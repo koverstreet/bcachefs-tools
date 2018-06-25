@@ -9,7 +9,7 @@
 #include <sys/types.h>
 #include <sys/vfs.h>
 #include <unistd.h>
-#include <attr/xattr.h>
+#include <sys/xattr.h>
 
 #include <linux/fiemap.h>
 #include <linux/fs.h>
