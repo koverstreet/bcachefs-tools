@@ -1,5 +1,5 @@
 
-PREFIX=/usr/local
+PREFIX?=/usr/local
 INSTALL=install
 CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall				\
 	-Wno-pointer-sign					\
