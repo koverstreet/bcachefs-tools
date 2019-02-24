@@ -1,5 +1,6 @@
 
 PREFIX?=/usr/local
+PKG_CONFIG?=pkg-config
 INSTALL=install
 CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall				\
 	-Wno-pointer-sign					\
@@ -36,13 +37,13 @@ endif
 
 PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd"
 
-PKGCONFIG_CFLAGS:=$(shell pkg-config --cflags $(PKGCONFIG_LIBS))
+PKGCONFIG_CFLAGS:=$(shell $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
 ifeq (,$(PKGCONFIG_CFLAGS))
-    $(error pkg-config error)
+    $(error pkg-config error, command: $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
 endif
-PKGCONFIG_LDLIBS:=$(shell pkg-config --libs   $(PKGCONFIG_LIBS))
+PKGCONFIG_LDLIBS:=$(shell $(PKG_CONFIG) --libs   $(PKGCONFIG_LIBS))
 ifeq (,$(PKGCONFIG_LDLIBS))
-    $(error pkg-config error (libs))
+    $(error pkg-config error, command: $(PKG_CONFIG) --libs $(PKGCONFIG_LIBS))
 endif
 
 CFLAGS+=$(PKGCONFIG_CFLAGS)
