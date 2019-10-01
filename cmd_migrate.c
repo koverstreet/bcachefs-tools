@@ -169,8 +169,9 @@ static struct bch_inode_unpacked create_file(struct bch_fs *c,
 
 	bch2_inode_init(c, &new_inode, uid, gid, mode, rdev, parent);
 
-	ret = bch2_inode_create(c, &new_inode, BLOCKDEV_INODE_MAX, 0,
-				&c->unused_inode_hint);
+	ret = bch2_trans_do(c, NULL, 0,
+		bch2_inode_create(&trans, &new_inode, BLOCKDEV_INODE_MAX, 0,
+				&c->unused_inode_hint));
 	if (ret)
 		die("error creating file: %s", strerror(-ret));
 

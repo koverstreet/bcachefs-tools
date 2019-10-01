@@ -125,7 +125,8 @@ static inline void bch2_trans_update(struct btree_trans *trans,
 		bch2_trans_begin(&trans);				\
 									\
 		_ret = (_do) ?:	bch2_trans_commit(&trans, NULL,		\
-					(_journal_seq), (_flags));	\
+					(_journal_seq),			\
+					(_flags)|BTREE_INSERT_ATOMIC);	\
 	} while (_ret == -EINTR);					\
 									\
 	bch2_trans_exit(&trans);					\

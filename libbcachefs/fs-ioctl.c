@@ -5,6 +5,7 @@
 #include "chardev.h"
 #include "dirent.h"
 #include "fs.h"
+#include "fs-common.h"
 #include "fs-ioctl.h"
 #include "quota.h"
 
@@ -164,6 +165,15 @@ err:
 	return ret;
 }
 
+static int bch2_reinherit_attrs_fn(struct bch_inode_info *inode,
+				   struct bch_inode_unpacked *bi,
+				   void *p)
+{
+	struct bch_inode_info *dir = p;
+
+	return !bch2_reinherit_attrs(bi, &dir->ei_inode);
+}
+
 static int bch2_ioc_reinherit_attrs(struct bch_fs *c,
 				    struct file *file,
 				    struct bch_inode_info *src,
@@ -188,9 +198,7 @@ static int bch2_ioc_reinherit_attrs(struct bch_fs *c,
 	qstr.name	= kname;
 
 	ret = -ENOENT;
-	inum = bch2_dirent_lookup(c, src->v.i_ino,
-				  &src->ei_str_hash,
-				  &qstr);
+	inum = bch2_dirent_lookup(c, src->v.i_ino, &qstr);
 	if (!inum)
 		goto err1;
 

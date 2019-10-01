@@ -12,6 +12,7 @@ CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall				\
 	-D_LGPL_SOURCE						\
 	-DRCU_MEMBARRIER					\
 	-DZSTD_STATIC_LINKING_ONLY				\
+	-DFUSE_USE_VERSION=32					\
 	-DNO_BCACHEFS_CHARDEV					\
 	-DNO_BCACHEFS_FS					\
 	-DNO_BCACHEFS_SYSFS					\
@@ -36,7 +37,7 @@ ifdef D
 	CFLAGS+=-DCONFIG_BCACHEFS_DEBUG=y
 endif
 
-PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd"
+PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd fuse3"
 
 PKGCONFIG_CFLAGS:=$(shell $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
 ifeq (,$(PKGCONFIG_CFLAGS))

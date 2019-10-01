@@ -46,14 +46,22 @@ struct bkey_inode_buf {
 void bch2_inode_pack(struct bkey_inode_buf *, const struct bch_inode_unpacked *);
 int bch2_inode_unpack(struct bkey_s_c_inode, struct bch_inode_unpacked *);
 
+struct btree_iter *bch2_inode_peek(struct btree_trans *,
+			struct bch_inode_unpacked *, u64, unsigned);
+int bch2_inode_write(struct btree_trans *, struct btree_iter *,
+		     struct bch_inode_unpacked *);
+
+void bch2_inode_init_early(struct bch_fs *,
+			   struct bch_inode_unpacked *);
+void bch2_inode_init_late(struct bch_fs *, struct bch_inode_unpacked *,
+			  uid_t, gid_t, umode_t, dev_t,
+			  struct bch_inode_unpacked *);
 void bch2_inode_init(struct bch_fs *, struct bch_inode_unpacked *,
 		     uid_t, gid_t, umode_t, dev_t,
 		     struct bch_inode_unpacked *);
 
-int __bch2_inode_create(struct btree_trans *,
-			struct bch_inode_unpacked *,
-			u64, u64, u64 *);
-int bch2_inode_create(struct bch_fs *, struct bch_inode_unpacked *,
+int bch2_inode_create(struct btree_trans *,
+		      struct bch_inode_unpacked *,
 		      u64, u64, u64 *);
 
 int bch2_inode_rm(struct bch_fs *, u64);
@@ -101,6 +109,11 @@ static inline u64 bch2_inode_opt_get(struct bch_inode_unpacked *inode,
 	default:
 		BUG();
 	}
+}
+
+static inline u8 mode_to_type(umode_t mode)
+{
+	return (mode >> 12) & 15;
 }
 
 /* i_nlink: */

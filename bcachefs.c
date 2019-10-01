@@ -203,6 +203,9 @@ int main(int argc, char *argv[])
 	if (!strcmp(cmd, "setattr"))
 		return cmd_setattr(argc, argv);
 
+	if (!strcmp(cmd, "fusemount"))
+		return cmd_fusemount(argc, argv);
+
 	if (!strcmp(cmd, "--help")) {
 		usage();
 		return 0;
