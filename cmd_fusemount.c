@@ -556,21 +556,146 @@ static const struct fuse_lowlevel_ops bcachefs_fuse_ops = {
 
 };
 
+/*
+ * Setup and command parsing.
+ */
+
+struct bf_context {
+	char            *devices_str;
+	char            **devices;
+	int             nr_devices;
+};
+
+static void bf_context_free(struct bf_context *ctx)
+{
+	int i;
+
+	free(ctx->devices_str);
+	for (i = 0; i < ctx->nr_devices; ++i)
+		free(ctx->devices[i]);
+	free(ctx->devices);
+}
+
+static struct fuse_opt bf_opts[] = {
+	FUSE_OPT_END
+};
+
+/*
+ * Fuse option parsing helper -- returning 0 means we consumed the argument, 1
+ * means we did not.
+ */
+static int bf_opt_proc(void *data, const char *arg, int key,
+    struct fuse_args *outargs)
+{
+	struct bf_context *ctx = data;
+
+	switch (key) {
+	case FUSE_OPT_KEY_NONOPT:
+		/* Just extract the first non-option string. */
+		if (!ctx->devices_str) {
+			ctx->devices_str = strdup(arg);
+			return 0;
+		}
+		return 1;
+	}
+
+	return 1;
+}
+
+/*
+ * dev1:dev2 -> [ dev1, dev2 ]
+ * dev	     -> [ dev ]
+ */
+static void tokenize_devices(struct bf_context *ctx)
+{
+	char *devices_str = strdup(ctx->devices_str);
+	char *devices_tmp = devices_str;
+	char **devices = NULL;
+	int nr = 0;
+	char *dev = NULL;
+
+	while ((dev = strsep(&devices_tmp, ":"))) {
+		if (strlen(dev) > 0) {
+			devices = realloc(devices, (nr + 1) * sizeof *devices);
+			devices[nr] = strdup(dev);
+			nr++;
+		}
+	}
+
+	if (!devices) {
+		devices = malloc(sizeof *devices);
+		devices[0] = strdup(ctx->devices_str);
+		nr = 1;
+	}
+
+	ctx->devices = devices;
+	ctx->nr_devices = nr;
+
+	free(devices_str);
+}
+
+static void usage(char *argv[])
+{
+	printf("Usage: %s fusemount [options] <dev>[:dev2:...] <mountpoint>\n",
+	       argv[0]);
+	printf("\n");
+}
+
 int cmd_fusemount(int argc, char *argv[])
 {
-	struct bch_opts bch_opts = bch2_opts_empty();
-	struct bch_fs *c = NULL;
-
-	c = bch2_fs_open(argv + optind, argc - optind, bch_opts);
-	if (IS_ERR(c))
-		die("error opening %s: %s", argv[optind],
-		    strerror(-PTR_ERR(c)));
-
 	struct fuse_args args = FUSE_ARGS_INIT(argc, argv);
+	struct bch_opts bch_opts = bch2_opts_empty();
+	struct bf_context ctx = { 0 };
+	struct bch_fs *c = NULL;
+	int ret = 0, i;
+
+	/* Parse arguments. */
+	if (fuse_opt_parse(&args, &ctx, bf_opts, bf_opt_proc) < 0)
+		die("fuse_opt_parse err: %m");
+
 	struct fuse_cmdline_opts fuse_opts;
 	if (fuse_parse_cmdline(&args, &fuse_opts) < 0)
 		die("fuse_parse_cmdline err: %m");
 
+	if (fuse_opts.show_help) {
+		usage(argv);
+		fuse_cmdline_help();
+		fuse_lowlevel_help();
+		ret = 0;
+		goto out;
+	}
+	if (fuse_opts.show_version) {
+		/* TODO: Show bcachefs version. */
+		printf("FUSE library version %s\n", fuse_pkgversion());
+		fuse_lowlevel_version();
+		ret = 0;
+		goto out;
+	}
+	if (!fuse_opts.mountpoint) {
+		usage(argv);
+		printf("Please supply a mountpoint.\n");
+		ret = 1;
+		goto out;
+	}
+	if (!ctx.devices_str) {
+		usage(argv);
+		printf("Please specify a device or device1:device2:...\n");
+		ret = 1;
+		goto out;
+	}
+	tokenize_devices(&ctx);
+
+	/* Open bch */
+	printf("Opening bcachefs filesystem on:\n");
+	for (i = 0; i < ctx.nr_devices; ++i)
+                printf("\t%s\n", ctx.devices[i]);
+
+	c = bch2_fs_open(ctx.devices, ctx.nr_devices, bch_opts);
+	if (IS_ERR(c))
+		die("error opening %s: %s", ctx.devices_str,
+		    strerror(-PTR_ERR(c)));
+
+	/* Fuse */
 	struct fuse_session *se =
 		fuse_session_new(&args, &bcachefs_fuse_ops,
 				 sizeof(bcachefs_fuse_ops), c);
@@ -580,15 +705,22 @@ int cmd_fusemount(int argc, char *argv[])
 	if (fuse_set_signal_handlers(se) < 0)
 		die("fuse_set_signal_handlers err: %m");
 
-	if (fuse_session_mount(se, "/home/kent/mnt"))
+	if (fuse_session_mount(se, fuse_opts.mountpoint))
 		die("fuse_mount err: %m");
 
-	int ret = fuse_session_loop(se);
+	fuse_daemonize(fuse_opts.foreground);
 
+	ret = fuse_session_loop(se);
+
+	/* Cleanup */
 	fuse_session_unmount(se);
 	fuse_remove_signal_handlers(se);
 	fuse_session_destroy(se);
+
+out:
+	free(fuse_opts.mountpoint);
 	fuse_opt_free_args(&args);
+	bf_context_free(&ctx);
 
 	return ret ? 1 : 0;
 }
