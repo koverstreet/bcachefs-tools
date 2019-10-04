@@ -360,38 +360,98 @@ static void bcachefs_fuse_opendir(fuse_req_t req, fuse_ino_t inum,
 }
 #endif
 
+struct fuse_dir_entry {
+	u64		ino;
+	unsigned	type;
+	char		name[0];
+};
+
 struct fuse_dir_context {
 	struct dir_context	ctx;
 	fuse_req_t		req;
 	char			*buf;
 	size_t			bufsize;
+
+	struct fuse_dir_entry	*prev;
 };
+
+static int fuse_send_dir_entry(struct fuse_dir_context *ctx, loff_t pos)
+{
+	struct fuse_dir_entry *de = ctx->prev;
+	ctx->prev = NULL;
+
+	struct stat statbuf = {
+		.st_ino		= unmap_root_ino(de->ino),
+		.st_mode	= de->type << 12,
+	};
+
+	size_t len = fuse_add_direntry(ctx->req, ctx->buf, ctx->bufsize,
+				       de->name, &statbuf, pos);
+
+	free(de);
+
+	if (len > ctx->bufsize)
+		return -EINVAL;
+
+	ctx->buf	+= len;
+	ctx->bufsize	-= len;
+
+	return 0;
+}
 
 static int fuse_filldir(struct dir_context *_ctx,
 			const char *name, int namelen,
-			loff_t pos, u64 dir, unsigned type)
+			loff_t pos, u64 ino, unsigned type)
 {
 	struct fuse_dir_context *ctx =
 		container_of(_ctx, struct fuse_dir_context, ctx);
 
-	struct stat statbuf = {
-		.st_ino		= map_root_ino(dir),
-		.st_mode	= type << 12,
-	};
+	fuse_log(FUSE_LOG_DEBUG, "fuse_filldir(ctx={.ctx={.pos=%llu}}, "
+		 "name=%s, namelen=%d, pos=%lld, dir=%llu, type=%u)\n",
+		 ctx->ctx.pos, name, namelen, pos, ino, type);
 
-	size_t len = fuse_add_direntry(ctx->req,
-				       ctx->buf,
-				       ctx->bufsize,
-				       name,
-				       &statbuf,
-				       pos + 1);
+	/*
+	 * We have to emit directory entries after reading the next entry,
+	 * because the previous entry contains a pointer to next.
+	 */
+	if (ctx->prev) {
+		int ret = fuse_send_dir_entry(ctx, pos);
+		if (ret)
+			return ret;
+	}
 
-	if (len > ctx->bufsize)
-		return 0;
+	struct fuse_dir_entry *cur = malloc(sizeof *cur + namelen + 1);
+	cur->ino = ino;
+	cur->type = type;
+	memcpy(cur->name, name, namelen);
+	cur->name[namelen] = 0;
 
-	ctx->buf	+= len;
-	ctx->bufsize	-= len;
-	return 1;
+	ctx->prev = cur;
+
+	return 0;
+}
+
+static bool handle_dots(struct fuse_dir_context *ctx, fuse_ino_t dir)
+{
+	int ret = 0;
+
+	if (ctx->ctx.pos == 0) {
+		ret = fuse_filldir(&ctx->ctx, ".", 1, ctx->ctx.pos,
+				   unmap_root_ino(dir), DT_DIR);
+		if (ret < 0)
+			return false;
+		ctx->ctx.pos = 1;
+	}
+
+	if (ctx->ctx.pos == 1) {
+		ret = fuse_filldir(&ctx->ctx, "..", 2, ctx->ctx.pos,
+				   /*TODO: parent*/ 1, DT_DIR);
+		if (ret < 0)
+			return false;
+		ctx->ctx.pos = 2;
+	}
+
+	return true;
 }
 
 static void bcachefs_fuse_readdir(fuse_req_t req, fuse_ino_t dir,
@@ -399,24 +459,58 @@ static void bcachefs_fuse_readdir(fuse_req_t req, fuse_ino_t dir,
 				  struct fuse_file_info *fi)
 {
 	struct bch_fs *c = fuse_req_userdata(req);
-	char buf[4096];
+	struct bch_inode_unpacked bi;
+	char *buf = calloc(size, 1);
 	struct fuse_dir_context ctx = {
 		.ctx.actor	= fuse_filldir,
 		.ctx.pos	= off,
 		.req		= req,
 		.buf		= buf,
-		.bufsize	= sizeof(buf),
+		.bufsize	= size,
 	};
-	int ret;
+	int ret = 0;
+
+	fuse_log(FUSE_LOG_DEBUG, "bcachefs_fuse_readdir(dir=%llu, size=%zu, "
+		 "off=%lld)\n", dir, size, off);
 
 	dir = map_root_ino(dir);
 
+	ret = bch2_inode_find_by_inum(c, dir, &bi);
+	if (ret)
+		goto reply;
+
+	if (!S_ISDIR(bi.bi_mode)) {
+		ret = -ENOTDIR;
+		goto reply;
+	}
+
+	if (!handle_dots(&ctx, dir))
+		goto reply;
+
 	ret = bch2_readdir(c, dir, &ctx.ctx);
+
+reply:
+	/*
+	 * If we have something to send, the error above doesn't matter.
+	 *
+	 * Alternatively, if this send fails, but we previously sent something,
+	 * then this is a success.
+	 */
+	if (ctx.prev) {
+		ret = fuse_send_dir_entry(&ctx, ctx.ctx.pos);
+		if (ret && ctx.buf != buf)
+			ret = 0;
+	}
+
 	if (!ret) {
+		fuse_log(FUSE_LOG_DEBUG, "bcachefs_fuse_readdir reply %zd\n",
+					ctx.buf - buf);
 		fuse_reply_buf(req, buf, ctx.buf - buf);
 	} else {
 		fuse_reply_err(req, -ret);
 	}
+
+	free(buf);
 }
 
 #if 0
