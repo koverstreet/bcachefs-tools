@@ -5,6 +5,7 @@ Dependencies:
  * libblkid
  * libkeyutils
  * liblz4
+ * libfuse3 >= 3.7
  * libscrypt
  * libsodium
  * liburcu
@@ -14,9 +15,9 @@ Dependencies:
  * zlib1g
  * valgrind
 
-On debian, you can install these with
+On Debian (Bullseye or later), you can install these with
     apt install -y pkg-config libaio-dev libblkid-dev libkeyutils-dev \
         liblz4-dev libscrypt-dev libsodium-dev liburcu-dev libzstd-dev \
-        uuid-dev zlib1g-dev valgrind
+        uuid-dev zlib1g-dev valgrind libfuse3-dev
 
 Then, just make && make install
