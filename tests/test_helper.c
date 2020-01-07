@@ -32,7 +32,7 @@ static void test_undefined(void)
 
 static void test_undefined_branch(void)
 {
-       	int x;
+	int x;	
 	trick_compiler(&x);
 
 	if (x)

@@ -27,8 +27,7 @@ void raid_genz_int32(int nd, size_t size, void **vv)
 	int d, l;
 	size_t i;
 
-	uint32_t d0, r0, q0, p0;
-	uint32_t d1, r1, q1, p1;
+	uint32_t d0, d1;	
 
 	l = nd - 1;
 	p = v[nd];
@@ -36,6 +35,7 @@ void raid_genz_int32(int nd, size_t size, void **vv)
 	r = v[nd + 2];
 
 	for (i = 0; i < size; i += 8) {
+		uint32_t r0, q0, p0, r1, q1, p1;
 		r0 = q0 = p0 = v_32(v[l][i]);
 		r1 = q1 = p1 = v_32(v[l][i + 4]);
 		for (d = l - 1; d >= 0; --d) {
@@ -78,8 +78,7 @@ void raid_genz_int64(int nd, size_t size, void **vv)
 	int d, l;
 	size_t i;
 
-	uint64_t d0, r0, q0, p0;
-	uint64_t d1, r1, q1, p1;
+	uint64_t d0, d1;	
 
 	l = nd - 1;
 	p = v[nd];
@@ -87,6 +86,7 @@ void raid_genz_int64(int nd, size_t size, void **vv)
 	r = v[nd + 2];
 
 	for (i = 0; i < size; i += 16) {
+		uint64_t r0, q0, p0, r1, q1, p1;		
 		r0 = q0 = p0 = v_64(v[l][i]);
 		r1 = q1 = p1 = v_64(v[l][i + 8]);
 		for (d = l - 1; d >= 0; --d) {

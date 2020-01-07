@@ -103,7 +103,7 @@ void SipHash_Update(SIPHASH_CTX *ctx, int rc, int rf,
 		    const void *src, size_t len)
 {
 	const u8 *ptr = src;
-	size_t left, used;
+	size_t used;
 
 	if (len == 0)
 		return;
@@ -112,6 +112,7 @@ void SipHash_Update(SIPHASH_CTX *ctx, int rc, int rf,
 	ctx->bytes += len;
 
 	if (used > 0) {
+		size_t left;
 		left = sizeof(ctx->buf) - used;
 
 		if (len >= left) {

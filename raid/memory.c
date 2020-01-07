@@ -109,7 +109,6 @@ int raid_mtest_vector(int n, size_t size, void **vv)
 	size_t j;
 	unsigned k;
 	unsigned char d;
-	unsigned char p;
 
 	/* fill with 0 */
 	d = 0;
@@ -119,6 +118,7 @@ int raid_mtest_vector(int n, size_t size, void **vv)
 
 	/* test with all the byte patterns */
 	for (k = 1; k < 256; ++k) {
+		unsigned char p;
 		p = d;
 		d = k;
 

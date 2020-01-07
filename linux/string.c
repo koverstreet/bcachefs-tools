@@ -71,9 +71,9 @@ void memzero_explicit(void *s, size_t count)
 int match_string(const char * const *array, size_t n, const char *string)
 {
 	int index;
-	const char *item;
 
 	for (index = 0; index < n; index++) {
+		const char *item;
 		item = array[index];
 		if (!item)
 			break;
