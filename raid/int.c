@@ -339,7 +339,7 @@ void raid_gen6_int8(int nd, size_t size, void **vv)
 	u = v[nd + 5];
 
 	for (i = 0; i < size; i += 1) {
-		uint8_t u0, t0, s0, r0, q0, p0
+		uint8_t u0, t0, s0, r0, q0, p0;
 		p0 = q0 = r0 = s0 = t0 = u0 = 0;
 		for (d = l; d > 0; --d) {
 			d0 = v_8(v[d][i]);

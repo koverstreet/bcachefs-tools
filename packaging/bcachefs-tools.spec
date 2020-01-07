@@ -5,7 +5,7 @@ Summary:        Userspace tools for bcachefs
 
 License:        GPLv2
 URL:            https://github.com/koverstreet/bcachefs-tools
-Source0:        bcachefs-tools.tar.bz2
+Source0:        %{name}-%{version}.tar.bz2
 
 BuildRequires:  epel-release
 BuildRequires:  bzip2
@@ -54,14 +54,19 @@ make
 
 %install
 rm -rf $RPM_BUILD_ROOT
+mkdir -p $RPM_BUILD_ROOT/usr/local/sbin
+mkdir -p $RPM_BUILD_ROOT/usr/local/share/man/man8
 %make_install
 
 %files
-%{_sbindir}/bcachefs
-%{_sbindir}/fsck.bcachefs
-%{_sbindir}/mkfs.bcachefs
-%{_mandir}/man8/bcachefs.8.gz
+/usr/local/sbin/bcachefs
+/usr/local/sbin/fsck.bcachefs
+/usr/local/sbin/mkfs.bcachefs
+/usr/local/share/man/man8/bcachefs.8
+/etc/initramfs-tools/hooks/bcachefs
+/etc/initramfs-tools/scripts/local-premount/bcachefs
 
 %changelog
 * Tue Jan 07 2020 Michael Adams <unquietwiki@gmail.com> - 2020.01.07-1
 - Initial RPM package definition
+- Makefile needs further work to accomodate RPM macros.

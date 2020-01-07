@@ -25,8 +25,8 @@ Before building: scl enable devtoolset-8 bash
 2. Make a non-root user to build RPMs with.
 3. "su - (non-root user)" and use "rpmdev-setuptree" to create an RPM build structure.
 4. Copy the SPEC file from this directory to the "~/rpmbuild/SPECS/" folder.
-5. "tar cjf (directory of bcachefs-tools) ~/bcachefs-tools.tar.bz2"
-6. "mv ~/bcachefs-tools.tar.bz2 ~/rpmbuild/SOURCES/"
-7. "rpmbuild -bs ~/rpmbuild/SPECS/bcachefs-tools.spec"
-8. "rpmbuild -bb ~/rpmbuild/SPECS/bcachefs-tools.spec"
-9. The RPMs will be in "~/rpmbuild/RPMS" and "~/rpmbuild/SRPMS".
+6. Move the parent directory here to bcachefs-tools-(VERSION), and "cd" to its parent.
+7. "tar cjf bcachefs-tools-(VERSION).tar.bz2 (directory of bcachefs-tools-(VERSION))"
+8. "rpmbuild -bs ~/rpmbuild/SPECS/bcachefs-tools.spec"
+9. "rpmbuild -bb ~/rpmbuild/SPECS/bcachefs-tools.spec"
+10. The RPMs will be in "~/rpmbuild/RPMS" and "~/rpmbuild/SRPMS".
