@@ -3,7 +3,7 @@ PREFIX?=/usr/local
 PKG_CONFIG?=pkg-config
 INSTALL=install
 PYTEST=pytest-3
-CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall				\
+CFLAGS+=-std=gnu99 -O2 -g -MMD -Wall				\
 	-Wno-pointer-sign					\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
