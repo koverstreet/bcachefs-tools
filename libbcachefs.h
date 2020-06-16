@@ -52,10 +52,8 @@ struct dev_opts {
 	const char	*group;
 	unsigned	data_allowed;
 	unsigned	durability;
-	bool		discard;
-
+	bool    	discard;
 	u64		nbuckets;
-
 	u64		sb_offset;
 	u64		sb_end;
 };
@@ -65,6 +63,8 @@ static inline struct dev_opts dev_opts_default()
 	return (struct dev_opts) {
 		.data_allowed		= ~0U << 2,
 		.durability		= 1,
+		.path			= NULL,
+		.discard		= false,
 	};
 }
 

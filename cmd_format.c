@@ -169,9 +169,10 @@ int cmd_format(int argc, char *argv[])
 		case O_group:
 		case 'g':
 			dev_opts.group = optarg;
+                        dev_opts.discard = 0;
 			break;
 		case O_discard:
-			dev_opts.discard = true;
+                        dev_opts.discard = 1;
 			break;
 		case O_data_allowed:
 			dev_opts.data_allowed =

@@ -12,6 +12,7 @@
 #include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
+#include <blkid.h>
 
 #include <uuid/uuid.h>
 
@@ -298,9 +299,23 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 			    i->sb_offset, i->sb_end);
 
 		if (i->sb_offset == BCH_SB_SECTOR) {
+			/* Wipe all filesystems, if any */
+			unsigned error = 0;
+			blkid_probe pr = blkid_new_probe_from_filename(i->path);
+
+			blkid_probe_set_device(pr, i->fd, 0, 0);
+			blkid_probe_enable_superblocks(pr, 1);
+			blkid_probe_set_superblocks_flags(pr, BLKID_SUBLKS_MAGIC);
+
+			while (blkid_do_probe(pr) == 0)
+				    error += blkid_do_wipe(pr, 0);
+			
+			blkid_free_probe(pr);
+			if(error)
+				fprintf( stderr, "Warning: failed to erase filesystem on %s\n", i->path);
+
 			/* Zero start of disk */
 			static const char zeroes[BCH_SB_SECTOR << 9];
-
 			xpwrite(i->fd, zeroes, BCH_SB_SECTOR << 9, 0);
 		}
 

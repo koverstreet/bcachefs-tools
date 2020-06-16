@@ -3,7 +3,7 @@ PREFIX?=/usr/local
 PKG_CONFIG?=pkg-config
 INSTALL=install
 PYTEST=pytest-3
-CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall				\
+CFLAGS+=-std=gnu89 -O2 -MMD -Wall				\
 	-Wno-pointer-sign					\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
@@ -31,12 +31,6 @@ endif
 
 ifneq (,$(findstring clang,$(CC_VERSION)))
 	CFLAGS+=-Wno-missing-braces
-endif
-
-ifdef D
-	CFLAGS+=-Werror
-	CFLAGS+=-DCONFIG_BCACHEFS_DEBUG=y
-	CFLAGS+=-DCONFIG_VALGRIND=y
 endif
 
 PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd libudev"
@@ -70,6 +64,10 @@ endif
 
 .PHONY: all
 all: bcachefs
+
+.PHONY: debug
+debug: CFLAGS+=-g3 -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y -Werror
+debug: bcachefs
 
 .PHONY: tests
 tests: tests/test_helper
