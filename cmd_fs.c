@@ -37,7 +37,7 @@ static void print_dev_usage(struct bchfs_handle fs,
 
 	printf("\n");
 	printf_pad(20, "%s (device %u):", d->label ?: "(no label)", d->idx);
-	printf("%30s%16s\n", d->dev ?: "(device not found)", bch2_member_states[u.state]);
+	printf("%30s%16s\n", d->dev ?: "(device not found)", bch2_dev_state[u.state]);
 
 	printf("%-20s%16s%16s%16s\n",
 	       "", "data", "buckets", "fragmented");

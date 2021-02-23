@@ -837,15 +837,13 @@ static void bch2_journal_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 
 	for (i = 0; i < j->nr_ptrs; i++) {
 		struct bch_dev *ca = c->devs[j->ptrs[i].dev];
-		u64 offset;
-
-		div64_u64_rem(j->ptrs[i].offset, ca->mi.bucket_size, &offset);
 
 		if (i)
 			pr_buf(out, " ");
 		pr_buf(out, "%u:%llu (offset %llu)",
 		       j->ptrs[i].dev,
-		       (u64) j->ptrs[i].offset, offset);
+		       (u64) j->ptrs[i].offset,
+		       (u64) j->ptrs[i].offset % ca->mi.bucket_size);
 	}
 }
 
@@ -871,8 +869,8 @@ int bch2_journal_read(struct bch_fs *c, struct list_head *list,
 		    !(bch2_dev_has_data(c, ca) & (1 << BCH_DATA_journal)))
 			continue;
 
-		if ((ca->mi.state == BCH_MEMBER_STATE_rw ||
-		     ca->mi.state == BCH_MEMBER_STATE_ro) &&
+		if ((ca->mi.state == BCH_MEMBER_STATE_RW ||
+		     ca->mi.state == BCH_MEMBER_STATE_RO) &&
 		    percpu_ref_tryget(&ca->io_ref))
 			closure_call(&ca->journal.read,
 				     bch2_journal_read_device,
@@ -1065,7 +1063,7 @@ static void __journal_write_alloc(struct journal *j,
 		 * it:
 		 */
 		if (!ca->mi.durability ||
-		    ca->mi.state != BCH_MEMBER_STATE_rw ||
+		    ca->mi.state != BCH_MEMBER_STATE_RW ||
 		    !ja->nr ||
 		    bch2_bkey_has_device(bkey_i_to_s_c(&w->key),
 					 ca->dev_idx) ||

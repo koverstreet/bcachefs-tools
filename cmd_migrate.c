@@ -123,7 +123,7 @@ static void update_inode(struct bch_fs *c,
 	int ret;
 
 	bch2_inode_pack(c, &packed, inode);
-	ret = bch2_btree_insert(c, BTREE_ID_inodes, &packed.inode.k_i,
+	ret = bch2_btree_insert(c, BTREE_ID_INODES, &packed.inode.k_i,
 				NULL, NULL, 0);
 	if (ret)
 		die("error updating inode: %s", strerror(-ret));
@@ -329,7 +329,7 @@ static void link_data(struct bch_fs *c, struct bch_inode_unpacked *dst,
 
 		bch2_mark_bkey_replicas(c, extent_i_to_s_c(e).s_c);
 
-		ret = bch2_btree_insert(c, BTREE_ID_extents, &e->k_i,
+		ret = bch2_btree_insert(c, BTREE_ID_EXTENTS, &e->k_i,
 					&res, NULL, 0);
 		if (ret)
 			die("btree insert error %s", strerror(-ret));

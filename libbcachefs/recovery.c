@@ -32,7 +32,7 @@ static void drop_alloc_keys(struct journal_keys *keys)
 	size_t src, dst;
 
 	for (src = 0, dst = 0; src < keys->nr; src++)
-		if (keys->d[src].btree_id != BTREE_ID_alloc)
+		if (keys->d[src].btree_id != BTREE_ID_ALLOC)
 			keys->d[dst++] = keys->d[src];
 
 	keys->nr = dst;
@@ -548,7 +548,7 @@ static int __bch2_alloc_replay_key(struct btree_trans *trans, struct bkey_i *k)
 	struct btree_iter *iter;
 	int ret;
 
-	iter = bch2_trans_get_iter(trans, BTREE_ID_alloc, k->k.p,
+	iter = bch2_trans_get_iter(trans, BTREE_ID_ALLOC, k->k.p,
 				   BTREE_ITER_CACHED|
 				   BTREE_ITER_CACHED_NOFILL|
 				   BTREE_ITER_INTENT);
@@ -600,7 +600,7 @@ static int bch2_journal_replay(struct bch_fs *c,
 	for_each_journal_key(keys, i) {
 		cond_resched();
 
-		if (!i->level && i->btree_id == BTREE_ID_alloc) {
+		if (!i->level && i->btree_id == BTREE_ID_ALLOC) {
 			j->replay_journal_seq = keys.journal_seq_base + i->journal_seq;
 			ret = bch2_alloc_replay_key(c, i->k);
 			if (ret)
@@ -639,7 +639,7 @@ static int bch2_journal_replay(struct bch_fs *c,
 	for_each_journal_key(keys, i) {
 		cond_resched();
 
-		if (i->level || i->btree_id == BTREE_ID_alloc)
+		if (i->level || i->btree_id == BTREE_ID_ALLOC)
 			continue;
 
 		replay_now_at(j, keys.journal_seq_base + i->journal_seq);
@@ -925,28 +925,28 @@ static int read_btree_roots(struct bch_fs *c)
 		if (!r->alive)
 			continue;
 
-		if (i == BTREE_ID_alloc &&
+		if (i == BTREE_ID_ALLOC &&
 		    c->opts.reconstruct_alloc) {
 			c->sb.compat &= ~(1ULL << BCH_COMPAT_FEAT_ALLOC_INFO);
 			continue;
 		}
 
 		if (r->error) {
-			__fsck_err(c, i == BTREE_ID_alloc
+			__fsck_err(c, i == BTREE_ID_ALLOC
 				   ? FSCK_CAN_IGNORE : 0,
 				   "invalid btree root %s",
 				   bch2_btree_ids[i]);
-			if (i == BTREE_ID_alloc)
+			if (i == BTREE_ID_ALLOC)
 				c->sb.compat &= ~(1ULL << BCH_COMPAT_FEAT_ALLOC_INFO);
 		}
 
 		ret = bch2_btree_root_read(c, i, &r->key, r->level);
 		if (ret) {
-			__fsck_err(c, i == BTREE_ID_alloc
+			__fsck_err(c, i == BTREE_ID_ALLOC
 				   ? FSCK_CAN_IGNORE : 0,
 				   "error reading btree root %s",
 				   bch2_btree_ids[i]);
-			if (i == BTREE_ID_alloc)
+			if (i == BTREE_ID_ALLOC)
 				c->sb.compat &= ~(1ULL << BCH_COMPAT_FEAT_ALLOC_INFO);
 		}
 	}
@@ -976,12 +976,6 @@ int bch2_fs_recovery(struct bch_fs *c)
 	if (c->sb.clean)
 		bch_info(c, "recovering from clean shutdown, journal seq %llu",
 			 le64_to_cpu(clean->journal_seq));
-
-	if (!(c->sb.features & (1ULL << BCH_FEATURE_new_extent_overwrite))) {
-		bch_err(c, "feature new_extent_overwrite not set, filesystem no longer supported");
-		ret = -EINVAL;
-		goto err;
-	}
 
 	if (!(c->sb.features & (1ULL << BCH_FEATURE_alloc_v2))) {
 		bch_info(c, "alloc_v2 feature bit not set, fsck required");
@@ -1321,7 +1315,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 	bch2_inode_pack(c, &packed_inode, &root_inode);
 
 	err = "error creating root directory";
-	ret = bch2_btree_insert(c, BTREE_ID_inodes,
+	ret = bch2_btree_insert(c, BTREE_ID_INODES,
 				&packed_inode.inode.k_i,
 				NULL, NULL, 0);
 	if (ret)

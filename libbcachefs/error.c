@@ -11,13 +11,13 @@ bool bch2_inconsistent_error(struct bch_fs *c)
 	set_bit(BCH_FS_ERROR, &c->flags);
 
 	switch (c->opts.errors) {
-	case BCH_ON_ERROR_continue:
+	case BCH_ON_ERROR_CONTINUE:
 		return false;
-	case BCH_ON_ERROR_ro:
+	case BCH_ON_ERROR_RO:
 		if (bch2_fs_emergency_read_only(c))
 			bch_err(c, "emergency read only");
 		return true;
-	case BCH_ON_ERROR_panic:
+	case BCH_ON_ERROR_PANIC:
 		panic(bch2_fmt(c, "panic after error"));
 		return true;
 	default:
@@ -38,10 +38,10 @@ void bch2_io_error_work(struct work_struct *work)
 	bool dev;
 
 	down_write(&c->state_lock);
-	dev = bch2_dev_state_allowed(c, ca, BCH_MEMBER_STATE_ro,
+	dev = bch2_dev_state_allowed(c, ca, BCH_MEMBER_STATE_RO,
 				    BCH_FORCE_IF_DEGRADED);
 	if (dev
-	    ? __bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_ro,
+	    ? __bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_RO,
 				  BCH_FORCE_IF_DEGRADED)
 	    : bch2_fs_emergency_read_only(c))
 		bch_err(ca,

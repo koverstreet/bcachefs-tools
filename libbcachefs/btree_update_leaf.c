@@ -73,13 +73,13 @@ bool bch2_btree_bset_insert_key(struct btree_iter *iter,
 		k = NULL;
 
 	/* @k is the key being overwritten/deleted, if any: */
-	EBUG_ON(k && bkey_deleted(k));
+	EBUG_ON(k && bkey_whiteout(k));
 
 	/* Deleting, but not found? nothing to do: */
-	if (bkey_deleted(&insert->k) && !k)
+	if (bkey_whiteout(&insert->k) && !k)
 		return false;
 
-	if (bkey_deleted(&insert->k)) {
+	if (bkey_whiteout(&insert->k)) {
 		/* Deleting: */
 		btree_account_key_drop(b, k);
 		k->type = KEY_TYPE_deleted;
@@ -340,7 +340,7 @@ static inline bool iter_has_nontrans_triggers(struct btree_iter *iter)
 {
 	return (((BTREE_NODE_TYPE_HAS_TRIGGERS &
 		  ~BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS)) |
-		(1U << BTREE_ID_stripes)) &
+		(1U << BTREE_ID_EC)) &
 		(1U << iter->btree_id);
 }
 

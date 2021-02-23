@@ -326,7 +326,7 @@ static inline void bkey_init(struct bkey *k)
 	x(discard,		1)			\
 	x(error,		2)			\
 	x(cookie,		3)			\
-	x(hash_whiteout,	4)			\
+	x(whiteout,		4)			\
 	x(btree_ptr,		5)			\
 	x(extent,		6)			\
 	x(reservation,		7)			\
@@ -351,25 +351,9 @@ enum bch_bkey_type {
 	KEY_TYPE_MAX,
 };
 
-struct bch_deleted {
-	struct bch_val		v;
-};
-
-struct bch_discard {
-	struct bch_val		v;
-};
-
-struct bch_error {
-	struct bch_val		v;
-};
-
 struct bch_cookie {
 	struct bch_val		v;
 	__le64			cookie;
-};
-
-struct bch_hash_whiteout {
-	struct bch_val		v;
 };
 
 /* Extents */
@@ -987,29 +971,19 @@ LE64_BITMASK(BCH_MEMBER_NR_READ_ERRORS,	struct bch_member, flags[1], 0,  20);
 LE64_BITMASK(BCH_MEMBER_NR_WRITE_ERRORS,struct bch_member, flags[1], 20, 40);
 #endif
 
-#define BCH_MEMBER_STATES()			\
-	x(rw,		0)			\
-	x(ro,		1)			\
-	x(failed,	2)			\
-	x(spare,	3)
-
 enum bch_member_state {
-#define x(t, n) BCH_MEMBER_STATE_##t = n,
-	BCH_MEMBER_STATES()
-#undef x
-	BCH_MEMBER_STATE_NR
+	BCH_MEMBER_STATE_RW		= 0,
+	BCH_MEMBER_STATE_RO		= 1,
+	BCH_MEMBER_STATE_FAILED		= 2,
+	BCH_MEMBER_STATE_SPARE		= 3,
+	BCH_MEMBER_STATE_NR		= 4,
 };
 
-#define BCH_CACHE_REPLACEMENT_POLICIES()	\
-	x(lru,		0)			\
-	x(fifo,		1)			\
-	x(random,	2)
-
-enum bch_cache_replacement_policies {
-#define x(t, n) BCH_CACHE_REPLACEMENT_##t = n,
-	BCH_CACHE_REPLACEMENT_POLICIES()
-#undef x
-	BCH_CACHE_REPLACEMENT_NR
+enum cache_replacement {
+	CACHE_REPLACEMENT_LRU		= 0,
+	CACHE_REPLACEMENT_FIFO		= 1,
+	CACHE_REPLACEMENT_RANDOM	= 2,
+	CACHE_REPLACEMENT_NR		= 3,
 };
 
 struct bch_sb_field_members {
@@ -1403,16 +1377,11 @@ enum bch_sb_compat {
 
 #define BCH_BKEY_PTRS_MAX		16U
 
-#define BCH_ERROR_ACTIONS()		\
-	x(continue,		0)	\
-	x(ro,			1)	\
-	x(panic,		2)
-
 enum bch_error_actions {
-#define x(t, n) BCH_ON_ERROR_##t = n,
-	BCH_ERROR_ACTIONS()
-#undef x
-	BCH_ON_ERROR_NR
+	BCH_ON_ERROR_CONTINUE		= 0,
+	BCH_ON_ERROR_RO			= 1,
+	BCH_ON_ERROR_PANIC		= 2,
+	BCH_NR_ERROR_ACTIONS		= 3,
 };
 
 enum bch_str_hash_type {
@@ -1423,16 +1392,11 @@ enum bch_str_hash_type {
 	BCH_STR_HASH_NR			= 4,
 };
 
-#define BCH_STR_HASH_OPTS()		\
-	x(crc32c,		0)	\
-	x(crc64,		1)	\
-	x(siphash,		2)
-
 enum bch_str_hash_opts {
-#define x(t, n) BCH_STR_HASH_OPT_##t = n,
-	BCH_STR_HASH_OPTS()
-#undef x
-	BCH_STR_HASH_OPT_NR
+	BCH_STR_HASH_OPT_CRC32C		= 0,
+	BCH_STR_HASH_OPT_CRC64		= 1,
+	BCH_STR_HASH_OPT_SIPHASH	= 2,
+	BCH_STR_HASH_OPT_NR		= 3,
 };
 
 enum bch_csum_type {
@@ -1467,16 +1431,11 @@ static inline _Bool bch2_csum_type_is_encryption(enum bch_csum_type type)
 	}
 }
 
-#define BCH_CSUM_OPTS()			\
-	x(none,			0)	\
-	x(crc32c,		1)	\
-	x(crc64,		2)
-
 enum bch_csum_opts {
-#define x(t, n) BCH_CSUM_OPT_##t = n,
-	BCH_CSUM_OPTS()
-#undef x
-	BCH_CSUM_OPT_NR
+	BCH_CSUM_OPT_NONE		= 0,
+	BCH_CSUM_OPT_CRC32C		= 1,
+	BCH_CSUM_OPT_CRC64		= 2,
+	BCH_CSUM_OPT_NR			= 3,
 };
 
 #define BCH_COMPRESSION_TYPES()		\
@@ -1488,7 +1447,7 @@ enum bch_csum_opts {
 	x(incompressible,	5)
 
 enum bch_compression_type {
-#define x(t, n) BCH_COMPRESSION_TYPE_##t = n,
+#define x(t, n) BCH_COMPRESSION_TYPE_##t,
 	BCH_COMPRESSION_TYPES()
 #undef x
 	BCH_COMPRESSION_TYPE_NR
@@ -1501,7 +1460,7 @@ enum bch_compression_type {
 	x(zstd,		3)
 
 enum bch_compression_opts {
-#define x(t, n) BCH_COMPRESSION_OPT_##t = n,
+#define x(t, n) BCH_COMPRESSION_OPT_##t,
 	BCH_COMPRESSION_OPTS()
 #undef x
 	BCH_COMPRESSION_OPT_NR
@@ -1668,18 +1627,18 @@ LE32_BITMASK(JSET_NO_FLUSH,	struct jset, flags, 5, 6);
 
 /* Btree: */
 
-#define BCH_BTREE_IDS()				\
-	x(extents,	0)			\
-	x(inodes,	1)			\
-	x(dirents,	2)			\
-	x(xattrs,	3)			\
-	x(alloc,	4)			\
-	x(quotas,	5)			\
-	x(stripes,	6)			\
-	x(reflink,	7)
+#define BCH_BTREE_IDS()					\
+	x(EXTENTS,	0, "extents")			\
+	x(INODES,	1, "inodes")			\
+	x(DIRENTS,	2, "dirents")			\
+	x(XATTRS,	3, "xattrs")			\
+	x(ALLOC,	4, "alloc")			\
+	x(QUOTAS,	5, "quotas")			\
+	x(EC,		6, "stripes")			\
+	x(REFLINK,	7, "reflink")
 
 enum btree_id {
-#define x(kwd, val) BTREE_ID_##kwd = val,
+#define x(kwd, val, name) BTREE_ID_##kwd = val,
 	BCH_BTREE_IDS()
 #undef x
 	BTREE_ID_NR

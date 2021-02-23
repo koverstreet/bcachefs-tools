@@ -9,54 +9,72 @@
 #include "super-io.h"
 #include "util.h"
 
-#define x(t, n) #t,
-
 const char * const bch2_error_actions[] = {
-	BCH_ERROR_ACTIONS()
+	"continue",
+	"remount-ro",
+	"panic",
 	NULL
 };
 
 const char * const bch2_sb_features[] = {
+#define x(f, n) #f,
 	BCH_SB_FEATURES()
-	NULL
-};
-
-const char * const bch2_btree_ids[] = {
-	BCH_BTREE_IDS()
+#undef x
 	NULL
 };
 
 const char * const bch2_csum_opts[] = {
-	BCH_CSUM_OPTS()
+	"none",
+	"crc32c",
+	"crc64",
 	NULL
 };
 
 const char * const bch2_compression_opts[] = {
+#define x(t, n) #t,
 	BCH_COMPRESSION_OPTS()
+#undef x
 	NULL
 };
 
 const char * const bch2_str_hash_types[] = {
-	BCH_STR_HASH_OPTS()
+	"crc32c",
+	"crc64",
+	"siphash",
 	NULL
 };
 
 const char * const bch2_data_types[] = {
+#define x(t, n) #t,
 	BCH_DATA_TYPES()
+#undef x
 	NULL
 };
 
 const char * const bch2_cache_replacement_policies[] = {
-	BCH_CACHE_REPLACEMENT_POLICIES()
+	"lru",
+	"fifo",
+	"random",
 	NULL
 };
 
-const char * const bch2_member_states[] = {
-	BCH_MEMBER_STATES()
+/* Default is -1; we skip past it for struct cached_dev's cache mode */
+const char * const bch2_cache_modes[] = {
+	"default",
+	"writethrough",
+	"writeback",
+	"writearound",
+	"none",
 	NULL
 };
 
-#undef x
+const char * const bch2_dev_state[] = {
+	"readwrite",
+	"readonly",
+	"failed",
+	"spare",
+	NULL
+};
 
 void bch2_opts_apply(struct bch_opts *dst, struct bch_opts src)
 {

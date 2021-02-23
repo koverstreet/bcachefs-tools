@@ -193,7 +193,7 @@ static inline void compat_bformat(unsigned level, enum btree_id btree_id,
 				 int write, struct bkey_format *f)
 {
 	if (version < bcachefs_metadata_version_inode_btree_change &&
-	    btree_id == BTREE_ID_inodes) {
+	    btree_id == BTREE_ID_INODES) {
 		swap(f->bits_per_field[BKEY_FIELD_INODE],
 		     f->bits_per_field[BKEY_FIELD_OFFSET]);
 		swap(f->field_offset[BKEY_FIELD_INODE],
@@ -209,7 +209,7 @@ static inline void compat_bpos(unsigned level, enum btree_id btree_id,
 		bch2_bpos_swab(p);
 
 	if (version < bcachefs_metadata_version_inode_btree_change &&
-	    btree_id == BTREE_ID_inodes)
+	    btree_id == BTREE_ID_INODES)
 		swap(p->inode, p->offset);
 }
 

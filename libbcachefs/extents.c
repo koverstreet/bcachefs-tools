@@ -677,7 +677,7 @@ bool bch2_check_range_allocated(struct bch_fs *c, struct bpos pos, u64 size,
 
 	bch2_trans_init(&trans, c, 0, 0);
 
-	for_each_btree_key(&trans, iter, BTREE_ID_extents, pos,
+	for_each_btree_key(&trans, iter, BTREE_ID_EXTENTS, pos,
 			   BTREE_ITER_SLOTS, k, err) {
 		if (bkey_cmp(bkey_start_pos(k.k), end) >= 0)
 			break;
@@ -725,7 +725,7 @@ static unsigned bch2_extent_ptr_durability(struct bch_fs *c,
 
 	ca = bch_dev_bkey_exists(c, p.ptr.dev);
 
-	if (ca->mi.state != BCH_MEMBER_STATE_failed)
+	if (ca->mi.state != BCH_MEMBER_STATE_FAILED)
 		durability = max_t(unsigned, durability, ca->mi.durability);
 
 	if (p.has_ec)
@@ -972,9 +972,9 @@ bool bch2_extent_normalize(struct bch_fs *c, struct bkey_s k)
 
 	/* will only happen if all pointers were cached: */
 	if (!bch2_bkey_nr_ptrs(k.s_c))
-		k.k->type = KEY_TYPE_deleted;
+		k.k->type = KEY_TYPE_discard;
 
-	return bkey_deleted(k.k);
+	return bkey_whiteout(k.k);
 }
 
 void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,

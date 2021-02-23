@@ -114,7 +114,7 @@ int cmd_dump(int argc, char *argv[])
 	opt_set(opts, nochanges,	true);
 	opt_set(opts, norecovery,	true);
 	opt_set(opts, degraded,		true);
-	opt_set(opts, errors,		BCH_ON_ERROR_continue);
+	opt_set(opts, errors,		BCH_ON_ERROR_CONTINUE);
 	opt_set(opts, fix_errors,	FSCK_OPT_YES);
 
 	while ((opt = getopt(argc, argv, "o:fvh")) != -1)
@@ -447,7 +447,7 @@ int cmd_list(int argc, char *argv[])
 	opt_set(opts, nochanges,	true);
 	opt_set(opts, norecovery,	true);
 	opt_set(opts, degraded,		true);
-	opt_set(opts, errors,		BCH_ON_ERROR_continue);
+	opt_set(opts, errors,		BCH_ON_ERROR_CONTINUE);
 
 	while ((opt = getopt(argc, argv, "b:s:e:i:m:fvh")) != -1)
 		switch (opt) {
@@ -540,7 +540,7 @@ int cmd_list_journal(int argc, char *argv[])
 	opt_set(opts, nochanges,	true);
 	opt_set(opts, norecovery,	true);
 	opt_set(opts, degraded,		true);
-	opt_set(opts, errors,		BCH_ON_ERROR_continue);
+	opt_set(opts, errors,		BCH_ON_ERROR_CONTINUE);
 	opt_set(opts, fix_errors,	FSCK_OPT_YES);
 	opt_set(opts, keep_journal,	true);
 

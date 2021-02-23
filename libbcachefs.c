@@ -255,7 +255,7 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 		m->first_bucket	= 0;
 		m->bucket_size	= cpu_to_le16(i->bucket_size);
 
-		SET_BCH_MEMBER_REPLACEMENT(m,	BCH_CACHE_REPLACEMENT_lru);
+		SET_BCH_MEMBER_REPLACEMENT(m,	CACHE_REPLACEMENT_LRU);
 		SET_BCH_MEMBER_DISCARD(m,	i->discard);
 		SET_BCH_MEMBER_DATA_ALLOWED(m,	i->data_allowed);
 		SET_BCH_MEMBER_DURABILITY(m,	i->durability + 1);
@@ -535,14 +535,14 @@ static void bch2_sb_print_members(struct bch_sb *sb, struct bch_sb_field *f,
 		       time_str,
 
 		       BCH_MEMBER_STATE(m) < BCH_MEMBER_STATE_NR
-		       ? bch2_member_states[BCH_MEMBER_STATE(m)]
+		       ? bch2_dev_state[BCH_MEMBER_STATE(m)]
 		       : "unknown",
 
 		       group,
 		       data_allowed_str,
 		       data_has_str,
 
-		       BCH_MEMBER_REPLACEMENT(m) < BCH_CACHE_REPLACEMENT_NR
+		       BCH_MEMBER_REPLACEMENT(m) < CACHE_REPLACEMENT_NR
 		       ? bch2_cache_replacement_policies[BCH_MEMBER_REPLACEMENT(m)]
 		       : "unknown",
 
@@ -778,7 +778,7 @@ void bch2_sb_print(struct bch_sb *sb, bool print_layout,
 	       pr_units(le16_to_cpu(sb->block_size), units),
 	       pr_units(BCH_SB_BTREE_NODE_SIZE(sb), units),
 
-	       BCH_SB_ERROR_ACTION(sb) < BCH_ON_ERROR_NR
+	       BCH_SB_ERROR_ACTION(sb) < BCH_NR_ERROR_ACTIONS
 	       ? bch2_error_actions[BCH_SB_ERROR_ACTION(sb)]
 	       : "unknown",
 

@@ -313,9 +313,9 @@ int cmd_device_evacuate(int argc, char *argv[])
 
 	struct bch_ioctl_dev_usage u = bchu_dev_usage(fs, dev_idx);
 
-	if (u.state == BCH_MEMBER_STATE_rw) {
+	if (u.state == BCH_MEMBER_STATE_RW) {
 		printf("Setting %s readonly\n", dev_path);
-		bchu_disk_set_state(fs, dev_idx, BCH_MEMBER_STATE_ro, 0);
+		bchu_disk_set_state(fs, dev_idx, BCH_MEMBER_STATE_RO, 0);
 	}
 
 	return bchu_data(fs, (struct bch_ioctl_data) {
@@ -372,7 +372,7 @@ int cmd_device_set_state(int argc, char *argv[])
 		die("Please supply a device state");
 
 	unsigned new_state = read_string_list_or_die(new_state_str,
-					bch2_member_states, "device state");
+					bch2_dev_state, "device state");
 
 	if (!offline) {
 		unsigned dev_idx;

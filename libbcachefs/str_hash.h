@@ -18,11 +18,11 @@ static inline enum bch_str_hash_type
 bch2_str_hash_opt_to_type(struct bch_fs *c, enum bch_str_hash_opts opt)
 {
 	switch (opt) {
-	case BCH_STR_HASH_OPT_crc32c:
+	case BCH_STR_HASH_OPT_CRC32C:
 		return BCH_STR_HASH_CRC32C;
-	case BCH_STR_HASH_OPT_crc64:
+	case BCH_STR_HASH_OPT_CRC64:
 		return BCH_STR_HASH_CRC64;
-	case BCH_STR_HASH_OPT_siphash:
+	case BCH_STR_HASH_OPT_SIPHASH:
 		return c->sb.features & (1ULL << BCH_FEATURE_new_siphash)
 			? BCH_STR_HASH_SIPHASH
 			: BCH_STR_HASH_SIPHASH_OLD;
@@ -156,7 +156,7 @@ bch2_hash_lookup(struct btree_trans *trans,
 		if (k.k->type == desc.key_type) {
 			if (!desc.cmp_key(k, key))
 				return iter;
-		} else if (k.k->type == KEY_TYPE_hash_whiteout) {
+		} else if (k.k->type == KEY_TYPE_whiteout) {
 			;
 		} else {
 			/* hole, not found */
@@ -210,7 +210,7 @@ int bch2_hash_needs_whiteout(struct btree_trans *trans,
 
 	for_each_btree_key_continue(iter, BTREE_ITER_SLOTS, k, ret) {
 		if (k.k->type != desc.key_type &&
-		    k.k->type != KEY_TYPE_hash_whiteout)
+		    k.k->type != KEY_TYPE_whiteout)
 			break;
 
 		if (k.k->type == desc.key_type &&
@@ -254,7 +254,7 @@ int bch2_hash_set(struct btree_trans *trans,
 		    !(flags & BCH_HASH_SET_MUST_REPLACE))
 			slot = bch2_trans_copy_iter(trans, iter);
 
-		if (k.k->type != KEY_TYPE_hash_whiteout)
+		if (k.k->type != KEY_TYPE_whiteout)
 			goto not_found;
 	}
 
@@ -303,7 +303,7 @@ int bch2_hash_delete_at(struct btree_trans *trans,
 
 	bkey_init(&delete->k);
 	delete->k.p = iter->pos;
-	delete->k.type = ret ? KEY_TYPE_hash_whiteout : KEY_TYPE_deleted;
+	delete->k.type = ret ? KEY_TYPE_whiteout : KEY_TYPE_deleted;
 
 	bch2_trans_update(trans, iter, delete, 0);
 	return 0;
