@@ -80,7 +80,7 @@ struct task_struct *kthread_create(int (*thread_fn)(void *data),
 
 	ret = pthread_create(&p->thread, &attr, kthread_start_fn, p);
 	if (ret)
-		die("pthread_create error %s", strerror(ret));
+		return ERR_PTR(-ret);
 	pthread_setname_np(p->thread, p->comm);
 	return p;
 }
