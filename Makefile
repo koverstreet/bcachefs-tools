@@ -1,12 +1,9 @@
-
 PREFIX?=/usr/local
 PKG_CONFIG?=pkg-config
 INSTALL=install
 PYTEST=pytest-3
 CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall				\
 	-Wno-pointer-sign					\
-	-Wno-zero-length-bounds					\
-	-Wno-stringop-overflow					\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
 	-I. -Iinclude -Iraid					\
@@ -28,11 +25,16 @@ VERSION?=$(shell git describe --dirty=+ 2>/dev/null || echo v0.1-nogit)
 CC_VERSION=$(shell $(CC) -v 2>&1|grep -E '(gcc|clang) version')
 
 ifneq (,$(findstring gcc,$(CC_VERSION)))
-	CFLAGS+=-Wno-unused-but-set-variable
+	CFLAGS+=-Wno-unused-but-set-variable			\
+		-Wno-zero-length-bounds				\
+		-Wno-stringop-overflow
 endif
 
 ifneq (,$(findstring clang,$(CC_VERSION)))
-	CFLAGS+=-Wno-missing-braces
+	CFLAGS+=-Wno-missing-braces				\
+		-Wno-zero-length-array				\
+		-Wno-shift-overflow				\
+		-Wno-enum-conversion
 endif
 
 ifdef D

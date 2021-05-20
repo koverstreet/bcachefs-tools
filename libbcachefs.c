@@ -1100,22 +1100,17 @@ struct bch_opts bch2_parse_opts(struct bch_opt_strs strs)
 	return opts;
 }
 
+#define newline(c)		\
+	do {			\
+		printf("\n");	\
+		c = 0;	 	\
+	} while(0)
 void bch2_opts_usage(unsigned opt_types)
 {
 	const struct bch_option *opt;
 	unsigned i, c = 0, helpcol = 30;
 
-	void tabalign() {
-		while (c < helpcol) {
-			putchar(' ');
-			c++;
-		}
-	}
 
-	void newline() {
-		printf("\n");
-		c = 0;
-	}
 
 	for (opt = bch2_opt_table;
 	     opt < bch2_opt_table + bch2_opts_nr;
@@ -1146,21 +1141,24 @@ void bch2_opts_usage(unsigned opt_types)
 			const char *l = opt->help;
 
 			if (c >= helpcol)
-				newline();
+				newline(c);
 
 			while (1) {
 				const char *n = strchrnul(l, '\n');
 
-				tabalign();
+				while (c < helpcol) {
+					putchar(' ');
+					c++;
+				}
 				printf("%.*s", (int) (n - l), l);
-				newline();
+				newline(c);
 
 				if (!*n)
 					break;
 				l = n + 1;
 			}
 		} else {
-			newline();
+			newline(c);
 		}
 	}
 }

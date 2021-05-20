@@ -20,6 +20,7 @@
 
 set -e
 
+PYTEST=pytest-3
 spam=$(tempfile)
 unset BCACHEFS_FUSE BCACHEFS_TEST_USE_VALGRIND D
 
@@ -44,7 +45,7 @@ function test() {
     echo Running tests.
     (
         cd tests
-        pytest-3 -n${JOBS}
+        ${PYTEST} -n${JOBS}
     ) > ${spam} 2>&1
 }
 
@@ -53,7 +54,7 @@ function test_vg() {
     (
         export BCACHEFS_TEST_USE_VALGRIND=yes
         cd tests
-        pytest-3 -n${JOBS}
+        ${PYTEST} -n${JOBS}
     ) > ${spam} 2>&1
 }
 
