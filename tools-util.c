@@ -289,6 +289,8 @@ int open_for_format(const char *dev, bool force)
 		fputs("Proceed anyway?", stdout);
 		if (!ask_yn())
 			exit(EXIT_FAILURE);
+		while (blkid_do_probe(pr) == 0)
+    			blkid_do_wipe(pr, 0);
 	}
 
 	blkid_free_probe(pr);
