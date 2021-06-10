@@ -1,12 +1,13 @@
 PREFIX?=/usr/local
 PKG_CONFIG?=pkg-config
 INSTALL=install
+KVERSION = $(shell uname -r)
 PYTEST=pytest-3
-CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall				\
+CFLAGS+=-std=gnu89 -O2 -MMD -Wall				\
 	-Wno-pointer-sign					\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
-	-I. -Iinclude -Iraid					\
+	-I. -Iraid						\
 	-D_FILE_OFFSET_BITS=64					\
 	-D_GNU_SOURCE						\
 	-D_LGPL_SOURCE						\
@@ -17,6 +18,7 @@ CFLAGS+=-std=gnu89 -O2 -g -MMD -Wall				\
 	-DNO_BCACHEFS_FS					\
 	-DNO_BCACHEFS_SYSFS					\
 	-DVERSION_STRING='"$(VERSION)"'				\
+	-Iinclude						\
 	$(EXTRA_CFLAGS)
 LDFLAGS+=$(CFLAGS) $(EXTRA_LDFLAGS)
 
@@ -26,8 +28,15 @@ CC_VERSION=$(shell $(CC) -v 2>&1|grep -E '(gcc|clang) version')
 
 ifneq (,$(findstring gcc,$(CC_VERSION)))
 	CFLAGS+=-Wno-unused-but-set-variable			\
-		-Wno-zero-length-bounds				\
 		-Wno-stringop-overflow
+#gcc 7-9 do not allow the -Wno-zero-length-bounds, and github currently still uses gcc 7, so we'll have to exclude it
+ifeq (,$(findstring 9.,$(CC_VERSION)))
+ifeq (,$(findstring 8.,$(CC_VERSION)))
+ifeq (,$(findstring 7.,$(CC_VERSION)))
+	CFLAGS+=-Wno-zero-length-bounds
+endif
+endif
+endif
 endif
 
 ifneq (,$(findstring clang,$(CC_VERSION)))
@@ -38,10 +47,10 @@ ifneq (,$(findstring clang,$(CC_VERSION)))
 endif
 
 ifdef BCACHEFS_DEBUG
-	CFLAGS+=-Werror
-	CFLAGS+=-DCONFIG_BCACHEFS_DEBUG=y
+	CFLAGS+=-Werror						\
+		-DCONFIG_BCACHEFS_DEBUG=y			\
+		-DCONFIG_VALGRIND=y
 endif
-	CFLAGS+=-DCONFIG_VALGRIND=y
 
 PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd libudev"
 ifdef BCACHEFS_FUSE
@@ -98,6 +107,8 @@ bcachefs: $(filter-out ./tests/%.o, $(OBJS))
 
 MOUNT_SRCS=$(shell find mount/src -type f -iname '*.rs') \
     mount/Cargo.toml mount/Cargo.lock mount/build.rs
+debug: CFLAGS+=-g -Werror -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
+debug: bcachefs
 libbcachefs_mount.a: $(MOUNT_SRCS)
 	LIBBCACHEFS_INCLUDE=$(CURDIR) cargo build --manifest-path mount/Cargo.toml --release
 	cp mount/target/release/libbcachefs_mount.a $@
