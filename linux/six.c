@@ -142,6 +142,8 @@ static __always_inline bool do_six_trylock_type(struct six_lock *lock,
 	union six_lock_state old, new;
 	bool ret;
 	u64 v;
+	old.v = 0;
+	new.v = 0;
 
 	EBUG_ON(type == SIX_LOCK_write && lock->owner != current);
 	EBUG_ON(type == SIX_LOCK_write && (lock->state.seq & 1));

@@ -32,6 +32,10 @@ Or to build from source, install libscrypt from the AUR along with,
 
 Then, just make && make install
 
+-- Debug build --
+
+In order to perform extra checks on bcachefs tools, abort on any unforeseen warning and include support for valgrind, use 'make debug'.
+This target will decrease performance and is specifically meant for developers
 
 -- Experimental features --
 
