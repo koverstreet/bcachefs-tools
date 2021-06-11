@@ -230,112 +230,134 @@ void bch2_extent_to_text(struct printbuf *out, struct bch_fs *c,
 	bch2_bkey_ptrs_to_text(out, c, k);
 }
 
-enum merge_result bch2_extent_merge(struct bch_fs *c,
-				    struct bkey_s _l, struct bkey_s _r)
+bool bch2_extent_merge(struct bch_fs *c, struct bkey_s l, struct bkey_s_c r)
 {
-	struct bkey_s_extent l = bkey_s_to_extent(_l);
-	struct bkey_s_extent r = bkey_s_to_extent(_r);
-	union bch_extent_entry *en_l = l.v->start;
-	union bch_extent_entry *en_r = r.v->start;
-	struct bch_extent_crc_unpacked crc_l, crc_r;
+	struct bkey_ptrs   l_ptrs = bch2_bkey_ptrs(l);
+	struct bkey_ptrs_c r_ptrs = bch2_bkey_ptrs_c(r);
+	union bch_extent_entry *en_l;
+	const union bch_extent_entry *en_r;
+	struct extent_ptr_decoded lp, rp;
+	bool use_right_ptr;
+	struct bch_dev *ca;
 
-	if (bkey_val_u64s(l.k) != bkey_val_u64s(r.k))
-		return BCH_MERGE_NOMERGE;
-
-	crc_l = bch2_extent_crc_unpack(l.k, NULL);
-
-	extent_for_each_entry(l, en_l) {
-		en_r = vstruct_idx(r.v, (u64 *) en_l - l.v->_data);
-
+	en_l = l_ptrs.start;
+	en_r = r_ptrs.start;
+	while (en_l < l_ptrs.end && en_r < r_ptrs.end) {
 		if (extent_entry_type(en_l) != extent_entry_type(en_r))
-			return BCH_MERGE_NOMERGE;
+			return false;
 
-		switch (extent_entry_type(en_l)) {
-		case BCH_EXTENT_ENTRY_ptr: {
-			const struct bch_extent_ptr *lp = &en_l->ptr;
-			const struct bch_extent_ptr *rp = &en_r->ptr;
-			struct bch_dev *ca;
-
-			if (lp->offset + crc_l.compressed_size != rp->offset ||
-			    lp->dev			!= rp->dev ||
-			    lp->gen			!= rp->gen)
-				return BCH_MERGE_NOMERGE;
-
-			/* We don't allow extents to straddle buckets: */
-			ca = bch_dev_bkey_exists(c, lp->dev);
-
-			if (PTR_BUCKET_NR(ca, lp) != PTR_BUCKET_NR(ca, rp))
-				return BCH_MERGE_NOMERGE;
-
-			break;
-		}
-		case BCH_EXTENT_ENTRY_stripe_ptr:
-			if (en_l->stripe_ptr.block	!= en_r->stripe_ptr.block ||
-			    en_l->stripe_ptr.idx	!= en_r->stripe_ptr.idx)
-				return BCH_MERGE_NOMERGE;
-			break;
-		case BCH_EXTENT_ENTRY_crc32:
-		case BCH_EXTENT_ENTRY_crc64:
-		case BCH_EXTENT_ENTRY_crc128:
-			crc_l = bch2_extent_crc_unpack(l.k, entry_to_crc(en_l));
-			crc_r = bch2_extent_crc_unpack(r.k, entry_to_crc(en_r));
-
-			if (crc_l.csum_type		!= crc_r.csum_type ||
-			    crc_l.compression_type	!= crc_r.compression_type ||
-			    crc_l.nonce			!= crc_r.nonce)
-				return BCH_MERGE_NOMERGE;
-
-			if (crc_l.offset + crc_l.live_size != crc_l.compressed_size ||
-			    crc_r.offset)
-				return BCH_MERGE_NOMERGE;
-
-			if (!bch2_checksum_mergeable(crc_l.csum_type))
-				return BCH_MERGE_NOMERGE;
-
-			if (crc_is_compressed(crc_l))
-				return BCH_MERGE_NOMERGE;
-
-			if (crc_l.csum_type &&
-			    crc_l.uncompressed_size +
-			    crc_r.uncompressed_size > c->sb.encoded_extent_max)
-				return BCH_MERGE_NOMERGE;
-
-			if (crc_l.uncompressed_size + crc_r.uncompressed_size >
-			    bch2_crc_field_size_max[extent_entry_type(en_l)])
-				return BCH_MERGE_NOMERGE;
-
-			break;
-		default:
-			return BCH_MERGE_NOMERGE;
-		}
+		en_l = extent_entry_next(en_l);
+		en_r = extent_entry_next(en_r);
 	}
 
-	extent_for_each_entry(l, en_l) {
-		struct bch_extent_crc_unpacked crc_l, crc_r;
+	if (en_l < l_ptrs.end || en_r < r_ptrs.end)
+		return false;
 
-		en_r = vstruct_idx(r.v, (u64 *) en_l - l.v->_data);
+	en_l = l_ptrs.start;
+	en_r = r_ptrs.start;
+	lp.crc = bch2_extent_crc_unpack(l.k, NULL);
+	rp.crc = bch2_extent_crc_unpack(r.k, NULL);
 
-		if (!extent_entry_is_crc(en_l))
-			continue;
+	while (__bkey_ptr_next_decode(l.k, l_ptrs.end, lp, en_l) &&
+	       __bkey_ptr_next_decode(r.k, r_ptrs.end, rp, en_r)) {
+		if (lp.ptr.offset + lp.crc.offset + lp.crc.live_size !=
+		    rp.ptr.offset + rp.crc.offset ||
+		    lp.ptr.dev			!= rp.ptr.dev ||
+		    lp.ptr.gen			!= rp.ptr.gen ||
+		    lp.has_ec			!= rp.has_ec)
+			return false;
 
-		crc_l = bch2_extent_crc_unpack(l.k, entry_to_crc(en_l));
-		crc_r = bch2_extent_crc_unpack(r.k, entry_to_crc(en_r));
+		/* Extents may not straddle buckets: */
+		ca = bch_dev_bkey_exists(c, lp.ptr.dev);
+		if (PTR_BUCKET_NR(ca, &lp.ptr) != PTR_BUCKET_NR(ca, &rp.ptr))
+			return false;
 
-		crc_l.csum = bch2_checksum_merge(crc_l.csum_type,
-						 crc_l.csum,
-						 crc_r.csum,
-						 crc_r.uncompressed_size << 9);
+		if (lp.has_ec			!= rp.has_ec ||
+		    (lp.has_ec &&
+		     (lp.ec.block		!= rp.ec.block ||
+		      lp.ec.redundancy		!= rp.ec.redundancy ||
+		      lp.ec.idx			!= rp.ec.idx)))
+			return false;
 
-		crc_l.uncompressed_size	+= crc_r.uncompressed_size;
-		crc_l.compressed_size	+= crc_r.compressed_size;
+		if (lp.crc.compression_type	!= rp.crc.compression_type ||
+		    lp.crc.nonce		!= rp.crc.nonce)
+			return false;
 
-		bch2_extent_crc_pack(entry_to_crc(en_l), crc_l,
-				     extent_entry_type(en_l));
+		if (lp.crc.offset + lp.crc.live_size + rp.crc.live_size <=
+		    lp.crc.uncompressed_size) {
+			/* can use left extent's crc entry */
+		} else if (lp.crc.live_size <= rp.crc.offset ) {
+			/* can use right extent's crc entry */
+		} else {
+			/* check if checksums can be merged: */
+			if (lp.crc.csum_type		!= rp.crc.csum_type ||
+			    lp.crc.nonce		!= rp.crc.nonce ||
+			    crc_is_compressed(lp.crc) ||
+			    !bch2_checksum_mergeable(lp.crc.csum_type))
+				return false;
+
+			if (lp.crc.offset + lp.crc.live_size != lp.crc.compressed_size ||
+			    rp.crc.offset)
+				return false;
+
+			if (lp.crc.csum_type &&
+			    lp.crc.uncompressed_size +
+			    rp.crc.uncompressed_size > c->sb.encoded_extent_max)
+				return false;
+
+			if (lp.crc.uncompressed_size + rp.crc.uncompressed_size >
+			    bch2_crc_field_size_max[extent_entry_type(en_l)])
+				return false;
+		}
+
+		en_l = extent_entry_next(en_l);
+		en_r = extent_entry_next(en_r);
+	}
+
+	use_right_ptr = false;
+	en_l = l_ptrs.start;
+	en_r = r_ptrs.start;
+	while (en_l < l_ptrs.end) {
+		if (extent_entry_type(en_l) == BCH_EXTENT_ENTRY_ptr &&
+		    use_right_ptr)
+			en_l->ptr = en_r->ptr;
+
+		if (extent_entry_is_crc(en_l)) {
+			struct bch_extent_crc_unpacked crc_l =
+				bch2_extent_crc_unpack(l.k, entry_to_crc(en_l));
+			struct bch_extent_crc_unpacked crc_r =
+				bch2_extent_crc_unpack(r.k, entry_to_crc(en_r));
+
+			use_right_ptr = false;
+
+			if (crc_l.offset + crc_l.live_size + crc_r.live_size <=
+			    crc_l.uncompressed_size) {
+				/* can use left extent's crc entry */
+			} else if (crc_l.live_size <= crc_r.offset ) {
+				/* can use right extent's crc entry */
+				crc_r.offset -= crc_l.live_size;
+				bch2_extent_crc_pack(entry_to_crc(en_l), crc_r,
+						     extent_entry_type(en_l));
+				use_right_ptr = true;
+			} else {
+				crc_l.csum = bch2_checksum_merge(crc_l.csum_type,
+								 crc_l.csum,
+								 crc_r.csum,
+								 crc_r.uncompressed_size << 9);
+
+				crc_l.uncompressed_size	+= crc_r.uncompressed_size;
+				crc_l.compressed_size	+= crc_r.compressed_size;
+				bch2_extent_crc_pack(entry_to_crc(en_l), crc_l,
+						     extent_entry_type(en_l));
+			}
+		}
+
+		en_l = extent_entry_next(en_l);
+		en_r = extent_entry_next(en_r);
 	}
 
 	bch2_key_resize(l.k, l.k->size + r.k->size);
-
-	return BCH_MERGE_MERGE;
+	return true;
 }
 
 /* KEY_TYPE_reservation: */
@@ -363,25 +385,17 @@ void bch2_reservation_to_text(struct printbuf *out, struct bch_fs *c,
 	       r.v->nr_replicas);
 }
 
-enum merge_result bch2_reservation_merge(struct bch_fs *c,
-					 struct bkey_s _l, struct bkey_s _r)
+bool bch2_reservation_merge(struct bch_fs *c, struct bkey_s _l, struct bkey_s_c _r)
 {
 	struct bkey_s_reservation l = bkey_s_to_reservation(_l);
-	struct bkey_s_reservation r = bkey_s_to_reservation(_r);
+	struct bkey_s_c_reservation r = bkey_s_c_to_reservation(_r);
 
 	if (l.v->generation != r.v->generation ||
 	    l.v->nr_replicas != r.v->nr_replicas)
-		return BCH_MERGE_NOMERGE;
-
-	if ((u64) l.k->size + r.k->size > KEY_SIZE_MAX) {
-		bch2_key_resize(l.k, KEY_SIZE_MAX);
-		bch2_cut_front_s(l.k->p, r.s);
-		return BCH_MERGE_PARTIAL;
-	}
+		return false;
 
 	bch2_key_resize(l.k, l.k->size + r.k->size);
-
-	return BCH_MERGE_MERGE;
+	return true;
 }
 
 /* Extent checksum entries: */

@@ -153,9 +153,6 @@ struct btree *bch2_btree_iter_next_node(struct btree_iter *);
 struct bkey_s_c bch2_btree_iter_peek(struct btree_iter *);
 struct bkey_s_c bch2_btree_iter_next(struct btree_iter *);
 
-struct bkey_s_c bch2_btree_iter_peek_with_updates(struct btree_iter *);
-struct bkey_s_c bch2_btree_iter_next_with_updates(struct btree_iter *);
-
 struct bkey_s_c bch2_btree_iter_peek_prev(struct btree_iter *);
 struct bkey_s_c bch2_btree_iter_prev(struct btree_iter *);
 
@@ -179,6 +176,12 @@ static inline void bch2_btree_iter_set_pos(struct btree_iter *iter, struct bpos 
 	iter->k.p.snapshot	= iter->pos.snapshot	= new_pos.snapshot;
 	iter->k.size = 0;
 	iter->should_be_locked = false;
+}
+
+static inline struct btree_iter *btree_iter_child(struct btree_iter *iter)
+{
+	return iter->child_idx == U8_MAX ? NULL
+		: iter->trans->iters + iter->child_idx;
 }
 
 /* Sort order for locking btree iterators: */

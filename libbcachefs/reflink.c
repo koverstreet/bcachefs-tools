@@ -42,24 +42,22 @@ void bch2_reflink_p_to_text(struct printbuf *out, struct bch_fs *c,
 	pr_buf(out, "idx %llu", le64_to_cpu(p.v->idx));
 }
 
-enum merge_result bch2_reflink_p_merge(struct bch_fs *c,
-				       struct bkey_s _l, struct bkey_s _r)
+bool bch2_reflink_p_merge(struct bch_fs *c, struct bkey_s _l, struct bkey_s_c _r)
 {
 	struct bkey_s_reflink_p l = bkey_s_to_reflink_p(_l);
-	struct bkey_s_reflink_p r = bkey_s_to_reflink_p(_r);
+	struct bkey_s_c_reflink_p r = bkey_s_c_to_reflink_p(_r);
+
+	/*
+	 * Disabled for now, the triggers code needs to be reworked for merging
+	 * of reflink pointers to work:
+	 */
+	return false;
 
 	if (le64_to_cpu(l.v->idx) + l.k->size != le64_to_cpu(r.v->idx))
-		return BCH_MERGE_NOMERGE;
-
-	if ((u64) l.k->size + r.k->size > KEY_SIZE_MAX) {
-		bch2_key_resize(l.k, KEY_SIZE_MAX);
-		bch2_cut_front_s(l.k->p, _r);
-		return BCH_MERGE_PARTIAL;
-	}
+		return false;
 
 	bch2_key_resize(l.k, l.k->size + r.k->size);
-
-	return BCH_MERGE_MERGE;
+	return true;
 }
 
 /* indirect extents */
@@ -82,6 +80,14 @@ void bch2_reflink_v_to_text(struct printbuf *out, struct bch_fs *c,
 	pr_buf(out, "refcount: %llu ", le64_to_cpu(r.v->refcount));
 
 	bch2_bkey_ptrs_to_text(out, c, k);
+}
+
+bool bch2_reflink_v_merge(struct bch_fs *c, struct bkey_s _l, struct bkey_s_c _r)
+{
+	struct bkey_s_reflink_v   l = bkey_s_to_reflink_v(_l);
+	struct bkey_s_c_reflink_v r = bkey_s_c_to_reflink_v(_r);
+
+	return l.v->refcount == r.v->refcount && bch2_extent_merge(c, _l, _r);
 }
 
 /* indirect inline data */
@@ -138,7 +144,7 @@ static int bch2_make_extent_indirect(struct btree_trans *trans,
 	/* rewind iter to start of hole, if necessary: */
 	bch2_btree_iter_set_pos(reflink_iter, bkey_start_pos(k.k));
 
-	r_v = bch2_trans_kmalloc(trans, sizeof(__le64) + bkey_val_bytes(&orig->k));
+	r_v = bch2_trans_kmalloc(trans, sizeof(__le64) + bkey_bytes(&orig->k));
 	ret = PTR_ERR_OR_ZERO(r_v);
 	if (ret)
 		goto err;
@@ -158,12 +164,6 @@ static int bch2_make_extent_indirect(struct btree_trans *trans,
 	ret = bch2_trans_update(trans, reflink_iter, r_v, 0);
 	if (ret)
 		goto err;
-
-	r_p = bch2_trans_kmalloc(trans, sizeof(*r_p));
-	if (IS_ERR(r_p)) {
-		ret = PTR_ERR(r_p);
-		goto err;
-	}
 
 	orig->k.type = KEY_TYPE_reflink_p;
 	r_p = bkey_i_to_reflink_p(orig);

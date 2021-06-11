@@ -1079,32 +1079,6 @@ static int bch2_mark_stripe(struct bch_fs *c,
 	return 0;
 }
 
-static int __reflink_p_frag_references(struct bkey_s_c_reflink_p p,
-				       u64 p_start, u64 p_end,
-				       u64 v_start, u64 v_end)
-{
-	if (p_start == p_end)
-		return false;
-
-	p_start	+= le64_to_cpu(p.v->idx);
-	p_end	+= le64_to_cpu(p.v->idx);
-
-	if (p_end <= v_start)
-		return false;
-	if (p_start >= v_end)
-		return false;
-	return true;
-}
-
-static int reflink_p_frag_references(struct bkey_s_c_reflink_p p,
-				     u64 start, u64 end,
-				     struct bkey_s_c k)
-{
-	return __reflink_p_frag_references(p, start, end,
-					   bkey_start_offset(k.k),
-					   k.k->p.offset);
-}
-
 static int __bch2_mark_reflink_p(struct bch_fs *c,
 			struct bkey_s_c_reflink_p p,
 			u64 idx, unsigned sectors,
@@ -1115,7 +1089,6 @@ static int __bch2_mark_reflink_p(struct bch_fs *c,
 {
 	struct reflink_gc *r;
 	int add = !(flags & BTREE_TRIGGER_OVERWRITE) ? 1 : -1;
-	int frags_referenced;
 
 	while (1) {
 		if (*r_idx >= c->reflink_gc_nr)
@@ -1126,20 +1099,6 @@ static int __bch2_mark_reflink_p(struct bch_fs *c,
 		if (r->offset > idx)
 			break;
 		(*r_idx)++;
-	}
-
-	frags_referenced =
-		__reflink_p_frag_references(p, 0, front_frag,
-					    r->offset - r->size, r->offset) +
-		__reflink_p_frag_references(p, back_frag, p.k->size,
-					    r->offset - r->size, r->offset);
-
-	if (frags_referenced == 2) {
-		BUG_ON(!(flags & BTREE_TRIGGER_OVERWRITE_SPLIT));
-		add = -add;
-	} else if (frags_referenced == 1) {
-		BUG_ON(!(flags & BTREE_TRIGGER_OVERWRITE));
-		add = 0;
 	}
 
 	BUG_ON((s64) r->refcount + add < 0);
@@ -1515,29 +1474,6 @@ static struct btree_iter *trans_get_update(struct btree_trans *trans,
 	return NULL;
 }
 
-static int trans_get_key(struct btree_trans *trans,
-			 enum btree_id btree_id, struct bpos pos,
-			 struct btree_iter **iter,
-			 struct bkey_s_c *k)
-{
-	unsigned flags = btree_id != BTREE_ID_alloc
-		? BTREE_ITER_SLOTS
-		: BTREE_ITER_CACHED;
-	int ret;
-
-	*iter = trans_get_update(trans, btree_id, pos, k);
-	if (*iter)
-		return 1;
-
-	*iter = bch2_trans_get_iter(trans, btree_id, pos,
-				    flags|BTREE_ITER_INTENT);
-	*k = __bch2_btree_iter_peek(*iter, flags);
-	ret = bkey_err(*k);
-	if (ret)
-		bch2_trans_iter_put(trans, *iter);
-	return ret;
-}
-
 static struct bkey_alloc_buf *
 bch2_trans_start_alloc_update(struct btree_trans *trans, struct btree_iter **_iter,
 			      const struct bch_extent_ptr *ptr,
@@ -1617,9 +1553,13 @@ static int bch2_trans_mark_stripe_ptr(struct btree_trans *trans,
 	struct bch_replicas_padded r;
 	int ret = 0;
 
-	ret = trans_get_key(trans, BTREE_ID_stripes, POS(0, p.ec.idx), &iter, &k);
-	if (ret < 0)
-		return ret;
+	iter = bch2_trans_get_iter(trans, BTREE_ID_stripes, POS(0, p.ec.idx),
+				   BTREE_ITER_INTENT|
+				   BTREE_ITER_WITH_UPDATES);
+	k = bch2_btree_iter_peek_slot(iter);
+	ret = bkey_err(k);
+	if (ret)
+		goto err;
 
 	if (k.k->type != KEY_TYPE_stripe) {
 		bch2_fs_inconsistent(c,
@@ -1627,7 +1567,7 @@ static int bch2_trans_mark_stripe_ptr(struct btree_trans *trans,
 			(u64) p.ec.idx);
 		bch2_inconsistent_error(c);
 		ret = -EIO;
-		goto out;
+		goto err;
 	}
 
 	if (!bch2_ptr_matches_stripe(bkey_s_c_to_stripe(k).v, p)) {
@@ -1635,13 +1575,13 @@ static int bch2_trans_mark_stripe_ptr(struct btree_trans *trans,
 			"stripe pointer doesn't match stripe %llu",
 			(u64) p.ec.idx);
 		ret = -EIO;
-		goto out;
+		goto err;
 	}
 
 	s = bch2_trans_kmalloc(trans, bkey_bytes(k.k));
 	ret = PTR_ERR_OR_ZERO(s);
 	if (ret)
-		goto out;
+		goto err;
 
 	bkey_reassemble(&s->k_i, k);
 	stripe_blockcount_set(&s->v, p.ec.block,
@@ -1652,7 +1592,7 @@ static int bch2_trans_mark_stripe_ptr(struct btree_trans *trans,
 	bch2_bkey_to_replicas(&r.e, bkey_i_to_s_c(&s->k_i));
 	r.e.data_type = data_type;
 	update_replicas_list(trans, &r.e, sectors);
-out:
+err:
 	bch2_trans_iter_put(trans, iter);
 	return ret;
 }
@@ -1821,8 +1761,6 @@ static int bch2_trans_mark_stripe(struct btree_trans *trans,
 static int __bch2_trans_mark_reflink_p(struct btree_trans *trans,
 			struct bkey_s_c_reflink_p p,
 			u64 idx, unsigned sectors,
-			unsigned front_frag,
-			unsigned back_frag,
 			unsigned flags)
 {
 	struct bch_fs *c = trans->c;
@@ -1831,27 +1769,17 @@ static int __bch2_trans_mark_reflink_p(struct btree_trans *trans,
 	struct bkey_i *n;
 	__le64 *refcount;
 	int add = !(flags & BTREE_TRIGGER_OVERWRITE) ? 1 : -1;
-	int frags_referenced;
 	s64 ret;
 
-	ret = trans_get_key(trans, BTREE_ID_reflink,
-			    POS(0, idx), &iter, &k);
-	if (ret < 0)
-		return ret;
+	iter = bch2_trans_get_iter(trans, BTREE_ID_reflink, POS(0, idx),
+				   BTREE_ITER_INTENT|
+				   BTREE_ITER_WITH_UPDATES);
+	k = bch2_btree_iter_peek_slot(iter);
+	ret = bkey_err(k);
+	if (ret)
+		goto err;
 
 	sectors = min_t(u64, sectors, k.k->p.offset - idx);
-
-	frags_referenced =
-		reflink_p_frag_references(p, 0, front_frag, k) +
-		reflink_p_frag_references(p, back_frag, p.k->size, k);
-
-	if (frags_referenced == 2) {
-		BUG_ON(!(flags & BTREE_TRIGGER_OVERWRITE_SPLIT));
-		add = -add;
-	} else if (frags_referenced == 1) {
-		BUG_ON(!(flags & BTREE_TRIGGER_OVERWRITE));
-		goto out;
-	}
 
 	n = bch2_trans_kmalloc(trans, bkey_bytes(k.k));
 	ret = PTR_ERR_OR_ZERO(n);
@@ -1882,7 +1810,7 @@ static int __bch2_trans_mark_reflink_p(struct btree_trans *trans,
 	ret = bch2_trans_update(trans, iter, n, 0);
 	if (ret)
 		goto err;
-out:
+
 	ret = sectors;
 err:
 	bch2_trans_iter_put(trans, iter);
@@ -1894,20 +1822,15 @@ static int bch2_trans_mark_reflink_p(struct btree_trans *trans,
 			s64 sectors, unsigned flags)
 {
 	u64 idx = le64_to_cpu(p.v->idx) + offset;
-	unsigned front_frag, back_frag;
 	s64 ret = 0;
 
 	if (sectors < 0)
 		sectors = -sectors;
 
-	BUG_ON(offset + sectors > p.k->size);
-
-	front_frag = offset;
-	back_frag = offset + sectors;
+	BUG_ON(offset || sectors != p.k->size);
 
 	while (sectors) {
-		ret = __bch2_trans_mark_reflink_p(trans, p, idx, sectors,
-					front_frag, back_frag, flags);
+		ret = __bch2_trans_mark_reflink_p(trans, p, idx, sectors, flags);
 		if (ret < 0)
 			return ret;
 
@@ -1990,86 +1913,27 @@ int bch2_trans_mark_update(struct btree_trans *trans,
 	if (!btree_node_type_needs_gc(iter->btree_id))
 		return 0;
 
-	if (!btree_node_type_is_extents(iter->btree_id)) {
-		if (btree_iter_type(iter) != BTREE_ITER_CACHED) {
-			old = bch2_btree_iter_peek_slot(iter);
-			ret = bkey_err(old);
-			if (ret)
-				return ret;
-		} else {
-			struct bkey_cached *ck = (void *) iter->l[0].b;
-
-			BUG_ON(!ck->valid);
-			old = bkey_i_to_s_c(ck->k);
-		}
-
-		if (old.k->type == new->k.type) {
-			ret   = bch2_trans_mark_key(trans, old, bkey_i_to_s_c(new), 0, 0,
-					BTREE_TRIGGER_INSERT|BTREE_TRIGGER_OVERWRITE|flags);
-		} else {
-			ret   = bch2_trans_mark_key(trans, old, bkey_i_to_s_c(new), 0, 0,
-					BTREE_TRIGGER_INSERT|flags) ?:
-				bch2_trans_mark_key(trans, old, bkey_i_to_s_c(new), 0, 0,
-					BTREE_TRIGGER_OVERWRITE|flags);
-		}
-	} else {
-		struct btree_iter *copy;
-		struct bkey _old;
-
-		EBUG_ON(btree_iter_type(iter) == BTREE_ITER_CACHED);
-
-		bkey_init(&_old);
-		old = (struct bkey_s_c) { &_old, NULL };
-
-		ret = bch2_trans_mark_key(trans, old, bkey_i_to_s_c(new),
-					  0, new->k.size,
-					  BTREE_TRIGGER_INSERT);
+	if (btree_iter_type(iter) != BTREE_ITER_CACHED) {
+		old = bch2_btree_iter_peek_slot(iter);
+		ret = bkey_err(old);
 		if (ret)
 			return ret;
+	} else {
+		struct bkey_cached *ck = (void *) iter->l[0].b;
 
-		copy = bch2_trans_copy_iter(trans, iter);
+		BUG_ON(!ck->valid);
+		old = bkey_i_to_s_c(ck->k);
+	}
 
-		for_each_btree_key_continue(copy, 0, old, ret) {
-			unsigned offset = 0;
-			s64 sectors = -((s64) old.k->size);
-
-			flags |= BTREE_TRIGGER_OVERWRITE;
-
-			if (bkey_cmp(new->k.p, bkey_start_pos(old.k)) <= 0)
-				break;
-
-			switch (bch2_extent_overlap(&new->k, old.k)) {
-			case BCH_EXTENT_OVERLAP_ALL:
-				offset = 0;
-				sectors = -((s64) old.k->size);
-				break;
-			case BCH_EXTENT_OVERLAP_BACK:
-				offset = bkey_start_offset(&new->k) -
-					bkey_start_offset(old.k);
-				sectors = bkey_start_offset(&new->k) -
-					old.k->p.offset;
-				break;
-			case BCH_EXTENT_OVERLAP_FRONT:
-				offset = 0;
-				sectors = bkey_start_offset(old.k) -
-					new->k.p.offset;
-				break;
-			case BCH_EXTENT_OVERLAP_MIDDLE:
-				offset = bkey_start_offset(&new->k) -
-					bkey_start_offset(old.k);
-				sectors = -((s64) new->k.size);
-				flags |= BTREE_TRIGGER_OVERWRITE_SPLIT;
-				break;
-			}
-
-			BUG_ON(sectors >= 0);
-
-			ret = bch2_trans_mark_key(trans, old, bkey_i_to_s_c(new),
-					offset, sectors, flags);
-			if (ret)
-				break;
-		}
-		bch2_trans_iter_put(trans, copy);
+	if (old.k->type == new->k.type &&
+	    !btree_node_type_is_extents(iter->btree_id)) {
+		ret   = bch2_trans_mark_key(trans, old, bkey_i_to_s_c(new), 0, 0,
+				BTREE_TRIGGER_INSERT|BTREE_TRIGGER_OVERWRITE|flags);
+	} else {
+		ret   = bch2_trans_mark_key(trans, old, bkey_i_to_s_c(new), 0, new->k.size,
+				BTREE_TRIGGER_INSERT|flags) ?:
+			bch2_trans_mark_key(trans, old, bkey_i_to_s_c(new), 0, -((s64) old.k->size),
+				BTREE_TRIGGER_OVERWRITE|flags);
 	}
 
 	return ret;

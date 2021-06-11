@@ -209,12 +209,13 @@ enum btree_iter_type {
  * @pos or the first key strictly greater than @pos
  */
 #define BTREE_ITER_IS_EXTENTS		(1 << 6)
-#define BTREE_ITER_ERROR		(1 << 7)
-#define BTREE_ITER_SET_POS_AFTER_COMMIT	(1 << 8)
-#define BTREE_ITER_CACHED_NOFILL	(1 << 9)
-#define BTREE_ITER_CACHED_NOCREATE	(1 << 10)
-#define BTREE_ITER_NOT_EXTENTS		(1 << 11)
-#define BTREE_ITER_ALL_SNAPSHOTS	(1 << 12)
+#define BTREE_ITER_NOT_EXTENTS		(1 << 7)
+#define BTREE_ITER_ERROR		(1 << 8)
+#define BTREE_ITER_SET_POS_AFTER_COMMIT	(1 << 9)
+#define BTREE_ITER_CACHED_NOFILL	(1 << 10)
+#define BTREE_ITER_CACHED_NOCREATE	(1 << 11)
+#define BTREE_ITER_WITH_UPDATES		(1 << 12)
+#define BTREE_ITER_ALL_SNAPSHOTS	(1 << 13)
 
 enum btree_iter_uptodate {
 	BTREE_ITER_UPTODATE		= 0,
@@ -241,15 +242,20 @@ enum btree_iter_uptodate {
  */
 struct btree_iter {
 	struct btree_trans	*trans;
-	struct bpos		pos;
-	/* what we're searching for/what the iterator actually points to: */
-	struct bpos		real_pos;
-	struct bpos		pos_after_commit;
+	unsigned long		ip_allocated;
+
+	u8			idx;
+	u8			child_idx;
+
+	/* btree_iter_copy starts here: */
+	u16			flags;
+
 	/* When we're filtering by snapshot, the snapshot ID we're looking for: */
 	unsigned		snapshot;
 
-	u16			flags;
-	u8			idx;
+	struct bpos		pos;
+	struct bpos		real_pos;
+	struct bpos		pos_after_commit;
 
 	enum btree_id		btree_id:4;
 	enum btree_iter_uptodate uptodate:3;
@@ -276,7 +282,6 @@ struct btree_iter {
 	 * bch2_btree_iter_next_slot() can correctly advance pos.
 	 */
 	struct bkey		k;
-	unsigned long		ip_allocated;
 };
 
 static inline enum btree_iter_type
@@ -340,7 +345,6 @@ struct btree_insert_entry {
 	enum btree_id		btree_id:8;
 	u8			level;
 	unsigned		trans_triggers_run:1;
-	unsigned		is_extent:1;
 	struct bkey_i		*k;
 	struct btree_iter	*iter;
 };
@@ -376,7 +380,6 @@ struct btree_trans {
 	int			srcu_idx;
 
 	u8			nr_updates;
-	u8			nr_updates2;
 	unsigned		used_mempool:1;
 	unsigned		error:1;
 	unsigned		in_traverse_all:1;
@@ -391,7 +394,6 @@ struct btree_trans {
 
 	struct btree_iter	*iters;
 	struct btree_insert_entry *updates;
-	struct btree_insert_entry *updates2;
 
 	/* update path: */
 	struct btree_trans_commit_hook *hooks;

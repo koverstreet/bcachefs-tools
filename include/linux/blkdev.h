@@ -6,7 +6,7 @@
 #include <linux/kobject.h>
 #include <linux/types.h>
 
-#define BIO_MAX_PAGES	256
+#define BIO_MAX_VECS	256
 
 typedef unsigned fmode_t;
 

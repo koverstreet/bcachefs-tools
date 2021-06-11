@@ -26,6 +26,7 @@
 
 struct inode;
 struct dentry;
+struct user_namespace;
 
 /*
  * struct xattr_handler: When @name is set, match attributes with exactly that
@@ -40,7 +41,8 @@ struct xattr_handler {
 	int (*get)(const struct xattr_handler *, struct dentry *dentry,
 		   struct inode *inode, const char *name, void *buffer,
 		   size_t size);
-	int (*set)(const struct xattr_handler *, struct dentry *dentry,
+	int (*set)(const struct xattr_handler *,
+		   struct user_namespace *mnt_userns, struct dentry *dentry,
 		   struct inode *inode, const char *name, const void *buffer,
 		   size_t size, int flags);
 };
