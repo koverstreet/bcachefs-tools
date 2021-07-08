@@ -89,12 +89,13 @@ TAGS:
 tags:
 	ctags -R .
 
-DOCSRC := gen.h bcachefs.5.rst
-DOCGENERATED := bcachefs.5 doc/autogen/gen.csv
-DOCDEPS := $(addprefix ./doc/autogen/,$(DOCSRC))
+DOCSRC := opts_macro.h bcachefs.5.rst.tmpl
+DOCGENERATED := bcachefs.5 doc/bcachefs.5.rst
+DOCDEPS := $(addprefix ./doc/,$(DOCSRC))
 bcachefs.5: $(DOCDEPS)  libbcachefs/opts.h
-	CC=$(CC) doc/autogen/gen.sh
-	rst2man doc/autogen/bcachefs.5.rst bcachefs.5
+	$(CC) doc/opts_macro.h -I libbcachefs -I include -E 2>/dev/null	\
+		| doc/macro2rst.py
+	rst2man doc/bcachefs.5.rst bcachefs.5
 
 SRCS=$(shell find . -type f -iname '*.c')
 DEPS=$(SRCS:.c=.d)
