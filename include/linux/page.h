@@ -12,6 +12,11 @@ struct page;
 
 #endif
 
+#ifndef PAGE_SHIFT
+#define PAGE_SHIFT 12
+#endif
+
+
 #define virt_to_page(p)							\
 	((struct page *) (((unsigned long) (p)) & PAGE_MASK))
 #define offset_in_page(p)		((unsigned long) (p) & ~PAGE_MASK)
