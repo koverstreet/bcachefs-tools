@@ -61,6 +61,12 @@ else
 	INITRAMFS_DIR=/etc/initramfs-tools
 endif
 
+ifeq (, $(shell which rst2man))
+RST=rst2man.py
+else
+RST=rst2man
+endif
+
 .PHONY: all
 all: bcachefs bcachefs.5
 
@@ -84,7 +90,7 @@ DOCDEPS := $(addprefix ./doc/,$(DOCSRC))
 bcachefs.5: $(DOCDEPS)  libbcachefs/opts.h
 	$(CC) doc/opts_macro.h -I libbcachefs -I include -E 2>/dev/null	\
 		| doc/macro2rst.py
-	rst2man doc/bcachefs.5.rst bcachefs.5
+	$(RST) doc/bcachefs.5.rst bcachefs.5
 
 SRCS=$(shell find . -type f -iname '*.c')
 DEPS=$(SRCS:.c=.d)
