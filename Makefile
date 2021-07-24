@@ -61,17 +61,21 @@ else
 	INITRAMFS_DIR=/etc/initramfs-tools
 endif
 
-var := $(shell rst2man 2>/dev/null)
+var := $(shell rst2man -V 2>/dev/null)
 ifeq ($(.SHELLSTATUS),0)
 	RST2MAN=rst2man
 endif
 
-var := $(shell rst2man.py 2>/dev/null)
+var := $(shell rst2man.py -V 2>/dev/null)
 ifeq ($(.SHELLSTATUS),0)
 	RST2MAN=rst2man.py
 endif
 
 undefine var
+
+ifeq (,$(RST2MAN))
+	@echo "WARNING: no RST2MAN found!"
+endif
 
 .PHONY: all
 all: bcachefs bcachefs.5
