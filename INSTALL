@@ -18,7 +18,8 @@ Dependencies:
 Debian (Bullseye or later) and Ubuntu (20.04 or later): you can install these with
     apt install -y pkg-config libaio-dev libblkid-dev libkeyutils-dev \
         liblz4-dev libscrypt-dev libsodium-dev liburcu-dev libzstd-dev \
-        uuid-dev zlib1g-dev valgrind libudev-dev
+        uuid-dev zlib1g-dev valgrind libudev-dev git build-essential \
+        python3 python3-docutils
 
 Fedora: install the "Development tools" group along with:
     dnf install -y libaio-devel libsodium-devel \
