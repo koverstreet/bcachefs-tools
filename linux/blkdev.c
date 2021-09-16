@@ -76,9 +76,9 @@ void generic_make_request(struct bio *bio)
 	switch (bio_op(bio)) {
 	case REQ_OP_READ:
 		iocb.aio_lio_opcode	= IO_CMD_PREADV;
-		iocb.u.v.vec		= iov;
-		iocb.u.v.nr		= i;
-		iocb.u.v.offset		= bio->bi_iter.bi_sector << 9;
+		iocb.u.c.buf		= iov;
+		iocb.u.c.nbytes		= i;
+		iocb.u.c.offset		= bio->bi_iter.bi_sector << 9;
 
 		atomic_inc(&running_requests);
 		ret = io_submit(aio_ctx, 1, &iocbp);
@@ -87,9 +87,9 @@ void generic_make_request(struct bio *bio)
 		break;
 	case REQ_OP_WRITE:
 		iocb.aio_lio_opcode	= IO_CMD_PWRITEV;
-		iocb.u.v.vec		= iov;
-		iocb.u.v.nr		= i;
-		iocb.u.v.offset		= bio->bi_iter.bi_sector << 9;
+		iocb.u.c.buf		= iov;
+		iocb.u.c.nbytes		= i;
+		iocb.u.c.offset		= bio->bi_iter.bi_sector << 9;
 
 		atomic_inc(&running_requests);
 		ret = io_submit(aio_ctx, 1, &iocbp);
