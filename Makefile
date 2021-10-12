@@ -61,20 +61,14 @@ else
 	INITRAMFS_DIR=/etc/initramfs-tools
 endif
 
-var := $(shell rst2man -V 2>/dev/null)
-ifeq ($(.SHELLSTATUS),0)
+STATUS:=$(shell rst2man -V 2>/dev/null; echo $$?)
+ifeq ($(STATUS),0)
 	RST2MAN=rst2man
 endif
 
-var := $(shell rst2man.py -V 2>/dev/null)
-ifeq ($(.SHELLSTATUS),0)
+STATUS:=$(shell rst2man.py -V 2>/dev/null; echo $$?)
+ifeq ($(STATUS),0)
 	RST2MAN=rst2man.py
-endif
-
-undefine var
-
-ifeq (,$(RST2MAN))
-	@echo "WARNING: no RST2MAN found!"
 endif
 
 .PHONY: all
@@ -98,9 +92,13 @@ DOCSRC := opts_macro.h bcachefs.5.rst.tmpl
 DOCGENERATED := bcachefs.5 doc/bcachefs.5.rst
 DOCDEPS := $(addprefix ./doc/,$(DOCSRC))
 bcachefs.5: $(DOCDEPS)  libbcachefs/opts.h
+ifneq (,$(RST2MAN))
 	$(CC) doc/opts_macro.h -I libbcachefs -I include -E 2>/dev/null	\
 		| doc/macro2rst.py
 	$(RST2MAN) doc/bcachefs.5.rst bcachefs.5
+else
+	@echo "WARNING: no rst2man found! Man page not generated."
+endif
 
 SRCS=$(shell find . -type f -iname '*.c')
 DEPS=$(SRCS:.c=.d)
