@@ -61,12 +61,12 @@ else
 	INITRAMFS_DIR=/etc/initramfs-tools
 endif
 
-STATUS:=$(shell rst2man -V 2>/dev/null; echo $$?)
+STATUS:=$(shell rst2man -V &>/dev/null; echo $$?)
 ifeq ($(STATUS),0)
 	RST2MAN=rst2man
 endif
 
-STATUS:=$(shell rst2man.py -V 2>/dev/null; echo $$?)
+STATUS:=$(shell rst2man.py -V &>/dev/null; echo $$?)
 ifeq ($(STATUS),0)
 	RST2MAN=rst2man.py
 endif
