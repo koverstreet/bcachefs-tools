@@ -119,7 +119,12 @@ MOUNT_SRCS=$(filter %mount, $(RUST_SRCS))
 debug: CFLAGS+=-Werror -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
 debug: bcachefs
 
+rlibbcachefs.a:
+	$(CARGO_BUILD) --manifest-path rust-src/rlibbcachefs/Cargo.toml
+	cp rust-src/rlibbcachefs/target/$(CARGO_PROFILE)/rlibbcachefs.a $@
+
 MOUNT_OBJ=$(filter-out ./bcachefs.o ./tests/%.o ./cmd_%.o , $(OBJS))
+
 libbcachefs.so: LDFLAGS+=-shared
 libbcachefs.so: $(MOUNT_OBJ)
 	$(CC) $(LDFLAGS) $+ -o $@ $(LDLIBS)

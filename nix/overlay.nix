@@ -18,6 +18,8 @@ final: prev: {
 
 		mount = final.callPackage ../rust-src/mount {};
 
+		rlibbcachefs = final.callPackage ../rust-src/rlibbcachefs {};
+
 		kernelPackages = final.recurseIntoAttrs (final.linuxPackagesFor final.bcachefs.kernel);
 		kernel = final.callPackage ./bcachefs-kernel.nix {
 			commit = final.bcachefs.tools.bcachefs_revision;
