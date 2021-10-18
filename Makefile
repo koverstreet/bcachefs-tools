@@ -61,14 +61,12 @@ else
 	INITRAMFS_DIR=/etc/initramfs-tools
 endif
 
-STATUS:=$(shell rst2man -V 2>/dev/null; echo $$?)
-ifeq ($(STATUS),0)
-	RST2MAN=rst2man
-endif
-
-STATUS:=$(shell rst2man.py -V 2>/dev/null; echo $$?)
-ifeq ($(STATUS),0)
-	RST2MAN=rst2man.py
+RST2MAN:=$(shell which rst2man)
+ifeq ($(RST2MAN),)
+	RST2MAN:=$(shell which rst2man.py)
+	ifeq ($(RST2MAN),)
+		@echo "WARNING: no rst2man found! Man page not generated."
+	endif
 endif
 
 .PHONY: all
