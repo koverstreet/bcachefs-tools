@@ -21,6 +21,8 @@
 , docutils
 , nixosTests
 
+, which
+
 , lastModified
 , versionString ? lastModified
 
@@ -61,6 +63,7 @@ stdenv.mkDerivation {
 		# used to find dependencies
 		## see ./INSTALL
 		pkg-config
+		which
 	];
 	buildInputs = [
 		# bcachefs explicit dependencies
