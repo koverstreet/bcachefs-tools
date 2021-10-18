@@ -23,7 +23,6 @@ in {
 	buildInputs = bcachefs.bch_bindgen.buildInputs;
 	inherit (bcachefs.bch_bindgen)
 		LIBBCACHEFS_INCLUDE
-		LIBBCACHEFS_LIB
 		LIBCLANG_PATH
 		BINDGEN_EXTRA_CLANG_ARGS;
 
