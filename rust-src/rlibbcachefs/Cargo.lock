@@ -211,6 +211,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "rbcachefs"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "cbindgen",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -226,14 +234,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3acd125665422973a33ac9d3dd2df85edad0f4ae9b00dafb1a05e43a9f5ef8e7"
 dependencies = [
  "winapi",
-]
-
-[[package]]
-name = "rlibbcachefs"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "cbindgen",
 ]
 
 [[package]]
