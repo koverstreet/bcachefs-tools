@@ -24,6 +24,7 @@
 , which
 , cargo
 , rustc
+, bcachefs
 
 , lastModified
 , versionString ? lastModified
@@ -49,8 +50,8 @@ stdenv.mkDerivation {
 		name = "bcachefs-tools";
 		root = ./.;
 		exclude = [
-			./rust-src
-			
+			(filter.inDirectory "rust-src/mount")
+			(filter.inDirectory "rust-src/bch_bindgen")
 			./.git
 			./nix
 			
@@ -61,6 +62,9 @@ stdenv.mkDerivation {
 
 	postPatch = "patchShebangs --build doc/macro2rst.py";
 
+	preBuild = ''
+		cp ${bcachefs.rlibbcachefs.out}/lib/librbcachefs.a .
+	'';
 	nativeBuildInputs = [
 		# used to find dependencies
 		## see ./INSTALL
