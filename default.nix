@@ -22,6 +22,8 @@
 , nixosTests
 
 , which
+, cargo
+, rustc
 
 , lastModified
 , versionString ? lastModified
@@ -64,6 +66,7 @@ stdenv.mkDerivation {
 		## see ./INSTALL
 		pkg-config
 		which
+		cargo rustc
 	];
 	buildInputs = [
 		# bcachefs explicit dependencies

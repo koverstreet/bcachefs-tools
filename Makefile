@@ -55,7 +55,7 @@ endif
 
 CFLAGS+=$(PKGCONFIG_CFLAGS)
 LDLIBS+=$(PKGCONFIG_LDLIBS)
-LDLIBS+=-lm -lpthread -lrt -lscrypt -lkeyutils -laio -ldl
+LDLIBS+=-lm -lpthread -lrt -lscrypt -lkeyutils -laio -ldl -L . -lrbcachefs
 LDLIBS+=$(EXTRA_LDLIBS)
 
 ifeq ($(PREFIX),/usr)
@@ -111,7 +111,7 @@ DEPS=$(SRCS:.c=.d)
 -include $(DEPS)
 
 OBJS=$(SRCS:.c=.o)
-bcachefs: $(filter-out ./tests/%.o, $(OBJS))
+bcachefs: $(filter-out ./tests/%.o, $(OBJS)) librbcachefs.a
 
 RUST_SRCS=$(shell find rust-src/ -type f -iname '*.rs')
 MOUNT_SRCS=$(filter %mount, $(RUST_SRCS))
@@ -119,9 +119,9 @@ MOUNT_SRCS=$(filter %mount, $(RUST_SRCS))
 debug: CFLAGS+=-Werror -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
 debug: bcachefs
 
-rlibbcachefs.a:
+librbcachefs.a:
 	$(CARGO_BUILD) --manifest-path rust-src/rlibbcachefs/Cargo.toml
-	cp rust-src/rlibbcachefs/target/$(CARGO_PROFILE)/rlibbcachefs.a $@
+	cp rust-src/rlibbcachefs/target/$(CARGO_PROFILE)/librbcachefs.a $@
 
 MOUNT_OBJ=$(filter-out ./bcachefs.o ./tests/%.o ./cmd_%.o , $(OBJS))
 
