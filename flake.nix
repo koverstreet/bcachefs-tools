@@ -34,6 +34,7 @@
 					toolsDebug
 					mount
 					bch_bindgen
+					rlibbcachefs
 					kernel;
 
 				tools-musl = pkgs.pkgsMusl.bcachefs.tools;
@@ -45,6 +46,7 @@
 				inherit (packages) 
 					mount
 					bch_bindgen
+					rlibbcachefs
 					toolsValgrind;
 			};
 
