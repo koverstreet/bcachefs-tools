@@ -166,6 +166,7 @@ install: bcachefs lib
 	$(INSTALL) -m0755 -D bcachefs      -t $(DESTDIR)$(ROOT_SBINDIR)
 	$(INSTALL) -m0755    fsck.bcachefs    $(DESTDIR)$(ROOT_SBINDIR)
 	$(INSTALL) -m0755    mkfs.bcachefs    $(DESTDIR)$(ROOT_SBINDIR)
+	$(INSTALL) -m0644 -D bcachefs.5    -t $(DESTDIR)$(PREFIX)/share/man/man5/
 	$(INSTALL) -m0644 -D bcachefs.8    -t $(DESTDIR)$(PREFIX)/share/man/man8/
 	$(INSTALL) -m0755 -D initramfs/script $(DESTDIR)$(INITRAMFS_SCRIPT)
 	$(INSTALL) -m0755 -D initramfs/hook   $(DESTDIR)$(INITRAMFS_HOOK)
@@ -177,7 +178,7 @@ install: bcachefs lib
 
 .PHONY: clean
 clean:
-	$(RM) bcachefs mount.bcachefs libbcachefs_mount.a tests/test_helper .version $(OBJS) $(DEPS) $(DOCGENERATED)
+	$(RM) bcachefs mount.bcachefs libbcachefs_mount.a tests/test_helper bcachefs.5 .version $(OBJS) $(DEPS) $(DOCGENERATED)
 	$(RM) -rf rust-src/*/target
 
 .PHONY: deb

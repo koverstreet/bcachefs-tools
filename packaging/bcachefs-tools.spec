@@ -59,6 +59,7 @@ mkdir -p $RPM_BUILD_ROOT/usr/local/share/man/man8
 /usr/local/sbin/bcachefs
 /usr/local/sbin/fsck.bcachefs
 /usr/local/sbin/mkfs.bcachefs
+/usr/local/share/man/man5/bcachefs.5
 /usr/local/share/man/man8/bcachefs.8
 /etc/initramfs-tools/hooks/bcachefs
 /etc/initramfs-tools/scripts/local-premount/bcachefs
