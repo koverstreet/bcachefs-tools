@@ -211,9 +211,6 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 		__bch2_opt_set_sb(sb.sb, &bch2_opt_table[opt_id], v);
 	}
 
-	SET_BCH_SB_ENCODED_EXTENT_MAX_BITS(sb.sb,
-				ilog2(opts.encoded_extent_max));
-
 	struct timespec now;
 	if (clock_gettime(CLOCK_REALTIME, &now))
 		die("error getting current time: %m");
