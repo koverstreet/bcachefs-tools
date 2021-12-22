@@ -102,12 +102,14 @@ void bch2_pick_bucket_size(struct bch_opts opts, struct dev_opts *dev)
 
 	dev->nbuckets	= dev->size / dev->bucket_size;
 
-	if (dev->bucket_size < opts.block_size)
-		die("Bucket size cannot be smaller than block size");
+	if (dev->bucket_size << 9 < opts.block_size)
+		die("Bucket size (%u) cannot be smaller than block size (%u)",
+		    dev->bucket_size << 9, opts.block_size);
 
 	if (opt_defined(opts, btree_node_size) &&
-	    dev->bucket_size < opts.btree_node_size)
-		die("Bucket size cannot be smaller than btree node size");
+	    dev->bucket_size << 9 < opts.btree_node_size)
+		die("Bucket size (%u) cannot be smaller than btree node size (%u)",
+		    dev->bucket_size << 9, opts.btree_node_size);
 
 	if (dev->nbuckets < BCH_MIN_NR_NBUCKETS)
 		die("Not enough buckets: %llu, need %u (bucket size %u)",
@@ -151,7 +153,7 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 
 	for (i = devs; i < devs + nr_devs; i++)
 		max_dev_block_size = max(max_dev_block_size,
-					 get_blocksize(i->path, i->fd));
+					 get_blocksize(i->path, i->fd) << 9);
 
 	/* calculate block size: */
 	if (!opt_defined(fs_opts, block_size)) {
@@ -167,19 +169,13 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 	/* calculate btree node size: */
 	if (!opt_defined(fs_opts, btree_node_size)) {
 		/* 256k default btree node size */
-		opt_set(fs_opts, btree_node_size, 512);
+		opt_set(fs_opts, btree_node_size, 256 << 10);
 
 		for (i = devs; i < devs + nr_devs; i++)
 			fs_opts.btree_node_size =
 				min_t(unsigned, fs_opts.btree_node_size,
-				      i->bucket_size);
+				      i->bucket_size << 9);
 	}
-
-	if (!is_power_of_2(fs_opts.block_size))
-		die("block size must be power of 2");
-
-	if (!is_power_of_2(fs_opts.btree_node_size))
-		die("btree node size must be power of 2");
 
 	if (uuid_is_null(opts.uuid.b))
 		uuid_generate(opts.uuid.b);
@@ -190,7 +186,6 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 	sb.sb->version		= le16_to_cpu(opts.version);
 	sb.sb->version_min	= le16_to_cpu(opts.version);
 	sb.sb->magic		= BCACHE_MAGIC;
-	sb.sb->block_size	= cpu_to_le16(fs_opts.block_size);
 	sb.sb->user_uuid	= opts.uuid;
 	sb.sb->nr_devices	= nr_devs;
 
@@ -207,17 +202,13 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 	for (opt_id = 0;
 	     opt_id < bch2_opts_nr;
 	     opt_id++) {
-		const struct bch_option *opt = &bch2_opt_table[opt_id];
 		u64 v;
-
-		if (opt->set_sb == SET_NO_SB_OPT)
-			continue;
 
 		v = bch2_opt_defined_by_id(&fs_opts, opt_id)
 			? bch2_opt_get_by_id(&fs_opts, opt_id)
 			: bch2_opt_get_by_id(&bch2_opts_default, opt_id);
 
-		opt->set_sb(sb.sb, v);
+		__bch2_opt_set_sb(sb.sb, &bch2_opt_table[opt_id], v);
 	}
 
 	SET_BCH_SB_ENCODED_EXTENT_MAX_BITS(sb.sb,
@@ -1066,7 +1057,7 @@ struct bch_opt_strs bch2_cmdline_opts_get(int *argc, char *argv[],
 
 		optid = bch2_opt_lookup(optstr);
 		if (optid < 0 ||
-		    !(bch2_opt_table[optid].mode & opt_types)) {
+		    !(bch2_opt_table[optid].flags & opt_types)) {
 			i++;
 			goto next;
 		}
@@ -1106,7 +1097,8 @@ struct bch_opts bch2_parse_opts(struct bch_opt_strs strs)
 		    bch2_opt_table[i].type == BCH_OPT_FN)
 			continue;
 
-		ret = bch2_opt_parse(NULL, &bch2_opt_table[i],
+		ret = bch2_opt_parse(NULL, "option",
+				     &bch2_opt_table[i],
 				     strs.by_id[i], &v);
 		if (ret < 0)
 			die("Invalid %s: %s",
@@ -1134,7 +1126,7 @@ void bch2_opts_usage(unsigned opt_types)
 	for (opt = bch2_opt_table;
 	     opt < bch2_opt_table + bch2_opts_nr;
 	     opt++) {
-		if (!(opt->mode & opt_types))
+		if (!(opt->flags & opt_types))
 			continue;
 
 		c += printf("      --%s", opt->attr.name);

@@ -682,7 +682,7 @@ static int migrate_fs(const char		*fs_path,
 
 	u64 bcachefs_inum;
 	ranges extents = reserve_new_fs_space(file_path,
-				fs_opts.block_size << 9,
+				fs_opts.block_size,
 				get_size(dev.path, dev.fd) / 5,
 				&bcachefs_inum, stat.st_dev, force);
 

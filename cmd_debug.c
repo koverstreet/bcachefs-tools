@@ -295,7 +295,7 @@ static void print_node_ondisk(struct bch_fs *c, struct btree *b)
 	bio_put(bio);
 	percpu_ref_put(&ca->io_ref);
 
-	while (offset < c->opts.btree_node_size) {
+	while (offset < btree_sectors(c)) {
 		struct bset *i;
 		struct nonce nonce;
 		struct bch_csum csum;
