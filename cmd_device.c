@@ -78,12 +78,10 @@ int cmd_device_add(int argc, char *argv[])
 		case 'S':
 			if (bch2_strtoull_h(optarg, &dev_opts.size))
 				die("invalid filesystem size");
-
-			dev_opts.size >>= 9;
 			break;
 		case 'B':
-			dev_opts.bucket_size =
-				hatoi_validate(optarg, "bucket size");
+			if (bch2_strtoull_h(optarg, &dev_opts.bucket_size))
+				die("bad bucket_size %s", optarg);
 			break;
 		case 'D':
 			dev_opts.discard = true;
@@ -121,9 +119,9 @@ int cmd_device_add(int argc, char *argv[])
 	struct bch_opts fs_opts = bch2_parse_opts(fs_opt_strs);
 
 	opt_set(fs_opts, block_size,
-		read_file_u64(fs.sysfs_fd, "options/block_size") >> 9);
+		read_file_u64(fs.sysfs_fd, "options/block_size"));
 	opt_set(fs_opts, btree_node_size,
-		read_file_u64(fs.sysfs_fd, "options/btree_node_size") >> 9);
+		read_file_u64(fs.sysfs_fd, "options/btree_node_size"));
 
 	struct bch_sb *sb = bch2_format(fs_opt_strs,
 					fs_opts,

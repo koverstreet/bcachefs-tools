@@ -22,14 +22,15 @@
 
 #define noreturn __attribute__((noreturn))
 
-void die(const char *, ...) noreturn;
+void die(const char *, ...)
+	__attribute__ ((format (printf, 1, 2))) noreturn;
 char *mprintf(const char *, ...)
 	__attribute__ ((format (printf, 1, 2)));
 void *xcalloc(size_t, size_t);
 void *xmalloc(size_t);
 void *xrealloc(void *, size_t);
 void xpread(int, void *, size_t, off_t);
-void xpwrite(int, const void *, size_t, off_t);
+void xpwrite(int, const void *, size_t, off_t, const char *);
 struct stat xfstatat(int, const char *, int);
 struct stat xfstat(int);
 struct stat xstat(const char *);
@@ -149,8 +150,6 @@ struct fiemap_extent fiemap_iter_next(struct fiemap_iter *);
 	     (extent = fiemap_iter_next(&iter)).fe_length;)
 
 char *strcmp_prefix(char *, const char *);
-
-unsigned hatoi_validate(const char *, const char *);
 
 u32 crc32c(u32, const void *, size_t);
 

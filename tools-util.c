@@ -94,12 +94,12 @@ void xpread(int fd, void *buf, size_t count, off_t offset)
 	}
 }
 
-void xpwrite(int fd, const void *buf, size_t count, off_t offset)
+void xpwrite(int fd, const void *buf, size_t count, off_t offset, const char *msg)
 {
 	ssize_t r = pwrite(fd, buf, count, offset);
 
 	if (r != count)
-		die("write error (ret %zi err %m)", r);
+		die("error writing %s (ret %zi err %m)", msg, r);
 }
 
 struct stat xfstatat(int dirfd, const char *path, int flags)
@@ -242,7 +242,7 @@ u64 get_size(const char *path, int fd)
 	return ret;
 }
 
-/* Returns blocksize in units of 512 byte sectors: */
+/* Returns blocksize, in bytes: */
 unsigned get_blocksize(const char *path, int fd)
 {
 	struct stat statbuf = xfstat(fd);
@@ -401,24 +401,6 @@ char *strcmp_prefix(char *a, const char *a_prefix)
 		a_prefix++;
 	}
 	return *a_prefix ? NULL : a;
-}
-
-unsigned hatoi_validate(const char *s, const char *msg)
-{
-	u64 v;
-
-	if (bch2_strtoull_h(s, &v))
-		die("bad %s %s", msg, s);
-
-	v /= 512;
-
-	if (v > USHRT_MAX)
-		die("%s too large\n", msg);
-
-	if (!v)
-		die("%s too small\n", msg);
-
-	return v;
 }
 
 /* crc32c */

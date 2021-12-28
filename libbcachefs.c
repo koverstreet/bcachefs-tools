@@ -29,12 +29,6 @@
 
 #define NSEC_PER_SEC	1000000000L
 
-/* minimum size filesystem we can create, given a bucket size: */
-static u64 min_size(unsigned bucket_size)
-{
-	return BCH_MIN_NR_NBUCKETS * bucket_size;
-}
-
 static void init_layout(struct bch_sb_layout *l,
 			unsigned block_size,
 			unsigned sb_size,
@@ -64,14 +58,20 @@ static void init_layout(struct bch_sb_layout *l,
 		    sb_start, sb_pos, sb_end, sb_size);
 }
 
+/* minimum size filesystem we can create, given a bucket size: */
+static u64 min_size(unsigned bucket_size)
+{
+	return BCH_MIN_NR_NBUCKETS * bucket_size;
+}
+
 void bch2_pick_bucket_size(struct bch_opts opts, struct dev_opts *dev)
 {
 	if (!dev->size)
-		dev->size = get_size(dev->path, dev->fd) >> 9;
+		dev->size = get_size(dev->path, dev->fd);
 
 	if (!dev->bucket_size) {
 		if (dev->size < min_size(opts.block_size))
-			die("cannot format %s, too small (%llu sectors, min %llu)",
+			die("cannot format %s, too small (%llu bytes, min %llu)",
 			    dev->path, dev->size, min_size(opts.block_size));
 
 		/* Bucket size must be >= block size: */
@@ -83,16 +83,16 @@ void bch2_pick_bucket_size(struct bch_opts opts, struct dev_opts *dev)
 						 opts.btree_node_size);
 
 		/* Want a bucket size of at least 128k, if possible: */
-		dev->bucket_size = max(dev->bucket_size, 256U);
+		dev->bucket_size = max(dev->bucket_size, 128ULL << 10);
 
 		if (dev->size >= min_size(dev->bucket_size)) {
 			unsigned scale = max(1,
-					     ilog2(dev->size / min_size(dev->bucket_size)) / 4);
+				ilog2(dev->size / min_size(dev->bucket_size)) / 4);
 
 			scale = rounddown_pow_of_two(scale);
 
 			/* max bucket size 1 mb */
-			dev->bucket_size = min(dev->bucket_size * scale, 1U << 11);
+			dev->bucket_size = min(dev->bucket_size * scale, 1U << 20);
 		} else {
 			do {
 				dev->bucket_size /= 2;
@@ -100,21 +100,24 @@ void bch2_pick_bucket_size(struct bch_opts opts, struct dev_opts *dev)
 		}
 	}
 
-	dev->nbuckets	= dev->size / dev->bucket_size;
+	dev->nbuckets = dev->size / dev->bucket_size;
 
-	if (dev->bucket_size << 9 < opts.block_size)
-		die("Bucket size (%u) cannot be smaller than block size (%u)",
-		    dev->bucket_size << 9, opts.block_size);
+	if (dev->bucket_size < opts.block_size)
+		die("Bucket size (%llu) cannot be smaller than block size (%u)",
+		    dev->bucket_size, opts.block_size);
 
 	if (opt_defined(opts, btree_node_size) &&
-	    dev->bucket_size << 9 < opts.btree_node_size)
+	    dev->bucket_size < opts.btree_node_size)
 		die("Bucket size (%u) cannot be smaller than btree node size (%u)",
-		    dev->bucket_size << 9, opts.btree_node_size);
+		    dev->bucket_size, opts.btree_node_size);
 
 	if (dev->nbuckets < BCH_MIN_NR_NBUCKETS)
 		die("Not enough buckets: %llu, need %u (bucket size %u)",
 		    dev->nbuckets, BCH_MIN_NR_NBUCKETS, dev->bucket_size);
 
+	if (dev->bucket_size > (u32) U16_MAX << 9)
+		die("Bucket size (%llu) too big (max %u)",
+		    dev->bucket_size, (u32) U16_MAX << 9);
 }
 
 static unsigned parse_target(struct bch_sb_handle *sb,
@@ -229,7 +232,7 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 		uuid_generate(m->uuid.b);
 		m->nbuckets	= cpu_to_le64(i->nbuckets);
 		m->first_bucket	= 0;
-		m->bucket_size	= cpu_to_le16(i->bucket_size);
+		m->bucket_size	= cpu_to_le16(i->bucket_size >> 9);
 
 		SET_BCH_MEMBER_DISCARD(m,	i->discard);
 		SET_BCH_MEMBER_DATA_ALLOWED(m,	i->data_allowed);
@@ -270,11 +273,13 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 	}
 
 	for (i = devs; i < devs + nr_devs; i++) {
+		u64 size_sectors = i->size >> 9;
+
 		sb.sb->dev_idx = i - devs;
 
 		if (!i->sb_offset) {
 			i->sb_offset	= BCH_SB_SECTOR;
-			i->sb_end	= i->size;
+			i->sb_end	= size_sectors;
 		}
 
 		init_layout(&sb.sb->layout, fs_opts.block_size,
@@ -290,7 +295,7 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 		 */
 		if (i->sb_offset == BCH_SB_SECTOR) {
 			struct bch_sb_layout *l = &sb.sb->layout;
-			u64 backup_sb = i->size - (1 << l->sb_max_size_bits);
+			u64 backup_sb = size_sectors - (1 << l->sb_max_size_bits);
 
 			backup_sb = rounddown(backup_sb, i->bucket_size);
 			l->sb_offset[l->nr_superblocks++] = cpu_to_le64(backup_sb);
@@ -300,7 +305,8 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 			/* Zero start of disk */
 			static const char zeroes[BCH_SB_SECTOR << 9];
 
-			xpwrite(i->fd, zeroes, BCH_SB_SECTOR << 9, 0);
+			xpwrite(i->fd, zeroes, BCH_SB_SECTOR << 9, 0,
+				"zeroing start of disk");
 		}
 
 		bch2_super_write(i->fd, sb.sb);
@@ -321,12 +327,14 @@ void bch2_super_write(int fd, struct bch_sb *sb)
 		if (sb->offset == BCH_SB_SECTOR) {
 			/* Write backup layout */
 			xpwrite(fd, &sb->layout, sizeof(sb->layout),
-				BCH_SB_LAYOUT_SECTOR << 9);
+				BCH_SB_LAYOUT_SECTOR << 9,
+				"backup layout");
 		}
 
 		sb->csum = csum_vstruct(NULL, BCH_SB_CSUM_TYPE(sb), nonce, sb);
 		xpwrite(fd, sb, vstruct_bytes(sb),
-			le64_to_cpu(sb->offset) << 9);
+			le64_to_cpu(sb->offset) << 9,
+			"superblock");
 	}
 
 	fsync(fd);

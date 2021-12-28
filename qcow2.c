@@ -46,7 +46,8 @@ static void flush_l2(struct qcow2_image *img)
 	if (img->l1_index != -1) {
 		img->l1_table[img->l1_index] =
 			cpu_to_be64(img->offset|QCOW_OFLAG_COPIED);
-		xpwrite(img->fd, img->l2_table, img->block_size, img->offset);
+		xpwrite(img->fd, img->l2_table, img->block_size, img->offset,
+			"qcow2 l2 table");
 		img->offset += img->block_size;
 
 		memset(img->l2_table, 0, img->block_size);
@@ -101,7 +102,8 @@ void qcow2_write_image(int infd, int outfd, ranges *data,
 			img.offset += img.block_size;
 
 			xpread(infd, buf, block_size, src_offset);
-			xpwrite(outfd, buf, block_size, dst_offset);
+			xpwrite(outfd, buf, block_size, dst_offset,
+				"qcow2 data");
 
 			add_l2(&img, src_offset / block_size, dst_offset);
 		}
@@ -111,7 +113,8 @@ void qcow2_write_image(int infd, int outfd, ranges *data,
 	/* Write L1 table: */
 	dst_offset		= img.offset;
 	img.offset		+= round_up(l1_size * sizeof(u64), block_size);
-	xpwrite(img.fd, img.l1_table, l1_size * sizeof(u64), dst_offset);
+	xpwrite(img.fd, img.l1_table, l1_size * sizeof(u64), dst_offset,
+		"qcow2 l1 table");
 
 	/* Write header: */
 	hdr.magic		= cpu_to_be32(QCOW_MAGIC);
@@ -123,7 +126,8 @@ void qcow2_write_image(int infd, int outfd, ranges *data,
 
 	memset(buf, 0, block_size);
 	memcpy(buf, &hdr, sizeof(hdr));
-	xpwrite(img.fd, buf, block_size, 0);
+	xpwrite(img.fd, buf, block_size, 0,
+		"qcow2 header");
 
 	free(img.l2_table);
 	free(img.l1_table);

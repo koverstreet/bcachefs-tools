@@ -50,8 +50,8 @@ static inline struct format_opts format_opts_default()
 struct dev_opts {
 	int		fd;
 	char		*path;
-	u64		size; /* 512 byte sectors */
-	unsigned	bucket_size;
+	u64		size;		/* bytes*/
+	u64		bucket_size;	/* bytes */
 	const char	*label;
 	unsigned	data_allowed;
 	unsigned	durability;

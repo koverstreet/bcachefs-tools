@@ -1132,9 +1132,9 @@ static int check_i_sectors(struct btree_trans *trans, struct inode_walker *w)
 		count2 = lockrestart_do(trans,
 			bch2_count_inode_sectors(trans, w->cur_inum, i->snapshot));
 
-		if (i->count != count2) {
-			bch_err(c, "fsck counted i_sectors wrong: got %llu should be %llu",
-				i->count, count2);
+		if (fsck_err_on(i->count != count2, c,
+				"fsck counted i_sectors wrong: got %llu should be %llu",
+				i->count, count2)) {
 			i->count = count2;
 			if (i->inode.bi_sectors == i->count)
 				continue;
@@ -1316,9 +1316,9 @@ static int check_subdir_count(struct btree_trans *trans, struct inode_walker *w)
 		count2 = lockrestart_do(trans,
 				bch2_count_subdirs(trans, w->cur_inum, i->snapshot));
 
-		if (i->count != count2) {
-			bch_err(c, "fsck counted subdirectories wrong: got %llu should be %llu",
-				i->count, count2);
+		if (fsck_err_on(i->count != count2, c,
+				"directory %llu:%u: fsck counted subdirectories wrong, got %llu should be %llu",
+				w->cur_inum, i->snapshot, i->count, count2)) {
 			i->count = count2;
 			if (i->inode.bi_nlink == i->count)
 				continue;
