@@ -86,7 +86,7 @@ int cmd_device_add(int argc, char *argv[])
 		case 'D':
 			dev_opts.discard = true;
 			break;
-		case 'g':
+		case 'l':
 			dev_opts.label = strdup(optarg);
 			break;
 		case 'f':
