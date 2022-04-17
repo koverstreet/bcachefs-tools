@@ -41,7 +41,7 @@ struct {								\
 
 #define heap_free(heap)							\
 do {									\
-	kvfree((heap)->data);						\
+	free((heap)->data);						\
 	(heap)->data = NULL;						\
 } while (0)
 
@@ -326,4 +326,5 @@ static void timers_cleanup(void)
 
 	put_task_struct(timer_task);
 	timer_task = NULL;
+	heap_free(&pending_timers);
 }
