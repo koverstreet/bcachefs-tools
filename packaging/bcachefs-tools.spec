@@ -68,4 +68,4 @@ mkdir -p $RPM_BUILD_ROOT/usr/local/share/man/man8
 - Updated RPM package definition to reflect that changes in codebase have occurred.
 * Tue Jan 07 2020 Michael Adams <unquietwiki@gmail.com> - 2020.01.07-1
 - Initial RPM package definition
-- Makefile needs further work to accomodate RPM macros.
+- Makefile needs further work to accommodate RPM macros.

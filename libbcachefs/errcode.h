@@ -94,4 +94,4 @@ static inline long bch2_err_class(long err)
 	return err < 0 ? __bch2_err_class(err) : err;
 }
 
-#endif /* _BCACHFES_ERRCODE_H */
+#endif /* _BCACHEFS_ERRCODE_H */

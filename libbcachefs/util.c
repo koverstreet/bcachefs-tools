@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * random utiility code, for bcache but in theory not specific to bcache
+ * random utility code, for bcache but in theory not specific to bcache
  *
  * Copyright 2010, 2011 Kent Overstreet <kent.overstreet@gmail.com>
  * Copyright 2012 Google, Inc.
@@ -511,7 +511,7 @@ void bch2_ratelimit_increment(struct bch_ratelimit *d, u64 done)
 /* pd controller: */
 
 /*
- * Updates pd_controller. Attempts to scale inputed values to units per second.
+ * Updates pd_controller. Attempts to scale inputted values to units per second.
  * @target: desired value
  * @actual: current value
  *

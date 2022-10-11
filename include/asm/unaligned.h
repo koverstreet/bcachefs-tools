@@ -14,7 +14,7 @@
 # define get_unaligned	__get_unaligned_be
 # define put_unaligned	__put_unaligned_be
 #else
-# error need to define endianess
+# error need to define endianness
 #endif
 
 #endif /* _ASM_UNALIGNED_H */

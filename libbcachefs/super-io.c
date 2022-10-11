@@ -307,7 +307,7 @@ static int bch2_sb_validate(struct bch_sb_handle *disk_sb, struct printbuf *out,
 	}
 
 	if (bch2_is_zero(sb->uuid.b, sizeof(uuid_le))) {
-		prt_printf(out, "Bad intenal UUID (got zeroes)");
+		prt_printf(out, "Bad internal UUID (got zeroes)");
 		return -EINVAL;
 	}
 
@@ -335,7 +335,7 @@ static int bch2_sb_validate(struct bch_sb_handle *disk_sb, struct printbuf *out,
 		/*
 		 * Been seeing a bug where these are getting inexplicably
 		 * zeroed, so we'r now validating them, but we have to be
-		 * careful not to preven people's filesystems from mounting:
+		 * careful not to prevent people's filesystems from mounting:
 		 */
 		if (!BCH_SB_JOURNAL_FLUSH_DELAY(sb))
 			SET_BCH_SB_JOURNAL_FLUSH_DELAY(sb, 1000);

@@ -131,7 +131,7 @@ static void snapshot_create_usage(void)
 	     "Usage: bcachefs subvolume snapshot [OPTION]... <source> <dest>\n"
 	     "\n"
 	     "Create a snapshot of <source> at <dest>. If specified, <source> must be a subvolume;\n"
-	     "if not specified the snapshot will be of the subvolme containing <dest>.\n"
+	     "if not specified the snapshot will be of the subvolume containing <dest>.\n"
 	     "Options:\n"
 	     "  -r                          Make snapshot read only\n"
 	     "  -h, --help                  Display this help and exit\n"

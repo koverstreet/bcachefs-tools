@@ -146,7 +146,7 @@ static void kill_btree_node_usage(void)
 	     "\n"
 	     "Options:\n"
 	     "  -b (extents|inodes|dirents|xattrs)    Btree to delete from\n"
-	     "  -l level                              Levle to delete from (0 == leaves)\n"
+	     "  -l level                              Level to delete from (0 == leaves)\n"
 	     "  -i index                              Index of btree node to kill\n"
 	     "  -h                                    Display this help and exit\n"
 	     "Report bugs to <linux-bcachefs@vger.kernel.org>");

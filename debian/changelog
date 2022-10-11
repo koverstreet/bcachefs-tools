@@ -23,7 +23,7 @@ bcachefs-tools (1.0.8-1) unstable; urgency=medium
   * Update changelog
   * Adding dep3 headers to the 0001 patch
   * Update watch to use http://evilpiepirate.org/git/bcache-tools.git
-  * Add patch for gcc-5 compatability.
+  * Add patch for gcc-5 compatibility.
     Thanks to James Cowgill (Closes: #777798)
 
  -- David Mohr <david@mcbf.net>  Tue, 26 May 2015 20:57:58 -0600

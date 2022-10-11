@@ -76,7 +76,7 @@ pub struct Options {
 	pub uuid: uuid::Uuid,
 
 	/// Where the filesystem should be mounted. If not set, then the filesystem
-	/// won't actually be mounted. But all steps preceeding mounting the
+	/// won't actually be mounted. But all steps preceding mounting the
 	/// filesystem (e.g. asking for passphrase) will still be performed.
 	pub mountpoint: Option<std::path::PathBuf>,
 

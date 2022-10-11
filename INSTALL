@@ -44,7 +44,7 @@ testing. To enable, you'll also need to add:
 On Debian/Ubuntu (Bullseye/20.04 or later needed for libfuse >= 3.7):
     apt install -y libfuse3-dev
 
-On Fedora (32 or later needed for lbifuse >= 3.7):
+On Fedora (32 or later needed for libfuse >= 3.7):
     dnf install -y fuse3-devel
 
 Arch:

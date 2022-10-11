@@ -612,7 +612,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		 * - btree_key_can_insert_cached() when it has to reallocate
 		 *
 		 *   Ugly because we currently have no way to tell if the
-		 *   pointer's been invalidated, which means it's debatabale
+		 *   pointer's been invalidated, which means it's debatable
 		 *   whether we should be stashing the old key at all.
 		 */
 		i->old_v = bch2_btree_path_peek_slot(i->path, &i->old_k).v;
@@ -1168,7 +1168,7 @@ int bch2_trans_update_extent(struct btree_trans *trans,
 		 * visible and the other is not - i.e. if visibility is
 		 * different.
 		 *
-		 * Instead of checking if visibilitiy of the two extents is
+		 * Instead of checking if visibility of the two extents is
 		 * different, for now we just check if either has been
 		 * overwritten:
 		 */

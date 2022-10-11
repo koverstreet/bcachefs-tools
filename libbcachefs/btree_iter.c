@@ -1434,7 +1434,7 @@ static void bch2_trans_update_max_paths(struct btree_trans *trans)
 static noinline void btree_path_overflow(struct btree_trans *trans)
 {
 	bch2_dump_trans_paths_updates(trans);
-	panic("trans path oveflow\n");
+	panic("trans path overflow\n");
 }
 
 static inline struct btree_path *btree_path_alloc(struct btree_trans *trans,
@@ -1977,7 +1977,7 @@ struct bkey_s_c bch2_btree_iter_peek_upto(struct btree_iter *iter, struct bpos e
 			goto out_no_locked;
 
 		/*
-		 * iter->pos should be mononotically increasing, and always be
+		 * iter->pos should be monotonically increasing, and always be
 		 * equal to the key we just returned - except extents can
 		 * straddle iter->pos:
 		 */
@@ -2762,7 +2762,7 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 
 		/*
 		 * If the transaction wasn't restarted, we're presuming to be
-		 * doing something new: dont keep iterators excpt the ones that
+		 * doing something new: don't keep iterators except the ones that
 		 * are in use - except for the subvolumes btree:
 		 */
 		if (!trans->restarted && path->btree_id != BTREE_ID_subvolumes)

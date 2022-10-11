@@ -266,7 +266,7 @@ EXPORT_SYMBOL(prt_tab_rjust);
  * @str: string to print
  * @count: number of bytes to print
  *
- * The following contol characters are handled as so:
+ * The following control characters are handled as so:
  *   \n: prt_newline	newline that obeys current indent level
  *   \t: prt_tab	advance to next tabstop
  *   \r: prt_tab_rjust	advance to next tabstop, with right justification
@@ -341,7 +341,7 @@ EXPORT_SYMBOL(prt_human_readable_s64);
 /**
  * prt_units_u64 - Print out a u64 according to printbuf unit options
  *
- * Units are either raw (default), or human reabable units (controlled via
+ * Units are either raw (default), or human readable units (controlled via
  * @buf->human_readable_units)
  */
 void prt_units_u64(struct printbuf *out, u64 v)
@@ -356,7 +356,7 @@ EXPORT_SYMBOL(prt_units_u64);
 /**
  * prt_units_s64 - Print out a s64 according to printbuf unit options
  *
- * Units are either raw (default), or human reabable units (controlled via
+ * Units are either raw (default), or human readable units (controlled via
  * @buf->human_readable_units)
  */
 void prt_units_s64(struct printbuf *out, s64 v)

@@ -133,7 +133,7 @@ struct bpos {
 	 * single large integer, for search/comparison purposes
 	 *
 	 * Note that wherever a bpos is embedded in another on disk data
-	 * structure, it has to be byte swabbed when reading in metadata that
+	 * structure, it has to be byte swapped when reading in metadata that
 	 * wasn't written in native endian order:
 	 */
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
@@ -1571,7 +1571,7 @@ struct bch_sb {
 
 /*
  * Flags:
- * BCH_SB_INITALIZED	- set on first mount
+ * BCH_SB_INITIALIZED	- set on first mount
  * BCH_SB_CLEAN		- did we shut down cleanly? Just a hint, doesn't affect
  *			  behaviour of mount/recovery path:
  * BCH_SB_INODE_32BIT	- limit inode numbers to 32 bits

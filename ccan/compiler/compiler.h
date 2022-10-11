@@ -97,7 +97,7 @@
  * UNNEEDED - a variable/function may not be needed
  *
  * This suppresses warnings about unused variables or functions, but tells
- * the compiler that if it is unused it need not emit it into the source code.
+ * the compiler that if it is unused it needs not emit it into the source code.
  *
  * Example:
  * // With some preprocessor options, this is unnecessary.

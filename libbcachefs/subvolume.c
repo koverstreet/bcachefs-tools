@@ -648,7 +648,7 @@ int bch2_delete_dead_snapshots(struct bch_fs *c)
 	if (!test_bit(BCH_FS_STARTED, &c->flags)) {
 		ret = bch2_fs_read_write_early(c);
 		if (ret) {
-			bch_err(c, "error deleleting dead snapshots: error going rw: %s", bch2_err_str(ret));
+			bch_err(c, "error deleting dead snapshots: error going rw: %s", bch2_err_str(ret));
 			return ret;
 		}
 	}

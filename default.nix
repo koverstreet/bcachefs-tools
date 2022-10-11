@@ -67,7 +67,7 @@ stdenv.mkDerivation {
 		attr
 		udev
 
-		# documentation depenedencies
+		# documentation dependencies
 		docutils
 		python39Packages.pygments
 	] ++ (lib.optional fuseSupport fuse3)

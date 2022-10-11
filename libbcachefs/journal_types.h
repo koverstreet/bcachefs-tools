@@ -119,7 +119,7 @@ union journal_preres_state {
 #define JOURNAL_ENTRY_SIZE_MAX		(4U  << 20) /* 4M */
 
 /*
- * We stash some journal state as sentinal values in cur_entry_offset:
+ * We stash some journal state as sentinel values in cur_entry_offset:
  * note - cur_entry_offset is in units of u64s
  */
 #define JOURNAL_ENTRY_OFFSET_MAX	((1U << 20) - 1)

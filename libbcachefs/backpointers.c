@@ -612,7 +612,7 @@ static int bch2_check_btree_backpointer(struct btree_trans *trans, struct btree_
 	int ret = 0;
 
 	if (fsck_err_on(!bch2_dev_exists2(c, k.k->p.inode), c,
-			"backpointer for mising device:\n%s",
+			"backpointer for missing device:\n%s",
 			(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
 		ret = bch2_btree_delete_at(trans, bp_iter, 0);
 		goto out;
@@ -855,7 +855,7 @@ int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 					  btree == start.btree ? start.pos : POS_MIN,
 					  0, depth, 0);
 		/*
-		 * for_each_btree_key_contineu() doesn't check the return value
+		 * for_each_btree_key_continue() doesn't check the return value
 		 * from bch2_btree_iter_advance(), which is needed when
 		 * iterating over interior nodes where we'll see keys at
 		 * SPOS_MAX:

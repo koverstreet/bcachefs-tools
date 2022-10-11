@@ -136,7 +136,7 @@ static void __journal_entry_close(struct journal *j, unsigned closed_val)
 	 * pin, so we can only write the updated last_seq on the entry that
 	 * contains whatever the new pin protects.
 	 *
-	 * Restated, we can _not_ update last_seq for a given entry if there
+	 * Restarted, we can _not_ update last_seq for a given entry if there
 	 * could be a newer entry open with reservations/pins that have been
 	 * taken against it.
 	 *
@@ -449,7 +449,7 @@ unlock:
 }
 
 /*
- * Essentially the entry function to the journaling code. When bcachefs is doing
+ * Essentially the entry function to the journalling code. When bcachefs is doing
  * a btree insert, it calls this function to get the current journal write.
  * Journal write is the structure used set up journal writes. The calling
  * function will then add its keys to the structure, queuing them for the next

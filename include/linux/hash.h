@@ -7,7 +7,7 @@
 #include <linux/compiler.h>
 
 /*
- * The "GOLDEN_RATIO_PRIME" is used in ifs/btrfs/brtfs_inode.h and
+ * The "GOLDEN_RATIO_PRIME" is used in fs/btrfs/btrfs_inode.h and
  * fs/inode.c.  It's not actually prime any more (the previous primes
  * were actively bad for hashing), but the name remains.
  */

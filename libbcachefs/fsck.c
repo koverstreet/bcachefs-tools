@@ -87,7 +87,7 @@ static int __snapshot_lookup_subvol(struct btree_trans *trans, u32 snapshot,
 		goto err;
 
 	if (k.k->type != KEY_TYPE_snapshot) {
-		bch_err(trans->c, "snapshot %u not fonud", snapshot);
+		bch_err(trans->c, "snapshot %u not found", snapshot);
 		ret = -ENOENT;
 		goto err;
 	}

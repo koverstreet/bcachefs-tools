@@ -1336,7 +1336,7 @@ void bch2_fs_allocator_foreground_init(struct bch_fs *c)
 	mutex_init(&c->write_points_hash_lock);
 	c->write_points_nr = ARRAY_SIZE(c->write_points);
 
-	/* open bucket 0 is a sentinal NULL: */
+	/* open bucket 0 is a sentinel NULL: */
 	spin_lock_init(&c->open_buckets[0].lock);
 
 	for (ob = c->open_buckets + 1;

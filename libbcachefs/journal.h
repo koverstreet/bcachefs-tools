@@ -29,7 +29,7 @@
  *
  * Synchronous updates are specified by passing a closure (@flush_cl) to
  * bch2_btree_insert() or bch_btree_insert_node(), which then pass that parameter
- * down to the journalling code. That closure will will wait on the journal
+ * down to the journalling code. That closure will wait on the journal
  * write to complete (via closure_wait()).
  *
  * If the index update wasn't synchronous, the journal entry will be

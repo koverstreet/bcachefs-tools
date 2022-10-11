@@ -811,7 +811,7 @@ static int bch2_check_discard_freespace_key(struct btree_trans *trans,
 	bch2_trans_iter_init(trans, &alloc_iter, BTREE_ID_alloc, pos, 0);
 
 	if (fsck_err_on(!bch2_dev_bucket_exists(c, pos), c,
-			"entry in %s btree for nonexistant dev:bucket %llu:%llu",
+			"entry in %s btree for nonexistent dev:bucket %llu:%llu",
 			bch2_btree_ids[iter->btree_id], pos.inode, pos.offset))
 		goto delete;
 

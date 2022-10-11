@@ -57,7 +57,7 @@ fn main() {
 		// .opaque_type("bch_extent_crc32")
 		.opaque_type("open_bucket.*")
 		.generate()
-		.expect("BindGen Generation Failiure: [libbcachefs_wrapper]");
+		.expect("BindGen Generation Failure: [libbcachefs_wrapper]");
 	bindings
 		.write_to_file(out_dir.join("bcachefs.rs"))
 		.expect("Writing to output file failed for: `bcachefs.rs`");
@@ -67,7 +67,7 @@ fn main() {
 		.header(top_dir.join("src").join("keyutils_wrapper.h").display().to_string())
 		.clang_args(keyutils.include_paths.iter().map(|p| format!("-I{}", p.display())))
 		.generate()
-		.expect("BindGen Generation Failiure: [Keyutils]");
+		.expect("BindGen Generation Failure: [Keyutils]");
 	bindings
 		.write_to_file(out_dir.join("keyutils.rs"))
 		.expect("Writing to output file failed for: `keyutils.rs`");

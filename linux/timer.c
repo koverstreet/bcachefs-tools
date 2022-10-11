@@ -12,7 +12,7 @@
  * @a:		pointer to timespec to be incremented
  * @ns:		unsigned nanoseconds value to be added
  *
- * This must always be inlined because its used from the x86-64 vdso,
+ * This must always be inlined because it's used from the x86-64 vdso,
  * which cannot call other kernel functions.
  */
 static struct timespec timespec_add_ns(struct timespec a, u64 ns)
