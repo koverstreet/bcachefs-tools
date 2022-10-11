@@ -16,7 +16,6 @@
 #include <linux/export.h>
 #include <linux/jiffies.h>
 #include <linux/mempool.h>
-#include <linux/mempool.h>
 #include <linux/sched.h>
 
 #if defined(CONFIG_DEBUG_SLAB) || defined(CONFIG_SLUB_DEBUG_ON)

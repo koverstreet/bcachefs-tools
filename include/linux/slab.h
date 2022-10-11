@@ -12,7 +12,6 @@
 #include <linux/shrinker.h>
 #include <linux/types.h>
 
-#include <stdlib.h>
 #include <sys/mman.h>
 
 #define ARCH_KMALLOC_MINALIGN		16
