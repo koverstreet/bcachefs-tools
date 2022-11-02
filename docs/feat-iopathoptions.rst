@@ -11,7 +11,7 @@ automatically applied recursively.
 
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
 
    feat-checksumming
    feat-encryption

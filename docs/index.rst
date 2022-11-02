@@ -12,14 +12,6 @@ Welcome to bcachefs's documentation!
    performance
    bucketbased
 
-   man-index
-   Administration
-   Hardware
-   CHANGES
-   Feature-by-version
-   Glossary
-   INSTALL
-
 .. toctree::
    :maxdepth: 2
    :caption: Features:
@@ -32,7 +24,7 @@ Welcome to bcachefs's documentation!
    feat-quotas
 
 .. toctree::
-   :maxdepth: 1
+   :maxdepth: 2
    :caption: Management:
 
    mgmt-formatting
@@ -40,26 +32,16 @@ Welcome to bcachefs's documentation!
    mgmt-fsck
    mgmt-fsstatus
    mgmt-journal
+   mgmt-devicemanagement
+   mgmt-datamanagement
 
-
-   
 
 .. toctree::
-   :maxdepth: 1
-   :caption: Project information
+   :maxdepth: 2
+   :caption: Advanced:
 
-   Source-repositories
-   Contributors
+   options
+   debugging
+   ioctl
+   ondiskformat
 
-.. toctree::
-   :maxdepth: 1
-   :caption: TODO
-
-   Quick-start
-   Interoperability
-   trouble-index
-   Experimental
-   btrfs-ioctl
-   DocConventions
-   dev-send-stream
-   Kernel-by-version

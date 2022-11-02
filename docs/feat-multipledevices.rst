@@ -9,7 +9,7 @@ have the same performance characteristics: we track device IO latency
 and direct reads to the device that is currently fastest.
 
 .. toctree::
-   :maxdepth: 2
+   :maxdepth: 1
 
    feat-replication
    feat-erasurecoding
