@@ -1,13 +1,13 @@
+use crate::key;
+use crate::key::KeyLoc;
 use atty::Stream;
 use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, debug, error, info};
 use clap::Parser;
 use colored::Colorize;
-use uuid::Uuid;
-use std::path::PathBuf;
-use crate::key;
-use crate::key::KeyLoc;
-use std::ffi::{CStr, CString, OsStr, c_int, c_char, c_void};
+use std::ffi::{c_char, c_int, c_void, CStr, CString, OsStr};
 use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
+use uuid::Uuid;
 
 fn mount_inner(
     src: String,
@@ -16,7 +16,6 @@ fn mount_inner(
     mountflags: u64,
     data: Option<String>,
 ) -> anyhow::Result<()> {
-
     // bind the CStrings to keep them alive
     let src = CString::new(src)?;
     let target = CString::new(target.as_ref().as_os_str().as_bytes())?;
@@ -51,22 +50,22 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, u64) {
         .as_ref()
         .split(",")
         .map(|o| match o {
-            "dirsync"       => Left(libc::MS_DIRSYNC),
-            "lazytime"      => Left(1 << 25), // MS_LAZYTIME
-            "mand"          => Left(libc::MS_MANDLOCK),
-            "noatime"       => Left(libc::MS_NOATIME),
-            "nodev"         => Left(libc::MS_NODEV),
-            "nodiratime"    => Left(libc::MS_NODIRATIME),
-            "noexec"        => Left(libc::MS_NOEXEC),
-            "nosuid"        => Left(libc::MS_NOSUID),
-            "relatime"      => Left(libc::MS_RELATIME),
-            "remount"       => Left(libc::MS_REMOUNT),
-            "ro"            => Left(libc::MS_RDONLY),
-            "rw"            => Left(0),
-            "strictatime"   => Left(libc::MS_STRICTATIME),
-            "sync"          => Left(libc::MS_SYNCHRONOUS),
-            ""              => Left(0),
-            o @ _           => Right(o),
+            "dirsync" => Left(libc::MS_DIRSYNC),
+            "lazytime" => Left(1 << 25), // MS_LAZYTIME
+            "mand" => Left(libc::MS_MANDLOCK),
+            "noatime" => Left(libc::MS_NOATIME),
+            "nodev" => Left(libc::MS_NODEV),
+            "nodiratime" => Left(libc::MS_NODIRATIME),
+            "noexec" => Left(libc::MS_NOEXEC),
+            "nosuid" => Left(libc::MS_NOSUID),
+            "relatime" => Left(libc::MS_RELATIME),
+            "remount" => Left(libc::MS_REMOUNT),
+            "ro" => Left(libc::MS_RDONLY),
+            "rw" => Left(0),
+            "strictatime" => Left(libc::MS_STRICTATIME),
+            "sync" => Left(libc::MS_SYNCHRONOUS),
+            "" => Left(0),
+            o @ _ => Right(o),
         })
         .fold((Vec::new(), 0), |(mut opts, flags), next| match next {
             Left(f) => (opts, flags | f),
@@ -143,27 +142,27 @@ struct Cli {
     /// "fail" - don't ask for password, fail if filesystem is encrypted;
     /// "wait" - wait for password to become available before mounting;
     /// "ask" -  prompt the user for password;
-    #[arg(short, long, default_value = "", verbatim_doc_comment)]
-    key_location:   KeyLoc,
+    #[arg(short, long, default_value = "ask", verbatim_doc_comment)]
+    key_location: KeyLoc,
 
     /// Device, or UUID=<UUID>
-    dev:            String,
+    dev: String,
 
     /// Where the filesystem should be mounted. If not set, then the filesystem
     /// won't actually be mounted. But all steps preceeding mounting the
     /// filesystem (e.g. asking for passphrase) will still be performed.
-    mountpoint:     std::path::PathBuf,
+    mountpoint: std::path::PathBuf,
 
     /// Mount options
     #[arg(short, default_value = "")]
-    options:        String,
+    options: String,
 
     /// Force color on/off. Default: autodetect tty
     #[arg(short, long, action = clap::ArgAction::Set, default_value=stdout_isatty())]
-    colorize:       bool,
+    colorize: bool,
 
     #[arg(short = 'v', long, action = clap::ArgAction::Count)]
-    verbose:        u8,
+    verbose: u8,
 }
 
 fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
@@ -172,7 +171,10 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         let uuid = Uuid::parse_str(&uuid)?;
         let devs_sbs = get_devices_by_uuid(uuid)?;
 
-        let devs_strs: Vec<_> = devs_sbs.iter().map(|(dev, _)| dev.clone().into_os_string().into_string().unwrap()).collect();
+        let devs_strs: Vec<_> = devs_sbs
+            .iter()
+            .map(|(dev, _)| dev.clone().into_os_string().into_string().unwrap())
+            .collect();
         let devs_str = devs_strs.join(":");
         let sbs = devs_sbs.iter().map(|(_, sb)| *sb).collect();
 
