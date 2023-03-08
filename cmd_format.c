@@ -40,6 +40,7 @@ x(0,	superblock_size,	required_argument)	\
 x(0,	bucket_size,		required_argument)	\
 x('l',	label,			required_argument)	\
 x(0,	discard,		no_argument)		\
+x(0,	torture,		no_argument)		\
 x(0,	data_allowed,		required_argument)	\
 x(0,	durability,		required_argument)	\
 x(0,	version,		required_argument)	\
@@ -179,6 +180,9 @@ int cmd_format(int argc, char *argv[])
 			break;
 		case O_discard:
 			dev_opts.discard = true;
+			break;
+		case O_torture:
+			opts.torture = true;
 			break;
 		case O_data_allowed:
 			dev_opts.data_allowed =

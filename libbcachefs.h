@@ -37,6 +37,7 @@ struct format_opts {
 	unsigned	superblock_size;
 	bool		encrypted;
 	char		*passphrase;
+	bool		torture;
 };
 
 static inline struct format_opts format_opts_default()
@@ -48,6 +49,7 @@ static inline struct format_opts format_opts_default()
 	return (struct format_opts) {
 		.version		= version,
 		.superblock_size	= SUPERBLOCK_SIZE_DEFAULT,
+		.torture		= false,
 	};
 }
 

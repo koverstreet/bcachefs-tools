@@ -8,8 +8,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/random.h>
+#include <sys/ioctl.h>
 #include <sys/sysmacros.h>
 #include <sys/types.h>
+#include <linux/fs.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -142,6 +145,86 @@ static unsigned parse_target(struct bch_sb_handle *sb,
 	return 0;
 }
 
+static bool torture_target_verify(const struct dev_opts* i,
+				  const void* random_buffer,
+				  const uint64_t* position_iterator,
+				  const uint64_t block_size,
+				  void* read_buffer)
+{
+	lseek(i->fd, position_iterator[0] * block_size, SEEK_SET);
+	if (read(i->fd, read_buffer, block_size) == -1)
+		return false;
+	if ( memcmp(read_buffer, random_buffer, block_size) != 0)
+		return false;
+	return true;
+}
+
+static bool torture_target_store(const struct dev_opts* i,
+				const void* random_buffer,
+				const uint64_t* position_iterator,
+				const uint64_t block_size)
+{
+	uint64_t range[2] = { position_iterator[1] * block_size, block_size };
+
+	lseek(i->fd, position_iterator[0] * block_size, SEEK_SET);
+	if (write(i->fd, random_buffer, block_size) == -1)
+		return false;
+	if (i->discard && ioctl(i->fd, BLKDISCARD, &range))
+		return false;
+	return true;
+}
+
+static int torture_target(struct dev_opts* i, const struct bch_opts fs_opts)
+{
+	const uint32_t nr_of_tests = (i->size >> 9) >> 5; // test 1/16, 6% of the device
+	uint32_t test_iterator;
+	uint64_t position_iterator[2];
+	void* random_buffer = malloc(fs_opts.block_size);
+	void* read_buffer = malloc(fs_opts.block_size);
+
+	/* generate a block of random data */
+	if (getrandom(random_buffer, fs_opts.block_size, 0) != fs_opts.block_size)
+		die("internal torture test error");
+
+	/* open the device as synchronous as possible */
+	i->fd = open(i->path, O_RDWR, O_DIRECT | O_DSYNC);
+	if(i->fd == -1)
+		die("torture test error: opening device %s failed", i->path);
+
+	/* start round zero: */
+	position_iterator[0] = (uint64_t) (random() % i->size) / fs_opts.block_size;
+	do {
+		position_iterator[1] = (uint64_t) (random() % i->size) / fs_opts.block_size;
+	} while (position_iterator[0] == position_iterator[1]);
+
+	if( ! torture_target_store(i, random_buffer, position_iterator, fs_opts.block_size))
+		die("torture test error: storing data blocks at device %s failed", i->path);
+
+	for( test_iterator = 0; test_iterator < nr_of_tests; test_iterator++ )
+	{
+			if (! torture_target_verify(i, random_buffer, position_iterator, fs_opts.block_size, read_buffer))
+				die("torture test error: verifying data integrity at device %s failed", i->path);
+
+			/* write new round: */
+			position_iterator[0] = (uint64_t) (random() % i->size) / fs_opts.block_size;
+			do {
+				position_iterator[1] = (uint64_t) (random() % i->size) / fs_opts.block_size;
+			} while (position_iterator[0] == position_iterator[1]);
+
+			if( ! torture_target_store(i, random_buffer, position_iterator, fs_opts.block_size))
+				die("torture test error: storing data blocks at device %s failed", i->path);
+	}
+
+	if (! torture_target_verify(i, random_buffer, position_iterator, fs_opts.block_size, read_buffer))
+		die("torture test error: verifying data integrity at device %s failed", i->path);
+
+	close(i->fd);
+	free(random_buffer);
+	free(read_buffer);
+	return 0;
+}
+
+
 struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 			   struct bch_opts	fs_opts,
 			   struct format_opts	opts,
@@ -185,6 +268,10 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 
 	if (bch2_sb_realloc(&sb, 0))
 		die("insufficient memory");
+
+	/* some devices may need checking: */
+	if(opts.torture)
+		for (i = devs; i < devs + nr_devs; i++) torture_target(i, fs_opts);
 
 	sb.sb->version		= le16_to_cpu(opts.version);
 	sb.sb->version_min	= le16_to_cpu(opts.version);
