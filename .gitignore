@@ -16,7 +16,7 @@ tests/__pycache__/
 
 # dot-files that we don't want to ignore
 !.gitignore
-!.travis.yml
+!.github/dependabot.yml
 !.editorconfig
 
 bcachefs-principles-of-operation.*
