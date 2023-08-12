@@ -35,7 +35,7 @@ impl std::str::FromStr for KeyLoc {
 fn check_for_key(key_name: &std::ffi::CStr) -> anyhow::Result<bool> {
     use bch_bindgen::keyutils::{self, keyctl_search};
     let key_name = key_name.to_bytes_with_nul().as_ptr() as *const _;
-    let key_type = c_str!("logon");
+    let key_type = c_str!("user");
 
     let key_id = unsafe { keyctl_search(keyutils::KEY_SPEC_USER_KEYRING, key_type, key_name, 0) };
     if key_id > 0 {
@@ -101,7 +101,7 @@ fn ask_for_key(sb: &bch_sb_handle) -> anyhow::Result<()> {
     } else if key.magic != bch_key_magic {
         Err(anyhow!("failed to verify the password"))
     } else {
-        let key_type = c_str!("logon");
+        let key_type = c_str!("user");
         let ret = unsafe {
             bch_bindgen::keyutils::add_key(
                 key_type,
