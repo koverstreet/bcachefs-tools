@@ -968,7 +968,10 @@ retry:
 			goto fatal_err;
 	}
 
-	event_inc_trace(c, transaction_commit, buf, prt_str(&buf, trans->fn));
+	event_inc_trace(c, transaction_commit, buf, ({
+		prt_printf(&buf, "%s\nseq %llu\n", trans->fn, trans->journal_res.seq);
+		bch2_trans_updates_to_text(&buf, trans);
+	}));
 
 	return 0;
 fatal_err:
@@ -1053,7 +1056,10 @@ static int trans_commit_merge(struct btree_trans *trans,
 noinline __cold
 static void transaction_commit_trace(struct btree_trans *trans)
 {
-	__event_trace(trans->c, transaction_commit, buf, prt_str(&buf, trans->fn));
+	__event_trace(trans->c, transaction_commit, buf, ({
+		prt_printf(&buf, "%s\nseq %llu\n", trans->fn, trans->journal_res.seq);
+		bch2_trans_updates_to_text(&buf, trans);
+	}));
 }
 
 static inline bool update_is_noop(struct btree_insert_entry *i, enum bch_trans_commit_flags flags)
@@ -1200,6 +1206,8 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		btree_insert_entry_checks(trans, i);
 	}
 #endif
+
+	event_inc_trace_fn(c, transaction_commit, transaction_commit_trace(trans));
 
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
 		struct journal *j = &c->journal;
@@ -1471,7 +1479,6 @@ retry:
 		goto err;
 
 	trans->commit_count++;
-	event_inc_trace_fn(c, transaction_commit, transaction_commit_trace(trans));
 out:
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_check_rw)))
 		enumerated_ref_put(&c->writes, BCH_WRITE_REF_trans);
