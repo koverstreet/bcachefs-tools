@@ -145,7 +145,7 @@ struct Cli {
     /// Where the filesystem should be mounted. If not set, then the filesystem
     /// won't actually be mounted. But all steps preceeding mounting the
     /// filesystem (e.g. asking for passphrase) will still be performed.
-    mountpoint:     std::path::PathBuf,
+    mountpoint:     Option<std::path::PathBuf>,
 
     /// Mount options
     #[arg(short, default_value = "")]
@@ -207,14 +207,23 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         key::prepare_key(&sbs[0], key)?;
     }
 
-    info!(
-        "mounting with params: device: {}, target: {}, options: {}",
-        devs,
-        &opt.mountpoint.to_string_lossy(),
-        &opt.options
-    );
+    if let Some(mountpoint) = opt.mountpoint {
+        info!(
+            "mounting with params: device: {}, target: {}, options: {}",
+            devs,
+            mountpoint.to_string_lossy(),
+            &opt.options
+        );
 
-    mount(devs, &opt.mountpoint, &opt.options)?;
+        mount(devs, mountpoint, &opt.options)?;
+    } else {
+        info!(
+            "would mount with params: device: {}, options: {}",
+            devs,
+            &opt.options
+        );
+    }
+
     Ok(())
 }
 
