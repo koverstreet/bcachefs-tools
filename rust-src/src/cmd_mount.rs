@@ -14,7 +14,7 @@ fn mount_inner(
     src: String,
     target: impl AsRef<std::path::Path>,
     fstype: &str,
-    mountflags: u64,
+    mountflags: libc::c_ulong,
     data: Option<String>,
 ) -> anyhow::Result<()> {
 
@@ -45,7 +45,7 @@ fn mount_inner(
 
 /// Parse a comma-separated mount options and split out mountflags and filesystem
 /// specific options.
-fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, u64) {
+fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulong) {
     use either::Either::*;
     debug!("parsing mount options: {}", options.as_ref());
     let (opts, flags) = options
