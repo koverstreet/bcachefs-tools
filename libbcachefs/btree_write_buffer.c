@@ -9,6 +9,7 @@
 #include "journal.h"
 #include "journal_reclaim.h"
 
+#include <linux/atomic.h>
 #include <linux/sort.h>
 
 static int btree_write_buffered_key_cmp(const void *_l, const void *_r)

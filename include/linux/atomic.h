@@ -318,6 +318,12 @@ static inline s64 atomic64_cmpxchg_acquire(atomic64_t *v, s64 old, s64 new)
 	return atomic64_cmpxchg(v, old, new);
 }
 
+static inline s64 atomic64_sub_return_release(s64 i, atomic64_t *v)
+{
+       smp_mb__before_atomic();
+       return atomic64_sub_return(i, v);
+}
+
 #endif
 
 #endif /* __TOOLS_LINUX_ATOMIC_H */
