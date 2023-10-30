@@ -66,9 +66,9 @@ void bch2_inode_update_after_write(struct btree_trans *trans,
 	inode->v.i_mode	= bi->bi_mode;
 
 	if (fields & ATTR_ATIME)
-		inode->v.i_atime = bch2_time_to_timespec(c, bi->bi_atime);
+		inode_set_atime_to_ts(&inode->v, bch2_time_to_timespec(c, bi->bi_atime));
 	if (fields & ATTR_MTIME)
-		inode->v.i_mtime = bch2_time_to_timespec(c, bi->bi_mtime);
+		inode_set_mtime_to_ts(&inode->v, bch2_time_to_timespec(c, bi->bi_mtime));
 	if (fields & ATTR_CTIME)
 		inode_set_ctime_to_ts(&inode->v, bch2_time_to_timespec(c, bi->bi_ctime));
 
@@ -753,8 +753,8 @@ static int bch2_getattr(struct mnt_idmap *idmap,
 	stat->gid	= inode->v.i_gid;
 	stat->rdev	= inode->v.i_rdev;
 	stat->size	= i_size_read(&inode->v);
-	stat->atime	= inode->v.i_atime;
-	stat->mtime	= inode->v.i_mtime;
+	stat->atime	= inode_get_atime(&inode->v);
+	stat->mtime	= inode_get_mtime(&inode->v);
 	stat->ctime	= inode_get_ctime(&inode->v);
 	stat->blksize	= block_bytes(c);
 	stat->blocks	= inode->v.i_blocks;
@@ -1418,8 +1418,8 @@ static int inode_update_times_fn(struct btree_trans *trans,
 {
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
 
-	bi->bi_atime	= timespec_to_bch2_time(c, inode->v.i_atime);
-	bi->bi_mtime	= timespec_to_bch2_time(c, inode->v.i_mtime);
+	bi->bi_atime	= timespec_to_bch2_time(c, inode_get_atime(&inode->v));
+	bi->bi_mtime	= timespec_to_bch2_time(c, inode_get_mtime(&inode->v));
 	bi->bi_ctime	= timespec_to_bch2_time(c, inode_get_ctime(&inode->v));
 
 	return 0;
