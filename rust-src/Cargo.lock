@@ -91,7 +91,6 @@ dependencies = [
  "atty",
  "bch_bindgen",
  "byteorder",
- "cfg-if",
  "chrono",
  "clap",
  "clap_complete",

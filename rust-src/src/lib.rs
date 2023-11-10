@@ -34,25 +34,12 @@ macro_rules! c_str {
 #[macro_export]
 macro_rules! transform_c_args {
     ($var:ident, $argc:expr, $argv:expr) => {
+        // TODO: `OsStr::from_bytes` only exists on *nix
+        use ::std::os::unix::ffi::OsStrExt;
         let $var: Vec<_> = (0..$argc)
-            .map(|i| unsafe { ::std::ffi::CStr::from_ptr(*$argv.add(i as usize)) })
-            .map(|x| {
-                ::cfg_if::cfg_if! {
-                    if #[cfg(unix)] {
-                        use ::std::os::unix::ffi::OsStrExt;
-                        ::std::ffi::OsStr::from_bytes(x.to_bytes())
-                    } else {
-                        // If arbitrary-bytes `OsStr`s are not supported (e.g. MS Windows),
-                        // just assert the arguments are UTF-8 encoded
-                        let Ok(os_str) = cstr.to_str() else {
-                            ::log::error!("Invalid UTF-8 argument meets");
-                            ::std::process::abort()
-                        };
-                        os_str
-                    }
-                }
-            })
-            .collect();
+        .map(|i| unsafe { ::std::ffi::CStr::from_ptr(*$argv.add(i as usize)) })
+        .map(|i| ::std::ffi::OsStr::from_bytes(i.to_bytes()))
+        .collect();
     };
 }
 
