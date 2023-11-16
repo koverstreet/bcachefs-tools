@@ -14,7 +14,7 @@ log = { version = "0.4", features = ["std"] }
 chrono = { version = "0.4", default-features = false }
 colored = "2"
 clap = { version = "4.0.32", features = ["derive", "wrap_help"] }
-clap_complete = "4.4.4"
+clap_complete = "4.3.2"
 anyhow = "1.0"
 libc = "0.2.69"
 udev = "0.7.0"
