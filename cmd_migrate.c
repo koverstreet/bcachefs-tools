@@ -648,6 +648,7 @@ static void migrate_usage(void)
 static const struct option migrate_opts[] = {
 	{ "encrypted",		no_argument, NULL, 'e' },
 	{ "no_passphrase",	no_argument, NULL, 'p' },
+	{ "help",			no_argument, NULL, 'h' },
 	{ NULL }
 };
 
