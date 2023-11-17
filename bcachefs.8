@@ -1,4 +1,4 @@
-.Dd March 7, 2023
+.Dd September 17, 2023
 .Dt BCACHEFS 8 SMM
 .Os
 .Sh NAME
@@ -20,6 +20,8 @@ which are documented in detail below:
 Format one or a list of devices with bcachefs data structures.
 .It Ic show-super
 Dump superblock information to stdout.
+.It Ic set-option
+Set a filesystem option
 .El
 .Ss Mount commands
 .Bl -tag -width 18n -compact
@@ -37,7 +39,7 @@ Check an existing filesystem for errors.
 Show disk usage
 .El
 .Ss Commands for managing devices within a running filesystem
-.Bl -tag -width 18n -compact
+.Bl -tag -width 22n -compact
 .It Ic device add
 Add a new device to an existing filesystem
 .It Ic device remove
@@ -52,11 +54,24 @@ Migrate data off of a specific device
 Mark a device as failed
 .It Ic device resize
 Resize filesystem on a device
+.It Ic device resize-journal
+Resize journal on a device
+.El
+.Ss Commands for managing subvolumes and snapshots
+.Bl -tag -width 18n -compact
+.It Ic subvolume create
+Create a new subvolume
+.It Ic subvolume delete
+Delete an existing subvolume
+.It Ic subvolume snapshot
+Create a snapshot
 .El
 .Ss Commands for managing filesystem data
 .Bl -tag -width 18n -compact
 .It Ic data rereplicate
 Rereplicate degraded data
+.It Ic data job
+Kick off low level data jobs
 .El
 .Ss Commands for encryption
 .Bl -tag -width 18n -compact
@@ -74,17 +89,30 @@ Migrate an existing filesystem to bcachefs, in place
 .It Ic migrate-superblock
 Add default superblock, after bcachefs migrate
 .El
+.Ss Commands for operating on files in a bcachefs filesystem
+.Bl -tag -width 18n -compact
+.It Ic setattr
+Set various per file attributes
+.El
 .Ss Commands for debugging
 .Bl -tag -width 18n -compact
 .It Ic dump
 Dump filesystem metadata to a qcow2 image
 .It Ic list
 List filesystem metadata in textual form
+.It Ic list_journal
+List contents of journal
+.El
+.Ss FUSE commands
+.Bl -tag -width 18n -compact
+.It Ic fusemount Mount a filesystem via FUSE
 .El
 .Ss Miscellaneous commands
 .Bl -tag -width 18n -compact
 .It Ic version
 Display the version of the invoked bcachefs tool
+.It Ic completions
+Generate shell completions
 .El
 .Sh Superblock commands
 .Bl -tag -width Ds
@@ -95,23 +123,80 @@ You need to do this before you create a volume.
 Device specific options must come before corresponding devices, e.g.
 .Dl bcachefs format --label=ssd /dev/sda --label=hdd /dev/sdb
 .Bl -tag -width Ds
-.It Fl b , Fl -block Ns = Ns Ar size
+.It Fl -block_size Ns = Ns Ar size
 block size, in bytes (e.g. 4k)
-.It Fl -btree_node Ns = Ns Ar size
+.It Fl -btree_node_size Ns = Ns Ar size
 Btree node size, default 256k
-.It Fl -metadata_checksum_type Ns = Ns ( Cm none | crc32c | crc64 )
+.It Fl -errors Ns = Ns ( Cm continue | ro | panic )
+Action to take on filesystem error
+.It Fl -data_replicas Ns = Ns Ar number
+Number of data replicas
+.It Fl -metadata_replicas Ns = Ns Ar number
+Number of metadata replicas
+.It Fl -data_replicas_required Ns = Ns Ar number
+
+.It Fl -metadata_replicas_required Ns = Ns Ar number
+
+.It Fl -encoded_extent_max Ns = Ns Ar size
+Maximum size of checksummed/compressed extents
+.It Fl -metadata_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
 Set metadata checksum type (default:
 .Cm crc32c ) .
-.It Fl -data_checksum_type Ns = Ns ( Cm none | crc32c | crc64 )
+.It Fl -data_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
 Set data checksum type (default:
 .Cm crc32c ) .
 .It Fl -compression Ns = Ns ( Cm none | lz4 | gzip | zstd )
 Set compression type (default:
 .Cm none ) .
-.It Fl -data_replicas Ns = Ns Ar number
-Number of data replicas
-.It Fl -metadata_replicas Ns = Ns Ar number
-Number of metadata replicas
+.It Fl -background_compression Ns = Ns ( Cm none | lz4 | gzip | zstd )
+
+.It Fl -str_hash Ns = Ns ( Cm crc32c | crc64 | siphash )
+Hash function for directory entries and xattrs
+.It Fl -metadata_target Ns = Ns Ar target
+Device or label for metadata writes
+.It Fl -foreground_target Ns = Ns Ar target
+Device or label for foreground writes
+.It Fl -background_target Ns = Ns Ar target
+Device or label to move data to in the background
+.It Fl -promote_target Ns = Ns Ar target
+Device or label to promote data to on read
+.It Fl -erasure_code
+Enable erasure coding (DO NOT USE YET)
+.It Fl -inodes_32bit
+Constrain inode numbers to 32 bits
+.It Fl -shared_inode_numbers
+Shared new inode numbers by CPU id
+.It Fl -inodes_use_key_cache
+Use the btree key cache for the inodes btree
+.It Fl -gc_reserve_percent Ns = Ns Ar percentage
+Percentage of disk space to reserve for copygc
+.It Fl -gc_reserve_bytes Ns = Ns Ar percentage
+Amount of disk space to reserve for copygc
+.sp
+This takes precedence over
+.Cm gc_reserve_percent
+if set
+.It Fl -root_reserve_percent Ns = Ns Ar percentage
+Percentage of disk space to reserve for superuser
+.It Fl -wide_macs
+Store full 128bits of cryptographic MACS, instead of 80
+.It Fl -acl
+Enable POSIX acls
+.It Fl -usrquota
+Enable user quotas
+.It Fl -grpquota
+Enable group quotas
+.It Fl prjquota
+Enable project quotas
+.It Fl -journal_transaction_names
+Log transaction function names in journal
+.It Fl -nocow
+Nocow mode: Writes will be done in place when possible.
+.sp
+Snapshots and reflink will still caused writes to be COW.
+.sp
+This flag implicitly disables data checksumming, compression and
+encryption.
 .It Fl -replicas Ns = Ns Ar number
 Sets both data and metadata replicas
 .It Fl -encrypted
@@ -119,22 +204,20 @@ Enable whole filesystem encryption (chacha20/poly1305);
 passphrase will be prompted for.
 .It Fl -no_passphrase
 Don't encrypt master encryption key
-.It Fl -error_action Ns = Ns ( Cm continue | remount-ro | panic )
-Action to take on filesystem error (default:
-.Cm remount-ro )
-.It Fl L , Fl -label Ns = Ns Ar label
+.It Fl L , Fl -fs_label Ns = Ns Ar label
 Create the filesystem with the specified
 .Ar label
 .It Fl U , -uuid Ns = Ns Ar uuid
 Create the filesystem with the specified
 .Ar uuid
-.It Fl f , Fl -force
-Force the filesystem to be created,
-even if the device already contains a filesystem.
+.It Fl -superblock_size Ns = Ns Ar size
+
 .El
 .Pp
 Device specific options:
 .Bl -tag -width Ds
+.It Fl -discard
+Enable discard/TRIM support
 .It Fl -fs_size Ns = Ns Ar size
 Create the filesystem using
 .Ar size
@@ -142,10 +225,20 @@ bytes on the subsequent device.
 .It Fl -bucket Ns = Ns Ar size
 Specifies the bucket size;
 must be greater than the btree node size
-.It Fl -discard
-Enable discards on subsequent devices
+.It Fl -durability Ns = Ns Ar n
+Data written to this device will be considered
+to have already been replicated
+.Ar n
+times
+.It Fl l , Fl -label
+Disk label
+.It Fl f , Fl -force
+Force the filesystem to be created,
+even if the device already contains a filesystem.
 .It Fl q , Fl -quiet
 Only print errors
+.It Fl v , Fl -verbose
+Verbose filesystem initialization
 .El
 .It Nm Ic show-super Oo Ar options Oc Ar device
 Dump superblock information to stdout.
@@ -164,11 +257,11 @@ Mount a filesystem. The
 can be a device, a colon-separated list of devices, or UUID=<UUID>. The
 .Ar mountpoint
 is the path where the filesystem should be mounted. If not set, then the filesystem won't actually be mounted
-but all steps preceeding mounting the filesystem (e.g. asking for passphrase) will still be performed.
+but all steps preceding mounting the filesystem (e.g. asking for passphrase) will still be performed.
 .Pp the options are as follows:
 .Bl -tag -width Ds
 .It Fl o Ar options
-Mount options provided as a comma-separated list. See userguide for complete list.
+Mount options provided as a comma-separated list. See user guide for complete list.
 .Bl -tag -width Ds -compact
 .It Cm degraded
 Allow mounting with data degraded
@@ -193,6 +286,8 @@ wait for password to become available before mounting.
 .It Cm ask
 prompt the user for password.
 .El
+.It Fl c , Fl -colorize Ns = Ns ( Cm true | false )
+Force color on/off. Default: auto-detect TTY
 .It Fl v
 Be verbose. Can be specified more than once.
 .El
@@ -210,6 +305,10 @@ Don't repair, only check for errors
 Assume "yes" to all questions
 .It Fl f
 Force checking even if filesystem is marked clean
+.It Fl r , Fl -ratelimit_errors
+Don't display more than 10 errors of a given type
+.It Fl R , Fl -reconstruct_alloc
+Reconstruct the alloc btree
 .It Fl v
 Be verbose
 .El
@@ -219,7 +318,7 @@ Be verbose
 .It Nm Ic fs Ic usage Oo Ar options Oc Op Ar filesystem
 Show disk usage.
 .Bl -tag -width Ds
-.It Fl h
+.It Fl h , Fl -human-readable
 Print human readable sizes.
 .El
 .El
@@ -234,6 +333,8 @@ Size of filesystem on device
 Set bucket size
 .It Fl -discard
 Enable discards
+.It Fl l , Fl -label Ns = Ns Ar label
+Disk label
 .It Fl f , Fl -force
 Use device even if it appears to already be formatted
 .El
@@ -242,7 +343,7 @@ Remove a device from a filesystem
 .Bl -tag -width Ds
 .It Fl f , Fl -force
 Force removal, even if some data couldn't be migrated
-.It Fl -force-metadata
+.It Fl F , Fl -force-metadata
 Force removal, even if some metadata couldn't be migrated
 .El
 .It Nm Ic device Ic online Ar device
@@ -260,20 +361,69 @@ Move data off of a given device
 .It Ar  new-state Ns = Ns ( Ar rw | ro | failed | spare )
 .It Fl f , Fl -force
 Force, if data redundancy will be degraded
+.It Fl -force-if-data-lost
+Force, if data will be lost
+.It Fl o , Fl -offline
+Set state of an offline device
 .El
 .It Nm Ic device Ic resize Ar device Op Ar size
 Resize filesystem on a device
+.It Nm Ic device Ic resize-journal Ar device Op Ar size
+Resize journal on a device
+.El
+.Sh Commands for managing subvolumes and snapshots
+.Bl -tag -width Ds
+.It Ic subvolume create Oo Ar options Oc Ar path
+Create a new subvolume
+.It Ic subvolume delete Oo Ar options Oc Ar path
+Delete an existing subvolume
+.It Ic subvolume delete Oo Ar options Oc Ar source dest
+Create a snapshot of
+.Ar source
+at
+.Ar dest .
+If specified,
+.Ar source
+must be a subvolume;
+if not specified the snapshot will be of the subvolume containing
+.Ar dest .
+.Bl -tag -width Ds
+.It Fl r
+Make snapshot read-only
+.El
 .El
 .Sh Commands for managing filesystem data
 .Bl -tag -width Ds
-.It Nm Ic device Ic rereplicate Ar filesystem
+.It Nm Ic data Ic rereplicate Ar filesystem
 Walks existing data in a filesystem,
 writing additional copies of any degraded data.
+.It Nm Ic data Ic job Ar job filesystem
+Kick off a data job and report progress
+.sp
+.Ar job
+is one of (
+.Cm scrub | rereplicate | migrate | rewrite_old_nodes
+)
+.Bl -tag -width Ds
+.It Fl b Ar btree
+Btree to operate on
+.It Fl s Ar inode Ns Cm \&: Ns Ar offset
+Start position
+.It Fl e Ar inode Ns Cm \&: Ns Ar offset
+End position
+.El
 .El
 .Sh Commands for encryption
 .Bl -tag -width Ds
 .It Nm Ic unlock Ar device
 Unlock an encrypted filesystem prior to running/mounting.
+.Bl -tag -width Ds
+.It Fl c
+Check if a device is encrypted
+.It Fl k Ns = Ns ( Cm session | user | user_session )
+Keyring to add to (default:
+.Cm user )
+.El
 .It Nm Ic set-passphrase Ar devices\ ...
 Change passphrase on an existing (unmounted) filesystem.
 .It Nm Ic remove-passphrase Ar devices\ ...
@@ -302,6 +452,36 @@ Device to create superblock for
 Offset of existing superblock
 .El
 .El
+.Sh Commands for operating on files in a bcachefs filesystem
+.Bl -tag -width Ds
+.It Nm Ic setattr Oo Ar options Oc Ar devices\ ...
+.Bl -tag -width Ds
+.It Fl -data_replicas Ns = Ns Ar number
+Number of data replicas
+.It Fl -data_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
+Set data checksum type (default:
+.Cm crc32c ) .
+.It Fl -compression Ns = Ns ( Cm none | lz4 | gzip | zstd )
+Set compression type (default:
+.Cm none ) .
+.It Fl -background_compression Ns = Ns ( Cm none | lz4 | gzip | zstd )
+
+.It Fl -metadata_target Ns = Ns Ar target
+Device or label for metadata writes
+.It Fl -foreground_target Ns = Ns Ar target
+Device or label for foreground writes
+.It Fl -background_target Ns = Ns Ar target
+Device or label to move data to in the background
+.It Fl -promote_target Ns = Ns Ar target
+Device or label to promote data to on read
+.It Fl -erasure_code
+Enable erasure coding (DO NOT USE YET)
+.It Fl -project
+
+.It Fl -nocow
+Nocow mode: Writes will be done in place when possible.
+.El
+.El
 .Sh Commands for debugging
 These commands work on offline, unmounted filesystems.
 .Bl -tag -width Ds
@@ -310,30 +490,61 @@ Dump filesystem metadata
 .Bl -tag -width Ds
 .It Fl o Ar output
 Required flag: Output qcow2 image(s)
-.It Fl f
+.It Fl f , Fl -force
 Force; overwrite when needed
+.It Fl -nojournal
+Don't dump entire journal, just dirty entries
 .El
 .It Nm Ic list Oo Ar options Oc Ar devices\ ...
 List filesystem metadata to stdout
 .Bl -tag -width Ds
 .It Fl b ( Cm extents | inodes | dirents | xattrs )
-Btree to list from
+Btree to list from. (default:
+.Cm extents)
+.It Fl l , Fl -level
+Btree depth to descend to. (
+.Cm 0
+== leaves; default:
+.Cm 0)
 .It Fl s Ar inode Ns Cm \&: Ns Ar offset
 Start position to list from
 .It Fl e Ar inode Ns Cm \&: Ns Ar offset
 End position
-.It Fl i Ar inode
-List keys for a given inode number
-.It Fl m ( Cm keys | formats )
+.It Fl m , Fl -mode ( Cm keys | formats | nodes | nodes-ondisk )
+(default:
+.Cm keys)
 .It Fl f
-Force fsck
+Check (fsck) the filesystem first
+.It Fl c , Fl -colorize Ns = Ns ( Cm true | false )
+Force color on/off. Default: auto-detect TTY
 .It Fl v
 Verbose mode
-List mode
 .El
+.It Nm Ic list_journal Oo Ar options Oc Ar devices\ ...
+.Bl -tag -width Ds
+.It Fl a
+Read entire journal, not just dirty entries
+.It Fl n , Fl -nr-entries Ns = Ns Ar nr
+Number of journal entries to print, starting from the most recent
+.It Fl t , Fl -transaction-filter Ns = Ns Ar bbpos
+Filter transactions not updating
+.Ar bbpos
+.It Fl k , Fl -key-filter Ns = Ns Ar btree
+Filter keys not updating
+.Ar btree
+.It Fl v , Fl -verbose
+Verbose mode
+.El
+.El
+.Sh FUSE commands
+.Bl -tag -width Ds
+.It Nm Ic fusemount
+Mount a filesystem via FUSE
 .El
 .Sh Miscellaneous commands
 .Bl -tag -width Ds
+.It Nm Ic completions Ar shell
+Generate shell completions
 .It Nm Ic version
 Display the version of the invoked bcachefs tool
 .El
