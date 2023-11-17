@@ -248,6 +248,126 @@ List of sections to print
 .It Fl l , Fl -layout
 Print superblock layout
 .El
+.It Nm Ic set-option Oo Ar options Oc Ar device
+.Bl -tag -width Ds
+.It Fl -errors Ns = Ns ( Cm continue | ro | panic )
+Action to take on filesystem error
+.It Fl -metadata_replicas Ns = Ns Ar number
+Number of metadata replicas
+.It Fl -data_replicas Ns = Ns Ar number
+Number of data replicas
+.It Fl -metadata_replicas_required Ns = Ns Ar number
+
+.It Fl -data_replicas_required Ns = Ns Ar number
+
+.It Fl -metadata_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
+Set metadata checksum type (default:
+.Cm crc32c ) .
+.It Fl -data_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
+Set data checksum type (default:
+.Cm crc32c ) .
+.It Fl -compression Ns = Ns ( Cm none | lz4 | gzip | zstd )
+Set compression type (default:
+.Cm none ) .
+.It Fl -background_compression Ns = Ns ( Cm none | lz4 | gzip | zstd )
+
+.It Fl -str_hash Ns = Ns ( Cm crc32c | crc64 | siphash )
+Hash function for directory entries and xattrs
+.It Fl -metadata_target Ns = Ns Ar target
+Device or label for metadata writes
+.It Fl -foreground_target Ns = Ns Ar target
+Device or label for foreground writes
+.It Fl -background_target Ns = Ns Ar target
+Device or label to move data to in the background
+.It Fl -promote_target Ns = Ns Ar target
+Device or label to promote data to on read
+.It Fl -erasure_code
+Enable erasure coding (DO NOT USE YET)
+.It Fl -inodes_32bit
+Constrain inode numbers to 32 bits
+.It Fl -shared_inode_numbers
+Shared new inode numbers by CPU id
+.It Fl -inodes_use_key_cache
+Use the btree key cache for the inodes btree
+.It Fl -gc_reserve_percent Ns = Ns Ar percentage
+Percentage of disk space to reserve for copygc
+.It Fl -gc_reserve_bytes Ns = Ns Ar percentage
+Amount of disk space to reserve for copygc
+.sp
+This takes precedence over
+.Cm gc_reserve_percent
+if set
+.It Fl -root_reserve_percent Ns = Ns Ar percentage
+Percentage of disk space to reserve for superuser
+.It Fl -wide_macs
+Store full 128bits of cryptographic MACS, instead of 80
+.It Fl -acl
+Enable POSIX acls
+.It Fl -usrquota
+Enable user quotas
+.It Fl -grpquota
+Enable group quotas
+.It Fl prjquota
+Enable project quotas
+.It Fl degraded
+Allow mounting in degraded mode
+.It Fl -very_degraded
+Allow mounting in when data will be missing
+.It Fl -discard
+Enable discard/TRIM support
+.It Fl -verbose
+Extra debugging information during mount/recovery
+.It Fl -journal_flush_delay Ns = Ns Ar ms
+Delay in milliseconds before automatic journal commits
+.It Fl -journal_flush_disabled
+Disable journal flush on sync/fsync
+.sp
+If enabled, writes can be lost, but only since the
+last journal write (default 1 second)
+.It Fl -journal_reclaim_delay Ns = Ns Ar ms
+Delay in milliseconds before automatic journal reclaim
+.It Fl -move_bytes_in_flight Ns = Ns Ar bytes
+Maximum Amount of IO to keep in flight by the move path
+.It Fl -move_ios_in_flight Ns = Ns Ar number
+Maximum number of IOs to keep in flight by the move path
+.It Fl -fsck
+Run fsck on mount
+.It Fl -fix_errors Ns = Ns Ar error
+Fix errors during fsck without asking
+.It Fl -ratelimit_errors
+Ratelimit error messages during fsck
+.It Fl -nochanges
+Super read only mode - no writes at all will be issued,
+even if we have to replay the journal
+.It Fl -norecovery
+Don't replay the journal
+.It Fl -journal_transaction_names
+Log transaction function names in journal
+.It Fl -noexcl
+Don't open device in exclusive mode
+.It Fl -direct_io
+Use O_DIRECT (userspace only)
+.It Fl -sb Ns = Ns Ar offset
+Sector offset of superblock
+.It Fl -reconstruct_alloc
+Reconstruct alloc btree
+.It Fl -version_upgrade Ns = Ns ( Cm compatible | incompatible | none )
+Set superblock to latest version, allowing any new features
+to be used
+.It Fl -nocow
+Nocow mode: Writes will be done in place when possible.
+.sp
+Snapshots and reflink will still caused writes to be COW.
+.sp
+This flag implicitly disables data checksumming, compression and
+encryption.
+.It Fl -nocow_enabled
+Enable nocow mode: enables runtime locking in data
+move path needed if nocow will ever be in use
+.It Fl -no_data_io
+Skip submit_bio() for data reads and writes,
+for performance testing purposes
+.El
 .El
 .Sh Mount commands
 .Bl -tag -width Ds
