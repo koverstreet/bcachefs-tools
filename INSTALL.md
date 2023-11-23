@@ -5,6 +5,7 @@ Build dependencies:
 
  * libaio
  * libblkid
+ * libclang
  * libkeyutils
  * liblz4
  * libsodium
@@ -25,7 +26,7 @@ Debian (Bullseye or later) and Ubuntu (20.04 or later): you can install these wi
 apt install -y pkg-config libaio-dev libblkid-dev libkeyutils-dev \
     liblz4-dev libsodium-dev liburcu-dev libzstd-dev \
     uuid-dev zlib1g-dev valgrind libudev-dev git build-essential \
-    python3 python3-docutils
+    python3 python3-docutils libclang-dev
 ```
 
 Fedora: install the "Development tools" group along with:
