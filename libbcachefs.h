@@ -167,14 +167,31 @@ static inline struct bch_ioctl_fs_usage *bchu_fs_usage(struct bchfs_handle fs)
 	}
 }
 
-static inline struct bch_ioctl_dev_usage bchu_dev_usage(struct bchfs_handle fs,
-							unsigned idx)
+static inline struct bch_ioctl_dev_usage_v2 *bchu_dev_usage(struct bchfs_handle fs,
+							    unsigned idx)
 {
-	struct bch_ioctl_dev_usage i = { .dev = idx, .flags = BCH_BY_INDEX};
+	struct bch_ioctl_dev_usage_v2 *u = xcalloc(sizeof(*u) + sizeof(u->d[0]) * BCH_DATA_NR, 1);
 
-	if (xioctl(fs.ioctl_fd, BCH_IOCTL_DEV_USAGE, &i))
-		die("BCH_IOCTL_DEV_USAGE error: %m");
-	return i;
+	u->dev			= idx;
+	u->flags		= BCH_BY_INDEX;
+	u->nr_data_types	= BCH_DATA_NR;
+
+	if (!xioctl(fs.ioctl_fd, BCH_IOCTL_DEV_USAGE_V2, u))
+		return u;
+
+	struct bch_ioctl_dev_usage u_v1;
+	if (xioctl(fs.ioctl_fd, BCH_IOCTL_DEV_USAGE, &u_v1))
+		die("BCH_IOCTL_DEV_USAGE_V2 error: %m");
+
+	u->state	= u_v1.state;
+	u->nr_data_types = ARRAY_SIZE(u_v1.d);
+	u->bucket_size	= u_v1.bucket_size;
+	u->nr_buckets	= u_v1.nr_buckets;
+
+	for (unsigned i = 0; i < ARRAY_SIZE(u_v1.d); i++)
+		u->d[i] = u_v1.d[i];
+
+	return u;
 }
 
 static inline struct bch_sb *bchu_read_super(struct bchfs_handle fs, unsigned idx)

@@ -36,7 +36,7 @@ static void __dev_usage_type_to_text(struct printbuf *out,
 }
 
 static void dev_usage_type_to_text(struct printbuf *out,
-				   struct bch_ioctl_dev_usage *u,
+				   struct bch_ioctl_dev_usage_v2 *u,
 				   enum bch_data_type type)
 {
 	__dev_usage_type_to_text(out, bch2_data_types[type],
@@ -50,8 +50,7 @@ static void dev_usage_to_text(struct printbuf *out,
 			      struct bchfs_handle fs,
 			      struct dev_name *d)
 {
-	struct bch_ioctl_dev_usage u = bchu_dev_usage(fs, d->idx);
-	unsigned i;
+	struct bch_ioctl_dev_usage_v2 *u = bchu_dev_usage(fs, d->idx);
 
 	prt_newline(out);
 	prt_printf(out, "%s (device %u):", d->label ?: "(no label)", d->idx);
@@ -59,7 +58,7 @@ static void dev_usage_to_text(struct printbuf *out,
 	prt_str(out, d->dev ?: "(device not found)");
 	prt_tab_rjust(out);
 
-	prt_str(out, bch2_member_states[u.state]);
+	prt_str(out, bch2_member_states[u->state]);
 	prt_tab_rjust(out);
 
 	prt_newline(out);
@@ -78,23 +77,21 @@ static void dev_usage_to_text(struct printbuf *out,
 
 	prt_newline(out);
 
-	for (i = 0; i < BCH_DATA_NR; i++)
-		dev_usage_type_to_text(out, &u, i);
-	__dev_usage_type_to_text(out, "erasure coded",
-				 u.bucket_size,
-				 u.buckets_ec, u.buckets_ec * u.bucket_size, 0);
+	for (unsigned i = 0; i < u->nr_data_types; i++)
+		dev_usage_type_to_text(out, u, i);
 
 	prt_str(out, "capacity:");
 	prt_tab(out);
 
-	prt_units_u64(out, (u.nr_buckets * u.bucket_size) << 9);
+	prt_units_u64(out, (u->nr_buckets * u->bucket_size) << 9);
 	prt_tab_rjust(out);
-	prt_printf(out, "%llu", u.nr_buckets);
+	prt_printf(out, "%llu", u->nr_buckets);
 	prt_tab_rjust(out);
 
 	printbuf_indent_sub(out, 2);
 
 	prt_newline(out);
+	free(u);
 }
 
 static int dev_by_label_cmp(const void *_l, const void *_r)
