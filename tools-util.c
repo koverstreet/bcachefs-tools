@@ -225,9 +225,6 @@ int open_for_format(struct dev_opts *dev, bool force)
 	if (ret < 0)
 		die("Error opening device to format %s: %s", dev->path, strerror(-ret));
 
-	if (force)
-		return 0;
-
 	if (!(pr = blkid_new_probe()))
 		die("blkid error 1");
 	if (blkid_probe_set_device(pr, dev->bdev->bd_buffered_fd, 0, 0))
@@ -250,9 +247,11 @@ int open_for_format(struct dev_opts *dev, bool force)
 		else
 			printf("%s contains a %s filesystem\n",
 			       dev->path, fs_type);
-		fputs("Proceed anyway?", stdout);
-		if (!ask_yn())
-			exit(EXIT_FAILURE);
+		if (!force) {
+			fputs("Proceed anyway?", stdout);
+			if (!ask_yn())
+				exit(EXIT_FAILURE);
+		}
 		while (blkid_do_probe(pr) == 0) {
 			if (blkid_do_wipe(pr, 0))
 				die("Failed to wipe preexisting metadata.");
