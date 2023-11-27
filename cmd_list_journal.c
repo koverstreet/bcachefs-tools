@@ -140,11 +140,11 @@ static void journal_entries_print(struct bch_fs *c, unsigned nr_entries,
 		if (le64_to_cpu(p->j.seq) + nr_entries < atomic64_read(&c->journal.seq))
 			continue;
 
-		bool blacklisted =
+		bool blacklisted = p->ignore ||
 			bch2_journal_seq_is_blacklisted(c,
 					le64_to_cpu(p->j.seq), false);
 
-		if (!transaction_filter.nr) {
+		if (transaction_filter.nr) {
 			if (blacklisted)
 				printf("blacklisted ");
 
