@@ -123,9 +123,11 @@ int bch2_check_lru_key(struct btree_trans *trans,
 	if (lru_k.k->type != KEY_TYPE_set ||
 	    lru_pos_time(lru_k.k->p) != idx) {
 		if (!bpos_eq(*last_flushed_pos, lru_k.k->p)) {
-			*last_flushed_pos = lru_k.k->p;
-			ret = bch2_btree_write_buffer_flush_sync(trans) ?:
-				-BCH_ERR_transaction_restart_write_buffer_flush;
+			ret = bch2_btree_write_buffer_flush_sync(trans);
+			if (!ret) {
+				*last_flushed_pos = lru_k.k->p;
+				ret = -BCH_ERR_transaction_restart_write_buffer_flush;
+			}
 			goto out;
 		}
 

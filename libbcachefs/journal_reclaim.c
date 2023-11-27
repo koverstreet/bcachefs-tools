@@ -3,7 +3,6 @@
 #include "bcachefs.h"
 #include "btree_key_cache.h"
 #include "btree_update.h"
-#include "btree_write_buffer.h"
 #include "buckets.h"
 #include "errcode.h"
 #include "error.h"
@@ -51,23 +50,20 @@ unsigned bch2_journal_dev_buckets_available(struct journal *j,
 	return available;
 }
 
-void bch2_journal_set_watermark(struct journal *j)
+static inline void journal_set_watermark(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	bool low_on_space = j->space[journal_space_clean].total * 4 <=
 		j->space[journal_space_total].total;
 	bool low_on_pin = fifo_free(&j->pin) < j->pin.size / 4;
-	bool low_on_wb = bch2_btree_write_buffer_must_wait(c);
-	unsigned watermark = low_on_space || low_on_pin || low_on_wb
+	unsigned watermark = low_on_space || low_on_pin
 		? BCH_WATERMARK_reclaim
 		: BCH_WATERMARK_stripe;
 
 	if (track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_space],
 			       &j->low_on_space_start, low_on_space) ||
 	    track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_pin],
-			       &j->low_on_pin_start, low_on_pin) ||
-	    track_event_change(&c->times[BCH_TIME_blocked_write_buffer_full],
-			       &j->write_buffer_full_start, low_on_wb))
+			       &j->low_on_pin_start, low_on_pin))
 		trace_and_count(c, journal_full, c);
 
 	swap(watermark, j->watermark);
@@ -234,7 +230,7 @@ void bch2_journal_space_available(struct journal *j)
 	else
 		clear_bit(JOURNAL_MAY_SKIP_FLUSH, &j->flags);
 
-	bch2_journal_set_watermark(j);
+	journal_set_watermark(j);
 out:
 	j->cur_entry_sectors	= !ret ? j->space[journal_space_discarded].next_entry : 0;
 	j->cur_entry_error	= ret;
@@ -307,7 +303,6 @@ void bch2_journal_reclaim_fast(struct journal *j)
 	 * all btree nodes got written out
 	 */
 	while (!fifo_empty(&j->pin) &&
-	       j->pin.front <= j->seq_ondisk &&
 	       !atomic_read(&fifo_peek_front(&j->pin).count)) {
 		j->pin.front++;
 		popped = true;

@@ -56,17 +56,6 @@ static void trace_move_extent_read2(struct bch_fs *c, struct bkey_s_c k)
 	}
 }
 
-static void trace_move_extent_alloc_mem_fail2(struct bch_fs *c, struct bkey_s_c k)
-{
-	if (trace_move_extent_alloc_mem_fail_enabled()) {
-		struct printbuf buf = PRINTBUF;
-
-		bch2_bkey_val_to_text(&buf, c, k);
-		trace_move_extent_alloc_mem_fail(c, buf.buf);
-		printbuf_exit(&buf);
-	}
-}
-
 struct moving_io {
 	struct list_head		read_list;
 	struct list_head		io_list;
@@ -356,8 +345,16 @@ err:
 	if (ret == -BCH_ERR_data_update_done)
 		return 0;
 
-	this_cpu_inc(c->counters[BCH_COUNTER_move_extent_alloc_mem_fail]);
-	trace_move_extent_alloc_mem_fail2(c, k);
+	this_cpu_inc(c->counters[BCH_COUNTER_move_extent_start_fail]);
+	if (trace_move_extent_start_fail_enabled()) {
+		struct printbuf buf = PRINTBUF;
+
+		bch2_bkey_val_to_text(&buf, c, k);
+		prt_str(&buf, ": ");
+		prt_str(&buf, bch2_err_str(ret));
+		trace_move_extent_start_fail(c, buf.buf);
+		printbuf_exit(&buf);
+	}
 	return ret;
 }
 

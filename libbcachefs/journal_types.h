@@ -36,7 +36,6 @@ struct journal_buf {
 	bool			noflush;	/* write has already been kicked off, and was noflush */
 	bool			must_flush;	/* something wants a flush */
 	bool			separate_flush;
-	bool			need_flush_to_write_buffer;
 };
 
 /*
@@ -183,12 +182,6 @@ struct journal {
 	darray_u64		early_journal_entries;
 
 	/*
-	 * Protects journal_buf->data, when accessing without a jorunal
-	 * reservation: for synchronization between the btree write buffer code
-	 * and the journal write path:
-	 */
-	struct mutex		buf_lock;
-	/*
 	 * Two journal entries -- one is currently open for new entries, the
 	 * other is possibly being written out.
 	 */
@@ -278,7 +271,6 @@ struct journal {
 	u64			low_on_space_start;
 	u64			low_on_pin_start;
 	u64			max_in_flight_start;
-	u64			write_buffer_full_start;
 
 	struct bch2_time_stats	*flush_write_time;
 	struct bch2_time_stats	*noflush_write_time;

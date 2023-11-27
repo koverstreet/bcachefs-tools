@@ -10,7 +10,6 @@
 #include "bkey_methods.h"
 #include "btree_gc.h"
 #include "btree_update.h"
-#include "btree_write_buffer.h"
 #include "buckets.h"
 #include "error.h"
 #include "journal.h"
@@ -148,7 +147,6 @@ void bch2_journal_buf_put_final(struct journal *j, u64 seq, bool write)
 		bch2_journal_reclaim_fast(j);
 	if (write)
 		closure_call(&j->io, bch2_journal_write, c->io_complete_wq, NULL);
-	wake_up(&j->wait);
 }
 
 /*
@@ -332,7 +330,6 @@ static int journal_entry_open(struct journal *j)
 	buf->must_flush	= false;
 	buf->separate_flush = false;
 	buf->flush_time	= 0;
-	buf->need_flush_to_write_buffer = true;
 
 	memset(buf->data, 0, sizeof(*buf->data));
 	buf->data->seq	= cpu_to_le64(journal_cur_seq(j));
@@ -767,75 +764,6 @@ void bch2_journal_block(struct journal *j)
 	spin_unlock(&j->lock);
 
 	journal_quiesce(j);
-}
-
-/*
- * XXX: ideally this would not be closing the current journal entry, but
- * otherwise we do not have a way to avoid racing with res_get() - j->blocked
- * will race.
- */
-static bool journal_reservations_stopped(struct journal *j)
-{
-	union journal_res_state s;
-
-	journal_entry_close(j);
-
-	s.v = atomic64_read_acquire(&j->reservations.counter);
-
-	return  s.buf0_count == 0 &&
-		s.buf1_count == 0 &&
-		s.buf2_count == 0 &&
-		s.buf3_count == 0;
-}
-
-void bch2_journal_block_reservations(struct journal *j)
-{
-	spin_lock(&j->lock);
-	j->blocked++;
-	spin_unlock(&j->lock);
-
-	wait_event(j->wait, journal_reservations_stopped(j));
-}
-
-static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct journal *j, u64 max_seq)
-{
-	spin_lock(&j->lock);
-	max_seq = min(max_seq, journal_cur_seq(j));
-
-	for (u64 seq = journal_last_unwritten_seq(j);
-	     seq <= max_seq;
-	     seq++) {
-		unsigned idx = seq & JOURNAL_BUF_MASK;
-		struct journal_buf *buf = j->buf + idx;
-		union journal_res_state s;
-
-		if (!buf->need_flush_to_write_buffer)
-			continue;
-
-		if (seq == journal_cur_seq(j))
-			__journal_entry_close(j, JOURNAL_ENTRY_CLOSED_VAL);
-
-		s.v = atomic64_read_acquire(&j->reservations.counter);
-
-		if (journal_state_count(s, idx)) {
-			spin_unlock(&j->lock);
-			return ERR_PTR(-EAGAIN);
-		}
-
-		spin_unlock(&j->lock);
-		return buf;
-	}
-
-	spin_unlock(&j->lock);
-	return NULL;
-}
-
-struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *j, u64 max_seq)
-{
-	struct journal_buf *ret;
-
-	wait_event(j->wait, (ret = __bch2_next_write_buffer_flush_journal_buf(j, max_seq)) != ERR_PTR(-EAGAIN));
-	return ret;
 }
 
 /* allocate journal on a device: */
@@ -1289,7 +1217,6 @@ int bch2_fs_journal_init(struct journal *j)
 	static struct lock_class_key res_key;
 	unsigned i;
 
-	mutex_init(&j->buf_lock);
 	spin_lock_init(&j->lock);
 	spin_lock_init(&j->err_lock);
 	init_waitqueue_head(&j->wait);

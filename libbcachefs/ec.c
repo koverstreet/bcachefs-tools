@@ -1005,7 +1005,7 @@ static int ec_stripe_update_extents(struct bch_fs *c, struct ec_stripe_buf *s)
 	unsigned i, nr_data = v->nr_blocks - v->nr_redundant;
 	int ret = 0;
 
-	ret = bch2_btree_write_buffer_flush_sync(trans);
+	ret = bch2_btree_write_buffer_flush_nocheck_rw(trans);
 	if (ret)
 		goto err;
 
@@ -1415,7 +1415,7 @@ __bch2_ec_stripe_head_get(struct btree_trans *trans,
 	if (ret)
 		return ERR_PTR(ret);
 
-	if (test_bit(BCH_FS_GOING_RO, &c->flags)) {
+	if (test_bit(BCH_FS_going_ro, &c->flags)) {
 		h = ERR_PTR(-BCH_ERR_erofs_no_writes);
 		goto found;
 	}

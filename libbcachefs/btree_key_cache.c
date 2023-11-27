@@ -13,7 +13,6 @@
 #include "trace.h"
 
 #include <linux/sched/mm.h>
-#include <linux/seq_buf.h>
 
 static inline bool btree_uses_pcpu_readers(enum btree_id id)
 {
@@ -779,7 +778,7 @@ bool bch2_btree_insert_key_cached(struct btree_trans *trans,
 	ck->valid = true;
 
 	if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
-		EBUG_ON(test_bit(BCH_FS_CLEAN_SHUTDOWN, &c->flags));
+		EBUG_ON(test_bit(BCH_FS_clean_shutdown, &c->flags));
 		set_bit(BKEY_CACHED_DIRTY, &ck->flags);
 		atomic_long_inc(&c->btree_key_cache.nr_dirty);
 
@@ -1008,7 +1007,7 @@ void bch2_fs_btree_key_cache_exit(struct btree_key_cache *bc)
 
 	if (atomic_long_read(&bc->nr_dirty) &&
 	    !bch2_journal_error(&c->journal) &&
-	    test_bit(BCH_FS_WAS_RW, &c->flags))
+	    test_bit(BCH_FS_was_rw, &c->flags))
 		panic("btree key cache shutdown error: nr_dirty nonzero (%li)\n",
 		      atomic_long_read(&bc->nr_dirty));
 
@@ -1027,18 +1026,6 @@ void bch2_fs_btree_key_cache_init_early(struct btree_key_cache *c)
 	mutex_init(&c->lock);
 	INIT_LIST_HEAD(&c->freed_pcpu);
 	INIT_LIST_HEAD(&c->freed_nonpcpu);
-}
-
-static void bch2_btree_key_cache_shrinker_to_text(struct seq_buf *s, struct shrinker *shrink)
-{
-	struct bch_fs *c = shrink->private_data;
-	struct btree_key_cache *bc = &c->btree_key_cache;
-	char *cbuf;
-	size_t buflen = seq_buf_get_buf(s, &cbuf);
-	struct printbuf out = PRINTBUF_EXTERN(cbuf, buflen);
-
-	bch2_btree_key_cache_to_text(&out, bc);
-	seq_buf_commit(s, out.pos);
 }
 
 int bch2_fs_btree_key_cache_init(struct btree_key_cache *bc)
@@ -1064,7 +1051,6 @@ int bch2_fs_btree_key_cache_init(struct btree_key_cache *bc)
 	shrink->seeks		= 0;
 	shrink->count_objects	= bch2_btree_key_cache_count;
 	shrink->scan_objects	= bch2_btree_key_cache_scan;
-	shrink->to_text		= bch2_btree_key_cache_shrinker_to_text;
 	shrink->private_data	= c;
 	shrinker_register(shrink);
 	return 0;

@@ -97,11 +97,11 @@ int cmd_fsck(int argc, char *argv[])
 		exit(8);
 	}
 
-	if (test_bit(BCH_FS_ERRORS_FIXED, &c->flags)) {
+	if (test_bit(BCH_FS_errors_fixed, &c->flags)) {
 		fprintf(stderr, "%s: errors fixed\n", c->name);
 		ret |= 1;
 	}
-	if (test_bit(BCH_FS_ERROR, &c->flags)) {
+	if (test_bit(BCH_FS_error, &c->flags)) {
 		fprintf(stderr, "%s: still has errors\n", c->name);
 		ret |= 4;
 	}

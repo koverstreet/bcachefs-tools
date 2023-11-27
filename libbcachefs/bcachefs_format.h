@@ -1539,7 +1539,7 @@ struct bch_sb_field_disk_groups {
 	x(move_extent_write,				36)	\
 	x(move_extent_finish,				37)	\
 	x(move_extent_fail,				38)	\
-	x(move_extent_alloc_mem_fail,			39)	\
+	x(move_extent_start_fail,			39)	\
 	x(copygc,					40)	\
 	x(copygc_wait,					41)	\
 	x(gc_gens_end,					42)	\
@@ -1576,7 +1576,9 @@ struct bch_sb_field_disk_groups {
 	x(write_super,					73)	\
 	x(trans_restart_would_deadlock_recursion_limit,	74)	\
 	x(trans_restart_write_buffer_flush,		75)	\
-	x(trans_restart_split_race,			76)
+	x(trans_restart_split_race,			76)	\
+	x(write_buffer_flush_slowpath,			77)	\
+	x(write_buffer_flush_sync,			78)
 
 enum bch_persistent_counters {
 #define x(t, n, ...) BCH_COUNTER_##t,
@@ -2135,8 +2137,7 @@ static inline __u64 __bset_magic(struct bch_sb *sb)
 	x(clock,		7)		\
 	x(dev_usage,		8)		\
 	x(log,			9)		\
-	x(overwrite,		10)		\
-	x(write_buffer_keys,	11)
+	x(overwrite,		10)
 
 enum {
 #define x(f, nr)	BCH_JSET_ENTRY_##f	= nr,
