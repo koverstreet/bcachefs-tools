@@ -87,7 +87,7 @@ fn ask_for_key(sb: &bch_sb_handle) -> anyhow::Result<()> {
     let bch_key_magic = BCH_KEY_MAGIC.as_bytes().read_u64::<LittleEndian>().unwrap();
     let crypt = sb.sb().crypt().unwrap();
     let pass = if atty::is(atty::Stream::Stdin) {
-        rpassword::read_password_from_tty(Some("Enter passphrase: "))?
+        rpassword::prompt_password("Enter passphrase: ")?
     } else {
         let mut line = String::new();
         std::io::stdin().read_line(&mut line)?;
