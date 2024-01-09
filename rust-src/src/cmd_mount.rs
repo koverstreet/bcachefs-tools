@@ -76,12 +76,11 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulo
             }
         });
 
-    use itertools::Itertools;
     (
         if opts.len() == 0 {
             None
         } else {
-            Some(opts.iter().join(","))
+            Some(opts.join(","))
         },
         flags,
     )
