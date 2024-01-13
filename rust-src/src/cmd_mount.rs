@@ -1,5 +1,5 @@
 use atty::Stream;
-use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle};
+use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, opt_set};
 use log::{info, debug, error, LevelFilter};
 use clap::{Parser};
 use uuid::Uuid;
@@ -104,7 +104,10 @@ fn read_super_silent(path: &std::path::PathBuf) -> anyhow::Result<bch_sb_handle>
     // Stop libbcachefs from spamming the output
     let _gag = gag::BufferRedirect::stdout().unwrap();
 
-    bch_bindgen::rs::read_super(&path)
+    let mut opts = bcachefs::bch_opts::default();
+    opt_set!(opts, noexcl, 1);
+
+    bch_bindgen::rs::read_super_opts(&path, opts)
 }
 
 fn get_devices_by_uuid(uuid: Uuid) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
