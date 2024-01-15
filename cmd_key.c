@@ -73,22 +73,55 @@ int cmd_unlock(int argc, char *argv[])
 	return 0;
 }
 
+static void set_passphrase_usage(void)
+{
+    puts("bcachefs set-passphrase - Change passphrase on an existing (unmounted) filesystem\n"
+         "Usage: bcachefs set-passphrase [OPTION]... <device>...\n"
+         "\n"
+         "Options:\n"
+         "  -h                          Display this help and exit\n"
+         "\n"
+         "Report bugs to <linux-bcachefs@vger.kernel.org>");
+}
+
+static void remove_passphrase_usage(void)
+{
+    puts("bcachefs remove-passphrase - Remove passphrase on an existing (unmounted) filesystem\n"
+         "Usage: bcachefs remove-passphrase [OPTION]... <device>...\n"
+         "\n"
+         "Options:\n"
+         "  -h                          Display this help and exit\n"
+         "\n"
+         "Report bugs to <linux-bcachefs@vger.kernel.org>");
+}
+
 int cmd_set_passphrase(int argc, char *argv[])
 {
-	struct bch_opts opts = bch2_opts_empty();
-	struct bch_fs *c;
+    int opt;
+    while ((opt = getopt(argc, argv, "h")) != -1)
+        switch (opt) {
+            case 'h':
+                set_passphrase_usage();
+                exit(EXIT_SUCCESS);
+        }
+    args_shift(optind);
 
-	if (argc < 2)
-		die("Please supply one or more devices");
+    if (!argc) {
+        set_passphrase_usage();
+        return EXIT_SUCCESS;
+    }
 
-	opt_set(opts, nostart, true);
+    struct bch_opts opts = bch2_opts_empty();
+    struct bch_fs *c;
+
+    opt_set(opts, nostart, true);
 
 	/*
 	 * we use bch2_fs_open() here, instead of just reading the superblock,
 	 * to make sure we're opening and updating every component device:
 	 */
 
-	c = bch2_fs_open(argv + 1, argc - 1, opts);
+	c = bch2_fs_open(argv, argc, opts);
 	if (IS_ERR(c))
 		die("Error opening %s: %s", argv[1], bch2_err_str(PTR_ERR(c)));
 
@@ -119,14 +152,26 @@ int cmd_set_passphrase(int argc, char *argv[])
 
 int cmd_remove_passphrase(int argc, char *argv[])
 {
-	struct bch_opts opts = bch2_opts_empty();
-	struct bch_fs *c;
+    int opt;
+    while ((opt = getopt(argc, argv, "h")) != -1)
+        switch (opt) {
+            case 'h':
+                remove_passphrase_usage();
+                exit(EXIT_SUCCESS);
+        }
+    args_shift(optind);
 
-	if (argc < 2)
-		die("Please supply one or more devices");
+    if (!argc) {
+        remove_passphrase_usage();
+        return EXIT_SUCCESS;
+    }
 
-	opt_set(opts, nostart, true);
-	c = bch2_fs_open(argv + 1, argc - 1, opts);
+    struct bch_opts opts = bch2_opts_empty();
+    struct bch_fs *c;
+
+    opt_set(opts, nostart, true);
+
+	c = bch2_fs_open(argv, argc, opts);
 	if (IS_ERR(c))
 		die("Error opening %s: %s", argv[1], bch2_err_str(PTR_ERR(c)));
 

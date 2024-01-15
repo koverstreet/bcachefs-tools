@@ -67,7 +67,7 @@ int cmd_data_rereplicate(int argc, char *argv[])
 static void data_job_usage(void)
 {
 	puts("bcachefs data job\n"
-	     "Usage: bcachefs data job [job} filesystem\n"
+	     "Usage: bcachefs data job [job] filesystem\n"
 	     "\n"
 	     "Kick off a data job and report progress\n"
 	     "\n"

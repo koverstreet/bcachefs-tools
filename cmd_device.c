@@ -220,15 +220,20 @@ static void device_online_usage(void)
 
 int cmd_device_online(int argc, char *argv[])
 {
-	int opt;
+    static const struct option longopts[] = {
+            { "help",		no_argument, NULL, 'h' },
+            { NULL }
+    };
+    int opt;
 
-	while ((opt = getopt(argc, argv, "h")) != -1)
-		switch (opt) {
-		case 'h':
-			device_online_usage();
-			exit(EXIT_SUCCESS);
-		}
-	args_shift(optind);
+    while ((opt = getopt_long(argc, argv, "h",
+                              longopts, NULL)) != -1)
+        switch (opt) {
+            case 'h':
+                device_online_usage();
+                exit(EXIT_SUCCESS);
+        }
+    args_shift(optind);
 
 	char *dev = arg_pop();
 	if (!dev)
@@ -258,7 +263,8 @@ static void device_offline_usage(void)
 int cmd_device_offline(int argc, char *argv[])
 {
 	static const struct option longopts[] = {
-		{ "force",		0, NULL, 'f' },
+		{ "force",		no_argument, NULL, 'f' },
+		{ "help",		no_argument, NULL, 'h' },
 		{ NULL }
 	};
 	int opt, flags = 0;
