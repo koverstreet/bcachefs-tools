@@ -162,18 +162,3 @@ int data_cmds(int argc, char *argv[])
 
 	return 0;
 }
-
-int subvolume_cmds(int argc, char *argv[])
-{
-	char *cmd = pop_cmd(&argc, argv);
-	if (argc < 1)
-		return subvolume_usage();
-	if (!strcmp(cmd, "create"))
-		return cmd_subvolume_create(argc, argv);
-	if (!strcmp(cmd, "delete"))
-		return cmd_subvolume_delete(argc, argv);
-	if (!strcmp(cmd, "snapshot"))
-		return cmd_subvolume_snapshot(argc, argv);
-
-	return 0;
-}
