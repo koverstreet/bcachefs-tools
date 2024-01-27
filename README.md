@@ -15,6 +15,16 @@ This repo primarily consists of the following:
 Please refer to the main site for [getting started](https://bcachefs.org/#Getting_started)
 An in-depth user manual is (also) found on the [official website](https://bcachefs.org/#Documentation)
 
+Version semantics
+-----------------
+
+The tools relies on an expected disk format structure which is reflected by your current kernel version.
+Disk format can be upgraded or downgraded automatically by the kernel, if needed.
+
+- Any patch-level change means no disk format change
+- Any minor-level change means a potential disk format change which **is not breaking**
+- Any major-level change means **breaking changes**
+
 Build and install
 -----------------
 
