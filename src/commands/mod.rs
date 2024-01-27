@@ -4,6 +4,7 @@ pub mod logger;
 pub mod cmd_mount;
 pub mod cmd_list;
 pub mod cmd_completions;
+pub mod cmd_subvolume;
 
 #[derive(clap::Parser, Debug)]
 #[command(name = "bcachefs")]
@@ -17,6 +18,7 @@ enum Subcommands {
     List(cmd_list::Cli),
     Mount(cmd_mount::Cli),
     Completions(cmd_completions::Cli),
+    Subvolume(cmd_subvolume::Cli),
 }
 
 #[macro_export]
