@@ -1,6 +1,7 @@
 VERSION=1.4.0
 
 PREFIX?=/usr/local
+LIBEXECDIR?=$(PREFIX)/libexec
 PKG_CONFIG?=pkg-config
 INSTALL=install
 LN=ln
@@ -105,7 +106,6 @@ else
 	ROOT_SBINDIR?=$(PREFIX)/sbin
 	INITRAMFS_DIR=/etc/initramfs-tools
 endif
-LIBEXECDIR=$(PREFIX)/libexec
 
 PKGCONFIG_SERVICEDIR:=$(shell $(PKG_CONFIG) --variable=systemdsystemunitdir systemd)
 ifeq (,$(PKGCONFIG_SERVICEDIR))
