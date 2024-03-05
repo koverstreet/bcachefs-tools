@@ -3,6 +3,7 @@ use crate::key::UnlockPolicy;
 use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, opt_set};
 use clap::Parser;
 use log::{debug, error, info, LevelFilter};
+use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CString};
 use std::io::{stdout, IsTerminal};
 use std::os::unix::ffi::OsStrExt;
@@ -106,15 +107,29 @@ fn read_super_silent(path: &Path) -> anyhow::Result<bch_sb_handle> {
     bch_bindgen::sb_io::read_super_silent(path, opts)
 }
 
+fn device_property_map(dev: &udev::Device) -> HashMap<String, String> {
+    let rc: HashMap<_, _> = dev
+        .properties()
+        .map(|i| {
+            (
+                String::from(i.name().to_string_lossy()),
+                String::from(i.value().to_string_lossy()),
+            )
+        })
+        .collect();
+    rc
+}
+
 fn get_devices_by_uuid(uuid: Uuid) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
     debug!("enumerating udev devices");
     let mut udev = udev::Enumerator::new()?;
 
     udev.match_subsystem("block")?;
+    udev.match_property("ID_FS_UUID", uuid.to_string())?;
 
     let devs = udev
         .scan_devices()?
-        .into_iter()
+        .filter(|dev| dev.is_initialized())
         .filter_map(|dev| dev.devnode().map(ToOwned::to_owned))
         .map(|dev| (dev.clone(), read_super_silent(&dev)))
         .filter_map(|(dev, sb)| sb.ok().map(|sb| (dev, sb)))
@@ -126,19 +141,19 @@ fn get_devices_by_uuid(uuid: Uuid) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle
 fn get_uuid_for_dev_node(device: &std::path::PathBuf) -> anyhow::Result<Option<Uuid>> {
     let mut udev = udev::Enumerator::new()?;
     udev.match_subsystem("block")?;
+    udev.match_property("DEVNAME", device)?;
 
-    for dev in udev.scan_devices()?.into_iter() {
-        if let Some(devnode) = dev.devnode() {
-            if devnode == device {
-                let devnode_owned = devnode.to_owned();
-                let sb_result = read_super_silent(&devnode_owned);
-                if let Ok(sb) = sb_result {
-                    return Ok(Some(sb.sb().uuid()));
-                }
-            }
-        }
+    let devs: Vec<HashMap<String, String>> = udev
+        .scan_devices()?
+        .filter(|dev| dev.is_initialized())
+        .map(|dev| device_property_map(&dev))
+        .collect();
+
+    if !devs.is_empty() && devs[0].contains_key("ID_FS_UUID") {
+        Ok(Some(Uuid::parse_str(devs[0]["ID_FS_UUID"].as_str())?))
+    } else {
+        Ok(None)
     }
-    Ok(None)
 }
 
 /// Mount a bcachefs filesystem by its UUID.
