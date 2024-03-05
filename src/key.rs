@@ -101,7 +101,7 @@ fn ask_for_passphrase(sb: &bch_sb_handle) -> anyhow::Result<()> {
 }
 
 const BCH_KEY_MAGIC: &str = "bch**key";
-fn unlock_master_key(sb: &bch_sb_handle, passphrase: &String) -> anyhow::Result<()> {
+fn unlock_master_key(sb: &bch_sb_handle, passphrase: &str) -> anyhow::Result<()> {
     use bch_bindgen::bcachefs::{self, bch2_chacha_encrypt_key, bch_encrypted_key, bch_key};
     use byteorder::{LittleEndian, ReadBytesExt};
     use std::os::raw::c_char;
@@ -121,13 +121,13 @@ fn unlock_master_key(sb: &bch_sb_handle, passphrase: &String) -> anyhow::Result<
         )
     };
 
-    let mut key = crypt.key().clone();
+    let mut key = *crypt.key();
     let ret = unsafe {
         bch2_chacha_encrypt_key(
             &mut output as *mut _,
             sb.sb().nonce(),
             &mut key as *mut _ as *mut _,
-            std::mem::size_of::<bch_encrypted_key>() as usize,
+            std::mem::size_of::<bch_encrypted_key>(),
         )
     };
     if ret != 0 {
@@ -141,7 +141,7 @@ fn unlock_master_key(sb: &bch_sb_handle, passphrase: &String) -> anyhow::Result<
                 key_type,
                 key_name.as_c_str().to_bytes_with_nul() as *const _ as *const c_char,
                 &output as *const _ as *const _,
-                std::mem::size_of::<bch_key>() as usize,
+                std::mem::size_of::<bch_key>(),
                 bch_bindgen::keyutils::KEY_SPEC_USER_KEYRING,
             )
         };

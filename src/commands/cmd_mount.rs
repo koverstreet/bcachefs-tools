@@ -6,7 +6,7 @@ use log::{debug, error, info, LevelFilter};
 use std::ffi::{c_char, c_void, CString};
 use std::io::{stdout, IsTerminal};
 use std::os::unix::ffi::OsStrExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
 fn mount_inner(
@@ -48,7 +48,7 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulo
     debug!("parsing mount options: {}", options.as_ref());
     let (opts, flags) = options
         .as_ref()
-        .split(",")
+        .split(',')
         .map(|o| match o {
             "dirsync" => Left(libc::MS_DIRSYNC),
             "lazytime" => Left(1 << 25), // MS_LAZYTIME
@@ -65,7 +65,7 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulo
             "strictatime" => Left(libc::MS_STRICTATIME),
             "sync" => Left(libc::MS_SYNCHRONOUS),
             "" => Left(0),
-            o @ _ => Right(o),
+            o => Right(o),
         })
         .fold((Vec::new(), 0), |(mut opts, flags), next| match next {
             Left(f) => (opts, flags | f),
@@ -76,7 +76,7 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulo
         });
 
     (
-        if opts.len() == 0 {
+        if opts.is_empty() {
             None
         } else {
             Some(opts.join(","))
@@ -99,11 +99,11 @@ fn mount(
     mount_inner(device, target, "bcachefs", mountflags, data)
 }
 
-fn read_super_silent(path: &std::path::PathBuf) -> anyhow::Result<bch_sb_handle> {
+fn read_super_silent(path: &Path) -> anyhow::Result<bch_sb_handle> {
     let mut opts = bcachefs::bch_opts::default();
     opt_set!(opts, noexcl, 1);
 
-    bch_bindgen::sb_io::read_super_silent(&path, opts)
+    bch_bindgen::sb_io::read_super_silent(path, opts)
 }
 
 fn get_devices_by_uuid(uuid: Uuid) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
@@ -191,7 +191,7 @@ pub struct Cli {
 fn devs_str_sbs_from_uuid(uuid: String) -> anyhow::Result<(String, Vec<bch_sb_handle>)> {
     debug!("enumerating devices with UUID {}", uuid);
 
-    let devs_sbs = Uuid::parse_str(&uuid).map(|uuid| get_devices_by_uuid(uuid))??;
+    let devs_sbs = Uuid::parse_str(&uuid).map(get_devices_by_uuid)??;
 
     let devs_str = devs_sbs
         .iter()
@@ -228,7 +228,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         // If they supply a single device it could be either the FS only has 1 device or it's
         // only 1 of a number of devices which are part of the FS. This appears to be the case
         // when we get called during fstab mount processing and the fstab specifies a UUID.
-        if opt.dev.contains(":") {
+        if opt.dev.contains(':') {
             let mut block_devices_to_mount = Vec::new();
 
             for dev in opt.dev.split(':') {
@@ -242,7 +242,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         }
     };
 
-    if block_devices_to_mount.len() == 0 {
+    if block_devices_to_mount.is_empty() {
         Err(anyhow::anyhow!("No device found from specified parameters"))?;
     }
     // Check if the filesystem's master key is encrypted
