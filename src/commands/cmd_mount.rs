@@ -1,13 +1,13 @@
-use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, opt_set};
-use log::{info, debug, error, LevelFilter};
-use clap::Parser;
-use uuid::Uuid;
-use std::io::{stdout, IsTerminal};
-use std::path::PathBuf;
 use crate::key;
 use crate::key::UnlockPolicy;
-use std::ffi::{CString, c_char, c_void};
+use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, opt_set};
+use clap::Parser;
+use log::{debug, error, info, LevelFilter};
+use std::ffi::{c_char, c_void, CString};
+use std::io::{stdout, IsTerminal};
 use std::os::unix::ffi::OsStrExt;
+use std::path::PathBuf;
+use uuid::Uuid;
 
 fn mount_inner(
     src: String,
@@ -16,7 +16,6 @@ fn mount_inner(
     mountflags: libc::c_ulong,
     data: Option<String>,
 ) -> anyhow::Result<()> {
-
     // bind the CStrings to keep them alive
     let src = CString::new(src)?;
     let target = CString::new(target.as_ref().as_os_str().as_bytes())?;
@@ -51,22 +50,22 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulo
         .as_ref()
         .split(",")
         .map(|o| match o {
-            "dirsync"       => Left(libc::MS_DIRSYNC),
-            "lazytime"      => Left(1 << 25), // MS_LAZYTIME
-            "mand"          => Left(libc::MS_MANDLOCK),
-            "noatime"       => Left(libc::MS_NOATIME),
-            "nodev"         => Left(libc::MS_NODEV),
-            "nodiratime"    => Left(libc::MS_NODIRATIME),
-            "noexec"        => Left(libc::MS_NOEXEC),
-            "nosuid"        => Left(libc::MS_NOSUID),
-            "relatime"      => Left(libc::MS_RELATIME),
-            "remount"       => Left(libc::MS_REMOUNT),
-            "ro"            => Left(libc::MS_RDONLY),
-            "rw"            => Left(0),
-            "strictatime"   => Left(libc::MS_STRICTATIME),
-            "sync"          => Left(libc::MS_SYNCHRONOUS),
-            ""              => Left(0),
-            o @ _           => Right(o),
+            "dirsync" => Left(libc::MS_DIRSYNC),
+            "lazytime" => Left(1 << 25), // MS_LAZYTIME
+            "mand" => Left(libc::MS_MANDLOCK),
+            "noatime" => Left(libc::MS_NOATIME),
+            "nodev" => Left(libc::MS_NODEV),
+            "nodiratime" => Left(libc::MS_NODIRATIME),
+            "noexec" => Left(libc::MS_NOEXEC),
+            "nosuid" => Left(libc::MS_NOSUID),
+            "relatime" => Left(libc::MS_RELATIME),
+            "remount" => Left(libc::MS_REMOUNT),
+            "ro" => Left(libc::MS_RDONLY),
+            "rw" => Left(0),
+            "strictatime" => Left(libc::MS_STRICTATIME),
+            "sync" => Left(libc::MS_SYNCHRONOUS),
+            "" => Left(0),
+            o @ _ => Right(o),
         })
         .fold((Vec::new(), 0), |(mut opts, flags), next| match next {
             Left(f) => (opts, flags | f),
@@ -124,7 +123,7 @@ fn get_devices_by_uuid(uuid: Uuid) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle
     Ok(devs)
 }
 
-fn get_uuid_for_dev_node(device: &std::path::PathBuf) ->  anyhow::Result<Option<Uuid>> {
+fn get_uuid_for_dev_node(device: &std::path::PathBuf) -> anyhow::Result<Option<Uuid>> {
     let mut udev = udev::Enumerator::new()?;
     udev.match_subsystem("block")?;
 
@@ -152,7 +151,7 @@ pub struct Cli {
     /// by the specified passphrase file; it is decrypted. (i.e. Regardless
     /// if "fail" is specified for key_location/unlock_policy.)
     #[arg(short = 'f', long)]
-    passphrase_file:       Option<PathBuf>,
+    passphrase_file: Option<PathBuf>,
 
     /// Password policy to use in case of encrypted filesystem.
     ///
@@ -160,35 +159,39 @@ pub struct Cli {
     /// "fail" - don't ask for password, fail if filesystem is encrypted;
     /// "wait" - wait for password to become available before mounting;
     /// "ask" -  prompt the user for password;
-    #[arg(short = 'k', long = "key_location", default_value = "ask", verbatim_doc_comment)]
-    unlock_policy:     UnlockPolicy,
+    #[arg(
+        short = 'k',
+        long = "key_location",
+        default_value = "ask",
+        verbatim_doc_comment
+    )]
+    unlock_policy: UnlockPolicy,
 
     /// Device, or UUID=\<UUID\>
-    dev:            String,
+    dev: String,
 
     /// Where the filesystem should be mounted. If not set, then the filesystem
     /// won't actually be mounted. But all steps preceeding mounting the
     /// filesystem (e.g. asking for passphrase) will still be performed.
-    mountpoint:     Option<PathBuf>,
+    mountpoint: Option<PathBuf>,
 
     /// Mount options
     #[arg(short, default_value = "")]
-    options:        String,
+    options: String,
 
     /// Force color on/off. Autodetect tty is used to define default:
     #[arg(short, long, action = clap::ArgAction::Set, default_value_t=stdout().is_terminal())]
-    colorize:       bool,
+    colorize: bool,
 
     /// Verbose mode
     #[arg(short, long, action = clap::ArgAction::Count)]
-    verbose:        u8,
+    verbose: u8,
 }
 
 fn devs_str_sbs_from_uuid(uuid: String) -> anyhow::Result<(String, Vec<bch_sb_handle>)> {
     debug!("enumerating devices with UUID {}", uuid);
 
-    let devs_sbs = Uuid::parse_str(&uuid)
-        .map(|uuid| get_devices_by_uuid(uuid))??;
+    let devs_sbs = Uuid::parse_str(&uuid).map(|uuid| get_devices_by_uuid(uuid))??;
 
     let devs_str = devs_sbs
         .iter()
@@ -199,10 +202,11 @@ fn devs_str_sbs_from_uuid(uuid: String) -> anyhow::Result<(String, Vec<bch_sb_ha
     let sbs: Vec<bch_sb_handle> = devs_sbs.iter().map(|(_, sb)| *sb).collect();
 
     Ok((devs_str, sbs))
-
 }
 
-fn devs_str_sbs_from_device(device: &std::path::PathBuf) -> anyhow::Result<(String, Vec<bch_sb_handle>)> {
+fn devs_str_sbs_from_device(
+    device: &std::path::PathBuf,
+) -> anyhow::Result<(String, Vec<bch_sb_handle>)> {
     let uuid = get_uuid_for_dev_node(device)?;
 
     if let Some(bcache_fs_uuid) = uuid {
@@ -245,7 +249,10 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     if unsafe { bcachefs::bch2_sb_is_encrypted_and_locked(block_devices_to_mount[0].sb) } {
         // First by password_file, if available
         let fallback_to_unlock_policy = if let Some(passphrase_file) = &opt.passphrase_file {
-            match key::read_from_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {
+            match key::read_from_passphrase_file(
+                &block_devices_to_mount[0],
+                passphrase_file.as_path(),
+            ) {
                 Ok(()) => {
                     // Decryption succeeded
                     false
@@ -278,8 +285,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     } else {
         info!(
             "would mount with params: device: {}, options: {}",
-            devices,
-            &opt.options
+            devices, &opt.options
         );
     }
 

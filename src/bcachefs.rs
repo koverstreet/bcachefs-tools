@@ -1,15 +1,15 @@
-mod wrappers;
 mod commands;
 mod key;
+mod wrappers;
 
 use std::ffi::CString;
 
+use bch_bindgen::c;
 use commands::cmd_completions::cmd_completions;
 use commands::cmd_list::cmd_list;
 use commands::cmd_mount::cmd_mount;
 use commands::cmd_subvolume::cmd_subvolumes;
 use commands::logger::SimpleLogger;
-use bch_bindgen::c;
 
 #[derive(Debug)]
 pub struct ErrnoError(pub errno::Errno);
@@ -48,7 +48,7 @@ fn handle_c_command(args: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "--help" => {
                 c::bcachefs_usage();
                 0
-            },
+            }
             "data" => c::data_cmds(argc, argv),
             "device" => c::device_cmds(argc, argv),
             "dump" => c::cmd_dump(argc, argv),

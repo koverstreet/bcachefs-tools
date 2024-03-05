@@ -1,10 +1,10 @@
 use clap::Subcommand;
 
-pub mod logger;
-pub mod cmd_mount;
-pub mod cmd_list;
 pub mod cmd_completions;
+pub mod cmd_list;
+pub mod cmd_mount;
 pub mod cmd_subvolume;
+pub mod logger;
 
 #[derive(clap::Parser, Debug)]
 #[command(name = "bcachefs")]
