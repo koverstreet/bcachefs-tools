@@ -42,6 +42,7 @@
 #include <linux/pagemap.h>
 #include <linux/posix_acl.h>
 #include <linux/random.h>
+#include <linux/security.h>
 #include <linux/seq_file.h>
 #include <linux/siphash.h>
 #include <linux/statfs.h>
@@ -573,6 +574,59 @@ struct inode *bch2_vfs_inode_get(struct bch_fs *c, subvol_inum inum,
 	return ret ? ERR_PTR(ret) : &inode->v;
 }
 
+struct bch2_initxattrs_ctx {
+	struct btree_trans	*trans;
+	subvol_inum		inum;
+	struct bch_hash_info	hash;
+};
+
+static int bch2_initxattrs(struct inode *vinode,
+			   const struct xattr *xattr_array,
+			   void *fs_data)
+{
+	struct bch2_initxattrs_ctx *ctx = fs_data;
+	const struct xattr *xattr;
+
+	for (xattr = xattr_array; xattr->name; xattr++) {
+		int ret = __bch2_xattr_set(ctx->trans, ctx->inum, &ctx->hash,
+					   xattr->name, xattr->value,
+					   xattr->value_len,
+					   KEY_TYPE_XATTR_INDEX_SECURITY,
+					   XATTR_CREATE);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int bch2_inode_init_security(struct btree_trans *trans,
+				    struct bch_inode_info *dir,
+				    struct bch_inode_info *inode,
+				    const struct qstr *name,
+				    subvol_inum inum,
+				    struct bch_inode_unpacked *inode_u)
+{
+	struct bch2_initxattrs_ctx ctx = {
+		.trans	= trans,
+		.inum	= inum,
+	};
+
+	/*
+	 * The LSM computes the new label from the task, the dir, and the new
+	 * inode's mode; the vfs inode isn't initialized until after commit
+	 * (bch2_vfs_inode_init), so give it just enough identity here:
+	 */
+	inode->v.i_mode = inode_u->bi_mode;
+	i_uid_write(&inode->v, inode_u->bi_uid);
+	i_gid_write(&inode->v, inode_u->bi_gid);
+
+	try(bch2_hash_info_init(trans->c, inode_u, &ctx.hash));
+
+	return security_inode_init_security(&inode->v, &dir->v, name,
+					    bch2_initxattrs, &ctx);
+}
+
 struct bch_inode_info *
 __bch2_create(struct mnt_idmap *idmap,
 	      struct bch_inode_info *dir, struct dentry *dentry,
@@ -636,7 +690,11 @@ retry:
 	inum.subvol = inode_u.bi_subvol ?: dir->ei_inum.subvol;
 	inum.inum = inode_u.bi_inum;
 
-	ret = bch2_trans_commit(trans, NULL, NULL, 0);
+	ret =   bch2_inode_init_security(trans, dir, inode,
+					 !(flags & BCH_CREATE_TMPFILE)
+					 ? &dentry->d_name : NULL,
+					 inum, &inode_u) ?:
+		bch2_trans_commit(trans, NULL, NULL, 0);
 	if (unlikely(ret)) {
 		bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, -1,
 				KEY_TYPE_QUOTA_WARN);
