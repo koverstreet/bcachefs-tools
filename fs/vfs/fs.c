@@ -42,6 +42,7 @@
 #include <linux/pagemap.h>
 #include <linux/posix_acl.h>
 #include <linux/random.h>
+#include <linux/security.h>
 #include <linux/seq_file.h>
 #include <linux/siphash.h>
 #include <linux/statfs.h>
@@ -573,6 +574,55 @@ struct inode *bch2_vfs_inode_get(struct bch_fs *c, subvol_inum inum,
 	return ret ? ERR_PTR(ret) : &inode->v;
 }
 
+struct bch2_initxattrs_ctx {
+	struct btree_trans	*trans;
+	subvol_inum		inum;
+	struct bch_hash_info	hash;
+};
+
+static int bch2_initxattrs(struct inode *vinode,
+			   const struct xattr *xattr_array,
+			   void *fs_data)
+{
+	struct bch2_initxattrs_ctx *ctx = fs_data;
+	const struct xattr *xattr;
+
+	for (xattr = xattr_array; xattr->name; xattr++) {
+		int ret = __bch2_xattr_set(ctx->trans, ctx->inum, &ctx->hash,
+					   xattr->name, xattr->value,
+					   xattr->value_len,
+					   KEY_TYPE_XATTR_INDEX_SECURITY,
+					   XATTR_CREATE);
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+static int bch2_inode_init_security(struct btree_trans *trans,
+				    struct bch_inode_info *dir,
+				    struct bch_inode_info *inode,
+				    struct dentry *dentry,
+				    subvol_inum inum,
+				    struct bch_inode_unpacked *inode_u)
+{
+	struct bch2_initxattrs_ctx ctx = {
+		.trans	= trans,
+		.inum	= inum,
+	};
+
+	inode->v.i_ino		= inum.inum;
+	inode->ei_inum		= inum;
+	inode->ei_inode.bi_inum	= inum.inum;
+	bch2_inode_update_after_write(trans, inode, inode_u, ~0);
+
+	try(bch2_hash_info_init(trans->c, inode_u, &ctx.hash));
+
+	return security_inode_init_security(&inode->v, &dir->v, &dentry->d_name,
+					    bch2_initxattrs, &ctx);
+}
+
 struct bch_inode_info *
 __bch2_create(struct mnt_idmap *idmap,
 	      struct bch_inode_info *dir, struct dentry *dentry,
@@ -636,8 +686,13 @@ retry:
 	inum.subvol = inode_u.bi_subvol ?: dir->ei_inum.subvol;
 	inum.inum = inode_u.bi_inum;
 
+	ret = bch2_inode_init_security(trans, dir, inode, dentry, inum, &inode_u);
+	if (unlikely(ret))
+		goto err_after_quota;
+
 	ret = bch2_trans_commit(trans, NULL, NULL, 0);
 	if (unlikely(ret)) {
+err_after_quota:
 		bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, -1,
 				KEY_TYPE_QUOTA_WARN);
 err_before_quota:
