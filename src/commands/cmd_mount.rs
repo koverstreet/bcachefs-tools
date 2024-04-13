@@ -211,6 +211,16 @@ fn devs_str_sbs_from_device(device: &std::path::PathBuf) -> anyhow::Result<(Stri
     }
 }
 
+fn parse_key_file_from_mount_options(options: impl AsRef<str>) -> Option<PathBuf> {
+    options
+        .as_ref()
+        .split(",")
+        .fold(None, |_, next| match next {
+            x if x.starts_with("key_file") => Some(PathBuf::from(x.split("=").nth(1).unwrap().to_string())),
+            _ => None,
+        })
+}
+
 fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     let (devices, block_devices_to_mount) = if opt.dev.starts_with("UUID=") {
         let uuid = opt.dev.replacen("UUID=", "", 1);
@@ -244,6 +254,18 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     if unsafe { bcachefs::bch2_sb_is_encrypted_and_locked(block_devices_to_mount[0].sb) } {
         // First by password_file, if available
         let fallback_to_unlock_policy = if let Some(passphrase_file) = &opt.passphrase_file {
+            match key::read_from_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {
+                Ok(()) => {
+                    // Decryption succeeded
+                    false
+                }
+                Err(err) => {
+                    // Decryption failed
+                    error!("Failed to decrypt using passphrase_file: {}", err);
+                    true
+                }
+            }
+        } else if let Some(passphrase_file) = parse_key_file_from_mount_options(&opt.options) {
             match key::read_from_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {
                 Ok(()) => {
                     // Decryption succeeded
