@@ -211,12 +211,12 @@ fn devs_str_sbs_from_device(device: &std::path::PathBuf) -> anyhow::Result<(Stri
     }
 }
 
-fn parse_key_file_from_mount_options(options: impl AsRef<str>) -> Option<PathBuf> {
+fn parse_passphrase_file_from_mount_options(options: impl AsRef<str>) -> Option<PathBuf> {
     options
         .as_ref()
         .split(",")
         .fold(None, |_, next| match next {
-            x if x.starts_with("key_file") => Some(PathBuf::from(x.split("=").nth(1).unwrap().to_string())),
+            x if x.starts_with("passphrase_file") => Some(PathBuf::from(x.split("=").nth(1).unwrap().to_string())),
             _ => None,
         })
 }
@@ -265,7 +265,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
                     true
                 }
             }
-        } else if let Some(passphrase_file) = parse_key_file_from_mount_options(&opt.options) {
+        } else if let Some(passphrase_file) = parse_passphrase_file_from_mount_options(&opt.options) {
             match key::read_from_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {
                 Ok(()) => {
                     // Decryption succeeded
