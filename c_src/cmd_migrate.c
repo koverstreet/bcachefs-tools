@@ -451,7 +451,8 @@ static void copy_dir(struct copy_fs_state *s,
 		char *child_path = mprintf("%s/%s", src_path, d->d_name);
 
 		if (stat.st_dev != s->dev)
-			die("%s does not have correct st_dev!", child_path);
+			die("%s does not have correct st_dev: expected %d, but got %d, "
+				"does it reside on separate filesystem?", child_path, s->dev, stat.st_dev);
 
 		u64 *dst_inum = S_ISREG(stat.st_mode)
 			? genradix_ptr_alloc(&s->hardlinks, stat.st_ino, GFP_KERNEL)
