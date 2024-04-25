@@ -229,6 +229,10 @@ static void copy_xattrs(struct bch_fs *c, struct bch_inode_unpacked *dst,
 			die("error getting xattr val: %m");
 
 		const struct xattr_handler *h = xattr_resolve_name(&attr);
+		if (IS_ERR(h))
+			die("cannot copy extended attribute \"%s\" "
+				"because it's unsupported", attr);
+
 		struct bch_inode_unpacked inode_u;
 
 		int ret = bch2_trans_do(c, NULL, NULL, 0,
