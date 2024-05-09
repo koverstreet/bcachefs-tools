@@ -344,8 +344,17 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     if block_devices_to_mount.len() == 0 {
         Err(anyhow::anyhow!("No device found from specified parameters"))?;
     }
-    // Check if the filesystem's master key is encrypted
-    if unsafe { bcachefs::bch2_sb_is_encrypted_and_locked(block_devices_to_mount[0].sb) } {
+
+    let key_name = CString::new(format!(
+        "bcachefs:{}",
+        block_devices_to_mount[0].sb().uuid()
+    ))
+    .unwrap();
+
+    // Check if the filesystem's master key is encrypted and we don't have a key
+    if unsafe { bcachefs::bch2_sb_is_encrypted_and_locked(block_devices_to_mount[0].sb) }
+        && !key::check_for_key(&key_name)?
+    {
         // First by password_file, if available
         let fallback_to_unlock_policy = if let Some(passphrase_file) = &opt.passphrase_file {
             match key::read_from_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {

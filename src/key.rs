@@ -58,7 +58,7 @@ impl fmt::Display for UnlockPolicy {
     }
 }
 
-fn check_for_key(key_name: &std::ffi::CStr) -> anyhow::Result<bool> {
+pub fn check_for_key(key_name: &std::ffi::CStr) -> anyhow::Result<bool> {
     use bch_bindgen::keyutils::{self, keyctl_search};
     let key_name = key_name.to_bytes_with_nul().as_ptr() as *const _;
     let key_type = c_str!("user");
@@ -86,10 +86,12 @@ fn wait_for_unlock(uuid: &uuid::Uuid) -> anyhow::Result<()> {
     }
 }
 
+// blocks indefinitely if no input is available on stdin
 fn ask_for_passphrase(sb: &bch_sb_handle) -> anyhow::Result<()> {
     let passphrase = if stdin().is_terminal() {
         rpassword::prompt_password("Enter passphrase: ")?
     } else {
+        info!("Trying to read passphrase from stdin...");
         let mut line = String::new();
         stdin().read_line(&mut line)?;
         line
