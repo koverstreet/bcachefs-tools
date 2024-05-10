@@ -64,6 +64,15 @@ static inline void *xrealloc(void *p, size_t size)
 	return p;
 }
 
+static inline char *xstrdup(const char *s)
+{
+	void *p = strdup(s);
+	if (!p)
+		die("insufficient memory");
+
+	return p;
+}
+
 #define xopenat(_dirfd, _path, ...)					\
 ({									\
 	int _fd = openat((_dirfd), (_path), __VA_ARGS__);		\

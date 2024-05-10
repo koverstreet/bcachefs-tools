@@ -94,7 +94,7 @@ void bcachefs_usage(void)
 	     "  fusemount                Mount a filesystem via FUSE\n"
 	     "\n"
 	     "Miscellaneous:\n"
-         "  completions              Generate shell completions\n"
+	     "  completions              Generate shell completions\n"
 	     "  version                  Display the version of the invoked bcachefs tool\n");
 }
 
@@ -161,4 +161,130 @@ int data_cmds(int argc, char *argv[])
 		return cmd_data_job(argc, argv);
 
 	return 0;
+}
+
+int subvolume_cmds(int argc, char *argv[])
+{
+	char *cmd = pop_cmd(&argc, argv);
+	if (argc < 1)
+		return subvolume_usage();
+	if (!strcmp(cmd, "create"))
+		return cmd_subvolume_create(argc, argv);
+	if (!strcmp(cmd, "delete"))
+		return cmd_subvolume_delete(argc, argv);
+	if (!strcmp(cmd, "snapshot"))
+		return cmd_subvolume_snapshot(argc, argv);
+
+	return 0;
+}
+
+int main(int argc, char *argv[])
+{
+	raid_init();
+
+	char *full_cmd = argv[0];
+
+	/* Are we being called via a symlink? */
+
+	if (strstr(full_cmd, "mkfs"))
+		return cmd_format(argc, argv);
+
+	if (strstr(full_cmd, "fsck"))
+		return cmd_fsck(argc, argv);
+
+#ifdef BCACHEFS_FUSE
+	if (strstr(full_cmd, "mount.fuse"))
+		return cmd_fusemount(argc, argv);
+#endif
+
+	if (strstr(full_cmd, "mount"))
+		return cmd_mount(argc, argv);
+
+	setvbuf(stdout, NULL, _IOLBF, 0);
+
+	char *cmd = pop_cmd(&argc, argv);
+	if (!cmd) {
+		puts("missing command\n");
+		goto usage;
+	}
+
+	/* these subcommands display usage when argc < 2 */
+	if (!strcmp(cmd, "device"))
+		return device_cmds(argc, argv);
+	if (!strcmp(cmd, "fs"))
+		return fs_cmds(argc, argv);
+	if (!strcmp(cmd, "data"))
+		return data_cmds(argc, argv);
+	if (!strcmp(cmd, "subvolume"))
+		return subvolume_cmds(argc, argv);
+	if (!strcmp(cmd, "format"))
+		return cmd_format(argc, argv);
+	if (!strcmp(cmd, "fsck"))
+		return cmd_fsck(argc, argv);
+	if (!strcmp(cmd, "version"))
+		return cmd_version(argc, argv);
+	if (!strcmp(cmd, "show-super"))
+		return cmd_show_super(argc, argv);
+	if (!strcmp(cmd, "set-option"))
+		return cmd_set_option(argc, argv);
+	if (!strcmp(cmd, "reset-counters"))
+		return cmd_reset_counters(argc, argv);
+
+#if 0
+	if (!strcmp(cmd, "assemble"))
+		return cmd_assemble(argc, argv);
+	if (!strcmp(cmd, "incremental"))
+		return cmd_incremental(argc, argv);
+	if (!strcmp(cmd, "run"))
+		return cmd_run(argc, argv);
+	if (!strcmp(cmd, "stop"))
+		return cmd_stop(argc, argv);
+#endif
+
+	if (!strcmp(cmd, "unlock"))
+		return cmd_unlock(argc, argv);
+	if (!strcmp(cmd, "set-passphrase"))
+		return cmd_set_passphrase(argc, argv);
+	if (!strcmp(cmd, "remove-passphrase"))
+		return cmd_remove_passphrase(argc, argv);
+
+	if (!strcmp(cmd, "migrate"))
+		return cmd_migrate(argc, argv);
+	if (!strcmp(cmd, "migrate-superblock"))
+		return cmd_migrate_superblock(argc, argv);
+
+	if (!strcmp(cmd, "dump"))
+		return cmd_dump(argc, argv);
+#if 0
+	if (!strcmp(cmd, "list"))
+		return cmd_list(argc, argv);
+#endif
+	if (!strcmp(cmd, "list_journal"))
+		return cmd_list_journal(argc, argv);
+
+	if (!strcmp(cmd, "setattr"))
+		return cmd_setattr(argc, argv);
+
+#if 0
+	if (!strcmp(cmd, "completions"))
+		return cmd_completions(argc, argv);
+#endif
+
+#ifdef BCACHEFS_FUSE
+	if (!strcmp(cmd, "fusemount"))
+		return cmd_fusemount(argc, argv);
+#endif
+
+	if (!strcmp(cmd, "mount"))
+		return cmd_mount(argc, argv);
+
+	if (!strcmp(cmd, "--help")) {
+		bcachefs_usage();
+		return 0;
+	}
+
+	printf("Unknown command %s\n", cmd);
+usage:
+	bcachefs_usage();
+	exit(EXIT_FAILURE);
 }

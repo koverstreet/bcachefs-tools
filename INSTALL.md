@@ -20,6 +20,9 @@ In addition a recent Rust toolchain is required (rustc, cargo), either by using
 [rustup](https://rustup.rs/) or make sure to use a distribution where rustc (>=1.65)
 is available.
 
+Makefile.pc is provided to build without Rust toolchain for special cases,
+for example embedded device.
+
 ``` shell
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
 ```
