@@ -312,6 +312,16 @@ fn devs_str_sbs_from_device(
     }
 }
 
+fn parse_passphrase_file_from_mount_options(options: impl AsRef<str>) -> Option<PathBuf> {
+    options
+        .as_ref()
+        .split(",")
+        .fold(None, |_, next| match next {
+            x if x.starts_with("passphrase_file") => Some(PathBuf::from(x.split("=").nth(1).unwrap().to_string())),
+            _ => None,
+        })
+}
+
 fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     // Grab the udev information once
     let udev_info = udev_bcachefs_info()?;
@@ -348,6 +358,18 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     if unsafe { bcachefs::bch2_sb_is_encrypted_and_locked(block_devices_to_mount[0].sb) } {
         // First by password_file, if available
         let fallback_to_unlock_policy = if let Some(passphrase_file) = &opt.passphrase_file {
+            match key::read_from_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {
+                Ok(()) => {
+                    // Decryption succeeded
+                    false
+                }
+                Err(err) => {
+                    // Decryption failed, fall back to unlock_policy
+                    error!("Failed to decrypt using passphrase_file: {}", err);
+                    true
+                }
+            }
+        } else if let Some(passphrase_file) = parse_passphrase_file_from_mount_options(&opt.options) {
             match key::read_from_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {
                 Ok(()) => {
                     // Decryption succeeded
