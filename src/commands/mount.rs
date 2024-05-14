@@ -305,6 +305,18 @@ fn devs_str_sbs_from_device(
     }
 }
 
+fn parse_passphrase_file_from_mount_options(options: impl AsRef<str>) -> Option<PathBuf> {
+    options
+        .as_ref()
+        .split(',')
+        .fold(None, |_, next| match next {
+            x if x.starts_with("passphrase_file") => {
+                Some(PathBuf::from(x.split('=').nth(1).unwrap().to_string()))
+            }
+            _ => None,
+        })
+}
+
 fn cmd_mount_inner(opt: Cli) -> Result<()> {
     // Grab the udev information once
     let udev_info = udev_bcachefs_info()?;
@@ -338,7 +350,12 @@ fn cmd_mount_inner(opt: Cli) -> Result<()> {
 
     if unsafe { bcachefs::bch2_sb_is_encrypted(first_sb.sb) } {
         let _key_handle: KeyHandle = KeyHandle::new_from_search(&uuid).or_else(|_| {
-            attempt_unlock_master_key(opt.passphrase_file, opt.unlock_policy, first_sb)
+            attempt_unlock_master_key(
+                opt.passphrase_file,
+                &opt.options,
+                opt.unlock_policy,
+                first_sb,
+            )
         })?;
     }
 
@@ -364,9 +381,11 @@ fn cmd_mount_inner(opt: Cli) -> Result<()> {
 
 fn attempt_unlock_master_key(
     passphrase_file: Option<PathBuf>,
+    options: &String,
     unlock_policy: UnlockPolicy,
     first_sb: bch_sb_handle,
 ) -> Result<KeyHandle, anyhow::Error> {
+    // Unlock by key_file CLI option
     passphrase_file
         .and_then(|path| match Passphrase::new_from_file(&first_sb, path) {
             Ok(p) => Some(KeyHandle::new(&first_sb, &p)),
@@ -378,7 +397,24 @@ fn attempt_unlock_master_key(
                 None
             }
         })
-        .unwrap_or_else(|| unlock_policy.apply(&first_sb))
+        // Unlock by key_file mount option
+        .unwrap_or_else(|| {
+            parse_passphrase_file_from_mount_options(options)
+                .and_then(
+                    |path: PathBuf| match Passphrase::new_from_file(&first_sb, path) {
+                        Ok(p) => Some(KeyHandle::new(&first_sb, &p)),
+                        Err(e) => {
+                            error!(
+                                "Failed to read passphrase from file, falling back to prompt: {}",
+                                e
+                            );
+                            None
+                        }
+                    },
+                )
+                // Unlock by unlock policy
+                .unwrap_or_else(|| unlock_policy.apply(&first_sb))
+        })
 }
 
 pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
