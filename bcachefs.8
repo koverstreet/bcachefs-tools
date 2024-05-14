@@ -380,6 +380,12 @@ is the path where the filesystem should be mounted. If not set, then the filesys
 but all steps preceding mounting the filesystem (e.g. asking for passphrase) will still be performed.
 .Pp the options are as follows:
 .Bl -tag -width Ds
+.It Fl f , Fl -passphrase-file Ns = Ns Ar passphrase_file
+Path to passphrase/key file
+.sp
+Precedes key_location/unlock_policy: if the filesystem can be decrypted by the specified passphrase
+file, it is decrypted. (i.e. Regardless if "fail" is specified for key_location/unlock_policy.)
+.El
 .It Fl o Ar options
 Mount options provided as a comma-separated list. See user guide for complete list.
 .Bl -tag -width Ds -compact
@@ -393,6 +399,8 @@ Run fsck during mount
 Fix errors without asking during fsck
 .It Cm read_only
 Mount in read only mode
+.It Cm passphrase_file Ns = Ns Ar passphrase_file
+Path to passphrase/key file
 .It Cm version_upgrade
 .El
 .It Fl k , Fl -key-location Ns = Ns ( Cm fail | wait | ask )
@@ -408,6 +416,7 @@ prompt the user for password.
 .El
 .It Fl c , Fl -colorize Ns = Ns ( Cm true | false )
 Force color on/off. Default: auto-detect TTY
+.El
 .It Fl v
 Be verbose. Can be specified more than once.
 .El
