@@ -151,10 +151,10 @@ fn unlock_master_key(sb: &bch_sb_handle, passphrase: &String) -> anyhow::Result<
 }
 
 pub fn unlock_master_key_using_passphrase_file(block_device: &bch_sb_handle, passphrase_file: &std::path::Path) -> anyhow::Result<()> {
-    // Attempts to unlock the master key by password_file
-    // Return true if unlock was successful, false otherwise
-    info!("Attempting to unlock master key for filesystem {}, using password from file {}", block_device.sb().uuid(), passphrase_file.display());
-    // Read the contents of the password_file into a string
+    // Attempts to unlock the master key by passphrase_file
+    // Return OK() if unlock was successful, Err() otherwise
+    info!("Attempting to unlock master key for filesystem {}, using passphrase from file {}", block_device.sb().uuid(), passphrase_file.display());
+    // Read the contents of the passphrase_file into a string
     let passphrase = fs::read_to_string(passphrase_file)?;
     // Call decrypt_master_key with the read string
     unlock_master_key(block_device, &passphrase)
