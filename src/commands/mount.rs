@@ -356,7 +356,24 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     }
     // Check if the filesystem is encrypted and the master key is locked
     if unsafe { bcachefs::bch2_sb_is_encrypted_and_locked(block_devices_to_mount[0].sb) } {
-        attempt_unlock_master_key(block_devices_to_mount, &opt.passphrase_file, &opt.options, opt.unlock_policy)?;
+        // First by password_file, if available
+        let fallback_to_unlock_policy = if let Some() = &opt.passphrase_file {
+            // Unlock by passphrase_file specified by cli
+            debug!("Attempting to unlock the master key with the passphrase file specified by cli");
+            attempt_unlock_master_key_with_passphrase_file(&block_devices_to_mount[0], passphrase_file)
+        } else if let Some(passphrase_file) = &parse_passphrase_file_from_mount_options(&opt.options) {
+            // Unlock by passphrase_file specified by mount options
+            debug!("Attempting to unlock the master key with the passphrase_file specified in the mount options");
+            attempt_unlock_master_key_with_passphrase_file(&block_devices_to_mount[0], passphrase_file)
+        } else {
+            // No passphrase_file specified, fall back to unlock_policy
+            true
+        };
+        // If decryption by key_file was unsuccesful, prompt for passphrase (or follow key_policy)
+        if fallback_to_unlock_policy {
+            key::apply_key_unlocking_policy(&block_devices_to_mount[0], opt.unlock_policy)?;
+        };
+        
     }
 
     if let Some(mountpoint) = opt.mountpoint {
@@ -379,31 +396,18 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn attempt_unlock_master_key(block_devices_to_mount: Vec<bch_sb_handle>, opt_passphrase_file: &Option<PathBuf>, options: &String, unlock_policy: UnlockPolicy) -> Result<(), anyhow::Error> {
-    // Unlock by passphrase_file specified by cli
-    if let Some(passphrase_file) = opt_passphrase_file{
-        debug!("Attempting to unlock the master key with the passphrase file specified by cli");
-        match key::unlock_master_key_using_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {
-            Ok(()) => return Ok(()), // Unlock succeeded, return early.
-            Err(err) => {
-                // Unlock failed, print error and continue.
-                error!("Failed to decrypt using passphrase_file: {}", err);
-            }
+fn attempt_unlock_master_key_with_passphrase_file(block_device: bch_sb_handle, passphrase_file: PathBuf) -> bool {
+    match key::unlock_master_key_using_passphrase_file(block_device, passphrase_file.as_path()) {
+        Ok(()) => {
+            // Decryption succeeded
+            false
+        }
+        Err(err) => {
+            // Decryption failed, fall back to unlock_policy
+            error!("Failed to decrypt using passphrase_file: {}", err);
+            true
         }
     }
-    // Unlock by passphrase_file specified by mount options
-    if let Some(passphrase_file) = &parse_passphrase_file_from_mount_options(options) {
-        debug!("Attempting to unlock the master key with the passphrase_file specified in the mount options");
-        match key::unlock_master_key_using_passphrase_file(&block_devices_to_mount[0], passphrase_file.as_path()) {
-            Ok(()) => return Ok(()), // Unlock succeeded, return early.
-            Err(err) => {
-                // Unlock failed, print error and continue.
-                error!("Failed to decrypt using passphrase_file: {}", err);
-            }
-        }
-    }
-    // Fallback to the key_policy
-    key::apply_key_unlocking_policy(&block_devices_to_mount[0], unlock_policy)
 }
 
 pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
