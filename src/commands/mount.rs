@@ -373,7 +373,6 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         if fallback_to_unlock_policy {
             key::apply_key_unlocking_policy(&block_devices_to_mount[0], opt.unlock_policy)?;
         };
-        
     }
 
     if let Some(mountpoint) = opt.mountpoint {
