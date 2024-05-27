@@ -11,6 +11,11 @@
       inputs.nixpkgs.follows = "nixpkgs";
     };
 
+    fenix = {
+      url = "github:nix-community/fenix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
     flake-compat = {
       url = "github:edolstra/flake-compat";
       flake = false;
@@ -23,6 +28,7 @@
       nixpkgs,
       flake-parts,
       treefmt-nix,
+      fenix,
       flake-compat,
       ...
     }:
@@ -41,8 +47,12 @@
           self',
           config,
           pkgs,
+          system,
           ...
         }:
+        let
+          rustfmtToml = builtins.fromTOML (builtins.readFile ./rustfmt.toml);
+        in
         {
           packages.default = config.packages.bcachefs-tools;
           packages.bcachefs-tools = pkgs.callPackage ./build.nix { };
@@ -74,6 +84,9 @@
 
             programs = {
               nixfmt-rfc-style.enable = true;
+              rustfmt.edition = rustfmtToml.edition;
+              rustfmt.enable = true;
+              rustfmt.package = fenix.packages.${system}.default.rustfmt;
             };
           };
         };
