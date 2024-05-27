@@ -191,7 +191,7 @@ retry:
 	bch2_trans_begin(trans);
 	now = bch2_current_time(c);
 
-	ret = bch2_inode_peek(trans, &iter, &inode_u, inum, BTREE_ITER_INTENT);
+	ret = bch2_inode_peek(trans, &iter, &inode_u, inum, BTREE_ITER_intent);
 	if (ret)
 		goto err;
 
@@ -544,7 +544,7 @@ retry:
 	bch2_trans_begin(trans);
 	now = bch2_current_time(c);
 
-	ret = bch2_inode_peek(trans, &iter, &inode_u, inum, BTREE_ITER_INTENT);
+	ret = bch2_inode_peek(trans, &iter, &inode_u, inum, BTREE_ITER_intent);
 	if (ret)
 		goto err;
 

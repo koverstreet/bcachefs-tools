@@ -1,10 +1,13 @@
-use std::{fmt, fs, io::{stdin, IsTerminal}};
+use std::{
+    fmt, fs,
+    io::{stdin, IsTerminal},
+};
 
-use log::info;
-use bch_bindgen::bcachefs::bch_sb_handle;
-use clap::builder::PossibleValue;
 use crate::c_str;
 use anyhow::anyhow;
+use bch_bindgen::bcachefs::bch_sb_handle;
+use clap::builder::PossibleValue;
+use log::info;
 
 #[derive(Clone, Debug)]
 pub enum UnlockPolicy {
@@ -18,11 +21,11 @@ impl std::str::FromStr for UnlockPolicy {
     type Err = anyhow::Error;
     fn from_str(s: &str) -> anyhow::Result<Self> {
         match s {
-            ""|"none" => Ok(UnlockPolicy::None),
-            "fail"    => Ok(UnlockPolicy::Fail),
-            "wait"    => Ok(UnlockPolicy::Wait),
-            "ask"     => Ok(UnlockPolicy::Ask),
-            _         => Err(anyhow!("Invalid unlock policy provided")),
+            "" | "none" => Ok(UnlockPolicy::None),
+            "fail" => Ok(UnlockPolicy::Fail),
+            "wait" => Ok(UnlockPolicy::Wait),
+            "ask" => Ok(UnlockPolicy::Ask),
+            _ => Err(anyhow!("Invalid unlock policy provided")),
         }
     }
 }
@@ -58,7 +61,7 @@ impl fmt::Display for UnlockPolicy {
     }
 }
 
-fn check_for_key(key_name: &std::ffi::CStr) -> anyhow::Result<bool> {
+pub fn check_for_key(key_name: &std::ffi::CStr) -> anyhow::Result<bool> {
     use bch_bindgen::keyutils::{self, keyctl_search};
     let key_name = key_name.to_bytes_with_nul().as_ptr() as *const _;
     let key_type = c_str!("user");
@@ -86,10 +89,12 @@ fn wait_for_unlock(uuid: &uuid::Uuid) -> anyhow::Result<()> {
     }
 }
 
+// blocks indefinitely if no input is available on stdin
 fn ask_for_passphrase(sb: &bch_sb_handle) -> anyhow::Result<()> {
     let passphrase = if stdin().is_terminal() {
         rpassword::prompt_password("Enter passphrase: ")?
     } else {
+        info!("Trying to read passphrase from stdin...");
         let mut line = String::new();
         stdin().read_line(&mut line)?;
         line
@@ -98,7 +103,7 @@ fn ask_for_passphrase(sb: &bch_sb_handle) -> anyhow::Result<()> {
 }
 
 const BCH_KEY_MAGIC: &str = "bch**key";
-fn unlock_master_key(sb: &bch_sb_handle, passphrase: &String) -> anyhow::Result<()> {
+fn unlock_master_key(sb: &bch_sb_handle, passphrase: &str) -> anyhow::Result<()> {
     use bch_bindgen::bcachefs::{self, bch2_chacha_encrypt_key, bch_encrypted_key, bch_key};
     use byteorder::{LittleEndian, ReadBytesExt};
     use std::os::raw::c_char;
@@ -118,13 +123,13 @@ fn unlock_master_key(sb: &bch_sb_handle, passphrase: &String) -> anyhow::Result<
         )
     };
 
-    let mut key = crypt.key().clone();
+    let mut key = *crypt.key();
     let ret = unsafe {
         bch2_chacha_encrypt_key(
             &mut output as *mut _,
             sb.sb().nonce(),
             &mut key as *mut _ as *mut _,
-            std::mem::size_of::<bch_encrypted_key>() as usize,
+            std::mem::size_of::<bch_encrypted_key>(),
         )
     };
     if ret != 0 {
@@ -138,7 +143,7 @@ fn unlock_master_key(sb: &bch_sb_handle, passphrase: &String) -> anyhow::Result<
                 key_type,
                 key_name.as_c_str().to_bytes_with_nul() as *const _ as *const c_char,
                 &output as *const _ as *const _,
-                std::mem::size_of::<bch_key>() as usize,
+                std::mem::size_of::<bch_key>(),
                 bch_bindgen::keyutils::KEY_SPEC_USER_KEYRING,
             )
         };
@@ -150,18 +155,32 @@ fn unlock_master_key(sb: &bch_sb_handle, passphrase: &String) -> anyhow::Result<
     }
 }
 
-pub fn unlock_master_key_using_passphrase_file(block_device: &bch_sb_handle, passphrase_file: &std::path::Path) -> anyhow::Result<()> {
-    // Attempts to unlock the master key by passphrase_file
-    // Return OK() if unlock was successful, Err() otherwise
-    info!("Attempting to unlock master key for filesystem {}, using passphrase from file {}", block_device.sb().uuid(), passphrase_file.display());
-    // Read the contents of the passphrase_file into a string
+pub fn read_from_passphrase_file(
+    block_device: &bch_sb_handle,
+    passphrase_file: &std::path::Path,
+) -> anyhow::Result<()> {
+    // Attempts to unlock the master key by password_file
+    // Return true if unlock was successful, false otherwise
+    info!(
+        "Attempting to unlock master key for filesystem {}, using password from file {}",
+        block_device.sb().uuid(),
+        passphrase_file.display()
+    );
+    // Read the contents of the password_file into a string
     let passphrase = fs::read_to_string(passphrase_file)?;
     // Call decrypt_master_key with the read string
     unlock_master_key(block_device, &passphrase)
 }
 
-pub fn apply_key_unlocking_policy(block_device: &bch_sb_handle, unlock_policy: UnlockPolicy) -> anyhow::Result<()> {
-    info!("Attempting to unlock master key for filesystem {}, using unlock policy {}", block_device.sb().uuid(), unlock_policy);
+pub fn apply_key_unlocking_policy(
+    block_device: &bch_sb_handle,
+    unlock_policy: UnlockPolicy,
+) -> anyhow::Result<()> {
+    info!(
+        "Attempting to unlock master key for filesystem {}, using unlock policy {}",
+        block_device.sb().uuid(),
+        unlock_policy
+    );
     match unlock_policy {
         UnlockPolicy::Fail => Err(anyhow!("no passphrase available")),
         UnlockPolicy::Wait => Ok(wait_for_unlock(&block_device.sb().uuid())?),

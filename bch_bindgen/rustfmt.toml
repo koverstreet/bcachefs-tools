@@ -1,3 +1,0 @@
-# Default settings, i.e. idiomatic rust
-edition = "2021"
-newline_style = "Unix"

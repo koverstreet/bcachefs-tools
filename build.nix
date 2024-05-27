@@ -1,12 +1,31 @@
-{ lib, stdenv, pkg-config, attr, libuuid, libsodium, keyutils, liburcu, zlib
-, libaio, udev, zstd, lz4, nix-gitignore, rustPlatform, rustc, cargo, fuse3
-, fuseSupport ? false, }:
+{
+  lib,
+  stdenv,
+  pkg-config,
+  attr,
+  libuuid,
+  libsodium,
+  keyutils,
+  liburcu,
+  zlib,
+  libaio,
+  udev,
+  zstd,
+  lz4,
+  nix-gitignore,
+  rustPlatform,
+  rustc,
+  cargo,
+  fuse3,
+  fuseSupport ? false,
+}:
 let
   src = nix-gitignore.gitignoreSource [ ] ./.;
 
   commit = lib.strings.substring 0 7 (builtins.readFile ./.bcachefs_revision);
   version = "git-${commit}";
-in stdenv.mkDerivation {
+in
+stdenv.mkDerivation {
   inherit src version;
 
   pname = "bcachefs-tools";
@@ -39,11 +58,13 @@ in stdenv.mkDerivation {
   # when git-based crates are updated, run:
   # nix run github:Mic92/nix-update -- --version=skip --flake default
   # to update the hashes
-  cargoDeps = rustPlatform.importCargoLock {
-    lockFile = "${src}/Cargo.lock";
-  };
+  cargoDeps = rustPlatform.importCargoLock { lockFile = "${src}/Cargo.lock"; };
 
-  makeFlags = [ "DESTDIR=${placeholder "out"}" "PREFIX=" "VERSION=${commit}" ];
+  makeFlags = [
+    "DESTDIR=${placeholder "out"}"
+    "PREFIX="
+    "VERSION=${commit}"
+  ];
 
   dontStrip = true;
   checkPhase = "./target/release/bcachefs version";

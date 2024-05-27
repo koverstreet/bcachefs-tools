@@ -1,40 +1,81 @@
 {
   description = "Userspace tools for bcachefs";
 
-  # Nixpkgs / NixOS version to use.
-  inputs.nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
-  inputs.utils.url = "github:numtide/flake-utils";
-  inputs.flake-compat = {
-    url = "github:edolstra/flake-compat";
-    flake = false;
+  inputs = {
+    nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
+
+    flake-parts.url = "github:hercules-ci/flake-parts";
+
+    treefmt-nix = {
+      url = "github:numtide/treefmt-nix";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
+
+    flake-compat = {
+      url = "github:edolstra/flake-compat";
+      flake = false;
+    };
   };
 
-  outputs = { self, nixpkgs, utils, ... }:
-    {
-      overlays.default = final: prev: {
-        bcachefs = final.callPackage ./build.nix { };
-      };
-    } // utils.lib.eachDefaultSystem (system:
-      let
-        pkgs = import nixpkgs {
-          inherit system;
-          overlays = [ self.overlays.default ];
-        };
-      in {
-        packages = {
-          inherit (pkgs) bcachefs;
-          bcachefs-fuse = pkgs.bcachefs.override { fuseSupport = true; };
-          default = pkgs.bcachefs;
-        };
+  outputs =
+    inputs@{
+      self,
+      nixpkgs,
+      flake-parts,
+      treefmt-nix,
+      flake-compat,
+      ...
+    }:
+    flake-parts.lib.mkFlake { inherit inputs; } {
+      imports = [ inputs.treefmt-nix.flakeModule ];
 
-        formatter = pkgs.nixfmt;
+      # can be extended, but these have proper binary cache support in nixpkgs
+      # as of writing.
+      systems = [
+        "aarch64-linux"
+        "x86_64-linux"
+      ];
 
-        devShells.default = pkgs.callPackage ({ mkShell, rustc, cargo, gnumake
-          , gcc, clang, pkg-config, libuuid, libsodium, keyutils, liburcu, zlib
-          , libaio, zstd, lz4, udev, bcachefs }:
-          mkShell {
-            LIBCLANG_PATH = "${clang.cc.lib}/lib";
-            inherit (bcachefs) nativeBuildInputs buildInputs;
-          }) { };
-      });
+      perSystem =
+        {
+          self',
+          config,
+          pkgs,
+          ...
+        }:
+        {
+          packages.default = config.packages.bcachefs-tools;
+          packages.bcachefs-tools = pkgs.callPackage ./build.nix { };
+
+          packages.bcachefs-tools-fuse = config.packages.bcachefs-tools.override { fuseSupport = true; };
+
+          devShells.default = pkgs.mkShell {
+            inputsFrom = [
+              config.packages.default
+              config.treefmt.build.devShell
+            ];
+
+            LIBCLANG_PATH = "${pkgs.clang.cc.lib}/lib";
+
+            # here go packages that aren't required for builds but are used for
+            # development, and might need to be version matched with build
+            # dependencies (e.g. clippy or rust-analyzer).
+            packages = with pkgs; [
+              cargo-audit
+              cargo-outdated
+              clang-tools
+              clippy
+              rust-analyzer
+            ];
+          };
+
+          treefmt.config = {
+            projectRootFile = "flake.nix";
+
+            programs = {
+              nixfmt-rfc-style.enable = true;
+            };
+          };
+        };
+    };
 }

@@ -1,23 +1,26 @@
-use crate::SPOS_MAX;
-use crate::c;
 use crate::bkey::BkeySC;
-use crate::fs::Fs;
+use crate::c;
 use crate::errcode::{bch_errcode, errptr_to_result_c};
+use crate::fs::Fs;
 use crate::printbuf_to_formatter;
+use crate::SPOS_MAX;
+use bitflags::bitflags;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
-use bitflags::bitflags;
 
 pub struct BtreeTrans<'f> {
-    raw:    *mut c::btree_trans,
-    fs:     PhantomData<&'f Fs>
+    raw: *mut c::btree_trans,
+    fs:  PhantomData<&'f Fs>,
 }
 
 impl<'f> BtreeTrans<'f> {
     pub fn new(fs: &'f Fs) -> BtreeTrans {
         unsafe {
-            BtreeTrans { raw: &mut *c::__bch2_trans_get(fs.raw, 0), fs: PhantomData }
+            BtreeTrans {
+                raw: &mut *c::__bch2_trans_get(fs.raw, 0),
+                fs:  PhantomData,
+            }
         }
     }
 }
@@ -25,7 +28,7 @@ impl<'f> BtreeTrans<'f> {
 impl<'f> Drop for BtreeTrans<'f> {
     fn drop(&mut self) {
         unsafe { c::bch2_trans_put(&mut *self.raw) }
-    }             
+    }
 }
 
 bitflags! {
@@ -49,12 +52,17 @@ bitflags! {
 }
 
 pub struct BtreeIter<'t> {
-    raw:    c::btree_iter,
-    trans:  PhantomData<&'t BtreeTrans<'t>>,
+    raw:   c::btree_iter,
+    trans: PhantomData<&'t BtreeTrans<'t>>,
 }
 
 impl<'t> BtreeIter<'t> {
-    pub fn new(trans: &'t BtreeTrans<'t>, btree: c::btree_id, pos: c::bpos, flags: BtreeIterFlags) -> BtreeIter<'t> {
+    pub fn new(
+        trans: &'t BtreeTrans<'t>,
+        btree: c::btree_id,
+        pos: c::bpos,
+        flags: BtreeIterFlags,
+    ) -> BtreeIter<'t> {
         unsafe {
             let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
 
@@ -63,17 +71,30 @@ impl<'t> BtreeIter<'t> {
                 iter.as_mut_ptr(),
                 btree,
                 pos,
-                flags.bits as u32);
+                flags.bits as u32,
+            );
 
-            BtreeIter { raw: iter.assume_init(), trans: PhantomData }
+            BtreeIter {
+                raw:   iter.assume_init(),
+                trans: PhantomData,
+            }
         }
     }
 
     pub fn peek_upto<'i>(&'i mut self, end: c::bpos) -> Result<Option<BkeySC>, bch_errcode> {
         unsafe {
             let k = c::bch2_btree_iter_peek_upto(&mut self.raw, end);
-            errptr_to_result_c(k.k)
-                .map(|_| if !k.k.is_null() { Some(BkeySC { k: &*k.k, v: &*k.v, iter: PhantomData }) } else { None } )
+            errptr_to_result_c(k.k).map(|_| {
+                if !k.k.is_null() {
+                    Some(BkeySC {
+                        k:    &*k.k,
+                        v:    &*k.v,
+                        iter: PhantomData,
+                    })
+                } else {
+                    None
+                }
+            })
         }
     }
 
@@ -85,8 +106,17 @@ impl<'t> BtreeIter<'t> {
         unsafe {
             let k = c::bch2_btree_iter_peek_and_restart_outlined(&mut self.raw);
 
-            errptr_to_result_c(k.k)
-                .map(|_| if !k.k.is_null() { Some(BkeySC{ k: &*k.k, v: &*k.v, iter: PhantomData }) } else { None } )
+            errptr_to_result_c(k.k).map(|_| {
+                if !k.k.is_null() {
+                    Some(BkeySC {
+                        k:    &*k.k,
+                        v:    &*k.v,
+                        iter: PhantomData,
+                    })
+                } else {
+                    None
+                }
+            })
         }
     }
 
@@ -100,21 +130,23 @@ impl<'t> BtreeIter<'t> {
 impl<'t> Drop for BtreeIter<'t> {
     fn drop(&mut self) {
         unsafe { c::bch2_trans_iter_exit(self.raw.trans, &mut self.raw) }
-    }             
+    }
 }
 
 pub struct BtreeNodeIter<'t> {
-    raw:    c::btree_iter,
-    trans:  PhantomData<&'t BtreeTrans<'t>>,
+    raw:   c::btree_iter,
+    trans: PhantomData<&'t BtreeTrans<'t>>,
 }
 
 impl<'t> BtreeNodeIter<'t> {
-    pub fn new(trans: &'t BtreeTrans<'t>,
-        btree:      c::btree_id,
-        pos:        c::bpos,
+    pub fn new(
+        trans: &'t BtreeTrans<'t>,
+        btree: c::btree_id,
+        pos: c::bpos,
         locks_want: u32,
-        depth:      u32,
-        flags: BtreeIterFlags) -> BtreeNodeIter {
+        depth: u32,
+        flags: BtreeIterFlags,
+    ) -> BtreeNodeIter {
         unsafe {
             let mut iter: MaybeUninit<c::btree_iter> = MaybeUninit::uninit();
             c::bch2_trans_node_iter_init(
@@ -124,9 +156,13 @@ impl<'t> BtreeNodeIter<'t> {
                 pos,
                 locks_want,
                 depth,
-                flags.bits as u32);
+                flags.bits as u32,
+            );
 
-            BtreeNodeIter { raw: iter.assume_init(), trans: PhantomData }
+            BtreeNodeIter {
+                raw:   iter.assume_init(),
+                trans: PhantomData,
+            }
         }
     }
 
@@ -161,7 +197,7 @@ impl<'t> BtreeNodeIter<'t> {
 impl<'t> Drop for BtreeNodeIter<'t> {
     fn drop(&mut self) {
         unsafe { c::bch2_trans_iter_exit(self.raw.trans, &mut self.raw) }
-    }             
+    }
 }
 
 impl<'b, 'f> c::btree {
@@ -175,23 +211,27 @@ impl<'b, 'f> c::btree {
 }
 
 pub struct BtreeNodeToText<'b, 'f> {
-    b:      &'b c::btree,
-    fs:     &'f Fs,
+    b:  &'b c::btree,
+    fs: &'f Fs,
 }
 
 impl<'b, 'f> fmt::Display for BtreeNodeToText<'b, 'f> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        printbuf_to_formatter(f, |buf| unsafe { c::bch2_btree_node_to_text(buf, self.fs.raw, self.b) })
+        printbuf_to_formatter(f, |buf| unsafe {
+            c::bch2_btree_node_to_text(buf, self.fs.raw, self.b)
+        })
     }
 }
 
 pub struct BtreeNodeOndiskToText<'b, 'f> {
-    b:      &'b c::btree,
-    fs:     &'f Fs,
+    b:  &'b c::btree,
+    fs: &'f Fs,
 }
 
 impl<'b, 'f> fmt::Display for BtreeNodeOndiskToText<'b, 'f> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        printbuf_to_formatter(f, |buf| unsafe { c::bch2_btree_node_ondisk_to_text(buf, self.fs.raw, self.b) })
+        printbuf_to_formatter(f, |buf| unsafe {
+            c::bch2_btree_node_ondisk_to_text(buf, self.fs.raw, self.b)
+        })
     }
 }

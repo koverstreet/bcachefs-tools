@@ -1,11 +1,11 @@
-mod wrappers;
 mod commands;
 mod key;
+mod wrappers;
 
 use std::ffi::{c_char, CString};
 
-use commands::logger::SimpleLogger;
 use bch_bindgen::c;
+use commands::logger::SimpleLogger;
 
 #[derive(Debug)]
 pub struct ErrnoError(pub errno::Errno);
@@ -25,10 +25,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
 
     let argc: i32 = argv.len().try_into().unwrap();
 
-    let argv: Vec<_> = argv
-        .into_iter()
-        .map(|s| CString::new(s).unwrap())
-        .collect();
+    let argv: Vec<_> = argv.into_iter().map(|s| CString::new(s).unwrap()).collect();
     let mut argv = argv
         .into_iter()
         .map(|s| Box::into_raw(s.into_boxed_c_str()) as *mut c_char)
@@ -41,7 +38,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "--help" => {
                 c::bcachefs_usage();
                 0
-            },
+            }
             "data" => c::data_cmds(argc, argv),
             "device" => c::device_cmds(argc, argv),
             "dump" => c::cmd_dump(argc, argv),

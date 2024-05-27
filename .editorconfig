@@ -1,6 +1,30 @@
-indent_style = tab
+root = true
+
+[*]
+charset = utf-8
+end_of_line = lf
 indent_size = 8
+indent_style = tab
+insert_final_newline = true
+max_line_length = 80
+tab_width = 8
+trim_trailing_whitespace = true
+
+[.git/**]
+max_line_length = 72
 
 [*.nix]
 indent_style = space
 indent_size = 2
+
+[*.y{,a}ml]
+indent_size = 2
+indent_style = space
+
+[Cargo.toml]
+indent_style = space
+indent_size = 4
+
+[*.rs]
+indent_style = space
+indent_size = 4

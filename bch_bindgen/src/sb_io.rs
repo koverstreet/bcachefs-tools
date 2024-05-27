@@ -1,8 +1,8 @@
-use anyhow::anyhow;
-use crate::path_to_cstr;
 use crate::bcachefs;
 use crate::bcachefs::*;
 use crate::errcode::bch_errcode;
+use crate::path_to_cstr;
+use anyhow::anyhow;
 
 pub fn read_super_opts(
     path: &std::path::Path,
@@ -11,7 +11,8 @@ pub fn read_super_opts(
     let path = path_to_cstr(path);
     let mut sb = std::mem::MaybeUninit::zeroed();
 
-    let ret = unsafe { crate::bcachefs::bch2_read_super(path.as_ptr(), &mut opts, sb.as_mut_ptr()) };
+    let ret =
+        unsafe { crate::bcachefs::bch2_read_super(path.as_ptr(), &mut opts, sb.as_mut_ptr()) };
 
     if ret != 0 {
         let err: bch_errcode = unsafe { ::std::mem::transmute(ret) };
@@ -33,7 +34,9 @@ pub fn read_super_silent(
     let path = path_to_cstr(path);
     let mut sb = std::mem::MaybeUninit::zeroed();
 
-    let ret = unsafe { crate::bcachefs::bch2_read_super_silent(path.as_ptr(), &mut opts, sb.as_mut_ptr()) };
+    let ret = unsafe {
+        crate::bcachefs::bch2_read_super_silent(path.as_ptr(), &mut opts, sb.as_mut_ptr())
+    };
 
     if ret != 0 {
         let err: bch_errcode = unsafe { ::std::mem::transmute(ret) };

@@ -271,7 +271,7 @@ void ranges_sort_merge(ranges *r)
 
 	/* Merge contiguous ranges: */
 	darray_for_each(*r, i) {
-		struct range *t = tmp.nr ?  &tmp.data[tmp.nr - 1] : NULL;
+		struct range *t = tmp.nr ? &tmp.data[tmp.nr - 1] : NULL;
 
 		if (t && t->end >= i->start)
 			t->end = max(t->end, i->end);

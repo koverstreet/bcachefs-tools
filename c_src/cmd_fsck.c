@@ -1,4 +1,5 @@
 
+#include <errno.h>
 #include <getopt.h>
 #include <sys/uio.h>
 #include <unistd.h>
@@ -98,7 +99,7 @@ static int fsck_online(const char *dev_path)
 
 	int fsck_fd = ioctl(fs.ioctl_fd, BCH_IOCTL_FSCK_ONLINE, &fsck);
 	if (fsck_fd < 0)
-		die("BCH_IOCTL_FSCK_ONLINE error: %s", bch2_err_str(fsck_fd));
+		die("BCH_IOCTL_FSCK_ONLINE error: %s", bch2_err_str(errno));
 
 	return splice_fd_to_stdinout(fsck_fd);
 }
@@ -249,7 +250,7 @@ int cmd_fsck(int argc, char *argv[])
 			goto userland_fsck;
 
 		if (fsck_fd < 0)
-			die("BCH_IOCTL_FSCK_OFFLINE error: %s", bch2_err_str(fsck_fd));
+			die("BCH_IOCTL_FSCK_OFFLINE error: %s", bch2_err_str(errno));
 
 		ret = splice_fd_to_stdinout(fsck_fd);
 	} else {

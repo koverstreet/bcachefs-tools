@@ -1,13 +1,16 @@
 use std::path::Path;
 
-use bch_bindgen::c::{bchfs_handle, BCH_IOCTL_SUBVOLUME_CREATE, BCH_IOCTL_SUBVOLUME_DESTROY, bch_ioctl_subvolume, bcache_fs_open, BCH_SUBVOL_SNAPSHOT_CREATE, bcache_fs_close};
+use bch_bindgen::c::{
+    bcache_fs_close, bcache_fs_open, bch_ioctl_subvolume, bchfs_handle, BCH_IOCTL_SUBVOLUME_CREATE,
+    BCH_IOCTL_SUBVOLUME_DESTROY, BCH_SUBVOL_SNAPSHOT_CREATE,
+};
 use bch_bindgen::path_to_cstr;
 use errno::Errno;
 
 /// A handle to a bcachefs filesystem
 /// This can be used to send [`libc::ioctl`] to the underlying filesystem.
 pub(crate) struct BcachefsHandle {
-    inner: bchfs_handle
+    inner: bchfs_handle,
 }
 
 impl BcachefsHandle {
@@ -16,13 +19,13 @@ impl BcachefsHandle {
     pub(crate) unsafe fn open<P: AsRef<Path>>(path: P) -> Self {
         let path = path_to_cstr(path);
         Self {
-            inner: bcache_fs_open(path.as_ptr())
+            inner: bcache_fs_open(path.as_ptr()),
         }
     }
 }
 
 /// I/O control commands that can be sent to a bcachefs filesystem
-/// Those are non-exhaustive 
+/// Those are non-exhaustive
 #[repr(u32)]
 #[non_exhaustive]
 pub enum BcachefsIoctl {
@@ -39,14 +42,18 @@ pub enum BcachefsIoctlPayload {
 impl From<&BcachefsIoctlPayload> for *const libc::c_void {
     fn from(value: &BcachefsIoctlPayload) -> Self {
         match value {
-            BcachefsIoctlPayload::Subvolume(p) => p as *const _ as *const libc::c_void
+            BcachefsIoctlPayload::Subvolume(p) => p as *const _ as *const libc::c_void,
         }
     }
 }
 
 impl BcachefsHandle {
     /// Type-safe [`libc::ioctl`] for bcachefs filesystems
-    pub fn ioctl(&self, request: BcachefsIoctl, payload: &BcachefsIoctlPayload) -> Result<(), Errno> {
+    pub fn ioctl(
+        &self,
+        request: BcachefsIoctl,
+        payload: &BcachefsIoctlPayload,
+    ) -> Result<(), Errno> {
         let payload_ptr: *const libc::c_void = payload.into();
         let ret = unsafe { libc::ioctl(self.inner.ioctl_fd, request as libc::Ioctl, payload_ptr) };
 
@@ -61,41 +68,55 @@ impl BcachefsHandle {
     /// at the given path
     pub fn create_subvolume<P: AsRef<Path>>(&self, dst: P) -> Result<(), Errno> {
         let dst = path_to_cstr(dst);
-        self.ioctl(BcachefsIoctl::SubvolumeCreate, &BcachefsIoctlPayload::Subvolume(bch_ioctl_subvolume {
-            dirfd: libc::AT_FDCWD as u32,
-            mode: 0o777,
-            dst_ptr: dst.as_ptr() as u64,
-            ..Default::default()
-        }))
+        self.ioctl(
+            BcachefsIoctl::SubvolumeCreate,
+            &BcachefsIoctlPayload::Subvolume(bch_ioctl_subvolume {
+                dirfd: libc::AT_FDCWD as u32,
+                mode: 0o777,
+                dst_ptr: dst.as_ptr() as u64,
+                ..Default::default()
+            }),
+        )
     }
 
     /// Delete the subvolume at the given path
     /// for this bcachefs filesystem
     pub fn delete_subvolume<P: AsRef<Path>>(&self, dst: P) -> Result<(), Errno> {
         let dst = path_to_cstr(dst);
-        self.ioctl(BcachefsIoctl::SubvolumeDestroy, &BcachefsIoctlPayload::Subvolume(bch_ioctl_subvolume {
-            dirfd: libc::AT_FDCWD as u32,
-            mode: 0o777,
-            dst_ptr: dst.as_ptr() as u64,
-            ..Default::default()
-        }))
+        self.ioctl(
+            BcachefsIoctl::SubvolumeDestroy,
+            &BcachefsIoctlPayload::Subvolume(bch_ioctl_subvolume {
+                dirfd: libc::AT_FDCWD as u32,
+                mode: 0o777,
+                dst_ptr: dst.as_ptr() as u64,
+                ..Default::default()
+            }),
+        )
     }
 
     /// Snapshot a subvolume for this bcachefs filesystem
     /// at the given path
-    pub fn snapshot_subvolume<P: AsRef<Path>>(&self, extra_flags: u32, src: Option<P>, dst: P) -> Result<(), Errno> {
+    pub fn snapshot_subvolume<P: AsRef<Path>>(
+        &self,
+        extra_flags: u32,
+        src: Option<P>,
+        dst: P,
+    ) -> Result<(), Errno> {
         let src = src.map(|src| path_to_cstr(src));
         let dst = path_to_cstr(dst);
 
-        let res = self.ioctl(BcachefsIoctl::SubvolumeCreate, &BcachefsIoctlPayload::Subvolume(bch_ioctl_subvolume {
-            flags: BCH_SUBVOL_SNAPSHOT_CREATE | extra_flags,
-            dirfd: libc::AT_FDCWD as u32,
-            mode: 0o777,
-            src_ptr: src.as_ref().map_or(0, |x| x.as_ptr() as u64),
-            //src_ptr: if let Some(src) = src { src.as_ptr() } else { std::ptr::null() } as u64,
-            dst_ptr: dst.as_ptr() as u64,
-            ..Default::default()
-        }));
+        let res = self.ioctl(
+            BcachefsIoctl::SubvolumeCreate,
+            &BcachefsIoctlPayload::Subvolume(bch_ioctl_subvolume {
+                flags: BCH_SUBVOL_SNAPSHOT_CREATE | extra_flags,
+                dirfd: libc::AT_FDCWD as u32,
+                mode: 0o777,
+                src_ptr: src.as_ref().map_or(0, |x| x.as_ptr() as u64),
+                //src_ptr: if let Some(src) = src { src.as_ptr() } else { std::ptr::null() } as u64,
+                dst_ptr: dst.as_ptr() as u64,
+                ..Default::default()
+            }),
+        );
 
         drop(src);
         drop(dst);

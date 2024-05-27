@@ -30,6 +30,15 @@ static void dump_usage(void)
 	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
 }
 
+static void dump_node(struct bch_fs *c, struct bch_dev *ca, struct bkey_s_c k, ranges *data)
+{
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	bkey_for_each_ptr(ptrs, ptr)
+		if (ptr->dev == ca->dev_idx)
+			range_add(data, ptr->offset << 9, c->opts.btree_node_size);
+}
+
 static void dump_one_device(struct bch_fs *c, struct bch_dev *ca, int fd,
 			    bool entire_journal)
 {
@@ -60,7 +69,6 @@ static void dump_one_device(struct bch_fs *c, struct bch_dev *ca, int fd,
 
 	/* Btree: */
 	for (i = 0; i < BTREE_ID_NR; i++) {
-		struct bkey_ptrs_c ptrs;
 		struct btree_trans *trans = bch2_trans_get(c);
 		struct btree_iter iter;
 		struct btree *b;
@@ -70,30 +78,16 @@ static void dump_one_device(struct bch_fs *c, struct bch_dev *ca, int fd,
 			struct bkey u;
 			struct bkey_s_c k;
 
-			for_each_btree_node_key_unpack(b, k, &iter, &u) {
-				ptrs = bch2_bkey_ptrs_c(k);
-
-				bkey_for_each_ptr(ptrs, ptr)
-					if (ptr->dev == ca->dev_idx)
-						range_add(&data,
-							  ptr->offset << 9,
-							  btree_ptr_sectors_written(&b->key) << 9);
-			}
+			for_each_btree_node_key_unpack(b, k, &iter, &u)
+				dump_node(c, ca, k, &data);
 		}
 
 		if (ret)
 			die("error %s walking btree nodes", bch2_err_str(ret));
 
 		b = bch2_btree_id_root(c, i)->b;
-		if (!btree_node_fake(b)) {
-			ptrs = bch2_bkey_ptrs_c(bkey_i_to_s_c(&b->key));
-
-			bkey_for_each_ptr(ptrs, ptr)
-				if (ptr->dev == ca->dev_idx)
-					range_add(&data,
-						  ptr->offset << 9,
-						  btree_ptr_sectors_written(&b->key) << 9);
-		}
+		if (!btree_node_fake(b))
+			dump_node(c, ca, bkey_i_to_s_c(&b->key), &data);
 
 		bch2_trans_iter_exit(trans, &iter);
 		bch2_trans_put(trans);

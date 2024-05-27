@@ -1,14 +1,14 @@
 use clap::Subcommand;
 
+pub mod completions;
+pub mod list;
 pub mod logger;
 pub mod mount;
-pub mod list;
-pub mod completions;
 pub mod subvolume;
 
-pub use mount::mount;
-pub use list::list;
 pub use completions::completions;
+pub use list::list;
+pub use mount::mount;
 pub use subvolume::subvolume;
 
 #[derive(clap::Parser, Debug)]

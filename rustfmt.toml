@@ -1,3 +1,5 @@
 # Default settings, i.e. idiomatic rust
 edition = "2021"
 newline_style = "Unix"
+enum_discrim_align_threshold = 20
+struct_field_align_threshold = 20

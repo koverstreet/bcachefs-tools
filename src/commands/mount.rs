@@ -1,14 +1,14 @@
-use bch_bindgen::{path_to_cstr, bcachefs, bcachefs::bch_sb_handle, opt_set};
-use log::{info, debug, error, LevelFilter};
-use std::collections::HashMap;
-use clap::Parser;
-use uuid::Uuid;
-use std::io::{stdout, IsTerminal};
-use std::path::PathBuf;
-use std::{fs, str, env};
 use crate::key;
 use crate::key::UnlockPolicy;
-use std::ffi::{CString, c_char, c_void};
+use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, opt_set, path_to_cstr};
+use clap::Parser;
+use log::{debug, error, info, LevelFilter};
+use std::collections::HashMap;
+use std::ffi::{c_char, c_void, CString};
+use std::io::{stdout, IsTerminal};
+use std::path::{Path, PathBuf};
+use std::{env, fs, str};
+use uuid::Uuid;
 
 fn mount_inner(
     src: String,
@@ -17,7 +17,6 @@ fn mount_inner(
     mountflags: libc::c_ulong,
     data: Option<String>,
 ) -> anyhow::Result<()> {
-
     // bind the CStrings to keep them alive
     let src = CString::new(src)?;
     let target = path_to_cstr(target);
@@ -50,24 +49,24 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulo
     debug!("parsing mount options: {}", options.as_ref());
     let (opts, flags) = options
         .as_ref()
-        .split(",")
+        .split(',')
         .map(|o| match o {
-            "dirsync"       => Left(libc::MS_DIRSYNC),
-            "lazytime"      => Left(1 << 25), // MS_LAZYTIME
-            "mand"          => Left(libc::MS_MANDLOCK),
-            "noatime"       => Left(libc::MS_NOATIME),
-            "nodev"         => Left(libc::MS_NODEV),
-            "nodiratime"    => Left(libc::MS_NODIRATIME),
-            "noexec"        => Left(libc::MS_NOEXEC),
-            "nosuid"        => Left(libc::MS_NOSUID),
-            "relatime"      => Left(libc::MS_RELATIME),
-            "remount"       => Left(libc::MS_REMOUNT),
-            "ro"            => Left(libc::MS_RDONLY),
-            "rw"            => Left(0),
-            "strictatime"   => Left(libc::MS_STRICTATIME),
-            "sync"          => Left(libc::MS_SYNCHRONOUS),
-            ""              => Left(0),
-            o @ _           => Right(o),
+            "dirsync" => Left(libc::MS_DIRSYNC),
+            "lazytime" => Left(1 << 25), // MS_LAZYTIME
+            "mand" => Left(libc::MS_MANDLOCK),
+            "noatime" => Left(libc::MS_NOATIME),
+            "nodev" => Left(libc::MS_NODEV),
+            "nodiratime" => Left(libc::MS_NODIRATIME),
+            "noexec" => Left(libc::MS_NOEXEC),
+            "nosuid" => Left(libc::MS_NOSUID),
+            "relatime" => Left(libc::MS_RELATIME),
+            "remount" => Left(libc::MS_REMOUNT),
+            "ro" => Left(libc::MS_RDONLY),
+            "rw" => Left(0),
+            "strictatime" => Left(libc::MS_STRICTATIME),
+            "sync" => Left(libc::MS_SYNCHRONOUS),
+            "" => Left(0),
+            o => Right(o),
         })
         .fold((Vec::new(), 0), |(mut opts, flags), next| match next {
             Left(f) => (opts, flags | f),
@@ -78,7 +77,7 @@ fn parse_mount_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulo
         });
 
     (
-        if opts.len() == 0 {
+        if opts.is_empty() {
             None
         } else {
             Some(opts.join(","))
@@ -101,11 +100,11 @@ fn do_mount(
     mount_inner(device, target, "bcachefs", mountflags, data)
 }
 
-fn read_super_silent(path: &std::path::PathBuf) -> anyhow::Result<bch_sb_handle> {
+fn read_super_silent(path: impl AsRef<Path>) -> anyhow::Result<bch_sb_handle> {
     let mut opts = bcachefs::bch_opts::default();
     opt_set!(opts, noexcl, 1);
 
-    bch_bindgen::sb_io::read_super_silent(&path, opts)
+    bch_bindgen::sb_io::read_super_silent(path.as_ref(), opts)
 }
 
 fn device_property_map(dev: &udev::Device) -> HashMap<String, String> {
@@ -158,7 +157,7 @@ fn get_super_blocks(
     Ok(devices
         .iter()
         .filter_map(|dev| {
-            read_super_silent(&PathBuf::from(dev))
+            read_super_silent(PathBuf::from(dev))
                 .ok()
                 .map(|sb| (PathBuf::from(dev), sb))
         })
@@ -203,6 +202,7 @@ fn get_devices_by_uuid(
     get_super_blocks(uuid, &devices)
 }
 
+#[allow(clippy::type_complexity)]
 fn get_uuid_for_dev_node(
     udev_bcachefs: &HashMap<String, Vec<String>>,
     device: &std::path::PathBuf,
@@ -234,7 +234,7 @@ pub struct Cli {
     /// by the specified passphrase file; it is decrypted. (i.e. Regardless
     /// if "fail" is specified for key_location/unlock_policy.)
     #[arg(short = 'f', long)]
-    passphrase_file:       Option<PathBuf>,
+    passphrase_file: Option<PathBuf>,
 
     /// Password policy to use in case of encrypted filesystem.
     ///
@@ -242,28 +242,33 @@ pub struct Cli {
     /// "fail" - don't ask for password, fail if filesystem is encrypted;
     /// "wait" - wait for password to become available before mounting;
     /// "ask" -  prompt the user for password;
-    #[arg(short = 'k', long = "key_location", default_value = "ask", verbatim_doc_comment)]
-    unlock_policy:     UnlockPolicy,
+    #[arg(
+        short = 'k',
+        long = "key_location",
+        default_value = "ask",
+        verbatim_doc_comment
+    )]
+    unlock_policy: UnlockPolicy,
 
     /// Device, or UUID=\<UUID\>
-    dev:            String,
+    dev: String,
 
     /// Where the filesystem should be mounted. If not set, then the filesystem
     /// won't actually be mounted. But all steps preceeding mounting the
     /// filesystem (e.g. asking for passphrase) will still be performed.
-    mountpoint:     Option<PathBuf>,
+    mountpoint: Option<PathBuf>,
 
     /// Mount options
     #[arg(short, default_value = "")]
-    options:        String,
+    options: String,
 
     /// Force color on/off. Autodetect tty is used to define default:
     #[arg(short, long, action = clap::ArgAction::Set, default_value_t=stdout().is_terminal())]
-    colorize:       bool,
+    colorize: bool,
 
     /// Verbose mode
     #[arg(short, long, action = clap::ArgAction::Count)]
-    verbose:        u8,
+    verbose: u8,
 }
 
 fn devs_str_sbs_from_uuid(
@@ -337,7 +342,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         // If they supply a single device it could be either the FS only has 1 device or it's
         // only 1 of a number of devices which are part of the FS. This appears to be the case
         // when we get called during fstab mount processing and the fstab specifies a UUID.
-        if opt.dev.contains(":") {
+        if opt.dev.contains(':') {
             let mut block_devices_to_mount = Vec::new();
 
             for dev in opt.dev.split(':') {
@@ -351,9 +356,10 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         }
     };
 
-    if block_devices_to_mount.len() == 0 {
+    if block_devices_to_mount.is_empty() {
         Err(anyhow::anyhow!("No device found from specified parameters"))?;
     }
+
     let key_name = CString::new(format!(
         "bcachefs:{}",
         block_devices_to_mount[0].sb().uuid()
@@ -373,6 +379,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
             // Unlock by passphrase_file specified by mount options
             debug!("Attempting to unlock the master key with the passphrase_file specified in the mount options");
             attempt_unlock_master_key_with_passphrase_file(&block_devices_to_mount[0], passphrase_file)
+
         } else {
             // No passphrase_file specified, fall back to unlock_policy
             true
@@ -395,8 +402,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     } else {
         info!(
             "would mount with params: device: {}, options: {}",
-            devices,
-            &opt.options
+            devices, &opt.options
         );
     }
 
@@ -404,7 +410,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
 }
 
 fn attempt_unlock_master_key_with_passphrase_file(block_device: bch_sb_handle, passphrase_file: PathBuf) -> bool {
-    match key::unlock_master_key_using_passphrase_file(block_device, passphrase_file.as_path()) {
+    match key::read_from_passphrase_file(block_device, passphrase_file.as_path()) {
         Ok(()) => {
             // Decryption succeeded
             false

@@ -29,8 +29,7 @@ fn main() {
                 .to_string(),
         )
         .clang_args(
-            urcu
-                .include_paths
+            urcu.include_paths
                 .iter()
                 .map(|p| format!("-I{}", p.display())),
         )

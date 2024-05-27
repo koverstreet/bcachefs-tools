@@ -188,8 +188,7 @@ static struct bch_inode_info *bch2_inode_insert(struct bch_fs *c, struct bch_ino
 	BUG_ON(!old);
 
 	if (unlikely(old != inode)) {
-		__destroy_inode(&inode->v);
-		kmem_cache_free(bch2_inode_cache, inode);
+		discard_new_inode(&inode->v);
 		inode = old;
 	} else {
 		mutex_lock(&c->vfs_inodes_lock);
@@ -876,6 +875,9 @@ static int bch2_getattr(struct mnt_idmap *idmap,
 	stat->blksize	= block_bytes(c);
 	stat->blocks	= inode->v.i_blocks;
 
+	stat->subvol	= inode->ei_subvol;
+	stat->result_mask |= STATX_SUBVOL;
+
 	if (request_mask & STATX_BTIME) {
 		stat->result_mask |= STATX_BTIME;
 		stat->btime = bch2_time_to_timespec(c, inode->ei_inode.bi_otime);
@@ -1142,6 +1144,8 @@ static int bch2_open(struct inode *vinode, struct file *file)
 			return ret;
 	}
 
+	file->f_mode |= FMODE_CAN_ODIRECT;
+
 	return generic_file_open(vinode, file);
 }
 
@@ -1234,7 +1238,6 @@ static const struct address_space_operations bch_address_space_operations = {
 	.write_end	= bch2_write_end,
 	.invalidate_folio = bch2_invalidate_folio,
 	.release_folio	= bch2_release_folio,
-	.direct_IO	= noop_direct_IO,
 #ifdef CONFIG_MIGRATION
 	.migrate_folio	= filemap_migrate_folio,
 #endif
