@@ -29,7 +29,7 @@ impl BcachefsHandle {
 #[repr(u32)]
 #[non_exhaustive]
 pub enum BcachefsIoctl {
-    SubvolumeCreate = BCH_IOCTL_SUBVOLUME_CREATE,
+    SubvolumeCreate  = BCH_IOCTL_SUBVOLUME_CREATE,
     SubvolumeDestroy = BCH_IOCTL_SUBVOLUME_DESTROY,
 }
 
