@@ -371,11 +371,11 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         && !key::check_for_key(&key_name)?
     {
         // First by password_file, if available
-        let fallback_to_unlock_policy = if let Some(passphrase_file) = &opt.passphrase_file {
+        let fallback_to_unlock_policy = if let Some(passphrase_file) = opt.passphrase_file {
             // Unlock by passphrase_file specified by cli
             debug!("Attempting to unlock the master key with the passphrase file specified by cli");
             attempt_unlock_master_key_with_passphrase_file(&block_devices_to_mount[0], passphrase_file)
-        } else if let Some(passphrase_file) = &parse_passphrase_file_from_mount_options(&opt.options) {
+        } else if let Some(passphrase_file) = parse_passphrase_file_from_mount_options(&opt.options) {
             // Unlock by passphrase_file specified by mount options
             debug!("Attempting to unlock the master key with the passphrase_file specified in the mount options");
             attempt_unlock_master_key_with_passphrase_file(&block_devices_to_mount[0], passphrase_file)
@@ -409,7 +409,7 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn attempt_unlock_master_key_with_passphrase_file(block_device: bch_sb_handle, passphrase_file: PathBuf) -> bool {
+fn attempt_unlock_master_key_with_passphrase_file(block_device: &bch_sb_handle, passphrase_file: PathBuf) -> bool {
     match key::read_from_passphrase_file(block_device, passphrase_file.as_path()) {
         Ok(()) => {
             // Decryption succeeded
