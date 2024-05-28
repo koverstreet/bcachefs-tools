@@ -317,6 +317,16 @@ fn devs_str_sbs_from_device(
     }
 }
 
+fn parse_passphrase_file_from_mount_options(options: impl AsRef<str>) -> Option<PathBuf> {
+    options
+        .as_ref()
+        .split(",")
+        .fold(None, |_, next| match next {
+            x if x.starts_with("passphrase_file") => Some(PathBuf::from(x.split("=").nth(1).unwrap().to_string())),
+            _ => None,
+        })
+}
+
 fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     // Grab the udev information once
     let udev_info = udev_bcachefs_info()?;
@@ -361,21 +371,15 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
         && !key::check_for_key(&key_name)?
     {
         // First by password_file, if available
-        let fallback_to_unlock_policy = if let Some(passphrase_file) = &opt.passphrase_file {
-            match key::read_from_passphrase_file(
-                &block_devices_to_mount[0],
-                passphrase_file.as_path(),
-            ) {
-                Ok(()) => {
-                    // Decryption succeeded
-                    false
-                }
-                Err(err) => {
-                    // Decryption failed, fall back to unlock_policy
-                    error!("Failed to decrypt using passphrase_file: {}", err);
-                    true
-                }
-            }
+        let fallback_to_unlock_policy = if let Some(passphrase_file) = opt.passphrase_file {
+            // Unlock by passphrase_file specified by cli
+            debug!("Attempting to unlock the master key with the passphrase file specified by cli");
+            attempt_unlock_master_key_with_passphrase_file(&block_devices_to_mount[0], passphrase_file)
+        } else if let Some(passphrase_file) = parse_passphrase_file_from_mount_options(&opt.options) {
+            // Unlock by passphrase_file specified by mount options
+            debug!("Attempting to unlock the master key with the passphrase_file specified in the mount options");
+            attempt_unlock_master_key_with_passphrase_file(&block_devices_to_mount[0], passphrase_file)
+
         } else {
             // No passphrase_file specified, fall back to unlock_policy
             true
@@ -403,6 +407,20 @@ fn cmd_mount_inner(opt: Cli) -> anyhow::Result<()> {
     }
 
     Ok(())
+}
+
+fn attempt_unlock_master_key_with_passphrase_file(block_device: &bch_sb_handle, passphrase_file: PathBuf) -> bool {
+    match key::read_from_passphrase_file(block_device, passphrase_file.as_path()) {
+        Ok(()) => {
+            // Decryption succeeded
+            false
+        }
+        Err(err) => {
+            // Decryption failed, fall back to unlock_policy
+            error!("Failed to decrypt using passphrase_file: {}", err);
+            true
+        }
+    }
 }
 
 pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
