@@ -387,31 +387,35 @@ fn attempt_unlock_master_key(
 ) -> Result<KeyHandle, anyhow::Error> {
     // Unlock by key_file CLI option
     passphrase_file
-        .and_then(|path| match Passphrase::new_from_file(&first_sb, path) {
-            Ok(p) => Some(KeyHandle::new(&first_sb, &p)),
-            Err(e) => {
-                error!(
-                    "Failed to read passphrase from file, falling back to prompt: {}",
-                    e
-                );
-                None
-            }
-        })
+        .and_then(
+            |path| match Passphrase::new_from_file(&first_sb, path.clone()) {
+                Ok(p) => Some(KeyHandle::new(&first_sb, &p)),
+                Err(e) => {
+                    error!(
+                        "Failed to read passphrase from path \"{}\". Error: {}",
+                        path.display(),
+                        e
+                    );
+                    None
+                }
+            },
+        )
         // Unlock by key_file mount option
         .unwrap_or_else(|| {
             parse_passphrase_file_from_mount_options(options)
-                .and_then(
-                    |path: PathBuf| match Passphrase::new_from_file(&first_sb, path) {
+                .and_then(|path: PathBuf| {
+                    match Passphrase::new_from_file(&first_sb, path.clone()) {
                         Ok(p) => Some(KeyHandle::new(&first_sb, &p)),
                         Err(e) => {
                             error!(
-                                "Failed to read passphrase from file, falling back to prompt: {}",
+                                "Failed to read passphrase from path \"{}\". Error: {}",
+                                path.display(),
                                 e
                             );
                             None
                         }
-                    },
-                )
+                    }
+                })
                 // Unlock by unlock policy
                 .unwrap_or_else(|| unlock_policy.apply(&first_sb))
         })
