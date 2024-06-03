@@ -338,18 +338,7 @@ fn cmd_mount_inner(opt: Cli) -> Result<()> {
 
     if unsafe { bcachefs::bch2_sb_is_encrypted(first_sb.sb) } {
         let _key_handle: KeyHandle = KeyHandle::new_from_search(&uuid).or_else(|_| {
-            opt.passphrase_file
-                .and_then(|path| match Passphrase::new_from_file(&first_sb, path) {
-                    Ok(p) => Some(KeyHandle::new(&first_sb, &p)),
-                    Err(e) => {
-                        error!(
-                            "Failed to read passphrase from file, falling back to prompt: {}",
-                            e
-                        );
-                        None
-                    }
-                })
-                .unwrap_or_else(|| opt.unlock_policy.apply(&first_sb))
+            attempt_unlock_master_key(opt.passphrase_file, opt.unlock_policy, first_sb)
         })?;
     }
 
@@ -371,6 +360,25 @@ fn cmd_mount_inner(opt: Cli) -> Result<()> {
 
         Ok(())
     }
+}
+
+fn attempt_unlock_master_key(
+    passphrase_file: Option<PathBuf>,
+    unlock_policy: UnlockPolicy,
+    first_sb: bch_sb_handle,
+) -> Result<KeyHandle, anyhow::Error> {
+    passphrase_file
+        .and_then(|path| match Passphrase::new_from_file(&first_sb, path) {
+            Ok(p) => Some(KeyHandle::new(&first_sb, &p)),
+            Err(e) => {
+                error!(
+                    "Failed to read passphrase from file, falling back to prompt: {}",
+                    e
+                );
+                None
+            }
+        })
+        .unwrap_or_else(|| unlock_policy.apply(&first_sb))
 }
 
 pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
