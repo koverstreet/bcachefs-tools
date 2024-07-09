@@ -16,6 +16,7 @@ use bch_bindgen::{
 };
 use byteorder::{LittleEndian, ReadBytesExt};
 use log::info;
+use rustix::termios;
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -151,9 +152,20 @@ impl Passphrase {
 
     // blocks indefinitely if no input is available on stdin
     pub fn new_from_prompt() -> Result<Self> {
-        let passphrase = Zeroizing::new(rpassword::prompt_password("Enter passphrase: ")?);
+        let old = termios::tcgetattr(stdin())?;
+        let mut new = old.clone();
+        new.local_modes.remove(termios::LocalModes::ECHO);
+        termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &new)?;
 
-        Ok(Self(CString::new(passphrase.trim_end_matches('\n'))?))
+        eprint!("Enter passphrase: ");
+
+        let mut line = Zeroizing::new(String::new());
+        let res = stdin().read_line(&mut line);
+        termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &old)?;
+        eprintln!("");
+        res?;
+
+        Ok(Self(CString::new(line.trim_end_matches('\n'))?))
     }
 
     // blocks indefinitely if no input is available on stdin
