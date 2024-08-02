@@ -32,3 +32,6 @@ default-features = false
 
 [profile.release]
 strip = "none"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(fuse)'] }
