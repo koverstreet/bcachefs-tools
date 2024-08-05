@@ -59,6 +59,7 @@
         }:
         let
           inherit (builtins) readFile split;
+          inherit (lib) fileset;
           inherit (lib.lists) findFirst;
           inherit (lib.strings) hasPrefix removePrefix substring;
 
@@ -75,7 +76,17 @@
 
           commonArgs = {
             inherit version;
-            src = self;
+            src = fileset.toSource {
+              root = ./.;
+
+              fileset = fileset.difference (fileset.gitTracked ./.) (
+                fileset.unions [
+                  ./checks
+                  ./doc
+                  ./tests
+                ]
+              );
+            };
 
             env = {
               PKG_CONFIG_SYSTEMD_SYSTEMDSYSTEMUNITDIR = "${placeholder "out"}/lib/systemd/system";
@@ -150,31 +161,37 @@
             }
           );
 
-          checks.cargo-clippy = craneLib.cargoClippy (
-            commonArgs
-            // {
-              inherit cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
-            }
-          );
+          checks =
+            let
+              overlay = final: prev: { inherit (config.packages) bcachefs-tools; };
 
-          # we have to build our own `craneLib.cargoTest`
-          checks.cargo-test = craneLib.mkCargoDerivation (
-            commonArgs
-            // {
-              inherit cargoArtifacts;
-              doCheck = true;
+              cargo-clippy = craneLib.cargoClippy (
+                commonArgs
+                // {
+                  inherit cargoArtifacts;
+                  cargoClippyExtraArgs = "--all-targets -- --deny warnings";
+                }
+              );
 
-              enableParallelChecking = true;
+              # we have to build our own `craneLib.cargoTest`
+              cargo-test = craneLib.mkCargoDerivation (
+                commonArgs
+                // {
+                  inherit cargoArtifacts;
+                  doCheck = true;
 
-              pnameSuffix = "-test";
-              buildPhaseCargoCommand = "";
-              checkPhaseCargoCommand = ''
-                make ''${enableParallelChecking:+-j''${NIX_BUILD_CORES}} $makeFlags libbcachefs.a
-                cargo test --profile release -- --nocapture
-              '';
-            }
-          );
+                  enableParallelChecking = true;
+
+                  pnameSuffix = "-test";
+                  buildPhaseCargoCommand = "";
+                  checkPhaseCargoCommand = ''
+                    make ''${enableParallelChecking:+-j''${NIX_BUILD_CORES}} $makeFlags libbcachefs.a
+                    cargo test --profile release -- --nocapture
+                  '';
+                }
+              );
+            in
+            (import ./checks { pkgs = pkgs.extend overlay; }) // { inherit cargo-clippy cargo-test; };
 
           devShells.default = pkgs.mkShell {
             inputsFrom = [
