@@ -1,0 +1,14 @@
+#!/usr/bin/ash
+
+run_hook() {
+
+# check if $root needs unlocking
+if bcachefs unlock -c $root >/dev/null 2>&1; then
+    echo "Unlocking $root:"
+    while true; do
+        bcachefs unlock $root && break
+    done
+fi
+}
+
+# vim: set ft=sh ts=4 sw=4 et:
