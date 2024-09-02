@@ -16,16 +16,16 @@ fuse = []
 log = { version = "0.4", features = ["std"] }
 clap = { version = "4.0.32", features = ["derive", "wrap_help"] }
 clap_complete = "4.3.2"
-anyhow = "1.0"
+anyhow = "1.0.1"
 libc = "0.2.69"
 udev = "0.7.0"
 uuid = "1.2.2"
-errno = "0.2"
+errno = "0.2.7"
 either = "1.5"
 bch_bindgen = { path = "bch_bindgen" }
 strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"
-zeroize = { version = "1", features = ["std", "zeroize_derive"] }
+zeroize = { version = "1.5.5", features = ["std", "zeroize_derive"] }
 rustix = { version = "0.38.34", features = ["termios"] }
 owo-colors = "4"
 
