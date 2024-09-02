@@ -20,7 +20,7 @@ anyhow = "1.0.1"
 libc = "0.2.69"
 udev = "0.7.0"
 uuid = "1.2.2"
-errno = "0.2.7"
+errno = "0.3"
 either = "1.5"
 bch_bindgen = { path = "bch_bindgen" }
 strum = { version = "0.26", features = ["derive"] }
