@@ -81,7 +81,6 @@ dependencies = [
  "owo-colors",
  "rustix",
  "strum",
- "strum_macros",
  "udev",
  "uuid",
  "zeroize",
