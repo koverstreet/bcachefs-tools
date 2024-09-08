@@ -24,7 +24,6 @@ errno = "0.3"
 either = "1.5"
 bch_bindgen = { path = "bch_bindgen" }
 strum = { version = "0.26", features = ["derive"] }
-strum_macros = "0.26"
 zeroize = { version = "1.5.5", features = ["std", "zeroize_derive"] }
 rustix = { version = "0.38.34", features = ["termios"] }
 owo-colors = "4"
