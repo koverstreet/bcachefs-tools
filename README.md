@@ -30,6 +30,20 @@ Build and install
 
 Refer to [INSTALL.md](./INSTALL.md)
 
+Testing
+-------
+
+Besides manual testing, which is also encouraged, there are also a number of
+checks defined that are used for CI (e.g. github actions).
+
+These checks can be listed using `nix flake show`. You can, for example, test
+the current state of the repo or test every patch before publishing them.
+
+```console
+$ nix flake check
+$ git rev-list origin/master.. | xargs -I{} nix flake check "git+file://$(pwd)?rev={}"
+```
+
 Bug reports and contributions
 -----------------------------
 
