@@ -214,9 +214,7 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 	uuid_generate(sb.sb->uuid.b);
 
 	if (opts.label)
-		memcpy(sb.sb->label,
-		       opts.label,
-		       min(strlen(opts.label), sizeof(sb.sb->label)));
+		snprintf(sb.sb->label, sizeof(sb.sb->label), "%s", opts.label);
 
 	for (opt_id = 0;
 	     opt_id < bch2_opts_nr;
