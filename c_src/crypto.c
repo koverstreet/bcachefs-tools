@@ -176,26 +176,47 @@ void bch_sb_crypt_init(struct bch_sb *sb,
 		       struct bch_sb_field_crypt *crypt,
 		       const char *passphrase)
 {
+	struct bch_key key;
+	get_random_bytes(&key, sizeof(key));
+
 	crypt->key.magic = BCH_KEY_MAGIC;
-	get_random_bytes(&crypt->key.key, sizeof(crypt->key.key));
+	crypt->key.key = key;
 
-	if (passphrase) {
+	bch_crypt_update_passphrase(sb, crypt, &key, passphrase);
+}
 
+void bch_crypt_update_passphrase(
+			struct bch_sb *sb,
+			struct bch_sb_field_crypt *crypt,
+			struct bch_key *key,
+			const char *new_passphrase)
+{
+
+	struct bch_encrypted_key new_key;
+	new_key.magic = BCH_KEY_MAGIC;
+	new_key.key = *key;
+
+	if(!new_passphrase) {
+		crypt->key = new_key;
+		return;
+	}
+
+	// If crypt already has an encrypted key reuse it's encryption params
+	if (!bch2_key_is_encrypted(&crypt->key)) {
 		SET_BCH_CRYPT_KDF_TYPE(crypt, BCH_KDF_SCRYPT);
 		SET_BCH_KDF_SCRYPT_N(crypt, ilog2(16384));
 		SET_BCH_KDF_SCRYPT_R(crypt, ilog2(8));
 		SET_BCH_KDF_SCRYPT_P(crypt, ilog2(16));
-
-		struct bch_key passphrase_key = derive_passphrase(crypt, passphrase);
-
-		assert(!bch2_key_is_encrypted(&crypt->key));
-
-		if (bch2_chacha_encrypt_key(&passphrase_key, __bch2_sb_key_nonce(sb),
-					   &crypt->key, sizeof(crypt->key)))
-			die("error encrypting key");
-
-		assert(bch2_key_is_encrypted(&crypt->key));
-
-		memzero_explicit(&passphrase_key, sizeof(passphrase_key));
 	}
+
+	struct bch_key passphrase_key = derive_passphrase(crypt, new_passphrase);
+
+	if (bch2_chacha_encrypt_key(&passphrase_key, __bch2_sb_key_nonce(sb),
+				    &new_key, sizeof(new_key)))
+		die("error encrypting key");
+
+	memzero_explicit(&passphrase_key, sizeof(passphrase_key));
+
+	crypt->key = new_key;
+	assert(bch2_key_is_encrypted(&crypt->key));
 }
