@@ -464,10 +464,10 @@ do {									\
 	while (1) {							\
 		closure_wait(waitlist, &cl);				\
 		if (_cond) {						\
-			_t = max(1, _until - jiffies);			\
+			_t = max_t(long, 1L, _until - jiffies);		\
 			break;						\
 		}							\
-		_t = max(0, _until - jiffies);				\
+		_t = max_t(long, 0L, _until - jiffies);			\
 		if (!_t)						\
 			break;						\
 		closure_sync_timeout(&cl, _t);				\
@@ -485,7 +485,7 @@ do {									\
 ({									\
 	unsigned long _until = jiffies + _timeout;			\
 	(_cond)								\
-		? max(1, _until - jiffies)				\
+		? max_t(long, 1L, _until - jiffies)			\
 		: __closure_wait_event_timeout(waitlist, _cond, _until);\
 })
 
