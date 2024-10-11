@@ -27,30 +27,44 @@ static void kill_btree_node_usage(void)
 	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
 }
 
+struct kill_node {
+	unsigned	btree;
+	unsigned	level;
+	u64		idx;
+};
+
 int cmd_kill_btree_node(int argc, char *argv[])
 {
 	struct bch_opts opts = bch2_opts_empty();
-	enum btree_id btree_id = 0;
-	unsigned level = 0;
-	u64 node_index = 0;
+	DARRAY(struct kill_node) kill_nodes = {};
 	int opt;
 
 	opt_set(opts, read_only,	true);
 
-	while ((opt = getopt(argc, argv, "b:l:i:h")) != -1)
+	while ((opt = getopt(argc, argv, "n:h")) != -1)
 		switch (opt) {
-		case 'b':
-			btree_id = read_string_list_or_die(optarg,
-						__bch2_btree_ids, "btree id");
-			break;
-		case 'l':
-			if (kstrtouint(optarg, 10, &level) || level >= BTREE_MAX_DEPTH)
+		case 'n': {
+			char *p = optarg;
+			const char *str_btree	= strsep(&p, ":");
+			const char *str_level	= strsep(&p, ":");
+			const char *str_idx	= strsep(&p, ":");
+
+			struct kill_node n = {
+				.btree = read_string_list_or_die(str_btree,
+						__bch2_btree_ids, "btree id"),
+			};
+
+			if (str_level &&
+			    (kstrtouint(str_level, 10, &n.level) || n.level >= BTREE_MAX_DEPTH))
 				die("invalid level");
+
+			if (str_idx &&
+			    kstrtoull(optarg, 10, &n.idx))
+				die("invalid index %s", str_idx);
+
+			darray_push(&kill_nodes, n);
 			break;
-		case 'i':
-			if (kstrtoull(optarg, 10, &node_index))
-				die("invalid index %s", optarg);
-			break;
+		}
 		case 'h':
 			kill_btree_node_usage();
 			exit(EXIT_SUCCESS);
@@ -71,16 +85,19 @@ int cmd_kill_btree_node(int argc, char *argv[])
 	if (ret)
 		die("error %s from posix_memalign", bch2_err_str(ret));
 
-	ret = bch2_trans_run(c,
-		__for_each_btree_node(trans, iter, btree_id, POS_MIN, 0, level, 0, b, ({
-			if (b->c.level != level)
+	struct btree_trans *trans = bch2_trans_get(c);
+
+	darray_for_each(kill_nodes, i) {
+		ret = __for_each_btree_node(trans, iter, i->btree, POS_MIN, 0, i->level, 0, b, ({
+			if (b->c.level != i->level)
 				continue;
 
 			int ret2 = 0;
-			if (!node_index) {
+			if (!i->idx) {
 				struct printbuf buf = PRINTBUF;
 				bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&b->key));
-				bch_info(c, "killing btree node %s", buf.buf);
+				bch_info(c, "killing btree node %s l=%u %s",
+					 bch2_btree_id_str(i->btree), i->level, buf.buf);
 				printbuf_exit(&buf);
 
 				ret2 = 1;
@@ -102,16 +119,22 @@ int cmd_kill_btree_node(int argc, char *argv[])
 				}
 			}
 
-			node_index--;
+			i->idx--;
 			ret2;
-		})));
-	if (ret < 0)
-		bch_err(c, "error %i walking btree nodes", ret);
-	else if (!ret) {
-		bch_err(c, "node at specified index not found");
-		ret = EXIT_FAILURE;
+		}));
+
+		if (ret < 0) {
+			bch_err(c, "error %i walking btree nodes", ret);
+			break;
+		} else if (!ret) {
+			bch_err(c, "node at specified index not found");
+			ret = EXIT_FAILURE;
+			break;
+		}
 	}
 
+	bch2_trans_put(trans);
 	bch2_fs_stop(c);
+	darray_exit(&kill_nodes);
 	return ret < 0 ? ret : 0;
 }
