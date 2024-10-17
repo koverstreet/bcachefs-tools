@@ -19,4 +19,7 @@ void bch2_add_key(struct bch_sb *, const char *, const char *, const char *);
 void bch_sb_crypt_init(struct bch_sb *sb, struct bch_sb_field_crypt *,
 		       const char *);
 
+void bch_crypt_update_passphrase(struct bch_sb *sb, struct bch_sb_field_crypt *crypt,
+			struct bch_key *key, const char *new_passphrase);
+
 #endif /* _CRYPTO_H */
