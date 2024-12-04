@@ -124,10 +124,6 @@ char *read_file_str(int dirfd, const char *path)
 	buf[len] = '\0';
 	if (len && buf[len - 1] == '\n')
 		buf[len - 1] = '\0';
-	if (!strlen(buf)) {
-		free(buf);
-		buf = NULL;
-	}
 
 	close(fd);
 
