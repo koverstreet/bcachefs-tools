@@ -10,7 +10,7 @@ use std::{
 use anyhow::{ensure, Result};
 use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, opt_set, path_to_cstr};
 use clap::Parser;
-use log::{debug, info};
+use log::{debug, error, info};
 use uuid::Uuid;
 
 use crate::{
@@ -385,6 +385,9 @@ pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::
 
     match cmd_mount_inner(&cli) {
         Ok(_)   => std::process::ExitCode::SUCCESS,
-        Err(_)   => std::process::ExitCode::FAILURE,
+        Err(e)   => {
+            error!("Mount failed: {e}");
+            std::process::ExitCode::FAILURE
+        }
     }
 }
