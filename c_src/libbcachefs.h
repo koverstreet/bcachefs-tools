@@ -97,11 +97,16 @@ struct bchfs_handle {
 	__uuid_t	uuid;
 	int		ioctl_fd;
 	int		sysfs_fd;
+	int		dev_idx;
 };
 
 void bcache_fs_close(struct bchfs_handle);
+
+int bcache_fs_open_fallible(const char *, struct bchfs_handle *);
+
 struct bchfs_handle bcache_fs_open(const char *);
 struct bchfs_handle bchu_fs_open_by_dev(const char *, int *);
+
 int bchu_dev_path_to_idx(struct bchfs_handle, const char *);
 
 static inline void bchu_disk_add(struct bchfs_handle fs, char *dev)
@@ -296,5 +301,6 @@ struct dev_name {
 typedef DARRAY(struct dev_name) dev_names;
 
 dev_names bchu_fs_get_devices(struct bchfs_handle);
+struct dev_name *dev_idx_to_name(dev_names *dev_names, unsigned idx);
 
 #endif /* _LIBBCACHE_H */

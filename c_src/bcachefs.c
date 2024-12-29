@@ -70,6 +70,7 @@ void bcachefs_usage(void)
 	     "\n"
 	     "Commands for managing filesystem data:\n"
 	     "  data rereplicate         Rereplicate degraded data\n"
+	     "  data scrub               Verify checksums and correct errors, if possible\n"
 	     "  data job                 Kick off low level data jobs\n"
 	     "\n"
 	     "Encryption:\n"
@@ -157,6 +158,8 @@ int data_cmds(int argc, char *argv[])
 		return data_usage();
 	if (!strcmp(cmd, "rereplicate"))
 		return cmd_data_rereplicate(argc, argv);
+	if (!strcmp(cmd, "scrub"))
+		return cmd_data_scrub(argc, argv);
 	if (!strcmp(cmd, "job"))
 		return cmd_data_job(argc, argv);
 

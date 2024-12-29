@@ -51,6 +51,11 @@ static inline bool entry_is_transaction_start(struct jset_entry *entry)
 	return entry->type == BCH_JSET_ENTRY_log && !entry->level;
 }
 
+static inline bool entry_is_log_msg(struct jset_entry *entry)
+{
+	return entry->type == BCH_JSET_ENTRY_log && entry->level;
+}
+
 typedef DARRAY(struct bbpos_range) d_bbpos_range;
 typedef DARRAY(enum btree_id) d_btree_id;
 
@@ -60,8 +65,8 @@ static bool bkey_matches_filter(d_bbpos_range filter, struct jset_entry *entry, 
 		struct bbpos k_start	= BBPOS(entry->btree_id, bkey_start_pos(&k->k));
 		struct bbpos k_end	= BBPOS(entry->btree_id, k->k.p);
 
-		if (bbpos_cmp(k_start, i->end) < 0 &&
-		    bbpos_cmp(k_end, i->start) > 0)
+		if (bbpos_cmp(k_start, i->start) >= 0 &&
+		    bbpos_cmp(k_end, i->end) <= 0)
 			return true;
 	}
 	return false;
@@ -96,7 +101,8 @@ static bool should_print_transaction(struct jset_entry *entry, struct jset_entry
 	for (entry = vstruct_next(entry);
 	     entry != end && !entry_is_transaction_start(entry);
 	     entry = vstruct_next(entry))
-		if (entry_matches_transaction_filter(entry, key_filter))
+		if (entry_is_log_msg(entry) ||
+		    entry_matches_transaction_filter(entry, key_filter))
 			return true;
 
 	return false;

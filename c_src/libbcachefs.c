@@ -411,43 +411,107 @@ void bcache_fs_close(struct bchfs_handle fs)
 	close(fs.sysfs_fd);
 }
 
-struct bchfs_handle bcache_fs_open(const char *path)
+static int bcache_fs_open_by_uuid(const char *uuid_str, struct bchfs_handle *fs)
 {
-	struct bchfs_handle ret;
+	if (uuid_parse(uuid_str, fs->uuid.b))
+		return -1;
 
-	if (!uuid_parse(path, ret.uuid.b)) {
-		/* It's a UUID, look it up in sysfs: */
-		char *sysfs = mprintf(SYSFS_BASE "%s", path);
-		ret.sysfs_fd = xopen(sysfs, O_RDONLY);
+	char *sysfs = mprintf(SYSFS_BASE "%s", uuid_str);
+	fs->sysfs_fd = open(sysfs, O_RDONLY);
+	free(sysfs);
 
-		char *minor = read_file_str(ret.sysfs_fd, "minor");
-		char *ctl = mprintf("/dev/bcachefs%s-ctl", minor);
-		ret.ioctl_fd = xopen(ctl, O_RDWR);
+	if (fs->sysfs_fd < 0)
+		return -errno;
 
-		free(sysfs);
-		free(minor);
-		free(ctl);
-	} else {
-		/* It's a path: */
-		ret.ioctl_fd = open(path, O_RDONLY);
-		if (ret.ioctl_fd < 0)
-			die("Error opening filesystem at %s: %m", path);
+	char *minor = read_file_str(fs->sysfs_fd, "minor");
+	char *ctl = mprintf("/dev/bcachefs%s-ctl", minor);
+	fs->ioctl_fd = open(ctl, O_RDWR);
+	free(minor);
+	free(ctl);
 
-		struct bch_ioctl_query_uuid uuid;
-		if (ioctl(ret.ioctl_fd, BCH_IOCTL_QUERY_UUID, &uuid) < 0)
-			die("error opening %s: not a bcachefs filesystem", path);
+	return fs->ioctl_fd < 0 ? -errno : 0;
+}
 
-		ret.uuid = uuid.uuid;
+int bcache_fs_open_fallible(const char *path, struct bchfs_handle *fs)
+{
+	memset(fs, 0, sizeof(*fs));
+	fs->dev_idx = -1;
+
+	if (!uuid_parse(path, fs->uuid.b))
+		return bcache_fs_open_by_uuid(path, fs);
+
+	/* It's a path: */
+	int path_fd = open(path, O_RDONLY);
+	if (path_fd < 0)
+		return -errno;
+
+	struct bch_ioctl_query_uuid uuid;
+	if (!ioctl(path_fd, BCH_IOCTL_QUERY_UUID, &uuid)) {
+		/* It's a path to the mounted filesystem: */
+		fs->ioctl_fd = path_fd;
+
+		fs->uuid = uuid.uuid;
 
 		char uuid_str[40];
 		uuid_unparse(uuid.uuid.b, uuid_str);
 
 		char *sysfs = mprintf(SYSFS_BASE "%s", uuid_str);
-		ret.sysfs_fd = xopen(sysfs, O_RDONLY);
+		fs->sysfs_fd = xopen(sysfs, O_RDONLY);
 		free(sysfs);
+		return 0;
 	}
 
-	return ret;
+	struct bch_opts opts = bch2_opts_empty();
+	char buf[1024], *uuid_str;
+
+	struct stat stat = xstat(path);
+	close(path_fd);
+
+	if (S_ISBLK(stat.st_mode)) {
+		char *sysfs = mprintf("/sys/dev/block/%u:%u/bcachefs",
+				      major(stat.st_rdev),
+				      minor(stat.st_rdev));
+
+		ssize_t len = readlink(sysfs, buf, sizeof(buf));
+		free(sysfs);
+
+		if (len <= 0)
+			goto read_super;
+
+		char *p = strrchr(buf, '/');
+		if (!p || sscanf(p + 1, "dev-%u", &fs->dev_idx) != 1)
+			die("error parsing sysfs");
+
+		*p = '\0';
+		p = strrchr(buf, '/');
+		uuid_str = p + 1;
+	} else {
+read_super:
+		opt_set(opts, noexcl,	true);
+		opt_set(opts, nochanges, true);
+
+		struct bch_sb_handle sb;
+		int ret = bch2_read_super(path, &opts, &sb);
+		if (ret)
+			die("Error opening %s: %s", path, strerror(-ret));
+
+		fs->dev_idx = sb.sb->dev_idx;
+		uuid_str = buf;
+		uuid_unparse(sb.sb->user_uuid.b, uuid_str);
+
+		bch2_free_super(&sb);
+	}
+
+	return bcache_fs_open_by_uuid(uuid_str, fs);
+}
+
+struct bchfs_handle bcache_fs_open(const char *path)
+{
+	struct bchfs_handle fs;
+	int ret = bcache_fs_open_fallible(path, &fs);
+	if (ret)
+		die("Error opening filesystem at %s: %s", path, strerror(-ret));
+	return fs;
 }
 
 /*
@@ -523,7 +587,7 @@ int bchu_data(struct bchfs_handle fs, struct bch_ioctl_data cmd)
 		if (e.type)
 			continue;
 
-		if (e.p.data_type == U8_MAX)
+		if (e.ret || e.p.data_type == U8_MAX)
 			break;
 
 		printf("\33[2K\r");
@@ -733,6 +797,8 @@ dev_names bchu_fs_get_devices(struct bchfs_handle fs)
 		if (r > 0) {
 			sysfs_block_buf[r] = '\0';
 			n.dev = strdup(basename(sysfs_block_buf));
+		} else {
+			n.dev = mprintf("(offline dev %u)", n.idx);
 		}
 
 		free(block_attr);
@@ -751,4 +817,12 @@ dev_names bchu_fs_get_devices(struct bchfs_handle fs)
 	closedir(dir);
 
 	return devs;
+}
+
+struct dev_name *dev_idx_to_name(dev_names *dev_names, unsigned idx)
+{
+	darray_for_each(*dev_names, dev)
+		if (dev->idx == idx)
+			return dev;
+	return NULL;
 }
