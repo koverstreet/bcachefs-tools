@@ -33,5 +33,22 @@ owo-colors = "4"
 version = "0.10"
 default-features = false
 
+[build-dependencies]
+system-deps = "7"
+
+[package.metadata.system-deps]
+# libaio is missing a pkg-config file
+# blkid/util-linux 2.40.1 is recommended
+blkid = "2.39.3"
+fuse3 = { version = "3.14", feature = "fuse" }
+libkeyutils = "1.6.3"
+liblz4 = "1.9.4"
+libsodium = "1.0.18"
+libudev = "252"
+liburcu = "0.13"
+libzstd = "1.5.4"
+uuid = "2.39.3"
+zlib = "1.2.13"
+
 [profile.release]
 strip = "none"
