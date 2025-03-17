@@ -89,6 +89,7 @@
               libuuid,
               lz4,
               udev,
+              util-linux,
               zlib,
               zstd,
             }:
@@ -139,6 +140,7 @@
                   libuuid
                   lz4
                   udev
+                  util-linux
                   zlib
                   zstd
                 ];
