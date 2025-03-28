@@ -22,6 +22,11 @@
       url = "github:edolstra/flake-compat";
       flake = false;
     };
+
+    nix-github-actions = {
+      url = "github:nix-community/nix-github-actions";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
   outputs =
@@ -33,12 +38,20 @@
       crane,
       rust-overlay,
       flake-compat,
+      nix-github-actions,
     }:
     let
       systems = nixpkgs.lib.filter (s: nixpkgs.lib.hasSuffix "-linux" s) nixpkgs.lib.systems.flakeExposed;
     in
     flake-parts.lib.mkFlake { inherit inputs; } {
       imports = [ inputs.treefmt-nix.flakeModule ];
+
+      flake = {
+        githubActions = nix-github-actions.lib.mkGithubMatrix {
+          # github actions supports fewer architectures
+          checks = nixpkgs.lib.getAttrs [ "aarch64-linux" "x86_64-linux" ] self.checks;
+        };
+      };
 
       inherit systems;
 
@@ -225,49 +238,55 @@
               default = config.packages.${name};
             };
 
-          checks.cargo-clippy = common.craneLib.cargoClippy (
-            common.args
-            // {
-              inherit (common) cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets --all-features -- --deny warnings";
-            }
-          );
+          checks = {
+            inherit (config.packages)
+              bcachefs-tools
+              bcachefs-tools-fuse
+              bcachefs-tools-fuse-i686-linux
+              ;
 
-          # we have to build our own `craneLib.cargoTest`
-          checks.cargo-test = common.craneLib.mkCargoDerivation (
-            common.args
-            // {
-              inherit (common) cargoArtifacts;
-              doCheck = true;
-
-              enableParallelChecking = true;
-
-              pnameSuffix = "-test";
-              buildPhaseCargoCommand = "";
-              checkPhaseCargoCommand = ''
-                make ''${enableParallelChecking:+-j''${NIX_BUILD_CORES}} $makeFlags libbcachefs.a
-                cargo test --profile release -- --nocapture
-              '';
-            }
-          );
-
-          # cargo clippy with the current minimum supported rust version
-          # according to Cargo.toml
-          checks.msrv =
-            let
-              rustVersion = cargoToml.package.rust-version;
-              common = pkgs.callPackage mkCommon { inherit crane rustVersion; };
-            in
-            common.craneLib.cargoClippy (
+            cargo-clippy = common.craneLib.cargoClippy (
               common.args
               // {
-                pname = "msrv";
                 inherit (common) cargoArtifacts;
                 cargoClippyExtraArgs = "--all-targets --all-features -- --deny warnings";
               }
             );
 
-          checks."32-bit" = config.packages."${cargoToml.package.name}-i686-linux";
+            # we have to build our own `craneLib.cargoTest`
+            cargo-test = common.craneLib.mkCargoDerivation (
+              common.args
+              // {
+                inherit (common) cargoArtifacts;
+                doCheck = true;
+
+                enableParallelChecking = true;
+
+                pnameSuffix = "-test";
+                buildPhaseCargoCommand = "";
+                checkPhaseCargoCommand = ''
+                  make ''${enableParallelChecking:+-j''${NIX_BUILD_CORES}} $makeFlags libbcachefs.a
+                  cargo test --profile release -- --nocapture
+                '';
+              }
+            );
+
+            # cargo clippy with the current minimum supported rust version
+            # according to Cargo.toml
+            msrv =
+              let
+                rustVersion = cargoToml.package.rust-version;
+                common = pkgs.callPackage mkCommon { inherit crane rustVersion; };
+              in
+              common.craneLib.cargoClippy (
+                common.args
+                // {
+                  pname = "msrv";
+                  inherit (common) cargoArtifacts;
+                  cargoClippyExtraArgs = "--all-targets --all-features -- --deny warnings";
+                }
+              );
+          };
 
           devShells.default = pkgs.mkShell {
             inputsFrom = [
