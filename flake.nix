@@ -55,9 +55,20 @@
           inherit (lib.lists) findFirst;
           inherit (lib.strings) hasPrefix removePrefix substring;
 
+          myOverlays = [
+            (import rust-overlay)
+            (_: prev: {
+              util-linux = prev.util-linux.override {
+                ncursesSupport = false;
+                nlsSupport = false;
+                pamSupport = false;
+                systemdSupport = false;
+              };
+            })
+          ];
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ (import rust-overlay) ];
+            overlays = myOverlays;
           };
 
           cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
@@ -89,6 +100,7 @@
               libuuid,
               lz4,
               udev,
+              util-linux,
               zlib,
               zstd,
             }:
@@ -139,6 +151,7 @@
                   libuuid
                   lz4
                   udev
+                  util-linux
                   zlib
                   zstd
                 ];
@@ -194,7 +207,7 @@
                   localSystem = system;
                   pkgs' = import nixpkgs {
                     inherit crossSystem localSystem;
-                    overlays = [ (import rust-overlay) ];
+                    overlays = myOverlays;
                   };
 
                   common = pkgs'.callPackage mkCommon { inherit crane; };
@@ -229,7 +242,7 @@
             common.args
             // {
               inherit (common) cargoArtifacts;
-              cargoClippyExtraArgs = "--all-targets --all-features -- --deny warnings";
+              cargoClippyExtraArgs = "--all-targets -- --deny warnings";
             }
           );
 
@@ -263,7 +276,7 @@
               // {
                 pname = "msrv";
                 inherit (common) cargoArtifacts;
-                cargoClippyExtraArgs = "--all-targets --all-features -- --deny warnings";
+                cargoClippyExtraArgs = "--all-targets -- --deny warnings";
               }
             );
 
