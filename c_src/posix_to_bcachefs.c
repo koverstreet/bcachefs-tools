@@ -1,6 +1,7 @@
 #include <dirent.h>
 #include <sys/xattr.h>
 #include <linux/dcache.h>
+#include <linux/sort.h>
 #include <linux/xattr.h>
 
 #include "posix_to_bcachefs.h"
@@ -313,6 +314,14 @@ static void copy_file(struct bch_fs *c, struct bch_inode_unpacked *dst,
 	fiemap_iter_exit(&iter);
 }
 
+static int dirent_cmp(const void *_l, const void *_r)
+{
+	const struct dirent *l = _l;
+	const struct dirent *r = _r;
+
+	return strcmp(l->d_name, r->d_name);
+}
+
 static void copy_dir(struct copy_fs_state *s,
 		     struct bch_fs *c,
 		     struct bch_inode_unpacked *dst,
@@ -321,8 +330,18 @@ static void copy_dir(struct copy_fs_state *s,
 {
 	DIR *dir = fdopendir(src_fd);
 	struct dirent *d;
+	DARRAY(struct dirent) dirents = {};
 
 	while ((errno = 0), (d = readdir(dir))) {
+		darray_push(&dirents, *d);
+	}
+
+	if (errno)
+		die("readdir error: %m");
+
+	sort(dirents.data, dirents.nr, sizeof(dirents.data[0]), dirent_cmp, NULL);
+
+	darray_for_each(dirents, d) {
 		struct bch_inode_unpacked inode;
 		int fd;
 
@@ -401,8 +420,7 @@ next:
 		free(child_path);
 	}
 
-	if (errno)
-		die("readdir error: %m");
+	darray_exit(&dirents);
 	closedir(dir);
 }
 
