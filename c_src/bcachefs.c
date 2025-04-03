@@ -36,6 +36,7 @@ void bcachefs_usage(void)
 	     "  recover-super            Attempt to recover overwritten superblock from backups\n"
 	     "  set-fs-option            Set a filesystem option\n"
 	     "  reset-counters           Reset all counters on an unmounted device\n"
+	     "  strip-alloc              Strip alloc info on a filesystem to be used read-only\n"
 	     "\n"
 	     "Mount:\n"
 	     "  mount                    Mount a filesystem\n"

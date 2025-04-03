@@ -13,6 +13,7 @@ int cmd_format(int argc, char *argv[]);
 int cmd_show_super(int argc, char *argv[]);
 int cmd_recover_super(int argc, char *argv[]);
 int cmd_reset_counters(int argc, char *argv[]);
+int cmd_strip_alloc(int argc, char *argv[]);
 int cmd_set_option(int argc, char *argv[]);
 
 int fs_usage(void);
