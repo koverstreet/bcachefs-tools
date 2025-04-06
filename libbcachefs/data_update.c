@@ -216,7 +216,7 @@ static int __bch2_data_update_index_update(struct btree_trans *trans,
 
 		bch2_trans_begin(trans);
 
-		k = bch2_btree_iter_peek_slot(&iter);
+		k = bch2_btree_iter_peek_slot(trans, &iter);
 		ret = bkey_err(k);
 		if (ret)
 			goto err;
@@ -398,7 +398,7 @@ restart_drop_extra_replicas:
 				BCH_TRANS_COMMIT_no_enospc|
 				m->data_opts.btree_insert_flags);
 		if (!ret) {
-			bch2_btree_iter_set_pos(&iter, next_pos);
+			bch2_btree_iter_set_pos(trans, &iter, next_pos);
 
 			this_cpu_add(c->counters[BCH_COUNTER_io_move_finish], new->k.size);
 			if (trace_io_move_finish_enabled())
@@ -426,7 +426,7 @@ nowork:
 
 		count_event(c, io_move_fail);
 
-		bch2_btree_iter_advance(&iter);
+		bch2_btree_iter_advance(trans, &iter);
 		goto next;
 	}
 out:
@@ -497,7 +497,7 @@ static int bch2_update_unwritten_extent(struct btree_trans *trans,
 		bch2_trans_iter_init(trans, &iter, update->btree_id, update->op.pos,
 				     BTREE_ITER_slots);
 		ret = lockrestart_do(trans, ({
-			k = bch2_btree_iter_peek_slot(&iter);
+			k = bch2_btree_iter_peek_slot(trans, &iter);
 			bkey_err(k);
 		}));
 		bch2_trans_iter_exit(trans, &iter);
@@ -607,7 +607,7 @@ void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update 
 	prt_newline(out);
 	printbuf_indent_add(out, 2);
 	bch2_data_update_opts_to_text(out, m->op.c, &m->op.opts, &m->data_opts);
-	prt_printf(out, "read_done:\t\%u\n", m->read_done);
+	prt_printf(out, "read_done:\t%u\n", m->read_done);
 	bch2_write_op_to_text(out, &m->op);
 	printbuf_indent_sub(out, 2);
 }

@@ -14,6 +14,8 @@
 #include "snapshot.h"
 #include "trace.h"
 
+#include <linux/string_helpers.h>
+
 static inline int btree_insert_entry_cmp(const struct btree_insert_entry *l,
 					 const struct btree_insert_entry *r)
 {
@@ -126,7 +128,7 @@ int __bch2_insert_snapshot_whiteouts(struct btree_trans *trans,
 				   struct bpos new_pos)
 {
 	struct bch_fs *c = trans->c;
-	struct btree_iter old_iter, new_iter = { NULL };
+	struct btree_iter old_iter, new_iter = {};
 	struct bkey_s_c old_k, new_k;
 	snapshot_id_list s;
 	struct bkey_i *update;
@@ -140,7 +142,7 @@ int __bch2_insert_snapshot_whiteouts(struct btree_trans *trans,
 	bch2_trans_iter_init(trans, &old_iter, id, old_pos,
 			     BTREE_ITER_not_extents|
 			     BTREE_ITER_all_snapshots);
-	while ((old_k = bch2_btree_iter_prev(&old_iter)).k &&
+	while ((old_k = bch2_btree_iter_prev(trans, &old_iter)).k &&
 	       !(ret = bkey_err(old_k)) &&
 	       bkey_eq(old_pos, old_k.k->p)) {
 		struct bpos whiteout_pos =
@@ -296,7 +298,7 @@ static int bch2_trans_update_extent(struct btree_trans *trans,
 			     BTREE_ITER_intent|
 			     BTREE_ITER_with_updates|
 			     BTREE_ITER_not_extents);
-	k = bch2_btree_iter_peek_max(&iter, POS(insert->k.p.inode, U64_MAX));
+	k = bch2_btree_iter_peek_max(trans, &iter, POS(insert->k.p.inode, U64_MAX));
 	if ((ret = bkey_err(k)))
 		goto err;
 	if (!k.k)
@@ -322,8 +324,8 @@ static int bch2_trans_update_extent(struct btree_trans *trans,
 		if (done)
 			goto out;
 next:
-		bch2_btree_iter_advance(&iter);
-		k = bch2_btree_iter_peek_max(&iter, POS(insert->k.p.inode, U64_MAX));
+		bch2_btree_iter_advance(trans, &iter);
+		k = bch2_btree_iter_peek_max(trans, &iter, POS(insert->k.p.inode, U64_MAX));
 		if ((ret = bkey_err(k)))
 			goto err;
 		if (!k.k)
@@ -592,13 +594,13 @@ int bch2_bkey_get_empty_slot(struct btree_trans *trans, struct btree_iter *iter,
 			     enum btree_id btree, struct bpos end)
 {
 	bch2_trans_iter_init(trans, iter, btree, end, BTREE_ITER_intent);
-	struct bkey_s_c k = bch2_btree_iter_peek_prev(iter);
+	struct bkey_s_c k = bch2_btree_iter_peek_prev(trans, iter);
 	int ret = bkey_err(k);
 	if (ret)
 		goto err;
 
-	bch2_btree_iter_advance(iter);
-	k = bch2_btree_iter_peek_slot(iter);
+	bch2_btree_iter_advance(trans, iter);
+	k = bch2_btree_iter_peek_slot(trans, iter);
 	ret = bkey_err(k);
 	if (ret)
 		goto err;
@@ -634,7 +636,7 @@ int bch2_btree_insert_nonextent(struct btree_trans *trans,
 			     BTREE_ITER_cached|
 			     BTREE_ITER_not_extents|
 			     BTREE_ITER_intent);
-	ret   = bch2_btree_iter_traverse(&iter) ?:
+	ret   = bch2_btree_iter_traverse(trans, &iter) ?:
 		bch2_trans_update(trans, &iter, k, flags);
 	bch2_trans_iter_exit(trans, &iter);
 	return ret;
@@ -646,7 +648,7 @@ int bch2_btree_insert_trans(struct btree_trans *trans, enum btree_id id,
 	struct btree_iter iter;
 	bch2_trans_iter_init(trans, &iter, id, bkey_start_pos(&k->k),
 			     BTREE_ITER_intent|flags);
-	int ret = bch2_btree_iter_traverse(&iter) ?:
+	int ret = bch2_btree_iter_traverse(trans, &iter) ?:
 		  bch2_trans_update(trans, &iter, k, flags);
 	bch2_trans_iter_exit(trans, &iter);
 	return ret;
@@ -695,7 +697,7 @@ int bch2_btree_delete(struct btree_trans *trans,
 	bch2_trans_iter_init(trans, &iter, btree, pos,
 			     BTREE_ITER_cached|
 			     BTREE_ITER_intent);
-	ret   = bch2_btree_iter_traverse(&iter) ?:
+	ret   = bch2_btree_iter_traverse(trans, &iter) ?:
 		bch2_btree_delete_at(trans, &iter, update_flags);
 	bch2_trans_iter_exit(trans, &iter);
 
@@ -713,7 +715,7 @@ int bch2_btree_delete_range_trans(struct btree_trans *trans, enum btree_id id,
 	int ret = 0;
 
 	bch2_trans_iter_init(trans, &iter, id, start, BTREE_ITER_intent);
-	while ((k = bch2_btree_iter_peek_max(&iter, end)).k) {
+	while ((k = bch2_btree_iter_peek_max(trans, &iter, end)).k) {
 		struct disk_reservation disk_res =
 			bch2_disk_reservation_init(trans->c, 0);
 		struct bkey_i delete;
@@ -808,7 +810,7 @@ int bch2_btree_bit_mod(struct btree_trans *trans, enum btree_id btree,
 	struct btree_iter iter;
 	bch2_trans_iter_init(trans, &iter, btree, pos, BTREE_ITER_intent);
 
-	int ret = bch2_btree_iter_traverse(&iter) ?:
+	int ret = bch2_btree_iter_traverse(trans, &iter) ?:
 		  bch2_btree_bit_mod_iter(trans, &iter, set);
 	bch2_trans_iter_exit(trans, &iter);
 	return ret;
@@ -829,7 +831,6 @@ int bch2_btree_bit_mod_buffered(struct btree_trans *trans, enum btree_id btree,
 int bch2_trans_log_msg(struct btree_trans *trans, struct printbuf *buf)
 {
 	unsigned u64s = DIV_ROUND_UP(buf->pos, sizeof(u64));
-	prt_chars(buf, '\0', u64s * sizeof(u64) - buf->pos);
 
 	int ret = buf->allocation_failure ? -BCH_ERR_ENOMEM_trans_log_msg : 0;
 	if (ret)
@@ -842,7 +843,7 @@ int bch2_trans_log_msg(struct btree_trans *trans, struct printbuf *buf)
 
 	struct jset_entry_log *l = container_of(e, struct jset_entry_log, entry);
 	journal_entry_init(e, BCH_JSET_ENTRY_log, 0, 1, u64s);
-	memcpy(l->d, buf->buf, buf->pos);
+	memcpy_and_pad(l->d, u64s * sizeof(u64), buf->buf, buf->pos, 0);
 	return 0;
 }
 
@@ -868,7 +869,6 @@ __bch2_fs_log_msg(struct bch_fs *c, unsigned commit_flags, const char *fmt,
 	prt_vprintf(&buf, fmt, args);
 
 	unsigned u64s = DIV_ROUND_UP(buf.pos, sizeof(u64));
-	prt_chars(&buf, '\0', u64s * sizeof(u64) - buf.pos);
 
 	int ret = buf.allocation_failure ? -BCH_ERR_ENOMEM_trans_log_msg : 0;
 	if (ret)
@@ -881,7 +881,7 @@ __bch2_fs_log_msg(struct bch_fs *c, unsigned commit_flags, const char *fmt,
 
 		struct jset_entry_log *l = (void *) &darray_top(c->journal.early_journal_entries);
 		journal_entry_init(&l->entry, BCH_JSET_ENTRY_log, 0, 1, u64s);
-		memcpy(l->d, buf.buf, buf.pos);
+		memcpy_and_pad(l->d, u64s * sizeof(u64), buf.buf, buf.pos, 0);
 		c->journal.early_journal_entries.nr += jset_u64s(u64s);
 	} else {
 		ret = bch2_trans_commit_do(c, NULL, NULL, commit_flags,

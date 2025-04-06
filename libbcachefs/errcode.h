@@ -192,6 +192,8 @@
 	x(BCH_ERR_data_update_done,	data_update_done_no_rw_devs)		\
 	x(EINVAL,			device_state_not_allowed)		\
 	x(EINVAL,			member_info_missing)			\
+	x(EINVAL,			single_device_filesystem)		\
+	x(EINVAL,			not_single_device_filesystem)		\
 	x(EINVAL,			mismatched_block_size)			\
 	x(EINVAL,			block_size_too_small)			\
 	x(EINVAL,			bucket_size_too_small)			\
@@ -211,6 +213,7 @@
 	x(EINVAL,			inode_unpack_error)			\
 	x(EINVAL,			varint_decode_error)			\
 	x(EINVAL,			erasure_coding_found_btree_node)	\
+	x(EINVAL,			option_negative)			\
 	x(EOPNOTSUPP,			may_not_use_incompat_feature)		\
 	x(EROFS,			erofs_trans_commit)			\
 	x(EROFS,			erofs_no_writes)			\

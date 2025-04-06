@@ -367,7 +367,6 @@ static inline unsigned long btree_path_ip_allocated(struct btree_path *path)
  * @nodes_intent_locked	- bitmask indicating which locks are intent locks
  */
 struct btree_iter {
-	struct btree_trans	*trans;
 	btree_path_idx_t	path;
 	btree_path_idx_t	update_path;
 	btree_path_idx_t	key_cache_path;
@@ -478,6 +477,12 @@ struct btree_trans_paths {
 	struct btree_path	paths[];
 };
 
+struct trans_kmalloc_trace {
+	unsigned long		ip;
+	size_t			bytes;
+};
+typedef DARRAY(struct trans_kmalloc_trace) darray_trans_kmalloc_trace;
+
 struct btree_trans {
 	struct bch_fs		*c;
 
@@ -489,6 +494,9 @@ struct btree_trans {
 	void			*mem;
 	unsigned		mem_top;
 	unsigned		mem_bytes;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	darray_trans_kmalloc_trace trans_kmalloc_trace;
+#endif
 
 	btree_path_idx_t	nr_sorted;
 	btree_path_idx_t	nr_paths;

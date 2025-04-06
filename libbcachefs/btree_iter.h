@@ -393,36 +393,37 @@ void bch2_trans_node_add(struct btree_trans *trans, struct btree_path *, struct 
 void bch2_trans_node_drop(struct btree_trans *trans, struct btree *);
 void bch2_trans_node_reinit_iter(struct btree_trans *, struct btree *);
 
-int __must_check __bch2_btree_iter_traverse(struct btree_iter *iter);
-int __must_check bch2_btree_iter_traverse(struct btree_iter *);
+int __must_check __bch2_btree_iter_traverse(struct btree_trans *, struct btree_iter *);
+int __must_check bch2_btree_iter_traverse(struct btree_trans *, struct btree_iter *);
 
-struct btree *bch2_btree_iter_peek_node(struct btree_iter *);
-struct btree *bch2_btree_iter_peek_node_and_restart(struct btree_iter *);
-struct btree *bch2_btree_iter_next_node(struct btree_iter *);
+struct btree *bch2_btree_iter_peek_node(struct btree_trans *, struct btree_iter *);
+struct btree *bch2_btree_iter_peek_node_and_restart(struct btree_trans *, struct btree_iter *);
+struct btree *bch2_btree_iter_next_node(struct btree_trans *, struct btree_iter *);
 
-struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *, struct bpos);
-struct bkey_s_c bch2_btree_iter_next(struct btree_iter *);
+struct bkey_s_c bch2_btree_iter_peek_max(struct btree_trans *, struct btree_iter *, struct bpos);
+struct bkey_s_c bch2_btree_iter_next(struct btree_trans *, struct btree_iter *);
 
-static inline struct bkey_s_c bch2_btree_iter_peek(struct btree_iter *iter)
+static inline struct bkey_s_c bch2_btree_iter_peek(struct btree_trans *trans,
+						   struct btree_iter *iter)
 {
-	return bch2_btree_iter_peek_max(iter, SPOS_MAX);
+	return bch2_btree_iter_peek_max(trans, iter, SPOS_MAX);
 }
 
-struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *, struct bpos);
+struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_trans *, struct btree_iter *, struct bpos);
 
-static inline struct bkey_s_c bch2_btree_iter_peek_prev(struct btree_iter *iter)
+static inline struct bkey_s_c bch2_btree_iter_peek_prev(struct btree_trans *trans, struct btree_iter *iter)
 {
-	return bch2_btree_iter_peek_prev_min(iter, POS_MIN);
+	return bch2_btree_iter_peek_prev_min(trans, iter, POS_MIN);
 }
 
-struct bkey_s_c bch2_btree_iter_prev(struct btree_iter *);
+struct bkey_s_c bch2_btree_iter_prev(struct btree_trans *, struct btree_iter *);
 
-struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *);
-struct bkey_s_c bch2_btree_iter_next_slot(struct btree_iter *);
-struct bkey_s_c bch2_btree_iter_prev_slot(struct btree_iter *);
+struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_trans *, struct btree_iter *);
+struct bkey_s_c bch2_btree_iter_next_slot(struct btree_trans *, struct btree_iter *);
+struct bkey_s_c bch2_btree_iter_prev_slot(struct btree_trans *, struct btree_iter *);
 
-bool bch2_btree_iter_advance(struct btree_iter *);
-bool bch2_btree_iter_rewind(struct btree_iter *);
+bool bch2_btree_iter_advance(struct btree_trans *, struct btree_iter *);
+bool bch2_btree_iter_rewind(struct btree_trans *, struct btree_iter *);
 
 static inline void __bch2_btree_iter_set_pos(struct btree_iter *iter, struct bpos new_pos)
 {
@@ -433,10 +434,9 @@ static inline void __bch2_btree_iter_set_pos(struct btree_iter *iter, struct bpo
 	iter->k.size = 0;
 }
 
-static inline void bch2_btree_iter_set_pos(struct btree_iter *iter, struct bpos new_pos)
+static inline void bch2_btree_iter_set_pos(struct btree_trans *trans,
+					   struct btree_iter *iter, struct bpos new_pos)
 {
-	struct btree_trans *trans = iter->trans;
-
 	if (unlikely(iter->update_path))
 		bch2_path_put(trans, iter->update_path,
 			      iter->flags & BTREE_ITER_intent);
@@ -454,13 +454,14 @@ static inline void bch2_btree_iter_set_pos_to_extent_start(struct btree_iter *it
 	iter->pos = bkey_start_pos(&iter->k);
 }
 
-static inline void bch2_btree_iter_set_snapshot(struct btree_iter *iter, u32 snapshot)
+static inline void bch2_btree_iter_set_snapshot(struct btree_trans *trans,
+						struct btree_iter *iter, u32 snapshot)
 {
 	struct bpos pos = iter->pos;
 
 	iter->snapshot = snapshot;
 	pos.snapshot = snapshot;
-	bch2_btree_iter_set_pos(iter, pos);
+	bch2_btree_iter_set_pos(trans, iter, pos);
 }
 
 void bch2_trans_iter_exit(struct btree_trans *, struct btree_iter *);
@@ -502,7 +503,6 @@ static inline void bch2_trans_iter_init_common(struct btree_trans *trans,
 					  unsigned flags,
 					  unsigned long ip)
 {
-	iter->trans		= trans;
 	iter->update_path	= 0;
 	iter->key_cache_path	= 0;
 	iter->btree_id		= btree_id;
@@ -539,21 +539,49 @@ static inline void bch2_trans_iter_init(struct btree_trans *trans,
 void bch2_trans_node_iter_init(struct btree_trans *, struct btree_iter *,
 			       enum btree_id, struct bpos,
 			       unsigned, unsigned, unsigned);
-void bch2_trans_copy_iter(struct btree_iter *, struct btree_iter *);
+void bch2_trans_copy_iter(struct btree_trans *, struct btree_iter *, struct btree_iter *);
 
-void bch2_set_btree_iter_dontneed(struct btree_iter *);
+void bch2_set_btree_iter_dontneed(struct btree_trans *, struct btree_iter *);
 
-void *__bch2_trans_kmalloc(struct btree_trans *, size_t);
+#ifdef CONFIG_BCACHEFS_DEBUG
+void bch2_trans_kmalloc_trace_to_text(struct printbuf *,
+				      darray_trans_kmalloc_trace *);
+#endif
 
-/**
- * bch2_trans_kmalloc - allocate memory for use by the current transaction
- *
- * Must be called after bch2_trans_begin, which on second and further calls
- * frees all memory allocated in this transaction
- */
-static inline void *bch2_trans_kmalloc(struct btree_trans *trans, size_t size)
+void *__bch2_trans_kmalloc(struct btree_trans *, size_t, unsigned long);
+
+static inline void bch2_trans_kmalloc_trace(struct btree_trans *trans, size_t size,
+					    unsigned long ip)
+{
+#ifdef CONFIG_BCACHEFS_DEBUG
+	darray_push(&trans->trans_kmalloc_trace,
+		    ((struct trans_kmalloc_trace) { .ip = ip, .bytes = size }));
+#endif
+}
+
+static __always_inline void *bch2_trans_kmalloc_nomemzero_ip(struct btree_trans *trans, size_t size,
+						    unsigned long ip)
 {
 	size = roundup(size, 8);
+
+	bch2_trans_kmalloc_trace(trans, size, ip);
+
+	if (likely(trans->mem_top + size <= trans->mem_bytes)) {
+		void *p = trans->mem + trans->mem_top;
+
+		trans->mem_top += size;
+		return p;
+	} else {
+		return __bch2_trans_kmalloc(trans, size, ip);
+	}
+}
+
+static __always_inline void *bch2_trans_kmalloc_ip(struct btree_trans *trans, size_t size,
+					  unsigned long ip)
+{
+	size = roundup(size, 8);
+
+	bch2_trans_kmalloc_trace(trans, size, ip);
 
 	if (likely(trans->mem_top + size <= trans->mem_bytes)) {
 		void *p = trans->mem + trans->mem_top;
@@ -562,22 +590,24 @@ static inline void *bch2_trans_kmalloc(struct btree_trans *trans, size_t size)
 		memset(p, 0, size);
 		return p;
 	} else {
-		return __bch2_trans_kmalloc(trans, size);
+		return __bch2_trans_kmalloc(trans, size, ip);
 	}
 }
 
-static inline void *bch2_trans_kmalloc_nomemzero(struct btree_trans *trans, size_t size)
+/**
+ * bch2_trans_kmalloc - allocate memory for use by the current transaction
+ *
+ * Must be called after bch2_trans_begin, which on second and further calls
+ * frees all memory allocated in this transaction
+ */
+static __always_inline void *bch2_trans_kmalloc(struct btree_trans *trans, size_t size)
 {
-	size = round_up(size, 8);
+	return bch2_trans_kmalloc_ip(trans, size, _THIS_IP_);
+}
 
-	if (likely(trans->mem_top + size <= trans->mem_bytes)) {
-		void *p = trans->mem + trans->mem_top;
-
-		trans->mem_top += size;
-		return p;
-	} else {
-		return __bch2_trans_kmalloc(trans, size);
-	}
+static __always_inline void *bch2_trans_kmalloc_nomemzero(struct btree_trans *trans, size_t size)
+{
+	return bch2_trans_kmalloc_nomemzero_ip(trans, size, _THIS_IP_);
 }
 
 static inline struct bkey_s_c __bch2_bkey_get_iter(struct btree_trans *trans,
@@ -588,7 +618,7 @@ static inline struct bkey_s_c __bch2_bkey_get_iter(struct btree_trans *trans,
 	struct bkey_s_c k;
 
 	bch2_trans_iter_init(trans, iter, btree_id, pos, flags);
-	k = bch2_btree_iter_peek_slot(iter);
+	k = bch2_btree_iter_peek_slot(trans, iter);
 
 	if (!bkey_err(k) && type && k.k->type != type)
 		k = bkey_s_c_err(-BCH_ERR_ENOENT_bkey_type_mismatch);
@@ -658,14 +688,14 @@ u32 bch2_trans_begin(struct btree_trans *);
 	int _ret3 = 0;								\
 	do {									\
 		_ret3 = lockrestart_do((_trans), ({				\
-			struct btree *_b = bch2_btree_iter_peek_node(&_iter);	\
+			struct btree *_b = bch2_btree_iter_peek_node(_trans, &_iter);\
 			if (!_b)						\
 				break;						\
 										\
 			PTR_ERR_OR_ZERO(_b) ?: (_do);				\
 		})) ?:								\
 		lockrestart_do((_trans),					\
-			PTR_ERR_OR_ZERO(bch2_btree_iter_next_node(&_iter)));	\
+			PTR_ERR_OR_ZERO(bch2_btree_iter_next_node(_trans, &_iter)));\
 	} while (!_ret3);							\
 										\
 	bch2_trans_iter_exit((_trans), &(_iter));				\
@@ -677,31 +707,34 @@ u32 bch2_trans_begin(struct btree_trans *);
 	__for_each_btree_node(_trans, _iter, _btree_id, _start,	\
 			      0, 0, _flags, _b, _do)
 
-static inline struct bkey_s_c bch2_btree_iter_peek_prev_type(struct btree_iter *iter,
+static inline struct bkey_s_c bch2_btree_iter_peek_prev_type(struct btree_trans *trans,
+							     struct btree_iter *iter,
 							     unsigned flags)
 {
-	return  flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
-						bch2_btree_iter_peek_prev(iter);
+	return  flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(trans, iter) :
+						bch2_btree_iter_peek_prev(trans, iter);
 }
 
-static inline struct bkey_s_c bch2_btree_iter_peek_type(struct btree_iter *iter,
+static inline struct bkey_s_c bch2_btree_iter_peek_type(struct btree_trans *trans,
+							struct btree_iter *iter,
 							unsigned flags)
 {
-	return  flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
-						bch2_btree_iter_peek(iter);
+	return  flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(trans, iter) :
+						bch2_btree_iter_peek(trans, iter);
 }
 
-static inline struct bkey_s_c bch2_btree_iter_peek_max_type(struct btree_iter *iter,
-							     struct bpos end,
-							     unsigned flags)
+static inline struct bkey_s_c bch2_btree_iter_peek_max_type(struct btree_trans *trans,
+							    struct btree_iter *iter,
+							    struct bpos end,
+							    unsigned flags)
 {
 	if (!(flags & BTREE_ITER_slots))
-		return bch2_btree_iter_peek_max(iter, end);
+		return bch2_btree_iter_peek_max(trans, iter, end);
 
 	if (bkey_gt(iter->pos, end))
 		return bkey_s_c_null;
 
-	return bch2_btree_iter_peek_slot(iter);
+	return bch2_btree_iter_peek_slot(trans, iter);
 }
 
 int __bch2_btree_trans_too_many_iters(struct btree_trans *);
@@ -768,14 +801,14 @@ transaction_restart:							\
 									\
 	do {								\
 		_ret3 = lockrestart_do(_trans, ({			\
-			(_k) = bch2_btree_iter_peek_max_type(&(_iter),	\
+			(_k) = bch2_btree_iter_peek_max_type(_trans, &(_iter),	\
 						_end, (_flags));	\
 			if (!(_k).k)					\
 				break;					\
 									\
 			bkey_err(_k) ?: (_do);				\
 		}));							\
-	} while (!_ret3 && bch2_btree_iter_advance(&(_iter)));		\
+	} while (!_ret3 && bch2_btree_iter_advance(_trans, &(_iter)));	\
 									\
 	bch2_trans_iter_exit((_trans), &(_iter));			\
 	_ret3;								\
@@ -813,14 +846,14 @@ transaction_restart:							\
 									\
 	do {								\
 		_ret3 = lockrestart_do(_trans, ({			\
-			(_k) = bch2_btree_iter_peek_prev_type(&(_iter),	\
+			(_k) = bch2_btree_iter_peek_prev_type(_trans, &(_iter),	\
 							(_flags));	\
 			if (!(_k).k)					\
 				break;					\
 									\
 			bkey_err(_k) ?: (_do);				\
 		}));							\
-	} while (!_ret3 && bch2_btree_iter_rewind(&(_iter)));		\
+	} while (!_ret3 && bch2_btree_iter_rewind(_trans, &(_iter)));	\
 									\
 	bch2_trans_iter_exit((_trans), &(_iter));			\
 	_ret3;								\
@@ -850,37 +883,38 @@ transaction_restart:							\
 			    (_do) ?: bch2_trans_commit(_trans, (_disk_res),\
 					(_journal_seq), (_commit_flags)))
 
-struct bkey_s_c bch2_btree_iter_peek_and_restart_outlined(struct btree_iter *);
+struct bkey_s_c bch2_btree_iter_peek_and_restart_outlined(struct btree_trans *,
+							  struct btree_iter *);
 
 #define for_each_btree_key_max_norestart(_trans, _iter, _btree_id,	\
 			   _start, _end, _flags, _k, _ret)		\
 	for (bch2_trans_iter_init((_trans), &(_iter), (_btree_id),	\
 				  (_start), (_flags));			\
-	     (_k) = bch2_btree_iter_peek_max_type(&(_iter), _end, _flags),\
+	     (_k) = bch2_btree_iter_peek_max_type(_trans, &(_iter), _end, _flags),\
 	     !((_ret) = bkey_err(_k)) && (_k).k;			\
-	     bch2_btree_iter_advance(&(_iter)))
+	     bch2_btree_iter_advance(_trans, &(_iter)))
 
-#define for_each_btree_key_max_continue_norestart(_iter, _end, _flags, _k, _ret)\
+#define for_each_btree_key_max_continue_norestart(_trans, _iter, _end, _flags, _k, _ret)\
 	for (;									\
-	     (_k) = bch2_btree_iter_peek_max_type(&(_iter), _end, _flags),	\
+	     (_k) = bch2_btree_iter_peek_max_type(_trans, &(_iter), _end, _flags),	\
 	     !((_ret) = bkey_err(_k)) && (_k).k;				\
-	     bch2_btree_iter_advance(&(_iter)))
+	     bch2_btree_iter_advance(_trans, &(_iter)))
 
 #define for_each_btree_key_norestart(_trans, _iter, _btree_id,		\
 			   _start, _flags, _k, _ret)			\
 	for_each_btree_key_max_norestart(_trans, _iter, _btree_id, _start,\
 					  SPOS_MAX, _flags, _k, _ret)
 
-#define for_each_btree_key_reverse_norestart(_trans, _iter, _btree_id,	\
-					     _start, _flags, _k, _ret)	\
-	for (bch2_trans_iter_init((_trans), &(_iter), (_btree_id),	\
-				  (_start), (_flags));			\
-	     (_k) = bch2_btree_iter_peek_prev_type(&(_iter), _flags),	\
-	     !((_ret) = bkey_err(_k)) && (_k).k;			\
-	     bch2_btree_iter_rewind(&(_iter)))
+#define for_each_btree_key_reverse_norestart(_trans, _iter, _btree_id,		\
+					     _start, _flags, _k, _ret)		\
+	for (bch2_trans_iter_init((_trans), &(_iter), (_btree_id),		\
+				  (_start), (_flags));				\
+	     (_k) = bch2_btree_iter_peek_prev_type(_trans, &(_iter), _flags),	\
+	     !((_ret) = bkey_err(_k)) && (_k).k;				\
+	     bch2_btree_iter_rewind(_trans, &(_iter)))
 
-#define for_each_btree_key_continue_norestart(_iter, _flags, _k, _ret)	\
-	for_each_btree_key_max_continue_norestart(_iter, SPOS_MAX, _flags, _k, _ret)
+#define for_each_btree_key_continue_norestart(_trans, _iter, _flags, _k, _ret)	\
+	for_each_btree_key_max_continue_norestart(_trans, _iter, SPOS_MAX, _flags, _k, _ret)
 
 /*
  * This should not be used in a fastpath, without first trying _do in

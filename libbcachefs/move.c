@@ -126,26 +126,40 @@ static void move_write_done(struct bch_write_op *op)
 
 static void move_write(struct moving_io *io)
 {
+	struct bch_fs *c = io->write.op.c;
 	struct moving_context *ctxt = io->write.ctxt;
+	struct bch_read_bio *rbio = &io->write.rbio;
 
 	if (ctxt->stats) {
-		if (io->write.rbio.bio.bi_status)
+		if (rbio->bio.bi_status)
 			atomic64_add(io->write.rbio.bvec_iter.bi_size >> 9,
 				     &ctxt->stats->sectors_error_uncorrected);
-		else if (io->write.rbio.saw_error)
+		else if (rbio->saw_error)
 			atomic64_add(io->write.rbio.bvec_iter.bi_size >> 9,
 				     &ctxt->stats->sectors_error_corrected);
 	}
 
-	if (unlikely(io->write.rbio.ret ||
-		     io->write.rbio.bio.bi_status ||
-		     io->write.data_opts.scrub)) {
+	/*
+	 * If the extent has been bitrotted, we're going to have to give it a
+	 * new checksum in order to move it - but the poison bit will ensure
+	 * that userspace still gets the appropriate error.
+	 */
+	if (unlikely(rbio->ret == -BCH_ERR_data_read_csum_err &&
+		     (bch2_bkey_extent_flags(bkey_i_to_s_c(io->write.k.k)) & BIT_ULL(BCH_EXTENT_FLAG_poisoned)))) {
+		struct bch_extent_crc_unpacked crc = rbio->pick.crc;
+		struct nonce nonce = extent_nonce(rbio->version, crc);
+
+		rbio->pick.crc.csum	= bch2_checksum_bio(c, rbio->pick.crc.csum_type,
+							    nonce, &rbio->bio);
+		rbio->ret		= 0;
+	}
+
+	if (unlikely(rbio->ret || io->write.data_opts.scrub)) {
 		move_free(io);
 		return;
 	}
 
 	if (trace_io_move_write_enabled()) {
-		struct bch_fs *c = io->write.op.c;
 		struct printbuf buf = PRINTBUF;
 
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(io->write.k.k));
@@ -545,7 +559,7 @@ static struct bkey_s_c bch2_lookup_indirect_extent_for_move(struct btree_trans *
 			     BTREE_ID_reflink, reflink_pos,
 			     BTREE_ITER_not_extents);
 
-	struct bkey_s_c k = bch2_btree_iter_peek(iter);
+	struct bkey_s_c k = bch2_btree_iter_peek(trans, iter);
 	if (!k.k || bkey_err(k)) {
 		bch2_trans_iter_exit(trans, iter);
 		return k;
@@ -603,7 +617,7 @@ static int bch2_move_data_btree(struct moving_context *ctxt,
 
 		bch2_trans_begin(trans);
 
-		k = bch2_btree_iter_peek(&iter);
+		k = bch2_btree_iter_peek(trans, &iter);
 		if (!k.k)
 			break;
 
@@ -681,7 +695,7 @@ next:
 		if (ctxt->stats)
 			atomic64_add(k.k->size, &ctxt->stats->sectors_seen);
 next_nondata:
-		bch2_btree_iter_advance(&iter);
+		bch2_btree_iter_advance(trans, &iter);
 	}
 
 	bch2_trans_iter_exit(trans, &reflink_iter);
@@ -794,7 +808,7 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 
 		bch2_trans_begin(trans);
 
-		k = bch2_btree_iter_peek(&bp_iter);
+		k = bch2_btree_iter_peek(trans, &bp_iter);
 		ret = bkey_err(k);
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			continue;
@@ -876,7 +890,7 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 		if (ctxt->stats)
 			atomic64_add(sectors, &ctxt->stats->sectors_seen);
 next:
-		bch2_btree_iter_advance(&bp_iter);
+		bch2_btree_iter_advance(trans, &bp_iter);
 	}
 err:
 	bch2_trans_iter_exit(trans, &bp_iter);
@@ -991,7 +1005,7 @@ static int bch2_move_btree(struct bch_fs *c,
 retry:
 		ret = 0;
 		while (bch2_trans_begin(trans),
-		       (b = bch2_btree_iter_peek_node(&iter)) &&
+		       (b = bch2_btree_iter_peek_node(trans, &iter)) &&
 		       !(ret = PTR_ERR_OR_ZERO(b))) {
 			if (kthread && kthread_should_stop())
 				break;
@@ -1011,7 +1025,7 @@ retry:
 			if (ret)
 				break;
 next:
-			bch2_btree_iter_next_node(&iter);
+			bch2_btree_iter_next_node(trans, &iter);
 		}
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			goto retry;

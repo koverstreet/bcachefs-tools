@@ -281,6 +281,16 @@ fsck_err:
 	return ret;
 }
 
+static int bch2_snapshot_table_make_room(struct bch_fs *c, u32 id)
+{
+	mutex_lock(&c->snapshot_table_lock);
+	int ret = snapshot_t_mut(c, id)
+		? 0
+		: -BCH_ERR_ENOMEM_mark_snapshot;
+	mutex_unlock(&c->snapshot_table_lock);
+	return ret;
+}
+
 static int __bch2_mark_snapshot(struct btree_trans *trans,
 		       enum btree_id btree, unsigned level,
 		       struct bkey_s_c old, struct bkey_s_c new,
@@ -843,9 +853,6 @@ static int check_snapshot_exists(struct btree_trans *trans, u32 id)
 {
 	struct bch_fs *c = trans->c;
 
-	if (bch2_snapshot_exists(c, id))
-		return 0;
-
 	/* Do we need to reconstruct the snapshot_tree entry as well? */
 	struct btree_iter iter;
 	struct bkey_s_c k;
@@ -890,9 +897,8 @@ static int check_snapshot_exists(struct btree_trans *trans, u32 id)
 	}
 	bch2_trans_iter_exit(trans, &iter);
 
-	return  bch2_btree_insert_trans(trans, BTREE_ID_snapshots, &snapshot->k_i, 0) ?:
-		bch2_mark_snapshot(trans, BTREE_ID_snapshots, 0,
-				   bkey_s_c_null, bkey_i_to_s(&snapshot->k_i), 0);
+	return  bch2_snapshot_table_make_room(c, id) ?:
+		bch2_btree_insert_trans(trans, BTREE_ID_snapshots, &snapshot->k_i, 0);
 }
 
 /* Figure out which snapshot nodes belong in the same tree: */
@@ -1074,9 +1080,9 @@ static inline void normalize_snapshot_child_pointers(struct bch_snapshot *s)
 static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id)
 {
 	struct bch_fs *c = trans->c;
-	struct btree_iter iter, p_iter = (struct btree_iter) { NULL };
-	struct btree_iter c_iter = (struct btree_iter) { NULL };
-	struct btree_iter tree_iter = (struct btree_iter) { NULL };
+	struct btree_iter iter, p_iter = {};
+	struct btree_iter c_iter = {};
+	struct btree_iter tree_iter = {};
 	struct bkey_s_c_snapshot s;
 	u32 parent_id, child_id;
 	unsigned i;
@@ -1193,13 +1199,13 @@ static int create_snapids(struct btree_trans *trans, u32 parent, u32 tree,
 
 	bch2_trans_iter_init(trans, &iter, BTREE_ID_snapshots,
 			     POS_MIN, BTREE_ITER_intent);
-	k = bch2_btree_iter_peek(&iter);
+	k = bch2_btree_iter_peek(trans, &iter);
 	ret = bkey_err(k);
 	if (ret)
 		goto err;
 
 	for (i = 0; i < nr_snapids; i++) {
-		k = bch2_btree_iter_prev_slot(&iter);
+		k = bch2_btree_iter_prev_slot(trans, &iter);
 		ret = bkey_err(k);
 		if (ret)
 			goto err;

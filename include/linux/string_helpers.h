@@ -17,4 +17,15 @@ enum string_size_units {
 int string_get_size(u64 size, u64 blk_size, enum string_size_units units,
 		    char *buf, int len);
 
+static inline void memcpy_and_pad(void *dest, size_t dest_len, const void *src,
+				  size_t count, int pad)
+{
+	if (dest_len > count) {
+		memcpy(dest, src, count);
+		memset(dest + count, pad,  dest_len - count);
+	} else {
+		memcpy(dest, src, dest_len);
+	}
+}
+
 #endif

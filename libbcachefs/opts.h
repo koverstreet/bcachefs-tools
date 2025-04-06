@@ -11,6 +11,7 @@
 struct bch_fs;
 
 extern const char * const bch2_error_actions[];
+extern const char * const bch2_degraded_actions[];
 extern const char * const bch2_fsck_fix_opts[];
 extern const char * const bch2_version_upgrade_opts[];
 extern const char * const bch2_sb_features[];
@@ -302,14 +303,9 @@ enum fsck_err_opts {
 	  NULL,		"Enable project quotas")			\
 	x(degraded,			u8,				\
 	  OPT_FS|OPT_MOUNT,						\
-	  OPT_BOOL(),							\
-	  BCH2_NO_SB_OPT,		false,				\
+	  OPT_STR(bch2_degraded_actions),				\
+	  BCH_SB_DEGRADED_ACTION,	BCH_DEGRADED_ask,		\
 	  NULL,		"Allow mounting in degraded mode")		\
-	x(very_degraded,		u8,				\
-	  OPT_FS|OPT_MOUNT,						\
-	  OPT_BOOL(),							\
-	  BCH2_NO_SB_OPT,		false,				\
-	  NULL,		"Allow mounting in when data will be missing")	\
 	x(no_splitbrain_check,		u8,				\
 	  OPT_FS|OPT_MOUNT,						\
 	  OPT_BOOL(),							\
@@ -517,7 +513,7 @@ enum fsck_err_opts {
 	  BCH_MEMBER_DATA_ALLOWED,	BIT(BCH_DATA_journal)|BIT(BCH_DATA_btree)|BIT(BCH_DATA_user),\
 	  "types",	"Allowed data types for this device: journal, btree, and/or user")\
 	x(discard,			u8,				\
-	  OPT_MOUNT|OPT_DEVICE|OPT_RUNTIME,				\
+	  OPT_MOUNT|OPT_FS|OPT_DEVICE|OPT_RUNTIME,			\
 	  OPT_BOOL(),							\
 	  BCH_MEMBER_DISCARD,		true,				\
 	  NULL,		"Enable discard/TRIM support")			\
@@ -525,8 +521,13 @@ enum fsck_err_opts {
 	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		true,				\
-	  NULL,		"BTREE_ITER_prefetch casuse btree nodes to be\n"\
-	  " prefetched sequentially")
+	  NULL,		"BTREE_ITER_prefetch causes btree nodes to be\n"\
+	  " prefetched sequentially")					\
+	x(single_device,		u8,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
+	  OPT_BOOL(),							\
+	  BCH_SB_SINGLE_DEVICE,		false,				\
+	  NULL,		"Devices with the same UUID may be mounted simultaneously")
 
 struct bch_opts {
 #define x(_name, _bits, ...)	unsigned _name##_defined:1;

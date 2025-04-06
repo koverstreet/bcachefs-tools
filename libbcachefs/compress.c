@@ -371,13 +371,14 @@ static int attempt_compress(struct bch_fs *c,
 		};
 
 		zlib_set_workspace(&strm, workspace);
-		zlib_deflateInit2(&strm,
+		if (zlib_deflateInit2(&strm,
 				  compression.level
 				  ? clamp_t(unsigned, compression.level,
 					    Z_BEST_SPEED, Z_BEST_COMPRESSION)
 				  : Z_DEFAULT_COMPRESSION,
 				  Z_DEFLATED, -MAX_WBITS, DEF_MEM_LEVEL,
-				  Z_DEFAULT_STRATEGY);
+				  Z_DEFAULT_STRATEGY) != Z_OK)
+			return 0;
 
 		if (zlib_deflate(&strm, Z_FINISH) != Z_STREAM_END)
 			return 0;
@@ -713,7 +714,7 @@ int bch2_opt_compression_parse(struct bch_fs *c, const char *_val, u64 *res,
 
 	ret = match_string(bch2_compression_opts, -1, type_str);
 	if (ret < 0 && err)
-		prt_str(err, "invalid compression type");
+		prt_str(err, "invalid compression type\n");
 	if (ret < 0)
 		goto err;
 
@@ -728,7 +729,7 @@ int bch2_opt_compression_parse(struct bch_fs *c, const char *_val, u64 *res,
 		if (!ret && level > 15)
 			ret = -EINVAL;
 		if (ret < 0 && err)
-			prt_str(err, "invalid compression level");
+			prt_str(err, "invalid compression level\n");
 		if (ret < 0)
 			goto err;
 

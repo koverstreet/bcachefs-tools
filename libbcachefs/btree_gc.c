@@ -691,7 +691,7 @@ retry_root:
 		struct btree_iter iter;
 		bch2_trans_node_iter_init(trans, &iter, btree, POS_MIN,
 					  0, bch2_btree_id_root(c, btree)->b->c.level, 0);
-		struct btree *b = bch2_btree_iter_peek_node(&iter);
+		struct btree *b = bch2_btree_iter_peek_node(trans, &iter);
 		ret = PTR_ERR_OR_ZERO(b);
 		if (ret)
 			goto err_root;
@@ -1199,7 +1199,7 @@ int bch2_gc_gens(struct bch_fs *c)
 				BCH_TRANS_COMMIT_no_enospc, ({
 			ca = bch2_dev_iterate(c, ca, k.k->p.inode);
 			if (!ca) {
-				bch2_btree_iter_set_pos(&iter, POS(k.k->p.inode + 1, 0));
+				bch2_btree_iter_set_pos(trans, &iter, POS(k.k->p.inode + 1, 0));
 				continue;
 			}
 			bch2_alloc_write_oldest_gen(trans, ca, &iter, k);
@@ -1243,16 +1243,11 @@ void bch2_gc_gens_async(struct bch_fs *c)
 		bch2_write_ref_put(c, BCH_WRITE_REF_gc_gens);
 }
 
-void bch2_fs_btree_gc_exit(struct bch_fs *c)
-{
-}
-
-int bch2_fs_btree_gc_init(struct bch_fs *c)
+void bch2_fs_btree_gc_init_early(struct bch_fs *c)
 {
 	seqcount_init(&c->gc_pos_lock);
 	INIT_WORK(&c->gc_gens_work, bch2_gc_gens_work);
 
 	init_rwsem(&c->gc_lock);
 	mutex_init(&c->gc_gens_lock);
-	return 0;
 }

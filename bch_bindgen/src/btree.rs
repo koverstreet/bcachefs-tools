@@ -53,7 +53,7 @@ bitflags! {
 
 pub struct BtreeIter<'t> {
     raw:   c::btree_iter,
-    trans: PhantomData<&'t BtreeTrans<'t>>,
+    trans: &'t BtreeTrans<'t>,
 }
 
 impl<'t> BtreeIter<'t> {
@@ -76,14 +76,14 @@ impl<'t> BtreeIter<'t> {
 
             BtreeIter {
                 raw:   iter.assume_init(),
-                trans: PhantomData,
+                trans: trans,
             }
         }
     }
 
     pub fn peek_max(&mut self, end: c::bpos) -> Result<Option<BkeySC<'_>>, bch_errcode> {
         unsafe {
-            let k = c::bch2_btree_iter_peek_max(&mut self.raw, end);
+            let k = c::bch2_btree_iter_peek_max(self.trans.raw, &mut self.raw, end);
             errptr_to_result_c(k.k).map(|_| {
                 if !k.k.is_null() {
                     Some(BkeySC {
@@ -104,7 +104,7 @@ impl<'t> BtreeIter<'t> {
 
     pub fn peek_and_restart(&mut self) -> Result<Option<BkeySC>, bch_errcode> {
         unsafe {
-            let k = c::bch2_btree_iter_peek_and_restart_outlined(&mut self.raw);
+            let k = c::bch2_btree_iter_peek_and_restart_outlined(self.trans.raw, &mut self.raw);
 
             errptr_to_result_c(k.k).map(|_| {
                 if !k.k.is_null() {
@@ -122,20 +122,20 @@ impl<'t> BtreeIter<'t> {
 
     pub fn advance(&mut self) {
         unsafe {
-            c::bch2_btree_iter_advance(&mut self.raw);
+            c::bch2_btree_iter_advance(self.trans.raw, &mut self.raw);
         }
     }
 }
 
 impl Drop for BtreeIter<'_> {
     fn drop(&mut self) {
-        unsafe { c::bch2_trans_iter_exit(self.raw.trans, &mut self.raw) }
+        unsafe { c::bch2_trans_iter_exit(self.trans.raw, &mut self.raw) }
     }
 }
 
 pub struct BtreeNodeIter<'t> {
     raw:   c::btree_iter,
-    trans: PhantomData<&'t BtreeTrans<'t>>,
+    trans: &'t BtreeTrans<'t>,
 }
 
 impl<'t> BtreeNodeIter<'t> {
@@ -161,35 +161,35 @@ impl<'t> BtreeNodeIter<'t> {
 
             BtreeNodeIter {
                 raw:   iter.assume_init(),
-                trans: PhantomData,
+                trans: trans,
             }
         }
     }
 
     pub fn peek(&mut self) -> Result<Option<&c::btree>, bch_errcode> {
         unsafe {
-            let b = c::bch2_btree_iter_peek_node(&mut self.raw);
+            let b = c::bch2_btree_iter_peek_node(self.trans.raw, &mut self.raw);
             errptr_to_result_c(b).map(|b| if !b.is_null() { Some(&*b) } else { None })
         }
     }
 
     pub fn peek_and_restart(&mut self) -> Result<Option<&c::btree>, bch_errcode> {
         unsafe {
-            let b = c::bch2_btree_iter_peek_node_and_restart(&mut self.raw);
+            let b = c::bch2_btree_iter_peek_node_and_restart(self.trans.raw, &mut self.raw);
             errptr_to_result_c(b).map(|b| if !b.is_null() { Some(&*b) } else { None })
         }
     }
 
     pub fn advance(&mut self) {
         unsafe {
-            c::bch2_btree_iter_next_node(&mut self.raw);
+            c::bch2_btree_iter_next_node(self.trans.raw, &mut self.raw);
         }
     }
 
     #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<&c::btree>, bch_errcode> {
         unsafe {
-            let b = c::bch2_btree_iter_next_node(&mut self.raw);
+            let b = c::bch2_btree_iter_next_node(self.trans.raw, &mut self.raw);
             errptr_to_result_c(b).map(|b| if !b.is_null() { Some(&*b) } else { None })
         }
     }
@@ -197,7 +197,7 @@ impl<'t> BtreeNodeIter<'t> {
 
 impl Drop for BtreeNodeIter<'_> {
     fn drop(&mut self) {
-        unsafe { c::bch2_trans_iter_exit(self.raw.trans, &mut self.raw) }
+        unsafe { c::bch2_trans_iter_exit(self.trans.raw, &mut self.raw) }
     }
 }
 
