@@ -49,6 +49,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "format" => c::cmd_format(argc, argv),
             "fs" => c::fs_cmds(argc, argv),
             "fsck" => c::cmd_fsck(argc, argv),
+            "image" => c::image_cmds(argc, argv),
             "list_journal" => c::cmd_list_journal(argc, argv),
             "kill_btree_node" => c::cmd_kill_btree_node(argc, argv),
             "migrate" => c::cmd_migrate(argc, argv),
