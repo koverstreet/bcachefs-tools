@@ -38,6 +38,8 @@ void bcachefs_usage(void)
 	     "  reset-counters           Reset all counters on an unmounted device\n"
 	     "  strip-alloc              Strip alloc info on a filesystem to be used read-only\n"
 	     "\n"
+	     "Commands for managing images:\n"
+	     "  image create             Create a new compact disk image\n"
 	     "Mount:\n"
 	     "  mount                    Mount a filesystem\n"
 	     "\n"
