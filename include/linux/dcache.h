@@ -9,7 +9,7 @@ struct dentry {
 	struct inode *d_inode;
 };
 
-static inline void shrink_dcache_sb(struct super_block *) {}
+static inline void shrink_dcache_sb(struct super_block *sb) {}
 
 #define QSTR_INIT(n,l) { { { .len = l } }, .name = n }
 #define QSTR(n) (struct qstr)QSTR_INIT(n, strlen(n))
