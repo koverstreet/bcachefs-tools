@@ -1,3 +1,12 @@
+bcachefs-tools (1:1.25.1-1) unstable; urgency=medium
+
+  * bcachefs migrate now works
+  * bcachefs list-journal transaction filter fixes
+  * bcachefs format now loads the bcachefs module, so that we can correctly
+  * detect the version supported by the running kernel
+
+ -- Kent Overstreet <kent.overstreet@linux.dev>  Tue Apr 1 13:06:37 2025 -0400
+
 bcachefs-tools (1:1.9.1-1) unstable; urgency=medium
 
   * New upstream release
