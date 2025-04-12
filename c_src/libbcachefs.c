@@ -674,7 +674,7 @@ const struct bch_option *bch2_cmdline_opt_parse(int argc, char *argv[],
 		if (optarg == argv[optind])
 			optind++;
 	} else {
-		optarg = NULL;
+		optarg = "1";
 	}
 
 	return opt;
