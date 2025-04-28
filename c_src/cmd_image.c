@@ -26,6 +26,7 @@
 #include "crypto.h"
 #include "libbcachefs/alloc_background.h"
 #include "libbcachefs/alloc_foreground.h"
+#include "libbcachefs/btree_update.h"
 #include "libbcachefs/data_update.h"
 #include "libbcachefs/errcode.h"
 #include "libbcachefs/journal_reclaim.h"
@@ -65,6 +66,22 @@ static u64 count_input_size(int dirfd)
 	return bytes;
 }
 
+static void set_data_allowed_for_image_update(struct bch_fs *c)
+{
+	mutex_lock(&c->sb_lock);
+	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, 0);
+	SET_BCH_MEMBER_DATA_ALLOWED(m, BIT(BCH_DATA_user));
+
+	m = bch2_members_v2_get_mut(c->disk_sb.sb, 1);
+	SET_BCH_MEMBER_DATA_ALLOWED(m, BIT(BCH_DATA_journal)|BIT(BCH_DATA_btree));
+
+	bch2_write_super(c);
+	mutex_unlock(&c->sb_lock);
+
+	bch2_dev_allocator_set_rw(c, c->devs[0], true);
+	bch2_dev_allocator_set_rw(c, c->devs[1], true);
+}
+
 struct move_btree_args {
 	bool		move_alloc;
 	unsigned	target;
@@ -77,7 +94,6 @@ static bool move_btree_pred(struct bch_fs *c, void *_arg,
 {
 	struct move_btree_args *args = _arg;
 
-	data_opts->target = dev_to_target(0);
 	data_opts->target = args->target;
 
 	if (k.k->type != KEY_TYPE_btree_ptr_v2)
@@ -487,6 +503,166 @@ static int cmd_image_create(int argc, char *argv[])
 	return 0;
 }
 
+static int image_update(const char *src_path, const char *dst_image,
+			bool			keep_alloc,
+			unsigned		verbosity)
+{
+	int src_fd = xopen(src_path, O_RDONLY);
+
+	if (!S_ISDIR(xfstat(src_fd).st_mode))
+		die("%s is not a directory", src_path);
+
+	u64 input_bytes = count_input_size(src_fd);
+
+	if (truncate(dst_image, input_bytes * 2))
+		die("truncate error: %m");
+
+	darray_const_str device_paths = {};
+	darray_push(&device_paths, dst_image);
+
+	struct bch_opts opts = bch2_opts_empty();
+	opt_set(opts, copygc_enabled,		false);
+	opt_set(opts, rebalance_enabled,	false);
+	opt_set(opts, nostart,			true);
+	if (verbosity > 1)
+		opt_set(opts, verbose,		true);
+
+	struct bch_fs *c = bch2_fs_open(&device_paths, &opts);
+	int ret = PTR_ERR_OR_ZERO(c);
+	if (ret)
+		die("error opening image: %s", bch2_err_str(ret));
+
+	struct dev_opts dev_opts = dev_opts_default();
+	dev_opts.path = mprintf("%s.metadata", dst_image);
+
+	if (1) {
+		/* factor this out into a helper */
+
+		ret = open_for_format(&dev_opts, BLK_OPEN_CREAT, false);
+		if (ret) {
+			fprintf(stderr, "error opening %s: %m", dev_opts.path);
+			goto err;
+		}
+
+		if (ftruncate(dev_opts.bdev->bd_fd, input_bytes)) {
+			fprintf(stderr, "ftruncate error: %m");
+			goto err;
+		}
+
+		ret = bch2_format_for_device_add(&dev_opts,
+				c->opts.block_size,
+				c->opts.btree_node_size);
+		bch_err_msg(c, ret, "opening %s", dev_opts.path);
+		if (ret)
+			goto err;
+
+		ret = bch2_dev_add(c, dev_opts.path);
+		bch_err_msg(c, ret, "adding metadata device");
+		if (ret)
+			goto err;
+	}
+
+	set_data_allowed_for_image_update(c);
+
+	ret = bch2_fs_start(c);
+	bch_err_msg(c, ret, "starting fs");
+	if (ret)
+		goto err;
+
+	bch_verbose(c, "Moving btree to temp device");
+	ret = move_btree(c, true, 1);
+	bch_err_msg(c, ret, "migrating btree to temp device");
+	if (ret)
+		goto err_stop;
+
+	/* xattrs will be recreated */
+	bch_verbose(c, "Deleting xattrs");
+	ret = bch2_btree_delete_range(c, BTREE_ID_xattrs, POS_MIN, SPOS_MAX,
+				      BTREE_ITER_all_snapshots, NULL);
+	bch_err_msg(c, ret, "deleting xattrs");
+	if (ret)
+		goto err_stop;
+
+	bch_verbose(c, "Syncing data");
+	struct copy_fs_state s = {};
+
+	ret =   copy_fs(c, &s, src_fd, src_path) ?:
+		finish_image(c, keep_alloc, verbosity);
+	if (ret)
+		goto err;
+
+	bch2_fs_stop(c);
+	unlink(dev_opts.path);
+	xclose(src_fd);
+	return 0;
+err_stop:
+	bch2_fs_stop(c);
+err:
+	unlink(dev_opts.path);
+	exit(EXIT_FAILURE);
+}
+
+static void image_update_usage(void)
+{
+	puts("bcachefs image update - update an image file, minimizing changes\n"
+	     "Usage: bcachefs image update [OPTION]... <file>\n"
+	     "\n"
+	     "Options:\n"
+	     "      --source=path           Source directory to be used as content for the new image\n"
+	     "  -a, --keep-alloc            Include allocation info in the filesystem\n"
+	     "                              6.16+ regenerates alloc info on first rw mount\n"
+	     "  -q, --quiet                 Only print errors\n"
+	     "  -v, --verbose               Verbose filesystem initialization\n"
+	     "  -h, --help                  Display this help and exit\n"
+	     "\n"
+	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
+}
+
+static int cmd_image_update(int argc, char *argv[])
+{
+	static const struct option longopts[] = {
+		{ "source",		required_argument,	NULL, 's' },
+		{ "keep-alloc",		no_argument,		NULL, 'a' },
+		{ "quiet",		no_argument,		NULL, 'q' },
+		{ "verbose",		no_argument,		NULL, 'v' },
+		{ "help",		no_argument,		NULL, 'h' },
+		{ NULL }
+	};
+	const char *source = NULL;
+	bool keep_alloc = false;
+	unsigned verbosity = 1;
+	int opt;
+
+	while ((opt = getopt_long(argc, argv, "s:aqvh",
+				  longopts, NULL)) != -1)
+		switch (opt) {
+		case 's':
+			source = optarg;
+			break;
+		case 'a':
+			keep_alloc = true;
+			break;
+		case 'q':
+			verbosity = 0;
+			break;
+		case 'v':
+			verbosity++;
+			break;
+		case 'h':
+			image_update_usage();
+			exit(EXIT_SUCCESS);
+		default:
+			die("getopt ret %i %c", opt, opt);
+		}
+	args_shift(optind);
+
+	if (argc != 1)
+		die("Please supply a filename");
+
+	return image_update(source, argv[0],
+			    keep_alloc, verbosity);
+}
+
 static int image_usage(void)
 {
 	puts("bcachefs image - commands for creating and updating image files\n"
@@ -494,6 +670,7 @@ static int image_usage(void)
             "\n"
             "Commands:\n"
             "  create                  Create a minimally-sized disk image\n"
+	    "  update                  Update a disk image, minimizing changes\n"
             "\n"
             "Report bugs to <linux-bcachefs@vger.kernel.org>");
 	return 0;
@@ -507,6 +684,8 @@ int image_cmds(int argc, char *argv[])
 		return image_usage();
 	if (!strcmp(cmd, "create"))
 		return cmd_image_create(argc, argv);
+	if (!strcmp(cmd, "update"))
+		return cmd_image_update(argc, argv);
 
 	image_usage();
 	return -EINVAL;
