@@ -342,6 +342,27 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 	return sb.sb;
 }
 
+int bch2_format_for_device_add(struct dev_opts *dev,
+			       unsigned block_size, unsigned btree_node_size)
+{
+	struct bch_opt_strs fs_opt_strs;
+	memset(&fs_opt_strs, 0, sizeof(fs_opt_strs));
+
+	struct bch_opts fs_opts = bch2_parse_opts(fs_opt_strs);
+	opt_set(fs_opts, block_size,		block_size);
+	opt_set(fs_opts, btree_node_size,	btree_node_size);
+
+	dev_opts_list devs = {};
+	darray_push(&devs, *dev);
+
+	struct format_opts format_opts	= format_opts_default();
+	struct bch_sb *sb = bch2_format(fs_opt_strs, fs_opts, format_opts, devs);
+	darray_exit(&devs);
+	free(sb);
+
+	return 0;
+}
+
 void bch2_super_write(int fd, struct bch_sb *sb)
 {
 	struct nonce nonce = { 0 };

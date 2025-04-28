@@ -49,7 +49,6 @@ static int cmd_device_add(int argc, char *argv[])
 		{ "help",		no_argument,		NULL, 'h' },
 		{ NULL }
 	};
-	struct format_opts format_opts	= format_opts_default();
 	struct dev_opts dev_opts	= dev_opts_default();
 	bool force = false;
 
@@ -106,26 +105,13 @@ static int cmd_device_add(int argc, char *argv[])
 
 	struct bchfs_handle fs = bcache_fs_open(fs_path);
 
-	int ret = open_for_format(&dev_opts, 0, force);
+	int ret = open_for_format(&dev_opts, 0, force) ?:
+		bch2_format_for_device_add(&dev_opts,
+			read_file_u64(fs.sysfs_fd, "options/block_size"),
+			read_file_u64(fs.sysfs_fd, "options/btree_node_size"));
 	if (ret)
 		die("Error opening %s: %s", dev_opts.path, strerror(-ret));
 
-	struct bch_opt_strs fs_opt_strs;
-	memset(&fs_opt_strs, 0, sizeof(fs_opt_strs));
-
-	struct bch_opts fs_opts = bch2_parse_opts(fs_opt_strs);
-
-	opt_set(fs_opts, block_size,
-		read_file_u64(fs.sysfs_fd, "options/block_size"));
-	opt_set(fs_opts, btree_node_size,
-		read_file_u64(fs.sysfs_fd, "options/btree_node_size"));
-
-	dev_opts_list devs = {};
-	darray_push(&devs, dev_opts);
-
-	struct bch_sb *sb = bch2_format(fs_opt_strs, fs_opts, format_opts, devs);
-	darray_exit(&devs);
-	free(sb);
 	bchu_disk_add(fs, dev_opts.path);
 
 	/* A whole bunch of nonsense to get blkid to update its cache, so
