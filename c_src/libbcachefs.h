@@ -71,7 +71,7 @@ static inline struct format_opts format_opts_default()
 struct dev_opts {
 	struct file	*file;
 	struct block_device *bdev;
-	char		*path;
+	const char	*path;
 
 	u64		sb_offset;
 	u64		sb_end;
@@ -102,6 +102,9 @@ struct bch_sb *bch2_format(struct bch_opt_strs,
 			   struct format_opts,
 			   dev_opts_list devs);
 
+int bch2_format_for_device_add(struct dev_opts *,
+			       unsigned, unsigned);
+
 void bch2_super_write(int, struct bch_sb *);
 struct bch_sb *__bch2_super_read(int, u64);
 
@@ -125,7 +128,7 @@ struct bchfs_handle bchu_fs_open_by_dev(const char *, int *);
 
 int bchu_dev_path_to_idx(struct bchfs_handle, const char *);
 
-static inline void bchu_disk_add(struct bchfs_handle fs, char *dev)
+static inline void bchu_disk_add(struct bchfs_handle fs, const char *dev)
 {
 	struct bch_ioctl_disk i = { .dev = (unsigned long) dev, };
 
