@@ -64,6 +64,22 @@ static u64 count_input_size(int dirfd)
 	return bytes;
 }
 
+static void set_data_allowed_for_image_update(struct bch_fs *c)
+{
+	mutex_lock(&c->sb_lock);
+	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, 0);
+	SET_BCH_MEMBER_DATA_ALLOWED(m, BIT(BCH_DATA_user));
+
+	m = bch2_members_v2_get_mut(c->disk_sb.sb, 1);
+	SET_BCH_MEMBER_DATA_ALLOWED(m, BIT(BCH_DATA_journal)|BIT(BCH_DATA_btree));
+
+	bch2_write_super(c);
+	mutex_unlock(&c->sb_lock);
+
+	bch2_dev_allocator_set_rw(c, c->devs[0], true);
+	bch2_dev_allocator_set_rw(c, c->devs[1], true);
+}
+
 struct move_btree_args {
 	bool		move_alloc;
 	unsigned	target;
@@ -497,30 +513,55 @@ static int image_update(const char *src_path, const char *dst_image)
 	struct dev_opts dev_opts = dev_opts_default();
 	dev_opts.path = mprintf("%s.metadata", dst_image);
 
-	ret = open_for_format(&dev_opts, BLK_OPEN_CREAT, false);
+	if (1) {
+		/* factor this out into a helper */
+
+		ret = open_for_format(&dev_opts, BLK_OPEN_CREAT, false);
+		if (ret) {
+			fprintf(stderr, "error opening %s: %m", dev_opts.path);
+			goto err;
+		}
+
+		if (ftruncate(dev_opts.bdev->bd_fd, input_bytes)) {
+			fprintf(stderr, "ftruncate error: %m");
+			goto err;
+		}
+
+		ret = bch2_format_for_device_add(&dev_opts,
+				c->opts.block_size,
+				c->opts.btree_node_size);
+		if (ret) {
+			fprintf(stderr, "Error opening %s: %s\n", dev_opts.path, strerror(-ret));
+			goto err;
+		}
+
+		ret = bch2_dev_add(c, dev_opts.path);
+		if (ret) {
+			fprintf(stderr, "Error adding metadata device: %s\n", strerror(-ret));
+			goto err;
+		}
+	}
+
+	set_data_allowed_for_image_update(c);
+
+	ret = bch2_fs_start(c);
 	if (ret) {
-		fprintf(stderr, "error opening %s: %m", dev_opts.path);
+		fprintf(stderr, "error starting fs: %s\n", bch2_err_str(ret));
 		goto err;
 	}
 
-	if (ftruncate(dev_opts.bdev->bd_fd, input_bytes)) {
-		fprintf(stderr, "ftruncate error: %m");
+	ret = move_btree(c, true, 1);
+	if (ret) {
+		fprintf(stderr, "error migrating btree to temporary device: %s\n",
+			bch2_err_str(ret));
 		goto err;
 	}
 
-	ret = bch2_format_for_device_add(&dev_opts,
-			c->opts.block_size,
-			c->opts.btree_node_size);
-	if (ret) {
-		fprintf(stderr, "Error opening %s: %s\n", dev_opts.path, strerror(-ret));
-		goto err;
-	}
+	/* delete data being deleted */
 
-	ret = bch2_dev_add(c, dev_opts.path);
-	if (ret) {
-		fprintf(stderr, "Error adding metadata device: %s\n", strerror(-ret));
-		goto err;
-	}
+	/* sync data */
+
+	/* factor out another helper for dropping metadata device? */
 
 	unlink(dev_opts.path);
 	return 0;
