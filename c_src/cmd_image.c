@@ -302,6 +302,8 @@ static void image_create(struct bch_opt_strs	fs_opt_strs,
 	if (0)
 		check_gaps(c);
 
+	/* XXX: print out disk usage */
+
 	u64 nbuckets;
 	ret = get_nbuckets_used(c, &nbuckets);
 	if (ret)
