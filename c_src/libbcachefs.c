@@ -690,8 +690,16 @@ const struct bch_option *bch2_cmdline_opt_parse(int argc, char *argv[],
 
 
 	int optid = bch2_opt_lookup(optstr);
-	if (optid < 0)
-		goto noopt;
+	if (optid < 0) {
+		if(strcmp_prefix(optstr, "no")) {
+			free(optstr);
+			optstr = strdup(argv[optind] + 4);
+			optid = bch2_opt_lookup(optstr);
+			optarg = "0";
+		}
+		if (optid < 0)
+			goto noopt;
+	}
 
 	const struct bch_option *opt = bch2_opt_table + optid;
 	if (!opt_type_filter(opt, opt_types))
@@ -703,7 +711,13 @@ const struct bch_option *bch2_cmdline_opt_parse(int argc, char *argv[],
 		if (optarg == argv[optind])
 			optind++;
 	} else {
-		optarg = NULL;
+		if (optarg == argv[optind]) {
+			if(!strcmp("0", optarg) || !strcmp("1", optarg)) {
+				optind++;
+			} else {
+				optarg = NULL;
+			}
+		}
 	}
 
 	return opt;
