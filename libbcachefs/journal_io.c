@@ -1557,8 +1557,10 @@ static void __journal_write_alloc(struct journal *j,
 	darray_for_each(*devs, i) {
 		struct bch_dev *ca = bch2_dev_get_ioref(c, *i, WRITE,
 					BCH_DEV_WRITE_REF_journal_write);
-		if (!ca)
+		if (!ca) {
+			BUG();
 			continue;
+		}
 
 		struct journal_device *ja = &ca->journal;
 

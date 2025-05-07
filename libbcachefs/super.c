@@ -497,11 +497,13 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 	clear_bit(BCH_FS_clean_shutdown, &c->flags);
 
 	scoped_guard(rcu)
-		for_each_online_member_rcu(c, ca)
+		for_each_online_member_rcu(c, ca) {
+			pr_info("dev %u state %u", ca->dev_idx, ca->mi.state);
 			if (ca->mi.state == BCH_MEMBER_STATE_rw) {
 				bch2_dev_allocator_add(c, ca);
 				enumerated_ref_start(&ca->io_ref[WRITE]);
 			}
+		}
 
 	bch2_recalc_capacity(c);
 
@@ -1954,6 +1956,7 @@ int bch2_dev_add(struct bch_fs *c, const char *path)
 
 	ca->disk_sb.sb->dev_idx	= dev_idx;
 	bch2_dev_attach(c, ca, dev_idx);
+	set_bit(ca->dev_idx, c->online_devs.d);
 
 	if (BCH_MEMBER_GROUP(&dev_mi)) {
 		ret = __bch2_dev_group_set(c, ca, label.buf);
