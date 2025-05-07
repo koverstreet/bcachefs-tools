@@ -1471,7 +1471,9 @@ static int check_key_has_inode(struct btree_trans *trans,
 	if (k.k->type == KEY_TYPE_whiteout)
 		goto out;
 
-	if (!i && (c->sb.btrees_lost_data & BIT_ULL(BTREE_ID_inodes))) {
+	bool have_inode = i && !i->whiteout;
+
+	if (!have_inode && (c->sb.btrees_lost_data & BIT_ULL(BTREE_ID_inodes))) {
 		ret =   reconstruct_inode(trans, iter->btree_id, k.k->p.snapshot, k.k->p.inode) ?:
 			bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 		if (ret)
@@ -1482,14 +1484,14 @@ static int check_key_has_inode(struct btree_trans *trans,
 		goto err;
 	}
 
-	if (fsck_err_on(!i,
+	if (fsck_err_on(!have_inode,
 			trans, key_in_missing_inode,
 			"key in missing inode:\n%s",
 			(printbuf_reset(&buf),
 			 bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
 		goto delete;
 
-	if (fsck_err_on(i && !btree_matches_i_mode(iter->btree_id, i->inode.bi_mode),
+	if (fsck_err_on(have_inode && !btree_matches_i_mode(iter->btree_id, i->inode.bi_mode),
 			trans, key_in_wrong_inode_type,
 			"key for wrong inode mode %o:\n%s",
 			i->inode.bi_mode,
@@ -1877,7 +1879,8 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 		for (struct inode_walker_entry *i = extent_i ?: &darray_last(inode->inodes);
 		     inode->inodes.data && i >= inode->inodes.data;
 		     --i) {
-			if (i->inode.bi_snapshot > k.k->p.snapshot ||
+			if (i->whiteout ||
+			    i->inode.bi_snapshot > k.k->p.snapshot ||
 			    !key_visible_in_snapshot(c, s, i->inode.bi_snapshot, k.k->p.snapshot))
 				continue;
 
@@ -2188,7 +2191,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 	if (ret)
 		goto err;
 
-	if (!i)
+	if (!i || i->whiteout)
 		goto out;
 
 	if (dir->first_this_inode)
@@ -2328,7 +2331,7 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 	if (ret)
 		return ret;
 
-	if (!i)
+	if (!i || i->whiteout)
 		return 0;
 
 	if (inode->first_this_inode)

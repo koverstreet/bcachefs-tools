@@ -10,6 +10,7 @@
 #include "btree_update_interior.h"
 #include "btree_write_buffer.h"
 #include "buckets.h"
+#include "ec.h"
 #include "errcode.h"
 #include "extents.h"
 #include "io_write.h"
@@ -210,19 +211,28 @@ static int data_drop_bp(struct btree_trans *trans, unsigned dev_idx,
 			unsigned flags)
 {
 	struct btree_iter iter;
-	struct bkey_s_c k = bch2_backpointer_get_key(trans, bp, &iter, 0, last_flushed);
+	struct bkey_s_c k = bch2_backpointer_get_key(trans, bp, &iter, BTREE_ITER_intent,
+						     last_flushed);
 	int ret = bkey_err(k);
 	if (ret == -BCH_ERR_backpointer_to_overwritten_btree_node)
 		return 0;
 	if (ret)
 		return ret;
 
-	if (!bch2_bkey_has_device_c(k, dev_idx))
+	if (!k.k || !bch2_bkey_has_device_c(k, dev_idx))
 		goto out;
 
-	ret = bkey_is_btree_ptr(k.k)
-		? bch2_dev_btree_drop_key(trans, bp, dev_idx, last_flushed, flags)
-		: bch2_dev_usrdata_drop_key(trans, &iter, k, dev_idx, flags);
+	/*
+	 * XXX: pass flags arg to invalidate_stripe_to_dev and handle it
+	 * properly
+	 */
+
+	if (bkey_is_btree_ptr(k.k))
+		ret = bch2_dev_btree_drop_key(trans, bp, dev_idx, last_flushed, flags);
+	else if (k.k->type == KEY_TYPE_stripe)
+		ret = bch2_invalidate_stripe_to_dev(trans, &iter, k, dev_idx, flags);
+	else
+		ret = bch2_dev_usrdata_drop_key(trans, &iter, k, dev_idx, flags);
 out:
 	bch2_trans_iter_exit(trans, &iter);
 	return ret;

@@ -19,6 +19,7 @@
 
 #include <linux/ioprio.h>
 #include <linux/string_choices.h>
+#include <linux/sched/sysctl.h>
 
 void bch2_journal_pos_from_member_info_set(struct bch_fs *c)
 {
@@ -1263,7 +1264,8 @@ int bch2_journal_read(struct bch_fs *c,
 			degraded = true;
 	}
 
-	closure_sync(&jlist.cl);
+	while (closure_sync_timeout(&jlist.cl, sysctl_hung_task_timeout_secs * HZ / 2))
+		;
 
 	if (jlist.ret)
 		return jlist.ret;
@@ -2045,21 +2047,21 @@ CLOSURE_CALLBACK(bch2_journal_write)
 
 	j->write_start_time = local_clock();
 
-	mutex_lock(&j->buf_lock);
-	journal_buf_realloc(j, w);
-
-	ret = bch2_journal_write_prep(j, w);
-	mutex_unlock(&j->buf_lock);
-
-	if (unlikely(ret))
-		goto err;
-
 	spin_lock(&j->lock);
 	if (nr_rw_members > 1)
 		w->separate_flush = true;
 
 	ret = bch2_journal_write_pick_flush(j, w);
 	spin_unlock(&j->lock);
+
+	if (unlikely(ret))
+		goto err;
+
+	mutex_lock(&j->buf_lock);
+	journal_buf_realloc(j, w);
+
+	ret = bch2_journal_write_prep(j, w);
+	mutex_unlock(&j->buf_lock);
 
 	if (unlikely(ret))
 		goto err;

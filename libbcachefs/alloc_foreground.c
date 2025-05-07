@@ -1336,10 +1336,30 @@ alloc_done:
 
 	req->wp->sectors_free = UINT_MAX;
 
-	open_bucket_for_each(c, &req->wp->ptrs, ob, i)
+	open_bucket_for_each(c, &req->wp->ptrs, ob, i) {
+		/*
+		 * Ensure proper write alignment - either due to misaligned
+		 * bucket sizes (from buggy bcachefs-tools), or writes that mix
+		 * logical/physical alignment:
+		 */
+		struct bch_dev *ca = ob_dev(c, ob);
+		u64 offset = bucket_to_sector(ca, ob->bucket) +
+			ca->mi.bucket_size -
+			ob->sectors_free;
+		unsigned align = round_up(offset, block_sectors(c)) - offset;
+
+		ob->sectors_free = max_t(int, 0, ob->sectors_free - align);
+
 		req->wp->sectors_free = min(req->wp->sectors_free, ob->sectors_free);
+	}
 
 	req->wp->sectors_free = rounddown(req->wp->sectors_free, block_sectors(c));
+
+	/* Did alignment use up space in an open_bucket? */
+	if (unlikely(!req->wp->sectors_free)) {
+		bch2_alloc_sectors_done(c, req->wp);
+		goto retry;
+	}
 
 	BUG_ON(!req->wp->sectors_free || req->wp->sectors_free == UINT_MAX);
 
@@ -1366,20 +1386,6 @@ err:
 		ret = -BCH_ERR_bucket_alloc_blocked;
 
 	return ret;
-}
-
-struct bch_extent_ptr bch2_ob_ptr(struct bch_fs *c, struct open_bucket *ob)
-{
-	struct bch_dev *ca = ob_dev(c, ob);
-
-	return (struct bch_extent_ptr) {
-		.type	= 1 << BCH_EXTENT_ENTRY_ptr,
-		.gen	= ob->gen,
-		.dev	= ob->dev,
-		.offset	= bucket_to_sector(ca, ob->bucket) +
-			ca->mi.bucket_size -
-			ob->sectors_free,
-	};
 }
 
 void bch2_alloc_sectors_append_ptrs(struct bch_fs *c, struct write_point *wp,
