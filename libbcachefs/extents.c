@@ -1140,6 +1140,7 @@ void bch2_extent_ptr_set_cached(struct bch_fs *c,
 	union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
 	bool have_cached_ptr;
+	unsigned drop_dev = ptr->dev;
 
 	rcu_read_lock();
 restart_drop_ptrs:
@@ -1157,12 +1158,18 @@ restart_drop_ptrs:
 		if (p.ptr.cached) {
 			if (have_cached_ptr || !want_cached_ptr(c, opts, &p.ptr)) {
 				bch2_bkey_drop_ptr_noerror(k, &entry->ptr);
+				ptr = NULL;
 				goto restart_drop_ptrs;
 			}
 
 			have_cached_ptr = true;
 		}
 	}
+
+	if (!ptr)
+		bkey_for_each_ptr(ptrs, ptr2)
+			if (ptr2->dev == drop_dev)
+				ptr = ptr2;
 
 	if (have_cached_ptr || !want_cached_ptr(c, opts, ptr))
 		goto drop;

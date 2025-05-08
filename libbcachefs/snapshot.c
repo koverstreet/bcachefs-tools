@@ -211,9 +211,14 @@ void bch2_snapshot_to_text(struct printbuf *out, struct bch_fs *c,
 {
 	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 
-	prt_printf(out, "is_subvol %llu deleted %llu parent %10u children %10u %10u subvol %u tree %u",
-	       BCH_SNAPSHOT_SUBVOL(s.v),
-	       BCH_SNAPSHOT_WILL_DELETE(s.v),
+	if (BCH_SNAPSHOT_SUBVOL(s.v))
+		prt_str(out, "subvol ");
+	if (BCH_SNAPSHOT_WILL_DELETE(s.v))
+		prt_str(out, "will_delete ");
+	if (BCH_SNAPSHOT_DELETED(s.v))
+		prt_str(out, "deleted ");
+
+	prt_printf(out, "parent %10u children %10u %10u subvol %u tree %u",
 	       le32_to_cpu(s.v->parent),
 	       le32_to_cpu(s.v->children[0]),
 	       le32_to_cpu(s.v->children[1]),
@@ -1646,7 +1651,7 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 	if (BCH_SNAPSHOT_DELETED(s.v))
 		return 0;
 
-	mutex_lock(&d->lock);
+	mutex_lock(&d->progress_lock);
 	for (unsigned i = 0; i < 2; i++) {
 		u32 child = le32_to_cpu(s.v->children[i]);
 
@@ -1673,7 +1678,7 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 				darray_push(&d->delete_interior, n);
 		}
 	}
-	mutex_unlock(&d->lock);
+	mutex_unlock(&d->progress_lock);
 
 	return ret;
 }
@@ -1763,20 +1768,26 @@ static void bch2_snapshot_delete_nodes_to_text(struct printbuf *out, struct snap
 	prt_printf(out, "deleting leaves");
 	darray_for_each(d->delete_leaves, i)
 		prt_printf(out, " %u", *i);
+	prt_newline(out);
 
-	prt_printf(out, " interior");
+	prt_printf(out, "interior");
 	darray_for_each(d->delete_interior, i)
 		prt_printf(out, " %u->%u", i->id, i->live_child);
+	prt_newline(out);
 }
 
-int bch2_delete_dead_snapshots(struct bch_fs *c)
+int __bch2_delete_dead_snapshots(struct bch_fs *c)
 {
-	if (!test_and_clear_bit(BCH_FS_need_delete_dead_snapshots, &c->flags))
-		return 0;
-
-	struct btree_trans *trans = bch2_trans_get(c);
 	struct snapshot_delete *d = &c->snapshot_delete;
 	int ret = 0;
+
+	if (!mutex_trylock(&d->lock))
+		return 0;
+
+	if (!test_and_clear_bit(BCH_FS_need_delete_dead_snapshots, &c->flags))
+		goto out_unlock;
+
+	struct btree_trans *trans = bch2_trans_get(c);
 
 	/*
 	 * For every snapshot node: If we have no live children and it's not
@@ -1843,16 +1854,26 @@ int bch2_delete_dead_snapshots(struct bch_fs *c)
 			goto err;
 	}
 err:
-	mutex_lock(&d->lock);
+	mutex_lock(&d->progress_lock);
 	darray_exit(&d->deleting_from_trees);
 	darray_exit(&d->delete_interior);
 	darray_exit(&d->delete_leaves);
 	d->running = false;
-	mutex_unlock(&d->lock);
+	mutex_unlock(&d->progress_lock);
 	bch2_trans_put(trans);
+out_unlock:
+	mutex_unlock(&d->lock);
 	if (!bch2_err_matches(ret, EROFS))
 		bch_err_fn(c, ret);
 	return ret;
+}
+
+int bch2_delete_dead_snapshots(struct bch_fs *c)
+{
+	if (!c->opts.auto_snapshot_deletion)
+		return 0;
+
+	return __bch2_delete_dead_snapshots(c);
 }
 
 void bch2_delete_dead_snapshots_work(struct work_struct *work)
@@ -1867,6 +1888,9 @@ void bch2_delete_dead_snapshots_work(struct work_struct *work)
 
 void bch2_delete_dead_snapshots_async(struct bch_fs *c)
 {
+	if (!c->opts.auto_snapshot_deletion)
+		return;
+
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_delete_dead_snapshots))
 		return;
 
@@ -1885,12 +1909,11 @@ void bch2_snapshot_delete_status_to_text(struct printbuf *out, struct bch_fs *c)
 		return;
 	}
 
-	mutex_lock(&d->lock);
+	mutex_lock(&d->progress_lock);
 	bch2_snapshot_delete_nodes_to_text(out, d);
-	prt_newline(out);
-	mutex_unlock(&d->lock);
 
 	bch2_bbpos_to_text(out, d->pos);
+	mutex_unlock(&d->progress_lock);
 }
 
 int __bch2_key_has_snapshot_overwrites(struct btree_trans *trans,
@@ -1972,5 +1995,6 @@ void bch2_fs_snapshots_init_early(struct bch_fs *c)
 {
 	INIT_WORK(&c->snapshot_delete.work, bch2_delete_dead_snapshots_work);
 	mutex_init(&c->snapshot_delete.lock);
+	mutex_init(&c->snapshot_delete.progress_lock);
 	mutex_init(&c->snapshots_unlinked_lock);
 }

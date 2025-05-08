@@ -505,7 +505,7 @@ static int cmd_device_resize(int argc, char *argv[])
 
 		struct bch_member m = bch2_sb_member_get(sb, idx);
 
-		u64 nbuckets = size / le16_to_cpu(m.bucket_size);
+		u64 nbuckets = size / BCH_MEMBER_BUCKET_SIZE(&m);
 
 		if (nbuckets < le64_to_cpu(m.nbuckets))
 			die("Shrinking not supported yet");
@@ -532,7 +532,7 @@ static int cmd_device_resize(int argc, char *argv[])
 			enumerated_ref_get(&resize->io_ref[READ], 0);
 		}
 
-		u64 nbuckets = size / le16_to_cpu(resize->mi.bucket_size);
+		u64 nbuckets = size / resize->mi.bucket_size;
 
 		if (nbuckets < le64_to_cpu(resize->mi.nbuckets))
 			die("Shrinking not supported yet");
@@ -609,7 +609,7 @@ static int cmd_device_resize_journal(int argc, char *argv[])
 
 		struct bch_member m = bch2_sb_member_get(sb, idx);
 
-		u64 nbuckets = size / le16_to_cpu(m.bucket_size);
+		u64 nbuckets = size / BCH_MEMBER_BUCKET_SIZE(&m);
 
 		printf("resizing journal on %s to %llu buckets\n", dev, nbuckets);
 		bchu_disk_resize_journal(fs, idx, nbuckets);

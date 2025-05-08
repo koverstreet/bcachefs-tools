@@ -401,6 +401,11 @@ void bch2_fs_read_only(struct bch_fs *c)
 		bch_verbose(c, "marking filesystem clean");
 		bch2_fs_mark_clean(c);
 	} else {
+		/* Make sure error counts/counters are persisted */
+		mutex_lock(&c->sb_lock);
+		bch2_write_super(c);
+		mutex_unlock(&c->sb_lock);
+
 		bch_verbose(c, "done going read-only, filesystem not clean");
 	}
 }
@@ -574,35 +579,37 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_find_btree_nodes_exit(&c->found_btree_nodes);
 	bch2_free_pending_node_rewrites(c);
 	bch2_free_fsck_errs(c);
-	bch2_fs_accounting_exit(c);
-	bch2_fs_async_obj_exit(c);
-	bch2_fs_sb_errors_exit(c);
-	bch2_fs_counters_exit(c);
+	bch2_fs_vfs_exit(c);
 	bch2_fs_snapshots_exit(c);
+	bch2_fs_sb_errors_exit(c);
+	bch2_fs_replicas_exit(c);
+	bch2_fs_rebalance_exit(c);
 	bch2_fs_quota_exit(c);
+	bch2_fs_nocow_locking_exit(c);
+	bch2_fs_journal_exit(&c->journal);
 	bch2_fs_fs_io_direct_exit(c);
 	bch2_fs_fs_io_buffered_exit(c);
 	bch2_fs_fsio_exit(c);
-	bch2_fs_vfs_exit(c);
-	bch2_fs_ec_exit(c);
-	bch2_fs_encryption_exit(c);
-	bch2_fs_nocow_locking_exit(c);
 	bch2_fs_io_write_exit(c);
 	bch2_fs_io_read_exit(c);
-	bch2_fs_buckets_waiting_for_journal_exit(c);
-	bch2_fs_btree_interior_update_exit(c);
-	bch2_fs_btree_key_cache_exit(&c->btree_key_cache);
-	bch2_fs_btree_cache_exit(c);
-	bch2_fs_btree_iter_exit(c);
-	bch2_fs_replicas_exit(c);
-	bch2_fs_journal_exit(&c->journal);
+	bch2_fs_encryption_exit(c);
+	bch2_fs_ec_exit(c);
+	bch2_fs_counters_exit(c);
+	bch2_fs_compress_exit(c);
 	bch2_io_clock_exit(&c->io_clock[WRITE]);
 	bch2_io_clock_exit(&c->io_clock[READ]);
-	bch2_fs_compress_exit(c);
+	bch2_fs_buckets_waiting_for_journal_exit(c);
+	bch2_fs_btree_write_buffer_exit(c);
+	bch2_fs_btree_key_cache_exit(&c->btree_key_cache);
+	bch2_fs_btree_iter_exit(c);
+	bch2_fs_btree_interior_update_exit(c);
+	bch2_fs_btree_cache_exit(c);
+	bch2_fs_accounting_exit(c);
+	bch2_fs_async_obj_exit(c);
 	bch2_journal_keys_put_initial(c);
 	bch2_find_btree_nodes_exit(&c->found_btree_nodes);
+
 	BUG_ON(atomic_read(&c->journal_keys.ref));
-	bch2_fs_btree_write_buffer_exit(c);
 	percpu_free_rwsem(&c->mark_lock);
 	if (c->online_reserved) {
 		u64 v = percpu_u64_get(c->online_reserved);
@@ -861,7 +868,6 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	bch2_fs_move_init(c);
 	bch2_fs_nocow_locking_init_early(c);
 	bch2_fs_quota_init(c);
-	bch2_fs_rebalance_init(c);
 	bch2_fs_sb_errors_init_early(c);
 	bch2_fs_snapshots_init_early(c);
 	bch2_fs_subvolumes_init_early(c);
@@ -983,6 +989,7 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	    bch2_fs_fsio_init(c) ?:
 	    bch2_fs_fs_io_direct_init(c) ?:
 	    bch2_fs_io_read_init(c) ?:
+	    bch2_fs_rebalance_init(c) ?:
 	    bch2_fs_sb_errors_init(c) ?:
 	    bch2_fs_vfs_init(c);
 	if (ret)
@@ -1205,7 +1212,7 @@ static int bch2_dev_may_add(struct bch_sb *sb, struct bch_fs *c)
 	if (le16_to_cpu(sb->block_size) != block_sectors(c))
 		return -BCH_ERR_mismatched_block_size;
 
-	if (le16_to_cpu(m.bucket_size) <
+	if (BCH_MEMBER_BUCKET_SIZE(&m) <
 	    BCH_SB_BTREE_NODE_SIZE(c->disk_sb.sb))
 		return -BCH_ERR_bucket_size_too_small;
 
@@ -1741,11 +1748,12 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags)
 
 	ret = fast_device_removal
 		? bch2_dev_data_drop_by_backpointers(c, ca->dev_idx, flags)
-		: bch2_dev_data_drop(c, ca->dev_idx, flags);
+		: (bch2_dev_data_drop(c, ca->dev_idx, flags) ?:
+		   bch2_dev_remove_stripes(c, ca->dev_idx, flags));
 	if (ret)
 		goto err;
 
-	/* Check if device still has data */
+	/* Check if device still has data before blowing away alloc info */
 	struct bch_dev_usage usage = bch2_dev_usage_read(ca);
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
 		if (!data_type_is_empty(i) &&
@@ -2159,7 +2167,7 @@ int bch2_fs_resize_on_mount(struct bch_fs *c)
 			m->nbuckets = cpu_to_le64(new_nbuckets);
 			SET_BCH_MEMBER_RESIZE_ON_MOUNT(m, false);
 
-			c->disk_sb.sb->features[0] &= ~BIT_ULL(BCH_FEATURE_small_image);
+			c->disk_sb.sb->features[0] &= ~cpu_to_le64(BIT_ULL(BCH_FEATURE_small_image));
 			bch2_write_super(c);
 			mutex_unlock(&c->sb_lock);
 

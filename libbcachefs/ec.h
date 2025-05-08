@@ -160,6 +160,7 @@ static inline void gc_stripe_unlock(struct gc_stripe *s)
 	BUILD_BUG_ON(!((union ulong_byte_assert) { .ulong = 1UL << BUCKET_LOCK_BITNR }).byte);
 
 	clear_bit_unlock(BUCKET_LOCK_BITNR, (void *) &s->lock);
+	smp_mb__after_atomic();
 	wake_up_bit((void *) &s->lock, BUCKET_LOCK_BITNR);
 }
 
@@ -287,7 +288,9 @@ static inline void ec_stripe_new_put(struct bch_fs *c, struct ec_stripe_new *s,
 		}
 }
 
-int bch2_dev_remove_stripes(struct bch_fs *, unsigned);
+int bch2_invalidate_stripe_to_dev(struct btree_trans *, struct btree_iter *,
+				  struct bkey_s_c, unsigned, unsigned);
+int bch2_dev_remove_stripes(struct bch_fs *, unsigned, unsigned);
 
 void bch2_ec_stop_dev(struct bch_fs *, struct bch_dev *);
 void bch2_fs_ec_stop(struct bch_fs *);

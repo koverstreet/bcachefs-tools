@@ -217,7 +217,7 @@ enum bch_fsck_flags {
 	x(inode_str_hash_invalid,				194,	0)		\
 	x(inode_v3_fields_start_bad,				195,	0)		\
 	x(inode_snapshot_mismatch,				196,	0)		\
-	x(snapshot_key_missing_inode_snapshot,			314,	FSCK_AUTOFIX)	\
+	x(snapshot_key_missing_inode_snapshot,			314,	0)		\
 	x(inode_unlinked_but_clean,				197,	0)		\
 	x(inode_unlinked_but_nlink_nonzero,			198,	0)		\
 	x(inode_unlinked_and_not_open,				281,	0)		\

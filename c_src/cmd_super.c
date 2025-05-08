@@ -297,7 +297,7 @@ static struct bch_sb *recover_super_from_member(struct recover_super_args args)
 
 	bch2_sb_layout_init(&sb->layout,
 			    le16_to_cpu(sb->block_size) << 9,
-			    le16_to_cpu(m.bucket_size) << 9,
+			    BCH_MEMBER_BUCKET_SIZE(&m) << 9,
 			    1U << sb->layout.sb_max_size_bits,
 			    BCH_SB_SECTOR,
 			    args.dev_size >> 9,
