@@ -800,6 +800,12 @@ struct bch_opts bch2_parse_opts(struct bch_opt_strs strs)
 	return opts;
 }
 
+void bch2_remove_arg_from_argv(int *argc, char *argv[], unsigned index)
+{
+	memmove(&argv[index], &argv[index + 1], (*argc - index) * sizeof(char*));
+	(*argc)--;
+}
+
 #define newline(c)		\
 	do {			\
 		printf("\n");	\

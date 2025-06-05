@@ -602,6 +602,13 @@ Enable erasure coding (DO NOT USE YET)
 
 .It Fl -nocow
 Nocow mode: Writes will be done in place when possible.
+
+.It Fl -remove-all
+Removes all bcachefs file options from the specified file(s).
+.Pp
+To remove specific file options, use
+.Fl -option Ns = Ns Cm - .
+
 .El
 .El
 .Sh Commands for debugging
