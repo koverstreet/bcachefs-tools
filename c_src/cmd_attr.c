@@ -55,9 +55,41 @@ static void propagate_recurse(int dirfd)
 	closedir(dir);
 }
 
-static void do_setattr(char *path, struct bch_opt_strs opts)
+static void remove_bcachefs_attr(const char *path, const char *full_attr_name)
+{
+	if (removexattr(path, full_attr_name) != 0) {
+		// EINVAL in case bcachefs-tools is newer than kernel
+		if (errno != ENODATA && errno != EINVAL) {
+			fprintf(stderr, "error removing attribute %s from %s: %m\n",
+				full_attr_name, path);
+		}
+	}
+}
+
+static void remove_all_bcachefs_attrs(const char *path)
 {
 	unsigned i;
+
+	for (i = 0; i < bch2_opts_nr; i++) {
+		if (bch2_opt_table[i].flags & OPT_INODE) {
+			// Only works on empty directory.
+			if (strcmp(bch2_opt_table[i].attr.name, "casefold") == 0)
+				continue;
+
+			char *full_name = mprintf("bcachefs.%s", bch2_opt_table[i].attr.name);
+			remove_bcachefs_attr(path, full_name);
+			free(full_name);
+		}
+	}
+}
+
+static void do_setattr(char *path, struct bch_opt_strs opts, bool remove_all)
+{
+	unsigned i;
+
+	if (remove_all) {
+		remove_all_bcachefs_attrs(path);
+	}
 
 	for (i = 0; i < bch2_opts_nr; i++) {
 		if (!opts.by_id[i])
@@ -65,8 +97,12 @@ static void do_setattr(char *path, struct bch_opt_strs opts)
 
 		char *n = mprintf("bcachefs.%s", bch2_opt_table[i].attr.name);
 
-		if (setxattr(path, n, opts.by_id[i], strlen(opts.by_id[i]), 0))
-			die("setxattr error: %m");
+		if (strcmp(opts.by_id[i], "-") == 0) {
+			remove_bcachefs_attr(path, n);
+		} else {
+			if (setxattr(path, n, opts.by_id[i], strlen(opts.by_id[i]), 0))
+				die("setxattr error: %m");
+		}
 
 		free(n);
 	}
@@ -90,15 +126,27 @@ static void setattr_usage(void)
 	     "Options:");
 
 	bch2_opts_usage(OPT_INODE);
-	puts("  -h            Display this help and exit\n"
+	puts("      --remove-all            Remove all file options\n"
+	     "                              To remove specific options, use: --option=-\n"
+	     "      -h                      Display this help and exit\n"
 	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
 }
 
 int cmd_setattr(int argc, char *argv[])
 {
+	unsigned i;
+	bool remove_all = false;
+
+	for (i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--remove-all") == 0) {
+			remove_all = true;
+			bch_remove_arg_from_argv(&argc, argv, i);
+			i--;
+		}
+	}
+
 	struct bch_opt_strs opts =
 		bch2_cmdline_opts_get(&argc, argv, OPT_INODE);
-	unsigned i;
 
 	for (i = 1; i < argc; i++)
 		if (argv[i][0] == '-') {
@@ -111,7 +159,7 @@ int cmd_setattr(int argc, char *argv[])
 		die("Please supply one or more files");
 
 	for (i = 1; i < argc; i++)
-		do_setattr(argv[i], opts);
+		do_setattr(argv[i], opts, remove_all);
 	bch2_opt_strs_free(&opts);
 
 	return 0;

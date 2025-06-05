@@ -737,6 +737,12 @@ noopt:
 	return NULL;
 }
 
+void bch_remove_arg_from_argv(int *argc, char *argv[], int index)
+{
+	memmove(&argv[index], &argv[index + 1], (*argc - index) * sizeof(char*));
+	(*argc)--;
+}
+
 struct bch_opt_strs bch2_cmdline_opts_get(int *argc, char *argv[],
 					  unsigned opt_types)
 {

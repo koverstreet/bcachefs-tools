@@ -576,7 +576,10 @@ Offset of existing superblock
 .El
 .Sh Commands for operating on files in a bcachefs filesystem
 .Bl -tag -width Ds
-.It Nm Ic set-file-option Oo Ar options Oc Ar devices\ ...
+.It Nm Ic set-file-option Oo Ar options Oc Ar [files|folders]\ ...
+Set various per-file attributes on files and directories in a bcachefs filesystem.
+When applied to directories, attributes are propagated recursively to all files
+and subdirectories within.
 .Bl -tag -width Ds
 .It Fl -data_replicas Ns = Ns Ar number
 Number of data replicas
@@ -602,7 +605,16 @@ Enable erasure coding (DO NOT USE YET)
 
 .It Fl -nocow
 Nocow mode: Writes will be done in place when possible.
+.It Fl -remove-all
+Remove all file options from the specified files/directories
 .El
+.Pp
+To remove specific options, use
+.Ar --option=-
+.Pp
+Options can be chained together to perform multiple operations in a single command, for example:
+.Dl bcachefs set-file-option --remove-all --compression=lz4 .
+.Dl bcachefs set-file-option --compression=- --background_compression=zstd:10 --data_replicas=- file.txt
 .El
 .Sh Commands for debugging
 These commands work on offline, unmounted filesystems.

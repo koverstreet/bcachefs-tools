@@ -31,6 +31,7 @@ void bch2_opt_strs_free(struct bch_opt_strs *);
 
 const struct bch_option *bch2_cmdline_opt_parse(int argc, char *argv[],
 						unsigned opt_types);
+void bch_remove_arg_from_argv(int *argc, char *argv[], int index);
 struct bch_opt_strs bch2_cmdline_opts_get(int *, char *[], unsigned);
 struct bch_opts bch2_parse_opts(struct bch_opt_strs);
 void bch2_opts_usage(unsigned);
