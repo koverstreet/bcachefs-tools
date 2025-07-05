@@ -41,6 +41,7 @@ struct format_opts {
 	unsigned	version;
 	unsigned	superblock_size;
 	bool		encrypted;
+	char		*passphrase_file;
 	char		*passphrase;
 	char		*source;
 	bool		no_sb_at_end;
