@@ -42,27 +42,55 @@ void create_link(struct bch_fs *c,
 		die("error creating hardlink: %s", bch2_err_str(ret));
 }
 
-struct bch_inode_unpacked create_file(struct bch_fs *c,
-				      struct bch_inode_unpacked *parent,
-				      const char *name,
-				      uid_t uid, gid_t gid,
-				      mode_t mode, dev_t rdev)
+struct bch_inode_unpacked create_or_update_file(struct bch_fs *c,
+			subvol_inum dir_inum,
+			struct bch_inode_unpacked *dir,
+			const char *name,
+			uid_t uid, gid_t gid,
+			mode_t mode, dev_t rdev)
 {
-	struct qstr qstr = QSTR(name);
-	struct bch_inode_unpacked new_inode;
+	struct bch_hash_info dir_hash = bch2_hash_info_init(c, dir);
 
-	bch2_inode_init_early(c, &new_inode);
+	struct qstr qname = QSTR(name);
+	struct bch_inode_unpacked child_inode;
+	subvol_inum child_inum;
 
-	int ret = bch2_trans_commit_do(c, NULL, NULL, 0,
-		bch2_create_trans(trans,
-				  (subvol_inum) { 1, parent->bi_inum }, parent,
-				  &new_inode, &qstr,
-				  uid, gid, mode, rdev, NULL, NULL,
-				  (subvol_inum) {}, 0));
-	if (ret)
-		die("error creating %s: %s", name, bch2_err_str(ret));
+	int ret = bch2_dirent_lookup(c, dir_inum, &dir_hash,
+				     &qname, &child_inum);
+	if (!ret) {
+		/* Already exists, update */
 
-	return new_inode;
+		ret = bch2_inode_find_by_inum(c, child_inum, &child_inode);
+		bch_err_fn(c, ret);
+		if (ret)
+			die("error looking up %s: %s", name, bch2_err_str(ret));
+
+		BUG_ON(mode_to_type(child_inode.bi_mode) !=
+		       mode_to_type(mode));
+
+		child_inode.bi_mode	= mode;
+		child_inode.bi_uid	= uid;
+		child_inode.bi_gid	= gid;
+		child_inode.bi_dev	= rdev;
+
+		ret = bch2_trans_commit_do(c, NULL, NULL, 0,
+			bch2_fsck_write_inode(trans, &child_inode));
+		if (ret)
+			die("error updating up %s: %s", name, bch2_err_str(ret));
+	} else {
+		bch2_inode_init_early(c, &child_inode);
+
+		int ret = bch2_trans_commit_do(c, NULL, NULL, 0,
+			bch2_create_trans(trans,
+					  dir_inum, dir,
+					  &child_inode, &qname,
+					  uid, gid, mode, rdev, NULL, NULL,
+					  (subvol_inum) {}, 0));
+		if (ret)
+			die("error creating %s: %s", name, bch2_err_str(ret));
+	}
+
+	return child_inode;
 }
 
 #define for_each_xattr_handler(handlers, handler)		\
@@ -487,21 +515,22 @@ static void copy_dir(struct copy_fs_state *s,
 		if (s->type == BCH_MIGRATE_migrate && stat.st_dev != s->dev)
 			die("%s does not have correct st_dev!", child_path);
 
-		u64 *dst_inum = S_ISREG(stat.st_mode)
+		u64 *dst_inum_p = S_ISREG(stat.st_mode)
 			? genradix_ptr_alloc(&s->hardlinks, stat.st_ino, GFP_KERNEL)
 			: NULL;
 
-		if (dst_inum && *dst_inum) {
-			create_link(c, dst, d->d_name, *dst_inum, S_IFREG);
+		if (dst_inum_p && *dst_inum_p) {
+			create_link(c, dst, d->d_name, *dst_inum_p, S_IFREG);
 			goto next;
 		}
 
-		inode = create_file(c, dst, d->d_name,
+		subvol_inum dst_inum = { 1, dst->bi_inum };
+		inode = create_or_update_file(c, dst_inum, dst, d->d_name,
 				    stat.st_uid, stat.st_gid,
 				    stat.st_mode, stat.st_rdev);
 
-		if (dst_inum)
-			*dst_inum = inode.bi_inum;
+		if (dst_inum_p)
+			*dst_inum_p = inode.bi_inum;
 
 		copy_xattrs(c, &inode, d->d_name);
 
@@ -556,7 +585,9 @@ static void reserve_old_fs_space(struct bch_fs *c,
 	struct hole_iter iter;
 	struct range i;
 
-	dst = create_file(c, root_inode, "old_migrated_filesystem",
+	subvol_inum root_inum = { 1, root_inode->bi_inum };
+	dst = create_or_update_file(c, root_inum, root_inode,
+			  "old_migrated_filesystem",
 			  0, 0, S_IFREG|0400, 0);
 	dst.bi_size = bucket_to_sector(ca, ca->mi.nbuckets) << 9;
 
