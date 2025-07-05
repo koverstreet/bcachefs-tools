@@ -43,10 +43,10 @@ void create_link(struct bch_fs *c,
 }
 
 struct bch_inode_unpacked create_file(struct bch_fs *c,
-					     struct bch_inode_unpacked *parent,
-					     const char *name,
-					     uid_t uid, gid_t gid,
-					     mode_t mode, dev_t rdev)
+				      struct bch_inode_unpacked *parent,
+				      const char *name,
+				      uid_t uid, gid_t gid,
+				      mode_t mode, dev_t rdev)
 {
 	struct qstr qstr = QSTR(name);
 	struct bch_inode_unpacked new_inode;
@@ -323,6 +323,124 @@ static int dirent_cmp(const void *_l, const void *_r)
 		strcmp(l->d_name, r->d_name);
 }
 
+typedef DARRAY(struct dirent) dirents;
+
+struct readdir_out {
+	struct dir_context	ctx;
+	dirents			*dirents;
+};
+
+static int readdir_actor(struct dir_context *ctx, const char *name, int name_len,
+			 loff_t pos, u64 inum, unsigned type)
+{
+	struct readdir_out *out = container_of(ctx, struct readdir_out, ctx);
+
+	struct dirent d = {
+		.d_ino	= inum,
+		.d_type	= type,
+	};
+	memcpy(d.d_name, name, name_len);
+	d.d_name[name_len] = '\0';
+
+	return darray_push(out->dirents, d);
+}
+
+static int simple_readdir(struct bch_fs *c,
+			  subvol_inum dir_inum,
+			  struct bch_inode_unpacked *dir,
+			  dirents *dirents)
+{
+	darray_init(dirents);
+
+	struct bch_hash_info hash_info = bch2_hash_info_init(c, dir);
+	struct readdir_out dst_dirents = { .ctx.actor = readdir_actor, .dirents = dirents };
+
+	int ret = bch2_readdir(c, dir_inum, &hash_info, &dst_dirents.ctx);
+	bch_err_fn(c, ret);
+	if (ret) {
+		darray_exit(dirents);
+		return ret;
+	}
+
+	sort(dirents->data, dirents->nr, sizeof(dirents->data[0]), dirent_cmp, NULL);
+	return 0;
+}
+
+static int recursive_remove(struct bch_fs *c,
+			    subvol_inum dir_inum,
+			    struct bch_inode_unpacked *dir,
+			    struct dirent *d)
+{
+	subvol_inum child_inum = dir_inum;
+	child_inum.inum = d->d_ino;
+
+	struct bch_inode_unpacked child;
+	int ret = bch2_inode_find_by_inum(c, child_inum, &child);
+	if (ret)
+		return ret;
+
+	if (S_ISDIR(child.bi_mode)) {
+		dirents child_dirents;
+		ret = simple_readdir(c, child_inum, &child, &child_dirents);
+		if (ret)
+			return ret;
+
+		darray_for_each(child_dirents, i) {
+			ret = recursive_remove(c, child_inum, &child, i);
+			if (ret) {
+				darray_exit(&child_dirents);
+				return ret;
+			}
+		}
+
+		darray_exit(&child_dirents);
+	}
+
+	struct qstr d_name = QSTR_INIT(d->d_name, strlen(d->d_name));
+
+	ret = bch2_trans_commit_do(c, NULL, NULL,
+			BCH_TRANS_COMMIT_no_enospc,
+		bch2_unlink_trans(trans, dir_inum, dir, &child, &d_name, false));
+	if (ret)
+		return ret;
+
+	return !child.bi_nlink
+		? bch2_inode_rm(c, child_inum)
+		: 0;
+}
+
+static int delete_non_matching_dirents(struct bch_fs *c,
+				       subvol_inum dst_dir_inum,
+				       struct bch_inode_unpacked *dst_dir,
+				       dirents src_dirents)
+{
+	/* Assumes single subvolume */
+
+	dirents dst_dirents;
+	int ret = simple_readdir(c, dst_dir_inum, dst_dir, &dst_dirents);
+	if (ret)
+		return ret;
+
+	struct dirent *src_d = src_dirents.data;
+	darray_for_each(dst_dirents, dst_d) {
+		while (src_d < &darray_top(src_dirents) &&
+		       dirent_cmp(src_d,dst_d) < 0)
+			src_d++;
+
+		if (src_d == &darray_top(src_dirents) ||
+		    dirent_cmp(src_d, dst_d) ||
+		    src_d->d_type != dst_d->d_type) {
+			ret = recursive_remove(c, dst_dir_inum, dst_dir, dst_d);
+			if (ret)
+				goto err;
+		}
+	}
+err:
+	darray_exit(&dst_dirents);
+	bch_err_fn(c, ret);
+	return ret;
+}
+
 static void copy_dir(struct copy_fs_state *s,
 		     struct bch_fs *c,
 		     struct bch_inode_unpacked *dst,
@@ -331,7 +449,7 @@ static void copy_dir(struct copy_fs_state *s,
 {
 	DIR *dir = fdopendir(src_fd);
 	struct dirent *d;
-	DARRAY(struct dirent) dirents = {};
+	dirents dirents = {};
 
 	while ((errno = 0), (d = readdir(dir)))
 		darray_push(&dirents, *d);
@@ -340,6 +458,11 @@ static void copy_dir(struct copy_fs_state *s,
 		die("readdir error: %m");
 
 	sort(dirents.data, dirents.nr, sizeof(dirents.data[0]), dirent_cmp, NULL);
+
+	subvol_inum dir_inum = { 1, dst->bi_inum };
+	int ret = delete_non_matching_dirents(c, dir_inum, dst, dirents);
+	if (ret)
+		goto err;
 
 	darray_for_each(dirents, d) {
 		struct bch_inode_unpacked inode;
@@ -418,7 +541,7 @@ static void copy_dir(struct copy_fs_state *s,
 next:
 		free(child_path);
 	}
-
+err:
 	darray_exit(&dirents);
 	closedir(dir);
 }
