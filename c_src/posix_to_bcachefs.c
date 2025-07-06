@@ -7,6 +7,8 @@
 #include "posix_to_bcachefs.h"
 #include "libbcachefs/alloc_foreground.h"
 #include "libbcachefs/buckets.h"
+#include "libbcachefs/io_misc.h"
+#include "libbcachefs/io_read.h"
 #include "libbcachefs/io_write.h"
 #include "libbcachefs/namei.h"
 #include "libbcachefs/str_hash.h"
@@ -167,7 +169,47 @@ void copy_xattrs(struct bch_fs *c, struct bch_inode_unpacked *dst,
 
 #define WRITE_DATA_BUF	(1 << 20)
 
-static char buf[WRITE_DATA_BUF] __aligned(PAGE_SIZE);
+static char src_buf[WRITE_DATA_BUF] __aligned(PAGE_SIZE);
+static char dst_buf[WRITE_DATA_BUF] __aligned(PAGE_SIZE);
+
+static void read_data_endio(struct bio *bio)
+{
+	closure_put(bio->bi_private);
+}
+
+static void read_data(struct bch_fs *c,
+		      subvol_inum inum,
+		      struct bch_inode_unpacked *inode,
+		      u64 offset, void *buf, size_t len)
+{
+	BUG_ON(offset	& (block_bytes(c) - 1));
+	BUG_ON(len	& (block_bytes(c) - 1));
+	BUG_ON(len > WRITE_DATA_BUF);
+
+	struct closure cl;
+	closure_init_stack(&cl);
+
+	struct bch_read_bio rbio;
+	struct bio_vec bv[WRITE_DATA_BUF / PAGE_SIZE];
+
+	bio_init(&rbio.bio, NULL, bv, ARRAY_SIZE(bv), 0);
+	rbio.bio.bi_opf			= REQ_OP_READ|REQ_SYNC;
+	rbio.bio.bi_iter.bi_sector	= offset >> 9;
+	rbio.bio.bi_private		= &cl;
+	bch2_bio_map(&rbio.bio, buf, len);
+
+	struct bch_io_opts opts;
+	bch2_inode_opts_get(&opts, c, inode);
+
+	rbio_init(&rbio.bio, c, opts, read_data_endio);
+
+	closure_get(&cl);
+	bch2_read(c, &rbio, inum);
+	closure_sync(&cl);
+
+	if (rbio.ret)
+		die("read error: %s", bch2_err_str(rbio.ret));
+}
 
 static void write_data(struct bch_fs *c,
 		       struct bch_inode_unpacked *dst_inode,
@@ -209,13 +251,13 @@ static void copy_data(struct bch_fs *c,
 		      int src_fd, u64 start, u64 end)
 {
 	while (start < end) {
-		unsigned len = min_t(u64, end - start, sizeof(buf));
+		unsigned len = min_t(u64, end - start, sizeof(src_buf));
 		unsigned pad = round_up(len, block_bytes(c)) - len;
 
-		xpread(src_fd, buf, len, start);
-		memset(buf + len, 0, pad);
+		xpread(src_fd, src_buf, len, start);
+		memset(src_buf + len, 0, pad);
 
-		write_data(c, dst_inode, start, buf, len + pad);
+		write_data(c, dst_inode, start, src_buf, len + pad);
 		start += len;
 	}
 }
@@ -277,21 +319,27 @@ static void link_data(struct bch_fs *c, struct bch_inode_unpacked *dst,
 	}
 }
 
-void copy_link(struct bch_fs *c, struct bch_inode_unpacked *dst,
-		      char *src)
+void copy_link(struct bch_fs *c,
+	       subvol_inum dst_inum,
+	       struct bch_inode_unpacked *dst,
+	       char *src)
 {
-	ssize_t i;
-	ssize_t ret = readlink(src, buf, sizeof(buf));
+	s64 i_sectors_delta = 0;
+	int ret = bch2_fpunch(c, dst_inum, 0, U64_MAX, &i_sectors_delta);
+	if (ret)
+		die("bch2_fpunch error: %s", bch2_err_str(ret));
+
+	ret = readlink(src, src_buf, sizeof(src_buf));
 	if (ret < 0)
 		die("readlink error: %m");
 
-	for (i = ret; i < round_up(ret, block_bytes(c)); i++)
-		buf[i] = 0;
+	for (unsigned i = ret; i < round_up(ret, block_bytes(c)); i++)
+		src_buf[i] = 0;
 
-	write_data(c, dst, 0, buf, round_up(ret, block_bytes(c)));
+	write_data(c, dst, 0, src_buf, round_up(ret, block_bytes(c)));
 }
 
-static void copy_file(struct bch_fs *c, struct bch_inode_unpacked *dst,
+static void link_file_data(struct bch_fs *c, struct bch_inode_unpacked *dst,
 		      int src_fd, u64 src_size,
 		      char *src_path, struct copy_fs_state *s,
 		      u64 reserve_start)
@@ -340,6 +388,149 @@ static void copy_file(struct bch_fs *c, struct bch_inode_unpacked *dst,
 		link_data(c, dst, e.fe_logical, e.fe_physical, e.fe_length);
 	}
 	fiemap_iter_exit(&iter);
+}
+
+static struct range seek_data_aligned(int fd, u64 i_size, loff_t o, unsigned bs)
+{
+	struct range seek_data(int fd, loff_t o)
+	{
+		s64 s = lseek(fd, o, SEEK_DATA);
+		if (s < 0 && errno == ENXIO)
+			return (struct range) {};
+		if (s < 0)
+			die("lseek error: %m");
+
+		s64 e = lseek(fd, s, SEEK_HOLE);
+		if (e < 0 && errno == ENXIO)
+			e = i_size;
+		if (e < 0)
+			die("lseek error: %m");
+
+		return (struct range) { s, e };
+	}
+
+	struct range __seek_data_aligned(int fd, loff_t o, unsigned bs)
+	{
+		struct range r = seek_data(fd, o);
+
+		r.start	= round_down(r.start,	bs);
+		r.end	= round_up(r.end,	bs);
+		return r;
+	}
+
+	struct range r = __seek_data_aligned(fd, o, bs);
+	if (!r.end)
+		return r;
+
+	while (true) {
+		struct range n = __seek_data_aligned(fd, r.end, bs);
+		if (!n.end || r.end < n.start)
+			break;
+
+		r.end = n.end;
+	}
+
+	return r;
+}
+
+static struct range seek_mismatch_aligned(const char *buf1, const char *buf2,
+					  unsigned offset, unsigned len,
+					  unsigned bs)
+{
+	struct range seek_mismatch(unsigned o)
+	{
+		while (o < len && buf1[o] == buf2[o])
+			o++;
+
+		if (o == len)
+			return (struct range) {};
+
+		unsigned s = o;
+		while (o < len && buf1[o] != buf2[o])
+			o++;
+
+		return (struct range) { s, o };
+	}
+
+	struct range __seek_mismatch_aligned(unsigned o)
+	{
+		struct range r = seek_mismatch(o);
+
+		r.start	= round_down(r.start,	bs);
+		r.end	= round_up(r.end,	bs);
+		return r;
+	}
+
+	struct range r = __seek_mismatch_aligned(offset);
+	if (r.end)
+		while (true) {
+			struct range n = __seek_mismatch_aligned(r.end);
+			if (!n.end || r.end < n.start)
+				break;
+
+			r.end = n.end;
+		}
+
+	return r;
+}
+
+static void copy_sync_file_range(struct bch_fs *c,
+				 subvol_inum dst_inum,
+				 struct bch_inode_unpacked *dst,
+				 int src_fd, u64 src_size,
+				 u64 *total_wrote,
+				 struct range r)
+{
+	while (r.start != r.end) {
+		BUG_ON(r.start > r.end);
+
+		unsigned b = min(r.end - r.start, WRITE_DATA_BUF);
+
+		memset(src_buf, 0, b);
+		xpread(src_fd, src_buf, min(b, src_size - r.start), r.start);
+
+		read_data(c, dst_inum, dst, r.start, dst_buf, b);
+
+		struct range m = {};
+		while ((m = seek_mismatch_aligned(src_buf, dst_buf,
+						  m.end, b, c->opts.block_size)).end) {
+			write_data(c, dst, r.start + m.start,
+				   src_buf + m.start, m.end - m.start);
+			*total_wrote += m.end - m.start;
+		}
+
+		r.start += b;
+	}
+}
+
+static void copy_sync_file_data(struct bch_fs *c,
+				subvol_inum dst_inum,
+				struct bch_inode_unpacked *dst,
+				int src_fd, u64 src_size,
+				u64 *total_wrote)
+{
+	s64 i_sectors_delta = 0;
+
+	struct range next, prev = {};
+
+	while ((next = seek_data_aligned(src_fd, src_size, prev.end, c->opts.block_size)).end) {
+		if (next.start) {
+			BUG_ON(prev.end >= next.start);
+
+			int ret = bch2_fpunch(c, dst_inum, prev.end >> 9, next.start >> 9, &i_sectors_delta);
+			if (ret)
+				die("bch2_fpunch error: %s", bch2_err_str(ret));
+		}
+
+		copy_sync_file_range(c, dst_inum, dst, src_fd, src_size, total_wrote, next);
+
+		prev = next;
+	}
+
+	/* end of file, truncate remaining */
+	int ret = bch2_fpunch(c, dst_inum, prev.end >> 9, U64_MAX, &i_sectors_delta);
+	if (ret)
+		die("bch2_fpunch error: %s", bch2_err_str(ret));
 }
 
 static int dirent_cmp(const void *_l, const void *_r)
@@ -473,7 +664,8 @@ static void copy_dir(struct copy_fs_state *s,
 		     struct bch_fs *c,
 		     struct bch_inode_unpacked *dst,
 		     int src_fd, const char *src_path,
-		     u64 reserve_start)
+		     u64 reserve_start,
+		     u64 *total_wrote)
 {
 	DIR *dir = fdopendir(src_fd);
 	struct dirent *d;
@@ -524,35 +716,40 @@ static void copy_dir(struct copy_fs_state *s,
 			goto next;
 		}
 
-		subvol_inum dst_inum = { 1, dst->bi_inum };
-		inode = create_or_update_file(c, dst_inum, dst, d->d_name,
+		subvol_inum dst_dir_inum = { 1, dst->bi_inum };
+		inode = create_or_update_file(c, dst_dir_inum, dst, d->d_name,
 				    stat.st_uid, stat.st_gid,
 				    stat.st_mode, stat.st_rdev);
+
+		subvol_inum dst_child_inum = { 1, inode.bi_inum };
 
 		if (dst_inum_p)
 			*dst_inum_p = inode.bi_inum;
 
 		copy_xattrs(c, &inode, d->d_name);
 
-		/* copy xattrs */
-
 		switch (mode_to_type(stat.st_mode)) {
 		case DT_DIR:
 			fd = xopen(d->d_name, O_RDONLY|O_NOATIME);
-			copy_dir(s, c, &inode, fd, child_path, reserve_start);
+			copy_dir(s, c, &inode, fd, child_path,
+				 reserve_start, total_wrote);
 			break;
 		case DT_REG:
 			inode.bi_size = stat.st_size;
 
 			fd = xopen(d->d_name, O_RDONLY|O_NOATIME);
-			copy_file(c, &inode, fd, stat.st_size,
-				  child_path, s, reserve_start);
+			if (s->type == BCH_MIGRATE_migrate)
+				link_file_data(c, &inode, fd, stat.st_size,
+					       child_path, s, reserve_start);
+			else
+				copy_sync_file_data(c, dst_child_inum, &inode,
+						    fd, stat.st_size, total_wrote);
 			xclose(fd);
 			break;
 		case DT_LNK:
 			inode.bi_size = stat.st_size;
 
-			copy_link(c, &inode, d->d_name);
+			copy_link(c, dst_child_inum, &inode, d->d_name);
 			break;
 		case DT_FIFO:
 		case DT_CHR:
@@ -628,7 +825,10 @@ void copy_fs(struct bch_fs *c, int src_fd, const char *src_path,
 	copy_xattrs(c, &root_inode, ".");
 
 	/* now, copy: */
-	copy_dir(s, c, &root_inode, dup(src_fd), src_path, reserve_start);
+	u64 total_wrote = 0;
+	copy_dir(s, c, &root_inode, dup(src_fd), src_path, reserve_start, &total_wrote);
+
+	pr_info("wrote %llu", total_wrote);
 
 	if (s->type == BCH_MIGRATE_migrate)
 		reserve_old_fs_space(c, &root_inode, &s->extents, reserve_start);
