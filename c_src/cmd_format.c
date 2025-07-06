@@ -102,12 +102,12 @@ static const struct option format_opts[] = {
 };
 #undef x
 
-static void build_fs(struct bch_fs *c, const char *src_path)
+static int build_fs(struct bch_fs *c, const char *src_path)
 {
 	struct copy_fs_state s = {};
 	int src_fd = xopen(src_path, O_RDONLY|O_NOATIME);
 
-	copy_fs(c, src_fd, src_path, &s, 0);
+	return copy_fs(c, &s, src_fd, src_path);
 }
 
 int cmd_format(int argc, char *argv[])

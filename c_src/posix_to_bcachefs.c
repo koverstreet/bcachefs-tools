@@ -339,10 +339,10 @@ void copy_link(struct bch_fs *c,
 	write_data(c, dst, 0, src_buf, round_up(ret, block_bytes(c)));
 }
 
-static void link_file_data(struct bch_fs *c, struct bch_inode_unpacked *dst,
-		      int src_fd, u64 src_size,
-		      char *src_path, struct copy_fs_state *s,
-		      u64 reserve_start)
+static void link_file_data(struct bch_fs *c,
+			   struct copy_fs_state *s,
+			   struct bch_inode_unpacked *dst,
+			   int src_fd, char *src_path, u64 src_size)
 {
 	struct fiemap_iter iter;
 	struct fiemap_extent e;
@@ -355,9 +355,13 @@ static void link_file_data(struct bch_fs *c, struct bch_inode_unpacked *dst,
 	fiemap_iter_exit(&iter);
 
 	fiemap_for_each(src_fd, iter, e) {
+		s->total_input += e.fe_length;
+
 		u64 src_max = roundup(src_size, block_bytes(c));
 
 		e.fe_length = min(e.fe_length, src_max - e.fe_logical);
+
+		unsigned visible_len = min(src_size - e.fe_logical, e.fe_length);
 
 		if ((e.fe_logical	& (block_bytes(c) - 1)) ||
 		    (e.fe_length	& (block_bytes(c) - 1)))
@@ -368,16 +372,16 @@ static void link_file_data(struct bch_fs *c, struct bch_inode_unpacked *dst,
 				  FIEMAP_EXTENT_NOT_ALIGNED|
 				  FIEMAP_EXTENT_DATA_INLINE))) {
 			copy_data(c, dst, src_fd, e.fe_logical,
-				  e.fe_logical + min(src_size - e.fe_logical,
-				      e.fe_length));
+				  e.fe_logical + visible_len);
+			s->total_wrote += visible_len;
 			continue;
 		}
 
 		/* If the data is in bcachefs's superblock region, copy it: */
-		if (e.fe_physical < reserve_start) {
+		if (e.fe_physical < s->reserve_start) {
 			copy_data(c, dst, src_fd, e.fe_logical,
-				  e.fe_logical + min(src_size - e.fe_logical,
-				      e.fe_length));
+				  e.fe_logical + visible_len);
+			s->total_wrote += visible_len;
 			continue;
 		}
 
@@ -386,6 +390,7 @@ static void link_file_data(struct bch_fs *c, struct bch_inode_unpacked *dst,
 
 		range_add(&s->extents, e.fe_physical, e.fe_length);
 		link_data(c, dst, e.fe_logical, e.fe_physical, e.fe_length);
+		s->total_linked += e.fe_length;
 	}
 	fiemap_iter_exit(&iter);
 }
@@ -475,10 +480,10 @@ static struct range seek_mismatch_aligned(const char *buf1, const char *buf2,
 }
 
 static void copy_sync_file_range(struct bch_fs *c,
+				 struct copy_fs_state *s,
 				 subvol_inum dst_inum,
 				 struct bch_inode_unpacked *dst,
 				 int src_fd, u64 src_size,
-				 u64 *total_wrote,
 				 struct range r)
 {
 	while (r.start != r.end) {
@@ -496,7 +501,7 @@ static void copy_sync_file_range(struct bch_fs *c,
 						  m.end, b, c->opts.block_size)).end) {
 			write_data(c, dst, r.start + m.start,
 				   src_buf + m.start, m.end - m.start);
-			*total_wrote += m.end - m.start;
+			s->total_wrote += m.end - m.start;
 		}
 
 		r.start += b;
@@ -504,10 +509,10 @@ static void copy_sync_file_range(struct bch_fs *c,
 }
 
 static void copy_sync_file_data(struct bch_fs *c,
+				struct copy_fs_state *s,
 				subvol_inum dst_inum,
 				struct bch_inode_unpacked *dst,
-				int src_fd, u64 src_size,
-				u64 *total_wrote)
+				int src_fd, u64 src_size)
 {
 	s64 i_sectors_delta = 0;
 
@@ -522,7 +527,9 @@ static void copy_sync_file_data(struct bch_fs *c,
 				die("bch2_fpunch error: %s", bch2_err_str(ret));
 		}
 
-		copy_sync_file_range(c, dst_inum, dst, src_fd, src_size, total_wrote, next);
+		copy_sync_file_range(c, s, dst_inum, dst, src_fd, src_size, next);
+
+		s->total_input += next.end - next.start;
 
 		prev = next;
 	}
@@ -595,6 +602,7 @@ static int recursive_remove(struct bch_fs *c,
 
 	struct bch_inode_unpacked child;
 	int ret = bch2_inode_find_by_inum(c, child_inum, &child);
+	bch_err_msg(c, ret, "looking up inode for %s", d->d_name);
 	if (ret)
 		return ret;
 
@@ -620,12 +628,16 @@ static int recursive_remove(struct bch_fs *c,
 	ret = bch2_trans_commit_do(c, NULL, NULL,
 			BCH_TRANS_COMMIT_no_enospc,
 		bch2_unlink_trans(trans, dir_inum, dir, &child, &d_name, false));
+	bch_err_msg(c, ret, "unlinking %s", d->d_name);
 	if (ret)
 		return ret;
 
-	return !child.bi_nlink
-		? bch2_inode_rm(c, child_inum)
-		: 0;
+	if (!(child.bi_flags & BCH_INODE_unlinked))
+		return 0;
+
+	ret = bch2_inode_rm(c, child_inum);
+	bch_err_msg(c, ret, "deleting %s", d->d_name);
+	return ret;
 }
 
 static int delete_non_matching_dirents(struct bch_fs *c,
@@ -643,12 +655,13 @@ static int delete_non_matching_dirents(struct bch_fs *c,
 	struct dirent *src_d = src_dirents.data;
 	darray_for_each(dst_dirents, dst_d) {
 		while (src_d < &darray_top(src_dirents) &&
-		       dirent_cmp(src_d,dst_d) < 0)
+		       dirent_cmp(src_d, dst_d) < 0)
 			src_d++;
 
 		if (src_d == &darray_top(src_dirents) ||
-		    dirent_cmp(src_d, dst_d) ||
-		    src_d->d_type != dst_d->d_type) {
+		    dirent_cmp(src_d, dst_d)) {
+			printf("deleting %s type %u\n", dst_d->d_name, dst_d->d_type);
+
 			ret = recursive_remove(c, dst_dir_inum, dst_dir, dst_d);
 			if (ret)
 				goto err;
@@ -656,16 +669,13 @@ static int delete_non_matching_dirents(struct bch_fs *c,
 	}
 err:
 	darray_exit(&dst_dirents);
-	bch_err_fn(c, ret);
 	return ret;
 }
 
-static void copy_dir(struct copy_fs_state *s,
-		     struct bch_fs *c,
-		     struct bch_inode_unpacked *dst,
-		     int src_fd, const char *src_path,
-		     u64 reserve_start,
-		     u64 *total_wrote)
+static int copy_dir(struct bch_fs *c,
+		    struct copy_fs_state *s,
+		    struct bch_inode_unpacked *dst,
+		    int src_fd, const char *src_path)
 {
 	DIR *dir = fdopendir(src_fd);
 	struct dirent *d;
@@ -731,19 +741,20 @@ static void copy_dir(struct copy_fs_state *s,
 		switch (mode_to_type(stat.st_mode)) {
 		case DT_DIR:
 			fd = xopen(d->d_name, O_RDONLY|O_NOATIME);
-			copy_dir(s, c, &inode, fd, child_path,
-				 reserve_start, total_wrote);
+			ret = copy_dir(c, s, &inode, fd, child_path);
+			if (ret)
+				goto err;
 			break;
 		case DT_REG:
 			inode.bi_size = stat.st_size;
 
 			fd = xopen(d->d_name, O_RDONLY|O_NOATIME);
 			if (s->type == BCH_MIGRATE_migrate)
-				link_file_data(c, &inode, fd, stat.st_size,
-					       child_path, s, reserve_start);
+				link_file_data(c, s, &inode,
+					       fd, child_path, stat.st_size);
 			else
-				copy_sync_file_data(c, dst_child_inum, &inode,
-						    fd, stat.st_size, total_wrote);
+				copy_sync_file_data(c, s, dst_child_inum, &inode,
+						    fd, stat.st_size);
 			xclose(fd);
 			break;
 		case DT_LNK:
@@ -770,6 +781,7 @@ next:
 err:
 	darray_exit(&dirents);
 	closedir(dir);
+	return ret;
 }
 
 static void reserve_old_fs_space(struct bch_fs *c,
@@ -802,8 +814,8 @@ static void reserve_old_fs_space(struct bch_fs *c,
 	update_inode(c, &dst);
 }
 
-void copy_fs(struct bch_fs *c, int src_fd, const char *src_path,
-	     struct copy_fs_state *s, u64 reserve_start)
+int copy_fs(struct bch_fs *c, struct copy_fs_state *s,
+	    int src_fd, const char *src_path)
 {
 	if (!S_ISDIR(xfstat(src_fd).st_mode))
 		die("%s is not a directory", src_path);
@@ -814,8 +826,9 @@ void copy_fs(struct bch_fs *c, int src_fd, const char *src_path,
 	struct bch_inode_unpacked root_inode;
 	int ret = bch2_inode_find_by_inum(c, (subvol_inum) { 1, BCACHEFS_ROOT_INO },
 					  &root_inode);
+	bch_err_msg(c, ret, "looking up root directory");
 	if (ret)
-		die("error looking up root directory: %s", bch2_err_str(ret));
+		return ret;
 
 	if (fchdir(src_fd))
 		die("fchdir error: %m");
@@ -825,16 +838,37 @@ void copy_fs(struct bch_fs *c, int src_fd, const char *src_path,
 	copy_xattrs(c, &root_inode, ".");
 
 	/* now, copy: */
-	u64 total_wrote = 0;
-	copy_dir(s, c, &root_inode, dup(src_fd), src_path, reserve_start, &total_wrote);
+	ret = copy_dir(c, s, &root_inode, dup(src_fd), src_path);
+	bch_err_msg(c, ret, "copying filesystem");
+	if (ret)
+		return ret;
 
-	pr_info("wrote %llu", total_wrote);
+	CLASS(printbuf, buf)();
+	printbuf_indent_add_nextline(&buf, 2);
+	printbuf_tabstop_push(&buf, 20);
+	prt_str_indented(&buf, "Total input:\t");
+	prt_human_readable_u64(&buf, s->total_input);
+	prt_newline(&buf);
+
+	if (s->total_wrote) {
+		prt_str_indented(&buf, "Wrote:\t");
+		prt_human_readable_u64(&buf, s->total_wrote);
+		prt_newline(&buf);
+	}
+
+	if (s->total_linked) {
+		prt_str(&buf, "Linked:\t");
+		prt_human_readable_u64(&buf, s->total_linked);
+		prt_newline(&buf);
+	}
+	fputs(buf.buf, stdout);
 
 	if (s->type == BCH_MIGRATE_migrate)
-		reserve_old_fs_space(c, &root_inode, &s->extents, reserve_start);
+		reserve_old_fs_space(c, &root_inode, &s->extents, s->reserve_start);
 
 	update_inode(c, &root_inode);
 
 	darray_exit(&s->extents);
 	genradix_free(&s->hardlinks);
+	return 0;
 }

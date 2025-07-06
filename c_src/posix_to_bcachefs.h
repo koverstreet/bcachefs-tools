@@ -36,6 +36,12 @@ struct copy_fs_state {
 	GENRADIX(u64)		hardlinks;
 	ranges			extents;
 	enum bch_migrate_type	type;
+
+	u64			reserve_start;
+
+	u64			total_input;
+	u64			total_wrote;
+	u64			total_linked;
 };
 
 /*
@@ -49,6 +55,6 @@ struct copy_fs_state {
  * In the migrate case, all the fields from `copy_fs_state` need to be
  * initialized (`hardlinks` is initialized with zeroes).
  */
-void copy_fs(struct bch_fs *c, int src_fd, const char *src_path,
-	     struct copy_fs_state *s, u64);
+int copy_fs(struct bch_fs *, struct copy_fs_state *, int, const char *);
+
 #endif /* _LIBBCACHE_H */

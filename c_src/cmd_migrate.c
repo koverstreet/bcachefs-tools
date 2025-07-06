@@ -279,16 +279,18 @@ static int migrate_fs(const char		*fs_path,
 		.dev		= stat.st_dev,
 		.extents	= extents,
 		.type		= BCH_MIGRATE_migrate,
+		.reserve_start	= roundup((format_opts.superblock_size * 2 + 8) << 9,
+					  bucket_bytes(c->devs[0])),
 	};
 
+	BUG_ON(!s.reserve_start);
 
-	u64 reserve_start = roundup((format_opts.superblock_size * 2 + 8) << 9,
-				    bucket_bytes(c->devs[0]));
-	BUG_ON(!reserve_start);
-
-	copy_fs(c, fs_fd, fs_path, &s, reserve_start);
+	ret = copy_fs(c, &s, fs_fd, fs_path);
 
 	bch2_fs_stop(c);
+
+	if (ret)
+		return ret;
 
 	printf("Migrate complete, running fsck:\n");
 	opt_set(opts, nostart,	false);
