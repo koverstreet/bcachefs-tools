@@ -640,6 +640,12 @@ static int recursive_remove(struct bch_fs *c,
 	return ret;
 }
 
+static void dump_dirents(struct printbuf *out, dirents dirents)
+{
+	darray_for_each(dirents, d)
+		prt_printf(out, "%s type %u -> %lu\n", d->d_name, d->d_type, d->d_ino);
+}
+
 static int delete_non_matching_dirents(struct bch_fs *c,
 				       subvol_inum dst_dir_inum,
 				       struct bch_inode_unpacked *dst_dir,
@@ -652,6 +658,16 @@ static int delete_non_matching_dirents(struct bch_fs *c,
 	if (ret)
 		return ret;
 
+	if (1) {
+		CLASS(printbuf, buf)();
+		prt_printf(&buf, "src dirents:\n");
+		dump_dirents(&buf, src_dirents);
+
+		prt_printf(&buf, "dst dirents:\n");
+		dump_dirents(&buf, dst_dirents);
+		fputs(buf.buf, stdout);
+	}
+
 	struct dirent *src_d = src_dirents.data;
 	darray_for_each(dst_dirents, dst_d) {
 		while (src_d < &darray_top(src_dirents) &&
@@ -660,6 +676,8 @@ static int delete_non_matching_dirents(struct bch_fs *c,
 
 		if (src_d == &darray_top(src_dirents) ||
 		    dirent_cmp(src_d, dst_d)) {
+			if (src_d != &darray_top(src_dirents))
+				printf("have %s type %u\n", src_d->d_name, src_d->d_type);
 			printf("deleting %s type %u\n", dst_d->d_name, dst_d->d_type);
 
 			ret = recursive_remove(c, dst_dir_inum, dst_dir, dst_d);
