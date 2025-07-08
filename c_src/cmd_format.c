@@ -21,6 +21,7 @@
 #include <uuid/uuid.h>
 
 #include "cmds.h"
+#include "tools-util.h"
 #include "posix_to_bcachefs.h"
 #include "libbcachefs.h"
 #include "crypto.h"
@@ -34,6 +35,7 @@
 #define OPTS						\
 x(0,	replicas,		required_argument)	\
 x(0,	encrypted,		no_argument)		\
+x(0,	passphrase_file,	required_argument)	\
 x(0,	no_passphrase,		no_argument)		\
 x('L',	fs_label,		required_argument)	\
 x('U',	uuid,			required_argument)	\
@@ -59,6 +61,7 @@ static void format_usage(void)
 
 	puts("      --replicas=#            Sets both data and metadata replicas\n"
 	     "      --encrypted             Enable whole filesystem encryption (chacha20/poly1305)\n"
+	     "      --passphrase_file=file  File containing passphrase used for encryption/decryption\n"
 	     "      --no_passphrase         Don't encrypt master encryption key\n"
 	     "  -L, --fs_label=label\n"
 	     "  -U, --uuid=uuid\n"
@@ -173,6 +176,9 @@ int cmd_format(int argc, char *argv[])
 		case O_encrypted:
 			opts.encrypted = true;
 			break;
+		case O_passphrase_file:
+			opts.passphrase_file = optarg;
+			break;
 		case O_no_passphrase:
 			no_passphrase = true;
 			break;
@@ -247,8 +253,19 @@ int cmd_format(int argc, char *argv[])
 	if (opts.source && !initialize)
 		die("--source, --no_initialize are incompatible");
 
+	if (opts.passphrase_file && !opts.encrypted)
+		die("--passphrase_file, requires --encrypted set");
+
+	if (opts.passphrase_file && no_passphrase) {
+		die("--passphrase_file, --no_passphrase are incompatible");
+	}
+
 	if (opts.encrypted && !no_passphrase) {
-		opts.passphrase = read_passphrase_twice("Enter passphrase: ");
+		if (opts.passphrase_file) {
+			opts.passphrase =  read_file_str(AT_FDCWD, opts.passphrase_file);
+		} else {
+			opts.passphrase = read_passphrase_twice("Enter passphrase: ");
+		}
 		initialize = false;
 	}
 
