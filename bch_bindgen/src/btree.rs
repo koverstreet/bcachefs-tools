@@ -71,7 +71,7 @@ impl<'t> BtreeIter<'t> {
                 iter.as_mut_ptr(),
                 btree,
                 pos,
-                flags.bits as u32,
+                flags.bits().into(),
             );
 
             BtreeIter { raw: iter.assume_init(), trans }
@@ -153,7 +153,7 @@ impl<'t> BtreeNodeIter<'t> {
                 pos,
                 locks_want,
                 depth,
-                flags.bits as u32,
+                flags.bits().into(),
             );
 
             BtreeNodeIter { raw: iter.assume_init(), trans }
