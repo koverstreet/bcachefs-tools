@@ -117,6 +117,7 @@ static inline void range_add(ranges *data, u64 offset, u64 size)
 	}));
 }
 
+void ranges_sort(ranges *);
 void ranges_sort_merge(ranges *);
 void ranges_roundup(ranges *, unsigned);
 void ranges_rounddown(ranges *, unsigned);

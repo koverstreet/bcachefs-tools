@@ -291,11 +291,16 @@ static int range_cmp(const void *_l, const void *_r)
 	return 0;
 }
 
+void ranges_sort(ranges *r)
+{
+	sort(r->data, r->nr, sizeof(r->data[0]), range_cmp, NULL);
+}
+
 void ranges_sort_merge(ranges *r)
 {
 	ranges tmp = { 0 };
 
-	sort(r->data, r->nr, sizeof(r->data[0]), range_cmp, NULL);
+	ranges_sort(r);
 
 	/* Merge contiguous ranges: */
 	darray_for_each(*r, i) {
