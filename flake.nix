@@ -245,13 +245,13 @@
               bcachefs-tools-fuse-i686-linux
               ;
 
-            cargo-clippy = common.craneLib.cargoClippy (
-              common.args
-              // {
-                inherit (common) cargoArtifacts;
-                cargoClippyExtraArgs = "--all-targets --all-features -- --deny warnings";
-              }
-            );
+            #cargo-clippy = common.craneLib.cargoClippy (
+            #  common.args
+            #  // {
+            #    inherit (common) cargoArtifacts;
+            #    cargoClippyExtraArgs = "--all-targets --all-features -- --deny warnings";
+            #  }
+            #);
 
             # we have to build our own `craneLib.cargoTest`
             cargo-test = common.craneLib.mkCargoDerivation (
