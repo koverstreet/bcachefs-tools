@@ -31,24 +31,19 @@ struct qcow2_hdr {
 	u64			snapshots_offset;
 };
 
-struct qcow2_image {
-	int			fd;
-	u32			block_size;
-	u64			*l1_table;
-	u64			l1_offset;
-	u32			l1_index;
-	u64			*l2_table;
-	u64			offset;
-};
+static void __qcow2_write_buf(struct qcow2_image *img, void *buf, unsigned len)
+{
+	xpwrite(img->outfd, buf, img->block_size, img->offset, "qcow2 data");
+	img->offset += img->block_size;
+}
 
 static void flush_l2(struct qcow2_image *img)
 {
 	if (img->l1_index != -1) {
 		img->l1_table[img->l1_index] =
 			cpu_to_be64(img->offset|QCOW_OFLAG_COPIED);
-		xpwrite(img->fd, img->l2_table, img->block_size, img->offset,
-			"qcow2 l2 table");
-		img->offset += img->block_size;
+
+		__qcow2_write_buf(img, img->l2_table, img->block_size);
 
 		memset(img->l2_table, 0, img->block_size);
 		img->l1_index = -1;
@@ -69,6 +64,32 @@ static void add_l2(struct qcow2_image *img, u64 src_blk, u64 dst_offset)
 	img->l2_table[l2_index] = cpu_to_be64(dst_offset|QCOW_OFLAG_COPIED);
 }
 
+void qcow2_write_buf(struct qcow2_image *img, void *buf, unsigned len, u64 src_offset)
+{
+	u64 dst_offset = img->offset;
+	__qcow2_write_buf(img, buf, len);
+	add_l2(img, src_offset / img->block_size, dst_offset);
+}
+
+void qcow2_write_ranges(struct qcow2_image *img, ranges *data)
+{
+	ranges_roundup(data, img->block_size);
+	ranges_sort_merge(data);
+
+	char *buf = xmalloc(img->block_size);
+
+	/* Write data: */
+	darray_for_each(*data, r)
+		for (u64 src_offset = r->start;
+		     src_offset < r->end;
+		     src_offset += img->block_size) {
+			xpread(img->infd, buf, img->block_size, src_offset);
+			qcow2_write_buf(img, buf, img->block_size, src_offset);
+		}
+
+	free(buf);
+}
+
 void qcow2_write_image(int infd, int outfd, ranges *data,
 		       unsigned block_size)
 {
@@ -77,7 +98,8 @@ void qcow2_write_image(int infd, int outfd, ranges *data,
 	unsigned l1_size = DIV_ROUND_UP(image_size, (u64) block_size * l2_size);
 	struct qcow2_hdr hdr = { 0 };
 	struct qcow2_image img = {
-		.fd		= outfd,
+		.infd		= infd,
+		.outfd		= outfd,
 		.block_size	= block_size,
 		.l2_table	= xcalloc(l2_size, sizeof(u64)),
 		.l1_table	= xcalloc(l1_size, sizeof(u64)),
@@ -85,34 +107,18 @@ void qcow2_write_image(int infd, int outfd, ranges *data,
 		.offset		= round_up(sizeof(hdr), block_size),
 	};
 	char *buf = xmalloc(block_size);
-	u64 src_offset, dst_offset;
+	u64 dst_offset;
 
 	assert(is_power_of_2(block_size));
 
-	ranges_roundup(data, block_size);
-	ranges_sort_merge(data);
-
-	/* Write data: */
-	darray_for_each(*data, r)
-		for (src_offset = r->start;
-		     src_offset < r->end;
-		     src_offset += block_size) {
-			dst_offset = img.offset;
-			img.offset += img.block_size;
-
-			xpread(infd, buf, block_size, src_offset);
-			xpwrite(outfd, buf, block_size, dst_offset,
-				"qcow2 data");
-
-			add_l2(&img, src_offset / block_size, dst_offset);
-		}
+	qcow2_write_ranges(&img, data);
 
 	flush_l2(&img);
 
 	/* Write L1 table: */
 	dst_offset		= img.offset;
 	img.offset		+= round_up(l1_size * sizeof(u64), block_size);
-	xpwrite(img.fd, img.l1_table, l1_size * sizeof(u64), dst_offset,
+	xpwrite(img.outfd, img.l1_table, l1_size * sizeof(u64), dst_offset,
 		"qcow2 l1 table");
 
 	/* Write header: */
@@ -125,7 +131,7 @@ void qcow2_write_image(int infd, int outfd, ranges *data,
 
 	memset(buf, 0, block_size);
 	memcpy(buf, &hdr, sizeof(hdr));
-	xpwrite(img.fd, buf, block_size, 0,
+	xpwrite(img.outfd, buf, block_size, 0,
 		"qcow2 header");
 
 	free(img.l2_table);
