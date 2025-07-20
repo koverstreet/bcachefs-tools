@@ -4,7 +4,7 @@ default-members = [".", "bch_bindgen"]
 
 [package]
 name = "bcachefs-tools"
-version = "1.25.2"
+version = "1.25.3"
 authors = ["Yuxuan Shui <yshuiv7@gmail.com>", "Kayla Firestack <dev@kaylafire.me>", "Kent Overstreet <kent.overstreet@linux.dev>" ]
 edition = "2021"
 rust-version = "1.77.0"
