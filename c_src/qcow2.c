@@ -90,51 +90,65 @@ void qcow2_write_ranges(struct qcow2_image *img, ranges *data)
 	free(buf);
 }
 
-void qcow2_write_image(int infd, int outfd, ranges *data,
-		       unsigned block_size)
+void qcow2_image_init(struct qcow2_image *img, int infd, int outfd, unsigned block_size)
 {
+	assert(is_power_of_2(block_size));
+
 	u64 image_size = get_size(infd);
 	unsigned l2_size = block_size / sizeof(u64);
 	unsigned l1_size = DIV_ROUND_UP(image_size, (u64) block_size * l2_size);
-	struct qcow2_hdr hdr = { 0 };
-	struct qcow2_image img = {
+
+	*img = (struct qcow2_image) {
 		.infd		= infd,
 		.outfd		= outfd,
+		.image_size	= image_size,
 		.block_size	= block_size,
-		.l2_table	= xcalloc(l2_size, sizeof(u64)),
+		.l1_size	= l1_size,
 		.l1_table	= xcalloc(l1_size, sizeof(u64)),
 		.l1_index	= -1,
-		.offset		= round_up(sizeof(hdr), block_size),
+		.l2_table	= xcalloc(l2_size, sizeof(u64)),
+		.offset		= round_up(sizeof(struct qcow2_hdr), block_size),
 	};
-	char *buf = xmalloc(block_size);
-	u64 dst_offset;
+}
 
-	assert(is_power_of_2(block_size));
+void qcow2_image_finish(struct qcow2_image *img)
+{
+	char *buf = xmalloc(img->block_size);
 
-	qcow2_write_ranges(&img, data);
-
-	flush_l2(&img);
+	flush_l2(img);
 
 	/* Write L1 table: */
-	dst_offset		= img.offset;
-	img.offset		+= round_up(l1_size * sizeof(u64), block_size);
-	xpwrite(img.outfd, img.l1_table, l1_size * sizeof(u64), dst_offset,
+	u64 dst_offset		= img->offset;
+	img->offset		+= round_up(img->l1_size * sizeof(u64), img->block_size);
+	xpwrite(img->outfd, img->l1_table, img->l1_size * sizeof(u64), dst_offset,
 		"qcow2 l1 table");
 
 	/* Write header: */
-	hdr.magic		= cpu_to_be32(QCOW_MAGIC);
-	hdr.version		= cpu_to_be32(QCOW_VERSION);
-	hdr.block_bits		= cpu_to_be32(ilog2(block_size));
-	hdr.size		= cpu_to_be64(image_size);
-	hdr.l1_size		= cpu_to_be32(l1_size);
-	hdr.l1_table_offset	= cpu_to_be64(dst_offset);
+	struct qcow2_hdr hdr = {
+		.magic			= cpu_to_be32(QCOW_MAGIC),
+		.version		= cpu_to_be32(QCOW_VERSION),
+		.block_bits		= cpu_to_be32(ilog2(img->block_size)),
+		.size			= cpu_to_be64(img->image_size),
+		.l1_size		= cpu_to_be32(img->l1_size),
+		.l1_table_offset	= cpu_to_be64(dst_offset),
+	};
 
-	memset(buf, 0, block_size);
+	memset(buf, 0, img->block_size);
 	memcpy(buf, &hdr, sizeof(hdr));
-	xpwrite(img.outfd, buf, block_size, 0,
+	xpwrite(img->outfd, buf, img->block_size, 0,
 		"qcow2 header");
 
-	free(img.l2_table);
-	free(img.l1_table);
+	free(img->l2_table);
+	free(img->l1_table);
 	free(buf);
+}
+
+void qcow2_write_image(int infd, int outfd, ranges *data,
+		       unsigned block_size)
+{
+	struct qcow2_image img;
+
+	qcow2_image_init(&img, infd, outfd, block_size);
+	qcow2_write_ranges(&img, data);
+	qcow2_image_finish(&img);
 }

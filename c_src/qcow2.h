@@ -7,6 +7,7 @@
 struct qcow2_image {
 	int			infd;
 	int			outfd;
+	u64			image_size;
 	u32			block_size;
 	u32			l1_size;
 	u64			*l1_table;
@@ -18,6 +19,9 @@ struct qcow2_image {
 
 void qcow2_write_buf(struct qcow2_image *, void *, unsigned, u64);
 void qcow2_write_ranges(struct qcow2_image *, ranges *);
+
+void qcow2_image_init(struct qcow2_image *, int, int, unsigned);
+void qcow2_image_finish(struct qcow2_image *);
 
 void qcow2_write_image(int, int, ranges *, unsigned);
 
