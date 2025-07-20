@@ -31,70 +31,46 @@ static void dump_usage(void)
 	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
 }
 
-static void dump_node(struct bch_fs *c, struct bch_dev *ca, struct bkey_s_c k, ranges *data)
+struct dump_dev {
+	ranges	sb, journal, btree;
+};
+typedef DARRAY(struct dump_dev) dump_devs;
+
+static void dump_node(struct bch_fs *c, dump_devs *devs, struct bkey_s_c k)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+	unsigned bytes = btree_ptr_sectors_written(k) << 9 ?: c->opts.btree_node_size;
 
 	bkey_for_each_ptr(ptrs, ptr)
-		if (ptr->dev == ca->dev_idx)
-			range_add(data, ptr->offset << 9, c->opts.btree_node_size);
+		range_add(&devs->data[ptr->dev].btree,
+			  ptr->offset << 9, bytes);
 }
 
-static void dump_one_device(struct bch_fs *c, struct bch_dev *ca, int fd,
-			    bool entire_journal)
+static void get_sb_journal(struct bch_fs *c, struct bch_dev *ca,
+			    bool entire_journal,
+			    struct dump_dev *d)
 {
 	struct bch_sb *sb = ca->disk_sb.sb;
-	ranges data = { 0 };
-	unsigned i;
-	int ret;
 
 	/* Superblock: */
-	range_add(&data, BCH_SB_LAYOUT_SECTOR << 9,
+	range_add(&d->sb, BCH_SB_LAYOUT_SECTOR << 9,
 		  sizeof(struct bch_sb_layout));
 
-	for (i = 0; i < sb->layout.nr_superblocks; i++)
-		range_add(&data,
+	for (unsigned i = 0; i < sb->layout.nr_superblocks; i++)
+		range_add(&d->sb,
 			  le64_to_cpu(sb->layout.sb_offset[i]) << 9,
 			  vstruct_bytes(sb));
 
 	/* Journal: */
-	for (i = 0; i < ca->journal.nr; i++)
+	for (unsigned i = 0; i < ca->journal.nr; i++)
 		if (entire_journal ||
 		    ca->journal.bucket_seq[i] >= c->journal.last_seq_ondisk) {
 			u64 bucket = ca->journal.buckets[i];
 
-			range_add(&data,
+			range_add(&d->journal,
 				  bucket_bytes(ca) * bucket,
 				  bucket_bytes(ca));
 		}
-
-	/* Btree: */
-	for (i = 0; i < BTREE_ID_NR; i++) {
-		struct btree_trans *trans = bch2_trans_get(c);
-
-		ret = __for_each_btree_node(trans, iter, i, POS_MIN, 0, 1, 0, b, ({
-			struct btree_node_iter iter;
-			struct bkey u;
-			struct bkey_s_c k;
-
-			for_each_btree_node_key_unpack(b, k, &iter, &u)
-				dump_node(c, ca, k, &data);
-			0;
-		}));
-
-		if (ret)
-			die("error %s walking btree nodes", bch2_err_str(ret));
-
-		struct btree *b = bch2_btree_id_root(c, i)->b;
-		if (!btree_node_fake(b))
-			dump_node(c, ca, bkey_i_to_s_c(&b->key), &data);
-
-		bch2_trans_put(trans);
-	}
-
-	qcow2_write_image(ca->disk_sb.bdev->bd_fd, fd, &data,
-			  max_t(unsigned, c->opts.btree_node_size / 8, block_bytes(c)));
-	darray_exit(&data);
 }
 
 int cmd_dump(int argc, char *argv[])
@@ -109,7 +85,6 @@ int cmd_dump(int argc, char *argv[])
 	};
 	struct bch_opts opts = bch2_opts_empty();
 	char *out = NULL;
-	unsigned nr_devices = 0;
 	bool force = false, entire_journal = true;
 	int fd, opt;
 
@@ -151,18 +126,44 @@ int cmd_dump(int argc, char *argv[])
 	if (!argc)
 		die("Please supply device(s) to check");
 
-	darray_const_str devs = get_or_split_cmdline_devs(argc, argv);
+	darray_const_str dev_names = get_or_split_cmdline_devs(argc, argv);
 
-	struct bch_fs *c = bch2_fs_open(&devs, &opts);
+	struct bch_fs *c = bch2_fs_open(&dev_names, &opts);
 	if (IS_ERR(c))
 		die("error opening devices: %s", bch2_err_str(PTR_ERR(c)));
 
+	dump_devs devs = {};
+	while (devs.nr < c->sb.nr_devices)
+		darray_push(&devs, (struct dump_dev) {});
+
 	down_read(&c->state_lock);
 
-	for_each_online_member(c, ca, 0)
-		nr_devices++;
+	unsigned nr_online = 0;
+	for_each_online_member(c, ca, 0) {
+		get_sb_journal(c, ca, entire_journal, &devs.data[ca->dev_idx]);
+		nr_online++;
+	}
 
-	BUG_ON(!nr_devices);
+	for (unsigned i = 0; i < BTREE_ID_NR; i++) {
+		CLASS(btree_trans, trans)(c);
+
+		int ret = __for_each_btree_node(trans, iter, i, POS_MIN, 0, 1, 0, b, ({
+			struct btree_node_iter iter;
+			struct bkey u;
+			struct bkey_s_c k;
+
+			for_each_btree_node_key_unpack(b, k, &iter, &u)
+				dump_node(c, &devs, k);
+			0;
+		}));
+
+		if (ret)
+			die("error %s walking btree nodes", bch2_err_str(ret));
+
+		struct btree *b = bch2_btree_id_root(c, i)->b;
+		if (!btree_node_fake(b))
+			dump_node(c, &devs, bkey_i_to_s_c(&b->key));
+	}
 
 	for_each_online_member(c, ca, 0) {
 		int flags = O_WRONLY|O_CREAT|O_TRUNC;
@@ -170,19 +171,33 @@ int cmd_dump(int argc, char *argv[])
 		if (!force)
 			flags |= O_EXCL;
 
-		char *path = nr_devices > 1
+		char *path = nr_online > 1
 			? mprintf("%s.%u.qcow2", out, ca->dev_idx)
 			: mprintf("%s.qcow2", out);
 		fd = xopen(path, flags, 0600);
 		free(path);
 
-		dump_one_device(c, ca, fd, entire_journal);
+		struct qcow2_image img;
+		qcow2_image_init(&img, ca->disk_sb.bdev->bd_fd, fd, c->opts.block_size);
+
+		qcow2_write_ranges(&img, &devs.data[ca->dev_idx].sb);
+		qcow2_write_ranges(&img, &devs.data[ca->dev_idx].journal);
+		qcow2_write_ranges(&img, &devs.data[ca->dev_idx].btree);
+
+		qcow2_image_finish(&img);
 		xclose(fd);
 	}
 
 	up_read(&c->state_lock);
 
 	bch2_fs_stop(c);
+
+	darray_for_each(devs, d) {
+		darray_exit(&d->sb);
+		darray_exit(&d->journal);
+		darray_exit(&d->btree);
+	}
 	darray_exit(&devs);
+	darray_exit(&dev_names);
 	return 0;
 }
