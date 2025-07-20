@@ -33,8 +33,10 @@ struct qcow2_hdr {
 
 static void __qcow2_write_buf(struct qcow2_image *img, void *buf, unsigned len)
 {
-	xpwrite(img->outfd, buf, img->block_size, img->offset, "qcow2 data");
-	img->offset += img->block_size;
+	assert(!(len % img->block_size));
+
+	xpwrite(img->outfd, buf, len, img->offset, "qcow2 data");
+	img->offset += len;
 }
 
 static void flush_l2(struct qcow2_image *img)
@@ -68,7 +70,13 @@ void qcow2_write_buf(struct qcow2_image *img, void *buf, unsigned len, u64 src_o
 {
 	u64 dst_offset = img->offset;
 	__qcow2_write_buf(img, buf, len);
-	add_l2(img, src_offset / img->block_size, dst_offset);
+
+	while (len) {
+		add_l2(img, src_offset / img->block_size, dst_offset);
+		dst_offset += img->block_size;
+		src_offset += img->block_size;
+		len -= img->block_size;
+	}
 }
 
 void qcow2_write_ranges(struct qcow2_image *img, ranges *data)
