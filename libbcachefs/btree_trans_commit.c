@@ -969,7 +969,7 @@ do_bch2_trans_commit_to_journal_replay(struct btree_trans *trans,
 	BUG_ON(current != c->recovery_task);
 
 	struct bkey_i *accounting;
-
+retry:
 	percpu_down_read(&c->mark_lock);
 	for (accounting = btree_trans_subbuf_base(trans, &trans->accounting);
 	     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
@@ -1025,13 +1025,17 @@ fatal_err:
 	bch2_fs_fatal_error(c, "fatal error in transaction commit: %s", bch2_err_str(ret));
 	percpu_down_read(&c->mark_lock);
 revert_fs_usage:
-	BUG();
-	/* error path not handled by __bch2_trans_commit() */
 	for (struct bkey_i *i = btree_trans_subbuf_base(trans, &trans->accounting);
 	     i != accounting;
 	     i = bkey_next(i))
 		bch2_accounting_trans_commit_revert(trans, bkey_i_to_accounting(i), flags);
 	percpu_up_read(&c->mark_lock);
+
+	if (bch2_err_matches(ret, BCH_ERR_btree_insert_need_mark_replicas)) {
+		ret = drop_locks_do(trans, bch2_accounting_update_sb(trans));
+		if (!ret)
+			goto retry;
+	}
 	return ret;
 }
 

@@ -2250,6 +2250,7 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_trans *trans, struct 
 					      struct bpos search_key)
 {
 	struct bkey_s_c k, k2;
+	struct bpos orig_search = search_key;
 	int ret;
 
 	EBUG_ON(btree_iter_path(trans, iter)->cached);
@@ -2332,6 +2333,9 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_trans *trans, struct 
 	if (trace___btree_iter_peek_enabled()) {
 		CLASS(printbuf, buf)();
 
+		bch2_bpos_to_text(&buf, orig_search);
+		prt_newline(&buf);
+
 		int ret = bkey_err(k);
 		if (ret)
 			prt_str(&buf, bch2_err_str(ret));
@@ -2359,6 +2363,7 @@ struct bkey_s_c bch2_btree_iter_peek_max(struct btree_trans *trans, struct btree
 {
 	struct bpos search_key = btree_iter_search_key(iter);
 	struct bkey_s_c k;
+	struct bpos orig_search = iter->pos;
 	struct bpos iter_pos = iter->pos;
 	int ret;
 
@@ -2502,6 +2507,11 @@ out_no_locked:
 
 	if (trace_btree_iter_peek_max_enabled()) {
 		CLASS(printbuf, buf)();
+
+		bch2_bpos_to_text(&buf, orig_search);
+		prt_str(&buf, " - ");
+		bch2_bpos_to_text(&buf, end);
+		prt_newline(&buf);
 
 		int ret = bkey_err(k);
 		if (ret)
@@ -2744,7 +2754,7 @@ struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_trans *trans, struct 
 	}
 
 	/* Extents can straddle iter->pos: */
-	iter->pos = bpos_min(iter->pos, k.k->p);;
+	iter->pos = bpos_min(iter->pos, k.k->p);
 
 	if (iter->flags & BTREE_ITER_filter_snapshots)
 		iter->pos.snapshot = iter->snapshot;

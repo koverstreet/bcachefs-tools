@@ -1060,14 +1060,13 @@ static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct jou
 
 			if (open && !*blocked) {
 				__bch2_journal_block(j);
+				s.v = atomic64_read_acquire(&j->reservations.counter);
 				*blocked = true;
 			}
 
 			ret = journal_state_count(s, idx & JOURNAL_STATE_BUF_MASK) > open
 				? ERR_PTR(-EAGAIN)
 				: buf;
-			if (!IS_ERR(ret))
-				smp_mb();
 			break;
 		}
 	}
@@ -1297,7 +1296,7 @@ int bch2_dev_journal_bucket_delete(struct bch_dev *ca, u64 b)
 		return -EINVAL;
 	}
 
-	u64 *new_buckets = kcalloc(ja->nr, sizeof(u64), GFP_KERNEL);;
+	u64 *new_buckets = kcalloc(ja->nr, sizeof(u64), GFP_KERNEL);
 	if (!new_buckets)
 		return bch_err_throw(c, ENOMEM_set_nr_journal_buckets);
 

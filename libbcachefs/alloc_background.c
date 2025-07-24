@@ -1554,6 +1554,9 @@ int bch2_check_alloc_info(struct bch_fs *c)
 	struct bkey_s_c k;
 	int ret = 0;
 
+	struct progress_indicator_state progress;
+	bch2_progress_init(&progress, c, BIT_ULL(BTREE_ID_alloc));
+
 	CLASS(btree_trans, trans)(c);
 	bch2_trans_iter_init(trans, &iter, BTREE_ID_alloc, POS_MIN,
 			     BTREE_ITER_prefetch);
@@ -1576,6 +1579,8 @@ int bch2_check_alloc_info(struct bch_fs *c)
 
 		if (!k.k)
 			break;
+
+		progress_update_iter(trans, &progress, &iter);
 
 		if (k.k->type) {
 			next = bpos_nosnap_successor(k.k->p);
