@@ -95,7 +95,7 @@ int rust_fuse_readdir(struct bch_fs *c, subvol_inum dir,
 		.filldir	= filldir,
 	};
 
-	return bch2_readdir(c, dir, &dir_hash, &rctx.ctx);
+	return bch2_readdir(c, dir, &dir_hash, &rctx.ctx, NULL);
 }
 
 #endif /* BCACHEFS_FUSE */

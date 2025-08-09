@@ -37,6 +37,6 @@ pub fn readdir(
     ctx:       &mut c::dir_context,
 ) -> Result<(), BchError> {
     ret_to_result(unsafe {
-        c::bch2_readdir(fs.raw, dir_inum, hash_info, ctx)
+        c::bch2_readdir(fs.raw, dir_inum, hash_info, ctx, std::ptr::null_mut())
     })
 }

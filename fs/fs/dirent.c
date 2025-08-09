@@ -611,8 +611,24 @@ int bch2_empty_dir_trans(struct btree_trans *trans, subvol_inum dir)
 		bch2_empty_dir_snapshot(trans, dir.inum, dir.subvol, snapshot);
 }
 
+struct bch2_dir_private_info {
+	u64		pos;
+};
+
+static inline unsigned d_offset_32bit_shift(struct bch_hash_info *hash_info,
+					    struct bch2_dir_private_info *info)
+{
+	if (!info)
+		return 0;
+	if (hash_info->type == BCH_STR_HASH_crc32c)
+		return 1;
+	return 33;
+}
+
 static noinline int bch2_dir_emit_slow(struct btree_trans *trans, struct bkey_buf *sk,
+				       struct bch_hash_info *hash_info,
 				       struct dir_context *ctx,
+				       struct bch2_dir_private_info *info,
 				       struct bkey_s_c_dirent d, subvol_inum target)
 {
 	bch2_bkey_buf_reassemble(sk, d.s_c);
@@ -628,7 +644,7 @@ static noinline int bch2_dir_emit_slow(struct btree_trans *trans, struct bkey_bu
 	int ret = dir_emit(ctx, name.name, name.len, target.inum, vfs_d_type(d.v->d_type));
 	if (!ret)
 		return 1;
-	ctx->pos = d.k->p.offset + 1;
+	ctx->pos = (d.k->p.offset + 1) >> d_offset_32bit_shift(hash_info, info);
 	/*
 	 * Don't relock here: a restart return would cause for_each_btree_key_*
 	 * to retry the current key without advancing the iter, which re-emits
@@ -746,7 +762,9 @@ static filldir_t filldir64_sym __read_mostly;
 
 static int bch2_dir_emit(struct btree_trans *trans,
 			 struct bkey_buf *sk,
+			 struct bch_hash_info *hash_info,
 			 struct dir_context *ctx,
+			 struct bch2_dir_private_info *info,
 			 struct bkey_s_c_dirent d, subvol_inum target)
 {
 	struct qstr name = bch2_dirent_get_name(d);
@@ -757,7 +775,8 @@ static int bch2_dir_emit(struct btree_trans *trans,
 	 * directories (via the bcachefs_fuse_readdir callback).
 	 * In kernel space, ctx->pos is updated by the VFS code.
 	 */
-	ctx->pos = d.k->p.offset;
+	unsigned shift = d_offset_32bit_shift(hash_info, info);
+	ctx->pos = d.k->p.offset >> shift;
 
 	if (ctx->actor == filldir64_sym) {
 		pagefault_disable();
@@ -765,7 +784,7 @@ static int bch2_dir_emit(struct btree_trans *trans,
 					  target.inum, vfs_d_type(d.v->d_type));
 		pagefault_enable();
 		if (likely(ret)) {
-			ctx->pos = d.k->p.offset + 1;
+			ctx->pos = (d.k->p.offset + 1) >> shift;
 			return 0;
 		}
 		/*
@@ -776,21 +795,24 @@ static int bch2_dir_emit(struct btree_trans *trans,
 		 */
 	}
 
-	return bch2_dir_emit_slow(trans, sk, ctx, d, target);
+	return bch2_dir_emit_slow(trans, sk, hash_info, ctx, info, d, target);
 }
 #else
 static int bch2_dir_emit(struct btree_trans *trans,
 			 struct bkey_buf *sk,
+			 struct bch_hash_info *hash_info,
 			 struct dir_context *ctx,
+			 struct bch2_dir_private_info *info,
 			 struct bkey_s_c_dirent d, subvol_inum target)
 {
-	return bch2_dir_emit_slow(trans, sk, ctx, d, target);
+	return bch2_dir_emit_slow(trans, sk, hash_info, ctx, info, d, target);
 }
 #endif
 
 int bch2_readdir(struct bch_fs *c, subvol_inum inum,
 		 struct bch_hash_info *hash_info,
-		 struct dir_context *ctx)
+		 struct dir_context *ctx,
+		 struct bch2_dir_private_info *info)
 {
 #ifdef __KERNEL__
 	/*
@@ -813,27 +835,56 @@ int bch2_readdir(struct bch_fs *c, subvol_inum inum,
 	CLASS(btree_trans, trans)(c);
 	int ret = for_each_btree_key_in_subvolume_max_in_trans(trans,
 				iter, BTREE_ID_dirents,
-				POS(inum.inum, ctx->pos),
+				POS(inum.inum, info ? info->pos : ctx->pos),
 				POS(inum.inum, U64_MAX),
 				inum.subvol, 0, k, ({
-			if (k.k->type != KEY_TYPE_dirent)
-				continue;
+		if (k.k->type != KEY_TYPE_dirent)
+			continue;
 
-			struct bkey_s_c_dirent dirent = bkey_s_c_to_dirent(k);
-			subvol_inum target;
+		struct bkey_s_c_dirent dirent = bkey_s_c_to_dirent(k);
+		subvol_inum target;
 
-			bool need_second_pass = false, repaired_inode = false;
-			int ret2 = bch2_str_hash_check_key(trans, NULL, &bch2_dirent_hash_desc,
-							   hash_info, k,
-							   &need_second_pass, &repaired_inode) ?:
-				bch2_dirent_read_target(trans, inum, dirent, &target);
-			if (ret2 > 0)
-				continue;
+		bool need_second_pass = false, repaired_inode = false;
+		int ret2 = bch2_str_hash_check_key(trans, NULL, &bch2_dirent_hash_desc,
+						   hash_info, k,
+						   &need_second_pass, &repaired_inode) ?:
+			bch2_dirent_read_target(trans, inum, dirent, &target);
+		if (ret2 > 0)
+			continue;
 
-			ret2 ?: bch2_dir_emit(trans, &sk, ctx, dirent, target);
-		}));
+		ret2 ?: bch2_dir_emit(trans, &sk, hash_info, ctx, info, dirent, target);
+	}));
 
 	return ret < 0 ? ret : 0;
+}
+
+static inline int is_32bit_api(void)
+{
+#ifdef CONFIG_COMPAT
+	return in_compat_syscall();
+#else
+	return (BITS_PER_LONG == 32);
+#endif
+}
+
+int bch2_dir_open(struct inode *inode, struct file *file)
+{
+	if (!is_32bit_api())
+		return 0;
+
+	struct bch2_dir_private_info *info = kzalloc(sizeof(*info), GFP_KERNEL);
+	if (!info)
+		return -ENOMEM;
+
+	file->private_data = info;
+	return 0;
+}
+
+int bch2_release_dir(struct inode *inode, struct file *file)
+{
+	kfree(file->private_data);
+	file->private_data = NULL;
+	return 0;
 }
 
 /* fsck */
