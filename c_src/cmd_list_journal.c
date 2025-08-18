@@ -552,8 +552,10 @@ int cmd_list_journal(int argc, char *argv[])
 		}
 	args_shift(optind);
 
-	if (!argc)
+	if (!argc) {
+		list_journal_usage();
 		die("Please supply device(s) to open");
+	}
 
 	darray_const_str devs = get_or_split_cmdline_devs(argc, argv);
 

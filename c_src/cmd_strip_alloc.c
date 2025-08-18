@@ -96,8 +96,8 @@ int cmd_strip_alloc(int argc, char *argv[])
 	args_shift(optind);
 
 	if (!argc) {
-		fprintf(stderr, "Please supply device(s)\n");
-		exit(8);
+		strip_alloc_usage();
+		die("Please supply device(s)");
 	}
 
 	darray_const_str devs = get_or_split_cmdline_devs(argc, argv);

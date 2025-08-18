@@ -614,8 +614,10 @@ static int cmd_image_create(int argc, char *argv[])
 	}
 	args_shift(optind);
 
-	if (argc != 1)
+	if (argc != 1) {
+		image_create_usage();
 		die("Please supply a filename for the new image");
+	}
 
 	dev_opts.path = argv[0];
 
@@ -784,8 +786,10 @@ static int cmd_image_update(int argc, char *argv[])
 		}
 	args_shift(optind);
 
-	if (argc != 1)
+	if (argc != 1) {
+		image_update_usage();
 		die("Please supply a filename");
+	}
 
 	return image_update(source, argv[0],
 			    keep_alloc, verbosity);

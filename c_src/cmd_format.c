@@ -249,8 +249,10 @@ int cmd_format(int argc, char *argv[])
 	if (unconsumed_dev_option)
 		die("Options for devices apply to subsequent devices; got a device option with no device");
 
-	if (!devices.nr)
+	if (!devices.nr) {
+		format_usage();
 		die("Please supply a device");
+	}
 
 	if (opts.source && !initialize)
 		die("--source, --no_initialize are incompatible");

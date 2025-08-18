@@ -39,7 +39,6 @@ int cmd_unlock(int argc, char *argv[])
 	char *passphrase = NULL;
 
 	int opt;
-
 	while ((opt = getopt_long(argc, argv, "cf:k:h", longopts, NULL)) != -1)
 		switch (opt) {
 		case 'c':
@@ -58,8 +57,10 @@ int cmd_unlock(int argc, char *argv[])
 	args_shift(optind);
 
 	char *dev = arg_pop();
-	if (!dev)
+	if (!dev) {
+		unlock_usage();
 		die("Please supply a device");
+	}
 
 	if (argc)
 		die("Too many arguments");
@@ -93,11 +94,36 @@ int cmd_unlock(int argc, char *argv[])
 	return 0;
 }
 
+static void set_passphrase_usage(void)
+{
+	puts("bcachefs set-passphares - change passphrase on an encrypted filesystem\n"
+	     "Usage: bcachefs set-passphares device\n"
+	     "\n"
+	     "Options:\n"
+	     "  -h, --help             Display this help and exit\n"
+	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
+}
+
 int cmd_set_passphrase(int argc, char *argv[])
 {
-	args_shift(1);
-	if (!argc)
+	static const struct option longopts[] = {
+		{ "help",		no_argument,		NULL, 'h' },
+		{ NULL }
+	};
+
+	int opt;
+	while ((opt = getopt_long(argc, argv, "h", longopts, NULL)) != -1)
+		switch (opt) {
+		case 'h':
+			set_passphrase_usage();
+			exit(EXIT_SUCCESS);
+		}
+	args_shift(optind);
+
+	if (!argc) {
+		set_passphrase_usage();
 		die("Please supply one or more devices");
+	}
 
 	darray_const_str devs = get_or_split_cmdline_devs(argc, argv);
 
@@ -133,11 +159,36 @@ int cmd_set_passphrase(int argc, char *argv[])
 	return 0;
 }
 
+static void remove_passphrase_usage(void)
+{
+	puts("bcachefs remove-passphares - remove passphrase on an encrypted filesystem\n"
+	     "Usage: bcachefs remove-passphares device\n"
+	     "\n"
+	     "Options:\n"
+	     "  -h, --help             Display this help and exit\n"
+	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
+}
+
 int cmd_remove_passphrase(int argc, char *argv[])
 {
-	args_shift(1);
-	if (!argc)
+	static const struct option longopts[] = {
+		{ "help",		no_argument,		NULL, 'h' },
+		{ NULL }
+	};
+
+	int opt;
+	while ((opt = getopt_long(argc, argv, "h", longopts, NULL)) != -1)
+		switch (opt) {
+		case 'h':
+			set_passphrase_usage();
+			exit(EXIT_SUCCESS);
+		}
+	args_shift(optind);
+
+	if (!argc) {
+		set_passphrase_usage();
 		die("Please supply one or more devices");
+	}
 
 	darray_const_str devs = get_or_split_cmdline_devs(argc, argv);
 

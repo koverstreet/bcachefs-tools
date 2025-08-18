@@ -150,8 +150,10 @@ int cmd_show_super(int argc, char *argv[])
 	args_shift(optind);
 
 	char *dev = arg_pop();
-	if (!dev)
+	if (!dev) {
+		show_super_usage();
 		die("please supply a device");
+	}
 	if (argc)
 		die("too many arguments");
 
@@ -449,8 +451,10 @@ int cmd_recover_super(int argc, char *argv[])
 		die("--dev_idx requires --src_device");
 
 	char *dev_path = arg_pop();
-	if (!dev_path)
+	if (!dev_path) {
+		recover_super_usage();
 		die("please supply a device");
+	}
 	if (argc)
 		die("too many arguments");
 

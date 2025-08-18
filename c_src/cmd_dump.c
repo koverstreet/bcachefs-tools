@@ -371,8 +371,10 @@ int cmd_dump(int argc, char *argv[])
 	if (!opts.out)
 		die("Please supply output filename");
 
-	if (!argc)
+	if (!argc) {
+		dump_usage();
 		die("Please supply device(s) to check");
+	}
 
 	darray_const_str dev_names = get_or_split_cmdline_devs(argc, argv);
 

@@ -32,8 +32,10 @@ int cmd_reset_counters(int argc, char *argv[])
 	args_shift(optind);
 
 	char *dev = arg_pop();
-	if (!dev)
+	if (!dev) {
+		reset_counters_usage();
 		die("please supply a device");
+	}
 	if (argc)
 		die("too many arguments");
 

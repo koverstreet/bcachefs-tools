@@ -353,8 +353,10 @@ int cmd_migrate(int argc, char *argv[])
 			exit(EXIT_SUCCESS);
 		}
 
-	if (!fs_path)
+	if (!fs_path) {
+		migrate_usage();
 		die("Please specify a filesystem to migrate");
+	}
 
 	if (format_opts.encrypted && !no_passphrase)
 		format_opts.passphrase = read_passphrase_twice("Enter passphrase: ");
