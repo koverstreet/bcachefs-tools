@@ -255,7 +255,7 @@ static void read_data(struct bch_fs *c,
 
 static void write_data(struct bch_fs *c,
 		       struct bch_inode_unpacked *dst_inode,
-		       u64 dst_offset, void *buf, size_t len)
+		       u64 dst_offset, void *buf, size_t len, u64 new_i_size)
 {
 	struct bch_write_op op;
 	struct bio_vec bv[WRITE_DATA_BUF / PAGE_SIZE];
@@ -273,6 +273,7 @@ static void write_data(struct bch_fs *c,
 	op.subvol	= 1;
 	op.pos		= SPOS(dst_inode->bi_inum, dst_offset >> 9, U32_MAX);
 	op.flags |= BCH_WRITE_sync|BCH_WRITE_only_specified_devs;
+	op.new_i_size	= new_i_size;
 
 	int ret = bch2_disk_reservation_get(c, &op.res, len >> 9,
 					    c->opts.data_replicas, 0);
@@ -299,7 +300,7 @@ static void copy_data(struct bch_fs *c,
 		xpread(src_fd, src_buf, len, start);
 		memset(src_buf + len, 0, pad);
 
-		write_data(c, dst_inode, start, src_buf, len + pad);
+		write_data(c, dst_inode, start, src_buf, len + pad, start + len);
 		start += len;
 	}
 }
@@ -380,7 +381,7 @@ static void copy_link(struct bch_fs *c,
 	for (unsigned i = ret; i < round_up(ret, block_bytes(c)); i++)
 		src_buf[i] = 0;
 
-	write_data(c, dst, 0, src_buf, round_up(ret, block_bytes(c)));
+	write_data(c, dst, 0, src_buf, round_up(ret, block_bytes(c)), ret);
 }
 
 static void link_file_data(struct bch_fs *c,
@@ -534,7 +535,7 @@ static void copy_sync_file_range(struct bch_fs *c,
 		while ((m = seek_mismatch_aligned(src_buf, dst_buf,
 						  m.end, b, c->opts.block_size)).end) {
 			write_data(c, dst, r.start + m.start,
-				   src_buf + m.start, m.end - m.start);
+				   src_buf + m.start, m.end - m.start, min_t(u64, m.end, src_size));
 			s->total_wrote += m.end - m.start;
 		}
 
