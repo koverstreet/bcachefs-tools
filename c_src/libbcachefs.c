@@ -201,18 +201,20 @@ struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
 			   dev_opts_list devs)
 {
 	struct bch_sb_handle sb = { NULL };
-	unsigned max_dev_block_size = 0;
-
-	darray_for_each(devs, i)
-		max_dev_block_size = max(max_dev_block_size, get_blocksize(i->bdev->bd_fd));
 
 	/* calculate block size: */
-	if (!opt_defined(fs_opts, block_size))
-		opt_set(fs_opts, block_size, max_dev_block_size);
+	if (!opt_defined(fs_opts, block_size)) {
+		unsigned max_dev_block_size = 0;
+	
+		darray_for_each(devs, i)
+			max_dev_block_size = max(max_dev_block_size, get_blocksize(i->bdev->bd_fd));
 
-	if (fs_opts.block_size < max_dev_block_size)
-		die("blocksize too small: %u, must be greater than device blocksize %u",
-		    fs_opts.block_size, max_dev_block_size);
+		opt_set(fs_opts, block_size, max_dev_block_size);
+	}
+
+	if (fs_opts.block_size < 512)
+		die("blocksize too small: %u, must be greater than one sector (512 bytes)",
+		    fs_opts.block_size);
 
 	/* get device size, if it wasn't specified: */
 	darray_for_each(devs, i)
