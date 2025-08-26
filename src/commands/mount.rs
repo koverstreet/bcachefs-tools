@@ -218,23 +218,19 @@ pub struct Cli {
     verbose: u8,
 }
 
-fn require_bcachefs_module() {
+fn check_bcachefs_module() -> bool {
     let path = Path::new("/sys/module/bcachefs");
 
-    if !path.exists() {
+    path.exists() || {
         let _ = std::process::Command::new("modprobe")
             .arg("bcachefs")
             .status();
-
-        if !path.exists() {
-            error!("bcachefs module not loaded?");
-            std::process::exit(1);
-        }
+        path.exists()
     }
 }
 
 pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::ExitCode {
-    require_bcachefs_module();
+    let module_loaded = check_bcachefs_module();
 
     // If the bcachefs tool is being called as "bcachefs mount dev ..." (as opposed to via a
     // symlink like "/usr/sbin/mount.bcachefs dev ...", then we need to pop the 0th argument
@@ -252,6 +248,9 @@ pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::
         Ok(_)   => std::process::ExitCode::SUCCESS,
         Err(e)   => {
             error!("Mount failed: {e}");
+            if !module_loaded {
+                error!("bcachefs module not loaded?");
+            }
             std::process::ExitCode::FAILURE
         }
     }
