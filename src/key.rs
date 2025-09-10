@@ -63,7 +63,7 @@ impl Default for UnlockPolicy {
 pub struct KeyHandle {
     // FIXME: Either these come in useful for something or we remove them
     _uuid: Uuid,
-    _id: c_long,
+    _id:   c_long,
 }
 
 impl KeyHandle {
@@ -92,7 +92,7 @@ impl KeyHandle {
             info!("Added key to keyring");
             Ok(KeyHandle {
                 _uuid: sb.sb().uuid(),
-                _id: c_long::from(key_id),
+                _id:   c_long::from(key_id),
             })
         } else {
             Err(anyhow!("failed to add key to keyring: {}", errno::errno()))
@@ -121,7 +121,7 @@ impl KeyHandle {
             .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_SESSION_KEYRING, &key_name))
             .map(|id| Self {
                 _uuid: *uuid,
-                _id: id,
+                _id:   id,
             })
     }
 
@@ -159,6 +159,8 @@ impl Passphrase {
         let output = Command::new("systemd-ask-password")
             .arg("--icon=drive-harddisk")
             .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
+            .arg(format!("--keyname={}", uuid.as_hyphenated()))
+            .arg("--accept-cached")
             .arg("-n")
             .arg("Enter passphrase: ")
             .stdin(Stdio::inherit())
