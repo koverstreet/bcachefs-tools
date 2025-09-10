@@ -2,6 +2,7 @@ VERSION=1.25.3
 
 PREFIX?=/usr/local
 LIBEXECDIR?=$(PREFIX)/libexec
+DKMSDIR?=$(PREFIX)/src/bcachefs-$(VERSION)
 PKG_CONFIG?=pkg-config
 INSTALL=install
 LN=ln
@@ -223,6 +224,16 @@ install: bcachefs $(optional_install)
 install_systemd: $(systemd_services) $(systemd_libexecfiles)
 	$(INSTALL) -m0755 -D $(systemd_libexecfiles) -t $(DESTDIR)$(LIBEXECDIR)
 	$(INSTALL) -m0644 -D $(systemd_services) -t $(DESTDIR)$(PKGCONFIG_SERVICEDIR)
+
+.PHONY: install_dkms
+install_dkms:
+	$(INSTALL) -m0644 -D dkms/Makefile         -t $(DESTDIR)$(DKMSDIR)
+	$(INSTALL) -m0644 -D dkms/dkms.conf        -t $(DESTDIR)$(DKMSDIR)
+	$(INSTALL) -m0644 -D libbcachefs/Makefile  -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
+	$(INSTALL) -m0644 -D libbcachefs/*.[ch]    -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
+	sed -i "s|@PACKAGE_VERSION@|$(VERSION)|g" $(DESTDIR)$(DKMSDIR)/dkms.conf
+	sed -i "s|^#define TRACE_INCLUDE_PATH \\.\\./\\.\\./fs/bcachefs$$|#define TRACE_INCLUDE_PATH $(DKMSDIR)/src/fs/bcachefs|" \
+	  $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/trace.h
 
 .PHONY: clean
 clean:
