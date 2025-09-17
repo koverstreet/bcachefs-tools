@@ -71,7 +71,7 @@ impl<'t> BtreeIter<'t> {
                 iter.as_mut_ptr(),
                 btree,
                 pos,
-                c::btree_iter_update_trigger_flags(flags.bits),
+                c::btree_iter_update_trigger_flags(flags.bits()),
                 0
             );
 
@@ -157,7 +157,7 @@ impl<'t> BtreeNodeIter<'t> {
                 pos,
                 locks_want,
                 depth,
-                c::btree_iter_update_trigger_flags(flags.bits),
+                c::btree_iter_update_trigger_flags(flags.bits()),
             );
 
             BtreeNodeIter {
