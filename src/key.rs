@@ -1,8 +1,9 @@
 use std::{
     ffi::{c_long, CStr, CString},
     fs,
-    io::{stdin, IsTerminal},
-    mem,
+    io::{self, stdin, IsTerminal},
+    mem::{self, MaybeUninit},
+    os::fd::{AsFd, AsRawFd, BorrowedFd},
     path::Path,
     process::{Command, Stdio},
     ptr, thread,
@@ -143,10 +144,10 @@ impl Passphrase {
     }
 
     pub fn new(uuid: &Uuid) -> Result<Self> {
-        if stdin().is_terminal() {
-            Self::new_from_prompt(uuid)
-        } else {
-            Self::new_from_stdin()
+        match get_stdin_type() {
+            StdinType::Terminal => Self::new_from_prompt(uuid),
+            StdinType::DevNull => Self::new_from_askpassword(uuid).unwrap_or_else(|err| Err(err)),
+            StdinType::Other => Self::new_from_stdin(),
         }
     }
 
@@ -158,6 +159,8 @@ impl Passphrase {
         let output = Command::new("systemd-ask-password")
             .arg("--icon=drive-harddisk")
             .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
+            .arg(format!("--keyname={}", uuid.as_hyphenated()))
+            .arg("--accept-cached")
             .arg("-n")
             .arg("Enter passphrase: ")
             .stdin(Stdio::inherit())
@@ -251,5 +254,36 @@ impl Passphrase {
         ensure!(sb_key.magic == bch_key_magic, "incorrect passphrase");
 
         Ok((passphrase_key, sb_key))
+    }
+}
+
+fn is_dev_null(fd: BorrowedFd) -> io::Result<bool> {
+    let mut buf: MaybeUninit<libc::stat> = MaybeUninit::uninit();
+    let ret = unsafe { libc::fstat(fd.as_raw_fd(), buf.as_mut_ptr()) };
+    if ret < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: `fstat` was successful so the buffer was filled with initialized data.
+    let buf = unsafe { buf.assume_init() };
+    let is_char_dev = (buf.st_mode & libc::S_IFMT) == libc::S_IFCHR;
+    let major = unsafe { libc::major(buf.st_rdev) };
+    let minor = unsafe { libc::minor(buf.st_rdev) };
+    Ok(is_char_dev && major == 1 && minor == 3)
+}
+
+enum StdinType {
+    Terminal,
+    DevNull,
+    Other,
+}
+
+fn get_stdin_type() -> StdinType {
+    let stdin = stdin();
+    if stdin.is_terminal() {
+        StdinType::Terminal
+    } else if is_dev_null(stdin.as_fd()).unwrap_or(false) {
+        StdinType::DevNull
+    } else {
+        StdinType::Other
     }
 }
