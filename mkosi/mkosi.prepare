@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+[ "$1" = "final" ] && exit 0
+
+debian_control_value() {
+    local file=$1
+    local key=$2
+    local in_kv=false
+    local value=
+
+    while IFS= read -r line; do
+        case "$line" in
+        "$key:"*)
+            in_kv=true
+            value="$value ${line#"$key:"}"
+            ;;
+        " "*)
+            if [ "$in_kv" = true ]; then
+                value="$value $line"
+            fi
+            ;;
+        *)
+            in_kv=false
+            ;;
+        esac
+    done <"$file"
+
+    echo "$value"
+}
+
+dcontrol="$SRCDIR/build/bcachefs-tools/debian/control"
+
+apt-get satisfy --yes "$(debian_control_value "$dcontrol" Build-Depends)"

@@ -29,6 +29,6 @@ indent_size = 4
 indent_style = space
 indent_size = 4
 
-[*.sh]
+[{*.sh,mkosi.*}]
 indent_size = 4
 indent_style = space
