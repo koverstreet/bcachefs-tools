@@ -3,7 +3,6 @@ VERSION=$(shell cargo metadata --format-version 1 | jq -r '.packages[] | select(
 PREFIX?=/usr/local
 LIBEXECDIR?=$(PREFIX)/libexec
 DKMSDIR?=$(PREFIX)/src/bcachefs-$(VERSION)
-PKG_CONFIG?=pkg-config
 INSTALL=install
 LN=ln
 .DEFAULT_GOAL=all
@@ -30,34 +29,6 @@ else
 	BUILT_BIN = target/release/bcachefs
 endif
 
-# Prevent recursive expansions of $(CFLAGS) to avoid repeatedly performing
-# compile tests
-CFLAGS:=$(CFLAGS)
-
-CFLAGS+=-std=gnu11 -O2 -g -MMD -Wall -fPIC			\
-	-Wno-pointer-sign					\
-	-Wno-deprecated-declarations				\
-	-fno-strict-aliasing					\
-	-fno-delete-null-pointer-checks				\
-	-I. -Ic_src -Iinclude -Iraid				\
-	-D_FILE_OFFSET_BITS=64					\
-	-D_GNU_SOURCE						\
-	-D_LGPL_SOURCE						\
-	-DRCU_MEMBARRIER					\
-	-DZSTD_STATIC_LINKING_ONLY				\
-	-DFUSE_USE_VERSION=35					\
-	-DNO_BCACHEFS_CHARDEV					\
-	-DNO_BCACHEFS_FS					\
-	-DNO_BCACHEFS_SYSFS					\
-	-DCONFIG_UNICODE					\
-	-DVERSION_STRING='"$(VERSION)"'				\
-	-D__SANE_USERSPACE_TYPES__				\
-	$(EXTRA_CFLAGS)
-
-# Intenionally not doing the above to $(LDFLAGS) because we rely on
-# recursive expansion here (CFLAGS is not yet completely built by this line)
-LDFLAGS+=$(CFLAGS) $(EXTRA_LDFLAGS)
-
 ifdef CARGO_TOOLCHAIN_VERSION
   CARGO_TOOLCHAIN = +$(CARGO_TOOLCHAIN_VERSION)
 endif
@@ -74,20 +45,11 @@ CARGO_CLEAN=$(CARGO) clean $(CARGO_CLEAN_ARGS)
 
 include Makefile.compiler
 
-CFLAGS+=$(call cc-disable-warning, unused-but-set-variable)
-CFLAGS+=$(call cc-disable-warning, stringop-overflow)
-CFLAGS+=$(call cc-disable-warning, zero-length-bounds)
-CFLAGS+=$(call cc-disable-warning, missing-braces)
-CFLAGS+=$(call cc-disable-warning, zero-length-array)
-CFLAGS+=$(call cc-disable-warning, shift-overflow)
-CFLAGS+=$(call cc-disable-warning, enum-conversion)
-CFLAGS+=$(call cc-disable-warning, gnu-variable-sized-type-not-at-end)
 export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries
 
 PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd libudev libkeyutils"
 ifdef BCACHEFS_FUSE
 	PKGCONFIG_LIBS+="fuse3 >= 3.7"
-	CFLAGS+=-DBCACHEFS_FUSE
 	RUSTFLAGS+=--cfg feature="fuse"
 endif
 
@@ -105,11 +67,6 @@ ifeq (,$(PKGCONFIG_UDEVDIR))
 endif
 PKGCONFIG_UDEVRULESDIR:=$(PKGCONFIG_UDEVDIR)/rules.d
 
-CFLAGS+=$(PKGCONFIG_CFLAGS)
-LDLIBS+=$(PKGCONFIG_LDLIBS)
-LDLIBS+=-lm -lpthread -lrt -lkeyutils -laio -ldl
-LDLIBS+=$(EXTRA_LDLIBS)
-
 ifeq ($(PREFIX),/usr)
 	ROOT_SBINDIR?=/sbin
 	INITRAMFS_DIR=$(PREFIX)/share/initramfs-tools
@@ -119,11 +76,11 @@ else
 endif
 
 .PHONY: all
-all: bcachefs initramfs/hook dkms/dkms.conf
+all: initramfs/hook dkms/dkms.conf
 
 .PHONY: debug
 debug: CFLAGS+=-Werror -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
-debug: bcachefs
+debug:
 
 .PHONY: TAGS tags
 TAGS:
@@ -131,37 +88,6 @@ TAGS:
 
 tags:
 	ctags -R .
-
-SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' -iname '*.c'))
-DEPS:=$(SRCS:.c=.d)
--include $(DEPS)
-
-OBJS:=$(SRCS:.c=.o)
-
-%.o: %.c
-	@echo "    [CC]     $@"
-	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
-
-BCACHEFS_DEPS=libbcachefs.a
-RUST_SRCS:=$(shell find src bch_bindgen/src -type f -iname '*.rs')
-
-bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
-	$(Q)$(CARGO_BUILD)
-
-libbcachefs.a: $(OBJS)
-	@echo "    [AR]     $@"
-	$(Q)$(AR) -rc $@ $+
-
-# If the version string differs from the last build, update the last version
-ifneq ($(VERSION),$(shell cat .version 2>/dev/null))
-.PHONY: .version
-endif
-.version:
-	@echo "  [VERS]    $@"
-	$(Q)echo '$(VERSION)' > $@
-
-# Rebuild the 'version' command any time the version string changes
-cmd_version.o : .version
 
 dkms/dkms.conf: dkms/dkms.conf.in
 	@echo "    [SED]    $@"
