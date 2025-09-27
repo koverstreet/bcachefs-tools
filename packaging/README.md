@@ -15,6 +15,10 @@ On a RPM system,
 
 ## How to build the package (deb)
 
+There are two paths to building Debian packaging: using the RPM spec with debbuild or using debian source control (dsc)
+
+### RPM Spec with debbuild
+
 This packaging can be used to build packages using [debbuild](https://github.com/debbuild/debbuild) for Debian targets.
 You can install debbuild from the openSUSE Build Service for either [Debian](https://software.opensuse.org//download.html?project=Debian%3Adebbuild&package=debbuild) or [Ubuntu](https://software.opensuse.org//download.html?project=Ubuntu%3Adebbuild&package=debbuild).
 
@@ -26,3 +30,13 @@ On a Debian/Ubuntu system,
 4. Download the bcachefs-tools sources referenced in the spec and put it in `~/debbuild/SOURCES`
 5. Copy the spec to `~/debbuild/SPECS`
 6. Run debbuild: `debbuild -ba ~/debbuild/SPECS/bcachefs-tools.spec`
+
+### Debian Source Control with dpkg-buildpackage
+
+On a Debian/Ubuntu system,
+
+1. Install the `dpkg-dev` package
+2. Change into the root of the source tree
+3. Run dpkg-buildpackage: `dpkg-buildpackage -F -us -uc`
+
+
