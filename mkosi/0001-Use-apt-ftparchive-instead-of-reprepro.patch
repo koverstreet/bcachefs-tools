@@ -1,0 +1,139 @@
+From fd065f0b5ae583b5b43a13ee0e7f82d40f1f0490 Mon Sep 17 00:00:00 2001
+From: =?UTF-8?q?Thomas=20M=C3=BChlbacher?= <tmuehlbacher@posteo.net>
+Date: Sun, 10 Aug 2025 00:50:42 +0200
+Subject: [PATCH] Use apt-ftparchive instead of reprepro
+
+Afaict, this should work quite similar to the previous dpkg-scanpackages but
+also doesn't use perl and is part of apt. Certain distros don't have reprepro
+packaged, e.g. nixpkgs. It's also a simpler to work with and smaller compared
+to reprepro.
+
+(cherry picked from commit cdd2d1570e256ef0aa122c079e55f093cc0df453)
+---
+ mkosi/installer/apt.py                        | 44 +++++--------------
+ .../debian-kali-ubuntu/mkosi.conf             |  2 +-
+ .../package-manager/mkosi.conf.d/arch.conf    |  1 -
+ .../package-manager/mkosi.conf.d/fedora.conf  |  2 +-
+ .../mkosi.conf.d/opensuse.conf                |  1 -
+ 5 files changed, 14 insertions(+), 36 deletions(-)
+
+diff --git a/mkosi/installer/apt.py b/mkosi/installer/apt.py
+index becb6d38..248bc3ee 100644
+--- a/mkosi/installer/apt.py
++++ b/mkosi/installer/apt.py
+@@ -271,36 +271,17 @@ class Apt(PackageManager):
+         if not names:
+             return
+ 
+-        if not (conf := context.repository / "conf/distributions").exists():
+-            conf.parent.mkdir(exist_ok=True)
+-            conf.write_text(
+-                textwrap.dedent(
+-                    f"""\
+-                    Origin: mkosi
+-                    Label: mkosi
+-                    Architectures: {context.config.distribution.architecture(context.config.architecture)}
+-                    Codename: mkosi
+-                    Components: main
+-                    Description: mkosi local repository
+-                    """
+-                )
+-            )
+-
+-        run(
+-            [
+-                "reprepro",
+-                "--ignore=extension",
+-                "includedeb",
+-                "mkosi",
+-                *names,
+-            ],
+-            sandbox=context.sandbox(
+-                options=[
+-                    "--bind", context.repository, workdir(context.repository),
+-                    "--chdir", workdir(context.repository),
+-                ],
+-            ),
+-        )  # fmt: skip
++        with (context.repository / "Packages").open("wb") as f:
++            run(
++                ["apt-ftparchive", "packages", "."],
++                stdout=f,
++                sandbox=context.sandbox(
++                    options=[
++                        "--ro-bind", context.repository, workdir(context.repository),
++                        "--chdir", workdir(context.repository),
++                    ],
++                ),
++            )  # fmt: skip
+ 
+         (context.sandbox_tree / "etc/apt/sources.list.d").mkdir(parents=True, exist_ok=True)
+         (context.sandbox_tree / "etc/apt/sources.list.d/mkosi-local.sources").write_text(
+@@ -309,8 +290,7 @@ class Apt(PackageManager):
+                 Enabled: yes
+                 Types: deb
+                 URIs: file:///repository
+-                Suites: mkosi
+-                Components: main
++                Suites: ./
+                 Trusted: yes
+                 """
+             )
+diff --git a/mkosi/resources/mkosi-tools/mkosi.conf.d/debian-kali-ubuntu/mkosi.conf b/mkosi/resources/mkosi-tools/mkosi.conf.d/debian-kali-ubuntu/mkosi.conf
+index 0f48bf25..008b9252 100644
+--- a/mkosi/resources/mkosi-tools/mkosi.conf.d/debian-kali-ubuntu/mkosi.conf
++++ b/mkosi/resources/mkosi-tools/mkosi.conf.d/debian-kali-ubuntu/mkosi.conf
+@@ -9,6 +9,7 @@ Distribution=|ubuntu
+ Packages=
+         ?exact-name(grub-pc-bin)
+         apt
++        apt-utils
+         btrfs-progs
+         erofs-utils
+         grub-common
+@@ -17,7 +18,6 @@ Packages=
+         libtss2-dev
+         policycoreutils
+         python3-pefile
+-        reprepro
+         sbsigntool
+         squashfs-tools
+         xz-utils
+diff --git a/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/arch.conf b/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/arch.conf
+index 19c5f437..8d82429a 100644
+--- a/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/arch.conf
++++ b/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/arch.conf
+@@ -10,6 +10,5 @@ Packages=
+         createrepo_c
+         distribution-gpg-keys
+         dnf
+-        reprepro
+         ubuntu-keyring
+         zypper
+diff --git a/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/fedora.conf b/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/fedora.conf
+index 7e6e10db..f7af1af7 100644
+--- a/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/fedora.conf
++++ b/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/fedora.conf
+@@ -6,9 +6,9 @@ Distribution=fedora
+ [Content]
+ Packages=
+         apt
++        apt-utils
+         archlinux-keyring
+         debian-keyring
+         pacman
+-        reprepro
+         ubu-keyring
+         zypper
+diff --git a/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/opensuse.conf b/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/opensuse.conf
+index 3f876c9f..47df9a5d 100644
+--- a/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/opensuse.conf
++++ b/mkosi/resources/mkosi-tools/mkosi.profiles/package-manager/mkosi.conf.d/opensuse.conf
+@@ -7,4 +7,3 @@ Distribution=opensuse
+ Packages=
+         dnf5
+         dnf5-plugins
+-        reprepro
+-- 
+2.51.0
+

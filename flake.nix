@@ -74,6 +74,44 @@
 
           rev = self.shortRev or self.dirtyShortRev or (lib.substring 0 8 self.lastModifiedDate);
           version = "${cargoToml.package.version}+${rev}";
+
+          # this is somewhat cursed
+          mkosiFhs =
+            let
+              keyringDeb = pkgs.fetchurl {
+                url = "https://deb.debian.org/debian/pool/main/d/debian-archive-keyring/debian-archive-keyring_2025.1_all.deb";
+                hash = "sha256-nqd3jkQxRMpJBmhzeoqyLdPnSLuZ6AXiLsBVq+s8f6w=";
+              };
+              debian-archive-keyring =
+                pkgs.runCommandNoCCLocal "debian-archive-keyring"
+                  {
+                    nativeBuildInputs = with pkgs; [ binutils ];
+                  }
+                  ''
+                    ar vx ${keyringDeb}
+                    mkdir "$out"
+                    tar -xf data.tar.xz --transform "s|/usr||" -C "$out"
+                  '';
+            in
+            pkgs.buildFHSEnv {
+              name = "mkosi";
+              runScript = "mkosi";
+              targetPkgs =
+                pkgs: with pkgs; [
+                  (mkosi.overrideAttrs (
+                    final: prev: {
+                      patches = prev.patches ++ [ ./mkosi/0001-Use-apt-ftparchive-instead-of-reprepro.patch ];
+                    }
+                  ))
+                  apt
+                  debian-archive-keyring
+                  dpkg
+                  e2fsprogs
+                  gnupg
+                  jq
+                  python3
+                ];
+            };
         in
         {
           packages =
@@ -143,6 +181,7 @@
               cargo-audit
               cargo-outdated
               clang-tools
+              mkosiFhs
               (rust-bin.stable.latest.minimal.override {
                 extensions = [
                   "rust-analyzer"

@@ -1,0 +1,14 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# test installing inside the image
+if ! mkosi-install bcachefs-tools bcachefs-kernel-dkms; then
+    echo "
+---start build log output-------------------------------------------------------
+$(<"$BUILDROOT"/var/lib/dkms/bcachefs/*/build/make.log)
+---end build log output---------------------------------------------------------"
+    exit 1
+fi
+
+# copy built packages to output dir
+cp "$PACKAGEDIR"/* "$OUTPUTDIR"
