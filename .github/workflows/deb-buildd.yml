@@ -39,34 +39,25 @@ jobs:
         timeout-minutes: 1
         run: |
           set -xe
-          tee /etc/dpkg/dpkg.cfg.d/force-unsafe-io > /dev/null <<EOT
-          force-unsafe-io
-          EOT
-          tee /etc/apt/apt.conf.d/tmpfs > /dev/null <<EOT
-          Dir::Cache::Archives "/tmp/apt/archives";
-          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
-          EOT
+
           mkdir -p /tmp/apt/archives
-          tee /etc/apt/apt.conf.d/80retry > /dev/null <<EOT
-          Acquire::Retries "10";
-          EOT
-          tee /etc/apt/apt.conf.d/80recommends > /dev/null <<EOT
-          APT::Install-Recommends "false";
-          EOT
-          tee /etc/apt/apt.conf.d/80suggests > /dev/null <<EOT
-          APT::Install-Suggests "false";
-          EOT
-          tee /etc/apt/apt.conf.d/80forceyes > /dev/null <<EOT
-          APT::Get::Assume-Yes "true";
-          EOT
-          tee /etc/apt/apt.conf.d/80fixmissing > /dev/null <<EOT
-          APT::Get::Fix-Missing "true";
-          EOT
           rm -rf /var/lib/apt/lists/*
           rm -rf /etc/apt/sources.list*
-          tee /etc/apt/sources.list > /dev/null <<EOT
-          deb http://deb.debian.org/debian unstable main
+
+          echo force-unsafe-io > /etc/dpkg/dpkg.cfg.d/force-unsafe-io
+
+          tee /etc/apt/apt.conf.d/80buildd-workflow > /dev/null <<EOT
+            Dir::Cache::Archives "/tmp/apt/archives";
+            APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+            Acquire::Retries "10";
+            APT::Install-Recommends "false";
+            APT::Install-Suggests "false";
+            APT::Get::Assume-Yes "true";
+            APT::Get::Fix-Missing "true";
           EOT
+
+          echo "deb http://deb.debian.org/debian unstable main" > /etc/apt/sources.list
+
           apt update
           apt full-upgrade
           apt install \
@@ -98,6 +89,7 @@ jobs:
           apt clean
           USER=`whoami`
           sudo usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+
       - name: Import GPG key
         timeout-minutes: 1
         id: gpg
@@ -107,6 +99,7 @@ jobs:
           gpg_private_key: ${{ secrets.GPG_SECRET_SUBKEYS }}
           fingerprint: ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
           trust_level: 5
+
       - name: Configure GPG
         timeout-minutes: 1
         if: steps.gpg.conclusion != 'skipped'
@@ -116,20 +109,21 @@ jobs:
           rm -f ~/.gnupg/trustedkeys.gpg
           gpg --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --import /etc/apt/trusted.gpg.d/apt.bcachefs.org.asc
           tee -a ~/.gnupg/gpg.conf > /dev/null <<EOT
-          default-key ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+            default-key ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
           EOT
           tee -a ~/.gbp.conf > /dev/null <<EOT
-          [buildpackage]
-          sign-tags = True
-          keyid = ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+            [buildpackage]
+            sign-tags = True
+            keyid = ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
           EOT
           tee -a ~/.devscripts > /dev/null <<EOT
-          DEBSIGN_KEYID=${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+            DEBSIGN_KEYID=${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
           EOT
           tee -a ~/.sbuildrc > /dev/null <<EOT
           \$key_id = '${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}';
           \$dpkg_buildpackage_user_options = ['--sign-keyid=${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}', '--force-sign'];
           EOT
+
       - name: Configure sbuild
         timeout-minutes: 1
         run: |
@@ -137,82 +131,76 @@ jobs:
           BUILD_DIR="$GITHUB_WORKSPACE/deb-bin/${{ inputs.dist-version }}/${{ inputs.arch }}"
           echo "BUILD_DIR=$(echo ${BUILD_DIR})" >> $GITHUB_ENV
           mkdir -p "$BUILD_DIR"
+
           tee -a ~/.sbuildrc > /dev/null <<EOT
-          \$verbose = 1;
-          \$build_dir = '$BUILD_DIR';
-          \$distribution = '${{ inputs.dist-version }}';
-          #\$host_arch = '${{ inputs.arch }}';
-          \$chroot_mode = 'unshare';
-          \$unshare_tmpdir_template = '/tmp/tmp.sbuild.XXXXXXXXXX';
-          \$run_lintian = 1;
-          \$run_piuparts = 0;
-          \$run_autopkgtest = 0;
-          push @{\$unshare_mmdebstrap_extra_args}, "*", [
-            '--variant=apt'
-          ];
+            \$verbose = 1;
+            \$build_dir = '$BUILD_DIR';
+            \$distribution = '${{ inputs.dist-version }}';
+            #\$host_arch = '${{ inputs.arch }}';
+            \$chroot_mode = 'unshare';
+            \$unshare_tmpdir_template = '/tmp/tmp.sbuild.XXXXXXXXXX';
+            \$run_lintian = 1;
+            \$run_piuparts = 0;
+            \$run_autopkgtest = 0;
+            push @{\$unshare_mmdebstrap_extra_args}, "*", [
+              '--variant=apt'
+            ];
           EOT
-          if [ "${{ inputs.dist-name }}" = "debian" ];
-          then
-          MIRROR="http://deb.debian.org/debian"
-          elif [ "${{ inputs.dist-name }}" = "ubuntu" ] && [ "${{ inputs.arch }}" = "amd64" ];
-          then
-          MIRROR="http://archive.ubuntu.com/ubuntu"
-          elif [ "${{ inputs.dist-name }}" = "ubuntu" ] && [ "${{ inputs.arch }}" != "amd64" ];
-          then
-          MIRROR="http://ports.ubuntu.com/ubuntu-ports"
+
+          if [ "${{ inputs.dist-name }}" = "debian" ]; then
+            KEYRING="/usr/share/keyrings/debian-keyring.gpg"
+            MIRROR="http://deb.debian.org/debian"
+
+            tee -a ~/.sbuildrc > /dev/null <<EOT
+              push @{\$unshare_mmdebstrap_extra_args}, "*", [
+                '$MIRROR',
+                '--keyring=$KEYRING',
+                '--components=main'
+              ];
+            EOT
+
+            if [ "${{ inputs.dist-version }}" != "unstable" ]; then
+              tee -a ~/.sbuildrc > /dev/null <<EOT
+                \$extra_repositories = [
+                  'deb $MIRROR ${{ inputs.dist-version }}-updates main',
+                  'deb $MIRROR ${{ inputs.dist-version }}-backports main'
+                ];
+              EOT
+            fi
+          elif [ "${{ inputs.dist-name }}" = "ubuntu" ]; then
+            KEYRING="/usr/share/keyrings/ubuntu-archive-keyring.gpg"
+
+            if [ "${{ inputs.arch }}" = "amd64" ]; then
+              MIRROR="http://archive.ubuntu.com/ubuntu"
+            else
+              MIRROR="http://ports.ubuntu.com/ubuntu-ports"
+            fi
+
+            tee -a ~/.sbuildrc > /dev/null <<EOT
+              push @{\$unshare_mmdebstrap_extra_args}, "*", [
+                '$MIRROR',
+                '--keyring=$KEYRING',
+                '--components=main,universe'
+              ];
+              \$extra_repositories = [
+                'deb $MIRROR ${{ inputs.dist-version }}-updates main universe',
+                'deb $MIRROR ${{ inputs.dist-version }}-security main universe',
+                'deb $MIRROR ${{ inputs.dist-version }}-backports main universe',
+              ];
+            EOT
           else
-          exit 1
+            exit 1
           fi
-          if [ "${{ inputs.dist-name }}" = "debian" ];
-          then
-          KEYRING="/usr/share/keyrings/debian-keyring.gpg"
-          elif [ "${{ inputs.dist-name }}" = "ubuntu" ];
-          then
-          KEYRING="/usr/share/keyrings/ubuntu-archive-keyring.gpg"
-          else
-          exit 1
-          fi
+
           echo "MIRROR=$(echo ${MIRROR})" >> $GITHUB_ENV
-          if [ "${{ inputs.dist-name }}" = "debian" ];
-          then
-          tee -a ~/.sbuildrc > /dev/null <<EOT
-          push @{\$unshare_mmdebstrap_extra_args}, "*", [
-            '$MIRROR',
-            '--keyring=$KEYRING',
-            '--components=main'
-          ];
-          EOT
-          fi
-          if [ "${{ inputs.dist-name }}" = "debian" ] && [ "${{ inputs.dist-version }}" != "unstable" ];
-          then
-          tee -a ~/.sbuildrc > /dev/null <<EOT
-          \$extra_repositories = [
-            'deb $MIRROR ${{ inputs.dist-version }}-updates main',
-            'deb $MIRROR ${{ inputs.dist-version }}-backports main'
-          ];
-          EOT
-          fi
-          if [ "${{ inputs.dist-name }}" = "ubuntu" ];
-          then
-          tee -a ~/.sbuildrc > /dev/null <<EOT
-          push @{\$unshare_mmdebstrap_extra_args}, "*", [
-            '$MIRROR',
-            '--keyring=$KEYRING',
-            '--components=main,universe'
-          ];
-          \$extra_repositories = [
-            'deb $MIRROR ${{ inputs.dist-version }}-updates main universe',
-            'deb $MIRROR ${{ inputs.dist-version }}-security main universe',
-            'deb $MIRROR ${{ inputs.dist-version }}-backports main universe',
-          ];
-          EOT
-          fi
+
       - name: Download source-only .deb to be built
         timeout-minutes: 1
         uses: actions/download-artifact@v5
         with:
           artifact-ids: ${{ inputs.deb-src-artifact-id }}
           path: deb-src
+
       - name: Unpack the downloaded tarball
         timeout-minutes: 1
         run: |
@@ -220,6 +208,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/deb-src"
           tar -xf "$GITHUB_WORKSPACE/deb-src/artifact-src.tar"
           rm "$GITHUB_WORKSPACE/deb-src/artifact-src.tar"
+
       - name: Ensure that all incoming source artifacts are signed
         timeout-minutes: 1
         if: steps.gpg.conclusion != 'skipped'
@@ -235,16 +224,17 @@ jobs:
             ) \
             && echo 'Processing {}: ok' \
           "
+
       - name: Build the package
         timeout-minutes: 10
         run: |
           set -xe
           cd "$GITHUB_WORKSPACE/deb-bin"
-          if [ "${{ inputs.dist-name }}" = "ubuntu" ];
-          then
-          export DEB_BUILD_OPTIONS=noautodbgsym
+          if [ "${{ inputs.dist-name }}" = "ubuntu" ]; then
+            export DEB_BUILD_OPTIONS=noautodbgsym
           fi
           sbuild --verbose --arch-any --arch-all "$GITHUB_WORKSPACE/deb-src/"*.dsc
+
       - name: Ensure that all binary artifacts are signed, or sign them
         timeout-minutes: 1
         if: steps.gpg.conclusion != 'skipped'
@@ -258,18 +248,21 @@ jobs:
               || gpg --verbose --detach-sign {}                                                        \
             ) \
           "
+
       - name: Archive build artifacts
         timeout-minutes: 1
         run: |
           set -xe
           cd "$GITHUB_WORKSPACE/deb-bin"
           tar -cf "$GITHUB_WORKSPACE/deb-bin/artifact-bin-${{ inputs.dist-version }}-${{ inputs.arch }}.tar" *
+
       - name: Attest build artifact
         timeout-minutes: 1
         if: github.event_name != 'pull_request'
         uses: actions/attest-build-provenance@v3
         with:
           subject-path: '${{ github.workspace }}/deb-bin'
+
       - name: Upload build artifact archive
         timeout-minutes: 1
         id: deb-bin-upload
@@ -279,6 +272,7 @@ jobs:
           path: '${{ github.workspace }}/deb-bin/artifact-bin-${{ inputs.dist-version }}-${{ inputs.arch }}.tar'
           if-no-files-found: error
           compression-level: 0
+
       - name: Attest uploaded build artifact
         timeout-minutes: 1
         if: github.event_name != 'pull_request'
@@ -286,6 +280,7 @@ jobs:
         with:
           subject-name: artifact-bin-${{ inputs.dist-version }}-${{ inputs.arch }}.tar.zip
           subject-digest: sha256:${{ steps.deb-bin-upload.outputs.artifact-digest }}
+
       - name: Build Qemu image for autopkgtest
         timeout-minutes: 2
         id: qemu-image
@@ -295,6 +290,7 @@ jobs:
           IMAGE="/tmp/autopkgtest-qemu-image.qcow2"
           echo "IMAGE=$(echo ${IMAGE})" >> $GITHUB_ENV
           mmdebstrap-autopkgtest-build-qemu --boot=efi --mirror "${{ env.MIRROR }}" "${{ inputs.dist-version }}" "$IMAGE"
+
       - name: Run autopkgtest
         timeout-minutes: 10
         if: steps.qemu-image.conclusion != 'skipped'
