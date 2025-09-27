@@ -895,7 +895,59 @@ static int ec_stripe_mem_alloc(struct btree_trans *trans,
  * Hash table of open stripes:
  * Stripes that are being created or modified are kept in a hash table, so that
  * stripe deletion can skip them.
+ *
+ * Additionally, we have a hash table for buckets that have stripes being
+ * created, to avoid racing with rebalance:
  */
+
+static bool __bch2_bucket_has_new_stripe(struct bch_fs *c, u64 dev_bucket)
+{
+	unsigned hash = hash_64(dev_bucket, ilog2(ARRAY_SIZE(c->ec_stripes_new_buckets)));
+	struct ec_stripe_new_bucket *s;
+
+	hlist_for_each_entry(s, &c->ec_stripes_new_buckets[hash], hash)
+		if (s->dev_bucket == dev_bucket)
+			return true;
+	return false;
+}
+
+bool bch2_bucket_has_new_stripe(struct bch_fs *c, u64 dev_bucket)
+{
+	guard(spinlock)(&c->ec_stripes_new_lock);
+	return __bch2_bucket_has_new_stripe(c, dev_bucket);
+}
+
+static void stripe_new_bucket_add(struct bch_fs *c, struct ec_stripe_new_bucket *s, u64 dev_bucket)
+{
+	s->dev_bucket = dev_bucket;
+
+	unsigned hash = hash_64(dev_bucket, ilog2(ARRAY_SIZE(c->ec_stripes_new_buckets)));
+	hlist_add_head(&s->hash, &c->ec_stripes_new_buckets[hash]);
+}
+
+static void stripe_new_buckets_add(struct bch_fs *c, struct ec_stripe_new *s)
+{
+	unsigned nr_blocks = s->nr_data + s->nr_parity;
+
+	guard(spinlock)(&c->ec_stripes_new_lock);
+	for (unsigned i = 0; i < nr_blocks; i++) {
+		if (!s->blocks[i])
+			continue;
+
+		struct open_bucket *ob = c->open_buckets + s->blocks[i];
+		struct bpos bucket = POS(ob->dev, ob->bucket);
+
+		stripe_new_bucket_add(c, &s->buckets[i], bucket_to_u64(bucket));
+	}
+}
+
+static void stripe_new_buckets_del(struct bch_fs *c, struct ec_stripe_new *s)
+{
+	struct bch_stripe *v = &bkey_i_to_stripe(&s->new_stripe.key)->v;
+
+	for (unsigned i = 0; i < v->nr_blocks; i++)
+		hlist_del_init(&s->buckets[i].hash);
+}
 
 static bool __bch2_stripe_is_open(struct bch_fs *c, u64 idx)
 {
@@ -937,6 +989,8 @@ static void bch2_stripe_close(struct bch_fs *c, struct ec_stripe_new *s)
 	hlist_del_init(&s->hash);
 
 	s->idx = 0;
+
+	stripe_new_buckets_del(c, s);
 }
 
 /* stripe deletion */
@@ -1134,7 +1188,7 @@ static int ec_stripe_update_extent(struct btree_trans *trans,
 
 	ret =   bch2_extent_get_io_opts_one(trans, &opts, &iter, bkey_i_to_s_c(n),
 					    SET_NEEDS_REBALANCE_other) ?:
-		bch2_bkey_set_needs_rebalance(trans->c, &opts, n,
+		bch2_bkey_set_needs_rebalance(trans, NULL, &opts, n,
 					      SET_NEEDS_REBALANCE_other, 0) ?:
 		bch2_trans_update(trans, &iter, n, 0);
 out:
@@ -2027,6 +2081,7 @@ allocate_buf:
 	if (ret)
 		goto err;
 
+	stripe_new_buckets_add(c, s);
 	s->allocated = true;
 allocated:
 	BUG_ON(!s->idx);

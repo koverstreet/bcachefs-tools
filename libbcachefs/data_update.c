@@ -153,28 +153,6 @@ static void trace_data_update2(struct data_update *m,
 }
 
 noinline_for_stack
-static void trace_io_move_created_rebalance2(struct data_update *m,
-					     struct bkey_s_c old, struct bkey_s_c k,
-					     struct bkey_i *insert)
-{
-	struct bch_fs *c = m->op.c;
-	CLASS(printbuf, buf)();
-
-	bch2_data_update_opts_to_text(&buf, c, &m->op.opts, &m->data_opts);
-
-	prt_str(&buf, "\nold: ");
-	bch2_bkey_val_to_text(&buf, c, old);
-	prt_str(&buf, "\nk:   ");
-	bch2_bkey_val_to_text(&buf, c, k);
-	prt_str(&buf, "\nnew: ");
-	bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
-
-	trace_io_move_created_rebalance(c, buf.buf);
-
-	count_event(c, io_move_created_rebalance);
-}
-
-noinline_for_stack
 static int data_update_invalid_bkey(struct data_update *m,
 				    struct bkey_s_c old, struct bkey_s_c k,
 				    struct bkey_i *insert)
@@ -383,7 +361,7 @@ restart_drop_extra_replicas:
 			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
 						k.k->p, insert->k.p) ?:
 			bch2_inum_snapshot_opts_get(trans, k.k->p.inode, k.k->p.snapshot, &opts) ?:
-			bch2_bkey_set_needs_rebalance(c, &opts, insert,
+			bch2_bkey_set_needs_rebalance(trans, NULL, &opts, insert,
 						      SET_NEEDS_REBALANCE_foreground,
 						      m->op.opts.change_cookie) ?:
 			bch2_trans_update(trans, &iter, insert,
@@ -393,10 +371,6 @@ restart_drop_extra_replicas:
 
 		if (trace_data_update_enabled())
 			trace_data_update2(m, old, k, insert);
-
-		if (bch2_bkey_sectors_need_rebalance(c, bkey_i_to_s_c(insert)) * k.k->size >
-		    bch2_bkey_sectors_need_rebalance(c, k) * insert->k.size)
-			trace_io_move_created_rebalance2(m, old, k, insert);
 
 		ret =   bch2_trans_commit(trans, &op->res,
 				NULL,
