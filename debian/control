@@ -39,6 +39,8 @@ Recommends: bcachefs-kernel-dkms (= ${binary:Version}),
             initramfs-tools | linux-initramfs-tool,
 Breaks: bcachefs-kernel-dkms (<< ${binary:Version}),
         bcachefs-kernel-dkms (>> ${binary:Version}),
+Replaces: bcachefs-kernel-dkms (<< ${binary:Version}),
+          bcachefs-kernel-dkms (>> ${binary:Version}),
 Description: bcachefs userspace tools
  Userspace tools for bcachefs, a modern copy on write, checksumming, multi
  device filesystem.

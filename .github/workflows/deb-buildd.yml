@@ -36,7 +36,7 @@ jobs:
       attestations: write
     steps:
       - name: Install necessary packages
-        timeout-minutes: 1
+        timeout-minutes: 2
         run: |
           set -xe
           tee /etc/dpkg/dpkg.cfg.d/force-unsafe-io > /dev/null <<EOT
@@ -68,8 +68,9 @@ jobs:
           deb http://deb.debian.org/debian unstable main
           EOT
           apt update
-          apt full-upgrade
-          apt install \
+          apt install eatmydata
+          eatmydata apt full-upgrade
+          eatmydata apt install \
             ${{ inputs.dist-name }}-keyring \
             autopkgtest \
             curl \
@@ -148,9 +149,18 @@ jobs:
           \$run_piuparts = 0;
           \$run_autopkgtest = 0;
           push @{\$unshare_mmdebstrap_extra_args}, "*", [
+            '--include=eatmydata',
             '--variant=apt'
           ];
           EOT
+          if [ "${{ inputs.dist-name }}" = "debian" ];
+          then
+          tee -a ~/.sbuildrc > /dev/null <<EOT
+          push @{\$unshare_mmdebstrap_extra_args}, "*", [
+            '--hook-dir=/usr/share/mmdebstrap/hooks/eatmydata'
+          ];
+          EOT
+          fi
           if [ "${{ inputs.dist-name }}" = "debian" ];
           then
           MIRROR="http://deb.debian.org/debian"
@@ -244,7 +254,7 @@ jobs:
           then
           export DEB_BUILD_OPTIONS=noautodbgsym
           fi
-          sbuild --verbose --arch-any --arch-all "$GITHUB_WORKSPACE/deb-src/"*.dsc
+          eatmydata sbuild --verbose --arch-any --arch-all "$GITHUB_WORKSPACE/deb-src/"*.dsc
       - name: Ensure that all binary artifacts are signed, or sign them
         timeout-minutes: 1
         if: steps.gpg.conclusion != 'skipped'
@@ -294,10 +304,10 @@ jobs:
           set -xe
           IMAGE="/tmp/autopkgtest-qemu-image.qcow2"
           echo "IMAGE=$(echo ${IMAGE})" >> $GITHUB_ENV
-          mmdebstrap-autopkgtest-build-qemu --boot=efi --mirror "${{ env.MIRROR }}" "${{ inputs.dist-version }}" "$IMAGE"
+          eatmydata mmdebstrap-autopkgtest-build-qemu --boot=efi --mirror "${{ env.MIRROR }}" "${{ inputs.dist-version }}" "$IMAGE"
       - name: Run autopkgtest
         timeout-minutes: 10
         if: steps.qemu-image.conclusion != 'skipped'
         run: |
           set -xe
-          autopkgtest --no-built-binaries --apt-upgrade "$GITHUB_WORKSPACE/deb-src"/*.dsc "${{ env.BUILD_DIR }}"/*.changes -- autopkgtest-virt-qemu --qemu-options="-smp $(nproc --all)" --boot=efi "${{ env.IMAGE }}"
+          eatmydata autopkgtest --no-built-binaries --apt-upgrade "$GITHUB_WORKSPACE/deb-src"/*.dsc "${{ env.BUILD_DIR }}"/*.changes -- autopkgtest-virt-qemu --qemu-options="-smp $(nproc --all)" --boot=efi "${{ env.IMAGE }}"

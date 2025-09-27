@@ -23,7 +23,7 @@ jobs:
       SUITE: ${{ (github.event_name == 'push' && github.ref_type == 'tag') && 'release' || 'snapshot' }}
     steps:
       - name: Install necessary packages
-        timeout-minutes: 1
+        timeout-minutes: 2
         run: |
           set -xe
           tee /etc/dpkg/dpkg.cfg.d/force-unsafe-io > /dev/null <<EOT

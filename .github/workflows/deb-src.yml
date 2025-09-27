@@ -31,7 +31,7 @@ jobs:
       DEBPKG_EPOCH: 1
     steps:
       - name: Install necessary packages
-        timeout-minutes: 1
+        timeout-minutes: 2
         run: |
           set -xe
           tee /etc/dpkg/dpkg.cfg.d/force-unsafe-io > /dev/null <<EOT
@@ -63,8 +63,9 @@ jobs:
           deb http://deb.debian.org/debian unstable main
           EOT
           apt update
-          apt full-upgrade
-          apt install \
+          apt install eatmydata
+          eatmydata apt full-upgrade
+          eatmydata apt install \
             ${{ inputs.dist-name }}-keyring \
             curl \
             devscripts \
@@ -130,6 +131,8 @@ jobs:
           EOT
           tee -a ~/.sbuildrc > /dev/null <<EOT
           push @{\$unshare_mmdebstrap_extra_args}, "*", [
+            '--include=eatmydata',
+            '--hook-dir=/usr/share/mmdebstrap/hooks/eatmydata',
             'http://deb.debian.org/debian',
             '--variant=apt',
             '--keyring=/usr/share/keyrings/debian-keyring.gpg',
@@ -140,7 +143,7 @@ jobs:
         timeout-minutes: 1
         run: |
           set -xe
-          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain $RUST_VERSION --profile minimal -y
+          eatmydata curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- --default-toolchain $RUST_VERSION --profile minimal -y
           . "$HOME/.cargo/env"
       - name: Fetch our git repository
         timeout-minutes: 1
@@ -174,7 +177,7 @@ jobs:
           cd "$GITHUB_WORKSPACE/bcachefs-tools"
           mkdir -p "$GITHUB_WORKSPACE/deb-src"
           # FIXME: pubkey is not avaliable in chroot, .dsc signature verification fails
-          gbp buildpackage --git-verbose --git-ignore-branch --no-clean --git-dist=${{ inputs.dist-version }} --git-builder=sbuild --source --source-only-changes --no-arch-all --no-arch-any
+          eatmydata gbp buildpackage --git-verbose --git-ignore-branch --no-clean --git-dist=${{ inputs.dist-version }} --git-builder=sbuild --source --source-only-changes --no-arch-all --no-arch-any
       - name: Ensure that all source artifacts are signed, or sign them
         timeout-minutes: 1
         if: steps.gpg.conclusion != 'skipped'
