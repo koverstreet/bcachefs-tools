@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euxo pipefail
+
+cd "$SRCDIR/build/bcachefs-tools"
+
+gbp buildpackage --git-ignore-new --git-upstream-tree=SLOPPY -us -uc -nc -b -i -I
+
+cp ../bcachefs-tools-deb-export-dir/* "$PACKAGEDIR"
