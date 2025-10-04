@@ -2,6 +2,7 @@ use std::{
     ffi::{CStr, CString, c_char, c_int},
     collections::HashMap,
     env,
+    fs,
     path::{Path, PathBuf},
     str,
 };
@@ -132,6 +133,15 @@ fn devs_str_sbs_from_device(
     device: &Path,
     opts: &bch_opts
 ) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
+    if let Ok(metadata) = fs::metadata(device) {
+        if metadata.is_dir() {
+            return Err(anyhow::anyhow!("'{}' is a directory, not a block device", device.display()));
+        }
+        if metadata.is_file() {
+            return Err(anyhow::anyhow!("'{}' is a regular file, not a block device", device.display()));
+        }
+    }
+
     let dev_sb = read_super_silent(device, *opts)?;
 
     if dev_sb.sb().number_of_devices() == 1 {
@@ -199,7 +209,13 @@ pub extern "C" fn bch2_scan_device_sbs(device: *const c_char, ret: *mut sb_names
     // how to initialize to default/empty?
     let opts = bch_bindgen::opts::parse_mount_opts(None, None, true).unwrap_or_default();
 
-    let sbs = scan_sbs(&device, &opts).unwrap();
+    let sbs = match scan_sbs(&device, &opts) {
+        Ok(sbs) => sbs,
+        Err(e) => {
+            eprintln!("bcachefs ({}): error reading superblock: {}", device, e);
+            return -1;
+        }
+    };
 
     let mut sbs = sbs.iter()
         .map(|(name, sb)| sb_name {
@@ -225,5 +241,11 @@ pub extern "C" fn bch2_scan_devices(device: *const c_char) -> *mut c_char {
     // how to initialize to default/empty?
     let opts = bch_bindgen::opts::parse_mount_opts(None, None, true).unwrap_or_default();
 
-    CString::new(scan_devices(&device, &opts).unwrap()).unwrap().into_raw()
+    match scan_devices(&device, &opts) {
+        Ok(result) => CString::new(result).unwrap().into_raw(),
+        Err(e) => {
+            eprintln!("bcachefs ({}): error reading superblock: {}", device, e);
+            std::ptr::null_mut()
+        }
+    }
 }
