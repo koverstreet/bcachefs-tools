@@ -5,6 +5,7 @@
 
 #include "btree/bbpos.h"
 
+#include "init/passes.h"
 #include "init/progress.h"
 
 void bch2_progress_init_inner(struct progress_indicator_state *s,
@@ -64,12 +65,15 @@ static inline bool progress_update_p(struct progress_indicator_state *s)
 	return ret;
 }
 
-void bch2_progress_update_iter(struct btree_trans *trans,
-			       struct progress_indicator_state *s,
-			       struct btree_iter *iter,
-			       const char *msg)
+int bch2_progress_update_iter(struct btree_trans *trans,
+			      struct progress_indicator_state *s,
+			      struct btree_iter *iter,
+			      const char *msg)
 {
 	struct bch_fs *c = trans->c;
+
+	try(bch2_recovery_cancelled(c));
+
 	struct btree *b = path_l(btree_iter_path(trans, iter))->b;
 
 	s->nodes_seen += b != s->last_node;
@@ -88,4 +92,6 @@ void bch2_progress_update_iter(struct btree_trans *trans,
 
 		bch_info(c, "%s", buf.buf);
 	}
+
+	return 0;
 }
