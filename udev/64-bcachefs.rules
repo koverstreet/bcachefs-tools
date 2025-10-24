@@ -2,7 +2,16 @@
 #
 # Copyright (C) 2024 Oracle.  All rights reserved.
 # Author: Darrick J. Wong <djwong@kernel.org>
-#
+
+SUBSYSTEM!="block", GOTO="bcachefs_end"
+ACTION=="remove", GOTO="bcachefs_end"
+ENV{ID_FS_TYPE}!="bcachefs", GOTO="bcachefs_end"
+ENV{SYSTEMD_READY}=="0", GOTO="bcachefs_end"
+
+# udev has already assigned a by-uuid link using the FS global
+# UUID. We should also have a link for the per-member UUID.
+ENV{ID_FS_UUID_SUB_ENC}=="?*", SYMLINK+="disk/by-uuid/$env{ID_FS_UUID_SUB_ENC}"
+
 # Don't let udisks automount bcachefs filesystems without even asking a user.
 # This doesn't eliminate filesystems as an attack surface; it only prevents
 # evil maid attacks when all sessions are locked.
@@ -10,4 +19,6 @@
 # According to http://storaged.org/doc/udisks2-api/latest/udisks.8.html,
 # supplying UDISKS_AUTO=0 here changes the HintAuto property of the block
 # device abstraction to mean "do not automatically start" (e.g. mount).
-SUBSYSTEM=="block", ENV{ID_FS_TYPE}=="bcachefs", ENV{UDISKS_AUTO}="0"
+ENV{UDISKS_AUTO}="0"
+
+LABEL="bcachefs_end"
