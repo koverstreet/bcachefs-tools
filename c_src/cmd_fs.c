@@ -372,8 +372,11 @@ static int fs_usage_v1_to_text(struct printbuf *out,
 	if (fields & FS_USAGE_btree)
 		accounting_types |= BIT(BCH_DISK_ACCOUNTING_btree);
 
-	if (fields & FS_USAGE_rebalance_work)
+	if (fields & FS_USAGE_rebalance_work) {
 		accounting_types |= BIT(BCH_DISK_ACCOUNTING_rebalance_work);
+		accounting_types |= BIT(BCH_DISK_ACCOUNTING_rebalance_work_v2);
+		accounting_types |= BIT(BCH_DISK_ACCOUNTING_dev_leaving);
+	}
 
 	struct bch_ioctl_query_accounting *a =
 		bchu_fs_accounting(fs, accounting_types);
@@ -640,6 +643,9 @@ int cmd_fs_usage(int argc, char *argv[])
 			exit(EXIT_FAILURE);
 		}
 	args_shift(optind);
+
+	if (!fields)
+		fields |= FS_USAGE_rebalance_work;
 
 	if (!argc) {
 		printbuf_reset(&buf);
