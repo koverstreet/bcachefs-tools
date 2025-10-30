@@ -283,6 +283,9 @@ void bch2_accounting_key_to_text(struct printbuf *out, struct disk_accounting_po
 		prt_str(out, "btree=");
 		bch2_btree_id_to_text(out, k->btree.id);
 		break;
+	case BCH_DISK_ACCOUNTING_rebalance_work_v2:
+		bch2_prt_rebalance_accounting_type(out, k->rebalance_work_v2.type);
+		break;
 	}
 }
 
@@ -440,25 +443,39 @@ static bool accounting_mem_entry_is_zero(struct accounting_mem_entry *e)
 	return true;
 }
 
-void bch2_accounting_mem_gc(struct bch_fs *c)
+void __bch2_accounting_maybe_kill(struct bch_fs *c, struct bpos pos)
 {
-	struct bch_accounting_mem *acc = &c->accounting;
+	struct disk_accounting_pos acc_k;
+	bpos_to_disk_accounting_pos(&acc_k, pos);
 
-	guard(percpu_write)(&c->mark_lock);
-	struct accounting_mem_entry *dst = acc->k.data;
+	if (acc_k.type != BCH_DISK_ACCOUNTING_replicas)
+		return;
 
-	darray_for_each(acc->k, src) {
-		if (accounting_mem_entry_is_zero(src)) {
-			free_percpu(src->v[0]);
-			free_percpu(src->v[1]);
-		} else {
-			*dst++ = *src;
+	guard(mutex)(&c->sb_lock);
+	scoped_guard(percpu_write, &c->mark_lock) {
+		struct bch_accounting_mem *acc = &c->accounting;
+
+		unsigned idx = eytzinger0_find(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
+					       accounting_pos_cmp, &pos);
+
+		if (idx < acc->k.nr) {
+			struct accounting_mem_entry *e = acc->k.data + idx;
+			if (!accounting_mem_entry_is_zero(e))
+				return;
+
+			free_percpu(e->v[0]);
+			free_percpu(e->v[1]);
+
+			swap(*e, darray_last(acc->k));
+			--acc->k.nr;
+			eytzinger0_sort(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
+					accounting_pos_cmp, NULL);
 		}
+
+		bch2_replicas_entry_kill(c, &acc_k.replicas);
 	}
 
-	acc->k.nr = dst - acc->k.data;
-	eytzinger0_sort(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
-			accounting_pos_cmp, NULL);
+	bch2_write_super(c);
 }
 
 /*
@@ -472,9 +489,6 @@ void bch2_accounting_mem_gc(struct bch_fs *c)
 int bch2_fs_replicas_usage_read(struct bch_fs *c, darray_char *usage)
 {
 	struct bch_accounting_mem *acc = &c->accounting;
-	int ret = 0;
-
-	darray_init(usage);
 
 	guard(percpu_read)(&c->mark_lock);
 	darray_for_each(acc->k, i) {
@@ -492,24 +506,19 @@ int bch2_fs_replicas_usage_read(struct bch_fs *c, darray_char *usage)
 		bch2_accounting_mem_read_counters(acc, i - acc->k.data, &sectors, 1, false);
 		u.r.sectors = sectors;
 
-		ret = darray_make_room(usage, replicas_usage_bytes(&u.r));
-		if (ret)
-			break;
+		try(darray_make_room(usage, replicas_usage_bytes(&u.r)));
 
 		memcpy(&darray_top(*usage), &u.r, replicas_usage_bytes(&u.r));
 		usage->nr += replicas_usage_bytes(&u.r);
 	}
 
-	if (ret)
-		darray_exit(usage);
-	return ret;
+	return 0;
 }
 
 int bch2_fs_accounting_read(struct bch_fs *c, darray_char *out_buf, unsigned accounting_types_mask)
 {
 
 	struct bch_accounting_mem *acc = &c->accounting;
-	int ret = 0;
 
 	darray_init(out_buf);
 
@@ -521,10 +530,8 @@ int bch2_fs_accounting_read(struct bch_fs *c, darray_char *out_buf, unsigned acc
 		if (!(accounting_types_mask & BIT(a_p.type)))
 			continue;
 
-		ret = darray_make_room(out_buf, sizeof(struct bkey_i_accounting) +
-				       sizeof(u64) * i->nr_counters);
-		if (ret)
-			break;
+		try(darray_make_room(out_buf, sizeof(struct bkey_i_accounting) +
+				     sizeof(u64) * i->nr_counters));
 
 		struct bkey_i_accounting *a_out =
 			bkey_accounting_init((void *) &darray_top(*out_buf));
@@ -537,9 +544,7 @@ int bch2_fs_accounting_read(struct bch_fs *c, darray_char *out_buf, unsigned acc
 			out_buf->nr += bkey_bytes(&a_out->k);
 	}
 
-	if (ret)
-		darray_exit(out_buf);
-	return ret;
+	return 0;
 }
 
 static void bch2_accounting_free_counters(struct bch_accounting_mem *acc, bool gc)

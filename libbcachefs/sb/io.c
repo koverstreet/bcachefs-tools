@@ -1021,6 +1021,11 @@ int bch2_write_super(struct bch_fs *c)
 	closure_init_stack(cl);
 	memset(&sb_written, 0, sizeof(sb_written));
 
+	if (bch2_sb_has_journal(c->disk_sb.sb))
+		bch2_fs_mark_dirty(c);
+	else
+		bch2_fs_mark_clean(c);
+
 	/*
 	 * Note: we do writes to RO devices here, and we might want to change
 	 * that in the future.
@@ -1276,6 +1281,8 @@ void bch2_sb_upgrade_incompat(struct bch_fs *c)
 	c->disk_sb.sb->features[0] |= cpu_to_le64(BCH_SB_FEATURES_ALL);
 	SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb,
 			max(BCH_SB_VERSION_INCOMPAT_ALLOWED(c->disk_sb.sb), c->sb.version));
+
+	bch2_sb_set_upgrade_incompat(c, c->sb.version_incompat_allowed, c->sb.version);
 	bch2_write_super(c);
 }
 

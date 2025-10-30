@@ -324,8 +324,11 @@ int bch2_move_extent(struct moving_context *ctxt,
 
 	struct bch_inode_opts opts;
 	try(bch2_bkey_get_io_opts(trans, snapshot_io_opts, k, &opts));
-	try(bch2_update_rebalance_opts(trans, &opts, iter, k, SET_NEEDS_REBALANCE_other));
-	try(bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+	try(bch2_update_rebalance_opts(trans, snapshot_io_opts, &opts, iter, level, k,
+				       SET_NEEDS_REBALANCE_other));
+
+	CLASS(disk_reservation, res)(c);
+	try(bch2_trans_commit_lazy(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc));
 
 	struct data_update_opts data_opts = {};
 	int ret = pred(trans, arg, iter->btree_id, k, &opts, &data_opts);
@@ -994,7 +997,6 @@ int bch2_data_job(struct bch_fs *c,
 				     true,
 				     rereplicate_pred, c) ?: ret;
 		bch2_btree_interior_updates_flush(c);
-		ret = bch2_replicas_gc2(c) ?: ret;
 		break;
 	case BCH_DATA_OP_migrate:
 		if (op->migrate.dev >= c->sb.nr_devices)
@@ -1010,7 +1012,6 @@ int bch2_data_job(struct bch_fs *c,
 					  true,
 					  migrate_pred, op) ?: ret;
 		bch2_btree_interior_updates_flush(c);
-		ret = bch2_replicas_gc2(c) ?: ret;
 		break;
 	case BCH_DATA_OP_rewrite_old_nodes:
 		ret = bch2_scan_old_btree_nodes(c, stats);
@@ -1020,7 +1021,6 @@ int bch2_data_job(struct bch_fs *c,
 				     writepoint_hashed((unsigned long) current),
 				     true,
 				     drop_extra_replicas_pred, c) ?: ret;
-		ret = bch2_replicas_gc2(c) ?: ret;
 		break;
 	default:
 		ret = -EINVAL;

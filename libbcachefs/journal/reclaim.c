@@ -211,7 +211,7 @@ void bch2_journal_space_available(struct journal *j)
 			continue;
 
 		while (ja->dirty_idx != ja->cur_idx &&
-		       ja->bucket_seq[ja->dirty_idx] < journal_last_seq(j))
+		       ja->bucket_seq[ja->dirty_idx] < j->last_seq)
 			ja->dirty_idx = (ja->dirty_idx + 1) % ja->nr;
 
 		while (ja->dirty_idx_ondisk != ja->dirty_idx &&
@@ -325,20 +325,37 @@ void bch2_journal_do_discards(struct journal *j)
  * entry, holding it open to ensure it gets replayed during recovery:
  */
 
-void bch2_journal_reclaim_fast(struct journal *j)
+void bch2_journal_update_last_seq(struct journal *j)
 {
-	bool popped = false;
-
 	lockdep_assert_held(&j->lock);
 
 	/*
 	 * Unpin journal entries whose reference counts reached zero, meaning
 	 * all btree nodes got written out
 	 */
+	u64 old = j->last_seq;
 	struct journal_entry_pin_list *pin_list;
-	while (!fifo_empty(&j->pin) &&
-	       j->pin.front <= j->seq_ondisk &&
-	       !atomic_read(&(pin_list = &fifo_peek_front(&j->pin))->count)) {
+	while (j->last_seq <  j->pin.back &&
+	       j->last_seq <= j->seq_ondisk &&
+	       !atomic_read(&(pin_list = journal_seq_pin(j, j->last_seq))->count))
+		j->last_seq++;
+
+	if (old != j->last_seq) {
+		bch2_journal_space_available(j);
+		__closure_wake_up(&j->reclaim_flush_wait);
+	}
+}
+
+void bch2_journal_update_last_seq_ondisk(struct journal *j, u64 last_seq_ondisk)
+{
+	guard(mutex)(&j->reclaim_replicas_lock);
+
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	union bch_replicas_padded replicas;
+	unsigned nr_refs = 0;
+
+	while (j->last_seq_ondisk < last_seq_ondisk) {
+		struct journal_entry_pin_list *pin_list = journal_seq_pin(j, j->last_seq_ondisk);
 
 		if (WARN_ON(j->dirty_entry_bytes < pin_list->bytes))
 			pin_list->bytes = j->dirty_entry_bytes;
@@ -346,14 +363,23 @@ void bch2_journal_reclaim_fast(struct journal *j)
 		j->dirty_entry_bytes -= pin_list->bytes;
 		pin_list->bytes = 0;
 
-		j->pin.front++;
-		popped = true;
+		if (pin_list->devs.e.nr_devs) {
+			if (nr_refs &&
+			    !bch2_replicas_entry_eq(&replicas.e, &pin_list->devs.e)) {
+				bch2_replicas_entry_put_many(c, &replicas.e, nr_refs);
+				nr_refs = 0;
+			}
+
+			memcpy(&replicas, &pin_list->devs, replicas_entry_bytes(&pin_list->devs.e));
+			pin_list->devs.e.nr_devs = 0;
+			nr_refs++;
+		}
+
+		j->last_seq_ondisk++;
 	}
 
-	if (popped) {
-		bch2_journal_space_available(j);
-		__closure_wake_up(&j->reclaim_flush_wait);
-	}
+	if (nr_refs)
+		bch2_replicas_entry_put_many(c, &replicas.e, nr_refs);
 }
 
 bool __bch2_journal_pin_put(struct journal *j, u64 seq)
@@ -367,7 +393,7 @@ void bch2_journal_pin_put(struct journal *j, u64 seq)
 {
 	if (__bch2_journal_pin_put(j, seq)) {
 		guard(spinlock)(&j->lock);
-		bch2_journal_reclaim_fast(j);
+		bch2_journal_update_last_seq(j);
 	}
 }
 
@@ -394,7 +420,7 @@ static inline bool __journal_pin_drop(struct journal *j,
 	 * writing a new last_seq will now make another bucket available:
 	 */
 	return atomic_dec_and_test(&pin_list->count) &&
-		pin_list == &fifo_peek_front(&j->pin);
+		pin_list == journal_seq_pin(j, j->last_seq);
 }
 
 void bch2_journal_pin_drop(struct journal *j,
@@ -402,7 +428,7 @@ void bch2_journal_pin_drop(struct journal *j,
 {
 	guard(spinlock)(&j->lock);
 	if (__journal_pin_drop(j, pin))
-		bch2_journal_reclaim_fast(j);
+		bch2_journal_update_last_seq(j);
 }
 
 static enum journal_pin_type journal_pin_type(struct journal_entry_pin *pin,
@@ -453,7 +479,7 @@ void bch2_journal_pin_copy(struct journal *j,
 
 	u64 seq = READ_ONCE(src->seq);
 
-	if (seq < journal_last_seq(j)) {
+	if (seq < j->last_seq) {
 		/*
 		 * bch2_journal_pin_copy() raced with bch2_journal_pin_drop() on
 		 * the src pin - with the pin dropped, the entry to pin might no
@@ -468,13 +494,13 @@ void bch2_journal_pin_copy(struct journal *j,
 	bch2_journal_pin_set_locked(j, seq, dst, flush_fn, journal_pin_type(dst, flush_fn));
 
 	if (reclaim)
-		bch2_journal_reclaim_fast(j);
+		bch2_journal_update_last_seq(j);
 
 	/*
 	 * If the journal is currently full,  we might want to call flush_fn
 	 * immediately:
 	 */
-	if (seq == journal_last_seq(j))
+	if (seq == j->last_seq)
 		journal_wake(j);
 }
 
@@ -485,19 +511,19 @@ void bch2_journal_pin_set(struct journal *j, u64 seq,
 	bool wake;
 
 	scoped_guard(spinlock, &j->lock) {
-		BUG_ON(seq < journal_last_seq(j));
+		BUG_ON(seq < j->last_seq);
 
 		bool reclaim = __journal_pin_drop(j, pin);
 
 		bch2_journal_pin_set_locked(j, seq, pin, flush_fn, journal_pin_type(pin, flush_fn));
 
 		if (reclaim)
-			bch2_journal_reclaim_fast(j);
+			bch2_journal_update_last_seq(j);
 		/*
 		 * If the journal is currently full,  we might want to call flush_fn
 		 * immediately:
 		 */
-		wake = seq == journal_last_seq(j);
+		wake = seq == j->last_seq;
 	}
 
 	if (wake)
@@ -929,8 +955,8 @@ static int journal_flush_done(struct journal *j, u64 seq_to_flush,
 	 */
 	guard(spinlock)(&j->lock);
 	return !test_bit(JOURNAL_replay_done, &j->flags) ||
-		journal_last_seq(j) > seq_to_flush ||
-		!fifo_used(&j->pin);
+		j->last_seq > seq_to_flush ||
+		j->last_seq == j->pin.back;
 }
 
 bool bch2_journal_flush_pins(struct journal *j, u64 seq_to_flush)
@@ -956,48 +982,15 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 	scoped_guard(spinlock, &j->lock)
 		fifo_for_each_entry_ptr(p, &j->pin, iter)
 			if (dev_idx >= 0
-			    ? bch2_dev_list_has_dev(p->devs, dev_idx)
-			    : p->devs.nr < c->opts.metadata_replicas)
+			    ? bch2_replicas_entry_has_dev(&p->devs.e, dev_idx)
+			    : p->devs.e.nr_devs < c->opts.metadata_replicas)
 				seq = iter;
 
 	bch2_journal_flush_pins(j, seq);
 
 	try(bch2_journal_error(j));
 
-	guard(mutex)(&c->replicas_gc_lock);
-	bch2_replicas_gc_start(c, 1 << BCH_DATA_journal);
-
-	/*
-	 * Now that we've populated replicas_gc, write to the journal to mark
-	 * active journal devices. This handles the case where the journal might
-	 * be empty. Otherwise we could clear all journal replicas and
-	 * temporarily put the fs into an unrecoverable state. Journal recovery
-	 * expects to find devices marked for journal data on unclean mount.
-	 */
-	int ret = bch2_journal_meta(&c->journal);
-	if (ret)
-		goto err;
-
-	seq = 0;
-	scoped_guard(spinlock, &j->lock)
-		while (!ret) {
-			union bch_replicas_padded replicas;
-
-			seq = max(seq, journal_last_seq(j));
-			if (seq >= j->pin.back)
-				break;
-			bch2_devlist_to_replicas(&replicas.e, BCH_DATA_journal,
-						 journal_seq_pin(j, seq)->devs);
-			seq++;
-
-			if (replicas.e.nr_devs) {
-				spin_unlock(&j->lock);
-				ret = bch2_mark_replicas(c, &replicas.e);
-				spin_lock(&j->lock);
-			}
-		}
-err:
-	return bch2_replicas_gc_end(c, ret);
+	return 0;
 }
 
 bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 *seq)
@@ -1011,7 +1004,7 @@ bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 
 	if (!test_bit(JOURNAL_running, &j->flags))
 		return true;
 
-	*seq = max(*seq, j->pin.front);
+	*seq = max(*seq, j->last_seq);
 
 	if (*seq >= j->pin.back)
 		return true;
@@ -1020,6 +1013,9 @@ bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 
 
 	prt_printf(out, "%llu: count %u\n", *seq, atomic_read(&pin_list->count));
 	guard(printbuf_indent)(out);
+
+	bch2_replicas_entry_to_text(out, &pin_list->devs.e);
+	prt_newline(out);
 
 	prt_printf(out, "unflushed:\n");
 	for (unsigned i = 0; i < ARRAY_SIZE(pin_list->unflushed); i++)

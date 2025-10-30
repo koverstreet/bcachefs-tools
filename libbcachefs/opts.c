@@ -110,6 +110,13 @@ static const char * const __bch2_fs_usage_types[] = {
 
 #undef x
 
+static const char * const __bch2_rebalance_accounting_types[] = {
+#define x(n)	#n,
+	BCH_REBALANCE_ACCOUNTING()
+#undef x
+	NULL
+};
+
 static void prt_str_opt_boundscheck(struct printbuf *out, const char * const opts[],
 				    unsigned nr, const char *type, unsigned idx)
 {
@@ -132,6 +139,7 @@ PRT_STR_OPT_BOUNDSCHECKED(csum_opt,		enum bch_csum_opt);
 PRT_STR_OPT_BOUNDSCHECKED(csum_type,		enum bch_csum_type);
 PRT_STR_OPT_BOUNDSCHECKED(compression_type,	enum bch_compression_type);
 PRT_STR_OPT_BOUNDSCHECKED(str_hash_type,	enum bch_str_hash_type);
+PRT_STR_OPT_BOUNDSCHECKED(rebalance_accounting_type,	enum bch_rebalance_accounting_type);
 
 static int bch2_opt_fix_errors_parse(struct bch_fs *c, const char *val, u64 *res,
 				     struct printbuf *err)
@@ -525,6 +533,50 @@ void bch2_opts_to_text(struct printbuf *out,
 	}
 }
 
+static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_opt_id id,
+		       u64 v, bool post)
+{
+	if (!test_bit(BCH_FS_started, &c->flags))
+		return 0;
+
+	switch (id) {
+	case Opt_foreground_target:
+	case Opt_background_target:
+	case Opt_promote_target:
+	case Opt_compression:
+	case Opt_background_compression:
+	case Opt_data_checksum:
+	case Opt_data_replicas:
+	case Opt_erasure_code: {
+		struct rebalance_scan s = {
+			.type = !inum ? REBALANCE_SCAN_fs : REBALANCE_SCAN_inum,
+			.inum = inum,
+		};
+
+		try(bch2_set_rebalance_needs_scan(c, s, post));
+		break;
+	}
+	case Opt_metadata_target:
+	case Opt_metadata_checksum:
+	case Opt_metadata_replicas:
+		try(bch2_set_rebalance_needs_scan(c,
+			(struct rebalance_scan) { .type = REBALANCE_SCAN_metadata, .dev = inum }, post));
+		break;
+	case Opt_durability:
+		if (!post && v > ca->mi.durability)
+			try(bch2_set_rebalance_needs_scan(c,
+				(struct rebalance_scan) { .type = REBALANCE_SCAN_pending}, post));
+
+		try(bch2_set_rebalance_needs_scan(c,
+			(struct rebalance_scan) { .type = REBALANCE_SCAN_device, .dev = inum }, post));
+		break;
+	default:
+		break;
+	}
+
+	return 0;
+}
+
 int bch2_opt_hook_pre_set(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_opt_id id, u64 v,
 			  bool change)
 {
@@ -546,16 +598,8 @@ int bch2_opt_hook_pre_set(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum b
 		break;
 	}
 
-	if (change &&
-	    test_bit(BCH_FS_started, &c->flags) &&
-	    (id == Opt_foreground_target ||
-	     id == Opt_background_target ||
-	     id == Opt_promote_target ||
-	     id == Opt_compression ||
-	     id == Opt_background_compression ||
-	     id == Opt_data_checksum ||
-	     id == Opt_data_replicas))
-		try(bch2_set_rebalance_needs_scan(c, inum));
+	if (change)
+		try(opt_hook_io(c, ca, inum, id, v, false));
 
 	return 0;
 }
@@ -571,17 +615,7 @@ int bch2_opts_hooks_pre_set(struct bch_fs *c)
 void bch2_opt_hook_post_set(struct bch_fs *c, struct bch_dev *ca, u64 inum,
 			    enum bch_opt_id id, u64 v)
 {
-	if (test_bit(BCH_FS_started, &c->flags) &&
-	    (id == Opt_foreground_target ||
-	     id == Opt_background_target ||
-	     id == Opt_promote_target ||
-	     id == Opt_compression ||
-	     id == Opt_background_compression ||
-	     id == Opt_data_checksum ||
-	     id == Opt_data_replicas)) {
-		bch2_set_rebalance_needs_scan(c, inum);
-		bch2_rebalance_wakeup(c);
-	}
+	opt_hook_io(c, ca, inum, id, v, true);
 
 	switch (id) {
 	case Opt_rebalance_enabled:
@@ -838,6 +872,7 @@ void bch2_inode_opts_get(struct bch_fs *c, struct bch_inode_opts *ret, bool meta
 		ret->background_target	= c->opts.metadata_target ?: c->opts.foreground_target;
 		ret->data_replicas	= c->opts.metadata_replicas;
 		ret->data_checksum	= c->opts.metadata_checksum;
+		ret->erasure_code	= false;
 	} else {
 		bch2_io_opts_fixups(ret);
 	}

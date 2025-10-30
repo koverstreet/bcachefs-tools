@@ -9,7 +9,9 @@
 #include "journal/seq_blacklist.h"
 
 #include "alloc/foreground.h"
+#include "alloc/replicas.h"
 #include "btree/update.h"
+#include "init/error.h"
 
 /* allocate journal on a device: */
 
@@ -373,6 +375,7 @@ int bch2_fs_journal_start(struct journal *j, u64 last_seq, u64 cur_seq)
 	struct journal_replay *i, **_i;
 	struct genradix_iter iter;
 	bool had_entries = false;
+	int ret = 0;
 
 	/*
 	 *
@@ -418,6 +421,7 @@ int bch2_fs_journal_start(struct journal *j, u64 last_seq, u64 cur_seq)
 	j->seq_write_started	= cur_seq - 1;
 	j->seq_ondisk		= cur_seq - 1;
 	j->pin.front		= last_seq;
+	j->last_seq		= last_seq;
 	j->pin.back		= cur_seq;
 	atomic64_set(&j->seq, cur_seq - 1);
 
@@ -440,11 +444,24 @@ int bch2_fs_journal_start(struct journal *j, u64 last_seq, u64 cur_seq)
 		if (journal_entry_empty(&i->j))
 			j->last_empty_seq = le64_to_cpu(i->j.seq);
 
-		p = journal_seq_pin(j, seq);
-
-		p->devs.nr = 0;
+		struct bch_devs_list seq_devs = {};
 		darray_for_each(i->ptrs, ptr)
-			bch2_dev_list_add_dev(&p->devs, ptr->dev);
+			seq_devs.data[seq_devs.nr++] = ptr->dev;
+
+		p = journal_seq_pin(j, seq);
+		bch2_devlist_to_replicas(&p->devs.e, BCH_DATA_journal, seq_devs);
+
+		CLASS(printbuf, buf)();
+		bch2_replicas_entry_to_text(&buf, &p->devs.e);
+
+		fsck_err_on(!test_bit(JOURNAL_degraded, &j->flags) &&
+			    !bch2_replicas_marked(c, &p->devs.e),
+			    c, journal_entry_replicas_not_marked,
+			    "superblock not marked as containing replicas for journal entry %llu\n%s",
+			    le64_to_cpu(i->j.seq), buf.buf);
+
+		if (bch2_replicas_entry_get(c, &p->devs.e))
+			p->devs.e.nr_devs = 0;
 
 		had_entries = true;
 	}
@@ -458,7 +475,9 @@ int bch2_fs_journal_start(struct journal *j, u64 last_seq, u64 cur_seq)
 		c->last_bucket_seq_cleanup = journal_cur_seq(j);
 	}
 
-	return 0;
+	try(bch2_replicas_gc_reffed(c));
+fsck_err:
+	return ret;
 }
 
 void bch2_journal_set_replay_done(struct journal *j)
@@ -583,6 +602,7 @@ void bch2_fs_journal_init_early(struct journal *j)
 	init_waitqueue_head(&j->reclaim_wait);
 	init_waitqueue_head(&j->pin_flush_wait);
 	mutex_init(&j->reclaim_lock);
+	mutex_init(&j->reclaim_replicas_lock);
 	mutex_init(&j->discard_lock);
 
 	lockdep_init_map(&j->res_map, "journal res", &res_key, 0);

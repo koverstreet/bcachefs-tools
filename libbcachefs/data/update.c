@@ -298,7 +298,6 @@ restart_drop_extra_replicas:
 		extent_for_each_ptr_decode(extent_i_to_s(new), p, entry)
 			bch2_extent_ptr_decoded_append(insert, &p);
 
-		bch2_bkey_narrow_crcs(insert, (struct bch_extent_crc_unpacked) { 0 });
 		bch2_bkey_drop_extra_cached_ptrs(c, &m->op.opts, bkey_i_to_s(insert));
 
 		ret = bch2_sum_sector_overwrites(trans, &iter, insert,
@@ -328,7 +327,7 @@ restart_drop_extra_replicas:
 			bch2_insert_snapshot_whiteouts(trans, m->btree_id,
 						k.k->p, insert->k.p) ?:
 			bch2_bkey_get_io_opts(trans, NULL, k, &opts) ?:
-			bch2_bkey_set_needs_rebalance(c, &opts, insert,
+			bch2_bkey_set_needs_rebalance(trans, NULL, &opts, insert,
 						      SET_NEEDS_REBALANCE_foreground,
 						      m->op.opts.change_cookie) ?:
 			bch2_trans_update(trans, &iter, insert,
@@ -693,6 +692,9 @@ static int bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
 				      struct bch_inode_opts *io_opts,
 				      unsigned buf_bytes)
 {
+	/* be paranoid */
+	buf_bytes = round_up(buf_bytes, c->opts.block_size);
+
 	unsigned nr_vecs = DIV_ROUND_UP(buf_bytes, PAGE_SIZE);
 
 	m->bvecs = kmalloc_array(nr_vecs, sizeof*(m->bvecs), GFP_KERNEL);
@@ -702,7 +704,7 @@ static int bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
 	bio_init(&m->rbio.bio,		NULL, m->bvecs, nr_vecs, REQ_OP_READ);
 	bio_init(&m->op.wbio.bio,	NULL, m->bvecs, nr_vecs, 0);
 
-	if (bch2_bio_alloc_pages(&m->op.wbio.bio, buf_bytes, GFP_KERNEL)) {
+	if (bch2_bio_alloc_pages(&m->op.wbio.bio, c->opts.block_size, buf_bytes, GFP_KERNEL)) {
 		kfree(m->bvecs);
 		m->bvecs = NULL;
 		return -ENOMEM;
@@ -781,6 +783,53 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 	return 0;
 }
 
+/*
+ * When an extent has both checksummed and non-checksummed pointers, special
+ * handling:
+ *
+ * We don't want to blindly apply an existing checksum to non-checksummed data,
+ * or lose our ability to detect that different replicas in the same extent have
+ * or had different data, so:
+ *
+ * - prefer to read from the specific replica being rewritten
+ * - if we're rewriting a replica without a checksum, only rewrite that specific
+ *   replica in this data update
+ */
+static void checksummed_and_non_checksummed_handling(struct data_update *u, struct bkey_ptrs_c ptrs)
+{
+	bool have_checksummed = false, have_non_checksummed = false;
+
+	struct bkey_s_c k = bkey_i_to_s_c(u->k.k);
+	const union bch_extent_entry *entry;
+	struct extent_ptr_decoded p;
+	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+		if (p.crc.csum_type)
+			have_checksummed = true;
+		else
+			have_non_checksummed = true;
+	}
+
+	if (unlikely(have_checksummed && have_non_checksummed)) {
+		unsigned ptr_bit = 1;
+		int rewrite_checksummed = -1;
+
+		bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+			if (ptr_bit & u->opts.ptrs_rewrite) {
+				if (rewrite_checksummed < 0) {
+					rewrite_checksummed = p.crc.csum_type != 0;
+					u->opts.read_dev = p.ptr.dev;
+				}
+
+				if (rewrite_checksummed != (p.crc.csum_type != 0) ||
+				    rewrite_checksummed && p.ptr.dev != u->opts.read_dev)
+					u->opts.ptrs_rewrite &= ~ptr_bit;
+			}
+
+			ptr_bit <<= 1;
+		}
+	}
+}
+
 int bch2_data_update_init(struct btree_trans *trans,
 			  struct btree_iter *iter,
 			  struct moving_context *ctxt,
@@ -840,6 +889,9 @@ int bch2_data_update_init(struct btree_trans *trans,
 	unsigned reserve_sectors = k.k->size * data_opts.extra_replicas;
 	unsigned buf_bytes = 0;
 	bool unwritten = false;
+
+	if (m->opts.ptrs_rewrite)
+		checksummed_and_non_checksummed_handling(m, ptrs);
 
 	scoped_guard(rcu) {
 		unsigned ptr_bit = 1;
@@ -953,6 +1005,11 @@ int bch2_data_update_init(struct btree_trans *trans,
 			goto out;
 		}
 	}
+
+	/*
+	 * Check if we have checksummed and non-checksummed pointers, prefer to
+	 * read from the pointer we're operating on
+	 */
 
 	m->ptrs_held = bkey_get_dev_refs(c, k);
 

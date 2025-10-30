@@ -708,7 +708,8 @@ struct bch_sb_field_ext {
 	x(inode_has_case_insensitive,	BCH_VERSION(1, 28))		\
 	x(extent_snapshot_whiteouts,	BCH_VERSION(1, 29))		\
 	x(31bit_dirent_offset,		BCH_VERSION(1, 30))		\
-	x(btree_node_accounting,	BCH_VERSION(1, 31))
+	x(btree_node_accounting,	BCH_VERSION(1, 31))		\
+	x(rebalance_v2,			BCH_VERSION(1, 32))
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
@@ -1427,6 +1428,17 @@ enum btree_id_flags {
 	  BTREE_IS_snapshot_field|						\
 	  BTREE_IS_write_buffer,						\
 	  BIT_ULL(KEY_TYPE_accounting))						\
+	x(rebalance_hipri,	21,						\
+	  BTREE_IS_snapshot_field|						\
+	  BTREE_IS_write_buffer,						\
+	  BIT_ULL(KEY_TYPE_set))						\
+	x(rebalance_pending,	22,						\
+	  BTREE_IS_snapshot_field|						\
+	  BTREE_IS_write_buffer,						\
+	  BIT_ULL(KEY_TYPE_set))						\
+	x(rebalance_scan,	23,	0,					\
+	  BIT_ULL(KEY_TYPE_cookie)|						\
+	  BIT_ULL(KEY_TYPE_backpointer))
 
 enum btree_id {
 #define x(name, nr, ...) BTREE_ID_##name = nr,

@@ -598,31 +598,16 @@ static inline bool bch2_crc_unpacked_cmp(struct bch_extent_crc_unpacked l,
 		bch2_crc_cmp(l.csum, r.csum));
 }
 
-static inline bool can_narrow_crc(struct bch_extent_crc_unpacked u,
-				  struct bch_extent_crc_unpacked n)
+static union bch_extent_entry *bkey_crc_find(struct bkey_i *k, struct bch_extent_crc_unpacked crc)
 {
-	return !crc_is_compressed(u) &&
-		u.csum_type &&
-		u.uncompressed_size > u.live_size &&
-		bch2_csum_type_is_encryption(u.csum_type) ==
-		bch2_csum_type_is_encryption(n.csum_type);
-}
+	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
+	struct bch_extent_crc_unpacked i;
+	union bch_extent_entry *entry;
 
-bool bch2_can_narrow_extent_crcs(struct bkey_s_c k,
-				 struct bch_extent_crc_unpacked n)
-{
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	struct bch_extent_crc_unpacked crc;
-	const union bch_extent_entry *i;
-
-	if (!n.csum_type)
-		return false;
-
-	bkey_for_each_crc(k.k, ptrs, crc, i)
-		if (can_narrow_crc(crc, n))
-			return true;
-
-	return false;
+	bkey_for_each_crc(&k->k, ptrs, i, entry)
+		if (!bch2_crc_unpacked_cmp(i, crc))
+			return entry;
+	return NULL;
 }
 
 /*
@@ -634,44 +619,31 @@ bool bch2_can_narrow_extent_crcs(struct bkey_s_c k,
  * currently live (so that readers won't have to bounce) while we've got the
  * checksum we need:
  */
-bool bch2_bkey_narrow_crcs(struct bkey_i *k, struct bch_extent_crc_unpacked n)
+bool bch2_bkey_narrow_crc(struct bkey_i *k,
+			  struct bch_extent_crc_unpacked old,
+			  struct bch_extent_crc_unpacked new)
 {
-	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
-	struct bch_extent_crc_unpacked u;
-	struct extent_ptr_decoded p;
-	union bch_extent_entry *i;
-	bool ret = false;
+	BUG_ON(crc_is_compressed(new));
+	BUG_ON(new.offset);
+	BUG_ON(new.live_size != k->k.size);
 
-	/* Find a checksum entry that covers only live data: */
-	if (!n.csum_type) {
-		bkey_for_each_crc(&k->k, ptrs, u, i)
-			if (!crc_is_compressed(u) &&
-			    u.csum_type &&
-			    u.live_size == u.uncompressed_size) {
-				n = u;
-				goto found;
-			}
+
+	union bch_extent_entry *old_e = bkey_crc_find(k, old);
+	if (!old_e)
 		return false;
+
+	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
+	union bch_extent_entry *i;
+
+	bkey_extent_entry_for_each_from(ptrs, i, extent_entry_next(old_e)) {
+		if (extent_entry_is_crc(i))
+			break;
+		if (extent_entry_is_ptr(i))
+			i->ptr.offset += old.offset;
 	}
-found:
-	BUG_ON(crc_is_compressed(n));
-	BUG_ON(n.offset);
-	BUG_ON(n.live_size != k->k.size);
 
-restart_narrow_pointers:
-	ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
-
-	bkey_for_each_ptr_decode(&k->k, ptrs, p, i)
-		if (can_narrow_crc(p.crc, n)) {
-			bch2_bkey_drop_ptr_noerror(bkey_i_to_s(k), &i->ptr);
-			p.ptr.offset += p.crc.offset;
-			p.crc = n;
-			bch2_extent_ptr_decoded_append(k, &p);
-			ret = true;
-			goto restart_narrow_pointers;
-		}
-
-	return ret;
+	bch2_extent_crc_pack(entry_to_crc(old_e), new, extent_entry_type(old_e));
+	return true;
 }
 
 static void bch2_extent_crc_pack(union bch_extent_crc *dst,
@@ -907,6 +879,15 @@ static unsigned bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k)
 		if (p.ptr.dev < c->sb.nr_devices && c->devs[p.ptr.dev])
 			durability += bch2_extent_ptr_durability(c, &p);
 	return durability;
+}
+
+void bch2_bkey_extent_entry_drop_s(struct bkey_s k, union bch_extent_entry *entry)
+{
+	union bch_extent_entry *end = bkey_val_end(k);
+	union bch_extent_entry *next = extent_entry_next(entry);
+
+	memmove_u64s(entry, next, (u64 *) end - (u64 *) next);
+	k.k->u64s -= extent_entry_u64s(entry);
 }
 
 void bch2_bkey_extent_entry_drop(struct bkey_i *k, union bch_extent_entry *entry)
@@ -1410,6 +1391,10 @@ void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			prt_bitflags(out, bch2_extent_flags_strs, entry->flags.flags);
 			break;
 
+		case BCH_EXTENT_ENTRY_rebalance_bp:
+			prt_printf(out, "idx %llu", (u64) entry->rebalance_bp.idx);
+			break;
+
 		default:
 			prt_printf(out, "(invalid extent entry %.16llx)", *((u64 *) entry));
 			return;
@@ -1463,6 +1448,18 @@ fsck_err:
 	return ret;
 }
 
+static inline bool btree_ptr_entry_type_allowed(enum bch_extent_entry_type type)
+{
+	switch (type) {
+	case BCH_EXTENT_ENTRY_ptr:
+	case BCH_EXTENT_ENTRY_rebalance:
+	case BCH_EXTENT_ENTRY_rebalance_bp:
+		return true;
+	default:
+		return false;
+	};
+}
+
 int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 			    struct bkey_validate_context from)
 {
@@ -1473,23 +1470,26 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 	unsigned nonce = UINT_MAX;
 	unsigned nr_ptrs = 0;
 	bool have_written = false, have_unwritten = false, have_ec = false, crc_since_last_ptr = false;
+	bool have_inval_dev_ptrs = false, have_non_inval_dev_ptrs = false;
 	int ret = 0;
 
 	if (bkey_is_btree_ptr(k.k))
 		size_ondisk = btree_sectors(c);
 
 	bkey_extent_entry_for_each(ptrs, entry) {
-		bkey_fsck_err_on(__extent_entry_type(entry) >= BCH_EXTENT_ENTRY_MAX,
+		enum bch_extent_entry_type type = __extent_entry_type(entry);
+
+		bkey_fsck_err_on(type >= BCH_EXTENT_ENTRY_MAX,
 				 c, extent_ptrs_invalid_entry,
 				 "invalid extent entry type (got %u, max %u)",
-				 __extent_entry_type(entry), BCH_EXTENT_ENTRY_MAX);
+				 type, BCH_EXTENT_ENTRY_MAX);
 
 		bkey_fsck_err_on(bkey_is_btree_ptr(k.k) &&
-				 !extent_entry_is_ptr(entry),
+				 !btree_ptr_entry_type_allowed(type),
 				 c, btree_ptr_has_non_ptr,
-				 "has non ptr field");
+				 "has non allowed field");
 
-		switch (extent_entry_type(entry)) {
+		switch (type) {
 		case BCH_EXTENT_ENTRY_ptr:
 			try(extent_ptr_validate(c, k, from, &entry->ptr, size_ondisk, false));
 
@@ -1504,6 +1504,12 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 
 			have_ec = false;
 			crc_since_last_ptr = false;
+
+			if (entry->ptr.dev == BCH_SB_MEMBER_INVALID)
+				have_inval_dev_ptrs = true;
+			else
+				have_non_inval_dev_ptrs = true;
+
 			nr_ptrs++;
 			break;
 		case BCH_EXTENT_ENTRY_crc32:
@@ -1551,29 +1557,17 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 					 c, ptr_stripe_redundant,
 					 "redundant stripe entry");
 			have_ec = true;
+			have_non_inval_dev_ptrs = true;
 			break;
-		case BCH_EXTENT_ENTRY_rebalance: {
-			/*
-			 * this shouldn't be a fsck error, for forward
-			 * compatibility; the rebalance code should just refetch
-			 * the compression opt if it's unknown
-			 */
-#if 0
-			const struct bch_extent_rebalance *r = &entry->rebalance;
-
-			if (!bch2_compression_opt_valid(r->compression)) {
-				union bch_compression_opt opt = { .value = r->compression };
-				prt_printf(err, "invalid compression opt %u:%u",
-					   opt.type, opt.level);
-				return bch_err_throw(c, invalid_bkey);
-			}
-#endif
+		case BCH_EXTENT_ENTRY_rebalance:
+			try(bch2_extent_rebalance_validate(c, k, from, &entry->rebalance));
 			break;
-		}
 		case BCH_EXTENT_ENTRY_flags:
 			bkey_fsck_err_on(entry != ptrs.start,
 					 c, extent_flags_not_at_start,
 					 "extent flags entry not at start");
+			break;
+		case BCH_EXTENT_ENTRY_rebalance_bp:
 			break;
 		}
 	}
@@ -1596,6 +1590,9 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 	bkey_fsck_err_on(have_ec,
 			 c, extent_ptrs_redundant_stripe,
 			 "redundant stripe entry");
+	bkey_fsck_err_on(have_inval_dev_ptrs && !have_non_inval_dev_ptrs,
+			 c, extent_ptrs_all_invalid,
+			 "extent ptrs all to BCH_SB_MEMBER_INVALID");
 fsck_err:
 	return ret;
 }
@@ -1708,6 +1705,7 @@ int bch2_cut_front_s(struct bpos where, struct bkey_s k)
 			case BCH_EXTENT_ENTRY_stripe_ptr:
 			case BCH_EXTENT_ENTRY_rebalance:
 			case BCH_EXTENT_ENTRY_flags:
+			case BCH_EXTENT_ENTRY_rebalance_bp:
 				break;
 			}
 

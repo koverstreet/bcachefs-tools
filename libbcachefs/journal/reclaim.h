@@ -26,7 +26,7 @@ static inline void journal_pin_list_init(struct journal_entry_pin_list *p, int c
 	for (unsigned i = 0; i < ARRAY_SIZE(p->flushed); i++)
 		INIT_LIST_HEAD(&p->flushed[i]);
 	atomic_set(&p->count, count);
-	p->devs.nr = 0;
+	p->devs.e.nr_devs = 0;
 	p->bytes = 0;
 }
 
@@ -43,7 +43,9 @@ journal_seq_pin(struct journal *j, u64 seq)
 	return &j->pin.data[seq & j->pin.mask];
 }
 
-void bch2_journal_reclaim_fast(struct journal *);
+void bch2_journal_update_last_seq(struct journal *);
+void bch2_journal_update_last_seq_ondisk(struct journal *, u64);
+
 bool __bch2_journal_pin_put(struct journal *, u64);
 void bch2_journal_pin_put(struct journal *, u64);
 void bch2_journal_pin_drop(struct journal *, struct journal_entry_pin *);

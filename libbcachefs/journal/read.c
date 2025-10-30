@@ -1354,7 +1354,7 @@ int bch2_journal_read(struct bch_fs *c,
 	struct journal_list jlist;
 	struct journal_replay *i, **_i;
 	struct genradix_iter radix_iter;
-	bool degraded = false, last_write_torn = false;
+	bool last_write_torn = false;
 	u64 seq;
 	int ret = 0;
 
@@ -1377,7 +1377,7 @@ int bch2_journal_read(struct bch_fs *c,
 				     system_unbound_wq,
 				     &jlist.cl);
 		else
-			degraded = true;
+			set_bit(JOURNAL_degraded, &c->journal.flags);
 	}
 
 	while (closure_sync_timeout(&jlist.cl, sysctl_hung_task_timeout_secs * HZ / 2))
@@ -1516,17 +1516,6 @@ int bch2_journal_read(struct bch_fs *c,
 			replicas_entry_add_dev(&replicas.e, ptr->dev);
 
 		bch2_replicas_entry_sort(&replicas.e);
-
-		CLASS(printbuf, buf)();
-		bch2_replicas_entry_to_text(&buf, &replicas.e);
-
-		if (!degraded &&
-		    !bch2_replicas_marked(c, &replicas.e) &&
-		    (le64_to_cpu(i->j.seq) == *last_seq ||
-		     fsck_err(c, journal_entry_replicas_not_marked,
-			      "superblock not marked as containing replicas for journal entry %llu\n%s",
-			      le64_to_cpu(i->j.seq), buf.buf)))
-			try(bch2_mark_replicas(c, &replicas.e));
 	}
 fsck_err:
 	return ret;

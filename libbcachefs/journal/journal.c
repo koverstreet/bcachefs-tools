@@ -187,7 +187,7 @@ void bch2_journal_buf_put_final(struct journal *j, u64 seq)
 	lockdep_assert_held(&j->lock);
 
 	if (__bch2_journal_pin_put(j, seq))
-		bch2_journal_reclaim_fast(j);
+		bch2_journal_update_last_seq(j);
 	bch2_journal_do_writes(j);
 
 	/*
@@ -280,7 +280,7 @@ static void __journal_entry_close(struct journal *j, unsigned closed_val, bool t
 	 * contain either what the old pin protected or what the new pin
 	 * protects.
 	 *
-	 * After the old pin is dropped journal_last_seq() won't include the old
+	 * After the old pin is dropped j->last_seq won't include the old
 	 * pin, so we can only write the updated last_seq on the entry that
 	 * contains whatever the new pin protects.
 	 *
@@ -291,7 +291,7 @@ static void __journal_entry_close(struct journal *j, unsigned closed_val, bool t
 	 * Hence, we want update/set last_seq on the current journal entry right
 	 * before we open a new one:
 	 */
-	buf->last_seq		= journal_last_seq(j);
+	buf->last_seq		= j->last_seq;
 	buf->data->last_seq	= cpu_to_le64(buf->last_seq);
 	BUG_ON(buf->last_seq > le64_to_cpu(buf->data->seq));
 
@@ -358,7 +358,6 @@ static int journal_entry_open(struct journal *j)
 
 	lockdep_assert_held(&j->lock);
 	BUG_ON(journal_entry_is_open(j));
-	BUG_ON(c->sb.clean);
 
 	if (j->blocked)
 		return bch_err_throw(c, journal_blocked);
@@ -416,7 +415,7 @@ static int journal_entry_open(struct journal *j)
 
 	/*
 	 * The fifo_push() needs to happen at the same time as j->seq is
-	 * incremented for journal_last_seq() to be calculated correctly
+	 * incremented for j->last_seq to be calculated correctly
 	 */
 	atomic64_inc(&j->seq);
 	journal_pin_list_init(fifo_push_ref(&j->pin), 1);
@@ -442,6 +441,7 @@ static int journal_entry_open(struct journal *j)
 	buf->write_started	= false;
 	buf->write_allocated	= false;
 	buf->write_done		= false;
+	buf->had_error		= false;
 
 	memset(buf->data, 0, sizeof(*buf->data));
 	buf->data->seq	= cpu_to_le64(journal_cur_seq(j));
@@ -1091,7 +1091,7 @@ void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
 	prt_printf(out, "dirty journal entries:\t%llu/%llu\n",	fifo_used(&j->pin), j->pin.size);
 	prt_printf(out, "seq:\t%llu\n",				journal_cur_seq(j));
 	prt_printf(out, "seq_ondisk:\t%llu\n",			j->seq_ondisk);
-	prt_printf(out, "last_seq:\t%llu\n",			journal_last_seq(j));
+	prt_printf(out, "last_seq:\t%llu\n",			j->last_seq);
 	prt_printf(out, "last_seq_ondisk:\t%llu\n",		j->last_seq_ondisk);
 	prt_printf(out, "flushed_seq_ondisk:\t%llu\n",		j->flushed_seq_ondisk);
 	prt_printf(out, "watermark:\t%s\n",			bch2_watermarks[j->watermark]);

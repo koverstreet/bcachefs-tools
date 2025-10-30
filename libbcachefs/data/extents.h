@@ -461,9 +461,9 @@ bool bch2_reservation_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 
 /* Extent checksum entries: */
 
-bool bch2_can_narrow_extent_crcs(struct bkey_s_c,
-				 struct bch_extent_crc_unpacked);
-bool bch2_bkey_narrow_crcs(struct bkey_i *, struct bch_extent_crc_unpacked);
+bool bch2_bkey_narrow_crc(struct bkey_i *,
+			  struct bch_extent_crc_unpacked,
+			  struct bch_extent_crc_unpacked);
 void bch2_extent_crc_append(struct bkey_i *,
 			    struct bch_extent_crc_unpacked);
 
@@ -607,6 +607,7 @@ bool bch2_bkey_devs_rw(struct bch_fs *, struct bkey_s_c);
 bool bch2_bkey_has_target(struct bch_fs *, struct bkey_s_c, unsigned);
 bool bch2_bkey_in_target(struct bch_fs *, struct bkey_s_c, unsigned);
 
+void bch2_bkey_extent_entry_drop_s(struct bkey_s, union bch_extent_entry *);
 void bch2_bkey_extent_entry_drop(struct bkey_i *, union bch_extent_entry *);
 
 static inline void bch2_bkey_append_ptr(struct bkey_i *k, struct bch_extent_ptr ptr)
