@@ -24,6 +24,8 @@ int cmd_fs_top(int argc, char *argv[]);
 
 int device_cmds(int argc, char *argv[]);
 
+int cmd_scrub(int argc, char *argv[]);
+int reconcile_cmds(int argc, char *argv[]);
 int data_cmds(int argc, char *argv[]);
 
 int cmd_unlock(int argc, char *argv[]);
