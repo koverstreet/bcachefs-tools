@@ -2,13 +2,17 @@
 #include <getopt.h>
 #include <stdio.h>
 #include <sys/ioctl.h>
+#include <unistd.h>
 
 #include "bcachefs_ioctl.h"
+#include "alloc/accounting.h"
 #include "btree/cache.h"
 #include "data/move.h"
 
 #include "cmds.h"
 #include "libbcachefs.h"
+
+/* Obsolete, will be deleted */
 
 static void data_rereplicate_usage(void)
 {
@@ -40,6 +44,9 @@ static int cmd_data_rereplicate(int argc, char *argv[])
 		}
 	args_shift(optind);
 
+	if (bcachefs_kernel_version() >= bcachefs_metadata_version_reconcile)
+		die("rereplicate no longer required or support >= reconcile; use 'bcachefs reconcile wait'");
+
 	char *fs_path = arg_pop();
 	if (!fs_path)
 		die("Please supply a filesystem");
@@ -56,10 +63,122 @@ static int cmd_data_rereplicate(int argc, char *argv[])
 	});
 }
 
-static void data_scrub_usage(void)
+static void data_job_usage(void)
 {
-	puts("bcachefs data scrub\n"
-	     "Usage: bcachefs data scrub [filesystem|device]\n"
+	puts("bcachefs data job\n"
+	     "Usage: bcachefs data job [job} filesystem\n"
+	     "\n"
+	     "Kick off a data job and report progress\n"
+	     "\n"
+	     "job: one of scrub, rereplicate, migrate, rewrite_old_nodes, or drop_extra_replicas\n"
+	     "\n"
+	     "Options:\n"
+	     "  -b, --btree btree            Btree to operate on\n"
+	     "  -s, --start inode:offset     Start position\n"
+	     "  -e, --end   inode:offset     End position\n"
+	     "  -h, --help                   Display this help and exit\n"
+	     "\n"
+	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
+	exit(EXIT_SUCCESS);
+}
+
+static int cmd_data_job(int argc, char *argv[])
+{
+	static const struct option longopts[] = {
+		{ "btree",		required_argument,	NULL, 'b' },
+		{ "start",		required_argument,	NULL, 's' },
+		{ "end",		required_argument,	NULL, 'e' },
+		{ "help",		no_argument,		NULL, 'h' },
+		{ NULL }
+	};
+	struct bch_ioctl_data op = {
+		.start_btree	= 0,
+		.start_pos	= POS_MIN,
+		.end_btree	= BTREE_ID_NR,
+		.end_pos	= POS_MAX,
+	};
+	int opt;
+
+	while ((opt = getopt_long(argc, argv, "b:s:e:h", longopts, NULL)) != -1)
+		switch (opt) {
+		case 'b':
+			op.start_btree = read_string_list_or_die(optarg,
+						__bch2_btree_ids, "btree id");
+			op.end_btree = op.start_btree;
+			break;
+		case 's':
+			op.start_pos	= bpos_parse(optarg);
+			break;
+		case 'e':
+			op.end_pos	= bpos_parse(optarg);
+			break;
+		case 'h':
+			data_job_usage();
+		}
+	args_shift(optind);
+
+	char *job = arg_pop();
+	if (!job)
+		die("please specify which type of job");
+
+	op.op = read_string_list_or_die(job, bch2_data_ops_strs, "bad job type");
+
+	if (op.op == BCH_DATA_OP_scrub)
+		die("scrub should be invoked with 'bcachefs data scrub'");
+
+	if ((op.op == BCH_DATA_OP_rereplicate ||
+	     op.op == BCH_DATA_OP_migrate ||
+	     op.op == BCH_DATA_OP_drop_extra_replicas) &&
+	    bcachefs_kernel_version() >= bcachefs_metadata_version_reconcile)
+		die("%s no longer required or support >= reconcile; use 'bcachefs reconcile wait'", job);
+
+	char *fs_path = arg_pop();
+	if (!fs_path)
+		fs_path = ".";
+
+	if (argc)
+		die("too many arguments");
+
+	return bchu_data(bcache_fs_open(fs_path), op);
+}
+
+static int data_usage(void)
+{
+	puts("bcachefs data - manage filesystem data\n"
+	     "Usage: bcachefs data <CMD> [OPTIONS]\n"
+	     "\n"
+	     "Commands:\n"
+	     "  rereplicate                  Rereplicate degraded data\n"
+	     "  scrub                        Verify checksums and correct errors, if possible\n"
+	     "  job                          Kick off low level data jobs\n"
+	     "\n"
+	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
+	return 0;
+}
+
+int data_cmds(int argc, char *argv[])
+{
+	char *cmd = pop_cmd(&argc, argv);
+
+	if (argc < 1)
+		return data_usage();
+	if (!strcmp(cmd, "rereplicate"))
+		return cmd_data_rereplicate(argc, argv);
+	if (!strcmp(cmd, "scrub"))
+		return cmd_scrub(argc, argv);
+	if (!strcmp(cmd, "job"))
+		return cmd_data_job(argc, argv);
+
+	data_usage();
+	return -EINVAL;
+}
+
+/* Scrub */
+
+static void scrub_usage(void)
+{
+	puts("bcachefs scrub\n"
+	     "Usage: bcachefs scrub [filesystem|device]\n"
 	     "\n"
 	     "Check data for errors, fix from another replica if possible\n"
 	     "\n"
@@ -71,7 +190,7 @@ static void data_scrub_usage(void)
 	exit(EXIT_SUCCESS);
 }
 
-static int cmd_data_scrub(int argc, char *argv[])
+int cmd_scrub(int argc, char *argv[])
 {
 	static const struct option longopts[] = {
 		{ "metadata",		no_argument,		NULL, 'm' },
@@ -90,7 +209,7 @@ static int cmd_data_scrub(int argc, char *argv[])
 			cmd.scrub.data_types = BIT(BCH_DATA_btree);
 			break;
 		case 'h':
-			data_scrub_usage();
+			scrub_usage();
 			break;
 		}
 	args_shift(optind);
@@ -263,106 +382,208 @@ static int cmd_data_scrub(int argc, char *argv[])
 	return ret;
 }
 
-static void data_job_usage(void)
+/* Nwe reconcile commands */
+
+static void reconcile_wait_usage(void)
 {
-	puts("bcachefs data job\n"
-	     "Usage: bcachefs data job [job} filesystem\n"
+	CLASS(printbuf, buf)();
+	prt_bitflags(&buf, __bch2_rebalance_accounting_types, ~0UL);
+
+	printf("bcachefs reconcile wait\n"
+	     "Usage: bcachefs reconcile wait [OPTION]... <mountpoint>\n"
 	     "\n"
-	     "Kick off a data job and report progress\n"
-	     "\n"
-	     "job: one of scrub, rereplicate, migrate, rewrite_old_nodes, or drop_extra_replicas\n"
+	     "Wait for reconcile to finish background data processing of one or more types\n"
 	     "\n"
 	     "Options:\n"
-	     "  -b, --btree btree            Btree to operate on\n"
-	     "  -s, --start inode:offset     Start position\n"
-	     "  -e, --end   inode:offset     End position\n"
+	     "  -t, --types=TYPES            List of reconcile types to wait on\n"
+	     "                               %s\n"
 	     "  -h, --help                   Display this help and exit\n"
 	     "\n"
-	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
+	     "Report bugs to <linux-bcachefs@vger.kernel.org>\n",
+	     buf.buf);
 	exit(EXIT_SUCCESS);
 }
 
-static int cmd_data_job(int argc, char *argv[])
+static bool reconcile_status(struct printbuf *out,
+			     struct bchfs_handle fs,
+			     unsigned types)
+{
+	bool scan_pending = read_file_u64(fs.sysfs_fd, "reconcile_scan_pending");
+
+	u64 v[BCH_REBALANCE_ACCOUNTING_NR];
+	memset(v, 0, sizeof(v));
+
+	struct bch_ioctl_query_accounting *a =
+		bchu_fs_accounting(fs, BIT(BCH_DISK_ACCOUNTING_reconcile_work));
+
+	/*
+	 * This would be cleaner if we had an interface for doing
+	 * lookups on specific keys
+	 */
+	for (struct bkey_i_accounting *k = a->accounting;
+	     k < (struct bkey_i_accounting *) ((u64 *) a->accounting + a->accounting_u64s);
+	     k = bkey_i_to_accounting(bkey_next(&k->k_i))) {
+		struct disk_accounting_pos acc_k;
+		bpos_to_disk_accounting_pos(&acc_k, k->k.p);
+
+		v[acc_k.reconcile_work.type] = k->v.d[0];
+	}
+	free(a);
+
+	if (!out->nr_tabstops)
+		printbuf_tabstop_push(out, 32);
+
+	prt_printf(out, "Scan pending:\t%u\n", scan_pending);
+	bool have_pending = scan_pending;
+
+	for (unsigned i = 0; i < ARRAY_SIZE(v); i++)
+		if (types & BIT(i)) {
+			prt_printf(out, "Pending %s:\t", __bch2_rebalance_accounting_types[i]);
+			prt_human_readable_u64(out, v[i] << 9);
+			prt_newline(out);
+			have_pending |= v[i] != 0;
+		}
+
+	return have_pending;
+}
+
+static size_t count_newlines(const char *str)
+{
+	size_t ret = 0;
+	const char *n;
+	while ((n = strchr(str, '\n'))) {
+		str = n + 1;
+		ret++;
+	}
+
+	return ret;
+}
+
+int cmd_reconcile_wait(int argc, char *argv[])
 {
 	static const struct option longopts[] = {
-		{ "btree",		required_argument,	NULL, 'b' },
-		{ "start",		required_argument,	NULL, 's' },
-		{ "end",		required_argument,	NULL, 'e' },
+		{ "types",		required_argument,	NULL, 't' },
 		{ "help",		no_argument,		NULL, 'h' },
 		{ NULL }
 	};
-	struct bch_ioctl_data op = {
-		.start_btree	= 0,
-		.start_pos	= POS_MIN,
-		.end_btree	= BTREE_ID_NR,
-		.end_pos	= POS_MAX,
-	};
+	unsigned types = ~0U;
 	int opt;
 
-	while ((opt = getopt_long(argc, argv, "b:s:e:h", longopts, NULL)) != -1)
+	while ((opt = getopt_long(argc, argv, "t:h", longopts, NULL)) != -1)
 		switch (opt) {
-		case 'b':
-			op.start_btree = read_string_list_or_die(optarg,
-						__bch2_btree_ids, "btree id");
-			op.end_btree = op.start_btree;
-			break;
-		case 's':
-			op.start_pos	= bpos_parse(optarg);
-			break;
-		case 'e':
-			op.end_pos	= bpos_parse(optarg);
+		case 't':
+			types = read_flag_list_or_die(optarg,
+					__bch2_rebalance_accounting_types, "reconcile type");
 			break;
 		case 'h':
-			data_job_usage();
+			reconcile_wait_usage();
 		}
 	args_shift(optind);
 
-	char *job = arg_pop();
-	if (!job)
-		die("please specify which type of job");
-
-	op.op = read_string_list_or_die(job, bch2_data_ops_strs, "bad job type");
-
-	if (op.op == BCH_DATA_OP_scrub)
-		die("scrub should be invoked with 'bcachefs data scrub'");
-
 	char *fs_path = arg_pop();
 	if (!fs_path)
-		fs_path = ".";
+		die("Please supply a filesystem");
 
 	if (argc)
 		die("too many arguments");
 
-	return bchu_data(bcache_fs_open(fs_path), op);
+	struct bchfs_handle fs = bcache_fs_open(fs_path);
+
+	while (true) {
+		CLASS(printbuf, buf)();
+		bool pending = reconcile_status(&buf, fs, types);
+
+		printf("\033[%zuF\033[J", count_newlines(buf.buf));
+		fputs(buf.buf, stdout);
+
+		if (!pending)
+			break;
+
+		sleep(1);
+	}
+
+	return 0;
 }
 
-static int data_usage(void)
+static void reconcile_status_usage(void)
 {
-	puts("bcachefs data - manage filesystem data\n"
-	     "Usage: bcachefs data <CMD> [OPTIONS]\n"
+	CLASS(printbuf, buf)();
+	prt_bitflags(&buf, __bch2_rebalance_accounting_types, ~0UL);
+
+	printf("bcachefs reconcile status\n"
+	       "Usage: bcachefs reconcile status [OPTION]... <mountpoint>\n"
+	       "\n"
+	       "Options:\n"
+	       "  -t, --types=TYPES            List of reconcile types to wait on\n"
+	     "                               %s\n"
+	       "  -h, --help                   Display this help and exit\n"
+	       "\n"
+	       "Report bugs to <linux-bcachefs@vger.kernel.org>\n",
+	       buf.buf);
+	exit(EXIT_SUCCESS);
+}
+
+int cmd_reconcile_status(int argc, char *argv[])
+{
+	static const struct option longopts[] = {
+		{ "types",		required_argument,	NULL, 't' },
+		{ "help",		no_argument,		NULL, 'h' },
+		{ NULL }
+	};
+	unsigned types = ~0U;
+	int opt;
+
+	while ((opt = getopt_long(argc, argv, "t:h", longopts, NULL)) != -1)
+		switch (opt) {
+		case 't':
+			types = read_flag_list_or_die(optarg,
+					__bch2_rebalance_accounting_types, "reconcile type");
+			break;
+		case 'h':
+			reconcile_status_usage();
+		}
+	args_shift(optind);
+
+	char *fs_path = arg_pop();
+	if (!fs_path)
+		die("Please supply a filesystem");
+
+	if (argc)
+		die("too many arguments");
+
+	struct bchfs_handle fs = bcache_fs_open(fs_path);
+
+	CLASS(printbuf, buf)();
+	reconcile_status(&buf, fs, types);
+	fputs(buf.buf, stdout);
+
+	return 0;
+}
+
+static int reconcile_usage(void)
+{
+	puts("bcachefs reconcile - manage data reconcile\n"
+	     "Usage: bcachefs reconcile <CMD> [OPTIONS]\n"
 	     "\n"
 	     "Commands:\n"
-	     "  rereplicate                  Rereplicate degraded data\n"
-	     "  scrub                        Verify checksums and correct errors, if possible\n"
-	     "  job                          Kick off low level data jobs\n"
+	     "  status                       Show status of background data processing\n"
+	     "  wait                         Wait on background data processing to complete\n"
 	     "\n"
 	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
 	return 0;
 }
 
-int data_cmds(int argc, char *argv[])
+int reconcile_cmds(int argc, char *argv[])
 {
 	char *cmd = pop_cmd(&argc, argv);
 
 	if (argc < 1)
-		return data_usage();
-	if (!strcmp(cmd, "rereplicate"))
-		return cmd_data_rereplicate(argc, argv);
-	if (!strcmp(cmd, "scrub"))
-		return cmd_data_scrub(argc, argv);
-	if (!strcmp(cmd, "job"))
-		return cmd_data_job(argc, argv);
+		return reconcile_usage();
+	if (!strcmp(cmd, "status"))
+		return cmd_reconcile_status(argc, argv);
+	if (!strcmp(cmd, "wait"))
+		return cmd_reconcile_wait(argc, argv);
 
-	data_usage();
+	reconcile_usage();
 	return -EINVAL;
 }

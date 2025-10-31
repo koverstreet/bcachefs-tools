@@ -59,6 +59,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "migrate" => c::cmd_migrate(argc, argv),
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
             "mkfs" => c::cmd_format(argc, argv),
+            "reconcile" => c::reconcile_cmds(argc, argv),
             "remove-passphrase" => c::cmd_remove_passphrase(argc, argv),
             "reset-counters" => c::cmd_reset_counters(argc, argv),
             "set-fs-option" => c::cmd_set_option(argc, argv),

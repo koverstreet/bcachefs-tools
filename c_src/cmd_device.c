@@ -295,26 +295,42 @@ static void device_evacuate_usage(void)
 	     "Usage: bcachefs device evacuate [OPTION]... device\n"
 	     "\n"
 	     "Options:\n"
-	     "  -f, --force                  Force if data redundancy will be degraded\n"
 	     "  -h, --help                   Display this help and exit\n"
 	     "\n"
 	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
 }
 
+static int evacuate_v0(struct bchfs_handle fs, unsigned dev_idx, const char *dev_path)
+{
+	struct bch_ioctl_dev_usage_v2 *u = bchu_dev_usage(fs, dev_idx);
+
+	if (u->state == BCH_MEMBER_STATE_rw) {
+		printf("Setting %s readonly\n", dev_path);
+		bchu_disk_set_state(fs, dev_idx, BCH_MEMBER_STATE_ro, BCH_FORCE_IF_DEGRADED);
+	}
+
+	free(u);
+
+	return bchu_data(fs, (struct bch_ioctl_data) {
+		.op		= BCH_DATA_OP_migrate,
+		.start_btree	= 0,
+		.start_pos	= POS_MIN,
+		.end_btree	= BTREE_ID_NR,
+		.end_pos	= POS_MAX,
+		.migrate.dev	= dev_idx,
+	});
+}
+
 static int cmd_device_evacuate(int argc, char *argv[])
 {
 	static const struct option longopts[] = {
-		{ "force",			no_argument,	NULL, 'f' },
 		{ "help",			no_argument,	NULL, 'h' },
 		{ NULL }
 	};
-	int opt, flags = 0;
+	int opt;
 
 	while ((opt = getopt_long(argc, argv, "fh", longopts, NULL)) != -1)
 		switch (opt) {
-		case 'f':
-			flags |= BCH_FORCE_IF_DEGRADED;
-			break;
 		case 'h':
 			device_evacuate_usage();
 			exit(EXIT_SUCCESS);
@@ -331,23 +347,34 @@ static int cmd_device_evacuate(int argc, char *argv[])
 	int dev_idx;
 	struct bchfs_handle fs = bchu_fs_open_by_dev(dev_path, &dev_idx);
 
-	struct bch_ioctl_dev_usage_v2 *u = bchu_dev_usage(fs, dev_idx);
+	if (bcachefs_kernel_version() < bcachefs_metadata_version_reconcile)
+		return evacuate_v0(fs, dev_idx, dev_path);
 
-	if (u->state == BCH_MEMBER_STATE_rw) {
-		printf("Setting %s readonly\n", dev_path);
-		bchu_disk_set_state(fs, dev_idx, BCH_MEMBER_STATE_ro, flags);
+	printf("Setting %s failed\n", dev_path);
+	bchu_disk_set_state(fs, dev_idx, BCH_MEMBER_STATE_failed, BCH_FORCE_IF_DEGRADED);
+
+	while (true) {
+		struct bch_ioctl_dev_usage_v2 *u = bchu_dev_usage(fs, dev_idx);
+
+		u64 data = 0;
+		for (unsigned type = 0; type < u->nr_data_types; type++)
+			if (!data_type_is_empty(type) &&
+			    !data_type_is_hidden(type))
+				data += u->d[type].sectors;
+		free(u);
+
+		printf("\33[2K\r");
+		CLASS(printbuf, buf)();
+		prt_units_u64(&buf, data << 9);
+
+		fputs(buf.buf, stdout);
+		fflush(stdout);
+
+		if (!data)
+			return 0;
+
+		sleep(1);
 	}
-
-	free(u);
-
-	return bchu_data(fs, (struct bch_ioctl_data) {
-		.op		= BCH_DATA_OP_migrate,
-		.start_btree	= 0,
-		.start_pos	= POS_MIN,
-		.end_btree	= BTREE_ID_NR,
-		.end_pos	= POS_MAX,
-		.migrate.dev	= dev_idx,
-	});
 }
 
 static void device_set_state_usage(void)
