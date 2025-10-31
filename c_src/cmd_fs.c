@@ -43,12 +43,19 @@ const char * const fs_usage_field_strs[] = {
 	NULL
 };
 
+struct dev_usage {
+	unsigned			idx;
+	const char			*label;
+	const char			*dev;
+	struct bch_ioctl_dev_usage_v2	*u;
+	u64				leaving;
+};
+
 static void dev_usage_to_text(struct printbuf *out,
-			      struct bchfs_handle fs,
-			      struct dev_name *d,
+			      struct dev_usage *d,
 			      bool full)
 {
-	struct bch_ioctl_dev_usage_v2 *u = bchu_dev_usage(fs, d->idx);
+	struct bch_ioctl_dev_usage_v2 *u = d->u;
 
 	u64 used = 0, capacity = u->nr_buckets * u->bucket_size;
 	for (unsigned type = 0; type < u->nr_data_types; type++)
@@ -107,6 +114,21 @@ static int dev_by_label_cmp(const void *_l, const void *_r)
 		cmp_int(l->idx, r->idx);
 }
 
+static u64 dev_leaving_dev(struct bch_ioctl_query_accounting *in, unsigned dev)
+{
+	for (struct bkey_i_accounting *a = in->accounting;
+	     a < (struct bkey_i_accounting *) ((u64 *) in->accounting + in->accounting_u64s);
+	     a = bkey_i_to_accounting(bkey_next(&a->k_i))) {
+		struct disk_accounting_pos acc_k;
+		bpos_to_disk_accounting_pos(&acc_k, a->k.p);
+
+		if (acc_k.dev_leaving.dev == dev)
+			return a->v.d[0];
+	}
+
+	return 0;
+}
+
 static void devs_usage_to_text(struct printbuf *out,
 			       struct bchfs_handle fs,
 			       dev_names dev_names,
@@ -114,6 +136,24 @@ static void devs_usage_to_text(struct printbuf *out,
 {
 	sort(dev_names.data, dev_names.nr,
 	     sizeof(dev_names.data[0]), dev_by_label_cmp, NULL);
+
+	struct bch_ioctl_query_accounting *dev_leaving =
+		bchu_fs_accounting(fs, BIT(BCH_DISK_ACCOUNTING_dev_leaving));
+
+	DARRAY(struct dev_usage) dev_usage = {};
+
+	darray_for_each(dev_names, i)
+		darray_push(&dev_usage, ((struct dev_usage) {
+			.idx		= i->idx,
+			.label		= i->label,
+			.dev		= i->dev,
+			.u		= bchu_dev_usage(fs, i->idx),
+			.leaving	= dev_leaving_dev(dev_leaving, i->idx),
+		}));
+
+	bool print_dev_leaving = false;
+	darray_for_each(dev_usage, i)
+		print_dev_leaving |= i->leaving != 0;
 
 	printbuf_tabstops_reset(out);
 	prt_newline(out);
@@ -124,8 +164,8 @@ static void devs_usage_to_text(struct printbuf *out,
 		printbuf_tabstop_push(out, 16);
 		printbuf_tabstop_push(out, 14);
 
-		darray_for_each(dev_names, dev)
-			dev_usage_to_text(out, fs, dev, full);
+		darray_for_each(dev_usage, d)
+			dev_usage_to_text(out, d, full);
 	} else {
 		printbuf_tabstop_push(out, 32);
 		printbuf_tabstop_push(out, 12);
@@ -133,11 +173,15 @@ static void devs_usage_to_text(struct printbuf *out,
 		printbuf_tabstop_push(out, 10);
 		printbuf_tabstop_push(out, 10);
 		printbuf_tabstop_push(out, 6);
+		printbuf_tabstop_push(out, 10);
 
-		prt_printf(out, "Device label\tDevice\tState\tSize\rUsed\rUse%%\r\n");
+		prt_printf(out, "Device label\tDevice\tState\tSize\rUsed\rUse%%\r");
+		if (print_dev_leaving)
+			prt_printf(out, "Leaving\r");
+		prt_newline(out);
 
-		darray_for_each(dev_names, d) {
-			struct bch_ioctl_dev_usage_v2 *u = bchu_dev_usage(fs, d->idx);
+		darray_for_each(dev_usage, d) {
+			struct bch_ioctl_dev_usage_v2 *u = d->u;
 
 			u64 used = 0, capacity = u->nr_buckets * u->bucket_size;
 			for (unsigned type = 0; type < u->nr_data_types; type++)
@@ -153,13 +197,15 @@ static void devs_usage_to_text(struct printbuf *out,
 			prt_tab_rjust(out);
 			prt_units_u64(out, used << 9);
 
-			prt_printf(out, "\r%02u%%\r\n", (unsigned) (used * 100 / capacity));
-		}
-	}
+			prt_printf(out, "\r%02u%%\r", (unsigned) (used * 100 / capacity));
 
-	darray_for_each(dev_names, dev) {
-		free(dev->dev);
-		free(dev->label);
+			if (d->leaving) {
+				prt_units_u64(out, d->leaving << 9);
+				prt_tab_rjust(out);
+			}
+
+			prt_newline(out);
+		}
 	}
 }
 
@@ -603,13 +649,15 @@ static void fs_usage_to_text(struct printbuf *out, const char *path,
 
 	dev_names dev_names = bchu_fs_get_devices(fs);
 
-	if (!fs_usage_v1_to_text(out, fs, dev_names, fields))
-		goto devs;
+	if (fs_usage_v1_to_text(out, fs, dev_names, fields))
+		fs_usage_v0_to_text(out, fs, dev_names, fields);
 
-	fs_usage_v0_to_text(out, fs, dev_names, fields);
-devs:
 	devs_usage_to_text(out, fs, dev_names, fields & FS_USAGE_devices);
 
+	darray_for_each(dev_names, dev) {
+		free(dev->dev);
+		free(dev->label);
+	}
 	darray_exit(&dev_names);
 
 	bcache_fs_close(fs);
