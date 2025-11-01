@@ -355,7 +355,7 @@ int bch2_extent_update(struct btree_trans *trans,
 
 	bch2_inode_opts_get_inode(c, &inode, &opts);
 
-	try(bch2_bkey_set_needs_rebalance(c, &opts, k,
+	try(bch2_bkey_set_needs_rebalance(trans, NULL, &opts, k,
 					  SET_NEEDS_REBALANCE_foreground,
 					  change_cookie));
 	try(bch2_trans_update(trans, iter, k, 0));
@@ -390,6 +390,13 @@ static int bch2_write_index_default(struct bch_write_op *op)
 		bch2_trans_begin(trans);
 
 		k = bch2_keylist_front(keys);
+
+		/*
+		 * If we did a degraded write, bch2_bkey_set_needs_rebalance() will add
+		 * pointers to BCH_SB_MEMBER_INVALID so the extent is accounted as
+		 * degraded
+		 */
+		bch2_bkey_buf_realloc(&sk, k->k.u64s + 1 + BCH_REPLICAS_MAX);
 		bch2_bkey_buf_copy(&sk, k);
 
 		int ret = bch2_subvolume_get_snapshot(trans, inum.subvol, &sk.k->k.p.snapshot);
@@ -1224,8 +1231,16 @@ static int bch2_nocow_write_convert_one_unwritten(struct btree_trans *trans,
 	}
 
 	struct bch_fs *c = trans->c;
+
+	/*
+	 * If we did a degraded write, bch2_bkey_set_needs_rebalance() will add
+	 * pointers to BCH_SB_MEMBER_INVALID so the extent is accounted as
+	 * degraded
+	 */
 	struct bkey_i *new = errptr_try(bch2_trans_kmalloc_nomemzero(trans,
-				bkey_bytes(k.k) + sizeof(struct bch_extent_rebalance)));
+				bkey_bytes(k.k) +
+				sizeof(struct bch_extent_rebalance) +
+				sizeof(struct bch_extent_ptr) * BCH_REPLICAS_MAX));
 
 	bkey_reassemble(new, k);
 	bch2_cut_front(bkey_start_pos(&orig->k), new);
@@ -1253,7 +1268,7 @@ static int bch2_nocow_write_convert_one_unwritten(struct btree_trans *trans,
 	return  bch2_extent_update_i_size_sectors(trans, iter,
 					min(new->k.p.offset << 9, new_i_size), 0, &inode) ?:
 		(bch2_inode_opts_get_inode(c, &inode, &opts),
-		 bch2_bkey_set_needs_rebalance(c, &opts, new,
+		 bch2_bkey_set_needs_rebalance(trans, NULL, &opts, new,
 					       SET_NEEDS_REBALANCE_foreground,
 					       op->opts.change_cookie)) ?:
 		bch2_trans_update(trans, iter, new,
@@ -1270,7 +1285,8 @@ static void bch2_nocow_write_convert_unwritten(struct bch_write_op *op)
 		ret = for_each_btree_key_max_commit(trans, iter, BTREE_ID_extents,
 				     bkey_start_pos(&orig->k), orig->k.p,
 				     BTREE_ITER_intent, k,
-				     NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+				     &op->res, NULL,
+				     BCH_TRANS_COMMIT_no_enospc, ({
 			bch2_nocow_write_convert_one_unwritten(trans, &iter, op, orig, k, op->new_i_size);
 		}));
 		if (ret)

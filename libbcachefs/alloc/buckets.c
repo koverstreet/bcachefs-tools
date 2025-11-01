@@ -317,8 +317,7 @@ int bch2_check_fix_ptrs(struct btree_trans *trans,
 
 	if (do_update) {
 		struct bkey_i *new =
-			errptr_try(bch2_trans_kmalloc(trans, bkey_bytes(k.k) +
-						      sizeof(struct bch_extent_rebalance)));
+			errptr_try(bch2_trans_kmalloc(trans, BKEY_EXTENT_U64s_MAX * sizeof(u64)));
 		bkey_reassemble(new, k);
 
 		scoped_guard(rcu)
@@ -386,7 +385,7 @@ found:
 
 		struct bch_inode_opts opts;
 		try(bch2_bkey_get_io_opts(trans, NULL, k, &opts));
-		try(bch2_bkey_set_needs_rebalance(c, &opts, new, SET_NEEDS_REBALANCE_opt_change, 0));
+		try(bch2_bkey_set_needs_rebalance(trans, NULL, &opts, new, SET_NEEDS_REBALANCE_opt_change, 0));
 
 		if (!(flags & BTREE_TRIGGER_is_root)) {
 			CLASS(btree_node_iter, iter)(trans, btree, new->k.p, 0, level,
@@ -888,7 +887,7 @@ int bch2_trigger_extent(struct btree_trans *trans,
 			try(__trigger_extent(trans, btree, level, new.s_c,
 					     flags & ~BTREE_TRIGGER_overwrite));
 
-		try(bch2_trigger_extent_rebalance(trans, old, new.s_c, flags));
+		try(bch2_trigger_extent_rebalance(trans, btree, level, old, new, flags));
 	}
 
 	return 0;

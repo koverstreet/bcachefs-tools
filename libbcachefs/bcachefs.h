@@ -808,8 +808,6 @@ struct bch_fs {
 	struct bch_accounting_mem accounting;
 
 	struct bch_replicas_cpu replicas;
-	struct bch_replicas_cpu replicas_gc;
-	struct mutex		replicas_gc_lock;
 
 	struct journal_entry_res btree_root_journal_res;
 	struct journal_entry_res clock_journal_res;
@@ -1072,6 +1070,7 @@ struct bch_fs {
 	GENRADIX(struct gc_stripe) gc_stripes;
 
 	struct hlist_head	ec_stripes_new[32];
+	struct hlist_head	ec_stripes_new_buckets[64];
 	spinlock_t		ec_stripes_new_lock;
 
 	/* ERASURE CODING */
