@@ -231,6 +231,9 @@ struct ec_stripe_new {
 
 	struct ec_stripe_handle	new_stripe_handle;
 	struct ec_stripe_handle	old_stripe_handle;
+
+	u8			old_block_map[BCH_BKEY_PTRS_MAX];
+	u8			old_blocks_nr;
 };
 
 struct ec_stripe_head {
@@ -319,6 +322,6 @@ void bch2_fs_ec_exit(struct bch_fs *);
 void bch2_fs_ec_init_early(struct bch_fs *);
 int bch2_fs_ec_init(struct bch_fs *);
 
-int bch2_check_stripe_to_lru_refs(struct btree_trans *);
+int bch2_check_stripe_refs(struct btree_trans *);
 
 #endif /* _BCACHEFS_EC_H */
