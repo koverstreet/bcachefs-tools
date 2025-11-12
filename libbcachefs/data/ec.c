@@ -24,7 +24,7 @@
 #include "data/read.h"
 #include "data/write.h"
 #include "data/keylist.h"
-#include "data/rebalance.h"
+#include "data/reconcile.h"
 
 #include "sb/io.h"
 
@@ -140,6 +140,10 @@ int bch2_stripe_validate(struct bch_fs *c, struct bkey_s_c k,
 			 c, stripe_csum_granularity_bad,
 			 "invalid csum granularity (%u >= 64)",
 			 s->csum_granularity_bits);
+
+	bkey_fsck_err_on(!s->sectors,
+			 c, stripe_sectors_zero,
+			 "invalid sectors zero");
 
 	ret = bch2_bkey_ptrs_validate(c, k, from);
 fsck_err:
@@ -1091,6 +1095,7 @@ static int ec_stripe_update_extent(struct btree_trans *trans,
 				   struct ec_stripe_buf *s,
 				   struct bkey_s_c_backpointer bp,
 				   struct stripe_update_bucket_stats *stats,
+				   struct disk_reservation *res,
 				   struct wb_maybe_flush *last_flushed)
 {
 	struct bch_stripe *v = &bkey_i_to_stripe(&s->key)->v;
@@ -1156,7 +1161,7 @@ static int ec_stripe_update_extent(struct btree_trans *trans,
 		.idx		= s->key.k.p.offset,
 	};
 
-	struct bkey_i *n = errptr_try(bch2_trans_kmalloc(trans, bkey_bytes(k.k) + sizeof(stripe_ptr)));
+	struct bkey_i *n = errptr_try(bch2_trans_kmalloc(trans, BKEY_EXTENT_U64s_MAX * sizeof(u64)));
 
 	bkey_reassemble(n, k);
 
@@ -1172,10 +1177,9 @@ static int ec_stripe_update_extent(struct btree_trans *trans,
 	struct bch_inode_opts opts;
 
 	try(bch2_bkey_get_io_opts(trans, NULL, bkey_i_to_s_c(n), &opts));
-	try(bch2_bkey_set_needs_rebalance(trans->c, &opts, n,
-					  SET_NEEDS_REBALANCE_other, 0));
+	try(bch2_bkey_set_needs_rebalance(trans, NULL, &opts, n, SET_NEEDS_REBALANCE_other, 0));
 	try(bch2_trans_update(trans, &iter, n, 0));
-	try(bch2_trans_commit(trans, NULL, NULL,
+	try(bch2_trans_commit(trans, res, NULL,
 			BCH_TRANS_COMMIT_no_check_rw|
 			BCH_TRANS_COMMIT_no_enospc));
 
@@ -1205,6 +1209,8 @@ static int ec_stripe_update_bucket(struct btree_trans *trans, struct ec_stripe_b
 
 	struct stripe_update_bucket_stats stats = {};
 
+	CLASS(disk_reservation, res)(c);
+
 	try(for_each_btree_key_max(trans, bp_iter, BTREE_ID_backpointers,
 			bucket_pos_to_bp_start(ca, bucket_pos),
 			bucket_pos_to_bp_end(ca, bucket_pos), 0, bp_k, ({
@@ -1220,7 +1226,7 @@ static int ec_stripe_update_bucket(struct btree_trans *trans, struct ec_stripe_b
 
 		wb_maybe_flush_inc(&last_flushed);
 		ec_stripe_update_extent(trans, ca, bucket_pos, ptr.gen, s, bp,
-					&stats, &last_flushed);
+					&stats, &res.r, &last_flushed);
 	})));
 
 	if (trace_stripe_update_bucket_enabled()) {

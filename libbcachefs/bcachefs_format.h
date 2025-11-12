@@ -711,7 +711,8 @@ struct bch_sb_field_ext {
 	x(extent_snapshot_whiteouts,	BCH_VERSION(1, 29))		\
 	x(31bit_dirent_offset,		BCH_VERSION(1, 30))		\
 	x(btree_node_accounting,	BCH_VERSION(1, 31))		\
-	x(sb_field_extent_type_u64s,	BCH_VERSION(1, 32))
+	x(sb_field_extent_type_u64s,	BCH_VERSION(1, 32))		\
+	x(reconcile,			BCH_VERSION(1, 33))
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
@@ -1420,7 +1421,7 @@ enum btree_id_flags {
 	  BIT_ULL(KEY_TYPE_logged_op_truncate)|					\
 	  BIT_ULL(KEY_TYPE_logged_op_finsert)|					\
 	  BIT_ULL(KEY_TYPE_inode_alloc_cursor))					\
-	x(rebalance_work,	18,						\
+	x(reconcile_work,	18,						\
 	  BTREE_IS_snapshot_field|						\
 	  BTREE_IS_write_buffer,						\
 	  BIT_ULL(KEY_TYPE_set)|BIT_ULL(KEY_TYPE_cookie))			\
@@ -1430,6 +1431,17 @@ enum btree_id_flags {
 	  BTREE_IS_snapshot_field|						\
 	  BTREE_IS_write_buffer,						\
 	  BIT_ULL(KEY_TYPE_accounting))						\
+	x(reconcile_hipri,	21,						\
+	  BTREE_IS_snapshot_field|						\
+	  BTREE_IS_write_buffer,						\
+	  BIT_ULL(KEY_TYPE_set))						\
+	x(reconcile_pending,	22,						\
+	  BTREE_IS_snapshot_field|						\
+	  BTREE_IS_write_buffer,						\
+	  BIT_ULL(KEY_TYPE_set))						\
+	x(reconcile_scan,	23,	0,					\
+	  BIT_ULL(KEY_TYPE_cookie)|						\
+	  BIT_ULL(KEY_TYPE_backpointer))
 
 enum btree_id {
 #define x(name, nr, ...) BTREE_ID_##name = nr,
@@ -1470,7 +1482,10 @@ static inline bool btree_id_can_reconstruct(enum btree_id btree)
 	switch (btree) {
 	case BTREE_ID_snapshot_trees:
 	case BTREE_ID_deleted_inodes:
-	case BTREE_ID_rebalance_work:
+	case BTREE_ID_reconcile_work:
+	case BTREE_ID_reconcile_hipri:
+	case BTREE_ID_reconcile_pending:
+	case BTREE_ID_reconcile_scan:
 	case BTREE_ID_subvolume_children:
 		return true;
 	default:

@@ -20,7 +20,7 @@
 #include "data/keylist.h"
 #include "data/migrate.h"
 #include "data/move.h"
-#include "data/rebalance.h"
+#include "data/reconcile.h"
 
 #include "journal/journal.h"
 
@@ -41,7 +41,8 @@ static struct bkey_i *drop_dev_ptrs(struct btree_trans *trans, struct bkey_s_c k
 		return NULL;
 
 	struct bkey_i *n = bch2_trans_kmalloc(trans, bkey_bytes(k.k) +
-					      sizeof(struct bch_extent_rebalance));
+					      sizeof(struct bch_extent_reconcile) +
+					      sizeof(struct bch_extent_ptr) * BCH_REPLICAS_MAX);
 	if (IS_ERR(n))
 		return n;
 	bkey_reassemble(n, k);
@@ -63,7 +64,7 @@ static struct bkey_i *drop_dev_ptrs(struct btree_trans *trans, struct bkey_s_c k
 	if (n->k.type != KEY_TYPE_error) {
 		struct bch_inode_opts opts;
 		int ret = bch2_bkey_get_io_opts(trans, NULL, k, &opts) ?:
-			  bch2_bkey_set_needs_rebalance(c, &opts, n,
+			  bch2_bkey_set_needs_rebalance(trans, NULL, &opts, n,
 							SET_NEEDS_REBALANCE_opt_change, 0);
 		if (ret)
 			return ERR_PTR(ret);
@@ -125,6 +126,7 @@ static int bch2_dev_usrdata_drop(struct bch_fs *c,
 				 unsigned flags, struct printbuf *err)
 {
 	CLASS(btree_trans, trans)(c);
+	CLASS(disk_reservation, res)(c);
 
 	/* FIXME: this does not handle unknown btrees with data pointers */
 	for (unsigned id = 0; id < BTREE_ID_NR; id++) {
@@ -135,14 +137,13 @@ static int bch2_dev_usrdata_drop(struct bch_fs *c,
 		if (id == BTREE_ID_stripes)
 			continue;
 
-		int ret = for_each_btree_key_commit(trans, iter, id, POS_MIN,
+		try(for_each_btree_key_commit(trans, iter, id, POS_MIN,
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
-				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+				&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+			bch2_disk_reservation_put(c, &res.r);
 			bch2_progress_update_iter(trans, progress, &iter, "dropping user data") ?:
 			bch2_dev_usrdata_drop_key(trans, &iter, k, dev_idx, flags, err);
-		}));
-		if (ret)
-			return ret;
+		})));
 	}
 
 	return 0;
@@ -225,6 +226,7 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, unsigned dev_idx, unsig
 				       struct printbuf *err)
 {
 	CLASS(btree_trans, trans)(c);
+	CLASS(disk_reservation, res)(c);
 
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
@@ -233,11 +235,12 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, unsigned dev_idx, unsig
 		for_each_btree_key_max_commit(trans, iter, BTREE_ID_backpointers,
 				POS(dev_idx, 0),
 				POS(dev_idx, U64_MAX), 0, k,
-				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+				&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
 			if (k.k->type != KEY_TYPE_backpointer)
 				continue;
 
 			wb_maybe_flush_inc(&last_flushed);
+			bch2_disk_reservation_put(c, &res.r);
 			data_drop_bp(trans, dev_idx, bkey_s_c_to_backpointer(k),
 				     &last_flushed, flags, err);
 

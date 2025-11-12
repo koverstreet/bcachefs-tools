@@ -15,7 +15,7 @@
 #include "data/keylist.h"
 #include "data/move.h"
 #include "data/nocow_locking.h"
-#include "data/rebalance.h"
+#include "data/reconcile.h"
 #include "data/update.h"
 #include "data/write.h"
 
@@ -161,14 +161,23 @@ static int data_update_index_update_key(struct btree_trans *trans,
 	/* make a local copy, so that we can trace it after the transaction commit:  */
 	k = bkey_i_to_s_c(errptr_try(bch2_bkey_make_mut_noupdate(trans, k)));
 
+	/*
+	 * We're calling set_needs_rebalance() on both @insert and @new,
+	 * and it can add a bch_extent_reconcile and additional
+	 * pointers to BCH_SB_MEMBER_INVALID if the extent is now
+	 * degraded due to option changes:
+	 */
 	struct bkey_i_extent *new = bkey_i_to_extent(bch2_keylist_front(&u->op.insert_keys));
-	new = errptr_try(bch2_trans_kmalloc(trans, bkey_bytes(&new->k)));
+	new = errptr_try(bch2_trans_kmalloc(trans, bkey_bytes(&new->k) +
+				 sizeof(struct bch_extent_reconcile) +
+				 sizeof(struct bch_extent_ptr) * BCH_REPLICAS_MAX));
 	bkey_copy(&new->k_i, bch2_keylist_front(&u->op.insert_keys));
 
 	struct bkey_i *insert = errptr_try(bch2_trans_kmalloc(trans,
 				    bkey_bytes(k.k) +
 				    bkey_val_bytes(&new->k) +
-				    sizeof(struct bch_extent_rebalance)));
+				    sizeof(struct bch_extent_reconcile) +
+				    sizeof(struct bch_extent_ptr) * BCH_REPLICAS_MAX));
 	bkey_reassemble(insert, k);
 
 	if (!bch2_extents_match(c, k, old)) {
@@ -274,7 +283,17 @@ static int data_update_index_update_key(struct btree_trans *trans,
 	try(bch2_insert_snapshot_whiteouts(trans, u->btree_id, k.k->p, bkey_start_pos(&insert->k)));
 	try(bch2_insert_snapshot_whiteouts(trans, u->btree_id, k.k->p, insert->k.p));
 
-	try(bch2_bkey_set_needs_rebalance(c, &opts, insert,
+	/*
+	 * This set_needs_rebalance call is only for verifying that the data we
+	 * just wrote was written correctly, otherwise we could fail to flag
+	 * incorrectly written data due to needs_rb already being set on the
+	 * existing extent
+	 */
+	try(bch2_bkey_set_needs_rebalance(trans, NULL, &opts, &new->k_i,
+					  SET_NEEDS_REBALANCE_foreground,
+					  u->op.opts.change_cookie));
+	/* This is the real set_needs_rebalance() call */
+	try(bch2_bkey_set_needs_rebalance(trans, NULL, &opts, insert,
 					  SET_NEEDS_REBALANCE_foreground,
 					  u->op.opts.change_cookie));
 
@@ -404,7 +423,8 @@ static void data_update_trace(struct data_update *u, int ret)
 			trace_data_update_no_io(c, buf.buf);
 		}
 		count_event(c, data_update_no_io);
-	} else if (ret != -BCH_ERR_data_update_fail_no_rw_devs) {
+	} else if (ret != -BCH_ERR_data_update_fail_no_rw_devs &&
+		   ret != -BCH_ERR_insufficient_devices) {
 		if (trace_data_update_fail_enabled()) {
 			CLASS(printbuf, buf)();
 			bch2_data_update_to_text(&buf, u);
@@ -689,10 +709,6 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 		if (*i != BCH_SB_MEMBER_INVALID)
 			__clear_bit(*i, devs.d);
 
-	bool trace = trace_data_update_fail_enabled();
-	CLASS(printbuf, buf)();
-
-	guard(printbuf_atomic)(&buf);
 	guard(rcu)();
 
 	unsigned nr_replicas = 0, i;
@@ -705,10 +721,6 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 		bch2_dev_usage_read_fast(ca, &usage);
 
 		u64 nr_free = dev_buckets_free(ca, usage, m->op.watermark);
-
-		if (trace)
-			prt_printf(&buf, "%s=%llu ", ca->name, nr_free);
-
 		if (!nr_free)
 			continue;
 
@@ -717,24 +729,8 @@ static int can_write_extent(struct bch_fs *c, struct data_update *m)
 			break;
 	}
 
-	if (!nr_replicas) {
-		/*
-		 * If it's a promote that's failing because the promote target
-		 * is full - we expect that in normal operation; it'll still
-		 * show up in io_read_nopromote and error_throw:
-		 */
-		if (m->opts.type != BCH_DATA_UPDATE_promote) {
-			if (trace) {
-				prt_printf(&buf, " - got replicas %u\n", nr_replicas);
-				bch2_data_update_to_text(&buf, m);
-				prt_printf(&buf, "\nret:\t%s\n", bch2_err_str(-BCH_ERR_data_update_fail_no_rw_devs));
-				trace_data_update_fail(c, buf.buf);
-			}
-			count_event(c, data_update_fail);
-		}
-
+	if (!nr_replicas)
 		return bch_err_throw(c, data_update_fail_no_rw_devs);
-	}
 
 	return 0;
 }

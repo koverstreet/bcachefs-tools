@@ -19,7 +19,7 @@
 #include "data/checksum.h"
 #include "data/compress.h"
 #include "data/extents.h"
-#include "data/rebalance.h"
+#include "data/reconcile.h"
 
 #include "fs/inode.h"
 
@@ -796,7 +796,7 @@ void bch2_bkey_propagate_incompressible(const struct bch_fs *c, struct bkey_i *d
 
 	/*
 	 * XXX: if some data actually is compressed, we want
-	 * bch_extent_rebalance.wont_recompress_smaller
+	 * bch_extent_reconcile.wont_recompress_smaller
 	 */
 
 	bkey_extent_entry_for_each(ptrs, entry) {
@@ -882,6 +882,15 @@ static unsigned bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k)
 		if (p.ptr.dev < c->sb.nr_devices && c->devs[p.ptr.dev])
 			durability += bch2_extent_ptr_durability(c, &p);
 	return durability;
+}
+
+void bch2_bkey_extent_entry_drop_s(const struct bch_fs *c, struct bkey_s k, union bch_extent_entry *entry)
+{
+	union bch_extent_entry *end = bkey_val_end(k);
+	union bch_extent_entry *next = extent_entry_next(c, entry);
+
+	memmove_u64s(entry, next, (u64 *) end - (u64 *) next);
+	k.k->u64s -= extent_entry_u64s(c, entry);
 }
 
 void bch2_bkey_extent_entry_drop(const struct bch_fs *c, struct bkey_i *k, union bch_extent_entry *entry)
@@ -1421,12 +1430,20 @@ void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			prt_printf(out, "idx %llu block %u", (u64) ec->idx, ec->block);
 			break;
 		}
-		case BCH_EXTENT_ENTRY_rebalance:
-			bch2_extent_rebalance_to_text(out, c, &entry->rebalance);
+		case BCH_EXTENT_ENTRY_rebalance_v1:
+			bch2_extent_rebalance_v1_to_text(out, c, &entry->rebalance_v1);
+			break;
+
+		case BCH_EXTENT_ENTRY_reconcile:
+			bch2_extent_rebalance_v2_to_text(out, c, &entry->reconcile);
 			break;
 
 		case BCH_EXTENT_ENTRY_flags:
 			prt_bitflags(out, bch2_extent_flags_strs, entry->flags.flags);
+			break;
+
+		case BCH_EXTENT_ENTRY_reconcile_bp:
+			prt_printf(out, "idx %llu", (u64) entry->reconcile_bp.idx);
 			break;
 
 		default:
@@ -1482,6 +1499,18 @@ fsck_err:
 	return ret;
 }
 
+static inline bool btree_ptr_entry_type_allowed(enum bch_extent_entry_type type)
+{
+	switch (type) {
+	case BCH_EXTENT_ENTRY_ptr:
+	case BCH_EXTENT_ENTRY_reconcile:
+	case BCH_EXTENT_ENTRY_reconcile_bp:
+		return true;
+	default:
+		return false;
+	};
+}
+
 int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 			    struct bkey_validate_context from)
 {
@@ -1492,23 +1521,27 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 	unsigned nonce = UINT_MAX;
 	unsigned nr_ptrs = 0;
 	bool have_written = false, have_unwritten = false, have_ec = false, crc_since_last_ptr = false;
+	bool have_inval_dev_ptrs = false, have_non_inval_dev_ptrs = false;
 	int ret = 0;
 
 	if (bkey_is_btree_ptr(k.k))
 		size_ondisk = btree_sectors(c);
 
 	bkey_extent_entry_for_each(ptrs, entry) {
-		bkey_fsck_err_on(extent_entry_type(entry) >= c->extent_types_known,
+		unsigned type = extent_entry_type(entry);
+
+		bkey_fsck_err_on(type >= c->extent_types_known,
 				 c, extent_ptrs_invalid_entry,
 				 "invalid extent entry type (got %u, max %u)",
-				 extent_entry_type(entry), c->extent_types_known);
+				 type, c->extent_types_known);
 
 		bkey_fsck_err_on(bkey_is_btree_ptr(k.k) &&
-				 !extent_entry_is_ptr(entry),
+				 type < BCH_EXTENT_ENTRY_MAX &&
+				 !btree_ptr_entry_type_allowed(type),
 				 c, btree_ptr_has_non_ptr,
-				 "has non ptr field");
+				 "has non allowed field");
 
-		switch (extent_entry_type(entry)) {
+		switch (type) {
 		case BCH_EXTENT_ENTRY_ptr:
 			try(extent_ptr_validate(c, k, from, &entry->ptr, size_ondisk, false));
 
@@ -1523,6 +1556,12 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 
 			have_ec = false;
 			crc_since_last_ptr = false;
+
+			if (entry->ptr.dev == BCH_SB_MEMBER_INVALID)
+				have_inval_dev_ptrs = true;
+			else
+				have_non_inval_dev_ptrs = true;
+
 			nr_ptrs++;
 			break;
 		case BCH_EXTENT_ENTRY_crc32:
@@ -1570,29 +1609,17 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 					 c, ptr_stripe_redundant,
 					 "redundant stripe entry");
 			have_ec = true;
+			have_non_inval_dev_ptrs = true;
 			break;
-		case BCH_EXTENT_ENTRY_rebalance: {
-			/*
-			 * this shouldn't be a fsck error, for forward
-			 * compatibility; the rebalance code should just refetch
-			 * the compression opt if it's unknown
-			 */
-#if 0
-			const struct bch_extent_rebalance *r = &entry->rebalance;
-
-			if (!bch2_compression_opt_valid(r->compression)) {
-				union bch_compression_opt opt = { .value = r->compression };
-				prt_printf(err, "invalid compression opt %u:%u",
-					   opt.type, opt.level);
-				return bch_err_throw(c, invalid_bkey);
-			}
-#endif
+		case BCH_EXTENT_ENTRY_reconcile:
+			try(bch2_extent_reconcile_validate(c, k, from, &entry->reconcile));
 			break;
-		}
 		case BCH_EXTENT_ENTRY_flags:
 			bkey_fsck_err_on(entry != ptrs.start,
 					 c, extent_flags_not_at_start,
 					 "extent flags entry not at start");
+			break;
+		case BCH_EXTENT_ENTRY_reconcile_bp:
 			break;
 		}
 	}
@@ -1615,6 +1642,15 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 	bkey_fsck_err_on(have_ec,
 			 c, extent_ptrs_redundant_stripe,
 			 "redundant stripe entry");
+
+	/*
+	 * we don't use KEY_TYPE_error for dead btree nodes - we still want the
+	 * other fields in bch_btree_ptr_v2
+	 */
+	bkey_fsck_err_on(!bkey_is_btree_ptr(k.k) &&
+			 have_inval_dev_ptrs && !have_non_inval_dev_ptrs,
+			 c, extent_ptrs_all_invalid,
+			 "extent ptrs all to BCH_SB_MEMBER_INVALID");
 fsck_err:
 	return ret;
 }
@@ -1651,7 +1687,8 @@ void bch2_ptr_swab(const struct bch_fs *c, struct bkey_s k)
 			break;
 		case BCH_EXTENT_ENTRY_stripe_ptr:
 			break;
-		case BCH_EXTENT_ENTRY_rebalance:
+		case BCH_EXTENT_ENTRY_rebalance_v1:
+		case BCH_EXTENT_ENTRY_reconcile:
 			break;
 		default:
 			/* Bad entry type: will be caught by validate() */
@@ -1725,8 +1762,10 @@ int bch2_cut_front_s(const struct bch_fs *c, struct bpos where, struct bkey_s k)
 				entry->crc128.offset += sub;
 				break;
 			case BCH_EXTENT_ENTRY_stripe_ptr:
-			case BCH_EXTENT_ENTRY_rebalance:
+			case BCH_EXTENT_ENTRY_rebalance_v1:
+			case BCH_EXTENT_ENTRY_reconcile:
 			case BCH_EXTENT_ENTRY_flags:
+			case BCH_EXTENT_ENTRY_reconcile_bp:
 				break;
 			}
 
