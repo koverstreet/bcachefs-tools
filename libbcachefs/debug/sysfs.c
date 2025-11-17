@@ -323,7 +323,8 @@ static bool bkey_has_inconsistent_checksums(struct bch_fs *c, struct bkey_s_c k)
 	bool have_prev = false;
 
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-		if (p.crc.uncompressed_size != p.crc.live_size)
+		if (p.crc.uncompressed_size != p.crc.live_size ||
+		    crc_is_compressed(p.crc))
 			continue;
 
 		if (!have_prev) {
