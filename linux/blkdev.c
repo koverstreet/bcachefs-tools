@@ -59,18 +59,15 @@ void generic_make_request(struct bio *bio)
 
 	i = 0;
 	bio_for_each_segment(bv, bio, iter) {
-		void *start = page_address(bv.bv_page) + bv.bv_offset;
-		size_t len = bv.bv_len;
-
 		iov[i++] = (struct iovec) {
-			.iov_base = start,
-			.iov_len = len,
+			.iov_base = bv.bv_addr,
+			.iov_len = bv.bv_len,
 		};
 
 #ifdef CONFIG_VALGRIND
 		/* To be pedantic it should only be on IO completion. */
 		if (bio_op(bio) == REQ_OP_READ)
-			VALGRIND_MAKE_MEM_DEFINED(start, len);
+			VALGRIND_MAKE_MEM_DEFINED(bv.bv_addr, bv.bv_len);
 #endif
 	}
 

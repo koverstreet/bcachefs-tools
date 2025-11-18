@@ -34,15 +34,9 @@
 #define bio_iter_iovec(bio, iter)				\
 	bvec_iter_bvec((bio)->bi_io_vec, (iter))
 
-#define bio_iter_page(bio, iter)				\
-	bvec_iter_page((bio)->bi_io_vec, (iter))
 #define bio_iter_len(bio, iter)					\
 	bvec_iter_len((bio)->bi_io_vec, (iter))
-#define bio_iter_offset(bio, iter)				\
-	bvec_iter_offset((bio)->bi_io_vec, (iter))
 
-#define bio_page(bio)		bio_iter_page((bio), (bio)->bi_iter)
-#define bio_offset(bio)		bio_iter_offset((bio), (bio)->bi_iter)
 #define bio_iovec(bio)		bio_iter_iovec((bio), (bio)->bi_iter)
 
 #define bio_multiple_segments(bio)				\
@@ -98,20 +92,6 @@ static inline unsigned int bio_cur_bytes(struct bio *bio)
 	else /* dataless requests such as discard */
 		return bio->bi_iter.bi_size;
 }
-
-static inline void *bio_data(struct bio *bio)
-{
-	if (bio_has_data(bio))
-		return page_address(bio_page(bio)) + bio_offset(bio);
-
-	return NULL;
-}
-
-#define __bio_kmap_atomic(bio, iter)				\
-	(kmap_atomic(bio_iter_iovec((bio), (iter)).bv_page) +	\
-		bio_iter_iovec((bio), (iter)).bv_offset)
-
-#define __bio_kunmap_atomic(addr)	kunmap_atomic(addr)
 
 static inline struct bio_vec *bio_next_segment(const struct bio *bio,
 					       struct bvec_iter_all *iter)
@@ -238,7 +218,6 @@ struct bio *bio_alloc_bioset(struct block_device *, unsigned,
 
 extern void bio_put(struct bio *);
 
-int bio_add_page(struct bio *, struct page *, unsigned, unsigned);
 void bio_add_virt_nofail(struct bio *, void *, unsigned);
 
 static inline void bio_add_vmalloc(struct bio *bio, void *vaddr, unsigned len)
@@ -265,8 +244,6 @@ extern void bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
 			       struct bio *src, struct bvec_iter *src_iter);
 extern void bio_copy_data(struct bio *dst, struct bio *src);
 
-void bio_free_pages(struct bio *bio);
-
 void zero_fill_bio_iter(struct bio *bio, struct bvec_iter iter);
 
 static inline void zero_fill_bio(struct bio *bio)
@@ -284,29 +261,12 @@ do {						\
 	(dst)->bi_bdev = (src)->bi_bdev;	\
 } while (0)
 
-static inline void *bvec_kmap_irq(struct bio_vec *bvec, unsigned long *flags)
-{
-	return page_address(bvec->bv_page) + bvec->bv_offset;
-}
-
-static inline void bvec_kunmap_irq(char *buffer, unsigned long *flags)
-{
-	*flags = 0;
-}
-
 static inline void *bvec_kmap_local(struct bio_vec *bvec)
 {
-	return page_address(bvec->bv_page) + bvec->bv_offset;
+	return bvec_virt(bvec);
 }
 
 static inline void bvec_kunmap_local(char *buffer) {}
-
-static inline void *__bio_kmap_irq(struct bio *bio, struct bvec_iter iter,
-				   unsigned long *flags)
-{
-	return bvec_kmap_irq(&bio_iter_iovec(bio, iter), flags);
-}
-#define __bio_kunmap_irq(buf, flags)	bvec_kunmap_irq(buf, flags)
 
 #define bio_kmap_irq(bio, flags) \
 	__bio_kmap_irq((bio), (bio)->bi_iter, (flags))

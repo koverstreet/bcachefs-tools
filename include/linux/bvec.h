@@ -27,9 +27,8 @@
  * was unsigned short, but we might as well be ready for > 64kB I/O pages
  */
 struct bio_vec {
-	struct page	*bv_page;
+	void		*bv_addr;
 	unsigned int	bv_len;
-	unsigned int	bv_offset;
 };
 
 struct bvec_iter {
@@ -53,21 +52,22 @@ struct bvec_iter_all {
  */
 #define __bvec_iter_bvec(bvec, iter)	(&(bvec)[(iter).bi_idx])
 
-#define bvec_iter_page(bvec, iter)				\
-	(__bvec_iter_bvec((bvec), (iter))->bv_page)
+static inline void *bvec_virt(struct bio_vec *bv)
+{
+	return bv->bv_addr;
+}
+
+#define bvec_iter_addr(bvec, iter)				\
+	(__bvec_iter_bvec((bvec), (iter))->bv_addr + (iter).bi_bvec_done)
 
 #define bvec_iter_len(bvec, iter)				\
 	min((iter).bi_size,					\
 	    __bvec_iter_bvec((bvec), (iter))->bv_len - (iter).bi_bvec_done)
 
-#define bvec_iter_offset(bvec, iter)				\
-	(__bvec_iter_bvec((bvec), (iter))->bv_offset + (iter).bi_bvec_done)
-
 #define bvec_iter_bvec(bvec, iter)				\
 ((struct bio_vec) {						\
-	.bv_page	= bvec_iter_page((bvec), (iter)),	\
+	.bv_addr	= bvec_iter_addr((bvec), (iter)),	\
 	.bv_len		= bvec_iter_len((bvec), (iter)),	\
-	.bv_offset	= bvec_iter_offset((bvec), (iter)),	\
 })
 
 static inline void bvec_iter_advance(const struct bio_vec *bv,

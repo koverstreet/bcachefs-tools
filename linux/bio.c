@@ -64,27 +64,13 @@ const char *blk_status_to_str(blk_status_t status)
 void bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
 			struct bio *src, struct bvec_iter *src_iter)
 {
-	struct bio_vec src_bv, dst_bv;
-	void *src_p, *dst_p;
-	unsigned bytes;
-
 	while (src_iter->bi_size && dst_iter->bi_size) {
-		src_bv = bio_iter_iovec(src, *src_iter);
-		dst_bv = bio_iter_iovec(dst, *dst_iter);
+		struct bio_vec src_bv = bio_iter_iovec(src, *src_iter);
+		struct bio_vec dst_bv = bio_iter_iovec(dst, *dst_iter);
 
-		bytes = min(src_bv.bv_len, dst_bv.bv_len);
+		unsigned bytes = min(src_bv.bv_len, dst_bv.bv_len);
 
-		src_p = kmap_atomic(src_bv.bv_page);
-		dst_p = kmap_atomic(dst_bv.bv_page);
-
-		memcpy(dst_p + dst_bv.bv_offset,
-		       src_p + src_bv.bv_offset,
-		       bytes);
-
-		kunmap_atomic(dst_p);
-		kunmap_atomic(src_p);
-
-		flush_dcache_page(dst_bv.bv_page);
+		memcpy(dst_bv.bv_addr, src_bv.bv_addr, bytes);
 
 		bio_advance_iter(src, src_iter, bytes);
 		bio_advance_iter(dst, dst_iter, bytes);
@@ -109,15 +95,11 @@ void bio_copy_data(struct bio *dst, struct bio *src)
 
 void zero_fill_bio_iter(struct bio *bio, struct bvec_iter start)
 {
-	unsigned long flags;
 	struct bio_vec bv;
 	struct bvec_iter iter;
 
-	__bio_for_each_segment(bv, bio, iter, start) {
-		char *data = bvec_kmap_irq(&bv, &flags);
-		memset(data, 0, bv.bv_len);
-		bvec_kunmap_irq(data, &flags);
-	}
+	__bio_for_each_segment(bv, bio, iter, start)
+		memset(bv.bv_addr, 0, bv.bv_len);
 }
 
 static int __bio_clone(struct bio *bio, struct bio *bio_src, gfp_t gfp)
@@ -165,15 +147,6 @@ struct bio *bio_split(struct bio *bio, int sectors,
 	return split;
 }
 
-void bio_free_pages(struct bio *bio)
-{
-	struct bvec_iter_all iter;
-	struct bio_vec *bvec;
-
-	bio_for_each_segment_all(bvec, bio, iter)
-		__free_page(bvec->bv_page);
-}
-
 void bio_advance(struct bio *bio, unsigned bytes)
 {
 	bio_advance_iter(bio, &bio->bi_iter, bytes);
@@ -208,26 +181,18 @@ void bio_put(struct bio *bio)
 	}
 }
 
-int bio_add_page(struct bio *bio, struct page *page,
-		 unsigned int len, unsigned int off)
+void bio_add_virt_nofail(struct bio *bio, void *vaddr, unsigned len)
 {
 	struct bio_vec *bv = &bio->bi_io_vec[bio->bi_vcnt];
 
 	WARN_ON_ONCE(bio_flagged(bio, BIO_CLONED));
 	WARN_ON_ONCE(bio->bi_vcnt >= bio->bi_max_vecs);
 
-	bv->bv_page = page;
-	bv->bv_offset = off;
+	bv->bv_addr = vaddr;
 	bv->bv_len = len;
 
 	bio->bi_iter.bi_size += len;
 	bio->bi_vcnt++;
-	return len;
-}
-
-void bio_add_virt_nofail(struct bio *bio, void *vaddr, unsigned len)
-{
-	bio_add_page(bio, virt_to_page(vaddr), len, offset_in_page(vaddr));
 }
 
 static inline bool bio_remaining_done(struct bio *bio)
