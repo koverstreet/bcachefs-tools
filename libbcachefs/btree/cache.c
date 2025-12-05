@@ -18,9 +18,14 @@
 
 #include "sb/counters.h"
 
+#include <linux/module.h>
 #include <linux/prefetch.h>
 #include <linux/sched/mm.h>
 #include <linux/swap.h>
+
+bool bch2_mm_avoid_compaction = true;
+module_param_named(mm_avoid_compaction, bch2_mm_avoid_compaction, bool, 0644);
+MODULE_PARM_DESC(force_read_device, "");
 
 const char * const bch2_btree_node_flags[] = {
 	"typebit",
@@ -90,7 +95,20 @@ void bch2_btree_node_to_freelist(struct bch_fs *c, struct btree *b)
 	six_unlock_intent(&b->c.lock);
 }
 
-void __btree_node_data_free(struct btree *b)
+static void __btree_node_data_free(struct btree *b)
+{
+	kvfree(b->data);
+	b->data = NULL;
+#ifdef __KERNEL__
+	kvfree(b->aux_data);
+#else
+	if (b->aux_data)
+		munmap(b->aux_data, btree_aux_data_bytes(b));
+#endif
+	b->aux_data = NULL;
+}
+
+void bch2_btree_node_data_free_locked(struct btree *b)
 {
 	BUG_ON(!list_empty(&b->list));
 	BUG_ON(btree_node_hashed(b));
@@ -108,23 +126,15 @@ void __btree_node_data_free(struct btree *b)
 	EBUG_ON(btree_node_write_in_flight(b));
 
 	clear_btree_node_just_written(b);
-
-	kvfree(b->data);
-	b->data = NULL;
-#ifdef __KERNEL__
-	kvfree(b->aux_data);
-#else
-	munmap(b->aux_data, btree_aux_data_bytes(b));
-#endif
-	b->aux_data = NULL;
+	__btree_node_data_free(b);
 }
 
-static void btree_node_data_free(struct bch_fs_btree_cache *bc, struct btree *b)
+static void bch2_btree_node_data_free(struct bch_fs_btree_cache *bc, struct btree *b)
 {
 	BUG_ON(list_empty(&b->list));
 	list_del_init(&b->list);
 
-	__btree_node_data_free(b);
+	bch2_btree_node_data_free_locked(b);
 
 	--bc->nr_freeable;
 	btree_node_to_freedlist(bc, b);
@@ -147,13 +157,29 @@ static const struct rhashtable_params bch_btree_cache_params = {
 	.automatic_shrinking	= true,
 };
 
-static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp)
+static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp,
+				 bool avoid_compaction)
 {
 	BUG_ON(b->data || b->aux_data);
 
 	gfp |= __GFP_ACCOUNT|__GFP_RECLAIMABLE;
 
-	b->data = kvmalloc(btree_buf_bytes(b), gfp);
+	if (avoid_compaction && bch2_mm_avoid_compaction) {
+		/*
+		 * Cursed hack: mm doesn't know how to limit the amount of time
+		 * we spend blocked on compaction, even if we specified a
+		 * vmalloc fallback.
+		 *
+		 * So we have to do that ourselves: only try for a high order
+		 * page allocation if we're GFP_NOWAIT, otherwise straight to
+		 * vmalloc.
+		 */
+		b->data = gfp & __GFP_RECLAIM
+			? __vmalloc(btree_buf_bytes(b), gfp)
+			: kmalloc(btree_buf_bytes(b), gfp);
+	} else {
+		b->data = kvmalloc(btree_buf_bytes(b), gfp);
+	}
 	if (!b->data)
 		return bch_err_throw(c, ENOMEM_btree_node_mem_alloc);
 #ifdef __KERNEL__
@@ -165,20 +191,15 @@ static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp)
 	if (b->aux_data == MAP_FAILED)
 		b->aux_data = NULL;
 #endif
-	if (!b->aux_data) {
-		kvfree(b->data);
-		b->data = NULL;
+	if (!b->aux_data)
 		return bch_err_throw(c, ENOMEM_btree_node_mem_alloc);
-	}
 
 	return 0;
 }
 
 static struct btree *__btree_node_mem_alloc(struct bch_fs *c, gfp_t gfp)
 {
-	struct btree *b;
-
-	b = kzalloc(sizeof(struct btree), gfp);
+	struct btree *b = kzalloc(sizeof(struct btree), gfp);
 	if (!b)
 		return NULL;
 
@@ -195,7 +216,8 @@ struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *c)
 	if (!b)
 		return NULL;
 
-	if (btree_node_data_alloc(c, b, GFP_KERNEL)) {
+	if (btree_node_data_alloc(c, b, GFP_KERNEL, false)) {
+		__btree_node_data_free(b);
 		kfree(b);
 		return NULL;
 	}
@@ -262,6 +284,9 @@ void __bch2_btree_node_hash_remove(struct bch_fs_btree_cache *bc, struct btree *
 	if (b->c.btree_id < BTREE_ID_NR)
 		--bc->nr_by_btree[b->c.btree_id];
 	--bc->live[btree_node_pinned(b)].nr;
+
+	bc->nr_vmalloc -= is_vmalloc_addr(b->data);
+
 	list_del_init(&b->list);
 }
 
@@ -278,6 +303,8 @@ int __bch2_btree_node_hash_insert(struct bch_fs_btree_cache *bc, struct btree *b
 
 	b->hash_val = btree_ptr_hash_val(&b->key);
 	try(rhashtable_lookup_insert_fast(&bc->table, &b->hash, bch_btree_cache_params));
+
+	bc->nr_vmalloc += is_vmalloc_addr(b->data);
 
 	if (b->c.btree_id < BTREE_ID_NR)
 		bc->nr_by_btree[b->c.btree_id]++;
@@ -502,7 +529,7 @@ static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
 			goto out;
 
 		if (!btree_node_reclaim(c, b)) {
-			btree_node_data_free(bc, b);
+			bch2_btree_node_data_free(bc, b);
 			six_unlock_write(&b->c.lock);
 			six_unlock_intent(&b->c.lock);
 			freed++;
@@ -519,7 +546,7 @@ restart:
 			--touched;
 		} else if (!btree_node_reclaim(c, b)) {
 			__bch2_btree_node_hash_remove(bc, b);
-			__btree_node_data_free(b);
+			bch2_btree_node_data_free_locked(b);
 			btree_node_to_freedlist(bc, b);
 
 			freed++;
@@ -606,7 +633,7 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 		BUG_ON(btree_node_read_in_flight(b) ||
 		       btree_node_write_in_flight(b));
 
-		btree_node_data_free(bc, b);
+		bch2_btree_node_data_free(bc, b);
 		cond_resched();
 	}
 
@@ -830,10 +857,12 @@ got_node:
 
 	mutex_unlock(&bc->lock);
 
-	if (btree_node_data_alloc(c, b, GFP_NOWAIT)) {
+	if (btree_node_data_alloc(c, b, GFP_NOWAIT, true)) {
 		bch2_trans_unlock(trans);
-		if (btree_node_data_alloc(c, b, GFP_KERNEL|__GFP_NOWARN))
+		if (btree_node_data_alloc(c, b, GFP_KERNEL|__GFP_NOWARN, true)) {
+			__btree_node_data_free(b);
 			goto err;
+		}
 	}
 
 got_mem:
@@ -1371,7 +1400,7 @@ wait_on_io:
 
 	mutex_lock(&bc->lock);
 	bch2_btree_node_hash_remove(bc, b);
-	btree_node_data_free(bc, b);
+	bch2_btree_node_data_free(bc, b);
 	mutex_unlock(&bc->lock);
 out:
 	six_unlock_write(&b->c.lock);
@@ -1484,6 +1513,7 @@ void bch2_btree_cache_to_text(struct printbuf *out, const struct bch_fs_btree_ca
 
 	prt_btree_cache_line(out, c, "live:",		bc->live[0].nr);
 	prt_btree_cache_line(out, c, "pinned:",		bc->live[1].nr);
+	prt_btree_cache_line(out, c, "vmalloc:",	bc->nr_vmalloc);
 	prt_btree_cache_line(out, c, "reserve:",	bc->nr_reserve);
 	prt_btree_cache_line(out, c, "freed:",		bc->nr_freeable);
 	prt_btree_cache_line(out, c, "dirty:",		atomic_long_read(&bc->nr_dirty));

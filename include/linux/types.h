@@ -32,6 +32,7 @@ typedef unsigned gfp_t;
 #define GFP_NOFS	0
 #define GFP_NOIO	0
 #define GFP_NOWAIT	0
+#define __GFP_RECLAIM	0
 #define __GFP_FS	0
 #define __GFP_IO	0
 #define __GFP_NOWARN	0
