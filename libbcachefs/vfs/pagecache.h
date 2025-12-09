@@ -153,7 +153,8 @@ ssize_t bch2_folio_reservation_get_partial(struct bch_fs *,
 			struct bch2_folio_reservation *,
 			size_t, size_t);
 
-void bch2_set_folio_dirty(struct bch_fs *,
+bool bch2_vfs_dirty_folio(struct address_space *mapping, struct folio *folio);
+bool bch2_set_folio_dirty(struct bch_fs *,
 			  struct bch_inode_info *,
 			  struct folio *,
 			  struct bch2_folio_reservation *,

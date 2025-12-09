@@ -460,6 +460,47 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 	return partial ? reserved : 0;
 }
 
+static int bch2_folio_reservation_get_nofail(struct bch_fs *c,
+			struct bch_inode_info *inode,
+			struct folio *folio,
+			struct bch2_folio_reservation *res,
+			size_t offset, size_t len)
+{
+	struct bch_folio *s = bch2_folio(folio);
+	unsigned i, disk_sectors = 0, quota_sectors = 0;
+	struct disk_reservation disk_res = {};
+	int ret;
+
+	BUG_ON(!s);
+	BUG_ON(!s->uptodate);
+
+	for (i = round_down(offset, block_bytes(c)) >> 9;
+	     i < round_up(offset + len, block_bytes(c)) >> 9;
+	     i++) {
+		disk_sectors += sectors_to_reserve(&s->s[i], res->disk.nr_replicas);
+		quota_sectors += s->s[i].state == SECTOR_unallocated;
+	     }
+
+	if (disk_sectors) {
+		ret = bch2_disk_reservation_add(c, &disk_res, disk_sectors,
+				BCH_DISK_RESERVATION_NOFAIL);
+		if (unlikely(ret))
+			return ret;
+	}
+
+	if (quota_sectors) {
+		/* FIXME: we'll need to make sure this won't fail with -ENOMEM */
+		ret = bch2_quota_reservation_add(c, inode, &res->quota, quota_sectors, false);
+		if (unlikely(ret)) {
+			bch2_disk_reservation_put(c, &disk_res);
+			return ret;
+		}
+	}
+
+	res->disk.sectors += disk_res.sectors;
+	return 0;
+}
+
 int bch2_folio_reservation_get(struct bch_fs *c,
 			struct bch_inode_info *inode,
 			struct folio *folio,
@@ -506,7 +547,22 @@ static void bch2_clear_folio_bits(struct folio *folio)
 	bch2_folio_release(folio);
 }
 
-void bch2_set_folio_dirty(struct bch_fs *c,
+bool bch2_vfs_dirty_folio(struct address_space *mapping, struct folio *folio)
+{
+	struct bch_inode_info *inode = to_bch_ei(mapping->host);
+	struct bch_fs *c = inode->v.i_sb->s_fs_info;
+	struct bch2_folio_reservation res;
+
+	loff_t file_size = i_size_read(&inode->v);
+	size_t dirty_bytes = min_t(size_t, folio_size(folio),
+		round_up(file_size, block_bytes(c)) - folio_pos(folio));
+
+	bch2_folio_reservation_init(c, inode, &res);
+	BUG_ON(bch2_folio_reservation_get_nofail(c, inode, folio, &res, 0, dirty_bytes));
+	return bch2_set_folio_dirty(c, inode, folio, &res, 0, dirty_bytes);
+}
+
+bool bch2_set_folio_dirty(struct bch_fs *c,
 			  struct bch_inode_info *inode,
 			  struct folio *folio,
 			  struct bch2_folio_reservation *res,
@@ -546,7 +602,8 @@ void bch2_set_folio_dirty(struct bch_fs *c,
 	bch2_i_sectors_acct(c, inode, &res->quota, dirty_sectors);
 
 	if (!folio_test_dirty(folio))
-		filemap_dirty_folio(inode->v.i_mapping, folio);
+		return filemap_dirty_folio(inode->v.i_mapping, folio);
+	return false;
 }
 
 vm_fault_t bch2_page_fault(struct vm_fault *vmf)
