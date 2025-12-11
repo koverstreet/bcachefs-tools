@@ -68,17 +68,15 @@ static void fs_top(const char *path, bool human_readable)
 		prt_printf(&buf, "\033[2J");
 		prt_printf(&buf, "\033[H");
 
-		printbuf_tabstop_push(&buf, 40);
-		printbuf_tabstop_push(&buf, 14);
-		printbuf_tabstop_push(&buf, 14);
-		printbuf_tabstop_push(&buf, 14);
+		printbuf_tabstop_start(&buf);
 
 		prt_printf(&buf,
 			   "All counters have a corresponding tracepoint; for more info on any given event, try e.g.\n"
 			   "  perf trace -e bcachefs:data_update_pred\n"
 			   "\n");
 
-		prt_printf(&buf, "\t%us\rtotal\rmount\r\n", interval_secs);
+		prt_printf(&buf, "\t%us\ttotal\tmount", interval_secs);
+		prt_newline(&buf);
 
 		for (unsigned i = 0; i < BCH_COUNTER_NR; i++) {
 			unsigned stable = counters_to_stable_map[i];
@@ -99,17 +97,17 @@ static void fs_top(const char *path, bool human_readable)
 
 			prt_counter(&buf, v1 / interval_secs, human_readable, bch2_counter_flags[i]);
 			prt_str(&buf, "/sec");
-			prt_tab_rjust(&buf);
+			prt_printf(&buf, "\t");
 
 			prt_counter(&buf, v2, human_readable, bch2_counter_flags[i]);
-			prt_tab_rjust(&buf);
+			prt_printf(&buf, "\t");
 
 			prt_counter(&buf, v3, human_readable, bch2_counter_flags[i]);
-			prt_tab_rjust(&buf);
 
 			prt_newline(&buf);
 		}
 
+		printbuf_tabstop_finish(&buf);
 		write(STDOUT_FILENO, buf.buf, buf.pos);
 		/* XXX: include btree cache size, key cache size, total ram size */
 	}

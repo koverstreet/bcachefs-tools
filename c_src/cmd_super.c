@@ -99,7 +99,7 @@ void bch2_sb_to_text_with_names(struct printbuf *out,
 		if (f)
 			__bch2_sb_field_to_text(out, c, sb, f);
 	} else {
-		printbuf_tabstop_push(out, 44);
+		printbuf_tabstop_start(out);
 
 		bch2_sb_to_text(out, c, sb, print_layout,
 				fields & ~(BIT(BCH_SB_FIELD_members_v1)|
@@ -118,6 +118,8 @@ void bch2_sb_to_text_with_names(struct printbuf *out,
 		    (mi2 = bch2_sb_field_get(sb, members_v2)))
 			for (unsigned i = 0; i < sb->nr_devices; i++)
 				print_one_member(out, sb_names, sb, gi, bch2_members_v2_get(mi2, i), i);
+
+		printbuf_tabstop_finish(out);
 	}
 }
 

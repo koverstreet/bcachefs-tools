@@ -922,26 +922,27 @@ int copy_fs(struct bch_fs *c, struct copy_fs_state *s,
 	//genradix_free(&s->hardlinks);
 
 	CLASS(printbuf, buf)();
-	printbuf_tabstop_push(&buf, 24);
-	printbuf_tabstop_push(&buf, 16);
-	prt_printf(&buf, "Total files:\t%llu\r\n", s->total_files);
+	printbuf_tabstop_start(&buf);
+	prt_printf(&buf, "Total files:\t%llu", s->total_files);
+	prt_newline(&buf);
 	prt_str_indented(&buf, "Total input:\t");
 	prt_human_readable_u64(&buf, s->total_input);
-	prt_printf(&buf, "\r\n");
+	prt_newline(&buf);
 
 	if (s->total_wrote) {
 		prt_str_indented(&buf, "Wrote:\t");
 		prt_human_readable_u64(&buf, s->total_wrote);
-		prt_printf(&buf, "\r\n");
+		prt_newline(&buf);
 	}
 
 	if (s->total_linked) {
 		prt_str(&buf, "Linked:\t");
 		prt_human_readable_u64(&buf, s->total_linked);
-		prt_printf(&buf, "\r\n");
+		prt_newline(&buf);
 	}
 
 	prt_newline(&buf);
+	printbuf_tabstop_finish(&buf);
 
 	fputs(buf.buf, stdout);
 	return 0;

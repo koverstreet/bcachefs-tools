@@ -62,14 +62,14 @@ static void dev_usage_to_text(struct printbuf *out,
 		if (type != BCH_DATA_unstriped)
 			used += u->d[type].sectors;
 
-	prt_printf(out, "%s (device %u):\t%s\r%s\r    %02u%%\n",
+	prt_printf(out, "%s (device %u):\t%s\t%s\t%02u%%\n",
 		   d->label ?: "(no label)", d->idx,
 		   d->dev ?: "(device not found)",
 		   bch2_member_states[u->state],
 		   (unsigned) (used * 100 / capacity));
 
 	printbuf_indent_add(out, 2);
-	prt_printf(out, "\tdata\rbuckets\rfragmented\r\n");
+	prt_printf(out, "\tdata\tbuckets\tfragmented\n");
 
 	for (unsigned type = 0; type < u->nr_data_types; type++) {
 		bch2_prt_data_type(out, type);
@@ -81,21 +81,21 @@ static void dev_usage_to_text(struct printbuf *out,
 			: u->d[type].sectors;
 		prt_units_u64(out, sectors << 9);
 
-		prt_printf(out, "\r%llu\r", u->d[type].buckets);
+		prt_printf(out, "\t%llu\t", u->d[type].buckets);
 
 		u64 fragmented = u->d[type].buckets * u->bucket_size - sectors;
 		if (fragmented)
 			prt_units_u64(out, fragmented << 9);
-		prt_printf(out, "\r\n");
+		prt_newline(out);
 	}
 
 	prt_printf(out, "capacity:\t");
 	prt_units_u64(out, (u->nr_buckets * u->bucket_size) << 9);
-	prt_printf(out, "\r%llu\r\n", u->nr_buckets);
+	prt_printf(out, "\t%llu\n", u->nr_buckets);
 
 	prt_printf(out, "bucket size:\t");
 	prt_units_u64(out, u->bucket_size << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
 
 	printbuf_indent_sub(out, 2);
 	prt_newline(out);
@@ -159,25 +159,18 @@ static void devs_usage_to_text(struct printbuf *out,
 	prt_newline(out);
 
 	if (full) {
-		printbuf_tabstop_push(out, 16);
-		printbuf_tabstop_push(out, 20);
-		printbuf_tabstop_push(out, 16);
-		printbuf_tabstop_push(out, 14);
+		printbuf_tabstop_start(out);
 
 		darray_for_each(dev_usage, d)
 			dev_usage_to_text(out, d, full);
-	} else {
-		printbuf_tabstop_push(out, 32);
-		printbuf_tabstop_push(out, 12);
-		printbuf_tabstop_push(out, 8);
-		printbuf_tabstop_push(out, 10);
-		printbuf_tabstop_push(out, 10);
-		printbuf_tabstop_push(out, 6);
-		printbuf_tabstop_push(out, 10);
 
-		prt_printf(out, "Device label\tDevice\tState\tSize\rUsed\rUse%%\r");
+		printbuf_tabstop_finish(out);
+	} else {
+		printbuf_tabstop_start(out);
+
+		prt_printf(out, "Device label\tDevice\tState\tSize\tUsed\tUse%%\t");
 		if (print_dev_leaving)
-			prt_printf(out, "Leaving\r");
+			prt_printf(out, "Leaving\t");
 		prt_newline(out);
 
 		darray_for_each(dev_usage, d) {
@@ -194,18 +187,20 @@ static void devs_usage_to_text(struct printbuf *out,
 				   bch2_member_states[u->state]);
 
 			prt_units_u64(out, (u->nr_buckets * u->bucket_size) << 9);
-			prt_tab_rjust(out);
+			prt_printf(out, "\t");
 			prt_units_u64(out, used << 9);
+			prt_printf(out, "\t");
 
-			prt_printf(out, "\r%02u%%\r", (unsigned) (used * 100 / capacity));
+			prt_printf(out, "%02u%%\t", (unsigned) (used * 100 / capacity));
 
 			if (d->leaving) {
 				prt_units_u64(out, d->leaving << 9);
-				prt_tab_rjust(out);
+				prt_printf(out, "\t");
 			}
 
 			prt_newline(out);
 		}
+		printbuf_tabstop_finish(out);
 	}
 }
 
@@ -217,7 +212,7 @@ static void persistent_reserved_to_text(struct printbuf *out,
 
 	prt_printf(out, "reserved:\t%u/%u\t[] ", 1, nr_replicas);
 	prt_units_u64(out, sectors << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
 }
 
 struct durability_x_degraded {
@@ -281,7 +276,7 @@ static void replicas_usage_to_text(struct printbuf *out,
 	prt_printf(out, "]\t");
 
 	prt_units_u64(out, sectors << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
 }
 
 #define for_each_usage_replica(_u, _r)					\
@@ -374,14 +369,14 @@ static void replicas_summary_to_text(struct printbuf *out,
 		max_degraded = max(max_degraded, i->nr);
 
 	printbuf_tabstops_reset(out);
-	printbuf_tabstop_push(out, 8);
-	prt_tab(out);
+	printbuf_tabstop_start(out);
+
+	prt_printf(out, "\t");
 	for (unsigned i = 0; i < max_degraded; i++) {
-		printbuf_tabstop_push(out, 12);
 		if (!i)
-			prt_printf(out, "undegraded\r");
+			prt_printf(out, "undegraded\t");
 		else
-			prt_printf(out, "-%ux\r", i);
+			prt_printf(out, "-%ux\t", i);
 	}
 	prt_newline(out);
 
@@ -394,7 +389,7 @@ static void replicas_summary_to_text(struct printbuf *out,
 		darray_for_each(*i, j) {
 			if (*j)
 				prt_units_u64(out, *j << 9);
-			prt_tab_rjust(out);
+			prt_printf(out, "\t");
 		}
 		prt_newline(out);
 	}
@@ -410,6 +405,7 @@ static void replicas_summary_to_text(struct printbuf *out,
 		prt_units_u64(out, reserved << 9);
 		prt_printf(out, "\r\n");
 	}
+	printbuf_tabstop_finish(out);
 }
 
 static int fs_usage_v1_to_text(struct printbuf *out,
@@ -446,36 +442,31 @@ static int fs_usage_v1_to_text(struct printbuf *out,
 	darray_accounting_p a_sorted = {};
 
 	accounting_sort(&a_sorted, a);
+	printbuf_tabstop_start(out);
 
-	prt_str(out, "Filesystem: ");
+	prt_str(out, "Filesystem:\t");
 	pr_uuid(out, fs.uuid.b);
 	prt_newline(out);
 
-	printbuf_tabstops_reset(out);
-	printbuf_tabstop_push(out, 20);
-	printbuf_tabstop_push(out, 16);
-
 	prt_printf(out, "Size:\t");
 	prt_units_u64(out, a->capacity << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
 
 	prt_printf(out, "Used:\t");
 	prt_units_u64(out, a->used << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
 
 	prt_printf(out, "Online reserved:\t");
 	prt_units_u64(out, a->online_reserved << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
+
+	printbuf_tabstop_finish(out);
 
 	replicas_summary_to_text(out, a_sorted, dev_names);
 
 	if (fields & FS_USAGE_replicas) {
 		printbuf_tabstops_reset(out);
-		printbuf_tabstop_push(out, 16);
-		printbuf_tabstop_push(out, 16);
-		printbuf_tabstop_push(out, 14);
-		printbuf_tabstop_push(out, 14);
-		printbuf_tabstop_push(out, 14);
+		printbuf_tabstop_start(out);
 		prt_printf(out, "\nData type\tRequired/total\tDurability\tDevices\n");
 	}
 
@@ -505,11 +496,8 @@ static int fs_usage_v1_to_text(struct printbuf *out,
 			if (new_type) {
 				prt_printf(out, "\nCompression:\n");
 				printbuf_tabstops_reset(out);
-				printbuf_tabstop_push(out, 12);
-				printbuf_tabstop_push(out, 16);
-				printbuf_tabstop_push(out, 16);
-				printbuf_tabstop_push(out, 24);
-				prt_printf(out, "type\tcompressed\runcompressed\raverage extent size\r\n");
+				printbuf_tabstop_start(out);
+				prt_printf(out, "type\tcompressed\tuncompressed\taverage extent size\n");
 			}
 
 			u64 nr_extents			= a->v.d[0];
@@ -517,29 +505,28 @@ static int fs_usage_v1_to_text(struct printbuf *out,
 			u64 sectors_compressed		= a->v.d[2];
 
 			bch2_prt_compression_type(out, acc_k.compression.type);
-			prt_tab(out);
+			prt_printf(out, "\t");
 
 			prt_units_u64(out, sectors_compressed << 9);
-			prt_tab_rjust(out);
+			prt_printf(out, "\t");
 
 			prt_units_u64(out, sectors_uncompressed << 9);
-			prt_tab_rjust(out);
+			prt_printf(out, "\t");
 
 			prt_units_u64(out, nr_extents
 					       ? div_u64(sectors_uncompressed << 9, nr_extents)
 					       : 0);
-			prt_printf(out, "\r\n");
+			prt_newline(out);
 			break;
 		case BCH_DISK_ACCOUNTING_btree:
 			if (new_type) {
 				prt_printf(out, "\nBtree usage:\n");
 				printbuf_tabstops_reset(out);
-				printbuf_tabstop_push(out, 12);
-				printbuf_tabstop_push(out, 16);
+				printbuf_tabstop_start(out);
 			}
 			prt_printf(out, "%s:\t", bch2_btree_id_str(acc_k.btree.id));
 			prt_units_u64(out, a->v.d[0] << 9);
-			prt_printf(out, "\r\n");
+			prt_newline(out);
 			break;
 		case BCH_DISK_ACCOUNTING_rebalance_work:
 			if (new_type)
@@ -550,22 +537,43 @@ static int fs_usage_v1_to_text(struct printbuf *out,
 		case BCH_DISK_ACCOUNTING_reconcile_work:
 			if (new_type) {
 				printbuf_tabstops_reset(out);
-				printbuf_tabstop_push(out, 32);
-				printbuf_tabstop_push(out, 12);
-				printbuf_tabstop_push(out, 12);
-				prt_printf(out, "\nPending reconcile:\tdata\rmetadata\r\n");
+				printbuf_tabstop_start(out);
+				prt_printf(out, "\nPending reconcile:\tdata\tmetadata\n");
 			}
 			bch2_prt_reconcile_accounting_type(out, acc_k.reconcile_work.type);
 			prt_char(out, ':');
-			prt_tab(out);
+			prt_printf(out, "\t");
 			prt_units_u64(out, a->v.d[0] << 9);
-			prt_tab_rjust(out);
+			prt_printf(out, "\t");
 			prt_units_u64(out, a->v.d[1] << 9);
-			prt_tab_rjust(out);
 			prt_newline(out);
 			break;
 		}
+
+		/* Finish elastic tabstops when type changes */
+		size_t idx = i - a_sorted.data;
+		if (idx + 1 < a_sorted.nr) {
+			struct bkey_i_accounting *next = a_sorted.data[idx + 1];
+			struct disk_accounting_pos next_k;
+			bpos_to_disk_accounting_pos(&next_k, next->k.p);
+
+			if (next_k.type != acc_k.type) {
+				if (acc_k.type == BCH_DISK_ACCOUNTING_compression ||
+				    acc_k.type == BCH_DISK_ACCOUNTING_btree ||
+				    acc_k.type == BCH_DISK_ACCOUNTING_reconcile_work)
+					printbuf_tabstop_finish(out);
+			}
+		} else {
+			/* Last item - finish if needed */
+			if (acc_k.type == BCH_DISK_ACCOUNTING_compression ||
+			    acc_k.type == BCH_DISK_ACCOUNTING_btree ||
+			    acc_k.type == BCH_DISK_ACCOUNTING_reconcile_work)
+				printbuf_tabstop_finish(out);
+		}
 	}
+
+	if (fields & FS_USAGE_replicas)
+		printbuf_tabstop_finish(out);
 
 	darray_exit(&a_sorted);
 	free(a);
@@ -584,45 +592,41 @@ static void fs_usage_v0_to_text(struct printbuf *out,
 	prt_newline(out);
 
 	printbuf_tabstops_reset(out);
-	printbuf_tabstop_push(out, 20);
-	printbuf_tabstop_push(out, 16);
+	printbuf_tabstop_start(out);
 
 	prt_str(out, "Size:");
-	prt_tab(out);
+	prt_printf(out, "\t");
 	prt_units_u64(out, u->capacity << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
 
 	prt_str(out, "Used:");
-	prt_tab(out);
+	prt_printf(out, "\t");
 	prt_units_u64(out, u->used << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
 
 	prt_str(out, "Online reserved:");
-	prt_tab(out);
+	prt_printf(out, "\t");
 	prt_units_u64(out, u->online_reserved << 9);
-	prt_printf(out, "\r\n");
+	prt_newline(out);
+
+	printbuf_tabstop_finish(out);
 
 	prt_newline(out);
 
 	printbuf_tabstops_reset(out);
+	printbuf_tabstop_start(out);
 
-	printbuf_tabstop_push(out, 16);
 	prt_str(out, "Data type");
-	prt_tab(out);
+	prt_printf(out, "\t");
 
-	printbuf_tabstop_push(out, 16);
 	prt_str(out, "Required/total");
-	prt_tab(out);
+	prt_printf(out, "\t");
 
-	printbuf_tabstop_push(out, 14);
 	prt_str(out, "Durability");
-	prt_tab(out);
+	prt_printf(out, "\t");
 
-	printbuf_tabstop_push(out, 14);
 	prt_str(out, "Devices");
 	prt_newline(out);
-
-	printbuf_tabstop_push(out, 14);
 
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
 		persistent_reserved_to_text(out, i, u->persistent_reserved[i]);
@@ -646,6 +650,8 @@ static void fs_usage_v0_to_text(struct printbuf *out,
 	for_each_usage_replica(u, r)
 		if (r->r.data_type > BCH_DATA_user)
 			replicas_usage_to_text(out, &r->r, r->sectors, &dev_names);
+
+	printbuf_tabstop_finish(out);
 
 	free(u);
 }
