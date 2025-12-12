@@ -102,7 +102,8 @@ static void __printbuf_do_indent(struct printbuf *out, unsigned pos)
 		char *n = memscan(p, '\n', len);
 		if (cur_tabstop(out)) {
 			n = min(n, (char *) memscan(p, '\r', len));
-			n = min(n, (char *) memscan(p, '\t', len));
+			if (!out->elastic_tabstops)
+				n = min(n, (char *) memscan(p, '\t', len));
 		}
 
 		pos = n - out->buf;
@@ -133,18 +134,24 @@ static void __printbuf_do_indent(struct printbuf *out, unsigned pos)
 			out->cur_tabstop++;
 			break;
 		case '\t':
-			pad = (int) cur_tabstop(out) - (int) __printbuf_linelen(out, pos) - 1;
-			if (pad > 0) {
-				*n = ' ';
-				printbuf_insert_spaces(out, pos, pad - 1);
-				pos += pad;
+			if (out->elastic_tabstops) {
+				pos++;
+				out->last_field = pos;
+				out->cur_tabstop++;
 			} else {
-				memmove(n, n + 1, out->pos - pos);
-				--out->pos;
-			}
+				pad = (int) cur_tabstop(out) - (int) __printbuf_linelen(out, pos) - 1;
+				if (pad > 0) {
+					*n = ' ';
+					printbuf_insert_spaces(out, pos, pad - 1);
+					pos += pad;
+				} else {
+					memmove(n, n + 1, out->pos - pos);
+					--out->pos;
+				}
 
-			out->last_field = pos;
-			out->cur_tabstop++;
+				out->last_field = pos;
+				out->cur_tabstop++;
+			}
 			break;
 		}
 	}
@@ -554,4 +561,96 @@ void bch2_prt_bitflags_vector(struct printbuf *out,
 		first = false;
 		bch2_prt_printf(out, "%s", list[i]);
 	}
+}
+
+/**
+ * bch2_printbuf_tabstop_align() - Apply elastic tabstops algorithm
+ * @buf: printbuf to align
+ *
+ * This implements the "Elastic Tabstops" algorithm described by Nick Gravgaard.
+ */
+void bch2_printbuf_tabstop_align(struct printbuf *buf)
+{
+	if (!buf->elastic_tabstops || !buf->pos)
+		return;
+
+	#define MAX_ELASTIC_COLUMNS 16
+	unsigned column_widths[MAX_ELASTIC_COLUMNS] = {0};
+	unsigned nr_columns = 0;
+
+	unsigned line_start = 0;
+	unsigned col = 0;
+	unsigned col_start = 0;
+
+	for (unsigned i = 0; i <= buf->pos; i++) {
+		char c = i < buf->pos ? buf->buf[i] : '\n';
+
+		if (c == '\n') {
+			if (col > 0 && col_start < i) {
+				unsigned width = i - col_start;
+				if (col < MAX_ELASTIC_COLUMNS && width > column_widths[col])
+					column_widths[col] = width;
+				if (col + 1 > nr_columns)
+					nr_columns = col + 1;
+			}
+
+			line_start = i + 1;
+			col = 0;
+			col_start = line_start;
+		} else if (c == '\t') {
+			unsigned width = i - col_start;
+			if (col < MAX_ELASTIC_COLUMNS && width > column_widths[col])
+				column_widths[col] = width;
+			if (col + 1 > nr_columns)
+				nr_columns = col + 1;
+
+			col++;
+			col_start = i + 1;
+		}
+	}
+
+	if (nr_columns == 0)
+		return;
+
+	struct printbuf aligned = PRINTBUF;
+
+	line_start = 0;
+	col = 0;
+	col_start = 0;
+
+	for (unsigned i = 0; i <= buf->pos; i++) {
+		char c = i < buf->pos ? buf->buf[i] : '\n';
+
+		if (c == '\n') {
+			if (col_start < i)
+				prt_bytes(&aligned, buf->buf + col_start, i - col_start);
+			prt_char(&aligned, '\n');
+
+			line_start = i + 1;
+			col = 0;
+			col_start = line_start;
+		} else if (c == '\t') {
+			unsigned content_len = i - col_start;
+			prt_bytes(&aligned, buf->buf + col_start, content_len);
+
+			/* Add spacing: pad to column width + 3 spaces separator */
+			if (col < nr_columns && col < MAX_ELASTIC_COLUMNS) {
+				unsigned pad = column_widths[col] > content_len 
+					? column_widths[col] - content_len + 3
+					: 3;
+				prt_chars(&aligned, ' ', pad);
+			}
+
+			col++;
+			col_start = i + 1;
+		}
+	}
+
+	if (buf->heap_allocated)
+		kfree(buf->buf);
+
+	buf->buf = aligned.buf;
+	buf->size = aligned.size;
+	buf->pos = aligned.pos;
+	buf->heap_allocated = aligned.heap_allocated;
 }

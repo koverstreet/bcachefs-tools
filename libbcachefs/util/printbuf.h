@@ -91,6 +91,7 @@ struct printbuf {
 	enum printbuf_si	si_units:1;
 	bool			human_readable_units:1;
 	bool			has_indent_or_tabstops:1;
+	bool			elastic_tabstops:1;
 	u8			nr_tabstops;
 
 	/*
@@ -119,6 +120,7 @@ void bch2_prt_newline(struct printbuf *);
 void bch2_printbuf_strip_trailing_newline(struct printbuf *);
 void bch2_prt_tab(struct printbuf *);
 void bch2_prt_tab_rjust(struct printbuf *);
+void bch2_printbuf_tabstop_align(struct printbuf *);
 
 void bch2_prt_bytes_indented(struct printbuf *, const char *, unsigned);
 void bch2_prt_human_readable_u64(struct printbuf *, u64);
