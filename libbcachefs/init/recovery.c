@@ -169,6 +169,7 @@ void bch2_reconstruct_alloc(struct bch_fs *c)
 	__set_bit_le64(BCH_FSCK_ERR_alloc_key_cached_sectors_wrong, ext->errors_silent);
 	__set_bit_le64(BCH_FSCK_ERR_alloc_key_stripe_wrong, ext->errors_silent);
 	__set_bit_le64(BCH_FSCK_ERR_alloc_key_stripe_redundancy_wrong, ext->errors_silent);
+	__set_bit_le64(BCH_FSCK_ERR_alloc_key_to_missing_lru_entry, ext->errors_silent);
 	__set_bit_le64(BCH_FSCK_ERR_need_discard_key_wrong, ext->errors_silent);
 	__set_bit_le64(BCH_FSCK_ERR_freespace_key_wrong, ext->errors_silent);
 	__set_bit_le64(BCH_FSCK_ERR_bucket_gens_key_wrong, ext->errors_silent);
@@ -865,12 +866,6 @@ use_clean:
 			write_sb = true;
 		}
 
-		if (!test_bit(BCH_FS_error, &c->flags) &&
-		    !bch2_is_zero(ext->errors_silent, sizeof(ext->errors_silent))) {
-			memset(ext->errors_silent, 0, sizeof(ext->errors_silent));
-			write_sb = true;
-		}
-
 		if (c->opts.fsck &&
 		    !test_bit(BCH_FS_error, &c->flags) &&
 		    c->recovery.pass_done == BCH_RECOVERY_PASS_NR - 1 &&
@@ -926,7 +921,7 @@ int bch2_fs_recovery(struct bch_fs *c)
 	if (ret) {
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "error in recovery: %s\n", bch2_err_str(ret));
-		bch2_fs_emergency_read_only2(c, &msg.m);
+		bch2_fs_emergency_read_only(c, &msg.m);
 	}
 	return ret;
 }

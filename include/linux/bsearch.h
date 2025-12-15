@@ -27,6 +27,4 @@ void *__inline_bsearch(const void *key, const void *base, size_t num, size_t siz
 	return NULL;
 }
 
-extern void *bsearch(const void *key, const void *base, size_t num, size_t size, cmp_func_t cmp);
-
 #endif /* _LINUX_BSEARCH_H */

@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.33.1 - Thu Dec 11 2025
+
+### Recovery passes will now be run in the background when possible
+
+When a scheduled recovery pass and all scheduled passes that depend on it can be
+run online, we'll now run it in the background instead of blocking mount.
+
+This means that upgrades to 1.33 from previous versions will now happen in the
+background.
+
+### Bugfixes:
+
+- We now avoid blocking on memory reclaim when allocating btree node buffers; it
+  was discovered that under memory pressure it can take > 10 seconds to satisfiy
+  a single allocation due to compaction. We'll now fall back to vmalloc much
+  quicker.
+
+  This should help with the SRCU lock hold time warnings that have still been
+  popping up.
+
+  There's a new btree node cache statistic to track the number of vmalloc
+  allocations; if we notice that this is now too high we may want to add a
+  background task to allocate physically contiguous buffers to replace the
+  vmalloc allocations (vmalloc memory is a bit slower than physically contiguous
+  memory).
+
+- Fix a "pending incorrectly set" ERO
+
+- Fix checking for device rebalance scan cookies, this will eliminate some
+  spurious "extent with incorrect/missing reconcile opts" errors.
+
+- Snapshot deletion fixes; when multiple leaves were being deleted
+  simultaneously and interior nodes needed to be deleted too, the interior nodes
+  often wouldn't get cleaned up - and in rare situations keys could get moved to
+  the incorrect snapshot node, due to a DFS iteration bug.
+
 ## v1.33.0 - Thu Dec  4 2025
 
 `bcachefs_metadata_version_reconcile` (formerly known as rebalance_v2)

@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "bcachefs.h"
 
+#include "alloc/accounting.h"
 #include "alloc/buckets.h"
 
 #include "btree/bbpos.h"
@@ -213,6 +214,20 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 		s->k.type = KEY_TYPE_deleted;
 		set_bkey_val_u64s(&s->k, 0);
 	}
+
+	/*
+	 * Delete accounting: note that designated initializers will not
+	 * reliably cause a struct to be zeroed if it's a union:
+	 */
+
+	struct disk_accounting_pos acc;
+	memset(&acc, 0, sizeof(acc));
+	acc.type = BCH_DISK_ACCOUNTING_snapshot;
+	acc.snapshot.id = id;
+
+	try(bch2_btree_bit_mod_buffered(trans, BTREE_ID_accounting,
+					disk_accounting_pos_to_bpos(&acc),
+					false));
 
 	return 0;
 }
@@ -479,11 +494,11 @@ static inline u32 bch2_snapshot_nth_parent_skip(struct bch_fs *c, u32 id, u32 n,
 	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
 
 	while (interior_delete_has_id(skip, id))
-		id = __bch2_snapshot_parent(t, id);
+		id = __bch2_snapshot_parent(c, t, id);
 
 	while (n--) {
 		do {
-			id = __bch2_snapshot_parent(t, id);
+			id = __bch2_snapshot_parent(c, t, id);
 		} while (interior_delete_has_id(skip, id));
 	}
 
@@ -650,6 +665,9 @@ static int bch2_get_dead_interior_snapshots(struct btree_trans *trans, struct bk
 
 	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 
+	if (BCH_SNAPSHOT_DELETED(s.v))
+		return 0;
+
 	if (BCH_SNAPSHOT_NO_KEYS(s.v)) {
 		u32 live_child = 0, nr_live_children = 0;
 		for (unsigned i = 0; i < 2; i++) {
@@ -679,7 +697,7 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 	CLASS(btree_trans, trans)(c);
 	CLASS(interior_delete_list, delete)();
 
-	try(for_each_btree_key(trans, iter, BTREE_ID_snapshots, POS_MAX, 0, k,
+	try(for_each_btree_key(trans, iter, BTREE_ID_snapshots, POS_MIN, 0, k,
 			       bch2_get_dead_interior_snapshots(trans, k, &delete)));
 
 	if (delete.nr) {
@@ -720,6 +738,9 @@ int bch2_check_snapshot_needs_deletion(struct btree_trans *trans, struct bkey_s_
 
 	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 	struct bch_fs *c = trans->c;
+
+	if (BCH_SNAPSHOT_DELETED(s.v))
+		return 0;
 
 	if (BCH_SNAPSHOT_NO_KEYS(s.v))
 		*nr_empty_interior += 1;

@@ -660,6 +660,8 @@ Verbose mode
 Read entire journal, not just dirty entries
 .It Fl n , Fl -nr-entries Ns = Ns Ar nr
 Number of journal entries to print, starting from the most recent
+.It Fl s , Fl -seq Ns = Ns Ar seq Ns Oo Ar ..seq Oc
+Journal entry sequence or range to print (e.g., 123, 100..200, 100.., ..200)
 .It Fl t , Fl -transaction-filter Ns = Ns Ar bbpos
 Filter transactions not updating
 .Ar bbpos

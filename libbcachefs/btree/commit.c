@@ -21,6 +21,7 @@
 #include "journal/reclaim.h"
 
 #include "init/error.h"
+#include "init/fs.h"
 
 #include "sb/counters.h"
 
@@ -309,6 +310,19 @@ inline void bch2_btree_insert_key_leaf(struct btree_trans *trans,
 	if (unlikely(!bch2_btree_bset_insert_key(trans, path, b,
 					&path_l(path)->iter, insert)))
 		return;
+
+	if (unlikely(b->c.level)) {
+		CLASS(bch_log_msg, msg)(c);
+		msg.m.suppress = true;
+
+		int ret = bch2_btree_node_check_topology_msg(trans, b, &msg.m);
+		if (ret) {
+			prt_str(&msg.m, "Btree update created topology error:\n");
+			bch2_trans_updates_to_text(&msg.m, trans);
+			bch2_fs_emergency_read_only(c, &msg.m);
+			return;
+		}
+	}
 
 	i->journal_seq = cpu_to_le64(max(journal_seq, le64_to_cpu(i->journal_seq)));
 
@@ -844,8 +858,9 @@ static inline int do_bch2_trans_commit(struct btree_trans *trans,
 		u64s_delta -= i->old_btree_u64s;
 
 		if (!same_leaf_as_next(trans, i)) {
-			try(bch2_foreground_maybe_merge(trans, i->path, i->level,
-							flags, u64s_delta, NULL));
+			if (!trans->has_interior_updates)
+				try(bch2_foreground_maybe_merge(trans, i->path, i->level,
+								flags, u64s_delta, NULL));
 
 			u64s_delta = 0;
 		}
@@ -909,6 +924,10 @@ static int __bch2_trans_commit_error(struct btree_trans *trans, unsigned flags,
 	switch (ret) {
 	case -BCH_ERR_btree_insert_btree_node_full:
 		ret = bch2_btree_split_leaf(trans, i->path, flags);
+		if (!ret && trans->has_interior_updates)
+			return btree_trans_restart(trans,
+					     BCH_ERR_transaction_restart_split_with_interior_updates);
+
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			event_inc_trace(c, trans_restart_btree_node_split, buf, ({
 				prt_printf(&buf, "%s\n", trans->fn);

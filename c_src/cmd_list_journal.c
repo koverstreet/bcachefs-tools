@@ -127,6 +127,27 @@ static int parse_sign(char **str)
 	return 0;
 }
 
+static void parse_seq_range(char *arg, u64 *start, u64 *end)
+{
+	char *dots = strstr(arg, "..");
+	if (dots) {
+		*dots = '\0';
+		char *end_str = dots + 2;
+
+		if (*arg && kstrtoull(arg, 10, start))
+			die("error parsing seq range start: %s", arg);
+		if (*end_str && kstrtoull(end_str, 10, end))
+			die("error parsing seq range end: %s", end_str);
+	} else {
+		if (kstrtoull(arg, 10, start))
+			die("error parsing seq: %s", arg);
+		*end = *start;
+	}
+
+	if (*start > *end)
+		swap(*start, *end);
+}
+
 static bool entry_matches_btree_filter(journal_filter f, struct jset_entry *entry)
 {
 	return f.btree_filter == ~0ULL ||
@@ -464,6 +485,7 @@ static void list_journal_usage(void)
 	     "  -L, --log-only                   Only print transactions containing log messages\n"
 	     "  -o, --offset                     Print offset of each subentry\n"
 	     "  -n, --nr-entries=nr              Number of journal entries to print, starting from the most recent\n"
+	     "  -s, --seq=seq[..seq]             Journal entry sequence or range to print\n"
 	     "  -b, --btree=(+|-)btree1,btree2   Filter keys matching or not updating btree(s)\n"
 	     "  -t, --transaction=(+|-)fn1,fn2   Filter transactions matching or not matching fn(s)\n"
 	     "  -k, --key=(+-1)bbpos1,bbpos2x    Filter transactions updating bbpos\n"
@@ -480,6 +502,7 @@ int cmd_list_journal(int argc, char *argv[])
 		{ "all",		no_argument,		NULL, 'a' },
 		{ "dirty-only",		no_argument,		NULL, 'd' },
 		{ "nr-entries",		required_argument,	NULL, 'n' },
+		{ "seq",		required_argument,	NULL, 's' },
 		{ "blacklisted",	no_argument,		NULL, 'B' },
 		{ "flush-only",		no_argument,		NULL, 'F' },
 		{ "datetime",		no_argument,		NULL, 'D' },
@@ -498,6 +521,7 @@ int cmd_list_journal(int argc, char *argv[])
 	};
 	struct bch_opts opts = bch2_opts_empty();
 	u32 nr_entries = 0;
+	u64 seq_start = 0, seq_end = U64_MAX;
 	journal_filter f = { .btree_filter = ~0ULL, .bkey_val = true };
 	bool contiguous_only = true;
 	char *t;
@@ -514,7 +538,7 @@ int cmd_list_journal(int argc, char *argv[])
 	opt_set(opts, read_journal_only,true);
 	opt_set(opts, read_entire_journal, true);
 
-	while ((opt = getopt_long(argc, argv, "adn:BFMDHlLob:t:k:V:vh",
+	while ((opt = getopt_long(argc, argv, "adn:s:BFDHlLob:t:k:V:vh",
 				  longopts, NULL)) != -1)
 		switch (opt) {
 		case 'a':
@@ -526,6 +550,11 @@ int cmd_list_journal(int argc, char *argv[])
 		case 'n':
 			if (kstrtouint(optarg, 10, &nr_entries))
 				die("error parsing nr_entries");
+			opt_set(opts, read_entire_journal, true);
+			break;
+		case 's':
+			parse_seq_range(optarg, &seq_start, &seq_end);
+			contiguous_only = false;
 			opt_set(opts, read_entire_journal, true);
 			break;
 		case 'B':
@@ -633,6 +662,12 @@ int cmd_list_journal(int argc, char *argv[])
 
 		if (le64_to_cpu(p->j.seq) < min_seq_to_print)
 			continue;
+
+		if (le64_to_cpu(p->j.seq) < seq_start)
+			continue;
+
+		if (le64_to_cpu(p->j.seq) > seq_end)
+			break;
 
 		if (!seq)
 			seq = le64_to_cpu(p->j.seq);

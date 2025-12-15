@@ -930,7 +930,7 @@ int copy_fs(struct bch_fs *c, struct copy_fs_state *s,
 	prt_newline(&buf);
 
 	if (s->total_wrote) {
-		prt_str_indented(&buf, "Wrote:\t");
+		prt_str(&buf, "Wrote:\t");
 		prt_human_readable_u64(&buf, s->total_wrote);
 		prt_newline(&buf);
 	}

@@ -39,7 +39,9 @@
 #include <linux/random.h>
 #include <linux/seq_file.h>
 
+#ifdef CONFIG_DEBUG_FS
 static struct dentry *bch_debug;
+#endif
 
 static bool bch2_btree_verify_replica(struct bch_fs *c, struct btree *b,
 				      struct extent_ptr_decoded pick)
@@ -87,13 +89,13 @@ static bool bch2_btree_verify_replica(struct bch_fs *c, struct btree *b,
 		struct bset *i;
 		unsigned j;
 
-		console_lock();
+		CLASS(printbuf, buf)();
 
-		printk(KERN_ERR "*** in memory:\n");
-		bch2_dump_bset(c, b, inmemory, 0);
+		prt_str(&buf, "*** in memory:\n");
+		bch2_bset_to_text(&buf, c, b, inmemory, 0);
 
-		printk(KERN_ERR "*** read back in:\n");
-		bch2_dump_bset(c, v, sorted, 0);
+		prt_str(&buf, "*** read back in:\n");
+		bch2_bset_to_text(&buf, c, b, sorted, 0);
 
 		while (offset < v->written) {
 			if (!offset) {
@@ -109,8 +111,8 @@ static bool bch2_btree_verify_replica(struct bch_fs *c, struct btree *b,
 					c->block_bits;
 			}
 
-			printk(KERN_ERR "*** on disk block %u:\n", offset);
-			bch2_dump_bset(c, b, i, offset);
+			prt_printf(&buf, "*** on disk block %u:\n", offset);
+			bch2_bset_to_text(&buf, c, b, i, offset);
 
 			offset += sectors;
 		}
@@ -119,8 +121,8 @@ static bool bch2_btree_verify_replica(struct bch_fs *c, struct btree *b,
 			if (inmemory->_data[j] != sorted->_data[j])
 				break;
 
-		console_unlock();
-		bch_err(c, "verify failed at key %u", j);
+		prt_printf(&buf, "verify failed at key %u\n", j);
+		bch2_print_string_as_lines(KERN_ERR, buf.buf);
 
 		failed = true;
 	}
@@ -799,7 +801,7 @@ static ssize_t btree_transaction_stats_read(struct file *file, char __user *buf,
 			prt_printf(&i->buf, "Maximum allocated btree paths (%u):\n", s->nr_max_paths);
 
 			scoped_guard(printbuf_indent, &i->buf)
-				prt_str_indented(&i->buf, s->max_paths_text);
+				prt_str(&i->buf, s->max_paths_text);
 		}
 
 		prt_newline(&i->buf);
@@ -1021,8 +1023,6 @@ void bch2_fs_debug_init(struct bch_fs *c)
 	}
 }
 
-#endif
-
 void bch2_debug_exit(void)
 {
 	if (!IS_ERR_OR_NULL(bch_debug))
@@ -1034,3 +1034,5 @@ int __init bch2_debug_init(void)
 	bch_debug = debugfs_create_dir("bcachefs", NULL);
 	return 0;
 }
+
+#endif

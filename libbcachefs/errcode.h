@@ -187,6 +187,7 @@
 	x(BCH_ERR_transaction_restart,	transaction_restart_key_cache_raced)	\
 	x(BCH_ERR_transaction_restart,	transaction_restart_lock_root_race)	\
 	x(BCH_ERR_transaction_restart,	transaction_restart_split_race)		\
+	x(BCH_ERR_transaction_restart,	transaction_restart_split_with_interior_updates)\
 	x(BCH_ERR_transaction_restart,	transaction_restart_write_buffer_flush)	\
 	x(BCH_ERR_transaction_restart,	transaction_restart_nested)		\
 	x(BCH_ERR_transaction_restart,	transaction_restart_commit)		\
@@ -396,7 +397,6 @@
 	x(BCH_ERR_data_read,		data_read_key_overwritten)		\
 	x(0,				rbio_narrow_crcs_fail)			\
 	x(0,				nopromote)				\
-	x(BCH_ERR_nopromote,		nopromote_may_not)			\
 	x(BCH_ERR_nopromote,		nopromote_no_rewrites)			\
 	x(BCH_ERR_nopromote,		nopromote_already_promoted)		\
 	x(BCH_ERR_nopromote,		nopromote_unwritten)			\

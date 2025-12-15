@@ -693,12 +693,20 @@ static int check_dev_reconcile_scan_cookie(struct btree_trans *trans, struct bke
 	struct bch_fs *c = trans->c;
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 
-	bkey_for_each_ptr(ptrs, ptr)
+	bkey_for_each_ptr(ptrs, ptr) {
+		if (ptr->dev == BCH_SB_MEMBER_INVALID)
+			continue;
+
 		if (v && test_bit(ptr->dev, v->d))
 			return 1;
+	}
 
 	bkey_for_each_ptr(ptrs, ptr) {
-		int ret = check_reconcile_scan_cookie(trans, ptr->dev + 1, NULL);
+		if (ptr->dev == BCH_SB_MEMBER_INVALID)
+			continue;
+
+		int ret = check_reconcile_scan_cookie(trans,
+				RECONCILE_SCAN_COOKIE_device + ptr->dev, NULL);
 		if (ret < 0)
 			return ret;
 		if (ret) {
@@ -1184,6 +1192,10 @@ static struct bkey_s_c next_reconcile_entry(struct btree_trans *trans,
 
 		int ret = for_each_btree_key(trans, iter, btree, *work_pos,
 				   BTREE_ITER_all_snapshots|BTREE_ITER_prefetch, k, ({
+			/* There might be leftover scan cookies from rebalance, pre reconcile upgrade: */
+			if (k.k->type != KEY_TYPE_set)
+				continue;
+
 			BUG_ON(bkey_bytes(k.k) > sizeof(buf->data[0]));
 
 			/* we previously used darray_make_room */
@@ -2189,10 +2201,15 @@ static int check_reconcile_work_one(struct btree_trans *trans,
 	bch2_btree_iter_set_pos(rb_h,		*cur_pos);
 	bch2_btree_iter_set_pos(rb_p,		*cur_pos);
 
-	struct bkey_s_c data_k = bkey_try(bch2_btree_iter_peek(data_iter));
-	bkey_try(bch2_btree_iter_peek(rb_w));
+	struct bkey_s_c data_k	= bkey_try(bch2_btree_iter_peek(data_iter));
+	struct bkey_s_c w_k	= bkey_try(bch2_btree_iter_peek(rb_w));
 	bkey_try(bch2_btree_iter_peek(rb_h));
 	bkey_try(bch2_btree_iter_peek(rb_p));
+
+	if (w_k.k && w_k.k->type == KEY_TYPE_cookie) {
+		try(bch2_btree_delete_at(trans, rb_w, 0));
+		try(bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+	}
 
 	struct bpos rb_work_pos = bpos_min(bpos_min(rb_w->pos, rb_h->pos), rb_p->pos);
 
