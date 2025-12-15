@@ -190,6 +190,18 @@ static void scrub_usage(void)
 	exit(EXIT_SUCCESS);
 }
 
+static size_t count_newlines(const char *str)
+{
+	size_t ret = 0;
+	const char *n;
+	while ((n = strchr(str, '\n'))) {
+		str = n + 1;
+		ret++;
+	}
+
+	return ret;
+}
+
 int cmd_scrub(int argc, char *argv[])
 {
 	static const struct option longopts[] = {
@@ -262,24 +274,12 @@ int cmd_scrub(int argc, char *argv[])
 	bool first = true;
 
 	struct printbuf buf = PRINTBUF;
-	printbuf_tabstop_push(&buf, 16);
-	printbuf_tabstop_push(&buf, 12);
-	printbuf_tabstop_push(&buf, 12);
-	printbuf_tabstop_push(&buf, 12);
-	printbuf_tabstop_push(&buf, 12);
-	printbuf_tabstop_push(&buf, 6);
-
-	prt_printf(&buf, "device\t");
-	prt_printf(&buf, "checked\r");
-	prt_printf(&buf, "corrected\r");
-	prt_printf(&buf, "uncorrected\r");
-	prt_printf(&buf, "total\r");
-	puts(buf.buf);
+	printbuf_tabstop_start(&buf);
 
 	while (1) {
 		bool done = true;
-
 		printbuf_reset_keep_tabstops(&buf);
+		prt_printf(&buf, "device\tchecked\tcorrected\tuncorrected\ttotal\tprogress\tstatus\n");
 
 		clock_gettime(CLOCK_MONOTONIC, &now);
 		u64 ns_since_last = 0;
@@ -327,24 +327,22 @@ int cmd_scrub(int argc, char *argv[])
 			prt_printf(&buf, "%s\t", dev->name ?: "(offline)");
 
 			prt_human_readable_u64(&buf, dev->done << 9);
-			prt_tab_rjust(&buf);
+			prt_printf(&buf, "\t");
 
 			prt_human_readable_u64(&buf, dev->corrected << 9);
-			prt_tab_rjust(&buf);
+			prt_printf(&buf, "\t");
 
 			prt_human_readable_u64(&buf, dev->uncorrected << 9);
-			prt_tab_rjust(&buf);
+			prt_printf(&buf, "\t");
 
 			prt_human_readable_u64(&buf, dev->total << 9);
-			prt_tab_rjust(&buf);
+			prt_printf(&buf, "\t");
 
 			prt_printf(&buf, "%llu%%",
 				   dev->total
 				   ? dev->done * 100 / dev->total
 				   : 0);
-			prt_tab_rjust(&buf);
-
-			prt_str(&buf, "  ");
+			prt_printf(&buf, "\t");
 
 			if (dev->progress_fd >= 0) {
 				prt_human_readable_u64(&buf, rate);
@@ -359,6 +357,7 @@ int cmd_scrub(int argc, char *argv[])
 				prt_newline(&buf);
 		}
 
+		printbuf_tabstop_finish(&buf);
 		fputs(buf.buf, stdout);
 		fflush(stdout);
 
@@ -368,8 +367,9 @@ int cmd_scrub(int argc, char *argv[])
 		last = now;
 		first = false;
 		sleep(1);
-
-		for (unsigned i = 0; i < scrub_devs.nr; i++) {
+		
+		size_t lines = count_newlines(buf.buf) + 1;
+		for (size_t i = 0; i < lines; i++) {
 			if (i)
 				printf("\033[1A");
 			printf("\33[2K\r");
@@ -431,14 +431,10 @@ static bool reconcile_status(struct printbuf *out,
 	}
 	free(a);
 
-	if (!out->nr_tabstops) {
-		printbuf_tabstop_push(out, 32);
-		printbuf_tabstop_push(out, 12);
-		printbuf_tabstop_push(out, 12);
-	}
+	printbuf_tabstop_start(out);
 
 	prt_printf(out, "Scan pending:\t%u\n", scan_pending);
-	prt_printf(out, "\tdata\rmetadata\r\n");
+	prt_printf(out, "\tdata\tmetadata\n");
 
 	bool have_pending = scan_pending;
 
@@ -446,27 +442,17 @@ static bool reconcile_status(struct printbuf *out,
 		if (types & BIT(i)) {
 			prt_printf(out, "  %s:\t", __bch2_reconcile_accounting_types[i]);
 			prt_human_readable_u64(out, v[i][0] << 9);
-			prt_tab_rjust(out);
+			prt_printf(out, "\t");
 			prt_human_readable_u64(out, v[i][1] << 9);
-			prt_tab_rjust(out);
+			prt_printf(out, "\t");
 			prt_newline(out);
 			have_pending |= v[i][0] != 0;
 			have_pending |= v[i][1] != 0;
 		}
 
+	printbuf_tabstop_finish(out);
+
 	return have_pending;
-}
-
-static size_t count_newlines(const char *str)
-{
-	size_t ret = 0;
-	const char *n;
-	while ((n = strchr(str, '\n'))) {
-		str = n + 1;
-		ret++;
-	}
-
-	return ret;
 }
 
 int cmd_reconcile_wait(int argc, char *argv[])
