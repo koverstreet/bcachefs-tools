@@ -841,38 +841,113 @@ unsigned bch2_dev_durability(struct bch_fs *c, unsigned dev)
 		: 0;
 }
 
-static inline unsigned __extent_ptr_durability(struct bch_dev *ca, struct extent_ptr_decoded *p)
+static unsigned bch2_dev_durability_desired(struct bch_fs *c, unsigned dev)
+{
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+
+	return ca ? ca->mi.durability : 0;
+}
+
+static unsigned __bch2_dev_durability(struct bch_fs *c, unsigned dev, bool desired)
+{
+	return desired
+		? bch2_dev_durability_desired(c, dev)
+		: bch2_dev_durability(c, dev);
+}
+
+struct stripe_dev_durability {
+	u8	durability;
+	bool	online;
+};
+
+static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
+				  bool desired, struct bkey_durability *ret)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx), 0);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+	if (k.k->type != KEY_TYPE_stripe)
+		return 0;
+
+	struct bkey_s_c_stripe s = bkey_s_c_to_stripe(k);
+	unsigned nr_data = s.v->nr_blocks - s.v->nr_redundant;
+
+	/*
+	 * Sort the stripe's devices by durability so we can sum the least
+	 * durable few. nr_blocks is bounded by the stripe width; the
+	 * preallocated buffer covers the common case, growing (before taking
+	 * rcu, since it can't allocate under it) only for unusually wide stripes.
+	 */
+	DARRAY_PREALLOCATED(struct stripe_dev_durability, BCH_BKEY_PTRS_MAX) devs;
+	darray_init(&devs);
+	int ret2 = darray_make_room(&devs, s.v->nr_blocks);
+	if (ret2)
+		goto out;
+
+	unsigned online_count = 0;
+
+	scoped_guard(rcu)
+		for (unsigned i = 0; i < s.v->nr_blocks; i++) {
+			unsigned dev = s.v->ptrs[i].dev;
+			struct stripe_dev_durability d = {
+				.durability = desired
+					? bch2_dev_durability_desired(c, dev)
+					: bch2_dev_durability(c, dev),
+				.online = test_bit(dev, c->devs_online.d),
+			};
+			online_count += d.online;
+
+			unsigned pos = devs.nr;
+			while (pos && d.durability < devs.data[pos - 1].durability) {
+				devs.data[pos] = devs.data[pos - 1];
+				--pos;
+			}
+			devs.data[pos] = d;
+			devs.nr++;
+		}
+
+	/*
+	 * Durability is the number of device failures the data survives, plus
+	 * one. The data survives losing nr_redundant of nr_blocks devices, so
+	 * total durability is the sum of the nr_redundant + 1 least durable
+	 * devices. Online durability is the same over only online devices: the
+	 * data is readable now if at least nr_data are online, so the online
+	 * redundancy is online_count - nr_data, and online durability is the sum
+	 * of the (online_count - nr_data + 1) least durable online devices - zero
+	 * when fewer than nr_data are online.
+	 */
+	unsigned total_keep = s.v->nr_redundant + 1;
+	int online_keep = (int) online_count - (int) nr_data + 1;
+	unsigned online_taken = 0;
+
+	for (unsigned i = 0; i < devs.nr; i++) {
+		if (i < total_keep)
+			ret->total += devs.data[i].durability;
+		if (online_keep > 0 && devs.data[i].online &&
+		    online_taken < (unsigned) online_keep) {
+			ret->online += devs.data[i].durability;
+			online_taken++;
+		}
+	}
+out:
+	darray_exit(&devs);
+	return ret2;
+}
+
+int __bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_decoded *p, bool desired)
 {
 	if (p->ptr.cached)
 		return 0;
 
-	return p->has_ec
-		? p->ec.redundancy + 1
-		: ca->mi.durability;
-}
+	if (likely(!p->has_ec)) {
+		guard(rcu)();
+		return __bch2_dev_durability(trans->c, p->ptr.dev, desired);
+	}
 
-int bch2_extent_ptr_desired_durability(struct btree_trans *trans, struct extent_ptr_decoded *p)
-{
-	guard(rcu)();
-	struct bch_dev *ca = bch2_dev_rcu_noerror(trans->c, p->ptr.dev);
-
-	return ca ? __extent_ptr_durability(ca, p) : 0;
-}
-
-static unsigned bch2_extent_ptr_durability_rcu(struct bch_fs *c, struct extent_ptr_decoded *p)
-{
-	struct bch_dev *ca = bch2_dev_rcu_noerror(c, p->ptr.dev);
-
-	if (!ca || ca->mi.state == BCH_MEMBER_STATE_evacuating)
-		return 0;
-
-	return __extent_ptr_durability(ca, p);
-}
-
-int bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_decoded *p)
-{
-	guard(rcu)();
-	return bch2_extent_ptr_durability_rcu(trans->c, p);
+	struct bkey_durability d = {};
+	int ret = bch2_stripe_durability(trans, p->ec.idx, desired, &d);
+	return ret ?: (int) d.total;
 }
 
 int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bkey_durability *ret)
@@ -885,16 +960,26 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 	*ret = (struct bkey_durability) {};
 
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-		if (p.ptr.dev == BCH_SB_MEMBER_INVALID)
+		if (p.ptr.cached)
 			continue;
 
-		int d = bch2_extent_ptr_durability(trans, &p);
-		if (d < 0)
-			return d;
+		if (p.has_ec) {
+			/*
+			 * An erasure coded pointer - including a
+			 * BCH_SB_MEMBER_INVALID placeholder for data not yet moved -
+			 * gets its durability, online vs total, from the stripe's
+			 * devices rather than its own (placeholder) device.
+			 */
+			int ret2 = bch2_stripe_durability(trans, p.ec.idx, false, ret);
+			if (ret2 < 0)
+				return ret2;
+		} else if (p.ptr.dev != BCH_SB_MEMBER_INVALID) {
+			unsigned d = bch2_dev_durability(c, p.ptr.dev);
 
-		if (bch2_dev_idx_is_online(c, p.ptr.dev))
-			ret->online += d;
-		ret->total += d;
+			if (bch2_dev_idx_is_online(c, p.ptr.dev))
+				ret->online += d;
+			ret->total += d;
+		}
 	}
 	return 0;
 }
@@ -904,21 +989,18 @@ struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *c, struct bkey_s
 	BUG_ON(!bkey_is_btree_ptr(k.k));
 
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
 	struct bkey_durability ret = {};
 
 	guard(rcu)();
-	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-		if (p.ptr.dev == BCH_SB_MEMBER_INVALID)
-			continue;
+	bkey_for_each_ptr(ptrs, ptr)
+		if (!ptr->cached &&
+		    ptr->dev != BCH_SB_MEMBER_INVALID) {
+			unsigned d = bch2_dev_durability(c, ptr->dev);
 
-		unsigned d = bch2_extent_ptr_durability_rcu(c, &p);
-
-		if (test_bit(p.ptr.dev, c->devs_online.d))
-			ret.online += d;
-		ret.total += d;
-	}
+			if (test_bit(ptr->dev, c->devs_online.d))
+				ret.online += d;
+			ret.total += d;
+		}
 	return ret;
 }
 
@@ -930,13 +1012,13 @@ bool bch2_bkey_can_read(const struct bch_fs *c, struct bkey_s_c k)
 
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry)
 		if (!p.ptr.cached &&
-		    (p.ptr.dev != BCH_SB_MEMBER_INVALID ||
-		     p.has_ec))
+		    (p.ptr.dev != BCH_SB_MEMBER_INVALID || p.has_ec))
 			return true;
 
 	return false;
 }
 
+/* desired durability, no btree lookups for stripes: */
 static unsigned bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
@@ -946,8 +1028,15 @@ static unsigned bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k)
 
 	guard(rcu)();
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry)
-		if (p.ptr.dev < c->sb.nr_devices && c->devs[p.ptr.dev])
-			durability += bch2_extent_ptr_durability_rcu(c, &p);
+		if (p.ptr.cached) {
+			/* nothing */
+		} else if (p.has_ec) {
+			durability += p.ec.redundancy + 1;
+		} else {
+			struct bch_dev *ca = bch2_dev_rcu_noerror(c, p.ptr.dev);
+			durability += ca ? ca->mi.durability : 1;
+		}
+
 	return durability;
 }
 

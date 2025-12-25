@@ -489,9 +489,22 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 				bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
 					if (p.ptr.dev == BCH_SB_MEMBER_INVALID ||
 					    !test_bit(p.ptr.dev, c->devs_online.d)) {
-						if (p.has_ec && durability.total - p.ec.redundancy >= r->data_replicas) {
-							data_opts->ptrs_kill_ec |= ptr_bit;
-							durability.total -= p.ec.redundancy;
+						if (p.has_ec) {
+							/*
+							 * Durability lost by dropping the stripe
+							 * pointer: the pointer keeps its own device's
+							 * durability but loses the stripe's. Must match
+							 * bch2_bkey_drop_extra_ec_durability().
+							 */
+							int d = bch2_extent_ptr_durability(trans, &p);
+							if (d < 0)
+								return d;
+							d -= bch2_dev_durability(c, p.ptr.dev);
+
+							if (durability.total - d >= r->data_replicas) {
+								data_opts->ptrs_kill_ec |= ptr_bit;
+								durability.total -= d;
+							}
 						}
 					}
 
@@ -521,9 +534,16 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 			/* Stripe ec? */
 			ptr_bit = 1;
 			bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-				if (p.has_ec && durability.online - p.ec.redundancy >= r->data_replicas) {
-					data_opts->ptrs_kill_ec |= ptr_bit;
-					durability.online -= p.ec.redundancy;
+				if (p.has_ec) {
+					int d = bch2_extent_ptr_durability(trans, &p);
+					if (d < 0)
+						return d;
+					d -= bch2_dev_durability(c, p.ptr.dev);
+
+					if (durability.online - d >= r->data_replicas) {
+						data_opts->ptrs_kill_ec |= ptr_bit;
+						durability.online -= d;
+					}
 				}
 
 				ptr_bit <<= 1;
