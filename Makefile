@@ -1,31 +1,13 @@
-ifneq ($(wildcard .git),)
-VERSION=$(shell git -c safe.directory=$$PWD -c core.abbrev=12 describe)
-else ifneq ($(wildcard .version),)
-VERSION=$(shell cat .version)
-else
-VERSION=$(shell cargo metadata --format-version 1 | jq -r '.packages[] | select(.name | test("bcachefs-tools")) | .version')
-endif
+include Makefile.common
 
-PREFIX?=/usr/local
 LIBEXECDIR?=$(PREFIX)/libexec
-DKMSDIR?=$(PREFIX)/src/bcachefs-$(VERSION)
 PKG_CONFIG?=pkg-config
-INSTALL=install
 LN=ln
 .DEFAULT_GOAL=all
 
-ifeq ("$(origin V)", "command line")
-  BUILD_VERBOSE = $(V)
-endif
-ifndef BUILD_VERBOSE
-  BUILD_VERBOSE = 0
-endif
-
 ifeq ($(BUILD_VERBOSE),1)
-  Q =
   CARGO_CLEAN_ARGS = --verbose
 else
-  Q = @
   CARGO_CLEAN_ARGS = --quiet
 endif
 
@@ -157,17 +139,10 @@ libbcachefs.a: $(OBJS)
 	@echo "    [AR]     $@"
 	$(Q)$(AR) -rc $@ $+
 
-.PHONY: force
-
 .version: force
 	$(Q)echo "$(VERSION)" > .version.new
 	$(Q)cmp -s .version.new .version || mv .version.new .version
 
-VERSION_H=$(shell echo "#define bcachefs_version \\\"$(VERSION)\\\"")
-
-version.h: force
-	$(Q)echo "$(VERSION_H)" > version.h.new
-	$(Q)cmp -s version.h.new version.h || mv version.h.new version.h
 
 .PHONY: generate_version
 generate_version: .version version.h
@@ -175,11 +150,6 @@ generate_version: .version version.h
 # Rebuild the 'version' command any time the version string changes
 c_src/cmd_version.o : version.h
 c_src/cmd_fusemount.o: version.h
-
-.PHONY: dkms/dkms.conf
-dkms/dkms.conf: dkms/dkms.conf.in version.h
-	@echo "    [SED]    $@"
-	$(Q)sed "s|@PACKAGE_VERSION@|$(VERSION)|g" dkms/dkms.conf.in > dkms/dkms.conf
 
 .PHONY: initramfs/hook
 initramfs/hook: initramfs/hook.in
@@ -204,22 +174,16 @@ ifdef BCACHEFS_FUSE
 endif
 
 .PHONY: install_dkms
-install_dkms: dkms/dkms.conf dkms/module-version.c
-	$(INSTALL) -m0644 -D dkms/Makefile		-t $(DESTDIR)$(DKMSDIR)
-	$(INSTALL) -m0644 -D dkms/dkms.conf		-t $(DESTDIR)$(DKMSDIR)
-	$(INSTALL) -m0644 -D libbcachefs/Makefile	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
-	(cd libbcachefs; find -name '*.[ch]' -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
-	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
-	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
-	sed -i "s|^#define TRACE_INCLUDE_PATH \\.\\./\\.\\./fs/bcachefs$$|#define TRACE_INCLUDE_PATH .|" \
-	  $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/debug/trace.h
+install_dkms: version.h
+	$(MAKE) -f Makefile.dkms install
 
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
-	$(Q)$(RM) libbcachefs.a c_src/libbcachefs.a .version dkms/dkms.conf *.tar.xz $(OBJS) $(DEPS) $(DOCGENERATED)
+	$(Q)$(RM) libbcachefs.a c_src/libbcachefs.a .version *.tar.xz $(OBJS) $(DEPS) $(DOCGENERATED)
 	$(Q)$(CARGO_CLEAN)
 	$(Q)$(RM) -f $(built_scripts)
+	$(Q)$(MAKE) -f Makefile.dkms clean
 
 .PHONY: deb
 deb: all
