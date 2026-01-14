@@ -6,6 +6,7 @@ bcachefs.5
 *.d
 *.a
 version.h
+version.h.new
 tags
 TAGS
 cscope*
