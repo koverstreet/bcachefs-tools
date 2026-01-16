@@ -72,6 +72,7 @@
 #define PF_MCE_EARLY    0x08000000      /* Early kill for mce process policy */
 #define PF_MUTEX_TESTER	0x20000000	/* Thread belongs to the rt mutex tester */
 #define PF_FREEZER_SKIP	0x40000000	/* Freezer should not count it as freezable */
+#define PF_MEMALLOC_PIN		0x10000000
 
 struct task_struct {
 	pthread_t		thread;
