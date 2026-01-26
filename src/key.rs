@@ -160,6 +160,7 @@ impl Passphrase {
             .arg("--icon=drive-harddisk")
             .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
             .arg(format!("--keyname={}", uuid.as_hyphenated()))
+            .arg("--timeout=0")
             .arg("--accept-cached")
             .arg("-n")
             .arg("Enter passphrase: ")
