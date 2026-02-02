@@ -1,5 +1,6 @@
 #include <assert.h>
 #include <ctype.h>
+#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
@@ -661,6 +662,106 @@ got_model:
 	} else {
 		return strdup("(image file)");
 	}
+}
+
+/* Device-mapper and multipath helpers */
+
+bool is_dm_device(dev_t dev)
+{
+	char *sysfs_dm = mprintf("/sys/dev/block/%u:%u/dm", major(dev), minor(dev));
+	bool ret = access(sysfs_dm, F_OK) == 0;
+	free(sysfs_dm);
+	return ret;
+}
+
+char *get_dm_uuid(dev_t dev)
+{
+	char *uuid_path = mprintf("/sys/dev/block/%u:%u/dm/uuid", major(dev), minor(dev));
+	char *uuid = NULL;
+	if (access(uuid_path, R_OK) == 0)
+		uuid = read_file_str(AT_FDCWD, uuid_path);
+	free(uuid_path);
+	return uuid;
+}
+
+char *get_dm_name(dev_t dev)
+{
+	char *name_path = mprintf("/sys/dev/block/%u:%u/dm/name", major(dev), minor(dev));
+	char *name = NULL;
+	if (access(name_path, R_OK) == 0)
+		name = read_file_str(AT_FDCWD, name_path);
+	free(name_path);
+	return name;
+}
+
+bool is_multipath_device(dev_t dev)
+{
+	char *uuid = get_dm_uuid(dev);
+	if (!uuid)
+		return false;
+
+	/* Multipath devices have DM UUID starting with "mpath-" */
+	bool ret = strncmp(uuid, "mpath-", 6) == 0;
+	free(uuid);
+	return ret;
+}
+
+char *dm_device_lookup_mapper_path(dev_t dev)
+{
+	if (!is_dm_device(dev))
+		return NULL;
+
+	char *name = get_dm_name(dev);
+	if (!name)
+		return NULL;
+
+	char *mapper_path = mprintf("/dev/mapper/%s", name);
+	free(name);
+
+	/* Only return /dev/mapper path if it exists */
+	if (access(mapper_path, F_OK) == 0)
+		return mapper_path;
+
+	free(mapper_path);
+	return NULL;
+}
+
+bool has_multipath_holder(const char *path)
+{
+	struct stat st;
+
+	if (stat(path, &st) || !S_ISBLK(st.st_mode))
+		return false;
+
+	char *holders_dir = mprintf("/sys/dev/block/%u:%u/holders",
+				    major(st.st_rdev), minor(st.st_rdev));
+	DIR *dir = opendir(holders_dir);
+	free(holders_dir);
+	if (!dir)
+		return false;
+
+	struct dirent *d;
+	while ((d = readdir(dir))) {
+		if (strncmp(d->d_name, "dm-", 3) != 0)
+			continue;
+
+		char *uuid_path = mprintf("/sys/block/%s/dm/uuid", d->d_name);
+		if (access(uuid_path, R_OK) == 0) {
+			char *uuid = read_file_str(AT_FDCWD, uuid_path);
+			free(uuid_path);
+			if (uuid && strncmp(uuid, "mpath-", 6) == 0) {
+				free(uuid);
+				closedir(dir);
+				return true;
+			}
+			free(uuid);
+		} else {
+			free(uuid_path);
+		}
+	}
+
+	closedir(dir);
+	return false;
 }
 
 static int kstrtoull_symbolic(const char *s, unsigned int base, unsigned long long *res)

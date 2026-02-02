@@ -946,7 +946,21 @@ dev_names bchu_fs_get_devices(struct bchfs_handle fs)
 				       sysfs_block_buf, sizeof(sysfs_block_buf));
 		if (r > 0) {
 			sysfs_block_buf[r] = '\0';
-			n.dev = strdup(basename(sysfs_block_buf));
+			char *devname = basename(sysfs_block_buf);
+			char *dev_path = mprintf("/dev/%s", devname);
+			struct stat st;
+
+			if (!stat(dev_path, &st) && S_ISBLK(st.st_mode)) {
+				char *mapper_path = dm_device_lookup_mapper_path(st.st_rdev);
+				if (mapper_path) {
+					free(dev_path);
+					n.dev = mapper_path;
+				} else {
+					n.dev = dev_path;
+				}
+			} else {
+				n.dev = dev_path;
+			}
 		} else {
 			n.dev = mprintf("(offline dev %u)", n.idx);
 		}

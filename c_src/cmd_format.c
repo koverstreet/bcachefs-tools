@@ -289,6 +289,15 @@ int cmd_format(int argc, char *argv[])
 	}
 
 	darray_for_each(devices, dev) {
+		if (has_multipath_holder(dev->path)) {
+			fprintf(stderr,
+				"Warning: %s appears to be a multipath component device.\n"
+				"Consider using the multipath device (/dev/mapper/mpath*) instead.\n",
+				dev->path);
+			if (!force)
+				die("Use -f/--force to format anyway");
+		}
+
 		int ret = open_for_format(dev, 0, force);
 		if (ret)
 			die("Error opening %s: %s", dev->path, strerror(-ret));

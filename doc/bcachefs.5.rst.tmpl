@@ -51,6 +51,13 @@ overridden on files or directories, but there are some:
 
  *durability*
 
+Multipath devices
+-----------------
+When using device-mapper multipath, use the multipath device (e.g.
+``/dev/mapper/mpathX``) rather than component paths (e.g. ``/dev/sdX``). The
+tools skip multipath component devices during scans, and formatting a component
+device will warn and require ``-f/--force`` to proceed.
+
 Device labels, targets
 ----------------------
 
