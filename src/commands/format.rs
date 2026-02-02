@@ -17,7 +17,7 @@
 
 use std::ffi::{CStr, CString, c_char};
 use std::io;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
 use anyhow::{anyhow, bail, Result};
@@ -26,6 +26,7 @@ use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 
 use crate::commands::opts::{bch_opt_lookup, opts_usage_str, parse_opt_val};
+use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use bch_bindgen::printbuf::Printbuf;
@@ -482,7 +483,17 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
         .collect();
 
     // Open all devices for format
-    for c_dev in &mut c_devices {
+    for (dev_cfg, c_dev) in cfg.devices.iter().zip(&mut c_devices) {
+        if let Some(mpath_dev) = find_multipath_holder(Path::new(&dev_cfg.path)) {
+            warn_multipath_component(Path::new(&dev_cfg.path), &mpath_dev);
+            if !cfg.force {
+                // Locking applies to the selected device path only; it is not
+                // coordinated across dm-mpath maps and component devices.
+                // Selecting a component path may cause unintended data loss.
+                bail!("Use -f/--force to format anyway");
+            }
+        }
+
         let ret = unsafe { c::open_for_format(c_dev, 0, cfg.force) };
         if ret != 0 {
             let path = unsafe { CStr::from_ptr(c_dev.path) }.to_string_lossy();
