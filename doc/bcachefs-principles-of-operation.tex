@@ -759,7 +759,15 @@ some of the filesystem wide options can be set via \texttt{bcachefs set-fs-optio
 
 \subsection{File and directory options}
 
-<say something here about how attrs must be set via bcachefs attr command>
+A subset of filesystem options can be set on individual files and directories,
+overriding the filesystem-wide defaults. The per-inode options are:
+\texttt{data\_checksum}, \texttt{compression}, \texttt{background\_compression},
+\texttt{data\_replicas}, \texttt{foreground\_target},
+\texttt{background\_target}, \texttt{promote\_target}, \texttt{metadata\_target},
+\texttt{erasure\_code}, \texttt{nocow}, and \texttt{casefold}. Per-inode options
+are stored with a bias of +1, so that zero means ``not set, use parent or
+filesystem default.'' A separate bitmask (\texttt{bi\_fields\_set}) tracks which
+options were explicitly set versus inherited.
 
 Options set on inodes (files and directories) are automatically inherited by
 their descendants, and inodes also record whether a given option was explicitly
