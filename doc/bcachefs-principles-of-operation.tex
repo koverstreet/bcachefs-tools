@@ -100,6 +100,24 @@ able to support cached data:
 		zoned device support is not yet implemented.
 \end{itemize}
 
+\subsection{Backpointers}
+
+Every data pointer on disk - whether in an extent, a btree node, or an erasure
+code stripe - has a corresponding backpointer: a reverse reference from the
+physical location (device, bucket, offset within bucket) back to the logical
+btree entry that owns it. Backpointers are stored in a dedicated write-buffered
+btree (ID 13), keyed by device and physical offset, with the value recording the
+btree ID, level, and position of the owning key.
+
+Backpointers enable efficient answers to the question ``what data lives in this
+bucket?'' without scanning the entire extents btree. This is essential for device
+evacuation (moving all data off a device), scrub (verifying data integrity in
+physical order), the reconcile subsystem (tracking what needs to be moved on
+rotational devices in LBA order), and fsck (verifying bidirectional consistency
+between extents and their physical locations). Three fsck passes validate
+backpointers: extents-to-backpointers, backpointers-to-extents, and
+btree-backpointers.
+
 \section{Feature overview}
 
 \subsection{IO path options}
