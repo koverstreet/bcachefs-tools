@@ -424,6 +424,31 @@ assume 32-bit inode numbers internally. When combined with
 \texttt{shard\_inode\_numbers} (which uses the CPU ID for the high bits of new
 inodes to reduce allocator contention on large systems), the inode space is
 partitioned so that each CPU gets a range within the 32-bit space.
+
+\subsection{Casefolding}
+
+bcachefs supports case-insensitive filenames via the Linux kernel's Unicode
+subsystem (\texttt{CONFIG\_UNICODE}). Casefolding is a per-directory property:
+the \texttt{bi\_casefold} inode field controls it, with inheritance from the
+filesystem default.
+
+On disk, the \texttt{bch\_dirent} structure uses a union for the name: when the
+\texttt{d\_casefold} bit is set, the \texttt{d\_cf\_name\_block} variant is
+used, which stores the original filename and its case-folded form back-to-back
+in \texttt{d\_names[]}, with separate 16-bit length fields
+(\texttt{d\_name\_len}, \texttt{d\_cf\_name\_len}). The case-folded form is
+used for hash computation and lookup, preserving the original case for display.
+When \texttt{d\_casefold} is clear, the plain \texttt{d\_name[]} flex array is
+used instead. Enabling casefolding on a directory requires it to be empty, as
+existing entries must be rehashed with case-folded names.
+
+The Unicode version used for case folding is currently hardcoded to
+\texttt{UNICODE\_AGE(12, 1, 0)} (Unicode 12.1.0) and is not stored in the
+superblock. Since the case-folded form is persisted on disk and used for
+hashing, a kernel built with different Unicode tables could produce different
+case-folded forms and fail to find existing entries. Unlike other casefolding
+filesystems, bcachefs does not yet record the Unicode version in the
+superblock.
 \section{Management}
 
 \subsection{Formatting}
