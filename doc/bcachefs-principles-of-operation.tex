@@ -665,10 +665,32 @@ The journal should be sized sufficiently that bursts of activity do not fill up
 the journal too quickly; also, a larger journal means that we can queue up
 larger btree writes. The \texttt{bcachefs device resize-journal} can be used for
 resizing the journal on disk on a particular device - it can be used on a
-mounted or unmounted filesystem.
+mounted or unmounted filesystem. Current journal utilization can be inspected
+via \texttt{/sys/fs/bcachefs/<uuid>/internal/journal\_debug}, which reports
+dirty entries out of total capacity, sequence numbers, watermark level, and
+reclaim statistics.
 
-In the future, we should implement a method to see how much space is currently
-utilized in the journal.
+\subsubsection{Journal rewind}
+
+The \texttt{journal\_rewind} mount option accepts a journal sequence number and
+rolls the filesystem back to that point, discarding all subsequent updates. This
+is a last-resort disaster recovery tool: it drops all leaf-level btree updates
+to non-allocator btrees at or above the specified sequence number, then
+automatically triggers a full fsck to rebuild allocation metadata from the
+resulting state.
+
+Journal rewind is used in conjunction with \texttt{bcachefs list\_journal} to
+identify the sequence number to rewind to. The
+\texttt{journal\_transaction\_names} option (on by default) ensures that each
+journal entry records the function that created it, making it possible to
+identify which transactions caused a problem. Since rewind operates on metadata
+only, data in buckets that have been reused (generation incremented and
+overwritten with new data) is unrecoverable - the journal records allocator
+updates, so \texttt{list\_journal -b alloc} can be used to identify when
+specific buckets were recycled. The rewind window is bounded by the journal
+size: only sequences between \texttt{last\_seq} (oldest entry still on disk)
+and the current sequence are available, so a larger journal provides a deeper
+rewind history.
 
 \subsection{Device management}
 
@@ -1109,8 +1131,14 @@ listing btree nodes and contents, but for offline filesystems.
 
 \subsubsection{bcachefs list\_journal}
 
-This subcommand lists the contents of the journal, which primarily records btree
-updates ordered by when they occurred.
+This subcommand lists the contents of the journal for offline filesystems. The
+journal is a complete record of every btree update, accounting delta, log
+message, and timestamp, ordered by sequence number. Each entry can be traced
+back to the transaction function that created it (when
+\texttt{journal\_transaction\_names} is enabled). Filtering by btree, sequence
+range, or transaction name makes it possible to reconstruct the exact sequence
+of events leading to a problem - and to identify the right sequence number for
+journal rewind.
 
 \subsubsection{bcachefs dump}
 
