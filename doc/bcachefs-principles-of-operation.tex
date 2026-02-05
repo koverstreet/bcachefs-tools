@@ -53,6 +53,98 @@ greatly improves our write efficiency on random update workloads, as it means
 btree writes are only done when we have a large block of updates, or when
 required by memory reclaim or journal reclaim.
 
+\subsection{Transactions}
+
+All btree operations go through a transaction layer (\texttt{btree\_trans}) that
+provides atomic multi-key updates with optimistic concurrency control.
+Transactions collect updates in memory, then commit them atomically: first
+acquiring a journal reservation, then taking write locks on affected btree nodes
+in sorted order, applying updates, and releasing locks before the journal write
+completes. This means btree locks are held only for in-memory operations, never
+across IO.
+
+When a transaction encounters a lock conflict, it does not block - it drops all
+locks and restarts from the beginning. This restart-based approach avoids
+deadlocks entirely and keeps worst-case latency bounded, at the cost of
+requiring all transaction code to be idempotent and prepared for restarts at any
+point. This idempotency requirement has a profound consequence for reliability:
+since every operation can be safely interrupted and restarted, the filesystem is
+inherently resilient to interruption at any point - including during recovery
+itself. A crash during journal replay, during fsck, or even during an on-disk
+format upgrade simply results in the operation restarting from where it left off
+on the next mount.
+
+Sequence numbers on btree nodes enable efficient relocking after a restart: if a
+node's sequence number hasn't changed, the lock can be reacquired without
+re-traversing the btree.
+
+Transactions also support triggers: callbacks that fire on key insertion or
+deletion. Transactional triggers run before commit and may generate additional
+updates (e.g. updating backpointers when an extent changes). Atomic triggers
+run with the journal lock held and are used for accounting updates that must be
+exactly synchronized with the commit.
+
+For operations that cannot be made atomic within a single transaction (such as
+truncate or file insert/collapse, which may need to modify an unbounded number
+of extents), bcachefs uses logged operations: the intent is written to the
+\texttt{logged\_ops} btree before starting, and on recovery any incomplete
+logged operations are replayed to completion.
+
+\subsection{Recovery}
+
+On unclean shutdown, the journal is replayed to bring the btrees up to date.
+Journal entries record btree updates in commit order; replay applies them
+sequentially to reconstruct the state at the last completed commit.
+
+During btree node reads, bcachefs may find bsets (sorted key arrays within a
+node) whose journal sequence number is newer than the last successfully written
+journal entry - meaning the btree node was written to disk but the corresponding
+journal entry was not. These sequences are blacklisted: recorded in the
+superblock so that they are never replayed, and the bsets referencing them are
+ignored until the btree node is next rewritten.
+
+\subsubsection{Recovery passes}
+
+Beyond journal replay, bcachefs has approximately 48 recovery passes with an
+explicit dependency graph. Not all passes run on every mount - which passes run
+depends on context:
+
+\begin{description}
+	\item[Every mount] A core set of passes always runs: reading the
+		allocation, stripe, and snapshot btrees, replaying the journal,
+		deleting dead inodes, and resuming incomplete logged operations.
+
+	\item[Unclean shutdown] Additional passes run to verify and repair
+		metadata that may be inconsistent: allocation info, backpointers,
+		LRU lists.
+
+	\item[Fsck] The full set of validation passes runs: checking inodes,
+		extents, dirents, xattrs, link counts, directory structure, and
+		cross-referencing backpointers in both directions.
+\end{description}
+
+Recovery is split into two phases around the transition to read-write mode.
+Early passes run read-only: reading btrees into memory, verifying btree
+topology, and reconstructing allocation state. Once the allocator and journal
+are initialized, the filesystem transitions to read-write and journal replay
+runs - followed by the heavier validation and repair passes that need to write.
+
+Most validation passes (those marked \texttt{PASS\_ONLINE}) can also run after
+the filesystem is fully mounted, either triggered explicitly or scheduled
+automatically when an inconsistency is detected at runtime. A pass can request
+that other passes be re-run, rewinding the recovery sequence if necessary.
+
+For catastrophic damage, heavier passes exist that reconstruct entire btrees
+from scratch. These are triggered automatically when normal recovery detects
+structural damage: \texttt{scan\_for\_btree\_nodes} is scheduled when
+\texttt{check\_topology} finds missing or unreachable btree nodes - it
+physically scans the raw device for valid btree node headers and recovers what
+it can. \texttt{reconstruct\_snapshots} is scheduled when the snapshots btree
+itself is lost or when snapshot references point to nonexistent entries.
+\texttt{check\_allocations} rebuilds all allocation accounting from the extents
+and backpointers btrees. These passes are not part of normal recovery and may
+take considerable time on large filesystems.
+
 \subsection{Bucket based allocation}
 
 As mentioned bcachefs is descended from bcache, where the ability to efficiently
@@ -511,14 +603,25 @@ missing.
 
 \subsection{Fsck}
 
-It is possible to run fsck either in userspace with the \texttt{bcachefs fsck}
-subcommand (also available as \texttt{fsck.bcachefs}, or in the kernel while
-mounting by specifying the \texttt{-o fsck} mount option). In either case the
-exact same fsck implementation is being run, only the environment is different.
-Running fsck in the kernel at mount time has the advantage of somewhat better
-performance, while running in userspace has the ability to be stopped with
-ctrl-c and can prompt the user for fixing errors. To fix errors while running
-fsck in the kernel, use the \texttt{-o fix\_errors} option.
+bcachefs fsck can run in three modes: offline in userspace with the
+\texttt{bcachefs fsck} subcommand (also available as \texttt{fsck.bcachefs}),
+in the kernel at mount time with the \texttt{-o fsck} mount option, or online
+on a mounted filesystem. In all cases the exact same fsck implementation is
+being run - the recovery passes described above. Running in the kernel at mount
+time has the advantage of somewhat better performance, while running in
+userspace has the ability to be stopped with ctrl-c and can prompt the user for
+fixing errors. To fix errors while running fsck in the kernel, use the
+\texttt{-o fix\_errors} option.
+
+Online fsck runs the validation passes that are marked as safe for concurrent
+use (\texttt{PASS\_ONLINE}) on a mounted, read-write filesystem. Since version
+1.19, the default error action is \texttt{fix\_safe}: when the filesystem
+detects a metadata inconsistency during normal operation - for example, a dirent
+pointing to a nonexistent inode - it automatically schedules the relevant repair
+pass to run online in the background, without requiring user intervention, a
+remount, or taking the filesystem offline. Errors that are not safe to
+auto-repair are logged and persisted in the superblock for the next explicit
+fsck. This makes bcachefs a self-healing filesystem under normal operation.
 
 The \texttt{-o nochanges} mount option disallows any writes to the underlying
 devices, pinning dirty data in memory if journal replay is necessary. This is
@@ -691,10 +794,14 @@ Inode allocation cursors are persisted in the \texttt{logged\_ops} btree
 after a crash.
 
 \subsection{Error actions}
-The \texttt{errors} option is used for inconsistencies that indicate some sort
-of a bug. Valid error actions are:
+The \texttt{errors} option controls how the filesystem responds to metadata
+inconsistencies. Valid error actions are:
 \begin{description}
+	\item[{\tt fix\_safe}] (default) Automatically repair errors that are
+		safe to fix without user confirmation. Unsafe errors are logged
+		and persisted for the next explicit fsck.
 	\item[{\tt continue}] Log the error but continue normal operation
+		without attempting repair
 	\item[{\tt ro}] Emergency read only, immediately halting any changes
 		to the filesystem on disk
 	\item[{\tt panic}] Immediately halt the entire machine, printing a
