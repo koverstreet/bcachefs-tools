@@ -742,6 +742,8 @@ struct bch_fs {
 	struct mutex		verify_lock;
 };
 
+/* Error tracking: */
+
 static inline int __bch2_err_throw(struct bch_fs *c, int err)
 {
 	BUG_ON(err >= 0);
@@ -751,6 +753,8 @@ static inline int __bch2_err_throw(struct bch_fs *c, int err)
 }
 
 #define bch_err_throw(_c, _err) __bch2_err_throw(_c, -BCH_ERR_##_err)
+
+/* Read-only refs: */
 
 static inline bool bch2_ro_ref_tryget(struct bch_fs *c)
 {
@@ -774,6 +778,8 @@ static inline void bch2_set_ra_pages(struct bch_fs *c, unsigned ra_pages)
 #endif
 }
 
+/* Unit conversions: */
+
 static inline unsigned bucket_bytes(const struct bch_dev *ca)
 {
 	return ca->mi.bucket_size << 9;
@@ -788,6 +794,8 @@ static inline unsigned block_sectors(const struct bch_fs *c)
 {
 	return c->opts.block_size >> 9;
 }
+
+/* Time conversion: */
 
 static inline struct timespec64 bch2_time_to_timespec(const struct bch_fs *c, s64 time)
 {
@@ -878,6 +886,8 @@ static inline bool bch2_dev_rotational(struct bch_fs *c, unsigned dev)
 {
 	return dev != BCH_SB_MEMBER_INVALID && test_bit(dev, c->devs_rotational.d);
 }
+
+/* Log messages: */
 
 void __bch2_log_msg_start(const char *, struct printbuf *);
 
