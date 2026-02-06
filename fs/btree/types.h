@@ -23,6 +23,8 @@ struct open_bucket;
 struct btree_update;
 struct btree_trans;
 
+/* Btree nodes: */
+
 #define MAX_BSETS		3U
 
 struct btree_nr_keys {
@@ -138,6 +140,8 @@ struct btree {
 	struct list_head	list;
 };
 
+/* Btree cache: */
+
 #define BCH_BTREE_CACHE_NOT_FREED_REASONS()	\
 	x(cache_reserve)			\
 	x(lock_intent)				\
@@ -225,6 +229,8 @@ struct bch_fs_btree_cache {
 	u64			pinned_nodes_mask[2];
 };
 
+/* Iterator, update, and trigger flags: */
+
 struct btree_node_iter {
 	struct btree_node_iter_set {
 		u16	k, end;
@@ -310,6 +316,8 @@ enum btree_iter_update_trigger_flags {
 	BTREE_TRIGGER_FLAGS()
 #undef x
 };
+
+/* Btree paths and iterators: */
 
 enum btree_path_uptodate {
 	BTREE_ITER_UPTODATE		= 0,
@@ -406,6 +414,8 @@ struct btree_iter {
 #endif
 };
 
+/* Key cache: */
+
 #define BKEY_CACHED_ACCESSED		0
 #define BKEY_CACHED_DIRTY		1
 
@@ -432,6 +442,8 @@ static inline struct bpos btree_node_pos(struct btree_bkey_cached_common *b)
 		? container_of(b, struct btree, c)->key.k.p
 		: container_of(b, struct bkey_cached, c)->key.pos;
 }
+
+/* Transaction types: */
 
 struct btree_insert_entry {
 	unsigned		flags;
@@ -652,6 +664,8 @@ static inline struct btree_path *btree_iter_key_cache_path(struct btree_trans *t
 		: NULL;
 }
 
+/* Btree node write types and flags: */
+
 #define BCH_BTREE_WRITE_TYPES()						\
 	x(initial,		0)					\
 	x(init_next_bset,	1)					\
@@ -723,6 +737,8 @@ enum btree_node_rewrite_reason {
 #undef x
 };
 
+/* Filesystem-level btree state: */
+
 struct bch_fs_btree {
 	u16					foreground_merge_threshold;
 
@@ -753,6 +769,8 @@ struct bch_fs_btree {
 	struct bch_fs_btree_node_rewrites	node_rewrites;
 	struct find_btree_nodes			node_scan;
 };
+
+/* Btree node/bset accessors: */
 
 static inline enum btree_node_rewrite_reason btree_node_rewrite_reason(struct btree *b)
 {
@@ -873,6 +891,8 @@ static inline unsigned bset_byte_offset(struct btree *b, void *i)
 {
 	return i - (void *) b->data;
 }
+
+/* Btree ID properties: */
 
 enum btree_node_type {
 	BKEY_TYPE_btree,
