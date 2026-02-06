@@ -140,6 +140,11 @@ struct btree {
 	struct list_head	list;
 };
 
+enum btree_node_sibling {
+	btree_prev_sib,
+	btree_next_sib,
+};
+
 /* Btree cache: */
 
 #define BCH_BTREE_CACHE_NOT_FREED_REASONS()	\
@@ -412,6 +417,11 @@ struct btree_iter {
 #ifdef TRACK_PATH_ALLOCATED
 	unsigned long		ip_allocated;
 #endif
+};
+
+struct get_locks_fail {
+	unsigned	l;
+	struct btree	*b;
 };
 
 /* Key cache: */
@@ -1030,21 +1040,5 @@ static inline u8 btree_trigger_order(enum btree_id btree)
 		return btree;
 	}
 }
-
-enum btree_gc_coalesce_fail_reason {
-	BTREE_GC_COALESCE_FAIL_RESERVE_GET,
-	BTREE_GC_COALESCE_FAIL_KEYLIST_REALLOC,
-	BTREE_GC_COALESCE_FAIL_FORMAT_FITS,
-};
-
-enum btree_node_sibling {
-	btree_prev_sib,
-	btree_next_sib,
-};
-
-struct get_locks_fail {
-	unsigned	l;
-	struct btree	*b;
-};
 
 #endif /* _BCACHEFS_BTREE_TYPES_H */
