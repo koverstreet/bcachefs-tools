@@ -770,14 +770,6 @@ static inline void bch2_ro_ref_put(struct bch_fs *c)
 		wake_up(&c->ro_ref_wait);
 }
 
-static inline void bch2_set_ra_pages(struct bch_fs *c, unsigned ra_pages)
-{
-#ifndef NO_BCACHEFS_FS
-	if (c->vfs_sb)
-		c->vfs_sb->s_bdi->ra_pages = ra_pages;
-#endif
-}
-
 /* Unit conversions: */
 
 static inline unsigned bucket_bytes(const struct bch_dev *ca)
@@ -829,6 +821,16 @@ static inline s64 bch2_current_time(const struct bch_fs *c)
 static inline u64 bch2_current_io_time(const struct bch_fs *c, int rw)
 {
 	return max(1ULL, (u64) atomic64_read(&c->io_clock[rw].now) & LRU_TIME_MAX);
+}
+
+/* Filesystem and device helpers: */
+
+static inline void bch2_set_ra_pages(struct bch_fs *c, unsigned ra_pages)
+{
+#ifndef NO_BCACHEFS_FS
+	if (c->vfs_sb)
+		c->vfs_sb->s_bdi->ra_pages = ra_pages;
+#endif
 }
 
 static inline struct stdio_redirect *bch2_fs_stdio_redirect(struct bch_fs *c)
