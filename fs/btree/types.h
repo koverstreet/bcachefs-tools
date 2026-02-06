@@ -372,11 +372,10 @@ static inline unsigned long btree_path_ip_allocated(struct btree_path *path)
 }
 
 /*
- * @pos			- iterator's current position
- * @level		- current btree depth
- * @locks_want		- btree level below which we start taking intent locks
- * @nodes_locked	- bitmask indicating which nodes in @nodes are locked
- * @nodes_intent_locked	- bitmask indicating which locks are intent locks
+ * btree_iter: the high level btree iterator API, iterates over keys.
+ * btree_path: the low level path to a btree node, holds locks.
+ *
+ * Multiple iterators can share the same btree_path via refcounting.
  */
 struct btree_iter {
 	struct btree_trans	*trans;
@@ -505,6 +504,19 @@ struct btree_trans_subbuf {
 	u16			size;
 };
 
+/*
+ * Transaction context for btree operations.
+ *
+ * Holds iterators/paths, pending updates, locks, and a memory arena for a
+ * single logical btree operation.  On lock contention or memory pressure,
+ * the transaction restarts: releases all locks, resets state, and retries
+ * (via lockrestart_do() or similar retry loops).
+ *
+ *  - mem/mem_top: bump allocator, invalidated on every restart
+ *  - Paths kept sorted in lock order to prevent deadlocks
+ *  - SRCU read lock protects btree node memory from being freed;
+ *    released periodically to avoid stalling reclaim
+ */
 struct btree_trans {
 	struct bch_fs		*c;
 
@@ -513,6 +525,7 @@ struct btree_trans {
 	btree_path_idx_t	*sorted;
 	struct btree_insert_entry *updates;
 
+	/* bump allocator, invalidated on transaction restart */
 	void			*mem;
 	unsigned		mem_top;
 	unsigned		mem_bytes;

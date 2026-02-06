@@ -9,6 +9,7 @@
 #define _BUCKETS_H
 
 #include "alloc/buckets_types.h"
+#include "alloc/format.h"
 #include "data/extents.h"
 #include "sb/members.h"
 
@@ -115,6 +116,33 @@ static inline struct bucket *PTR_GC_BUCKET(struct bch_dev *ca,
 					   const struct bch_extent_ptr *ptr)
 {
 	return gc_bucket(ca, PTR_BUCKET_NR(ca, ptr));
+}
+
+/* GC bucket ↔ alloc_v4 conversion */
+
+static inline void alloc_to_bucket(struct bucket *dst, struct bch_alloc_v4 src)
+{
+	dst->gen		= src.gen;
+	dst->data_type		= src.data_type;
+	dst->stripe_sectors	= src.stripe_sectors;
+	dst->dirty_sectors	= src.dirty_sectors;
+	dst->cached_sectors	= src.cached_sectors;
+}
+
+static inline void __bucket_m_to_alloc(struct bch_alloc_v4 *dst, struct bucket src)
+{
+	dst->gen		= src.gen;
+	dst->data_type		= src.data_type;
+	dst->stripe_sectors	= src.stripe_sectors;
+	dst->dirty_sectors	= src.dirty_sectors;
+	dst->cached_sectors	= src.cached_sectors;
+}
+
+static inline struct bch_alloc_v4 bucket_m_to_alloc(struct bucket b)
+{
+	struct bch_alloc_v4 ret = {};
+	__bucket_m_to_alloc(&ret, b);
+	return ret;
 }
 
 static inline enum bch_data_type ptr_data_type(const struct bkey *k,

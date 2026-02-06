@@ -6,8 +6,7 @@
 #include "alloc/types.h"
 #include "alloc/buckets.h"
 
-/* How out of date a pointer gen is allowed to be: */
-#define BUCKET_GC_GEN_MAX	96U
+/* Bucket position helpers */
 
 static inline bool bch2_dev_bucket_exists(struct bch_fs *c, struct bpos pos)
 {
@@ -26,36 +25,22 @@ static inline struct bpos u64_to_bucket(u64 bucket)
 	return POS(bucket >> 48, bucket & ~(~0ULL << 48));
 }
 
+/* Generation tracking */
+
+/* How out of date a pointer gen is allowed to be: */
+#define BUCKET_GC_GEN_MAX	96U
+
 static inline u8 alloc_gc_gen(struct bch_alloc_v4 a)
 {
 	return a.gen - a.oldest_gen;
 }
 
-static inline void alloc_to_bucket(struct bucket *dst, struct bch_alloc_v4 src)
-{
-	dst->gen		= src.gen;
-	dst->data_type		= src.data_type;
-	dst->stripe_sectors	= src.stripe_sectors;
-	dst->dirty_sectors	= src.dirty_sectors;
-	dst->cached_sectors	= src.cached_sectors;
-}
+/* Data type computation */
 
-static inline void __bucket_m_to_alloc(struct bch_alloc_v4 *dst, struct bucket src)
-{
-	dst->gen		= src.gen;
-	dst->data_type		= src.data_type;
-	dst->stripe_sectors	= src.stripe_sectors;
-	dst->dirty_sectors	= src.dirty_sectors;
-	dst->cached_sectors	= src.cached_sectors;
-}
-
-static inline struct bch_alloc_v4 bucket_m_to_alloc(struct bucket b)
-{
-	struct bch_alloc_v4 ret = {};
-	__bucket_m_to_alloc(&ret, b);
-	return ret;
-}
-
+/*
+ * Normalize data_type to the type of data stored in the bucket: cached and
+ * stripe data are both user data from the bucket's perspective.
+ */
 static inline enum bch_data_type bucket_data_type(enum bch_data_type data_type)
 {
 	switch (data_type) {
@@ -73,6 +58,18 @@ static inline bool bucket_data_type_mismatch(enum bch_data_type bucket,
 	return !data_type_is_empty(bucket) &&
 		bucket_data_type(bucket) != bucket_data_type(ptr);
 }
+
+#define DATA_TYPES_MOVABLE		\
+	((1U << BCH_DATA_btree)|	\
+	 (1U << BCH_DATA_user)|		\
+	 (1U << BCH_DATA_stripe))
+
+static inline bool data_type_movable(enum bch_data_type type)
+{
+	return (1U << type) & DATA_TYPES_MOVABLE;
+}
+
+/* Sector accounting */
 
 /*
  * It is my general preference to use unsigned types for unsigned quantities -
@@ -107,18 +104,16 @@ static inline s64 bch2_bucket_sectors_fragmented(struct bch_dev *ca,
 	return d ? max(0, ca->mi.bucket_size - d) : 0;
 }
 
-static inline s64 bch2_gc_bucket_sectors_fragmented(struct bch_dev *ca, struct bucket a)
-{
-	int d = a.stripe_sectors + a.dirty_sectors;
-
-	return d ? max(0, ca->mi.bucket_size - d) : 0;
-}
-
 static inline s64 bch2_bucket_sectors_unstriped(struct bch_alloc_v4 a)
 {
 	return a.data_type == BCH_DATA_stripe ? a.dirty_sectors : 0;
 }
 
+/*
+ * Compute data_type from bucket state. The data_type parameter is a hint for
+ * what kind of data the bucket contains; the actual type is determined by
+ * sector counts, flags, and stripe_refcount.
+ */
 static inline enum bch_data_type alloc_data_type(struct bch_alloc_v4 a,
 						 enum bch_data_type data_type)
 {
@@ -140,21 +135,13 @@ static inline void alloc_data_type_set(struct bch_alloc_v4 *a, enum bch_data_typ
 	a->data_type = alloc_data_type(*a, data_type);
 }
 
+/* Auxiliary btree index helpers (LRU, freespace, bucket_gens) */
+
 static inline u64 alloc_lru_idx_read(struct bch_alloc_v4 a)
 {
 	return a.data_type == BCH_DATA_cached
 		? a.io_time[READ] & LRU_TIME_MAX
 		: 0;
-}
-
-#define DATA_TYPES_MOVABLE		\
-	((1U << BCH_DATA_btree)|	\
-	 (1U << BCH_DATA_user)|		\
-	 (1U << BCH_DATA_stripe))
-
-static inline bool data_type_movable(enum bch_data_type type)
-{
-	return (1U << type) & DATA_TYPES_MOVABLE;
 }
 
 static inline u64 alloc_lru_idx_fragmentation(struct bch_alloc_v4 a,
@@ -188,26 +175,6 @@ static inline struct bpos alloc_freespace_pos(struct bpos pos, struct bch_alloc_
 	return pos;
 }
 
-static inline unsigned alloc_v4_u64s_noerror(const struct bch_alloc_v4 *a)
-{
-	return (BCH_ALLOC_V4_BACKPOINTERS_START(a) ?:
-			BCH_ALLOC_V4_U64s_V0) +
-		BCH_ALLOC_V4_NR_BACKPOINTERS(a) *
-		(sizeof(struct bch_backpointer) / sizeof(u64));
-}
-
-static inline unsigned alloc_v4_u64s(const struct bch_alloc_v4 *a)
-{
-	unsigned ret = alloc_v4_u64s_noerror(a);
-	BUG_ON(ret > U8_MAX - BKEY_U64s);
-	return ret;
-}
-
-static inline void set_alloc_v4_u64s(struct bkey_i_alloc_v4 *a)
-{
-	set_bkey_val_u64s(&a->k, alloc_v4_u64s(&a->v));
-}
-
 static inline struct bpos alloc_gens_pos(struct bpos pos, unsigned *offset)
 {
 	*offset = pos.offset & KEY_TYPE_BUCKET_GENS_MASK;
@@ -229,6 +196,49 @@ static inline unsigned alloc_gen(struct bkey_s_c k, unsigned offset)
 		? bkey_s_c_to_bucket_gens(k).v->gens[offset]
 		: 0;
 }
+
+/* Key format and backpointers */
+
+static inline unsigned alloc_v4_u64s_noerror(const struct bch_alloc_v4 *a)
+{
+	return (BCH_ALLOC_V4_BACKPOINTERS_START(a) ?:
+			BCH_ALLOC_V4_U64s_V0) +
+		BCH_ALLOC_V4_NR_BACKPOINTERS(a) *
+		(sizeof(struct bch_backpointer) / sizeof(u64));
+}
+
+static inline unsigned alloc_v4_u64s(const struct bch_alloc_v4 *a)
+{
+	unsigned ret = alloc_v4_u64s_noerror(a);
+	BUG_ON(ret > U8_MAX - BKEY_U64s);
+	return ret;
+}
+
+static inline void set_alloc_v4_u64s(struct bkey_i_alloc_v4 *a)
+{
+	set_bkey_val_u64s(&a->k, alloc_v4_u64s(&a->v));
+}
+
+static inline struct bch_backpointer *alloc_v4_backpointers(struct bch_alloc_v4 *a)
+{
+	return (void *) ((u64 *) &a->v +
+			 (BCH_ALLOC_V4_BACKPOINTERS_START(a) ?:
+			  BCH_ALLOC_V4_U64s_V0));
+}
+
+static inline const struct bch_backpointer *alloc_v4_backpointers_c(const struct bch_alloc_v4 *a)
+{
+	return (void *) ((u64 *) &a->v + BCH_ALLOC_V4_BACKPOINTERS_START(a));
+}
+
+static inline bool bkey_is_alloc(const struct bkey *k)
+{
+	return  k->type == KEY_TYPE_alloc ||
+		k->type == KEY_TYPE_alloc_v2 ||
+		k->type == KEY_TYPE_alloc_v3;
+}
+
+/* Alloc key operations */
 
 struct bkey_i_alloc_v4 *
 bch2_trans_start_alloc_update_noupdate(struct btree_trans *, struct btree_iter *, struct bpos);
@@ -306,13 +316,6 @@ void bch2_bucket_gens_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_
 
 int bch2_bucket_gens_init(struct bch_fs *);
 
-static inline bool bkey_is_alloc(const struct bkey *k)
-{
-	return  k->type == KEY_TYPE_alloc ||
-		k->type == KEY_TYPE_alloc_v2 ||
-		k->type == KEY_TYPE_alloc_v3;
-}
-
 int bch2_alloc_read(struct bch_fs *);
 
 int bch2_bucket_do_index(struct btree_trans *, struct bch_dev *,
@@ -324,18 +327,6 @@ int bch2_alloc_key_to_dev_counters(struct btree_trans *, struct bch_dev *,
 int bch2_trigger_alloc(struct btree_trans *, enum btree_id, unsigned,
 		       struct bkey_s_c, struct bkey_s,
 		       enum btree_iter_update_trigger_flags);
-
-static inline struct bch_backpointer *alloc_v4_backpointers(struct bch_alloc_v4 *a)
-{
-	return (void *) ((u64 *) &a->v +
-			 (BCH_ALLOC_V4_BACKPOINTERS_START(a) ?:
-			  BCH_ALLOC_V4_U64s_V0));
-}
-
-static inline const struct bch_backpointer *alloc_v4_backpointers_c(const struct bch_alloc_v4 *a)
-{
-	return (void *) ((u64 *) &a->v + BCH_ALLOC_V4_BACKPOINTERS_START(a));
-}
 
 int bch2_dev_remove_alloc(struct bch_fs *, struct bch_dev *);
 
