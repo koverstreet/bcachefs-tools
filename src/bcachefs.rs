@@ -1,5 +1,6 @@
 mod commands;
 mod key;
+mod device_identity;
 mod dump_stack;
 mod logging;
 mod wrappers;

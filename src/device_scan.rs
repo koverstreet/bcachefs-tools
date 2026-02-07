@@ -15,7 +15,9 @@ use bcachefs::{
 };
 use bcachefs::bch_opts;
 use uuid::Uuid;
-use log::debug;
+use log::{debug, warn};
+
+use crate::device_identity::find_multipath_holder;
 
 fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> anyhow::Result<bch_sb_handle> {
     opt_set!(opts, noexcl, 1);
@@ -38,6 +40,31 @@ fn device_property_map(dev: &udev::Device) -> HashMap<String, String> {
     rc
 }
 
+fn should_skip_multipath_component(props: &HashMap<String, String>) -> bool {
+    // Set by multipath's udev rule; fall back to sysfs if not present.
+    if props
+        .get("DM_MULTIPATH_DEVICE_PATH")
+        .map_or(false, |v| v == "1")
+    {
+        if let Some(devname) = props.get("DEVNAME") {
+            debug!("Skipping multipath component device: {}", devname);
+        }
+        return true;
+    }
+
+    if let Some(devname) = props.get("DEVNAME") {
+        if find_multipath_holder(Path::new(devname)).is_some() {
+            debug!(
+                "Skipping multipath component device via sysfs holders: {}",
+                devname
+            );
+            return true;
+        }
+    }
+
+    false
+}
+
 fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<String>> {
     debug!("Walking udev db!");
 
@@ -54,7 +81,8 @@ fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<String>> {
         .filter(|m|
             m.contains_key("ID_FS_UUID") &&
             m["ID_FS_UUID"] == uuid &&
-            m.contains_key("DEVNAME"))
+            m.contains_key("DEVNAME") &&
+            !should_skip_multipath_component(m))
         .map(|m| m["DEVNAME"].clone())
         .collect::<Vec<_>>())
 }
@@ -76,9 +104,22 @@ fn get_all_block_devnodes() -> anyhow::Result<Vec<String>> {
     Ok(devices)
 }
 
-fn read_sbs_matching_uuid(uuid: Uuid, devices: &[String], opts: &bch_opts) -> Vec<(PathBuf, bch_sb_handle)> {
+fn read_sbs_matching_uuid(
+    uuid: Uuid,
+    devices: &[String],
+    opts: &bch_opts,
+    filter_multipath: bool,
+) -> Vec<(PathBuf, bch_sb_handle)> {
     devices
         .iter()
+        .filter(|dev| {
+            // When not using udev (which already filters), skip multipath components
+            if filter_multipath && find_multipath_holder(Path::new(dev)).is_some() {
+                debug!("Skipping multipath component device in fallback scan: {}", dev);
+                return false;
+            }
+            true
+        })
         .filter_map(|dev| {
             read_super_silent(PathBuf::from(dev), *opts)
                 .ok()
@@ -95,13 +136,15 @@ fn get_devices_by_uuid(
 ) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
     let devs_from_udev = get_devices_by_uuid_udev(uuid)?;
 
-    let devices = if use_udev && !devs_from_udev.is_empty() {
-        devs_from_udev
+    // udev path already filters multipath components via DM_MULTIPATH_DEVICE_PATH;
+    // fallback path needs explicit filtering via sysfs holder check
+    let (devices, filter_multipath) = if use_udev && !devs_from_udev.is_empty() {
+        (devs_from_udev, false)
     } else {
-        get_all_block_devnodes()?
+        (get_all_block_devnodes()?, true)
     };
 
-    Ok(read_sbs_matching_uuid(uuid, &devices, opts))
+    Ok(read_sbs_matching_uuid(uuid, &devices, opts, filter_multipath))
 }
 
 fn devs_str_sbs_from_device(
@@ -111,8 +154,19 @@ fn devs_str_sbs_from_device(
 ) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
     if let Ok(metadata) = fs::metadata(device) {
         if metadata.is_dir() {
-            return Err(anyhow::anyhow!("'{}' is a directory, not a block device", device.display()));
+            return Err(anyhow::anyhow!(
+                "'{}' is a directory, not a block device",
+                device.display()
+            ));
         }
+    }
+
+    if let Some(mpath_dev) = find_multipath_holder(device) {
+        warn!(
+            "{} is a multipath component. Using {} is recommended to avoid I/O path issues.",
+            device.display(),
+            mpath_dev.display()
+        );
     }
 
     let dev_sb = read_super_silent(device, *opts)?;

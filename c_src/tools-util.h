@@ -201,6 +201,14 @@ struct mntent *dev_to_mount(const char *);
 int dev_mounted(const char *);
 char *fd_to_dev_model(int);
 
+/* Device-mapper and multipath helpers */
+bool is_dm_device(dev_t);
+bool is_multipath_device(dev_t);
+bool has_multipath_holder(const char *);
+char *get_dm_name(dev_t);
+char *get_dm_uuid(dev_t);
+char *dm_device_lookup_mapper_path(dev_t);
+
 #define args_shift(_nr)							\
 do {									\
 	unsigned _n = min((_nr), argc);					\
