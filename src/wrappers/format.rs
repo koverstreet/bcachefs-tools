@@ -101,7 +101,7 @@ pub extern "C" fn bch2_format(
 
     // Calculate block size
     if opt_defined!(fs_opts, block_size) == 0 {
-        let mut max_dev_block_size = 0u32;
+        let mut max_dev_block_size = 4096u32;
         for dev in dev_slice.iter() {
             let bs = unsafe { c::get_blocksize((*dev.bdev).bd_fd) };
             max_dev_block_size = max_dev_block_size.max(bs);
