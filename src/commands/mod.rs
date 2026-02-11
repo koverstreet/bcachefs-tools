@@ -9,6 +9,7 @@ pub mod key;
 pub mod list;
 pub mod mount;
 pub mod opts;
+pub mod reconcile;
 pub mod scrub;
 pub mod subvolume;
 pub mod timestats;
@@ -25,6 +26,7 @@ pub use device::{
 pub use key::{cmd_unlock, cmd_set_passphrase, cmd_remove_passphrase};
 pub use list::list;
 pub use mount::mount;
+pub use reconcile::{cmd_reconcile_status, cmd_reconcile_wait};
 pub use scrub::scrub;
 pub use subvolume::subvolume;
 pub use timestats::timestats;
@@ -85,7 +87,9 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("image").about("Filesystem image commands"))
         .subcommand(Command::new("migrate")
             .about("Migrate an existing ext2/3/4 filesystem to bcachefs in place"))
-        .subcommand(Command::new("reconcile").about("Reconcile filesystem data"))
+        .subcommand(Command::new("reconcile").about("Reconcile filesystem data")
+            .subcommand(reconcile::StatusCli::command().name("status"))
+            .subcommand(reconcile::WaitCli::command().name("wait")))
         .subcommand(Command::new("recovery-pass")
             .about("Run a specific recovery pass"))
         .subcommand(Command::new("set-fs-option")

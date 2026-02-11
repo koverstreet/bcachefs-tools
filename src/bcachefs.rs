@@ -67,7 +67,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "migrate" => c::cmd_migrate(argc, argv),
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
             "mkfs" => c::cmd_format(argc, argv),
-            "reconcile" => c::reconcile_cmds(argc, argv),
+            // reconcile handled in Rust dispatch
             // remove-passphrase handled in Rust dispatch
             // reset-counters handled in Rust dispatch
             "set-fs-option" => c::cmd_set_option(argc, argv),
@@ -176,6 +176,18 @@ fn main() -> ExitCode {
         },
         "remove-passphrase" => commands::cmd_remove_passphrase(args[1..].to_vec()).report(),
         "reset-counters" => commands::cmd_reset_counters(args[1..].to_vec()).report(),
+        "reconcile" => match args.get(2).map(|s| s.as_str()) {
+            Some("status") => commands::cmd_reconcile_status(args[2..].to_vec()).report(),
+            Some("wait") => commands::cmd_reconcile_wait(args[2..].to_vec()).report(),
+            _ => {
+                println!("bcachefs reconcile - manage data reconcile");
+                println!("Usage: bcachefs reconcile <status|wait> [OPTION]...\n");
+                println!("Commands:");
+                println!("  status                       Show status of background data processing");
+                println!("  wait                         Wait on background data processing to complete");
+                ExitCode::from(1)
+            }
+        },
         "set-file-option" => commands::cmd_setattr(args[1..].to_vec()).report(),
         "set-passphrase" => commands::cmd_set_passphrase(args[1..].to_vec()).report(),
         "reflink-option-propagate" => commands::cmd_reflink_option_propagate(args[1..].to_vec()).report(),
