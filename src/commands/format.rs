@@ -45,35 +45,37 @@ fn format_usage() {
         c::opt_flags::OPT_FS as u32,
     );
 
-    println!("bcachefs format - create a new bcachefs filesystem on one or more devices");
-    println!("Usage: bcachefs format [OPTION]... <devices>\n");
-    println!("Options:");
-    print!("{}", fs_opts);
+    print!("\
+bcachefs format - create a new bcachefs filesystem on one or more devices
+Usage: bcachefs format [OPTION]... <devices>
 
-    println!("      --replicas=#             Sets both data and metadata replicas");
-    println!("      --encrypted              Enable whole filesystem encryption (chacha20/poly1305)");
-    println!("      --passphrase_file=file   File containing passphrase used for encryption/decryption");
-    println!("      --no_passphrase          Don't encrypt master encryption key");
-    println!("  -L, --fs_label=label");
-    println!("  -U, --uuid=uuid");
-    println!("      --superblock_size=size");
-    println!("      --version=version        Create filesystem with specified on disk format version instead of the latest");
-    println!("      --source=path            Initialize the bcachefs filesystem from this root directory");
-    println!("\nDevice specific options:");
-    print!("{}", dev_opts);
+Options:
+{fs_opts}\
+      --replicas=#             Sets both data and metadata replicas
+      --encrypted              Enable whole filesystem encryption (chacha20/poly1305)
+      --passphrase_file=file   File containing passphrase used for encryption/decryption
+      --no_passphrase          Don't encrypt master encryption key
+  -L, --fs_label=label
+  -U, --uuid=uuid
+      --superblock_size=size
+      --version=version        Create filesystem with specified on disk format version instead of the latest
+      --source=path            Initialize the bcachefs filesystem from this root directory
 
-    println!("      --fs_size=size           Size of filesystem on device");
-    println!("  -l, --label=label            Disk label");
-    println!();
-    println!("  -f, --force");
-    println!("  -q, --quiet                  Only print errors");
-    println!("  -v, --verbose                Verbose filesystem initialization");
-    println!("  -h, --help                   Display this help and exit");
-    println!();
-    println!("Device specific options must come before corresponding devices, e.g.");
-    println!("  bcachefs format --label cache /dev/sdb /dev/sdc");
-    println!();
-    println!("Report bugs to <linux-bcachefs@vger.kernel.org>");
+Device specific options:
+{dev_opts}\
+      --fs_size=size           Size of filesystem on device
+  -l, --label=label            Disk label
+
+  -f, --force
+  -q, --quiet                  Only print errors
+  -v, --verbose                Verbose filesystem initialization
+  -h, --help                   Display this help and exit
+
+Device specific options must come before corresponding devices, e.g.
+  bcachefs format --label cache /dev/sdb /dev/sdc
+
+Report bugs to <linux-bcachefs@vger.kernel.org>
+");
 }
 
 /// Per-device configuration accumulated during parsing.
