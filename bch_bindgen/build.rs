@@ -115,6 +115,41 @@ fn generate_sb_field_impls(entries: &[Vec<String>]) -> String {
     out
 }
 
+fn generate_str_table(name: &str, entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("// Auto-generated — do not edit\n\n"));
+    out.push_str(&format!("pub const {name}: &[&str] = &[\n"));
+    for e in entries {
+        out.push_str(&format!("    \"{}\",\n", e[0]));
+    }
+    out.push_str("];\n");
+    out
+}
+
+fn generate_counter_table(entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    out.push_str("// Auto-generated from BCH_PERSISTENT_COUNTERS() — do not edit\n\n");
+
+    out.push_str("pub struct CounterInfo {\n");
+    out.push_str("    pub name: &'static str,\n");
+    out.push_str("    pub stable_id: u16,\n");
+    out.push_str("    pub is_sectors: bool,\n");
+    out.push_str("}\n\n");
+
+    out.push_str("pub const COUNTERS: &[CounterInfo] = &[\n");
+    for e in entries {
+        let name = &e[0];
+        let stable_id = &e[1];
+        let flags = &e[2];
+        let is_sectors = flags.contains("TYPE_SECTORS");
+        out.push_str(&format!(
+            "    CounterInfo {{ name: \"{name}\", stable_id: {stable_id}, is_sectors: {is_sectors} }},\n"
+        ));
+    }
+    out.push_str("];\n");
+    out
+}
+
 fn generate_bkey_types(entries: &[Vec<String>]) -> String {
     let mut out = String::new();
 
@@ -164,6 +199,8 @@ fn main() {
 
     println!("cargo:rerun-if-changed=src/libbcachefs_wrapper.h");
     println!("cargo:rerun-if-changed=../libbcachefs/bcachefs_format.h");
+    println!("cargo:rerun-if-changed=../libbcachefs/sb/members_format.h");
+    println!("cargo:rerun-if-changed=../libbcachefs/sb/counters_format.h");
 
     let out_dir: PathBuf = std::env::var_os("OUT_DIR")
         .expect("ENV Var 'OUT_DIR' Expected")
@@ -298,6 +335,26 @@ fn main() {
         generate_sb_field_impls(&sb_fields),
     )
     .expect("Writing sb_field_types_gen.rs");
+
+    let members_h = std::fs::read_to_string(top_dir.join("../libbcachefs/sb/members_format.h"))
+        .expect("reading members_format.h");
+    let member_states = parse_xmacro(&members_h, "BCH_MEMBER_STATES");
+    assert!(!member_states.is_empty(), "failed to parse BCH_MEMBER_STATES()");
+    std::fs::write(
+        out_dir.join("member_states_gen.rs"),
+        generate_str_table("MEMBER_STATE_NAMES", &member_states),
+    )
+    .expect("Writing member_states_gen.rs");
+
+    let counters_h = std::fs::read_to_string(top_dir.join("../libbcachefs/sb/counters_format.h"))
+        .expect("reading counters_format.h");
+    let counters = parse_xmacro(&counters_h, "BCH_PERSISTENT_COUNTERS");
+    assert!(!counters.is_empty(), "failed to parse BCH_PERSISTENT_COUNTERS()");
+    std::fs::write(
+        out_dir.join("counters_gen.rs"),
+        generate_counter_table(&counters),
+    )
+    .expect("Writing counters_gen.rs");
 
     let keyutils = pkg_config::probe_library("libkeyutils").expect("Failed to find keyutils lib");
     let bindings = bindgen::builder()

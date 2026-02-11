@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::ffi::CStr;
 use std::fs;
 use std::io::{self, Write};
 use std::mem;
@@ -7,8 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
-use bch_bindgen::c::{bch_counters_flags, bch_ioctl_query_counters};
-use bch_bindgen::c::bch_persistent_counters::BCH_COUNTER_NR;
+use bch_bindgen::c::bch_ioctl_query_counters;
+use bch_bindgen::sb::COUNTERS;
 use clap::Parser;
 use crossterm::{
     cursor,
@@ -27,25 +26,6 @@ use crate::wrappers::sysfs::{dev_name_from_sysfs, sysfs_path_from_fd};
 
 const BCH_IOCTL_QUERY_COUNTERS_NR: u32 = 21;
 const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
-const NR_COUNTERS: usize = BCH_COUNTER_NR as usize;
-
-// Counter info accessors — read directly from bch_bindgen FFI arrays
-
-fn counter_name(i: usize) -> &'static str {
-    if i >= NR_COUNTERS { return "???" }
-    let p = unsafe { *bch_bindgen::c::bch2_counter_names.as_ptr().add(i) };
-    if p.is_null() { "???" } else { unsafe { CStr::from_ptr(p) }.to_str().unwrap_or("???") }
-}
-
-fn counter_stable_id(i: usize) -> u16 {
-    if i >= NR_COUNTERS { return 0 }
-    unsafe { *bch_bindgen::c::bch2_counter_stable_map.as_ptr().add(i) }
-}
-
-fn counter_is_sectors(i: usize) -> bool {
-    if i >= NR_COUNTERS { return false }
-    unsafe { *bch_bindgen::c::bch2_counter_flags_map.as_ptr().add(i) == bch_counters_flags::TYPE_SECTORS }
-}
 
 // ioctl query
 
@@ -166,7 +146,7 @@ struct TopState {
 impl TopState {
     fn new(handle: &BcachefsHandle, human_readable: bool) -> Result<Self> {
         let ioctl_fd = handle.ioctl_fd_raw();
-        let nr_stable = (0..NR_COUNTERS).map(|i| counter_stable_id(i)).max().unwrap_or(0) + 1;
+        let nr_stable = COUNTERS.iter().map(|c| c.stable_id).max().unwrap_or(0) + 1;
 
         let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
         let start_vals = read_counters(ioctl_fd, 0, nr_stable)?;
@@ -198,12 +178,11 @@ impl TopState {
         write!(stdout, "{:<40} {:>14} {:>14} {:>14}\r\n",
             "", format!("{}/s", self.interval_secs), "total", "mount")?;
 
-        for i in 0..NR_COUNTERS {
-            let (stable, sectors) = (counter_stable_id(i), counter_is_sectors(i));
-            let cv = Self::get_val(curr, stable);
-            let pv = Self::get_val(&self.prev_vals, stable);
-            let sv = Self::get_val(&self.start_vals, stable);
-            let mv = Self::get_val(&self.mount_vals, stable);
+        for c in COUNTERS {
+            let cv = Self::get_val(curr, c.stable_id);
+            let pv = Self::get_val(&self.prev_vals, c.stable_id);
+            let sv = Self::get_val(&self.start_vals, c.stable_id);
+            let mv = Self::get_val(&self.mount_vals, c.stable_id);
 
             let v_mount = cv.wrapping_sub(mv);
             if v_mount == 0 { continue }
@@ -212,10 +191,10 @@ impl TopState {
             let v_total = cv.wrapping_sub(sv);
 
             write!(stdout, "{:<40} {:>12}/s {:>14} {:>14}\r\n",
-                counter_name(i),
-                fmt_counter(v_rate / self.interval_secs as u64, sectors, self.human_readable),
-                fmt_counter(v_total, sectors, self.human_readable),
-                fmt_counter(v_mount, sectors, self.human_readable))?;
+                c.name,
+                fmt_counter(v_rate / self.interval_secs as u64, c.is_sectors, self.human_readable),
+                fmt_counter(v_total, c.is_sectors, self.human_readable),
+                fmt_counter(v_mount, c.is_sectors, self.human_readable))?;
         }
 
         if self.show_devices && !dev_io.is_empty() {

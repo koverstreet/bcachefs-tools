@@ -1,5 +1,3 @@
-use std::ffi::CStr;
-
 use bch_bindgen::c;
 
 use super::handle::BcachefsHandle;
@@ -330,12 +328,5 @@ pub fn btree_id_str(id: u32) -> String {
 
 /// Get a member state string.
 pub fn member_state_str(state: u8) -> &'static str {
-    // bch2_member_states is declared as extern [] so bindgen emits a
-    // zero-length array; index via raw pointer to avoid bounds panic.
-    let ptr = unsafe { *c::bch2_member_states.as_ptr().add(state as usize) };
-    if ptr.is_null() {
-        "unknown"
-    } else {
-        unsafe { CStr::from_ptr(ptr).to_str().unwrap_or("unknown") }
-    }
+    bch_bindgen::sb::member_state_str(state)
 }

@@ -1,4 +1,3 @@
-use std::ffi::CStr;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, Context, Result};
@@ -7,22 +6,12 @@ use bch_bindgen::c::bch_degraded_actions;
 use bch_bindgen::c::bch_persistent_counters::BCH_COUNTER_NR;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
+use bch_bindgen::sb::COUNTERS;
 use clap::Parser;
 
 fn match_counter(name: &str) -> Result<usize> {
-    unsafe {
-        let base = c::bch2_counter_names.as_ptr();
-        for i in 0..BCH_COUNTER_NR as usize {
-            let ptr = *base.add(i);
-            if ptr.is_null() { continue }
-            if let Ok(s) = CStr::from_ptr(ptr).to_str() {
-                if s == name {
-                    return Ok(i);
-                }
-            }
-        }
-    }
-    Err(anyhow!("invalid counter '{}'", name))
+    COUNTERS.iter().position(|c| c.name == name)
+        .ok_or_else(|| anyhow!("invalid counter '{}'", name))
 }
 
 #[derive(Parser, Debug)]
