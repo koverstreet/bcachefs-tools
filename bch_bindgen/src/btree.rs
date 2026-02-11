@@ -42,7 +42,13 @@ impl<'f> BtreeTrans<'f> {
 
 impl<'f> Drop for BtreeTrans<'f> {
     fn drop(&mut self) {
-        unsafe { c::bch2_trans_put(&mut *self.raw) }
+        unsafe {
+            // Clear any pending restart state — bch2_trans_put() BUG_ONs
+            // if the transaction is in restart, which can happen if Rust
+            // code propagates a restart error via ? and unwinds.
+            c::bch2_trans_begin(self.raw);
+            c::bch2_trans_put(&mut *self.raw)
+        }
     }
 }
 

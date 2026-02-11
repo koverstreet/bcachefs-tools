@@ -31,6 +31,15 @@ impl Fs {
 
         errptr_to_result(ret).map(|fs| Fs { raw: fs })
     }
+
+    /// Shut down the filesystem, returning the error code from bch2_fs_exit.
+    /// Consumes self so the caller can't use it afterward; forget prevents
+    /// Drop from double-freeing.
+    pub fn exit(self) -> i32 {
+        let ret = unsafe { c::bch2_fs_exit(self.raw) };
+        std::mem::forget(self);
+        ret
+    }
 }
 
 impl Drop for Fs {

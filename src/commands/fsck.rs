@@ -406,10 +406,7 @@ fn run_userspace_fsck(devices: &[String], opts_str: &str) -> Result<()> {
         eprint!("{}", buf);
     }
 
-    let ret2 = unsafe { c::bch2_fs_exit(fs.raw) };
-
-    // Prevent Fs::drop from calling bch2_fs_exit again
-    std::mem::forget(fs);
+    let ret2 = fs.exit();
 
     if ret2 != 0 {
         eprintln!("error shutting down filesystem: {}", crate::wrappers::bch_err_str(ret2));
