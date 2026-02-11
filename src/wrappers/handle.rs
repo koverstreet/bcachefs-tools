@@ -51,6 +51,8 @@ type SubvolDestroyOpcode   = WriteOpcode<0xbc, 17, bch_ioctl_subvolume>;
 type SubvolDestroyV2Opcode = WriteOpcode<0xbc, 30, bch_ioctl_subvolume_v2>;
 
 // Disk ioctl opcodes (_IOW(0xbc, N, struct))
+type DiskAddOpcode         = WriteOpcode<0xbc, 4,  bch_ioctl_disk>;
+type DiskAddV2Opcode       = WriteOpcode<0xbc, 23, bch_ioctl_disk_v2>;
 type DiskRemoveOpcode      = WriteOpcode<0xbc, 5,  bch_ioctl_disk>;
 type DiskRemoveV2Opcode    = WriteOpcode<0xbc, 24, bch_ioctl_disk_v2>;
 type DiskOnlineOpcode      = WriteOpcode<0xbc, 6,  bch_ioctl_disk>;
@@ -169,6 +171,13 @@ impl BcachefsHandle {
             self.ioctl_fd(), V2, V1,
             bch_ioctl_disk_v2 { flags, dev, ..Default::default() },
             bch_ioctl_disk    { flags, dev, ..Default::default() }
+        )
+    }
+
+    /// Add a new device to this filesystem.
+    pub(crate) fn disk_add(&self, dev_path: &CStr) -> Result<(), Errno> {
+        self.disk_ioctl::<DiskAddV2Opcode, DiskAddOpcode>(
+            0, dev_path.as_ptr() as u64,
         )
     }
 

@@ -1,3 +1,4 @@
+use std::ffi::CString;
 use std::io::{self, Write};
 use std::path::Path;
 use std::thread;
@@ -5,17 +6,109 @@ use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use bch_bindgen::c::{
+    self,
     bch_member_state::*,
     bcachefs_metadata_version::bcachefs_metadata_version_reconcile,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
 };
 use bch_bindgen::path_to_cstr;
-use clap::{Parser, ValueEnum};
+use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
+use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
 use crate::util::{fmt_sectors_human, parse_human_size};
 use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::sysfs::bcachefs_kernel_version;
+use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
+
+fn device_add_opt_flags() -> u32 {
+    c::opt_flags::OPT_FORMAT as u32 | c::opt_flags::OPT_DEVICE as u32
+}
+
+pub fn device_add_cmd() -> Command {
+    Command::new("add")
+        .about("Add a new device to an existing filesystem")
+        .args(bch_option_args(device_add_opt_flags()))
+        .arg(Arg::new("label")
+            .short('l')
+            .long("label")
+            .help("Disk label"))
+        .arg(Arg::new("force")
+            .short('f')
+            .long("force")
+            .action(ArgAction::SetTrue)
+            .help("Use device even if it appears to already be formatted"))
+        .arg(Arg::new("filesystem")
+            .required(true)
+            .help("Filesystem path or mountpoint"))
+        .arg(Arg::new("device")
+            .required(true)
+            .help("Device to add"))
+}
+
+pub fn cmd_device_add(argv: Vec<String>) -> Result<()> {
+    let matches = device_add_cmd().get_matches_from(argv);
+
+    let fs_path = matches.get_one::<String>("filesystem").unwrap();
+    let dev_path = matches.get_one::<String>("device").unwrap();
+    let label = matches.get_one::<String>("label");
+    let force = matches.get_flag("force");
+
+    let handle = BcachefsHandle::open(fs_path)
+        .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))?;
+
+    let block_size = sysfs::read_sysfs_fd_u64(handle.sysfs_fd(), "options/block_size")
+        .context("reading block_size from sysfs")?;
+    let btree_node_size = sysfs::read_sysfs_fd_u64(handle.sysfs_fd(), "options/btree_node_size")
+        .context("reading btree_node_size from sysfs")?;
+
+    // Build dev_opts with bch_opts from parsed arguments
+    let mut dev_opts: c::dev_opts = unsafe { std::mem::zeroed() };
+
+    let c_path = CString::new(dev_path.as_str())?;
+    dev_opts.path = c_path.as_ptr();
+
+    let c_label = label.map(|l| CString::new(l.as_str()).unwrap());
+    if let Some(ref l) = c_label {
+        dev_opts.label = l.as_ptr();
+    }
+
+    // Apply bcachefs options (--discard, --durability, etc.)
+    let bch_opts = bch_options_from_matches(&matches, device_add_opt_flags());
+    for (name, value) in &bch_opts {
+        let Some((opt_id, opt)) = bch_opt_lookup(name) else { continue };
+        let c_value = CString::new(value.as_str())?;
+        let mut val: u64 = 0;
+        let ret = unsafe {
+            c::bch2_opt_parse(std::ptr::null_mut(), opt, c_value.as_ptr(), &mut val, std::ptr::null_mut())
+        };
+        if ret != 0 {
+            return Err(anyhow!("invalid option {}={}", name, value));
+        }
+
+        let opt_id_enum: c::bch_opt_id = unsafe { std::mem::transmute(opt_id as u32) };
+        unsafe { c::bch2_opt_set_by_id(&mut dev_opts.opts, opt_id_enum, val) };
+    }
+
+    let ret = unsafe { c::open_for_format(&mut dev_opts, 0, force) };
+    if ret != 0 {
+        return Err(anyhow!("error opening {}: {}",
+            dev_path, std::io::Error::from_raw_os_error(-ret)));
+    }
+
+    let ret = unsafe {
+        c::bch2_format_for_device_add(&mut dev_opts, block_size as u32, btree_node_size as u32)
+    };
+    if ret != 0 {
+        return Err(anyhow!("error formatting {}: {}",
+            dev_path, std::io::Error::from_raw_os_error(-ret)));
+    }
+
+    let c_dev_path = path_to_cstr(dev_path);
+    handle.disk_add(&c_dev_path)
+        .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
+
+    Ok(())
+}
 
 /// Open a filesystem by block device path and return its handle + device index.
 fn open_dev(path: &str) -> Result<(BcachefsHandle, u32)> {

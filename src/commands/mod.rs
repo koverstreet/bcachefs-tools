@@ -26,6 +26,7 @@ pub use attr::cmd_setattr;
 pub use attr::cmd_reflink_option_propagate;
 pub use counters::cmd_reset_counters;
 pub use device::{
+    cmd_device_add,
     cmd_device_online, cmd_device_offline, cmd_device_remove, cmd_device_evacuate,
     cmd_device_set_state, cmd_device_resize, cmd_device_resize_journal,
 };
@@ -80,6 +81,7 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("data").about("Manage filesystem data")
             .subcommand(scrub::Cli::command().name("scrub")))
         .subcommand(Command::new("device").about("Manage devices within a filesystem")
+            .subcommand(device::device_add_cmd())
             .subcommand(device::OnlineCli::command().name("online"))
             .subcommand(device::OfflineCli::command().name("offline"))
             .subcommand(device::RemoveCli::command().name("remove"))

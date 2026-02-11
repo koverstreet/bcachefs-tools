@@ -37,6 +37,19 @@ pub fn read_sysfs_u64(path: &Path) -> io::Result<u64> {
             format!("{}: {:?}", e, s.trim())))
 }
 
+/// Read a sysfs attribute as a u64, relative to a directory fd.
+pub fn read_sysfs_fd_u64(dirfd: i32, path: &str) -> io::Result<u64> {
+    let dir = unsafe { BorrowedFd::borrow_raw(dirfd) };
+    let flags = rustix::fs::OFlags::RDONLY;
+    let fd = rustix::fs::openat(dir, path, flags, rustix::fs::Mode::empty())?;
+    let mut buf = [0u8; 64];
+    let n = rustix::io::read(&fd, &mut buf)?;
+    let s = std::str::from_utf8(&buf[..n])
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    s.trim().parse::<u64>()
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
+}
+
 const KERNEL_VERSION_PATH: &str = "/sys/module/bcachefs/parameters/version";
 
 /// Read the bcachefs kernel module metadata version.
