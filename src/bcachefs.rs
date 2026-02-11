@@ -58,7 +58,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "kill_btree_node"   => c::cmd_kill_btree_node(argc, argv),
             "migrate"           => c::cmd_migrate(argc, argv),
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
-            "strip-alloc"       => c::cmd_strip_alloc(argc, argv),
+            "strip-alloc"       => { eprintln!("BUG: strip-alloc should be handled in Rust"); 1 }
             #[cfg(feature = "fuse")]
             "fusemount"         => c::cmd_fusemount(argc, argv),
             _ => { println!("Unknown command {cmd}"); c::bcachefs_usage(); 1 }
@@ -184,6 +184,7 @@ fn main() -> ExitCode {
         "undump" => commands::cmd_undump(args[1..].to_vec()).report(),
         "recover-super" => commands::cmd_recover_super(args[1..].to_vec()).report(),
         "show-super" => commands::super_cmd::cmd_show_super(args[1..].to_vec()).report(),
+        "strip-alloc" => commands::cmd_strip_alloc(args[1..].to_vec()).report(),
         "set-file-option" => commands::cmd_setattr(args[1..].to_vec()).report(),
         "set-fs-option" => commands::cmd_set_option(args[1..].to_vec()).report(),
         "set-passphrase" => commands::cmd_set_passphrase(args[1..].to_vec()).report(),

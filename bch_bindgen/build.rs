@@ -275,6 +275,8 @@ fn main() {
         .allowlist_function("copy_fs")
         .allowlist_function("rust_fmt_build_fs")
         .allowlist_function("rust_opts_usage_to_str")
+        .allowlist_function("rust_strip_alloc_check")
+        .allowlist_function("rust_strip_alloc_do")
         .allowlist_function("read_passphrase")
         .allowlist_function("read_passphrase_twice")
         .blocklist_function("bch2_prt_vprintf")

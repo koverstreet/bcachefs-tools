@@ -7,6 +7,8 @@
 
 #include "libbcachefs.h"
 #include "libbcachefs/opts.h"
+#include "libbcachefs/sb/io.h"
+#include "cmd_strip_alloc.h"
 #include "posix_to_bcachefs.h"
 #include "rust_shims.h"
 
@@ -94,4 +96,27 @@ int rust_fmt_build_fs(struct bch_fs *c, const char *src_path)
 	int ret = copy_fs(c, &s, src_fd, src_path);
 	close(src_fd);
 	return ret;
+}
+
+int rust_strip_alloc_check(struct bch_fs *c)
+{
+	if (!c->sb.clean)
+		return 1;
+
+	u64 capacity = 0;
+	for_each_member_device(c, ca)
+		capacity += ca->mi.nbuckets * (ca->mi.bucket_size << 9);
+
+	if (capacity > 1ULL << 40)
+		return -ERANGE;
+
+	return 0;
+}
+
+void rust_strip_alloc_do(struct bch_fs *c)
+{
+	mutex_lock(&c->sb_lock);
+	strip_fs_alloc(c);
+	bch2_write_super(c);
+	mutex_unlock(&c->sb_lock);
 }

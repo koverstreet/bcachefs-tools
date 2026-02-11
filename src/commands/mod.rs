@@ -17,6 +17,7 @@ pub mod recover_super;
 pub mod recovery_pass;
 pub mod scrub;
 pub mod set_option;
+pub mod strip_alloc;
 pub mod subvolume;
 pub mod super_cmd;
 pub mod timestats;
@@ -42,6 +43,7 @@ pub use recover_super::cmd_recover_super;
 pub use recovery_pass::cmd_recovery_pass;
 pub use scrub::scrub;
 pub use set_option::cmd_set_option;
+pub use strip_alloc::cmd_strip_alloc;
 pub use subvolume::subvolume;
 pub use timestats::timestats;
 pub use top::top;
@@ -111,7 +113,9 @@ pub fn build_cli() -> Command {
         .subcommand(key::SetPassphraseCli::command().name("set-passphrase"))
         .subcommand(key::RemovePassphraseCli::command().name("remove-passphrase"))
         .subcommand(super_cmd::ShowSuperCli::command().name("show-super"))
-        .subcommand(key::UnlockCli::command().name("unlock"));
+        .subcommand(key::UnlockCli::command().name("unlock"))
+        .subcommand(Command::new("strip-alloc")
+            .about("Strip alloc info on a filesystem to be used read-only"));
 
     cmd
 }

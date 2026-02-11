@@ -22,4 +22,18 @@ int rust_fmt_build_fs(struct bch_fs *c, const char *src_path);
  */
 char *rust_opts_usage_to_str(unsigned flags_all, unsigned flags_none);
 
+/*
+ * Check if filesystem is ready for strip-alloc:
+ *   returns 0 if clean and capacity <= 1TB
+ *   returns 1 if not clean (caller should run recovery and reopen)
+ *   returns -ERANGE if capacity too large
+ */
+int rust_strip_alloc_check(struct bch_fs *c);
+
+/*
+ * Strip alloc info: takes sb_lock, calls strip_fs_alloc(),
+ * writes superblock, releases lock.
+ */
+void rust_strip_alloc_do(struct bch_fs *c);
+
 #endif /* _RUST_SHIMS_H */
