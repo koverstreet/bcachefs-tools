@@ -10,6 +10,7 @@ pub mod list;
 pub mod mount;
 pub mod opts;
 pub mod reconcile;
+pub mod recovery_pass;
 pub mod scrub;
 pub mod set_option;
 pub mod subvolume;
@@ -29,6 +30,7 @@ pub use key::{cmd_unlock, cmd_set_passphrase, cmd_remove_passphrase};
 pub use list::list;
 pub use mount::mount;
 pub use reconcile::{cmd_reconcile_status, cmd_reconcile_wait};
+pub use recovery_pass::cmd_recovery_pass;
 pub use scrub::scrub;
 pub use set_option::cmd_set_option;
 pub use subvolume::subvolume;
@@ -93,8 +95,7 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("reconcile").about("Reconcile filesystem data")
             .subcommand(reconcile::StatusCli::command().name("status"))
             .subcommand(reconcile::WaitCli::command().name("wait")))
-        .subcommand(Command::new("recovery-pass")
-            .about("Run a specific recovery pass"))
+        .subcommand(recovery_pass::RecoveryPassCli::command().name("recovery-pass"))
         .subcommand(set_option::set_option_cmd())
         .subcommand(key::SetPassphraseCli::command().name("set-passphrase"))
         .subcommand(key::RemovePassphraseCli::command().name("remove-passphrase"))

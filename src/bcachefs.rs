@@ -59,7 +59,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "format" => c::cmd_format(argc, argv),
             // fs subcommand dispatch is fully in Rust now
             "fsck" => c::cmd_fsck(argc, argv),
-            "recovery-pass" => c::cmd_recovery_pass(argc, argv),
+            // recovery-pass handled in Rust dispatch
             "image" => c::image_cmds(argc, argv),
             "list_journal" => c::cmd_list_journal(argc, argv),
             "kill_btree_node" => c::cmd_kill_btree_node(argc, argv),
@@ -181,6 +181,7 @@ fn main() -> ExitCode {
         },
         "remove-passphrase" => commands::cmd_remove_passphrase(args[1..].to_vec()).report(),
         "reset-counters" => commands::cmd_reset_counters(args[1..].to_vec()).report(),
+        "recovery-pass" => commands::cmd_recovery_pass(args[1..].to_vec()).report(),
         "reconcile" => match args.get(2).map(|s| s.as_str()) {
             Some("status") => commands::cmd_reconcile_status(args[2..].to_vec()).report(),
             Some("wait") => commands::cmd_reconcile_wait(args[2..].to_vec()).report(),
