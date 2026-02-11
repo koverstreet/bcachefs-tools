@@ -24,7 +24,6 @@ bitfield! {
     pub struct bch_crypt_flags(u64);
     pub TYPE, _: 4, 0;
 }
-use std::mem::offset_of;
 impl bch_sb_field_crypt {
     pub fn scrypt_flags(&self) -> Option<bch_scrypt_flags> {
         use std::convert::TryInto;
@@ -49,20 +48,14 @@ impl PartialEq for bch_sb {
 }
 
 impl bch_sb {
-    pub fn crypt(&self) -> Option<&bch_sb_field_crypt> {
-        unsafe {
-            let ptr = bch2_sb_field_get_id(
-                self as *const _ as *mut _,
-                bch_sb_field_type::BCH_SB_FIELD_crypt,
-            ) as *const u8;
-            if ptr.is_null() {
-                None
-            } else {
-                let offset = offset_of!(bch_sb_field_crypt, field);
-                Some(&*((ptr.sub(offset)) as *const _))
-            }
-        }
+    pub fn field<F: crate::sb::SbField>(&self) -> Option<&F> {
+        crate::sb::sb_field_get(self)
     }
+
+    pub fn crypt(&self) -> Option<&bch_sb_field_crypt> {
+        self.field()
+    }
+
     pub fn uuid(&self) -> uuid::Uuid {
         uuid::Uuid::from_bytes(self.user_uuid.b)
     }

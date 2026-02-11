@@ -89,6 +89,32 @@ fn split_xmacro_args(s: &str) -> Vec<String> {
     args
 }
 
+fn generate_sb_field_impls(entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+
+    out.push_str("// Auto-generated from BCH_SB_FIELDS() — do not edit\n\n");
+
+    out.push_str("/// Marker trait connecting an sb field struct to its field type enum.\n");
+    out.push_str("///\n");
+    out.push_str("/// # Safety\n");
+    out.push_str("/// Implementors must ensure FIELD_TYPE matches the struct type,\n");
+    out.push_str("/// and that `field` is the first member (offset 0).\n");
+    out.push_str("pub unsafe trait SbField: Sized {\n");
+    out.push_str("    const FIELD_TYPE: c::bch_sb_field_type;\n");
+    out.push_str("}\n\n");
+
+    for e in entries {
+        let name = &e[0];
+        out.push_str(&format!(
+            "unsafe impl SbField for c::bch_sb_field_{name} {{\n\
+             \x20   const FIELD_TYPE: c::bch_sb_field_type = c::bch_sb_field_type::BCH_SB_FIELD_{name};\n\
+             }}\n\n"
+        ));
+    }
+
+    out
+}
+
 fn generate_bkey_types(entries: &[Vec<String>]) -> String {
     let mut out = String::new();
 
@@ -253,9 +279,10 @@ fn main() {
     )
     .expect("Writing to output file failed for: `bcachefs.rs`");
 
-    // Generate bkey type enum from BCH_BKEY_TYPES() x-macro
+    // Generate from x-macros in bcachefs_format.h
     let format_h = std::fs::read_to_string(top_dir.join("../libbcachefs/bcachefs_format.h"))
         .expect("reading bcachefs_format.h");
+
     let bkey_types = parse_xmacro(&format_h, "BCH_BKEY_TYPES");
     assert!(!bkey_types.is_empty(), "failed to parse BCH_BKEY_TYPES()");
     std::fs::write(
@@ -263,6 +290,14 @@ fn main() {
         generate_bkey_types(&bkey_types),
     )
     .expect("Writing bkey_types_gen.rs");
+
+    let sb_fields = parse_xmacro(&format_h, "BCH_SB_FIELDS");
+    assert!(!sb_fields.is_empty(), "failed to parse BCH_SB_FIELDS()");
+    std::fs::write(
+        out_dir.join("sb_field_types_gen.rs"),
+        generate_sb_field_impls(&sb_fields),
+    )
+    .expect("Writing sb_field_types_gen.rs");
 
     let keyutils = pkg_config::probe_library("libkeyutils").expect("Failed to find keyutils lib");
     let bindings = bindgen::builder()

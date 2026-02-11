@@ -5,6 +5,7 @@ pub mod errcode;
 pub mod fs;
 pub mod keyutils;
 pub mod opts;
+pub mod sb;
 pub mod sb_io;
 pub use paste::paste;
 

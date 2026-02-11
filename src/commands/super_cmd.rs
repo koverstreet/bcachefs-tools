@@ -81,12 +81,7 @@ pub fn cmd_show_super(argv: Vec<String>) -> Result<()> {
         let sb = (*fs.raw).disk_sb.sb;
 
         if print_default_fields {
-            let has_v2 = !c::bch2_sb_field_get_id(
-                sb,
-                c::bch_sb_field_type::BCH_SB_FIELD_members_v2,
-            ).is_null();
-
-            if has_v2 {
+            if (*sb).field::<c::bch_sb_field_members_v2>().is_some() {
                 fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
             } else {
                 fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32;

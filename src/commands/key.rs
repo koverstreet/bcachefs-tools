@@ -118,10 +118,9 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
 
 /// Write a new encrypted key to the crypt superblock field.
 unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
-    let sb_ptr = (*fs.raw).disk_sb.sb;
-    let crypt_ptr = c::bch2_sb_field_get_id(sb_ptr, c::bch_sb_field_type::BCH_SB_FIELD_crypt)
-        as *mut c::bch_sb_field_crypt;
-    (*crypt_ptr).key = key;
+    let crypt = bch_bindgen::sb::sb_field_get_mut::<c::bch_sb_field_crypt>((*fs.raw).disk_sb.sb)
+        .expect("filesystem has no crypt field");
+    crypt.key = key;
 }
 
 // ---- set-passphrase ----
