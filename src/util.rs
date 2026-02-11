@@ -1,9 +1,12 @@
 use std::ffi::CString;
+use std::fs::File;
 use std::io;
+use std::os::unix::fs::FileTypeExt;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::c;
 use crossterm::{cursor, execute, terminal};
+use rustix::ioctl::{self, Getter, ReadOpcode};
 
 /// Parse a human-readable size string (e.g. "1G", "512M") via bch2_strtoull_h.
 pub fn parse_human_size(s: &str) -> Result<u64> {
@@ -56,6 +59,18 @@ pub fn fmt_num_human(n: u64) -> String {
         val /= 1000.0;
     }
     format!("{}", n)
+}
+
+/// Get the size of a file or block device in bytes.
+pub fn file_size(f: &File) -> Result<u64> {
+    let meta = f.metadata()?;
+    if meta.file_type().is_block_device() {
+        // BLKGETSIZE64 = _IOR(0x12, 114, size_t)
+        type BlkGetSize64 = ReadOpcode<0x12, 114, u64>;
+        Ok(unsafe { ioctl::ioctl(f, Getter::<BlkGetSize64, u64>::new()) }?)
+    } else {
+        Ok(meta.len())
+    }
 }
 
 pub fn run_tui<F>(f: F) -> Result<()>

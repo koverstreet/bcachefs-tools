@@ -254,23 +254,10 @@ impl MemberState {
 }
 
 fn device_size(dev: &str) -> Result<u64> {
-    use std::os::unix::fs::FileTypeExt;
-    use rustix::ioctl::{self, Getter, ReadOpcode};
-
     let f = std::fs::File::open(dev)
         .with_context(|| format!("opening {}", dev))?;
-    let meta = f.metadata()
-        .with_context(|| format!("stat {}", dev))?;
-
-    if meta.file_type().is_block_device() {
-        // BLKGETSIZE64 = _IOR(0x12, 114, size_t)
-        type BlkGetSize64 = ReadOpcode<0x12, 114, u64>;
-        let size = unsafe { ioctl::ioctl(&f, Getter::<BlkGetSize64, u64>::new()) }
-            .map_err(|_| anyhow!("BLKGETSIZE64 failed on {}", dev))?;
-        Ok(size)
-    } else {
-        Ok(meta.len())
-    }
+    crate::util::file_size(&f)
+        .with_context(|| format!("getting size of {}", dev))
 }
 
 #[derive(Parser, Debug)]
