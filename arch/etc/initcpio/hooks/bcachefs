@@ -4,11 +4,14 @@ run_hook() {
     local rootdev
     if rootdev="$(resolve_device "$root")" && bcachefs unlock -c "$rootdev" >/dev/null 2>&1
     then
-        echo "Unlocking $rootdev:"
-        while true
-        do
-            bcachefs unlock "$rootdev" && break
-        done
+        if [ -e "/run/plymouth/pid" ]
+        then
+            echo "Unlocking $rootdev using plymouth"
+            plymouth ask-for-password --prompt "Enter passphrase" --command "bcachefs unlock $rootdev" --number-of-tries=3
+        else
+            echo "Unlocking $rootdev"
+            bcachefs unlock "$rootdev"
+        fi
     fi
 }
 
