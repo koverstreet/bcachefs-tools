@@ -31,17 +31,20 @@ const NR_COUNTERS: usize = BCH_COUNTER_NR as usize;
 
 // Counter info accessors — read directly from bch_bindgen FFI arrays
 
-unsafe fn counter_name(i: usize) -> &'static str {
-    let p = *bch_bindgen::c::bch2_counter_names.as_ptr().add(i);
-    if p.is_null() { "???" } else { CStr::from_ptr(p).to_str().unwrap_or("???") }
+fn counter_name(i: usize) -> &'static str {
+    if i >= NR_COUNTERS { return "???" }
+    let p = unsafe { *bch_bindgen::c::bch2_counter_names.as_ptr().add(i) };
+    if p.is_null() { "???" } else { unsafe { CStr::from_ptr(p) }.to_str().unwrap_or("???") }
 }
 
-unsafe fn counter_stable_id(i: usize) -> u16 {
-    *bch_bindgen::c::bch2_counter_stable_map.as_ptr().add(i)
+fn counter_stable_id(i: usize) -> u16 {
+    if i >= NR_COUNTERS { return 0 }
+    unsafe { *bch_bindgen::c::bch2_counter_stable_map.as_ptr().add(i) }
 }
 
-unsafe fn counter_is_sectors(i: usize) -> bool {
-    *bch_bindgen::c::bch2_counter_flags_map.as_ptr().add(i) == bch_counters_flags::TYPE_SECTORS
+fn counter_is_sectors(i: usize) -> bool {
+    if i >= NR_COUNTERS { return false }
+    unsafe { *bch_bindgen::c::bch2_counter_flags_map.as_ptr().add(i) == bch_counters_flags::TYPE_SECTORS }
 }
 
 // ioctl query
@@ -163,9 +166,7 @@ struct TopState {
 impl TopState {
     fn new(handle: &BcachefsHandle, human_readable: bool) -> Result<Self> {
         let ioctl_fd = handle.ioctl_fd_raw();
-        let nr_stable = unsafe {
-            (0..NR_COUNTERS).map(|i| counter_stable_id(i)).max().unwrap_or(0) + 1
-        };
+        let nr_stable = (0..NR_COUNTERS).map(|i| counter_stable_id(i)).max().unwrap_or(0) + 1;
 
         let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
         let start_vals = read_counters(ioctl_fd, 0, nr_stable)?;
@@ -198,7 +199,7 @@ impl TopState {
             "", format!("{}/s", self.interval_secs), "total", "mount")?;
 
         for i in 0..NR_COUNTERS {
-            let (stable, sectors) = unsafe { (counter_stable_id(i), counter_is_sectors(i)) };
+            let (stable, sectors) = (counter_stable_id(i), counter_is_sectors(i));
             let cv = Self::get_val(curr, stable);
             let pv = Self::get_val(&self.prev_vals, stable);
             let sv = Self::get_val(&self.start_vals, stable);
@@ -211,7 +212,7 @@ impl TopState {
             let v_total = cv.wrapping_sub(sv);
 
             write!(stdout, "{:<40} {:>12}/s {:>14} {:>14}\r\n",
-                unsafe { counter_name(i) },
+                counter_name(i),
                 fmt_counter(v_rate / self.interval_secs as u64, sectors, self.human_readable),
                 fmt_counter(v_total, sectors, self.human_readable),
                 fmt_counter(v_mount, sectors, self.human_readable))?;

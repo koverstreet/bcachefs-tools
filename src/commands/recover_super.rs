@@ -214,7 +214,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     opt_set!(opts, nochanges, 1);
 
     let c_path = CString::new(src_device)?;
-    let mut src_sb: c::bch_sb_handle = unsafe { std::mem::zeroed() };
+    let mut src_sb: c::bch_sb_handle = Default::default();
     let ret = unsafe { c::bch2_read_super(c_path.as_ptr(), &mut opts, &mut src_sb) };
     if ret != 0 {
         let err_str = unsafe { std::ffi::CStr::from_ptr(c::bch2_err_str(ret)).to_string_lossy() };
