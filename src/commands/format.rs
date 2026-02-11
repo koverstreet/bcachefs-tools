@@ -163,6 +163,19 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     let mut fs_opts: c::bch_opts = Default::default();
     let mut deferred_opts: Vec<(usize, String)> = Vec::new();
 
+    macro_rules! push_device {
+        ($path:expr) => {{
+            devices.push(DevConfig {
+                path: $path,
+                label: cur_label.take(),
+                fs_size: cur_fs_size,
+                opts: std::mem::take(&mut cur_dev_opts),
+            });
+            cur_fs_size = 0;
+            unconsumed_dev_option = false;
+        }};
+    }
+
     // Parse arguments (skip argv[0] which is the command/program name)
     let mut i = 1;
     while i < argv.len() {
@@ -172,14 +185,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
         if arg == "--" {
             i += 1;
             while i < argv.len() {
-                devices.push(DevConfig {
-                    path: argv[i].clone(),
-                    label: cur_label.take(),
-                    fs_size: cur_fs_size,
-                    opts: std::mem::take(&mut cur_dev_opts),
-                });
-                cur_fs_size = 0;
-                unconsumed_dev_option = false;
+                push_device!(argv[i].clone());
                 i += 1;
             }
             break;
@@ -341,14 +347,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
         }
 
         // Positional argument: device path
-        devices.push(DevConfig {
-            path: arg.clone(),
-            label: cur_label.take(),
-            fs_size: cur_fs_size,
-            opts: std::mem::take(&mut cur_dev_opts),
-        });
-        cur_fs_size = 0;
-        unconsumed_dev_option = false;
+        push_device!(arg.clone());
         i += 1;
     }
 
