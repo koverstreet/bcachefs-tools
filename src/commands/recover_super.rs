@@ -1,16 +1,17 @@
-use std::ffi::CString;
 use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::os::unix::io::AsRawFd;
+use std::path::Path;
 use std::process;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::bcachefs;
 use bch_bindgen::c;
 use bch_bindgen::opt_set;
+use bch_bindgen::sb_io;
 use clap::Parser;
 
-use crate::util::parse_human_size;
+use crate::util::{file_size, parse_human_size};
 use crate::wrappers::printbuf::Printbuf;
 
 // bch2_sb_validate's flags parameter is a bch_validate_flags enum in bindgen,
@@ -76,28 +77,41 @@ pub struct RecoverSuperCli {
     device: String,
 }
 
+/// Interpret a byte buffer as a `&bch_sb`.
+///
+/// SAFETY: `buf` must be large enough to contain a `bch_sb` header and the
+/// pointer must be suitably aligned (any 512-byte-aligned buffer suffices).
+unsafe fn buf_as_sb(buf: &[u8]) -> &c::bch_sb {
+    &*(buf.as_ptr() as *const c::bch_sb)
+}
+
+/// Interpret a byte buffer as a `&mut bch_sb`.
+///
+/// SAFETY: same as `buf_as_sb`.
+unsafe fn buf_as_sb_mut(buf: &mut [u8]) -> &mut c::bch_sb {
+    &mut *(buf.as_mut_ptr() as *mut c::bch_sb)
+}
+
 /// Total size of a bch_sb structure in bytes (fixed header + variable-length data).
-unsafe fn sb_bytes(sb: *const c::bch_sb) -> usize {
-    std::mem::size_of::<c::bch_sb>() + (*sb).u64s as usize * 8
+fn sb_bytes(sb: &c::bch_sb) -> usize {
+    std::mem::size_of::<c::bch_sb>() + sb.u64s as usize * 8
 }
 
-fn sb_as_ptr(buf: &[u8]) -> *const c::bch_sb { buf.as_ptr() as _ }
-fn sb_as_mut_ptr(buf: &mut [u8]) -> *mut c::bch_sb { buf.as_mut_ptr() as _ }
-
-fn sb_magic_matches(sb: *const c::bch_sb) -> bool {
-    let magic = unsafe { (*sb).magic.b };
-    magic == BCACHE_MAGIC || magic == BCHFS_MAGIC
+fn sb_magic_matches(sb: &c::bch_sb) -> bool {
+    sb.magic.b == BCACHE_MAGIC || sb.magic.b == BCHFS_MAGIC
 }
 
-fn sb_last_mount_time(sb: *const c::bch_sb) -> u64 {
-    let nr = unsafe { (*sb).nr_devices };
-    (0..nr as i32)
-        .map(|i| u64::from_le(unsafe { c::bch2_sb_member_get(sb as *mut _, i) }.last_mount as u64))
+fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
+    (0..sb.nr_devices as i32)
+        .map(|i| {
+            let m = unsafe { c::bch2_sb_member_get(sb as *const _ as *mut _, i) };
+            u64::from_le(m.last_mount as u64)
+        })
         .max()
         .unwrap_or(0)
 }
 
-fn validate_sb(sb: *mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
+fn validate_sb(sb: &mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
     let mut err = Printbuf::new();
     let mut opts = bcachefs::bch_opts::default();
     let ret = unsafe { bch2_sb_validate(sb, &mut opts, offset_sectors, 0, err.as_raw()) };
@@ -110,12 +124,6 @@ fn prt_offset(offset: u64) -> Printbuf {
     hr
 }
 
-/// Copy the superblock at `buf[..sb_bytes]` into a new owned Vec.
-unsafe fn copy_sb(buf: &[u8]) -> Vec<u8> {
-    let bytes = sb_bytes(buf.as_ptr() as _);
-    buf[..bytes].to_vec()
-}
-
 fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Option<Vec<u8>> {
     let mut buf = vec![0u8; sb_size];
     let r = dev.read_at(&mut buf, offset).ok()?;
@@ -123,7 +131,8 @@ fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Op
         return None;
     }
 
-    let (ret, _err) = validate_sb(sb_as_mut_ptr(&mut buf), offset >> 9);
+    let sb = unsafe { buf_as_sb_mut(&mut buf) };
+    let (ret, _err) = validate_sb(sb, offset >> 9);
     if ret != 0 {
         return None;
     }
@@ -132,7 +141,8 @@ fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Op
         println!("found superblock at {}", prt_offset(offset));
     }
 
-    Some(unsafe { copy_sb(&buf) })
+    let bytes = sb_bytes(unsafe { buf_as_sb(&buf) });
+    Some(buf[..bytes].to_vec())
 }
 
 fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<Vec<u8>> {
@@ -150,21 +160,22 @@ fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<Vec<u8
     let mut offset = 0usize;
 
     while offset < buflen {
-        let sb = unsafe { buf.as_ptr().add(offset) as *const c::bch_sb };
+        let sb = unsafe { buf_as_sb(&buf[offset..]) };
 
         if !sb_magic_matches(sb) {
             offset += 512;
             continue;
         }
 
-        let bytes = unsafe { sb_bytes(sb) };
+        let bytes = sb_bytes(sb);
         if offset + bytes > buflen {
             eprintln!("found sb {} size {} that overran buffer", start + offset as u64, bytes);
             offset += 512;
             continue;
         }
 
-        let (ret, err) = validate_sb(sb as *mut _, (start + offset as u64) >> 9);
+        let sb = unsafe { buf_as_sb_mut(&mut buf[offset..]) };
+        let (ret, err) = validate_sb(sb, (start + offset as u64) >> 9);
         if ret != 0 {
             eprintln!("found sb {} that failed to validate: {}", start + offset as u64, err);
             offset += 512;
@@ -204,7 +215,7 @@ fn recover_from_scan(
     }
 
     // Pick the most recently mounted superblock
-    sbs.sort_by_key(|sb| sb_last_mount_time(sb_as_ptr(sb)));
+    sbs.sort_by_key(|sb| sb_last_mount_time(unsafe { buf_as_sb(sb) }));
     sbs.pop().unwrap()
 }
 
@@ -213,16 +224,11 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);
 
-    let c_path = CString::new(src_device)?;
-    let mut src_sb: c::bch_sb_handle = Default::default();
-    let ret = unsafe { c::bch2_read_super(c_path.as_ptr(), &mut opts, &mut src_sb) };
-    if ret != 0 {
-        return Err(anyhow!("Error opening {}: {}", src_device, crate::wrappers::bch_err_str(ret)));
-    }
+    let mut src_sb = sb_io::read_super_opts(Path::new(src_device), opts)
+        .map_err(|e| anyhow!("Error opening {}: {}", src_device, e))?;
 
     let m = unsafe { c::bch2_sb_member_get(src_sb.sb, dev_idx) };
     if m.uuid.b == [0u8; 16] {
-        unsafe { c::bch2_free_super(&mut src_sb) };
         return Err(anyhow!("Member {} does not exist in source superblock", dev_idx));
     }
 
@@ -232,23 +238,15 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
         (*src_sb.sb).dev_idx = dev_idx as u8;
     }
 
-    // Copy to owned buffer, then free the C allocation
-    let sb_buf = unsafe {
-        let bytes = sb_bytes(src_sb.sb);
-        std::slice::from_raw_parts(src_sb.sb as *const u8, bytes).to_vec()
-    };
-    src_sb.sb = std::ptr::null_mut();
-    unsafe { c::bch2_free_super(&mut src_sb) };
-
-    // Set up layout for this device
-    let sb = sb_as_ptr(&sb_buf);
-    let block_size = unsafe { u16::from_le((*sb).block_size) as u32 };
+    // Read fields safely before layout mutation
+    let sb = src_sb.sb();
+    let block_size = u16::from_le(sb.block_size) as u32;
     let bucket_size = u16::from_le(m.bucket_size) as u32;
-    let sb_max_size = unsafe { 1u32 << (*sb).layout.sb_max_size_bits };
+    let sb_max_size = 1u32 << sb.layout.sb_max_size_bits;
 
     unsafe {
         c::bch2_sb_layout_init(
-            &mut (*(sb as *mut c::bch_sb)).layout,
+            &mut (*src_sb.sb).layout,
             block_size << 9,
             bucket_size << 9,
             sb_max_size,
@@ -257,6 +255,12 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
             false,
         );
     }
+
+    // Copy to owned buffer; src_sb's Drop will free the C allocation
+    let bytes = sb_bytes(src_sb.sb());
+    let sb_buf = unsafe {
+        std::slice::from_raw_parts(src_sb.sb as *const u8, bytes).to_vec()
+    };
 
     Ok(sb_buf)
 }
@@ -294,7 +298,7 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
 
     let dev_size = match &cli.dev_size {
         Some(s) => parse_human_size(s)?,
-        None => unsafe { c::get_size(dev_file.as_raw_fd()) },
+        None => file_size(&dev_file)?,
     };
 
     let mut sb_buf = if let Some(ref src) = cli.src_device {
@@ -303,12 +307,10 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
         recover_from_scan(&dev_file, dev_size, offset, scan_len, cli.verbose)
     };
 
-    let sb = sb_as_mut_ptr(&mut sb_buf);
-
     let mut buf = Printbuf::new();
     buf.sb_to_text(
         std::ptr::null_mut(),
-        unsafe { &*sb },
+        unsafe { buf_as_sb(&sb_buf) },
         true,
         1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32,
     );
@@ -321,7 +323,7 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
     }
 
     if cli.yes || unsafe { c::ask_yn() } {
-        unsafe { c::bch2_super_write(dev_file.as_raw_fd(), sb) };
+        unsafe { c::bch2_super_write(dev_file.as_raw_fd(), buf_as_sb_mut(&mut sb_buf)) };
     }
 
     let _ = std::process::Command::new("udevadm")
