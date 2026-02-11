@@ -1,3 +1,5 @@
+use std::ops::ControlFlow;
+
 use anyhow::Result;
 use bch_bindgen::bcachefs;
 use bch_bindgen::bkey::BkeySC;
@@ -30,21 +32,20 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         flags,
     );
 
-    while let Some(k) = iter.peek_and_restart()? {
+    iter.for_each(&trans, |k| {
         if k.k.p > opt.end {
-            break;
+            return ControlFlow::Break(());
         }
 
         if let Some(ty) = opt.bkey_type {
             if k.k.type_ != ty as u8 {
-                iter.advance();
-                continue;
+                return ControlFlow::Continue(());
             }
         }
 
         println!("{}", k.to_text(fs));
-        iter.advance();
-    }
+        ControlFlow::Continue(())
+    })?;
 
     Ok(())
 }
@@ -60,14 +61,14 @@ fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         BtreeIterFlags::PREFETCH,
     );
 
-    while let Some(b) = iter.peek_and_restart()? {
+    iter.for_each(&trans, |b| {
         if b.key.k.p > opt.end {
-            break;
+            return ControlFlow::Break(());
         }
 
         println!("{}", b.to_text(fs));
-        iter.advance();
-    }
+        ControlFlow::Continue(())
+    })?;
 
     Ok(())
 }
@@ -83,14 +84,14 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         BtreeIterFlags::PREFETCH,
     );
 
-    while let Some(b) = iter.peek_and_restart()? {
+    iter.for_each(&trans, |b| {
         if b.key.k.p > opt.end {
-            break;
+            return ControlFlow::Break(());
         }
 
         println!("{}", BkeySC::from(&b.key).to_text(fs));
-        iter.advance();
-    }
+        ControlFlow::Continue(())
+    })?;
 
     Ok(())
 }
@@ -106,14 +107,14 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         BtreeIterFlags::PREFETCH,
     );
 
-    while let Some(b) = iter.peek_and_restart()? {
+    iter.for_each(&trans, |b| {
         if b.key.k.p > opt.end {
-            break;
+            return ControlFlow::Break(());
         }
 
         println!("{}", b.ondisk_to_text(fs));
-        iter.advance();
-    }
+        ControlFlow::Continue(())
+    })?;
 
     Ok(())
 }

@@ -54,7 +54,7 @@ pub enum BkeyValC<'a> {
     extent_whiteout,
 }
 
-impl<'a, 'b> BkeySC<'a> {
+impl<'a> BkeySC<'a> {
     unsafe fn to_raw(&self) -> c::bkey_s_c {
         c::bkey_s_c {
             k: self.k,
@@ -62,8 +62,11 @@ impl<'a, 'b> BkeySC<'a> {
         }
     }
 
-    pub fn to_text(&'a self, fs: &'b Fs) -> BkeySCToText<'a, 'b> {
-        BkeySCToText { k: self, fs }
+    pub fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'a, 'f> {
+        BkeySCToText {
+            k: BkeySC { k: self.k, v: self.v, iter: PhantomData },
+            fs,
+        }
     }
 
     #[allow(clippy::missing_transmute_annotations)]
@@ -137,9 +140,9 @@ impl<'a> From<&'a c::bkey_s_c> for BkeySC<'a> {
     }
 }
 
-pub struct BkeySCToText<'a, 'b> {
-    k:  &'a BkeySC<'a>,
-    fs: &'b Fs,
+pub struct BkeySCToText<'a, 'f> {
+    k:  BkeySC<'a>,
+    fs: &'f Fs,
 }
 
 impl fmt::Display for BkeySCToText<'_, '_> {

@@ -8,6 +8,7 @@ use bitflags::bitflags;
 use std::fmt;
 use std::marker::PhantomData;
 use std::mem::MaybeUninit;
+use std::ops::ControlFlow;
 
 use c::bpos;
 
@@ -26,14 +27,14 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
-    pub fn begin(&mut self) -> u32 {
-        unsafe { c::bch2_trans_begin(&mut *self.raw) }
+    pub fn begin(&self) -> u32 {
+        unsafe { c::bch2_trans_begin(self.raw) }
     }
 
-    pub fn verify_not_restarted(&mut self, restart_count: u32) {
+    pub fn verify_not_restarted(&self, restart_count: u32) {
         unsafe {
             if (*self.raw).restart_count != restart_count {
-                c::bch2_trans_restart_error(&mut *self.raw, restart_count);
+                c::bch2_trans_restart_error(self.raw, restart_count);
             }
         }
     }
@@ -64,23 +65,20 @@ bitflags! {
     }
 }
 
-pub fn lockrestart_do<T, F>(trans: &mut BtreeTrans, f: F) -> Result<T, BchError>
+pub fn lockrestart_do<T, F>(trans: &BtreeTrans, mut f: F) -> Result<T, BchError>
 where
-    F: Fn() -> Result<T, BchError>
+    F: FnMut() -> Result<T, BchError>
 {
     loop {
         let restart_count = trans.begin();
-        let r = f();
 
-        if let Err(e) = r {
-            if e.matches(bch_errcode::BCH_ERR_transaction_restart) {
-                continue;
+        match f() {
+            Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
+            Err(e) => return Err(e),
+            Ok(v) => {
+                trans.verify_not_restarted(restart_count);
+                return Ok(v);
             }
-
-            return r;
-        } else {
-            trans.verify_not_restarted(restart_count);
-            return r;
         }
     }
 }
@@ -184,9 +182,27 @@ impl<'t> BtreeIter<'t> {
         self.peek_max(SPOS_MAX)
     }
 
-    pub fn peek_and_restart(&mut self) -> Result<Option<BkeySC<'_>>, BchError> {
-        unsafe {
-            bkey_s_c_to_result(c::bch2_btree_iter_peek_and_restart_outlined(&mut self.raw))
+    pub fn for_each<F>(&mut self, trans: &BtreeTrans, mut f: F) -> Result<(), BchError>
+    where
+        F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
+    {
+        let raw = &mut self.raw as *mut c::btree_iter;
+        loop {
+            let restart_count = trans.begin();
+            let k = unsafe { c::bch2_btree_iter_peek_max(raw, SPOS_MAX) };
+
+            match bkey_s_c_to_result(k) {
+                Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
+                Err(e) => return Err(e),
+                Ok(None) => return Ok(()),
+                Ok(Some(k)) => {
+                    trans.verify_not_restarted(restart_count);
+                    if let ControlFlow::Break(()) = f(k) {
+                        return Ok(());
+                    }
+                }
+            }
+            unsafe { c::bch2_btree_iter_advance(raw) };
         }
     }
 
@@ -243,10 +259,27 @@ impl<'t> BtreeNodeIter<'t> {
         }
     }
 
-    pub fn peek_and_restart<'i>(&'i mut self) -> Result<Option<&'i c::btree>, BchError> {
-        unsafe {
-            let b = c::bch2_btree_iter_peek_node_and_restart(&mut self.raw);
-            errptr_to_result_c(b).map(|b| if !b.is_null() { Some(&*b) } else { None })
+    pub fn for_each<F>(&mut self, trans: &BtreeTrans, mut f: F) -> Result<(), BchError>
+    where
+        F: for<'a> FnMut(&'a c::btree) -> ControlFlow<()>,
+    {
+        let raw = &mut self.raw as *mut c::btree_iter;
+        loop {
+            let restart_count = trans.begin();
+            let b = unsafe { c::bch2_btree_iter_peek_node(raw) };
+
+            match errptr_to_result_c(b) {
+                Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
+                Err(e) => return Err(e),
+                Ok(b) if b.is_null() => return Ok(()),
+                Ok(b) => {
+                    trans.verify_not_restarted(restart_count);
+                    if let ControlFlow::Break(()) = f(unsafe { &*b }) {
+                        return Ok(());
+                    }
+                }
+            }
+            unsafe { c::bch2_btree_iter_next_node(raw) };
         }
     }
 
