@@ -101,6 +101,10 @@ fn main() -> ExitCode {
     }
 
     match cmd {
+        "--help" | "help" => {
+            unsafe { c::bcachefs_usage() };
+            ExitCode::SUCCESS
+        }
         "version" => {
             let vh = include_str!("../version.h");
             println!("{}", vh.split('"').nth(1).unwrap_or("unknown"));
