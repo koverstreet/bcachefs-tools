@@ -30,6 +30,7 @@ pub struct Cli {
 /// Subvolumes-related commands
 #[derive(Subcommand, Debug)]
 enum Subcommands {
+    /// Create a new subvolume
     #[command(visible_aliases = ["new"])]
     Create {
         /// Paths
@@ -37,6 +38,7 @@ enum Subcommands {
         targets: Vec<PathBuf>,
     },
 
+    /// Delete an existing subvolume
     #[command(visible_aliases = ["del"])]
     Delete {
         /// Path
@@ -44,6 +46,7 @@ enum Subcommands {
         targets: Vec<PathBuf>,
     },
 
+    /// Create a snapshot of a subvolume
     #[command(allow_missing_positional = true, visible_aliases = ["snap"])]
     Snapshot {
         /// Make snapshot read only
@@ -53,6 +56,7 @@ enum Subcommands {
         dest:      PathBuf,
     },
 
+    /// List subvolumes
     #[command(visible_aliases = ["ls"])]
     List {
         /// Output as JSON

@@ -25,6 +25,71 @@ impl std::fmt::Display for ErrnoError {
 
 impl std::error::Error for ErrnoError {}
 
+/// Print main bcachefs usage, with commands grouped by category.
+/// Descriptions are pulled from the clap command tree (build_cli).
+fn bcachefs_usage() {
+    let cmd = commands::build_cli();
+
+    let groups: &[(&str, &[&str])] = &[
+        ("Superblock commands:", &[
+            "format", "show-super", "recover-super",
+            "set-fs-option", "reset-counters", "strip-alloc",
+        ]),
+        ("Images:", &["image"]),
+        ("Mount:", &["mount"]),
+        ("Repair:", &["fsck", "recovery-pass"]),
+        ("Running filesystem:", &["fs"]),
+        ("Devices:", &["device"]),
+        ("Subvolumes and snapshots:", &["subvolume"]),
+        ("Filesystem data:", &["reconcile", "scrub"]),
+        ("Encryption:", &["unlock", "set-passphrase", "remove-passphrase"]),
+        ("Migrate:", &["migrate", "migrate-superblock"]),
+        ("File options:", &["set-file-option", "reflink-option-propagate"]),
+        ("Debug:", &["dump", "undump", "list", "list_journal", "kill_btree_node"]),
+        ("Miscellaneous:", &["completions", "version"]),
+    ];
+
+    println!("bcachefs - tool for managing bcachefs filesystems");
+    println!("usage: bcachefs <command> [<args>]\n");
+
+    for (heading, names) in groups {
+        println!("{heading}");
+        for name in *names {
+            let Some(sub) = cmd.find_subcommand(name) else { continue };
+            let children: Vec<_> = sub.get_subcommands()
+                .filter(|c| c.get_name() != "help")
+                .collect();
+            if !children.is_empty() {
+                for child in children {
+                    let about = child.get_about().map(|s| s.to_string()).unwrap_or_default();
+                    let full = format!("{name} {}", child.get_name());
+                    println!("  {full:<26}{about}");
+                }
+            } else {
+                let about = sub.get_about().map(|s| s.to_string()).unwrap_or_default();
+                println!("  {:<26}{about}", name);
+            }
+        }
+        println!();
+    }
+}
+
+/// Print usage for a subcommand group (device, fs, data, reconcile, etc.)
+/// by pulling subcommand names and descriptions from the clap tree.
+fn group_usage(group: &str) {
+    let cmd = commands::build_cli();
+    let Some(sub) = cmd.find_subcommand(group) else { return };
+    let about = sub.get_about().map(|s| s.to_string()).unwrap_or_default();
+    println!("bcachefs {group} - {about}");
+    println!("Usage: bcachefs {group} <command> [OPTION]...\n");
+    println!("Commands:");
+    for child in sub.get_subcommands() {
+        if child.get_name() == "help" { continue }
+        let child_about = child.get_about().map(|s| s.to_string()).unwrap_or_default();
+        println!("  {:<26}{child_about}", child.get_name());
+    }
+}
+
 fn c_command(args: Vec<String>, symlink_cmd: Option<&str>) -> ExitCode {
     let r = handle_c_command(args, symlink_cmd);
     debug!("return code from C command: {r}");
@@ -49,7 +114,6 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
     // The C functions will mutate argv. It shouldn't be used after this block.
     unsafe {
         match cmd.as_str() {
-            "--help" => { c::bcachefs_usage(); 0 }
             "dump"              => c::cmd_dump(argc, argv),
             "image"             => c::image_cmds(argc, argv),
             "list_journal"      => c::cmd_list_journal(argc, argv),
@@ -58,7 +122,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
             #[cfg(feature = "fuse")]
             "fusemount"         => c::cmd_fusemount(argc, argv),
-            _ => { println!("Unknown command {cmd}"); c::bcachefs_usage(); 1 }
+            _ => { println!("Unknown command {cmd}"); bcachefs_usage(); 1 }
         }
     }
 }
@@ -80,7 +144,7 @@ fn main() -> ExitCode {
 
     if symlink_cmd.is_none() && args.len() < 2 {
         println!("missing command");
-        unsafe { c::bcachefs_usage() };
+        bcachefs_usage();
         return ExitCode::from(1);
     }
 
@@ -99,7 +163,7 @@ fn main() -> ExitCode {
 
     match cmd {
         "--help" | "help" => {
-            unsafe { c::bcachefs_usage() };
+            bcachefs_usage();
             ExitCode::SUCCESS
         }
         "version" => {
@@ -117,13 +181,7 @@ fn main() -> ExitCode {
         "subvolume" => commands::subvolume(args[1..].to_vec()).report(),
         "data" => match args.get(2).map(|s| s.as_str()) {
             Some("scrub") => commands::scrub(args[2..].to_vec()).report(),
-            _ => {
-                println!("bcachefs data - manage filesystem data");
-                println!("Usage: bcachefs data <scrub> [OPTION]...\n");
-                println!("Commands:");
-                println!("  scrub                        Verify checksums and correct errors");
-                ExitCode::from(1)
-            }
+            _ => { group_usage("data"); ExitCode::from(1) }
         },
         "device" => match args.get(2).map(|s| s.as_str()) {
             Some("add") => commands::cmd_device_add(args[2..].to_vec()).report(),
@@ -134,20 +192,7 @@ fn main() -> ExitCode {
             Some("set-state") => commands::cmd_device_set_state(args[2..].to_vec()).report(),
             Some("resize") => commands::cmd_device_resize(args[2..].to_vec()).report(),
             Some("resize-journal") => commands::cmd_device_resize_journal(args[2..].to_vec()).report(),
-            _ => {
-                println!("bcachefs device - manage devices within a running filesystem");
-                println!("Usage: bcachefs device <CMD> [OPTION]...\n");
-                println!("Commands:");
-                println!("  add                          Add a new device to an existing filesystem");
-                println!("  remove                       Remove a device from an existing filesystem");
-                println!("  online                       Re-add an existing member to a filesystem");
-                println!("  offline                      Take a device offline, without removing it");
-                println!("  evacuate                     Migrate data off a specific device");
-                println!("  set-state                    Change device state (rw, ro, evacuating, spare)");
-                println!("  resize                       Resize filesystem on a device");
-                println!("  resize-journal               Resize journal on a device");
-                ExitCode::SUCCESS
-            }
+            _ => { group_usage("device"); ExitCode::SUCCESS }
         },
         "format" | "mkfs" => {
             let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
@@ -161,15 +206,7 @@ fn main() -> ExitCode {
             Some("timestats") => commands::timestats(args[2..].to_vec()).report(),
             Some("top") => commands::top(args[2..].to_vec()).report(),
             Some("usage") => commands::fs_usage::fs_usage(args[2..].to_vec()).report(),
-            _ => {
-                println!("bcachefs fs - manage a running filesystem");
-                println!("Usage: bcachefs fs <usage|top|timestats> [OPTION]...\n");
-                println!("Commands:");
-                println!("  usage                        Display detailed filesystem usage");
-                println!("  top                          Show runtime performance information");
-                println!("  timestats                    Show filesystem time statistics");
-                ExitCode::from(1)
-            }
+            _ => { group_usage("fs"); ExitCode::from(1) }
         },
         "remove-passphrase" => commands::cmd_remove_passphrase(args[1..].to_vec()).report(),
         "reset-counters" => commands::cmd_reset_counters(args[1..].to_vec()).report(),
@@ -177,14 +214,7 @@ fn main() -> ExitCode {
         "reconcile" => match args.get(2).map(|s| s.as_str()) {
             Some("status") => commands::cmd_reconcile_status(args[2..].to_vec()).report(),
             Some("wait") => commands::cmd_reconcile_wait(args[2..].to_vec()).report(),
-            _ => {
-                println!("bcachefs reconcile - manage data reconcile");
-                println!("Usage: bcachefs reconcile <status|wait> [OPTION]...\n");
-                println!("Commands:");
-                println!("  status                       Show status of background data processing");
-                println!("  wait                         Wait on background data processing to complete");
-                ExitCode::from(1)
-            }
+            _ => { group_usage("reconcile"); ExitCode::from(1) }
         },
         "undump" => commands::cmd_undump(args[1..].to_vec()).report(),
         "recover-super" => commands::cmd_recover_super(args[1..].to_vec()).report(),

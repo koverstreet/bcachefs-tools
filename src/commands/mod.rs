@@ -124,7 +124,9 @@ pub fn build_cli() -> Command {
         .subcommand(super_cmd::ShowSuperCli::command().name("show-super"))
         .subcommand(key::UnlockCli::command().name("unlock"))
         .subcommand(Command::new("strip-alloc")
-            .about("Strip alloc info on a filesystem to be used read-only"));
+            .about("Strip alloc info on a filesystem to be used read-only"))
+        .subcommand(Command::new("undump")
+            .about("Convert qcow2 metadata dumps to sparse raw files"));
 
     cmd
 }
