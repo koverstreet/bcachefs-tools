@@ -168,7 +168,7 @@ pub fn scan_devices(device: &String, opts: &bch_opts) -> Result<OsString> {
 #[no_mangle]
 pub extern "C" fn bch2_scan_device_sbs(device: *const c_char, ret: *mut sb_names) -> c_int {
     let device = unsafe { CStr::from_ptr(device) };
-    let device = device.to_str().unwrap().to_string();
+    let device = device.to_string_lossy().into_owned();
 
     // how to initialize to default/empty?
     let opts = bch_bindgen::opts::parse_mount_opts(None, None, true).unwrap_or_default();
@@ -197,7 +197,7 @@ pub extern "C" fn bch2_scan_device_sbs(device: *const c_char, ret: *mut sb_names
 #[no_mangle]
 pub extern "C" fn bch2_scan_devices(device: *const c_char) -> *mut c_char {
     let device = unsafe { CStr::from_ptr(device) };
-    let device = device.to_str().unwrap().to_string();
+    let device = device.to_string_lossy().into_owned();
 
     // how to initialize to default/empty?
     let opts = bch_bindgen::opts::parse_mount_opts(None, None, true).unwrap_or_default();

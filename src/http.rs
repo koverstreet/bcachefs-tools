@@ -24,9 +24,13 @@ fn http_thread(listen: String) {
                         .with_status_code(403);
                     request.respond(response).expect("Responded");
                 } else {
-                    let s = unsafe { CStr::from_ptr(buf.buf) };
+                    let body = if buf.buf.is_null() {
+                        String::new()
+                    } else {
+                        unsafe { CStr::from_ptr(buf.buf) }.to_string_lossy().into_owned()
+                    };
 
-                    let response = Response::from_string(s.to_string_lossy());
+                    let response = Response::from_string(body);
                     request.respond(response).expect("Responded");
                 }
             }
@@ -43,7 +47,7 @@ fn http_thread(listen: String) {
 #[no_mangle]
 pub extern "C" fn start_http(listen: *const c_char) {
     let listen = unsafe { CStr::from_ptr(listen) };
-    let listen = listen.to_str().unwrap().to_string();
+    let listen = listen.to_string_lossy().into_owned();
 
     std::thread::spawn(|| http_thread(listen));
 }
