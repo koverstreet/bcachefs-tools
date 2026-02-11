@@ -92,6 +92,23 @@ impl Printbuf {
         unsafe { c::bch2_version_to_text(&mut self.0, std::mem::transmute(v)) };
     }
 
+    /// Print superblock contents.
+    pub fn sb_to_text(&mut self, fs: *mut c::bch_fs, sb: *mut c::bch_sb,
+                      layout: bool, fields: u32) {
+        unsafe { c::bch2_sb_to_text(&mut self.0, fs, sb, layout, fields) };
+    }
+
+    /// Print superblock contents with field names.
+    pub fn sb_to_text_with_names(&mut self, fs: *mut c::bch_fs, sb: *mut c::bch_sb,
+                                 layout: bool, fields: u32, field_only: i32) {
+        unsafe { c::bch2_sb_to_text_with_names(&mut self.0, fs, sb, layout, fields, field_only) };
+    }
+
+    /// Print a set of bitflags as comma-separated names.
+    pub fn prt_bitflags(&mut self, list: *const *const std::os::raw::c_char, flags: u64) {
+        unsafe { c::bch2_prt_bitflags(&mut self.0, list, flags) };
+    }
+
     /// Access the underlying `c::printbuf` for calling C prt_* functions.
     pub fn as_raw(&mut self) -> &mut c::printbuf {
         &mut self.0

@@ -212,14 +212,14 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
 
                     let c_val = CString::new(val_str.as_str())?;
                     let mut v: u64 = 0;
-                    let mut err = c::printbuf::new();
+                    let mut err = Printbuf::new();
                     let ret = unsafe {
                         c::bch2_opt_parse(
                             std::ptr::null_mut(),
                             opt,
                             c_val.as_ptr(),
                             &mut v,
-                            &mut err,
+                            err.as_raw(),
                         )
                     };
 
@@ -230,13 +230,10 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                     }
 
                     if ret != 0 {
-                        let msg = if !err.buf.is_null() {
-                            unsafe { CStr::from_ptr(err.buf) }
-                                .to_string_lossy()
-                                .into_owned()
-                        } else {
-                            val_str.clone()
-                        };
+                        let msg = err.as_str();
+                        if msg.is_empty() {
+                            bail!("invalid option: {}", val_str);
+                        }
                         bail!("invalid option: {}", msg);
                     }
 
@@ -514,16 +511,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
         let fields = 1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
-        unsafe {
-            c::bch2_sb_to_text_with_names(
-                buf.as_raw(),
-                std::ptr::null_mut(),
-                sb,
-                false,
-                fields,
-                -1i32,
-            );
-        }
+        buf.sb_to_text_with_names(std::ptr::null_mut(), sb, false, fields, -1);
         print!("{}", buf);
     }
     unsafe { libc::free(sb as *mut _) };

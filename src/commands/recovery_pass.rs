@@ -93,8 +93,7 @@ pub fn cmd_recovery_pass(argv: Vec<String>) -> Result<()> {
         let _ = write!(buf, "Scheduled recovery passes: ");
 
         if scheduled != 0 {
-            c::bch2_prt_bitflags(
-                buf.as_raw(),
+            buf.prt_bitflags(
                 c::bch2_recovery_passes.as_ptr(),
                 c::bch2_recovery_passes_from_stable(scheduled),
             );

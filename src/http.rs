@@ -1,5 +1,6 @@
-use std::ffi::{CString, CStr, c_char};
+use std::ffi::{CStr, CString, c_char};
 use crate::c;
+use crate::wrappers::printbuf::Printbuf;
 
 extern crate tiny_http;
 
@@ -15,22 +16,16 @@ fn http_thread(listen: String) {
 
         match request.method() {
             tiny_http::Method::Get => {
-                let mut buf = c::printbuf::new();
+                let mut buf = Printbuf::new();
 
-                let ret = unsafe { c::sysfs_read_or_html_dirlist(c_path.as_ptr(), &mut buf) };
+                let ret = unsafe { c::sysfs_read_or_html_dirlist(c_path.as_ptr(), buf.as_raw()) };
 
                 if ret < 0 {
                     let response = Response::from_string(format!("Error {}", ret))
                         .with_status_code(403);
                     request.respond(response).expect("Responded");
                 } else {
-                    let body = if buf.buf.is_null() {
-                        String::new()
-                    } else {
-                        unsafe { CStr::from_ptr(buf.buf) }.to_string_lossy().into_owned()
-                    };
-
-                    let response = Response::from_string(body);
+                    let response = Response::from_string(buf.as_str());
                     request.respond(response).expect("Responded");
                 }
             }
