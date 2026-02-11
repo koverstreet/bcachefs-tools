@@ -79,8 +79,8 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("version")
             .about("Display version"));
 
-    // C commands — stubs for completions/help
-    // (list, mount, completions, subvolume already come from the derive-based Cli)
+    // Additional commands not in the derive-based Cli above
+    // (list, mount, completions, subvolume come from Subcommands derive)
     cmd = cmd
         .subcommand(Command::new("data").about("Manage filesystem data")
             .subcommand(scrub::Cli::command().name("scrub")))
@@ -101,14 +101,23 @@ pub fn build_cli() -> Command {
             .subcommand(top::Cli::command().name("top"))
             .subcommand(timestats::Cli::command().name("timestats")))
         .subcommand(fsck::FsckCli::command().name("fsck"))
-        .subcommand(Command::new("image").about("Filesystem image commands"))
+        .subcommand(Command::new("image").about("Filesystem image commands")
+            .subcommand(Command::new("create").about("Create a filesystem image"))
+            .subcommand(Command::new("update").about("Update a filesystem image")))
+        .subcommand(Command::new("kill_btree_node")
+            .about("Kill a specific btree node (debugging)"))
+        .subcommand(Command::new("list_journal")
+            .about("List filesystem journal entries"))
         .subcommand(Command::new("migrate")
             .about("Migrate an existing ext2/3/4 filesystem to bcachefs in place"))
+        .subcommand(Command::new("migrate-superblock")
+            .about("Migrate superblock to standard location"))
         .subcommand(Command::new("reconcile").about("Reconcile filesystem data")
             .subcommand(reconcile::StatusCli::command().name("status"))
             .subcommand(reconcile::WaitCli::command().name("wait")))
         .subcommand(recover_super::RecoverSuperCli::command().name("recover-super"))
         .subcommand(recovery_pass::RecoveryPassCli::command().name("recovery-pass"))
+        .subcommand(scrub::Cli::command().name("scrub"))
         .subcommand(set_option::set_option_cmd())
         .subcommand(key::SetPassphraseCli::command().name("set-passphrase"))
         .subcommand(key::RemovePassphraseCli::command().name("remove-passphrase"))

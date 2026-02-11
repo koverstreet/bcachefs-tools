@@ -50,7 +50,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
     unsafe {
         match cmd.as_str() {
             "--help" => { c::bcachefs_usage(); 0 }
-            "device"            => c::device_cmds(argc, argv),
+            "device"            => { eprintln!("BUG: device should be handled in Rust"); 1 }
             "dump"              => c::cmd_dump(argc, argv),
             "format" | "mkfs"   => { eprintln!("BUG: format should be handled in Rust"); 1 }
             "image"             => c::image_cmds(argc, argv),
@@ -133,7 +133,20 @@ fn main() -> ExitCode {
             Some("set-state") => commands::cmd_device_set_state(args[2..].to_vec()).report(),
             Some("resize") => commands::cmd_device_resize(args[2..].to_vec()).report(),
             Some("resize-journal") => commands::cmd_device_resize_journal(args[2..].to_vec()).report(),
-            _ => c_command(args, symlink_cmd),
+            _ => {
+                println!("bcachefs device - manage devices within a running filesystem");
+                println!("Usage: bcachefs device <CMD> [OPTION]...\n");
+                println!("Commands:");
+                println!("  add                          Add a new device to an existing filesystem");
+                println!("  remove                       Remove a device from an existing filesystem");
+                println!("  online                       Re-add an existing member to a filesystem");
+                println!("  offline                      Take a device offline, without removing it");
+                println!("  evacuate                     Migrate data off a specific device");
+                println!("  set-state                    Change device state (rw, ro, evacuating, spare)");
+                println!("  resize                       Resize filesystem on a device");
+                println!("  resize-journal               Resize journal on a device");
+                ExitCode::SUCCESS
+            }
         },
         "format" | "mkfs" => {
             let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };

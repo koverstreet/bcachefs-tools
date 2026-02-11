@@ -58,6 +58,7 @@ impl DiskAccountingPos {
     }
 
     /// The underlying bpos, for passing to btree/ioctl APIs.
+    #[allow(dead_code)]
     pub fn as_bpos(&self) -> c::bpos {
         self.0
     }
@@ -127,6 +128,7 @@ const _: () = assert!(BCH_DISK_ACCOUNTING_TYPE_NR as u32 == 11);
 
 impl DiskAccountingKind {
     /// Encode into a DiskAccountingPos (reverse of decode).
+    #[allow(dead_code)]
     pub fn encode(&self) -> DiskAccountingPos {
         let mut raw = [0u8; BPOS_SIZE];
         match *self {
