@@ -1,4 +1,7 @@
 use std::ffi::CString;
+use std::fs::File;
+use std::os::unix::fs::FileExt;
+use std::os::unix::io::AsRawFd;
 use std::process;
 
 use anyhow::{anyhow, Result};
@@ -113,12 +116,10 @@ unsafe fn copy_sb(buf: &[u8]) -> Vec<u8> {
     buf[..bytes].to_vec()
 }
 
-fn probe_one_super(dev_fd: i32, sb_size: usize, offset: u64, verbose: bool) -> Option<Vec<u8>> {
+fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Option<Vec<u8>> {
     let mut buf = vec![0u8; sb_size];
-    let r = unsafe {
-        libc::pread(dev_fd, buf.as_mut_ptr() as *mut libc::c_void, sb_size, offset as i64)
-    };
-    if r < sb_size as isize {
+    let r = dev.read_at(&mut buf, offset).ok()?;
+    if r < sb_size {
         return None;
     }
 
@@ -134,16 +135,14 @@ fn probe_one_super(dev_fd: i32, sb_size: usize, offset: u64, verbose: bool) -> O
     Some(unsafe { copy_sb(&buf) })
 }
 
-fn probe_sb_range(dev_fd: i32, start: u64, end: u64, verbose: bool) -> Vec<Vec<u8>> {
+fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<Vec<u8>> {
     let start = start & !511u64;
     let end = end & !511u64;
     let buflen = (end - start) as usize;
     let mut buf = vec![0u8; buflen];
 
-    let r = unsafe {
-        libc::pread(dev_fd, buf.as_mut_ptr() as *mut libc::c_void, buflen, start as i64)
-    };
-    if r < buflen as isize {
+    let Ok(r) = dev.read_at(&mut buf, start) else { return Vec::new() };
+    if r < buflen {
         return Vec::new();
     }
 
@@ -184,18 +183,18 @@ fn probe_sb_range(dev_fd: i32, start: u64, end: u64, verbose: bool) -> Vec<Vec<u
 }
 
 fn recover_from_scan(
-    dev_fd: i32,
+    dev: &File,
     dev_size: u64,
     offset: u64,
     scan_len: u64,
     verbose: bool,
 ) -> Vec<u8> {
     let mut sbs = if offset != 0 {
-        probe_one_super(dev_fd, SUPERBLOCK_SIZE_DEFAULT as usize * 512, offset, verbose)
+        probe_one_super(dev, SUPERBLOCK_SIZE_DEFAULT as usize * 512, offset, verbose)
             .into_iter().collect()
     } else {
-        let mut v = probe_sb_range(dev_fd, 4096, scan_len, verbose);
-        v.extend(probe_sb_range(dev_fd, dev_size - scan_len, dev_size, verbose));
+        let mut v = probe_sb_range(dev, 4096, scan_len, verbose);
+        v.extend(probe_sb_range(dev, dev_size - scan_len, dev_size, verbose));
         v
     };
 
@@ -289,21 +288,20 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
         None => 16 << 20,
     };
 
-    let c_path = CString::new(cli.device.as_str())?;
-    let dev_fd = unsafe { libc::open(c_path.as_ptr(), libc::O_RDWR) };
-    if dev_fd < 0 {
-        return Err(anyhow!("{}: {}", cli.device, std::io::Error::last_os_error()));
-    }
+    let dev_file = std::fs::OpenOptions::new()
+        .read(true).write(true)
+        .open(&cli.device)
+        .map_err(|e| anyhow!("{}: {}", cli.device, e))?;
 
     let dev_size = match &cli.dev_size {
         Some(s) => parse_human_size(s)?,
-        None => unsafe { c::get_size(dev_fd) },
+        None => unsafe { c::get_size(dev_file.as_raw_fd()) },
     };
 
     let mut sb_buf = if let Some(ref src) = cli.src_device {
         recover_from_member(src, cli.dev_idx.unwrap(), dev_size)?
     } else {
-        recover_from_scan(dev_fd, dev_size, offset, scan_len, cli.verbose)
+        recover_from_scan(&dev_file, dev_size, offset, scan_len, cli.verbose)
     };
 
     let sb = sb_as_mut_ptr(&mut sb_buf);
@@ -327,7 +325,7 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
     }
 
     if cli.yes || unsafe { c::ask_yn() } {
-        unsafe { c::bch2_super_write(dev_fd, sb) };
+        unsafe { c::bch2_super_write(dev_file.as_raw_fd(), sb) };
     }
 
     let _ = std::process::Command::new("udevadm")
@@ -337,8 +335,6 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
     if cli.src_device.is_some() {
         println!("Recovered device will no longer have a journal, please run fsck");
     }
-
-    unsafe { libc::close(dev_fd) };
 
     Ok(())
 }
