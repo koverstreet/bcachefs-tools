@@ -13,6 +13,8 @@ pub use c::bch_data_type;
 pub use c::bch_compression_type;
 pub use c::bch_reconcile_accounting_type;
 
+use bch_data_type::*;
+
 /// Decoded accounting key type.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -124,11 +126,6 @@ fn bpos_to_disk_accounting_pos(p: &c::bpos) -> DiskAccountingPos {
     }
 }
 
-/// Byte-swap a bpos in place (for old kernels that didn't do big-endian accounting).
-fn bpos_swab(p: &mut c::bpos) {
-    unsafe { c::bch2_bpos_swab(p) };
-}
-
 /// Header of bch_ioctl_query_accounting (fixed part before flex array).
 #[repr(C)]
 struct QueryAccountingHeader {
@@ -232,7 +229,7 @@ fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
         };
 
         if need_swab {
-            bpos_swab(&mut bpos);
+            unsafe { c::bch2_bpos_swab(&mut bpos) };
         }
 
         let pos = bpos_to_disk_accounting_pos(&bpos);
@@ -254,8 +251,6 @@ fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
 
     entries
 }
-
-use bch_data_type::*;
 
 /// Free/empty data types — not counted as "used" space.
 pub fn data_type_is_empty(t: bch_data_type) -> bool {

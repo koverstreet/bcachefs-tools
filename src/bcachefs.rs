@@ -49,41 +49,19 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
     // The C functions will mutate argv. It shouldn't be used after this block.
     unsafe {
         match cmd.as_str() {
-            "--help" => {
-                c::bcachefs_usage();
-                0
-            }
-            "device" => c::device_cmds(argc, argv),
-            "dump" => c::cmd_dump(argc, argv),
-            // undump handled in Rust dispatch
-            "format" => c::cmd_format(argc, argv),
-            // fs subcommand dispatch is fully in Rust now
-            // fsck handled in Rust dispatch
-            // recovery-pass handled in Rust dispatch
-            "image" => c::image_cmds(argc, argv),
-            "list_journal" => c::cmd_list_journal(argc, argv),
-            "kill_btree_node" => c::cmd_kill_btree_node(argc, argv),
-            "migrate" => c::cmd_migrate(argc, argv),
+            "--help" => { c::bcachefs_usage(); 0 }
+            "device"            => c::device_cmds(argc, argv),
+            "dump"              => c::cmd_dump(argc, argv),
+            "format" | "mkfs"   => c::cmd_format(argc, argv),
+            "image"             => c::image_cmds(argc, argv),
+            "list_journal"      => c::cmd_list_journal(argc, argv),
+            "kill_btree_node"   => c::cmd_kill_btree_node(argc, argv),
+            "migrate"           => c::cmd_migrate(argc, argv),
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
-            "mkfs" => c::cmd_format(argc, argv),
-            // reconcile handled in Rust dispatch
-            // remove-passphrase handled in Rust dispatch
-            // reset-counters handled in Rust dispatch
-            // set-fs-option handled in Rust dispatch
-            // set-passphrase handled in Rust dispatch
-            // set-file-option handled in Rust dispatch
-            // show-super handled in Rust dispatch
-            // recover-super handled in Rust dispatch
-            "strip-alloc" => c::cmd_strip_alloc(argc, argv),
-            // unlock handled in Rust dispatch
+            "strip-alloc"       => c::cmd_strip_alloc(argc, argv),
             #[cfg(feature = "fuse")]
-            "fusemount" => c::cmd_fusemount(argc, argv),
-
-            _ => {
-                println!("Unknown command {cmd}");
-                c::bcachefs_usage();
-                1
-            }
+            "fusemount"         => c::cmd_fusemount(argc, argv),
+            _ => { println!("Unknown command {cmd}"); c::bcachefs_usage(); 1 }
         }
     }
 }

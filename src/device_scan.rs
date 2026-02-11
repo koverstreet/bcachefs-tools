@@ -26,16 +26,12 @@ fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> anyhow::Resu
 }
 
 fn device_property_map(dev: &udev::Device) -> HashMap<String, String> {
-    let rc: HashMap<_, _> = dev
-        .properties()
-        .map(|i| {
-            (
-                String::from(i.name().to_string_lossy()),
-                String::from(i.value().to_string_lossy()),
-            )
-        })
-        .collect();
-    rc
+    dev.properties()
+        .map(|i| (
+            i.name().to_string_lossy().into_owned(),
+            i.value().to_string_lossy().into_owned(),
+        ))
+        .collect()
 }
 
 fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<String>> {
@@ -156,7 +152,7 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
     }
 }
 
-pub fn joined_device_str(sbs: &Vec<(PathBuf, bch_sb_handle)>) -> OsString {
+pub fn joined_device_str(sbs: &[(PathBuf, bch_sb_handle)]) -> OsString {
     sbs.iter()
         .map(|sb| sb.0.clone().into_os_string())
         .collect::<Vec<_>>()
