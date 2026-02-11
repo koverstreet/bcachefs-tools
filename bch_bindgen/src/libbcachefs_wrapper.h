@@ -11,9 +11,11 @@
 #include "sb/io.h"
 
 #include "cmds.h"
+#include "cmd_super.h"
 #include "crypto.h"
 #include "libbcachefs.h"
 #include "raid/raid.h"
+#include "sb/members.h"
 #include "src/rust_to_c.h"
 
 #include "include/linux/bio.h"

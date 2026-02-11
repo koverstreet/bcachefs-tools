@@ -12,6 +12,7 @@ pub mod opts;
 pub mod reconcile;
 pub mod scrub;
 pub mod subvolume;
+pub mod super_cmd;
 pub mod timestats;
 pub mod top;
 
@@ -96,8 +97,7 @@ pub fn build_cli() -> Command {
             .about("Set a filesystem option"))
         .subcommand(key::SetPassphraseCli::command().name("set-passphrase"))
         .subcommand(key::RemovePassphraseCli::command().name("remove-passphrase"))
-        .subcommand(Command::new("show-super")
-            .about("Print superblock information to stdout"))
+        .subcommand(super_cmd::ShowSuperCli::command().name("show-super"))
         .subcommand(key::UnlockCli::command().name("unlock"));
 
     cmd
