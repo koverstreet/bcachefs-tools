@@ -75,7 +75,7 @@ pub fn cmd_show_super(argv: Vec<String>) -> Result<()> {
     opt_set!(fs_opts, no_version_check, 1);
     opt_set!(fs_opts, nostart, 1);
 
-    let fs = Fs::open(&[cli.device.clone().into()], fs_opts)?;
+    let fs = Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
 
     unsafe {
         let sb = (*fs.raw).disk_sb.sb;

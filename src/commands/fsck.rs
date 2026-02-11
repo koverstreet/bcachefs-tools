@@ -12,6 +12,7 @@ use clap::Parser;
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::printbuf::Printbuf;
+use crate::wrappers::sysfs;
 
 // _IOW(0xbc, 19, struct bch_ioctl_fsck_offline) — sizeof = 24
 const BCH_IOCTL_FSCK_OFFLINE: libc::c_ulong = 0x4018bc13;
@@ -160,17 +161,8 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
     Ok(splice_fd_to_stdinout(fsck_fd))
 }
 
-fn bcachefs_kernel_version() -> u64 {
-    let path = "/sys/module/bcachefs/parameters/version";
-    if std::fs::metadata(path).is_ok() {
-        unsafe { c::read_file_u64(libc::AT_FDCWD, c"/sys/module/bcachefs/parameters/version".as_ptr()) }
-    } else {
-        0
-    }
-}
-
 fn should_use_kernel_fsck(devs: &[String]) -> bool {
-    let kernel_version = bcachefs_kernel_version();
+    let kernel_version = sysfs::bcachefs_kernel_version();
     if kernel_version == 0 {
         return false;
     }
@@ -248,14 +240,12 @@ pub fn cmd_fsck(argv: Vec<String>) -> Result<()> {
         process::exit(0);
     }
 
-    let kernel = if std::env::var("BCACHEFS_KERNEL_ONLY").is_ok() {
-        Some(true)
-    } else if cli.kernel {
+    let kernel = if std::env::var("BCACHEFS_KERNEL_ONLY").is_ok() || cli.kernel {
         Some(true)
     } else if cli.no_kernel {
         Some(false)
     } else {
-        None // auto-detect
+        None
     };
 
     let mut opts_str = String::from("degraded,fsck,fix_errors=ask,read_only");

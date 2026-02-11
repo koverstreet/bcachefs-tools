@@ -68,10 +68,6 @@ pub fn fs_usage(argv: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn fmt_uuid(uuid: &[u8; 16]) -> String {
-    uuid::Uuid::from_bytes(*uuid).hyphenated().to_string()
-}
-
 struct DevContext {
     info: DevInfo,
     usage: DevUsage,
@@ -129,7 +125,8 @@ fn fs_usage_v1_to_text(
     sorted.sort_by(|a, b| a.bpos.cmp(&b.bpos));
 
     // Header
-    write!(out, "Filesystem: {}\n", fmt_uuid(&handle.uuid())).unwrap();
+    let uuid = uuid::Uuid::from_bytes(handle.uuid());
+    write!(out, "Filesystem: {}\n", uuid.hyphenated()).unwrap();
 
     out.tabstops(&[20, 16]);
 
