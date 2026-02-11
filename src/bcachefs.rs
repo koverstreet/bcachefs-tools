@@ -58,7 +58,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "undump" => c::cmd_undump(argc, argv),
             "format" => c::cmd_format(argc, argv),
             // fs subcommand dispatch is fully in Rust now
-            "fsck" => c::cmd_fsck(argc, argv),
+            // fsck handled in Rust dispatch
             // recovery-pass handled in Rust dispatch
             "image" => c::image_cmds(argc, argv),
             "list_journal" => c::cmd_list_journal(argc, argv),
@@ -165,6 +165,10 @@ fn main() -> ExitCode {
             },
             _ => c_command(args, symlink_cmd),
         },
+        "fsck" => {
+            let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
+            commands::cmd_fsck(argv).report()
+        }
         "fs" => match args.get(2).map(|s| s.as_str()) {
             Some("timestats") => commands::timestats(args[2..].to_vec()).report(),
             Some("top") => commands::top(args[2..].to_vec()).report(),

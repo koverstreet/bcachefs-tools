@@ -5,6 +5,7 @@ pub mod completions;
 pub mod counters;
 pub mod device;
 pub mod fs_usage;
+pub mod fsck;
 pub mod key;
 pub mod list;
 pub mod mount;
@@ -29,6 +30,7 @@ pub use device::{
 pub use key::{cmd_unlock, cmd_set_passphrase, cmd_remove_passphrase};
 pub use list::list;
 pub use mount::mount;
+pub use fsck::cmd_fsck;
 pub use reconcile::{cmd_reconcile_status, cmd_reconcile_wait};
 pub use recovery_pass::cmd_recovery_pass;
 pub use scrub::scrub;
@@ -88,7 +90,7 @@ pub fn build_cli() -> Command {
             .subcommand(fs_usage::Cli::command())
             .subcommand(top::Cli::command().name("top"))
             .subcommand(timestats::Cli::command().name("timestats")))
-        .subcommand(Command::new("fsck").about("Check an existing filesystem for errors"))
+        .subcommand(fsck::FsckCli::command().name("fsck"))
         .subcommand(Command::new("image").about("Filesystem image commands"))
         .subcommand(Command::new("migrate")
             .about("Migrate an existing ext2/3/4 filesystem to bcachefs in place"))

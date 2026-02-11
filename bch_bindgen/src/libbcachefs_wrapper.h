@@ -9,6 +9,7 @@
 #include "init/error.h"
 #include "init/fs.h"
 #include "init/passes.h"
+#include "fs/check.h"
 #include "sb/io.h"
 
 #include "cmds.h"
