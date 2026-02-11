@@ -10,20 +10,13 @@
 #include "tools-util.h"
 
 int cmd_format(int argc, char *argv[]);
-int cmd_show_super(int argc, char *argv[]);
-int cmd_recover_super(int argc, char *argv[]);
 int cmd_strip_alloc(int argc, char *argv[]);
-int cmd_set_option(int argc, char *argv[]);
 
 int image_cmds(int argc, char *argv[]);
 
 int device_cmds(int argc, char *argv[]);
 
-int cmd_fsck(int argc, char *argv[]);
-int cmd_recovery_pass(int argc, char *argv[]);
-
 int cmd_dump(int argc, char *argv[]);
-int cmd_undump(int argc, char *argv[]);
 
 int cmd_list_journal(int argc, char *argv[]);
 int cmd_kill_btree_node(int argc, char *argv[]);
