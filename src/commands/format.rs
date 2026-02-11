@@ -465,25 +465,27 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
         unsafe { fs_opt_strs.__bindgen_anon_1.by_id[id] = ptr };
     }
 
-    // Build C dev_opts
-    let mut dev_path_cstrs: Vec<CString> = Vec::new();
-    let mut dev_label_cstrs: Vec<Option<CString>> = Vec::new();
-    for dev in &cfg.devices {
-        dev_path_cstrs.push(CString::new(dev.path.as_str())?);
-        dev_label_cstrs.push(dev.label.as_ref().map(|l| CString::new(l.as_str())).transpose()?);
-    }
+    // Build C dev_opts — CStrings must outlive c_devices
+    let dev_cstrs: Vec<(CString, Option<CString>)> = cfg.devices.iter()
+        .map(|dev| Ok((
+            CString::new(dev.path.as_str())?,
+            dev.label.as_ref().map(|l| CString::new(l.as_str())).transpose()?,
+        )))
+        .collect::<Result<_>>()?;
 
-    let mut c_devices: Vec<c::dev_opts> = Vec::new();
-    for (idx, dev) in cfg.devices.iter().enumerate() {
-        let mut c_dev: c::dev_opts = Default::default();
-        c_dev.path = dev_path_cstrs[idx].as_ptr();
-        if let Some(ref label) = dev_label_cstrs[idx] {
-            c_dev.label = label.as_ptr();
-        }
-        c_dev.fs_size = dev.fs_size;
-        c_dev.opts = dev.opts;
-        c_devices.push(c_dev);
-    }
+    let mut c_devices: Vec<c::dev_opts> = cfg.devices.iter()
+        .zip(&dev_cstrs)
+        .map(|(dev, (path_c, label_c))| {
+            let mut c_dev = c::dev_opts::default();
+            c_dev.path = path_c.as_ptr();
+            if let Some(ref l) = label_c {
+                c_dev.label = l.as_ptr();
+            }
+            c_dev.fs_size = dev.fs_size;
+            c_dev.opts = dev.opts;
+            c_dev
+        })
+        .collect();
 
     // Open all devices for format
     for c_dev in &mut c_devices {
