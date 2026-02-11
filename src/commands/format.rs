@@ -116,18 +116,34 @@ fn take_short_value(arg: &str, argv: &[String], i: &mut usize, flag: char) -> Re
     }
 }
 
-pub fn cmd_format(argv: Vec<String>) -> Result<()> {
+/// Parsed format configuration — all state from argument parsing.
+struct FormatConfig {
+    devices:         Vec<DevConfig>,
+    force:           bool,
+    quiet:           bool,
+    initialize:      bool,
+    encrypted:       bool,
+    no_passphrase:   bool,
+    passphrase_file: Option<String>,
+    source:          Option<String>,
+    fs_label:        Option<String>,
+    uuid_bytes:      Option<[u8; 16]>,
+    format_version:  Option<u32>,
+    superblock_size: u32,
+    fs_opts:         c::bch_opts,
+    deferred_opts:   Vec<(usize, String)>,
+}
+
+fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     let opt_flags = c::opt_flags::OPT_FORMAT as u32
         | c::opt_flags::OPT_FS as u32
         | c::opt_flags::OPT_DEVICE as u32;
 
-    // Parsing state
     let mut devices: Vec<DevConfig> = Vec::new();
     let mut force = false;
     let mut no_passphrase = false;
     let mut quiet = false;
     let mut initialize = true;
-    let mut _verbose = false;
     let mut encrypted = false;
     let mut passphrase_file: Option<String> = None;
     let mut source: Option<String> = None;
@@ -142,7 +158,6 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     let mut cur_dev_opts: c::bch_opts = Default::default();
     let mut unconsumed_dev_option = false;
 
-    // FS-level options
     let mut fs_opts: c::bch_opts = Default::default();
     let mut deferred_opts: Vec<(usize, String)> = Vec::new();
 
@@ -282,7 +297,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
                 }
                 "force" => force = true,
                 "quiet" => quiet = true,
-                "verbose" => _verbose = true,
+                "verbose" => {}
                 "help" => {
                     format_usage();
                     process::exit(0);
@@ -311,7 +326,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
                 }
                 b'f' => force = true,
                 b'q' => quiet = true,
-                b'v' => _verbose = true,
+                b'v' => {}
                 b'h' => {
                     format_usage();
                     process::exit(0);
@@ -357,14 +372,35 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
         bail!("--passphrase_file, --no_passphrase are incompatible");
     }
 
+    Ok(FormatConfig {
+        devices,
+        force,
+        quiet,
+        initialize,
+        encrypted,
+        no_passphrase,
+        passphrase_file,
+        source,
+        fs_label,
+        uuid_bytes,
+        format_version,
+        superblock_size,
+        fs_opts,
+        deferred_opts,
+    })
+}
+
+pub fn cmd_format(argv: Vec<String>) -> Result<()> {
+    let mut cfg = parse_format_args(argv)?;
+
     // Handle encryption
-    let passphrase: Option<Passphrase> = if encrypted && !no_passphrase {
-        let p = if let Some(ref path) = passphrase_file {
+    let passphrase: Option<Passphrase> = if cfg.encrypted && !cfg.no_passphrase {
+        let p = if let Some(ref path) = cfg.passphrase_file {
             Passphrase::new_from_file(path)?
         } else {
             Passphrase::new_from_prompt_twice()?
         };
-        initialize = false;
+        cfg.initialize = false;
         Some(p)
     } else {
         None
@@ -380,7 +416,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     let kernel_version = sysfs::bcachefs_kernel_version() as u32;
     let current_version = metadata_version_current();
 
-    let version = format_version.unwrap_or_else(|| {
+    let version = cfg.format_version.unwrap_or_else(|| {
         if kernel_version > 0 {
             std::cmp::min(current_version, kernel_version)
         } else {
@@ -388,32 +424,32 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
         }
     });
 
-    if source.is_none() {
+    if cfg.source.is_none() {
         if std::env::var_os("BCACHEFS_KERNEL_ONLY").is_some() {
-            initialize = false;
+            cfg.initialize = false;
         }
 
         if version != current_version {
             println!("version mismatch, not initializing");
-            initialize = false;
+            cfg.initialize = false;
         }
     }
 
     // Build C format_opts
-    let label_cstr = fs_label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
-    let source_cstr = source.as_ref().map(|s| CString::new(s.as_str())).transpose()?;
+    let label_cstr = cfg.fs_label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
+    let source_cstr = cfg.source.as_ref().map(|s| CString::new(s.as_str())).transpose()?;
 
     let mut fmt_opts: c::format_opts = Default::default();
     fmt_opts.version = version;
-    fmt_opts.superblock_size = superblock_size;
-    fmt_opts.encrypted = encrypted;
+    fmt_opts.superblock_size = cfg.superblock_size;
+    fmt_opts.encrypted = cfg.encrypted;
     if let Some(ref l) = label_cstr {
         fmt_opts.label = l.as_ptr() as *mut c_char;
     }
     if let Some(ref s) = source_cstr {
         fmt_opts.source = s.as_ptr() as *mut c_char;
     }
-    if let Some(bytes) = uuid_bytes {
+    if let Some(bytes) = cfg.uuid_bytes {
         fmt_opts.uuid.b = bytes;
     }
     if let Some(ref p) = passphrase {
@@ -422,7 +458,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
 
     // Build bch_opt_strs for deferred options
     let mut fs_opt_strs: c::bch_opt_strs = Default::default();
-    for &(id, ref val) in &deferred_opts {
+    for &(id, ref val) in &cfg.deferred_opts {
         let cstr = CString::new(val.as_str())?;
         let ptr = unsafe { libc::strdup(cstr.as_ptr()) };
         unsafe { fs_opt_strs.__bindgen_anon_1.by_id[id] = ptr };
@@ -431,13 +467,13 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     // Build C dev_opts
     let mut dev_path_cstrs: Vec<CString> = Vec::new();
     let mut dev_label_cstrs: Vec<Option<CString>> = Vec::new();
-    for dev in &devices {
+    for dev in &cfg.devices {
         dev_path_cstrs.push(CString::new(dev.path.as_str())?);
         dev_label_cstrs.push(dev.label.as_ref().map(|l| CString::new(l.as_str())).transpose()?);
     }
 
     let mut c_devices: Vec<c::dev_opts> = Vec::new();
-    for (idx, dev) in devices.iter().enumerate() {
+    for (idx, dev) in cfg.devices.iter().enumerate() {
         let mut c_dev: c::dev_opts = Default::default();
         c_dev.path = dev_path_cstrs[idx].as_ptr();
         if let Some(ref label) = dev_label_cstrs[idx] {
@@ -450,7 +486,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
 
     // Open all devices for format
     for c_dev in &mut c_devices {
-        let ret = unsafe { c::open_for_format(c_dev, 0, force) };
+        let ret = unsafe { c::open_for_format(c_dev, 0, cfg.force) };
         if ret != 0 {
             let path = unsafe { CStr::from_ptr(c_dev.path) }.to_string_lossy();
             bail!("Error opening {}: {}", path, io::Error::from_raw_os_error(-ret));
@@ -465,13 +501,13 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
         preallocated: Default::default(),
     };
 
-    let sb = unsafe { c::bch2_format(fs_opt_strs, fs_opts, fmt_opts, dev_list) };
+    let sb = unsafe { c::bch2_format(fs_opt_strs, cfg.fs_opts, fmt_opts, dev_list) };
     if sb.is_null() {
         bail!("bch2_format returned null");
     }
 
     // Print superblock
-    if !quiet {
+    if !cfg.quiet {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
         let fields = 1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
@@ -493,14 +529,14 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     fmt_opts.passphrase = std::ptr::null_mut();
 
     // Initialize filesystem
-    if initialize {
-        let dev_paths: Vec<PathBuf> = devices.iter().map(|d| PathBuf::from(&d.path)).collect();
+    if cfg.initialize {
+        let dev_paths: Vec<PathBuf> = cfg.devices.iter().map(|d| PathBuf::from(&d.path)).collect();
         let open_opts: c::bch_opts = Default::default();
 
         let fs = Fs::open(&dev_paths, open_opts)
-            .map_err(|e| anyhow!("error opening {}: {}", devices[0].path, e))?;
+            .map_err(|e| anyhow!("error opening {}: {}", cfg.devices[0].path, e))?;
 
-        if let Some(ref src) = source {
+        if let Some(ref src) = cfg.source {
             let src_c = CString::new(src.as_str())?;
             let ret = unsafe { c::rust_fmt_build_fs(fs.raw, src_c.as_ptr()) };
             if ret != 0 {
