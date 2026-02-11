@@ -65,6 +65,7 @@ pub fn bch_option_args(flag_filter: u32) -> Vec<Arg> {
             c::opt_type::BCH_OPT_BOOL => {
                 arg = arg.num_args(0..=1)
                          .default_missing_value("1")
+                         .require_equals(true)
                          .action(ArgAction::Set);
             }
             c::opt_type::BCH_OPT_STR => {

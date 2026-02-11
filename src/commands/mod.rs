@@ -11,6 +11,7 @@ pub mod mount;
 pub mod opts;
 pub mod reconcile;
 pub mod scrub;
+pub mod set_option;
 pub mod subvolume;
 pub mod super_cmd;
 pub mod timestats;
@@ -29,6 +30,7 @@ pub use list::list;
 pub use mount::mount;
 pub use reconcile::{cmd_reconcile_status, cmd_reconcile_wait};
 pub use scrub::scrub;
+pub use set_option::cmd_set_option;
 pub use subvolume::subvolume;
 pub use timestats::timestats;
 pub use top::top;
@@ -93,8 +95,7 @@ pub fn build_cli() -> Command {
             .subcommand(reconcile::WaitCli::command().name("wait")))
         .subcommand(Command::new("recovery-pass")
             .about("Run a specific recovery pass"))
-        .subcommand(Command::new("set-fs-option")
-            .about("Set a filesystem option"))
+        .subcommand(set_option::set_option_cmd())
         .subcommand(key::SetPassphraseCli::command().name("set-passphrase"))
         .subcommand(key::RemovePassphraseCli::command().name("remove-passphrase"))
         .subcommand(super_cmd::ShowSuperCli::command().name("show-super"))

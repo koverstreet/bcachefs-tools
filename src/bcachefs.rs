@@ -69,7 +69,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             // reconcile handled in Rust dispatch
             // remove-passphrase handled in Rust dispatch
             // reset-counters handled in Rust dispatch
-            "set-fs-option" => c::cmd_set_option(argc, argv),
+            // set-fs-option handled in Rust dispatch
             // set-passphrase handled in Rust dispatch
             // set-file-option handled in Rust dispatch
             // show-super handled in Rust dispatch
@@ -195,6 +195,7 @@ fn main() -> ExitCode {
         },
         "show-super" => commands::super_cmd::cmd_show_super(args[1..].to_vec()).report(),
         "set-file-option" => commands::cmd_setattr(args[1..].to_vec()).report(),
+        "set-fs-option" => commands::cmd_set_option(args[1..].to_vec()).report(),
         "set-passphrase" => commands::cmd_set_passphrase(args[1..].to_vec()).report(),
         "reflink-option-propagate" => commands::cmd_reflink_option_propagate(args[1..].to_vec()).report(),
         "unlock" => commands::cmd_unlock(args[1..].to_vec()).report(),
