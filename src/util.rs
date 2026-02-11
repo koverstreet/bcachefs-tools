@@ -1,7 +1,19 @@
+use std::ffi::CString;
 use std::io;
 
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use bch_bindgen::c;
 use crossterm::{cursor, execute, terminal};
+
+/// Parse a human-readable size string (e.g. "1G", "512M") via bch2_strtoull_h.
+pub fn parse_human_size(s: &str) -> Result<u64> {
+    let cstr = CString::new(s)?;
+    let mut val: u64 = 0;
+    if unsafe { c::bch2_strtoull_h(cstr.as_ptr(), &mut val) } != 0 {
+        return Err(anyhow!("invalid size: {}", s));
+    }
+    Ok(val)
+}
 
 pub fn fmt_sectors_human(sectors: u64) -> String {
     fmt_bytes_human(sectors << 9)

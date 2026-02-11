@@ -7,6 +7,7 @@ use bch_bindgen::c;
 use bch_bindgen::opt_set;
 use clap::Parser;
 
+use crate::util::parse_human_size;
 use crate::wrappers::printbuf::Printbuf;
 
 // bch2_sb_validate's flags parameter is a bch_validate_flags enum in bindgen,
@@ -70,14 +71,6 @@ pub struct RecoverSuperCli {
     /// Device to recover
     #[arg(required = true)]
     device: String,
-}
-
-fn parse_size(s: &str) -> Result<u64> {
-    let mut val: u64 = 0;
-    if unsafe { c::bch2_strtoull_h(CString::new(s)?.as_ptr(), &mut val) } != 0 {
-        return Err(anyhow!("invalid size: {}", s));
-    }
-    Ok(val)
 }
 
 /// Total size of a bch_sb structure in bytes (fixed header + variable-length data).
@@ -282,7 +275,7 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
 
     let offset = match &cli.offset {
         Some(s) => {
-            let v = parse_size(s)?;
+            let v = parse_human_size(s)?;
             if v & 511 != 0 {
                 return Err(anyhow!("offset must be a multiple of 512"));
             }
@@ -292,7 +285,7 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
     };
 
     let scan_len = match &cli.scan_len {
-        Some(s) => parse_size(s)?,
+        Some(s) => parse_human_size(s)?,
         None => 16 << 20,
     };
 
@@ -303,7 +296,7 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
     }
 
     let dev_size = match &cli.dev_size {
-        Some(s) => parse_size(s)?,
+        Some(s) => parse_human_size(s)?,
         None => unsafe { c::get_size(dev_fd) },
     };
 

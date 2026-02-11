@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::io::{self, Write};
 use std::path::Path;
 use std::thread;
@@ -13,7 +12,7 @@ use bch_bindgen::c::{
 use bch_bindgen::path_to_cstr;
 use clap::{Parser, ValueEnum};
 
-use crate::util::fmt_sectors_human;
+use crate::util::{fmt_sectors_human, parse_human_size};
 use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::bcachefs_kernel_version;
@@ -156,14 +155,6 @@ impl MemberState {
             MemberState::Spare      => BCH_MEMBER_STATE_spare as u32,
         }
     }
-}
-
-fn parse_human_size(s: &str) -> Result<u64> {
-    let cstr = CString::new(s).map_err(|_| anyhow!("invalid size string"))?;
-    let mut val: u64 = 0;
-    let ret = unsafe { bch_bindgen::c::bch2_strtoull_h(cstr.as_ptr(), &mut val) };
-    if ret != 0 { return Err(anyhow!("invalid size: {}", s)) }
-    Ok(val)
 }
 
 fn block_device_size(dev: &str) -> Result<u64> {
