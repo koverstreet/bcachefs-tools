@@ -7,8 +7,9 @@ use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 use clap::{Arg, ArgAction, Command};
 
-use crate::commands::opts::{bch_option_args, bch_options_from_matches};
+use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
 use crate::wrappers::handle::BcachefsHandle;
+use crate::wrappers::sysfs;
 
 fn opt_flags() -> u32 {
     c::opt_flags::OPT_FS as u32 | c::opt_flags::OPT_DEVICE as u32
@@ -43,10 +44,7 @@ pub fn cmd_set_option(argv: Vec<String>) -> Result<()> {
         bail!("No options specified");
     }
 
-    let online = devices.iter().any(|dev| {
-        let c_dev = CString::new(dev.as_str()).unwrap();
-        unsafe { c::dev_mounted(c_dev.as_ptr()) != 0 }
-    });
+    let online = devices.iter().any(|dev| sysfs::dev_mounted(dev));
 
     if online {
         set_option_online(&devices, &opts)
@@ -66,16 +64,10 @@ fn set_option_online(devices: &[&String], opts: &[(String, String)]) -> Result<(
     }
 
     for (name, value) in opts {
-        let opt_id = unsafe {
-            let c_name = CString::new(name.as_str())?;
-            c::bch2_opt_lookup(c_name.as_ptr())
-        };
-        if opt_id < 0 {
+        let Some((_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");
             continue;
-        }
-
-        let opt = unsafe { &*c::bch2_opt_table.as_ptr().add(opt_id as usize) };
+        };
         let flags = opt.flags as u32;
 
         if flags & opt_flags() == 0 {
@@ -84,10 +76,7 @@ fn set_option_online(devices: &[&String], opts: &[(String, String)]) -> Result<(
         }
 
         if flags & c::opt_flags::OPT_FS as u32 != 0 {
-            let path = format!("options/{name}");
-            let c_path = CString::new(path)?;
-            let c_value = CString::new(value.as_str())?;
-            unsafe { c::write_file_str(fs.sysfs_fd(), c_path.as_ptr(), c_value.as_ptr()); }
+            sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value);
         }
 
         if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
@@ -99,10 +88,7 @@ fn set_option_online(devices: &[&String], opts: &[(String, String)]) -> Result<(
                     continue;
                 }
 
-                let path = format!("dev-{dev_idx}/{name}");
-                let c_path = CString::new(path)?;
-                let c_value = CString::new(value.as_str())?;
-                unsafe { c::write_file_str(fs.sysfs_fd(), c_path.as_ptr(), c_value.as_ptr()); }
+                sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value);
             }
         }
     }
@@ -123,16 +109,10 @@ fn set_option_offline(
     let fs = Fs::open(&devs, fs_opts)?;
 
     for (name, value) in opts {
-        let opt_id = unsafe {
-            let c_name = CString::new(name.as_str())?;
-            c::bch2_opt_lookup(c_name.as_ptr())
-        };
-        if opt_id < 0 {
+        let Some((opt_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");
             continue;
-        }
-
-        let opt = unsafe { &*c::bch2_opt_table.as_ptr().add(opt_id as usize) };
+        };
         let flags = opt.flags as u32;
 
         if flags & opt_flags() == 0 {
@@ -150,7 +130,7 @@ fn set_option_offline(
             continue;
         }
 
-        // SAFETY: opt_id came from bch2_opt_lookup which returns values in [0, bch2_opts_nr)
+        // SAFETY: opt_id came from bch2_opt_lookup which validates [0, bch2_opts_nr)
         let opt_id_enum: c::bch_opt_id = unsafe { std::mem::transmute(opt_id as u32) };
 
         if flags & c::opt_flags::OPT_FS as u32 != 0 {

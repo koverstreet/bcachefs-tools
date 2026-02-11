@@ -80,6 +80,18 @@ impl Printbuf {
         self.0.set_human_readable_units(v);
     }
 
+    /// Print a human-readable representation of a u64 value.
+    pub fn human_readable_u64(&mut self, v: u64) {
+        unsafe { c::bch2_prt_human_readable_u64(&mut self.0, v) };
+    }
+
+    /// Print a bcachefs metadata version number.
+    pub fn version(&mut self, v: u32) {
+        // bch2_version_to_text takes an enum bcachefs_metadata_version,
+        // which is #[repr(u32)]. We transmute from u32.
+        unsafe { c::bch2_version_to_text(&mut self.0, std::mem::transmute(v)) };
+    }
+
     /// Access the underlying `c::printbuf` for calling C prt_* functions.
     pub fn as_raw(&mut self) -> &mut c::printbuf {
         &mut self.0

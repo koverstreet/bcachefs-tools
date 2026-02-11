@@ -106,7 +106,7 @@ fn validate_sb(sb: *mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
 
 fn prt_offset(offset: u64) -> Printbuf {
     let mut hr = Printbuf::new();
-    unsafe { c::bch2_prt_human_readable_u64(hr.as_raw(), offset) };
+    hr.human_readable_u64(offset);
     hr
 }
 
@@ -217,8 +217,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     let mut src_sb: c::bch_sb_handle = Default::default();
     let ret = unsafe { c::bch2_read_super(c_path.as_ptr(), &mut opts, &mut src_sb) };
     if ret != 0 {
-        let err_str = unsafe { std::ffi::CStr::from_ptr(c::bch2_err_str(ret)).to_string_lossy() };
-        return Err(anyhow!("Error opening {}: {}", src_device, err_str));
+        return Err(anyhow!("Error opening {}: {}", src_device, crate::wrappers::bch_err_str(ret)));
     }
 
     let m = unsafe { c::bch2_sb_member_get(src_sb.sb, dev_idx) };

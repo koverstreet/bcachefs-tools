@@ -152,10 +152,7 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
     };
     if fsck_fd < 0 {
         let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        let err_str = unsafe {
-            std::ffi::CStr::from_ptr(c::bch2_err_str(errno)).to_string_lossy()
-        };
-        return Err(anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}", err_str));
+        return Err(anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}", crate::wrappers::bch_err_str(errno)));
     }
 
     Ok(splice_fd_to_stdinout(fsck_fd))
@@ -192,11 +189,11 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
     if ret {
         let mut buf = Printbuf::new();
         let _ = write!(buf, "fsck binary is version ");
-        unsafe { c::bch2_version_to_text(buf.as_raw(), std::mem::transmute(current as u32)) };
+        buf.version(current as u32);
         let _ = write!(buf, " but filesystem is ");
-        unsafe { c::bch2_version_to_text(buf.as_raw(), std::mem::transmute(sb_version as u32)) };
+        buf.version(sb_version as u32);
         let _ = write!(buf, " and kernel is ");
-        unsafe { c::bch2_version_to_text(buf.as_raw(), std::mem::transmute(kernel_version as u32)) };
+        buf.version(kernel_version as u32);
         let _ = write!(buf, ", using kernel fsck");
         println!("{}", buf);
     }
@@ -283,8 +280,7 @@ pub fn cmd_fsck(argv: Vec<String>) -> Result<()> {
 
     // Check if any device is mounted (online fsck)
     for dev in devices {
-        let c_dev = CString::new(dev.as_str())?;
-        if unsafe { c::dev_mounted(c_dev.as_ptr()) != 0 } {
+        if sysfs::dev_mounted(dev) {
             println!("Running fsck online");
             let fs = BcachefsHandle::open(dev)?;
             let ret = fsck_online(&fs, &opts_str)?;
@@ -367,10 +363,7 @@ pub fn cmd_fsck(argv: Vec<String>) -> Result<()> {
 
         if fsck_fd < 0 {
             let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            let err_str = unsafe {
-                std::ffi::CStr::from_ptr(c::bch2_err_str(errno)).to_string_lossy()
-            };
-            return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}", err_str));
+            return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}", crate::wrappers::bch_err_str(errno)));
         }
 
         let ret = splice_fd_to_stdinout(fsck_fd);
@@ -419,10 +412,7 @@ fn run_userspace_fsck(devices: &[String], opts_str: &str) -> Result<()> {
     std::mem::forget(fs);
 
     if ret2 != 0 {
-        let err_str = unsafe {
-            std::ffi::CStr::from_ptr(c::bch2_err_str(ret2)).to_string_lossy()
-        };
-        eprintln!("error shutting down filesystem: {}", err_str);
+        eprintln!("error shutting down filesystem: {}", crate::wrappers::bch_err_str(ret2));
         process::exit(ret | 8);
     }
 

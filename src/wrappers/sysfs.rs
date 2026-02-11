@@ -1,8 +1,11 @@
+use std::ffi::CString;
 use std::fs;
 use std::io;
+use std::os::fd::BorrowedFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+use bch_bindgen::c;
 
 /// Resolve the block device name for a bcachefs sysfs device directory.
 ///
@@ -40,6 +43,21 @@ const KERNEL_VERSION_PATH: &str = "/sys/module/bcachefs/parameters/version";
 /// Returns 0 if the module isn't loaded.
 pub fn bcachefs_kernel_version() -> u64 {
     read_sysfs_u64(Path::new(KERNEL_VERSION_PATH)).unwrap_or(0)
+}
+
+/// Check if a block device is currently mounted as a bcachefs member.
+pub fn dev_mounted(path: &str) -> bool {
+    let Ok(c_path) = CString::new(path) else { return false };
+    unsafe { c::dev_mounted(c_path.as_ptr()) != 0 }
+}
+
+/// Write a string value to a sysfs attribute file relative to a directory fd.
+pub fn sysfs_write_str(sysfs_fd: i32, path: &str, value: &str) {
+    let dir = unsafe { BorrowedFd::borrow_raw(sysfs_fd) };
+    let flags = rustix::fs::OFlags::WRONLY;
+    if let Ok(fd) = rustix::fs::openat(dir, path, flags, rustix::fs::Mode::empty()) {
+        let _ = rustix::io::write(&fd, value.as_bytes());
+    }
 }
 
 /// Info about a device in a mounted bcachefs filesystem, read from sysfs.
