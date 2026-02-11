@@ -13,7 +13,7 @@ use crossterm::{
 };
 
 use crate::util::run_tui;
-use crate::wrappers::accounting::{self, DiskAccountingPos};
+use crate::wrappers::accounting::{self, DiskAccountingKind};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::printbuf::Printbuf;
 use crate::wrappers::sysfs;
@@ -113,8 +113,8 @@ fn reconcile_status_to_text(
     let mut v = vec![[0u64; 2]; nr];
 
     for entry in &result.entries {
-        if let DiskAccountingPos::ReconcileWork { work_type } = &entry.pos {
-            let idx = *work_type as usize;
+        if let DiskAccountingKind::ReconcileWork { work_type } = entry.pos.decode() {
+            let idx = work_type as usize;
             if idx < nr {
                 v[idx][0] = entry.counter(0);
                 v[idx][1] = entry.counter(1);

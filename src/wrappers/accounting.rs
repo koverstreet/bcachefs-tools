@@ -45,10 +45,52 @@ fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
 /// Size of a bpos in bytes — maximum size of any accounting key payload.
 const BPOS_SIZE: usize = std::mem::size_of::<c::bpos>();
 
-/// Decoded accounting key type.
+/// A bpos encoding a disk accounting key position.
+///
+/// Same size and ABI as bpos (`#[repr(transparent)]`). The accounting type
+/// and variant fields are encoded in the bpos bytes (byte-reversed on LE).
+/// Use `decode()` to parse into `DiskAccountingKind` for pattern matching.
+#[repr(transparent)]
+#[derive(Clone, Copy, Debug)]
+pub struct DiskAccountingPos(pub c::bpos);
+
+impl DiskAccountingPos {
+    /// Wrap a raw bpos as an accounting position.
+    pub fn from_bpos(p: c::bpos) -> Self {
+        Self(p)
+    }
+
+    /// The underlying bpos, for passing to btree/ioctl APIs.
+    pub fn as_bpos(&self) -> c::bpos {
+        self.0
+    }
+
+    /// Decode into the typed enum for pattern matching.
+    pub fn decode(&self) -> DiskAccountingKind {
+        bpos_to_accounting_kind(&self.0)
+    }
+}
+
+impl PartialEq for DiskAccountingPos {
+    fn eq(&self, other: &Self) -> bool { self.0 == other.0 }
+}
+impl Eq for DiskAccountingPos {}
+
+impl PartialOrd for DiskAccountingPos {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl Ord for DiskAccountingPos {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+/// Decoded accounting key — the typed form for pattern matching.
 #[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
-pub enum DiskAccountingPos {
+pub enum DiskAccountingKind {
     NrInodes,
     PersistentReserved { nr_replicas: u8 },
     Replicas { data_type: bch_data_type, nr_devs: u8, nr_required: u8, devs: [u8; BPOS_SIZE] },
@@ -70,7 +112,6 @@ use disk_accounting_type::*;
 #[derive(Debug)]
 pub struct AccountingEntry {
     pub pos: DiskAccountingPos,
-    pub bpos: c::bpos,
     pub counters: Vec<u64>,
 }
 
@@ -88,12 +129,12 @@ pub struct AccountingResult {
     pub entries: Vec<AccountingEntry>,
 }
 
-/// Convert a bpos to a DiskAccountingPos by byte-reversing the 20-byte bpos
+/// Decode a bpos into a DiskAccountingKind by byte-reversing the 20-byte bpos
 /// (memcpy_swab on little-endian) and parsing the type-tagged union.
-fn bpos_to_disk_accounting_pos(p: &c::bpos) -> DiskAccountingPos {
+fn bpos_to_accounting_kind(p: &c::bpos) -> DiskAccountingKind {
     // bpos is 20 bytes: on little-endian, the accounting pos is the
     // byte-reversed form. We copy to a 20-byte LE array, then reverse all bytes.
-    let mut raw = [0u8; 20];
+    let mut raw = [0u8; BPOS_SIZE];
 
     // Copy bpos fields into raw bytes in memory order (LE: snapshot, offset, inode)
     let snap_bytes = p.snapshot.to_ne_bytes();
@@ -120,8 +161,8 @@ fn bpos_to_disk_accounting_pos(p: &c::bpos) -> DiskAccountingPos {
     const DEV_LEAVING:          u32 = BCH_DISK_ACCOUNTING_dev_leaving as u32;
 
     match raw[0] as u32 {
-        NR_INODES => DiskAccountingPos::NrInodes,
-        PERSISTENT_RESERVED => DiskAccountingPos::PersistentReserved {
+        NR_INODES => DiskAccountingKind::NrInodes,
+        PERSISTENT_RESERVED => DiskAccountingKind::PersistentReserved {
             nr_replicas: raw[1],
         },
         REPLICAS => {
@@ -130,42 +171,42 @@ fn bpos_to_disk_accounting_pos(p: &c::bpos) -> DiskAccountingPos {
             let mut devs = [0u8; BPOS_SIZE];
             let n = (nr_devs as usize).min(BPOS_SIZE - 4);
             devs[..n].copy_from_slice(&raw[4..4 + n]);
-            DiskAccountingPos::Replicas {
+            DiskAccountingKind::Replicas {
                 data_type: data_type_from_u8(raw[1]),
                 nr_devs, nr_required, devs,
             }
         }
-        DEV_DATA_TYPE => DiskAccountingPos::DevDataType {
+        DEV_DATA_TYPE => DiskAccountingKind::DevDataType {
             dev: raw[1],
             data_type: data_type_from_u8(raw[2]),
         },
-        COMPRESSION => DiskAccountingPos::Compression {
+        COMPRESSION => DiskAccountingKind::Compression {
             compression_type: compression_type_from_u8(raw[1]),
         },
         SNAPSHOT => {
             let id = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
-            DiskAccountingPos::Snapshot { id }
+            DiskAccountingKind::Snapshot { id }
         }
         BTREE => {
             let id = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
-            DiskAccountingPos::Btree { id }
+            DiskAccountingKind::Btree { id }
         }
-        REBALANCE_WORK => DiskAccountingPos::RebalanceWork,
+        REBALANCE_WORK => DiskAccountingKind::RebalanceWork,
         INUM => {
             let inum = u64::from_ne_bytes([
                 raw[1], raw[2], raw[3], raw[4],
                 raw[5], raw[6], raw[7], raw[8],
             ]);
-            DiskAccountingPos::Inum { inum }
+            DiskAccountingKind::Inum { inum }
         }
-        RECONCILE_WORK => DiskAccountingPos::ReconcileWork {
+        RECONCILE_WORK => DiskAccountingKind::ReconcileWork {
             work_type: reconcile_type_from_u8(raw[1]),
         },
         DEV_LEAVING => {
             let dev = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
-            DiskAccountingPos::DevLeaving { dev }
+            DiskAccountingKind::DevLeaving { dev }
         }
-        _ => DiskAccountingPos::Unknown(raw[0]),
+        _ => DiskAccountingKind::Unknown(raw[0]),
     }
 }
 
@@ -275,7 +316,7 @@ fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
             unsafe { c::bch2_bpos_swab(&mut bpos) };
         }
 
-        let pos = bpos_to_disk_accounting_pos(&bpos);
+        let pos = DiskAccountingPos::from_bpos(bpos);
 
         // Counters start after the bkey header (bch_accounting.d[])
         // bch_accounting has just a bch_val (0 bytes), then d[]
@@ -288,7 +329,7 @@ fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
             })
             .collect();
 
-        entries.push(AccountingEntry { pos, bpos, counters });
+        entries.push(AccountingEntry { pos, counters });
         offset += entry_bytes;
     }
 
