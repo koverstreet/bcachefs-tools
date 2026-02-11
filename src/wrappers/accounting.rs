@@ -15,6 +15,35 @@ pub use c::bch_reconcile_accounting_type;
 
 use bch_data_type::*;
 
+/// Safely convert a raw u8 to bch_data_type.
+/// Out-of-range values return BCH_DATA_NR.
+pub fn data_type_from_u8(v: u8) -> bch_data_type {
+    if (v as u32) < BCH_DATA_NR as u32 {
+        // SAFETY: v is in [0, BCH_DATA_NR), all valid #[repr(u32)] discriminants
+        unsafe { std::mem::transmute::<u32, bch_data_type>(v as u32) }
+    } else {
+        BCH_DATA_NR
+    }
+}
+
+/// Safely convert a raw u8 to bch_compression_type.
+fn compression_type_from_u8(v: u8) -> bch_compression_type {
+    if (v as u32) < bch_compression_type::BCH_COMPRESSION_TYPE_NR as u32 {
+        unsafe { std::mem::transmute::<u32, bch_compression_type>(v as u32) }
+    } else {
+        bch_compression_type::BCH_COMPRESSION_TYPE_NR
+    }
+}
+
+/// Safely convert a raw u8 to bch_reconcile_accounting_type.
+fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
+    if (v as u32) < bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_NR as u32 {
+        unsafe { std::mem::transmute::<u32, bch_reconcile_accounting_type>(v as u32) }
+    } else {
+        bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_NR
+    }
+}
+
 /// Decoded accounting key type.
 #[derive(Debug)]
 #[allow(dead_code)]
@@ -76,49 +105,60 @@ fn bpos_to_disk_accounting_pos(p: &c::bpos) -> DiskAccountingPos {
     // memcpy_swab: reverse all 20 bytes
     raw.reverse();
 
-    // Now raw[0] is the accounting type discriminant
-    let ty: disk_accounting_type = unsafe { std::mem::transmute(raw[0] as u32) };
+    // Match on raw discriminant — no transmute, unknown types safely fall to Unknown
+    const NR_INODES:            u32 = BCH_DISK_ACCOUNTING_nr_inodes as u32;
+    const PERSISTENT_RESERVED:  u32 = BCH_DISK_ACCOUNTING_persistent_reserved as u32;
+    const REPLICAS:             u32 = BCH_DISK_ACCOUNTING_replicas as u32;
+    const DEV_DATA_TYPE:        u32 = BCH_DISK_ACCOUNTING_dev_data_type as u32;
+    const COMPRESSION:          u32 = BCH_DISK_ACCOUNTING_compression as u32;
+    const SNAPSHOT:             u32 = BCH_DISK_ACCOUNTING_snapshot as u32;
+    const BTREE:                u32 = BCH_DISK_ACCOUNTING_btree as u32;
+    const REBALANCE_WORK:       u32 = BCH_DISK_ACCOUNTING_rebalance_work as u32;
+    const INUM:                 u32 = BCH_DISK_ACCOUNTING_inum as u32;
+    const RECONCILE_WORK:       u32 = BCH_DISK_ACCOUNTING_reconcile_work as u32;
+    const DEV_LEAVING:          u32 = BCH_DISK_ACCOUNTING_dev_leaving as u32;
 
-    match ty {
-        BCH_DISK_ACCOUNTING_nr_inodes => DiskAccountingPos::NrInodes,
-        BCH_DISK_ACCOUNTING_persistent_reserved => DiskAccountingPos::PersistentReserved {
+    match raw[0] as u32 {
+        NR_INODES => DiskAccountingPos::NrInodes,
+        PERSISTENT_RESERVED => DiskAccountingPos::PersistentReserved {
             nr_replicas: raw[1],
         },
-        BCH_DISK_ACCOUNTING_replicas => {
-            let data_type: bch_data_type = unsafe { std::mem::transmute(raw[1] as u32) };
+        REPLICAS => {
             let nr_devs = raw[2];
             let nr_required = raw[3];
             let devs = raw[4..4 + nr_devs as usize].to_vec();
-            DiskAccountingPos::Replicas { data_type, nr_devs, nr_required, devs }
+            DiskAccountingPos::Replicas {
+                data_type: data_type_from_u8(raw[1]),
+                nr_devs, nr_required, devs,
+            }
         }
-        BCH_DISK_ACCOUNTING_dev_data_type => DiskAccountingPos::DevDataType {
+        DEV_DATA_TYPE => DiskAccountingPos::DevDataType {
             dev: raw[1],
-            data_type: unsafe { std::mem::transmute(raw[2] as u32) },
+            data_type: data_type_from_u8(raw[2]),
         },
-        BCH_DISK_ACCOUNTING_compression => DiskAccountingPos::Compression {
-            compression_type: unsafe { std::mem::transmute(raw[1] as u32) },
+        COMPRESSION => DiskAccountingPos::Compression {
+            compression_type: compression_type_from_u8(raw[1]),
         },
-        BCH_DISK_ACCOUNTING_snapshot => {
-            // After memcpy_swab, multi-byte fields are in native byte order
+        SNAPSHOT => {
             let id = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
             DiskAccountingPos::Snapshot { id }
         }
-        BCH_DISK_ACCOUNTING_btree => {
+        BTREE => {
             let id = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
             DiskAccountingPos::Btree { id }
         }
-        BCH_DISK_ACCOUNTING_rebalance_work => DiskAccountingPos::RebalanceWork,
-        BCH_DISK_ACCOUNTING_inum => {
+        REBALANCE_WORK => DiskAccountingPos::RebalanceWork,
+        INUM => {
             let inum = u64::from_ne_bytes([
                 raw[1], raw[2], raw[3], raw[4],
                 raw[5], raw[6], raw[7], raw[8],
             ]);
             DiskAccountingPos::Inum { inum }
         }
-        BCH_DISK_ACCOUNTING_reconcile_work => DiskAccountingPos::ReconcileWork {
-            work_type: unsafe { std::mem::transmute(raw[1] as u32) },
+        RECONCILE_WORK => DiskAccountingPos::ReconcileWork {
+            work_type: reconcile_type_from_u8(raw[1]),
         },
-        BCH_DISK_ACCOUNTING_dev_leaving => {
+        DEV_LEAVING => {
             let dev = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
             DiskAccountingPos::DevLeaving { dev }
         }
@@ -279,9 +319,13 @@ pub fn prt_reconcile_type(out: &mut Printbuf, t: bch_reconcile_accounting_type) 
 
 /// Get a btree ID name string.
 pub fn btree_id_str(id: u32) -> String {
-    // bch2_btree_id_str takes an enum btree_id; we transmute from u32
-    let btree_id: c::btree_id = unsafe { std::mem::transmute(id) };
-    format!("{}", btree_id)
+    if id < c::btree_id::BTREE_ID_NR as u32 {
+        // SAFETY: id is in [0, BTREE_ID_NR), a valid discriminant
+        let btree_id: c::btree_id = unsafe { std::mem::transmute(id) };
+        format!("{}", btree_id)
+    } else {
+        format!("(unknown btree {})", id)
+    }
 }
 
 /// Get a member state string.

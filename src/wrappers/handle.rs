@@ -269,7 +269,7 @@ impl BcachefsHandle {
         let mut u_v1 = bch_ioctl_dev_usage {
             dev: dev_idx as u64,
             flags: BCH_BY_INDEX,
-            ..unsafe { mem::zeroed() }
+            ..Default::default()
         };
         let request_v1 = bch_ioc_wr::<bch_ioctl_dev_usage>(11);
         let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request_v1, &mut u_v1 as *mut _) };
@@ -303,13 +303,11 @@ impl DevUsage {
     /// Iterate data types with their typed enum key.
     /// Caps at BCH_DATA_NR to avoid UB if the kernel returns more types than we know.
     pub fn iter_typed(&self) -> impl Iterator<Item = (bch_data_type, &DevUsageType)> {
+        use super::accounting::data_type_from_u8;
         let max = bch_data_type::BCH_DATA_NR as usize;
         self.data_types.iter().enumerate()
             .take(max)
-            .map(|(i, dt)| {
-                let t: bch_data_type = unsafe { std::mem::transmute(i as u32) };
-                (t, dt)
-            })
+            .map(|(i, dt)| (data_type_from_u8(i as u8), dt))
     }
 
     /// Total capacity in sectors.
