@@ -124,15 +124,15 @@ impl Printbuf {
     }
 
     /// Print superblock contents.
-    pub fn sb_to_text(&mut self, fs: *mut c::bch_fs, sb: *mut c::bch_sb,
+    pub fn sb_to_text(&mut self, fs: *mut c::bch_fs, sb: &c::bch_sb,
                       layout: bool, fields: u32) {
-        unsafe { c::bch2_sb_to_text(&mut self.0, fs, sb, layout, fields) };
+        unsafe { c::bch2_sb_to_text(&mut self.0, fs, sb as *const _ as *mut _, layout, fields) };
     }
 
     /// Print superblock contents with field names.
-    pub fn sb_to_text_with_names(&mut self, fs: *mut c::bch_fs, sb: *mut c::bch_sb,
+    pub fn sb_to_text_with_names(&mut self, fs: *mut c::bch_fs, sb: &c::bch_sb,
                                  layout: bool, fields: u32, field_only: i32) {
-        unsafe { c::bch2_sb_to_text_with_names(&mut self.0, fs, sb, layout, fields, field_only) };
+        unsafe { c::bch2_sb_to_text_with_names(&mut self.0, fs, sb as *const _ as *mut _, layout, fields, field_only) };
     }
 
     /// Print a set of bitflags as comma-separated names.

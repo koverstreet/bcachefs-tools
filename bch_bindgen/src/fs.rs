@@ -1,3 +1,4 @@
+use crate::bcachefs;
 use crate::c;
 use crate::errcode::{BchError, errptr_to_result};
 use std::ffi::CString;
@@ -9,6 +10,21 @@ pub struct Fs {
 }
 
 impl Fs {
+    /// Access the superblock handle.
+    pub fn sb_handle(&self) -> &bcachefs::bch_sb_handle {
+        unsafe { &(*self.raw).disk_sb }
+    }
+
+    /// Access the superblock.
+    pub fn sb(&self) -> &bcachefs::bch_sb {
+        self.sb_handle().sb()
+    }
+
+    /// Write superblock to disk.
+    pub fn write_super(&self) {
+        unsafe { c::bch2_write_super(self.raw) };
+    }
+
     pub fn open(devs: &[PathBuf], mut opts: c::bch_opts) -> Result<Fs, BchError> {
         let devs_cstrs : Vec<_> = devs
             .iter()

@@ -77,10 +77,8 @@ pub fn cmd_show_super(argv: Vec<String>) -> Result<()> {
 
     let fs = Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
 
-    let sb = unsafe { (*fs.raw).disk_sb.sb };
-
     if print_default_fields {
-        if unsafe { (*sb).field::<c::bch_sb_field_members_v2>() }.is_some() {
+        if fs.sb().field::<c::bch_sb_field_members_v2>().is_some() {
             fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
         } else {
             fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32;
@@ -90,7 +88,7 @@ pub fn cmd_show_super(argv: Vec<String>) -> Result<()> {
 
     let mut buf = Printbuf::new();
     buf.set_human_readable(true);
-    buf.sb_to_text_with_names(fs.raw, sb, cli.layout, fields, field_only);
+    buf.sb_to_text_with_names(fs.raw, fs.sb(), cli.layout, fields, field_only);
 
     print!("{}", buf);
 

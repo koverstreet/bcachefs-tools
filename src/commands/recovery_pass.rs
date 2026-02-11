@@ -84,7 +84,7 @@ pub fn cmd_recovery_pass(argv: Vec<String>) -> Result<()> {
             (*ext).recovery_passes_required[0] &= !passes_to_unset.to_le();
             (*ext).recovery_passes_required[0] |= passes_to_set.to_le();
             scheduled = u64::from_le((*ext).recovery_passes_required[0]);
-            c::bch2_write_super(fs.raw);
+            fs.write_super();
         }
 
         drop(_sb_lock);

@@ -1,7 +1,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use bch_bindgen::bcachefs::{bch_key, bch_sb_handle};
+use bch_bindgen::bcachefs::bch_key;
 use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
@@ -92,16 +92,11 @@ fn open_nostart(devs: &[PathBuf]) -> Result<Fs> {
         .map_err(|e| anyhow::anyhow!("Error opening {:?}: {}", devs, e))
 }
 
-/// Get the disk_sb handle from an open filesystem.
-unsafe fn fs_sb_handle(fs: &Fs) -> &bch_sb_handle {
-    &(*fs.raw).disk_sb
-}
-
 /// Open filesystem, verify encryption is enabled, and verify the current passphrase.
 /// Returns the open filesystem and the decrypted raw key.
 fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
     let fs = open_nostart(devs)?;
-    let sb_handle = unsafe { fs_sb_handle(&fs) };
+    let sb_handle = fs.sb_handle();
 
     if sb_handle.sb().crypt().is_none() {
         bail!("Filesystem does not have encryption enabled");
@@ -118,7 +113,7 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
 
 /// Write a new encrypted key to the crypt superblock field.
 unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
-    let crypt = bch_bindgen::sb::sb_field_get_mut::<c::bch_sb_field_crypt>((*fs.raw).disk_sb.sb)
+    let crypt = bch_bindgen::sb::sb_field_get_mut::<c::bch_sb_field_crypt>(fs.sb_handle().sb)
         .expect("filesystem has no crypt field");
     crypt.key = key;
 }
@@ -140,14 +135,13 @@ pub fn cmd_set_passphrase(argv: Vec<String>) -> Result<()> {
     let new_passphrase = Passphrase::new_from_prompt_twice()
         .context("reading new passphrase")?;
 
-    let sb_handle = unsafe { fs_sb_handle(&fs) };
-    let encrypted_key = new_passphrase.encrypt_key(sb_handle, &raw_key);
+    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), &raw_key);
 
     unsafe {
         set_crypt_key(&fs, encrypted_key);
-        c::bch2_revoke_key((*fs.raw).disk_sb.sb);
-        c::bch2_write_super(fs.raw);
+        c::bch2_revoke_key(fs.sb_handle().sb);
     }
+    fs.write_super();
 
     Ok(())
 }
@@ -166,10 +160,8 @@ pub fn cmd_remove_passphrase(argv: Vec<String>) -> Result<()> {
     let cli = RemovePassphraseCli::parse_from(argv);
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
-    unsafe {
-        set_crypt_key(&fs, unencrypted_key(&raw_key));
-        c::bch2_write_super(fs.raw);
-    }
+    unsafe { set_crypt_key(&fs, unencrypted_key(&raw_key)); }
+    fs.write_super();
 
     Ok(())
 }

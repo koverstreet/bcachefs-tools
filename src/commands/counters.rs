@@ -50,8 +50,7 @@ pub fn cmd_reset_counters(argv: Vec<String>) -> Result<()> {
         .context("opening filesystem")?;
 
     unsafe {
-        let c = fs.raw;
-        let now = (*c).counters.now;
+        let now = (*fs.raw).counters.now;
 
         // zero counters (percpu is just a plain pointer in userspace)
         if to_reset.is_empty() {
@@ -65,8 +64,8 @@ pub fn cmd_reset_counters(argv: Vec<String>) -> Result<()> {
         }
 
         // persist to superblock
-        let _lock = crate::wrappers::sb_lock(c);
-        c::bch2_write_super(c);
+        let _lock = crate::wrappers::sb_lock(fs.raw);
+        fs.write_super();
     }
 
     Ok(())

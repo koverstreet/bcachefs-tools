@@ -308,7 +308,7 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
     let mut buf = Printbuf::new();
     buf.sb_to_text(
         std::ptr::null_mut(),
-        sb,
+        unsafe { &*sb },
         true,
         1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32,
     );

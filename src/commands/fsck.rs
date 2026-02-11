@@ -172,7 +172,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
         Err(_) => return false,
     };
 
-    let sb_version = unsafe { (*(*fs.raw).disk_sb.sb).version as u64 };
+    let sb_version = fs.sb().version as u64;
 
     let ret = (current < kernel_version && kernel_version <= sb_version) ||
               (sb_version <= kernel_version && kernel_version < current);
