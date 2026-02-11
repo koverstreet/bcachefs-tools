@@ -106,7 +106,7 @@ impl FromStr for c::btree_id {
     type Err = BchToolsErr;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = CString::new(s).unwrap();
+        let s = CString::new(s).map_err(|_| BchToolsErr::InvalidBtreeId)?;
         let p = s.as_ptr();
 
         let v =
@@ -123,7 +123,7 @@ impl FromStr for c::bch_bkey_type {
     type Err = BchToolsErr;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = CString::new(s).unwrap();
+        let s = CString::new(s).map_err(|_| BchToolsErr::InvalidBkeyType)?;
         let p = s.as_ptr();
 
         let v = unsafe { c::match_string(c::bch2_bkey_types[..].as_ptr(), (-1_isize) as usize, p) };
