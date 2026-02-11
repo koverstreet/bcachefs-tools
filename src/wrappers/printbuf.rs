@@ -1,5 +1,6 @@
 use std::ffi::CStr;
 use std::fmt;
+use std::ops::{Deref, DerefMut};
 
 use bch_bindgen::c;
 
@@ -7,6 +8,28 @@ use bch_bindgen::c;
 /// `bch2_prt_bytes_indented`, which processes `\t`, `\r`, `\n` for
 /// tabstop and indent handling.
 pub struct Printbuf(c::printbuf);
+
+/// RAII guard for printbuf indentation — calls `indent_sub` on drop.
+/// Use through `Printbuf::indent()`.
+pub struct PrintbufIndent<'a> {
+    buf: &'a mut Printbuf,
+    spaces: u32,
+}
+
+impl Drop for PrintbufIndent<'_> {
+    fn drop(&mut self) {
+        self.buf.indent_sub(self.spaces);
+    }
+}
+
+impl Deref for PrintbufIndent<'_> {
+    type Target = Printbuf;
+    fn deref(&self) -> &Printbuf { self.buf }
+}
+
+impl DerefMut for PrintbufIndent<'_> {
+    fn deref_mut(&mut self) -> &mut Printbuf { self.buf }
+}
 
 impl Printbuf {
     pub fn new() -> Self {
@@ -46,6 +69,14 @@ impl Printbuf {
 
     pub fn indent_sub(&mut self, spaces: u32) {
         unsafe { c::bch2_printbuf_indent_sub(&mut self.0, spaces) };
+    }
+
+    /// Add indentation, returning a guard that removes it on drop.
+    /// Use the guard (which derefs to `&mut Printbuf`) for all
+    /// operations within the indented scope.
+    pub fn indent(&mut self, spaces: u32) -> PrintbufIndent<'_> {
+        self.indent_add(spaces);
+        PrintbufIndent { buf: self, spaces }
     }
 
     /// Advance to next tabstop (equivalent to `\t` in format string).

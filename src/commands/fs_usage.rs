@@ -555,37 +555,37 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
 
     write!(out, "{} (device {}):\t{}\r{}\r    {:>2}%\n", label, d.info.idx, d.info.dev, state, pct).unwrap();
 
-    out.indent_add(2);
-    write!(out, "\tdata\rbuckets\rfragmented\r\n").unwrap();
+    {
+        let out = &mut *out.indent(2);
+        write!(out, "\tdata\rbuckets\rfragmented\r\n").unwrap();
 
-    for (dt_type, dt) in u.iter_typed() {
-        accounting::prt_data_type(out, dt_type);
-        write!(out, ":\t").unwrap();
+        for (dt_type, dt) in u.iter_typed() {
+            accounting::prt_data_type(out, dt_type);
+            write!(out, ":\t").unwrap();
 
-        let sectors = if data_type_is_empty(dt_type) {
-            dt.buckets * u.bucket_size as u64
-        } else {
-            dt.sectors
-        };
-        out.units_sectors(sectors);
+            let sectors = if data_type_is_empty(dt_type) {
+                dt.buckets * u.bucket_size as u64
+            } else {
+                dt.sectors
+            };
+            out.units_sectors(sectors);
 
-        write!(out, "\r{}\r", dt.buckets).unwrap();
+            write!(out, "\r{}\r", dt.buckets).unwrap();
 
-        if dt.fragmented > 0 {
-            out.units_sectors(dt.fragmented);
+            if dt.fragmented > 0 {
+                out.units_sectors(dt.fragmented);
+            }
+            write!(out, "\r\n").unwrap();
         }
+
+        write!(out, "capacity:\t").unwrap();
+        out.units_sectors(capacity);
+        write!(out, "\r{}\r\n", u.nr_buckets).unwrap();
+
+        write!(out, "bucket size:\t").unwrap();
+        out.units_sectors(u.bucket_size as u64);
         write!(out, "\r\n").unwrap();
     }
-
-    write!(out, "capacity:\t").unwrap();
-    out.units_sectors(capacity);
-    write!(out, "\r{}\r\n", u.nr_buckets).unwrap();
-
-    write!(out, "bucket size:\t").unwrap();
-    out.units_sectors(u.bucket_size as u64);
-    write!(out, "\r\n").unwrap();
-
-    out.indent_sub(2);
     out.newline();
 }
 
