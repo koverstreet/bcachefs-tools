@@ -65,10 +65,8 @@ pub fn cmd_reset_counters(argv: Vec<String>) -> Result<()> {
         }
 
         // persist to superblock
-        let lock = &mut (*c).sb_lock.lock as *mut _ as *mut libc::pthread_mutex_t;
-        libc::pthread_mutex_lock(lock);
+        let _lock = crate::wrappers::sb_lock(c);
         c::bch2_write_super(c);
-        libc::pthread_mutex_unlock(lock);
     }
 
     Ok(())

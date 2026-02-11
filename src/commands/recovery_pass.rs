@@ -66,8 +66,7 @@ pub fn cmd_recovery_pass(argv: Vec<String>) -> Result<()> {
     let fs = Fs::open(&devs, fs_opts)?;
 
     unsafe {
-        let sb_lock = &mut (*fs.raw).sb_lock.lock as *mut _ as *mut libc::pthread_mutex_t;
-        libc::pthread_mutex_lock(sb_lock);
+        let _sb_lock = crate::wrappers::sb_lock(fs.raw);
 
         let ext = c::bch2_sb_field_get_minsize_id(
             &mut (*fs.raw).disk_sb,
@@ -76,7 +75,6 @@ pub fn cmd_recovery_pass(argv: Vec<String>) -> Result<()> {
         ) as *mut c::bch_sb_field_ext;
 
         if ext.is_null() {
-            libc::pthread_mutex_unlock(sb_lock);
             bail!("Error getting sb_field_ext");
         }
 
@@ -89,7 +87,7 @@ pub fn cmd_recovery_pass(argv: Vec<String>) -> Result<()> {
             c::bch2_write_super(fs.raw);
         }
 
-        libc::pthread_mutex_unlock(sb_lock);
+        drop(_sb_lock);
 
         let mut buf = Printbuf::new();
         let _ = write!(buf, "Scheduled recovery passes: ");
