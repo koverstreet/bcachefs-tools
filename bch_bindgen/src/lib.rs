@@ -153,13 +153,7 @@ impl Drop for c::printbuf {
 
 impl fmt::Display for Bpos {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let mut buf = c::printbuf::new();
-
-        unsafe { c::bch2_bpos_to_text(&mut buf, *self) };
-
-        let s = unsafe { CStr::from_ptr(buf.buf) };
-        let s = s.to_str().unwrap();
-        write!(f, "{}", s)
+        printbuf_to_formatter(f, |buf| unsafe { c::bch2_bpos_to_text(buf, *self) })
     }
 }
 
@@ -203,6 +197,10 @@ where
     let mut buf = c::printbuf::new();
 
     func(&mut buf);
+
+    if buf.buf.is_null() {
+        return Ok(());
+    }
 
     let s = unsafe { CStr::from_ptr(buf.buf) };
     f.write_str(&s.to_string_lossy())
