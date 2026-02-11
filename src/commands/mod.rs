@@ -4,6 +4,7 @@ pub mod attr;
 pub mod completions;
 pub mod counters;
 pub mod device;
+pub mod dump;
 pub mod fs_usage;
 pub mod fsck;
 pub mod key;
@@ -30,6 +31,7 @@ pub use device::{
 pub use key::{cmd_unlock, cmd_set_passphrase, cmd_remove_passphrase};
 pub use list::list;
 pub use mount::mount;
+pub use dump::cmd_undump;
 pub use fsck::cmd_fsck;
 pub use reconcile::{cmd_reconcile_status, cmd_reconcile_wait};
 pub use recovery_pass::cmd_recovery_pass;

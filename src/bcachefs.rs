@@ -55,7 +55,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             }
             "device" => c::device_cmds(argc, argv),
             "dump" => c::cmd_dump(argc, argv),
-            "undump" => c::cmd_undump(argc, argv),
+            // undump handled in Rust dispatch
             "format" => c::cmd_format(argc, argv),
             // fs subcommand dispatch is fully in Rust now
             // fsck handled in Rust dispatch
@@ -198,6 +198,7 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        "undump" => commands::cmd_undump(args[1..].to_vec()).report(),
         "show-super" => commands::super_cmd::cmd_show_super(args[1..].to_vec()).report(),
         "set-file-option" => commands::cmd_setattr(args[1..].to_vec()).report(),
         "set-fs-option" => commands::cmd_set_option(args[1..].to_vec()).report(),
