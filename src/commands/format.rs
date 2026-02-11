@@ -408,10 +408,10 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     };
 
     // Determine format version (modprobe first to read kernel version)
-    let _ = std::process::Command::new("modprobe")
+    let _ = process::Command::new("modprobe")
         .arg("bcachefs")
-        .stdout(std::process::Stdio::null())
-        .stderr(std::process::Stdio::null())
+        .stdout(process::Stdio::null())
+        .stderr(process::Stdio::null())
         .status();
 
     let kernel_version = sysfs::bcachefs_kernel_version() as u32;
@@ -419,7 +419,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
 
     let version = cfg.format_version.unwrap_or_else(|| {
         if kernel_version > 0 {
-            std::cmp::min(current_version, kernel_version)
+            current_version.min(kernel_version)
         } else {
             current_version
         }
@@ -527,9 +527,6 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
         print!("{}", buf);
     }
     unsafe { libc::free(sb as *mut _) };
-
-    // Clean up passphrase pointer before Passphrase::drop zeroes it
-    fmt_opts.passphrase = std::ptr::null_mut();
 
     // Initialize filesystem
     if cfg.initialize {
