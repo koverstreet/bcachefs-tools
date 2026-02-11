@@ -65,12 +65,12 @@ pub fn cmd_device_add(argv: Vec<String>) -> Result<()> {
         .context("reading btree_node_size from sysfs")?;
 
     // Build dev_opts with bch_opts from parsed arguments
-    let mut dev_opts: c::dev_opts = unsafe { std::mem::zeroed() };
+    let mut dev_opts: c::dev_opts = Default::default();
 
     let c_path = CString::new(dev_path.as_str())?;
     dev_opts.path = c_path.as_ptr();
 
-    let c_label = label.map(|l| CString::new(l.as_str()).unwrap());
+    let c_label = label.map(|l| CString::new(l.as_str())).transpose()?;
     if let Some(ref l) = c_label {
         dev_opts.label = l.as_ptr();
     }
@@ -334,7 +334,7 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
     opt_set!(opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
 
     // Read superblock to get dev_idx
-    let mut sb_handle: c::bch_sb_handle = unsafe { std::mem::zeroed() };
+    let mut sb_handle: c::bch_sb_handle = Default::default();
     let ret = unsafe { c::bch2_read_super(c_path.as_ptr(), &mut opts, &mut sb_handle) };
     if ret != 0 {
         return Err(anyhow!("error opening {}: {}", device, bch_err_str(ret)));

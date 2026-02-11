@@ -400,10 +400,10 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     }
 
     // Build C format_opts
-    let label_cstr = fs_label.as_ref().map(|l| CString::new(l.as_str()).unwrap());
-    let source_cstr = source.as_ref().map(|s| CString::new(s.as_str()).unwrap());
+    let label_cstr = fs_label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
+    let source_cstr = source.as_ref().map(|s| CString::new(s.as_str())).transpose()?;
 
-    let mut fmt_opts: c::format_opts = unsafe { std::mem::zeroed() };
+    let mut fmt_opts: c::format_opts = Default::default();
     fmt_opts.version = version;
     fmt_opts.superblock_size = superblock_size;
     fmt_opts.encrypted = encrypted;
@@ -421,7 +421,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     }
 
     // Build bch_opt_strs for deferred options
-    let mut fs_opt_strs: c::bch_opt_strs = unsafe { std::mem::zeroed() };
+    let mut fs_opt_strs: c::bch_opt_strs = Default::default();
     for &(id, ref val) in &deferred_opts {
         let cstr = CString::new(val.as_str())?;
         let ptr = unsafe { libc::strdup(cstr.as_ptr()) };
@@ -433,12 +433,12 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     let mut dev_label_cstrs: Vec<Option<CString>> = Vec::new();
     for dev in &devices {
         dev_path_cstrs.push(CString::new(dev.path.as_str())?);
-        dev_label_cstrs.push(dev.label.as_ref().map(|l| CString::new(l.as_str()).unwrap()));
+        dev_label_cstrs.push(dev.label.as_ref().map(|l| CString::new(l.as_str())).transpose()?);
     }
 
     let mut c_devices: Vec<c::dev_opts> = Vec::new();
     for (idx, dev) in devices.iter().enumerate() {
-        let mut c_dev: c::dev_opts = unsafe { std::mem::zeroed() };
+        let mut c_dev: c::dev_opts = Default::default();
         c_dev.path = dev_path_cstrs[idx].as_ptr();
         if let Some(ref label) = dev_label_cstrs[idx] {
             c_dev.label = label.as_ptr();
