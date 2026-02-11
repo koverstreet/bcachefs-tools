@@ -16,11 +16,11 @@ use bch_bindgen::c;
 pub fn dev_name_from_sysfs(dev_sysfs_path: &Path) -> String {
     if let Ok(target) = fs::read_link(dev_sysfs_path.join("block")) {
         if let Some(name) = target.file_name() {
-            return name.to_string_lossy().to_string();
+            return name.to_string_lossy().into_owned();
         }
     }
     dev_sysfs_path.file_name()
-        .map(|n| n.to_string_lossy().to_string())
+        .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_default()
 }
 

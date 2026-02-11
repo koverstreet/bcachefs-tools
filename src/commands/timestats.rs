@@ -172,7 +172,7 @@ fn read_time_stats(sysfs_path: &Path) -> Result<Vec<StatEntry>> {
     let mut entries = Vec::new();
     for file in fs::read_dir(&json_dir).context("reading time_stats_json directory")? {
         let file = file?;
-        let name = file.file_name().to_string_lossy().to_string();
+        let name = file.file_name().to_string_lossy().into_owned();
         let content = fs::read_to_string(file.path())
             .with_context(|| format!("reading {}", file.path().display()))?;
         match serde_json::from_str::<TimeStats>(&content) {
@@ -190,7 +190,7 @@ fn read_device_latency_stats(sysfs_path: &Path) -> Result<Vec<StatEntry>> {
 
     for entry in dir {
         let entry = entry?;
-        let dirname = entry.file_name().to_string_lossy().to_string();
+        let dirname = entry.file_name().to_string_lossy().into_owned();
         if !dirname.starts_with("dev-") { continue }
 
         let dev_path = entry.path();
@@ -257,7 +257,7 @@ fn collect_stats(sysfs_paths: &[PathBuf], show_devices: bool) -> Result<Vec<FsSn
 
         snaps.push(FsSnapshot {
             label: path.file_name()
-                .map(|n| n.to_string_lossy().to_string())
+                .map(|n| n.to_string_lossy().into_owned())
                 .unwrap_or_default(),
             sections,
         });

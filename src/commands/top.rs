@@ -90,7 +90,7 @@ fn read_device_io(sysfs_path: &Path) -> Vec<DevIoEntry> {
     let Ok(dir) = fs::read_dir(sysfs_path) else { return entries };
 
     for entry in dir.flatten() {
-        let dirname = entry.file_name().to_string_lossy().to_string();
+        let dirname = entry.file_name().to_string_lossy().into_owned();
         if !dirname.starts_with("dev-") { continue }
 
         let dev_path = entry.path();
