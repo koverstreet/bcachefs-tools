@@ -13,33 +13,30 @@ pub use c::bch_reconcile_accounting_type;
 
 use bch_data_type::*;
 
-/// Safely convert a raw u8 to bch_data_type.
-/// Out-of-range values return BCH_DATA_NR.
+/// Safely convert a raw u8 to a bindgen #[repr(u32)] enum.
+/// Out-of-range values return the NR sentinel.
+macro_rules! enum_from_u8 {
+    ($ty:ty, $nr:expr, $v:expr) => {{
+        let v = $v as u32;
+        if v < $nr as u32 {
+            // SAFETY: v is in [0, NR), all valid #[repr(u32)] discriminants
+            unsafe { std::mem::transmute::<u32, $ty>(v) }
+        } else {
+            $nr
+        }
+    }}
+}
+
 pub fn data_type_from_u8(v: u8) -> bch_data_type {
-    if (v as u32) < BCH_DATA_NR as u32 {
-        // SAFETY: v is in [0, BCH_DATA_NR), all valid #[repr(u32)] discriminants
-        unsafe { std::mem::transmute::<u32, bch_data_type>(v as u32) }
-    } else {
-        BCH_DATA_NR
-    }
+    enum_from_u8!(bch_data_type, BCH_DATA_NR, v)
 }
 
-/// Safely convert a raw u8 to bch_compression_type.
 fn compression_type_from_u8(v: u8) -> bch_compression_type {
-    if (v as u32) < bch_compression_type::BCH_COMPRESSION_TYPE_NR as u32 {
-        unsafe { std::mem::transmute::<u32, bch_compression_type>(v as u32) }
-    } else {
-        bch_compression_type::BCH_COMPRESSION_TYPE_NR
-    }
+    enum_from_u8!(bch_compression_type, bch_compression_type::BCH_COMPRESSION_TYPE_NR, v)
 }
 
-/// Safely convert a raw u8 to bch_reconcile_accounting_type.
 fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
-    if (v as u32) < bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_NR as u32 {
-        unsafe { std::mem::transmute::<u32, bch_reconcile_accounting_type>(v as u32) }
-    } else {
-        bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_NR
-    }
+    enum_from_u8!(bch_reconcile_accounting_type, bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_NR, v)
 }
 
 /// Size of a bpos in bytes — maximum size of any accounting key payload.
@@ -68,6 +65,23 @@ impl DiskAccountingPos {
     /// Decode into the typed enum for pattern matching.
     pub fn decode(&self) -> DiskAccountingKind {
         bpos_to_accounting_kind(&self.0)
+    }
+
+    /// Extract the accounting type byte without full decode.
+    /// On LE, this is the high byte of bpos.inode (equivalent to raw[0]
+    /// after the 20-byte memcpy_swab reversal).
+    fn type_byte(&self) -> u8 {
+        (self.0.inode >> 56) as u8
+    }
+
+    /// Get the accounting type discriminant without full decode.
+    pub fn accounting_type(&self) -> Option<disk_accounting_type> {
+        let t = self.type_byte() as u32;
+        if t < BCH_DISK_ACCOUNTING_TYPE_NR as u32 {
+            Some(unsafe { std::mem::transmute(t) })
+        } else {
+            None
+        }
     }
 }
 
@@ -107,6 +121,77 @@ pub enum DiskAccountingKind {
 
 use c::disk_accounting_type;
 use disk_accounting_type::*;
+
+// Compile-time check: update DiskAccountingKind when new disk_accounting_type values are added.
+const _: () = assert!(BCH_DISK_ACCOUNTING_TYPE_NR as u32 == 11);
+
+impl DiskAccountingKind {
+    /// Encode into a DiskAccountingPos (reverse of decode).
+    pub fn encode(&self) -> DiskAccountingPos {
+        let mut raw = [0u8; BPOS_SIZE];
+        match *self {
+            Self::NrInodes => {
+                raw[0] = BCH_DISK_ACCOUNTING_nr_inodes as u8;
+            }
+            Self::PersistentReserved { nr_replicas } => {
+                raw[0] = BCH_DISK_ACCOUNTING_persistent_reserved as u8;
+                raw[1] = nr_replicas;
+            }
+            Self::Replicas { data_type, nr_devs, nr_required, devs } => {
+                raw[0] = BCH_DISK_ACCOUNTING_replicas as u8;
+                raw[1] = data_type as u8;
+                raw[2] = nr_devs;
+                raw[3] = nr_required;
+                let n = (nr_devs as usize).min(BPOS_SIZE - 4);
+                raw[4..4 + n].copy_from_slice(&devs[..n]);
+            }
+            Self::DevDataType { dev, data_type } => {
+                raw[0] = BCH_DISK_ACCOUNTING_dev_data_type as u8;
+                raw[1] = dev;
+                raw[2] = data_type as u8;
+            }
+            Self::Compression { compression_type } => {
+                raw[0] = BCH_DISK_ACCOUNTING_compression as u8;
+                raw[1] = compression_type as u8;
+            }
+            Self::Snapshot { id } => {
+                raw[0] = BCH_DISK_ACCOUNTING_snapshot as u8;
+                raw[1..5].copy_from_slice(&id.to_ne_bytes());
+            }
+            Self::Btree { id } => {
+                raw[0] = BCH_DISK_ACCOUNTING_btree as u8;
+                raw[1..5].copy_from_slice(&id.to_ne_bytes());
+            }
+            Self::RebalanceWork => {
+                raw[0] = BCH_DISK_ACCOUNTING_rebalance_work as u8;
+            }
+            Self::Inum { inum } => {
+                raw[0] = BCH_DISK_ACCOUNTING_inum as u8;
+                raw[1..9].copy_from_slice(&inum.to_ne_bytes());
+            }
+            Self::ReconcileWork { work_type } => {
+                raw[0] = BCH_DISK_ACCOUNTING_reconcile_work as u8;
+                raw[1] = work_type as u8;
+            }
+            Self::DevLeaving { dev } => {
+                raw[0] = BCH_DISK_ACCOUNTING_dev_leaving as u8;
+                raw[1..5].copy_from_slice(&dev.to_ne_bytes());
+            }
+            Self::Unknown(t) => {
+                raw[0] = t;
+            }
+        }
+
+        // Reverse memcpy_swab: reverse bytes back into bpos layout
+        raw.reverse();
+
+        DiskAccountingPos(c::bpos {
+            snapshot: u32::from_ne_bytes(raw[0..4].try_into().unwrap()),
+            offset:   u64::from_ne_bytes(raw[4..12].try_into().unwrap()),
+            inode:    u64::from_ne_bytes(raw[12..20].try_into().unwrap()),
+        })
+    }
+}
 
 /// A single accounting entry from the ioctl.
 #[derive(Debug)]

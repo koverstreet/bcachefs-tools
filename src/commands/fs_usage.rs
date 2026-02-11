@@ -183,7 +183,7 @@ fn fs_usage_v1_to_text(
     // Compression
     if has(Field::Compression) {
         let compr: Vec<_> = sorted.iter()
-            .filter(|e| matches!(e.pos.decode(), DiskAccountingKind::Compression { .. }))
+            .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_compression))
             .collect();
         if !compr.is_empty() {
             write!(out, "\nCompression:\n").unwrap();
@@ -217,7 +217,7 @@ fn fs_usage_v1_to_text(
     // Btree usage
     if has(Field::Btree) {
         let btrees: Vec<_> = sorted.iter()
-            .filter(|e| matches!(e.pos.decode(), DiskAccountingKind::Btree { .. }))
+            .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_btree))
             .collect();
         if !btrees.is_empty() {
             write!(out, "\nBtree usage:\n").unwrap();
@@ -235,7 +235,7 @@ fn fs_usage_v1_to_text(
     // Rebalance / reconcile work
     if has(Field::RebalanceWork) {
         let rebalance: Vec<_> = sorted.iter()
-            .filter(|e| matches!(e.pos.decode(), DiskAccountingKind::RebalanceWork))
+            .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_rebalance_work))
             .collect();
         if !rebalance.is_empty() {
             write!(out, "\nPending rebalance work:\n").unwrap();
@@ -246,7 +246,7 @@ fn fs_usage_v1_to_text(
         }
 
         let reconcile: Vec<_> = sorted.iter()
-            .filter(|e| matches!(e.pos.decode(), DiskAccountingKind::ReconcileWork { .. }))
+            .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_reconcile_work))
             .collect();
         if !reconcile.is_empty() {
             out.tabstops(&[32, 12, 12]);
