@@ -53,7 +53,6 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
                 c::bcachefs_usage();
                 0
             }
-            "data" => c::data_cmds(argc, argv),
             "device" => c::device_cmds(argc, argv),
             "dump" => c::cmd_dump(argc, argv),
             "undump" => c::cmd_undump(argc, argv),
@@ -139,7 +138,13 @@ fn main() -> ExitCode {
         "subvolume" => commands::subvolume(args[1..].to_vec()).report(),
         "data" => match args.get(2).map(|s| s.as_str()) {
             Some("scrub") => commands::scrub(args[2..].to_vec()).report(),
-            _ => c_command(args, symlink_cmd),
+            _ => {
+                println!("bcachefs data - manage filesystem data");
+                println!("Usage: bcachefs data <scrub> [OPTION]...\n");
+                println!("Commands:");
+                println!("  scrub                        Verify checksums and correct errors");
+                ExitCode::from(1)
+            }
         },
         "device" => match args.get(2).map(|s| s.as_str()) {
             Some("online") => commands::cmd_device_online(args[2..].to_vec()).report(),
