@@ -130,18 +130,9 @@ fn main() -> ExitCode {
             Some("offline") => commands::cmd_device_offline(args[2..].to_vec()).report(),
             Some("remove") => commands::cmd_device_remove(args[2..].to_vec()).report(),
             Some("evacuate") => commands::cmd_device_evacuate(args[2..].to_vec()).report(),
-            Some("set-state") if !args.iter().any(|a| a == "--offline" || a == "-o") =>
-                commands::cmd_device_set_state(args[2..].to_vec()).report(),
-            Some("resize") => match commands::cmd_device_resize(args[2..].to_vec()) {
-                Ok(true) => ExitCode::SUCCESS,
-                Ok(false) => c_command(args, symlink_cmd),
-                Err(e) => { eprintln!("Error: {e:#}"); ExitCode::FAILURE }
-            },
-            Some("resize-journal") => match commands::cmd_device_resize_journal(args[2..].to_vec()) {
-                Ok(true) => ExitCode::SUCCESS,
-                Ok(false) => c_command(args, symlink_cmd),
-                Err(e) => { eprintln!("Error: {e:#}"); ExitCode::FAILURE }
-            },
+            Some("set-state") => commands::cmd_device_set_state(args[2..].to_vec()).report(),
+            Some("resize") => commands::cmd_device_resize(args[2..].to_vec()).report(),
+            Some("resize-journal") => commands::cmd_device_resize_journal(args[2..].to_vec()).report(),
             _ => c_command(args, symlink_cmd),
         },
         "format" | "mkfs" => {

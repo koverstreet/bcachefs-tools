@@ -1,16 +1,19 @@
 use std::ffi::CString;
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, Context, Result};
 use bch_bindgen::c::{
     self,
+    bch_degraded_actions,
     bch_member_state::*,
     bcachefs_metadata_version::bcachefs_metadata_version_reconcile,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
 };
+use bch_bindgen::fs::Fs;
+use bch_bindgen::opt_set;
 use bch_bindgen::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
@@ -250,18 +253,26 @@ impl MemberState {
     }
 }
 
-fn block_device_size(dev: &str) -> Result<u64> {
+fn device_size(dev: &str) -> Result<u64> {
+    use std::os::unix::fs::FileTypeExt;
     use std::os::unix::io::AsRawFd;
     let f = std::fs::File::open(dev)
         .with_context(|| format!("opening {}", dev))?;
-    let mut size: u64 = 0;
-    // BLKGETSIZE64 = _IOR(0x12, 114, size_t)
-    const BLKGETSIZE64: libc::c_ulong = 0x80081272;
-    let ret = unsafe { libc::ioctl(f.as_raw_fd(), BLKGETSIZE64, &mut size) };
-    if ret < 0 {
-        return Err(anyhow!("BLKGETSIZE64 failed on {}", dev));
+    let meta = f.metadata()
+        .with_context(|| format!("stat {}", dev))?;
+
+    if meta.file_type().is_block_device() {
+        let mut size: u64 = 0;
+        // BLKGETSIZE64 = _IOR(0x12, 114, size_t)
+        const BLKGETSIZE64: libc::c_ulong = 0x80081272;
+        let ret = unsafe { libc::ioctl(f.as_raw_fd(), BLKGETSIZE64, &mut size) };
+        if ret < 0 {
+            return Err(anyhow!("BLKGETSIZE64 failed on {}", dev));
+        }
+        Ok(size)
+    } else {
+        Ok(meta.len())
     }
-    Ok(size)
 }
 
 #[derive(Parser, Debug)]
@@ -274,6 +285,10 @@ pub struct SetStateCli {
     /// Force even if data will be lost
     #[arg(short = 'F', long)]
     force_if_data_lost: bool,
+
+    /// Set state of an offline device
+    #[arg(short = 'o', long)]
+    offline: bool,
 
     /// Device state
     #[arg(value_enum)]
@@ -290,6 +305,14 @@ pub fn cmd_device_set_state(argv: Vec<String>) -> Result<()> {
     let cli = SetStateCli::parse_from(argv);
 
     let new_state = cli.new_state.as_u32();
+
+    if cli.offline {
+        if cli.device.parse::<u32>().is_ok() {
+            return Err(anyhow!("Cannot specify offline device by id"));
+        }
+        return set_state_offline(&cli.device, new_state);
+    }
+
     let mut flags = if cli.force { BCH_FORCE_IF_DEGRADED } else { 0 };
     if cli.force_if_data_lost {
         flags |= BCH_FORCE_IF_DEGRADED | BCH_FORCE_IF_DATA_LOST | BCH_FORCE_IF_METADATA_LOST;
@@ -302,6 +325,30 @@ pub fn cmd_device_set_state(argv: Vec<String>) -> Result<()> {
         .context("setting device state")
 }
 
+fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
+    use crate::wrappers::bch_err_str;
+
+    let c_path = CString::new(device)?;
+    let mut opts: c::bch_opts = Default::default();
+    opt_set!(opts, nostart, 1);
+    opt_set!(opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
+
+    // Read superblock to get dev_idx
+    let mut sb_handle: c::bch_sb_handle = unsafe { std::mem::zeroed() };
+    let ret = unsafe { c::bch2_read_super(c_path.as_ptr(), &mut opts, &mut sb_handle) };
+    if ret != 0 {
+        return Err(anyhow!("error opening {}: {}", device, bch_err_str(ret)));
+    }
+    let dev_idx = unsafe { (*sb_handle.sb).dev_idx as u32 };
+    unsafe { c::bch2_free_super(&mut sb_handle) };
+
+    let fs = Fs::open(&[PathBuf::from(device)], opts)
+        .map_err(|e| anyhow!("Error opening filesystem: {}", e))?;
+
+    unsafe { c::rust_device_set_state_offline(fs.raw, dev_idx, new_state) };
+    Ok(())
+}
+
 #[derive(Parser, Debug)]
 #[command(about = "Resize the filesystem on a device")]
 pub struct ResizeCli {
@@ -312,34 +359,53 @@ pub struct ResizeCli {
     size: Option<String>,
 }
 
-/// Returns Ok(true) if handled, Ok(false) if device not mounted (needs offline path).
-pub fn cmd_device_resize(argv: Vec<String>) -> Result<bool> {
+pub fn cmd_device_resize(argv: Vec<String>) -> Result<()> {
     let cli = ResizeCli::parse_from(argv);
-
-    let (handle, dev_idx) = match open_dev(&cli.device) {
-        Ok(r) => r,
-        Err(_) if Path::new(&cli.device).exists() => return Ok(false),
-        Err(e) => return Err(e),
-    };
 
     let size_bytes = match cli.size {
         Some(ref s) => parse_human_size(s)?,
-        None => block_device_size(&cli.device)?,
+        None => device_size(&cli.device)?,
     };
     let size_sectors = size_bytes >> 9;
 
-    let usage = handle.dev_usage(dev_idx)
-        .context("querying device usage")?;
-    let nbuckets = size_sectors / usage.bucket_size as u64;
+    match open_dev(&cli.device) {
+        Ok((handle, dev_idx)) => {
+            println!("Doing online resize of {}", cli.device);
 
-    if nbuckets < usage.nr_buckets {
-        return Err(anyhow!("Shrinking not supported yet"));
+            let usage = handle.dev_usage(dev_idx)
+                .context("querying device usage")?;
+            let nbuckets = size_sectors / usage.bucket_size as u64;
+
+            if nbuckets < usage.nr_buckets {
+                return Err(anyhow!("Shrinking not supported yet"));
+            }
+
+            println!("resizing {} to {} buckets", cli.device, nbuckets);
+            handle.disk_resize(dev_idx, nbuckets)
+                .context("resizing device")?;
+        }
+        Err(_) if Path::new(&cli.device).exists() => {
+            println!("Doing offline resize of {}", cli.device);
+            resize_offline(&cli.device, size_sectors)?;
+        }
+        Err(e) => return Err(e),
     }
 
-    println!("resizing {} to {} buckets", cli.device, nbuckets);
-    handle.disk_resize(dev_idx, nbuckets)
-        .context("resizing device")?;
-    Ok(true)
+    Ok(())
+}
+
+fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
+    use crate::wrappers::bch_err_str;
+
+    let opts: c::bch_opts = Default::default();
+    let fs = Fs::open(&[PathBuf::from(device)], opts)
+        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
+
+    let ret = unsafe { c::rust_device_resize_offline(fs.raw, size_sectors) };
+    if ret != 0 {
+        return Err(anyhow!("resize error: {}", bch_err_str(ret)));
+    }
+    Ok(())
 }
 
 #[derive(Parser, Debug)]
@@ -352,27 +418,44 @@ pub struct ResizeJournalCli {
     size: String,
 }
 
-/// Returns Ok(true) if handled, Ok(false) if device not mounted (needs offline path).
-pub fn cmd_device_resize_journal(argv: Vec<String>) -> Result<bool> {
+pub fn cmd_device_resize_journal(argv: Vec<String>) -> Result<()> {
     let cli = ResizeJournalCli::parse_from(argv);
-
-    let (handle, dev_idx) = match open_dev(&cli.device) {
-        Ok(r) => r,
-        Err(_) if Path::new(&cli.device).exists() => return Ok(false),
-        Err(e) => return Err(e),
-    };
 
     let size_bytes = parse_human_size(&cli.size)?;
     let size_sectors = size_bytes >> 9;
 
-    let usage = handle.dev_usage(dev_idx)
-        .context("querying device usage")?;
-    let nbuckets = size_sectors / usage.bucket_size as u64;
+    match open_dev(&cli.device) {
+        Ok((handle, dev_idx)) => {
+            let usage = handle.dev_usage(dev_idx)
+                .context("querying device usage")?;
+            let nbuckets = size_sectors / usage.bucket_size as u64;
 
-    println!("resizing journal on {} to {} buckets", cli.device, nbuckets);
-    handle.disk_resize_journal(dev_idx, nbuckets)
-        .context("resizing journal")?;
-    Ok(true)
+            println!("resizing journal on {} to {} buckets", cli.device, nbuckets);
+            handle.disk_resize_journal(dev_idx, nbuckets)
+                .context("resizing journal")?;
+        }
+        Err(_) if Path::new(&cli.device).exists() => {
+            println!("{} is offline - starting:", cli.device);
+            resize_journal_offline(&cli.device, size_sectors)?;
+        }
+        Err(e) => return Err(e),
+    }
+
+    Ok(())
+}
+
+fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
+    use crate::wrappers::bch_err_str;
+
+    let opts: c::bch_opts = Default::default();
+    let fs = Fs::open(&[PathBuf::from(device)], opts)
+        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
+
+    let ret = unsafe { c::rust_device_resize_journal_offline(fs.raw, size_sectors) };
+    if ret != 0 {
+        return Err(anyhow!("resize error: {}", bch_err_str(ret)));
+    }
+    Ok(())
 }
 
 #[derive(Parser, Debug)]
