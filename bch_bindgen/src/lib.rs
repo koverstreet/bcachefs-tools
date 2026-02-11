@@ -69,8 +69,7 @@ use std::fmt;
 impl fmt::Display for c::btree_id {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self)) };
-        let s = s.to_str().unwrap();
-        write!(f, "{}", s)
+        f.write_str(&s.to_string_lossy())
     }
 }
 
