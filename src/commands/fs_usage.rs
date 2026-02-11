@@ -318,12 +318,10 @@ fn durability_matrix_add(matrix: &mut DurabilityMatrix, durability: u32, degrade
     row[degraded as usize] += sectors;
 }
 
-fn durability_matrix_to_text(out: &mut Printbuf, matrix: &DurabilityMatrix) {
-    let max_degraded = matrix.iter().map(|r| r.len()).max().unwrap_or(0);
-    if max_degraded == 0 { return; }
-
+/// Print the degradation header row: "undegraded  -1x  -2x ..."
+fn prt_degraded_header(out: &mut Printbuf, label_width: u32, max_degraded: usize) {
     out.tabstops_reset();
-    out.tabstop_push(8);
+    out.tabstop_push(label_width);
     out.tab();
     for i in 0..max_degraded {
         out.tabstop_push(12);
@@ -334,17 +332,29 @@ fn durability_matrix_to_text(out: &mut Printbuf, matrix: &DurabilityMatrix) {
         }
     }
     out.newline();
+}
+
+/// Print a row of sector values, right-justified in tabstop columns.
+fn prt_sector_row(out: &mut Printbuf, values: &[u64]) {
+    for &val in values {
+        if val != 0 {
+            out.units_sectors(val);
+        }
+        out.tab_rjust();
+    }
+    out.newline();
+}
+
+fn durability_matrix_to_text(out: &mut Printbuf, matrix: &DurabilityMatrix) {
+    let max_degraded = matrix.iter().map(|r| r.len()).max().unwrap_or(0);
+    if max_degraded == 0 { return; }
+
+    prt_degraded_header(out, 8, max_degraded);
 
     for (dur, row) in matrix.iter().enumerate() {
         if row.is_empty() { continue; }
         write!(out, "{}x:\t", dur).unwrap();
-        for val in row {
-            if *val != 0 {
-                out.units_sectors(*val);
-            }
-            out.tab_rjust();
-        }
-        out.newline();
+        prt_sector_row(out, row);
     }
 }
 
@@ -352,14 +362,12 @@ fn durability_matrix_to_text(out: &mut Printbuf, matrix: &DurabilityMatrix) {
 struct EcConfig {
     nr_data:    u8,
     nr_parity:  u8,
-    degraded:   Vec<u64>,  // [degraded_level] = sectors
+    degraded:   Vec<u64>,
 }
 
 fn ec_config_add(configs: &mut Vec<EcConfig>, nr_required: u8, nr_devs: u8, degraded: u32, sectors: u64) {
     let nr_parity = nr_devs - nr_required;
-    let cfg = configs.iter_mut()
-        .find(|c| c.nr_data == nr_required && c.nr_parity == nr_parity);
-    let cfg = match cfg {
+    let cfg = match configs.iter_mut().find(|c| c.nr_data == nr_required && c.nr_parity == nr_parity) {
         Some(c) => c,
         None => {
             configs.push(EcConfig { nr_data: nr_required, nr_parity, degraded: Vec::new() });
@@ -378,28 +386,11 @@ fn ec_configs_to_text(out: &mut Printbuf, configs: &mut [EcConfig]) {
     let max_degraded = configs.iter().map(|c| c.degraded.len()).max().unwrap_or(0);
     if max_degraded == 0 { return; }
 
-    out.tabstops_reset();
-    out.tabstop_push(12);
-    out.tab();
-    for i in 0..max_degraded {
-        out.tabstop_push(12);
-        if i == 0 {
-            write!(out, "undegraded\r").unwrap();
-        } else {
-            write!(out, "-{}x\r", i).unwrap();
-        }
-    }
-    out.newline();
+    prt_degraded_header(out, 12, max_degraded);
 
     for cfg in configs.iter() {
         write!(out, "{}+{}:\t", cfg.nr_data, cfg.nr_parity).unwrap();
-        for &val in &cfg.degraded {
-            if val != 0 {
-                out.units_sectors(val);
-            }
-            out.tab_rjust();
-        }
-        out.newline();
+        prt_sector_row(out, &cfg.degraded);
     }
 }
 
