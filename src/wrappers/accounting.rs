@@ -42,13 +42,16 @@ fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
     }
 }
 
+/// Size of a bpos in bytes — maximum size of any accounting key payload.
+const BPOS_SIZE: usize = std::mem::size_of::<c::bpos>();
+
 /// Decoded accounting key type.
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 #[allow(dead_code)]
 pub enum DiskAccountingPos {
     NrInodes,
     PersistentReserved { nr_replicas: u8 },
-    Replicas { data_type: bch_data_type, nr_devs: u8, nr_required: u8, devs: Vec<u8> },
+    Replicas { data_type: bch_data_type, nr_devs: u8, nr_required: u8, devs: [u8; BPOS_SIZE] },
     DevDataType { dev: u8, data_type: bch_data_type },
     Compression { compression_type: bch_compression_type },
     Snapshot { id: u32 },
@@ -124,7 +127,9 @@ fn bpos_to_disk_accounting_pos(p: &c::bpos) -> DiskAccountingPos {
         REPLICAS => {
             let nr_devs = raw[2];
             let nr_required = raw[3];
-            let devs = raw[4..4 + nr_devs as usize].to_vec();
+            let mut devs = [0u8; BPOS_SIZE];
+            let n = (nr_devs as usize).min(BPOS_SIZE - 4);
+            devs[..n].copy_from_slice(&raw[4..4 + n]);
             DiskAccountingPos::Replicas {
                 data_type: data_type_from_u8(raw[1]),
                 nr_devs, nr_required, devs,

@@ -163,6 +163,7 @@ fn fs_usage_v1_to_text(
                     let sectors = entry.counter(0);
                     if sectors == 0 { continue; }
 
+                    let dev_list = &dev_list[..*nr_devs as usize];
                     let dur = replicas_durability(*nr_devs, *nr_required, dev_list, devs);
 
                     accounting::prt_data_type(out, *data_type);
@@ -412,6 +413,7 @@ fn replicas_summary_to_text(
                     continue;
                 }
 
+                let dev_list = &dev_list[..*nr_devs as usize];
                 let d = replicas_durability(*nr_devs, *nr_required, dev_list, devs);
 
                 if *nr_required > 1 {
