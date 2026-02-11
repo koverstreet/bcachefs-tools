@@ -50,15 +50,12 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
     unsafe {
         match cmd.as_str() {
             "--help" => { c::bcachefs_usage(); 0 }
-            "device"            => { eprintln!("BUG: device should be handled in Rust"); 1 }
             "dump"              => c::cmd_dump(argc, argv),
-            "format" | "mkfs"   => { eprintln!("BUG: format should be handled in Rust"); 1 }
             "image"             => c::image_cmds(argc, argv),
             "list_journal"      => c::cmd_list_journal(argc, argv),
             "kill_btree_node"   => c::cmd_kill_btree_node(argc, argv),
             "migrate"           => c::cmd_migrate(argc, argv),
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
-            "strip-alloc"       => { eprintln!("BUG: strip-alloc should be handled in Rust"); 1 }
             #[cfg(feature = "fuse")]
             "fusemount"         => c::cmd_fusemount(argc, argv),
             _ => { println!("Unknown command {cmd}"); c::bcachefs_usage(); 1 }

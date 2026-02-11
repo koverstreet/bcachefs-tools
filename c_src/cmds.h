@@ -9,12 +9,7 @@
 
 #include "tools-util.h"
 
-int cmd_format(int argc, char *argv[]);
-int cmd_strip_alloc(int argc, char *argv[]);
-
 int image_cmds(int argc, char *argv[]);
-
-int device_cmds(int argc, char *argv[]);
 
 int cmd_dump(int argc, char *argv[]);
 
