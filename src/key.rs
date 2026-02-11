@@ -1,5 +1,5 @@
 use std::{
-    ffi::{c_long, CStr, CString},
+    ffi::{CStr, CString},
     fs,
     io::{self, stdin, IsTerminal},
     mem,
@@ -96,12 +96,8 @@ impl Default for UnlockPolicy {
     }
 }
 
-/// A handle to an existing bcachefs key in the kernel keyring
-pub struct KeyHandle {
-    // FIXME: Either these come in useful for something or we remove them
-    _uuid: Uuid,
-    _id:   c_long,
-}
+/// Proof that a bcachefs key has been added to or found in the kernel keyring.
+pub struct KeyHandle;
 
 impl KeyHandle {
     pub fn format_key_name(uuid: &Uuid) -> CString {
@@ -127,16 +123,13 @@ impl KeyHandle {
 
         if key_id > 0 {
             info!("Added key to keyring");
-            Ok(KeyHandle {
-                _uuid: sb.sb().uuid(),
-                _id:   c_long::from(key_id),
-            })
+            Ok(KeyHandle)
         } else {
             Err(anyhow!("failed to add key to keyring: {}", errno::errno()))
         }
     }
 
-    fn search_keyring(keyring: i32, key_name: &CStr) -> Result<c_long> {
+    fn search_keyring(keyring: i32, key_name: &CStr) -> Result<()> {
         let key_name = CStr::as_ptr(key_name);
         let key_type = c"user";
 
@@ -144,7 +137,7 @@ impl KeyHandle {
 
         if key_id > 0 {
             info!("Found key in keyring");
-            Ok(key_id)
+            Ok(())
         } else {
             Err(ErrnoError(errno::errno()).into())
         }
@@ -156,10 +149,7 @@ impl KeyHandle {
         Self::search_keyring(keyutils::KEY_SPEC_SESSION_KEYRING, &key_name)
             .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_KEYRING, &key_name))
             .or_else(|_| Self::search_keyring(keyutils::KEY_SPEC_USER_SESSION_KEYRING, &key_name))
-            .map(|id| Self {
-                _uuid: *uuid,
-                _id:   id,
-            })
+            .map(|_| KeyHandle)
     }
 
     fn wait_for_unlock(uuid: &Uuid) -> Result<Self> {
