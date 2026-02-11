@@ -150,6 +150,7 @@ fn set_option_offline(
             continue;
         }
 
+        // SAFETY: opt_id came from bch2_opt_lookup which returns values in [0, bch2_opts_nr)
         let opt_id_enum: c::bch_opt_id = unsafe { std::mem::transmute(opt_id as u32) };
 
         if flags & c::opt_flags::OPT_FS as u32 != 0 {

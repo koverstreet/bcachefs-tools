@@ -1,4 +1,4 @@
-use std::os::unix::io::IntoRawFd;
+use std::os::unix::io::AsRawFd;
 use std::path::Path;
 
 use anyhow::{anyhow, Result};
@@ -61,15 +61,7 @@ pub fn cmd_undump(argv: Vec<String>) -> Result<()> {
         let outfile = open_opts.open(&e.output)
             .map_err(|err| anyhow!("{}: {}", e.output, err))?;
 
-        let infd = infile.into_raw_fd();
-        let outfd = outfile.into_raw_fd();
-
-        unsafe { qcow2_to_raw(infd, outfd) };
-
-        unsafe {
-            libc::close(infd);
-            libc::close(outfd);
-        }
+        unsafe { qcow2_to_raw(infile.as_raw_fd(), outfile.as_raw_fd()) };
     }
 
     Ok(())
