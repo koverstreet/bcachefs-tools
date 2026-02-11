@@ -12,6 +12,7 @@ pub mod list;
 pub mod mount;
 pub mod opts;
 pub mod reconcile;
+pub mod recover_super;
 pub mod recovery_pass;
 pub mod scrub;
 pub mod set_option;
@@ -34,6 +35,7 @@ pub use mount::mount;
 pub use dump::cmd_undump;
 pub use fsck::cmd_fsck;
 pub use reconcile::{cmd_reconcile_status, cmd_reconcile_wait};
+pub use recover_super::cmd_recover_super;
 pub use recovery_pass::cmd_recovery_pass;
 pub use scrub::scrub;
 pub use set_option::cmd_set_option;
@@ -99,6 +101,7 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("reconcile").about("Reconcile filesystem data")
             .subcommand(reconcile::StatusCli::command().name("status"))
             .subcommand(reconcile::WaitCli::command().name("wait")))
+        .subcommand(recover_super::RecoverSuperCli::command().name("recover-super"))
         .subcommand(recovery_pass::RecoveryPassCli::command().name("recovery-pass"))
         .subcommand(set_option::set_option_cmd())
         .subcommand(key::SetPassphraseCli::command().name("set-passphrase"))

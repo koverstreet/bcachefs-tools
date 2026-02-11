@@ -73,7 +73,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             // set-passphrase handled in Rust dispatch
             // set-file-option handled in Rust dispatch
             // show-super handled in Rust dispatch
-            "recover-super" => c::cmd_recover_super(argc, argv),
+            // recover-super handled in Rust dispatch
             "strip-alloc" => c::cmd_strip_alloc(argc, argv),
             // unlock handled in Rust dispatch
             #[cfg(feature = "fuse")]
@@ -199,6 +199,7 @@ fn main() -> ExitCode {
             }
         },
         "undump" => commands::cmd_undump(args[1..].to_vec()).report(),
+        "recover-super" => commands::cmd_recover_super(args[1..].to_vec()).report(),
         "show-super" => commands::super_cmd::cmd_show_super(args[1..].to_vec()).report(),
         "set-file-option" => commands::cmd_setattr(args[1..].to_vec()).report(),
         "set-fs-option" => commands::cmd_set_option(args[1..].to_vec()).report(),
