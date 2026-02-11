@@ -9,7 +9,8 @@ build() {
 
 help() {
     cat <<HELPEOF
-This hook is for getting the bcachefs unlock prompt at boot
+This hook adds bcachefs support to the image. This is needed to unlock encrypted root
+devices on boot. A graphical passphrase prompt using Plymouth is optionally supported.
 HELPEOF
 }
 
