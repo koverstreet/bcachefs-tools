@@ -1,3 +1,130 @@
+/// Parse an x-macro from a C header file.
+///
+/// Finds `#define {macro_name}(...)` and extracts all `x(...)` invocations,
+/// returning each as a vec of trimmed argument strings.  Handles nested
+/// parentheses in arguments (e.g. `BIT_ULL(KEY_TYPE_foo)`).
+fn parse_xmacro(header: &str, macro_name: &str) -> Vec<Vec<String>> {
+    let define_prefix = format!("#define {}", macro_name);
+    let mut in_macro = false;
+    let mut macro_text = String::new();
+
+    for line in header.lines() {
+        let trimmed = line.trim();
+        if !in_macro {
+            if trimmed.starts_with(&define_prefix) {
+                in_macro = true;
+                // grab any content after the macro signature on this line
+                if let Some(pos) = trimmed.find(&define_prefix) {
+                    let after = &trimmed[pos + define_prefix.len()..];
+                    // skip past optional parameter list
+                    let after = if let Some(i) = after.find(')') {
+                        &after[i + 1..]
+                    } else {
+                        after
+                    };
+                    macro_text.push_str(after.trim_end_matches('\\').trim());
+                    macro_text.push(' ');
+                }
+                if !trimmed.ends_with('\\') {
+                    break;
+                }
+            }
+        } else {
+            macro_text.push_str(trimmed.trim_end_matches('\\').trim());
+            macro_text.push(' ');
+            if !trimmed.ends_with('\\') {
+                break;
+            }
+        }
+    }
+
+    // extract x(...) calls, respecting nested parens
+    let mut entries = Vec::new();
+    let bytes = macro_text.as_bytes();
+    let mut pos = 0;
+    while pos < bytes.len() {
+        let Some(start) = macro_text[pos..].find("x(") else { break };
+        let open = pos + start + 2;
+        let mut depth = 1usize;
+        let mut i = open;
+        while i < bytes.len() && depth > 0 {
+            match bytes[i] {
+                b'(' => depth += 1,
+                b')' => depth -= 1,
+                _ => {}
+            }
+            if depth > 0 { i += 1; }
+        }
+        if depth == 0 {
+            entries.push(split_xmacro_args(&macro_text[open..i]));
+            pos = i + 1;
+        } else {
+            break;
+        }
+    }
+    entries
+}
+
+/// Split a comma-separated argument list, respecting nested parentheses.
+fn split_xmacro_args(s: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    let mut depth = 0;
+    let mut current = String::new();
+
+    for ch in s.chars() {
+        match ch {
+            '(' => { depth += 1; current.push(ch); }
+            ')' => { depth -= 1; current.push(ch); }
+            ',' if depth == 0 => {
+                args.push(current.trim().to_string());
+                current.clear();
+            }
+            _ => current.push(ch),
+        }
+    }
+    let tail = current.trim().to_string();
+    if !tail.is_empty() {
+        args.push(tail);
+    }
+    args
+}
+
+fn generate_bkey_types(entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+
+    out.push_str("// Auto-generated from BCH_BKEY_TYPES() — do not edit\n\n");
+
+    // enum
+    out.push_str("pub enum BkeyValC<'a> {\n");
+    for e in entries {
+        out.push_str(&format!("    {}(&'a c::bch_{}),\n", e[0], e[0]));
+    }
+    out.push_str("    unknown(u8),\n");
+    out.push_str("}\n\n");
+
+    // from_raw: safe range-checked conversion (unsafe because of the transmutes)
+    out.push_str("impl<'a> BkeyValC<'a> {\n");
+    out.push_str("    /// Convert a raw bkey type tag and value reference to a typed variant.\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// # Safety\n");
+    out.push_str("    /// `val` must point to valid data for the bkey type indicated by `type_`.\n");
+    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
+    out.push_str("    pub(crate) unsafe fn from_raw(type_: u8, val: &'a c::bch_val) -> Self {\n");
+    out.push_str("        match type_ as u32 {\n");
+    for e in entries {
+        out.push_str(&format!(
+            "            {} => BkeyValC::{}(std::mem::transmute(val)),\n",
+            e[1], e[0]
+        ));
+    }
+    out.push_str("            _ => BkeyValC::unknown(type_),\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n");
+
+    out
+}
+
 #[derive(Debug)]
 pub struct Fix753 {}
 impl bindgen::callbacks::ParseCallbacks for Fix753 {
@@ -10,6 +137,7 @@ fn main() {
     use std::path::PathBuf;
 
     println!("cargo:rerun-if-changed=src/libbcachefs_wrapper.h");
+    println!("cargo:rerun-if-changed=../libbcachefs/bcachefs_format.h");
 
     let out_dir: PathBuf = std::env::var_os("OUT_DIR")
         .expect("ENV Var 'OUT_DIR' Expected")
@@ -124,6 +252,17 @@ fn main() {
         packed_and_align_fix(bindings.to_string()),
     )
     .expect("Writing to output file failed for: `bcachefs.rs`");
+
+    // Generate bkey type enum from BCH_BKEY_TYPES() x-macro
+    let format_h = std::fs::read_to_string(top_dir.join("../libbcachefs/bcachefs_format.h"))
+        .expect("reading bcachefs_format.h");
+    let bkey_types = parse_xmacro(&format_h, "BCH_BKEY_TYPES");
+    assert!(!bkey_types.is_empty(), "failed to parse BCH_BKEY_TYPES()");
+    std::fs::write(
+        out_dir.join("bkey_types_gen.rs"),
+        generate_bkey_types(&bkey_types),
+    )
+    .expect("Writing bkey_types_gen.rs");
 
     let keyutils = pkg_config::probe_library("libkeyutils").expect("Failed to find keyutils lib");
     let bindings = bindgen::builder()
