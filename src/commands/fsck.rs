@@ -1,6 +1,7 @@
 use std::ffi::CString;
 use std::fmt::Write;
-use std::os::unix::io::RawFd;
+use std::io;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::process;
 
 use anyhow::{anyhow, Result};
@@ -9,6 +10,7 @@ use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 use clap::Parser;
+use rustix::event::{poll, PollFd, PollFlags};
 
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::printbuf::Printbuf;
@@ -64,80 +66,68 @@ pub struct FsckCli {
     devices: Vec<String>,
 }
 
-fn setnonblocking(fd: RawFd) {
-    unsafe {
-        let flags = libc::fcntl(fd, libc::F_GETFL);
-        libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK);
-    }
+fn setnonblocking(fd: BorrowedFd) {
+    let flags = rustix::fs::fcntl_getfl(fd).unwrap();
+    rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK).unwrap();
 }
 
-fn do_splice(rfd: RawFd, wfd: RawFd) -> i32 {
+/// Transfer data from rfd to wfd.  Returns Ok(true) on EOF, Ok(false)
+/// when data was transferred (or EAGAIN), Err on real errors.
+fn do_splice(rfd: BorrowedFd, wfd: BorrowedFd) -> io::Result<bool> {
     let mut buf = [0u8; 4096];
-    let r = unsafe { libc::read(rfd, buf.as_mut_ptr() as *mut libc::c_void, buf.len()) };
-    if r < 0 {
-        let err = std::io::Error::last_os_error();
-        if err.raw_os_error() == Some(libc::EAGAIN) {
-            return 0;
-        }
-        return -1;
-    }
-    if r == 0 {
-        return 1;
-    }
+    let n = match rustix::io::read(rfd, &mut buf) {
+        Ok(0) => return Ok(true),
+        Ok(n) => n,
+        Err(rustix::io::Errno::AGAIN) => return Ok(false),
+        Err(e) => return Err(e.into()),
+    };
 
-    let mut off = 0usize;
-    while off < r as usize {
-        let w = unsafe {
-            libc::write(
-                wfd,
-                buf[off..].as_ptr() as *const libc::c_void,
-                r as usize - off,
-            )
-        };
-        if w < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::EAGAIN) {
-                unsafe {
-                    let mut fds: libc::fd_set = std::mem::zeroed();
-                    libc::FD_SET(wfd, &mut fds);
-                    libc::select(wfd + 1, std::ptr::null_mut(), &mut fds, std::ptr::null_mut(), std::ptr::null_mut());
-                }
-                continue;
+    let mut off = 0;
+    while off < n {
+        match rustix::io::write(wfd, &buf[off..n]) {
+            Ok(w) => off += w,
+            Err(rustix::io::Errno::AGAIN) => {
+                poll(&mut [PollFd::new(&wfd, PollFlags::OUT)], -1)?;
             }
-            return -1;
+            Err(e) => return Err(e.into()),
         }
-        off += w as usize;
     }
-    0
+    Ok(false)
 }
 
-fn splice_fd_to_stdinout(fd: RawFd) -> i32 {
-    setnonblocking(libc::STDIN_FILENO);
+fn splice_fd_to_stdinout(fd: BorrowedFd) -> i32 {
+    let stdin = io::stdin();
+    let stdout = io::stdout();
+
+    setnonblocking(stdin.as_fd());
     setnonblocking(fd);
 
     let mut stdin_closed = false;
 
     loop {
-        unsafe {
-            let mut fds: libc::fd_set = std::mem::zeroed();
-            libc::FD_SET(fd, &mut fds);
-            if !stdin_closed {
-                libc::FD_SET(libc::STDIN_FILENO, &mut fds);
-            }
-            libc::select(fd + 1, &mut fds, std::ptr::null_mut(), std::ptr::null_mut(), std::ptr::null_mut());
+        let mut pollfds = vec![PollFd::new(&fd, PollFlags::IN)];
+        if !stdin_closed {
+            pollfds.push(PollFd::new(&stdin, PollFlags::IN));
+        }
+        let _ = poll(&mut pollfds, -1);
+
+        match do_splice(fd, stdout.as_fd()) {
+            Ok(true) => break,
+            Err(_) => return -1,
+            _ => {}
         }
 
-        let r = do_splice(fd, libc::STDOUT_FILENO);
-        if r < 0 { return r; }
-        if r > 0 { break; }
-
-        let r = do_splice(libc::STDIN_FILENO, fd);
-        if r < 0 { return r; }
-        if r > 0 { stdin_closed = true; }
+        if !stdin_closed {
+            match do_splice(stdin.as_fd(), fd) {
+                Ok(true) => stdin_closed = true,
+                Err(_) => return -1,
+                _ => {}
+            }
+        }
     }
 
-    // The return code from fsck itself is returned via close()
-    unsafe { libc::close(fd) }
+    // The return code from fsck is returned via close() on this fd
+    unsafe { libc::close(fd.as_raw_fd()) }
 }
 
 fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
@@ -151,11 +141,12 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
         libc::ioctl(fs.ioctl_fd_raw(), BCH_IOCTL_FSCK_ONLINE, &fsck)
     };
     if fsck_fd < 0 {
-        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
         return Err(anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}", crate::wrappers::bch_err_str(errno)));
     }
 
-    Ok(splice_fd_to_stdinout(fsck_fd))
+    let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
+    Ok(splice_fd_to_stdinout(fd))
 }
 
 fn should_use_kernel_fsck(devs: &[String]) -> bool {
@@ -344,13 +335,14 @@ pub fn cmd_fsck(argv: Vec<String>) -> Result<()> {
             }
         }
 
-        let ctl_fd = unsafe { libc::open(c"/dev/bcachefs-ctl".as_ptr(), libc::O_RDWR) };
-        let fsck_fd = if ctl_fd >= 0 {
-            let fd = unsafe { libc::ioctl(ctl_fd, BCH_IOCTL_FSCK_OFFLINE, fsck_ptr) };
-            unsafe { libc::close(ctl_fd); }
-            fd
-        } else {
-            -1
+        let fsck_fd = match std::fs::OpenOptions::new()
+            .read(true).write(true)
+            .open("/dev/bcachefs-ctl")
+        {
+            Ok(ctl_file) => unsafe {
+                libc::ioctl(ctl_file.as_raw_fd(), BCH_IOCTL_FSCK_OFFLINE, fsck_ptr)
+            },
+            Err(_) => -1,
         };
 
         unsafe { std::alloc::dealloc(fsck_ptr as *mut u8, layout); }
@@ -362,11 +354,12 @@ pub fn cmd_fsck(argv: Vec<String>) -> Result<()> {
         }
 
         if fsck_fd < 0 {
-            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+            let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
             return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}", crate::wrappers::bch_err_str(errno)));
         }
 
-        let ret = splice_fd_to_stdinout(fsck_fd);
+        let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
+        let ret = splice_fd_to_stdinout(fd);
         process::exit(ret);
     }
 
