@@ -52,7 +52,7 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
             "--help" => { c::bcachefs_usage(); 0 }
             "device"            => c::device_cmds(argc, argv),
             "dump"              => c::cmd_dump(argc, argv),
-            "format" | "mkfs"   => c::cmd_format(argc, argv),
+            "format" | "mkfs"   => { eprintln!("BUG: format should be handled in Rust"); 1 }
             "image"             => c::image_cmds(argc, argv),
             "list_journal"      => c::cmd_list_journal(argc, argv),
             "kill_btree_node"   => c::cmd_kill_btree_node(argc, argv),
@@ -144,6 +144,10 @@ fn main() -> ExitCode {
             },
             _ => c_command(args, symlink_cmd),
         },
+        "format" | "mkfs" => {
+            let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
+            commands::cmd_format(argv).report()
+        }
         "fsck" => {
             let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
             commands::cmd_fsck(argv).report()

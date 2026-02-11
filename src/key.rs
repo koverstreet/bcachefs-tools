@@ -166,7 +166,7 @@ impl KeyHandle {
 pub struct Passphrase(CString);
 
 impl Passphrase {
-    fn get(&self) -> &CStr {
+    pub(crate) fn get(&self) -> &CStr {
         &self.0
     }
 
