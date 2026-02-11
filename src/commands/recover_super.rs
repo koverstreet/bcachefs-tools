@@ -9,6 +9,19 @@ use clap::Parser;
 
 use crate::wrappers::printbuf::Printbuf;
 
+// bch2_sb_validate's flags parameter is a bch_validate_flags enum in bindgen,
+// but C passes 0 (no flags). Since 0 isn't a valid Rust enum variant, declare
+// our own FFI binding with the correct ABI type.
+extern "C" {
+    fn bch2_sb_validate(
+        sb: *mut c::bch_sb,
+        opts: *mut bcachefs::bch_opts,
+        offset: u64,
+        flags: u32,
+        err: *mut c::printbuf,
+    ) -> i32;
+}
+
 // UUID constants — from libbcachefs/bcachefs_format.h
 const BCACHE_MAGIC: [u8; 16] = [
     0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
@@ -109,7 +122,7 @@ fn probe_one_super(
     let mut err = Printbuf::new();
     let mut opts = bcachefs::bch_opts::default();
     let ret = unsafe {
-        c::bch2_sb_validate(sb, &mut opts, offset >> 9, std::mem::transmute(0u32), err.as_raw())
+        bch2_sb_validate(sb, &mut opts, offset >> 9, 0, err.as_raw())
     };
 
     if ret != 0 {
@@ -175,11 +188,11 @@ fn probe_sb_range(
         let mut err = Printbuf::new();
         let mut opts = bcachefs::bch_opts::default();
         let ret = unsafe {
-            c::bch2_sb_validate(
+            bch2_sb_validate(
                 sb as *mut c::bch_sb,
                 &mut opts,
                 (start + offset as u64) >> 9,
-                std::mem::transmute(0u32),
+                0,
                 err.as_raw(),
             )
         };
