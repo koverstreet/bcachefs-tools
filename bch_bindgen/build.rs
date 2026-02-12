@@ -150,6 +150,26 @@ fn generate_counter_table(entries: &[Vec<String>]) -> String {
     out
 }
 
+fn generate_extent_entry_u64s(entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    out.push_str("// Auto-generated from BCH_EXTENT_ENTRY_TYPES() — do not edit\n\n");
+    out.push_str("/// Size in u64s for each known extent entry type.\n");
+    out.push_str("pub fn extent_entry_type_u64s(ty: u32) -> Option<usize> {\n");
+    out.push_str("    use std::mem::size_of;\n");
+    out.push_str("    Some(match ty {\n");
+    for e in entries {
+        let name = &e[0];
+        let n = &e[1];
+        out.push_str(&format!(
+            "        {n} => size_of::<c::bch_extent_{name}>() / 8,\n"
+        ));
+    }
+    out.push_str("        _ => return None,\n");
+    out.push_str("    })\n");
+    out.push_str("}\n");
+    out
+}
+
 fn generate_bkey_types(entries: &[Vec<String>]) -> String {
     let mut out = String::new();
 
@@ -200,6 +220,7 @@ fn main() {
     println!("cargo:rerun-if-changed=src/libbcachefs_wrapper.h");
     println!("cargo:rerun-if-changed=../libbcachefs/bcachefs_format.h");
     println!("cargo:rerun-if-changed=../libbcachefs/sb/members_format.h");
+    println!("cargo:rerun-if-changed=../libbcachefs/data/extents_format.h");
     println!("cargo:rerun-if-changed=../libbcachefs/sb/counters_format.h");
 
     let out_dir: PathBuf = std::env::var_os("OUT_DIR")
@@ -373,6 +394,16 @@ fn main() {
         generate_counter_table(&counters),
     )
     .expect("Writing counters_gen.rs");
+
+    let extents_h = std::fs::read_to_string(top_dir.join("../libbcachefs/data/extents_format.h"))
+        .expect("reading extents_format.h");
+    let extent_entry_types = parse_xmacro(&extents_h, "BCH_EXTENT_ENTRY_TYPES");
+    assert!(!extent_entry_types.is_empty(), "failed to parse BCH_EXTENT_ENTRY_TYPES()");
+    std::fs::write(
+        out_dir.join("extent_entry_types_gen.rs"),
+        generate_extent_entry_u64s(&extent_entry_types),
+    )
+    .expect("Writing extent_entry_types_gen.rs");
 
     let keyutils = pkg_config::probe_library("libkeyutils").expect("Failed to find keyutils lib");
     let bindings = bindgen::builder()

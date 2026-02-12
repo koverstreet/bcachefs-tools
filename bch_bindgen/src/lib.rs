@@ -2,6 +2,7 @@ pub mod bcachefs;
 pub mod bkey;
 pub mod btree;
 pub mod errcode;
+pub mod extent_iter;
 pub mod fs;
 pub mod journal;
 pub mod keyutils;
