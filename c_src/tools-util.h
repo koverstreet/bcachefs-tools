@@ -98,7 +98,6 @@ do {									\
 		die("error closing fd: %m at %s:%u", __FILE__, __LINE__);\
 } while (0)
 
-void write_file_str(int, const char *, const char *);
 char *read_file_str(int, const char *);
 u64 read_file_u64(int, const char *);
 
@@ -127,10 +126,7 @@ static inline void range_add(ranges *data, u64 offset, u64 size)
 	}));
 }
 
-void ranges_sort(ranges *);
 void ranges_sort_merge(ranges *);
-void ranges_roundup(ranges *, unsigned);
-void ranges_rounddown(ranges *, unsigned);
 
 struct hole_iter {
 	ranges		r;
@@ -195,28 +191,10 @@ char *strcmp_prefix(char *, const char *);
 #define crc32c bch_crc32c
 u32 crc32c(u32, const void *, size_t);
 
-char *dev_to_name(dev_t);
-char *dev_to_path(dev_t);
 struct mntent *dev_to_mount(const char *);
 int dev_mounted(const char *);
 char *fd_to_dev_model(int);
 
-#define args_shift(_nr)							\
-do {									\
-	unsigned _n = min((_nr), argc);					\
-	argc -= _n;							\
-	argv += _n;							\
-} while (0)
-
-#define arg_pop()							\
-({									\
-	char *_ret = argc ? argv[0] : NULL;				\
-	if (_ret)							\
-		args_shift(1);						\
-	_ret;								\
-})
-
-struct bpos bpos_parse(char *);
 struct bbpos bbpos_parse(char *);
 
 struct bbpos_range {
@@ -227,9 +205,5 @@ struct bbpos_range {
 struct bbpos_range bbpos_range_parse(char *);
 
 unsigned version_parse(char *);
-
-darray_const_str get_or_split_cmdline_devs(int argc, char *argv[]);
-
-char *pop_cmd(int *argc, char *argv[]);
 
 #endif /* _TOOLS_UTIL_H */

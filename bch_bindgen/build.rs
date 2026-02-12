@@ -382,12 +382,10 @@ fn main() {
         // tools-util functions for Rust command conversions
         .allowlist_function("open_for_format")
         .allowlist_function("ask_yn")
-        .allowlist_function("get_or_split_cmdline_devs")
         .allowlist_function("dev_mounted")
         .allowlist_function("dev_to_mount")
         .allowlist_function("read_string_list_or_die")
         .allowlist_function("read_flag_list_or_die")
-        .allowlist_function("write_file_str")
         .allowlist_function("read_file_str")
         .allowlist_function("read_file_u64")
         .allowlist_function("get_size")

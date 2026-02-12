@@ -105,17 +105,6 @@ struct stat xstat(const char *path)
 
 /* File parsing (i.e. sysfs) */
 
-void write_file_str(int dirfd, const char *path, const char *str)
-{
-	int fd = xopenat(dirfd, path, O_WRONLY);
-	ssize_t wrote, len = strlen(str);
-
-	wrote = write(fd, str, len);
-	if (wrote != len)
-		die("read error: %m");
-	xclose(fd);
-}
-
 char *read_file_str(int dirfd, const char *path)
 {
 	int fd = xopenat(dirfd, path, O_RDONLY);
@@ -297,7 +286,7 @@ static int range_cmp(const void *_l, const void *_r)
 	return 0;
 }
 
-void ranges_sort(ranges *r)
+static void ranges_sort(ranges *r)
 {
 	sort(r->data, r->nr, sizeof(r->data[0]), range_cmp, NULL);
 }
@@ -320,23 +309,6 @@ void ranges_sort_merge(ranges *r)
 
 	darray_exit(r);
 	*r = tmp;
-}
-
-void ranges_roundup(ranges *r, unsigned block_size)
-{
-	darray_for_each(*r, i) {
-		i->start = round_down(i->start, block_size);
-		i->end	= round_up(i->end, block_size);
-	}
-}
-
-void ranges_rounddown(ranges *r, unsigned block_size)
-{
-	darray_for_each(*r, i) {
-		i->start = round_up(i->start, block_size);
-		i->end	= round_down(i->end, block_size);
-		i->end	= max(i->end, i->start);
-	}
 }
 
 struct fiemap_extent fiemap_iter_next(struct fiemap_iter *iter)
@@ -528,46 +500,6 @@ u32 crc32c(u32 crc, const void *buf, size_t size)
 
 #endif /* HAVE_WORKING_IFUNC */
 
-char *dev_to_name(dev_t dev)
-{
-	char *line = NULL, *name = NULL;
-	size_t n = 0;
-
-	FILE *f = fopen("/proc/partitions", "r");
-	if (!f)
-		die("error opening /proc/partitions: %m");
-
-	while (getline(&line, &n, f) != -1) {
-		unsigned ma, mi;
-		u64 sectors;
-
-		name = realloc(name, n + 1);
-
-		if (sscanf(line, " %u %u %llu %s", &ma, &mi, &sectors, name) == 4 &&
-		    ma == major(dev) && mi == minor(dev))
-			goto found;
-	}
-
-	free(name);
-	name = NULL;
-found:
-	fclose(f);
-	free(line);
-	return name;
-}
-
-char *dev_to_path(dev_t dev)
-{
-	char *name = dev_to_name(dev);
-	if (!name)
-		return NULL;
-
-	char *path = mprintf("/dev/%s", name);
-
-	free(name);
-	return path;
-}
-
 struct mntent *dev_to_mount(const char *dev)
 {
 	struct mntent *mnt, *ret = NULL;
@@ -692,7 +624,7 @@ static int kstrtouint_symbolic(const char *s, unsigned int base, unsigned *res)
 	return 0;
 }
 
-struct bpos bpos_parse(char *buf)
+static struct bpos bpos_parse(char *buf)
 {
 	if (!strcmp(buf, "POS_MIN"))
 		return POS_MIN;
@@ -780,29 +712,3 @@ unsigned version_parse(char *buf)
 	return BCH_VERSION(major, minor);
 }
 
-darray_const_str get_or_split_cmdline_devs(int argc, char *argv[])
-{
-	darray_const_str ret = {};
-
-	if (argc == 1) {
-		char *dev = bch2_scan_devices(argv[0]);
-
-		bch2_split_devs(dev, &ret);
-	} else {
-		for (unsigned i = 0; i < argc; i++)
-			darray_push(&ret, strdup(argv[i]));
-	}
-
-	return ret;
-}
-
-char *pop_cmd(int *argc, char *argv[])
-{
-	char *cmd = argv[1];
-	if (!(*argc < 2))
-		memmove(&argv[1], &argv[2], (*argc - 2) * sizeof(argv[0]));
-	(*argc)--;
-	argv[*argc] = NULL;
-
-	return cmd;
-}

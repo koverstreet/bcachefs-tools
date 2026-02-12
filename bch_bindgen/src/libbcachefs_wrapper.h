@@ -16,7 +16,6 @@
 
 #include "alloc/disk_groups.h"
 #include "cmds.h"
-#include "cmd_super.h"
 #include "crypto.h"
 #include "libbcachefs.h"
 #include "raid/raid.h"
