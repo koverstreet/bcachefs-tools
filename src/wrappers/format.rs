@@ -3,6 +3,7 @@
 //! Rust implementation of bch2_format and bch2_format_for_device_add.
 
 use std::ffi::CStr;
+use std::os::unix::fs::FileExt;
 
 use bch_bindgen::c;
 use bch_bindgen::{opt_defined, opt_get, opt_set};
@@ -215,16 +216,14 @@ pub extern "C" fn bch2_format(
 
         unsafe {
             (*m).uuid.b = *uuid::Uuid::new_v4().as_bytes();
-            (*m).nbuckets = (dev.nbuckets).to_le();
+            (*m).nbuckets = dev.nbuckets.to_le();
             (*m).first_bucket = 0;
         }
 
-        {
-            let opts = &mut dev.opts;
-            if opt_defined!(opts, rotational) == 0 {
-                let nonrot = unsafe { c::bdev_nonrot(dev.bdev) };
-                opt_set!(opts, rotational, !nonrot as u8);
-            }
+        let opts = &mut dev.opts;
+        if opt_defined!(opts, rotational) == 0 {
+            let nonrot = unsafe { c::bdev_nonrot(dev.bdev) };
+            opt_set!(opts, rotational, !nonrot as u8);
         }
 
         opt_set_sb_all(sb.sb, idx as i32, &mut dev.opts);
@@ -291,13 +290,10 @@ pub extern "C" fn bch2_format(
     unsafe { c::bch2_sb_members_cpy_v2_v1(&mut *sb) };
 
     // Write superblocks to each device
-    for dev in dev_slice.iter_mut() {
+    for (idx, dev) in dev_slice.iter_mut().enumerate() {
         let size_sectors = dev.fs_size >> 9;
         let sb_ref = unsafe { &mut *sb.sb };
-        let dev_idx = unsafe {
-            (dev as *const c::dev_opts).offset_from(devs.data) as u8
-        };
-        sb_ref.dev_idx = dev_idx;
+        sb_ref.dev_idx = idx as u8;
 
         if dev.sb_offset == 0 {
             dev.sb_offset = c::BCH_SB_SECTOR as u64;
@@ -316,20 +312,16 @@ pub extern "C" fn bch2_format(
             );
         }
 
+        let fd = unsafe { (*dev.bdev).bd_fd };
+
         if dev.sb_offset == c::BCH_SB_SECTOR as u64 {
             // Zero start of disk
             let zeroes = vec![0u8; (c::BCH_SB_SECTOR as usize) << 9];
-            let fd = unsafe { (*dev.bdev).bd_fd };
-            let file: std::mem::ManuallyDrop<std::fs::File> =
-                std::mem::ManuallyDrop::new(unsafe {
-                    std::os::unix::io::FromRawFd::from_raw_fd(fd)
-                });
-            use std::os::unix::fs::FileExt;
+            let file = super::super_io::borrowed_file(fd);
             file.write_all_at(&zeroes, 0)
                 .unwrap_or_else(|e| panic!("zeroing start of disk: {}", e));
         }
 
-        let fd = unsafe { (*dev.bdev).bd_fd };
         super::super_io::bch2_super_write(fd, sb.sb);
 
         unsafe { libc::close(fd) };

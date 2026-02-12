@@ -13,7 +13,7 @@ use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
 use crate::wrappers::printbuf::Printbuf;
-use crate::wrappers::super_io::{BCACHE_MAGIC, BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
+use crate::wrappers::super_io::{self, BCACHE_MAGIC, BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
 
 // bch2_sb_validate's flags parameter is a bch_validate_flags enum in bindgen,
 // but C passes 0 (no flags). Since 0 isn't a valid Rust enum variant, declare
@@ -80,11 +80,6 @@ unsafe fn buf_as_sb_mut(buf: &mut [u8]) -> &mut c::bch_sb {
     &mut *(buf.as_mut_ptr() as *mut c::bch_sb)
 }
 
-/// Total size of a bch_sb structure in bytes (fixed header + variable-length data).
-fn sb_bytes(sb: &c::bch_sb) -> usize {
-    std::mem::size_of::<c::bch_sb>() + sb.u64s as usize * 8
-}
-
 fn sb_magic_matches(sb: &c::bch_sb) -> bool {
     sb.magic.b == BCACHE_MAGIC || sb.magic.b == BCHFS_MAGIC
 }
@@ -129,7 +124,7 @@ fn probe_one_super(dev: &File, sb_size: usize, offset: u64, verbose: bool) -> Op
         println!("found superblock at {}", prt_offset(offset));
     }
 
-    let bytes = sb_bytes(unsafe { buf_as_sb(&buf) });
+    let bytes = super_io::vstruct_bytes_sb(unsafe { buf_as_sb(&buf) });
     Some(buf[..bytes].to_vec())
 }
 
@@ -155,7 +150,7 @@ fn probe_sb_range(dev: &File, start: u64, end: u64, verbose: bool) -> Vec<Vec<u8
             continue;
         }
 
-        let bytes = sb_bytes(sb);
+        let bytes = super_io::vstruct_bytes_sb(sb);
         if offset + bytes > buflen {
             eprintln!("found sb {} size {} that overran buffer", start + offset as u64, bytes);
             offset += 512;
@@ -245,7 +240,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     }
 
     // Copy to owned buffer; src_sb's Drop will free the C allocation
-    let bytes = sb_bytes(src_sb.sb());
+    let bytes = super_io::vstruct_bytes_sb(src_sb.sb());
     let sb_buf = unsafe {
         std::slice::from_raw_parts(src_sb.sb as *const u8, bytes).to_vec()
     };

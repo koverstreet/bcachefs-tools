@@ -3,11 +3,20 @@
 //! Rust implementations of superblock read/write operations.
 
 use std::os::unix::fs::FileExt;
+use std::os::unix::io::FromRawFd;
 
 use bch_bindgen::c;
 
+/// Wrap a borrowed file descriptor as a `File` without taking ownership.
+///
+/// The caller must ensure the fd remains valid for the lifetime of the
+/// returned `ManuallyDrop<File>`. The fd will NOT be closed on drop.
+pub fn borrowed_file(fd: i32) -> std::mem::ManuallyDrop<std::fs::File> {
+    std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) })
+}
+
 /// Compute the total byte size of a variable-length superblock struct.
-fn vstruct_bytes_sb(sb: *const c::bch_sb) -> usize {
+pub fn vstruct_bytes_sb(sb: &c::bch_sb) -> usize {
     unsafe { c::rust_vstruct_bytes_sb(sb) }
 }
 
@@ -24,11 +33,7 @@ fn csum_vstruct_sb(sb: *mut c::bch_sb) -> c::bch_csum {
 /// Panics on I/O errors (matches C `die()` behavior).
 #[no_mangle]
 pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
-    use std::os::unix::io::FromRawFd;
-
-    // Safety: fd is a valid open file descriptor passed from C.
-    // We wrap it in ManuallyDrop to avoid closing it when we're done.
-    let file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+    let file = borrowed_file(fd);
 
     let bs = unsafe { c::get_blocksize(fd) } as usize;
     let sb_ref = unsafe { &mut *sb };
@@ -63,7 +68,7 @@ pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
 
         sb_ref.csum = csum_vstruct_sb(sb);
 
-        let sb_bytes = vstruct_bytes_sb(sb);
+        let sb_bytes = vstruct_bytes_sb(unsafe { &*sb });
         let write_len = round_up(sb_bytes, bs);
         let sb_slice = unsafe { std::slice::from_raw_parts(sb as *const u8, write_len) };
 
@@ -80,9 +85,7 @@ pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
 /// Panics if the magic doesn't match a bcachefs superblock.
 #[no_mangle]
 pub extern "C" fn __bch2_super_read(fd: i32, sector: u64) -> *mut c::bch_sb {
-    use std::os::unix::io::FromRawFd;
-
-    let file = std::mem::ManuallyDrop::new(unsafe { std::fs::File::from_raw_fd(fd) });
+    let file = borrowed_file(fd);
 
     // Read the fixed-size header first
     let header_size = std::mem::size_of::<c::bch_sb>();

@@ -12,6 +12,7 @@ use crate::commands::opts::bch_opt_lookup;
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use crate::wrappers::printbuf::Printbuf;
+use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
 
 const BCH_REPLICAS_MAX: u32 = 4;
@@ -152,7 +153,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     let mut fs_label: Option<String> = None;
     let mut uuid_bytes: Option<[u8; 16]> = None;
     let mut format_version: Option<u32> = None;
-    let mut superblock_size: u32 = 2048; // SUPERBLOCK_SIZE_DEFAULT (sectors = 1MB)
+    let mut superblock_size: u32 = SUPERBLOCK_SIZE_DEFAULT;
 
     // Per-device accumulator
     let mut cur_label: Option<String> = None;
