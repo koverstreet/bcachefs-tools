@@ -37,6 +37,7 @@ pub use key::{cmd_unlock, cmd_set_passphrase, cmd_remove_passphrase};
 pub use list::list;
 pub use list_journal::cmd_list_journal;
 pub use mount::mount;
+pub use dump::cmd_dump;
 pub use dump::cmd_undump;
 pub use format::cmd_format;
 pub use fsck::cmd_fsck;
@@ -95,7 +96,7 @@ pub fn build_cli() -> Command {
             .subcommand(device::SetStateCli::command().name("set-state"))
             .subcommand(device::ResizeCli::command().name("resize"))
             .subcommand(device::ResizeJournalCli::command().name("resize-journal")))
-        .subcommand(Command::new("dump").about("Dump filesystem metadata to a qcow2 image"))
+        .subcommand(dump::DumpCli::command().name("dump"))
         .subcommand(Command::new("format").visible_alias("mkfs")
             .about("Format a new filesystem"))
         .subcommand(Command::new("fs").about("Manage a running filesystem")
@@ -126,8 +127,7 @@ pub fn build_cli() -> Command {
         .subcommand(key::UnlockCli::command().name("unlock"))
         .subcommand(Command::new("strip-alloc")
             .about("Strip alloc info on a filesystem to be used read-only"))
-        .subcommand(Command::new("undump")
-            .about("Convert qcow2 metadata dumps to sparse raw files"));
+        .subcommand(dump::UndumpCli::command().name("undump"));
 
     cmd
 }
