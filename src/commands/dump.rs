@@ -4,9 +4,7 @@ use std::path::Path;
 use anyhow::{anyhow, Result};
 use clap::Parser;
 
-extern "C" {
-    fn qcow2_to_raw(infd: i32, outfd: i32);
-}
+use crate::qcow2;
 
 /// Convert a qcow2 image back to a raw device image
 #[derive(Parser, Debug)]
@@ -61,7 +59,7 @@ pub fn cmd_undump(argv: Vec<String>) -> Result<()> {
         let outfile = open_opts.open(&e.output)
             .map_err(|err| anyhow!("{}: {}", e.output, err))?;
 
-        unsafe { qcow2_to_raw(infile.as_raw_fd(), outfile.as_raw_fd()) };
+        qcow2::qcow2_to_raw(infile.as_raw_fd(), outfile.as_raw_fd())?;
     }
 
     Ok(())
