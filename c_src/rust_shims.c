@@ -7,6 +7,7 @@
 
 #include "libbcachefs.h"
 #include "libbcachefs/opts.h"
+#include "libbcachefs/btree/cache.h"
 #include "libbcachefs/init/dev.h"
 #include "libbcachefs/journal/init.h"
 #include "libbcachefs/journal/read.h"
@@ -249,6 +250,33 @@ int rust_device_resize_journal_offline(struct bch_fs *c, u64 size)
 
 	enumerated_ref_put(&resize->io_ref[READ], 0);
 	return ret;
+}
+
+/* btree node introspection shims */
+
+bool rust_btree_node_fake(struct btree *b)
+{
+	return btree_node_fake(b);
+}
+
+struct btree *rust_btree_id_root_b(struct bch_fs *c, unsigned id)
+{
+	struct btree_root *r = bch2_btree_id_root(c, id);
+	return r ? r->b : NULL;
+}
+
+/* online member iteration shim */
+
+struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,
+					 struct bch_dev *ca,
+					 unsigned ref_idx)
+{
+	return bch2_get_next_online_dev(c, ca, ~0U, READ, ref_idx);
+}
+
+void rust_put_online_dev_ref(struct bch_dev *ca, unsigned ref_idx)
+{
+	enumerated_ref_put(&ca->io_ref[READ], ref_idx);
 }
 
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)

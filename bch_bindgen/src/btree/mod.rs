@@ -12,6 +12,10 @@ use std::ops::ControlFlow;
 
 use c::bpos;
 
+extern "C" {
+    fn rust_btree_node_fake(b: *mut c::btree) -> bool;
+}
+
 pub struct BtreeTrans<'f> {
     raw: *mut c::btree_trans,
     fs:  PhantomData<&'f Fs>,
@@ -316,6 +320,46 @@ impl<'b, 'f> c::btree {
 
     pub fn ondisk_to_text(&'b self, fs: &'f Fs) -> BtreeNodeOndiskToText<'b, 'f> {
         BtreeNodeOndiskToText { b: &self, fs }
+    }
+}
+
+impl c::btree {
+    /// Check if this btree node is a fake/placeholder node.
+    pub fn is_fake(&self) -> bool {
+        unsafe { rust_btree_node_fake(self as *const _ as *mut _) }
+    }
+
+    /// Iterate over unpacked keys within this btree node.
+    ///
+    /// Equivalent to the C `for_each_btree_node_key_unpack` macro.
+    /// The callback receives each key in order; return `Break` to
+    /// stop early.
+    pub fn for_each_key<F>(&self, mut f: F) -> ControlFlow<()>
+    where
+        F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
+    {
+        let b = self as *const _ as *mut c::btree;
+        let mut node_iter = c::btree_node_iter::default();
+        let mut unpacked: c::bkey = unsafe { std::mem::zeroed() };
+
+        unsafe { c::bch2_btree_node_iter_init_from_start(&mut node_iter, b) };
+
+        loop {
+            let k = unsafe {
+                c::bch2_btree_node_iter_peek_unpack(&mut node_iter, b, &mut unpacked)
+            };
+            if k.k.is_null() {
+                return ControlFlow::Continue(());
+            }
+            if f(BkeySC {
+                k: unsafe { &*k.k },
+                v: unsafe { &*k.v },
+                iter: PhantomData,
+            }).is_break() {
+                return ControlFlow::Break(());
+            }
+            unsafe { c::bch2_btree_node_iter_advance(&mut node_iter, b) };
+        }
     }
 }
 

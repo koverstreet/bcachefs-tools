@@ -2,8 +2,19 @@ use crate::bcachefs;
 use crate::c;
 use crate::errcode::{BchError, errptr_to_result};
 use std::ffi::CString;
+use std::ops::ControlFlow;
 use std::os::unix::ffi::OsStrExt;
 use std::path::PathBuf;
+
+extern "C" {
+    fn rust_get_next_online_dev(
+        c: *mut c::bch_fs,
+        ca: *mut c::bch_dev,
+        ref_idx: u32,
+    ) -> *mut c::bch_dev;
+    fn rust_put_online_dev_ref(ca: *mut c::bch_dev, ref_idx: u32);
+    fn rust_btree_id_root_b(c: *mut c::bch_fs, id: u32) -> *mut c::btree;
+}
 
 pub struct Fs {
     pub raw: *mut c::bch_fs,
@@ -55,6 +66,51 @@ impl Fs {
         let ret = unsafe { c::bch2_fs_exit(self.raw) };
         std::mem::forget(self);
         ret
+    }
+
+    /// Iterate over all online member devices.
+    ///
+    /// Equivalent to the C `for_each_online_member` macro. Ref counting
+    /// is handled automatically, including on early break.
+    pub fn for_each_online_member<F>(&self, mut f: F) -> ControlFlow<()>
+    where
+        F: FnMut(&c::bch_dev) -> ControlFlow<()>,
+    {
+        let mut ca: *mut c::bch_dev = std::ptr::null_mut();
+        loop {
+            ca = unsafe { rust_get_next_online_dev(self.raw, ca, 0) };
+            if ca.is_null() {
+                return ControlFlow::Continue(());
+            }
+            if f(unsafe { &*ca }).is_break() {
+                unsafe { rust_put_online_dev_ref(ca, 0) };
+                return ControlFlow::Break(());
+            }
+        }
+    }
+
+    /// Get the root btree node for a btree ID.
+    pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
+        let b = unsafe { rust_btree_id_root_b(self.raw, id) };
+        if b.is_null() {
+            None
+        } else {
+            Some(unsafe { &*b })
+        }
+    }
+
+    /// Number of devices in the filesystem superblock.
+    pub fn nr_devices(&self) -> u32 {
+        unsafe { (*self.raw).sb.nr_devices as u32 }
+    }
+
+    /// Check if a device index exists and has a device pointer.
+    pub fn dev_exists(&self, dev: u32) -> bool {
+        unsafe {
+            let c = &*self.raw;
+            (dev as usize) < c.sb.nr_devices as usize
+                && !c.devs[dev as usize].is_null()
+        }
     }
 }
 

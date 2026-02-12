@@ -104,4 +104,23 @@ struct rust_journal_entries {
 
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c);
 
+/*
+ * Btree node introspection shims — wraps x-macro generated static
+ * inline accessors and static inline bch2_btree_id_root().
+ */
+struct btree;
+bool rust_btree_node_fake(struct btree *b);
+struct btree *rust_btree_id_root_b(struct bch_fs *c, unsigned id);
+
+/*
+ * Online member iteration shim — wraps the static inline
+ * bch2_get_next_online_dev() which handles ref counting internally.
+ * rust_put_online_dev_ref() is for cleanup on early loop termination.
+ */
+struct bch_dev;
+struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,
+					 struct bch_dev *ca,
+					 unsigned ref_idx);
+void rust_put_online_dev_ref(struct bch_dev *ca, unsigned ref_idx);
+
 #endif /* _RUST_SHIMS_H */
