@@ -1,6 +1,5 @@
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <string.h>
 #include <sys/ioctl.h>
 #include <sys/stat.h>
@@ -15,15 +14,14 @@
 
 #include <uuid/uuid.h>
 
-#include "cmds.h"
+#include "bcachefs.h"
+
 #include "crypto.h"
 #include "libbcachefs.h"
 #include "posix_to_bcachefs.h"
 
 #include <linux/dcache.h>
 #include <linux/generic-radix-tree.h>
-
-#include "bcachefs.h"
 #include "alloc/buckets.h"
 #include "alloc/replicas.h"
 #include "btree/update.h"
@@ -182,34 +180,12 @@ static void find_superblock_space(ranges extents,
 	die("Couldn't find a valid location for superblock");
 }
 
-static void migrate_usage(void)
-{
-	puts("bcachefs migrate - migrate an existing filesystem to bcachefs\n"
-	     "Usage: bcachefs migrate [OPTION]...\n"
-	     "\n"
-	     "Options:\n"
-	     "  -f fs                        Root of filesystem to migrate(s)\n"
-	     "      --encrypted              Enable whole filesystem encryption (chacha20/poly1305)\n"
-	     "      --no_passphrase          Don't encrypt master encryption key\n"
-	     "  -F                           Force, even if metadata file already exists\n"
-	     "  -h, --help                   Display this help and exit\n"
-	     "\n"
-	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
-	exit(EXIT_SUCCESS);
-}
 
-static const struct option migrate_opts[] = {
-	{ "encrypted",		no_argument, NULL, 'e' },
-	{ "no_passphrase",	no_argument, NULL, 'p' },
-	{ "help",		no_argument, NULL, 'h' },
-	{ NULL }
-};
-
-static int migrate_fs(const char		*fs_path,
-		      struct bch_opt_strs	fs_opt_strs,
-		      struct bch_opts		fs_opts,
-		      struct format_opts	format_opts,
-		      bool force)
+int rust_migrate_fs(const char		*fs_path,
+		    struct bch_opt_strs	fs_opt_strs,
+		    struct bch_opts		fs_opts,
+		    struct format_opts	format_opts,
+		    bool force)
 {
 	if (!path_is_fs_root(fs_path))
 		die("%s is not a filesystem root", fs_path);
@@ -333,67 +309,6 @@ static int migrate_fs(const char		*fs_path,
 	return 0;
 }
 
-int cmd_migrate(int argc, char *argv[])
-{
-	struct format_opts format_opts = format_opts_default();
-	char *fs_path = NULL;
-	bool no_passphrase = false, force = false;
-	int opt;
-
-	struct bch_opt_strs fs_opt_strs =
-		bch2_cmdline_opts_get(&argc, argv, OPT_FORMAT);
-	struct bch_opts fs_opts = bch2_parse_opts(fs_opt_strs);
-
-	while ((opt = getopt_long(argc, argv, "f:Fh",
-				  migrate_opts, NULL)) != -1)
-		switch (opt) {
-		case 'f':
-			fs_path = optarg;
-			break;
-		case 'e':
-			format_opts.encrypted = true;
-			break;
-		case 'p':
-			no_passphrase = true;
-			break;
-		case 'F':
-			force = true;
-			break;
-		case 'h':
-			migrate_usage();
-			exit(EXIT_SUCCESS);
-		}
-
-	if (!fs_path) {
-		migrate_usage();
-		die("Please specify a filesystem to migrate");
-	}
-
-	if (format_opts.encrypted && !no_passphrase)
-		format_opts.passphrase = read_passphrase_twice("Enter passphrase: ");
-
-	int ret = migrate_fs(fs_path,
-			     fs_opt_strs,
-			     fs_opts,
-			     format_opts, force);
-	bch2_opt_strs_free(&fs_opt_strs);
-	return ret;
-}
-
-static void migrate_superblock_usage(void)
-{
-	puts("bcachefs migrate-superblock - create default superblock after migrating\n"
-	     "Usage: bcachefs migrate-superblock [OPTION]...\n"
-	     "\n"
-	     "Options:\n"
-	     "  -d, --dev    device          Device to create superblock for\n"
-	     "  -o, --offset offset          Offset of existing superblock\n"
-	     "  -h, --help                   Display this help and exit\n"
-	     "\n"
-	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
-	exit(EXIT_SUCCESS);
-}
-
 static void add_default_sb_layout(struct bch_sb* sb, unsigned *out_sb_size)
 {
 	unsigned sb_size = 1U << sb->layout.sb_max_size_bits;
@@ -416,40 +331,13 @@ static void add_default_sb_layout(struct bch_sb* sb, unsigned *out_sb_size)
 	sb->layout.sb_offset[1] = cpu_to_le64(BCH_SB_SECTOR + sb_size);
 }
 
-int cmd_migrate_superblock(int argc, char *argv[])
+int rust_migrate_superblock(const char *dev_path, u64 sb_offset)
 {
-	static const struct option longopts[] = {
-		{ "dev",		required_argument,	NULL, 'd' },
-		{ "offset",		required_argument,	NULL, 'o' },
-		{ "help",		no_argument,		NULL, 'h' },
-		{ NULL }
-	};
 	darray_const_str devs = {};
-	u64 sb_offset = 0;
-	int opt, ret;
+	darray_push(&devs, dev_path);
+	int ret;
 
-	while ((opt = getopt_long(argc, argv, "d:o:h", longopts, NULL)) != -1)
-		switch (opt) {
-			case 'd':
-				darray_push(&devs, optarg);
-				break;
-			case 'o':
-				ret = kstrtou64(optarg, 10, &sb_offset);
-				if (ret)
-					die("Invalid offset");
-				break;
-			case 'h':
-				migrate_superblock_usage();
-				exit(EXIT_SUCCESS);
-		}
-
-	if (!devs.nr)
-		die("Please specify a device");
-
-	if (!sb_offset)
-		die("Please specify offset of existing superblock");
-
-	int fd = xopen(devs.data[0], O_RDWR | O_EXCL);
+	int fd = xopen(dev_path, O_RDWR | O_EXCL);
 	struct bch_sb *sb = __bch2_super_read(fd, sb_offset);
 	unsigned sb_size;
 	/* Check for invocation errors early */
@@ -519,5 +407,6 @@ int cmd_migrate_superblock(int argc, char *argv[])
 
 	bch2_fs_exit(c);
 #endif
+	darray_exit(&devs);
 	return 0;
 }

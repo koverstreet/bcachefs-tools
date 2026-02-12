@@ -364,7 +364,7 @@ pub extern "C" fn bch2_format_for_device_add(
 }
 
 /// Mirrors the C `format_opts_default()` inline function.
-fn format_opts_default() -> c::format_opts {
+pub(crate) fn format_opts_default() -> c::format_opts {
     // Try to load bcachefs module to detect kernel version
     let _ = std::process::Command::new("modprobe")
         .arg("bcachefs")

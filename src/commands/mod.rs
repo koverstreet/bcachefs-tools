@@ -13,6 +13,7 @@ pub mod key;
 pub mod kill_btree_node;
 pub mod list;
 pub mod list_journal;
+pub mod migrate;
 pub mod mount;
 pub mod opts;
 pub mod reconcile;
@@ -38,6 +39,7 @@ pub use device::{
 pub use key::{cmd_unlock, cmd_set_passphrase, cmd_remove_passphrase};
 pub use list::list;
 pub use list_journal::cmd_list_journal;
+pub use migrate::{cmd_migrate, cmd_migrate_superblock};
 pub use mount::mount;
 pub use dump::cmd_dump;
 pub use dump::cmd_undump;
@@ -115,8 +117,7 @@ pub fn build_cli() -> Command {
         .subcommand(list_journal::Cli::command().name("list_journal"))
         .subcommand(Command::new("migrate")
             .about("Migrate an existing ext2/3/4 filesystem to bcachefs in place"))
-        .subcommand(Command::new("migrate-superblock")
-            .about("Migrate superblock to standard location"))
+        .subcommand(migrate::MigrateSuperblockCli::command().name("migrate-superblock"))
         .subcommand(Command::new("reconcile").about("Reconcile filesystem data")
             .subcommand(reconcile::StatusCli::command().name("status"))
             .subcommand(reconcile::WaitCli::command().name("wait")))

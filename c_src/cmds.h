@@ -9,9 +9,6 @@
 
 #include "tools-util.h"
 
-int cmd_migrate(int argc, char *argv[]);
-int cmd_migrate_superblock(int argc, char *argv[]);
-
 int cmd_fusemount(int argc, char *argv[]);
 
 #endif /* _CMDS_H */

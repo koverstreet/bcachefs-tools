@@ -8,12 +8,14 @@ mod wrappers;
 mod device_scan;
 mod http;
 
-use std::{
-    ffi::{c_char, CString},
-    process::{ExitCode, Termination},
-};
+use std::process::{ExitCode, Termination};
+
+#[cfg(feature = "fuse")]
+use std::ffi::{c_char, CString};
 
 use bch_bindgen::c;
+
+#[cfg(feature = "fuse")]
 use log::debug;
 
 #[derive(Debug)]
@@ -91,12 +93,14 @@ fn group_usage(group: &str) {
     }
 }
 
+#[cfg(feature = "fuse")]
 fn c_command(args: Vec<String>, symlink_cmd: Option<&str>) -> ExitCode {
     let r = handle_c_command(args, symlink_cmd);
     debug!("return code from C command: {r}");
     ExitCode::from(r as u8)
 }
 
+#[cfg(feature = "fuse")]
 fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
     let cmd = match symlink_cmd {
         Some(s) => s.to_string(),
@@ -115,9 +119,6 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
     // The C functions will mutate argv. It shouldn't be used after this block.
     unsafe {
         match cmd.as_str() {
-            "migrate"           => c::cmd_migrate(argc, argv),
-            "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
-            #[cfg(feature = "fuse")]
             "fusemount"         => c::cmd_fusemount(argc, argv),
             _ => { println!("Unknown command {cmd}"); bcachefs_usage(); 1 }
         }
@@ -219,6 +220,8 @@ fn main() -> ExitCode {
             Some("wait") => commands::cmd_reconcile_wait(args[2..].to_vec()).report(),
             _ => { group_usage("reconcile"); ExitCode::from(1) }
         },
+        "migrate" => commands::cmd_migrate(args[1..].to_vec()).report(),
+        "migrate-superblock" => commands::cmd_migrate_superblock(args[1..].to_vec()).report(),
         "kill_btree_node" => commands::cmd_kill_btree_node(args[1..].to_vec()).report(),
         "dump" => commands::cmd_dump(args[1..].to_vec()).report(),
         "undump" => commands::cmd_undump(args[1..].to_vec()).report(),
@@ -230,6 +233,12 @@ fn main() -> ExitCode {
         "set-passphrase" => commands::cmd_set_passphrase(args[1..].to_vec()).report(),
         "reflink-option-propagate" => commands::cmd_reflink_option_propagate(args[1..].to_vec()).report(),
         "unlock" => commands::cmd_unlock(args[1..].to_vec()).report(),
-        _ => c_command(args, symlink_cmd),
+        #[cfg(feature = "fuse")]
+        "fusemount" => c_command(args, symlink_cmd),
+        _ => {
+            println!("Unknown command {cmd}");
+            bcachefs_usage();
+            ExitCode::from(1)
+        }
     }
 }
