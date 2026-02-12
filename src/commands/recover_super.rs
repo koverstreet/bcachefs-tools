@@ -227,17 +227,15 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     let bucket_size = u16::from_le(m.bucket_size) as u32;
     let sb_max_size = 1u32 << sb.layout.sb_max_size_bits;
 
-    unsafe {
-        c::bch2_sb_layout_init(
-            &mut (*src_sb.sb).layout,
-            block_size << 9,
-            bucket_size << 9,
-            sb_max_size,
-            c::BCH_SB_SECTOR as u64,
-            dev_size >> 9,
-            false,
-        );
-    }
+    super_io::sb_layout_init(
+        unsafe { &mut (*src_sb.sb).layout },
+        block_size << 9,
+        bucket_size << 9,
+        sb_max_size,
+        c::BCH_SB_SECTOR as u64,
+        dev_size >> 9,
+        false,
+    );
 
     // Copy to owned buffer; src_sb's Drop will free the C allocation
     let bytes = super_io::vstruct_bytes_sb(src_sb.sb());

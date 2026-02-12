@@ -300,17 +300,15 @@ pub extern "C" fn bch2_format(
             dev.sb_end = size_sectors;
         }
 
-        unsafe {
-            c::bch2_sb_layout_init(
-                &mut (*sb.sb).layout,
-                fs_opts.block_size as u32,
-                dev.opts.bucket_size,
-                opts.superblock_size,
-                dev.sb_offset,
-                dev.sb_end,
-                opts.no_sb_at_end,
-            );
-        }
+        super::super_io::sb_layout_init(
+            unsafe { &mut (*sb.sb).layout },
+            fs_opts.block_size as u32,
+            dev.opts.bucket_size,
+            opts.superblock_size,
+            dev.sb_offset,
+            dev.sb_end,
+            opts.no_sb_at_end,
+        );
 
         let fd = unsafe { (*dev.bdev).bd_fd };
 

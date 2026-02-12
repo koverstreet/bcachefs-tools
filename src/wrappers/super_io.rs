@@ -135,3 +135,57 @@ pub const BCHFS_MAGIC: [u8; 16] = [
 
 /// Default superblock size in 512-byte sectors
 pub const SUPERBLOCK_SIZE_DEFAULT: u32 = 2048;
+
+/// Initialize superblock layout with primary and backup superblock positions.
+///
+/// `block_size` and `bucket_size` are in bytes.
+/// `sb_size`, `sb_start`, and `sb_end` are in 512-byte sectors.
+pub fn sb_layout_init(
+    l: &mut c::bch_sb_layout,
+    block_size: u32,
+    bucket_size: u32,
+    sb_size: u32,
+    sb_start: u64,
+    sb_end: u64,
+    no_sb_at_end: bool,
+) {
+    *l = unsafe { std::mem::zeroed() };
+
+    l.magic.b = BCHFS_MAGIC;
+    l.layout_type = 0;
+    l.nr_superblocks = 2;
+    l.sb_max_size_bits = sb_size.ilog2() as u8;
+
+    // Create two superblocks in the allowed range
+    let mut sb_pos = sb_start;
+    for i in 0..l.nr_superblocks as usize {
+        if sb_pos != c::BCH_SB_SECTOR as u64 {
+            let align = (block_size >> 9) as u64;
+            sb_pos = (sb_pos + align - 1) / align * align;
+        }
+
+        l.sb_offset[i] = sb_pos.to_le();
+        sb_pos += sb_size as u64;
+    }
+
+    if sb_pos > sb_end {
+        panic!(
+            "insufficient space for superblocks: start {} end {} > {} size {}",
+            sb_start, sb_pos, sb_end, sb_size
+        );
+    }
+
+    // Also create a backup superblock at the end of the disk:
+    //
+    // If we're not creating a superblock at the default offset, it
+    // means we're being run from the migrate tool and we could be
+    // overwriting existing data if we write to the end of the disk
+    if sb_start == c::BCH_SB_SECTOR as u64 && !no_sb_at_end {
+        let sb_max_size = 1u64 << l.sb_max_size_bits;
+        let bucket_sectors = (bucket_size >> 9) as u64;
+        let backup_sb = (sb_end - sb_max_size) / bucket_sectors * bucket_sectors;
+        let idx = l.nr_superblocks as usize;
+        l.sb_offset[idx] = backup_sb.to_le();
+        l.nr_superblocks += 1;
+    }
+}

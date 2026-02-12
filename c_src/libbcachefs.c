@@ -14,53 +14,6 @@
 #include "alloc/buckets.h"
 #include "btree/cache.h"
 
-#include "sb/io.h"
-
-void bch2_sb_layout_init(struct bch_sb_layout *l,
-			 unsigned block_size,
-			 unsigned bucket_size,
-			 unsigned sb_size,
-			 u64 sb_start, u64 sb_end,
-			 bool no_sb_at_end)
-{
-	u64 sb_pos = sb_start;
-	unsigned i;
-
-	memset(l, 0, sizeof(*l));
-
-	l->magic		= BCHFS_MAGIC;
-	l->layout_type		= 0;
-	l->nr_superblocks	= 2;
-	l->sb_max_size_bits	= ilog2(sb_size);
-
-	/* Create two superblocks in the allowed range: */
-	for (i = 0; i < l->nr_superblocks; i++) {
-		if (sb_pos != BCH_SB_SECTOR)
-			sb_pos = round_up(sb_pos, block_size >> 9);
-
-		l->sb_offset[i] = cpu_to_le64(sb_pos);
-		sb_pos += sb_size;
-	}
-
-	if (sb_pos > sb_end)
-		die("insufficient space for superblocks: start %llu end %llu > %llu size %u",
-		    sb_start, sb_pos, sb_end, sb_size);
-
-	/*
-	 * Also create a backup superblock at the end of the disk:
-	 *
-	 * If we're not creating a superblock at the default offset, it
-	 * means we're being run from the migrate tool and we could be
-	 * overwriting existing data if we write to the end of the disk:
-	 */
-	if (sb_start == BCH_SB_SECTOR && !no_sb_at_end) {
-		u64 backup_sb = sb_end - (1 << l->sb_max_size_bits);
-
-		backup_sb = rounddown(backup_sb, bucket_size >> 9);
-		l->sb_offset[l->nr_superblocks++] = cpu_to_le64(backup_sb);
-	}
-}
-
 u64 bch2_pick_bucket_size(struct bch_opts opts, dev_opts_list devs)
 {
 	/* Hard minimum: bucket must hold a btree node */
