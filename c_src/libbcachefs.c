@@ -4,88 +4,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include <linux/mm.h>
-
 #include "libbcachefs.h"
 #include "tools-util.h"
 
 #include "bcachefs.h"
-
-#include "alloc/buckets.h"
-#include "btree/cache.h"
-
-u64 bch2_pick_bucket_size(struct bch_opts opts, dev_opts_list devs)
-{
-	/* Hard minimum: bucket must hold a btree node */
-	u64 bucket_size = opts.block_size;
-	if (opt_defined(opts, btree_node_size))
-		bucket_size = max_t(u64, bucket_size, opts.btree_node_size);
-
-	u64 min_dev_size = BCH_MIN_NR_NBUCKETS * bucket_size;
-	darray_for_each(devs, i)
-		if (i->fs_size < min_dev_size)
-			die("cannot format %s, too small (%llu bytes, min %llu)",
-			    i->path, i->fs_size, min_dev_size);
-
-	u64 total_fs_size = 0;
-	darray_for_each(devs, i)
-		total_fs_size += i->fs_size;
-
-	/*
-	 * Soft preferences below — these set the ideal bucket size,
-	 * but dev_bucket_size_clamp() may reduce per-device to keep
-	 * bucket counts reasonable on small devices:
-	 */
-
-	/* btree_node_size isn't calculated yet; use a reasonable floor: */
-	bucket_size = max(bucket_size, 256ULL << 10);
-
-	/*
-	 * Avoid fragmenting encoded (checksummed/compressed) extents
-	 * when they're moved — prefer buckets large enough for several
-	 * max-size extents:
-	 */
-	bucket_size = max(bucket_size, (u64) opt_get(opts, encoded_extent_max) * 4);
-
-	/*
-	 * Prefer larger buckets up to 2MB — reduces allocator overhead.
-	 * Scales linearly with total filesystem size, reaching 2MB at 2TB:
-	 */
-	u64 perf_lower_bound = min(2ULL << 20, total_fs_size / (1ULL << 20));
-	bucket_size = max(bucket_size, perf_lower_bound);
-
-	/*
-	 * Upper bound on bucket count: ensure we can fsck with available
-	 * memory.  Large fudge factor to allow for other fsck processes
-	 * and devices being added after creation:
-	 */
-	struct sysinfo info;
-	si_meminfo(&info);
-	u64 mem_available_for_fsck = info.totalram / 8;
-	u64 buckets_can_fsck = mem_available_for_fsck / (sizeof(struct bucket) * 1.5);
-	u64 mem_lower_bound = roundup_pow_of_two(total_fs_size / buckets_can_fsck);
-	bucket_size = max(bucket_size, mem_lower_bound);
-
-	bucket_size = roundup_pow_of_two(bucket_size);
-
-	return bucket_size;
-}
-
-void bch2_check_bucket_size(struct bch_opts opts, struct dev_opts *dev)
-{
-	if (dev->opts.bucket_size < opts.block_size)
-		die("Bucket size (%u) cannot be smaller than block size (%u)",
-		    dev->opts.bucket_size, opts.block_size);
-
-	if (opt_defined(opts, btree_node_size) &&
-	    dev->opts.bucket_size < opts.btree_node_size)
-		die("Bucket size (%u) cannot be smaller than btree node size (%u)",
-		    dev->opts.bucket_size, opts.btree_node_size);
-
-	if (dev->nbuckets < BCH_MIN_NR_NBUCKETS)
-		die("Not enough buckets: %llu, need %u (bucket size %u)",
-		    dev->nbuckets, BCH_MIN_NR_NBUCKETS, dev->opts.bucket_size);
-}
 
 /* option parsing */
 

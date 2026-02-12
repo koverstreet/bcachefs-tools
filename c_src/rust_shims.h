@@ -33,6 +33,12 @@ __u64 rust_bch_sb_features_all(void);
 struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb);
 
 /*
+ * Size of struct bucket — used by pick_bucket_size to estimate fsck
+ * memory requirements. Shim needed because the struct has bitfields.
+ */
+size_t rust_sizeof_bucket(void);
+
+/*
  * Compute the total byte size of a variable-length superblock struct.
  * Wraps the vstruct_bytes() macro.
  */

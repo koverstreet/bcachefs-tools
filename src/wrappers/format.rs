@@ -106,9 +106,7 @@ pub extern "C" fn bch2_format(
     }
 
     // Calculate bucket sizes
-    // Copy devs for the call — bch2_pick_bucket_size takes by value (C semantics)
-    let devs_copy = unsafe { std::ptr::read(&devs) };
-    let fs_bucket_size = unsafe { c::bch2_pick_bucket_size(fs_opts, devs_copy) };
+    let fs_bucket_size = pick_bucket_size(&fs_opts, dev_slice);
 
     for dev in dev_slice.iter_mut() {
         let opts = &mut dev.opts;
@@ -120,7 +118,7 @@ pub extern "C" fn bch2_format(
 
     for dev in dev_slice.iter_mut() {
         dev.nbuckets = dev.fs_size / dev.opts.bucket_size as u64;
-        unsafe { c::bch2_check_bucket_size(fs_opts, dev) };
+        check_bucket_size(&fs_opts, dev);
     }
 
     // Calculate btree node size
@@ -424,5 +422,109 @@ fn rounddown_pow_of_two(v: u64) -> u64 {
         return 0;
     }
     1u64 << (63 - v.leading_zeros())
+}
+
+/// Pick the filesystem-wide bucket size based on device sizes and options.
+///
+/// Returns the bucket size in bytes.
+pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[c::dev_opts]) -> u64 {
+    // Hard minimum: bucket must hold a btree node
+    let mut bucket_size = opts.block_size as u64;
+    if opt_defined!(opts, btree_node_size) != 0 {
+        bucket_size = bucket_size.max(opts.btree_node_size as u64);
+    }
+
+    let min_dev_size = c::BCH_MIN_NR_NBUCKETS as u64 * bucket_size;
+    for dev in devs {
+        if dev.fs_size < min_dev_size {
+            let path = if dev.path.is_null() {
+                "<unknown>".to_string()
+            } else {
+                unsafe { CStr::from_ptr(dev.path) }.to_string_lossy().into_owned()
+            };
+            panic!(
+                "cannot format {}, too small ({} bytes, min {})",
+                path, dev.fs_size, min_dev_size
+            );
+        }
+    }
+
+    let total_fs_size: u64 = devs.iter().map(|d| d.fs_size).sum();
+
+    // Soft preferences below — these set the ideal bucket size,
+    // but dev_bucket_size_clamp() may reduce per-device to keep
+    // bucket counts reasonable on small devices
+
+    // btree_node_size isn't calculated yet; use a reasonable floor
+    bucket_size = bucket_size.max(256 << 10);
+
+    // Avoid fragmenting encoded (checksummed/compressed) extents
+    // when they're moved — prefer buckets large enough for several
+    // max-size extents
+    bucket_size = bucket_size.max(opt_get!(opts, encoded_extent_max) as u64 * 4);
+
+    // Prefer larger buckets up to 2MB — reduces allocator overhead.
+    // Scales linearly with total filesystem size, reaching 2MB at 2TB
+    let perf_lower_bound = (2u64 << 20).min(total_fs_size / (1u64 << 20));
+    bucket_size = bucket_size.max(perf_lower_bound);
+
+    // Upper bound on bucket count: ensure we can fsck with available
+    // memory. Large fudge factor to allow for other fsck processes
+    // and devices being added after creation
+    let mut info: libc::sysinfo = unsafe { std::mem::zeroed() };
+    if unsafe { libc::sysinfo(&mut info) } != 0 {
+        panic!("sysinfo() failed");
+    }
+    let total_ram = info.totalram as u64 * info.mem_unit as u64;
+    let mem_available_for_fsck = total_ram / 8;
+    let bucket_struct_size = unsafe { c::rust_sizeof_bucket() } as u64;
+    let buckets_can_fsck = mem_available_for_fsck / (bucket_struct_size * 3 / 2);
+    let mem_lower_bound = (total_fs_size / buckets_can_fsck).next_power_of_two();
+    bucket_size = bucket_size.max(mem_lower_bound);
+
+    bucket_size.next_power_of_two()
+}
+
+/// Validate that a device's bucket size is consistent with filesystem options.
+///
+/// Panics on validation failure (matches C `die()` behavior).
+pub fn check_bucket_size(opts: &c::bch_opts, dev: &c::dev_opts) {
+    if dev.opts.bucket_size < opts.block_size as u32 {
+        panic!(
+            "Bucket size ({}) cannot be smaller than block size ({})",
+            dev.opts.bucket_size, opts.block_size
+        );
+    }
+
+    if opt_defined!(opts, btree_node_size) != 0
+        && dev.opts.bucket_size < opts.btree_node_size
+    {
+        panic!(
+            "Bucket size ({}) cannot be smaller than btree node size ({})",
+            dev.opts.bucket_size, opts.btree_node_size
+        );
+    }
+
+    if dev.nbuckets < c::BCH_MIN_NR_NBUCKETS as u64 {
+        panic!(
+            "Not enough buckets: {}, need {} (bucket size {})",
+            dev.nbuckets,
+            c::BCH_MIN_NR_NBUCKETS,
+            dev.opts.bucket_size
+        );
+    }
+}
+
+/// C-compatible wrapper for cmd_migrate.c.
+#[no_mangle]
+pub extern "C" fn bch2_pick_bucket_size(opts: c::bch_opts, devs: c::dev_opts_list) -> u64 {
+    let dev_slice = unsafe { std::slice::from_raw_parts(devs.data, devs.nr) };
+    pick_bucket_size(&opts, dev_slice)
+}
+
+/// C-compatible wrapper for cmd_migrate.c.
+#[no_mangle]
+pub extern "C" fn bch2_check_bucket_size(opts: c::bch_opts, dev: *mut c::dev_opts) {
+    check_bucket_size(&opts, unsafe { &*dev });
 }
 
