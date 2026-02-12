@@ -9,10 +9,6 @@
 
 #include "tools-util.h"
 
-int image_cmds(int argc, char *argv[]);
-
-int cmd_kill_btree_node(int argc, char *argv[]);
-
 int cmd_migrate(int argc, char *argv[]);
 int cmd_migrate_superblock(int argc, char *argv[]);
 

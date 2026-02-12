@@ -7,7 +7,6 @@
 #include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <getopt.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -19,13 +18,12 @@
 
 #include <uuid/uuid.h>
 
-#include "cmds.h"
+#include "bcachefs.h"
+
 #include "rust_shims.h"
 #include "posix_to_bcachefs.h"
 #include "libbcachefs.h"
 #include "crypto.h"
-
-#include "bcachefs.h"
 
 #include "alloc/accounting.h"
 #include "fs/inode.h"
@@ -407,7 +405,7 @@ static int finish_image(struct bch_fs *c,
  * After migrating metadata, the image file is trimmed and the temporary
  * metadata device is dropped.
  */
-static void image_create(struct bch_opt_strs	fs_opt_strs,
+void rust_image_create(struct bch_opt_strs	fs_opt_strs,
 			 struct bch_opts	fs_opts,
 			 struct format_opts	format_opts,
 			 struct dev_opts	dev_opts,
@@ -506,146 +504,7 @@ err:
 	exit(EXIT_FAILURE);
 }
 
-static void image_create_usage(void)
-{
-	puts("bcachefs image create - create a minimum size, reproducible filesystem image\n"
-	     "Usage: bcachefs image create [OPTION]... <file>\n"
-	     "\n"
-	     "Options:\n"
-	     "      --source=path            Source directory to be used as content for the new image\n"
-	     "  -a, --keep-alloc             Include allocation info in the filesystem\n"
-	     "                               6.16+ regenerates alloc info on first rw mount\n"
-	     "      --encrypted              Enable whole filesystem encryption (chacha20/poly1305)\n"
-	     "  -L, --fs_label=label\n"
-	     "  -U, --uuid=uuid\n"
-	     "      --superblock_size=size\n"
-	     "      --bucket_size=size\n"
-	     "      --fs_size=size           Expected size of device image will be used on, hint for bucket size\n"
-	     "      --version=version        Create filesystem with specified on disk format version instead of the latest\n"
-	     "  -f, --force\n"
-	     "  -q, --quiet                  Only print errors\n"
-	     "  -v, --verbose                Verbose filesystem initialization\n"
-	     "  -h, --help                   Display this help and exit\n"
-	     "\n"
-	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
-	exit(EXIT_SUCCESS);
-}
-
-static int cmd_image_create(int argc, char *argv[])
-{
-	static const struct option longopts[] = {
-		{ "source",		required_argument,	NULL, 's' },
-		{ "keep-alloc",		no_argument,		NULL, 'a' },
-		{ "encrypted",		required_argument,	NULL, 'e' },
-		{ "fs_label",		required_argument,	NULL, 'L' },
-		{ "uuid",		required_argument,	NULL, 'U' },
-		{ "superblock_size",	required_argument,	NULL, 'S' },
-		{ "version",		required_argument,	NULL, 'V' },
-		{ "force",		no_argument,		NULL, 'f' },
-		{ "quiet",		no_argument,		NULL, 'q' },
-		{ "verbose",		no_argument,		NULL, 'v' },
-		{ "help",		no_argument,		NULL, 'h' },
-		{ NULL }
-	};
-	struct format_opts opts	= format_opts_default();
-	struct dev_opts dev_opts = dev_opts_default();
-	bool keep_alloc = false, force = false;
-	unsigned verbosity = 1;
-	struct bch_opt_strs fs_opt_strs = {};
-	struct bch_opts fs_opts = bch2_opts_empty();
-
-	opts.superblock_size = 128;	/* 64k */
-
-	while (true) {
-		const struct bch_option *opt =
-			bch2_cmdline_opt_parse(argc, argv, OPT_FORMAT|OPT_FS|OPT_DEVICE);
-		if (opt) {
-			unsigned id = opt - bch2_opt_table;
-			u64 v;
-			struct printbuf err = PRINTBUF;
-			int ret = bch2_opt_parse(NULL, opt, optarg, &v, &err);
-			if (ret == -BCH_ERR_option_needs_open_fs) {
-				fs_opt_strs.by_id[id] = strdup(optarg);
-				continue;
-			}
-			if (ret)
-				die("invalid option: %s", err.buf);
-
-			if (opt->flags & OPT_DEVICE)
-				bch2_opt_set_by_id(&dev_opts.opts, id, v);
-			else if (opt->flags & OPT_FS)
-				bch2_opt_set_by_id(&fs_opts, id, v);
-			else
-				die("got bch_opt of wrong type %s", opt->attr.name);
-
-			continue;
-		}
-
-		int optid = getopt_long(argc, argv,
-					"s:aeL:U:S:fqvh",
-					longopts, NULL);
-		if (optid == -1)
-			break;
-
-		switch (optid) {
-		case 's':
-			opts.source = optarg;
-			break;
-		case 'a':
-			keep_alloc = true;
-			break;
-		case 'L':
-			opts.label = optarg;
-			break;
-		case 'U':
-			if (uuid_parse(optarg, opts.uuid.b))
-				die("Bad uuid");
-			break;
-		case 'S':
-			if (bch2_strtouint_h(optarg, &opts.superblock_size))
-				die("invalid filesystem size");
-
-			opts.superblock_size >>= 9;
-			break;
-		case 'f':
-			force = true;
-			break;
-		case 'q':
-			verbosity = 0;
-			break;
-		case 'v':
-			verbosity++;
-			break;
-		case 'V':
-			opts.version = version_parse(optarg);
-			break;
-		case 'h':
-			image_create_usage();
-			exit(EXIT_SUCCESS);
-			break;
-		case '?':
-			exit(EXIT_FAILURE);
-			break;
-		default:
-			die("getopt ret %i %c", optid, optid);
-		}
-	}
-	args_shift(optind);
-
-	if (argc != 1) {
-		image_create_usage();
-		die("Please supply a filename for the new image");
-	}
-
-	dev_opts.path = argv[0];
-
-	image_create(fs_opt_strs, fs_opts, opts, dev_opts, opts.source,
-		     keep_alloc, verbosity);
-	bch2_opt_strs_free(&fs_opt_strs);
-	return 0;
-}
-
-static int image_update(const char *src_path, const char *dst_image,
+int rust_image_update(const char *src_path, const char *dst_image,
 			bool			keep_alloc,
 			unsigned		verbosity)
 {
@@ -746,94 +605,3 @@ err:
 	return ret ? EXIT_FAILURE : EXIT_SUCCESS;
 }
 
-static void image_update_usage(void)
-{
-	puts("bcachefs image update - update an image file, minimizing changes\n"
-	     "Usage: bcachefs image update [OPTION]... <file>\n"
-	     "\n"
-	     "Options:\n"
-	     "      --source=path            Source directory to be used as content for the new image\n"
-	     "  -a, --keep-alloc             Include allocation info in the filesystem\n"
-	     "                               6.16+ regenerates alloc info on first rw mount\n"
-	     "  -q, --quiet                  Only print errors\n"
-	     "  -v, --verbose                Verbose filesystem initialization\n"
-	     "  -h, --help                   Display this help and exit\n"
-	     "\n"
-	     "Report bugs to <linux-bcachefs@vger.kernel.org>");
-	exit(EXIT_SUCCESS);
-}
-
-static int cmd_image_update(int argc, char *argv[])
-{
-	static const struct option longopts[] = {
-		{ "source",		required_argument,	NULL, 's' },
-		{ "keep-alloc",		no_argument,		NULL, 'a' },
-		{ "quiet",		no_argument,		NULL, 'q' },
-		{ "verbose",		no_argument,		NULL, 'v' },
-		{ "help",		no_argument,		NULL, 'h' },
-		{ NULL }
-	};
-	const char *source = NULL;
-	bool keep_alloc = false;
-	unsigned verbosity = 1;
-	int opt;
-
-	while ((opt = getopt_long(argc, argv, "s:aqvh",
-				  longopts, NULL)) != -1)
-		switch (opt) {
-		case 's':
-			source = optarg;
-			break;
-		case 'a':
-			keep_alloc = true;
-			break;
-		case 'q':
-			verbosity = 0;
-			break;
-		case 'v':
-			verbosity++;
-			break;
-		case 'h':
-			image_update_usage();
-			exit(EXIT_SUCCESS);
-		default:
-			die("getopt ret %i %c", opt, opt);
-		}
-	args_shift(optind);
-
-	if (argc != 1) {
-		image_update_usage();
-		die("Please supply a filename");
-	}
-
-	return image_update(source, argv[0],
-			    keep_alloc, verbosity);
-}
-
-static int image_usage(void)
-{
-	puts("bcachefs image - commands for creating and updating image files\n"
-	     "Usage: bcachefs image <create|update> [OPTION]... <file>\n"
-            "\n"
-            "Commands:\n"
-            "  create                       Create a minimally-sized disk image\n"
-            "  update                       Update a disk image, minimizing changes\n"
-            "\n"
-            "Report bugs to <linux-bcachefs@vger.kernel.org>");
-	exit(EXIT_SUCCESS);
-}
-
-int image_cmds(int argc, char *argv[])
-{
-	char *cmd = pop_cmd(&argc, argv);
-
-	if (argc < 1)
-		return image_usage();
-	if (!strcmp(cmd, "create"))
-		return cmd_image_create(argc, argv);
-	if (!strcmp(cmd, "update"))
-		return cmd_image_update(argc, argv);
-
-	image_usage();
-	return -EINVAL;
-}

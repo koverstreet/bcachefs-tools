@@ -17,14 +17,14 @@ use crate::wrappers::sysfs;
 
 const BCH_REPLICAS_MAX: u32 = 4;
 
-fn metadata_version_current() -> u32 {
+pub(crate) fn metadata_version_current() -> u32 {
     c::bcachefs_metadata_version::bcachefs_metadata_version_max as u32 - 1
 }
 
 /// Capture filtered opts usage as a Rust String.
 /// flags_all: all these bits must be set in the option.
 /// flags_none: none of these bits may be set in the option.
-fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
+pub(crate) fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
     let ptr = unsafe { c::rust_opts_usage_to_str(flags_all, flags_none) };
     if ptr.is_null() {
         return String::new();
@@ -88,7 +88,7 @@ struct DevConfig {
 }
 
 /// Get the value for a long option, consuming the next argv entry if needed.
-fn take_opt_value<'a>(
+pub(crate) fn take_opt_value<'a>(
     inline_val: Option<&'a str>,
     argv: &'a [String],
     i: &mut usize,
@@ -107,7 +107,7 @@ fn take_opt_value<'a>(
 
 /// Get the value for a short option, consuming the next argv entry if needed.
 /// If the arg has chars after the flag letter (e.g. "-Lfoo"), use those.
-fn take_short_value(arg: &str, argv: &[String], i: &mut usize, flag: char) -> Result<String> {
+pub(crate) fn take_short_value(arg: &str, argv: &[String], i: &mut usize, flag: char) -> Result<String> {
     if arg.len() > 2 {
         Ok(arg[2..].to_string())
     } else {

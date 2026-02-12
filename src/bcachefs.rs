@@ -115,7 +115,6 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
     // The C functions will mutate argv. It shouldn't be used after this block.
     unsafe {
         match cmd.as_str() {
-            "image"             => c::image_cmds(argc, argv),
             "migrate"           => c::cmd_migrate(argc, argv),
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
             #[cfg(feature = "fuse")]
@@ -201,6 +200,11 @@ fn main() -> ExitCode {
             let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
             commands::cmd_fsck(argv).report()
         }
+        "image" => match args.get(2).map(|s| s.as_str()) {
+            Some("create") => commands::cmd_image_create(args[2..].to_vec()).report(),
+            Some("update") => commands::cmd_image_update(args[2..].to_vec()).report(),
+            _ => { group_usage("image"); ExitCode::from(1) }
+        },
         "fs" => match args.get(2).map(|s| s.as_str()) {
             Some("timestats") => commands::timestats(args[2..].to_vec()).report(),
             Some("top") => commands::top(args[2..].to_vec()).report(),

@@ -7,6 +7,7 @@ pub mod device;
 pub mod dump;
 pub mod format;
 pub mod fs_usage;
+pub mod image;
 pub mod fsck;
 pub mod key;
 pub mod kill_btree_node;
@@ -42,6 +43,7 @@ pub use dump::cmd_dump;
 pub use dump::cmd_undump;
 pub use kill_btree_node::cmd_kill_btree_node;
 pub use format::cmd_format;
+pub use image::{cmd_image_create, cmd_image_update};
 pub use fsck::cmd_fsck;
 pub use reconcile::{cmd_reconcile_status, cmd_reconcile_wait};
 pub use recover_super::cmd_recover_super;
@@ -108,7 +110,7 @@ pub fn build_cli() -> Command {
         .subcommand(fsck::FsckCli::command().name("fsck"))
         .subcommand(Command::new("image").about("Filesystem image commands")
             .subcommand(Command::new("create").about("Create a filesystem image"))
-            .subcommand(Command::new("update").about("Update a filesystem image")))
+            .subcommand(image::ImageUpdateCli::command().name("update")))
         .subcommand(kill_btree_node::KillBtreeNodeCli::command().name("kill_btree_node"))
         .subcommand(list_journal::Cli::command().name("list_journal"))
         .subcommand(Command::new("migrate")
