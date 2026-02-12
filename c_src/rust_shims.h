@@ -91,4 +91,17 @@ int rust_device_resize_offline(struct bch_fs *c, __u64 size);
  */
 int rust_device_resize_journal_offline(struct bch_fs *c, __u64 size);
 
+/*
+ * Collect all non-NULL journal_replay entries from c->journal_entries
+ * (genradix) into a flat array. Caller must free entries.
+ */
+struct journal_replay;
+
+struct rust_journal_entries {
+	struct journal_replay	**entries;
+	size_t			nr;
+};
+
+struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c);
+
 #endif /* _RUST_SHIMS_H */

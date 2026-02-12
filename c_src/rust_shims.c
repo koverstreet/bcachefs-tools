@@ -9,6 +9,8 @@
 #include "libbcachefs/opts.h"
 #include "libbcachefs/init/dev.h"
 #include "libbcachefs/journal/init.h"
+#include "libbcachefs/journal/read.h"
+#include "libbcachefs/journal/seq_blacklist.h"
 #include "libbcachefs/sb/io.h"
 #include "libbcachefs/sb/members.h"
 #include "libbcachefs/alloc/buckets_types.h"
@@ -246,5 +248,30 @@ int rust_device_resize_journal_offline(struct bch_fs *c, u64 size)
 		fprintf(stderr, "resize error: %s\n", bch2_err_str(ret));
 
 	enumerated_ref_put(&resize->io_ref[READ], 0);
+	return ret;
+}
+
+struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
+{
+	struct rust_journal_entries ret = { NULL, 0 };
+	struct genradix_iter iter;
+	struct journal_replay **_p;
+	size_t count = 0;
+
+	genradix_for_each(&c->journal_entries, iter, _p)
+		if (*_p)
+			count++;
+
+	if (!count)
+		return ret;
+
+	ret.entries = malloc(count * sizeof(*ret.entries));
+	if (!ret.entries)
+		die("malloc");
+
+	genradix_for_each(&c->journal_entries, iter, _p)
+		if (*_p)
+			ret.entries[ret.nr++] = *_p;
+
 	return ret;
 }

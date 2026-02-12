@@ -285,6 +285,7 @@ fn main() {
         .allowlist_function("rust_bch_sb_features_all")
         .allowlist_function("bbpos_range_parse")
         .allowlist_function("bbpos_parse")
+        .allowlist_function("rust_collect_journal_entries")
         .allowlist_function("get_blocksize")
         .allowlist_function("bch_sb_crypt_init")
         .allowlist_function("bdev_nonrot")
