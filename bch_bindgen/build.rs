@@ -283,6 +283,8 @@ fn main() {
         .allowlist_function("rust_set_bch_sb_.*")
         .allowlist_function("rust_set_bch_member_.*")
         .allowlist_function("rust_bch_sb_features_all")
+        .allowlist_function("bbpos_range_parse")
+        .allowlist_function("bbpos_parse")
         .allowlist_function("get_blocksize")
         .allowlist_function("bch_sb_crypt_init")
         .allowlist_function("bdev_nonrot")

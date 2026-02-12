@@ -10,6 +10,8 @@
 #include "init/fs.h"
 #include "init/passes.h"
 #include "fs/check.h"
+#include "journal/read.h"
+#include "journal/seq_blacklist.h"
 #include "sb/io.h"
 
 #include "alloc/disk_groups.h"
