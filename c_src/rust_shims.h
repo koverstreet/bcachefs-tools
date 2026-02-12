@@ -145,6 +145,20 @@ int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
 int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
 
 /*
+ * Kill btree nodes by walking the btree and pwriting zeroes.
+ * Returns > 0 on success, 0 if node not found, < 0 on error.
+ */
+struct rust_kill_node {
+	unsigned	btree;
+	unsigned	level;
+	__u64		idx;
+};
+
+int rust_kill_btree_nodes(struct bch_fs *c,
+			  struct rust_kill_node *nodes, size_t nr_nodes,
+			  int dev_idx);
+
+/*
  * Superblock display with device names — scans for devices by UUID,
  * prints member info with device model and name.
  */

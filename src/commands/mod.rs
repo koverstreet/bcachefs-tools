@@ -9,6 +9,7 @@ pub mod format;
 pub mod fs_usage;
 pub mod fsck;
 pub mod key;
+pub mod kill_btree_node;
 pub mod list;
 pub mod list_journal;
 pub mod mount;
@@ -39,6 +40,7 @@ pub use list_journal::cmd_list_journal;
 pub use mount::mount;
 pub use dump::cmd_dump;
 pub use dump::cmd_undump;
+pub use kill_btree_node::cmd_kill_btree_node;
 pub use format::cmd_format;
 pub use fsck::cmd_fsck;
 pub use reconcile::{cmd_reconcile_status, cmd_reconcile_wait};
@@ -107,8 +109,7 @@ pub fn build_cli() -> Command {
         .subcommand(Command::new("image").about("Filesystem image commands")
             .subcommand(Command::new("create").about("Create a filesystem image"))
             .subcommand(Command::new("update").about("Update a filesystem image")))
-        .subcommand(Command::new("kill_btree_node")
-            .about("Kill a specific btree node (debugging)"))
+        .subcommand(kill_btree_node::KillBtreeNodeCli::command().name("kill_btree_node"))
         .subcommand(list_journal::Cli::command().name("list_journal"))
         .subcommand(Command::new("migrate")
             .about("Migrate an existing ext2/3/4 filesystem to bcachefs in place"))

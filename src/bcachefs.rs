@@ -116,7 +116,6 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
     unsafe {
         match cmd.as_str() {
             "image"             => c::image_cmds(argc, argv),
-            "kill_btree_node"   => c::cmd_kill_btree_node(argc, argv),
             "migrate"           => c::cmd_migrate(argc, argv),
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
             #[cfg(feature = "fuse")]
@@ -216,6 +215,7 @@ fn main() -> ExitCode {
             Some("wait") => commands::cmd_reconcile_wait(args[2..].to_vec()).report(),
             _ => { group_usage("reconcile"); ExitCode::from(1) }
         },
+        "kill_btree_node" => commands::cmd_kill_btree_node(args[1..].to_vec()).report(),
         "dump" => commands::cmd_dump(args[1..].to_vec()).report(),
         "undump" => commands::cmd_undump(args[1..].to_vec()).report(),
         "recover-super" => commands::cmd_recover_super(args[1..].to_vec()).report(),
