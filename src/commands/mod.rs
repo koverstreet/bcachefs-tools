@@ -10,6 +10,7 @@ pub mod fs_usage;
 pub mod fsck;
 pub mod key;
 pub mod list;
+pub mod list_journal;
 pub mod mount;
 pub mod opts;
 pub mod reconcile;
@@ -34,6 +35,7 @@ pub use device::{
 };
 pub use key::{cmd_unlock, cmd_set_passphrase, cmd_remove_passphrase};
 pub use list::list;
+pub use list_journal::cmd_list_journal;
 pub use mount::mount;
 pub use dump::cmd_undump;
 pub use format::cmd_format;
@@ -106,8 +108,7 @@ pub fn build_cli() -> Command {
             .subcommand(Command::new("update").about("Update a filesystem image")))
         .subcommand(Command::new("kill_btree_node")
             .about("Kill a specific btree node (debugging)"))
-        .subcommand(Command::new("list_journal")
-            .about("List filesystem journal entries"))
+        .subcommand(list_journal::Cli::command().name("list_journal"))
         .subcommand(Command::new("migrate")
             .about("Migrate an existing ext2/3/4 filesystem to bcachefs in place"))
         .subcommand(Command::new("migrate-superblock")

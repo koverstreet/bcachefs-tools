@@ -116,7 +116,6 @@ fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
         match cmd.as_str() {
             "dump"              => c::cmd_dump(argc, argv),
             "image"             => c::image_cmds(argc, argv),
-            "list_journal"      => c::cmd_list_journal(argc, argv),
             "kill_btree_node"   => c::cmd_kill_btree_node(argc, argv),
             "migrate"           => c::cmd_migrate(argc, argv),
             "migrate-superblock" => c::cmd_migrate_superblock(argc, argv),
@@ -176,6 +175,7 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "list" => commands::list(args[1..].to_vec()).report(),
+        "list_journal" => commands::cmd_list_journal(args[1..].to_vec()).report(),
         "mount" => commands::mount(args, symlink_cmd),
         "scrub" => commands::scrub(args[1..].to_vec()).report(),
         "subvolume" => commands::subvolume(args[1..].to_vec()).report(),
