@@ -393,7 +393,6 @@ fn main() {
         .allowlist_function("version_parse")
         .allowlist_function("copy_fs")
         .allowlist_function("rust_fmt_build_fs")
-        .allowlist_function("rust_opts_usage_to_str")
         .allowlist_function("rust_strip_alloc_check")
         .allowlist_function("rust_strip_alloc_do")
         .allowlist_function("rust_device_set_state_offline")

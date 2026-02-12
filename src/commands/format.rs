@@ -8,7 +8,7 @@ use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 
-use crate::commands::opts::{bch_opt_lookup, parse_opt_val};
+use crate::commands::opts::{bch_opt_lookup, opts_usage_str, parse_opt_val};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use bch_bindgen::printbuf::Printbuf;
@@ -19,21 +19,6 @@ const BCH_REPLICAS_MAX: u32 = 4;
 
 pub(crate) fn metadata_version_current() -> u32 {
     c::bcachefs_metadata_version::bcachefs_metadata_version_max as u32 - 1
-}
-
-/// Capture filtered opts usage as a Rust String.
-/// flags_all: all these bits must be set in the option.
-/// flags_none: none of these bits may be set in the option.
-pub(crate) fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
-    let ptr = unsafe { c::rust_opts_usage_to_str(flags_all, flags_none) };
-    if ptr.is_null() {
-        return String::new();
-    }
-    let s = unsafe { CStr::from_ptr(ptr) }
-        .to_string_lossy()
-        .into_owned();
-    unsafe { libc::free(ptr as *mut _) };
-    s
 }
 
 fn format_usage() {

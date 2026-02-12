@@ -6,7 +6,6 @@
 #include <unistd.h>
 
 #include "libbcachefs.h"
-#include "libbcachefs/opts.h"
 #include "libbcachefs/btree/cache.h"
 #include "libbcachefs/init/dev.h"
 #include "libbcachefs/journal/init.h"
@@ -76,80 +75,6 @@ struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb)
 size_t rust_sizeof_bucket(void)
 {
 	return sizeof(struct bucket);
-}
-
-char *rust_opts_usage_to_str(unsigned flags_all, unsigned flags_none)
-{
-	char *buf = NULL;
-	size_t size = 0;
-	FILE *memf = open_memstream(&buf, &size);
-	if (!memf)
-		return NULL;
-
-	FILE *saved = stdout;
-	stdout = memf;
-
-	const struct bch_option *opt;
-	unsigned c = 0, helpcol = 32;
-	for (opt = bch2_opt_table;
-	     opt < bch2_opt_table + bch2_opts_nr;
-	     opt++) {
-		if ((opt->flags & flags_all) != flags_all)
-			continue;
-		if (opt->flags & flags_none)
-			continue;
-
-		c += printf("      --%s", opt->attr.name);
-
-		switch (opt->type) {
-		case BCH_OPT_BOOL:
-			break;
-		case BCH_OPT_STR:
-			c += printf("=(");
-			for (unsigned i = 0; opt->choices[i]; i++) {
-				if (i)
-					c += printf("|");
-				c += printf("%s", opt->choices[i]);
-			}
-			c += printf(")");
-			break;
-		default:
-			c += printf("=%s", opt->hint);
-			break;
-		}
-
-		if (opt->help) {
-			const char *l = opt->help;
-
-			if (c > helpcol) {
-				printf("\n");
-				c = 0;
-			}
-
-			while (1) {
-				const char *n = strchrnul(l, '\n');
-
-				while (c < helpcol - 1) {
-					putchar(' ');
-					c++;
-				}
-				printf("%.*s", (int)(n - l), l);
-				printf("\n");
-				c = 0;
-
-				if (!*n)
-					break;
-				l = n + 1;
-			}
-		} else {
-			printf("\n");
-			c = 0;
-		}
-	}
-
-	stdout = saved;
-	fclose(memf);
-	return buf;
 }
 
 int rust_fmt_build_fs(struct bch_fs *c, const char *src_path)

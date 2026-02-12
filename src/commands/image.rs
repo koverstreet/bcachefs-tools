@@ -7,9 +7,9 @@ use bch_bindgen::opt_set;
 use clap::Parser;
 
 use crate::commands::format::{
-    take_opt_value, take_short_value, opts_usage_str, metadata_version_current,
+    take_opt_value, take_short_value, metadata_version_current,
 };
-use crate::commands::opts::{bch_opt_lookup, parse_opt_val};
+use crate::commands::opts::{bch_opt_lookup, opts_usage_str, parse_opt_val};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;

@@ -1,4 +1,5 @@
 use std::ffi::{CStr, CString};
+use std::fmt::Write;
 
 use anyhow::{bail, Result};
 use bch_bindgen::c;
@@ -44,6 +45,72 @@ unsafe fn collect_choices(choices: *const *const std::os::raw::c_char) -> Vec<&'
         i += 1;
     }
     v
+}
+
+/// Format usage text for bcachefs options matching the given flags.
+///
+/// `flags_all` bits must all be set, `flags_none` bits must not be set.
+/// Returns a formatted multi-line string with option names, types, and help text.
+pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
+    const HELPCOL: usize = 32;
+    let mut out = String::new();
+
+    unsafe {
+        for i in 0..c::bch_opt_id::bch2_opts_nr as usize {
+            let opt = &*c::bch2_opt_table.as_ptr().add(i);
+            if opt.flags as u32 & flags_all != flags_all { continue }
+            if opt.flags as u32 & flags_none != 0 { continue }
+            let Some(name) = c_str(opt.attr.name) else { continue };
+
+            let mut col = 0;
+            let s = format!("      --{name}");
+            col += s.len();
+            out.push_str(&s);
+
+            match opt.type_ {
+                c::opt_type::BCH_OPT_BOOL => {}
+                c::opt_type::BCH_OPT_STR => {
+                    out.push_str("=(");
+                    col += 2;
+                    let choices = collect_choices(opt.choices);
+                    for (j, ch) in choices.iter().enumerate() {
+                        if j > 0 { out.push('|'); col += 1; }
+                        out.push_str(ch);
+                        col += ch.len();
+                    }
+                    out.push(')');
+                    col += 1;
+                }
+                _ => {
+                    if let Some(h) = c_str(opt.hint) {
+                        let _ = write!(out, "={h}");
+                        col += 1 + h.len();
+                    }
+                }
+            }
+
+            if let Some(help) = c_str(opt.help) {
+                for (j, line) in help.split('\n').enumerate() {
+                    if line.is_empty() && j > 0 { break; }
+                    if j > 0 || col > HELPCOL {
+                        out.push('\n');
+                        col = 0;
+                    }
+                    while col < HELPCOL - 1 {
+                        out.push(' ');
+                        col += 1;
+                    }
+                    out.push_str(line);
+                    out.push('\n');
+                    col = 0;
+                }
+            } else {
+                out.push('\n');
+            }
+        }
+    }
+
+    out
 }
 
 /// Build Clap arguments from bch2_opt_table entries matching flag_filter.

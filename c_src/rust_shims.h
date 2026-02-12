@@ -45,13 +45,6 @@ size_t rust_sizeof_bucket(void);
 int rust_fmt_build_fs(struct bch_fs *c, const char *src_path);
 
 /*
- * Capture bch2_opts_usage output as a string, with proper flag
- * filtering: flags_all bits must all be set, flags_none bits must
- * not be set. Caller must free the returned buffer.
- */
-char *rust_opts_usage_to_str(unsigned flags_all, unsigned flags_none);
-
-/*
  * Check if filesystem is ready for strip-alloc:
  *   returns 0 if clean and capacity <= 1TB
  *   returns 1 if not clean (caller should run recovery and reopen)
