@@ -175,30 +175,133 @@ fn generate_bkey_types(entries: &[Vec<String>]) -> String {
 
     out.push_str("// Auto-generated from BCH_BKEY_TYPES() — do not edit\n\n");
 
-    // enum
-    out.push_str("pub enum BkeyValC<'a> {\n");
+    // ---- accessor methods on bkey_i_* types ----
     for e in entries {
-        out.push_str(&format!("    {}(&'a c::bch_{}),\n", e[0], e[0]));
+        let name = &e[0];
+        out.push_str(&format!(
+            "impl c::bkey_i_{name} {{\n\
+             \x20   pub fn k(&self) -> &c::bkey {{ unsafe {{ self.__bindgen_anon_1.k.as_ref() }} }}\n\
+             \x20   pub fn k_mut(&mut self) -> &mut c::bkey {{ unsafe {{ self.__bindgen_anon_1.k.as_mut() }} }}\n\
+             \x20   pub fn k_i(&self) -> &c::bkey_i {{ unsafe {{ self.__bindgen_anon_1.k_i.as_ref() }} }}\n\
+             \x20   pub fn k_i_mut(&mut self) -> &mut c::bkey_i {{ unsafe {{ self.__bindgen_anon_1.k_i.as_mut() }} }}\n\
+             }}\n\n"
+        ));
     }
-    out.push_str("    unknown(u8),\n");
+
+    // ---- BkeyValI: inline typed bkey dispatch ----
+    out.push_str("/// Typed dispatch for inline bkeys (`bkey_i`).\n");
+    out.push_str("pub enum BkeyValI<'a> {\n");
+    for e in entries {
+        out.push_str(&format!("    {}(&'a c::bkey_i_{}),\n", e[0], e[0]));
+    }
+    out.push_str("    unknown(&'a c::bkey_i),\n");
     out.push_str("}\n\n");
 
-    // from_raw: safe range-checked conversion (unsafe because of the transmutes)
-    out.push_str("impl<'a> BkeyValC<'a> {\n");
-    out.push_str("    /// Convert a raw bkey type tag and value reference to a typed variant.\n");
-    out.push_str("    ///\n");
-    out.push_str("    /// # Safety\n");
-    out.push_str("    /// `val` must point to valid data for the bkey type indicated by `type_`.\n");
+    out.push_str("impl<'a> BkeyValI<'a> {\n");
     out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
-    out.push_str("    pub(crate) unsafe fn from_raw(type_: u8, val: &'a c::bch_val) -> Self {\n");
-    out.push_str("        match type_ as u32 {\n");
+    out.push_str("    pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {\n");
+    out.push_str("        match k.k.type_ as u32 {\n");
     for e in entries {
         out.push_str(&format!(
-            "            {} => BkeyValC::{}(std::mem::transmute(val)),\n",
+            "            {} => BkeyValI::{}(unsafe {{ std::mem::transmute(k) }}),\n",
             e[1], e[0]
         ));
     }
-    out.push_str("            _ => BkeyValC::unknown(type_),\n");
+    out.push_str("            _ => BkeyValI::unknown(k),\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    // ---- BkeyValIMut: mutable inline typed bkey dispatch ----
+    out.push_str("/// Typed dispatch for mutable inline bkeys (`bkey_i`).\n");
+    out.push_str("pub enum BkeyValIMut<'a> {\n");
+    for e in entries {
+        out.push_str(&format!("    {}(&'a mut c::bkey_i_{}),\n", e[0], e[0]));
+    }
+    out.push_str("    unknown(&'a mut c::bkey_i),\n");
+    out.push_str("}\n\n");
+
+    out.push_str("impl<'a> BkeyValIMut<'a> {\n");
+    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
+    out.push_str("    pub fn from_bkey_i(k: &'a mut c::bkey_i) -> Self {\n");
+    out.push_str("        let type_ = k.k.type_;\n");
+    out.push_str("        match type_ as u32 {\n");
+    for e in entries {
+        out.push_str(&format!(
+            "            {} => BkeyValIMut::{}(unsafe {{ std::mem::transmute(k) }}),\n",
+            e[1], e[0]
+        ));
+    }
+    out.push_str("            _ => BkeyValIMut::unknown(k),\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    // ---- BkeyValSC: split const typed dispatch ----
+    out.push_str("/// Typed dispatch for split-const bkey references.\n");
+    out.push_str("pub enum BkeyValSC<'a> {\n");
+    for e in entries {
+        out.push_str(&format!("    {}(&'a c::bkey, &'a c::bch_{}),\n", e[0], e[0]));
+    }
+    out.push_str("    unknown(&'a c::bkey, u8),\n");
+    out.push_str("}\n\n");
+
+    out.push_str("impl<'a> BkeyValSC<'a> {\n");
+    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
+    out.push_str("    pub fn from_bkey_i(k: &'a c::bkey_i) -> Self {\n");
+    out.push_str("        match k.k.type_ as u32 {\n");
+    for e in entries {
+        out.push_str(&format!(
+            "            {} => BkeyValSC::{}(&k.k, unsafe {{ std::mem::transmute(&k.v) }}),\n",
+            e[1], e[0]
+        ));
+    }
+    out.push_str(&format!(
+        "            _ => BkeyValSC::unknown(&k.k, k.k.type_),\n"
+    ));
+    out.push_str("        }\n");
+    out.push_str("    }\n\n");
+
+    // from raw (k, v) pointers — used by BkeySC and btree iteration
+    out.push_str("    /// Construct from raw key and value references.\n");
+    out.push_str("    ///\n");
+    out.push_str("    /// # Safety\n");
+    out.push_str("    /// `val` must point to valid data for the bkey type indicated by `k.type_`.\n");
+    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
+    out.push_str("    pub unsafe fn from_raw(k: &'a c::bkey, val: &'a c::bch_val) -> Self {\n");
+    out.push_str("        match k.type_ as u32 {\n");
+    for e in entries {
+        out.push_str(&format!(
+            "            {} => BkeyValSC::{}(k, std::mem::transmute(val)),\n",
+            e[1], e[0]
+        ));
+    }
+    out.push_str("            _ => BkeyValSC::unknown(k, k.type_),\n");
+    out.push_str("        }\n");
+    out.push_str("    }\n");
+    out.push_str("}\n\n");
+
+    // ---- BkeyValS: split mutable typed dispatch ----
+    out.push_str("/// Typed dispatch for split-mutable bkey references.\n");
+    out.push_str("pub enum BkeyValS<'a> {\n");
+    for e in entries {
+        out.push_str(&format!("    {}(&'a mut c::bkey, &'a mut c::bch_{}),\n", e[0], e[0]));
+    }
+    out.push_str("    unknown(&'a mut c::bkey, u8),\n");
+    out.push_str("}\n\n");
+
+    out.push_str("impl<'a> BkeyValS<'a> {\n");
+    out.push_str("    #[allow(clippy::missing_transmute_annotations)]\n");
+    out.push_str("    pub fn from_bkey_i(k: &'a mut c::bkey_i) -> Self {\n");
+    out.push_str("        let type_ = k.k.type_;\n");
+    out.push_str("        match type_ as u32 {\n");
+    for e in entries {
+        out.push_str(&format!(
+            "            {} => BkeyValS::{}(&mut k.k, unsafe {{ std::mem::transmute(&mut k.v) }}),\n",
+            e[1], e[0]
+        ));
+    }
+    out.push_str("            _ => BkeyValS::unknown(&mut k.k, type_),\n");
     out.push_str("        }\n");
     out.push_str("    }\n");
     out.push_str("}\n");
@@ -325,6 +428,9 @@ fn main() {
         .allowlist_var("BTREE_ITER.*")
         .blocklist_item("bch2_bkey_ops")
         .allowlist_type("bch_.*")
+        .allowlist_type("bkey_i_.*")
+        .allowlist_type("bkey_s_c_.*")
+        .allowlist_type("bkey_s_.*")
         .allowlist_type("disk_accounting_type")
         .allowlist_type("fsck_err_opts")
         .rustified_enum("fsck_err_opts")

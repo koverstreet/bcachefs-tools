@@ -13,7 +13,7 @@ pub struct BkeySC<'a> {
     pub(crate) iter: PhantomData<&'a mut BtreeIter<'a>>,
 }
 
-// BkeyValC enum and from_raw() — generated from BCH_BKEY_TYPES() x-macro
+// Typed bkey dispatch enums — generated from BCH_BKEY_TYPES() x-macro
 include!(concat!(env!("OUT_DIR"), "/bkey_types_gen.rs"));
 
 impl<'a> BkeySC<'a> {
@@ -31,8 +31,8 @@ impl<'a> BkeySC<'a> {
         }
     }
 
-    pub fn v(&'a self) -> BkeyValC<'a> {
-        unsafe { BkeyValC::from_raw(self.k.type_, self.v) }
+    pub fn v(&'a self) -> BkeyValSC<'a> {
+        unsafe { BkeyValSC::from_raw(self.k, self.v) }
     }
 }
 

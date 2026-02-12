@@ -1,5 +1,7 @@
+use crate::bkey::BkeyValSC;
 use crate::c;
 use std::marker::PhantomData;
+use std::mem::size_of;
 
 // Pull in generated extent_entry_type_u64s() from build.rs
 include!(concat!(env!("OUT_DIR"), "/extent_entry_types_gen.rs"));
@@ -12,52 +14,43 @@ pub fn extent_entry_type(entry: &c::bch_extent_entry) -> u32 {
     if t != 0 { t.trailing_zeros() } else { u32::MAX }
 }
 
-/// sizeof(struct bkey) / sizeof(u64)
-const BKEY_U64S: usize = 5;
-
-/// Get the start and end pointers for extent entries within a bkey_i.
+/// Pointer past the last val u64 for a bkey.
 ///
-/// Returns `None` for key types that don't contain extent entries.
-fn bkey_ptrs_raw(k: &c::bkey_i) -> Option<(*const c::bch_extent_entry, *const c::bch_extent_entry)> {
-    let val_ptr = &k.v as *const c::bch_val as *const u8;
-    let val_u64s = k.k.u64s as usize - BKEY_U64S;
-    let val_end = unsafe { val_ptr.add(val_u64s * 8) } as *const c::bch_extent_entry;
+/// # Safety
+/// `v` must point to the start of the value region for `k`.
+unsafe fn bkey_val_end(k: &c::bkey, v: *const u8) -> *const c::bch_extent_entry {
+    let val_u64s = k.u64s as usize - size_of::<c::bkey>() / 8;
+    v.add(val_u64s * 8) as *const c::bch_extent_entry
+}
 
-    use c::bch_bkey_type::*;
-    use std::mem::size_of;
-
-    let ty = k.k.type_ as u32;
-    match ty {
-        x if x == KEY_TYPE_btree_ptr as u32 ||
-             x == KEY_TYPE_extent as u32 =>
-            Some((val_ptr as *const c::bch_extent_entry, val_end)),
-        x if x == KEY_TYPE_stripe as u32 => {
-            let s = val_ptr as *const c::bch_stripe;
-            let nr_blocks = unsafe { (*s).nr_blocks } as usize;
-            let hdr = size_of::<c::bch_stripe>();
-            let ptrs_start = unsafe { val_ptr.add(hdr) } as *const c::bch_extent_entry;
-            let ptrs_end = unsafe { val_ptr.add(hdr + nr_blocks * 8) } as *const c::bch_extent_entry;
-            Some((ptrs_start, ptrs_end))
-        }
-        x if x == KEY_TYPE_reflink_v as u32 => {
-            let hdr = size_of::<c::bch_reflink_v>();
-            let start = unsafe { val_ptr.add(hdr) } as *const c::bch_extent_entry;
-            Some((start, val_end))
-        }
-        x if x == KEY_TYPE_btree_ptr_v2 as u32 => {
-            let hdr = size_of::<c::bch_btree_ptr_v2>();
-            let start = unsafe { val_ptr.add(hdr) } as *const c::bch_extent_entry;
-            Some((start, val_end))
-        }
+/// Get the start and end pointers for extent entries from a typed bkey.
+fn bkey_ptrs_raw(sc: &BkeyValSC<'_>) -> Option<(*const c::bch_extent_entry, *const c::bch_extent_entry)> {
+    // Safety: all typed value pointers come from BkeyValSC dispatch,
+    // which guarantees they point to valid bkey value data.
+    unsafe { match sc {
+        BkeyValSC::btree_ptr(k, v) =>
+            Some((v.start.as_ptr() as _, bkey_val_end(k, *v as *const _ as _))),
+        BkeyValSC::extent(k, v) =>
+            Some((v.start.as_ptr() as _, bkey_val_end(k, *v as *const _ as _))),
+        BkeyValSC::stripe(_k, v) =>
+            Some((v.ptrs.as_ptr() as _, v.ptrs.as_ptr().add(v.nr_blocks as usize) as _)),
+        BkeyValSC::reflink_v(k, v) =>
+            Some((v.start.as_ptr() as _, bkey_val_end(k, *v as *const _ as _))),
+        BkeyValSC::btree_ptr_v2(k, v) =>
+            Some((v.start.as_ptr() as _, bkey_val_end(k, *v as *const _ as _))),
         _ => None,
-    }
+    } }
+}
+
+fn empty_iter<'a>() -> ExtentEntryIter<'a> {
+    ExtentEntryIter { cur: std::ptr::null(), end: std::ptr::null(), _phantom: PhantomData }
 }
 
 /// Iterator over extent entries within a bkey.
 pub struct ExtentEntryIter<'a> {
     cur: *const c::bch_extent_entry,
     end: *const c::bch_extent_entry,
-    _phantom: PhantomData<&'a c::bkey_i>,
+    _phantom: PhantomData<&'a c::bch_extent_entry>,
 }
 
 impl<'a> Iterator for ExtentEntryIter<'a> {
@@ -79,18 +72,19 @@ impl<'a> Iterator for ExtentEntryIter<'a> {
     }
 }
 
-/// Iterate over all extent entries in a bkey.
+/// Iterate over all extent entries in a typed bkey.
 ///
 /// Returns an empty iterator for key types that don't have extent entries.
-pub fn bkey_extent_entries(k: &c::bkey_i) -> ExtentEntryIter<'_> {
-    match bkey_ptrs_raw(k) {
+pub fn bkey_extent_entries_sc<'a>(sc: &BkeyValSC<'a>) -> ExtentEntryIter<'a> {
+    match bkey_ptrs_raw(sc) {
         Some((start, end)) => ExtentEntryIter { cur: start, end, _phantom: PhantomData },
-        None => ExtentEntryIter {
-            cur: std::ptr::null(),
-            end: std::ptr::null(),
-            _phantom: PhantomData,
-        },
+        None => empty_iter(),
     }
+}
+
+/// Iterate over all extent entries in a `bkey_i`.
+pub fn bkey_extent_entries(k: &c::bkey_i) -> ExtentEntryIter<'_> {
+    bkey_extent_entries_sc(&BkeyValSC::from_bkey_i(k))
 }
 
 /// Iterator over extent pointers within a bkey.
@@ -111,9 +105,12 @@ impl<'a> Iterator for ExtentPtrIter<'a> {
     }
 }
 
-/// Iterate over extent pointers in a bkey, skipping non-pointer entries.
-///
-/// Returns an empty iterator for key types that don't have extent pointers.
+/// Iterate over extent pointers in a typed bkey, skipping non-pointer entries.
+pub fn bkey_ptrs_sc<'a>(sc: &BkeyValSC<'a>) -> ExtentPtrIter<'a> {
+    ExtentPtrIter { inner: bkey_extent_entries_sc(sc) }
+}
+
+/// Iterate over extent pointers in a `bkey_i`.
 pub fn bkey_ptrs(k: &c::bkey_i) -> ExtentPtrIter<'_> {
-    ExtentPtrIter { inner: bkey_extent_entries(k) }
+    bkey_ptrs_sc(&BkeyValSC::from_bkey_i(k))
 }
