@@ -238,13 +238,11 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                         bail!("invalid option: {}", msg);
                     }
 
-                    let opt_id_enum: c::bch_opt_id =
-                        unsafe { std::mem::transmute(opt_id as u32) };
                     if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
-                        unsafe { c::bch2_opt_set_by_id(&mut cur_dev_opts, opt_id_enum, v) };
+                        unsafe { c::bch2_opt_set_by_id(&mut cur_dev_opts, opt_id, v) };
                         unconsumed_dev_option = true;
                     } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
-                        unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id_enum, v) };
+                        unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id, v) };
                     }
 
                     i += 1;

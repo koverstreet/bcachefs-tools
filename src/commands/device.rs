@@ -92,8 +92,7 @@ pub fn cmd_device_add(argv: Vec<String>) -> Result<()> {
             return Err(anyhow!("invalid option {}={}", name, value));
         }
 
-        let opt_id_enum: c::bch_opt_id = unsafe { std::mem::transmute(opt_id as u32) };
-        unsafe { c::bch2_opt_set_by_id(&mut dev_opts.opts, opt_id_enum, val) };
+        unsafe { c::bch2_opt_set_by_id(&mut dev_opts.opts, opt_id, val) };
     }
 
     let ret = unsafe { c::open_for_format(&mut dev_opts, 0, force) };

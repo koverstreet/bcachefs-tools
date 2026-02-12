@@ -130,12 +130,9 @@ fn set_option_offline(
             continue;
         }
 
-        // SAFETY: opt_id came from bch2_opt_lookup which validates [0, bch2_opts_nr)
-        let opt_id_enum: c::bch_opt_id = unsafe { std::mem::transmute(opt_id as u32) };
-
         if flags & c::opt_flags::OPT_FS as u32 != 0 {
             let ret = unsafe {
-                c::bch2_opt_hook_pre_set(fs.raw, std::ptr::null_mut(), 0, opt_id_enum, val, true)
+                c::bch2_opt_hook_pre_set(fs.raw, std::ptr::null_mut(), 0, opt_id, val, true)
             };
             if ret < 0 {
                 eprintln!("Error setting {name}: {ret}");
@@ -161,7 +158,7 @@ fn set_option_offline(
                 }
 
                 let ret = unsafe {
-                    c::bch2_opt_hook_pre_set(fs.raw, ca, 0, opt_id_enum, val, true)
+                    c::bch2_opt_hook_pre_set(fs.raw, ca, 0, opt_id, val, true)
                 };
                 if ret < 0 {
                     eprintln!("Error setting {name}: {ret}");

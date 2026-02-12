@@ -89,15 +89,17 @@ pub fn bch_option_args(flag_filter: u32) -> Vec<Arg> {
     args
 }
 
-/// Look up a bcachefs option by name. Returns the option index and reference.
-pub fn bch_opt_lookup(name: &str) -> Option<(i32, &'static c::bch_option)> {
+/// Look up a bcachefs option by name. Returns the typed option id and reference.
+pub fn bch_opt_lookup(name: &str) -> Option<(c::bch_opt_id, &'static c::bch_option)> {
     let c_name = std::ffi::CString::new(name).ok()?;
     let id = unsafe { c::bch2_opt_lookup(c_name.as_ptr()) };
     if id < 0 || id as u32 >= c::bch_opt_id::bch2_opts_nr as u32 {
         return None;
     }
+    // Safety: validated in range [0, bch2_opts_nr)
+    let opt_id: c::bch_opt_id = unsafe { std::mem::transmute(id as u32) };
     let opt = unsafe { &*c::bch2_opt_table.as_ptr().add(id as usize) };
-    Some((id, opt))
+    Some((opt_id, opt))
 }
 
 /// Option names matching the filter.
