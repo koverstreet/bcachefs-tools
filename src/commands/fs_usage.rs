@@ -125,10 +125,10 @@ fn fs_usage_v1_to_text(
     sorted.sort_by(|a, b| a.pos.cmp(&b.pos));
 
     // Header
-    let uuid = uuid::Uuid::from_bytes(handle.uuid());
-    writeln!(out, "Filesystem: {}", uuid.hyphenated()).unwrap();
-
     out.tabstops(&[20, 16]);
+    let uuid = uuid::Uuid::from_bytes(handle.uuid());
+
+    writeln!(out, "Filesystem: {}", uuid.hyphenated()).unwrap();
 
     write!(out, "Size:\t").unwrap();
     out.units_sectors(result.capacity);
