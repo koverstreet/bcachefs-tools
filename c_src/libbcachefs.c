@@ -1,8 +1,6 @@
 #include <ctype.h>
-#include <dirent.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <libgen.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -20,6 +18,7 @@
 #include <linux/mm.h>
 
 #include "libbcachefs.h"
+#include "bcachefs_ioctl.h"
 #include "crypto.h"
 #include "tools-util.h"
 
@@ -477,14 +476,6 @@ struct bch_sb *__bch2_super_read(int fd, u64 sector)
 	return ret;
 }
 
-/* ioctl interface: */
-
-/* Global control device: */
-int bcachectl_open(void)
-{
-	return xopen("/dev/bcachefs-ctl", O_RDWR);
-}
-
 /* Filesystem handles (ioctl, sysfs dir): */
 
 #define SYSFS_BASE "/sys/fs/bcachefs/"
@@ -604,130 +595,6 @@ read_super:
 	return bcache_fs_open_by_name(uuid_str, fs);
 }
 
-struct bchfs_handle bcache_fs_open(const char *path)
-{
-	struct bchfs_handle fs;
-	int ret = bcache_fs_open_fallible(path, &fs);
-	if (ret)
-		die("Error opening filesystem at %s: %s", path, strerror(-ret));
-	return fs;
-}
-
-/*
- * Given a path to a block device, open the filesystem it belongs to; also
- * return the device's idx:
- */
-struct bchfs_handle bchu_fs_open_by_dev(const char *path, int *idx)
-{
-	struct bch_opts opts = bch2_opts_empty();
-	char buf[1024], *fs_str;
-
-	struct stat stat = xstat(path);
-
-	if (S_ISBLK(stat.st_mode)) {
-		char *sysfs = mprintf("/sys/dev/block/%u:%u/bcachefs",
-				      major(stat.st_rdev),
-				      minor(stat.st_rdev));
-
-		ssize_t len = readlink(sysfs, buf, sizeof(buf));
-		free(sysfs);
-
-		if (len <= 0)
-			goto read_super;
-
-		buf[len] = '\0';
-
-		fs_str = strstr(buf, "bcachefs/");
-		if (!fs_str)
-			die("error parsing sysfs");
-
-		fs_str += 9;
-		char *dev_str = strchr(fs_str, '/');
-		if (!dev_str)
-			die("error parsing sysfs");
-
-		*dev_str = '\0';
-		dev_str++;
-		if (sscanf(dev_str, "dev-%u", idx) != 1)
-			die("error parsing sysfs");
-	} else {
-read_super:
-		opt_set(opts, noexcl,	true);
-		opt_set(opts, nochanges, true);
-
-		struct bch_sb_handle sb;
-		int ret = bch2_read_super(path, &opts, &sb);
-		if (ret)
-			die("Error opening %s: %s", path, strerror(-ret));
-
-		*idx = sb.sb->dev_idx;
-		fs_str = buf;
-		uuid_unparse(sb.sb->user_uuid.b, fs_str);
-
-		bch2_free_super(&sb);
-	}
-
-	struct bchfs_handle fs;
-	int ret = bcache_fs_open_by_name(fs_str, &fs);
-	if (ret)
-		die("Error opening filesystem at %s (%s): %s",
-		    path, fs_str, strerror(-ret));
-	return fs;
-}
-
-int bchu_dev_path_to_idx(struct bchfs_handle fs, const char *dev_path)
-{
-	int idx;
-	struct bchfs_handle fs2 = bchu_fs_open_by_dev(dev_path, &idx);
-
-	if (memcmp(&fs.uuid, &fs2.uuid, sizeof(fs.uuid)))
-		idx = -1;
-	bcache_fs_close(fs2);
-	return idx;
-}
-
-int bchu_data(struct bchfs_handle fs, struct bch_ioctl_data cmd)
-{
-	int progress_fd = xioctl(fs.ioctl_fd, BCH_IOCTL_DATA, &cmd);
-
-	while (1) {
-		struct bch_ioctl_data_event e;
-
-		if (read(progress_fd, &e, sizeof(e)) != sizeof(e))
-			die("error reading from progress fd %m");
-
-		if (e.type)
-			continue;
-
-		if (e.ret || e.p.data_type == U8_MAX)
-			break;
-
-		printf("\33[2K\r");
-
-		printf("%llu%% complete: current position %s",
-		       e.p.sectors_total
-		       ? e.p.sectors_done * 100 / e.p.sectors_total
-		       : 0,
-		       bch2_data_type_str(e.p.data_type));
-
-		switch (e.p.data_type) {
-		case BCH_DATA_btree:
-		case BCH_DATA_user:
-			printf(" %s:%llu:%llu",
-			       bch2_btree_id_str(e.p.btree_id),
-			       e.p.pos.inode,
-			       e.p.pos.offset);
-		}
-
-		fflush(stdout);
-		sleep(1);
-	}
-	printf("\nDone\n");
-
-	xclose(progress_fd);
-	return 0;
-}
-
 /* option parsing */
 
 #include <getopt.h>
@@ -794,12 +661,6 @@ const struct bch_option *bch2_cmdline_opt_parse(int argc, char *argv[],
 noopt:
 	free(optstr);
 	return NULL;
-}
-
-void bch_remove_arg_from_argv(int *argc, char *argv[], int index)
-{
-	memmove(&argv[index], &argv[index + 1], (*argc - index) * sizeof(char*));
-	(*argc)--;
 }
 
 struct bch_opt_strs bch2_cmdline_opts_get(int *argc, char *argv[],
@@ -948,60 +809,3 @@ void bch2_opts_usage(unsigned opt_types)
 	}
 }
 
-dev_names bchu_fs_get_devices(struct bchfs_handle fs)
-{
-	DIR *dir = fdopendir(dup(fs.sysfs_fd));
-	struct dirent *d;
-	dev_names devs;
-
-	struct bch_sb *sb = bchu_read_super(fs, -1);
-
-	darray_init(&devs);
-
-	while ((errno = 0), (d = readdir(dir))) {
-		struct dev_name n = { 0, NULL, NULL };
-
-		if (sscanf(d->d_name, "dev-%u", &n.idx) != 1)
-			continue;
-
-		char *block_attr = mprintf("dev-%u/block", n.idx);
-
-		char sysfs_block_buf[4096];
-		ssize_t r = readlinkat(fs.sysfs_fd, block_attr,
-				       sysfs_block_buf, sizeof(sysfs_block_buf));
-		if (r > 0) {
-			sysfs_block_buf[r] = '\0';
-			n.dev = strdup(basename(sysfs_block_buf));
-		} else {
-			n.dev = mprintf("(offline dev %u)", n.idx);
-		}
-
-		free(block_attr);
-
-		char *label_attr = mprintf("dev-%u/label", n.idx);
-		n.label = read_file_str(fs.sysfs_fd, label_attr);
-		free(label_attr);
-
-		char *durability_attr = mprintf("dev-%u/durability", n.idx);
-		n.durability = read_file_u64(fs.sysfs_fd, durability_attr);
-		free(durability_attr);
-
-		struct bch_member m = bch2_sb_member_get(sb, n.idx);
-		n.state = BCH_MEMBER_STATE(&m);
-
-		darray_push(&devs, n);
-	}
-
-	free(sb);
-	closedir(dir);
-
-	return devs;
-}
-
-struct dev_name *dev_idx_to_name(dev_names *dev_names, unsigned idx)
-{
-	darray_for_each(*dev_names, dev)
-		if (dev->idx == idx)
-			return dev;
-	return NULL;
-}

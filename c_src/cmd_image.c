@@ -28,6 +28,7 @@
 #include "bcachefs.h"
 
 #include "alloc/accounting.h"
+#include "fs/inode.h"
 #include "alloc/background.h"
 #include "alloc/disk_groups.h"
 #include "alloc/foreground.h"

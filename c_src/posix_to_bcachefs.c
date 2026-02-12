@@ -13,6 +13,7 @@
 #include "data/read.h"
 #include "data/write.h"
 
+#include "fs/inode.h"
 #include "fs/namei.h"
 #include "fs/str_hash.h"
 #include "fs/xattr.h"
