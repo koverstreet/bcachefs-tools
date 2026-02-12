@@ -155,7 +155,7 @@ fn fs_usage_v1_to_text(
                 DiskAccountingKind::PersistentReserved { nr_replicas } => {
                     let sectors = entry.counter(0);
                     if sectors == 0 { continue; }
-                    write!(out, "reserved:\t1/{}\t[] ", nr_replicas).unwrap();
+                    write!(out, "reserved:\t1/{}\t\t[]\t", nr_replicas).unwrap();
                     out.units_sectors(sectors);
                     write!(out, "\r\n").unwrap();
                 }
