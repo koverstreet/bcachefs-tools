@@ -9,8 +9,8 @@ use clap::Parser;
 
 use bch_bindgen::bkey::BkeySC;
 use bch_bindgen::btree::*;
+use bch_bindgen::accounting;
 use bch_bindgen::c;
-use bch_bindgen::c::btree_id;
 use bch_bindgen::data::extents::bkey_ptrs_sc;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
@@ -276,13 +276,12 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
         return Err(anyhow!("{}", err));
     }
 
-    // Walk all btree types to collect metadata locations
-    for id in 0..btree_id::BTREE_ID_NR as u32 {
-        let bid: c::btree_id = unsafe { std::mem::transmute(id) };
+    // Walk all btree types (including dynamic) to collect metadata locations
+    for id in 0..fs.btree_id_nr_alive() {
         let trans = BtreeTrans::new(fs);
         let mut node_iter = BtreeNodeIter::new(
             &trans,
-            bid,
+            id,
             POS_MIN,
             0, // locks_want
             1, // depth
@@ -295,7 +294,8 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
                 ControlFlow::Continue(())
             });
             ControlFlow::Continue(())
-        }).map_err(|e| anyhow!("error walking btree {}: {}", id, e))?;
+        }).map_err(|e| anyhow!("error walking btree {}: {}",
+            accounting::btree_id_str(id), e))?;
 
         // Also dump the root node itself
         if let Some(b) = fs.btree_id_root(id) {

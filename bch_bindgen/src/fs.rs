@@ -14,6 +14,7 @@ extern "C" {
     ) -> *mut c::bch_dev;
     fn rust_put_online_dev_ref(ca: *mut c::bch_dev, ref_idx: u32);
     fn rust_btree_id_root_b(c: *mut c::bch_fs, id: u32) -> *mut c::btree;
+    fn rust_btree_id_nr_alive(c: *mut c::bch_fs) -> u32;
 }
 
 pub struct Fs {
@@ -97,6 +98,11 @@ impl Fs {
         } else {
             Some(unsafe { &*b })
         }
+    }
+
+    /// Total number of btree IDs (known + dynamic) on this filesystem.
+    pub fn btree_id_nr_alive(&self) -> u32 {
+        unsafe { rust_btree_id_nr_alive(self.raw) }
     }
 
     /// Number of devices in the filesystem superblock.

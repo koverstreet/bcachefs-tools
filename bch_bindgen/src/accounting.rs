@@ -310,12 +310,9 @@ pub fn prt_reconcile_type(out: &mut Printbuf, t: bch_reconcile_accounting_type) 
 
 /// Get a btree ID name string.
 pub fn btree_id_str(id: u32) -> String {
-    if id < c::btree_id::BTREE_ID_NR as u32 {
-        // SAFETY: id is in [0, BTREE_ID_NR), a valid discriminant
-        let btree_id: c::btree_id = unsafe { std::mem::transmute(id) };
-        format!("{}", btree_id)
-    } else {
-        format!("(unknown btree {})", id)
+    match c::btree_id::from_raw(id) {
+        Some(btree_id) => format!("{}", btree_id),
+        None => format!("(unknown btree {})", id),
     }
 }
 

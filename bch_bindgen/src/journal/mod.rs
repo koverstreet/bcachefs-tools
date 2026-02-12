@@ -119,12 +119,7 @@ pub fn entry_type(entry: &c::jset_entry) -> Option<c::bch_jset_entry_type> {
 
 /// Convert entry btree_id byte to the enum, if it's a known btree.
 pub fn entry_btree_id(entry: &c::jset_entry) -> Option<c::btree_id> {
-    let raw = entry.btree_id as u32;
-    if raw < c::btree_id::BTREE_ID_NR as u32 {
-        Some(unsafe { std::mem::transmute(raw) })
-    } else {
-        None
-    }
+    c::btree_id::from_raw(entry.btree_id as u32)
 }
 
 // ---- jset_entry_log helpers ----

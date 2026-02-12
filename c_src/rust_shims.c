@@ -269,6 +269,11 @@ struct btree *rust_btree_id_root_b(struct bch_fs *c, unsigned id)
 	return r ? r->b : NULL;
 }
 
+unsigned rust_btree_id_nr_alive(struct bch_fs *c)
+{
+	return btree_id_nr_alive(c);
+}
+
 /* online member iteration shim */
 
 struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,

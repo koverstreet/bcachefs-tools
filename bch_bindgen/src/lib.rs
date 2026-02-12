@@ -90,6 +90,30 @@ impl Ord for c::bbpos {
 use std::ffi::CStr;
 use std::fmt;
 
+impl c::btree_id {
+    /// Convert from raw u32. Returns None for unknown btree IDs (>= BTREE_ID_NR).
+    pub fn from_raw(id: u32) -> Option<Self> {
+        if id < Self::BTREE_ID_NR as u32 {
+            // SAFETY: id is in [0, BTREE_ID_NR), a valid discriminant
+            Some(unsafe { std::mem::transmute(id) })
+        } else {
+            None
+        }
+    }
+
+    /// Iterate over all known btree IDs.
+    pub fn iter_known() -> impl Iterator<Item = Self> {
+        (0..Self::BTREE_ID_NR as u32)
+            .map(|id| unsafe { std::mem::transmute(id) })
+    }
+}
+
+impl From<c::btree_id> for u32 {
+    fn from(id: c::btree_id) -> u32 {
+        id as u32
+    }
+}
+
 impl fmt::Display for c::btree_id {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self)) };
@@ -135,11 +159,8 @@ impl FromStr for c::btree_id {
 
         let v =
             unsafe { c::match_string(c::__bch2_btree_ids[..].as_ptr(), (-1_isize) as usize, p) };
-        if v >= 0 {
-            Ok(unsafe { std::mem::transmute::<i32, bcachefs::btree_id>(v) })
-        } else {
-            Err(BchToolsErr::InvalidBtreeId)
-        }
+        c::btree_id::from_raw(v as u32)
+            .ok_or(BchToolsErr::InvalidBtreeId)
     }
 }
 

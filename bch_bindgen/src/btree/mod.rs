@@ -117,7 +117,7 @@ fn bkey_s_c_to_result<'i>(k: c::bkey_s_c) -> Result<Option<BkeySC<'i>>, BchError
 impl<'t> BtreeIter<'t> {
     pub fn new(
         trans: &'t BtreeTrans<'t>,
-        btree: c::btree_id,
+        btree: impl Into<u32>,
         pos: bpos,
         flags: BtreeIterFlags,
     ) -> BtreeIter<'t> {
@@ -127,7 +127,7 @@ impl<'t> BtreeIter<'t> {
             c::bch2_trans_iter_init_outlined(
                 trans.raw,
                 iter.as_mut_ptr(),
-                btree,
+                std::mem::transmute(btree.into()),
                 pos,
                 c::btree_iter_update_trigger_flags(flags.bits),
                 0
@@ -142,7 +142,7 @@ impl<'t> BtreeIter<'t> {
 
     pub fn new_level(
         trans: &'t BtreeTrans<'t>,
-        btree: c::btree_id,
+        btree: impl Into<u32>,
         pos: bpos,
         level: u32,
         flags: BtreeIterFlags,
@@ -153,7 +153,7 @@ impl<'t> BtreeIter<'t> {
             c::__bch2_trans_node_iter_init(
                 trans.raw,
                 iter.as_mut_ptr(),
-                btree,
+                std::mem::transmute(btree.into()),
                 pos,
                 0,
                 level,
@@ -237,7 +237,7 @@ pub struct BtreeNodeIter<'t> {
 impl<'t> BtreeNodeIter<'t> {
     pub fn new(
         trans: &'t BtreeTrans<'t>,
-        btree: c::btree_id,
+        btree: impl Into<u32>,
         pos: bpos,
         locks_want: u32,
         depth: u32,
@@ -248,7 +248,7 @@ impl<'t> BtreeNodeIter<'t> {
             c::__bch2_trans_node_iter_init(
                 trans.raw,
                 iter.as_mut_ptr(),
-                btree,
+                std::mem::transmute(btree.into()),
                 pos,
                 locks_want,
                 depth,
