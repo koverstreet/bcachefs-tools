@@ -22,8 +22,6 @@ use crate::wrappers::super_io::vstruct_bytes_sb;
 extern "C" {
     fn rust_jset_magic(c: *mut c::bch_fs) -> u64;
     fn rust_bset_magic(c: *mut c::bch_fs) -> u64;
-    fn rust_block_bits(c: *mut c::bch_fs) -> u32;
-    fn rust_chacha20_key_set(c: *mut c::bch_fs) -> bool;
     fn rust_jset_decrypt(c: *mut c::bch_fs, j: *mut u8) -> i32;
     fn rust_bset_decrypt(c: *mut c::bch_fs, i: *mut u8, offset: u32) -> i32;
 }
@@ -233,7 +231,7 @@ fn sanitize_journal_keys(
 /// zero inline data, optionally scramble filenames, clear checksums.
 fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bool) {
     let jset_magic = unsafe { rust_jset_magic(fs_raw) };
-    let block_bits = unsafe { rust_block_bits(fs_raw) } as usize;
+    let block_bits = unsafe { (*fs_raw).block_bits } as usize;
 
     let mut pos = 0;
     while pos + JSET_HDR <= buf.len() {
@@ -251,7 +249,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: 
         let mut modified = false;
 
         if csum_type_is_encryption(csum_type) {
-            if !unsafe { rust_chacha20_key_set(fs_raw) } {
+            if !unsafe { (*fs_raw).chacha20_key_set } {
                 eprintln!("found encrypted journal entry on non-encrypted filesystem");
                 return;
             }
@@ -300,7 +298,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: 
 /// encryption, zero inline data, optionally scramble filenames.
 fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bool) {
     let bset_magic = unsafe { rust_bset_magic(fs_raw) };
-    let block_bits = unsafe { rust_block_bits(fs_raw) } as usize;
+    let block_bits = unsafe { (*fs_raw).block_bits } as usize;
 
     let mut first = true;
     let mut seq: u64 = 0;
@@ -347,7 +345,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bo
         let mut modified = false;
 
         if csum_type_is_encryption(csum_type) {
-            if !unsafe { rust_chacha20_key_set(fs_raw) } {
+            if !unsafe { (*fs_raw).chacha20_key_set } {
                 eprintln!("found encrypted btree node on non-encrypted filesystem");
                 return;
             }

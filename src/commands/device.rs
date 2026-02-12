@@ -17,7 +17,7 @@ use bch_bindgen::opt_set;
 use bch_bindgen::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
-use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
+use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches, parse_opt_val};
 use crate::util::{fmt_sectors_human, parse_human_size};
 use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
 use crate::wrappers::handle::BcachefsHandle;
@@ -83,15 +83,8 @@ pub fn cmd_device_add(argv: Vec<String>) -> Result<()> {
     let bch_opts = bch_options_from_matches(&matches, device_add_opt_flags());
     for (name, value) in &bch_opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else { continue };
-        let c_value = CString::new(value.as_str())?;
-        let mut val: u64 = 0;
-        let ret = unsafe {
-            c::bch2_opt_parse(std::ptr::null_mut(), opt, c_value.as_ptr(), &mut val, std::ptr::null_mut())
-        };
-        if ret != 0 {
-            return Err(anyhow!("invalid option {}={}", name, value));
-        }
-
+        let val = parse_opt_val(opt, value)?
+            .ok_or_else(|| anyhow!("option {} requires open filesystem", name))?;
         unsafe { c::bch2_opt_set_by_id(&mut dev_opts.opts, opt_id, val) };
     }
 

@@ -400,7 +400,6 @@ fn main() {
         .allowlist_function("rust_device_resize_offline")
         .allowlist_function("rust_device_resize_journal_offline")
         .allowlist_function("rust_csum_vstruct_sb")
-        .allowlist_function("rust_vstruct_bytes_sb")
         .allowlist_function("rust_sizeof_bucket")
         .allowlist_function("rust_set_bch_sb_.*")
         .allowlist_function("rust_set_bch_member_.*")

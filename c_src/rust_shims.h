@@ -39,12 +39,6 @@ struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb);
 size_t rust_sizeof_bucket(void);
 
 /*
- * Compute the total byte size of a variable-length superblock struct.
- * Wraps the vstruct_bytes() macro.
- */
-size_t rust_vstruct_bytes_sb(const struct bch_sb *sb);
-
-/*
  * Wrapper around copy_fs() for format --source: opens src_path,
  * creates a zeroed copy_fs_state, and copies the directory tree.
  */
@@ -139,8 +133,6 @@ struct bset;
 
 __u64 rust_jset_magic(struct bch_fs *c);
 __u64 rust_bset_magic(struct bch_fs *c);
-unsigned rust_block_bits(struct bch_fs *c);
-bool rust_chacha20_key_set(struct bch_fs *c);
 int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
 int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
 

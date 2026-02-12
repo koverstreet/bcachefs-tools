@@ -78,11 +78,6 @@ size_t rust_sizeof_bucket(void)
 	return sizeof(struct bucket);
 }
 
-size_t rust_vstruct_bytes_sb(const struct bch_sb *sb)
-{
-	return vstruct_bytes(sb);
-}
-
 char *rust_opts_usage_to_str(unsigned flags_all, unsigned flags_none)
 {
 	char *buf = NULL;
@@ -370,16 +365,6 @@ __u64 rust_jset_magic(struct bch_fs *c)
 __u64 rust_bset_magic(struct bch_fs *c)
 {
 	return __bset_magic(c->disk_sb.sb);
-}
-
-unsigned rust_block_bits(struct bch_fs *c)
-{
-	return c->block_bits;
-}
-
-bool rust_chacha20_key_set(struct bch_fs *c)
-{
-	return c->chacha20_key_set;
 }
 
 int rust_jset_decrypt(struct bch_fs *c, struct jset *j)
