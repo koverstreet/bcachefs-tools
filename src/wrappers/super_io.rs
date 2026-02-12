@@ -2,6 +2,8 @@
 
 //! Rust implementations of superblock read/write operations.
 
+use std::os::unix::fs::FileExt;
+
 use bch_bindgen::c;
 
 /// Compute the total byte size of a variable-length superblock struct.
@@ -43,7 +45,8 @@ pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
             let mut buf = vec![0u8; buflen];
 
             // Read existing data at 4096 - bs
-            pread_exact(&file, &mut buf[..bs], 4096 - bs as u64);
+            file.read_exact_at(&mut buf[..bs], 4096 - bs as u64)
+                .unwrap_or_else(|e| panic!("pread failed at offset {}: {}", 4096 - bs, e));
 
             // Patch the layout into the end of this block
             let layout_bytes = std::mem::size_of::<c::bch_sb_layout>();
@@ -84,7 +87,8 @@ pub extern "C" fn __bch2_super_read(fd: i32, sector: u64) -> *mut c::bch_sb {
     // Read the fixed-size header first
     let header_size = std::mem::size_of::<c::bch_sb>();
     let mut header_buf = vec![0u8; header_size];
-    pread_exact(&file, &mut header_buf, sector << 9);
+    file.read_exact_at(&mut header_buf, sector << 9)
+        .unwrap_or_else(|e| panic!("pread failed at offset {}: {}", sector << 9, e));
 
     let sb_header = unsafe { &*(header_buf.as_ptr() as *const c::bch_sb) };
 
@@ -101,7 +105,8 @@ pub extern "C" fn __bch2_super_read(fd: i32, sector: u64) -> *mut c::bch_sb {
     }
 
     let buf = unsafe { std::slice::from_raw_parts_mut(ptr, bytes) };
-    pread_exact(&file, buf, sector << 9);
+    file.read_exact_at(buf, sector << 9)
+        .unwrap_or_else(|e| panic!("pread failed at offset {}: {}", sector << 9, e));
 
     ptr as *mut c::bch_sb
 }
@@ -110,30 +115,20 @@ fn round_up(val: usize, align: usize) -> usize {
     (val + align - 1) & !(align - 1)
 }
 
-/// Read exactly `buf.len()` bytes at `offset`. Panics on error or short read.
-fn pread_exact(file: &std::fs::File, buf: &mut [u8], offset: u64) {
-    use std::os::unix::fs::FileExt;
-
-    let n = file.read_at(buf, offset)
-        .unwrap_or_else(|e| panic!("pread failed at offset {}: {}", offset, e));
-    if n != buf.len() {
-        panic!("short pread at offset {}: got {} bytes, expected {}", offset, n, buf.len());
-    }
-}
-
 /// Write exactly `buf.len()` bytes at `offset`. Panics on error.
 fn pwrite_exact(file: &std::fs::File, buf: &[u8], offset: u64) {
-    use std::os::unix::fs::FileExt;
-
     file.write_all_at(buf, offset)
         .unwrap_or_else(|e| panic!("pwrite failed at offset {}: {}", offset, e));
 }
 
-const BCACHE_MAGIC: [u8; 16] = [
+pub const BCACHE_MAGIC: [u8; 16] = [
     0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
     0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81,
 ];
-const BCHFS_MAGIC: [u8; 16] = [
+pub const BCHFS_MAGIC: [u8; 16] = [
     0xc6, 0x85, 0x73, 0xf6, 0x66, 0xce, 0x90, 0xa9,
     0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
 ];
+
+/// Default superblock size in 512-byte sectors
+pub const SUPERBLOCK_SIZE_DEFAULT: u32 = 2048;

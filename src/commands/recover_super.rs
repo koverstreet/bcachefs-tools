@@ -13,6 +13,7 @@ use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
 use crate::wrappers::printbuf::Printbuf;
+use crate::wrappers::super_io::{BCACHE_MAGIC, BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
 
 // bch2_sb_validate's flags parameter is a bch_validate_flags enum in bindgen,
 // but C passes 0 (no flags). Since 0 isn't a valid Rust enum variant, declare
@@ -26,19 +27,6 @@ extern "C" {
         err: *mut c::printbuf,
     ) -> i32;
 }
-
-// UUID constants — from libbcachefs/bcachefs_format.h
-const BCACHE_MAGIC: [u8; 16] = [
-    0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
-    0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81,
-];
-const BCHFS_MAGIC: [u8; 16] = [
-    0xc6, 0x85, 0x73, 0xf6, 0x66, 0xce, 0x90, 0xa9,
-    0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
-];
-
-/// Default superblock size in 512-byte sectors
-const SUPERBLOCK_SIZE_DEFAULT: u32 = 2048;
 
 /// Attempt to recover an overwritten superblock from backups
 #[derive(Parser, Debug)]

@@ -7,6 +7,8 @@ use std::ffi::CStr;
 use bch_bindgen::c;
 use bch_bindgen::{opt_defined, opt_get, opt_set};
 
+use super::super_io::{BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
+
 const TARGET_DEV_START: u32 = 1;
 const TARGET_GROUP_START: u32 = 256 + TARGET_DEV_START;
 
@@ -392,7 +394,7 @@ fn format_opts_default() -> c::format_opts {
 
     c::format_opts {
         version,
-        superblock_size: 2048, // SUPERBLOCK_SIZE_DEFAULT
+        superblock_size: SUPERBLOCK_SIZE_DEFAULT,
         ..Default::default()
     }
 }
@@ -432,7 +434,3 @@ fn rounddown_pow_of_two(v: u64) -> u64 {
     1u64 << (63 - v.leading_zeros())
 }
 
-const BCHFS_MAGIC: [u8; 16] = [
-    0xc6, 0x85, 0x73, 0xf6, 0x66, 0xce, 0x90, 0xa9,
-    0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
-];
