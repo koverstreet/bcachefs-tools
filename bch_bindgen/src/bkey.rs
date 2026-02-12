@@ -171,3 +171,12 @@ pub fn bkey_cmp(l: Bpos, r: Bpos) -> i32 {
         0
     }
 }
+
+/// Start position of a bkey (p.offset - size).
+pub fn bkey_start_pos(k: &c::bkey) -> c::bpos {
+    c::bpos {
+        inode: k.p.inode,
+        offset: k.p.offset.wrapping_sub(k.size as u64),
+        snapshot: k.p.snapshot,
+    }
+}

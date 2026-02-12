@@ -3,6 +3,7 @@ pub mod bkey;
 pub mod btree;
 pub mod errcode;
 pub mod fs;
+pub mod journal;
 pub mod keyutils;
 pub mod opts;
 pub mod sb;
@@ -60,6 +61,27 @@ impl Ord for Bpos {
             .cmp(&r_inode)
             .then(l_offset.cmp(&r_offset))
             .then(l_snapshot.cmp(&r_snapshot))
+    }
+}
+
+impl PartialEq for c::bbpos {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == Ordering::Equal
+    }
+}
+
+impl Eq for c::bbpos {}
+
+impl PartialOrd for c::bbpos {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for c::bbpos {
+    fn cmp(&self, other: &Self) -> Ordering {
+        (self.btree as u32).cmp(&(other.btree as u32))
+            .then(self.pos.cmp(&other.pos))
     }
 }
 
