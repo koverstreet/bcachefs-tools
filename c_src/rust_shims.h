@@ -8,6 +8,20 @@
  */
 
 struct bch_fs;
+struct bch_sb;
+struct bch_csum;
+
+/*
+ * Compute the checksum of an on-disk superblock, using the csum type
+ * stored in the sb itself.  Wraps the csum_vstruct() macro.
+ */
+struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb);
+
+/*
+ * Compute the total byte size of a variable-length superblock struct.
+ * Wraps the vstruct_bytes() macro.
+ */
+size_t rust_vstruct_bytes_sb(const struct bch_sb *sb);
 
 /*
  * Wrapper around copy_fs() for format --source: opens src_path,

@@ -11,9 +11,22 @@
 #include "libbcachefs/journal/init.h"
 #include "libbcachefs/sb/io.h"
 #include "libbcachefs/sb/members.h"
+#include "libbcachefs/data/checksum.h"
 #include "cmd_strip_alloc.h"
 #include "posix_to_bcachefs.h"
 #include "rust_shims.h"
+
+struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb)
+{
+	struct nonce nonce = { 0 };
+
+	return csum_vstruct(NULL, BCH_SB_CSUM_TYPE(sb), nonce, sb);
+}
+
+size_t rust_vstruct_bytes_sb(const struct bch_sb *sb)
+{
+	return vstruct_bytes(sb);
+}
 
 char *rust_opts_usage_to_str(unsigned flags_all, unsigned flags_none)
 {
