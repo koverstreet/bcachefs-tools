@@ -1,4 +1,3 @@
-use std::ffi::CString;
 use std::fmt::Write;
 
 use anyhow::{bail, Result};
@@ -7,6 +6,8 @@ use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 use clap::Parser;
+
+use crate::util::read_flag_list;
 
 use bch_bindgen::printbuf::Printbuf;
 
@@ -34,25 +35,11 @@ pub fn cmd_recovery_pass(argv: Vec<String>) -> Result<()> {
     let mut passes_to_unset: u64 = 0;
 
     for s in &cli.set {
-        let c_str = CString::new(s.as_str())?;
-        passes_to_set |= unsafe {
-            c::read_flag_list_or_die(
-                c_str.as_ptr().cast_mut(),
-                c::bch2_recovery_passes.as_ptr(),
-                c"recovery pass".as_ptr(),
-            )
-        };
+        passes_to_set |= read_flag_list(s, unsafe { &c::bch2_recovery_passes }, "recovery pass")?;
     }
 
     for s in &cli.unset {
-        let c_str = CString::new(s.as_str())?;
-        passes_to_unset |= unsafe {
-            c::read_flag_list_or_die(
-                c_str.as_ptr().cast_mut(),
-                c::bch2_recovery_passes.as_ptr(),
-                c"recovery pass".as_ptr(),
-            )
-        };
+        passes_to_unset |= read_flag_list(s, unsafe { &c::bch2_recovery_passes }, "recovery pass")?;
     }
 
     passes_to_set = unsafe { c::bch2_recovery_passes_to_stable(passes_to_set) };

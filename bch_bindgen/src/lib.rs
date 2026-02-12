@@ -136,6 +136,7 @@ pub enum BchToolsErr {
     InvalidBtreeId,
     InvalidBkeyType,
     InvalidBpos,
+    InvalidBbpos,
 }
 
 impl fmt::Display for BchToolsErr {
@@ -144,6 +145,7 @@ impl fmt::Display for BchToolsErr {
             BchToolsErr::InvalidBtreeId => write!(f, "invalid btree id"),
             BchToolsErr::InvalidBkeyType => write!(f, "invalid bkey type"),
             BchToolsErr::InvalidBpos => write!(f, "invalid bpos"),
+            BchToolsErr::InvalidBbpos => write!(f, "invalid bbpos"),
         }
     }
 }
@@ -162,6 +164,45 @@ impl FromStr for c::btree_id {
         c::btree_id::from_raw(v as u32)
             .ok_or(BchToolsErr::InvalidBtreeId)
     }
+}
+
+impl FromStr for c::bbpos {
+    type Err = BchToolsErr;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let (btree_s, pos_s) = s.split_once(':')
+            .ok_or(BchToolsErr::InvalidBbpos)?;
+
+        let btree: c::btree_id = btree_s.parse()
+            .map_err(|_| BchToolsErr::InvalidBbpos)?;
+        let pos: c::bpos = pos_s.parse()
+            .map_err(|_| BchToolsErr::InvalidBbpos)?;
+
+        Ok(c::bbpos { btree, pos })
+    }
+}
+
+/// A range of btree positions (start..=end).
+#[derive(Clone, Copy)]
+pub struct BbposRange {
+    pub start: c::bbpos,
+    pub end:   c::bbpos,
+}
+
+/// Parse a bbpos range string "start-end" or just "pos" (start == end).
+pub fn bbpos_range_parse(s: &str) -> Result<BbposRange, BchToolsErr> {
+    let (start_s, end_s) = match s.split_once('-') {
+        Some((a, b)) => (a, Some(b)),
+        None => (s, None),
+    };
+
+    let start: c::bbpos = start_s.parse()?;
+    let end: c::bbpos = match end_s {
+        Some(e) => e.parse()?,
+        None => start,
+    };
+
+    Ok(BbposRange { start, end })
 }
 
 impl FromStr for c::bch_bkey_type {

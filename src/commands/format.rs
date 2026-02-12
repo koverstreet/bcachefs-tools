@@ -21,6 +21,22 @@ pub(crate) fn metadata_version_current() -> u32 {
     c::bcachefs_metadata_version::bcachefs_metadata_version_max as u32 - 1
 }
 
+/// Parse a version string "major.minor" or just "minor" (major defaults to 0).
+pub(crate) fn version_parse(s: &str) -> Result<u32> {
+    let (major, minor) = match s.split_once('.') {
+        Some((maj, min)) => {
+            let major: u32 = maj.parse().map_err(|_| anyhow!("invalid version {}", s))?;
+            let minor: u32 = min.parse().map_err(|_| anyhow!("invalid version {}", s))?;
+            (major, minor)
+        }
+        None => {
+            let minor: u32 = s.parse().map_err(|_| anyhow!("invalid version {}", s))?;
+            (0, minor)
+        }
+    };
+    Ok((major << 10) | minor)
+}
+
 fn format_usage() {
     let fs_opts = opts_usage_str(
         c::opt_flags::OPT_FORMAT as u32 | c::opt_flags::OPT_FS as u32,
@@ -254,9 +270,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                 }
                 "version" => {
                     let val = take_opt_value(inline_val, &argv, &mut i, raw_name)?;
-                    let c_val = CString::new(val.as_str())?;
-                    format_version =
-                        Some(unsafe { c::version_parse(c_val.as_ptr() as *mut _) });
+                    format_version = Some(version_parse(&val)?);
                 }
                 "no_initialize" => initialize = false,
                 "source" => {

@@ -1,9 +1,9 @@
-use std::ffi::CString;
 use std::fmt::Write;
 
 use anyhow::{bail, Result};
 use bch_bindgen::c;
 use bch_bindgen::bkey::bkey_start_pos;
+use bch_bindgen::{BbposRange, bbpos_range_parse};
 use bch_bindgen::journal::{
     jset_entries, jset_entry_keys, entry_type, entry_btree_id, entry_log_str_eq,
     jset_vstruct_bytes, jset_vstruct_sectors, jset_no_flush,
@@ -13,6 +13,7 @@ use bch_bindgen::fs::Fs;
 use clap::Parser;
 
 use bch_bindgen::printbuf::Printbuf;
+use crate::util::read_flag_list;
 
 // ---- entry classification ----
 
@@ -71,7 +72,7 @@ struct TransactionMsgFilter {
 
 struct TransactionKeyFilter {
     sign: i32,
-    ranges: Vec<c::bbpos_range>,
+    ranges: Vec<BbposRange>,
 }
 
 struct JournalFilter {
@@ -658,14 +659,7 @@ pub fn cmd_list_journal(argv: Vec<String>) -> Result<()> {
 
     if let Some(ref btree_arg) = cli.btree {
         let (sign, rest) = parse_sign(btree_arg);
-        let c_str = CString::new(rest).unwrap();
-        f.btree_filter = unsafe {
-            c::read_flag_list_or_die(
-                c_str.as_ptr() as *mut _,
-                c::__bch2_btree_ids.as_ptr(),
-                b"btree id\0".as_ptr() as *const _,
-            )
-        };
+        f.btree_filter = read_flag_list(rest, unsafe { &c::__bch2_btree_ids }, "btree id")?;
         if sign < 0 {
             f.btree_filter = !f.btree_filter;
         }
@@ -685,8 +679,8 @@ pub fn cmd_list_journal(argv: Vec<String>) -> Result<()> {
         let (sign, rest) = parse_sign(key_arg);
         f.key.sign = sign;
         for part in rest.split(',') {
-            let c_str = CString::new(part).unwrap();
-            let range = unsafe { c::bbpos_range_parse(c_str.as_ptr() as *mut _) };
+            let range = bbpos_range_parse(part)
+                .map_err(|e| anyhow::anyhow!("{}: {}", e, part))?;
             f.key.ranges.push(range);
         }
         f.filtering = true;

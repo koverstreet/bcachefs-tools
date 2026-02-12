@@ -2,7 +2,6 @@
 #define _TOOLS_UTIL_H
 
 #include <errno.h>
-#include <mntent.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -20,7 +19,6 @@
 #include <linux/uuid.h>
 
 #include "bcachefs.h"
-#include "btree/bbpos.h"
 #include "util/darray.h"
 
 #define noreturn __attribute__((noreturn))
@@ -100,9 +98,6 @@ do {									\
 
 char *read_file_str(int, const char *);
 u64 read_file_u64(int, const char *);
-
-ssize_t read_string_list_or_die(const char *, const char * const[], const char *);
-u64 read_flag_list_or_die(char *, const char * const[], const char *);
 
 u64 get_size(int);
 unsigned get_blocksize(int);
@@ -191,19 +186,6 @@ char *strcmp_prefix(char *, const char *);
 #define crc32c bch_crc32c
 u32 crc32c(u32, const void *, size_t);
 
-struct mntent *dev_to_mount(const char *);
-int dev_mounted(const char *);
 char *fd_to_dev_model(int);
-
-struct bbpos bbpos_parse(char *);
-
-struct bbpos_range {
-	struct bbpos	start;
-	struct bbpos	end;
-};
-
-struct bbpos_range bbpos_range_parse(char *);
-
-unsigned version_parse(char *);
 
 #endif /* _TOOLS_UTIL_H */

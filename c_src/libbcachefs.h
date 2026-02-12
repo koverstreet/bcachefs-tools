@@ -11,8 +11,6 @@
 
 /* option parsing */
 
-#define SUPERBLOCK_SIZE_DEFAULT		2048	/* 1 MB */
-
 struct bch_opt_strs {
 union {
 	char			*by_id[bch2_opts_nr];
@@ -38,31 +36,6 @@ struct format_opts {
 	char		*source;
 	bool		no_sb_at_end;
 };
-
-static inline unsigned bcachefs_kernel_version(void)
-{
-	return !access("/sys/module/bcachefs/parameters/version", R_OK)
-	    ? read_file_u64(AT_FDCWD, "/sys/module/bcachefs/parameters/version")
-	    : 0;
-}
-
-static inline struct format_opts format_opts_default()
-{
-	/*
-	 * Ensure bcachefs module is loaded so we know the supported on disk
-	 * format version:
-	 */
-	(void)!system("modprobe bcachefs > /dev/null 2>&1");
-
-	unsigned kernel_version = bcachefs_kernel_version();
-
-	return (struct format_opts) {
-		.version		= kernel_version
-			? min(bcachefs_metadata_version_current, kernel_version)
-			: bcachefs_metadata_version_current,
-		.superblock_size	= SUPERBLOCK_SIZE_DEFAULT,
-	};
-}
 
 struct dev_opts {
 	struct file	*file;

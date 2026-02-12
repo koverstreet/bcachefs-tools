@@ -1,11 +1,10 @@
-use std::ffi::CString;
 use std::fs;
-use std::io;
+use std::io::{self, BufRead};
 use std::os::fd::BorrowedFd;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use bch_bindgen::c;
 
 /// Resolve the block device name for a bcachefs sysfs device directory.
 ///
@@ -59,10 +58,38 @@ pub fn bcachefs_kernel_version() -> u64 {
     read_sysfs_u64(Path::new(KERNEL_VERSION_PATH)).unwrap_or(0)
 }
 
-/// Check if a block device is currently mounted as a bcachefs member.
+/// Check if a block device is currently mounted.
+///
+/// Parses /proc/mounts and compares device identity (st_rdev for block
+/// devices, st_dev+st_ino for files) against each mount's device path(s).
+/// bcachefs mounts list multiple devices separated by colons.
 pub fn dev_mounted(path: &str) -> bool {
-    let Ok(c_path) = CString::new(path) else { return false };
-    unsafe { c::dev_mounted(c_path.as_ptr()) != 0 }
+    let Ok(d1) = fs::metadata(path) else { return false };
+
+    let Ok(f) = fs::File::open("/proc/mounts") else { return false };
+    for line in io::BufReader::new(f).lines() {
+        let Ok(line) = line else { continue };
+        let Some(dev_field) = line.split_whitespace().next() else { continue };
+
+        for dev in dev_field.split(':') {
+            let Ok(d2) = fs::metadata(dev) else { continue };
+
+            let is_blk_1 = d1.file_type().is_block_device();
+            let is_blk_2 = d2.file_type().is_block_device();
+            if is_blk_1 != is_blk_2 {
+                continue;
+            }
+
+            if is_blk_1 {
+                if d1.rdev() == d2.rdev() {
+                    return true;
+                }
+            } else if d1.dev() == d2.dev() && d1.ino() == d2.ino() {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 /// Write a string value to a sysfs attribute file relative to a directory fd.

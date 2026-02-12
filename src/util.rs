@@ -1,9 +1,10 @@
 use std::ffi::CString;
 use std::fs::File;
 use std::io;
+use std::os::raw::c_char;
 use std::os::unix::fs::FileTypeExt;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
 use crossterm::{cursor, execute, terminal};
 use rustix::ioctl::{self, Getter, ReadOpcode};
@@ -71,6 +72,18 @@ pub fn file_size(f: &File) -> Result<u64> {
     } else {
         Ok(meta.len())
     }
+}
+
+/// Parse a comma-separated flag list against a C string table.
+///
+/// Returns a bitmask of matched flags, or an error if any flag is unrecognized.
+pub fn read_flag_list(s: &str, list: &[*const c_char], what: &str) -> Result<u64> {
+    let c_str = CString::new(s)?;
+    let v = unsafe { c::bch2_read_flag_list(c_str.as_ptr(), list.as_ptr()) };
+    if v == u64::MAX {
+        bail!("Bad {} {}", what, s);
+    }
+    Ok(v)
 }
 
 pub fn run_tui<F>(f: F) -> Result<()>

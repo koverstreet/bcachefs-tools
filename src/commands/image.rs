@@ -7,7 +7,7 @@ use bch_bindgen::opt_set;
 use clap::Parser;
 
 use crate::commands::format::{
-    take_opt_value, take_short_value, metadata_version_current,
+    take_opt_value, take_short_value, metadata_version_current, version_parse,
 };
 use crate::commands::opts::{bch_opt_lookup, opts_usage_str, parse_opt_val};
 use crate::key::Passphrase;
@@ -191,9 +191,7 @@ pub fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                 }
                 "version" => {
                     let val = take_opt_value(inline_val, &argv, &mut i, raw_name)?;
-                    let c_val = CString::new(val.as_str())?;
-                    format_version =
-                        Some(unsafe { c::version_parse(c_val.as_ptr() as *mut _) });
+                    format_version = Some(version_parse(&val)?);
                 }
                 "force" => {}
                 "quiet" => verbosity = 0,
