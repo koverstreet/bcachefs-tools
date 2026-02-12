@@ -24,9 +24,11 @@ pub fn dev_name_from_sysfs(dev_sysfs_path: &Path) -> String {
         .unwrap_or_default()
 }
 
-pub fn sysfs_path_from_fd(fd: i32) -> Result<PathBuf> {
-    let link = format!("/proc/self/fd/{}", fd);
-    fs::read_link(&link).with_context(|| format!("resolving sysfs fd {}", fd))
+pub fn sysfs_path_from_fd(fd: BorrowedFd) -> Result<PathBuf> {
+    use std::os::fd::AsRawFd;
+    let raw = fd.as_raw_fd();
+    let link = format!("/proc/self/fd/{}", raw);
+    fs::read_link(&link).with_context(|| format!("resolving sysfs fd {}", raw))
 }
 
 /// Read a sysfs attribute as a u64.
@@ -37,16 +39,21 @@ pub fn read_sysfs_u64(path: &Path) -> io::Result<u64> {
             format!("{}: {:?}", e, s.trim())))
 }
 
-/// Read a sysfs attribute as a u64, relative to a directory fd.
-pub fn read_sysfs_fd_u64(dirfd: i32, path: &str) -> io::Result<u64> {
-    let dir = unsafe { BorrowedFd::borrow_raw(dirfd) };
+/// Read a sysfs attribute as a string, relative to a directory fd.
+pub fn read_sysfs_fd_str(dirfd: BorrowedFd, path: &str) -> io::Result<String> {
     let flags = rustix::fs::OFlags::RDONLY;
-    let fd = rustix::fs::openat(dir, path, flags, rustix::fs::Mode::empty())?;
-    let mut buf = [0u8; 64];
+    let fd = rustix::fs::openat(dirfd, path, flags, rustix::fs::Mode::empty())?;
+    let mut buf = [0u8; 256];
     let n = rustix::io::read(&fd, &mut buf)?;
     let s = std::str::from_utf8(&buf[..n])
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    s.trim().parse::<u64>()
+    Ok(s.trim().to_string())
+}
+
+/// Read a sysfs attribute as a u64, relative to a directory fd.
+pub fn read_sysfs_fd_u64(dirfd: BorrowedFd, path: &str) -> io::Result<u64> {
+    read_sysfs_fd_str(dirfd, path)?
+        .parse::<u64>()
         .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
@@ -65,10 +72,9 @@ pub fn dev_mounted(path: &str) -> bool {
 }
 
 /// Write a string value to a sysfs attribute file relative to a directory fd.
-pub fn sysfs_write_str(sysfs_fd: i32, path: &str, value: &str) {
-    let dir = unsafe { BorrowedFd::borrow_raw(sysfs_fd) };
+pub fn sysfs_write_str(sysfs_fd: BorrowedFd, path: &str, value: &str) {
     let flags = rustix::fs::OFlags::WRONLY;
-    if let Ok(fd) = rustix::fs::openat(dir, path, flags, rustix::fs::Mode::empty()) {
+    if let Ok(fd) = rustix::fs::openat(sysfs_fd, path, flags, rustix::fs::Mode::empty()) {
         let _ = rustix::io::write(&fd, value.as_bytes());
     }
 }

@@ -1,10 +1,10 @@
 use std::ffi::CStr;
+use std::io;
 use std::mem;
-use std::os::fd::BorrowedFd;
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use bch_bindgen::c::{
-    bcache_fs_close, bcache_fs_open_fallible,
     bch_data_type,
     bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2,
     bch_ioctl_dev_usage_bch_ioctl_dev_usage_type,
@@ -13,11 +13,11 @@ use bch_bindgen::c::{
     bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2,
     bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2,
     bch_ioctl_subvolume, bch_ioctl_subvolume_v2,
-    bchfs_handle,
     BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE,
 };
 use crate::wrappers::ioctl::bch_ioc_wr;
-use bch_bindgen::errcode::{BchError, ret_to_result};
+use crate::wrappers::sysfs;
+use bch_bindgen::errcode::BchError;
 use bch_bindgen::path_to_cstr;
 use errno::Errno;
 use rustix::ioctl::{self, CompileTimeOpcode, Setter, WriteOpcode};
@@ -66,42 +66,219 @@ type DiskResizeV2Opcode    = WriteOpcode<0xbc, 27, bch_ioctl_disk_resize_v2>;
 type DiskResizeJournalOpcode   = WriteOpcode<0xbc, 15, bch_ioctl_disk_resize_journal>;
 type DiskResizeJournalV2Opcode = WriteOpcode<0xbc, 28, bch_ioctl_disk_resize_journal_v2>;
 
-/// A handle to a bcachefs filesystem
-/// This can be used to send [`libc::ioctl`] to the underlying filesystem.
+const SYSFS_BASE: &str = "/sys/fs/bcachefs/";
+
+/// BCH_IOCTL_QUERY_UUID: _IOR(0xbc, 1, struct bch_ioctl_query_uuid)
+/// Returns the user-visible filesystem UUID.
+#[repr(C)]
+#[derive(Default)]
+struct BchIoctlQueryUuid {
+    uuid: [u8; 16],
+}
+
+/// Compute _IOR(type, nr, size)
+const fn ioc_r(type_: u32, nr: u32, size: u32) -> libc::c_ulong {
+    ((2u32 << 30) | (size << 16) | (type_ << 8) | nr) as libc::c_ulong
+}
+
+const BCH_IOCTL_QUERY_UUID: libc::c_ulong =
+    ioc_r(0xbc, 1, mem::size_of::<BchIoctlQueryUuid>() as u32);
+
+/// FS_IOC_GETFSSYSFSPATH: _IOR(0x15, 1, struct fs_sysfs_path)
+#[repr(C)]
+struct FsSysfsPath {
+    len: u8,
+    name: [u8; 128],
+}
+
+const FS_IOC_GETFSSYSFSPATH: libc::c_ulong =
+    ioc_r(0x15, 1, mem::size_of::<FsSysfsPath>() as u32);
+
+/// A handle to a bcachefs filesystem, with RAII close.
 pub(crate) struct BcachefsHandle {
-    inner: bchfs_handle,
+    ioctl_fd: OwnedFd,
+    sysfs_fd: OwnedFd,
+    uuid:     [u8; 16],
+    dev_idx:  i32,
 }
 
 impl BcachefsHandle {
-    pub(crate) fn sysfs_fd(&self) -> i32 {
-        self.inner.sysfs_fd
+    pub(crate) fn sysfs_fd(&self) -> BorrowedFd<'_> {
+        self.sysfs_fd.as_fd()
     }
 
     pub(crate) fn ioctl_fd_raw(&self) -> i32 {
-        self.inner.ioctl_fd
+        self.ioctl_fd.as_raw_fd()
     }
 
     /// Device index when opened via a block device path; -1 when opened via mount point.
     pub(crate) fn dev_idx(&self) -> i32 {
-        self.inner.dev_idx
+        self.dev_idx
     }
 
     /// Filesystem UUID.
     pub(crate) fn uuid(&self) -> [u8; 16] {
-        self.inner.uuid.b
+        self.uuid
     }
 
-    /// Opens a bcachefs filesystem and returns its handle
+    /// Opens a bcachefs filesystem and returns its handle.
+    ///
+    /// `path` can be:
+    /// - A UUID string (e.g. "abcd-...")
+    /// - A path to a mounted filesystem
+    /// - A block device path
+    /// - A file path (reads superblock)
     pub(crate) fn open<P: AsRef<Path>>(path: P) -> Result<Self, BchError> {
-        let path = path_to_cstr(path);
-        let mut handle = std::mem::MaybeUninit::uninit();
-        ret_to_result(unsafe { bcache_fs_open_fallible(path.as_ptr(), handle.as_mut_ptr()) })?;
-        let inner = unsafe { handle.assume_init() };
-        Ok(Self { inner })
+        let path = path.as_ref();
+        let path_str = path.to_string_lossy();
+
+        // Try as UUID string first
+        if let Ok(uuid) = parse_uuid(&path_str) {
+            return Self::open_by_name(&path_str, Some(uuid))
+                .map_err(|e| BchError::from_raw(-e.0));
+        }
+
+        // It's a path — open it
+        let path_fd = rustix::fs::open(
+            path,
+            rustix::fs::OFlags::RDONLY,
+            rustix::fs::Mode::empty(),
+        ).map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+
+        // Try BCH_IOCTL_QUERY_UUID — if it succeeds, it's a mounted fs path
+        let mut query_uuid = BchIoctlQueryUuid::default();
+        let ret = unsafe {
+            libc::ioctl(path_fd.as_raw_fd(), BCH_IOCTL_QUERY_UUID, &mut query_uuid)
+        };
+        if ret == 0 {
+            return Self::open_mounted_path(path_fd, query_uuid.uuid);
+        }
+
+        // stat the path to distinguish block device vs file
+        let stat = rustix::fs::fstat(&path_fd)
+            .map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+
+        // Drop path_fd — we'll re-open via sysfs/ctl
+        drop(path_fd);
+
+        let mode = stat.st_mode & libc::S_IFMT as u32;
+
+        if mode == libc::S_IFBLK as u32 {
+            // Block device: try sysfs symlink
+            let major = rustix::fs::major(stat.st_rdev);
+            let minor = rustix::fs::minor(stat.st_rdev);
+            let sysfs_link = format!("/sys/dev/block/{}:{}/bcachefs", major, minor);
+
+            if let Ok(target) = std::fs::read_link(&sysfs_link) {
+                let target = target.to_string_lossy();
+                // target looks like "../../fs/bcachefs/<uuid>/dev-N"
+                // We need to extract uuid and dev_idx
+                if let Some((uuid_str, dev_idx)) = parse_sysfs_link(&target) {
+                    let uuid = parse_uuid(uuid_str).ok();
+                    let mut handle = Self::open_by_name(uuid_str, uuid)
+                        .map_err(|e| BchError::from_raw(-e.0))?;
+                    handle.dev_idx = dev_idx;
+                    return Ok(handle);
+                }
+            }
+        }
+
+        // Fallback: read superblock to get UUID
+        Self::open_via_superblock(path)
+    }
+
+    /// Open a mounted filesystem path. The fd becomes the ioctl fd.
+    fn open_mounted_path(ioctl_fd: OwnedFd, uuid: [u8; 16]) -> Result<Self, BchError> {
+        // Try FS_IOC_GETFSSYSFSPATH to get sysfs path
+        let mut fs_path = FsSysfsPath { len: 0, name: [0; 128] };
+        let ret = unsafe {
+            libc::ioctl(ioctl_fd.as_raw_fd(), FS_IOC_GETFSSYSFSPATH, &mut fs_path)
+        };
+
+        let sysfs_fd = if ret == 0 {
+            let name_len = fs_path.len as usize;
+            let name = std::str::from_utf8(&fs_path.name[..name_len])
+                .map_err(|_| BchError::from_raw(-libc::EINVAL))?;
+            let sysfs = format!("/sys/fs/{}", name);
+            rustix::fs::open(
+                sysfs.as_str(),
+                rustix::fs::OFlags::RDONLY,
+                rustix::fs::Mode::empty(),
+            ).map_err(|e| BchError::from_raw(-e.raw_os_error()))?
+        } else {
+            // Fallback: use UUID
+            let uuid_str = format_uuid(&uuid);
+            let sysfs = format!("{}{}", SYSFS_BASE, uuid_str);
+            rustix::fs::open(
+                sysfs.as_str(),
+                rustix::fs::OFlags::RDONLY,
+                rustix::fs::Mode::empty(),
+            ).map_err(|e| BchError::from_raw(-e.raw_os_error()))?
+        };
+
+        Ok(BcachefsHandle {
+            ioctl_fd,
+            sysfs_fd,
+            uuid,
+            dev_idx: -1,
+        })
+    }
+
+    /// Open by sysfs name (UUID string). Reads minor number, opens /dev/bcachefsN-ctl.
+    fn open_by_name(name: &str, uuid: Option<[u8; 16]>) -> Result<Self, Errno> {
+        let sysfs_path = format!("{}{}", SYSFS_BASE, name);
+        let sysfs_fd = rustix::fs::open(
+            sysfs_path.as_str(),
+            rustix::fs::OFlags::RDONLY,
+            rustix::fs::Mode::empty(),
+        ).map_err(|e| Errno(e.raw_os_error()))?;
+
+        let minor = sysfs::read_sysfs_fd_str(sysfs_fd.as_fd(), "minor")
+            .map_err(|e| Errno(e.raw_os_error().unwrap_or(libc::EIO)))?;
+
+        let ctl_path = format!("/dev/bcachefs{}-ctl", minor);
+        let ioctl_fd = rustix::fs::open(
+            ctl_path.as_str(),
+            rustix::fs::OFlags::RDWR,
+            rustix::fs::Mode::empty(),
+        ).map_err(|e| Errno(e.raw_os_error()))?;
+
+        Ok(BcachefsHandle {
+            ioctl_fd,
+            sysfs_fd,
+            uuid: uuid.unwrap_or([0; 16]),
+            dev_idx: -1,
+        })
+    }
+
+    /// Open by reading superblock from a device/file path.
+    fn open_via_superblock(path: &Path) -> Result<Self, BchError> {
+        use bch_bindgen::bcachefs;
+
+        let mut opts = bcachefs::bch_opts::default();
+        bch_bindgen::opt_set!(opts, noexcl, 1);
+        bch_bindgen::opt_set!(opts, nochanges, 1);
+
+        let sb = bch_bindgen::sb_io::read_super_opts(path, opts)
+            .map_err(|e| match e.downcast::<BchError>() {
+                Ok(bch_err) => bch_err,
+                Err(_) => BchError::from_raw(-libc::EIO),
+            })?;
+
+        let dev_idx = unsafe { (*sb.sb).dev_idx as i32 };
+        let uuid = unsafe { (*sb.sb).user_uuid.b };
+        let uuid_str = format_uuid(&uuid);
+
+        unsafe { bch_bindgen::sb_io::bch2_free_super(&sb as *const _ as *mut _) };
+
+        let mut handle = Self::open_by_name(&uuid_str, Some(uuid))
+            .map_err(|e| BchError::from_raw(-e.0))?;
+        handle.dev_idx = dev_idx;
+        Ok(handle)
     }
 
     fn ioctl_fd(&self) -> BorrowedFd<'_> {
-        unsafe { BorrowedFd::borrow_raw(self.ioctl_fd_raw()) }
+        self.ioctl_fd.as_fd()
     }
 
     fn subvol_ioctl<V2: CompileTimeOpcode, V1: CompileTimeOpcode>(
@@ -269,7 +446,7 @@ impl BcachefsHandle {
             });
         }
 
-        let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
         if errno != libc::ENOTTY {
             return Err(Errno(errno));
         }
@@ -283,7 +460,7 @@ impl BcachefsHandle {
         let request_v1 = bch_ioc_wr::<bch_ioctl_dev_usage>(11);
         let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request_v1, &mut u_v1 as *mut _) };
         if ret < 0 {
-            return Err(Errno(std::io::Error::last_os_error().raw_os_error().unwrap_or(0)));
+            return Err(Errno(io::Error::last_os_error().raw_os_error().unwrap_or(0)));
         }
 
         let mut data_types = Vec::new();
@@ -348,8 +525,40 @@ fn print_errmsg(err_buf: &[u8]) {
     }
 }
 
-impl Drop for BcachefsHandle {
-    fn drop(&mut self) {
-        unsafe { bcache_fs_close(self.inner) };
+/// Parse a UUID string into 16 bytes.
+fn parse_uuid(s: &str) -> Result<[u8; 16], ()> {
+    let hex: String = s.chars().filter(|c| *c != '-').collect();
+    if hex.len() != 32 {
+        return Err(());
     }
+    let mut uuid = [0u8; 16];
+    for i in 0..16 {
+        uuid[i] = u8::from_str_radix(&hex[i*2..i*2+2], 16).map_err(|_| ())?;
+    }
+    Ok(uuid)
+}
+
+/// Format a UUID as a lowercase hex string with dashes.
+fn format_uuid(uuid: &[u8; 16]) -> String {
+    format!(
+        "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
+        uuid[0], uuid[1], uuid[2], uuid[3],
+        uuid[4], uuid[5],
+        uuid[6], uuid[7],
+        uuid[8], uuid[9],
+        uuid[10], uuid[11], uuid[12], uuid[13], uuid[14], uuid[15],
+    )
+}
+
+/// Parse a sysfs bcachefs symlink target like "../../fs/bcachefs/<uuid>/dev-N".
+/// Returns (uuid_str, dev_idx).
+fn parse_sysfs_link(target: &str) -> Option<(&str, i32)> {
+    // Find the last '/' to get "dev-N"
+    let (prefix, dev_part) = target.rsplit_once('/')?;
+    let dev_idx: i32 = dev_part.strip_prefix("dev-")?.parse().ok()?;
+
+    // Find the uuid — it's the path component before "dev-N"
+    let (_, uuid_str) = prefix.rsplit_once('/')?;
+
+    Some((uuid_str, dev_idx))
 }
