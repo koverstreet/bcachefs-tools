@@ -55,27 +55,6 @@ char *read_passphrase(const char *prompt)
 	return buf;
 }
 
-char *read_passphrase_twice(const char *prompt)
-{
-	char *pass = read_passphrase(prompt);
-
-	if (!isatty(STDIN_FILENO))
-		return pass;
-
-	char *pass2 = read_passphrase("Enter same passphrase again: ");
-
-	if (strcmp(pass, pass2)) {
-		memzero_explicit(pass, strlen(pass));
-		memzero_explicit(pass2, strlen(pass2));
-		die("Passphrases do not match");
-	}
-
-	memzero_explicit(pass2, strlen(pass2));
-	free(pass2);
-
-	return pass;
-}
-
 struct bch_key derive_passphrase(struct bch_sb_field_crypt *crypt,
 				 const char *passphrase)
 {

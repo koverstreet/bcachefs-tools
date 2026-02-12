@@ -26,7 +26,6 @@ struct {
 
 void bch2_opt_strs_free(struct bch_opt_strs *);
 struct bch_opts bch2_parse_opts(struct bch_opt_strs);
-void bch2_opts_usage(unsigned);
 
 struct format_opts {
 	char		*label;

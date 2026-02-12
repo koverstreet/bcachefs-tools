@@ -412,7 +412,6 @@ fn main() {
         .allowlist_function("bch_sb_crypt_init")
         .allowlist_function("bdev_nonrot")
         .allowlist_function("read_passphrase")
-        .allowlist_function("read_passphrase_twice")
         .blocklist_function("bch2_prt_vprintf")
         .blocklist_type("rhash_lock_head")
         .blocklist_type("srcu_struct")
