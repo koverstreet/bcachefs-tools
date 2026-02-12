@@ -31,7 +31,7 @@ impl<'a> BkeySC<'a> {
         }
     }
 
-    pub fn v(&'a self) -> BkeyValSC<'a> {
+    pub fn v(&self) -> BkeyValSC<'a> {
         unsafe { BkeyValSC::from_raw(self.k, self.v) }
     }
 }
