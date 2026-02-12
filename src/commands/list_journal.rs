@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use bch_bindgen::c;
 use bch_bindgen::bkey::bkey_start_pos;
 use bch_bindgen::journal::{
-    jset_entries, jset_entry_keys, entry_type, entry_log_str_eq,
+    jset_entries, jset_entry_keys, entry_type, entry_btree_id, entry_log_str_eq,
     jset_vstruct_bytes, jset_vstruct_sectors, jset_no_flush,
 };
 use bch_bindgen::opt_set;
@@ -17,12 +17,12 @@ use crate::wrappers::printbuf::Printbuf;
 // ---- entry classification ----
 
 fn entry_is_transaction_start(entry: &c::jset_entry) -> bool {
-    entry_type(entry) == c::bch_jset_entry_type::BCH_JSET_ENTRY_log
+    entry_type(entry) == Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_log)
         && entry.level == 0
 }
 
 fn entry_is_log_msg(entry: &c::jset_entry) -> bool {
-    if !(entry_type(entry) == c::bch_jset_entry_type::BCH_JSET_ENTRY_log
+    if !(entry_type(entry) == Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_log)
         && entry.level != 0)
     {
         return false;
@@ -44,10 +44,10 @@ fn entry_is_print_key(entry: &c::jset_entry) -> bool {
     use c::bch_jset_entry_type::*;
     matches!(
         entry_type(entry),
-        BCH_JSET_ENTRY_btree_root
+        Some(BCH_JSET_ENTRY_btree_root
             | BCH_JSET_ENTRY_btree_keys
             | BCH_JSET_ENTRY_write_buffer_keys
-            | BCH_JSET_ENTRY_overwrite
+            | BCH_JSET_ENTRY_overwrite)
     )
 }
 
@@ -55,10 +55,10 @@ fn entry_is_non_transaction(entry: &c::jset_entry) -> bool {
     use c::bch_jset_entry_type::*;
     matches!(
         entry_type(entry),
-        BCH_JSET_ENTRY_btree_root
+        Some(BCH_JSET_ENTRY_btree_root
             | BCH_JSET_ENTRY_datetime
             | BCH_JSET_ENTRY_usage
-            | BCH_JSET_ENTRY_clock
+            | BCH_JSET_ENTRY_clock)
     )
 }
 
@@ -95,7 +95,7 @@ struct JournalFilter {
 fn entry_matches_btree_filter(f: &JournalFilter, entry: &c::jset_entry) -> bool {
     f.btree_filter == !0u64
         || (entry.level == 0
-            && entry_type(entry) != c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root
+            && entry_type(entry) != Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root)
             && (1u64 << entry.btree_id) & f.btree_filter != 0)
 }
 
@@ -114,7 +114,7 @@ fn bkey_matches_filter(
     entry: &c::jset_entry,
     k: &c::bkey_i,
 ) -> bool {
-    let btree: c::btree_id = unsafe { std::mem::transmute(entry.btree_id as u32) };
+    let Some(btree) = entry_btree_id(entry) else { return false };
 
     for range in &f.ranges {
         let mut k_start = c::bbpos {
@@ -149,8 +149,8 @@ fn entry_matches_transaction_filter(
         return false;
     }
     let t = entry_type(entry);
-    if t != c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys
-        && t != c::bch_jset_entry_type::BCH_JSET_ENTRY_overwrite
+    if t != Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_keys)
+        && t != Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_overwrite)
     {
         return false;
     }
@@ -191,7 +191,7 @@ fn should_print_transaction(
     f: &JournalFilter,
     entries: &[&c::jset_entry],
 ) -> bool {
-    debug_assert!(entry_type(entries[0]) == c::bch_jset_entry_type::BCH_JSET_ENTRY_log);
+    debug_assert!(entry_type(entries[0]) == Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_log));
 
     if f.log && entry_is_log_only(entries) {
         return true;
@@ -276,7 +276,7 @@ fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
     use c::bch_jset_entry_type::*;
     if entry_is_transaction_start(entry)
         || matches!(entry_type(entry),
-            BCH_JSET_ENTRY_btree_root | BCH_JSET_ENTRY_datetime | BCH_JSET_ENTRY_usage)
+            Some(BCH_JSET_ENTRY_btree_root | BCH_JSET_ENTRY_datetime | BCH_JSET_ENTRY_usage))
     {
         2
     } else {
@@ -286,13 +286,18 @@ fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
 
 fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
     for k in jset_entry_keys(entry) {
-        unsafe {
-            c::bch2_prt_jset_entry_type(out.as_raw(), entry_type(entry));
+        if let Some(t) = entry_type(entry) {
+            unsafe { c::bch2_prt_jset_entry_type(out.as_raw(), t) };
+        } else {
+            write!(out, "(unknown jset entry {})", entry.type_).unwrap();
         }
         write!(out, ": ").unwrap();
-        let btree: c::btree_id = unsafe { std::mem::transmute(entry.btree_id as u32) };
-        unsafe {
-            c::bch2_btree_id_level_to_text(out.as_raw(), btree, entry.level as u32);
+        if let Some(btree) = entry_btree_id(entry) {
+            unsafe {
+                c::bch2_btree_id_level_to_text(out.as_raw(), btree, entry.level as u32);
+            }
+        } else {
+            write!(out, "(unknown btree {})", entry.btree_id).unwrap();
         }
         write!(out, " ").unwrap();
         unsafe {
@@ -364,7 +369,7 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
         ).unwrap();
 
         for entry in jset_entries(&p.j) {
-            if entry_type(entry) == c::bch_jset_entry_type::BCH_JSET_ENTRY_datetime {
+            if entry_type(entry) == Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_datetime) {
                 unsafe {
                     c::bch2_journal_entry_to_text(
                         buf.as_raw(), c_fs, entry as *const _ as *mut _,

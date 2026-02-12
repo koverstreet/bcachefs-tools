@@ -107,9 +107,24 @@ pub fn jset_entry_keys(entry: &c::jset_entry) -> JsetEntryKeyIter<'_> {
 
 // ---- entry type conversion ----
 
-/// Convert entry type byte to the enum.
-pub fn entry_type(entry: &c::jset_entry) -> c::bch_jset_entry_type {
-    unsafe { std::mem::transmute(entry.type_ as u32) }
+/// Convert entry type byte to the enum, if it's a known type.
+pub fn entry_type(entry: &c::jset_entry) -> Option<c::bch_jset_entry_type> {
+    let raw = entry.type_ as u32;
+    if raw < c::bch_jset_entry_type::BCH_JSET_ENTRY_NR as u32 {
+        Some(unsafe { std::mem::transmute(raw) })
+    } else {
+        None
+    }
+}
+
+/// Convert entry btree_id byte to the enum, if it's a known btree.
+pub fn entry_btree_id(entry: &c::jset_entry) -> Option<c::btree_id> {
+    let raw = entry.btree_id as u32;
+    if raw < c::btree_id::BTREE_ID_NR as u32 {
+        Some(unsafe { std::mem::transmute(raw) })
+    } else {
+        None
+    }
 }
 
 // ---- jset_entry_log helpers ----
