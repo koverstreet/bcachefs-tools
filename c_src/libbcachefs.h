@@ -109,16 +109,4 @@ int bch2_format_for_device_add(struct dev_opts *,
 void bch2_super_write(int, struct bch_sb *);
 struct bch_sb *__bch2_super_read(int, u64);
 
-/* ioctl interface: */
-
-struct bchfs_handle {
-	__uuid_t	uuid;
-	int		ioctl_fd;
-	int		sysfs_fd;
-	int		dev_idx;
-};
-
-void bcache_fs_close(struct bchfs_handle);
-int bcache_fs_open_fallible(const char *, struct bchfs_handle *);
-
 #endif /* _LIBBCACHE_H */
