@@ -166,7 +166,7 @@ pub fn bch_opt_lookup(name: &str) -> Option<(c::bch_opt_id, &'static c::bch_opti
         return None;
     }
     // Safety: validated in range [0, bch2_opts_nr)
-    let opt_id: c::bch_opt_id = unsafe { std::mem::transmute(id as u32) };
+    let opt_id: c::bch_opt_id = unsafe { std::mem::transmute::<u32, c::bch_opt_id>(id as u32) };
     let opt = unsafe { &*c::bch2_opt_table.as_ptr().add(id as usize) };
     Some((opt_id, opt))
 }

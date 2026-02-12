@@ -72,7 +72,7 @@ fn parse_target(
 fn opt_set_sb_all(sb: *mut c::bch_sb, dev_idx: i32, opts: &mut c::bch_opts) {
     let nr = c::bch_opt_id::bch2_opts_nr as u32;
     for id in 0..nr {
-        let opt_id: c::bch_opt_id = unsafe { std::mem::transmute(id) };
+        let opt_id: c::bch_opt_id = unsafe { std::mem::transmute::<u32, c::bch_opt_id>(id) };
 
         let v = if unsafe { c::bch2_opt_defined_by_id(opts, opt_id) } {
             unsafe { c::bch2_opt_get_by_id(opts, opt_id) }

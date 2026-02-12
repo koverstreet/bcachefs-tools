@@ -111,7 +111,7 @@ pub fn jset_entry_keys(entry: &c::jset_entry) -> JsetEntryKeyIter<'_> {
 pub fn entry_type(entry: &c::jset_entry) -> Option<c::bch_jset_entry_type> {
     let raw = entry.type_ as u32;
     if raw < c::bch_jset_entry_type::BCH_JSET_ENTRY_NR as u32 {
-        Some(unsafe { std::mem::transmute(raw) })
+        Some(unsafe { std::mem::transmute::<u32, c::bch_jset_entry_type>(raw) })
     } else {
         None
     }

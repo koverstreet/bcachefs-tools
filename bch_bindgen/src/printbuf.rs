@@ -120,7 +120,7 @@ impl Printbuf {
     pub fn version(&mut self, v: u32) {
         // bch2_version_to_text takes an enum bcachefs_metadata_version,
         // which is #[repr(u32)]. We transmute from u32.
-        unsafe { c::bch2_version_to_text(&mut self.0, std::mem::transmute(v)) };
+        unsafe { c::bch2_version_to_text(&mut self.0, std::mem::transmute::<u32, c::bcachefs_metadata_version>(v)) };
     }
 
     /// Print superblock contents.
@@ -157,6 +157,10 @@ impl fmt::Write for Printbuf {
         }
         Ok(())
     }
+}
+
+impl Default for Printbuf {
+    fn default() -> Self { Self::new() }
 }
 
 impl fmt::Display for Printbuf {

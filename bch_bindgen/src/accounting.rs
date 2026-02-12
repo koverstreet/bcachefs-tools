@@ -73,7 +73,7 @@ impl DiskAccountingPos {
     pub fn accounting_type(&self) -> Option<disk_accounting_type> {
         let t = self.type_byte() as u32;
         if t < BCH_DISK_ACCOUNTING_TYPE_NR as u32 {
-            Some(unsafe { std::mem::transmute(t) })
+            Some(unsafe { std::mem::transmute::<u32, disk_accounting_type>(t) })
         } else {
             None
         }

@@ -95,7 +95,7 @@ impl c::btree_id {
     pub fn from_raw(id: u32) -> Option<Self> {
         if id < Self::BTREE_ID_NR as u32 {
             // SAFETY: id is in [0, BTREE_ID_NR), a valid discriminant
-            Some(unsafe { std::mem::transmute(id) })
+            Some(unsafe { std::mem::transmute::<u32, Self>(id) })
         } else {
             None
         }
@@ -104,7 +104,7 @@ impl c::btree_id {
     /// Iterate over all known btree IDs.
     pub fn iter_known() -> impl Iterator<Item = Self> {
         (0..Self::BTREE_ID_NR as u32)
-            .map(|id| unsafe { std::mem::transmute(id) })
+            .map(|id| unsafe { std::mem::transmute::<u32, Self>(id) })
     }
 }
 
