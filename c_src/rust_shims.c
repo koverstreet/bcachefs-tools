@@ -16,6 +16,44 @@
 #include "posix_to_bcachefs.h"
 #include "rust_shims.h"
 
+/* LE64_BITMASK setter shims for Rust — wraps static inline SET_* macros */
+
+void rust_set_bch_sb_version_incompat_allowed(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(sb, v); }
+
+void rust_set_bch_sb_meta_replicas_req(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_META_REPLICAS_REQ(sb, v); }
+
+void rust_set_bch_sb_data_replicas_req(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_DATA_REPLICAS_REQ(sb, v); }
+
+void rust_set_bch_sb_extent_bp_shift(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_EXTENT_BP_SHIFT(sb, v); }
+
+void rust_set_bch_sb_foreground_target(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_FOREGROUND_TARGET(sb, v); }
+
+void rust_set_bch_sb_background_target(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_BACKGROUND_TARGET(sb, v); }
+
+void rust_set_bch_sb_promote_target(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_PROMOTE_TARGET(sb, v); }
+
+void rust_set_bch_sb_metadata_target(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_METADATA_TARGET(sb, v); }
+
+void rust_set_bch_sb_encryption_type(struct bch_sb *sb, __u64 v)
+{ SET_BCH_SB_ENCRYPTION_TYPE(sb, v); }
+
+void rust_set_bch_member_rotational_set(struct bch_member *m, __u64 v)
+{ SET_BCH_MEMBER_ROTATIONAL_SET(m, v); }
+
+void rust_set_bch_member_group(struct bch_member *m, __u64 v)
+{ SET_BCH_MEMBER_GROUP(m, v); }
+
+__u64 rust_bch_sb_features_all(void)
+{ return BCH_SB_FEATURES_ALL; }
+
 struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb)
 {
 	struct nonce nonce = { 0 };
