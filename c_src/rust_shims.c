@@ -313,184 +313,36 @@ struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
 	return ret;
 }
 
-/* dump sanitize shims — wraps vstruct iteration + encryption macros */
+/* dump sanitize shims — wraps magic computation and crypto operations */
 
-static void sanitize_key(struct bkey_packed *k, struct bkey_format *f, void *end,
-			 bool sanitize_filenames, bool *modified)
+__u64 rust_jset_magic(struct bch_fs *c)
 {
-	struct bch_val *v = bkeyp_val(f, k);
-	unsigned len = min_t(unsigned, end - (void *) v, bkeyp_val_bytes(f, k));
-
-	switch (k->type) {
-	case KEY_TYPE_inline_data: {
-		struct bch_inline_data *d = container_of(v, struct bch_inline_data, v);
-
-		memset(&d->data[0], 0, len - offsetof(struct bch_inline_data, data));
-		*modified = true;
-		break;
-	}
-	case KEY_TYPE_indirect_inline_data: {
-		struct bch_indirect_inline_data *d = container_of(v, struct bch_indirect_inline_data, v);
-
-		memset(&d->data[0], 0, len - offsetof(struct bch_indirect_inline_data, data));
-		*modified = true;
-		break;
-	}
-
-	case KEY_TYPE_dirent:
-		if (sanitize_filenames) {
-			struct bch_dirent *d = container_of(v, struct bch_dirent, v);
-
-			memset(d->d_name, 'X', len - offsetof(struct bch_dirent, d_name));
-			*modified = true;
-		}
-	}
+	return __jset_magic(c->disk_sb.sb);
 }
 
-void rust_sanitize_journal(struct bch_fs *c, void *buf, size_t len,
-			   bool sanitize_filenames)
+__u64 rust_bset_magic(struct bch_fs *c)
 {
-	struct bkey_format f = BKEY_FORMAT_CURRENT;
-	void *end = buf + len;
-
-	while (len) {
-		struct jset *j = buf;
-		bool modified = false;
-
-		if (le64_to_cpu(j->magic) != jset_magic(c))
-			break;
-
-		if (bch2_csum_type_is_encryption(JSET_CSUM_TYPE(j))) {
-			if (!c->chacha20_key_set) {
-				fprintf(stderr,
-					"found encrypted journal entry on non-encrypted filesystem\n");
-				return;
-			}
-
-			if (vstruct_bytes(j) > len) {
-				fprintf(stderr,
-					"encrypted journal entry overruns bucket; skipping\n");
-				return;
-			}
-
-			int ret = bch2_encrypt(c, JSET_CSUM_TYPE(j), journal_nonce(j),
-					       j->encrypted_start,
-					       vstruct_end(j) - (void *) j->encrypted_start);
-			if (ret)
-				die("error decrypting journal entry: %s", bch2_err_str(ret));
-
-			modified = true;
-		}
-
-		vstruct_for_each(j, i) {
-			if ((void *) i >= end)
-				break;
-
-			if (!jset_entry_is_key(i))
-				continue;
-
-			jset_entry_for_each_key(i, k) {
-				if ((void *) k >= end)
-					break;
-				if (!k->k.u64s)
-					break;
-				sanitize_key(bkey_to_packed(k), &f, end, sanitize_filenames, &modified);
-			}
-		}
-
-		if (modified) {
-			memset(&j->csum, 0, sizeof(j->csum));
-			SET_JSET_CSUM_TYPE(j, 0);
-		}
-
-		unsigned b = min(len, vstruct_sectors(j, c->block_bits) << 9);
-		len -= b;
-		buf += b;
-	}
+	return __bset_magic(c->disk_sb.sb);
 }
 
-void rust_sanitize_btree(struct bch_fs *c, void *buf, size_t len,
-			 bool sanitize_filenames)
+unsigned rust_block_bits(struct bch_fs *c)
 {
-	void *end = buf + len;
-	bool first = true;
-	struct bkey_format f_current = BKEY_FORMAT_CURRENT;
-	struct bkey_format f;
-	unsigned offset = 0;
-	u64 seq;
+	return c->block_bits;
+}
 
-	while (len) {
-		unsigned sectors;
-		struct bset *i;
-		bool modified = false;
+bool rust_chacha20_key_set(struct bch_fs *c)
+{
+	return c->chacha20_key_set;
+}
 
-		if (first) {
-			struct btree_node *bn = buf;
+int rust_jset_decrypt(struct bch_fs *c, struct jset *j)
+{
+	return bch2_encrypt(c, JSET_CSUM_TYPE(j), journal_nonce(j),
+			    j->encrypted_start,
+			    vstruct_end(j) - (void *) j->encrypted_start);
+}
 
-			if (le64_to_cpu(bn->magic) != bset_magic(c))
-				break;
-
-			i = &bn->keys;
-			seq = bn->keys.seq;
-			f = bn->format;
-
-			sectors = vstruct_sectors(bn, c->block_bits);
-		} else {
-			struct btree_node_entry *bne = buf;
-
-			if (bne->keys.seq != seq)
-				break;
-
-			i = &bne->keys;
-			sectors = vstruct_sectors(bne, c->block_bits);
-		}
-
-		if (bch2_csum_type_is_encryption(BSET_CSUM_TYPE(i))) {
-			if (!c->chacha20_key_set) {
-				fprintf(stderr,
-					"found encrypted btree node on non-encrypted filesystem\n");
-				return;
-			}
-
-			if (vstruct_end(i) > end) {
-				fprintf(stderr,
-					"encrypted btree node entry overruns bucket; skipping\n");
-				return;
-			}
-
-			int ret = bset_encrypt(c, i, offset);
-			if (ret)
-				die("error decrypting btree node: %s", bch2_err_str(ret));
-
-			modified = true;
-		}
-
-		vstruct_for_each(i, k) {
-			if ((void *) k >= end)
-				break;
-			if (!k->u64s)
-				break;
-
-			sanitize_key(k, bkey_packed(k) ? &f : &f_current, end,
-				     sanitize_filenames, &modified);
-		}
-
-		if (modified) {
-			if (first) {
-				struct btree_node *bn = buf;
-				memset(&bn->csum, 0, sizeof(bn->csum));
-			} else {
-				struct btree_node_entry *bne = buf;
-				memset(&bne->csum, 0, sizeof(bne->csum));
-			}
-			SET_BSET_CSUM_TYPE(i, 0);
-		}
-
-		first = false;
-
-		unsigned b = min(len, sectors << 9);
-		len -= b;
-		buf += b;
-		offset += b;
-	}
+int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset)
+{
+	return bset_encrypt(c, i, offset);
 }

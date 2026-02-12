@@ -20,10 +20,12 @@ use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 use crate::wrappers::super_io::vstruct_bytes_sb;
 
 extern "C" {
-    fn rust_sanitize_journal(c: *mut c::bch_fs, buf: *mut u8, len: usize,
-                             sanitize_filenames: bool);
-    fn rust_sanitize_btree(c: *mut c::bch_fs, buf: *mut u8, len: usize,
-                           sanitize_filenames: bool);
+    fn rust_jset_magic(c: *mut c::bch_fs) -> u64;
+    fn rust_bset_magic(c: *mut c::bch_fs) -> u64;
+    fn rust_block_bits(c: *mut c::bch_fs) -> u32;
+    fn rust_chacha20_key_set(c: *mut c::bch_fs) -> bool;
+    fn rust_jset_decrypt(c: *mut c::bch_fs, j: *mut u8) -> i32;
+    fn rust_bset_decrypt(c: *mut c::bch_fs, i: *mut u8, offset: u32) -> i32;
 }
 
 // ---- Dump CLI ----
@@ -122,6 +124,290 @@ pub fn cmd_undump(argv: Vec<String>) -> Result<()> {
     Ok(())
 }
 
+// ---- Sanitize implementation ----
+
+// On-disk struct sizes (all __packed, little-endian x86_64)
+const JSET_HDR: usize = 56;            // offsetof(jset, _data)
+const JSET_ENTRY_HDR: usize = 8;       // offsetof(jset_entry, start)
+const BSET_HDR: usize = 24;            // offsetof(bset, _data)
+const BTREE_NODE_KEYS: usize = 136;    // offsetof(btree_node, keys)
+const BNE_KEYS: usize = 16;            // offsetof(btree_node_entry, keys)
+const BKEY_U64S: usize = 5;            // sizeof(bkey) / 8
+
+fn read_le64(buf: &[u8], off: usize) -> u64 {
+    u64::from_le_bytes(buf[off..off + 8].try_into().unwrap())
+}
+
+fn read_le32(buf: &[u8], off: usize) -> u32 {
+    u32::from_le_bytes(buf[off..off + 4].try_into().unwrap())
+}
+
+fn read_le16(buf: &[u8], off: usize) -> u16 {
+    u16::from_le_bytes(buf[off..off + 2].try_into().unwrap())
+}
+
+fn csum_type_is_encryption(csum_type: u32) -> bool {
+    csum_type == 3 || csum_type == 4 // chacha20_poly1305_{80,128}
+}
+
+/// Zero the csum field (16 bytes at `csum_off`) and clear bits 0-3 of
+/// the le32 flags field at `flags_off`.
+fn clear_csum(buf: &mut [u8], csum_off: usize, flags_off: usize) {
+    buf[csum_off..csum_off + 16].fill(0);
+    let flags = read_le32(buf, flags_off);
+    buf[flags_off..flags_off + 4].copy_from_slice(&(flags & !0xf).to_le_bytes());
+}
+
+/// Round `bytes` up to the block alignment determined by `block_bits`,
+/// matching C `vstruct_sectors(s, block_bits) << 9`.
+fn vstruct_aligned_bytes(bytes: usize, block_bits: usize) -> usize {
+    let align = 512 << block_bits;
+    (bytes + align - 1) / align * align
+}
+
+/// Sanitize a bkey value region in-place. Returns true if modified.
+///
+/// On-disk value layout (bch_val = 0 bytes):
+///  - inline_data:          data at offset 0 — zero all
+///  - indirect_inline_data: refcount(8), data — zero data
+///  - dirent:               d_inum(8), d_type(1), d_name — fill with 'X'
+fn sanitize_val(val: &mut [u8], key_type: u8, sanitize_filenames: bool) -> bool {
+    use c::bch_bkey_type::*;
+    let t = key_type as u32;
+
+    if t == KEY_TYPE_inline_data as u32 {
+        val.fill(0);
+        true
+    } else if t == KEY_TYPE_indirect_inline_data as u32 {
+        if val.len() > 8 {
+            val[8..].fill(0);
+        }
+        true
+    } else if t == KEY_TYPE_dirent as u32 && sanitize_filenames {
+        if val.len() > 9 {
+            val[9..].fill(b'X');
+        }
+        true
+    } else {
+        false
+    }
+}
+
+/// Walk unpacked bkey_i entries in a jset_entry data region and sanitize.
+fn sanitize_journal_keys(
+    buf: &mut [u8],
+    start: usize,
+    end: usize,
+    sanitize_filenames: bool,
+) -> bool {
+    let mut modified = false;
+    let mut pos = start;
+
+    while pos + 3 <= end {
+        let key_u64s = buf[pos] as usize;
+        if key_u64s == 0 {
+            break;
+        }
+
+        let key_bytes = key_u64s * 8;
+        if pos + key_bytes > end {
+            break;
+        }
+
+        let key_type = buf[pos + 2];
+        let val_off = BKEY_U64S * 8;
+        if val_off < key_bytes {
+            if sanitize_val(&mut buf[pos + val_off..pos + key_bytes],
+                            key_type, sanitize_filenames) {
+                modified = true;
+            }
+        }
+
+        pos += key_bytes;
+    }
+
+    modified
+}
+
+/// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
+/// zero inline data, optionally scramble filenames, clear checksums.
+fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bool) {
+    let jset_magic = unsafe { rust_jset_magic(fs_raw) };
+    let block_bits = unsafe { rust_block_bits(fs_raw) } as usize;
+
+    let mut pos = 0;
+    while pos + JSET_HDR <= buf.len() {
+        if read_le64(buf, pos + 16) != jset_magic {
+            break;
+        }
+
+        let u64s = read_le32(buf, pos + 40) as usize;
+        let vstruct_bytes = JSET_HDR + u64s * 8;
+        if vstruct_bytes > buf.len() - pos {
+            break;
+        }
+
+        let csum_type = read_le32(buf, pos + 36) & 0xf;
+        let mut modified = false;
+
+        if csum_type_is_encryption(csum_type) {
+            if !unsafe { rust_chacha20_key_set(fs_raw) } {
+                eprintln!("found encrypted journal entry on non-encrypted filesystem");
+                return;
+            }
+
+            let ret = unsafe { rust_jset_decrypt(fs_raw, buf.as_mut_ptr().add(pos)) };
+            if ret != 0 {
+                eprintln!("error decrypting journal entry: {}", ret);
+                return;
+            }
+            modified = true;
+        }
+
+        // Walk jset entries: each is 8-byte header + u64s * 8 data
+        let data_end = (pos + vstruct_bytes).min(buf.len());
+        let mut entry_pos = pos + JSET_HDR;
+
+        while entry_pos + JSET_ENTRY_HDR <= data_end {
+            let entry_u64s = read_le16(buf, entry_pos) as usize;
+            let entry_end = entry_pos + JSET_ENTRY_HDR + entry_u64s * 8;
+            if entry_end > data_end {
+                break;
+            }
+
+            // jset_entry_is_key: btree_keys(0), btree_root(1), write_buffer_keys(11)
+            let entry_type = buf[entry_pos + 4];
+            if entry_type == 0 || entry_type == 1 || entry_type == 11 {
+                if sanitize_journal_keys(buf, entry_pos + JSET_ENTRY_HDR,
+                                         entry_end, sanitize_filenames) {
+                    modified = true;
+                }
+            }
+
+            entry_pos = entry_end;
+        }
+
+        if modified {
+            clear_csum(buf, pos, pos + 36);
+        }
+
+        pos += vstruct_aligned_bytes(vstruct_bytes, block_bits)
+            .min(buf.len() - pos);
+    }
+}
+
+/// Sanitize a btree node buffer in-place: walk bset entries, handle
+/// encryption, zero inline data, optionally scramble filenames.
+fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bool) {
+    let bset_magic = unsafe { rust_bset_magic(fs_raw) };
+    let block_bits = unsafe { rust_block_bits(fs_raw) } as usize;
+
+    let mut first = true;
+    let mut seq: u64 = 0;
+    let mut format_key_u64s: usize = BKEY_U64S;
+    let mut pos = 0;
+    let mut bset_byte_offset: usize = 0;
+
+    while pos < buf.len() {
+        let (bset_off, data_off, vstruct_bytes);
+
+        if first {
+            if pos + BTREE_NODE_KEYS + BSET_HDR > buf.len() {
+                break;
+            }
+            if read_le64(buf, pos + 16) != bset_magic {
+                break;
+            }
+
+            bset_off = pos + BTREE_NODE_KEYS;
+            data_off = pos + BTREE_NODE_KEYS + BSET_HDR;
+            format_key_u64s = buf[pos + 80] as usize; // btree_node.format.key_u64s
+            seq = read_le64(buf, bset_off);            // bset.seq
+            let u64s = read_le16(buf, bset_off + 22) as usize;
+            vstruct_bytes = BTREE_NODE_KEYS + BSET_HDR + u64s * 8;
+        } else {
+            if pos + BNE_KEYS + BSET_HDR > buf.len() {
+                break;
+            }
+
+            bset_off = pos + BNE_KEYS;
+            data_off = pos + BNE_KEYS + BSET_HDR;
+            if read_le64(buf, bset_off) != seq {
+                break;
+            }
+            let u64s = read_le16(buf, bset_off + 22) as usize;
+            vstruct_bytes = BNE_KEYS + BSET_HDR + u64s * 8;
+        }
+
+        if pos + vstruct_bytes > buf.len() {
+            break;
+        }
+
+        let csum_type = read_le32(buf, bset_off + 16) & 0xf;
+        let mut modified = false;
+
+        if csum_type_is_encryption(csum_type) {
+            if !unsafe { rust_chacha20_key_set(fs_raw) } {
+                eprintln!("found encrypted btree node on non-encrypted filesystem");
+                return;
+            }
+
+            let ret = unsafe {
+                rust_bset_decrypt(fs_raw, buf.as_mut_ptr().add(bset_off),
+                                  bset_byte_offset as u32)
+            };
+            if ret != 0 {
+                eprintln!("error decrypting btree node: {}", ret);
+                return;
+            }
+            modified = true;
+        }
+
+        // Walk packed keys in bset data region
+        let u64s = read_le16(buf, bset_off + 22) as usize;
+        let key_end = (data_off + u64s * 8).min(buf.len());
+
+        let mut key_pos = data_off;
+        while key_pos + 3 <= key_end {
+            let key_u64s = buf[key_pos] as usize;
+            if key_u64s == 0 {
+                break;
+            }
+
+            let key_bytes = key_u64s * 8;
+            if key_pos + key_bytes > key_end {
+                break;
+            }
+
+            let key_type = buf[key_pos + 2];
+            let key_format = buf[key_pos + 1] & 0x7f;
+            let key_hdr_u64s = if key_format != 0 { format_key_u64s } else { BKEY_U64S };
+            let val_off = key_hdr_u64s * 8;
+
+            if val_off < key_bytes {
+                if sanitize_val(&mut buf[key_pos + val_off..key_pos + key_bytes],
+                                key_type, sanitize_filenames) {
+                    modified = true;
+                }
+            }
+
+            key_pos += key_bytes;
+        }
+
+        if modified {
+            // Zero csum at start of btree_node or btree_node_entry
+            // Clear BSET_CSUM_TYPE in bset.flags
+            clear_csum(buf, pos, bset_off + 16);
+        }
+
+        first = false;
+        let advance = vstruct_aligned_bytes(vstruct_bytes, block_bits)
+            .min(buf.len() - pos);
+        bset_byte_offset += advance;
+        pos += advance;
+    }
+}
+
 // ---- Dump implementation ----
 
 struct DumpDev {
@@ -183,7 +469,7 @@ fn write_sanitized_ranges(
     ranges: &mut Ranges,
     bucket_bytes: u64,
     sanitize_filenames: bool,
-    sanitize_fn: unsafe extern "C" fn(*mut c::bch_fs, *mut u8, usize, bool),
+    sanitize_fn: fn(*mut c::bch_fs, &mut [u8], bool),
 ) -> Result<()> {
     ranges_sort(ranges);
     let mut buf = vec![0u8; bucket_bytes as usize];
@@ -193,7 +479,7 @@ fn write_sanitized_ranges(
         assert!(len <= bucket_bytes as usize);
 
         qcow2::pread_exact(img.infd(), &mut buf[..len], r.start)?;
-        unsafe { sanitize_fn(fs_raw, buf.as_mut_ptr(), len, sanitize_filenames) };
+        sanitize_fn(fs_raw, &mut buf[..len], sanitize_filenames);
         img.write_buf(&buf[..len], r.start)?;
     }
 
@@ -233,11 +519,11 @@ fn write_dev_image(
         let bucket_bytes = (ca.mi.bucket_size as u64) << 9;
         write_sanitized_ranges(
             &mut img, fs.raw, &mut d.journal, bucket_bytes,
-            sanitize_filenames, rust_sanitize_journal,
+            sanitize_filenames, sanitize_journal,
         )?;
         write_sanitized_ranges(
             &mut img, fs.raw, &mut d.btree, bucket_bytes,
-            sanitize_filenames, rust_sanitize_btree,
+            sanitize_filenames, sanitize_btree,
         )?;
     }
 

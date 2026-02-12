@@ -125,13 +125,17 @@ struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,
 void rust_put_online_dev_ref(struct bch_dev *ca, unsigned ref_idx);
 
 /*
- * Sanitize journal/btree data in a buffer for safe sharing.
- * Zeroes inline data extents and optionally filenames; handles
- * decryption, checksum clearing, and vstruct iteration internally.
+ * Dump sanitize shims — provide magic values, crypto, and block
+ * geometry that Rust code can't compute directly from macros/inlines.
  */
-void rust_sanitize_journal(struct bch_fs *c, void *buf, size_t len,
-			   bool sanitize_filenames);
-void rust_sanitize_btree(struct bch_fs *c, void *buf, size_t len,
-			 bool sanitize_filenames);
+struct jset;
+struct bset;
+
+__u64 rust_jset_magic(struct bch_fs *c);
+__u64 rust_bset_magic(struct bch_fs *c);
+unsigned rust_block_bits(struct bch_fs *c);
+bool rust_chacha20_key_set(struct bch_fs *c);
+int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
+int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
 
 #endif /* _RUST_SHIMS_H */
