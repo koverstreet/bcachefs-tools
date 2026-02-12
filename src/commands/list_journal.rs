@@ -731,15 +731,15 @@ pub struct Cli {
     offset: bool,
 
     /// Filter by btree (+/-btree1,btree2)
-    #[arg(short = 'b', long)]
+    #[arg(short = 'b', long, allow_hyphen_values = true)]
     btree: Option<String>,
 
     /// Filter transactions by function (+/-fn1,fn2)
-    #[arg(short = 't', long)]
+    #[arg(short = 't', long, allow_hyphen_values = true)]
     transaction: Option<String>,
 
     /// Filter by key range (+/-bbpos[-bbpos],...)
-    #[arg(short = 'k', long)]
+    #[arg(short = 'k', long, allow_hyphen_values = true)]
     key: Option<String>,
 
     /// Print bkey values (true/false)
@@ -915,8 +915,13 @@ pub fn cmd_list_journal(argv: Vec<String>) -> Result<()> {
     }
 
     if let Some(nr) = cli.nr_entries {
-        let journal_seq = unsafe { (*c_fs).journal.seq.counter };
-        let computed = (journal_seq as i64) - (nr as i64);
+        // journal.seq isn't set in read_journal_only mode, so compute
+        // the max seq from the entries we actually collected
+        let max_seq = entries.iter()
+            .map(|&ep| unsafe { u64::from_le((*ep).j.seq) })
+            .max()
+            .unwrap_or(0);
+        let computed = (max_seq as i64) - (nr as i64) + 1;
         min_seq_to_print = min_seq_to_print.max(computed.max(0) as u64);
     }
 
