@@ -50,12 +50,6 @@ pub fn read_sysfs_fd_str(dirfd: BorrowedFd, path: &str) -> io::Result<String> {
     Ok(s.trim().to_string())
 }
 
-/// Read a sysfs attribute as a u64, relative to a directory fd.
-pub fn read_sysfs_fd_u64(dirfd: BorrowedFd, path: &str) -> io::Result<u64> {
-    read_sysfs_fd_str(dirfd, path)?
-        .parse::<u64>()
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
-}
 
 const KERNEL_VERSION_PATH: &str = "/sys/module/bcachefs/parameters/version";
 

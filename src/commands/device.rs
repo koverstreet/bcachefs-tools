@@ -59,10 +59,14 @@ pub fn cmd_device_add(argv: Vec<String>) -> Result<()> {
     let handle = BcachefsHandle::open(fs_path)
         .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))?;
 
-    let block_size = sysfs::read_sysfs_fd_u64(handle.sysfs_fd(), "options/block_size")
-        .context("reading block_size from sysfs")?;
-    let btree_node_size = sysfs::read_sysfs_fd_u64(handle.sysfs_fd(), "options/btree_node_size")
-        .context("reading btree_node_size from sysfs")?;
+    let block_size = parse_human_size(
+        &sysfs::read_sysfs_fd_str(handle.sysfs_fd(), "options/block_size")
+            .context("reading block_size from sysfs")?,
+    ).context("parsing block_size")?;
+    let btree_node_size = parse_human_size(
+        &sysfs::read_sysfs_fd_str(handle.sysfs_fd(), "options/btree_node_size")
+            .context("reading btree_node_size from sysfs")?,
+    ).context("parsing btree_node_size")?;
 
     // Build dev_opts with bch_opts from parsed arguments
     let mut dev_opts: c::dev_opts = Default::default();
