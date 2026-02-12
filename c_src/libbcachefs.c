@@ -420,59 +420,6 @@ int bch2_format_for_device_add(struct dev_opts *dev,
 	return 0;
 }
 
-void bch2_super_write(int fd, struct bch_sb *sb)
-{
-	struct nonce nonce = { 0 };
-	unsigned bs = get_blocksize(fd);
-
-	unsigned i;
-	for (i = 0; i < sb->layout.nr_superblocks; i++) {
-		sb->offset = sb->layout.sb_offset[i];
-
-		if (sb->offset == BCH_SB_SECTOR) {
-			/* Write backup layout */
-
-			unsigned buflen = max(bs, 4096);
-
-			char *buf = aligned_alloc(buflen, buflen);
-			xpread(fd, buf, bs, 4096 - bs);
-			memcpy(buf + bs - sizeof(sb->layout),
-			       &sb->layout,
-			       sizeof(sb->layout));
-			xpwrite(fd, buf, bs, 4096 - bs,
-				"backup layout");
-			free(buf);
-
-		}
-
-		sb->csum = csum_vstruct(NULL, BCH_SB_CSUM_TYPE(sb), nonce, sb);
-		xpwrite(fd, sb, round_up(vstruct_bytes(sb), bs),
-			le64_to_cpu(sb->offset) << 9,
-			"superblock");
-	}
-
-	fsync(fd);
-}
-
-struct bch_sb *__bch2_super_read(int fd, u64 sector)
-{
-	struct bch_sb sb, *ret;
-
-	xpread(fd, &sb, sizeof(sb), sector << 9);
-
-	if (memcmp(&sb.magic, &BCACHE_MAGIC, sizeof(sb.magic)) &&
-	    memcmp(&sb.magic, &BCHFS_MAGIC, sizeof(sb.magic)))
-		die("not a bcachefs superblock");
-
-	size_t bytes = vstruct_bytes(&sb);
-
-	ret = malloc(bytes);
-
-	xpread(fd, ret, bytes, sector << 9);
-
-	return ret;
-}
-
 /* option parsing */
 
 #include <getopt.h>

@@ -2,6 +2,7 @@ pub mod accounting;
 pub mod handle;
 pub mod ioctl;
 pub mod printbuf;
+pub mod super_io;
 pub mod sysfs;
 
 /// Convert a bcachefs error code to a human-readable string.

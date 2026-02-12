@@ -323,7 +323,10 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
     }
 
     if cli.yes || unsafe { c::ask_yn() } {
-        unsafe { c::bch2_super_write(dev_file.as_raw_fd(), buf_as_sb_mut(&mut sb_buf)) };
+        crate::wrappers::super_io::bch2_super_write(
+            dev_file.as_raw_fd(),
+            unsafe { buf_as_sb_mut(&mut sb_buf) },
+        );
     }
 
     let _ = std::process::Command::new("udevadm")
