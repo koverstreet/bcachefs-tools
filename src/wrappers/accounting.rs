@@ -1,7 +1,7 @@
 use bch_bindgen::c;
 
 use super::handle::BcachefsHandle;
-use super::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 use super::ioctl::bch_ioc_w;
 use super::sysfs::bcachefs_kernel_version;
 

@@ -8,7 +8,7 @@ use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 use clap::Parser;
 
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 
 /// List and manage scheduled recovery passes
 #[derive(Parser, Debug)]

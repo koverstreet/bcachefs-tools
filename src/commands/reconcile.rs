@@ -15,7 +15,7 @@ use crossterm::{
 use crate::util::run_tui;
 use crate::wrappers::accounting::{self, DiskAccountingKind};
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 use crate::wrappers::sysfs;
 
 use c::bch_reconcile_accounting_type::*;

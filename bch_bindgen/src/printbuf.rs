@@ -2,7 +2,7 @@ use std::ffi::CStr;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 
-use bch_bindgen::c;
+use crate::c;
 
 /// Rust wrapper around `c::printbuf` providing `fmt::Write` via
 /// `bch2_prt_bytes_indented`, which processes `\t`, `\r`, `\n` for

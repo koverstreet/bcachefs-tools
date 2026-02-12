@@ -11,7 +11,7 @@ use bch_bindgen::opt_set;
 use crate::commands::opts::bch_opt_lookup;
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
 

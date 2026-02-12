@@ -12,7 +12,7 @@ use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 use crate::wrappers::super_io::{self, BCACHE_MAGIC, BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
 
 // bch2_sb_validate's flags parameter is a bch_validate_flags enum in bindgen,

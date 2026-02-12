@@ -6,7 +6,7 @@ use clap::Parser;
 
 use crate::wrappers::accounting::{self, AccountingEntry, DiskAccountingKind, data_type_is_empty};
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 use crate::wrappers::sysfs::{self, DevInfo, bcachefs_kernel_version};
 
 use c::bch_data_type::*;

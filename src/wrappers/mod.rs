@@ -2,7 +2,6 @@ pub mod accounting;
 pub mod format;
 pub mod handle;
 pub mod ioctl;
-pub mod printbuf;
 pub mod super_io;
 pub mod sysfs;
 

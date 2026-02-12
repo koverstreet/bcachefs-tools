@@ -7,7 +7,7 @@ use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 use clap::Parser;
 
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 
 /// Print superblock information to stdout
 #[derive(Parser, Debug)]

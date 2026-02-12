@@ -13,7 +13,7 @@ use clap::Parser;
 use rustix::event::{poll, PollFd, PollFlags};
 
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 use crate::wrappers::sysfs;
 
 // _IOW(0xbc, 19, struct bch_ioctl_fsck_offline) — sizeof = 24

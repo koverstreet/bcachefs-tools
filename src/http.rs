@@ -1,6 +1,6 @@
 use std::ffi::{CStr, CString, c_char};
 use crate::c;
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 
 extern crate tiny_http;
 

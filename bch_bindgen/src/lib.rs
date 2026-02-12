@@ -7,6 +7,7 @@ pub mod fs;
 pub mod journal;
 pub mod keyutils;
 pub mod opts;
+pub mod printbuf;
 pub mod sb;
 pub use paste::paste;
 

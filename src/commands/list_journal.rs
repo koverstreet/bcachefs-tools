@@ -12,7 +12,7 @@ use bch_bindgen::opt_set;
 use bch_bindgen::fs::Fs;
 use clap::Parser;
 
-use crate::wrappers::printbuf::Printbuf;
+use bch_bindgen::printbuf::Printbuf;
 
 // ---- entry classification ----
 
