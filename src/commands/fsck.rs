@@ -225,7 +225,7 @@ pub fn cmd_fsck(argv: Vec<String>) -> Result<()> {
 
     if cli.auto_repair {
         // Automatic run, called by the system — we don't need checks here
-        process::exit(0);
+        return Ok(());
     }
 
     let kernel = if std::env::var("BCACHEFS_KERNEL_ONLY").is_ok() || cli.kernel {

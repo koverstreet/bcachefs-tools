@@ -223,7 +223,7 @@ pub fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                 "verbose" => verbosity = verbosity.saturating_add(1),
                 "help" => {
                     image_create_usage();
-                    process::exit(0);
+                    return Ok(());
                 }
                 _ => bail!("unknown option: {}", arg),
             }
@@ -251,7 +251,7 @@ pub fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                 b'v' => verbosity = verbosity.saturating_add(1),
                 b'h' => {
                     image_create_usage();
-                    process::exit(0);
+                    return Ok(());
                 }
                 _ => bail!("unknown option: {}", arg),
             }

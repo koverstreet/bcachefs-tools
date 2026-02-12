@@ -114,7 +114,7 @@ pub fn cmd_migrate(argv: Vec<String>) -> Result<()> {
                 "no_passphrase" => no_passphrase = true,
                 "help" => {
                     migrate_usage();
-                    process::exit(0);
+                    return Ok(());
                 }
                 _ => bail!("unknown option: {}", arg),
             }
@@ -135,7 +135,7 @@ pub fn cmd_migrate(argv: Vec<String>) -> Result<()> {
                 b'F' => force = true,
                 b'h' => {
                     migrate_usage();
-                    process::exit(0);
+                    return Ok(());
                 }
                 _ => bail!("unknown option: {}", arg),
             }

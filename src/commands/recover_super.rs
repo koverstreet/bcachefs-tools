@@ -2,9 +2,7 @@ use std::fs::File;
 use std::os::unix::fs::FileExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
-use std::process;
-
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use bch_bindgen::bcachefs;
 use bch_bindgen::c;
 use bch_bindgen::opt_set;
@@ -182,7 +180,7 @@ fn recover_from_scan(
     offset: u64,
     scan_len: u64,
     verbose: bool,
-) -> Vec<u8> {
+) -> Result<Vec<u8>> {
     let mut sbs = if offset != 0 {
         probe_one_super(dev, SUPERBLOCK_SIZE_DEFAULT as usize * 512, offset, verbose)
             .into_iter().collect()
@@ -193,13 +191,12 @@ fn recover_from_scan(
     };
 
     if sbs.is_empty() {
-        eprintln!("Found no bcachefs superblocks");
-        process::exit(1);
+        bail!("Found no bcachefs superblocks");
     }
 
     // Pick the most recently mounted superblock
     sbs.sort_by_key(|sb| sb_last_mount_time(unsafe { buf_as_sb(sb) }));
-    sbs.pop().unwrap()
+    Ok(sbs.pop().unwrap())
 }
 
 fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<Vec<u8>> {
@@ -285,7 +282,7 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
     let mut sb_buf = if let Some(ref src) = cli.src_device {
         recover_from_member(src, cli.dev_idx.unwrap(), dev_size)?
     } else {
-        recover_from_scan(&dev_file, dev_size, offset, scan_len, cli.verbose)
+        recover_from_scan(&dev_file, dev_size, offset, scan_len, cli.verbose)?
     };
 
     let mut buf = Printbuf::new();
