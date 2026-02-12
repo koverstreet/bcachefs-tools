@@ -1,165 +1,20 @@
 use std::ffi::CString;
-use std::marker::PhantomData;
+use std::fmt::Write;
 
 use anyhow::{bail, Result};
 use bch_bindgen::c;
-use bch_bindgen::bkey;
+use bch_bindgen::bkey::bkey_start_pos;
+use bch_bindgen::journal::{
+    jset_entries, jset_entry_keys, entry_type, entry_log_str_eq,
+    jset_vstruct_bytes, jset_vstruct_sectors, jset_no_flush,
+};
 use bch_bindgen::opt_set;
 use bch_bindgen::fs::Fs;
 use clap::Parser;
 
 use crate::wrappers::printbuf::Printbuf;
 
-// ---- vstruct pointer arithmetic ----
-
-/// jset_entry is 8 bytes; _data is at offset 0 (u64 flexible array).
-/// vstruct_next(entry) = (u64*)entry._data + le16(entry.u64s)
-unsafe fn vstruct_next_entry(entry: *const c::jset_entry) -> *const c::jset_entry {
-    let u64s = u16::from_le((*entry).u64s) as usize;
-    // offsetof(jset_entry, _data) = 8 (header is 8 bytes)
-    // vstruct_next = (u64*)entry->_data + u64s = entry + 8 + u64s * 8
-    (entry as *const u8).add(8 + u64s * 8) as *const c::jset_entry
-}
-
-/// Pointer to one past the last entry in a jset.
-/// vstruct_last(jset) = &jset.start[0] + jset.u64s * 8
-/// (start and _data are at the same offset; last uses start type)
-unsafe fn vstruct_last_jset(jset: *const c::jset) -> *const c::jset_entry {
-    let u64s = u32::from_le((*jset).u64s) as usize;
-    // _data is at offset 56 from jset start (sizeof(jset) = 56)
-    // vstruct_last = (u64*)jset._data + __vstruct_u64s(jset)
-    (jset as *const u8).add(56 + u64s * 8) as *const c::jset_entry
-}
-
-/// Total byte size of a jset including header.
-fn jset_vstruct_bytes(jset: &c::jset) -> usize {
-    let u64s = u32::from_le(jset.u64s) as usize;
-    56 + u64s * 8
-}
-
-/// Number of sectors occupied by a jset on disk.
-fn jset_vstruct_sectors(jset: &c::jset, block_bits: u16) -> usize {
-    let bytes = jset_vstruct_bytes(jset);
-    let block_size = 512usize << block_bits;
-    ((bytes + block_size - 1) / block_size) * block_size >> 9
-}
-
-/// JSET_NO_FLUSH bitfield: bit 5 of le32 flags.
-fn jset_no_flush(jset: &c::jset) -> bool {
-    (u32::from_le(jset.flags) >> 5) & 1 != 0
-}
-
-/// bkey_next: advance past a bkey_i.
-/// In C: (u64*)k->_data + k->k.u64s
-/// _data is at offset 0 of bkey_i, k.u64s counts u64s from _data.
-/// sizeof(bkey_i) = 40, offsetof(_data) = 0.
-/// So next = (char*)k + 0 + k.k.u64s * 8 = k + k.k.u64s * 8.
-unsafe fn bkey_next_raw(k: *const c::bkey_i) -> *const c::bkey_i {
-    let u64s = (*k).k.u64s as usize;
-    (k as *const u8).add(u64s * 8) as *const c::bkey_i
-}
-
-/// Start position of a bkey (p.offset - size).
-fn bkey_start_pos(k: &c::bkey) -> c::bpos {
-    c::bpos {
-        inode: k.p.inode,
-        offset: k.p.offset.wrapping_sub(k.size as u64),
-        snapshot: k.p.snapshot,
-    }
-}
-
-// ---- vstruct iterators ----
-
-/// Iterator over jset_entry references within a jset.
-struct JsetEntryIter<'a> {
-    cur: *const c::jset_entry,
-    end: *const c::jset_entry,
-    _phantom: PhantomData<&'a c::jset>,
-}
-
-impl<'a> Iterator for JsetEntryIter<'a> {
-    type Item = &'a c::jset_entry;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.cur >= self.end {
-            return None;
-        }
-        let entry = unsafe { &*self.cur };
-        let next = unsafe { vstruct_next_entry(self.cur) };
-        if next > self.end {
-            return None;
-        }
-        self.cur = next;
-        Some(entry)
-    }
-}
-
-fn jset_entries(jset: &c::jset) -> JsetEntryIter<'_> {
-    let start = jset.start.as_ptr();
-    let end = unsafe { vstruct_last_jset(jset as *const c::jset) };
-    JsetEntryIter { cur: start, end, _phantom: PhantomData }
-}
-
-/// Iterator over bkey_i references within a jset_entry.
-struct JsetEntryKeyIter<'a> {
-    cur: *const c::bkey_i,
-    end: *const c::bkey_i,
-    _phantom: PhantomData<&'a c::jset_entry>,
-}
-
-impl<'a> Iterator for JsetEntryKeyIter<'a> {
-    type Item = &'a c::bkey_i;
-    fn next(&mut self) -> Option<Self::Item> {
-        if self.cur >= self.end {
-            return None;
-        }
-        let k = unsafe { &*self.cur };
-        if k.k.u64s == 0 {
-            return None;
-        }
-        let next = unsafe { bkey_next_raw(self.cur) };
-        if next > self.end {
-            return None;
-        }
-        self.cur = next;
-        Some(k)
-    }
-}
-
-fn jset_entry_keys(entry: &c::jset_entry) -> JsetEntryKeyIter<'_> {
-    let start = entry.start.as_ptr();
-    let end = unsafe { vstruct_next_entry(entry as *const c::jset_entry) as *const c::bkey_i };
-    JsetEntryKeyIter { cur: start, end, _phantom: PhantomData }
-}
-
-// ---- jset_entry_log helpers ----
-
-/// Get log message bytes from a jset_entry of type log.
-/// Layout: jset_entry header (8 bytes) followed by d[] message bytes.
-fn entry_log_msg(entry: &c::jset_entry) -> &[u8] {
-    let total = 8 + u16::from_le(entry.u64s) as usize * 8;
-    let msg_bytes = total.saturating_sub(8);
-    if msg_bytes == 0 {
-        return &[];
-    }
-    let ptr = entry as *const c::jset_entry as *const u8;
-    let data = unsafe { std::slice::from_raw_parts(ptr.add(8), msg_bytes) };
-    // Trim trailing nulls
-    let len = data.iter().rposition(|&b| b != 0).map_or(0, |i| i + 1);
-    &data[..len]
-}
-
-fn entry_log_str_eq(entry: &c::jset_entry, s: &str) -> bool {
-    let msg = entry_log_msg(entry);
-    msg.len() >= s.len() && &msg[..s.len()] == s.as_bytes()
-}
-
 // ---- entry classification ----
-
-/// Convert entry type byte to the enum. The enum is non-exhaustive so we
-/// use unsafe transmute — the C code does the same implicitly.
-fn entry_type(entry: &c::jset_entry) -> c::bch_jset_entry_type {
-    unsafe { std::mem::transmute(entry.type_ as u32) }
-}
 
 fn entry_is_transaction_start(entry: &c::jset_entry) -> bool {
     entry_type(entry) == c::bch_jset_entry_type::BCH_JSET_ENTRY_log
@@ -235,14 +90,6 @@ struct JournalFilter {
     bkey_val: bool,
 }
 
-// ---- bbpos comparison ----
-
-fn bbpos_cmp(l: &c::bbpos, r: &c::bbpos) -> std::cmp::Ordering {
-    (l.btree as u32)
-        .cmp(&(r.btree as u32))
-        .then_with(|| bkey::bpos_cmp(l.pos, r.pos).cmp(&0))
-}
-
 // ---- filter logic ----
 
 fn entry_matches_btree_filter(f: &JournalFilter, entry: &c::jset_entry) -> bool {
@@ -267,8 +114,9 @@ fn bkey_matches_filter(
     entry: &c::jset_entry,
     k: &c::bkey_i,
 ) -> bool {
+    let btree: c::btree_id = unsafe { std::mem::transmute(entry.btree_id as u32) };
+
     for range in &f.ranges {
-        let btree: c::btree_id = unsafe { std::mem::transmute(entry.btree_id as u32) };
         let mut k_start = c::bbpos {
             btree,
             pos: bkey_start_pos(&k.k),
@@ -286,9 +134,7 @@ fn bkey_matches_filter(
         // Match the C code: always use point comparison (true || !k.k.size)
         k_start = k_end;
 
-        if bbpos_cmp(&k_start, &range.start) != std::cmp::Ordering::Less
-            && bbpos_cmp(&k_end, &range.end) != std::cmp::Ordering::Greater
-        {
+        if k_start >= range.start && k_end <= range.end {
             return true;
         }
     }
@@ -309,15 +155,7 @@ fn entry_matches_transaction_filter(
         return false;
     }
 
-    for k in jset_entry_keys(entry) {
-        if k.k.u64s == 0 {
-            break;
-        }
-        if bkey_matches_filter(f, entry, k) {
-            return true;
-        }
-    }
-    false
+    jset_entry_keys(entry).any(|k| bkey_matches_filter(f, entry, k))
 }
 
 fn transaction_matches_transaction_filter(
@@ -410,7 +248,6 @@ fn journal_entry_header_to_text(
     p: &c::journal_replay,
     blacklisted: bool,
 ) {
-    use std::fmt::Write;
     write!(
         out,
         "\n{}journal entry     {}\n\
@@ -436,10 +273,10 @@ fn journal_entry_header_to_text(
 }
 
 fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
+    use c::bch_jset_entry_type::*;
     if entry_is_transaction_start(entry)
-        || entry_type(entry) == c::bch_jset_entry_type::BCH_JSET_ENTRY_btree_root
-        || entry_type(entry) == c::bch_jset_entry_type::BCH_JSET_ENTRY_datetime
-        || entry_type(entry) == c::bch_jset_entry_type::BCH_JSET_ENTRY_usage
+        || matches!(entry_type(entry),
+            BCH_JSET_ENTRY_btree_root | BCH_JSET_ENTRY_datetime | BCH_JSET_ENTRY_usage)
     {
         2
     } else {
@@ -449,13 +286,9 @@ fn journal_entry_indent(entry: &c::jset_entry) -> u32 {
 
 fn journal_entry_keys_noval_to_text(out: &mut Printbuf, entry: &c::jset_entry) {
     for k in jset_entry_keys(entry) {
-        if k.k.u64s == 0 {
-            break;
-        }
         unsafe {
             c::bch2_prt_jset_entry_type(out.as_raw(), entry_type(entry));
         }
-        use std::fmt::Write;
         write!(out, ": ").unwrap();
         let btree: c::btree_id = unsafe { std::mem::transmute(entry.btree_id as u32) };
         unsafe {
@@ -486,35 +319,31 @@ fn print_one_entry(
 
     let highlight = entry_matches_transaction_filter(&f.key, entry);
     if highlight {
-        use std::fmt::Write;
         write!(out, "{RED}").unwrap();
     }
 
-    let indent = journal_entry_indent(entry);
-    out.indent_add(indent);
+    let mut ind = out.indent(journal_entry_indent(entry));
 
     if f.print_offset {
-        use std::fmt::Write;
         // Compute offset of entry._data relative to p.j._data
         let entry_data = entry._data.as_ptr() as usize;
         let jset_data = p.j._data.as_ptr() as usize;
         let offset = (entry_data - jset_data) / 8;
-        write!(out, "{offset:4} ").unwrap();
+        write!(ind, "{offset:4} ").unwrap();
     }
 
     if !f.bkey_val && entry_is_print_key(entry) {
-        journal_entry_keys_noval_to_text(out, entry);
+        journal_entry_keys_noval_to_text(&mut ind, entry);
     } else {
         unsafe {
-            c::bch2_journal_entry_to_text(out.as_raw(), c_fs, entry as *const _ as *mut _);
+            c::bch2_journal_entry_to_text(ind.as_raw(), c_fs, entry as *const _ as *mut _);
         }
-        out.newline();
+        ind.newline();
     }
 
-    out.indent_sub(indent);
+    drop(ind);
 
     if highlight {
-        use std::fmt::Write;
         write!(out, "{NORMAL}").unwrap();
     }
 }
@@ -527,7 +356,6 @@ fn journal_replay_print(c_fs: *mut c::bch_fs, f: &JournalFilter, p: &c::journal_
     let mut printed_header = false;
 
     if f.datetime_only {
-        use std::fmt::Write;
         write!(
             &mut buf,
             "{}journal entry     {:<8} ",
@@ -620,38 +448,33 @@ fn print_buf(buf: &Printbuf, blacklisted: bool) {
 
 // ---- seq range parsing ----
 
-fn parse_seq_range(arg: &str) -> (u64, u64) {
+fn parse_seq_range(arg: &str) -> Result<(u64, u64)> {
     if let Some((start_s, end_s)) = arg.split_once("..") {
         let start = if start_s.is_empty() {
             0
         } else {
             start_s
                 .parse::<u64>()
-                .unwrap_or_else(|_| die_msg(&format!("error parsing seq range start: {start_s}")))
+                .map_err(|_| anyhow::anyhow!("error parsing seq range start: {start_s}"))?
         };
         let end = if end_s.is_empty() {
             u64::MAX
         } else {
             end_s
                 .parse::<u64>()
-                .unwrap_or_else(|_| die_msg(&format!("error parsing seq range end: {end_s}")))
+                .map_err(|_| anyhow::anyhow!("error parsing seq range end: {end_s}"))?
         };
         if start > end {
-            (end, start)
+            Ok((end, start))
         } else {
-            (start, end)
+            Ok((start, end))
         }
     } else {
         let seq = arg
             .parse::<u64>()
-            .unwrap_or_else(|_| die_msg(&format!("error parsing seq: {arg}")));
-        (seq, seq)
+            .map_err(|_| anyhow::anyhow!("error parsing seq: {arg}"))?;
+        Ok((seq, seq))
     }
-}
-
-fn die_msg(msg: &str) -> ! {
-    eprintln!("{msg}");
-    std::process::exit(1);
 }
 
 // ---- sign parsing ----
@@ -668,11 +491,11 @@ fn parse_sign(s: &str) -> (i32, &str) {
 
 // ---- bool parsing ----
 
-fn parse_bool_val(s: &str) -> bool {
+fn parse_bool_val(s: &str) -> Result<bool> {
     match s {
-        "1" | "true" | "yes" => true,
-        "0" | "false" | "no" => false,
-        _ => die_msg(&format!("error parsing {s}")),
+        "1" | "true" | "yes" => Ok(true),
+        "0" | "false" | "no" => Ok(false),
+        _ => bail!("error parsing boolean: {s}"),
     }
 }
 
@@ -786,7 +609,7 @@ pub fn cmd_list_journal(argv: Vec<String>) -> Result<()> {
     }
 
     if let Some(ref seq_arg) = cli.seq {
-        let (s, e) = parse_seq_range(seq_arg);
+        let (s, e) = parse_seq_range(seq_arg)?;
         seq_start = s;
         seq_end = e;
         contiguous_only = false;
@@ -865,7 +688,7 @@ pub fn cmd_list_journal(argv: Vec<String>) -> Result<()> {
     }
 
     if let Some(ref bkey_val_arg) = cli.bkey_val {
-        f.bkey_val = parse_bool_val(bkey_val_arg);
+        f.bkey_val = parse_bool_val(bkey_val_arg)?;
     }
 
     if cli.devices.is_empty() {
