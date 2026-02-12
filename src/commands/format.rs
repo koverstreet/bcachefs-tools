@@ -8,7 +8,7 @@ use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 
-use crate::commands::opts::bch_opt_lookup;
+use crate::commands::opts::{bch_opt_lookup, parse_opt_val};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use bch_bindgen::printbuf::Printbuf;
@@ -211,38 +211,16 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                         "1".to_string()
                     };
 
-                    let c_val = CString::new(val_str.as_str())?;
-                    let mut v: u64 = 0;
-                    let mut err = Printbuf::new();
-                    let ret = unsafe {
-                        c::bch2_opt_parse(
-                            std::ptr::null_mut(),
-                            opt,
-                            c_val.as_ptr(),
-                            &mut v,
-                            err.as_raw(),
-                        )
-                    };
-
-                    if ret == -(c::bch_errcode::BCH_ERR_option_needs_open_fs as i32) {
-                        deferred_opts.push((opt_id as usize, val_str));
-                        i += 1;
-                        continue;
-                    }
-
-                    if ret != 0 {
-                        let msg = err.as_str();
-                        if msg.is_empty() {
-                            bail!("invalid option: {}", val_str);
+                    match parse_opt_val(opt, &val_str)? {
+                        None => deferred_opts.push((opt_id as usize, val_str)),
+                        Some(v) => {
+                            if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
+                                unsafe { c::bch2_opt_set_by_id(&mut cur_dev_opts, opt_id, v) };
+                                unconsumed_dev_option = true;
+                            } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
+                                unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id, v) };
+                            }
                         }
-                        bail!("invalid option: {}", msg);
-                    }
-
-                    if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
-                        unsafe { c::bch2_opt_set_by_id(&mut cur_dev_opts, opt_id, v) };
-                        unconsumed_dev_option = true;
-                    } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
-                        unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id, v) };
                     }
 
                     i += 1;

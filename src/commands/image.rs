@@ -4,13 +4,12 @@ use std::process;
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
 use bch_bindgen::opt_set;
-use bch_bindgen::printbuf::Printbuf;
 use clap::Parser;
 
 use crate::commands::format::{
     take_opt_value, take_short_value, opts_usage_str, metadata_version_current,
 };
-use crate::commands::opts::bch_opt_lookup;
+use crate::commands::opts::{bch_opt_lookup, parse_opt_val};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
@@ -134,37 +133,15 @@ pub fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                         "1".to_string()
                     };
 
-                    let c_val = CString::new(val_str.as_str())?;
-                    let mut v: u64 = 0;
-                    let mut err = Printbuf::new();
-                    let ret = unsafe {
-                        c::bch2_opt_parse(
-                            std::ptr::null_mut(),
-                            opt,
-                            c_val.as_ptr(),
-                            &mut v,
-                            err.as_raw(),
-                        )
-                    };
-
-                    if ret == -(c::bch_errcode::BCH_ERR_option_needs_open_fs as i32) {
-                        deferred_opts.push((opt_id as usize, val_str));
-                        i += 1;
-                        continue;
-                    }
-
-                    if ret != 0 {
-                        let msg = err.as_str();
-                        if msg.is_empty() {
-                            bail!("invalid option: {}", val_str);
+                    match parse_opt_val(opt, &val_str)? {
+                        None => deferred_opts.push((opt_id as usize, val_str)),
+                        Some(v) => {
+                            if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
+                                unsafe { c::bch2_opt_set_by_id(&mut dev_opts, opt_id, v) };
+                            } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
+                                unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id, v) };
+                            }
                         }
-                        bail!("invalid option: {}", msg);
-                    }
-
-                    if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
-                        unsafe { c::bch2_opt_set_by_id(&mut dev_opts, opt_id, v) };
-                    } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
-                        unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id, v) };
                     }
 
                     i += 1;

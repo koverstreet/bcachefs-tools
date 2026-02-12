@@ -1,6 +1,8 @@
-use std::ffi::CStr;
+use std::ffi::{CStr, CString};
 
+use anyhow::{bail, Result};
 use bch_bindgen::c;
+use bch_bindgen::printbuf::Printbuf;
 use clap::{Arg, ArgAction, ArgMatches};
 
 /// Leak a String to get a &'static str. Used for Clap args built from
@@ -118,4 +120,42 @@ pub fn bch_options_from_matches(matches: &ArgMatches, flag_filter: u32) -> Vec<(
         }
     }
     opts
+}
+
+/// Parse a bcachefs option value string using the C option table.
+///
+/// Returns:
+///   `Ok(None)` — option needs an open filesystem, should be deferred
+///   `Ok(Some(v))` — parsed value, ready to set with `bch2_opt_set_by_id`
+///   `Err(...)` — parse error
+pub(crate) fn parse_opt_val(
+    opt: &c::bch_option,
+    val_str: &str,
+) -> Result<Option<u64>> {
+    let c_val = CString::new(val_str)?;
+    let mut v: u64 = 0;
+    let mut err = Printbuf::new();
+    let ret = unsafe {
+        c::bch2_opt_parse(
+            std::ptr::null_mut(),
+            opt,
+            c_val.as_ptr(),
+            &mut v,
+            err.as_raw(),
+        )
+    };
+
+    if ret == -(c::bch_errcode::BCH_ERR_option_needs_open_fs as i32) {
+        return Ok(None);
+    }
+
+    if ret != 0 {
+        let msg = err.as_str();
+        if msg.is_empty() {
+            bail!("invalid option: {}", val_str);
+        }
+        bail!("invalid option: {}", msg);
+    }
+
+    Ok(Some(v))
 }
