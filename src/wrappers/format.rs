@@ -137,8 +137,10 @@ pub extern "C" fn bch2_format(
     }
 
     // Allocate superblock
-    let mut sb = c::bch_sb_handle::default();
-    if unsafe { c::bch2_sb_realloc(&mut sb, 0) } != 0 {
+    // ManuallyDrop: we return sb.sb to the caller (who frees it),
+    // so we must not let bch_sb_handle's Drop call bch2_free_super.
+    let mut sb = std::mem::ManuallyDrop::new(c::bch_sb_handle::default());
+    if unsafe { c::bch2_sb_realloc(&mut *sb, 0) } != 0 {
         panic!("insufficient memory");
     }
 
@@ -199,7 +201,7 @@ pub extern "C" fn bch2_format(
 
     let mi = unsafe {
         c::bch2_sb_field_resize_id(
-            &mut sb,
+            &mut *sb,
             c::bch_sb_field_type::BCH_SB_FIELD_members_v2,
             mi_u64s as u32,
         ) as *mut c::bch_sb_field_members_v2
@@ -235,7 +237,7 @@ pub extern "C" fn bch2_format(
             continue;
         }
 
-        let path_idx = unsafe { c::bch2_disk_path_find_or_create(&mut sb, dev.label) };
+        let path_idx = unsafe { c::bch2_disk_path_find_or_create(&mut *sb, dev.label) };
         if path_idx < 0 {
             panic!(
                 "error creating disk path: {}",
@@ -253,19 +255,19 @@ pub extern "C" fn bch2_format(
     unsafe {
         c::rust_set_bch_sb_foreground_target(
             sb.sb,
-            parse_target(&mut sb, dev_slice, target_strs.foreground_target) as u64,
+            parse_target(&mut *sb, dev_slice, target_strs.foreground_target) as u64,
         );
         c::rust_set_bch_sb_background_target(
             sb.sb,
-            parse_target(&mut sb, dev_slice, target_strs.background_target) as u64,
+            parse_target(&mut *sb, dev_slice, target_strs.background_target) as u64,
         );
         c::rust_set_bch_sb_promote_target(
             sb.sb,
-            parse_target(&mut sb, dev_slice, target_strs.promote_target) as u64,
+            parse_target(&mut *sb, dev_slice, target_strs.promote_target) as u64,
         );
         c::rust_set_bch_sb_metadata_target(
             sb.sb,
-            parse_target(&mut sb, dev_slice, target_strs.metadata_target) as u64,
+            parse_target(&mut *sb, dev_slice, target_strs.metadata_target) as u64,
         );
     }
 
@@ -275,7 +277,7 @@ pub extern "C" fn bch2_format(
             std::mem::size_of::<c::bch_sb_field_crypt>() / std::mem::size_of::<u64>();
         let crypt = unsafe {
             c::bch2_sb_field_resize_id(
-                &mut sb,
+                &mut *sb,
                 c::bch_sb_field_type::BCH_SB_FIELD_crypt,
                 crypt_size as u32,
             ) as *mut c::bch_sb_field_crypt
@@ -286,7 +288,7 @@ pub extern "C" fn bch2_format(
         }
     }
 
-    unsafe { c::bch2_sb_members_cpy_v2_v1(&mut sb) };
+    unsafe { c::bch2_sb_members_cpy_v2_v1(&mut *sb) };
 
     // Write superblocks to each device
     for dev in dev_slice.iter_mut() {
