@@ -66,6 +66,12 @@ char *rust_opts_usage_to_str(unsigned flags_all, unsigned flags_none);
 int rust_strip_alloc_check(struct bch_fs *c);
 
 /*
+ * Strip alloc info from a clean filesystem: removes alloc btree roots
+ * from the clean section, replicas, and journal fields.
+ */
+void strip_fs_alloc(struct bch_fs *c);
+
+/*
  * Strip alloc info: takes sb_lock, calls strip_fs_alloc(),
  * writes superblock, releases lock.
  */
@@ -137,5 +143,14 @@ unsigned rust_block_bits(struct bch_fs *c);
 bool rust_chacha20_key_set(struct bch_fs *c);
 int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
 int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
+
+/*
+ * Superblock display with device names — scans for devices by UUID,
+ * prints member info with device model and name.
+ */
+struct printbuf;
+void bch2_sb_to_text_with_names(struct printbuf *out,
+				struct bch_fs *c, struct bch_sb *sb,
+				bool print_layout, unsigned fields, int field_only);
 
 #endif /* _RUST_SHIMS_H */

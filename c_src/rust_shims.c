@@ -20,9 +20,11 @@
 #include "libbcachefs/btree/read.h"
 #include "libbcachefs/fs/dirent_format.h"
 #include "libbcachefs/init/error.h"
-#include "cmd_strip_alloc.h"
+#include "libbcachefs/journal/journal.h"
+#include "libbcachefs/sb/clean.h"
 #include "posix_to_bcachefs.h"
 #include "rust_shims.h"
+#include "src/rust_to_c.h"
 
 /* LE64_BITMASK setter shims for Rust — wraps static inline SET_* macros */
 
@@ -178,6 +180,49 @@ int rust_strip_alloc_check(struct bch_fs *c)
 		return -ERANGE;
 
 	return 0;
+}
+
+void strip_fs_alloc(struct bch_fs *c)
+{
+	struct bch_sb_field_clean *clean = bch2_sb_field_get(c->disk_sb.sb, clean);
+	struct jset_entry *entry = clean->start;
+
+	unsigned u64s = clean->field.u64s;
+	while (entry != vstruct_end(&clean->field)) {
+		if (entry->type == BCH_JSET_ENTRY_btree_root &&
+		    btree_id_is_alloc(entry->btree_id)) {
+			clean->field.u64s -= jset_u64s(entry->u64s);
+			memmove(entry,
+				vstruct_next(entry),
+				vstruct_end(&clean->field) - (void *) vstruct_next(entry));
+		} else {
+			entry = vstruct_next(entry);
+		}
+	}
+
+	swap(u64s, clean->field.u64s);
+	bch2_sb_field_resize(&c->disk_sb, clean, u64s);
+
+	scoped_guard(percpu_write, &c->capacity.mark_lock) {
+		kfree(c->replicas.entries);
+		c->replicas.entries = NULL;
+		c->replicas.nr = 0;
+	}
+
+	bch2_sb_field_resize(&c->disk_sb, replicas_v0, 0);
+	bch2_sb_field_resize(&c->disk_sb, replicas, 0);
+
+	for_each_online_member(c, ca, 0) {
+		bch2_sb_field_resize(&c->disk_sb, journal, 0);
+		bch2_sb_field_resize(&c->disk_sb, journal_v2, 0);
+	}
+
+	for_each_member_device(c, ca) {
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+		SET_BCH_MEMBER_FREESPACE_INITIALIZED(m, false);
+	}
+
+	c->disk_sb.sb->features[0] |= cpu_to_le64(BIT_ULL(BCH_FEATURE_no_alloc_info));
 }
 
 void rust_strip_alloc_do(struct bch_fs *c)
@@ -345,4 +390,76 @@ int rust_jset_decrypt(struct bch_fs *c, struct jset *j)
 int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset)
 {
 	return bset_encrypt(c, i, offset);
+}
+
+/* superblock display — wraps member iteration with device name lookup */
+
+static struct sb_name *sb_dev_to_name(sb_names sb_names, unsigned idx)
+{
+	darray_for_each(sb_names, i)
+		if (i->sb.sb->dev_idx == idx)
+			return i;
+	return NULL;
+}
+
+static void print_one_member(struct printbuf *out, sb_names sb_names,
+			     struct bch_sb *sb,
+			     struct bch_sb_field_disk_groups *gi,
+			     struct bch_member m, unsigned idx)
+{
+	if (!bch2_member_alive(&m))
+		return;
+
+	struct sb_name *name = sb_dev_to_name(sb_names, idx);
+	prt_printf(out, "Device %u:\t%s\t", idx, name ? name->name : "(not found)");
+
+	if (name) {
+		char *model = fd_to_dev_model(name->sb.bdev->bd_fd);
+		prt_str(out, model);
+		free(model);
+	}
+	prt_newline(out);
+
+	printbuf_indent_add(out, 2);
+	bch2_member_to_text(out, &m, gi, sb, idx);
+	printbuf_indent_sub(out, 2);
+}
+
+void bch2_sb_to_text_with_names(struct printbuf *out,
+				struct bch_fs *c, struct bch_sb *sb,
+				bool print_layout, unsigned fields, int field_only)
+{
+	CLASS(printbuf, uuid_buf)();
+	prt_str(&uuid_buf, "UUID=");
+	pr_uuid(&uuid_buf, sb->user_uuid.b);
+
+	sb_names sb_names = {};
+	bch2_scan_device_sbs(uuid_buf.buf, &sb_names);
+
+	if (field_only >= 0) {
+		struct bch_sb_field *f = bch2_sb_field_get_id(sb, field_only);
+
+		if (f)
+			__bch2_sb_field_to_text(out, c, sb, f);
+	} else {
+		printbuf_tabstop_push(out, 44);
+
+		bch2_sb_to_text(out, c, sb, print_layout,
+				fields & ~(BIT(BCH_SB_FIELD_members_v1)|
+					   BIT(BCH_SB_FIELD_members_v2)));
+
+		struct bch_sb_field_disk_groups *gi = bch2_sb_field_get(sb, disk_groups);
+
+		struct bch_sb_field_members_v1 *mi1;
+		if ((fields & BIT(BCH_SB_FIELD_members_v1)) &&
+		    (mi1 = bch2_sb_field_get(sb, members_v1)))
+			for (unsigned i = 0; i < sb->nr_devices; i++)
+				print_one_member(out, sb_names, sb, gi, bch2_members_v1_get(mi1, i), i);
+
+		struct bch_sb_field_members_v2 *mi2;
+		if ((fields & BIT(BCH_SB_FIELD_members_v2)) &&
+		    (mi2 = bch2_sb_field_get(sb, members_v2)))
+			for (unsigned i = 0; i < sb->nr_devices; i++)
+				print_one_member(out, sb_names, sb, gi, bch2_members_v2_get(mi2, i), i);
+	}
 }

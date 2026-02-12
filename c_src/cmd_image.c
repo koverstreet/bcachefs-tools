@@ -20,7 +20,7 @@
 #include <uuid/uuid.h>
 
 #include "cmds.h"
-#include "cmd_strip_alloc.h"
+#include "rust_shims.h"
 #include "posix_to_bcachefs.h"
 #include "libbcachefs.h"
 #include "crypto.h"
