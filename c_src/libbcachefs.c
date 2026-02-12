@@ -1,38 +1,20 @@
 #include <ctype.h>
-#include <errno.h>
-#include <fcntl.h>
 #include <stdbool.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <sys/types.h>
-#include <time.h>
-#include <unistd.h>
-
-#include <uuid/uuid.h>
 
 #include <linux/mm.h>
 
 #include "libbcachefs.h"
-#include "crypto.h"
 #include "tools-util.h"
 
 #include "bcachefs.h"
 
 #include "alloc/buckets.h"
-#include "alloc/disk_groups.h"
-#include "alloc/replicas.h"
 #include "btree/cache.h"
 
-#include "data/checksum.h"
-
-#include "journal/seq_blacklist.h"
-
 #include "sb/io.h"
-
-#define NSEC_PER_SEC	1000000000L
 
 void bch2_sb_layout_init(struct bch_sb_layout *l,
 			 unsigned block_size,
@@ -77,35 +59,6 @@ void bch2_sb_layout_init(struct bch_sb_layout *l,
 		backup_sb = rounddown(backup_sb, bucket_size >> 9);
 		l->sb_offset[l->nr_superblocks++] = cpu_to_le64(backup_sb);
 	}
-}
-
-/*
- * Clamp fs-wide bucket size for a specific device that may be too small.
- * Prefer at least 2048 buckets per device (512 is the absolute minimum
- * but gets dicey).  Within that constraint, try to reach at least
- * encoded_extent_max to avoid fragmenting checksummed/compressed extents.
- */
-static u64 dev_bucket_size_clamp(struct bch_opts fs_opts, u64 dev_size, u64 fs_bucket_size)
-{
-	/* Largest bucket size that still gives us >= 2048 buckets: */
-	u64 max_size = rounddown_pow_of_two(dev_size / (BCH_MIN_NR_NBUCKETS * 4));
-	if (opt_defined(fs_opts, btree_node_size))
-		max_size = max(max_size, fs_opts.btree_node_size);
-	if (max_size * BCH_MIN_NR_NBUCKETS > dev_size)
-		die("bucket size %llu too big for device size", max_size);
-
-	u64 dev_bucket_size = min(max_size, fs_bucket_size);
-
-	/*
-	 * Buckets >= encoded_extent_max avoid fragmenting encoded
-	 * extents when they're moved, but don't push below 2048 buckets:
-	 */
-	u64 extent_min = opt_get(fs_opts, encoded_extent_max);
-	while (dev_bucket_size < extent_min &&
-	       dev_bucket_size < max_size)
-		dev_bucket_size *= 2;
-
-	return dev_bucket_size;
 }
 
 u64 bch2_pick_bucket_size(struct bch_opts opts, dev_opts_list devs)
@@ -179,245 +132,6 @@ void bch2_check_bucket_size(struct bch_opts opts, struct dev_opts *dev)
 	if (dev->nbuckets < BCH_MIN_NR_NBUCKETS)
 		die("Not enough buckets: %llu, need %u (bucket size %u)",
 		    dev->nbuckets, BCH_MIN_NR_NBUCKETS, dev->opts.bucket_size);
-}
-
-static unsigned parse_target(struct bch_sb_handle *sb,
-			     dev_opts_list devs,
-			     const char *s)
-{
-	if (!s)
-		return 0;
-
-	darray_for_each(devs, i)
-		if (!strcmp(s, i->path))
-			return dev_to_target(i - devs.data);
-
-	int idx = bch2_disk_path_find(sb, s);
-	if (idx >= 0)
-		return group_to_target(idx);
-
-	die("Invalid target %s", s);
-	return 0;
-}
-
-static void bch2_opt_set_sb_all(struct bch_sb *sb, int dev_idx, struct bch_opts *opts)
-{
-	for (unsigned id = 0; id < bch2_opts_nr; id++) {
-		u64 v = bch2_opt_defined_by_id(opts, id)
-			? bch2_opt_get_by_id(opts, id)
-			: bch2_opt_get_by_id(&bch2_opts_default, id);
-
-		__bch2_opt_set_sb(sb, dev_idx, &bch2_opt_table[id], v);
-	}
-}
-
-struct bch_sb *bch2_format(struct bch_opt_strs	fs_opt_strs,
-			   struct bch_opts	fs_opts,
-			   struct format_opts	opts,
-			   dev_opts_list devs)
-{
-	struct bch_sb_handle sb = { NULL };
-
-	/* calculate block size: */
-	if (!opt_defined(fs_opts, block_size)) {
-		unsigned max_dev_block_size = 0;
-
-		darray_for_each(devs, i)
-			max_dev_block_size = max(max_dev_block_size, get_blocksize(i->bdev->bd_fd));
-
-		opt_set(fs_opts, block_size, max_dev_block_size);
-	}
-
-	if (fs_opts.block_size < 512)
-		die("blocksize too small: %u, must be greater than one sector (512 bytes)",
-		    fs_opts.block_size);
-
-	/* get device size, if it wasn't specified: */
-	darray_for_each(devs, i)
-		if (!i->fs_size)
-			i->fs_size = get_size(i->bdev->bd_fd);
-
-	/* calculate bucket sizes: */
-	u64 fs_bucket_size = bch2_pick_bucket_size(fs_opts, devs);
-
-	darray_for_each(devs, i)
-		if (!opt_defined(i->opts, bucket_size))
-			opt_set(i->opts, bucket_size,
-				dev_bucket_size_clamp(fs_opts, i->fs_size, fs_bucket_size));
-
-	darray_for_each(devs, i) {
-		i->nbuckets = i->fs_size / i->opts.bucket_size;
-		bch2_check_bucket_size(fs_opts, i);
-	}
-
-	/* calculate btree node size: */
-	if (!opt_defined(fs_opts, btree_node_size)) {
-		unsigned s = bch2_opts_default.btree_node_size;
-
-		darray_for_each(devs, i)
-			s = min(s, i->opts.bucket_size);
-		opt_set(fs_opts, btree_node_size, s);
-	}
-
-	if (uuid_is_null(opts.uuid.b))
-		uuid_generate(opts.uuid.b);
-
-	if (bch2_sb_realloc(&sb, 0))
-		die("insufficient memory");
-
-	sb.sb->version		= le16_to_cpu(opts.version);
-	sb.sb->version_min	= le16_to_cpu(opts.version);
-	sb.sb->magic		= BCHFS_MAGIC;
-	sb.sb->user_uuid	= opts.uuid;
-	sb.sb->nr_devices	= devs.nr;
-	SET_BCH_SB_VERSION_INCOMPAT_ALLOWED(sb.sb, opts.version);
-
-	/* These are no longer options, only provided for compatibility with old verions */
-	SET_BCH_SB_META_REPLICAS_REQ(sb.sb, 1);
-	SET_BCH_SB_DATA_REPLICAS_REQ(sb.sb, 1);
-
-	SET_BCH_SB_EXTENT_BP_SHIFT(sb.sb, 16);
-
-	if (opts.version > bcachefs_metadata_version_disk_accounting_big_endian)
-		sb.sb->features[0] |= cpu_to_le64(BCH_SB_FEATURES_ALL);
-
-	uuid_generate(sb.sb->uuid.b);
-
-	if (opts.label) {
-		if (strlen(opts.label) >= sizeof(sb.sb->label))
-			die("filesystem label too long (max %zu characters)",
-			    sizeof(sb.sb->label) - 1);
-		memcpy(sb.sb->label, opts.label, strlen(opts.label));
-	}
-
-	bch2_opt_set_sb_all(sb.sb, -1, &fs_opts);
-
-	struct timespec now;
-	if (clock_gettime(CLOCK_REALTIME, &now))
-		die("error getting current time: %m");
-
-	sb.sb->time_base_lo	= cpu_to_le64(now.tv_sec * NSEC_PER_SEC + now.tv_nsec);
-	sb.sb->time_precision	= cpu_to_le32(1);
-
-	/* Member info: */
-	struct bch_sb_field_members_v2 *mi =
-		bch2_sb_field_resize(&sb, members_v2,
-			(sizeof(*mi) + sizeof(struct bch_member) * devs.nr) / sizeof(u64));
-
-	mi->member_bytes = cpu_to_le16(sizeof(struct bch_member));
-	darray_for_each(devs, i) {
-		unsigned idx = i - devs.data;
-		struct bch_member *m = bch2_members_v2_get_mut(sb.sb, idx);
-
-		uuid_generate(m->uuid.b);
-		m->nbuckets	= cpu_to_le64(i->nbuckets);
-		m->first_bucket	= 0;
-
-		if (!opt_defined(i->opts, rotational))
-			opt_set(i->opts, rotational, !bdev_nonrot(i->bdev));
-
-		bch2_opt_set_sb_all(sb.sb, idx, &i->opts);
-		SET_BCH_MEMBER_ROTATIONAL_SET(m, true);
-	}
-
-	/* Disk labels*/
-	darray_for_each(devs, i) {
-		if (!i->label)
-			continue;
-
-		int idx = bch2_disk_path_find_or_create(&sb, i->label);
-		if (idx < 0)
-			die("error creating disk path: %s", strerror(-idx));
-
-		/*
-		 * Recompute mi and m after each sb modification: its location
-		 * in memory may have changed due to reallocation.
-		 */
-		struct bch_member *m = bch2_members_v2_get_mut(sb.sb, (i - devs.data));
-		SET_BCH_MEMBER_GROUP(m,	idx + 1);
-	}
-
-	SET_BCH_SB_FOREGROUND_TARGET(sb.sb,
-		parse_target(&sb, devs, fs_opt_strs.foreground_target));
-	SET_BCH_SB_BACKGROUND_TARGET(sb.sb,
-		parse_target(&sb, devs, fs_opt_strs.background_target));
-	SET_BCH_SB_PROMOTE_TARGET(sb.sb,
-		parse_target(&sb, devs, fs_opt_strs.promote_target));
-	SET_BCH_SB_METADATA_TARGET(sb.sb,
-		parse_target(&sb, devs, fs_opt_strs.metadata_target));
-
-	/* Crypt: */
-	if (opts.encrypted) {
-		struct bch_sb_field_crypt *crypt =
-			bch2_sb_field_resize(&sb, crypt, sizeof(*crypt) / sizeof(u64));
-
-		bch_sb_crypt_init(sb.sb, crypt, opts.passphrase);
-		SET_BCH_SB_ENCRYPTION_TYPE(sb.sb, 1);
-	}
-
-	bch2_sb_members_cpy_v2_v1(&sb);
-
-	darray_for_each(devs, i) {
-		u64 size_sectors = i->fs_size >> 9;
-
-		sb.sb->dev_idx = i - devs.data;
-
-		if (!i->sb_offset) {
-			i->sb_offset	= BCH_SB_SECTOR;
-			i->sb_end	= size_sectors;
-		}
-
-		bch2_sb_layout_init(&sb.sb->layout,
-				    fs_opts.block_size,
-				    i->opts.bucket_size,
-				    opts.superblock_size,
-				    i->sb_offset, i->sb_end,
-				    opts.no_sb_at_end);
-
-		if (i->sb_offset == BCH_SB_SECTOR) {
-			/* Zero start of disk */
-			static const char zeroes[BCH_SB_SECTOR << 9];
-
-			xpwrite(i->bdev->bd_fd, zeroes, BCH_SB_SECTOR << 9, 0,
-				"zeroing start of disk");
-		}
-
-		bch2_super_write(i->bdev->bd_fd, sb.sb);
-		xclose(i->bdev->bd_fd);
-	}
-
-	/*
-	 * Ensure that 'bcachefs mount' sees the newly formatted devices when
-	 * scanning by UUID in the udev database:
-	 */
-	CLASS(printbuf, udevadm_cmd)();
-	prt_str(&udevadm_cmd, "udevadm trigger --settle");
-	darray_for_each(devs, i)
-		prt_printf(&udevadm_cmd, " %s", i->path);
-	system(udevadm_cmd.buf);
-
-	return sb.sb;
-}
-
-int bch2_format_for_device_add(struct dev_opts *dev,
-			       unsigned block_size, unsigned btree_node_size)
-{
-	struct bch_opt_strs fs_opt_strs;
-	memset(&fs_opt_strs, 0, sizeof(fs_opt_strs));
-
-	struct bch_opts fs_opts = bch2_parse_opts(fs_opt_strs);
-	opt_set(fs_opts, block_size,		block_size);
-	opt_set(fs_opts, btree_node_size,	btree_node_size);
-
-	dev_opts_list devs = {};
-	darray_push(&devs, *dev);
-
-	struct format_opts format_opts	= format_opts_default();
-	struct bch_sb *sb = bch2_format(fs_opt_strs, fs_opts, format_opts, devs);
-	darray_exit(&devs);
-	free(sb);
-
-	return 0;
 }
 
 /* option parsing */

@@ -98,9 +98,9 @@ pub fn cmd_device_add(argv: Vec<String>) -> Result<()> {
             dev_path, std::io::Error::from_raw_os_error(-ret)));
     }
 
-    let ret = unsafe {
-        c::bch2_format_for_device_add(&mut dev_opts, block_size as u32, btree_node_size as u32)
-    };
+    let ret = crate::wrappers::format::bch2_format_for_device_add(
+        &mut dev_opts, block_size as u32, btree_node_size as u32,
+    );
     if ret != 0 {
         return Err(anyhow!("error formatting {}: {}",
             dev_path, std::io::Error::from_raw_os_error(-ret)));

@@ -12,6 +12,7 @@
 #include "fs/check.h"
 #include "sb/io.h"
 
+#include "alloc/disk_groups.h"
 #include "cmds.h"
 #include "cmd_super.h"
 #include "crypto.h"

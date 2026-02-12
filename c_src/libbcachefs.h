@@ -98,14 +98,15 @@ void bch2_sb_layout_init(struct bch_sb_layout *,
 u64 bch2_pick_bucket_size(struct bch_opts, dev_opts_list);
 void bch2_check_bucket_size(struct bch_opts, struct dev_opts *);
 
+/* Implemented in Rust (src/wrappers/format.rs) */
 struct bch_sb *bch2_format(struct bch_opt_strs,
 			   struct bch_opts,
 			   struct format_opts,
 			   dev_opts_list devs);
-
 int bch2_format_for_device_add(struct dev_opts *,
 			       unsigned, unsigned);
 
+/* Implemented in Rust (src/wrappers/super_io.rs) */
 void bch2_super_write(int, struct bch_sb *);
 struct bch_sb *__bch2_super_read(int, u64);
 
