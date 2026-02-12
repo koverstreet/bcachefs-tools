@@ -173,14 +173,13 @@ fn set_option_offline(
 }
 
 fn name_to_dev_idx(c: *mut c::bch_fs, name: &str) -> Option<usize> {
-    unsafe {
-        for i in 0..(*c).devs.len() {
-            let ca = (*c).devs[i];
-            if ca.is_null() { continue; }
-            let ca_name = CStr::from_ptr((*ca).name.as_ptr());
-            if ca_name.to_bytes() == name.as_bytes() {
-                return Some(i);
-            }
+    let devs_len = unsafe { (*c).devs.len() };
+    for i in 0..devs_len {
+        let ca = unsafe { (*c).devs[i] };
+        if ca.is_null() { continue; }
+        let ca_name = unsafe { CStr::from_ptr((*ca).name.as_ptr()) };
+        if ca_name.to_bytes() == name.as_bytes() {
+            return Some(i);
         }
     }
     None

@@ -188,9 +188,8 @@ pub extern "C" fn bch2_scan_device_sbs(device: *const c_char, ret: *mut sb_names
         (*ret).data   = sbs.as_mut_ptr();
         (*ret).nr     = sbs.len();
         (*ret).size   = sbs.capacity();
-
-        std::mem::forget(sbs);
     }
+    std::mem::forget(sbs);
     0
 }
 

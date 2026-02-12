@@ -415,12 +415,10 @@ impl BcachefsHandle {
         let mut buf = vec![0u8; buf_size];
 
         // Fill header
-        unsafe {
-            let hdr = &mut *(buf.as_mut_ptr() as *mut bch_ioctl_dev_usage_v2);
-            hdr.dev = dev_idx as u64;
-            hdr.flags = BCH_BY_INDEX;
-            hdr.nr_data_types = nr_data_types as u8;
-        }
+        let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut bch_ioctl_dev_usage_v2) };
+        hdr.dev = dev_idx as u64;
+        hdr.flags = BCH_BY_INDEX;
+        hdr.nr_data_types = nr_data_types as u8;
 
         let request = bch_ioc_wr::<bch_ioctl_dev_usage_v2>(18);
         let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request, buf.as_mut_ptr()) };

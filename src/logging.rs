@@ -39,8 +39,8 @@ pub fn setup(verbose: u8, color: bool) {
                 buf,
                 "[{:<5} {}:{}] {}",
                 record.level().style(style),
-                record.file().unwrap(),
-                record.line().unwrap(),
+                record.file().unwrap_or("<unknown>"),
+                record.line().unwrap_or(0),
                 record.args()
             )
         })
