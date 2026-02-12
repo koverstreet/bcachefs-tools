@@ -22,7 +22,7 @@ fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> anyhow::Resu
     opt_set!(opts, nochanges, 1);
     opt_set!(opts, no_version_check, 1);
 
-    bch_bindgen::sb_io::read_super_silent(path.as_ref(), opts)
+    bch_bindgen::sb::io::read_super_silent(path.as_ref(), opts)
 }
 
 fn device_property_map(dev: &udev::Device) -> HashMap<String, String> {
@@ -136,7 +136,7 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
         return device.split(':')
             .map(PathBuf::from)
             .map(|path|
-                 bch_bindgen::sb_io::read_super_opts(path.as_ref(), opts)
+                 bch_bindgen::sb::io::read_super_opts(path.as_ref(), opts)
                  .map(|sb| (path, sb)))
             .collect::<Result<Vec<_>>>()
     }

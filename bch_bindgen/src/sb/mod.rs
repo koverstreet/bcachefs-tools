@@ -1,3 +1,5 @@
+pub mod io;
+
 use crate::c;
 
 // SbField trait + impls — generated from BCH_SB_FIELDS() x-macro

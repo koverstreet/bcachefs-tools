@@ -8,7 +8,7 @@ use anyhow::{anyhow, Result};
 use bch_bindgen::bcachefs;
 use bch_bindgen::c;
 use bch_bindgen::opt_set;
-use bch_bindgen::sb_io;
+use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};

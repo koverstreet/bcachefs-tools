@@ -259,7 +259,7 @@ impl BcachefsHandle {
         bch_bindgen::opt_set!(opts, noexcl, 1);
         bch_bindgen::opt_set!(opts, nochanges, 1);
 
-        let sb = bch_bindgen::sb_io::read_super_opts(path, opts)
+        let sb = bch_bindgen::sb::io::read_super_opts(path, opts)
             .map_err(|e| match e.downcast::<BchError>() {
                 Ok(bch_err) => bch_err,
                 Err(_) => BchError::from_raw(-libc::EIO),
@@ -269,7 +269,7 @@ impl BcachefsHandle {
         let uuid = unsafe { (*sb.sb).user_uuid.b };
         let uuid_str = format_uuid(&uuid);
 
-        unsafe { bch_bindgen::sb_io::bch2_free_super(&sb as *const _ as *mut _) };
+        unsafe { bch_bindgen::sb::io::bch2_free_super(&sb as *const _ as *mut _) };
 
         let mut handle = Self::open_by_name(&uuid_str, Some(uuid))
             .map_err(|e| BchError::from_raw(-e.0))?;

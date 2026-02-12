@@ -1,14 +1,13 @@
 pub mod bcachefs;
 pub mod bkey;
 pub mod btree;
+pub mod data;
 pub mod errcode;
-pub mod extent_iter;
 pub mod fs;
 pub mod journal;
 pub mod keyutils;
 pub mod opts;
 pub mod sb;
-pub mod sb_io;
 pub use paste::paste;
 
 pub mod c {

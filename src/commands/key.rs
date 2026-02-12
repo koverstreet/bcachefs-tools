@@ -5,7 +5,7 @@ use bch_bindgen::bcachefs::bch_key;
 use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
-use bch_bindgen::sb_io;
+use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
 use crate::key::{sb_is_encrypted, unencrypted_key, KeyHandle, Keyring, Passphrase};
