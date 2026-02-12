@@ -62,9 +62,6 @@ void rust_set_bch_member_rotational_set(struct bch_member *m, __u64 v)
 void rust_set_bch_member_group(struct bch_member *m, __u64 v)
 { SET_BCH_MEMBER_GROUP(m, v); }
 
-__u64 rust_bch_sb_features_all(void)
-{ return BCH_SB_FEATURES_ALL; }
-
 struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb)
 {
 	struct nonce nonce = { 0 };

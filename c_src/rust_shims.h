@@ -24,7 +24,6 @@ void rust_set_bch_sb_metadata_target(struct bch_sb *, __u64);
 void rust_set_bch_sb_encryption_type(struct bch_sb *, __u64);
 void rust_set_bch_member_rotational_set(struct bch_member *, __u64);
 void rust_set_bch_member_group(struct bch_member *, __u64);
-__u64 rust_bch_sb_features_all(void);
 
 /*
  * Compute the checksum of an on-disk superblock, using the csum type

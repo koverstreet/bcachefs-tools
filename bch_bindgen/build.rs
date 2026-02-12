@@ -402,7 +402,6 @@ fn main() {
         .allowlist_function("rust_sizeof_bucket")
         .allowlist_function("rust_set_bch_sb_.*")
         .allowlist_function("rust_set_bch_member_.*")
-        .allowlist_function("rust_bch_sb_features_all")
         .allowlist_function("bbpos_range_parse")
         .allowlist_function("bbpos_parse")
         .allowlist_function("rust_collect_journal_entries")
