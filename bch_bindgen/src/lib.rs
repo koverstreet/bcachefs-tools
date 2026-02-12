@@ -1,3 +1,4 @@
+pub mod accounting;
 pub mod bcachefs;
 pub mod bkey;
 pub mod btree;
