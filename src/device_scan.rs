@@ -89,15 +89,33 @@ fn get_devices_by_uuid(
     opts: &bch_opts,
     use_udev: bool
 ) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
-    let devs_from_udev = get_devices_by_uuid_udev(uuid)?;
+    if use_udev {
+        let devs_from_udev = get_devices_by_uuid_udev(uuid)?;
 
-    let devices = if use_udev && !devs_from_udev.is_empty() {
-        devs_from_udev
-    } else {
-        get_all_block_devnodes()?
-    };
+        if !devs_from_udev.is_empty() {
+            let sbs = read_sbs_matching_uuid(uuid, &devs_from_udev, opts);
 
-    Ok(read_sbs_matching_uuid(uuid, &devices, opts))
+            // Check if udev found all expected devices. During early boot,
+            // udev may not have finished processing all devices yet — if we
+            // got fewer than expected, fall back to scanning all block devices.
+            let expected = sbs.first()
+                .map(|(_, sb)| sb.sb().number_of_devices() as usize)
+                .unwrap_or(0);
+
+            if sbs.len() >= expected {
+                return Ok(sbs);
+            }
+
+            debug!("udev found {}/{} devices for UUID {}, falling back to block scan",
+                sbs.len(), expected, uuid);
+        }
+    }
+
+    // TODO: both paths use udev enumeration, so devices not yet known to udev
+    // are missed entirely. Proper fix: wait for udev events (or poll) until all
+    // expected devices appear or a timeout expires, then attempt degraded mount.
+    let all_devs = get_all_block_devnodes()?;
+    Ok(read_sbs_matching_uuid(uuid, &all_devs, opts))
 }
 
 fn devs_str_sbs_from_device(
