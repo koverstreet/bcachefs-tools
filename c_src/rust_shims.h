@@ -126,18 +126,11 @@ int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
 int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
 
 /*
- * Kill btree nodes by walking the btree and pwriting zeroes.
- * Returns > 0 on success, 0 if node not found, < 0 on error.
+ * Device reference shims — wraps static inline bch2_dev_tryget_noerror()
+ * and bch2_dev_put() for Rust.
  */
-struct rust_kill_node {
-	unsigned	btree;
-	unsigned	level;
-	__u64		idx;
-};
-
-int rust_kill_btree_nodes(struct bch_fs *c,
-			  struct rust_kill_node *nodes, size_t nr_nodes,
-			  int dev_idx);
+struct bch_dev *rust_dev_tryget_noerror(struct bch_fs *c, unsigned dev);
+void rust_dev_put(struct bch_dev *ca);
 
 /*
  * Superblock display with device names — scans for devices by UUID,

@@ -1,26 +1,48 @@
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::bcachefs;
+use bch_bindgen::bkey::BkeySC;
+use bch_bindgen::btree::{BtreeIterFlags, BtreeNodeIter, BtreeTrans};
 use bch_bindgen::c;
+use bch_bindgen::data::extents::bkey_ptrs;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 use clap::Parser;
 
-#[repr(C)]
-struct KillNode {
-    btree:  u32,
-    level:  u32,
-    idx:    u64,
+extern "C" {
+    fn rust_dev_tryget_noerror(c: *mut c::bch_fs, dev: u32) -> *mut c::bch_dev;
+    fn rust_dev_put(ca: *mut c::bch_dev);
 }
 
-extern "C" {
-    fn rust_kill_btree_nodes(
-        c: *mut c::bch_fs,
-        nodes: *mut KillNode,
-        nr_nodes: usize,
-        dev_idx: i32,
-    ) -> i32;
+/// RAII guard for a device reference obtained via bch2_dev_tryget_noerror.
+struct DevRef(*mut c::bch_dev);
+
+impl DevRef {
+    fn get(fs: *mut c::bch_fs, dev: u32) -> Option<DevRef> {
+        let ca = unsafe { rust_dev_tryget_noerror(fs, dev) };
+        if ca.is_null() { None } else { Some(DevRef(ca)) }
+    }
+}
+
+impl std::ops::Deref for DevRef {
+    type Target = c::bch_dev;
+    fn deref(&self) -> &c::bch_dev {
+        unsafe { &*self.0 }
+    }
+}
+
+impl Drop for DevRef {
+    fn drop(&mut self) {
+        unsafe { rust_dev_put(self.0) };
+    }
+}
+
+struct KillNode {
+    btree:  c::btree_id,
+    level:  u32,
+    idx:    u64,
 }
 
 /// Make btree nodes unreadable (debugging tool)
@@ -69,11 +91,7 @@ fn parse_kill_node(s: &str) -> Result<KillNode> {
         0
     };
 
-    Ok(KillNode {
-        btree: btree.into(),
-        level,
-        idx,
-    })
+    Ok(KillNode { btree, level, idx })
 }
 
 pub fn cmd_kill_btree_node(argv: Vec<String>) -> Result<()> {
@@ -90,24 +108,74 @@ pub fn cmd_kill_btree_node(argv: Vec<String>) -> Result<()> {
     let mut fs_opts = bcachefs::bch_opts::default();
     opt_set!(fs_opts, read_only, 1);
 
-    let fs = Fs::open(
-        &cli.devices,
-        fs_opts,
-    )?;
+    let fs = Fs::open(&cli.devices, fs_opts)?;
 
+    let block_size = unsafe { (*fs.raw).opts.block_size } as usize;
+    let zeroes = vec![0u8; block_size];
     let dev_idx = cli.dev.unwrap_or(-1);
 
-    let ret = unsafe {
-        rust_kill_btree_nodes(
-            fs.raw,
-            kill_nodes.as_mut_ptr(),
-            kill_nodes.len(),
-            dev_idx,
-        )
-    };
+    let trans = BtreeTrans::new(&fs);
 
-    if ret != 0 {
-        bail!("kill_btree_node failed: {}", ret);
+    for kill in &mut kill_nodes {
+        let mut found = false;
+
+        let mut iter = BtreeNodeIter::new(
+            &trans,
+            kill.btree,
+            c::bpos::default(),
+            0,
+            kill.level,
+            BtreeIterFlags::empty(),
+        );
+
+        iter.for_each(&trans, |b| {
+            if b.c.level != kill.level as u8 {
+                return ControlFlow::Continue(());
+            }
+
+            if kill.idx > 0 {
+                kill.idx -= 1;
+                return ControlFlow::Continue(());
+            }
+
+            found = true;
+            let k = BkeySC::from(&b.key);
+
+            for ptr in bkey_ptrs(&b.key) {
+                let dev = ptr.dev() as u32;
+                if dev_idx >= 0 && dev as i32 != dev_idx {
+                    continue;
+                }
+
+                let Some(ca) = DevRef::get(fs.raw, dev) else {
+                    continue;
+                };
+
+                eprintln!("killing btree node on dev {} {} l={}\n  {}",
+                    dev, kill.btree, kill.level, k.to_text(&fs));
+
+                let fd = unsafe { (*ca.disk_sb.bdev).bd_fd };
+                let offset = (ptr.offset() as i64) << 9;
+                let ret = unsafe {
+                    libc::pwrite(
+                        fd,
+                        zeroes.as_ptr() as *const libc::c_void,
+                        block_size,
+                        offset,
+                    )
+                };
+                if ret as usize != block_size {
+                    eprintln!("pwrite error: expected {} got {} {}",
+                        block_size, ret, std::io::Error::last_os_error());
+                }
+            }
+
+            ControlFlow::Break(())
+        }).map_err(|e| anyhow!("error walking btree nodes: {}", e))?;
+
+        if !found {
+            bail!("node at specified index not found");
+        }
     }
 
     Ok(())

@@ -15,10 +15,7 @@
 #include "libbcachefs/sb/members.h"
 #include "libbcachefs/alloc/buckets_types.h"
 #include "libbcachefs/data/checksum.h"
-#include "libbcachefs/data/extents.h"
 #include "libbcachefs/btree/read.h"
-#include "libbcachefs/fs/dirent_format.h"
-#include "libbcachefs/btree/iter.h"
 #include "libbcachefs/init/error.h"
 #include "libbcachefs/init/fs.h"
 #include "libbcachefs/journal/journal.h"
@@ -363,75 +360,14 @@ void bch2_sb_to_text_with_names(struct printbuf *out,
 	}
 }
 
-/* kill_btree_node — walks btree nodes and pwrites zeroes to corrupt them */
+/* Device reference shims */
 
-int rust_kill_btree_nodes(struct bch_fs *c,
-			  struct rust_kill_node *nodes, size_t nr_nodes,
-			  int dev_idx)
+struct bch_dev *rust_dev_tryget_noerror(struct bch_fs *c, unsigned dev)
 {
-	int ret;
-	void *zeroes;
+	return bch2_dev_tryget_noerror(c, dev);
+}
 
-	ret = posix_memalign(&zeroes, c->opts.block_size, c->opts.block_size);
-	if (ret)
-		return -ENOMEM;
-	memset(zeroes, 0, c->opts.block_size);
-
-	struct btree_trans *trans = bch2_trans_get(c);
-
-	for (size_t n = 0; n < nr_nodes; n++) {
-		struct rust_kill_node *i = &nodes[n];
-
-		ret = __for_each_btree_node(trans, iter, i->btree, POS_MIN, 0, i->level, 0, b, ({
-			if (b->c.level != i->level)
-				continue;
-
-			int ret2 = 0;
-			if (!i->idx) {
-				ret2 = 1;
-
-				struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(bkey_i_to_s_c(&b->key));
-				bkey_for_each_ptr(ptrs, ptr) {
-					if (dev_idx >= 0 && ptr->dev != dev_idx)
-						continue;
-
-					struct bch_dev *ca = bch2_dev_tryget(c, ptr->dev);
-					if (!ca)
-						continue;
-
-					struct printbuf buf = PRINTBUF;
-					bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&b->key));
-					bch_info(c, "killing btree node on dev %i %s l=%u\n  %s",
-						 ptr->dev,
-						 bch2_btree_id_str(i->btree), i->level, buf.buf);
-					printbuf_exit(&buf);
-
-					int ret3 = pwrite(ca->disk_sb.bdev->bd_fd, zeroes,
-						     c->opts.block_size, ptr->offset << 9);
-					bch2_dev_put(ca);
-					if (ret3 != c->opts.block_size) {
-						bch_err(c, "pwrite error: expected %u got %i %s",
-							c->opts.block_size, ret3, strerror(errno));
-						ret2 = EXIT_FAILURE;
-					}
-				}
-			}
-
-			i->idx--;
-			ret2;
-		}));
-
-		if (ret < 0) {
-			bch_err(c, "error %i walking btree nodes", ret);
-			break;
-		} else if (!ret) {
-			bch_err(c, "node at specified index not found");
-			ret = EXIT_FAILURE;
-			break;
-		}
-	}
-
-	bch2_trans_put(trans);
-	free(zeroes);
-	return ret < 0 ? ret : 0;
+void rust_dev_put(struct bch_dev *ca)
+{
+	bch2_dev_put(ca);
 }
