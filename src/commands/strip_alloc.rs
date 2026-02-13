@@ -18,8 +18,7 @@ fn strip_alloc_usage() {
 pub fn cmd_strip_alloc(argv: Vec<String>) -> anyhow::Result<()> {
     let mut devs: Vec<PathBuf> = Vec::new();
 
-    let mut args = argv.iter().skip(1); // skip "strip-alloc"
-    while let Some(arg) = args.next() {
+    for arg in argv.iter().skip(1) { // skip "strip-alloc"
         match arg.as_str() {
             "-h" | "--help" => {
                 strip_alloc_usage();

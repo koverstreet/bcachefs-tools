@@ -73,8 +73,8 @@ const TIME_UNITS: &[(&str, u64)] = &[
 fn fmt_duration(ns: u64) -> String {
     if ns == 0 { return "0".to_string() }
     let (name, scale) = TIME_UNITS.iter()
-        .filter(|(_, s)| ns >= s * 10)
-        .last()
+        .rev()
+        .find(|(_, s)| ns >= s * 10)
         .unwrap_or(&TIME_UNITS[0]);
     format!("{}{}", ns / scale, name)
 }

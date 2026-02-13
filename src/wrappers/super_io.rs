@@ -43,7 +43,7 @@ pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
     for i in 0..nr_superblocks {
         sb_ref.offset = sb_ref.layout.sb_offset[i];
 
-        let offset_sectors = u64::from_le(sb_ref.offset as u64);
+        let offset_sectors = u64::from_le(sb_ref.offset);
 
         if offset_sectors == c::BCH_SB_SECTOR as u64 {
             // Write backup layout at byte 4096
@@ -162,7 +162,7 @@ pub fn sb_layout_init(
     for i in 0..l.nr_superblocks as usize {
         if sb_pos != c::BCH_SB_SECTOR as u64 {
             let align = (block_size >> 9) as u64;
-            sb_pos = (sb_pos + align - 1) / align * align;
+            sb_pos = sb_pos.div_ceil(align) * align;
         }
 
         l.sb_offset[i] = sb_pos.to_le();

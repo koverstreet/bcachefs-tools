@@ -161,9 +161,9 @@ impl BcachefsHandle {
         // Drop path_fd — we'll re-open via sysfs/ctl
         drop(path_fd);
 
-        let mode = stat.st_mode & libc::S_IFMT as u32;
+        let mode = stat.st_mode & libc::S_IFMT;
 
-        if mode == libc::S_IFBLK as u32 {
+        if mode == libc::S_IFBLK {
             // Block device: try sysfs symlink
             let major = rustix::fs::major(stat.st_rdev);
             let minor = rustix::fs::minor(stat.st_rdev);

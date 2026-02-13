@@ -332,14 +332,10 @@ fn compute_subvol_sizes(tree: &SnapshotTreeResult) -> HashMap<u32, u64> {
         if n.subvol == 0 { continue; }
         let mut cumulative = 0u64;
         let mut cur = n.id;
-        loop {
-            if let Some(node) = by_id.get(&cur) {
-                cumulative += node.sectors;
-                if node.parent == 0 { break; }
-                cur = node.parent;
-            } else {
-                break;
-            }
+        while let Some(node) = by_id.get(&cur) {
+            cumulative += node.sectors;
+            if node.parent == 0 { break; }
+            cur = node.parent;
         }
         sizes.insert(n.subvol, cumulative);
     }
@@ -434,11 +430,11 @@ fn print_flat(dir: &Path, recursive: bool, show_snapshots: bool,
     }
 
     if show_snapshots {
-        println!("{:<24} {:<8} {:<16} {:<12} {:<12} {}",
-            "Path", "ID", "Created", "Flags", "Size", "Snapshot");
-    } else {
-        println!("{:<24} {:<8} {:<16} {:<12} {}",
+        println!("{:<24} {:<8} {:<16} {:<12} {:<12} Snapshot",
             "Path", "ID", "Created", "Flags", "Size");
+    } else {
+        println!("{:<24} {:<8} {:<16} {:<12} Size",
+            "Path", "ID", "Created", "Flags");
     }
 
     for (path, e) in &entries {
@@ -675,8 +671,8 @@ fn print_snapshot_flat(dir: &Path, readonly: bool, sort: Option<SortBy>) -> Resu
         }
     }
 
-    println!("{:<24} {:<8} {:<12} {:<12} {}",
-        "Path", "ID", "Own", "Total", "Flags");
+    println!("{:<24} {:<8} {:<12} {:<12} Flags",
+        "Path", "ID", "Own", "Total");
 
     for (path, n, cumulative) in &entries {
         let f = flags_str(n.flags);

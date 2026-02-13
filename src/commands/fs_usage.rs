@@ -126,7 +126,7 @@ fn fs_usage_v1_to_text(
 
     // Header
     let uuid = uuid::Uuid::from_bytes(handle.uuid());
-    write!(out, "Filesystem: {}\n", uuid.hyphenated()).unwrap();
+    writeln!(out, "Filesystem: {}", uuid.hyphenated()).unwrap();
 
     out.tabstops(&[20, 16]);
 
@@ -428,9 +428,9 @@ fn replicas_summary_to_text(
 
     let has_ec = !ec_configs.is_empty();
 
-    write!(out, "\n").unwrap();
+    writeln!(out).unwrap();
     if has_ec {
-        write!(out, "Replicated:\n").unwrap();
+        writeln!(out, "Replicated:").unwrap();
     }
     durability_matrix_to_text(out, &replicated);
 

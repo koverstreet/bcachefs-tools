@@ -123,7 +123,7 @@ fn reconcile_status_to_text(
     }
 
     out.tabstops(&[32, 12, 12]);
-    write!(out, "Scan pending:\t{}\n", scan_pending).unwrap();
+    writeln!(out, "Scan pending:\t{}", scan_pending).unwrap();
     write!(out, "\tdata\rmetadata\r\n").unwrap();
 
     let mut have_pending = scan_pending != 0;

@@ -322,11 +322,11 @@ pub fn qcow2_to_raw(infd: RawFd, outfd: RawFd) -> Result<()> {
 }
 
 fn round_up(v: u64, align: u64) -> u64 {
-    (v + align - 1) / align * align
+    v.div_ceil(align) * align
 }
 
 fn div_round_up(n: u64, d: u64) -> u64 {
-    (n + d - 1) / d
+    n.div_ceil(d)
 }
 
 // _IOR(0x12, 114, u64) — BLKGETSIZE64 on 64-bit Linux

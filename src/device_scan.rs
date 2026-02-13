@@ -222,7 +222,7 @@ pub extern "C" fn bch2_scan_device_sbs(device: *const c_char, ret: *mut sb_names
         .into_iter()
         .map(|(name, sb)| sb_name {
             name: CString::new(name.into_os_string().into_vec()).unwrap().into_raw(),
-            sb: sb } )
+            sb } )
         .collect::<Vec<sb_name>>();
 
     unsafe {

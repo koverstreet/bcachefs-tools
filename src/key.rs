@@ -62,7 +62,7 @@ impl Keyring {
     }
 }
 
-#[derive(Clone, Debug, clap::ValueEnum, strum::Display)]
+#[derive(Clone, Debug, Default, clap::ValueEnum, strum::Display)]
 pub enum UnlockPolicy {
     /// Don't ask for passphrase, if the key cannot be found in the keyring just
     /// fail
@@ -70,6 +70,7 @@ pub enum UnlockPolicy {
     /// Wait for passphrase to become available before mounting
     Wait,
     /// Interactively prompt the user for a passphrase
+    #[default]
     Ask,
     /// Try to read the passphrase from `stdin` without prompting
     Stdin,
@@ -90,11 +91,6 @@ impl UnlockPolicy {
     }
 }
 
-impl Default for UnlockPolicy {
-    fn default() -> Self {
-        Self::Ask
-    }
-}
 
 /// Proof that a bcachefs key has been added to or found in the kernel keyring.
 pub struct KeyHandle;

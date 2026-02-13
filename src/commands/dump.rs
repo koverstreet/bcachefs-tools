@@ -173,7 +173,7 @@ fn clear_csum(buf: &mut [u8], csum_off: usize, flags_off: usize) {
 /// matching C `vstruct_sectors(s, block_bits) << 9`.
 fn vstruct_aligned_bytes(bytes: usize, block_bits: usize) -> usize {
     let align = 512 << block_bits;
-    (bytes + align - 1) / align * align
+    bytes.div_ceil(align) * align
 }
 
 /// Sanitize a bkey value region in-place. Returns true if modified.
@@ -227,11 +227,10 @@ fn sanitize_journal_keys(
 
         let key_type = buf[pos + 2];
         let val_off = BKEY_U64S * 8;
-        if val_off < key_bytes {
-            if sanitize_val(&mut buf[pos + val_off..pos + key_bytes],
+        if val_off < key_bytes
+            && sanitize_val(&mut buf[pos + val_off..pos + key_bytes],
                             key_type, sanitize_filenames) {
-                modified = true;
-            }
+            modified = true;
         }
 
         pos += key_bytes;
@@ -288,11 +287,10 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: 
 
             // jset_entry_is_key: btree_keys(0), btree_root(1), write_buffer_keys(11)
             let entry_type = buf[entry_pos + 4];
-            if entry_type == 0 || entry_type == 1 || entry_type == 11 {
-                if sanitize_journal_keys(buf, entry_pos + JSET_ENTRY_HDR,
+            if (entry_type == 0 || entry_type == 1 || entry_type == 11)
+                && sanitize_journal_keys(buf, entry_pos + JSET_ENTRY_HDR,
                                          entry_end, sanitize_filenames) {
-                    modified = true;
-                }
+                modified = true;
             }
 
             entry_pos = entry_end;
@@ -395,11 +393,10 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bo
             let key_hdr_u64s = if key_format != 0 { format_key_u64s } else { BKEY_U64S };
             let val_off = key_hdr_u64s * 8;
 
-            if val_off < key_bytes {
-                if sanitize_val(&mut buf[key_pos + val_off..key_pos + key_bytes],
+            if val_off < key_bytes
+                && sanitize_val(&mut buf[key_pos + val_off..key_pos + key_bytes],
                                 key_type, sanitize_filenames) {
-                    modified = true;
-                }
+                modified = true;
             }
 
             key_pos += key_bytes;
