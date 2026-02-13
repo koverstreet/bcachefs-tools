@@ -7,8 +7,6 @@
 
 #include "libbcachefs.h"
 #include "libbcachefs/btree/cache.h"
-#include "libbcachefs/init/dev.h"
-#include "libbcachefs/journal/init.h"
 #include "libbcachefs/journal/read.h"
 #include "libbcachefs/journal/seq_blacklist.h"
 #include "libbcachefs/sb/io.h"
@@ -109,63 +107,6 @@ void rust_strip_alloc_do(struct bch_fs *c)
 	mutex_unlock(&c->sb_lock);
 }
 
-int rust_device_resize_offline(struct bch_fs *c, u64 size)
-{
-	struct bch_dev *resize = NULL;
-
-	for_each_online_member(c, ca, 0) {
-		if (resize) {
-			enumerated_ref_put(&resize->io_ref[READ], 0);
-			return -EINVAL;
-		}
-		resize = ca;
-		enumerated_ref_get(&resize->io_ref[READ], 0);
-	}
-	if (!resize)
-		return -ENODEV;
-
-	u64 nbuckets = size / resize->mi.bucket_size;
-
-	if (nbuckets < le64_to_cpu(resize->mi.nbuckets)) {
-		enumerated_ref_put(&resize->io_ref[READ], 0);
-		return -ENOSPC;
-	}
-
-	printf("resizing to %llu buckets\n", nbuckets);
-	CLASS(printbuf, err)();
-	int ret = bch2_dev_resize(c, resize, nbuckets, &err);
-	if (ret)
-		fprintf(stderr, "resize error: %s\n%s", bch2_err_str(ret), err.buf);
-
-	enumerated_ref_put(&resize->io_ref[READ], 0);
-	return ret;
-}
-
-int rust_device_resize_journal_offline(struct bch_fs *c, u64 size)
-{
-	struct bch_dev *resize = NULL;
-
-	for_each_online_member(c, ca, 0) {
-		if (resize) {
-			enumerated_ref_put(&resize->io_ref[READ], 0);
-			return -EINVAL;
-		}
-		resize = ca;
-		enumerated_ref_get(&resize->io_ref[READ], 0);
-	}
-	if (!resize)
-		return -ENODEV;
-
-	u64 nbuckets = size / le16_to_cpu(resize->mi.bucket_size);
-
-	printf("resizing journal to %llu buckets\n", nbuckets);
-	int ret = bch2_set_nr_journal_buckets(c, resize, nbuckets);
-	if (ret)
-		fprintf(stderr, "resize error: %s\n", bch2_err_str(ret));
-
-	enumerated_ref_put(&resize->io_ref[READ], 0);
-	return ret;
-}
 
 /* btree node introspection shims */
 

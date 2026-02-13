@@ -43,18 +43,6 @@ void strip_fs_alloc(struct bch_fs *c);
  */
 void rust_strip_alloc_do(struct bch_fs *c);
 
-/*
- * Offline device resize: finds the single online device, resizes it.
- * Returns -EINVAL if multiple devices online, -ENOSPC for shrink,
- * or error from bch2_dev_resize.  size is in 512-byte sectors.
- */
-int rust_device_resize_offline(struct bch_fs *c, __u64 size);
-
-/*
- * Offline journal resize: finds the single online device, sets
- * the number of journal buckets.  size is in 512-byte sectors.
- */
-int rust_device_resize_journal_offline(struct bch_fs *c, __u64 size);
 
 /*
  * Collect all non-NULL journal_replay entries from c->journal_entries

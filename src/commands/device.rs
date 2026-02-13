@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use bch_bindgen::c::{
     self,
     bch_degraded_actions,
@@ -380,15 +380,47 @@ pub fn cmd_device_resize(argv: Vec<String>) -> Result<()> {
 }
 
 fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
-    use crate::wrappers::bch_err_str;
+    use bch_bindgen::printbuf::Printbuf;
+    use std::ops::ControlFlow;
 
     let opts: c::bch_opts = Default::default();
     let fs = Fs::open(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 
-    let ret = unsafe { c::rust_device_resize_offline(fs.raw, size_sectors) };
+    // Find the single online device — offline resize only works with one
+    let mut count = 0u32;
+    let mut found_idx = 0u32;
+    let _ = fs.for_each_online_member(|ca| {
+        found_idx = ca.dev_idx as u32;
+        count += 1;
+        ControlFlow::Continue(())
+    });
+
+    if count == 0 {
+        bail!("no online device found");
+    }
+    if count > 1 {
+        bail!("multiple devices online, offline resize requires exactly one");
+    }
+
+    let ca = fs.dev_get(found_idx)
+        .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))?;
+
+    let nbuckets = size_sectors / ca.mi.bucket_size as u64;
+
+    if nbuckets < ca.mi.nbuckets {
+        bail!("shrinking not supported (requested {} buckets, have {})",
+            nbuckets, ca.mi.nbuckets);
+    }
+
+    println!("resizing to {} buckets", nbuckets);
+
+    let mut err = Printbuf::new();
+    let ret = unsafe {
+        c::bch2_dev_resize(fs.raw, ca.as_mut_ptr(), nbuckets, err.as_raw())
+    };
     if ret != 0 {
-        return Err(anyhow!("resize error: {}", bch_err_str(ret)));
+        bail!("resize error: {}\n{}", crate::wrappers::bch_err_str(ret), err);
     }
     Ok(())
 }
@@ -430,15 +462,39 @@ pub fn cmd_device_resize_journal(argv: Vec<String>) -> Result<()> {
 }
 
 fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
-    use crate::wrappers::bch_err_str;
+    use std::ops::ControlFlow;
 
     let opts: c::bch_opts = Default::default();
     let fs = Fs::open(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 
-    let ret = unsafe { c::rust_device_resize_journal_offline(fs.raw, size_sectors) };
+    // Find the single online device
+    let mut count = 0u32;
+    let mut found_idx = 0u32;
+    let _ = fs.for_each_online_member(|ca| {
+        found_idx = ca.dev_idx as u32;
+        count += 1;
+        ControlFlow::Continue(())
+    });
+
+    if count == 0 {
+        bail!("no online device found");
+    }
+    if count > 1 {
+        bail!("multiple devices online, offline resize requires exactly one");
+    }
+
+    let ca = fs.dev_get(found_idx)
+        .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))?;
+
+    let nbuckets = size_sectors / ca.mi.bucket_size as u64;
+
+    println!("resizing journal to {} buckets", nbuckets);
+    let ret = unsafe {
+        c::bch2_set_nr_journal_buckets(fs.raw, ca.as_mut_ptr(), nbuckets as u32)
+    };
     if ret != 0 {
-        return Err(anyhow!("resize error: {}", bch_err_str(ret)));
+        bail!("resize error: {}", crate::wrappers::bch_err_str(ret));
     }
     Ok(())
 }

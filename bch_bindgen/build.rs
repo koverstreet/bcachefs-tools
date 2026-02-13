@@ -388,8 +388,6 @@ fn main() {
         .allowlist_function("rust_fmt_build_fs")
         .allowlist_function("rust_strip_alloc_check")
         .allowlist_function("rust_strip_alloc_do")
-        .allowlist_function("rust_device_resize_offline")
-        .allowlist_function("rust_device_resize_journal_offline")
         .allowlist_function("bch2_dev_resize")
         .allowlist_function("bch2_set_nr_journal_buckets")
         .allowlist_function("rust_csum_vstruct_sb")
