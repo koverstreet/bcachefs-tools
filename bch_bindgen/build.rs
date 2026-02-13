@@ -117,7 +117,7 @@ fn generate_sb_field_impls(entries: &[Vec<String>]) -> String {
 
 fn generate_str_table(name: &str, entries: &[Vec<String>]) -> String {
     let mut out = String::new();
-    out.push_str(&format!("// Auto-generated — do not edit\n\n"));
+    out.push_str("// Auto-generated — do not edit\n\n");
     out.push_str(&format!("pub const {name}: &[&str] = &[\n"));
     for e in entries {
         out.push_str(&format!("    \"{}\",\n", e[0]));
@@ -256,9 +256,7 @@ fn generate_bkey_types(entries: &[Vec<String>]) -> String {
             e[1], e[0]
         ));
     }
-    out.push_str(&format!(
-        "            _ => BkeyValSC::unknown(&k.k, k.k.type_),\n"
-    ));
+    out.push_str("            _ => BkeyValSC::unknown(&k.k, k.k.type_),\n");
     out.push_str("        }\n");
     out.push_str("    }\n\n");
 
