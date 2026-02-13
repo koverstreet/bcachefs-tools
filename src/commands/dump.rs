@@ -20,10 +20,23 @@ use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 use crate::wrappers::super_io::vstruct_bytes_sb;
 
 extern "C" {
-    fn rust_jset_magic(c: *mut c::bch_fs) -> u64;
-    fn rust_bset_magic(c: *mut c::bch_fs) -> u64;
     fn rust_jset_decrypt(c: *mut c::bch_fs, j: *mut u8) -> i32;
     fn rust_bset_decrypt(c: *mut c::bch_fs, i: *mut u8, offset: u32) -> i32;
+}
+
+/// First 8 bytes of the superblock UUID interpreted as a little-endian u64.
+fn sb_magic(sb: &c::bch_sb) -> u64 {
+    u64::from_le_bytes(sb.uuid.b[..8].try_into().unwrap())
+}
+
+/// Journal set magic: sb_magic XOR JSET_MAGIC constant.
+fn jset_magic(sb: &c::bch_sb) -> u64 {
+    sb_magic(sb) ^ 0x245235c1a3625032
+}
+
+/// Btree set magic: sb_magic XOR BSET_MAGIC constant.
+fn bset_magic(sb: &c::bch_sb) -> u64 {
+    sb_magic(sb) ^ 0x90135c78b99e07f5
 }
 
 // ---- Dump CLI ----
@@ -230,7 +243,7 @@ fn sanitize_journal_keys(
 /// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
 /// zero inline data, optionally scramble filenames, clear checksums.
 fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bool) {
-    let jset_magic = unsafe { rust_jset_magic(fs_raw) };
+    let jset_magic = jset_magic(unsafe { &*(*fs_raw).disk_sb.sb });
     let block_bits = unsafe { (*fs_raw).block_bits } as usize;
 
     let mut pos = 0;
@@ -297,7 +310,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: 
 /// Sanitize a btree node buffer in-place: walk bset entries, handle
 /// encryption, zero inline data, optionally scramble filenames.
 fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bool) {
-    let bset_magic = unsafe { rust_bset_magic(fs_raw) };
+    let bset_magic = bset_magic(unsafe { &*(*fs_raw).disk_sb.sb });
     let block_bits = unsafe { (*fs_raw).block_bits } as usize;
 
     let mut first = true;

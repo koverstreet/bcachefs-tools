@@ -117,14 +117,11 @@ struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,
 void rust_put_online_dev_ref(struct bch_dev *ca, unsigned ref_idx);
 
 /*
- * Dump sanitize shims — provide magic values, crypto, and block
- * geometry that Rust code can't compute directly from macros/inlines.
+ * Dump sanitize shims — wraps crypto operations for encrypted fs dumps.
  */
 struct jset;
 struct bset;
 
-__u64 rust_jset_magic(struct bch_fs *c);
-__u64 rust_bset_magic(struct bch_fs *c);
 int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
 int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
 

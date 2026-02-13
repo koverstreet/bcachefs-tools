@@ -277,17 +277,7 @@ struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
 	return ret;
 }
 
-/* dump sanitize shims — wraps magic computation and crypto operations */
-
-__u64 rust_jset_magic(struct bch_fs *c)
-{
-	return __jset_magic(c->disk_sb.sb);
-}
-
-__u64 rust_bset_magic(struct bch_fs *c)
-{
-	return __bset_magic(c->disk_sb.sb);
-}
+/* dump sanitize shims — wraps crypto operations for encrypted fs dumps */
 
 int rust_jset_decrypt(struct bch_fs *c, struct jset *j)
 {
