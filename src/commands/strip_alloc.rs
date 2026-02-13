@@ -45,26 +45,29 @@ pub fn cmd_strip_alloc(argv: Vec<String>) -> anyhow::Result<()> {
         let fs = Fs::open(&devs, opts)
             .map_err(|e| anyhow::anyhow!("Error opening filesystem: {}", e))?;
 
-        let ret = unsafe { c::rust_strip_alloc_check(fs.raw) };
-        match ret {
-            0 => {
-                println!("Stripping alloc info from {}", devs[0].display());
-                unsafe { c::rust_strip_alloc_do(fs.raw) };
-                return Ok(());
+        if unsafe { (*fs.raw).sb.clean } == 0 {
+            println!("Filesystem not clean, running recovery");
+            let ret = unsafe { c::bch2_fs_start(fs.raw) };
+            if ret != 0 {
+                bail!("Error starting filesystem: {}", bch_err_str(ret));
             }
-            1 => {
-                println!("Filesystem not clean, running recovery");
-                let ret = unsafe { c::bch2_fs_start(fs.raw) };
-                if ret != 0 {
-                    bail!("Error starting filesystem: {}", bch_err_str(ret));
-                }
-                // exit and reopen — drop triggers bch2_fs_exit
-                drop(fs);
-                continue;
-            }
-            _ => {
-                bail!("capacity too large for alloc info reconstruction");
+            drop(fs);
+            continue;
+        }
+
+        // Check total capacity — reconstruction is limited to ~1TB
+        let mut capacity: u64 = 0;
+        for dev in 0..fs.nr_devices() {
+            if let Some(ca) = fs.dev_get(dev) {
+                capacity += ca.mi.nbuckets * (ca.mi.bucket_size as u64) << 9;
             }
         }
+        if capacity > 1u64 << 40 {
+            bail!("capacity too large for alloc info reconstruction");
+        }
+
+        println!("Stripping alloc info from {}", devs[0].display());
+        unsafe { c::rust_strip_alloc_do(fs.raw) };
+        return Ok(());
     }
 }

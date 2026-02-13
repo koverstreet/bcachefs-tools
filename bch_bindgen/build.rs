@@ -386,7 +386,6 @@ fn main() {
         .allowlist_function("fd_to_dev_model")
         .allowlist_function("copy_fs")
         .allowlist_function("rust_fmt_build_fs")
-        .allowlist_function("rust_strip_alloc_check")
         .allowlist_function("rust_strip_alloc_do")
         .allowlist_function("bch2_dev_resize")
         .allowlist_function("bch2_set_nr_journal_buckets")

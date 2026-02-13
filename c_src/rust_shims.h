@@ -23,13 +23,6 @@ struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb);
  */
 int rust_fmt_build_fs(struct bch_fs *c, const char *src_path);
 
-/*
- * Check if filesystem is ready for strip-alloc:
- *   returns 0 if clean and capacity <= 1TB
- *   returns 1 if not clean (caller should run recovery and reopen)
- *   returns -ERANGE if capacity too large
- */
-int rust_strip_alloc_check(struct bch_fs *c);
 
 /*
  * Strip alloc info from a clean filesystem: removes alloc btree roots

@@ -40,20 +40,6 @@ int rust_fmt_build_fs(struct bch_fs *c, const char *src_path)
 	return ret;
 }
 
-int rust_strip_alloc_check(struct bch_fs *c)
-{
-	if (!c->sb.clean)
-		return 1;
-
-	u64 capacity = 0;
-	for_each_member_device(c, ca)
-		capacity += ca->mi.nbuckets * (ca->mi.bucket_size << 9);
-
-	if (capacity > 1ULL << 40)
-		return -ERANGE;
-
-	return 0;
-}
 
 void strip_fs_alloc(struct bch_fs *c)
 {
