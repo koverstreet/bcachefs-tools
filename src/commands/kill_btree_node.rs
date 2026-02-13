@@ -7,11 +7,6 @@
 // Safety: Opens the filesystem read-only (no in-memory modifications), then
 // does raw pwrite() to the block device fd. The O_DIRECT alignment constraint
 // comes from the block device being opened with O_DIRECT by the kernel code.
-//
-// DevRef: RAII wrapper for bch2_dev_tryget_noerror / bch2_dev_put. The C
-// shim is needed because tryget_noerror is a static inline. This pattern
-// (tryget → Deref → Drop put) is reusable for any code that needs temporary
-// device references.
 
 use std::ops::ControlFlow;
 use std::path::PathBuf;
@@ -25,34 +20,6 @@ use bch_bindgen::data::extents::bkey_ptrs;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 use clap::Parser;
-
-extern "C" {
-    fn rust_dev_tryget_noerror(c: *mut c::bch_fs, dev: u32) -> *mut c::bch_dev;
-    fn rust_dev_put(ca: *mut c::bch_dev);
-}
-
-/// RAII guard for a device reference obtained via bch2_dev_tryget_noerror.
-struct DevRef(*mut c::bch_dev);
-
-impl DevRef {
-    fn get(fs: *mut c::bch_fs, dev: u32) -> Option<DevRef> {
-        let ca = unsafe { rust_dev_tryget_noerror(fs, dev) };
-        if ca.is_null() { None } else { Some(DevRef(ca)) }
-    }
-}
-
-impl std::ops::Deref for DevRef {
-    type Target = c::bch_dev;
-    fn deref(&self) -> &c::bch_dev {
-        unsafe { &*self.0 }
-    }
-}
-
-impl Drop for DevRef {
-    fn drop(&mut self) {
-        unsafe { rust_dev_put(self.0) };
-    }
-}
 
 struct KillNode {
     btree:  c::btree_id,
@@ -169,7 +136,7 @@ pub fn cmd_kill_btree_node(argv: Vec<String>) -> Result<()> {
                     continue;
                 }
 
-                let Some(ca) = DevRef::get(fs.raw, dev) else {
+                let Some(ca) = fs.dev_get(dev) else {
                     continue;
                 };
 

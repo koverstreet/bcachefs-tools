@@ -15,8 +15,36 @@ extern "C" {
     fn rust_put_online_dev_ref(ca: *mut c::bch_dev, ref_idx: u32);
     fn rust_btree_id_root_b(c: *mut c::bch_fs, id: u32) -> *mut c::btree;
     fn rust_btree_id_nr_alive(c: *mut c::bch_fs) -> u32;
+    fn rust_dev_tryget_noerror(c: *mut c::bch_fs, dev: u32) -> *mut c::bch_dev;
+    fn rust_dev_put(ca: *mut c::bch_dev);
     fn pthread_mutex_lock(mutex: *mut c::pthread_mutex_t) -> i32;
     fn pthread_mutex_unlock(mutex: *mut c::pthread_mutex_t) -> i32;
+}
+
+/// RAII guard for a device reference. Calls bch2_dev_put on drop.
+///
+/// Obtained via `Fs::dev_get()`. Derefs to `&bch_dev` for read access.
+pub struct DevRef(*mut c::bch_dev);
+
+impl DevRef {
+    /// Get a raw mutable pointer to the device. Needed for C functions
+    /// that take `*mut bch_dev`.
+    pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
+        self.0
+    }
+}
+
+impl std::ops::Deref for DevRef {
+    type Target = c::bch_dev;
+    fn deref(&self) -> &c::bch_dev {
+        unsafe { &*self.0 }
+    }
+}
+
+impl Drop for DevRef {
+    fn drop(&mut self) {
+        unsafe { rust_dev_put(self.0) };
+    }
 }
 
 /// RAII guard for bch_fs::sb_lock. Unlocks on drop.
@@ -136,6 +164,13 @@ impl Fs {
     /// Number of devices in the filesystem superblock.
     pub fn nr_devices(&self) -> u32 {
         unsafe { (*self.raw).sb.nr_devices as u32 }
+    }
+
+    /// Get a reference to a device by index. Returns None if the device
+    /// doesn't exist or can't be referenced.
+    pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
+        let ca = unsafe { rust_dev_tryget_noerror(self.raw, dev) };
+        if ca.is_null() { None } else { Some(DevRef(ca)) }
     }
 
     /// Check if a device index exists and has a device pointer.
