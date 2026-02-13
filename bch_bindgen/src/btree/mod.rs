@@ -12,9 +12,6 @@ use std::ops::ControlFlow;
 
 use c::bpos;
 
-extern "C" {
-    fn rust_btree_node_fake(b: *mut c::btree) -> bool;
-}
 
 pub struct BtreeTrans<'f> {
     raw: *mut c::btree_trans,
@@ -327,7 +324,7 @@ impl<'b, 'f> c::btree {
 impl c::btree {
     /// Check if this btree node is a fake/placeholder node.
     pub fn is_fake(&self) -> bool {
-        unsafe { rust_btree_node_fake(self as *const _ as *mut _) }
+        (self.flags >> c::btree_flags::BTREE_NODE_fake as u64) & 1 != 0
     }
 
     /// Iterate over unpacked keys within this btree node.

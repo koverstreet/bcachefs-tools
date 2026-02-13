@@ -412,6 +412,7 @@ fn main() {
         .allowlist_type("bkey_i_.*")
         .allowlist_type("bkey_s_c_.*")
         .allowlist_type("bkey_s_.*")
+        .allowlist_type("btree_flags")
         .allowlist_type("disk_accounting_type")
         .allowlist_type("fsck_err_opts")
         .rustified_enum("fsck_err_opts")

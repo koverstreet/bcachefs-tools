@@ -6,7 +6,6 @@
 #include <unistd.h>
 
 #include "libbcachefs.h"
-#include "libbcachefs/btree/cache.h"
 #include "libbcachefs/journal/read.h"
 #include "libbcachefs/journal/seq_blacklist.h"
 #include "libbcachefs/sb/io.h"
@@ -108,23 +107,6 @@ void rust_strip_alloc_do(struct bch_fs *c)
 }
 
 
-/* btree node introspection shims */
-
-bool rust_btree_node_fake(struct btree *b)
-{
-	return btree_node_fake(b);
-}
-
-struct btree *rust_btree_id_root_b(struct bch_fs *c, unsigned id)
-{
-	struct btree_root *r = bch2_btree_id_root(c, id);
-	return r ? r->b : NULL;
-}
-
-unsigned rust_btree_id_nr_alive(struct bch_fs *c)
-{
-	return btree_id_nr_alive(c);
-}
 
 /* online member iteration shim */
 

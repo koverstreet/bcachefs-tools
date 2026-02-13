@@ -13,8 +13,6 @@ extern "C" {
         ref_idx: u32,
     ) -> *mut c::bch_dev;
     fn rust_put_online_dev_ref(ca: *mut c::bch_dev, ref_idx: u32);
-    fn rust_btree_id_root_b(c: *mut c::bch_fs, id: u32) -> *mut c::btree;
-    fn rust_btree_id_nr_alive(c: *mut c::bch_fs) -> u32;
     fn rust_dev_tryget_noerror(c: *mut c::bch_fs, dev: u32) -> *mut c::bch_dev;
     fn rust_dev_put(ca: *mut c::bch_dev);
     fn pthread_mutex_lock(mutex: *mut c::pthread_mutex_t) -> i32;
@@ -148,17 +146,31 @@ impl Fs {
 
     /// Get the root btree node for a btree ID.
     pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
-        let b = unsafe { rust_btree_id_root_b(self.raw, id) };
-        if b.is_null() {
-            None
-        } else {
-            Some(unsafe { &*b })
+        unsafe {
+            let c = &*self.raw;
+            let nr_known = c::btree_id::BTREE_ID_NR as u32;
+
+            let r = if id < nr_known {
+                &c.btree.cache.roots_known[id as usize]
+            } else {
+                let idx = (id - nr_known) as usize;
+                if idx >= c.btree.cache.roots_extra.nr {
+                    return None;
+                }
+                &*c.btree.cache.roots_extra.data.add(idx)
+            };
+
+            let b = r.b;
+            if b.is_null() { None } else { Some(&*b) }
         }
     }
 
     /// Total number of btree IDs (known + dynamic) on this filesystem.
     pub fn btree_id_nr_alive(&self) -> u32 {
-        unsafe { rust_btree_id_nr_alive(self.raw) }
+        unsafe {
+            let c = &*self.raw;
+            c::btree_id::BTREE_ID_NR as u32 + c.btree.cache.roots_extra.nr as u32
+        }
     }
 
     /// Number of devices in the filesystem superblock.

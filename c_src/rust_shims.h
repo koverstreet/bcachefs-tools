@@ -57,14 +57,6 @@ struct rust_journal_entries {
 
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c);
 
-/*
- * Btree node introspection shims — wraps x-macro generated static
- * inline accessors and static inline bch2_btree_id_root().
- */
-struct btree;
-bool rust_btree_node_fake(struct btree *b);
-struct btree *rust_btree_id_root_b(struct bch_fs *c, unsigned id);
-unsigned rust_btree_id_nr_alive(struct bch_fs *c);
 
 /*
  * Online member iteration shim — wraps the static inline
