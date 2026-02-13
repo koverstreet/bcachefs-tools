@@ -12,7 +12,6 @@ use std::ops::ControlFlow;
 
 use c::bpos;
 
-
 pub struct BtreeTrans<'f> {
     raw: *mut c::btree_trans,
     fs:  PhantomData<&'f Fs>,

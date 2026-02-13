@@ -43,7 +43,6 @@ void strip_fs_alloc(struct bch_fs *c);
  */
 void rust_strip_alloc_do(struct bch_fs *c);
 
-
 /*
  * Collect all non-NULL journal_replay entries from c->journal_entries
  * (genradix) into a flat array. Caller must free entries.
@@ -56,7 +55,6 @@ struct rust_journal_entries {
 };
 
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c);
-
 
 /*
  * Online member iteration shim — wraps the static inline

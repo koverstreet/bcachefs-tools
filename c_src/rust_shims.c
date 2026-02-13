@@ -106,8 +106,6 @@ void rust_strip_alloc_do(struct bch_fs *c)
 	mutex_unlock(&c->sb_lock);
 }
 
-
-
 /* online member iteration shim */
 
 struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,
