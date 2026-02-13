@@ -1,4 +1,5 @@
 use std::ffi::CString;
+use std::ops::ControlFlow;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::bcachefs;
@@ -77,20 +78,27 @@ pub fn cmd_show_super(argv: Vec<String>) -> Result<()> {
 
     let fs = Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
 
-    if print_default_fields {
-        if fs.sb().field::<c::bch_sb_field_members_v2>().is_some() {
-            fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
-        } else {
-            fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32;
+    // Use the per-device superblock, not c->disk_sb.sb — the filesystem-level
+    // copy omits fields like magic and layout that __copy_super doesn't transfer.
+    let _ = fs.for_each_online_member(|ca| {
+        let sb = unsafe { &*ca.disk_sb.sb };
+
+        let mut fields = fields;
+        if print_default_fields {
+            if sb.field::<c::bch_sb_field_members_v2>().is_some() {
+                fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
+            } else {
+                fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32;
+            }
+            fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_errors as u32;
         }
-        fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_errors as u32;
-    }
 
-    let mut buf = Printbuf::new();
-    buf.set_human_readable(true);
-    buf.sb_to_text_with_names(fs.raw, fs.sb(), cli.layout, fields, field_only);
-
-    print!("{}", buf);
+        let mut buf = Printbuf::new();
+        buf.set_human_readable(true);
+        buf.sb_to_text_with_names(fs.raw, sb, cli.layout, fields, field_only);
+        print!("{}", buf);
+        ControlFlow::Continue(())
+    });
 
     Ok(())
 }
