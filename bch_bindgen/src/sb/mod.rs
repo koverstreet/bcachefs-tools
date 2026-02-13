@@ -37,6 +37,12 @@ pub unsafe fn sb_field_get_mut<'a, F: SbField>(sb: *mut c::bch_sb) -> Option<&'a
 // Each field is defined by: struct type, flags field + index, C constant prefix.
 
 bitmask_accessors! {
+    bch_sb, flags[0],
+        BCH_SB_INITIALIZED        => (sb_initialized, set_sb_initialized),
+        BCH_SB_CLEAN              => (sb_clean, set_sb_clean),
+        BCH_SB_CSUM_TYPE          => (sb_csum_type, set_sb_csum_type),
+        BCH_SB_BTREE_NODE_SIZE    => (sb_btree_node_size, set_sb_btree_node_size);
+
     bch_sb, flags[1],
         BCH_SB_ENCRYPTION_TYPE    => (sb_encryption_type, set_sb_encryption_type),
         BCH_SB_META_REPLICAS_REQ  => (sb_meta_replicas_req, set_sb_meta_replicas_req),
@@ -57,5 +63,6 @@ bitmask_accessors! {
     bch_member, flags,
         BCH_MEMBER_STATE          => (member_state, set_member_state),
         BCH_MEMBER_GROUP          => (member_group, set_member_group),
-        BCH_MEMBER_ROTATIONAL_SET => (member_rotational_set, set_member_rotational_set);
+        BCH_MEMBER_ROTATIONAL_SET => (member_rotational_set, set_member_rotational_set),
+        BCH_MEMBER_FREESPACE_INITIALIZED => (member_freespace_initialized, set_member_freespace_initialized);
 }
