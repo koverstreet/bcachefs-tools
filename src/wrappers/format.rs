@@ -170,13 +170,11 @@ pub extern "C" fn bch2_format(
     sb_ref.user_uuid = opts.uuid;
     sb_ref.nr_devices = devs.nr as u8;
 
-    unsafe {
-        c::rust_set_bch_sb_version_incompat_allowed(sb_ptr, opts.version as u64);
-        // These are no longer options, only for compatibility with old versions
-        c::rust_set_bch_sb_meta_replicas_req(sb_ptr, 1);
-        c::rust_set_bch_sb_data_replicas_req(sb_ptr, 1);
-        c::rust_set_bch_sb_extent_bp_shift(sb_ptr, 16);
-    }
+    sb_ref.set_sb_version_incompat_allowed(opts.version as u64);
+    // These are no longer options, only for compatibility with old versions
+    sb_ref.set_sb_meta_replicas_req(1);
+    sb_ref.set_sb_data_replicas_req(1);
+    sb_ref.set_sb_extent_bp_shift(16);
 
     let version_threshold =
         c::bcachefs_metadata_version::bcachefs_metadata_version_disk_accounting_big_endian as u32;
@@ -242,7 +240,7 @@ pub extern "C" fn bch2_format(
         }
 
         opt_set_sb_all(sb.sb, idx as i32, &mut dev.opts);
-        unsafe { c::rust_set_bch_member_rotational_set(m, 1) };
+        unsafe { &mut *m }.set_member_rotational_set(1);
     }
 
     // Disk labels
@@ -261,29 +259,21 @@ pub extern "C" fn bch2_format(
 
         // Recompute m after sb modification (memory may have been reallocated)
         let m = unsafe { c::bch2_members_v2_get_mut(sb.sb, idx as i32) };
-        unsafe { c::rust_set_bch_member_group(m, path_idx as u64 + 1) };
+        unsafe { &mut *m }.set_member_group(path_idx as u64 + 1);
     }
 
     // Targets
     let target_strs = unsafe { &fs_opt_strs.__bindgen_anon_1.__bindgen_anon_1 };
-    unsafe {
-        c::rust_set_bch_sb_foreground_target(
-            sb.sb,
-            parse_target(&mut *sb, dev_slice, target_strs.foreground_target) as u64,
-        );
-        c::rust_set_bch_sb_background_target(
-            sb.sb,
-            parse_target(&mut *sb, dev_slice, target_strs.background_target) as u64,
-        );
-        c::rust_set_bch_sb_promote_target(
-            sb.sb,
-            parse_target(&mut *sb, dev_slice, target_strs.promote_target) as u64,
-        );
-        c::rust_set_bch_sb_metadata_target(
-            sb.sb,
-            parse_target(&mut *sb, dev_slice, target_strs.metadata_target) as u64,
-        );
-    }
+    let sb_handle = &mut *sb;
+    let foreground = parse_target(sb_handle, dev_slice, target_strs.foreground_target);
+    let background = parse_target(sb_handle, dev_slice, target_strs.background_target);
+    let promote    = parse_target(sb_handle, dev_slice, target_strs.promote_target);
+    let metadata   = parse_target(sb_handle, dev_slice, target_strs.metadata_target);
+    let sb_ref = unsafe { &mut *sb.sb };
+    sb_ref.set_sb_foreground_target(foreground as u64);
+    sb_ref.set_sb_background_target(background as u64);
+    sb_ref.set_sb_promote_target(promote as u64);
+    sb_ref.set_sb_metadata_target(metadata as u64);
 
     // Encryption
     if opts.encrypted {
@@ -296,10 +286,8 @@ pub extern "C" fn bch2_format(
                 crypt_size as u32,
             ) as *mut c::bch_sb_field_crypt
         };
-        unsafe {
-            c::bch_sb_crypt_init(sb.sb, crypt, opts.passphrase);
-            c::rust_set_bch_sb_encryption_type(sb.sb, 1);
-        }
+        unsafe { c::bch_sb_crypt_init(sb.sb, crypt, opts.passphrase) };
+        unsafe { &mut *sb.sb }.set_sb_encryption_type(1);
     }
 
     unsafe { c::bch2_sb_members_cpy_v2_v1(&mut *sb) };
