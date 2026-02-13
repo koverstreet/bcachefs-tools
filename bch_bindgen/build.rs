@@ -390,6 +390,8 @@ fn main() {
         .allowlist_function("rust_strip_alloc_do")
         .allowlist_function("rust_device_resize_offline")
         .allowlist_function("rust_device_resize_journal_offline")
+        .allowlist_function("bch2_dev_resize")
+        .allowlist_function("bch2_set_nr_journal_buckets")
         .allowlist_function("rust_csum_vstruct_sb")
         .allowlist_function("rust_collect_journal_entries")
         .allowlist_function("get_blocksize")
