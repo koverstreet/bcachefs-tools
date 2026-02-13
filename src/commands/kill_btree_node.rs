@@ -111,8 +111,15 @@ pub fn cmd_kill_btree_node(argv: Vec<String>) -> Result<()> {
     let fs = Fs::open(&cli.devices, fs_opts)?;
 
     let block_size = unsafe { (*fs.raw).opts.block_size } as usize;
-    let zeroes = vec![0u8; block_size];
     let dev_idx = cli.dev.unwrap_or(-1);
+
+    // O_DIRECT requires aligned buffers; bd_fd is opened with O_DIRECT
+    let mut zeroes: *mut libc::c_void = std::ptr::null_mut();
+    let r = unsafe { libc::posix_memalign(&mut zeroes, block_size, block_size) };
+    if r != 0 {
+        bail!("posix_memalign failed: {}", std::io::Error::from_raw_os_error(r));
+    }
+    unsafe { std::ptr::write_bytes(zeroes as *mut u8, 0, block_size) };
 
     let trans = BtreeTrans::new(&fs);
 
@@ -157,12 +164,7 @@ pub fn cmd_kill_btree_node(argv: Vec<String>) -> Result<()> {
                 let fd = unsafe { (*ca.disk_sb.bdev).bd_fd };
                 let offset = (ptr.offset() as i64) << 9;
                 let ret = unsafe {
-                    libc::pwrite(
-                        fd,
-                        zeroes.as_ptr() as *const libc::c_void,
-                        block_size,
-                        offset,
-                    )
+                    libc::pwrite(fd, zeroes, block_size, offset)
                 };
                 if ret as usize != block_size {
                     eprintln!("pwrite error: expected {} got {} {}",
@@ -174,9 +176,11 @@ pub fn cmd_kill_btree_node(argv: Vec<String>) -> Result<()> {
         }).map_err(|e| anyhow!("error walking btree nodes: {}", e))?;
 
         if !found {
+            unsafe { libc::free(zeroes) };
             bail!("node at specified index not found");
         }
     }
 
+    unsafe { libc::free(zeroes) };
     Ok(())
 }
