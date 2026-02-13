@@ -4,6 +4,7 @@ pub mod bkey;
 pub mod btree;
 pub mod data;
 pub mod errcode;
+pub mod extent;
 pub mod fs;
 pub mod journal;
 pub mod keyutils;
