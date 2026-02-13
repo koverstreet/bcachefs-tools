@@ -105,7 +105,7 @@ pub fn cmd_show_super(argv: Vec<String>) -> Result<()> {
 
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
-        buf.sb_to_text_with_names(fs.raw, sb, cli.layout, fields, field_only);
+        unsafe { buf.sb_to_text_with_names(fs.raw, sb, cli.layout, fields, field_only) };
         print!("{}", buf);
         ControlFlow::Continue(())
     });

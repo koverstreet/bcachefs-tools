@@ -299,6 +299,7 @@ impl<'t> BtreeNodeIter<'t> {
         }
     }
 
+    #[allow(clippy::should_implement_trait)]
     pub fn next(&mut self) -> Result<Option<&c::btree>, BchError> {
         unsafe {
             let b = c::bch2_btree_iter_next_node(&mut self.raw);

@@ -34,7 +34,7 @@ pub fn jset_vstruct_bytes(jset: &c::jset) -> usize {
 pub fn jset_vstruct_sectors(jset: &c::jset, block_bits: u16) -> usize {
     let bytes = jset_vstruct_bytes(jset);
     let block_size = 512usize << block_bits;
-    ((bytes + block_size - 1) / block_size) * block_size >> 9
+    (bytes.div_ceil(block_size) * block_size) >> 9
 }
 
 /// JSET_NO_FLUSH bitfield: bit 5 of le32 flags.

@@ -10,17 +10,17 @@ use crate::c;
 /// Get a bitmask field from a little-endian u64.
 #[inline]
 pub fn le64_bitmask_get(field: c::__le64, offset: u32, bits: u32) -> u64 {
-    (u64::from_le(field as u64) >> offset) & !(!0u64 << bits)
+    (u64::from_le(field) >> offset) & !(!0u64 << bits)
 }
 
 /// Set a bitmask field in a little-endian u64.
 #[inline]
 pub fn le64_bitmask_set(field: &mut c::__le64, offset: u32, bits: u32, v: u64) {
     let mask = !(!0u64 << bits);
-    let mut val = u64::from_le(*field as u64);
+    let mut val = u64::from_le(*field);
     val &= !(mask << offset);
     val |= (v & mask) << offset;
-    *field = val.to_le() as c::__le64;
+    *field = val.to_le();
 }
 
 /// Generate getter and setter methods for LE64_BITMASK fields.

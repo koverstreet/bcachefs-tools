@@ -10,7 +10,7 @@ include!(concat!(env!("OUT_DIR"), "/extent_entry_types_gen.rs"));
 ///
 /// Returns `u32::MAX` if the type field is zero (invalid).
 pub fn extent_entry_type(entry: &c::bch_extent_entry) -> u32 {
-    let t = unsafe { entry.type_ } as u64;
+    let t = unsafe { entry.type_ };
     if t != 0 { t.trailing_zeros() } else { u32::MAX }
 }
 
