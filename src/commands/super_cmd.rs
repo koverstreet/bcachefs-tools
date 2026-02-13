@@ -1,3 +1,13 @@
+// show-super: Display superblock contents for a bcachefs device.
+//
+// Key detail: we use ca->disk_sb.sb (per-device superblock) not c->disk_sb.sb
+// (filesystem-level copy), because __copy_super deliberately omits fields like
+// magic and layout from the fs-level copy. The per-device copy has everything.
+//
+// Field selection: by default prints ext + members + errors sections. The -f
+// flag selects specific sections (or "all"), -F prints a single field with no
+// header for scripting use (e.g. `bcachefs show-super -F version`).
+
 use std::ffi::CString;
 use std::ops::ControlFlow;
 

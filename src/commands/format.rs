@@ -1,3 +1,20 @@
+// format: Create a new bcachefs filesystem.
+//
+// This uses manual argument parsing (~225 lines) rather than clap because:
+// - Per-device options (--label, --discard, etc.) must apply to the next
+//   device on the command line, not globally — clap can't express this.
+// - The C opts table (bch_opts) is dynamic and parsed via bch2_parse_one_opt,
+//   so duplicating it in clap would create a maintenance burden.
+// - Several options (--encrypted, --replicas, --label) have special handling
+//   that maps to multiple underlying C opts.
+//
+// The format flow: parse args → build bch_opt_strs → call bch2_format() →
+// optionally write encryption key → print superblock.
+//
+// Per-device options work by accumulating device entries with their own
+// bch_opt_strs. When a bare path argument is seen, it captures whatever
+// per-device options preceded it.
+
 use std::ffi::{CStr, CString, c_char};
 use std::io;
 use std::path::PathBuf;

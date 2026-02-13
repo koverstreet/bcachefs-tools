@@ -1,3 +1,18 @@
+// kill_btree_node: Debugging tool for corrupting specific btree nodes.
+//
+// Walks the btree at a given level and writes zeroes to the on-disk location
+// of the Nth node, simulating media corruption. Used for testing recovery
+// paths — fsck should detect and repair the damage.
+//
+// Safety: Opens the filesystem read-only (no in-memory modifications), then
+// does raw pwrite() to the block device fd. The O_DIRECT alignment constraint
+// comes from the block device being opened with O_DIRECT by the kernel code.
+//
+// DevRef: RAII wrapper for bch2_dev_tryget_noerror / bch2_dev_put. The C
+// shim is needed because tryget_noerror is a static inline. This pattern
+// (tryget → Deref → Drop put) is reusable for any code that needs temporary
+// device references.
+
 use std::ops::ControlFlow;
 use std::path::PathBuf;
 

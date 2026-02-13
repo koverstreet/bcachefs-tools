@@ -1,3 +1,26 @@
+// device_scan: Discover bcachefs devices for mount.
+//
+// Multi-device bcachefs filesystems require all member devices to be
+// identified before mounting. This module handles device discovery via
+// two strategies:
+//
+// 1. **udev**: Query udev's database for devices tagged as bcachefs with
+//    a matching UUID. Fast, but depends on udev having processed the device
+//    — during early boot, devices may not be tagged yet.
+//
+// 2. **Block scan fallback**: Enumerate all block devices and read each
+//    superblock directly. Slow but reliable. Used when udev returns fewer
+//    devices than the superblock's nr_devices field indicates.
+//
+// Known limitation: both paths use udev enumeration to list block devices,
+// so devices not yet known to udev at all are missed. The proper fix is
+// event-driven waiting (see TODO in get_devices_by_uuid). Related issues:
+// #308, #393, #174.
+//
+// The C FFI exports (bch2_scan_devices, bch2_scan_device_sbs) are called
+// from the kernel's mount path. Memory ownership crosses the FFI boundary
+// via forget() + raw pointers — the C side is responsible for freeing.
+
 use std::{
     ffi::{CStr, CString, c_char, c_int, OsString, OsStr},
     collections::HashMap,
