@@ -109,16 +109,6 @@ void rust_strip_alloc_do(struct bch_fs *c)
 	mutex_unlock(&c->sb_lock);
 }
 
-void rust_device_set_state_offline(struct bch_fs *c,
-				   unsigned dev_idx, unsigned new_state)
-{
-	mutex_lock(&c->sb_lock);
-	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx);
-	SET_BCH_MEMBER_STATE(m, new_state);
-	bch2_write_super(c);
-	mutex_unlock(&c->sb_lock);
-}
-
 int rust_device_resize_offline(struct bch_fs *c, u64 size)
 {
 	struct bch_dev *resize = NULL;

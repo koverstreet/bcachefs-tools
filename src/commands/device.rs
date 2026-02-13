@@ -326,7 +326,11 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
     let fs = Fs::open(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("Error opening filesystem: {}", e))?;
 
-    unsafe { c::rust_device_set_state_offline(fs.raw, dev_idx, new_state) };
+    {
+        let _lock = fs.sb_lock();
+        unsafe { fs.members_v2_get_mut(dev_idx) }.set_member_state(new_state as u64);
+        fs.write_super();
+    }
     Ok(())
 }
 

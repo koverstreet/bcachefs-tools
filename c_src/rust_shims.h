@@ -44,13 +44,6 @@ void strip_fs_alloc(struct bch_fs *c);
 void rust_strip_alloc_do(struct bch_fs *c);
 
 /*
- * Set member state on an offline device: takes sb_lock, modifies
- * the member state via SET_BCH_MEMBER_STATE, writes superblock.
- */
-void rust_device_set_state_offline(struct bch_fs *c,
-				   unsigned dev_idx, unsigned new_state);
-
-/*
  * Offline device resize: finds the single online device, resizes it.
  * Returns -EINVAL if multiple devices online, -ENOSPC for shrink,
  * or error from bch2_dev_resize.  size is in 512-byte sectors.

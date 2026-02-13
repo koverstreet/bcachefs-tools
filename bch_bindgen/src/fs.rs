@@ -15,6 +15,19 @@ extern "C" {
     fn rust_put_online_dev_ref(ca: *mut c::bch_dev, ref_idx: u32);
     fn rust_btree_id_root_b(c: *mut c::bch_fs, id: u32) -> *mut c::btree;
     fn rust_btree_id_nr_alive(c: *mut c::bch_fs) -> u32;
+    fn pthread_mutex_lock(mutex: *mut c::pthread_mutex_t) -> i32;
+    fn pthread_mutex_unlock(mutex: *mut c::pthread_mutex_t) -> i32;
+}
+
+/// RAII guard for bch_fs::sb_lock. Unlocks on drop.
+pub struct SbLockGuard<'a> {
+    fs: &'a Fs,
+}
+
+impl Drop for SbLockGuard<'_> {
+    fn drop(&mut self) {
+        unsafe { pthread_mutex_unlock(&mut (*self.fs.raw).sb_lock.lock); }
+    }
 }
 
 pub struct Fs {
@@ -32,9 +45,24 @@ impl Fs {
         self.sb_handle().sb()
     }
 
-    /// Write superblock to disk.
+    /// Acquire the superblock lock, returning a guard that releases it on drop.
+    pub fn sb_lock(&self) -> SbLockGuard<'_> {
+        unsafe { pthread_mutex_lock(&mut (*self.raw).sb_lock.lock); }
+        SbLockGuard { fs: self }
+    }
+
+    /// Write superblock to disk. Caller must hold sb_lock.
     pub fn write_super(&self) {
         unsafe { c::bch2_write_super(self.raw) };
+    }
+
+    /// Get a mutable reference to a member entry in the superblock.
+    /// Caller must hold sb_lock.
+    ///
+    /// # Safety
+    /// `dev_idx` must be a valid device index.
+    pub unsafe fn members_v2_get_mut(&self, dev_idx: u32) -> &mut c::bch_member {
+        unsafe { &mut *c::bch2_members_v2_get_mut((*self.raw).disk_sb.sb, dev_idx as i32) }
     }
 
     pub fn open(devs: &[PathBuf], mut opts: c::bch_opts) -> Result<Fs, BchError> {
