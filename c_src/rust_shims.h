@@ -10,32 +10,12 @@
 struct bch_fs;
 struct bch_sb;
 struct bch_csum;
-struct bch_member;
-
-/* LE64_BITMASK setter shims — wraps static inline SET_* macros */
-void rust_set_bch_sb_version_incompat_allowed(struct bch_sb *, __u64);
-void rust_set_bch_sb_meta_replicas_req(struct bch_sb *, __u64);
-void rust_set_bch_sb_data_replicas_req(struct bch_sb *, __u64);
-void rust_set_bch_sb_extent_bp_shift(struct bch_sb *, __u64);
-void rust_set_bch_sb_foreground_target(struct bch_sb *, __u64);
-void rust_set_bch_sb_background_target(struct bch_sb *, __u64);
-void rust_set_bch_sb_promote_target(struct bch_sb *, __u64);
-void rust_set_bch_sb_metadata_target(struct bch_sb *, __u64);
-void rust_set_bch_sb_encryption_type(struct bch_sb *, __u64);
-void rust_set_bch_member_rotational_set(struct bch_member *, __u64);
-void rust_set_bch_member_group(struct bch_member *, __u64);
 
 /*
  * Compute the checksum of an on-disk superblock, using the csum type
  * stored in the sb itself.  Wraps the csum_vstruct() macro.
  */
 struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb);
-
-/*
- * Size of struct bucket — used by pick_bucket_size to estimate fsck
- * memory requirements. Shim needed because the struct has bitfields.
- */
-size_t rust_sizeof_bucket(void);
 
 /*
  * Wrapper around copy_fs() for format --source: opens src_path,

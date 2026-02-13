@@ -55,6 +55,7 @@ bitmask_accessors! {
         BCH_SB_EXTENT_BP_SHIFT    => (sb_extent_bp_shift, set_sb_extent_bp_shift);
 
     bch_member, flags,
+        BCH_MEMBER_STATE          => (member_state, set_member_state),
         BCH_MEMBER_GROUP          => (member_group, set_member_group),
         BCH_MEMBER_ROTATIONAL_SET => (member_rotational_set, set_member_rotational_set);
 }

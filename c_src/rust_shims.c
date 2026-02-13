@@ -31,11 +31,6 @@ struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb)
 	return csum_vstruct(NULL, BCH_SB_CSUM_TYPE(sb), nonce, sb);
 }
 
-size_t rust_sizeof_bucket(void)
-{
-	return sizeof(struct bucket);
-}
-
 int rust_fmt_build_fs(struct bch_fs *c, const char *src_path)
 {
 	struct copy_fs_state s = {};

@@ -482,7 +482,7 @@ pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[c::dev_opts]) -> u64 {
     }
     let total_ram = info.totalram as u64 * info.mem_unit as u64;
     let mem_available_for_fsck = total_ram / 8;
-    let bucket_struct_size = unsafe { c::rust_sizeof_bucket() } as u64;
+    let bucket_struct_size = std::mem::size_of::<c::bucket>() as u64;
     let buckets_can_fsck = mem_available_for_fsck / (bucket_struct_size * 3 / 2);
     let mem_lower_bound = (total_fs_size / buckets_can_fsck).next_power_of_two();
     bucket_size = bucket_size.max(mem_lower_bound);
