@@ -265,7 +265,7 @@ pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::
     match cmd_mount_inner(&cli) {
         Ok(_)   => std::process::ExitCode::SUCCESS,
         Err(e)   => {
-            error!("Mount failed: {e}");
+            error!("Mount failed for {}: {e}", cli.dev);
             if !module_loaded {
                 error!("bcachefs module not loaded?");
             }
