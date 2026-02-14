@@ -508,8 +508,9 @@ fn devs_usage_to_text(
             dev_usage_full_to_text(out, d);
         }
     } else {
-        // Summary table
-        out.tabstops(&[32, 12, 8, 10, 10, 6, 10]);
+        // Summary table — use wider columns for raw byte values
+        let num_w = if out.is_human_readable() { 10 } else { 16 };
+        out.tabstops(&[32, 12, 8, num_w, num_w, 6, num_w]);
 
         write!(out, "Device label\tDevice\tState\tSize\rUsed\rUse%\r").unwrap();
         if has_leaving {

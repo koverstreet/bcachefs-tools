@@ -107,6 +107,10 @@ impl Printbuf {
         self.units_u64(sectors << 9);
     }
 
+    pub fn is_human_readable(&self) -> bool {
+        self.0.human_readable_units()
+    }
+
     pub fn set_human_readable(&mut self, v: bool) {
         self.0.set_human_readable_units(v);
     }
