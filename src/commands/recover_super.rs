@@ -207,6 +207,12 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     let mut src_sb = sb_io::read_super_opts(Path::new(src_device), opts)
         .map_err(|e| anyhow!("Error opening {}: {}", src_device, e))?;
 
+    let nr_devices = unsafe { (*src_sb.sb).nr_devices } as i32;
+    if dev_idx < 0 || dev_idx >= nr_devices {
+        return Err(anyhow!("Device index {} out of range (filesystem has {} devices)",
+                           dev_idx, nr_devices));
+    }
+
     let m = unsafe { c::bch2_sb_member_get(src_sb.sb, dev_idx) };
     if m.uuid.b == [0u8; 16] {
         return Err(anyhow!("Member {} does not exist in source superblock", dev_idx));
@@ -232,7 +238,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
         c::BCH_SB_SECTOR as u64,
         dev_size >> 9,
         false,
-    );
+    )?;
 
     // Copy to owned buffer; src_sb's Drop will free the C allocation
     let bytes = super_io::vstruct_bytes_sb(src_sb.sb());
