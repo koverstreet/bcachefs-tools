@@ -149,7 +149,7 @@ pub fn sb_layout_init(
     sb_start: u64,
     sb_end: u64,
     no_sb_at_end: bool,
-) {
+) -> anyhow::Result<()> {
     *l = unsafe { std::mem::zeroed() };
 
     l.magic.b = BCHFS_MAGIC;
@@ -170,10 +170,10 @@ pub fn sb_layout_init(
     }
 
     if sb_pos > sb_end {
-        panic!(
-            "insufficient space for superblocks: start {} end {} > {} size {}",
-            sb_start, sb_pos, sb_end, sb_size
-        );
+        return Err(anyhow::anyhow!(
+            "insufficient space for superblocks: need {} sectors but only {} available",
+            sb_pos - sb_start, sb_end - sb_start
+        ));
     }
 
     // Also create a backup superblock at the end of the disk:
@@ -189,4 +189,6 @@ pub fn sb_layout_init(
         l.sb_offset[idx] = backup_sb.to_le();
         l.nr_superblocks += 1;
     }
+
+    Ok(())
 }

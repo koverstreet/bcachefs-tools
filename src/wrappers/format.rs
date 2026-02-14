@@ -303,7 +303,7 @@ pub extern "C" fn bch2_format(
             dev.sb_end = size_sectors;
         }
 
-        super::super_io::sb_layout_init(
+        if let Err(e) = super::super_io::sb_layout_init(
             unsafe { &mut (*sb.sb).layout },
             fs_opts.block_size as u32,
             dev.opts.bucket_size,
@@ -311,7 +311,10 @@ pub extern "C" fn bch2_format(
             dev.sb_offset,
             dev.sb_end,
             opts.no_sb_at_end,
-        );
+        ) {
+            eprintln!("Error: {}", e);
+            return std::ptr::null_mut();
+        }
 
         let fd = unsafe { (*dev.bdev).bd_fd };
 
