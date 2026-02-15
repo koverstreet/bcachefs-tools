@@ -59,7 +59,7 @@ pub fn cmd_strip_alloc(argv: Vec<String>) -> anyhow::Result<()> {
         let mut capacity: u64 = 0;
         for dev in 0..fs.nr_devices() {
             if let Some(ca) = fs.dev_get(dev) {
-                capacity += ca.mi.nbuckets * (ca.mi.bucket_size as u64) << 9;
+                capacity += (ca.mi.nbuckets * ca.mi.bucket_size as u64) << 9;
             }
         }
         if capacity > 1u64 << 40 {
