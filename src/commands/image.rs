@@ -292,10 +292,12 @@ pub fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     let source_cstr = CString::new(source.as_str())?;
     let path_cstr = CString::new(image_path.as_str())?;
 
-    let mut fmt_opts: c::format_opts = Default::default();
-    fmt_opts.version = version;
-    fmt_opts.superblock_size = superblock_size;
-    fmt_opts.encrypted = encrypted;
+    let mut fmt_opts = c::format_opts {
+        version,
+        superblock_size,
+        encrypted,
+        ..Default::default()
+    };
     if let Some(ref l) = label_cstr {
         fmt_opts.label = l.as_ptr() as *mut c_char;
     }
@@ -315,13 +317,15 @@ pub fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     }
 
     // Build dev_opts
-    let mut c_dev_opts: c::dev_opts = Default::default();
-    c_dev_opts.path = path_cstr.as_ptr();
+    let mut c_dev_opts = c::dev_opts {
+        path: path_cstr.as_ptr(),
+        fs_size: dev_fs_size,
+        opts: dev_opts,
+        ..Default::default()
+    };
     if let Some(ref l) = dev_label_cstr {
         c_dev_opts.label = l.as_ptr();
     }
-    c_dev_opts.fs_size = dev_fs_size;
-    c_dev_opts.opts = dev_opts;
 
     // rust_image_create either returns on success or calls exit() on error
     unsafe {

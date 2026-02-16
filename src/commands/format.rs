@@ -430,10 +430,12 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     let label_cstr = cfg.fs_label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
     let source_cstr = cfg.source.as_ref().map(|s| CString::new(s.as_str())).transpose()?;
 
-    let mut fmt_opts: c::format_opts = Default::default();
-    fmt_opts.version = version;
-    fmt_opts.superblock_size = cfg.superblock_size;
-    fmt_opts.encrypted = cfg.encrypted;
+    let mut fmt_opts = c::format_opts {
+        version,
+        superblock_size: cfg.superblock_size,
+        encrypted: cfg.encrypted,
+        ..Default::default()
+    };
     if let Some(ref l) = label_cstr {
         fmt_opts.label = l.as_ptr() as *mut c_char;
     }
@@ -466,13 +468,15 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
     let mut c_devices: Vec<c::dev_opts> = cfg.devices.iter()
         .zip(&dev_cstrs)
         .map(|(dev, (path_c, label_c))| {
-            let mut c_dev = c::dev_opts::default();
-            c_dev.path = path_c.as_ptr();
+            let mut c_dev = c::dev_opts {
+                path: path_c.as_ptr(),
+                fs_size: dev.fs_size,
+                opts: dev.opts,
+                ..Default::default()
+            };
             if let Some(ref l) = label_c {
                 c_dev.label = l.as_ptr();
             }
-            c_dev.fs_size = dev.fs_size;
-            c_dev.opts = dev.opts;
             c_dev
         })
         .collect();
