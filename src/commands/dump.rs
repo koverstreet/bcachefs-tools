@@ -494,6 +494,7 @@ fn write_sanitized_ranges(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 fn write_dev_image(
     fs: &Fs,
     ca: &c::bch_dev,
