@@ -1182,7 +1182,8 @@ static int __bch2_can_do_write(struct bch_fs *c,
 		: 0;
 
 	if (btree &&
-	    data_opts->type == BCH_DATA_UPDATE_reconcile)
+	    data_opts->type == BCH_DATA_UPDATE_reconcile &&
+	    !bch2_bkey_has_ptr_bad_or_evacuating(c, k))
 		return bch2_can_do_write_btree(c, opts, data_opts, k, trace);
 
 	if (trace) {

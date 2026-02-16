@@ -458,7 +458,7 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 			guard(rcu)();
 
 			bkey_for_each_ptr(ptrs, ptr) {
-				if (bch2_dev_bad_or_evacuating(c, ptr->dev))
+				if (bch2_ptr_bad_or_evacuating_rcu(c, ptr))
 					data_opts->ptrs_kill |= ptr_bit;
 				ptr_bit <<= 1;
 			}
@@ -476,8 +476,8 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 			struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
 			struct bkey_durability cur = durability;
 
-			for (unsigned phase = 0; phase < 2; phase++) {
-				bool online_floor = phase == 1;
+				for (unsigned phase = 0; phase < 2; phase++) {
+					bool online_floor = phase == 1;
 
 				/* phase 0 (hold total) only matters if some durability is offline */
 				if (!online_floor && cur.total == cur.online)
@@ -485,12 +485,12 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 
 				/* Drop entire pointers? */
 				unsigned ptr_bit = 1;
-				bkey_for_each_ptr(bch2_bkey_ptrs(bkey_i_to_s(n)), ptr) {
-					bool offline = ptr->dev == BCH_SB_MEMBER_INVALID ||
-						       !test_bit(ptr->dev, c->devs_online.d);
+					bkey_for_each_ptr(bch2_bkey_ptrs(bkey_i_to_s(n)), ptr) {
+						bool offline = ptr->dev == BCH_SB_MEMBER_INVALID ||
+							       !test_bit(ptr->dev, c->devs_online.d);
 
-					if (!ptr->cached && (online_floor || offline)) {
-						bool force = bch2_dev_bad_or_evacuating(c, ptr->dev);
+						if (!ptr->cached && (online_floor || offline)) {
+							bool force = bch2_ptr_bad_or_evacuating(c, ptr);
 
 						ptr->cached = true;
 						struct bkey_durability d;
@@ -509,11 +509,11 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 						 * reads as durability=0, but we drop it once the
 						 * required durability is held by other devices.
 						 */
-						if (have >= r->data_replicas &&
-						    (force || have < was)) {
-							data_opts->ptrs_kill |= ptr_bit;
-							cur = d;
-						} else {
+							if (have >= r->data_replicas &&
+							    (force || have < was)) {
+								data_opts->ptrs_kill |= ptr_bit;
+								cur = d;
+							} else {
 							ptr->cached = false;
 						}
 					}
@@ -541,18 +541,18 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 					struct bkey_i *m = errptr_try(bch2_bkey_make_mut_noupdate(trans, bkey_i_to_s_c(n)));
 					bch2_bkey_drop_ec_mask(c, m, ec_bits[i]);
 
-					struct bkey_durability d;
-					try(bch2_bkey_durability(trans, bkey_i_to_s_c(m), &d));
+						struct bkey_durability d;
+						try(bch2_bkey_durability(trans, bkey_i_to_s_c(m), &d));
 
-					unsigned have = online_floor ? d.online : d.total;
-					if (have >= r->data_replicas) {
-						data_opts->ptrs_kill_ec |= ec_bits[i];
-						bch2_bkey_drop_ec_mask(c, n, ec_bits[i]);
-						cur = d;
+						unsigned have = online_floor ? d.online : d.total;
+						if (have >= r->data_replicas) {
+							data_opts->ptrs_kill_ec |= ec_bits[i];
+							bch2_bkey_drop_ec_mask(c, n, ec_bits[i]);
+							cur = d;
+						}
 					}
 				}
 			}
-		}
 	}
 
 	if (r->need_rb & BIT(BCH_RECONCILE_erasure_code)) {
