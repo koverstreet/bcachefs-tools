@@ -659,6 +659,124 @@ proof fn bkey_trichotomy(a: Bpos, b: Bpos)
 {}
 
 // ============================================================
+// bversion comparison — two-field version stamp
+// ============================================================
+//
+// bversion is (hi: u32, lo: u64), compared lexicographically.
+// Used for key versioning in snapshots — each mutation gets a
+// monotonically increasing version.
+
+pub struct Bversion {
+    pub hi: u32,
+    pub lo: u64,
+}
+
+pub open spec fn bversion_cmp_spec(l: Bversion, r: Bversion) -> int {
+    if l.hi != r.hi {
+        if l.hi < r.hi { -1 } else { 1 }
+    } else if l.lo != r.lo {
+        if l.lo < r.lo { -1 } else { 1 }
+    } else {
+        0int
+    }
+}
+
+pub open spec fn bversion_eq_spec(l: Bversion, r: Bversion) -> bool {
+    l.hi == r.hi && l.lo == r.lo
+}
+
+pub open spec fn bversion_lt_spec(l: Bversion, r: Bversion) -> bool {
+    if l.hi != r.hi {
+        l.hi < r.hi
+    } else {
+        l.lo < r.lo
+    }
+}
+
+pub open spec fn bversion_le_spec(l: Bversion, r: Bversion) -> bool {
+    if l.hi != r.hi {
+        l.hi < r.hi
+    } else {
+        l.lo <= r.lo
+    }
+}
+
+fn bversion_cmp(l: &Bversion, r: &Bversion) -> (result: i32)
+    ensures
+        result == 0 ==> bversion_eq_spec(*l, *r),
+        result < 0 ==> bversion_lt_spec(*l, *r),
+        result > 0 ==> bversion_lt_spec(*r, *l),
+        result == -1 || result == 0 || result == 1,
+{
+    if l.hi != r.hi {
+        if l.hi < r.hi { -1 } else { 1 }
+    } else if l.lo != r.lo {
+        if l.lo < r.lo { -1 } else { 1 }
+    } else {
+        0
+    }
+}
+
+fn bversion_eq(l: &Bversion, r: &Bversion) -> (result: bool)
+    ensures result == bversion_eq_spec(*l, *r)
+{
+    l.hi == r.hi && l.lo == r.lo
+}
+
+// Total order proofs for bversion
+proof fn bversion_le_reflexive(a: Bversion)
+    ensures bversion_le_spec(a, a)
+{}
+
+proof fn bversion_le_antisymmetric(a: Bversion, b: Bversion)
+    requires
+        bversion_le_spec(a, b),
+        bversion_le_spec(b, a),
+    ensures bversion_eq_spec(a, b)
+{}
+
+proof fn bversion_le_transitive(a: Bversion, b: Bversion, c: Bversion)
+    requires
+        bversion_le_spec(a, b),
+        bversion_le_spec(b, c),
+    ensures bversion_le_spec(a, c)
+{}
+
+proof fn bversion_le_total(a: Bversion, b: Bversion)
+    ensures bversion_le_spec(a, b) || bversion_le_spec(b, a)
+{}
+
+proof fn bversion_trichotomy(a: Bversion, b: Bversion)
+    ensures
+        (bversion_lt_spec(a, b) && !bversion_eq_spec(a, b) && !bversion_lt_spec(b, a))
+        || (!bversion_lt_spec(a, b) && bversion_eq_spec(a, b) && !bversion_lt_spec(b, a))
+        || (!bversion_lt_spec(a, b) && !bversion_eq_spec(a, b) && bversion_lt_spec(b, a))
+{}
+
+// ZERO_VERSION is the minimum
+pub open spec fn zero_version_spec() -> Bversion {
+    Bversion { hi: 0, lo: 0 }
+}
+
+pub open spec fn max_version_spec() -> Bversion {
+    Bversion { hi: u32::MAX, lo: u64::MAX }
+}
+
+proof fn zero_version_is_minimum(v: Bversion)
+    ensures bversion_le_spec(zero_version_spec(), v)
+{}
+
+proof fn max_version_is_maximum(v: Bversion)
+    ensures bversion_le_spec(v, max_version_spec())
+{}
+
+fn bversion_zero(v: &Bversion) -> (result: bool)
+    ensures result == bversion_eq_spec(*v, zero_version_spec())
+{
+    v.hi == 0 && v.lo == 0
+}
+
+// ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
 
