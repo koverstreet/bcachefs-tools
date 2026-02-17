@@ -836,6 +836,123 @@ proof fn extents_sorted_by_end(s: Seq<Bkey>, i: int, j: int)
 }
 
 // ============================================================
+// Extent trimming (cut_front / cut_back)
+// ============================================================
+//
+// When inserting an extent that overlaps existing ones, bcachefs
+// trims the overlapping extents: bch2_cut_front advances the start,
+// bch2_cut_back shrinks the end. These proofs verify that trimming
+// preserves key validity and that splitting produces adjacent
+// non-overlapping pieces.
+
+/// Front-trim: advance start of k to new_start, keeping same end.
+/// Models bch2_cut_front from fs/bcachefs/extents.c.
+pub open spec fn cut_front_spec(new_start: u64, k: Bkey) -> Bkey
+    recommends
+        k.p.offset >= k.size as u64,
+        new_start >= key_start(k),
+        new_start < key_end(k),
+        k.p.offset - new_start <= u32::MAX as u64,
+{
+    Bkey {
+        p: Bpos { inode: k.p.inode, offset: k.p.offset, snapshot: k.p.snapshot },
+        size: (k.p.offset - new_start) as u32,
+    }
+}
+
+/// Back-trim: shrink end of k to new_end, keeping same start.
+/// Models bch2_cut_back from fs/bcachefs/extents.c.
+pub open spec fn cut_back_spec(new_end: u64, k: Bkey) -> Bkey
+    recommends
+        k.p.offset >= k.size as u64,
+        new_end > key_start(k),
+        new_end <= key_end(k),
+        new_end - key_start(k) <= u32::MAX as u64,
+{
+    Bkey {
+        p: Bpos { inode: k.p.inode, offset: new_end, snapshot: k.p.snapshot },
+        size: (new_end - key_start(k)) as u32,
+    }
+}
+
+// Front-trim starts at the trim point, keeps the same end, stays valid.
+proof fn cut_front_preserves(new_start: u64, k: Bkey)
+    requires
+        k.p.offset >= k.size as u64,
+        new_start >= key_start(k),
+        new_start < key_end(k),
+        k.p.offset - new_start <= u32::MAX as u64,
+    ensures
+        key_start(cut_front_spec(new_start, k)) == new_start,
+        key_end(cut_front_spec(new_start, k)) == key_end(k),
+        cut_front_spec(new_start, k).size > 0,
+        cut_front_spec(new_start, k).p.offset >= cut_front_spec(new_start, k).size as u64,
+{}
+
+// Back-trim keeps the same start, ends at the trim point, stays valid.
+proof fn cut_back_preserves(new_end: u64, k: Bkey)
+    requires
+        k.p.offset >= k.size as u64,
+        new_end > key_start(k),
+        new_end <= key_end(k),
+        new_end - key_start(k) <= u32::MAX as u64,
+    ensures
+        key_start(cut_back_spec(new_end, k)) == key_start(k),
+        key_end(cut_back_spec(new_end, k)) == new_end,
+        cut_back_spec(new_end, k).size > 0,
+        cut_back_spec(new_end, k).p.offset >= cut_back_spec(new_end, k).size as u64,
+{}
+
+/// Splitting an extent at a point produces adjacent, non-overlapping
+/// pieces that together cover the original range. This is the
+/// fundamental correctness property of extent splitting.
+proof fn extent_split_adjacent(k: Bkey, mid: u64)
+    requires
+        k.p.offset >= k.size as u64,
+        k.size > 0,
+        key_start(k) < mid,
+        mid < key_end(k),
+        mid - key_start(k) <= u32::MAX as u64,
+        k.p.offset - mid <= u32::MAX as u64,
+    ensures
+        key_start(cut_back_spec(mid, k)) == key_start(k),
+        key_end(cut_front_spec(mid, k)) == key_end(k),
+        key_end(cut_back_spec(mid, k)) == key_start(cut_front_spec(mid, k)),
+        cut_back_spec(mid, k).size > 0,
+        cut_front_spec(mid, k).size > 0,
+{}
+
+/// After back-trimming an existing extent to make room for a new one,
+/// the trimmed extent ends where the new extent starts — no overlap.
+proof fn back_trim_clears_overlap(existing: Bkey, new_ext: Bkey)
+    requires
+        existing.p.offset >= existing.size as u64,
+        new_ext.p.offset >= new_ext.size as u64,
+        existing.size > 0,
+        new_ext.size > 0,
+        key_start(new_ext) > key_start(existing),
+        key_start(new_ext) < key_end(existing),
+        key_start(new_ext) - key_start(existing) <= u32::MAX as u64,
+    ensures
+        key_end(cut_back_spec(key_start(new_ext), existing)) <= key_start(new_ext)
+{}
+
+/// After front-trimming an existing extent to make room for a new one,
+/// the trimmed extent starts where the new extent ends — no overlap.
+proof fn front_trim_clears_overlap(existing: Bkey, new_ext: Bkey)
+    requires
+        existing.p.offset >= existing.size as u64,
+        new_ext.p.offset >= new_ext.size as u64,
+        existing.size > 0,
+        new_ext.size > 0,
+        key_end(new_ext) > key_start(existing),
+        key_end(new_ext) < key_end(existing),
+        existing.p.offset - key_end(new_ext) <= u32::MAX as u64,
+    ensures
+        key_start(cut_front_spec(key_end(new_ext), existing)) >= key_end(new_ext)
+{}
+
+// ============================================================
 // bversion comparison — two-field version stamp
 // ============================================================
 //
