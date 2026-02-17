@@ -1184,6 +1184,340 @@ fn find_extent(extents: &Vec<Bkey>, target: u64) -> (result: Option<usize>)
 }
 
 // ============================================================
+// Extent overwrite — modeling bch2_trans_update_extent_overwrite
+// ============================================================
+//
+// When a new extent is inserted that overlaps an existing one,
+// bch2_trans_update_extent_overwrite (btree/update.c:146) trims
+// the old extent, keeping only the non-overlapping fragments.
+//
+// This models the same-snapshot case. Four cases based on whether
+// old extends past new on the left (front_split) or right (back_split):
+//
+//    old:     [---------)          old:     [---------)
+//    new:       [----)             new:          [--------)
+//    result:  [--)    [--)         result:  [----)
+//
+//    old:        [---------)       old:        [-----)
+//    new:     [--------)           new:     [-----------)
+//    result:           [---)       result:  (nothing)
+
+/// Returns true if two extents overlap (half-open interval intersection).
+pub open spec fn extents_overlap(a: Bkey, b: Bkey) -> bool
+    recommends
+        a.p.offset >= a.size as u64,
+        b.p.offset >= b.size as u64,
+{
+    key_start(a) < key_end(b) && key_start(b) < key_end(a)
+}
+
+/// Overlap is symmetric.
+proof fn extents_overlap_symmetric(a: Bkey, b: Bkey)
+    requires
+        a.p.offset >= a.size as u64,
+        b.p.offset >= b.size as u64,
+        extents_overlap(a, b),
+    ensures extents_overlap(b, a)
+{}
+
+/// Given an old extent overlapped by a new one (same snapshot),
+/// return the surviving fragments of old.
+/// Models bch2_trans_update_extent_overwrite (btree/update.c:146).
+pub open spec fn extent_overwrite_fragments(old: Bkey, new: Bkey) -> Seq<Bkey>
+    recommends
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+
+    if front_split && back_split {
+        // old fully contains new: two fragments
+        seq![cut_back_spec(key_start(new), old),
+             cut_front_spec(key_end(new), old)]
+    } else if front_split {
+        // old extends left of new
+        seq![cut_back_spec(key_start(new), old)]
+    } else if back_split {
+        // old extends right of new
+        seq![cut_front_spec(key_end(new), old)]
+    } else {
+        // new fully covers old
+        seq![]
+    }
+}
+
+/// All fragments from an overwrite are valid and nonempty.
+proof fn overwrite_fragments_valid(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+    ensures ({
+        let frags = extent_overwrite_fragments(old, new);
+        forall|i: int| 0 <= i < frags.len() ==> (
+            (#[trigger] frags[i]).p.offset >= frags[i].size as u64
+            && frags[i].size > 0
+        )
+    })
+{
+    let frags = extent_overwrite_fragments(old, new);
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+
+    if front_split && back_split {
+        cut_back_preserves(key_start(new), old);
+        cut_front_preserves(key_end(new), old);
+        assert(frags[0] == cut_back_spec(key_start(new), old));
+        assert(frags[1] == cut_front_spec(key_end(new), old));
+    } else if front_split {
+        cut_back_preserves(key_start(new), old);
+        assert(frags[0] == cut_back_spec(key_start(new), old));
+    } else if back_split {
+        cut_front_preserves(key_end(new), old);
+        assert(frags[0] == cut_front_spec(key_end(new), old));
+    }
+}
+
+/// When front_split: the front fragment ends at or before where new starts.
+proof fn overwrite_front_nonoverlap(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        key_start(old) < key_start(new),
+    ensures
+        key_end(cut_back_spec(key_start(new), old)) <= key_start(new)
+{
+    cut_back_preserves(key_start(new), old);
+}
+
+/// When back_split: the back fragment starts at or after where new ends.
+proof fn overwrite_back_nonoverlap(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        key_end(old) > key_end(new),
+    ensures
+        key_start(cut_front_spec(key_end(new), old)) >= key_end(new)
+{
+    cut_front_preserves(key_end(new), old);
+}
+
+/// When both front and back split: front < new < back (ordered).
+proof fn overwrite_fragments_ordered(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        key_start(old) < key_start(new),
+        key_end(old) > key_end(new),
+    ensures ({
+        let front = cut_back_spec(key_start(new), old);
+        let back = cut_front_spec(key_end(new), old);
+        key_end(front) <= key_start(new)
+        && key_end(new) <= key_start(back)
+        && key_end(front) <= key_start(back)
+    })
+{
+    cut_back_preserves(key_start(new), old);
+    cut_front_preserves(key_end(new), old);
+}
+
+/// The fragments + new form a non-overlapping sequence when ordered
+/// as [front_frag, new, back_frag]. This is the key correctness
+/// property: the overwrite operation produces a valid extent sequence.
+proof fn overwrite_result_nonoverlap(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+    ensures ({
+        let frags = extent_overwrite_fragments(old, new);
+        let front_split = key_start(old) < key_start(new);
+        let back_split = key_end(old) > key_end(new);
+
+        // Front fragment doesn't overlap new
+        (front_split ==> key_end(frags[0]) <= key_start(new))
+        // Back fragment doesn't overlap new
+        && (back_split && front_split ==> key_start(frags[1]) >= key_end(new))
+        && (back_split && !front_split ==> key_start(frags[0]) >= key_end(new))
+        // When both exist, front doesn't overlap back
+        && (front_split && back_split ==>
+            key_end(frags[0]) <= key_start(frags[1]))
+    })
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+
+    if front_split && back_split {
+        overwrite_fragments_ordered(old, new);
+    } else if front_split {
+        overwrite_front_nonoverlap(old, new);
+    } else if back_split {
+        overwrite_back_nonoverlap(old, new);
+    }
+}
+
+/// Fragments are contained within the original extent's range.
+proof fn overwrite_fragments_within_old(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+    ensures ({
+        let frags = extent_overwrite_fragments(old, new);
+        forall|i: int| 0 <= i < frags.len() ==> (
+            key_start(#[trigger] frags[i]) >= key_start(old)
+            && key_end(frags[i]) <= key_end(old)
+        )
+    })
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+    let frags = extent_overwrite_fragments(old, new);
+
+    if front_split && back_split {
+        cut_back_preserves(key_start(new), old);
+        cut_front_preserves(key_end(new), old);
+        assert(frags[0] == cut_back_spec(key_start(new), old));
+        assert(frags[1] == cut_front_spec(key_end(new), old));
+    } else if front_split {
+        cut_back_preserves(key_start(new), old);
+        assert(frags[0] == cut_back_spec(key_start(new), old));
+    } else if back_split {
+        cut_front_preserves(key_end(new), old);
+        assert(frags[0] == cut_front_spec(key_end(new), old));
+    }
+}
+
+/// The number of fragments is bounded: 0 for full cover, 1 for
+/// single-sided overlap, 2 for containment.
+proof fn overwrite_fragment_count(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+    ensures ({
+        let frags = extent_overwrite_fragments(old, new);
+        let front_split = key_start(old) < key_start(new);
+        let back_split = key_end(old) > key_end(new);
+        (front_split && back_split ==> frags.len() == 2)
+        && ((front_split && !back_split) || (!front_split && back_split)
+            ==> frags.len() == 1)
+        && (!front_split && !back_split ==> frags.len() == 0)
+    })
+{}
+
+/// When new overlaps old but not a predecessor extent, the
+/// overwrite result (fragments + new) doesn't overlap the
+/// predecessor either. This proves the splice is clean on the left.
+proof fn overwrite_pred_compatible(pred: Bkey, old: Bkey, new: Bkey)
+    requires
+        pred.p.offset >= pred.size as u64,
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        pred.size > 0,
+        old.size > 0,
+        new.size > 0,
+        key_end(pred) <= key_start(old),       // pred before old in sequence
+        extents_overlap(old, new),             // new overlaps old
+        !extents_overlap(pred, new),           // new doesn't overlap pred
+    ensures
+        key_end(pred) <= key_start(new),
+        (key_start(old) < key_start(new) ==>
+            key_end(pred) <= key_start(cut_back_spec(key_start(new), old))),
+{
+    // !overlap(pred, new) means:
+    //   key_start(pred) >= key_end(new) OR key_start(new) >= key_end(pred)
+    // First case gives: key_start(pred) >= key_end(new) > key_start(old) >= key_end(pred)
+    //   > key_start(pred), contradiction. So: key_end(pred) <= key_start(new).
+    // Front fragment starts at key_start(old) >= key_end(pred).
+    if key_start(old) < key_start(new) {
+        cut_back_preserves(key_start(new), old);
+    }
+}
+
+/// When new overlaps old but not a successor extent, the
+/// overwrite result doesn't overlap the successor. Clean splice on the right.
+proof fn overwrite_succ_compatible(old: Bkey, new: Bkey, succ: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        succ.p.offset >= succ.size as u64,
+        old.size > 0,
+        new.size > 0,
+        succ.size > 0,
+        key_end(old) <= key_start(succ),       // old before succ in sequence
+        extents_overlap(old, new),             // new overlaps old
+        !extents_overlap(new, succ),           // new doesn't overlap succ
+    ensures
+        key_end(new) <= key_start(succ),
+        (key_end(old) > key_end(new) ==>
+            key_end(cut_front_spec(key_end(new), old)) <= key_start(succ)),
+{
+    // !overlap(new, succ) means:
+    //   key_start(new) >= key_end(succ) OR key_start(succ) >= key_end(new)
+    // First case gives: key_start(new) >= key_end(succ) > key_start(succ) >= key_end(old)
+    //   > key_start(new), contradiction. So: key_end(new) <= key_start(succ).
+    // Back fragment ends at key_end(old) <= key_start(succ).
+    if key_end(old) > key_end(new) {
+        cut_front_preserves(key_end(new), old);
+    }
+}
+
+/// Every point in the old extent's range is covered by either
+/// the new extent or one of the surviving fragments. This is
+/// the conservation property: overwrite doesn't create gaps.
+proof fn overwrite_covers_old_range(old: Bkey, new: Bkey, point: u64)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        key_start(old) <= point,
+        point < key_end(old),
+    ensures ({
+        let frags = extent_overwrite_fragments(old, new);
+        // Point is in new, or in some fragment
+        (key_start(new) <= point && point < key_end(new))
+        || (frags.len() > 0 && key_start(frags[0]) <= point && point < key_end(frags[0]))
+        || (frags.len() > 1 && key_start(frags[1]) <= point && point < key_end(frags[1]))
+    })
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+
+    if front_split && back_split {
+        cut_back_preserves(key_start(new), old);
+        cut_front_preserves(key_end(new), old);
+    } else if front_split {
+        cut_back_preserves(key_start(new), old);
+    } else if back_split {
+        cut_front_preserves(key_end(new), old);
+    }
+}
+
+// ============================================================
 // bversion comparison — two-field version stamp
 // ============================================================
 //
