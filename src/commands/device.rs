@@ -379,15 +379,11 @@ pub fn cmd_device_resize(argv: Vec<String>) -> Result<()> {
     Ok(())
 }
 
-fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
-    use bch_bindgen::printbuf::Printbuf;
+/// Find the single online device in a filesystem.
+/// Offline operations (resize, resize-journal) require exactly one device.
+fn find_single_online_dev(fs: &Fs) -> Result<bch_bindgen::fs::DevRef> {
     use std::ops::ControlFlow;
 
-    let opts: c::bch_opts = Default::default();
-    let fs = Fs::open(&[PathBuf::from(device)], opts)
-        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
-
-    // Find the single online device — offline resize only works with one
     let mut count = 0u32;
     let mut found_idx = 0u32;
     let _ = fs.for_each_online_member(|ca| {
@@ -403,8 +399,18 @@ fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
         bail!("multiple devices online, offline resize requires exactly one");
     }
 
-    let ca = fs.dev_get(found_idx)
-        .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))?;
+    fs.dev_get(found_idx)
+        .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))
+}
+
+fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
+    use bch_bindgen::printbuf::Printbuf;
+
+    let opts: c::bch_opts = Default::default();
+    let fs = Fs::open(&[PathBuf::from(device)], opts)
+        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
+
+    let ca = find_single_online_dev(&fs)?;
 
     let nbuckets = size_sectors / ca.mi.bucket_size as u64;
 
@@ -462,30 +468,11 @@ pub fn cmd_device_resize_journal(argv: Vec<String>) -> Result<()> {
 }
 
 fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
-    use std::ops::ControlFlow;
-
     let opts: c::bch_opts = Default::default();
     let fs = Fs::open(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 
-    // Find the single online device
-    let mut count = 0u32;
-    let mut found_idx = 0u32;
-    let _ = fs.for_each_online_member(|ca| {
-        found_idx = ca.dev_idx as u32;
-        count += 1;
-        ControlFlow::Continue(())
-    });
-
-    if count == 0 {
-        bail!("no online device found");
-    }
-    if count > 1 {
-        bail!("multiple devices online, offline resize requires exactly one");
-    }
-
-    let ca = fs.dev_get(found_idx)
-        .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))?;
+    let ca = find_single_online_dev(&fs)?;
 
     let nbuckets = size_sectors / ca.mi.bucket_size as u64;
 
