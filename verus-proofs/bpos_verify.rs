@@ -659,6 +659,49 @@ proof fn bkey_trichotomy(a: Bpos, b: Bpos)
 {}
 
 // ============================================================
+// Sorted sequence properties (level 2 verification)
+// ============================================================
+//
+// A btree node contains keys sorted by bpos. We define "sorted" for
+// a spec-level Seq<Bpos> and prove that sortedness implies pairwise
+// ordering (via transitivity induction).
+
+/// A sequence of bpos values is sorted if each consecutive pair is strictly ordered.
+pub open spec fn bpos_sorted(s: Seq<Bpos>) -> bool {
+    forall|i: int| 0 <= i < s.len() - 1 ==> bpos_lt_spec(#[trigger] s[i], s[i + 1])
+}
+
+/// Sortedness implies pairwise ordering for any i < j.
+proof fn sorted_implies_pairwise(s: Seq<Bpos>, i: int, j: int)
+    requires
+        bpos_sorted(s),
+        0 <= i < j < s.len(),
+    ensures
+        bpos_lt_spec(s[i], s[j])
+    decreases j - i
+{
+    if j == i + 1 {
+        // Base: consecutive elements, follows directly from sorted
+    } else {
+        // Inductive: s[i] < s[j-1] (by IH) and s[j-1] < s[j] (sorted)
+        sorted_implies_pairwise(s, i, j - 1);
+        bpos_le_transitive(s[i], s[j - 1], s[j]);
+    }
+}
+
+/// All elements in a sorted sequence are distinct.
+proof fn sorted_implies_distinct(s: Seq<Bpos>, i: int, j: int)
+    requires
+        bpos_sorted(s),
+        0 <= i < j < s.len(),
+    ensures
+        !bpos_eq_spec(s[i], s[j])
+{
+    sorted_implies_pairwise(s, i, j);
+    // bpos_lt implies not eq (from trichotomy)
+}
+
+// ============================================================
 // bversion comparison — two-field version stamp
 // ============================================================
 //
