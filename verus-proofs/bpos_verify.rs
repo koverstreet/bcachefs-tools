@@ -702,6 +702,140 @@ proof fn sorted_implies_distinct(s: Seq<Bpos>, i: int, j: int)
 }
 
 // ============================================================
+// Extent range properties (level 2 verification)
+// ============================================================
+//
+// Extents in bcachefs cover half-open offset ranges [start, end)
+// where start = p.offset - size, end = p.offset. Within a btree
+// node, extents in the same inode must not overlap — the insert
+// logic trims existing extents when a new one is written.
+//
+// We define the non-overlap invariant for consecutive pairs and
+// prove it generalizes to ALL pairs. This means offset lookups
+// are unambiguous: a point lies in at most one extent.
+
+/// Start offset of an extent.
+pub open spec fn key_start(k: Bkey) -> u64
+    recommends k.p.offset >= k.size as u64
+{
+    (k.p.offset - k.size as u64) as u64
+}
+
+/// End offset of an extent.
+pub open spec fn key_end(k: Bkey) -> u64 {
+    k.p.offset
+}
+
+// key_start is consistent with bkey_start_pos_spec
+proof fn key_start_matches_bkey_start_pos(k: Bkey)
+    requires k.p.offset >= k.size as u64
+    ensures key_start(k) == bkey_start_pos_spec(k).offset
+{}
+
+/// All extents have valid sizes (offset >= size, so start doesn't underflow).
+pub open spec fn extents_valid(s: Seq<Bkey>) -> bool {
+    forall|i: int| 0 <= i < s.len() ==>
+        (#[trigger] s[i]).p.offset >= s[i].size as u64
+}
+
+/// All extents are non-empty (size > 0).
+pub open spec fn extents_nonempty(s: Seq<Bkey>) -> bool {
+    forall|i: int| 0 <= i < s.len() ==>
+        (#[trigger] s[i]).size > 0
+}
+
+/// Consecutive extents don't overlap: each ends at or before the next starts.
+/// This is the local invariant maintained by btree extent insert.
+pub open spec fn extents_nonoverlap(s: Seq<Bkey>) -> bool {
+    forall|i: int| 0 <= i < s.len() - 1 ==>
+        key_end(#[trigger] s[i]) <= key_start(s[i + 1])
+}
+
+/// Each extent has positive length (start < end).
+proof fn extent_has_positive_length(s: Seq<Bkey>, i: int)
+    requires
+        extents_valid(s),
+        extents_nonempty(s),
+        0 <= i < s.len(),
+    ensures
+        key_start(s[i]) < key_end(s[i])
+{}
+
+/// Local non-overlap implies global non-overlap for all pairs.
+/// Proof: induction on j - i. The chain is:
+///   end(i) <= start(i+1) < end(i+1) <= ... <= start(j)
+proof fn extents_nonoverlap_pairwise(s: Seq<Bkey>, i: int, j: int)
+    requires
+        extents_valid(s),
+        extents_nonempty(s),
+        extents_nonoverlap(s),
+        0 <= i < j < s.len(),
+    ensures
+        key_end(s[i]) <= key_start(s[j])
+    decreases j - i
+{
+    if j == i + 1 {
+        // Direct from extents_nonoverlap
+    } else {
+        extents_nonoverlap_pairwise(s, i, j - 1);
+        // IH: key_end(s[i]) <= key_start(s[j-1])
+        // valid + nonempty: key_start(s[j-1]) < key_end(s[j-1])
+        // nonoverlap: key_end(s[j-1]) <= key_start(s[j])
+    }
+}
+
+/// A point in offset space lies in at most one extent.
+/// This is THE key correctness property for extent lookups:
+/// bch2_btree_iter_peek returns at most one matching extent.
+proof fn point_in_at_most_one_extent(s: Seq<Bkey>, point: u64, i: int, j: int)
+    requires
+        extents_valid(s),
+        extents_nonempty(s),
+        extents_nonoverlap(s),
+        0 <= i < j < s.len(),
+        key_start(s[i]) <= point,
+        point < key_end(s[i]),
+    ensures
+        !(key_start(s[j]) <= point && point < key_end(s[j]))
+{
+    extents_nonoverlap_pairwise(s, i, j);
+    // key_end(s[i]) <= key_start(s[j]) and point < key_end(s[i])
+    // so point < key_start(s[j])
+}
+
+/// Non-overlapping extents are sorted by start offset.
+proof fn extents_sorted_by_start(s: Seq<Bkey>, i: int, j: int)
+    requires
+        extents_valid(s),
+        extents_nonempty(s),
+        extents_nonoverlap(s),
+        0 <= i < j < s.len(),
+    ensures
+        key_start(s[i]) < key_start(s[j])
+{
+    extents_nonoverlap_pairwise(s, i, j);
+    // key_end(s[i]) <= key_start(s[j])
+    // key_start(s[i]) < key_end(s[i]) (valid + nonempty)
+    // chain: key_start(s[i]) < key_end(s[i]) <= key_start(s[j])
+}
+
+/// Non-overlapping extents are sorted by end offset.
+proof fn extents_sorted_by_end(s: Seq<Bkey>, i: int, j: int)
+    requires
+        extents_valid(s),
+        extents_nonempty(s),
+        extents_nonoverlap(s),
+        0 <= i < j < s.len(),
+    ensures
+        key_end(s[i]) < key_end(s[j])
+{
+    extents_nonoverlap_pairwise(s, i, j);
+    // key_end(s[i]) <= key_start(s[j])
+    // key_start(s[j]) < key_end(s[j]) (valid + nonempty)
+    // chain: key_end(s[i]) <= key_start(s[j]) < key_end(s[j])
+}
+
+// ============================================================
 // bversion comparison — two-field version stamp
 // ============================================================
 //
