@@ -1919,6 +1919,336 @@ fn bversion_zero(v: &Bversion) -> (result: bool)
 }
 
 // ============================================================
+// Snapshot-aware extent overwrite
+// ============================================================
+//
+// Models bch2_trans_update_extent_overwrite with the snapshot
+// dimension. When old and new extents are in different snapshots,
+// the overlapping region must be PRESERVED in the old snapshot
+// (the "middle split"). Same-snapshot overwrites simply delete
+// the overlap.
+//
+// This models the kernel code at btree/update.c:146, specifically:
+//   unsigned middle_split = (front_split || back_split) &&
+//       old.k->p.snapshot != new.k->p.snapshot;
+//
+// Cross-snapshot overwrite can produce up to 3 fragments:
+//   - front: [old_start, new_start) in old snapshot
+//   - middle: [new_start, new_end) in old snapshot (preserves data)
+//   - back: [new_end, old_end) in old snapshot
+
+/// Snapshot-aware overwrite fragments. Extends the same-snapshot
+/// model with the middle_split case.
+pub open spec fn snapshot_overwrite_fragments(old: Bkey, new: Bkey) -> Seq<Bkey>
+    recommends
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+    let cross_snapshot = old.p.snapshot != new.p.snapshot;
+    let middle_split = (front_split || back_split) && cross_snapshot;
+
+    // Build fragments in order: front, middle, back
+    let front = if front_split {
+        seq![cut_back_spec(key_start(new), old)]
+    } else {
+        seq![]
+    };
+    let middle = if middle_split {
+        // Middle fragment: the overlapping region, kept in old snapshot
+        let trimmed = if front_split && back_split {
+            // Both sides extend: trim both
+            cut_front_spec(key_start(new),
+                cut_back_spec(key_end(new), old))
+        } else if front_split {
+            // Old extends left only: trim front to new_start, back is at new_end
+            cut_front_spec(key_start(new), old)
+        } else {
+            // Old extends right only: front is at new_start, trim back to new_end
+            cut_back_spec(key_end(new), old)
+        };
+        seq![trimmed]
+    } else {
+        seq![]
+    };
+    let back = if back_split {
+        seq![cut_front_spec(key_end(new), old)]
+    } else {
+        seq![]
+    };
+    front + middle + back
+}
+
+/// Same-snapshot overwrite produces the same result as the original model.
+proof fn snapshot_same_reduces_to_original(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        old.p.snapshot == new.p.snapshot,
+    ensures
+        snapshot_overwrite_fragments(old, new) =~=
+            extent_overwrite_fragments(old, new),
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+
+    // middle_split is false when snapshots match
+    // So we get: front + seq![] + back = front + back
+    if front_split && back_split {
+        assert(snapshot_overwrite_fragments(old, new) =~=
+            seq![cut_back_spec(key_start(new), old)]
+            + seq![]
+            + seq![cut_front_spec(key_end(new), old)]);
+    } else if front_split {
+        assert(snapshot_overwrite_fragments(old, new) =~=
+            seq![cut_back_spec(key_start(new), old)]
+            + seq![]
+            + seq![]);
+    } else if back_split {
+        assert(snapshot_overwrite_fragments(old, new) =~=
+            seq![]
+            + seq![]
+            + seq![cut_front_spec(key_end(new), old)]);
+    } else {
+        assert(snapshot_overwrite_fragments(old, new) =~=
+            seq![] + seq![] + seq![]);
+    }
+}
+
+/// Cross-snapshot overwrite with containment produces 3 fragments.
+proof fn snapshot_cross_containment_count(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        old.p.snapshot != new.p.snapshot,
+        key_start(old) < key_start(new),  // front_split
+        key_end(old) > key_end(new),      // back_split
+    ensures
+        snapshot_overwrite_fragments(old, new).len() == 3,
+{}
+
+/// Cross-snapshot, single-sided: 2 fragments (the side + middle).
+proof fn snapshot_cross_front_only_count(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        old.p.snapshot != new.p.snapshot,
+        key_start(old) < key_start(new),   // front_split
+        !(key_end(old) > key_end(new)),    // no back_split
+    ensures
+        snapshot_overwrite_fragments(old, new).len() == 2,
+{}
+
+proof fn snapshot_cross_back_only_count(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        old.p.snapshot != new.p.snapshot,
+        !(key_start(old) < key_start(new)), // no front_split
+        key_end(old) > key_end(new),        // back_split
+    ensures
+        snapshot_overwrite_fragments(old, new).len() == 2,
+{}
+
+/// Cross-snapshot, full cover: no fragments (but the kernel inserts
+/// a whiteout — modeled separately since it's not a data fragment).
+proof fn snapshot_cross_full_cover_count(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        old.p.snapshot != new.p.snapshot,
+        !(key_start(old) < key_start(new)), // no front_split
+        !(key_end(old) > key_end(new)),     // no back_split
+    ensures
+        // No middle_split when neither front nor back split
+        snapshot_overwrite_fragments(old, new).len() == 0,
+{}
+
+/// The middle fragment covers exactly the overlap region.
+proof fn snapshot_middle_covers_overlap(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        old.p.snapshot != new.p.snapshot,
+        key_start(old) < key_start(new),  // front_split
+        key_end(old) > key_end(new),      // back_split
+    ensures ({
+        let frags = snapshot_overwrite_fragments(old, new);
+        // Middle is at index 1 (between front and back)
+        let middle = frags[1];
+        // Middle covers exactly [new_start, new_end)
+        key_start(middle) == key_start(new)
+        && key_end(middle) == key_end(new)
+    })
+{
+    let new_start = key_start(new);
+    let new_end = key_end(new);
+
+    // The middle fragment is: cut_front(new_start, cut_back(new_end, old))
+    // cut_back(new_end, old) gives: start = old_start, end = new_end
+    cut_back_preserves(new_end, old);
+    let trimmed_back = cut_back_spec(new_end, old);
+    // cut_front(new_start, trimmed_back) gives: start = new_start, end = new_end
+    cut_front_preserves(new_start, trimmed_back);
+}
+
+/// All snapshot overwrite fragments are valid and nonempty.
+proof fn snapshot_overwrite_fragments_valid(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+    ensures ({
+        let frags = snapshot_overwrite_fragments(old, new);
+        forall|i: int| 0 <= i < frags.len() ==> (
+            (#[trigger] frags[i]).p.offset >= frags[i].size as u64
+            && frags[i].size > 0
+        )
+    })
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+    let cross_snapshot = old.p.snapshot != new.p.snapshot;
+    let middle_split = (front_split || back_split) && cross_snapshot;
+    let frags = snapshot_overwrite_fragments(old, new);
+
+    // Prove each component is valid
+    if front_split {
+        cut_back_preserves(key_start(new), old);
+    }
+    if back_split {
+        cut_front_preserves(key_end(new), old);
+    }
+    if middle_split {
+        if front_split && back_split {
+            cut_back_preserves(key_end(new), old);
+            let tb = cut_back_spec(key_end(new), old);
+            cut_front_preserves(key_start(new), tb);
+        } else if front_split {
+            cut_front_preserves(key_start(new), old);
+        } else {
+            cut_back_preserves(key_end(new), old);
+        }
+    }
+
+    // Now show each element of the concatenation is valid
+    assert forall|i: int| 0 <= i < frags.len()
+        implies (#[trigger] frags[i]).p.offset >= frags[i].size as u64
+            && frags[i].size > 0
+    by {
+        // The concat structure means we need to map i to which sub-sequence
+        let front_len: int = if front_split { 1 } else { 0 };
+        let middle_len: int = if middle_split { 1 } else { 0 };
+        if i < front_len {
+            // In front fragment
+            cut_back_preserves(key_start(new), old);
+        } else if i < front_len + middle_len {
+            // In middle fragment
+            if front_split && back_split {
+                cut_back_preserves(key_end(new), old);
+                let tb = cut_back_spec(key_end(new), old);
+                cut_front_preserves(key_start(new), tb);
+            } else if front_split {
+                cut_front_preserves(key_start(new), old);
+            } else {
+                cut_back_preserves(key_end(new), old);
+            }
+        } else {
+            // In back fragment
+            cut_front_preserves(key_end(new), old);
+        }
+    }
+}
+
+/// All fragments are within the old extent's range.
+proof fn snapshot_overwrite_within_old(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+    ensures ({
+        let frags = snapshot_overwrite_fragments(old, new);
+        forall|i: int| 0 <= i < frags.len() ==> (
+            key_start(#[trigger] frags[i]) >= key_start(old)
+            && key_end(frags[i]) <= key_end(old)
+        )
+    })
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+    let cross_snapshot = old.p.snapshot != new.p.snapshot;
+    let middle_split = (front_split || back_split) && cross_snapshot;
+    let frags = snapshot_overwrite_fragments(old, new);
+
+    if front_split {
+        cut_back_preserves(key_start(new), old);
+    }
+    if back_split {
+        cut_front_preserves(key_end(new), old);
+    }
+    if middle_split {
+        if front_split && back_split {
+            cut_back_preserves(key_end(new), old);
+            let tb = cut_back_spec(key_end(new), old);
+            cut_front_preserves(key_start(new), tb);
+        } else if front_split {
+            cut_front_preserves(key_start(new), old);
+        } else {
+            cut_back_preserves(key_end(new), old);
+        }
+    }
+
+    assert forall|i: int| 0 <= i < frags.len()
+        implies key_start(#[trigger] frags[i]) >= key_start(old)
+            && key_end(frags[i]) <= key_end(old)
+    by {
+        let front_len: int = if front_split { 1 } else { 0 };
+        let middle_len: int = if middle_split { 1 } else { 0 };
+        if i < front_len {
+            cut_back_preserves(key_start(new), old);
+        } else if i < front_len + middle_len {
+            if front_split && back_split {
+                cut_back_preserves(key_end(new), old);
+                let tb = cut_back_spec(key_end(new), old);
+                cut_front_preserves(key_start(new), tb);
+            } else if front_split {
+                cut_front_preserves(key_start(new), old);
+            } else {
+                cut_back_preserves(key_end(new), old);
+            }
+        } else {
+            cut_front_preserves(key_end(new), old);
+        }
+    }
+}
+
+// ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
 
