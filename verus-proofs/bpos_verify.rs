@@ -559,6 +559,106 @@ fn bpos_eq_xor(l: &Bpos, r: &Bpos) -> (result: bool)
 }
 
 // ============================================================
+// Key range overlap and adjacency
+// ============================================================
+//
+// Extents in bcachefs cover a half-open range [start, end) where
+// start = p.offset - size and end = p.offset. Two extents overlap
+// if their ranges intersect. These properties are fundamental to
+// the btree insert/merge/split logic.
+
+/// Two keys (same inode) overlap if their offset ranges intersect.
+pub open spec fn keys_overlap_spec(a: Bkey, b: Bkey) -> bool
+    recommends
+        a.p.inode == b.p.inode,
+        a.p.offset >= a.size as u64,
+        b.p.offset >= b.size as u64,
+{
+    let a_start = (a.p.offset - a.size as u64) as u64;
+    let b_start = (b.p.offset - b.size as u64) as u64;
+    a_start < b.p.offset && b_start < a.p.offset
+}
+
+/// Two keys are adjacent if one ends exactly where the other starts.
+pub open spec fn keys_adjacent_spec(a: Bkey, b: Bkey) -> bool
+    recommends
+        a.p.inode == b.p.inode,
+        a.p.offset >= a.size as u64,
+        b.p.offset >= b.size as u64,
+{
+    a.p.offset == (b.p.offset - b.size as u64) as u64
+}
+
+// Adjacent keys don't overlap (half-open ranges: [start, end) touch but don't intersect)
+proof fn adjacent_keys_no_overlap(a: Bkey, b: Bkey)
+    requires
+        a.p.inode == b.p.inode,
+        a.p.offset >= a.size as u64,
+        b.p.offset >= b.size as u64,
+        a.size > 0,
+        b.size > 0,
+        keys_adjacent_spec(a, b),
+    ensures !keys_overlap_spec(a, b)
+{}
+
+// A key overlaps with itself (if non-empty)
+proof fn key_overlaps_self(k: Bkey)
+    requires
+        k.p.offset >= k.size as u64,
+        k.size > 0,
+    ensures keys_overlap_spec(k, k)
+{}
+
+// If keys are sorted by bkey ordering and non-overlapping,
+// then a ends at or before b starts
+proof fn sorted_nonoverlapping_disjoint(a: Bkey, b: Bkey)
+    requires
+        a.p.inode == b.p.inode,
+        a.p.offset >= a.size as u64,
+        b.p.offset >= b.size as u64,
+        a.size > 0,
+        b.size > 0,
+        a.p.offset <= b.p.offset,  // sorted by end position
+        !keys_overlap_spec(a, b),
+    ensures a.p.offset <= (b.p.offset - b.size as u64) as u64  // a ends at or before b starts
+{}
+
+// bkey_start_pos is within the same inode and at or before end
+proof fn start_pos_in_range(k: Bkey)
+    requires k.p.offset >= k.size as u64
+    ensures
+        bkey_start_pos_spec(k).inode == k.p.inode,
+        bkey_start_pos_spec(k).offset <= k.p.offset,
+        k.size > 0 ==> bkey_start_pos_spec(k).offset < k.p.offset,
+{}
+
+// ============================================================
+// bpos_cmp full equivalence with equality
+// ============================================================
+
+// Strengthen: bpos_eq implies bpos_cmp returns 0 (the converse is already proven)
+proof fn bpos_eq_implies_cmp_zero(a: Bpos, b: Bpos)
+    requires bpos_eq_spec(a, b)
+    ensures !bpos_lt_spec(a, b) && !bpos_lt_spec(b, a)
+{}
+
+// Trichotomy: exactly one of lt, eq, gt holds
+proof fn bpos_trichotomy(a: Bpos, b: Bpos)
+    ensures
+        (bpos_lt_spec(a, b) && !bpos_eq_spec(a, b) && !bpos_lt_spec(b, a))
+        || (!bpos_lt_spec(a, b) && bpos_eq_spec(a, b) && !bpos_lt_spec(b, a))
+        || (!bpos_lt_spec(a, b) && !bpos_eq_spec(a, b) && bpos_lt_spec(b, a))
+{}
+
+// bkey trichotomy (ignoring snapshot)
+proof fn bkey_trichotomy(a: Bpos, b: Bpos)
+    ensures
+        (bkey_lt_spec(a, b) && !bkey_eq_spec(a, b) && !bkey_lt_spec(b, a))
+        || (!bkey_lt_spec(a, b) && bkey_eq_spec(a, b) && !bkey_lt_spec(b, a))
+        || (!bkey_lt_spec(a, b) && !bkey_eq_spec(a, b) && bkey_lt_spec(b, a))
+{}
+
+// ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
 
