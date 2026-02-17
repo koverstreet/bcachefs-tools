@@ -1135,6 +1135,55 @@ proof fn merge_preserves_extent_invariants(left: Seq<Bkey>, right: Seq<Bkey>)
 }
 
 // ============================================================
+// Verified extent lookup (first exec-level verified function)
+// ============================================================
+//
+// A linear scan that finds the extent containing a given offset.
+// The postcondition guarantees: if Some(idx) is returned, the
+// extent at idx contains the target; if None, no extent does.
+// Combined with point_in_at_most_one_extent, this means the
+// result (if any) is the UNIQUE matching extent.
+
+fn find_extent(extents: &Vec<Bkey>, target: u64) -> (result: Option<usize>)
+    requires
+        extents_valid(extents@),
+        extents_nonempty(extents@),
+        extents_nonoverlap(extents@),
+    ensures
+        match result {
+            Some(idx) => {
+                let idx = idx as int;
+                &&& 0 <= idx < extents@.len()
+                &&& key_start(extents@[idx]) <= target
+                &&& target < key_end(extents@[idx])
+            }
+            None => {
+                forall|i: int| #![auto] 0 <= i < extents@.len() ==>
+                    !(key_start(extents@[i]) <= target && target < key_end(extents@[i]))
+            }
+        }
+{
+    let mut i: usize = 0;
+    while i < extents.len()
+        invariant
+            i <= extents@.len(),
+            extents_valid(extents@),
+            forall|j: int| #![auto] 0 <= j < i as int ==>
+                !(key_start(extents@[j]) <= target && target < key_end(extents@[j])),
+        decreases extents.len() - i,
+    {
+        let ext = &extents[i];
+        let start = ext.p.offset - ext.size as u64;
+        let end = ext.p.offset;
+        if start <= target && target < end {
+            return Some(i);
+        }
+        i = i + 1;
+    }
+    None
+}
+
+// ============================================================
 // bversion comparison — two-field version stamp
 // ============================================================
 //
