@@ -1427,6 +1427,82 @@ proof fn overwrite_fragment_count(old: Bkey, new: Bkey)
     })
 {}
 
+/// Verified extent overwrite — compute surviving fragments.
+/// This is the exec-level counterpart of extent_overwrite_fragments.
+/// Models the core logic of bch2_trans_update_extent_overwrite.
+fn extent_overwrite_exec(old: &Bkey, new: &Bkey) -> (result: Vec<Bkey>)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(*old, *new),
+    ensures
+        // Result matches the spec
+        result@.len() == extent_overwrite_fragments(*old, *new).len(),
+        // All fragments are valid and nonempty
+        forall|i: int| 0 <= i < result@.len() ==> (
+            (#[trigger] result@[i]).p.offset >= result@[i].size as u64
+            && result@[i].size > 0
+        ),
+        // Fragments don't overlap new
+        forall|i: int| 0 <= i < result@.len() ==>
+            !extents_overlap(#[trigger] result@[i], *new),
+        // Fragments are within old's range
+        forall|i: int| 0 <= i < result@.len() ==> (
+            key_start(#[trigger] result@[i]) >= key_start(*old)
+            && key_end(result@[i]) <= key_end(*old)
+        ),
+{
+    let old_start = old.p.offset - old.size as u64;
+    let new_start = new.p.offset - new.size as u64;
+    let old_end = old.p.offset;
+    let new_end = new.p.offset;
+
+    let mut result: Vec<Bkey> = Vec::new();
+
+    if old_start < new_start && old_end > new_end {
+        // Both splits: old completely contains new
+        let front = Bkey {
+            p: Bpos { inode: old.p.inode, offset: new_start, snapshot: old.p.snapshot },
+            size: (new_start - old_start) as u32,
+        };
+        let back = Bkey {
+            p: Bpos { inode: old.p.inode, offset: old_end, snapshot: old.p.snapshot },
+            size: (old_end - new_end) as u32,
+        };
+        proof {
+            cut_back_preserves(key_start(*new), *old);
+            cut_front_preserves(key_end(*new), *old);
+        }
+        result.push(front);
+        result.push(back);
+    } else if old_start < new_start {
+        // Front split only
+        let front = Bkey {
+            p: Bpos { inode: old.p.inode, offset: new_start, snapshot: old.p.snapshot },
+            size: (new_start - old_start) as u32,
+        };
+        proof {
+            cut_back_preserves(key_start(*new), *old);
+        }
+        result.push(front);
+    } else if old_end > new_end {
+        // Back split only
+        let back = Bkey {
+            p: Bpos { inode: old.p.inode, offset: old_end, snapshot: old.p.snapshot },
+            size: (old_end - new_end) as u32,
+        };
+        proof {
+            cut_front_preserves(key_end(*new), *old);
+        }
+        result.push(back);
+    }
+    // else: new fully covers old, no fragments
+
+    result
+}
+
 /// When new overlaps old but not a predecessor extent, the
 /// overwrite result (fragments + new) doesn't overlap the
 /// predecessor either. This proves the splice is clean on the left.
