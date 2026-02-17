@@ -28,6 +28,34 @@ impl std::fmt::Display for ErrnoError {
 
 impl std::error::Error for ErrnoError {}
 
+/// Read the running kernel's .config from /boot/config-$(uname -r).
+fn read_kernel_config() -> Option<String> {
+    // Try /boot/config-$(uname -r)
+    let release = std::process::Command::new("uname").arg("-r")
+        .output().ok()?;
+    let release = std::str::from_utf8(&release.stdout).ok()?.trim();
+    let path = format!("/boot/config-{release}");
+    std::fs::read_to_string(path).ok()
+}
+
+fn kernel_config_has(config: &str, key: &str) -> bool {
+    let needle = format!("{key}=y");
+    config.lines().any(|l| l == needle)
+}
+
+/// Print warnings about kernel configuration issues that affect bcachefs.
+/// Called before every command so users can't miss them.
+fn check_kernel_warnings() {
+    let Some(config) = read_kernel_config() else { return };
+
+    if !kernel_config_has(&config, "CONFIG_RUST") {
+        eprintln!("WARNING: kernel does not have CONFIG_RUST enabled; \
+                   this will be required for bcachefs in the near future");
+        eprintln!("         please alert your distribution or kernel developers \
+                   if your kernel does not support CONFIG_RUST");
+    }
+}
+
 /// Print main bcachefs usage, with commands grouped by category.
 /// Descriptions are pulled from the clap command tree (build_cli).
 fn bcachefs_usage() {
@@ -159,6 +187,8 @@ fn main() -> ExitCode {
         unsafe { c::linux_shrinkers_init() };
     }
 
+    check_kernel_warnings();
+
     match cmd {
         "--help" | "help" => {
             bcachefs_usage();
@@ -167,6 +197,13 @@ fn main() -> ExitCode {
         "version" => {
             let vh = include_str!("../version.h");
             println!("{}", vh.split('"').nth(1).unwrap_or("unknown"));
+            let config = read_kernel_config();
+            let rust_status = match config.as_deref().map(|c| kernel_config_has(c, "CONFIG_RUST")) {
+                Some(true)  => "CONFIG_RUST=y",
+                Some(false) => "CONFIG_RUST is not enabled",
+                None        => "unable to read kernel config",
+            };
+            println!("kernel: {rust_status}");
             ExitCode::SUCCESS
         }
         "completions" => {
