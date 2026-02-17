@@ -44,6 +44,7 @@ DEFINE_DARRAY_NAMED(interior_delete_list, struct snapshot_interior_delete);
 struct snapshot_delete {
 	struct mutex			lock;
 	struct work_struct		work;
+	struct task_struct __rcu		*thread;
 
 	struct mutex			progress_lock;
 	snapshot_id_list		deleting_from_trees;
