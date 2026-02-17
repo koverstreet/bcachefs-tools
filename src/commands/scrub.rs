@@ -1,6 +1,7 @@
 use std::io::{self, Read, Write};
 use std::os::unix::io::FromRawFd;
 use std::process;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -14,6 +15,12 @@ use crate::util::{fmt_bytes_human, fmt_sectors_human};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::bch_ioc_w;
 use crate::wrappers::sysfs::{fs_get_devices, sysfs_path_from_fd};
+
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn sigint_handler(_: libc::c_int) {
+    INTERRUPTED.store(true, Ordering::Relaxed);
+}
 
 const BCH_IOCTL_DATA_NR: u32 = 10;
 
@@ -38,8 +45,10 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
 }
 
 fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
-    let mut cmd = bch_ioctl_data::default();
-    cmd.op = bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub as u16;
+    let mut cmd = bch_ioctl_data {
+        op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub as u16,
+        ..Default::default()
+    };
     cmd.__bindgen_anon_1.scrub.dev = dev_idx;
     cmd.__bindgen_anon_1.scrub.data_types = data_types;
 
@@ -101,6 +110,8 @@ pub struct Cli {
 
 pub fn scrub(argv: Vec<String>) -> Result<()> {
     let cli = Cli::parse_from(argv);
+
+    unsafe { libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t); }
 
     let data_types: u32 = if cli.metadata {
         1 << (bch_data_type::BCH_DATA_btree as u32)
@@ -222,6 +233,13 @@ pub fn scrub(argv: Vec<String>) -> Result<()> {
 
         if all_done {
             writeln!(io::stdout())?;
+            break;
+        }
+
+        if INTERRUPTED.load(Ordering::Relaxed) {
+            writeln!(io::stdout())?;
+            eprintln!("Interrupted");
+            exit_code |= 1;
             break;
         }
 
