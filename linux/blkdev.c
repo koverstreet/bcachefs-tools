@@ -33,14 +33,14 @@ struct fops {
 static void sync_check(struct bio *bio, int ret)
 {
 	if (ret != bio->bi_iter.bi_size) {
-		fprintf(stderr, "IO error: %s\n", strerror(-ret));
+		fprintf(stderr, "IO error: %s\n", ret < 0 ? strerror(errno) : "short IO");
 		bio->bi_status = BLK_STS_IOERR;
 	}
 
 	if (bio->bi_opf & REQ_FUA) {
 		ret = fdatasync(bio->bi_bdev->bd_fd);
 		if (ret) {
-			fprintf(stderr, "fsync error: %s\n", strerror(-ret));
+			fprintf(stderr, "fsync error: %s\n", strerror(errno));
 			bio->bi_status = BLK_STS_IOERR;
 		}
 	}
