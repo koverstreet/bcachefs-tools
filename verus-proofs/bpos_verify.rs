@@ -953,6 +953,188 @@ proof fn front_trim_clears_overlap(existing: Bkey, new_ext: Bkey)
 {}
 
 // ============================================================
+// Btree node split — preserving invariants
+// ============================================================
+//
+// When a btree node exceeds its size limit, it's split at a pivot.
+// Keys before the pivot go to the left child, keys at/after to the
+// right. These proofs verify that both halves inherit sortedness
+// and non-overlap from the original sequence.
+
+/// Splitting a sorted bpos sequence preserves sortedness in both halves.
+proof fn split_preserves_bpos_sorted(s: Seq<Bpos>, split_idx: int)
+    requires
+        bpos_sorted(s),
+        0 < split_idx < s.len(),
+    ensures
+        bpos_sorted(s.subrange(0, split_idx)),
+        bpos_sorted(s.subrange(split_idx, s.len() as int)),
+{
+    let left = s.subrange(0, split_idx);
+    assert forall|j: int| 0 <= j < left.len() - 1 implies
+        bpos_lt_spec(#[trigger] left[j], left[j + 1])
+    by {
+        assert(left[j] == s[j]);
+        assert(left[j + 1] == s[j + 1]);
+    }
+    let right = s.subrange(split_idx, s.len() as int);
+    assert forall|j: int| 0 <= j < right.len() - 1 implies
+        bpos_lt_spec(#[trigger] right[j], right[j + 1])
+    by {
+        assert(right[j] == s[split_idx + j]);
+        assert(right[j + 1] == s[split_idx + j + 1]);
+    }
+}
+
+/// Splitting preserves the non-overlap invariant for extent sequences.
+proof fn split_preserves_extent_invariants(s: Seq<Bkey>, split_idx: int)
+    requires
+        extents_valid(s),
+        extents_nonempty(s),
+        extents_nonoverlap(s),
+        0 < split_idx < s.len(),
+    ensures
+        extents_valid(s.subrange(0, split_idx)),
+        extents_nonempty(s.subrange(0, split_idx)),
+        extents_nonoverlap(s.subrange(0, split_idx)),
+        extents_valid(s.subrange(split_idx, s.len() as int)),
+        extents_nonempty(s.subrange(split_idx, s.len() as int)),
+        extents_nonoverlap(s.subrange(split_idx, s.len() as int)),
+{
+    let left = s.subrange(0, split_idx);
+    // Left half: valid, nonempty
+    assert forall|i: int| 0 <= i < left.len() implies
+        (#[trigger] left[i]).p.offset >= left[i].size as u64
+    by { assert(left[i] == s[i]); }
+    assert forall|i: int| 0 <= i < left.len() implies
+        (#[trigger] left[i]).size > 0
+    by { assert(left[i] == s[i]); }
+    // Left half: nonoverlap
+    assert forall|i: int| 0 <= i < left.len() - 1 implies
+        key_end(#[trigger] left[i]) <= key_start(left[i + 1])
+    by {
+        assert(left[i] == s[i]);
+        assert(left[i + 1] == s[i + 1]);
+    }
+
+    let right = s.subrange(split_idx, s.len() as int);
+    // Right half: valid, nonempty
+    assert forall|i: int| 0 <= i < right.len() implies
+        (#[trigger] right[i]).p.offset >= right[i].size as u64
+    by { assert(right[i] == s[split_idx + i]); }
+    assert forall|i: int| 0 <= i < right.len() implies
+        (#[trigger] right[i]).size > 0
+    by { assert(right[i] == s[split_idx + i]); }
+    // Right half: nonoverlap
+    assert forall|i: int| 0 <= i < right.len() - 1 implies
+        key_end(#[trigger] right[i]) <= key_start(right[i + 1])
+    by {
+        assert(right[i] == s[split_idx + i]);
+        assert(right[i + 1] == s[split_idx + i + 1]);
+    }
+}
+
+/// After splitting, the left half's maximum is less than the right half's minimum.
+/// This is the pivot property that separates the two child nodes.
+proof fn split_pivot_property(s: Seq<Bpos>, split_idx: int)
+    requires
+        bpos_sorted(s),
+        0 < split_idx < s.len(),
+    ensures
+        bpos_lt_spec(
+            s.subrange(0, split_idx)[split_idx - 1],
+            s.subrange(split_idx, s.len() as int)[0],
+        )
+{
+    assert(s.subrange(0, split_idx)[split_idx - 1] == s[split_idx - 1]);
+    assert(s.subrange(split_idx, s.len() as int)[0] == s[split_idx]);
+}
+
+/// Merging two sorted sequences where max(left) < min(right)
+/// produces a sorted sequence. This is the btree node merge operation.
+proof fn merge_preserves_bpos_sorted(left: Seq<Bpos>, right: Seq<Bpos>)
+    requires
+        bpos_sorted(left),
+        bpos_sorted(right),
+        left.len() > 0,
+        right.len() > 0,
+        bpos_lt_spec(left[left.len() - 1], right[0]),
+    ensures
+        bpos_sorted(left + right)
+{
+    let merged = left + right;
+    assert forall|i: int| 0 <= i < merged.len() - 1 implies
+        bpos_lt_spec(#[trigger] merged[i], merged[i + 1])
+    by {
+        if i < left.len() - 1 {
+            // Both in left half
+            assert(merged[i] == left[i]);
+            assert(merged[i + 1] == left[i + 1]);
+        } else if i == left.len() - 1 {
+            // Crossing point: last of left, first of right
+            assert(merged[i] == left[left.len() - 1]);
+            assert(merged[i + 1] == right[0]);
+        } else {
+            // Both in right half
+            let j = i - left.len() as int;
+            assert(merged[i] == right[j]);
+            assert(merged[i + 1] == right[j + 1]);
+        }
+    }
+}
+
+/// Merging two non-overlapping extent sequences where the left's last
+/// extent ends before the right's first extent starts.
+proof fn merge_preserves_extent_invariants(left: Seq<Bkey>, right: Seq<Bkey>)
+    requires
+        extents_valid(left),
+        extents_nonempty(left),
+        extents_nonoverlap(left),
+        extents_valid(right),
+        extents_nonempty(right),
+        extents_nonoverlap(right),
+        left.len() > 0,
+        right.len() > 0,
+        key_end(left[left.len() - 1]) <= key_start(right[0]),
+    ensures
+        extents_valid(left + right),
+        extents_nonempty(left + right),
+        extents_nonoverlap(left + right),
+{
+    let merged = left + right;
+    // Valid
+    assert forall|i: int| 0 <= i < merged.len() implies
+        (#[trigger] merged[i]).p.offset >= merged[i].size as u64
+    by {
+        if i < left.len() { assert(merged[i] == left[i]); }
+        else { assert(merged[i] == right[i - left.len() as int]); }
+    }
+    // Nonempty
+    assert forall|i: int| 0 <= i < merged.len() implies
+        (#[trigger] merged[i]).size > 0
+    by {
+        if i < left.len() { assert(merged[i] == left[i]); }
+        else { assert(merged[i] == right[i - left.len() as int]); }
+    }
+    // Nonoverlap
+    assert forall|i: int| 0 <= i < merged.len() - 1 implies
+        key_end(#[trigger] merged[i]) <= key_start(merged[i + 1])
+    by {
+        if i < left.len() - 1 {
+            assert(merged[i] == left[i]);
+            assert(merged[i + 1] == left[i + 1]);
+        } else if i == left.len() - 1 {
+            assert(merged[i] == left[left.len() - 1]);
+            assert(merged[i + 1] == right[0]);
+        } else {
+            let j = i - left.len() as int;
+            assert(merged[i] == right[j]);
+            assert(merged[i + 1] == right[j + 1]);
+        }
+    }
+}
+
+// ============================================================
 // bversion comparison — two-field version stamp
 // ============================================================
 //
