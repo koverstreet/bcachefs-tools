@@ -1582,6 +1582,134 @@ fn extent_insert_nonoverlap(extents: &Vec<Bkey>, new: &Bkey) -> (result: Vec<Bke
     result
 }
 
+/// Insert a new extent into a non-overlapping sequence, trimming any
+/// overlapping extents. This models the full bch2_trans_update_extent
+/// loop (btree/update.c:226): iterate through all old extents that
+/// overlap new, compute surviving fragments, and splice in the result.
+///
+/// The postcondition guarantees the result is valid, nonempty, and
+/// non-overlapping — the fundamental invariant of extent btrees.
+fn extent_insert(extents: &Vec<Bkey>, new: &Bkey) -> (result: Vec<Bkey>)
+    requires
+        extents_valid(extents@),
+        extents_nonempty(extents@),
+        extents_nonoverlap(extents@),
+        new.p.offset >= new.size as u64,
+        new.size > 0,
+    ensures
+        extents_valid(result@),
+        extents_nonempty(result@),
+        extents_nonoverlap(result@),
+{
+    let mut result: Vec<Bkey> = Vec::new();
+    let new_start: u64 = new.p.offset - new.size as u64;
+    let new_end: u64 = new.p.offset;
+    let mut inserted: bool = false;
+    let mut i: usize = 0;
+
+    while i < extents.len()
+        invariant
+            i <= extents@.len(),
+            new_start == new.p.offset - new.size as u64,
+            new_end == new.p.offset,
+            extents_valid(extents@),
+            extents_nonempty(extents@),
+            extents_nonoverlap(extents@),
+            new.p.offset >= new.size as u64,
+            new.size > 0,
+            // Result well-formed
+            extents_valid(result@),
+            extents_nonempty(result@),
+            extents_nonoverlap(result@),
+            // Phase monotonicity: once inserted, remaining extents
+            // start past new_start (no more front fragments possible)
+            // and end past new_start (no more phase 1)
+            inserted && i < extents@.len() ==>
+                key_start(extents@[i as int]) >= new_start,
+            // Before insertion: boundary with new and next input
+            !inserted && result@.len() > 0 ==>
+                key_end(result@[result@.len() - 1]) <= new_start,
+            !inserted && result@.len() > 0 && i < extents@.len() ==>
+                key_end(result@[result@.len() - 1]) <= key_start(extents@[i as int]),
+            // After insertion: result is nonempty
+            inserted ==> result@.len() > 0,
+            // After insertion with more extents to process: last end is
+            // at most new_end (overlap zone) or before next input (past overlaps)
+            inserted && i < extents@.len() ==> (
+                key_end(result@[result@.len() - 1]) <= new_end
+                || key_end(result@[result@.len() - 1]) <= key_start(extents@[i as int])
+            ),
+        decreases extents.len() - i,
+    {
+        let ext = &extents[i];
+        let ext_start: u64 = ext.p.offset - ext.size as u64;
+        let ext_end: u64 = ext.p.offset;
+
+        if ext_end <= new_start {
+            // Phase 1: before overlap — copy unchanged
+            // Phase monotonicity guarantees !inserted here:
+            // if inserted, key_start(ext) >= new_start, but
+            // key_start(ext) < key_end(ext) <= new_start, contradiction.
+            result.push(*ext);
+        } else if ext_start >= new_end {
+            // Phase 3: after overlap — insert new if needed, copy
+            if !inserted {
+                result.push(*new);
+                inserted = true;
+            }
+            proof {
+                // key_end(last) <= new_end or <= key_start(ext)
+                // ext_start >= new_end, so either way: <= ext_start
+                assert(ext_start >= new_end);
+            }
+            result.push(*ext);
+        } else {
+            // Phase 2: overlapping extent (ext_end > new_start && ext_start < new_end)
+            if ext_start < new_start {
+                // Front fragment — only happens for the first overlap
+                // Phase monotonicity: if inserted, ext_start >= new_start,
+                // contradicting ext_start < new_start. So !inserted here.
+                let front = Bkey {
+                    p: Bpos { inode: ext.p.inode, offset: new_start, snapshot: ext.p.snapshot },
+                    size: (new_start - ext_start) as u32,
+                };
+                proof { cut_back_preserves(new_start, *ext); }
+                result.push(front);
+            }
+            if !inserted {
+                // After front (if it exists): key_end(front) = new_start = key_start(new)
+                // After pre-overlap ext: key_end(last) <= new_start = key_start(new)
+                result.push(*new);
+                inserted = true;
+            }
+            if ext_end > new_end {
+                // Back fragment: [new_end, ext_end)
+                // result.last() is new (key_end = new_end = key_start(back))
+                let back = Bkey {
+                    p: Bpos { inode: ext.p.inode, offset: ext_end, snapshot: ext.p.snapshot },
+                    size: (ext_end - new_end) as u32,
+                };
+                proof { cut_front_preserves(new_end, *ext); }
+                result.push(back);
+            }
+        }
+        // Help Z3 with phase monotonicity for i+1
+        proof {
+            if inserted && i + 1 < extents@.len() {
+                assert(key_end(extents@[i as int])
+                    <= key_start(extents@[i as int + 1]));
+            }
+        }
+        i = i + 1;
+    }
+
+    if !inserted {
+        result.push(*new);
+    }
+
+    result
+}
+
 /// When new overlaps old but not a predecessor extent, the
 /// overwrite result (fragments + new) doesn't overlap the
 /// predecessor either. This proves the splice is clean on the left.
