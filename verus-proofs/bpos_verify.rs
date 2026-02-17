@@ -15,6 +15,7 @@ use vstd::prelude::*;
 verus! {
 
 // Mirror of the C/Rust bpos struct
+#[derive(Copy, Clone)]
 pub struct Bpos {
     pub inode: u64,
     pub offset: u64,
@@ -476,6 +477,7 @@ proof fn nosnap_successor_advances_bkey(p: Bpos)
 // bkey_start_pos
 // ============================================================
 
+#[derive(Copy, Clone)]
 pub struct Bkey {
     pub p: Bpos,
     pub size: u32,
@@ -1499,6 +1501,83 @@ fn extent_overwrite_exec(old: &Bkey, new: &Bkey) -> (result: Vec<Bkey>)
         result.push(back);
     }
     // else: new fully covers old, no fragments
+
+    result
+}
+
+/// Insert a new extent into a non-overlapping sequence where it
+/// doesn't overlap any existing extent (gap fill). The result is
+/// the original sequence with new inserted at the correct position,
+/// maintaining sortedness and non-overlap.
+///
+/// This is the base case of extent insert — when the offset range
+/// is empty, we just need to find the right position.
+fn extent_insert_nonoverlap(extents: &Vec<Bkey>, new: &Bkey) -> (result: Vec<Bkey>)
+    requires
+        extents_valid(extents@),
+        extents_nonempty(extents@),
+        extents_nonoverlap(extents@),
+        new.p.offset >= new.size as u64,
+        new.size > 0,
+        // new doesn't overlap any existing extent
+        forall|j: int| #![auto] 0 <= j < extents@.len() ==>
+            !extents_overlap(extents@[j], *new),
+    ensures
+        extents_valid(result@),
+        extents_nonempty(result@),
+        extents_nonoverlap(result@),
+        result@.len() == extents@.len() + 1,
+{
+    let mut result: Vec<Bkey> = Vec::new();
+    let new_start: u64 = new.p.offset - new.size as u64;
+    let mut inserted: bool = false;
+    let mut i: usize = 0;
+
+    while i < extents.len()
+        invariant
+            i <= extents@.len(),
+            new_start == new.p.offset - new.size as u64,
+            extents_valid(extents@),
+            extents_nonempty(extents@),
+            extents_nonoverlap(extents@),
+            new.p.offset >= new.size as u64,
+            new.size > 0,
+            forall|j: int| #![auto] 0 <= j < extents@.len() ==>
+                !extents_overlap(extents@[j], *new),
+            // Result shape
+            extents_valid(result@),
+            extents_nonempty(result@),
+            extents_nonoverlap(result@),
+            !inserted ==> result@.len() == i as int,
+            inserted ==> result@.len() == i as int + 1,
+            // Ordering: last element of result is before next input and before new
+            result@.len() > 0 && i < extents@.len() ==>
+                key_end(result@[result@.len() - 1]) <= key_start(extents@[i as int]),
+            result@.len() > 0 && !inserted ==>
+                key_end(result@[result@.len() - 1]) <= key_start(*new),
+        decreases extents.len() - i,
+    {
+        let ext = &extents[i];
+        let ext_start: u64 = ext.p.offset - ext.size as u64;
+
+        if !inserted && new_start < ext_start {
+            // Insert new before this extent
+            proof {
+                // new doesn't overlap ext, and new_start < ext_start,
+                // so key_end(new) <= key_start(ext)
+                assert(!extents_overlap(extents@[i as int], *new));
+            }
+            result.push(*new);
+            inserted = true;
+        }
+
+        result.push(*ext);
+        i = i + 1;
+    }
+
+    if !inserted {
+        result.push(*new);
+    }
 
     result
 }
