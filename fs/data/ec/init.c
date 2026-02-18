@@ -180,7 +180,7 @@ static bool should_cancel_stripe(struct bch_fs *c, struct ec_stripe_new *s, stru
 		/* Freshly allocated block - check the open_bucket's device: */
 		if (s->blocks[i]) {
 			struct open_bucket *ob = c->allocator.open_buckets + s->blocks[i];
-			if (ob->dev == ca->dev_idx)
+			if (dev_and_region_matches(ob, ca))
 				return true;
 		}
 
@@ -191,7 +191,9 @@ static bool should_cancel_stripe(struct bch_fs *c, struct ec_stripe_new *s, stru
 		 * ptrs explicitly for the reuse path.
 		 */
 		if (test_bit(i, s->blocks_allocated) &&
-		    v->ptrs[i].dev == ca->dev_idx)
+		    v->ptrs[i].dev == ca->dev_idx &&
+		    (!ca->mi.target_nbuckets ||
+		     PTR_BUCKET_NR(ca, &v->ptrs[i]) >= ca->mi.target_nbuckets))
 			return true;
 	}
 

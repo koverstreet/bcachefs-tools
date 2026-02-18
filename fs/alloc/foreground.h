@@ -314,6 +314,16 @@ enum bch_write_flags;
 int bch2_bucket_alloc_set_trans(struct btree_trans *, struct alloc_request *,
 				struct dev_stripe_state *);
 
+/*
+ * Returns whether the open bucket's device matches ca, and if we're currently
+ * shrinking, whether it falls into the to-be-shrunk region.
+ */
+static inline bool dev_and_region_matches(struct open_bucket *ob, struct bch_dev *ca)
+{
+	return ob->dev == ca->dev_idx &&
+		(!ca->mi.target_nbuckets || ob->bucket >= ca->mi.target_nbuckets);
+}
+
 int bch2_alloc_sectors_req(struct btree_trans *, struct alloc_request *,
 			   struct write_point_specifier,
 			   struct write_point **);
