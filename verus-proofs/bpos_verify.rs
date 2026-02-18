@@ -2248,6 +2248,76 @@ proof fn snapshot_overwrite_within_old(old: Bkey, new: Bkey)
     }
 }
 
+/// Every point in the old extent's range is covered by either
+/// the new extent or one of the surviving fragments. This is
+/// the conservation property for snapshot-aware overwrite:
+/// no data is lost when splitting an extent across snapshots.
+proof fn snapshot_overwrite_covers_old_range(old: Bkey, new: Bkey, point: u64)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+        key_start(old) <= point,
+        point < key_end(old),
+    ensures ({
+        let frags = snapshot_overwrite_fragments(old, new);
+        // Point is in new, or in some fragment
+        (key_start(new) <= point && point < key_end(new))
+        || (frags.len() > 0 && key_start(frags[0]) <= point && point < key_end(frags[0]))
+        || (frags.len() > 1 && key_start(frags[1]) <= point && point < key_end(frags[1]))
+        || (frags.len() > 2 && key_start(frags[2]) <= point && point < key_end(frags[2]))
+    })
+{
+    let front_split = key_start(old) < key_start(new);
+    let back_split = key_end(old) > key_end(new);
+    let cross_snapshot = old.p.snapshot != new.p.snapshot;
+    let middle_split = (front_split || back_split) && cross_snapshot;
+
+    if front_split {
+        cut_back_preserves(key_start(new), old);
+    }
+    if back_split {
+        cut_front_preserves(key_end(new), old);
+    }
+    if middle_split {
+        if front_split && back_split {
+            cut_back_preserves(key_end(new), old);
+            let tb = cut_back_spec(key_end(new), old);
+            cut_front_preserves(key_start(new), tb);
+        } else if front_split {
+            cut_front_preserves(key_start(new), old);
+        } else {
+            cut_back_preserves(key_end(new), old);
+        }
+    }
+}
+
+/// The fragment count for snapshot overwrite is bounded:
+/// 0 when new fully covers old (any snapshot),
+/// up to 3 when cross-snapshot with both front and back splits.
+proof fn snapshot_overwrite_fragment_count(old: Bkey, new: Bkey)
+    requires
+        old.p.offset >= old.size as u64,
+        new.p.offset >= new.size as u64,
+        old.size > 0,
+        new.size > 0,
+        extents_overlap(old, new),
+    ensures ({
+        let frags = snapshot_overwrite_fragments(old, new);
+        let front_split = key_start(old) < key_start(new);
+        let back_split = key_end(old) > key_end(new);
+        let cross_snapshot = old.p.snapshot != new.p.snapshot;
+        let middle_split = (front_split || back_split) && cross_snapshot;
+
+        let front_count: int = if front_split { 1 } else { 0 };
+        let middle_count: int = if middle_split { 1 } else { 0 };
+        let back_count: int = if back_split { 1 } else { 0 };
+        frags.len() == front_count + middle_count + back_count
+    })
+{}
+
 // ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
