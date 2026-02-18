@@ -315,13 +315,12 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *, struct alloc_request *,
 				struct dev_stripe_state *);
 
 /*
- * Returns whether the open bucket's device matches ca, and if we're currently
- * shrinking, whether it falls into the to-be-shrunk region.
+ * Returns whether the open bucket's device matches ca and whether the open
+ * bucket falls behind the cutoff.
  */
-static inline bool dev_and_region_matches(struct open_bucket *ob, struct bch_dev *ca)
+static inline bool dev_and_region_matches(struct open_bucket *ob, struct bch_dev *ca, u64 tail_cutoff)
 {
-	return ob->dev == ca->dev_idx &&
-		(!ca->mi.target_nbuckets || ob->bucket >= ca->mi.target_nbuckets);
+	return ob->dev == ca->dev_idx && ob->bucket >= tail_cutoff;
 }
 
 int bch2_alloc_sectors_req(struct btree_trans *, struct alloc_request *,
@@ -443,7 +442,7 @@ void bch2_alloc_sectors_append_ptrs(struct bch_fs *, struct write_point *,
 				    struct bkey_i *, unsigned, bool);
 void bch2_alloc_sectors_done(struct bch_fs *, struct write_point *);
 
-void bch2_open_buckets_stop(struct bch_fs *c, struct bch_dev *, bool);
+void bch2_open_buckets_stop(struct bch_fs *c, struct bch_dev *, bool, u64 tail_cutoff);
 
 static inline struct write_point_specifier writepoint_hashed(unsigned long v)
 {
