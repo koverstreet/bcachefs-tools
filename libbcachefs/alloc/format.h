@@ -56,6 +56,25 @@ struct bch_alloc_v3 {
 LE32_BITMASK(BCH_ALLOC_V3_NEED_DISCARD,struct bch_alloc_v3, flags,  0,  1)
 LE32_BITMASK(BCH_ALLOC_V3_NEED_INC_GEN,struct bch_alloc_v3, flags,  1,  2)
 
+/*
+ * Per-bucket allocation state, stored in the alloc btree (cached).
+ *
+ * data_type is computed by alloc_data_type() from sector counts, flags,
+ * and stripe_refcount:
+ *   stripe_refcount > 0	→ BCH_DATA_stripe/parity
+ *   dirty_sectors > 0		→ data type from bucket contents
+ *   cached_sectors > 0		→ BCH_DATA_cached
+ *   NEED_DISCARD flag		→ BCH_DATA_need_discard
+ *   gc_gen >= BUCKET_GC_GEN_MAX → BCH_DATA_need_gc_gens
+ *   otherwise			→ BCH_DATA_free
+ *
+ * journal_seq_nonempty/journal_seq_empty track bucket state transitions for
+ * the noflush optimization and discard path:
+ *   journal_seq_nonempty: set on empty→nonempty transition
+ *   journal_seq_empty:    set on nonempty→empty transition;
+ *     bucket can't be reused until this seq is flushed to disk.
+ *     0 means no journal delay needed (noflush/fast discard path).
+ */
 struct bch_alloc_v4 {
 	struct bch_val		v;
 	__u64			journal_seq_nonempty;

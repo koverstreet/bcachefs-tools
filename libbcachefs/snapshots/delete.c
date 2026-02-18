@@ -108,6 +108,17 @@ void bch2_snapshot_delete_status_to_text(struct printbuf *out, struct bch_fs *c)
 		prt_newline(out);
 		bch2_snapshot_delete_nodes_to_text(out, d, false);
 	}
+
+	struct task_struct *t;
+	scoped_guard(rcu) {
+		t = rcu_dereference(d->thread);
+		if (t)
+			get_task_struct(t);
+	}
+	if (t) {
+		bch2_prt_task_backtrace(out, t, 0, GFP_KERNEL);
+		put_task_struct(t);
+	}
 }
 
 /*
@@ -741,7 +752,10 @@ void bch2_delete_dead_snapshots_work(struct work_struct *work)
 
 	set_worker_desc("bcachefs-delete-dead-snapshots/%s", c->name);
 
+	rcu_assign_pointer(c->snapshots.delete.thread, current);
 	bch2_delete_dead_snapshots(c);
+	rcu_assign_pointer(c->snapshots.delete.thread, NULL);
+
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_delete_dead_snapshots);
 }
 

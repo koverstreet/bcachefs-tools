@@ -193,15 +193,9 @@ static inline bool may_alloc_bucket(struct bch_fs *c,
 		return false;
 	}
 
-	u64 journal_seq_ready =
-		bch2_bucket_journal_seq_ready(&c->buckets_waiting_for_journal,
-					      bucket.inode, bucket.offset);
-	if (journal_seq_ready > c->journal.flushed_seq_ondisk) {
-		if (journal_seq_ready > c->journal.flushing_seq)
-			req->counters.need_journal_commit++;
-		req->counters.skipped_need_journal_commit++;
-		return false;
-	}
+	BUG_ON(bch2_bucket_journal_seq_ready(&c->buckets_waiting_for_journal,
+					      bucket.inode, bucket.offset) >
+	       c->journal.flushed_seq_ondisk);
 
 	if (bch2_bucket_nocow_is_locked(&c->nocow_locks, bucket)) {
 		req->counters.skipped_nocow++;
@@ -468,7 +462,6 @@ static noinline void bucket_alloc_to_text(struct printbuf *out,
 		   c->copygc.wait - atomic64_read(&c->io_clock[WRITE].now));
 	prt_printf(out, "seen\t%llu\n",	req->counters.buckets_seen);
 	prt_printf(out, "open\t%llu\n",	req->counters.skipped_open);
-	prt_printf(out, "need journal commit\t%llu\n", req->counters.skipped_need_journal_commit);
 	prt_printf(out, "nocow\t%llu\n",	req->counters.skipped_nocow);
 	prt_printf(out, "nouse\t%llu\n",	req->counters.skipped_nouse);
 	prt_printf(out, "mi_btree_bitmap\t%llu\n", req->counters.skipped_mi_btree_bitmap);
@@ -576,6 +569,15 @@ err:
 		   !req->will_retry_all_devices)
 		event_inc_trace(c, bucket_alloc_fail, buf,
 			bucket_alloc_to_text(&buf, c, req, ob));
+
+	if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+		unsigned idx = req->trace.nr % ARRAY_SIZE(req->trace.entries);
+		struct alloc_trace_entry *e = &req->trace.entries[idx];
+
+		e->dev		= ca->dev_idx;
+		e->err		= ret;
+		req->trace.nr++;
+	}
 
 	return ob;
 }
@@ -1586,6 +1588,27 @@ static inline bool dev_may_alloc(struct bch_fs *c, struct bch_dev *ca, struct al
 		(ca->mi.data_allowed & BIT(req->data_type));
 }
 
+static void alloc_trace_to_text(struct printbuf *out, struct bch_fs *c,
+			       struct alloc_trace *trace)
+{
+	if (!trace->nr)
+		return;
+
+	unsigned start = trace->nr > ARRAY_SIZE(trace->entries)
+		? trace->nr - ARRAY_SIZE(trace->entries) : 0;
+
+	prt_printf(out, "Allocation attempts (%u total):\n", trace->nr);
+	scoped_guard(printbuf_indent, out)
+		for (unsigned i = start; i < trace->nr; i++) {
+			struct alloc_trace_entry *e =
+				&trace->entries[i % ARRAY_SIZE(trace->entries)];
+
+			prt_printf(out, "dev %u -> %s\n",
+				   e->dev,
+				   e->err ? bch2_err_str(e->err) : "ok");
+		}
+}
+
 static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_request *req, int err)
 {
 	CLASS(printbuf, buf)();
@@ -1615,6 +1638,9 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 			bch2_devs_list_to_text(&buf, c, req->devs_have);
 			prt_newline(&buf);
 		}
+
+		alloc_trace_to_text(&buf, c, &req->trace);
+		prt_newline(&buf);
 	}
 
 	if (err == -BCH_ERR_bucket_alloc_blocked) {

@@ -23,6 +23,8 @@ struct open_bucket;
 struct btree_update;
 struct btree_trans;
 
+/* Btree nodes: */
+
 #define MAX_BSETS		3U
 
 struct btree_nr_keys {
@@ -138,6 +140,13 @@ struct btree {
 	struct list_head	list;
 };
 
+enum btree_node_sibling {
+	btree_prev_sib,
+	btree_next_sib,
+};
+
+/* Btree cache: */
+
 #define BCH_BTREE_CACHE_NOT_FREED_REASONS()	\
 	x(cache_reserve)			\
 	x(lock_intent)				\
@@ -225,6 +234,8 @@ struct bch_fs_btree_cache {
 	u64			pinned_nodes_mask[2];
 };
 
+/* Iterator, update, and trigger flags: */
+
 struct btree_node_iter {
 	struct btree_node_iter_set {
 		u16	k, end;
@@ -311,6 +322,8 @@ enum btree_iter_update_trigger_flags {
 #undef x
 };
 
+/* Btree paths and iterators: */
+
 enum btree_path_uptodate {
 	BTREE_ITER_UPTODATE		= 0,
 	BTREE_ITER_NEED_RELOCK		= 1,
@@ -372,11 +385,10 @@ static inline unsigned long btree_path_ip_allocated(struct btree_path *path)
 }
 
 /*
- * @pos			- iterator's current position
- * @level		- current btree depth
- * @locks_want		- btree level below which we start taking intent locks
- * @nodes_locked	- bitmask indicating which nodes in @nodes are locked
- * @nodes_intent_locked	- bitmask indicating which locks are intent locks
+ * btree_iter: the high level btree iterator API, iterates over keys.
+ * btree_path: the low level path to a btree node, holds locks.
+ *
+ * Multiple iterators can share the same btree_path via refcounting.
  */
 struct btree_iter {
 	struct btree_trans	*trans;
@@ -407,6 +419,13 @@ struct btree_iter {
 #endif
 };
 
+struct get_locks_fail {
+	unsigned	l;
+	struct btree	*b;
+};
+
+/* Key cache: */
+
 #define BKEY_CACHED_ACCESSED		0
 #define BKEY_CACHED_DIRTY		1
 
@@ -433,6 +452,8 @@ static inline struct bpos btree_node_pos(struct btree_bkey_cached_common *b)
 		? container_of(b, struct btree, c)->key.k.p
 		: container_of(b, struct bkey_cached, c)->key.pos;
 }
+
+/* Transaction types: */
 
 struct btree_insert_entry {
 	unsigned		flags;
@@ -505,6 +526,19 @@ struct btree_trans_subbuf {
 	u16			size;
 };
 
+/*
+ * Transaction context for btree operations.
+ *
+ * Holds iterators/paths, pending updates, locks, and a memory arena for a
+ * single logical btree operation.  On lock contention or memory pressure,
+ * the transaction restarts: releases all locks, resets state, and retries
+ * (via lockrestart_do() or similar retry loops).
+ *
+ *  - mem/mem_top: bump allocator, invalidated on every restart
+ *  - Paths kept sorted in lock order to prevent deadlocks
+ *  - SRCU read lock protects btree node memory from being freed;
+ *    released periodically to avoid stalling reclaim
+ */
 struct btree_trans {
 	struct bch_fs		*c;
 
@@ -513,6 +547,7 @@ struct btree_trans {
 	btree_path_idx_t	*sorted;
 	struct btree_insert_entry *updates;
 
+	/* bump allocator, invalidated on transaction restart */
 	void			*mem;
 	unsigned		mem_top;
 	unsigned		mem_bytes;
@@ -639,6 +674,8 @@ static inline struct btree_path *btree_iter_key_cache_path(struct btree_trans *t
 		: NULL;
 }
 
+/* Btree node write types and flags: */
+
 #define BCH_BTREE_WRITE_TYPES()						\
 	x(initial,		0)					\
 	x(init_next_bset,	1)					\
@@ -710,6 +747,8 @@ enum btree_node_rewrite_reason {
 #undef x
 };
 
+/* Filesystem-level btree state: */
+
 struct bch_fs_btree {
 	u16					foreground_merge_threshold;
 
@@ -740,6 +779,8 @@ struct bch_fs_btree {
 	struct bch_fs_btree_node_rewrites	node_rewrites;
 	struct find_btree_nodes			node_scan;
 };
+
+/* Btree node/bset accessors: */
 
 static inline enum btree_node_rewrite_reason btree_node_rewrite_reason(struct btree *b)
 {
@@ -860,6 +901,8 @@ static inline unsigned bset_byte_offset(struct btree *b, void *i)
 {
 	return i - (void *) b->data;
 }
+
+/* Btree ID properties: */
 
 enum btree_node_type {
 	BKEY_TYPE_btree,
@@ -997,21 +1040,5 @@ static inline u8 btree_trigger_order(enum btree_id btree)
 		return btree;
 	}
 }
-
-enum btree_gc_coalesce_fail_reason {
-	BTREE_GC_COALESCE_FAIL_RESERVE_GET,
-	BTREE_GC_COALESCE_FAIL_KEYLIST_REALLOC,
-	BTREE_GC_COALESCE_FAIL_FORMAT_FITS,
-};
-
-enum btree_node_sibling {
-	btree_prev_sib,
-	btree_next_sib,
-};
-
-struct get_locks_fail {
-	unsigned	l;
-	struct btree	*b;
-};
 
 #endif /* _BCACHEFS_BTREE_TYPES_H */

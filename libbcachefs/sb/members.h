@@ -6,6 +6,8 @@
 #include "util/enumerated_ref.h"
 #include "util/darray.h"
 
+/* Superblock member access: */
+
 extern char * const bch2_member_error_strs[];
 
 static inline struct bch_member *
@@ -47,6 +49,8 @@ void bch2_member_to_text(struct printbuf *, struct bch_member *,
 void bch2_member_to_text_short(struct printbuf *, struct bch_fs *, struct bch_dev *);
 void bch2_devs_mask_to_text_locked(struct printbuf *, struct bch_fs *, struct bch_devs_mask *);
 
+/* Device online state: */
+
 static inline bool bch2_dev_is_online(struct bch_dev *ca)
 {
 	return !enumerated_ref_is_zero(&ca->io_ref[READ]);
@@ -58,6 +62,8 @@ static inline bool bch2_dev_idx_is_online(struct bch_fs *c, unsigned dev)
 {
 	return test_bit(dev, c->devs_online.d);
 }
+
+/* Device masks and lists: */
 
 static inline unsigned dev_mask_nr(const struct bch_devs_mask *devs)
 {
@@ -94,6 +100,8 @@ static inline struct bch_devs_list bch2_dev_list_single(unsigned dev)
 	return (struct bch_devs_list) { .nr = 1, .data[0] = dev };
 }
 
+/* Device iteration (RCU): */
+
 static inline struct bch_dev *__bch2_next_dev_idx(struct bch_fs *c, unsigned idx,
 						  const struct bch_devs_mask *mask)
 {
@@ -125,6 +133,8 @@ static inline struct bch_dev *__bch2_next_dev(struct bch_fs *c, struct bch_dev *
 #define for_each_rw_member_rcu(_c, _ca)					\
 	for_each_member_device_rcu(_c, _ca, &(_c)->allocator.rw_devs[BCH_DATA_free])
 
+/* Device refcounting: */
+
 static inline void bch2_dev_get(struct bch_dev *ca)
 {
 #ifdef CONFIG_BCACHEFS_DEBUG
@@ -154,6 +164,8 @@ static inline void bch2_dev_put(struct bch_dev *ca)
 		__bch2_dev_put(ca);
 }
 DEFINE_FREE(bch2_dev_put, struct bch_dev *, bch2_dev_put(_T))
+
+/* Device iteration (refcounted): */
 
 static inline struct bch_dev *bch2_get_next_dev(struct bch_fs *c, struct bch_dev *ca)
 {
@@ -197,6 +209,8 @@ static inline struct bch_dev *bch2_get_next_online_dev(struct bch_fs *c,
 
 #define for_each_readable_member(c, ca, ref_idx)				\
 	__for_each_online_member(c, ca,	BIT( BCH_MEMBER_STATE_rw)|BIT(BCH_MEMBER_STATE_ro), READ, ref_idx)
+
+/* Device lookup: */
 
 static inline bool bch2_dev_exists(const struct bch_fs *c, unsigned dev)
 {
@@ -354,6 +368,8 @@ static inline struct bch_dev *bch2_dev_get_ioref(struct bch_fs *c, unsigned dev,
 	return NULL;
 }
 
+/* Member properties: */
+
 extern const struct bch_sb_field_ops bch_sb_field_ops_members_v1;
 extern const struct bch_sb_field_ops bch_sb_field_ops_members_v2;
 
@@ -403,6 +419,8 @@ void bch2_sb_members_to_cpu(struct bch_fs *);
 
 void bch2_dev_io_errors_to_text(struct printbuf *, struct bch_dev *);
 void bch2_dev_errors_reset(struct bch_dev *);
+
+/* Btree allocation bitmap: */
 
 static inline bool __bch2_dev_btree_bitmap_marked_sectors(struct bch_dev *ca, u64 start,
 							  unsigned sectors, bool with_gc)
@@ -454,6 +472,8 @@ void bch2_dev_btree_bitmap_mark(struct bch_fs *, struct bkey_s_c);
 int bch2_btree_bitmap_gc(struct bch_fs *);
 void bch2_maybe_schedule_btree_bitmap_gc_stop(struct bch_fs *);
 void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *);
+
+/* Member management: */
 
 int bch2_sb_member_alloc(struct bch_fs *);
 void bch2_sb_members_clean_deleted(struct bch_fs *);

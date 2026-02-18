@@ -3,177 +3,11 @@
 #define _BCACHEFS_H
 
 /*
- * SOME HIGH LEVEL CODE DOCUMENTATION:
+ * bcachefs: a COW filesystem built around a b-tree with snapshot support,
+ * multiple devices, checksumming, compression, and encryption.
  *
- * Bcache mostly works with cache sets, cache devices, and backing devices.
- *
- * Support for multiple cache devices hasn't quite been finished off yet, but
- * it's about 95% plumbed through. A cache set and its cache devices is sort of
- * like a md raid array and its component devices. Most of the code doesn't care
- * about individual cache devices, the main abstraction is the cache set.
- *
- * Multiple cache devices is intended to give us the ability to mirror dirty
- * cached data and metadata, without mirroring clean cached data.
- *
- * Backing devices are different, in that they have a lifetime independent of a
- * cache set. When you register a newly formatted backing device it'll come up
- * in passthrough mode, and then you can attach and detach a backing device from
- * a cache set at runtime - while it's mounted and in use. Detaching implicitly
- * invalidates any cached data for that backing device.
- *
- * A cache set can have multiple (many) backing devices attached to it.
- *
- * There's also flash only volumes - this is the reason for the distinction
- * between struct cached_dev and struct bcache_device. A flash only volume
- * works much like a bcache device that has a backing device, except the
- * "cached" data is always dirty. The end result is that we get thin
- * provisioning with very little additional code.
- *
- * Flash only volumes work but they're not production ready because the moving
- * garbage collector needs more work. More on that later.
- *
- * BUCKETS/ALLOCATION:
- *
- * Bcache is primarily designed for caching, which means that in normal
- * operation all of our available space will be allocated. Thus, we need an
- * efficient way of deleting things from the cache so we can write new things to
- * it.
- *
- * To do this, we first divide the cache device up into buckets. A bucket is the
- * unit of allocation; they're typically around 1 mb - anywhere from 128k to 2M+
- * works efficiently.
- *
- * Each bucket has a 16 bit priority, and an 8 bit generation associated with
- * it. The gens and priorities for all the buckets are stored contiguously and
- * packed on disk (in a linked list of buckets - aside from the superblock, all
- * of bcache's metadata is stored in buckets).
- *
- * The priority is used to implement an LRU. We reset a bucket's priority when
- * we allocate it or on cache it, and every so often we decrement the priority
- * of each bucket. It could be used to implement something more sophisticated,
- * if anyone ever gets around to it.
- *
- * The generation is used for invalidating buckets. Each pointer also has an 8
- * bit generation embedded in it; for a pointer to be considered valid, its gen
- * must match the gen of the bucket it points into.  Thus, to reuse a bucket all
- * we have to do is increment its gen (and write its new gen to disk; we batch
- * this up).
- *
- * Bcache is entirely COW - we never write twice to a bucket, even buckets that
- * contain metadata (including btree nodes).
- *
- * THE BTREE:
- *
- * Bcache is in large part design around the btree.
- *
- * At a high level, the btree is just an index of key -> ptr tuples.
- *
- * Keys represent extents, and thus have a size field. Keys also have a variable
- * number of pointers attached to them (potentially zero, which is handy for
- * invalidating the cache).
- *
- * The key itself is an inode:offset pair. The inode number corresponds to a
- * backing device or a flash only volume. The offset is the ending offset of the
- * extent within the inode - not the starting offset; this makes lookups
- * slightly more convenient.
- *
- * Pointers contain the cache device id, the offset on that device, and an 8 bit
- * generation number. More on the gen later.
- *
- * Index lookups are not fully abstracted - cache lookups in particular are
- * still somewhat mixed in with the btree code, but things are headed in that
- * direction.
- *
- * Updates are fairly well abstracted, though. There are two different ways of
- * updating the btree; insert and replace.
- *
- * BTREE_INSERT will just take a list of keys and insert them into the btree -
- * overwriting (possibly only partially) any extents they overlap with. This is
- * used to update the index after a write.
- *
- * BTREE_REPLACE is really cmpxchg(); it inserts a key into the btree iff it is
- * overwriting a key that matches another given key. This is used for inserting
- * data into the cache after a cache miss, and for background writeback, and for
- * the moving garbage collector.
- *
- * There is no "delete" operation; deleting things from the index is
- * accomplished by either by invalidating pointers (by incrementing a bucket's
- * gen) or by inserting a key with 0 pointers - which will overwrite anything
- * previously present at that location in the index.
- *
- * This means that there are always stale/invalid keys in the btree. They're
- * filtered out by the code that iterates through a btree node, and removed when
- * a btree node is rewritten.
- *
- * BTREE NODES:
- *
- * Our unit of allocation is a bucket, and we can't arbitrarily allocate and
- * free smaller than a bucket - so, that's how big our btree nodes are.
- *
- * (If buckets are really big we'll only use part of the bucket for a btree node
- * - no less than 1/4th - but a bucket still contains no more than a single
- * btree node. I'd actually like to change this, but for now we rely on the
- * bucket's gen for deleting btree nodes when we rewrite/split a node.)
- *
- * Anyways, btree nodes are big - big enough to be inefficient with a textbook
- * btree implementation.
- *
- * The way this is solved is that btree nodes are internally log structured; we
- * can append new keys to an existing btree node without rewriting it. This
- * means each set of keys we write is sorted, but the node is not.
- *
- * We maintain this log structure in memory - keeping 1Mb of keys sorted would
- * be expensive, and we have to distinguish between the keys we have written and
- * the keys we haven't. So to do a lookup in a btree node, we have to search
- * each sorted set. But we do merge written sets together lazily, so the cost of
- * these extra searches is quite low (normally most of the keys in a btree node
- * will be in one big set, and then there'll be one or two sets that are much
- * smaller).
- *
- * This log structure makes bcache's btree more of a hybrid between a
- * conventional btree and a compacting data structure, with some of the
- * advantages of both.
- *
- * GARBAGE COLLECTION:
- *
- * We can't just invalidate any bucket - it might contain dirty data or
- * metadata. If it once contained dirty data, other writes might overwrite it
- * later, leaving no valid pointers into that bucket in the index.
- *
- * Thus, the primary purpose of garbage collection is to find buckets to reuse.
- * It also counts how much valid data it each bucket currently contains, so that
- * allocation can reuse buckets sooner when they've been mostly overwritten.
- *
- * It also does some things that are really internal to the btree
- * implementation. If a btree node contains pointers that are stale by more than
- * some threshold, it rewrites the btree node to avoid the bucket's generation
- * wrapping around. It also merges adjacent btree nodes if they're empty enough.
- *
- * THE JOURNAL:
- *
- * Bcache's journal is not necessary for consistency; we always strictly
- * order metadata writes so that the btree and everything else is consistent on
- * disk in the event of an unclean shutdown, and in fact bcache had writeback
- * caching (with recovery from unclean shutdown) before journalling was
- * implemented.
- *
- * Rather, the journal is purely a performance optimization; we can't complete a
- * write until we've updated the index on disk, otherwise the cache would be
- * inconsistent in the event of an unclean shutdown. This means that without the
- * journal, on random write workloads we constantly have to update all the leaf
- * nodes in the btree, and those writes will be mostly empty (appending at most
- * a few keys each) - highly inefficient in terms of amount of metadata writes,
- * and it puts more strain on the various btree resorting/compacting code.
- *
- * The journal is just a log of keys we've inserted; on startup we just reinsert
- * all the keys in the open journal entries. That means that when we're updating
- * a node in the btree, we can wait until a 4k block of keys fills up before
- * writing them out.
- *
- * For simplicity, we only journal updates to leaf nodes; updates to parent
- * nodes are rare enough (since our leaf nodes are huge) that it wasn't worth
- * the complexity to deal with journalling them (in particular, journal replay)
- * - updates to non leaf nodes just happen synchronously (see btree_split()).
+ * This header defines the core runtime types (struct bch_fs, struct bch_dev)
+ * and pulls in subsystem type headers.
  */
 
 #undef pr_fmt
@@ -908,6 +742,8 @@ struct bch_fs {
 	struct mutex		verify_lock;
 };
 
+/* Error tracking: */
+
 static inline int __bch2_err_throw(struct bch_fs *c, int err)
 {
 	BUG_ON(err >= 0);
@@ -917,6 +753,8 @@ static inline int __bch2_err_throw(struct bch_fs *c, int err)
 }
 
 #define bch_err_throw(_c, _err) __bch2_err_throw(_c, -BCH_ERR_##_err)
+
+/* Read-only refs: */
 
 static inline bool bch2_ro_ref_tryget(struct bch_fs *c)
 {
@@ -932,13 +770,7 @@ static inline void bch2_ro_ref_put(struct bch_fs *c)
 		wake_up(&c->ro_ref_wait);
 }
 
-static inline void bch2_set_ra_pages(struct bch_fs *c, unsigned ra_pages)
-{
-#ifndef NO_BCACHEFS_FS
-	if (c->vfs_sb)
-		c->vfs_sb->s_bdi->ra_pages = ra_pages;
-#endif
-}
+/* Unit conversions: */
 
 static inline unsigned bucket_bytes(const struct bch_dev *ca)
 {
@@ -954,6 +786,8 @@ static inline unsigned block_sectors(const struct bch_fs *c)
 {
 	return c->opts.block_size >> 9;
 }
+
+/* Time conversion: */
 
 static inline struct timespec64 bch2_time_to_timespec(const struct bch_fs *c, s64 time)
 {
@@ -987,6 +821,16 @@ static inline s64 bch2_current_time(const struct bch_fs *c)
 static inline u64 bch2_current_io_time(const struct bch_fs *c, int rw)
 {
 	return max(1ULL, (u64) atomic64_read(&c->io_clock[rw].now) & LRU_TIME_MAX);
+}
+
+/* Filesystem and device helpers: */
+
+static inline void bch2_set_ra_pages(struct bch_fs *c, unsigned ra_pages)
+{
+#ifndef NO_BCACHEFS_FS
+	if (c->vfs_sb)
+		c->vfs_sb->s_bdi->ra_pages = ra_pages;
+#endif
 }
 
 static inline struct stdio_redirect *bch2_fs_stdio_redirect(struct bch_fs *c)
@@ -1044,6 +888,8 @@ static inline bool bch2_dev_rotational(struct bch_fs *c, unsigned dev)
 {
 	return dev != BCH_SB_MEMBER_INVALID && test_bit(dev, c->devs_rotational.d);
 }
+
+/* Log messages: */
 
 void __bch2_log_msg_start(const char *, struct printbuf *);
 

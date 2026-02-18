@@ -9,8 +9,11 @@
 #define _BUCKETS_H
 
 #include "alloc/buckets_types.h"
+#include "alloc/format.h"
 #include "data/extents.h"
 #include "sb/members.h"
+
+/* Bucket addressing: */
 
 static inline u64 sector_to_bucket(const struct bch_dev *ca, sector_t s)
 {
@@ -39,6 +42,8 @@ static inline u64 sector_to_bucket_and_offset(const struct bch_dev *ca, sector_t
 	for (_b = (_buckets)->b + (_buckets)->first_bucket;	\
 	     _b < (_buckets)->b + (_buckets)->nbuckets; _b++)
 
+/* Bucket locking: */
+
 static inline void bucket_unlock(struct bucket *b)
 {
 	BUILD_BUG_ON(!((union ulong_byte_assert) { .ulong = 1UL << BUCKET_LOCK_BITNR }).byte);
@@ -58,12 +63,16 @@ DEFINE_GUARD(bucket_lock, struct bucket *,
 	     bucket_lock(_T),
 	     bucket_unlock(_T));
 
+/* GC bucket access: */
+
 static inline struct bucket *gc_bucket(struct bch_dev *ca, size_t b)
 {
 	return bucket_valid(ca, b)
 		? genradix_ptr(&ca->buckets_gc, b)
 		: NULL;
 }
+
+/* Bucket generation: */
 
 static inline struct bucket_gens *bucket_gens(struct bch_dev *ca)
 {
@@ -92,6 +101,18 @@ static inline int bucket_gen_get(struct bch_dev *ca, size_t b)
 	return bucket_gen_get_rcu(ca, b);
 }
 
+static inline int gen_cmp(u8 a, u8 b)
+{
+	return (s8) (a - b);
+}
+
+static inline int gen_after(u8 a, u8 b)
+{
+	return max(0, gen_cmp(a, b));
+}
+
+/* Pointer → bucket mapping: */
+
 static inline size_t PTR_BUCKET_NR(const struct bch_dev *ca,
 				   const struct bch_extent_ptr *ptr)
 {
@@ -117,6 +138,35 @@ static inline struct bucket *PTR_GC_BUCKET(struct bch_dev *ca,
 	return gc_bucket(ca, PTR_BUCKET_NR(ca, ptr));
 }
 
+/* GC bucket ↔ alloc_v4 conversion: */
+
+static inline void alloc_to_bucket(struct bucket *dst, struct bch_alloc_v4 src)
+{
+	dst->gen		= src.gen;
+	dst->data_type		= src.data_type;
+	dst->stripe_sectors	= src.stripe_sectors;
+	dst->dirty_sectors	= src.dirty_sectors;
+	dst->cached_sectors	= src.cached_sectors;
+}
+
+static inline void __bucket_m_to_alloc(struct bch_alloc_v4 *dst, struct bucket src)
+{
+	dst->gen		= src.gen;
+	dst->data_type		= src.data_type;
+	dst->stripe_sectors	= src.stripe_sectors;
+	dst->dirty_sectors	= src.dirty_sectors;
+	dst->cached_sectors	= src.cached_sectors;
+}
+
+static inline struct bch_alloc_v4 bucket_m_to_alloc(struct bucket b)
+{
+	struct bch_alloc_v4 ret = {};
+	__bucket_m_to_alloc(&ret, b);
+	return ret;
+}
+
+/* Extent pointer helpers: */
+
 static inline enum bch_data_type ptr_data_type(const struct bkey *k,
 					       const struct bch_extent_ptr *ptr)
 {
@@ -136,15 +186,7 @@ static inline s64 ptr_disk_sectors(s64 sectors, struct extent_ptr_decoded p)
 		: sectors;
 }
 
-static inline int gen_cmp(u8 a, u8 b)
-{
-	return (s8) (a - b);
-}
-
-static inline int gen_after(u8 a, u8 b)
-{
-	return max(0, gen_cmp(a, b));
-}
+/* Pointer staleness: */
 
 static inline int dev_ptr_stale_rcu(struct bch_dev *ca, const struct bch_extent_ptr *ptr)
 {
@@ -298,7 +340,7 @@ static inline const char *bch2_data_type_str(enum bch_data_type type)
 		: "(invalid data type)";
 }
 
-/* disk reservations: */
+/* Disk reservations: */
 
 static inline void bch2_disk_reservation_put(struct bch_fs *c,
 					     struct disk_reservation *res)

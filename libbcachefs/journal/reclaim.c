@@ -83,8 +83,8 @@ void bch2_journal_set_watermark(struct journal *j)
 		event_inc_trace(c, journal_full, buf, ({
 			guard(printbuf_atomic)(&buf);
 			prt_printf(&buf, "low_on_space %u\n",	low_on_space);
-			prt_printf(&buf, "low_on_pin%u\n",	low_on_pin);
-			prt_printf(&buf, "low_on_wb%u\n",	low_on_wb);
+			prt_printf(&buf, "low_on_pin %u\n",	low_on_pin);
+			prt_printf(&buf, "low_on_wb %u\n",	low_on_wb);
 		}));
 
 	mod_bit(JOURNAL_low_on_space,	&j->flags, low_on_space);
