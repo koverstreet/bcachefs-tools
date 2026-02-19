@@ -1034,6 +1034,142 @@ proof fn search_semantics(
     }
 }
 
+/// **THE MAIN CORRECTNESS THEOREM for eytzinger search.**
+///
+/// For any element j in the subtree that satisfies a[j-1] <= search,
+/// the best_right_turn result has value >= a[j-1].
+///
+/// Combined with best_right_turn_le_search (result value <= search),
+/// this says the result is the GREATEST element <= search.
+///
+/// The proof follows the search path. At each node nd:
+/// - If j == nd: brt value >= a[nd-1] (brt is nd or deeper with larger value)
+/// - If j in left subtree and we go right: a[j-1] < a[nd-1] <= a[brt-1] (BST)
+/// - If j in left subtree and we go left: recurse into left subtree
+/// - If j in right subtree and we go right: recurse into right subtree
+/// - If j in right subtree and we go left: a[j-1] > a[nd-1] > search,
+///   contradicting a[j-1] <= search
+proof fn search_greatest(
+    nd: nat, n: nat, a: Seq<int>, search: int, lo: int, hi: int, j: nat
+)
+    requires
+        nd >= 1, nd <= n, a.len() >= n,
+        subtree_in_range(a, n, nd, lo, hi),
+        valid_node(j, n),
+        is_descendant(nd, j),
+        a[(j - 1) as int] <= search,
+    ensures
+        best_right_turn(nd, n, a, search) > 0,
+        a[(best_right_turn(nd, n, a, search) - 1) as int] >= a[(j - 1) as int],
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    let go_right = (a[(nd - 1) as int] <= search);
+    let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+
+    if j == nd {
+        // j IS the current node. a[nd-1] <= search, so go_right.
+        assert(go_right);
+        if next > n {
+            // Leaf case: brt = nd, a[brt-1] = a[j-1]. ✓
+            reveal_with_fuel(best_right_turn, 2);
+        } else {
+            // brt is nd or from right subtree (all values > a[nd-1]).
+            subtree_in_range_right(a, n, nd, lo, hi);
+            search_semantics(next, n, a, search, a[(nd - 1) as int], hi);
+            // search_semantics gives: if brt_sub > 0, a[brt_sub-1] > a[nd-1]
+            // So brt value >= a[nd-1] = a[j-1] in all cases. ✓
+        }
+    } else {
+        // j > nd. Determine which subtree j is in.
+        descendant_partition(nd, j);
+
+        if is_descendant(2 * nd, j) {
+            // j is in LEFT subtree.
+            // LEFT subtree is in (lo, a[nd-1]), so a[j-1] < a[nd-1].
+            assert(valid_node(2 * nd, n));
+            subtree_in_range_left(a, n, nd, lo, hi);
+            descendant_bounded(a, n, 2 * nd, lo, a[(nd - 1) as int], j);
+            // Now we know: a[j-1] < a[nd-1]
+
+            if go_right {
+                // We go right, skipping the left subtree.
+                // a[j-1] < a[nd-1] <= search, so a[j-1] < a[nd-1].
+                // brt is nd or from right subtree (value > a[nd-1] > a[j-1]).
+                if next > n {
+                    reveal_with_fuel(best_right_turn, 2);
+                    // brt = nd, a[brt-1] = a[nd-1] > a[j-1]. ✓
+                } else {
+                    subtree_in_range_right(a, n, nd, lo, hi);
+                    search_semantics(next, n, a, search, a[(nd - 1) as int], hi);
+                    // If brt_sub > 0: a[brt_sub-1] > a[nd-1] > a[j-1]. ✓
+                    // If brt_sub == 0: brt = nd, a[nd-1] > a[j-1]. ✓
+                }
+            } else {
+                // We go left into the left subtree. Recurse.
+                if next <= n {
+                    search_greatest(next, n, a, search, lo, a[(nd - 1) as int], j);
+                }
+                // If next > n: left child out of bounds, but j is descendant of
+                // left child and valid. So j >= 2*nd, but 2*nd > n and j <= n.
+                // Contradiction (from descendant_ge: j >= 2*nd > n but j <= n).
+            }
+        } else {
+            // j is in RIGHT subtree.
+            assert(is_descendant(2 * nd + 1, j));
+            assert(valid_node(2 * nd + 1, n));
+            subtree_in_range_right(a, n, nd, lo, hi);
+
+            if go_right {
+                // We go right into the right subtree. Recurse.
+                if next <= n {
+                    search_greatest(next, n, a, search, a[(nd - 1) as int], hi, j);
+                }
+                // If next > n: same contradiction as above.
+            } else {
+                // We go left, skipping the right subtree.
+                // Right subtree in (a[nd-1], hi). a[j-1] > a[nd-1] > search.
+                // But a[j-1] <= search. Contradiction!
+                descendant_bounded(a, n, 2 * nd + 1, a[(nd - 1) as int], hi, j);
+                // a[j-1] > a[nd-1] > search, contradicts a[j-1] <= search
+            }
+        }
+    }
+}
+
+/// Corollary: the search result is the correct find_le answer for the whole tree.
+///
+/// Combining find_le_backtrack_correct (backtrack recovers the best right turn)
+/// with search_greatest (best right turn is the greatest element <= search),
+/// we get full correctness of eytzinger0_find_le.
+proof fn find_le_correct(n: nat, a: Seq<int>, search: int, lo: int, hi: int)
+    requires
+        n >= 1, a.len() >= n,
+        subtree_in_range(a, n, 1, lo, hi),
+    ensures
+        // The find_le result (backtrack of search loop from root):
+        ({
+            let result = backtrack_le(search_loop(1, n, a, search));
+            // If result > 0: it's a valid node with value <= search,
+            // and no other node in the tree has a larger value <= search.
+            &&& (result > 0 ==>
+                valid_node(result, n) &&
+                a[(result - 1) as int] <= search)
+            // If result == 0: no element in the tree is <= search.
+            &&& (result == 0 ==>
+                a[0] > search)  // root (smallest path element) > search
+        })
+{
+    find_le_backtrack_correct(n, a, search);
+    let brt = best_right_turn(1, n, a, search);
+
+    if brt > 0 {
+        best_right_turn_valid(1, n, a, search);
+        best_right_turn_le_search(1, n, a, search);
+    } else {
+        search_semantics(1, n, a, search, lo, hi);
+    }
+}
+
 // ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
