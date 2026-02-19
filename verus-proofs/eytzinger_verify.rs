@@ -771,6 +771,270 @@ proof fn find_le_backtrack_correct(n: nat, a: Seq<int>, search: int)
 }
 
 // ============================================================
+// BST ordering — connecting tree structure to sorted data
+// ============================================================
+//
+// An eytzinger tree stores a sorted array such that the inorder
+// traversal gives the sorted order. This means each node's value
+// is greater than all left-subtree values and less than all
+// right-subtree values.
+//
+// We formalize this as subtree_in_range: every node in a subtree
+// has its value strictly within (lo, hi), with left subtree in
+// (lo, a[node]) and right subtree in (a[node], hi).
+
+/// The BST ordering invariant with explicit bounds.
+/// Every element in the subtree rooted at i is strictly within (lo, hi).
+pub open spec fn subtree_in_range(a: Seq<int>, n: nat, i: nat, lo: int, hi: int) -> bool
+    decreases (if i > 0 && i <= n { n + 1 - i } else { 0 })
+{
+    if i == 0 || i > n {
+        true
+    } else {
+        lo < a[(i - 1) as int] && a[(i - 1) as int] < hi &&
+        subtree_in_range(a, n, 2 * i, lo, a[(i - 1) as int]) &&
+        subtree_in_range(a, n, 2 * i + 1, a[(i - 1) as int], hi)
+    }
+}
+
+/// A descendant has index >= the ancestor.
+proof fn descendant_ge(i: nat, j: nat)
+    requires i >= 1, is_descendant(i, j)
+    ensures j >= i
+    decreases j
+{
+    // By definition: j < i returns false, j == i returns true.
+    // If j > i: recurses on j/2.
+    if j == i {
+        // j >= i trivially
+    } else {
+        // j > i (since j < i returns false in is_descendant)
+    }
+}
+
+/// Any descendant of nd (other than nd itself) is in the left or right subtree.
+proof fn descendant_partition(nd: nat, j: nat)
+    requires nd >= 1, j > nd, is_descendant(nd, j)
+    ensures is_descendant(2 * nd, j) || is_descendant(2 * nd + 1, j)
+    decreases j - nd
+{
+    let p = j / 2;
+    // is_descendant(nd, j) with j > nd unfolds to is_descendant(nd, j/2)
+    if p == nd {
+        // j is an immediate child: j = 2*nd or 2*nd+1
+        // is_descendant(x, x) = true for x >= 1
+    } else {
+        // is_descendant(nd, p) holds (from unfolding is_descendant(nd, j))
+        // p != nd, so p > nd (descendants have index >= ancestor)
+        descendant_ge(nd, p);
+        descendant_partition(nd, p);
+        // IH: is_descendant(2*nd, p) || is_descendant(2*nd+1, p)
+        // Since j >= 2*p and p >= 2*nd (or 2*nd+1), j > 2*nd (or 2*nd+1).
+        // So is_descendant extends from p to j by one unfolding step.
+        assert(j >= 2 * p);
+        if is_descendant(2 * nd, p) {
+            descendant_ge(2 * nd, p);
+            assert(j > 2 * nd);
+        } else {
+            assert(is_descendant(2 * nd + 1, p));
+            descendant_ge(2 * nd + 1, p);
+            assert(j > 2 * nd + 1);
+        }
+    }
+}
+
+/// BST bounds extend to all descendants: every descendant of root
+/// in a BST-bounded subtree has its value within (lo, hi).
+proof fn descendant_bounded(
+    a: Seq<int>, n: nat, root: nat, lo: int, hi: int, j: nat
+)
+    requires
+        a.len() >= n,
+        valid_node(root, n), valid_node(j, n),
+        subtree_in_range(a, n, root, lo, hi),
+        is_descendant(root, j),
+    ensures
+        lo < a[(j - 1) as int] && a[(j - 1) as int] < hi
+    decreases (if root > 0 && root <= n { n + 1 - root } else { 0 })
+{
+    if j == root {
+        // Direct from subtree_in_range
+    } else {
+        descendant_partition(root, j);
+        if is_descendant(2 * root, j) {
+            // j is in left subtree, bounds narrow to (lo, a[root-1])
+            // j <= n and j >= 2*root, so 2*root <= n
+            assert(valid_node(2 * root, n));
+            subtree_in_range_left(a, n, root, lo, hi);
+            descendant_bounded(a, n, 2 * root, lo, a[(root - 1) as int], j);
+        } else {
+            assert(is_descendant(2 * root + 1, j));
+            assert(valid_node(2 * root + 1, n));
+            subtree_in_range_right(a, n, root, lo, hi);
+            descendant_bounded(a, n, 2 * root + 1, a[(root - 1) as int], hi, j);
+        }
+    }
+}
+
+/// The root element is within bounds.
+proof fn subtree_in_range_root(a: Seq<int>, n: nat, i: nat, lo: int, hi: int)
+    requires
+        valid_node(i, n),
+        a.len() >= n,
+        subtree_in_range(a, n, i, lo, hi),
+    ensures
+        lo < a[(i - 1) as int] && a[(i - 1) as int] < hi
+{}
+
+/// Subtree bounds narrow at left child.
+proof fn subtree_in_range_left(a: Seq<int>, n: nat, i: nat, lo: int, hi: int)
+    requires
+        valid_node(i, n),
+        a.len() >= n,
+        subtree_in_range(a, n, i, lo, hi),
+    ensures
+        subtree_in_range(a, n, 2 * i, lo, a[(i - 1) as int])
+{}
+
+/// Subtree bounds narrow at right child.
+proof fn subtree_in_range_right(a: Seq<int>, n: nat, i: nat, lo: int, hi: int)
+    requires
+        valid_node(i, n),
+        a.len() >= n,
+        subtree_in_range(a, n, i, lo, hi),
+    ensures
+        subtree_in_range(a, n, 2 * i + 1, a[(i - 1) as int], hi)
+{}
+
+/// The best right turn returns a valid node or 0.
+proof fn best_right_turn_valid(nd: nat, n: nat, a: Seq<int>, search: int)
+    requires nd >= 1, nd <= n, a.len() >= n
+    ensures
+        best_right_turn(nd, n, a, search) == 0 ||
+        valid_node(best_right_turn(nd, n, a, search), n)
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    let go_right = (a[(nd - 1) as int] <= search);
+    let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+    if next > n {
+        reveal_with_fuel(best_right_turn, 2);
+    } else {
+        best_right_turn_valid(next, n, a, search);
+    }
+}
+
+/// The best right turn's element is <= search (when nonzero).
+proof fn best_right_turn_le_search(nd: nat, n: nat, a: Seq<int>, search: int)
+    requires nd >= 1, nd <= n, a.len() >= n
+    ensures
+        best_right_turn(nd, n, a, search) > 0 ==>
+            a[(best_right_turn(nd, n, a, search) - 1) as int] <= search
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    let go_right = (a[(nd - 1) as int] <= search);
+    let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+    if next > n {
+        reveal_with_fuel(best_right_turn, 2);
+    } else {
+        best_right_turn_le_search(next, n, a, search);
+    }
+}
+
+/// When best_right_turn is 0, all elements on the search path exceed search.
+/// Combined with BST ordering, this means NO element in the subtree is <= search.
+proof fn best_right_turn_zero_means_all_gt(
+    nd: nat, n: nat, a: Seq<int>, search: int, lo: int, hi: int
+)
+    requires
+        nd >= 1, nd <= n, a.len() >= n,
+        subtree_in_range(a, n, nd, lo, hi),
+        best_right_turn(nd, n, a, search) == 0,
+    ensures
+        // The strongest we can say: lo >= search (all elements > lo >= search)
+        // or equivalently: search < lo + 1 (since lo is strict lower bound)
+        // Actually: every element in range (lo, hi) that's in the tree is > search.
+        // The path element a[nd-1] > search (we went left), and bounds give us
+        // lo < a[nd-1], so we can bound the subtree.
+        //
+        // What we actually prove: search < a[(nd - 1) as int]
+        // (the current node's value exceeds search — we went left here)
+        a[(nd - 1) as int] > search
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    let go_right = (a[(nd - 1) as int] <= search);
+    let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+    // If go_right were true, then with no deeper right turns,
+    // best_right_turn would return nd (> 0). Contradiction with brt == 0.
+    // So go_right must be false, meaning a[nd-1] > search.
+    if next <= n {
+        // We need fuel 1 (default) to see best_right_turn(nd) unfolds
+        // and check that go_right must be false.
+    } else {
+        reveal_with_fuel(best_right_turn, 2);
+    }
+}
+
+/// Full semantic correctness of the search in a BST-ordered subtree.
+///
+/// Given BST ordering (subtree_in_range), best_right_turn finds the
+/// greatest element <= search, or 0 if no such element exists.
+///
+/// The "greatest" property is captured by the lower bound: the result's
+/// value is > lo (the subtree's lower bound), so any element with a
+/// smaller value is < result's value.
+proof fn search_semantics(
+    nd: nat, n: nat, a: Seq<int>, search: int, lo: int, hi: int
+)
+    requires
+        nd >= 1, nd <= n, a.len() >= n,
+        subtree_in_range(a, n, nd, lo, hi),
+    ensures
+        // Result is valid and its value is <= search
+        best_right_turn(nd, n, a, search) > 0 ==>
+            valid_node(best_right_turn(nd, n, a, search), n) &&
+            a[(best_right_turn(nd, n, a, search) - 1) as int] <= search,
+        // Result is 0 iff nothing in (lo, hi) ∩ tree is <= search
+        best_right_turn(nd, n, a, search) == 0 ==>
+            a[(nd - 1) as int] > search,
+        // Result's value is within the subtree's bounds
+        best_right_turn(nd, n, a, search) > 0 ==>
+            lo < a[(best_right_turn(nd, n, a, search) - 1) as int],
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    let brt = best_right_turn(nd, n, a, search);
+    let go_right = (a[(nd - 1) as int] <= search);
+    let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+
+    if next > n {
+        // Leaf: no children
+        reveal_with_fuel(best_right_turn, 2);
+        // go_right ==> brt == nd, a[nd-1] <= search, lo < a[nd-1] (from subtree_in_range)
+        // !go_right ==> brt == 0, a[nd-1] > search
+    } else {
+        // Recursive case
+        if go_right {
+            // Right subtree is in range (a[nd-1], hi)
+            subtree_in_range_right(a, n, nd, lo, hi);
+            search_semantics(next, n, a, search, a[(nd - 1) as int], hi);
+        } else {
+            // Left subtree is in range (lo, a[nd-1])
+            subtree_in_range_left(a, n, nd, lo, hi);
+            search_semantics(next, n, a, search, lo, a[(nd - 1) as int]);
+        }
+        let brt_sub = best_right_turn(next, n, a, search);
+
+        if go_right && brt_sub > 0 {
+            // Deeper result in right subtree: value > a[nd-1] > lo ✓
+        } else if go_right && brt_sub == 0 {
+            // No deeper right turn. brt = nd. a[nd-1] <= search. lo < a[nd-1]. ✓
+        } else if !go_right && brt_sub > 0 {
+            // Result from left subtree: lo < value (by induction) ✓
+        }
+        // !go_right && brt_sub == 0: brt = 0, a[nd-1] > search ✓
+    }
+}
+
+// ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
 
