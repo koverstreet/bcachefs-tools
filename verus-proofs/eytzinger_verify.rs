@@ -1171,6 +1171,308 @@ proof fn find_le_correct(n: nat, a: Seq<int>, search: int, lo: int, hi: int)
 }
 
 // ============================================================
+// Eytzinger-to-inorder bijection
+// ============================================================
+//
+// __eytzinger1_to_inorder and __inorder_to_eytzinger1 convert
+// between eytzinger tree indices and inorder (sorted) positions
+// using bit manipulation.
+//
+// For node i at level b in a tree of depth d:
+//   raw(i) = (2 * (i - 2^b) + 1) * 2^(d-b)
+//
+// Children have raw values (4p+1)*k, (4p+2)*k, (4p+3)*k
+// giving immediate BST ordering.
+//
+// Incomplete trees adjust: raw → (raw + extra) / 2.
+
+/// pow2(k+1) = 2 * pow2(k).
+proof fn pow2_double(k: nat)
+    ensures pow2(k + 1) == 2 * pow2(k)
+{}
+
+/// Level is bounded: i <= j implies level(i) <= level(j).
+proof fn level_le_when_le(i: nat, j: nat)
+    requires i >= 1, j >= 1, i <= j
+    ensures level(i) <= level(j)
+{
+    level_range(i);
+    level_range(j);
+    if level(i) > level(j) {
+        if level(i) > level(j) + 1 {
+            pow2_increasing(level(j) + 1, level(i));
+        }
+        // pow2(level(i)) >= pow2(level(j)+1) > j >= i >= pow2(level(i))
+        // Contradiction.
+    }
+}
+
+/// Count trailing zeros (position of lowest set bit).
+pub open spec fn ctz(n: nat) -> nat
+    decreases n
+{
+    if n == 0 { 0 }
+    else if n % 2 == 1 { 0 }
+    else { 1 + ctz(n / 2) }
+}
+
+/// Safe nat subtraction (returns 0 if would underflow).
+pub open spec fn nsub(a: nat, b: nat) -> nat {
+    if a >= b { (a - b) as nat } else { 0 }
+}
+
+/// The "extra" count for incomplete trees.
+/// Matches eytzinger1_extra in C: (size + 1 - rounddown_pow_of_two(size)) << 1.
+pub open spec fn eytzinger1_extra(size: nat) -> nat {
+    if size == 0 { 0 }
+    else { 2 * nsub(size + 1, pow2(level(size))) }
+}
+
+/// Raw inorder position before the incomplete-tree adjustment.
+pub open spec fn to_inorder_raw(i: nat, size: nat) -> nat
+    recommends i >= 1, i <= size, size >= 1
+{
+    let b = level(i);
+    let d = level(size);
+    (2 * nsub(i, pow2(b)) + 1) * pow2(nsub(d, b))
+}
+
+/// Eytzinger to inorder. Matches __eytzinger1_to_inorder.
+pub open spec fn to_inorder(i: nat, size: nat) -> nat
+    recommends i >= 1, i <= size, size >= 1
+{
+    let raw = to_inorder_raw(i, size);
+    let extra = eytzinger1_extra(size);
+    if raw <= extra { raw }
+    else { (raw + extra) / 2 }
+}
+
+/// Strip trailing zeros and lowest set bit: n >> (__ffs(n) + 1).
+/// Recursive formulation avoids nesting pow2(ctz(n)) which Z3 can't chain.
+pub open spec fn strip_lowest_bit(n: nat) -> nat
+    decreases n
+{
+    if n == 0 { 0 }
+    else if n % 2 == 1 { n / 2 }
+    else { strip_lowest_bit(n / 2) }
+}
+
+/// Inorder to eytzinger. Matches __inorder_to_eytzinger1.
+pub open spec fn from_inorder(pos: nat, size: nat) -> nat
+    recommends pos >= 1, pos <= size, size >= 1
+{
+    let extra = eytzinger1_extra(size);
+    let raw: nat = if pos <= extra { pos } else { (2 * pos - extra) as nat };
+    let offset = strip_lowest_bit(raw);
+    let shift = ctz(raw);
+    let d = level(size);
+    offset + pow2(nsub(d, shift))
+}
+
+// --- Helper: establish level and pow2 facts for trees up to size 7 ---
+
+proof fn eval_level_pow2()
+    ensures
+        level(1) == 0, level(2) == 1, level(3) == 1,
+        level(4) == 2, level(5) == 2, level(6) == 2, level(7) == 2,
+        pow2(0nat) == 1, pow2(1nat) == 2, pow2(2nat) == 4,
+{
+    reveal_with_fuel(level, 4);
+    reveal_with_fuel(pow2, 4);
+}
+
+// --- Concrete evaluations: complete trees ---
+
+proof fn to_inorder_n1()
+    ensures to_inorder(1, 1) == 1
+{
+    eval_level_pow2();
+    assert(nsub(1nat, 1nat) == 0);
+    assert(nsub(0nat, 0nat) == 0);
+    assert(nsub(2nat, 1nat) == 1);
+    assert(eytzinger1_extra(1) == 2);
+    assert(to_inorder_raw(1, 1) == 1);
+}
+
+proof fn to_inorder_n3()
+    ensures
+        to_inorder(1, 3) == 2,
+        to_inorder(2, 3) == 1,
+        to_inorder(3, 3) == 3,
+{
+    eval_level_pow2();
+    assert(nsub(1nat, 1nat) == 0);
+    assert(nsub(1nat, 0nat) == 1);
+    assert(nsub(2nat, 2nat) == 0);
+    assert(nsub(3nat, 2nat) == 1);
+    assert(nsub(4nat, 2nat) == 2);
+    assert(eytzinger1_extra(3) == 4);
+    assert(to_inorder_raw(1, 3) == 2);
+    assert(to_inorder_raw(2, 3) == 1);
+    assert(to_inorder_raw(3, 3) == 3);
+}
+
+proof fn to_inorder_n7()
+    ensures
+        to_inorder(1, 7) == 4,
+        to_inorder(2, 7) == 2,
+        to_inorder(3, 7) == 6,
+        to_inorder(4, 7) == 1,
+        to_inorder(5, 7) == 3,
+        to_inorder(6, 7) == 5,
+        to_inorder(7, 7) == 7,
+{
+    eval_level_pow2();
+    assert(nsub(1nat, 1nat) == 0);
+    assert(nsub(2nat, 0nat) == 2);
+    assert(nsub(2nat, 1nat) == 1);
+    assert(nsub(2nat, 2nat) == 0);
+    assert(nsub(3nat, 2nat) == 1);
+    assert(nsub(4nat, 4nat) == 0);
+    assert(nsub(5nat, 4nat) == 1);
+    assert(nsub(6nat, 4nat) == 2);
+    assert(nsub(7nat, 4nat) == 3);
+    assert(nsub(8nat, 4nat) == 4);
+    assert(eytzinger1_extra(7) == 8);
+    assert(to_inorder_raw(1, 7) == 4);
+    assert(to_inorder_raw(2, 7) == 2);
+    assert(to_inorder_raw(3, 7) == 6);
+    assert(to_inorder_raw(4, 7) == 1);
+    assert(to_inorder_raw(5, 7) == 3);
+    assert(to_inorder_raw(6, 7) == 5);
+    assert(to_inorder_raw(7, 7) == 7);
+}
+
+// --- Incomplete tree: tests the extra adjustment ---
+
+proof fn to_inorder_n5()
+    ensures
+        to_inorder(1, 5) == 4,
+        to_inorder(2, 5) == 2,
+        to_inorder(3, 5) == 5,  // raw=6, extra=4, adjusted=(6+4)/2=5
+        to_inorder(4, 5) == 1,
+        to_inorder(5, 5) == 3,
+{
+    eval_level_pow2();
+    assert(nsub(1nat, 1nat) == 0);
+    assert(nsub(2nat, 0nat) == 2);
+    assert(nsub(2nat, 1nat) == 1);
+    assert(nsub(2nat, 2nat) == 0);
+    assert(nsub(3nat, 2nat) == 1);
+    assert(nsub(4nat, 4nat) == 0);
+    assert(nsub(5nat, 4nat) == 1);
+    assert(nsub(6nat, 4nat) == 2);
+    assert(eytzinger1_extra(5) == 4);
+    assert(to_inorder_raw(1, 5) == 4);
+    assert(to_inorder_raw(2, 5) == 2);
+    assert(to_inorder_raw(3, 5) == 6);
+    assert(to_inorder_raw(4, 5) == 1);
+    assert(to_inorder_raw(5, 5) == 3);
+}
+
+// --- Roundtrip: from_inorder(to_inorder(i)) == i ---
+
+proof fn roundtrip_n3()
+    ensures
+        from_inorder(to_inorder(1, 3), 3) == 1,
+        from_inorder(to_inorder(2, 3), 3) == 2,
+        from_inorder(to_inorder(3, 3), 3) == 3,
+{
+    eval_level_pow2();
+    reveal_with_fuel(ctz, 4);
+    reveal_with_fuel(strip_lowest_bit, 4);
+    assert(nsub(1nat, 1nat) == 0);
+    assert(nsub(1nat, 0nat) == 1);
+    assert(nsub(2nat, 2nat) == 0);
+    assert(nsub(3nat, 2nat) == 1);
+    assert(nsub(4nat, 2nat) == 2);
+    assert(eytzinger1_extra(3) == 4);
+    assert(to_inorder(1, 3) == 2);
+    assert(to_inorder(2, 3) == 1);
+    assert(to_inorder(3, 3) == 3);
+    assert(ctz(1) == 0);
+    assert(ctz(2) == 1);
+    assert(ctz(3) == 0);
+    assert(strip_lowest_bit(1) == 0);
+    assert(strip_lowest_bit(2) == 0);
+    assert(strip_lowest_bit(3) == 1);
+}
+
+proof fn roundtrip_n5()
+    ensures
+        from_inorder(to_inorder(1, 5), 5) == 1,
+        from_inorder(to_inorder(2, 5), 5) == 2,
+        from_inorder(to_inorder(3, 5), 5) == 3,
+        from_inorder(to_inorder(4, 5), 5) == 4,
+        from_inorder(to_inorder(5, 5), 5) == 5,
+{
+    eval_level_pow2();
+    reveal_with_fuel(ctz, 4);
+    reveal_with_fuel(strip_lowest_bit, 4);
+    assert(nsub(1nat, 1nat) == 0);
+    assert(nsub(1nat, 0nat) == 1);
+    assert(nsub(2nat, 0nat) == 2);
+    assert(nsub(2nat, 1nat) == 1);
+    assert(nsub(2nat, 2nat) == 0);
+    assert(nsub(3nat, 2nat) == 1);
+    assert(nsub(4nat, 4nat) == 0);
+    assert(nsub(5nat, 4nat) == 1);
+    assert(nsub(6nat, 4nat) == 2);
+    assert(eytzinger1_extra(5) == 4);
+    assert(to_inorder(1, 5) == 4);
+    assert(to_inorder(2, 5) == 2);
+    assert(to_inorder(3, 5) == 5);
+    assert(to_inorder(4, 5) == 1);
+    assert(to_inorder(5, 5) == 3);
+    assert(ctz(1) == 0); assert(ctz(2) == 1); assert(ctz(3) == 0);
+    assert(ctz(4) == 2); assert(ctz(5) == 0); assert(ctz(6) == 1);
+    assert(strip_lowest_bit(1) == 0); assert(strip_lowest_bit(2) == 0);
+    assert(strip_lowest_bit(3) == 1); assert(strip_lowest_bit(4) == 0);
+    assert(strip_lowest_bit(5) == 2); assert(strip_lowest_bit(6) == 1);
+}
+
+proof fn roundtrip_n7()
+    ensures
+        from_inorder(to_inorder(1, 7), 7) == 1,
+        from_inorder(to_inorder(2, 7), 7) == 2,
+        from_inorder(to_inorder(3, 7), 7) == 3,
+        from_inorder(to_inorder(4, 7), 7) == 4,
+        from_inorder(to_inorder(5, 7), 7) == 5,
+        from_inorder(to_inorder(6, 7), 7) == 6,
+        from_inorder(to_inorder(7, 7), 7) == 7,
+{
+    eval_level_pow2();
+    reveal_with_fuel(ctz, 4);
+    reveal_with_fuel(strip_lowest_bit, 4);
+    assert(nsub(1nat, 1nat) == 0);
+    assert(nsub(1nat, 0nat) == 1);
+    assert(nsub(2nat, 0nat) == 2);
+    assert(nsub(2nat, 1nat) == 1);
+    assert(nsub(2nat, 2nat) == 0);
+    assert(nsub(3nat, 2nat) == 1);
+    assert(nsub(4nat, 4nat) == 0);
+    assert(nsub(5nat, 4nat) == 1);
+    assert(nsub(6nat, 4nat) == 2);
+    assert(nsub(7nat, 4nat) == 3);
+    assert(nsub(8nat, 4nat) == 4);
+    assert(eytzinger1_extra(7) == 8);
+    assert(to_inorder(1, 7) == 4);
+    assert(to_inorder(2, 7) == 2);
+    assert(to_inorder(3, 7) == 6);
+    assert(to_inorder(4, 7) == 1);
+    assert(to_inorder(5, 7) == 3);
+    assert(to_inorder(6, 7) == 5);
+    assert(to_inorder(7, 7) == 7);
+    assert(ctz(1) == 0); assert(ctz(2) == 1); assert(ctz(3) == 0);
+    assert(ctz(4) == 2); assert(ctz(5) == 0); assert(ctz(6) == 1);
+    assert(ctz(7) == 0);
+    assert(strip_lowest_bit(1) == 0); assert(strip_lowest_bit(2) == 0);
+    assert(strip_lowest_bit(3) == 1); assert(strip_lowest_bit(4) == 0);
+    assert(strip_lowest_bit(5) == 2); assert(strip_lowest_bit(6) == 1);
+    assert(strip_lowest_bit(7) == 3);
+}
+
+// ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
 
