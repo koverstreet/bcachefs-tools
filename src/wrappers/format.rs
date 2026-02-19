@@ -148,6 +148,13 @@ pub extern "C" fn bch2_format(
         opt_set!(fs_opts, btree_node_size, s);
     }
 
+    if fs_opts.btree_node_size <= fs_opts.block_size as u32 {
+        panic!(
+            "btree node size ({}) must be greater than block size ({})",
+            fs_opts.btree_node_size, fs_opts.block_size
+        );
+    }
+
     // UUID
     if opts.uuid.b == [0u8; 16] {
         opts.uuid.b = *uuid::Uuid::new_v4().as_bytes();
