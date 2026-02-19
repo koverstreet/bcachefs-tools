@@ -26,6 +26,8 @@ pub mod subvolume;
 pub mod super_cmd;
 pub mod timestats;
 pub mod top;
+#[cfg(feature = "fuse")]
+pub mod fusemount;
 
 pub use completions::completions;
 pub use attr::cmd_setattr;

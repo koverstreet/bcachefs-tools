@@ -10,13 +10,7 @@ mod http;
 
 use std::process::{ExitCode, Termination};
 
-#[cfg(feature = "fuse")]
-use std::ffi::{c_char, CString};
-
 use bch_bindgen::c;
-
-#[cfg(feature = "fuse")]
-use log::debug;
 
 #[derive(Debug)]
 pub struct ErrnoError(pub errno::Errno);
@@ -118,38 +112,6 @@ fn group_usage(group: &str) {
         if child.get_name() == "help" { continue }
         let child_about = child.get_about().map(|s| s.to_string()).unwrap_or_default();
         println!("  {:<26}{child_about}", child.get_name());
-    }
-}
-
-#[cfg(feature = "fuse")]
-fn c_command(args: Vec<String>, symlink_cmd: Option<&str>) -> ExitCode {
-    let r = handle_c_command(args, symlink_cmd);
-    debug!("return code from C command: {r}");
-    ExitCode::from(r as u8)
-}
-
-#[cfg(feature = "fuse")]
-fn handle_c_command(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> i32 {
-    let cmd = match symlink_cmd {
-        Some(s) => s.to_string(),
-        None => argv.remove(1),
-    };
-
-    let argc: i32 = argv.len().try_into().unwrap();
-
-    let argv: Vec<_> = argv.into_iter().map(|s| CString::new(s).unwrap()).collect();
-    let mut argv = argv
-        .into_iter()
-        .map(|s| Box::into_raw(s.into_boxed_c_str()).cast::<c_char>())
-        .collect::<Box<[*mut c_char]>>();
-    let argv = argv.as_mut_ptr();
-
-    // The C functions will mutate argv. It shouldn't be used after this block.
-    unsafe {
-        match cmd.as_str() {
-            "fusemount"         => c::cmd_fusemount(argc, argv),
-            _ => { println!("Unknown command {cmd}"); bcachefs_usage(); 1 }
-        }
     }
 }
 
@@ -271,7 +233,10 @@ fn main() -> ExitCode {
         "reflink-option-propagate" => commands::cmd_reflink_option_propagate(args[1..].to_vec()).report(),
         "unlock" => commands::cmd_unlock(args[1..].to_vec()).report(),
         #[cfg(feature = "fuse")]
-        "fusemount" => c_command(args, symlink_cmd),
+        "fusemount" => {
+            let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
+            commands::fusemount::cmd_fusemount(argv).report()
+        }
         _ => {
             println!("Unknown command {cmd}");
             bcachefs_usage();

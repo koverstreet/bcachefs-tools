@@ -91,9 +91,8 @@ export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries
 
 PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd libudev libkeyutils"
 ifdef BCACHEFS_FUSE
-	PKGCONFIG_LIBS+="fuse3 >= 3.7"
 	CFLAGS+=-DBCACHEFS_FUSE
-	RUSTFLAGS+=--cfg feature="fuse"
+	CARGO_BUILD_ARGS+=--features fuse
 endif
 
 PKGCONFIG_CFLAGS:=$(shell $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
@@ -138,6 +137,7 @@ tags:
 	ctags -R .
 
 SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' -iname '*.c'))
+SRCS:=$(filter-out ./c_src/cmd_fusemount.c,$(SRCS))
 DEPS:=$(SRCS:.c=.d)
 -include $(DEPS)
 

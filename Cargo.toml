@@ -14,7 +14,7 @@ name = "bcachefs"
 path = "src/bcachefs.rs"
 
 [features]
-fuse = []
+fuse = ["dep:fuser"]
 
 [dependencies]
 log = { version = "0.4", features = ["std"] }
@@ -37,6 +37,7 @@ owo-colors = "4"
 crossterm = { version = "0.28", default-features = false, features = ["events"] }
 tiny_http = "0.12.0"
 chrono = { version = "0.4.43", default-features = false, features = ["clock"] }
+fuser = { version = "0.17", optional = true }
 
 [dependencies.env_logger]
 version = "0.10"

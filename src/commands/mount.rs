@@ -242,21 +242,13 @@ pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::
 
     #[cfg(feature = "fuse")]
     if cli.fs_type == "bcachefs.fuse" {
-        use std::ffi::c_char;
-        use bch_bindgen::c;
-
-        let argc: i32 = argv.len().try_into().unwrap();
-
-        let argv: Vec<_> = argv.into_iter().map(|s| CString::new(s).unwrap()).collect();
-        let mut argv = argv
-            .into_iter()
-            .map(|s| Box::into_raw(s.into_boxed_c_str()).cast::<c_char>())
-            .collect::<Box<[*mut c_char]>>();
-        let argv = argv.as_mut_ptr();
-
-        return std::process::ExitCode::from(
-            unsafe { c::cmd_fusemount(argc, argv) } as u8
-        );
+        return match super::fusemount::cmd_fusemount(argv) {
+            Ok(()) => std::process::ExitCode::SUCCESS,
+            Err(e) => {
+                error!("FUSE mount failed: {e}");
+                std::process::ExitCode::FAILURE
+            }
+        };
     }
 
     // TODO: centralize this on the top level CLI

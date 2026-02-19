@@ -11,6 +11,13 @@
 #include "init/fs.h"
 #include "init/passes.h"
 #include "fs/check.h"
+#include "fs/dirent.h"
+#include "fs/namei.h"
+#include "fs/inode.h"
+#include "alloc/accounting.h"
+#include "alloc/buckets.h"
+#include "data/read.h"
+#include "data/write.h"
 #include "journal/init.h"
 #include "journal/read.h"
 #include "journal/seq_blacklist.h"
@@ -27,6 +34,8 @@
 
 #include "include/linux/bio.h"
 #include "include/linux/blkdev.h"
+
+#include "c_src/fuse_shims.h"
 
 /* Fix753 is a workaround for https://github.com/rust-lang/rust-bindgen/issues/753
  * Functional macro are not expanded with bindgen, e.g. ioctl are automatically ignored
