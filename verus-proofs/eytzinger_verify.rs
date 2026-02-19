@@ -2191,6 +2191,302 @@ proof fn from_inorder_valid(pos: nat, size: nat)
     }
 }
 
+// ============================================================
+// Adjustment monotonicity — extra doesn't break ordering
+// ============================================================
+//
+// The to_inorder adjustment maps raw to:
+//   raw               if raw <= extra
+//   (raw + extra) / 2 if raw > extra
+//
+// This is strictly monotone: if raw_a < raw_b, then
+// to_inorder(a) < to_inorder(b) (for any nodes a, b in same tree).
+//
+// Three cases:
+//   Both <= extra:  raw_a < raw_b directly. ✓
+//   Both > extra:   (raw_a + extra)/2 < (raw_b + extra)/2. ✓
+//   a <= extra < b: raw_a <= extra < (raw_b + extra)/2. Need raw_b >= extra + 2
+//                   (since raw_b > extra and raw_b - extra is even). ✓
+
+/// The adjustment preserves strict ordering of raw values.
+proof fn adjustment_monotone(raw_a: nat, raw_b: nat, size: nat)
+    requires
+        size >= 1,
+        raw_a >= 1, raw_b >= 1,
+        raw_a < raw_b,
+        // raw_b - extra is even when raw_b > extra (from raw_extra_diff_even)
+        (raw_b > eytzinger1_extra(size)) ==> (raw_b - eytzinger1_extra(size)) % 2 == 0,
+    ensures
+        ({
+            let extra = eytzinger1_extra(size);
+            let adj_a: nat = if raw_a <= extra { raw_a } else { (raw_a + extra) / 2 };
+            let adj_b: nat = if raw_b <= extra { raw_b } else { (raw_b + extra) / 2 };
+            adj_a < adj_b
+        })
+{
+    let extra = eytzinger1_extra(size);
+    let adj_a: nat = if raw_a <= extra { raw_a } else { (raw_a + extra) / 2 };
+    let adj_b: nat = if raw_b <= extra { raw_b } else { (raw_b + extra) / 2 };
+
+    if raw_a <= extra && raw_b <= extra {
+        // Both unadjusted: adj_a = raw_a < raw_b = adj_b. ✓
+    } else if raw_a > extra && raw_b > extra {
+        // Both adjusted: (raw_a + extra)/2 < (raw_b + extra)/2
+        // Since raw_a < raw_b, raw_a + extra < raw_b + extra.
+        assert(raw_a + extra < raw_b + extra);
+        // Integer division preserves strict < when gap >= 2
+        // (raw_b + extra) - (raw_a + extra) = raw_b - raw_a >= 1
+        // But we need the division to preserve strict <.
+        // Actually: a < b implies a/2 <= b/2. For strict <:
+        // raw_a + extra < raw_b + extra and both are even (since raw-extra is even):
+        // raw_a + extra = raw_a - extra + 2*extra. If raw_a > extra, raw_a - extra is even,
+        // so raw_a + extra is even (even + even). Similarly raw_b + extra is even.
+        // For even a < even b: a/2 < b/2 iff a < b. ✓
+        // But we only know raw_b - extra is even. Need raw_a - extra is even too.
+        // We don't have that as a precondition. Hmm.
+        // Actually: for the case where raw_a comes from a valid node via to_inorder_raw,
+        // raw_extra_diff_even proves it. But this lemma takes raw values directly.
+        // Let me just work with the integer arithmetic.
+        //
+        // raw_a < raw_b and raw_b - extra is even. raw_a > extra.
+        // We need (raw_a + extra)/2 < (raw_b + extra)/2.
+        // Sufficient: raw_a + extra < raw_b + extra, and (raw_b + extra) is even.
+        // raw_b + extra = (raw_b - extra) + 2*extra. raw_b - extra is even, so raw_b + extra is even.
+        // raw_a + extra <= raw_b + extra - 1 (since raw_a < raw_b).
+        // If raw_a + extra is even: (raw_a+extra)/2 < (raw_b+extra)/2. ✓
+        // If raw_a + extra is odd: (raw_a+extra)/2 = (raw_a+extra-1)/2 < (raw_b+extra)/2. ✓
+        // In both cases: ⌊(raw_a+extra)/2⌋ < (raw_b+extra)/2. ✓ (since raw_b+extra is even)
+        assert((raw_b + extra) % 2 == 0);
+        // For even b and any a < b: a/2 < b/2 when b is even.
+        // Actually not quite: 3/2=1, 4/2=2, yes 1 < 2. 2/2=1, 4/2=2, yes. 1/2=0, 2/2=1, yes.
+        // More precisely: if b is even and a < b, then ⌊a/2⌋ ≤ (b-1)/2 = b/2 - 1 < b/2.
+        // Wait, (b-1)/2 when b is even = (b-1)/2 which is ⌊b/2⌋ - 1 + something...
+        // Let me just assert it.
+        assert(adj_a < adj_b);
+    } else {
+        // raw_a <= extra < raw_b
+        assert(raw_a <= extra);
+        assert(raw_b > extra);
+        // adj_a = raw_a <= extra
+        // adj_b = (raw_b + extra) / 2
+        // raw_b - extra is even and >= 2 (since raw_b > extra and even gap)
+        // raw_b >= extra + 2
+        assert((raw_b - extra) % 2 == 0);
+        assert(raw_b >= extra + 2);
+        // adj_b = (raw_b + extra) / 2 >= (extra + 2 + extra) / 2 = extra + 1
+        assert(adj_b >= extra + 1);
+        assert(adj_a <= extra);
+        assert(adj_a < adj_b);
+    }
+}
+
+/// Children ordering WITH the extra adjustment.
+/// Extends raw_children_ordered to the full to_inorder function.
+proof fn children_ordered(i: nat, size: nat)
+    requires
+        i >= 1,
+        right_child(i) <= size,
+        size >= 1,
+    ensures
+        to_inorder(left_child(i), size) < to_inorder(i, size),
+        to_inorder(i, size) < to_inorder(right_child(i), size),
+{
+    // Raw values are positive (2*offset+1 >= 1 and pow2 >= 1)
+    let b = level(i);
+    let d = level(size);
+    pow2_positive(nsub(d, b));
+    level_of_left_child(i);
+    level_of_right_child(i);
+    pow2_positive(nsub(d, b + 1));
+    nat_mul_positive(2 * nsub(left_child(i), pow2(b + 1)) + 1, pow2(nsub(d, b + 1)));
+    nat_mul_positive(2 * nsub(i, pow2(b)) + 1, pow2(nsub(d, b)));
+    nat_mul_positive(2 * nsub(right_child(i), pow2(b + 1)) + 1, pow2(nsub(d, b + 1)));
+
+    // Get raw ordering
+    raw_children_ordered(i, size);
+    let raw_l = to_inorder_raw(left_child(i), size);
+    let raw_p = to_inorder_raw(i, size);
+    let raw_r = to_inorder_raw(right_child(i), size);
+    assert(raw_l >= 1);
+    assert(raw_p >= 1);
+    assert(raw_r >= 1);
+    assert(raw_l < raw_p);
+    assert(raw_p < raw_r);
+
+    // Get the even-parity preconditions for adjustment_monotone
+    if raw_p > eytzinger1_extra(size) {
+        raw_extra_diff_even(i, size);
+    }
+    if raw_r > eytzinger1_extra(size) {
+        raw_extra_diff_even(right_child(i), size);
+    }
+
+    // Apply adjustment monotonicity
+    adjustment_monotone(raw_l, raw_p, size);
+    adjustment_monotone(raw_p, raw_r, size);
+}
+
+/// Raw values are always positive for valid nodes.
+proof fn to_inorder_raw_positive(i: nat, size: nat)
+    requires i >= 1, i <= size, size >= 1
+    ensures to_inorder_raw(i, size) >= 1
+{
+    let b = level(i);
+    let d = level(size);
+    level_range(i);
+    level_le_when_le(i, size);
+    pow2_positive(nsub(d, b));
+    nat_mul_positive(2 * nsub(i, pow2(b)) + 1, pow2(nsub(d, b)));
+}
+
+/// to_inorder_raw is bounded: raw < pow2(d+1).
+proof fn to_inorder_raw_bound(i: nat, size: nat)
+    requires i >= 1, i <= size, size >= 1
+    ensures to_inorder_raw(i, size) < pow2(level(size) + 1)
+{
+    let b = level(i);
+    let d = level(size);
+    let offset = nsub(i, pow2(b));
+    let shift = nsub(d, b);
+
+    level_range(i);
+    level_le_when_le(i, size);
+    pow2_positive(b);
+    pow2_positive(shift);
+
+    // offset < pow2(b)
+    assert(offset < pow2(b));
+    // raw <= (2*pow2(b)-1)*pow2(shift) < 2*pow2(b)*pow2(shift) = 2*pow2(d) = pow2(d+1)
+    pow2_split(b, shift);
+    assert(pow2(b) * pow2(shift) == pow2(d));
+    assert(b + shift == d);
+    assert((2 * offset + 1) * pow2(shift) <= (2 * pow2(b) - 1) * pow2(shift)) by (nonlinear_arith)
+        requires 2 * offset + 1 <= 2 * pow2(b) - 1, pow2(shift) > 0
+    {};
+    assert((2 * pow2(b) - 1) * pow2(shift) < 2 * pow2(b) * pow2(shift)) by (nonlinear_arith)
+        requires pow2(shift) > 0, pow2(b) > 0
+    {};
+    assert(2 * pow2(b) * pow2(shift) == 2 * pow2(d)) by (nonlinear_arith)
+        requires pow2(b) * pow2(shift) == pow2(d)
+    {};
+    pow2_double(d);
+}
+
+/// to_inorder maps valid eytzinger indices to valid inorder positions.
+proof fn to_inorder_valid(i: nat, size: nat)
+    requires i >= 1, i <= size, size >= 1
+    ensures
+        to_inorder(i, size) >= 1,
+        to_inorder(i, size) <= size,
+{
+    let b = level(i);
+    let d = level(size);
+    let offset = nsub(i, pow2(b));
+    let shift = nsub(d, b);
+    let raw = to_inorder_raw(i, size);
+    let extra = eytzinger1_extra(size);
+
+    level_range(i);
+    level_range(size);
+    level_le_when_le(i, size);
+    pow2_positive(b);
+    pow2_positive(d);
+    pow2_positive(shift);
+    pow2_double(d);
+    to_inorder_raw_positive(i, size);
+    to_inorder_raw_bound(i, size);
+
+    assert(offset < pow2(b));
+    assert(nsub(size + 1, pow2(d)) == (size + 1 - pow2(d)) as nat);
+
+    if raw <= extra {
+        assert(to_inorder(i, size) == raw);
+
+        if shift == 0 {
+            // Deepest level: raw = 2*offset+1, max = extra-1 <= size
+            reveal_with_fuel(pow2, 1);
+            assert(pow2(0nat) == 1);
+            assert(raw == (2 * offset + 1) * pow2(shift));
+            assert((2 * offset + 1) * 1 == 2 * offset + 1) by (nonlinear_arith)
+                requires offset >= 0
+            {};
+            assert(raw == 2 * offset + 1);
+            assert(offset <= size - pow2(d));
+            assert(extra == 2 * (size + 1 - pow2(d)));
+            assert(size + 1 <= 2 * pow2(d));
+            assert(raw <= extra - 1);
+            assert(raw <= size);
+        } else {
+            // Non-deepest: raw < pow2(d+1). Two sub-cases.
+            if extra <= size {
+                // Incomplete tree: raw <= extra <= size
+                assert(raw <= size);
+            } else {
+                // Complete tree: extra = size+1, raw < pow2(d+1)
+                assert(raw < pow2(d + 1));
+                assert(pow2(d + 1) == 2 * pow2(d));
+                assert(raw <= 2 * pow2(d) - 1);
+                // extra = 2*(size+1-pow2(d)), extra > size means
+                // 2*(size+1-pow2(d)) > size, i.e., size+2 > 2*pow2(d).
+                // Since size < pow2(d+1) = 2*pow2(d), size <= 2*pow2(d)-1.
+                // So size+2 > 2*pow2(d) iff size >= 2*pow2(d)-1 iff size = 2*pow2(d)-1.
+                assert(size == 2 * pow2(d) - 1);
+                assert(raw <= size);
+            }
+        }
+    } else {
+        // Adjusted: to_inorder = (raw+extra)/2
+        raw_extra_diff_even(i, size);
+
+        // raw + extra <= 2*size (key bound for adjusted case):
+        // raw <= (2*offset+1)*pow2(shift) <= (2*pow2(b)-1)*pow2(shift) = 2*pow2(d) - pow2(shift)
+        pow2_split(b, shift);
+        assert(pow2(b) * pow2(shift) == pow2(d));
+        assert((2 * offset + 1) * pow2(shift) <= (2 * pow2(b) - 1) * pow2(shift)) by (nonlinear_arith)
+            requires 2 * offset + 1 <= 2 * pow2(b) - 1, pow2(shift) > 0
+        {};
+        assert((2 * pow2(b) - 1) * pow2(shift) == 2 * pow2(b) * pow2(shift) - pow2(shift)) by (nonlinear_arith)
+            requires pow2(b) > 0, pow2(shift) > 0
+        {};
+        assert(2 * pow2(b) * pow2(shift) == 2 * pow2(d)) by (nonlinear_arith)
+            requires pow2(b) * pow2(shift) == pow2(d)
+        {};
+        assert(raw <= 2 * pow2(d) - pow2(shift));
+        // extra = 2*(size+1-pow2(d)), so raw + extra <= 2*pow2(d) - pow2(shift) + 2*size + 2 - 2*pow2(d) = 2*size + 2 - pow2(shift)
+        assert(raw + extra <= 2 * size + 2 - pow2(shift));
+        // shift >= 1: when shift=0 (deepest level), raw <= extra, contradicting this branch.
+        // Proof: shift=0 means b=d, offset = i-pow2(d) <= size-pow2(d),
+        // raw = (2*offset+1)*1 = 2*offset+1 <= 2*(size-pow2(d))+1 < extra = 2*(size+1-pow2(d)).
+        if shift == 0 {
+            reveal_with_fuel(pow2, 1);
+            assert(pow2(0nat) == 1);
+            assert(raw == (2 * offset + 1) * pow2(shift));
+            assert((2 * offset + 1) * 1 == 2 * offset + 1) by (nonlinear_arith)
+                requires offset >= 0
+            {};
+            assert(raw == 2 * offset + 1);
+            assert(offset <= size - pow2(d));
+            assert(raw <= 2 * (size - pow2(d)) + 1) by (nonlinear_arith)
+                requires raw == 2 * offset + 1, offset <= size - pow2(d)
+            {};
+            assert(nsub(size + 1, pow2(d)) == (size + 1 - pow2(d)) as nat);
+            assert(extra == 2 * (size + 1 - pow2(d)));
+            assert(raw < extra) by (nonlinear_arith)
+                requires raw <= 2 * (size - pow2(d)) + 1, extra == 2 * (size + 1 - pow2(d))
+            {};
+            assert(false);
+        }
+        assert(shift >= 1);
+        pow2_double((shift - 1) as nat);
+        pow2_positive((shift - 1) as nat);
+        assert(pow2(shift) >= 2);
+        assert(raw + extra <= 2 * size);
+        assert((raw + extra) / 2 <= size);
+        assert(to_inorder(i, size) >= 1);
+        assert(to_inorder(i, size) <= size);
+    }
+}
+
 fn main() {}
 
 } // verus!
