@@ -1680,6 +1680,194 @@ proof fn undo_extra_correct(raw: nat, extra: nat)
     // 2*adjusted - extra = 2 * (raw + extra) / 2 - extra = (raw + extra) - extra = raw
 }
 
+/// The raw value has the form (2*offset + 1) * pow2(shift).
+/// This connects to_inorder_raw with the ctz/strip decomposition.
+proof fn raw_decomposition(i: nat, size: nat)
+    requires i >= 1, i <= size, size >= 1
+    ensures
+        to_inorder_raw(i, size) ==
+            (2 * nsub(i, pow2(level(i))) + 1) * pow2(nsub(level(size), level(i)))
+{
+    // Direct from definition of to_inorder_raw.
+}
+
+/// Offset plus level bit recovers the eytzinger index.
+/// i = (i - pow2(level(i))) + pow2(level(i))
+proof fn offset_plus_level_bit(i: nat)
+    requires i >= 1
+    ensures nsub(i, pow2(level(i))) + pow2(level(i)) == i
+{
+    level_range(i);
+}
+
+/// THE ROUNDTRIP THEOREM: from_inorder(to_inorder(i, n), n) == i.
+///
+/// This proves the bijection: the C bit manipulation in
+/// __eytzinger1_to_inorder and __inorder_to_eytzinger1 are exact inverses.
+///
+/// The proof chains:
+/// 1. to_inorder computes raw = (2*offset+1)*2^shift, possibly adjusted
+/// 2. from_inorder undoes the adjustment, recovering raw
+/// 3. strip_lowest_bit(raw) recovers offset (by strip_raw)
+/// 4. ctz(raw) recovers shift (by ctz_raw)
+/// 5. offset + pow2(level) = i (reconstruction)
+///
+/// We prove it first for complete trees (raw <= extra, no adjustment),
+/// then extend to incomplete trees.
+proof fn roundtrip_complete(i: nat, size: nat)
+    requires
+        i >= 1, i <= size, size >= 1,
+        to_inorder_raw(i, size) <= eytzinger1_extra(size),
+    ensures
+        from_inorder(to_inorder(i, size), size) == i
+{
+    let b = level(i);
+    let d = level(size);
+    let offset = nsub(i, pow2(b));
+    let shift = nsub(d, b);
+
+    level_range(i);
+    level_le_when_le(i, size);
+
+    let raw = to_inorder_raw(i, size);
+    let extra = eytzinger1_extra(size);
+
+    // to_inorder(i, size) == raw (no adjustment since raw <= extra)
+    assert(to_inorder(i, size) == raw);
+
+    // from_inorder: pos <= extra so raw_in = pos = raw
+    // Need raw <= extra (our precondition)
+
+    // Decompose raw
+    raw_decomposition(i, size);
+    assert(raw == (2 * offset + 1) * pow2(shift));
+
+    // strip_lowest_bit and ctz recover offset and shift
+    strip_raw(offset, shift);
+    ctz_raw(offset, shift);
+    assert(strip_lowest_bit(raw) == offset);
+    assert(ctz(raw) == shift);
+
+    // nsub(d, shift) == nsub(d, nsub(d, b)) == b
+    assert(nsub(d, shift) == b);
+
+    // offset + pow2(b) == i
+    offset_plus_level_bit(i);
+}
+
+/// For valid nodes, raw - extra is always even when raw > extra.
+/// This is because: raw = (2*offset+1)*pow2(shift) where shift >= 1
+/// for non-deepest-level nodes (the only ones that can have raw > extra),
+/// so raw is even. And extra = 2*(...) is always even.
+proof fn raw_extra_diff_even(i: nat, size: nat)
+    requires
+        i >= 1, i <= size, size >= 1,
+        to_inorder_raw(i, size) > eytzinger1_extra(size),
+    ensures
+        (to_inorder_raw(i, size) - eytzinger1_extra(size)) % 2 == 0
+{
+    // raw > extra. We need to show raw and extra have the same parity.
+    // extra = 2 * nsub(size+1, pow2(level(size))) is always even.
+    // raw = (2*offset+1) * pow2(shift) where shift = nsub(d, b).
+    // If shift >= 1: pow2(shift) is even, so raw is even. Even - even = even. ✓
+    // If shift == 0: raw = 2*offset+1 (odd). We need to show this can't exceed extra.
+    let b = level(i);
+    let d = level(size);
+    let shift = nsub(d, b);
+
+    level_range(i);
+    level_le_when_le(i, size);
+    level_range(size);
+
+    if shift == 0 {
+        // b == d: node i is at the deepest level.
+        // raw = 2*offset+1 where offset = i - pow2(d).
+        // Max offset at deepest level: size - pow2(d).
+        // Max raw at deepest level: 2*(size - pow2(d)) + 1.
+        // extra = 2*(size + 1 - pow2(d)) = 2*(size - pow2(d)) + 2.
+        // So max raw = extra - 1 < extra. Contradiction with raw > extra!
+        assert(b == d);  // shift == 0 means b == d
+        let offset = nsub(i, pow2(b));
+        reveal_with_fuel(pow2, 1);
+        assert(nsub(d, b) == 0);
+        assert(pow2(0nat) == 1);
+        assert(to_inorder_raw(i, size) == (2 * offset + 1) * 1);
+        assert(to_inorder_raw(i, size) == 2 * offset + 1);
+        assert(eytzinger1_extra(size) == 2 * nsub(size + 1, pow2(d)));
+        // offset = i - pow2(d) <= size - pow2(d)
+        // So 2*offset+1 <= 2*(size-pow2(d))+1 = 2*(size+1-pow2(d))-1 = extra-1 < extra
+        assert(offset <= nsub(size, pow2(d)));
+        assert(2 * offset + 1 < 2 * nsub(size + 1, pow2(d)));
+        // This contradicts raw > extra
+    } else {
+        // shift >= 1, so pow2(shift) >= 2, raw is even.
+        pow2_double((shift - 1) as nat);
+        pow2_positive((shift - 1) as nat);
+        let offset = nsub(i, pow2(b));
+        let odd = 2 * offset + 1;
+        assert(to_inorder_raw(i, size) == odd * pow2(shift));
+        // pow2(shift) = 2 * pow2(shift-1), so raw = 2 * (odd * pow2(shift-1))
+        assert(odd * pow2(shift) == 2 * (odd * pow2((shift - 1) as nat))) by (nonlinear_arith)
+            requires pow2(shift) == 2 * pow2((shift - 1) as nat)
+        {};
+        // raw is even
+        assert(to_inorder_raw(i, size) % 2 == 0);
+        // extra is always even (2 * something)
+        assert(eytzinger1_extra(size) % 2 == 0);
+        // even - even is even
+    }
+}
+
+/// Full roundtrip theorem including incomplete trees.
+proof fn roundtrip(i: nat, size: nat)
+    requires
+        i >= 1, i <= size, size >= 1,
+    ensures
+        from_inorder(to_inorder(i, size), size) == i
+{
+    let raw = to_inorder_raw(i, size);
+    let extra = eytzinger1_extra(size);
+    let b = level(i);
+    let d = level(size);
+    let offset = nsub(i, pow2(b));
+    let shift = nsub(d, b);
+
+    level_range(i);
+    level_le_when_le(i, size);
+    raw_decomposition(i, size);
+
+    if raw <= extra {
+        roundtrip_complete(i, size);
+    } else {
+        // Adjusted case: to_inorder returns (raw + extra) / 2
+        let adjusted = (raw + extra) / 2;
+        assert(to_inorder(i, size) == adjusted);
+
+        // The adjusted value > extra (since raw > extra implies (raw+extra)/2 > extra)
+        // Proof: raw > extra, so raw + extra > 2*extra, so (raw+extra)/2 > extra.
+        // But we need this for integer division. Since raw-extra is even:
+        raw_extra_diff_even(i, size);
+        assert((raw - extra) % 2 == 0);
+        // raw + extra = (raw - extra) + 2*extra, also even, so division is exact
+        assert((raw + extra) % 2 == 0);
+        assert(adjusted == (raw + extra) / 2);
+        assert(2 * adjusted == raw + extra);
+        assert(adjusted > extra);
+
+        // from_inorder: pos > extra, so raw_in = 2*pos - extra = 2*adjusted - extra
+        //   = raw + extra - extra = raw
+        assert((2 * adjusted - extra) as nat == raw);
+
+        // Same as complete case from here
+        strip_raw(offset, shift);
+        ctz_raw(offset, shift);
+        assert(strip_lowest_bit(raw) == offset);
+        assert(ctz(raw) == shift);
+        assert(nsub(d, shift) == b);
+        offset_plus_level_bit(i);
+    }
+}
+
 // ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
