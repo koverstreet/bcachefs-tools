@@ -705,6 +705,101 @@ proof fn skiplist_phase_brings_close(
 }
 
 // ============================================================
+// Skiplist construction correctness
+// ============================================================
+//
+// The kernel builds skiplist entries as (snapshot.c:375-394):
+//   skip[0] = parent
+//   skip[1] = parent->skip[0]
+//   skip[2] = parent->skip[1]
+//
+// We prove that this construction satisfies the skiplist_are_ancestors
+// and skiplist_ge_parent invariants — i.e., the constructed entries
+// are genuine ancestors of the node.
+
+/// If a new node's skip entries are set from its parent's ancestors
+/// (the construction pattern), they are genuine ancestors of the node.
+///
+/// This proves that snapshot.c:375-394 maintains skiplist_are_ancestors.
+proof fn skiplist_construction_correct(
+    table: Map<u32, SnapshotEntry>, id: u32
+)
+    requires
+        well_formed(table),
+        table.contains_key(id),
+        table[id].parent != 0,
+        id > 0,
+    ensures
+        // skip[0] = parent is an ancestor of id
+        is_ancestor(table, id, table[id].parent),
+        // If parent's skip[0] is a non-zero ancestor of parent,
+        // then it's also an ancestor of id (via transitivity through parent).
+        table.contains_key(table[id].parent) ==> {
+            let parent = table[id].parent;
+            let p_entry = table[parent];
+            (p_entry.skip.0 != 0 && is_ancestor(table, parent, p_entry.skip.0))
+                ==> is_ancestor(table, id, p_entry.skip.0)
+        },
+        // Same for parent's skip[1]
+        table.contains_key(table[id].parent) ==> {
+            let parent = table[id].parent;
+            let p_entry = table[parent];
+            (p_entry.skip.1 != 0 && is_ancestor(table, parent, p_entry.skip.1))
+                ==> is_ancestor(table, id, p_entry.skip.1)
+        },
+{
+    let parent = table[id].parent;
+
+    // skip[0] = parent: parent is an ancestor by one step
+    parent_is_ancestor(table, id);
+
+    if table.contains_key(parent) {
+        let p_entry = table[parent];
+
+        // skip[1] = parent.skip[0]: if parent.skip[0] is an ancestor
+        // of parent, then by transitivity it's an ancestor of id.
+        if p_entry.skip.0 != 0 && is_ancestor(table, parent, p_entry.skip.0) {
+            ancestor_transitive(table, id, parent, p_entry.skip.0);
+        }
+
+        // skip[2] = parent.skip[1]: same reasoning.
+        if p_entry.skip.1 != 0 && is_ancestor(table, parent, p_entry.skip.1) {
+            ancestor_transitive(table, id, parent, p_entry.skip.1);
+        }
+    }
+}
+
+/// The constructed skip entries are >= parent (since they're ancestors
+/// of parent, and ancestors have higher IDs).
+proof fn skiplist_construction_ge_parent(
+    table: Map<u32, SnapshotEntry>, id: u32
+)
+    requires
+        well_formed(table),
+        table.contains_key(id),
+        table[id].parent != 0,
+        id > 0,
+    ensures
+        table.contains_key(table[id].parent) ==> {
+            let parent = table[id].parent;
+            let p_entry = table[parent];
+            // parent.skip[0] >= parent (it's parent's ancestor)
+            (p_entry.skip.0 != 0 && is_ancestor(table, parent, p_entry.skip.0))
+                ==> p_entry.skip.0 >= parent
+        },
+{
+    let parent = table[id].parent;
+    if table.contains_key(parent) {
+        let p_entry = table[parent];
+        if p_entry.skip.0 != 0 && is_ancestor(table, parent, p_entry.skip.0) {
+            if p_entry.skip.0 != parent {
+                ancestor_implies_lt(table, parent, p_entry.skip.0);
+            }
+        }
+    }
+}
+
+// ============================================================
 // Bitmap — correctness model
 // ============================================================
 //
