@@ -578,12 +578,14 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 			continue;
 		}
 
+		u32 bucket_len = bp.v->bucket_len;
+
 		ret = bch2_move_extent_pred(ctxt, bucket_in_flight, NULL, pred, arg, &iter, bp.v->level, k);
 
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			continue;
 		if (ctxt->stats)
-			atomic64_add(bp.v->bucket_len, &ctxt->stats->sectors_seen);
+			atomic64_add(bucket_len, &ctxt->stats->sectors_seen);
 		if (bch2_err_matches(ret, BCH_ERR_data_update_fail))
 			ret = 0; /* failure for this extent, keep going */
 		if (bch2_err_matches(ret, EAGAIN) ||
