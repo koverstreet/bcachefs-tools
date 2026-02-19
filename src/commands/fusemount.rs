@@ -14,6 +14,7 @@
 /// - I/O alignment: All reads and writes must be block-aligned. Unaligned
 ///   requests get read-modify-write treatment in the C shim layer.
 
+use std::cell::Cell;
 use std::ffi::OsStr;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -22,6 +23,22 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
+
+thread_local! {
+    static THREAD_INITIALIZED: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Ensure the current thread has a valid `current` task_struct.
+/// fuser worker threads don't run the sched_init() constructor,
+/// so `current` starts as NULL and any libbcachefs call would crash.
+fn ensure_thread_init() {
+    THREAD_INITIALIZED.with(|init| {
+        if !init.get() {
+            unsafe { c::rust_fuse_ensure_current() };
+            init.set(true);
+        }
+    });
+}
 
 use fuser::{
     Config, FileAttr, FileType, Filesystem, MountOption,
@@ -135,6 +152,7 @@ impl Filesystem for BcachefsFs {
     }
 
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
+        ensure_thread_init();
         let dir = map_root_ino(parent);
         let name_bytes = name.as_bytes();
         debug!("fuse_lookup(dir={}, name={:?})", dir.inum, name);
@@ -175,6 +193,7 @@ impl Filesystem for BcachefsFs {
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
+        ensure_thread_init();
         let inum = map_root_ino(ino);
         debug!("fuse_getattr(inum={})", inum.inum);
 
@@ -206,6 +225,7 @@ impl Filesystem for BcachefsFs {
         _flags: Option<BsdFileFlags>,
         reply: ReplyAttr,
     ) {
+        ensure_thread_init();
         let inum = map_root_ino(ino);
         debug!("fuse_setattr(inum={})", inum.inum);
 
@@ -251,6 +271,7 @@ impl Filesystem for BcachefsFs {
     }
 
     fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
+        ensure_thread_init();
         let inum = map_root_ino(ino);
         debug!("fuse_readlink(inum={})", inum.inum);
 
@@ -297,6 +318,7 @@ impl Filesystem for BcachefsFs {
         rdev: u32,
         reply: ReplyEntry,
     ) {
+        ensure_thread_init();
         let dir = map_root_ino(parent);
         let name_bytes = name.as_bytes();
         debug!("fuse_mknod(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
@@ -335,6 +357,7 @@ impl Filesystem for BcachefsFs {
     }
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        ensure_thread_init();
         let dir = map_root_ino(parent);
         let name_bytes = name.as_bytes();
         debug!("fuse_unlink(dir={}, name={:?})", dir.inum, name);
@@ -367,6 +390,7 @@ impl Filesystem for BcachefsFs {
         link: &Path,
         reply: ReplyEntry,
     ) {
+        ensure_thread_init();
         let dir = map_root_ino(parent);
         let name_bytes = name.as_bytes();
         let link_bytes = link.as_os_str().as_bytes();
@@ -403,6 +427,7 @@ impl Filesystem for BcachefsFs {
         _flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
+        ensure_thread_init();
         let src_dir = map_root_ino(parent);
         let dst_dir = map_root_ino(newparent);
         let src_bytes = name.as_bytes();
@@ -433,6 +458,7 @@ impl Filesystem for BcachefsFs {
         newname: &OsStr,
         reply: ReplyEntry,
     ) {
+        ensure_thread_init();
         let src_inum = map_root_ino(ino);
         let parent = map_root_ino(newparent);
         let name_bytes = newname.as_bytes();
@@ -474,6 +500,7 @@ impl Filesystem for BcachefsFs {
         _lock_owner: Option<LockOwner>,
         reply: ReplyData,
     ) {
+        ensure_thread_init();
         let inum = map_root_ino(ino);
         let size = size as usize;
         debug!("fuse_read(ino={}, offset={}, size={})", inum.inum, offset, size);
@@ -536,6 +563,7 @@ impl Filesystem for BcachefsFs {
         _lock_owner: Option<LockOwner>,
         reply: ReplyWrite,
     ) {
+        ensure_thread_init();
         let inum = map_root_ino(ino);
         let size = data.len();
         debug!("fuse_write(ino={}, offset={}, size={})", inum.inum, offset, size);
@@ -566,6 +594,7 @@ impl Filesystem for BcachefsFs {
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
+        ensure_thread_init();
         let dir = map_root_ino(ino);
         debug!("fuse_readdir(dir={}, offset={})", dir.inum, offset);
 
@@ -631,6 +660,7 @@ impl Filesystem for BcachefsFs {
     }
 
     fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
+        ensure_thread_init();
         debug!("fuse_statfs");
 
         let usage = unsafe { c::rust_bch2_fs_usage_read_short(self.c) };
@@ -662,6 +692,7 @@ impl Filesystem for BcachefsFs {
         _flags: i32,
         reply: ReplyCreate,
     ) {
+        ensure_thread_init();
         let dir = map_root_ino(parent);
         let name_bytes = name.as_bytes();
         debug!("fuse_create(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
@@ -733,6 +764,10 @@ pub fn cmd_fusemount(args: Vec<String>) -> anyhow::Result<()> {
         MountOption::FSName(cli.device.clone()),
         MountOption::Subtype("bcachefs".to_string()),
     ];
+    // Single-threaded: all FUSE ops run on the thread that called
+    // linux_shrinkers_init(), which has current + RCU set up.
+    // Matches the old fuse_session_loop() behavior.
+    config.n_threads = Some(1);
 
     if cli.foreground {
         unsafe { c::linux_shrinkers_init() };

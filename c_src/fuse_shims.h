@@ -14,6 +14,9 @@
  * expressed through bindgen.
  */
 
+/* Thread initialization — must be called on fuser worker threads */
+void rust_fuse_ensure_current(void);
+
 /* Inline function wrappers */
 u32 rust_block_bytes(struct bch_fs *c);
 u32 rust_inode_nlink_get(struct bch_inode_unpacked *bi);
