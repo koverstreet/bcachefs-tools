@@ -1561,6 +1561,126 @@ proof fn raw_children_ordered(i: nat, size: nat)
 }
 
 // ============================================================
+// Roundtrip properties for the bijection
+// ============================================================
+//
+// To prove from_inorder(to_inorder(i, n), n) == i we need:
+// 1. ctz/strip_lowest_bit recover shift/offset from raw
+// 2. The extra adjustment is invertible
+// 3. offset + pow2(level) recovers i
+
+/// ctz of an odd number is 0.
+proof fn ctz_odd(n: nat)
+    requires n > 0, n % 2 == 1
+    ensures ctz(n) == 0
+{}
+
+/// ctz of 2*n is 1 + ctz(n) when n > 0.
+proof fn ctz_double(n: nat)
+    requires n > 0
+    ensures ctz(2 * n) == 1 + ctz(n)
+{
+    // 2*n is even, so ctz(2*n) = 1 + ctz(2*n / 2) = 1 + ctz(n)
+    assert(2 * n > 0);
+    assert((2 * n) % 2 == 0);
+}
+
+/// Product of positive nats is positive.
+proof fn nat_mul_positive(a: nat, b: nat)
+    requires a > 0, b > 0
+    ensures a * b > 0
+{
+    assert(a * b > 0) by (nonlinear_arith)
+        requires a > 0, b > 0
+    {};
+}
+
+/// ctz of (2*offset+1)*2^shift is shift.
+/// This is the key: the raw value encodes shift in its trailing zeros.
+proof fn ctz_raw(offset: nat, shift: nat)
+    ensures ctz((2 * offset + 1) * pow2(shift)) == shift
+    decreases shift
+{
+    pow2_positive(shift);
+    let odd = 2 * offset + 1;
+    if shift == 0 {
+        reveal_with_fuel(pow2, 1);
+        assert(pow2(0nat) == 1);
+        assert(odd * 1 == odd);
+        assert(odd % 2 == 1);
+    } else {
+        pow2_double((shift - 1) as nat);
+        pow2_positive((shift - 1) as nat);
+        let odd = 2 * offset + 1;
+        let ps1 = pow2((shift - 1) as nat);
+        // odd * pow2(shift) = odd * 2 * ps1 = 2 * (odd * ps1)
+        assert(odd * pow2(shift) == 2 * (odd * ps1)) by (nonlinear_arith)
+            requires pow2(shift) == 2 * ps1
+        {};
+        ctz_raw(offset, (shift - 1) as nat);
+        nat_mul_positive(odd, ps1);
+        ctz_double(odd * ps1);
+    }
+}
+
+/// strip_lowest_bit of an odd number gives n/2 (the offset).
+proof fn strip_odd(n: nat)
+    requires n > 0, n % 2 == 1
+    ensures strip_lowest_bit(n) == n / 2
+{}
+
+/// strip_lowest_bit of 2*n passes through.
+proof fn strip_double(n: nat)
+    requires n > 0
+    ensures strip_lowest_bit(2 * n) == strip_lowest_bit(n)
+{
+    assert(2 * n > 0);
+    assert((2 * n) % 2 == 0);
+}
+
+/// strip_lowest_bit of (2*offset+1)*2^shift recovers offset.
+proof fn strip_raw(offset: nat, shift: nat)
+    ensures strip_lowest_bit((2 * offset + 1) * pow2(shift)) == offset
+    decreases shift
+{
+    pow2_positive(shift);
+    let odd = 2 * offset + 1;
+    if shift == 0 {
+        reveal_with_fuel(pow2, 1);
+        assert(pow2(0nat) == 1);
+        assert(odd * 1 == odd);
+        assert(odd % 2 == 1);
+        assert(odd > 0);
+    } else {
+        pow2_double((shift - 1) as nat);
+        pow2_positive((shift - 1) as nat);
+        let odd = 2 * offset + 1;
+        let ps1 = pow2((shift - 1) as nat);
+        assert(odd * pow2(shift) == 2 * (odd * ps1)) by (nonlinear_arith)
+            requires pow2(shift) == 2 * ps1
+        {};
+        strip_raw(offset, (shift - 1) as nat);
+        nat_mul_positive(odd, ps1);
+        strip_double(odd * ps1);
+    }
+}
+
+/// The extra adjustment is invertible when raw > extra and raw - extra is even.
+proof fn undo_extra_correct(raw: nat, extra: nat)
+    requires
+        raw > extra,
+        (raw - extra) % 2 == 0,
+    ensures
+        (2 * ((raw + extra) / 2) - extra) as nat == raw
+{
+    // (raw + extra) / 2 = (raw + extra) / 2
+    // Since raw - extra is even and raw + extra = (raw - extra) + 2*extra,
+    // raw + extra is also even, so division is exact.
+    let adjusted = (raw + extra) / 2;
+    // 2*adjusted - extra = 2 * (raw + extra) / 2 - extra = (raw + extra) - extra = raw
+}
+
+// ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
 
