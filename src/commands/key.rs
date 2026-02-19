@@ -51,7 +51,7 @@ pub fn cmd_unlock(argv: Vec<String>) -> Result<()> {
     let passphrase = if let Some(ref file) = cli.file {
         Passphrase::new_from_file(file)?
     } else {
-        Passphrase::new_from_prompt(&uuid)?
+        Passphrase::new(&uuid)?
     };
 
     match KeyHandle::new(&sb, &passphrase, cli.keyring) {
