@@ -232,7 +232,6 @@ fn main() -> ExitCode {
         "set-passphrase" => commands::cmd_set_passphrase(args[1..].to_vec()).report(),
         "reflink-option-propagate" => commands::cmd_reflink_option_propagate(args[1..].to_vec()).report(),
         "unlock" => commands::cmd_unlock(args[1..].to_vec()).report(),
-        #[cfg(feature = "fuse")]
         "fusemount" => {
             let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
             commands::fusemount::cmd_fusemount(argv).report()

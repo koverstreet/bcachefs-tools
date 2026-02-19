@@ -15,7 +15,5 @@ fn main() {
     println!("cargo:rustc-link-lib=keyutils");
     println!("cargo:rustc-link-lib=aio");
 
-    if std::env::var("BCACHEFS_FUSE").is_ok() {
-        println!("cargo:rustc-link-lib=fuse3");
-    }
+    // fuser crate talks to /dev/fuse directly — no libfuse3 needed
 }

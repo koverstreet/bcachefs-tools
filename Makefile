@@ -14,6 +14,8 @@ INSTALL=install
 LN=ln
 .DEFAULT_GOAL=all
 
+
+
 ifeq ("$(origin V)", "command line")
   BUILD_VERBOSE = $(V)
 endif
@@ -90,10 +92,7 @@ CFLAGS+=$(call cc-disable-warning, gnu-variable-sized-type-not-at-end)
 export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries
 
 PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd libudev libkeyutils"
-ifdef BCACHEFS_FUSE
-	CFLAGS+=-DBCACHEFS_FUSE
-	CARGO_BUILD_ARGS+=--features fuse
-endif
+CFLAGS+=-DBCACHEFS_FUSE
 
 PKGCONFIG_CFLAGS:=$(shell $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
 ifeq (,$(PKGCONFIG_CFLAGS))
@@ -201,11 +200,9 @@ install: all install_dkms
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.bcachefs
 	$(INSTALL) -d $(DESTDIR)$(BASH_COMPLETION_DIR)
 	$(BUILT_BIN) completions bash > $(DESTDIR)$(BASH_COMPLETION_DIR)/bcachefs
-ifdef BCACHEFS_FUSE
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuse.bcachefs
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuse.bcachefs
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.fuse.bcachefs
-endif
 
 .PHONY: install_dkms
 install_dkms: dkms/dkms.conf dkms/module-version.c
