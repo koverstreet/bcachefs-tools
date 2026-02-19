@@ -100,9 +100,10 @@ void bch2_bkey_nocow_unlock(struct bch_fs *c, struct bkey_s_c k,
 	bkey_for_each_ptr(ptrs, ptr) {
 		if ((ptrs_held & ptr_bit) && ptr->dev != BCH_SB_MEMBER_INVALID) {
 			struct bch_dev *ca = bch2_dev_have_ref(c, ptr->dev);
-			struct bpos bucket = PTR_BUCKET_POS(ca, ptr);
-
-			bch2_bucket_nocow_unlock(&c->nocow_locks, bucket, flags);
+			if (ca) {
+				struct bpos bucket = PTR_BUCKET_POS(ca, ptr);
+				bch2_bucket_nocow_unlock(&c->nocow_locks, bucket, flags);
+			}
 		}
 		ptr_bit <<= 1;
 	}
@@ -120,6 +121,10 @@ bool bch2_bkey_nocow_trylock(struct bch_fs *c, struct bkey_ptrs_c ptrs,
 		}
 
 		struct bch_dev *ca = bch2_dev_have_ref(c, ptr->dev);
+		if (!ca) {
+			ptr_bit <<= 1;
+			continue;
+		}
 		struct bpos bucket = PTR_BUCKET_POS(ca, ptr);
 
 		if (unlikely(!bch2_bucket_nocow_trylock(c, bucket, flags))) {
@@ -130,6 +135,10 @@ bool bch2_bkey_nocow_trylock(struct bch_fs *c, struct bkey_ptrs_c ptrs,
 				if ((ptrs_held & ptr_bit2) &&
 				    ptr2->dev != BCH_SB_MEMBER_INVALID) {
 					ca = bch2_dev_have_ref(c, ptr2->dev);
+					if (!ca) {
+						ptr_bit2 <<= 1;
+						continue;
+					}
 					bucket = PTR_BUCKET_POS(ca, ptr2);
 					bch2_bucket_nocow_unlock(&c->nocow_locks, bucket, flags);
 				}
