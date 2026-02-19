@@ -423,39 +423,36 @@ pub open spec fn depth_consistent(table: Map<u32, SnapshotEntry>) -> bool {
     }
 }
 
-/// Depth is bounded by the node's ID (since each ancestor uses
-/// a distinct ID, and there are at most `id` IDs less than `id`).
-proof fn depth_bounded_by_id(table: Map<u32, SnapshotEntry>, id: u32)
+/// Ancestors have strictly lower depth than descendants.
+/// Depth decreases going up (root = 0).
+proof fn ancestor_has_lower_depth(table: Map<u32, SnapshotEntry>, id: u32)
+    requires
+        well_formed(table),
+        depth_consistent(table),
+        table.contains_key(id),
+        table[id].parent != 0,
+    ensures
+        table.contains_key(table[id].parent) &&
+        table[table[id].parent].depth < table[id].depth
+{
+    // parent is in the table by parent_links_closed.
+    // depth(id) == depth(parent) + 1 by depth_consistent.
+    // So depth(parent) < depth(id).
+}
+
+/// Root nodes (depth 0) have no parent.
+proof fn root_has_no_parent(table: Map<u32, SnapshotEntry>, id: u32)
     requires
         well_formed(table),
         root_depth_zero(table),
         depth_consistent(table),
         table.contains_key(id),
+        table[id].depth == 0,
     ensures
-        table[id].depth <= id
-    decreases id
+        table[id].parent == 0
 {
-    let e = table[id];
-    if e.parent == 0 {
-        // depth == 0 <= id (since id >= 1 for valid snapshots)
-    } else {
-        // depth == parent.depth + 1
-        // parent > id... wait, parent > id means parent.depth is not
-        // necessarily smaller. Let me reconsider.
-        //
-        // Actually, depth DECREASES going up (root=0, deeper=higher).
-        // And parent > id means the parent has a higher ID.
-        // We can't directly recurse on parent because parent > id.
-        //
-        // Instead: depth == parent.depth + 1, and parent.depth <= parent - 1
-        // ... this doesn't directly help.
-        //
-        // Actually, the bound depth <= id follows from: the chain from
-        // root to this node has length == depth, and each node in the
-        // chain has a DISTINCT ID in [1, id). So depth < id.
-        // This needs a stronger induction — skipping for now.
-        assume(table[id].depth <= id);
-    }
+    // By contradiction: if parent != 0, then depth(id) == depth(parent) + 1 >= 1.
+    // But depth(id) == 0. Contradiction.
 }
 
 // ============================================================
@@ -513,17 +510,51 @@ proof fn skiplist_walk_equiv(
     } else if !table.contains_key(id) {
         // Both return false
     } else {
-        // TODO: Complete this proof. The key ideas are:
-        // 1. get_ancestor_below returns an ancestor of id (or 0)
-        // 2. If next > ancestor, both walks fail (correct)
-        // 3. If id < next <= ancestor, the skiplist jumps ahead on
-        //    the ancestor chain — ancestor_step_equiv shows this
-        //    preserves the answer
-        // 4. Recurse on (next, ancestor) with strictly smaller measure
-        //
-        // The difficulty: needs case-split on whether next <= ancestor,
-        // and ancestor_step_equiv needs refinement for the > case.
-        assume(false);
+        let e = table[id];
+        let parent = e.parent;
+
+        if parent == 0 {
+            // parent = 0 → is_ancestor fails (parent > id check fails).
+            // get_ancestor_below returns parent = 0 → next = 0.
+            // is_ancestor_skiplist: next = 0, 0 > id false → false.
+            // Both false ✓
+        } else if parent > ancestor {
+            // All non-zero skip entries >= parent > ancestor (skiplist_ge_parent).
+            // So no skip entry satisfies skip[i] <= ancestor.
+            // Therefore get_ancestor_below returns parent.
+            let next = get_ancestor_below_spec(table, id, ancestor);
+
+            // Help Z3: skip entries >= parent > ancestor
+            assert(e.skip.0 == 0 || e.skip.0 >= parent);
+            assert(e.skip.1 == 0 || e.skip.1 >= parent);
+            assert(e.skip.2 == 0 || e.skip.2 >= parent);
+            assert(next == parent);
+
+            // Z3 needs two unfoldings of each recursive spec:
+            // 1st: is_ancestor(id, ancestor) → parent > id && is_ancestor(parent, ancestor)
+            // 2nd: is_ancestor(parent, ancestor) → parent > ancestor → false
+            reveal_with_fuel(is_ancestor, 2);
+            reveal_with_fuel(is_ancestor_skiplist, 2);
+        } else {
+            // parent <= ancestor and parent != 0 and parent > id.
+            let next = get_ancestor_below_spec(table, id, ancestor);
+
+            // get_ancestor_below makes progress and stays bounded
+            get_ancestor_below_makes_progress(table, id, ancestor);
+            get_ancestor_below_bounded(table, id, ancestor);
+            assert(next > id);
+            assert(next <= ancestor);
+
+            // next is an ancestor of id
+            get_ancestor_below_is_ancestor(table, id, ancestor);
+            assert(next > 0u32);
+
+            // By induction: skiplist agrees with linear for (next, ancestor)
+            skiplist_walk_equiv(table, next, ancestor);
+
+            // Bridge: is_ancestor(id, ancestor) ↔ is_ancestor(next, ancestor)
+            ancestor_step_equiv(table, id, next, ancestor);
+        }
     }
 }
 
