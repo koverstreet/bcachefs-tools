@@ -242,7 +242,17 @@ pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::
 
     #[cfg(feature = "fuse")]
     if cli.fs_type == "bcachefs.fuse" {
-        return match super::fusemount::cmd_fusemount(argv) {
+        // Build argv for fusemount from mount's parsed args
+        let mut fuse_argv = vec!["fusemount".to_string()];
+        if !cli.options.is_empty() {
+            fuse_argv.push("-o".to_string());
+            fuse_argv.push(cli.options.clone());
+        }
+        fuse_argv.push(cli.dev.clone());
+        if let Some(mp) = cli.mountpoint.as_ref() {
+            fuse_argv.push(mp.to_string_lossy().into_owned());
+        }
+        return match super::fusemount::cmd_fusemount(fuse_argv) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 error!("FUSE mount failed: {e}");
