@@ -45,6 +45,16 @@ void rust_fuse_ensure_current(void)
 	current = p;
 }
 
+void rust_fuse_rcu_register(void)
+{
+	rcu_register_thread();
+}
+
+void rust_fuse_rcu_unregister(void)
+{
+	rcu_unregister_thread();
+}
+
 /* ---- inline function wrappers ---- */
 
 u32 rust_block_bytes(struct bch_fs *c)

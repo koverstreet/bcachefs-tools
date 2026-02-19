@@ -16,6 +16,8 @@
 
 /* Thread initialization — must be called on fuser worker threads */
 void rust_fuse_ensure_current(void);
+void rust_fuse_rcu_register(void);
+void rust_fuse_rcu_unregister(void);
 
 /* Inline function wrappers */
 u32 rust_block_bytes(struct bch_fs *c);
