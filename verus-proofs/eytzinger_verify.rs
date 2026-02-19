@@ -400,25 +400,80 @@ proof fn subtree_size_additive(i: nat, n: nat)
 }
 
 // ============================================================
+// Inorder traversal sequence
+// ============================================================
+//
+// The inorder traversal visits: left subtree, root, right subtree.
+// For a sorted array stored in eytzinger layout, the inorder
+// traversal produces the sorted order. This connects tree position
+// to sorted order — what __eytzinger1_to_inorder computes.
+
+/// The sequence of nodes visited in inorder traversal of the
+/// subtree rooted at node i in a tree of size n.
+pub open spec fn inorder_seq(i: nat, n: nat) -> Seq<nat>
+    decreases (if i > 0 && i <= n { n + 1 - i } else { 0 })
+{
+    if i == 0 || i > n {
+        Seq::<nat>::empty()
+    } else {
+        let left = inorder_seq(2 * i, n);
+        let right = inorder_seq(2 * i + 1, n);
+        left.push(i).add(right)
+    }
+}
+
+/// Inorder sequence length equals subtree size.
+proof fn inorder_seq_len(i: nat, n: nat)
+    ensures inorder_seq(i, n).len() == subtree_size(i, n)
+    decreases (if i > 0 && i <= n { n + 1 - i } else { 0 })
+{
+    if i == 0 || i > n {
+    } else {
+        inorder_seq_len(2 * i, n);
+        inorder_seq_len(2 * i + 1, n);
+    }
+}
+
+/// Inorder sequence of a leaf is a single element.
+proof fn inorder_seq_leaf(i: nat, n: nat)
+    requires valid_node(i, n), is_leaf(i, n)
+    ensures
+        inorder_seq(i, n).len() == 1,
+        inorder_seq(i, n)[0] == i,
+{
+    reveal_with_fuel(inorder_seq, 2);
+    no_left_implies_no_right(i, n);
+}
+
+/// The root of a subtree is at index |left_subtree| in the inorder sequence.
+proof fn inorder_root_position(i: nat, n: nat)
+    requires valid_node(i, n)
+    ensures
+        inorder_seq(i, n).len() >= 1,
+        inorder_seq(i, n)[subtree_size(2 * i, n) as int] == i,
+{
+    inorder_seq_len(i, n);
+    inorder_seq_len(2 * i, n);
+    subtree_size_positive(i, n);
+}
+
+// ============================================================
 // Search — key correctness property
 // ============================================================
 //
 // The eytzinger search (eytzinger0_find_le) works by walking
-// the tree, going left when element > search and right when
-// element <= search. After reaching a leaf, it backtracks
-// using bit manipulation to find the answer.
+// the tree from root to a leaf-past-end:
 //
-// The key property: in a sorted array stored in eytzinger
-// layout, the left subtree of node i contains all elements
-// less than element[i], and the right subtree contains all
-// elements greater than element[i].
+//   n = 1;
+//   while (n <= nr)
+//       n = eytzinger1_child(n, cmp <= 0);
+//   n >>= __ffs(n) + 1;      // backtrack
+//   return n - 1;             // 0-based result
 //
-// We model this as: for a sorted sequence s stored in
-// eytzinger layout, s[inorder_rank(left_child(i))] < s[inorder_rank(i)]
-// and s[inorder_rank(right_child(i))] > s[inorder_rank(i)].
-//
-// The inorder rank is what connects eytzinger position to
-// sorted order. This is what __eytzinger1_to_inorder computes.
+// Left turns (element > search) append 0 to n's binary encoding.
+// Right turns (element <= search) append 1.
+// The backtrack strips the lowest 1 and everything below,
+// recovering the last right-turn node — the correct answer.
 
 // ============================================================
 // Search path — modeling the tree traversal
@@ -541,6 +596,177 @@ proof fn search_path_exceeds(n: nat, nr: nat, decisions: Seq<bool>)
         assert(next > n);
         assert(next >= 1);
         search_path_exceeds(next, nr, decisions.subrange(1, decisions.len() as int));
+    }
+}
+
+// ============================================================
+// Backtrack — bit manipulation for search result recovery
+// ============================================================
+//
+// After the search loop, n > nr and n's binary representation
+// encodes the full search path. The backtrack strips the lowest
+// set bit, recovering the last right-turn node.
+//
+// Recursively: if n is odd, strip the trailing 1 (n/2).
+// If n is even, strip the trailing 0 and continue.
+// This is equivalent to n >>= __ffs(n) + 1 in the C code.
+
+/// Backtrack for find_le: strip the lowest set bit.
+pub open spec fn backtrack_le(n: nat) -> nat
+    decreases n
+{
+    if n == 0 { 0 }
+    else if n % 2 == 1 { n / 2 }
+    else { backtrack_le(n / 2) }
+}
+
+/// Backtracking a right child (2m+1) gives the parent (m).
+proof fn backtrack_right_child(m: nat)
+    ensures backtrack_le(2 * m + 1) == m
+{}
+
+/// Backtracking through a left child (2m) is transparent.
+proof fn backtrack_shift(m: nat)
+    requires m > 0
+    ensures backtrack_le(2 * m) == backtrack_le(m)
+{}
+
+/// Backtracking from the root gives 0 (no right-turn ancestor).
+proof fn backtrack_root()
+    ensures backtrack_le(1) == 0
+{}
+
+// ============================================================
+// Concrete search — models eytzinger0_find_le
+// ============================================================
+//
+// The search walks from the root (node 1, 1-based) down the tree.
+// At each node, it compares a[node] with the search value:
+//   a[node] <= search → go right (append 1 bit)
+//   a[node] >  search → go left  (append 0 bit)
+//
+// After falling off the tree (node > n), the backtrack
+// recovers the last right-turn node — the answer to find_le.
+
+/// The search loop: walk down the tree making comparisons.
+/// a is 0-indexed, tree is 1-indexed, so a[nd-1] is the element at node nd.
+/// Returns the final position past the tree (> n).
+pub open spec fn search_loop(nd: nat, n: nat, a: Seq<int>, search: int) -> nat
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    if nd == 0 || nd > n {
+        nd
+    } else {
+        let go_right = (a[(nd - 1) as int] <= search);
+        let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+        search_loop(next, n, a, search)
+    }
+}
+
+/// The best right turn: deepest node on the search path where
+/// a[node] <= search, or 0 if no such node exists.
+pub open spec fn best_right_turn(nd: nat, n: nat, a: Seq<int>, search: int) -> nat
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    if nd == 0 || nd > n {
+        0
+    } else {
+        let go_right = (a[(nd - 1) as int] <= search);
+        let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+        let deeper = best_right_turn(next, n, a, search);
+        if deeper > 0 { deeper }
+        else if go_right { nd }
+        else { 0 }
+    }
+}
+
+/// The search loop result always exceeds n (search terminates past the tree).
+proof fn search_loop_exceeds_n(nd: nat, n: nat, a: Seq<int>, search: int)
+    requires nd >= 1, nd <= n, a.len() >= n
+    ensures search_loop(nd, n, a, search) > n
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    let go_right = (a[(nd - 1) as int] <= search);
+    let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+    if next > n {
+        reveal_with_fuel(search_loop, 2);
+    } else {
+        search_loop_exceeds_n(next, n, a, search);
+    }
+}
+
+/// Key invariant: backtrack of search result matches best_right_turn.
+///
+/// When the subtree has right turns: backtrack gives the deepest one.
+/// When it doesn't: backtrack "passes through" to backtrack_le(nd),
+/// representing the ancestor path encoding above this subtree.
+proof fn backtrack_search_invariant(nd: nat, n: nat, a: Seq<int>, search: int)
+    requires nd >= 1, nd <= n, a.len() >= n
+    ensures
+        best_right_turn(nd, n, a, search) > 0 ==>
+            backtrack_le(search_loop(nd, n, a, search)) ==
+            best_right_turn(nd, n, a, search),
+        best_right_turn(nd, n, a, search) == 0 ==>
+            backtrack_le(search_loop(nd, n, a, search)) ==
+            backtrack_le(nd),
+    decreases (if nd > 0 && nd <= n { n + 1 - nd } else { 0 })
+{
+    let go_right = (a[(nd - 1) as int] <= search);
+    let next = if go_right { 2 * nd + 1 } else { 2 * nd };
+
+    if next > n {
+        // Leaf case: the subtree below nd is empty.
+        // Need fuel 2 to see: search_loop(nd) → search_loop(next) → next
+        // and: best_right_turn(nd) → best_right_turn(next) → 0
+        reveal_with_fuel(search_loop, 2);
+        reveal_with_fuel(best_right_turn, 2);
+
+        if go_right {
+            // next = 2*nd+1. brt = nd. Need: backtrack_le(2*nd+1) == nd
+            backtrack_right_child(nd);
+        } else {
+            // next = 2*nd. brt = 0. Need: backtrack_le(2*nd) == backtrack_le(nd)
+            backtrack_shift(nd);
+        }
+    } else {
+        // Recursive case: descend into subtree
+        backtrack_search_invariant(next, n, a, search);
+        let brt_sub = best_right_turn(next, n, a, search);
+
+        if go_right {
+            // next = 2*nd+1
+            if brt_sub == 0 {
+                // No deeper right turns. IH: backtrack_le(r) == backtrack_le(2*nd+1)
+                // backtrack_le(2*nd+1) == nd, which is the answer.
+                backtrack_right_child(nd);
+            }
+            // brt_sub > 0: IH directly gives backtrack_le(r) == brt_sub == brt
+        } else {
+            // next = 2*nd
+            if brt_sub == 0 {
+                // No right turns at all. IH: backtrack_le(r) == backtrack_le(2*nd)
+                // backtrack_le(2*nd) == backtrack_le(nd) by transparency.
+                backtrack_shift(nd);
+            }
+            // brt_sub > 0: IH directly gives backtrack_le(r) == brt_sub == brt
+        }
+    }
+}
+
+/// Main theorem: for a search starting at the root,
+/// backtrack of the search result equals the best right turn.
+///
+/// This proves that the C bit manipulation (n >>= __ffs(n) + 1)
+/// correctly recovers the answer from the binary-encoded search path.
+proof fn find_le_backtrack_correct(n: nat, a: Seq<int>, search: int)
+    requires n >= 1, a.len() >= n
+    ensures
+        backtrack_le(search_loop(1, n, a, search)) ==
+        best_right_turn(1, n, a, search)
+{
+    backtrack_search_invariant(1, n, a, search);
+    if best_right_turn(1, n, a, search) == 0 {
+        backtrack_root();
     }
 }
 
