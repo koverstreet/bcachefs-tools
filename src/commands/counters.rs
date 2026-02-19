@@ -18,7 +18,7 @@ fn match_counter(name: &str) -> Result<usize> {
 #[command(about = "Reset all counters on an unmounted device")]
 struct Cli {
     /// Reset specific counters (comma-separated), not all
-    #[arg(short, long)]
+    #[arg(short, long, visible_alias = "counter")]
     counters: Option<String>,
 
     /// Device path
