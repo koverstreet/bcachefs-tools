@@ -1473,6 +1473,94 @@ proof fn roundtrip_n7()
 }
 
 // ============================================================
+// Raw ordering: the core bit-manipulation property
+// ============================================================
+//
+// For node i at level b with offset p = i - 2^b:
+//   raw(left_child)  = (4p + 1) * k
+//   raw(parent)      = (4p + 2) * k
+//   raw(right_child) = (4p + 3) * k
+// where k = 2^(d - b - 1).
+//
+// This gives immediate BST ordering from the bit layout alone.
+
+/// Children have raw positions ordered around the parent.
+proof fn raw_children_ordered(i: nat, size: nat)
+    requires
+        i >= 1,
+        right_child(i) <= size,
+        size >= 1,
+    ensures
+        to_inorder_raw(left_child(i), size) < to_inorder_raw(i, size),
+        to_inorder_raw(i, size) < to_inorder_raw(right_child(i), size),
+{
+    let b = level(i);
+    let d = level(size);
+    let p = nsub(i, pow2(b));
+
+    // Children are one level deeper
+    level_of_left_child(i);
+    level_of_right_child(i);
+    // level(2i) == b + 1, level(2i+1) == b + 1
+
+    // d >= b + 1 since right child (at level b+1) is valid
+    level_le_when_le(2 * i + 1, size);
+    // level(2i+1) <= level(size), i.e., b + 1 <= d
+
+    // Node i is at level b, so i >= pow2(b)
+    level_range(i);
+    pow2_positive(b);
+
+    // pow2(b+1) = 2 * pow2(b)
+    pow2_double(b);
+    // pow2(d-b) = 2 * pow2(d-b-1)
+    pow2_double(nsub(d, b + 1));
+
+    // k = pow2(d - b - 1) > 0
+    let k = pow2(nsub(d, b + 1));
+    pow2_positive(nsub(d, b + 1));
+
+    // Left child offset: 2i - pow2(b+1) = 2i - 2*pow2(b) = 2*(i - pow2(b)) = 2p
+    assert(nsub(2 * i, pow2(b + 1)) == 2 * p);
+
+    // Right child offset: (2i+1) - pow2(b+1) = 2p + 1
+    assert(nsub(2 * i + 1, pow2(b + 1)) == 2 * p + 1);
+
+    // d - (b+1) = d - b - 1
+    assert(nsub(d, b + 1) == nsub(d, b) - 1) by {
+        // b + 1 <= d, so nsub(d, b+1) = d - b - 1
+        // nsub(d, b) = d - b (since b <= d)
+        // d - b - 1 = nsub(d, b) - 1
+    };
+
+    // pow2(nsub(d,b)) = 2 * k  (since nsub(d,b) = nsub(d,b+1) + 1)
+    assert(pow2(nsub(d, b)) == 2 * k) by {
+        assert(nsub(d, b) == nsub(d, b + 1) + 1);
+        pow2_double(nsub(d, b + 1));
+    };
+
+    // Raw formulas:
+    // raw(2i)   = (2*(2p) + 1) * k = (4p+1) * k
+    assert(to_inorder_raw(2 * i, size) == (4 * p + 1) * k);
+    // raw(i)    = (2p+1) * 2k = (4p+2) * k
+    assert(to_inorder_raw(i, size) == (2 * p + 1) * (2 * k));
+    // Algebraic: (2p+1)*2k = 2*(2p+1)*k = (4p+2)*k
+    assert((2 * p + 1) * (2 * k) == (4 * p + 2) * k) by (nonlinear_arith)
+        requires k >= 0, p >= 0
+    {};
+    // raw(2i+1) = (2*(2p+1) + 1) * k = (4p+3) * k
+    assert(to_inorder_raw(2 * i + 1, size) == (4 * p + 3) * k);
+
+    // (4p+1)*k < (4p+2)*k < (4p+3)*k since k > 0
+    assert((4 * p + 1) * k < (4 * p + 2) * k) by (nonlinear_arith)
+        requires k > 0, p >= 0
+    {};
+    assert((4 * p + 2) * k < (4 * p + 3) * k) by (nonlinear_arith)
+        requires k > 0, p >= 0
+    {};
+}
+
+// ============================================================
 // Main — just to make it a valid Verus file
 // ============================================================
 
