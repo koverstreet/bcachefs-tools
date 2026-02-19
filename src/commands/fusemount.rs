@@ -70,6 +70,9 @@ fn err(ret: i32) -> Errno {
 
 struct BcachefsFs {
     c: *mut c::bch_fs,
+    /// Write end of a pipe used to signal the parent process that the
+    /// FUSE mount is established. Written in init(), None in foreground mode.
+    signal_fd: Option<i32>,
 }
 
 // Safety: bch_fs is internally synchronized with its own locking.
@@ -115,6 +118,14 @@ fn ts_to_systime(ts: c::timespec) -> SystemTime {
 impl Filesystem for BcachefsFs {
     fn init(&mut self, _req: &Request, _config: &mut fuser::KernelConfig) -> std::io::Result<()> {
         debug!("bcachefs fuse: init");
+        // Signal parent that mount is established
+        if let Some(fd) = self.signal_fd.take() {
+            unsafe {
+                let byte = 0u8;
+                libc::write(fd, &byte as *const _ as *const _, 1);
+                libc::close(fd);
+            }
+        }
         Ok(())
     }
 
@@ -723,20 +734,59 @@ pub fn cmd_fusemount(args: Vec<String>) -> anyhow::Result<()> {
         MountOption::Subtype("bcachefs".to_string()),
     ];
 
-    // Daemonize before spawning threads.
-    // fork() only preserves the calling thread, so this must happen
-    // before bch2_fs_start and linux_shrinkers_init.
-    if !cli.foreground {
-        unsafe {
-            let pid = libc::fork();
-            if pid < 0 {
-                anyhow::bail!("fork failed");
-            }
-            if pid > 0 {
-                std::process::exit(0);
-            }
-            libc::setsid();
+    if cli.foreground {
+        unsafe { c::linux_shrinkers_init() };
+        let ret = unsafe { c::bch2_fs_start(fs_raw) };
+        if ret != 0 {
+            unsafe { c::bch2_fs_exit(fs_raw) };
+            anyhow::bail!("Error starting filesystem: {}", ret);
         }
+        let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: None };
+        fuser::mount2(bcachefs_fs, &cli.mountpoint, &config)?;
+        return Ok(());
+    }
+
+    // Daemonize with pipe-based synchronization.
+    //
+    // The parent must not return until the FUSE mount is established,
+    // otherwise mount(8) reports success before the mountpoint is usable.
+    // The child signals readiness from the FUSE init() callback, which
+    // fires after the kernel has acknowledged the mount.
+    //
+    // fork() must happen before spawning threads (linux_shrinkers_init,
+    // bch2_fs_start) because only the calling thread survives fork().
+    let mut pipe_fds = [0i32; 2];
+    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
+        anyhow::bail!("pipe() failed");
+    }
+
+    let pid = unsafe { libc::fork() };
+    if pid < 0 {
+        anyhow::bail!("fork() failed");
+    }
+
+    if pid > 0 {
+        // Parent: wait for child to signal mount readiness
+        unsafe { libc::close(pipe_fds[1]) };
+        let mut buf = [0u8; 1];
+        let n = unsafe {
+            libc::read(pipe_fds[0], buf.as_mut_ptr() as *mut _, 1)
+        };
+        unsafe { libc::close(pipe_fds[0]) };
+
+        if n == 1 && buf[0] == 0 {
+            std::process::exit(0);
+        } else {
+            let mut status = 0i32;
+            unsafe { libc::waitpid(pid, &mut status, 0) };
+            anyhow::bail!("FUSE mount failed in child process");
+        }
+    }
+
+    // Child
+    unsafe {
+        libc::close(pipe_fds[0]);
+        libc::setsid();
     }
 
     unsafe { c::linux_shrinkers_init() };
@@ -744,11 +794,25 @@ pub fn cmd_fusemount(args: Vec<String>) -> anyhow::Result<()> {
     let ret = unsafe { c::bch2_fs_start(fs_raw) };
     if ret != 0 {
         unsafe { c::bch2_fs_exit(fs_raw) };
-        anyhow::bail!("Error starting filesystem: {}", ret);
+        unsafe {
+            let byte = 1u8;
+            libc::write(pipe_fds[1], &byte as *const _ as *const _, 1);
+            libc::close(pipe_fds[1]);
+        }
+        std::process::exit(1);
     }
 
-    let bcachefs_fs = BcachefsFs { c: fs_raw };
-    fuser::mount2(bcachefs_fs, &cli.mountpoint, &config)?;
+    let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: Some(pipe_fds[1]) };
+
+    if let Err(e) = fuser::mount2(bcachefs_fs, &cli.mountpoint, &config) {
+        eprintln!("fuser::mount2 failed: {}", e);
+        unsafe {
+            let byte = 1u8;
+            libc::write(pipe_fds[1], &byte as *const _ as *const _, 1);
+            libc::close(pipe_fds[1]);
+        }
+        std::process::exit(1);
+    }
 
     Ok(())
 }
