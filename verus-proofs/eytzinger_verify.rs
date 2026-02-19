@@ -317,58 +317,121 @@ proof fn level_injective(i: nat, j: nat)
 {}
 
 // ============================================================
-// Inorder position
+// Subtree size
 // ============================================================
 //
-// The key property of the eytzinger layout: a sorted array stored
-// in eytzinger order has the property that inorder traversal of
-// the tree visits elements in sorted order. We define the inorder
-// position recursively and prove it's a bijection on [1..size].
+// The subtree rooted at node i in a tree of size n contains
+// all valid descendants. We count them recursively.
 
-/// Count of nodes in the left subtree of node i in a tree of size n.
-/// This is the number of valid nodes < left_child(i) that are
-/// descendants of i.
-pub open spec fn left_subtree_size(i: nat, size: nat) -> nat
-    recommends valid_node(i, size)
-    decreases size - i + 1
+/// Number of valid nodes in the subtree rooted at i.
+/// Measure: as i grows (children are 2i, 2i+1), it eventually
+/// exceeds n, giving the base case. We use (n + 1 - i) as nat
+/// but need to guard against underflow.
+pub open spec fn subtree_size(i: nat, n: nat) -> nat
+    decreases (if i > 0 && i <= n { n + 1 - i } else { 0 })
 {
-    if !valid_node(i, size) || left_child(i) > size {
-        0  // leaf or invalid
+    if i == 0 || i > n {
+        0
     } else {
-        // Left subtree has all valid descendants via left_child
-        // This is hard to define recursively on the tree structure
-        // without a concrete tree. Use the relationship:
-        // left_subtree_size = (number of nodes with inorder position < i)
-        // We'll use the to_inorder conversion instead.
-        0  // placeholder
+        // Inline left_child and right_child for termination checking.
+        // left_child(i) = 2*i > i (when i > 0), so n - 2*i < n - i.
+        // right_child(i) = 2*i + 1 > i, same reasoning.
+        1 + subtree_size(2 * i, n) + subtree_size(2 * i + 1, n)
     }
 }
 
-/// Inorder rank of node i: the position in sorted order.
-/// Node with inorder rank 1 holds the smallest element.
-///
-/// For a 1-based eytzinger tree of size n:
-///   inorder_rank(i) = 1 + (number of nodes visited before i in inorder)
-///
-/// Recursive definition: inorder rank = left subtree size + 1
-/// (adjusted for the global tree, not just the subtree).
-///
-/// We define this more directly: in the complete binary tree,
-/// the inorder rank is determined by the path from root to node.
-pub open spec fn inorder_rank_spec(i: nat, size: nat) -> nat
-    recommends i > 0, i <= size
-    decreases i
+/// A leaf has subtree size 1.
+proof fn leaf_subtree_size(i: nat, n: nat)
+    requires valid_node(i, n), is_leaf(i, n)
+    ensures subtree_size(i, n) == 1
 {
-    if i == 0 || i > size {
-        0
-    } else if left_child(i) > size {
-        // Leaf: inorder rank depends on position in tree.
-        // For now, leave as opaque — the bit-manipulation
-        // implementation (__eytzinger1_to_inorder) computes this.
-        0 // placeholder — to be filled in with the concrete formula
-    } else {
-        0 // placeholder
-    }
+    // Need 2 unfoldings: one to expose the recursive calls,
+    // one more to evaluate them at the base case (2*i > n).
+    reveal_with_fuel(subtree_size, 2);
+    assert(2 * i > n);  // from is_leaf: left_child(i) = 2*i > n
+}
+
+/// Subtree size is positive for valid nodes.
+proof fn subtree_size_positive(i: nat, n: nat)
+    requires valid_node(i, n)
+    ensures subtree_size(i, n) >= 1
+{
+    // subtree_size(i, n) = 1 + left + right >= 1
+}
+
+/// The whole tree (rooted at 1) has size n.
+/// This is the fundamental counting property.
+///
+/// Proof sketch: every node j in [1, n] is in exactly one subtree.
+/// Node j's path from root: j, j/2, j/4, ..., 1. It goes left at
+/// parent(j) if j is even, right if j is odd. So j lands in the
+/// left subtree of parent(j) if even, right if odd.
+///
+/// Full proof requires showing the subtree partition is exact.
+/// Deferred — the simpler properties are more immediately useful.
+///
+/// For small n, we can verify directly:
+proof fn whole_tree_size_1()
+    ensures subtree_size(1, 1) == 1
+{
+    reveal_with_fuel(subtree_size, 2);
+}
+
+proof fn whole_tree_size_2()
+    ensures subtree_size(1, 2) == 2
+{
+    reveal_with_fuel(subtree_size, 3);
+}
+
+proof fn whole_tree_size_3()
+    ensures subtree_size(1, 3) == 3
+{
+    reveal_with_fuel(subtree_size, 3);
+}
+
+/// Subtree sizes are additive: total = 1 + left_size + right_size.
+proof fn subtree_size_additive(i: nat, n: nat)
+    requires valid_node(i, n)
+    ensures
+        subtree_size(i, n) ==
+        1 + subtree_size(left_child(i), n) + subtree_size(right_child(i), n)
+{
+    // Direct from the definition.
+}
+
+// ============================================================
+// Search — key correctness property
+// ============================================================
+//
+// The eytzinger search (eytzinger0_find_le) works by walking
+// the tree, going left when element > search and right when
+// element <= search. After reaching a leaf, it backtracks
+// using bit manipulation to find the answer.
+//
+// The key property: in a sorted array stored in eytzinger
+// layout, the left subtree of node i contains all elements
+// less than element[i], and the right subtree contains all
+// elements greater than element[i].
+//
+// We model this as: for a sorted sequence s stored in
+// eytzinger layout, s[inorder_rank(left_child(i))] < s[inorder_rank(i)]
+// and s[inorder_rank(right_child(i))] > s[inorder_rank(i)].
+//
+// The inorder rank is what connects eytzinger position to
+// sorted order. This is what __eytzinger1_to_inorder computes.
+
+/// A node's left descendants all have smaller inorder rank.
+/// A node's right descendants all have larger inorder rank.
+/// This is the BST property in terms of inorder rank.
+///
+/// (Stated as a spec predicate; proof deferred to when
+/// inorder_rank is fully defined.)
+pub open spec fn bst_property(i: nat, j: nat, n: nat) -> bool
+    recommends valid_node(i, n), valid_node(j, n)
+{
+    // j is in left subtree of i → inorder_rank(j) < inorder_rank(i)
+    // j is in right subtree of i → inorder_rank(j) > inorder_rank(i)
+    true // placeholder — needs inorder_rank definition
 }
 
 // ============================================================
