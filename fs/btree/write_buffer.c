@@ -803,6 +803,12 @@ static int bch2_btree_write_buffer_flush_thread(void *arg)
 				 !bch2_journal_error(&c->journal) &&
 				 bch2_btree_write_buffer_should_flush(c));
 		}
+
+		if (test_bit(JOURNAL_low_on_wb, &c->journal.flags) &&
+		    !bch2_btree_write_buffer_must_wait(c)) {
+			guard(spinlock)(&c->journal.lock);
+			bch2_journal_set_watermark(&c->journal);
+		}
 	}
 
 	return 0;
