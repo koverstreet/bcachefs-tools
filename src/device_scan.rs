@@ -12,10 +12,10 @@
 //    superblock directly. Slow but reliable. Used when udev returns fewer
 //    devices than the superblock's nr_devices field indicates.
 //
-// Known limitation: both paths use udev enumeration to list block devices,
-// so devices not yet known to udev at all are missed. The proper fix is
-// event-driven waiting (see TODO in get_devices_by_uuid). Related issues:
-// #308, #393, #174.
+// The block scan falls back to /proc/partitions when udev is unavailable,
+// so multi-device mount works without udevd running (#344). Remaining
+// limitation: devices that haven't appeared yet are missed — the proper
+// fix is event-driven waiting with a timeout. Related issues: #308, #393.
 //
 // The C FFI exports (bch2_scan_devices, bch2_scan_device_sbs) are called
 // from the kernel's mount path. Memory ownership crosses the FFI boundary
@@ -78,7 +78,7 @@ fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<String>> {
         .collect::<Vec<_>>())
 }
 
-fn get_all_block_devnodes() -> anyhow::Result<Vec<String>> {
+fn get_all_block_devnodes_udev() -> anyhow::Result<Vec<String>> {
     let mut udev = udev::Enumerator::new()?;
     udev.match_subsystem("block")?;
 
@@ -93,6 +93,39 @@ fn get_all_block_devnodes() -> anyhow::Result<Vec<String>> {
         })
         .collect::<Vec<_>>();
     Ok(devices)
+}
+
+/// Scan /proc/partitions for block devices. Works without udev.
+fn get_all_block_devnodes_procfs() -> anyhow::Result<Vec<String>> {
+    let contents = fs::read_to_string("/proc/partitions")?;
+    let devices = contents
+        .lines()
+        .skip(2) // skip header lines
+        .filter_map(|line| {
+            let name = line.split_whitespace().nth(3)?;
+            let path = format!("/dev/{}", name);
+            if Path::new(&path).exists() {
+                Some(path)
+            } else {
+                None
+            }
+        })
+        .collect();
+    Ok(devices)
+}
+
+fn get_all_block_devnodes() -> anyhow::Result<Vec<String>> {
+    match get_all_block_devnodes_udev() {
+        Ok(devs) if !devs.is_empty() => Ok(devs),
+        Ok(_) => {
+            debug!("udev returned no block devices, falling back to /proc/partitions");
+            get_all_block_devnodes_procfs()
+        }
+        Err(e) => {
+            debug!("udev block scan failed ({}), falling back to /proc/partitions", e);
+            get_all_block_devnodes_procfs()
+        }
+    }
 }
 
 fn read_sbs_matching_uuid(uuid: Uuid, devices: &[String], opts: &bch_opts) -> Vec<(PathBuf, bch_sb_handle)> {
@@ -134,9 +167,9 @@ fn get_devices_by_uuid(
         }
     }
 
-    // TODO: both paths use udev enumeration, so devices not yet known to udev
-    // are missed entirely. Proper fix: wait for udev events (or poll) until all
-    // expected devices appear or a timeout expires, then attempt degraded mount.
+    // Falls back to /proc/partitions if udev is unavailable, so this works
+    // without udevd running. Remaining TODO: wait for devices to appear
+    // (poll or udev events) with a timeout, then attempt degraded mount.
     let all_devs = get_all_block_devnodes()?;
     Ok(read_sbs_matching_uuid(uuid, &all_devs, opts))
 }
