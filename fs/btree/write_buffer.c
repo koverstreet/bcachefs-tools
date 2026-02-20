@@ -1004,6 +1004,8 @@ void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
 	if (wb->flushing.keys.nr)
 		wb_keys_by_btree_to_text(out, &wb->flushing);
 
+	prt_printf(out, "sorted:\t%zu/%zu\n",		wb->sorted.nr, wb->sorted.size);
+
 	prt_printf(out, "nr flushes:\t%llu\n",		wb->nr_flushes);
 	for (unsigned i = 0; i < WB_FLUSH_NR; i++)
 		prt_printf(out, "  %s:\t%llu\n",	wb_flush_caller_names[i], wb->nr_flushes_caller[i]);
