@@ -32,7 +32,7 @@ if [[ ${UUID//-/} =~ ^[[:xdigit:]]{32}$ ]]; then
     PARTS=()
 
     for part in $(tail -n +3 /proc/partitions|awk '{print $4}'); do
-	uuid_line=$(bcachefs show-super /dev/$part|& head -n1)
+	uuid_line=$(timeout 3 bcachefs show-super /dev/$part 2>/dev/null | head -n1)
 
 	if [[ $uuid_line =~ $UUID ]]; then
 	    PARTS+=(/dev/$part)
