@@ -94,6 +94,11 @@ export RUSTFLAGS:=$(RUSTFLAGS) -C default-linker-libraries
 PKGCONFIG_LIBS="blkid uuid liburcu libsodium zlib liblz4 libzstd libudev libkeyutils"
 CFLAGS+=-DBCACHEFS_FUSE
 
+# Only query pkg-config for targets that compile or do a full install.
+# Targets like install_dkms and clean don't need build dependencies.
+NO_PKGCONFIG_TARGETS := install_dkms clean dkms/dkms.conf generate_version TAGS tags
+ifneq ($(filter-out $(NO_PKGCONFIG_TARGETS),$(or $(MAKECMDGOALS),all)),)
+
 PKGCONFIG_CFLAGS:=$(shell $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
 ifeq (,$(PKGCONFIG_CFLAGS))
     $(error pkg-config error, command: $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
@@ -110,6 +115,9 @@ PKGCONFIG_UDEVRULESDIR:=$(PKGCONFIG_UDEVDIR)/rules.d
 
 CFLAGS+=$(PKGCONFIG_CFLAGS)
 LDLIBS+=$(PKGCONFIG_LDLIBS)
+
+endif # NEEDS_PKGCONFIG
+
 LDLIBS+=-lm -lpthread -lrt -lkeyutils -laio -ldl
 LDLIBS+=$(EXTRA_LDLIBS)
 
