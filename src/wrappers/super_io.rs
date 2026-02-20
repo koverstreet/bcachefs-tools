@@ -7,6 +7,13 @@ use std::os::unix::io::FromRawFd;
 
 use bch_bindgen::c;
 
+/// Print error to stderr and exit with failure status.
+/// Matches the C `die()` function behavior.
+fn die(msg: &str) -> ! {
+    eprintln!("{}", msg);
+    std::process::exit(1);
+}
+
 /// Wrap a borrowed file descriptor as a `File` without taking ownership.
 ///
 /// The caller must ensure the fd remains valid for the lifetime of the
@@ -31,7 +38,7 @@ fn csum_vstruct_sb(sb: *mut c::bch_sb) -> c::bch_csum {
 /// # Safety
 /// `sb` must point to a valid, fully initialized `bch_sb`.
 ///
-/// Panics on I/O errors (matches C `die()` behavior).
+/// Exits on I/O errors (matches C `die()` behavior).
 #[no_mangle]
 pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
     let file = borrowed_file(fd);
@@ -52,7 +59,7 @@ pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
 
             // Read existing data at 4096 - bs
             file.read_exact_at(&mut buf[..bs], 4096 - bs as u64)
-                .unwrap_or_else(|e| panic!("pread failed at offset {}: {}", 4096 - bs, e));
+                .unwrap_or_else(|e| die(&format!("pread failed at offset {}: {}", 4096 - bs, e)));
 
             // Patch the layout into the end of this block
             let layout_bytes = std::mem::size_of::<c::bch_sb_layout>();
@@ -76,14 +83,16 @@ pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
         pwrite_exact(&file, sb_slice, offset_sectors << 9);
     }
 
-    rustix::fs::fsync(&*file).expect("fsync failed writing superblock");
+    if let Err(e) = rustix::fs::fsync(&*file) {
+        die(&format!("fsync failed writing superblock: {}", e));
+    }
 }
 
 /// Read a superblock from disk at the given sector offset.
 ///
 /// Returns a malloc'd `bch_sb` pointer (caller must free).
 ///
-/// Panics if the magic doesn't match a bcachefs superblock.
+/// Exits if the magic doesn't match or on I/O error.
 #[no_mangle]
 pub extern "C" fn __bch2_super_read(fd: i32, sector: u64) -> *mut c::bch_sb {
     let file = borrowed_file(fd);
@@ -92,12 +101,12 @@ pub extern "C" fn __bch2_super_read(fd: i32, sector: u64) -> *mut c::bch_sb {
     let header_size = std::mem::size_of::<c::bch_sb>();
     let mut header_buf = vec![0u8; header_size];
     file.read_exact_at(&mut header_buf, sector << 9)
-        .unwrap_or_else(|e| panic!("pread failed at offset {}: {}", sector << 9, e));
+        .unwrap_or_else(|e| die(&format!("pread failed at offset {}: {}", sector << 9, e)));
 
     let sb_header = unsafe { &*(header_buf.as_ptr() as *const c::bch_sb) };
 
     if sb_header.magic.b != BCACHE_MAGIC && sb_header.magic.b != BCHFS_MAGIC {
-        panic!("not a bcachefs superblock");
+        die("not a bcachefs superblock");
     }
 
     let bytes = vstruct_bytes_sb(sb_header);
@@ -105,12 +114,12 @@ pub extern "C" fn __bch2_super_read(fd: i32, sector: u64) -> *mut c::bch_sb {
     // Use malloc so the caller can free() it (C callers expect this)
     let ptr = unsafe { libc::malloc(bytes) as *mut u8 };
     if ptr.is_null() {
-        panic!("allocation failed for superblock ({} bytes)", bytes);
+        die(&format!("allocation failed for superblock ({} bytes)", bytes));
     }
 
     let buf = unsafe { std::slice::from_raw_parts_mut(ptr, bytes) };
     file.read_exact_at(buf, sector << 9)
-        .unwrap_or_else(|e| panic!("pread failed at offset {}: {}", sector << 9, e));
+        .unwrap_or_else(|e| die(&format!("pread failed at offset {}: {}", sector << 9, e)));
 
     ptr as *mut c::bch_sb
 }
@@ -119,10 +128,10 @@ fn round_up(val: usize, align: usize) -> usize {
     (val + align - 1) & !(align - 1)
 }
 
-/// Write exactly `buf.len()` bytes at `offset`. Panics on error.
+/// Write exactly `buf.len()` bytes at `offset`. Exits on error.
 fn pwrite_exact(file: &std::fs::File, buf: &[u8], offset: u64) {
     file.write_all_at(buf, offset)
-        .unwrap_or_else(|e| panic!("pwrite failed at offset {}: {}", offset, e));
+        .unwrap_or_else(|e| die(&format!("pwrite failed at offset {}: {}", offset, e)));
 }
 
 pub const BCACHE_MAGIC: [u8; 16] = [
