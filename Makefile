@@ -96,7 +96,7 @@ CFLAGS+=-DBCACHEFS_FUSE
 
 # Only query pkg-config for targets that compile or do a full install.
 # Targets like install_dkms and clean don't need build dependencies.
-NO_PKGCONFIG_TARGETS := install_dkms clean dkms/dkms.conf generate_version TAGS tags
+NO_PKGCONFIG_TARGETS := install_dkms uninstall clean dkms/dkms.conf generate_version TAGS tags
 ifneq ($(filter-out $(NO_PKGCONFIG_TARGETS),$(or $(MAKECMDGOALS),all)),)
 
 PKGCONFIG_CFLAGS:=$(shell $(PKG_CONFIG) --cflags $(PKGCONFIG_LIBS))
@@ -211,6 +211,19 @@ install: all install_dkms
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuse.bcachefs
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuse.bcachefs
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.fuse.bcachefs
+
+.PHONY: uninstall
+uninstall:
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mkfs.bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/fsck.bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mount.bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuse.bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuse.bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mount.fuse.bcachefs
+	$(RM) $(DESTDIR)$(PREFIX)/share/man/man8/bcachefs.8
+	$(RM) $(DESTDIR)$(BASH_COMPLETION_DIR)/bcachefs
+	$(RM) -r $(DESTDIR)$(DKMSDIR)
 
 .PHONY: install_dkms
 install_dkms: dkms/dkms.conf dkms/module-version.c
