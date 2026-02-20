@@ -99,6 +99,10 @@ fn parse_mountflag_options(options: impl AsRef<str>) -> (Option<String>, libc::c
             "rw" | "" => Left(0),
             "strictatime" => Left(libc::MS_STRICTATIME),
             "sync" => Left(libc::MS_SYNCHRONOUS),
+            // Userspace-only fstab options — not passed to the kernel
+            "auto" | "noauto" | "nofail" | "_netdev" |
+            "user" | "nouser" | "users" | "group" | "owner" => Left(0),
+            o if o.starts_with("x-") || o.starts_with("comment=") => Left(0),
             o => Right(o),
         })
         .fold((Vec::new(), 0), |(mut opts, flags), next| match next {
