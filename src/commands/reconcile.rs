@@ -192,7 +192,7 @@ pub fn cmd_reconcile_wait(argv: Vec<String>) -> Result<()> {
     // Trigger reconcile wakeup so it starts processing
     let _ = std::fs::write(sysfs_path.join("internal/trigger_reconcile_wakeup"), "1");
 
-    if std::io::stdout().is_terminal() {
+    if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
         reconcile_wait_tui(&handle, &sysfs_path, &types)
     } else {
         reconcile_wait_headless(&handle, &sysfs_path, &types)
