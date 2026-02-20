@@ -28,14 +28,38 @@ impl std::fmt::Display for ErrnoError {
 
 impl std::error::Error for ErrnoError {}
 
-/// Read the running kernel's .config from /boot/config-$(uname -r).
-fn read_kernel_config() -> Option<String> {
-    // Try /boot/config-$(uname -r)
+const PROC_CONFIG_GZ: &str = "/proc/config.gz";
+
+/// Read the running kernel's .config.
+///
+/// Tries /boot/config-$(uname -r), then /proc/config.gz.
+fn read_kernel_config() -> Result<String, String> {
     let release = std::process::Command::new("uname").arg("-r")
-        .output().ok()?;
-    let release = std::str::from_utf8(&release.stdout).ok()?.trim();
-    let path = format!("/boot/config-{release}");
-    std::fs::read_to_string(path).ok()
+        .output()
+        .map_err(|e| format!("failed to run uname -r: {e}"))?;
+    let release = std::str::from_utf8(&release.stdout)
+        .map_err(|e| format!("uname -r returned invalid UTF-8: {e}"))?
+        .trim();
+
+    let boot_path = format!("/boot/config-{release}");
+    let boot_err = match std::fs::read_to_string(&boot_path) {
+        Ok(config) => return Ok(config),
+        Err(e) => e,
+    };
+
+    match std::process::Command::new("gzip").args(["-dc", PROC_CONFIG_GZ]).output() {
+        Ok(output) if output.status.success() => {
+            String::from_utf8(output.stdout)
+                .map_err(|e| format!("{PROC_CONFIG_GZ}: invalid UTF-8: {e}"))
+        }
+        Ok(output) => {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            Err(format!("{boot_path}: {boot_err}, {PROC_CONFIG_GZ}: {}", stderr.trim()))
+        }
+        Err(proc_err) => {
+            Err(format!("{boot_path}: {boot_err}, {PROC_CONFIG_GZ}: {proc_err}"))
+        }
+    }
 }
 
 fn kernel_config_has(config: &str, key: &str) -> bool {
@@ -46,7 +70,7 @@ fn kernel_config_has(config: &str, key: &str) -> bool {
 /// Print warnings about kernel configuration issues that affect bcachefs.
 /// Called before every command so users can't miss them.
 fn check_kernel_warnings() {
-    let Some(config) = read_kernel_config() else { return };
+    let Ok(config) = read_kernel_config() else { return };
 
     if !kernel_config_has(&config, "CONFIG_RUST") {
         eprintln!("WARNING: kernel does not have CONFIG_RUST enabled; \
@@ -197,11 +221,10 @@ fn main() -> ExitCode {
         "version" => {
             let vh = include_str!("../version.h");
             println!("{}", vh.split('"').nth(1).unwrap_or("unknown"));
-            let config = read_kernel_config();
-            let rust_status = match config.as_deref().map(|c| kernel_config_has(c, "CONFIG_RUST")) {
-                Some(true)  => "CONFIG_RUST=y",
-                Some(false) => "CONFIG_RUST is not enabled",
-                None        => "unable to read kernel config",
+            let rust_status = match read_kernel_config() {
+                Ok(ref c) if kernel_config_has(c, "CONFIG_RUST") => "CONFIG_RUST=y".into(),
+                Ok(_)       => "CONFIG_RUST is not enabled".into(),
+                Err(e)      => e,
             };
             println!("kernel: {rust_status}");
             ExitCode::SUCCESS
