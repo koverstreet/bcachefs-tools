@@ -8,7 +8,7 @@ use std::os::unix::fs::FileExt;
 use bch_bindgen::c;
 use bch_bindgen::{opt_defined, opt_get, opt_set};
 
-use super::super_io::{BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
+use super::super_io::{die, BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
 
 /// Features enabled on all new filesystems.
 /// Must match BCH_SB_FEATURES_ALL in bcachefs_format.h.
@@ -65,7 +65,7 @@ fn parse_target(
         return group_to_target(idx as u32);
     }
 
-    panic!("Invalid target {}", target_str.to_string_lossy());
+    die(&format!("Invalid target {}", target_str.to_string_lossy()));
 }
 
 /// Set all sb options from a bch_opts struct.
@@ -89,7 +89,7 @@ fn opt_set_sb_all(sb: *mut c::bch_sb, dev_idx: i32, opts: &mut c::bch_opts) {
 ///
 /// Returns a pointer to the superblock (caller must free with `free()`).
 ///
-/// Panics on fatal errors (matching the C `die()` behavior).
+/// Exits on fatal errors (matching the C `die()` behavior).
 #[no_mangle]
 pub extern "C" fn bch2_format(
     fs_opt_strs: c::bch_opt_strs,
@@ -110,10 +110,10 @@ pub extern "C" fn bch2_format(
     }
 
     if fs_opts.block_size < 512 {
-        panic!(
+        die(&format!(
             "blocksize too small: {}, must be greater than one sector (512 bytes)",
             fs_opts.block_size
-        );
+        ));
     }
 
     // Get device size if not specified
@@ -149,10 +149,10 @@ pub extern "C" fn bch2_format(
     }
 
     if fs_opts.btree_node_size <= fs_opts.block_size as u32 {
-        panic!(
+        die(&format!(
             "btree node size ({}) must be greater than block size ({})",
             fs_opts.btree_node_size, fs_opts.block_size
-        );
+        ));
     }
 
     // UUID
@@ -165,7 +165,7 @@ pub extern "C" fn bch2_format(
     // so we must not let bch_sb_handle's Drop call bch2_free_super.
     let mut sb = std::mem::ManuallyDrop::new(c::bch_sb_handle::default());
     if unsafe { c::bch2_sb_realloc(&mut *sb, 0) } != 0 {
-        panic!("insufficient memory");
+        die("insufficient memory");
     }
 
     let sb_ptr = sb.sb;
@@ -197,10 +197,10 @@ pub extern "C" fn bch2_format(
         let label = unsafe { CStr::from_ptr(opts.label) };
         let label_bytes = label.to_bytes();
         if label_bytes.len() >= sb_ref.label.len() {
-            panic!(
+            die(&format!(
                 "filesystem label too long (max {} characters)",
                 sb_ref.label.len() - 1
-            );
+            ));
         }
         sb_ref.label[..label_bytes.len()].copy_from_slice(label_bytes);
     }
@@ -210,7 +210,7 @@ pub extern "C" fn bch2_format(
     // Time
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .expect("error getting current time");
+        .unwrap_or_else(|_| die("error getting current time"));
     let nsec = now.as_secs() * 1_000_000_000 + now.subsec_nanos() as u64;
     sb_ref.time_base_lo = nsec.to_le();
     sb_ref.time_precision = 1u32.to_le();
@@ -258,10 +258,10 @@ pub extern "C" fn bch2_format(
 
         let path_idx = unsafe { c::bch2_disk_path_find_or_create(&mut *sb, dev.label) };
         if path_idx < 0 {
-            panic!(
+            die(&format!(
                 "error creating disk path: {}",
                 std::io::Error::from_raw_os_error(-path_idx)
-            );
+            ));
         }
 
         // Recompute m after sb modification (memory may have been reallocated)
@@ -330,7 +330,7 @@ pub extern "C" fn bch2_format(
             let zeroes = vec![0u8; (c::BCH_SB_SECTOR as usize) << 9];
             let file = super::super_io::borrowed_file(fd);
             file.write_all_at(&zeroes, 0)
-                .unwrap_or_else(|e| panic!("zeroing start of disk: {}", e));
+                .unwrap_or_else(|e| die(&format!("zeroing start of disk: {}", e)));
         }
 
         super::super_io::bch2_super_write(fd, sb.sb);
@@ -418,7 +418,7 @@ fn dev_bucket_size_clamp(fs_opts: c::bch_opts, dev_size: u64, fs_bucket_size: u6
         max_size = max_size.max(fs_opts.btree_node_size as u64);
     }
     if max_size * min_nr_nbuckets > dev_size {
-        panic!("bucket size {} too big for device size", max_size);
+        die(&format!("bucket size {} too big for device size", max_size));
     }
 
     let mut dev_bucket_size = max_size.min(fs_bucket_size);
@@ -457,10 +457,10 @@ pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[c::dev_opts]) -> u64 {
             } else {
                 unsafe { CStr::from_ptr(dev.path) }.to_string_lossy().into_owned()
             };
-            panic!(
+            die(&format!(
                 "cannot format {}, too small ({} bytes, min {})",
                 path, dev.fs_size, min_dev_size
-            );
+            ));
         }
     }
 
@@ -488,7 +488,7 @@ pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[c::dev_opts]) -> u64 {
     // and devices being added after creation
     let mut info: libc::sysinfo = unsafe { std::mem::zeroed() };
     if unsafe { libc::sysinfo(&mut info) } != 0 {
-        panic!("sysinfo() failed");
+        die("sysinfo() failed");
     }
     let total_ram = info.totalram as u64 * info.mem_unit as u64;
     let mem_available_for_fsck = total_ram / 8;
@@ -502,31 +502,31 @@ pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[c::dev_opts]) -> u64 {
 
 /// Validate that a device's bucket size is consistent with filesystem options.
 ///
-/// Panics on validation failure (matches C `die()` behavior).
+/// Exits on validation failure (matches C `die()` behavior).
 pub fn check_bucket_size(opts: &c::bch_opts, dev: &c::dev_opts) {
     if dev.opts.bucket_size < opts.block_size as u32 {
-        panic!(
+        die(&format!(
             "Bucket size ({}) cannot be smaller than block size ({})",
             dev.opts.bucket_size, opts.block_size
-        );
+        ));
     }
 
     if opt_defined!(opts, btree_node_size) != 0
         && dev.opts.bucket_size < opts.btree_node_size
     {
-        panic!(
+        die(&format!(
             "Bucket size ({}) cannot be smaller than btree node size ({})",
             dev.opts.bucket_size, opts.btree_node_size
-        );
+        ));
     }
 
     if dev.nbuckets < c::BCH_MIN_NR_NBUCKETS as u64 {
-        panic!(
+        die(&format!(
             "Not enough buckets: {}, need {} (bucket size {})",
             dev.nbuckets,
             c::BCH_MIN_NR_NBUCKETS,
             dev.opts.bucket_size
-        );
+        ));
     }
 }
 

@@ -9,7 +9,7 @@ use bch_bindgen::c;
 
 /// Print error to stderr and exit with failure status.
 /// Matches the C `die()` function behavior.
-fn die(msg: &str) -> ! {
+pub fn die(msg: &str) -> ! {
     eprintln!("{}", msg);
     std::process::exit(1);
 }
