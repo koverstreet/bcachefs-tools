@@ -1,6 +1,7 @@
 use std::fmt::Write;
-use std::io::Write as IoWrite;
+use std::io::{IsTerminal, Write as IoWrite};
 use std::time::Duration;
+use std::thread;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::c;
@@ -191,11 +192,24 @@ pub fn cmd_reconcile_wait(argv: Vec<String>) -> Result<()> {
     // Trigger reconcile wakeup so it starts processing
     let _ = std::fs::write(sysfs_path.join("internal/trigger_reconcile_wakeup"), "1");
 
+    if std::io::stdout().is_terminal() {
+        reconcile_wait_tui(&handle, &sysfs_path, &types)
+    } else {
+        reconcile_wait_headless(&handle, &sysfs_path, &types)
+    }
+}
+
+/// Interactive TUI mode: alternate screen, keyboard input, live updates.
+fn reconcile_wait_tui(
+    handle: &BcachefsHandle,
+    sysfs_path: &std::path::Path,
+    types: &[ReconcileType],
+) -> Result<()> {
     run_tui(|stdout| loop {
         let mut out = Printbuf::new();
         out.set_human_readable(true);
 
-        let pending = reconcile_status_to_text(&mut out, &handle, &sysfs_path, &types)
+        let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)
             .unwrap_or(false);
 
         execute!(stdout, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
@@ -217,4 +231,25 @@ pub fn cmd_reconcile_wait(argv: Vec<String>) -> Result<()> {
             while event::poll(Duration::ZERO)? { let _ = event::read()?; }
         }
     })
+}
+
+/// Non-interactive mode: simple polling loop for scripts and CI.
+fn reconcile_wait_headless(
+    handle: &BcachefsHandle,
+    sysfs_path: &std::path::Path,
+    types: &[ReconcileType],
+) -> Result<()> {
+    loop {
+        let mut out = Printbuf::new();
+        out.set_human_readable(true);
+
+        let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)
+            .unwrap_or(false);
+
+        if !pending {
+            return Ok(());
+        }
+
+        thread::sleep(Duration::from_secs(1));
+    }
 }
