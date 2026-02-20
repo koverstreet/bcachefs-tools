@@ -782,7 +782,12 @@ pub fn cmd_fusemount(args: Vec<String>) -> anyhow::Result<()> {
     let mut config = Config::default();
     config.mount_options = vec![
         MountOption::FSName(cli.device.clone()),
-        MountOption::Subtype("bcachefs".to_string()),
+        // Use CUSTOM instead of Subtype — fuser categorizes Subtype as
+        // "Fusermount" group, which is only passed when using the fusermount3
+        // helper. With a direct mount syscall (as root), Subtype gets
+        // silently dropped and the mount shows as "fuse" instead of
+        // "fuse.bcachefs" in /proc/mounts.
+        MountOption::CUSTOM("subtype=bcachefs".to_string()),
     ];
     // Worker threads get current + RCU via ensure_thread_init() with
     // a Drop guard for cleanup. No need to restrict to single-threaded.
