@@ -209,8 +209,7 @@ fn reconcile_wait_tui(
         let mut out = Printbuf::new();
         out.set_human_readable(true);
 
-        let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)
-            .unwrap_or(false);
+        let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)?;
 
         execute!(stdout, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
         write!(stdout, "{}", out)?;
@@ -243,8 +242,7 @@ fn reconcile_wait_headless(
         let mut out = Printbuf::new();
         out.set_human_readable(true);
 
-        let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)
-            .unwrap_or(false);
+        let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)?;
 
         if !pending {
             return Ok(());
