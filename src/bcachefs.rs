@@ -22,14 +22,25 @@ impl std::fmt::Display for ErrnoError {
 
 impl std::error::Error for ErrnoError {}
 
-/// Read the running kernel's .config from /boot/config-$(uname -r).
+/// Read the running kernel's .config from /boot or /proc/config.gz.
 fn read_kernel_config() -> Option<String> {
-    // Try /boot/config-$(uname -r)
+    // Try /boot/config-$(uname -r) first (most distros)
     let release = std::process::Command::new("uname").arg("-r")
         .output().ok()?;
     let release = std::str::from_utf8(&release.stdout).ok()?.trim();
     let path = format!("/boot/config-{release}");
-    std::fs::read_to_string(path).ok()
+    if let Ok(config) = std::fs::read_to_string(&path) {
+        return Some(config);
+    }
+
+    // Fallback: /proc/config.gz (NixOS, CONFIG_IKCONFIG_PROC=y kernels)
+    let output = std::process::Command::new("zcat")
+        .arg("/proc/config.gz")
+        .output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout).ok()
 }
 
 fn kernel_config_has(config: &str, key: &str) -> bool {
