@@ -125,10 +125,10 @@ fn fs_usage_v1_to_text(
     sorted.sort_by(|a, b| a.pos.cmp(&b.pos));
 
     // Header
-    let uuid = uuid::Uuid::from_bytes(handle.uuid());
-    writeln!(out, "Filesystem: {}", uuid.hyphenated()).unwrap();
-
     out.tabstops(&[20, 16]);
+    let uuid = uuid::Uuid::from_bytes(handle.uuid());
+
+    writeln!(out, "Filesystem: {}", uuid.hyphenated()).unwrap();
 
     write!(out, "Size:\t").unwrap();
     out.units_sectors(result.capacity);
@@ -148,14 +148,14 @@ fn fs_usage_v1_to_text(
     // Detailed replicas
     if has(Field::Replicas) {
         out.tabstops(&[16, 16, 14, 14, 14]);
-        write!(out, "\nData type\tRequired/total\tDurability\tDevices\n").unwrap();
+        write!(out, "\nData type\tRequired/total\tDurability\tDevices\tUsage\r\n").unwrap();
 
         for entry in &sorted {
             match entry.pos.decode() {
                 DiskAccountingKind::PersistentReserved { nr_replicas } => {
                     let sectors = entry.counter(0);
                     if sectors == 0 { continue; }
-                    write!(out, "reserved:\t1/{}\t[] ", nr_replicas).unwrap();
+                    write!(out, "reserved:\t1/{}\t\t[]\t", nr_replicas).unwrap();
                     out.units_sectors(sectors);
                     write!(out, "\r\n").unwrap();
                 }
