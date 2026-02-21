@@ -181,6 +181,7 @@ generate_version: .version version.h
 
 # Rebuild the 'version' command any time the version string changes
 c_src/cmd_version.o : version.h
+dkms/module-version.o : version.h
 
 
 .PHONY: dkms/dkms.conf
