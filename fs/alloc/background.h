@@ -306,8 +306,7 @@ int bch2_alloc_key_to_dev_counters(struct btree_trans *, struct bch_dev *,
 				   const struct bch_alloc_v4 *, unsigned);
 int bch2_trigger_alloc(struct btree_trans *, struct btree_trigger_op);
 
-int bch2_dev_truncate_alloc(struct bch_fs *c, struct bch_dev *ca, u64 cutoff);
-int bch2_dev_remove_alloc(struct bch_fs *, struct bch_dev *);
+int bch2_dev_remove_alloc(struct bch_fs *, struct bch_dev *, u64);
 
 void bch2_recalc_capacity(struct bch_fs *);
 unsigned long bch2_fs_ra_pages(struct bch_fs *);
