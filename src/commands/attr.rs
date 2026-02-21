@@ -55,7 +55,7 @@ fn remove_bcachefs_attr(path: &Path, attr_name: &str) {
     }
 }
 
-fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Result<()> {
+fn set_xattrs(path: &Path, opts: &[(String, String)], remove_all: bool) -> Result<()> {
     if remove_all {
         for name in opts::bch_option_names(c::opt_flags::OPT_INODE as u32) {
             // casefold only works on empty directories
@@ -74,6 +74,11 @@ fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Resul
                 .with_context(|| format!("setting {} on {}", attr, path.display()))?;
         }
     }
+    Ok(())
+}
+
+fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Result<()> {
+    set_xattrs(path, opts, remove_all)?;
 
     if std::fs::metadata(path)
         .with_context(|| format!("stat {}", path.display()))?
@@ -82,6 +87,27 @@ fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Resul
         propagate_recurse(path);
     }
     Ok(())
+}
+
+fn setattr_recurse(dir_path: &Path, opts: &[(String, String)], remove_all: bool) {
+    let inner = || -> Result<()> {
+        for entry in std::fs::read_dir(dir_path)? {
+            let entry = entry?;
+            let ft = entry.file_type()?;
+            if ft.is_symlink() { continue }
+            let path = entry.path();
+
+            set_xattrs(&path, opts, remove_all)?;
+
+            if ft.is_dir() {
+                setattr_recurse(&path, opts, remove_all);
+            }
+        }
+        Ok(())
+    };
+    if let Err(e) = inner() {
+        eprintln!("{}: {e:#}", dir_path.display());
+    }
 }
 
 pub(super) fn setattr_cmd() -> Command {
@@ -93,6 +119,11 @@ pub(super) fn setattr_cmd() -> Command {
             .long("remove-all")
             .action(ArgAction::SetTrue)
             .help("Remove all file options"))
+        .arg(Arg::new("recursive")
+            .short('r')
+            .long("recursive")
+            .action(ArgAction::SetTrue)
+            .help("Set options recursively on all files in directories"))
         .arg(Arg::new("files")
             .action(ArgAction::Append)
             .required(true))
@@ -102,11 +133,23 @@ pub fn cmd_setattr(argv: Vec<String>) -> Result<()> {
     let matches = setattr_cmd().get_matches_from(argv);
 
     let remove_all = matches.get_flag("remove-all");
+    let recursive = matches.get_flag("recursive");
     let opts = opts::bch_options_from_matches(&matches, c::opt_flags::OPT_INODE as u32);
     let files: Vec<&String> = matches.get_many("files").unwrap().collect();
 
     for path in files {
-        do_setattr(Path::new(path), &opts, remove_all)?;
+        let path = Path::new(path);
+        if recursive {
+            set_xattrs(path, &opts, remove_all)?;
+            if std::fs::metadata(path)
+                .with_context(|| format!("stat {}", path.display()))?
+                .is_dir()
+            {
+                setattr_recurse(path, &opts, remove_all);
+            }
+        } else {
+            do_setattr(path, &opts, remove_all)?;
+        }
     }
     Ok(())
 }
