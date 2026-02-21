@@ -807,7 +807,7 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 			CLASS(printbuf, buf)();
 			log_fsck_err_on(true, trans,
 				alloc_key_bucket_nonempty_to_empty_not_open,
-				"bucket %llu:%llu going empty but not open\n%s",
+				"bucket %u:%llu going empty but not open\n%s",
 				new.k->p.inode, new.k->p.offset,
 				(bch2_bkey_val_to_text(&buf, c, new.s_c), buf.buf));
 		}

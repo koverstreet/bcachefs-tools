@@ -62,6 +62,7 @@ struct alloc_request {
 	struct {
 		u64		buckets_seen;
 		u64		skipped_open;
+		u64		skipped_need_journal_commit;
 		u64		need_journal_commit;
 		u64		skipped_nocow;
 		u64		skipped_nouse;

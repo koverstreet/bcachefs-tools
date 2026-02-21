@@ -17,7 +17,7 @@ static inline bool bch2_btree_write_buffer_must_wait(struct bch_fs *c)
 {
 	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer;
 
-	return wb->inc.keys.nr > wb->inc.keys.size * 3 / 4;
+	return wb->inc.keys.nr + wb->flushing.keys.nr > wb->inc.keys.size * 3 / 4;
 }
 
 struct btree_trans;

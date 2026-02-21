@@ -803,6 +803,12 @@ static int bch2_btree_write_buffer_flush_thread(void *arg)
 				 !bch2_journal_error(&c->journal) &&
 				 bch2_btree_write_buffer_should_flush(c));
 		}
+
+		if (test_bit(JOURNAL_low_on_wb, &c->journal.flags) &&
+		    !bch2_btree_write_buffer_must_wait(c)) {
+			guard(spinlock)(&c->journal.lock);
+			bch2_journal_set_watermark(&c->journal);
+		}
 	}
 
 	return 0;
@@ -965,6 +971,28 @@ int bch2_btree_write_buffer_resize(struct bch_fs *c, size_t new_size)
 		wb_keys_resize(&wb->inc, new_size);
 }
 
+static void wb_keys_by_btree_to_text(struct printbuf *out,
+				     struct btree_write_buffer_keys *keys)
+{
+	size_t counts[BTREE_ID_NR] = {};
+	size_t other = 0;
+
+	wb_keys_for_each(keys, k)
+		if (k->btree < BTREE_ID_NR)
+			counts[k->btree]++;
+		else
+			other++;
+
+	for (unsigned i = 0; i < BTREE_ID_NR; i++)
+		if (counts[i]) {
+			prt_printf(out, "  ");
+			bch2_btree_id_to_text(out, i);
+			prt_printf(out, ":\t%zu\n", counts[i]);
+		}
+	if (other)
+		prt_printf(out, "  (other):\t%zu\n", other);
+}
+
 void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer;
@@ -974,9 +1002,15 @@ void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
 
 	prt_printf(out, "inc keys:\t%zu/%zu\n",		wb->inc.keys.nr, wb->inc.keys.size);
 	prt_printf(out, "inc seq pinned:\t%llu\n",	wb->inc.pin.seq);
+	if (wb->inc.keys.nr)
+		wb_keys_by_btree_to_text(out, &wb->inc);
 
 	prt_printf(out, "flushing keys:\t%zu/%zu\n",	wb->flushing.keys.nr, wb->flushing.keys.size);
 	prt_printf(out, "flushing seq pinned:\t%llu\n",	wb->flushing.pin.seq);
+	if (wb->flushing.keys.nr)
+		wb_keys_by_btree_to_text(out, &wb->flushing);
+
+	prt_printf(out, "sorted:\t%zu/%zu\n",		wb->sorted.nr, wb->sorted.size);
 
 	prt_printf(out, "nr flushes:\t%llu\n",		wb->nr_flushes);
 	for (unsigned i = 0; i < WB_FLUSH_NR; i++)
@@ -1001,7 +1035,7 @@ void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
 	prt_newline(out);
 
 	if (t) {
-		prt_str(out, "Write buffer flush thread:\n");
+		prt_printf(out, "Write buffer flush thread (pid %d):\n", t->pid);
 		scoped_guard(printbuf_indent, out)
 			bch2_prt_task_backtrace(out, t, 0, GFP_KERNEL);
 		put_task_struct(t);

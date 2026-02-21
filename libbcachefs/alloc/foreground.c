@@ -193,9 +193,15 @@ static inline bool may_alloc_bucket(struct bch_fs *c,
 		return false;
 	}
 
-	BUG_ON(bch2_bucket_journal_seq_ready(&c->buckets_waiting_for_journal,
-					      bucket.inode, bucket.offset) >
-	       c->journal.flushed_seq_ondisk);
+	u64 journal_seq_ready =
+		bch2_bucket_journal_seq_ready(&c->buckets_waiting_for_journal,
+					      bucket.inode, bucket.offset);
+	if (journal_seq_ready > c->journal.flushed_seq_ondisk) {
+		if (journal_seq_ready > c->journal.flushing_seq)
+			req->counters.need_journal_commit++;
+		req->counters.skipped_need_journal_commit++;
+		return false;
+	}
 
 	if (bch2_bucket_nocow_is_locked(&c->nocow_locks, bucket)) {
 		req->counters.skipped_nocow++;
@@ -462,6 +468,7 @@ static noinline void bucket_alloc_to_text(struct printbuf *out,
 		   c->copygc.wait - atomic64_read(&c->io_clock[WRITE].now));
 	prt_printf(out, "seen\t%llu\n",	req->counters.buckets_seen);
 	prt_printf(out, "open\t%llu\n",	req->counters.skipped_open);
+	prt_printf(out, "need journal commit\t%llu\n", req->counters.skipped_need_journal_commit);
 	prt_printf(out, "nocow\t%llu\n",	req->counters.skipped_nocow);
 	prt_printf(out, "nouse\t%llu\n",	req->counters.skipped_nouse);
 	prt_printf(out, "mi_btree_bitmap\t%llu\n", req->counters.skipped_mi_btree_bitmap);

@@ -1631,7 +1631,7 @@ static int bch2_param_set_static_key_t(const char *val, const struct kernel_para
 static int bch2_param_get_static_key_t(char *buffer, const struct kernel_param *kp)
 {
 	struct static_key *key = kp->arg;
-	return sprintf(buffer, "%c\n", static_key_enabled(key) ? 'N' : 'Y');
+	return sprintf(buffer, "%c\n", static_key_enabled(key) ? 'Y' : 'N');
 }
 
 /* this is unused in userspace - silence the warning */
