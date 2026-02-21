@@ -8,10 +8,6 @@ ACTION=="remove", GOTO="bcachefs_end"
 ENV{ID_FS_TYPE}!="bcachefs", GOTO="bcachefs_end"
 ENV{SYSTEMD_READY}=="0", GOTO="bcachefs_end"
 
-# udev has already assigned a by-uuid link using the FS global
-# UUID. We should also have a link for the per-member UUID.
-ENV{ID_FS_UUID_SUB_ENC}=="?*", SYMLINK+="disk/by-uuid/$env{ID_FS_UUID_SUB_ENC}"
-
 # Don't let udisks automount bcachefs filesystems without even asking a user.
 # This doesn't eliminate filesystems as an attack surface; it only prevents
 # evil maid attacks when all sessions are locked.
@@ -20,5 +16,13 @@ ENV{ID_FS_UUID_SUB_ENC}=="?*", SYMLINK+="disk/by-uuid/$env{ID_FS_UUID_SUB_ENC}"
 # supplying UDISKS_AUTO=0 here changes the HintAuto property of the block
 # device abstraction to mean "do not automatically start" (e.g. mount).
 ENV{UDISKS_AUTO}="0"
+
+# Skip multipath component devices. Only the dm-mpath map should be enumerated.
+# Multipath sets DM_MULTIPATH_DEVICE_PATH=1 on underlying component devices.
+ENV{DM_MULTIPATH_DEVICE_PATH}=="1", GOTO="bcachefs_end"
+
+# udev has already assigned a by-uuid link using the FS global
+# UUID. We should also have a link for the per-member UUID.
+ENV{ID_FS_UUID_SUB_ENC}=="?*", SYMLINK+="disk/by-uuid/$env{ID_FS_UUID_SUB_ENC}"
 
 LABEL="bcachefs_end"

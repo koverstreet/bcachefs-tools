@@ -2,6 +2,7 @@ use std::ffi::CString;
 use std::fmt::Write;
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::path::Path;
 use std::process;
 
 use anyhow::{anyhow, Result};
@@ -14,6 +15,7 @@ use rustix::event::{poll, PollFd, PollFlags};
 
 use crate::wrappers::handle::BcachefsHandle;
 use bch_bindgen::printbuf::Printbuf;
+use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::wrappers::sysfs;
 
 // _IOW(0xbc, 19, struct bch_ioctl_fsck_offline) — sizeof = 24
@@ -256,6 +258,14 @@ pub fn cmd_fsck(argv: Vec<String>) -> Result<()> {
     }
 
     let devices = &cli.devices;
+
+    // Honor explicit user-supplied paths, but warn when a path appears to be
+    // a multipath component because that is typically unintended.
+    for dev in devices {
+        if let Some(mpath_dev) = find_multipath_holder(Path::new(dev)) {
+            warn_multipath_component(Path::new(dev), &mpath_dev);
+        }
+    }
 
     // Check if any device is a mountpoint/directory (online fsck)
     if devices.len() == 1 {

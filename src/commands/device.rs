@@ -18,6 +18,7 @@ use bch_bindgen::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches, parse_opt_val};
+use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::util::{fmt_sectors_human, parse_human_size};
 use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
 use crate::wrappers::handle::BcachefsHandle;
@@ -86,6 +87,16 @@ pub fn cmd_device_add(argv: Vec<String>) -> Result<()> {
         let val = parse_opt_val(opt, value)?
             .ok_or_else(|| anyhow!("option {} requires open filesystem", name))?;
         unsafe { c::bch2_opt_set_by_id(&mut dev_opts.opts, opt_id, val) };
+    }
+
+    if let Some(mpath_dev) = find_multipath_holder(Path::new(dev_path)) {
+        warn_multipath_component(Path::new(dev_path), &mpath_dev);
+        if !force {
+            // Locking applies to the selected device path only; it is not
+            // coordinated across dm-mpath maps and component devices.
+            // Selecting a component path may cause unintended data loss.
+            bail!("Use -f/--force to add anyway");
+        }
     }
 
     let ret = unsafe { c::open_for_format(&mut dev_opts, 0, force) };
