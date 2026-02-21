@@ -90,6 +90,13 @@ impl Printbuf {
         unsafe { c::bch2_prt_tab_rjust(&mut self.0) };
     }
 
+    /// Post-process the buffer, aligning columns separated by raw `\t`
+    /// (left-aligned) and `\r` (right-aligned) characters. Call after
+    /// writing a section of tabular data without preset tabstops.
+    pub fn tabstop_align(&mut self) {
+        unsafe { c::bch2_printbuf_tabstop_align(&mut self.0) };
+    }
+
     /// Emit newline with indent handling
     /// (equivalent to `\n` in format string).
     pub fn newline(&mut self) {

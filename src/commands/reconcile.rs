@@ -123,7 +123,6 @@ fn reconcile_status_to_text(
         }
     }
 
-    out.tabstops(&[32, 12, 12]);
     writeln!(out, "Scan pending:\t{}", scan_pending).unwrap();
     write!(out, "\tdata\rmetadata\r\n").unwrap();
 
@@ -136,13 +135,13 @@ fn reconcile_status_to_text(
             accounting::prt_reconcile_type(out, t.as_c());
             write!(out, ":\t").unwrap();
             out.units_sectors(v[idx][0]);
-            out.tab_rjust();
+            write!(out, "\r").unwrap();
             out.units_sectors(v[idx][1]);
-            out.tab_rjust();
-            out.newline();
+            write!(out, "\r\n").unwrap();
             have_pending |= v[idx][0] != 0 || v[idx][1] != 0;
         }
     }
+    out.tabstop_align();
 
     Ok(have_pending)
 }

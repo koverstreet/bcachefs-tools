@@ -192,10 +192,9 @@ static int get_nbuckets_used(struct bch_fs *c, u64 *nbuckets)
 
 static void prt_sectors(struct printbuf *out, u64 v)
 {
-	prt_tab(out);
+	prt_printf(out, "\t");
 	prt_human_readable_u64(out, v << 9);
-	prt_tab_rjust(out);
-	prt_newline(out);
+	prt_printf(out, "\r\n");
 }
 
 static void print_data_type_usage(struct printbuf *out,
@@ -218,10 +217,6 @@ static void print_data_type_usage(struct printbuf *out,
 static void print_image_usage(struct bch_fs *c, bool keep_alloc, u64 nbuckets)
 {
 	struct printbuf buf = PRINTBUF;
-	printbuf_tabstop_push(&buf, 24);
-	printbuf_tabstop_push(&buf, 16);
-	printbuf_tabstop_push(&buf, 16);
-	printbuf_tabstop_push(&buf,  8);
 
 	struct bch_dev *ca = c->devs[0];
 	struct bch_dev_usage_full dev_stats = bch2_dev_usage_full_read(ca);
@@ -269,6 +264,8 @@ static void print_image_usage(struct bch_fs *c, bool keep_alloc, u64 nbuckets)
 		prt_sectors(&buf, dev_stats.d[BCH_DATA_user].fragmented);
 	}
 
+	printbuf_tabstop_align(&buf);
+
 	bool compression_header = false;
 	for (unsigned i = 1; i < BCH_COMPRESSION_TYPE_NR; i++) {
 		struct disk_accounting_pos a;
@@ -290,10 +287,10 @@ static void print_image_usage(struct bch_fs *c, bool keep_alloc, u64 nbuckets)
 		u64 sectors_compressed		= v[2];
 
 		bch2_prt_compression_type(&buf, i);
-		prt_tab(&buf);
+		prt_printf(&buf, "\t");
 
 		prt_human_readable_u64(&buf, sectors_compressed << 9);
-		prt_tab_rjust(&buf);
+		prt_printf(&buf, "\r");
 
 		if (i == BCH_COMPRESSION_TYPE_incompressible) {
 			prt_newline(&buf);
@@ -306,12 +303,15 @@ static void print_image_usage(struct bch_fs *c, bool keep_alloc, u64 nbuckets)
 				     sectors_uncompressed));
 	}
 
-	if (compression_header)
+	if (compression_header) {
+		printbuf_tabstop_align(&buf);
 		printbuf_indent_sub(&buf, 2);
+	}
 
 	prt_printf(&buf, "image size");
 	prt_sectors(&buf, bucket_to_sector(c->devs[0], nbuckets));
 
+	printbuf_tabstop_align(&buf);
 	printf("%s", buf.buf);
 	printbuf_exit(&buf);
 }

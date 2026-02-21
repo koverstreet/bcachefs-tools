@@ -923,8 +923,6 @@ int copy_fs(struct bch_fs *c, struct copy_fs_state *s,
 	//genradix_free(&s->hardlinks);
 
 	CLASS(printbuf, buf)();
-	printbuf_tabstop_push(&buf, 24);
-	printbuf_tabstop_push(&buf, 16);
 	prt_printf(&buf, "Total files:\t%llu\r\n", s->total_files);
 	prt_str(&buf, "Total input:\t");
 	prt_human_readable_u64(&buf, s->total_input);
@@ -942,6 +940,7 @@ int copy_fs(struct bch_fs *c, struct copy_fs_state *s,
 		prt_printf(&buf, "\r\n");
 	}
 
+	printbuf_tabstop_align(&buf);
 	prt_newline(&buf);
 
 	fputs(buf.buf, stdout);

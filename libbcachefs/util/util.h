@@ -110,6 +110,7 @@ do {									\
 #define printbuf_tabstops_reset(_buf)	bch2_printbuf_tabstops_reset(_buf)
 #define printbuf_tabstop_pop(_buf)	bch2_printbuf_tabstop_pop(_buf)
 #define printbuf_tabstop_push(_buf, _n)	bch2_printbuf_tabstop_push(_buf, _n)
+#define printbuf_tabstop_align(_buf)	bch2_printbuf_tabstop_align(_buf)
 
 #define printbuf_indent_add(_out, _n)	bch2_printbuf_indent_add(_out, _n)
 #define printbuf_indent_add_nextline(_out, _n)	bch2_printbuf_indent_add_nextline(_out, _n)

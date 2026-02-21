@@ -128,8 +128,6 @@ fn fs_usage_v1_to_text(
     let uuid = uuid::Uuid::from_bytes(handle.uuid());
     writeln!(out, "Filesystem: {}", uuid.hyphenated()).unwrap();
 
-    out.tabstops(&[20, 16]);
-
     write!(out, "Size:\t").unwrap();
     out.units_sectors(result.capacity);
     write!(out, "\r\n").unwrap();
@@ -142,12 +140,13 @@ fn fs_usage_v1_to_text(
     out.units_sectors(result.online_reserved);
     write!(out, "\r\n").unwrap();
 
+    out.tabstop_align();
+
     // Replicas summary
     replicas_summary_to_text(out, &sorted, devs);
 
     // Detailed replicas
     if has(Field::Replicas) {
-        out.tabstops(&[16, 16, 14, 14, 14]);
         write!(out, "\nData type\tRequired/total\tDurability\tDevices\n").unwrap();
 
         for entry in &sorted {
@@ -178,6 +177,7 @@ fn fs_usage_v1_to_text(
                 _ => {}
             }
         }
+        out.tabstop_align();
     }
 
     // Compression
@@ -187,22 +187,21 @@ fn fs_usage_v1_to_text(
             .collect();
         if !compr.is_empty() {
             write!(out, "\nCompression:\n").unwrap();
-            out.tabstops(&[12, 16, 16, 24]);
             write!(out, "type\tcompressed\runcompressed\raverage extent size\r\n").unwrap();
 
             for entry in &compr {
                 if let DiskAccountingKind::Compression { compression_type } = entry.pos.decode() {
                     accounting::prt_compression_type(out, compression_type);
-                    out.tab();
+                    write!(out, "\t").unwrap();
 
                     let nr_extents = entry.counter(0);
                     let sectors_uncompressed = entry.counter(1);
                     let sectors_compressed = entry.counter(2);
 
                     out.units_sectors(sectors_compressed);
-                    out.tab_rjust();
+                    write!(out, "\r").unwrap();
                     out.units_sectors(sectors_uncompressed);
-                    out.tab_rjust();
+                    write!(out, "\r").unwrap();
 
                     let avg = if nr_extents > 0 {
                         (sectors_uncompressed << 9) / nr_extents
@@ -211,6 +210,7 @@ fn fs_usage_v1_to_text(
                     write!(out, "\r\n").unwrap();
                 }
             }
+            out.tabstop_align();
         }
     }
 
@@ -221,7 +221,6 @@ fn fs_usage_v1_to_text(
             .collect();
         if !btrees.is_empty() {
             write!(out, "\nBtree usage:\n").unwrap();
-            out.tabstops(&[12, 16]);
             for entry in &btrees {
                 if let DiskAccountingKind::Btree { id } = entry.pos.decode() {
                     write!(out, "{}:\t", accounting::btree_id_str(id)).unwrap();
@@ -229,6 +228,7 @@ fn fs_usage_v1_to_text(
                     write!(out, "\r\n").unwrap();
                 }
             }
+            out.tabstop_align();
         }
     }
 
@@ -249,20 +249,18 @@ fn fs_usage_v1_to_text(
             .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_reconcile_work))
             .collect();
         if !reconcile.is_empty() {
-            out.tabstops(&[32, 12, 12]);
             write!(out, "\nPending reconcile:\tdata\rmetadata\r\n").unwrap();
             for entry in &reconcile {
                 if let DiskAccountingKind::ReconcileWork { work_type } = entry.pos.decode() {
                     accounting::prt_reconcile_type(out, work_type);
-                    write!(out, ":").unwrap();
-                    out.tab();
+                    write!(out, ":\t").unwrap();
                     out.units_sectors(entry.counter(0));
-                    out.tab_rjust();
+                    write!(out, "\r").unwrap();
                     out.units_sectors(entry.counter(1));
-                    out.tab_rjust();
-                    out.newline();
+                    write!(out, "\r\n").unwrap();
                 }
             }
+            out.tabstop_align();
         }
     }
 
@@ -317,12 +315,9 @@ fn durability_matrix_add(matrix: &mut DurabilityMatrix, durability: u32, degrade
 }
 
 /// Print the degradation header row: "undegraded  -1x  -2x ..."
-fn prt_degraded_header(out: &mut Printbuf, label_width: u32, max_degraded: usize) {
-    out.tabstops_reset();
-    out.tabstop_push(label_width);
-    out.tab();
+fn prt_degraded_header(out: &mut Printbuf, max_degraded: usize) {
+    write!(out, "\t").unwrap();
     for i in 0..max_degraded {
-        out.tabstop_push(12);
         if i == 0 {
             write!(out, "undegraded\r").unwrap();
         } else {
@@ -332,13 +327,13 @@ fn prt_degraded_header(out: &mut Printbuf, label_width: u32, max_degraded: usize
     out.newline();
 }
 
-/// Print a row of sector values, right-justified in tabstop columns.
+/// Print a row of sector values, right-justified in columns.
 fn prt_sector_row(out: &mut Printbuf, values: &[u64]) {
     for &val in values {
         if val != 0 {
             out.units_sectors(val);
         }
-        out.tab_rjust();
+        write!(out, "\r").unwrap();
     }
     out.newline();
 }
@@ -347,13 +342,14 @@ fn durability_matrix_to_text(out: &mut Printbuf, matrix: &DurabilityMatrix) {
     let max_degraded = matrix.iter().map(|r| r.len()).max().unwrap_or(0);
     if max_degraded == 0 { return; }
 
-    prt_degraded_header(out, 8, max_degraded);
+    prt_degraded_header(out, max_degraded);
 
     for (dur, row) in matrix.iter().enumerate() {
         if row.is_empty() { continue; }
         write!(out, "{}x:\t", dur).unwrap();
         prt_sector_row(out, row);
     }
+    out.tabstop_align();
 }
 
 /// EC entries grouped by stripe config: (nr_data, nr_parity) → [degraded] = sectors
@@ -384,12 +380,13 @@ fn ec_configs_to_text(out: &mut Printbuf, configs: &mut [EcConfig]) {
     let max_degraded = configs.iter().map(|c| c.degraded.len()).max().unwrap_or(0);
     if max_degraded == 0 { return; }
 
-    prt_degraded_header(out, 12, max_degraded);
+    prt_degraded_header(out, max_degraded);
 
     for cfg in configs.iter() {
         write!(out, "{}+{}:\t", cfg.nr_data, cfg.nr_parity).unwrap();
         prt_sector_row(out, &cfg.degraded);
     }
+    out.tabstop_align();
 }
 
 fn replicas_summary_to_text(
@@ -449,6 +446,9 @@ fn replicas_summary_to_text(
         out.units_sectors(reserved);
         write!(out, "\r\n").unwrap();
     }
+    if cached > 0 || reserved > 0 {
+        out.tabstop_align();
+    }
 }
 
 /// Print a device list like [sda sdb sdc].
@@ -502,16 +502,11 @@ fn devs_usage_to_text(
 
     if has(Field::Devices) {
         // Full per-device breakdown
-        out.tabstops(&[16, 20, 16, 14]);
-
         for d in &dev_ctxs {
             dev_usage_full_to_text(out, d);
         }
     } else {
-        // Summary table — use wider columns for raw byte values
-        let num_w = if out.is_human_readable() { 10 } else { 16 };
-        out.tabstops(&[32, 12, 8, num_w, num_w, 6, num_w]);
-
+        // Summary table
         write!(out, "Device label\tDevice\tState\tSize\rUsed\rUse%\r").unwrap();
         if has_leaving {
             write!(out, "Leaving\r").unwrap();
@@ -527,7 +522,7 @@ fn devs_usage_to_text(
             write!(out, "{} (device {}):\t{}\t{}\t", label, d.info.idx, d.info.dev, state).unwrap();
 
             out.units_sectors(capacity);
-            out.tab_rjust();
+            write!(out, "\r").unwrap();
             out.units_sectors(used);
 
             let pct = if capacity > 0 { used * 100 / capacity } else { 0 };
@@ -535,11 +530,12 @@ fn devs_usage_to_text(
 
             if d.leaving > 0 {
                 out.units_sectors(d.leaving);
-                out.tab_rjust();
+                write!(out, "\r").unwrap();
             }
 
             out.newline();
         }
+        out.tabstop_align();
     }
 
     Ok(())
@@ -554,7 +550,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
     let state = accounting::member_state_str(u.state);
     let pct = if capacity > 0 { used * 100 / capacity } else { 0 };
 
-    write!(out, "{} (device {}):\t{}\r{}\r    {:>2}%\n", label, d.info.idx, d.info.dev, state, pct).unwrap();
+    write!(out, "{} (device {}):\t{}\t{}\t{:>2}%\n", label, d.info.idx, d.info.dev, state, pct).unwrap();
 
     {
         let out = &mut *out.indent(2);
@@ -587,6 +583,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
         out.units_sectors(u.bucket_size as u64);
         write!(out, "\r\n").unwrap();
     }
+    out.tabstop_align();
     out.newline();
 }
 
