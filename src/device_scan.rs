@@ -188,10 +188,13 @@ fn devs_str_sbs_from_device(
     let dev_sb = read_super_silent(device, *opts)?;
 
     if dev_sb.sb().number_of_devices() == 1 {
-        Ok(vec![(device.to_path_buf(), dev_sb)])
-    } else {
-        get_devices_by_uuid(dev_sb.sb().uuid(), opts, use_udev)
+        return Ok(vec![(device.to_path_buf(), dev_sb)]);
     }
+
+    let uuid = dev_sb.sb().uuid();
+    drop(dev_sb);
+
+    get_devices_by_uuid(uuid, opts, use_udev)
 }
 
 pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb_handle)>> {
