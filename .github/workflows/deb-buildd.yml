@@ -296,6 +296,19 @@ jobs:
           ];
           EOT
           fi
+          if [ "${{ inputs.dist-version }}" = "plucky" ];
+          then
+          tee -a ~/.sbuildrc > /dev/null <<EOT
+          push @{\$unshare_mmdebstrap_extra_args}, "*", [
+            '--include=curl,ca-certificates'
+          ];
+          push @{\$external_commands->{'chroot-setup-commands'}},
+            'export RUSTUP_HOME=/opt/rustup CARGO_HOME=/opt/cargo && curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.85.0 --profile minimal && chmod -R a+rX /opt/rustup /opt/cargo',
+            'TBIN=\$(echo /opt/rustup/toolchains/1.85.0-*/bin) && for b in rustc cargo; do dpkg-divert --rename /usr/bin/\$b && ln -sf \$TBIN/\$b /usr/bin/\$b; done',
+            'rustc --version && cargo --version'
+          ;
+          EOT
+          fi
           if [ "${{ steps.gpg.conclusion }}" != "skipped" ]
           then
           tee ~/debsigs-hook.sh > /dev/null <<EOT

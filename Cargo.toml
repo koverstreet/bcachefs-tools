@@ -7,7 +7,7 @@ name = "bcachefs-tools"
 version = "1.36.0"
 authors = ["Yuxuan Shui <yshuiv7@gmail.com>", "Kayla Firestack <dev@kaylafire.me>", "Kent Overstreet <kent.overstreet@linux.dev>" ]
 edition = "2021"
-rust-version = "1.77.0"
+rust-version = "1.85.0"
 
 [[bin]]
 name = "bcachefs"
