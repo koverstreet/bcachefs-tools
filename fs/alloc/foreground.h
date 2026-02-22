@@ -81,10 +81,30 @@ struct alloc_request {
 		u8		nr;
 		struct alloc_trace_entry {
 			u8	dev;
+			bool	will_retry_all_devices:1;
+			bool	will_retry_target_devices:1;
+			bool	have_cl:1;
 			s16	err;
 		}		entries[16];
 	} trace;
 };
+
+static inline int alloc_trace_add(struct alloc_request *req,
+				  u8 dev, int err)
+{
+	if (req) {
+		unsigned idx = req->trace.nr % ARRAY_SIZE(req->trace.entries);
+		struct alloc_trace_entry *e = &req->trace.entries[idx];
+
+		e->dev				= dev;
+		e->will_retry_all_devices	= req->will_retry_all_devices;
+		e->will_retry_target_devices	= req->will_retry_target_devices;
+		e->have_cl			= req->cl != NULL;
+		e->err				= err;
+		req->trace.nr++;
+	}
+	return err;
+}
 
 void bch2_dev_alloc_list(struct bch_fs *,
 			 struct dev_stripe_state *,

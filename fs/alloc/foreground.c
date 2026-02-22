@@ -230,15 +230,14 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 	if (unlikely(c->allocator.open_buckets_nr_free <= bch2_open_buckets_reserved(req->watermark))) {
 		track_event_change(&c->times[BCH_TIME_blocked_allocate_open_bucket], true);
 
-		int ret;
 		if (req->cl) {
 			closure_wait(&c->allocator.open_buckets_wait, req->cl);
-			ret = bch_err_throw(c, open_bucket_alloc_blocked);
+			return ERR_PTR(alloc_trace_add(req, U8_MAX,
+					bch_err_throw(c, open_bucket_alloc_blocked)));
 		} else {
-			ret = bch_err_throw(c, open_buckets_empty);
+			return ERR_PTR(alloc_trace_add(req, U8_MAX,
+					bch_err_throw(c, open_buckets_empty)));
 		}
-
-		return ERR_PTR(ret);
 	}
 
 	/* Recheck under lock: */
@@ -577,14 +576,7 @@ err:
 		event_inc_trace(c, bucket_alloc_fail, buf,
 			bucket_alloc_to_text(&buf, c, req, ob));
 
-	if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
-		unsigned idx = req->trace.nr % ARRAY_SIZE(req->trace.entries);
-		struct alloc_trace_entry *e = &req->trace.entries[idx];
-
-		e->dev		= ca->dev_idx;
-		e->err		= ret;
-		req->trace.nr++;
-	}
+	alloc_trace_add(req, ca->dev_idx, ret);
 
 	return ob;
 }
@@ -759,7 +751,8 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *trans,
 			return 0;
 	}
 
-	return ret ?: bch_err_throw(c, insufficient_devices);
+	return ret ?: alloc_trace_add(req, U8_MAX,
+			bch_err_throw(c, insufficient_devices));
 }
 
 /* Allocate from stripes: */
@@ -1166,6 +1159,8 @@ int bch2_alloc_sectors_req(struct btree_trans *trans,
 	int i;
 
 	BUG_ON(!req->nr_replicas);
+
+	req->trace.nr			= 0;
 retry:
 	req->ca				= NULL;
 	req->will_retry_all_devices	= req->target && !(req->flags & BCH_WRITE_only_specified_devs);
@@ -1610,8 +1605,17 @@ static void alloc_trace_to_text(struct printbuf *out, struct bch_fs *c,
 			struct alloc_trace_entry *e =
 				&trace->entries[i % ARRAY_SIZE(trace->entries)];
 
-			prt_printf(out, "dev %u -> %s\n",
-				   e->dev,
+			if (e->dev != U8_MAX)
+				prt_printf(out, "dev %u", e->dev);
+			else
+				prt_str(out, "no dev");
+			if (e->will_retry_all_devices)
+				prt_str(out, " retry_all");
+			if (e->will_retry_target_devices)
+				prt_str(out, " retry_target");
+			if (e->have_cl)
+				prt_str(out, " cl");
+			prt_printf(out, " -> %s\n",
 				   e->err ? bch2_err_str(e->err) : "ok");
 		}
 }
@@ -1625,7 +1629,7 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 		   bch2_err_str(err));
 
 	if (req) {
-		printbuf_tabstop_push(&buf, 16);
+		printbuf_tabstop_push(&buf, 28);
 		prt_str(&buf, "Allocation:\n");
 		guard(printbuf_indent)(&buf);
 		prt_printf(&buf, "nr_replicas:\t%u\n", req->nr_replicas);
@@ -1639,6 +1643,11 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 		prt_str(&buf, "flags:\t");
 		prt_bitflags(&buf, bch2_write_flags, req->flags);
 		prt_newline(&buf);
+
+		prt_printf(&buf, "ec:\t%u\n", req->ec);
+		prt_printf(&buf, "will_retry_all_devices:\t%u\n", req->will_retry_all_devices);
+		prt_printf(&buf, "will_retry_target_devices:\t%u\n", req->will_retry_target_devices);
+		prt_printf(&buf, "have_cl:\t%u\n", req->cl != NULL);
 
 		if (req->devs_have && req->devs_have->nr) {
 			prt_printf(&buf, "devs_have:\t");
