@@ -940,7 +940,7 @@ int copy_fs(struct bch_fs *c, struct copy_fs_state *s,
 		prt_printf(&buf, "\r\n");
 	}
 
-	printbuf_tabstop_align(&buf);
+	bch2_printbuf_tabstop_align(&buf);
 	prt_newline(&buf);
 
 	fputs(buf.buf, stdout);
