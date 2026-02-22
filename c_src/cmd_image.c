@@ -264,7 +264,7 @@ static void print_image_usage(struct bch_fs *c, bool keep_alloc, u64 nbuckets)
 		prt_sectors(&buf, dev_stats.d[BCH_DATA_user].fragmented);
 	}
 
-	printbuf_tabstop_align(&buf);
+	bch2_printbuf_tabstop_align(&buf);
 
 	bool compression_header = false;
 	for (unsigned i = 1; i < BCH_COMPRESSION_TYPE_NR; i++) {
@@ -304,14 +304,14 @@ static void print_image_usage(struct bch_fs *c, bool keep_alloc, u64 nbuckets)
 	}
 
 	if (compression_header) {
-		printbuf_tabstop_align(&buf);
+		bch2_printbuf_tabstop_align(&buf);
 		printbuf_indent_sub(&buf, 2);
 	}
 
 	prt_printf(&buf, "image size");
 	prt_sectors(&buf, bucket_to_sector(c->devs[0], nbuckets));
 
-	printbuf_tabstop_align(&buf);
+	bch2_printbuf_tabstop_align(&buf);
 	printf("%s", buf.buf);
 	printbuf_exit(&buf);
 }

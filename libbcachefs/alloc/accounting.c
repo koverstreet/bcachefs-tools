@@ -764,9 +764,54 @@ static int accounting_read_key(struct btree_trans *trans, struct bkey_s_c k)
 		}
 	}
 
-	guard(percpu_read)(&c->capacity.mark_lock);
-	return bch2_accounting_mem_mod_locked(trans, bkey_s_c_to_accounting(k),
-					      BCH_ACCOUNTING_read, false);
+	if (!bch2_accounting_is_mem(&acc_k))
+		return 0;
+
+	struct bch_accounting_mem *acc = &c->accounting;
+	struct bkey_s_c_accounting a = bkey_s_c_to_accounting(k);
+	unsigned nr = bch2_accounting_counters(k.k);
+
+	/* Caller holds percpu_write on mark_lock */
+
+	/*
+	 * Accumulate into last entry if same bpos - this happens when both
+	 * btree and journal keys exist for the same accounting entry
+	 * (journal key = delta on top of btree base value).
+	 *
+	 * The btree/journal walk in bch2_accounting_read() processes keys
+	 * in bpos order, so duplicates are always adjacent.
+	 */
+	if (acc->k.nr && bpos_eq(darray_last(acc->k).pos, a.k->p)) {
+		struct accounting_mem_entry *e = &darray_last(acc->k);
+		nr = min_t(unsigned, nr, e->nr_counters);
+		for (unsigned i = 0; i < nr; i++)
+			percpu_u64_set(e->v[0] + i,
+				       percpu_u64_get(e->v[0] + i) + a.v->d[i]);
+		return 0;
+	}
+
+	struct accounting_mem_entry n = {
+		.pos		= a.k->p,
+		.bversion	= a.k->bversion,
+		.nr_counters	= bch2_accounting_type_nr_counters[acc_k.type],
+	};
+
+	n.v[0] = __alloc_percpu_gfp(n.nr_counters * sizeof(u64),
+				     sizeof(u64), GFP_KERNEL);
+	if (!n.v[0])
+		return bch_err_throw(c, ENOMEM_disk_accounting);
+
+	if (darray_push(&acc->k, n)) {
+		free_percpu(n.v[0]);
+		return bch_err_throw(c, ENOMEM_disk_accounting);
+	}
+
+	struct accounting_mem_entry *e = &darray_last(acc->k);
+	nr = min_t(unsigned, nr, e->nr_counters);
+	for (unsigned i = 0; i < nr; i++)
+		percpu_u64_set(e->v[0] + i, a.v->d[i]);
+
+	return 0;
 }
 
 static int disk_accounting_invalid_dev(struct btree_trans *trans,
@@ -1015,11 +1060,12 @@ int bch2_accounting_read(struct bch_fs *c)
 	 * btree node scan - and those might cause us to get different results,
 	 * so we can't just skip if we've already run.
 	 *
-	 * Instead, zero out any accounting we have:
+	 * Free and re-initialize accounting - entries are appended unsorted
+	 * during the read and sorted once at the end, so we need a clean slate.
 	 */
 	scoped_guard(percpu_write, &c->capacity.mark_lock) {
-		darray_for_each(acc->k, e)
-			percpu_memset(e->v[0], 0, sizeof(u64) * e->nr_counters);
+		bch2_accounting_free_counters(acc, false);
+		acc->k.nr = 0;
 		for_each_member_device(c, ca)
 			percpu_memset(ca->usage, 0, sizeof(*ca->usage));
 		percpu_memset(c->capacity.usage, 0, sizeof(*c->capacity.usage));
@@ -1049,6 +1095,8 @@ int bch2_accounting_read(struct bch_fs *c)
 	 * dropped old accounting deltas we can accumulate and compact deltas
 	 * for the same key:
 	 */
+
+	percpu_down_write(&c->capacity.mark_lock);
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_accounting, POS_MIN,
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots);
@@ -1106,6 +1154,31 @@ int bch2_accounting_read(struct bch_fs *c)
 			*dst++ = *i;
 	keys->gap = keys->nr = dst - keys->data;
 
+	/*
+	 * Entries were inserted unsorted during the btree/journal walk above.
+	 * Sort now, before fixups which may need eytzinger lookups.
+	 */
+	eytzinger0_sort(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
+			accounting_pos_cmp, NULL);
+
+	/* Assert no duplicates - the btree/journal walk must produce unique keys */
+	{
+		struct bpos prev;
+		bool have_prev = false;
+		eytzinger0_for_each(i, acc->k.nr) {
+			BUG_ON(have_prev && bpos_cmp(prev, acc->k.data[i].pos) >= 0);
+			prev = acc->k.data[i].pos;
+			have_prev = true;
+		}
+	}
+
+	percpu_up_write(&c->capacity.mark_lock);
+
+	/*
+	 * accounting_read_mem_fixups() does transaction commits to
+	 * fix invalid accounting entries, so we can't hold mark_lock
+	 * across it - the commit path takes mark_lock itself.
+	 */
 	return accounting_read_mem_fixups(trans);
 }
 
