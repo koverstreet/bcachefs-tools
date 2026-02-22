@@ -215,6 +215,12 @@ void bch2_sb_to_text_with_names(struct printbuf *out,
 			for (unsigned i = 0; i < sb->nr_devices; i++)
 				print_one_member(out, sb_names, sb, gi, bch2_members_v2_get(mi2, i), i);
 	}
+
+	darray_for_each(sb_names, i) {
+		free((void *) i->name);
+		bch2_free_super(&i->sb);
+	}
+	darray_exit(&sb_names);
 }
 
 /* Device reference shims */
