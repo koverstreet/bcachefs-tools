@@ -133,7 +133,7 @@ fn main() -> ExitCode {
         Some("mkfs")
     } else if args[0].contains("fsck") {
         Some("fsck")
-    } else if args[0].contains("mount.fuse") {
+    } else if cfg!(feature = "fuse") && args[0].contains("mount.fuse") {
         Some("fusemount")
     } else if args[0].contains("mount") {
         Some("mount")
@@ -156,7 +156,7 @@ fn main() -> ExitCode {
 
     // fuse will call this after daemonizing, we can't create threads before - note that mount
     // may invoke fusemount, via -t bcachefs.fuse
-    if cmd != "mount" && cmd != "fusemount" {
+    if cmd != "mount" && (!cfg!(feature = "fuse") || cmd != "fusemount") {
         unsafe { c::linux_shrinkers_init() };
     }
 
@@ -243,6 +243,7 @@ fn main() -> ExitCode {
         "set-passphrase" => commands::cmd_set_passphrase(args[1..].to_vec()).report(),
         "reflink-option-propagate" => commands::cmd_reflink_option_propagate(args[1..].to_vec()).report(),
         "unlock" => commands::cmd_unlock(args[1..].to_vec()).report(),
+        #[cfg(feature = "fuse")]
         "fusemount" => {
             let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
             commands::fusemount::cmd_fusemount(argv).report()

@@ -244,6 +244,7 @@ pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::
 
     let cli = Cli::parse_from(argv.clone());
 
+    #[cfg(feature = "fuse")]
     if cli.fs_type == "bcachefs.fuse" {
         // Build argv for fusemount from mount's parsed args
         let mut fuse_argv = vec!["fusemount".to_string()];
