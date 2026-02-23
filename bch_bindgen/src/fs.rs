@@ -1,6 +1,10 @@
 use crate::bcachefs;
 use crate::c;
-use crate::errcode::{BchError, errptr_to_result};
+use crate::errcode::{self, BchError, errptr_to_result};
+
+fn ret_to_result(ret: i32) -> Result<(), BchError> {
+    errcode::ret_to_result(ret).map(|_| ())
+}
 use std::ffi::CString;
 use std::ops::ControlFlow;
 use std::os::unix::ffi::OsStrExt;
@@ -184,6 +188,27 @@ impl Fs {
     pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
         let ca = unsafe { rust_dev_tryget_noerror(self.raw, dev) };
         if ca.is_null() { None } else { Some(DevRef(ca)) }
+    }
+
+    /// Start the filesystem (recovery, journal replay, etc).
+    pub fn start(&self) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_fs_start(self.raw) })
+    }
+
+    /// Allocate the buckets_nouse bitmaps for all devices.
+    pub fn buckets_nouse_alloc(&self) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_buckets_nouse_alloc(self.raw) })
+    }
+
+    /// Mark device superblock buckets in btree metadata.
+    pub fn trans_mark_dev_sb(&self, ca: &DevRef, flags: c::btree_iter_update_trigger_flags) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.raw, ca.as_mut_ptr(), flags) })
+    }
+
+    /// Write superblock to disk (locked version). Caller must hold sb_lock.
+    /// Returns Ok(()) on success or the error code on failure.
+    pub fn write_super_ret(&self) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_write_super(self.raw) })
     }
 
     /// Check if a device index exists and has a device pointer.
