@@ -70,6 +70,33 @@ int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
 int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
 
 /*
+ * Open a block device without blkid probe (for migrate, not format).
+ * Sets dev->file and dev->bdev from dev->path.
+ */
+struct dev_opts;
+int rust_bdev_open(struct dev_opts *dev, unsigned int mode);
+
+/*
+ * Bitmap shim — set_bit() is atomic (locked bitops in the kernel),
+ * can't be inlined through bindgen.
+ */
+void rust_set_bit(unsigned long nr, unsigned long *addr);
+
+/*
+ * copy_fs shim for migrate — constructs copy_fs_state from flat parameters
+ * so Rust doesn't need to deal with rhashtable or darray internals.
+ */
+struct range;
+int rust_migrate_copy_fs(struct bch_fs *c,
+			 int src_fd,
+			 const char *fs_path,
+			 __u64 bcachefs_inum,
+			 dev_t dev,
+			 struct range *extent_array,
+			 size_t nr_extents,
+			 __u64 reserve_start);
+
+/*
  * Device reference shims — wraps static inline bch2_dev_tryget_noerror()
  * and bch2_dev_put() for Rust.
  */

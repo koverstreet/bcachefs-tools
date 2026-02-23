@@ -144,6 +144,54 @@ int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset)
 	return bset_encrypt(c, i, offset);
 }
 
+/* copy_fs shim for migrate — constructs copy_fs_state from flat parameters */
+
+int rust_migrate_copy_fs(struct bch_fs *c,
+			 int src_fd,
+			 const char *fs_path,
+			 u64 bcachefs_inum,
+			 dev_t dev,
+			 struct range *extent_array,
+			 size_t nr_extents,
+			 u64 reserve_start)
+{
+	ranges extents = {};
+
+	for (size_t i = 0; i < nr_extents; i++)
+		darray_push(&extents, extent_array[i]);
+
+	struct copy_fs_state s = {
+		.bcachefs_inum	= bcachefs_inum,
+		.dev		= dev,
+		.extents	= extents,
+		.type		= BCH_MIGRATE_migrate,
+		.reserve_start	= reserve_start,
+	};
+
+	BUG_ON(!s.reserve_start);
+
+	return copy_fs(c, &s, src_fd, fs_path);
+}
+
+/* Open a block device without blkid probe (for migrate, not format) */
+
+int rust_bdev_open(struct dev_opts *dev, blk_mode_t mode)
+{
+	dev->file = bdev_file_open_by_path(dev->path, mode, dev, NULL);
+	int ret = PTR_ERR_OR_ZERO(dev->file);
+	if (ret < 0)
+		return ret;
+	dev->bdev = file_bdev(dev->file);
+	return 0;
+}
+
+/* Bitmap shim — set_bit is atomic (locked bitops) */
+
+void rust_set_bit(unsigned long nr, unsigned long *addr)
+{
+	set_bit(nr, addr);
+}
+
 /* Device reference shims */
 
 struct bch_dev *rust_dev_tryget_noerror(struct bch_fs *c, unsigned dev)
