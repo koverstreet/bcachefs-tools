@@ -188,14 +188,25 @@ impl<'t> BtreeIter<'t> {
         self.peek_max(SPOS_MAX)
     }
 
-    pub fn for_each<F>(&mut self, trans: &BtreeTrans, mut f: F) -> Result<(), BchError>
+    pub fn peek_prev_min<'i>(&'i mut self, min: bpos) -> Result<Option<BkeySC<'i>>, BchError> {
+        unsafe {
+            bkey_s_c_to_result(c::bch2_btree_iter_peek_prev_min(&mut self.raw, min))
+        }
+    }
+
+    pub fn peek_prev(&mut self) -> Result<Option<BkeySC<'_>>, BchError> {
+        self.peek_prev_min(c::bpos { inode: 0, offset: 0, snapshot: 0 })
+    }
+
+    pub fn for_each_max<F>(&mut self, trans: &BtreeTrans, end: bpos, mut f: F)
+        -> Result<(), BchError>
     where
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
     {
         let raw = &mut self.raw as *mut c::btree_iter;
         loop {
             let restart_count = trans.begin();
-            let k = unsafe { c::bch2_btree_iter_peek_max(raw, SPOS_MAX) };
+            let k = unsafe { c::bch2_btree_iter_peek_max(raw, end) };
 
             match bkey_s_c_to_result(k) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
@@ -210,6 +221,13 @@ impl<'t> BtreeIter<'t> {
             }
             unsafe { c::bch2_btree_iter_advance(raw) };
         }
+    }
+
+    pub fn for_each<F>(&mut self, trans: &BtreeTrans, f: F) -> Result<(), BchError>
+    where
+        F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
+    {
+        self.for_each_max(trans, SPOS_MAX, f)
     }
 
     pub fn advance(&mut self) {
