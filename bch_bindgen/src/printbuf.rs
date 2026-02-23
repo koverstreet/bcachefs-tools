@@ -97,6 +97,17 @@ impl Printbuf {
         unsafe { c::bch2_printbuf_tabstop_align(&mut self.0) };
     }
 
+    /// Write a section of tabular data using automatic column alignment.
+    /// Creates a sub-buffer with the same human_readable setting, passes
+    /// it to `f`, calls `tabstop_align()`, then appends the result.
+    pub fn aligned(&mut self, f: impl FnOnce(&mut Printbuf)) {
+        let mut sub = Printbuf::new();
+        sub.set_human_readable(self.is_human_readable());
+        f(&mut sub);
+        sub.tabstop_align();
+        fmt::Write::write_fmt(self, format_args!("{}", sub)).unwrap();
+    }
+
     /// Emit newline with indent handling
     /// (equivalent to `\n` in format string).
     pub fn newline(&mut self) {
