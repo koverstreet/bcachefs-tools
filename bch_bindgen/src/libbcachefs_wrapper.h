@@ -29,7 +29,6 @@
 #include "libbcachefs.h"
 #include "raid/raid.h"
 #include "sb/members.h"
-#include "src/rust_to_c.h"
 #include "rust_shims.h"
 
 #include "include/linux/bio.h"

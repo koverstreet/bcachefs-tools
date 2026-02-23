@@ -143,15 +143,6 @@ impl Printbuf {
         c::bch2_sb_to_text(&mut self.0, fs, sb as *const _ as *mut _, layout, fields);
     }
 
-    /// Print superblock contents with field names.
-    ///
-    /// # Safety
-    /// `fs` must be a valid pointer to a `bch_fs` or null.
-    pub unsafe fn sb_to_text_with_names(&mut self, fs: *mut c::bch_fs, sb: &c::bch_sb,
-                                        layout: bool, fields: u32, field_only: i32) {
-        c::bch2_sb_to_text_with_names(&mut self.0, fs, sb as *const _ as *mut _, layout, fields, field_only);
-    }
-
     /// Print a set of bitflags as comma-separated names.
     ///
     /// # Safety

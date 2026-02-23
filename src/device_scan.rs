@@ -17,12 +17,13 @@
 // limitation: devices that haven't appeared yet are missed — the proper
 // fix is event-driven waiting with a timeout. Related issues: #308, #393.
 //
-// The C FFI exports (bch2_scan_devices, bch2_scan_device_sbs) are called
-// from the kernel's mount path. Memory ownership crosses the FFI boundary
-// via forget() + raw pointers — the C side is responsible for freeing.
+// The C FFI export bch2_scan_devices is called from cmd_fusemount.c.
+// bch2_scan_device_sbs was removed — its only caller (bch2_sb_to_text_with_names)
+// was rewritten in Rust (see wrappers/sb_display.rs) to fix an allocator
+// mismatch where Vec-allocated memory was freed with kvfree.
 
 use std::{
-    ffi::{CStr, CString, c_char, c_int, OsString, OsStr},
+    ffi::{CStr, CString, c_char, OsString, OsStr},
     collections::HashMap,
     fs,
     os::unix::ffi::OsStringExt,
@@ -31,11 +32,7 @@ use std::{
 
 use anyhow::Result;
 use bch_bindgen::{bcachefs, opt_get, opt_set};
-use bcachefs::{
-    bch_sb_handle,
-    sb_name,
-    sb_names,
-};
+use bcachefs::bch_sb_handle;
 use bcachefs::bch_opts;
 use uuid::Uuid;
 use log::debug;
@@ -240,34 +237,6 @@ pub fn scan_devices(device: &String, opts: &bch_opts) -> Result<OsString> {
     let sbs = scan_sbs(device, opts)?;
 
     Ok(joined_device_str(&sbs))
-}
-
-#[no_mangle]
-pub extern "C" fn bch2_scan_device_sbs(device: *const c_char, ret: *mut sb_names) -> c_int {
-    let device = unsafe { CStr::from_ptr(device) };
-    let device = device.to_string_lossy().into_owned();
-
-    // how to initialize to default/empty?
-    let opts = bch_bindgen::opts::parse_mount_opts(None, None, true).unwrap_or_default();
-
-    let mut sbs = scan_sbs(&device, &opts)
-        .unwrap_or_else(|e| {
-            eprintln!("bcachefs ({}): error reading superblock: {}", device, e);
-            std::process::exit(-1);
-        })
-        .into_iter()
-        .map(|(name, sb)| sb_name {
-            name: CString::new(name.into_os_string().into_vec()).unwrap().into_raw(),
-            sb } )
-        .collect::<Vec<sb_name>>();
-
-    unsafe {
-        (*ret).data   = sbs.as_mut_ptr();
-        (*ret).nr     = sbs.len();
-        (*ret).size   = sbs.capacity();
-    }
-    std::mem::forget(sbs);
-    0
 }
 
 #[no_mangle]

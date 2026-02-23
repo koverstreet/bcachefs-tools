@@ -76,13 +76,4 @@ int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
 struct bch_dev *rust_dev_tryget_noerror(struct bch_fs *c, unsigned dev);
 void rust_dev_put(struct bch_dev *ca);
 
-/*
- * Superblock display with device names — scans for devices by UUID,
- * prints member info with device model and name.
- */
-struct printbuf;
-void bch2_sb_to_text_with_names(struct printbuf *out,
-				struct bch_fs *c, struct bch_sb *sb,
-				bool print_layout, unsigned fields, int field_only);
-
 #endif /* _RUST_SHIMS_H */

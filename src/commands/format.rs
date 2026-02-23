@@ -508,7 +508,7 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
         let fields = 1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
-        unsafe { buf.sb_to_text_with_names(std::ptr::null_mut(), &*sb, false, fields, -1) };
+        unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, std::ptr::null_mut(), &*sb, false, fields, -1) };
         print!("{}", buf);
     }
     unsafe { libc::free(sb as *mut _) };
