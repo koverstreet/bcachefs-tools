@@ -99,14 +99,30 @@ pub extern "C" fn bch2_format(
 ) -> *mut c::bch_sb {
     let dev_slice = unsafe { std::slice::from_raw_parts_mut(devs.data, devs.nr) };
 
-    // Calculate block size
-    if opt_defined!(fs_opts, block_size) == 0 {
-        let mut max_dev_block_size = 4096u32;
-        for dev in dev_slice.iter() {
-            let bs = unsafe { c::get_blocksize((*dev.bdev).bd_fd) };
-            max_dev_block_size = max_dev_block_size.max(bs);
+    // Get device size if not specified (needed for block size threshold)
+    for dev in dev_slice.iter_mut() {
+        if dev.fs_size == 0 {
+            dev.fs_size = unsafe { c::get_size((*dev.bdev).bd_fd) };
         }
-        opt_set!(fs_opts, block_size, max_dev_block_size as u16);
+    }
+
+    // Calculate block size: on large filesystems (>= 1GB), use the maximum
+    // of 4k and the device block size for performance on 4k-sector hardware.
+    // On small filesystems (typically test images on loop devices), default
+    // to 512 bytes to avoid wasting space.
+    if opt_defined!(fs_opts, block_size) == 0 {
+        let total_size: u64 = dev_slice.iter().map(|d| d.fs_size).sum();
+
+        let block_size = if total_size >= 1u64 << 30 {
+            let mut bs = 4096u32;
+            for dev in dev_slice.iter() {
+                bs = bs.max(unsafe { c::get_blocksize((*dev.bdev).bd_fd) });
+            }
+            bs
+        } else {
+            512u32
+        };
+        opt_set!(fs_opts, block_size, block_size as u16);
     }
 
     if fs_opts.block_size < 512 {
@@ -114,13 +130,6 @@ pub extern "C" fn bch2_format(
             "blocksize too small: {}, must be greater than one sector (512 bytes)",
             fs_opts.block_size
         ));
-    }
-
-    // Get device size if not specified
-    for dev in dev_slice.iter_mut() {
-        if dev.fs_size == 0 {
-            dev.fs_size = unsafe { c::get_size((*dev.bdev).bd_fd) };
-        }
     }
 
     // Calculate bucket sizes
