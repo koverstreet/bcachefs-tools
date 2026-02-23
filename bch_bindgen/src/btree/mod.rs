@@ -38,6 +38,29 @@ impl<'f> BtreeTrans<'f> {
             }
         }
     }
+
+    /// Get the raw transaction pointer for passing to C functions.
+    pub fn raw(&self) -> *mut c::btree_trans {
+        self.raw
+    }
+
+    /// Commit the transaction.
+    ///
+    /// Equivalent to the static inline bch2_trans_commit() which sets
+    /// disk_res/journal_seq then calls __bch2_trans_commit().
+    pub fn commit(
+        &self,
+        disk_res: *mut c::disk_reservation,
+        journal_seq: *mut u64,
+        flags: c::bch_trans_commit_flags,
+    ) -> Result<(), BchError> {
+        unsafe {
+            (*self.raw).disk_res = disk_res;
+            (*self.raw).journal_seq = journal_seq;
+        }
+        let ret = unsafe { c::__bch2_trans_commit(self.raw, flags) };
+        crate::errcode::ret_to_result(ret).map(|_| ())
+    }
 }
 
 impl<'f> Drop for BtreeTrans<'f> {
@@ -87,6 +110,54 @@ where
             }
         }
     }
+}
+
+/// Run a closure inside a transaction commit loop.
+///
+/// Equivalent to the C `commit_do` macro: runs the closure, and if it
+/// succeeds, commits the transaction. Retries on transaction restart.
+pub fn commit_do<F>(
+    trans: &BtreeTrans,
+    disk_res: *mut c::disk_reservation,
+    journal_seq: *mut u64,
+    flags: c::bch_trans_commit_flags,
+    mut f: F,
+) -> Result<(), BchError>
+where
+    F: FnMut(&BtreeTrans) -> Result<(), BchError>,
+{
+    lockrestart_do(trans, || {
+        f(trans)?;
+        trans.commit(disk_res, journal_seq, flags)
+    })
+}
+
+/// Create a transaction and run a closure with commit retry.
+///
+/// Equivalent to the C `bch2_trans_commit_do` macro.
+pub fn trans_commit_do<F>(
+    fs: &Fs,
+    disk_res: *mut c::disk_reservation,
+    journal_seq: *mut u64,
+    flags: c::bch_trans_commit_flags,
+    f: F,
+) -> Result<(), BchError>
+where
+    F: FnMut(&BtreeTrans) -> Result<(), BchError>,
+{
+    let trans = BtreeTrans::new(fs);
+    commit_do(&trans, disk_res, journal_seq, flags, f)
+}
+
+/// Create a transaction and run a closure with restart retry (no commit).
+///
+/// Equivalent to the C `bch2_trans_run` macro.
+pub fn trans_run<T, F>(fs: &Fs, f: F) -> Result<T, BchError>
+where
+    F: FnMut() -> Result<T, BchError>,
+{
+    let trans = BtreeTrans::new(fs);
+    lockrestart_do(&trans, f)
 }
 
 pub struct BtreeIter<'t> {
