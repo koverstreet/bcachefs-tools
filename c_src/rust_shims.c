@@ -12,11 +12,15 @@
 #include "libbcachefs/sb/members.h"
 #include "libbcachefs/alloc/buckets_types.h"
 #include "libbcachefs/data/checksum.h"
+#include "libbcachefs/data/read.h"
+#include "libbcachefs/data/write.h"
 #include "libbcachefs/btree/read.h"
 #include "libbcachefs/init/error.h"
 #include "libbcachefs/init/fs.h"
+#include "libbcachefs/fs/inode.h"
 #include "libbcachefs/journal/journal.h"
 #include "libbcachefs/sb/clean.h"
+#include "libbcachefs/alloc/foreground.h"
 #include "posix_to_bcachefs.h"
 #include "rust_shims.h"
 
@@ -202,4 +206,98 @@ struct bch_dev *rust_dev_tryget_noerror(struct bch_fs *c, unsigned dev)
 void rust_dev_put(struct bch_dev *ca)
 {
 	bch2_dev_put(ca);
+}
+
+/*
+ * Data IO shims — bridge Rust async IO to kernel closure-based completion.
+ *
+ * The mapping:
+ *   Rust Future construction  ↔  write_op_init / bio setup
+ *   Future::poll (first)      ↔  closure_call(bch2_write) / bch2_read
+ *   Future::poll (Ready)      ↔  closure_sync completion
+ *
+ * Currently synchronous (complete on first "poll"). When the closure
+ * subsystem moves to Rust async, these shims become native Futures
+ * where closure completion drives the Waker.
+ */
+
+int rust_write_data(struct bch_fs *c,
+		    u64 inum, u64 offset,
+		    const void *buf, size_t len,
+		    u32 subvol, u32 replicas,
+		    s64 *sectors_delta)
+{
+	struct bch_write_op op;
+	struct bio_vec bv[RUST_IO_MAX / PAGE_SIZE];
+
+	BUG_ON(offset	& (block_bytes(c) - 1));
+	BUG_ON(len	& (block_bytes(c) - 1));
+	BUG_ON(len > RUST_IO_MAX);
+
+	bio_init(&op.wbio.bio, NULL, bv, ARRAY_SIZE(bv), 0);
+	bch2_bio_map(&op.wbio.bio, (void *) buf, len);
+
+	struct bch_inode_opts opts;
+	bch2_inode_opts_get(c, &opts, false);
+
+	bch2_write_op_init(&op, c, opts);
+	op.write_point	= writepoint_hashed(0);
+	op.nr_replicas	= replicas;
+	op.subvol	= subvol;
+	op.pos		= SPOS(inum, offset >> 9, U32_MAX);
+	op.flags	|= BCH_WRITE_sync;
+
+	int ret = bch2_disk_reservation_get(c, &op.res, len >> 9,
+					    replicas, 0);
+	if (ret) {
+		*sectors_delta = 0;
+		return ret;
+	}
+
+	closure_call(&op.cl, bch2_write, NULL, NULL);
+
+	*sectors_delta = op.i_sectors_delta;
+	return op.error;
+}
+
+static void rust_read_endio(struct bio *bio)
+{
+	closure_put(bio->bi_private);
+}
+
+int rust_read_data(struct bch_fs *c,
+		   u64 inum, u32 subvol,
+		   u64 offset,
+		   void *buf, size_t len)
+{
+	BUG_ON(offset	& (block_bytes(c) - 1));
+	BUG_ON(len	& (block_bytes(c) - 1));
+	BUG_ON(len > RUST_IO_MAX);
+
+	struct closure cl;
+	closure_init_stack(&cl);
+
+	struct bch_read_bio rbio;
+	struct bio_vec bv[RUST_IO_MAX / PAGE_SIZE];
+
+	bio_init(&rbio.bio, NULL, bv, ARRAY_SIZE(bv), 0);
+	rbio.bio.bi_opf		= REQ_OP_READ|REQ_SYNC;
+	rbio.bio.bi_iter.bi_sector	= offset >> 9;
+	rbio.bio.bi_private		= &cl;
+	bch2_bio_map(&rbio.bio, buf, len);
+
+	struct bch_inode_unpacked inode;
+	subvol_inum si = { .subvol = subvol, .inum = inum };
+	int ret = bch2_inode_find_by_inum(c, si, &inode);
+	if (ret)
+		return ret;
+
+	struct bch_inode_opts opts;
+	bch2_inode_opts_get_inode(c, &inode, &opts);
+
+	closure_get(&cl);
+	bch2_read(c, rbio_init(&rbio.bio, c, opts, rust_read_endio), si);
+	closure_sync(&cl);
+
+	return rbio.ret;
 }

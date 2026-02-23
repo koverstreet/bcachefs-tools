@@ -1,5 +1,6 @@
 use crate::bcachefs;
 use crate::c;
+use crate::data::io::{ReadOp, WriteOp};
 use crate::errcode::{self, BchError, errptr_to_result};
 
 fn ret_to_result(ret: i32) -> Result<(), BchError> {
@@ -209,6 +210,16 @@ impl Fs {
     /// Returns Ok(()) on success or the error code on failure.
     pub fn write_super_ret(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_write_super(self.raw) })
+    }
+
+    /// Start building a write operation.
+    pub fn write(&self) -> WriteOp<'_> {
+        WriteOp::new(self)
+    }
+
+    /// Start building a read operation.
+    pub fn read(&self) -> ReadOp<'_> {
+        ReadOp::new(self)
     }
 
     /// Check if a device index exists and has a device pointer.
