@@ -272,7 +272,16 @@ impl BcachefsHandle {
         unsafe { bch_bindgen::sb::io::bch2_free_super(&sb as *const _ as *mut _) };
 
         let mut handle = Self::open_by_name(&uuid_str, Some(uuid))
-            .map_err(|e| BchError::from_raw(-e.0))?;
+            .map_err(|e| {
+                if e.0 == libc::ENOENT {
+                    if !Path::new("/sys/fs/bcachefs").exists() {
+                        eprintln!("bcachefs kernel module not loaded");
+                    } else {
+                        eprintln!("filesystem {} not mounted", uuid_str);
+                    }
+                }
+                BchError::from_raw(-e.0)
+            })?;
         handle.dev_idx = dev_idx;
         Ok(handle)
     }
