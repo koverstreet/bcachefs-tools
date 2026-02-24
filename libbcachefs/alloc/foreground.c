@@ -220,7 +220,7 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 	if (unlikely(is_superblock_bucket(c, ca, bucket)))
 		return NULL;
 
-	if (unlikely(ca->buckets_nouse && test_bit(bucket, ca->buckets_nouse))) {
+	if (unlikely(bch2_bucket_nouse(ca, bucket))) {
 		req->counters.skipped_nouse++;
 		return NULL;
 	}
@@ -544,7 +544,7 @@ alloc:
 		: bch2_bucket_alloc_early(trans, req);
 
 	if (req->counters.need_journal_commit * 2 > avail)
-		bch2_journal_flush_async(&c->journal, NULL);
+		bch2_journal_flush_async(&c->journal, BCH_WATERMARK_normal, NULL);
 
 	if (!ob && req->btree_bitmap != BTREE_BITMAP_ANY) {
 		req->btree_bitmap = BTREE_BITMAP_ANY;
