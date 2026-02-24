@@ -148,7 +148,7 @@ fn fs_usage_v1_to_text(
     // Detailed replicas
     if has(Field::Replicas) {
         out.aligned(|sub| {
-            write!(sub, "\nData type\tRequired/total\tDurability\tDevices\n").unwrap();
+            write!(sub, "\nData type\tRequired/total\tDurability\tDevices\tUsage\n").unwrap();
 
             for entry in &sorted {
                 match entry.pos.decode() {
