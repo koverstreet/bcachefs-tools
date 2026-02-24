@@ -165,9 +165,11 @@ module to mount, create, check, modify and correct any inconsistencies in the bc
 filesystem.
 
 %preun -n %{dkmsname}
-if [  "$(dkms status -m %{kmodname} -v %{version})" ]; then
-   dkms remove -m %{kmodname} -v %{version} --all --rpm_safe_upgrade
-   exit $?
+if [ "$1" -eq 0 ]; then
+   if [  "$(dkms status -m %{kmodname} -v %{version})" ]; then
+      dkms remove -m %{kmodname} -v %{version} --all
+      exit $?
+   fi
 fi
 
 %post -n %{dkmsname}
