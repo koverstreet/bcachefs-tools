@@ -1,5 +1,12 @@
 # Testing bcachefs
 
+## ktest CI
+
+- **Dashboard**: https://evilpiepirate.org/~testdashboard/c
+- **Config**: `~/ktest-ci.toml` (branches, test groups, CI URL)
+- **Local CI data**: `~/ci-data`
+- **Test files**: `~/ktest/tests/fs/bcachefs/*.ktest`
+
 ## ktest
 
 Tests live in `~/ktest/tests/fs/bcachefs/` (e.g. `subvol.ktest`).
