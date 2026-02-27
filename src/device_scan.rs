@@ -37,6 +37,8 @@ use bcachefs::bch_opts;
 use uuid::Uuid;
 use log::debug;
 
+use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
+
 fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> anyhow::Result<bch_sb_handle> {
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);
@@ -52,6 +54,31 @@ fn device_property_map(dev: &udev::Device) -> HashMap<String, String> {
             i.value().to_string_lossy().into_owned(),
         ))
         .collect()
+}
+
+fn should_skip_multipath_component(props: &HashMap<String, String>) -> bool {
+    // Set by multipath's udev rule; fall back to sysfs if not present.
+    if props
+        .get("DM_MULTIPATH_DEVICE_PATH")
+        .map_or(false, |v| v == "1")
+    {
+        if let Some(devname) = props.get("DEVNAME") {
+            debug!("Skipping multipath component device: {}", devname);
+        }
+        return true;
+    }
+
+    if let Some(devname) = props.get("DEVNAME") {
+        if find_multipath_holder(Path::new(devname)).is_some() {
+            debug!(
+                "Skipping multipath component device via sysfs holders: {}",
+                devname
+            );
+            return true;
+        }
+    }
+
+    false
 }
 
 fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<String>> {
@@ -70,7 +97,8 @@ fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<String>> {
         .filter(|m|
             m.contains_key("ID_FS_UUID") &&
             m["ID_FS_UUID"] == uuid &&
-            m.contains_key("DEVNAME"))
+            m.contains_key("DEVNAME") &&
+            !should_skip_multipath_component(m))
         .map(|m| m["DEVNAME"].clone())
         .collect::<Vec<_>>())
 }
@@ -125,9 +153,22 @@ fn get_all_block_devnodes() -> anyhow::Result<Vec<String>> {
     }
 }
 
-fn read_sbs_matching_uuid(uuid: Uuid, devices: &[String], opts: &bch_opts) -> Vec<(PathBuf, bch_sb_handle)> {
+fn read_sbs_matching_uuid(
+    uuid: Uuid,
+    devices: &[String],
+    opts: &bch_opts,
+    filter_multipath: bool,
+) -> Vec<(PathBuf, bch_sb_handle)> {
     devices
         .iter()
+        .filter(|dev| {
+            // When not using udev (which already filters), skip multipath components
+            if filter_multipath && find_multipath_holder(Path::new(dev)).is_some() {
+                debug!("Skipping multipath component device in fallback scan: {}", dev);
+                return false;
+            }
+            true
+        })
         .filter_map(|dev| {
             read_super_silent(PathBuf::from(dev), *opts)
                 .ok()
@@ -146,7 +187,7 @@ fn get_devices_by_uuid(
         let devs_from_udev = get_devices_by_uuid_udev(uuid)?;
 
         if !devs_from_udev.is_empty() {
-            let sbs = read_sbs_matching_uuid(uuid, &devs_from_udev, opts);
+            let sbs = read_sbs_matching_uuid(uuid, &devs_from_udev, opts, false);
 
             // Check if udev found all expected devices. During early boot,
             // udev may not have finished processing all devices yet — if we
@@ -168,7 +209,7 @@ fn get_devices_by_uuid(
     // without udevd running. Remaining TODO: wait for devices to appear
     // (poll or udev events) with a timeout, then attempt degraded mount.
     let all_devs = get_all_block_devnodes()?;
-    Ok(read_sbs_matching_uuid(uuid, &all_devs, opts))
+    Ok(read_sbs_matching_uuid(uuid, &all_devs, opts, true))
 }
 
 fn devs_str_sbs_from_device(
@@ -180,6 +221,12 @@ fn devs_str_sbs_from_device(
         if metadata.is_dir() {
             return Err(anyhow::anyhow!("'{}' is a directory, not a block device", device.display()));
         }
+    }
+
+    // Honor explicit user-supplied paths, but warn when a path appears to be
+    // a multipath component because that is typically unintended.
+    if let Some(mpath_dev) = find_multipath_holder(device) {
+        warn_multipath_component(device, &mpath_dev);
     }
 
     let dev_sb = read_super_silent(device, *opts)?;
@@ -209,9 +256,14 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
 
         return device.split(':')
             .map(PathBuf::from)
-            .map(|path|
-                 bch_bindgen::sb::io::read_super_opts(path.as_ref(), opts)
-                 .map(|sb| (path, sb)))
+            .map(|path| {
+                if let Some(mpath_dev) = find_multipath_holder(path.as_path()) {
+                    warn_multipath_component(path.as_path(), &mpath_dev);
+                }
+
+                bch_bindgen::sb::io::read_super_opts(path.as_ref(), opts)
+                    .map(|sb| (path, sb))
+            })
             .collect::<Result<Vec<_>>>()
     }
 
