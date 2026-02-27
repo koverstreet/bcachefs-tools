@@ -2242,7 +2242,7 @@ retry:
 		k = bkey_i_to_s_c(op->insert_keys.top);
 		ptrs = bch2_bkey_ptrs_c(k);
 
-		bch2_trans_unlock(trans);
+		bch2_trans_unlock_long(trans);
 
 		bch2_bkey_nocow_lock(c, trans, ptrs, cas, BUCKET_NOCOW_LOCK_UPDATE);
 

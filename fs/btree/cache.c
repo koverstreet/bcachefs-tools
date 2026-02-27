@@ -927,7 +927,7 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_rea
 
 	struct btree_node_bufs bufs = { .byte_order = ilog2(c->opts.btree_node_size) };
 	if (__btree_node_data_alloc(c, &bufs, GFP_NOWAIT, true)) {
-		bch2_trans_unlock(trans);
+		bch2_trans_unlock_long(trans);
 		if (__btree_node_data_alloc(c, &bufs, GFP_KERNEL|__GFP_NOWARN, true)) {
 			btree_node_bufs_free(&bufs);
 			goto err;
@@ -938,7 +938,7 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_rea
 	if (!b) {
 		b = __btree_node_mem_alloc(c, pcpu_read_locks, GFP_NOWAIT);
 		if (!b) {
-			bch2_trans_unlock(trans);
+			bch2_trans_unlock_long(trans);
 			b = __btree_node_mem_alloc(c, pcpu_read_locks, GFP_KERNEL);
 			if (!b) {
 				btree_node_bufs_free(&bufs);
@@ -1074,7 +1074,7 @@ static noinline struct btree *bch2_btree_node_fill(struct btree_trans *trans,
 
 			/* Unlock before doing IO: */
 			six_unlock_intent(&b->c.lock);
-			bch2_trans_unlock(trans);
+			bch2_trans_unlock_long(trans);
 
 			bch2_btree_node_read(trans, b, sync);
 
@@ -1248,7 +1248,7 @@ retry:
 		u32 seq = six_lock_seq(&b->c.lock);
 
 		six_unlock_type(&b->c.lock, lock_type);
-		bch2_trans_unlock(trans);
+		bch2_trans_unlock_long(trans);
 
 		bch2_btree_node_wait_on_read(trans, b);
 

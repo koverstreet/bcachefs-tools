@@ -999,7 +999,7 @@ static void btree_update_nodes_written(struct btree_update *as)
 	 * which may require allocations as well.
 	 */
 
-	bch2_trans_unlock(trans);
+	bch2_trans_unlock_long(trans);
 	/*
 	 * btree_interior_update_commit_lock is needed for synchronization with
 	 * btree_node_update_key(): having the lock be at the filesystem level
@@ -1438,7 +1438,7 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 		if (commit_flags & BCH_TRANS_COMMIT_journal_reclaim)
 			return ERR_PTR(-BCH_ERR_journal_reclaim_would_deadlock);
 
-		ret = drop_locks_do(trans,
+		ret = drop_locks_long_do(trans,
 			({ trans_wait_event(trans, &c->journal.async_wait,
 					    !journal_low_on_space(&c->journal)); 0; }));
 		if (ret)
@@ -1472,7 +1472,7 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 	}
 
 	if (!down_read_trylock(&c->gc.lock)) {
-		ret = drop_locks_do(trans, (down_read(&c->gc.lock), 0));
+		ret = drop_locks_long_do(trans, (down_read(&c->gc.lock), 0));
 		if (ret) {
 			up_read(&c->gc.lock);
 			return ERR_PTR(ret);
@@ -1576,7 +1576,7 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 		 * without waking up the waitlist:
 		 */
 		if (closure_nr_remaining(&cl) > 1)
-			bch2_trans_unlock(trans);
+			bch2_trans_unlock_long(trans);
 	}
 
 	if (ret) {

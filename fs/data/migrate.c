@@ -172,7 +172,7 @@ static int bch2_dev_metadata_drop(struct bch_fs *c,
 				drop_btree_ptrs(trans, &iter, b, dev_idx, flags, err);
 			})));
 
-	bch2_trans_unlock(trans);
+	bch2_trans_unlock_long(trans);
 	bch2_btree_interior_updates_flush(c);
 	return 0;
 }
