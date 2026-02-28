@@ -148,14 +148,14 @@ fn fs_usage_v1_to_text(
     // Detailed replicas
     if has(Field::Replicas) {
         out.aligned(|sub| {
-            write!(sub, "\nData type\tRequired/total\tDurability\tDevices\n").unwrap();
+            write!(sub, "\nData type\tRequired/total\tDurability\tDevices\tUsage\n").unwrap();
 
             for entry in &sorted {
                 match entry.pos.decode() {
                     DiskAccountingKind::PersistentReserved { nr_replicas } => {
                         let sectors = entry.counter(0);
                         if sectors == 0 { continue; }
-                        write!(sub, "reserved:\t1/{}\t[] ", nr_replicas).unwrap();
+                        write!(sub, "reserved:\t1/{}\t\t[]\t ", nr_replicas).unwrap();
                         sub.units_sectors(sectors);
                         write!(sub, "\r\n").unwrap();
                     }
