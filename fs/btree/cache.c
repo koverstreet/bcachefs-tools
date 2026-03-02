@@ -280,13 +280,13 @@ static struct btree *__btree_node_mem_alloc(struct bch_fs *c, bool pcpu_read_loc
 	return b;
 }
 
-struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *c)
+static struct btree *__bch2_btree_node_mem_alloc_gfp(struct bch_fs *c, gfp_t gfp)
 {
 	struct btree_node_bufs bufs = { .byte_order = ilog2(c->opts.btree_node_size) };
 	struct btree *b;
 
-	if (__btree_node_data_alloc(c, &bufs, GFP_KERNEL, false) ||
-	    !(b = __btree_node_mem_alloc(c, false, GFP_KERNEL))) {
+	if (__btree_node_data_alloc(c, &bufs, gfp, false) ||
+	    !(b = __btree_node_mem_alloc(c, false, gfp))) {
 		btree_node_bufs_free(&bufs);
 		return NULL;
 	}
@@ -294,6 +294,76 @@ struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *c)
 	b->data		= bufs.data;
 	b->aux_data	= bufs.aux_data;
 	return b;
+}
+
+struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *c)
+{
+	return __bch2_btree_node_mem_alloc_gfp(c, GFP_KERNEL);
+}
+
+/*
+ * bch2_btree_cache_add_reserve - pre-allocate btree node buffers for swap I/O
+ *
+ * At swapon time, allocate @count empty btree node buffers and put them on
+ * bc->freeable.  bch2_btree_node_mem_alloc() always checks freeable first and
+ * steals the data buffer from a freeable node rather than going to the page
+ * allocator — so under PF_MEMALLOC these buffers are used without hitting the
+ * emergency reserve at all.
+ *
+ * A single swap COW write touches at least three btrees (extents, inodes, and
+ * alloc/freespace), each up to BTREE_MAX_DEPTH levels deep.  With mempool=8
+ * the worst case is ~24 MB of concurrent node buffers; callers should reserve
+ * enough to cover their expected concurrency.
+ *
+ * We also increment nr_reserve by the same count.  nr_reserve is the shrinker
+ * eviction watermark for bc->live[0]; raising it reduces the shrinker's
+ * can_free budget, which indirectly shields the freeable pool from being
+ * drained under memory pressure before swap I/O can use it.
+ *
+ * Returns the number of nodes actually allocated (may be less than @count on
+ * ENOMEM).
+ */
+int bch2_btree_cache_add_reserve(struct bch_fs *c, unsigned count)
+{
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+	unsigned allocated = 0;
+
+	for (unsigned i = 0; i < count; i++) {
+		struct btree *b = __bch2_btree_node_mem_alloc_gfp(c,
+					GFP_KERNEL | __GFP_NORETRY);
+		if (!b)
+			break;
+
+		BUG_ON(!six_trylock_intent(&b->c.lock));
+		BUG_ON(!six_trylock_write(&b->c.lock));
+
+		bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREEABLE);
+
+		six_unlock_write(&b->c.lock);
+		six_unlock_intent(&b->c.lock);
+
+		scoped_guard(mutex_noio, &bc->lock)
+			bc->nr_reserve++;
+
+		allocated++;
+	}
+
+	return allocated;
+}
+
+/*
+ * bch2_btree_cache_remove_reserve - release swap-time btree node reserve
+ *
+ * Called at swapoff.  Decrements nr_reserve so the shrinker can reclaim the
+ * extra freeable buffers under normal memory pressure.  The actual kvfree of
+ * the node data buffers happens lazily via the shrinker scan.
+ */
+void bch2_btree_cache_remove_reserve(struct bch_fs *c, unsigned count)
+{
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+
+	scoped_guard(mutex_noio, &bc->lock)
+		bc->nr_reserve -= min(bc->nr_reserve, (size_t)count);
 }
 
 /* Pinning */

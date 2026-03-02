@@ -1089,8 +1089,17 @@ static int bch2_btree_write_buffer_flush_nocheck_rw(struct btree_trans *trans)
 		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
 
 		if (mutex_trylock(&wb->flushing.lock)) {
-			bch2_trans_unlock_long(trans);
-			ret = bch2_btree_write_buffer_flush_locked(trans, i, WB_FLUSH_tryflush);
+			/*
+			 * PF_MEMALLOC prevents entering direct reclaim while
+			 * holding wb->flushing.lock.  Without it, btree node
+			 * allocation inside the flush can enter reclaim →
+			 * reclaim needs journal → journal needs write-buffer
+			 * flush → blocked on our mutex → deadlock.
+			 */
+			scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO|PF_MEMALLOC) {
+				bch2_trans_unlock_long(trans);
+				ret = bch2_btree_write_buffer_flush_locked(trans, i, WB_FLUSH_tryflush);
+			}
 			mutex_unlock(&wb->flushing.lock);
 			if (ret)
 				break;
@@ -1199,7 +1208,13 @@ static void bch2_btree_write_buffer_flush_work_fn(struct work_struct *work)
 	struct bch_fs *c = wb->c;
 	enum wb_flush_caller caller = READ_ONCE(wb->flush_work_caller);
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
+	/*
+	 * PF_MEMALLOC in addition to NOIO: allocations inside the flush must
+	 * not enter direct reclaim at all while wb->flushing.lock is held —
+	 * reclaim can need the journal, which needs write-buffer flush,
+	 * which blocks on our mutex.
+	 */
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO|PF_MEMALLOC) {
 		guard(mutex)(&wb->flushing.lock);
 		CLASS(btree_trans, trans)(c);
 		while (1) {
