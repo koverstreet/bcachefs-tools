@@ -62,7 +62,7 @@ fn should_skip_multipath_component(props: &HashMap<String, String>) -> bool {
     // Set by multipath's udev rule; fall back to sysfs if not present.
     if props
         .get("DM_MULTIPATH_DEVICE_PATH")
-        .map_or(false, |v| v == "1")
+        .is_some_and(|v| v == "1")
     {
         if let Some(devname) = props.get("DEVNAME") {
             debug!("Skipping multipath component device: {}", devname);

@@ -194,6 +194,23 @@ by deletion alone and recovering those snapshots is feasible.
 and backpointers btrees. These passes are not part of normal recovery and may
 take considerable time on large filesystems.
 
+When a pass is scheduled at runtime (post-mount), its persistence depends on
+severity. Passes scheduled without the \texttt{nopersistent} flag are written
+to the superblock's \texttt{recovery\_passes\_required} field and survive
+reboots: the pass will run automatically at the next mount even if the
+filesystem is cleanly unmounted. Ephemeral scheduling (used when a prior pass
+must complete first before the repair makes sense) is remembered only until
+the current recovery sequence completes and does not touch the superblock.
+Once a pass runs successfully, it clears its own bit from
+\texttt{recovery\_passes\_required}.
+
+Some passes are scheduled with a ratelimit flag, used for errors that may be
+detected in large numbers during a single I/O operation (for example, EC
+accounting inconsistencies during a stripe write). A ratelimited pass is not
+re-scheduled unless the same error is detected again via a non-ratelimited
+request, preventing repair-loop flooding. The ratelimiting state is in-memory
+only and does not affect persistence.
+
 The complete list of recovery passes, in execution order:
 
 \bchdoc{recovery-passes}
@@ -970,6 +987,51 @@ auto-repair cause the filesystem to go emergency read-only, with a message
 suggesting to run fsck and report the issue to developers so it can be marked
 for self-healing in future versions.
 
+\subsection{Self-healing}
+
+Bcachefs classifies metadata errors into three tiers based on severity and
+whether a safe automatic repair is known:
+
+\begin{description}
+\item[Autofix errors (\texttt{FSCK\_AUTOFIX})] Inconsistencies with a
+  well-understood, always-safe repair that can be applied immediately inline
+  during normal operation, without interrupting I/O or requiring a recovery
+  pass. An example is a missing journal entry replica marker: the repair is
+  simply to write the correct marker, with no data at risk.
+
+\item[Fixable errors (\texttt{FSCK\_CAN\_FIX})] Inconsistencies that have a
+  known repair procedure but require a dedicated recovery pass to execute
+  safely. Under \texttt{errors=fix\_safe} (the default since version 1.19),
+  detecting such an error schedules the relevant recovery pass to run online
+  in the background. The pass runs concurrently with normal filesystem
+  operation without taking the filesystem offline, provided it carries the
+  \texttt{PASS\_ONLINE} flag. Errors detected during recovery that would
+  rewind the recovery sequence are handled specially: recovery restarts from
+  the affected pass rather than aborting.
+
+\item[Inconsistent errors] Structural corruption for which no safe automatic
+  repair is known, or where continuing operation risks further data loss. These
+  trigger emergency read-only regardless of the \texttt{errors} setting (except
+  \texttt{errors=continue}, which logs the error and proceeds). The filesystem
+  logs a message directing the administrator to run fsck. If a repair procedure
+  is subsequently developed and deemed safe, the error can be reclassified to
+  \texttt{FSCK\_CAN\_FIX} in a future kernel release.
+\end{description}
+
+The \texttt{errors} mount option controls the policy for the second and third
+tiers; see \S\ref{sec:error-actions}. The default \texttt{fix\_safe} enables
+background self-repair for fixable errors while taking the conservative
+read-only path for inconsistent ones.
+
+Every error detection event is recorded as a persistent count in the
+superblock's errors section. These counts survive across reboots and accumulate
+over the filesystem's lifetime, providing an audit trail of what has been
+detected and repaired. The counts are visible in \texttt{bcachefs show-super}
+output (included by default) and via the sysfs \texttt{errors} file. A count
+of zero for an error type means it has never been detected; a nonzero count
+means it was detected and, if the error type has \texttt{FSCK\_CAN\_FIX},
+automatically scheduled for repair.
+
 \subsection{Status of data}
 
 The \texttt{bcachefs fs usage} may be used to display filesystem usage broken
@@ -1196,6 +1258,7 @@ allocation range. This eliminates cross-CPU contention at the cost of
 non-sequential inode numbers.
 
 \subsection{Error actions}
+\label{sec:error-actions}
 The \texttt{errors} option controls how the filesystem responds to metadata
 inconsistencies. Valid error actions are:
 \bchdoc{error-actions}
