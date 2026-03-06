@@ -16,14 +16,14 @@
 /// The loop fills the gap. New push = update desired, loop picks it up.
 /// Same pattern as ktest CI and the filesystem's own reconcile pass.
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use chrono::Local;
 use log::{error, info, warn};
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
+use std::process::{Child, Command, ExitCode, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -73,6 +73,27 @@ impl Distro {
             "http://deb.debian.org/debian"
         }
     }
+
+    fn container_image(self) -> &'static str {
+        match self {
+            Distro::Unstable => "debian:unstable-slim",
+            Distro::Forky    => "debian:forky-slim",
+            Distro::Trixie   => "debian:trixie-slim",
+            Distro::Plucky   => "ubuntu:plucky",
+            Distro::Questing => "ubuntu:questing",
+        }
+    }
+
+    fn parse(s: &str) -> Option<Distro> {
+        match s {
+            "unstable" => Some(Distro::Unstable),
+            "forky"    => Some(Distro::Forky),
+            "trixie"   => Some(Distro::Trixie),
+            "questing" => Some(Distro::Questing),
+            "plucky"   => Some(Distro::Plucky),
+            _          => None,
+        }
+    }
 }
 
 impl fmt::Display for Distro {
@@ -108,6 +129,15 @@ impl Arch {
     /// Whether this arch is built on a remote host
     fn is_remote(self) -> bool {
         matches!(self, Arch::Arm64)
+    }
+
+    fn parse(s: &str) -> Option<Arch> {
+        match s {
+            "amd64"   => Some(Arch::Amd64),
+            "ppc64el" => Some(Arch::Ppc64el),
+            "arm64"   => Some(Arch::Arm64),
+            _         => None,
+        }
     }
 }
 
@@ -315,6 +345,250 @@ impl Default for Config {
             rust_version:    "1.89.0".into(),
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Podman container helper
+// ---------------------------------------------------------------------------
+
+/// RAII wrapper around a podman container. Cleans up on drop.
+struct PodmanContainer {
+    name: String,
+}
+
+impl PodmanContainer {
+    /// Start a detached container with the given volumes.
+    /// Each volume is (host_path, container_path, mode).
+    fn create(
+        name: &str,
+        image: &str,
+        volumes: &[(&str, &str, &str)],
+    ) -> Result<Self> {
+        let mut cmd = Command::new("podman");
+        cmd.args(["run", "--name", name, "--detach", "--init"]);
+        cmd.args(["--security-opt", "seccomp=unconfined"]);
+        cmd.args(["--security-opt", "apparmor=unconfined"]);
+        cmd.args(["--device", "/dev/fuse"]);
+        cmd.args(["--cap-add", "SYS_ADMIN"]);
+        for &(host, container, mode) in volumes {
+            cmd.arg("--volume");
+            cmd.arg(format!("{host}:{container}:{mode}"));
+        }
+        cmd.args(["--tmpfs", "/tmp:exec"]);
+        cmd.args([image, "sleep", "infinity"]);
+
+        let output = cmd.output().context("starting podman container")?;
+        if !output.status.success() {
+            bail!("podman run failed: {}", String::from_utf8_lossy(&output.stderr));
+        }
+        Ok(Self { name: name.to_string() })
+    }
+
+    /// Execute a command with proper argv (no shell interpretation).
+    fn exec(&self, args: &[&str]) -> Result<()> {
+        let status = Command::new("podman")
+            .arg("exec")
+            .arg(&self.name)
+            .args(args)
+            .status()
+            .with_context(|| format!("podman exec {:?}", args))?;
+        if !status.success() {
+            bail!("command failed in container: {:?}", args);
+        }
+        Ok(())
+    }
+
+    /// Execute a shell script inside the container.
+    /// Use sparingly — prefer exec() with proper argv where possible.
+    fn exec_shell(&self, script: &str) -> Result<()> {
+        let status = Command::new("podman")
+            .args(["exec", &self.name, "bash", "-euxc", script])
+            .status()
+            .context("podman exec bash")?;
+        if !status.success() {
+            bail!("shell command failed in container");
+        }
+        Ok(())
+    }
+
+    /// Write a file into the container by piping content through stdin.
+    /// No shell quoting involved — content is passed as raw bytes.
+    fn write_file(&self, path: &str, content: &str) -> Result<()> {
+        let mut child = Command::new("podman")
+            .args(["exec", "-i", &self.name, "tee", path])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .spawn()
+            .context("podman exec tee")?;
+        child.stdin.take().unwrap().write_all(content.as_bytes())?;
+        let status = child.wait()?;
+        if !status.success() {
+            bail!("writing file {path} in container failed");
+        }
+        Ok(())
+    }
+}
+
+impl Drop for PodmanContainer {
+    fn drop(&mut self) {
+        let _ = Command::new("podman")
+            .args(["rm", "-f", &self.name])
+            .status();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Binary package build (replaces build-binary.sh)
+// ---------------------------------------------------------------------------
+
+fn find_dsc(source_dir: &Path) -> Result<PathBuf> {
+    for entry in fs::read_dir(source_dir).context("reading source dir")? {
+        let entry = entry?;
+        if entry.path().extension().and_then(|e| e.to_str()) == Some("dsc") {
+            return Ok(entry.path());
+        }
+    }
+    bail!("no .dsc file found in {}", source_dir.display())
+}
+
+/// Check if system Rust in the container is new enough (>= 1.85).
+fn container_rust_is_new_enough(container: &PodmanContainer) -> bool {
+    let output = Command::new("podman")
+        .args(["exec", &container.name, "rustc", "--version"])
+        .output();
+
+    let Ok(output) = output else { return false };
+    let Ok(ver_str) = String::from_utf8(output.stdout) else { return false };
+
+    // Parse "rustc 1.XX.Y ..." and check minor >= 85
+    ver_str.split_whitespace()
+        .nth(1)
+        .and_then(|v| v.split('.').nth(1))
+        .and_then(|minor| minor.parse::<u32>().ok())
+        .is_some_and(|minor| minor >= 85)
+}
+
+/// Install rustup and cargo shim if the distro's Rust is too old.
+fn install_rust_if_needed(container: &PodmanContainer, version: &str) -> Result<()> {
+    if container_rust_is_new_enough(container) {
+        return Ok(());
+    }
+
+    info!("distro Rust too old, installing rustup {version}");
+    container.exec_shell(&format!(
+        "curl --proto =https --tlsv1.2 -sSf https://sh.rustup.rs | \
+         sh -s -- --default-toolchain {version} --profile minimal -y"
+    ))?;
+
+    // Write cargo shim to a temp file — no quoting layers, just raw content.
+    // The shim handles Ubuntu's "prepare-debian" vendor setup step as a no-op.
+    container.write_file("/tmp/cargo-shim", "\
+#!/bin/sh
+[ \"$1\" = \"prepare-debian\" ] && exit 0
+exec /root/.cargo/bin/cargo \"$@\"
+")?;
+
+    // Install shim if the Ubuntu cargo wrapper exists
+    container.exec_shell("\
+        if [ -f /usr/share/cargo/bin/cargo ]; then \
+            cp /tmp/cargo-shim /usr/share/cargo/bin/cargo; \
+            chmod +x /usr/share/cargo/bin/cargo; \
+        fi; \
+        ln -sf /root/.cargo/bin/rustc /usr/bin/rustc")?;
+
+    Ok(())
+}
+
+/// Build binary .deb packages for a specific distro×arch inside a podman container.
+fn build_binary(
+    distro: Distro,
+    arch: Arch,
+    commit: &str,
+    source_dir: &Path,
+    result_dir: &Path,
+    rust_version: &str,
+    cache_dir: &Path,
+) -> Result<()> {
+    let container_name = format!("ci-binary-{distro}-{arch}-{}", std::process::id());
+    let apt_cache_dir = cache_dir.join(format!("apt-{distro}-{arch}"));
+    fs::create_dir_all(result_dir)?;
+    fs::create_dir_all(&apt_cache_dir)?;
+
+    info!("=== Building binary: {distro} {arch} (commit {}) ===", &commit[..commit.len().min(12)]);
+
+    let container = PodmanContainer::create(
+        &container_name,
+        distro.container_image(),
+        &[
+            (source_dir.to_str().unwrap(), "/source", "ro"),
+            (result_dir.to_str().unwrap(), "/result", "rw"),
+            (apt_cache_dir.to_str().unwrap(), "/var/cache/apt", "rw"),
+        ],
+    )?;
+
+    // Clear stale apt locks from crashed previous containers
+    for lock in [
+        "/var/cache/apt/archives/lock",
+        "/var/lib/apt/lists/lock",
+        "/var/lib/dpkg/lock",
+        "/var/lib/dpkg/lock-frontend",
+    ] {
+        container.exec(&["rm", "-f", lock])?;
+    }
+
+    // Cross-compilation: add foreign arch before first apt-get update
+    if arch.is_cross() {
+        container.exec(&["dpkg", "--add-architecture", "ppc64el"])?;
+    }
+
+    // Install essential build tools
+    container.exec_shell(
+        "apt-get update && \
+         DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+         build-essential ca-certificates curl devscripts dpkg-dev"
+    )?;
+
+    // Cross-compilation tools
+    if arch.is_cross() {
+        container.exec_shell(
+            "DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+             qemu-user-static binfmt-support gcc-powerpc64le-linux-gnu"
+        )?;
+    }
+
+    // Find .dsc and extract source package
+    let dsc = find_dsc(source_dir)?;
+    let dsc_name = dsc.file_name().unwrap().to_str().unwrap();
+    let cross_dep = if arch.is_cross() { "--host-architecture ppc64el" } else { "" };
+
+    container.exec_shell(&format!(
+        "mkdir -p /build && \
+         cp /source/* /build/ && \
+         cd /build && \
+         dpkg-source -x {dsc_name} src && \
+         DEBIAN_FRONTEND=noninteractive apt-get build-dep -y {cross_dep} ./src"
+    ))?;
+
+    // Install rustup if distro Rust is too old
+    install_rust_if_needed(&container, rust_version)?;
+
+    // Build
+    let cross_dpkg = if arch.is_cross() { "-a ppc64el" } else { "" };
+    container.exec_shell(&format!(
+        "export PATH=\"$HOME/.cargo/bin:$PATH\" && \
+         cd /build/src && \
+         dpkg-buildpackage -us -uc -b {cross_dpkg}"
+    ))?;
+
+    // Copy results out
+    for pattern in ["*.deb", "*.ddeb", "*.changes", "*.buildinfo"] {
+        container.exec_shell(&format!(
+            "find /build -maxdepth 1 -name '{pattern}' -exec cp {{}} /result/ \\;"
+        ))?;
+    }
+
+    info!("=== Binary build complete: {distro} {arch} ===");
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -543,7 +817,9 @@ impl Orchestrator {
                 .spawn()
                 .with_context(|| format!("spawning remote build for {}", name))?
         } else {
-            Command::new(&self.config.scripts_dir.join("build-binary.sh"))
+            // Local builds use our own binary — no shell quoting layers
+            Command::new(std::env::current_exe().context("getting own binary path")?)
+                .arg("build-binary")
                 .arg(job.distro.as_str())
                 .arg(job.arch.as_str())
                 .arg(commit)
@@ -645,7 +921,30 @@ fn remove_pid_file(state_dir: &Path) {
 // Main
 // ---------------------------------------------------------------------------
 
-fn main() -> Result<()> {
+fn run_build_binary() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    // build-binary DISTRO ARCH COMMIT SOURCE_DIR RESULT_DIR RUST_VERSION
+    if args.len() != 8 {
+        bail!("usage: {} build-binary DISTRO ARCH COMMIT SOURCE_DIR RESULT_DIR RUST_VERSION",
+              args[0]);
+    }
+    let distro = Distro::parse(&args[2])
+        .with_context(|| format!("unknown distro: {}", args[2]))?;
+    let arch = Arch::parse(&args[3])
+        .with_context(|| format!("unknown arch: {}", args[3]))?;
+    let commit = &args[4];
+    let source_dir = PathBuf::from(&args[5]);
+    let result_dir = PathBuf::from(&args[6]);
+    let rust_version = &args[7];
+    let cache_dir = PathBuf::from(
+        std::env::var("CACHE_DIR")
+            .unwrap_or_else(|_| "/home/aptbcachefsorg/package-ci/cache".into())
+    );
+
+    build_binary(distro, arch, commit, &source_dir, &result_dir, rust_version, &cache_dir)
+}
+
+fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
         .format(|buf, record| {
             writeln!(buf, "{} [{}] {}",
@@ -655,6 +954,23 @@ fn main() -> Result<()> {
         })
         .init();
 
+    // Subcommand dispatch
+    if std::env::args().nth(1).as_deref() == Some("build-binary") {
+        if let Err(e) = run_build_binary() {
+            error!("build-binary failed: {e:?}");
+            return ExitCode::FAILURE;
+        }
+        return ExitCode::SUCCESS;
+    }
+
+    if let Err(e) = run_orchestrator() {
+        error!("orchestrator failed: {e:?}");
+        return ExitCode::FAILURE;
+    }
+    ExitCode::SUCCESS
+}
+
+fn run_orchestrator() -> Result<()> {
     let config = Config::default();
     info!("bcachefs-ci starting");
     info!("  git repo:    {}", config.git_repo.display());
