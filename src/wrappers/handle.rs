@@ -524,6 +524,15 @@ impl DevUsage {
             .map(|(_, dt)| dt.sectors)
             .sum()
     }
+
+    /// Used buckets (excludes free/need_gc_gens/need_discard and hidden types).
+    pub fn used_buckets(&self) -> u64 {
+        use super::accounting::{data_type_is_empty, data_type_is_hidden};
+        self.iter_typed()
+            .filter(|(t, _)| !data_type_is_empty(*t) && !data_type_is_hidden(*t))
+            .map(|(_, dt)| dt.buckets)
+            .sum()
+    }
 }
 
 /// Per-data-type usage on a device.

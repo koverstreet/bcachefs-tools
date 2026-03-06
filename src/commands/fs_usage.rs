@@ -540,7 +540,9 @@ fn devs_usage_to_text(
                 write!(sub, "\r").unwrap();
                 sub.units_sectors(used);
 
-                let pct = if capacity > 0 { used * 100 / capacity } else { 0 };
+                let pct = if d.usage.nr_buckets > 0 {
+                    d.usage.used_buckets() * 100 / d.usage.nr_buckets
+                } else { 0 };
                 write!(sub, "\r{:>2}%\r", pct).unwrap();
 
                 if d.leaving > 0 {
@@ -558,13 +560,10 @@ fn devs_usage_to_text(
 
 fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
     let u = &d.usage;
-    let hidden = u.hidden_sectors();
-    let capacity = u.capacity_sectors() - hidden;
-    let used = u.used_sectors() - hidden;
 
     let label = d.info.label.as_deref().unwrap_or("(no label)");
     let state = accounting::member_state_str(u.state);
-    let pct = if capacity > 0 { used * 100 / capacity } else { 0 };
+    let pct = if u.nr_buckets > 0 { u.used_buckets() * 100 / u.nr_buckets } else { 0 };
 
     out.aligned(|sub| {
         writeln!(sub, "{} (device {}):\t{}\t{}\t{:>2}%", label, d.info.idx, d.info.dev, state, pct).unwrap();
@@ -593,7 +592,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
             }
 
             write!(sub, "capacity:\t").unwrap();
-            sub.units_sectors(capacity);
+            sub.units_sectors(u.capacity_sectors());
             write!(sub, "\r{}\r\n", u.nr_buckets).unwrap();
 
             write!(sub, "bucket size:\t").unwrap();
