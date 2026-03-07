@@ -575,7 +575,9 @@ fn build_binary(
     // Build
     let cross_dpkg = if arch.is_cross() { "-a ppc64el" } else { "" };
     container.exec_shell(&format!(
-        "export PATH=\"$HOME/.cargo/bin:$PATH\" && \
+        "export RUSTUP_HOME=\"$HOME/.rustup\" \
+                CARGO_HOME=\"$HOME/.cargo\" \
+                PATH=\"$HOME/.cargo/bin:$PATH\" && \
          cd /build/src && \
          dpkg-buildpackage -us -uc -b {cross_dpkg}"
     ))?;
