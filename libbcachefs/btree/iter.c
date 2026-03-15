@@ -1615,6 +1615,12 @@ void bch2_trans_updates_to_text(struct printbuf *buf, struct btree_trans *trans)
 	for (struct jset_entry *e = btree_trans_journal_entries_start(trans);
 	     e != btree_trans_journal_entries_top(trans);
 	     e = vstruct_next(e)) {
+		if (vstruct_next(e) > btree_trans_journal_entries_top(trans)) {
+			prt_printf(buf, "corrupt journal entry in btree transaction: size %u u64s > %zu remaining",
+				   (unsigned) vstruct_u64s(e),
+				   (u64 *) btree_trans_journal_entries_top(trans) - (u64 *) e);
+			break;
+		}
 		bch2_journal_entry_to_text(buf, trans->c, e);
 		prt_newline(buf);
 	}

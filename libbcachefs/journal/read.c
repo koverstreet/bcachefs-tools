@@ -967,6 +967,8 @@ void bch2_journal_entry_to_text(struct printbuf *out, struct bch_fs *c,
 
 	if (entry->type < BCH_JSET_ENTRY_NR) {
 		prt_str(out, ": ");
+
+		/* validate entry size */
 		bch2_jset_entry_ops[entry->type].to_text(out, c, entry);
 	}
 }
