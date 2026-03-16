@@ -57,6 +57,16 @@
           # github actions supports fewer architectures
           checks = nixpkgs.lib.getAttrs [ "aarch64-linux" "x86_64-linux" ] self.checks;
         };
+        nixosModules = let
+          bcachefsNixosModule = { pkgs, ... }: {
+            boot.supportedFilesystems = [ "bcachefs" ];
+            boot.bcachefs.package =
+              self.packages.${pkgs.stdenv.hostPlatform.system}.bcachefs-tools;
+          };
+        in {
+          default = bcachefsNixosModule;
+          bcachefs = bcachefsNixosModule;
+        };
       };
 
       inherit systems;
