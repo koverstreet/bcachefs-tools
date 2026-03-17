@@ -492,6 +492,7 @@ pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[DevOpts]) -> u32 {
     };
 
     block_size
+        .min((u16::MAX as u32 >> 1) + 1)
 }
 
 /// Pick the filesystem-wide bucket size based on device sizes and options.
@@ -544,7 +545,9 @@ pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[DevOpts]) -> u64 {
     let mem_lower_bound = (total_fs_size / buckets_can_fsck).next_power_of_two();
     bucket_size = bucket_size.max(mem_lower_bound);
 
-    bucket_size.next_power_of_two()
+    bucket_size
+        .next_power_of_two()
+        .min((u32::MAX as u64 >> 1) + 1)
 }
 
 /// Validate that a device's bucket size is consistent with filesystem options.
