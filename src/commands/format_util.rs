@@ -105,22 +105,8 @@ pub extern "C" fn bch2_format(
         }
     }
 
-    // Calculate block size: on large filesystems (>= 1GB), use the maximum
-    // of 4k and the device block size for performance on 4k-sector hardware.
-    // On small filesystems (typically test images on loop devices), default
-    // to 512 bytes to avoid wasting space.
     if opt_defined!(fs_opts, block_size) == 0 {
-        let total_size: u64 = dev_slice.iter().map(|d| d.fs_size).sum();
-
-        let block_size = if total_size >= 1u64 << 30 {
-            let mut bs = 4096u32;
-            for dev in dev_slice.iter() {
-                bs = bs.max(unsafe { c::get_blocksize((*dev.bdev).bd_fd) });
-            }
-            bs
-        } else {
-            512u32
-        };
+        let block_size = pick_block_size(&fs_opts, dev_slice);
         opt_set!(fs_opts, block_size, block_size as u16);
     }
 
@@ -457,6 +443,30 @@ fn rounddown_pow_of_two(v: u64) -> u64 {
     1u64 << (63 - v.leading_zeros())
 }
 
+/// Pick the filesystem-wide block size based on device sizes and topology.
+///
+/// On large filesystems (>= 1GB), use the maximum of 4k and the device
+/// physical block size for performance on 4k-sector (or larger) hardware.
+/// On small filesystems (typically test images on loop devices), default
+/// to 512 bytes to avoid wasting space.
+///
+/// Returns the block size in bytes.
+pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[c::dev_opts]) -> u32 {
+    let total_size: u64 = dev_slice.iter().map(|d| d.fs_size).sum();
+
+    let block_size = if total_size >= 1u64 << 30 {
+        let mut bs = 4096u32;
+        for dev in dev_slice.iter() {
+            bs = bs.max(unsafe { c::get_blocksize((*dev.bdev).bd_fd) });
+        }
+        bs
+    } else {
+        512u32
+    };
+
+    block_size
+}
+
 /// Pick the filesystem-wide bucket size based on device sizes and options.
 ///
 /// Returns the bucket size in bytes.
@@ -550,6 +560,13 @@ pub fn check_bucket_size(opts: &c::bch_opts, dev: &c::dev_opts) {
 
 /// C-compatible wrapper.
 #[no_mangle]
+pub extern "C" fn bch2_pick_block_size(opts: c::bch_opts, devs: c::dev_opts_list) -> u32 {
+    let dev_slice = unsafe { std::slice::from_raw_parts(devs.data, devs.nr) };
+    pick_block_size(&opts, dev_slice)
+}
+
+/// C-compatible wrapper.
+#[no_mangle]
 pub extern "C" fn bch2_pick_bucket_size(opts: c::bch_opts, devs: c::dev_opts_list) -> u64 {
     let dev_slice = unsafe { std::slice::from_raw_parts(devs.data, devs.nr) };
     pick_bucket_size(&opts, dev_slice)
@@ -560,4 +577,3 @@ pub extern "C" fn bch2_pick_bucket_size(opts: c::bch_opts, devs: c::dev_opts_lis
 pub extern "C" fn bch2_check_bucket_size(opts: c::bch_opts, dev: *mut c::dev_opts) {
     check_bucket_size(&opts, unsafe { &*dev });
 }
-
