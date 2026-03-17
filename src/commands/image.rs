@@ -125,12 +125,7 @@ unsafe extern "C" fn move_btree_pred(
         return 0;
     }
 
-    opts.write_flags = unsafe {
-        std::mem::transmute::<u32, c::bch_write_flags>(
-            opts.write_flags as u32
-                | c::bch_write_flags::BCH_WRITE_only_specified_devs as u32,
-        )
-    };
+    opts.write_flags |= c::bch_write_flags::BCH_WRITE_only_specified_devs;
     1
 }
 

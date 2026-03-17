@@ -52,14 +52,14 @@ impl<'f> BtreeTrans<'f> {
         &self,
         disk_res: *mut c::disk_reservation,
         journal_seq: *mut u64,
-        flags: u32,
+        flags: c::bch_trans_commit_flags,
     ) -> Result<(), BchError> {
         unsafe {
             (*self.raw).disk_res = disk_res;
             (*self.raw).journal_seq = journal_seq;
         }
         let ret = unsafe {
-            c::__bch2_trans_commit(self.raw, std::mem::transmute::<u32, c::bch_trans_commit_flags>(flags))
+            c::__bch2_trans_commit(self.raw, flags)
         };
         crate::errcode::ret_to_result(ret).map(|_| ())
     }
@@ -122,7 +122,7 @@ pub fn commit_do<F>(
     trans: &BtreeTrans,
     disk_res: *mut c::disk_reservation,
     journal_seq: *mut u64,
-    flags: u32,
+    flags: c::bch_trans_commit_flags,
     mut f: F,
 ) -> Result<(), BchError>
 where
@@ -141,7 +141,7 @@ pub fn trans_commit_do<F>(
     fs: &Fs,
     disk_res: *mut c::disk_reservation,
     journal_seq: *mut u64,
-    flags: u32,
+    flags: c::bch_trans_commit_flags,
     f: F,
 ) -> Result<(), BchError>
 where

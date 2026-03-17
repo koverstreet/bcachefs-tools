@@ -362,6 +362,8 @@ fn main() {
             non_exhaustive: true,
         })
         .bitfield_enum("btree_iter_update_trigger_flags")
+        .bitfield_enum("bch_trans_commit_flags")
+        .bitfield_enum("bch_write_flags")
         .allowlist_function("raid_init")
         .allowlist_function("linux_shrinkers_init")
         .allowlist_function("sysfs_.*")
