@@ -43,7 +43,6 @@ fn csum_vstruct_sb(sb: *mut c::bch_sb) -> c::bch_csum {
 pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
     let file = borrowed_file(fd);
 
-    let bs = unsafe { c::get_blocksize_physical_hint(fd) } as usize;
     let sb_ref = unsafe { &mut *sb };
 
     let nr_superblocks = sb_ref.layout.nr_superblocks as usize;
@@ -68,9 +67,7 @@ pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
         sb_ref.csum = csum_vstruct_sb(sb);
 
         let sb_bytes = vstruct_bytes_sb(unsafe { &*sb });
-        let write_len = round_up(sb_bytes, bs);
-        let sb_slice = unsafe { std::slice::from_raw_parts(sb as *const u8, write_len) };
-
+        let sb_slice = unsafe { std::slice::from_raw_parts(sb as *const u8, sb_bytes) };
         pwrite_exact(&file, sb_slice, offset_sectors << 9);
     }
 
