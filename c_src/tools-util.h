@@ -70,6 +70,7 @@ char *read_file_str(int, const char *);
 u64 read_file_u64(int, const char *);
 
 u64 get_size(int);
+unsigned get_blocksize_logical(int);
 unsigned get_blocksize_physical_hint(int);
 struct dev_opts;
 int open_for_format(struct dev_opts *, blk_mode_t, bool);
