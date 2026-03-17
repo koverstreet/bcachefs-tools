@@ -484,7 +484,7 @@ pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[DevOpts]) -> u32 {
     let block_size = if total_size >= 1u64 << 30 {
         let mut bs = 4096u32;
         for dev in dev_slice.iter() {
-            bs = bs.max(crate::wrappers::bdev::get_blocksize(dev.fd));
+            bs = bs.max(crate::wrappers::bdev::get_blocksize_physical_hint(dev.fd));
         }
         bs
     } else {
