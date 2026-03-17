@@ -21,6 +21,7 @@ use crate::key::Passphrase;
 use crate::commands::format_util::{
     check_bucket_size,
     format_opts_default,
+    pick_block_size,
     pick_bucket_size,
 };
 use crate::wrappers::super_io;
@@ -359,15 +360,14 @@ fn migrate_fs(
               io::Error::from_raw_os_error(-ret));
     }
 
-    let bdev_fd = unsafe { (*c_dev.bdev).bd_fd };
-    let block_size = unsafe { c::get_blocksize(bdev_fd) };
-    opt_set!(fs_opts, block_size, block_size as u16);
-
     let file_path = format!("{}/bcachefs", fs_path);
     println!("Creating new filesystem on {} in space reserved at {}", dev_path, file_path);
 
-    let dev_size = unsafe { c::get_size(bdev_fd) };
+    let dev_size = unsafe { c::get_size((*c_dev.bdev).bd_fd) };
     c_dev.fs_size = dev_size;
+
+    let block_size = pick_block_size(&fs_opts, &[c_dev]);
+    opt_set!(fs_opts, block_size, block_size as u16);
 
     let bucket_size = pick_bucket_size(&fs_opts, &[c_dev]);
     {
