@@ -109,8 +109,11 @@ u64 get_size(int fd)
 	return ret;
 }
 
-/* Returns blocksize, in bytes: */
-unsigned get_blocksize(int fd)
+/* Returns physical block size of a block device (the _larger_ of the two),
+ * with fallback to the filesystem block size hint for regular files, in bytes
+ * (to be used as a performance hint only):
+ */
+unsigned get_blocksize_physical_hint(int fd)
 {
 	struct stat statbuf = xfstat(fd);
 

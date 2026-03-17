@@ -43,7 +43,7 @@ fn csum_vstruct_sb(sb: *mut c::bch_sb) -> c::bch_csum {
 pub extern "C" fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
     let file = borrowed_file(fd);
 
-    let bs = unsafe { c::get_blocksize(fd) } as usize;
+    let bs = unsafe { c::get_blocksize_physical_hint(fd) } as usize;
     let sb_ref = unsafe { &mut *sb };
 
     let nr_superblocks = sb_ref.layout.nr_superblocks as usize;

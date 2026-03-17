@@ -388,7 +388,7 @@ fn main() {
         .allowlist_function("rust_.*")
         .allowlist_function("bch2_dev_resize")
         .allowlist_function("bch2_set_nr_journal_buckets")
-        .allowlist_function("get_blocksize")
+        .allowlist_function("get_blocksize_.*")
         .allowlist_function("bch_sb_crypt_init")
         .allowlist_function("bdev_nonrot")
         .allowlist_function("read_passphrase")

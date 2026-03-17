@@ -457,7 +457,7 @@ pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[c::dev_opts]) -> u32
     let block_size = if total_size >= 1u64 << 30 {
         let mut bs = 4096u32;
         for dev in dev_slice.iter() {
-            bs = bs.max(unsafe { c::get_blocksize((*dev.bdev).bd_fd) });
+            bs = bs.max(unsafe { c::get_blocksize_physical_hint((*dev.bdev).bd_fd) });
         }
         bs
     } else {
