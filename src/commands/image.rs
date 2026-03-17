@@ -64,7 +64,7 @@ fn count_input_size(dir: &std::fs::File) -> u64 {
             Err(_) => continue,
         };
 
-        bytes += meta.blocks() * 512;
+        bytes += meta.size();
 
         if meta.is_dir() {
             if let Ok(subdir) = std::fs::File::open(entry.path()) {
