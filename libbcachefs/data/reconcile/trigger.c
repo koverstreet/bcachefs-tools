@@ -882,23 +882,60 @@ int bch2_update_reconcile_opts(struct btree_trans *trans,
 		return ret;
 
 	if (!level) {
-		struct bkey_i *n = errptr_try(bch2_trans_kmalloc(trans, bkey_bytes(k.k) +
-							sizeof(struct bch_extent_reconcile) +
-							sizeof(struct bch_extent_ptr) * BCH_REPLICAS_MAX));
+		size_t orig_bytes = bkey_bytes(k.k);
+		size_t alloc_bytes = orig_bytes +
+			sizeof(struct bch_extent_reconcile) +
+			sizeof(struct bch_extent_ptr) * BCH_REPLICAS_MAX * 2;
+		struct bkey_i *n = errptr_try(bch2_trans_kmalloc(trans, alloc_bytes));
 		bkey_reassemble(n, k);
 
-		return  bch2_bkey_set_needs_reconcile(trans, snapshot_io_opts, opts, n, ctx, 0) ?:
-			bch2_trans_update(trans, iter, n, BTREE_UPDATE_internal_snapshot_node);
+		int ret = bch2_bkey_set_needs_reconcile(trans, snapshot_io_opts, opts, n, ctx, 0);
+		if (!ret && bkey_bytes(&n->k) > orig_bytes +
+		    sizeof(struct bch_extent_reconcile) +
+		    sizeof(struct bch_extent_ptr) * BCH_REPLICAS_MAX) {
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "reconcile key growth exceeded: orig %zu now %zu max %zu need_invalid_devs %i",
+				   orig_bytes, (size_t)bkey_bytes(&n->k),
+				   orig_bytes + sizeof(struct bch_extent_reconcile) +
+				   sizeof(struct bch_extent_ptr) * BCH_REPLICAS_MAX,
+				   need_update_invalid_devs);
+			prt_newline(&buf);
+			prt_str(&buf, "  before: ");
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_newline(&buf);
+			prt_str(&buf, "  after:  ");
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(n));
+			bch_err(c, "%s", buf.buf);
+		}
+		if (ret)
+			return ret;
+		return bch2_trans_update(trans, iter, n, BTREE_UPDATE_internal_snapshot_node);
 	} else {
 		CLASS(btree_node_iter, iter2)(trans, iter->btree_id, iter->pos, 0, level - 1, 0);
 		struct btree *b = errptr_try(bch2_btree_iter_peek_node(&iter2));
 
+		size_t alloc_u64s = BKEY_BTREE_PTR_U64s_MAX + BCH_REPLICAS_MAX;
 		struct bkey_i *n =
-			errptr_try(bch2_trans_kmalloc(trans, BKEY_BTREE_PTR_U64s_MAX * sizeof(u64)));
+			errptr_try(bch2_trans_kmalloc(trans, alloc_u64s * sizeof(u64)));
 		bkey_copy(n, &b->key);
 
-		return  bch2_bkey_set_needs_reconcile(trans, snapshot_io_opts, opts, n, ctx, 0) ?:
-			bch2_btree_node_update_key(trans, &iter2, b, n, BCH_TRANS_COMMIT_no_enospc, false) ?:
+		int ret = bch2_bkey_set_needs_reconcile(trans, snapshot_io_opts, opts, n, ctx, 0);
+		if (!ret && n->k.u64s > BKEY_BTREE_PTR_U64s_MAX) {
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "btree ptr key growth exceeded: u64s %u max %lu need_invalid_devs %i",
+				   n->k.u64s, (unsigned long)BKEY_BTREE_PTR_U64s_MAX,
+				   need_update_invalid_devs);
+			prt_newline(&buf);
+			prt_str(&buf, "  before: ");
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&b->key));
+			prt_newline(&buf);
+			prt_str(&buf, "  after:  ");
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(n));
+			bch_err(c, "%s", buf.buf);
+		}
+		if (ret)
+			return ret;
+		return  bch2_btree_node_update_key(trans, &iter2, b, n, BCH_TRANS_COMMIT_no_enospc, false) ?:
 			bch_err_throw(c, transaction_restart_commit);
 	}
 }
