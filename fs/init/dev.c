@@ -398,6 +398,7 @@ static void __bch2_dev_read_only(struct bch_fs *c, struct bch_dev *ca)
 	bch2_dev_allocator_remove(c, ca);
 	bch2_recalc_capacity(c);
 	bch2_dev_journal_stop(&c->journal, ca);
+	bch2_do_discards_async(c);
 }
 
 static void __bch2_dev_read_write(struct bch_fs *c, struct bch_dev *ca)
@@ -412,7 +413,7 @@ static void __bch2_dev_read_write(struct bch_fs *c, struct bch_dev *ca)
 	if (enumerated_ref_is_zero(&ca->io_ref[WRITE]))
 		enumerated_ref_start(&ca->io_ref[WRITE]);
 
-	bch2_dev_do_discards(ca);
+	bch2_do_discards_async(c);
 }
 
 void bch2_dev_unlink(struct bch_dev *ca)

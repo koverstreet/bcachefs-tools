@@ -194,21 +194,26 @@ struct discard_release {
 	u64		reserve;
 	u64		buffer_clamped;
 	s64		release;
+	u64		new_rewind_seq;
 	bool		flush_journal;
+	bool		flush_wb;
 };
 
 struct discard_state {
-	u64				seen;
-	u64				open;
-	u64				need_journal_commit;
-	u64				bad_data_type;
-	u64				discarded;
-	u64				committed;
-	struct discard_release		r;
+	u64			seen;
+	u64			not_rw;
+	u64			open;
+	u64			need_journal_commit;
+	u64			bad_data_type;
+	u64			discarded;
+	u64			committed;
+	struct bpos		pos;
+	struct discard_release	r;
 };
 
 struct bch_fs_discards {
 	struct mutex			lock;
+	struct work_struct		work;
 
 	struct discard_state		s;
 };
