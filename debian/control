@@ -64,7 +64,8 @@ Depends: ${misc:Depends},
 	 proxmox-headers-6.17 [amd64] |
 	 linux-headers-amd64 (>= 6.16) [amd64] | linux-headers-cloud-amd64 (>= 6.16) [amd64] | linux-headers-rt-amd64 (>= 6.16) [amd64] |
 	 linux-headers-arm64 (>= 6.16) [arm64] | linux-headers-cloud-arm64 (>= 6.16) [arm64] | linux-headers-rt-arm64 (>= 6.16) [arm64] |
-	 linux-headers-ppc64el (>= 6.16) [ppc64el] | linux-headers-cloud-ppc64el (>= 6.16) [ppc64el] | linux-headers-rt-ppc64el (>= 6.16) [ppc64el]
+	 linux-headers-ppc64el (>= 6.16) [ppc64el] | linux-headers-cloud-ppc64el (>= 6.16) [ppc64el] | linux-headers-rt-ppc64el (>= 6.16) [ppc64el] |
+	 linux-headers (>= 6.16)
 Pre-Depends: bcachefs-tools (= ${binary:Version}),
 Provides: bcachefs-kernel
 Description: bcachefs kernel module DKMS source
