@@ -411,3 +411,36 @@ got_model:
 		return strdup("(image file)");
 	}
 }
+
+char *fd_to_dev_serial(int fd)
+{
+	struct stat stat = xfstat(fd);
+
+	if (S_ISBLK(stat.st_mode)) {
+		char *sysfs_path = dev_to_sysfs_path(stat.st_rdev);
+
+		char *serial_path = mprintf("%s/device/serial", sysfs_path);
+		if (!access(serial_path, R_OK))
+			goto got_serial;
+		free(serial_path);
+
+		/* partition? try parent */
+
+		serial_path = mprintf("%s/../device/serial", sysfs_path);
+		if (!access(serial_path, R_OK))
+			goto got_serial;
+		free(serial_path);
+
+		free(sysfs_path);
+		return NULL;
+got_serial:
+		{
+			char *serial = read_file_str(AT_FDCWD, serial_path);
+			free(serial_path);
+			free(sysfs_path);
+			return serial;
+		}
+	} else {
+		return NULL;
+	}
+}

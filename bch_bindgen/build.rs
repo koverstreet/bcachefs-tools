@@ -389,6 +389,7 @@ fn main() {
         .allowlist_function("read_file_u64")
         .allowlist_function("get_size")
         .allowlist_function("fd_to_dev_model")
+        .allowlist_function("fd_to_dev_serial")
         .allowlist_function("copy_fs")
         .allowlist_function("rust_.*")
         .allowlist_function("bch2_dev_resize")
