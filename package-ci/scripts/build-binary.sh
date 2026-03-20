@@ -221,7 +221,7 @@ run "
 # wrapper, so we append the cross-linker config to the vendored
 # config.toml that cargo prepare-debian generates.
 if [ "$ARCH" = "ppc64el" ]; then
-    run 'printf "\n[target.powerpc64le-unknown-linux-gnu]\nlinker = \"powerpc64le-linux-gnu-gcc\"\n" >> /build/src/.cargo/config.toml'
+    run 'mkdir -p /build/src/.cargo && printf "\n[target.powerpc64le-unknown-linux-gnu]\nlinker = \"powerpc64le-linux-gnu-gcc\"\n" >> /build/src/.cargo/config.toml'
 fi
 
 # Cap parallelism — nproc can report 80+ on big machines, which

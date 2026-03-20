@@ -396,6 +396,12 @@ enum fsck_err_opts {
 	  OPT_UINT(0, U64_MAX),						\
 	  BCH2_NO_SB_OPT,		0,				\
 	  NULL,		"Rewind journal")				\
+	x(journal_rewind_discard_buffer_percent, u8,			\
+	  OPT_FS|OPT_MOUNT,						\
+	  OPT_UINT(0, 10),						\
+	  BCH_SB_EXT_DISCARD_BUFFER,	4,				\
+	  NULL,		"Percentage of filesystem capacity to leave undiscarded"\
+	  " for journal rewind")					\
 	x(scrub_recent_journal_entries,	u8,				\
 	  OPT_FS|OPT_MOUNT,						\
 	  OPT_STR(bch2_scrub_journal_opts),				\
@@ -725,6 +731,9 @@ static inline void bch2_io_opts_fixups(struct bch_inode_opts *opts)
 		opts->data_checksum = 0;
 		opts->erasure_code = 0;
 	}
+	/* We currently only support up to RAID6: */
+	if (opts->erasure_code)
+		opts->data_replicas = min(opts->data_replicas, 3);
 }
 
 void bch2_inode_opts_get(struct bch_fs *, struct bch_inode_opts *, bool);
