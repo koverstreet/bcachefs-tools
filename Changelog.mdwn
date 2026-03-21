@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.37.3 - Fri Mar 20 2026
+
+New option: opts.journal_rewind_discard_buffer_percent
+
+This allows the size of the discard buffer for journal rewind to be adjusted -
+tiering setups with significantly mismatched device sizes will want to turn this
+down, or off.
+
+- Ensure we don't accidentally create cached erasure coded pointers, which
+  aren't supported yet
+- Fix buffer overflows when padding extents with `BCH_SB_MEBER_INVALID` pointers
+- Fix a spurious -EAGAIN in the write path
+- Fix a few bugs on 32bit x86
+- Fix ppc64le build failures
+
 ## v1.37.2 - Mon Mar 16 2026
 
 Bugfix release - fix an oops in mount from incorrect zeroing of
