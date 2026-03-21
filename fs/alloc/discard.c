@@ -234,12 +234,12 @@ static void discard_buckets_state_to_text(struct printbuf *out, struct bch_dev *
 	prt_printf(out, "committed:\t%llu\n",		s->committed);
 }
 
-static int bch2_discard_one_bucket(struct btree_trans *trans,
-				   struct bch_dev *ca,
-				   struct bpos pos,
-				   struct bpos *discard_pos_done,
-				   struct discard_buckets_state *s,
-				   bool fastpath)
+static int __bch2_discard_one_bucket(struct btree_trans *trans,
+				     struct bch_dev *ca,
+				     struct bpos pos,
+				     struct bpos *discard_pos_done,
+				     struct discard_buckets_state *s,
+				     bool fastpath)
 {
 	struct bch_fs *c = trans->c;
 
@@ -268,9 +268,9 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 		return 0;
 	}
 
-	if (!bkey_eq(*discard_pos_done, iter.pos)) {
+	if (!bkey_eq(*discard_pos_done, pos)) {
 		s->discarded++;
-		*discard_pos_done = iter.pos;
+		*discard_pos_done = pos;
 
 		if (bch2_discard_opt_enabled(c, ca) && !c->opts.nochanges) {
 			/*
@@ -305,6 +305,22 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 	s->committed++;
 
 	return 0;
+}
+
+static int bch2_discard_one_bucket(struct btree_trans *trans,
+				   struct bpos bucket,
+				   struct bpos *discard_pos_done,
+				   struct discard_buckets_state *s,
+				   bool fastpath)
+{
+	struct bch_dev *ca = bch2_dev_get_ioref(trans->c, bucket.inode, WRITE, BCH_DEV_WRITE_REF_discard_bucket);
+	if (!ca)
+		return 0;
+
+	int ret = __bch2_discard_one_bucket(trans, ca, bucket, discard_pos_done, s, fastpath);
+
+	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_discard_bucket);
+	return ret;
 }
 
 struct discard_sectors_to_release {
@@ -388,7 +404,7 @@ static void __bch2_dev_do_discards(struct bch_dev *ca)
 			s.seen++;
 
 			ret = lockrestart_do(trans,
-				bch2_discard_one_bucket(trans, ca, POS(ca->dev_idx, bucket),
+				bch2_discard_one_bucket(trans, POS(ca->dev_idx, bucket),
 							&discard_pos_done, &s, false));
 			if (ret)
 				break;
@@ -559,6 +575,7 @@ void bch2_do_discards_fast_work(struct work_struct *work)
 	struct bch_dev *ca = container_of(work, struct bch_dev, discard_fast_work);
 	struct bch_fs *c = ca->fs;
 	struct discard_buckets_state s = {};
+	struct bpos discard_pos_done = POS_MAX;
 	int ret = 0;
 
 	CLASS(btree_trans, trans)(c);
@@ -577,12 +594,11 @@ void bch2_do_discards_fast_work(struct work_struct *work)
 		if (!bucket)
 			break;
 
-		struct bpos discard_pos_done = POS_MAX;
 
 		s.seen++;
 
 		ret = lockrestart_do(trans,
-			bch2_discard_one_bucket(trans, ca, POS(ca->dev_idx, bucket),
+			bch2_discard_one_bucket(trans, POS(ca->dev_idx, bucket),
 						&discard_pos_done, &s, true));
 		if (ret)
 			break;
