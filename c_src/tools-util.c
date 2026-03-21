@@ -109,8 +109,27 @@ u64 get_size(int fd)
 	return ret;
 }
 
-/* Returns blocksize, in bytes: */
-unsigned get_blocksize(int fd)
+/* Returns logical block size (LBA) of a block device (the smaller of the two),
+ * with fallback to the filesystem block size hint for regular files, in bytes
+ * (suitable for use as an alignment for direct I/O or similar):
+ */
+unsigned get_blocksize_logical(int fd)
+{
+	struct stat statbuf = xfstat(fd);
+
+	if (!S_ISBLK(statbuf.st_mode))
+		return statbuf.st_blksize;
+
+	unsigned ret;
+	xioctl(fd, BLKSSZGET, &ret);
+	return ret;
+}
+
+/* Returns physical block size of a block device (the _larger_ of the two),
+ * with fallback to the filesystem block size hint for regular files, in bytes
+ * (to be used as a performance hint only):
+ */
+unsigned get_blocksize_physical_hint(int fd)
 {
 	struct stat statbuf = xfstat(fd);
 
