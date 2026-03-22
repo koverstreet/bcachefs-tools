@@ -617,8 +617,22 @@ impl Orchestrator {
         let log_file = fs::File::create(self.state.log_path(commit, "publish"))
             .context("creating publish log")?;
 
+        // Check if this commit has a release tag — publish to "release" suite if so
+        let is_release = Command::new("git")
+            .args(["describe", "--exact-match", "--tags", commit])
+            .env("GIT_DIR", &self.config.git_repo)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        let suite = if is_release { "release" } else { "snapshot" };
+        info!("[{}] publishing to {} suite", &commit[..12], suite);
+
         let child = Command::new(&self.config.scripts_dir.join("publish.sh"))
             .arg(commit)
+            .arg(suite)
             .env("STATE_DIR", &self.config.state_dir)
             .stdout(Stdio::from(log_file.try_clone()?))
             .stderr(Stdio::from(log_file))
