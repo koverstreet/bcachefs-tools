@@ -230,7 +230,15 @@ void rust_read_submit(struct bch_fs *c,
 	rbio->bio.bi_iter.bi_sector	= offset >> 9;
 	bio_add_virt_nofail(&rbio->bio, buf, len);
 
-	bch2_read(c, rbio_init(&rbio->bio, c, opts, endio), inum);
+	struct bch_read_bio *r = rbio_init(&rbio->bio, c, opts, endio);
+	BUG_ON(r->_state);
+	r->subvol = inum.subvol;
+
+	CLASS(btree_trans, trans)(c);
+	bch2_read(trans, r, r->bio.bi_iter, inum, NULL, NULL,
+		  BCH_READ_retry_if_stale|
+		  BCH_READ_may_promote|
+		  BCH_READ_user_mapped);
 }
 
 

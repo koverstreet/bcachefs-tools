@@ -398,6 +398,8 @@ fn main() -> ExitCode {
         "migrate" => commands::cmd_migrate(args[1..].to_vec()).report(),
         "migrate-superblock" => commands::cmd_migrate_superblock(args[1..].to_vec()).report(),
         "kill_btree_node" => commands::cmd_kill_btree_node(args[1..].to_vec()).report(),
+        "data-read" => commands::data_read::cmd_data_read(args[1..].to_vec()).report(),
+        "unpoison" => commands::unpoison::cmd_unpoison(args[1..].to_vec()).report(),
         "dump" => commands::cmd_dump(args[1..].to_vec()).report(),
         "undump" => commands::cmd_undump(args[1..].to_vec()).report(),
         "recover-super" => commands::cmd_recover_super(args[1..].to_vec()).report(),

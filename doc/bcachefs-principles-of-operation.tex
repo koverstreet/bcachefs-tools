@@ -1132,6 +1132,55 @@ When investigating damage before attempting repair:
   the passphrase must first be removed with \texttt{bcachefs remove-passphrase}.
 \end{description}
 
+\subsubsection{Extent poisoning and data recovery}
+
+When a read detects a checksum mismatch and no valid replica exists to serve
+the read from, the extent is marked \emph{poisoned}. Subsequent reads of a
+poisoned extent return an error immediately without going to disk, preventing
+applications from silently consuming corrupt data.
+
+Poisoning is persistent: it survives remounts and data moves. When a poisoned
+extent is moved (by rebalance, copygc, or tiering), the filesystem must
+compute a new checksum over the data at its new location. Because the data is
+corrupt, the new checksum is valid for the corrupt data. The poison flag is how
+the filesystem remembers that the data was known-bad before the move---without
+it, the new checksum would pass and the corruption would become invisible.
+
+\paragraph{Inspecting poisoned data.}
+The \texttt{bcachefs data-read} command performs an O\_DIRECT read with
+extended error reporting. It reports errors via a bitmask (checksum, IO,
+decompression, erasure coding reconstruction) and detailed kernel error
+messages.
+
+\begin{verbatim}
+# Read with error diagnostics
+bcachefs data-read /path/to/file --offset 0 --len 4096
+
+# Read poisoned data (bypasses poison check)
+bcachefs data-read /path/to/file --no-poison-check
+
+# Save recovered data to a file
+bcachefs data-read /path/to/file --no-poison-check --output recovered.bin
+\end{verbatim}
+
+With \texttt{--no-poison-check}, the command bypasses the poison check and
+returns whatever data is on disk. The errors bitmask will include
+\texttt{checksum} to indicate that the extent was poisoned.
+
+\paragraph{Clearing poison flags.}
+If the data has been verified as acceptable (or restored from backup), the
+\texttt{bcachefs unpoison} command clears the poison flag:
+
+\begin{verbatim}
+bcachefs unpoison /path/to/file --yes-i-understand
+\end{verbatim}
+
+The \texttt{--yes-i-understand} flag is required because unpoisoning removes
+the only indication that the data is bad. After unpoisoning, normal reads
+return the data without errors, even if it is corrupt. This is appropriate
+when the data is usable despite corruption (e.g.\ a media file with minor
+artifacts) or when the file has been restored from backup.
+
 \section{Command reference}
 
 The \texttt{bcachefs} tool provides filesystem management through grouped

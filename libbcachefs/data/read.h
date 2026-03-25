@@ -13,6 +13,17 @@
 void bch2_dev_congested_to_text(struct printbuf *, struct bch_dev *);
 #endif
 
+#define BCH_READ_ERR_checksum		(1U << 0)
+#define BCH_READ_ERR_io			(1U << 1)
+#define BCH_READ_ERR_decompression	(1U << 2)
+#define BCH_READ_ERR_ec_reconstruct	(1U << 3)
+
+struct bch_read_err_report {
+	struct mutex		lock;
+	u32			errors;
+	struct printbuf		msg;
+};
+
 struct bch_read_bio {
 	struct bch_fs		*c;
 	u64			start_time;
@@ -79,6 +90,8 @@ struct bch_read_bio {
 
 	struct bch_inode_opts	opts;
 
+	struct bch_read_err_report *err_report;
+
 	struct work_struct	work;
 
 	struct bio		bio;
@@ -133,23 +146,9 @@ static inline void bch2_read_extent(struct btree_trans *trans,
 	WARN(ret, "unhandled error from __bch2_read_extent(): %s", bch2_err_str(ret));
 }
 
-int __bch2_read(struct btree_trans *, struct bch_read_bio *, struct bvec_iter,
-		subvol_inum,
-		struct bch_io_failures *, struct bkey_buf *, enum bch_read_flags);
-
-static inline void bch2_read(struct bch_fs *c, struct bch_read_bio *rbio,
-			     subvol_inum inum)
-{
-	BUG_ON(rbio->_state);
-
-	rbio->subvol = inum.subvol;
-
-	CLASS(btree_trans, trans)(c);
-	__bch2_read(trans, rbio, rbio->bio.bi_iter, inum, NULL, NULL,
-		    BCH_READ_retry_if_stale|
-		    BCH_READ_may_promote|
-		    BCH_READ_user_mapped);
-}
+int bch2_read(struct btree_trans *, struct bch_read_bio *, struct bvec_iter,
+	      subvol_inum,
+	      struct bch_io_failures *, struct bkey_buf *, enum bch_read_flags);
 
 static inline struct bch_read_bio *rbio_init_fragment(struct bio *bio,
 						      struct bch_read_bio *orig)
@@ -163,6 +162,7 @@ static inline struct bch_read_bio *rbio_init_fragment(struct bio *bio,
 	rbio->split		= true;
 	rbio->parent		= orig;
 	rbio->opts		= orig->opts;
+	rbio->err_report	= orig->err_report;
 #ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
 	rbio->list_idx	= 0;
 #endif
@@ -181,6 +181,7 @@ static inline struct bch_read_bio *rbio_init(struct bio *bio,
 	rbio->_state		= 0;
 	rbio->flags		= 0;
 	rbio->ret		= 0;
+	rbio->err_report	= NULL;
 	rbio->opts		= opts;
 	rbio->bio.bi_end_io	= end_io;
 #ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS

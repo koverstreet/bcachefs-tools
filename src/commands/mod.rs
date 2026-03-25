@@ -17,7 +17,7 @@ pub const COMMAND_GROUPS: &[(&str, &[&str])] = &[
     ("Encryption", &["unlock", "set-passphrase", "remove-passphrase"]),
     ("Migrate", &["migrate", "migrate-superblock"]),
     ("File options", &["set-file-option", "reflink-option-propagate"]),
-    ("Debug", &["dump", "undump", "list", "list_journal", "kill_btree_node"]),
+    ("Debug", &["dump", "undump", "list", "list_journal", "kill_btree_node", "data-read", "unpoison"]),
     ("Miscellaneous", &["completions", "version"]),
 ];
 
@@ -38,6 +38,8 @@ pub mod list_journal;
 pub mod migrate;
 pub mod mount;
 pub mod opts;
+pub mod data_read;
+pub mod unpoison;
 pub mod reconcile;
 pub mod recover_super;
 pub mod recovery_pass;
