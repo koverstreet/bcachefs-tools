@@ -99,8 +99,15 @@ unsafe fn print_one_member(
         let model = c::fd_to_dev_model(sb_handle.bdev().bd_fd);
         if !model.is_null() {
             let model_str = CStr::from_ptr(model).to_string_lossy();
-            write!(out, "{}", model_str).unwrap();
+            write!(out, "{}\t", model_str).unwrap();
             libc::free(model as *mut _);
+        }
+
+        let serial = c::fd_to_dev_serial(sb_handle.bdev().bd_fd);
+        if !serial.is_null() {
+            let serial_str = CStr::from_ptr(serial).to_string_lossy();
+            write!(out, "S/N: {}", serial_str).unwrap();
+            libc::free(serial as *mut _);
         }
     }
     out.newline();

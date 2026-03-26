@@ -81,5 +81,6 @@ bool ask_yn(void);
 u32 crc32c(u32, const void *, size_t);
 
 char *fd_to_dev_model(int);
+char *fd_to_dev_serial(int);
 
 #endif /* _TOOLS_UTIL_H */
