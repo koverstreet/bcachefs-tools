@@ -1044,11 +1044,18 @@ static bool may_reuse_stripe(struct bch_fs *c,
 
 	struct bch_devs_mask devs_may_alloc = new->devs;
 	unsigned nr_data = old->nr_blocks - old->nr_redundant;
+	unsigned live_data = 0;
 
 	for (unsigned i = 0; i < nr_data; i++)
-		if (!bch2_dev_bad_or_evacuating(c, old->ptrs[i].dev) &&
-		    stripe_blockcount_get(old, i))
-			__clear_bit(old->ptrs[i].dev, devs_may_alloc.d);
+		if (stripe_blockcount_get(old, i)) {
+			if (!bch2_dev_bad_or_evacuating(c, old->ptrs[i].dev))
+				__clear_bit(old->ptrs[i].dev, devs_may_alloc.d);
+			live_data++;
+		}
+
+	/* live data blocks (including moving) must fit with room for at least one new block */
+	if (live_data + 1 > new->nr_data)
+		return false;
 
 	return dev_mask_nr(&devs_may_alloc) > new->nr_parity;
 }
@@ -1114,9 +1121,10 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s)
 	memset(s->blocks_gotten, 0, sizeof(s->blocks_gotten));
 	memset(s->blocks_allocated, 0, sizeof(s->blocks_allocated));
 
-	unsigned nr_data = old_v->nr_blocks - old_v->nr_redundant;
+	unsigned old_nr_data = old_v->nr_blocks - old_v->nr_redundant;
+	unsigned new_nr_data = new_v->nr_blocks - new_v->nr_redundant;
 
-	for (unsigned i = 0; i < nr_data; i++) {
+	for (unsigned i = 0; i < old_nr_data; i++) {
 		if (stripe_blockcount_get(old_v, i)) {
 			if (!bch2_dev_bad_or_evacuating(c, old_v->ptrs[i].dev))
 				__set_bit(s->old_blocks_nr, s->blocks_gotten);
@@ -1127,6 +1135,7 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s)
 			new_v->ptrs[s->old_blocks_nr] = old_v->ptrs[i];
 
 			s->old_block_map[s->old_blocks_nr++] = i;
+			BUG_ON(s->old_blocks_nr + 1 >= new_nr_data);
 		}
 	}
 
