@@ -257,7 +257,7 @@ static int __bch2_discard_one_bucket(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 
 	if (bch2_bucket_is_open_safe(c, pos.inode, pos.offset)) {
-		s->open++;
+		s->open += ca->mi.bucket_size;
 		return 0;
 	}
 
@@ -271,18 +271,18 @@ static int __bch2_discard_one_bucket(struct btree_trans *trans,
 	struct bkey_i_alloc_v4 *a = errptr_try(bch2_alloc_to_v4_mut(trans, k));
 
 	if (a->v.journal_seq_empty > c->journal.flushed_seq_ondisk) {
-		s->need_journal_commit++;
+		s->need_journal_commit += ca->mi.bucket_size;
 		return 0;
 	}
 
 	if (a->v.data_type != BCH_DATA_need_discard) {
 		/* expected race */
-		s->bad_data_type++;
+		s->bad_data_type += ca->mi.bucket_size;
 		return 0;
 	}
 
 	if (!bkey_eq(*discard_pos_done, pos)) {
-		s->discarded++;
+		s->discarded += ca->mi.bucket_size;
 		*discard_pos_done = pos;
 
 		if (bch2_discard_opt_enabled(c, ca) && !c->opts.nochanges) {
@@ -315,7 +315,7 @@ static int __bch2_discard_one_bucket(struct btree_trans *trans,
 	else
 		event_inc_trace(c, bucket_discard_fast, buf,
 			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(orig_k.k)));
-	s->committed++;
+	s->committed += ca->mi.bucket_size;
 
 	return 0;
 }
@@ -401,7 +401,7 @@ static void __bch2_dev_do_discards(struct bch_dev *ca)
 		while ((bucket = discard_fifo_get(ca, &cursor))) {
 			struct bpos discard_pos_done = POS_MAX;
 
-			s->seen++;
+			s->seen += ca->mi.bucket_size;
 
 			ret = lockrestart_do(trans,
 				bch2_discard_one_bucket(trans, POS(ca->dev_idx, bucket),
@@ -569,7 +569,7 @@ void bch2_do_discards_fast_work(struct work_struct *work)
 			break;
 
 
-		s.seen++;
+		s.seen += ca->mi.bucket_size;
 
 		ret = lockrestart_do(trans,
 			bch2_discard_one_bucket(trans, POS(ca->dev_idx, bucket),
