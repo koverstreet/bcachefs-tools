@@ -14,7 +14,7 @@ fn opt_flags() -> u32 {
     c::opt_flags::OPT_FS as u32 | c::opt_flags::OPT_DEVICE as u32
 }
 
-pub fn set_option_cmd() -> Command {
+fn set_option_cmd() -> Command {
     Command::new("set-fs-option")
         .about("Set a filesystem option")
         .long_about("\
@@ -35,7 +35,7 @@ available options.")
             .help("Device path(s)"))
 }
 
-pub fn cmd_set_option(argv: Vec<String>) -> Result<()> {
+fn cmd_set_option(argv: Vec<String>) -> Result<()> {
     let matches = set_option_cmd().get_matches_from(argv);
 
     let devices: Vec<&String> = matches.get_many::<String>("devices").unwrap().collect();
@@ -188,3 +188,5 @@ fn name_to_dev_idx(c: *mut c::bch_fs, name: &str) -> Option<usize> {
     }
     None
 }
+
+pub const CMD: super::CmdDef = raw_cmd!("set-fs-option", "Set filesystem options", cmd_set_option);

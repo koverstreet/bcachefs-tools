@@ -597,7 +597,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
 
 // ---- Public command entry points ----
 
-pub fn cmd_migrate(argv: Vec<String>) -> Result<()> {
+fn cmd_migrate(argv: Vec<String>) -> Result<()> {
     let opt_flags = c::opt_flags::OPT_FORMAT as u32;
 
     let mut fs_path: Option<String> = None;
@@ -727,7 +727,9 @@ pub struct MigrateSuperblockCli {
     offset: u64,
 }
 
-pub fn cmd_migrate_superblock(argv: Vec<String>) -> Result<()> {
-    let cli = MigrateSuperblockCli::parse_from(argv);
+fn cmd_migrate_superblock(cli: MigrateSuperblockCli) -> Result<()> {
     migrate_superblock(&cli.device, cli.offset)
 }
+
+pub const CMD_MIGRATE: super::CmdDef = raw_cmd!("migrate", "Migrate existing filesystem to bcachefs", cmd_migrate);
+pub const CMD_MIGRATE_SUPERBLOCK: super::CmdDef = typed_cmd!("migrate-superblock", "Move superblock to standard location", MigrateSuperblockCli, cmd_migrate_superblock);

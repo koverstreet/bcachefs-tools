@@ -52,8 +52,7 @@ pub struct Cli {
     mountpoints: Vec<String>,
 }
 
-pub fn fs_usage(argv: Vec<String>) -> Result<()> {
-    let cli = Cli::try_parse_from(argv)?;
+fn fs_usage(cli: Cli) -> Result<()> {
 
     let fields: Vec<Field> = if cli.all {
         vec![Field::Replicas, Field::Btree, Field::Compression,
@@ -611,3 +610,5 @@ fn dev_leaving_sectors(entries: &[AccountingEntry], dev_idx: u32) -> u64 {
         })
         .unwrap_or(0)
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("usage", "Show filesystem disk usage", Cli, fs_usage);

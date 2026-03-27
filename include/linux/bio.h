@@ -63,7 +63,7 @@ static inline bool bio_no_advance_iter(struct bio *bio)
 {
 	return bio_op(bio) == REQ_OP_DISCARD ||
 	       bio_op(bio) == REQ_OP_SECURE_ERASE ||
-	       bio_op(bio) == REQ_OP_WRITE_SAME;
+	       bio_op(bio) == REQ_OP_WRITE_ZEROES;
 }
 
 static inline bool bio_is_rw(struct bio *bio)
@@ -147,7 +147,7 @@ static inline unsigned bio_segments(struct bio *bio)
 	if (bio_op(bio) == REQ_OP_SECURE_ERASE)
 		return 1;
 
-	if (bio_op(bio) == REQ_OP_WRITE_SAME)
+	if (bio_op(bio) == REQ_OP_WRITE_ZEROES)
 		return 1;
 
 	bio_for_each_segment(bv, bio, iter)

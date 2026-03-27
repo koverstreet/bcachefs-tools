@@ -806,29 +806,28 @@ impl Filesystem for BcachefsFs {
     }
 }
 
-pub fn cmd_fusemount(args: Vec<String>) -> anyhow::Result<()> {
-    use clap::Parser;
+use clap::Parser;
+
+#[derive(Parser, Debug)]
+#[command(name = "fusemount")]
+pub struct Cli {
+    /// Mount options (-o key=value,...)
+    #[arg(short = 'o')]
+    pub options: Option<String>,
+
+    /// Run in foreground
+    #[arg(short = 'f')]
+    pub foreground: bool,
+
+    /// Device(s) to mount (dev1:dev2:...)
+    pub device: String,
+
+    /// Mountpoint
+    pub mountpoint: String,
+}
+
+pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     use crate::device_scan::scan_sbs;
-
-    #[derive(Parser, Debug)]
-    #[command(name = "fusemount")]
-    struct Cli {
-        /// Mount options (-o key=value,...)
-        #[arg(short = 'o')]
-        options: Option<String>,
-
-        /// Run in foreground
-        #[arg(short = 'f')]
-        foreground: bool,
-
-        /// Device(s) to mount (dev1:dev2:...)
-        device: String,
-
-        /// Mountpoint
-        mountpoint: String,
-    }
-
-    let cli = Cli::parse_from(args);
 
     let mut bch_opts = c::bch_opts::default();
     opt_set!(bch_opts, nostart, 1);
@@ -951,3 +950,5 @@ pub fn cmd_fusemount(args: Vec<String>) -> anyhow::Result<()> {
 
     Ok(())
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("fusemount", "FUSE mount", Cli, cmd_fusemount);

@@ -251,8 +251,7 @@ fn run_interactive(handle: BcachefsHandle, human_readable: bool) -> Result<()> {
     })
 }
 
-pub fn top(argv: Vec<String>) -> Result<()> {
-    let cli = Cli::parse_from(argv);
+fn top(cli: Cli) -> Result<()> {
 
     let fs_arg = cli.filesystem.as_deref().unwrap_or(".");
     let handle = BcachefsHandle::open(fs_arg)
@@ -260,3 +259,5 @@ pub fn top(argv: Vec<String>) -> Result<()> {
 
     run_interactive(handle, cli.human_readable)
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("top", "Show live performance counters", Cli, top);

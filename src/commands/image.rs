@@ -774,7 +774,7 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 ");
 }
 
-pub fn cmd_image_create(argv: Vec<String>) -> Result<()> {
+fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     let opt_flags = c::opt_flags::OPT_FORMAT as u32
         | c::opt_flags::OPT_FS as u32
         | c::opt_flags::OPT_DEVICE as u32;
@@ -1064,8 +1064,7 @@ pub struct ImageUpdateCli {
     image: String,
 }
 
-pub fn cmd_image_update(argv: Vec<String>) -> Result<()> {
-    let cli = ImageUpdateCli::parse_from(argv);
+fn cmd_image_update(cli: ImageUpdateCli) -> Result<()> {
 
     let verbosity: u32 = if cli.quiet {
         0
@@ -1075,3 +1074,10 @@ pub fn cmd_image_update(argv: Vec<String>) -> Result<()> {
 
     image_update_inner(&cli.source, &cli.image, cli.keep_alloc, verbosity)
 }
+
+pub const CMD_CREATE: super::CmdDef = raw_cmd!("create", "Create a filesystem image", cmd_image_create);
+pub const CMD_UPDATE: super::CmdDef = typed_cmd!("update", "Update a filesystem image", ImageUpdateCli, cmd_image_update);
+pub const CMD: super::CmdDef = super::CmdDef {
+    name: "image", about: "Filesystem image commands", aliases: &[],
+    kind: super::CmdKind::Group { children: &[&CMD_CREATE, &CMD_UPDATE] },
+};

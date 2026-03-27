@@ -16,7 +16,7 @@ fn match_counter(name: &str) -> Result<usize> {
 
 #[derive(Parser, Debug)]
 #[command(about = "Reset all counters on an unmounted device")]
-struct Cli {
+pub struct Cli {
     /// Reset specific counters (comma-separated), not all
     #[arg(short, long, visible_alias = "counter")]
     counters: Option<String>,
@@ -25,8 +25,7 @@ struct Cli {
     device: String,
 }
 
-pub fn cmd_reset_counters(argv: Vec<String>) -> Result<()> {
-    let cli = Cli::parse_from(argv);
+fn cmd_reset_counters(cli: Cli) -> Result<()> {
 
     let to_reset: Vec<usize> = if let Some(ref names) = cli.counters {
         names.split(',')
@@ -70,3 +69,5 @@ pub fn cmd_reset_counters(argv: Vec<String>) -> Result<()> {
 
     Ok(())
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("reset-counters", "Reset filesystem counters", Cli, cmd_reset_counters);

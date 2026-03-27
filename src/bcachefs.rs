@@ -10,8 +10,7 @@ mod util;
 mod wrappers;
 mod http;
 
-use std::process::{ExitCode, Termination};
-
+use std::process::ExitCode;
 use bch_bindgen::c;
 
 #[derive(Debug)]
@@ -64,50 +63,29 @@ fn check_kernel_warnings() {
 }
 
 /// Print main bcachefs usage, with commands grouped by category.
-/// Descriptions are pulled from the clap command tree (build_cli).
 fn bcachefs_usage() {
-    let cmd = commands::build_cli();
+    use commands::{CmdKind, COMMAND_GROUPS};
 
     println!("bcachefs - tool for managing bcachefs filesystems");
     println!("usage: bcachefs <command> [<args>]\n");
 
-    for (heading, names) in commands::COMMAND_GROUPS {
-        println!("{heading}:");
-        for name in *names {
-            let Some(sub) = cmd.find_subcommand(name) else { continue };
-            let children: Vec<_> = sub.get_subcommands()
-                .filter(|c| c.get_name() != "help")
-                .collect();
-            if !children.is_empty() {
-                for child in children {
-                    let about = child.get_about().map(|s| s.to_string()).unwrap_or_default();
-                    let full = format!("{name} {}", child.get_name());
-                    println!("  {full:<26}{about}");
+    for group in COMMAND_GROUPS {
+        println!("{}:", group.heading);
+        for cmd in group.commands {
+            match &cmd.kind {
+                CmdKind::Group { children } => {
+                    for child in *children {
+                        let full = format!("{} {}", cmd.name, child.name);
+                        println!("  {full:<26}{}", child.about);
+                    }
                 }
-            } else {
-                let about = sub.get_about().map(|s| s.to_string()).unwrap_or_default();
-                println!("  {:<26}{about}", name);
+                _ => println!("  {:<26}{}", cmd.name, cmd.about),
             }
         }
         println!();
     }
 }
 
-/// Print usage for a subcommand group (device, fs, data, reconcile, etc.)
-/// by pulling subcommand names and descriptions from the clap tree.
-fn group_usage(group: &str) {
-    let cmd = commands::build_cli();
-    let Some(sub) = cmd.find_subcommand(group) else { return };
-    let about = sub.get_about().map(|s| s.to_string()).unwrap_or_default();
-    println!("bcachefs {group} - {about}");
-    println!("Usage: bcachefs {group} <command> [OPTION]...\n");
-    println!("Commands:");
-    for child in sub.get_subcommands() {
-        if child.get_name() == "help" { continue }
-        let child_about = child.get_about().map(|s| s.to_string()).unwrap_or_default();
-        println!("  {:<26}{child_about}", child.get_name());
-    }
-}
 
 fn escape_latex(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
@@ -183,32 +161,32 @@ fn generate_cli_doc() -> ExitCode {
     let cmd = commands::build_cli();
     let mut out = String::new();
 
-    for (heading, names) in commands::COMMAND_GROUPS {
-        writeln!(out, "\\subsection{{{heading}}}").unwrap();
+    for group in commands::COMMAND_GROUPS {
+        writeln!(out, "\\subsection{{{}}}", group.heading).unwrap();
 
-        // Emit group-level long_about as intro text before the command list
-        for name in *names {
-            let Some(sub) = cmd.find_subcommand(name) else { continue };
-            if sub.get_subcommands().count() > 0 {
-                if let Some(long_about) = sub.get_long_about() {
-                    writeln!(out).unwrap();
-                    write!(out, "{}", about_to_latex(&long_about.to_string())).unwrap();
+        // Emit group-level long_about as intro text
+        for def in group.commands {
+            if let Some(sub) = cmd.find_subcommand(def.name) {
+                if sub.get_subcommands().count() > 0 {
+                    if let Some(long_about) = sub.get_long_about() {
+                        writeln!(out).unwrap();
+                        write!(out, "{}", about_to_latex(&long_about.to_string())).unwrap();
+                    }
                 }
             }
         }
 
         writeln!(out, "\\begin{{description}}").unwrap();
 
-        for name in *names {
-            let Some(sub) = cmd.find_subcommand(name) else { continue };
+        for def in group.commands {
+            let Some(sub) = cmd.find_subcommand(def.name) else { continue };
             let children: Vec<_> = sub.get_subcommands()
                 .filter(|c| c.get_name() != "help")
                 .collect();
 
             if !children.is_empty() {
-                // Group command (device, fs, image, etc.) — list children
                 for child in children {
-                    let full = format!("bcachefs {name} {}", child.get_name());
+                    let full = format!("bcachefs {} {}", def.name, child.get_name());
                     write!(out, "\\item[{{\\tt {}}}]", escape_latex(&full)).unwrap();
 
                     let aliases: Vec<_> = child.get_visible_aliases().collect();
@@ -234,13 +212,11 @@ fn generate_cli_doc() -> ExitCode {
                     }
                 }
             } else {
-                // Leaf command
-                let full = format!("bcachefs {name}");
+                let full = format!("bcachefs {}", def.name);
                 write!(out, "\\item[{{\\tt {}}}]", escape_latex(&full)).unwrap();
 
-                let aliases: Vec<_> = sub.get_visible_aliases().collect();
-                if !aliases.is_empty() {
-                    let alias_str = aliases.into_iter()
+                if !def.aliases.is_empty() {
+                    let alias_str = def.aliases.iter()
                         .map(|a| format!("{{\\tt {}}}", escape_latex(a)))
                         .collect::<Vec<_>>()
                         .join(", ");
@@ -293,8 +269,9 @@ fn main() -> ExitCode {
 
     let args: Vec<String> = std::env::args().collect();
 
+    // Handle symlink invocations (mkfs.bcachefs, fsck.bcachefs, mount.bcachefs, etc.)
     let symlink_cmd: Option<&str> = if args[0].contains("mkfs") {
-        Some("mkfs")
+        Some("format")
     } else if args[0].contains("fsck") {
         Some("fsck")
     } else if args[0].contains("mount.fuse") {
@@ -305,117 +282,45 @@ fn main() -> ExitCode {
         None
     };
 
-    if symlink_cmd.is_none() && args.len() < 2 {
-        println!("missing command");
-        bcachefs_usage();
-        return ExitCode::from(1);
+    // Handle top-level help and missing command
+    if symlink_cmd.is_none() {
+        match args.get(1).map(|s| s.as_str()) {
+            None => {
+                println!("missing command");
+                bcachefs_usage();
+                return ExitCode::from(1);
+            }
+            Some("--help" | "-h" | "help") => {
+                bcachefs_usage();
+                return ExitCode::SUCCESS;
+            }
+            Some("_doc_gen") => return generate_cli_doc(),
+            _ => {}
+        }
     }
 
     unsafe { c::raid_init() };
 
-    let cmd = match symlink_cmd {
-        Some(s) => s,
-        None => args[1].as_str(),
+    let (cmd_name, argv) = if let Some(cmd) = symlink_cmd {
+        let mut v = vec![cmd.to_string()];
+        v.extend_from_slice(&args[1..]);
+        (cmd, v)
+    } else {
+        (args[1].as_str(), args[1..].to_vec())
     };
 
-    // fuse will call this after daemonizing, we can't create threads before - note that mount
-    // may invoke fusemount, via -t bcachefs.fuse
-    if cmd != "mount" && cmd != "fusemount" {
+    // fuse will call this after daemonizing, we can't create threads before
+    // note that mount may invoke fusemount, via -t bcachefs.fuse
+    if !commands::defers_shrinkers(cmd_name) {
         unsafe { c::linux_shrinkers_init() };
     }
 
     check_kernel_warnings();
 
-    match cmd {
-        "--help" | "help" => {
-            bcachefs_usage();
-            ExitCode::SUCCESS
-        }
-        "version" => {
-            let vh = include_str!("../version.h");
-            println!("{}", vh.split('"').nth(1).unwrap_or("unknown"));
-            let config = read_kernel_config();
-            let rust_status = match config.as_deref().map(|c| kernel_config_has(c, "CONFIG_RUST")) {
-                Some(true)  => "CONFIG_RUST=y",
-                Some(false) => "CONFIG_RUST is not enabled",
-                None        => "unable to read kernel config",
-            };
-            println!("kernel: {rust_status}");
-            ExitCode::SUCCESS
-        }
-        "_doc_gen" => generate_cli_doc(),
-        "completions" => {
-            commands::completions(args[1..].to_vec());
-            ExitCode::SUCCESS
-        }
-        "list" => commands::list(args[1..].to_vec()).report(),
-        "list_journal" => commands::cmd_list_journal(args[1..].to_vec()).report(),
-        "mount" => commands::mount(args, symlink_cmd),
-        "scrub" => commands::scrub(args[1..].to_vec()).report(),
-        "subvolume" => commands::subvolume(args[1..].to_vec()).report(),
-        "data" => match args.get(2).map(|s| s.as_str()) {
-            Some("scrub") => commands::scrub(args[2..].to_vec()).report(),
-            _ => { group_usage("data"); ExitCode::from(1) }
-        },
-        "device" => match args.get(2).map(|s| s.as_str()) {
-            Some("add") => commands::cmd_device_add(args[2..].to_vec()).report(),
-            Some("online") => commands::cmd_device_online(args[2..].to_vec()).report(),
-            Some("offline") => commands::cmd_device_offline(args[2..].to_vec()).report(),
-            Some("remove") => commands::cmd_device_remove(args[2..].to_vec()).report(),
-            Some("evacuate") => commands::cmd_device_evacuate(args[2..].to_vec()).report(),
-            Some("set-state") => commands::cmd_device_set_state(args[2..].to_vec()).report(),
-            Some("resize") => commands::cmd_device_resize(args[2..].to_vec()).report(),
-            Some("resize-journal") => commands::cmd_device_resize_journal(args[2..].to_vec()).report(),
-            _ => { group_usage("device"); ExitCode::SUCCESS }
-        },
-        "format" | "mkfs" => {
-            let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
-            commands::cmd_format(argv).report()
-        }
-        "fsck" => {
-            let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
-            commands::cmd_fsck(argv).report()
-        }
-        "image" => match args.get(2).map(|s| s.as_str()) {
-            Some("create") => commands::cmd_image_create(args[2..].to_vec()).report(),
-            Some("update") => commands::cmd_image_update(args[2..].to_vec()).report(),
-            _ => { group_usage("image"); ExitCode::from(1) }
-        },
-        "fs" => match args.get(2).map(|s| s.as_str()) {
-            Some("timestats") => commands::timestats(args[2..].to_vec()).report(),
-            Some("top") => commands::top(args[2..].to_vec()).report(),
-            Some("usage") => commands::fs_usage::fs_usage(args[2..].to_vec()).report(),
-            _ => { group_usage("fs"); ExitCode::from(1) }
-        },
-        "remove-passphrase" => commands::cmd_remove_passphrase(args[1..].to_vec()).report(),
-        "reset-counters" => commands::cmd_reset_counters(args[1..].to_vec()).report(),
-        "recovery-pass" => commands::cmd_recovery_pass(args[1..].to_vec()).report(),
-        "reconcile" => match args.get(2).map(|s| s.as_str()) {
-            Some("status") => commands::cmd_reconcile_status(args[2..].to_vec()).report(),
-            Some("wait") => commands::cmd_reconcile_wait(args[2..].to_vec()).report(),
-            _ => { group_usage("reconcile"); ExitCode::from(1) }
-        },
-        "migrate" => commands::cmd_migrate(args[1..].to_vec()).report(),
-        "migrate-superblock" => commands::cmd_migrate_superblock(args[1..].to_vec()).report(),
-        "kill_btree_node" => commands::cmd_kill_btree_node(args[1..].to_vec()).report(),
-        "data-read" => commands::data_read::cmd_data_read(args[1..].to_vec()).report(),
-        "unpoison" => commands::unpoison::cmd_unpoison(args[1..].to_vec()).report(),
-        "dump" => commands::cmd_dump(args[1..].to_vec()).report(),
-        "undump" => commands::cmd_undump(args[1..].to_vec()).report(),
-        "recover-super" => commands::cmd_recover_super(args[1..].to_vec()).report(),
-        "show-super" => commands::super_cmd::cmd_show_super(args[1..].to_vec()).report(),
-        "strip-alloc" => commands::cmd_strip_alloc(args[1..].to_vec()).report(),
-        "set-file-option" => commands::cmd_setattr(args[1..].to_vec()).report(),
-        "set-fs-option" => commands::cmd_set_option(args[1..].to_vec()).report(),
-        "set-passphrase" => commands::cmd_set_passphrase(args[1..].to_vec()).report(),
-        "reflink-option-propagate" => commands::cmd_reflink_option_propagate(args[1..].to_vec()).report(),
-        "unlock" => commands::cmd_unlock(args[1..].to_vec()).report(),
-        "fusemount" => {
-            let argv = if symlink_cmd.is_some() { args.clone() } else { args[1..].to_vec() };
-            commands::fusemount::cmd_fusemount(argv).report()
-        }
-        _ => {
-            println!("Unknown command {cmd}");
+    match commands::dispatch(cmd_name, argv) {
+        Some(code) => code,
+        None => {
+            println!("Unknown command {cmd_name}");
             bcachefs_usage();
             ExitCode::from(1)
         }

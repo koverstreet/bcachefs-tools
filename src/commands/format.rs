@@ -384,7 +384,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     })
 }
 
-pub fn cmd_format(argv: Vec<String>) -> Result<()> {
+fn cmd_format(argv: Vec<String>) -> Result<()> {
     let mut cfg = parse_format_args(argv)?;
 
     // Handle encryption
@@ -551,3 +551,5 @@ pub fn cmd_format(argv: Vec<String>) -> Result<()> {
 
     Ok(())
 }
+
+pub const CMD: super::CmdDef = raw_cmd!("format", "Format a new filesystem", aliases: ["mkfs"], cmd_format);

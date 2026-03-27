@@ -754,8 +754,7 @@ fn print_snapshot_json(dir: &Path) -> Result<()> {
 
 // ---- Command handlers ----
 
-pub fn subvolume(argv: Vec<String>) -> Result<()> {
-    let cli = Cli::parse_from(argv);
+fn subvolume(cli: Cli) -> Result<()> {
 
     match cli.subcommands {
         Subcommands::Create { targets }                                         => cmd_create(targets),
@@ -844,3 +843,5 @@ fn cmd_list_snapshots(flat: bool, json: bool, readonly: bool,
     }
     Ok(())
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("subvolume", "Manage subvolumes and snapshots", aliases: ["subvol"], Cli, subvolume);

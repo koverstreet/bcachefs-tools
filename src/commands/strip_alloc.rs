@@ -2,40 +2,19 @@ use std::path::PathBuf;
 use bch_bindgen::c;
 use bch_bindgen::opt_set;
 use anyhow::bail;
+use clap::Parser;
 use crate::wrappers::bch_err_str;
 
-fn strip_alloc_usage() {
-    println!("bcachefs strip-alloc - remove alloc info and journal from a filesystem");
-    println!("Usage: bcachefs strip-alloc [OPTION]... <devices>\n");
-    println!("Removes metadata unneeded for running in read-only mode");
-    println!("Alloc info and journal will be recreated on first RW mount\n");
-    println!("Options:");
-    println!("  -h, --help              Display this help and exit\n");
-    println!("Report bugs to <linux-bcachefs@vger.kernel.org>");
+#[derive(Parser, Debug)]
+#[command(about = "Strip alloc info for read-only use")]
+pub struct Cli {
+    /// Device(s) to strip
+    #[arg(required = true)]
+    devices: Vec<PathBuf>,
 }
 
-pub fn cmd_strip_alloc(argv: Vec<String>) -> anyhow::Result<()> {
-    let mut devs: Vec<PathBuf> = Vec::new();
-
-    for arg in argv.iter().skip(1) { // skip "strip-alloc"
-        match arg.as_str() {
-            "-h" | "--help" => {
-                strip_alloc_usage();
-                return Ok(());
-            }
-            s if s.starts_with('-') => {
-                bail!("Unknown option: {}", s);
-            }
-            _ => {
-                devs.push(PathBuf::from(arg));
-            }
-        }
-    }
-
-    if devs.is_empty() {
-        strip_alloc_usage();
-        bail!("Please supply device(s)");
-    }
+fn cmd_strip_alloc(cli: Cli) -> anyhow::Result<()> {
+    let devs = cli.devices;
 
     loop {
         let mut opts: c::bch_opts = Default::default();
@@ -70,3 +49,5 @@ pub fn cmd_strip_alloc(argv: Vec<String>) -> anyhow::Result<()> {
         return Ok(());
     }
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("strip-alloc", "Strip alloc info for read-only use", Cli, cmd_strip_alloc);

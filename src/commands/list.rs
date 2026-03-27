@@ -216,11 +216,12 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     }
 }
 
-pub fn list(argv: Vec<String>) -> Result<()> {
-    let opt = Cli::parse_from(argv);
+fn list(opt: Cli) -> Result<()> {
 
     // TODO: centralize this on the top level CLI
     logging::setup(opt.verbose, opt.colorize);
 
     cmd_list_inner(&opt)
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("list", "List filesystem metadata", Cli, list);

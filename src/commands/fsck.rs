@@ -223,8 +223,7 @@ fn loopdev_free(path: &str) {
         .status();
 }
 
-pub fn cmd_fsck(argv: Vec<String>) -> Result<()> {
-    let cli = FsckCli::parse_from(argv);
+fn cmd_fsck(cli: FsckCli) -> Result<()> {
 
     if cli.auto_repair {
         // Automatic run, called by the system — we don't need checks here
@@ -436,3 +435,5 @@ fn run_userspace_fsck(devices: &[String], opts_str: &str) -> Result<()> {
 
     process::exit(ret)
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("fsck", "Check filesystem consistency", FsckCli, cmd_fsck);

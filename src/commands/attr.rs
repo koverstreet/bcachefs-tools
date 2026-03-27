@@ -108,7 +108,7 @@ option, or --remove-all to clear all per-file options.")
             .required(true))
 }
 
-pub fn cmd_setattr(argv: Vec<String>) -> Result<()> {
+fn cmd_setattr(argv: Vec<String>) -> Result<()> {
     let matches = setattr_cmd().get_matches_from(argv);
 
     let remove_all = matches.get_flag("remove-all");
@@ -169,7 +169,7 @@ fn do_reflink_propagate(path: &str, set_may_update: bool) -> Result<()> {
     Ok(())
 }
 
-pub fn cmd_reflink_option_propagate(argv: Vec<String>) -> Result<()> {
+fn cmd_reflink_option_propagate(argv: Vec<String>) -> Result<()> {
     let matches = reflink_option_propagate_cmd().get_matches_from(argv);
 
     let set_may_update = matches.get_flag("set-may-update");
@@ -189,3 +189,6 @@ pub fn cmd_reflink_option_propagate(argv: Vec<String>) -> Result<()> {
         Ok(())
     }
 }
+
+pub const CMD_SETATTR: super::CmdDef = raw_cmd!("set-file-option", "Set file-level options", cmd_setattr);
+pub const CMD_REFLINK_PROPAGATE: super::CmdDef = raw_cmd!("reflink-option-propagate", "Propagate options to reflinked files", cmd_reflink_option_propagate);

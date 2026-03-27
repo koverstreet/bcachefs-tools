@@ -108,8 +108,7 @@ pub struct Cli {
     filesystem: String,
 }
 
-pub fn scrub(argv: Vec<String>) -> Result<()> {
-    let cli = Cli::parse_from(argv);
+fn scrub(cli: Cli) -> Result<()> {
 
     unsafe { libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t); }
 
@@ -254,3 +253,5 @@ pub fn scrub(argv: Vec<String>) -> Result<()> {
 
     Ok(())
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("scrub", "Verify data checksums", Cli, scrub);

@@ -75,8 +75,7 @@ fn parse_kill_node(s: &str) -> Result<KillNode> {
     Ok(KillNode { btree, level, idx })
 }
 
-pub fn cmd_kill_btree_node(argv: Vec<String>) -> Result<()> {
-    let cli = KillBtreeNodeCli::parse_from(argv);
+fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
 
     if cli.nodes.is_empty() {
         bail!("no nodes specified (use -n btree:level:idx)");
@@ -165,3 +164,5 @@ pub fn cmd_kill_btree_node(argv: Vec<String>) -> Result<()> {
     unsafe { libc::free(zeroes) };
     Ok(())
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("kill_btree_node", "Remove a btree node", KillBtreeNodeCli, cmd_kill_btree_node);

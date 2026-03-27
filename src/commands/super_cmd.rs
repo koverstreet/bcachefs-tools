@@ -43,8 +43,7 @@ pub struct ShowSuperCli {
     device: String,
 }
 
-pub fn cmd_show_super(argv: Vec<String>) -> Result<()> {
-    let cli = ShowSuperCli::parse_from(argv);
+fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
     let ext_bit = 1u32 << c::bch_sb_field_type::BCH_SB_FIELD_ext as u32;
     let mut fields = ext_bit;
@@ -111,3 +110,5 @@ pub fn cmd_show_super(argv: Vec<String>) -> Result<()> {
 
     Ok(())
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("show-super", "Print superblock information", ShowSuperCli, cmd_show_super);

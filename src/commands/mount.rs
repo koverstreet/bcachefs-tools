@@ -239,30 +239,19 @@ fn check_bcachefs_module() -> bool {
     }
 }
 
-pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::ExitCode {
+fn mount(cli: Cli) -> std::process::ExitCode {
     let module_loaded = check_bcachefs_module();
 
-    // If the bcachefs tool is being called as "bcachefs mount dev ..." (as opposed to via a
-    // symlink like "/usr/sbin/mount.bcachefs dev ...", then we need to pop the 0th argument
-    // ("bcachefs") since the CLI parser here expects the device at position 1.
-    if symlink_cmd.is_none() {
-        argv.remove(0);
-    }
-
-    let cli = Cli::parse_from(argv.clone());
-
     if cli.fs_type == "bcachefs.fuse" {
-        // Build argv for fusemount from mount's parsed args
-        let mut fuse_argv = vec!["fusemount".to_string()];
-        if !cli.options.is_empty() {
-            fuse_argv.push("-o".to_string());
-            fuse_argv.push(cli.options.clone());
-        }
-        fuse_argv.push(cli.dev.clone());
-        if let Some(mp) = cli.mountpoint.as_ref() {
-            fuse_argv.push(mp.to_string_lossy().into_owned());
-        }
-        return match super::fusemount::cmd_fusemount(fuse_argv) {
+        let fuse_cli = super::fusemount::Cli {
+            options: if cli.options.is_empty() { None } else { Some(cli.options.clone()) },
+            foreground: false,
+            device: cli.dev.clone(),
+            mountpoint: cli.mountpoint.as_ref()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default(),
+        };
+        return match super::fusemount::cmd_fusemount(fuse_cli) {
             Ok(()) => std::process::ExitCode::SUCCESS,
             Err(e) => {
                 error!("FUSE mount failed: {e}");
@@ -285,3 +274,14 @@ pub fn mount(mut argv: Vec<String>, symlink_cmd: Option<&str>) -> std::process::
         }
     }
 }
+
+pub static CMD: super::CmdDef = {
+    fn __cmd() -> clap::Command { <Cli as clap::CommandFactory>::command() }
+    fn __run(argv: Vec<String>) -> std::process::ExitCode {
+        mount(Cli::parse_from(argv))
+    }
+    super::CmdDef {
+        name: "mount", about: "Mount a filesystem", aliases: &[],
+        kind: super::CmdKind::Typed { cmd: __cmd, run: __run },
+    }
+};

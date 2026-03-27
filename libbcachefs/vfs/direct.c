@@ -128,8 +128,6 @@ static int __bch2_direct_IO_read(struct kiocb *req, struct iov_iter *iter,
 	 */
 	dio->should_dirty = user_backed_iter(iter);
 
-	CLASS(btree_trans, trans)(c);
-
 	goto start;
 	while (iter->count) {
 		split = true;
@@ -171,6 +169,8 @@ start:
 		BUG_ON(rbio->_state);
 		rbio->err_report = err_report;
 		rbio->subvol = inode_inum(inode).subvol;
+
+		CLASS(btree_trans, trans)(c);
 		bch2_read(trans, rbio, rbio->bio.bi_iter, inode_inum(inode),
 			  NULL, NULL,
 			  BCH_READ_retry_if_stale|

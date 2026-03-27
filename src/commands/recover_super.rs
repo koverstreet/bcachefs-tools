@@ -249,8 +249,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     Ok(sb_buf)
 }
 
-pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
-    let cli = RecoverSuperCli::parse_from(argv);
+fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
 
     if cli.src_device.is_some() && cli.dev_idx.is_none() {
         return Err(anyhow!("--src_device requires --dev_idx"));
@@ -325,3 +324,5 @@ pub fn cmd_recover_super(argv: Vec<String>) -> Result<()> {
 
     Ok(())
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("recover-super", "Recover damaged superblock", RecoverSuperCli, cmd_recover_super);

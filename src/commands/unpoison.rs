@@ -31,7 +31,7 @@ struct BchIoctlUnpoison {
     pad:        u32,
 }
 
-#[derive(Parser)]
+#[derive(Parser, Debug)]
 #[command(name = "unpoison")]
 /// Clear poison flags on file extents
 ///
@@ -61,8 +61,7 @@ pub struct Cli {
     yes_i_understand: bool,
 }
 
-pub fn cmd_unpoison(argv: Vec<String>) -> anyhow::Result<()> {
-    let cli = Cli::parse_from(argv);
+fn cmd_unpoison(cli: Cli) -> anyhow::Result<()> {
 
     if !cli.yes_i_understand {
         eprintln!("WARNING: Unpoisoning makes corruption invisible.");
@@ -111,3 +110,5 @@ pub fn cmd_unpoison(argv: Vec<String>) -> anyhow::Result<()> {
     println!("unpoisoned {} bytes at offset {}", len, cli.offset);
     Ok(())
 }
+
+pub const CMD: super::CmdDef = typed_cmd!("unpoison", "Clear poison flags on file extents", Cli, cmd_unpoison);

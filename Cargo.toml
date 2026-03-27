@@ -20,7 +20,7 @@ fuse = ["dep:fuser"]
 
 [dependencies]
 log = { version = "0.4", features = ["std"] }
-clap = { version = "4.0.32", features = ["derive", "wrap_help"] }
+clap = { version = "4.0.32", features = ["derive", "wrap_help", "color", "error-context", "suggestions"] }
 clap_complete = "4.3.2"
 anyhow = "1.0"
 serde = { version = "1", features = ["derive"] }
@@ -47,7 +47,7 @@ version = "0.10"
 default-features = false
 
 [profile.release]
-strip = "none"
+strip = "debuginfo"
 
 [package.metadata.vendor-filter]
 platforms = ["*-linux-*"]

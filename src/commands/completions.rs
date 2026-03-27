@@ -12,7 +12,18 @@ fn print_completions<G: Generator>(gen: G, cmd: &mut Command) {
     generate(gen, cmd, cmd.get_name().to_string(), &mut io::stdout());
 }
 
-pub fn completions(argv: Vec<String>) {
-    let cli = Cli::parse_from(argv);
+fn completions(cli: Cli) {
     print_completions(cli.shell, &mut super::build_cli());
 }
+
+pub static CMD: super::CmdDef = {
+    fn __cmd() -> clap::Command { <Cli as clap::CommandFactory>::command() }
+    fn __run(argv: Vec<String>) -> std::process::ExitCode {
+        completions(Cli::parse_from(argv));
+        std::process::ExitCode::SUCCESS
+    }
+    super::CmdDef {
+        name: "completions", about: "Generate shell completions", aliases: &[],
+        kind: super::CmdKind::Typed { cmd: __cmd, run: __run },
+    }
+};

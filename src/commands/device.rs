@@ -28,7 +28,7 @@ fn device_add_opt_flags() -> u32 {
     c::opt_flags::OPT_FORMAT as u32 | c::opt_flags::OPT_DEVICE as u32
 }
 
-pub fn device_add_cmd() -> Command {
+fn device_add_cmd() -> Command {
     Command::new("add")
         .about("Add a new device to an existing filesystem")
         .args(bch_option_args(device_add_opt_flags()))
@@ -49,7 +49,7 @@ pub fn device_add_cmd() -> Command {
             .help("Device to add"))
 }
 
-pub fn cmd_device_add(argv: Vec<String>) -> Result<()> {
+fn cmd_device_add(argv: Vec<String>) -> Result<()> {
     let matches = device_add_cmd().get_matches_from(argv);
 
     let fs_path = matches.get_one::<String>("filesystem").unwrap();
@@ -174,8 +174,7 @@ pub struct OnlineCli {
     device: String,
 }
 
-pub fn cmd_device_online(argv: Vec<String>) -> Result<()> {
-    let cli = OnlineCli::parse_from(argv);
+fn cmd_device_online(cli: OnlineCli) -> Result<()> {
 
     let handle = BcachefsHandle::open(&cli.device)
         .with_context(|| format!("opening filesystem for '{}'", cli.device))?;
@@ -196,8 +195,7 @@ pub struct OfflineCli {
     device: String,
 }
 
-pub fn cmd_device_offline(argv: Vec<String>) -> Result<()> {
-    let cli = OfflineCli::parse_from(argv);
+fn cmd_device_offline(cli: OfflineCli) -> Result<()> {
     let (handle, dev_idx) = open_dev(&cli.device)?;
 
     let flags = if cli.force { BCH_FORCE_IF_DEGRADED } else { 0 };
@@ -223,8 +221,7 @@ pub struct RemoveCli {
     path: Option<String>,
 }
 
-pub fn cmd_device_remove(argv: Vec<String>) -> Result<()> {
-    let cli = RemoveCli::parse_from(argv);
+fn cmd_device_remove(cli: RemoveCli) -> Result<()> {
 
     let mut flags = BCH_FORCE_IF_DEGRADED;
     if cli.force {
@@ -293,8 +290,7 @@ pub struct SetStateCli {
     path: Option<String>,
 }
 
-pub fn cmd_device_set_state(argv: Vec<String>) -> Result<()> {
-    let cli = SetStateCli::parse_from(argv);
+fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
 
     let new_state = cli.new_state.as_u32();
 
@@ -355,8 +351,7 @@ pub struct ResizeCli {
     size: Option<String>,
 }
 
-pub fn cmd_device_resize(argv: Vec<String>) -> Result<()> {
-    let cli = ResizeCli::parse_from(argv);
+fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
 
     let size_bytes = match cli.size {
         Some(ref s) => parse_human_size(s)?,
@@ -452,8 +447,7 @@ pub struct ResizeJournalCli {
     size: String,
 }
 
-pub fn cmd_device_resize_journal(argv: Vec<String>) -> Result<()> {
-    let cli = ResizeJournalCli::parse_from(argv);
+fn cmd_device_resize_journal(cli: ResizeJournalCli) -> Result<()> {
 
     let size_bytes = parse_human_size(&cli.size)?;
     let size_sectors = size_bytes >> 9;
@@ -504,8 +498,7 @@ pub struct EvacuateCli {
     device: String,
 }
 
-pub fn cmd_device_evacuate(argv: Vec<String>) -> Result<()> {
-    let cli = EvacuateCli::parse_from(argv);
+fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
 
     if bcachefs_kernel_version() < bcachefs_metadata_version_reconcile as u64 {
         return Err(anyhow!(
@@ -565,3 +558,19 @@ pub fn cmd_device_evacuate(argv: Vec<String>) -> Result<()> {
         thread::sleep(Duration::from_secs(1));
     }
 }
+
+pub const CMD_ADD: super::CmdDef = raw_cmd!("add", "Add a device to a filesystem", cmd_device_add);
+pub const CMD_ONLINE: super::CmdDef = typed_cmd!("online", "Bring a device online", OnlineCli, cmd_device_online);
+pub const CMD_OFFLINE: super::CmdDef = typed_cmd!("offline", "Take a device offline", OfflineCli, cmd_device_offline);
+pub const CMD_REMOVE: super::CmdDef = typed_cmd!("remove", "Remove a device", RemoveCli, cmd_device_remove);
+pub const CMD_EVACUATE: super::CmdDef = typed_cmd!("evacuate", "Evacuate data from a device", EvacuateCli, cmd_device_evacuate);
+pub const CMD_SET_STATE: super::CmdDef = typed_cmd!("set-state", "Set device state", SetStateCli, cmd_device_set_state);
+pub const CMD_RESIZE: super::CmdDef = typed_cmd!("resize", "Resize filesystem on a device", ResizeCli, cmd_device_resize);
+pub const CMD_RESIZE_JOURNAL: super::CmdDef = typed_cmd!("resize-journal", "Resize journal on a device", ResizeJournalCli, cmd_device_resize_journal);
+pub const CMD: super::CmdDef = super::CmdDef {
+    name: "device", about: "Manage devices within a filesystem", aliases: &[],
+    kind: super::CmdKind::Group { children: &[
+        &CMD_ADD, &CMD_ONLINE, &CMD_OFFLINE, &CMD_REMOVE,
+        &CMD_EVACUATE, &CMD_SET_STATE, &CMD_RESIZE, &CMD_RESIZE_JOURNAL,
+    ]},
+};
