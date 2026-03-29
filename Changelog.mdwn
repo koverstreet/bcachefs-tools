@@ -1,5 +1,51 @@
 # Changelog
 
+## v1.37.4 - Sun Mar 29 2026
+
+New commands:
+
+- `bcachefs data-read`: O_DIRECT read via BCHFS_IOC_PREAD_RAW with extended
+  error reporting (checksum, IO, decompression, and EC errors). Supports
+  `--no-poison-check` for reading poisoned extents.
+- `bcachefs unpoison`: Clear poison flags on file extents.
+
+Bug fixes:
+
+- Fix shell completion generation panic
+- Fix group subcommand dispatch off-by-one
+
+Tools improvements:
+
+- Migrated to clap derive for subcommand dispatch with typed Cli structs
+- Enabled clap suggestions and color help, stripped debuginfo from release builds
+
+Kernel source updates:
+
+- Fix segfault in bch2_stripe_new_buckets_del()
+- Fix reconcile checksum rewrite skipping cached pointers
+- Fix use-after-free in ec_block_endio()
+- Fix cached pointer handling in data update
+- Fix init_new_stripe_from_old() copying parity blocks
+- Fix torn write of path->l[0].b in btree_path_copy()
+- Fix linking error on i586
+- BCH_SB_MEMBER_INVALID pointers don't count as written or unwritten
+- Don't add cached pointer devices to devs_have
+- Don't reuse stripes when live data would overflow into parity
+- Detect and repair non-zero parity blockcounts
+- Plumb EC reconstruct messages to read path
+- Add BCHFS_IOC_PREAD_RAW and BCHFS_IOC_UNPOISON ioctls
+- Read path error reporting infrastructure
+- Don't start reconcile unless we're really going rw
+- Add timestats for btree node/key cache shrinkers
+- Improve bch2_bio_to_text(), include bio on BLK_STS_INVAL read errors
+- Improve error message when autofix blocked by errors policy
+- Automatically advance rewind_seq when journal_rewind_discard_buffer_percent=0
+
+Package CI:
+
+- Publish to release suite for tagged commits
+- Atomic publish via staging directory + rsync (fixes apt hash mismatch, #543)
+
 ## v1.37.3 - Fri Mar 20 2026
 
 New option: opts.journal_rewind_discard_buffer_percent

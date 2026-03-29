@@ -1,8 +1,10 @@
 #!/bin/bash
 # Publish built .deb packages to apt.bcachefs.org
 #
-# Signs .debs with debsigs, then includes them in aptly repos and publishes.
-# Called by the orchestrator after all builds for a commit succeed.
+# Signs .debs with debsigs, then includes them in aptly repos and publishes
+# to a staging directory. After aptly finishes, rsync with --delay-updates
+# copies to the live directory — each file is written to a temp name, then
+# renamed into place, so the live tree is never in an inconsistent state.
 #
 # Usage: publish.sh COMMIT [snapshot|release]
 #   SUITE defaults to "snapshot" (use "release" for tagged releases)
@@ -28,9 +30,15 @@ source "$STATE_DIR/config"
 : "${APTLY_ROOT:?not set in config}"
 : "${PUBLISH_ROOT:=$APTLY_ROOT/public}"
 
+STAGING_ROOT="$APTLY_ROOT/staging"
 SNAPSHOT_DATE="$(date -u +%Y%m%d%H%M%S)"
 
-# Minimal aptly config — points at the existing db/pool/public
+mkdir -p "$STAGING_ROOT"
+
+# Aptly config — publish to staging directory, not directly to live.
+# No -force-overwrite: that flag corrupts shared pool files by overwriting
+# them in-place, leaving metadata hashes stale.  Instead we remove old
+# packages before adding new ones.
 APTLY_CONF="$(mktemp)"
 trap "rm -f '$APTLY_CONF'" EXIT
 cat > "$APTLY_CONF" << EOF
@@ -40,7 +48,7 @@ cat > "$APTLY_CONF" << EOF
     "skipContentsPublishing": true,
     "FileSystemPublishEndpoints": {
         "public": {
-            "rootDir": "$PUBLISH_ROOT",
+            "rootDir": "$STAGING_ROOT",
             "linkMethod": "symlink"
         }
     }
@@ -73,6 +81,7 @@ declare -A DISTRO_DONE
 for job_dir in "$BUILD_DIR"/*/; do
     job="$(basename "$job_dir")"
     [ "$job" = "source" ] && continue
+    [ "$job" = "publish" ] && continue
     status="$(cat "$job_dir/status" 2>/dev/null || echo pending)"
     [ "$status" != "done" ] && continue
     distro="${job%-*}"
@@ -96,6 +105,10 @@ for distro in "${!DISTRO_DONE[@]}"; do
             -component=main \
             "$REPO_NAME"
 
+    # Clear old packages before adding — avoids -force-replace/-force-overwrite
+    # which can corrupt pool files shared across repos
+    aptly repo remove "$REPO_NAME" 'Name (% bcachefs-*)' 2>/dev/null || true
+
     # Build list of dirs to include: source + all arches for this distro
     INCLUDE_DIRS=("$SRC_DIR")
     for job_dir in "$BUILD_DIR/${distro}"-*/; do
@@ -105,18 +118,17 @@ for distro in "${!DISTRO_DONE[@]}"; do
     done
 
     # repo add takes .deb/.dsc files directly (avoids needing signed .changes)
-    aptly repo add -force-replace "$REPO_NAME" "${INCLUDE_DIRS[@]}"
+    aptly repo add "$REPO_NAME" "${INCLUDE_DIRS[@]}"
 
     echo "--- $distro: snapshot $SNAPSHOT_NAME ---"
     aptly snapshot create "$SNAPSHOT_NAME" from repo "$REPO_NAME"
 
     echo "--- $distro: publish ---"
     if aptly publish show "$REPO_SUITE" "$PUBLISH_PREFIX" &>/dev/null; then
-        aptly publish switch -force-overwrite \
+        aptly publish switch \
             "$REPO_SUITE" "$PUBLISH_PREFIX" "$SNAPSHOT_NAME"
     else
         aptly publish snapshot \
-            -force-overwrite \
             -acquire-by-hash \
             -origin="apt.bcachefs.org" \
             -label="apt.bcachefs.org Packages" \
@@ -124,5 +136,11 @@ for distro in "${!DISTRO_DONE[@]}"; do
             "$PUBLISH_PREFIX"
     fi
 done
+
+# Sync staging to live directory.  --delay-updates writes each updated file
+# to a temp name first, then renames them all into place at the end — the
+# live tree is never half-old half-new.
+echo "--- Syncing staging to live ---"
+rsync -rlpt --delay-updates --delete-delay "$STAGING_ROOT/" "$PUBLISH_ROOT/"
 
 echo "=== Publish complete: $SHORT ==="
