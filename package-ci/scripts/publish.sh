@@ -140,7 +140,9 @@ done
 # Sync staging to live directory.  --delay-updates writes each updated file
 # to a temp name first, then renames them all into place at the end — the
 # live tree is never half-old half-new.
+# No --delete: staging only has suites published in this run, other suites
+# (e.g. snapshot when publishing release, or vice versa) must be preserved.
 echo "--- Syncing staging to live ---"
-rsync -rlpt --delay-updates --delete-delay "$STAGING_ROOT/" "$PUBLISH_ROOT/"
+rsync -rlpt --delay-updates "$STAGING_ROOT/" "$PUBLISH_ROOT/"
 
 echo "=== Publish complete: $SHORT ==="
