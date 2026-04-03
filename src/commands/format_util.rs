@@ -159,22 +159,8 @@ pub fn format(
         }
     }
 
-    // Calculate block size: on large filesystems (>= 1GB), use the maximum
-    // of 4k and the device block size for performance on 4k-sector hardware.
-    // On small filesystems (typically test images on loop devices), default
-    // to 512 bytes to avoid wasting space.
     if opt_defined!(fs_opts, block_size) == 0 {
-        let total_size: u64 = dev_slice.iter().map(|d| d.fs_size).sum();
-
-        let block_size = if total_size >= 1u64 << 30 {
-            let mut bs = 4096u32;
-            for dev in dev_slice.iter() {
-                bs = bs.max(crate::wrappers::bdev::get_blocksize(dev.fd));
-            }
-            bs
-        } else {
-            512u32
-        };
+        let block_size = pick_block_size(&fs_opts, dev_slice);
         opt_set!(fs_opts, block_size, block_size as u16);
     }
 
@@ -484,6 +470,31 @@ fn rounddown_pow_of_two(v: u64) -> u64 {
     1u64 << (63 - v.leading_zeros())
 }
 
+/// Pick the filesystem-wide block size based on device sizes and topology.
+///
+/// On large filesystems (>= 1GB), use the maximum of 4k and the device
+/// physical block size for performance on 4k-sector (or larger) hardware.
+/// On small filesystems (typically test images on loop devices), default
+/// to 512 bytes to avoid wasting space.
+///
+/// Returns the block size in bytes.
+pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[DevOpts]) -> u32 {
+    let total_size: u64 = dev_slice.iter().map(|d| d.fs_size).sum();
+
+    let block_size = if total_size >= 1u64 << 30 {
+        let mut bs = 4096u32;
+        for dev in dev_slice.iter() {
+            bs = bs.max(crate::wrappers::bdev::get_blocksize_physical_hint(dev.fd));
+        }
+        bs
+    } else {
+        512u32
+    };
+
+    block_size
+        .min((u16::MAX as u32 >> 1) + 1)
+}
+
 /// Pick the filesystem-wide bucket size based on device sizes and options.
 ///
 /// Returns the bucket size in bytes.
@@ -534,7 +545,9 @@ pub fn pick_bucket_size(opts: &c::bch_opts, devs: &[DevOpts]) -> u64 {
     let mem_lower_bound = (total_fs_size / buckets_can_fsck).next_power_of_two();
     bucket_size = bucket_size.max(mem_lower_bound);
 
-    bucket_size.next_power_of_two()
+    bucket_size
+        .next_power_of_two()
+        .min((u32::MAX as u64 >> 1) + 1)
 }
 
 /// Validate that a device's bucket size is consistent with filesystem options.
@@ -566,5 +579,4 @@ pub fn check_bucket_size(opts: &c::bch_opts, dev: &DevOpts) {
         ));
     }
 }
-
 

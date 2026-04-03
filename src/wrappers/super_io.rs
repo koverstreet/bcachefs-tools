@@ -42,7 +42,6 @@ fn csum_vstruct_sb(sb: *mut c::bch_sb) -> c::bch_csum {
 pub fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
     let file = borrowed_file(fd);
 
-    let bs = crate::wrappers::bdev::get_blocksize(fd) as usize;
     let sb_ref = unsafe { &mut *sb };
 
     let nr_superblocks = sb_ref.layout.nr_superblocks as usize;
@@ -52,15 +51,8 @@ pub fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
         let offset_sectors = u64::from_le(sb_ref.offset);
 
         if offset_sectors == c::BCH_SB_SECTOR as u64 {
-            // Write backup layout at byte 4096
-            let buflen = bs.max(4096);
-            let mut buf = vec![0u8; buflen];
-
-            // Read existing data at 4096 - bs
-            file.read_exact_at(&mut buf[..bs], 4096 - bs as u64)
-                .unwrap_or_else(|e| die(&format!("pread failed at offset {}: {}", 4096 - bs, e)));
-
-            // Patch the layout into the end of this block
+            // Write backup layout immediately preceding byte 4096
+            let layout_offset = (c::BCH_SB_LAYOUT_SECTOR as usize) << 9;
             let layout_bytes = std::mem::size_of::<c::bch_sb_layout>();
             let src = unsafe {
                 std::slice::from_raw_parts(
@@ -68,17 +60,13 @@ pub fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
                     layout_bytes,
                 )
             };
-            buf[bs - layout_bytes..bs].copy_from_slice(src);
-
-            pwrite_exact(&file, &buf[..bs], 4096 - bs as u64);
+            pwrite_exact(&file, &src, layout_offset as u64);
         }
 
         sb_ref.csum = csum_vstruct_sb(sb);
 
         let sb_bytes = vstruct_bytes_sb(unsafe { &*sb });
-        let write_len = round_up(sb_bytes, bs);
-        let sb_slice = unsafe { std::slice::from_raw_parts(sb as *const u8, write_len) };
-
+        let sb_slice = unsafe { std::slice::from_raw_parts(sb as *const u8, sb_bytes) };
         pwrite_exact(&file, sb_slice, offset_sectors << 9);
     }
 
