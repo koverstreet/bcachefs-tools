@@ -315,8 +315,8 @@ pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<Fs, BchError> {
     Fs::open(&devs, fs_opts)
 }
 
-#[no_mangle]
-pub extern "C" fn bch2_scan_devices(device: *const c_char) -> *mut c_char {
+#[allow(dead_code)]
+pub fn bch2_scan_devices(device: *const c_char) -> *mut c_char {
     let device = unsafe { CStr::from_ptr(device) };
     let device = device.to_string_lossy().into_owned();
 

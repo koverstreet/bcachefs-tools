@@ -39,8 +39,8 @@ fn http_thread(listen: String) {
     }
 }
 
-#[no_mangle]
-pub extern "C" fn start_http(listen: *const c_char) {
+#[allow(dead_code)]
+pub fn start_http(listen: *const c_char) {
     let listen = unsafe { CStr::from_ptr(listen) };
     let listen = listen.to_string_lossy().into_owned();
 

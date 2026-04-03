@@ -2287,6 +2287,8 @@ again:
 
 		CLASS(btree_trans, trans)(c);
 		struct alloc_request *req;
+		bool io_in_flight = op->open_buckets.nr;
+
 		ret = lockrestart_do(trans, ({
 			req = alloc_request_get(trans,
 						op->target,
@@ -2296,11 +2298,14 @@ again:
 						op->opts.data_replicas,
 						op->watermark,
 						op->flags,
-						&op->cl);
+						!io_in_flight ? &op->cl : NULL);
 			PTR_ERR_OR_ZERO(req) ?:
 			bch2_alloc_sectors_req(trans, req, op->write_point, &wp);
 		}));
 		bch2_trans_unlock_long(trans);
+		if (ret && io_in_flight)
+			break;
+
 		if (bch2_err_matches(ret, BCH_ERR_operation_blocked)) {
 			if (!wait_on_allocator_sync)
 				break;
@@ -2527,6 +2532,8 @@ void __bch2_write_op_to_text(struct printbuf *out, struct bch_write_op *op)
 	prt_printf(out, "opts:\t");
 	bch2_inode_opts_to_text(out, op->c, op->opts);
 	prt_newline(out);
+
+	prt_printf(out, "open_buckets:\t%u\n", op->open_buckets.nr);
 
 	prt_printf(out, "ref:\t%u\n", closure_nr_remaining(&op->cl));
 	prt_printf(out, "ret\t%s\n", bch2_err_str(op->error));

@@ -1,4 +1,4 @@
-use std::ffi::CStr;
+
 use std::ops::ControlFlow;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
@@ -556,9 +556,15 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     let mut bucket_err: Option<String> = None;
     let _ = fs.for_each_online_member(|ca| {
         if sanitize && (ca.mi.bucket_size as u32) % (block_size >> 9) != 0 {
-            let name = unsafe { CStr::from_ptr(ca.name.as_ptr()) };
-            bucket_err = Some(format!("{} has unaligned buckets, cannot sanitize",
-                                      name.to_str().unwrap_or("?")));
+            // bch_dev.name is a [c_char; 32] array
+            let ca_name_bytes = &ca.name;
+            let len = ca_name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
+            // c_char is i8, but from_utf8 wants u8 - use from_raw_parts to reinterpret
+            let ca_name_bytes_u8 = unsafe {
+                std::slice::from_raw_parts(ca_name_bytes[..len].as_ptr() as *const u8, len)
+            };
+            let name = std::str::from_utf8(ca_name_bytes_u8).unwrap_or("?");
+            bucket_err = Some(format!("{} has unaligned buckets, cannot sanitize", name));
             return ControlFlow::Break(());
         }
 

@@ -15,7 +15,7 @@
 // bch_opt_strs. When a bare path argument is seen, it captures whatever
 // per-device options preceded it.
 
-use std::ffi::{CStr, CString, c_char};
+use std::ffi::{CString, c_char};
 use std::io;
 use std::os::fd::AsFd;
 use std::path::{Path, PathBuf};
@@ -186,13 +186,14 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
 
     macro_rules! push_device {
         ($path:expr) => {{
+            // Device options are sticky: they apply to all subsequent
+            // devices until overridden by a new value.
             devices.push(DevConfig {
                 path: $path,
-                label: cur_label.take(),
+                label: cur_label.clone(),
                 fs_size: cur_fs_size,
-                opts: std::mem::take(&mut cur_dev_opts),
+                opts: cur_dev_opts,
             });
-            cur_fs_size = 0;
             unconsumed_dev_option = false;
         }};
     }
@@ -236,10 +237,10 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                         None => deferred_opts.push((opt_id as usize, val_str)),
                         Some(v) => {
                             if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
-                                unsafe { c::bch2_opt_set_by_id(&mut cur_dev_opts, opt_id, v) };
+                                bch_bindgen::opts::opt_set_by_id(&mut cur_dev_opts, opt_id, v);
                                 unconsumed_dev_option = true;
                             } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
-                                unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id, v) };
+                                bch_bindgen::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
                             }
                         }
                     }
@@ -456,38 +457,26 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     let mut fs_opt_strs: c::bch_opt_strs = Default::default();
     for &(id, ref val) in &cfg.deferred_opts {
         let cstr = CString::new(val.as_str())?;
-        let ptr = unsafe { libc::strdup(cstr.as_ptr()) };
-        unsafe { fs_opt_strs.__bindgen_anon_1.by_id[id] = ptr };
+        fs_opt_strs.set(id, &cstr);
     }
 
-    // Build C dev_opts — CStrings must outlive c_devices
-    let dev_cstrs: Vec<(CString, Option<CString>)> = cfg.devices.iter()
-        .map(|dev| Ok((
-            CString::new(dev.path.as_str())?,
-            dev.label.as_ref().map(|l| CString::new(l.as_str())).transpose()?,
-        )))
+    // Build DevOpts
+    use crate::commands::format_util::DevOpts;
+
+    let mut devices: Vec<DevOpts> = cfg.devices.iter()
+        .map(|dev| {
+            let mut d = DevOpts::new(CString::new(dev.path.as_str())?);
+            d.label = dev.label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
+            d.fs_size = dev.fs_size;
+            d.opts = dev.opts;
+            Ok(d)
+        })
         .collect::<Result<_>>()?;
 
-    let mut c_devices: Vec<c::dev_opts> = cfg.devices.iter()
-        .zip(&dev_cstrs)
-        .map(|(dev, (path_c, label_c))| {
-            let mut c_dev = c::dev_opts {
-                path: path_c.as_ptr(),
-                fs_size: dev.fs_size,
-                opts: dev.opts,
-                ..Default::default()
-            };
-            if let Some(ref l) = label_c {
-                c_dev.label = l.as_ptr();
-            }
-            c_dev
-        })
-        .collect();
-
     // Open all devices for format
-    for (dev_cfg, c_dev) in cfg.devices.iter().zip(&mut c_devices) {
-        if let Some(mpath_dev) = find_multipath_holder(Path::new(&dev_cfg.path)) {
-            warn_multipath_component(Path::new(&dev_cfg.path), &mpath_dev);
+    for (i, dev) in devices.iter_mut().enumerate() {
+        if let Some(mpath_dev) = find_multipath_holder(Path::new(&cfg.devices[i].path)) {
+            warn_multipath_component(Path::new(&cfg.devices[i].path), &mpath_dev);
             if !cfg.force {
                 // Locking applies to the selected device path only; it is not
                 // coordinated across dm-mpath maps and component devices.
@@ -496,24 +485,14 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
             }
         }
 
-        let ret = unsafe { c::open_for_format(c_dev, 0, cfg.force) };
-        if ret != 0 {
-            let path = unsafe { CStr::from_ptr(c_dev.path) }.to_string_lossy();
-            bail!("Error opening {}: {}", path, io::Error::from_raw_os_error(-ret));
-        }
+        dev.open(0, cfg.force).map_err(|e| {
+            anyhow!("Error opening {}: {}", dev.path.to_string_lossy(), io::Error::from_raw_os_error(e))
+        })?;
     }
 
-    // Call bch2_format
-    let dev_list = c::dev_opts_list {
-        nr: c_devices.len(),
-        size: c_devices.len(),
-        data: c_devices.as_mut_ptr(),
-        preallocated: Default::default(),
-    };
-
-    let sb = crate::commands::format_util::bch2_format(fs_opt_strs, cfg.fs_opts, fmt_opts, dev_list);
+    let sb = crate::commands::format_util::format(fs_opt_strs, cfg.fs_opts, fmt_opts, &mut devices);
     if sb.is_null() {
-        bail!("bch2_format returned null");
+        bail!("format returned null");
     }
 
     // Print superblock
@@ -547,7 +526,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     }
 
     // Free deferred option strings
-    unsafe { c::bch2_opt_strs_free(&mut fs_opt_strs) };
+    fs_opt_strs.free();
 
     Ok(())
 }

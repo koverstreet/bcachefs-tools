@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 
 use anyhow::{bail, Result};
 use bch_bindgen::bcachefs;
@@ -181,8 +181,16 @@ fn name_to_dev_idx(c: *mut c::bch_fs, name: &str) -> Option<usize> {
     for i in 0..devs_len {
         let ca = unsafe { (*c).devs[i] };
         if ca.is_null() { continue; }
-        let ca_name = unsafe { CStr::from_ptr((*ca).name.as_ptr()) };
-        if ca_name.to_bytes() == name.as_bytes() {
+        // bch_dev.name is a [c_char; 32] array, not a pointer
+        let ca_name_bytes = unsafe { &(*ca).name };
+        // Find the null terminator
+        let len = ca_name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
+        // c_char is i8, but from_utf8 wants u8 - use from_raw_parts to reinterpret
+        let ca_name_bytes_u8 = unsafe {
+            std::slice::from_raw_parts(ca_name_bytes[..len].as_ptr() as *const u8, len)
+        };
+        let ca_name = std::str::from_utf8(ca_name_bytes_u8).ok()?;
+        if ca_name == name {
             return Some(i);
         }
     }

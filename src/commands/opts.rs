@@ -1,4 +1,4 @@
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fmt::Write;
 
 use anyhow::{bail, Result};
@@ -12,36 +12,14 @@ fn leak(s: String) -> &'static str {
     Box::leak(s.into_boxed_str())
 }
 
-/// Read a C string pointer, returning None if null or invalid UTF-8.
-unsafe fn c_str(p: *const std::os::raw::c_char) -> Option<&'static str> {
-    if p.is_null() { return None }
-    CStr::from_ptr(p).to_str().ok()
-}
-
 /// Iterate bch2_opt_table entries matching flag_filter, calling f for each.
 fn for_each_opt(flag_filter: u32, mut f: impl FnMut(&'static str, &c::bch_option)) {
     for opt in bch_bindgen::opts::opt_table() {
         if opt.flags as u32 & flag_filter == 0 { continue }
         if opt.flags as u32 & c::opt_flags::OPT_HIDDEN as u32 != 0 { continue }
-        let Some(name) = (unsafe { c_str(opt.attr.name) }) else { continue };
+        let Some(name) = opt.name() else { continue };
         f(name, opt);
     }
-}
-
-/// Collect null-terminated C string array into Vec.
-unsafe fn collect_choices(choices: *const *const std::os::raw::c_char) -> Vec<&'static str> {
-    let mut v = Vec::new();
-    if choices.is_null() { return v }
-    let mut i = 0;
-    loop {
-        let p = *choices.add(i);
-        if p.is_null() { break }
-        if let Some(s) = c_str(p) {
-            v.push(s);
-        }
-        i += 1;
-    }
-    v
 }
 
 /// Format usage text for bcachefs options matching the given flags.
@@ -55,7 +33,7 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
     for opt in bch_bindgen::opts::opt_table() {
         if opt.flags as u32 & flags_all != flags_all { continue }
         if opt.flags as u32 & flags_none != 0 { continue }
-        let Some(name) = (unsafe { c_str(opt.attr.name) }) else { continue };
+        let Some(name) = opt.name() else { continue };
 
         let mut col = 0;
         let s = format!("      --{name}");
@@ -67,7 +45,7 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
             c::opt_type::BCH_OPT_STR => {
                 out.push_str("=(");
                 col += 2;
-                let choices = unsafe { collect_choices(opt.choices) };
+                let choices = opt.choices();
                 for (j, ch) in choices.iter().enumerate() {
                     if j > 0 { out.push('|'); col += 1; }
                     out.push_str(ch);
@@ -77,14 +55,14 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
                 col += 1;
             }
             _ => {
-                if let Some(h) = unsafe { c_str(opt.hint) } {
+                if let Some(h) = opt.hint() {
                     let _ = write!(out, "={h}");
                     col += 1 + h.len();
                 }
             }
         }
 
-        if let Some(help) = unsafe { c_str(opt.help) } {
+        if let Some(help) = opt.help() {
             for (j, line) in help.split('\n').enumerate() {
                 if line.is_empty() && j > 0 { break; }
                 if j > 0 || col > HELPCOL {
@@ -118,10 +96,8 @@ pub fn bch_option_args(flag_filter: u32) -> Vec<Arg> {
             arg = arg.visible_alias(leak(name.replace('_', "-")));
         }
 
-        unsafe {
-            if let Some(h) = c_str(opt.help) {
-                arg = arg.help(h);
-            }
+        if let Some(h) = opt.help() {
+            arg = arg.help(h);
         }
 
         match opt.type_ {
@@ -148,16 +124,14 @@ pub fn bch_option_args(flag_filter: u32) -> Vec<Arg> {
                 args.push(no_arg);
             }
             c::opt_type::BCH_OPT_STR => {
-                let choices = unsafe { collect_choices(opt.choices) };
+                let choices = opt.choices();
                 if !choices.is_empty() {
                     arg = arg.value_parser(choices);
                 }
             }
             _ => {
-                unsafe {
-                    if let Some(h) = c_str(opt.hint) {
-                        arg = arg.value_name(h);
-                    }
+                if let Some(h) = opt.hint() {
+                    arg = arg.value_name(h);
                 }
             }
         }

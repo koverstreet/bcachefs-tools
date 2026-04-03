@@ -18,6 +18,16 @@ impl BchError {
     pub fn from_raw(code: i32) -> Self { Self(code) }
     pub fn raw(&self) -> i32 { self.0 }
 
+    /// Get the error message string.
+    ///
+    /// Returns a static string since bch2_err_str() returns strings
+    /// that live for the process lifetime.
+    pub fn msg(&self) -> &'static str {
+        unsafe { CStr::from_ptr(bcachefs::bch2_err_str(self.0)) }
+            .to_str()
+            .unwrap_or("unknown error")
+    }
+
     pub fn matches(&self, class: bch_errcode) -> bool {
         if self.0 != 0 {
             unsafe { c::__bch2_err_matches(self.0, class as i32) }
@@ -49,8 +59,7 @@ impl BchError {
 
 impl fmt::Display for BchError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = unsafe { CStr::from_ptr(bcachefs::bch2_err_str(self.0)) };
-        write!(f, "{}", s.to_str().unwrap_or("unknown error"))
+        write!(f, "{}", self.msg())
     }
 }
 

@@ -18,13 +18,12 @@ use clap::Parser;
 use crate::commands::format::take_opt_value;
 use crate::commands::opts::{bch_opt_lookup_negated, parse_opt_val};
 use crate::key::Passphrase;
-use crate::commands::format_util::format_opts_default;
+use crate::commands::format_util::{format_opts_default, DevOpts};
 use crate::wrappers::super_io;
 
 // ---- C shim declarations ----
 
 extern "C" {
-    fn rust_bdev_open(dev: *mut c::dev_opts, mode: c::blk_mode_t) -> i32;
     fn rust_set_bit(nr: c_ulong, addr: *mut c_ulong);
 }
 
@@ -341,46 +340,32 @@ fn migrate_fs(
 
     // Find the underlying block device
     let dev_path = dev_t_to_path(fs_dev)?;
-    let dev_path_cstr = CString::new(dev_path.as_str())?;
 
-    // Set up dev_opts and open the device
-    let mut c_dev = c::dev_opts {
-        path: dev_path_cstr.as_ptr(),
-        ..Default::default()
-    };
-
-    let ret = unsafe { rust_bdev_open(&mut c_dev, c::BLK_OPEN_READ | c::BLK_OPEN_WRITE) };
-    if ret < 0 {
-        bail!("Error opening device to format {}: {}", dev_path,
-              io::Error::from_raw_os_error(-ret));
-    }
-
-    let bdev_fd = unsafe { (*c_dev.bdev).bd_fd };
-    let block_size = unsafe { c::get_blocksize(bdev_fd) };
-    opt_set!(fs_opts, block_size, block_size as u16);
+    // Set up DevOpts and open the device
+    let mut c_dev = DevOpts::new(CString::new(dev_path.as_str())?);
+    c_dev.open_no_blkid(
+        crate::wrappers::bdev::BLK_OPEN_READ | crate::wrappers::bdev::BLK_OPEN_WRITE,
+    ).map_err(|e| {
+        anyhow!("Error opening device to format {}: {}", dev_path, io::Error::from_raw_os_error(e))
+    })?;
 
     let file_path = format!("{}/bcachefs", fs_path);
     println!("Creating new filesystem on {} in space reserved at {}", dev_path, file_path);
 
-    let dev_size = unsafe { c::get_size(bdev_fd) };
+    let dev_size = crate::wrappers::bdev::get_size(c_dev.fd);
     c_dev.fs_size = dev_size;
 
-    // Build a dev_opts_list for bch2_pick_bucket_size
-    let dev_list = c::dev_opts_list {
-        nr: 1,
-        size: 1,
-        data: &mut c_dev,
-        preallocated: Default::default(),
-    };
+    let block_size = crate::commands::format_util::pick_block_size(&fs_opts, std::slice::from_ref(&c_dev));
+    opt_set!(fs_opts, block_size, block_size as u16);
 
-    let bucket_size = unsafe { c::bch2_pick_bucket_size(fs_opts, dev_list) };
+    let bucket_size = crate::commands::format_util::pick_bucket_size(&fs_opts, std::slice::from_ref(&c_dev));
     {
         let dev_opts = &mut c_dev.opts;
         opt_set!(dev_opts, bucket_size, bucket_size as u32);
     }
     c_dev.nbuckets = c_dev.fs_size / c_dev.opts.bucket_size as u64;
 
-    unsafe { c::bch2_check_bucket_size(fs_opts, &mut c_dev) };
+    crate::commands::format_util::check_bucket_size(&fs_opts, &c_dev);
 
     // Reserve space for bcachefs metadata — grab as much as we can
     let (extents, bcachefs_inum) = reserve_new_fs_space(
@@ -400,17 +385,9 @@ fn migrate_fs(
     c_dev.sb_offset = sb_offset;
     c_dev.sb_end = sb_end;
 
-    // Format the filesystem
-    let dev_list = c::dev_opts_list {
-        nr: 1,
-        size: 1,
-        data: &mut c_dev,
-        preallocated: Default::default(),
-    };
-
-    let sb = crate::commands::format_util::bch2_format(fs_opt_strs, fs_opts, format_opts, dev_list);
+    let sb = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, std::slice::from_mut(&mut c_dev));
     if sb.is_null() {
-        bail!("bch2_format failed");
+        bail!("format failed");
     }
 
     let sb_offset_val = u64::from_le(unsafe { (*sb).layout.sb_offset[0] });
@@ -634,7 +611,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
 
                     match parse_opt_val(opt, &val_str)? {
                         None => deferred_opts.push((opt_id as usize, val_str)),
-                        Some(v) => unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id, v) },
+                        Some(v) => bch_bindgen::opts::opt_set_by_id(&mut fs_opts, opt_id, v),
                     }
                     i += 1;
                     continue;
@@ -703,13 +680,12 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
     let mut fs_opt_strs: c::bch_opt_strs = Default::default();
     for &(id, ref val) in &deferred_opts {
         let cstr = CString::new(val.as_str())?;
-        let ptr = unsafe { libc::strdup(cstr.as_ptr()) };
-        unsafe { fs_opt_strs.__bindgen_anon_1.by_id[id] = ptr };
+        fs_opt_strs.set(id, &cstr);
     }
 
     let result = migrate_fs(&fs_path, fs_opt_strs, fs_opts, fmt_opts, force);
 
-    unsafe { c::bch2_opt_strs_free(&mut fs_opt_strs) };
+    fs_opt_strs.free();
 
     result
 }

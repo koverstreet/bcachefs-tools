@@ -63,13 +63,6 @@ int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
 int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
 
 /*
- * Open a block device without blkid probe (for migrate, not format).
- * Sets dev->file and dev->bdev from dev->path.
- */
-struct dev_opts;
-int rust_bdev_open(struct dev_opts *dev, unsigned int mode);
-
-/*
  * Bitmap shim — set_bit() is atomic (locked bitops in the kernel),
  * can't be inlined through bindgen.
  */

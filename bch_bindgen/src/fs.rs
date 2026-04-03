@@ -108,9 +108,9 @@ impl Fs {
     /// Caller must hold sb_lock.
     ///
     /// # Safety
-    /// `dev_idx` must be a valid device index.
+    /// Caller must hold sb_lock for mutation safety.
     #[allow(clippy::mut_from_ref)] // interior mutability guarded by sb_lock
-    pub unsafe fn members_v2_get_mut(&self, dev_idx: u32) -> &mut c::bch_member {
+    pub unsafe fn member_mut(&self, dev_idx: u32) -> &mut c::bch_member {
         unsafe { &mut *c::bch2_members_v2_get_mut((*self.raw).disk_sb.sb, dev_idx as i32) }
     }
 

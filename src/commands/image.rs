@@ -3,7 +3,7 @@
 // Uses a temporary second device for metadata, writes data sequentially to the
 // primary device, then migrates metadata to the primary and drops the temp device.
 
-use std::ffi::{CStr, CString, c_char, c_void};
+use std::ffi::{CString, c_char, c_void};
 use std::fmt::Write;
 use std::os::unix::io::AsRawFd;
 use std::path::PathBuf;
@@ -26,6 +26,8 @@ use clap::Parser;
 use crate::commands::format::{
     take_opt_value, take_short_value, metadata_version_current, version_parse,
 };
+use crate::commands::format_util::DevOpts;
+use crate::wrappers::bdev;
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
@@ -81,10 +83,10 @@ fn count_input_size(dir: &std::fs::File) -> u64 {
 fn set_data_allowed_for_image_update(fs: &Fs) {
     let _lock = fs.sb_lock();
 
-    let m0 = unsafe { fs.members_v2_get_mut(0) };
+    let m0 = unsafe { fs.member_mut(0) };
     m0.set_member_data_allowed(1 << c::bch_data_type::BCH_DATA_user as u64);
 
-    let m1 = unsafe { fs.members_v2_get_mut(1) };
+    let m1 = unsafe { fs.member_mut(1) };
     m1.set_member_data_allowed(
         (1 << c::bch_data_type::BCH_DATA_journal as u64)
             | (1 << c::bch_data_type::BCH_DATA_btree as u64),
@@ -125,12 +127,7 @@ unsafe extern "C" fn move_btree_pred(
         return 0;
     }
 
-    opts.write_flags = unsafe {
-        std::mem::transmute::<u32, c::bch_write_flags>(
-            opts.write_flags as u32
-                | c::bch_write_flags::BCH_WRITE_only_specified_devs as u32,
-        )
-    };
+    opts.write_flags |= c::bch_write_flags::BCH_WRITE_only_specified_devs;
     1
 }
 
@@ -355,7 +352,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     // Allow btree data on primary device
     {
         let _lock = fs.sb_lock();
-        let m = unsafe { fs.members_v2_get_mut(0) };
+        let m = unsafe { fs.member_mut(0) };
         let allowed = m.member_data_allowed() | (1 << c::bch_data_type::BCH_DATA_btree as u64);
         m.set_member_data_allowed(allowed);
         fs.write_super();
@@ -395,36 +392,33 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     unsafe { (*fs.raw).devs[1] = std::ptr::null_mut() };
 
     // Allow journal on primary device
-    let m = unsafe { fs.members_v2_get_mut(0) };
+    let m = unsafe { fs.member_mut(0) };
     let allowed = m.member_data_allowed() | (1 << c::bch_data_type::BCH_DATA_journal as u64);
     m.set_member_data_allowed(allowed);
 
     // Set nbuckets
-    unsafe { fs.members_v2_get_mut(0) }.nbuckets = nbuckets.to_le();
+    unsafe { fs.member_mut(0) }.nbuckets = nbuckets.to_le();
 
     // Set resize_on_mount for all online members
     let _ = fs.for_each_online_member(|ca| {
-        let m = unsafe { fs.members_v2_get_mut(ca.dev_idx as u32) };
+        let m = unsafe { fs.member_mut(ca.dev_idx as u32) };
         m.set_member_resize_on_mount(1);
         std::ops::ControlFlow::Continue(())
     });
 
     // Set small_image feature
-    let sb = unsafe { &mut *(*fs.raw).disk_sb.sb };
-    sb.features[0] |= (1u64 << c::bch_sb_feature::BCH_FEATURE_small_image as u64).to_le();
+    let disk_sb = unsafe { fs.disk_sb_mut() };
+    disk_sb.sb_mut().features[0] |= (1u64 << c::bch_sb_feature::BCH_FEATURE_small_image as u64).to_le();
 
     // Resize members_v2 to contain only one device
-    let mi: &c::bch_sb_field_members_v2 = sb::sb_field_get(sb)
+    let mi: &c::bch_sb_field_members_v2 = disk_sb.field()
         .expect("members_v2 field missing");
     let member_bytes = u16::from_le(mi.member_bytes);
     let u64s = (std::mem::size_of::<c::bch_sb_field_members_v2>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
-    let disk_sb = unsafe { fs.disk_sb_mut() };
-    unsafe {
-        sb::sb_field_resize::<c::bch_sb_field_members_v2>(disk_sb, u64s);
-    }
-    unsafe { (*disk_sb.sb).nr_devices = 1 };
-    unsafe { (*disk_sb.sb).set_sb_multi_device(0) };
+    sb::sb_field_resize::<c::bch_sb_field_members_v2>(disk_sb, u64s);
+    disk_sb.sb_mut().nr_devices = 1;
+    disk_sb.sb_mut().set_sb_multi_device(0);
 
     fs.write_super();
 
@@ -436,7 +430,7 @@ fn image_create_inner(
     fs_opt_strs: c::bch_opt_strs,
     fs_opts: c::bch_opts,
     mut format_opts: c::format_opts,
-    dev_opts: c::dev_opts,
+    dev_opts: DevOpts,
     src_path: &str,
     keep_alloc: bool,
     verbosity: u32,
@@ -450,18 +444,11 @@ fn image_create_inner(
     let input_bytes = count_input_size(&src_dir);
 
     // Set up two devices: primary for data, temp for metadata
-    let primary_path = unsafe { CStr::from_ptr(dev_opts.path) }
-        .to_string_lossy()
-        .into_owned();
+    let primary_path = dev_opts.path.to_string_lossy().into_owned();
     let metadata_path = format!("{}.metadata", primary_path);
-    let metadata_path_cstr = CString::new(metadata_path.as_str())?;
 
     let mut devs = vec![dev_opts];
-    let mut meta_dev = c::dev_opts {
-        path: metadata_path_cstr.as_ptr(),
-        ..Default::default()
-    };
-    // data_allowed will be set below via opt_set
+    let mut meta_dev = DevOpts::new(CString::new(metadata_path.as_str())?);
 
     // Check temp file doesn't exist
     if std::path::Path::new(&metadata_path).exists() {
@@ -488,28 +475,19 @@ fn image_create_inner(
     // journal capacity for finish_image's btree migration.
     let target_size = std::cmp::max(input_bytes * 2, 64 << 20);
     for dev in &mut devs {
-        let ret = unsafe { c::open_for_format(dev, c::BLK_OPEN_CREAT, false) };
-        if ret != 0 {
-            let path = unsafe { CStr::from_ptr(dev.path) }.to_string_lossy();
-            bail!("Error opening {}: {}", path, std::io::Error::from_raw_os_error(-ret));
-        }
-        if unsafe { libc::ftruncate((*dev.bdev).bd_fd, target_size as libc::off_t) } != 0 {
+        dev.open(bdev::BLK_OPEN_CREAT, false).map_err(|e| {
+            anyhow!("Error opening {}: {}", dev.path.to_string_lossy(), std::io::Error::from_raw_os_error(e))
+        })?;
+        if unsafe { libc::ftruncate(dev.fd, target_size as libc::off_t) } != 0 {
             bail!("ftruncate error: {}", std::io::Error::last_os_error());
         }
     }
 
     format_opts.no_sb_at_end = true;
 
-    let dev_list = c::dev_opts_list {
-        nr: devs.len(),
-        size: devs.len(),
-        data: devs.as_mut_ptr(),
-        preallocated: Default::default(),
-    };
-
-    let sb = crate::commands::format_util::bch2_format(fs_opt_strs, fs_opts, format_opts, dev_list);
+    let sb = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, &mut devs);
     if sb.is_null() {
-        bail!("bch2_format returned null");
+        bail!("format returned null");
     }
 
     if verbosity > 1 {
@@ -529,10 +507,7 @@ fn image_create_inner(
     // Open filesystem
     let device_paths: Vec<PathBuf> = devs
         .iter()
-        .map(|d| {
-            let s = unsafe { CStr::from_ptr(d.path) }.to_string_lossy();
-            PathBuf::from(s.as_ref())
-        })
+        .map(|d| PathBuf::from(d.path.to_string_lossy().as_ref()))
         .collect();
 
     let mut opts: c::bch_opts = Default::default();
@@ -569,8 +544,7 @@ fn image_create_inner(
 
     if let Err(e) = result {
         for d in &devs {
-            let path = unsafe { CStr::from_ptr(d.path) }.to_string_lossy();
-            let _ = std::fs::remove_file(path.as_ref());
+            let _ = std::fs::remove_file(d.path.to_str().unwrap_or(""));
         }
         return Err(e);
     }
@@ -579,7 +553,7 @@ fn image_create_inner(
     if ret != 0 {
         bail!(
             "error shutting down new filesystem: {}",
-            unsafe { CStr::from_ptr(c::bch2_err_str(ret)) }.to_string_lossy()
+            bch_bindgen::errcode::BchError::from_raw(ret).msg()
         );
     }
 
@@ -629,17 +603,12 @@ fn image_update_inner(
 
     // Add temporary metadata device
     let metadata_path = format!("{}.metadata", dst_image);
-    let metadata_path_cstr = CString::new(metadata_path.as_str())?;
 
-    let mut dev_opts = c::dev_opts {
-        path: metadata_path_cstr.as_ptr(),
-        ..Default::default()
-    };
+    let mut dev_opts = DevOpts::new(CString::new(metadata_path.as_str())?);
 
-    let ret = unsafe { c::open_for_format(&mut dev_opts, c::BLK_OPEN_CREAT, false) };
-    if ret != 0 {
-        bail!("error opening {}: {}", metadata_path, std::io::Error::last_os_error());
-    }
+    dev_opts.open(bdev::BLK_OPEN_CREAT, false).map_err(|e| {
+        anyhow!("error opening {}: {}", metadata_path, std::io::Error::from_raw_os_error(e))
+    })?;
 
     // Temp device needs enough space for btree nodes AND adequate journal
     // for the btree migration workload. With small bucket sizes, the
@@ -653,21 +622,18 @@ fn image_update_inner(
         ),
     );
 
-    if unsafe { libc::ftruncate((*dev_opts.bdev).bd_fd, metadata_dev_size as libc::off_t) } != 0 {
+    if unsafe { libc::ftruncate(dev_opts.fd, metadata_dev_size as libc::off_t) } != 0 {
         bail!("ftruncate error: {}", std::io::Error::last_os_error());
     }
 
-    let ret = unsafe {
-        c::bch2_format_for_device_add(
-            &mut dev_opts,
-            (*fs.raw).opts.block_size as u32,
-            (*fs.raw).opts.btree_node_size,
-        )
-    };
+    let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
+    let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
+    let ret = crate::commands::format_util::format_for_device_add(
+        &mut dev_opts, block_size, btree_node_size,
+    );
     if ret != 0 {
-        bail!("formatting metadata device: {}", unsafe {
-            CStr::from_ptr(c::bch2_err_str(ret))
-        }.to_string_lossy());
+        bail!("formatting metadata device: {}",
+            bch_bindgen::errcode::BchError::from_raw(ret).msg());
     }
 
     fs.dev_add(&metadata_path)
@@ -723,7 +689,7 @@ fn image_update_inner(
     if exit_ret != 0 {
         bail!(
             "error shutting down filesystem: {}",
-            unsafe { CStr::from_ptr(c::bch2_err_str(exit_ret)) }.to_string_lossy()
+            bch_bindgen::errcode::BchError::from_raw(exit_ret).msg()
         );
     }
 
@@ -835,9 +801,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                         None => deferred_opts.push((opt_id as usize, val_str)),
                         Some(v) => {
                             if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
-                                unsafe { c::bch2_opt_set_by_id(&mut dev_opts, opt_id, v) };
+                                bch_bindgen::opts::opt_set_by_id(&mut dev_opts, opt_id, v);
                             } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
-                                unsafe { c::bch2_opt_set_by_id(&mut fs_opts, opt_id, v) };
+                                bch_bindgen::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
                             }
                         }
                     }
@@ -1009,32 +975,26 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     let mut fs_opt_strs: c::bch_opt_strs = Default::default();
     for &(id, ref val) in &deferred_opts {
         let cstr = CString::new(val.as_str())?;
-        let ptr = unsafe { libc::strdup(cstr.as_ptr()) };
-        unsafe { fs_opt_strs.__bindgen_anon_1.by_id[id] = ptr };
+        fs_opt_strs.set(id, &cstr);
     }
 
-    // Build dev_opts
-    let mut c_dev_opts = c::dev_opts {
-        path: path_cstr.as_ptr(),
-        fs_size: dev_fs_size,
-        opts: dev_opts,
-        ..Default::default()
-    };
-    if let Some(ref l) = dev_label_cstr {
-        c_dev_opts.label = l.as_ptr();
-    }
+    // Build DevOpts
+    let mut d = DevOpts::new(path_cstr);
+    d.fs_size = dev_fs_size;
+    d.opts = dev_opts;
+    d.label = dev_label_cstr;
 
     let result = image_create_inner(
         fs_opt_strs,
         fs_opts,
         fmt_opts,
-        c_dev_opts,
+        d,
         &source,
         keep_alloc,
         verbosity,
     );
 
-    unsafe { c::bch2_opt_strs_free(&mut fs_opt_strs) };
+    fs_opt_strs.free();
 
     result
 }

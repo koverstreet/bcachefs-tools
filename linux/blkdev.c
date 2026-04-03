@@ -333,8 +333,12 @@ static int aio_completion_thread(void *arg)
 				continue;
 			}
 
-			if (ev->res != bio->bi_iter.bi_size)
-				bio->bi_status = BLK_STS_IOERR;
+			if (ev->res != bio->bi_iter.bi_size) {
+				if (ev->res == -ENOSPC)
+					bio->bi_status = BLK_STS_NOSPC;
+				else
+					bio->bi_status = BLK_STS_IOERR;
+			}
 
 			bio_endio(bio);
 			atomic_dec(&running_requests);

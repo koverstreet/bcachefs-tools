@@ -266,8 +266,8 @@ impl BcachefsHandle {
                 Err(_) => BchError::from_raw(-libc::EIO),
             })?;
 
-        let dev_idx = unsafe { (*sb.sb).dev_idx as i32 };
-        let uuid = unsafe { (*sb.sb).user_uuid.b };
+        let dev_idx = sb.sb().dev_idx as i32;
+        let uuid = sb.sb().user_uuid.b;
         let uuid_str = format_uuid(&uuid);
 
         unsafe { bch_bindgen::sb::io::bch2_free_super(&sb as *const _ as *mut _) };

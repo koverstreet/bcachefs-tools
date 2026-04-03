@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use bch_bindgen::bcachefs;
 use bch_bindgen::c;
 use bch_bindgen::opt_set;
@@ -53,22 +53,18 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
     unsafe {
         let _sb_lock = crate::wrappers::sb_lock(fs.raw);
 
-        let ext = c::bch2_sb_field_get_minsize_id(
+        let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+        let ext: &mut c::bch_sb_field_ext = bch_bindgen::sb::sb_field_get_minsize(
             &mut (*fs.raw).disk_sb,
-            c::bch_sb_field_type::BCH_SB_FIELD_ext,
-            (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32,
-        ) as *mut c::bch_sb_field_ext;
+            ext_u64s,
+        ).ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
 
-        if ext.is_null() {
-            bail!("Error getting sb_field_ext");
-        }
-
-        let mut scheduled = u64::from_le((*ext).recovery_passes_required[0]);
+        let mut scheduled = u64::from_le(ext.recovery_passes_required[0]);
 
         if passes_to_set != 0 || passes_to_unset != 0 {
-            (*ext).recovery_passes_required[0] &= !passes_to_unset.to_le();
-            (*ext).recovery_passes_required[0] |= passes_to_set.to_le();
-            scheduled = u64::from_le((*ext).recovery_passes_required[0]);
+            ext.recovery_passes_required[0] &= !passes_to_unset.to_le();
+            ext.recovery_passes_required[0] |= passes_to_set.to_le();
+            scheduled = u64::from_le(ext.recovery_passes_required[0]);
             fs.write_super();
         }
 

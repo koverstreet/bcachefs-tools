@@ -43,7 +43,7 @@ fn device_add_cmd() -> Command {
             .help("Use device even if it appears to already be formatted"))
         .arg(Arg::new("filesystem")
             .required(true)
-            .help("Filesystem path or mountpoint"))
+            .help("Filesystem path, mountpoint, or device"))
         .arg(Arg::new("device")
             .required(true)
             .help("Device to add"))
@@ -57,9 +57,22 @@ fn cmd_device_add(argv: Vec<String>) -> Result<()> {
     let label = matches.get_one::<String>("label");
     let force = matches.get_flag("force");
 
-    let handle = BcachefsHandle::open(fs_path)
-        .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))?;
+    // Try online first — works for mountpoints, and for block devices
+    // or files with a bcachefs superblock if the filesystem is mounted.
+    // If the filesystem isn't mounted, fall back to offline add.
+    match BcachefsHandle::open(fs_path) {
+        Ok(handle) => cmd_device_add_online(handle, dev_path, label, force, &matches),
+        Err(_) => cmd_device_add_offline(fs_path, dev_path, label, force, &matches),
+    }
+}
 
+fn cmd_device_add_online(
+    handle: BcachefsHandle,
+    dev_path: &str,
+    label: Option<&String>,
+    force: bool,
+    matches: &clap::ArgMatches,
+) -> Result<()> {
     let block_size = parse_human_size(
         &sysfs::read_sysfs_fd_str(handle.sysfs_fd(), "options/block_size")
             .context("reading block_size from sysfs")?,
@@ -69,55 +82,89 @@ fn cmd_device_add(argv: Vec<String>) -> Result<()> {
             .context("reading btree_node_size from sysfs")?,
     ).context("parsing btree_node_size")?;
 
-    // Build dev_opts with bch_opts from parsed arguments
-    let mut dev_opts: c::dev_opts = Default::default();
+    drop(device_add_format(dev_path, label, force, matches,
+        block_size as u32, btree_node_size as u32)?);
+    let c_dev_path = path_to_cstr(dev_path);
+    handle.disk_add(&c_dev_path)
+        .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
 
-    let c_path = CString::new(dev_path.as_str())?;
-    dev_opts.path = c_path.as_ptr();
+    Ok(())
+}
 
-    let c_label = label.map(|l| CString::new(l.as_str())).transpose()?;
-    if let Some(ref l) = c_label {
-        dev_opts.label = l.as_ptr();
-    }
+fn cmd_device_add_offline(
+    fs_path: &str,
+    dev_path: &str,
+    label: Option<&String>,
+    force: bool,
+    matches: &clap::ArgMatches,
+) -> Result<()> {
+    // Open the existing filesystem without starting it — same approach
+    // as 'bcachefs image update'. This works even when the allocator is
+    // stuck and the filesystem can't mount normally.
+    let mut opts: c::bch_opts = Default::default();
+    opt_set!(opts, nostart, 1u8);
+    opt_set!(opts, copygc_enabled, 0u8);
+    opt_set!(opts, reconcile_enabled, 0u8);
 
-    // Apply bcachefs options (--discard, --durability, etc.)
-    let bch_opts = bch_options_from_matches(&matches, device_add_opt_flags());
+    let fs = crate::device_scan::open_scan(&[PathBuf::from(fs_path)], opts)
+        .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))?;
+
+    let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
+    let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
+
+    device_add_format(dev_path, label, force, matches,
+        block_size, btree_node_size)?;
+
+    fs.dev_add(dev_path)
+        .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
+
+    fs.start()
+        .map_err(|e| anyhow!("starting filesystem: {}", e))?;
+
+    Ok(())
+}
+
+fn device_add_format(
+    dev_path: &str,
+    label: Option<&String>,
+    force: bool,
+    matches: &clap::ArgMatches,
+    block_size: u32,
+    btree_node_size: u32,
+) -> Result<crate::commands::format_util::DevOpts> {
+    use crate::commands::format_util::DevOpts;
+
+    let mut dev_opts = DevOpts::new(CString::new(dev_path)?);
+    dev_opts.label = label.map(|l| CString::new(l.as_str())).transpose()?;
+
+    let bch_opts = bch_options_from_matches(matches, device_add_opt_flags());
     for (name, value) in &bch_opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else { continue };
         let val = parse_opt_val(opt, value)?
             .ok_or_else(|| anyhow!("option {} requires open filesystem", name))?;
-        unsafe { c::bch2_opt_set_by_id(&mut dev_opts.opts, opt_id, val) };
+        bch_bindgen::opts::opt_set_by_id(&mut dev_opts.opts, opt_id, val);
     }
 
     if let Some(mpath_dev) = find_multipath_holder(Path::new(dev_path)) {
         warn_multipath_component(Path::new(dev_path), &mpath_dev);
         if !force {
-            // Locking applies to the selected device path only; it is not
-            // coordinated across dm-mpath maps and component devices.
-            // Selecting a component path may cause unintended data loss.
-            bail!("Use -f/--force to add anyway");
+            bail!("device appears to be a multipath component, use -f/--force to add anyway");
         }
     }
 
-    let ret = unsafe { c::open_for_format(&mut dev_opts, 0, force) };
-    if ret != 0 {
-        return Err(anyhow!("error opening {}: {}",
-            dev_path, std::io::Error::from_raw_os_error(-ret)));
-    }
+    dev_opts.open(0, force).map_err(|e| {
+        anyhow!("error opening {}: {}", dev_path, std::io::Error::from_raw_os_error(e))
+    })?;
 
-    let ret = crate::commands::format_util::bch2_format_for_device_add(
-        &mut dev_opts, block_size as u32, btree_node_size as u32,
+    let ret = crate::commands::format_util::format_for_device_add(
+        &mut dev_opts, block_size, btree_node_size,
     );
     if ret != 0 {
         return Err(anyhow!("error formatting {}: {}",
             dev_path, std::io::Error::from_raw_os_error(-ret)));
     }
 
-    let c_dev_path = path_to_cstr(dev_path);
-    handle.disk_add(&c_dev_path)
-        .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
-
-    Ok(())
+    Ok(dev_opts)
 }
 
 /// Open a filesystem by block device path and return its handle + device index.
@@ -327,15 +374,15 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
     if ret != 0 {
         return Err(anyhow!("error opening {}: {}", device, bch_err_str(ret)));
     }
-    let dev_idx = unsafe { (*sb_handle.sb).dev_idx as u32 };
-    unsafe { c::bch2_free_super(&mut sb_handle) };
+    let dev_idx = sb_handle.sb().dev_idx as u32;
+    drop(sb_handle);
 
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("Error opening filesystem: {}", e))?;
 
     {
         let _lock = fs.sb_lock();
-        unsafe { fs.members_v2_get_mut(dev_idx) }.set_member_state(new_state as u64);
+        unsafe { fs.member_mut(dev_idx) }.set_member_state(new_state as u64);
         fs.write_super();
     }
     Ok(())

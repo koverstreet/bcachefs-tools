@@ -96,34 +96,8 @@ u64 read_file_u64(int dirfd, const char *path)
 	return v;
 }
 
-/* Returns size of file or block device: */
-u64 get_size(int fd)
-{
-	struct stat statbuf = xfstat(fd);
-
-	if (!S_ISBLK(statbuf.st_mode))
-		return statbuf.st_size;
-
-	u64 ret;
-	xioctl(fd, BLKGETSIZE64, &ret);
-	return ret;
-}
-
-/* Returns blocksize, in bytes: */
-unsigned get_blocksize(int fd)
-{
-	struct stat statbuf = xfstat(fd);
-
-	if (!S_ISBLK(statbuf.st_mode))
-		return statbuf.st_blksize;
-
-	unsigned ret;
-	xioctl(fd, BLKPBSZGET, &ret);
-	return ret;
-}
-
-/* Open a block device, do magic blkid stuff to probe for existing filesystems: */
-int open_for_format(struct dev_opts *dev, blk_mode_t mode, bool force)
+/* Check for existing filesystems using blkid and optionally wipe them: */
+void blkid_check(int fd, const char *path, bool force)
 {
 	int blkid_version_code = blkid_get_library_version(NULL, NULL);
 	if (blkid_version_code < 2401) {
@@ -147,17 +121,9 @@ int open_for_format(struct dev_opts *dev, blk_mode_t mode, bool force)
 	const char *fs_type = NULL, *fs_label = NULL;
 	size_t fs_type_len, fs_label_len;
 
-	dev->file = bdev_file_open_by_path(dev->path,
-				BLK_OPEN_READ|BLK_OPEN_WRITE|BLK_OPEN_EXCL|BLK_OPEN_BUFFERED|mode,
-				dev, NULL);
-	int ret = PTR_ERR_OR_ZERO(dev->file);
-	if (ret < 0)
-		die("Error opening device to format %s: %s", dev->path, strerror(-ret));
-	dev->bdev = file_bdev(dev->file);
-
 	if (!(pr = blkid_new_probe()))
 		die("blkid error 1");
-	if (blkid_probe_set_device(pr, dev->bdev->bd_fd, 0, 0))
+	if (blkid_probe_set_device(pr, fd, 0, 0))
 		die("blkid error 2");
 	if (blkid_probe_enable_partitions(pr, true) ||
 	    blkid_probe_enable_superblocks(pr, true) ||
@@ -173,10 +139,10 @@ int open_for_format(struct dev_opts *dev, blk_mode_t mode, bool force)
 	if (fs_type) {
 		if (fs_label)
 			printf("%s contains a %s filesystem labelled '%s'\n",
-			       dev->path, fs_type, fs_label);
+			       path, fs_type, fs_label);
 		else
 			printf("%s contains a %s filesystem\n",
-			       dev->path, fs_type);
+			       path, fs_type);
 		if (!force) {
 			fputs("Proceed anyway?", stdout);
 			if (!ask_yn())
@@ -189,7 +155,6 @@ int open_for_format(struct dev_opts *dev, blk_mode_t mode, bool force)
 	}
 
 	blkid_free_probe(pr);
-	return ret;
 }
 
 bool ask_yn(void)
@@ -367,47 +332,3 @@ u32 crc32c(u32 crc, const void *buf, size_t size)
 
 #endif /* HAVE_WORKING_IFUNC */
 
-static char *dev_to_sysfs_path(dev_t dev)
-{
-	return mprintf("/sys/dev/block/%u:%u", major(dev), minor(dev));
-}
-
-char *fd_to_dev_model(int fd)
-{
-	struct stat stat = xfstat(fd);
-
-	if (S_ISBLK(stat.st_mode)) {
-		char *sysfs_path = dev_to_sysfs_path(stat.st_rdev);
-
-		char *model_path = mprintf("%s/device/model", sysfs_path);
-		if (!access(model_path, R_OK))
-			goto got_model;
-		free(model_path);
-
-		/* partition? try parent */
-
-		model_path = mprintf("%s/../device/model", sysfs_path);
-		if (!access(model_path, R_OK))
-			goto got_model;
-		free(model_path);
-
-		/* loop device? try loop/backing_file */
-
-		model_path = mprintf("%s/loop/backing_file", sysfs_path);
-		if (!access(model_path, R_OK))
-			goto got_model;
-		free(model_path);
-
-		free(sysfs_path);
-		return strdup("(unknown model)");
-got_model:
-		{
-			char *model = read_file_str(AT_FDCWD, model_path);
-			free(model_path);
-			free(sysfs_path);
-			return model;
-		}
-	} else {
-		return strdup("(image file)");
-	}
-}

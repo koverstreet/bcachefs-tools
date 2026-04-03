@@ -207,7 +207,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     let mut src_sb = sb_io::read_super_opts(Path::new(src_device), opts)
         .map_err(|e| anyhow!("Error opening {}: {}", src_device, e))?;
 
-    let nr_devices = unsafe { (*src_sb.sb).nr_devices } as i32;
+    let nr_devices = src_sb.sb().nr_devices as i32;
     if dev_idx < 0 || dev_idx >= nr_devices {
         return Err(anyhow!("Device index {} out of range (filesystem has {} devices)",
                            dev_idx, nr_devices));
@@ -221,8 +221,8 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     unsafe {
         c::bch2_sb_field_delete(&mut src_sb, c::bch_sb_field_type::BCH_SB_FIELD_journal);
         c::bch2_sb_field_delete(&mut src_sb, c::bch_sb_field_type::BCH_SB_FIELD_journal_v2);
-        (*src_sb.sb).dev_idx = dev_idx as u8;
     }
+    src_sb.sb_mut().dev_idx = dev_idx as u8;
 
     // Read fields safely before layout mutation
     let sb = src_sb.sb();
@@ -231,7 +231,7 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     let sb_max_size = 1u32 << sb.layout.sb_max_size_bits;
 
     super_io::sb_layout_init(
-        unsafe { &mut (*src_sb.sb).layout },
+        &mut src_sb.sb_mut().layout,
         block_size << 9,
         bucket_size << 9,
         sb_max_size,

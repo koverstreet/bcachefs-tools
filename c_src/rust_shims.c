@@ -139,18 +139,6 @@ int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset)
 }
 
 
-/* Open a block device without blkid probe (for migrate, not format) */
-
-int rust_bdev_open(struct dev_opts *dev, blk_mode_t mode)
-{
-	dev->file = bdev_file_open_by_path(dev->path, mode, dev, NULL);
-	int ret = PTR_ERR_OR_ZERO(dev->file);
-	if (ret < 0)
-		return ret;
-	dev->bdev = file_bdev(dev->file);
-	return 0;
-}
-
 /* Bitmap shim — set_bit is atomic (locked bitops) */
 
 void rust_set_bit(unsigned long nr, unsigned long *addr)
