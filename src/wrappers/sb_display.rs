@@ -60,8 +60,13 @@ unsafe fn print_one_member(
     write!(out, "Device {}:\t{}\t", idx, name_str).unwrap();
 
     if let Some((_, sb_handle)) = dev {
-        let model = crate::wrappers::bdev::fd_to_dev_model(sb_handle.bdev().bd_fd);
+        use crate::wrappers::bdev;
+        let fd = sb_handle.bdev().bd_fd;
+        let model = bdev::fd_to_dev_model(fd);
         write!(out, "{}", model).unwrap();
+        if let Some(serial) = bdev::fd_to_dev_serial(fd) {
+            write!(out, "\tS/N: {}", serial).unwrap();
+        }
     }
     out.newline();
 

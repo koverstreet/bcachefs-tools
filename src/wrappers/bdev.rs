@@ -71,6 +71,33 @@ pub fn fd_to_dev_model(fd: RawFd) -> String {
     "(unknown model)".to_string()
 }
 
+/// Returns the device serial number for a block device fd, or None
+/// if not available (image files, devices without serial sysfs entry).
+pub fn fd_to_dev_serial(fd: RawFd) -> Option<String> {
+    let stat = fstat(fd);
+
+    if !is_blk(stat.st_mode) {
+        return None;
+    }
+
+    let major = libc::major(stat.st_rdev);
+    let minor = libc::minor(stat.st_rdev);
+    let sysfs = format!("/sys/dev/block/{}:{}", major, minor);
+
+    // Try device/serial, then parent's device/serial (partition)
+    for suffix in &["device/serial", "../device/serial"] {
+        let path = format!("{}/{}", sysfs, suffix);
+        if let Ok(contents) = std::fs::read_to_string(&path) {
+            let trimmed = contents.trim();
+            if !trimmed.is_empty() {
+                return Some(trimmed.to_string());
+            }
+        }
+    }
+
+    None
+}
+
 /// Returns true if the block device is non-rotational (SSD).
 ///
 /// For regular files, returns false.
