@@ -106,7 +106,7 @@ fn cmd_device_add_offline(
     opt_set!(opts, copygc_enabled, 0u8);
     opt_set!(opts, reconcile_enabled, 0u8);
 
-    let fs = Fs::open(&[PathBuf::from(fs_path)], opts)
+    let fs = crate::device_scan::open_scan(&[PathBuf::from(fs_path)], opts)
         .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))?;
 
     let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
