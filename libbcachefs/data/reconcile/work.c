@@ -514,7 +514,8 @@ static int check_reconcile_pending_err(struct btree_trans *trans,
 
 	 if (!bch2_err_matches(err, BCH_ERR_data_update_fail_no_rw_devs) &&
 	     !bch2_err_matches(err, BCH_ERR_insufficient_devices) &&
-	     !bch2_err_matches(err, ENOSPC))
+	     !bch2_err_matches(err, ENOSPC) &&
+	     !bch2_err_matches(err, BCH_ERR_ec_alloc_failed))
 		 return err;
 
 	event_add_trace(c, reconcile_set_pending, k.k->size, buf, ({
