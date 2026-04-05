@@ -1053,8 +1053,6 @@ static bool may_reuse_stripe(struct bch_fs *c,
 			live_data++;
 		}
 
-	pr_info("%px: live_data %u new->nr_data %u", new, live_data, new->nr_data);
-
 	/* live data blocks (including moving) must fit with room for at least one new block */
 	if (live_data + 1 > new->nr_data)
 		return false;
@@ -1162,8 +1160,7 @@ static int stripe_reuse(struct btree_trans *trans, struct ec_stripe_new *s)
 		return ret ?: bch_err_throw(c, stripe_alloc_blocked);
 
 	init_new_stripe_from_old(c, s, false);
-	return ret;
-
+	return 0;
 }
 
 static int stripe_idx_alloc(struct btree_trans *trans, struct ec_stripe_new *s)

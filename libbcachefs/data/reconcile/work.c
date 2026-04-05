@@ -279,8 +279,8 @@ static int extent_ec_pending(struct btree_trans *trans, struct bkey_ptrs_c ptrs)
 	return false;
 }
 
-static int bch2_extent_reconcile_pending_mod(struct btree_trans *, struct btree_iter *,
-					     unsigned, struct bkey_s_c, bool);
+int bch2_extent_reconcile_pending_mod(struct btree_trans *, struct btree_iter *,
+				      unsigned, struct bkey_s_c, bool);
 
 static int reconcile_set_data_opts(struct btree_trans *trans,
 				   struct btree_iter *iter,
@@ -467,8 +467,8 @@ static void bkey_reconcile_pending_mod(struct bch_fs *c, struct bkey_i *k, bool 
 	r->pending = set;
 }
 
-static int bch2_extent_reconcile_pending_mod(struct btree_trans *trans, struct btree_iter *iter,
-					     unsigned level, struct bkey_s_c k, bool set)
+int bch2_extent_reconcile_pending_mod(struct btree_trans *trans, struct btree_iter *iter,
+				      unsigned level, struct bkey_s_c k, bool set)
 {
 	struct bch_fs *c = trans->c;
 
@@ -514,8 +514,7 @@ static int check_reconcile_pending_err(struct btree_trans *trans,
 
 	 if (!bch2_err_matches(err, BCH_ERR_data_update_fail_no_rw_devs) &&
 	     !bch2_err_matches(err, BCH_ERR_insufficient_devices) &&
-	     !bch2_err_matches(err, ENOSPC) &&
-	     !bch2_err_matches(err, BCH_ERR_ec_alloc_failed))
+	     !bch2_err_matches(err, ENOSPC))
 		 return err;
 
 	event_add_trace(c, reconcile_set_pending, k.k->size, buf, ({
