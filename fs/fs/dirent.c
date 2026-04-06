@@ -391,8 +391,7 @@ int bch2_dirent_rename(struct btree_trans *trans,
 	CLASS(btree_iter_uninit, dst_iter)(trans);
 	struct bkey_s_c old_src, old_dst = bkey_s_c_null;
 	struct bkey_i_dirent *new_src = NULL, *new_dst = NULL;
-	struct bpos dst_pos =
-		POS(dst_dir.inum, bch2_dirent_hash(dst_hash, dst_name));
+	struct bpos dst_pos;
 	unsigned src_update_flags = 0;
 	bool delete_src, delete_dst;
 
@@ -410,6 +409,8 @@ int bch2_dirent_rename(struct btree_trans *trans,
 
 	/* Lookup dst: */
 	try(bch2_maybe_casefold(trans, dst_hash, dst_name, &dst_name_lookup));
+
+	dst_pos = POS(dst_dir.inum, bch2_dirent_hash(dst_hash, &dst_name_lookup));
 
 	if (mode == BCH_RENAME) {
 		/*
