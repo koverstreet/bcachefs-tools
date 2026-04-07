@@ -731,6 +731,7 @@ struct bch_fs {
 	struct bch_disk_groups_cpu __rcu	*disk_groups;
 	struct bch_fs_capacity			capacity;
 	struct bch_fs_allocator			allocator;
+	struct bch_fs_discards			discards;
 
 	struct bch_fs_snapshots			snapshots;
 
