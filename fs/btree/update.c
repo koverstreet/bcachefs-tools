@@ -601,7 +601,7 @@ int bch2_btree_insert_nonextent(struct btree_trans *trans,
 int bch2_btree_insert_trans(struct btree_trans *trans, enum btree_id btree,
 			    struct bkey_i *k, enum btree_iter_update_trigger_flags flags)
 {
-	CLASS(btree_iter, iter)(trans, btree, bkey_start_pos(&k->k),
+	CLASS(btree_iter, iter)(trans, btree, k->k.p,
 				BTREE_ITER_intent|flags);
 	return  bch2_btree_iter_traverse(&iter) ?:
 		bch2_trans_update_ip(trans, &iter, k, flags, _RET_IP_);
