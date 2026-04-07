@@ -302,6 +302,8 @@ static int bch2_str_hash_repair_key(struct btree_trans *trans,
 					    BTREE_UPDATE_internal_snapshot_node));
 			try(bch2_fsck_update_backpointers(trans, s, *desc, hash_info, new));
 			try(bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+		} else {
+			try(str_hash_dup_entries(trans, s, desc, hash_info, k, dup_k, updated_before_k_pos));
 		}
 	} else {
 		try(str_hash_dup_entries(trans, s, desc, hash_info, k, dup_k, updated_before_k_pos));
