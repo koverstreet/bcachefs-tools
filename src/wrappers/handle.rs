@@ -78,11 +78,11 @@ struct BchIoctlQueryUuid {
 }
 
 /// Compute _IOR(type, nr, size)
-const fn ioc_r(type_: u32, nr: u32, size: u32) -> libc::c_ulong {
-    ((2u32 << 30) | (size << 16) | (type_ << 8) | nr) as libc::c_ulong
+const fn ioc_r(type_: u32, nr: u32, size: u32) -> libc::Ioctl {
+    ((2u32 << 30) | (size << 16) | (type_ << 8) | nr) as libc::Ioctl
 }
 
-const BCH_IOCTL_QUERY_UUID: libc::c_ulong =
+const BCH_IOCTL_QUERY_UUID: libc::Ioctl =
     ioc_r(0xbc, 1, mem::size_of::<BchIoctlQueryUuid>() as u32);
 
 /// FS_IOC_GETFSSYSFSPATH: _IOR(0x15, 1, struct fs_sysfs_path)
@@ -92,7 +92,7 @@ struct FsSysfsPath {
     name: [u8; 128],
 }
 
-const FS_IOC_GETFSSYSFSPATH: libc::c_ulong =
+const FS_IOC_GETFSSYSFSPATH: libc::Ioctl =
     ioc_r(0x15, 1, mem::size_of::<FsSysfsPath>() as u32);
 
 /// A handle to a bcachefs filesystem, with RAII close.

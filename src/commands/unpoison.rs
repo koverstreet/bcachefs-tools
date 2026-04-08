@@ -17,9 +17,9 @@ use clap::Parser;
 const SECTOR_SIZE: u64 = 512;
 
 /// ioctl number: _IOW(0xbc, 68, struct bch_ioctl_unpoison)
-const fn bchfs_ioc_unpoison() -> libc::c_ulong {
+const fn bchfs_ioc_unpoison() -> libc::Ioctl {
     let size = std::mem::size_of::<BchIoctlUnpoison>() as u32;
-    ((1u32 << 30) | (size << 16) | (0xbcu32 << 8) | 68) as libc::c_ulong
+    ((1u32 << 30) | (size << 16) | (0xbcu32 << 8) | 68) as libc::Ioctl
 }
 
 #[repr(C)]
