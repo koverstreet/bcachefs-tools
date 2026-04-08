@@ -13,9 +13,9 @@ use clap::Parser;
 const SECTOR_SIZE: u64 = 512;
 
 /// ioctl number: _IOWR(0xbc, 67, struct bch_ioctl_pread_raw)
-const fn bchfs_ioc_pread_raw() -> libc::c_ulong {
+const fn bchfs_ioc_pread_raw() -> libc::Ioctl {
     let size = std::mem::size_of::<BchIoctlPreadRaw>() as u32;
-    ((3u32 << 30) | (size << 16) | (0xbcu32 << 8) | 67) as libc::c_ulong
+    ((3u32 << 30) | (size << 16) | (0xbcu32 << 8) | 67) as libc::Ioctl
 }
 
 #[repr(C)]
