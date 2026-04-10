@@ -504,11 +504,13 @@ fn image_create_inner(
         print!("{}", buf);
     }
 
-    // Open filesystem
+    // Collect paths before dropping devs — Fs::open needs O_EXCL and
+    // the format fds are still holding it.
     let device_paths: Vec<PathBuf> = devs
         .iter()
         .map(|d| PathBuf::from(d.path.to_string_lossy().as_ref()))
         .collect();
+    drop(devs);
 
     let mut opts: c::bch_opts = Default::default();
     opt_set!(opts, copygc_enabled, 0u8);
@@ -543,8 +545,8 @@ fn image_create_inner(
     drop(src_file);
 
     if let Err(e) = result {
-        for d in &devs {
-            let _ = std::fs::remove_file(d.path.to_str().unwrap_or(""));
+        for p in &device_paths {
+            let _ = std::fs::remove_file(p);
         }
         return Err(e);
     }
