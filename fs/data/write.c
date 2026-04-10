@@ -2119,6 +2119,15 @@ retry:
 			     !bch2_extent_is_writeable(op, k)))
 			break;
 
+		/*
+		 * Extent end may not be block-aligned (e.g. after
+		 * truncate). Can't split a nocow bio at a non-aligned
+		 * point — fall back to COW which allocates new blocks.
+		 */
+		if (k.k->p.offset < op->pos.offset + bio_sectors(bio) &&
+		    (k.k->p.offset - op->pos.offset) & (block_sectors(c) - 1))
+			break;
+
 		if (bch2_keylist_realloc(&op->insert_keys,
 					 op->inline_keys,
 					 ARRAY_SIZE(op->inline_keys),
