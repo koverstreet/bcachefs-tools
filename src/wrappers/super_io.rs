@@ -42,6 +42,7 @@ fn csum_vstruct_sb(sb: *mut c::bch_sb) -> c::bch_csum {
 pub fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
     let file = borrowed_file(fd);
 
+    let bs = crate::wrappers::bdev::get_blocksize_physical_hint(fd) as usize;
     let sb_ref = unsafe { &mut *sb };
 
     let nr_superblocks = sb_ref.layout.nr_superblocks as usize;
@@ -50,24 +51,58 @@ pub fn bch2_super_write(fd: i32, sb: *mut c::bch_sb) {
 
         let offset_sectors = u64::from_le(sb_ref.offset);
 
-        if offset_sectors == c::BCH_SB_SECTOR as u64 {
-            // Write backup layout immediately preceding byte 4096
+        sb_ref.csum = csum_vstruct_sb(sb);
+
+        let sb_bytes = vstruct_bytes_sb(unsafe { &*sb });
+
+        if offset_sectors == c::BCH_SB_SECTOR as u64 && bs > 4096 {
+            // Layout and superblock are in the same aligned block;
+            // write them together.
             let layout_offset = (c::BCH_SB_LAYOUT_SECTOR as usize) << 9;
             let layout_bytes = std::mem::size_of::<c::bch_sb_layout>();
-            let src = unsafe {
+            let sb_offset = (offset_sectors as usize) << 9;
+            let write_len = round_up(sb_offset + sb_bytes, bs);
+            let mut buf = vec![0u8; write_len];
+
+            let layout_src = unsafe {
                 std::slice::from_raw_parts(
                     &sb_ref.layout as *const _ as *const u8,
                     layout_bytes,
                 )
             };
-            pwrite_exact(&file, &src, layout_offset as u64);
+            buf[layout_offset..layout_offset + layout_bytes].copy_from_slice(layout_src);
+
+            let sb_src = unsafe { std::slice::from_raw_parts(sb as *const u8, sb_bytes) };
+            buf[sb_offset..sb_offset + sb_bytes].copy_from_slice(sb_src);
+
+            pwrite_exact(&file, &buf, 0);
+        } else {
+            if offset_sectors == c::BCH_SB_SECTOR as u64 {
+                // Write backup layout in the block preceding the superblock
+                let mut buf = vec![0u8; bs];
+
+                file.read_exact_at(&mut buf, 4096 - bs as u64)
+                    .unwrap_or_else(|e| die(&format!("pread failed at offset {}: {}", 4096 - bs, e)));
+
+                let layout_bytes = std::mem::size_of::<c::bch_sb_layout>();
+                let layout_src = unsafe {
+                    std::slice::from_raw_parts(
+                        &sb_ref.layout as *const _ as *const u8,
+                        layout_bytes,
+                    )
+                };
+                buf[bs - layout_bytes..].copy_from_slice(layout_src);
+
+                pwrite_exact(&file, &buf, 4096 - bs as u64);
+            }
+
+            let write_len = round_up(sb_bytes, bs);
+            let mut buf = vec![0u8; write_len];
+            let sb_src = unsafe { std::slice::from_raw_parts(sb as *const u8, sb_bytes) };
+            buf[..sb_bytes].copy_from_slice(sb_src);
+
+            pwrite_exact(&file, &buf, offset_sectors << 9);
         }
-
-        sb_ref.csum = csum_vstruct_sb(sb);
-
-        let sb_bytes = vstruct_bytes_sb(unsafe { &*sb });
-        let sb_slice = unsafe { std::slice::from_raw_parts(sb as *const u8, sb_bytes) };
-        pwrite_exact(&file, sb_slice, offset_sectors << 9);
     }
 
     if let Err(e) = rustix::fs::fsync(&*file) {

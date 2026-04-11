@@ -315,14 +315,28 @@ impl bindgen::callbacks::ParseCallbacks for Fix753 {
     }
 }
 
+fn watch_dir(dir: &str) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            watch_dir(&path.to_string_lossy());
+        } else if path.extension().is_some_and(|ext| ext == "h" || ext == "c") {
+            println!("cargo:rerun-if-changed={}", path.display());
+        }
+    }
+}
+
 fn main() {
     use std::path::PathBuf;
 
     println!("cargo:rerun-if-changed=src/libbcachefs_wrapper.h");
-    println!("cargo:rerun-if-changed=../libbcachefs/bcachefs_format.h");
-    println!("cargo:rerun-if-changed=../libbcachefs/sb/members_format.h");
-    println!("cargo:rerun-if-changed=../libbcachefs/data/extents_format.h");
-    println!("cargo:rerun-if-changed=../libbcachefs/sb/counters_format.h");
+    // Watch all C/H files that the wrapper might include, so bindgen
+    // reruns when any header changes — not just the handful we used
+    // to list explicitly.
+    for dir in ["../libbcachefs", "../c_src", "../include"] {
+        watch_dir(dir);
+    }
 
     let out_dir: PathBuf = std::env::var_os("OUT_DIR")
         .expect("ENV Var 'OUT_DIR' Expected")

@@ -13,7 +13,7 @@ use libc::{
 };
 
 // linux/fs.h ioctl constants not exposed by libc crate
-const BLKGETSIZE64: libc::c_ulong = 0x80081272;
+const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
 
 /// Returns the size of a file or block device in bytes.
 ///

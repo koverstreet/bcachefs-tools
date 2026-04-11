@@ -20,9 +20,9 @@ use crate::wrappers::sysfs;
 use crate::device_scan;
 
 // _IOW(0xbc, 19, struct bch_ioctl_fsck_offline) — sizeof = 24
-const BCH_IOCTL_FSCK_OFFLINE: libc::c_ulong = 0x4018bc13;
+const BCH_IOCTL_FSCK_OFFLINE: libc::Ioctl = 0x4018bc13u32 as libc::Ioctl;
 // _IOW(0xbc, 20, struct bch_ioctl_fsck_online) — sizeof = 16
-const BCH_IOCTL_FSCK_ONLINE: libc::c_ulong = 0x4010bc14;
+const BCH_IOCTL_FSCK_ONLINE: libc::Ioctl = 0x4010bc14u32 as libc::Ioctl;
 
 /// Filesystem check and repair
 #[derive(Parser, Debug)]

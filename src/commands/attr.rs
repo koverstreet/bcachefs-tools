@@ -10,12 +10,12 @@ use rustix::fs::{XattrFlags, setxattr, removexattr};
 
 use super::opts;
 
-const BCHFS_IOC_REINHERIT_ATTRS: libc::c_ulong = 0x8008bc40;
-const BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS: libc::c_ulong = 0xbc41;
-const BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS: libc::c_ulong = 0xbc42;
+const BCHFS_IOC_REINHERIT_ATTRS: libc::Ioctl = 0x8008bc40u32 as libc::Ioctl;
+const BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS: libc::Ioctl = 0xbc41u32 as libc::Ioctl;
+const BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS: libc::Ioctl = 0xbc42u32 as libc::Ioctl;
 
 /// Call a no-argument ioctl, returning io::Result.
-fn ioctl_none(fd: i32, request: libc::c_ulong) -> std::io::Result<()> {
+fn ioctl_none(fd: i32, request: libc::Ioctl) -> std::io::Result<()> {
     if unsafe { libc::ioctl(fd, request) } < 0 {
         Err(std::io::Error::last_os_error())
     } else {

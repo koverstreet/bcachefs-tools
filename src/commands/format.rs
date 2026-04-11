@@ -508,10 +508,12 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     // Initialize filesystem
     if cfg.initialize {
         let dev_paths: Vec<PathBuf> = cfg.devices.iter().map(|d| PathBuf::from(&d.path)).collect();
+        drop(devices);
+
         let open_opts: c::bch_opts = Default::default();
 
         let fs = Fs::open(&dev_paths, open_opts)
-            .map_err(|e| anyhow!("error opening {}: {}", cfg.devices[0].path, e))?;
+            .map_err(|e| anyhow!("error opening {}: {}", dev_paths[0].display(), e))?;
 
         if let Some(ref src) = cfg.source {
             let file = std::fs::File::open(src)

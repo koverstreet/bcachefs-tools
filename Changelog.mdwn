@@ -1,5 +1,44 @@
 # Changelog
 
+## v1.37.5 - Mon Apr 7 2026
+
+New features:
+
+- Offline device add: `bcachefs device add` now works without the
+  filesystem mounted, discovering member devices automatically
+- Show device serial numbers in `show-super` output
+
+Bug fixes:
+
+- Fix fd leak in format()
+- Fix sticky device options not carrying across subsequent devices
+  during format
+- Fix super_io write path (two fixes from intelfx)
+- DKMS: add linux-headers virtual package fallback (#540)
+
+Rust migration:
+
+- Replace C `struct dev_opts` with Rust `DevOpts` type
+- Safe typed field API for superblock access
+- Safe wrappers for opts, dev_opts, opt_set_by_id, bch_opt_strs
+- Move get_size, get_blocksize, fd_to_dev_model from C to Rust
+- Add nonrot() Rust wrapper, replace C bdev_nonrot
+- Safe error string access via errcode msg() method
+- Remove unnecessary extern "C" from Rust-only functions
+
+Kernel source updates:
+
+- Fix handling of stripe_buf limits (#1096, #1098)
+- Fix bad return code from stripe_reuse()
+- Fix str_hash repair silently failing when insert finds duplicate
+- Fix rename computing wrong hash with casefolding
+- Reconcile: mark ec_alloc_failed extents as pending
+- Preserve pre-recovery journal keys across journal_keys_sort
+- Record device serial number in superblock
+- Print write buffer state in journal stuck diagnostic
+- Improved allocator error matching in foreground.c
+- write_op_to_text(): include open_buckets
+
 ## v1.37.4 - Sun Mar 29 2026
 
 New commands:
