@@ -446,8 +446,7 @@ static int drop_dev_and_update(struct btree_trans *trans, enum btree_id btree,
 	if (!bch2_bkey_can_read(c, bkey_i_to_s_c(n)))
 		bch2_set_bkey_error(c, n, KEY_TYPE_ERROR_double_allocation);
 
-	CLASS(btree_node_iter, iter)(trans, btree, bkey_start_pos(&n->k),
-				    0, level, BTREE_ITER_intent);
+	CLASS(btree_node_iter, iter)(trans, btree, n->k.p, 0, level, BTREE_ITER_intent);
 	return bch2_btree_iter_traverse(&iter) ?:
 	       bch2_trans_update(trans, &iter, n, 0);
 }
