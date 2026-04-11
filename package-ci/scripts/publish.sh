@@ -145,4 +145,40 @@ done
 echo "--- Syncing staging to live ---"
 rsync -rlpt --delay-updates "$STAGING_ROOT/" "$PUBLISH_ROOT/"
 
+# Export GPG public key so users can fetch it for apt verification
+echo "--- Exporting GPG public key ---"
+gpg --armor --export "$GPG_SIGNING_SUBKEY_FINGERPRINT" > "$PUBLISH_ROOT/apt.bcachefs.org.asc"
+
+# Generate landing page footer (nginx fancyindex_footer)
+echo "--- Generating landing page ---"
+mkdir -p "$PUBLISH_ROOT/.footer"
+cat > "$PUBLISH_ROOT/.footer/README.html" << 'FOOTER'
+<hr>
+<h2>Adding this repository</h2>
+<pre><code>wget -qO- https://apt.bcachefs.org/apt.bcachefs.org.asc | sudo tee /etc/apt/trusted.gpg.d/apt.bcachefs.org.asc
+FOOTER
+
+# Inject the real fingerprint
+cat >> "$PUBLISH_ROOT/.footer/README.html" << EOF
+# Fingerprint: $GPG_SIGNING_SUBKEY_FINGERPRINT
+EOF
+
+cat >> "$PUBLISH_ROOT/.footer/README.html" << 'FOOTER'
+
+sudo tee /etc/apt/sources.list.d/apt.bcachefs.org.sources > /dev/null &lt;&lt;SOURCES
+Types: deb deb-src
+URIs: https://apt.bcachefs.org/unstable/
+Suites: bcachefs-tools-release
+Components: main
+Signed-By: /etc/apt/trusted.gpg.d/apt.bcachefs.org.asc
+SOURCES
+
+sudo apt update
+sudo apt install bcachefs-tools
+</code></pre>
+<p><strong>Note:</strong> For latest <code>git master</code> packages, replace <code>bcachefs-tools-release</code> with <code>bcachefs-tools-snapshot</code>.</p>
+<p>For more information, see the <a href="https://wiki.debian.org/DebianRepository/UseThirdParty">Debian third-party repository guide</a>.</p>
+<p>Binary <code>.deb</code> packages are signed with <a href="https://manpages.debian.org/debsigs">debsigs</a>. Source artifacts can be verified using <a href="https://github.com/sigstore/rekor">Rekor</a>.</p>
+FOOTER
+
 echo "=== Publish complete: $SHORT ==="
