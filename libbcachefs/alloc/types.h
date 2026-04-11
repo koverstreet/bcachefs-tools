@@ -173,8 +173,6 @@ struct bch_fs_allocator {
 
 	struct write_point	btree_write_point;
 	struct write_point	reconcile_write_point;
-
-	struct mutex		discard_lock;
 };
 
 struct discard_fifo_entry {
@@ -185,6 +183,34 @@ struct discard_fifo_entry {
 struct discard_fifo_cursor {
 	size_t			fifo_idx;
 	size_t			bucket_idx;
+};
+
+struct discard_release {
+	u64		buffer;
+	u64		pending_need_flush;
+	u64		pending_need_rewind_advance;
+	u64		pending_total;
+	u64		free;
+	u64		reserve;
+	u64		buffer_clamped;
+	s64		release;
+	bool		flush_journal;
+};
+
+struct discard_state {
+	u64				seen;
+	u64				open;
+	u64				need_journal_commit;
+	u64				bad_data_type;
+	u64				discarded;
+	u64				committed;
+	struct discard_release		r;
+};
+
+struct bch_fs_discards {
+	struct mutex			lock;
+
+	struct discard_state		s;
 };
 
 #endif /* _BCACHEFS_ALLOC_TYPES_H */

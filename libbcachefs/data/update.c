@@ -16,6 +16,7 @@
 #include "data/move.h"
 #include "data/nocow_locking.h"
 #include "data/reconcile/trigger.h"
+#include "data/ec/create.h"
 #include "data/reconcile/work.h"
 #include "data/update.h"
 #include "data/write.h"
@@ -1167,7 +1168,29 @@ int bch2_can_do_data_update(struct btree_trans *trans,
 	if (trace)
 		prt_printf(trace, "need %u replicas\n", opts->data_replicas - durability_keeping);
 
-	return __bch2_can_do_write(c, opts, data_opts, &devs_have, k, trace);
+	int ret = __bch2_can_do_write(c, opts, data_opts, &devs_have, k, trace);
+	if (ret)
+		return ret;
+
+	/*
+	 * Check if EC stripe creation is feasible — avoid expensive data
+	 * reads when EC will inevitably fail (not enough devices, etc.)
+	 */
+	if (data_opts->write_flags & BCH_WRITE_must_ec) {
+		struct alloc_request req = {
+			.target		= data_opts->target,
+			.ec_replicas	= opts->data_replicas + data_opts->extra_replicas,
+			.watermark	= BCH_WATERMARK_normal,
+		};
+
+		struct ec_stripe_head *h =
+			bch2_ec_stripe_head_get(trans, &req, 0);
+		if (IS_ERR_OR_NULL(h))
+			return bch_err_throw(c, ec_alloc_failed);
+		bch2_ec_stripe_head_put(c, h);
+	}
+
+	return 0;
 }
 
 /*

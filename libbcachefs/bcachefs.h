@@ -440,6 +440,7 @@ enum bch_dev_read_ref {
 #define BCH_DEV_WRITE_REFS()				\
 	x(journal_write)				\
 	x(journal_discard)				\
+	x(discard_bucket)				\
 	x(dev_do_discards)				\
 	x(discard_sectors_to_release)			\
 	x(discard_one_bucket_fast)			\
@@ -730,6 +731,7 @@ struct bch_fs {
 	struct bch_disk_groups_cpu __rcu	*disk_groups;
 	struct bch_fs_capacity			capacity;
 	struct bch_fs_allocator			allocator;
+	struct bch_fs_discards			discards;
 
 	struct bch_fs_snapshots			snapshots;
 
