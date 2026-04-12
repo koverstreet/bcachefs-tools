@@ -344,7 +344,7 @@ fn migrate_fs(
     // Set up DevOpts and open the device
     let mut c_dev = DevOpts::new(CString::new(dev_path.as_str())?);
     c_dev.open_no_blkid(
-        crate::wrappers::bdev::BLK_OPEN_READ | crate::wrappers::bdev::BLK_OPEN_WRITE,
+        crate::wrappers::bdev::BLK_OPEN_READ | crate::wrappers::bdev::BLK_OPEN_WRITE | crate::wrappers::bdev::BLK_OPEN_BUFFERED,
     ).map_err(|e| {
         anyhow!("Error opening device to format {}: {}", dev_path, io::Error::from_raw_os_error(e))
     })?;
