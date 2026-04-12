@@ -477,7 +477,7 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		false,				\
 	  NULL,		"Don\'t start filesystem, only open devices")	\
-	x(reconstruct_alloc,		u8,				\
+	x(dangerously_reconstruct_alloc,u8,				\
 	  OPT_FS|OPT_MOUNT,						\
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		false,				\

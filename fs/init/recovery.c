@@ -770,7 +770,7 @@ use_clean:
 		bch_info(c, "mounting a filesystem with no alloc info read-write; will recreate");
 
 		bch2_reconstruct_alloc(c);
-	} else if (c->opts.reconstruct_alloc) {
+	} else if (c->opts.dangerously_reconstruct_alloc) {
 		bch2_journal_log_msg(c, "dropping alloc info");
 		bch_info(c, "dropping and reconstructing all alloc info");
 
