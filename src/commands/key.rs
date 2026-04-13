@@ -63,7 +63,7 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
     // Retry up to 2 more times, always interactive
     for _ in 0..2 {
         eprintln!("incorrect passphrase");
-        let passphrase = Passphrase::new_from_prompt(&uuid, true)?;
+        let passphrase = Passphrase::new_from_prompt(&uuid, false)?;
         if let Some(correct) = passphrase.check(&sb)? {
             KeyHandle::new(&correct, cli.keyring)?;
             return Ok(());
