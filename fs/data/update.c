@@ -734,12 +734,13 @@ static inline bool should_trace_update_err(struct data_update *u, int ret)
 	    ((u->opts.type == BCH_DATA_UPDATE_reconcile ||
 	      u->opts.type == BCH_DATA_UPDATE_promote) &&
 	     (bch2_err_matches(ret, BCH_ERR_data_update_fail_no_rw_devs) ||
-	      /*
-	       * Reconcile promotes ENOSPC-class write failures to pending work
-	       * and retries after space/stripe availability changes, so don't
-	       * count those transient allocation misses as data update failures.
-	       */
-	      bch2_err_matches(ret, ENOSPC))))
+		      /*
+		       * Reconcile promotes ENOSPC-class write failures to pending work
+		       * and retries after space/stripe availability changes, so don't
+		       * count those transient allocation misses as data update failures.
+		       */
+		      bch2_err_matches(ret, BCH_ERR_freelist_empty) ||
+		      bch2_err_matches(ret, ENOSPC))))
 		return false;
 
 	return true;
