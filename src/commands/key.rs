@@ -63,7 +63,7 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
     // Retry up to 2 more times, always interactive
     for _ in 0..2 {
         eprintln!("incorrect passphrase");
-        let passphrase = Passphrase::new_from_prompt(&uuid)?;
+        let passphrase = Passphrase::new_from_prompt(&uuid, true)?;
         if let Some(correct) = passphrase.check(&sb)? {
             KeyHandle::new(&correct, cli.keyring)?;
             return Ok(());
@@ -107,7 +107,7 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
     if sb_is_encrypted(sb_handle) {
         let uuid = sb_handle.sb().uuid();
         let old_passphrase =
-            Passphrase::new_from_prompt(&uuid).context("reading current passphrase")?;
+            Passphrase::new_from_prompt(&uuid, true).context("reading current passphrase")?;
         let CorrectPassphrase { sb_key, .. } = old_passphrase
             .check(sb_handle)?
             .context("verifying current passphrase")?;

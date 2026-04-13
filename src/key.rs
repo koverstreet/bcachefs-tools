@@ -86,7 +86,7 @@ impl UnlockPolicy {
             Self::Fail => KeyHandle::new_from_search(&uuid),
             Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
             Self::Ask => {
-                let correct = Passphrase::new_from_prompt(&uuid)?
+                let correct = Passphrase::new_from_prompt(&uuid, true)?
                     .check(sb)?
                     .ok_or_else(|| anyhow!("incorrect passphrase"))?;
                 KeyHandle::new(&correct, Keyring::User)
@@ -181,8 +181,8 @@ impl Passphrase {
 
     pub fn new(uuid: &Uuid) -> Result<Self> {
         match get_stdin_type() {
-            StdinType::Terminal => Self::new_from_prompt(uuid),
-            StdinType::DevNull => Self::new_from_askpassword(uuid)?,
+            StdinType::Terminal => Self::new_from_prompt(uuid, true),
+            StdinType::DevNull => Self::new_from_askpassword(uuid, true)?,
             StdinType::Other => Self::new_from_stdin(),
         }
     }
@@ -191,13 +191,17 @@ impl Passphrase {
     // it is non-critical and will cause the password to be asked internally.
     // The inner result represent a successful request that returned an error
     // this one results in an error.
-    fn new_from_askpassword(uuid: &Uuid) -> Result<Result<Self>> {
-        let output = Command::new("systemd-ask-password")
+    fn new_from_askpassword(uuid: &Uuid, accept_cached: bool) -> Result<Result<Self>> {
+        let mut command = Command::new("systemd-ask-password");
+        command
             .arg("--icon=drive-harddisk")
             .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
             .arg(format!("--keyname={}", uuid.as_hyphenated()))
-            .arg("--accept-cached")
-            .arg("-n")
+            .arg("-n");
+        if accept_cached {
+            command.arg("--accept-cached");
+        }
+        let output = command
             .arg("Enter passphrase: ")
             .stdin(Stdio::inherit())
             .stderr(Stdio::inherit())
@@ -231,8 +235,8 @@ impl Passphrase {
     }
 
     // blocks indefinitely if no input is available on stdin
-    pub fn new_from_prompt(uuid: &Uuid) -> Result<Self> {
-        match Self::new_from_askpassword(uuid) {
+    pub fn new_from_prompt(uuid: &Uuid, accept_cached: bool) -> Result<Self> {
+        match Self::new_from_askpassword(uuid, accept_cached) {
             Ok(phrase) => return phrase,
             Err(_) => debug!("Failed to start systemd-ask-password, doing the prompt ourselves"),
         }
