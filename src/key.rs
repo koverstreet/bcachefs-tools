@@ -86,7 +86,7 @@ impl UnlockPolicy {
             Self::Fail => KeyHandle::new_from_search(&uuid),
             Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
             Self::Ask => {
-                let correct = Passphrase::new_from_prompt(&uuid, true)?
+                let correct = Passphrase::new_from_prompt(&uuid, false)?
                     .check(sb)?
                     .ok_or_else(|| anyhow!("incorrect passphrase"))?;
                 KeyHandle::new(&correct, Keyring::User)
