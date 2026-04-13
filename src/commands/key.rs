@@ -46,31 +46,10 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
         return Ok(());
     }
 
-    let uuid = sb.sb().uuid();
+    let correct = CorrectPassphrase::new(&sb, cli.file.as_deref())?;
 
-    // First attempt
-    let passphrase = if let Some(ref file) = cli.file {
-        Passphrase::new_from_file(file)?
-    } else {
-        Passphrase::new(&uuid)?
-    };
-
-    if let Some(correct) = passphrase.check(&sb)? {
-        KeyHandle::new(&correct, cli.keyring)?;
-        return Ok(());
-    }
-
-    // Retry up to 2 more times, always interactive
-    for _ in 0..2 {
-        eprintln!("incorrect passphrase");
-        let passphrase = Passphrase::new_from_prompt(&uuid, false)?;
-        if let Some(correct) = passphrase.check(&sb)? {
-            KeyHandle::new(&correct, cli.keyring)?;
-            return Ok(());
-        }
-    }
-
-    bail!("incorrect passphrase limit reached");
+    KeyHandle::new(&correct, cli.keyring)?;
+    Ok(())
 }
 
 // ---- shared helpers for set/remove-passphrase ----

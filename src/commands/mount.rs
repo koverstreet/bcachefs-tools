@@ -6,11 +6,11 @@ use std::{
     ptr, str,
 };
 
+use crate::{device_scan, key::CorrectPassphrase};
 use anyhow::{anyhow, ensure, Result};
 use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info};
-use crate::device_scan;
 
 use crate::{
     key::{KeyHandle, Keyring, Passphrase, UnlockPolicy},
@@ -143,9 +143,7 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
         return Ok(handle);
     }
 
-    let correct = Passphrase::new(&uuid)?
-        .check(sb)?
-        .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+    let correct = CorrectPassphrase::new(sb, None)?;
     KeyHandle::new(&correct, Keyring::User)
 }
 

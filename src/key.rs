@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use bch_bindgen::{
     bcachefs::{self, bch_key, bch_sb_handle},
     c::{bch2_chacha20, bch_encrypted_key, bch_sb_field_crypt},
@@ -171,20 +171,48 @@ pub struct CorrectPassphrase {
     pub sb_key: bch_encrypted_key,
 }
 
+impl CorrectPassphrase {
+    pub fn new(sb: &bch_sb_handle, file: Option<&Path>) -> Result<Self> {
+        if let Some(f) = file {
+            let passphrase = Passphrase::new_from_file(f)?;
+            if let Some(correct) = passphrase.check(sb)? {
+                return Ok(correct);
+            }
+        }
+
+        let stdin_type = get_stdin_type();
+
+        if stdin_type == StdinType::Other {
+            // Only one try.
+            let passphrase = Passphrase::new_from_stdin()?;
+            return passphrase.check(sb)?
+                .ok_or_else(|| anyhow!("incorrect passphrase"));
+        }
+
+        let uuid = sb.sb().uuid();
+
+        for i in 0..3 {
+            let accept_cached = i == 0;
+            let passphrase = match stdin_type {
+                StdinType::Terminal => Passphrase::new_from_prompt(&uuid, accept_cached)?,
+                StdinType::DevNull => Passphrase::new_from_askpassword(&uuid, accept_cached)??,
+                StdinType::Other => unreachable!(),
+            };
+            if let Some(correct) = passphrase.check(sb)? {
+                return Ok(correct);
+            }
+        }
+
+        bail!("incorrect passphrase limit reached")
+    }
+}
+
 #[derive(ZeroizeOnDrop)]
 pub struct Passphrase(CString);
 
 impl Passphrase {
     pub(crate) fn get(&self) -> &CStr {
         &self.0
-    }
-
-    pub fn new(uuid: &Uuid) -> Result<Self> {
-        match get_stdin_type() {
-            StdinType::Terminal => Self::new_from_prompt(uuid, true),
-            StdinType::DevNull => Self::new_from_askpassword(uuid, true)?,
-            StdinType::Other => Self::new_from_stdin(),
-        }
     }
 
     // The outer result represents a failure when trying to run systemd-ask-password,
@@ -357,6 +385,7 @@ fn is_dev_null(fd: BorrowedFd) -> io::Result<bool> {
     Ok(major == 1 && minor == 3)
 }
 
+#[derive(PartialEq)]
 enum StdinType {
     Terminal,
     DevNull,
