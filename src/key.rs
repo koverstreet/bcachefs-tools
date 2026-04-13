@@ -87,6 +87,9 @@ impl UnlockPolicy {
             Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
             Self::Ask => {
                 let correct = Passphrase::new_from_prompt(&uuid, false)?
+                    .into_iter()
+                    .next()
+                    .expect("Passphase::new_from_prompt should always return at least one passphrase")
                     .check(sb)?
                     .ok_or_else(|| anyhow!("incorrect passphrase"))?;
                 KeyHandle::new(&correct, Keyring::User)
@@ -193,13 +196,16 @@ impl CorrectPassphrase {
 
         for i in 0..3 {
             let accept_cached = i == 0;
-            let passphrase = match stdin_type {
+            let passphrases = match stdin_type {
                 StdinType::Terminal => Passphrase::new_from_prompt(&uuid, accept_cached)?,
                 StdinType::DevNull => Passphrase::new_from_askpassword(&uuid, accept_cached)??,
                 StdinType::Other => unreachable!(),
             };
-            if let Some(correct) = passphrase.check(sb)? {
-                return Ok(correct);
+            if let Some(correct) = passphrases
+                .into_iter()
+                .find_map(|p| p.check(sb).transpose())
+            {
+                return correct;
             }
         }
 
@@ -219,26 +225,29 @@ impl Passphrase {
     // it is non-critical and will cause the password to be asked internally.
     // The inner result represent a successful request that returned an error
     // this one results in an error.
-    fn new_from_askpassword(uuid: &Uuid, accept_cached: bool) -> Result<Result<Self>> {
+    fn new_from_askpassword(uuid: &Uuid, accept_cached: bool) -> Result<Result<Vec<Self>>> {
         let mut command = Command::new("systemd-ask-password");
         command
             .arg("--icon=drive-harddisk")
-            .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
-            .arg(format!("--keyname={}", uuid.as_hyphenated()))
+            .arg(format!("--id=cryptsetup:UUID={uuid}"))
+            .arg("--keyname=cryptsetup")
+            .arg("--credential=cryptsetup.passphrase")
+            .arg("--timeout=0")
             .arg("-n");
         if accept_cached {
             command.arg("--accept-cached");
         }
         let output = command
-            .arg("Enter passphrase: ")
+            .arg("Please enter passphrase for disk:")
             .stdin(Stdio::inherit())
             .stderr(Stdio::inherit())
             .output()?;
         Ok(if output.status.success() {
-            match CString::new(output.stdout) {
-                Ok(cstr) => Ok(Self(cstr)),
-                Err(e) => Err(e.into()),
-            }
+            Ok(output
+                .stdout
+                .split(|b| *b == b'\0')
+                .map(|passphrase| Self(CString::new(passphrase).expect("passphase should not contain a NUL byte because the output was split on NUL bytes")))
+                .collect())
         } else {
             Err(anyhow!("systemd-ask-password returned an error"))
         })
@@ -263,12 +272,13 @@ impl Passphrase {
     }
 
     // blocks indefinitely if no input is available on stdin
-    pub fn new_from_prompt(uuid: &Uuid, accept_cached: bool) -> Result<Self> {
+    pub fn new_from_prompt(uuid: &Uuid, accept_cached: bool) -> Result<Vec<Self>> {
         match Self::new_from_askpassword(uuid, accept_cached) {
             Ok(phrase) => return phrase,
             Err(_) => debug!("Failed to start systemd-ask-password, doing the prompt ourselves"),
         }
-        Self::prompt_hidden("Enter passphrase: ")
+        let phrase = Self::prompt_hidden("Enter passphrase: ")?;
+        Ok(vec![phrase])
     }
 
     /// Prompt for a new passphrase twice and verify they match.
