@@ -85,8 +85,20 @@ impl UnlockPolicy {
         match self {
             Self::Fail => KeyHandle::new_from_search(&uuid),
             Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
-            Self::Ask => Passphrase::new_from_prompt(&uuid).and_then(|p| KeyHandle::new(sb, &p, Keyring::User)),
-            Self::Stdin => Passphrase::new_from_stdin().and_then(|p| KeyHandle::new(sb, &p, Keyring::User)),
+            Self::Ask => {
+                let passphrase = Passphrase::new_from_prompt(&uuid)?;
+                let passphrase_correct = passphrase
+                    .check(sb)
+                    .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+                KeyHandle::new(&passphrase_correct, Keyring::User)
+            }
+            Self::Stdin => {
+                let passphrase = Passphrase::new_from_stdin()?;
+                let passphrase_correct = passphrase
+                    .check(sb)
+                    .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+                KeyHandle::new(&passphrase_correct, Keyring::User)
+            }
         }
     }
 }
@@ -100,19 +112,17 @@ impl KeyHandle {
         CString::new(format!("bcachefs:{uuid}")).unwrap()
     }
 
-    pub fn new(sb: &bch_sb_handle, passphrase: &Passphrase, keyring: Keyring) -> Result<Self> {
-        let key_name = Self::format_key_name(&sb.sb().uuid());
+    pub fn new(passphrase_correct: &PassphraseCorrect, keyring: Keyring) -> Result<Self> {
+        let key_name = Self::format_key_name(&passphrase_correct.fs_uuid);
         let key_name = CStr::as_ptr(&key_name);
         let key_type = c"user";
-
-        let (passphrase_key, _sb_key) = passphrase.check(sb)?;
 
         let key_id = unsafe {
             keyutils::add_key(
                 key_type.as_ptr(),
                 key_name,
-                ptr::addr_of!(passphrase_key).cast(),
-                mem::size_of_val(&passphrase_key),
+                ptr::addr_of!(passphrase_correct.passphrase_key).cast(),
+                mem::size_of_val(&passphrase_correct.passphrase_key),
                 keyring.id(),
             )
         };
@@ -293,34 +303,46 @@ impl Passphrase {
         new_key
     }
 
-    pub fn check(&self, sb: &bch_sb_handle) -> Result<(bch_key, bch_encrypted_key)> {
+    pub fn check(&self, sb: &bch_sb_handle) -> Option<PassphraseCorrect> {
         let bch_key_magic = u64::from_le_bytes(*BCH_KEY_MAGIC);
 
         let crypt = sb
             .sb()
             .crypt()
-            .ok_or_else(|| anyhow!("filesystem is not encrypted"))?;
-        let mut sb_key = *crypt.key();
+            .expect("superblock should have crypt when calling Passphrase::check");
 
-        ensure!(
-            sb_key.magic != bch_key_magic,
-            "filesystem encryption key is not passphrase-protected"
+        assert!(
+            crypt.key().magic != bch_key_magic,
+            "sb_key should be encrypted when calling Passphrase::check",
         );
 
         let mut passphrase_key: bch_key = self.derive(crypt);
 
+        let mut cleartext_sb_key = *crypt.key();
         unsafe {
             bch2_chacha20(
                 ptr::addr_of_mut!(passphrase_key),
                 sb.sb().nonce(),
-                ptr::addr_of_mut!(sb_key).cast(),
-                mem::size_of_val(&sb_key),
+                ptr::addr_of_mut!(cleartext_sb_key).cast(),
+                mem::size_of_val(&cleartext_sb_key),
             )
         };
-        ensure!(sb_key.magic == bch_key_magic, "incorrect passphrase");
+        if cleartext_sb_key.magic != bch_key_magic {
+            return None;
+        }
 
-        Ok((passphrase_key, sb_key))
+        Some(PassphraseCorrect {
+            fs_uuid: sb.sb().uuid(),
+            passphrase_key,
+            cleartext_sb_key,
+        })
     }
+}
+
+pub struct PassphraseCorrect {
+    pub fs_uuid:          Uuid,
+    pub passphrase_key:   bch_key,
+    pub cleartext_sb_key: bch_encrypted_key,
 }
 
 fn is_dev_null(fd: BorrowedFd) -> io::Result<bool> {

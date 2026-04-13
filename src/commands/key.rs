@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::c::bch_key;
 use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
@@ -8,7 +8,7 @@ use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
-use crate::key::{sb_is_encrypted, unencrypted_key, KeyHandle, Keyring, Passphrase};
+use crate::key::{sb_is_encrypted, unencrypted_key, KeyHandle, Keyring, Passphrase, PassphraseCorrect};
 
 // ---- unlock ----
 
@@ -32,7 +32,6 @@ pub struct UnlockCli {
 }
 
 fn cmd_unlock(cli: UnlockCli) -> Result<()> {
-
     let sb = sb_io::read_super(Path::new(&cli.device))
         .with_context(|| format!("Error opening {}", cli.device))?;
 
@@ -69,7 +68,10 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
         Passphrase::new(&uuid)?
     };
 
-    KeyHandle::new(&sb, &passphrase, cli.keyring)?;
+    let passphrase_correct = passphrase
+        .check(&sb)
+        .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+    KeyHandle::new(&passphrase_correct, cli.keyring)?;
 
     Ok(())
 }
@@ -107,11 +109,14 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
 
     if sb_is_encrypted(sb_handle) {
         let uuid = sb_handle.sb().uuid();
-        let old_passphrase = Passphrase::new_from_prompt(&uuid)
-            .context("reading current passphrase")?;
-        let (_, sb_key) = old_passphrase.check(sb_handle)
+        let old_passphrase =
+            Passphrase::new_from_prompt(&uuid).context("reading current passphrase")?;
+        let PassphraseCorrect {
+            cleartext_sb_key, ..
+        } = old_passphrase
+            .check(sb_handle)
             .context("verifying current passphrase")?;
-        Ok((fs, sb_key.key))
+        Ok((fs, cleartext_sb_key.key))
     } else {
         let raw_key = sb_handle.sb().crypt().unwrap().key().key;
         Ok((fs, raw_key))
