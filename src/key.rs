@@ -85,12 +85,21 @@ impl UnlockPolicy {
         match self {
             Self::Fail => KeyHandle::new_from_search(&uuid),
             Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
-            Self::Ask => Passphrase::new_from_prompt(&uuid).and_then(|p| KeyHandle::new(sb, &p, Keyring::User)),
-            Self::Stdin => Passphrase::new_from_stdin().and_then(|p| KeyHandle::new(sb, &p, Keyring::User)),
+            Self::Ask => {
+                let correct = Passphrase::new_from_prompt(&uuid)?
+                    .check(sb)?
+                    .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+                KeyHandle::new(&correct, Keyring::User)
+            }
+            Self::Stdin => {
+                let correct = Passphrase::new_from_stdin()?
+                    .check(sb)?
+                    .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+                KeyHandle::new(&correct, Keyring::User)
+            }
         }
     }
 }
-
 
 /// Proof that a bcachefs key has been added to or found in the kernel keyring.
 pub struct KeyHandle;
@@ -100,19 +109,17 @@ impl KeyHandle {
         CString::new(format!("bcachefs:{uuid}")).unwrap()
     }
 
-    pub fn new(sb: &bch_sb_handle, passphrase: &Passphrase, keyring: Keyring) -> Result<Self> {
-        let key_name = Self::format_key_name(&sb.sb().uuid());
+    pub fn new(correct_passphrase: &CorrectPassphrase, keyring: Keyring) -> Result<Self> {
+        let key_name = Self::format_key_name(&correct_passphrase.uuid);
         let key_name = CStr::as_ptr(&key_name);
         let key_type = c"user";
-
-        let (passphrase_key, _sb_key) = passphrase.check(sb)?;
 
         let key_id = unsafe {
             keyutils::add_key(
                 key_type.as_ptr(),
                 key_name,
-                ptr::addr_of!(passphrase_key).cast(),
-                mem::size_of_val(&passphrase_key),
+                ptr::addr_of!(correct_passphrase.passphrase_key).cast(),
+                mem::size_of_val(&correct_passphrase.passphrase_key),
                 keyring.id(),
             )
         };
@@ -156,6 +163,12 @@ impl KeyHandle {
             }
         }
     }
+}
+
+pub struct CorrectPassphrase {
+    pub uuid: Uuid,
+    pub passphrase_key: bch_key,
+    pub sb_key: bch_encrypted_key,
 }
 
 #[derive(ZeroizeOnDrop)]
@@ -293,7 +306,7 @@ impl Passphrase {
         new_key
     }
 
-    pub fn check(&self, sb: &bch_sb_handle) -> Result<(bch_key, bch_encrypted_key)> {
+    pub fn check(&self, sb: &bch_sb_handle) -> Result<Option<CorrectPassphrase>> {
         let bch_key_magic = u64::from_le_bytes(*BCH_KEY_MAGIC);
 
         let crypt = sb
@@ -317,9 +330,15 @@ impl Passphrase {
                 mem::size_of_val(&sb_key),
             )
         };
-        ensure!(sb_key.magic == bch_key_magic, "incorrect passphrase");
+        if sb_key.magic != bch_key_magic {
+            return Ok(None);
+        }
 
-        Ok((passphrase_key, sb_key))
+        Ok(Some(CorrectPassphrase {
+            uuid: sb.sb().uuid(),
+            passphrase_key,
+            sb_key,
+        }))
     }
 }
 

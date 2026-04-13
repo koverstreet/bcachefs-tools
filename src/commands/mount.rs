@@ -6,7 +6,7 @@ use std::{
     ptr, str,
 };
 
-use anyhow::{ensure, Result};
+use anyhow::{anyhow, ensure, Result};
 use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info};
@@ -132,12 +132,21 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
     }
 
     if let Some(path) = cli.passphrase_file.as_deref() {
-        return Passphrase::new_from_file(path).and_then(|p| KeyHandle::new(sb, &p, Keyring::User));
+        let correct = Passphrase::new_from_file(path)?
+            .check(sb)?
+            .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+        return KeyHandle::new(&correct, Keyring::User);
     }
 
     let uuid = sb.sb().uuid();
-    KeyHandle::new_from_search(&uuid)
-        .or_else(|_| Passphrase::new(&uuid).and_then(|p| KeyHandle::new(sb, &p, Keyring::User)))
+    if let Ok(handle) = KeyHandle::new_from_search(&uuid) {
+        return Ok(handle);
+    }
+
+    let correct = Passphrase::new(&uuid)?
+        .check(sb)?
+        .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+    KeyHandle::new(&correct, Keyring::User)
 }
 
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {

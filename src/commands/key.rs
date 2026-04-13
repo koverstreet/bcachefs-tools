@@ -8,7 +8,9 @@ use bch_bindgen::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
-use crate::key::{sb_is_encrypted, unencrypted_key, KeyHandle, Keyring, Passphrase};
+use crate::key::{
+    sb_is_encrypted, unencrypted_key, CorrectPassphrase, KeyHandle, Keyring, Passphrase,
+};
 
 // ---- unlock ----
 
@@ -53,20 +55,18 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
         Passphrase::new(&uuid)?
     };
 
-    match KeyHandle::new(&sb, &passphrase, cli.keyring) {
-        Ok(_) => return Ok(()),
-        Err(e) if e.to_string().contains("incorrect passphrase") => {}
-        Err(e) => return Err(e),
+    if let Some(correct) = passphrase.check(&sb)? {
+        KeyHandle::new(&correct, cli.keyring)?;
+        return Ok(());
     }
 
     // Retry up to 2 more times, always interactive
     for _ in 0..2 {
         eprintln!("incorrect passphrase");
         let passphrase = Passphrase::new_from_prompt(&uuid)?;
-        match KeyHandle::new(&sb, &passphrase, cli.keyring) {
-            Ok(_) => return Ok(()),
-            Err(e) if e.to_string().contains("incorrect passphrase") => continue,
-            Err(e) => return Err(e),
+        if let Some(correct) = passphrase.check(&sb)? {
+            KeyHandle::new(&correct, cli.keyring)?;
+            return Ok(());
         }
     }
 
@@ -106,9 +106,10 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
 
     if sb_is_encrypted(sb_handle) {
         let uuid = sb_handle.sb().uuid();
-        let old_passphrase = Passphrase::new_from_prompt(&uuid)
-            .context("reading current passphrase")?;
-        let (_, sb_key) = old_passphrase.check(sb_handle)
+        let old_passphrase =
+            Passphrase::new_from_prompt(&uuid).context("reading current passphrase")?;
+        let CorrectPassphrase { sb_key, .. } = old_passphrase
+            .check(sb_handle)?
             .context("verifying current passphrase")?;
         Ok((fs, sb_key.key))
     } else {
