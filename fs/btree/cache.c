@@ -87,6 +87,11 @@ static inline size_t btree_cache_can_free(struct btree_cache_list *list)
 	return can_free;
 }
 
+static inline size_t btree_cache_nr_live(struct bch_fs_btree_cache *bc)
+{
+	return bc->live[0].nr + bc->live[1].nr + bc->nr_freeable;
+}
+
 static void btree_node_to_freedlist(struct bch_fs_btree_cache *bc, struct btree *b)
 {
 	BUG_ON(!list_empty(&b->list));
@@ -893,6 +898,19 @@ got_node:
 			six_unlock_intent(&b2->c.lock);
 			goto got_mem;
 		}
+
+	/*
+	 * If btree_cache_size_max is set and we're over the limit, try to
+	 * acquire the cannibalize lock and reclaim a node rather than
+	 * allocating new memory.
+	 */
+	if (c->opts.btree_cache_size_max &&
+	    btree_cache_nr_live(bc) * c->opts.btree_node_size >=
+	    c->opts.btree_cache_size_max) {
+		mutex_unlock(&bc->lock);
+		bch2_btree_cache_cannibalize_lock(trans, NULL);
+		goto err;
+	}
 
 	mutex_unlock(&bc->lock);
 
