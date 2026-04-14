@@ -290,7 +290,7 @@ static struct open_bucket *try_alloc_bucket(struct btree_trans *trans,
 
 	u8 gen;
 	u64 journal_seq_empty;
-	int ret = bch2_check_discard_freespace_key_async(trans, freespace_iter, &gen, &journal_seq_empty);
+	int ret = bch2_check_freespace_key_async(trans, freespace_iter, &gen, &journal_seq_empty);
 	if (ret < 0)
 		return ERR_PTR(ret);
 	if (ret)
