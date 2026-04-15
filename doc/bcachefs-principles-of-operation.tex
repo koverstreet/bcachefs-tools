@@ -1140,7 +1140,7 @@ poisoned extent return an error immediately without going to disk, preventing
 applications from silently consuming corrupt data.
 
 Poisoning is persistent: it survives remounts and data moves. When a poisoned
-extent is moved (by rebalance, copygc, or tiering), the filesystem must
+extent is moved (by reconcile, copygc, or tiering), the filesystem must
 compute a new checksum over the data at its new location. Because the data is
 corrupt, the new checksum is valid for the corrupt data. The poison flag is how
 the filesystem remembers that the data was known-bad before the move---without
@@ -1474,6 +1474,10 @@ the filesystem.
 
 \bchdoc{data-paths}
 
+\subsubsection{Extent checksums and compression}
+
+\bchdoc{extent-checksums}
+
 \subsection{Allocator}
 
 \bchdoc{allocator}
@@ -1507,6 +1511,11 @@ index and journal bucket locations.
 \label{sec:btrees}
 
 \bchdoc{btrees}
+
+\subsection{Erasure coding}
+\label{sec:erasure-coding}
+
+\bchdoc{erasure-coding}
 
 \section{ioctl interface}
 
@@ -1659,6 +1668,13 @@ efficient bulk insertion; this sort-merge-sweep is inherently single-threaded,
 making its efficiency critical for multithreaded workloads.
 
 \subsection{Btree keys}
+
+\bchdoc{bkey-structures}
+
+See \S\ref{bkey-type-list} for the complete list of key types.
+
+\subsection{Btree key types}
+\label{bkey-type-list}
 
 \bchdoc{bkey-types}
 

@@ -126,6 +126,10 @@ void __bch2_open_bucket_put(struct bch_fs *c, struct open_bucket *ob)
 		ob->data_type = 0;
 	}
 
+	if (ob->do_discards_fast)
+		bch2_fast_discard_bucket_add(ca, ob->bucket);
+	ob->do_discards_fast = false;
+
 	scoped_guard(spinlock, &c->allocator.freelist_lock) {
 		bch2_open_bucket_hash_remove(c, ob);
 
@@ -286,7 +290,7 @@ static struct open_bucket *try_alloc_bucket(struct btree_trans *trans,
 
 	u8 gen;
 	u64 journal_seq_empty;
-	int ret = bch2_check_discard_freespace_key_async(trans, freespace_iter, &gen, &journal_seq_empty);
+	int ret = bch2_check_freespace_key_async(trans, freespace_iter, &gen, &journal_seq_empty);
 	if (ret < 0)
 		return ERR_PTR(ret);
 	if (ret)
@@ -518,7 +522,7 @@ again:
 
 	if (req->usage.buckets[BCH_DATA_need_discard] >
 	    min(avail, ca->mi.nbuckets >> 7))
-		bch2_dev_do_discards(ca);
+		bch2_do_discards_async(c);
 
 	if (req->usage.buckets[BCH_DATA_need_gc_gens] > avail)
 		bch2_gc_gens_async(c);

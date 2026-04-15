@@ -441,7 +441,6 @@ enum bch_dev_read_ref {
 	x(journal_write)				\
 	x(journal_discard)				\
 	x(discard_bucket)				\
-	x(dev_do_discards)				\
 	x(discard_sectors_to_release)			\
 	x(discard_one_bucket_fast)			\
 	x(do_invalidates)				\
@@ -524,11 +523,8 @@ struct bch_dev {
 
 	struct work_struct	invalidate_work;
 
-	struct work_struct	discard_work;
 	struct work_struct	discard_fast_work;
 	darray_u64		discard_fast;
-	FIFO(struct discard_fifo_entry) discard_fifo;
-	bool			discard_buckets_degraded;
 
 	atomic64_t		rebalance_work;
 

@@ -96,7 +96,7 @@ The following options control which disks data is written to:
 
 The foreground_target option is used to direct writes from applications. The
 background_target option, if set, will cause data to be moved to that target in
-the background by the rebalance thread some time after it has been initially
+the background by the reconcile thread some time after it has been initially
 written - leaving behind the original copy, but marking it cached so that it can
 be discarded by the allocator. The promote_target will cause reads to write
 a cached copy of the data being read to that target, if it doesn't exist.

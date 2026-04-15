@@ -87,6 +87,11 @@ static inline size_t btree_cache_can_free(struct btree_cache_list *list)
 	return can_free;
 }
 
+static inline size_t btree_cache_nr_live(struct bch_fs_btree_cache *bc)
+{
+	return bc->live[0].nr + bc->live[1].nr + bc->nr_freeable;
+}
+
 static void btree_node_to_freedlist(struct bch_fs_btree_cache *bc, struct btree *b)
 {
 	BUG_ON(!list_empty(&b->list));
@@ -894,6 +899,19 @@ got_node:
 			goto got_mem;
 		}
 
+	/*
+	 * If btree_cache_size_max is set and we're over the limit, try to
+	 * acquire the cannibalize lock and reclaim a node rather than
+	 * allocating new memory.
+	 */
+	if (c->opts.btree_cache_size_max &&
+	    btree_cache_nr_live(bc) * c->opts.btree_node_size >=
+	    c->opts.btree_cache_size_max) {
+		mutex_unlock(&bc->lock);
+		bch2_btree_cache_cannibalize_lock(trans, NULL);
+		goto err;
+	}
+
 	mutex_unlock(&bc->lock);
 
 	if (btree_node_data_alloc(c, b, GFP_NOWAIT, true)) {
@@ -1082,12 +1100,13 @@ static noinline void btree_bad_header(struct bch_fs *c, struct btree *b)
 
 	CLASS(printbuf, buf)();
 	prt_printf(&buf,
-		   "btree node header doesn't match ptr: ");
+		   "cached btree node header doesn't match expected (memory corruption?)\n"
+		   "expected: ");
 	bch2_btree_id_level_to_text(&buf, b->c.btree_id, b->c.level);
 	prt_str(&buf, "\nptr: ");
 	bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&b->key));
 
-	prt_str(&buf, "\nheader: ");
+	prt_str(&buf, "\ngot: ");
 	bch2_btree_id_level_to_text(&buf, BTREE_NODE_ID(b->data), BTREE_NODE_LEVEL(b->data));
 	prt_str(&buf, "\nmin ");
 	bch2_bpos_to_text(&buf, b->data->min_key);

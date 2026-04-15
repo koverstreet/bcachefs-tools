@@ -1,5 +1,116 @@
 // SPDX-License-Identifier: GPL-2.0
 
+/* DOC_LATEX(btree-programmer-interface)
+ *
+ * This section describes the btree interface from a programmer's perspective:
+ * how to look up keys, iterate, and perform updates.
+ *
+ * \paragraph{Btrees and keys}
+ *
+ * Keys are indexed in a small number of btrees: one for extents, another for
+ * inodes, another for directory entries, and so on. New btree types can be
+ * added for new features without on-disk format changes---many features were
+ * added this way (e.g.\ erasure coding stripes, backpointers, accounting).
+ *
+ * The btree interface is iteration-oriented rather than lookup-oriented.
+ * Lookup is not exposed as a primitive because most usage involves iterating
+ * from a given position. The fundamental operation is: position an iterator,
+ * then peek at or advance through keys.
+ *
+ * \paragraph{Transactions}
+ *
+ * All btree operations go through a transaction (\texttt{struct btree\_trans}).
+ * A transaction provides:
+ *
+ * \begin{itemize}
+ * \item Atomic multi-key updates across any combination of btrees
+ * \item Automatic lock management and deadlock avoidance
+ * \item Restart handling when locks are contended
+ * \end{itemize}
+ *
+ * Transactions are allocated with \texttt{bch2\_trans\_get()} and released with
+ * \texttt{bch2\_trans\_put()}. Within a transaction, iterators are created with
+ * \texttt{bch2\_trans\_iter\_init()} specifying the btree ID and starting
+ * position.
+ *
+ * \paragraph{Basic iteration}
+ *
+ * The core iteration pattern:
+ *
+ * \begin{verbatim}
+ *     struct btree_iter iter;
+ *     struct bkey_s_c k;
+ *
+ *     bch2_trans_iter_init(trans, &iter, BTREE_ID_extents,
+ *                          POS(inode, offset), 0);
+ *
+ *     while ((k = bch2_btree_iter_peek(&iter)).k) {
+ *         // process key
+ *         bch2_btree_iter_advance(&iter);
+ *     }
+ *
+ *     bch2_trans_iter_exit(trans, &iter);
+ * \end{verbatim}
+ *
+ * The convenience macro \texttt{for\_each\_btree\_key()} wraps this pattern:
+ *
+ * \begin{verbatim}
+ *     for_each_btree_key(trans, iter, BTREE_ID_extents,
+ *                        POS(inode, 0), 0, k, ret)
+ *         printk("extent at %llu:%llu\n",
+ *                k.k->p.inode, k.k->p.offset);
+ * \end{verbatim}
+ *
+ * \paragraph{Lookup}
+ *
+ * Lookup can be implemented via iteration: position an iterator, peek, and
+ * check if the returned key matches:
+ *
+ * \begin{verbatim}
+ *     bch2_trans_iter_init(trans, &iter, BTREE_ID_inodes,
+ *                          POS(inum, 0), 0);
+ *     k = bch2_btree_iter_peek_slot(&iter);
+ *     if (k.k && k.k->type == KEY_TYPE_inode)
+ *         // found it
+ * \end{verbatim}
+ *
+ * The \texttt{peek\_slot()} variant returns a key at exactly the requested
+ * position, synthesizing a deleted key if no key exists there. This is useful
+ * for checking whether a specific slot is occupied.
+ *
+ * \paragraph{Updates}
+ *
+ * Updates are staged in the transaction and committed atomically:
+ *
+ * \begin{verbatim}
+ *     struct bkey_i_inode *inode = ...;
+ *
+ *     ret = bch2_trans_update(trans, &iter, &inode->k_i, 0);
+ *     if (ret)
+ *         return ret;
+ *
+ *     ret = bch2_trans_commit(trans, NULL, NULL, 0);
+ * \end{verbatim}
+ *
+ * Multiple updates can be staged before a single commit, and they will all
+ * be applied atomically. Updates to different btrees within the same
+ * transaction are also atomic.
+ *
+ * \paragraph{Restarts}
+ *
+ * Transactions may need to restart due to lock contention or other conflicts.
+ * The standard pattern uses \texttt{lockrestart\_do()}:
+ *
+ * \begin{verbatim}
+ *     ret = lockrestart_do(trans,
+ *         do_something(trans) ?:
+ *         bch2_trans_commit(trans, NULL, NULL, 0));
+ * \end{verbatim}
+ *
+ * This automatically retries the operation if a restart is needed. All code
+ * within the retry block must be idempotent---it may execute multiple times.
+ */
+
 /* DOC(btree-iterators)
  *
  * A btree iterator (`struct btree_iter`) maintains a full path from the root
