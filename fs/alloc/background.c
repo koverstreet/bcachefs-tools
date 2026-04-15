@@ -53,6 +53,12 @@
  * such as the oldest journal sequence number referencing it, stripe membership,
  * and generation number.
  *
+ * Buckets are append-only: when allocated, a bucket is written to sequentially
+ * and never overwritten until the entire bucket is invalidated and reused.
+ * This log-structured approach means that stale data cannot be reclaimed in
+ * place---copygc must move live data to new buckets before fragmented buckets
+ * can be freed.
+ *
  * Buckets cycle through a series of states:
  *
  * \begin{description}

@@ -1,5 +1,50 @@
 // SPDX-License-Identifier: GPL-2.0
 
+/* DOC_LATEX(erasure-coding)
+ *
+ * Erasure coding in bcachefs works by encoding entire buckets in the background,
+ * rather than fragmenting foreground writes into stripes.
+ *
+ * \paragraph{Write path}
+ *
+ * Foreground writes are replicated normally (e.g.\ two copies with
+ * \texttt{data\_replicas=2}). The reconcile thread tracks buckets containing
+ * replicated data that are candidates for erasure coding.
+ *
+ * When enough candidate buckets accumulate, the erasure coding background job:
+ *
+ * \begin{enumerate}
+ * \item Takes a set of data buckets (e.g.\ 5 buckets with unrelated data)
+ * \item Allocates parity buckets (e.g.\ 2 buckets for RAID-6 style redundancy)
+ * \item Computes Reed-Solomon parity across the data buckets
+ * \item Writes the parity to the new buckets
+ * \item Updates every extent pointing into the original data buckets:
+ *   \begin{itemize}
+ *   \item Drops the extra replica pointers
+ *   \item Adds pointers to the parity buckets with a flag indicating
+ *         reconstruct-read is required
+ *   \end{itemize}
+ * \end{enumerate}
+ *
+ * This approach avoids the write hole entirely: parity is computed once for
+ * immutable data, and the extent updates are atomic btree operations.
+ *
+ * \paragraph{Stripe lifetime}
+ *
+ * Once buckets are grouped into a stripe, none of them can be reused until
+ * \emph{all} data in the stripe is dead or moved. Copygc is aware of this
+ * constraint and will evacuate entire stripes when they become fragmented,
+ * rewriting live data to new buckets so the old stripe can be reclaimed.
+ *
+ * \paragraph{Read path}
+ *
+ * When reading an extent with erasure coding pointers, the read path first
+ * attempts to read from the data bucket directly. If that fails (device offline,
+ * checksum error), it performs a reconstruct read: fetching the surviving data
+ * buckets and parity buckets, then using Reed-Solomon to recover the missing
+ * data. The stripe-to-bucket mapping is stored in the stripes btree.
+ */
+
 #include "bcachefs.h"
 
 #include "alloc/backpointers.h"
