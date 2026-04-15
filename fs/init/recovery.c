@@ -413,6 +413,7 @@ int bch2_journal_replay(struct bch_fs *c)
 		cond_resched();
 
 		ret = commit_do(trans, NULL, NULL,
+				BCH_TRANS_COMMIT_journal_replay|
 				BCH_TRANS_COMMIT_no_enospc|
 				BCH_TRANS_COMMIT_no_skip_noops|
 				BCH_TRANS_COMMIT_journal_reclaim|
@@ -446,6 +447,7 @@ int bch2_journal_replay(struct bch_fs *c)
 		/* Skip fastpath if we're low on space in the journal */
 		ret = c->journal.watermark ? -1 :
 			commit_do(trans, NULL, NULL,
+				  BCH_TRANS_COMMIT_journal_replay|
 				  BCH_TRANS_COMMIT_no_enospc|
 				  BCH_TRANS_COMMIT_no_skip_noops|
 				  BCH_TRANS_COMMIT_journal_reclaim|

@@ -31,6 +31,7 @@ void bch2_btree_insert_key_leaf(struct btree_trans *, struct btree_path *,
 	x(no_skip_noops, "don't drop noop updates")					\
 	x(journal_reclaim, "operation required for journal reclaim; may return error"	\
 			"instead of deadlocking if BCH_WATERMARK_reclaim not specified")\
+	x(journal_replay, "in journal replay")						\
 	x(skip_accounting_apply, "we're in journal replay - accounting updates have already been applied")
 
 enum __bch_trans_commit_flags {
