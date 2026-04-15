@@ -74,13 +74,15 @@ macro_rules! raw_cmd {
 pub mod attr;
 pub mod completions;
 pub mod counters;
+pub mod data_read;
 pub mod device;
 pub mod dump;
 pub mod format;
 pub mod format_util;
 pub mod fs_usage;
-pub mod image;
 pub mod fsck;
+pub mod fusemount;
+pub mod image;
 pub mod key;
 pub mod kill_btree_node;
 pub mod list;
@@ -88,8 +90,6 @@ pub mod list_journal;
 pub mod migrate;
 pub mod mount;
 pub mod opts;
-pub mod data_read;
-pub mod unpoison;
 pub mod reconcile;
 pub mod recover_super;
 pub mod recovery_pass;
@@ -100,7 +100,8 @@ pub mod subvolume;
 pub mod super_cmd;
 pub mod timestats;
 pub mod top;
-pub mod fusemount;
+pub mod unpoison;
+pub mod wait;
 
 // ── Dispatch and help ────────────────────────────────────────────────
 
@@ -203,7 +204,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
         &set_option::CMD, &counters::CMD, &strip_alloc::CMD,
     ]},
     GroupDef { heading: "Images",                   commands: &[&image::CMD] },
-    GroupDef { heading: "Mount",                    commands: &[&mount::CMD, &fusemount::CMD] },
+    GroupDef { heading: "Mount",                    commands: &[&mount::CMD, &fusemount::CMD, &wait::CMD] },
     GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &recovery_pass::CMD] },
     GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD] },
     GroupDef { heading: "Devices",                  commands: &[&device::CMD] },
@@ -218,4 +219,3 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
     ]},
     GroupDef { heading: "Miscellaneous",            commands: &[&completions::CMD, &VERSION_CMD] },
 ];
-

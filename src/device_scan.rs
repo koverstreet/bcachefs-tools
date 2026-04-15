@@ -40,7 +40,7 @@ use log::debug;
 
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 
-fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_sb_handle, BchError> {
+pub fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_sb_handle, BchError> {
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);
     opt_set!(opts, no_version_check, 1);
@@ -48,7 +48,7 @@ fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_s
     bch_bindgen::sb::io::read_super_silent(path.as_ref(), opts)
 }
 
-fn should_skip_multipath_component(dev: &udev::Device) -> bool {
+pub fn should_skip_multipath_component(dev: &udev::Device) -> bool {
     // Set by multipath's udev rule; fall back to sysfs if not present.
     if dev
         .property_value("DM_MULTIPATH_DEVICE_PATH")
