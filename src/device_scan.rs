@@ -243,6 +243,13 @@ fn devs_str_sbs_from_device(
     get_devices_by_uuid(uuid, opts, use_udev)
 }
 
+pub fn parse_uuid_equals(s: &str) -> Result<Option<Uuid>> {
+    let Some(("UUID" | "OLD_BLKID_UUID", uuid)) = s.split_once('=') else {
+        return Ok(None);
+    };
+    Ok(Some(Uuid::parse_str(uuid)?))
+}
+
 pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb_handle)>> {
     if device.contains(':') {
         let mut opts = *opts;
@@ -271,9 +278,7 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
 
     let udev = opt_get!(opts, mount_trusts_udev) != 0;
 
-    if let Some(("UUID" | "OLD_BLKID_UUID", uuid)) = device.split_once('=') {
-        let uuid = Uuid::parse_str(uuid)?;
-
+    if let Some(uuid) = parse_uuid_equals(&device)? {
         get_devices_by_uuid(uuid, opts, udev)
     } else {
         devs_str_sbs_from_device(Path::new(device), opts, udev)
