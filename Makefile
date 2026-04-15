@@ -137,8 +137,23 @@ else
 	INITRAMFS_DIR=/etc/initramfs-tools
 endif
 
+PKGCONFIG_SERVICEDIR:=$(shell $(PKG_CONFIG) --variable=systemdsystemunitdir systemd)
+ifeq (,$(PKGCONFIG_SERVICEDIR))
+  $(warning skipping systemd integration)
+else
+systemd_services=bcachefs-wait@.service
+built_scripts+=bcachefs-wait@.service
+
+%.service: %.service.in
+	@echo "    [SED]    $@"
+	$(Q)sed -e "s|@sbindir@|$(ROOT_SBINDIR)|g" < $< > $@
+
+optional_build+=$(systemd_services)
+optional_install+=install_systemd
+endif	# PKGCONFIG_SERVICEDIR
+
 .PHONY: all
-all: bcachefs initramfs/hook dkms/dkms.conf
+all: bcachefs initramfs/hook dkms/dkms.conf $(optional_build)
 
 .PHONY: debug
 debug: CFLAGS+=-Werror -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
@@ -206,7 +221,7 @@ BASH_COMPLETION_DIR?=$(shell $(PKG_CONFIG) --variable=completionsdir bash-comple
 
 install: INITRAMFS_HOOK=$(INITRAMFS_DIR)/hooks/bcachefs
 install: INITRAMFS_SCRIPT=$(INITRAMFS_DIR)/scripts/local-premount/bcachefs
-install: all install_dkms
+install: all install_dkms $(optional_install)
 	$(INSTALL) -m0755 -D $(BUILT_BIN)  -t $(DESTDIR)$(ROOT_SBINDIR)
 	$(INSTALL) -m0644 -D bcachefs.8    -t $(DESTDIR)$(PREFIX)/share/man/man8/
 	$(INSTALL) -m0755 -D initramfs/hook   $(DESTDIR)$(INITRAMFS_HOOK)
@@ -232,6 +247,11 @@ uninstall:
 	$(RM) $(DESTDIR)$(PREFIX)/share/man/man8/bcachefs.8
 	$(RM) $(DESTDIR)$(BASH_COMPLETION_DIR)/bcachefs
 	$(RM) -r $(DESTDIR)$(DKMSDIR)
+	$(RM) $(addprefix $(DESTDIR)$(PKGCONFIG_SERVICEDIR)/,$(systemd_services))
+
+.PHONY: install_systemd
+install_systemd: $(systemd_services) $(systemd_libexecfiles)
+	$(INSTALL) -m0644 -D $(systemd_services) -t $(DESTDIR)$(PKGCONFIG_SERVICEDIR)
 
 .PHONY: install_dkms
 install_dkms: dkms/dkms.conf dkms/module-version.c
