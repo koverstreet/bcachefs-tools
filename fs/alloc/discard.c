@@ -403,6 +403,11 @@ int bch2_dev_clear_need_discard(struct bch_fs *c, struct bch_dev *ca, u64 cutoff
 			} else {
 				struct bpos bucket = u64_to_bucket(k.k->p.offset);
 
+				/*
+				 * need_discard is ordered by (journal seq, encoded bucket),
+				 * not by device bucket space, so tail truncation has to
+				 * scan and filter by the decoded bucket position.
+				 */
 				next = bpos_successor(k.k->p);
 
 				if (bucket.inode == ca->dev_idx &&
@@ -524,27 +529,58 @@ static void bch2_do_discards(struct bch_fs *c)
 		struct discard_state *s = &c->discards.s;
 		memset(s, 0, sizeof(*s));
 
+		struct bpos pos = POS_MIN;
 		/*
 		 * Iterate need_discard btree (sorted by journal_seq).
 		 * Stop when we hit a seq beyond rewind_seq_ondisk.
 		 */
-		ret = for_each_btree_key(trans, iter,
-				BTREE_ID_need_discard, POS_MIN, 0, k, ({
-			u64 journal_seq		= k.k->p.inode;
-			struct bpos bucket	= u64_to_bucket(k.k->p.offset);
-			u32 bucket_size		= dev_bucket_size(c, bucket.inode);
+		while (!ret) {
+			struct bpos next = POS_MAX;
+			struct bpos bucket = POS_MAX;
+			u64 journal_seq = 0;
+			u32 bucket_size = 0;
+			bool done = false;
+
+			/*
+			 * Drop the need_discard iterator before we update alloc and
+			 * commit: the discard path removes the corresponding index
+			 * entry, and keeping the original iterator pinned across that
+			 * commit can deadlock against the alloc/freespace updates.
+			 */
+			ret = lockrestart_do(trans, ({
+				int __ret = 0;
+				CLASS(btree_iter, iter)(trans, BTREE_ID_need_discard, pos, 0);
+				struct bkey_s_c k = bch2_btree_iter_peek(&iter);
+				int _ret = bkey_err(k);
+
+				if (_ret) {
+					__ret = _ret;
+				} else if (!k.k) {
+					done = true;
+				} else {
+					journal_seq = k.k->p.inode;
+					bucket = u64_to_bucket(k.k->p.offset);
+					bucket_size = dev_bucket_size(c, bucket.inode);
+					next = bpos_successor(k.k->p);
+					s->pos = next;
+				}
+				__ret;
+			}));
+			if (ret || done)
+				break;
 
 			if (journal_seq >= min(c->journal.rewind_seq_ondisk,
 					       c->journal.flushed_seq_ondisk + 1))
 				break;
 
-			if (!bpos_eq(s->pos, iter.pos))
-				s->seen += bucket_size;
-			s->pos = iter.pos;
-
-			int ret2 = bch2_discard_one_bucket(trans,
-						bucket, bucket_size,
-						s, false);
+			ret = lockrestart_do(trans, ({
+				int __ret = bch2_discard_one_bucket(trans,
+								    bucket, bucket_size,
+								    s, false);
+				if (!__ret)
+					s->seen += bucket_size;
+				__ret;
+			}));
 			/*
 			 * Reap completed discards as we go: in_flight entries
 			 * are only freed in bch2_discards_complete(), so if we
@@ -557,19 +593,20 @@ static void bch2_do_discards(struct bch_fs *c)
 			 * waiting to be reaped.
 			 *
 			 * On success the bucket's been handled, so advance the
-			 * iterator before the nested restart so we don't
-			 * reprocess it; on -max_discards_in_flight leave it put
-			 * so we retry the bucket after draining.
+			 * detached need_discard cursor before the nested restart;
+			 * on -max_discards_in_flight leave it put so we retry the
+			 * bucket after draining.
 			 */
-			if (ret2 == -BCH_ERR_max_discards_in_flight ||
-			    (!ret2 && READ_ONCE(d->in_flight.nr) > READ_ONCE(d->ref))) {
-				if (!ret2)
-					bch2_btree_iter_advance(&iter);
-				ret2 = bch2_discards_complete(trans, s, false, false) ?:
-				btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+			if (ret == -BCH_ERR_max_discards_in_flight ||
+			    (!ret && READ_ONCE(d->in_flight.nr) > READ_ONCE(d->ref))) {
+				if (!ret)
+					pos = next;
+				ret = bch2_discards_complete(trans, s, false, false) ?:
+				      btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+			} else if (!ret) {
+				pos = next;
 			}
-			ret2;
-		}));
+		}
 
 		ret = bch2_discards_complete(trans, s, false, true) ?: ret;
 
