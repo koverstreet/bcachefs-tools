@@ -41,7 +41,7 @@ use log::debug;
 
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 
-fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> anyhow::Result<bch_sb_handle> {
+fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_sb_handle, BchError> {
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);
     opt_set!(opts, no_version_check, 1);
