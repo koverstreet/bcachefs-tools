@@ -1341,6 +1341,8 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 		if (statechange_to(a->data_type == BCH_DATA_free)) {
 			/* Transitioning to free: should not have NEED_DISCARD set */
 			WARN_ON(BCH_ALLOC_V4_NEED_DISCARD(new_a));
+			BUG_ON(old_a->data_type != BCH_DATA_need_discard);
+			BUG_ON(!(flags & BTREE_TRIGGER_is_discard));
 
 			new_a->journal_seq_nonempty = new_a->journal_seq_empty = 0;
 

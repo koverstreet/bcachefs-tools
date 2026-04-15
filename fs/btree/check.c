@@ -883,8 +883,20 @@ static int bch2_alloc_write_key(struct btree_trans *trans,
 			iter->pos.inode, iter->pos.offset,
 			gc.gen,
 			bch2_data_type_str(new.data_type),
-			bch2_data_type_str(gc.data_type)))
+			bch2_data_type_str(gc.data_type))) {
 		new.data_type = gc.data_type;
+
+		/*
+		 * Transitions to free must go through need_discard; reconstruct
+		 * runs under BTREE_TRIGGER_gc which skips the transactional path
+		 * that sets NEED_DISCARD, so set it here for any bucket that
+		 * will need discarding when eventually freed.
+		 */
+		if (!data_type_is_empty(new.data_type) &&
+		    new.data_type != BCH_DATA_sb &&
+		    new.data_type != BCH_DATA_journal)
+			SET_BCH_ALLOC_V4_NEED_DISCARD(&new, true);
+	}
 
 #define copy_bucket_field(_errtype, _f)					\
 	if (ret_fsck_err_on(new._f != gc._f,				\
