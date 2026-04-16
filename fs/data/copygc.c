@@ -390,6 +390,19 @@ err:
 	return ret;
 }
 
+bool bch2_copygc_can_make_progress(struct bch_dev *ca)
+{
+	struct bch_dev_usage_full usage_full = bch2_dev_usage_full_read(ca);
+	u64 fragmented = 0;
+
+	for (unsigned i = 0; i < BCH_DATA_NR; i++)
+		if (data_type_movable(i))
+			fragmented += usage_full.d[i].fragmented;
+
+	return fragmented > ca->mi.bucket_size *
+		bch2_dev_buckets_reserved(ca, BCH_WATERMARK_stripe);
+}
+
 u64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
 {
 	struct bch_dev_usage_full usage_full = bch2_dev_usage_full_read(ca);

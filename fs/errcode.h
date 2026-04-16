@@ -204,6 +204,7 @@
 	x(EAGAIN,			max_discards_in_flight)			\
 	x(ENOSPC,			ec_alloc_failed)			\
 	x(BCH_ERR_freelist_empty,	no_buckets_found)			\
+	x(BCH_ERR_freelist_empty,	bucket_alloc_no_progress)		\
 	x(0,				transaction_restart)			\
 	x(BCH_ERR_transaction_restart,	transaction_restart_fault_inject)	\
 	x(BCH_ERR_transaction_restart,	transaction_restart_relock)		\
