@@ -341,8 +341,17 @@ shared structures that do not belong to any individual file. Encryption can
 only be enabled at format time; it cannot be added to an existing filesystem.
 
 \textbf{Critical exception}: Data written with the \texttt{nocow} option is
-stored \textbf{unencrypted}, even on an encrypted filesystem (see the Nocow
-section below).
+stored \textbf{unencrypted}, even on an encrypted filesystem. This is a hard
+design incompatibility, not a policy choice: ChaCha20 requires a unique nonce
+per (key, plaintext), and bcachefs stores the nonce externally alongside each
+data pointer. An in-place \texttt{nocow} overwrite cannot produce a new nonce
+without also atomically updating the pointer (which defeats the purpose of
+nocow), so the (key, nonce) pair would be reused against a different
+plaintext --- catastrophic for ChaCha20, since the XOR of two ciphertexts
+leaks the XOR of the plaintexts. Supporting encrypted nocow would require
+integrating a position-tweakable cipher (e.g.\ AES-XTS) alongside ChaCha20.
+See the Nocow section below and the Nonce reuse discussion for related
+considerations.
 
 The key hierarchy uses a passphrase (never stored on disk) to derive a
 passphrase key via scrypt, which decrypts a random master key stored in the
@@ -364,17 +373,31 @@ models. The \texttt{wide\_macs} option stores the full 128-bit MAC and is
 recommended when the storage device itself is untrusted (e.g. USB drives,
 network storage). Metadata always uses full-width MACs.
 
-\paragraph{Nonce reuse with external snapshots}
+\paragraph{Nonce reuse}
 
-If the underlying storage is snapshotted externally (LVM, ZFS zvol, VM
-snapshot) and the snapshot is mounted read-write, both instances share the
-same master key and will reuse nonces, breaking encryption security.
-bcachefs's own snapshots do not have this problem.
+ChaCha20 requires a unique nonce for every (key, plaintext) pair. bcachefs
+stores nonces externally (in the data pointer), so the filesystem itself
+assigns nonces --- and anything that breaks the ``one nonce per plaintext''
+invariant breaks encryption security. There are two distinct ways this can
+happen:
+
+\emph{External snapshots, mounted read-write}: if the underlying storage is
+snapshotted externally (LVM, ZFS zvol, VM snapshot) and the snapshot is
+mounted read-write, both instances share the same master key and will assign
+nonces independently, producing collisions. bcachefs's own snapshots do not
+have this problem.
 
 \textbf{Mitigation}: Never mount an external snapshot of an encrypted volume
 read-write --- keep external snapshots read-only (\texttt{-o nochanges}).
 Alternatively, place LUKS between the snapshot layer and bcachefs (e.g.
 LVM $\to$ LUKS $\to$ bcachefs).
+
+\emph{In-place overwrites (\texttt{nocow})}: in-place writes cannot update
+the externally-stored nonce without also updating the data pointer, which
+would defeat the point of nocow. Encrypting a nocow overwrite would therefore
+reuse the existing (key, nonce) against new plaintext. This is why nocow
+data on encrypted filesystems is stored in plaintext; see the Nocow section
+for details.
 
 See \hyperref[sec:encryption]{Encryption} in subsystem details for key
 hierarchy internals, keyring integration, and MAC storage details.
@@ -411,9 +434,21 @@ resume in-place.
 
 Because nocow data has no checksums, it cannot be verified by scrub, cannot be
 self-healed from a replica on checksum mismatch, and is not protected against
-bitrot. On encrypted filesystems, nocow data is stored in plaintext. These
-tradeoffs should be weighed carefully; for most workloads, the default COW
-behavior with checksumming is the better choice.
+bitrot.
+
+On encrypted filesystems, nocow data is stored in plaintext --- this is a
+hard incompatibility, not an oversight. ChaCha20 requires unique nonces, and
+bcachefs's nonces live in the data pointer (external to the ciphertext). An
+in-place overwrite therefore cannot change the nonce, so it would reuse the
+(key, nonce) pair against new plaintext, which leaks both plaintexts via
+keystream recovery. This also means subsystems that re-encrypt or re-emit
+data in the background (e.g.\ reconcile, background compression) must skip
+nocow extents; treating a nocow extent as encrypted is a correctness bug.
+Lifting this restriction would require adding a position-tweakable cipher
+(e.g.\ AES-XTS) to the encryption pipeline.
+
+These tradeoffs should be weighed carefully; for most workloads, the default
+COW behavior with checksumming is the better choice.
 
 \subsection{Multiple devices}
 
