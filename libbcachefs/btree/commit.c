@@ -830,7 +830,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 	return 0;
 }
 
-static noinline void bch2_drop_overwrites_from_journal(struct btree_trans *trans)
+static noinline int bch2_check_drop_overwrites_from_journal(struct btree_trans *trans, bool check)
 {
 	/*
 	 * Accounting keys aren't deduped in the journal: we have to compare
@@ -840,7 +840,21 @@ static noinline void bch2_drop_overwrites_from_journal(struct btree_trans *trans
 	 */
 	trans_for_each_update(trans, i)
 		if (i->k->k.type != KEY_TYPE_accounting)
-			bch2_journal_key_overwritten(trans->c, i->btree_id, i->level, i->k->k.p);
+			try(bch2_journal_key_check_or_overwrite(trans->c, i->btree_id,
+								i->level, i->k->k.p, check));
+
+	for (struct jset_entry *i = btree_trans_journal_entries_start(trans);
+	     i != btree_trans_journal_entries_top(trans);
+	     i = vstruct_next(i)) {
+		if (i->type == BCH_JSET_ENTRY_btree_keys ||
+		    i->type == BCH_JSET_ENTRY_write_buffer_keys) {
+			jset_entry_for_each_key(i, k)
+				try(bch2_journal_key_check_or_overwrite(trans->c, i->btree_id,
+									i->level, k->k.p, check));
+		}
+	}
+
+	return 0;
 }
 
 static int bch2_trans_commit_journal_pin_flush(struct journal *j,
@@ -885,14 +899,37 @@ static inline int do_bch2_trans_commit(struct btree_trans *trans,
 		}
 	}
 
-	try(bch2_trans_lock_write(trans));
+	/*
+	 * Pre-grow journal entries subbuf for write buffer updates
+	 * that will be added during atomic triggers (can't realloc
+	 * after journal reservation):
+	 */
+	if (trans->extra_journal_u64s)
+		try(bch2_trans_subbuf_reserve(trans, &trans->journal_entries,
+					      trans->extra_journal_u64s));
 
-	int ret = bch2_trans_commit_write_locked(trans, flags, stopped_at, trace_ip);
+	if (unlikely(trans->journal_replay_not_finished)) {
+		try(bch2_trans_mutex_lock(trans, &c->journal_keys.overwrite_lock));
 
-	if (!ret && unlikely(trans->journal_replay_not_finished))
-		bch2_drop_overwrites_from_journal(trans);
+		if ((flags & BCH_TRANS_COMMIT_journal_replay) &&
+		    bch2_check_drop_overwrites_from_journal(trans, true)) {
+			mutex_unlock(&c->journal_keys.overwrite_lock);
+			return btree_trans_restart(trans,
+					     BCH_ERR_transaction_restart_journal_overwrites_changed);
+		}
+	}
 
-	bch2_trans_unlock_updates_write(trans);
+	int ret = bch2_trans_lock_write(trans);
+	if (likely(!ret)) {
+		ret = bch2_trans_commit_write_locked(trans, flags, stopped_at, trace_ip);
+		bch2_trans_unlock_updates_write(trans);
+	}
+
+	if (unlikely(trans->journal_replay_not_finished)) {
+		if (!ret)
+			bch2_check_drop_overwrites_from_journal(trans, false);
+		mutex_unlock(&c->journal_keys.overwrite_lock);
+	}
 
 	if (!ret && trans->journal_pin)
 		bch2_journal_pin_add(&c->journal, trans->journal_res.seq,
@@ -1207,7 +1244,8 @@ retry:
 		memset(&trans->journal_res, 0, sizeof(trans->journal_res));
 	memset(&trans->fs_usage_delta, 0, sizeof(trans->fs_usage_delta));
 
-	trans->journal_u64s = journal_u64s + trans->journal_entries.u64s;
+	trans->journal_u64s = journal_u64s + trans->journal_entries.u64s +
+		trans->extra_journal_u64s;
 
 	ret = do_bch2_trans_commit(trans, flags, &errored_at, _RET_IP_);
 

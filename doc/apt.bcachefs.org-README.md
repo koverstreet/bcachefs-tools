@@ -1,7 +1,7 @@
 To add this repository to your computer, do:
 ```bash
 wget -qO- https://apt.bcachefs.org/apt.bcachefs.org.asc | sudo tee /etc/apt/trusted.gpg.d/apt.bcachefs.org.asc
-# Fingerprint: $GPG_SIGNING_SUBKEY_FINGERPRINT
+# Fingerprint: EA483B991020C72A8A5035ADA0620B5E0E01C1DD
 sudo tee /etc/apt/sources.list.d/apt.bcachefs.org.sources > /dev/null <<EOF
 Types: deb deb-src
 URIs: https://apt.bcachefs.org/unstable/

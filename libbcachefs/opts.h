@@ -251,6 +251,11 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		true,				\
 	  NULL,		"Stash pointer to in memory btree node in btree ptr")\
+	x(btree_cache_size_max,		u64,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME|OPT_HUMAN_READABLE,		\
+	  OPT_UINT(0, U64_MAX),						\
+	  BCH2_NO_SB_OPT,		0,				\
+	  NULL,		"Maximum size of the btree node cache in bytes (0 = no limit)")\
 	x(gc_reserve_percent,		u8,				\
 	  OPT_FS|OPT_FORMAT|OPT_MOUNT|OPT_RUNTIME,			\
 	  OPT_UINT(5, 21),						\
@@ -477,7 +482,7 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		false,				\
 	  NULL,		"Don\'t start filesystem, only open devices")	\
-	x(reconstruct_alloc,		u8,				\
+	x(dangerously_reconstruct_alloc,u8,				\
 	  OPT_FS|OPT_MOUNT,						\
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		false,				\

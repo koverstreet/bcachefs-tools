@@ -440,8 +440,7 @@ enum bch_dev_read_ref {
 #define BCH_DEV_WRITE_REFS()				\
 	x(journal_write)				\
 	x(journal_discard)				\
-	x(dev_do_discards)				\
-	x(discard_sectors_to_release)			\
+	x(discard_bucket)				\
 	x(discard_one_bucket_fast)			\
 	x(do_invalidates)				\
 	x(stripe_update_extents)			\
@@ -523,11 +522,9 @@ struct bch_dev {
 
 	struct work_struct	invalidate_work;
 
-	struct work_struct	discard_work;
 	struct work_struct	discard_fast_work;
 	darray_u64		discard_fast;
-	FIFO(struct discard_fifo_entry) discard_fifo;
-	bool			discard_buckets_degraded;
+	struct mutex		discard_fast_lock;
 
 	atomic64_t		rebalance_work;
 
@@ -730,6 +727,7 @@ struct bch_fs {
 	struct bch_disk_groups_cpu __rcu	*disk_groups;
 	struct bch_fs_capacity			capacity;
 	struct bch_fs_allocator			allocator;
+	struct bch_fs_discards			discards;
 
 	struct bch_fs_snapshots			snapshots;
 

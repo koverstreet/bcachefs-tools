@@ -485,8 +485,9 @@ static void __bch2_journal_key_overwritten(struct journal_keys *keys, size_t pos
 	}
 }
 
-void bch2_journal_key_overwritten(struct bch_fs *c, enum btree_id btree,
-				  unsigned level, struct bpos pos)
+int bch2_journal_key_check_or_overwrite(struct bch_fs *c, enum btree_id btree,
+					 unsigned level, struct bpos pos,
+					 bool check)
 {
 	struct journal_keys *keys = &c->journal_keys;
 	size_t idx = bch2_journal_key_search(keys, btree, level, pos);
@@ -495,14 +496,18 @@ void bch2_journal_key_overwritten(struct bch_fs *c, enum btree_id btree,
 	    keys->data[idx].btree_id	!= btree ||
 	    keys->data[idx].level	!= level ||
 	    keys->data[idx].overwritten)
-		return;
+		return 0;
 
 	struct bkey_i *k = journal_key_k(c, &keys->data[idx]);
 
-	if (bpos_eq(k->k.p, pos)) {
-		guard(mutex)(&keys->overwrite_lock);
-		__bch2_journal_key_overwritten(keys, idx);
-	}
+	if (!bpos_eq(k->k.p, pos))
+		return 0;
+
+	if (check)
+		return keys->data[idx].overwritten ? -1 : 0;
+
+	__bch2_journal_key_overwritten(keys, idx);
+	return 0;
 }
 
 static void bch2_journal_iter_advance(struct journal_iter *iter)

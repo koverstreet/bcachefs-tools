@@ -1,5 +1,103 @@
 // SPDX-License-Identifier: GPL-2.0
 
+/* DOC_LATEX(btree-locking)
+ *
+ * Bcachefs uses SIX locks (shared, intent, exclusive) for btree nodes rather
+ * than traditional read/write locks. The three states are:
+ *
+ * \begin{itemize}
+ * \item \textbf{Shared}: Does not conflict with other shared locks (like a read lock)
+ * \item \textbf{Intent}: Conflicts with other intent locks but not shared locks
+ * \item \textbf{Exclusive}: Conflicts with everything (like a write lock)
+ * \end{itemize}
+ *
+ * \paragraph{Why intent locks?}
+ *
+ * With a regular read/write lock, a read lock cannot be upgraded to a write
+ * lock---that leads to deadlock when multiple threads with read locks try to
+ * upgrade simultaneously. With complicated data structures like btrees, updates
+ * often need to hold write locks for exclusion with other updates for much
+ * longer than the part where they actually modify data that needs exclusion
+ * from readers.
+ *
+ * Consider a btree node split. The update starts at a leaf node and discovers
+ * it needs to split. Before starting the split, it must acquire a write lock
+ * on the parent node---primarily to avoid deadlocking with other splits. It
+ * needs at least a read lock on the parent to lock the path to the child node,
+ * but it cannot upgrade that read lock to a write lock (to update the parent
+ * with pointers to the new children) because that would deadlock with threads
+ * splitting sibling leaf nodes.
+ *
+ * Intent locks solve this. When doing a split, we acquire an intent lock on
+ * the parent---exclusive locks (for the actual in-memory modification) are
+ * only ever held while modifying in-memory btree contents, which is a much
+ * shorter duration than the entire split operation (which requires waiting for
+ * new nodes to be written to disk). Readers can continue accessing the parent
+ * throughout the split; only the final pointer update requires exclusive
+ * access.
+ *
+ * \paragraph{Parent-child ordering}
+ *
+ * Intent locks with only three states do introduce another potential deadlock:
+ *
+ * \begin{verbatim}
+ *     Thread A                        Thread B
+ *     read            | Parent |      intent
+ *     intent          | Child  |      intent
+ * \end{verbatim}
+ *
+ * Thread B is splitting the child node: it has allocated new nodes and written
+ * them out, and now needs an exclusive lock on the parent to add the new
+ * pointers (after which it will free the old child). Thread A just wants to
+ * insert into the child---it has a read lock on the parent, has looked up the
+ * child node, and is waiting on thread B to get an intent lock on the child.
+ *
+ * But thread A has blocked thread B from taking its exclusive lock on the
+ * parent, and thread B cannot drop its intent lock on the child until after
+ * the new nodes are visible and the old child is freed.
+ *
+ * The solution: we drop read locks on parent nodes \emph{before} taking intent
+ * locks on child nodes. This might cause us to race with the node being freed,
+ * so after grabbing the intent lock we verify the node is still valid and redo
+ * the traversal if necessary.
+ *
+ * \paragraph{Sequence numbers and optimistic relocking}
+ *
+ * SIX locks include embedded sequence numbers, incremented when taking and
+ * releasing exclusive locks (much like seqlocks). This allows us to
+ * aggressively drop locks---we can usually retake the lock by checking the
+ * sequence number rather than redoing the full btree traversal. We also use
+ * this for \texttt{try\_upgrade()}: if we discover we need an intent lock (e.g.
+ * for a split, or because the caller is inserting into a leaf node they did
+ * not get an intent lock for), we can often upgrade without unwinding and
+ * redoing the traversal.
+ *
+ * \paragraph{Cycle detection}
+ *
+ * Bcachefs uses database-style cycle detection to avoid deadlocks entirely.
+ * Before a transaction sleeps waiting on a contended lock, it invokes
+ * \texttt{bch2\_check\_for\_deadlock()}, which walks the graph of transactions
+ * waiting on locks. The algorithm follows the chain of dependencies: for each
+ * lock a transaction holds, check if any other transaction is waiting on that
+ * lock; if so, recursively check what locks \emph{that} transaction holds, and
+ * so on.
+ *
+ * If the walk returns to the original transaction, a cycle exists. One
+ * transaction in the cycle is selected to abort: it releases all its locks and
+ * restarts from the beginning. The transaction layer is designed so that all
+ * operations are idempotent and can be safely restarted at any point.
+ *
+ * This approach eliminates deadlocks entirely and keeps worst-case latency
+ * bounded, at the cost of requiring restartable transactions. The same
+ * restart infrastructure also provides crash resilience: since every operation
+ * can be interrupted and restarted, the filesystem is inherently resilient to
+ * interruption at any point---including during recovery itself.
+ *
+ * The cycle detector runs only when a transaction would block, so it adds no
+ * overhead to the fast path. When cycles are detected, they are broken
+ * immediately rather than timing out, keeping latency predictable.
+ */
+
 #include "bcachefs.h"
 
 #include "btree/bbpos.h"

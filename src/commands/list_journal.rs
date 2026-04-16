@@ -98,8 +98,7 @@ struct TransactionMsgFilter {
 }
 
 struct TransactionKeyFilter {
-    sign: i32,
-    ranges: Vec<BbposRange>,
+    ranges: Vec<(i32, BbposRange)>,  // (sign, range)
 }
 
 struct JournalFilter {
@@ -137,41 +136,36 @@ fn transaction_matches_btree_filter(
     })
 }
 
-fn bkey_matches_filter(
-    f: &TransactionKeyFilter,
+fn bkey_matches_range(
     entry: &c::jset_entry,
     k: &c::bkey_i,
+    range: &BbposRange,
 ) -> bool {
     let Some(btree) = entry_btree_id(entry) else { return false };
 
-    for range in &f.ranges {
-        let mut k_start = c::bbpos {
-            btree,
-            pos: bkey_start_pos(&k.k),
-        };
-        let mut k_end = c::bbpos {
-            btree,
-            pos: k.k.p,
-        };
+    let mut k_start = c::bbpos {
+        btree,
+        pos: bkey_start_pos(&k.k),
+    };
+    let mut k_end = c::bbpos {
+        btree,
+        pos: k.k.p,
+    };
 
-        if range.start.pos.snapshot == 0 && range.end.pos.snapshot == 0 {
-            k_start.pos.snapshot = 0;
-            k_end.pos.snapshot = 0;
-        }
-
-        // Match the C code: always use point comparison (true || !k.k.size)
-        k_start = k_end;
-
-        if k_start >= range.start && k_end <= range.end {
-            return true;
-        }
+    if range.start.pos.snapshot == 0 && range.end.pos.snapshot == 0 {
+        k_start.pos.snapshot = 0;
+        k_end.pos.snapshot = 0;
     }
-    false
+
+    // Match the C code: always use point comparison (true || !k.k.size)
+    k_start = k_end;
+
+    k_start >= range.start && k_end <= range.end
 }
 
-fn entry_matches_transaction_filter(
-    f: &TransactionKeyFilter,
+fn entry_matches_range(
     entry: &c::jset_entry,
+    range: &BbposRange,
 ) -> bool {
     if entry.level != 0 {
         return false;
@@ -183,17 +177,40 @@ fn entry_matches_transaction_filter(
         return false;
     }
 
-    jset_entry_keys(entry).any(|k| bkey_matches_filter(f, entry, k))
+    jset_entry_keys(entry).any(|k| bkey_matches_range(entry, k, range))
 }
 
 fn transaction_matches_transaction_filter(
     f: &TransactionKeyFilter,
     entries: &[&c::jset_entry],
 ) -> bool {
-    entries
-        .iter()
-        .skip(1)
-        .any(|e| entry_matches_transaction_filter(f, e))
+    let has_positive = f.ranges.iter().any(|(sign, _)| *sign >= 0);
+    let has_negative = f.ranges.iter().any(|(sign, _)| *sign < 0);
+
+    // Check negative ranges first - must NOT match any
+    if has_negative {
+        for (sign, range) in &f.ranges {
+            if *sign < 0 {
+                if entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    // Check positive ranges - must match at least one (if any exist)
+    if has_positive {
+        for (sign, range) in &f.ranges {
+            if *sign >= 0 {
+                if entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    true
 }
 
 fn entry_matches_msg_filter(f: &TransactionMsgFilter, entry: &c::jset_entry) -> bool {
@@ -240,7 +257,7 @@ fn should_print_transaction(
     }
 
     if !f.key.ranges.is_empty()
-        && transaction_matches_transaction_filter(&f.key, entries) != (f.key.sign >= 0)
+        && !transaction_matches_transaction_filter(&f.key, entries)
     {
         return false;
     }
@@ -350,7 +367,8 @@ fn print_one_entry(
         return;
     }
 
-    let highlight = entry_matches_transaction_filter(&f.key, entry);
+    let highlight = f.key.ranges.iter()
+        .any(|(_, range)| entry_matches_range(entry, range));
     if highlight {
         write!(out, "{RED}").unwrap();
     }
@@ -598,7 +616,7 @@ pub struct Cli {
 
     /// Filter by key range (+/-bbpos[-bbpos],...)
     #[arg(short = 'k', long, allow_hyphen_values = true)]
-    key: Option<String>,
+    key: Vec<String>,
 
     /// Print bkey values (true/false)
     #[arg(short = 'V', long = "bkey-val")]
@@ -675,7 +693,6 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
             patterns: Vec::new(),
         },
         key: TransactionKeyFilter {
-            sign: 0,
             ranges: Vec::new(),
         },
         bkey_val: true,
@@ -703,13 +720,12 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
         f.filtering = true;
     }
 
-    if let Some(ref key_arg) = cli.key {
+    for key_arg in &cli.key {
         let (sign, rest) = parse_sign(key_arg);
-        f.key.sign = sign;
         for part in rest.split(',') {
             let range = bbpos_range_parse(part)
                 .map_err(|e| anyhow::anyhow!("{}: {}", e, part))?;
-            f.key.ranges.push(range);
+            f.key.ranges.push((sign, range));
         }
         f.filtering = true;
     }
