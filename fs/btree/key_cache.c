@@ -256,7 +256,6 @@ static int btree_key_cache_create(struct btree_trans *trans,
 	ck->key.btree_id	= ck_path->btree_id;
 	ck->key.pos		= ck_path->pos;
 	ck->flags		= 1U << BKEY_CACHED_ACCESSED;
-	ck->needs_immediate_flush = false;
 
 	if (unlikely(key_u64s > ck->u64s)) {
 		mark_btree_node_locked_noreset(ck_path, 0, BTREE_NODE_UNLOCKED);
@@ -352,7 +351,7 @@ static noinline int btree_key_cache_fill(struct btree_trans *trans,
 
 	if (unlikely(needs_immediate_flush)) {
 		struct bkey_cached *ck = (void *) ck_path->l[0].b;
-		ck->needs_immediate_flush = true;
+		set_bit(BKEY_CACHED_IMMEDIATE_FLUSH, &ck->flags);
 	}
 
 	event_inc_trace(c, btree_key_cache_fill, buf, ({
