@@ -176,15 +176,11 @@ struct bch_fs_allocator {
 	struct write_point	reconcile_write_point;
 };
 
-struct discard_fifo_entry {
-	u64			seq;
-	DARRAY(u64)		buckets;
-};
-
-struct discard_fifo_cursor {
-	size_t			fifo_idx;
-	size_t			bucket_idx;
-};
+typedef struct {
+	u64				dev_bucket;
+	bool				complete;
+	bool				marking_free;
+} discard_in_flight;
 
 struct discard_release {
 	u64		buffer;
@@ -203,8 +199,11 @@ struct discard_release {
 struct discard_state {
 	u64			seen;
 	u64			not_rw;
+	u64			eexist;
+	u64			eagain;
 	u64			open;
 	u64			need_journal_commit;
+	u64			need_rewind_advance;
 	u64			bad_data_type;
 	u64			discarded;
 	u64			committed;
@@ -213,8 +212,14 @@ struct discard_state {
 };
 
 struct bch_fs_discards {
-	struct mutex			lock;
 	struct work_struct		work;
+	struct bio_set			bioset;
+
+	DARRAY(discard_in_flight)	in_flight;
+	spinlock_t			lock;
+	u32				ref;
+	u8				refs[BCH_SB_MEMBERS_MAX];
+	struct closure_waitlist		wait;
 
 	struct discard_state		s;
 };

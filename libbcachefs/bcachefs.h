@@ -441,7 +441,6 @@ enum bch_dev_read_ref {
 	x(journal_write)				\
 	x(journal_discard)				\
 	x(discard_bucket)				\
-	x(discard_sectors_to_release)			\
 	x(discard_one_bucket_fast)			\
 	x(do_invalidates)				\
 	x(stripe_update_extents)			\
@@ -525,6 +524,7 @@ struct bch_dev {
 
 	struct work_struct	discard_fast_work;
 	darray_u64		discard_fast;
+	struct mutex		discard_fast_lock;
 
 	atomic64_t		rebalance_work;
 
