@@ -205,7 +205,7 @@ static inline u64 last_uncompleted_write_seq(struct journal *j, u64 seq_completi
 static CLOSURE_CALLBACK(journal_write_done)
 {
 	closure_type(w, struct journal_buf, io);
-	struct journal *j = container_of(w, struct journal, buf[w->idx]);
+	struct journal *j = w->j;
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	u64 seq_wrote = le64_to_cpu(w->data->seq);
 	int err = 0;
@@ -276,7 +276,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 
 	u64 seq;
 	while ((seq = last_uncompleted_write_seq(j, seq_wrote))) {
-		w = j->buf + (seq & JOURNAL_BUF_MASK);
+		w = journal_seq_to_buf(j, seq);
 
 		if (!j->err_seq && !w->noflush) {
 			BUG_ON(w->empty && w->last_seq != seq);
@@ -387,9 +387,9 @@ static void journal_write_endio(struct bio *bio)
 {
 	struct journal_bio *jbio = container_of(bio, struct journal_bio, bio);
 	struct bch_dev *ca = jbio->ca;
-	struct journal *j = &ca->fs->journal;
+	struct journal_buf *w = jbio->buf;
+	struct journal *j = w->j;
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	struct journal_buf *w = j->buf + jbio->buf_idx;
 
 	bch2_account_io_completion(ca, BCH_MEMBER_ERROR_write,
 				   jbio->submit_time, !bio->bi_status);
@@ -409,7 +409,7 @@ static void journal_write_endio(struct bio *bio)
 static CLOSURE_CALLBACK(journal_write_submit)
 {
 	closure_type(w, struct journal_buf, io);
-	struct journal *j = container_of(w, struct journal, buf[w->idx]);
+	struct journal *j = w->j;
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	unsigned sectors = vstruct_sectors(w->data, c->block_bits);
 
@@ -455,7 +455,7 @@ static CLOSURE_CALLBACK(journal_write_submit)
 			container_of(bio, struct journal_bio, bio);
 
 		jbio->ca		= ca;
-		jbio->buf_idx		= w->idx;
+		jbio->buf		= w;
 		jbio->submit_time	= local_clock();
 
 		bio->bi_end_io		= journal_write_endio;
@@ -475,7 +475,7 @@ static CLOSURE_CALLBACK(journal_write_submit)
 static CLOSURE_CALLBACK(journal_write_preflush)
 {
 	closure_type(w, struct journal_buf, io);
-	struct journal *j = container_of(w, struct journal, buf[w->idx]);
+	struct journal *j = w->j;
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
 	/*
@@ -505,7 +505,7 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 			struct journal_bio *jbio = container_of(bio, struct journal_bio, bio);
 
 			jbio->ca		= ca;
-			jbio->buf_idx		= w->idx;
+			jbio->buf		= w;
 			jbio->submit_time	= local_clock();
 
 			bio->bi_end_io		= journal_write_endio;
@@ -738,7 +738,7 @@ static int bch2_journal_write_pick_flush(struct journal *j, struct journal_buf *
 CLOSURE_CALLBACK(bch2_journal_write)
 {
 	closure_type(w, struct journal_buf, io);
-	struct journal *j = container_of(w, struct journal, buf[w->idx]);
+	struct journal *j = w->j;
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	unsigned nr_rw_members = dev_mask_nr(&c->allocator.rw_devs[BCH_DATA_free]);
 	int ret;

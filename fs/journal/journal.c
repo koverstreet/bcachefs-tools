@@ -495,6 +495,7 @@ static int journal_entry_open(struct journal *j)
 	buf->u64s_reserved	= j->entry_u64s_reserved;
 	buf->disk_sectors	= j->cur_entry_sectors;
 	buf->sectors		= min(buf->disk_sectors, buf->buf_size >> 9);
+	buf->j			= j;
 
 	u64s = (int) (buf->sectors << 9) / sizeof(u64) -
 		journal_entry_overhead(j);

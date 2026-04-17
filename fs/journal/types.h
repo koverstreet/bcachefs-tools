@@ -31,6 +31,7 @@
  */
 struct journal_buf {
 	struct closure		io;
+	struct journal		*j;		/* for container_of-equivalent recovery */
 	struct jset		*data;
 
 	__BKEY_PADDED(key, BCH_REPLICAS_MAX);
@@ -56,7 +57,6 @@ struct journal_buf {
 	bool			write_done:1;
 	bool			empty:1;
 	bool			has_overwrites:1;
-	u8			idx;
 };
 
 /*
@@ -173,7 +173,7 @@ enum journal_flags {
 
 struct journal_bio {
 	struct bch_dev		*ca;
-	unsigned		buf_idx;
+	struct journal_buf	*buf;
 	u64			submit_time;
 
 	struct bio		bio;

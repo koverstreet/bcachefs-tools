@@ -595,9 +595,6 @@ int bch2_fs_journal_init(struct journal *j)
 	if (!j->free_buf)
 		return bch_err_throw(c, ENOMEM_journal_buf);
 
-	for (unsigned i = 0; i < ARRAY_SIZE(j->buf); i++)
-		j->buf[i].idx = i;
-
 	j->wq = alloc_workqueue("bcachefs_journal",
 				WQ_HIGHPRI|WQ_FREEZABLE|WQ_UNBOUND|WQ_MEM_RECLAIM, 512);
 	if (!j->wq)
