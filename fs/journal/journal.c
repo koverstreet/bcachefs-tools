@@ -461,8 +461,13 @@ static int journal_entry_open(struct journal *j)
 	if (!fifo_free(&j->pin))
 		return bch_err_throw(c, journal_pin_full);
 
-	if (nr_unwritten_journal_entries(j) == ARRAY_SIZE(j->buf))
-		return bch_err_throw(c, journal_max_in_flight);
+	/*
+	 * Need room in the in_flight FIFO and a pre-allocated data buffer;
+	 * the data buffer is topped up by journal_buf_prealloc() outside of
+	 * j->lock.
+	 */
+	if (!fifo_free(&j->in_flight))
+		return bch_err_throw(c, journal_buf_enomem);
 
 	if (atomic64_read(&j->seq) - j->seq_write_started == JOURNAL_STATE_BUF_NR)
 		return bch_err_throw(c, journal_max_open);
@@ -485,7 +490,7 @@ static int journal_entry_open(struct journal *j)
 	}
 
 	if (!j->free_buf)
-		return bch_err_throw(c, journal_buf_enomem); /* will retry after write completion frees up a buf */
+		return bch_err_throw(c, journal_buf_enomem);
 
 	BUG_ON(!j->cur_entry_sectors);
 
@@ -508,7 +513,12 @@ static int journal_entry_open(struct journal *j)
 
 	BUG_ON(j->pin.back - 1 != seq);
 
-	struct journal_buf *buf = j->buf + (seq & JOURNAL_BUF_MASK);
+	/*
+	 * Grab the next in_flight FIFO slot (inline storage — the pointer
+	 * is stable because the FIFO is statically sized and never
+	 * reallocated).
+	 */
+	struct journal_buf *buf = fifo_push_ref(&j->in_flight);
 	memset(buf, 0, sizeof(*buf));
 
 	/* Claim the pre-allocated data buffer */
@@ -820,8 +830,10 @@ void bch2_journal_entry_res_resize(struct journal *j,
 	j->cur_entry_u64s = max_t(int, 0, j->cur_entry_u64s - d);
 	state = READ_ONCE(j->reservations);
 
-	if (state.cur_entry_offset < JOURNAL_ENTRY_CLOSED_VAL &&
-	    state.cur_entry_offset > j->cur_entry_u64s) {
+	if (state.cur_entry_offset >= JOURNAL_ENTRY_CLOSED_VAL)
+		return;
+
+	if (state.cur_entry_offset > j->cur_entry_u64s) {
 		j->cur_entry_u64s += d;
 		/*
 		 * Not enough room in current journal entry, have to flush it:

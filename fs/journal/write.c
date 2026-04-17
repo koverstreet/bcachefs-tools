@@ -329,6 +329,16 @@ static CLOSURE_CALLBACK(journal_write_done)
 
 		closure_wake_up(&w->wait);
 		completed = true;
+
+		/*
+		 * Advance the in_flight FIFO front. Maintains the invariant
+		 * fifo.front == seq_ondisk + 1 so journal_seq_to_buf()'s
+		 * fifo_entry() indexing stays consistent with seq. The buf
+		 * storage is inline in the FIFO's backing array; buf->data
+		 * was already recycled/freed above.
+		 */
+		BUG_ON(j->in_flight.front != seq);
+		j->in_flight.front++;
 	}
 
 	j->pin.front = min(j->pin.back, j->last_seq_ondisk);

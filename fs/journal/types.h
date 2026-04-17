@@ -21,9 +21,7 @@
 #define JOURNAL_STATE_BUF_NR	(1U << JOURNAL_STATE_BUF_BITS)
 #define JOURNAL_STATE_BUF_MASK	(JOURNAL_STATE_BUF_NR - 1)
 
-#define JOURNAL_BUF_BITS	4
-#define JOURNAL_BUF_NR		(1U << JOURNAL_BUF_BITS)
-#define JOURNAL_BUF_MASK	(JOURNAL_BUF_NR - 1)
+struct journal;
 
 /*
  * One journal buffer: staging area for a journal entry. Dynamically
@@ -259,10 +257,12 @@ struct journal {
 	 * FIFO of in-flight journal bufs, one entry per seq in
 	 * (seq_ondisk, cur_seq]. fifo.front = seq_ondisk + 1, fifo.back =
 	 * cur_seq + 1, so seq-indexed lookup is O(1) via fifo_entry().
-	 * Bufs are pushed in journal_entry_open() and popped (and freed) in
+	 * Bufs live inline in the FIFO's backing array: pushed (and zeroed)
+	 * in journal_entry_open(), freed (front-advanced) in
 	 * journal_write_done() as seq_ondisk advances.
 	 */
-	struct journal_buf	buf[JOURNAL_BUF_NR];
+	FIFO_U64_IDX(struct journal_buf) in_flight;
+
 	void			*free_buf;
 	unsigned		free_buf_size;
 

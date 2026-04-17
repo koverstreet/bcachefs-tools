@@ -410,6 +410,13 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 	j->pin.back		= cur_seq;
 	atomic64_set(&j->seq, cur_seq - 1);
 
+	/*
+	 * Align the in_flight FIFO with seq numbering: front == seq_ondisk + 1
+	 * == cur_seq initially (empty fifo), so fifo_entry(in_flight, seq)
+	 * indexes by seq once entries start pushing.
+	 */
+	j->in_flight.front = j->in_flight.back = cur_seq;
+
 	u64 seq;
 	fifo_for_each_entry_ptr(p, &j->pin, seq)
 		journal_pin_list_init(p, 1);
@@ -566,8 +573,19 @@ void bch2_fs_journal_exit(struct journal *j)
 	darray_exit(&j->early_journal_entries);
 	darray_exit(&j->rewind_ranges);
 
-	for (unsigned i = 0; i < ARRAY_SIZE(j->buf); i++)
-		kvfree(j->buf[i].data);
+	/*
+	 * Any bufs still in the in_flight fifo are leftover on error paths
+	 * (normal shutdown drains them).
+	 */
+	{
+		struct journal_buf *buf;
+		size_t i;
+
+		fifo_for_each_entry_ptr(buf, &j->in_flight, i)
+			kvfree(buf->data);
+	}
+	free_fifo(&j->in_flight);
+
 	kvfree(j->free_buf);
 	free_fifo(&j->pin);
 }
@@ -599,6 +617,16 @@ int bch2_fs_journal_init(struct journal *j)
 	j->free_buf_size = j->buf_size_want = JOURNAL_ENTRY_SIZE_MIN;
 	j->free_buf = kvmalloc(j->free_buf_size, GFP_KERNEL);
 	if (!j->free_buf)
+		return bch_err_throw(c, ENOMEM_journal_buf);
+
+	/*
+	 * in_flight holds one entry per seq in (seq_ondisk, cur_seq]. Size is
+	 * an upper bound on in-flight journal writes; starts at 256, which is
+	 * well above the 16-slot cap of the prior static-array layout. If
+	 * workloads saturate this, journal_entry_open() returns ENOMEM and
+	 * the existing retry path throttles via completion backpressure.
+	 */
+	if (!init_fifo(&j->in_flight, 256, GFP_KERNEL))
 		return bch_err_throw(c, ENOMEM_journal_buf);
 
 	j->wq = alloc_workqueue("bcachefs_journal",

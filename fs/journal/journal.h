@@ -139,54 +139,52 @@ static inline u64 journal_last_unwritten_seq(struct journal *j)
 	return j->seq_ondisk + 1;
 }
 
-static inline u64 journal_last_unallocated_seq(struct journal *j)
-{
-	for (u64 seq = journal_last_unwritten_seq(j);
-	     seq <= journal_cur_seq(j);
-	     seq++)
-		if (!j->buf[seq & JOURNAL_BUF_MASK].write_allocated)
-			return seq;
-	return 0;
-}
-
 static inline bool journal_seq_unwritten(struct journal *j, u64 seq)
 {
 	return seq > j->seq_ondisk;
 }
 
-static inline struct journal_buf *journal_cur_buf(struct journal *j)
-{
-	unsigned idx = (journal_cur_seq(j) &
-			JOURNAL_BUF_MASK &
-			~JOURNAL_STATE_BUF_MASK) + j->reservations.idx;
-
-	return j->buf + idx;
-}
-
 /*
- * Look up the buffer for @seq. Caller must hold j->lock (or otherwise be
- * serialized against j->seq_ondisk advancing), since the returned buffer
- * may be reused once seq <= seq_ondisk.
+ * Look up the buffer for @seq via the in_flight FIFO. Caller must hold
+ * j->lock (or otherwise be serialized against seq_ondisk advancing and
+ * FIFO mutation), since the FIFO front moves with seq_ondisk and
+ * buffers are freed on pop.
  *
  * For the fast path when holding a reservation, use journal_res_buf()
- * instead — the reservation pins its buffer slot, so no lock is needed.
+ * instead — the reservation pins its ring slot.
  */
 static inline struct journal_buf *
 journal_seq_to_buf(struct journal *j, u64 seq)
 {
-	struct journal_buf *buf = NULL;
-
+	lockdep_assert_held(&j->lock);
 	EBUG_ON(seq > journal_cur_seq(j));
 
-	if (journal_seq_unwritten(j, seq))
-		buf = j->buf + (seq & JOURNAL_BUF_MASK);
-	return buf;
+	if (!journal_seq_unwritten(j, seq))
+		return NULL;
+	return &fifo_entry(&j->in_flight, seq);
+}
+
+static inline u64 journal_last_unallocated_seq(struct journal *j)
+{
+	for (u64 seq = journal_last_unwritten_seq(j);
+	     seq <= journal_cur_seq(j);
+	     seq++) {
+		struct journal_buf *buf = journal_seq_to_buf(j, seq);
+		if (buf && !buf->write_allocated)
+			return seq;
+	}
+	return 0;
+}
+
+static inline struct journal_buf *journal_cur_buf(struct journal *j)
+{
+	return j->ring[j->reservations.idx].buf;
 }
 
 /*
  * Fastpath buffer lookup for a held reservation. No lock required: the
- * reservation holds a count on the buffer's state slot, so the buffer
- * can't be sealed or its slot reused until the reservation is released.
+ * reservation holds a count on the ring slot's state index, so the slot
+ * still points at the buf for res->seq until the reservation is released.
  */
 static inline struct journal_buf *
 journal_res_buf(struct journal *j, struct journal_res *res)
