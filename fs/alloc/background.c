@@ -1223,8 +1223,6 @@ static noinline int inval_bucket_key(struct btree_trans *trans, struct bkey_s_c 
 #define statechange_to(expr)		(!eval_state(old_a, expr) && eval_state(new_a, expr))
 #define statechange(expr)		(eval_state(old_a, expr) != eval_state(new_a, expr))
 
-#define bucket_flushed(a)		(a->journal_seq_empty <= c->journal.flushed_seq_ondisk)
-
 int bch2_trigger_alloc(struct btree_trans *trans,
 		       enum btree_id btree, unsigned level,
 		       struct bkey_s_c old, struct bkey_s new,
@@ -1337,37 +1335,6 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 				    (bch2_bkey_val_to_text(&buf, c, new.s_c), buf.buf)))
 			new_a->journal_seq_nonempty = transaction_seq;
 
-		int is_empty_delta = (int) data_type_is_empty(new_a->data_type) -
-				     (int) data_type_is_empty(old_a->data_type);
-
-		/*
-		 * Record journal sequence number of empty -> nonempty transition:
-		 * Note that there may be multiple empty -> nonempty
-		 * transitions, data in a bucket may be overwritten while we're
-		 * still writing to it - so be careful to only record the first:
-		 * */
-		if (is_empty_delta < 0) {
-			new_a->journal_seq_nonempty	= transaction_seq;
-			new_a->journal_seq_empty	= 0;
-		}
-
-		/*
-		 * Bucket becomes empty: mark it as waiting for a journal flush,
-		 * unless updates since empty -> nonempty transition were never
-		 * flushed - we may need to ask the journal not to flush
-		 * intermediate sequence numbers:
-		 */
-		if (is_empty_delta > 0) {
-			if (new_a->journal_seq_nonempty == transaction_seq ||
-			    bch2_journal_noflush_seq(&c->journal,
-						     new_a->journal_seq_nonempty,
-						     transaction_seq)) {
-				new_a->journal_seq_nonempty = new_a->journal_seq_empty = 0;
-			} else {
-				new_a->journal_seq_empty = transaction_seq;
-			}
-		}
-
 		if (new_a->gen != old_a->gen) {
 			guard(rcu)();
 			u8 *gen = bucket_gen(ca, new.k->p.offset);
@@ -1380,24 +1347,52 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 			/* Transitioning to free: should not have NEED_DISCARD set */
 			WARN_ON(BCH_ALLOC_V4_NEED_DISCARD(new_a));
 
-			if (bucket_flushed(new_a))
-				closure_wake_up(&c->allocator.freelist_wait);
+			closure_wake_up(&c->allocator.freelist_wait);
 		}
 
-		if (statechange(a->data_type == BCH_DATA_need_discard) ||
-		    (old_a->data_type == BCH_DATA_need_discard &&
-		     old_a->journal_seq_empty != new_a->journal_seq_empty)) {
-			try(bch2_bucket_do_discard_index(trans, old, old_a, false));
-			try(bch2_bucket_do_discard_index(trans, new.s_c, new_a, true));
+		if (statechange_to(!data_type_is_empty(a->data_type)) &&
+		    !new_a->journal_seq_nonempty) {
+			/*
+			 * Record journal sequence number of empty -> nonempty
+			 * transition: Note that there may be multiple empty ->
+			 * nonempty transitions, data in a bucket may be
+			 * overwritten while we're still writing to it - so be
+			 * careful to only record the first:
+			 */
+			new_a->journal_seq_nonempty	= transaction_seq;
 		}
+
+		if (old_a->data_type == BCH_DATA_need_discard &&
+		    new_a->data_type == BCH_DATA_free)
+			new_a->journal_seq_nonempty = new_a->journal_seq_empty = 0;
 
 		if (statechange_to(a->data_type == BCH_DATA_need_discard)) {
 			/* Transitioning to need_discard: NEED_DISCARD must be set */
 			WARN_ON(!BCH_ALLOC_V4_NEED_DISCARD(new_a));
 
-			if (!new_a->journal_seq_empty &&
-			    !bch2_bucket_set_discard_fast(c, new.k->p.inode, new.k->p.offset))
-				bch2_fast_discard_bucket_add(ca, new.k->p.offset);
+			/*
+			 * Bucket becomes empty: mark it as waiting for a
+			 * journal flush, unless updates since empty -> nonempty
+			 * transition were never flushed - we may need to ask
+			 * the journal not to flush intermediate sequence
+			 * numbers:
+			 */
+			new_a->journal_seq_empty = transaction_seq;
+
+			if (new_a->journal_seq_nonempty ==  new_a->journal_seq_empty ||
+			    bch2_journal_noflush_seq(&c->journal,
+						     new_a->journal_seq_nonempty,
+						     new_a->journal_seq_empty)) {
+				new_a->journal_seq_nonempty = new_a->journal_seq_empty = 0;
+
+				if (!bch2_bucket_set_discard_fast(c, new.k->p.inode, new.k->p.offset))
+					bch2_fast_discard_bucket_add(ca, new.k->p.offset);
+			}
+		}
+
+		if (statechange(a->data_type == BCH_DATA_need_discard)) {
+			try(bch2_bucket_do_discard_index(trans, old, old_a, false));
+			try(bch2_bucket_do_discard_index(trans, new.s_c, new_a, true));
 		}
 
 		if (statechange_to(a->data_type == BCH_DATA_cached) &&
