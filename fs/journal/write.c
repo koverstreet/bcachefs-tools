@@ -403,6 +403,7 @@ static void journal_write_endio(struct bio *bio)
 
 	closure_put(&w->io);
 	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_journal_write);
+	bio_put(bio);
 }
 
 static CLOSURE_CALLBACK(journal_write_submit)
@@ -417,6 +418,9 @@ static CLOSURE_CALLBACK(journal_write_submit)
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&w->key));
 	}));
 
+	struct blk_plug plug;
+	blk_start_plug(&plug);
+
 	extent_for_each_ptr(bkey_i_to_s_extent(&w->key), ptr) {
 		struct bch_dev *ca = bch2_dev_have_ref(c, ptr->dev);
 
@@ -424,35 +428,46 @@ static CLOSURE_CALLBACK(journal_write_submit)
 			     sectors);
 
 		struct journal_device *ja = &ca->journal;
-		struct journal_bio *jbio = ja->bio[w->idx];
-		struct bio *bio = &jbio->bio;
 
-		jbio->submit_time	= local_clock();
+		BUG_ON(ptr->offset == ca->prev_journal_sector);
+		ca->prev_journal_sector = ptr->offset;
 
 		/*
 		 * blk-wbt.c throttles all writes except those that have both
 		 * REQ_SYNC and REQ_IDLE set...
 		 */
-		bio_reset(bio, ca->disk_sb.bdev, REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|REQ_META);
-		bio->bi_iter.bi_sector	= ptr->offset;
+		blk_opf_t opf = REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|REQ_META;
+		if (!JSET_NO_FLUSH(w->data))
+			opf |= REQ_FUA;
+		if (!JSET_NO_FLUSH(w->data) && !w->separate_flush)
+			opf |= REQ_PREFLUSH;
+
+		/*
+		 * Large vmalloc'd journal buffers may exceed BIO_MAX_VECS
+		 * and need multiple bios chained together; physically
+		 * contiguous buffers fit in a single bvec and the helper
+		 * returns one bio.
+		 */
+		struct bio *bio = bch2_bio_map_and_chain(ca->disk_sb.bdev,
+				w->data, sectors << 9, ptr->offset,
+				opf, GFP_NOFS, &ja->bio_set);
+		struct journal_bio *jbio =
+			container_of(bio, struct journal_bio, bio);
+
+		jbio->ca		= ca;
+		jbio->buf_idx		= w->idx;
+		jbio->submit_time	= local_clock();
+
 		bio->bi_end_io		= journal_write_endio;
 		bio->bi_private		= ca;
 		bio->bi_ioprio		= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_RT, 0);
-
-		BUG_ON(bio->bi_iter.bi_sector == ca->prev_journal_sector);
-		ca->prev_journal_sector = bio->bi_iter.bi_sector;
-
-		if (!JSET_NO_FLUSH(w->data))
-			bio->bi_opf    |= REQ_FUA;
-		if (!JSET_NO_FLUSH(w->data) && !w->separate_flush)
-			bio->bi_opf    |= REQ_PREFLUSH;
-
-		bch2_bio_map(bio, w->data, sectors << 9);
 
 		closure_bio_submit(bio, cl);
 
 		ja->bucket_seq[ja->cur_idx] = le64_to_cpu(w->data->seq);
 	}
+
+	blk_finish_plug(&plug);
 
 	continue_at(cl, journal_write_done, j->wq);
 }
@@ -484,11 +499,15 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 					   BCH_DEV_WRITE_REF_journal_write);
 
 			struct journal_device *ja = &ca->journal;
-			struct journal_bio *jbio = ja->bio[w->idx];
-			struct bio *bio = &jbio->bio;
+			struct bio *bio = bio_alloc_bioset(ca->disk_sb.bdev, 0,
+					REQ_OP_WRITE|REQ_SYNC|REQ_META|REQ_PREFLUSH,
+					GFP_NOFS, &ja->bio_set);
+			struct journal_bio *jbio = container_of(bio, struct journal_bio, bio);
+
+			jbio->ca		= ca;
+			jbio->buf_idx		= w->idx;
 			jbio->submit_time	= local_clock();
-			bio_reset(bio, ca->disk_sb.bdev,
-				  REQ_OP_WRITE|REQ_SYNC|REQ_META|REQ_PREFLUSH);
+
 			bio->bi_end_io		= journal_write_endio;
 			bio->bi_private		= ca;
 			closure_bio_submit(bio, cl);

@@ -486,10 +486,7 @@ void bch2_dev_journal_exit(struct bch_dev *ca)
 {
 	struct journal_device *ja = &ca->journal;
 
-	for (unsigned i = 0; i < ARRAY_SIZE(ja->bio); i++) {
-		kvfree(ja->bio[i]);
-		ja->bio[i] = NULL;
-	}
+	bioset_exit(&ja->bio_set);
 
 	kfree(ja->buckets);
 	kfree(ja->bucket_seq);
@@ -527,27 +524,10 @@ int bch2_dev_journal_init(struct bch_dev *ca, struct bch_sb *sb)
 	if (!ja->bucket_seq)
 		return bch_err_throw(c, ENOMEM_dev_journal_init);
 
-	unsigned nr_bvecs = DIV_ROUND_UP(JOURNAL_ENTRY_SIZE_MAX, PAGE_SIZE);
-
-	for (unsigned i = 0; i < ARRAY_SIZE(ja->bio); i++) {
-		/*
-		 * kvzalloc() is not what we want to be using here:
-		 * JOURNAL_ENTRY_SIZE_MAX is probably quite a bit bigger than it
-		 * needs to be.
-		 *
-		 * But changing that will require performance testing -
-		 * performance can be sensitive to anything that affects journal
-		 * pipelining.
-		 */
-		ja->bio[i] = kvzalloc(sizeof(struct bio) + sizeof(struct bio_vec) * nr_bvecs,
-				      GFP_KERNEL);
-		if (!ja->bio[i])
-			return bch_err_throw(c, ENOMEM_dev_journal_init);
-
-		ja->bio[i]->ca = ca;
-		ja->bio[i]->buf_idx = i;
-		bio_init(&ja->bio[i]->bio, NULL, bio_inline_vecs(&ja->bio[i]->bio), nr_bvecs, 0);
-	}
+	if (bioset_init(&ja->bio_set, JOURNAL_BUF_NR,
+			offsetof(struct journal_bio, bio),
+			BIOSET_NEED_BVECS))
+		return bch_err_throw(c, ENOMEM_dev_journal_init);
 
 	ja->buckets = kcalloc(ja->nr, sizeof(u64), GFP_KERNEL);
 	if (!ja->buckets)

@@ -363,8 +363,12 @@ struct journal_device {
 
 	u64			*buckets;
 
-	/* Bio for journal reads/writes to this device */
-	struct journal_bio	*bio[JOURNAL_BUF_NR];
+	/*
+	 * Bioset for journal write bios. Journal writes allocate from this at
+	 * submit time and free on completion; the pool size bounds the
+	 * mempool reserve, not in-flight depth.
+	 */
+	struct bio_set		bio_set;
 
 	struct mutex		discard_lock;
 	struct work_struct	discard;
