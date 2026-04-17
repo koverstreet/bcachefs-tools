@@ -191,7 +191,19 @@ journal_seq_to_buf(struct journal *j, u64 seq)
 static inline struct journal_buf *
 journal_res_buf(struct journal *j, struct journal_res *res)
 {
-	return j->buf + (res->seq & JOURNAL_BUF_MASK);
+	return j->ring[res->seq & JOURNAL_STATE_BUF_MASK].buf;
+}
+
+/*
+ * Fastpath access to the staging buffer (jset) for a held reservation.
+ * Equivalent to journal_res_buf(j, res)->data, but goes through the
+ * cached pointer in the ring slot to avoid an extra dereference on the
+ * hot reservation-write path.
+ */
+static inline struct jset *
+journal_res_data(struct journal *j, struct journal_res *res)
+{
+	return j->ring[res->seq & JOURNAL_STATE_BUF_MASK].data;
 }
 
 static inline int journal_state_count(union journal_res_state s, int idx)
@@ -253,7 +265,7 @@ bch2_journal_add_entry_noreservation(struct journal_buf *buf, size_t u64s)
 static inline struct jset_entry *
 journal_res_entry(struct journal *j, struct journal_res *res)
 {
-	return vstruct_idx(journal_res_buf(j, res)->data, res->offset);
+	return vstruct_idx(journal_res_data(j, res), res->offset);
 }
 
 static inline unsigned journal_entry_init(struct jset_entry *entry, unsigned type,

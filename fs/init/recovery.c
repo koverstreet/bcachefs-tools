@@ -803,7 +803,7 @@ use_clean:
 	 * journal sequence numbers:
 	 */
 	if (!c->sb.clean)
-		journal_start.cur_seq += JOURNAL_BUF_NR * 4;
+		journal_start.cur_seq += 64;
 
 	if (journal_start.replay_end &&
 	    journal_start.replay_end + 1 != journal_start.cur_seq) {

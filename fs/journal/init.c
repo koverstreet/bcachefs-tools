@@ -524,7 +524,13 @@ int bch2_dev_journal_init(struct bch_dev *ca, struct bch_sb *sb)
 	if (!ja->bucket_seq)
 		return bch_err_throw(c, ENOMEM_dev_journal_init);
 
-	if (bioset_init(&ja->bio_set, JOURNAL_BUF_NR,
+	/*
+	 * Pool size is just the mempool reserve for forward progress under
+	 * memory pressure; JOURNAL_STATE_BUF_NR matches the reservation
+	 * fastpath ring (the effective parallel-write ceiling for hot-path
+	 * allocations).
+	 */
+	if (bioset_init(&ja->bio_set, JOURNAL_STATE_BUF_NR,
 			offsetof(struct journal_bio, bio),
 			BIOSET_NEED_BVECS))
 		return bch_err_throw(c, ENOMEM_dev_journal_init);

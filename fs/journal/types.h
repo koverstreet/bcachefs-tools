@@ -26,8 +26,15 @@
 #define JOURNAL_BUF_MASK	(JOURNAL_BUF_NR - 1)
 
 /*
- * We put JOURNAL_BUF_NR of these in struct journal; we used them for writes to
- * the journal that are being staged or in flight.
+ * One journal buffer: staging area for a journal entry. Dynamically
+ * allocated per journal entry (one per seq), rides j->in_flight from
+ * the moment the entry is opened until its write completes and
+ * seq_ondisk advances past it.
+ *
+ * Reservation concurrency is bounded by JOURNAL_STATE_BUF_NR via the
+ * reservation state encoded in j->reservations; in-flight depth is
+ * bounded only by the in_flight FIFO capacity (grown on demand) and
+ * natural memory/device backpressure.
  */
 struct journal_buf {
 	struct closure		io;
@@ -57,6 +64,23 @@ struct journal_buf {
 	bool			write_done:1;
 	bool			empty:1;
 	bool			has_overwrites:1;
+};
+
+/*
+ * Ring slot for open reservations. Cache of the journal_buf pointer and
+ * its data pointer, indexed by seq & JOURNAL_STATE_BUF_MASK. The
+ * reservation fastpath reads .data directly to avoid the extra
+ * indirection through .buf.
+ *
+ * A ring slot is overwritten in journal_entry_open() when a new seq is
+ * assigned to that state index. Stale entries are never dereferenced
+ * because the only readers are reservation holders (trusted: the
+ * reservation pins the buf) or journal_res_entry() via those reservations.
+ * All non-reservation seq→buf lookups go through j->in_flight.
+ */
+struct journal_ringbuf {
+	struct journal_buf	*buf;
+	struct jset		*data;
 };
 
 /*
@@ -225,8 +249,18 @@ struct journal {
 	 */
 	struct mutex		buf_lock;
 	/*
-	 * Two journal entries -- one is currently open for new entries, the
-	 * other is possibly being written out.
+	 * Ring of slots indexed by seq & JOURNAL_STATE_BUF_MASK; only used by
+	 * the reservation fastpath. Updated in journal_entry_open() when a new
+	 * seq is assigned to the slot's state index.
+	 */
+	struct journal_ringbuf	ring[JOURNAL_STATE_BUF_NR];
+
+	/*
+	 * FIFO of in-flight journal bufs, one entry per seq in
+	 * (seq_ondisk, cur_seq]. fifo.front = seq_ondisk + 1, fifo.back =
+	 * cur_seq + 1, so seq-indexed lookup is O(1) via fifo_entry().
+	 * Bufs are pushed in journal_entry_open() and popped (and freed) in
+	 * journal_write_done() as seq_ondisk advances.
 	 */
 	struct journal_buf	buf[JOURNAL_BUF_NR];
 	void			*free_buf;
@@ -403,7 +437,7 @@ struct journal_entry_res {
  *
  * @cur_seq:	First sequence number available for new journal writes.
  *		Initialized to highest on-disk entry + 1, then bumped
- *		further by recovery (+JOURNAL_BUF_NR*4 for unclean
+ *		further by recovery (+64 for unclean
  *		shutdown) and max'd with last blacklisted seq.
  *		Must be strictly greater than every entry found on disk,
  *		including noflush/blacklisted entries — we must never
