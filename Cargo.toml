@@ -47,7 +47,8 @@ version = "0.10"
 default-features = false
 
 [profile.release]
-strip = "debuginfo"
+#strip = "debuginfo"
+debug = 2
 
 [package.metadata.vendor-filter]
 platforms = ["*-linux-*"]
