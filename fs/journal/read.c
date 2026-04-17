@@ -1144,7 +1144,7 @@ static int journal_read_bucket(struct bch_dev *ca,
 reread:
 			sectors_read = min_t(unsigned,
 				end - offset, buf->size >> 9);
-			nr_bvecs = buf_pages(buf->data, sectors_read << 9);
+			nr_bvecs = buf_nr_bvecs(buf->data, sectors_read << 9);
 
 			bio = kmalloc(sizeof(struct bio) + sizeof(struct bio_vec) * nr_bvecs, GFP_KERNEL);
 			if (!bio)
@@ -1303,7 +1303,7 @@ static int journal_peek_bucket(struct bch_dev *ca,
 			return ret;
 	}
 
-	unsigned nr_bvecs = buf_pages(buf->data, block_bytes(c));
+	unsigned nr_bvecs = buf_nr_bvecs(buf->data, block_bytes(c));
 	struct bio *bio = kmalloc(sizeof(struct bio) +
 				  sizeof(struct bio_vec) * nr_bvecs, GFP_KERNEL);
 	if (!bio)

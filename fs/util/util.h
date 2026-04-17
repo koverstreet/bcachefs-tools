@@ -58,12 +58,17 @@ static inline struct bio_vec *bio_inline_vecs(struct bio *bio)
 
 DEFINE_FREE(bio_put, struct bio *, if (_T) bio_put(_T))
 
-/* Userspace doesn't align allocations as nicely as the kernel allocators: */
-static inline size_t buf_pages(void *p, size_t len)
+/*
+ * Number of bvecs needed to describe [p, p+len) in a bio, matching how
+ * bch2_bio_map() will add it: physically contiguous buffers take one bvec,
+ * vmalloc buffers take one bvec per page.
+ */
+static inline size_t buf_nr_bvecs(void *p, size_t len)
 {
-	return DIV_ROUND_UP(len +
-			    ((unsigned long) p & (PAGE_SIZE - 1)),
-			    PAGE_SIZE);
+	return is_vmalloc_addr(p)
+		? DIV_ROUND_UP(len + ((unsigned long) p & (PAGE_SIZE - 1)),
+			       PAGE_SIZE)
+		: 1;
 }
 
 static inline void *bch2_kvmalloc_noprof(size_t n, gfp_t flags)
@@ -374,6 +379,9 @@ static inline unsigned fract_exp_two(unsigned x, unsigned fract_bits)
 }
 
 void bch2_bio_map(struct bio *bio, void *base, size_t);
+struct bio *bch2_bio_map_and_chain(struct block_device *, void *, size_t,
+				       sector_t, blk_opf_t, gfp_t,
+				       struct bio_set *);
 int bch2_bio_alloc_pages(struct bio *, unsigned, size_t, gfp_t);
 
 #define closure_bio_submit(bio, cl)					\

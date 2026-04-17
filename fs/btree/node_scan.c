@@ -228,7 +228,7 @@ static int read_btree_nodes_worker(void *p)
 		goto err;
 	}
 
-	bio = bio_alloc(NULL, buf_pages(b->data, c->opts.btree_node_size), 0, GFP_KERNEL);
+	bio = bio_alloc(NULL, buf_nr_bvecs(b->data, c->opts.btree_node_size), 0, GFP_KERNEL);
 	if (!bio) {
 		bch_err(c, "read_btree_nodes_worker: error allocating bio");
 		w->f->ret = -ENOMEM;

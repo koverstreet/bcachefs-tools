@@ -1036,7 +1036,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 	ca = bch2_dev_get_ioref(c, pick.ptr.dev, READ, BCH_DEV_READ_REF_btree_node_read);
 
 	bio = bio_alloc_bioset(NULL,
-			       buf_pages(b->data, btree_buf_bytes(b)),
+			       buf_nr_bvecs(b->data, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_SYNC|REQ_META,
 			       GFP_NOFS,
 			       &c->btree.bio);
@@ -1260,7 +1260,7 @@ int bch2_btree_node_scrub(struct btree_trans *trans,
 	bool used_mempool = false;
 	void *buf = bch2_btree_bounce_alloc(c, c->opts.btree_node_size, &used_mempool);
 
-	unsigned vecs = buf_pages(buf, c->opts.btree_node_size);
+	unsigned vecs = buf_nr_bvecs(buf, c->opts.btree_node_size);
 
 	struct btree_node_scrub *scrub =
 		kzalloc(sizeof(*scrub) + sizeof(struct bio_vec) * vecs, GFP_KERNEL);
