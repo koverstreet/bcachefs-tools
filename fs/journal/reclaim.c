@@ -117,11 +117,9 @@ journal_dev_space_available(struct journal *j, struct bch_dev *ca,
 	 * We that we don't allocate the space for a journal entry
 	 * until we write it out - thus, account for it here:
 	 */
-	for (u64 seq = journal_last_unwritten_seq(j);
-	     seq <= journal_cur_seq(j);
-	     seq++) {
-		struct journal_buf *buf = journal_seq_to_buf(j, seq);
-
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq) {
 		unsigned unwritten = buf->sectors;
 		if (!unwritten)
 			continue;
@@ -214,10 +212,10 @@ void bch2_journal_space_available(struct journal *j)
 	 * when no ring slot has a buf assigned yet.
 	 */
 	unsigned max_entry_size = UINT_MAX;
-	for (u64 seq = journal_last_unwritten_seq(j);
-	     seq <= journal_cur_seq(j);
-	     seq++)
-		max_entry_size = min(max_entry_size, journal_seq_to_buf(j, seq)->buf_size >> 9);
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
+		max_entry_size = min(max_entry_size, buf->buf_size >> 9);
 	if (max_entry_size == UINT_MAX)
 		max_entry_size = j->buf_size_want >> 9;
 

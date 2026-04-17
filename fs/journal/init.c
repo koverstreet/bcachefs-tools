@@ -306,14 +306,11 @@ static bool bch2_journal_writing_to_device(struct journal *j, unsigned dev_idx)
 
 	guard(spinlock)(&j->lock);
 
-	for (u64 seq = journal_last_unwritten_seq(j);
-	     seq <= journal_cur_seq(j);
-	     seq++) {
-		struct journal_buf *buf = journal_seq_to_buf(j, seq);
-
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
 		if (bch2_bkey_has_device_c(c, bkey_i_to_s_c(&buf->key), dev_idx))
 			return true;
-	}
 
 	return false;
 }
@@ -579,9 +576,9 @@ void bch2_fs_journal_exit(struct journal *j)
 	 */
 	{
 		struct journal_buf *buf;
-		size_t i;
+		u64 seq;
 
-		fifo_for_each_entry_ptr(buf, &j->in_flight, i)
+		fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
 			kvfree(buf->data);
 	}
 	free_fifo(&j->in_flight);

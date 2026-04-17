@@ -192,12 +192,10 @@ static void replicas_refs_put(struct bch_fs *c, darray_replicas_entry_refs *refs
 
 static inline u64 last_uncompleted_write_seq(struct journal *j)
 {
-	u64 seq = journal_last_unwritten_seq(j);
-	if (seq > journal_cur_seq(j))
-		return 0;
-
-	struct journal_buf *buf = journal_seq_to_buf(j, seq);
-	return buf && buf->write_done ? seq : 0;
+	return !fifo_empty(&j->in_flight) &&
+		fifo_peek_front(&j->in_flight).write_done
+		? j->in_flight.front
+		: 0;
 }
 
 static CLOSURE_CALLBACK(journal_write_done)
@@ -362,7 +360,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 		journal_wake(j);
 	}
 
-	if (journal_last_unwritten_seq(j) == journal_cur_seq(j) &&
+	if (fifo_used(&j->in_flight) == 1 &&
 	    j->reservations.cur_entry_offset < JOURNAL_ENTRY_CLOSED_VAL) {
 		struct journal_buf *buf = journal_cur_buf(j);
 		long delta = buf->expires - jiffies;

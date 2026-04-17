@@ -148,13 +148,10 @@ static bool journal_entry_is_open(struct journal *j)
 	return __journal_entry_is_open(j->reservations);
 }
 
-static void bch2_journal_buf_to_text(struct printbuf *out, struct journal *j, u64 seq)
+static void bch2_journal_buf_to_text(struct printbuf *out, struct journal *j,
+				     struct journal_buf *buf, u64 seq)
 {
 	union journal_res_state s = READ_ONCE(j->reservations);
-	struct journal_buf *buf = journal_seq_to_buf(j, seq);
-
-	if (!buf)
-		return;
 
 	prt_printf(out, "seq:\t%llu\n", seq);
 	guard(printbuf_indent)(out);
@@ -200,10 +197,10 @@ static void bch2_journal_bufs_to_text(struct printbuf *out, struct journal *j)
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 24);
 
-	for (u64 seq = journal_last_unwritten_seq(j);
-	     seq <= journal_cur_seq(j);
-	     seq++)
-		bch2_journal_buf_to_text(out, j, seq);
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
+		bch2_journal_buf_to_text(out, j, buf, seq);
 	prt_printf(out, "last buf %s\n", journal_entry_is_open(j) ? "open" : "closed");
 }
 
@@ -415,7 +412,7 @@ void bch2_journal_halt(struct journal *j)
 static bool journal_entry_close_locked(struct journal *j)
 {
 	bool ret = !journal_entry_is_open(j) ||
-		journal_cur_seq(j) == journal_last_unwritten_seq(j);
+		fifo_used(&j->in_flight) == 1;
 
 	/* Don't close it yet if we already have a write in flight: */
 	if (ret)
@@ -886,7 +883,7 @@ int bch2_journal_flush_seq_async(struct journal *j, u64 seq,
 	}
 
 	/* if seq was written, but not flushed - flush a newer one instead */
-	seq = max(seq, journal_last_unwritten_seq(j));
+	seq = max(seq, j->in_flight.front);
 
 recheck_need_open:
 	if (seq > journal_cur_seq(j)) {
@@ -1029,7 +1026,6 @@ int bch2_journal_add_rewind_range(struct bch_fs *c, u64 from, u64 to)
 bool bch2_journal_noflush_seq(struct journal *j, u64 start, u64 end)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	u64 unwritten_seq;
 
 	if (!(c->sb.features & (1ULL << BCH_FEATURE_journal_no_flush)))
 		return false;
@@ -1042,10 +1038,11 @@ bool bch2_journal_noflush_seq(struct journal *j, u64 start, u64 end)
 	if (c->journal.flushed_seq_ondisk >= start)
 		return false;
 
-	for (unwritten_seq = journal_last_unwritten_seq(j);
-	     unwritten_seq < end;
-	     unwritten_seq++) {
-		struct journal_buf *buf = journal_seq_to_buf(j, unwritten_seq);
+	struct journal_buf *buf;
+	u64 unwritten_seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, unwritten_seq) {
+		if (unwritten_seq >= end)
+			break;
 
 		/* journal flush already in flight, or flush requseted */
 		if (buf->must_flush)
@@ -1153,10 +1150,11 @@ static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct jou
 	guard(spinlock)(&j->lock);
 	max_seq = min(max_seq, journal_cur_seq(j));
 
-	for (u64 seq = journal_last_unwritten_seq(j);
-	     seq <= max_seq;
-	     seq++) {
-		struct journal_buf *buf = journal_seq_to_buf(j, seq);
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq) {
+		if (seq > max_seq)
+			break;
 
 		if (buf->need_flush_to_write_buffer) {
 			union journal_res_state s;
@@ -1170,8 +1168,7 @@ static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct jou
 				*blocked = true;
 			}
 
-			ret = journal_cur_seq(j) - seq < JOURNAL_STATE_BUF_NR &&
-				journal_state_count(s, seq & JOURNAL_STATE_BUF_MASK) > open
+			ret = journal_state_seq_count(j, s, seq) > open
 				? ERR_PTR(-EAGAIN)
 				: buf;
 			break;

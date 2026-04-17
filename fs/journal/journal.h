@@ -134,16 +134,6 @@ static inline u64 journal_cur_seq(struct journal *j)
 	return atomic64_read(&j->seq);
 }
 
-static inline u64 journal_last_unwritten_seq(struct journal *j)
-{
-	return j->seq_ondisk + 1;
-}
-
-static inline bool journal_seq_unwritten(struct journal *j, u64 seq)
-{
-	return seq > j->seq_ondisk;
-}
-
 /*
  * Look up the buffer for @seq via the in_flight FIFO. Caller must hold
  * j->lock (or otherwise be serialized against seq_ondisk advancing and
@@ -159,20 +149,18 @@ journal_seq_to_buf(struct journal *j, u64 seq)
 	lockdep_assert_held(&j->lock);
 	EBUG_ON(seq > journal_cur_seq(j));
 
-	if (!journal_seq_unwritten(j, seq))
-		return NULL;
-	return &fifo_entry(&j->in_flight, seq);
+	return seq >= j->in_flight.front
+		? &fifo_entry(&j->in_flight, seq)
+		: NULL;
 }
 
 static inline u64 journal_last_unallocated_seq(struct journal *j)
 {
-	for (u64 seq = journal_last_unwritten_seq(j);
-	     seq <= journal_cur_seq(j);
-	     seq++) {
-		struct journal_buf *buf = journal_seq_to_buf(j, seq);
-		if (buf && !buf->write_allocated)
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
+		if (!buf->write_allocated)
 			return seq;
-	}
 	return 0;
 }
 
