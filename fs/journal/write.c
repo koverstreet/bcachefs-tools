@@ -190,16 +190,14 @@ static void replicas_refs_put(struct bch_fs *c, darray_replicas_entry_refs *refs
 	refs->nr = 0;
 }
 
-static inline u64 last_uncompleted_write_seq(struct journal *j, u64 seq_completing)
+static inline u64 last_uncompleted_write_seq(struct journal *j)
 {
 	u64 seq = journal_last_unwritten_seq(j);
+	if (seq > journal_cur_seq(j))
+		return 0;
 
-	if (seq <= journal_cur_seq(j) &&
-	    (j->buf[seq & JOURNAL_BUF_MASK].write_done ||
-	     seq == seq_completing))
-		return seq;
-
-	return 0;
+	struct journal_buf *buf = journal_seq_to_buf(j, seq);
+	return buf && buf->write_done ? seq : 0;
 }
 
 static CLOSURE_CALLBACK(journal_write_done)
@@ -271,11 +269,19 @@ static CLOSURE_CALLBACK(journal_write_done)
 	w->data = NULL;
 	w->buf_size = 0;
 
+	/*
+	 * Mark our own write done up front: the seq_ondisk-advance loop
+	 * below gates on write_done, and we need to be visible as done
+	 * whether or not it advances past us in this call (out-of-order
+	 * completions get picked up by a later journal_write_done).
+	 */
+	w->write_done = true;
+
 	bool completed = false;
 	bool last_seq_ondisk_updated = false;
 
 	u64 seq;
-	while ((seq = last_uncompleted_write_seq(j, seq_wrote))) {
+	while ((seq = last_uncompleted_write_seq(j))) {
 		w = journal_seq_to_buf(j, seq);
 
 		if (!j->err_seq && !w->noflush) {
@@ -325,12 +331,6 @@ static CLOSURE_CALLBACK(journal_write_done)
 		completed = true;
 	}
 
-	/*
-	 * Writes might complete out of order, but we have to do the completions
-	 * in order: if we complete out of order we note it here so the next
-	 * write completion will pick it up:
-	 */
-	j->buf[seq_wrote & JOURNAL_BUF_MASK].write_done = true;
 	j->pin.front = min(j->pin.back, j->last_seq_ondisk);
 
 	if (completed) {
