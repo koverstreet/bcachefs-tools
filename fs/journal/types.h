@@ -321,10 +321,7 @@ struct journal {
 	 * needed. When all journal entries in the oldest journal bucket are no
 	 * longer needed, the bucket can be discarded and reused.
 	 */
-	struct {
-		u64 front, back, size, mask;
-		struct journal_entry_pin_list *data;
-	}			pin;
+	FIFO_U64_IDX(struct journal_entry_pin_list) pin;
 	u64			last_seq;
 
 	size_t			dirty_entry_bytes;

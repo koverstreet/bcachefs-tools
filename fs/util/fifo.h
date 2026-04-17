@@ -4,13 +4,17 @@
 
 #include "util.h"
 
-#define FIFO(type)							\
+#define __FIFO(type, index_type)					\
 struct {								\
-	size_t front, back, size, mask;					\
+	index_type front, back, size, mask;				\
 	type *data;							\
 }
 
-#define DECLARE_FIFO(type, name)	FIFO(type) name
+#define FIFO(type)			__FIFO(type, size_t)
+#define FIFO_U64_IDX(type)		__FIFO(type, u64)
+
+#define DECLARE_FIFO(type, name)		FIFO(type) name
+#define DECLARE_FIFO_U64_IDX(type, name)	FIFO_U64_IDX(type) name
 
 #define fifo_buf_size(fifo)						\
 	((fifo)->size							\
