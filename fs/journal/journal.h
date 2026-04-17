@@ -163,6 +163,14 @@ static inline struct journal_buf *journal_cur_buf(struct journal *j)
 	return j->buf + idx;
 }
 
+/*
+ * Look up the buffer for @seq. Caller must hold j->lock (or otherwise be
+ * serialized against j->seq_ondisk advancing), since the returned buffer
+ * may be reused once seq <= seq_ondisk.
+ *
+ * For the fast path when holding a reservation, use journal_res_buf()
+ * instead — the reservation pins its buffer slot, so no lock is needed.
+ */
 static inline struct journal_buf *
 journal_seq_to_buf(struct journal *j, u64 seq)
 {
@@ -173,6 +181,17 @@ journal_seq_to_buf(struct journal *j, u64 seq)
 	if (journal_seq_unwritten(j, seq))
 		buf = j->buf + (seq & JOURNAL_BUF_MASK);
 	return buf;
+}
+
+/*
+ * Fastpath buffer lookup for a held reservation. No lock required: the
+ * reservation holds a count on the buffer's state slot, so the buffer
+ * can't be sealed or its slot reused until the reservation is released.
+ */
+static inline struct journal_buf *
+journal_res_buf(struct journal *j, struct journal_res *res)
+{
+	return j->buf + (res->seq & JOURNAL_BUF_MASK);
 }
 
 static inline int journal_state_count(union journal_res_state s, int idx)
@@ -234,7 +253,7 @@ bch2_journal_add_entry_noreservation(struct journal_buf *buf, size_t u64s)
 static inline struct jset_entry *
 journal_res_entry(struct journal *j, struct journal_res *res)
 {
-	return vstruct_idx(j->buf[res->seq & JOURNAL_BUF_MASK].data, res->offset);
+	return vstruct_idx(journal_res_buf(j, res)->data, res->offset);
 }
 
 static inline unsigned journal_entry_init(struct jset_entry *entry, unsigned type,
@@ -410,7 +429,7 @@ static inline int journal_res_get_fast(struct journal *j,
 	res->offset	= old.cur_entry_offset;
 	res->seq	= journal_cur_seq(j);
 	res->seq -= (res->seq - old.idx) & JOURNAL_STATE_BUF_MASK;
-	res->has_overwrites = j->buf[res->seq & JOURNAL_BUF_MASK].has_overwrites;
+	res->has_overwrites = journal_res_buf(j, res)->has_overwrites;
 	return 1;
 }
 
