@@ -1242,8 +1242,6 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 	if (likely(new.k->type == KEY_TYPE_alloc_v4)) {
 		new_a = bkey_s_to_alloc_v4(new).v;
 	} else {
-		BUG_ON(!(flags & (BTREE_TRIGGER_gc|BTREE_TRIGGER_check_repair)));
-
 		struct bkey_i_alloc_v4 *new_ka =
 			errptr_try(bch2_alloc_to_v4_mut_inlined(trans, new.s_c));
 		new_a = &new_ka->v;
@@ -1252,23 +1250,20 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 	if (flags & BTREE_TRIGGER_transactional) {
 		alloc_data_type_set(new_a, new_a->data_type);
 
-		int is_empty_delta = (int) data_type_is_empty(new_a->data_type) -
-				     (int) data_type_is_empty(old_a->data_type);
+		if (statechange_to(!data_type_is_empty(a->data_type))) {
+			if ((new_a->data_type != BCH_DATA_sb &&
+			     new_a->data_type != BCH_DATA_journal) &&
+			    !bch2_bucket_is_open_safe(c, new.k->p.inode, new.k->p.offset) &&
+			    !bch2_bucket_nouse(ca, new.k->p.offset)) {
+				CLASS(printbuf, buf)();
+				prt_printf(&buf, "bucket going empty but not open\n");
+				bch2_bkey_val_to_text(&buf, c, new.s_c);
 
-		if (is_empty_delta < 0 &&
-		    (new_a->data_type != BCH_DATA_sb &&
-		     new_a->data_type != BCH_DATA_journal) &&
-		    !bch2_bucket_is_open_safe(c, new.k->p.inode, new.k->p.offset) &&
-		    !bch2_bucket_nouse(ca, new.k->p.offset)) {
-			CLASS(printbuf, buf)();
-			log_fsck_err_on(true, trans,
-				alloc_key_bucket_nonempty_to_empty_not_open,
-				"bucket %llu:%llu going empty but not open\n%s",
-				new.k->p.inode, new.k->p.offset,
-				(bch2_bkey_val_to_text(&buf, c, new.s_c), buf.buf));
-		}
+				log_fsck_err_on(true, trans,
+					alloc_key_bucket_nonempty_to_empty_not_open,
+					"%s", buf.buf);
+			}
 
-		if (is_empty_delta < 0) {
 			new_a->io_time[READ] = bch2_current_io_time(c, READ);
 			new_a->io_time[WRITE]= bch2_current_io_time(c, WRITE);
 			SET_BCH_ALLOC_V4_NEED_INC_GEN(new_a, true);
@@ -1323,7 +1318,7 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 		try(bch2_alloc_key_to_dev_counters(trans, ca, old_a, new_a, flags));
 	}
 
-	if ((flags & BTREE_TRIGGER_atomic) && (flags & BTREE_TRIGGER_insert)) {
+	if (flags & BTREE_TRIGGER_atomic) {
 		u64 transaction_seq = trans->journal_res.seq;
 		BUG_ON(!transaction_seq);
 
@@ -1347,11 +1342,12 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 			/* Transitioning to free: should not have NEED_DISCARD set */
 			WARN_ON(BCH_ALLOC_V4_NEED_DISCARD(new_a));
 
+			new_a->journal_seq_nonempty = new_a->journal_seq_empty = 0;
+
 			closure_wake_up(&c->allocator.freelist_wait);
 		}
 
-		if (statechange_to(!data_type_is_empty(a->data_type)) &&
-		    !new_a->journal_seq_nonempty) {
+		if (statechange_to(!data_type_is_empty(a->data_type))) {
 			/*
 			 * Record journal sequence number of empty -> nonempty
 			 * transition: Note that there may be multiple empty ->
@@ -1359,12 +1355,9 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 			 * overwritten while we're still writing to it - so be
 			 * careful to only record the first:
 			 */
-			new_a->journal_seq_nonempty	= transaction_seq;
+			if (!new_a->journal_seq_nonempty)
+				new_a->journal_seq_nonempty = transaction_seq;
 		}
-
-		if (old_a->data_type == BCH_DATA_need_discard &&
-		    new_a->data_type == BCH_DATA_free)
-			new_a->journal_seq_nonempty = new_a->journal_seq_empty = 0;
 
 		if (statechange_to(a->data_type == BCH_DATA_need_discard)) {
 			/* Transitioning to need_discard: NEED_DISCARD must be set */
