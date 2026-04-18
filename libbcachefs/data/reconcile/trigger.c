@@ -476,7 +476,7 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 
 	bool poisoned = bch2_bkey_extent_ptrs_flags(ptrs) & BIT_ULL(BCH_EXTENT_FLAG_poisoned);
 	unsigned compression_type = bch2_compression_opt_to_type(r.background_compression);
-	unsigned csum_type	= bch2_data_checksum_type_rb(c, r);
+	unsigned csum_type	= !opts->nocow ? bch2_data_checksum_type_rb(c, r) : 0;
 
 	bool incompressible = false, unwritten = false, ec = false;
 	unsigned durability = 0, durability_acct = 0, invalid = 0, min_durability = INT_MAX;

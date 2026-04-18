@@ -110,24 +110,27 @@ void generic_make_request(struct bio *bio)
 		}
 	}
 
-	i = 0;
-	bio_for_each_segment(bv, bio, iter)
-		i++;
+	if (bio_op(bio) == REQ_OP_READ ||
+	    bio_op(bio) == REQ_OP_WRITE) {
+		i = 0;
+		bio_for_each_segment(bv, bio, iter)
+			i++;
 
-	iov = alloca(sizeof(*iov) * i);
+		iov = alloca(sizeof(*iov) * i);
 
-	i = 0;
-	bio_for_each_segment(bv, bio, iter) {
-		iov[i++] = (struct iovec) {
-			.iov_base = bv.bv_addr,
-			.iov_len = bv.bv_len,
-		};
+		i = 0;
+		bio_for_each_segment(bv, bio, iter) {
+			iov[i++] = (struct iovec) {
+				.iov_base = bv.bv_addr,
+				.iov_len = bv.bv_len,
+			};
 
 #ifdef CONFIG_VALGRIND
-		/* To be pedantic it should only be on IO completion. */
-		if (bio_op(bio) == REQ_OP_READ)
-			VALGRIND_MAKE_MEM_DEFINED(bv.bv_addr, bv.bv_len);
+			/* To be pedantic it should only be on IO completion. */
+			if (bio_op(bio) == REQ_OP_READ)
+				VALGRIND_MAKE_MEM_DEFINED(bv.bv_addr, bv.bv_len);
 #endif
+		}
 	}
 
 	switch (bio_op(bio)) {
@@ -141,6 +144,11 @@ void generic_make_request(struct bio *bio)
 		ret = fsync(bio->bi_bdev->bd_fd);
 		if (ret)
 			die("fsync error: %m");
+		bio_endio(bio);
+		break;
+	case REQ_OP_DISCARD:
+		fallocate(bio->bi_bdev->bd_fd, FALLOC_FL_PUNCH_HOLE|FALLOC_FL_KEEP_SIZE,
+			  bio->bi_iter.bi_sector << 9, bio->bi_iter.bi_size);
 		bio_endio(bio);
 		break;
 	default:

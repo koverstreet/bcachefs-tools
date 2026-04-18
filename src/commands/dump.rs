@@ -389,7 +389,10 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bo
 
             let key_type = buf[key_pos + 2];
             let key_format = buf[key_pos + 1] & 0x7f;
-            let key_hdr_u64s = if key_format != 0 { format_key_u64s } else { BKEY_U64S };
+            // KEY_FORMAT_LOCAL_BTREE (0) uses the btree node's packed format;
+            // anything else (KEY_FORMAT_CURRENT = 1) is the canonical
+            // unpacked layout.
+            let key_hdr_u64s = if key_format == 0 { format_key_u64s } else { BKEY_U64S };
             let val_off = key_hdr_u64s * 8;
 
             if val_off < key_bytes
