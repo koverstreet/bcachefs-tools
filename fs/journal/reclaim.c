@@ -215,7 +215,8 @@ void bch2_journal_space_available(struct journal *j)
 	struct journal_buf *buf;
 	u64 seq;
 	fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
-		max_entry_size = min(max_entry_size, buf->buf_size >> 9);
+		if (buf->buf_size)
+			max_entry_size = min(max_entry_size, buf->buf_size >> 9);
 	if (max_entry_size == UINT_MAX)
 		max_entry_size = j->buf_size_want >> 9;
 
