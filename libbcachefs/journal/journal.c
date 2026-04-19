@@ -283,10 +283,13 @@ void bch2_journal_buf_put_final(struct journal *j, u64 seq)
 	bch2_journal_do_writes_locked(j);
 
 	/*
-	 * for __bch2_next_write_buffer_flush_journal_buf(), when quiescing an
-	 * open journal entry
+	 * Wake both j->wait (for __bch2_next_write_buffer_flush_journal_buf(),
+	 * when quiescing an open journal entry) and j->async_wait (for
+	 * journal_res_get_slowpath() waiters blocked on journal_max_open — the
+	 * refcount drop may have enabled do_writes_locked() to advance
+	 * seq_write_started above).
 	 */
-	wake_up(&j->wait);
+	journal_wake(j);
 }
 
 /*
