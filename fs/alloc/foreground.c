@@ -547,7 +547,8 @@ again:
 		    !req->will_retry_target_devices &&
 		    !req->will_retry_all_devices &&
 		    !req->will_retry_set_devices) {
-			if (!req->copygc_can_make_progress &&
+			if ((!req->copygc_can_make_progress ||
+			     req->watermark == BCH_WATERMARK_copygc) &&
 			    (req->nr_effective || (req->devs_have && req->devs_have->nr))) {
 				ob = ERR_PTR(bch_err_throw(c, bucket_alloc_no_progress));
 			} else if (!waiting) {
