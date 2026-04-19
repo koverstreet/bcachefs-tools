@@ -2039,7 +2039,7 @@ static void __btree_increase_depth(struct btree_update *as, struct btree_trans *
 	six_unlock_intent(&n->c.lock);
 
 	scoped_guard(mutex, &c->btree.cache.lock)
-		list_add_tail(&b->list, &c->btree.cache.live[btree_node_pinned(b)].list);
+		list_add_tail(&b->list, &c->btree.cache.list);
 
 	bch2_trans_verify_locks(trans);
 }

@@ -169,7 +169,6 @@ enum bch_btree_cache_not_freed_reasons {
 struct btree_cache_list {
 	unsigned		idx;
 	struct shrinker		*shrink;
-	struct list_head	list;
 	size_t			nr;
 };
 
@@ -207,6 +206,7 @@ struct bch_fs_btree_cache {
 	struct list_head	freeable;
 	struct list_head	freed_pcpu;
 	struct list_head	freed_nonpcpu;
+	struct list_head	list;
 	struct btree_cache_list	live[2];
 
 	size_t			nr_vmalloc;
