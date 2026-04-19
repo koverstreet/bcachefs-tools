@@ -6,6 +6,17 @@
 #include "btree/bkey_buf.h"
 #include "alloc/accounting.h"
 
+static inline enum bch_wb_btree bch_wb_btree_idx(enum btree_id btree)
+{
+	switch (btree) {
+#define x(name) case BTREE_ID_##name: return BCH_WB_BTREE_##name;
+	BCH_WRITE_BUFFER_BTREES()
+#undef x
+	default:
+		BUG();
+	}
+}
+
 static inline bool bch2_btree_write_buffer_should_flush(struct bch_fs *c)
 {
 	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer;

@@ -5,6 +5,32 @@
 #include "util/darray.h"
 #include "journal/types.h"
 
+/*
+ * Subset of BCH_BTREE_IDS() that are marked BTREE_IS_write_buffer, enumerated
+ * densely so we can size per-btree write buffer state as a compact array. Must
+ * be kept in sync with BCH_BTREE_IDS() — adding BTREE_IS_write_buffer to a new
+ * btree requires a matching entry here.
+ */
+#define BCH_WRITE_BUFFER_BTREES()	\
+	x(lru)				\
+	x(need_discard)			\
+	x(backpointers)			\
+	x(deleted_inodes)		\
+	x(reconcile_work)		\
+	x(accounting)			\
+	x(reconcile_hipri)		\
+	x(reconcile_pending)		\
+	x(reconcile_work_phys)		\
+	x(reconcile_hipri_phys)		\
+	x(stripe_backpointers)
+
+enum bch_wb_btree {
+#define x(name)	BCH_WB_BTREE_##name,
+	BCH_WRITE_BUFFER_BTREES()
+#undef x
+	BCH_WB_BTREE_NR,
+};
+
 #define BTREE_WRITE_BUFERED_VAL_U64s_MAX	4
 
 struct wb_key_ref {

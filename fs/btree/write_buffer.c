@@ -35,11 +35,30 @@
 #include <linux/prefetch.h>
 #include <linux/sort.h>
 
+/*
+ * Catch the "added BTREE_IS_write_buffer but forgot BCH_WRITE_BUFFER_BTREES"
+ * footgun at compile time: count the write_buffer bits in BCH_BTREE_IDS() and
+ * compare against BCH_WB_BTREE_NR.
+ */
+enum {
+#define x(name, nr, flags, ...)	+ !!((flags) & BTREE_IS_write_buffer)
+	__bch_wb_btree_nr_check = 0 BCH_BTREE_IDS(),
+#undef x
+};
+static_assert((int)__bch_wb_btree_nr_check == (int)BCH_WB_BTREE_NR,
+	"BCH_WRITE_BUFFER_BTREES() is out of sync with BCH_BTREE_IDS() write_buffer flags");
+
 static const char * const wb_flush_caller_names[] = {
 #define x(n)	#n,
 	WB_FLUSH_CALLERS()
 #undef x
 	NULL,
+};
+
+static const char * const bch_wb_btree_names[] = {
+#define x(name)	#name,
+	BCH_WRITE_BUFFER_BTREES()
+#undef x
 };
 
 static int bch2_btree_write_buffer_journal_flush(struct journal *,
