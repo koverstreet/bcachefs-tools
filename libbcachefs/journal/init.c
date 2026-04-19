@@ -622,8 +622,16 @@ int bch2_fs_journal_init(struct journal *j)
 	 * well above the 16-slot cap of the prior static-array layout. If
 	 * workloads saturate this, journal_entry_open() returns ENOMEM and
 	 * the existing retry path throttles via completion backpressure.
+	 *
+	 * Open-coded instead of init_fifo() because bch2_fs_journal_start()
+	 * already set front/back to the correct seq-aligned value, and
+	 * init_fifo() would unconditionally reset them to 0.
 	 */
-	if (!init_fifo(&j->in_flight, 256, GFP_KERNEL))
+	j->in_flight.size = 256;
+	j->in_flight.mask = 255;
+	j->in_flight.data = kvmalloc_array(256, sizeof(*j->in_flight.data),
+					   GFP_KERNEL);
+	if (!j->in_flight.data)
 		return bch_err_throw(c, ENOMEM_journal_buf);
 
 	j->wq = alloc_workqueue("bcachefs_journal",
