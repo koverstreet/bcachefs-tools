@@ -1645,7 +1645,7 @@ static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
 	while (!bch2_move_ratelimit(ctxt) &&
 	       !test_bit(BCH_FS_going_ro, &c->flags) &&
 	       bch2_reconcile_enabled(c) &&
-	       kick == r->kick) {
+	       kick == atomic_read(&r->kick)) {
 		bch2_trans_begin(trans);
 
 		struct bkey_s_c k = next_reconcile_entry(trans, p->work, &r->work_pos,
@@ -1734,8 +1734,9 @@ static int do_reconcile(struct moving_context *ctxt)
 	struct bch_fs *c = trans->c;
 	struct bch_fs_reconcile *r = &c->reconcile;
 	u64 sectors_scanned = 0;
-	u32 kick = r->kick;
+	u32 kick = atomic_read(&r->kick);
 	u32 copygc_run_count = c->copygc.run_count;
+	bool pass_complete = false;
 	int ret = 0;
 
 	CLASS(darray_reconcile_work, work)();
@@ -1786,7 +1787,7 @@ static int do_reconcile(struct moving_context *ctxt)
 		 * uses this latest value to decide whether anyone is still
 		 * asking for more work.
 		 */
-		kick = r->kick;
+		kick = atomic_read(&r->kick);
 
 		for (r->phase = 0; r->phase < ARRAY_SIZE(reconcile_phases); r->phase++) {
 			reconcile_phase_start(c);
@@ -1807,7 +1808,7 @@ static int do_reconcile(struct moving_context *ctxt)
 
 			work.nr = 0;
 
-			if (kick != r->kick ||
+			if (kick != atomic_read(&r->kick) ||
 			    test_bit(BCH_FS_going_ro, &c->flags) ||
 			    bch2_move_ratelimit(ctxt))
 				break;
@@ -1817,13 +1818,29 @@ static int do_reconcile(struct moving_context *ctxt)
 		}
 
 		/* Completed a clean pass through all phases — we're done. */
-		if (r->phase == ARRAY_SIZE(reconcile_phases))
+		if (r->phase == ARRAY_SIZE(reconcile_phases)) {
+			pass_complete = true;
 			break;
+		}
 	}
 out:
 	if (!ret && !bkey_deleted(&pending_cookie.k))
 		try(bch2_clear_reconcile_needs_scan(trans,
 				pending_cookie.k.p, pending_cookie.v.cookie));
+
+	/*
+	 * A completed kick means reconcile drained every phase for the current
+	 * request generation without being superseded by a newer wakeup.
+	 * Shrink uses this as the point where all scan-generated downstream
+	 * work has been attempted before it decides a tail is still impossible
+	 * to evacuate.
+	 */
+	if (!ret &&
+	    pass_complete &&
+	    kick == atomic_read(&r->kick)) {
+		atomic_set(&r->completed_kick, kick);
+		wake_up_all(&r->wait);
+	}
 
 	bch2_move_stats_exit(&r->work_stats, c);
 
@@ -1831,7 +1848,7 @@ out:
 	    !kthread_should_stop() &&
 	    !atomic64_read(&r->work_stats.sectors_seen) &&
 	    !sectors_scanned &&
-	    kick == r->kick) {
+	    kick == atomic_read(&r->kick)) {
 		bch2_moving_ctxt_flush_all(ctxt);
 		bch2_trans_unlock_long(trans);
 		reconcile_wait(c);
@@ -2046,6 +2063,9 @@ int bch2_fs_reconcile_init(struct bch_fs *c)
 {
 	struct bch_fs_reconcile *r = &c->reconcile;
 
+	atomic_set(&r->kick, 0);
+	init_waitqueue_head(&r->wait);
+	atomic_set(&r->completed_kick, 0);
 	mutex_init(&r->scans_in_flight_lock);
 	try(rhashtable_init(&r->scans_in_flight, &reconcile_scan_in_flight_params));
 	r->scans_in_flight_init_done = true;
