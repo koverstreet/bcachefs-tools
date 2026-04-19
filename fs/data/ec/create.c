@@ -1673,7 +1673,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 
 		bubble_sort(blocks_used, nr, cmp_int);
 
-		for (unsigned i = 0; i < min(nr, need_evacuate); i++) {
+		for (unsigned i = 0; i < need_evacuate; i++) {
 			const struct bch_extent_ptr *ptr = old_s->ptrs + blocks_used[i];
 
 			try(bch2_evacuate_data(ctxt, ptr->dev, ptr->offset, ptr->offset + le16_to_cpu(old_s->sectors)));
