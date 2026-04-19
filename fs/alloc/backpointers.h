@@ -158,6 +158,11 @@ static inline enum bch_data_type bch2_bkey_ptr_data_type(struct bkey_s_c k,
 	}
 }
 
+static inline u64 bp_dev_for_ec_removed_dev(u64 ec_idx, unsigned ec_block)
+{
+	return (ec_idx << 8) | ec_block;
+}
+
 static inline struct bpos bch2_extent_ptr_to_bp_pos(const struct bch_fs *c, struct bkey_s_c k,
 						    struct extent_ptr_decoded p)
 {
@@ -166,7 +171,7 @@ static inline struct bpos bch2_extent_ptr_to_bp_pos(const struct bch_fs *c, stru
 			   ((u64) p.ptr.offset << c->sb.extent_bp_shift) + p.crc.offset);
 
 		if (p.ptr.dev == BCH_SB_MEMBER_INVALID && p.has_ec)
-			pos.inode = (p.ec.idx << 8) | p.ec.block;
+			pos.inode = bp_dev_for_ec_removed_dev(p.ec.idx, p.ec.block);
 		return pos;
 	} else {
 		/*
