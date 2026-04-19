@@ -443,8 +443,10 @@ void bch2_fs_read_only(struct bch_fs *c)
 		BUG_ON(!c->sb.clean);
 		BUG_ON(atomic_long_read(&c->btree.cache.nr_dirty));
 		BUG_ON(atomic_long_read(&c->btree.key_cache.nr_dirty));
-		BUG_ON(c->btree.write_buffer.inc.keys.nr);
-		BUG_ON(c->btree.write_buffer.flushing.keys.nr);
+		for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
+			BUG_ON(c->btree.write_buffer[i].inc.keys.nr);
+			BUG_ON(c->btree.write_buffer[i].flushing.keys.nr);
+		}
 		bch2_verify_replicas_refs_clean(c);
 		bch2_verify_accounting_clean(c);
 	} else {

@@ -574,7 +574,7 @@ static int bch2_journal_write_prep(struct journal *j, struct journal_buf *w)
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct jset_entry *start, *end;
 	struct jset *jset = w->data;
-	struct journal_keys_to_wb wb = { NULL };
+	struct journal_keys_to_wb wb = {};
 	unsigned u64s;
 	unsigned long btree_roots_have = 0;
 	u64 seq = le64_to_cpu(jset->seq);
@@ -618,7 +618,7 @@ static int bch2_journal_write_prep(struct journal *j, struct journal_buf *w)
 		case BCH_JSET_ENTRY_write_buffer_keys:
 			EBUG_ON(!w->need_flush_to_write_buffer);
 
-			if (!wb.wb)
+			if (!wb.seq)
 				bch2_journal_keys_to_write_buffer_start(c, &wb, seq);
 
 			jset_entry_for_each_key(i, k) {
@@ -635,7 +635,7 @@ static int bch2_journal_write_prep(struct journal *j, struct journal_buf *w)
 		}
 	}
 
-	if (wb.wb) {
+	if (wb.seq) {
 		ret = bch2_journal_keys_to_write_buffer_end(c, &wb);
 		if (ret) {
 			bch2_fs_fatal_error(c, "error flushing journal keys to btree write buffer: %s",

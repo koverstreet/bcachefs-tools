@@ -779,7 +779,12 @@ struct bch_fs_btree {
 
 	struct bch_fs_btree_cache		cache;
 	struct bch_fs_btree_key_cache		key_cache;
-	struct bch_fs_btree_write_buffer	write_buffer;
+	/*
+	 * One per BTREE_IS_write_buffer btree (indexed by BCH_WB_BTREE_*, see
+	 * bch_wb_btree_idx()). Each instance has its own intake/flushing
+	 * buffers and locks.
+	 */
+	struct bch_fs_btree_write_buffer	write_buffer[BCH_WB_BTREE_NR];
 	struct bch_fs_btree_trans		trans;
 	struct bch_fs_btree_reserve_cache	reserve_cache;
 	struct bch_fs_btree_interior_updates	interior_updates;

@@ -72,6 +72,12 @@ struct btree_write_buffer_keys {
 	darray_u64			keys;
 	struct journal_entry_pin	pin;
 	struct mutex			lock;
+	/*
+	 * Back-references set at init so the journal-pin callback can recover
+	 * which btree (and which of inc/flushing) a firing pin belongs to.
+	 */
+	enum bch_wb_btree		wb_btree;
+	bool				is_flushing;
 };
 
 #define WB_FLUSH_CALLERS()		\
@@ -89,6 +95,10 @@ enum wb_flush_caller {
 };
 
 struct bch_fs_btree_write_buffer {
+	/* Back-refs set at init so the flush thread can find c and its idx. */
+	struct bch_fs			*c;
+	enum bch_wb_btree		idx;
+
 	DARRAY(struct wb_key_ref)	sorted;
 	struct btree_write_buffer_keys	inc;
 	struct btree_write_buffer_keys	flushing;
