@@ -713,7 +713,8 @@ enum btree_write_type {
 	x(need_rewrite_error)						\
 	x(need_rewrite_ptr_written_zero)				\
 	x(never_write)							\
-	x(pinned)
+	x(pinned)							\
+	x(permanent)
 
 enum btree_flags {
 	/* First bits for btree node write type */

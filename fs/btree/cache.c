@@ -657,11 +657,18 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 
 		kvfree(c->verify_ondisk);
 
+		/*
+		 * Roots live off the live list during the fs's lifetime (via
+		 * BTREE_NODE_permanent); clear the flag and add them back so
+		 * the teardown sweep below hash-removes them.
+		 */
 		for (unsigned i = 0; i < btree_id_nr_alive(c); i++) {
 			struct btree_root *r = bch2_btree_id_root(c, i);
 
-			if (r->b)
+			if (r->b) {
+				clear_btree_node_permanent(r->b);
 				list_add(&r->b->list, &bc->list);
+			}
 		}
 
 		list_for_each_entry_safe(b, t, &bc->list, list)
@@ -687,9 +694,9 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 
 		for (unsigned i = 0; i < ARRAY_SIZE(bc->nr_by_btree); i++)
 			BUG_ON(bc->nr_by_btree[i]);
-		BUG_ON(bc->live[0].nr);
-		BUG_ON(bc->live[1].nr);
-		BUG_ON(bc->nr_freeable);
+		WARN_ON(bc->live[0].nr);
+		WARN_ON(bc->live[1].nr);
+		WARN_ON(bc->nr_freeable);
 
 		darray_exit(&bc->roots_extra);
 	}
