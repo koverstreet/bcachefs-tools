@@ -428,13 +428,13 @@ struct get_locks_fail {
 
 #define BKEY_CACHED_ACCESSED		0
 #define BKEY_CACHED_DIRTY		1
+#define BKEY_CACHED_IMMEDIATE_FLUSH	2
 
 struct bkey_cached {
 	struct btree_bkey_cached_common c;
 
 	unsigned long		flags;
 	u16			u64s;
-	bool			needs_immediate_flush:1;
 	struct bkey_cached_key	key;
 
 	struct rhash_head	hash;

@@ -102,9 +102,7 @@ journal_dev_space_available(struct journal *j, struct bch_dev *ca,
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct journal_device *ja = &ca->journal;
-	unsigned sectors, buckets, unwritten;
 	unsigned bucket_size_aligned = round_down(ca->mi.bucket_size, block_sectors(c));
-	u64 seq;
 
 	if (from == journal_space_total)
 		return (struct journal_space) {
@@ -112,18 +110,17 @@ journal_dev_space_available(struct journal *j, struct bch_dev *ca,
 			.total		= bucket_size_aligned * ja->nr,
 		};
 
-	buckets = bch2_journal_dev_buckets_available(j, ja, from);
-	sectors = round_down(ja->sectors_free, block_sectors(c));
+	unsigned buckets = bch2_journal_dev_buckets_available(j, ja, from);
+	unsigned sectors = round_down(ja->sectors_free, block_sectors(c));
 
 	/*
 	 * We that we don't allocate the space for a journal entry
 	 * until we write it out - thus, account for it here:
 	 */
-	for (seq = journal_last_unwritten_seq(j);
-	     seq <= journal_cur_seq(j);
-	     seq++) {
-		unwritten = j->buf[seq & JOURNAL_BUF_MASK].sectors;
-
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq) {
+		unsigned unwritten = buf->sectors;
 		if (!unwritten)
 			continue;
 
@@ -208,8 +205,21 @@ void bch2_journal_space_available(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	unsigned clean, clean_ondisk, total;
-	unsigned max_entry_size	 = min(j->buf[0].buf_size >> 9,
-				       j->buf[1].buf_size >> 9);
+
+	/*
+	 * Max entry size we'll let callers use — take the min over any
+	 * currently-live ring buffers, or fall back to the target buf size
+	 * when no ring slot has a buf assigned yet.
+	 */
+	unsigned max_entry_size = UINT_MAX;
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
+		if (buf->buf_size)
+			max_entry_size = min(max_entry_size, buf->buf_size >> 9);
+	if (max_entry_size == UINT_MAX)
+		max_entry_size = j->buf_size_want >> 9;
+
 	unsigned nr_online = 0, nr_devs_want;
 	bool can_discard = false;
 

@@ -256,7 +256,6 @@ static int btree_key_cache_create(struct btree_trans *trans,
 	ck->key.btree_id	= ck_path->btree_id;
 	ck->key.pos		= ck_path->pos;
 	ck->flags		= 1U << BKEY_CACHED_ACCESSED;
-	ck->needs_immediate_flush = false;
 
 	if (unlikely(key_u64s > ck->u64s)) {
 		mark_btree_node_locked_noreset(ck_path, 0, BTREE_NODE_UNLOCKED);
@@ -320,7 +319,6 @@ static noinline int btree_key_cache_fill(struct btree_trans *trans,
 	}
 
 	struct bch_fs *c = trans->c;
-	bool needs_immediate_flush = false;
 
 	CLASS(btree_iter, iter)(trans, ck_path->btree_id, ck_path->pos,
 				BTREE_ITER_intent|
@@ -330,16 +328,18 @@ static noinline int btree_key_cache_fill(struct btree_trans *trans,
 	iter.flags &= ~BTREE_ITER_with_journal;
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
+	bool needs_immediate_flush = bkey_deleted(k.k);
+
 	ck_path = trans->paths + ck_path_idx;
 
-	if (unlikely(trans->journal_replay_not_finished && bkey_deleted(k.k))) {
+	if (unlikely(trans->journal_replay_not_finished)) {
 		size_t idx = 0;
 		const struct bkey_i *jk =
 			bch2_journal_keys_peek_max(trans->c, ck_path->btree_id, 0,
 						   ck_path->pos, ck_path->pos, &idx);
 		if (jk) {
 			k = bkey_i_to_s_c(jk);
-			needs_immediate_flush = true;
+			needs_immediate_flush |= bkey_deleted(k.k);
 		}
 	}
 
@@ -352,7 +352,7 @@ static noinline int btree_key_cache_fill(struct btree_trans *trans,
 
 	if (unlikely(needs_immediate_flush)) {
 		struct bkey_cached *ck = (void *) ck_path->l[0].b;
-		ck->needs_immediate_flush = true;
+		set_bit(BKEY_CACHED_IMMEDIATE_FLUSH, &ck->flags);
 	}
 
 	event_inc_trace(c, btree_key_cache_fill, buf, ({

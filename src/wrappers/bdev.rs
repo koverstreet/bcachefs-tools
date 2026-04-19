@@ -118,22 +118,16 @@ pub fn fd_to_dev_serial(fd: RawFd) -> Option<String> {
 
 /// Returns true if the block device is non-rotational (SSD).
 ///
-/// For regular files, returns false.
+/// For regular files (image files) the ioctl fails and we default to false.
 pub fn nonrot(fd: RawFd) -> bool {
-    let stat = fstat(fd);
-
-    if !is_blk(stat.st_mode) {
-        return false;
-    }
-
-    let major = libc::major(stat.st_rdev);
-    let minor = libc::minor(stat.st_rdev);
-    let path = format!("/sys/dev/block/{}:{}/queue/rotational", major, minor);
-
-    match std::fs::read_to_string(&path) {
-        Ok(s) => s.trim() == "0",
-        Err(_) => false,
-    }
+    // BLKROTATIONAL = _IO(0x12, 126). Kernel returns !bdev_nonrot(bdev) via
+    // put_ushort — bdev_nonrot internally uses bdev_get_queue(bdev), which
+    // resolves to the parent disk's queue for partitions and handles LVM,
+    // md, loop devices, etc. uniformly.
+    const BLKROTATIONAL: libc::c_ulong = 0x127E;
+    let mut rotational: u16 = 0;
+    let ret = unsafe { libc::ioctl(fd, BLKROTATIONAL, &mut rotational) };
+    ret == 0 && rotational == 0
 }
 
 // BLK_OPEN_* flags from include/linux/blk_types.h
