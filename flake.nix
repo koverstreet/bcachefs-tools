@@ -61,7 +61,7 @@
           bcachefsNixosModule = { pkgs, ... }: {
             boot.supportedFilesystems = [ "bcachefs" ];
             boot.bcachefs.package =
-              self.packages.${pkgs.stdenv.hostPlatform.system}.bcachefs-tools;
+              (pkgs.extend self.overlays.default).bcachefsPackages.bcachefs-tools;
           };
         in {
           default = bcachefsNixosModule;
@@ -84,7 +84,7 @@
         let
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ (import rust-overlay) ];
+            overlays = [ self.overlays.default ];
           };
           latexDerivation = (
             pkgs.texliveBasic.withPackages (
@@ -106,10 +106,7 @@
                   localSystem = system;
                   pkgs' = import nixpkgs {
                     inherit crossSystem localSystem;
-                    overlays = [
-                      (import rust-overlay)
-                      self.overlays.default
-                    ];
+                    overlays = [ self.overlays.default ];
                   };
 
                   withCrossName =

@@ -1,7 +1,11 @@
 { inputs, version }:
+let
+  rustOverlay = import inputs.rust-overlay;
+in
 final: prev:
 let
-  craneBuild = prev.callPackage ./crane-build.nix {
+  pkgs = prev.extend rustOverlay;
+  craneBuild = pkgs.callPackage ./crane-build.nix {
     inherit version;
     inherit (inputs) crane;
   };
