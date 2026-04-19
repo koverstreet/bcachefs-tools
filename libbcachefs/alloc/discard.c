@@ -16,6 +16,21 @@
 
 #include "journal/journal.h"
 
+static bool discard_opt_enabled_idx(struct bch_fs *c, unsigned dev)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+	BUG_ON(!ca);
+	return ca && bch2_discard_opt_enabled(c, ca);
+}
+
+static u32 dev_bucket_size(struct bch_fs *c, unsigned dev)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+	return ca ? ca->mi.bucket_size : 0;
+}
+
 #define DEV_IN_FLIGHT_MAX		4
 
 static void __discard_state_to_text(struct printbuf *out, struct discard_state *s)
@@ -136,6 +151,17 @@ static int __discard_mark_free(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
+	if (a->v.data_type != BCH_DATA_need_discard) {
+		struct bch_fs *c = trans->c;
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "Discarded bucket that is no longer BCH_DATA_need_discard!\n");
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&a->k_i));
+		panic("%s\n", msg.m.buf);
+
+		bch2_fs_emergency_read_only(c, &msg.m);
+		return bch_err_throw(c, emergency_ro);
+	}
+
 	struct bkey_buf orig_k __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&orig_k);
 	bch2_bkey_buf_copy(&orig_k, &a->k_i);
@@ -156,7 +182,7 @@ static int __discard_mark_free(struct btree_trans *trans,
 	else
 		event_inc_trace(c, bucket_discard_fast, buf,
 			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(orig_k.k)));
-	s->committed++;
+	s->committed += dev_bucket_size(c, iter->k.p.inode);
 
 	return 0;
 }
@@ -166,21 +192,9 @@ static int discard_mark_free(struct btree_trans *trans,
 			     struct discard_state *s,
 			     bool fastpath)
 {
-	try(bch2_trans_relock(trans));
-
-	CLASS(btree_iter, iter)(trans, BTREE_ID_alloc, bucket, BTREE_ITER_cached);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_alloc, bucket, BTREE_ITER_cached|BTREE_ITER_intent);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
-
 	struct bkey_i_alloc_v4 *a = errptr_try(bch2_alloc_to_v4_mut(trans, k));
-
-	if (a->v.data_type != BCH_DATA_need_discard) {
-		struct bch_fs *c = trans->c;
-		CLASS(bch_log_msg, msg)(c);
-		prt_printf(&msg.m, "Discarded bucket that is no longer BCH_DATA_need_discard!\n");
-		bch2_bkey_val_to_text(&msg.m, c, k);
-		bch2_fs_emergency_read_only(c, &msg.m);
-		return bch_err_throw(c, emergency_ro);
-	}
 
 	return __discard_mark_free(trans, s, fastpath, &iter, a);
 }
@@ -221,6 +235,7 @@ static int bch2_discards_complete(struct btree_trans *trans,
 	while ((dev_bucket = next_to_complete(d, &iter))) {
 		struct bpos bucket = u64_to_bucket(dev_bucket);
 		struct bch_dev *ca = bch2_dev_have_ref(c, bucket.inode);
+
 		ret = lockrestart_do(trans, discard_mark_free(trans, bucket, s, fastpath)) ?: ret;
 
 		scoped_guard(spinlock_irq, &d->lock) {
@@ -238,20 +253,6 @@ static int bch2_discards_complete(struct btree_trans *trans,
 	return ret;
 }
 
-static bool discard_opt_enabled_idx(struct bch_fs *c, unsigned dev)
-{
-	guard(rcu)();
-	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
-	return ca && bch2_discard_opt_enabled(c, ca);
-}
-
-static u32 dev_bucket_size(struct bch_fs *c, unsigned dev)
-{
-	guard(rcu)();
-	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
-	return ca ? ca->mi.bucket_size : 0;
-}
-
 static int bch2_discard_one_bucket(struct btree_trans *trans,
 				   struct bpos bucket,
 				   u32 bucket_size,
@@ -261,21 +262,16 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 
 	int ret = discard_in_flight_add(c, bucket, fastpath, true);
-	if (ret == -EEXIST) {
-		s->eexist += bucket_size;
-		return 0;
-	}
-
 	if (ret) {
-		s->eagain += bucket_size;
-		return s->eagain * 2 > s->seen
-			? bch_err_throw(c, max_discards_in_flight)
-			: 0;
-	}
-
-	if (bch2_bucket_is_open_safe(c, bucket.inode, bucket.offset)) {
-		s->open += bucket_size;
-		return 0;
+		if (ret == -EEXIST) {
+			s->eexist += bucket_size;
+			return 0;
+		} else {
+			s->eagain += bucket_size;
+			return s->eagain * 2 > s->seen
+				? bch_err_throw(c, max_discards_in_flight)
+				: 0;
+		}
 	}
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_alloc, bucket, BTREE_ITER_cached);
@@ -296,6 +292,12 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 	if (a->v.data_type != BCH_DATA_need_discard) {
 		/* expected race - btree write buffer */
 		s->bad_data_type += bucket_size;
+		return 0;
+	}
+
+	/* Must check after we've looked at and locked the alloc key: */
+	if (bch2_bucket_is_open_safe(c, bucket.inode, bucket.offset)) {
+		s->open += bucket_size;
 		return 0;
 	}
 

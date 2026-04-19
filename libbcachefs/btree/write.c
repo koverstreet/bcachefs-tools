@@ -492,7 +492,7 @@ do_write:
 	 */
 
 	wbio = container_of(bio_alloc_bioset(NULL,
-				buf_pages(data, sectors_to_write << 9),
+				buf_nr_bvecs(data, sectors_to_write << 9),
 				REQ_OP_WRITE|REQ_META|REQ_SYNC|REQ_IDLE,
 				GFP_NOFS,
 				&c->btree.bio),

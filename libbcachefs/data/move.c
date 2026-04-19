@@ -516,12 +516,12 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 
 	/* Userspace might have supplied @dev: */
 	CLASS(bch2_dev_tryget_noerror, ca)(c, dev);
-	if (!ca)
-		return 0;
 
-	sector_end = min(sector_end, bucket_to_sector(ca, ca->mi.nbuckets));
-
-	u64 check_mismatch_done = sector_to_bucket(ca, sector_start);
+	u64 check_mismatch_done = 0;
+	if (ca) {
+		sector_end		= min(sector_end, bucket_to_sector(ca, ca->mi.nbuckets));
+		check_mismatch_done	= sector_to_bucket(ca, sector_start);
+	}
 
 	struct bpos bp_start	= POS(dev, sector_start	<< c->sb.extent_bp_shift);
 	struct bpos bp_end	= POS(dev, sector_end	<< c->sb.extent_bp_shift);
@@ -534,7 +534,9 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 	 */
 	bch2_trans_begin(trans);
 
-	CLASS(btree_iter, bp_iter)(trans, BTREE_ID_backpointers, bp_start, 0);
+	CLASS(btree_iter, bp_iter)(trans, dev != BCH_SB_MEMBER_INVALID
+				   ? BTREE_ID_backpointers
+				   : BTREE_ID_stripe_backpointers, bp_start, 0);
 
 	ret = bch2_btree_write_buffer_tryflush(trans);
 	if (!bch2_err_matches(ret, EROFS))
@@ -555,7 +557,8 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 		if (!k.k || bkey_gt(k.k->p, bp_end))
 			break;
 
-		if (check_mismatch_done < bp_pos_to_bucket(ca, k.k->p).offset) {
+		if (ca &&
+		    check_mismatch_done < bp_pos_to_bucket(ca, k.k->p).offset) {
 			while (check_mismatch_done < bp_pos_to_bucket(ca, k.k->p).offset)
 				bch2_check_bucket_backpointer_mismatch(trans, ca, check_mismatch_done++,
 								       copygc, &last_flushed);
@@ -613,7 +616,8 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 	if (ret > 0)
 		ret = 0;
 
-	while (check_mismatch_done < sector_to_bucket(ca, sector_end))
+	while (ca &&
+	       check_mismatch_done < sector_to_bucket(ca, sector_end))
 		bch2_check_bucket_backpointer_mismatch(trans, ca, check_mismatch_done++,
 						       copygc, &last_flushed);
 

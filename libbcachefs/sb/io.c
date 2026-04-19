@@ -318,7 +318,7 @@ int bch2_sb_realloc(struct bch_sb_handle *sb, unsigned u64s)
 	sb->sb = new_sb;
 
 	if (sb->have_bio) {
-		unsigned nr_bvecs = buf_pages(sb->sb, new_buffer_size);
+		unsigned nr_bvecs = buf_nr_bvecs(sb->sb, new_buffer_size);
 
 		bio = bio_kmalloc(nr_bvecs, GFP_KERNEL);
 		if (!bio)

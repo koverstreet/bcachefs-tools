@@ -390,6 +390,19 @@ err:
 	return ret;
 }
 
+bool bch2_copygc_can_make_progress(struct bch_dev *ca)
+{
+	struct bch_dev_usage_full usage_full = bch2_dev_usage_full_read(ca);
+	u64 fragmented = 0;
+
+	for (unsigned i = 0; i < BCH_DATA_NR; i++)
+		if (data_type_movable(i))
+			fragmented += usage_full.d[i].fragmented;
+
+	return fragmented > ca->mi.bucket_size *
+		bch2_dev_buckets_reserved(ca, BCH_WATERMARK_stripe);
+}
+
 u64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
 {
 	struct bch_dev_usage_full usage_full = bch2_dev_usage_full_read(ca);
@@ -399,15 +412,12 @@ u64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
 		usage.buckets[i] = usage_full.d[i].buckets;
 
 	/* Don't start until less than 20% of the device is free */
-	u64 available = (usage.buckets[BCH_DATA_free] +
-			 usage.buckets[BCH_DATA_need_gc_gens] +
-			 usage.buckets[BCH_DATA_need_discard]);
-	s64 wait = (available * 5 - ca->mi.nbuckets) * ca->mi.bucket_size;
+	s64 wait = (usage.buckets[BCH_DATA_free] * 5 - ca->mi.nbuckets) * ca->mi.bucket_size;
 	if (wait > 0)
 		return wait;
 
-	s64 fragmented_allowed = (((__dev_buckets_available(ca, usage, BCH_WATERMARK_stripe) +
-				    (ca->mi.nbuckets >> 6)) * /* Copygc hard reserve */
+	s64 fragmented_allowed = (((__dev_buckets_free(ca, usage, BCH_WATERMARK_stripe) +
+				    bch2_dev_buckets_reserved(ca, BCH_WATERMARK_stripe)) *
 				   ca->mi.bucket_size) >> 1);
 	s64 fragmented = 0;
 

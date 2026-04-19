@@ -421,7 +421,7 @@ static noinline int flush_new_cached_update(struct btree_trans *trans,
 static inline bool key_cache_needs_flush(struct btree_path *path)
 {
 	struct bkey_cached *ck = (void *) path->l[0].b;
-	return ck->needs_immediate_flush;
+	return test_bit(BKEY_CACHED_IMMEDIATE_FLUSH, &ck->flags);
 }
 
 static int __must_check

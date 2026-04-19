@@ -59,7 +59,7 @@ static bool bch2_btree_verify_replica(struct bch_fs *c, struct btree *b,
 		return false;
 
 	bio = bio_alloc_bioset(ca->disk_sb.bdev,
-			       buf_pages(n_sorted, btree_buf_bytes(b)),
+			       buf_nr_bvecs(n_sorted, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_META,
 			       GFP_NOFS,
 			       &c->btree.bio);
@@ -216,7 +216,7 @@ void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *c,
 	}
 
 	bio = bio_alloc_bioset(ca->disk_sb.bdev,
-			       buf_pages(n_ondisk, btree_buf_bytes(b)),
+			       buf_nr_bvecs(n_ondisk, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_META,
 			       GFP_NOFS,
 			       &c->btree.bio);

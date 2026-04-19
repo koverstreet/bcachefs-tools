@@ -21,16 +21,22 @@
 #define JOURNAL_STATE_BUF_NR	(1U << JOURNAL_STATE_BUF_BITS)
 #define JOURNAL_STATE_BUF_MASK	(JOURNAL_STATE_BUF_NR - 1)
 
-#define JOURNAL_BUF_BITS	4
-#define JOURNAL_BUF_NR		(1U << JOURNAL_BUF_BITS)
-#define JOURNAL_BUF_MASK	(JOURNAL_BUF_NR - 1)
+struct journal;
 
 /*
- * We put JOURNAL_BUF_NR of these in struct journal; we used them for writes to
- * the journal that are being staged or in flight.
+ * One journal buffer: staging area for a journal entry. Dynamically
+ * allocated per journal entry (one per seq), rides j->in_flight from
+ * the moment the entry is opened until its write completes and
+ * seq_ondisk advances past it.
+ *
+ * Reservation concurrency is bounded by JOURNAL_STATE_BUF_NR via the
+ * reservation state encoded in j->reservations; in-flight depth is
+ * bounded only by the in_flight FIFO capacity (grown on demand) and
+ * natural memory/device backpressure.
  */
 struct journal_buf {
 	struct closure		io;
+	struct journal		*j;		/* for container_of-equivalent recovery */
 	struct jset		*data;
 
 	__BKEY_PADDED(key, BCH_REPLICAS_MAX);
@@ -56,7 +62,23 @@ struct journal_buf {
 	bool			write_done:1;
 	bool			empty:1;
 	bool			has_overwrites:1;
-	u8			idx;
+};
+
+/*
+ * Ring slot for open reservations. Cache of the journal_buf pointer and
+ * its data pointer, indexed by seq & JOURNAL_STATE_BUF_MASK. The
+ * reservation fastpath reads .data directly to avoid the extra
+ * indirection through .buf.
+ *
+ * A ring slot is overwritten in journal_entry_open() when a new seq is
+ * assigned to that state index. Stale entries are never dereferenced
+ * because the only readers are reservation holders (trusted: the
+ * reservation pins the buf) or journal_res_entry() via those reservations.
+ * All non-reservation seq→buf lookups go through j->in_flight.
+ */
+struct journal_ringbuf {
+	struct journal_buf	*buf;
+	struct jset		*data;
 };
 
 /*
@@ -173,7 +195,7 @@ enum journal_flags {
 
 struct journal_bio {
 	struct bch_dev		*ca;
-	unsigned		buf_idx;
+	struct journal_buf	*buf;
 	u64			submit_time;
 
 	struct bio		bio;
@@ -225,10 +247,22 @@ struct journal {
 	 */
 	struct mutex		buf_lock;
 	/*
-	 * Two journal entries -- one is currently open for new entries, the
-	 * other is possibly being written out.
+	 * Ring of slots indexed by seq & JOURNAL_STATE_BUF_MASK; only used by
+	 * the reservation fastpath. Updated in journal_entry_open() when a new
+	 * seq is assigned to the slot's state index.
 	 */
-	struct journal_buf	buf[JOURNAL_BUF_NR];
+	struct journal_ringbuf	ring[JOURNAL_STATE_BUF_NR];
+
+	/*
+	 * FIFO of in-flight journal bufs, one entry per seq in
+	 * (seq_ondisk, cur_seq]. fifo.front = seq_ondisk + 1, fifo.back =
+	 * cur_seq + 1, so seq-indexed lookup is O(1) via fifo_entry().
+	 * Bufs live inline in the FIFO's backing array: pushed (and zeroed)
+	 * in journal_entry_open(), freed (front-advanced) in
+	 * journal_write_done() as seq_ondisk advances.
+	 */
+	FIFO_U64_IDX(struct journal_buf) in_flight;
+
 	void			*free_buf;
 	unsigned		free_buf_size;
 
@@ -287,10 +321,7 @@ struct journal {
 	 * needed. When all journal entries in the oldest journal bucket are no
 	 * longer needed, the bucket can be discarded and reused.
 	 */
-	struct {
-		u64 front, back, size, mask;
-		struct journal_entry_pin_list *data;
-	}			pin;
+	FIFO_U64_IDX(struct journal_entry_pin_list) pin;
 	u64			last_seq;
 
 	size_t			dirty_entry_bytes;
@@ -363,8 +394,12 @@ struct journal_device {
 
 	u64			*buckets;
 
-	/* Bio for journal reads/writes to this device */
-	struct journal_bio	*bio[JOURNAL_BUF_NR];
+	/*
+	 * Bioset for journal write bios. Journal writes allocate from this at
+	 * submit time and free on completion; the pool size bounds the
+	 * mempool reserve, not in-flight depth.
+	 */
+	struct bio_set		bio_set;
 
 	struct mutex		discard_lock;
 	struct work_struct	discard;
@@ -399,7 +434,7 @@ struct journal_entry_res {
  *
  * @cur_seq:	First sequence number available for new journal writes.
  *		Initialized to highest on-disk entry + 1, then bumped
- *		further by recovery (+JOURNAL_BUF_NR*4 for unclean
+ *		further by recovery (+64 for unclean
  *		shutdown) and max'd with last blacklisted seq.
  *		Must be strictly greater than every entry found on disk,
  *		including noflush/blacklisted entries — we must never

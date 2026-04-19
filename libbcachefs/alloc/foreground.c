@@ -535,6 +535,11 @@ again:
 		    c->recovery.pass_done < BCH_RECOVERY_PASS_check_allocations)
 			goto alloc;
 
+		if (bch2_copygc_can_make_progress(ca)) {
+			req->copygc_can_make_progress = true;
+			bch2_copygc_wakeup(c);
+		}
+
 		track_event_change(&c->times[BCH_TIME_blocked_allocate], true);
 
 		if (req->cl &&
@@ -542,14 +547,17 @@ again:
 		    !req->will_retry_target_devices &&
 		    !req->will_retry_all_devices &&
 		    !req->will_retry_set_devices) {
-			if (!waiting) {
+			if ((!req->copygc_can_make_progress ||
+			     req->watermark == BCH_WATERMARK_copygc) &&
+			    (req->nr_effective || (req->devs_have && req->devs_have->nr))) {
+				ob = ERR_PTR(bch_err_throw(c, bucket_alloc_no_progress));
+			} else if (!waiting) {
 				closure_wait(&c->allocator.freelist_wait, req->cl);
 				waiting = true;
 				goto again;
+			} else {
+				ob = ERR_PTR(bch_err_throw(c, bucket_alloc_blocked));
 			}
-
-			bch2_copygc_wakeup(c);
-			ob = ERR_PTR(bch_err_throw(c, bucket_alloc_blocked));
 		} else {
 			ob = ERR_PTR(bch_err_throw(c, freelist_empty));
 		}
@@ -1187,6 +1195,7 @@ retry:
 	req->ca				= NULL;
 	req->will_retry_all_devices	= req->target && !(req->flags & BCH_WRITE_only_specified_devs);
 	req->will_retry_target_devices	= !(req->flags & BCH_WRITE_alloc_nowait);
+	req->copygc_can_make_progress	= false;
 	req->ptrs.nr			= 0;
 	req->nr_effective		= 0;
 	req->have_cache			= req->flags & BCH_WRITE_move;
@@ -1263,7 +1272,8 @@ retry:
 			continue;
 		}
 
-		if (bch2_err_matches(ret, BCH_ERR_insufficient_devices) &&
+		if ((bch2_err_matches(ret, BCH_ERR_insufficient_devices) ||
+		     bch2_err_matches(ret, BCH_ERR_bucket_alloc_no_progress)) &&
 		    req->nr_effective)
 			ret = 0;
 
@@ -1274,6 +1284,7 @@ retry:
 		 * need another retry so that we can add ourself to the waitlist
 		 */
 		if (bch2_err_matches(ret, BCH_ERR_freelist_empty) &&
+		    !bch2_err_matches(ret, BCH_ERR_bucket_alloc_no_progress) &&
 		    req->cl &&
 		    !(req->flags & BCH_WRITE_alloc_nowait))
 			continue;
@@ -1688,6 +1699,7 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 		prt_printf(&buf, "will_retry_all_devices:\t%u\n", req->will_retry_all_devices);
 		prt_printf(&buf, "will_retry_target_devices:\t%u\n", req->will_retry_target_devices);
 		prt_printf(&buf, "will_retry_set_devices:\t%u\n", req->will_retry_set_devices);
+		prt_printf(&buf, "copygc_can_make_progress :\t%u\n", req->copygc_can_make_progress);
 		prt_printf(&buf, "have_cl:\t%u\n", req->cl != NULL);
 
 		if (req->devs_have && req->devs_have->nr) {
@@ -1709,6 +1721,8 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 			prt_printf(&buf, "%u ", *i);
 		prt_newline(&buf);
 
+		prt_printf(&buf, "allocated:\t%u\n", req->nr_effective);
+
 		alloc_trace_to_text(&buf, c, &req->trace);
 		prt_newline(&buf);
 	}
@@ -1725,12 +1739,12 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 
 		scoped_guard(rcu) {
 			guard(printbuf_atomic)(&buf);
-			prt_printf(&buf, "Devices elligible for allocation\n");
+			prt_printf(&buf, "Devices eligible for allocation\n");
 			for_each_member_device_rcu(c, ca, NULL)
 				if (dev_may_alloc(c, ca, req))
 					dev_alloc_debug_header(&buf, ca);
 
-			prt_printf(&buf, "Devices inelligible for allocation\n");
+			prt_printf(&buf, "Devices ineligible for allocation\n");
 			for_each_member_device_rcu(c, ca, NULL)
 				if (!dev_may_alloc(c, ca, req))
 					dev_alloc_debug_header(&buf, ca);

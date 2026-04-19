@@ -572,7 +572,9 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 					    .io_seq	= ctxt->io_seq,
 			}));
 		} else {
-			bch_err_msg(c, ret, "retrying stripe");
+			CLASS(bch_log_msg_ratelimited, msg)(c);
+			prt_printf(&msg.m, "error retrying stripe: %s\n", bch2_err_str(ret));
+			bch2_bkey_val_to_text(&msg.m, c, s.s_c);
 		}
 		ret = 0;
 	}
