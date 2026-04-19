@@ -359,7 +359,7 @@ static noinline struct snapshot_t *__snapshot_t_mut(struct bch_fs *c, u32 id)
 	size_t idx = U32_MAX - id;
 	struct snapshot_table *new, *old;
 
-	size_t new_bytes = kmalloc_size_roundup(struct_size(new, s, idx + 1));
+	size_t new_bytes = roundup_pow_of_two(struct_size(new, s, idx + 1));
 	size_t new_size = (new_bytes - sizeof(*new)) / sizeof(new->s[0]);
 
 	if (unlikely(new_bytes > INT_MAX))
