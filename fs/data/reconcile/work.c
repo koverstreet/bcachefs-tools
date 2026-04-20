@@ -1853,9 +1853,6 @@ out:
 	if (!ret &&
 	    pass_complete &&
 	    kick == atomic_read(&r->kick)) {
-		atomic64_set(&r->completed_work_units,
-			     atomic64_read(&r->work_stats.sectors_seen) +
-			     sectors_scanned);
 		atomic_set(&r->completed_kick, kick);
 		wake_up_all(&r->wait);
 	}
@@ -2084,7 +2081,6 @@ int bch2_fs_reconcile_init(struct bch_fs *c)
 	atomic_set(&r->kick, 0);
 	init_waitqueue_head(&r->wait);
 	atomic_set(&r->completed_kick, 0);
-	atomic64_set(&r->completed_work_units, 0);
 	mutex_init(&r->scans_in_flight_lock);
 	try(rhashtable_init(&r->scans_in_flight, &reconcile_scan_in_flight_params));
 	r->scans_in_flight_init_done = true;
