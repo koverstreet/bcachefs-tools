@@ -71,7 +71,10 @@
 
       inherit systems;
 
-      flake.overlays.default = import ./overlay.nix { inherit inputs version; };
+      flake.overlays.default = nixpkgs.lib.composeManyExtensions [
+        (import rust-overlay)
+        (import ./overlay.nix { inherit inputs version; })
+      ];
 
       perSystem =
         {
