@@ -1,5 +1,72 @@
 # Changelog
 
+## v1.38.0 - Sun Apr 19 2026
+
+bcachefs_metadata_version_need_discard_by_journal_seq
+
+The `need_discard` btree (tracking buckets pending discard) is now
+indexed by journal sequence number instead of device/bucket. This
+reshapes how the allocator cooperates with the discard worker.
+
+- Fixes allocator-stuck-on-mount regressions (#1105, #1108).
+  Previously, mounting a filesystem whose metadata devices had very
+  few free buckets could stall during journal replay — the allocator
+  and discard worker couldn't make progress past each other. The new
+  layout breaks that deadlock.
+- Much faster sustained discard throughput. The discard worker
+  now iterates the need_discard btree in seq order directly, rather
+  than scanning the full set each pass. Noticeable on write-heavy
+  workloads, particularly on larger filesystems.
+
+Upgrade is automatic on mount. Downgrade to a pre-1.38 version
+requires offline downgrade tooling (existing format supports this).
+
+### Journal pipelining
+
+Previously we were limited to 16 in flight journal writes at a time, but for
+large arrays this had become a severe bottleneck. We now have a separate
+fifo for in flight journal writes; we currently allocate 256 entries, and if
+that limit is ever hit it's now trivial to make growable at runtime.
+
+### Faster snapshot_read at mount time
+
+Users with large numbers of snapshots should notice dramatically faster mount
+times; an accidental O(n^2) from incorrectly growing the in-memory snapshot
+table has been fixed.
+
+### Bug fixes
+
+- `bcachefs format` no longer misdetects SSDs as rotational when given a
+  partition (#554). If you created a filesystem on a partition (e.g.
+  `/dev/nvme0n1p3`) with 1.37.5, the rotational flag may have been set to 1
+  incorrectly; re-check with `show-super` and adjust if needed. New filesystems
+  are correct.
+- Fix reconcile spinning forever on encrypted filesystems with nocow enabled.
+  These options are not compatible — encryption
+  falls back to COW automatically now. Documented in the man page.
+- Fix `bcachefs migrate` failing on some devices due to O_DIRECT alignment
+  issues.
+- The stripe repair path now correctly handles full stripes with a block on a
+  device that has been force removed and need to be shrunk - instead of spinning
+  when it picked the block on the force-removed device to evacuate.
+
+### Tools
+
+- `bcachefs dump sanitize` output is now correct (was inverted for
+  certain key formats).
+- `list_journal -k` now correctly handles multiple ranges with
+  per-range signs.
+- GPG signing key for `apt.bcachefs.org` is now published directly
+  at that URL. (Note: Debian third-party-repo policy issue flagged
+  in #555 is not yet resolved; will address in a follow-up.)
+- Documentation for nocow+encryption interaction.
+
+### Documentation
+
+The principles of operations continues to grow; it now has more extensive
+documentation on btree internals and architecture, from folding in and updating
+documentation that was previously on the wiki.
+
 ## v1.37.5 - Mon Apr 7 2026
 
 New features:
