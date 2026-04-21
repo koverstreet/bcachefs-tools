@@ -957,6 +957,19 @@ err:
 		goto out;
 	}
 
+	/*
+	 * Can't cannibalize: if we got far enough to allocate b but not its
+	 * data, park it on the freed list so its cache indices and struct
+	 * are tracked — either reused by a future alloc or released at
+	 * teardown. Otherwise we'd leak the fast_list slot allocated by
+	 * __btree_node_mem_alloc().
+	 */
+	if (b) {
+		btree_node_to_freedlist(bc, b);
+		six_unlock_write(&b->c.lock);
+		six_unlock_intent(&b->c.lock);
+	}
+
 	mutex_unlock(&bc->lock);
 	return ERR_PTR(-BCH_ERR_ENOMEM_btree_node_mem_alloc);
 }
