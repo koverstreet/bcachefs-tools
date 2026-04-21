@@ -158,51 +158,49 @@ static inline void *idr_find(struct idr *idr, int id)
 	     ++id, (entry) = idr_get_next((idp), &(id)))
 
 /*
- * IDA - IDR based id allocator, use when translation from id to
- * pointer isn't necessary.
+ * IDA - ID allocator.
  *
- * IDA_BITMAP_LONGS is calculated to be one less to accommodate
- * ida_bitmap->nr_busy so that the whole struct fits in 128 bytes.
+ * Userspace bcachefs-tools implementation: a d-ary bitmap tree in a flat
+ * array, d == BITS_PER_LONG, eytzinger layout. Each node is a machine word;
+ * set bit = corresponding child subtree has at least one free id.
+ *
+ * Not a mirror of the kernel's xarray-backed ida - we don't need ID -> ptr
+ * translation, only alloc/free of unused integers.
  */
-#define IDA_CHUNK_SIZE		128	/* 128 bytes per chunk */
-#define IDA_BITMAP_LONGS	(IDA_CHUNK_SIZE / sizeof(long) - 1)
-#define IDA_BITMAP_BITS 	(IDA_BITMAP_LONGS * sizeof(long) * 8)
-
-struct ida_bitmap {
-	long			nr_busy;
-	unsigned long		bitmap[IDA_BITMAP_LONGS];
-};
 
 struct ida {
-	struct idr		idr;
-	struct ida_bitmap	*free_bitmap;
+	struct mutex		lock;
+	unsigned		depth;      /* 0 = uninitialized tree */
+	unsigned long		*nodes;     /* (BITS_PER_LONG^depth - 1) / (BITS_PER_LONG - 1) words */
 };
 
-#define IDA_INIT(name)		{ .idr = IDR_INIT((name).idr), .free_bitmap = NULL, }
+#define IDA_INIT(name)		{ .lock.lock = PTHREAD_MUTEX_INITIALIZER }
 #define DEFINE_IDA(name)	struct ida name = IDA_INIT(name)
 
-int ida_pre_get(struct ida *ida, gfp_t gfp_mask);
-int ida_get_new_above(struct ida *ida, int starting_id, int *p_id);
-void ida_remove(struct ida *ida, int id);
-void ida_destroy(struct ida *ida);
-void ida_init(struct ida *ida);
+void ida_init(struct ida *);
+void ida_destroy(struct ida *);
 
-int ida_simple_get(struct ida *ida, unsigned int start, unsigned int end,
-		   gfp_t gfp_mask);
-void ida_simple_remove(struct ida *ida, unsigned int id);
+int ida_alloc_range(struct ida *, unsigned min, unsigned max, gfp_t);
+void ida_free(struct ida *, unsigned id);
 
-/**
- * ida_get_new - allocate new ID
- * @ida:	idr handle
- * @p_id:	pointer to the allocated handle
- *
- * Simple wrapper around ida_get_new_above() w/ @starting_id of zero.
- */
-static inline int ida_get_new(struct ida *ida, int *p_id)
+int ida_alloc_batch(struct ida *, unsigned min, unsigned max, gfp_t,
+		    unsigned *ids, unsigned nr);
+
+int ida_find_first(struct ida *);
+
+static inline int ida_alloc(struct ida *ida, gfp_t gfp)
 {
-	return ida_get_new_above(ida, 0, p_id);
+	return ida_alloc_range(ida, 0, ~0U, gfp);
 }
 
-void __init idr_init_cache(void);
+static inline int ida_alloc_min(struct ida *ida, unsigned min, gfp_t gfp)
+{
+	return ida_alloc_range(ida, min, ~0U, gfp);
+}
+
+static inline int ida_alloc_max(struct ida *ida, unsigned max, gfp_t gfp)
+{
+	return ida_alloc_range(ida, 0, max, gfp);
+}
 
 #endif /* __IDR_H__ */
