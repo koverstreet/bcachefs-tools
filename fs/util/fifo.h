@@ -81,7 +81,7 @@ do {									\
 	_new_data != NULL;						\
 })
 
-#define fifo_used(fifo)		(((fifo)->back - (fifo)->front))
+#define fifo_used(fifo)		((typeof((fifo)->front)) ((fifo)->back - (fifo)->front))
 #define fifo_free(fifo)		((fifo)->size - fifo_used(fifo))
 
 #define fifo_empty(fifo)	((fifo)->front == (fifo)->back)
