@@ -754,13 +754,14 @@ CLOSURE_CALLBACK(bch2_journal_write)
 	BUG_ON(!w->write_started);
 	BUG_ON(w->write_allocated);
 	BUG_ON(w->write_done);
-	BUG_ON(journal_last_unallocated_seq(j) != le64_to_cpu(w->data->seq));
 
 	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
 
 	j->write_start_time = local_clock();
 
 	scoped_guard(spinlock, &j->lock) {
+		BUG_ON(journal_last_unallocated_seq(j) != le64_to_cpu(w->data->seq));
+
 		if (nr_rw_members > 1)
 			w->separate_flush = true;
 
