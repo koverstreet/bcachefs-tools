@@ -162,6 +162,12 @@ static void bch2_btree_node_data_free(struct bch_fs_btree_cache *bc, struct btre
 	btree_node_to_freedlist(bc, b);
 }
 
+void bch2_btree_node_mem_free(struct bch_fs *c, struct btree *b)
+{
+	six_lock_exit(&b->c.lock);
+	kfree(b);
+}
+
 static int bch2_btree_cache_cmp_fn(struct rhashtable_compare_arg *arg,
 				   const void *obj)
 {
@@ -254,7 +260,7 @@ struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *c)
 
 	if (btree_node_data_alloc(c, b, GFP_KERNEL, false)) {
 		__btree_node_data_free(b);
-		kfree(b);
+		bch2_btree_node_mem_free(c, b);
 		return NULL;
 	}
 
@@ -687,9 +693,8 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 		list_splice(&bc->freed_pcpu, &bc->freed_nonpcpu);
 
 		list_for_each_entry_safe(b, t, &bc->freed_nonpcpu, list) {
-			list_del(&b->list);
-			six_lock_exit(&b->c.lock);
-			kfree(b);
+			list_del_init(&b->list);
+			bch2_btree_node_mem_free(c, b);
 		}
 
 		for (unsigned i = 0; i < ARRAY_SIZE(bc->nr_by_btree); i++)
