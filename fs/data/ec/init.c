@@ -50,8 +50,6 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 
 	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(&s->k_i));
 
-	/* XXX: how much redundancy do we still have? check degraded flags */
-
 	unsigned nr_good = 0;
 
 	scoped_guard(rcu)
@@ -121,12 +119,24 @@ static bool should_cancel_stripe(struct bch_fs *c, struct ec_stripe_new *s, stru
 	if (!ca)
 		return true;
 
-	for (unsigned i = 0; i < s->new_stripe.key.v.nr_blocks; i++) {
-		if (!s->blocks[i])
-			continue;
+	struct bch_stripe *v = &s->new_stripe.key.v;
 
-		struct open_bucket *ob = c->allocator.open_buckets + s->blocks[i];
-		if (ob->dev == ca->dev_idx)
+	for (unsigned i = 0; i < v->nr_blocks; i++) {
+		/* Freshly allocated block - check the open_bucket's device: */
+		if (s->blocks[i]) {
+			struct open_bucket *ob = c->allocator.open_buckets + s->blocks[i];
+			if (ob->dev == ca->dev_idx)
+				return true;
+		}
+
+		/*
+		 * Reused block from an existing stripe: init_new_stripe_from_old()
+		 * copies the old ptr directly into new_stripe.key.v.ptrs[i] and
+		 * doesn't populate s->blocks[i], so we have to check the key's
+		 * ptrs explicitly for the reuse path.
+		 */
+		if (test_bit(i, s->blocks_allocated) &&
+		    v->ptrs[i].dev == ca->dev_idx)
 			return true;
 	}
 
