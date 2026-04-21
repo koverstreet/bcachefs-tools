@@ -11,9 +11,13 @@ struct {								\
 }
 
 #define FIFO(type)			__FIFO(type, size_t)
+#define FIFO_U16_IDX(type)		__FIFO(type, u16)
+#define FIFO_U32_IDX(type)		__FIFO(type, u32)
 #define FIFO_U64_IDX(type)		__FIFO(type, u64)
 
 #define DECLARE_FIFO(type, name)		FIFO(type) name
+#define DECLARE_FIFO_U16_IDX(type, name)	FIFO_U16_IDX(type) name
+#define DECLARE_FIFO_U32_IDX(type, name)	FIFO_U32_IDX(type) name
 #define DECLARE_FIFO_U64_IDX(type, name)	FIFO_U64_IDX(type) name
 
 #define fifo_buf_size(fifo)						\
@@ -54,6 +58,19 @@ do {									\
 		fifo_push(dest, _t);					\
 } while (0)
 
+#define __fifo_grow(fifo, _new_data, _new_size)			\
+({								\
+	size_t _old_size = fifo_buf_size(fifo);			\
+	typeof((fifo)->data) _old_data = (fifo)->data;		\
+								\
+	memcpy(_new_data,					\
+	       _old_data, _old_size);				\
+	memcpy(_new_data + (fifo)->mask + 1,			\
+	       _old_data, _old_size);				\
+	(fifo)->size	= _new_size;				\
+	(fifo)->mask	= roundup_pow_of_two(_new_size) - 1;	\
+})
+
 /*
  * Double the size of a fifo, preserving front and back indices.
  *
@@ -69,14 +86,9 @@ do {									\
 	typeof((fifo)->data) _new_data =				\
 		kvmalloc(_osize * 2, (_gfp));				\
 	if (_new_data) {						\
-		memcpy(_new_data,					\
-		       (fifo)->data, _osize);				\
-		memcpy(_new_data + (fifo)->mask + 1,			\
-		       (fifo)->data, _osize);				\
+		__fifo_grow(fifo, _new_data, _new_size);		\
 		kvfree((fifo)->data);					\
-		(fifo)->data	= _new_data;				\
-		(fifo)->size	= _new_size;				\
-		(fifo)->mask	= roundup_pow_of_two(_new_size) - 1;	\
+		(fifo)->data = _new_data;				\
 	}								\
 	_new_data != NULL;						\
 })
@@ -142,6 +154,12 @@ do {									\
 #define fifo_push(fifo, i)	fifo_push_back(fifo, (i))
 #define fifo_pop(fifo, i)	fifo_pop_front(fifo, (i))
 #define fifo_peek(fifo)		fifo_peek_front(fifo)
+
+#define fifo_for_each_entry_from(_entry, _fifo, _iter)			\
+	for (typecheck(typeof((_fifo)->front), _iter);			\
+	     ((_iter != (_fifo)->back) &&				\
+	      (_entry = fifo_entry(_fifo, _iter), true));		\
+	     (_iter)++)
 
 #define fifo_for_each_entry(_entry, _fifo, _iter)			\
 	for (typecheck(typeof((_fifo)->front), _iter),			\
