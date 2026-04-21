@@ -662,8 +662,6 @@ static void bch2_sb_update(struct bch_fs *c)
 	c->sb.compat		= le64_to_cpu(src->compat[0]);
 	c->sb.multi_device	= BCH_SB_MULTI_DEVICE(src);
 
-	memset(c->sb.errors_silent, 0, sizeof(c->sb.errors_silent));
-
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(src, ext);
 	if (ext) {
 		c->sb.recovery_passes_required =
@@ -672,6 +670,8 @@ static void bch2_sb_update(struct bch_fs *c)
 		le_bitvector_to_cpu(c->sb.errors_silent, (void *) ext->errors_silent,
 				    sizeof(c->sb.errors_silent) * 8);
 		c->sb.btrees_lost_data = le64_to_cpu(ext->btrees_lost_data);
+	} else {
+		memset(c->sb.errors_silent, 0, sizeof(c->sb.errors_silent));
 	}
 
 	bch2_sb_members_to_cpu(c);
