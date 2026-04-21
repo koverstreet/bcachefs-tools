@@ -13,6 +13,7 @@ struct btree_iter;
 void bch2_recalc_btree_reserve(struct bch_fs *);
 
 void bch2_btree_node_to_freelist(struct bch_fs *, struct btree *);
+void bch2_btree_node_mem_free(struct bch_fs *, struct btree *);
 
 void __bch2_btree_node_hash_remove(struct bch_fs_btree_cache *, struct btree *);
 void bch2_btree_node_hash_remove(struct bch_fs_btree_cache *, struct btree *);

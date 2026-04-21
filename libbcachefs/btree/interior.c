@@ -1392,8 +1392,10 @@ err:
 static void bch2_btree_set_root_inmem(struct bch_fs *c, struct btree *b)
 {
 	/* Root nodes cannot be reaped */
-	scoped_guard(mutex, &c->btree.cache.lock)
+	scoped_guard(mutex, &c->btree.cache.lock) {
+		set_btree_node_permanent(b);
 		list_del_init(&b->list);
+	}
 
 	scoped_guard(mutex, &c->btree.cache.root_lock)
 		bch2_btree_id_root(c, b->c.btree_id)->b = b;
@@ -2038,8 +2040,15 @@ static void __btree_increase_depth(struct btree_update *as, struct btree_trans *
 	bch2_trans_node_add(trans, path, n);
 	six_unlock_intent(&n->c.lock);
 
-	scoped_guard(mutex, &c->btree.cache.lock)
-		list_add_tail(&b->list, &c->btree.cache.live[btree_node_pinned(b)].list);
+	/*
+	 * Old root is no longer a root: clear permanent so the add helpers
+	 * will let it onto live/clean. Add to live now; the clean list will
+	 * be rejoined when/if clear_btree_node_dirty_acct fires.
+	 */
+	scoped_guard(mutex, &c->btree.cache.lock) {
+		clear_btree_node_permanent(b);
+		BUG_ON(bch2_btree_node_hash_insert(&c->btree.cache, b, b->c.level, b->c.btree_id));
+	}
 
 	bch2_trans_verify_locks(trans);
 }

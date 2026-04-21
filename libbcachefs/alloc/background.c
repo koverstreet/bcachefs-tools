@@ -1339,8 +1339,21 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 		}
 
 		if (statechange_to(a->data_type == BCH_DATA_free)) {
-			/* Transitioning to free: should not have NEED_DISCARD set */
+			/*
+			 * Transitioning to free: should not have NEED_DISCARD set.
+			 * Two legitimate paths:
+			 *   - from need_discard via the discard path (with
+			 *     BTREE_TRIGGER_is_discard)
+			 *   - from need_gc_gens via bch2_gc_gens() bumping
+			 *     oldest_gen (bucket has been empty the whole time,
+			 *     no discard needed - alloc_data_type() just stopped
+			 *     returning need_gc_gens)
+			 */
 			WARN_ON(BCH_ALLOC_V4_NEED_DISCARD(new_a));
+			BUG_ON(old_a->data_type != BCH_DATA_need_discard &&
+			       old_a->data_type != BCH_DATA_need_gc_gens);
+			BUG_ON(old_a->data_type == BCH_DATA_need_discard &&
+			       !(flags & BTREE_TRIGGER_is_discard));
 
 			new_a->journal_seq_nonempty = new_a->journal_seq_empty = 0;
 

@@ -1172,6 +1172,9 @@ static __always_inline int btree_path_down(struct btree_trans *trans,
 	if (btree_node_read_locked(path, level + 1))
 		btree_node_unlock(trans, path, level + 1);
 
+	if (unlikely(btree_node_needs_merge(trans, b, 0)))
+		bch2_btree_node_merge_async(trans->c, b);
+
 	mark_btree_node_locked(trans, path, level,
 			       (enum btree_node_locked_type) lock_type);
 	path->level = level;

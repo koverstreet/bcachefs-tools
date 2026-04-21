@@ -677,6 +677,7 @@ static int __bch2_fs_recovery(struct bch_fs *c)
 
 	if (!c->sb.clean ||
 	    c->opts.retain_recovery_info ||
+	    c->opts.journal_rewind ||
 	    c->opts.scrub_recent_journal_entries == BCH_SCRUB_JOURNAL_always) {
 		struct genradix_iter iter;
 		struct journal_replay **i;
@@ -784,6 +785,7 @@ use_clean:
 				journal_start.replay_end,
 				c->opts.journal_rewind));
 		bch2_ignore_journal_rewind_errors(c);
+		try(bch2_journal_reread_for_rewind(c));
 	}
 
 	if (c->sb.features & BIT_ULL(BCH_FEATURE_no_alloc_info)) {
@@ -907,20 +909,21 @@ use_clean:
 		bch2_flush_fsck_errs(c);
 
 		bch_info(c, "Fixed errors, running fsck a second time to verify fs is clean");
-		errors_fixed = test_bit(BCH_FS_errors_fixed, &c->flags);
-		clear_bit(BCH_FS_errors_fixed, &c->flags);
-		clear_bit(BCH_FS_errors_fixed_silent, &c->flags);
+
+		bool saved_fixed        = test_and_clear_bit(BCH_FS_errors_fixed,        &c->flags);
+		bool saved_fixed_silent = test_and_clear_bit(BCH_FS_errors_fixed_silent, &c->flags);
 
 		try(bch2_run_recovery_passes_startup(c, BCH_RECOVERY_PASS_check_alloc_info));
 
-		if (errors_fixed ||
-		    test_bit(BCH_FS_errors_not_fixed, &c->flags)) {
+		if (test_bit(BCH_FS_errors_fixed,        &c->flags) ||
+		    test_bit(BCH_FS_errors_fixed_silent, &c->flags) ||
+		    test_bit(BCH_FS_errors_not_fixed,    &c->flags)) {
 			bch_err(c, "Second fsck run was not clean");
 			set_bit(BCH_FS_errors_not_fixed, &c->flags);
 		}
 
-		if (errors_fixed)
-			set_bit(BCH_FS_errors_fixed, &c->flags);
+		mod_bit(BCH_FS_errors_fixed,        &c->flags, saved_fixed);
+		mod_bit(BCH_FS_errors_fixed_silent, &c->flags, saved_fixed_silent);
 	}
 
 	if (enabled_qtypes(c)) {

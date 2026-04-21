@@ -612,6 +612,38 @@ void bch2_journal_quiesce(struct journal *j)
 	wait_event(j->wait, journal_quiesced(j));
 }
 
+/*
+ * Shutdown-only quiesce: bch2_journal_quiesce() waits for writes to have
+ * landed on disk, but journal_write_done() still has bookkeeping to do after
+ * the write completes - notably bch2_journal_update_last_seq_ondisk() and
+ * replicas_refs_put(), which is what triggers the final mark_clean via
+ * __replicas_entry_kill() + bch2_write_super(). Wait for all of that to
+ * drain so the fs ends up marked clean.
+ *
+ * On journal error, flushed_seq_ondisk stops advancing (the update path in
+ * journal_write_done is gated on !j->err_seq), so fall back to the regular
+ * quiesce condition (seq == seq_ondisk), which always terminates since
+ * seq_ondisk is updated unconditionally for every completed write. Handles
+ * the race where the journal transitions to error state mid-wait.
+ */
+static bool journal_shutdown_quiesced(struct journal *j)
+{
+	guard(spinlock)(&j->lock);
+	u64 seq = atomic64_read(&j->seq);
+	bool ret = bch2_journal_error(j)
+		? seq == j->seq_ondisk
+		: seq == j->flushed_seq_ondisk;
+
+	if (!ret)
+		journal_entry_close_locked(j);
+	return ret;
+}
+
+void bch2_journal_shutdown_quiesce(struct journal *j)
+{
+	wait_event(j->wait, journal_shutdown_quiesced(j));
+}
+
 void bch2_journal_write_work(struct work_struct *work)
 {
 	struct journal *j = container_of(work, struct journal, write_work.work);

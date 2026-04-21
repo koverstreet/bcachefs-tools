@@ -260,9 +260,10 @@ static int read_btree_nodes_worker(void *p)
 		}
 	}
 err:
-	if (b)
+	if (b) {
 		bch2_btree_node_data_free_locked(b);
-	kfree(b);
+		bch2_btree_node_mem_free(c, b);
+	}
 	bio_put(bio);
 	enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_btree_node_scan);
 	closure_put(w->cl);
