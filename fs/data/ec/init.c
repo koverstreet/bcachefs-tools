@@ -178,6 +178,31 @@ void bch2_fs_ec_flush(struct bch_fs *c)
 	wait_event(c->ec.stripe_new_wait, bch2_fs_ec_flush_done(c));
 }
 
+static bool bch2_fs_ec_flush_outstanding_done(struct bch_fs *c, u64 wait_seq)
+{
+	sched_annotate_sleep();
+
+	guard(mutex)(&c->ec.stripe_new_lock);
+	struct ec_stripe_new *s;
+	list_for_each_entry(s, &c->ec.stripe_new_list, list)
+		if (s->seq <= wait_seq)
+			return false;
+	return true;
+}
+
+/*
+ * Wait for all stripe_new entries that were on stripe_new_list at call time to
+ * complete. Unlike bch2_fs_ec_flush(), doesn't wait for list_empty - so is
+ * bounded by the in-flight set at call time, not affected by new stripes
+ * started by other devices afterward.
+ */
+void bch2_fs_ec_flush_outstanding(struct bch_fs *c)
+{
+	u64 wait_seq = atomic64_read(&c->ec.stripe_new_seq);
+	wait_event(c->ec.stripe_new_wait,
+		   bch2_fs_ec_flush_outstanding_done(c, wait_seq));
+}
+
 int bch2_stripes_read(struct bch_fs *c)
 {
 	return 0;

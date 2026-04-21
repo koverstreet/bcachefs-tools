@@ -39,6 +39,8 @@ struct ec_stripe_new {
 
 	atomic_t		ref[STRIPE_REF_NR];
 
+	u64			seq;
+
 	int			err;
 
 	struct bch_devs_mask	devs;

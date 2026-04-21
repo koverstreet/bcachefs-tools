@@ -10,6 +10,7 @@ int bch2_dev_remove_stripes(struct bch_fs *, unsigned, unsigned, struct printbuf
 void bch2_ec_stop_dev(struct bch_fs *, struct bch_dev *);
 void bch2_fs_ec_stop(struct bch_fs *);
 void bch2_fs_ec_flush(struct bch_fs *);
+void bch2_fs_ec_flush_outstanding(struct bch_fs *);
 
 int bch2_stripes_read(struct bch_fs *);
 
