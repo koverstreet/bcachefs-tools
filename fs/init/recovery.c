@@ -677,6 +677,7 @@ static int __bch2_fs_recovery(struct bch_fs *c)
 
 	if (!c->sb.clean ||
 	    c->opts.retain_recovery_info ||
+	    c->opts.journal_rewind ||
 	    c->opts.scrub_recent_journal_entries == BCH_SCRUB_JOURNAL_always) {
 		struct genradix_iter iter;
 		struct journal_replay **i;
@@ -784,6 +785,7 @@ use_clean:
 				journal_start.replay_end,
 				c->opts.journal_rewind));
 		bch2_ignore_journal_rewind_errors(c);
+		try(bch2_journal_reread_for_rewind(c));
 	}
 
 	if (c->sb.features & BIT_ULL(BCH_FEATURE_no_alloc_info)) {
