@@ -208,24 +208,17 @@ static noinline void print_chain(struct printbuf *out, struct lock_graph *g)
 	prt_newline(out);
 }
 
-static void lock_graph_up(struct lock_graph *g)
+static void lock_graph_pop_all(struct lock_graph *g)
 {
-	closure_put(&g->g[--g->nr].trans->ref);
-}
-
-static noinline void lock_graph_pop_all(struct lock_graph *g)
-{
-	while (g->nr)
-		lock_graph_up(g);
+	g->nr = 0;
 }
 
 static noinline void lock_graph_pop_from(struct lock_graph *g, struct trans_waiting_for_lock *i)
 {
-	while (g->g + g->nr > i)
-		lock_graph_up(g);
+	g->nr = i - g->g;
 }
 
-static void __lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
+static void lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
 {
 	g->g[g->nr++] = (struct trans_waiting_for_lock) {
 		.trans		= trans,
@@ -233,12 +226,6 @@ static void __lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
 		.lock_want	= trans->locking_wait.lock_want,
 	};
 	g->printed_chain = false;
-}
-
-static void lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
-{
-	closure_get(&trans->ref);
-	__lock_graph_down(g, trans);
 }
 
 /*
@@ -387,14 +374,10 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 	struct btree_trans *orig_trans = g->g->trans;
 
 	for (struct trans_waiting_for_lock *i = g->g; i < g->g + g->nr; i++)
-		if (i->trans == trans) {
-			closure_put(&trans->ref);
+		if (i->trans == trans)
 			return break_cycle(g, cycle, i);
-		}
 
 	if (unlikely(g->nr == ARRAY_SIZE(g->g))) {
-		closure_put(&trans->ref);
-
 		if (orig_trans->lock_may_not_fail) {
 			/* Other threads will have to rerun the cycle detector: */
 			for (struct trans_waiting_for_lock *i = g->g + 1; i < g->g + g->nr; i++)
@@ -414,7 +397,7 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 		return btree_trans_restart(orig_trans, BCH_ERR_transaction_restart_deadlock_recursion_limit);
 	}
 
-	__lock_graph_down(g, trans);
+	lock_graph_down(g, trans);
 	return 0;
 }
 
@@ -504,14 +487,20 @@ next:
 				goto next;
 			}
 
-			raw_spin_lock(&b->lock.wait_lock);
-			struct six_lock_wait_fifo *wf = rcu_dereference_protected(
-				b->lock.wait_fifo, lockdep_is_held(&b->lock.wait_lock));
+			/*
+			 * Lockless walk: we're under guard(rcu)() at the top of
+			 * this function, and trans memory is RCU-deferred in
+			 * bch2_trans_put, so dereferencing wait_fifo and any
+			 * waiter pointers we pull out of it is safe for the
+			 * duration of this call. Per-CPU cache reuse within a
+			 * grace period can cause us to descend into a reused
+			 * trans instead of the one we observed — that's a race
+			 * we accept; cycles missed this pass are caught next.
+			 */
+			struct six_lock_wait_fifo *wf = rcu_dereference(b->lock.wait_fifo);
 
-			if (fifo_empty(wf)) {
-				raw_spin_unlock(&b->lock.wait_lock);
+			if (fifo_empty(wf))
 				continue;
-			}
 
 			struct six_lock_waiter *w;
 
@@ -543,9 +532,6 @@ next:
 				    !lock_type_conflicts(lock_held, trans->locking_wait.lock_want))
 					continue;
 
-				closure_get(&trans->ref);
-				raw_spin_unlock(&b->lock.wait_lock);
-
 				ret = lock_graph_descend(&g, trans, cycle);
 				if (ret)
 					goto out;
@@ -554,7 +540,6 @@ next:
 				goto next;
 
 			}
-			raw_spin_unlock(&b->lock.wait_lock);
 
 			top->waitlist_idx_initialized = false;
 		}
@@ -562,7 +547,7 @@ next:
 up:
 	if (cycle)
 		print_chain(cycle, &g);
-	lock_graph_up(&g);
+	--g.nr;
 	goto next;
 out:
 	if (cycle)
