@@ -3666,13 +3666,17 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 		bch2_trans_unlock_long(trans);
 
 	if (need_resched() ||
-	    time_after64(now, trans->last_begin_time + BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS)) {
+	    time_after64(now, trans->last_begin_time_nonrestarted +
+			 BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS)) {
 		bch2_trans_unlock(trans);
 
 		trans_migrate_enable(trans);
 		cond_resched();
 		now = local_clock();
 	}
+
+	if (!trans->restarted)
+		trans->last_begin_time_nonrestarted = now;
 	trans->last_begin_time = now;
 
 	trans->last_begin_ip = _RET_IP_;
@@ -3771,7 +3775,6 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	struct btree_trans *trans = bch2_trans_alloc(c);
 
 	trans->c		= c;
-	trans->last_begin_time	= local_clock();
 	trans->fn_idx		= fn_idx;
 	trans->locking_wait.task = current;
 	trans->journal_replay_not_finished =
@@ -3811,6 +3814,10 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	trans->srcu_lock_time	= jiffies;
 	trans->srcu_held	= true;
 	trans_set_locked(trans, false);
+
+	u64 now = local_clock();
+	trans->last_begin_time_nonrestarted = now;
+	trans->last_begin_time = now;
 
 	closure_init_stack_release(&trans->ref);
 	return trans;

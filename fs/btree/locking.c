@@ -299,15 +299,17 @@ static int abort_lock(struct lock_graph *g, struct trans_waiting_for_lock *i)
 	}
 }
 
-static int btree_trans_abort_preference(struct btree_trans *trans)
+static struct trans_waiting_for_lock *
+btree_trans_abort_preference(struct trans_waiting_for_lock *l,
+			     struct trans_waiting_for_lock *r)
 {
-	if (trans->lock_may_not_fail)
-		return 0;
-	if (trans->locking_wait.lock_want == SIX_LOCK_write)
-		return 1;
-	if (!trans->in_traverse_all)
-		return 2;
-	return 3;
+	if (l->trans->lock_may_not_fail !=
+	    r->trans->lock_may_not_fail)
+		return l->trans->lock_may_not_fail ? r : l;
+
+	return time_after64(l->trans->last_begin_time_nonrestarted,
+			    r->trans->last_begin_time_nonrestarted)
+		? l : r;
 }
 
 static noinline __noreturn void break_cycle_fail(struct lock_graph *g)
@@ -336,7 +338,6 @@ static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
 				struct trans_waiting_for_lock *from)
 {
 	struct trans_waiting_for_lock *i, *abort = NULL;
-	unsigned best = 0, pref;
 	int ret;
 
 	if (lock_graph_remove_non_waiters(g, from))
@@ -347,15 +348,10 @@ static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
 		print_cycle(cycle, g);
 		ret = -1;
 	} else {
-		for (i = from; i < g->g + g->nr; i++) {
-			pref = btree_trans_abort_preference(i->trans);
-			if (pref > best) {
-				abort = i;
-				best = pref;
-			}
-		}
+		for (i = from; i < g->g + g->nr; i++)
+			abort = !abort ? i : btree_trans_abort_preference(abort, i);
 
-		if (unlikely(!best))
+		if (unlikely(abort->trans->lock_may_not_fail))
 			break_cycle_fail(g);
 
 		ret = abort_lock(g, abort);

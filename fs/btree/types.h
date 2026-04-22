@@ -583,6 +583,7 @@ struct btree_trans {
 	u32			restart_count_this_trans;
 #endif
 
+	u64			last_begin_time_nonrestarted;
 	u64			last_begin_time;
 	unsigned long		last_begin_ip;
 	unsigned long		last_restarted_ip;
