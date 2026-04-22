@@ -261,6 +261,7 @@ static int str_hash_dup_entries(struct btree_trans *trans,
 	CLASS(btree_iter, del_iter)(trans, desc->btree_id,
 				    SPOS(dup_k.k->p.inode, dup_k.k->p.offset, k.k->p.snapshot),
 				    BTREE_ITER_slots);
+	try(bch2_btree_iter_traverse(&del_iter));
 	try(bch2_hash_delete_at(trans, *desc, hash_info, &del_iter, 0));
 
 	return bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
