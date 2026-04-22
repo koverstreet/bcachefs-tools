@@ -337,7 +337,7 @@ void bch2_fs_journal_stop(struct journal *j)
 	 */
 	__bch2_journal_meta(j);
 
-	bch2_journal_quiesce(j);
+	bch2_journal_shutdown_quiesce(j);
 	cancel_delayed_work_sync(&j->write_work);
 
 	WARN(!bch2_journal_error(j) &&

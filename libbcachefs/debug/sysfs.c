@@ -252,17 +252,8 @@ write_attribute(perf_test);
 static size_t bch2_btree_cache_size(struct bch_fs *c)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
-	size_t ret = 0;
-	struct btree *b;
 
-	guard(mutex)(&bc->lock);
-	list_for_each_entry(b, &bc->live[0].list, list)
-		ret += btree_buf_bytes(b);
-	list_for_each_entry(b, &bc->live[1].list, list)
-		ret += btree_buf_bytes(b);
-	list_for_each_entry(b, &bc->freeable, list)
-		ret += btree_buf_bytes(b);
-	return ret;
+	return (bc->live[0].nr + bc->live[1].nr) * c->opts.btree_node_size;
 }
 
 static int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c)

@@ -39,6 +39,8 @@ struct ec_stripe_new {
 
 	atomic_t		ref[STRIPE_REF_NR];
 
+	u64			seq;
+
 	int			err;
 
 	struct bch_devs_mask	devs;
@@ -129,6 +131,13 @@ static inline void ec_stripe_new_put(struct bch_fs *c, struct ec_stripe_new *s,
 			bch2_ec_stripe_new_free(c, s);
 			break;
 		case STRIPE_REF_io:
+			/*
+			 * seq is the commit-ready marker: assigned when all
+			 * accumulating writes have finished (refs drained).
+			 * bch2_fs_ec_flush_outstanding() waits on this.
+			 */
+			s->seq = atomic64_inc_return(&c->ec.stripe_new_seq);
+			wake_up(&c->ec.stripe_new_wait);
 			bch2_ec_stripe_create_start(c, s);
 			break;
 		default:

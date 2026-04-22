@@ -169,7 +169,6 @@ enum bch_btree_cache_not_freed_reasons {
 struct btree_cache_list {
 	unsigned		idx;
 	struct shrinker		*shrink;
-	struct list_head	list;
 	size_t			nr;
 };
 
@@ -207,6 +206,7 @@ struct bch_fs_btree_cache {
 	struct list_head	freeable;
 	struct list_head	freed_pcpu;
 	struct list_head	freed_nonpcpu;
+	struct list_head	list;
 	struct btree_cache_list	live[2];
 
 	size_t			nr_vmalloc;
@@ -293,7 +293,8 @@ struct btree_node_iter {
 	x(gc)					\
 	x(insert)				\
 	x(overwrite)				\
-	x(is_root)
+	x(is_root)				\
+	x(is_discard)
 
 enum {
 #define x(n) BTREE_ITER_FLAG_BIT_##n,
@@ -621,6 +622,7 @@ struct btree_trans {
 
 	struct list_head	list;
 	struct closure		ref;
+	struct rcu_head		rcu;
 
 	unsigned long		_paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)];
 	struct btree_trans_paths trans_paths;
@@ -713,7 +715,8 @@ enum btree_write_type {
 	x(need_rewrite_error)						\
 	x(need_rewrite_ptr_written_zero)				\
 	x(never_write)							\
-	x(pinned)
+	x(pinned)							\
+	x(permanent)
 
 enum btree_flags {
 	/* First bits for btree node write type */

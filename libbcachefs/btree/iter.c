@@ -1172,6 +1172,9 @@ static __always_inline int btree_path_down(struct btree_trans *trans,
 	if (btree_node_read_locked(path, level + 1))
 		btree_node_unlock(trans, path, level + 1);
 
+	if (unlikely(btree_node_needs_merge(trans, b, 0)))
+		bch2_btree_node_merge_async(trans->c, b);
+
 	mark_btree_node_locked(trans, path, level,
 			       (enum btree_node_locked_type) lock_type);
 	path->level = level;
@@ -1191,6 +1194,14 @@ static int bch2_btree_path_traverse_all(struct btree_trans *trans)
 	if (trans->in_traverse_all)
 		return bch_err_throw(c, transaction_restart_in_traverse_all);
 
+	/*
+	 * XXX: when restart reason is transaction_restart_lock_waitlist_alloc,
+	 * we should wait for lock contention to drop (FIFO to drain) before
+	 * retrying, otherwise we'll just keep hammering the same full waitlist.
+	 * Currently there's no mechanism to hook back-off on a specific lock;
+	 * adding one is nontrivial. For now we just retry and rely on timing /
+	 * other waiters completing to give us room.
+	 */
 	trans->in_traverse_all = true;
 retry_all:
 	trans->restarted = 0;
@@ -3854,6 +3865,12 @@ static void check_btree_paths_leaked(struct btree_trans *trans)
 static inline void check_btree_paths_leaked(struct btree_trans *trans) {}
 #endif
 
+static void trans_rcu_free(struct rcu_head *rcu)
+{
+	struct btree_trans *trans = container_of(rcu, struct btree_trans, rcu);
+	mempool_free(trans, &trans->c->btree.trans.pool);
+}
+
 void bch2_trans_put(struct btree_trans *trans)
 	__releases(&c->btree.trans.barrier)
 {
@@ -3913,7 +3930,16 @@ void bch2_trans_put(struct btree_trans *trans)
 		list_del(&trans->list);
 		seqmutex_unlock(&c->btree.trans.lock);
 
-		mempool_free(trans, &c->btree.trans.pool);
+		/*
+		 * RCU-defer the mempool return: the cycle detector walks
+		 * wait_fifos under RCU without holding closure refs, so other
+		 * threads may be mid-access of this trans via a pointer they
+		 * read from a wait_fifo slot. Grace period ensures the memory
+		 * isn't reused for a different struct before those walks
+		 * finish; per-CPU cache reuse within a grace period is
+		 * identity-confusion (acceptable per probabilistic detection).
+		 */
+		call_rcu(&trans->rcu, trans_rcu_free);
 	}
 }
 
@@ -4057,6 +4083,8 @@ void bch2_fs_btree_iter_exit(struct bch_fs *c)
 		synchronize_srcu_expedited(&c->btree.trans.barrier);
 		cleanup_srcu_struct(&c->btree.trans.barrier);
 	}
+	/* Drain pending trans_rcu_free callbacks before the pool is gone. */
+	rcu_barrier();
 	mempool_exit(&c->btree.trans.malloc_pool);
 	mempool_exit(&c->btree.trans.pool);
 }

@@ -156,7 +156,6 @@ static int __discard_mark_free(struct btree_trans *trans,
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "Discarded bucket that is no longer BCH_DATA_need_discard!\n");
 		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&a->k_i));
-		panic("%s\n", msg.m.buf);
 
 		bch2_fs_emergency_read_only(c, &msg.m);
 		return bch_err_throw(c, emergency_ro);
@@ -169,7 +168,7 @@ static int __discard_mark_free(struct btree_trans *trans,
 	SET_BCH_ALLOC_V4_NEED_DISCARD(&a->v, false);
 	alloc_data_type_set(&a->v, a->v.data_type);
 
-	try(bch2_trans_update(trans, iter, &a->k_i, 0));
+	try(bch2_trans_update(trans, iter, &a->k_i, BTREE_TRIGGER_is_discard));
 
 	try(bch2_trans_commit(trans, NULL, NULL,
 			      BCH_WATERMARK_reclaim|

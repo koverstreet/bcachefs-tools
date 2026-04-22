@@ -2,6 +2,7 @@
 #define __LINUX_PREEMPT_H
 
 #include <linux/cleanup.h>
+#include <linux/irqflags.h>
 
 extern void preempt_disable(void);
 extern void preempt_enable(void);

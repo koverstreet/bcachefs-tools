@@ -454,6 +454,7 @@ static inline int bch2_journal_res_get(struct journal *j, struct journal_res *re
 }
 
 void bch2_journal_quiesce(struct journal *);
+void bch2_journal_shutdown_quiesce(struct journal *);
 void bch2_journal_write_work(struct work_struct *);
 
 /* journal_entry_res: */

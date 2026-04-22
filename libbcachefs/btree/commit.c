@@ -245,25 +245,29 @@ static int __btree_node_flush(struct journal *j, struct journal_entry_pin *pin,
 	unsigned idx = w - b->writes;
 
 	CLASS(btree_trans, trans)(c);
-	btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_read);
+	return lockrestart_do(trans, ({
+		btree_path_idx_t path_idx;
+		int ret = bch2_btree_node_lock_with_path(trans, b, SIX_LOCK_read, &path_idx);
+		if (!ret) {
+			old = READ_ONCE(b->flags);
+			do {
+				new = old;
 
-	old = READ_ONCE(b->flags);
-	do {
-		new = old;
+				if (!(old & (1 << BTREE_NODE_dirty)) ||
+				    !!(old & (1 << BTREE_NODE_write_idx)) != idx ||
+				    w->journal.seq != seq)
+					break;
 
-		if (!(old & (1 << BTREE_NODE_dirty)) ||
-		    !!(old & (1 << BTREE_NODE_write_idx)) != idx ||
-		    w->journal.seq != seq)
-			break;
+				new &= ~BTREE_WRITE_TYPE_MASK;
+				new |= BTREE_WRITE_journal_reclaim;
+				new |= 1 << BTREE_NODE_need_write;
+			} while (!try_cmpxchg(&b->flags, &old, new));
 
-		new &= ~BTREE_WRITE_TYPE_MASK;
-		new |= BTREE_WRITE_journal_reclaim;
-		new |= 1 << BTREE_NODE_need_write;
-	} while (!try_cmpxchg(&b->flags, &old, new));
-
-	btree_node_write_if_need(trans, b, SIX_LOCK_read);
-	six_unlock_read(&b->c.lock);
-	return 0;
+			btree_node_write_if_need(trans, b, SIX_LOCK_read);
+			bch2_btree_node_unlock_with_path(trans, path_idx, b->c.level);
+		}
+		ret;
+	}));
 }
 
 int bch2_btree_node_flush0(struct journal *j, struct journal_entry_pin *pin, u64 seq)
@@ -908,28 +912,29 @@ static inline int do_bch2_trans_commit(struct btree_trans *trans,
 		try(bch2_trans_subbuf_reserve(trans, &trans->journal_entries,
 					      trans->extra_journal_u64s));
 
+	try(bch2_trans_lock_write(trans));
+
 	if (unlikely(trans->journal_replay_not_finished)) {
-		try(bch2_trans_mutex_lock(trans, &c->journal_keys.overwrite_lock));
+		mutex_lock(&c->journal_keys.overwrite_lock);
 
 		if ((flags & BCH_TRANS_COMMIT_journal_replay) &&
 		    bch2_check_drop_overwrites_from_journal(trans, true)) {
 			mutex_unlock(&c->journal_keys.overwrite_lock);
+			bch2_trans_unlock_updates_write(trans);
 			return btree_trans_restart(trans,
-					     BCH_ERR_transaction_restart_journal_overwrites_changed);
+					BCH_ERR_transaction_restart_journal_overwrites_changed);
 		}
 	}
 
-	int ret = bch2_trans_lock_write(trans);
-	if (likely(!ret)) {
-		ret = bch2_trans_commit_write_locked(trans, flags, stopped_at, trace_ip);
-		bch2_trans_unlock_updates_write(trans);
-	}
+	int ret = bch2_trans_commit_write_locked(trans, flags, stopped_at, trace_ip);
 
 	if (unlikely(trans->journal_replay_not_finished)) {
 		if (!ret)
 			bch2_check_drop_overwrites_from_journal(trans, false);
 		mutex_unlock(&c->journal_keys.overwrite_lock);
 	}
+
+	bch2_trans_unlock_updates_write(trans);
 
 	if (!ret && trans->journal_pin)
 		bch2_journal_pin_add(&c->journal, trans->journal_res.seq,

@@ -5,5 +5,5 @@ AUTOINSTALL=yes
 BUILT_MODULE_NAME[0]="bcachefs"
 BUILT_MODULE_LOCATION[0]="src/fs/bcachefs"
 DEST_MODULE_LOCATION[0]="/kernel/fs/bcachefs"
-# Regex matches 6.16-6.99.9
-BUILD_EXCLUSIVE_KERNEL="^(6\.(1[6-9]|[2-9][0-9])|[7-9]\d*)\."
+# kernels older than 6.16 are currently not supported
+BUILD_EXCLUSIVE_KERNEL_MIN="6.16"

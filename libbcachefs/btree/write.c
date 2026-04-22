@@ -83,18 +83,6 @@ static void __btree_node_write_done(struct bch_fs *c, struct btree *b, u64 start
 	}
 }
 
-static void btree_node_write_done(struct bch_fs *c, struct btree *b, u64 start_time)
-{
-	struct btree_trans *trans = bch2_trans_get(c);
-
-	btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_read);
-
-	/* we don't need transaction context anymore after we got the lock. */
-	bch2_trans_put(trans);
-	__btree_node_write_done(c, b, start_time);
-	six_unlock_read(&b->c.lock);
-}
-
 static int btree_node_write_update_key(struct btree_trans *trans,
 				       struct btree_write_bio *wbio, struct btree *b)
 {
@@ -147,8 +135,10 @@ static void btree_node_write_work(struct work_struct *work)
 		wbio->wbio.used_mempool,
 		wbio->data);
 
+	CLASS(btree_trans, trans)(c);
+
 	if (!wbio->wbio.first_btree_write || wbio->wbio.failed.nr) {
-		int ret = bch2_trans_do(c, btree_node_write_update_key(trans, wbio, b));
+		int ret = lockrestart_do(trans, btree_node_write_update_key(trans, wbio, b));
 		if (ret)
 			set_btree_node_noevict(b);
 
@@ -181,7 +171,16 @@ static void btree_node_write_work(struct work_struct *work)
 
 	async_object_list_del(c, btree_write_bio, wbio->list_idx);
 	bio_put(&wbio->wbio.bio);
-	btree_node_write_done(c, b, start_time);
+
+	lockrestart_do(trans, ({
+		btree_path_idx_t path_idx;
+		int ret = bch2_btree_node_lock_with_path(trans, b, SIX_LOCK_read, &path_idx);
+		if (!ret) {
+			__btree_node_write_done(c, b, start_time);
+			bch2_btree_node_unlock_with_path(trans, path_idx, b->c.level);
+		}
+		ret;
+	}));
 }
 
 static void btree_node_write_endio(struct bio *bio)
