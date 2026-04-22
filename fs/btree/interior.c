@@ -286,10 +286,17 @@ static void bch2_btree_node_free_never_used(struct btree_update *as,
 	scoped_guard(mutex, &c->btree.cache.lock)
 		__bch2_btree_node_hash_remove(&c->btree.cache, b);
 
+	/*
+	 * Take write to match the intent+write invariant for nodes on
+	 * prealloc_nodes. Caller holds intent; node is hash-removed above so
+	 * it's unreachable to other trans and the write take is uncontended.
+	 */
+	btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_write);
+
 	BUG_ON(p->nr >= ARRAY_SIZE(p->b));
 	p->b[p->nr++] = b;
 
-	six_unlock_intent(&b->c.lock);
+	/* Stays intent+write locked on prealloc. */
 
 	bch2_trans_node_drop(trans, b);
 }
@@ -383,8 +390,12 @@ retry:
 	bch2_open_bucket_get(c, wp, &b->ob);
 out:
 	bch2_alloc_sectors_done(c, wp);
-	six_unlock_write(&b->c.lock);
-	six_unlock_intent(&b->c.lock);
+	/*
+	 * Leave both intent and write held: nodes on the prealloc list stay
+	 * locked (they aren't reachable to any other trans — not yet hashed
+	 * in, or freshly hash-removed — so holding write blocks nothing).
+	 * Consumers can use them without any lock-take at pop time.
+	 */
 
 	return b;
 err:
@@ -406,8 +417,7 @@ static struct btree *bch2_btree_node_alloc(struct btree_update *as,
 
 	b = p->b[--p->nr];
 
-	btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_intent);
-	btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_write);
+	/* Both intent and write were held across parking on prealloc_nodes. */
 
 	set_btree_node_accessed(b);
 	set_btree_node_dirty_acct(c, b);
@@ -528,8 +538,7 @@ static void bch2_btree_reserve_put(struct btree_update *as, struct btree_trans *
 
 			mutex_unlock(&c->btree.reserve_cache.lock);
 
-			btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_intent);
-			btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_write);
+			/* Both intent and write were held across prealloc. */
 			__btree_node_free(trans, b);
 			bch2_btree_node_to_freelist(c, b);
 		}
