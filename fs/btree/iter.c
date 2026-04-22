@@ -1194,6 +1194,14 @@ static int bch2_btree_path_traverse_all(struct btree_trans *trans)
 	if (trans->in_traverse_all)
 		return bch_err_throw(c, transaction_restart_in_traverse_all);
 
+	/*
+	 * XXX: when restart reason is transaction_restart_lock_waitlist_alloc,
+	 * we should wait for lock contention to drop (FIFO to drain) before
+	 * retrying, otherwise we'll just keep hammering the same full waitlist.
+	 * Currently there's no mechanism to hook back-off on a specific lock;
+	 * adding one is nontrivial. For now we just retry and rely on timing /
+	 * other waiters completing to give us room.
+	 */
 	trans->in_traverse_all = true;
 retry_all:
 	trans->restarted = 0;

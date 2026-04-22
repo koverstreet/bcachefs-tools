@@ -237,6 +237,8 @@ static inline int __btree_node_lock_nopath(struct btree_trans *trans,
 
 	int ret = six_lock_ip_waiter(&b->lock, type, &trans->locking_wait,
 				     bch2_six_check_for_deadlock, trans, ip);
+	if (unlikely(ret == -ENOMEM))
+		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_waitlist_alloc);
 	WRITE_ONCE(trans->locking, NULL);
 	WRITE_ONCE(trans->locking_wait.start_time, 0);
 

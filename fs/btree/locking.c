@@ -162,8 +162,10 @@ struct trans_waiting_for_lock {
 	enum six_lock_type		lock_want;
 
 	/* for iterating over held locks :*/
-	u8				path_idx;
 	u8				level;
+	btree_path_idx_t		path_idx;
+	u16				waitlist_idx;
+	bool				waitlist_idx_initialized;
 	u64				lock_start_time;
 };
 
@@ -239,6 +241,34 @@ static void lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
 	__lock_graph_down(g, trans);
 }
 
+/*
+ * Revalidate the "who is blocked on whom" chain we've built up in @g before
+ * acting on a suspected cycle.
+ *
+ * Between the time we descended into frame @i and now, @i's trans could have:
+ *   - acquired the lock it was blocked on and moved on (possibly now blocked
+ *     waiting on something else entirely), or
+ *   - been woken, re-entered the slowpath, and blocked again - still waiting,
+ *     but the chain edge we recorded no longer describes reality.
+ *
+ * Two staleness checks, per frame:
+ *
+ * 1) i->trans->locking != i->node_want
+ *    node_want snapshots trans->locking at descent time ("i was blocked
+ *    waiting for *this* btree node"). If trans->locking has changed, i got
+ *    its lock and moved on - chain is stale from i onward.
+ *
+ * 2) i->trans->locking_wait.start_time != i[-1].lock_start_time
+ *    six_lock_waiter.start_time is set freshly on every slowpath entry
+ *    (see six_lock_slowpath), so it acts as a generation counter on a
+ *    waiter. When the parent i[-1] descended into i, it recorded i's
+ *    start_time into its own lock_start_time field. If i's current
+ *    start_time differs, i got woken and re-queued at least once - the
+ *    parent→child edge is stale.
+ *
+ * Either staleness makes the cycle hypothesis invalid; pop from the stale
+ * frame down and let the caller retry.
+ */
 static bool lock_graph_remove_non_waiters(struct lock_graph *g,
 					  struct trans_waiting_for_lock *from)
 {
@@ -397,7 +427,6 @@ int bch2_check_for_deadlock(struct btree_trans *trans, struct printbuf *cycle)
 {
 	struct lock_graph g;
 	struct trans_waiting_for_lock *top;
-	struct btree_bkey_cached_common *b;
 	btree_path_idx_t path_idx;
 	int ret = 0;
 
@@ -438,6 +467,8 @@ next:
 		if (path_idx != top->path_idx) {
 			top->path_idx		= path_idx;
 			top->level		= 0;
+			top->waitlist_idx	= 0;
+			top->waitlist_idx_initialized = false;
 			top->lock_start_time	= 0;
 		}
 
@@ -449,9 +480,8 @@ next:
 			if (lock_held == BTREE_NODE_UNLOCKED)
 				continue;
 
-			b = &READ_ONCE(path->l[top->level].b)->c;
-
-			if (IS_ERR_OR_NULL(b)) {
+			struct btree_bkey_cached_common *b = &READ_ONCE(path->l[top->level].b)->c;
+			if (unlikely(IS_ERR_OR_NULL(b))) {
 				/*
 				 * If we get here, it means we raced with the
 				 * other thread updating its btree_path
@@ -474,16 +504,32 @@ next:
 				goto next;
 			}
 
-			if (list_empty_careful(&b->lock.wait_list))
+			if (fifo_empty(&b->lock.wait_list))
 				continue;
 
 			raw_spin_lock(&b->lock.wait_lock);
-			list_for_each_entry(trans, &b->lock.wait_list, locking_wait.list) {
-				BUG_ON(b != trans->locking);
+			struct six_lock_waiter *w;
 
-				if (top->lock_start_time &&
-				    time_after_eq64(top->lock_start_time, trans->locking_wait.start_time))
+			/*
+			 * Clamp cursor forward into the live window. Works for
+			 * both wrapped and unwrapped FIFOs: (idx - front) and
+			 * (back - front) are computed in u16 modular
+			 * arithmetic, so distance > used catches both "front
+			 * advanced past our cursor" (wakeup compaction) and the
+			 * uninitialized 0 case when front is nonzero.
+			 */
+			if (!top->waitlist_idx_initialized ||
+			    (u16)(top->waitlist_idx - b->lock.wait_list.front) >
+			    fifo_used(&b->lock.wait_list))
+				top->waitlist_idx = b->lock.wait_list.front;
+
+			top->waitlist_idx_initialized = true;
+
+			fifo_for_each_entry_from(w, &b->lock.wait_list, top->waitlist_idx) {
+				if (!w)
 					continue;
+
+				trans = container_of(w, struct btree_trans, locking_wait);
 
 				top->lock_start_time = trans->locking_wait.start_time;
 
@@ -498,10 +544,14 @@ next:
 				ret = lock_graph_descend(&g, trans, cycle);
 				if (ret)
 					goto out;
+
+				top->waitlist_idx++;
 				goto next;
 
 			}
 			raw_spin_unlock(&b->lock.wait_lock);
+
+			top->waitlist_idx_initialized = false;
 		}
 	}
 up:
