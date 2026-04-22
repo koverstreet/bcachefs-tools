@@ -4053,6 +4053,7 @@ void bch2_fs_btree_iter_exit(struct bch_fs *c)
 			kfree(trans);
 		}
 	free_percpu(c->btree.trans.bufs);
+	free_percpu(c->btree.trans.lock_graph);
 
 	trans = list_first_entry_or_null(&c->btree.trans.list, struct btree_trans, list);
 	if (trans)
@@ -4102,6 +4103,10 @@ int bch2_fs_btree_iter_init(struct bch_fs *c)
 {
 	c->btree.trans.bufs = alloc_percpu(struct btree_trans_buf);
 	if (!c->btree.trans.bufs)
+		return -ENOMEM;
+
+	c->btree.trans.lock_graph = alloc_percpu(struct lock_graph);
+	if (!c->btree.trans.lock_graph)
 		return -ENOMEM;
 
 	try(mempool_init_kmalloc_pool(&c->btree.trans.pool, 1, sizeof(struct btree_trans)));
