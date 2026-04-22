@@ -260,6 +260,9 @@ enum bch_counters_flags {
 	x(trans_restart_would_deadlock_recursion_limit,			\
 						74,  TYPE_COUNTER,	\
 	  "Transaction restart: deadlock recursion limit")		\
+	x(trans_restart_deadlock_waitlist_alloc,			\
+						132, TYPE_COUNTER,	\
+	  "Transaction restart: deadlock detector waitlist alloc fail")	\
 	x(trans_restart_write_buffer_flush,	75,  TYPE_COUNTER,	\
 	  "Transaction restart: write buffer flush")			\
 	x(trans_restart_split_race,		76,  TYPE_COUNTER,	\

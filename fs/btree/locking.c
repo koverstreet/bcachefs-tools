@@ -198,12 +198,26 @@ static noinline void lock_graph_pop_from(struct lock_graph *g, struct trans_wait
 
 static void lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
 {
-	g->g[g->nr++] = (struct trans_waiting_for_lock) {
-		.trans		= trans,
-		.node_want	= trans->locking,
-		.lock_want	= trans->locking_wait.lock_want,
-	};
+	/*
+	 * Field-by-field init rather than aggregate: we keep waitlist_snap's
+	 * data/size across walks so any grown heap buffer is reused.
+	 */
+	struct trans_waiting_for_lock *top = &g->g[g->nr++];
+
+	top->trans			= trans;
+	top->node_want			= trans->locking;
+	top->lock_want			= READ_ONCE(trans->locking_wait.lock_want);
+	top->level			= 0;
+	top->path_idx			= 0;
+	top->waitlist_idx		= 0;
+	top->node_have			= NULL;
+	top->waitlist.nr		= 0;
+
 	g->printed_chain = false;
+
+	if (unlikely(top > g->g &&
+		     top->node_want != top[-1].node_have))
+		--g->nr;
 }
 
 /*
@@ -244,10 +258,9 @@ static bool lock_graph_remove_non_waiters(struct lock_graph *g,
 		return true;
 	}
 
-	for (i = from + 1; i < g->g + g->nr; i++)
-		if (i->trans->locking != i->node_want ||
-		    i->trans->locking_wait.start_time != i[-1].lock_start_time) {
-			lock_graph_pop_from(g, i);
+	for (i = from ; i + 1 < g->g + g->nr; i++)
+		if (i[0].node_have != i[1].node_want) {
+			lock_graph_pop_from(g, i + 1);
 			return true;
 		}
 
@@ -411,6 +424,19 @@ next:
 
 	struct trans_waiting_for_lock *top = &g->g[g->nr - 1];
 
+	if (top->waitlist_idx < top->waitlist.nr) {
+		trans = container_of(top->waitlist.data[top->waitlist_idx++],
+				     struct btree_trans, locking_wait);
+
+		ret = lock_graph_descend(g, trans, cycle);
+		if (ret)
+			goto out;
+
+		goto next;
+	}
+
+	top->waitlist_idx = top->waitlist.nr = 0;
+
 	struct btree_path *paths = rcu_dereference(top->trans->paths);
 	if (!paths)
 		goto up;
@@ -427,20 +453,18 @@ next:
 			top->path_idx		= path_idx;
 			top->level		= 0;
 			top->waitlist_idx	= 0;
-			top->waitlist_idx_initialized = false;
-			top->lock_start_time	= 0;
 		}
 
-		for (;
-		     top->level < BTREE_MAX_DEPTH;
-		     top->level++, top->lock_start_time = 0) {
+		while (top->level < BTREE_MAX_DEPTH) {
 			int lock_held = btree_node_locked_type(path, top->level);
 
-			if (lock_held == BTREE_NODE_UNLOCKED)
+			if (lock_held == BTREE_NODE_UNLOCKED) {
+				top->level++;
 				continue;
+			}
 
-			struct btree_bkey_cached_common *b = &READ_ONCE(path->l[top->level].b)->c;
-			if (unlikely(IS_ERR_OR_NULL(b))) {
+			top->node_have = &READ_ONCE(path->l[top->level].b)->c;
+			if (unlikely(IS_ERR_OR_NULL(top->node_have))) {
 				/*
 				 * If we get here, it means we raced with the
 				 * other thread updating its btree_path
@@ -472,52 +496,54 @@ next:
 			 * grace period can cause us to descend into a reused
 			 * trans instead of the one we observed — that's a race
 			 * we accept; cycles missed this pass are caught next.
+			 *
+			 * Snapshot the live fifo entries into a per-frame darray
+			 * the first time we visit this frame. The walker then
+			 * iterates the snapshot rather than the live fifo, so
+			 * wakeup-driven compaction (interior nulls shifting the
+			 * live entries forward) can't cause us to re-walk chains
+			 * we've already processed.
+			 *
+			 * Heap allocation uses GFP_NOWAIT|__GFP_NOWARN: we can't
+			 * sleep here (rcu + preempt disabled). If growth past the
+			 * 16-entry inline buffer fails, we can't silently truncate
+			 * without potentially missing a real cycle — bail out with
+			 * a dedicated restart type so the caller can retry after
+			 * conditions calm down, and bump a counter so we can tell
+			 * if this ever actually fires.
 			 */
-			struct six_lock_wait_fifo *wf = rcu_dereference(b->lock.wait_fifo);
-
-			if (fifo_empty(wf))
-				continue;
-
+			struct six_lock_wait_fifo *wf =
+				rcu_dereference(top->node_have->lock.wait_fifo);
 			struct six_lock_waiter *w;
+			u16 fifo_iter;
+			fifo_for_each_entry(w, wf, fifo_iter) {
+				trans = container_of_or_null(w, struct btree_trans, locking_wait);
 
-			/*
-			 * Clamp cursor forward into the live window. Works for
-			 * both wrapped and unwrapped FIFOs: (idx - front) and
-			 * (back - front) are computed in u16 modular
-			 * arithmetic, so distance > used catches both "front
-			 * advanced past our cursor" (wakeup compaction) and the
-			 * uninitialized 0 case when front is nonzero.
-			 */
-			if (!top->waitlist_idx_initialized ||
-			    (u16)(top->waitlist_idx - wf->front) >
-			    fifo_used(wf))
-				top->waitlist_idx = wf->front;
+				if (trans &&
+				    trans != top->trans &&
+				    lock_type_conflicts(lock_held, trans->locking_wait.lock_want)) {
+					if (darray_push_gfp(&top->waitlist, w,
+							    GFP_NOWAIT|__GFP_NOWARN)) {
+						if (cycle) {
+							ret = -1;
+							goto out;
+						}
 
-			top->waitlist_idx_initialized = true;
-
-			fifo_for_each_entry_from(w, wf, top->waitlist_idx) {
-				if (!w)
-					continue;
-
-				trans = container_of(w, struct btree_trans, locking_wait);
-
-				top->lock_start_time = trans->locking_wait.start_time;
-
-				/* Don't check for self deadlock: */
-				if (trans == top->trans ||
-				    !lock_type_conflicts(lock_held, trans->locking_wait.lock_want))
-					continue;
-
-				ret = lock_graph_descend(g, trans, cycle);
-				if (ret)
-					goto out;
-
-				top->waitlist_idx++;
-				goto next;
-
+						event_inc_trace(c, trans_restart_deadlock_waitlist_alloc, buf, ({
+							guard(printbuf_atomic)(&buf);
+							prt_str(&buf, g->g->trans->fn);
+						}));
+						ret = btree_trans_restart(g->g->trans,
+								BCH_ERR_transaction_restart_deadlock_waitlist_alloc);
+						goto out;
+					}
+				}
 			}
 
-			top->waitlist_idx_initialized = false;
+			top->level++;
+
+			if (top->waitlist_idx < top->waitlist.nr)
+				goto next;
 		}
 	}
 up:

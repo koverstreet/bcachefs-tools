@@ -20,8 +20,15 @@ struct trans_waiting_for_lock {
 	u8				level;
 	btree_path_idx_t		path_idx;
 	u16				waitlist_idx;
-	bool				waitlist_idx_initialized;
-	u64				lock_start_time;
+	struct btree_bkey_cached_common	*node_have;
+
+	/*
+	 * Snapshot of the live wait_fifo entries for the lock we're descending
+	 * through. Taken once per frame visit so the walker sees a stable
+	 * ordering and doesn't re-walk stale chains when wakeups null interior
+	 * entries and compaction shifts the FIFO.
+	 */
+	DARRAY_PREALLOCATED(struct six_lock_waiter *, 16) waitlist;
 };
 
 struct lock_graph {
