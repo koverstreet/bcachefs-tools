@@ -508,7 +508,7 @@ struct btree_trans_commit_hook {
 
 #define BTREE_TRANS_MEM_MAX	(1U << 16)
 
-#define BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS	10000
+#define BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS	NSEC_PER_MSEC
 
 struct btree_trans_paths {
 	unsigned long		nr_paths;
