@@ -498,10 +498,8 @@ next:
 			 */
 			struct six_lock_wait_fifo *wf =
 				rcu_dereference(top->node_have->lock.wait_fifo);
-			struct six_lock_waiter *w;
-			u16 fifo_iter;
-			fifo_for_each_entry(w, wf, fifo_iter) {
-				trans = container_of_or_null(w, struct btree_trans, locking_wait);
+			darray_for_each(*wf, i) {
+				trans = container_of_or_null(i->w, struct btree_trans, locking_wait);
 
 				if (trans &&
 				    trans != top->trans &&
