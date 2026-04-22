@@ -786,8 +786,6 @@ static inline int __bch2_bkey_get_val_typed(struct btree_trans *trans,
 	__bch2_bkey_get_val_typed(_trans, _btree_id, _pos, _flags,	\
 				  KEY_TYPE_##_type, sizeof(*_val), _val)
 
-void bch2_trans_srcu_unlock(struct btree_trans *);
-
 u32 bch2_trans_begin(struct btree_trans *);
 
 #define __for_each_btree_node(_trans, _iter, _btree_id, _start,			\

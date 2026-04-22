@@ -3564,36 +3564,6 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 	return p;
 }
 
-static inline void check_srcu_held_too_long(struct btree_trans *trans)
-{
-	if (unlikely(trans->srcu_held && time_after(jiffies, trans->srcu_lock_time + HZ * 10))) {
-		CLASS(printbuf, buf)();
-
-		prt_printf(&buf, "btree trans held srcu lock (delaying memory reclaim) for %lu seconds\n",
-			   (jiffies - trans->srcu_lock_time) / HZ);
-		bch2_sb_recent_counters_to_text(&buf, &trans->c->counters);
-
-		WARN_RATELIMIT(true, "%s", buf.buf);
-	}
-}
-
-void bch2_trans_srcu_unlock(struct btree_trans *trans)
-{
-	if (trans->srcu_held) {
-		struct bch_fs *c = trans->c;
-		struct btree_path *path;
-		unsigned i;
-
-		trans_for_each_path(trans, path, i)
-			if (path->cached && !btree_node_locked(path, 0))
-				path->l[0].b = ERR_PTR(-BCH_ERR_no_btree_node_srcu_reset);
-
-		check_srcu_held_too_long(trans);
-		srcu_read_unlock(&c->btree.trans.barrier, trans->srcu_idx);
-		trans->srcu_held = false;
-	}
-}
-
 static void bch2_trans_srcu_lock(struct btree_trans *trans)
 {
 	if (!trans->srcu_held) {
@@ -3677,18 +3647,18 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 		__bch2_time_stats_update(&btree_trans_stats(trans)->duration,
 					 trans->last_begin_time, now);
 
-	if (!trans->restarted &&
-	    (need_resched() ||
-	     time_after64(now, trans->last_begin_time + BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS))) {
+	if (unlikely(trans->srcu_held &&
+		     time_after(jiffies, trans->srcu_lock_time + msecs_to_jiffies(10))))
+		bch2_trans_unlock_long(trans);
+
+	if (need_resched() ||
+	    time_after64(now, trans->last_begin_time + BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS)) {
 		bch2_trans_unlock(trans);
+
 		cond_resched();
 		now = local_clock();
 	}
 	trans->last_begin_time = now;
-
-	if (unlikely(trans->srcu_held &&
-		     time_after(jiffies, trans->srcu_lock_time + msecs_to_jiffies(10))))
-		bch2_trans_srcu_unlock(trans);
 
 	trans->last_begin_ip = _RET_IP_;
 
@@ -3879,18 +3849,13 @@ void bch2_trans_put(struct btree_trans *trans)
 	if (trans->restarted)
 		bch2_trans_in_restart_error(trans);
 
-	bch2_trans_unlock(trans);
+	bch2_trans_unlock_long(trans);
 
 	trans_for_each_update(trans, i)
 		__btree_path_put(trans, trans->paths + i->path, true);
 	trans->nr_updates	= 0;
 
 	check_btree_paths_leaked(trans);
-
-	if (trans->srcu_held) {
-		check_srcu_held_too_long(trans);
-		srcu_read_unlock(&c->btree.trans.barrier, trans->srcu_idx);
-	}
 
 	if (unlikely(trans->journal_replay_not_finished))
 		bch2_journal_keys_put(c);

@@ -1020,7 +1020,29 @@ void bch2_trans_unlock(struct btree_trans *trans)
 void bch2_trans_unlock_long(struct btree_trans *trans)
 {
 	bch2_trans_unlock(trans);
-	bch2_trans_srcu_unlock(trans);
+
+	if (trans->srcu_held) {
+		struct bch_fs *c = trans->c;
+		struct btree_path *path;
+		unsigned i;
+
+		trans_for_each_path(trans, path, i)
+			if (path->cached && !btree_node_locked(path, 0))
+				path->l[0].b = ERR_PTR(-BCH_ERR_no_btree_node_srcu_reset);
+
+		if (unlikely(trans->srcu_held && time_after(jiffies, trans->srcu_lock_time + HZ * 10))) {
+			CLASS(printbuf, buf)();
+
+			prt_printf(&buf, "btree trans held srcu lock (delaying memory reclaim) for %lu seconds\n",
+				   (jiffies - trans->srcu_lock_time) / HZ);
+			bch2_sb_recent_counters_to_text(&buf, &trans->c->counters);
+
+			WARN_RATELIMIT(true, "%s", buf.buf);
+		}
+
+		srcu_read_unlock(&c->btree.trans.barrier, trans->srcu_idx);
+		trans->srcu_held = false;
+	}
 }
 
 void bch2_trans_unlock_write(struct btree_trans *trans)
