@@ -3573,6 +3573,20 @@ static void bch2_trans_srcu_lock(struct btree_trans *trans)
 	}
 }
 
+static inline void trans_migrate_disable(struct btree_trans *trans)
+{
+	if (!trans->migrate_disable_held)
+		migrate_disable();
+	trans->migrate_disable_held = true;
+}
+
+static inline void trans_migrate_enable(struct btree_trans *trans)
+{
+	if (trans->migrate_disable_held)
+		migrate_enable();
+	trans->migrate_disable_held = false;
+}
+
 /**
  * bch2_trans_begin() - reset a transaction after a interrupted attempt
  * @trans: transaction to reset
@@ -3655,6 +3669,7 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 	    time_after64(now, trans->last_begin_time + BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS)) {
 		bch2_trans_unlock(trans);
 
+		trans_migrate_enable(trans);
 		cond_resched();
 		now = local_clock();
 	}
@@ -3675,6 +3690,8 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 #endif
 
 	trans_set_locked(trans, false);
+
+	trans_migrate_disable(trans);
 
 	if (trans->restarted) {
 		bch2_btree_path_traverse_all(trans);
@@ -3850,6 +3867,8 @@ void bch2_trans_put(struct btree_trans *trans)
 		bch2_trans_in_restart_error(trans);
 
 	bch2_trans_unlock_long(trans);
+
+	trans_migrate_enable(trans);
 
 	trans_for_each_update(trans, i)
 		__btree_path_put(trans, trans->paths + i->path, true);
