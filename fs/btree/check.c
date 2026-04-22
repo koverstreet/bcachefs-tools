@@ -610,10 +610,21 @@ recover:
 			int _ret = bch2_btree_node_lock_with_path(trans, b,
 							SIX_LOCK_read, &path_idx);
 			if (!_ret) {
+				/*
+				 * bch2_btree_repair_topology_recurse() contains
+				 * inner lockrestart_do()s and recurses; their
+				 * internal restarts bump trans->restart_count
+				 * without propagating. Snapshot and restore so
+				 * this outer lockrestart_do()'s verify_not_restarted
+				 * only sees its own baseline.
+				 */
+				u32 _rc = trans->restart_count;
 				_ret = btree_check_root_boundaries(trans, b) ?:
 				       bch2_btree_repair_topology_recurse(trans, b);
 				bch2_btree_node_unlock_with_path(trans, path_idx,
 								 b->c.level);
+				if (!bch2_err_matches(_ret, BCH_ERR_transaction_restart))
+					trans->restart_count = _rc;
 			}
 			_ret;
 		}));
