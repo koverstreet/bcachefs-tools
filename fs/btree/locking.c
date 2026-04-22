@@ -551,9 +551,9 @@ out:
 	return ret;
 }
 
-int bch2_six_check_for_deadlock(struct six_lock *lock, void *p)
+int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w)
 {
-	struct btree_trans *trans = p;
+	struct btree_trans *trans = container_of(w, struct btree_trans, locking_wait);
 
 	return bch2_check_for_deadlock(trans, NULL);
 }

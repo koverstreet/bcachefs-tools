@@ -473,7 +473,7 @@ static struct six_lock_wait_fifo *alloc_wait_fifo(struct six_lock *lock, u16 *ne
 noinline
 static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			     struct six_lock_waiter *wait,
-			     six_lock_should_sleep_fn should_sleep_fn, void *p,
+			     six_lock_should_sleep_fn should_sleep_fn,
 			     unsigned long ip)
 {
 	struct six_lock_wait_fifo *new_wf = NULL;
@@ -568,7 +568,7 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 		if (smp_load_acquire(&wait->lock_acquired))
 			break;
 
-		ret = should_sleep_fn ? should_sleep_fn(lock, p) : 0;
+		ret = should_sleep_fn ? should_sleep_fn(lock, wait) : 0;
 		if (unlikely(ret)) {
 			bool acquired;
 
@@ -649,7 +649,7 @@ out:
  */
 int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
 		       struct six_lock_waiter *wait,
-		       six_lock_should_sleep_fn should_sleep_fn, void *p,
+		       six_lock_should_sleep_fn should_sleep_fn,
 		       unsigned long ip)
 {
 	int ret;
@@ -660,7 +660,7 @@ int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
 		six_acquire(&lock->dep_map, 0, type == SIX_LOCK_read, ip);
 
 	ret = do_six_trylock(lock, type, true) ? 0
-		: six_lock_slowpath(lock, type, wait, should_sleep_fn, p, ip);
+		: six_lock_slowpath(lock, type, wait, should_sleep_fn, ip);
 
 	if (ret && type != SIX_LOCK_write)
 		six_release(&lock->dep_map, ip);
