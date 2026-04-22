@@ -622,6 +622,7 @@ struct btree_trans {
 
 	struct list_head	list;
 	struct closure		ref;
+	struct rcu_head		rcu;
 
 	unsigned long		_paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)];
 	struct btree_trans_paths trans_paths;

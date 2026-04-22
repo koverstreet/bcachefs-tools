@@ -162,8 +162,10 @@ struct trans_waiting_for_lock {
 	enum six_lock_type		lock_want;
 
 	/* for iterating over held locks :*/
-	u8				path_idx;
 	u8				level;
+	btree_path_idx_t		path_idx;
+	u16				waitlist_idx;
+	bool				waitlist_idx_initialized;
 	u64				lock_start_time;
 };
 
@@ -206,24 +208,17 @@ static noinline void print_chain(struct printbuf *out, struct lock_graph *g)
 	prt_newline(out);
 }
 
-static void lock_graph_up(struct lock_graph *g)
+static void lock_graph_pop_all(struct lock_graph *g)
 {
-	closure_put(&g->g[--g->nr].trans->ref);
-}
-
-static noinline void lock_graph_pop_all(struct lock_graph *g)
-{
-	while (g->nr)
-		lock_graph_up(g);
+	g->nr = 0;
 }
 
 static noinline void lock_graph_pop_from(struct lock_graph *g, struct trans_waiting_for_lock *i)
 {
-	while (g->g + g->nr > i)
-		lock_graph_up(g);
+	g->nr = i - g->g;
 }
 
-static void __lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
+static void lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
 {
 	g->g[g->nr++] = (struct trans_waiting_for_lock) {
 		.trans		= trans,
@@ -233,12 +228,34 @@ static void __lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
 	g->printed_chain = false;
 }
 
-static void lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
-{
-	closure_get(&trans->ref);
-	__lock_graph_down(g, trans);
-}
-
+/*
+ * Revalidate the "who is blocked on whom" chain we've built up in @g before
+ * acting on a suspected cycle.
+ *
+ * Between the time we descended into frame @i and now, @i's trans could have:
+ *   - acquired the lock it was blocked on and moved on (possibly now blocked
+ *     waiting on something else entirely), or
+ *   - been woken, re-entered the slowpath, and blocked again - still waiting,
+ *     but the chain edge we recorded no longer describes reality.
+ *
+ * Two staleness checks, per frame:
+ *
+ * 1) i->trans->locking != i->node_want
+ *    node_want snapshots trans->locking at descent time ("i was blocked
+ *    waiting for *this* btree node"). If trans->locking has changed, i got
+ *    its lock and moved on - chain is stale from i onward.
+ *
+ * 2) i->trans->locking_wait.start_time != i[-1].lock_start_time
+ *    six_lock_waiter.start_time is set freshly on every slowpath entry
+ *    (see six_lock_slowpath), so it acts as a generation counter on a
+ *    waiter. When the parent i[-1] descended into i, it recorded i's
+ *    start_time into its own lock_start_time field. If i's current
+ *    start_time differs, i got woken and re-queued at least once - the
+ *    parent→child edge is stale.
+ *
+ * Either staleness makes the cycle hypothesis invalid; pop from the stale
+ * frame down and let the caller retry.
+ */
 static bool lock_graph_remove_non_waiters(struct lock_graph *g,
 					  struct trans_waiting_for_lock *from)
 {
@@ -357,14 +374,10 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 	struct btree_trans *orig_trans = g->g->trans;
 
 	for (struct trans_waiting_for_lock *i = g->g; i < g->g + g->nr; i++)
-		if (i->trans == trans) {
-			closure_put(&trans->ref);
+		if (i->trans == trans)
 			return break_cycle(g, cycle, i);
-		}
 
 	if (unlikely(g->nr == ARRAY_SIZE(g->g))) {
-		closure_put(&trans->ref);
-
 		if (orig_trans->lock_may_not_fail) {
 			/* Other threads will have to rerun the cycle detector: */
 			for (struct trans_waiting_for_lock *i = g->g + 1; i < g->g + g->nr; i++)
@@ -384,7 +397,7 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 		return btree_trans_restart(orig_trans, BCH_ERR_transaction_restart_deadlock_recursion_limit);
 	}
 
-	__lock_graph_down(g, trans);
+	lock_graph_down(g, trans);
 	return 0;
 }
 
@@ -397,7 +410,6 @@ int bch2_check_for_deadlock(struct btree_trans *trans, struct printbuf *cycle)
 {
 	struct lock_graph g;
 	struct trans_waiting_for_lock *top;
-	struct btree_bkey_cached_common *b;
 	btree_path_idx_t path_idx;
 	int ret = 0;
 
@@ -438,6 +450,8 @@ next:
 		if (path_idx != top->path_idx) {
 			top->path_idx		= path_idx;
 			top->level		= 0;
+			top->waitlist_idx	= 0;
+			top->waitlist_idx_initialized = false;
 			top->lock_start_time	= 0;
 		}
 
@@ -449,9 +463,8 @@ next:
 			if (lock_held == BTREE_NODE_UNLOCKED)
 				continue;
 
-			b = &READ_ONCE(path->l[top->level].b)->c;
-
-			if (IS_ERR_OR_NULL(b)) {
+			struct btree_bkey_cached_common *b = &READ_ONCE(path->l[top->level].b)->c;
+			if (unlikely(IS_ERR_OR_NULL(b))) {
 				/*
 				 * If we get here, it means we raced with the
 				 * other thread updating its btree_path
@@ -474,16 +487,43 @@ next:
 				goto next;
 			}
 
-			if (list_empty_careful(&b->lock.wait_list))
+			/*
+			 * Lockless walk: we're under guard(rcu)() at the top of
+			 * this function, and trans memory is RCU-deferred in
+			 * bch2_trans_put, so dereferencing wait_fifo and any
+			 * waiter pointers we pull out of it is safe for the
+			 * duration of this call. Per-CPU cache reuse within a
+			 * grace period can cause us to descend into a reused
+			 * trans instead of the one we observed — that's a race
+			 * we accept; cycles missed this pass are caught next.
+			 */
+			struct six_lock_wait_fifo *wf = rcu_dereference(b->lock.wait_fifo);
+
+			if (fifo_empty(wf))
 				continue;
 
-			raw_spin_lock(&b->lock.wait_lock);
-			list_for_each_entry(trans, &b->lock.wait_list, locking_wait.list) {
-				BUG_ON(b != trans->locking);
+			struct six_lock_waiter *w;
 
-				if (top->lock_start_time &&
-				    time_after_eq64(top->lock_start_time, trans->locking_wait.start_time))
+			/*
+			 * Clamp cursor forward into the live window. Works for
+			 * both wrapped and unwrapped FIFOs: (idx - front) and
+			 * (back - front) are computed in u16 modular
+			 * arithmetic, so distance > used catches both "front
+			 * advanced past our cursor" (wakeup compaction) and the
+			 * uninitialized 0 case when front is nonzero.
+			 */
+			if (!top->waitlist_idx_initialized ||
+			    (u16)(top->waitlist_idx - wf->front) >
+			    fifo_used(wf))
+				top->waitlist_idx = wf->front;
+
+			top->waitlist_idx_initialized = true;
+
+			fifo_for_each_entry_from(w, wf, top->waitlist_idx) {
+				if (!w)
 					continue;
+
+				trans = container_of(w, struct btree_trans, locking_wait);
 
 				top->lock_start_time = trans->locking_wait.start_time;
 
@@ -492,22 +532,22 @@ next:
 				    !lock_type_conflicts(lock_held, trans->locking_wait.lock_want))
 					continue;
 
-				closure_get(&trans->ref);
-				raw_spin_unlock(&b->lock.wait_lock);
-
 				ret = lock_graph_descend(&g, trans, cycle);
 				if (ret)
 					goto out;
+
+				top->waitlist_idx++;
 				goto next;
 
 			}
-			raw_spin_unlock(&b->lock.wait_lock);
+
+			top->waitlist_idx_initialized = false;
 		}
 	}
 up:
 	if (cycle)
 		print_chain(cycle, &g);
-	lock_graph_up(&g);
+	--g.nr;
 	goto next;
 out:
 	if (cycle)

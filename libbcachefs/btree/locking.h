@@ -237,6 +237,8 @@ static inline int __btree_node_lock_nopath(struct btree_trans *trans,
 
 	int ret = six_lock_ip_waiter(&b->lock, type, &trans->locking_wait,
 				     bch2_six_check_for_deadlock, trans, ip);
+	if (unlikely(ret == -ENOMEM))
+		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_waitlist_alloc);
 	WRITE_ONCE(trans->locking, NULL);
 	WRITE_ONCE(trans->locking_wait.start_time, 0);
 
@@ -268,6 +270,50 @@ static inline void btree_node_lock_nopath_nofail(struct btree_trans *trans,
 	int ret = __btree_node_lock_nopath(trans, b, type, true, _THIS_IP_);
 
 	BUG_ON(ret);
+}
+
+/*
+ * Lock @b when the caller doesn't already have a path for it, while staying
+ * visible to the cycle detector as a lock holder: create a temporary
+ * unlocked path, take the lock may-fail (setting trans->locking for
+ * cycle-detector visibility during the wait), then record the lock on
+ * the path so other trans walking the graph can find us as holder.
+ *
+ * Caller releases via bch2_btree_node_unlock_with_path().
+ *
+ * May return a transaction_restart; wrap in lockrestart_do().
+ */
+static inline int __must_check
+bch2_btree_node_lock_with_path(struct btree_trans *trans,
+			       struct btree *b,
+			       enum six_lock_type type,
+			       btree_path_idx_t *path_idx_out)
+{
+	btree_path_idx_t path_idx = bch2_path_get_unlocked_mut(trans,
+				b->c.btree_id, b->c.level, b->key.k.p);
+
+	int ret = btree_node_lock_nopath(trans, &b->c, type, _THIS_IP_);
+	if (ret) {
+		bch2_path_put(trans, path_idx, true);
+		return ret;
+	}
+
+	struct btree_path *path = trans->paths + path_idx;
+	mark_btree_node_locked(trans, path, b->c.level,
+			       (enum btree_node_locked_type) type);
+	path->l[b->c.level].lock_seq	= six_lock_seq(&b->c.lock);
+	path->l[b->c.level].b		= b;
+
+	*path_idx_out = path_idx;
+	return 0;
+}
+
+static inline void bch2_btree_node_unlock_with_path(struct btree_trans *trans,
+						    btree_path_idx_t path_idx,
+						    unsigned level)
+{
+	btree_node_unlock(trans, trans->paths + path_idx, level);
+	bch2_path_put(trans, path_idx, true);
 }
 
 /*

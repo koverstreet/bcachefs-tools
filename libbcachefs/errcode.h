@@ -214,6 +214,7 @@
 	x(BCH_ERR_transaction_restart,	transaction_restart_lock_node_reused)	\
 	x(BCH_ERR_transaction_restart,	transaction_restart_fill_relock)	\
 	x(BCH_ERR_transaction_restart,	transaction_restart_fill_mem_alloc_fail)\
+	x(BCH_ERR_transaction_restart,	transaction_restart_lock_waitlist_alloc)\
 	x(BCH_ERR_transaction_restart,	transaction_restart_mem_realloced)	\
 	x(BCH_ERR_transaction_restart,	transaction_restart_in_traverse_all)	\
 	x(BCH_ERR_transaction_restart,	transaction_restart_would_deadlock)	\

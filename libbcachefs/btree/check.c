@@ -605,6 +605,36 @@ recover:
 		struct btree_root *r = bch2_btree_id_root(c, i);
 		struct btree *b = r->b;
 
+		/*
+		 * XXX: _nofail() locks need to die in a fire.
+		 *
+		 * Any nofail lock take is invisible to the cycle detector
+		 * (the caller isn't recorded as a holder via any path), and
+		 * in multithreaded mode nofail takers piling up on a single
+		 * contended lock can blow through the wait_fifo cap and BUG.
+		 * The cycle detector can't unwind deadlocks it can't see.
+		 *
+		 * The correct shape is may-fail: take the lock via a path,
+		 * wrap in lockrestart_do, propagate transaction_restart up.
+		 * But topology repair is old code that walks the btree with
+		 * its own bch2_btree_and_journal_iter_* infrastructure, not
+		 * via paths — and shoving a synthetic "I locked the root"
+		 * path into that walking code doesn't work (the path's state
+		 * isn't maintained by the walk, and verify_locks on mem_alloc
+		 * slow paths blows up on the mismatch).
+		 *
+		 * Keeping nofail here is only OK because topology repair
+		 * runs at mount/recovery time, before any worker threads are
+		 * started, so there's physically nothing else that could be
+		 * contending for these locks — wait_fifo can't fill up, cycle
+		 * detection isn't needed.
+		 *
+		 * Proper fix is either (a) rewrite topology repair on top of
+		 * paths, or (b) redo the whole nofail → may-fail plumbing so
+		 * nofail callers can still get cycle-detector visibility via
+		 * a thin "lock holder record" that isn't a full path. Either
+		 * is bigger than this commit wants to be.
+		 */
 		btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_read);
 		int ret = btree_check_root_boundaries(trans, b) ?:
 			  bch2_btree_repair_topology_recurse(trans, b);

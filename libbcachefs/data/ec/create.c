@@ -1388,6 +1388,7 @@ static void ec_stripe_new_set_pending(struct bch_fs *c, struct ec_stripe_head *h
 	scoped_guard(mutex, &c->ec.stripe_new_lock)
 		list_add(&s->list, &c->ec.stripe_new_list);
 
+	/* s->seq assigned in ec_stripe_new_put() when STRIPE_REF_io drops. */
 	ec_stripe_new_put(c, s, STRIPE_REF_io);
 }
 
@@ -1790,6 +1791,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	scoped_guard(mutex, &c->ec.stripe_new_lock)
 		list_add(&new_s->list, &c->ec.stripe_new_list);
 
+	/* new_s->seq assigned in ec_stripe_new_put() when STRIPE_REF_io drops. */
 	ec_stripe_new_put(c, new_s, STRIPE_REF_io);
 	return 0;
 }
