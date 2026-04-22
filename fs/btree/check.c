@@ -605,10 +605,18 @@ recover:
 		struct btree_root *r = bch2_btree_id_root(c, i);
 		struct btree *b = r->b;
 
-		btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_read);
-		int ret = btree_check_root_boundaries(trans, b) ?:
-			  bch2_btree_repair_topology_recurse(trans, b);
-		six_unlock_read(&b->c.lock);
+		int ret = lockrestart_do(trans, ({
+			btree_path_idx_t path_idx;
+			int _ret = bch2_btree_node_lock_with_path(trans, b,
+							SIX_LOCK_read, &path_idx);
+			if (!_ret) {
+				_ret = btree_check_root_boundaries(trans, b) ?:
+				       bch2_btree_repair_topology_recurse(trans, b);
+				bch2_btree_node_unlock_with_path(trans, path_idx,
+								 b->c.level);
+			}
+			_ret;
+		}));
 
 		if (bch2_err_matches(ret, BCH_ERR_topology_repair_drop_this_node)) {
 			scoped_guard(mutex, &c->btree.cache.lock)

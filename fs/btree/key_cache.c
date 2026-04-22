@@ -534,31 +534,35 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 	int ret = 0;
 
 	CLASS(btree_trans, trans)(c);
-	btree_node_lock_nopath_nofail(trans, &ck->c, SIX_LOCK_read);
-	key = ck->key;
 
-	if (ck->journal.seq != seq ||
-	    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
-		six_unlock_read(&ck->c.lock);
-		goto unlock;
-	}
+	ret = lockrestart_do(trans, ({
+		int _ret = btree_node_lock_nopath(trans, &ck->c, SIX_LOCK_read, _THIS_IP_);
+		bool do_flush = false;
 
-	if (ck->seq != seq) {
-		bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
-					bch2_btree_key_cache_journal_flush);
-		six_unlock_read(&ck->c.lock);
-		goto unlock;
-	}
-	six_unlock_read(&ck->c.lock);
+		if (!_ret) {
+			key = ck->key;
 
-	ret = lockrestart_do(trans,
-		btree_key_cache_flush_pos(trans, key, seq,
-				BCH_TRANS_COMMIT_journal_reclaim, false));
+			if (ck->journal.seq != seq ||
+			    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+				/* nothing to do */
+			} else if (ck->seq != seq) {
+				bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
+							bch2_btree_key_cache_journal_flush);
+			} else {
+				do_flush = true;
+			}
+			six_unlock_read(&ck->c.lock);
+
+			if (do_flush)
+				_ret = btree_key_cache_flush_pos(trans, key, seq,
+						BCH_TRANS_COMMIT_journal_reclaim, false);
+		}
+		_ret;
+	}));
 	bch2_fs_fatal_err_on(ret &&
 			     !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
 			     !bch2_journal_error(j), c,
 			     "flushing key cache: %s", bch2_err_str(ret));
-unlock:
 	srcu_read_unlock(&c->btree.trans.barrier, srcu_idx);
 	return ret;
 }

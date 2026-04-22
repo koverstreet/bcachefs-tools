@@ -809,10 +809,19 @@ static void btree_update_nodes_written(struct btree_update *as)
 	 * buffer swapped for a new data buffer).
 	 */
 	darray_for_each(as->old_nodes, i) {
-		bch2_trans_begin(trans);
-		btree_node_lock_nopath_nofail(trans, &i->b->c, SIX_LOCK_read);
-		bool seq_matches = btree_node_seq_matches(i->b, i->seq);
-		six_unlock_read(&i->b->c.lock);
+		bool seq_matches = false;
+
+		ret = lockrestart_do(trans, ({
+			btree_path_idx_t path_idx;
+			int _ret = bch2_btree_node_lock_with_path(trans, i->b,
+								  SIX_LOCK_read, &path_idx);
+			if (!_ret) {
+				seq_matches = btree_node_seq_matches(i->b, i->seq);
+				bch2_btree_node_unlock_with_path(trans, path_idx,
+								 i->b->c.level);
+			}
+			_ret;
+		}));
 		bch2_trans_unlock_long(trans);
 
 		if (seq_matches)
@@ -896,66 +905,81 @@ static void btree_update_nodes_written(struct btree_update *as)
 		 * __bch2_btree_node_write() doesn't do the actual write if
 		 * we're in journal error state:
 		 */
+		lockrestart_do(trans, ({
+			btree_path_idx_t path_idx;
+			int _ret = bch2_btree_node_lock_with_path(trans, b,
+							SIX_LOCK_intent, &path_idx);
+			if (!_ret) {
+				struct btree_path *path = trans->paths + path_idx;
 
-		btree_path_idx_t path_idx = bch2_path_get_unlocked_mut(trans,
-						as->btree_id, b->c.level, b->key.k.p);
-		struct btree_path *path = trans->paths + path_idx;
-		btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_intent);
-		mark_btree_node_locked(trans, path, b->c.level, BTREE_NODE_INTENT_LOCKED);
-		path->l[b->c.level].lock_seq = six_lock_seq(&b->c.lock);
-		path->l[b->c.level].b = b;
+				_ret = bch2_btree_node_lock_write(trans, path, &b->c);
+				if (_ret) {
+					bch2_btree_node_unlock_with_path(trans, path_idx,
+									 b->c.level);
+				} else {
+					mutex_lock(&c->btree.interior_updates.lock);
 
-		bch2_btree_node_lock_write_nofail(trans, path, &b->c);
+					list_del(&as->write_blocked_list);
+					if (list_empty(&b->write_blocked))
+						clear_btree_node_write_blocked(b);
 
-		mutex_lock(&c->btree.interior_updates.lock);
+					/*
+					 * Node might have been freed, recheck under
+					 * btree_interior_updates.lock:
+					 */
+					if (as->b == b) {
+						BUG_ON(!b->c.level);
+						BUG_ON(!btree_node_dirty(b));
 
-		list_del(&as->write_blocked_list);
-		if (list_empty(&b->write_blocked))
-			clear_btree_node_write_blocked(b);
+						if (!ret) {
+							struct bset *last = btree_bset_last(b);
 
-		/*
-		 * Node might have been freed, recheck under
-		 * btree_interior_updates.lock:
-		 */
-		if (as->b == b) {
-			BUG_ON(!b->c.level);
-			BUG_ON(!btree_node_dirty(b));
+							last->journal_seq = cpu_to_le64(
+									max(journal_seq,
+									    le64_to_cpu(last->journal_seq)));
 
-			if (!ret) {
-				struct bset *last = btree_bset_last(b);
+							bch2_btree_add_journal_pin(c, b, journal_seq);
+						} else {
+							/*
+							 * If we didn't get a journal sequence
+							 * number we can't write this btree node,
+							 * because recovery won't know to ignore
+							 * this write:
+							 */
+							set_btree_node_never_write(b);
+						}
+					}
 
-				last->journal_seq = cpu_to_le64(
-							     max(journal_seq,
-								 le64_to_cpu(last->journal_seq)));
+					mutex_unlock(&c->btree.interior_updates.lock);
 
-				bch2_btree_add_journal_pin(c, b, journal_seq);
-			} else {
-				/*
-				 * If we didn't get a journal sequence number we
-				 * can't write this btree node, because recovery
-				 * won't know to ignore this write:
-				 */
-				set_btree_node_never_write(b);
+					mark_btree_node_locked_noreset(path, b->c.level,
+								       BTREE_NODE_INTENT_LOCKED);
+					six_unlock_write(&b->c.lock);
+
+					btree_node_write_if_need(trans, b, SIX_LOCK_intent);
+					bch2_btree_node_unlock_with_path(trans, path_idx,
+									 b->c.level);
+				}
 			}
-		}
-
-		mutex_unlock(&c->btree.interior_updates.lock);
-
-		mark_btree_node_locked_noreset(path, b->c.level, BTREE_NODE_INTENT_LOCKED);
-		six_unlock_write(&b->c.lock);
-
-		btree_node_write_if_need(trans, b, SIX_LOCK_intent);
-		btree_node_unlock(trans, path, b->c.level);
-		bch2_path_put(trans, path_idx, true);
+			_ret;
+		}));
 	}
 
 	bch2_journal_pin_drop(&c->journal, &as->journal);
 
 	darray_for_each(as->new_nodes, i)
 		if (i->b) {
-			btree_node_lock_nopath_nofail(trans, &i->b->c, SIX_LOCK_read);
-			btree_node_write_if_need(trans, i->b, SIX_LOCK_read);
-			six_unlock_read(&i->b->c.lock);
+			lockrestart_do(trans, ({
+				btree_path_idx_t path_idx;
+				int _ret = bch2_btree_node_lock_with_path(trans, i->b,
+							SIX_LOCK_read, &path_idx);
+				if (!_ret) {
+					btree_node_write_if_need(trans, i->b, SIX_LOCK_read);
+					bch2_btree_node_unlock_with_path(trans, path_idx,
+									 i->b->c.level);
+				}
+				_ret;
+			}));
 		}
 
 	for (unsigned i = 0; i < as->nr_open_buckets; i++)
