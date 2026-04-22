@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
+#include "bcachefs.h"
+
 #include <linux/export.h>
 #include <linux/log2.h>
 #include <linux/percpu.h>
@@ -14,12 +16,6 @@
 #include <trace/events/lock.h>
 
 #include "six.h"
-
-#ifdef DEBUG
-#define EBUG_ON(cond)			BUG_ON(cond)
-#else
-#define EBUG_ON(cond)			do {} while (0)
-#endif
 
 #define six_acquire(l, t, r, ip)	lock_acquire(l, 0, t, r, 1, NULL, ip)
 #define six_release(l, ip)		lock_release(l, ip)
