@@ -185,16 +185,26 @@ static bool bch2_fs_ec_flush_outstanding_done(struct bch_fs *c, u64 wait_seq)
 	guard(mutex)(&c->ec.stripe_new_lock);
 	struct ec_stripe_new *s;
 	list_for_each_entry(s, &c->ec.stripe_new_list, list)
-		if (s->seq <= wait_seq)
+		/*
+		 * seq == 0: stripe still has writes in flight (accumulating).
+		 * seq is assigned when STRIPE_REF_io hits zero, which is the
+		 * point at which the stripe is ready to commit. We only wait
+		 * for stripes that reached commit-ready before our snapshot
+		 * — accumulating stripes either complete after us (new seq >
+		 * wait_seq, skipped) or get cancelled via their io_refs,
+		 * which we shouldn't block on from under state_lock.
+		 */
+		if (s->seq && s->seq <= wait_seq)
 			return false;
 	return true;
 }
 
 /*
- * Wait for all stripe_new entries that were on stripe_new_list at call time to
- * complete. Unlike bch2_fs_ec_flush(), doesn't wait for list_empty - so is
- * bounded by the in-flight set at call time, not affected by new stripes
- * started by other devices afterward.
+ * Wait for all stripe_new entries that had transitioned to commit-ready
+ * (STRIPE_REF_io drained, seq assigned) at call time to finish committing.
+ * Accumulating-write stripes (seq == 0) are skipped — they must be cancelled
+ * by the caller's own teardown path (e.g. bch2_ec_stop_dev) before this call
+ * so their writers drop refs.
  */
 void bch2_fs_ec_flush_outstanding(struct bch_fs *c)
 {

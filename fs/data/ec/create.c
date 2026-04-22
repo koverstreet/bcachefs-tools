@@ -1384,11 +1384,11 @@ static void ec_stripe_new_set_pending(struct bch_fs *c, struct ec_stripe_head *h
 
 	h->s		= NULL;
 	s->pending	= true;
-	s->seq		= atomic64_inc_return(&c->ec.stripe_new_seq);
 
 	scoped_guard(mutex, &c->ec.stripe_new_lock)
 		list_add(&s->list, &c->ec.stripe_new_list);
 
+	/* s->seq assigned in ec_stripe_new_put() when STRIPE_REF_io drops. */
 	ec_stripe_new_put(c, s, STRIPE_REF_io);
 }
 
@@ -1788,11 +1788,10 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	closure_get(&ctxt->cl);
 
 	/* ec_stripe_new_set_pending */
-	new_s->seq = atomic64_inc_return(&c->ec.stripe_new_seq);
-
 	scoped_guard(mutex, &c->ec.stripe_new_lock)
 		list_add(&new_s->list, &c->ec.stripe_new_list);
 
+	/* new_s->seq assigned in ec_stripe_new_put() when STRIPE_REF_io drops. */
 	ec_stripe_new_put(c, new_s, STRIPE_REF_io);
 	return 0;
 }
