@@ -136,7 +136,6 @@ enum six_lock_type {
 };
 
 struct six_lock_waiter {
-	struct list_head	list;
 	struct task_struct	*task;
 	enum six_lock_type	lock_want;
 	bool			lock_acquired;
