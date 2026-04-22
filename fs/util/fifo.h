@@ -120,7 +120,7 @@ do {									\
 
 #define fifo_push_back(fifo, new)					\
 ({									\
-	typeof((fifo)->data) _r = fifo_push_back_ref(fifo);		\
+	typeof(&(fifo)->data[0]) _r = fifo_push_back_ref(fifo);		\
 	if (_r)								\
 		*_r = (new);						\
 	_r != NULL;							\
@@ -128,7 +128,7 @@ do {									\
 
 #define fifo_push_front(fifo, new)					\
 ({									\
-	typeof((fifo)->data) _r = fifo_push_front_ref(fifo);		\
+	typeof(&(fifo)->data[0]) _r = fifo_push_front_ref(fifo);	\
 	if (_r)								\
 		*_r = (new);						\
 	_r != NULL;							\

@@ -504,10 +504,15 @@ next:
 				goto next;
 			}
 
-			if (fifo_empty(&b->lock.wait_list))
-				continue;
-
 			raw_spin_lock(&b->lock.wait_lock);
+			struct six_lock_wait_fifo *wf = rcu_dereference_protected(
+				b->lock.wait_fifo, lockdep_is_held(&b->lock.wait_lock));
+
+			if (fifo_empty(wf)) {
+				raw_spin_unlock(&b->lock.wait_lock);
+				continue;
+			}
+
 			struct six_lock_waiter *w;
 
 			/*
@@ -519,13 +524,13 @@ next:
 			 * uninitialized 0 case when front is nonzero.
 			 */
 			if (!top->waitlist_idx_initialized ||
-			    (u16)(top->waitlist_idx - b->lock.wait_list.front) >
-			    fifo_used(&b->lock.wait_list))
-				top->waitlist_idx = b->lock.wait_list.front;
+			    (u16)(top->waitlist_idx - wf->front) >
+			    fifo_used(wf))
+				top->waitlist_idx = wf->front;
 
 			top->waitlist_idx_initialized = true;
 
-			fifo_for_each_entry_from(w, &b->lock.wait_list, top->waitlist_idx) {
+			fifo_for_each_entry_from(w, wf, top->waitlist_idx) {
 				if (!w)
 					continue;
 

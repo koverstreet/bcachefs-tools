@@ -143,6 +143,21 @@ struct six_lock_waiter {
 	u64			start_time;
 };
 
+/*
+ * RCU-swappable wait fifo. Layout matches what the fifo.h macros expect
+ * (front/back/size/mask plus data), so fifo_for_each_entry/fifo_push/etc.
+ * work on a pointer to this struct.
+ *
+ * Grown by allocating a new struct, copying fields + entries, then
+ * rcu_assign_pointer'ing the lock's wait_fifo to the new object. Old
+ * heap allocations are kvfree_rcu'd so future lockless readers can
+ * outrun the free.
+ */
+struct six_lock_wait_fifo {
+	u16			front, back, size, mask;
+	struct six_lock_waiter	*data[];
+};
+
 struct six_lock {
 	atomic_t		state;
 	u32			seq;
@@ -152,8 +167,17 @@ struct six_lock {
 	unsigned __percpu	*readers;
 	raw_spinlock_t		wait_lock;
 	u16			wait_list_tombstones;
-	FIFO_U16_IDX(struct six_lock_waiter *) wait_list;
-	struct six_lock_waiter	*inline_waiters[8];
+
+	struct six_lock_wait_fifo __rcu *wait_fifo;
+
+	/*
+	 * Inline wait fifo; layout-compatible with struct six_lock_wait_fifo
+	 * so (struct six_lock_wait_fifo *)&inline_fifo is a valid view.
+	 */
+	struct {
+		u16			front, back, size, mask;
+		struct six_lock_waiter	*data[8];
+	} inline_fifo;
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lockdep_map	dep_map;
 #endif
