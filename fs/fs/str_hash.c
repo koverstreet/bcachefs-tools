@@ -299,6 +299,7 @@ static int bch2_str_hash_repair_key(struct btree_trans *trans,
 							   k.k->p, new->k.p));
 
 			CLASS(btree_iter, k_iter)(trans, desc->btree_id, k.k->p, BTREE_ITER_slots);
+			try(bch2_btree_iter_traverse(&k_iter));
 			try(bch2_hash_delete_at(trans, *desc, hash_info, &k_iter,
 					    BTREE_UPDATE_internal_snapshot_node));
 			try(bch2_fsck_update_backpointers(trans, s, *desc, hash_info, new));
