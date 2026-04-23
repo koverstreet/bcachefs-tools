@@ -540,10 +540,6 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	}
 	raw_spin_unlock(&lock->wait_lock);
 
-	if (old_wf && old_wf != (struct six_lock_wait_fifo *) &lock->inline_fifo)
-		kfree_rcu_mightsleep(old_wf);
-	kfree(new_wf);
-
 	if (unlikely(ret > 0)) {
 		ret = 0;
 		goto out;
@@ -612,6 +608,18 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 
 	__set_current_state(TASK_RUNNING);
 out:
+	/*
+	 * Free any heap-allocated wait_fifos: new_wf if we lost the grow
+	 * race (either another thread grew first, or we bailed out on a
+	 * re-check of fifo_full before swapping it in), and old_wf if we
+	 * successfully swapped. Centralized here so every goto-out path
+	 * is covered — the earlier -ENOMEM path in particular used to
+	 * leak new_wf on the grow-race-then-still-full code path.
+	 */
+	if (old_wf && old_wf != (struct six_lock_wait_fifo *) &lock->inline_fifo)
+		kfree_rcu_mightsleep(old_wf);
+	kfree(new_wf);
+
 	trace_contention_end(lock, 0);
 
 	return ret;
