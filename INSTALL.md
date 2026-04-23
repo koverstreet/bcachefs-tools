@@ -85,11 +85,7 @@ outputs =
      ...
      bcachefs-tools,
      ...
-   }@attrs:
-   let
-     eachSystem = nixpkgs.lib.genAttrs (import systems) (system: nixpkgs.legacyPackages.${system});
-   in
-   {
+   }@attrs: {
      nixosConfigurations."YourPC" = nixpkgs.lib.nixosSystem {
        ...
        modules = [
