@@ -34,6 +34,7 @@ typedef struct {
 	bool	will_retry_set_devices:1;
 	bool	have_cl:1;
 	s16	err;
+	u32	wake_counter_snapshot;
 } alloc_trace_entry;
 
 struct alloc_request {
@@ -95,8 +96,15 @@ struct alloc_request {
 	DARRAY_PREALLOCATED(alloc_trace_entry, 16) trace;
 };
 
+/*
+ * wake_counter_snapshot must be sampled by the caller *before* it adds
+ * itself to freelist_wait via closure_wait(), otherwise a wake racing
+ * between closure_wait() and the snapshot read is lost (we'd record the
+ * already-bumped counter and then never notice the bump in the wait loop).
+ */
 static inline int alloc_trace_add(struct alloc_request *req,
-				  u8 dev, int err)
+				  u8 dev, int err,
+				  u32 wake_counter_snapshot)
 {
 	if (darray_push(&req->trace, ((alloc_trace_entry) {
 		.dev				= dev,
@@ -106,6 +114,7 @@ static inline int alloc_trace_add(struct alloc_request *req,
 		.will_retry_set_devices		= req->will_retry_set_devices,
 		.have_cl			= req->cl != NULL,
 		.err				= err,
+		.wake_counter_snapshot		= wake_counter_snapshot,
 	    })))
 		req->trace_alloc_failed = true;
 
