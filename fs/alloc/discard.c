@@ -31,6 +31,13 @@ static u32 dev_bucket_size(struct bch_fs *c, unsigned dev)
 	return ca ? ca->mi.bucket_size : 0;
 }
 
+static bool dev_bucket_nouse(struct bch_fs *c, struct bpos bucket)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, bucket.inode);
+	return ca ? bch2_bucket_nouse(ca, bucket.offset) : true;
+}
+
 #define DEV_IN_FLIGHT_MAX		4
 
 static void __discard_state_to_text(struct printbuf *out, struct discard_state *s)
@@ -259,6 +266,9 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 				   bool fastpath)
 {
 	struct bch_fs *c = trans->c;
+
+	if (unlikely(dev_bucket_nouse(c, bucket)))
+		return 0;
 
 	int ret = discard_in_flight_add(c, bucket, fastpath, true);
 	if (ret) {
