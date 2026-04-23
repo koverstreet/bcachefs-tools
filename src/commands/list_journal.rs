@@ -1,6 +1,6 @@
 use std::fmt::Write;
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
 use bch_bindgen::bkey::bkey_start_pos;
 use bch_bindgen::{BbposRange, bbpos_range_parse};
@@ -603,8 +603,12 @@ pub struct Cli {
     log_only: bool,
 
     /// Print offset of each subentry
-    #[arg(short = 'o', long)]
+    #[arg(short = 'O', long)]
     offset: bool,
+
+    /// Additional mount options
+    #[arg(short = 'o')]
+    opts: Vec<String>,
 
     /// Filter by btree (+/-btree1,btree2)
     #[arg(short = 'b', long, allow_hyphen_values = true)]
@@ -633,7 +637,8 @@ pub struct Cli {
 
 fn cmd_list_journal(cli: Cli) -> Result<()> {
 
-    let mut opts: c::bch_opts = Default::default();
+    let mut opts = bch_bindgen::opts::parse_mount_opts_vec(&cli.opts, false)
+        .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);
     opt_set!(opts, norecovery, 1);
