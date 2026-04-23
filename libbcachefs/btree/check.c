@@ -595,7 +595,7 @@ int bch2_check_topology(struct bch_fs *c)
 {
 	CLASS(btree_trans, trans)(c);
 
-	bch2_trans_srcu_unlock(trans);
+	bch2_trans_unlock_long(trans);
 
 	for (unsigned i = 0; i < btree_id_nr_alive(c); i++) {
 		bool reconstructed_root = false;
