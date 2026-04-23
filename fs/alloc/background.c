@@ -1357,7 +1357,7 @@ int bch2_trigger_alloc(struct btree_trans *trans,
 
 			new_a->journal_seq_nonempty = new_a->journal_seq_empty = 0;
 
-			closure_wake_up(&c->allocator.freelist_wait);
+			bch2_alloc_wake_dev(ca);
 		}
 
 		if (statechange_to(!data_type_is_empty(a->data_type))) {
@@ -1578,7 +1578,7 @@ void bch2_recalc_capacity(struct bch_fs *c)
 	c->capacity.bucket_size_max = bucket_size_max;
 
 	/* Wake up case someone was waiting for buckets */
-	closure_wake_up(&c->allocator.freelist_wait);
+	bch2_alloc_wake_all(c);
 }
 
 u64 bch2_min_rw_member_capacity(struct bch_fs *c)
@@ -1649,7 +1649,7 @@ void bch2_dev_allocator_remove(struct bch_fs *c, struct bch_dev *ca)
 	 * Wake up threads that were blocked on allocation, so they can notice
 	 * the device can no longer be removed and the capacity has changed:
 	 */
-	closure_wake_up(&c->allocator.freelist_wait);
+	bch2_alloc_wake_all(c);
 
 	/*
 	 * journal_res_get() can block waiting for free space in the journal -

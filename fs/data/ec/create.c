@@ -1064,7 +1064,7 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 			}
 		} else {
 			if (ret == -BCH_ERR_bucket_alloc_blocked)
-				closure_wake_up(&c->allocator.freelist_wait);
+				bch2_alloc_waiters_unpark(c);
 			ret = bch_err_throw(c, stripe_insufficient_devices);
 		}
 	}
@@ -1569,7 +1569,7 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 		ret = stripe_alloc_or_reuse(trans, req, h->dev_stripe, s, &waiting);
 		if (waiting &&
 		    !bch2_err_matches(ret, BCH_ERR_operation_blocked))
-			closure_wake_up(&c->allocator.freelist_wait);
+			bch2_alloc_waiters_unpark(c);
 
 		mutex_unlock(&h->dev_stripe->lock);
 

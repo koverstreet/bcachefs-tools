@@ -67,6 +67,44 @@ const char * const bch2_watermarks[] = {
 };
 
 /*
+ * Per-device freelist wake counter — bumped here, snapshotted by alloc
+ * waiters, used to filter spurious wakeups.
+ *
+ * The counter increment pairs with closure_wake_up's waitlist spinlock
+ * on the wake side and the waiter's post-wake read on the other side,
+ * so no explicit barriers are needed — the spinlock provides release /
+ * acquire ordering.
+ */
+void bch2_alloc_wake_dev(struct bch_dev *ca)
+{
+	atomic_inc(&ca->alloc_wake_counter);
+	closure_wake_up(&ca->fs->allocator.freelist_wait);
+}
+
+void bch2_alloc_wake_all(struct bch_fs *c)
+{
+	guard(rcu)();
+	for_each_member_device_rcu(c, ca, NULL)
+		atomic_inc(&ca->alloc_wake_counter);
+	closure_wake_up(&c->allocator.freelist_wait);
+}
+
+/*
+ * Wake everyone on freelist_wait without marking any device as having made
+ * progress. Used when we parked our own closure on the waitlist, can't
+ * continue waiting, and need to drop off — closure_waitlist is a llist so
+ * the only way off is to wake everyone and let them re-park.
+ *
+ * Real waiters will snapshot-compare their device's wake counter, see no
+ * advance, and re-park silently; we (the self-extractor) just don't
+ * closure_wait() again.
+ */
+void bch2_alloc_waiters_unpark(struct bch_fs *c)
+{
+	closure_wake_up(&c->allocator.freelist_wait);
+}
+
+/*
  * Open buckets represent a bucket that's currently being allocated from.  They
  * serve two purposes:
  *
@@ -191,7 +229,9 @@ static void open_bucket_free_unused(struct bch_fs *c, struct open_bucket *ob)
 	}
 
 	closure_wake_up(&c->allocator.open_buckets_wait);
-	closure_wake_up(&c->allocator.freelist_wait);
+
+	scoped_guard(rcu)
+		bch2_alloc_wake_dev(bch2_dev_have_ref(c, ob->dev));
 }
 
 static inline bool may_alloc_bucket(struct bch_fs *c,
@@ -566,7 +606,7 @@ again:
 	}
 
 	if (waiting)
-		closure_wake_up(&c->allocator.freelist_wait);
+		bch2_alloc_wake_dev(ca);
 alloc:
 	ob = likely(freespace)
 		? bch2_bucket_alloc_freelist(trans, req)
@@ -1359,7 +1399,7 @@ err:
 	     bch2_err_matches(ret, BCH_ERR_bucket_alloc_blocked)) &&
 	    try_decrease_writepoints(trans, write_points_nr)) {
 		if (bch2_err_matches(ret, BCH_ERR_bucket_alloc_blocked))
-			closure_wake_up(&c->allocator.freelist_wait);
+			bch2_alloc_waiters_unpark(c);
 		goto retry;
 	}
 

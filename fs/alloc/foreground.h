@@ -144,6 +144,26 @@ struct open_bucket *bch2_bucket_alloc(struct bch_fs *, struct bch_dev *,
 				      enum bch_watermark, enum bch_data_type,
 				      struct closure *);
 
+/*
+ * freelist_wait wake helpers. Every wake_up site on
+ * c->allocator.freelist_wait should go through these so the per-device
+ * alloc_wake_counter is maintained in lockstep with waitlist wakeups —
+ * it's the signal waiters use to filter spurious wakes from devices
+ * they don't care about.
+ *
+ * _dev: bump one device's counter and wake (use when the caller knows
+ *       which device changed state in a way that might unblock allocs).
+ * _all: bump every member device's counter and wake (use for events
+ *       that might unblock allocs on any device — journal state
+ *       changes, fsck progress, debug knobs).
+ * _waiters_unpark: wake without bumping any counter; used to drop our own
+ *       closure off the waitlist when we can't continue waiting. Real
+ *       waiters see no counter advance and re-park silently.
+ */
+void bch2_alloc_wake_dev(struct bch_dev *);
+void bch2_alloc_wake_all(struct bch_fs *);
+void bch2_alloc_waiters_unpark(struct bch_fs *);
+
 static inline void ob_push(struct bch_fs *c, struct open_buckets *obs,
 			   struct open_bucket *ob)
 {

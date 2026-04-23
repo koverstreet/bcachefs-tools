@@ -384,7 +384,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 
 	if (last_seq_ondisk_updated) {
 		bch2_reset_alloc_cursors(c);
-		closure_wake_up(&c->allocator.freelist_wait);
+		bch2_alloc_wake_all(c);
 		bch2_do_discards_async(c);
 	}
 
