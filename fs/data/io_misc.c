@@ -92,7 +92,7 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 		e = bkey_extent_init(new.k);
 		e->k.p = iter->pos;
 
-		struct alloc_request *req;
+		struct alloc_request *req __free(alloc_request_put) = NULL;
 		ret = PTR_ERR_OR_ZERO(req = alloc_request_get(trans,
 						opts.foreground_target,
 						false,

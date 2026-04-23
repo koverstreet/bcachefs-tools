@@ -2295,35 +2295,40 @@ again:
 			break;
 
 		CLASS(btree_trans, trans)(c);
-		struct alloc_request *req;
 		bool io_in_flight = op->open_buckets.nr;
 
 		ret = lockrestart_do(trans, ({
-			req = alloc_request_get(trans,
-						op->target,
-						op->opts.erasure_code && !(op->flags & BCH_WRITE_cached),
-						&op->devs_have,
-						op->nr_replicas,
-						op->opts.data_replicas,
-						op->watermark,
-						op->flags,
-						!io_in_flight ? &op->cl : NULL);
-			PTR_ERR_OR_ZERO(req) ?:
+			struct alloc_request *req __free(alloc_request_put) =
+				alloc_request_get(trans,
+						  op->target,
+						  op->opts.erasure_code && !(op->flags & BCH_WRITE_cached),
+						  &op->devs_have,
+						  op->nr_replicas,
+						  op->opts.data_replicas,
+						  op->watermark,
+						  op->flags,
+						  !io_in_flight ? &op->cl : NULL);
+			int ret2 = PTR_ERR_OR_ZERO(req) ?:
 			bch2_alloc_sectors_req(trans, req, op->write_point, &wp);
+
+			if (bch2_err_matches(ret2, BCH_ERR_operation_blocked)) {
+				if (!wait_on_allocator_sync)
+					break;
+
+				bch2_trans_unlock_long(trans);
+				bch2_wait_on_allocator(c, req, ret2, &op->cl);
+				__bch2_write_index(op);
+				op->wbio.failed.nr = 0;
+				ret2 = bch_err_throw(c, transaction_restart_nested);
+			}
+			ret2;
 		}));
 		bch2_trans_unlock_long(trans);
 		if (ret && io_in_flight)
 			break;
 
-		if (bch2_err_matches(ret, BCH_ERR_operation_blocked)) {
-			if (!wait_on_allocator_sync)
-				break;
-
-			bch2_wait_on_allocator(c, req, ret, &op->cl);
-			__bch2_write_index(op);
-			op->wbio.failed.nr = 0;
-			continue;
-		}
+		if (bch2_err_matches(ret, BCH_ERR_operation_blocked))
+			break;
 
 		if (unlikely(ret))
 			goto err;

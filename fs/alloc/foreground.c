@@ -620,9 +620,11 @@ struct open_bucket *bch2_bucket_alloc(struct bch_fs *c, struct bch_dev *ca,
 		.data_type	= data_type,
 		.ca		= ca,
 	};
+	darray_init(&req.trace);
 
 	CLASS(btree_trans, trans)(c);
 	lockrestart_do(trans, PTR_ERR_OR_ZERO(ob = bch2_bucket_alloc_trans(trans, &req)));
+	darray_exit(&req.trace);
 	return ob;
 }
 
@@ -1189,16 +1191,16 @@ int bch2_alloc_sectors_req(struct btree_trans *trans,
 	int i;
 
 	BUG_ON(!req->nr_replicas);
-
-	req->trace.nr			= 0;
 retry:
 	req->ca				= NULL;
 	req->will_retry_all_devices	= req->target && !(req->flags & BCH_WRITE_only_specified_devs);
 	req->will_retry_target_devices	= !(req->flags & BCH_WRITE_alloc_nowait);
 	req->copygc_can_make_progress	= false;
+	req->trace_alloc_failed		= false;
 	req->ptrs.nr			= 0;
 	req->nr_effective		= 0;
 	req->have_cache			= req->flags & BCH_WRITE_move;
+	req->trace.nr			= 0;
 	write_points_nr			= a->write_points_nr;
 
 	*wp_ret = req->wp = writepoint_find(trans, write_point.v);
@@ -1638,20 +1640,14 @@ static inline bool dev_may_alloc(struct bch_fs *c, struct bch_dev *ca, struct al
 }
 
 static void alloc_trace_to_text(struct printbuf *out, struct bch_fs *c,
-			       struct alloc_trace *trace)
+			        struct alloc_request *req)
 {
-	if (!trace->nr)
+	if (!req->trace.nr)
 		return;
 
-	unsigned start = trace->nr > ARRAY_SIZE(trace->entries)
-		? trace->nr - ARRAY_SIZE(trace->entries) : 0;
-
-	prt_printf(out, "Allocation attempts (%u total):\n", trace->nr);
+	prt_printf(out, "Allocation attempts (%zu total):\n", req->trace.nr);
 	scoped_guard(printbuf_indent, out)
-		for (unsigned i = start; i < trace->nr; i++) {
-			struct alloc_trace_entry *e =
-				&trace->entries[i % ARRAY_SIZE(trace->entries)];
-
+		darray_for_each(req->trace, e) {
 			if (e->dev != U8_MAX)
 				prt_printf(out, "dev %u", e->dev);
 			else
@@ -1723,7 +1719,7 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 
 		prt_printf(&buf, "allocated:\t%u\n", req->nr_effective);
 
-		alloc_trace_to_text(&buf, c, &req->trace);
+		alloc_trace_to_text(&buf, c, req);
 		prt_newline(&buf);
 	}
 

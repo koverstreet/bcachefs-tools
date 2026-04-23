@@ -26,6 +26,16 @@ struct dev_alloc_list {
 	u8		data[BCH_SB_MEMBERS_MAX];
 };
 
+typedef struct {
+	u8	dev;
+	bool	new_stripe_alloc:1;
+	bool	will_retry_all_devices:1;
+	bool	will_retry_target_devices:1;
+	bool	will_retry_set_devices:1;
+	bool	have_cl:1;
+	s16	err;
+} alloc_trace_entry;
+
 struct alloc_request {
 	struct closure		*cl;
 	u8			nr_replicas;
@@ -37,6 +47,7 @@ struct alloc_request {
 	bool			will_retry_target_devices:1;
 	bool			will_retry_set_devices:1;
 	bool			copygc_can_make_progress:1;
+	bool			trace_alloc_failed:1;
 	enum bch_watermark	watermark;
 	enum bch_write_flags	flags;
 	enum bch_data_type	data_type;
@@ -81,36 +92,23 @@ struct alloc_request {
 	struct bch_devs_mask	scratch_devs_may_alloc;
 
 	/* Allocation attempt trace — dumped on allocator stuck */
-	struct alloc_trace {
-		u8		nr;
-		struct alloc_trace_entry {
-			u8	dev;
-			bool	new_stripe_alloc:1;
-			bool	will_retry_all_devices:1;
-			bool	will_retry_target_devices:1;
-			bool	will_retry_set_devices:1;
-			bool	have_cl:1;
-			s16	err;
-		}		entries[16];
-	} trace;
+	DARRAY_PREALLOCATED(alloc_trace_entry, 16) trace;
 };
 
 static inline int alloc_trace_add(struct alloc_request *req,
 				  u8 dev, int err)
 {
-	if (req) {
-		unsigned idx = req->trace.nr % ARRAY_SIZE(req->trace.entries);
-		struct alloc_trace_entry *e = &req->trace.entries[idx];
+	if (darray_push(&req->trace, ((alloc_trace_entry) {
+		.dev				= dev,
+		.new_stripe_alloc		= req->new_stripe_alloc,
+		.will_retry_all_devices		= req->will_retry_all_devices,
+		.will_retry_target_devices	= req->will_retry_target_devices,
+		.will_retry_set_devices		= req->will_retry_set_devices,
+		.have_cl			= req->cl != NULL,
+		.err				= err,
+	    })))
+		req->trace_alloc_failed = true;
 
-		e->dev				= dev;
-		e->new_stripe_alloc		= req->new_stripe_alloc;
-		e->will_retry_all_devices	= req->will_retry_all_devices;
-		e->will_retry_target_devices	= req->will_retry_target_devices;
-		e->will_retry_set_devices	= req->will_retry_set_devices;
-		e->have_cl			= req->cl != NULL;
-		e->err				= err;
-		req->trace.nr++;
-	}
 	return err;
 }
 
@@ -286,6 +284,9 @@ int bch2_alloc_sectors_req(struct btree_trans *, struct alloc_request *,
 			   struct write_point_specifier,
 			   struct write_point **);
 
+DEFINE_FREE(alloc_request_put, struct alloc_request *,
+	    if (!IS_ERR_OR_NULL(_T)) darray_exit(&_T->trace))
+
 static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 						      unsigned target,
 						      unsigned erasure_code,
@@ -312,7 +313,7 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 	req->flags		= flags;
 	req->devs_have		= devs_have;
 	req->have_cache		= false;
-	req->trace.nr		= 0;
+	darray_init(&req->trace);
 	return req;
 }
 
@@ -333,7 +334,9 @@ static inline int bch2_alloc_sectors_start_trans(struct btree_trans *trans,
 								 nr_replicas,
 								 ec_replicas,
 								 watermark, flags, cl));
-	return bch2_alloc_sectors_req(trans, req, write_point, wp_ret);
+	int ret = bch2_alloc_sectors_req(trans, req, write_point, wp_ret);
+	darray_exit(&req->trace);
+	return ret;
 }
 
 static inline struct bch_extent_ptr bch2_ob_ptr(struct bch_fs *c, struct open_bucket *ob)
