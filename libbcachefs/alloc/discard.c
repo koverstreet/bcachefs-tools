@@ -118,7 +118,7 @@ static int discard_in_flight_add(struct bch_fs *c, struct bpos bucket,
 		return -EEXIST;
 
 	if (d->refs[bucket.inode] >= DEV_IN_FLIGHT_MAX + fastpath)
-		return -EAGAIN;
+		return bch_err_throw(c, max_discards_in_flight);
 
 	if (!check) {
 		try(darray_push_gfp(&d->in_flight,
@@ -218,10 +218,15 @@ static u64 next_to_complete(struct bch_fs_discards *d, size_t *iter)
 	return 0;
 }
 
-static bool discards_pending(struct bch_fs_discards *d, unsigned nr)
+static bool discards_pending(struct bch_fs_discards *d, bool fastpath, bool all)
 {
 	guard(spinlock_irq)(&d->lock);
-	return d->ref > nr;
+	if (all)
+		return d->ref != 0;
+	for (unsigned i = 0; i < ARRAY_SIZE(d->refs); i++)
+		if (d->refs[i] >= DEV_IN_FLIGHT_MAX + fastpath)
+			return true;
+	return false;
 }
 
 static int bch2_discards_complete(struct btree_trans *trans,
@@ -230,10 +235,9 @@ static int bch2_discards_complete(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	struct bch_fs_discards *d = &c->discards;
-	unsigned nr = all ? 0 : d->ref / 2;
 	int ret = 0;
 
-	closure_wait_event(&d->wait, !discards_pending(d, nr));
+	closure_wait_event(&d->wait, !discards_pending(d, fastpath, all));
 
 	u64 dev_bucket = 0;
 	size_t iter = 0;
@@ -274,13 +278,12 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 	if (ret) {
 		if (ret == -EEXIST) {
 			s->eexist += bucket_size;
-			return 0;
+			ret = 0;
 		} else {
 			s->eagain += bucket_size;
-			return s->eagain * 2 > s->seen
-				? bch_err_throw(c, max_discards_in_flight)
-				: 0;
 		}
+
+		return ret;
 	}
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_alloc, bucket, BTREE_ITER_cached);
@@ -330,13 +333,11 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 
 		if (ret == -EEXIST) {
 			s->eexist += bucket_size;
-			return 0;
+			ret = 0;
 		} else {
 			s->eagain += bucket_size;
-			return s->eagain * 2 > s->seen
-				? bch_err_throw(c, max_discards_in_flight)
-				: 0;
 		}
+		return ret;
 	} else {
 		return __discard_mark_free(trans, s, fastpath, &iter, a);
 	}

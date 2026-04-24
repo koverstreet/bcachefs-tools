@@ -276,6 +276,14 @@ static void trace_would_deadlock(struct lock_graph *g, struct btree_trans *trans
 	}));
 }
 
+static void wake_up_trans(struct btree_trans *trans)
+{
+	if (closure_get_not_zero(&trans->ref)) {
+		wake_up_process(trans->locking_wait.task);
+		closure_put(&trans->ref);
+	}
+}
+
 static int abort_lock(struct lock_graph *g, struct trans_waiting_for_lock *i)
 {
 	if (i == g->g) {
@@ -285,7 +293,7 @@ static int abort_lock(struct lock_graph *g, struct trans_waiting_for_lock *i)
 					_THIS_IP_);
 	} else {
 		i->trans->lock_must_abort = true;
-		wake_up_process(i->trans->locking_wait.task);
+		wake_up_trans(i->trans);
 		return 0;
 	}
 }
@@ -368,7 +376,7 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 		if (orig_trans->lock_may_not_fail) {
 			/* Other threads will have to rerun the cycle detector: */
 			for (struct trans_waiting_for_lock *i = g->g + 1; i < g->g + g->nr; i++)
-				wake_up_process(i->trans->locking_wait.task);
+				wake_up_trans(i->trans);
 			return 0;
 		}
 

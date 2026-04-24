@@ -553,6 +553,9 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	if (six_optimistic_spin(lock, wait, type))
 		goto out;
 
+	/* Yield before running the cycle detector: */
+	schedule();
+
 	while (1) {
 		set_current_state(TASK_UNINTERRUPTIBLE);
 
@@ -566,8 +569,6 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 
 		ret = should_sleep_fn ? should_sleep_fn(lock, wait) : 0;
 		if (unlikely(ret)) {
-			bool acquired;
-
 			/*
 			 * If should_sleep_fn() returns an error, we are
 			 * required to return that error even if we already
@@ -576,7 +577,7 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			 * detector in bcachefs issued a transaction restart)
 			 */
 			raw_spin_lock(&lock->wait_lock);
-			acquired = wait->lock_acquired;
+			bool acquired = wait->lock_acquired;
 			if (!acquired) {
 				struct six_lock_wait_fifo *wf = rcu_dereference_protected(
 					lock->wait_fifo, lockdep_is_held(&lock->wait_lock));

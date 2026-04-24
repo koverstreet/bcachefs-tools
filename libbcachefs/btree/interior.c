@@ -1246,6 +1246,7 @@ bch2_btree_update_start(struct btree_trans *trans, struct btree_path *path,
 	unsigned nr_nodes[2] = { 0, 0 };
 	unsigned level_end = level_start;
 	enum bch_watermark watermark = commit_flags & BCH_WATERMARK_MASK;
+	struct alloc_request *req __free(alloc_request_put) = NULL;
 	int ret = 0;
 	u32 restart_count = trans->restart_count;
 
@@ -1353,17 +1354,17 @@ bch2_btree_update_start(struct btree_trans *trans, struct btree_path *path,
 		goto err;
 
 	struct bch_devs_list devs_have = (struct bch_devs_list) { 0 };
-	struct alloc_request *req = alloc_request_get(trans,
-				      target ?:
-				      c->opts.metadata_target ?:
-				      c->opts.foreground_target,
-				      false,
-				      &devs_have,
-				      as->disk_res.nr_replicas,
-				      as->disk_res.nr_replicas,
-				      watermark,
-				      write_flags,
-				      NULL);
+	req = alloc_request_get(trans,
+				target ?:
+				c->opts.metadata_target ?:
+				c->opts.foreground_target,
+				false,
+				&devs_have,
+				as->disk_res.nr_replicas,
+				as->disk_res.nr_replicas,
+				watermark,
+				write_flags,
+				NULL);
 	ret = PTR_ERR_OR_ZERO(req);
 	if (ret)
 		goto err;
