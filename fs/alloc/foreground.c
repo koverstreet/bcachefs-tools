@@ -1853,8 +1853,11 @@ static bool alloc_wait_advanced(struct bch_fs *c, struct alloc_request *req)
 		struct bch_dev *ca = bch2_dev_rcu_noerror(c, e->dev);
 		if (!ca ||
 		    (atomic_read(&ca->alloc_wake_counter) !=
-		     e->wake_counter_snapshot))
-			return true;
+		     e->wake_counter_snapshot)) {
+			bch2_dev_usage_read_fast(ca, &req->usage);
+			if (__dev_buckets_free(ca, req->usage, req->watermark) > 1)
+				return true;
+		}
 	}
 	BUG_ON(!found);
 	return false;
