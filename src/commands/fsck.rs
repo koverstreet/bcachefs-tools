@@ -46,7 +46,7 @@ pub struct FsckCli {
 
     /// Additional mount options
     #[arg(short = 'o')]
-    mount_opts: Vec<String>,
+    opts: Vec<String>,
 
     /// Don't display more than 10 errors of a given type
     #[arg(short = 'r', long = "ratelimit_errors")]
@@ -238,23 +238,26 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
         None
     };
 
-    let mut opts_str = String::from("degraded,fsck,fix_errors=ask,read_only");
+    let mut opts: Vec<String> = vec![
+        "degraded".into(),
+        "fsck".into(),
+        "fix_errors=ask".into(),
+        "read_only".into(),
+    ];
 
     if cli.yes {
-        opts_str.push_str(",fix_errors=yes");
+        opts.push("fix_errors=yes".into());
     }
     if cli.no_repair {
-        opts_str.push_str(",nochanges,fix_errors=no");
+        opts.push("nochanges".into());
+        opts.push("fix_errors=no".into());
     }
-    for o in &cli.mount_opts {
-        opts_str.push(',');
-        opts_str.push_str(o);
-    }
+    opts.extend(cli.opts.iter().cloned());
     if cli.ratelimit_errors {
-        opts_str.push_str(",ratelimit_errors");
+        opts.push("ratelimit_errors".into());
     }
     if cli.verbose {
-        opts_str.push_str(",verbose");
+        opts.push("verbose".into());
     }
 
     let devices = &cli.devices;
@@ -266,6 +269,10 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             warn_multipath_component(Path::new(dev), &mpath_dev);
         }
     }
+
+    let opts_str = opts.join(",");
+    let fs_opts = bch_bindgen::opts::parse_mount_opts_vec(&opts, false)
+        .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
 
     // Check if any device is a mountpoint/directory (online fsck)
     if devices.len() == 1 {
@@ -340,7 +347,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
                             return Err(anyhow!("error setting up loop devices"));
                         }
                         // Fall through to userspace fsck
-                        return run_userspace_fsck(devices, &opts_str);
+                        return run_userspace_fsck(devices, fs_opts);
                     }
                 }
             }
@@ -377,7 +384,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
         for l in &loopdevs { loopdev_free(l); }
 
         if fsck_fd < 0 && kernel.is_none() {
-            return run_userspace_fsck(devices, &opts_str);
+            return run_userspace_fsck(devices, fs_opts);
         }
 
         if fsck_fd < 0 {
@@ -390,33 +397,13 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
         process::exit(ret);
     }
 
-    run_userspace_fsck(devices, &opts_str)
+    run_userspace_fsck(devices, fs_opts)
 }
 
-fn run_userspace_fsck(devices: &[String], opts_str: &str) -> Result<()> {
+fn run_userspace_fsck(devices: &[String], fs_opts: c::bch_opts) -> Result<()> {
     println!("Running userspace offline fsck");
 
     let dev_paths: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
-
-    let mut fs_opts = bcachefs::bch_opts::default();
-    let c_opts_str = CString::new(opts_str)?;
-    let c_opts_ptr = c_opts_str.into_raw();
-    let mut parse_later = Printbuf::new();
-    let ret = unsafe {
-        let r = c::bch2_parse_mount_opts(
-            std::ptr::null_mut(),
-            &mut fs_opts,
-            parse_later.as_raw(),
-            c_opts_ptr,
-            false,
-        );
-        // Reclaim the CString to free it
-        let _ = CString::from_raw(c_opts_ptr);
-        r
-    };
-    if ret != 0 {
-        process::exit(ret);
-    }
 
     let fs = device_scan::open_scan(&dev_paths, fs_opts)?;
 

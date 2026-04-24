@@ -16,6 +16,7 @@
 #include <trace/events/lock.h>
 
 #include "six.h"
+#include "btree/types.h"
 
 #define six_acquire(l, t, r, ip)	lock_acquire(l, 0, t, r, 1, NULL, ip)
 #define six_release(l, ip)		lock_release(l, ip)
@@ -472,7 +473,7 @@ static struct six_lock_wait_fifo *alloc_wait_fifo(struct six_lock *lock, u16 *ne
 noinline
 static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			     struct six_lock_waiter *wait,
-			     six_lock_should_sleep_fn should_sleep_fn, void *p,
+			     six_lock_should_sleep_fn should_sleep_fn,
 			     unsigned long ip)
 {
 	struct six_lock_wait_fifo *new_wf = NULL;
@@ -539,10 +540,6 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	}
 	raw_spin_unlock(&lock->wait_lock);
 
-	if (old_wf && old_wf != (struct six_lock_wait_fifo *) &lock->inline_fifo)
-		kfree_rcu_mightsleep(old_wf);
-	kfree(new_wf);
-
 	if (unlikely(ret > 0)) {
 		ret = 0;
 		goto out;
@@ -556,6 +553,9 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	if (six_optimistic_spin(lock, wait, type))
 		goto out;
 
+	/* Yield before running the cycle detector: */
+	schedule();
+
 	while (1) {
 		set_current_state(TASK_UNINTERRUPTIBLE);
 
@@ -567,10 +567,8 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 		if (smp_load_acquire(&wait->lock_acquired))
 			break;
 
-		ret = should_sleep_fn ? should_sleep_fn(lock, p) : 0;
+		ret = should_sleep_fn ? should_sleep_fn(lock, wait) : 0;
 		if (unlikely(ret)) {
-			bool acquired;
-
 			/*
 			 * If should_sleep_fn() returns an error, we are
 			 * required to return that error even if we already
@@ -579,7 +577,7 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			 * detector in bcachefs issued a transaction restart)
 			 */
 			raw_spin_lock(&lock->wait_lock);
-			acquired = wait->lock_acquired;
+			bool acquired = wait->lock_acquired;
 			if (!acquired) {
 				struct six_lock_wait_fifo *wf = rcu_dereference_protected(
 					lock->wait_fifo, lockdep_is_held(&lock->wait_lock));
@@ -611,6 +609,18 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 
 	__set_current_state(TASK_RUNNING);
 out:
+	/*
+	 * Free any heap-allocated wait_fifos: new_wf if we lost the grow
+	 * race (either another thread grew first, or we bailed out on a
+	 * re-check of fifo_full before swapping it in), and old_wf if we
+	 * successfully swapped. Centralized here so every goto-out path
+	 * is covered — the earlier -ENOMEM path in particular used to
+	 * leak new_wf on the grow-race-then-still-full code path.
+	 */
+	if (old_wf && old_wf != (struct six_lock_wait_fifo *) &lock->inline_fifo)
+		kfree_rcu_mightsleep(old_wf);
+	kfree(new_wf);
+
 	trace_contention_end(lock, 0);
 
 	return ret;
@@ -648,7 +658,7 @@ out:
  */
 int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
 		       struct six_lock_waiter *wait,
-		       six_lock_should_sleep_fn should_sleep_fn, void *p,
+		       six_lock_should_sleep_fn should_sleep_fn,
 		       unsigned long ip)
 {
 	int ret;
@@ -659,7 +669,7 @@ int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
 		six_acquire(&lock->dep_map, 0, type == SIX_LOCK_read, ip);
 
 	ret = do_six_trylock(lock, type, true) ? 0
-		: six_lock_slowpath(lock, type, wait, should_sleep_fn, p, ip);
+		: six_lock_slowpath(lock, type, wait, should_sleep_fn, ip);
 
 	if (ret && type != SIX_LOCK_write)
 		six_release(&lock->dep_map, ip);

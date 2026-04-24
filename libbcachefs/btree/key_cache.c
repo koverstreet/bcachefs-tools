@@ -159,6 +159,25 @@ static struct bkey_cached *__bkey_cached_alloc(unsigned key_u64s, gfp_t gfp)
 	return ck;
 }
 
+/*
+ * Predicate for rcu_pending_dequeue_where: try to claim a pending entry by
+ * taking its intent+write locks. Succeeds only if the lock is currently idle
+ * (no SRCU readers still using it), so the returned ck can be reused without
+ * blocking. Called under p->lock; six_trylock is safe there (atomic ops only).
+ */
+static bool bkey_cached_try_claim(struct rcu_head *rcu)
+{
+	struct bkey_cached *ck = container_of(rcu, struct bkey_cached, rcu);
+
+	if (!six_trylock_intent(&ck->c.lock))
+		return false;
+	if (!six_trylock_write(&ck->c.lock)) {
+		six_unlock_intent(&ck->c.lock);
+		return false;
+	}
+	return true;
+}
+
 static struct bkey_cached *
 bkey_cached_alloc(struct btree_trans *trans, struct btree_path *path, unsigned key_u64s)
 {
@@ -168,7 +187,8 @@ bkey_cached_alloc(struct btree_trans *trans, struct btree_path *path, unsigned k
 	int ret;
 
 	struct bkey_cached *ck = container_of_or_null(
-				rcu_pending_dequeue(&bc->pending[pcpu_readers]),
+				rcu_pending_dequeue_where(&bc->pending[pcpu_readers],
+							  bkey_cached_try_claim),
 				struct bkey_cached, rcu);
 	if (ck)
 		return ck;
@@ -186,11 +206,16 @@ bkey_cached_alloc(struct btree_trans *trans, struct btree_path *path, unsigned k
 	if (ck) {
 		bch2_btree_lock_init(&ck->c, pcpu_readers ? SIX_LOCK_INIT_PCPU : 0, GFP_KERNEL);
 		ck->c.cached = true;
+		/* Brand new lock, trylock can't fail. */
+		BUG_ON(!six_trylock_intent(&ck->c.lock));
+		BUG_ON(!six_trylock_write(&ck->c.lock));
 		return ck;
 	}
 
-	return container_of_or_null(rcu_pending_dequeue_from_all(&bc->pending[pcpu_readers]),
-				    struct bkey_cached, rcu);
+	return container_of_or_null(
+			rcu_pending_dequeue_from_all_where(&bc->pending[pcpu_readers],
+							   bkey_cached_try_claim),
+			struct bkey_cached, rcu);
 }
 
 static struct bkey_cached *
@@ -239,10 +264,7 @@ static int btree_key_cache_create(struct btree_trans *trans,
 	key_u64s = roundup_pow_of_two(key_u64s);
 
 	struct bkey_cached *ck = errptr_try(bkey_cached_alloc(trans, ck_path, key_u64s));
-	if (likely(ck)) {
-		six_lock_intent(&ck->c.lock, NULL, NULL);
-		six_lock_write(&ck->c.lock, NULL, NULL);
-	} else {
+	if (unlikely(!ck)) {
 		ck = bkey_cached_reuse(bc);
 		if (unlikely(!ck)) {
 			bch_err_ratelimited(c, "error allocating memory for key cache item, btree %s",
@@ -250,6 +272,12 @@ static int btree_key_cache_create(struct btree_trans *trans,
 			return bch_err_throw(c, ENOMEM_btree_key_cache_create);
 		}
 	}
+	/*
+	 * Either way, ck is returned with intent+write held: bkey_cached_alloc
+	 * claims them via try_claim for reclaimed entries and trylocks the fresh
+	 * lock for newly allocated entries; bkey_cached_reuse takes them via
+	 * bkey_cached_lock_for_evict.
+	 */
 
 	ck->c.level		= 0;
 	ck->c.btree_id		= ck_path->btree_id;

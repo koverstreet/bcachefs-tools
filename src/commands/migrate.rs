@@ -407,6 +407,8 @@ fn migrate_fs(
     opt_set!(opts, sb, sb_offset_val);
     opt_set!(opts, nostart, true as u8);
     opt_set!(opts, noexcl, true as u8);
+    opt_set!(opts, reconcile_enabled, false as u8);
+    opt_set!(opts, copygc_enabled, false as u8);
 
     let fs = Fs::open(std::slice::from_ref(&dev_path_pb), opts)
         .map_err(|e| anyhow!("Error opening new filesystem: {}", e))?;

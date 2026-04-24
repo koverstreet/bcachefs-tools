@@ -22,6 +22,7 @@
 struct open_bucket;
 struct btree_update;
 struct btree_trans;
+struct lock_graph;
 
 /* Btree nodes: */
 
@@ -508,7 +509,7 @@ struct btree_trans_commit_hook {
 
 #define BTREE_TRANS_MEM_MAX	(1U << 16)
 
-#define BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS	10000
+#define BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS	NSEC_PER_MSEC
 
 struct btree_trans_paths {
 	unsigned long		nr_paths;
@@ -564,10 +565,11 @@ struct btree_trans {
 	u8			fn_idx;
 	u8			lock_must_abort;
 	bool			lock_may_not_fail:1;
-	bool			srcu_held:1;
 	bool			locked:1;
-	bool			pf_memalloc_nofs:1;
 	bool			write_locked:1;
+	bool			srcu_held:1;
+	bool			migrate_disable_held:1;
+	bool			pf_memalloc_nofs:1;
 	bool			used_mempool:1;
 	bool			in_traverse_all:1;
 	bool			paths_sorted:1;
@@ -582,6 +584,7 @@ struct btree_trans {
 	u32			restart_count_this_trans;
 #endif
 
+	u64			last_begin_time_nonrestarted;
 	u64			last_begin_time;
 	unsigned long		last_begin_ip;
 	unsigned long		last_restarted_ip;
@@ -655,6 +658,7 @@ struct bch_fs_btree_trans {
 	mempool_t			pool;
 	mempool_t			malloc_pool;
 	struct btree_trans_buf		__percpu *bufs;
+	struct lock_graph		__percpu *lock_graph;
 
 	struct srcu_struct		barrier;
 	bool				barrier_initialized;

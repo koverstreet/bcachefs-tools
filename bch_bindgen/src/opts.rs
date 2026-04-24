@@ -175,3 +175,16 @@ pub fn parse_mount_opts(fs: Option<&mut Fs>, optstr: Option<&str>, ignore_unknow
     }
     Ok(opts)
 }
+
+/// Join a slice of option strings with commas and parse into bch_opts.
+///
+/// Convenience wrapper for callers that accumulate options as a Vec<String>.
+/// Caller passes an empty slice for default opts.
+pub fn parse_mount_opts_vec(opts: &[String], ignore_unknown: bool)
+        -> Result<c::bch_opts, crate::errcode::BchError> {
+    if opts.is_empty() {
+        return parse_mount_opts(None, None, ignore_unknown);
+    }
+    let joined = opts.join(",");
+    parse_mount_opts(None, Some(&joined), ignore_unknown)
+}

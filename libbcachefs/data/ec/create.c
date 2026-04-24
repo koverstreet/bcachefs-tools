@@ -1064,7 +1064,7 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 			}
 		} else {
 			if (ret == -BCH_ERR_bucket_alloc_blocked)
-				closure_wake_up(&c->allocator.freelist_wait);
+				bch2_alloc_waiters_unpark(c);
 			ret = bch_err_throw(c, stripe_insufficient_devices);
 		}
 	}
@@ -1569,7 +1569,7 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 		ret = stripe_alloc_or_reuse(trans, req, h->dev_stripe, s, &waiting);
 		if (waiting &&
 		    !bch2_err_matches(ret, BCH_ERR_operation_blocked))
-			closure_wake_up(&c->allocator.freelist_wait);
+			bch2_alloc_waiters_unpark(c);
 
 		mutex_unlock(&h->dev_stripe->lock);
 
@@ -1730,45 +1730,46 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		? group_to_target(old_s->disk_label - 1)
 		: 0;
 
-	while (true) {
-		bch2_trans_begin(trans); /* avoid unnecessary restarts from dev_stripe_state_get() */
+	bch2_trans_begin(trans); /* avoid unnecessary restarts from dev_stripe_state_get() */
 
-		struct ec_dev_stripe_state *dev_stripe =
-			errptr_try(ec_dev_stripe_state_get(trans, old_s->disk_label));
-		struct alloc_request *req;
+	ret = lockrestart_do(trans, ({
+		struct ec_dev_stripe_state *dev_stripe = NULL;
+		struct alloc_request *req __free(alloc_request_put) = NULL;
 
-		ret = lockrestart_do(trans, ({
-			req = alloc_request_get(trans, target, false, NULL,
-						0, 0, BCH_WATERMARK_normal, 0, &cl);
+		int ret2 = PTR_ERR_OR_ZERO(dev_stripe = ec_dev_stripe_state_get(trans, old_s->disk_label)) ?:
+			   PTR_ERR_OR_ZERO(req = alloc_request_get(trans, target, false, NULL,
+								   0, 0, BCH_WATERMARK_normal, 0, &cl));
+		if (!ret2)
+			ret2 = new_stripe_alloc_buckets(trans, req, dev_stripe, new_s, true);
 
-			PTR_ERR_OR_ZERO(req) ?:
-			new_stripe_alloc_buckets(trans, req, dev_stripe, new_s, true);
-		}));
-		mutex_unlock(&dev_stripe->lock);
+		if (!IS_ERR_OR_NULL(dev_stripe))
+			mutex_unlock(&dev_stripe->lock);
 
-		bch2_trans_unlock_long(trans);
-
-		if (!ret)
-			break;
-
-		if (!bch2_err_matches(ret, BCH_ERR_operation_blocked)) {
-			CLASS(bch_log_msg, msg)(c);
-			prt_str(&msg.m, "\nold: ");
-			bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->old_stripe.key.k_i));;
-			prt_str(&msg.m, "\nnew: ");
-			bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->new_stripe.key.k_i));;
-			prt_printf(&msg.m, "\nret %s", bch2_err_str(ret));
-
-			bch2_stripe_handle_put(c, &new_s->new_stripe_handle);
-			bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
-			bch2_ec_stripe_buf_exit(&new_s->new_stripe);
-			bch2_ec_stripe_buf_exit(&new_s->old_stripe);
-			kfree(new_s);
-			return ret;
+		if (bch2_err_matches(ret2, BCH_ERR_operation_blocked)) {
+			bch2_trans_unlock_long(trans);
+			bch2_wait_on_allocator(c, req, ret2, &cl);
+			ret2 = bch_err_throw(c, transaction_restart_nested);
 		}
+		ret2;
+	}));
 
-		bch2_wait_on_allocator(c, req, ret, &cl);
+	if (ret) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_str(&msg.m, "\nold: ");
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->old_stripe.key.k_i));;
+		prt_str(&msg.m, "\nnew: ");
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->new_stripe.key.k_i));;
+		prt_printf(&msg.m, "\nret %s", bch2_err_str(ret));
+
+		bch2_stripe_handle_put(c, &new_s->new_stripe_handle);
+		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
+		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
+		bch2_ec_stripe_buf_exit(&new_s->old_stripe);
+		kfree(new_s);
+		return ret;
 	}
+
+	bch2_trans_unlock_long(trans);
 
 	bch2_stripe_new_buckets_add(c, new_s);
 	new_s->allocated = true;

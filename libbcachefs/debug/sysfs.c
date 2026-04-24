@@ -458,7 +458,7 @@ STORE(bch2_fs)
 		bch2_do_invalidates(c);
 
 	if (attr == &sysfs_trigger_freelist_wakeup)
-		closure_wake_up(&c->allocator.freelist_wait);
+		bch2_alloc_wake_all(c);
 
 	if (attr == &sysfs_trigger_recalc_capacity) {
 		guard(rwsem_read)(&c->state_lock);

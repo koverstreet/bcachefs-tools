@@ -67,6 +67,44 @@ const char * const bch2_watermarks[] = {
 };
 
 /*
+ * Per-device freelist wake counter — bumped here, snapshotted by alloc
+ * waiters, used to filter spurious wakeups.
+ *
+ * The counter increment pairs with closure_wake_up's waitlist spinlock
+ * on the wake side and the waiter's post-wake read on the other side,
+ * so no explicit barriers are needed — the spinlock provides release /
+ * acquire ordering.
+ */
+void bch2_alloc_wake_dev(struct bch_dev *ca)
+{
+	atomic_inc(&ca->alloc_wake_counter);
+	closure_wake_up(&ca->fs->allocator.freelist_wait);
+}
+
+void bch2_alloc_wake_all(struct bch_fs *c)
+{
+	guard(rcu)();
+	for_each_member_device_rcu(c, ca, NULL)
+		atomic_inc(&ca->alloc_wake_counter);
+	closure_wake_up(&c->allocator.freelist_wait);
+}
+
+/*
+ * Wake everyone on freelist_wait without marking any device as having made
+ * progress. Used when we parked our own closure on the waitlist, can't
+ * continue waiting, and need to drop off — closure_waitlist is a llist so
+ * the only way off is to wake everyone and let them re-park.
+ *
+ * Real waiters will snapshot-compare their device's wake counter, see no
+ * advance, and re-park silently; we (the self-extractor) just don't
+ * closure_wait() again.
+ */
+void bch2_alloc_waiters_unpark(struct bch_fs *c)
+{
+	closure_wake_up(&c->allocator.freelist_wait);
+}
+
+/*
  * Open buckets represent a bucket that's currently being allocated from.  They
  * serve two purposes:
  *
@@ -191,7 +229,9 @@ static void open_bucket_free_unused(struct bch_fs *c, struct open_bucket *ob)
 	}
 
 	closure_wake_up(&c->allocator.open_buckets_wait);
-	closure_wake_up(&c->allocator.freelist_wait);
+
+	scoped_guard(rcu)
+		bch2_alloc_wake_dev(bch2_dev_have_ref(c, ob->dev));
 }
 
 static inline bool may_alloc_bucket(struct bch_fs *c,
@@ -246,10 +286,10 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 		if (req->cl) {
 			closure_wait(&c->allocator.open_buckets_wait, req->cl);
 			return ERR_PTR(alloc_trace_add(req, U8_MAX,
-					bch_err_throw(c, open_bucket_alloc_blocked)));
+					bch_err_throw(c, open_bucket_alloc_blocked), 0));
 		} else {
 			return ERR_PTR(alloc_trace_add(req, U8_MAX,
-					bch_err_throw(c, open_buckets_empty)));
+					bch_err_throw(c, open_buckets_empty), 0));
 		}
 	}
 
@@ -517,6 +557,7 @@ static struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *trans,
 	req->btree_bitmap = req->data_type == BCH_DATA_btree;
 	memset(&req->counters, 0, sizeof(req->counters));
 again:
+	u32 wake_counter_snapshot = atomic_read(&ca->alloc_wake_counter);
 	bch2_dev_usage_read_fast(ca, &req->usage);
 	u64 avail = __dev_buckets_free(ca, req->usage, req->watermark);
 
@@ -566,7 +607,7 @@ again:
 	}
 
 	if (waiting)
-		closure_wake_up(&c->allocator.freelist_wait);
+		bch2_alloc_wake_dev(ca);
 alloc:
 	ob = likely(freespace)
 		? bch2_bucket_alloc_freelist(trans, req)
@@ -603,7 +644,7 @@ err:
 		event_inc_trace(c, bucket_alloc_fail, buf,
 			bucket_alloc_to_text(&buf, c, req, ob));
 
-	alloc_trace_add(req, ca->dev_idx, ret);
+	alloc_trace_add(req, ca->dev_idx, ret, wake_counter_snapshot);
 
 	return ob;
 }
@@ -620,9 +661,11 @@ struct open_bucket *bch2_bucket_alloc(struct bch_fs *c, struct bch_dev *ca,
 		.data_type	= data_type,
 		.ca		= ca,
 	};
+	darray_init(&req.trace);
 
 	CLASS(btree_trans, trans)(c);
 	lockrestart_do(trans, PTR_ERR_OR_ZERO(ob = bch2_bucket_alloc_trans(trans, &req)));
+	darray_exit(&req.trace);
 	return ob;
 }
 
@@ -781,8 +824,8 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *trans,
 			return 0;
 	}
 
-	return ret ?: alloc_trace_add(req, U8_MAX,
-			bch_err_throw(c, insufficient_devices));
+	return ret ?: alloc_trace_add(req, BCH_SB_MEMBER_INVALID,
+			bch_err_throw(c, insufficient_devices), 0);
 }
 
 /* Allocate from stripes: */
@@ -1189,16 +1232,16 @@ int bch2_alloc_sectors_req(struct btree_trans *trans,
 	int i;
 
 	BUG_ON(!req->nr_replicas);
-
-	req->trace.nr			= 0;
 retry:
 	req->ca				= NULL;
 	req->will_retry_all_devices	= req->target && !(req->flags & BCH_WRITE_only_specified_devs);
 	req->will_retry_target_devices	= !(req->flags & BCH_WRITE_alloc_nowait);
 	req->copygc_can_make_progress	= false;
+	req->trace_alloc_failed		= false;
 	req->ptrs.nr			= 0;
 	req->nr_effective		= 0;
 	req->have_cache			= req->flags & BCH_WRITE_move;
+	req->trace.nr			= 0;
 	write_points_nr			= a->write_points_nr;
 
 	*wp_ret = req->wp = writepoint_find(trans, write_point.v);
@@ -1357,7 +1400,7 @@ err:
 	     bch2_err_matches(ret, BCH_ERR_bucket_alloc_blocked)) &&
 	    try_decrease_writepoints(trans, write_points_nr)) {
 		if (bch2_err_matches(ret, BCH_ERR_bucket_alloc_blocked))
-			closure_wake_up(&c->allocator.freelist_wait);
+			bch2_alloc_waiters_unpark(c);
 		goto retry;
 	}
 
@@ -1638,20 +1681,14 @@ static inline bool dev_may_alloc(struct bch_fs *c, struct bch_dev *ca, struct al
 }
 
 static void alloc_trace_to_text(struct printbuf *out, struct bch_fs *c,
-			       struct alloc_trace *trace)
+			        struct alloc_request *req)
 {
-	if (!trace->nr)
+	if (!req->trace.nr)
 		return;
 
-	unsigned start = trace->nr > ARRAY_SIZE(trace->entries)
-		? trace->nr - ARRAY_SIZE(trace->entries) : 0;
-
-	prt_printf(out, "Allocation attempts (%u total):\n", trace->nr);
+	prt_printf(out, "Allocation attempts (%zu total):\n", req->trace.nr);
 	scoped_guard(printbuf_indent, out)
-		for (unsigned i = start; i < trace->nr; i++) {
-			struct alloc_trace_entry *e =
-				&trace->entries[i % ARRAY_SIZE(trace->entries)];
-
+		darray_for_each(req->trace, e) {
 			if (e->dev != U8_MAX)
 				prt_printf(out, "dev %u", e->dev);
 			else
@@ -1723,7 +1760,7 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
 
 		prt_printf(&buf, "allocated:\t%u\n", req->nr_effective);
 
-		alloc_trace_to_text(&buf, c, &req->trace);
+		alloc_trace_to_text(&buf, c, req);
 		prt_newline(&buf);
 	}
 
@@ -1792,15 +1829,74 @@ static inline unsigned allocator_wait_timeout(struct bch_fs *c)
 	return c->opts.allocator_stuck_timeout * HZ;
 }
 
+/*
+ * Returns true if any device we tried to allocate from and failed has had
+ * its alloc_wake_counter advance since we recorded the snapshot — i.e. the
+ * wake we just woke from might actually be for us.
+ */
+static bool alloc_wait_advanced(struct bch_fs *c, struct alloc_request *req)
+{
+	if (unlikely(req->trace_alloc_failed))
+		return true;
+
+	guard(rcu)();
+	bool found = false;
+
+	darray_for_each(req->trace, e) {
+		if (!e->err ||
+		    e->dev == BCH_SB_MEMBER_INVALID)
+			continue;
+		found = true;
+
+		/* If a device has been removed, retry the allocation now */
+
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, e->dev);
+		if (!ca ||
+		    (atomic_read(&ca->alloc_wake_counter) !=
+		     e->wake_counter_snapshot)) {
+			bch2_dev_usage_read_fast(ca, &req->usage);
+			if (__dev_buckets_free(ca, req->usage, req->watermark) > 1)
+				return true;
+		}
+	}
+	BUG_ON(!found);
+	return false;
+}
+
 void __bch2_wait_on_allocator(struct bch_fs *c, struct alloc_request *req,
 			      int err, struct closure *cl)
 {
-	unsigned t = allocator_wait_timeout(c);
+	unsigned long until = jiffies + allocator_wait_timeout(c);
 
-	if (t && closure_sync_timeout(cl, t)) {
-		c->allocator.last_stuck = jiffies;
-		bch2_print_allocator_stuck(c, req, err);
+	while (1) {
+		unsigned long t = until - jiffies;
+
+		if (t && closure_sync_timeout(cl, t)) {
+			/* Timed out — cl is still on freelist_wait. */
+			c->allocator.last_stuck = jiffies;
+			bch2_print_allocator_stuck(c, req, err);
+		}
+
+		closure_sync(cl);
+
+		if (!bch2_err_matches(err, BCH_ERR_bucket_alloc_blocked))
+			return;
+
+		/*
+		 * freelist_wait is fs-wide, but we only care about the
+		 * devices we tried to allocate from. If none of their
+		 * alloc_wake_counters advanced, this wake didn't concern us
+		 * — re-park and sleep again rather than bouncing through a
+		 * full allocator retry.
+		 */
+		if (alloc_wait_advanced(c, req))
+			return;
+
+		closure_wait(&c->allocator.freelist_wait, cl);
+
+		if (alloc_wait_advanced(c, req)) {
+			bch2_alloc_waiters_unpark(c);
+			return;
+		}
 	}
-
-	closure_sync(cl);
 }

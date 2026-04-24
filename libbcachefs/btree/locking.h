@@ -12,6 +12,7 @@
 
 #include "btree/cache.h"
 #include "btree/iter.h"
+#include "btree/locking_types.h"
 #include "util/six.h"
 
 void bch2_btree_lock_init(struct btree_bkey_cached_common *, enum six_lock_init_flags, gfp_t gfp);
@@ -197,7 +198,7 @@ bch2_btree_node_unlock_write_inlined(struct btree_trans *trans, struct btree_pat
 	__bch2_btree_node_unlock_write(trans, b);
 }
 
-int bch2_six_check_for_deadlock(struct six_lock *lock, void *p);
+int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *);
 
 /* lock: */
 
@@ -236,7 +237,7 @@ static inline int __btree_node_lock_nopath(struct btree_trans *trans,
 	trans->locking		= b;
 
 	int ret = six_lock_ip_waiter(&b->lock, type, &trans->locking_wait,
-				     bch2_six_check_for_deadlock, trans, ip);
+				     bch2_six_check_for_deadlock, ip);
 	if (unlikely(ret == -ENOMEM))
 		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_waitlist_alloc);
 	WRITE_ONCE(trans->locking, NULL);

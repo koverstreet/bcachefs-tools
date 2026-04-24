@@ -3564,36 +3564,6 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 	return p;
 }
 
-static inline void check_srcu_held_too_long(struct btree_trans *trans)
-{
-	if (unlikely(trans->srcu_held && time_after(jiffies, trans->srcu_lock_time + HZ * 10))) {
-		CLASS(printbuf, buf)();
-
-		prt_printf(&buf, "btree trans held srcu lock (delaying memory reclaim) for %lu seconds\n",
-			   (jiffies - trans->srcu_lock_time) / HZ);
-		bch2_sb_recent_counters_to_text(&buf, &trans->c->counters);
-
-		WARN_RATELIMIT(true, "%s", buf.buf);
-	}
-}
-
-void bch2_trans_srcu_unlock(struct btree_trans *trans)
-{
-	if (trans->srcu_held) {
-		struct bch_fs *c = trans->c;
-		struct btree_path *path;
-		unsigned i;
-
-		trans_for_each_path(trans, path, i)
-			if (path->cached && !btree_node_locked(path, 0))
-				path->l[0].b = ERR_PTR(-BCH_ERR_no_btree_node_srcu_reset);
-
-		check_srcu_held_too_long(trans);
-		srcu_read_unlock(&c->btree.trans.barrier, trans->srcu_idx);
-		trans->srcu_held = false;
-	}
-}
-
 static void bch2_trans_srcu_lock(struct btree_trans *trans)
 {
 	if (!trans->srcu_held) {
@@ -3601,6 +3571,20 @@ static void bch2_trans_srcu_lock(struct btree_trans *trans)
 		trans->srcu_lock_time	= jiffies;
 		trans->srcu_held = true;
 	}
+}
+
+static inline void trans_migrate_disable(struct btree_trans *trans)
+{
+	if (!trans->migrate_disable_held)
+		migrate_disable();
+	trans->migrate_disable_held = true;
+}
+
+static inline void trans_migrate_enable(struct btree_trans *trans)
+{
+	if (trans->migrate_disable_held)
+		migrate_enable();
+	trans->migrate_disable_held = false;
 }
 
 /**
@@ -3677,18 +3661,23 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 		__bch2_time_stats_update(&btree_trans_stats(trans)->duration,
 					 trans->last_begin_time, now);
 
-	if (!trans->restarted &&
-	    (need_resched() ||
-	     time_after64(now, trans->last_begin_time + BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS))) {
+	if (unlikely(trans->srcu_held &&
+		     time_after(jiffies, trans->srcu_lock_time + msecs_to_jiffies(10))))
+		bch2_trans_unlock_long(trans);
+
+	if (need_resched() ||
+	    time_after64(now, trans->last_begin_time_nonrestarted +
+			 BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS)) {
 		bch2_trans_unlock(trans);
+
+		trans_migrate_enable(trans);
 		cond_resched();
 		now = local_clock();
 	}
-	trans->last_begin_time = now;
 
-	if (unlikely(trans->srcu_held &&
-		     time_after(jiffies, trans->srcu_lock_time + msecs_to_jiffies(10))))
-		bch2_trans_srcu_unlock(trans);
+	if (!trans->restarted)
+		trans->last_begin_time_nonrestarted = now;
+	trans->last_begin_time = now;
 
 	trans->last_begin_ip = _RET_IP_;
 
@@ -3705,6 +3694,8 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 #endif
 
 	trans_set_locked(trans, false);
+
+	trans_migrate_disable(trans);
 
 	if (trans->restarted) {
 		bch2_btree_path_traverse_all(trans);
@@ -3784,7 +3775,6 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	struct btree_trans *trans = bch2_trans_alloc(c);
 
 	trans->c		= c;
-	trans->last_begin_time	= local_clock();
 	trans->fn_idx		= fn_idx;
 	trans->locking_wait.task = current;
 	trans->journal_replay_not_finished =
@@ -3824,6 +3814,10 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	trans->srcu_lock_time	= jiffies;
 	trans->srcu_held	= true;
 	trans_set_locked(trans, false);
+
+	u64 now = local_clock();
+	trans->last_begin_time_nonrestarted = now;
+	trans->last_begin_time = now;
 
 	closure_init_stack_release(&trans->ref);
 	return trans;
@@ -3879,18 +3873,15 @@ void bch2_trans_put(struct btree_trans *trans)
 	if (trans->restarted)
 		bch2_trans_in_restart_error(trans);
 
-	bch2_trans_unlock(trans);
+	bch2_trans_unlock_long(trans);
+
+	trans_migrate_enable(trans);
 
 	trans_for_each_update(trans, i)
 		__btree_path_put(trans, trans->paths + i->path, true);
 	trans->nr_updates	= 0;
 
 	check_btree_paths_leaked(trans);
-
-	if (trans->srcu_held) {
-		check_srcu_held_too_long(trans);
-		srcu_read_unlock(&c->btree.trans.barrier, trans->srcu_idx);
-	}
 
 	if (unlikely(trans->journal_replay_not_finished))
 		bch2_journal_keys_put(c);
@@ -4063,6 +4054,15 @@ void bch2_fs_btree_iter_exit(struct bch_fs *c)
 		}
 	free_percpu(c->btree.trans.bufs);
 
+	if (c->btree.trans.lock_graph)
+		for_each_possible_cpu(cpu) {
+			struct lock_graph *g = per_cpu_ptr(c->btree.trans.lock_graph, cpu);
+
+			for (unsigned i = 0; i < ARRAY_SIZE(g->g); i++)
+				darray_exit(&g->g[i].waitlist);
+		}
+	free_percpu(c->btree.trans.lock_graph);
+
 	trans = list_first_entry_or_null(&c->btree.trans.list, struct btree_trans, list);
 	if (trans)
 		panic("%s leaked btree_trans\n", trans->fn);
@@ -4109,9 +4109,22 @@ void bch2_fs_btree_iter_init_early(struct bch_fs *c)
 
 int bch2_fs_btree_iter_init(struct bch_fs *c)
 {
+	int cpu;
+
 	c->btree.trans.bufs = alloc_percpu(struct btree_trans_buf);
 	if (!c->btree.trans.bufs)
 		return -ENOMEM;
+
+	c->btree.trans.lock_graph = alloc_percpu(struct lock_graph);
+	if (!c->btree.trans.lock_graph)
+		return -ENOMEM;
+
+	for_each_possible_cpu(cpu) {
+		struct lock_graph *g = per_cpu_ptr(c->btree.trans.lock_graph, cpu);
+
+		for (unsigned i = 0; i < ARRAY_SIZE(g->g); i++)
+			darray_init(&g->g[i].waitlist);
+	}
 
 	try(mempool_init_kmalloc_pool(&c->btree.trans.pool, 1, sizeof(struct btree_trans)));
 	try(mempool_init_kmalloc_pool(&c->btree.trans.malloc_pool, 1, BTREE_TRANS_MEM_MAX));
