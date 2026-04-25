@@ -69,12 +69,6 @@ static const char * const bch2_reconcile_phase_types[] = {
 
 #undef x
 
-static bool btree_is_reconcile_phys(enum btree_id btree)
-{
-	return btree == BTREE_ID_reconcile_hipri_phys ||
-		btree == BTREE_ID_reconcile_work_phys;
-}
-
 static u64 reconcile_scan_encode(struct reconcile_scan s)
 {
 	switch (s.type) {
@@ -1283,14 +1277,65 @@ struct reconcile_pass {
 	u32				*copygc_run_count;
 };
 
+/* Per-key handler: returns the result of processing one key in a keyed phase. */
+typedef int (*reconcile_key_handler)(struct reconcile_pass *p, struct bkey_s_c k);
+
+static int do_reconcile_scan_key(struct reconcile_pass *p, struct bkey_s_c k)
+{
+	struct btree_trans *trans = p->ctxt->trans;
+	struct bch_fs *c = trans->c;
+
+	if (reconcile_scan_decode(c, k.k->p.offset).type == RECONCILE_SCAN_pending)
+		bkey_reassemble(&p->pending_cookie->k_i, k);
+
+	int ret = do_reconcile_scan(p->ctxt, p->snapshot_io_opts, k.k->p,
+				    le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie),
+				    p->sectors_scanned, p->last_flushed);
+
+	if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+#ifdef CONFIG_BCACHEFS_DEBUG
+		CLASS(printbuf, buf)();
+		bch2_prt_backtrace(&buf, &trans->last_restarted_trace);
+		panic("in transaction restart: %s, last restarted by\n%s",
+		      bch2_err_str(trans->restarted),
+		      buf.buf);
+#else
+		panic("in transaction restart: %s, last restarted by %pS\n",
+		      bch2_err_str(trans->restarted),
+		      (void *) trans->last_restarted_ip);
+#endif
+	}
+	return ret;
+}
+
+static int do_reconcile_btree_key(struct reconcile_pass *p, struct bkey_s_c k)
+{
+	struct bch_fs_reconcile *r = &p->ctxt->trans->c->reconcile;
+
+	return do_reconcile_btree(p->ctxt, p->snapshot_io_opts, r->work_pos,
+				  bkey_s_c_to_backpointer(k));
+}
+
+static int do_reconcile_extent_key(struct reconcile_pass *p, struct bkey_s_c k)
+{
+	struct btree_trans *trans = p->ctxt->trans;
+	struct bch_fs_reconcile *r = &trans->c->reconcile;
+
+	return lockrestart_do(trans,
+		do_reconcile_extent(p->ctxt, p->snapshot_io_opts, r->work_pos,
+				    p->stripe_retry));
+}
+
 /*
- * Iterate one phase to exhaustion (next_reconcile_entry returns no key) or to
- * an interrupt condition (going RO, ratelimit hit, reconcile disabled, kick
- * changed). On real errors returns the error; otherwise returns 0 — caller
- * re-checks the conditions to decide whether to advance to the next phase or
- * bail out.
+ * Iterate one keyed phase (scan / btree / normal) to exhaustion or interrupt.
+ * The phys phase doesn't go through here — it's a one-shot, dispatched
+ * separately from the outer loop.
+ *
+ * Returns 0 on phase done or interrupt, error on real failure. Caller
+ * re-checks loop conditions to decide whether to advance or bail.
  */
-static int do_reconcile_phase(struct reconcile_pass *p, u32 kick)
+static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
+				   reconcile_key_handler handler)
 {
 	struct moving_context *ctxt = p->ctxt;
 	struct btree_trans *trans = ctxt->trans;
@@ -1316,48 +1361,7 @@ static int do_reconcile_phase(struct reconcile_pass *p, u32 kick)
 		r->running = true;
 		r->work_pos.pos = k.k->p;
 
-		if (k.k->type == KEY_TYPE_cookie &&
-		    reconcile_scan_decode(c, k.k->p.offset).type == RECONCILE_SCAN_pending)
-			bkey_reassemble(&p->pending_cookie->k_i, k);
-
-		if (k.k->type == KEY_TYPE_cookie) {
-			ret = do_reconcile_scan(ctxt, p->snapshot_io_opts,
-						k.k->p,
-						le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie),
-						p->sectors_scanned, p->last_flushed);
-
-			if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
-#ifdef CONFIG_BCACHEFS_DEBUG
-				CLASS(printbuf, buf)();
-				bch2_prt_backtrace(&buf, &trans->last_restarted_trace);
-				panic("in transaction restart: %s, last restarted by\n%s",
-				      bch2_err_str(trans->restarted),
-				      buf.buf);
-#else
-				panic("in transaction restart: %s, last restarted by %pS\n",
-				      bch2_err_str(trans->restarted),
-				      (void *) trans->last_restarted_ip);
-#endif
-			}
-		} else if (k.k->type == KEY_TYPE_backpointer) {
-			ret = do_reconcile_btree(ctxt, p->snapshot_io_opts,
-						 r->work_pos, bkey_s_c_to_backpointer(k));
-		} else if (btree_is_reconcile_phys(r->work_pos.btree)) {
-			/*
-			 * The phys phase consumes its whole btree in one
-			 * do_reconcile_phys() call (which fans out to
-			 * per-device worker threads); return so the caller
-			 * advances to the next phase.
-			 */
-			bch2_trans_unlock_long(trans);
-			ret = do_reconcile_phys(c, r->phase);
-			BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
-			return ret;
-		} else {
-			ret = lockrestart_do(trans,
-				do_reconcile_extent(ctxt, p->snapshot_io_opts, r->work_pos,
-						    p->stripe_retry));
-		}
+		ret = handler(p, k);
 
 		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
 			bch2_trans_unlock_long(trans);
@@ -1386,6 +1390,41 @@ static int do_reconcile_phase(struct reconcile_pass *p, u32 kick)
 	}
 
 	return ret;
+}
+
+/*
+ * Phys phase: one-shot. do_reconcile_phys() fans out to per-device worker
+ * threads which together consume the whole reconcile_*_phys btree, then we
+ * return to advance to the next phase.
+ */
+static int do_reconcile_phase_phys(struct reconcile_pass *p)
+{
+	struct btree_trans *trans = p->ctxt->trans;
+	struct bch_fs *c = trans->c;
+	struct bch_fs_reconcile *r = &c->reconcile;
+
+	bch2_trans_unlock_long(trans);
+	int ret = do_reconcile_phys(c, r->phase);
+	BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
+	return ret;
+}
+
+static int do_reconcile_phase(struct reconcile_pass *p, u32 kick)
+{
+	struct bch_fs_reconcile *r = &p->ctxt->trans->c->reconcile;
+
+	switch (reconcile_phases[r->phase].type) {
+	case RECONCILE_PHASE_scan:
+		return do_reconcile_phase_iter(p, kick, do_reconcile_scan_key);
+	case RECONCILE_PHASE_btree:
+		return do_reconcile_phase_iter(p, kick, do_reconcile_btree_key);
+	case RECONCILE_PHASE_phys:
+		return do_reconcile_phase_phys(p);
+	case RECONCILE_PHASE_normal:
+		return do_reconcile_phase_iter(p, kick, do_reconcile_extent_key);
+	default:
+		BUG();
+	}
 }
 
 static int do_reconcile(struct moving_context *ctxt)
