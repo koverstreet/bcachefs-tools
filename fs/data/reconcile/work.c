@@ -1592,33 +1592,45 @@ void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c)
 		bch2_pr_time_units(out, ktime_get_real_ns() - r->wait_wallclock_start);
 		prt_newline(out);
 	} else {
-		struct reconcile_phase phase = reconcile_phases[r->phase];
+		/*
+		 * r->phase is bumped concurrently by do_reconcile(); after a
+		 * clean pass through every phase it briefly equals
+		 * ARRAY_SIZE(reconcile_phases) before r->running is cleared.
+		 * Snapshot via READ_ONCE() and bounds-check.
+		 */
+		unsigned phase_idx = READ_ONCE(r->phase);
 		struct bpos work_pos = r->work_pos.pos;
 		barrier();
 
-		if (phase.type == RECONCILE_PHASE_scan) {
-			prt_printf(out, "scanning: ");
-			struct reconcile_scan s = reconcile_scan_decode(c, work_pos.offset);
-			reconcile_scan_to_text(out, c, s);
-
-			if (s.type == RECONCILE_SCAN_fs ||
-			    s.type == RECONCILE_SCAN_metadata) {
-				prt_char(out, ' ');
-				bch2_progress_to_text(out, &r->progress);
-			}
-			prt_newline(out);
+		if (phase_idx >= ARRAY_SIZE(reconcile_phases)) {
+			prt_printf(out, "between phases\n");
 		} else {
-			prt_printf(out, "processing %s %s: ",
-				   bch2_reconcile_work_ids[phase.priority],
-				   bch2_reconcile_phase_types[phase.type]);
+			struct reconcile_phase phase = reconcile_phases[phase_idx];
 
-			if (phase.type == RECONCILE_PHASE_normal) {
-				bch2_progress_to_text(out, &r->progress);
+			if (phase.type == RECONCILE_PHASE_scan) {
+				prt_printf(out, "scanning: ");
+				struct reconcile_scan s = reconcile_scan_decode(c, work_pos.offset);
+				reconcile_scan_to_text(out, c, s);
+
+				if (s.type == RECONCILE_SCAN_fs ||
+				    s.type == RECONCILE_SCAN_metadata) {
+					prt_char(out, ' ');
+					bch2_progress_to_text(out, &r->progress);
+				}
+				prt_newline(out);
 			} else {
-				bch2_bpos_to_text(out, work_pos);
-			}
+				prt_printf(out, "processing %s %s: ",
+					   bch2_reconcile_work_ids[phase.priority],
+					   bch2_reconcile_phase_types[phase.type]);
 
-			prt_newline(out);
+				if (phase.type == RECONCILE_PHASE_normal) {
+					bch2_progress_to_text(out, &r->progress);
+				} else {
+					bch2_bpos_to_text(out, work_pos);
+				}
+
+				prt_newline(out);
+			}
 		}
 	}
 
