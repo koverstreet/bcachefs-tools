@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use bch_bindgen::{
     bcachefs::{self, bch_key, bch_sb_handle},
     c::{bch2_chacha20, bch_encrypted_key, bch_sb_field_crypt},
@@ -85,12 +85,24 @@ impl UnlockPolicy {
         match self {
             Self::Fail => KeyHandle::new_from_search(&uuid),
             Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
-            Self::Ask => Passphrase::new_from_prompt(&uuid).and_then(|p| KeyHandle::new(sb, &p, Keyring::User)),
-            Self::Stdin => Passphrase::new_from_stdin().and_then(|p| KeyHandle::new(sb, &p, Keyring::User)),
+            Self::Ask => {
+                let correct = Passphrase::new_from_prompt(&uuid, false)?
+                    .into_iter()
+                    .next()
+                    .expect("Passphase::new_from_prompt should always return at least one passphrase")
+                    .check(sb)?
+                    .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+                KeyHandle::new(&correct, Keyring::User)
+            }
+            Self::Stdin => {
+                let correct = Passphrase::new_from_stdin()?
+                    .check(sb)?
+                    .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+                KeyHandle::new(&correct, Keyring::User)
+            }
         }
     }
 }
-
 
 /// Proof that a bcachefs key has been added to or found in the kernel keyring.
 pub struct KeyHandle;
@@ -100,19 +112,17 @@ impl KeyHandle {
         CString::new(format!("bcachefs:{uuid}")).unwrap()
     }
 
-    pub fn new(sb: &bch_sb_handle, passphrase: &Passphrase, keyring: Keyring) -> Result<Self> {
-        let key_name = Self::format_key_name(&sb.sb().uuid());
+    pub fn new(correct_passphrase: &CorrectPassphrase, keyring: Keyring) -> Result<Self> {
+        let key_name = Self::format_key_name(&correct_passphrase.uuid);
         let key_name = CStr::as_ptr(&key_name);
         let key_type = c"user";
-
-        let (passphrase_key, _sb_key) = passphrase.check(sb)?;
 
         let key_id = unsafe {
             keyutils::add_key(
                 key_type.as_ptr(),
                 key_name,
-                ptr::addr_of!(passphrase_key).cast(),
-                mem::size_of_val(&passphrase_key),
+                ptr::addr_of!(correct_passphrase.passphrase_key).cast(),
+                mem::size_of_val(&correct_passphrase.passphrase_key),
                 keyring.id(),
             )
         };
@@ -158,6 +168,51 @@ impl KeyHandle {
     }
 }
 
+pub struct CorrectPassphrase {
+    pub uuid: Uuid,
+    pub passphrase_key: bch_key,
+    pub sb_key: bch_encrypted_key,
+}
+
+impl CorrectPassphrase {
+    pub fn new(sb: &bch_sb_handle, file: Option<&Path>) -> Result<Self> {
+        if let Some(f) = file {
+            let passphrase = Passphrase::new_from_file(f)?;
+            if let Some(correct) = passphrase.check(sb)? {
+                return Ok(correct);
+            }
+        }
+
+        let stdin_type = get_stdin_type();
+
+        if stdin_type == StdinType::Other {
+            // Only one try.
+            let passphrase = Passphrase::new_from_stdin()?;
+            return passphrase.check(sb)?
+                .ok_or_else(|| anyhow!("incorrect passphrase"));
+        }
+
+        let uuid = sb.sb().uuid();
+
+        for i in 0..3 {
+            let accept_cached = i == 0;
+            let passphrases = match stdin_type {
+                StdinType::Terminal => Passphrase::new_from_prompt(&uuid, accept_cached)?,
+                StdinType::DevNull => Passphrase::new_from_askpassword(&uuid, accept_cached)??,
+                StdinType::Other => unreachable!(),
+            };
+            if let Some(correct) = passphrases
+                .into_iter()
+                .find_map(|p| p.check(sb).transpose())
+            {
+                return correct;
+            }
+        }
+
+        bail!("incorrect passphrase limit reached")
+    }
+}
+
 #[derive(ZeroizeOnDrop)]
 pub struct Passphrase(CString);
 
@@ -166,34 +221,33 @@ impl Passphrase {
         &self.0
     }
 
-    pub fn new(uuid: &Uuid) -> Result<Self> {
-        match get_stdin_type() {
-            StdinType::Terminal => Self::new_from_prompt(uuid),
-            StdinType::DevNull => Self::new_from_askpassword(uuid)?,
-            StdinType::Other => Self::new_from_stdin(),
-        }
-    }
-
     // The outer result represents a failure when trying to run systemd-ask-password,
     // it is non-critical and will cause the password to be asked internally.
     // The inner result represent a successful request that returned an error
     // this one results in an error.
-    fn new_from_askpassword(uuid: &Uuid) -> Result<Result<Self>> {
-        let output = Command::new("systemd-ask-password")
+    fn new_from_askpassword(uuid: &Uuid, accept_cached: bool) -> Result<Result<Vec<Self>>> {
+        let mut command = Command::new("systemd-ask-password");
+        command
             .arg("--icon=drive-harddisk")
-            .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
-            .arg(format!("--keyname={}", uuid.as_hyphenated()))
-            .arg("--accept-cached")
-            .arg("-n")
-            .arg("Enter passphrase: ")
+            .arg(format!("--id=cryptsetup:UUID={uuid}"))
+            .arg("--keyname=cryptsetup")
+            .arg("--credential=cryptsetup.passphrase")
+            .arg("--timeout=0")
+            .arg("-n");
+        if accept_cached {
+            command.arg("--accept-cached");
+        }
+        let output = command
+            .arg("Please enter passphrase for disk:")
             .stdin(Stdio::inherit())
             .stderr(Stdio::inherit())
             .output()?;
         Ok(if output.status.success() {
-            match CString::new(output.stdout) {
-                Ok(cstr) => Ok(Self(cstr)),
-                Err(e) => Err(e.into()),
-            }
+            Ok(output
+                .stdout
+                .split(|b| *b == b'\0')
+                .map(|passphrase| Self(CString::new(passphrase).expect("passphase should not contain a NUL byte because the output was split on NUL bytes")))
+                .collect())
         } else {
             Err(anyhow!("systemd-ask-password returned an error"))
         })
@@ -218,12 +272,13 @@ impl Passphrase {
     }
 
     // blocks indefinitely if no input is available on stdin
-    pub fn new_from_prompt(uuid: &Uuid) -> Result<Self> {
-        match Self::new_from_askpassword(uuid) {
+    pub fn new_from_prompt(uuid: &Uuid, accept_cached: bool) -> Result<Vec<Self>> {
+        match Self::new_from_askpassword(uuid, accept_cached) {
             Ok(phrase) => return phrase,
             Err(_) => debug!("Failed to start systemd-ask-password, doing the prompt ourselves"),
         }
-        Self::prompt_hidden("Enter passphrase: ")
+        let phrase = Self::prompt_hidden("Enter passphrase: ")?;
+        Ok(vec![phrase])
     }
 
     /// Prompt for a new passphrase twice and verify they match.
@@ -293,7 +348,7 @@ impl Passphrase {
         new_key
     }
 
-    pub fn check(&self, sb: &bch_sb_handle) -> Result<(bch_key, bch_encrypted_key)> {
+    pub fn check(&self, sb: &bch_sb_handle) -> Result<Option<CorrectPassphrase>> {
         let bch_key_magic = u64::from_le_bytes(*BCH_KEY_MAGIC);
 
         let crypt = sb
@@ -317,9 +372,15 @@ impl Passphrase {
                 mem::size_of_val(&sb_key),
             )
         };
-        ensure!(sb_key.magic == bch_key_magic, "incorrect passphrase");
+        if sb_key.magic != bch_key_magic {
+            return Ok(None);
+        }
 
-        Ok((passphrase_key, sb_key))
+        Ok(Some(CorrectPassphrase {
+            uuid: sb.sb().uuid(),
+            passphrase_key,
+            sb_key,
+        }))
     }
 }
 
@@ -334,6 +395,7 @@ fn is_dev_null(fd: BorrowedFd) -> io::Result<bool> {
     Ok(major == 1 && minor == 3)
 }
 
+#[derive(PartialEq)]
 enum StdinType {
     Terminal,
     DevNull,
