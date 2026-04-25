@@ -1802,7 +1802,7 @@ void bch2_btree_path_to_text(struct printbuf *out, struct btree_trans *trans,
 	prt_newline(out);
 
 	prt_newline(out);
-	prt_printf(out, " ptodate %u locks_want %u", path->uptodate, path->locks_want);
+	prt_printf(out, "uptodate %u locks_want %u\n", path->uptodate, path->locks_want);
 	guard(printbuf_indent)(out);
 
 	for (unsigned l = 0; l < BTREE_MAX_DEPTH; l++) {
