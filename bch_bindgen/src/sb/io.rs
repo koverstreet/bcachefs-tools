@@ -31,7 +31,7 @@ pub fn read_super(path: &std::path::Path) -> anyhow::Result<bch_sb_handle> {
 pub fn read_super_silent(
     path: &std::path::Path,
     mut opts: bch_opts,
-) -> anyhow::Result<bch_sb_handle> {
+) -> Result<bch_sb_handle, BchError> {
     let path = path_to_cstr(path);
     let mut sb = std::mem::MaybeUninit::zeroed();
 
@@ -40,7 +40,7 @@ pub fn read_super_silent(
     };
 
     if ret != 0 {
-        Err(anyhow!(BchError::from_raw(ret)))
+        Err(BchError::from_raw(ret))
     } else {
         Ok(unsafe { sb.assume_init() })
     }

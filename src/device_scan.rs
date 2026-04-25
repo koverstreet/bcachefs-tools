@@ -24,7 +24,6 @@
 
 use std::{
     ffi::{CStr, CString, c_char, OsString, OsStr},
-    collections::HashMap,
     fs,
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
@@ -41,7 +40,7 @@ use log::debug;
 
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 
-fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> anyhow::Result<bch_sb_handle> {
+pub fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_sb_handle, BchError> {
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);
     opt_set!(opts, no_version_check, 1);
@@ -49,32 +48,23 @@ fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> anyhow::Resu
     bch_bindgen::sb::io::read_super_silent(path.as_ref(), opts)
 }
 
-fn device_property_map(dev: &udev::Device) -> HashMap<String, String> {
-    dev.properties()
-        .map(|i| (
-            i.name().to_string_lossy().into_owned(),
-            i.value().to_string_lossy().into_owned(),
-        ))
-        .collect()
-}
-
-fn should_skip_multipath_component(props: &HashMap<String, String>) -> bool {
+pub fn should_skip_multipath_component(dev: &udev::Device) -> bool {
     // Set by multipath's udev rule; fall back to sysfs if not present.
-    if props
-        .get("DM_MULTIPATH_DEVICE_PATH")
+    if dev
+        .property_value("DM_MULTIPATH_DEVICE_PATH")
         .is_some_and(|v| v == "1")
     {
-        if let Some(devname) = props.get("DEVNAME") {
-            debug!("Skipping multipath component device: {}", devname);
+        if let Some(devnode) = dev.devnode() {
+            debug!("Skipping multipath component device: {}", devnode.display());
         }
         return true;
     }
 
-    if let Some(devname) = props.get("DEVNAME") {
-        if find_multipath_holder(Path::new(devname)).is_some() {
+    if let Some(devnode) = dev.devnode() {
+        if find_multipath_holder(devnode).is_some() {
             debug!(
                 "Skipping multipath component device via sysfs holders: {}",
-                devname
+                devnode.display()
             );
             return true;
         }
@@ -83,56 +73,50 @@ fn should_skip_multipath_component(props: &HashMap<String, String>) -> bool {
     false
 }
 
-fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<String>> {
+fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<PathBuf>> {
     debug!("Walking udev db!");
 
-    let mut udev = udev::Enumerator::new()?;
-    udev.match_subsystem("block")?;
-    udev.match_property("ID_FS_TYPE", "bcachefs")?;
+    let mut enumerator = udev::Enumerator::new()?;
+    enumerator.match_is_initialized()?;
+    enumerator.match_subsystem("block")?;
+    enumerator.match_property("ID_FS_TYPE", "bcachefs")?;
 
-    let uuid = uuid.to_string();
-
-    Ok(udev
+    Ok(enumerator
         .scan_devices()?
-        .filter(udev::Device::is_initialized)
-        .map(|dev| device_property_map(&dev))
-        .filter(|m|
-            m.contains_key("ID_FS_UUID") &&
-            m["ID_FS_UUID"] == uuid &&
-            m.contains_key("DEVNAME") &&
-            !should_skip_multipath_component(m))
-        .map(|m| m["DEVNAME"].clone())
+        .filter(|dev| {
+            dev.property_value("ID_FS_UUID")
+                .and_then(OsStr::to_str)
+                .and_then(|s| Uuid::parse_str(s).ok())
+                .is_some_and(|dev_uuid| dev_uuid == uuid)
+                && !should_skip_multipath_component(dev)
+        })
+        .filter_map(|dev| dev.devnode().map(Path::to_path_buf))
         .collect::<Vec<_>>())
 }
 
-fn get_all_block_devnodes_udev() -> anyhow::Result<Vec<String>> {
+fn get_all_block_devnodes_udev() -> anyhow::Result<Vec<PathBuf>> {
     let mut udev = udev::Enumerator::new()?;
+    udev.match_is_initialized()?;
     udev.match_subsystem("block")?;
 
     let devices = udev
         .scan_devices()?
-        .filter_map(|dev| {
-            if dev.is_initialized() {
-                dev.devnode().map(|dn| dn.to_string_lossy().into_owned())
-            } else {
-                None
-            }
-        })
+        .filter_map(|dev| dev.devnode().map(Path::to_path_buf))
         .collect::<Vec<_>>();
     Ok(devices)
 }
 
 /// Scan /proc/partitions for block devices. Works without udev.
-fn get_all_block_devnodes_procfs() -> anyhow::Result<Vec<String>> {
+fn get_all_block_devnodes_procfs() -> anyhow::Result<Vec<PathBuf>> {
     let contents = fs::read_to_string("/proc/partitions")?;
     let devices = contents
         .lines()
         .skip(2) // skip header lines
         .filter_map(|line| {
             let name = line.split_whitespace().nth(3)?;
-            let path = format!("/dev/{}", name);
-            if Path::new(&path).exists() {
-                Some(path)
+            let path = Path::new("/dev").join(name);
+            if path.exists() {
+                Some(path.to_path_buf())
             } else {
                 None
             }
@@ -141,7 +125,7 @@ fn get_all_block_devnodes_procfs() -> anyhow::Result<Vec<String>> {
     Ok(devices)
 }
 
-fn get_all_block_devnodes() -> anyhow::Result<Vec<String>> {
+fn get_all_block_devnodes() -> anyhow::Result<Vec<PathBuf>> {
     match get_all_block_devnodes_udev() {
         Ok(devs) if !devs.is_empty() => Ok(devs),
         Ok(_) => {
@@ -157,7 +141,7 @@ fn get_all_block_devnodes() -> anyhow::Result<Vec<String>> {
 
 fn read_sbs_matching_uuid(
     uuid: Uuid,
-    devices: &[String],
+    devices: &[PathBuf],
     opts: &bch_opts,
     filter_multipath: bool,
 ) -> Vec<(PathBuf, bch_sb_handle)> {
@@ -165,14 +149,17 @@ fn read_sbs_matching_uuid(
         .iter()
         .filter(|dev| {
             // When not using udev (which already filters), skip multipath components
-            if filter_multipath && find_multipath_holder(Path::new(dev)).is_some() {
-                debug!("Skipping multipath component device in fallback scan: {}", dev);
+            if filter_multipath && find_multipath_holder(dev).is_some() {
+                debug!(
+                    "Skipping multipath component device in fallback scan: {}",
+                    dev.display()
+                );
                 return false;
             }
             true
         })
         .filter_map(|dev| {
-            read_super_silent(PathBuf::from(dev), *opts)
+            read_super_silent(dev, *opts)
                 .ok()
                 .map(|sb| (PathBuf::from(dev), sb))
         })
@@ -243,6 +230,13 @@ fn devs_str_sbs_from_device(
     get_devices_by_uuid(uuid, opts, use_udev)
 }
 
+pub fn parse_uuid_equals(s: &str) -> Result<Option<Uuid>> {
+    let Some(("UUID" | "OLD_BLKID_UUID", uuid)) = s.split_once('=') else {
+        return Ok(None);
+    };
+    Ok(Some(Uuid::parse_str(uuid)?))
+}
+
 pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb_handle)>> {
     if device.contains(':') {
         let mut opts = *opts;
@@ -271,9 +265,7 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
 
     let udev = opt_get!(opts, mount_trusts_udev) != 0;
 
-    if let Some(("UUID" | "OLD_BLKID_UUID", uuid)) = device.split_once('=') {
-        let uuid = Uuid::parse_str(uuid)?;
-
+    if let Some(uuid) = parse_uuid_equals(&device)? {
         get_devices_by_uuid(uuid, opts, udev)
     } else {
         devs_str_sbs_from_device(Path::new(device), opts, udev)
