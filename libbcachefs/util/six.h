@@ -136,16 +136,40 @@ enum six_lock_type {
 };
 
 struct six_lock_waiter {
+	u64			trans_start_time;
 	struct task_struct	*task;
 	enum six_lock_type	lock_want;
 	bool			lock_acquired;
 	u64			start_time;
+	/* Index in wait_fifo->data[], set on insert, used for O(1) self-remove. */
+	u16			slot_idx;
 };
 
 /*
- * RCU-swappable wait fifo. Layout matches what the fifo.h macros expect
- * (front/back/size/mask plus data), so fifo_for_each_entry/fifo_push/etc.
- * work on a pointer to this struct.
+ * Wait list entry: cached {waiter pointer, start_time + lock_want} pair.
+ * Keeping start_time and lock_want in the slot lets the wakeup scan filter
+ * and pick the oldest matching waiter without dereffing each six_lock_waiter
+ * — only the chosen one is touched via @w.
+ *
+ * Low SIX_LOCK_WANT_BITS bits of @start_time hold lock_want; the remaining
+ * high bits hold trans_start_time shifted up. Time comparisons among waiters
+ * of the same lock_want are unaffected — the low bits are equal — so callers
+ * can compare @start_time directly without masking.
+ */
+#define SIX_LOCK_WANT_BITS	2
+#define SIX_LOCK_WANT_MASK	((1U << SIX_LOCK_WANT_BITS) - 1)
+
+struct six_lock_wait_slot {
+	struct six_lock_waiter	*w;
+	u64			start_time;
+};
+
+/*
+ * RCU-swappable wait list. Not a FIFO — entries sit at fixed indices from
+ * insertion to removal, so RCU readers (the cycle detector) never observe an
+ * entry moving. Removal writes NULL atomically; insertion finds a free slot
+ * (starting from @next_free_hint) and fills it. @nr is the high-water-mark
+ * index in use and shrinks when trailing slots go tombstone.
  *
  * Grown by allocating a new struct, copying fields + entries, then
  * rcu_assign_pointer'ing the lock's wait_fifo to the new object. Old
@@ -153,9 +177,13 @@ struct six_lock_waiter {
  * outrun the free.
  */
 struct six_lock_wait_fifo {
-	u16			front, back, size, mask;
-	struct six_lock_waiter	*data[];
+	u16			size;
+	u16			nr;
+	u16			next_free_hint;
+	struct six_lock_wait_slot data[];
 };
+
+#define SIX_LOCK_INLINE_WAITERS	8
 
 struct six_lock {
 	atomic_t		state;
@@ -165,17 +193,18 @@ struct six_lock {
 	struct task_struct	*owner;
 	unsigned __percpu	*readers;
 	raw_spinlock_t		wait_lock;
-	u16			wait_list_tombstones;
 
 	struct six_lock_wait_fifo __rcu *wait_fifo;
 
 	/*
-	 * Inline wait fifo; layout-compatible with struct six_lock_wait_fifo
+	 * Inline wait list; layout-compatible with struct six_lock_wait_fifo
 	 * so (struct six_lock_wait_fifo *)&inline_fifo is a valid view.
 	 */
 	struct {
-		u16			front, back, size, mask;
-		struct six_lock_waiter	*data[8];
+		u16			size;
+		u16			nr;
+		u16			next_free_hint;
+		struct six_lock_wait_slot data[SIX_LOCK_INLINE_WAITERS];
 	} inline_fifo;
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lockdep_map	dep_map;
@@ -278,7 +307,7 @@ static inline int six_lock_ip(struct six_lock *lock, enum six_lock_type type,
 			      six_lock_should_sleep_fn should_sleep_fn, void *p,
 			      unsigned long ip)
 {
-	struct six_lock_waiter wait;
+	struct six_lock_waiter wait = {};
 
 	return six_lock_ip_waiter(lock, type, &wait, should_sleep_fn, ip);
 }

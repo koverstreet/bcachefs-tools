@@ -224,29 +224,19 @@ static void lock_graph_down(struct lock_graph *g, struct btree_trans *trans)
  * Revalidate the "who is blocked on whom" chain we've built up in @g before
  * acting on a suspected cycle.
  *
- * Between the time we descended into frame @i and now, @i's trans could have:
- *   - acquired the lock it was blocked on and moved on (possibly now blocked
- *     waiting on something else entirely), or
- *   - been woken, re-entered the slowpath, and blocked again - still waiting,
- *     but the chain edge we recorded no longer describes reality.
+ * Between the time we descended into frame @i and now, @i's trans could have
+ * acquired its lock and moved on (possibly blocked waiting on something else
+ * entirely). Two staleness checks, per frame:
  *
- * Two staleness checks, per frame:
+ *   - @from->trans->locking != @from->node_want
+ *     @from's trans is no longer waiting for the node we recorded at descent.
  *
- * 1) i->trans->locking != i->node_want
- *    node_want snapshots trans->locking at descent time ("i was blocked
- *    waiting for *this* btree node"). If trans->locking has changed, i got
- *    its lock and moved on - chain is stale from i onward.
+ *   - i[0].node_have != i[1].node_want
+ *     The parent frame is no longer looking at the node the child frame was
+ *     blocked on - the edge we built between them is stale.
  *
- * 2) i->trans->locking_wait.start_time != i[-1].lock_start_time
- *    six_lock_waiter.start_time is set freshly on every slowpath entry
- *    (see six_lock_slowpath), so it acts as a generation counter on a
- *    waiter. When the parent i[-1] descended into i, it recorded i's
- *    start_time into its own lock_start_time field. If i's current
- *    start_time differs, i got woken and re-queued at least once - the
- *    parent→child edge is stale.
- *
- * Either staleness makes the cycle hypothesis invalid; pop from the stale
- * frame down and let the caller retry.
+ * Either makes the cycle hypothesis invalid; pop from the stale frame down
+ * and let the caller retry.
  */
 static bool lock_graph_remove_non_waiters(struct lock_graph *g,
 					  struct trans_waiting_for_lock *from)
@@ -284,7 +274,8 @@ static void wake_up_trans(struct btree_trans *trans)
 	}
 }
 
-static int abort_lock(struct lock_graph *g, struct trans_waiting_for_lock *i)
+static int abort_lock(struct lock_graph *g, struct trans_waiting_for_lock *i,
+		      int err)
 {
 	if (i == g->g) {
 		trace_would_deadlock(g, i->trans);
@@ -334,7 +325,8 @@ static noinline __noreturn void break_cycle_fail(struct lock_graph *g)
 }
 
 static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
-				struct trans_waiting_for_lock *from)
+				struct trans_waiting_for_lock *from,
+				int err)
 {
 	struct trans_waiting_for_lock *i, *abort = NULL;
 	int ret;
@@ -353,7 +345,7 @@ static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
 		if (unlikely(abort->trans->lock_may_not_fail))
 			break_cycle_fail(g);
 
-		ret = abort_lock(g, abort);
+		ret = abort_lock(g, abort, BCH_ERR_transaction_restart_would_deadlock);
 	}
 
 	if (ret)
@@ -370,9 +362,15 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 
 	for (struct trans_waiting_for_lock *i = g->g; i < g->g + g->nr; i++)
 		if (i->trans == trans)
-			return break_cycle(g, cycle, i);
+			return break_cycle(g, cycle, i, BCH_ERR_transaction_restart_would_deadlock);
 
 	if (unlikely(g->nr == ARRAY_SIZE(g->g))) {
+		if (!cycle)
+			event_inc_trace(trans->c, trans_restart_would_deadlock_recursion_limit, buf, ({
+				guard(printbuf_atomic)(&buf);
+				prt_str(&buf, trans->fn);
+			}));
+
 		if (orig_trans->lock_may_not_fail) {
 			/* Other threads will have to rerun the cycle detector: */
 			for (struct trans_waiting_for_lock *i = g->g + 1; i < g->g + g->nr; i++)
@@ -380,16 +378,7 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 			return 0;
 		}
 
-		lock_graph_pop_all(g);
-
-		if (cycle)
-			return 0;
-
-		event_inc_trace(trans->c, trans_restart_would_deadlock_recursion_limit, buf, ({
-			guard(printbuf_atomic)(&buf);
-			prt_str(&buf, trans->fn);
-		}));
-		return btree_trans_restart(orig_trans, BCH_ERR_transaction_restart_deadlock_recursion_limit);
+		return break_cycle(g, cycle, g->g, BCH_ERR_transaction_restart_deadlock_recursion_limit);
 	}
 
 	lock_graph_down(g, trans);
@@ -433,10 +422,7 @@ next:
 	struct trans_waiting_for_lock *top = &g->g[g->nr - 1];
 
 	if (top->waitlist_idx < top->waitlist.nr) {
-		trans = container_of(top->waitlist.data[top->waitlist_idx++],
-				     struct btree_trans, locking_wait);
-
-		ret = lock_graph_descend(g, trans, cycle);
+		ret = lock_graph_descend(g, top->waitlist.data[top->waitlist_idx++], cycle);
 		if (ret)
 			goto out;
 
@@ -460,7 +446,6 @@ next:
 		if (path_idx != top->path_idx) {
 			top->path_idx		= path_idx;
 			top->level		= 0;
-			top->waitlist_idx	= 0;
 		}
 
 		while (top->level < BTREE_MAX_DEPTH) {
@@ -496,42 +481,31 @@ next:
 			}
 
 			/*
-			 * Lockless walk: we're under guard(rcu)() at the top of
-			 * this function, and trans memory is RCU-deferred in
-			 * bch2_trans_put, so dereferencing wait_fifo and any
-			 * waiter pointers we pull out of it is safe for the
-			 * duration of this call. Per-CPU cache reuse within a
-			 * grace period can cause us to descend into a reused
-			 * trans instead of the one we observed — that's a race
-			 * we accept; cycles missed this pass are caught next.
+			 * Lockless walk of wait_fifo: we're under guard(rcu),
+			 * trans memory is RCU-deferred in bch2_trans_put, and
+			 * wait_fifo slots only transition between NULL and a
+			 * valid pointer (never torn). Per-CPU cache reuse inside
+			 * a grace period can aim us at a reused trans — benign,
+			 * cycles missed this pass are caught next.
 			 *
-			 * Snapshot the live fifo entries into a per-frame darray
-			 * the first time we visit this frame. The walker then
-			 * iterates the snapshot rather than the live fifo, so
-			 * wakeup-driven compaction (interior nulls shifting the
-			 * live entries forward) can't cause us to re-walk chains
-			 * we've already processed.
-			 *
-			 * Heap allocation uses GFP_NOWAIT|__GFP_NOWARN: we can't
-			 * sleep here (rcu + preempt disabled). If growth past the
-			 * 16-entry inline buffer fails, we can't silently truncate
-			 * without potentially missing a real cycle — bail out with
-			 * a dedicated restart type so the caller can retry after
-			 * conditions calm down, and bump a counter so we can tell
-			 * if this ever actually fires.
+			 * Snapshot the conflicting trans pointers into a per-frame
+			 * darray so iteration is stable across concurrent wakeups.
+			 * Heap allocation is GFP_NOWAIT|__GFP_NOWARN (can't sleep
+			 * under rcu+preempt). If growth past the inline buffer
+			 * fails, silently truncating would risk missing a cycle;
+			 * bail out with a dedicated restart type + counter so we
+			 * can tell if this ever actually fires in the wild.
 			 */
 			struct six_lock_wait_fifo *wf =
 				rcu_dereference(top->node_have->lock.wait_fifo);
-			struct six_lock_waiter *w;
-			u16 fifo_iter;
-			fifo_for_each_entry(w, wf, fifo_iter) {
-				trans = container_of_or_null(w, struct btree_trans, locking_wait);
+			darray_for_each(*wf, i) {
+				trans = container_of_or_null(i->w, struct btree_trans, locking_wait);
 
 				if (trans &&
 				    trans != top->trans &&
-				    lock_type_conflicts(lock_held, trans->locking_wait.lock_want)) {
-					if (darray_push_gfp(&top->waitlist, w,
-							    GFP_NOWAIT|__GFP_NOWARN)) {
+				    lock_type_conflicts(lock_held, i->start_time & SIX_LOCK_WANT_MASK)) {
+					if (unlikely(darray_push_gfp(&top->waitlist, trans,
+								     GFP_NOWAIT|__GFP_NOWARN))) {
 						if (cycle) {
 							ret = -1;
 							goto out;

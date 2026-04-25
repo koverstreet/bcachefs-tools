@@ -207,106 +207,157 @@ static int __do_six_trylock(struct six_lock *lock, enum six_lock_type type,
 }
 
 /*
- * Compact the wait_list in place by shifting live entries toward the back and
- * advancing front past the resulting tombstone prefix. Relative order of live
- * entries is preserved.
- *
- * Cursors in the cycle detector (top->waitlist_idx) are absolute positions
- * that may end up pointing at a tombstone slot after compaction; the
- * clamp-forward check in the walker (distance > used → clamp to front) picks
- * them back up on re-entry. Worst case is re-descending into trans we already
- * processed this pass — correct, just wasted work.
- *
+ * Trim @nr while the tail is all tombstones. Clamp hint inside [0, nr].
  * Caller must hold wait_lock.
  */
-noinline
-static void __six_lock_prune_tombstones(struct six_lock *lock)
+static inline void six_lock_wait_fifo_shrink(struct six_lock_wait_fifo *wf)
 {
-	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
-						lockdep_is_held(&lock->wait_lock));
-	u16 front = wf->front;
-	u16 back  = wf->back;
-	u16 write = back;
-
-	for (u16 read = back; read != front;) {
-		read--;
-		struct six_lock_waiter *w = fifo_entry(wf, read);
-		if (w) {
-			write--;
-			if (write != read)
-				fifo_entry(wf, write) = w;
-		}
-	}
-	wf->front = write;
-	lock->wait_list_tombstones = 0;
+	while (wf->nr > 0 && !wf->data[wf->nr - 1].w)
+		wf->nr--;
+	if (wf->next_free_hint > wf->nr)
+		wf->next_free_hint = wf->nr;
 }
 
-static inline void six_lock_prune_tombstones(struct six_lock *lock)
+/*
+ * Null out the entry at @idx and update the free-slot hint. Caller must hold
+ * wait_lock. Does not shrink @nr — that's done lazily by the caller when
+ * convenient (e.g. at the end of a wakeup scan).
+ */
+static inline void six_lock_wait_fifo_remove(struct six_lock_wait_fifo *wf, u16 idx)
 {
-	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
-						lockdep_is_held(&lock->wait_lock));
-
-	while (!fifo_empty(wf) && !fifo_peek_front(wf)) {
-		wf->front++;
-		lock->wait_list_tombstones--;
-	}
-
-	if (lock->wait_list_tombstones > fifo_used(wf) / 2)
-		__six_lock_prune_tombstones(lock);
+	wf->data[idx].w = NULL;
+	if (idx < wf->next_free_hint)
+		wf->next_free_hint = idx;
 }
 
+/*
+ * Find a free slot (starting from @next_free_hint) and write the entry.
+ * Returns 0 on success, -ENOMEM if the list is full.
+ * Caller must hold wait_lock.
+ */
+static inline int six_lock_wait_fifo_insert(struct six_lock_wait_fifo *wf,
+					    struct six_lock_waiter *wait)
+{
+	u16 i;
+
+	for (i = wf->next_free_hint; i < wf->nr; i++) {
+		if (!wf->data[i].w)
+			goto fill;
+	}
+
+	if (wf->nr < wf->size) {
+		i = wf->nr++;
+		goto fill;
+	}
+
+	return -ENOMEM;
+fill:
+	wf->data[i].w		= wait;
+	wf->data[i].start_time	= (wait->trans_start_time << SIX_LOCK_WANT_BITS) |
+				  ((u8) wait->lock_want & SIX_LOCK_WANT_MASK);
+	wait->slot_idx		= i;
+	wf->next_free_hint	= i + 1;
+	return 0;
+}
+
+/*
+ * Wake the single matching waiter with the smallest start_time (oldest
+ * transaction). On release, only that slot is nulled — the rest of the list
+ * remains stable from the lockless cycle detector's perspective.
+ *
+ * For reads: wake all matching waiters, same start-time ordering isn't
+ * relevant since readers don't conflict with each other.
+ */
 static void __six_lock_wakeup(struct six_lock *lock, enum six_lock_type lock_type)
 {
-	struct six_lock_waiter *w;
+	struct six_lock_wait_slot *slot;
 	struct task_struct *task;
-	bool saw_one;
-	u16 iter;
 	int ret;
 again:
 	ret = 0;
-	saw_one = false;
 	raw_spin_lock(&lock->wait_lock);
 	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
 						lockdep_is_held(&lock->wait_lock));
 
-	fifo_for_each_entry(w, wf, iter) {
-		if (!w)
-			continue;
+	if (lock_type == SIX_LOCK_read) {
+		/* Readers don't conflict: wake all matching waiters. */
+		for (u16 i = 0; i < wf->nr; i++) {
+			slot = &wf->data[i];
+			if (!slot->w ||
+			    (slot->start_time & SIX_LOCK_WANT_MASK) != lock_type)
+				continue;
 
-		if (w->lock_want != lock_type)
-			continue;
+			ret = __do_six_trylock(lock, lock_type, slot->w->task, false);
+			if (ret <= 0)
+				goto unlock;
 
-		if (saw_one && lock_type != SIX_LOCK_read)
-			goto unlock;
-		saw_one = true;
-
-		ret = __do_six_trylock(lock, lock_type, w->task, false);
-		if (ret <= 0)
-			goto unlock;
-
+			/*
+			 * Similar to percpu_rwsem_wake_function(), we need to
+			 * guard against the wakee noticing w->lock_acquired,
+			 * returning, and then exiting before we do the wakeup:
+			 */
+			struct six_lock_waiter *w = slot->w;
+			task = get_task_struct(w->task);
+			six_lock_wait_fifo_remove(wf, i);
+			/*
+			 * Release barrier orders the slot clear before
+			 * setting w->lock_acquired; @w is on the stack of the
+			 * waiting thread and will be reused after it sees
+			 * w->lock_acquired with no other locking: pairs with
+			 * smp_load_acquire() in six_lock_slowpath()
+			 */
+			smp_store_release(&w->lock_acquired, true);
+			wake_up_process(task);
+			put_task_struct(task);
+		}
+	} else {
 		/*
-		 * Similar to percpu_rwsem_wake_function(), we need to guard
-		 * against the wakee noticing w->lock_acquired, returning, and
-		 * then exiting before we do the wakeup:
+		 * Intent/write locks have a single holder: prefer the waiter
+		 * whose transaction started earliest. start_time is cached in
+		 * the slot so the scan doesn't deref each waiter.
 		 */
-		task = get_task_struct(w->task);
-		fifo_entry(wf, iter) = NULL;
-		lock->wait_list_tombstones++;
-		/*
-		 * The release barrier here ensures the ordering of the
-		 * __list_del before setting w->lock_acquired; @w is on the
-		 * stack of the thread doing the waiting and will be reused
-		 * after it sees w->lock_acquired with no other locking:
-		 * pairs with smp_load_acquire() in six_lock_slowpath()
-		 */
-		smp_store_release(&w->lock_acquired, true);
-		wake_up_process(task);
-		put_task_struct(task);
+		struct six_lock_wait_slot *oldest = NULL;
+		u16 oldest_iter = 0;
+		unsigned n_matches = 0;
+
+		for (u16 i = 0; i < wf->nr; i++) {
+			slot = &wf->data[i];
+			if (!slot->w ||
+			    (slot->start_time & SIX_LOCK_WANT_MASK) != lock_type)
+				continue;
+			n_matches++;
+			if (!oldest ||
+			    time_before64(slot->start_time, oldest->start_time)) {
+				oldest = slot;
+				oldest_iter = i;
+			}
+		}
+
+		if (oldest) {
+			ret = __do_six_trylock(lock, lock_type, oldest->w->task, false);
+			if (ret <= 0)
+				goto unlock;
+
+			struct six_lock_waiter *w = oldest->w;
+			task = get_task_struct(w->task);
+			six_lock_wait_fifo_remove(wf, oldest_iter);
+			smp_store_release(&w->lock_acquired, true);
+			wake_up_process(task);
+			put_task_struct(task);
+
+			/*
+			 * More non-read waiters still queued: leave the
+			 * WAITING bit set so the next unlock re-enters
+			 * __six_lock_wakeup and serves them.
+			 */
+			if (n_matches > 1)
+				goto unlock;
+		}
 	}
 
 	six_clear_bitmask(lock, SIX_LOCK_WAITING_read << lock_type);
 unlock:
-	six_lock_prune_tombstones(lock);
+	six_lock_wait_fifo_shrink(wf);
 	raw_spin_unlock(&lock->wait_lock);
 
 	if (ret < 0) {
@@ -410,7 +461,11 @@ static inline bool six_optimistic_spin(struct six_lock *lock,
 
 	scoped_guard(rcu) {
 		struct six_lock_wait_fifo *wf = rcu_dereference(lock->wait_fifo);
-		if (fifo_empty(wf) || fifo_peek_front(wf) != wait)
+		/*
+		 * Only spin if we're the sole entry in the wait list. Anything
+		 * more and someone older might get woken ahead of us.
+		 */
+		if (wf->nr != 1 || wf->data[0].w != wait)
 			return false;
 	}
 
@@ -494,22 +549,22 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	wait->lock_acquired	= false;
 
 	u16 new_size = 0;
-	if (unlikely(fifo_full(rcu_dereference_protected(lock->wait_fifo, true))))
-		new_wf = alloc_wait_fifo(lock, &new_size);
+	{
+		struct six_lock_wait_fifo *peek = rcu_dereference_protected(lock->wait_fifo, true);
+		if (unlikely(peek->nr == peek->size))
+			new_wf = alloc_wait_fifo(lock, &new_size);
+	}
 
 	raw_spin_lock(&lock->wait_lock);
 	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
 						lockdep_is_held(&lock->wait_lock));
 
 	if (unlikely(new_wf) && new_size == wf->size * 2) {
-		new_wf->front	= wf->front;
-		new_wf->back	= wf->back;
-		new_wf->size	= new_size;
-		new_wf->mask	= new_size - 1;
+		new_wf->size		= new_size;
+		new_wf->nr		= wf->nr;
+		new_wf->next_free_hint	= wf->next_free_hint;
 
-		size_t old_bytes = (wf->mask + 1) * sizeof(wf->data[0]);
-		memcpy(new_wf->data, wf->data, old_bytes);
-		memcpy((u8 *) new_wf->data + old_bytes, wf->data, old_bytes);
+		memcpy(new_wf->data, wf->data, wf->nr * sizeof(wf->data[0]));
 
 		rcu_assign_pointer(lock->wait_fifo, new_wf);
 		old_wf = wf;
@@ -526,7 +581,7 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	if (ret <= 0) {
 		wait->start_time = local_clock();
 
-		if (unlikely(fifo_full(wf))) {
+		if (six_lock_wait_fifo_insert(wf, wait)) {
 			raw_spin_unlock(&lock->wait_lock);
 			if (type == SIX_LOCK_write) {
 				six_clear_bitmask(lock, SIX_LOCK_HELD_write);
@@ -535,8 +590,6 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			ret = -ENOMEM;
 			goto out;
 		}
-
-		fifo_push(wf, wait);
 	}
 	raw_spin_unlock(&lock->wait_lock);
 
@@ -550,7 +603,8 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 		ret = 0;
 	}
 
-	if (six_optimistic_spin(lock, wait, type))
+	if (six_optimistic_spin(lock, wait, type) ||
+	    smp_load_acquire(&wait->lock_acquired))
 		goto out;
 
 	/* Yield before running the cycle detector: */
@@ -581,17 +635,9 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			if (!acquired) {
 				struct six_lock_wait_fifo *wf = rcu_dereference_protected(
 					lock->wait_fifo, lockdep_is_held(&lock->wait_lock));
-				struct six_lock_waiter *w;
-				u16 iter;
 
-				/* XXX O(n); fifo_idx on wait would make this O(1) */
-				fifo_for_each_entry(w, wf, iter)
-					if (w == wait) {
-						fifo_entry(wf, iter) = NULL;
-						lock->wait_list_tombstones++;
-						six_lock_prune_tombstones(lock);
-						break;
-					}
+				six_lock_wait_fifo_remove(wf, wait->slot_idx);
+				six_lock_wait_fifo_shrink(wf);
 			}
 			raw_spin_unlock(&lock->wait_lock);
 
@@ -882,20 +928,28 @@ EXPORT_SYMBOL_GPL(six_lock_increment);
 void six_lock_wakeup_all(struct six_lock *lock)
 {
 	u32 state = atomic_read(&lock->state);
-	struct six_lock_waiter *w;
 
+	/*
+	 * First, run the normal wakeup machinery for any waiters the lock
+	 * state actually permits to acquire: those slots get removed by
+	 * __six_lock_wakeup and lock_acquired is set on the waiter.
+	 */
 	six_lock_wakeup(lock, state, SIX_LOCK_read);
 	six_lock_wakeup(lock, state, SIX_LOCK_intent);
 	six_lock_wakeup(lock, state, SIX_LOCK_write);
 
-	u16 iter;
-
+	/*
+	 * Then wake any remaining waiters without removing their slots:
+	 * lock_acquired stays clear, so they'll re-run should_sleep_fn in
+	 * six_lock_slowpath() and self-remove via wait->slot_idx if it
+	 * returns an error. Removing here would corrupt that self-remove.
+	 */
 	raw_spin_lock(&lock->wait_lock);
 	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
 						lockdep_is_held(&lock->wait_lock));
-	fifo_for_each_entry(w, wf, iter)
-		if (w)
-			wake_up_process(w->task);
+	for (u16 i = 0; i < wf->nr; i++)
+		if (wf->data[i].w)
+			wake_up_process(wf->data[i].w->task);
 	raw_spin_unlock(&lock->wait_lock);
 }
 EXPORT_SYMBOL_GPL(six_lock_wakeup_all);
@@ -981,11 +1035,9 @@ void __six_lock_init(struct six_lock *lock, const char *name,
 {
 	atomic_set(&lock->state, 0);
 	raw_spin_lock_init(&lock->wait_lock);
-	lock->wait_list_tombstones = 0;
-	lock->inline_fifo.front	= 0;
-	lock->inline_fifo.back	= 0;
-	lock->inline_fifo.size	= ARRAY_SIZE(lock->inline_fifo.data);
-	lock->inline_fifo.mask	= ARRAY_SIZE(lock->inline_fifo.data) - 1;
+	lock->inline_fifo.size		= ARRAY_SIZE(lock->inline_fifo.data);
+	lock->inline_fifo.nr		= 0;
+	lock->inline_fifo.next_free_hint = 0;
 	RCU_INIT_POINTER(lock->wait_fifo,
 			 (struct six_lock_wait_fifo *) &lock->inline_fifo);
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
