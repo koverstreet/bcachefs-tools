@@ -253,7 +253,9 @@ static inline int six_lock_wait_fifo_insert(struct six_lock_wait_fifo *wf,
 	return -ENOMEM;
 fill:
 	wf->data[i].w		= wait;
-	wf->data[i].start_time	= wait->trans_start_time;
+	wf->data[i].start_time	= (wait->trans_start_time << SIX_LOCK_WANT_BITS) |
+				  ((u8) wait->lock_want & SIX_LOCK_WANT_MASK);
+	wait->slot_idx		= i;
 	wf->next_free_hint	= i + 1;
 	return 0;
 }
@@ -281,7 +283,8 @@ again:
 		/* Readers don't conflict: wake all matching waiters. */
 		for (u16 i = 0; i < wf->nr; i++) {
 			slot = &wf->data[i];
-			if (!slot->w || slot->w->lock_want != lock_type)
+			if (!slot->w ||
+			    (slot->start_time & SIX_LOCK_WANT_MASK) != lock_type)
 				continue;
 
 			ret = __do_six_trylock(lock, lock_type, slot->w->task, false);
@@ -319,7 +322,8 @@ again:
 
 		for (u16 i = 0; i < wf->nr; i++) {
 			slot = &wf->data[i];
-			if (!slot->w || slot->w->lock_want != lock_type)
+			if (!slot->w ||
+			    (slot->start_time & SIX_LOCK_WANT_MASK) != lock_type)
 				continue;
 			n_matches++;
 			if (!oldest ||
@@ -632,12 +636,7 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 				struct six_lock_wait_fifo *wf = rcu_dereference_protected(
 					lock->wait_fifo, lockdep_is_held(&lock->wait_lock));
 
-				/* XXX O(n); a slot index on wait would make this O(1) */
-				for (u16 i = 0; i < wf->nr; i++)
-					if (wf->data[i].w == wait) {
-						six_lock_wait_fifo_remove(wf, i);
-						break;
-					}
+				six_lock_wait_fifo_remove(wf, wait->slot_idx);
 				six_lock_wait_fifo_shrink(wf);
 			}
 			raw_spin_unlock(&lock->wait_lock);

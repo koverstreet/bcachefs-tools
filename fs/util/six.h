@@ -141,13 +141,24 @@ struct six_lock_waiter {
 	enum six_lock_type	lock_want;
 	bool			lock_acquired;
 	u64			start_time;
+	/* Index in wait_fifo->data[], set on insert, used for O(1) self-remove. */
+	u16			slot_idx;
 };
 
 /*
- * Wait list entry: cached {waiter pointer, trans_start_time} pair. Keeping
- * start_time in the slot lets the wakeup scan pick the oldest matching waiter
- * without dereffing each six_lock_waiter.
+ * Wait list entry: cached {waiter pointer, start_time + lock_want} pair.
+ * Keeping start_time and lock_want in the slot lets the wakeup scan filter
+ * and pick the oldest matching waiter without dereffing each six_lock_waiter
+ * — only the chosen one is touched via @w.
+ *
+ * Low SIX_LOCK_WANT_BITS bits of @start_time hold lock_want; the remaining
+ * high bits hold trans_start_time shifted up. Time comparisons among waiters
+ * of the same lock_want are unaffected — the low bits are equal — so callers
+ * can compare @start_time directly without masking.
  */
+#define SIX_LOCK_WANT_BITS	2
+#define SIX_LOCK_WANT_MASK	((1U << SIX_LOCK_WANT_BITS) - 1)
+
 struct six_lock_wait_slot {
 	struct six_lock_waiter	*w;
 	u64			start_time;

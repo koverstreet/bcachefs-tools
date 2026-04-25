@@ -503,7 +503,7 @@ next:
 
 				if (trans &&
 				    trans != top->trans &&
-				    lock_type_conflicts(lock_held, trans->locking_wait.lock_want)) {
+				    lock_type_conflicts(lock_held, i->start_time & SIX_LOCK_WANT_MASK)) {
 					if (unlikely(darray_push_gfp(&top->waitlist, trans,
 								     GFP_NOWAIT|__GFP_NOWARN))) {
 						if (cycle) {
