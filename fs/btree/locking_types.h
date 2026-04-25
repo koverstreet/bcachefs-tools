@@ -23,12 +23,11 @@ struct trans_waiting_for_lock {
 	struct btree_bkey_cached_common	*node_have;
 
 	/*
-	 * Snapshot of the live wait_fifo entries for the lock we're descending
-	 * through. Taken once per frame visit so the walker sees a stable
-	 * ordering and doesn't re-walk stale chains when wakeups null interior
-	 * entries and compaction shifts the FIFO.
+	 * Conflicting waiters we found on the lock at (@path_idx, @level),
+	 * cached at snapshot time so iteration is stable against concurrent
+	 * wakeup activity. @waitlist_idx is the next entry to descend into.
 	 */
-	DARRAY_PREALLOCATED(struct six_lock_waiter *, 16) waitlist;
+	DARRAY_PREALLOCATED(struct btree_trans *, 16) waitlist;
 };
 
 struct lock_graph {
