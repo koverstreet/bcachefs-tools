@@ -180,7 +180,9 @@ static noinline int wb_flush_one_slowpath(struct btree_trans *trans,
 				  BCH_TRANS_COMMIT_journal_reclaim);
 }
 
-static inline int wb_flush_one(struct btree_trans *trans, struct btree_iter *iter,
+static inline int wb_flush_one(struct btree_trans *trans,
+			       struct bch_fs_btree_write_buffer *wbb,
+			       struct btree_iter *iter,
 			       struct btree_write_buffered_key *wb,
 			       bool *write_locked,
 			       bool *accounting_accumulated,
@@ -189,12 +191,8 @@ static inline int wb_flush_one(struct btree_trans *trans, struct btree_iter *ite
 	struct btree_path *path;
 
 	EBUG_ON(!wb->journal_seq);
-	{
-		struct bch_fs_btree_write_buffer *wbb =
-			&trans->c->btree.write_buffer[bch_wb_btree_idx(wb->btree)];
-		EBUG_ON(!wbb->flushing.pin.seq);
-		EBUG_ON(wbb->flushing.pin.seq > wb->journal_seq);
-	}
+	EBUG_ON(!wbb->flushing.pin.seq);
+	EBUG_ON(wbb->flushing.pin.seq > wb->journal_seq);
 
 	try(bch2_btree_iter_traverse(iter));
 
@@ -270,9 +268,10 @@ static inline int wb_flush_one(struct btree_trans *trans, struct btree_iter *ite
  */
 static int
 btree_write_buffered_insert(struct btree_trans *trans,
+			    enum btree_id btree,
 			    struct btree_write_buffered_key *wb)
 {
-	CLASS(btree_iter, iter)(trans, wb->btree, bkey_start_pos(&wb->k.k),
+	CLASS(btree_iter, iter)(trans, btree, bkey_start_pos(&wb->k.k),
 				BTREE_ITER_cached|BTREE_ITER_intent);
 
 	trans->journal_res.seq = wb->journal_seq;
@@ -407,7 +406,6 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 		wb->sorted.nr++;
 
 		dst->idx	= (u64 *) k - wb->flushing.keys.data;
-		dst->btree	= k->btree;
 		memcpy(&dst->pos, &k->k.k.p, sizeof(struct bpos));
 	}
 
@@ -440,7 +438,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 
 		struct btree_write_buffered_key *k = wb_keys_idx(&wb->flushing, i->idx);
 
-		ret = bch2_btree_write_buffer_insert_checks(c, k->btree, &k->k);
+		ret = bch2_btree_write_buffer_insert_checks(c, btree, &k->k);
 		if (unlikely(ret))
 			goto err;
 
@@ -489,7 +487,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 				break;
 			}
 
-			ret = wb_flush_one(trans, &iter, k, &write_locked,
+			ret = wb_flush_one(trans, wb, &iter, k, &write_locked,
 					   &accounting_accumulated, &fast, &noop);
 			if (!write_locked)
 				bch2_trans_begin(trans);
@@ -557,7 +555,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 					BCH_TRANS_COMMIT_no_check_rw|
 					BCH_TRANS_COMMIT_no_enospc|
 					BCH_TRANS_COMMIT_no_journal_res ,
-					btree_write_buffered_insert(trans, k));
+					btree_write_buffered_insert(trans, btree, k));
 			if (ret)
 				goto err;
 
@@ -938,7 +936,7 @@ int bch2_accounting_key_to_wb_slowpath(struct bch_fs *c, enum btree_id btree,
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&k->k_i));
 	}));
 
-	struct btree_write_buffered_key new = { .btree = btree };
+	struct btree_write_buffered_key new = {};
 	bkey_copy(&new.k, &k->k_i);
 
 	try(darray_push(&wb->accounting, new));
@@ -1019,7 +1017,7 @@ retry:
 	BUG_ON(pb->room < u64s);
 	BUG_ON(!dst->seq);
 
-	bch2_journal_key_to_wb_reserved(c, pb, dst->seq, idx, k);
+	bch2_journal_key_to_wb_reserved(c, pb, dst->seq, k);
 	return 0;
 }
 
@@ -1120,28 +1118,6 @@ int bch2_btree_write_buffer_resize(struct bch_fs *c, size_t new_size)
 	return 0;
 }
 
-static void wb_keys_by_btree_to_text(struct printbuf *out,
-				     struct btree_write_buffer_keys *keys)
-{
-	size_t counts[BTREE_ID_NR] = {};
-	size_t other = 0;
-
-	wb_keys_for_each(keys, k)
-		if (k->btree < BTREE_ID_NR)
-			counts[k->btree]++;
-		else
-			other++;
-
-	for (unsigned i = 0; i < BTREE_ID_NR; i++)
-		if (counts[i]) {
-			prt_printf(out, "  ");
-			bch2_btree_id_to_text(out, i);
-			prt_printf(out, ":\t%zu\n", counts[i]);
-		}
-	if (other)
-		prt_printf(out, "  (other):\t%zu\n", other);
-}
-
 void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (!out->nr_tabstops)
@@ -1154,13 +1130,9 @@ void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
 
 		prt_printf(out, "inc keys:\t%zu/%zu\n",		wb->inc.keys.nr, wb->inc.keys.size);
 		prt_printf(out, "inc seq pinned:\t%llu\n",	wb->inc.pin.seq);
-		if (wb->inc.keys.nr)
-			wb_keys_by_btree_to_text(out, &wb->inc);
 
 		prt_printf(out, "flushing keys:\t%zu/%zu\n",	wb->flushing.keys.nr, wb->flushing.keys.size);
 		prt_printf(out, "flushing seq pinned:\t%llu\n",	wb->flushing.pin.seq);
-		if (wb->flushing.keys.nr)
-			wb_keys_by_btree_to_text(out, &wb->flushing);
 
 		prt_printf(out, "sorted:\t%zu/%zu\n",		wb->sorted.nr, wb->sorted.size);
 

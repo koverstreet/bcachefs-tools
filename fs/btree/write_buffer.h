@@ -95,7 +95,7 @@ static inline int wb_key_cmp(const void *_l, const void *_r)
 	const struct btree_write_buffered_key *l = _l;
 	const struct btree_write_buffered_key *r = _r;
 
-	return cmp_int(l->btree, r->btree) ?: bpos_cmp(l->k.k.p, r->k.k.p);
+	return bpos_cmp(l->k.k.p, r->k.k.p);
 }
 
 int bch2_accounting_key_to_wb_slowpath(struct bch_fs *,
@@ -106,7 +106,6 @@ static inline int bch2_accounting_key_to_wb(struct bch_fs *c,
 {
 	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[bch_wb_btree_idx(btree)];
 	struct btree_write_buffered_key search;
-	search.btree = btree;
 	search.k.k.p = k->k.p;
 
 	unsigned idx = eytzinger0_find(wb->accounting.data, wb->accounting.nr,
@@ -164,12 +163,11 @@ static inline struct btree_write_buffered_key *wb_key_next(const struct btree_wr
 static inline void bch2_journal_key_to_wb_reserved(struct bch_fs *c,
 			     struct journal_keys_to_wb_btree *pb,
 			     u64 seq,
-			     enum bch_wb_btree idx, struct bkey_i *k)
+			     struct bkey_i *k)
 {
 	unsigned u64s = wb_key_u64s(k);
 	struct btree_write_buffered_key *wb_k = wb_keys_end(pb->wb);
 	wb_k->journal_seq	= seq;
-	wb_k->btree		= bch_wb_btree_to_btree_id(idx);
 	bkey_copy(&wb_k->k, k);
 	pb->wb->keys.nr += u64s;
 	pb->room -= u64s;
@@ -185,7 +183,7 @@ static inline int __bch2_journal_key_to_wb(struct bch_fs *c,
 	if (unlikely(pb->room < wb_key_u64s(k)))
 		return bch2_journal_key_to_wb_slowpath(c, dst, idx, k);
 
-	bch2_journal_key_to_wb_reserved(c, pb, dst->seq, idx, k);
+	bch2_journal_key_to_wb_reserved(c, pb, dst->seq, k);
 	return 0;
 }
 

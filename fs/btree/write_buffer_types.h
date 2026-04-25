@@ -33,17 +33,19 @@ enum bch_wb_btree {
 
 #define BTREE_WRITE_BUFERED_VAL_U64s_MAX	4
 
+/*
+ * Each bch_fs_btree_write_buffer is per-btree, so individual key entries don't
+ * need to carry a btree id — it's implicit in the containing buffer.
+ */
 struct wb_key_ref {
 union {
 	struct {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
-		unsigned			idx:24;
+		u32				idx;
 		u8				pos[sizeof(struct bpos)];
-		enum btree_id			btree:8;
 #else
-		enum btree_id			btree:8;
 		u8				pos[sizeof(struct bpos)];
-		unsigned			idx:24;
+		u32				idx;
 #endif
 	} __packed;
 	struct {
@@ -61,8 +63,7 @@ union {
 };
 
 struct btree_write_buffered_key {
-	enum btree_id			btree:8;
-	u64				journal_seq:56;
+	u64				journal_seq;
 
 	/* BTREE_WRITE_BUFERED_VAL_U64s_MAX only applies to accounting keys */
 	__BKEY_PADDED(k, BTREE_WRITE_BUFERED_VAL_U64s_MAX);
