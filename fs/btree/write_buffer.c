@@ -467,6 +467,88 @@ static int wb_flush_sorted_range(struct btree_trans *trans,
 	return ret;
 }
 
+/*
+ * Sharded fastpath. Threshold and shard cap are deliberately conservative:
+ * fork/join + per-shard btree_trans setup isn't free, and we need each
+ * shard to do enough work to amortize that. Tune empirically.
+ */
+#define WB_FLUSH_SHARD_MIN_KEYS		(1UL << 12)
+
+static unsigned wb_flush_n_shards(size_t n_keys)
+{
+	return clamp_t(size_t, n_keys / WB_FLUSH_SHARD_MIN_KEYS, 1, num_online_cpus());
+}
+
+typedef struct {
+	struct closure			cl;
+	struct bch_fs			*c;
+	struct bch_fs_btree_write_buffer *wb;
+	size_t				start;
+	size_t				end;
+	bool				accounting_replay_done;
+	struct wb_flush_counters	cnt;
+	int				ret;
+} wb_flush_shard;
+DEFINE_DARRAY(wb_flush_shard);
+
+static CLOSURE_CALLBACK(wb_flush_shard_work)
+{
+	closure_type(s, wb_flush_shard, cl);
+	CLASS(btree_trans, trans)(s->c);
+
+	s->ret = wb_flush_sorted_range(trans, s->wb, s->start, s->end,
+				       s->accounting_replay_done, &s->cnt);
+
+	closure_return(cl);
+}
+
+static int wb_flush_sorted_sharded(struct btree_trans *trans,
+				   struct bch_fs_btree_write_buffer *wb,
+				   bool accounting_replay_done,
+				   struct wb_flush_counters *cnt)
+{
+	struct bch_fs *c = trans->c;
+	size_t n_keys = wb->sorted.nr;
+	unsigned n_shards = wb_flush_n_shards(n_keys);
+
+	if (n_shards <= 1)
+		return wb_flush_sorted_range(trans, wb, 0, n_keys,
+					     accounting_replay_done, cnt);
+
+	CLASS(darray_wb_flush_shard, shards)();
+	int ret = darray_make_room(&shards, n_shards);
+	if (ret)
+		/* OOM: fall back to single-shard inline path. */
+		return wb_flush_sorted_range(trans, wb, 0, n_keys,
+					     accounting_replay_done, cnt);
+
+	CLASS(closure_stack, cl)();
+
+	for (unsigned i = 0; i < n_shards; i++)
+		darray_push(&shards, ((wb_flush_shard) {
+			.c			= c,
+			.wb			= wb,
+			.start			= (n_keys * i) / n_shards,
+			.end			= (n_keys * (i + 1)) / n_shards,
+			.accounting_replay_done	= accounting_replay_done,
+		}));
+
+	darray_for_each(shards, i)
+		closure_call(&i->cl, wb_flush_shard_work, c->btree.write_buffer_wq, &cl);
+
+	closure_sync_unbounded(&cl);
+
+	darray_for_each(shards, s) {
+		if (s->ret && !ret)
+			ret = s->ret;
+		cnt->fast	+= s->cnt.fast;
+		cnt->noop	+= s->cnt.noop;
+		cnt->slowpath	+= s->cnt.slowpath;
+	}
+
+	return ret;
+}
+
 static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 						enum bch_wb_btree idx,
 						enum wb_flush_caller caller)
@@ -579,8 +661,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 		wb->sorted.nr = dst - wb->sorted.data;
 	}
 
-	ret = wb_flush_sorted_range(trans, wb, 0, wb->sorted.nr,
-				    accounting_replay_done, &cnt);
+	ret = wb_flush_sorted_sharded(trans, wb, accounting_replay_done, &cnt);
 	if (ret)
 		goto err;
 
@@ -1250,6 +1331,20 @@ int bch2_btree_write_buffer_start(struct bch_fs *c)
 	return 0;
 }
 
+#ifdef CONFIG_PROVE_LOCKING
+static int wb_keys_lock_cmp_fn(const struct lockdep_map *a, const struct lockdep_map *b)
+{
+	const struct btree_write_buffer_keys *ka =
+		container_of(container_of(a, struct mutex, dep_map),
+			     struct btree_write_buffer_keys, lock);
+	const struct btree_write_buffer_keys *kb =
+		container_of(container_of(b, struct mutex, dep_map),
+			     struct btree_write_buffer_keys, lock);
+
+	return cmp_int(ka->wb_btree, kb->wb_btree);
+}
+#endif
+
 void bch2_fs_btree_write_buffer_init_early(struct bch_fs *c)
 {
 	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
@@ -1263,6 +1358,8 @@ void bch2_fs_btree_write_buffer_init_early(struct bch_fs *c)
 		wb->flushing.is_flushing = true;
 		mutex_init(&wb->inc.lock);
 		mutex_init(&wb->flushing.lock);
+		lock_set_cmp_fn(&wb->inc.lock,	    wb_keys_lock_cmp_fn, NULL);
+		lock_set_cmp_fn(&wb->flushing.lock, wb_keys_lock_cmp_fn, NULL);
 		INIT_WORK(&wb->flush_work, bch2_btree_write_buffer_flush_work_fn);
 	}
 }
