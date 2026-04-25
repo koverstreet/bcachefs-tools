@@ -274,7 +274,8 @@ static void wake_up_trans(struct btree_trans *trans)
 	}
 }
 
-static int abort_lock(struct lock_graph *g, struct trans_waiting_for_lock *i)
+static int abort_lock(struct lock_graph *g, struct trans_waiting_for_lock *i,
+		      int err)
 {
 	if (i == g->g) {
 		trace_would_deadlock(g, i->trans);
@@ -324,7 +325,8 @@ static noinline __noreturn void break_cycle_fail(struct lock_graph *g)
 }
 
 static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
-				struct trans_waiting_for_lock *from)
+				struct trans_waiting_for_lock *from,
+				int err)
 {
 	struct trans_waiting_for_lock *i, *abort = NULL;
 	int ret;
@@ -343,7 +345,7 @@ static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
 		if (unlikely(abort->trans->lock_may_not_fail))
 			break_cycle_fail(g);
 
-		ret = abort_lock(g, abort);
+		ret = abort_lock(g, abort, BCH_ERR_transaction_restart_would_deadlock);
 	}
 
 	if (ret)
@@ -360,9 +362,15 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 
 	for (struct trans_waiting_for_lock *i = g->g; i < g->g + g->nr; i++)
 		if (i->trans == trans)
-			return break_cycle(g, cycle, i);
+			return break_cycle(g, cycle, i, BCH_ERR_transaction_restart_would_deadlock);
 
 	if (unlikely(g->nr == ARRAY_SIZE(g->g))) {
+		if (!cycle)
+			event_inc_trace(trans->c, trans_restart_would_deadlock_recursion_limit, buf, ({
+				guard(printbuf_atomic)(&buf);
+				prt_str(&buf, trans->fn);
+			}));
+
 		if (orig_trans->lock_may_not_fail) {
 			/* Other threads will have to rerun the cycle detector: */
 			for (struct trans_waiting_for_lock *i = g->g + 1; i < g->g + g->nr; i++)
@@ -370,16 +378,7 @@ static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 			return 0;
 		}
 
-		lock_graph_pop_all(g);
-
-		if (cycle)
-			return 0;
-
-		event_inc_trace(trans->c, trans_restart_would_deadlock_recursion_limit, buf, ({
-			guard(printbuf_atomic)(&buf);
-			prt_str(&buf, trans->fn);
-		}));
-		return btree_trans_restart(orig_trans, BCH_ERR_transaction_restart_deadlock_recursion_limit);
+		return break_cycle(g, cycle, g->g, BCH_ERR_transaction_restart_deadlock_recursion_limit);
 	}
 
 	lock_graph_down(g, trans);
@@ -507,8 +506,8 @@ next:
 				if (trans &&
 				    trans != top->trans &&
 				    lock_type_conflicts(lock_held, trans->locking_wait.lock_want)) {
-					if (darray_push_gfp(&top->waitlist, trans,
-							    GFP_NOWAIT|__GFP_NOWARN)) {
+					if (unlikely(darray_push_gfp(&top->waitlist, trans,
+								     GFP_NOWAIT|__GFP_NOWARN))) {
 						if (cycle) {
 							ret = -1;
 							goto out;
