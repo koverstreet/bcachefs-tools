@@ -929,10 +929,21 @@ void six_lock_wakeup_all(struct six_lock *lock)
 {
 	u32 state = atomic_read(&lock->state);
 
+	/*
+	 * First, run the normal wakeup machinery for any waiters the lock
+	 * state actually permits to acquire: those slots get removed by
+	 * __six_lock_wakeup and lock_acquired is set on the waiter.
+	 */
 	six_lock_wakeup(lock, state, SIX_LOCK_read);
 	six_lock_wakeup(lock, state, SIX_LOCK_intent);
 	six_lock_wakeup(lock, state, SIX_LOCK_write);
 
+	/*
+	 * Then wake any remaining waiters without removing their slots:
+	 * lock_acquired stays clear, so they'll re-run should_sleep_fn in
+	 * six_lock_slowpath() and self-remove via wait->slot_idx if it
+	 * returns an error. Removing here would corrupt that self-remove.
+	 */
 	raw_spin_lock(&lock->wait_lock);
 	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
 						lockdep_is_held(&lock->wait_lock));
