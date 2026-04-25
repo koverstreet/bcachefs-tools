@@ -1268,25 +1268,124 @@ static bool reconcile_phase_is_pending(unsigned i)
 		p.btree == BTREE_ID_reconcile_pending;
 }
 
-static bool reconcile_phase_next(struct bch_fs *c,
-				 struct moving_context *ctxt,
-				 struct bkey_i_cookie *pending_cookie)
+/*
+ * Per-pass cross-phase state. Threaded into do_reconcile_phase() so the
+ * inner loop has all of it without a long parameter list.
+ */
+struct reconcile_pass {
+	struct moving_context		*ctxt;
+	struct per_snapshot_io_opts	*snapshot_io_opts;
+	darray_reconcile_work		*work;
+	struct wb_maybe_flush		*last_flushed;
+	darray_stripe_retry		*stripe_retry;
+	struct bkey_i_cookie		*pending_cookie;
+	u64				*sectors_scanned;
+	u32				*copygc_run_count;
+};
+
+/*
+ * Iterate one phase to exhaustion (next_reconcile_entry returns no key) or to
+ * an interrupt condition (going RO, ratelimit hit, reconcile disabled, kick
+ * changed). On real errors returns the error; otherwise returns 0 — caller
+ * re-checks the conditions to decide whether to advance to the next phase or
+ * bail out.
+ */
+static int do_reconcile_phase(struct reconcile_pass *p, u32 kick)
 {
+	struct moving_context *ctxt = p->ctxt;
+	struct btree_trans *trans = ctxt->trans;
+	struct bch_fs *c = trans->c;
 	struct bch_fs_reconcile *r = &c->reconcile;
+	int ret = 0;
 
-	if (++r->phase == ARRAY_SIZE(reconcile_phases))
-		return false;
+	while (!bch2_move_ratelimit(ctxt) &&
+	       !test_bit(BCH_FS_going_ro, &c->flags) &&
+	       bch2_reconcile_enabled(c) &&
+	       kick == r->kick) {
+		bch2_trans_begin(trans);
 
-	reconcile_phase_start(c);
+		struct bkey_s_c k = next_reconcile_entry(trans, p->work, &r->work_pos,
+							 reconcile_phases[r->phase].end);
+		ret = bkey_err(k);
+		if (ret)
+			break;
 
-	if (reconcile_phase_is_pending(r->phase) &&
-	    bkey_deleted(&pending_cookie->k))
-		return false;
+		if (!k.k)
+			return 0;	/* phase exhausted */
 
-	/* Avoid conflicts when switching between phys/normal */
-	bch2_moving_ctxt_flush_all(ctxt);
-	bch2_btree_write_buffer_flush_sync(ctxt->trans);
-	return true;
+		r->running = true;
+		r->work_pos.pos = k.k->p;
+
+		if (k.k->type == KEY_TYPE_cookie &&
+		    reconcile_scan_decode(c, k.k->p.offset).type == RECONCILE_SCAN_pending)
+			bkey_reassemble(&p->pending_cookie->k_i, k);
+
+		if (k.k->type == KEY_TYPE_cookie) {
+			ret = do_reconcile_scan(ctxt, p->snapshot_io_opts,
+						k.k->p,
+						le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie),
+						p->sectors_scanned, p->last_flushed);
+
+			if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+#ifdef CONFIG_BCACHEFS_DEBUG
+				CLASS(printbuf, buf)();
+				bch2_prt_backtrace(&buf, &trans->last_restarted_trace);
+				panic("in transaction restart: %s, last restarted by\n%s",
+				      bch2_err_str(trans->restarted),
+				      buf.buf);
+#else
+				panic("in transaction restart: %s, last restarted by %pS\n",
+				      bch2_err_str(trans->restarted),
+				      (void *) trans->last_restarted_ip);
+#endif
+			}
+		} else if (k.k->type == KEY_TYPE_backpointer) {
+			ret = do_reconcile_btree(ctxt, p->snapshot_io_opts,
+						 r->work_pos, bkey_s_c_to_backpointer(k));
+		} else if (btree_is_reconcile_phys(r->work_pos.btree)) {
+			/*
+			 * The phys phase consumes its whole btree in one
+			 * do_reconcile_phys() call (which fans out to
+			 * per-device worker threads); return so the caller
+			 * advances to the next phase.
+			 */
+			bch2_trans_unlock_long(trans);
+			ret = do_reconcile_phys(c, r->phase);
+			BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
+			return ret;
+		} else {
+			ret = lockrestart_do(trans,
+				do_reconcile_extent(ctxt, p->snapshot_io_opts, r->work_pos,
+						    p->stripe_retry));
+		}
+
+		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
+			bch2_trans_unlock_long(trans);
+			bch2_copygc_wakeup(c);
+			wait_event(c->copygc.running_wq,
+				   c->copygc.run_count != *p->copygc_run_count ||
+				   kthread_should_stop());
+			*p->copygc_run_count = c->copygc.run_count;
+			ret = 0;
+			continue;
+		}
+
+		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+			ret = 0;
+			continue;
+		}
+
+		if (ret)
+			break;
+
+		do_retry_stripes(ctxt, p->stripe_retry);
+
+		r->work_pos.pos = btree_type_has_snapshot_field(r->work_pos.btree)
+			? bpos_successor(r->work_pos.pos)
+			: bpos_nosnap_successor(r->work_pos.pos);
+	}
+
+	return ret;
 }
 
 static int do_reconcile(struct moving_context *ctxt)
@@ -1306,9 +1405,6 @@ static int do_reconcile(struct moving_context *ctxt)
 
 	CLASS(per_snapshot_io_opts, snapshot_io_opts)(c);
 
-	r->phase = 0;
-	reconcile_phase_start(c);
-
 	struct bkey_i_cookie pending_cookie;
 	bkey_init(&pending_cookie.k);
 
@@ -1320,6 +1416,17 @@ static int do_reconcile(struct moving_context *ctxt)
 
 	CLASS(darray_stripe_retry, stripe_retry)();
 
+	struct reconcile_pass pass = {
+		.ctxt			= ctxt,
+		.snapshot_io_opts	= &snapshot_io_opts,
+		.work			= &work,
+		.last_flushed		= &last_flushed,
+		.stripe_retry		= &stripe_retry,
+		.pending_cookie		= &pending_cookie,
+		.sectors_scanned	= &sectors_scanned,
+		.copygc_run_count	= &copygc_run_count,
+	};
+
 	while (!bch2_move_ratelimit(ctxt) &&
 	       !test_bit(BCH_FS_going_ro, &c->flags)) {
 		if (!bch2_reconcile_enabled(c)) {
@@ -1328,99 +1435,51 @@ static int do_reconcile(struct moving_context *ctxt)
 					       kthread_should_stop());
 			if (kthread_should_stop())
 				break;
-		}
-
-		if (kick != r->kick) {
-			kick		= r->kick;
-			work.nr		= 0;
-			r->phase	= 0;
-			reconcile_phase_start(c);
-		}
-
-		bch2_trans_begin(trans);
-
-		struct bkey_s_c k = next_reconcile_entry(trans, &work,
-							 &r->work_pos,
-							 reconcile_phases[r->phase].end);
-		ret = bkey_err(k);
-		if (ret)
-			break;
-
-		if (!k.k) {
-			if (!reconcile_phase_next(c, ctxt, &pending_cookie))
-				break;
 			continue;
 		}
 
-		r->running = true;
-		r->work_pos.pos = k.k->p;
+		/*
+		 * Re-read kick: a kick during the previous pass restarts us
+		 * here so do_reconcile_phase() sees the same kick the for-loop
+		 * compares against — and the post-loop reconcile_wait() check
+		 * uses this latest value to decide whether anyone is still
+		 * asking for more work.
+		 */
+		kick = r->kick;
 
-		if (k.k->type == KEY_TYPE_cookie &&
-		    reconcile_scan_decode(c, k.k->p.offset).type == RECONCILE_SCAN_pending)
-			bkey_reassemble(&pending_cookie.k_i, k);
+		for (r->phase = 0; r->phase < ARRAY_SIZE(reconcile_phases); r->phase++) {
+			reconcile_phase_start(c);
 
-		if (k.k->type == KEY_TYPE_cookie) {
-			ret = do_reconcile_scan(ctxt, &snapshot_io_opts,
-						k.k->p,
-						le64_to_cpu(bkey_s_c_to_cookie(k).v->cookie),
-						&sectors_scanned, &last_flushed);
+			/*
+			 * Pending phases (the last entries in reconcile_phases[])
+			 * only run when something queued a pending cookie. Break
+			 * rather than continue: they're all at the end and skipping
+			 * them is equivalent to ending the pass.
+			 */
+			if (reconcile_phase_is_pending(r->phase) &&
+			    bkey_deleted(&pending_cookie.k))
+				break;
 
-			if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
-#ifdef CONFIG_BCACHEFS_DEBUG
-				CLASS(printbuf, buf)();
-				bch2_prt_backtrace(&buf, &trans->last_restarted_trace);
-				panic("in transaction restart: %s, last restarted by\n%s",
-				      bch2_err_str(trans->restarted),
-				      buf.buf);
-#else
-				panic("in transaction restart: %s, last restarted by %pS\n",
-				      bch2_err_str(trans->restarted),
-				      (void *) trans->last_restarted_ip);
-#endif
-			}
-		} else if (k.k->type == KEY_TYPE_backpointer) {
-			ret = do_reconcile_btree(ctxt, &snapshot_io_opts,
-						 r->work_pos, bkey_s_c_to_backpointer(k));
-		} else if (btree_is_reconcile_phys(r->work_pos.btree)) {
-			bch2_trans_unlock_long(trans);
-			ret = do_reconcile_phys(c, r->phase);
-			BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
+			ret = do_reconcile_phase(&pass, kick);
+			if (ret)
+				goto out;
 
 			work.nr = 0;
-			if (!reconcile_phase_next(c, ctxt, &pending_cookie))
+
+			if (kick != r->kick ||
+			    test_bit(BCH_FS_going_ro, &c->flags) ||
+			    bch2_move_ratelimit(ctxt))
 				break;
-			continue;
-		} else {
-			ret = lockrestart_do(trans,
-				do_reconcile_extent(ctxt, &snapshot_io_opts, r->work_pos,
-						    &stripe_retry));
+
+			/* Drain pending moves before the next phase. */
+			bch2_moving_ctxt_flush_all(ctxt);
 		}
 
-		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
-			bch2_trans_unlock_long(trans);
-			bch2_copygc_wakeup(c);
-			wait_event(c->copygc.running_wq,
-				   c->copygc.run_count != copygc_run_count ||
-				   kthread_should_stop());
-			copygc_run_count = c->copygc.run_count;
-			ret = 0;
-			continue;
-		}
-
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
-			ret = 0;
-			continue;
-		}
-
-		if (ret)
+		/* Completed a clean pass through all phases — we're done. */
+		if (r->phase == ARRAY_SIZE(reconcile_phases))
 			break;
-
-		do_retry_stripes(ctxt, &stripe_retry);
-
-		r->work_pos.pos = btree_type_has_snapshot_field(r->work_pos.btree)
-			? bpos_successor(r->work_pos.pos)
-			: bpos_nosnap_successor(r->work_pos.pos);
 	}
+out:
 
 	if (!ret && !bkey_deleted(&pending_cookie.k))
 		try(bch2_clear_reconcile_needs_scan(trans,
