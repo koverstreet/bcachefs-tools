@@ -109,7 +109,6 @@ struct bch_fs_btree_write_buffer {
 	u64				nr_flushes;
 	u64				nr_flushes_caller[WB_FLUSH_NR];
 	u64				nr_keys_flushed;
-	u64				nr_keys_skipped_overwritten;
 	u64				nr_keys_fast;
 	u64				nr_keys_slowpath;
 

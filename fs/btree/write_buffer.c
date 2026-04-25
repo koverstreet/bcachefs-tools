@@ -373,7 +373,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[idx];
 	enum btree_id btree = bch_wb_btree_to_btree_id(idx);
 	struct btree_iter iter = { NULL };
-	size_t overwritten = 0, fast = 0, noop = 0, slowpath = 0, could_not_insert = 0;
+	size_t fast = 0, noop = 0, slowpath = 0, could_not_insert = 0;
 	bool write_locked = false;
 	bool accounting_replay_done = test_bit(BCH_FS_accounting_replay_done, &c->flags);
 	int ret = 0;
@@ -425,6 +425,60 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 	 */
 	wb_sort(wb->sorted.data, wb->sorted.nr);
 
+	/*
+	 * Pre-flush dedup: collapse adjacent same-pos entries.
+	 *
+	 * After wb_sort, same-pos keys sit adjacent in wb->sorted, ordered
+	 * by idx (which is journal-insertion order: lower idx = earlier
+	 * write). For all btrees we drop the older entry in each same-pos
+	 * run and keep the newest. For accounting, where each entry is a
+	 * delta, we first accumulate the older value into the newer one,
+	 * yielding a single combined delta per pos.
+	 *
+	 * The dropped entry's journal_seq must be zeroed: the slowpath and
+	 * could_not_insert compaction iterate wb->flushing.keys directly
+	 * (not wb->sorted), and retain anything with non-zero journal_seq.
+	 * If we leave the dropped accounting entry alive in flushing, the
+	 * next flush's dedup would re-accumulate the already-accumulated
+	 * value into the survivor, multiplying the delta.
+	 *
+	 * This must run single-threaded before the sharded fastpath: the
+	 * partitioner splits wb->sorted by index, so a same-pos run
+	 * straddling a shard seam would otherwise be flushed in
+	 * non-deterministic order — an older write could clobber a newer
+	 * one. Collapsing same-pos runs here removes the constraint
+	 * entirely; shards see a slice with at most one entry per pos and
+	 * don't need to depend on sort-order semantics.
+	 */
+	{
+		struct wb_key_ref *src_end = wb->sorted.data + wb->sorted.nr;
+		struct wb_key_ref *dst = wb->sorted.data;
+
+		for (struct wb_key_ref *src = wb->sorted.data; src < src_end; src++) {
+			if (src + 1 < src_end && wb_key_eq(src, src + 1)) {
+				struct btree_write_buffered_key *k =
+					wb_keys_idx(&wb->flushing, src->idx);
+				struct btree_write_buffered_key *n =
+					wb_keys_idx(&wb->flushing, src[1].idx);
+
+				/* Accounting: accumulate older delta into newer entry. */
+				if (k->k.k.type == KEY_TYPE_accounting &&
+				    n->k.k.type == KEY_TYPE_accounting) {
+					bch2_accounting_accumulate(bkey_i_to_accounting(&n->k),
+								   bkey_i_to_s_c_accounting(&k->k));
+					n->journal_seq = min_t(u64, n->journal_seq, k->journal_seq);
+				}
+				/* Drop older entry; newer (src + 1) wins. */
+				k->journal_seq = 0;
+				continue;
+			}
+			if (dst != src)
+				*dst = *src;
+			dst++;
+		}
+		wb->sorted.nr = dst - wb->sorted.data;
+	}
+
 	bch2_trans_iter_init(trans, &iter, btree, POS_MIN,
 			     BTREE_ITER_intent|BTREE_ITER_all_snapshots);
 
@@ -450,21 +504,6 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 		if (!accounting_replay_done &&
 		    k->k.k.type == KEY_TYPE_accounting) {
 			slowpath++;
-			continue;
-		}
-
-		if (i + 1 < &darray_top(wb->sorted) &&
-		    wb_key_eq(i, i + 1)) {
-			struct btree_write_buffered_key *n = wb_keys_idx(&wb->flushing, i[1].idx);
-
-			if (k->k.k.type == KEY_TYPE_accounting &&
-			    n->k.k.type == KEY_TYPE_accounting)
-				bch2_accounting_accumulate(bkey_i_to_accounting(&n->k),
-							   bkey_i_to_s_c_accounting(&k->k));
-
-			overwritten++;
-			n->journal_seq = min_t(u64, n->journal_seq, k->journal_seq);
-			k->journal_seq = 0;
 			continue;
 		}
 
@@ -604,13 +643,12 @@ err:
 	wb->nr_flushes++;
 	wb->nr_flushes_caller[caller]++;
 	wb->nr_keys_flushed		+= nr_flushing;
-	wb->nr_keys_skipped_overwritten	+= overwritten;
 	wb->nr_keys_fast		+= fast;
 	wb->nr_keys_slowpath		+= slowpath;
 
 	event_inc_trace(c, write_buffer_flush, buf,
-		prt_printf(&buf, "flushed %llu skipped %zu fast %zu noop %zu",
-			   nr_flushing, overwritten, fast, noop));
+		prt_printf(&buf, "flushed %llu fast %zu noop %zu",
+			   nr_flushing, fast, noop));
 
 	return ret;
 }
@@ -1140,7 +1178,6 @@ void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
 		for (unsigned j = 0; j < WB_FLUSH_NR; j++)
 			prt_printf(out, "  %s:\t%llu\n",	wb_flush_caller_names[j], wb->nr_flushes_caller[j]);
 		prt_printf(out, "keys flushed:\t%llu\n",	wb->nr_keys_flushed);
-		prt_printf(out, "keys skipped:\t%llu\n",	wb->nr_keys_skipped_overwritten);
 		prt_printf(out, "keys fast:\t%llu\n",		wb->nr_keys_fast);
 		prt_printf(out, "keys slowpath:\t%llu\n",	wb->nr_keys_slowpath);
 
