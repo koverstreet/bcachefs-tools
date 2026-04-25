@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_WRITE_BUFFER_TYPES_H
 #define _BCACHEFS_BTREE_WRITE_BUFFER_TYPES_H
 
+#include <linux/workqueue.h>
+
 #include "util/darray.h"
 #include "journal/types.h"
 
@@ -104,7 +106,7 @@ struct bch_fs_btree_write_buffer {
 	struct btree_write_buffer_keys	inc;
 	struct btree_write_buffer_keys	flushing;
 
-	struct task_struct __rcu	*thread;
+	struct work_struct		flush_work;
 
 	u64				nr_flushes;
 	u64				nr_flushes_caller[WB_FLUSH_NR];

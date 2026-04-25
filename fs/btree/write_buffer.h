@@ -211,13 +211,9 @@ void bch2_btree_write_buffer_to_text(struct printbuf *, struct bch_fs *);
 
 static inline void bch2_btree_write_buffer_wakeup(struct bch_fs *c)
 {
-	guard(rcu)();
-	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
-		struct task_struct *p =
-			rcu_dereference(c->btree.write_buffer[i].thread);
-		if (p)
-			wake_up_process(p);
-	}
+	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++)
+		queue_work(c->btree.write_buffer_wq,
+			   &c->btree.write_buffer[i].flush_work);
 }
 
 void bch2_btree_write_buffer_stop(struct bch_fs *);

@@ -785,6 +785,12 @@ struct bch_fs_btree {
 	 * buffers and locks.
 	 */
 	struct bch_fs_btree_write_buffer	write_buffer[BCH_WB_BTREE_NR];
+	/*
+	 * Shared workqueue for parallelizing the write-buffer fastpath across
+	 * CPUs once the sorted key list crosses a threshold. WQ_MEM_RECLAIM
+	 * because the WB flush sits in the journal-reclaim path.
+	 */
+	struct workqueue_struct			*write_buffer_wq;
 	struct bch_fs_btree_trans		trans;
 	struct bch_fs_btree_reserve_cache	reserve_cache;
 	struct bch_fs_btree_interior_updates	interior_updates;
