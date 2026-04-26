@@ -168,6 +168,20 @@ enum bch_btree_cache_not_freed_reasons {
 	BCH_BTREE_CACHE_NOT_FREED_REASONS_NR,
 };
 
+/*
+ * Membership state of a struct btree in the btree node cache.
+ *
+ * See the DOC block at the top of btree/cache.c for the state machine and
+ * transitions. The state is encoded across list-head linkage, hash table
+ * presence, and b->data; btree_node_cache_state() decodes it.
+ */
+enum btree_node_cache_state {
+	BTREE_NODE_CACHE_DETACHED,	/* off all lists; in transit between states */
+	BTREE_NODE_CACHE_FREED,		/* on bc->freed_{pcpu,nonpcpu}; no data buffer */
+	BTREE_NODE_CACHE_FREEABLE,	/* on bc->freeable; has data; not hashed */
+	BTREE_NODE_CACHE_LIVE,		/* on bc->list; hashed; has data */
+};
+
 struct btree_cache_list {
 	unsigned		idx;
 	struct shrinker		*shrink;

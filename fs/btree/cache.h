@@ -80,6 +80,18 @@ static inline bool btree_node_hashed(struct btree *b)
 	return b->hash_val != 0;
 }
 
+/* See enum btree_node_cache_state and the cache.c DOC block. */
+static inline enum btree_node_cache_state btree_node_cache_state(struct btree *b)
+{
+	if (btree_node_hashed(b))
+		return BTREE_NODE_CACHE_LIVE;
+	if (list_empty(&b->list))
+		return BTREE_NODE_CACHE_DETACHED;
+	return b->data
+		? BTREE_NODE_CACHE_FREEABLE
+		: BTREE_NODE_CACHE_FREED;
+}
+
 #define for_each_cached_btree(_b, _c, _tbl, _iter, _pos)		\
 	for ((_tbl) = rht_dereference_rcu((_c)->btree.cache.table.tbl,	\
 					  &(_c)->btree.cache.table),	\
