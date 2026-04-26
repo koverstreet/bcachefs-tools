@@ -1644,7 +1644,7 @@ void bch2_btree_cache_to_text(struct printbuf *out, const struct bch_fs_btree_ca
 	prt_btree_cache_line(out, c, "pinned:",		bc->live[1].nr);
 	prt_btree_cache_line(out, c, "vmalloc:",	bc->nr_vmalloc);
 	prt_btree_cache_line(out, c, "reserve:",	bc->nr_reserve);
-	prt_btree_cache_line(out, c, "freed:",		bc->nr_freeable);
+	prt_btree_cache_line(out, c, "freeable:",	bc->nr_freeable);
 	prt_btree_cache_line(out, c, "dirty:",		atomic_long_read(&bc->nr_dirty));
 	prt_printf(out, "cannibalize lock:\t%s\n",	bc->alloc_lock ? "held" : "not held");
 	prt_newline(out);
