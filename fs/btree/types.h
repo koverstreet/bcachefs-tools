@@ -155,6 +155,7 @@ enum btree_node_sibling {
 	x(dirty)				\
 	x(read_in_flight)			\
 	x(write_in_flight)			\
+	x(permanent)				\
 	x(noevict)				\
 	x(write_blocked)			\
 	x(will_make_reachable)			\

@@ -25,16 +25,15 @@
  * ------------------------
  *
  * A struct btree is in exactly one of these states at any time, with the
- * encoding spread across list membership, hash table membership, b->data, and
- * the BTREE_NODE_permanent flag:
+ * encoding spread across list membership, hash table membership, and
+ * b->data:
  *
- *   LIVE      — bc->list, hashed, b->data set, !BTREE_NODE_permanent.
- *               Findable by lookup; reachable for reclaim. Counted in
- *               bc->live[btree_node_pinned(b)].nr (and bc->nr_by_btree[]).
- *   ROOT      — off all lists, hashed, b->data set, BTREE_NODE_permanent.
- *               Findable by lookup; pinned across the FS lifetime. Tracked
- *               via bc->roots_known[]/roots_extra (under bc->root_lock), not
- *               counted in bc->live[].
+ *   LIVE      — bc->list, hashed, b->data set. Findable by lookup;
+ *               reachable for reclaim. Counted in
+ *               bc->live[btree_node_pinned(b)].nr and bc->nr_by_btree[].
+ *               Roots are LIVE with BTREE_NODE_permanent set; the flag
+ *               makes the reclaim path skip them. Roots are also tracked
+ *               via bc->roots_known[]/roots_extra (under bc->root_lock).
  *   FREEABLE  — bc->freeable, NOT hashed, b->data set. Buffer cache for hot
  *               alloc/free churn. Counted in bc->nr_freeable.
  *   FREED     — bc->freed_pcpu (level-0 pcpu-readers locks) or
@@ -57,13 +56,13 @@
  *   LIVE → IN-TRANSIT → FREED        shrinker / cannibalize: hash_remove +
  *                                    data_free + btree_node_to_freedlist
  *   FREEABLE → IN-TRANSIT → FREED    bch2_btree_node_data_free
- *   LIVE → ROOT                      bch2_btree_set_root_inmem
- *                                    (set_permanent + list_del)
+ *   LIVE → LIVE+permanent            bch2_btree_set_root_inmem (just sets
+ *                                    the flag; node stays where it was).
  *
- * Roots leave bc->list when they become roots, but stay hashed (so lookups
- * still find them); ordinary reclaim never sees them because the shrinker
- * walks bc->list. Eviction (bch2_btree_node_evict) is forbidden on roots
- * (BUG_ON), since there's no caller path that legitimately wants to.
+ * Roots stay on bc->list (and stay counted in bc->live[]); the reclaim
+ * path checks BTREE_NODE_permanent and bails. Eviction
+ * (bch2_btree_node_evict) is forbidden on permanent nodes (BUG_ON),
+ * since there's no caller path that legitimately wants to.
  *
  * Lock discipline:
  *
@@ -467,6 +466,10 @@ static int __btree_node_reclaim_checks(struct bch_fs *c, struct btree *b,
 
 	lockdep_assert_held(&bc->lock);
 
+	if (btree_node_permanent(b)) {
+		bc->not_freed[BCH_BTREE_CACHE_NOT_FREED_permanent]++;
+		return bch_err_throw(c, ENOMEM_btree_node_reclaim);
+	}
 	if (btree_node_noevict(b)) {
 		bc->not_freed[BCH_BTREE_CACHE_NOT_FREED_noevict]++;
 		return bch_err_throw(c, ENOMEM_btree_node_reclaim);
@@ -720,20 +723,6 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 			list_move(&c->verify_data->list, &bc->list);
 
 		kvfree(c->verify_ondisk);
-
-		/*
-		 * Roots live off the live list during the fs's lifetime (via
-		 * BTREE_NODE_permanent); clear the flag and add them back so
-		 * the teardown sweep below hash-removes them.
-		 */
-		for (unsigned i = 0; i < btree_id_nr_alive(c); i++) {
-			struct btree_root *r = bch2_btree_id_root(c, i);
-
-			if (r->b) {
-				clear_btree_node_permanent(r->b);
-				list_add(&r->b->list, &bc->list);
-			}
-		}
 
 		list_for_each_entry_safe(b, t, &bc->list, list)
 			bch2_btree_node_hash_remove(bc, b);
@@ -1503,7 +1492,7 @@ void bch2_btree_node_evict(struct btree_trans *trans, const struct bkey_i *k)
 	if (!b)
 		return;
 
-	BUG_ON(b == btree_node_root(trans->c, b));
+	BUG_ON(btree_node_permanent(b));
 wait_on_io:
 	/* not allowed to wait on io with btree locks held: */
 
