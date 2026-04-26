@@ -322,7 +322,6 @@ static void __bch2_fs_read_only(struct bch_fs *c)
 	bch2_maybe_schedule_btree_bitmap_gc_stop(c);
 	bch2_fs_ec_stop(c);
 	bch2_open_buckets_stop(c, NULL, true);
-	bch2_reconcile_stop(c);
 	bch2_copygc_stop(c);
 	bch2_btree_write_buffer_stop(c);
 	bch2_fs_ec_flush(c);
@@ -386,6 +385,14 @@ void bch2_fs_read_only(struct bch_fs *c)
 	BUG_ON(test_bit(BCH_FS_write_disable_complete, &c->flags));
 
 	bch_verbose(c, "going read-only");
+
+	/*
+	 * Stop background kthreads that issue writes (reconcile, etc.)
+	 * before disabling c->writes; otherwise they can dispatch
+	 * data_update operations that fail with erofs_no_writes once
+	 * c->writes is stopped, and the failure-rate threshold trips.
+	 */
+	bch2_reconcile_stop(c);
 
 	/*
 	 * Block new foreground-end write operations from starting - any new
