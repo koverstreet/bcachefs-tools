@@ -148,22 +148,22 @@ static void __btree_node_data_free(struct btree *b)
 	b->aux_data = NULL;
 }
 
-void bch2_btree_node_data_free_locked(struct btree *b)
+void bch2_btree_node_data_free(struct btree *b)
 {
-	BUG_ON(!list_empty(&b->list));
-	BUG_ON(btree_node_hashed(b));
+	BUG_ON(btree_node_cache_state(b) != BTREE_NODE_CACHE_DETACHED);
+	EBUG_ON(btree_node_write_in_flight(b));
+
+	if (!b->data)
+		return;
 
 	/*
 	 * This should really be done in slub/vmalloc, but we're using the
 	 * kmalloc_large() path, so we're working around a slub bug by doing
 	 * this here:
 	 */
-	if (b->data)
-		mm_account_reclaimed_pages(btree_buf_bytes(b) / PAGE_SIZE);
+	mm_account_reclaimed_pages(btree_buf_bytes(b) / PAGE_SIZE);
 	if (b->aux_data)
 		mm_account_reclaimed_pages(btree_aux_data_bytes(b) / PAGE_SIZE);
-
-	EBUG_ON(btree_node_write_in_flight(b));
 
 	clear_btree_node_just_written(b);
 	__btree_node_data_free(b);
@@ -379,19 +379,7 @@ int bch2_btree_node_cache_attach(struct bch_fs_btree_cache *bc, struct btree *b,
 		list_add(&b->list, &bc->freeable);
 		return 0;
 	case BTREE_NODE_CACHE_FREED:
-		EBUG_ON(btree_node_write_in_flight(b));
-		if (b->data) {
-			/*
-			 * Working around a slub bug: kmalloc_large() pages
-			 * aren't accounted as reclaimable.
-			 */
-			mm_account_reclaimed_pages(btree_buf_bytes(b) / PAGE_SIZE);
-			if (b->aux_data)
-				mm_account_reclaimed_pages(btree_aux_data_bytes(b) / PAGE_SIZE);
-
-			clear_btree_node_just_written(b);
-			__btree_node_data_free(b);
-		}
+		bch2_btree_node_data_free(b);
 		list_add(&b->list, b->c.lock.readers
 				 ? &bc->freed_pcpu
 				 : &bc->freed_nonpcpu);

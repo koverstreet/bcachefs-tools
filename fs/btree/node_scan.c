@@ -261,7 +261,7 @@ static int read_btree_nodes_worker(void *p)
 	}
 err:
 	if (b) {
-		bch2_btree_node_data_free_locked(b);
+		bch2_btree_node_data_free(b);
 		bch2_btree_node_mem_free(c, b);
 	}
 	bio_put(bio);
