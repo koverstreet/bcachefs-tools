@@ -399,8 +399,16 @@ bool bch2_copygc_can_make_progress(struct bch_dev *ca)
 		if (data_type_movable(i))
 			fragmented += usage_full.d[i].fragmented;
 
+	/*
+	 * Hysteresis to avoid waking copygc for trivial fragmentation. The
+	 * threshold has to stay low enough that the alloc-blocked wakeup
+	 * path in bch2_bucket_alloc_trans() fires before the allocator
+	 * starves; using the full stripe-watermark reserve was too high and
+	 * could leave the allocator hung with non-trivial fragmentation
+	 * sitting just below threshold.
+	 */
 	return fragmented > ca->mi.bucket_size *
-		bch2_dev_buckets_reserved(ca, BCH_WATERMARK_stripe);
+		bch2_dev_buckets_reserved(ca, BCH_WATERMARK_stripe) / 4;
 }
 
 u64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
