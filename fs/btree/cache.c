@@ -509,17 +509,10 @@ static int __btree_node_reclaim_checks(struct bch_fs *c, struct btree *b,
 
 		if (locked) {
 			/*
-			 * Using the underscore version because we don't want to compact
-			 * bsets after the write, since this node is about to be evicted
-			 * - unless btree verify mode is enabled, since it runs out of
-			 * the post write cleanup:
+			 * Don't compact bsets after the write — this node is
+			 * about to be evicted.
 			 */
-			if (static_branch_unlikely(&bch2_verify_btree_ondisk))
-				bch2_btree_node_write(c, b, SIX_LOCK_intent,
-						      BTREE_WRITE_cache_reclaim);
-			else
-				__bch2_btree_node_write(c, b,
-							BTREE_WRITE_cache_reclaim);
+			__bch2_btree_node_write(c, b, BTREE_WRITE_cache_reclaim);
 		}
 	}
 
@@ -1475,8 +1468,6 @@ int bch2_fs_btree_cache_init(struct bch_fs *c)
 			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREEABLE);
 	}
 
-	mutex_init(&c->verify_lock);
-
 	shrink = shrinker_alloc(0, "%s-btree_cache", c->name);
 	if (!shrink)
 		return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
@@ -1511,11 +1502,6 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 	/* vfree() can allocate memory: */
 	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
 		guard(mutex)(&bc->lock);
-
-		if (c->verify_data)
-			list_move(&c->verify_data->list, &bc->list);
-
-		kvfree(c->verify_ondisk);
 
 		list_for_each_entry_safe(b, t, &bc->list, list)
 			bch2_btree_node_hash_remove(bc, b);

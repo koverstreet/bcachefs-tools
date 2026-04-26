@@ -251,10 +251,6 @@ do {									\
 		"Disables rewriting of btree nodes during mark and sweep")\
 	BCH_DEBUG_PARAM(btree_shrinker_disabled,			\
 		"Disables the shrinker callback for the btree node cache")\
-	BCH_DEBUG_PARAM(verify_btree_ondisk,				\
-		"Reread btree nodes at various points to verify the "	\
-		"mergesort in the read path against modifications "	\
-		"done in memory")					\
 	BCH_DEBUG_PARAM(backpointers_no_use_write_buffer,		\
 		"Don't use the write buffer for backpointers, enabling "\
 		"extra runtime checks")					\
@@ -804,9 +800,6 @@ struct bch_fs {
 	struct dentry		*async_obj_dir;
 	struct btree_debug	btree_debug[BTREE_ID_NR];
 #endif
-	struct btree		*verify_data;
-	struct btree_node	*verify_ondisk;
-	struct mutex		verify_lock;
 };
 
 /* Error tracking: */

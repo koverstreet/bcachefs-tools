@@ -571,8 +571,6 @@ bool bch2_btree_post_write_cleanup(struct bch_fs *c, struct btree *b)
 	for_each_bset(b, t)
 		bch2_set_bset_needs_whiteout(bset(b, t), true);
 
-	bch2_btree_verify(c, b);
-
 	/*
 	 * If later we don't unconditionally sort down to a single bset, we have
 	 * to ensure this is still true:
