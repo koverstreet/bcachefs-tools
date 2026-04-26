@@ -545,7 +545,7 @@ static void bch2_btree_reserve_put(struct btree_update *as, struct btree_trans *
 			/* Both intent and write were held across prealloc. */
 			__btree_node_free(trans, b);
 			bch2_btree_node_transition_state(&c->btree.cache, b,
-								  BTREE_NODE_CACHE_FREEABLE);
+							 BTREE_NODE_CACHE_FREEABLE);
 			six_unlock_write(&b->c.lock);
 			six_unlock_intent(&b->c.lock);
 		}
