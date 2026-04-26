@@ -133,17 +133,21 @@ void bch2_recalc_btree_reserve(struct bch_fs *c)
 
 /* Btree node allocation */
 
-static void __btree_node_data_free(struct btree *b)
+struct btree_node_bufs {
+	void		*data;
+	void		*aux_data;
+	unsigned	byte_order;
+};
+
+static void btree_node_bufs_free(struct btree_node_bufs *b)
 {
 	kvfree(b->data);
-	b->data = NULL;
 #ifdef __KERNEL__
 	kvfree(b->aux_data);
 #else
 	if (b->aux_data)
-		munmap(b->aux_data, btree_aux_data_bytes(b));
+		munmap(b->aux_data, __btree_aux_data_bytes(b->byte_order));
 #endif
-	b->aux_data = NULL;
 }
 
 void bch2_btree_node_data_free(struct btree *b)
@@ -163,7 +167,16 @@ void bch2_btree_node_data_free(struct btree *b)
 		mm_account_reclaimed_pages(btree_aux_data_bytes(b) / PAGE_SIZE);
 
 	clear_btree_node_just_written(b);
-	__btree_node_data_free(b);
+
+	struct btree_node_bufs bufs = {
+		.data		= b->data,
+		.aux_data	= b->aux_data,
+		.byte_order	= b->byte_order,
+	};
+	b->data = NULL;
+	b->aux_data = NULL;
+
+	btree_node_bufs_free(&bufs);
 }
 
 void bch2_btree_node_mem_free(struct bch_fs *c, struct btree *b)
@@ -189,8 +202,8 @@ static const struct rhashtable_params bch_btree_cache_params = {
 	.automatic_shrinking	= true,
 };
 
-static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp,
-				 bool avoid_compaction)
+static int __btree_node_data_alloc(struct bch_fs *c, struct btree_node_bufs *b,
+				   gfp_t gfp, bool avoid_compaction)
 {
 	/*
 	 * We probably ought to be using __GFP_RECLAIMABLE - but vmalloc barfs.
@@ -200,6 +213,8 @@ static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp,
 	gfp |= __GFP_ACCOUNT;
 
 	if (!b->data) {
+		unsigned bytes = 1U << b->byte_order;
+
 		if (avoid_compaction && bch2_mm_avoid_compaction) {
 			/*
 			 * Cursed hack: mm doesn't know how to limit the amount of time
@@ -211,8 +226,8 @@ static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp,
 			 * vmalloc.
 			 */
 			b->data = gfp & __GFP_RECLAIM
-				? __vmalloc(btree_buf_bytes(b), gfp)
-				: kmalloc(btree_buf_bytes(b), gfp);
+				? __vmalloc(bytes, gfp)
+				: kmalloc(bytes, gfp);
 		}
 		/*
 		 * mm is cursed: vmalloc can fail for no sane reason, even on 64
@@ -221,16 +236,18 @@ static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp,
 		 */
 
 		if (!b->data)
-			b->data = kvmalloc(btree_buf_bytes(b), gfp);
+			b->data = kvmalloc(bytes, gfp);
 		if (!b->data)
 			return bch_err_throw(c, ENOMEM_btree_node_mem_alloc);
 	}
 
 	if (!b->aux_data) {
+		unsigned bytes = __btree_aux_data_bytes(b->byte_order);
+
 #ifdef __KERNEL__
-		b->aux_data = kvmalloc(btree_aux_data_bytes(b), gfp);
+		b->aux_data = kvmalloc(bytes, gfp);
 #else
-		b->aux_data = mmap(NULL, btree_aux_data_bytes(b),
+		b->aux_data = mmap(NULL, bytes,
 				   PROT_READ|PROT_WRITE|PROT_EXEC,
 				   MAP_PRIVATE|MAP_ANONYMOUS, 0, 0);
 		if (b->aux_data == MAP_FAILED)
@@ -243,7 +260,7 @@ static int btree_node_data_alloc(struct bch_fs *c, struct btree *b, gfp_t gfp,
 	return 0;
 }
 
-static struct btree *__btree_node_mem_alloc(struct bch_fs *c, gfp_t gfp)
+static struct btree *__btree_node_mem_alloc(struct bch_fs *c, bool pcpu_read_locks, gfp_t gfp)
 {
 	struct btree *b = kzalloc(sizeof(struct btree), gfp);
 	if (!b)
@@ -253,22 +270,23 @@ static struct btree *__btree_node_mem_alloc(struct bch_fs *c, gfp_t gfp)
 	INIT_LIST_HEAD(&b->list);
 	INIT_LIST_HEAD(&b->write_blocked);
 	b->byte_order = ilog2(c->opts.btree_node_size);
+	bch2_btree_lock_init(&b->c, pcpu_read_locks ? SIX_LOCK_INIT_PCPU : 0, gfp);
 	return b;
 }
 
 struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *c)
 {
-	struct btree *b = __btree_node_mem_alloc(c, GFP_KERNEL);
-	if (!b)
-		return NULL;
+	struct btree_node_bufs bufs = { .byte_order = ilog2(c->opts.btree_node_size) };
+	struct btree *b;
 
-	if (btree_node_data_alloc(c, b, GFP_KERNEL, false)) {
-		__btree_node_data_free(b);
-		bch2_btree_node_mem_free(c, b);
+	if (__btree_node_data_alloc(c, &bufs, GFP_KERNEL, false) ||
+	    !(b = __btree_node_mem_alloc(c, false, GFP_KERNEL))) {
+		btree_node_bufs_free(&bufs);
 		return NULL;
 	}
 
-	bch2_btree_lock_init(&b->c, 0, GFP_KERNEL);
+	b->data		= bufs.data;
+	b->aux_data	= bufs.aux_data;
 	return b;
 }
 
@@ -749,21 +767,40 @@ int bch2_btree_cache_cannibalize_lock(struct btree_trans *trans, struct closure 
 	return ret;
 }
 
+/* Btree node alloc / lookup / evict */
+
+static struct btree *bch2_btree_node_grab(struct bch_fs *c, struct list_head *head, bool pcpu_read_locks)
+{
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+	guard(mutex)(&bc->lock);
+	struct btree *b;
+	list_for_each_entry(b, head, list)
+		if (pcpu_read_locks == (b->c.lock.readers != NULL) &&
+		    !btree_node_reclaim(c, b)) {
+			bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_NONE);
+			return b;
+		}
+
+	return NULL;
+}
+
 static struct btree *btree_node_cannibalize(struct bch_fs *c, bool pcpu_read_locks)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 	struct btree *b;
 
-	list_for_each_entry_reverse(b, &bc->list, list)
-		if (pcpu_read_locks == !!b->c.lock.readers &&
-		    !btree_node_reclaim(c, b))
-			return b;
+	b = bch2_btree_node_grab(c, &bc->list, pcpu_read_locks);
+	if (b)
+		return b;
 
 	while (1) {
-		list_for_each_entry_reverse(b, &bc->list, list)
-			if (pcpu_read_locks == !!b->c.lock.readers &&
-			    !btree_node_write_and_reclaim(c, b))
-				return b;
+		scoped_guard(mutex, &bc->lock)
+			list_for_each_entry_reverse(b, &bc->list, list)
+				if (pcpu_read_locks == !!b->c.lock.readers &&
+				    !btree_node_write_and_reclaim(c, b)) {
+					bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_NONE);
+					return b;
+				}
 
 		/*
 		 * Rare case: all matching-type nodes were intent-locked.
@@ -774,8 +811,6 @@ static struct btree *btree_node_cannibalize(struct bch_fs *c, bool pcpu_read_loc
 	}
 }
 
-/* Btree node alloc / lookup / evict */
-
 struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_read_locks)
 {
 	struct bch_fs *c = trans->c;
@@ -783,73 +818,39 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_rea
 	struct list_head *freed = pcpu_read_locks
 		? &bc->freed_pcpu
 		: &bc->freed_nonpcpu;
-	struct btree *b, *b2;
 	u64 start_time = local_clock();
 
-	mutex_lock(&bc->lock);
+	struct btree *b = bch2_btree_node_grab(c, &bc->freeable, pcpu_read_locks);
+	if (b)
+		goto got_mem;
 
-	/*
-	 * We never free struct btree itself, just the memory that holds the on
-	 * disk node. Check the freed list before allocating a new one:
-	 */
-	list_for_each_entry(b, freed, list)
-		if (!btree_node_reclaim(c, b)) {
-			bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_NONE);
-			goto got_node;
-		}
-
-	b = __btree_node_mem_alloc(c, GFP_NOWAIT);
-	if (b) {
-		bch2_btree_lock_init(&b->c, pcpu_read_locks ? SIX_LOCK_INIT_PCPU : 0, GFP_NOWAIT);
-	} else {
-		mutex_unlock(&bc->lock);
+	struct btree_node_bufs bufs = { .byte_order = ilog2(c->opts.btree_node_size) };
+	if (__btree_node_data_alloc(c, &bufs, GFP_NOWAIT, true)) {
 		bch2_trans_unlock(trans);
-		b = __btree_node_mem_alloc(c, GFP_KERNEL);
-		if (!b)
-			goto err;
-		bch2_btree_lock_init(&b->c, pcpu_read_locks ? SIX_LOCK_INIT_PCPU : 0, GFP_KERNEL);
-		mutex_lock(&bc->lock);
-	}
-
-	BUG_ON(!six_trylock_intent(&b->c.lock));
-	BUG_ON(!six_trylock_write(&b->c.lock));
-
-got_node:
-	/*
-	 * btree_free() doesn't free memory; it sticks the node on the end of
-	 * the list. Check if there's any freed nodes there:
-	 */
-	list_for_each_entry(b2, &bc->freeable, list)
-		if (!btree_node_reclaim(c, b2)) {
-			/*
-			 * Detach b2 _before_ the data swap: while b2 still has
-			 * its data, transition NONE captures FREEABLE bookkeeping
-			 * (decrements nr_freeable). After the swap b2->data is
-			 * NULL, so transition FREED just lists it (no kvfree).
-			 */
-			bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_NONE);
-
-			swap(b->data, b2->data);
-			swap(b->aux_data, b2->aux_data);
-
-			bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_FREED);
-			mutex_unlock(&bc->lock);
-
-			six_unlock_write(&b2->c.lock);
-			six_unlock_intent(&b2->c.lock);
-			goto got_mem;
-		}
-
-	mutex_unlock(&bc->lock);
-
-	if (btree_node_data_alloc(c, b, GFP_NOWAIT, true)) {
-		bch2_trans_unlock(trans);
-		if (btree_node_data_alloc(c, b, GFP_KERNEL|__GFP_NOWARN, true)) {
-			__btree_node_data_free(b);
+		if (__btree_node_data_alloc(c, &bufs, GFP_KERNEL|__GFP_NOWARN, true)) {
+			btree_node_bufs_free(&bufs);
 			goto err;
 		}
 	}
 
+	b = bch2_btree_node_grab(c, freed, pcpu_read_locks);
+	if (!b) {
+		b = __btree_node_mem_alloc(c, pcpu_read_locks, GFP_NOWAIT);
+		if (!b) {
+			bch2_trans_unlock(trans);
+			b = __btree_node_mem_alloc(c, pcpu_read_locks, GFP_KERNEL);
+			if (!b) {
+				btree_node_bufs_free(&bufs);
+				goto err;
+			}
+		}
+
+		BUG_ON(!six_trylock_intent(&b->c.lock));
+		BUG_ON(!six_trylock_write(&b->c.lock));
+	}
+
+	b->data			= bufs.data;
+	b->aux_data		= bufs.aux_data;
 got_mem:
 	BUG_ON(!list_empty(&b->list));
 	BUG_ON(btree_node_hashed(b));
@@ -878,43 +879,13 @@ got_mem:
 
 	return b;
 err:
-	mutex_lock(&bc->lock);
-
 	/* Try to cannibalize another cached btree node: */
-	if (bc->alloc_lock == current) {
-		b2 = btree_node_cannibalize(c, pcpu_read_locks);
-		bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_NONE);
-
-		if (b) {
-			swap(b->data, b2->data);
-			swap(b->aux_data, b2->aux_data);
-			bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_FREED);
-			six_unlock_write(&b2->c.lock);
-			six_unlock_intent(&b2->c.lock);
-		} else {
-			b = b2;
-		}
-
-		mutex_unlock(&bc->lock);
-
+	if (bc->alloc_lock == current &&
+	    (b = btree_node_cannibalize(c, pcpu_read_locks))) {
 		event_inc_trace(c, btree_cache_cannibalize, buf, prt_str(&buf, trans->fn));
 		goto got_mem;
 	}
 
-	/*
-	 * Can't cannibalize: if we got far enough to allocate b but not its
-	 * data, park it on the freed list so its cache indices and struct
-	 * are tracked — either reused by a future alloc or released at
-	 * teardown. Otherwise we'd leak the fast_list slot allocated by
-	 * __btree_node_mem_alloc().
-	 */
-	if (b) {
-		bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_FREED);
-		six_unlock_write(&b->c.lock);
-		six_unlock_intent(&b->c.lock);
-	}
-
-	mutex_unlock(&bc->lock);
 	return ERR_PTR(-BCH_ERR_ENOMEM_btree_node_mem_alloc);
 }
 
