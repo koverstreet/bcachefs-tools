@@ -1095,7 +1095,9 @@ static int __bch2_btree_root_read(struct btree_trans *trans, enum btree_id id,
 	BUG_ON(IS_ERR(b));
 
 	bkey_copy(&b->key, k);
-	BUG_ON(bch2_btree_node_hash_insert(&c->btree.cache, b, level, id));
+	b->c.level	= level;
+	b->c.btree_id	= id;
+	BUG_ON(bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE));
 
 	set_btree_node_read_in_flight(b);
 
@@ -1104,8 +1106,8 @@ static int __bch2_btree_root_read(struct btree_trans *trans, enum btree_id id,
 	bch2_btree_node_read(trans, b, true);
 
 	if (btree_node_read_error(b)) {
-		scoped_guard(mutex, &c->btree.cache.lock)
-			bch2_btree_node_hash_remove(&c->btree.cache, b);
+		bch2_btree_node_transition_state(&c->btree.cache, b,
+							  BTREE_NODE_CACHE_FREEABLE);
 
 		ret = bch_err_throw(c, btree_node_read_error);
 		goto err;

@@ -179,11 +179,8 @@ static int set_node_max(struct bch_fs *c, struct btree *b, struct bpos new_max)
 
 	bch2_btree_node_drop_keys_outside_node(b);
 
-	guard(mutex)(&c->btree.cache.lock);
-	bch2_btree_node_cache_detach(&c->btree.cache, b);
-
 	bkey_copy(&b->key, &new->k_i);
-	ret = bch2_btree_node_cache_attach(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE);
 	BUG_ON(ret);
 	return 0;
 }
@@ -641,8 +638,8 @@ recover:
 		six_unlock_read(&b->c.lock);
 
 		if (bch2_err_matches(ret, BCH_ERR_topology_repair_drop_this_node)) {
-			scoped_guard(mutex, &c->btree.cache.lock)
-				bch2_btree_node_hash_remove(&c->btree.cache, b);
+			bch2_btree_node_transition_state(&c->btree.cache, b,
+								  BTREE_NODE_CACHE_FREEABLE);
 
 			r->b = NULL;
 

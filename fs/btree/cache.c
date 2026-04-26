@@ -24,41 +24,39 @@
  * Membership state machine
  * ------------------------
  *
- * A struct btree is in exactly one of four states at any time. The state
- * is encoded across list membership, hash table membership, and b->data;
- * btree_node_cache_state(b) reads those fields and is the source of truth.
+ * A struct btree is in exactly one of four states at any time, recorded in
+ * b->cache_state and maintained by bch2_btree_node_transition_state():
  *
+ *   NONE      — off all lists, NOT hashed. Either kzalloc'd and not yet
+ *               placed, transiently held by one thread mid-state-change,
+ *               or claimed out of the cache by a caller for private use.
+ *   FREED     — bc->freed_pcpu (level-0 pcpu-readers locks) or
+ *               bc->freed_nonpcpu (interior nodes), NOT hashed, b->data NULL.
+ *               struct btree shell pool: lock state preserved, data buffer
+ *               released. Not counted (freed lists are unbounded scratch).
+ *   FREEABLE  — bc->freeable, NOT hashed, b->data set. Buffer cache for hot
+ *               alloc/free churn. Counted in bc->nr_freeable.
  *   LIVE      — bc->list, hashed, b->data set. Findable by lookup; reachable
  *               for reclaim. Counted in bc->live[btree_node_pinned(b)].nr
  *               and bc->nr_by_btree[]. Roots are LIVE with BTREE_NODE_permanent
  *               set; the flag tells the reclaim path to skip them. Roots are
  *               also tracked via bc->roots_known[]/roots_extra (under
  *               bc->root_lock).
- *   FREEABLE  — bc->freeable, NOT hashed, b->data set. Buffer cache for hot
- *               alloc/free churn. Counted in bc->nr_freeable.
- *   FREED     — bc->freed_pcpu (level-0 pcpu-readers locks) or
- *               bc->freed_nonpcpu (interior nodes), NOT hashed, b->data NULL.
- *               struct btree shell pool: lock state preserved, data buffer
- *               released. Not counted (freed lists are unbounded scratch).
- *   DETACHED  — list_empty(&b->list), NOT hashed. Either freshly allocated
- *               and not yet placed, or transiently held by one thread
- *               mid-state-change.
  *
- * All transitions go through two primitives, both requiring bc->lock:
+ * All transitions go through one primitive:
  *
- *   bch2_btree_node_cache_detach(bc, b)
- *      any state → DETACHED. Inspects b's current state and undoes the
- *      hash/list/counter bookkeeping for it.
+ *   bch2_btree_node_transition_state(bc, b, target)
+ *      Takes bc->lock, detaches from b's current state (undoing hash/list/
+ *      counter bookkeeping) then attaches to @target. Idempotent for
+ *      current==target. Transition to LIVE can fail (rhashtable insert
+ *      collision); on failure b->hash_val is reset and b ends up in NONE.
+ *      Internal callers already holding bc->lock use the static _locked
+ *      variant.
  *
- *   bch2_btree_node_cache_attach(bc, b, target)
- *      DETACHED → target. Establishes the bookkeeping. attach(LIVE) can
- *      fail (rhashtable insert collision); on failure b->hash_val is
- *      reset and b stays DETACHED.
- *
- * Compound transitions are detach + attach. The data-buffer swap inside
- * bch2_btree_node_mem_alloc fits as detach + swap(data) + attach(FREED):
- * detach captures b2's state while b2 still has its data, then attach(FREED)
- * sees NULL data after the swap and just lists it.
+ * The data-buffer swap inside bch2_btree_node_mem_alloc requires splitting
+ * the transition: transition_state(b2, NONE) captures b2's old-state
+ * bookkeeping while data is still attached, then swap(data), then
+ * transition_state(b2, FREED) lists b2 with its (now-NULL) data.
  *
  * One non-state-machine transition: LIVE → LIVE + BTREE_NODE_permanent
  * (bch2_btree_set_root_inmem just sets the flag; the node stays put).
@@ -74,9 +72,9 @@
  *                      only one thread reclaims under memory pressure
  *
  * Hash table lookups (rhashtable_lookup_fast) are RCU-safe; lookups can race
- * any LIVE↔DETACHED transition and may briefly miss a node that's
- * hash-removed mid-flight. After locking a node returned by lookup, callers
- * must recheck b->hash_val against the expected key to detect reuse.
+ * any LIVE↔NONE transition and may briefly miss a node that's hash-removed
+ * mid-flight. After locking a node returned by lookup, callers must recheck
+ * b->hash_val against the expected key to detect reuse.
  */
 
 #include "bcachefs.h"
@@ -150,7 +148,7 @@ static void __btree_node_data_free(struct btree *b)
 
 void bch2_btree_node_data_free(struct btree *b)
 {
-	BUG_ON(btree_node_cache_state(b) != BTREE_NODE_CACHE_DETACHED);
+	BUG_ON(b->cache_state != BTREE_NODE_CACHE_NONE);
 	EBUG_ON(btree_node_write_in_flight(b));
 
 	if (!b->data)
@@ -318,11 +316,13 @@ void bch2_btree_cache_unpin(struct bch_fs *c)
 
 /* Cache state transitions — see DOC at top of file. */
 
-void bch2_btree_node_cache_detach(struct bch_fs_btree_cache *bc, struct btree *b)
+static int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struct btree *b,
+						   enum btree_node_cache_state target)
 {
 	lockdep_assert_held(&bc->lock);
 
-	switch (btree_node_cache_state(b)) {
+	/* Undo current state's bookkeeping. */
+	switch (b->cache_state) {
 	case BTREE_NODE_CACHE_LIVE:
 		BUG_ON(rhashtable_remove_fast(&bc->table, &b->hash,
 					      bch_btree_cache_params));
@@ -338,20 +338,16 @@ void bch2_btree_node_cache_detach(struct bch_fs_btree_cache *bc, struct btree *b
 		--bc->nr_freeable;
 		break;
 	case BTREE_NODE_CACHE_FREED:
+	case BTREE_NODE_CACHE_NONE:
 		break;
-	case BTREE_NODE_CACHE_DETACHED:
-		return;
 	}
 	list_del_init(&b->list);
-}
+	b->cache_state = BTREE_NODE_CACHE_NONE;
 
-int bch2_btree_node_cache_attach(struct bch_fs_btree_cache *bc, struct btree *b,
-			      enum btree_node_cache_state target)
-{
-	lockdep_assert_held(&bc->lock);
-	BUG_ON(btree_node_cache_state(b) != BTREE_NODE_CACHE_DETACHED);
-
+	/* Attach to target state. */
 	switch (target) {
+	case BTREE_NODE_CACHE_NONE:
+		return 0;
 	case BTREE_NODE_CACHE_LIVE: {
 		BUG_ON(!b->data);
 		b->hash_val = btree_ptr_hash_val(&b->key);
@@ -371,50 +367,29 @@ int bch2_btree_node_cache_attach(struct bch_fs_btree_cache *bc, struct btree *b,
 		++bc->live[p].nr;
 
 		list_add_tail(&b->list, &bc->list);
-		return 0;
+		break;
 	}
 	case BTREE_NODE_CACHE_FREEABLE:
 		BUG_ON(!b->data);
 		++bc->nr_freeable;
 		list_add(&b->list, &bc->freeable);
-		return 0;
+		break;
 	case BTREE_NODE_CACHE_FREED:
 		bch2_btree_node_data_free(b);
 		list_add(&b->list, b->c.lock.readers
 				 ? &bc->freed_pcpu
 				 : &bc->freed_nonpcpu);
-		return 0;
-	case BTREE_NODE_CACHE_DETACHED:
-		BUG();
+		break;
 	}
-	BUG();
+	b->cache_state = target;
+	return 0;
 }
 
-void bch2_btree_node_to_freelist(struct bch_fs *c, struct btree *b)
+int bch2_btree_node_transition_state(struct bch_fs_btree_cache *bc, struct btree *b,
+					      enum btree_node_cache_state target)
 {
-	struct bch_fs_btree_cache *bc = &c->btree.cache;
-
-	scoped_guard(mutex, &bc->lock)
-		bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREEABLE);
-
-	six_unlock_write(&b->c.lock);
-	six_unlock_intent(&b->c.lock);
-}
-
-void bch2_btree_node_hash_remove(struct bch_fs_btree_cache *bc, struct btree *b)
-{
-	bch2_btree_node_cache_detach(bc, b);
-	bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREEABLE);
-}
-
-int bch2_btree_node_hash_insert(struct bch_fs_btree_cache *bc, struct btree *b,
-				unsigned level, enum btree_id id)
-{
-	b->c.level	= level;
-	b->c.btree_id	= id;
-
 	guard(mutex)(&bc->lock);
-	return bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_LIVE);
+	return bch2_btree_node_transition_state_locked(bc, b, target);
 }
 
 void bch2_btree_node_update_key_early(struct btree_trans *trans,
@@ -431,12 +406,8 @@ void bch2_btree_node_update_key_early(struct btree_trans *trans,
 
 	b = bch2_btree_node_get_noiter(trans, tmp.k, btree, level, true);
 	if (!IS_ERR_OR_NULL(b)) {
-		guard(mutex)(&bc->lock);
-
-		bch2_btree_node_cache_detach(bc, b);
-
 		bkey_copy(&b->key, new);
-		ret = bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_LIVE);
+		ret = bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_LIVE);
 		BUG_ON(ret);
 
 		six_unlock_read(&b->c.lock);
@@ -630,8 +601,7 @@ static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
 			goto out;
 
 		if (!btree_node_reclaim(c, b)) {
-			bch2_btree_node_cache_detach(bc, b);
-			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREED);
+			bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_FREED);
 			six_unlock_write(&b->c.lock);
 			six_unlock_intent(&b->c.lock);
 			freed++;
@@ -651,8 +621,7 @@ restart:
 			bc->not_freed[BCH_BTREE_CACHE_NOT_FREED_access_bit]++;
 			--touched;
 		} else if (!btree_node_reclaim(c, b)) {
-			bch2_btree_node_cache_detach(bc, b);
-			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREED);
+			bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_FREED);
 
 			freed++;
 			bc->nr_freed++;
@@ -803,7 +772,7 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_rea
 	 */
 	list_for_each_entry(b, freed, list)
 		if (!btree_node_reclaim(c, b)) {
-			bch2_btree_node_cache_detach(bc, b);
+			bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_NONE);
 			goto got_node;
 		}
 
@@ -832,16 +801,16 @@ got_node:
 		if (!btree_node_reclaim(c, b2)) {
 			/*
 			 * Detach b2 _before_ the data swap: while b2 still has
-			 * its data, btree_node_cache_state(b2) == FREEABLE and
-			 * detach decrements nr_freeable. After the swap b2->data
-			 * is NULL, so attach(FREED) just lists it (no kvfree).
+			 * its data, transition NONE captures FREEABLE bookkeeping
+			 * (decrements nr_freeable). After the swap b2->data is
+			 * NULL, so transition FREED just lists it (no kvfree).
 			 */
-			bch2_btree_node_cache_detach(bc, b2);
+			bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_NONE);
 
 			swap(b->data, b2->data);
 			swap(b->aux_data, b2->aux_data);
 
-			bch2_btree_node_cache_attach(bc, b2, BTREE_NODE_CACHE_FREED);
+			bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_FREED);
 			mutex_unlock(&bc->lock);
 
 			six_unlock_write(&b2->c.lock);
@@ -879,7 +848,9 @@ got_mem:
 
 	int ret = bch2_trans_relock(trans);
 	if (unlikely(ret)) {
-		bch2_btree_node_to_freelist(c, b);
+		bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREEABLE);
+		six_unlock_write(&b->c.lock);
+		six_unlock_intent(&b->c.lock);
 		return ERR_PTR(ret);
 	}
 
@@ -890,12 +861,12 @@ err:
 	/* Try to cannibalize another cached btree node: */
 	if (bc->alloc_lock == current) {
 		b2 = btree_node_cannibalize(c);
-		bch2_btree_node_cache_detach(bc, b2);
+		bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_NONE);
 
 		if (b) {
 			swap(b->data, b2->data);
 			swap(b->aux_data, b2->aux_data);
-			bch2_btree_node_cache_attach(bc, b2, BTREE_NODE_CACHE_FREED);
+			bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_FREED);
 			six_unlock_write(&b2->c.lock);
 			six_unlock_intent(&b2->c.lock);
 		} else {
@@ -916,7 +887,7 @@ err:
 	 * __btree_node_mem_alloc().
 	 */
 	if (b) {
-		bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREED);
+		bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_FREED);
 		six_unlock_write(&b->c.lock);
 		six_unlock_intent(&b->c.lock);
 	}
@@ -991,7 +962,9 @@ static noinline struct btree *bch2_btree_node_fill(struct btree_trans *trans,
 		return b;
 
 	bkey_copy(&b->key, k);
-	if (!bch2_btree_node_hash_insert(bc, b, level, btree_id)) {
+	b->c.level	= level;
+	b->c.btree_id	= btree_id;
+	if (!bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_LIVE)) {
 		set_btree_node_read_in_flight(b);
 		six_unlock_write(&b->c.lock);
 
@@ -1015,9 +988,7 @@ static noinline struct btree *bch2_btree_node_fill(struct btree_trans *trans,
 		}
 	} else {
 		/* raced with another fill: */
-		mutex_lock(&bc->lock);
-		bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREEABLE);
-		mutex_unlock(&bc->lock);
+		bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREEABLE);
 
 		six_unlock_write(&b->c.lock);
 		six_unlock_intent(&b->c.lock);
@@ -1412,10 +1383,7 @@ wait_on_io:
 
 	BUG_ON(btree_node_dirty(b));
 
-	mutex_lock(&bc->lock);
-	bch2_btree_node_cache_detach(bc, b);
-	bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREED);
-	mutex_unlock(&bc->lock);
+	bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREED);
 out:
 	six_unlock_write(&b->c.lock);
 	six_unlock_intent(&b->c.lock);
@@ -1452,8 +1420,7 @@ int bch2_fs_btree_cache_init(struct bch_fs *c)
 		if (!b)
 			return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
 
-		scoped_guard(mutex, &bc->lock)
-			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREEABLE);
+		bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREEABLE);
 	}
 
 	shrink = shrinker_alloc(0, "%s-btree_cache", c->name);
@@ -1492,14 +1459,13 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 		guard(mutex)(&bc->lock);
 
 		list_for_each_entry_safe(b, t, &bc->list, list)
-			bch2_btree_node_hash_remove(bc, b);
+			bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_FREEABLE);
 
 		list_for_each_entry_safe(b, t, &bc->freeable, list) {
 			BUG_ON(btree_node_read_in_flight(b) ||
 			       btree_node_write_in_flight(b));
 
-			bch2_btree_node_cache_detach(bc, b);
-			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREED);
+			bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_FREED);
 			cond_resched();
 		}
 

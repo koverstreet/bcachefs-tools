@@ -256,8 +256,7 @@ static void bch2_btree_node_free_inmem(struct btree_trans *trans,
 
 	__btree_node_free(trans, b);
 
-	scoped_guard(mutex, &c->btree.cache.lock)
-		bch2_btree_node_hash_remove(&c->btree.cache, b);
+	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_FREEABLE);
 
 	bch2_trans_node_drop(trans, b);
 }
@@ -280,8 +279,7 @@ static void bch2_btree_node_free_never_used(struct btree_update *as,
 	clear_btree_node_dirty_acct(c, b);
 	clear_btree_node_need_write(b);
 
-	scoped_guard(mutex, &c->btree.cache.lock)
-		bch2_btree_node_cache_detach(&c->btree.cache, b);
+	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_NONE);
 
 	BUG_ON(p->nr >= ARRAY_SIZE(p->b));
 	p->b[p->nr++] = b;
@@ -403,7 +401,9 @@ out:
 
 	return b;
 err:
-	bch2_btree_node_to_freelist(c, b);
+	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_FREEABLE);
+	six_unlock_write(&b->c.lock);
+	six_unlock_intent(&b->c.lock);
 	return ERR_PTR(ret);
 }
 
@@ -451,7 +451,7 @@ static struct btree *bch2_btree_node_alloc(struct btree_update *as,
 
 	bch2_btree_build_aux_trees(b);
 
-	ret = bch2_btree_node_hash_insert(&c->btree.cache, b, level, as->btree_id);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE);
 	BUG_ON(ret);
 
 	trace_btree_node(c, b, btree_node_alloc);
@@ -544,7 +544,10 @@ static void bch2_btree_reserve_put(struct btree_update *as, struct btree_trans *
 
 			/* Both intent and write were held across prealloc. */
 			__btree_node_free(trans, b);
-			bch2_btree_node_to_freelist(c, b);
+			bch2_btree_node_transition_state(&c->btree.cache, b,
+								  BTREE_NODE_CACHE_FREEABLE);
+			six_unlock_write(&b->c.lock);
+			six_unlock_intent(&b->c.lock);
 		}
 	}
 }
@@ -2752,8 +2755,7 @@ int bch2_btree_root_alloc_fake_trans(struct btree_trans *trans, enum btree_id id
 	b->data->format = bch2_btree_calc_format(b);
 	btree_node_set_format(b, b->data->format);
 
-	ret = bch2_btree_node_hash_insert(&c->btree.cache, b,
-					  b->c.level, b->c.btree_id);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE);
 	BUG_ON(ret);
 
 	bch2_btree_set_root_inmem(c, b);

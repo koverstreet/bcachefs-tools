@@ -72,6 +72,20 @@ struct btree_bkey_cached_common {
 	bool			cached;
 };
 
+/*
+ * Membership state of a struct btree in the btree node cache.
+ *
+ * Stored in b->cache_state and maintained by bch2_btree_node_transition_state().
+ * See the DOC block at the top of btree/cache.c for the state machine and
+ * the bookkeeping each state implies.
+ */
+enum btree_node_cache_state {
+	BTREE_NODE_CACHE_NONE,		/* off all lists; not in cache (kzalloc default) */
+	BTREE_NODE_CACHE_FREED,		/* on bc->freed_{pcpu,nonpcpu}; no data buffer */
+	BTREE_NODE_CACHE_FREEABLE,	/* on bc->freeable; has data; not hashed */
+	BTREE_NODE_CACHE_LIVE,		/* on bc->list; hashed; has data */
+};
+
 struct btree {
 	struct btree_bkey_cached_common c;
 
@@ -139,6 +153,8 @@ struct btree {
 
 	/* lru list */
 	struct list_head	list;
+
+	enum btree_node_cache_state cache_state;
 };
 
 enum btree_node_sibling {
@@ -166,20 +182,6 @@ enum bch_btree_cache_not_freed_reasons {
 	BCH_BTREE_CACHE_NOT_FREED_REASONS()
 #undef x
 	BCH_BTREE_CACHE_NOT_FREED_REASONS_NR,
-};
-
-/*
- * Membership state of a struct btree in the btree node cache.
- *
- * See the DOC block at the top of btree/cache.c for the state machine and
- * transitions. The state is encoded across list-head linkage, hash table
- * presence, and b->data; btree_node_cache_state() decodes it.
- */
-enum btree_node_cache_state {
-	BTREE_NODE_CACHE_DETACHED,	/* off all lists; in transit between states */
-	BTREE_NODE_CACHE_FREED,		/* on bc->freed_{pcpu,nonpcpu}; no data buffer */
-	BTREE_NODE_CACHE_FREEABLE,	/* on bc->freeable; has data; not hashed */
-	BTREE_NODE_CACHE_LIVE,		/* on bc->list; hashed; has data */
 };
 
 struct btree_cache_list {

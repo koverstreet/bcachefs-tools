@@ -12,16 +12,10 @@ struct btree_iter;
 
 void bch2_recalc_btree_reserve(struct bch_fs *);
 
-void bch2_btree_node_to_freelist(struct bch_fs *, struct btree *);
 void bch2_btree_node_mem_free(struct bch_fs *, struct btree *);
 
-void bch2_btree_node_cache_detach(struct bch_fs_btree_cache *, struct btree *);
-int bch2_btree_node_cache_attach(struct bch_fs_btree_cache *, struct btree *,
-			      enum btree_node_cache_state);
-
-void bch2_btree_node_hash_remove(struct bch_fs_btree_cache *, struct btree *);
-int bch2_btree_node_hash_insert(struct bch_fs_btree_cache *, struct btree *,
-				unsigned, enum btree_id);
+int bch2_btree_node_transition_state(struct bch_fs_btree_cache *, struct btree *,
+				     enum btree_node_cache_state);
 
 void bch2_node_pin(struct bch_fs *, struct btree *);
 void bch2_btree_cache_unpin(struct bch_fs *);
@@ -81,16 +75,9 @@ static inline bool btree_node_hashed(struct btree *b)
 	return b->hash_val != 0;
 }
 
-/* See enum btree_node_cache_state and the cache.c DOC block. */
 static inline enum btree_node_cache_state btree_node_cache_state(struct btree *b)
 {
-	if (btree_node_hashed(b))
-		return BTREE_NODE_CACHE_LIVE;
-	if (list_empty(&b->list))
-		return BTREE_NODE_CACHE_DETACHED;
-	return b->data
-		? BTREE_NODE_CACHE_FREEABLE
-		: BTREE_NODE_CACHE_FREED;
+	return b->cache_state;
 }
 
 #define for_each_cached_btree(_b, _c, _tbl, _iter, _pos)		\
