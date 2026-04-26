@@ -813,8 +813,6 @@ int bch2_fs_btree_cache_init(struct bch_fs *c)
 			__btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREEABLE);
 	}
 
-	list_splice_init(&bc->list, &bc->freeable);
-
 	mutex_init(&c->verify_lock);
 
 	shrink = shrinker_alloc(0, "%s-btree_cache", c->name);
@@ -1009,7 +1007,7 @@ got_mem:
 	BUG_ON(btree_node_dirty(b));
 	BUG_ON(btree_node_write_in_flight(b));
 	BUG_ON(!b->data);
-out:
+
 	b->flags		= 0;
 	b->written		= 0;
 	b->nsets		= 0;
@@ -1046,11 +1044,10 @@ err:
 			b = b2;
 		}
 
-		BUG_ON(!list_empty(&b->list));
 		mutex_unlock(&bc->lock);
 
 		event_inc_trace(c, btree_cache_cannibalize, buf, prt_str(&buf, trans->fn));
-		goto out;
+		goto got_mem;
 	}
 
 	/*
