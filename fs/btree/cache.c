@@ -424,6 +424,95 @@ int bch2_btree_node_hash_insert(struct bch_fs_btree_cache *bc, struct btree *b,
 	return __bch2_btree_node_hash_insert(bc, b);
 }
 
+/*
+ * Cache state transitions: detach moves any state → DETACHED, attach moves
+ * DETACHED → target. Both require bc->lock held; see the cache.c DOC block
+ * for the state machine.
+ *
+ * Compound transitions (e.g. LIVE → FREED) are detach + attach; the swap
+ * inside bch2_btree_node_mem_alloc fits naturally as detach + data swap +
+ * attach.
+ */
+void __btree_node_cache_detach(struct bch_fs_btree_cache *bc, struct btree *b)
+{
+	lockdep_assert_held(&bc->lock);
+
+	switch (btree_node_cache_state(b)) {
+	case BTREE_NODE_CACHE_LIVE:
+		BUG_ON(rhashtable_remove_fast(&bc->table, &b->hash,
+					      bch_btree_cache_params));
+		clear_btree_node_just_written(b);
+		b->hash_val = 0;
+
+		if (b->c.btree_id < BTREE_ID_NR)
+			--bc->nr_by_btree[b->c.btree_id];
+		--bc->live[btree_node_pinned(b)].nr;
+		bc->nr_vmalloc -= is_vmalloc_addr(b->data);
+		break;
+	case BTREE_NODE_CACHE_FREEABLE:
+		--bc->nr_freeable;
+		break;
+	case BTREE_NODE_CACHE_FREED:
+		break;
+	case BTREE_NODE_CACHE_DETACHED:
+		return;
+	}
+	list_del_init(&b->list);
+}
+
+int __btree_node_cache_attach(struct bch_fs_btree_cache *bc, struct btree *b,
+			      enum btree_node_cache_state target)
+{
+	lockdep_assert_held(&bc->lock);
+	BUG_ON(btree_node_cache_state(b) != BTREE_NODE_CACHE_DETACHED);
+
+	switch (target) {
+	case BTREE_NODE_CACHE_LIVE: {
+		BUG_ON(!b->data);
+		b->hash_val = btree_ptr_hash_val(&b->key);
+		try(rhashtable_lookup_insert_fast(&bc->table, &b->hash,
+						  bch_btree_cache_params));
+
+		bc->nr_vmalloc += is_vmalloc_addr(b->data);
+		if (b->c.btree_id < BTREE_ID_NR)
+			++bc->nr_by_btree[b->c.btree_id];
+
+		bool p = __btree_node_pinned(bc, b);
+		mod_bit(BTREE_NODE_pinned, &b->flags, p);
+		++bc->live[p].nr;
+
+		list_add_tail(&b->list, &bc->list);
+		return 0;
+	}
+	case BTREE_NODE_CACHE_FREEABLE:
+		BUG_ON(!b->data);
+		++bc->nr_freeable;
+		list_add(&b->list, &bc->freeable);
+		return 0;
+	case BTREE_NODE_CACHE_FREED:
+		EBUG_ON(btree_node_write_in_flight(b));
+		if (b->data) {
+			/*
+			 * Working around a slub bug: kmalloc_large() pages
+			 * aren't accounted as reclaimable.
+			 */
+			mm_account_reclaimed_pages(btree_buf_bytes(b) / PAGE_SIZE);
+			if (b->aux_data)
+				mm_account_reclaimed_pages(btree_aux_data_bytes(b) / PAGE_SIZE);
+
+			clear_btree_node_just_written(b);
+			__btree_node_data_free(b);
+		}
+		list_add(&b->list, b->c.lock.readers
+				 ? &bc->freed_pcpu
+				 : &bc->freed_nonpcpu);
+		return 0;
+	case BTREE_NODE_CACHE_DETACHED:
+		BUG();
+	}
+	BUG();
+}
+
 void bch2_btree_node_update_key_early(struct btree_trans *trans,
 				      enum btree_id btree, unsigned level,
 				      struct bkey_s_c old, struct bkey_i *new)
