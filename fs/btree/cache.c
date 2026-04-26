@@ -133,16 +133,7 @@ void bch2_recalc_btree_reserve(struct bch_fs *c)
 	c->btree.cache.nr_reserve = reserve;
 }
 
-static inline size_t btree_cache_can_free(struct btree_cache_list *list)
-{
-	struct bch_fs_btree_cache *bc =
-		container_of(list, struct bch_fs_btree_cache, live[list->idx]);
-
-	size_t can_free = list->nr;
-	if (!list->idx)
-		can_free = max_t(ssize_t, 0, can_free - bc->nr_reserve);
-	return can_free;
-}
+/* Btree node allocation */
 
 static void __btree_node_data_free(struct btree *b)
 {
@@ -284,6 +275,8 @@ struct btree *__bch2_btree_node_mem_alloc(struct bch_fs *c)
 	return b;
 }
 
+/* Pinning */
+
 static inline bool __btree_node_pinned(struct bch_fs_btree_cache *bc, struct btree *b)
 {
 	struct bbpos pos = BBPOS(b->c.btree_id, b->key.k.p);
@@ -323,7 +316,8 @@ void bch2_btree_cache_unpin(struct bch_fs *c)
 	bc->live[1].nr = 0;
 }
 
-/* See the DOC comment at the top of this file for the state machine. */
+/* Cache state transitions — see DOC at top of file. */
+
 void bch2_btree_node_cache_detach(struct bch_fs_btree_cache *bc, struct btree *b)
 {
 	lockdep_assert_held(&bc->lock);
@@ -408,8 +402,6 @@ int bch2_btree_node_cache_attach(struct bch_fs_btree_cache *bc, struct btree *b,
 	BUG();
 }
 
-/* Btree in memory cache - public wrappers */
-
 void bch2_btree_node_to_freelist(struct bch_fs *c, struct btree *b)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
@@ -470,6 +462,19 @@ static inline struct btree *btree_cache_find(struct bch_fs_btree_cache *bc,
 	u64 v = btree_ptr_hash_val(k);
 
 	return rhashtable_lookup_fast(&bc->table, &v, bch_btree_cache_params);
+}
+
+/* Reclaim and shrinker */
+
+static inline size_t btree_cache_can_free(struct btree_cache_list *list)
+{
+	struct bch_fs_btree_cache *bc =
+		container_of(list, struct bch_fs_btree_cache, live[list->idx]);
+
+	size_t can_free = list->nr;
+	if (!list->idx)
+		can_free = max_t(ssize_t, 0, can_free - bc->nr_reserve);
+	return can_free;
 }
 
 static int __btree_node_reclaim_checks(struct bch_fs *c, struct btree *b,
@@ -720,115 +725,6 @@ static unsigned long bch2_btree_cache_count(struct shrinker *shrink,
 	return btree_cache_can_free(list);
 }
 
-void bch2_fs_btree_cache_exit(struct bch_fs *c)
-{
-	struct bch_fs_btree_cache *bc = &c->btree.cache;
-	struct btree *b, *t;
-
-	shrinker_free(bc->live[1].shrink);
-	shrinker_free(bc->live[0].shrink);
-
-	/* vfree() can allocate memory: */
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		guard(mutex)(&bc->lock);
-
-		if (c->verify_data)
-			list_move(&c->verify_data->list, &bc->list);
-
-		kvfree(c->verify_ondisk);
-
-		list_for_each_entry_safe(b, t, &bc->list, list)
-			bch2_btree_node_hash_remove(bc, b);
-
-		list_for_each_entry_safe(b, t, &bc->freeable, list) {
-			BUG_ON(btree_node_read_in_flight(b) ||
-			       btree_node_write_in_flight(b));
-
-			bch2_btree_node_cache_detach(bc, b);
-			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREED);
-			cond_resched();
-		}
-
-		BUG_ON(!bch2_journal_error(&c->journal) && atomic_long_read(&bc->nr_dirty));
-
-		list_splice(&bc->freed_pcpu, &bc->freed_nonpcpu);
-
-		list_for_each_entry_safe(b, t, &bc->freed_nonpcpu, list) {
-			list_del_init(&b->list);
-			bch2_btree_node_mem_free(c, b);
-		}
-
-		for (unsigned i = 0; i < ARRAY_SIZE(bc->nr_by_btree); i++)
-			BUG_ON(bc->nr_by_btree[i]);
-		WARN_ON(bc->live[0].nr);
-		WARN_ON(bc->live[1].nr);
-		WARN_ON(bc->nr_freeable);
-
-		darray_exit(&bc->roots_extra);
-	}
-
-	if (bc->table_init_done)
-		rhashtable_destroy(&bc->table);
-}
-
-int bch2_fs_btree_cache_init(struct bch_fs *c)
-{
-	struct bch_fs_btree_cache *bc = &c->btree.cache;
-	struct shrinker *shrink;
-
-	if (rhashtable_init(&bc->table, &bch_btree_cache_params))
-		return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
-
-	bc->table_init_done = true;
-
-	bch2_recalc_btree_reserve(c);
-
-	for (unsigned i = 0; i < bc->nr_reserve; i++) {
-		struct btree *b = __bch2_btree_node_mem_alloc(c);
-		if (!b)
-			return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
-
-		scoped_guard(mutex, &bc->lock)
-			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREEABLE);
-	}
-
-	mutex_init(&c->verify_lock);
-
-	shrink = shrinker_alloc(0, "%s-btree_cache", c->name);
-	if (!shrink)
-		return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
-	bc->live[0].shrink	= shrink;
-	shrink->count_objects	= bch2_btree_cache_count;
-	shrink->scan_objects	= bch2_btree_cache_scan;
-	shrink->seeks		= 2;
-	shrink->private_data	= &bc->live[0];
-	shrinker_register(shrink);
-
-	shrink = shrinker_alloc(0, "%s-btree_cache-pinned", c->name);
-	if (!shrink)
-		return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
-	bc->live[1].shrink	= shrink;
-	shrink->count_objects	= bch2_btree_cache_count;
-	shrink->scan_objects	= bch2_btree_cache_scan;
-	shrink->seeks		= 8;
-	shrink->private_data	= &bc->live[1];
-	shrinker_register(shrink);
-
-	return 0;
-}
-
-void bch2_fs_btree_cache_init_early(struct bch_fs_btree_cache *bc)
-{
-	mutex_init(&bc->root_lock);
-	mutex_init(&bc->lock);
-	for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++)
-		bc->live[i].idx = i;
-	INIT_LIST_HEAD(&bc->list);
-	INIT_LIST_HEAD(&bc->freeable);
-	INIT_LIST_HEAD(&bc->freed_pcpu);
-	INIT_LIST_HEAD(&bc->freed_nonpcpu);
-}
-
 /*
  * We can only have one thread cannibalizing other cached btree nodes at a time,
  * or we'll deadlock. We use an open coded mutex to ensure that, which a
@@ -905,6 +801,8 @@ static struct btree *btree_node_cannibalize(struct bch_fs *c)
 		cond_resched();
 	}
 }
+
+/* Btree node alloc / lookup / evict */
 
 struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_read_locks)
 {
@@ -1541,6 +1439,119 @@ out:
 	six_unlock_write(&b->c.lock);
 	six_unlock_intent(&b->c.lock);
 }
+
+/* Filesystem init / exit */
+
+void bch2_fs_btree_cache_init_early(struct bch_fs_btree_cache *bc)
+{
+	mutex_init(&bc->root_lock);
+	mutex_init(&bc->lock);
+	for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++)
+		bc->live[i].idx = i;
+	INIT_LIST_HEAD(&bc->list);
+	INIT_LIST_HEAD(&bc->freeable);
+	INIT_LIST_HEAD(&bc->freed_pcpu);
+	INIT_LIST_HEAD(&bc->freed_nonpcpu);
+}
+
+int bch2_fs_btree_cache_init(struct bch_fs *c)
+{
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+	struct shrinker *shrink;
+
+	if (rhashtable_init(&bc->table, &bch_btree_cache_params))
+		return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
+
+	bc->table_init_done = true;
+
+	bch2_recalc_btree_reserve(c);
+
+	for (unsigned i = 0; i < bc->nr_reserve; i++) {
+		struct btree *b = __bch2_btree_node_mem_alloc(c);
+		if (!b)
+			return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
+
+		scoped_guard(mutex, &bc->lock)
+			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREEABLE);
+	}
+
+	mutex_init(&c->verify_lock);
+
+	shrink = shrinker_alloc(0, "%s-btree_cache", c->name);
+	if (!shrink)
+		return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
+	bc->live[0].shrink	= shrink;
+	shrink->count_objects	= bch2_btree_cache_count;
+	shrink->scan_objects	= bch2_btree_cache_scan;
+	shrink->seeks		= 2;
+	shrink->private_data	= &bc->live[0];
+	shrinker_register(shrink);
+
+	shrink = shrinker_alloc(0, "%s-btree_cache-pinned", c->name);
+	if (!shrink)
+		return bch_err_throw(c, ENOMEM_fs_btree_cache_init);
+	bc->live[1].shrink	= shrink;
+	shrink->count_objects	= bch2_btree_cache_count;
+	shrink->scan_objects	= bch2_btree_cache_scan;
+	shrink->seeks		= 8;
+	shrink->private_data	= &bc->live[1];
+	shrinker_register(shrink);
+
+	return 0;
+}
+
+void bch2_fs_btree_cache_exit(struct bch_fs *c)
+{
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+	struct btree *b, *t;
+
+	shrinker_free(bc->live[1].shrink);
+	shrinker_free(bc->live[0].shrink);
+
+	/* vfree() can allocate memory: */
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+		guard(mutex)(&bc->lock);
+
+		if (c->verify_data)
+			list_move(&c->verify_data->list, &bc->list);
+
+		kvfree(c->verify_ondisk);
+
+		list_for_each_entry_safe(b, t, &bc->list, list)
+			bch2_btree_node_hash_remove(bc, b);
+
+		list_for_each_entry_safe(b, t, &bc->freeable, list) {
+			BUG_ON(btree_node_read_in_flight(b) ||
+			       btree_node_write_in_flight(b));
+
+			bch2_btree_node_cache_detach(bc, b);
+			bch2_btree_node_cache_attach(bc, b, BTREE_NODE_CACHE_FREED);
+			cond_resched();
+		}
+
+		BUG_ON(!bch2_journal_error(&c->journal) && atomic_long_read(&bc->nr_dirty));
+
+		list_splice(&bc->freed_pcpu, &bc->freed_nonpcpu);
+
+		list_for_each_entry_safe(b, t, &bc->freed_nonpcpu, list) {
+			list_del_init(&b->list);
+			bch2_btree_node_mem_free(c, b);
+		}
+
+		for (unsigned i = 0; i < ARRAY_SIZE(bc->nr_by_btree); i++)
+			BUG_ON(bc->nr_by_btree[i]);
+		WARN_ON(bc->live[0].nr);
+		WARN_ON(bc->live[1].nr);
+		WARN_ON(bc->nr_freeable);
+
+		darray_exit(&bc->roots_extra);
+	}
+
+	if (bc->table_init_done)
+		rhashtable_destroy(&bc->table);
+}
+
+/* Debug / text rendering */
 
 const char *bch2_btree_id_str(enum btree_id btree)
 {
