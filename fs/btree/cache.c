@@ -732,7 +732,6 @@ static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
 			bc->nr_freed++;
 		}
 	}
-restart:
 	list_for_each_entry_safe(b, t, &list->clean, list) {
 		touched++;
 
@@ -751,19 +750,6 @@ restart:
 
 			if (freed == nr)
 				goto out_rotate;
-		} else if (trigger_writes &&
-			   btree_node_dirty(b) &&
-			   !btree_node_will_make_reachable(b) &&
-			   !btree_node_write_blocked(b) &&
-			   six_trylock_read(&b->c.lock)) {
-			list_move(&list->clean, &b->list);
-			mutex_unlock(&bc->lock);
-			__bch2_btree_node_write(c, b, BTREE_WRITE_cache_reclaim);
-			six_unlock_read(&b->c.lock);
-			if (touched >= nr)
-				goto out_nounlock;
-			mutex_lock(&bc->lock);
-			goto restart;
 		}
 
 		if (touched >= nr)
@@ -772,6 +758,38 @@ restart:
 out_rotate:
 	if (&t->list != &list->clean)
 		list_move_tail(&list->clean, &t->list);
+
+	/*
+	 * Writeout-kick pass: under enough dirty pressure, walk the dirty
+	 * list and kick writes for nodes that aren't blocked. The writes
+	 * complete asynchronously and free the cache slots on a future
+	 * scan.
+	 */
+	if (trigger_writes) {
+restart_dirty:
+		list_for_each_entry_safe(b, t, &list->dirty, list) {
+			if (touched >= nr)
+				break;
+
+			if (!btree_node_dirty(b) ||
+			    btree_node_will_make_reachable(b) ||
+			    btree_node_write_blocked(b))
+				continue;
+
+			if (!six_trylock_read(&b->c.lock))
+				continue;
+
+			touched++;
+			list_move_tail(&b->list, &list->dirty);
+			mutex_unlock(&bc->lock);
+			__bch2_btree_node_write(c, b, BTREE_WRITE_cache_reclaim);
+			six_unlock_read(&b->c.lock);
+			if (touched >= nr)
+				goto out_nounlock;
+			mutex_lock(&bc->lock);
+			goto restart_dirty;
+		}
+	}
 out:
 	mutex_unlock(&bc->lock);
 out_nounlock:
