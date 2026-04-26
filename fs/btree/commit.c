@@ -334,7 +334,7 @@ inline void bch2_btree_insert_key_leaf(struct btree_trans *trans,
 
 	if (unlikely(!btree_node_dirty(b))) {
 		EBUG_ON(test_bit(BCH_FS_clean_shutdown, &c->flags));
-		set_btree_node_dirty_acct(c, b);
+		bch2_btree_node_set_dirty(c, b);
 	}
 
 	live_u64s_added = (int) b->nr.live_u64s - old_live_u64s;

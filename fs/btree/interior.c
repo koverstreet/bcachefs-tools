@@ -276,7 +276,7 @@ static void bch2_btree_node_free_never_used(struct btree_update *as,
 
 	clear_btree_node_will_make_reachable(b);
 	clear_btree_node_accessed(b);
-	clear_btree_node_dirty_acct(c, b);
+	clear_btree_node_dirty(b);
 	clear_btree_node_need_write(b);
 
 	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_NONE);
@@ -424,7 +424,7 @@ static struct btree *bch2_btree_node_alloc(struct btree_update *as,
 	/* Both intent and write were held across parking on prealloc_nodes. */
 
 	set_btree_node_accessed(b);
-	set_btree_node_dirty_acct(c, b);
+	bch2_btree_node_set_dirty(c, b);
 	set_btree_node_need_write(b);
 
 	bch2_bset_init_first(b, &b->data->keys);
@@ -451,7 +451,7 @@ static struct btree *bch2_btree_node_alloc(struct btree_update *as,
 
 	bch2_btree_build_aux_trees(b);
 
-	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_CLEAN);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, btree_node_live_state(b));
 	BUG_ON(ret);
 
 	trace_btree_node(c, b, btree_node_alloc);
@@ -1186,7 +1186,7 @@ static void bch2_btree_interior_update_will_free_node(struct btree_update *as,
 		closure_wake_up(&c->btree.interior_updates.wait);
 	}
 
-	clear_btree_node_dirty_acct(c, b);
+	clear_btree_node_dirty(b);
 	clear_btree_node_need_write(b);
 	clear_btree_node_write_blocked(b);
 
@@ -1517,7 +1517,8 @@ static void bch2_insert_fixup_btree_ptr(struct btree_update *as,
 		bch2_btree_node_iter_advance(node_iter, b);
 
 	bch2_btree_bset_insert_key(trans, path, b, node_iter, insert);
-	set_btree_node_dirty_acct(c, b);
+	if (!btree_node_dirty(b))
+		bch2_btree_node_set_dirty(c, b);
 
 	old = READ_ONCE(b->flags);
 	do {
@@ -2763,7 +2764,7 @@ int bch2_btree_root_alloc_fake_trans(struct btree_trans *trans, enum btree_id id
 	b->data->format = bch2_btree_calc_format(b);
 	btree_node_set_format(b, b->data->format);
 
-	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_CLEAN);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, btree_node_live_state(b));
 	BUG_ON(ret);
 
 	bch2_btree_set_root_inmem(c, b);

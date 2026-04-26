@@ -78,6 +78,7 @@ static void __btree_node_write_done(struct bch_fs *c, struct btree *b, u64 start
 	if (new & (1U << BTREE_NODE_write_in_flight))
 		__bch2_btree_node_write(c, b, BTREE_WRITE_ALREADY_STARTED|type);
 	else {
+		bch2_btree_node_write_done_clean(c, b);
 		smp_mb__after_atomic();
 		wake_up_bit(&b->flags, BTREE_NODE_write_in_flight);
 	}
@@ -332,8 +333,6 @@ void __bch2_btree_node_write(struct bch_fs *c, struct btree *b, unsigned flags)
 		return;
 do_write:
 	BUG_ON((type == BTREE_WRITE_initial) != (b->written == 0));
-
-	atomic_long_dec(&c->btree.cache.nr_dirty);
 
 	BUG_ON(btree_node_fake(b));
 	BUG_ON((b->will_make_reachable != 0) != !b->written);

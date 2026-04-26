@@ -17,18 +17,6 @@ struct btree_write_bio {
 	struct bch_write_bio	wbio;
 };
 
-static inline void set_btree_node_dirty_acct(struct bch_fs *c, struct btree *b)
-{
-	if (!test_and_set_bit(BTREE_NODE_dirty, &b->flags))
-		atomic_long_inc(&c->btree.cache.nr_dirty);
-}
-
-static inline void clear_btree_node_dirty_acct(struct bch_fs *c, struct btree *b)
-{
-	if (test_and_clear_bit(BTREE_NODE_dirty, &b->flags))
-		atomic_long_dec(&c->btree.cache.nr_dirty);
-}
-
 bool bch2_btree_post_write_cleanup(struct bch_fs *, struct btree *);
 
 enum btree_write_flags {

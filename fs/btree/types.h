@@ -239,7 +239,6 @@ struct bch_fs_btree_cache {
 	size_t			nr_freeable;
 	size_t			nr_reserve;
 	size_t			nr_by_btree[BTREE_ID_NR];
-	atomic_long_t		nr_dirty;
 
 	/* shrinker stats */
 	size_t			nr_freed;
