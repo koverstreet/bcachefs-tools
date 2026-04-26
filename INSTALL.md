@@ -62,6 +62,41 @@ pacman -S base-devel libaio keyutils libsodium liburcu zstd valgrind llvm
 
 Then, just `make && make install`
 
+Nixos setup with flakes
+-----------------------
+
+To use snapshot version of bcachefs & bcachefs-tools, add the following to your `flake.nix`:
+```nix
+inputs = {
+  nixpkgs = {
+    url = "github:nixos/nixpkgs";
+  };
+  ...
+  bcachefs-tools = {
+    url = "github:koverstreet/bcachefs-tools";
+    # Optional but recommended to limit the size of your system closure.
+    inputs.nixpkgs.follows = "nixpkgs";
+  };
+...
+outputs =
+   {
+     self,
+     nixpkgs,
+     ...
+     bcachefs-tools,
+     ...
+   }@attrs: {
+     nixosConfigurations."YourPC" = nixpkgs.lib.nixosSystem {
+       ...
+       modules = [
+         ...
+         bcachefs-tools.nixosModules.default
+         ...
+       ];
+     };
+```
+Note that this not only pulls in the latest bcachefs-tools, but also replaces
+your system's bcachefs kernel module with the snapshot version.
 
 Experimental features
 ---------------------

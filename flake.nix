@@ -57,11 +57,24 @@
           # github actions supports fewer architectures
           checks = nixpkgs.lib.getAttrs [ "aarch64-linux" "x86_64-linux" ] self.checks;
         };
+        nixosModules = let
+          bcachefsNixosModule = { pkgs, ... }: {
+            boot.supportedFilesystems = [ "bcachefs" ];
+            boot.bcachefs.package =
+              (pkgs.extend self.overlays.default).bcachefsPackages.bcachefs-tools;
+          };
+        in {
+          default = bcachefsNixosModule;
+          bcachefs = bcachefsNixosModule;
+        };
       };
 
       inherit systems;
 
-      flake.overlays.default = import ./overlay.nix { inherit inputs version; };
+      flake.overlays.default = nixpkgs.lib.composeManyExtensions [
+        (import rust-overlay)
+        (import ./overlay.nix { inherit inputs version; })
+      ];
 
       perSystem =
         {
@@ -74,7 +87,7 @@
         let
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ (import rust-overlay) ];
+            overlays = [ self.overlays.default ];
           };
           latexDerivation = (
             pkgs.texliveBasic.withPackages (
@@ -96,10 +109,7 @@
                   localSystem = system;
                   pkgs' = import nixpkgs {
                     inherit crossSystem localSystem;
-                    overlays = [
-                      (import rust-overlay)
-                      self.overlays.default
-                    ];
+                    overlays = [ self.overlays.default ];
                   };
 
                   withCrossName =
