@@ -749,22 +749,24 @@ int bch2_btree_cache_cannibalize_lock(struct btree_trans *trans, struct closure 
 	return ret;
 }
 
-static struct btree *btree_node_cannibalize(struct bch_fs *c)
+static struct btree *btree_node_cannibalize(struct bch_fs *c, bool pcpu_read_locks)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 	struct btree *b;
 
 	list_for_each_entry_reverse(b, &bc->list, list)
-		if (!btree_node_reclaim(c, b))
+		if (pcpu_read_locks == !!b->c.lock.readers &&
+		    !btree_node_reclaim(c, b))
 			return b;
 
 	while (1) {
 		list_for_each_entry_reverse(b, &bc->list, list)
-			if (!btree_node_write_and_reclaim(c, b))
+			if (pcpu_read_locks == !!b->c.lock.readers &&
+			    !btree_node_write_and_reclaim(c, b))
 				return b;
 
 		/*
-		 * Rare case: all nodes were intent-locked.
+		 * Rare case: all matching-type nodes were intent-locked.
 		 * Just busy-wait.
 		 */
 		WARN_ONCE(1, "btree cache cannibalize failed\n");
@@ -880,7 +882,7 @@ err:
 
 	/* Try to cannibalize another cached btree node: */
 	if (bc->alloc_lock == current) {
-		b2 = btree_node_cannibalize(c);
+		b2 = btree_node_cannibalize(c, pcpu_read_locks);
 		bch2_btree_node_transition_state_locked(bc, b2, BTREE_NODE_CACHE_NONE);
 
 		if (b) {
