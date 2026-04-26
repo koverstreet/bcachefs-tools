@@ -595,6 +595,110 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 	return ret;
 }
 
+static int bkey_cached_key_cmp(const void *_l, const void *_r)
+{
+	const struct bkey_cached_key *l = _l;
+	const struct bkey_cached_key *r = _r;
+
+	return  cmp_int(l->btree_id, r->btree_id) ?:
+		bpos_cmp(l->pos, r->pos);
+}
+
+/*
+ * Going RO: flush every dirty key cache entry to the btree, dropping its
+ * journal pin. The journal-pin-driven flush path
+ * (bch2_btree_key_cache_journal_flush) has a re-journal branch when we're at
+ * j->last_seq and the journal is low on space - it acquires a fresh journal
+ * reservation and pins a new sequence. That's what we want during normal
+ * operation to free up space, but it defeats the clean_passes loop in
+ * __bch2_fs_read_only: every flush spawns a fresh pin and the loop never
+ * converges. Walk the cache directly and force no_journal_res so each flush
+ * only drops pins, never adds them.
+ */
+int bch2_btree_key_cache_flush_going_ro(struct bch_fs *c)
+{
+	struct bch_fs_btree_key_cache *bc = &c->btree.key_cache;
+	int ret = 0;
+
+	if (!atomic_long_read(&bc->nr_dirty) ||
+	    bch2_journal_error(&c->journal))
+		return 0;
+
+	DARRAY(struct bkey_cached_key) keys = {};
+	int srcu_idx = srcu_read_lock(&c->btree.trans.barrier);
+	bool any_done = false, full;
+
+	/*
+	 * Preallocate enough up front for the common case (no concurrent
+	 * dirties); on push failure under rcu we just flush what we have and
+	 * walk again to find the rest.
+	 */
+	ret = darray_resize(&keys, atomic_long_read(&bc->nr_dirty) + 64);
+	if (ret)
+		goto out;
+
+	CLASS(btree_trans, trans)(c);
+
+	do {
+		full = false;
+		keys.nr = 0;
+
+		rcu_read_lock();
+		struct bucket_table *tbl =
+			rht_dereference_rcu(bc->table.tbl, &bc->table);
+
+		/*
+		 * If a rehash is in flight some entries live on the new
+		 * table; skip this pass and let the OR-chain re-call us.
+		 */
+		if (unlikely(tbl->nest)) {
+			rcu_read_unlock();
+			goto out;
+		}
+
+		for (unsigned i = 0; i < tbl->size; i++) {
+			struct rhash_head *pos;
+			struct bkey_cached *ck;
+
+			rht_for_each_entry_rcu(ck, pos, tbl, i, hash) {
+				if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags))
+					continue;
+
+				if (darray_push_gfp(&keys, ck->key,
+						    GFP_NOWAIT|__GFP_NOWARN)) {
+					full = true;
+					goto out_rcu;
+				}
+			}
+		}
+out_rcu:
+		rcu_read_unlock();
+
+		if (!keys.nr)
+			break;
+
+		darray_sort(keys, bkey_cached_key_cmp);
+
+		darray_for_each(keys, k) {
+			ret = lockrestart_do(trans,
+				btree_key_cache_flush_pos(trans, *k, 0,
+					BCH_TRANS_COMMIT_no_journal_res, false));
+			if (ret &&
+			    !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
+			    !bch2_journal_error(&c->journal)) {
+				bch_err_fn(c, ret);
+				goto out;
+			}
+			ret = 0;
+		}
+		any_done = true;
+	} while (full);
+out:
+	darray_exit(&keys);
+	srcu_read_unlock(&c->btree.trans.barrier, srcu_idx);
+	return ret ?: any_done;
+}
+
 bool bch2_btree_insert_key_cached(struct btree_trans *trans,
 				  unsigned flags,
 				  struct btree_insert_entry *insert_entry)
