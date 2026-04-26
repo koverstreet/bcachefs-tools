@@ -180,10 +180,10 @@ static int set_node_max(struct bch_fs *c, struct btree *b, struct bpos new_max)
 	bch2_btree_node_drop_keys_outside_node(b);
 
 	guard(mutex)(&c->btree.cache.lock);
-	__btree_node_cache_detach(&c->btree.cache, b);
+	bch2_btree_node_cache_detach(&c->btree.cache, b);
 
 	bkey_copy(&b->key, &new->k_i);
-	ret = __btree_node_cache_attach(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE);
+	ret = bch2_btree_node_cache_attach(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE);
 	BUG_ON(ret);
 	return 0;
 }

@@ -15,8 +15,8 @@ void bch2_recalc_btree_reserve(struct bch_fs *);
 void bch2_btree_node_to_freelist(struct bch_fs *, struct btree *);
 void bch2_btree_node_mem_free(struct bch_fs *, struct btree *);
 
-void __btree_node_cache_detach(struct bch_fs_btree_cache *, struct btree *);
-int __btree_node_cache_attach(struct bch_fs_btree_cache *, struct btree *,
+void bch2_btree_node_cache_detach(struct bch_fs_btree_cache *, struct btree *);
+int bch2_btree_node_cache_attach(struct bch_fs_btree_cache *, struct btree *,
 			      enum btree_node_cache_state);
 
 void bch2_btree_node_hash_remove(struct bch_fs_btree_cache *, struct btree *);
