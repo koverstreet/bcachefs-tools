@@ -83,7 +83,8 @@ enum btree_node_cache_state {
 	BTREE_NODE_CACHE_NONE,		/* off all lists; not in cache (kzalloc default) */
 	BTREE_NODE_CACHE_FREED,		/* on bc->freed_{pcpu,nonpcpu}; no data buffer */
 	BTREE_NODE_CACHE_FREEABLE,	/* on bc->freeable; has data; not hashed */
-	BTREE_NODE_CACHE_LIVE,		/* on bc->list; hashed; has data */
+	BTREE_NODE_CACHE_CLEAN,		/* on bc->live[pinned].clean; hashed; has data */
+	BTREE_NODE_CACHE_DIRTY,		/* on bc->live[pinned].dirty; hashed; has data */
 };
 
 struct btree {
@@ -187,8 +188,16 @@ enum bch_btree_cache_not_freed_reasons {
 struct btree_cache_list {
 	unsigned		idx;
 	struct shrinker		*shrink;
-	size_t			nr;
+	size_t			nr_clean;
+	size_t			nr_dirty;
+	struct list_head	clean;
+	struct list_head	dirty;
 };
+
+static inline size_t btree_cache_list_nr(const struct btree_cache_list *l)
+{
+	return l->nr_clean + l->nr_dirty;
+}
 
 struct btree_root {
 	struct btree		*b;
@@ -224,7 +233,6 @@ struct bch_fs_btree_cache {
 	struct list_head	freeable;
 	struct list_head	freed_pcpu;
 	struct list_head	freed_nonpcpu;
-	struct list_head	list;
 	struct btree_cache_list	live[2];
 
 	size_t			nr_vmalloc;
@@ -747,7 +755,7 @@ enum btree_flags {
 };
 
 #define x(flag)								\
-static inline bool btree_node_ ## flag(struct btree *b)			\
+static inline bool btree_node_ ## flag(const struct btree *b)		\
 {	return test_bit(BTREE_NODE_ ## flag, &b->flags); }		\
 									\
 static inline void set_btree_node_ ## flag(struct btree *b)		\

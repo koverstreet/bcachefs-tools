@@ -793,7 +793,8 @@ static int __bch2_journal_reclaim(struct journal *j, bool direct, bool kicked)
 		if (journal_low_on_space(j))
 			min_nr = 1;
 
-		size_t btree_cache_live = bc->live[0].nr + bc->live[1].nr;
+		size_t btree_cache_live = btree_cache_list_nr(&bc->live[0]) +
+					  btree_cache_list_nr(&bc->live[1]);
 		if (atomic_long_read(&bc->nr_dirty) * 2 > btree_cache_live)
 			min_nr = 1;
 

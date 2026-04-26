@@ -253,7 +253,8 @@ static size_t bch2_btree_cache_size(struct bch_fs *c)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
-	return (bc->live[0].nr + bc->live[1].nr) * c->opts.btree_node_size;
+	return (btree_cache_list_nr(&bc->live[0]) +
+		btree_cache_list_nr(&bc->live[1])) * c->opts.btree_node_size;
 }
 
 static int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c)

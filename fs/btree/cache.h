@@ -80,6 +80,17 @@ static inline enum btree_node_cache_state btree_node_cache_state(struct btree *b
 	return b->cache_state;
 }
 
+/* CLEAN or DIRTY based on the dirty flag — for transitions that re-attach
+ * a live node without altering its dirty status (e.g. unhash/rehash for
+ * key updates).
+ */
+static inline enum btree_node_cache_state btree_node_live_state(const struct btree *b)
+{
+	return btree_node_dirty(b)
+		? BTREE_NODE_CACHE_DIRTY
+		: BTREE_NODE_CACHE_CLEAN;
+}
+
 #define for_each_cached_btree(_b, _c, _tbl, _iter, _pos)		\
 	for ((_tbl) = rht_dereference_rcu((_c)->btree.cache.table.tbl,	\
 					  &(_c)->btree.cache.table),	\

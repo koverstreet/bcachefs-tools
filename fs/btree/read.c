@@ -1097,7 +1097,7 @@ static int __bch2_btree_root_read(struct btree_trans *trans, enum btree_id id,
 	bkey_copy(&b->key, k);
 	b->c.level	= level;
 	b->c.btree_id	= id;
-	BUG_ON(bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE));
+	BUG_ON(bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_CLEAN));
 
 	set_btree_node_read_in_flight(b);
 

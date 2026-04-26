@@ -451,7 +451,7 @@ static struct btree *bch2_btree_node_alloc(struct btree_update *as,
 
 	bch2_btree_build_aux_trees(b);
 
-	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_CLEAN);
 	BUG_ON(ret);
 
 	trace_btree_node(c, b, btree_node_alloc);
@@ -2763,7 +2763,7 @@ int bch2_btree_root_alloc_fake_trans(struct btree_trans *trans, enum btree_id id
 	b->data->format = bch2_btree_calc_format(b);
 	btree_node_set_format(b, b->data->format);
 
-	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_LIVE);
+	ret = bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_CLEAN);
 	BUG_ON(ret);
 
 	bch2_btree_set_root_inmem(c, b);

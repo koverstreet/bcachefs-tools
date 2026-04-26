@@ -184,7 +184,7 @@ static int set_node_max(struct bch_fs *c, struct btree *b, struct bpos new_max)
 	/* unhash, rehash */
 	BUG_ON(bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREEABLE));
 	bkey_copy(&b->key, &new->k_i);
-	BUG_ON(bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_LIVE));
+	BUG_ON(bch2_btree_node_transition_state(bc, b, btree_node_live_state(b)));
 	return 0;
 }
 
