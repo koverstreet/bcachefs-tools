@@ -281,7 +281,7 @@ static void bch2_btree_node_free_never_used(struct btree_update *as,
 	clear_btree_node_need_write(b);
 
 	scoped_guard(mutex, &c->btree.cache.lock)
-		__bch2_btree_node_hash_remove(&c->btree.cache, b);
+		__btree_node_cache_detach(&c->btree.cache, b);
 
 	BUG_ON(p->nr >= ARRAY_SIZE(p->b));
 	p->b[p->nr++] = b;
