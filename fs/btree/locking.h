@@ -205,6 +205,16 @@ int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *)
 static inline void trans_set_locked(struct btree_trans *trans, bool try)
 {
 	if (!trans->locked) {
+		/*
+		 * Pin to CPU while btree locks are held: keeps cache footprint
+		 * hot, and per-CPU cursors (e.g. inode allocation) stable
+		 * across transaction restarts. Released in trans_set_unlocked,
+		 * so any wait that goes through bch2_trans_unlock(_long)
+		 * happens with migration enabled - including the cond_resched
+		 * in bch2_trans_begin and the freezer-visible window during
+		 * suspend.
+		 */
+		migrate_disable();
 		lock_acquire_exclusive(&trans->dep_map, 0, try, NULL, _THIS_IP_);
 		trans->locked = true;
 		trans->last_unlock_ip = 0;
@@ -223,6 +233,8 @@ static inline void trans_set_unlocked(struct btree_trans *trans)
 
 		if (!trans->pf_memalloc_nofs)
 			current->flags &= ~PF_MEMALLOC_NOFS;
+
+		migrate_enable();
 	}
 }
 
