@@ -441,8 +441,11 @@ static inline bool __journal_pin_drop(struct journal *j,
 		j->flush_in_progress_dropped = true;
 
 	pin_list = journal_seq_pin(j, pin->seq);
-	pin->seq = 0;
 	list_del_init(&pin->list);
+	/*
+	 * Don't clear pin->seq here; caller may be updating the pin, and we
+	 * don't want other threads to see pin->seq in an intermediate state
+	 */
 
 	if (j->reclaim_flush_wait.list.first)
 		__closure_wake_up(&j->reclaim_flush_wait);
@@ -461,6 +464,7 @@ void bch2_journal_pin_drop(struct journal *j,
 	guard(spinlock)(&j->lock);
 	if (__journal_pin_drop(j, pin))
 		bch2_journal_update_last_seq(j);
+	pin->seq = 0;
 }
 
 static enum journal_pin_type journal_pin_type(struct journal_entry_pin *pin,
