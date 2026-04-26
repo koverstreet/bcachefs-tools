@@ -20,6 +20,63 @@
  * be evicted from the cache and reused for different on-disk nodes at any time
  * when unlocked, so after locking a node the caller must verify it is still
  * the expected node.
+ *
+ * Membership state machine
+ * ------------------------
+ *
+ * A struct btree is in exactly one of these states at any time, with the
+ * encoding spread across list membership, hash table membership, b->data, and
+ * the BTREE_NODE_permanent flag:
+ *
+ *   LIVE      — bc->list, hashed, b->data set, !BTREE_NODE_permanent.
+ *               Findable by lookup; reachable for reclaim. Counted in
+ *               bc->live[btree_node_pinned(b)].nr (and bc->nr_by_btree[]).
+ *   ROOT      — off all lists, hashed, b->data set, BTREE_NODE_permanent.
+ *               Findable by lookup; pinned across the FS lifetime. Tracked
+ *               via bc->roots_known[]/roots_extra (under bc->root_lock), not
+ *               counted in bc->live[].
+ *   FREEABLE  — bc->freeable, NOT hashed, b->data set. Buffer cache for hot
+ *               alloc/free churn. Counted in bc->nr_freeable.
+ *   FREED     — bc->freed_pcpu (level-0 pcpu-readers locks) or
+ *               bc->freed_nonpcpu (interior nodes), NOT hashed, b->data NULL.
+ *               struct btree shell pool: lock state preserved, data buffer
+ *               released. Not counted (freed lists are unbounded scratch).
+ *   IN-TRANSIT — list_empty(&b->list) and not in any of the above; some
+ *               thread owns the node mid-state-change. Brief and protected
+ *               by bc->lock for list/hash transitions.
+ *
+ * Transitions (all under bc->lock for the list/hash/counter half):
+ *
+ *   freshly allocated → FREEABLE     __bch2_btree_node_to_freelist (init)
+ *   FREEABLE → IN-TRANSIT → LIVE     bch2_btree_node_mem_alloc (data swap) +
+ *                                    bch2_btree_node_hash_insert
+ *   FREED → IN-TRANSIT → LIVE        bch2_btree_node_mem_alloc (data alloc) +
+ *                                    bch2_btree_node_hash_insert
+ *   LIVE → IN-TRANSIT → FREEABLE     bch2_btree_node_hash_remove
+ *                                    (hash_remove + __to_freelist)
+ *   LIVE → IN-TRANSIT → FREED        shrinker / cannibalize: hash_remove +
+ *                                    data_free + btree_node_to_freedlist
+ *   FREEABLE → IN-TRANSIT → FREED    bch2_btree_node_data_free
+ *   LIVE → ROOT                      bch2_btree_set_root_inmem
+ *                                    (set_permanent + list_del)
+ *
+ * Roots leave bc->list when they become roots, but stay hashed (so lookups
+ * still find them); ordinary reclaim never sees them because the shrinker
+ * walks bc->list. Eviction (bch2_btree_node_evict) is forbidden on roots
+ * (BUG_ON), since there's no caller path that legitimately wants to.
+ *
+ * Lock discipline:
+ *
+ *   bc->lock         — list membership, hash table mutation, counters
+ *   bc->root_lock    — roots_known[]/roots_extra slot
+ *   b->c.lock        — per-node six_lock (read/intent/write)
+ *   bc->alloc_lock   — cmpxchg'd task pointer; serialises cannibalize so
+ *                      only one thread reclaims under memory pressure
+ *
+ * Hash table lookups (rhashtable_lookup_fast) are RCU-safe; lookups can race
+ * any of the LIVE↔IN-TRANSIT transitions and may briefly miss a node that's
+ * hash-removed mid-flight. After locking a node returned by lookup, callers
+ * must recheck b->hash_val against the expected key to detect reuse.
  */
 
 #include "bcachefs.h"
@@ -90,6 +147,7 @@ static inline size_t btree_cache_can_free(struct btree_cache_list *list)
 static void btree_node_to_freedlist(struct bch_fs_btree_cache *bc, struct btree *b)
 {
 	BUG_ON(!list_empty(&b->list));
+	BUG_ON(b->data);
 
 	if (b->c.lock.readers)
 		list_add(&b->list, &bc->freed_pcpu);
@@ -918,6 +976,7 @@ got_mem:
 	BUG_ON(btree_node_hashed(b));
 	BUG_ON(btree_node_dirty(b));
 	BUG_ON(btree_node_write_in_flight(b));
+	BUG_ON(!b->data);
 out:
 	b->flags		= 0;
 	b->written		= 0;
