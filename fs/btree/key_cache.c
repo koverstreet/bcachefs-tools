@@ -561,36 +561,54 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 	int srcu_idx = srcu_read_lock(&c->btree.trans.barrier);
 	int ret = 0;
 
-	CLASS(btree_trans, trans)(c);
+	/*
+	 * Lockless bailout: if the pin has already been updated past @seq, or
+	 * the key isn't dirty, there's nothing to do. False negatives (we miss
+	 * work) are fine — reclaim retries. Avoids taking ck's intent lock on
+	 * the hot reclaim path when there's nothing to do.
+	 *
+	 * The intent lock taken below serializes against
+	 * btree_key_cache_flush_pos(), which reads ck->journal.seq while the
+	 * cached path's intent lock is held: a read lock here would let
+	 * pin_update advance the pin out from under that reader, leaving it
+	 * with a captured ck->journal.seq < j->last_seq and BUG'ing in
+	 * bch2_journal_pin_set() once the trans commit fed it back in.
+	 */
+	if (READ_ONCE(ck->journal.seq) == seq &&
+	    test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+		CLASS(btree_trans, trans)(c);
 
-	ret = lockrestart_do(trans, ({
-		int _ret = btree_node_lock_nopath(trans, &ck->c, SIX_LOCK_read, _THIS_IP_);
-		bool do_flush = false;
+		ret = lockrestart_do(trans, ({
+			btree_path_idx_t path_idx;
+			int _ret = bch2_btree_node_lock_with_path(trans, &ck->c,
+								  SIX_LOCK_intent, &path_idx);
+			bool do_flush = false;
 
-		if (!_ret) {
-			key = ck->key;
+			if (!_ret) {
+				key = ck->key;
 
-			if (ck->journal.seq != seq ||
-			    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
-				/* nothing to do */
-			} else if (ck->seq != seq) {
-				bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
-							bch2_btree_key_cache_journal_flush);
-			} else {
-				do_flush = true;
+				if (ck->journal.seq != seq ||
+				    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+					/* raced; nothing to do */
+				} else if (ck->seq != seq) {
+					bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
+								bch2_btree_key_cache_journal_flush);
+				} else {
+					do_flush = true;
+				}
+				bch2_btree_node_unlock_with_path(trans, path_idx, 0);
+
+				if (do_flush)
+					_ret = btree_key_cache_flush_pos(trans, key, seq,
+							BCH_TRANS_COMMIT_journal_reclaim, false);
 			}
-			six_unlock_read(&ck->c.lock);
-
-			if (do_flush)
-				_ret = btree_key_cache_flush_pos(trans, key, seq,
-						BCH_TRANS_COMMIT_journal_reclaim, false);
-		}
-		_ret;
-	}));
-	bch2_fs_fatal_err_on(ret &&
-			     !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
-			     !bch2_journal_error(j), c,
-			     "flushing key cache: %s", bch2_err_str(ret));
+			_ret;
+		}));
+		bch2_fs_fatal_err_on(ret &&
+				     !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
+				     !bch2_journal_error(j), c,
+				     "flushing key cache: %s", bch2_err_str(ret));
+	}
 	srcu_read_unlock(&c->btree.trans.barrier, srcu_idx);
 	return ret;
 }
