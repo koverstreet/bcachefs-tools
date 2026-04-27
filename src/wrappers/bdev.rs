@@ -124,7 +124,7 @@ pub fn nonrot(fd: RawFd) -> bool {
     // put_ushort — bdev_nonrot internally uses bdev_get_queue(bdev), which
     // resolves to the parent disk's queue for partitions and handles LVM,
     // md, loop devices, etc. uniformly.
-    const BLKROTATIONAL: libc::c_ulong = 0x127E;
+    const BLKROTATIONAL: libc::Ioctl = 0x127E;
     let mut rotational: u16 = 0;
     let ret = unsafe { libc::ioctl(fd, BLKROTATIONAL, &mut rotational) };
     ret == 0 && rotational == 0
