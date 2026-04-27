@@ -247,7 +247,7 @@ static int __btree_node_flush(struct journal *j, struct journal_entry_pin *pin,
 	CLASS(btree_trans, trans)(c);
 	return lockrestart_do(trans, ({
 		btree_path_idx_t path_idx;
-		int ret = bch2_btree_node_lock_with_path(trans, b, SIX_LOCK_read, &path_idx);
+		int ret = bch2_btree_node_lock_with_path(trans, &b->c, SIX_LOCK_read, &path_idx);
 		if (!ret) {
 			old = READ_ONCE(b->flags);
 			do {

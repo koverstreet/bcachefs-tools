@@ -299,24 +299,24 @@ static inline void btree_node_lock_nopath_nofail(struct btree_trans *trans,
  */
 static inline int __must_check
 bch2_btree_node_lock_with_path(struct btree_trans *trans,
-			       struct btree *b,
+			       struct btree_bkey_cached_common *b,
 			       enum six_lock_type type,
 			       btree_path_idx_t *path_idx_out)
 {
 	btree_path_idx_t path_idx = bch2_path_get_unlocked_mut(trans,
-				b->c.btree_id, b->c.level, b->key.k.p);
+				b->btree_id, b->level, btree_node_pos(b), b->cached);
 
-	int ret = btree_node_lock_nopath(trans, &b->c, type, _THIS_IP_);
+	int ret = btree_node_lock_nopath(trans, b, type, _THIS_IP_);
 	if (ret) {
 		bch2_path_put(trans, path_idx, true);
 		return ret;
 	}
 
 	struct btree_path *path = trans->paths + path_idx;
-	mark_btree_node_locked(trans, path, b->c.level,
+	mark_btree_node_locked(trans, path, b->level,
 			       (enum btree_node_locked_type) type);
-	path->l[b->c.level].lock_seq	= six_lock_seq(&b->c.lock);
-	path->l[b->c.level].b		= b;
+	path->l[b->level].lock_seq	= six_lock_seq(&b->lock);
+	path->l[b->level].b		= (struct btree *) b;
 
 	*path_idx_out = path_idx;
 	return 0;

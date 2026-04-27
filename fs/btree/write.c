@@ -175,7 +175,7 @@ static void btree_node_write_work(struct work_struct *work)
 
 	lockrestart_do(trans, ({
 		btree_path_idx_t path_idx;
-		int ret = bch2_btree_node_lock_with_path(trans, b, SIX_LOCK_read, &path_idx);
+		int ret = bch2_btree_node_lock_with_path(trans, &b->c, SIX_LOCK_read, &path_idx);
 		if (!ret) {
 			__btree_node_write_done(c, b, start_time);
 			bch2_btree_node_unlock_with_path(trans, path_idx, b->c.level);
