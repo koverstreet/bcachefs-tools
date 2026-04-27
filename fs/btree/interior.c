@@ -715,6 +715,14 @@ static int btree_update_nodes_written_trans(struct btree_trans *trans,
 	struct bch_inode_opts opts;
 	bch2_inode_opts_get(as->c, &opts, true);
 
+	/*
+	 * Our caller uses BCH_TRANS_COMMIT_no_check_rw, so after emergency
+	 * read-only nothing else gates this path. Bail explicitly: running the
+	 * alloc info triggers below for an interior update whose journal half
+	 * won't land underflows bucket sector counts.
+	 */
+	try(bch2_journal_error(&c->journal));
+
 	trans->journal_pin = &as->journal;
 
 	darray_for_each(as->old_nodes, i) {
