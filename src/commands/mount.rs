@@ -145,10 +145,7 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
         return Ok(handle);
     }
 
-    let passphrase = Passphrase::new(&uuid)?;
-    let passphrase_correct = passphrase
-        .check(sb)
-        .ok_or_else(|| anyhow!("incorrect passphrase"))?;
+    let passphrase_correct = Passphrase::ask_and_check(sb)?;
     KeyHandle::new(&passphrase_correct, Keyring::User)
 }
 
