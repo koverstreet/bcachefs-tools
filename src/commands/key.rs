@@ -86,14 +86,9 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
     }
 
     if sb_is_encrypted(sb_handle) {
-        let uuid = sb_handle.sb().uuid();
-        let old_passphrase =
-            Passphrase::new_from_prompt(&uuid).context("reading current passphrase")?;
         let PassphraseCorrect {
             cleartext_sb_key, ..
-        } = old_passphrase
-            .check(sb_handle)
-            .context("verifying current passphrase")?;
+        } = Passphrase::ask_and_check(&sb_handle)?;
         Ok((fs, cleartext_sb_key.into_key()))
     } else {
         let raw_key = sb_handle.sb().crypt().unwrap().key().key.clone();
