@@ -185,6 +185,7 @@ impl Passphrase {
                 .arg("--icon=drive-harddisk")
                 .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
                 .arg(format!("--keyname={}", uuid.as_hyphenated()))
+                .arg("--multiple")
                 .arg("-n");
             if i == 0 {
                 command.arg("--accept-cached");
@@ -197,9 +198,14 @@ impl Passphrase {
             if !output.status.success() {
                 bail!("systemd-ask-password returned an error");
             }
-            let passphrase = Self(CString::new(output.stdout)?);
-            if let Some(passphrase_correct) = passphrase.check(sb) {
-                return Ok(passphrase_correct);
+            for passphrase in output.stdout.split(|b| *b == b'\0') {
+                let p = Self(
+                    CString::new(passphrase)
+                        .expect("passphrase should not contain a NUL byte because the output was split on NUL bytes")
+                );
+                if let Some(passphrase_correct) = p.check(sb) {
+                    return Ok(passphrase_correct);
+                }
             }
         }
         bail!("incorrect passphrase limit reached");
