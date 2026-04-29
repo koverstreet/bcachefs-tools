@@ -16,7 +16,7 @@ use bcachefs_kernel::c::{
     bch2_chacha20, bch_encrypted_key, bch_sb_field_crypt,
 };
 use bch_bindgen::keyutils::{self, keyctl_search};
-use log::{debug, info};
+use log::info;
 use rustix::termios;
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
@@ -177,16 +177,12 @@ impl Passphrase {
     }
 
     pub fn ask_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
-        let uuid = sb.sb().uuid();
         let passphrase = match StdinType::detect() {
-            StdinType::Terminal => match Self::new_from_askpassword(&uuid) {
-                Ok(phrase) => phrase?,
-                Err(_) => {
-                    debug!("Failed to start systemd-ask-password, doing the prompt ourselves");
-                    Self::new_from_prompt()?
-                }
-            },
-            StdinType::DevNull => Self::new_from_askpassword(&uuid)??,
+            StdinType::Terminal => Self::new_from_prompt()?,
+            StdinType::DevNull => {
+                let uuid = sb.sb().uuid();
+                Self::new_from_askpassword(&uuid)??
+            }
             StdinType::Other => Self::new_from_stdin()?,
         };
         passphrase
