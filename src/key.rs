@@ -183,8 +183,10 @@ impl Passphrase {
             let mut command = Command::new("systemd-ask-password");
             command
                 .arg("--icon=drive-harddisk")
-                .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
-                .arg(format!("--keyname={}", uuid.as_hyphenated()))
+                .arg(format!("--id=cryptsetup:UUID={}", uuid.as_hyphenated()))
+                .arg("--keyname=cryptsetup")
+                .arg("--credential=cryptsetup.passphrase")
+                .arg("--timeout=0")
                 .arg("--multiple")
                 .arg("-n");
             if i == 0 {
