@@ -669,7 +669,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
 
     // Handle encryption passphrase
     let passphrase: Option<Passphrase> = if encrypted && !no_passphrase {
-        Some(Passphrase::new_from_prompt_twice()?)
+        Some(Passphrase::ask_for_new_passphrase()?)
     } else {
         None
     };

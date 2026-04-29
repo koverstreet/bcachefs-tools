@@ -926,9 +926,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
 
     let passphrase: Option<Passphrase> = if encrypted && !no_passphrase {
         Some(if let Some(ref path) = passphrase_file {
-            Passphrase::new_from_file(path)?
+            Passphrase::read_from_file(path)?
         } else {
-            Passphrase::new_from_prompt_twice()?
+            Passphrase::ask_for_new_passphrase()?
         })
     } else {
         None

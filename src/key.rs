@@ -75,14 +75,14 @@ impl UnlockPolicy {
             Self::Fail => KeyHandle::new_from_search(&uuid),
             Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
             Self::Ask => {
-                let passphrase = Passphrase::new_from_prompt()?;
+                let passphrase = Passphrase::ask_in_terminal()?;
                 let passphrase_correct = passphrase
                     .check(sb)
                     .ok_or_else(|| anyhow!("incorrect passphrase"))?;
                 KeyHandle::new(&passphrase_correct, Keyring::User)
             }
             Self::Stdin => {
-                let passphrase = Passphrase::new_from_stdin()?;
+                let passphrase = Passphrase::read_from_stdin()?;
                 let passphrase_correct = passphrase
                     .check(sb)
                     .ok_or_else(|| anyhow!("incorrect passphrase"))?;
@@ -167,11 +167,11 @@ impl Passphrase {
 
     pub fn ask_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
         match StdinType::detect() {
-            StdinType::Terminal => Self::new_from_prompt()?
+            StdinType::Terminal => Self::ask_in_terminal()?
                 .check(sb)
                 .ok_or_else(|| anyhow!("incorrect passphrase")),
             StdinType::DevNull => Self::ask_from_systemd_and_check(sb),
-            StdinType::Other => Self::new_from_stdin()?
+            StdinType::Other => Self::read_from_stdin()?
                 .check(sb)
                 .ok_or_else(|| anyhow!("incorrect passphrase")),
         }
@@ -212,7 +212,7 @@ impl Passphrase {
     }
 
     /// Prompt for a passphrase with echo disabled.
-    fn prompt_hidden(prompt: &str) -> Result<Self> {
+    fn ask_in_terminal_with_prompt(prompt: &str) -> Result<Self> {
         let old = termios::tcgetattr(stdin())?;
         let mut new = old.clone();
         new.local_modes.remove(termios::LocalModes::ECHO);
@@ -230,23 +230,23 @@ impl Passphrase {
     }
 
     // blocks indefinitely if no input is available on stdin
-    pub fn new_from_prompt() -> Result<Self> {
-        Self::prompt_hidden("Enter passphrase: ")
+    pub fn ask_in_terminal() -> Result<Self> {
+        Self::ask_in_terminal_with_prompt("Enter passphrase: ")
     }
 
     /// Prompt for a new passphrase twice and verify they match.
-    pub fn new_from_prompt_twice() -> Result<Self> {
+    pub fn ask_for_new_passphrase() -> Result<Self> {
         if !stdin().is_terminal() {
-            return Self::new_from_stdin();
+            return Self::read_from_stdin();
         }
-        let pass1 = Self::prompt_hidden("Enter new passphrase: ")?;
-        let pass2 = Self::prompt_hidden("Enter same passphrase again: ")?;
+        let pass1 = Self::ask_in_terminal_with_prompt("Enter new passphrase: ")?;
+        let pass2 = Self::ask_in_terminal_with_prompt("Enter same passphrase again: ")?;
         ensure!(pass1.get().to_bytes() == pass2.get().to_bytes(), "Passphrases do not match");
         Ok(pass1)
     }
 
     // blocks indefinitely if no input is available on stdin
-    pub fn new_from_stdin() -> Result<Self> {
+    pub fn read_from_stdin() -> Result<Self> {
         info!("Trying to read passphrase from stdin...");
 
         let mut line = Zeroizing::new(String::new());
@@ -255,7 +255,7 @@ impl Passphrase {
         Ok(Self(CString::new(line.trim_end_matches('\n'))?))
     }
 
-    pub fn new_from_file(passphrase_file: impl AsRef<Path>) -> Result<Self> {
+    pub fn read_from_file(passphrase_file: impl AsRef<Path>) -> Result<Self> {
         let passphrase_file = passphrase_file.as_ref();
 
         info!(
