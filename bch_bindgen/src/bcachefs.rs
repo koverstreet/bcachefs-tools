@@ -9,11 +9,14 @@
 #![allow(unused)]
 #![allow(unnecessary_transmutes)]
 
+use std::{ptr, sync::atomic};
+
 use crate::c;
 
 include!(concat!(env!("OUT_DIR"), "/bcachefs.rs"));
 
 use bitfield::bitfield;
+use zeroize::{Zeroize, ZeroizeOnDrop};
 bitfield! {
     pub struct bch_scrypt_flags(u64);
     pub N, _: 15, 0;
@@ -164,3 +167,60 @@ impl bch_opt_strs {
 // #[repr(u8)]
 pub enum rhash_lock_head {}
 pub enum srcu_struct {}
+
+impl Clone for bch_key {
+    fn clone(&self) -> Self {
+        Self { key: self.key }
+    }
+}
+
+impl Zeroize for bch_key {
+    fn zeroize(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+impl Drop for bch_key {
+    fn drop(&mut self) {
+        self.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for bch_key {}
+
+impl bch_encrypted_key {
+    pub const MAGIC: &[u8; 8] = b"bch**key";
+
+    /// Create an unencrypted (plaintext) key for the crypt field (remove-passphrase).
+    pub fn new_unencrypted(key: bch_key) -> Self {
+        Self {
+            magic: u64::from_le_bytes(*Self::MAGIC),
+            key,
+        }
+    }
+
+    pub fn is_encrypted(&self) -> bool {
+        self.magic != u64::from_le_bytes(*Self::MAGIC)
+    }
+
+    pub fn into_key(self) -> bch_key {
+        self.key.clone()
+    }
+}
+
+impl Clone for bch_encrypted_key {
+    fn clone(&self) -> Self {
+        Self {
+            magic: self.magic,
+            key:   self.key.clone(),
+        }
+    }
+}
+
+impl Zeroize for bch_encrypted_key {
+    fn zeroize(&mut self) {
+        self.key.zeroize();
+    }
+}
+
+impl ZeroizeOnDrop for bch_encrypted_key {}

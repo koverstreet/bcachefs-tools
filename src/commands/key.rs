@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use bch_bindgen::bcachefs::bch_key;
+use bch_bindgen::bcachefs::{bch_key, bch_encrypted_key};
 use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
 use bch_bindgen::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
-use crate::key::{sb_is_encrypted, unencrypted_key, KeyHandle, Keyring, Passphrase};
+use crate::key::{sb_is_encrypted, KeyHandle, Keyring, Passphrase};
 
 // ---- unlock ----
 
@@ -110,9 +110,9 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
             .context("reading current passphrase")?;
         let (_, sb_key) = old_passphrase.check(sb_handle)
             .context("verifying current passphrase")?;
-        Ok((fs, sb_key.key))
+        Ok((fs, sb_key.into_key()))
     } else {
-        let raw_key = sb_handle.sb().crypt().unwrap().key().key;
+        let raw_key = sb_handle.sb().crypt().unwrap().key().key.clone();
         Ok((fs, raw_key))
     }
 }
@@ -144,7 +144,7 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
     let new_passphrase = Passphrase::new_from_prompt_twice()
         .context("reading new passphrase")?;
 
-    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), &raw_key);
+    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), raw_key);
 
     unsafe {
         set_crypt_key(&fs, encrypted_key);
@@ -168,7 +168,7 @@ pub struct RemovePassphraseCli {
 fn cmd_remove_passphrase(cli: RemovePassphraseCli) -> Result<()> {
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
-    unsafe { set_crypt_key(&fs, unencrypted_key(&raw_key)); }
+    unsafe { set_crypt_key(&fs, bch_encrypted_key::new_unencrypted(raw_key)); }
     fs.write_super();
 
     Ok(())

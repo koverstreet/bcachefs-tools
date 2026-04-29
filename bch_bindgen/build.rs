@@ -444,6 +444,8 @@ fn main() {
         .no_copy("btree_trans")
         .no_copy("printbuf")
         .no_copy("bch_sb_handle")
+        .no_copy("bch_key")
+        .no_copy("bch_encrypted_key")
         .no_partialeq("bkey")
         .no_partialeq("bpos")
         .generate_inline_functions(true)

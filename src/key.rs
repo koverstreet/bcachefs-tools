@@ -23,23 +23,12 @@ use zeroize::{ZeroizeOnDrop, Zeroizing};
 
 use crate::ErrnoError;
 
-const BCH_KEY_MAGIC: &[u8; 8] = b"bch**key";
-
 /// Check if a superblock has an encrypted passphrase set.
 pub fn sb_is_encrypted(sb: &bch_sb_handle) -> bool {
-    let bch_key_magic = u64::from_le_bytes(*BCH_KEY_MAGIC);
     sb.sb()
         .crypt()
-        .map(|c| c.key().magic != bch_key_magic)
+        .map(|c| c.key().is_encrypted())
         .unwrap_or(false)
-}
-
-/// Create an unencrypted (plaintext) key for the crypt field (remove-passphrase).
-pub fn unencrypted_key(key: &bch_key) -> bch_encrypted_key {
-    bch_encrypted_key {
-        magic: u64::from_le_bytes(*BCH_KEY_MAGIC),
-        key: *key,
-    }
 }
 
 /// Target keyring for key storage.
@@ -271,14 +260,11 @@ impl Passphrase {
     pub fn encrypt_key(
         &self,
         sb: &bch_sb_handle,
-        key: &bch_key,
+        key: bch_key,
     ) -> bch_encrypted_key {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
-        let mut new_key = bch_encrypted_key {
-            magic: u64::from_le_bytes(*BCH_KEY_MAGIC),
-            key: *key,
-        };
-
+        let mut new_key = bch_encrypted_key::new_unencrypted(key);
+        
         let mut passphrase_key: bch_key = self.derive(crypt);
 
         unsafe {
@@ -294,16 +280,14 @@ impl Passphrase {
     }
 
     pub fn check(&self, sb: &bch_sb_handle) -> Result<(bch_key, bch_encrypted_key)> {
-        let bch_key_magic = u64::from_le_bytes(*BCH_KEY_MAGIC);
-
         let crypt = sb
             .sb()
             .crypt()
             .ok_or_else(|| anyhow!("filesystem is not encrypted"))?;
-        let mut sb_key = *crypt.key();
+        let mut sb_key = crypt.key().clone();
 
         ensure!(
-            sb_key.magic != bch_key_magic,
+            sb_key.is_encrypted(),
             "filesystem encryption key is not passphrase-protected"
         );
 
@@ -317,7 +301,7 @@ impl Passphrase {
                 mem::size_of_val(&sb_key),
             )
         };
-        ensure!(sb_key.magic == bch_key_magic, "incorrect passphrase");
+        ensure!(!sb_key.is_encrypted(), "incorrect passphrase");
 
         Ok((passphrase_key, sb_key))
     }
