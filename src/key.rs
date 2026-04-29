@@ -86,7 +86,7 @@ impl UnlockPolicy {
             Self::Fail => KeyHandle::new_from_search(&uuid),
             Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
             Self::Ask => {
-                let passphrase = Passphrase::new_from_prompt(&uuid)?;
+                let passphrase = Passphrase::new_from_prompt()?;
                 let passphrase_correct = passphrase
                     .check(sb)
                     .ok_or_else(|| anyhow!("incorrect passphrase"))?;
@@ -179,7 +179,13 @@ impl Passphrase {
     pub fn ask_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
         let uuid = sb.sb().uuid();
         let passphrase = match StdinType::detect() {
-            StdinType::Terminal => Self::new_from_prompt(&uuid)?,
+            StdinType::Terminal => match Self::new_from_askpassword(&uuid) {
+                Ok(phrase) => phrase?,
+                Err(_) => {
+                    debug!("Failed to start systemd-ask-password, doing the prompt ourselves");
+                    Self::new_from_prompt()?
+                }
+            },
             StdinType::DevNull => Self::new_from_askpassword(&uuid)??,
             StdinType::Other => Self::new_from_stdin()?,
         };
@@ -232,11 +238,7 @@ impl Passphrase {
     }
 
     // blocks indefinitely if no input is available on stdin
-    pub fn new_from_prompt(uuid: &Uuid) -> Result<Self> {
-        match Self::new_from_askpassword(uuid) {
-            Ok(phrase) => return phrase,
-            Err(_) => debug!("Failed to start systemd-ask-password, doing the prompt ourselves"),
-        }
+    pub fn new_from_prompt() -> Result<Self> {
         Self::prompt_hidden("Enter passphrase: ")
     }
 
