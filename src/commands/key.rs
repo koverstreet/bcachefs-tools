@@ -62,7 +62,7 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
     }
 
     let passphrase_correct = match cli.file {
-        Some(file) => Passphrase::new_from_file(file)?
+        Some(file) => Passphrase::read_from_file(file)?
             .check(&sb)
             .ok_or_else(|| anyhow!("incorrect passphrase"))?,
         None => Passphrase::ask_and_check(&sb)?,
@@ -138,7 +138,7 @@ pub struct SetPassphraseCli {
 fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
-    let new_passphrase = Passphrase::new_from_prompt_twice()
+    let new_passphrase = Passphrase::ask_for_new_passphrase()
         .context("reading new passphrase")?;
 
     let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), &raw_key);

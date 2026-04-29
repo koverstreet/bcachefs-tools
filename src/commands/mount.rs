@@ -133,7 +133,7 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
     }
 
     if let Some(path) = cli.passphrase_file.as_deref() {
-        let passphrase = Passphrase::new_from_file(path)?;
+        let passphrase = Passphrase::read_from_file(path)?;
         let passphrase_correct = passphrase
             .check(sb)
             .ok_or_else(|| anyhow!("incorrect passphrase"))?;

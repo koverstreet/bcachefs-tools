@@ -394,9 +394,9 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     // Handle encryption
     let passphrase: Option<Passphrase> = if cfg.encrypted && !cfg.no_passphrase {
         let p = if let Some(ref path) = cfg.passphrase_file {
-            Passphrase::new_from_file(path)?
+            Passphrase::read_from_file(path)?
         } else {
-            Passphrase::new_from_prompt_twice()?
+            Passphrase::ask_for_new_passphrase()?
         };
         cfg.initialize = false;
         Some(p)
