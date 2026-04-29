@@ -167,7 +167,7 @@ impl Passphrase {
     }
 
     pub fn new(uuid: &Uuid) -> Result<Self> {
-        match get_stdin_type() {
+        match StdinType::detect() {
             StdinType::Terminal => Self::new_from_prompt(uuid),
             StdinType::DevNull => Self::new_from_askpassword(uuid)?,
             StdinType::Other => Self::new_from_stdin(),
@@ -340,13 +340,15 @@ enum StdinType {
     Other,
 }
 
-fn get_stdin_type() -> StdinType {
-    let stdin = stdin();
-    if stdin.is_terminal() {
-        StdinType::Terminal
-    } else if is_dev_null(stdin.as_fd()).unwrap_or(false) {
-        StdinType::DevNull
-    } else {
-        StdinType::Other
+impl StdinType {
+    fn detect() -> StdinType {
+        let stdin = stdin();
+        if stdin.is_terminal() {
+            StdinType::Terminal
+        } else if is_dev_null(stdin.as_fd()).unwrap_or(false) {
+            StdinType::DevNull
+        } else {
+            StdinType::Other
+        }
     }
 }
