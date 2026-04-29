@@ -62,33 +62,16 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
         bail!("{} is not encrypted", cli.device);
     }
 
-    let uuid = sb.sb().uuid();
-
-    // First attempt
     let passphrase = if let Some(ref file) = cli.file {
         Passphrase::new_from_file(file)?
     } else {
+        let uuid = sb.sb().uuid();
         Passphrase::new(&uuid)?
     };
 
-    match KeyHandle::new(&sb, &passphrase, cli.keyring) {
-        Ok(_) => return Ok(()),
-        Err(e) if e.to_string().contains("incorrect passphrase") => {}
-        Err(e) => return Err(e),
-    }
+    KeyHandle::new(&sb, &passphrase, cli.keyring)?;
 
-    // Retry up to 2 more times, always interactive
-    for _ in 0..2 {
-        eprintln!("incorrect passphrase");
-        let passphrase = Passphrase::new_from_prompt(&uuid)?;
-        match KeyHandle::new(&sb, &passphrase, cli.keyring) {
-            Ok(_) => return Ok(()),
-            Err(e) if e.to_string().contains("incorrect passphrase") => continue,
-            Err(e) => return Err(e),
-        }
-    }
-
-    bail!("incorrect passphrase limit reached");
+    Ok(())
 }
 
 // ---- shared helpers for set/remove-passphrase ----
