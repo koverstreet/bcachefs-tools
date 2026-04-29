@@ -43,16 +43,12 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
         return Ok(());
     }
 
-    let passphrase = if let Some(ref file) = cli.file {
-        Passphrase::new_from_file(file)?
-    } else {
-        let uuid = sb.sb().uuid();
-        Passphrase::new(&uuid)?
+    let passphrase_correct = match cli.file {
+        Some(file) => Passphrase::new_from_file(file)?
+            .check(&sb)
+            .ok_or_else(|| anyhow!("incorrect passphrase"))?,
+        None => Passphrase::ask_and_check(&sb)?,
     };
-
-    let passphrase_correct = passphrase
-        .check(&sb)
-        .ok_or_else(|| anyhow!("incorrect passphrase"))?;
     KeyHandle::new(&passphrase_correct, cli.keyring)?;
 
     Ok(())

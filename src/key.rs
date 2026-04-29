@@ -165,12 +165,16 @@ impl Passphrase {
         &self.0
     }
 
-    pub fn new(uuid: &Uuid) -> Result<Self> {
-        match StdinType::detect() {
-            StdinType::Terminal => Self::new_from_prompt(uuid),
-            StdinType::DevNull => Self::new_from_askpassword(uuid)?,
-            StdinType::Other => Self::new_from_stdin(),
-        }
+    pub fn ask_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
+        let uuid = sb.sb().uuid();
+        let passphrase = match StdinType::detect() {
+            StdinType::Terminal => Self::new_from_prompt(&uuid)?,
+            StdinType::DevNull => Self::new_from_askpassword(&uuid)??,
+            StdinType::Other => Self::new_from_stdin()?,
+        };
+        passphrase
+            .check(sb)
+            .ok_or_else(|| anyhow!("incorrect passphrase"))
     }
 
     // The outer result represents a failure when trying to run systemd-ask-password,
