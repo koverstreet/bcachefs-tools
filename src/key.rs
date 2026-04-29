@@ -10,7 +10,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{anyhow, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Result};
 use bch_bindgen::{
     bcachefs::{self, bch_key, bch_sb_handle},
     c::{bch2_chacha20, bch_encrypted_key, bch_sb_field_crypt},
@@ -166,42 +166,43 @@ impl Passphrase {
     }
 
     pub fn ask_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
-        let passphrase = match StdinType::detect() {
-            StdinType::Terminal => Self::new_from_prompt()?,
-            StdinType::DevNull => {
-                let uuid = sb.sb().uuid();
-                Self::new_from_askpassword(&uuid)??
-            }
-            StdinType::Other => Self::new_from_stdin()?,
-        };
-        passphrase
-            .check(sb)
-            .ok_or_else(|| anyhow!("incorrect passphrase"))
+        match StdinType::detect() {
+            StdinType::Terminal => Self::new_from_prompt()?
+                .check(sb)
+                .ok_or_else(|| anyhow!("incorrect passphrase")),
+            StdinType::DevNull => Self::ask_from_systemd_and_check(sb),
+            StdinType::Other => Self::new_from_stdin()?
+                .check(sb)
+                .ok_or_else(|| anyhow!("incorrect passphrase")),
+        }
     }
 
-    // The outer result represents a failure when trying to run systemd-ask-password,
-    // it is non-critical and will cause the password to be asked internally.
-    // The inner result represent a successful request that returned an error
-    // this one results in an error.
-    fn new_from_askpassword(uuid: &Uuid) -> Result<Result<Self>> {
-        let output = Command::new("systemd-ask-password")
-            .arg("--icon=drive-harddisk")
-            .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
-            .arg(format!("--keyname={}", uuid.as_hyphenated()))
-            .arg("--accept-cached")
-            .arg("-n")
-            .arg("Enter passphrase: ")
-            .stdin(Stdio::inherit())
-            .stderr(Stdio::inherit())
-            .output()?;
-        Ok(if output.status.success() {
-            match CString::new(output.stdout) {
-                Ok(cstr) => Ok(Self(cstr)),
-                Err(e) => Err(e.into()),
+    fn ask_from_systemd_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
+        let uuid = sb.sb().uuid();
+        for i in 0..3 {
+            let mut command = Command::new("systemd-ask-password");
+            command
+                .arg("--icon=drive-harddisk")
+                .arg(format!("--id=bcachefs:{}", uuid.as_hyphenated()))
+                .arg(format!("--keyname={}", uuid.as_hyphenated()))
+                .arg("-n");
+            if i == 0 {
+                command.arg("--accept-cached");
             }
-        } else {
-            Err(anyhow!("systemd-ask-password returned an error"))
-        })
+            let output = command
+                .arg("Enter passphrase: ")
+                .stdin(Stdio::inherit())
+                .stderr(Stdio::inherit())
+                .output()?;
+            if !output.status.success() {
+                bail!("systemd-ask-password returned an error");
+            }
+            let passphrase = Self(CString::new(output.stdout)?);
+            if let Some(passphrase_correct) = passphrase.check(sb) {
+                return Ok(passphrase_correct);
+            }
+        }
+        bail!("incorrect passphrase limit reached");
     }
 
     /// Prompt for a passphrase with echo disabled.
