@@ -12,6 +12,7 @@
   fuse3,
   keyutils,
   libaio,
+  libunwind,
   libsodium,
   liburcu,
   libuuid,
@@ -58,6 +59,7 @@ let
     buildInputs = [
       keyutils
       libaio
+      libunwind
       libsodium
       liburcu
       libuuid
