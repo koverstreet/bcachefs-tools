@@ -12,7 +12,29 @@ use std::os::unix::io::RawFd;
 
 use libc::BLKPBSZGET;
 
-// linux/fs.h ioctl constants not exposed by libc crate
+// linux/fs.h ioctl constants not exposed by libc crate. Note that some
+// architectures use a 3-bit ioctl direction field.
+#[cfg(any(
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6",
+    target_arch = "sparc",
+    target_arch = "sparc64",
+))]
+const BLKGETSIZE64: libc::Ioctl = 0x40081272u32 as libc::Ioctl;
+#[cfg(not(any(
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6",
+    target_arch = "sparc",
+    target_arch = "sparc64",
+)))]
 const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
 
 /// Returns the size of a file or block device in bytes.
