@@ -27,6 +27,7 @@
 #include "journal/reclaim.h"
 #include "journal/read.h"
 #include "journal/seq_blacklist.h"
+#include "journal/validate.h"
 #include "sb/io.h"
 
 #include "alloc/disk_groups.h"
