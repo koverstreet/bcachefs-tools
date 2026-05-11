@@ -10,6 +10,8 @@
 #include "data/read.h"
 #include "data/write.h"
 
+#include "snapshots/snapshot.h"
+
 #include "vfs/io.h"
 #include "vfs/buffered.h"
 #include "vfs/direct.h"
@@ -1130,6 +1132,7 @@ ssize_t bch2_write_iter(struct kiocb *iocb, struct iov_iter *from)
 {
 	struct file *file = iocb->ki_filp;
 	struct bch_inode_info *inode = file_bch_inode(file);
+	struct bch_fs *c = inode->v.i_sb->s_fs_info;
 	ssize_t ret;
 
 	if (iocb->ki_flags & IOCB_DIRECT) {
@@ -1137,7 +1140,22 @@ ssize_t bch2_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		goto out;
 	}
 
+	/*
+	 * Buffered write: dirties page cache; must be serialized against snapshot
+	 * creation so the snapshot doesn't capture a half-flushed inconsistent
+	 * state. O_DIRECT doesn't need this — btree commits are already atomic
+	 * w.r.t. snapshot — so we take the lock only on this side of the branch.
+	 *
+	 * NB: this assumes buffered writes are synchronous — submit and dirty
+	 * happen in the same task. If async buffered IO is ever added (e.g.
+	 * io_uring buffered writes via worker threads), the up_read here will
+	 * happen in a different task than down_read, which percpu_rwsem's lockdep
+	 * tracking won't tolerate. At that point switch this lock to a plain
+	 * rwsem + down_read_non_owner / up_read_non_owner under CONFIG_LOCKDEP,
+	 * or rethink the model.
+	 */
 	inode_lock(&inode->v);
+	percpu_down_read(&c->snapshots.create_lock);
 
 	ret = generic_write_checks(iocb, from);
 	if (ret <= 0)
@@ -1155,6 +1173,7 @@ ssize_t bch2_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	if (likely(ret > 0))
 		iocb->ki_pos += ret;
 unlock:
+	percpu_up_read(&c->snapshots.create_lock);
 	inode_unlock(&inode->v);
 
 	if (ret > 0)

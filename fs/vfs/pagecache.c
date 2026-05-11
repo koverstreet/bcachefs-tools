@@ -7,6 +7,7 @@
 
 #include "data/extents.h"
 
+#include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
 
 #include "vfs/io.h"
@@ -689,6 +690,7 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 
 	bch2_folio_reservation_init(c, inode, &res);
 
+	percpu_down_read(&c->snapshots.create_lock);
 	sb_start_pagefault(inode->v.i_sb);
 	file_update_time(file);
 
@@ -730,6 +732,7 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 	ret = VM_FAULT_LOCKED;
 out:
 	sb_end_pagefault(inode->v.i_sb);
+	percpu_up_read(&c->snapshots.create_lock);
 
 	return ret;
 }

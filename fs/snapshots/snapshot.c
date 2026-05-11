@@ -814,19 +814,24 @@ int bch2_snapshots_read(struct bch_fs *c)
 
 void bch2_fs_snapshots_exit(struct bch_fs *c)
 {
+	percpu_free_rwsem(&c->snapshots.create_lock);
 	kvfree(rcu_dereference_protected(c->snapshots.table, true));
 }
 
 void bch2_fs_snapshots_init_early(struct bch_fs *c)
 {
 	mutex_init(&c->snapshots.table_lock);
-	init_rwsem(&c->snapshots.create_lock);
 
 	INIT_WORK(&c->snapshots.delete.work, bch2_delete_dead_snapshots_work);
 	mutex_init(&c->snapshots.delete.lock);
 	mutex_init(&c->snapshots.delete.progress_lock);
 
 	mutex_init(&c->snapshots.unlinked_lock);
+}
+
+int bch2_fs_snapshots_init(struct bch_fs *c)
+{
+	return percpu_init_rwsem(&c->snapshots.create_lock);
 }
 
 /* to_text() methods: */
