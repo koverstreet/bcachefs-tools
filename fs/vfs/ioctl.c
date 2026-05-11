@@ -214,6 +214,41 @@ static int bch2_ioc_goingdown(struct bch_fs *c, u32 __user *arg)
 	}
 }
 
+/*
+ * Walk this fs's mapped inodes and unmap their writable PTEs.
+ *
+ * mmap stores after page_mkwrite has armed the PTE for write don't re-enter
+ * the FS — userspace writes go straight to the page cache. We need to force
+ * a re-fault around snapshot creation so that subsequent mmap writes hit
+ * page_mkwrite (which takes the snapshot create read lock and so blocks
+ * while we hold it as a writer).
+ *
+ * Walks c->vfs.inodes (bcachefs-internal fast_list, lockless iteration); RCU
+ * keeps inode memory valid until igrab pins it.
+ */
+static void bch2_unmap_mapped_inodes(struct bch_fs *c)
+{
+	struct bch_inode_info *inode;
+	struct genradix_iter iter;
+
+	rcu_read_lock();
+	fast_list_for_each(&c->vfs.inodes, iter, inode) {
+		if (inode_state_read_once(&inode->v) & (I_FREEING|I_WILL_FREE|I_NEW))
+			continue;
+		if (!mapping_mapped(inode->v.i_mapping))
+			continue;
+		if (!igrab(&inode->v))
+			continue;
+		rcu_read_unlock();
+
+		unmap_mapping_range(inode->v.i_mapping, 0, 0, 1);
+		iput(&inode->v);
+
+		rcu_read_lock();
+	}
+	rcu_read_unlock();
+}
+
 static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 					  struct bch_ioctl_subvolume_v2 arg,
 					  struct printbuf *err)
@@ -247,12 +282,6 @@ static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 
 	if (arg.flags & BCH_SUBVOL_SNAPSHOT_RO)
 		create_flags |= BCH_CREATE_SNAPSHOT_RO;
-
-	if (arg.flags & BCH_SUBVOL_SNAPSHOT_CREATE) {
-		/* sync_inodes_sb enforce s_umount is locked */
-		guard(rwsem_read)(&c->vfs_sb->s_umount);
-		sync_inodes_sb(c->vfs_sb);
-	}
 
 	if (arg.src_ptr) {
 		error = user_path_at(arg.dirfd,
@@ -319,10 +348,28 @@ static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 	    !arg.src_ptr)
 		snapshot_src.subvol = inode_inum(to_bch_ei(dir)).subvol;
 
-	scoped_guard(rwsem_write, &c->snapshots.create_lock)
-		inode = __bch2_create(file_mnt_idmap(filp), to_bch_ei(dir),
-				      dst_dentry, arg.mode|S_IFDIR,
-				      0, snapshot_src, create_flags);
+	if (arg.flags & BCH_SUBVOL_SNAPSHOT_CREATE) {
+		/*
+		 * Atomicity: block new page-cache dirtiers (write_iter,
+		 * page_mkwrite), flush existing dirty pages, then shoot down
+		 * writable PTEs so any subsequent mmap stores have to refault
+		 * and re-enter page_mkwrite (which blocks on our writer).
+		 * Flush again to catch anything dirtied through PTEs between
+		 * the first sync and the unmap.
+		 */
+		percpu_down_write(&c->snapshots.create_lock);
+		scoped_guard(rwsem_read, &c->vfs_sb->s_umount) {
+			sync_inodes_sb(c->vfs_sb);
+			bch2_unmap_mapped_inodes(c);
+			sync_inodes_sb(c->vfs_sb);
+		}
+	} else {
+		percpu_down_write(&c->snapshots.create_lock);
+	}
+	inode = __bch2_create(file_mnt_idmap(filp), to_bch_ei(dir),
+			      dst_dentry, arg.mode|S_IFDIR,
+			      0, snapshot_src, create_flags);
+	percpu_up_write(&c->snapshots.create_lock);
 	error = PTR_ERR_OR_ZERO(inode);
 	if (error)
 		goto err3;

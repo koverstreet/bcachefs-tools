@@ -1301,6 +1301,7 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	try(bch2_fs_errors_init(c));
 	try(bch2_fs_encryption_init(c));
 	try(bch2_fs_io_read_init(c));
+	try(bch2_fs_snapshots_init(c));
 	try(bch2_fs_vfs_init(c));
 	try(bch2_io_clock_init(&c->io_clock[READ]));
 	try(bch2_io_clock_init(&c->io_clock[WRITE]));
