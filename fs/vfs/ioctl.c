@@ -290,12 +290,6 @@ static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 	if (arg.flags & BCH_SUBVOL_SNAPSHOT_RO)
 		create_flags |= BCH_CREATE_SNAPSHOT_RO;
 
-	if (arg.flags & BCH_SUBVOL_SNAPSHOT_CREATE) {
-		/* sync_inodes_sb enforce s_umount is locked */
-		guard(rwsem_read)(&c->vfs_sb->s_umount);
-		sync_inodes_sb(c->vfs_sb);
-	}
-
 	if (arg.src_ptr) {
 		error = user_path_at(arg.dirfd,
 				(const char __user *)(unsigned long)arg.src_ptr,
@@ -361,10 +355,23 @@ static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 	    !arg.src_ptr)
 		snapshot_src.subvol = inode_inum(to_bch_ei(dir)).subvol;
 
-	scoped_guard(rwsem_write, &c->snapshots.create_lock)
-		inode = __bch2_create(file_mnt_idmap(filp), to_bch_ei(dir),
-				      dst_dentry, arg.mode|S_IFDIR,
-				      0, snapshot_src, create_flags);
+	/*
+	 * Atomicity: take create_lock as a writer to block new page-cache
+	 * dirtiers (write_iter, page_mkwrite), then flush existing dirty
+	 * pages. Writeback's folio_clear_dirty_for_io path WPs every PTE
+	 * pointing at a dirty folio (via folio_mkclean), so when sync
+	 * returns no writable PTE remains — any subsequent mmap store
+	 * traps to page_mkwrite, which then blocks on the writer.
+	 */
+	percpu_down_write(&c->snapshots.create_lock);
+	if (arg.flags & BCH_SUBVOL_SNAPSHOT_CREATE) {
+		scoped_guard(rwsem_read, &c->vfs_sb->s_umount)
+			sync_inodes_sb(c->vfs_sb);
+	}
+	inode = __bch2_create(file_mnt_idmap(filp), to_bch_ei(dir),
+			      dst_dentry, arg.mode|S_IFDIR,
+			      0, snapshot_src, create_flags);
+	percpu_up_write(&c->snapshots.create_lock);
 	error = PTR_ERR_OR_ZERO(inode);
 	if (error)
 		goto err3;
