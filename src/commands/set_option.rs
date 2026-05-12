@@ -136,7 +136,7 @@ fn set_option_offline(
 
         if flags & c::opt_flags::OPT_FS as u32 != 0 {
             let ret = unsafe {
-                c::bch2_opt_hook_pre_set(fs.raw, std::ptr::null_mut(), 0, opt_id, val, true)
+                c::bch2_opt_hook_pre_set(fs.raw, std::ptr::null_mut(), 0, opt_id, val, true, std::ptr::null_mut())
             };
             if ret < 0 {
                 eprintln!("Error setting {name}: {ret}");
@@ -162,7 +162,7 @@ fn set_option_offline(
                 }
 
                 let ret = unsafe {
-                    c::bch2_opt_hook_pre_set(fs.raw, ca, 0, opt_id, val, true)
+                    c::bch2_opt_hook_pre_set(fs.raw, ca, 0, opt_id, val, true, std::ptr::null_mut())
                 };
                 if ret < 0 {
                     eprintln!("Error setting {name}: {ret}");
