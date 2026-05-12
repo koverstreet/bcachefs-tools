@@ -36,3 +36,4 @@ Future design
    :maxdepth: 1
 
    future/idle_work
+   future/lseek_error_extents
