@@ -41,6 +41,7 @@ struct inode {
 	struct super_block	*i_sb;
 	blk_mode_t		mode;
 	void			*i_private;
+	unsigned		i_state;
 };
 
 struct request_queue {
