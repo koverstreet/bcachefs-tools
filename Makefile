@@ -267,6 +267,23 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	sed -i "s|^#define TRACE_INCLUDE_PATH \\.\\./\\.\\./fs/bcachefs$$|#define TRACE_INCLUDE_PATH .|" \
 	  $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/debug/trace.h
 
+# Build the kernel module via DKMS and load it. Must run as root
+# (sudo make dkms-reload). Idempotent — re-running rebuilds + reloads.
+.PHONY: dkms-reload
+dkms-reload: all
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "dkms-reload: must run as root (sudo make $@)"; exit 1; \
+	fi
+	$(Q)$(MAKE) install_dkms
+	@echo "    [DKMS]   bcachefs/$(VERSION)"
+	$(Q)dkms remove  -m bcachefs -v $(VERSION) --all 2>/dev/null || true
+	$(Q)dkms add     -m bcachefs -v $(VERSION)
+	$(Q)dkms build   -m bcachefs -v $(VERSION)
+	$(Q)dkms install -m bcachefs -v $(VERSION)
+	$(Q)modprobe -r bcachefs 2>/dev/null || true
+	$(Q)modprobe bcachefs
+	@modinfo bcachefs | grep -E '^(version|filename|srcversion):'
+
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
