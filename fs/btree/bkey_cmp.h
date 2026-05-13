@@ -110,11 +110,16 @@ int bch2_bkey_cmp_packed_inlined(const struct btree *b,
 			 const struct bkey_packed *l,
 			 const struct bkey_packed *r)
 {
-	struct bkey unpacked;
-
 	if (likely(bkey_packed(l) && bkey_packed(r)))
 		return __bch2_bkey_cmp_packed_format_checked_inlined(l, r, b);
 
+	/*
+	 * Declare in the cold mixed packed/unpacked branch so the
+	 * CONFIG_INIT_STACK_ALL_PATTERN auto-init (5 x mov of the 0xFE
+	 * pattern over sizeof(struct bkey) == 40 bytes) doesn't run on
+	 * every hot-path call where the buffer is never touched.
+	 */
+	struct bkey unpacked;
 	if (bkey_packed(l)) {
 		__bkey_unpack_key_format_checked(b, &unpacked, l);
 		l = (void *) &unpacked;
