@@ -339,22 +339,22 @@ static inline struct btree_node_entry *want_new_bset(struct bch_fs *c, struct bt
 
 static inline void push_whiteout(struct btree *b, struct bpos pos)
 {
-	struct bkey_packed k;
+	struct bkey_packed_padded k;
 
 	BUG_ON(bch2_btree_keys_u64s_remaining(b) < BKEY_U64s);
 	EBUG_ON(btree_node_just_written(b));
 
-	if (!bkey_pack_pos(&k, pos, b)) {
-		struct bkey *u = (void *) &k;
+	if (!bkey_pack_pos(&k.k, pos, b)) {
+		struct bkey *u = (void *) &k.k;
 
 		bkey_init(u);
 		u->p = pos;
 	}
 
-	k.needs_whiteout = true;
+	k.k.needs_whiteout = true;
 
-	b->whiteout_u64s += k.u64s;
-	bkey_p_copy(unwritten_whiteouts_start(b), &k);
+	b->whiteout_u64s += k.k.u64s;
+	bkey_p_copy(unwritten_whiteouts_start(b), &k.k);
 }
 
 /*

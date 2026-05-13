@@ -35,6 +35,29 @@ enum bkey_lr_packed {
 #define bkey_lr_packed(_l, _r)						\
 	((_l)->format + ((_r)->format << 1))
 
+/*
+ * Wrapper for stack-allocated struct bkey_packed.
+ *
+ * The byte-aligned fast-path unpackers (__bch2_bkey_unpack_key_b,
+ * __bkey_unpack_pos_b) issue an 8-byte unaligned load at @bytes +
+ * uf->byte_offset, where byte_offset is signed and can be as low as -7
+ * (and __bch2_bkey_unpack_key_b's header trick reads @bytes - 1). This
+ * is safe for bkeys inside a bset (preceded by the bset header or by
+ * another bkey), but reads into the stack redzone for a bare stack-local
+ * struct bkey_packed. Wrap stack copies in this to provide the leading
+ * padding.
+ */
+struct bkey_packed_padded {
+	u8			_pad[8];
+	struct bkey_packed	k;
+};
+
+/* Same trick for stack-local struct bkey_i (when used as pack target). */
+struct bkey_i_padded {
+	u8			_pad[8];
+	struct bkey_i		k;
+};
+
 static inline void bkey_p_copy(struct bkey_packed *dst, const struct bkey_packed *src)
 {
 	memcpy_u64s_small(dst, src, src->u64s);
@@ -391,6 +414,8 @@ void bch2_compute_bkey_unpack_consts(struct btree *);
 #ifndef HAVE_BCACHEFS_COMPILED_UNPACK
 struct bpos __bkey_unpack_pos(const struct bkey_format *,
 			      const struct bkey_packed *);
+struct bpos __bkey_unpack_pos_b(const struct btree *,
+				const struct bkey_packed *);
 #endif
 
 bool bch2_bkey_pack_key(struct bkey_packed *, const struct bkey *,
@@ -483,7 +508,7 @@ bkey_unpack_pos_format_checked(const struct btree *b,
 #ifdef HAVE_BCACHEFS_COMPILED_UNPACK
 	return bkey_unpack_key_format_checked(b, src).p;
 #else
-	return __bkey_unpack_pos(&b->format, src);
+	return __bkey_unpack_pos_b(b, src);
 #endif
 }
 
