@@ -245,30 +245,6 @@ journal_error_check_stuck(struct journal *j, int error, unsigned flags)
 	return true;
 }
 
-void bch2_journal_do_writes_locked(struct journal *j)
-{
-	lockdep_assert_held(&j->lock);
-
-	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	u64 seq = journal_last_unallocated_seq(j);
-	struct journal_buf *w = seq ? journal_seq_to_buf(j, seq) : NULL;
-
-	if (w &&
-	    !w->write_started &&
-	    !journal_state_seq_count(j, j->reservations, seq)) {
-		j->seq_write_started = seq;
-		w->write_started = true;
-		closure_get(&c->cl);
-		closure_call(&w->io, bch2_journal_write, j->wq, NULL);
-	}
-}
-
-void bch2_journal_do_writes(struct journal *j)
-{
-	guard(spinlock)(&j->lock);
-	bch2_journal_do_writes_locked(j);
-}
-
 /*
  * Final processing when the last reference of a journal buffer has been
  * dropped. Drop the pin list reference acquired at journal entry open and write
