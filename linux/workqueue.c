@@ -21,15 +21,6 @@ struct workqueue_struct {
 	char			name[24];
 };
 
-enum {
-	WORK_PENDING_BIT,
-};
-
-static bool work_pending(struct work_struct *work)
-{
-	return test_bit(WORK_PENDING_BIT, work_data_bits(work));
-}
-
 static void clear_work_pending(struct work_struct *work)
 {
 	clear_bit(WORK_PENDING_BIT, work_data_bits(work));

@@ -22,6 +22,10 @@ enum {
 };
 #endif
 
+enum {
+	WORK_PENDING_BIT,
+};
+
 struct work_struct {
 	atomic_long_t data;
 	struct list_head entry;
@@ -50,6 +54,16 @@ struct delayed_work {
 static inline struct delayed_work *to_delayed_work(struct work_struct *work)
 {
 	return container_of(work, struct delayed_work, work);
+}
+
+static inline bool work_pending(struct work_struct *work)
+{
+	return test_bit(WORK_PENDING_BIT, work_data_bits(work));
+}
+
+static inline bool delayed_work_pending(struct delayed_work *dwork)
+{
+	return work_pending(&dwork->work);
 }
 
 enum {
