@@ -748,67 +748,6 @@ static int bch2_journal_write_checksum(struct journal *j, struct journal_buf *w)
 	return 0;
 }
 
-static int bch2_journal_write_pick_flush(struct journal *j, struct journal_buf *w)
-{
-	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	int error = bch2_journal_error(j);
-
-	/*
-	 * If the journal is in an error state - we did an emergency shutdown -
-	 * we prefer to continue doing journal writes. We just mark them as
-	 * noflush so they'll never be used, but they'll still be visible by the
-	 * list_journal tool - this helps in debugging.
-	 *
-	 * There's a caveat: the first journal write after marking the
-	 * superblock dirty must always be a flush write, because on startup
-	 * from a clean shutdown we didn't necessarily read the journal and the
-	 * new journal write might overwrite whatever was in the journal
-	 * previously - we can't leave the journal without any flush writes in
-	 * it.
-	 *
-	 * So if we're in an error state, and we're still starting up, we don't
-	 * write anything at all.
-	 */
-	if (error && test_bit(JOURNAL_need_flush_write, &j->flags))
-		return error;
-
-	if (error ||
-	    w->noflush ||
-	    (!w->must_flush &&
-	     time_before(jiffies, j->last_flush_write +
-		 msecs_to_jiffies(c->opts.journal_flush_delay)) &&
-	     test_bit(JOURNAL_may_skip_flush, &j->flags))) {
-		w->noflush = true;
-		SET_JSET_NO_FLUSH(w->data, true);
-		w->data->last_seq	= 0;
-		w->last_seq		= 0;
-
-		j->nr_noflush_writes++;
-	} else {
-		struct jset *jset = w->data;
-
-		w->must_flush = true;
-		j->last_flush_write = jiffies;
-		j->nr_flush_writes++;
-		clear_bit(JOURNAL_need_flush_write, &j->flags);
-
-		if (!c->opts.journal_rewind_discard_buffer_percent)
-			j->rewind_seq = le64_to_cpu(jset->seq) + 1;
-
-		struct jset_entry *end = vstruct_last(jset);
-		struct jset_entry_rewind_limit *r =
-			container_of(jset_entry_init(&end, sizeof(*r)),
-				     struct jset_entry_rewind_limit, entry);
-		r->entry.type	= BCH_JSET_ENTRY_rewind_limit;
-		r->seq		= cpu_to_le64(min(j->rewind_seq,
-						  le64_to_cpu(jset->seq) + 1));
-		le32_add_cpu(&jset->u64s,
-			     sizeof(*r) / sizeof(u64));
-	}
-
-	return 0;
-}
-
 CLOSURE_CALLBACK(bch2_journal_write)
 {
 	closure_type(w, struct journal_buf, io);
@@ -825,20 +764,15 @@ CLOSURE_CALLBACK(bch2_journal_write)
 
 	j->write_start_time = local_clock();
 
-	scoped_guard(spinlock, &j->lock) {
-		BUG_ON(journal_last_unallocated_seq(j) != le64_to_cpu(w->data->seq));
-
-		if (nr_rw_members > 1)
-			w->separate_flush = true;
-
-		ret = bch2_journal_write_pick_flush(j, w);
-	}
-
-	if (unlikely(ret))
+	ret = bch2_journal_error(j);
+	if (unlikely(ret && test_bit(JOURNAL_need_flush_write, &j->flags)))
 		goto err;
 
 	scoped_guard(mutex, &j->buf_lock) {
 		journal_buf_realloc(j, w);
+
+		if (nr_rw_members > 1)
+			w->separate_flush = true;
 
 		ret = bch2_journal_write_prep(j, w);
 	}
@@ -863,6 +797,8 @@ CLOSURE_CALLBACK(bch2_journal_write)
 		goto err;
 
 	scoped_guard(spinlock, &j->lock) {
+		BUG_ON(journal_last_unallocated_seq(j) != le64_to_cpu(w->data->seq));
+
 		/*
 		 * write is allocated, no longer need to account for it in
 		 * bch2_journal_space_available():
@@ -940,14 +876,63 @@ void bch2_journal_do_writes_locked(struct journal *j)
 	u64 seq = journal_last_unallocated_seq(j);
 	struct journal_buf *w = seq ? journal_seq_to_buf(j, seq) : NULL;
 
-	if (w &&
-	    !w->write_started &&
-	    !journal_state_seq_count(j, j->reservations, seq)) {
-		j->seq_write_started = seq;
-		w->write_started = true;
-		closure_get(&c->cl);
-		closure_call(&w->io, bch2_journal_write, j->wq, NULL);
+	if (!w || w->write_started || journal_state_seq_count(j, j->reservations, seq))
+		return;
+
+	/*
+	 * If the journal is in an error state - we did an emergency shutdown -
+	 * we prefer to continue doing journal writes. We just mark them as
+	 * noflush so they'll never be used, but they'll still be visible by the
+	 * list_journal tool - this helps in debugging.
+	 *
+	 * There's a caveat: the first journal write after marking the
+	 * superblock dirty must always be a flush write, because on startup
+	 * from a clean shutdown we didn't necessarily read the journal and the
+	 * new journal write might overwrite whatever was in the journal
+	 * previously - we can't leave the journal without any flush writes in
+	 * it.
+	 *
+	 * So if we're in an error state, and we're still starting up, we don't
+	 * write anything at all.
+	 */
+	if (bch2_journal_error(j) ||
+	    w->noflush ||
+	    (!w->must_flush &&
+	     time_before(jiffies, j->last_flush_write +
+		 msecs_to_jiffies(c->opts.journal_flush_delay)) &&
+	     test_bit(JOURNAL_may_skip_flush, &j->flags))) {
+		w->noflush = true;
+		SET_JSET_NO_FLUSH(w->data, true);
+		w->data->last_seq	= 0;
+		w->last_seq		= 0;
+
+		j->nr_noflush_writes++;
+	} else {
+		struct jset *jset = w->data;
+
+		w->must_flush = true;
+		j->last_flush_write = jiffies;
+		j->nr_flush_writes++;
+		clear_bit(JOURNAL_need_flush_write, &j->flags);
+
+		if (!c->opts.journal_rewind_discard_buffer_percent)
+			j->rewind_seq = le64_to_cpu(jset->seq) + 1;
+
+		struct jset_entry *end = vstruct_last(jset);
+		struct jset_entry_rewind_limit *r =
+			container_of(jset_entry_init(&end, sizeof(*r)),
+				     struct jset_entry_rewind_limit, entry);
+		r->entry.type	= BCH_JSET_ENTRY_rewind_limit;
+		r->seq		= cpu_to_le64(min(j->rewind_seq,
+						  le64_to_cpu(jset->seq) + 1));
+		le32_add_cpu(&jset->u64s,
+			     sizeof(*r) / sizeof(u64));
 	}
+
+	j->seq_write_started = seq;
+	w->write_started = true;
+	closure_get(&c->cl);
+	closure_call(&w->io, bch2_journal_write, j->wq, NULL);
 }
 
 void bch2_journal_do_writes(struct journal *j)
