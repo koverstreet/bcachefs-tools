@@ -169,8 +169,6 @@ static void bch2_journal_buf_to_text(struct printbuf *out, struct journal *j,
 		prt_newline(out);
 	}
 
-	prt_printf(out, "expires:\t%li jiffies\n", buf->expires - jiffies);
-
 	prt_printf(out, "flags:\t");
 	if (buf->noflush)
 		prt_str(out, "noflush ");
@@ -391,14 +389,6 @@ bool bch2_journal_entry_close_locked(struct journal *j)
 	/* Don't close it yet if we already have a write in flight: */
 	if (ret)
 		__journal_entry_close(j, JOURNAL_ENTRY_CLOSED_VAL, true);
-	else if (nr_unwritten_journal_entries(j)) {
-		struct journal_buf *buf = journal_cur_buf(j);
-
-		if (!buf->flush_time) {
-			buf->flush_time	= local_clock() ?: 1;
-			buf->expires = jiffies;
-		}
-	}
 
 	return ret;
 }
@@ -493,12 +483,6 @@ static int journal_entry_open(struct journal *j)
 	/* Claim the pre-allocated data buffer */
 	swap(buf->data,		j->free_buf);
 	swap(buf->buf_size,	j->free_buf_size);
-
-	buf->expires		=
-		(seq == j->flushed_seq_ondisk
-		 ? jiffies
-		 : j->last_flush_write) +
-		msecs_to_jiffies(c->opts.journal_flush_delay);
 
 	buf->u64s_reserved	= j->entry_u64s_reserved;
 	buf->disk_sectors	= j->cur_entry_sectors;
@@ -907,14 +891,8 @@ recheck_need_open:
 		 */
 		buf = journal_res_buf(j, &res);
 
-		scoped_guard(spinlock, &j->lock) {
+		scoped_guard(spinlock, &j->lock)
 			buf->must_flush = true;
-
-			if (!buf->flush_time) {
-				buf->flush_time	= local_clock() ?: 1;
-				buf->expires = jiffies;
-			}
-		}
 
 		if (parent && !closure_wait(&buf->wait, parent))
 			BUG();
@@ -1058,14 +1036,8 @@ int __bch2_journal_meta(struct journal *j)
 
 	struct journal_buf *buf = journal_res_buf(j, &res);
 
-	scoped_guard(spinlock, &j->lock) {
+	scoped_guard(spinlock, &j->lock)
 		buf->must_flush = true;
-
-		if (!buf->flush_time) {
-			buf->flush_time	= local_clock() ?: 1;
-			buf->expires = jiffies;
-		}
-	}
 
 	bch2_journal_res_put(j, &res);
 
