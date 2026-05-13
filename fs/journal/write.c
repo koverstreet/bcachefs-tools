@@ -404,21 +404,17 @@ static CLOSURE_CALLBACK(journal_write_done)
 		journal_wake(j);
 	}
 
-	if (fifo_used(&j->in_flight) == 1 &&
-	    j->reservations.cur_entry_offset < JOURNAL_ENTRY_CLOSED_VAL) {
-		struct journal_buf *buf = journal_cur_buf(j);
-		long delta = buf->expires - jiffies;
-
-		/*
-		 * We don't close a journal entry to write it while there's
-		 * previous entries still in flight - the current journal entry
-		 * might want to be written now:
-		 */
-		mod_delayed_work(j->wq, &j->write_work, max(0L, delta));
-	}
+	/*
+	 * If the pipeline's drained and the open entry has a flush requested
+	 * (e.g. cascaded onto it from an earlier entry we demoted to noflush),
+	 * close it now so it gets written as the next flush - we don't close it
+	 * to write it while there are previous entries still in flight:
+	 */
+	if (journal_cur_buf(j)->must_flush)
+		bch2_journal_entry_close_locked(j);
 
 	/*
-	 * We don't typically trigger journal writes from her - the next journal
+	 * We don't typically trigger journal writes from here - the next journal
 	 * write will be triggered immediately after the previous one is
 	 * allocated, in bch2_journal_write() - but the journal write error path
 	 * is special:
@@ -915,6 +911,14 @@ void bch2_journal_do_writes_locked(struct journal *j)
 						  le64_to_cpu(jset->seq) + 1));
 		le32_add_cpu(&jset->u64s,
 			     sizeof(*r) / sizeof(u64));
+
+		/*
+		 * (Re-)arm the auto-commit timer: if nothing else
+		 * commits first, close + write the open entry in at most
+		 * journal_flush_delay.
+		 */
+		mod_delayed_work(j->wq, &j->write_work,
+				 msecs_to_jiffies(c->opts.journal_flush_delay));
 	}
 
 	j->seq_write_started = seq;
