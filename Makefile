@@ -298,16 +298,11 @@ cargo-update-msrv:
 	cargo +nightly generate-lockfile -Zmsrv-policy
 	cargo +nightly generate-lockfile --manifest-path bch_bindgen/Cargo.toml -Zmsrv-policy
 
-.PHONY: update-bcachefs-sources
-update-bcachefs-sources:
-	git rm -rf --ignore-unmatch fs
-	mkdir -p fs/vendor
-	cp -r $(LINUX_DIR)/fs/bcachefs/* fs/
-	git add fs/*.[ch]
-	git add fs/*/*.[ch]
-	git add fs/*/*/*.[ch]
-	git add fs/Makefile
-	git add fs/Kconfig
+# Refresh the small set of kernel files we vendor verbatim (not bcachefs
+# source — that lives in fs/ and is developed in-tree now). See
+# doc/vendored-kernel-files.md for the why and the list.
+.PHONY: update-vendored-kernel-sources
+update-vendored-kernel-sources:
 	cp $(LINUX_DIR)/include/linux/xxhash.h include/linux/
 	git add include/linux/xxhash.h
 	cp $(LINUX_DIR)/lib/xxhash.c linux/
@@ -326,14 +321,10 @@ update-bcachefs-sources:
 	git add linux/int_sqrt.c
 	cp $(LINUX_DIR)/scripts/Makefile.compiler ./
 	git add Makefile.compiler
-	$(RM) fs/*.mod.c
-	git -C $(LINUX_DIR) rev-parse HEAD | tee .bcachefs_revision
-	git add .bcachefs_revision
 
-
-.PHONY: update-commit-bcachefs-sources
-update-commit-bcachefs-sources: update-bcachefs-sources
-	git commit -m "Update bcachefs sources to $(shell git -C $(LINUX_DIR) show --oneline --no-patch)"
+.PHONY: update-commit-vendored-kernel-sources
+update-commit-vendored-kernel-sources: update-vendored-kernel-sources
+	git commit -m "Update vendored kernel sources to $(shell git -C $(LINUX_DIR) show --oneline --no-patch)"
 
 SRCTARXZ = bcachefs-tools-$(VERSION).tar.xz
 SRCDIR=bcachefs-tools-$(VERSION)
