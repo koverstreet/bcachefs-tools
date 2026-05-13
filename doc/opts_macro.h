@@ -1,4 +1,4 @@
-#include "../libbcachefs/opts.h"
+#include "../fs/opts.h"
 
 /**
  * generate tables from definitions in opt.h

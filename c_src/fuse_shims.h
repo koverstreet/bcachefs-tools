@@ -2,9 +2,9 @@
 #ifndef _FUSE_SHIMS_H
 #define _FUSE_SHIMS_H
 
-#include "libbcachefs/bcachefs.h"
-#include "libbcachefs/fs/inode.h"
-#include "libbcachefs/alloc/buckets.h"
+#include "fs/bcachefs.h"
+#include "fs/fs/inode.h"
+#include "fs/alloc/buckets.h"
 
 /*
  * C shims for the Rust FUSE mount command.

@@ -334,7 +334,7 @@ fn main() {
     // Watch all C/H files that the wrapper might include, so bindgen
     // reruns when any header changes — not just the handful we used
     // to list explicitly.
-    for dir in ["../libbcachefs", "../c_src", "../include"] {
+    for dir in ["../fs", "../c_src", "../include"] {
         watch_dir(dir);
     }
 
@@ -366,7 +366,7 @@ fn main() {
                 .map(|p| format!("-I{}", p.display())),
         )
         .clang_arg("-I..")
-        .clang_arg("-I../libbcachefs")
+        .clang_arg("-I../fs")
         .clang_arg("-I../c_src")
         .clang_arg("-I../include")
         .clang_arg("-DZSTD_STATIC_LINKING_ONLY")
@@ -458,7 +458,7 @@ fn main() {
     .expect("Writing to output file failed for: `bcachefs.rs`");
 
     // Generate from x-macros in bcachefs_format.h
-    let format_h = std::fs::read_to_string(top_dir.join("../libbcachefs/bcachefs_format.h"))
+    let format_h = std::fs::read_to_string(top_dir.join("../fs/bcachefs_format.h"))
         .expect("reading bcachefs_format.h");
 
     let bkey_types = parse_xmacro(&format_h, "BCH_BKEY_TYPES");
@@ -477,7 +477,7 @@ fn main() {
     )
     .expect("Writing sb_field_types_gen.rs");
 
-    let members_h = std::fs::read_to_string(top_dir.join("../libbcachefs/sb/members_format.h"))
+    let members_h = std::fs::read_to_string(top_dir.join("../fs/sb/members_format.h"))
         .expect("reading members_format.h");
     let member_states = parse_xmacro(&members_h, "BCH_MEMBER_STATES");
     assert!(!member_states.is_empty(), "failed to parse BCH_MEMBER_STATES()");
@@ -487,7 +487,7 @@ fn main() {
     )
     .expect("Writing member_states_gen.rs");
 
-    let counters_h = std::fs::read_to_string(top_dir.join("../libbcachefs/sb/counters_format.h"))
+    let counters_h = std::fs::read_to_string(top_dir.join("../fs/sb/counters_format.h"))
         .expect("reading counters_format.h");
     let counters = parse_xmacro(&counters_h, "BCH_PERSISTENT_COUNTERS");
     assert!(!counters.is_empty(), "failed to parse BCH_PERSISTENT_COUNTERS()");
@@ -497,7 +497,7 @@ fn main() {
     )
     .expect("Writing counters_gen.rs");
 
-    let extents_h = std::fs::read_to_string(top_dir.join("../libbcachefs/data/extents_format.h"))
+    let extents_h = std::fs::read_to_string(top_dir.join("../fs/data/extents_format.h"))
         .expect("reading extents_format.h");
     let extent_entry_types = parse_xmacro(&extents_h, "BCH_EXTENT_ENTRY_TYPES");
     assert!(!extent_entry_types.is_empty(), "failed to parse BCH_EXTENT_ENTRY_TYPES()");

@@ -45,8 +45,8 @@
 
 #include <linux/percpu.h>
 
-#include "libbcachefs/util/darray.h"
-#include "libbcachefs/util/util.h"
+#include "fs/util/darray.h"
+#include "fs/util/util.h"
 
 extern char __start_bch_percpu[], __stop_bch_percpu[];
 

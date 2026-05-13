@@ -69,7 +69,7 @@ see what's been analyzed and what was decided.
 
 ### Calibrate to the risk
 
-- **Kernel code** (`libbcachefs/`, `fs/bcachefs/`): Go slow. Research
+- **Kernel code** (`fs/`, `fs/bcachefs/`): Go slow. Research
   thoroughly. Always discuss design before implementing. Pay special
   attention to error paths, transaction restart handling, and locking.
   Don't commit kernel C changes to the tools tree — kernel code is

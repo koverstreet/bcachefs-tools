@@ -620,7 +620,7 @@ fn parse_opts(entries: &[Vec<String>]) -> Vec<OptEntry> {
 
 fn generate_opts_table(opts: &[OptEntry]) -> String {
     let mut out = String::new();
-    out.push_str("% Auto-generated from BCH_OPTS() in libbcachefs/opts.h — do not edit\n");
+    out.push_str("% Auto-generated from BCH_OPTS() in fs/opts.h — do not edit\n");
     out.push_str("% Regenerate with: cargo run -p bch-docgen\n\n");
 
     out.push_str("\\small\n");
@@ -690,7 +690,7 @@ struct EnumList {
 const ENUM_LISTS: &[EnumList] = &[
     EnumList {
         key: "error-actions",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_ERROR_ACTIONS",
         default: Some("fix_safe"),
         doc_field: Some(2),
@@ -701,7 +701,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "csum-opts",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_CSUM_OPTS",
         default: Some("crc32c"),
         doc_field: None,
@@ -712,7 +712,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "compression-opts",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_COMPRESSION_OPTS",
         default: Some("none"),
         doc_field: None,
@@ -723,7 +723,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "str-hash-opts",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_STR_HASH_OPTS",
         default: Some("siphash"),
         doc_field: None,
@@ -734,7 +734,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "btree-ids",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_BTREE_IDS",
         default: None,
         doc_field: Some(4),
@@ -745,7 +745,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "time-stats",
-        header: "libbcachefs/bcachefs.h",
+        header: "fs/bcachefs.h",
         macro_name: "BCH_TIME_STATS",
         default: None,
         doc_field: Some(1),
@@ -756,7 +756,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "sb-fields",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_SB_FIELDS",
         default: None,
         doc_field: Some(2),
@@ -767,7 +767,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "jset-entry-types",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_JSET_ENTRY_TYPES",
         default: None,
         doc_field: Some(2),
@@ -778,7 +778,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "counters",
-        header: "libbcachefs/sb/counters_format.h",
+        header: "fs/sb/counters_format.h",
         macro_name: "BCH_PERSISTENT_COUNTERS",
         default: None,
         doc_field: Some(3),
@@ -789,7 +789,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "bkey-types",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_BKEY_TYPES",
         default: None,
         doc_field: Some(3),
@@ -800,7 +800,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "metadata-versions",
-        header: "libbcachefs/bcachefs_format.h",
+        header: "fs/bcachefs_format.h",
         macro_name: "BCH_METADATA_VERSIONS",
         default: None,
         doc_field: Some(2),
@@ -811,7 +811,7 @@ const ENUM_LISTS: &[EnumList] = &[
     },
     EnumList {
         key: "recovery-passes",
-        header: "libbcachefs/init/passes_format.h",
+        header: "fs/init/passes_format.h",
         macro_name: "BCH_RECOVERY_PASSES",
         default: None,
         doc_field: Some(4),
@@ -966,11 +966,11 @@ fn find_root() -> PathBuf {
     }
     let mut dir = std::env::current_dir().unwrap();
     loop {
-        if dir.join("libbcachefs").is_dir() {
+        if dir.join("fs").is_dir() {
             return dir;
         }
         if !dir.pop() {
-            eprintln!("error: cannot find bcachefs-tools root (no libbcachefs/ found)");
+            eprintln!("error: cannot find bcachefs-tools root (no fs/ found)");
             std::process::exit(1);
         }
     }
@@ -985,7 +985,7 @@ fn main() {
     let mut errors = 0;
 
     // --- DOC() blocks from C sources ---
-    let mut doc_blocks = extract_doc_blocks(&root.join("libbcachefs"));
+    let mut doc_blocks = extract_doc_blocks(&root.join("fs"));
     doc_blocks.append(&mut extract_doc_blocks(&root.join("c_src")));
 
     for block in &doc_blocks {
@@ -1007,7 +1007,7 @@ fn main() {
     }
 
     // --- BCH_OPTS() table ---
-    let opts_source = fs::read_to_string(root.join("libbcachefs/opts.h")).unwrap();
+    let opts_source = fs::read_to_string(root.join("fs/opts.h")).unwrap();
     let opts_entries = parse_xmacro(&opts_source, "BCH_OPTS");
     let opts = parse_opts(&opts_entries);
     let table = generate_opts_table(&opts);

@@ -7,11 +7,11 @@
  * and go dynamically, so we register init_one/exit_one via bch_percpu_register()
  * and let the registry call them per-thread at thread-create / module-exit.
  *
- * Lives outside libbcachefs/ so it doesn't get clobbered on next sync.
+ * Lives outside fs/ so it doesn't get clobbered on next sync.
  */
 #include <linux/percpu.h>
 
-#include "libbcachefs/btree/locking.h"
+#include "fs/btree/locking.h"
 
 __attribute__((constructor(115)))
 static void bch2_percpu_register(void)

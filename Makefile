@@ -47,7 +47,7 @@ CFLAGS+=-std=gnu11 -O2 -g -MMD -Wall -fPIC			\
 	-Wno-deprecated-declarations				\
 	-fno-strict-aliasing					\
 	-fno-delete-null-pointer-checks				\
-	-I. -Ic_src -Ilibbcachefs -Iinclude -Iraid		\
+	-I. -Ic_src -Ifs -Iinclude -Iraid		\
 	-D_FILE_OFFSET_BITS=64					\
 	-D_GNU_SOURCE						\
 	-D_LGPL_SOURCE						\
@@ -168,6 +168,8 @@ tags:
 	ctags -R .
 
 SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './debian/*' -iname '*.c'))
+# KUnit test — kernel-only, no userspace equivalent for <kunit/test.h>
+SRCS:=$(filter-out %/mean_and_variance_test.c, $(SRCS))
 DEPS:=$(SRCS:.c=.d)
 -include $(DEPS)
 
@@ -258,8 +260,8 @@ install_systemd: $(systemd_services) $(systemd_libexecfiles)
 install_dkms: dkms/dkms.conf dkms/module-version.c
 	$(INSTALL) -m0644 -D dkms/Makefile		-t $(DESTDIR)$(DKMSDIR)
 	$(INSTALL) -m0644 -D dkms/dkms.conf		-t $(DESTDIR)$(DKMSDIR)
-	$(INSTALL) -m0644 -D libbcachefs/Makefile	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
-	(cd libbcachefs; find -name '*.[ch]' -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
+	$(INSTALL) -m0644 -D fs/Makefile	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
+	(cd fs; find -name '*.[ch]' -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	sed -i "s|^#define TRACE_INCLUDE_PATH \\.\\./\\.\\./fs/bcachefs$$|#define TRACE_INCLUDE_PATH .|" \
@@ -298,15 +300,14 @@ cargo-update-msrv:
 
 .PHONY: update-bcachefs-sources
 update-bcachefs-sources:
-	git rm -rf --ignore-unmatch libbcachefs
-	mkdir -p libbcachefs/vendor
-	cp -r $(LINUX_DIR)/fs/bcachefs/* libbcachefs/
-	git add libbcachefs/*.[ch]
-	git add libbcachefs/*/*.[ch]
-	git add libbcachefs/*/*/*.[ch]
-	git add libbcachefs/Makefile
-	git add libbcachefs/Kconfig
-	git rm -f libbcachefs/util/mean_and_variance_test.c
+	git rm -rf --ignore-unmatch fs
+	mkdir -p fs/vendor
+	cp -r $(LINUX_DIR)/fs/bcachefs/* fs/
+	git add fs/*.[ch]
+	git add fs/*/*.[ch]
+	git add fs/*/*/*.[ch]
+	git add fs/Makefile
+	git add fs/Kconfig
 	cp $(LINUX_DIR)/include/linux/xxhash.h include/linux/
 	git add include/linux/xxhash.h
 	cp $(LINUX_DIR)/lib/xxhash.c linux/
@@ -325,7 +326,7 @@ update-bcachefs-sources:
 	git add linux/int_sqrt.c
 	cp $(LINUX_DIR)/scripts/Makefile.compiler ./
 	git add Makefile.compiler
-	$(RM) libbcachefs/*.mod.c
+	$(RM) fs/*.mod.c
 	git -C $(LINUX_DIR) rev-parse HEAD | tee .bcachefs_revision
 	git add .bcachefs_revision
 

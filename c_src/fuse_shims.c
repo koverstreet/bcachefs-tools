@@ -10,17 +10,17 @@
 #include <string.h>
 
 #include "libbcachefs.h"
-#include "libbcachefs/bcachefs.h"
-#include "libbcachefs/fs/dirent.h"
-#include "libbcachefs/fs/namei.h"
-#include "libbcachefs/fs/inode.h"
-#include "libbcachefs/alloc/accounting.h"
-#include "libbcachefs/alloc/buckets.h"
-#include "libbcachefs/alloc/foreground.h"
-#include "libbcachefs/data/read.h"
-#include "libbcachefs/data/write.h"
-#include "libbcachefs/btree/iter.h"
-#include "libbcachefs/init/fs.h"
+#include "fs/bcachefs.h"
+#include "fs/fs/dirent.h"
+#include "fs/fs/namei.h"
+#include "fs/fs/inode.h"
+#include "fs/alloc/accounting.h"
+#include "fs/alloc/buckets.h"
+#include "fs/alloc/foreground.h"
+#include "fs/data/read.h"
+#include "fs/data/write.h"
+#include "fs/btree/iter.h"
+#include "fs/init/fs.h"
 
 #include <linux/dcache.h>
 
