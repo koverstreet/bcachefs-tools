@@ -346,8 +346,6 @@ static inline union journal_res_state journal_state_buf_put(struct journal *j, u
 
 bool bch2_journal_entry_close(struct journal *);
 
-void bch2_journal_do_writes_locked(struct journal *);
-void bch2_journal_do_writes(struct journal *);
 void bch2_journal_buf_put_final(struct journal *, u64);
 
 static inline void __bch2_journal_buf_put(struct journal *j, u64 seq)
