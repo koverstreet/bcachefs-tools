@@ -391,6 +391,8 @@ void bch2_compute_bkey_unpack_consts(struct btree *);
 #ifndef HAVE_BCACHEFS_COMPILED_UNPACK
 struct bpos __bkey_unpack_pos(const struct bkey_format *,
 			      const struct bkey_packed *);
+struct bpos __bkey_unpack_pos_b(const struct btree *,
+				const struct bkey_packed *);
 #endif
 
 bool bch2_bkey_pack_key(struct bkey_packed *, const struct bkey *,
@@ -483,7 +485,7 @@ bkey_unpack_pos_format_checked(const struct btree *b,
 #ifdef HAVE_BCACHEFS_COMPILED_UNPACK
 	return bkey_unpack_key_format_checked(b, src).p;
 #else
-	return __bkey_unpack_pos(&b->format, src);
+	return __bkey_unpack_pos_b(b, src);
 #endif
 }
 
