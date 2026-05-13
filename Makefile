@@ -8,7 +8,7 @@ endif
 
 PREFIX?=/usr/local
 LIBEXECDIR?=$(PREFIX)/libexec
-DKMSDIR?=$(PREFIX)/src/bcachefs-$(VERSION)
+DKMSDIR?=/usr/src/bcachefs-$(VERSION)
 PKG_CONFIG?=pkg-config
 INSTALL=install
 LN=ln
