@@ -82,6 +82,29 @@ static inline size_t buf_nr_bvecs(void *p, size_t len)
 		: 1;
 }
 
+/*
+ * Move all entries from one lock-less list onto another: atomic del_all on
+ * @from, then atomic add_batch onto @to. Safe against concurrent llist ops on
+ * either list; preserves the relative order of the moved entries (they end up
+ * ahead of whatever was already on @to). Returns true if @from was non-empty.
+ *
+ * (In include/linux/llist.h this would be llist_splice(); kept here because the
+ * module ships via DKMS and can't patch kernel headers.)
+ */
+static inline bool bch2_llist_splice(struct llist_head *from, struct llist_head *to)
+{
+	struct llist_node *first = llist_del_all(from), *last;
+
+	if (!first)
+		return false;
+
+	for (last = first; last->next; last = last->next)
+		;
+
+	llist_add_batch(first, last, to);
+	return true;
+}
+
 static inline void *bch2_kvmalloc_noprof(size_t n, gfp_t flags)
 {
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,18,0)

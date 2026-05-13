@@ -383,7 +383,7 @@ void bch2_journal_halt(struct journal *j)
 	bch2_journal_halt_locked(j);
 }
 
-static bool journal_entry_close_locked(struct journal *j)
+bool bch2_journal_entry_close_locked(struct journal *j)
 {
 	bool ret = !journal_entry_is_open(j) ||
 		fifo_used(&j->in_flight) == 1;
@@ -406,7 +406,7 @@ static bool journal_entry_close_locked(struct journal *j)
 bool bch2_journal_entry_close(struct journal *j)
 {
 	guard(spinlock)(&j->lock);
-	return journal_entry_close_locked(j);
+	return bch2_journal_entry_close_locked(j);
 }
 
 /*
@@ -507,7 +507,9 @@ static int journal_entry_open(struct journal *j)
 
 	bkey_extent_init(&buf->key);
 	/* if filesystem is clean, the first journal write must be a flush */
-	buf->must_flush		= c->sb.clean;
+	if (c->sb.clean)
+		set_bit(JOURNAL_need_flush_write, &j->flags);
+
 	buf->need_flush_to_write_buffer = true;
 	buf->has_overwrites	= READ_ONCE(c->opts.journal_transaction_names);
 
@@ -572,7 +574,7 @@ static bool journal_quiesced(struct journal *j)
 	bool ret = atomic64_read(&j->seq) == j->seq_ondisk;
 
 	if (!ret)
-		journal_entry_close_locked(j);
+		bch2_journal_entry_close_locked(j);
 	return ret;
 }
 
@@ -604,7 +606,7 @@ static bool journal_shutdown_quiesced(struct journal *j)
 		: seq == j->flushed_seq_ondisk;
 
 	if (!ret)
-		journal_entry_close_locked(j);
+		bch2_journal_entry_close_locked(j);
 	return ret;
 }
 
@@ -613,19 +615,19 @@ void bch2_journal_shutdown_quiesce(struct journal *j)
 	wait_event(j->wait, journal_shutdown_quiesced(j));
 }
 
+/*
+ * The journal auto-commit timer: re-armed for journal_flush_delay whenever a
+ * flush write is submitted (in bch2_journal_do_writes_locked()), so it only
+ * actually fires once that long has passed with no commit - at which point we
+ * close the open entry to get it written out.
+ */
 void bch2_journal_write_work(struct work_struct *work)
 {
 	struct journal *j = container_of(work, struct journal, write_work.work);
 
 	guard(spinlock)(&j->lock);
-	if (__journal_entry_is_open(j->reservations)) {
-		long delta = journal_cur_buf(j)->expires - jiffies;
-
-		if (delta > 0)
-			mod_delayed_work(j->wq, &j->write_work, delta);
-		else
-			__journal_entry_close(j, JOURNAL_ENTRY_CLOSED_VAL, true);
-	}
+	if (__journal_entry_is_open(j->reservations))
+		__journal_entry_close(j, JOURNAL_ENTRY_CLOSED_VAL, true);
 }
 
 static void journal_buf_prealloc(struct journal *j)
@@ -940,7 +942,7 @@ recheck_need_open:
 		BUG();
 want_write:
 	if (seq == journal_cur_seq(j))
-		journal_entry_close_locked(j);
+		bch2_journal_entry_close_locked(j);
 out:
 	spin_unlock(&j->lock);
 	return ret;

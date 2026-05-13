@@ -61,8 +61,12 @@ struct journal_buf {
 	unsigned		disk_sectors;	/* maximum size entry could have been, if
 						   buf_size was bigger */
 	unsigned		u64s_reserved;
+
 	bool			noflush:1;	/* write has already been kicked off, and was noflush */
+	bool			flush:1;	/* write has already been or waiting to be kicked off */
+
 	bool			must_flush:1;	/* something wants a flush */
+
 	bool			separate_flush:1;
 	bool			need_flush_to_write_buffer:1;
 	bool			write_started:1;
@@ -192,6 +196,7 @@ enum journal_space_from {
 	x(running)			\
 	x(may_skip_flush)		\
 	x(need_flush_write)		\
+	x(flush_outstanding)		\
 	x(low_on_space)			\
 	x(low_on_pin)			\
 	x(low_on_wb)
