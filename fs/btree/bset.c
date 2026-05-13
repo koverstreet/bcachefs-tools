@@ -833,7 +833,7 @@ static noinline void __build_rw_aux_tree(struct btree *b, struct bset_tree *t)
 static noinline void __build_ro_aux_tree(struct btree *b, struct bset_tree *t)
 {
 	struct bkey_packed *k = btree_bkey_first(b, t);
-	struct bkey_i min_key, max_key;
+	struct bkey_i_padded min_key, max_key;
 	unsigned cacheline = 1;
 
 	t->size = min(bkey_to_cacheline(b, t, btree_bkey_last(b, t)),
@@ -864,21 +864,21 @@ retry:
 		EBUG_ON(tree_to_bkey(b, t, j) != k);
 	}
 
-	if (!bkey_pack_pos(bkey_to_packed(&min_key), b->data->min_key, b)) {
-		bkey_init(&min_key.k);
-		min_key.k.p = b->data->min_key;
+	if (!bkey_pack_pos(bkey_to_packed(&min_key.k), b->data->min_key, b)) {
+		bkey_init(&min_key.k.k);
+		min_key.k.k.p = b->data->min_key;
 	}
 
-	if (!bkey_pack_pos(bkey_to_packed(&max_key), b->data->max_key, b)) {
-		bkey_init(&max_key.k);
-		max_key.k.p = b->data->max_key;
+	if (!bkey_pack_pos(bkey_to_packed(&max_key.k), b->data->max_key, b)) {
+		bkey_init(&max_key.k.k);
+		max_key.k.k.p = b->data->max_key;
 	}
 
 	/* Then we build the tree */
 	eytzinger1_for_each(j, t->size - 1)
 		make_bfloat(b, t, j,
-			    bkey_to_packed(&min_key),
-			    bkey_to_packed(&max_key));
+			    bkey_to_packed(&min_key.k),
+			    bkey_to_packed(&max_key.k));
 }
 
 static void bset_alloc_tree(struct btree *b, struct bset_tree *t)
@@ -1443,7 +1443,8 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 			       struct btree_node_iter *iter,
 			       struct bpos *search)
 {
-	struct bkey_packed p, *packed_search = NULL;
+	struct bkey_packed_padded p;
+	struct bkey_packed *packed_search = NULL;
 	struct btree_node_iter_set *pos = iter->data;
 	struct bkey_packed *k[MAX_BSETS];
 	unsigned i;
@@ -1454,9 +1455,9 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 
 	memset(iter, 0, sizeof(*iter));
 
-	switch (bch2_bkey_pack_pos_lossy(&p, *search, b)) {
+	switch (bch2_bkey_pack_pos_lossy(&p.k, *search, b)) {
 	case BKEY_PACK_POS_EXACT:
-		packed_search = &p;
+		packed_search = &p.k;
 		break;
 	case BKEY_PACK_POS_SMALLER:
 		packed_search = NULL;
@@ -1467,7 +1468,7 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 	}
 
 	for (i = 0; i < b->nsets; i++) {
-		k[i] = __bch2_bset_search(b, b->set + i, search, &p);
+		k[i] = __bch2_bset_search(b, b->set + i, search, &p.k);
 		prefetch_four_cachelines(k[i]);
 	}
 
@@ -1476,7 +1477,7 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 		struct bkey_packed *end = btree_bkey_last(b, t);
 
 		k[i] = bch2_bset_search_linear(b, t, search,
-					       packed_search, &p, k[i]);
+					       packed_search, &p.k, k[i]);
 		if (k[i] != end)
 			*pos++ = (struct btree_node_iter_set) {
 				__btree_node_key_to_offset(b, k[i]),
