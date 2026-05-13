@@ -637,6 +637,12 @@ static noinline int bch2_trans_commit_run_gc_triggers(struct btree_trans *trans)
 	return 0;
 }
 
+static int bch2_trans_commit_journal_pin_flush(struct journal *j,
+				struct journal_entry_pin *_pin, u64 seq)
+{
+	return 0;
+}
+
 static inline int
 bch2_trans_commit_write_locked(struct btree_trans *trans,
 			       enum bch_trans_commit_flags flags,
@@ -831,6 +837,14 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 
 		if (trans->journal_seq)
 			*trans->journal_seq = trans->journal_res.seq;
+
+		if (trans->journal_pin)
+			bch2_journal_pin_add(&c->journal, trans->journal_res.seq,
+					     trans->journal_pin,
+					     bch2_trans_commit_journal_pin_flush);
+
+		if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res)))
+			bch2_journal_res_put(&c->journal, &trans->journal_res);
 	}
 
 	trans_for_each_update(trans, i) {
@@ -871,12 +885,6 @@ static noinline int bch2_check_drop_overwrites_from_journal(struct btree_trans *
 		}
 	}
 
-	return 0;
-}
-
-static int bch2_trans_commit_journal_pin_flush(struct journal *j,
-				struct journal_entry_pin *_pin, u64 seq)
-{
 	return 0;
 }
 
@@ -949,16 +957,7 @@ static inline int do_bch2_trans_commit(struct btree_trans *trans,
 
 	bch2_trans_unlock_updates_write(trans);
 
-	if (!ret && trans->journal_pin)
-		bch2_journal_pin_add(&c->journal, trans->journal_res.seq,
-				     trans->journal_pin,
-				     bch2_trans_commit_journal_pin_flush);
-
-	/*
-	 * Drop journal reservation after dropping write locks, since dropping
-	 * the journal reservation may kick off a journal write:
-	 */
-	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res)))
+	if (unlikely(trans->journal_res.ref))
 		bch2_journal_res_put(&c->journal, &trans->journal_res);
 
 	return ret;
