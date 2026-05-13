@@ -44,6 +44,7 @@
 
 #include "journal/journal.h"
 #include "journal/reclaim.h"
+#include "journal/write.h"
 
 #include "sb/counters.h"
 #include "sb/errors.h"

@@ -3,6 +3,8 @@
 #define _BCACHEFS_JOURNAL_WRITE_H
 
 CLOSURE_CALLBACK(bch2_journal_write);
+void bch2_journal_do_writes_locked(struct journal *);
+void bch2_journal_do_writes(struct journal *);
 
 static inline struct jset_entry *jset_entry_init(struct jset_entry **end, size_t size)
 {
