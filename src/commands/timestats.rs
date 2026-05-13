@@ -497,8 +497,6 @@ fn build_frame(snaps: &[FsSnapshot], state: &TuiState, multi: bool) -> (Vec<Stri
 
         let mut first = true;
         for section in snap.sections.iter().filter(|s| s.page == state.page) {
-            if section.entries.is_empty() { continue }
-
             if !first { lines.push(String::new()); }
             first = false;
             lines.push(format!("{}:", section.label));
