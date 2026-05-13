@@ -483,7 +483,9 @@ static int journal_entry_open(struct journal *j)
 
 	bkey_extent_init(&buf->key);
 	/* if filesystem is clean, the first journal write must be a flush */
-	buf->must_flush		= c->sb.clean;
+	if (c->sb.clean)
+		set_bit(JOURNAL_need_flush_write, &j->flags);
+
 	buf->need_flush_to_write_buffer = true;
 	buf->has_overwrites	= READ_ONCE(c->opts.journal_transaction_names);
 
