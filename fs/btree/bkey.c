@@ -444,6 +444,54 @@ struct bpos __bkey_unpack_pos(const struct bkey_format *format,
 
 	return out;
 }
+
+/*
+ * Position-only sibling of __bch2_bkey_unpack_key_b: byte-aligned fast path
+ * for the 3 bpos fields, avoiding the bit-stream state machine. Mirrors the
+ * gate (byte_aligned_fields) and the precomputed @b->unpack[] constants.
+ *
+ * Profiling (sqlite-bench under FUSE, vtune): __bkey_unpack_pos was 7.5% of
+ * total instructions retired via get_inc_field()'s ~25-insn-per-field state
+ * machine. unpack_field_fast() is ~3 insns/field, so this trims ~70%+ of the
+ * per-call cost on byte-aligned formats - which is the common case.
+ */
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+struct bpos __bkey_unpack_pos_b(const struct btree *b,
+				const struct bkey_packed *in)
+{
+	const u8 *bytes = (const u8 *) in;
+
+	EBUG_ON(b->format.nr_fields != BKEY_NR_FIELDS);
+	EBUG_ON(in->u64s < b->format.key_u64s);
+	EBUG_ON(in->format != KEY_FORMAT_LOCAL_BTREE);
+
+	if (unlikely(!b->byte_aligned_fields))
+		return __bkey_unpack_pos(&b->format, in);
+
+	struct bpos out = {
+		.inode    = unpack_field_fast(bytes, &b->unpack[BKEY_FIELD_INODE],
+				le64_to_cpu(b->format.field_offset[BKEY_FIELD_INODE])),
+		.offset   = unpack_field_fast(bytes, &b->unpack[BKEY_FIELD_OFFSET],
+				le64_to_cpu(b->format.field_offset[BKEY_FIELD_OFFSET])),
+		.snapshot = (u32) unpack_field_fast(bytes, &b->unpack[BKEY_FIELD_SNAPSHOT],
+				le64_to_cpu(b->format.field_offset[BKEY_FIELD_SNAPSHOT])),
+	};
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	{
+		struct bpos check = __bkey_unpack_pos(&b->format, in);
+		EBUG_ON(memcmp(&out, &check, sizeof(out)));
+	}
+#endif
+	return out;
+}
+#else
+struct bpos __bkey_unpack_pos_b(const struct btree *b,
+				const struct bkey_packed *in)
+{
+	return __bkey_unpack_pos(&b->format, in);
+}
+#endif
 #endif
 
 /**
