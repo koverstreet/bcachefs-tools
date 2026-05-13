@@ -1487,7 +1487,8 @@ static void bch2_write_endio(struct bio *bio)
 		bch2_bucket_nocow_unlock(&c->nocow_locks,
 					 POS(ca->dev_idx, wbio->nocow_bucket),
 					 BUCKET_NOCOW_LOCK_UPDATE);
-		set_bit(wbio->dev, op->devs_need_flush->d);
+		if (!(bio->bi_opf & REQ_FUA))
+			set_bit(wbio->dev, op->devs_need_flush->d);
 	}
 
 	if (ca)
