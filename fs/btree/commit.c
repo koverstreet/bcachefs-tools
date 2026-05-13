@@ -638,6 +638,61 @@ static noinline int bch2_trans_commit_run_gc_triggers(struct btree_trans *trans)
 	return 0;
 }
 
+static int bch2_trans_commit_journal_pin_flush(struct journal *j,
+				struct journal_entry_pin *_pin, u64 seq)
+{
+	return 0;
+}
+
+noinline __cold
+static int trans_commit_accounting_revert(struct btree_trans *trans,
+					  enum bch_trans_commit_flags flags,
+					  int ret, struct bkey_i *end)
+{
+	for (struct bkey_i *i = btree_trans_subbuf_base(trans, &trans->accounting);
+	     i != end;
+	     i = bkey_next(i))
+		bch2_accounting_trans_commit_revert(trans, bkey_i_to_accounting(i), flags);
+	return ret;
+}
+
+noinline __cold
+static int trans_commit_fatal_err(struct btree_trans *trans, int ret)
+{
+	bch2_fs_fatal_error(trans->c, "%s(): fatal error in transaction commit: %s",
+			    trans->fn, bch2_err_str(ret));
+	return ret;
+}
+
+noinline __cold
+static int trans_commit_invalid_entry(struct btree_trans *trans, int ret)
+{
+
+	struct bch_fs *c = trans->c;
+	CLASS(bch_log_msg, msg)(c);
+	prt_printf(&msg.m, "%s(): invalid journal entry on insert\n", trans->fn);
+	bch2_trans_updates_to_text(&msg.m, trans);
+	bch2_sb_error_count(c, BCH_FSCK_ERR_validate_error_in_commit);
+	bch2_fs_emergency_read_only(c, &msg.m);
+	bch2_prt_task_backtrace(&msg.m, current, 1, GFP_KERNEL);
+	return ret;
+}
+
+noinline __cold
+static int trans_commit_invalid_key(struct btree_trans *trans,
+				    struct btree_insert_entry *i,
+				    int ret)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(bch_log_msg, msg)(c);
+	prt_printf(&msg.m, "%s() -> %ps: invalid bkey on insert from\n", trans->fn, (void *) i->ip_allocated);
+	bch2_trans_updates_to_text(&msg.m, trans);
+	bch2_sb_error_count(c, BCH_FSCK_ERR_validate_error_in_commit);
+	bch2_fs_emergency_read_only(c, &msg.m);
+	bch2_prt_task_backtrace(&msg.m, current, 1, GFP_KERNEL);
+	return ret;
+}
+
 static inline int
 bch2_trans_commit_write_locked(struct btree_trans *trans,
 			       enum bch_trans_commit_flags flags,
@@ -716,21 +771,14 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		h = h->next;
 	}
 
-	struct bkey_i *accounting;
-
 	scoped_guard(percpu_read, &c->capacity.mark_lock)
-		for (accounting = btree_trans_subbuf_base(trans, &trans->accounting);
+		for (struct bkey_i *accounting = btree_trans_subbuf_base(trans, &trans->accounting);
 		     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
 		     accounting = bkey_next(accounting)) {
 			ret = bch2_accounting_trans_commit_hook(trans,
 						bkey_i_to_accounting(accounting), flags);
-			if (unlikely(ret)) {
-				for (struct bkey_i *i = btree_trans_subbuf_base(trans, &trans->accounting);
-				     i != accounting;
-				     i = bkey_next(i))
-					bch2_accounting_trans_commit_revert(trans, bkey_i_to_accounting(i), flags);
-				return ret;
-			}
+			if (unlikely(ret))
+				return trans_commit_accounting_revert(trans, flags, ret, accounting);
 		}
 
 	/* XXX: we only want to run this if deltas are nonzero */
@@ -739,14 +787,14 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 	trans_for_each_update(trans, i)
 		if (btree_node_type_has_atomic_triggers(i->bkey_type)) {
 			ret = run_one_mem_trigger(trans, i, BTREE_TRIGGER_atomic|i->flags);
-			if (bch2_fs_fatal_err_on(ret, c, "fatal error in transaction commit: %s", bch2_err_str(ret)))
-				return ret;
+			if (unlikely(ret))
+				return trans_commit_fatal_err(trans, ret);
 		}
 
 	if (unlikely(c->gc.pos.phase)) {
 		ret = bch2_trans_commit_run_gc_triggers(trans);
-		if (bch2_fs_fatal_err_on(ret, c, "fatal error in transaction commit: %s", bch2_err_str(ret)))
-			return ret;
+		if (unlikely(ret))
+			return trans_commit_fatal_err(trans, ret);
 	}
 
 	struct bkey_validate_context validate_context = { .from	= BKEY_VALIDATE_commit };
@@ -760,13 +808,8 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		ret = bch2_journal_entry_validate(c, NULL, i,
 						  bcachefs_metadata_version_current,
 						  CPU_BIG_ENDIAN, validate_context);
-		if (unlikely(ret)) {
-			bch2_trans_inconsistent(trans, "invalid journal entry on insert from %s\n",
-						trans->fn);
-			bch2_sb_error_count(c, BCH_FSCK_ERR_validate_error_in_commit);
-			__WARN();
-			return ret;
-		}
+		if (unlikely(ret))
+			return trans_commit_invalid_entry(trans, ret);
 	}
 
 	trans_for_each_update(trans, i) {
@@ -774,13 +817,8 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		validate_context.btree	= i->btree_id;
 
 		ret = bch2_bkey_validate(c, bkey_i_to_s_c(i->k), &validate_context);
-		if (unlikely(ret)){
-			bch2_trans_inconsistent(trans, "invalid bkey on insert from %s -> %ps\n",
-						trans->fn, (void *) i->ip_allocated);
-			bch2_sb_error_count(c, BCH_FSCK_ERR_validate_error_in_commit);
-			__WARN();
-			return ret;
-		}
+		if (unlikely(ret))
+			return trans_commit_invalid_key(trans, i, ret);
 		btree_insert_entry_checks(trans, i);
 	}
 
@@ -832,6 +870,11 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 
 		if (trans->journal_seq)
 			*trans->journal_seq = trans->journal_res.seq;
+
+		if (trans->journal_pin)
+			bch2_journal_pin_add(&c->journal, trans->journal_res.seq,
+					     trans->journal_pin,
+					     bch2_trans_commit_journal_pin_flush);
 	}
 
 	trans_for_each_update(trans, i) {
@@ -848,7 +891,8 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 	return 0;
 }
 
-static noinline int bch2_check_drop_overwrites_from_journal(struct btree_trans *trans, bool check)
+__cold
+static int bch2_check_drop_overwrites_from_journal(struct btree_trans *trans, bool check)
 {
 	/*
 	 * Accounting keys aren't deduped in the journal: we have to compare
@@ -875,10 +919,27 @@ static noinline int bch2_check_drop_overwrites_from_journal(struct btree_trans *
 	return 0;
 }
 
-static int bch2_trans_commit_journal_pin_flush(struct journal *j,
-				struct journal_entry_pin *_pin, u64 seq)
+noinline __cold
+static int trans_commit_to_journal_replay_pre(struct btree_trans *trans, enum bch_trans_commit_flags flags)
 {
+	mutex_lock(&trans->c->journal_keys.overwrite_lock);
+
+	if ((flags & BCH_TRANS_COMMIT_journal_replay) &&
+	    bch2_check_drop_overwrites_from_journal(trans, true)) {
+		mutex_unlock(&trans->c->journal_keys.overwrite_lock);
+		bch2_trans_unlock_updates_write(trans);
+		return btree_trans_restart(trans, BCH_ERR_transaction_restart_journal_overwrites_changed);
+	}
+
 	return 0;
+}
+
+noinline __cold
+static void trans_commit_to_journal_replay_post(struct btree_trans *trans, int ret)
+{
+	if (!ret)
+		bch2_check_drop_overwrites_from_journal(trans, false);
+	mutex_unlock(&trans->c->journal_keys.overwrite_lock);
 }
 
 /*
@@ -928,38 +989,17 @@ static inline int do_bch2_trans_commit(struct btree_trans *trans,
 
 	try(bch2_trans_lock_write(trans));
 
-	if (unlikely(trans->journal_replay_not_finished)) {
-		mutex_lock(&c->journal_keys.overwrite_lock);
-
-		if ((flags & BCH_TRANS_COMMIT_journal_replay) &&
-		    bch2_check_drop_overwrites_from_journal(trans, true)) {
-			mutex_unlock(&c->journal_keys.overwrite_lock);
-			bch2_trans_unlock_updates_write(trans);
-			return btree_trans_restart(trans,
-					BCH_ERR_transaction_restart_journal_overwrites_changed);
-		}
-	}
+	if (unlikely(trans->journal_replay_not_finished))
+		try(trans_commit_to_journal_replay_pre(trans, flags));
 
 	int ret = bch2_trans_commit_write_locked(trans, flags, stopped_at, trace_ip);
 
-	if (unlikely(trans->journal_replay_not_finished)) {
-		if (!ret)
-			bch2_check_drop_overwrites_from_journal(trans, false);
-		mutex_unlock(&c->journal_keys.overwrite_lock);
-	}
+	if (unlikely(trans->journal_replay_not_finished))
+		trans_commit_to_journal_replay_post(trans, ret);
 
 	bch2_trans_unlock_updates_write(trans);
 
-	if (!ret && trans->journal_pin)
-		bch2_journal_pin_add(&c->journal, trans->journal_res.seq,
-				     trans->journal_pin,
-				     bch2_trans_commit_journal_pin_flush);
-
-	/*
-	 * Drop journal reservation after dropping write locks, since dropping
-	 * the journal reservation may kick off a journal write:
-	 */
-	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res)))
+	if (trans->journal_res.ref)
 		bch2_journal_res_put(&c->journal, &trans->journal_res);
 
 	return ret;
