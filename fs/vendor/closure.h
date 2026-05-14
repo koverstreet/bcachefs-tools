@@ -173,6 +173,22 @@ void __bch2_closure_wake_up(struct closure_waitlist *list);
 bool bch2_closure_wait(struct closure_waitlist *list, struct closure *cl);
 void __bch2_closure_sync(struct closure *cl);
 
+static inline void closure_val_checks(struct closure *cl, unsigned new, int d)
+{
+	unsigned count = new & CLOSURE_REMAINING_MASK;
+
+	if (WARN(new & CLOSURE_GUARD_MASK,
+		 "closure %ps has guard bits set: %x (%u), delta %i",
+		 cl->fn,
+		 new, (unsigned) __fls(new & CLOSURE_GUARD_MASK), d))
+		new &= ~CLOSURE_GUARD_MASK;
+
+	WARN(!count && (new & ~(CLOSURE_DESTRUCTOR|CLOSURE_SLEEPING)),
+	     "closure %ps ref hit 0 with incorrect flags set: %x (%u)",
+	     cl->fn,
+	     new, (unsigned) __fls(new));
+}
+
 /*
  * closure_put - decrement a closure's refcount
  */

@@ -158,6 +158,33 @@ journal_seq_to_buf(struct journal *j, u64 seq)
 		: NULL;
 }
 
+#define JOURNAL_BUF_NOT_IN_FLIGHT	((struct llist_node *) 1)
+#define JOURNAL_BUF_NOFLUSH		((struct llist_node *) 2)
+
+static inline bool journal_buf_must_flush(struct journal_buf *buf)
+{
+	return buf->wait.list.first > JOURNAL_BUF_NOFLUSH;
+}
+
+static inline bool journal_buf_must_not_flush(struct journal_buf *buf)
+{
+	return buf->wait.list.first == JOURNAL_BUF_NOFLUSH;
+}
+
+static inline bool journal_buf_try_noflush(struct journal_buf *buf)
+{
+	struct llist_node *old = READ_ONCE(buf->wait.list.first);
+
+	do {
+		if (old == JOURNAL_BUF_NOFLUSH)
+			return true;
+		if (old)
+			return false;
+	} while (!try_cmpxchg(&buf->wait.list.first, &old, JOURNAL_BUF_NOFLUSH));
+
+	return true;
+}
+
 static inline u64 journal_last_unallocated_seq(struct journal *j)
 {
 	struct journal_buf *buf;
@@ -477,6 +504,7 @@ void bch2_journal_entry_res_resize(struct journal *,
 				   struct journal_entry_res *,
 				   unsigned);
 
+void bch2_journal_res_flush(struct journal *, struct journal_res *, struct closure *);
 int bch2_journal_flush_seq_async(struct journal *, u64, unsigned, struct closure *);
 void bch2_journal_flush_async(struct journal *, unsigned, struct closure *);
 
