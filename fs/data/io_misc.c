@@ -126,7 +126,7 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 	}
 
 	ret = bch2_extent_update(trans, inum, iter, new.k, new_buf_u64s, &res.r,
-				 0, i_sectors_delta, true, 0);
+				 0, i_sectors_delta, true, 0, NULL);
 err:
 	if (!ret && sectors_allocated)
 		bch2_increment_clock(c, sectors_allocated, WRITE);
@@ -212,7 +212,7 @@ int bch2_fpunch_at(struct btree_trans *trans, struct btree_iter *iter,
 		bch2_key_resize(&delete.k, min(end, k.k->p.offset) - iter->pos.offset);
 
 		ret = bch2_extent_update(trans, inum, iter, &delete, delete.k.u64s,
-				&res.r, 0, i_sectors_delta, false, 0);
+				&res.r, 0, i_sectors_delta, false, 0, NULL);
 	}
 
 	return ret ?: ret2;

@@ -24,6 +24,7 @@
 	x(wrote_data_inline)		\
 	x(check_enospc)			\
 	x(sync)				\
+	x(flush)			\
 	x(move)				\
 	x(in_worker)			\
 	x(submitted)			\
