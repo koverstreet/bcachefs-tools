@@ -932,11 +932,9 @@ recheck_need_open:
 	buf->must_flush = true;
 	j->flushing_seq = max(j->flushing_seq, seq);
 
-	if (parent && !closure_wait(&buf->wait, parent))
-		BUG();
+	BUG_ON(!closure_wait(&buf->wait, parent));
 want_write:
-	if (seq == journal_cur_seq(j))
-		journal_entry_close_locked(j);
+	journal_entry_close_locked(j);
 out:
 	spin_unlock(&j->lock);
 	return ret;
@@ -968,13 +966,26 @@ int bch2_journal_flush_seq(struct journal *j, u64 seq, unsigned task_state)
 		: 0;
 }
 
+static CLOSURE_CALLBACK(closure_free)
+{
+	struct closure *cl = container_of(ws, struct closure, work);
+	kfree(cl);
+}
+
 /*
  * bch2_journal_flush_async - if there is an open journal entry, or a journal
  * still being written, write it and wait for the write to complete
  */
-void bch2_journal_flush_async(struct journal *j, unsigned flags, struct closure *parent)
+void bch2_journal_flush_async(struct journal *j, unsigned flags, struct closure *cl)
 {
-	bch2_journal_flush_seq_async(j, atomic64_read(&j->seq), flags, parent);
+	if (!cl) {
+		cl = kmalloc(sizeof(*cl), GFP_KERNEL);
+		closure_init(cl, NULL);
+		bch2_journal_flush_seq_async(j, atomic64_read(&j->seq), flags, cl);
+		continue_at(cl, closure_free, NULL);
+	} else {
+		bch2_journal_flush_seq_async(j, atomic64_read(&j->seq), flags, cl);
+	}
 }
 
 int bch2_journal_flush(struct journal *j)
