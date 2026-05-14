@@ -720,6 +720,7 @@ struct btree_trans {
 	struct journal_res	journal_res;
 	u64			*journal_seq;
 	struct disk_reservation *disk_res;
+	struct closure		*flush;
 
 	struct bch_fs_usage_base fs_usage_delta;
 

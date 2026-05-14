@@ -1242,6 +1242,9 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 			bch2_journal_pin_set(&c->journal, trans->journal_res.seq,
 					     trans->journal_pin,
 					     bch2_trans_commit_journal_pin_flush);
+
+		if (trans->flush)
+			bch2_journal_res_flush(&c->journal, &trans->journal_res, trans->flush);
 	}
 
 	trans_for_each_update(trans, i) {
