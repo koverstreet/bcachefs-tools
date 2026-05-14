@@ -51,7 +51,6 @@ struct journal_buf {
 	struct bch_devs_list	devs_written;
 	struct bch_io_failures	failed;
 
-	struct closure_waitlist	wait;
 	u64			last_seq;	/* copy of data->last_seq */
 
 	unsigned		buf_size;	/* size in bytes of @data */
@@ -60,10 +59,9 @@ struct journal_buf {
 						   buf_size was bigger */
 	unsigned		u64s_reserved;
 
-	bool			noflush:1;	/* write has already been kicked off, and was noflush */
-	bool			flush:1;	/* write has already been or waiting to be kicked off */
-
-	bool			must_flush:1;	/* something wants a flush */
+	/* write has already been or waiting to be kicked off */
+	bool			flush_picked:1;
+	bool			flush:1;
 
 	bool			separate_flush:1;
 	bool			need_flush_to_write_buffer:1;
@@ -72,6 +70,9 @@ struct journal_buf {
 	bool			write_done:1;
 	bool			empty:1;
 	bool			has_overwrites:1;
+
+	/* must not be memset, only manipulated by xchg/cmpxchg */
+	struct closure_waitlist	wait;
 };
 
 /*
@@ -274,6 +275,12 @@ struct journal {
 	 * journal_write_done() as seq_ondisk advances.
 	 */
 	FIFO_U64_IDX(struct journal_buf) in_flight;
+
+	/*
+	 * When we need a flush but no open journal entry was flushable, wait
+	 * here - transferred to journal_buf.wait on entry open
+	 */
+	struct closure_waitlist	flush_wait;
 
 	void			*free_buf;
 	unsigned		free_buf_size;

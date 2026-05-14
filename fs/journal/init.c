@@ -639,6 +639,11 @@ int bch2_fs_journal_init(struct journal *j)
 	if (!j->in_flight.data)
 		return bch_err_throw(c, ENOMEM_journal_buf);
 
+	for (struct journal_buf *buf = j->in_flight.data;
+	     buf < j->in_flight.data + j->in_flight.size;
+	     buf++)
+		buf->wait.list.first = JOURNAL_BUF_NOFLUSH;
+
 	j->wq = alloc_workqueue("bcachefs_journal",
 				WQ_HIGHPRI|WQ_FREEZABLE|WQ_UNBOUND|WQ_MEM_RECLAIM, 512);
 	if (!j->wq)

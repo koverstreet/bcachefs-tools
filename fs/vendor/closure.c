@@ -13,22 +13,6 @@
 #include <linux/seq_file.h>
 #include <linux/sched/debug.h>
 
-static void closure_val_checks(struct closure *cl, unsigned new, int d)
-{
-	unsigned count = new & CLOSURE_REMAINING_MASK;
-
-	if (WARN(new & CLOSURE_GUARD_MASK,
-		 "closure %ps has guard bits set: %x (%u), delta %i",
-		 cl->fn,
-		 new, (unsigned) __fls(new & CLOSURE_GUARD_MASK), d))
-		new &= ~CLOSURE_GUARD_MASK;
-
-	WARN(!count && (new & ~(CLOSURE_DESTRUCTOR|CLOSURE_SLEEPING)),
-	     "closure %ps ref hit 0 with incorrect flags set: %x (%u)",
-	     cl->fn,
-	     new, (unsigned) __fls(new));
-}
-
 enum new_closure_state {
 	CLOSURE_normal_put,
 	CLOSURE_requeue,
