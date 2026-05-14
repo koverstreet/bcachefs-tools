@@ -707,7 +707,7 @@ s64 bch2_remap_range(struct bch_fs *c,
 		ret = bch2_extent_update(trans, dst_inum, &dst_iter,
 					 new_dst.k, new_dst.k->k.u64s, &res.r,
 					 new_i_size, i_sectors_delta,
-					 true, 0);
+					 true, 0, NULL);
 	}
 
 	BUG_ON(!ret && !bkey_eq(dst_iter.pos, dst_end));

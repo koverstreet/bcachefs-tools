@@ -999,10 +999,10 @@ int bch2_extent_update(struct btree_trans *trans,
 		       u64 new_i_size,
 		       s64 *i_sectors_delta_total,
 		       bool check_enospc,
-		       u32 change_cookie)
+		       u32 change_cookie,
+		       struct closure *flush)
 {
 	struct bch_fs *c = trans->c;
-	struct bpos next_pos;
 	bool usage_increasing;
 	s64 i_sectors_delta = 0, disk_sectors_delta = 0;
 
@@ -1014,9 +1014,15 @@ int bch2_extent_update(struct btree_trans *trans,
 	 */
 	try(__bch2_btree_iter_traverse(iter));
 
+	struct bpos next_pos = k->k.p;
+
 	try(bch2_extent_trim_atomic(trans, iter, k));
 
-	next_pos = k->k.p;
+	if (!bpos_eq(next_pos, k->k.p)) {
+		next_pos = k->k.p;
+		/* trim split us: only the actually-last commit gets the flush */
+		flush = NULL;
+	}
 
 	try(bch2_sum_sector_overwrites(trans, iter, k,
 				       &usage_increasing,
@@ -1040,9 +1046,10 @@ int bch2_extent_update(struct btree_trans *trans,
 					  change_cookie));
 	try(bch2_trans_update(trans, iter, k,
 			      BTREE_TRIGGER_set_needs_reconcile_done));
-	try(bch2_trans_commit(trans, disk_res, NULL,
-			      BCH_TRANS_COMMIT_no_check_rw|
-			      BCH_TRANS_COMMIT_no_enospc));
+
+	try(bch2_trans_commit_flush(trans, disk_res, NULL, flush,
+				    BCH_TRANS_COMMIT_no_check_rw|
+				    BCH_TRANS_COMMIT_no_enospc));
 
 	if (i_sectors_delta_total)
 		*i_sectors_delta_total += i_sectors_delta;
@@ -1072,6 +1079,9 @@ static int bch2_write_index_default(struct bch_write_op *op)
 
 		k = bch2_keylist_front(keys);
 
+		bool is_last = bkey_next(k) == keys->top;
+		bool flush = is_last && (op->flags & BCH_WRITE_flush);
+
 		/*
 		 * If we did a degraded write, bch2_bkey_set_needs_reconcile() will add
 		 * pointers to BCH_SB_MEMBER_INVALID so the extent is accounted as
@@ -1095,7 +1105,8 @@ static int bch2_write_index_default(struct bch_write_op *op)
 					&op->res,
 					op->new_i_size, &op->i_sectors_delta,
 					op->flags & BCH_WRITE_check_enospc,
-					op->opts.change_cookie);
+					op->opts.change_cookie,
+					flush ? &op->cl : NULL);
 
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			continue;
@@ -1232,12 +1243,15 @@ void bch2_submit_wbio_replicas(struct bch_write_bio *wbio, struct bch_fs *c,
 
 static void __bch2_write(struct bch_write_op *);
 
-static void bch2_write_done(struct closure *cl)
+static CLOSURE_CALLBACK(__bch2_write_done)
 {
-	struct bch_write_op *op = container_of(cl, struct bch_write_op, cl);
+	closure_type(op, struct bch_write_op, cl);
 	struct bch_fs *c = op->c;
 
 	EBUG_ON(op->open_buckets.nr);
+
+	if (!op->error)
+		op->error = bch2_journal_error(&op->c->journal);
 
 	bch2_time_stats_update(&c->times[BCH_TIME_data_write], op->start_time);
 	bch2_disk_reservation_put(c, &op->res);
@@ -1251,6 +1265,14 @@ static void bch2_write_done(struct closure *cl)
 	async_object_list_del(c, write_op, op->list_idx);
 	if (op->end_io)
 		op->end_io(op);
+}
+
+static void bch2_write_done(struct bch_write_op *op)
+{
+	if (op->flags & BCH_WRITE_sync)
+		closure_sync(&op->cl);
+
+	continue_at(&op->cl, __bch2_write_done, closure_nr_remaining(&op->cl) > 1 ? index_update_wq(op) : NULL);
 }
 
 static noinline int bch2_write_drop_io_error_ptrs(struct bch_write_op *op)
@@ -1438,7 +1460,7 @@ void bch2_write_point_do_index_updates(struct work_struct *work)
 		if (!(op->flags & BCH_WRITE_submitted))
 			__bch2_write(op);
 		else
-			bch2_write_done(&op->cl);
+			bch2_write_done(op);
 	}
 }
 
@@ -1987,12 +2009,18 @@ static void bch2_nocow_write_convert_unwritten(struct bch_write_op *op)
 		CLASS(btree_trans, trans)(c);
 
 		for_each_keylist_key(&op->insert_keys, orig) {
-			ret = for_each_btree_key_max_commit(trans, iter, BTREE_ID_extents,
+			ret = for_each_btree_key_max(trans, iter, BTREE_ID_extents,
 					     bkey_start_pos(&orig->k), orig->k.p,
 					     BTREE_ITER_intent, k,
-					     &op->res, NULL,
-					     BCH_TRANS_COMMIT_no_enospc, ({
-				bch2_nocow_write_convert_one_unwritten(trans, &iter, op, orig, k, op->new_i_size);
+					     ({
+				bool flush = (op->flags & BCH_WRITE_flush) &&
+					bkey_next(orig) == op->insert_keys.top &&
+					bkey_ge(k.k->p, orig->k.p);
+
+				bch2_nocow_write_convert_one_unwritten(trans, &iter, op, orig, k, op->new_i_size) ?:
+				bch2_trans_commit_flush(trans, &op->res, NULL,
+							flush ? &op->cl : NULL,
+							BCH_TRANS_COMMIT_no_enospc);
 			}));
 			if (ret)
 				break;
@@ -2022,7 +2050,7 @@ static CLOSURE_CALLBACK(bch2_nocow_write_done)
 	closure_type(op, struct bch_write_op, cl);
 
 	__bch2_nocow_write_done(op);
-	bch2_write_done(cl);
+	bch2_write_done(op);
 }
 
 /*
@@ -2194,6 +2222,9 @@ retry:
 		bio->bi_end_io	= bch2_write_endio;
 		bio->bi_private	= &op->cl;
 		bio->bi_opf |= REQ_OP_WRITE;
+		if (op->flags & BCH_WRITE_flush)
+			bio->bi_opf |= REQ_FUA;
+
 		closure_get(&op->cl);
 
 		bch2_submit_wbio_replicas(to_wbio(bio), c, BCH_DATA_user,
@@ -2388,7 +2419,8 @@ err:
 
 		if (!(op->flags & BCH_WRITE_submitted))
 			goto again;
-		bch2_write_done(&op->cl);
+
+		bch2_write_done(op);
 	} else {
 		bch2_write_queue(op, wp);
 		continue_at(&op->cl, bch2_write_index, NULL);
@@ -2437,7 +2469,7 @@ static void bch2_write_data_inline(struct bch_write_op *op, unsigned data_len)
 
 	__bch2_write_index(op);
 err:
-	bch2_write_done(&op->cl);
+	bch2_write_done(op);
 }
 
 noinline __cold

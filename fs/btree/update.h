@@ -328,6 +328,19 @@ static inline int bch2_trans_commit(struct btree_trans *trans,
 	return __bch2_trans_commit(trans, flags);
 }
 
+static inline int bch2_trans_commit_flush(struct btree_trans *trans,
+					  struct disk_reservation *disk_res,
+					  u64 *journal_seq,
+					  struct closure *flush,
+					  enum bch_trans_commit_flags flags)
+{
+	trans->disk_res		= disk_res;
+	trans->journal_seq	= journal_seq;
+	trans->flush		= flush;
+
+	return __bch2_trans_commit(trans, flags);
+}
+
 static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
 					 struct disk_reservation *disk_res,
 					 u64 *journal_seq,
