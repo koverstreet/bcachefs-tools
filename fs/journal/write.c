@@ -427,7 +427,12 @@ static CLOSURE_CALLBACK(journal_write_done)
 	 * (e.g. cascaded onto it from an earlier entry we demoted to noflush),
 	 * close it now so it gets written as the next flush - we don't close it
 	 * to write it while there are previous entries still in flight:
+	 *
+	 * Barrier needed between incrementing j->in_flight.front and checking
+	 * for waiters:
 	 */
+	smp_mb();
+
 	if (journal_buf_must_flush(journal_cur_buf(j)) ||
 	    j->flush_wait.list.first)
 		bch2_journal_entry_close_locked(j);

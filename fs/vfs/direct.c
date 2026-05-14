@@ -351,8 +351,7 @@ static noinline void bch2_dio_write_flush(struct dio_write *dio)
 		if (ret) {
 			dio->op.error = ret;
 		} else {
-			bch2_journal_flush_seq_async(&c->journal, inode.bi_journal_seq,
-						     0, &dio->op.cl);
+			bch2_journal_flush_seq_async(&c->journal, inode.bi_journal_seq, &dio->op.cl);
 			bch2_inode_flush_nocow_writes_async(c, dio->inode, &dio->op.cl);
 		}
 	}

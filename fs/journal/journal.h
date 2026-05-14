@@ -504,9 +504,15 @@ void bch2_journal_entry_res_resize(struct journal *,
 				   struct journal_entry_res *,
 				   unsigned);
 
-void bch2_journal_res_flush(struct journal *, struct journal_res *, struct closure *);
-int bch2_journal_flush_seq_async(struct journal *, u64, unsigned, struct closure *);
-void bch2_journal_flush_async(struct journal *, unsigned, struct closure *);
+void __bch2_journal_flush_seq_async(struct journal *, u64, struct closure *);
+int bch2_journal_flush_seq_async(struct journal *, u64, struct closure *);
+void bch2_journal_flush_async(struct journal *, struct closure *);
+
+static inline void bch2_journal_res_flush(struct journal *j, struct journal_res *res,
+					  struct closure *cl)
+{
+	__bch2_journal_flush_seq_async(j, res->seq, cl);
+}
 
 int bch2_journal_flush_seq(struct journal *, u64, unsigned);
 int bch2_journal_flush(struct journal *);

@@ -2223,7 +2223,7 @@ static int bch2_sync_fs(struct super_block *sb, int wait)
 	if (c->opts.journal_flush_disabled)
 		;
 	else if (!wait)
-		bch2_journal_flush_async(&c->journal, BCH_WATERMARK_normal, NULL);
+		bch2_journal_flush_async(&c->journal, NULL);
 	else
 		ret = bch2_journal_flush(&c->journal);
 
