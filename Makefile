@@ -1,9 +1,15 @@
+# `:=` (simple expansion) is load-bearing here: VERSION feeds into DKMSDIR,
+# the dkms.conf PACKAGE_VERSION, version.h, and the `dkms add/remove` args.
+# With recursive `=` the $(shell git describe) re-runs on every $(VERSION)
+# expansion — so HEAD moving mid-recipe (e.g. a commit/rebase landing during
+# a long `make install_dkms`) can land the six install steps in two
+# different /usr/src/bcachefs-vN/ trees. Lock VERSION once at make start.
 ifneq ($(wildcard .git),)
-VERSION=$(shell git -c safe.directory=$$PWD -c core.abbrev=12 describe)
+VERSION:=$(shell git -c safe.directory=$$PWD -c core.abbrev=12 describe)
 else ifneq ($(wildcard .version),)
-VERSION=$(shell cat .version)
+VERSION:=$(shell cat .version)
 else
-VERSION=$(shell cargo metadata --format-version 1 | jq -r '.packages[] | select(.name | test("bcachefs-tools")) | .version')
+VERSION:=$(shell cargo metadata --format-version 1 | jq -r '.packages[] | select(.name | test("bcachefs-tools")) | .version')
 endif
 
 PREFIX?=/usr/local
@@ -195,7 +201,7 @@ libbcachefs.a: $(OBJS)
 	$(Q)echo "$(VERSION)" > .version.new
 	$(Q)cmp -s .version.new .version || mv .version.new .version
 
-VERSION_H=$(shell echo "#define bcachefs_version \\\"$(VERSION)\\\"")
+VERSION_H:=$(shell echo "#define bcachefs_version \\\"$(VERSION)\\\"")
 
 version.h: force
 	$(Q)echo "$(VERSION_H)" > version.h.new
@@ -264,8 +270,6 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	(cd fs; find -name '*.[ch]' -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
-	sed -i "s|^#define TRACE_INCLUDE_PATH \\.\\./\\.\\./fs/bcachefs$$|#define TRACE_INCLUDE_PATH .|" \
-	  $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/debug/trace.h
 
 # Build the kernel module via DKMS and load it. Must run as root
 # (sudo make dkms-reload). Idempotent — re-running rebuilds + reloads.
