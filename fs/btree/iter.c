@@ -1273,8 +1273,8 @@ err:
 	return ret;
 }
 
-static inline bool btree_path_check_pos_in_node(struct btree_path *path,
-						unsigned l, int check_pos)
+static __always_inline bool btree_path_check_pos_in_node(struct btree_path *path,
+							 unsigned l, int check_pos)
 {
 	if (check_pos < 0 && btree_path_pos_before_node(path, path->l[l].b))
 		return false;
@@ -1315,7 +1315,7 @@ again:
 	return l;
 }
 
-static inline unsigned btree_path_up_until_good_node(struct btree_trans *trans,
+static __always_inline unsigned btree_path_up_until_good_node(struct btree_trans *trans,
 						     struct btree_path *path,
 						     int check_pos)
 {
