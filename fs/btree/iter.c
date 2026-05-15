@@ -775,16 +775,17 @@ static inline void __btree_path_level_init(struct btree_trans *trans,
 
 void bch2_btree_path_level_init(struct btree_trans *trans,
 				struct btree_path *path,
+				unsigned level,
 				struct btree *b)
 {
 	BUG_ON(path->cached);
 
 	EBUG_ON(!btree_path_pos_in_node(path, b));
 
-	path->l[b->c.level].lock_seq = six_lock_seq(&b->c.lock);
+	path->l[level].lock_seq = six_lock_seq(&b->c.lock);
 	/* deadlock detector reads unlocked */
-	WRITE_ONCE(path->l[b->c.level].b, b);
-	__btree_path_level_init(trans, path, b->c.level);
+	WRITE_ONCE(path->l[level].b, b);
+	__btree_path_level_init(trans, path, level);
 }
 
 /* Btree path: fixups after btree node updates: */
@@ -844,7 +845,7 @@ void bch2_trans_node_add(struct btree_trans *trans,
 				mark_btree_node_locked(trans, path, b->c.level, t);
 			}
 
-			bch2_btree_path_level_init(trans, path, b);
+			bch2_btree_path_level_init(trans, path, b->c.level, b);
 		}
 
 	bch2_trans_revalidate_updates_in_node(trans, b);
@@ -953,7 +954,7 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 
 			mark_btree_node_locked(trans, path, path->level,
 					       (enum btree_node_locked_type) lock_type);
-			bch2_btree_path_level_init(trans, path, b);
+			bch2_btree_path_level_init(trans, path, path->level, b);
 			return 0;
 		}
 
@@ -1182,7 +1183,7 @@ static __always_inline int btree_path_down(struct btree_trans *trans,
 	mark_btree_node_locked(trans, path, level,
 			       (enum btree_node_locked_type) lock_type);
 	path->level = level;
-	bch2_btree_path_level_init(trans, path, b);
+	bch2_btree_path_level_init(trans, path, level, b);
 
 	bch2_btree_path_verify_locks(trans, path);
 	return 0;

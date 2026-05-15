@@ -282,7 +282,7 @@ static void btree_path_take_new_node(struct btree_trans *trans,
 {
 	six_lock_increment(&b->c.lock, SIX_LOCK_write);
 	mark_btree_node_locked(trans, path, b->c.level, BTREE_NODE_WRITE_LOCKED);
-	bch2_btree_path_level_init(trans, path, b);
+	bch2_btree_path_level_init(trans, path, b->c.level, b);
 }
 
 static bool can_use_btree_node(struct bch_fs *c,

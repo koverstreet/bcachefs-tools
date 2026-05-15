@@ -306,7 +306,7 @@ static inline struct bkey_s_c bch2_btree_path_peek_slot_exact(struct btree_path 
 	return (struct bkey_s_c) { u, NULL };
 }
 
-void bch2_btree_path_level_init(struct btree_trans *, struct btree_path *, struct btree *);
+void bch2_btree_path_level_init(struct btree_trans *, struct btree_path *, unsigned, struct btree *);
 
 int __bch2_trans_mutex_lock(struct btree_trans *, struct mutex *);
 
@@ -487,8 +487,10 @@ void __noreturn bch2_trans_unlocked_or_in_restart_error(struct btree_trans *);
 
 static inline void bch2_trans_verify_not_unlocked_or_in_restart(struct btree_trans *trans)
 {
+#ifdef CONFIG_BCACHEFS_DEBUG
 	if (trans->restarted || !trans->locked)
 		bch2_trans_unlocked_or_in_restart_error(trans);
+#endif
 }
 
 __always_inline
