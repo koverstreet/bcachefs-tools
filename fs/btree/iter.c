@@ -2664,6 +2664,116 @@ static void __btree_iter_peek_max_trace(struct bch_fs *c, struct bkey_s_c k)
 	}));
 }
 
+enum filter_snapshots_ret {
+	FILTER_SNAP_OK,		/* accept *k, exit caller's loop */
+	FILTER_SNAP_CONTINUE,	/* search_key updated, retry */
+	FILTER_SNAP_END,	/* out of range, terminate scan */
+	FILTER_SNAP_ERR,	/* *k set to err, exit cleanly */
+};
+
+noinline
+static enum filter_snapshots_ret
+btree_iter_filter_snapshots(struct btree_trans *trans,
+			    struct btree_iter *iter,
+			    struct bkey_s_c *k,
+			    struct bpos *search_key,
+			    const struct bpos *end)
+{
+	/*
+	 * We need to check against @end before FILTER_SNAPSHOTS because
+	 * if we get to a different inode than requested we might be
+	 * seeing keys for a different snapshot tree that will all be
+	 * filtered out.
+	 *
+	 * But we can't do the full check here, because bkey_start_pos()
+	 * isn't monotonically increasing before FILTER_SNAPSHOTS, and
+	 * that's what we check against in extents mode:
+	 */
+	if (unlikely(!(iter->flags & BTREE_ITER_is_extents)
+		     ? bkey_gt(k->k->p, *end)
+		     : k->k->p.inode > end->inode))
+		return FILTER_SNAP_END;
+
+	/*
+	 * If we want an update path we want to do this up front; also more
+	 * efficient than letting !bch2_snapshot_is_ancestor() skip these:
+	 */
+	if (k->k->p.snapshot < iter->snapshot) {
+		*search_key = bpos_with_snapshot(k->k->p, iter->snapshot);
+		return FILTER_SNAP_CONTINUE;
+	}
+
+	if (iter->update_path &&
+	    !bkey_eq(trans->paths[iter->update_path].pos, k->k->p)) {
+		bch2_path_put(trans, iter->update_path,
+			      iter->flags & BTREE_ITER_intent);
+		iter->update_path = 0;
+	}
+
+	if ((iter->flags & BTREE_ITER_intent) &&
+	    !(iter->flags & BTREE_ITER_is_extents) &&
+	    !iter->update_path) {
+		/*
+		 * We may have to skip over keys in unrelated snapshot branches
+		 * before finding the key to return; that will not be the
+		 * update position for iter->snapshot - cache that:
+		 */
+		__btree_path_get(trans, trans->paths + iter->path, iter->flags & BTREE_ITER_intent);
+		iter->update_path = iter->path;
+
+		struct bpos with_snapshot = bpos_with_snapshot(k->k->p, iter->snapshot);
+		iter->update_path = bch2_btree_path_set_pos(trans,
+					iter->update_path,
+					&with_snapshot,
+					iter->flags & BTREE_ITER_intent,
+					_THIS_IP_);
+		int ret = bch2_btree_path_traverse(trans, iter->update_path, iter->flags);
+		if (unlikely(ret)) {
+			*k = bkey_s_c_err(ret);
+			return FILTER_SNAP_ERR;
+		}
+	}
+
+	/*
+	 * We can never have a key in a leaf node at POS_MAX, so we don't have
+	 * to check these successor() calls:
+	 */
+	if (!bch2_snapshot_is_ancestor(trans, iter->snapshot, k->k->p.snapshot)) {
+		*search_key = bpos_successor(k->k->p);
+		return FILTER_SNAP_CONTINUE;
+	}
+
+	if (!(iter->flags & BTREE_ITER_nofilter_whiteouts) &&
+	    bkey_extent_whiteout(k->k)) {
+		/*
+		 * KEY_TYPE_extent_whiteout indicates that there are no extents
+		 * overlapping with this whiteout - meaning bkey_start_pos() is
+		 * monotonically increasing when including KEY_TYPE_extent_whiteout.
+		 * Without this @end wouldn't be able to terminate searches and
+		 * we'd have to scan through tons of whiteouts.
+		 */
+		if (k->k->type == KEY_TYPE_extent_whiteout &&
+		    bkey_ge(k->k->p, *end))
+			return FILTER_SNAP_END;
+
+		/*
+		 * Advance iter->pos incrementally, so on transaction restart we
+		 * don't restart scanning over large numbers of whiteouts. For
+		 * extent iterators, callers use iter->pos to mean "remaining
+		 * range we are processing", so we only advance on
+		 * KEY_TYPE_extent_whiteout.
+		 */
+		if (!(iter->flags & BTREE_ITER_is_extents) ||
+		    k->k->type == KEY_TYPE_extent_whiteout)
+			iter->pos = bpos_with_snapshot(k->k->p, iter->snapshot);
+
+		*search_key = bkey_successor(iter, k->k->p);
+		return FILTER_SNAP_CONTINUE;
+	}
+
+	return FILTER_SNAP_OK;
+}
+
 /**
  * bch2_btree_iter_peek_max() - returns first key greater than or equal to
  * iterator's current position
@@ -2703,119 +2813,18 @@ struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *iter, const struct b
 		if (unlikely(bkey_err(k)))
 			goto out_no_locked;
 
-		if (iter->flags & BTREE_ITER_filter_snapshots) {
-			/*
-			 * We need to check against @end before FILTER_SNAPSHOTS because
-			 * if we get to a different inode than requested we might be
-			 * seeing keys for a different snapshot tree that will all be
-			 * filtered out.
-			 *
-			 * But we can't do the full check here, because bkey_start_pos()
-			 * isn't monotonically increasing before FILTER_SNAPSHOTS, and
-			 * that's what we check against in extents mode:
-			 */
-			if (unlikely(!(iter->flags & BTREE_ITER_is_extents)
-				     ? bkey_gt(k.k->p, *end)
-				     : k.k->p.inode > end->inode))
+		if ((iter->flags & BTREE_ITER_filter_snapshots) &&
+		    unlikely(k.k->p.snapshot != iter->snapshot ||
+			     bkey_whiteout(k.k))) {
+			switch (btree_iter_filter_snapshots(trans, iter, &k, &search_key, end)) {
+			case FILTER_SNAP_OK:
+				break;
+			case FILTER_SNAP_CONTINUE:
+				continue;
+			case FILTER_SNAP_END:
 				goto end;
-
-			/*
-			 * If we want an update path we want to do this up
-			 * front; also more efficient than letting
-			 * !bch2_snapshot_is_ancestor() skip these:
-			 */
-			if (k.k->p.snapshot < iter->snapshot) {
-				search_key = bpos_with_snapshot(k.k->p, iter->snapshot);
-				continue;
-			}
-
-			if (iter->update_path &&
-			    !bkey_eq(trans->paths[iter->update_path].pos, k.k->p)) {
-				bch2_path_put(trans, iter->update_path,
-					      iter->flags & BTREE_ITER_intent);
-				iter->update_path = 0;
-			}
-
-			if ((iter->flags & BTREE_ITER_intent) &&
-			    !(iter->flags & BTREE_ITER_is_extents) &&
-			    !iter->update_path) {
-				/*
-				 * We may have to skip over keys in unrelated
-				 * snapshot branches before finding the key to
-				 * return; that will not be the update position
-				 * for iter->snapshot - cache that:
-				 */
-				__btree_path_get(trans, trans->paths + iter->path, iter->flags & BTREE_ITER_intent);
-				iter->update_path = iter->path;
-
-				struct bpos with_snapshot = bpos_with_snapshot(k.k->p, iter->snapshot);
-				iter->update_path = bch2_btree_path_set_pos(trans,
-							iter->update_path,
-							&with_snapshot,
-							iter->flags & BTREE_ITER_intent,
-							_THIS_IP_);
-				ret = bch2_btree_path_traverse(trans, iter->update_path, iter->flags);
-				if (unlikely(ret)) {
-					k = bkey_s_c_err(ret);
-					goto out_no_locked;
-				}
-			}
-
-			/*
-			 * We can never have a key in a leaf node at POS_MAX, so
-			 * we don't have to check these successor() calls:
-			 */
-			if (!bch2_snapshot_is_ancestor(trans,
-						       iter->snapshot,
-						       k.k->p.snapshot)) {
-				search_key = bpos_successor(k.k->p);
-				continue;
-			}
-
-			if (!(iter->flags & BTREE_ITER_nofilter_whiteouts) &&
-			    bkey_extent_whiteout(k.k)) {
-				/*
-				 * KEY_TYPE_extent_whiteout indicates that there are no extents that
-				 * overlap with this whiteout - meaning bkey_start_pos() is
-				 * monotonically increasing when including KEY_TYPE_extent_whiteout
-				 * (not KEY_TYPE_whiteout).
-				 *
-				 * Without this @end wouldn't be able to terminate searches and we'd
-				 * have to scan through tons of whiteouts:
-				 */
-				if (k.k->type == KEY_TYPE_extent_whiteout &&
-				    bkey_ge(k.k->p, *end))
-					goto end;
-
-				/*
-				 * Advance iter->pos incrementally, so that on transaction restart
-				 * we don't have to restart scanning over large numbers of whiteouts
-				 * from the beginning.
-				 *
-				 * Considerations:
-				 *
-				 * We currently require that iter->pos.snapshot == iter->snapshot,
-				 * so we can only update iter->pos when advancing to a new bkey, not
-				 * snapshot within a key.
-				 *
-				 * Additionally, advancing iter->pos means "we have checked that
-				 * there are no keys we will wish to return in the range that we are
-				 * advancing past". For non extent iterators, all keys (including
-				 * whiteouts) are monotonically increasing point positions - no
-				 * special considerations.
-				 *
-				 * But for extent iterators, callers use iter->pos to mean
-				 * "remaining range we are processing", meaning we cannot advance
-				 * iter->pos such that it straddles an extent we will subsequently
-				 * return - thus we only advance if we are seeing
-				 * KEY_TYPE_extent_whiteout.
-				 */
-				if (!(iter->flags & BTREE_ITER_is_extents) ||
-				    k.k->type == KEY_TYPE_extent_whiteout)
-					iter->pos = bpos_with_snapshot(k.k->p, iter->snapshot);
-
-				search_key = bkey_successor(iter, k.k->p);
-				continue;
+			case FILTER_SNAP_ERR:
+				goto out_no_locked;
 			}
 		}
 
