@@ -43,6 +43,7 @@
 #include "debug/sysfs.h"
 
 #include "fs/check.h"
+#include "fs/dirent.h"
 #include "fs/inode.h"
 #include "fs/quota.h"
 
@@ -1712,6 +1713,8 @@ static void bcachefs_exit(void)
 static int __init bcachefs_init(void)
 {
 	bch2_bkey_pack_test();
+
+	bch2_dirent_init();
 
 	kobject_init(&bcachefs_kobj, &bcachefs_ktype);
 

@@ -334,6 +334,7 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	$(INSTALL) -m0644 -D dkms/dkms.conf		-t $(DESTDIR)$(DKMSDIR)
 	$(INSTALL) -m0644 -D fs/Makefile	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	(cd fs; find -name '*.[ch]' -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
+	$(INSTALL) -m0755 -D fs/scripts/getdents-layout.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	@( :; $(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),printf '%s := %s\n' '$(v)' '$($(v))';)) ) > $(DESTDIR)$(DKMSDIR)/build.vars

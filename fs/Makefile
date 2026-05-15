@@ -24,6 +24,27 @@ ifdef BCACHEFS_TESTS
 	subdir-ccflags-y += -DCONFIG_BCACHEFS_TESTS=1
 endif
 
+# Verify the hand-copied struct getdents_callback64 in fs/dirent.c against
+# the target kernel's real layout (fs/scripts/getdents-layout.sh, pahole on
+# $(objtree)/vmlinux - present in external builds since kbuild needs it for
+# module BTF). In-tree builds compile from the same tree as fs/readdir.c
+# and are trusted; external builds are verified or the fastpath is
+# compiled out.
+subdir-ccflags-y += -I$(obj)
+$(obj)/fs/dirent.o: $(obj)/bch2_getdents_layout.h
+# The script is not a prerequisite: FORCE + write-if-changed already
+# covers script edits, and a source tree that didn't ship it (it's not
+# *.[ch]) must degrade to UNVERIFIED, not fail the build.
+$(obj)/bch2_getdents_layout.h: FORCE
+	$(Q)if [ -f $(src)/scripts/getdents-layout.sh ]; then \
+		$(CONFIG_SHELL) $(src)/scripts/getdents-layout.sh \
+			"$(if $(KBUILD_EXTMOD),$(objtree)/vmlinux,)" $@; \
+	else \
+		echo '#define BCH_GETDENTS_LAYOUT_UNVERIFIED 1' > $@.tmp; \
+		if cmp -s $@.tmp $@; then rm -f $@.tmp; else mv $@.tmp $@; fi; \
+	fi
+clean-files += bch2_getdents_layout.h
+
 # Quota is gated by CONFIG_BCACHEFS_QUOTA, which a DKMS build never gets
 # from a .config. Mirror the Kconfig's `default y if QUOTA`: the host
 # kernel's CONFIG_QUOTA reaches the module build via its auto.conf, so
