@@ -4168,6 +4168,7 @@ void bch2_fs_btree_iter_exit(struct bch_fs *c)
 #endif
 		kfree(s->max_paths_text);
 		bch2_time_stats_exit(&s->lock_hold_times);
+		bch2_time_stats_exit(&s->lock_wait_times);
 	}
 
 	printbuf_exit(&c->btree.trans.stats_json_buf);
@@ -4191,6 +4192,7 @@ void bch2_fs_btree_iter_init_early(struct bch_fs *c)
 	     s++) {
 		bch2_time_stats_init(&s->duration);
 		bch2_time_stats_init(&s->lock_hold_times);
+		bch2_time_stats_init(&s->lock_wait_times);
 		mutex_init(&s->lock);
 	}
 
