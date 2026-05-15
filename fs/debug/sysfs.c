@@ -706,6 +706,8 @@ static ssize_t bch2_btree_trans_stats_json_read(struct file *file,
 			if (IS_ENABLED(CONFIG_BCACHEFS_LOCK_TIME_STATS)) {
 				prt_str(out, ",\"lock_hold_times\":");
 				bch2_time_stats_json_to_text(out, &s->lock_hold_times, NULL, 0);
+				prt_str(out, ",\"lock_wait_times\":");
+				bch2_time_stats_json_to_text(out, &s->lock_wait_times, NULL, 0);
 			}
 
 			prt_char(out, '}');
@@ -740,6 +742,7 @@ static ssize_t bch2_btree_trans_stats_json_write(struct file *file,
 		guard(mutex)(&s->lock);
 		bch2_time_stats_reset(&s->duration);
 		bch2_time_stats_reset(&s->lock_hold_times);
+		bch2_time_stats_reset(&s->lock_wait_times);
 		s->nr_max_paths = 0;
 		s->max_mem = 0;
 		kfree(s->max_paths_text);

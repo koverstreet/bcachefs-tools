@@ -652,6 +652,11 @@ static ssize_t btree_transaction_stats_read(struct file *file, char __user *buf,
 
 			scoped_guard(printbuf_indent, &i->buf)
 				bch2_time_stats_to_text(&i->buf, &s->lock_hold_times);
+
+			prt_printf(&i->buf, "Lock wait times:\n");
+
+			scoped_guard(printbuf_indent, &i->buf)
+				bch2_time_stats_to_text(&i->buf, &s->lock_wait_times);
 		}
 
 		if (s->max_paths_text) {
