@@ -1,7 +1,7 @@
 #ifndef _LINUX_MATH64_H
 #define _LINUX_MATH64_H
 
-#include <linux/types.h>
+#include <linux/kernel.h>
 
 #define do_div(n,base) ({					\
 	u32 __base = (base);					\

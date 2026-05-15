@@ -1,64 +1,20 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * Functions for incremental mean and variance.
+ * Streaming median + MAD estimators (all-time and exponentially-weighted).
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful, but WITHOUT
- * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
- * more details.
- *
- * Copyright © 2022 Daniel B. Hill
- *
- * Author: Daniel B. Hill <daniel@gluo.nz>
- *
- * Description:
- *
- * This is includes some incremental algorithms for mean and variance calculation
- *
- * Derived from the paper: https://fanf2.user.srcf.net/hermes/doc/antiforgery/stats.pdf
- *
- * Create a struct and if it's the weighted variant set the w field (weight = 2^k).
- *
- * Use mean_and_variance[_weighted]_update() on the struct to update it's state.
- *
- * Use the mean_and_variance[_weighted]_get_* functions to calculate the mean and variance, some computation
- * is deferred to these functions for performance reasons.
- *
- * see lib/math/mean_and_variance_test.c for examples of usage.
- *
- * DO NOT access the mean and variance fields of the weighted variants directly.
- * DO NOT change the weight after calling update.
+ * Replaces an earlier sum-of-squares variance implementation; see the
+ * struct comments in mean_and_variance.h for the streaming-estimator
+ * design.
  */
 
 #include <linux/bug.h>
 #include <linux/compiler.h>
 #include <linux/export.h>
 #include <linux/limits.h>
-#include <linux/math.h>
 #include <linux/math64.h>
 #include <linux/module.h>
 
 #include "mean_and_variance.h"
-
-u128_u u128_div(u128_u n, u64 d)
-{
-	u128_u r;
-	u64 rem;
-	u64 hi = u128_hi(n);
-	u64 lo = u128_lo(n);
-	u64  h =  hi & ((u64) U32_MAX  << 32);
-	u64  l = (hi &  (u64) U32_MAX) << 32;
-
-	r =             u128_shl(u64_to_u128(div64_u64_rem(h,                d, &rem)), 64);
-	r = u128_add(r, u128_shl(u64_to_u128(div64_u64_rem(l  + (rem << 32), d, &rem)), 32));
-	r = u128_add(r,          u64_to_u128(div64_u64_rem(lo + (rem << 32), d, &rem)));
-	return r;
-}
-EXPORT_SYMBOL_GPL(u128_div);
 
 /**
  * mean_and_variance_get_mean() - get mean from @s
@@ -71,103 +27,38 @@ s64 mean_and_variance_get_mean(struct mean_and_variance s)
 EXPORT_SYMBOL_GPL(mean_and_variance_get_mean);
 
 /**
- * mean_and_variance_get_variance() -  get variance from @s1
- * @s1: mean and variance number of samples and sums
+ * mean_and_variance_get_mad() - get the all-time MAD (median absolute deviation)
  *
- * see linked pdf equation 12.
+ * Tracked by stochastic-gradient median on |x − median| with a 1/n step
+ * schedule. Robbins-Monro consistent: converges to the true MAD as n → ∞.
  */
-u64 mean_and_variance_get_variance(struct mean_and_variance s1)
+u64 mean_and_variance_get_mad(struct mean_and_variance s)
 {
-	if (s1.n) {
-		u128_u s2 = u128_div(s1.sum_squares, s1.n);
-		u64  s3 = abs(mean_and_variance_get_mean(s1));
-
-		return u128_lo(u128_sub(s2, u128_square(s3)));
-	} else {
-		return 0;
-	}
+	return s.n ? s.mad : 0;
 }
-EXPORT_SYMBOL_GPL(mean_and_variance_get_variance);
+EXPORT_SYMBOL_GPL(mean_and_variance_get_mad);
 
 /**
- * mean_and_variance_get_stddev() - get standard deviation from @s
- * @s: mean and variance number of samples and their sums
+ * mean_and_variance_get_stddev() - Gaussian-equivalent dispersion estimate
+ *
+ * Returns 1.4826 · MAD (~σ for Gaussian inputs), approximated as
+ * (mad * 1518) >> 10 (~0.01% error). Preserves the existing "stddev"
+ * readout label.
  */
 u32 mean_and_variance_get_stddev(struct mean_and_variance s)
 {
-	return int_sqrt64(mean_and_variance_get_variance(s));
+	return s.n ? (s.mad * 1518) >> 10 : 0;
 }
 EXPORT_SYMBOL_GPL(mean_and_variance_get_stddev);
 
 /**
- * mean_and_variance_weighted_update() - exponentially weighted variant of mean_and_variance_update()
- * @s: mean and variance number of samples and their sums
- * @x: new value to include in the &mean_and_variance_weighted
- * @initted: caller must track whether this is the first use or not
- * @weight: ewma weight
- *
- * see linked pdf: function derived from equations 140-143 where alpha = 2^w.
- * values are stored bitshifted for performance and added precision.
+ * mean_and_variance_get_median() - get the current median estimate.
  */
-void mean_and_variance_weighted_update(struct mean_and_variance_weighted *s,
-		s64 x, bool initted, u8 weight)
+s64 mean_and_variance_get_median(struct mean_and_variance s)
 {
-	// previous weighted variance.
-	u8 w		= weight;
-	u64 var_w0	= s->variance;
-	// new value weighted.
-	s64 x_w		= x << w;
-	s64 diff_w	= x_w - s->mean;
-	s64 diff	= fast_divpow2(diff_w, w);
-	// new mean weighted.
-	s64 u_w1	= s->mean + diff;
-
-	if (!initted) {
-		s->mean = x_w;
-		s->variance = 0;
-	} else {
-		s->mean = u_w1;
-		s->variance = ((var_w0 << w) - var_w0 + ((diff_w * (x_w - u_w1)) >> w)) >> w;
-	}
+	return s.median;
 }
-EXPORT_SYMBOL_GPL(mean_and_variance_weighted_update);
-
-/**
- * mean_and_variance_weighted_get_mean() - get mean from @s
- * @s: mean and variance number of samples and their sums
- * @weight: ewma weight
- */
-s64 mean_and_variance_weighted_get_mean(struct mean_and_variance_weighted s,
-		u8 weight)
-{
-	return fast_divpow2(s.mean, weight);
-}
-EXPORT_SYMBOL_GPL(mean_and_variance_weighted_get_mean);
-
-/**
- * mean_and_variance_weighted_get_variance() -- get variance from @s
- * @s: mean and variance number of samples and their sums
- * @weight: ewma weight
- */
-u64 mean_and_variance_weighted_get_variance(struct mean_and_variance_weighted s,
-		u8 weight)
-{
-	// always positive don't need fast divpow2
-	return s.variance >> weight;
-}
-EXPORT_SYMBOL_GPL(mean_and_variance_weighted_get_variance);
-
-/**
- * mean_and_variance_weighted_get_stddev() - get standard deviation from @s
- * @s: mean and variance number of samples and their sums
- * @weight: ewma weight
- */
-u32 mean_and_variance_weighted_get_stddev(struct mean_and_variance_weighted s,
-		u8 weight)
-{
-	return int_sqrt64(mean_and_variance_weighted_get_variance(s, weight));
-}
-EXPORT_SYMBOL_GPL(mean_and_variance_weighted_get_stddev);
+EXPORT_SYMBOL_GPL(mean_and_variance_get_median);
 
 MODULE_AUTHOR("Daniel B. Hill");
 MODULE_LICENSE("GPL");

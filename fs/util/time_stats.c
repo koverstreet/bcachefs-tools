@@ -73,15 +73,14 @@ static inline void time_stats_update_one(struct bch2_time_stats *stats,
 					      u64 start, u64 end)
 {
 	u64 duration, freq;
-	bool initted = stats->last_event != 0;
 
 	if (time_after64(end, start)) {
 		struct quantiles *quantiles = time_stats_to_quantiles(stats);
 
 		duration = end - start;
-		mean_and_variance_update(&stats->duration_stats, duration);
-		mean_and_variance_weighted_update(&stats->duration_stats_weighted,
-				duration, initted, TIME_STATS_MV_WEIGHT);
+		mean_and_variance_update(&stats->duration_stats, duration, 0);
+		mean_and_variance_update(&stats->duration_stats_weighted,
+				duration, TIME_STATS_MV_WEIGHT);
 		stats->max_duration = max(stats->max_duration, duration);
 		stats->min_duration = min(stats->min_duration, duration);
 		stats->total_duration += duration;
@@ -92,9 +91,9 @@ static inline void time_stats_update_one(struct bch2_time_stats *stats,
 
 	if (stats->last_event && time_after64(end, stats->last_event)) {
 		freq = end - stats->last_event;
-		mean_and_variance_update(&stats->freq_stats, freq);
-		mean_and_variance_weighted_update(&stats->freq_stats_weighted,
-				freq, initted, TIME_STATS_MV_WEIGHT);
+		mean_and_variance_update(&stats->freq_stats, freq, 0);
+		mean_and_variance_update(&stats->freq_stats_weighted,
+				freq, TIME_STATS_MV_WEIGHT);
 		stats->max_freq = max(stats->max_freq, freq);
 		stats->min_freq = min(stats->min_freq, freq);
 	}
@@ -131,7 +130,7 @@ void __bch2_time_stats_update(struct bch2_time_stats *stats, u64 start, u64 end)
 		time_stats_update_one(stats, start, end);
 
 		if (!stats->buffer &&
-		    mean_and_variance_weighted_get_mean(stats->freq_stats_weighted, TIME_STATS_MV_WEIGHT) < 32 &&
+		    mean_and_variance_get_median(stats->freq_stats_weighted) < 32000 &&
 		    stats->duration_stats.n > 1024)
 			stats->buffer =
 				alloc_percpu_gfp(struct time_stat_buffer,
@@ -231,12 +230,12 @@ void bch2_time_stats_to_seq_buf(struct seq_buf *out, struct bch2_time_stats *sta
 
 	seq_buf_printf(out, "  mean:                    ");
 	seq_buf_time_units_aligned(out, d_mean);
-	seq_buf_time_units_aligned(out, mean_and_variance_weighted_get_mean(stats->duration_stats_weighted, TIME_STATS_MV_WEIGHT));
+	seq_buf_time_units_aligned(out, mean_and_variance_get_median(stats->duration_stats_weighted));
 	seq_buf_printf(out, "\n");
 
 	seq_buf_printf(out, "  stddev:                  ");
 	seq_buf_time_units_aligned(out, d_stddev);
-	seq_buf_time_units_aligned(out, mean_and_variance_weighted_get_stddev(stats->duration_stats_weighted, TIME_STATS_MV_WEIGHT));
+	seq_buf_time_units_aligned(out, mean_and_variance_get_stddev(stats->duration_stats_weighted));
 	seq_buf_printf(out, "\n");
 
 	seq_buf_printf(out, "time between events\n");
@@ -251,12 +250,12 @@ void bch2_time_stats_to_seq_buf(struct seq_buf *out, struct bch2_time_stats *sta
 
 	seq_buf_printf(out, "  mean:                    ");
 	seq_buf_time_units_aligned(out, f_mean);
-	seq_buf_time_units_aligned(out, mean_and_variance_weighted_get_mean(stats->freq_stats_weighted, TIME_STATS_MV_WEIGHT));
+	seq_buf_time_units_aligned(out, mean_and_variance_get_median(stats->freq_stats_weighted));
 	seq_buf_printf(out, "\n");
 
 	seq_buf_printf(out, "  stddev:                  ");
 	seq_buf_time_units_aligned(out, f_stddev);
-	seq_buf_time_units_aligned(out, mean_and_variance_weighted_get_stddev(stats->freq_stats_weighted, TIME_STATS_MV_WEIGHT));
+	seq_buf_time_units_aligned(out, mean_and_variance_get_stddev(stats->freq_stats_weighted));
 	seq_buf_printf(out, "\n");
 
 	if (quantiles) {
@@ -318,8 +317,8 @@ void bch2_time_stats_to_json(struct seq_buf *out, struct bch2_time_stats *stats,
 	seq_buf_printf(out, "    \"stddev\":    %llu\n", d_stddev);
 	seq_buf_printf(out, "  },\n");
 
-	d_mean = mean_and_variance_weighted_get_mean(stats->duration_stats_weighted, TIME_STATS_MV_WEIGHT);
-	d_stddev = mean_and_variance_weighted_get_stddev(stats->duration_stats_weighted, TIME_STATS_MV_WEIGHT);
+	d_mean = mean_and_variance_get_median(stats->duration_stats_weighted);
+	d_stddev = mean_and_variance_get_stddev(stats->duration_stats_weighted);
 
 	seq_buf_printf(out, "  \"duration_ewma_ns\": {\n");
 	seq_buf_printf(out, "    \"mean\":      %llu,\n", d_mean);
@@ -333,8 +332,8 @@ void bch2_time_stats_to_json(struct seq_buf *out, struct bch2_time_stats *stats,
 	seq_buf_printf(out, "    \"stddev\":    %llu\n", f_stddev);
 	seq_buf_printf(out, "  },\n");
 
-	f_mean = mean_and_variance_weighted_get_mean(stats->freq_stats_weighted, TIME_STATS_MV_WEIGHT);
-	f_stddev = mean_and_variance_weighted_get_stddev(stats->freq_stats_weighted, TIME_STATS_MV_WEIGHT);
+	f_mean = mean_and_variance_get_median(stats->freq_stats_weighted);
+	f_stddev = mean_and_variance_get_stddev(stats->freq_stats_weighted);
 
 	seq_buf_printf(out, "  \"between_ewma_ns\": {\n");
 	seq_buf_printf(out, "    \"mean\":      %llu,\n", f_mean);
