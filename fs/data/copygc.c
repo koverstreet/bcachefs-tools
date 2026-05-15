@@ -313,9 +313,9 @@ err:
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_lru, lru_start(BCH_LRU_BUCKET_FRAGMENTATION), 0);
 	struct bkey_s_c lru_k;
+	struct bpos lru_end_pos = lru_end(BCH_LRU_BUCKET_FRAGMENTATION);
 
-	lockrestart_do(trans, bkey_err(lru_k = bch2_btree_iter_peek_max(&iter,
-							lru_end(BCH_LRU_BUCKET_FRAGMENTATION))));
+	lockrestart_do(trans, bkey_err(lru_k = bch2_btree_iter_peek_max(&iter, &lru_end_pos)));
 
 	u64 bucket_frag_ratio = lru_k.k && !bkey_err(lru_k) ? lru_pos_time(lru_k.k->p) : 0;
 

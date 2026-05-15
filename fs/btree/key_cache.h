@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_BTREE_KEY_CACHE_H
 #define _BCACHEFS_BTREE_KEY_CACHE_H
 
+#include "btree/bkey.h"
+
 static inline size_t bch2_nr_btree_keys_need_flush(struct bch_fs *c)
 {
 	size_t nr_dirty = atomic_long_read(&c->btree.key_cache.nr_dirty);
@@ -38,8 +40,36 @@ int bch2_btree_key_cache_journal_flush(struct journal *,
 				struct journal_entry_pin *, u64);
 int bch2_btree_key_cache_flush_going_ro(struct bch_fs *);
 
-struct bkey_cached *
-bch2_btree_key_cache_find(struct bch_fs *, enum btree_id, struct bpos);
+static inline int bch2_btree_key_cache_cmp_fn(struct rhashtable_compare_arg *arg,
+					      const void *obj)
+{
+	const struct bkey_cached *ck = obj;
+	const struct bkey_cached_key *key = arg->key;
+
+	return ck->key.btree_id != key->btree_id ||
+		!bpos_eq(ck->key.pos, key->pos);
+}
+
+static const struct rhashtable_params bch2_btree_key_cache_params = {
+	.head_offset		= offsetof(struct bkey_cached, hash),
+	.key_offset		= offsetof(struct bkey_cached, key),
+	.key_len		= sizeof(struct bkey_cached_key),
+	.obj_cmpfn		= bch2_btree_key_cache_cmp_fn,
+	.automatic_shrinking	= true,
+};
+
+__always_inline __flatten
+static struct bkey_cached *
+bch2_btree_key_cache_find(struct bch_fs *c, enum btree_id btree_id, struct bpos pos)
+{
+	struct bkey_cached_key key = {
+		.btree_id	= btree_id,
+		.pos		= pos,
+	};
+
+	return rhashtable_lookup_fast(&c->btree.key_cache.table, &key,
+				      bch2_btree_key_cache_params);
+}
 
 int bch2_btree_path_traverse_cached(struct btree_trans *, btree_path_idx_t, unsigned);
 

@@ -238,7 +238,7 @@ impl<'t> BtreeIter<'t> {
 
     pub fn peek_max<'i>(&'i mut self, end: bpos) -> Result<Option<BkeySC<'i>>, BchError> {
         unsafe {
-            bkey_s_c_to_result(c::bch2_btree_iter_peek_max(&mut self.raw, end))
+            bkey_s_c_to_result(c::bch2_btree_iter_peek_max(&mut self.raw, &end))
         }
     }
 
@@ -252,7 +252,7 @@ impl<'t> BtreeIter<'t> {
                     Ok(None)
                 }
             } else {
-                bkey_s_c_to_result(c::bch2_btree_iter_peek_max(&mut self.raw, end))
+                bkey_s_c_to_result(c::bch2_btree_iter_peek_max(&mut self.raw, &end))
             }
         }
     }
@@ -279,7 +279,7 @@ impl<'t> BtreeIter<'t> {
         let raw = &mut self.raw as *mut c::btree_iter;
         loop {
             let restart_count = trans.begin();
-            let k = unsafe { c::bch2_btree_iter_peek_max(raw, end) };
+            let k = unsafe { c::bch2_btree_iter_peek_max(raw, &end) };
 
             match bkey_s_c_to_result(k) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,

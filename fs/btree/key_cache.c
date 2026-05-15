@@ -34,24 +34,6 @@ static inline bool btree_uses_pcpu_readers(enum btree_id id)
 
 static struct kmem_cache *bch2_key_cache;
 
-static int bch2_btree_key_cache_cmp_fn(struct rhashtable_compare_arg *arg,
-				       const void *obj)
-{
-	const struct bkey_cached *ck = obj;
-	const struct bkey_cached_key *key = arg->key;
-
-	return ck->key.btree_id != key->btree_id ||
-		!bpos_eq(ck->key.pos, key->pos);
-}
-
-static const struct rhashtable_params bch2_btree_key_cache_params = {
-	.head_offset		= offsetof(struct bkey_cached, hash),
-	.key_offset		= offsetof(struct bkey_cached, key),
-	.key_len		= sizeof(struct bkey_cached_key),
-	.obj_cmpfn		= bch2_btree_key_cache_cmp_fn,
-	.automatic_shrinking	= true,
-};
-
 static inline void btree_path_cached_set(struct btree_trans *trans, struct btree_path *path,
 					 struct bkey_cached *ck,
 					 enum btree_node_locked_type lock_held)
@@ -59,19 +41,6 @@ static inline void btree_path_cached_set(struct btree_trans *trans, struct btree
 	path->l[0].lock_seq	= six_lock_seq(&ck->c.lock);
 	path->l[0].b		= (void *) ck;
 	mark_btree_node_locked(trans, path, 0, lock_held);
-}
-
-__flatten
-inline struct bkey_cached *
-bch2_btree_key_cache_find(struct bch_fs *c, enum btree_id btree_id, struct bpos pos)
-{
-	struct bkey_cached_key key = {
-		.btree_id	= btree_id,
-		.pos		= pos,
-	};
-
-	return rhashtable_lookup_fast(&c->btree.key_cache.table, &key,
-				      bch2_btree_key_cache_params);
 }
 
 static bool bkey_cached_lock_for_evict(struct bkey_cached *ck)

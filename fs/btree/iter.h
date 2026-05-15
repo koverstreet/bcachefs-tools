@@ -248,14 +248,15 @@ bch2_btree_path_make_mut(struct btree_trans *trans,
 
 btree_path_idx_t __must_check
 __bch2_btree_path_set_pos(struct btree_trans *, btree_path_idx_t,
-			  struct bpos, bool, unsigned long);
+			  const struct bpos *, bool, unsigned long);
 
 static inline btree_path_idx_t __must_check
 bch2_btree_path_set_pos(struct btree_trans *trans,
-			btree_path_idx_t path, struct bpos new_pos,
+			btree_path_idx_t path,
+			const struct bpos *new_pos,
 			bool intent, unsigned long ip)
 {
-	return !bpos_eq(new_pos, trans->paths[path].pos)
+	return !bpos_eq(*new_pos, trans->paths[path].pos)
 		? __bch2_btree_path_set_pos(trans, path, new_pos, intent, ip)
 		: path;
 }
@@ -279,7 +280,8 @@ static inline int __must_check bch2_btree_path_traverse(struct btree_trans *tran
 	return bch2_btree_path_traverse_one(trans, path, flags, _RET_IP_);
 }
 
-btree_path_idx_t bch2_path_get(struct btree_trans *, enum btree_id, struct bpos,
+btree_path_idx_t bch2_path_get(struct btree_trans *,
+			       enum btree_id, const struct bpos *,
 			       unsigned, unsigned,
 			       enum btree_iter_update_trigger_flags,
 			       unsigned long);
@@ -555,12 +557,12 @@ int __must_check bch2_btree_iter_traverse(struct btree_iter *);
 
 struct btree *bch2_btree_iter_peek_node(struct btree_iter *);
 
-struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *, struct bpos);
+struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *, const struct bpos *);
 struct bkey_s_c bch2_btree_iter_next(struct btree_iter *);
 
 static inline struct bkey_s_c bch2_btree_iter_peek(struct btree_iter *iter)
 {
-	return bch2_btree_iter_peek_max(iter, SPOS_MAX);
+	return bch2_btree_iter_peek_max(iter, &SPOS_MAX);
 }
 
 struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *, struct bpos);
@@ -678,7 +680,7 @@ static inline void bch2_trans_iter_init_common(struct btree_trans *trans,
 #ifdef CONFIG_BCACHEFS_DEBUG
 	iter->ip_allocated = ip;
 #endif
-	iter->path = bch2_path_get(trans, btree, iter->pos, locks_want, depth, flags, ip);
+	iter->path = bch2_path_get(trans, btree, &iter->pos, locks_want, depth, flags, ip);
 }
 
 void bch2_trans_iter_init_outlined(struct btree_trans *, struct btree_iter *,
@@ -959,7 +961,7 @@ static inline struct bkey_s_c bch2_btree_iter_peek_max_type(struct btree_iter *i
 							    enum btree_iter_update_trigger_flags flags)
 {
 	if (!(flags & BTREE_ITER_slots))
-		return bch2_btree_iter_peek_max(iter, end);
+		return bch2_btree_iter_peek_max(iter, &end);
 
 	if (bkey_gt(iter->pos, end))
 		return bkey_s_c_null;

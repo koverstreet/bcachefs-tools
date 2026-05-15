@@ -427,13 +427,13 @@ enum bkey_pack_pos_ret {
 	BKEY_PACK_POS_FAIL,
 };
 
-enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *, struct bpos,
+enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *, const struct bpos *,
 					   const struct btree *);
 
 static inline bool bkey_pack_pos(struct bkey_packed *out, struct bpos in,
 				 const struct btree *b)
 {
-	return bch2_bkey_pack_pos_lossy(out, in, b) == BKEY_PACK_POS_EXACT;
+	return bch2_bkey_pack_pos_lossy(out, &in, b) == BKEY_PACK_POS_EXACT;
 }
 
 void bch2_bkey_unpack(const struct btree *, struct bkey_i *,

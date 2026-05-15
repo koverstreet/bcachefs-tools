@@ -340,10 +340,10 @@ static int test_peek_end(struct bch_fs *c, u64 nr)
 	CLASS(btree_iter, iter)(trans, BTREE_ID_xattrs, SPOS(0, 0, U32_MAX), 0);
 
 	struct bkey_s_c k;
-	lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, POS(0, U64_MAX))));
+	lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, &POS(0, U64_MAX))));
 	BUG_ON(k.k);
 
-	lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, POS(0, U64_MAX))));
+	lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, &POS(0, U64_MAX))));
 	BUG_ON(k.k);
 
 	return 0;
@@ -357,10 +357,10 @@ static int test_peek_end_extents(struct bch_fs *c, u64 nr)
 	CLASS(btree_iter, iter)(trans, BTREE_ID_extents, SPOS(0, 0, U32_MAX), 0);
 
 	struct bkey_s_c k;
-	lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, POS(0, U64_MAX))));
+	lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, &POS(0, U64_MAX))));
 	BUG_ON(k.k);
 
-	lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, POS(0, U64_MAX))));
+	lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, &POS(0, U64_MAX))));
 	BUG_ON(k.k);
 
 	return 0;
@@ -465,7 +465,7 @@ static int test_extent_create_dup(struct bch_fs *c, u64 inum)
 	CLASS(disk_reservation, res)(c);
 
 	int ret = commit_do(trans, &res.r, NULL, 0, ({
-		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, POS(inum, U64_MAX)));
+		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(inum, U64_MAX)));
 
 		int _ret = !k.k || k.k->type != KEY_TYPE_extent ? -ENOENT : 0;
 		if (!_ret) {
@@ -507,7 +507,7 @@ static int test_snapshot_filter(struct bch_fs *c, u32 snapid_lo, u32 snapid_hi)
 	CLASS(btree_iter, iter)(trans, BTREE_ID_xattrs, SPOS(0, 0, snapid_lo), 0);
 
 	struct bkey_s_c k;
-	int ret = lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, POS(0, U64_MAX))));
+	int ret = lockrestart_do(trans, bkey_err(k = bch2_btree_iter_peek_max(&iter, &POS(0, U64_MAX))));
 
 	BUG_ON(k.k->p.snapshot != U32_MAX);
 
@@ -652,7 +652,7 @@ static int __do_delete(struct btree_trans *trans, struct bpos pos)
 {
 	CLASS(btree_iter, iter)(trans, BTREE_ID_xattrs, pos,
 				BTREE_ITER_intent);
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, POS(0, U64_MAX)));
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(0, U64_MAX)));
 
 	if (!k.k)
 		return 0;

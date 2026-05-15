@@ -778,7 +778,8 @@ static struct bkey_s_c next_lru_key(struct btree_trans *trans, struct btree_iter
 				    struct bch_dev *ca, bool *wrapped)
 {
 	while (true) {
-		struct bkey_s_c k = bch2_btree_iter_peek_max(iter, lru_pos(ca->dev_idx, U64_MAX, LRU_TIME_MAX));
+		struct bpos end = lru_pos(ca->dev_idx, U64_MAX, LRU_TIME_MAX);
+		struct bkey_s_c k = bch2_btree_iter_peek_max(iter, &end);
 		if (k.k || *wrapped)
 			return k;
 

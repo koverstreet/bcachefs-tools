@@ -2319,7 +2319,7 @@ static int btree_merge_push_pos(struct btree_trans *trans,
 		? bpos_predecessor(pivot->data->min_key)
 		: bpos_successor(pivot->data->max_key);
 
-	btree_path_idx_t path = bch2_path_get(trans, btree_id, pos,
+	btree_path_idx_t path = bch2_path_get(trans, btree_id, &pos,
 					      level + 1, level,
 					      BTREE_ITER_intent, _RET_IP_);
 

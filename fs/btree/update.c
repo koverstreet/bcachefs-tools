@@ -245,7 +245,7 @@ static int bch2_trans_update_extent(struct btree_trans *trans,
 				BTREE_ITER_intent|
 				BTREE_ITER_not_extents|
 				BTREE_ITER_nofilter_whiteouts);
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, POS(insert->k.p.inode, U64_MAX)));
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(insert->k.p.inode, U64_MAX)));
 	if (!k.k)
 		goto out;
 
@@ -288,7 +288,7 @@ static int bch2_trans_update_extent(struct btree_trans *trans,
 			goto out;
 next:
 		bch2_btree_iter_advance(&iter);
-		k = bkey_try(bch2_btree_iter_peek_max(&iter, POS(insert->k.p.inode, U64_MAX)));
+		k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(insert->k.p.inode, U64_MAX)));
 		if (!k.k)
 			goto out;
 	}
@@ -473,12 +473,12 @@ static noinline int bch2_trans_update_get_key_cache(struct btree_trans *trans,
 	    !bpos_eq(key_cache_path->pos, iter->pos)) {
 		if (!iter->key_cache_path)
 			iter->key_cache_path =
-				bch2_path_get(trans, path->btree_id, path->pos, 1, 0,
+				bch2_path_get(trans, path->btree_id, &path->pos, 1, 0,
 					      BTREE_ITER_intent|
 					      BTREE_ITER_cached, _THIS_IP_);
 
 		iter->key_cache_path =
-			bch2_btree_path_set_pos(trans, iter->key_cache_path, path->pos,
+			bch2_btree_path_set_pos(trans, iter->key_cache_path, &path->pos,
 						iter->flags & BTREE_ITER_intent,
 						_THIS_IP_);
 
@@ -721,7 +721,7 @@ int bch2_btree_delete(struct btree_trans *trans,
 static int delete_range_one(struct btree_trans *trans, struct btree_iter *iter,
 			    struct bpos end, enum btree_iter_update_trigger_flags flags)
 {
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(iter, end));
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(iter, &end));
 
 	if (!k.k)
 		return 1;

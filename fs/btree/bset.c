@@ -1455,7 +1455,7 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 
 	memset(iter, 0, sizeof(*iter));
 
-	switch (bch2_bkey_pack_pos_lossy(&p.k, *search, b)) {
+	switch (bch2_bkey_pack_pos_lossy(&p.k, search, b)) {
 	case BKEY_PACK_POS_EXACT:
 		packed_search = &p.k;
 		break;
