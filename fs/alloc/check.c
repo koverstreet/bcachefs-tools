@@ -40,7 +40,7 @@ static struct bkey_s_c bch2_get_key_or_hole(struct btree_iter *iter, struct bpos
 		 * btree node min/max is a closed interval, upto takes a half
 		 * open interval:
 		 */
-		k = bch2_btree_iter_peek_max(&iter2, end);
+		k = bch2_btree_iter_peek_max(&iter2, &end);
 		if (bkey_err(k))
 			return k;
 

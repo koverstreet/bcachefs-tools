@@ -1022,7 +1022,7 @@ static int bch2_inode_delete_keys(struct btree_trans *trans,
 
 		bch2_btree_iter_set_snapshot(&iter, snapshot);
 
-		k = bch2_btree_iter_peek_max(&iter, end);
+		k = bch2_btree_iter_peek_max(&iter, &end);
 		ret = bkey_err(k);
 		if (ret)
 			goto err;

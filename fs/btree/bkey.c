@@ -652,12 +652,13 @@ static bool bkey_format_has_too_big_fields(const struct bkey_format *f)
  * _provided_ it compares <= to the original pos.
  */
 enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
-					   struct bpos in,
+					   const struct bpos *_in,
 					   const struct btree *b)
 {
 	const struct bkey_format *f = &b->format;
 	struct pack_state state = pack_state_init(f, out);
 	u64 *w = out->_data;
+	struct bpos in = *_in;
 	struct bpos orig = in;
 	bool exact = true;
 	unsigned i;
