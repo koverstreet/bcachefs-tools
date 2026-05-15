@@ -32,14 +32,19 @@ int bch2_subvol_is_ro(struct bch_fs *, u32);
 
 static inline struct bkey_s_c
 bch2_btree_iter_peek_in_subvolume_max_type(struct btree_iter *iter, struct bpos end,
-					    u32 subvolid, unsigned flags)
+					   u32 subvolid, u32 *snapshot, unsigned flags)
 {
-	u32 snapshot;
-	int ret = bch2_subvolume_get_snapshot(iter->trans, subvolid, &snapshot);
+	int ret = bch2_trans_relock(iter->trans);
 	if (ret)
 		return bkey_s_c_err(ret);
 
-	bch2_btree_iter_set_snapshot(iter, snapshot);
+	if (!*snapshot) {
+		ret = bch2_subvolume_get_snapshot(iter->trans, subvolid, snapshot);
+		if (ret)
+			return bkey_s_c_err(ret);
+
+		bch2_btree_iter_set_snapshot(iter, *snapshot);
+	}
 	return bch2_btree_iter_peek_max_type(iter, end, flags);
 }
 
@@ -50,10 +55,11 @@ bch2_btree_iter_peek_in_subvolume_max_type(struct btree_iter *iter, struct bpos 
 										\
 	do {									\
 		u32 _restart_count = bch2_trans_begin(_trans);			\
+		u32 _snapshot = 0;						\
 		_ret3 = 0;							\
 										\
 		struct bkey_s_c _k = bch2_btree_iter_peek_in_subvolume_max_type(&(_iter),\
-						_end, _subvolid, (_flags));	\
+					_end, _subvolid, &_snapshot, (_flags));	\
 		if (!(_k).k)							\
 			break;							\
 										\
@@ -66,12 +72,63 @@ bch2_btree_iter_peek_in_subvolume_max_type(struct btree_iter *iter, struct bpos 
 	_ret3;									\
 })
 
+static inline bool
+febk_in_subvolume_in_trans_cond(struct btree_trans *trans,
+				struct btree_iter *iter,
+				u32 *restart_count,
+				u32 *snapshot,
+				int *ret)
+{
+	if (!*ret) {
+		bch2_trans_verify_not_restarted(trans, *restart_count);
+		return bch2_btree_iter_advance(iter);
+	}
+
+	if (bch2_err_matches(*ret, BCH_ERR_transaction_restart)) {
+		*restart_count = bch2_trans_begin(trans);
+		*snapshot = 0;
+		*ret = 0;
+		return true;
+	}
+
+	return false;
+}
+
+#define for_each_btree_key_in_subvolume_max_continue_in_trans(_trans, _iter,	\
+					 _end, _subvolid, _flags, _k, _do)	\
+({										\
+	u32 _restart_count = (_trans)->restart_count;				\
+	u32 _snapshot = 0;							\
+	int _ret3 = 0;								\
+										\
+	do {									\
+		struct bkey_s_c _k = bch2_btree_iter_peek_in_subvolume_max_type(&(_iter),\
+					_end, _subvolid, &_snapshot, (_flags));	\
+		if (!(_k).k)							\
+			break;							\
+										\
+		_ret3 = bkey_err(_k) ?: (_do);					\
+	} while (febk_in_subvolume_in_trans_cond(_trans, &(_iter),		\
+				 &_restart_count, &_snapshot, &_ret3));		\
+										\
+	_ret3;									\
+})
+
 #define for_each_btree_key_in_subvolume_max(_trans, _iter, _btree_id,		\
 				_start, _end, _subvolid, _flags, _k, _do)	\
 ({										\
 	CLASS(btree_iter, _iter)((_trans), (_btree_id), (_start), (_flags));	\
 										\
 	for_each_btree_key_in_subvolume_max_continue(_trans, _iter,		\
+					_end, _subvolid, _flags, _k, _do);	\
+})
+
+#define for_each_btree_key_in_subvolume_max_in_trans(_trans, _iter, _btree_id,	\
+				_start, _end, _subvolid, _flags, _k, _do)	\
+({										\
+	CLASS(btree_iter, _iter)((_trans), (_btree_id), (_start), (_flags));	\
+										\
+	for_each_btree_key_in_subvolume_max_continue_in_trans(_trans, _iter,		\
 					_end, _subvolid, _flags, _k, _do);	\
 })
 
