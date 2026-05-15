@@ -995,7 +995,7 @@ int bch2_fs_btree_key_cache_init(struct bch_fs_btree_key_cache *bc)
 	shrink->to_text		= bch2_btree_key_cache_shrinker_to_text;
 #endif
 	shrink->batch		= 1 << 14;
-	shrink->seeks		= 0;
+	shrink->seeks		= 1;
 	shrink->private_data	= c;
 	shrinker_register(shrink);
 	return 0;
