@@ -771,10 +771,11 @@ int bch2_readdir(struct bch_fs *c, subvol_inum inum,
 	bch2_bkey_buf_init(&sk);
 
 	CLASS(btree_trans, trans)(c);
-	int ret = for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_dirents,
-				   POS(inum.inum, ctx->pos),
-				   POS(inum.inum, U64_MAX),
-				   inum.subvol, 0, k, ({
+	int ret = for_each_btree_key_in_subvolume_max_in_trans(trans,
+				iter, BTREE_ID_dirents,
+				POS(inum.inum, ctx->pos),
+				POS(inum.inum, U64_MAX),
+				inum.subvol, 0, k, ({
 			if (k.k->type != KEY_TYPE_dirent)
 				continue;
 
