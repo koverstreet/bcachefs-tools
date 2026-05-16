@@ -340,6 +340,35 @@ int bch2_inode_unpack(struct bkey_s_c k,
 		: bch2_inode_unpack_slowpath(k, unpacked);
 }
 
+int __bch2_inode_peek_snapshot(struct btree_trans *trans,
+			       struct btree_iter *iter,
+			       struct bch_inode_unpacked *inode,
+			       subvol_inum inum, u32 snapshot,
+			       unsigned flags, const char *warn)
+{
+	bch2_trans_iter_init(trans, iter, BTREE_ID_inodes, SPOS(0, inum.inum, snapshot),
+			     flags|BTREE_ITER_cached);
+	struct bkey_s_c k = bch2_btree_iter_peek_slot(iter);
+	int ret = bkey_err(k);
+	if (ret)
+		goto err;
+
+	ret = bkey_is_inode(k.k) ? 0 : bch_err_throw(trans->c, ENOENT_inode);
+	if (ret)
+		goto err;
+
+	ret = bch2_inode_unpack(k, inode);
+	if (ret)
+		goto err;
+
+	return 0;
+err:
+	if (warn)
+		bch_err_msg(trans->c, ret, "%s(): looking up inum %llu:%llu:",
+			    warn, inum.subvol, inum.inum);
+	return ret;
+}
+
 int __bch2_inode_peek(struct btree_trans *trans,
 		      struct btree_iter *iter,
 		      struct bch_inode_unpacked *inode,

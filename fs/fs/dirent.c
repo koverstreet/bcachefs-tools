@@ -534,6 +534,25 @@ out_set_src:
 	return 0;
 }
 
+int bch2_dirent_lookup_snapshot(struct btree_trans *trans,
+				struct btree_iter *iter,
+				subvol_inum dir, u32 snapshot,
+				const struct bch_hash_info *hash_info,
+				const struct qstr *name, subvol_inum *inum,
+				unsigned flags)
+{
+	struct qstr lookup_name;
+	try(bch2_maybe_casefold(trans, hash_info, name, &lookup_name));
+
+	struct bkey_s_c k = bkey_try(bch2_hash_lookup_in_snapshot(trans, iter,
+							bch2_dirent_hash_desc,
+							hash_info, dir, &lookup_name,
+							flags, snapshot));
+
+	int ret = bch2_dirent_read_target(trans, dir, bkey_s_c_to_dirent(k), inum);
+	return ret > 0 ? -ENOENT : ret;
+}
+
 int bch2_dirent_lookup_trans(struct btree_trans *trans,
 			     struct btree_iter *iter,
 			     subvol_inum dir,
