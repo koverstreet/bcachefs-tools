@@ -647,7 +647,7 @@ recover:
 			scoped_guard(mutex, &c->btree.cache.root_lock) {
 				r->b = NULL;
 				if (likely(i < BTREE_ID_NR))
-					WRITE_ONCE(c->btree.cache.roots_b[i], NULL);
+					WRITE_ONCE(c->btree.cache.roots_b[i], 0);
 			}
 
 			if (!reconstructed_root) {

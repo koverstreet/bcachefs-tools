@@ -201,18 +201,56 @@ static inline struct btree_root *bch2_btree_id_root(struct bch_fs *c, unsigned i
 }
 
 /*
- * Hot read of root pointer — avoids touching struct btree_root, which is
- * ~0xb0 (176 bytes) per entry, by reading from the dedicated side-array.
- * For id < BTREE_ID_NR this is a tight L1 access (4 cache lines cover all
- * standard btree roots); roots_extra still falls through to the full struct.
+ * Pack root pointer + level: low 3 bits encode b->c.level (BTREE_MAX_DEPTH
+ * is 4, so values 0..3 fit comfortably; we reserve 3 bits to leave slack
+ * for future depth bumps). struct btree alignment is well over 8 bytes so
+ * the low bits are guaranteed free. Packing into a single word makes the
+ * read in btree_path_lock_root naturally atomic — no torn read across b
+ * and b->c.level — and avoids the cold-cacheline miss into the btree
+ * node just to learn its level.
  */
-static inline struct btree *bch2_btree_id_root_b(struct bch_fs *c, unsigned btree_id)
+#define BTREE_ROOT_LEVEL_BITS	3
+#define BTREE_ROOT_LEVEL_MASK	((1UL << BTREE_ROOT_LEVEL_BITS) - 1)
+
+static inline unsigned long bch2_btree_root_pack(struct btree *b)
+{
+	BUILD_BUG_ON(BTREE_MAX_DEPTH > (1U << BTREE_ROOT_LEVEL_BITS));
+	if (!b)
+		return 0;
+	EBUG_ON((unsigned long)b & BTREE_ROOT_LEVEL_MASK);
+	EBUG_ON(b->c.level & ~BTREE_ROOT_LEVEL_MASK);
+	return (unsigned long)b | b->c.level;
+}
+
+static inline struct btree *bch2_btree_root_unpack_b(unsigned long v)
+{
+	return (struct btree *)(v & ~BTREE_ROOT_LEVEL_MASK);
+}
+
+static inline unsigned bch2_btree_root_unpack_level(unsigned long v)
+{
+	return v & BTREE_ROOT_LEVEL_MASK;
+}
+
+/*
+ * Hot read of packed root pointer + level — avoids touching struct
+ * btree_root, which is ~0xb0 (176 bytes) per entry, by reading from the
+ * dedicated side-array. For id < BTREE_ID_NR this is a tight L1 access
+ * (4 cache lines cover all standard btree roots); roots_extra still
+ * falls through to the full struct.
+ */
+static inline unsigned long bch2_btree_id_root_packed(struct bch_fs *c, unsigned btree_id)
 {
 	if (likely(btree_id < BTREE_ID_NR))
 		return READ_ONCE(c->btree.cache.roots_b[btree_id]);
 
 	struct btree_root *r = bch2_btree_id_root(c, btree_id);
-	return r ? READ_ONCE(r->b) : NULL;
+	return r ? bch2_btree_root_pack(READ_ONCE(r->b)) : 0;
+}
+
+static inline struct btree *bch2_btree_id_root_b(struct bch_fs *c, unsigned btree_id)
+{
+	return bch2_btree_root_unpack_b(bch2_btree_id_root_packed(c, btree_id));
 }
 
 static inline struct btree *btree_node_root(struct bch_fs *c, struct btree *b)

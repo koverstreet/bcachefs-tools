@@ -240,12 +240,17 @@ struct btree_root {
 
 struct bch_fs_btree_cache {
 	/*
-	 * Hot path: btree_path_lock_root reads only the root pointer per
-	 * btree_id. Splitting `b` out of struct btree_root keeps the read-side
+	 * Hot path: btree_path_lock_root reads root pointer + level per
+	 * btree_id. We pack the level into the low 3 bits of the pointer so a
+	 * single load yields both atomically (no torn read between b and
+	 * b->c.level, no extra cacheline miss into the btree node to read
+	 * level). See bch2_btree_root_{pack,unpack_b,unpack_level} in cache.h.
+	 *
+	 * Splitting this out of struct btree_root also keeps the read-side
 	 * working set in a few cache lines instead of the full ~88 lines of
 	 * roots_known[].
 	 */
-	struct btree		*roots_b[BTREE_ID_NR];
+	unsigned long		roots_b[BTREE_ID_NR];
 
 	struct btree_root	roots_known[BTREE_ID_NR];
 	DARRAY(struct btree_root) roots_extra;
