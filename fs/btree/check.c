@@ -644,7 +644,11 @@ recover:
 			bch2_btree_node_transition_state(&c->btree.cache, b,
 								  BTREE_NODE_CACHE_FREEABLE);
 
-			r->b = NULL;
+			scoped_guard(mutex, &c->btree.cache.root_lock) {
+				r->b = NULL;
+				if (likely(i < BTREE_ID_NR))
+					WRITE_ONCE(c->btree.cache.roots_b[i], NULL);
+			}
 
 			if (!reconstructed_root) {
 				r->error = -EIO;
