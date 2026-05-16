@@ -6,6 +6,9 @@
 #include "btree/bkey_methods.h"
 #include "snapshots/snapshot.h"
 
+#include <linux/hash.h>
+#include <linux/sched.h>
+
 extern const char * const bch2_inode_opts[];
 
 int bch2_inode_validate(struct bch_fs *, struct bkey_s_c,
@@ -184,7 +187,23 @@ void bch2_inode_init(struct bch_fs *, struct bch_inode_unpacked *,
 		     struct bch_inode_unpacked *);
 
 int bch2_inode_create(struct btree_trans *, struct btree_iter *,
-		      struct bch_inode_unpacked *, u32, u64, bool);
+		      struct bch_inode_unpacked *, u32, bool);
+
+/*
+ * Shard index for inode-number allocation. We used to use the current CPU id,
+ * but threads migrate across CPUs and the win from per-CPU allocator
+ * separation evaporates — concurrent allocators end up sharing shards (and
+ * fighting on the same alloc_cursor btree node) any time the scheduler
+ * shuffles them onto the same core. Hashing the task's pid is stable per
+ * thread, so concurrent allocators in different threads keep their separation
+ * regardless of which CPU they're currently running on.
+ */
+static inline u64 bch2_inode_shard_idx(struct bch_fs *c)
+{
+	return c->opts.shard_inode_numbers_bits
+		? hash_64((u64) current->pid, c->opts.shard_inode_numbers_bits)
+		: 0;
+}
 
 int bch2_inode_rm(struct bch_fs *, subvol_inum);
 
