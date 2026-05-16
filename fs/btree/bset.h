@@ -547,13 +547,15 @@ void __bch2_btree_node_iter_verify(struct btree_node_iter *, struct btree *);
 static inline void bch2_btree_node_iter_verify(struct btree_node_iter *iter,
 					       struct btree *b)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups))
 		__bch2_btree_node_iter_verify(iter, b);
 }
 
 static inline void bch2_verify_btree_nr_keys(struct btree *b)
 {
-	if (static_branch_unlikely(&bch2_debug_check_btree_accounting))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_btree_accounting))
 		__bch2_verify_btree_nr_keys(b);
 }
 

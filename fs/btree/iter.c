@@ -494,33 +494,38 @@ void __bch2_assert_pos_locked(struct btree_trans *trans, enum btree_id id,
 static inline void bch2_btree_path_verify_level(struct btree_trans *trans,
 						struct btree_path *path, unsigned l)
 {
-	if (static_branch_unlikely(&bch2_debug_check_iterators))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_iterators))
 		__bch2_btree_path_verify_level(trans, path, l);
 }
 
 static inline void bch2_btree_path_verify(struct btree_trans *trans,
 					  struct btree_path *path)
 {
-	if (static_branch_unlikely(&bch2_debug_check_iterators))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_iterators))
 		__bch2_btree_path_verify(trans, path);
 }
 
 static inline void bch2_btree_iter_verify(struct btree_iter *iter)
 {
-	if (static_branch_unlikely(&bch2_debug_check_iterators))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_iterators))
 		__bch2_btree_iter_verify(iter);
 }
 
 static inline void bch2_btree_iter_verify_entry_exit(struct btree_iter *iter)
 {
-	if (static_branch_unlikely(&bch2_debug_check_iterators))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_iterators))
 		__bch2_btree_iter_verify_entry_exit(iter);
 }
 
 static inline int bch2_btree_iter_verify_ret(struct btree_iter *iter,
 					     struct bkey_s_c k)
 {
-	return static_branch_unlikely(&bch2_debug_check_iterators)
+	return IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+		static_branch_unlikely(&bch2_debug_check_iterators)
 		? __bch2_btree_iter_verify_ret(iter, k)
 		: 0;
 }
@@ -684,7 +689,8 @@ void bch2_btree_node_iter_fix(struct btree_trans *trans,
 		__bch2_btree_node_iter_fix(path, b, node_iter, t,
 					   where, clobber_u64s, new_u64s);
 
-		if (static_branch_unlikely(&bch2_debug_check_iterators))
+		if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+		    static_branch_unlikely(&bch2_debug_check_iterators))
 			bch2_btree_node_iter_verify(node_iter, b);
 	}
 
@@ -3181,7 +3187,8 @@ static void btree_trans_verify_sorted(struct btree_trans *trans)
 	struct btree_path *path, *prev = NULL;
 	struct trans_for_each_path_inorder_iter iter;
 
-	if (!static_branch_unlikely(&bch2_debug_check_iterators))
+	if (!IS_ENABLED(CONFIG_BCACHEFS_DEBUG) ||
+	    !static_branch_unlikely(&bch2_debug_check_iterators))
 		return;
 
 	trans_for_each_path_inorder(trans, path, iter) {

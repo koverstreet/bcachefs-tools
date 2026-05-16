@@ -101,7 +101,8 @@ static inline void bch2_bkey_pack_verify(const struct bkey_packed *packed,
 					 const struct bkey *unpacked,
 					 const struct bkey_format *format)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bkey_unpack))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bkey_unpack))
 		__bch2_bkey_pack_verify(packed, unpacked, format);
 }
 
@@ -712,7 +713,8 @@ enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
 	out->format	= KEY_FORMAT_LOCAL_BTREE;
 	out->type	= KEY_TYPE_deleted;
 
-	if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
 		if (exact) {
 			BUG_ON(bkey_cmp_left_packed(b, out, &orig));
 		} else {
@@ -804,7 +806,8 @@ struct bkey_format bch2_bkey_format_done(struct bkey_format_state *s)
 		}
 	}
 
-	if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
 		CLASS(printbuf, buf)();
 		BUG_ON(bch2_bkey_format_invalid(NULL, &ret, 0, &buf));
 	}

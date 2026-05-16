@@ -452,7 +452,8 @@ __bkey_unpack_key_format_checked(const struct btree *b,
 		compiled_unpack_fn unpack_fn = b->aux_data;
 		unpack_fn(dst, src);
 
-		if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+		if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+		    static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
 			struct bkey dst2;
 
 			__bch2_bkey_unpack_key(&b->format, &dst2, src);
@@ -461,7 +462,8 @@ __bkey_unpack_key_format_checked(const struct btree *b,
 	} else {
 		__bch2_bkey_unpack_key_b(b, dst, src);
 
-		if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+		if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+		    static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
 			struct bkey dst2;
 
 			__bch2_bkey_unpack_key(&b->format, &dst2, src);
