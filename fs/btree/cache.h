@@ -197,6 +197,21 @@ static inline struct btree_root *bch2_btree_id_root(struct bch_fs *c, unsigned i
 	}
 }
 
+/*
+ * Hot read of root pointer — avoids touching struct btree_root, which is
+ * ~0xb0 (176 bytes) per entry, by reading from the dedicated side-array.
+ * For id < BTREE_ID_NR this is a tight L1 access (4 cache lines cover all
+ * standard btree roots); roots_extra still falls through to the full struct.
+ */
+static inline struct btree *bch2_btree_id_root_b(struct bch_fs *c, unsigned btree_id)
+{
+	if (likely(btree_id < BTREE_ID_NR))
+		return READ_ONCE(c->btree.cache.roots_b[btree_id]);
+
+	struct btree_root *r = bch2_btree_id_root(c, btree_id);
+	return r ? READ_ONCE(r->b) : NULL;
+}
+
 static inline struct btree *btree_node_root(struct bch_fs *c, struct btree *b)
 {
 	struct btree_root *r = bch2_btree_id_root(c, b->c.btree_id);
