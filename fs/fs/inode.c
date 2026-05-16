@@ -907,29 +907,6 @@ __cold void bch2_inode_generation_to_text(struct printbuf *out, struct bch_fs *c
 	prt_printf(out, "generation: %u", le32_to_cpu(gen.v->bi_generation));
 }
 
-int bch2_inode_alloc_cursor_validate(struct bch_fs *c, struct bkey_s_c k,
-				   const struct bkey_validate_context *from)
-{
-	int ret = 0;
-
-	bkey_fsck_err_on(k.k->p.inode != LOGGED_OPS_INUM_inode_cursors,
-			 c, inode_alloc_cursor_inode_bad,
-			 "k.p.inode bad");
-fsck_err:
-	return ret;
-}
-
-__cold
-void bch2_inode_alloc_cursor_to_text(struct printbuf *out, struct bch_fs *c,
-				     struct bkey_s_c k)
-{
-	struct bkey_s_c_inode_alloc_cursor i = bkey_s_c_to_inode_alloc_cursor(k);
-
-	prt_printf(out, "idx %llu generation %llu",
-		   le64_to_cpu(i.v->idx),
-		   le64_to_cpu(i.v->gen));
-}
-
 void bch2_inode_init_early(struct bch_fs *c,
 			   struct bch_inode_unpacked *inode_u)
 {
@@ -984,6 +961,46 @@ void bch2_inode_init(struct bch_fs *c, struct bch_inode_unpacked *inode_u,
 			     uid, gid, mode, rdev, parent);
 }
 
+int bch2_inode_alloc_cursor_validate(struct bch_fs *c, struct bkey_s_c k,
+				   const struct bkey_validate_context *from)
+{
+	int ret = 0;
+
+	bkey_fsck_err_on(k.k->p.inode != LOGGED_OPS_INUM_inode_cursors,
+			 c, inode_alloc_cursor_inode_bad,
+			 "k.p.inode bad");
+fsck_err:
+	return ret;
+}
+
+static inline void cursor_idx_min_max(struct bch_fs *c, unsigned idx,
+				      u64 *min, u64 *max)
+{
+	if (!idx) {
+		*min = BLOCKDEV_INODE_MAX;
+		*max = INT_MAX;
+	} else {
+		u64 shard = idx - 1;
+		unsigned bits = 63 - c->opts.shard_inode_numbers_bits;
+
+		*min = max(shard << bits, (u64) INT_MAX + 1);
+		*max = (shard << bits) | ~(ULLONG_MAX << bits);
+	}
+}
+
+__cold
+void bch2_inode_alloc_cursor_to_text(struct printbuf *out, struct bch_fs *c,
+				     struct bkey_s_c k)
+{
+	struct bkey_s_c_inode_alloc_cursor i = bkey_s_c_to_inode_alloc_cursor(k);
+
+	u64 min, max, idx = le64_to_cpu(i.v->idx);
+	cursor_idx_min_max(c, k.k->p.offset, &min, &max);
+
+	prt_printf(out, "min %llu max %llu consumed %llu idx %llu generation %llu",
+		   min, max, idx - min, idx, le64_to_cpu(i.v->gen));
+}
+
 static struct bkey_i_inode_alloc_cursor *
 bch2_inode_alloc_cursor_get(struct btree_trans *trans, u64 cpu, u64 *min, u64 *max,
 			    bool is_32bit)
@@ -992,7 +1009,7 @@ bch2_inode_alloc_cursor_get(struct btree_trans *trans, u64 cpu, u64 *min, u64 *m
 
 	u64 cursor_idx = is_32bit ? 0 : cpu + 1;
 
-	cursor_idx &= ~(~0ULL << c->opts.shard_inode_numbers_bits);
+	cursor_idx_min_max(c, cursor_idx, min, max);
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_logged_ops,
 				POS(LOGGED_OPS_INUM_inode_cursors, cursor_idx),
@@ -1009,19 +1026,9 @@ bch2_inode_alloc_cursor_get(struct btree_trans *trans, u64 cpu, u64 *min, u64 *m
 	if (IS_ERR(cursor))
 		return cursor;
 
-	if (is_32bit) {
-		*min = BLOCKDEV_INODE_MAX;
-		*max = INT_MAX;
-	} else {
-		cursor->v.bits = c->opts.shard_inode_numbers_bits;
+	cursor->v.bits = c->opts.shard_inode_numbers_bits;
 
-		unsigned bits = 63 - c->opts.shard_inode_numbers_bits;
-
-		*min = max(cpu << bits, (u64) INT_MAX + 1);
-		*max = (cpu << bits) | ~(ULLONG_MAX << bits);
-	}
-
-	if (le64_to_cpu(cursor->v.idx)  < *min)
+	if (le64_to_cpu(cursor->v.idx) < *min)
 		cursor->v.idx = cpu_to_le64(*min);
 
 	if (le64_to_cpu(cursor->v.idx) >= *max) {
