@@ -393,7 +393,8 @@ static inline void bch2_verify_insert_pos(struct btree *b,
 					  struct bkey_packed *insert,
 					  unsigned clobber_u64s)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups))
 		__bch2_verify_insert_pos(b, where, insert, clobber_u64s);
 }
 
@@ -618,7 +619,8 @@ start:
 static inline void bch2_bset_verify_rw_aux_tree(struct btree *b,
 						struct bset_tree *t)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups))
 		__bch2_bset_verify_rw_aux_tree(b, t);
 }
 
@@ -663,7 +665,8 @@ static void __bset_aux_tree_verify(struct btree *b)
 
 static inline void bset_aux_tree_verify(struct btree *b)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups))
 		__bset_aux_tree_verify(b);
 }
 
@@ -1006,7 +1009,8 @@ struct bkey_packed *bch2_bkey_prev_filter(struct btree *b,
 		k = p;
 	}
 
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
 		BUG_ON(ret >= orig_k);
 
 		for (i = ret
@@ -1334,7 +1338,8 @@ struct bkey_packed *bch2_bset_search_linear(struct btree *b,
 		       bkey_iter_pos_cmp(b, m, search) < 0)
 			m = bkey_p_next(m);
 
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
 		struct bkey_packed *prev = bch2_bkey_prev_all(b, t, m);
 
 		BUG_ON(prev &&
@@ -1578,7 +1583,8 @@ static inline void __bch2_btree_node_iter_advance(struct btree_node_iter *iter,
 void bch2_btree_node_iter_advance(struct btree_node_iter *iter,
 				  struct btree *b)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
 		__bch2_btree_node_iter_verify(iter, b);
 		__bch2_btree_node_iter_next_check(iter, b);
 	}

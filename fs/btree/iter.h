@@ -324,14 +324,16 @@ void __bch2_assert_pos_locked(struct btree_trans *, enum btree_id, struct bpos);
 
 static inline void bch2_trans_verify_paths(struct btree_trans *trans)
 {
-	if (static_branch_unlikely(&bch2_debug_check_iterators))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_iterators))
 		__bch2_trans_verify_paths(trans);
 }
 
 static inline void bch2_assert_pos_locked(struct btree_trans *trans, enum btree_id btree,
 					  struct bpos pos)
 {
-	if (static_branch_unlikely(&bch2_debug_check_iterators))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_iterators))
 		__bch2_assert_pos_locked(trans, btree, pos);
 }
 
