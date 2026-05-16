@@ -997,6 +997,35 @@ void bch2_fs_inode_shard_cpu_init(struct bch_fs *c)
 #endif
 }
 
+/*
+ * Default for shard_inode_numbers_bits when the user didn't set it.
+ *
+ * Scales with nr_cpus (x2, for thread-oversubscription headroom), capped so the
+ * pre-split shard-boundary metadata (4 sharded btrees, one node per shard)
+ * stays under 1% of the filesystem, and clamped to [0, 8] - the range the
+ * option and the inode_shard_cpu[] array support.
+ *
+ * Shared so the format-time default (userspace) and the kernel sb_validate
+ * rewrite of legacy bits=0 filesystems pick the same value from one place.
+ */
+unsigned bch2_shard_inode_numbers_bits_default(unsigned nr_cpus,
+					       u64 fs_size,
+					       u64 btree_node_bytes)
+{
+	unsigned cpu_bits = ilog2(roundup_pow_of_two(max(nr_cpus, 1U) * 2));
+
+	/*
+	 * 2^bits * 4 * btree_node_bytes <= fs_size / 100
+	 *   =>  2^bits <= fs_size / (400 * btree_node_bytes)
+	 */
+	u64 denom = 400ULL * btree_node_bytes;
+	unsigned size_bits = btree_node_bytes && fs_size >= denom
+		? ilog2(fs_size / denom)
+		: 0;
+
+	return min(min(cpu_bits, size_bits), 8U);
+}
+
 static inline void cursor_idx_min_max(struct bch_fs *c, unsigned idx,
 				      u64 *min, u64 *max)
 {
