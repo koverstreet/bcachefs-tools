@@ -133,7 +133,6 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	prt_printf(&msg.m, "/lost+found in subvol %llu snapshot %u", root_inum.subvol, snapshot);
 
 	u64 now = bch2_current_time(c);
-	u64 cpu = raw_smp_processor_id();
 
 	bch2_inode_init_early(c, lostfound);
 	bch2_inode_init_late(c, lostfound, now, 0, 0, S_IFDIR|0700, 0, root_inode);
@@ -143,7 +142,7 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	root_inode->bi_nlink++;
 
 	CLASS(btree_iter_uninit, lostfound_iter)(trans);
-	try(bch2_inode_create(trans, &lostfound_iter, lostfound, snapshot, cpu,
+	try(bch2_inode_create(trans, &lostfound_iter, lostfound, snapshot,
 			      inode_opt_get(c, root_inode, inodes_32bit)));
 
 	bch2_btree_iter_set_snapshot(&lostfound_iter, snapshot);
@@ -434,14 +433,13 @@ static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 sub
 	if (!inum) {
 		CLASS(btree_iter_uninit, inode_iter)(trans);
 		struct bch_inode_unpacked new_inode;
-		u64 cpu = raw_smp_processor_id();
 
 		bch2_inode_init_early(c, &new_inode);
 		bch2_inode_init_late(c, &new_inode, bch2_current_time(c), 0, 0, S_IFDIR|0755, 0, NULL);
 
 		new_inode.bi_subvol = subvolid;
 
-		try(bch2_inode_create(trans, &inode_iter, &new_inode, snapshotid, cpu, false));
+		try(bch2_inode_create(trans, &inode_iter, &new_inode, snapshotid, false));
 		try(bch2_btree_iter_traverse(&inode_iter));
 		try(bch2_inode_write(trans, &inode_iter, &new_inode));
 
