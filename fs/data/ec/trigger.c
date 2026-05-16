@@ -72,7 +72,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_stripe_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_stripe_to_text(struct printbuf *out, struct bch_fs *c,
 			 struct bkey_s_c k)
 {
 	const struct bch_stripe *sp = bkey_s_c_to_stripe(k).v;

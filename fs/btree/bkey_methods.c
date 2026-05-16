@@ -72,7 +72,7 @@ static int key_type_error_validate(struct bch_fs *c, struct bkey_s_c k,
 	return 0;
 }
 
-static void key_type_error_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void key_type_error_to_text(struct printbuf *out, struct bch_fs *c,
 				    struct bkey_s_c k)
 {
 	struct bch_error e;
@@ -108,7 +108,7 @@ static int key_type_cookie_validate(struct bch_fs *c, struct bkey_s_c k,
 	return 0;
 }
 
-static void key_type_cookie_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void key_type_cookie_to_text(struct printbuf *out, struct bch_fs *c,
 				    struct bkey_s_c k)
 {
 	struct bkey_s_c_cookie ck = bkey_s_c_to_cookie(k);
@@ -132,7 +132,7 @@ static int key_type_inline_data_validate(struct bch_fs *c, struct bkey_s_c k,
 	return 0;
 }
 
-static void key_type_inline_data_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void key_type_inline_data_to_text(struct printbuf *out, struct bch_fs *c,
 					 struct bkey_s_c k)
 {
 	struct bkey_s_c_inline_data d = bkey_s_c_to_inline_data(k);
@@ -295,7 +295,7 @@ int bch2_bkey_validate(struct bch_fs *c, struct bkey_s_c k,
 		bch2_bkey_val_validate(c, k, from);
 }
 
-void bch2_bpos_to_text(struct printbuf *out, struct bpos pos)
+__cold void bch2_bpos_to_text(struct printbuf *out, struct bpos pos)
 {
 	if (bpos_eq(pos, POS_MIN))
 		prt_printf(out, "POS_MIN");
@@ -321,7 +321,7 @@ void bch2_bpos_to_text(struct printbuf *out, struct bpos pos)
 	}
 }
 
-void bch2_bkey_to_text(struct printbuf *out, const struct bkey *k)
+__cold void bch2_bkey_to_text(struct printbuf *out, const struct bkey *k)
 {
 	if (k) {
 		prt_printf(out, "u64s %u type ", k->u64s);
@@ -339,7 +339,7 @@ void bch2_bkey_to_text(struct printbuf *out, const struct bkey *k)
 	}
 }
 
-void bch2_val_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_val_to_text(struct printbuf *out, struct bch_fs *c,
 		      struct bkey_s_c k)
 {
 	const struct bkey_ops *ops = bch2_bkey_type_ops(k.k->type);
@@ -348,7 +348,7 @@ void bch2_val_to_text(struct printbuf *out, struct bch_fs *c,
 		ops->val_to_text(out, c, k);
 }
 
-void bch2_bkey_val_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_bkey_val_to_text(struct printbuf *out, struct bch_fs *c,
 			   struct bkey_s_c k)
 {
 	bch2_bkey_to_text(out, k.k);

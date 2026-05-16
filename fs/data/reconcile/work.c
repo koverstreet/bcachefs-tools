@@ -111,7 +111,7 @@ static struct reconcile_scan reconcile_scan_decode(struct bch_fs *c, u64 v)
 	return (struct reconcile_scan) { .type = RECONCILE_SCAN_fs};
 }
 
-static void reconcile_scan_to_text(struct printbuf *out,
+static __cold void reconcile_scan_to_text(struct printbuf *out,
 				   struct bch_fs *c, struct reconcile_scan s)
 {
 	prt_str(out, bch2_rebalance_scan_strs[s.type]);
@@ -1776,7 +1776,7 @@ static int bch2_reconcile_thread(void *arg)
 	return 0;
 }
 
-void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	printbuf_tabstop_push(out, 24);
 	printbuf_tabstop_push(out, 12);
@@ -1861,7 +1861,7 @@ void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c)
 	}
 }
 
-void bch2_reconcile_scan_pending_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_reconcile_scan_pending_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	/*
 	 * No multithreaded btree access until BCH_FS_may_go_rw and we're no

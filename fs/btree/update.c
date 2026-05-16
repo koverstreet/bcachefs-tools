@@ -301,6 +301,17 @@ out:
 		: 0;
 }
 
+static noinline __cold
+void __update_by_path_trace(struct btree_trans *trans, unsigned overwrite,
+			    btree_path_idx_t path_idx, struct bkey_i *k)
+{
+	__event_trace(trans->c, update_by_path, buf, ({
+		prt_printf(&buf, "%s overwrite %u\n", trans->fn, overwrite);
+		bch2_btree_path_to_text_short(&buf, trans, path_idx, trans->paths + path_idx);
+		bch2_bkey_val_to_text(&buf, trans->c, bkey_i_to_s_c(k));
+	}));
+}
+
 static inline struct btree_insert_entry *
 __btree_trans_update_by_path(struct btree_trans *trans,
 			     btree_path_idx_t path_idx,
@@ -386,11 +397,8 @@ __btree_trans_update_by_path(struct btree_trans *trans,
 
 	__btree_path_get(trans, trans->paths + i->path, true);
 
-	event_trace(c, update_by_path, buf, ({
-		prt_printf(&buf, "%s overwrite %u\n", trans->fn, overwrite);
-		bch2_btree_path_to_text_short(&buf, trans, path_idx, path);
-		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(k));
-	}));
+	event_trace_fn(c, update_by_path,
+		       __update_by_path_trace(trans, overwrite, path_idx, k));
 
 	return i;
 }

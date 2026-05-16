@@ -56,7 +56,7 @@ static const char * const bch2_gc_phase_strs[] = {
 	NULL
 };
 
-void bch2_gc_pos_to_text(struct printbuf *out, struct gc_pos *p)
+__cold void bch2_gc_pos_to_text(struct printbuf *out, struct gc_pos *p)
 {
 	prt_str(out, bch2_gc_phase_strs[p->phase]);
 	prt_char(out, ' ');

@@ -184,7 +184,7 @@ static int bch2_opt_fix_errors_parse(struct bch_fs *c, const char *val, u64 *res
 	return 0;
 }
 
-static void bch2_opt_fix_errors_to_text(struct printbuf *out,
+static __cold void bch2_opt_fix_errors_to_text(struct printbuf *out,
 					struct bch_fs *c,
 					struct bch_sb *sb,
 					u64 v)
@@ -495,7 +495,7 @@ int bch2_opt_parse(struct bch_fs *c,
 	return bch2_opt_validate(opt, *res, err);
 }
 
-void bch2_opt_to_text(struct printbuf *out,
+__cold void bch2_opt_to_text(struct printbuf *out,
 		      struct bch_fs *c, struct bch_sb *sb,
 		      const struct bch_option *opt, u64 v,
 		      unsigned flags)
@@ -538,7 +538,7 @@ void bch2_opt_to_text(struct printbuf *out,
 	}
 }
 
-void bch2_opts_to_text(struct printbuf *out,
+__cold void bch2_opts_to_text(struct printbuf *out,
 		       struct bch_opts opts,
 		       struct bch_fs *c, struct bch_sb *sb,
 		       struct bch_opts_mask *mask,
@@ -991,7 +991,7 @@ bool bch2_opt_is_inode_opt(enum bch_opt_id id)
 	return false;
 }
 
-void bch2_inode_opts_to_text(struct printbuf *out, struct bch_fs *c, struct bch_inode_opts opts)
+__cold void bch2_inode_opts_to_text(struct printbuf *out, struct bch_fs *c, struct bch_inode_opts opts)
 {
 	bool first = true;
 

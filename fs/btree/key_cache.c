@@ -923,7 +923,7 @@ rehash_wait:
 #ifdef HAVE_SHRINKER_TO_TEXT
 #include <linux/seq_buf.h>
 
-static void bch2_btree_key_cache_shrinker_to_text(struct seq_buf *s, struct shrinker *shrink)
+static __cold void bch2_btree_key_cache_shrinker_to_text(struct seq_buf *s, struct shrinker *shrink)
 {
 	struct bch_fs *c = shrink->private_data;
 	struct bch_fs_btree_key_cache *bc = &c->btree.key_cache;
@@ -970,7 +970,7 @@ int bch2_fs_btree_key_cache_init(struct bch_fs_btree_key_cache *bc)
 	return 0;
 }
 
-void bch2_btree_key_cache_to_text(struct printbuf *out, struct bch_fs_btree_key_cache *bc)
+__cold void bch2_btree_key_cache_to_text(struct printbuf *out, struct bch_fs_btree_key_cache *bc)
 {
 	printbuf_tabstop_push(out, 24);
 	printbuf_tabstop_push(out, 12);

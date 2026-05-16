@@ -44,7 +44,7 @@ static inline void __btree_path_get(struct btree_trans *trans, struct btree_path
 
 	path->ref++;
 	path->intent_ref += intent;
-
+#ifdef CONFIG_BCACHEFS_DEBUG
 	event_trace(trans->c, btree_path_get_ll, buf, ({
 		prt_printf(&buf, "%s: path %3u ref %u btree ", trans->fn,
 			   idx, path->ref);
@@ -52,6 +52,7 @@ static inline void __btree_path_get(struct btree_trans *trans, struct btree_path
 		prt_str(&buf, " pos ");
 		bch2_bpos_to_text(&buf, path->pos);
 	}));
+#endif
 }
 
 static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path *path, bool intent)
@@ -60,7 +61,7 @@ static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path
 	EBUG_ON(!test_bit(path - trans->paths, trans->paths_allocated));
 	EBUG_ON(!path->ref);
 	EBUG_ON(!path->intent_ref && intent);
-
+#ifdef CONFIG_BCACHEFS_DEBUG
 	event_trace(trans->c, btree_path_put_ll, buf, ({
 		prt_printf(&buf, "%s: path %3zu ref %u btree ", trans->fn,
 			   path - trans->paths, path->ref);
@@ -68,7 +69,7 @@ static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path
 		prt_str(&buf, " pos ");
 		bch2_bpos_to_text(&buf, path->pos);
 	}));
-
+#endif
 	path->intent_ref -= intent;
 	return --path->ref == 0;
 }

@@ -263,7 +263,7 @@ static inline int __btree_node_lock_nopath(struct btree_trans *trans,
 		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_waitlist_alloc);
 	WRITE_ONCE(trans->locking, NULL);
 	WRITE_ONCE(trans->locking_wait.start_time, 0);
-
+#ifdef CONFIG_BCACHEFS_DEBUG
 	event_trace(trans->c, btree_path_lock, buf,
 		prt_printf(&buf, "%s ret %s\n"
 			   "btree %s level %u lock seq %u node %px",
@@ -272,7 +272,7 @@ static inline int __btree_node_lock_nopath(struct btree_trans *trans,
 			   b->level,
 			   six_lock_seq(&b->lock),
 			   b));
-
+#endif
 	return ret;
 }
 
@@ -493,10 +493,12 @@ static inline void btree_path_set_should_be_locked(struct btree_trans *trans, st
 
 	if (!path->should_be_locked) {
 		path->should_be_locked = true;
+#ifdef CONFIG_BCACHEFS_DEBUG
 		event_trace(trans->c, btree_path_should_be_locked, buf, ({
 			prt_printf(&buf, "%s\n", trans->fn);
 			bch2_btree_path_to_text_short(&buf, trans, path - trans->paths, path);
 		}));
+#endif
 	}
 }
 

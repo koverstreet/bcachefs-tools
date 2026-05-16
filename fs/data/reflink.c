@@ -63,7 +63,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_reflink_p_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_reflink_p_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
 	struct bkey_s_c_reflink_p p = bkey_s_c_to_reflink_p(k);
@@ -118,7 +118,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_reflink_v_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_reflink_v_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
 	struct bkey_s_c_reflink_v r = bkey_s_c_to_reflink_v(k);
@@ -148,7 +148,7 @@ int bch2_indirect_inline_data_validate(struct bch_fs *c, struct bkey_s_c k,
 	return 0;
 }
 
-void bch2_indirect_inline_data_to_text(struct printbuf *out,
+__cold void bch2_indirect_inline_data_to_text(struct printbuf *out,
 				       struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_indirect_inline_data d = bkey_s_c_to_indirect_inline_data(k);

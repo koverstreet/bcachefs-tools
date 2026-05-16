@@ -54,7 +54,7 @@ static void bch2_extent_crc_pack(union bch_extent_crc *,
 				 struct bch_extent_crc_unpacked,
 				 enum bch_extent_entry_type);
 
-void bch2_io_failures_to_text(struct printbuf *out,
+__cold void bch2_io_failures_to_text(struct printbuf *out,
 			      struct bch_fs *c,
 			      struct bch_io_failures *failed)
 {
@@ -325,7 +325,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_btree_ptr_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_btree_ptr_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
 	bch2_bkey_ptrs_to_text(out, c, k);
@@ -357,7 +357,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_btree_ptr_v2_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_btree_ptr_v2_to_text(struct printbuf *out, struct bch_fs *c,
 			       struct bkey_s_c k)
 {
 	struct bkey_s_c_btree_ptr_v2 bp = bkey_s_c_to_btree_ptr_v2(k);
@@ -551,7 +551,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_reservation_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_reservation_to_text(struct printbuf *out, struct bch_fs *c,
 			      struct bkey_s_c k)
 {
 	struct bkey_s_c_reservation r = bkey_s_c_to_reservation(k);
@@ -1588,7 +1588,7 @@ int bch2_bkey_drop_extra_ec_durability(struct btree_trans *trans,
 	return 0;
 }
 
-void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *c, const struct bch_extent_ptr *ptr)
+__cold void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *c, const struct bch_extent_ptr *ptr)
 {
 	struct bch_dev *ca = c ? bch2_dev_rcu_noerror(c, ptr->dev) : NULL;
 	if (!ca) {
@@ -1613,7 +1613,7 @@ void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *c, const struc
 		prt_str(out, " unwritten");
 }
 
-void bch2_extent_crc_unpacked_to_text(struct printbuf *out, struct bch_extent_crc_unpacked *crc)
+__cold void bch2_extent_crc_unpacked_to_text(struct printbuf *out, struct bch_extent_crc_unpacked *crc)
 {
 	prt_printf(out, "c_size %u size %u offset %u nonce %u csum ",
 		   crc->compressed_size,
@@ -1632,7 +1632,7 @@ const char * const bch2_extent_entry_types[] = {
 	NULL
 };
 
-void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);

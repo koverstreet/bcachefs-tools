@@ -43,7 +43,7 @@
 static struct dentry *bch_debug;
 #endif
 
-void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *c,
 				    const struct btree *b)
 {
 	struct btree_node *n_ondisk = NULL;
@@ -330,7 +330,7 @@ static const struct file_operations bfloat_failed_debug_ops = {
 	.read		= bch2_read_bfloat_failed,
 };
 
-static void bch2_cached_btree_node_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void bch2_cached_btree_node_to_text(struct printbuf *out, struct bch_fs *c,
 					   struct btree *b)
 {
 	if (!out->nr_tabstops)
@@ -679,7 +679,7 @@ static const struct file_operations btree_transaction_stats_op = {
 };
 
 /* walk btree transactions until we find a deadlock and print it */
-static void btree_deadlock_to_text(struct printbuf *out, struct bch_fs *c)
+static __cold void btree_deadlock_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct btree_trans *trans;
 	ulong iter = 0;

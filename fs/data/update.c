@@ -72,7 +72,7 @@ bool bch2_data_update_in_flight(struct bch_fs *c, struct bbpos *pos,
 	return false;
 }
 
-static void ptr_bits_to_text(struct printbuf *out, unsigned ptrs, const char *name)
+static __cold void ptr_bits_to_text(struct printbuf *out, unsigned ptrs, const char *name)
 {
 	if (ptrs) {
 		prt_printf(out, "%s ptrs:\t", name);
@@ -190,7 +190,7 @@ static unsigned bkey_ptr_noncached_conflicts_mask(struct bch_fs *c, struct bkey_
 	return ptrs_conflict;
 }
 
-static void data_update_key_to_text(struct printbuf *out,
+static __cold void data_update_key_to_text(struct printbuf *out,
 				    struct data_update *u,
 				    struct bkey_s_c new,
 				    struct bkey_s_c wrote,
@@ -886,7 +886,7 @@ int bch2_update_unwritten_extent(struct btree_trans *trans,
 	return ret;
 }
 
-void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
 				   struct bch_inode_opts *io_opts,
 				   struct data_update_opts *data_opts)
 {
@@ -916,7 +916,7 @@ void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
 	prt_newline(out);
 }
 
-void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
+__cold void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
 {
 	bch2_data_update_opts_to_text(out, m->op.c, &m->op.opts, &m->opts);
 	prt_newline(out);
@@ -929,7 +929,7 @@ void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
 	__bch2_write_op_to_text(out, &m->op);
 }
 
-void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update *m)
+__cold void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update *m)
 {
 	bch2_bkey_val_to_text(out, m->op.c, bkey_i_to_s_c(m->k.k));
 	prt_newline(out);

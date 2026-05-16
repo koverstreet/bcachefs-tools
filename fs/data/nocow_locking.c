@@ -218,7 +218,7 @@ retake_all:
 	darray_exit(&buckets);
 }
 
-void bch2_nocow_locks_to_text(struct printbuf *out, struct bucket_nocow_lock_table *t)
+__cold void bch2_nocow_locks_to_text(struct printbuf *out, struct bucket_nocow_lock_table *t)
 
 {
 	unsigned i, nr_zero = 0;

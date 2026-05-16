@@ -45,7 +45,7 @@ static int bch2_sb_counters_validate(struct bch_sb *sb, struct bch_sb_field *f,
 	return 0;
 }
 
-static void bch2_sb_counters_to_text(struct printbuf *out,
+static __cold void bch2_sb_counters_to_text(struct printbuf *out,
 				     struct bch_fs *c, struct bch_sb *sb,
 				     struct bch_sb_field *f)
 {
@@ -121,7 +121,7 @@ static void bch2_sb_counters_work(struct work_struct *work)
 	queue_delayed_work(system_unbound_wq, &c->work, HZ / 2);
 }
 
-void bch2_sb_recent_counters_to_text(struct printbuf *out, struct bch_fs_counters *c)
+__cold void bch2_sb_recent_counters_to_text(struct printbuf *out, struct bch_fs_counters *c)
 {
 	unsigned long active[BITS_TO_LONGS(BCH_COUNTER_NR)];
 	memset(active, 0, sizeof(active));

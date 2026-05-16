@@ -13,7 +13,7 @@ const char * const bch2_sb_error_strs[] = {
 #undef x
 };
 
-void bch2_sb_error_id_to_text(struct printbuf *out, enum bch_sb_error_id id)
+__cold void bch2_sb_error_id_to_text(struct printbuf *out, enum bch_sb_error_id id)
 {
 	if (id < BCH_FSCK_ERR_MAX)
 		prt_str(out, bch2_sb_error_strs[id]);
@@ -67,7 +67,7 @@ static int error_entry_cmp(const void *_l, const void *_r)
 
 DEFINE_DARRAY(bch_sb_field_error_entry);
 
-static void bch2_sb_errors_to_text(struct printbuf *out,
+static __cold void bch2_sb_errors_to_text(struct printbuf *out,
 				   struct bch_fs *c,
 				   struct bch_sb *sb,
 				   struct bch_sb_field *f)
@@ -100,7 +100,7 @@ const struct bch_sb_field_ops bch_sb_field_ops_errors = {
 	.to_text	= bch2_sb_errors_to_text,
 };
 
-void bch2_fs_errors_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_fs_errors_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (out->nr_tabstops < 1)
 		printbuf_tabstop_push(out, 48);

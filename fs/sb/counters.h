@@ -40,13 +40,18 @@ do {									\
 	this_cpu_add((_c)->counters.now[BCH_COUNTER_##_name], _nr);	\
 } while (0)
 
+#define __event_trace(_c, _name, _buf, ...)				\
+do {									\
+	CLASS(printbuf, _buf)();					\
+	printbuf_indent_add_nextline(&_buf, 2);				\
+	__VA_ARGS__;							\
+	trace_##_name(_c, _buf.buf);					\
+} while (0)
+
 #define event_trace(_c, _name, _buf, ...)				\
 do {									\
 	if (trace_##_name##_enabled()) {				\
-		CLASS(printbuf, _buf)();				\
-		printbuf_indent_add_nextline(&_buf, 2);			\
-		__VA_ARGS__;						\
-		trace_##_name(_c, _buf.buf);				\
+		__event_trace(_c, _name, _buf, __VA_ARGS__);		\
 	}								\
 } while (0)
 
@@ -59,6 +64,31 @@ do {									\
 #define event_inc_trace(_c, _name, ...)					\
 do {									\
 	event_trace(_c, _name, __VA_ARGS__);				\
+	event_inc(_c, _name);						\
+} while (0)
+
+/*
+ * _fn variants: the tracepoint body is supplied as a function-call expression,
+ * so the call site's if-block contains nothing but the call instruction. The
+ * called function (typically __cold __noinline) does the printbuf+trace work
+ * out-of-line, keeping the hot path tight in icache regardless of whether
+ * the compiler's cold-partition pass honors the asm-goto-derived probability.
+ */
+#define event_trace_fn(_c, _name, _fn_call)				\
+do {									\
+	if (trace_##_name##_enabled())					\
+		_fn_call;						\
+} while (0)
+
+#define event_add_trace_fn(_c, _name, _nr, _fn_call)			\
+do {									\
+	event_trace_fn(_c, _name, _fn_call);				\
+	event_add(_c, _name, _nr);					\
+} while (0)
+
+#define event_inc_trace_fn(_c, _name, _fn_call)				\
+do {									\
+	event_trace_fn(_c, _name, _fn_call);				\
 	event_inc(_c, _name);						\
 } while (0)
 

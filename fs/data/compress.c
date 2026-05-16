@@ -790,7 +790,7 @@ int bch2_opt_compression_parse(struct bch_fs *c, const char *_val, u64 *res,
 	return 0;
 }
 
-void bch2_compression_opt_to_text(struct printbuf *out, u64 v)
+__cold void bch2_compression_opt_to_text(struct printbuf *out, u64 v)
 {
 	union bch_compression_opt opt = { .value = v };
 
@@ -802,7 +802,7 @@ void bch2_compression_opt_to_text(struct printbuf *out, u64 v)
 		prt_printf(out, ":%u", opt.level);
 }
 
-void bch2_opt_compression_to_text(struct printbuf *out,
+__cold void bch2_opt_compression_to_text(struct printbuf *out,
 				  struct bch_fs *c,
 				  struct bch_sb *sb,
 				  u64 v)

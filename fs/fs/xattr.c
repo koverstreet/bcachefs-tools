@@ -108,7 +108,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_xattr_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_xattr_to_text(struct printbuf *out, struct bch_fs *c,
 			struct bkey_s_c k)
 {
 	const struct xattr_handler *handler;

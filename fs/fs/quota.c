@@ -37,7 +37,7 @@ static int bch2_sb_quota_validate(struct bch_sb *sb, struct bch_sb_field *f,
 	return 0;
 }
 
-static void bch2_sb_quota_to_text(struct printbuf *out,
+static __cold void bch2_sb_quota_to_text(struct printbuf *out,
 				  struct bch_fs *c,
 				  struct bch_sb *sb,
 				  struct bch_sb_field *f)
@@ -78,7 +78,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_quota_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_quota_to_text(struct printbuf *out, struct bch_fs *c,
 			struct bkey_s_c k)
 {
 	struct bkey_s_c_quota dq = bkey_s_c_to_quota(k);
@@ -97,7 +97,7 @@ void bch2_quota_to_text(struct printbuf *out, struct bch_fs *c,
 #include <linux/fs.h>
 #include <linux/quota.h>
 
-static void qc_info_to_text(struct printbuf *out, struct qc_info *i)
+static __cold void qc_info_to_text(struct printbuf *out, struct qc_info *i)
 {
 	printbuf_tabstops_reset(out);
 	printbuf_tabstop_push(out, 20);
@@ -112,7 +112,7 @@ static void qc_info_to_text(struct printbuf *out, struct qc_info *i)
 	prt_printf(out, "i_rt_spc_warnlimit\t%u\n",	i->i_rt_spc_warnlimit);
 }
 
-static void qc_dqblk_to_text(struct printbuf *out, struct qc_dqblk *q)
+static __cold void qc_dqblk_to_text(struct printbuf *out, struct qc_dqblk *q)
 {
 	printbuf_tabstops_reset(out);
 	printbuf_tabstop_push(out, 20);

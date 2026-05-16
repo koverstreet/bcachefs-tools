@@ -812,7 +812,7 @@ static const char * const bch2_btree_write_types[] = {
 	NULL
 };
 
-void bch2_btree_write_stats_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_btree_write_stats_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	printbuf_tabstop_push(out, 20);
 	printbuf_tabstop_push(out, 10);

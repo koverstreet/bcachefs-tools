@@ -447,7 +447,7 @@ static int stripe_update_extents(struct bch_fs *c, struct ec_stripe_new *s)
 				       s->old_blocks_nr);
 }
 
-void bch2_logged_op_stripe_update_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_logged_op_stripe_update_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_logged_op_stripe_update op = bkey_s_c_to_logged_op_stripe_update(k);
 
@@ -1423,7 +1423,7 @@ static int stripe_alloc_or_reuse(struct btree_trans *trans,
 	return 0;
 }
 
-static void bch2_new_stripe_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void bch2_new_stripe_to_text(struct printbuf *out, struct bch_fs *c,
 				    struct ec_stripe_new *s)
 {
 	prt_printf(out, "\tidx %llu blocks %u+%u allocated %u ref %u %u %s obs",
@@ -1448,7 +1448,7 @@ static void bch2_new_stripe_to_text(struct printbuf *out, struct bch_fs *c,
 		prt_printf(out, "old_stripe.cl:\t%u\n", closure_nr_remaining(&s->old_stripe.io));
 }
 
-void bch2_new_stripes_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_new_stripes_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct ec_stripe_head *h;
 	struct ec_stripe_new *s;

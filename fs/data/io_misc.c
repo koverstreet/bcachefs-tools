@@ -232,7 +232,7 @@ int bch2_fpunch(struct bch_fs *c, subvol_inum inum, u64 start, u64 end,
 
 /* truncate: */
 
-void bch2_logged_op_truncate_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_logged_op_truncate_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_logged_op_truncate op = bkey_s_c_to_logged_op_truncate(k);
 
@@ -315,7 +315,7 @@ int bch2_truncate(struct bch_fs *c, subvol_inum inum, u64 new_i_size, u64 *i_sec
 
 /* finsert/fcollapse: */
 
-void bch2_logged_op_finsert_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_logged_op_finsert_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_logged_op_finsert op = bkey_s_c_to_logged_op_finsert(k);
 

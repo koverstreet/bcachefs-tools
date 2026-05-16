@@ -45,7 +45,7 @@ module_param_named(btree_read_corrupt_device, bch2_btree_read_corrupt_device, in
 MODULE_PARM_DESC(btree_read_corrupt_ratio, "");
 #endif
 
-static void bch2_btree_node_header_to_text(struct printbuf *out, struct btree_node *bn)
+static __cold void bch2_btree_node_header_to_text(struct printbuf *out, struct btree_node *bn)
 {
 	bch2_btree_id_level_to_text(out, BTREE_NODE_ID(bn), BTREE_NODE_LEVEL(bn));
 	prt_printf(out, " seq %llx %llu\n", bn->keys.seq, BTREE_NODE_SEQ(bn));
@@ -997,7 +997,7 @@ static void btree_node_read_endio(struct bio *bio)
 	queue_work(c->btree.read_complete_wq, &rb->work);
 }
 
-void bch2_btree_read_bio_to_text(struct printbuf *out, struct btree_read_bio *rbio)
+__cold void bch2_btree_read_bio_to_text(struct printbuf *out, struct btree_read_bio *rbio)
 {
 	bch2_bio_to_text(out, &rbio->bio);
 }

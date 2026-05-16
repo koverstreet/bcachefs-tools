@@ -136,7 +136,7 @@ static int journal_entry_btree_keys_validate(struct bch_fs *c,
 	return 0;
 }
 
-static void journal_entry_btree_keys_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_btree_keys_to_text(struct printbuf *out, struct bch_fs *c,
 					     struct jset_entry *entry)
 {
 	bool first = true;
@@ -201,7 +201,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_btree_root_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_btree_root_to_text(struct printbuf *out, struct bch_fs *c,
 					     struct jset_entry *entry)
 {
 	journal_entry_btree_keys_to_text(out, c, entry);
@@ -217,7 +217,7 @@ static int journal_entry_prio_ptrs_validate(struct bch_fs *c,
 	return 0;
 }
 
-static void journal_entry_prio_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_prio_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 					    struct jset_entry *entry)
 {
 }
@@ -240,7 +240,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_blacklist_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_blacklist_to_text(struct printbuf *out, struct bch_fs *c,
 					    struct jset_entry *entry)
 {
 	struct jset_entry_blacklist *bl =
@@ -280,7 +280,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_blacklist_v2_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_blacklist_v2_to_text(struct printbuf *out, struct bch_fs *c,
 					       struct jset_entry *entry)
 {
 	struct jset_entry_blacklist_v2 *bl =
@@ -314,7 +314,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_usage_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_usage_to_text(struct printbuf *out, struct bch_fs *c,
 					struct jset_entry *entry)
 {
 	struct jset_entry_usage *u =
@@ -357,7 +357,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_data_usage_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_data_usage_to_text(struct printbuf *out, struct bch_fs *c,
 					     struct jset_entry *entry)
 {
 	struct jset_entry_data_usage *u =
@@ -398,7 +398,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_clock_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_clock_to_text(struct printbuf *out, struct bch_fs *c,
 					struct jset_entry *entry)
 {
 	struct jset_entry_clock *clock =
@@ -440,7 +440,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_dev_usage_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_dev_usage_to_text(struct printbuf *out, struct bch_fs *c,
 					    struct jset_entry *entry)
 {
 	struct jset_entry_dev_usage *u =
@@ -472,7 +472,7 @@ static int journal_entry_log_validate(struct bch_fs *c,
 	return 0;
 }
 
-static void journal_entry_log_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_log_to_text(struct printbuf *out, struct bch_fs *c,
 				      struct jset_entry *entry)
 {
 	struct jset_entry_log *l = container_of(entry, struct jset_entry_log, entry);
@@ -491,7 +491,7 @@ static int journal_entry_overwrite_validate(struct bch_fs *c,
 				version, big_endian, from);
 }
 
-static void journal_entry_overwrite_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_overwrite_to_text(struct printbuf *out, struct bch_fs *c,
 					    struct jset_entry *entry)
 {
 	journal_entry_btree_keys_to_text(out, c, entry);
@@ -508,7 +508,7 @@ static int journal_entry_log_bkey_validate(struct bch_fs *c,
 				version, big_endian, from);
 }
 
-static void journal_entry_log_bkey_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_log_bkey_to_text(struct printbuf *out, struct bch_fs *c,
 					   struct jset_entry *entry)
 {
 	journal_entry_btree_keys_to_text(out, c, entry);
@@ -524,7 +524,7 @@ static int journal_entry_write_buffer_keys_validate(struct bch_fs *c,
 				version, big_endian, from);
 }
 
-static void journal_entry_write_buffer_keys_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_write_buffer_keys_to_text(struct printbuf *out, struct bch_fs *c,
 					    struct jset_entry *entry)
 {
 	journal_entry_btree_keys_to_text(out, c, entry);
@@ -552,7 +552,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_datetime_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_datetime_to_text(struct printbuf *out, struct bch_fs *c,
 					    struct jset_entry *entry)
 {
 	struct jset_entry_datetime *datetime =
@@ -581,7 +581,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_rewind_limit_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_rewind_limit_to_text(struct printbuf *out, struct bch_fs *c,
 					       struct jset_entry *entry)
 {
 	struct jset_entry_rewind_limit *r =
@@ -610,7 +610,7 @@ fsck_err:
 	return ret;
 }
 
-static void journal_entry_rewind_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void journal_entry_rewind_to_text(struct printbuf *out, struct bch_fs *c,
 					 struct jset_entry *entry)
 {
 	struct jset_entry_rewind *r =
@@ -648,7 +648,7 @@ int bch2_journal_entry_validate(struct bch_fs *c,
 		: 0;
 }
 
-void bch2_journal_entry_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_journal_entry_to_text(struct printbuf *out, struct bch_fs *c,
 				struct jset_entry *entry)
 {
 	bch2_prt_jset_entry_type(out, entry->type);

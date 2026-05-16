@@ -908,7 +908,9 @@ void __bch2_btree_path_downgrade(struct btree_trans *trans,
 				 struct btree_path *path,
 				 unsigned new_locks_want)
 {
-	unsigned l, old_locks_want = path->locks_want;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	unsigned old_locks_want = path->locks_want;
+#endif
 
 	if (trans->restarted)
 		return;
@@ -917,6 +919,7 @@ void __bch2_btree_path_downgrade(struct btree_trans *trans,
 
 	path->locks_want = new_locks_want;
 
+	unsigned l;
 	while (path->nodes_locked &&
 	       (l = btree_path_highest_level_locked(path)) >= path->locks_want) {
 		if (l > path->level) {
@@ -931,12 +934,13 @@ void __bch2_btree_path_downgrade(struct btree_trans *trans,
 	}
 
 	bch2_btree_path_verify_locks(trans, path);
-
+#ifdef CONFIG_BCACHEFS_DEBUG
 	event_trace(trans->c, path_downgrade, buf, ({
 		prt_printf(&buf, "%s\n", trans->fn);
 		prt_printf(&buf, "old locks_want: %u\n", old_locks_want);
 		bch2_btree_path_to_text(&buf, trans, path - trans->paths, path);
 	}));
+#endif
 }
 
 /* Btree transaction locking: */

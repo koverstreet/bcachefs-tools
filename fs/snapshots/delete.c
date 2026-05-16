@@ -63,7 +63,7 @@
  *   safety.
  */
 
-static void bch2_snapshot_delete_nodes_to_text(struct printbuf *out, struct snapshot_delete *d, bool full)
+static __cold void bch2_snapshot_delete_nodes_to_text(struct printbuf *out, struct snapshot_delete *d, bool full)
 {
 	size_t limit = !full ? 10 : SIZE_MAX;
 
@@ -92,7 +92,7 @@ static void bch2_snapshot_delete_nodes_to_text(struct printbuf *out, struct snap
 	prt_newline(out);
 }
 
-void bch2_snapshot_delete_status_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_snapshot_delete_status_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct snapshot_delete *d = &c->snapshots.delete;
 

@@ -19,28 +19,28 @@
 
 #include <linux/debugfs.h>
 
-static void promote_obj_to_text(struct printbuf *out,
+static __cold void promote_obj_to_text(struct printbuf *out,
 				struct bch_fs *c,
 				void *obj)
 {
 	bch2_promote_op_to_text(out, c, obj);
 }
 
-static void rbio_obj_to_text(struct printbuf *out,
+static __cold void rbio_obj_to_text(struct printbuf *out,
 			     struct bch_fs *c,
 			     void *obj)
 {
 	bch2_read_bio_to_text(out, c, obj);
 }
 
-static void write_op_obj_to_text(struct printbuf *out,
+static __cold void write_op_obj_to_text(struct printbuf *out,
 				 struct bch_fs *c,
 				 void *obj)
 {
 	bch2_write_op_to_text(out, obj);
 }
 
-static void btree_read_bio_obj_to_text(struct printbuf *out,
+static __cold void btree_read_bio_obj_to_text(struct printbuf *out,
 				       struct bch_fs *c,
 				       void *obj)
 {
@@ -48,7 +48,7 @@ static void btree_read_bio_obj_to_text(struct printbuf *out,
 	bch2_btree_read_bio_to_text(out, rbio);
 }
 
-static void btree_write_bio_obj_to_text(struct printbuf *out,
+static __cold void btree_write_bio_obj_to_text(struct printbuf *out,
 					struct bch_fs *c,
 					void *obj)
 {

@@ -257,7 +257,7 @@ static size_t bch2_btree_cache_size(struct bch_fs *c)
 		btree_cache_list_nr(&bc->live[1])) * c->opts.btree_node_size;
 }
 
-static int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c)
+static __cold int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	prt_str(out, "type");
 	printbuf_tabstop_push(out, 12);
@@ -296,13 +296,13 @@ static int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c
 	return 0;
 }
 
-static void bch2_gc_gens_pos_to_text(struct printbuf *out, struct bch_fs *c)
+static __cold void bch2_gc_gens_pos_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	bch2_bbpos_to_text(out, c->gc_gens.pos);
 	prt_printf(out, "\n");
 }
 
-static void bch2_fs_usage_base_to_text(struct printbuf *out, struct bch_fs *c)
+static __cold void bch2_fs_usage_base_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct bch_fs_usage_base b = {};
 
@@ -966,7 +966,7 @@ static const char * const bch2_rw[] = {
 	NULL
 };
 
-static void dev_io_done_to_text(struct printbuf *out, struct bch_dev *ca)
+static __cold void dev_io_done_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	prt_printf(out, "{\n");
 	for (int rw = 0; rw < 2; rw++) {

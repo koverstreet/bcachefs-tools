@@ -283,7 +283,7 @@ static int bch2_ec_do_recov(struct bch_fs *c, struct ec_stripe_buf *buf)
 
 /* Validate */
 
-static void __stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void __stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
 				      struct ec_stripe_buf *buf,
 				      enum bch_stripe_buf_err e)
 {
@@ -308,7 +308,7 @@ static void __stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
 	}
 }
 
-static void stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
 				    struct ec_stripe_buf *buf)
 {
 	if (ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV)) {
