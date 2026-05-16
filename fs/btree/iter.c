@@ -914,7 +914,8 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 	EBUG_ON(path->nodes_locked);
 
 	while (1) {
-		struct btree *b = bch2_btree_id_root_b(c, path->btree_id);
+		unsigned long root_packed = bch2_btree_id_root_packed(c, path->btree_id);
+		struct btree *b = bch2_btree_root_unpack_b(root_packed);
 		if (unlikely(!b)) {
 			struct btree_root *r = bch2_btree_id_root(c, path->btree_id);
 			if (!test_bit(BCH_FS_btree_running, &c->flags))
@@ -923,7 +924,7 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 			return r->error;
 		}
 
-		path->level = READ_ONCE(b->c.level);
+		path->level = bch2_btree_root_unpack_level(root_packed);
 
 		if (unlikely(path->level < depth_want)) {
 			/*
@@ -947,8 +948,7 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 			BUG();
 		}
 
-		if (likely(b == bch2_btree_id_root_b(c, path->btree_id) &&
-			   b->c.level == path->level &&
+		if (likely(root_packed == bch2_btree_id_root_packed(c, path->btree_id) &&
 			   !race_fault())) {
 			if (unlikely(!bpos_eq(b->data->min_key, POS_MIN) ||
 				     !bpos_eq(b->key.k.p, SPOS_MAX))) {
