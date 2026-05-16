@@ -696,7 +696,8 @@ static struct bch_inode_info *bch2_lookup_trans(struct btree_trans *trans,
 	struct bch_subvolume subvol;
 	struct bch_inode_unpacked inode_u;
 	ret =   bch2_subvolume_get(trans, inum.subvol, true, &subvol) ?:
-		bch2_inode_find_by_inum_nowarn_trans(trans, inum, &inode_u) ?:
+		bch2_inode_find_by_inum_snapshot(trans, inum.inum, le32_to_cpu(subvol.snapshot),
+						 &inode_u, BTREE_ITER_cached) ?:
 		bch2_check_dirent_target(trans, &dirent_iter, d, &inode_u, false) ?:
 		bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
 		PTR_ERR_OR_ZERO(inode = bch2_inode_hash_init_insert(trans, inum, &inode_u, &subvol));

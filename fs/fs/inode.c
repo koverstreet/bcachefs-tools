@@ -377,7 +377,8 @@ int bch2_inode_find_by_inum_snapshot(struct btree_trans *trans,
 				     struct bch_inode_unpacked *inode,
 				     unsigned flags)
 {
-	CLASS(btree_iter, iter)(trans, BTREE_ID_inodes, SPOS(0, inode_nr, snapshot), flags);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_inodes,
+				SPOS(0, inode_nr, snapshot), flags);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	return bkey_is_inode(k.k)
