@@ -1002,12 +1002,12 @@ void bch2_inode_alloc_cursor_to_text(struct printbuf *out, struct bch_fs *c,
 }
 
 static struct bkey_i_inode_alloc_cursor *
-bch2_inode_alloc_cursor_get(struct btree_trans *trans, u64 cpu, u64 *min, u64 *max,
+bch2_inode_alloc_cursor_get(struct btree_trans *trans, u64 *min, u64 *max,
 			    bool is_32bit)
 {
 	struct bch_fs *c = trans->c;
 
-	u64 cursor_idx = is_32bit ? 0 : cpu + 1;
+	u64 cursor_idx = is_32bit ? 0 : bch2_inode_shard_idx(c) + 1;
 
 	cursor_idx_min_max(c, cursor_idx, min, max);
 
@@ -1045,11 +1045,11 @@ bch2_inode_alloc_cursor_get(struct btree_trans *trans, u64 cpu, u64 *min, u64 *m
 int bch2_inode_create(struct btree_trans *trans,
 		      struct btree_iter *iter,
 		      struct bch_inode_unpacked *inode_u,
-		      u32 snapshot, u64 cpu, bool is_32bit)
+		      u32 snapshot, bool is_32bit)
 {
 	u64 min, max;
 	struct bkey_i_inode_alloc_cursor *cursor =
-		errptr_try(bch2_inode_alloc_cursor_get(trans, cpu, &min, &max, is_32bit));
+		errptr_try(bch2_inode_alloc_cursor_get(trans, &min, &max, is_32bit));
 
 	u64 start = le64_to_cpu(cursor->v.idx);
 	u64 pos = start;

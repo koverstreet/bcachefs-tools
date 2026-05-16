@@ -46,7 +46,6 @@ int bch2_create_trans(struct btree_trans *trans,
 	CLASS(btree_iter_uninit, inode_iter)(trans);
 	subvol_inum new_inum = dir;
 	u64 now = bch2_current_time(c);
-	u64 cpu = raw_smp_processor_id();
 	u64 dir_target;
 	unsigned dir_type = mode_to_type(mode);
 
@@ -68,7 +67,7 @@ int bch2_create_trans(struct btree_trans *trans,
 		if (flags & BCH_CREATE_TMPFILE)
 			new_inode->bi_flags |= BCH_INODE_unlinked;
 
-		try(bch2_inode_create(trans, &inode_iter, new_inode, dir_snapshot, cpu,
+		try(bch2_inode_create(trans, &inode_iter, new_inode, dir_snapshot,
 				      inode_opt_get(c, dir_u, inodes_32bit)));
 
 		snapshot_src = (subvol_inum) { 0 };
