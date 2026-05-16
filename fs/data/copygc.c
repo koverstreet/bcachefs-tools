@@ -460,7 +460,7 @@ u64 bch2_copygc_wait_amount(struct bch_fs *c)
 	return wait;
 }
 
-void bch2_copygc_wait_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_copygc_wait_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	printbuf_tabstop_push(out, 32);
 	prt_printf(out, "running:\t%u\n",		c->copygc.running);

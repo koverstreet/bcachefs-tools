@@ -96,7 +96,7 @@ int bch2_progress_update_iter(struct btree_trans *trans,
 	return 0;
 }
 
-void bch2_progress_to_text(struct printbuf *out, struct progress_indicator *s)
+__cold void bch2_progress_to_text(struct printbuf *out, struct progress_indicator *s)
 {
 	unsigned percent = s->nodes_total
 		? div64_u64(s->nodes_seen * 100, s->nodes_total)

@@ -257,7 +257,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_accounting_key_to_text(struct printbuf *out,
+__cold void bch2_accounting_key_to_text(struct printbuf *out,
 				 struct bch_fs *c,
 				 struct disk_accounting_pos *k)
 {
@@ -308,7 +308,7 @@ void bch2_accounting_key_to_text(struct printbuf *out,
 	}
 }
 
-void bch2_accounting_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_accounting_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_accounting acc = bkey_s_c_to_accounting(k);
 	struct disk_accounting_pos acc_k;

@@ -148,7 +148,7 @@ static bool journal_entry_is_open(struct journal *j)
 	return __journal_entry_is_open(j->reservations);
 }
 
-static void bch2_journal_buf_to_text(struct printbuf *out, struct journal *j,
+static __cold void bch2_journal_buf_to_text(struct printbuf *out, struct journal *j,
 				     struct journal_buf *buf, u64 seq)
 {
 	union journal_res_state s = READ_ONCE(j->reservations);
@@ -189,7 +189,7 @@ static void bch2_journal_buf_to_text(struct printbuf *out, struct journal *j,
 	prt_newline(out);
 }
 
-static void bch2_journal_bufs_to_text(struct printbuf *out, struct journal *j)
+static __cold void bch2_journal_bufs_to_text(struct printbuf *out, struct journal *j)
 {
 	lockdep_assert_held(&j->lock);
 	guard(printbuf_atomic)(out);
@@ -1222,7 +1222,7 @@ static const char * const bch2_journal_flags_strs[] = {
 	NULL
 };
 
-void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
+__cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	union journal_res_state s;
@@ -1321,7 +1321,7 @@ void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
 	prt_printf(out, "replicas %u\n", c->opts.metadata_replicas);
 }
 
-void bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
+__cold void bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
 {
 	guard(spinlock)(&j->lock);
 	__bch2_journal_debug_to_text(out, j);

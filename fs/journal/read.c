@@ -50,7 +50,7 @@ void bch2_journal_pos_from_member_info_resume(struct bch_fs *c)
 	}
 }
 
-static void bch2_journal_ptr_to_text(struct printbuf *out, struct bch_fs *c, struct journal_ptr *p)
+static __cold void bch2_journal_ptr_to_text(struct printbuf *out, struct bch_fs *c, struct journal_ptr *p)
 {
 	CLASS(bch2_dev_tryget_noerror, ca)(c, p->dev);
 	prt_printf(out, "%s %u:%u:%u (sector %llu)",
@@ -58,7 +58,7 @@ static void bch2_journal_ptr_to_text(struct printbuf *out, struct bch_fs *c, str
 		   p->dev, p->bucket, p->bucket_offset, p->sector);
 }
 
-void bch2_journal_ptrs_to_text(struct printbuf *out, struct bch_fs *c, struct journal_replay *j)
+__cold void bch2_journal_ptrs_to_text(struct printbuf *out, struct bch_fs *c, struct journal_replay *j)
 {
 	darray_for_each(j->ptrs, i) {
 		if (i != j->ptrs.data)
@@ -67,14 +67,14 @@ void bch2_journal_ptrs_to_text(struct printbuf *out, struct bch_fs *c, struct jo
 	}
 }
 
-static void bch2_journal_datetime_to_text(struct printbuf *out, struct jset *j)
+static __cold void bch2_journal_datetime_to_text(struct printbuf *out, struct jset *j)
 {
 	u64 t = jset_datetime(j);
 	if (t)
 		bch2_prt_datetime(out, t);
 }
 
-void bch2_journal_seq_datetime_to_text(struct printbuf *out, struct bch_fs *c, u64 seq)
+__cold void bch2_journal_seq_datetime_to_text(struct printbuf *out, struct bch_fs *c, u64 seq)
 {
 	struct journal_replay **p = genradix_ptr(&c->journal_entries,
 						 journal_entry_radix_idx(c, seq));
@@ -82,7 +82,7 @@ void bch2_journal_seq_datetime_to_text(struct printbuf *out, struct bch_fs *c, u
 		bch2_journal_datetime_to_text(out, &(*p)->j);
 }
 
-static void bch2_journal_replay_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void bch2_journal_replay_to_text(struct printbuf *out, struct bch_fs *c,
 					struct journal_replay *j)
 {
 	prt_printf(out, "seq %llu ", le64_to_cpu(j->j.seq));

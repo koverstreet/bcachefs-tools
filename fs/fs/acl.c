@@ -17,7 +17,7 @@ static const char * const acl_types[] = {
 	NULL,
 };
 
-void bch2_acl_to_text(struct printbuf *out, const void *value, size_t size)
+__cold void bch2_acl_to_text(struct printbuf *out, const void *value, size_t size)
 {
 	const void *p, *end = value + size;
 

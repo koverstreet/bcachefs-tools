@@ -87,7 +87,7 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb, struct bch_sb_field *
 	return 0;
 }
 
-static void bch2_sb_disk_groups_to_text(struct printbuf *out,
+static __cold void bch2_sb_disk_groups_to_text(struct printbuf *out,
 					struct bch_fs *c,
 					struct bch_sb *sb,
 					struct bch_sb_field *f)
@@ -342,7 +342,7 @@ static void disk_path_invalid(struct printbuf *out, unsigned v)
 	prt_printf(out, "invalid label %u", v);
 }
 
-static void __bch2_disk_path_to_text(struct printbuf *out, struct bch_disk_groups_cpu *g,
+static __cold void __bch2_disk_path_to_text(struct printbuf *out, struct bch_disk_groups_cpu *g,
 				     unsigned v)
 {
 	u16 path[32];
@@ -377,7 +377,7 @@ static void __bch2_disk_path_to_text(struct printbuf *out, struct bch_disk_group
 	}
 }
 
-void bch2_disk_groups_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_disk_groups_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	bch2_printbuf_make_room(out, 4096);
 
@@ -403,7 +403,7 @@ void bch2_disk_groups_to_text(struct printbuf *out, struct bch_fs *c)
 	}
 }
 
-void bch2_disk_path_to_text(struct printbuf *out, struct bch_fs *c, unsigned v)
+__cold void bch2_disk_path_to_text(struct printbuf *out, struct bch_fs *c, unsigned v)
 {
 	guard(printbuf_atomic)(out);
 	guard(rcu)();
@@ -520,7 +520,7 @@ int bch2_opt_target_parse(struct bch_fs *c, const char *val, u64 *res,
 	return bch_err_throw(c, EINVAL_opt_target_parse_not_found);
 }
 
-void bch2_target_to_text(struct printbuf *out, struct bch_fs *c, unsigned v)
+__cold void bch2_target_to_text(struct printbuf *out, struct bch_fs *c, unsigned v)
 {
 	struct target t = target_decode(v);
 
@@ -579,7 +579,7 @@ static void bch2_target_to_text_sb(struct printbuf *out, struct bch_sb *sb, unsi
 	}
 }
 
-void bch2_opt_target_to_text(struct printbuf *out,
+__cold void bch2_opt_target_to_text(struct printbuf *out,
 			     struct bch_fs *c,
 			     struct bch_sb *sb,
 			     u64 v)

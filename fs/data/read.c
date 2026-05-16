@@ -108,7 +108,7 @@ static bool bch2_target_congested(struct bch_fs *c, u16 target)
 	return get_random_u32_below(nr * CONGESTED_MAX) < total;
 }
 
-void bch2_dev_congested_to_text(struct printbuf *out, struct bch_dev *ca)
+__cold void bch2_dev_congested_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	printbuf_tabstop_push(out, 32);
 
@@ -419,7 +419,7 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 	return promote;
 }
 
-void bch2_promote_op_to_text(struct printbuf *out,
+__cold void bch2_promote_op_to_text(struct printbuf *out,
 			     struct bch_fs *c,
 			     struct promote_op *op)
 {
@@ -1672,7 +1672,7 @@ static const char * const bch2_read_bio_flags[] = {
 	NULL
 };
 
-static void __bch2_read_bio_to_text(struct printbuf *out,
+static __cold void __bch2_read_bio_to_text(struct printbuf *out,
 				    struct bch_read_bio *rbio)
 {
 	if (!out->nr_tabstops)
@@ -1723,7 +1723,7 @@ static void bch2_read_bio_to_text_atomic(struct printbuf *out, struct bch_read_b
 	__bch2_read_bio_to_text(out, rbio);
 }
 
-void bch2_read_bio_to_text(struct printbuf *out,
+__cold void bch2_read_bio_to_text(struct printbuf *out,
 			   struct bch_fs *c,
 			   struct bch_read_bio *rbio)
 {

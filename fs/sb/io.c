@@ -182,7 +182,7 @@ static const struct bch2_metadata_version bch2_metadata_versions[] = {
 #undef x
 };
 
-void bch2_version_to_text(struct printbuf *out, enum bcachefs_metadata_version v)
+__cold void bch2_version_to_text(struct printbuf *out, enum bcachefs_metadata_version v)
 {
 	const char *str = "(unknown version)";
 
@@ -1504,7 +1504,7 @@ static int bch2_sb_ext_validate(struct bch_sb *sb, struct bch_sb_field *f,
 	return 0;
 }
 
-static void bch2_sb_ext_to_text(struct printbuf *out,
+static __cold void bch2_sb_ext_to_text(struct printbuf *out,
 				struct bch_fs *c,
 				struct bch_sb *sb,
 				struct bch_sb_field *f)
@@ -1573,7 +1573,7 @@ static int bch2_sb_field_validate(struct bch_sb *sb, struct bch_sb_field *f,
 	return ret;
 }
 
-void __bch2_sb_field_to_text(struct printbuf *out,
+__cold void __bch2_sb_field_to_text(struct printbuf *out,
 			     struct bch_fs *c,
 			     struct bch_sb *sb,
 			     struct bch_sb_field *f)
@@ -1588,7 +1588,7 @@ void __bch2_sb_field_to_text(struct printbuf *out,
 		ops->to_text(out, c, sb, f);
 }
 
-void bch2_sb_field_to_text(struct printbuf *out,
+__cold void bch2_sb_field_to_text(struct printbuf *out,
 			   struct bch_fs *c,
 			   struct bch_sb *sb,
 			   struct bch_sb_field *f)
@@ -1606,7 +1606,7 @@ void bch2_sb_field_to_text(struct printbuf *out,
 	__bch2_sb_field_to_text(out, c, sb, f);
 }
 
-void bch2_sb_layout_to_text(struct printbuf *out, struct bch_sb_layout *l)
+__cold void bch2_sb_layout_to_text(struct printbuf *out, struct bch_sb_layout *l)
 {
 	prt_printf(out, "Type:                    %u", l->layout_type);
 	prt_newline(out);
@@ -1627,7 +1627,7 @@ void bch2_sb_layout_to_text(struct printbuf *out, struct bch_sb_layout *l)
 	prt_newline(out);
 }
 
-void bch2_sb_to_text(struct printbuf *out,
+__cold void bch2_sb_to_text(struct printbuf *out,
 		     struct bch_fs *c, struct bch_sb *sb,
 		     bool print_layout, unsigned fields)
 {

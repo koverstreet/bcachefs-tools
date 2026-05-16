@@ -1095,7 +1095,7 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 	return 0;
 }
 
-bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 *seq)
+__cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 *seq)
 {
 	struct journal_entry_pin_list *pin_list;
 	struct journal_entry_pin *pin;
@@ -1135,7 +1135,7 @@ bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 
 	return false;
 }
 
-void bch2_journal_pins_to_text(struct printbuf *out, struct journal *j)
+__cold void bch2_journal_pins_to_text(struct printbuf *out, struct journal *j)
 {
 	u64 seq = 0;
 
@@ -1143,7 +1143,7 @@ void bch2_journal_pins_to_text(struct printbuf *out, struct journal *j)
 		seq++;
 }
 
-static void bch2_time_stats_summary_to_text(struct printbuf *out,
+static __cold void bch2_time_stats_summary_to_text(struct printbuf *out,
 					    const char *name,
 					    struct bch2_time_stats *stats)
 {
@@ -1154,7 +1154,7 @@ static void bch2_time_stats_summary_to_text(struct printbuf *out,
 	prt_newline(out);
 }
 
-void bch2_journal_reclaim_to_text(struct printbuf *out, struct journal *j)
+__cold void bch2_journal_reclaim_to_text(struct printbuf *out, struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	unsigned long now = jiffies;

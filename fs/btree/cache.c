@@ -762,7 +762,7 @@ static unsigned long bch2_btree_cache_count(struct shrinker *shrink,
 #ifdef HAVE_SHRINKER_TO_TEXT
 #include <linux/seq_buf.h>
 
-static void bch2_btree_cache_shrinker_to_text(struct seq_buf *s, struct shrinker *shrink)
+static __cold void bch2_btree_cache_shrinker_to_text(struct seq_buf *s, struct shrinker *shrink)
 {
 	struct btree_cache_list *list = shrink->private_data;
 	struct bch_fs_btree_cache *bc = container_of(list, struct bch_fs_btree_cache, live[list->idx]);
@@ -1737,7 +1737,7 @@ const char *bch2_btree_id_str(enum btree_id btree)
 	return btree < BTREE_ID_NR ? __bch2_btree_ids[btree] : "(unknown)";
 }
 
-void bch2_btree_id_to_text(struct printbuf *out, enum btree_id btree)
+__cold void bch2_btree_id_to_text(struct printbuf *out, enum btree_id btree)
 {
 	if (btree < BTREE_ID_NR)
 		prt_str(out, __bch2_btree_ids[btree]);
@@ -1745,14 +1745,14 @@ void bch2_btree_id_to_text(struct printbuf *out, enum btree_id btree)
 		prt_printf(out, "(unknown btree %u)", btree);
 }
 
-void bch2_btree_id_level_to_text(struct printbuf *out, enum btree_id btree, unsigned level)
+__cold void bch2_btree_id_level_to_text(struct printbuf *out, enum btree_id btree, unsigned level)
 {
 	prt_str(out, "btree=");
 	bch2_btree_id_to_text(out, btree);
 	prt_printf(out, " level=%u", level);
 }
 
-void __bch2_btree_pos_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void __bch2_btree_pos_to_text(struct printbuf *out, struct bch_fs *c,
 			      enum btree_id btree, unsigned level, struct bkey_s_c k)
 {
 	bch2_btree_id_to_text(out, btree);
@@ -1767,12 +1767,12 @@ void __bch2_btree_pos_to_text(struct printbuf *out, struct bch_fs *c,
 	bch2_bkey_val_to_text(out, c, k);
 }
 
-void bch2_btree_pos_to_text(struct printbuf *out, struct bch_fs *c, const struct btree *b)
+__cold void bch2_btree_pos_to_text(struct printbuf *out, struct bch_fs *c, const struct btree *b)
 {
 	__bch2_btree_pos_to_text(out, c, b->c.btree_id, b->c.level, bkey_i_to_s_c(&b->key));
 }
 
-void bch2_btree_node_to_text(struct printbuf *out, struct bch_fs *c, const struct btree *b)
+__cold void bch2_btree_node_to_text(struct printbuf *out, struct bch_fs *c, const struct btree *b)
 {
 	struct bset_stats stats;
 
@@ -1829,7 +1829,7 @@ static const char * const bch2_btree_cache_not_freed_reasons_strs[] = {
 	NULL
 };
 
-void bch2_btree_cache_to_text(struct printbuf *out, const struct bch_fs_btree_cache *bc)
+__cold void bch2_btree_cache_to_text(struct printbuf *out, const struct bch_fs_btree_cache *bc)
 {
 	struct bch_fs *c = container_of(bc, struct bch_fs, btree.cache);
 

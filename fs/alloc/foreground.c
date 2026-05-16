@@ -503,7 +503,7 @@ fail:
 	return ob;
 }
 
-static noinline void bucket_alloc_to_text(struct printbuf *out,
+static noinline __cold void bucket_alloc_to_text(struct printbuf *out,
 					  struct bch_fs *c,
 					  struct alloc_request *req,
 					  struct open_bucket *ob)
@@ -1546,7 +1546,7 @@ void bch2_fs_allocator_foreground_init(struct bch_fs *c)
 	}
 }
 
-void bch2_open_bucket_to_text(struct printbuf *out, struct bch_fs *c, struct open_bucket *ob)
+__cold void bch2_open_bucket_to_text(struct printbuf *out, struct bch_fs *c, struct open_bucket *ob)
 {
 	struct bch_fs_allocator *a = &c->allocator;
 	struct bch_dev *ca = ob_dev(c, ob);
@@ -1567,7 +1567,7 @@ void bch2_open_bucket_to_text(struct printbuf *out, struct bch_fs *c, struct ope
 	prt_newline(out);
 }
 
-void bch2_open_buckets_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_open_buckets_to_text(struct printbuf *out, struct bch_fs *c,
 			       struct bch_dev *ca)
 {
 	struct bch_fs_allocator *a = &c->allocator;
@@ -1582,7 +1582,7 @@ void bch2_open_buckets_to_text(struct printbuf *out, struct bch_fs *c,
 	}
 }
 
-void bch2_open_buckets_partial_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_open_buckets_partial_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	guard(printbuf_atomic)(out);
 	guard(spinlock)(&c->allocator.freelist_lock);
@@ -1599,7 +1599,7 @@ static const char * const bch2_write_point_states[] = {
 	NULL
 };
 
-static void bch2_write_point_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void bch2_write_point_to_text(struct printbuf *out, struct bch_fs *c,
 				     struct write_point *wp)
 {
 	struct open_bucket *ob;
@@ -1625,7 +1625,7 @@ static void bch2_write_point_to_text(struct printbuf *out, struct bch_fs *c,
 			bch2_open_bucket_to_text(out, c, ob);
 }
 
-void bch2_write_points_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_write_points_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct bch_fs_allocator *a = &c->allocator;
 	struct write_point *wp;
@@ -1646,7 +1646,7 @@ void bch2_write_points_to_text(struct printbuf *out, struct bch_fs *c)
 	bch2_write_point_to_text(out, c, &a->btree_write_point);
 }
 
-void bch2_fs_open_buckets_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_fs_open_buckets_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 24);
@@ -1675,7 +1675,7 @@ void bch2_fs_open_buckets_to_text(struct printbuf *out, struct bch_fs *c)
 	prt_printf(out, "open_buckets_wait\t%s\n",		a->open_buckets_wait.list.first ? "waiting" : "empty");
 }
 
-void bch2_fs_alloc_debug_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_fs_alloc_debug_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 24);
@@ -1697,7 +1697,7 @@ void bch2_fs_alloc_debug_to_text(struct printbuf *out, struct bch_fs *c)
 	prt_newline(out);
 }
 
-void bch2_dev_alloc_debug_to_text(struct printbuf *out, struct bch_dev *ca)
+__cold void bch2_dev_alloc_debug_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 	struct bch_fs_allocator *a = &c->allocator;
@@ -1764,7 +1764,7 @@ static inline bool dev_may_alloc(struct bch_fs *c, struct bch_dev *ca, struct al
 		(ca->mi.data_allowed & BIT(req->data_type));
 }
 
-static void alloc_trace_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void alloc_trace_to_text(struct printbuf *out, struct bch_fs *c,
 			        struct alloc_request *req)
 {
 	if (!req->trace.nr)
@@ -1792,7 +1792,7 @@ static void alloc_trace_to_text(struct printbuf *out, struct bch_fs *c,
 		}
 }
 
-void bch2_alloc_request_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_alloc_request_to_text(struct printbuf *out, struct bch_fs *c,
 				struct alloc_request *req)
 {
 	prt_printf(out, "nr_replicas:\t%u\n", req->nr_replicas);

@@ -48,7 +48,7 @@ static const char * const bch2_btree_update_modes[] = {
 	NULL
 };
 
-static void bch2_btree_update_to_text(struct printbuf *, struct btree_update *);
+static __cold void bch2_btree_update_to_text(struct printbuf *, struct btree_update *);
 
 static int bch2_btree_insert_node(struct btree_update *, struct btree_trans *,
 				  btree_path_idx_t, struct btree *, struct keylist *);
@@ -3513,7 +3513,7 @@ void bch2_btree_root_alloc_fake(struct bch_fs *c, enum btree_id id, unsigned lev
 	lockrestart_do(trans, bch2_btree_root_alloc_fake_trans(trans, id, level));
 }
 
-static void bch2_btree_update_to_text(struct printbuf *out, struct btree_update *as)
+static __cold void bch2_btree_update_to_text(struct printbuf *out, struct btree_update *as)
 {
 	prt_printf(out, "%ps: ", (void *) as->ip_started);
 	bch2_trans_commit_flags_to_text(out, as->flags);
@@ -3539,7 +3539,7 @@ static void bch2_btree_update_to_text(struct printbuf *out, struct btree_update 
 		   as->journal.seq);
 }
 
-void bch2_btree_updates_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_btree_updates_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct btree_update *as;
 
@@ -3589,7 +3589,7 @@ bch2_btree_roots_to_journal_entries(struct bch_fs *c,
 	return end;
 }
 
-static void bch2_btree_alloc_to_text(struct printbuf *out,
+static __cold void bch2_btree_alloc_to_text(struct printbuf *out,
 				     struct bch_fs *c,
 				     struct btree_alloc *a)
 {
@@ -3603,7 +3603,7 @@ static void bch2_btree_alloc_to_text(struct printbuf *out,
 		bch2_open_bucket_to_text(out, c, ob);
 }
 
-void bch2_btree_reserve_cache_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_btree_reserve_cache_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	for (unsigned i = 0; i < c->btree.reserve_cache.nr; i++)
 		bch2_btree_alloc_to_text(out, c, &c->btree.reserve_cache.data[i]);

@@ -203,7 +203,7 @@ static int validate_member(struct printbuf *err,
 	return 0;
 }
 
-void bch2_member_to_text(struct printbuf *out,
+__cold void bch2_member_to_text(struct printbuf *out,
 			 struct bch_member *m,
 			 struct bch_sb_field_disk_groups *gi,
 			 struct bch_sb *sb,
@@ -357,7 +357,7 @@ void bch2_devs_mask_to_text_locked(struct printbuf *out, struct bch_fs *c,
 			bch2_member_to_text_short_locked(out, c, ca);
 }
 
-static void member_to_text(struct printbuf *out,
+static __cold void member_to_text(struct printbuf *out,
 			   struct bch_member m,
 			   struct bch_sb_field_disk_groups *gi,
 			   struct bch_sb *sb,
@@ -388,7 +388,7 @@ static int bch2_sb_members_v1_validate(struct bch_sb *sb, struct bch_sb_field *f
 	return 0;
 }
 
-static void bch2_sb_members_v1_to_text(struct printbuf *out,
+static __cold void bch2_sb_members_v1_to_text(struct printbuf *out,
 				       struct bch_fs *c,
 				       struct bch_sb *sb,
 				       struct bch_sb_field *f)
@@ -414,7 +414,7 @@ const struct bch_sb_field_ops bch_sb_field_ops_members_v1 = {
 	.to_text	= bch2_sb_members_v1_to_text,
 };
 
-static void bch2_sb_members_v2_to_text(struct printbuf *out,
+static __cold void bch2_sb_members_v2_to_text(struct printbuf *out,
 				       struct bch_fs *c,
 				       struct bch_sb *sb,
 				       struct bch_sb_field *f)
@@ -500,7 +500,7 @@ void bch2_sb_members_to_cpu(struct bch_fs *c)
 		}
 }
 
-void bch2_dev_io_errors_to_text(struct printbuf *out, struct bch_dev *ca)
+__cold void bch2_dev_io_errors_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 	struct bch_member m;

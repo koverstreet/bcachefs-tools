@@ -32,7 +32,7 @@ static bool dev_bucket_nouse(struct bch_fs *c, struct bpos bucket)
 
 #define DEV_IN_FLIGHT_MAX		4
 
-static void __discard_state_to_text(struct printbuf *out, struct discard_state *s)
+static __cold void __discard_state_to_text(struct printbuf *out, struct discard_state *s)
 {
 	printbuf_tabstop_push(out, 32);
 	prt_printf(out, "seen:\t%llu\n",		s->seen);
@@ -47,7 +47,7 @@ static void __discard_state_to_text(struct printbuf *out, struct discard_state *
 	prt_printf(out, "committed:\t%llu\n",		s->committed);
 }
 
-void bch2_discards_to_text(struct printbuf *out, struct bch_fs *c, struct discard_state *s)
+__cold void bch2_discards_to_text(struct printbuf *out, struct bch_fs *c, struct discard_state *s)
 {
 	__discard_state_to_text(out, s);
 
@@ -652,7 +652,7 @@ put_ref:
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_discard_fast);
 }
 
-void bch2_fast_discards_to_text(struct printbuf *out, struct bch_dev *ca)
+__cold void bch2_fast_discards_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	prt_printf(out, "%zu\n", ca->discard_fast.nr);
 }

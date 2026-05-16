@@ -132,7 +132,7 @@ struct bset_tree *bch2_bkey_to_bset(struct btree *b, struct bkey_packed *k)
  * by the time we actually do the insert will all be deleted.
  */
 
-void bch2_btree_node_keys_to_text(struct printbuf *out, struct bch_fs *c, struct btree *b)
+__cold void bch2_btree_node_keys_to_text(struct printbuf *out, struct bch_fs *c, struct btree *b)
 {
 	struct bkey_s_c k;
 	struct bkey unpacked;
@@ -143,7 +143,7 @@ void bch2_btree_node_keys_to_text(struct printbuf *out, struct bch_fs *c, struct
 	}
 }
 
-void bch2_bset_to_text(struct printbuf *out,
+__cold void bch2_bset_to_text(struct printbuf *out,
 		       struct bch_fs *c, struct btree *b,
 		       struct bset *i, unsigned set)
 {
@@ -189,7 +189,7 @@ void bch2_bset_to_text(struct printbuf *out,
 	}
 }
 
-static void bch2_btree_node_bsets_to_text(struct printbuf *out, struct bch_fs *c, struct btree *b)
+static __cold void bch2_btree_node_bsets_to_text(struct printbuf *out, struct bch_fs *c, struct btree *b)
 {
 	for_each_bset(b, t)
 		bch2_bset_to_text(out, c, b, bset(b, t), t - b->set);
@@ -1681,7 +1681,7 @@ void bch2_btree_keys_stats(const struct btree *b, struct bset_stats *stats)
 	}
 }
 
-void bch2_bfloat_to_text(struct printbuf *out, struct btree *b,
+__cold void bch2_bfloat_to_text(struct printbuf *out, struct btree *b,
 			 struct bkey_packed *k)
 {
 	struct bset_tree *t = bch2_bkey_to_bset(b, k);

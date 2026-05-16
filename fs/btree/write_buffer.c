@@ -1274,7 +1274,7 @@ int bch2_btree_write_buffer_resize(struct bch_fs *c, size_t new_size)
 	return 0;
 }
 
-void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 24);

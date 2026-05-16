@@ -784,7 +784,7 @@ void bch2_alloc_v4_swab(const struct bch_fs *c, struct bkey_s k)
 	a->stripe_sectors	= swab32(a->stripe_sectors);
 }
 
-static inline void __bch2_alloc_v4_to_text(struct printbuf *out, struct bch_fs *c,
+static inline __cold void __bch2_alloc_v4_to_text(struct printbuf *out, struct bch_fs *c,
 					   struct bkey_s_c k,
 					   const struct bch_alloc_v4 *a)
 {
@@ -816,7 +816,7 @@ static inline void __bch2_alloc_v4_to_text(struct printbuf *out, struct bch_fs *
 	bch2_dev_put(ca);
 }
 
-void bch2_alloc_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_alloc_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bch_alloc_v4 _a;
 	const struct bch_alloc_v4 *a = bch2_alloc_to_v4(k, &_a);
@@ -824,7 +824,7 @@ void bch2_alloc_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c 
 	__bch2_alloc_v4_to_text(out, c, k, a);
 }
 
-void bch2_alloc_v4_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_alloc_v4_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	__bch2_alloc_v4_to_text(out, c, k, bkey_s_c_to_alloc_v4(k).v);
 }
@@ -964,7 +964,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_bucket_gens_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_bucket_gens_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_bucket_gens g = bkey_s_c_to_bucket_gens(k);
 	unsigned i;

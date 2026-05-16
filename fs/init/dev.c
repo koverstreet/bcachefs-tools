@@ -239,7 +239,7 @@ const char * const bch2_dev_write_refs[] = {
 };
 #undef x
 
-void bch2_devs_list_to_text(struct printbuf *out,
+__cold void bch2_devs_list_to_text(struct printbuf *out,
 			    struct bch_fs *c,
 			    struct bch_devs_list *d)
 {

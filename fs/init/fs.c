@@ -1391,7 +1391,7 @@ static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 	return c;
 }
 
-void bch2_missing_devs_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_missing_devs_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	prt_printf(out, "Missing devices\n");
 	for_each_member_device(c, ca)

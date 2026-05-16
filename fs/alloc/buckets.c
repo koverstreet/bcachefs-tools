@@ -79,7 +79,7 @@ bch2_fs_usage_read_short(struct bch_fs *c)
 	return __bch2_fs_usage_read_short(c);
 }
 
-void bch2_dev_usage_to_text(struct printbuf *out,
+__cold void bch2_dev_usage_to_text(struct printbuf *out,
 			    struct bch_dev *ca,
 			    struct bch_dev_usage_full *usage)
 {

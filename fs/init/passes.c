@@ -88,7 +88,7 @@ static int bch2_sb_recovery_passes_validate(struct bch_sb *sb, struct bch_sb_fie
 	return 0;
 }
 
-static void bch2_sb_recovery_passes_to_text(struct printbuf *out,
+static __cold void bch2_sb_recovery_passes_to_text(struct printbuf *out,
 					    struct bch_fs *c,
 					    struct bch_sb *sb,
 					    struct bch_sb_field *f)
@@ -677,7 +677,7 @@ static void prt_passes(struct printbuf *out, const char *msg, u64 passes)
 	prt_newline(out);
 }
 
-void bch2_recovery_pass_status_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_recovery_pass_status_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct bch_fs_recovery *r = &c->recovery;
 

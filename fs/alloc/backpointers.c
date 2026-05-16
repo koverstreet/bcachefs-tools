@@ -51,7 +51,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_backpointer_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_backpointer_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(k);
 

@@ -858,7 +858,7 @@ int bch2_bkey_format_invalid(struct bch_fs *c,
 	return 0;
 }
 
-void bch2_bkey_format_to_text(struct printbuf *out, const struct bkey_format *f)
+__cold void bch2_bkey_format_to_text(struct printbuf *out, const struct bkey_format *f)
 {
 	prt_printf(out, "u64s %u fields ", f->key_u64s);
 

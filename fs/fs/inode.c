@@ -569,7 +569,7 @@ fsck_err:
 	return ret;
 }
 
-static void __bch2_inode_unpacked_to_text(struct printbuf *out,
+static __cold void __bch2_inode_unpacked_to_text(struct printbuf *out,
 					  struct bch_inode_unpacked *inode)
 {
 	prt_newline(out);
@@ -598,14 +598,14 @@ static void __bch2_inode_unpacked_to_text(struct printbuf *out,
 #undef  x
 }
 
-void bch2_inode_unpacked_to_text(struct printbuf *out, struct bch_inode_unpacked *inode)
+__cold void bch2_inode_unpacked_to_text(struct printbuf *out, struct bch_inode_unpacked *inode)
 {
 	prt_printf(out, "inum: %llu:%u ", inode->bi_inum, inode->bi_snapshot);
 	guard(printbuf_indent)(out);
 	__bch2_inode_unpacked_to_text(out, inode);
 }
 
-void bch2_inode_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_inode_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bch_inode_unpacked inode;
 
@@ -804,7 +804,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_inode_generation_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_inode_generation_to_text(struct printbuf *out, struct bch_fs *c,
 				   struct bkey_s_c k)
 {
 	struct bkey_s_c_inode_generation gen = bkey_s_c_to_inode_generation(k);
@@ -824,6 +824,7 @@ fsck_err:
 	return ret;
 }
 
+__cold
 void bch2_inode_alloc_cursor_to_text(struct printbuf *out, struct bch_fs *c,
 				     struct bkey_s_c k)
 {

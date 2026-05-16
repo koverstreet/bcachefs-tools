@@ -153,7 +153,7 @@
  * tree.
  */
 
-void bch2_snapshot_tree_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_snapshot_tree_to_text(struct printbuf *out, struct bch_fs *c,
 				struct bkey_s_c k)
 {
 	struct bkey_s_c_snapshot_tree t = bkey_s_c_to_snapshot_tree(k);
@@ -397,7 +397,7 @@ struct snapshot_t *bch2_snapshot_t_mut(struct bch_fs *c, u32 id)
 
 /* Snapshot btree key to_text/validate: */
 
-void bch2_snapshot_to_text(struct printbuf *out, const struct bch_snapshot *s)
+__cold void bch2_snapshot_to_text(struct printbuf *out, const struct bch_snapshot *s)
 {
 	if (BCH_SNAPSHOT_SUBVOL(s))
 		prt_str(out, "subvol ");
@@ -422,7 +422,7 @@ void bch2_snapshot_to_text(struct printbuf *out, const struct bch_snapshot *s)
 		   le32_to_cpu(s->skip[2]));
 }
 
-void bch2_snapshot_key_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_snapshot_key_to_text(struct printbuf *out, struct bch_fs *c,
 			       struct bkey_s_c k)
 {
 	struct bch_snapshot snapshot;
@@ -901,7 +901,7 @@ static unsigned snapshot_tree_max_depth(struct bch_fs *c, u32 start)
 	return max_depth;
 }
 
-int bch2_snapshot_tree_keys_to_text(struct printbuf *out, struct btree_trans *trans, u32 start)
+__cold int bch2_snapshot_tree_keys_to_text(struct printbuf *out, struct btree_trans *trans, u32 start)
 {
 	printbuf_tabstops_reset(out);
 	printbuf_tabstop_push(out, out->indent + 12 + 2 * snapshot_tree_max_depth(trans->c, start));
@@ -932,7 +932,7 @@ int bch2_snapshot_tree_keys_to_text(struct printbuf *out, struct btree_trans *tr
 	return 0;
 }
 
-void bch2_snapshot_id_list_to_text(struct printbuf *out, snapshot_id_list *s)
+__cold void bch2_snapshot_id_list_to_text(struct printbuf *out, snapshot_id_list *s)
 {
 	bool first = true;
 	darray_for_each(*s, i) {

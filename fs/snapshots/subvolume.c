@@ -240,7 +240,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
 	struct bkey_s_c_subvolume s = bkey_s_c_to_subvolume(k);

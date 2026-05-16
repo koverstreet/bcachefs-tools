@@ -40,7 +40,7 @@ static const char * const trans_commit_flags_strs[] = {
 	NULL
 };
 
-void bch2_trans_commit_flags_to_text(struct printbuf *out, enum bch_trans_commit_flags flags)
+__cold void bch2_trans_commit_flags_to_text(struct printbuf *out, enum bch_trans_commit_flags flags)
 {
 	enum bch_watermark watermark = flags & BCH_WATERMARK_MASK;
 

@@ -71,7 +71,7 @@ enum reconcile_work_id bch2_bkey_reconcile_work_id(const struct bch_fs *c, struc
 	}
 }
 
-void bch2_extent_rebalance_v1_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_extent_rebalance_v1_to_text(struct printbuf *out, struct bch_fs *c,
 				      const struct bch_extent_rebalance_v1 *r)
 {
 	prt_printf(out, "replicas=%u", r->data_replicas);
@@ -120,7 +120,7 @@ void bch2_extent_rebalance_v1_to_text(struct printbuf *out, struct bch_fs *c,
 	}
 }
 
-void bch2_extent_reconcile_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_extent_reconcile_to_text(struct printbuf *out, struct bch_fs *c,
 				      const struct bch_extent_reconcile *r)
 {
 	prt_str(out, "need_rb=");

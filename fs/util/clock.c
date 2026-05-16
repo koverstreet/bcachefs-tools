@@ -134,7 +134,7 @@ void __bch2_increment_clock(struct io_clock *clock, u64 sectors)
 		timer->fn(timer);
 }
 
-void bch2_io_timers_to_text(struct printbuf *out, struct io_clock *clock)
+__cold void bch2_io_timers_to_text(struct printbuf *out, struct io_clock *clock)
 {
 	u64 now = atomic64_read(&clock->now);
 

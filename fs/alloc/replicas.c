@@ -79,7 +79,7 @@ static void bch2_cpu_replicas_sort(struct bch_replicas_cpu *r)
 			  (void *)(size_t)r->entry_size);
 }
 
-static void bch2_replicas_entry_v0_to_text(struct printbuf *out,
+static __cold void bch2_replicas_entry_v0_to_text(struct printbuf *out,
 					   struct bch_replicas_entry_v0 *e)
 {
 	bch2_prt_data_type(out, e->data_type);
@@ -90,7 +90,7 @@ static void bch2_replicas_entry_v0_to_text(struct printbuf *out,
 	prt_printf(out, "]");
 }
 
-void bch2_replicas_entry_to_text(struct printbuf *out,
+__cold void bch2_replicas_entry_to_text(struct printbuf *out,
 				 struct bch_replicas_entry_v1 *e)
 {
 	bch2_prt_data_type(out, e->data_type);
@@ -101,7 +101,7 @@ void bch2_replicas_entry_to_text(struct printbuf *out,
 	prt_printf(out, "]");
 }
 
-static void bch2_replicas_entry_cpu_to_text(struct printbuf *out,
+static __cold void bch2_replicas_entry_cpu_to_text(struct printbuf *out,
 					    struct bch_replicas_entry_cpu *e)
 {
 	prt_printf(out, "ref=%u ", atomic_read(&e->ref));
@@ -161,7 +161,7 @@ int bch2_replicas_entry_validate(struct bch_replicas_entry_v1 *r,
 	return 0;
 }
 
-void bch2_cpu_replicas_to_text(struct printbuf *out,
+__cold void bch2_cpu_replicas_to_text(struct printbuf *out,
 			       struct bch_replicas_cpu *r)
 {
 	bool first = true;
@@ -805,7 +805,7 @@ static int bch2_sb_replicas_validate(struct bch_sb *sb, struct bch_sb_field *f,
 	return 0;
 }
 
-static void bch2_sb_replicas_to_text(struct printbuf *out,
+static __cold void bch2_sb_replicas_to_text(struct printbuf *out,
 				     struct bch_fs *c, struct bch_sb *sb,
 				     struct bch_sb_field *f)
 {
@@ -839,7 +839,7 @@ static int bch2_sb_replicas_v0_validate(struct bch_sb *sb, struct bch_sb_field *
 	return 0;
 }
 
-static void bch2_sb_replicas_v0_to_text(struct printbuf *out,
+static __cold void bch2_sb_replicas_v0_to_text(struct printbuf *out,
 					struct bch_fs *c, struct bch_sb *sb,
 					struct bch_sb_field *f)
 {
