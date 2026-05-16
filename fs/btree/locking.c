@@ -387,8 +387,8 @@ static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
 	return ret;
 }
 
-static int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
-			      struct printbuf *cycle)
+static inline int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
+				     struct printbuf *cycle)
 {
 	struct btree_trans *orig_trans = g->g->trans;
 
