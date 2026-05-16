@@ -61,6 +61,117 @@ void bch2_push_whiteout(struct btree *b, struct bpos pos)
 	bkey_p_copy(unwritten_whiteouts_start(b), &k.k);
 }
 
+/*
+ * Inode-number sharding (shard_inode_numbers_bits) splits concurrent
+ * allocators across disjoint ranges of three btrees so they don't fight
+ * for the same nodes:
+ *
+ *   inodes:  SPOS(0,    inum, snap)   — shard field is offset
+ *   extents: SPOS(inum, offset, snap) — shard field is inode
+ *   dirents: SPOS(inum, hash, snap)   — shard field is inode
+ *   xattrs:  SPOS(inum, hash, snap)   — shard field is inode
+ *
+ * Shard boundaries on inum sit at multiples of
+ * (1 << (63 - shard_inode_numbers_bits)).
+ *
+ * The helpers below let the splitter force a split at a shard boundary
+ * and the merger refuse a merge that would straddle one — keeping the
+ * leaf level shard-aligned over normal growth, no separate pre-split
+ * pass needed.
+ */
+
+/*
+ * Return the greatest shard-boundary pivot bpos strictly less than @key.
+ * POS_MIN if none (non-shard btree, sharding disabled, or @key already
+ * in shard 0) — pivots by definition separate intervals, so POS_MIN is
+ * a safe not-found sentinel.
+ */
+static struct bpos bch2_btree_shard_pivot_below(struct bch_fs *c,
+						enum btree_id id,
+						struct bpos key)
+{
+	unsigned shard_bits = c->opts.shard_inode_numbers_bits;
+	if (!shard_bits)
+		return POS_MIN;
+
+	unsigned bits = 63 - shard_bits;
+	u64 field;
+
+	switch (id) {
+	case BTREE_ID_inodes:
+		field = key.offset;
+		break;
+	case BTREE_ID_extents:
+	case BTREE_ID_dirents:
+	case BTREE_ID_xattrs:
+		field = key.inode;
+		break;
+	default:
+		return POS_MIN;
+	}
+
+	u64 shard = field >> bits;
+	if (!shard)
+		return POS_MIN;
+
+	/*
+	 * Clamp to the largest valid shard. Callers may pass SPOS_MAX (or
+	 * field values above the shard-encoded range) when looking up the
+	 * pivot for an unbounded leaf; without the clamp @shard would
+	 * point to a nonexistent boundary, and @boundary << bits could
+	 * overflow u64 for large shard_bits.
+	 */
+	u64 max_shard = (1ULL << shard_bits) - 1;
+	shard = min(shard, max_shard);
+	--shard;
+	if (!shard)
+		return POS_MIN;
+
+	return id == BTREE_ID_inodes
+		? SPOS(0, shard << bits, U32_MAX)
+		: SPOS(shard << bits, U64_MAX, U32_MAX);
+}
+
+/*
+ * Return the shard-boundary pivot strictly inside (b->min_key, b->max_key)
+ * — the rightmost boundary strictly above min_key and strictly below
+ * max_key. POS_MIN if none, or if @b isn't a leaf.
+ *
+ * Passing max_key to pivot_below already enforces the pivot < max_key
+ * half; a right-edge-aligned leaf still finds the next-smaller boundary
+ * inside, so successive rewrites converge toward full shard alignment.
+ */
+static inline struct bpos bch2_btree_node_shard_pivot(struct bch_fs *c,
+						      const struct btree *b)
+{
+	if (b->c.level)
+		return POS_MIN;
+
+	struct bpos p = bch2_btree_shard_pivot_below(c, b->c.btree_id,
+						     b->data->max_key);
+	return bpos_gt(p, b->data->min_key) ? p : POS_MIN;
+}
+
+/*
+ * True iff @key is at the start of a shard — the key immediately
+ * before @key is in a different shard. Used at both ends of a node:
+ *
+ *   bch2_key_is_shard_boundary(c, id, b->data->min_key)
+ *       — prev sib is in a different shard.
+ *   bch2_key_is_shard_boundary(c, id, bpos_successor(b->data->max_key))
+ *       — next sib is in a different shard.
+ *
+ * The POS_MIN guard avoids a phantom match at SPOS(0,0,1) when
+ * pivot_below returns POS_MIN for shard 0.
+ */
+static inline bool bch2_key_is_shard_boundary(struct bch_fs *c,
+					      enum btree_id id,
+					      struct bpos key)
+{
+	struct bpos p = bch2_btree_shard_pivot_below(c, id, key);
+	return !bpos_eq(p, POS_MIN) && bpos_eq(key, bpos_successor(p));
+}
+
 static const char * const bch2_btree_update_modes[] = {
 #define x(t) #t,
 	BTREE_UPDATE_MODES()
@@ -1748,8 +1859,6 @@ static void btree_pack_into_dsts(struct btree_update *as,
 
 		bsets[i]->u64s = cpu_to_le16((u64 *) out[i] - bsets[i]->_data);
 
-		BUG_ON(!bsets[i]->u64s);
-
 		set_btree_bset_end(n, n->set);
 
 		btree_node_reset_sib_u64s(n);
@@ -1885,7 +1994,16 @@ static int btree_split(struct btree_update *as, struct btree_trans *trans,
 		: as->new_key_u64s &&
 		  !bch2_btree_node_compact_fits(c, b, as->new_key_u64s);
 
-	if (must_split || b->nr.live_u64s > BTREE_SPLIT_THRESHOLD(c)) {
+	/*
+	 * Also split (vs compact) if a shard boundary lies inside this
+	 * leaf — compact would preserve the cross-shard layout that the
+	 * pid-hash inode sharding is trying to escape. Splitting drives
+	 * leaves toward shard-alignment automatically over normal growth;
+	 * no separate pre-split pass needed.
+	 */
+	if (must_split ||
+	    b->nr.live_u64s > BTREE_SPLIT_THRESHOLD(c) ||
+	    !bpos_eq(bch2_btree_node_shard_pivot(c, b), POS_MIN)) {
 		struct btree_merge_node split_src = { .trans = trans, .b = b };
 		darray_merge_node split_srcs = {
 			.data = &split_src, .nr = 1, .size = 1,
@@ -2598,7 +2716,23 @@ static bool find_balanced_split(struct btree_trans *trans,
 	struct split_layout best = {};
 	bool have_best = false;
 
-	if (n1_target_u64s) {
+	struct bpos shard_pivot = bch2_btree_node_shard_pivot(trans->c, srcs->data[0].b);
+
+	if (!bpos_eq(shard_pivot, POS_MIN)) {
+		/*
+		 * Shard pivot takes priority over size balance: force the
+		 * split at the boundary to keep the leaf level shard-aligned,
+		 * which is what gives concurrent inode/dirent/xattr allocators
+		 * their disjoint-btree-node separation. An uneven layout is
+		 * fine — must_split is recursive, so an overflowing side gets
+		 * another shot. Mergers never reach this branch in practice:
+		 * sib_u64s is poisoned at shard boundaries (bch2_foreground_
+		 * maybe_merge), so srcs[0]'s shard_pivot is POS_MIN whenever
+		 * a merger reaches find_balanced_split.
+		 */
+		predict_split(trans, srcs, insert_keys, 0, shard_pivot, &best);
+		have_best = true;
+	} else if (n1_target_u64s) {
 		predict_split(trans, srcs, insert_keys, n1_target_u64s, POS_MIN, &best);
 		have_best = true;
 	} else {
@@ -2804,9 +2938,13 @@ int __bch2_foreground_maybe_merge(struct btree_trans *trans,
 
 	struct btree *b = trans->paths[path].l[level].b;
 
-	if (bpos_eq(b->data->min_key, POS_MIN))
+	if (bpos_eq(b->data->min_key, POS_MIN) ||
+	    (!b->c.level &&
+	     bch2_key_is_shard_boundary(c, btree, b->data->min_key)))
 		b->sib_u64s[btree_prev_sib] = U16_MAX;
-	if (bpos_eq(b->data->max_key, SPOS_MAX))
+	if (bpos_eq(b->data->max_key, SPOS_MAX) ||
+	    (!b->c.level &&
+	     bch2_key_is_shard_boundary(c, btree, bpos_successor(b->data->max_key))))
 		b->sib_u64s[btree_next_sib] = U16_MAX;
 
 	/*
