@@ -280,6 +280,20 @@ struct posix_acl *bch2_get_acl(struct inode *vinode, int type, bool rcu)
 	if (rcu)
 		return ERR_PTR(-ECHILD);
 
+	/*
+	 * Fast path: if the inode flag for this ACL type is clear, no acl
+	 * xattr exists and we can skip the btree lookup. Also populate the
+	 * VFS negative cache, so subsequent permission checks on this inode
+	 * short-circuit at the VFS layer:
+	 */
+	u64 flag = type == ACL_TYPE_ACCESS
+		? BCH_INODE_has_access_acl
+		: BCH_INODE_has_default_acl;
+	if (!(inode->ei_inode.bi_flags & flag)) {
+		set_cached_acl(&inode->v, type, NULL);
+		return NULL;
+	}
+
 	struct bch_hash_info hash;
 	struct xattr_search_key search = X_SEARCH(acl_to_xattr_type(type), "", 0);
 
@@ -290,8 +304,13 @@ struct posix_acl *bch2_get_acl(struct inode *vinode, int type, bool rcu)
 		lockrestart_do(trans,
 			bkey_err(k = bch2_hash_lookup(trans, &iter, bch2_xattr_hash_desc,
 					     &hash, inode_inum(inode), &search, 0)));
-	if (ret)
-		return bch2_err_matches(ret, ENOENT) ? NULL : ERR_PTR(ret);
+	if (ret) {
+		if (bch2_err_matches(ret, ENOENT)) {
+			set_cached_acl(&inode->v, type, NULL);
+			return NULL;
+		}
+		return ERR_PTR(ret);
+	}
 
 	struct bkey_s_c_xattr xattr = bkey_s_c_to_xattr(k);
 	struct posix_acl *acl = bch2_acl_from_disk(trans, xattr);
