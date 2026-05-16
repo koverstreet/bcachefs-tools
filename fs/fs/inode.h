@@ -114,6 +114,15 @@ struct bkey_i *bch2_inode_to_v3(struct btree_trans *, struct bkey_i *);
 
 void bch2_inode_unpacked_to_text(struct printbuf *, struct bch_inode_unpacked *);
 
+int __bch2_inode_peek_snapshot(struct btree_trans *,
+			       struct btree_iter *,
+			       struct bch_inode_unpacked *,
+			       subvol_inum, u32,
+			       unsigned, const char *);
+
+#define bch2_inode_peek_snapshot(_trans, _iter, _inode, _inum, _snapshot, _flags)	\
+	__bch2_inode_peek_snapshot(_trans, _iter, _inode, _inum, _snapshot, _flags, __func__)
+
 int __bch2_inode_peek(struct btree_trans *, struct btree_iter *,
 		      struct bch_inode_unpacked *, subvol_inum, unsigned, const char *);
 

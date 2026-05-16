@@ -52,7 +52,8 @@ int bch2_create_trans(struct btree_trans *trans,
 	u32 snapshot;
 	try(bch2_subvol_is_ro_trans(trans, dir.subvol, &snapshot));
 
-	try(bch2_inode_peek(trans, &dir_iter, dir_u, dir, BTREE_ITER_intent));
+	try(bch2_inode_peek_snapshot(trans, &dir_iter, dir_u, dir,
+				     snapshot, BTREE_ITER_intent));
 
 	if (!(flags & BCH_CREATE_SNAPSHOT)) {
 		/* Normal create path - allocate a new inode: */
@@ -226,17 +227,23 @@ int bch2_unlink_trans(struct btree_trans *trans,
 	CLASS(btree_iter_uninit, inode_iter)(trans);
 	u64 now = bch2_current_time(c);
 
-	try(bch2_inode_peek(trans, &dir_iter, dir_u, dir, BTREE_ITER_intent));
+	u32 snapshot;
+	if (!deleting_subvol)
+		try(bch2_subvol_is_ro_trans(trans, dir.subvol, &snapshot));
+	else
+		try(bch2_subvolume_get_snapshot(trans, dir.subvol, &snapshot));
+
+	try(bch2_inode_peek_snapshot(trans, &dir_iter, dir_u, dir, snapshot, BTREE_ITER_intent));
 
 	struct bch_hash_info dir_hash;
 	try(bch2_hash_info_init(c, dir_u, &dir_hash));
 
 	subvol_inum inum;
-	try(bch2_dirent_lookup_trans(trans, &dirent_iter, dir, &dir_hash,
-				     name, &inum, BTREE_ITER_intent));
+	try(bch2_dirent_lookup_snapshot(trans, &dirent_iter, dir, snapshot, &dir_hash,
+					name, &inum, BTREE_ITER_intent));
 
 	if ((inode.subvol || inode.inum) &&
-	    !subvol_inum_eq(inode, inum)) {
+	    unlikely(!subvol_inum_eq(inode, inum))) {
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "vfs did bad unlink: wanted inum %llu:%llu, got %llu:%llu\n",
 			   inode.subvol, inode.inum,

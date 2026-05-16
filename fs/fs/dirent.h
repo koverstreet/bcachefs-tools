@@ -111,6 +111,13 @@ int bch2_dirent_rename(struct btree_trans *,
 		       const struct qstr *, subvol_inum *, u64 *,
 		       enum bch_rename_mode);
 
+int bch2_dirent_lookup_snapshot(struct btree_trans *,
+				struct btree_iter *,
+				subvol_inum, u32,
+				const struct bch_hash_info *,
+				const struct qstr *, subvol_inum *,
+				unsigned);
+
 int bch2_dirent_lookup_trans(struct btree_trans *, struct btree_iter *,
 			       subvol_inum, const struct bch_hash_info *,
 			       const struct qstr *, subvol_inum *, unsigned);
