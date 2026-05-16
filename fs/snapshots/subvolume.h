@@ -27,7 +27,7 @@ int __bch2_subvolume_get_snapshot(struct btree_trans *, u32,
 				  u32 *, bool);
 int bch2_subvolume_get_snapshot(struct btree_trans *, u32, u32 *);
 
-int bch2_subvol_is_ro_trans(struct btree_trans *, u32);
+int bch2_subvol_is_ro_trans(struct btree_trans *, u32, u32 *);
 int bch2_subvol_is_ro(struct bch_fs *, u32);
 
 static inline struct bkey_s_c

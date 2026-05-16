@@ -935,9 +935,11 @@ static int bch2_rename2(struct mnt_idmap *idmap,
 
 	CLASS(btree_trans, trans)(c);
 
+	u32 src_snapshot, dst_snapshot;
+
 	ret = lockrestart_do(trans,
-		bch2_subvol_is_ro_trans(trans, src_dir->ei_inum.subvol) ?:
-		bch2_subvol_is_ro_trans(trans, dst_dir->ei_inum.subvol));
+		bch2_subvol_is_ro_trans(trans, src_dir->ei_inum.subvol, &src_snapshot) ?:
+		bch2_subvol_is_ro_trans(trans, dst_dir->ei_inum.subvol, &dst_snapshot));
 	if (ret)
 		goto err;
 

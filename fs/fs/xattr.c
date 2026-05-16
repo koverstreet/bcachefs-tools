@@ -170,7 +170,8 @@ int bch2_xattr_set(struct btree_trans *trans, subvol_inum inum,
 {
 	struct bch_fs *c = trans->c;
 
-	try(bch2_subvol_is_ro_trans(trans, inum.subvol));
+	u32 snapshot;
+	try(bch2_subvol_is_ro_trans(trans, inum.subvol, &snapshot));
 
 	CLASS(btree_iter_uninit, inode_iter)(trans);
 	try(bch2_inode_peek(trans, &inode_iter, inode_u, inum, BTREE_ITER_intent));

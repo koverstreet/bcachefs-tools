@@ -47,12 +47,10 @@ int bch2_create_trans(struct btree_trans *trans,
 	u64 now = bch2_current_time(c);
 	u64 cpu = raw_smp_processor_id();
 	u64 dir_target;
-	u32 snapshot;
 	unsigned dir_type = mode_to_type(mode);
 
-	try(bch2_subvol_is_ro_trans(trans, dir.subvol));
-
-	try(bch2_subvolume_get_snapshot(trans, dir.subvol, &snapshot));
+	u32 snapshot;
+	try(bch2_subvol_is_ro_trans(trans, dir.subvol, &snapshot));
 
 	try(bch2_inode_peek(trans, &dir_iter, dir_u, dir, BTREE_ITER_intent));
 
