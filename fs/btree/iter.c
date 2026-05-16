@@ -1264,13 +1264,6 @@ err:
 	bch2_btree_cache_cannibalize_unlock(trans);
 
 	trans->in_traverse_all = false;
-
-	event_inc_trace(c, trans_traverse_all, buf, ({
-		prt_printf(&buf, "%s\n", trans->fn);
-		prt_printf(&buf, "nr_paths %u/%u\n",
-			   bitmap_weight(trans->paths_allocated, trans->nr_paths),
-			   trans->nr_paths);
-	}));
 	return ret;
 }
 
@@ -3601,6 +3594,15 @@ static void bch2_trans_srcu_lock(struct btree_trans *trans)
  */
 u32 bch2_trans_begin(struct btree_trans *trans)
 {
+	event_inc_trace(trans->c, transaction_begin, buf, ({
+		prt_printf(&buf,
+			   "%s\n"
+			   "nr_paths %u/%u\n",
+			   trans->fn,
+			   bitmap_weight(trans->paths_allocated, trans->nr_paths),
+			   trans->nr_paths);
+	}));
+
 	struct btree_path *path;
 	unsigned i;
 	u64 now;
