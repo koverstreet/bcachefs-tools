@@ -951,42 +951,32 @@ int bch2_inode_create(struct btree_trans *trans,
 
 	u64 start = le64_to_cpu(cursor->v.idx);
 	u64 pos = start;
-	u64 gen = 0;
 
 	bch2_trans_iter_init(trans, iter, BTREE_ID_inodes, POS(0, pos),
 			     BTREE_ITER_all_snapshots|
 			     BTREE_ITER_intent);
 	while (1) {
-		struct bkey_s_c k;
-		while ((k = bkey_try(bch2_btree_iter_peek(iter))).k &&
-		       bkey_lt(k.k->p, POS(0, max))) {
+		while (pos < max) {
+			struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(iter, &SPOS(0, pos, U32_MAX)));
 
-			if (pos < iter->pos.offset)
-				break;
+			if (!k.k ||
+			    (k.k->type == KEY_TYPE_inode_generation &&
+			     bch2_snapshot_is_ancestor(trans, snapshot, k.k->p.snapshot))) {
+				inode_u->bi_inum	= pos;
+				inode_u->bi_generation	= le64_to_cpu(cursor->v.gen);
+				cursor->v.idx		= cpu_to_le64(pos + 1);
 
-			if (k.k->type == KEY_TYPE_inode_generation &&
-			    bch2_snapshot_is_ancestor(trans, snapshot, k.k->p.snapshot)) {
-				pos = k.k->p.offset;
-				gen = le32_to_cpu(bkey_s_c_to_inode_generation(k).v->bi_generation);
-				break;
+				if (k.k)
+					inode_u->bi_generation = max(inode_u->bi_generation,
+							le32_to_cpu(bkey_s_c_to_inode_generation(k).v->bi_generation));
+
+				bch2_btree_iter_set_pos(iter, SPOS(0, pos, snapshot));
+				try(bch2_btree_iter_traverse(iter));
+				return 0;
 			}
 
-			/*
-			 * We don't need to iterate over keys in every snapshot once
-			 * we've found just one:
-			 */
-			pos = iter->pos.offset + 1;
+			pos++;
 			bch2_btree_iter_set_pos(iter, POS(0, pos));
-		}
-
-		if (likely(pos < max)) {
-			bch2_btree_iter_set_pos(iter, SPOS(0, pos, snapshot));
-			k = bkey_try(bch2_btree_iter_peek_slot(iter));
-
-			inode_u->bi_inum	= k.k->p.offset;
-			inode_u->bi_generation	= max(gen, le64_to_cpu(cursor->v.gen));
-			cursor->v.idx		= cpu_to_le64(k.k->p.offset + 1);
-			return 0;
 		}
 
 		if (start == min)
