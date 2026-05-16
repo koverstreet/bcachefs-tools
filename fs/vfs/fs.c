@@ -586,8 +586,7 @@ retry:
 
 	kuid = mapped_fsuid(idmap, i_user_ns(&dir->v));
 	kgid = mapped_fsgid(idmap, i_user_ns(&dir->v));
-	ret   = bch2_subvol_is_ro_trans(trans, dir->ei_inum.subvol) ?:
-		bch2_create_trans(trans,
+	ret   = bch2_create_trans(trans,
 				  inode_inum(dir), &dir_u, &inode_u,
 				  !(flags & BCH_CREATE_TMPFILE)
 				  ? &dentry->d_name : NULL,
