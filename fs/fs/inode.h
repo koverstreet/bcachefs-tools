@@ -190,6 +190,7 @@ int bch2_inode_create(struct btree_trans *, struct btree_iter *,
 		      struct bch_inode_unpacked *, u32, bool);
 
 void bch2_fs_inode_shard_cpu_init(struct bch_fs *);
+unsigned bch2_shard_inode_numbers_bits_default(unsigned nr_cpus, u64 fs_size, u64 btree_node_bytes);
 
 int bch2_inode_rm(struct bch_fs *, subvol_inum);
 
