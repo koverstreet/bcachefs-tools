@@ -1478,7 +1478,8 @@ static void bch2_btree_set_root_inmem(struct bch_fs *c, struct btree *b)
 	scoped_guard(mutex, &c->btree.cache.root_lock) {
 		bch2_btree_id_root(c, b->c.btree_id)->b = b;
 		if (likely(b->c.btree_id < BTREE_ID_NR))
-			WRITE_ONCE(c->btree.cache.roots_b[b->c.btree_id], b);
+			WRITE_ONCE(c->btree.cache.roots_b[b->c.btree_id],
+				   bch2_btree_root_pack(b));
 	}
 
 	bch2_recalc_btree_reserve(c);
