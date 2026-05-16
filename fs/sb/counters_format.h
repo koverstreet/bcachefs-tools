@@ -253,8 +253,8 @@ enum bch_counters_flags {
 	  "Transaction restart: injected for testing")			\
 	x(trans_restart_key_cache_upgrade,	70,  TYPE_COUNTER,	\
 	  "Transaction restart: key cache lock upgrade")		\
-	x(trans_traverse_all,			71,  TYPE_COUNTER,	\
-	  "Full transaction path traversals")				\
+	x(transaction_begin,			71,  TYPE_COUNTER,	\
+	  "Transaction start")						\
 	x(transaction_commit,			72,  TYPE_COUNTER,	\
 	  "Transaction commits")					\
 	x(write_super,				73,  TYPE_COUNTER,	\

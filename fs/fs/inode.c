@@ -963,8 +963,8 @@ int bch2_inode_create(struct btree_trans *trans,
 			if (pos < iter->pos.offset)
 				break;
 
-			if (bch2_snapshot_is_ancestor(trans, snapshot, k.k->p.snapshot) &&
-			    k.k->type == KEY_TYPE_inode_generation) {
+			if (k.k->type == KEY_TYPE_inode_generation &&
+			    bch2_snapshot_is_ancestor(trans, snapshot, k.k->p.snapshot)) {
 				pos = k.k->p.offset;
 				gen = le32_to_cpu(bkey_s_c_to_inode_generation(k).v->bi_generation);
 				break;
