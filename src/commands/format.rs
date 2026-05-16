@@ -473,6 +473,27 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         })
         .collect::<Result<_>>()?;
 
+    // Pick a default for shard_inode_numbers_bits if the user didn't.
+    //
+    // Sharding the inode-number space spreads concurrent allocators across
+    // disjoint cursor entries (and, with the planned pre-split, disjoint
+    // inode-btree nodes) so create/unlink/rename ops on many threads don't
+    // serialize on the same btree node. Scaling with nr_cpus * 2 leaves
+    // headroom for thread oversubscription without overshooting; clamped to
+    // the [0, 8] range the option supports.
+    if !bch_bindgen::opts::opt_defined_by_id(&cfg.fs_opts, c::bch_opt_id::Opt_shard_inode_numbers_bits) {
+        let nr = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let target = (nr * 2).next_power_of_two();
+        let bits = (target.trailing_zeros() as u64).min(8);
+        bch_bindgen::opts::opt_set_by_id(
+            &mut cfg.fs_opts,
+            c::bch_opt_id::Opt_shard_inode_numbers_bits,
+            bits,
+        );
+    }
+
     // Open all devices for format
     for (i, dev) in devices.iter_mut().enumerate() {
         if let Some(mpath_dev) = find_multipath_holder(Path::new(&cfg.devices[i].path)) {
