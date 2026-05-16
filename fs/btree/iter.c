@@ -3671,6 +3671,16 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 
 	struct btree_trans *trans = bch2_trans_alloc(c);
 
+	/*
+	 * Warm the btree root pointer cache lines: every btree access in this
+	 * trans goes through c->btree.cache.roots_b[], and the cold-line miss
+	 * shows up as ~3-7% of cycles in bch2_btree_path_traverse_one's
+	 * lock_root path. Issuing the prefetches here lets them complete
+	 * during the rest of trans_get's setup work.
+	 */
+	for (unsigned i = 0; i < sizeof(c->btree.cache.roots_b); i += 64)
+		prefetch((const char *) c->btree.cache.roots_b + i);
+
 	trans->c		= c;
 	trans->fn_idx		= fn_idx;
 	trans->locking_wait.task = current;
