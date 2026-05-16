@@ -12,6 +12,7 @@
 #include "journal/sb.h"
 #include "journal/seq_blacklist.h"
 
+#include "fs/inode.h"
 #include "fs/quota.h"
 
 #include "init/dev.h"
@@ -610,8 +611,17 @@ int bch2_sb_validate(struct bch_sb *sb, struct bch_opts *opts, u64 read_offset,
 		SET_BCH_SB_MULTI_DEVICE(sb, true);
 
 #ifdef __KERNEL__
-	if (!BCH_SB_SHARD_INUMS_NBITS(sb))
-		SET_BCH_SB_SHARD_INUMS_NBITS(sb, ilog2(roundup_pow_of_two(num_online_cpus())));
+	if (!BCH_SB_SHARD_INUMS_NBITS(sb)) {
+		u64 fs_size = 0;
+		for (unsigned i = 0; i < bch2_sb_nr_devices(sb); i++) {
+			struct bch_member m = bch2_sb_member_get(sb, i);
+			fs_size += le64_to_cpu(m.nbuckets) * le16_to_cpu(m.bucket_size);
+		}
+
+		SET_BCH_SB_SHARD_INUMS_NBITS(sb,
+			bch2_shard_inode_numbers_bits_default(num_online_cpus(),
+				fs_size << 9, (u64) BCH_SB_BTREE_NODE_SIZE(sb) << 9));
+	}
 #endif
 
 	/* validate layout */

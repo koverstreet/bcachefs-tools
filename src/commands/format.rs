@@ -490,6 +490,43 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         })?;
     }
 
+    // Default shard_inode_numbers_bits if the user didn't set it. The policy
+    // (cpu-scaled, fs-size-capped, clamped to [0, 8]) lives in C —
+    // bch2_shard_inode_numbers_bits_default() — so the format-time default and
+    // the kernel sb_validate rewrite of legacy bits=0 filesystems can't diverge.
+    if !bch_bindgen::opts::opt_defined_by_id(&cfg.fs_opts, c::bch_opt_id::Opt_shard_inode_numbers_bits) {
+        let nr_cpus = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1) as u32;
+
+        // Total fs size in bytes, populating per-device sizes from fd if the
+        // user didn't specify them.
+        let total_fs_size: u64 = devices.iter_mut().map(|d| {
+            if d.fs_size == 0 {
+                d.fs_size = crate::wrappers::bdev::get_size(d.fd);
+            }
+            d.fs_size
+        }).sum();
+
+        // btree_node_size in bytes; 0 here if the user didn't override (the
+        // default isn't materialized until later), so fall back to the same
+        // 256K default the format path picks.
+        let btree_node_bytes = if cfg.fs_opts.btree_node_size != 0 {
+            cfg.fs_opts.btree_node_size as u64
+        } else {
+            256 << 10
+        };
+
+        let bits = unsafe {
+            c::bch2_shard_inode_numbers_bits_default(nr_cpus, total_fs_size, btree_node_bytes)
+        } as u64;
+        bch_bindgen::opts::opt_set_by_id(
+            &mut cfg.fs_opts,
+            c::bch_opt_id::Opt_shard_inode_numbers_bits,
+            bits,
+        );
+    }
+
     let sb = crate::commands::format_util::format(fs_opt_strs, cfg.fs_opts, fmt_opts, &mut devices);
     if sb.is_null() {
         bail!("format returned null");
