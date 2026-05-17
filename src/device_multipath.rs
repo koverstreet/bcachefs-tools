@@ -2,8 +2,10 @@
 
 //! Helpers for detecting device-mapper multipath relationships.
 //!
-//! The core entrypoint is [`find_multipath_holder()`], which walks sysfs
-//! holders to determine whether a block device sits under a dm-multipath map.
+//! The core entrypoints are [`find_multipath_holder()`], which walks sysfs
+//! holders to determine whether a block device sits under a dm-multipath map,
+//! and [`preferred_multipath_devnode()`], which normalizes dm-multipath devices
+//! to their `/dev/mapper/` path when that path exists.
 //! Both top-level maps (`mpath-...`) and partition maps
 //! (`part<N>-mpath-...`, including nested partition prefixes) are treated as
 //! multipath.
@@ -64,6 +66,60 @@ fn is_multipath_dm_uuid(uuid: &str) -> bool {
 /// Returns the topmost multipath holder for a device, if any.
 pub fn find_multipath_holder(path: &Path) -> Option<PathBuf> {
     find_multipath_holder_inner(path, 0)
+}
+
+/// Returns the `/dev/mapper/` path for a dm-multipath block device, if one exists.
+pub fn preferred_multipath_devnode(path: &Path) -> Option<PathBuf> {
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            debug!("Failed to stat {}: {}", path.display(), e);
+            return None;
+        }
+    };
+
+    if !metadata.file_type().is_block_device() {
+        debug!("Skipping non-block device {}", path.display());
+        return None;
+    }
+
+    let dev = metadata.rdev();
+    if dev == 0 {
+        return None;
+    }
+
+    preferred_multipath_devnode_from_sysfs(&sysfs_path_for_dev(dev))
+}
+
+/// Returns the `/dev/mapper/` path for a dm-multipath sysfs block name, if one exists.
+pub fn preferred_multipath_devnode_for_block_name(name: &str) -> Option<PathBuf> {
+    if !name.starts_with("dm-") {
+        return None;
+    }
+
+    let sysfs = PathBuf::from(format!("/sys/block/{}", name));
+    preferred_multipath_devnode_from_sysfs(&sysfs)
+}
+
+fn multipath_dm_name_from_sysfs(block_sysfs: &Path) -> Option<String> {
+    let dm_path = block_sysfs.join("dm");
+
+    let uuid = read_sysfs_attr(&dm_path, "uuid")?;
+    if !is_multipath_dm_uuid(&uuid) {
+        return None;
+    }
+
+    read_sysfs_attr(&dm_path, "name")
+}
+
+fn mapper_path_if_exists(dm_name: &str) -> Option<PathBuf> {
+    let mapper_path = PathBuf::from(format!("/dev/mapper/{}", dm_name));
+    mapper_path.exists().then_some(mapper_path)
+}
+
+fn preferred_multipath_devnode_from_sysfs(block_sysfs: &Path) -> Option<PathBuf> {
+    let dm_name = multipath_dm_name_from_sysfs(block_sysfs)?;
+    mapper_path_if_exists(&dm_name)
 }
 
 pub fn warn_multipath_component(path: &Path, mpath_dev: &Path) {
@@ -133,24 +189,13 @@ fn find_multipath_holder_inner(path: &Path, depth: u32) -> Option<PathBuf> {
         }
 
         let holder_sysfs = PathBuf::from(format!("/sys/block/{}", name));
-        let dm_path = holder_sysfs.join("dm");
 
-        // Check if this is a multipath dm UUID (map or map partition)
-        let uuid = read_sysfs_attr(&dm_path, "uuid").unwrap_or_default();
-        if !is_multipath_dm_uuid(&uuid) {
+        let Some(dm_name) = multipath_dm_name_from_sysfs(&holder_sysfs) else {
             continue;
-        }
-
-        let mpath_dev = if let Some(dm_name) = read_sysfs_attr(&dm_path, "name") {
-            let mapper_path = PathBuf::from(format!("/dev/mapper/{}", dm_name));
-            if mapper_path.exists() {
-                mapper_path
-            } else {
-                PathBuf::from(format!("/dev/{}", name))
-            }
-        } else {
-            PathBuf::from(format!("/dev/{}", name))
         };
+
+        let mpath_dev = mapper_path_if_exists(&dm_name)
+            .unwrap_or_else(|| PathBuf::from(format!("/dev/{}", name)));
 
         if let Some(higher) = find_multipath_holder_inner(&mpath_dev, depth + 1) {
             debug!(
@@ -259,5 +304,10 @@ mod tests {
         assert!(!is_multipath_dm_uuid("part1-"));
         assert!(!is_multipath_dm_uuid("part1-crypt-foo"));
         assert!(!is_multipath_dm_uuid("foo-mpath-bar"));
+    }
+
+    #[test]
+    fn preferred_devnode_for_non_dm_block_name_returns_none() {
+        assert!(preferred_multipath_devnode_for_block_name("sda").is_none());
     }
 }

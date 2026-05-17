@@ -5,6 +5,8 @@
 
 use std::process::ExitCode;
 
+use crate::wrappers::sysfs::DeviceNameMode;
+
 // ── Command table types (must precede mod declarations for macro access) ──
 
 pub struct CmdDef {
@@ -30,6 +32,19 @@ pub enum CmdKind {
 pub struct GroupDef {
     pub heading:  &'static str,
     pub commands: &'static [&'static CmdDef],
+}
+
+#[derive(clap::Args, Clone, Copy, Debug, Default)]
+pub struct DeviceNameArgs {
+    /// Show mapper names for dm-multipath devices when available
+    #[arg(long = "mapper-names")]
+    pub mapper_names: bool,
+}
+
+impl DeviceNameArgs {
+    pub fn name_mode(self) -> DeviceNameMode {
+        DeviceNameMode::from_mapper_names(self.mapper_names)
+    }
 }
 
 /// Define a typed command (clap-parsed args).
