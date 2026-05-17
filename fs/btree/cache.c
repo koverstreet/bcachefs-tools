@@ -1284,6 +1284,8 @@ struct btree *bch2_btree_node_get(struct btree_trans *trans, struct btree_path *
 	EBUG_ON(level + 1 != path->level);
 
 	b = btree_node_mem_ptr(k);
+	prefetch(&b->c.lock);
+
 
 	/*
 	 * Check b->hash_val _before_ calling btree_node_lock() - this might not

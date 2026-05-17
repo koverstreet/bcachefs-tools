@@ -188,13 +188,13 @@ struct six_lock_wait_fifo {
 struct six_lock {
 	atomic_t		state;
 	u32			seq;
+	unsigned __percpu	*readers;
 	unsigned		intent_lock_recurse;
 	unsigned		write_lock_recurse;
 	struct task_struct	*owner;
 #ifdef CONFIG_BCACHEFS_DEBUG
 	bch_stacktrace		owner_stack;
 #endif
-	unsigned __percpu	*readers;
 	raw_spinlock_t		wait_lock;
 
 	struct six_lock_wait_fifo __rcu *wait_fifo;
