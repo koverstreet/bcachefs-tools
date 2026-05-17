@@ -586,9 +586,10 @@ static inline void memmove_u64s(void *dst, const void *src,
 /* Set the last few bytes up to a u64 boundary given an offset into a buffer. */
 static inline void memset_u64s_tail(void *s, int c, unsigned bytes)
 {
-	unsigned rem = round_up(bytes, sizeof(u64)) - bytes;
-
-	memset(s + bytes, c, rem);
+	while (bytes & 7) {
+		((char *) s)[bytes] = c;
+		bytes++;
+	}
 }
 
 /* just the memmove, doesn't update @_nr */
