@@ -462,7 +462,7 @@ static int journal_entry_open(struct journal *j)
 	 * j->lock.
 	 */
 	if (!fifo_free(&j->in_flight))
-		return bch_err_throw(c, journal_buf_enomem);
+		return bch_err_throw(c, journal_max_in_flight);
 
 	if (atomic64_read(&j->seq) - j->seq_write_started == JOURNAL_STATE_BUF_NR)
 		return bch_err_throw(c, journal_max_open);
