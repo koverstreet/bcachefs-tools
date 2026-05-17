@@ -156,24 +156,34 @@ static int __do_six_trylock(struct six_lock *lock, enum six_lock_type type,
 	 * itself), we return that the wakeup has to be done instead of doing it
 	 * here.
 	 */
-	if (type == SIX_LOCK_read && lock->readers) {
-		scoped_guard(preempt) {
-			this_cpu_inc(*lock->readers); /* signal that we own lock */
-
-			smp_mb();
-
-			old = atomic_read(&lock->state);
+	if (type == SIX_LOCK_intent || !lock->readers) {
+		old = atomic_read(&lock->state);
+		do {
 			ret = !(old & l[type].lock_fail);
+			if (!ret || (type == SIX_LOCK_write && !try)) {
+				smp_mb();
+				break;
+			}
+		} while (!atomic_try_cmpxchg_acquire(&lock->state, &old, old + l[type].lock_val));
 
-			this_cpu_sub(*lock->readers, !ret);
-		}
+		EBUG_ON(ret && !(atomic_read(&lock->state) & l[type].held_mask));
+	} else if (type == SIX_LOCK_read) {
+		guard(preempt)();
+
+		this_cpu_inc(*lock->readers); /* signal that we own lock */
+
+		smp_mb();
+
+		old = atomic_read(&lock->state);
+		ret = !(old & l[type].lock_fail);
 
 		if (!ret) {
+			this_cpu_dec(*lock->readers);
 			smp_mb();
 			if (atomic_read(&lock->state) & SIX_LOCK_WAITING_write)
 				ret = -1 - SIX_LOCK_write;
 		}
-	} else if (type == SIX_LOCK_write && lock->readers) {
+	} else {
 		if (try)
 			atomic_add(SIX_LOCK_HELD_write, &lock->state);
 
@@ -192,17 +202,6 @@ static int __do_six_trylock(struct six_lock *lock, enum six_lock_type type,
 			if (old & SIX_LOCK_WAITING_read)
 				ret = -1 - SIX_LOCK_read;
 		}
-	} else {
-		old = atomic_read(&lock->state);
-		do {
-			ret = !(old & l[type].lock_fail);
-			if (!ret || (type == SIX_LOCK_write && !try)) {
-				smp_mb();
-				break;
-			}
-		} while (!atomic_try_cmpxchg_acquire(&lock->state, &old, old + l[type].lock_val));
-
-		EBUG_ON(ret && !(atomic_read(&lock->state) & l[type].held_mask));
 	}
 
 	if (ret > 0)
