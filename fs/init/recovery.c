@@ -1065,7 +1065,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 	bch2_inode_init(c, &root_inode, 0, 0, S_IFDIR|0755, 0, NULL);
 	root_inode.bi_inum	= BCACHEFS_ROOT_INO;
 	root_inode.bi_subvol	= BCACHEFS_ROOT_SUBVOL;
-	bch2_inode_pack(&packed_inode, &root_inode);
+	bch2_inode_pack(c, &packed_inode, &root_inode);
 	packed_inode.inode.k.p.snapshot = U32_MAX;
 
 	ret = bch2_btree_insert(c, BTREE_ID_inodes, &packed_inode.inode.k_i, NULL, 0, 0);

@@ -202,7 +202,7 @@ fn unlink_and_rm(
 fn update_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
     unsafe {
         let mut packed: c::bkey_inode_buf = Default::default();
-        c::bch2_inode_pack(&mut packed, inode);
+        c::bch2_inode_pack(fs.raw, &mut packed, inode);
         packed.inode.__bindgen_anon_1.k.as_mut().p.snapshot = u32::MAX;
         ret_to_result(c::bch2_btree_insert(
             fs.raw,

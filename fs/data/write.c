@@ -945,7 +945,7 @@ static inline int bch2_extent_update_i_size_sectors(struct btree_trans *trans,
 	struct bkey_i_inode_v3 *inode = bkey_i_to_inode_v3(k_mut);
 
 	struct bch_inode_unpacked inode_u;
-	try(bch2_inode_unpack(k, &inode_u));
+	bch2_inode_unpack(c, k, &inode_u);
 	bch2_inode_opts_get_inode(c, &inode_u, opts);
 
 	/*
@@ -2060,7 +2060,7 @@ static int bch2_inode_get_i_size(struct btree_trans *trans, struct bpos inode_po
 		*i_size = le64_to_cpu(bkey_s_c_to_inode_v3(k).v->bi_size);
 	} else {
 		struct bch_inode_unpacked inode_u;
-		bch2_inode_unpack(k, &inode_u);
+		bch2_inode_unpack(trans->c, k, &inode_u);
 		*i_size = inode_u.bi_size;
 	}
 

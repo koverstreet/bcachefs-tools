@@ -395,7 +395,7 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 				continue;
 
 			struct bch_inode_unpacked child_inode;
-			try(bch2_inode_unpack(k, &child_inode));
+			bch2_inode_unpack(c, k, &child_inode);
 
 			if (!inode_should_reattach(&child_inode)) {
 				try(maybe_delete_dirent(trans,
@@ -619,12 +619,12 @@ static int add_inode(struct bch_fs *c, struct inode_walker *w,
 
 	struct inode_walker_entry *n = &darray_last(w->inodes);
 	if (!n->whiteout) {
-		return bch2_inode_unpack(inode, &n->inode);
+		bch2_inode_unpack(c, inode, &n->inode);
 	} else {
 		n->inode.bi_inum	= inode.k->p.offset;
 		n->inode.bi_snapshot	= inode.k->p.snapshot;
-		return 0;
 	}
+	return 0;
 }
 
 static int get_inodes_all_snapshots(struct btree_trans *trans,
@@ -902,7 +902,7 @@ static int check_inode(struct btree_trans *trans,
 	if (!bkey_is_inode(k.k))
 		return 0;
 
-	try(bch2_inode_unpack(k, &u));
+	bch2_inode_unpack(c, k, &u);
 	BUG_ON(u.bi_snapshot != k.k->p.snapshot);
 
 	if (snapshot_root->bi_inum != u.bi_inum ||
@@ -1126,7 +1126,7 @@ static int find_oldest_inode_needs_reattach(struct btree_trans *trans,
 			break;
 
 		struct bch_inode_unpacked parent_inode;
-		try(bch2_inode_unpack(k, &parent_inode));
+		bch2_inode_unpack(trans->c, k, &parent_inode);
 
 		if (!inode_should_reattach(&parent_inode))
 			break;
@@ -1148,7 +1148,7 @@ static int check_unreachable_inode(struct btree_trans *trans,
 		return 0;
 
 	struct bch_inode_unpacked inode;
-	try(bch2_inode_unpack(k, &inode));
+	bch2_inode_unpack(trans->c, k, &inode);
 
 	if (!inode_should_reattach(&inode))
 		return 0;

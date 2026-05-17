@@ -650,8 +650,7 @@ static int __bch2_fs_upgrade_for_subvolumes(struct btree_trans *trans)
 	}
 
 	struct bch_inode_unpacked inode;
-	ret = bch2_inode_unpack(k, &inode);
-	BUG_ON(ret);
+	bch2_inode_unpack(trans->c, k, &inode);
 
 	inode.bi_subvol = BCACHEFS_ROOT_SUBVOL;
 
