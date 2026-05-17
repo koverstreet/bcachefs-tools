@@ -127,9 +127,14 @@
 	  BCH_FSCK_ERR_need_discard_freespace_key_to_invalid_dev_bucket)\
 	x(per_dev_fragmentation_lru,				\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_lrus)|		\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_alloc_to_lru_refs),	\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_alloc_to_lru_refs)|	\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|		\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_xattrs),		\
 	  BCH_FSCK_ERR_lru_entry_bad,				\
-	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry)
+	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry,		\
+	  BCH_FSCK_ERR_inode_has_inode_opts_flag_wrong,		\
+	  BCH_FSCK_ERR_inode_has_access_acl_flag_wrong,		\
+	  BCH_FSCK_ERR_inode_has_default_acl_flag_wrong)
 
 #define UPGRADE_TABLE_INCOMPAT()				\
 	x(reconcile,						\

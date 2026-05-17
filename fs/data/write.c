@@ -947,9 +947,19 @@ static inline int bch2_extent_update_i_size_sectors(struct btree_trans *trans,
 		k_mut = errptr_try(bch2_inode_to_v3(trans, k_mut));
 	struct bkey_i_inode_v3 *inode = bkey_i_to_inode_v3(k_mut);
 
-	struct bch_inode_unpacked inode_u;
-	bch2_inode_unpack(c, k, &inode_u);
-	bch2_inode_opts_get_inode(c, &inode_u, opts);
+	/*
+	 * Fast path: if the inode has no per-inode io opts (the common case),
+	 * skip the full unpack and use fs defaults. has_inode_opts is set on
+	 * existing inodes by the upgrade's scheduled passes; version upgrades
+	 * always run, so by the time we're doing io the flags are trustworthy:
+	 */
+	if (likely(!(le64_to_cpu(inode->v.bi_flags) & BCH_INODE_has_inode_opts))) {
+		bch2_inode_opts_get(c, opts, false);
+	} else {
+		struct bch_inode_unpacked inode_u;
+		bch2_inode_unpack(c, k, &inode_u);
+		bch2_inode_opts_get_inode(c, &inode_u, opts);
+	}
 
 	/*
 	 * Crazy performance optimization:

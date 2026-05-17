@@ -897,6 +897,29 @@ fsck_err:
 	return ret;
 }
 
+/*
+ * Returns 1 if an xattr of the given type exists for @inode, 0 if not,
+ * negative on error. Used to verify the BCH_INODE_has_*_acl flags against
+ * what's actually in the xattr btree.
+ */
+static int inode_has_xattr_type(struct btree_trans *trans,
+				struct bch_inode_unpacked *inode,
+				unsigned xattr_type)
+{
+	struct bch_hash_info hash;
+	try(bch2_hash_info_init(trans->c, inode, &hash));
+
+	struct xattr_search_key search = X_SEARCH(xattr_type, "", 0);
+	CLASS(btree_iter_uninit, iter)(trans);
+	int ret = bkey_err(bch2_hash_lookup_in_snapshot(
+				trans, &iter, bch2_xattr_hash_desc, &hash,
+				(subvol_inum) { 0, inode->bi_inum },
+				&search, 0, inode->bi_snapshot));
+	if (bch2_err_matches(ret, ENOENT))
+		return 0;
+	return ret ?: 1;
+}
+
 static int check_inode(struct btree_trans *trans,
 		       struct btree_iter *iter,
 		       struct bkey_s_c k,
@@ -1042,6 +1065,53 @@ static int check_inode(struct btree_trans *trans,
 			u.bi_inum, k.k->p.snapshot, u.bi_subvol, u.bi_parent_subvol)) {
 		u.bi_parent_subvol = 0;
 		do_update = true;
+	}
+
+	bool has_opts = false;
+#define x(_name, _bits)  if (u.bi_##_name) has_opts = true;
+	BCH_INODE_OPTS()
+#undef x
+	if (fsck_err_on((bool) (u.bi_flags & BCH_INODE_has_inode_opts) != has_opts,
+			trans, inode_has_inode_opts_flag_wrong,
+			"inode %llu:%u has_inode_opts flag wrong, should be %u",
+			u.bi_inum, u.bi_snapshot, has_opts)) {
+		u.bi_flags &= ~BCH_INODE_has_inode_opts;
+		if (has_opts)
+			u.bi_flags |= BCH_INODE_has_inode_opts;
+		do_update = true;
+	}
+
+	/*
+	 * has_access_acl/has_default_acl: only the set direction is verified
+	 * here, an xattr lookup per flagged inode - inodes with ACLs are
+	 * rare. Flag clear but xattr present, the direction that would break
+	 * the bch2_get_acl() short circuit, is caught from the xattr side in
+	 * check_xattr():
+	 */
+	if (u.bi_flags & BCH_INODE_has_access_acl) {
+		int has = inode_has_xattr_type(trans, &u,
+					       KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS);
+		if (has < 0)
+			return has;
+		if (fsck_err_on(!has, trans, inode_has_access_acl_flag_wrong,
+				"inode %llu:%u has BCH_INODE_has_access_acl set but no acl xattr",
+				u.bi_inum, u.bi_snapshot)) {
+			u.bi_flags &= ~BCH_INODE_has_access_acl;
+			do_update = true;
+		}
+	}
+
+	if (u.bi_flags & BCH_INODE_has_default_acl) {
+		int has = inode_has_xattr_type(trans, &u,
+					       KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT);
+		if (has < 0)
+			return has;
+		if (fsck_err_on(!has, trans, inode_has_default_acl_flag_wrong,
+				"inode %llu:%u has BCH_INODE_has_default_acl set but no acl xattr",
+				u.bi_inum, u.bi_snapshot)) {
+			u.bi_flags &= ~BCH_INODE_has_default_acl;
+			do_update = true;
+		}
 	}
 
 	if (u.bi_subvol && bch2_snapshot_is_leaf(c, u.bi_snapshot)) {
@@ -1748,6 +1818,7 @@ again:
 static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		       struct bkey_s_c k,
 		       struct bch_hash_info *hash_info,
+		       struct snapshots_seen *s,
 		       struct inode_walker *inode)
 {
 	struct bch_fs *c = trans->c;
@@ -1757,6 +1828,8 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		return ret;
 	if (ret)
 		return 0;
+
+	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, inode, k));
 
@@ -1769,6 +1842,49 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		try(bch2_hash_info_init(c, &i->inode, hash_info));
 	inode->first_this_inode = false;
 
+	/*
+	 * The dangerous direction for the BCH_INODE_has_*_acl flags - flag
+	 * clear but an acl xattr exists, which would break the
+	 * bch2_get_acl() short circuit - is verified here, where we're
+	 * already walking the xattrs; the reverse direction is checked in
+	 * check_inode().
+	 *
+	 * The xattr is visible from every descendant snapshot version of
+	 * the inode that hasn't overwritten it - they all need the flag.
+	 *
+	 * Repairs are on attempt-local copies, without mutating the
+	 * walker's - a restarted commit must see the gating check fire
+	 * again, and when the repair commits the walker revalidates:
+	 */
+	if (k.k->type == KEY_TYPE_xattr) {
+		unsigned x_type = bkey_s_c_to_xattr(k).v->x_type;
+		struct inode_walker_entry *i2;
+
+		if (x_type == KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS)
+			for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i2)
+				if (!i2->whiteout &&
+				    fsck_err_on(!(i2->inode.bi_flags & BCH_INODE_has_access_acl),
+						trans, inode_has_access_acl_flag_wrong,
+						"inode %llu:%u has an access acl xattr but BCH_INODE_has_access_acl not set",
+						i2->inode.bi_inum, i2->inode.bi_snapshot)) {
+					struct bch_inode_unpacked inode_u = i2->inode;
+					inode_u.bi_flags |= BCH_INODE_has_access_acl;
+					try(__bch2_fsck_write_inode(trans, &inode_u));
+				}
+
+		if (x_type == KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT)
+			for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i2)
+				if (!i2->whiteout &&
+				    fsck_err_on(!(i2->inode.bi_flags & BCH_INODE_has_default_acl),
+						trans, inode_has_default_acl_flag_wrong,
+						"inode %llu:%u has a default acl xattr but BCH_INODE_has_default_acl not set",
+						i2->inode.bi_inum, i2->inode.bi_snapshot)) {
+					struct bch_inode_unpacked inode_u = i2->inode;
+					inode_u.bi_flags |= BCH_INODE_has_default_acl;
+					try(__bch2_fsck_write_inode(trans, &inode_u));
+				}
+	}
+
 	bool need_second_pass = false;
 	bool invalidated_inodes = false;
 	ret = bch2_str_hash_check_key(trans, NULL, &bch2_xattr_hash_desc, hash_info,
@@ -1778,7 +1894,9 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		return bch_err_throw(c, transaction_restart_nested);
 	}
 
-	return min(ret, 0);
+	ret = min(ret, 0);
+fsck_err:
+	return ret;
 }
 
 /*
@@ -1788,6 +1906,7 @@ int bch2_check_xattrs(struct bch_fs *c)
 {
 	struct bch_hash_info hash_info;
 	CLASS(btree_trans, trans)(c);
+	CLASS(snapshots_seen, s)();
 	CLASS(inode_walker, inode)();
 
 	struct progress_indicator progress;
@@ -1800,7 +1919,7 @@ int bch2_check_xattrs(struct bch_fs *c)
 			NULL, NULL,
 			BCH_TRANS_COMMIT_no_enospc, ({
 		bch2_progress_update_iter(trans, &progress, &iter) ?:
-		check_xattr(trans, &iter, k, &hash_info, &inode);
+		check_xattr(trans, &iter, k, &hash_info, &s, &inode);
 	}));
 	return ret;
 }

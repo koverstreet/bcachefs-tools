@@ -67,6 +67,11 @@ int bch2_create_trans(struct btree_trans *trans,
 		if (flags & BCH_CREATE_TMPFILE)
 			new_inode->bi_flags |= BCH_INODE_unlinked;
 
+		if (acl)
+			new_inode->bi_flags |= BCH_INODE_has_access_acl;
+		if (default_acl)
+			new_inode->bi_flags |= BCH_INODE_has_default_acl;
+
 		try(bch2_inode_create(trans, &inode_iter, new_inode, dir_snapshot,
 				      inode_opt_get(c, dir_u, inodes_32bit)));
 
