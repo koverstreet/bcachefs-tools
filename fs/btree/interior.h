@@ -344,7 +344,7 @@ static inline void push_whiteout(struct btree *b, struct bpos pos)
 	BUG_ON(bch2_btree_keys_u64s_remaining(b) < BKEY_U64s);
 	EBUG_ON(btree_node_just_written(b));
 
-	if (!bkey_pack_pos(&k.k, pos, b)) {
+	if (!bch2_bkey_pack_pos(&k.k, pos, b)) {
 		struct bkey *u = (void *) &k.k;
 
 		bkey_init(u);

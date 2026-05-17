@@ -867,12 +867,12 @@ retry:
 		EBUG_ON(tree_to_bkey(b, t, j) != k);
 	}
 
-	if (!bkey_pack_pos(bkey_to_packed(&min_key.k), b->data->min_key, b)) {
+	if (!bch2_bkey_pack_pos(bkey_to_packed(&min_key.k), b->data->min_key, b)) {
 		bkey_init(&min_key.k.k);
 		min_key.k.k.p = b->data->min_key;
 	}
 
-	if (!bkey_pack_pos(bkey_to_packed(&max_key.k), b->data->max_key, b)) {
+	if (!bch2_bkey_pack_pos(bkey_to_packed(&max_key.k), b->data->max_key, b)) {
 		bkey_init(&max_key.k.k);
 		max_key.k.k.p = b->data->max_key;
 	}
