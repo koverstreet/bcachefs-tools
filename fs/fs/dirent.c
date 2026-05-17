@@ -681,7 +681,7 @@ static int lookup_first_inode(struct btree_trans *trans, u64 inode_nr,
 			break;
 		if (!bkey_is_inode(k.k))
 			continue;
-		ret = bch2_inode_unpack(k, inode);
+		bch2_inode_unpack(trans->c, k, inode);
 		found = true;
 		break;
 	}

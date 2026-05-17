@@ -1025,9 +1025,9 @@ int bch2_bkey_get_io_opts(struct btree_trans *trans,
 							   SPOS(0, k.k->p.inode, U32_MAX),
 							   BTREE_ITER_all_snapshots, inode_k, ({
 					struct bch_inode_unpacked inode;
-					if (!bkey_is_inode(inode_k.k) ||
-					    bch2_inode_unpack(inode_k, &inode))
+					if (!bkey_is_inode(inode_k.k))
 						continue;
+					bch2_inode_unpack(c, inode_k, &inode);
 
 					struct snapshot_io_opts_entry e = { .snapshot = inode_k.k->p.snapshot };
 					bch2_inode_opts_get_inode(c, &inode, &e.io_opts);

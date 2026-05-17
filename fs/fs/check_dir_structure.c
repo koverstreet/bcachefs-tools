@@ -143,7 +143,7 @@ static int bch2_bi_depth_renumber_one(struct btree_trans *trans,
 	try(!bkey_is_inode(k.k) ? -BCH_ERR_ENOENT_inode : 0);
 
 	struct bch_inode_unpacked inode;
-	try(bch2_inode_unpack(k, &inode));
+	bch2_inode_unpack(trans->c, k, &inode);
 
 	if (inode.bi_depth != new_depth) {
 		inode.bi_depth = new_depth;
@@ -186,7 +186,7 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 	struct bpos start = inode_k.k->p;
 
 	struct bch_inode_unpacked inode;
-	try(bch2_inode_unpack(inode_k, &inode));
+	bch2_inode_unpack(c, inode_k, &inode);
 
 	CLASS(btree_iter, inode_iter)(trans, BTREE_ID_inodes, POS_MIN, 0);
 
@@ -219,13 +219,13 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 
 		struct bch_inode_unpacked parent_inode;
 		ret = bkey_err(inode_k) ?:
-			!bkey_is_inode(inode_k.k) ? -BCH_ERR_ENOENT_inode
-			: bch2_inode_unpack(inode_k, &parent_inode);
+			!bkey_is_inode(inode_k.k) ? -BCH_ERR_ENOENT_inode : 0;
 		if (ret) {
 			/* Should have been caught in dirents pass */
 			bch_err_msg(c, ret, "error looking up parent directory");
 			return ret;
 		}
+		bch2_inode_unpack(c, inode_k, &parent_inode);
 
 		min_bi_depth = parent_inode.bi_depth;
 

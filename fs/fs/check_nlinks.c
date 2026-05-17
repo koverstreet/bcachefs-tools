@@ -95,11 +95,8 @@ static int check_nlinks_find_hardlinks(struct bch_fs *c,
 			if (!bkey_is_inode(k.k))
 				continue;
 
-			/* Should never fail, checked by bch2_inode_invalid: */
 			struct bch_inode_unpacked u;
-			_ret3 = bch2_inode_unpack(k, &u);
-			if (_ret3)
-				break;
+			bch2_inode_unpack(c, k, &u);
 
 			/*
 			 * Backpointer and directory structure checks are sufficient for
@@ -173,7 +170,7 @@ static int check_nlinks_update_inode(struct btree_trans *trans, struct btree_ite
 	if (!bkey_is_inode(k.k))
 		return 0;
 
-	try(bch2_inode_unpack(k, &u));
+	bch2_inode_unpack(trans->c, k, &u);
 
 	if (S_ISDIR(u.bi_mode))
 		return 0;
