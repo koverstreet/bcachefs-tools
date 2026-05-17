@@ -161,6 +161,8 @@ struct btree *__bch2_btree_node_alloc_replacement(struct btree_update *,
 int bch2_btree_split_leaf(struct btree_trans *, btree_path_idx_t,
 			  unsigned, enum bch_trans_commit_flags);
 
+struct bpos bch2_btree_node_shard_pivot(struct bch_fs *, const struct btree *);
+
 int bch2_btree_increase_depth(struct btree_trans *, btree_path_idx_t, unsigned);
 
 int __bch2_foreground_maybe_merge(struct btree_trans *, btree_path_idx_t,

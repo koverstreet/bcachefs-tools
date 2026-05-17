@@ -640,6 +640,7 @@ struct journal_seq_blacklist_table {
 	x(invalidate)							\
 	x(delete_dead_snapshots)					\
 	x(gc_gens)							\
+	x(presplit_shard_boundaries)					\
 	x(snapshot_delete_pagecache)					\
 	x(sysfs)							\
 	x(btree_write_buffer)						\
