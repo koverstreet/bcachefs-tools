@@ -133,6 +133,25 @@ enum inode_opt_id {
 /*
  * BCH_INODE_has_case_insensitive is set if any descendent is case insensitive -
  * for overlayfs
+ *
+ * BCH_INODE_has_inode_opts is set iff some field in BCH_INODE_OPTS() is
+ * nonzero on this inode (per-inode option overrides exist). Lets the
+ * extent-update path skip the inode unpack and use fs defaults when the
+ * bit is clear. Maintained by bch2_inode_pack(): recomputed from the
+ * BCH_INODE_OPTS fields every pack.
+ *
+ * BCH_INODE_has_access_acl / has_default_acl are set iff a POSIX ACL
+ * xattr of that type (KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS / _DEFAULT)
+ * exists for this inode, so the common no-ACL path in bch2_get_acl() can
+ * short-circuit without an xattr lookup. Maintained at inode create and
+ * in bch2_set_acl_trans().
+ *
+ * All three ride the per_dev_fragmentation_lru version: the upgrade
+ * schedules check_inodes + check_xattrs, which set the flags correctly
+ * on existing inodes (silently - the upgrade entry lists the flag
+ * errors, feeding errors_silent), and fsck verifies both directions
+ * from then on. Version upgrades always run, so consumers can trust
+ * the bits unconditionally.
  */
 #define BCH_INODE_FLAGS()			\
 	x(sync,				0)	\
@@ -146,7 +165,10 @@ enum inode_opt_id {
 	x(backptr_untrusted,		8)	\
 	x(has_child_snapshot,		9)	\
 	x(has_case_insensitive,		10)	\
-	x(31bit_dirent_offset,		11)
+	x(31bit_dirent_offset,		11)	\
+	x(has_inode_opts,		12)	\
+	x(has_access_acl,		13)	\
+	x(has_default_acl,		14)
 
 /* bits 20+ reserved for packed fields below: */
 

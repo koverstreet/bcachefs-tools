@@ -95,11 +95,25 @@ static inline void bch2_inode_pack_inlined(struct bch_fs *c, struct bkey_inode_b
 	unsigned bytes;
 	int ret;
 
+	/*
+	 * Recompute has_inode_opts from the opt fields; pack is the sole
+	 * maintainer of this bit (cf. comment on BCH_INODE_has_inode_opts):
+	 */
+	bool has_opts = false;
+#define x(_name, _bits)							\
+	if (inode->bi_##_name)						\
+		has_opts = true;
+	BCH_INODE_OPTS()
+#undef x
+	u64 bi_flags = inode->bi_flags & ~BCH_INODE_has_inode_opts;
+	if (has_opts)
+		bi_flags |= BCH_INODE_has_inode_opts;
+
 	bkey_inode_v3_init(&packed->inode.k_i);
 	packed->inode.k.p.offset	= inode->bi_inum;
 	packed->inode.v.bi_journal_seq	= cpu_to_le64(inode->bi_journal_seq);
 	packed->inode.v.bi_hash_seed	= inode->bi_hash_seed;
-	packed->inode.v.bi_flags	= cpu_to_le64(inode->bi_flags);
+	packed->inode.v.bi_flags	= cpu_to_le64(bi_flags);
 	packed->inode.v.bi_sectors	= cpu_to_le64(inode->bi_sectors);
 	packed->inode.v.bi_size		= cpu_to_le64(inode->bi_size);
 	packed->inode.v.bi_version	= cpu_to_le64(inode->bi_version);

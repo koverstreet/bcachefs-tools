@@ -329,9 +329,22 @@ int bch2_set_acl_trans(struct btree_trans *trans, subvol_inum inum,
 
 		ret = bch2_hash_delete(trans, bch2_xattr_hash_desc, &hash_info,
 				       inum, &search);
+		if (bch2_err_matches(ret, ENOENT))
+			ret = 0;
 	}
 
-	return bch2_err_matches(ret, ENOENT) ? 0 : ret;
+	if (ret)
+		return ret;
+
+	u64 flag = type == ACL_TYPE_ACCESS
+		? BCH_INODE_has_access_acl
+		: BCH_INODE_has_default_acl;
+	if (acl)
+		inode_u->bi_flags |=  flag;
+	else
+		inode_u->bi_flags &= ~flag;
+
+	return 0;
 }
 
 static int __bch2_set_acl(struct btree_trans *trans,

@@ -376,7 +376,10 @@ enum bch_fsck_flags {
 	x(dup_extents_to_reflink,				362,	FSCK_AUTOFIX)	\
 	x(stripe_read_ptr_stale,				363,	0)		\
 	x(bkey_in_deleted_interior_snapshot,			364,	FSCK_AUTOFIX)	\
-	x(MAX,							365,	0)
+	x(inode_has_inode_opts_flag_wrong,			365,	FSCK_AUTOFIX)	\
+	x(inode_has_access_acl_flag_wrong,			366,	FSCK_AUTOFIX)	\
+	x(inode_has_default_acl_flag_wrong,			367,	FSCK_AUTOFIX)	\
+	x(MAX,							368,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
