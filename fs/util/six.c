@@ -596,8 +596,6 @@ retry_relock:
 	}
 
 	if (!ret) {
-		wait->start_time = local_clock();
-
 		ret = six_lock_wait_fifo_insert(lock, wait) ?:
 			six_lock_wait_fifo_realloc(lock, wait, &new_wf);
 		if (unlikely(ret <= 0)) {
@@ -703,8 +701,8 @@ out:
  * removed from the lock waitlist until the lock has been successfully acquired,
  * or we abort.
  *
- * @wait.start_time will be monotonically increasing for any given waitlist, and
- * thus may be used as a loop cursor.
+ * @wait.trans_start_time orders waiters on the same waitlist (oldest waiter
+ * wins), and may be used as a loop cursor for cycle detection.
  *
  * Return: 0 on success, or the return code from @should_sleep_fn on failure.
  */
@@ -714,8 +712,6 @@ int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
 		       unsigned long ip)
 {
 	int ret;
-
-	wait->start_time = 0;
 
 	if (type != SIX_LOCK_write)
 		six_acquire(&lock->dep_map, 0, type == SIX_LOCK_read, ip);

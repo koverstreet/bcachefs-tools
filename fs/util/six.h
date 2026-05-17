@@ -141,7 +141,6 @@ struct six_lock_waiter {
 	struct task_struct	*task;
 	enum six_lock_type	lock_want;
 	bool			lock_acquired;
-	u64			start_time;
 	/* Index in wait_fifo->data[], set on insert, used for O(1) self-remove. */
 	u16			slot_idx;
 };
