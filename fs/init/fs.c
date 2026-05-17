@@ -1284,6 +1284,8 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 
 	c->block_bits		= ilog2(block_sectors(c));
 
+	bch2_fs_inode_shard_cpu_init(c);
+
 	if (bch2_fs_init_fault("fs_alloc")) {
 		prt_printf(out, "fs_alloc fault injected\n");
 		return -EFAULT;

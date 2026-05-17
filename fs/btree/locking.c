@@ -636,6 +636,20 @@ int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w
 	if (b && node_reuse_race(trans, b))
 		return bch_err_throw(trans->c, no_btree_node_reused);
 
+#ifdef __KERNEL__
+	/*
+	 * Wake-CPU hint, set at the moment of sleep: nudge the scheduler
+	 * toward the CPU whose L1/L2 owns this task's shard's btree-node
+	 * working set. Soft — sched is free to override under load; writes
+	 * nothing when already matched. Placed here (vs. trans_begin)
+	 * because select_task_rq_fair() consults wake_cpu only at wakeup,
+	 * so the hint has to survive from the schedule() that follows.
+	 */
+	if (trans->shard_cpu >= 0 &&
+	    trans->shard_cpu != raw_smp_processor_id())
+		WRITE_ONCE(current->wake_cpu, trans->shard_cpu);
+#endif
+
 	return bch2_check_for_deadlock(trans, NULL);
 }
 
@@ -1208,6 +1222,7 @@ void bch2_trans_unlock(struct btree_trans *trans)
 void bch2_trans_unlock_long(struct btree_trans *trans)
 {
 	bch2_trans_unlock(trans);
+	trans_enable_migrate(trans);
 
 	if (trans->srcu_held) {
 		struct bch_fs *c = trans->c;
