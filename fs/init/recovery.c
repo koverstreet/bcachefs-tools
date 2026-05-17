@@ -8,6 +8,7 @@
 #include "alloc/replicas.h"
 
 #include "btree/bkey_buf.h"
+#include "btree/check.h"
 #include "btree/interior.h"
 #include "btree/journal_overlay.h"
 #include "btree/node_scan.h"
@@ -1056,6 +1057,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 	try(bch2_journal_replay(c));
 	try(bch2_initialize_subvolumes(c));
 	try(bch2_snapshots_read(c));
+	try(bch2_presplit_shard_boundaries(c));
 
 	bch2_inode_init(c, &root_inode, 0, 0, S_IFDIR|0755, 0, NULL);
 	root_inode.bi_inum	= BCACHEFS_ROOT_INO;
