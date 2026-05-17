@@ -606,10 +606,12 @@ int __bch2_btree_node_lock_write(struct btree_trans *trans, struct btree_path *p
 	 * goes to 0, and it's safe because we have the node intent
 	 * locked:
 	 */
-	six_lock_readers_add(&b->lock, -readers);
+	if (readers)
+		six_lock_readers_add(&b->lock, -readers);
 	ret = __btree_node_lock_nopath(trans, b, SIX_LOCK_write,
-				       lock_may_not_fail, _RET_IP_);
-	six_lock_readers_add(&b->lock, readers);
+				       lock_may_not_fail, _RET_IP_, !readers);
+	if (readers)
+		six_lock_readers_add(&b->lock, readers);
 
 	if (ret)
 		mark_btree_node_locked_noreset(path, b->level, BTREE_NODE_INTENT_LOCKED);

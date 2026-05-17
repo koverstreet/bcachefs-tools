@@ -250,18 +250,16 @@ static inline int __btree_node_lock_nopath(struct btree_trans *trans,
 					 struct btree_bkey_cached_common *b,
 					 enum six_lock_type type,
 					 bool lock_may_not_fail,
-					 unsigned long ip)
+					 unsigned long ip,
+					 bool contended)
 {
 	trans->lock_may_not_fail = lock_may_not_fail;
 	trans->lock_must_abort	= false;
 	trans->locking		= b;
 
-	/*
-	 * Caller (btree_node_lock) has already trylocked and observed
-	 * contention; skip the redundant trylock inside six_lock_ip_waiter.
-	 */
-	int ret = six_lock_contended(&b->lock, type, &trans->locking_wait,
-				     bch2_six_check_for_deadlock, ip);
+	int ret = !contended
+		? six_lock_ip_waiter(&b->lock, type, &trans->locking_wait, bch2_six_check_for_deadlock, ip)
+		: six_lock_contended(&b->lock, type, &trans->locking_wait, bch2_six_check_for_deadlock, ip);
 	if (unlikely(ret == -ENOMEM))
 		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_waitlist_alloc);
 
@@ -285,14 +283,14 @@ btree_node_lock_nopath(struct btree_trans *trans,
 		       enum six_lock_type type,
 		       unsigned long ip)
 {
-	return __btree_node_lock_nopath(trans, b, type, false, ip);
+	return __btree_node_lock_nopath(trans, b, type, false, ip, false);
 }
 
 static inline void btree_node_lock_nopath_nofail(struct btree_trans *trans,
 					 struct btree_bkey_cached_common *b,
 					 enum six_lock_type type)
 {
-	int ret = __btree_node_lock_nopath(trans, b, type, true, _THIS_IP_);
+	int ret = __btree_node_lock_nopath(trans, b, type, true, _THIS_IP_, false);
 
 	BUG_ON(ret);
 }
@@ -341,7 +339,7 @@ static inline int btree_node_lock(struct btree_trans *trans,
 
 	if (likely(six_trylock_type(&b->lock, type)) ||
 	    btree_node_lock_increment(trans, b, level, (enum btree_node_locked_type) type) ||
-	    !(ret = btree_node_lock_nopath(trans, b, type, btree_path_ip_allocated(path)))) {
+	    !(ret = __btree_node_lock_nopath(trans, b, type, false, btree_path_ip_allocated(path), true))) {
 #ifdef CONFIG_BCACHEFS_LOCK_TIME_STATS
 		path->l[b->level].lock_taken_time = local_clock();
 #endif
