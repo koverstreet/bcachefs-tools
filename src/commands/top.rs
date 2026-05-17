@@ -20,10 +20,11 @@ use crossterm::{
 use owo_colors::OwoColorize;
 use serde::Deserialize;
 
+use crate::commands::DeviceNameArgs;
 use crate::util::{fmt_bytes_human, fmt_num_human, run_tui};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::bch_ioc_w;
-use crate::wrappers::sysfs::{dev_name_from_sysfs, sysfs_path_from_fd};
+use crate::wrappers::sysfs::{DeviceNameMode, dev_display_name_from_sysfs, sysfs_path_from_fd};
 
 // ioctl constants
 
@@ -68,7 +69,7 @@ struct DevIoEntry {
     write_bytes: u64,
 }
 
-fn read_device_io(sysfs_path: &Path) -> Vec<DevIoEntry> {
+fn read_device_io(sysfs_path: &Path, name_mode: DeviceNameMode) -> Vec<DevIoEntry> {
     let mut entries = Vec::new();
     let Ok(dir) = fs::read_dir(sysfs_path) else { return entries };
 
@@ -77,7 +78,7 @@ fn read_device_io(sysfs_path: &Path) -> Vec<DevIoEntry> {
         if !dirname.starts_with("dev-") { continue }
 
         let dev_path = entry.path();
-        let dev_name = dev_name_from_sysfs(&dev_path);
+        let dev_name = dev_display_name_from_sysfs(&dev_path, name_mode);
 
         let io_done_path = dev_path.join("io_done");
         let Ok(content) = fs::read_to_string(&io_done_path) else { continue };
@@ -290,6 +291,9 @@ pub struct Cli {
     #[arg(short = 'd', long, default_value = "1")]
     delay: u32,
 
+    #[command(flatten)]
+    device_names: DeviceNameArgs,
+
     /// Filesystem path, device, or UUID (default: current directory)
     filesystem: Option<String>,
 }
@@ -328,6 +332,7 @@ struct TopState {
     prev_vals:      Vec<u64>,
     prev_dev_io:    HashMap<String, (u64, u64)>,    // label -> (read, write)
     human_readable: bool,
+    name_mode:      DeviceNameMode,
     sysfs_path:     PathBuf,
     interval_secs:  u32,
     page:           Page,
@@ -339,7 +344,11 @@ struct TopState {
 }
 
 impl TopState {
-    fn new(handle: &BcachefsHandle, human_readable: bool) -> Result<Self> {
+    fn new(
+        handle: &BcachefsHandle,
+        human_readable: bool,
+        name_mode: DeviceNameMode,
+    ) -> Result<Self> {
         let ioctl_fd = handle.ioctl_fd_raw();
         let nr_stable = COUNTERS.iter().map(|c| c.stable_id).max().unwrap_or(0) + 1;
 
@@ -357,6 +366,7 @@ impl TopState {
             mount_vals, start_vals, prev_vals,
             prev_dev_io: HashMap::new(),
             human_readable,
+            name_mode,
             sysfs_path, interval_secs: 1,
             page: Page::Base,
             cursor: 0,
@@ -569,8 +579,11 @@ fn print_frame(
  * sleep `delay` seconds, take a fresh sample, and print rates against the
  * previous sample. Total samples taken = count + 1; total frames printed = count. */
 fn run_non_interactive(
-    handle: &BcachefsHandle, human_readable: bool,
-    count: u32, delay: u32,
+    handle: &BcachefsHandle,
+    human_readable: bool,
+    count: u32,
+    delay: u32,
+    name_mode: DeviceNameMode,
 ) -> Result<()> {
     let ioctl_fd   = handle.ioctl_fd_raw();
     let nr_stable  = COUNTERS.iter().map(|c| c.stable_id).max().unwrap_or(0) + 1;
@@ -578,7 +591,7 @@ fn run_non_interactive(
     let sysfs_path = sysfs_path_from_fd(handle.sysfs_fd())?;
 
     let mut prev_vals   = read_counters(ioctl_fd, 0, nr_stable)?;
-    let mut prev_dev_io: HashMap<String, (u64, u64)> = read_device_io(&sysfs_path)
+    let mut prev_dev_io: HashMap<String, (u64, u64)> = read_device_io(&sysfs_path, name_mode)
         .into_iter()
         .map(|d| (d.label, (d.read_bytes, d.write_bytes)))
         .collect();
@@ -586,7 +599,7 @@ fn run_non_interactive(
     for i in 0..count {
         std::thread::sleep(Duration::from_secs(delay as u64));
         let curr   = read_counters(ioctl_fd, 0, nr_stable)?;
-        let dev_io = read_device_io(&sysfs_path);
+        let dev_io = read_device_io(&sysfs_path, name_mode);
 
         if i > 0 { println!(); }
         print_frame(&curr, &prev_vals, &mount_vals, &dev_io, &prev_dev_io, delay, human_readable);
@@ -599,8 +612,13 @@ fn run_non_interactive(
     Ok(())
 }
 
-fn run_interactive(handle: BcachefsHandle, human_readable: bool, delay: u32) -> Result<()> {
-    let mut state = TopState::new(&handle, human_readable)?;
+fn run_interactive(
+    handle: BcachefsHandle,
+    human_readable: bool,
+    delay: u32,
+    name_mode: DeviceNameMode,
+) -> Result<()> {
+    let mut state = TopState::new(&handle, human_readable, name_mode)?;
     state.interval_secs = delay.max(1);
 
     /* Sample once up front; prev == curr so the first frame shows zero rates.
@@ -610,7 +628,7 @@ fn run_interactive(handle: BcachefsHandle, human_readable: bool, delay: u32) -> 
      * rate column. */
     let mut curr = read_counters(state.ioctl_fd, 0, state.nr_stable)?;
     state.prev_vals = curr.clone();
-    let mut dev_io = read_device_io(&state.sysfs_path);
+    let mut dev_io = read_device_io(&state.sysfs_path, state.name_mode);
     state.prev_dev_io = dev_io.iter()
         .map(|d| (d.label.clone(), (d.read_bytes, d.write_bytes)))
         .collect();
@@ -713,7 +731,7 @@ fn run_interactive(handle: BcachefsHandle, human_readable: bool, delay: u32) -> 
                 .map(|d| (d.label, (d.read_bytes, d.write_bytes)))
                 .collect();
             curr = read_counters(state.ioctl_fd, 0, state.nr_stable)?;
-            dev_io = read_device_io(&state.sysfs_path);
+            dev_io = read_device_io(&state.sysfs_path, state.name_mode);
         }
     })
 }
@@ -734,10 +752,12 @@ fn top(cli: Cli) -> Result<()> {
                 else if !io::stdout().is_terminal() { 1 }
                 else { 0 };
 
+    let name_mode = cli.device_names.name_mode();
+
     if count > 0 {
-        run_non_interactive(&handle, cli.human_readable, count, delay)
+        run_non_interactive(&handle, cli.human_readable, count, delay, name_mode)
     } else {
-        run_interactive(handle, cli.human_readable, delay)
+        run_interactive(handle, cli.human_readable, delay, name_mode)
     }
 }
 

@@ -40,7 +40,9 @@ use c::bch_opts;
 use uuid::Uuid;
 use log::debug;
 
-use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
+use crate::device_multipath::{
+    find_multipath_holder, preferred_multipath_devnode, warn_multipath_component,
+};
 
 pub fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_sb_handle, BchError> {
     opt_set!(opts, noexcl, 1);
@@ -163,7 +165,10 @@ fn read_sbs_matching_uuid(
 		.filter_map(|dev| {
 			read_super_silent(dev, *opts)
 				.ok()
-				.map(|sb| (PathBuf::from(dev), sb))
+				.map(|sb| {
+					let path = preferred_multipath_devnode(dev).unwrap_or_else(|| dev.to_path_buf());
+					(path, sb)
+				})
 		})
 		.filter(|(_, sb)| sb.sb().uuid() == uuid)
 		.collect::<Vec<_>>();
@@ -202,7 +207,9 @@ pub fn filter_current_sbs(
 	let handles = handles.into_vec();
 	let mut filtered = Vec::with_capacity(handles.len());
 	for sb in handles {
-		filtered.push((sb_handle_path(&sb), sb));
+		let path = sb_handle_path(&sb);
+		let path = preferred_multipath_devnode(&path).unwrap_or(path);
+		filtered.push((path, sb));
 	}
 
 	Ok(filtered)
