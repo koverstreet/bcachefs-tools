@@ -248,10 +248,8 @@ int bch2_dirent_init_name(struct bch_fs *c,
 
 	if (!dirent->v.d_casefold) {
 		memcpy(&dirent->v.d_name[0], name->name, name->len);
-		memset(&dirent->v.d_name[name->len], 0,
-		       bkey_val_bytes(&dirent->k) -
-		       offsetof(struct bch_dirent, d_name) -
-		       name->len);
+		memset_u64s_tail(&dirent->v, 0,
+				 offsetof(struct bch_dirent, d_name) + name->len);
 	} else {
 		try(bch2_fs_casefold_enabled(c));
 
@@ -274,7 +272,7 @@ int bch2_dirent_init_name(struct bch_fs *c,
 
 		void *name_end = &dirent->v.d_cf_name_block.d_names[name->len + cf_len];
 		BUG_ON(name_end > val_end);
-		memset(name_end, 0, val_end - name_end);
+		memset_u64s_tail(&dirent->v, 0, name_end - (void *) &dirent->v);
 
 		dirent->v.d_cf_name_block.d_name_len = cpu_to_le16(name->len);
 		dirent->v.d_cf_name_block.d_cf_name_len = cpu_to_le16(cf_len);
