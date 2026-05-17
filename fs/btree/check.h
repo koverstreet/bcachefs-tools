@@ -84,6 +84,7 @@ int bch2_gc_gens(struct bch_fs *);
 void bch2_gc_gens_async(struct bch_fs *);
 
 int bch2_merge_btree_nodes(struct bch_fs *c);
+int bch2_presplit_shard_boundaries(struct bch_fs *c);
 
 void bch2_fs_btree_gc_init_early(struct bch_fs *);
 

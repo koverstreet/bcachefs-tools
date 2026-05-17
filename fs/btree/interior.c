@@ -141,8 +141,7 @@ static struct bpos bch2_btree_shard_pivot_below(struct bch_fs *c,
  * half; a right-edge-aligned leaf still finds the next-smaller boundary
  * inside, so successive rewrites converge toward full shard alignment.
  */
-static inline struct bpos bch2_btree_node_shard_pivot(struct bch_fs *c,
-						      const struct btree *b)
+struct bpos bch2_btree_node_shard_pivot(struct bch_fs *c, const struct btree *b)
 {
 	if (b->c.level)
 		return POS_MIN;
