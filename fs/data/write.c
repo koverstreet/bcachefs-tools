@@ -921,8 +921,33 @@ static inline int bch2_extent_update_i_size_sectors(struct btree_trans *trans,
 						    struct btree_iter *extent_iter,
 						    u64 new_i_size,
 						    s64 i_sectors_delta,
-						    struct bch_inode_unpacked *inode_u)
+						    struct bch_inode_opts *opts)
 {
+	struct bch_fs *c = trans->c;
+
+	CLASS(btree_iter, iter)(trans, BTREE_ID_inodes,
+				SPOS(0,
+				     extent_iter->pos.inode,
+				     extent_iter->snapshot),
+				BTREE_ITER_intent|
+				BTREE_ITER_cached);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+	/*
+	 * varint_decode_fast(), in the inode .invalid method, reads up to 7
+	 * bytes past the end of the buffer:
+	 */
+	struct bkey_i *k_mut = errptr_try(bch2_trans_kmalloc_nomemzero(trans, bkey_bytes(k.k) + 8));
+	bkey_reassemble(k_mut, k);
+
+	if (unlikely(k_mut->k.type != KEY_TYPE_inode_v3))
+		k_mut = errptr_try(bch2_inode_to_v3(trans, k_mut));
+	struct bkey_i_inode_v3 *inode = bkey_i_to_inode_v3(k_mut);
+
+	struct bch_inode_unpacked inode_u;
+	try(bch2_inode_unpack(k, &inode_u));
+	bch2_inode_opts_get_inode(c, &inode_u, opts);
+
 	/*
 	 * Crazy performance optimization:
 	 * Every extent update needs to also update the inode: the inode trigger
@@ -936,38 +961,7 @@ static inline int bch2_extent_update_i_size_sectors(struct btree_trans *trans,
 	 */
 	unsigned inode_update_flags = BTREE_UPDATE_nojournal;
 
-	CLASS(btree_iter, iter)(trans, BTREE_ID_inodes,
-				SPOS(0,
-				     extent_iter->pos.inode,
-				     extent_iter->snapshot),
-				BTREE_ITER_intent|
-				BTREE_ITER_cached);
-	struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
-
-	/*
-	 * XXX: we currently need to unpack the inode on every write because we
-	 * need the current io_opts, for transactional consistency - inode_v4?
-	 */
-	int ret = bkey_err(k) ?:
-		  bch2_inode_unpack(k, inode_u);
-	if (unlikely(ret))
-		return ret;
-
-	/*
-	 * varint_decode_fast(), in the inode .invalid method, reads up to 7
-	 * bytes past the end of the buffer:
-	 */
-	struct bkey_i *k_mut = errptr_try(bch2_trans_kmalloc_nomemzero(trans, bkey_bytes(k.k) + 8));
-
-	bkey_reassemble(k_mut, k);
-
-	if (unlikely(k_mut->k.type != KEY_TYPE_inode_v3))
-		k_mut = errptr_try(bch2_inode_to_v3(trans, k_mut));
-
-	struct bkey_i_inode_v3 *inode = bkey_i_to_inode_v3(k_mut);
-
-	if (!(le64_to_cpu(inode->v.bi_flags) & BCH_INODE_i_size_dirty) &&
-	    new_i_size > le64_to_cpu(inode->v.bi_size)) {
+	if (new_i_size > le64_to_cpu(inode->v.bi_size)) {
 		inode->v.bi_size = cpu_to_le64(new_i_size);
 		inode_update_flags = 0;
 	}
@@ -1036,20 +1030,10 @@ int bch2_extent_update(struct btree_trans *trans,
 					!check_enospc || !usage_increasing
 					? BCH_DISK_RESERVATION_NOFAIL : 0));
 
-	/*
-	 * Note:
-	 * We always have to do an inode update - even when i_size/i_sectors
-	 * aren't changing - for fsync to work properly; fsync relies on
-	 * inode->bi_journal_seq which is updated by the trigger code:
-	 */
-	struct bch_inode_unpacked inode;
 	struct bch_inode_opts opts;
-
 	try(bch2_extent_update_i_size_sectors(trans, iter,
 					      min(k->k.p.offset << 9, new_i_size),
-					      i_sectors_delta, &inode));
-
-	bch2_inode_opts_get_inode(c, &inode, &opts);
+					      i_sectors_delta, &opts));
 
 	try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(k), k_buf_u64s,
 					  SET_NEEDS_RECONCILE_foreground,
@@ -1981,16 +1965,14 @@ static int bch2_nocow_write_convert_one_unwritten(struct btree_trans *trans,
 	 * since been created. The write is still outstanding, so we're ok
 	 * w.r.t. snapshot atomicity:
 	 */
-	struct bch_inode_unpacked inode;
 	struct bch_inode_opts opts;
 
 	return  bch2_extent_update_i_size_sectors(trans, iter,
-					min(new->k.p.offset << 9, new_i_size), 0, &inode) ?:
-		(bch2_inode_opts_get_inode(c, &inode, &opts),
-		 bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(new),
-					       new_buf_u64s,
-					       SET_NEEDS_RECONCILE_foreground,
-					       op->opts.change_cookie)) ?:
+					min(new->k.p.offset << 9, new_i_size), 0, &opts) ?:
+		bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(new),
+					      new_buf_u64s,
+					      SET_NEEDS_RECONCILE_foreground,
+					      op->opts.change_cookie) ?:
 		bch2_trans_update(trans, iter, new,
 				  BTREE_UPDATE_internal_snapshot_node|
 				  BTREE_TRIGGER_set_needs_reconcile_done);
