@@ -1924,8 +1924,28 @@ static void btree_path_overflow(struct btree_trans *trans)
 	bch_err(trans->c, "trans path overflow");
 }
 
-static noinline void btree_paths_realloc(struct btree_trans *trans)
+static inline void btree_path_init(struct btree_trans *trans,
+				   btree_path_idx_t pos,
+				   btree_path_idx_t idx)
 {
+	struct btree_path *path = &trans->paths[idx];
+	path->ref		= 0;
+	path->intent_ref	= 0;
+	path->nodes_locked	= 0;
+
+	btree_path_list_add(trans, pos, idx);
+	trans->paths_sorted = false;
+}
+
+static noinline btree_path_idx_t btree_paths_realloc(struct btree_trans *trans,
+						     btree_path_idx_t pos)
+{
+	if (trans->nr_paths == BTREE_ITER_MAX) {
+		btree_path_overflow(trans);
+		return 0;
+	}
+
+	btree_path_idx_t idx = trans->nr_paths;
 	unsigned nr = trans->nr_paths * 2;
 
 	void *p = kvzalloc(BITS_TO_LONGS(nr) * sizeof(unsigned long) +
@@ -1962,21 +1982,6 @@ static noinline void btree_paths_realloc(struct btree_trans *trans)
 
 	if (old != trans->_paths_allocated)
 		kfree_rcu_mightsleep(old);
-}
-
-static inline btree_path_idx_t btree_path_alloc(struct btree_trans *trans,
-						btree_path_idx_t pos)
-{
-	btree_path_idx_t idx = find_first_zero_bit(trans->paths_allocated, trans->nr_paths);
-
-	if (unlikely(idx == trans->nr_paths)) {
-		if (trans->nr_paths == BTREE_ITER_MAX) {
-			btree_path_overflow(trans);
-			return 0;
-		}
-
-		btree_paths_realloc(trans);
-	}
 
 	/*
 	 * Do this before marking the new path as allocated, since it won't be
@@ -1987,14 +1992,40 @@ static inline btree_path_idx_t btree_path_alloc(struct btree_trans *trans,
 
 	__set_bit(idx, trans->paths_allocated);
 
-	struct btree_path *path = &trans->paths[idx];
-	path->ref		= 0;
-	path->intent_ref	= 0;
-	path->nodes_locked	= 0;
-
-	btree_path_list_add(trans, pos, idx);
-	trans->paths_sorted = false;
+	btree_path_init(trans, pos, idx);
 	return idx;
+}
+
+__always_inline
+static btree_path_idx_t btree_path_alloc(struct btree_trans *trans,
+						btree_path_idx_t pos)
+{
+	/* trans->nr_paths is always a multiple of BITS_PER_LONG, we can improve
+	 * over find_first_zero_bit */
+	btree_path_idx_t idx = 0;
+	unsigned long *p = trans->paths_allocated;
+	while (idx < trans->nr_paths) {
+		if (~*p) {
+			unsigned bit = ffz(*p);
+			idx |= bit;
+
+			/*
+			 * Do this before marking the new path as allocated, since it won't be
+			 * initialized yet:
+			 */
+			if (unlikely(idx > trans->nr_paths_max))
+				bch2_trans_update_max_paths(trans);
+
+			*p |= 1UL << bit;
+			btree_path_init(trans, pos, idx);
+			return idx;
+		}
+
+		idx += BITS_PER_LONG;
+		p++;
+	}
+
+	return btree_paths_realloc(trans, pos);
 }
 
 noinline __cold
