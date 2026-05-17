@@ -444,6 +444,16 @@ do {									\
 
 u64 bch2_get_random_u64_below(u64);
 
+/*
+ * All-ones mask of width @bits, defined for the full range 0..64 — unlike
+ * (1ULL << bits) - 1 (UB at 64) or ~0ULL >> (64 - bits) (UB at 0).
+ * Compiles branchless (cmov).
+ */
+static inline u64 u64_bitmask(unsigned bits)
+{
+	return bits ? ~0ULL >> (64 - bits) : 0;
+}
+
 void memcpy_to_bio(struct bio *, struct bvec_iter, const void *);
 void memcpy_from_bio(void *, struct bio *, struct bvec_iter);
 

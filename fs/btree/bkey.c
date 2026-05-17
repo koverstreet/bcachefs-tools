@@ -753,9 +753,14 @@ bool bch2_bkey_pack_pos(struct bkey_packed *out, struct bpos in,
 	return __bch2_bkey_pack_pos_exact(out, in, f);
 }
 
-enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
-					   const struct bpos *_in,
-					   const struct btree *b)
+/*
+ * Lossy slow path: handles underflow roll-up and overflow clamping per
+ * set_inc_field_lossy() semantics. Used directly by the fastpath gate
+ * below on any underflow/overflow.
+ */
+static enum bkey_pack_pos_ret
+__bch2_bkey_pack_pos_lossy(struct bkey_packed *out, const struct bpos *_in,
+			   const struct btree *b)
 {
 	const struct bkey_format *f = &b->format;
 	struct pack_state state = pack_state_init(f, out);
@@ -829,6 +834,128 @@ enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
 	}
 
 	return exact ? BKEY_PACK_POS_EXACT : BKEY_PACK_POS_SMALLER;
+}
+
+/*
+ * Lossy pack: like bch2_bkey_pack_pos() but rounds @in down to the nearest
+ * representable bpos when an exact pack isn't possible.
+ *
+ * Fastpath handles the lossy semantics inline:
+ *   - underflow (in.X < field_offset): roll up — bump the next-higher
+ *     field and set this field (and all below) to MAX. Underflow on inode
+ *     is FAIL.
+ *   - overflow (delta > field_max): clamp this field to field_max and
+ *     set all lower fields to MAX (cascading), since once a higher field
+ *     has been rounded down, the only way to keep @out <= @in is to make
+ *     everything below it MAX too.
+ *
+ * Hot path (no underflow/overflow) is the same shape as the exact-pack
+ * fastpath; the unlikely() branches just bump exact = false when needed.
+ *
+ * Padding requirement is identical to bch2_bkey_pack_pos() — see
+ * struct bkey_packed_padded.
+ */
+enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
+						const struct bpos *_in,
+						const struct btree *b)
+{
+	const struct bkey_format *f = &b->format;
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	if (likely(b->byte_aligned_fields)) {
+		struct bpos in = *_in;
+#ifdef CONFIG_BCACHEFS_DEBUG
+		struct bpos orig = in;
+#endif
+		bool exact = true;
+
+		u64 i_off = le64_to_cpu(f->field_offset[BKEY_FIELD_INODE]);
+		u64 o_off = le64_to_cpu(f->field_offset[BKEY_FIELD_OFFSET]);
+		u64 s_off = le64_to_cpu(f->field_offset[BKEY_FIELD_SNAPSHOT]);
+
+		/* Underflow roll-up — same logic as the slow path. */
+		if (unlikely(in.snapshot < s_off)) {
+			if (!in.offset-- &&
+			    !in.inode--)
+				return BKEY_PACK_POS_FAIL;
+			in.snapshot = KEY_SNAPSHOT_MAX;
+			exact = false;
+		}
+
+		if (unlikely(in.offset < o_off)) {
+			if (!in.inode--)
+				return BKEY_PACK_POS_FAIL;
+			in.offset = KEY_OFFSET_MAX;
+			in.snapshot = KEY_SNAPSHOT_MAX;
+			exact = false;
+		}
+
+		if (unlikely(in.inode < i_off))
+			return BKEY_PACK_POS_FAIL;
+
+		u64 i_v = in.inode    - i_off;
+		u64 o_v = in.offset   - o_off;
+		u64 s_v = (u64)in.snapshot - s_off;
+
+		unsigned i_bits = f->bits_per_field[BKEY_FIELD_INODE];
+		unsigned o_bits = f->bits_per_field[BKEY_FIELD_OFFSET];
+		unsigned s_bits = f->bits_per_field[BKEY_FIELD_SNAPSHOT];
+
+		/*
+		 * Overflow clamping with cascade: an overflowed field clamps
+		 * to its max and saturates the lower-order fields, giving the
+		 * largest packed key still <= the original pos.
+		 *
+		 * The cascaded fields' widths are independent of the branch
+		 * condition and can legitimately be 64 (e.g. offset in hash
+		 * btrees), hence u64_bitmask() and not (1ULL << bits) - 1.
+		 */
+		if (unlikely(fls64(i_v) > i_bits)) {
+			i_v = u64_bitmask(i_bits);
+			o_v = u64_bitmask(o_bits);
+			s_v = u64_bitmask(s_bits);
+			exact = false;
+		} else if (unlikely(fls64(o_v) > o_bits)) {
+			o_v = u64_bitmask(o_bits);
+			s_v = u64_bitmask(s_bits);
+			exact = false;
+		} else if (unlikely(fls64(s_v) > s_bits)) {
+			s_v = u64_bitmask(s_bits);
+			exact = false;
+		}
+
+		u64 *w = out->_data;
+		for (unsigned i = 0; i < f->key_u64s; i++)
+			w[i] = 0;
+
+		u8 *bytes = (u8 *) out;
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_INODE],    i_v);
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_OFFSET],   o_v);
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_SNAPSHOT], s_v);
+
+		out->u64s   = f->key_u64s;
+		out->format = KEY_FORMAT_LOCAL_BTREE;
+		out->type   = KEY_TYPE_deleted;
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+		if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+			if (exact) {
+				BUG_ON(bkey_cmp_left_packed(b, out, &orig));
+			} else {
+				struct bkey_packed_padded successor;
+
+				BUG_ON(bkey_cmp_left_packed(b, out, &orig) >= 0);
+				BUG_ON(bkey_packed_successor(&successor.k, b, out) &&
+				       bkey_cmp_left_packed(b, &successor.k, &orig) < 0 &&
+				       !bkey_format_has_too_big_fields(f));
+			}
+		}
+#endif
+		return exact ? BKEY_PACK_POS_EXACT : BKEY_PACK_POS_SMALLER;
+	}
+#endif
+
+	return __bch2_bkey_pack_pos_lossy(out, _in, b);
 }
 
 void bch2_bkey_format_init(struct bkey_format_state *s)
