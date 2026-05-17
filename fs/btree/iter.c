@@ -931,13 +931,8 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 		}
 
 		lock_type = __btree_lock_want(path, path->level);
-		ret = btree_node_lock(trans, path, &b->c,
-				      path->level, lock_type, trace_ip);
-		if (unlikely(ret)) {
-			if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-				return ret;
-			BUG();
-		}
+
+		try(btree_node_lock(trans, path, &b->c, path->level, lock_type, trace_ip));
 
 		if (likely(root_packed == bch2_btree_id_root_packed(c, path->btree_id) &&
 			   !race_fault())) {
