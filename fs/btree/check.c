@@ -1347,6 +1347,86 @@ int bch2_merge_btree_nodes(struct bch_fs *c)
 	return 0;
 }
 
+/*
+ * For each shard boundary in each shard-aware btree, look up the leaf
+ * containing it; if the leaf spans the boundary, rewrite it (which forces
+ * a split at the boundary, since bch2_btree_node_alloc_replacement honors
+ * the "leaves don't cross shard boundaries" constraint).
+ */
+static int presplit_shard_boundary_one(struct btree_trans *trans,
+				       enum btree_id btree, struct bpos pos,
+				       u64 *split_count)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(btree_node_iter, iter)(trans, btree, pos, 0, 0, 0);
+	try(bch2_btree_iter_traverse(&iter));
+
+	struct btree *b = path_l(btree_iter_path(trans, &iter))->b;
+
+	struct bpos pivot = bch2_btree_node_shard_pivot(c, b);
+	if (bpos_eq(pivot, POS_MIN) || bpos_eq(pivot, b->key.k.p))
+		return 1;
+
+	int ret = bch2_btree_split_leaf(trans, iter.path, 0, 0);
+	(*split_count) += !ret;
+	return ret;
+}
+
+int bch2_presplit_shard_boundaries(struct bch_fs *c)
+{
+	if (!c->opts.shard_inode_numbers_bits)
+		return 0;
+
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_presplit_shard_boundaries))
+		return 0;
+
+	static const enum btree_id sharded_btrees[] = {
+		BTREE_ID_inodes,
+		BTREE_ID_extents,
+		BTREE_ID_dirents,
+		BTREE_ID_xattrs,
+	};
+
+	unsigned shard_bits = c->opts.shard_inode_numbers_bits;
+	unsigned bits = 63 - shard_bits;
+	unsigned n_shards = 1U << shard_bits;
+	int ret = 0;
+
+	CLASS(btree_trans, trans)(c);
+
+	for (unsigned i = 0; i < ARRAY_SIZE(sharded_btrees); i++) {
+		u64 split_count = 0;
+		enum btree_id btree = sharded_btrees[i];
+
+		for (unsigned shard = 1; shard < n_shards; shard++) {
+			u64 boundary = (u64) shard << bits;
+			struct bpos pos = btree == BTREE_ID_inodes
+				? SPOS(0, boundary, 0)
+				: SPOS(boundary, 0, 0);
+			do {
+				ret = lockrestart_do(trans,
+					presplit_shard_boundary_one(trans, btree, pos, &split_count));
+			} while (!ret);
+
+			if (ret < 0) {
+				if (bch2_err_matches(ret, ENOSPC))
+					ret = 0;
+				break;
+			}
+			ret = 0;
+		}
+
+		if (split_count) {
+			CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_info);
+			prt_printf(&msg.m, "presplit_shard_boundaries: %llu splits in btree ", split_count);
+			bch2_btree_id_to_text(&msg.m, btree);
+		}
+	}
+
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_presplit_shard_boundaries);
+	return ret;
+}
+
 void bch2_fs_btree_gc_init_early(struct bch_fs *c)
 {
 	seqcount_init(&c->gc.pos_lock);
