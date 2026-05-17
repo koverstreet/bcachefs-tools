@@ -13,6 +13,7 @@ use bch_bindgen::c::{
 use bch_bindgen::accounting::data_type;
 use clap::Parser;
 
+use crate::commands::DeviceNameArgs;
 use crate::util::{fmt_bytes_human, fmt_sectors_human};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::bch_ioc_w;
@@ -116,6 +117,9 @@ pub struct Cli {
     #[arg(short, long)]
     metadata: bool,
 
+    #[command(flatten)]
+    device_names: DeviceNameArgs,
+
     /// Filesystem path or device
     filesystem: String,
 }
@@ -134,7 +138,8 @@ fn scrub(cli: Cli) -> Result<()> {
         .with_context(|| format!("opening filesystem '{}'", cli.filesystem))?;
 
     let sysfs_path = sysfs_path_from_fd(handle.sysfs_fd())?;
-    let devices = fs_get_devices(&sysfs_path)?;
+    let name_mode = cli.device_names.name_mode();
+    let devices = fs_get_devices(&sysfs_path, name_mode)?;
 
     let ioctl_fd = handle.ioctl_fd_raw();
     let dev_idx = handle.dev_idx();

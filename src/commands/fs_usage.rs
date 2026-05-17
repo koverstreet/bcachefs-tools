@@ -4,6 +4,7 @@ use anyhow::{anyhow, Result};
 use bch_bindgen::c;
 use clap::Parser;
 
+use crate::commands::DeviceNameArgs;
 use crate::wrappers::accounting::{
     AccountingEntry, DiskAccountingKind, data_type, data_type_is_empty, disk_accounting_type,
 };
@@ -11,7 +12,7 @@ use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bcachefs_kernel::{btree, metadata_version};
 use bcachefs_kernel::opts::{prt_data_type, prt_compression_type, prt_reconcile_type};
 use bcachefs_kernel::util::printbuf::Printbuf;
-use crate::wrappers::sysfs::{self, DevInfo, bcachefs_kernel_version};
+use crate::wrappers::sysfs::{self, DeviceNameMode, DevInfo, bcachefs_kernel_version};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "snake_case")]
@@ -48,6 +49,9 @@ pub struct Cli {
     #[arg(short = 'h', long = "human-readable")]
     human_readable: bool,
 
+    #[command(flatten)]
+    device_names: DeviceNameArgs,
+
     /// Filesystem mountpoints
     #[arg(default_value = ".")]
     mountpoints: Vec<String>,
@@ -67,7 +71,8 @@ fn fs_usage(cli: Cli) -> Result<()> {
     for path in &cli.mountpoints {
         let mut out = Printbuf::new();
         out.set_human_readable(cli.human_readable);
-        fs_usage_to_text(&mut out, path, &fields)?;
+        let name_mode = cli.device_names.name_mode();
+        fs_usage_to_text(&mut out, path, &fields, name_mode)?;
         print!("{}", out);
     }
 
@@ -80,12 +85,17 @@ struct DevContext {
     leaving: u64,
 }
 
-fn fs_usage_to_text(out: &mut Printbuf, path: &str, fields: &[Field]) -> Result<()> {
+fn fs_usage_to_text(
+    out: &mut Printbuf,
+    path: &str,
+    fields: &[Field],
+    name_mode: DeviceNameMode,
+) -> Result<()> {
     let handle = BcachefsHandle::open(path)
         .map_err(|e| anyhow!("opening filesystem '{}': {}", path, e))?;
 
     let sysfs_path = sysfs::sysfs_path_from_fd(handle.sysfs_fd())?;
-    let devs = sysfs::fs_get_devices(&sysfs_path)?;
+    let devs = sysfs::fs_get_devices(&sysfs_path, name_mode)?;
 
     fs_usage_v1_to_text(out, &handle, &devs, fields)
         .map_err(|e| anyhow!("query_accounting ioctl failed (kernel too old?): {}", e))?;
