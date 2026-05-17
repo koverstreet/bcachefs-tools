@@ -1270,7 +1270,6 @@ retry_all:
 	btree_trans_sort_paths(trans);
 
 	bch2_trans_unlock(trans);
-	cond_resched();
 	trans_set_locked(trans, false);
 
 	if (unlikely(trans->memory_allocation_failure)) {
@@ -3766,14 +3765,6 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 		     time_after(jiffies, trans->srcu_lock_time + msecs_to_jiffies(10))))
 		bch2_trans_unlock_long(trans);
 
-	if (need_resched() ||
-	    time_after64(now, trans->locking_wait.trans_start_time +
-			 BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS)) {
-		bch2_trans_unlock(trans);
-		cond_resched();
-		now = local_clock();
-	}
-
 	if (!trans->restarted)
 		trans->locking_wait.trans_start_time = now;
 	trans->last_begin_time = now;
@@ -3792,12 +3783,19 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 	trans->trans_kmalloc_trace.nr = 0;
 #endif
 
-	trans_set_locked(trans, false);
-
 	if (trans->restarted) {
+		/* restart is hot — skip the resched check */
 		bch2_btree_path_traverse_all(trans);
 		trans->notrace_relock_fail = false;
+	} else if (need_resched() ||
+		   time_after64(now, trans->locking_wait.trans_start_time +
+				BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS)) {
+		bch2_trans_unlock(trans);
+		cond_resched();
+		now = local_clock();
 	}
+
+	trans_set_locked(trans, false);
 
 	bch2_trans_verify_not_unlocked_or_in_restart(trans);
 	return trans->restart_count;
@@ -3882,6 +3880,9 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 		prefetch((const char *) c->btree.cache.roots_b + i);
 
 	trans->c		= c;
+	trans->shard_cpu	= c->opts.shard_inode_numbers_bits
+		? bch2_inode_shard_cpu(c)
+		: -1;
 	trans->fn_idx		= fn_idx;
 	trans->locking_wait.task = current;
 	trans->journal_replay_not_finished =

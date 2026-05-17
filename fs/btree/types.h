@@ -657,10 +657,12 @@ struct btree_trans {
 	btree_path_idx_t	nr_paths;
 	btree_path_idx_t	nr_paths_max;
 	btree_path_idx_t	nr_updates;
+	s16			shard_cpu;
 	u8			fn_idx;
 	u8			lock_must_abort;
 	bool			lock_may_not_fail:1;
 	bool			locked:1;
+	bool			migrate_disabled:1;
 	bool			write_locked:1;
 	bool			srcu_held:1;
 	bool			btree_cache_cannibalize_locked:1;
