@@ -3567,7 +3567,7 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 		bch2_trans_unlock_long(trans);
 
 	if (need_resched() ||
-	    time_after64(now, trans->last_begin_time_nonrestarted +
+	    time_after64(now, trans->locking_wait.trans_start_time +
 			 BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS)) {
 		bch2_trans_unlock(trans);
 		cond_resched();
@@ -3575,7 +3575,7 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 	}
 
 	if (!trans->restarted)
-		trans->last_begin_time_nonrestarted = now;
+		trans->locking_wait.trans_start_time = now;
 	trans->last_begin_time = now;
 
 	trans->last_begin_ip = _RET_IP_;
@@ -3713,7 +3713,7 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	trans_set_locked(trans, false);
 
 	u64 now = local_clock();
-	trans->last_begin_time_nonrestarted = now;
+	trans->locking_wait.trans_start_time = now;
 	trans->last_begin_time = now;
 
 	closure_init_stack_release(&trans->ref);
@@ -3921,8 +3921,7 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 
 	b = READ_ONCE(trans->locking);
 	if (b) {
-		prt_printf(out, "  blocked for %lluus on\n",
-			   div_u64(local_clock() - trans->locking_wait.start_time, 1000));
+		prt_printf(out, "  blocked on:\n");
 		prt_printf(out, "    %c", lock_types[trans->locking_wait.lock_want]);
 		bch2_btree_bkey_cached_common_to_text(out, b);
 		prt_newline(out);

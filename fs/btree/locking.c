@@ -328,8 +328,8 @@ btree_trans_abort_preference(struct trans_waiting_for_lock *l,
 	    r->trans->lock_may_not_fail)
 		return l->trans->lock_may_not_fail ? r : l;
 
-	return time_after64(l->trans->last_begin_time_nonrestarted,
-			    r->trans->last_begin_time_nonrestarted)
+	return time_after64(l->trans->locking_wait.trans_start_time,
+			    r->trans->locking_wait.trans_start_time)
 		? l : r;
 }
 
