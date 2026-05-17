@@ -898,6 +898,25 @@ int bch2_sum_sector_overwrites(struct btree_trans *trans,
 	return ret;
 }
 
+noinline
+static void bi_sectors_underflow(struct btree_trans *trans,
+				 struct bkey_i_inode_v3 *inode,
+				 u64 *i_sectors_delta)
+{
+	s64 bi_sectors = le64_to_cpu(inode->v.bi_sectors);
+
+	CLASS(bch_log_msg, msg)(trans->c);
+	prt_printf(&msg.m, "inode %llu i_sectors underflow: %lli + %lli < 0",
+		   inode->k.p.offset, bi_sectors, *i_sectors_delta);
+
+	msg.m.suppress = !bch2_count_fsck_err(trans->c, inode_i_sectors_underflow, &msg.m);
+
+	if (*i_sectors_delta < 0)
+		*i_sectors_delta = -bi_sectors;
+	else
+		*i_sectors_delta = 0;
+}
+
 static inline int bch2_extent_update_i_size_sectors(struct btree_trans *trans,
 						    struct btree_iter *extent_iter,
 						    u64 new_i_size,
@@ -955,20 +974,8 @@ static inline int bch2_extent_update_i_size_sectors(struct btree_trans *trans,
 
 	if (i_sectors_delta) {
 		s64 bi_sectors = le64_to_cpu(inode->v.bi_sectors);
-		if (unlikely(bi_sectors + i_sectors_delta < 0)) {
-			struct bch_fs *c = trans->c;
-
-			CLASS(bch_log_msg, msg)(c);
-			prt_printf(&msg.m, "inode %llu i_sectors underflow: %lli + %lli < 0",
-				   extent_iter->pos.inode, bi_sectors, i_sectors_delta);
-
-			msg.m.suppress = !bch2_count_fsck_err(c, inode_i_sectors_underflow, &msg.m);
-
-			if (i_sectors_delta < 0)
-				i_sectors_delta = -bi_sectors;
-			else
-				i_sectors_delta = 0;
-		}
+		if (unlikely(bi_sectors + i_sectors_delta < 0))
+			bi_sectors_underflow(trans, inode, &i_sectors_delta);
 
 		le64_add_cpu(&inode->v.bi_sectors, i_sectors_delta);
 		inode_update_flags = 0;
