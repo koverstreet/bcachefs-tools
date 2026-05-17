@@ -476,7 +476,8 @@ static int btree_key_can_insert_cached(struct btree_trans *trans, unsigned flags
 
 	if (watermark < BCH_WATERMARK_reclaim &&
 	    !test_bit(BKEY_CACHED_DIRTY, &ck->flags) &&
-	    bch2_btree_key_cache_must_wait(c))
+	    bch2_btree_key_cache_must_wait(c) &&
+	    test_bit(JOURNAL_replay_done, &c->journal.flags))
 		return bch_err_throw(c, btree_insert_need_journal_reclaim);
 
 	/*
