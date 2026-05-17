@@ -701,6 +701,13 @@ struct bch_fs {
 
 	unsigned short		block_bits;	/* ilog2(block_size) */
 
+	/*
+	 * shard → preferred CPU mapping for wake_cpu hinting from
+	 * bch2_trans_begin(): each shard's worth of btree-node working set
+	 * gravitates to a fixed CPU's L1/L2.
+	 */
+	u16			inode_shard_cpu[256];
+
 	struct delayed_work	maybe_schedule_btree_bitmap_gc;
 
 	struct bch_fs_counters	counters;

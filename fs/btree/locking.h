@@ -206,43 +206,78 @@ bch2_btree_node_unlock_write_inlined(struct btree_trans *trans, struct btree_pat
 	__bch2_btree_node_unlock_write(trans, b);
 }
 
+/*
+ * Shard index for inode-number allocation. We used to use the current CPU id,
+ * but threads migrate across CPUs and the win from per-CPU allocator
+ * separation evaporates — concurrent allocators end up sharing shards (and
+ * fighting on the same alloc_cursor btree node) any time the scheduler
+ * shuffles them onto the same core. Hashing the task's pid is stable per
+ * thread, so concurrent allocators in different threads keep their separation
+ * regardless of which CPU they're currently running on.
+ */
+static inline u64 bch2_inode_shard_idx(struct bch_fs *c)
+{
+	return hash_64((u64) current->pid, c->opts.shard_inode_numbers_bits);
+}
+
+static inline unsigned bch2_inode_shard_cpu(struct bch_fs *c)
+{
+	return c->inode_shard_cpu[bch2_inode_shard_idx(c)];
+}
+
 int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *);
 
 /* lock: */
 
+static inline void trans_maybe_disable_migrate(struct btree_trans *trans)
+{
+	/*
+	 * Pin to CPU while btree locks are held: keeps cache footprint
+	 * hot, and per-CPU cursors (e.g. inode allocation) stable
+	 * across transaction restarts. Released in trans_set_unlocked,
+	 * so any wait that goes through bch2_trans_unlock(_long)
+	 * happens with migration enabled - including the cond_resched
+	 * in bch2_trans_begin and the freezer-visible window during
+	 * suspend.
+	 */
+	if (!trans->migrate_disabled &&
+	    trans->shard_cpu == raw_smp_processor_id()) {
+		trans->migrate_disabled = true;
+		migrate_disable();
+	}
+}
+
+static inline void trans_enable_migrate(struct btree_trans *trans)
+{
+	if (trans->migrate_disabled) {
+		trans->migrate_disabled = false;
+		migrate_enable();
+	}
+}
+
 static inline void trans_set_locked(struct btree_trans *trans, bool try)
 {
 	if (!trans->locked) {
-		/*
-		 * Pin to CPU while btree locks are held: keeps cache footprint
-		 * hot, and per-CPU cursors (e.g. inode allocation) stable
-		 * across transaction restarts. Released in trans_set_unlocked,
-		 * so any wait that goes through bch2_trans_unlock(_long)
-		 * happens with migration enabled - including the cond_resched
-		 * in bch2_trans_begin and the freezer-visible window during
-		 * suspend.
-		 */
-		migrate_disable();
-		lock_acquire_exclusive(&trans->dep_map, 0, try, NULL, _THIS_IP_);
 		trans->locked = true;
 		trans->last_unlock_ip = 0;
+		lock_acquire_exclusive(&trans->dep_map, 0, try, NULL, _THIS_IP_);
 
 		trans->pf_memalloc_nofs = (current->flags & PF_MEMALLOC_NOFS) != 0;
 		current->flags |= PF_MEMALLOC_NOFS;
+
+		trans_maybe_disable_migrate(trans);
 	}
 }
 
 static inline void trans_set_unlocked(struct btree_trans *trans)
 {
 	if (trans->locked) {
-		lock_release(&trans->dep_map, _THIS_IP_);
 		trans->locked = false;
 		trans->last_unlock_ip = _RET_IP_;
+		lock_release(&trans->dep_map, _THIS_IP_);
 
 		if (!trans->pf_memalloc_nofs)
 			current->flags &= ~PF_MEMALLOC_NOFS;
-
-		migrate_enable();
 	}
 }
 
@@ -264,6 +299,8 @@ static inline int __btree_node_lock_nopath(struct btree_trans *trans,
 		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_waitlist_alloc);
 
 	WRITE_ONCE(trans->locking, NULL);
+
+	trans_maybe_disable_migrate(trans);
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 	event_trace(trans->c, btree_path_lock, buf,

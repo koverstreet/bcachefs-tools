@@ -6,6 +6,7 @@
 #include "alloc/buckets.h"
 
 #include "btree/key_cache.h"
+#include "btree/locking.h"
 #include "btree/write_buffer.h"
 #include "btree/bkey_methods.h"
 #include "btree/update.h"
@@ -958,6 +959,29 @@ int bch2_inode_alloc_cursor_validate(struct bch_fs *c, struct bkey_s_c k,
 			 "k.p.inode bad");
 fsck_err:
 	return ret;
+}
+
+/*
+ * Populate inode_shard_cpu[]: each shard gets a preferred CPU,
+ * spread across online CPUs with NUMA topology awareness.
+ * bch2_trans_cpu_hint() reads this on every trans_begin to nudge the
+ * scheduler toward the CPU that owns the task's shard's working set.
+ */
+void bch2_fs_inode_shard_cpu_init(struct bch_fs *c)
+{
+#ifdef __KERNEL__
+	unsigned bits = c->opts.shard_inode_numbers_bits;
+	if (!bits)
+		return;
+
+	unsigned nr_shards = 1U << bits;
+	BUG_ON(nr_shards > ARRAY_SIZE(c->inode_shard_cpu));
+
+	for (unsigned shard = 0; shard < nr_shards; shard++) {
+		unsigned cpu = cpumask_local_spread(shard, NUMA_NO_NODE);
+		c->inode_shard_cpu[shard] = cpu < nr_cpu_ids ? cpu : 0;
+	}
+#endif
 }
 
 static inline void cursor_idx_min_max(struct bch_fs *c, unsigned idx,
