@@ -552,18 +552,20 @@ __bch2_create(struct mnt_idmap *idmap,
 	struct posix_acl *default_acl = NULL, *acl = NULL;
 	subvol_inum inum;
 	struct bch_subvolume subvol;
-	u64 journal_seq = 0;
-	kuid_t kuid;
-	kgid_t kgid;
+	kuid_t kuid = mapped_fsuid(idmap, i_user_ns(&dir->v));
+	kgid_t kgid = mapped_fsgid(idmap, i_user_ns(&dir->v));
+	bool is_posixacl = IS_POSIXACL(&dir->v);
 	int ret;
 
 	/*
 	 * preallocate acls + vfs inode before btree transaction, so that
 	 * nothing can fail after the transaction succeeds:
 	 */
-	ret = posix_acl_create(&dir->v, &mode, &default_acl, &acl);
-	if (ret)
-		return ERR_PTR(ret);
+	if (is_posixacl) {
+		ret = posix_acl_create(&dir->v, &mode, &default_acl, &acl);
+		if (ret)
+			return ERR_PTR(ret);
+	}
 
 	inode = __bch2_new_inode(c, GFP_NOFS);
 	if (unlikely(!inode)) {
@@ -584,8 +586,6 @@ __bch2_create(struct mnt_idmap *idmap,
 retry:
 	bch2_trans_begin(trans);
 
-	kuid = mapped_fsuid(idmap, i_user_ns(&dir->v));
-	kgid = mapped_fsgid(idmap, i_user_ns(&dir->v));
 	ret   = bch2_create_trans(trans,
 				  inode_inum(dir), &dir_u, &inode_u,
 				  !(flags & BCH_CREATE_TMPFILE)
@@ -603,7 +603,7 @@ retry:
 	inum.inum = inode_u.bi_inum;
 
 	ret   = bch2_subvolume_get(trans, inum.subvol, true, &subvol) ?:
-		bch2_trans_commit(trans, NULL, &journal_seq, 0);
+		bch2_trans_commit(trans, NULL, NULL, 0);
 	if (unlikely(ret)) {
 		bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, -1,
 				KEY_TYPE_QUOTA_WARN);
@@ -621,8 +621,10 @@ err_before_quota:
 
 	bch2_vfs_inode_init(trans, inum, inode, &inode_u, &subvol);
 
-	set_cached_acl(&inode->v, ACL_TYPE_ACCESS, acl);
-	set_cached_acl(&inode->v, ACL_TYPE_DEFAULT, default_acl);
+	if (is_posixacl) {
+		set_cached_acl(&inode->v, ACL_TYPE_ACCESS, acl);
+		set_cached_acl(&inode->v, ACL_TYPE_DEFAULT, default_acl);
+	}
 
 	/*
 	 * we must insert the new inode into the inode cache before calling
