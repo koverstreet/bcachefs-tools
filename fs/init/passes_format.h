@@ -73,6 +73,12 @@
 	x(merge_btree_nodes,			45, PASS_ONLINE,			0,	\
 	  "Merge adjacent underfull btree nodes to reclaim "					\
 	  "wasted space")									\
+	x(presplit_shard_boundaries,		48, PASS_ALWAYS,				\
+	  BIT_ULL(BCH_RECOVERY_PASS_journal_replay),						\
+	  "Split btree leaves spanning inode-allocator shard "					\
+	  "boundaries so each shard's keys live in dedicated "					\
+	  "nodes (cache locality for sharded inode/dirent/"					\
+	  "extent/xattr access)")								\
 	x(check_alloc_info,			10, PASS_ONLINE|PASS_FSCK_ALLOC,		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_allocations),						\
 	  "Cross-check alloc btree against freespace, "						\
