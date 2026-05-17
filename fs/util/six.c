@@ -559,8 +559,8 @@ static inline bool six_optimistic_spin(struct six_lock *lock,
 
 #endif
 
-noinline
-static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
+__always_inline
+static int __six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			     struct six_lock_waiter *wait,
 			     six_lock_should_sleep_fn should_sleep_fn,
 			     unsigned long ip)
@@ -675,6 +675,15 @@ out:
 	return ret;
 }
 
+noinline
+static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
+			     struct six_lock_waiter *wait,
+			     six_lock_should_sleep_fn should_sleep_fn,
+			     unsigned long ip)
+{
+	return __six_lock_slowpath(lock, type, wait, should_sleep_fn, ip);
+}
+
 /**
  * six_lock_ip_waiter - take a lock, with full waitlist interface
  * @lock:	lock to take
@@ -728,6 +737,35 @@ int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
 	return ret;
 }
 EXPORT_SYMBOL_GPL(six_lock_ip_waiter);
+
+/*
+ * As six_lock_ip_waiter() but skip the initial trylock. The caller has
+ * already attempted (and observed failure) — burning another locked CAS
+ * to recheck would be wasted work. The post-WAITING-bit retry inside
+ * six_lock_slowpath() still covers the unlock-raced-with-us window.
+ */
+int six_lock_contended(struct six_lock *lock, enum six_lock_type type,
+				 struct six_lock_waiter *wait,
+				 six_lock_should_sleep_fn should_sleep_fn,
+				 unsigned long ip)
+{
+	int ret;
+
+	if (type != SIX_LOCK_write)
+		six_acquire(&lock->dep_map, 0, type == SIX_LOCK_read, ip);
+
+	ret = __six_lock_slowpath(lock, type, wait, should_sleep_fn, ip);
+
+	if (ret && type != SIX_LOCK_write)
+		six_release(&lock->dep_map, ip);
+	if (!ret) {
+		lock_acquired(&lock->dep_map, ip);
+		six_lock_record_acquire(lock, type);
+	}
+
+	return ret;
+}
+EXPORT_SYMBOL_GPL(six_lock_contended);
 
 __always_inline
 static void do_six_unlock_type(struct six_lock *lock, enum six_lock_type type)

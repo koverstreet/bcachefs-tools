@@ -265,6 +265,19 @@ int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
 		       six_lock_should_sleep_fn should_sleep_fn,
 		       unsigned long ip);
 
+/*
+ * As six_lock_ip_waiter(), but skip the initial trylock and go straight
+ * to the waitlist slowpath. Use this when the caller has already done a
+ * trylock and observed contention (e.g. btree_node_lock dispatching
+ * to btree_node_lock_nopath after its own fast-path trylock failed) —
+ * avoids burning a second locked CAS on a lock state we already know
+ * is contended.
+ */
+int six_lock_contended(struct six_lock *lock, enum six_lock_type type,
+				 struct six_lock_waiter *wait,
+				 six_lock_should_sleep_fn should_sleep_fn,
+				 unsigned long ip);
+
 /**
  * six_lock_waiter - take a lock, with full waitlist interface
  * @lock:	lock to take
