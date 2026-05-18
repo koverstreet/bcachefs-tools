@@ -78,7 +78,7 @@ static inline void btree_path_set_dirty(struct btree_trans *trans,
 					struct btree_path *path,
 					enum btree_path_uptodate u)
 {
-	BUG_ON(path->should_be_locked && trans->locked && !trans->restarted);
+	EBUG_ON(path->should_be_locked && trans->locked && !trans->restarted);
 	path->uptodate = max_t(unsigned, path->uptodate, u);
 }
 
@@ -614,7 +614,7 @@ static inline void bch2_btree_iter_set_pos(struct btree_iter *iter, struct bpos 
 
 static inline void bch2_btree_iter_set_pos_to_extent_start(struct btree_iter *iter)
 {
-	BUG_ON(!(iter->flags & BTREE_ITER_is_extents));
+	EBUG_ON(!(iter->flags & BTREE_ITER_is_extents));
 	iter->pos = bkey_start_pos(&iter->k);
 }
 

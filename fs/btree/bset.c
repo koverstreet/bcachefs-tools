@@ -423,7 +423,7 @@ struct rw_aux_tree {
 
 static unsigned bset_aux_tree_buf_end(const struct bset_tree *t)
 {
-	BUG_ON(t->aux_data_offset == U16_MAX);
+	EBUG_ON(t->aux_data_offset == U16_MAX);
 
 	switch (bset_aux_tree_type(t)) {
 	case BSET_NO_AUX_TREE:
@@ -886,10 +886,10 @@ retry:
 
 static void bset_alloc_tree(struct btree *b, struct bset_tree *t)
 {
-	struct bset_tree *i;
 
-	for (i = b->set; i != t; i++)
-		BUG_ON(bset_has_rw_aux_tree(i));
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG))
+		for (struct bset_tree *i = b->set; i != t; i++)
+			BUG_ON(bset_has_rw_aux_tree(i));
 
 	bch2_bset_set_no_aux_tree(b, t);
 
@@ -1388,7 +1388,7 @@ static inline void __bch2_btree_node_iter_push(struct btree_node_iter *iter,
 		struct btree_node_iter_set *pos =
 			&iter->data[__btree_node_iter_used(iter)];
 
-		BUG_ON(pos >= iter->data + ARRAY_SIZE(iter->data));
+		EBUG_ON(pos >= iter->data + ARRAY_SIZE(iter->data));
 		*pos = (struct btree_node_iter_set) {
 			__btree_node_key_to_offset(b, k),
 			__btree_node_key_to_offset(b, end)
@@ -1651,7 +1651,7 @@ struct bkey_packed *bch2_btree_node_iter_prev_all(struct btree_node_iter *iter,
 	struct btree_node_iter_set *set = btree_node_iter_set_find(iter, end) ?:
 		&iter->data[__btree_node_iter_used(iter)];
 
-	BUG_ON(set >= iter->data + ARRAY_SIZE(iter->data));
+	EBUG_ON(set >= iter->data + ARRAY_SIZE(iter->data));
 
 	memmove(&iter->data[1],
 		&iter->data[0],
