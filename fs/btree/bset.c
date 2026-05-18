@@ -1185,6 +1185,33 @@ void bch2_bset_delete(struct btree *b,
 
 /* Lookup */
 
+/* packed or unpacked */
+static int bkey_cmp_p_or_unp(const struct btree *b,
+			     const struct bkey_packed *l,
+			     const struct bkey_packed *r_packed,
+			     const struct bpos *r)
+{
+	EBUG_ON(r_packed && !bkey_packed(r_packed));
+
+	if (unlikely(!bkey_packed(l)))
+		return bpos_cmp(packed_to_bkey_c(l)->p, *r);
+
+	if (likely(r_packed))
+		return __bch2_bkey_cmp_packed_format_checked(l, r_packed, b);
+
+	return __bch2_bkey_cmp_left_packed_format_checked(b, l, r);
+}
+
+__flatten
+static inline int bkey_iter_cmp_p_or_unp(const struct btree *b,
+				    const struct bkey_packed *l,
+				    const struct bkey_packed *r_packed,
+				    const struct bpos *r)
+{
+	return bkey_cmp_p_or_unp(b, l, r_packed, r)
+		?: -((int) bkey_deleted(l));
+}
+
 __flatten
 static struct bkey_packed *bset_search_write_set(const struct btree *b,
 				struct bset_tree *t,

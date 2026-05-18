@@ -288,23 +288,6 @@ void bch2_bset_delete(struct btree *, struct bkey_packed *, unsigned);
 
 /* Bkey utility code */
 
-/* packed or unpacked */
-static inline int bkey_cmp_p_or_unp(const struct btree *b,
-				    const struct bkey_packed *l,
-				    const struct bkey_packed *r_packed,
-				    const struct bpos *r)
-{
-	EBUG_ON(r_packed && !bkey_packed(r_packed));
-
-	if (unlikely(!bkey_packed(l)))
-		return bpos_cmp(packed_to_bkey_c(l)->p, *r);
-
-	if (likely(r_packed))
-		return __bch2_bkey_cmp_packed_format_checked(l, r_packed, b);
-
-	return __bch2_bkey_cmp_left_packed_format_checked(b, l, r);
-}
-
 static inline struct bset_tree *
 bch2_bkey_to_bset_inlined(struct btree *b, struct bkey_packed *k)
 {
@@ -410,15 +393,6 @@ static inline int bkey_iter_pos_cmp(const struct btree *b,
 			const struct bpos *r)
 {
 	return bkey_cmp_left_packed(b, l, r)
-		?: -((int) bkey_deleted(l));
-}
-
-static inline int bkey_iter_cmp_p_or_unp(const struct btree *b,
-				    const struct bkey_packed *l,
-				    const struct bkey_packed *r_packed,
-				    const struct bpos *r)
-{
-	return bkey_cmp_p_or_unp(b, l, r_packed, r)
 		?: -((int) bkey_deleted(l));
 }
 
