@@ -846,10 +846,10 @@ bool bch2_btree_node_upgrade(struct btree_trans *trans,
 
 	switch (btree_lock_want(path, level)) {
 	case BTREE_NODE_UNLOCKED:
-		BUG_ON(btree_node_locked(path, level));
+		EBUG_ON(btree_node_locked(path, level));
 		return true;
 	case BTREE_NODE_READ_LOCKED:
-		BUG_ON(btree_node_intent_locked(path, level));
+		EBUG_ON(btree_node_intent_locked(path, level));
 		return bch2_btree_node_relock(trans, path, level);
 	case BTREE_NODE_INTENT_LOCKED:
 		break;

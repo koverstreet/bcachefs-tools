@@ -499,6 +499,7 @@
 	x(EIO,				sb_not_downgraded)			\
 	x(EIO,				btree_node_write_all_failed)		\
 	x(EIO,				btree_node_read_error)			\
+	x(EIO,				btree_root_error_unset)			\
 	x(EIO,				btree_need_topology_repair)		\
 	x(EIO,				bucket_ref_update)			\
 	x(EIO,				trigger_alloc)				\
