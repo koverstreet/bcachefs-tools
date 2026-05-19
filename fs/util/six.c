@@ -116,7 +116,7 @@ static inline unsigned pcpu_read_count(struct six_lock *lock)
  * Returns 1 on success, 0 on failure
  *
  * In percpu reader mode, a failed trylock may cause a spurious trylock failure
- * for anoter thread taking the competing lock type, and we may havve to do a
+ * for another thread taking the competing lock type, and we may havve to do a
  * wakeup: when a wakeup is required, we return -1 - wakeup_type.
  */
 static int __do_six_trylock(struct six_lock *lock, enum six_lock_type type,
@@ -246,17 +246,16 @@ static inline void six_lock_wait_fifo_remove(struct six_lock_wait_fifo *wf, u16 
 static inline int six_lock_wait_fifo_insert(struct six_lock_wait_fifo *wf,
 					    struct six_lock_waiter *wait)
 {
-	u16 i;
+	u16 i = wf->next_free_hint;
+	if (!wf->data[i].w)
+		goto fill;
 
-	for (i = wf->next_free_hint; i < wf->nr; i++) {
+	for (i = 0; i < wf->nr; i++)
 		if (!wf->data[i].w)
 			goto fill;
-	}
 
-	if (wf->nr < wf->size) {
-		i = wf->nr++;
+	if (wf->nr < wf->size)
 		goto fill;
-	}
 
 	return -ENOMEM;
 fill:
@@ -264,7 +263,8 @@ fill:
 	wf->data[i].start_time	= (wait->trans_start_time << SIX_LOCK_WANT_BITS) |
 				  ((u8) wait->lock_want & SIX_LOCK_WANT_MASK);
 	wait->slot_idx		= i;
-	wf->next_free_hint	= i + 1;
+	wf->next_free_hint	= (i + 1) & (wf->size - 1);
+	wf->nr			= max(wf->nr, i + 1);
 	return 0;
 }
 
