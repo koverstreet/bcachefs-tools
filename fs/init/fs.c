@@ -1186,6 +1186,11 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	c->journal.noflush_write_time	= &c->times[BCH_TIME_journal_noflush_write];
 	c->journal.flush_seq_time	= &c->times[BCH_TIME_journal_flush_seq];
 
+	/* must be initialized before we throw any errors */
+	c->counters.now = __alloc_percpu(sizeof(u64) * BCH_COUNTER_NR, sizeof(u64));
+	if (!c->counters.now)
+		return -BCH_ERR_ENOMEM_fs_counters_init;
+
 	try(bch2_fs_capacity_init(c));
 
 	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
