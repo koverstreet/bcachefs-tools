@@ -200,16 +200,8 @@ struct six_lock {
 
 	struct six_lock_wait_fifo __rcu *wait_fifo;
 
-	/*
-	 * Inline wait list; layout-compatible with struct six_lock_wait_fifo
-	 * so (struct six_lock_wait_fifo *)&inline_fifo is a valid view.
-	 */
-	struct {
-		u16			size;
-		u16			nr;
-		u16			next_free_hint;
-		struct six_lock_wait_slot data[SIX_LOCK_INLINE_WAITERS];
-	} inline_fifo;
+	struct six_lock_wait_fifo	inline_fifo;
+	struct six_lock_wait_slot	inline_fifo_data[SIX_LOCK_INLINE_WAITERS];
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lockdep_map	dep_map;
 #endif
