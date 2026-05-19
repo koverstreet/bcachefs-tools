@@ -116,7 +116,7 @@ static inline unsigned pcpu_read_count(struct six_lock *lock)
  * Returns 1 on success, 0 on failure
  *
  * In percpu reader mode, a failed trylock may cause a spurious trylock failure
- * for another thread taking the competing lock type, and we may havve to do a
+ * for another thread taking the competing lock type, and we may have to do a
  * wakeup: when a wakeup is required, we return -1 - wakeup_type.
  */
 static int __do_six_trylock(struct six_lock *lock, enum six_lock_type type,
@@ -234,8 +234,7 @@ static inline void six_lock_wait_fifo_shrink(struct six_lock_wait_fifo *wf)
 static inline void six_lock_wait_fifo_remove(struct six_lock_wait_fifo *wf, u16 idx)
 {
 	wf->data[idx].w = NULL;
-	if (idx < wf->next_free_hint)
-		wf->next_free_hint = idx;
+	wf->next_free_hint = min(wf->next_free_hint, idx);
 }
 
 /*
@@ -278,14 +277,13 @@ fill:
  */
 static void __six_lock_wakeup(struct six_lock *lock, enum six_lock_type lock_type)
 {
+	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
+						lockdep_is_held(&lock->wait_lock));
 	struct six_lock_wait_slot *slot;
 	struct task_struct *task;
 	int ret;
 again:
 	ret = 0;
-	raw_spin_lock(&lock->wait_lock);
-	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
-						lockdep_is_held(&lock->wait_lock));
 
 	if (lock_type == SIX_LOCK_read) {
 		/* Readers don't conflict: wake all matching waiters. */
@@ -297,7 +295,7 @@ again:
 
 			ret = __do_six_trylock(lock, lock_type, slot->w->task, false);
 			if (ret <= 0)
-				goto unlock;
+				goto out;
 
 			/*
 			 * Similar to percpu_rwsem_wake_function(), we need to
@@ -344,7 +342,7 @@ again:
 		if (oldest) {
 			ret = __do_six_trylock(lock, lock_type, oldest->w->task, false);
 			if (ret <= 0)
-				goto unlock;
+				goto out;
 
 			struct six_lock_waiter *w = oldest->w;
 			task = get_task_struct(w->task);
@@ -359,19 +357,18 @@ again:
 			 * __six_lock_wakeup and serves them.
 			 */
 			if (n_matches > 1)
-				goto unlock;
+				goto shrink;
 		}
 	}
 
 	six_clear_bitmask(lock, SIX_LOCK_WAITING_read << lock_type);
-unlock:
-	six_lock_wait_fifo_shrink(wf);
-	raw_spin_unlock(&lock->wait_lock);
-
+out:
 	if (ret < 0) {
 		lock_type = -ret - 1;
 		goto again;
 	}
+shrink:
+	six_lock_wait_fifo_shrink(wf);
 }
 
 __always_inline
@@ -384,6 +381,7 @@ static void six_lock_wakeup(struct six_lock *lock, u32 state,
 	if (!(state & (SIX_LOCK_WAITING_read << lock_type)))
 		return;
 
+	guard(raw_spinlock)(&lock->wait_lock);
 	__six_lock_wakeup(lock, lock_type);
 }
 
@@ -393,8 +391,10 @@ static bool do_six_trylock(struct six_lock *lock, enum six_lock_type type, bool 
 	int ret;
 
 	ret = __do_six_trylock(lock, type, current, try);
-	if (ret < 0)
+	if (ret < 0) {
+		guard(raw_spinlock)(&lock->wait_lock);
 		__six_lock_wakeup(lock, -ret - 1);
+	}
 
 	return ret > 0;
 }
@@ -587,7 +587,12 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	 */
 	six_set_bitmask(lock, SIX_LOCK_WAITING_read << type);
 	ret = __do_six_trylock(lock, type, current, false);
-	if (ret <= 0) {
+	if (unlikely(ret < 0)) {
+		__six_lock_wakeup(lock, -ret - 1);
+		ret = 0;
+	}
+
+	if (!ret) {
 		wait->start_time = local_clock();
 
 		if (six_lock_wait_fifo_insert(wf, wait)) {
@@ -605,11 +610,6 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	if (unlikely(ret > 0)) {
 		ret = 0;
 		goto out;
-	}
-
-	if (unlikely(ret < 0)) {
-		__six_lock_wakeup(lock, -ret - 1);
-		ret = 0;
 	}
 
 	if (six_optimistic_spin(lock, wait, type) ||
