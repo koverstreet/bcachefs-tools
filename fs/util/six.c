@@ -242,9 +242,12 @@ static inline void six_lock_wait_fifo_remove(struct six_lock_wait_fifo *wf, u16 
  * Returns 0 on success, -ENOMEM if the list is full.
  * Caller must hold wait_lock.
  */
-static inline int six_lock_wait_fifo_insert(struct six_lock_wait_fifo *wf,
+static inline int six_lock_wait_fifo_insert(struct six_lock *lock,
 					    struct six_lock_waiter *wait)
 {
+	struct six_lock_wait_fifo *wf =
+		rcu_dereference_protected(lock->wait_fifo, lockdep_is_held(&lock->wait_lock));
+
 	u16 i = wf->next_free_hint;
 	if (!wf->data[i].w)
 		goto fill;
@@ -256,7 +259,7 @@ static inline int six_lock_wait_fifo_insert(struct six_lock_wait_fifo *wf,
 	if (wf->nr < wf->size)
 		goto fill;
 
-	return -ENOMEM;
+	return 0;
 fill:
 	wf->data[i].w		= wait;
 	wf->data[i].start_time	= (wait->trans_start_time << SIX_LOCK_WANT_BITS) |
@@ -264,6 +267,42 @@ fill:
 	wait->slot_idx		= i;
 	wf->next_free_hint	= (i + 1) & (wf->size - 1);
 	wf->nr			= max(wf->nr, i + 1);
+	return 1;
+}
+
+noinline
+static int six_lock_wait_fifo_realloc(struct six_lock *lock,
+				      struct six_lock_waiter *wait,
+				      struct six_lock_wait_fifo **_new_wf)
+{
+	struct six_lock_wait_fifo *old_wf = rcu_dereference_protected(lock->wait_fifo, true);
+	struct six_lock_wait_fifo *new_wf = *_new_wf;
+
+	if (new_wf && new_wf->size == old_wf->size * 2) {
+		memcpy(new_wf->data, old_wf->data, old_wf->nr * sizeof(old_wf->data[0]));
+		new_wf->nr = old_wf->nr;
+		rcu_assign_pointer(lock->wait_fifo, new_wf);
+
+		*_new_wf = old_wf != &lock->inline_fifo ? old_wf : NULL;
+		return six_lock_wait_fifo_insert(lock, wait);
+	}
+
+	unsigned old_size = old_wf->size;
+	if (old_size >= (1 << 15))
+		return -ENOMEM;
+
+	raw_spin_unlock(&lock->wait_lock);
+
+	if (new_wf)
+		kfree(new_wf);
+
+	unsigned new_size = old_size * 2;
+	new_wf = kzalloc(struct_size(new_wf, data, new_size), GFP_KERNEL);
+	if (!new_wf)
+		return -ENOMEM;
+
+	new_wf->size = new_size;
+	*_new_wf = new_wf;
 	return 0;
 }
 
@@ -522,26 +561,12 @@ static inline bool six_optimistic_spin(struct six_lock *lock,
 #endif
 
 noinline
-static struct six_lock_wait_fifo *alloc_wait_fifo(struct six_lock *lock, u16 *new_size)
-{
-	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo, true);
-	unsigned old_size = READ_ONCE(wf->size);
-
-	if (old_size >= (1 << 15))
-		return NULL;
-
-	*new_size = old_size * 2;
-	return kzalloc(struct_size(wf, data, *new_size), GFP_KERNEL);
-}
-
-noinline
 static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			     struct six_lock_waiter *wait,
 			     six_lock_should_sleep_fn should_sleep_fn,
 			     unsigned long ip)
 {
 	struct six_lock_wait_fifo *new_wf = NULL;
-	struct six_lock_wait_fifo *old_wf = NULL;
 	int ret = 0;
 
 	if (type == SIX_LOCK_write) {
@@ -556,30 +581,8 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	wait->task		= current;
 	wait->lock_want		= type;
 	wait->lock_acquired	= false;
-
-	u16 new_size = 0;
-	{
-		struct six_lock_wait_fifo *peek = rcu_dereference_protected(lock->wait_fifo, true);
-		if (unlikely(peek->nr == peek->size))
-			new_wf = alloc_wait_fifo(lock, &new_size);
-	}
-
+retry_relock:
 	raw_spin_lock(&lock->wait_lock);
-	struct six_lock_wait_fifo *wf = rcu_dereference_protected(lock->wait_fifo,
-						lockdep_is_held(&lock->wait_lock));
-
-	if (unlikely(new_wf) && new_size == wf->size * 2) {
-		new_wf->size		= new_size;
-		new_wf->nr		= wf->nr;
-		new_wf->next_free_hint	= wf->next_free_hint;
-
-		memcpy(new_wf->data, wf->data, wf->nr * sizeof(wf->data[0]));
-
-		rcu_assign_pointer(lock->wait_fifo, new_wf);
-		old_wf = wf;
-		wf = new_wf;
-		new_wf = NULL;
-	}
 
 	/*
 	 * Retry taking the lock after taking waitlist lock, in case we raced
@@ -595,15 +598,19 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 	if (!ret) {
 		wait->start_time = local_clock();
 
-		if (six_lock_wait_fifo_insert(wf, wait)) {
-			raw_spin_unlock(&lock->wait_lock);
+		ret = six_lock_wait_fifo_insert(lock, wait) ?:
+			six_lock_wait_fifo_realloc(lock, wait, &new_wf);
+		if (unlikely(ret <= 0)) {
+			if (!ret)
+				goto retry_relock;
+
 			if (type == SIX_LOCK_write) {
 				six_clear_bitmask(lock, SIX_LOCK_HELD_write);
 				six_lock_wakeup(lock, atomic_read(&lock->state), SIX_LOCK_read);
 			}
-			ret = -ENOMEM;
 			goto out;
 		}
+		ret = 0;
 	}
 	raw_spin_unlock(&lock->wait_lock);
 
@@ -664,18 +671,8 @@ static int six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 
 	__set_current_state(TASK_RUNNING);
 out:
-	/*
-	 * Free any heap-allocated wait_fifos: new_wf if we lost the grow
-	 * race (either another thread grew first, or we bailed out on a
-	 * re-check of fifo_full before swapping it in), and old_wf if we
-	 * successfully swapped. Centralized here so every goto-out path
-	 * is covered — the earlier -ENOMEM path in particular used to
-	 * leak new_wf on the grow-race-then-still-full code path.
-	 */
-	if (old_wf && old_wf != (struct six_lock_wait_fifo *) &lock->inline_fifo)
-		kfree_rcu_mightsleep(old_wf);
-	kfree(new_wf);
-
+	if (new_wf)
+		kfree_rcu_mightsleep(new_wf);
 	trace_contention_end(lock, 0);
 
 	return ret;
@@ -1049,7 +1046,7 @@ void __six_lock_init(struct six_lock *lock, const char *name,
 {
 	atomic_set(&lock->state, 0);
 	raw_spin_lock_init(&lock->wait_lock);
-	lock->inline_fifo.size		= ARRAY_SIZE(lock->inline_fifo.data);
+	lock->inline_fifo.size		= ARRAY_SIZE(lock->inline_fifo_data);
 	lock->inline_fifo.nr		= 0;
 	lock->inline_fifo.next_free_hint = 0;
 	RCU_INIT_POINTER(lock->wait_fifo,
