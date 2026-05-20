@@ -69,10 +69,15 @@ unsigned bch2_journal_dev_buckets_available(struct journal *j,
 void bch2_journal_set_watermark(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+
+	bool med_on_space = (j->space[journal_space_clean].total * 4 <=
+			     j->space[journal_space_total].total * 3);
+
 	bool low_on_space = j->space[journal_space_clean].total * 4 <=
 		j->space[journal_space_total].total;
 	bool low_on_pin = fifo_free(&j->pin) < j->pin.size / 4;
 	bool low_on_wb = bch2_btree_write_buffer_must_wait(c);
+
 	unsigned watermark = low_on_space || low_on_pin || low_on_wb
 		? BCH_WATERMARK_reclaim
 		: BCH_WATERMARK_stripe;
@@ -89,6 +94,8 @@ void bch2_journal_set_watermark(struct journal *j)
 				bch2_btree_write_buffer_to_text(&buf, c);
 		}));
 
+	mod_bit(JOURNAL_med_on_space,	&j->flags, med_on_space);
+
 	mod_bit(JOURNAL_low_on_space,	&j->flags, low_on_space);
 	mod_bit(JOURNAL_low_on_pin,	&j->flags, low_on_pin);
 	mod_bit(JOURNAL_low_on_wb,	&j->flags, low_on_wb);
@@ -96,6 +103,8 @@ void bch2_journal_set_watermark(struct journal *j)
 	swap(watermark, j->watermark);
 	if (watermark > j->watermark)
 		journal_wake(j);
+	if (med_on_space)
+		journal_reclaim_kick(j);
 }
 
 static struct journal_space
@@ -857,7 +866,7 @@ static int __bch2_journal_reclaim(struct journal *j, bool direct, bool kicked)
 			       msecs_to_jiffies(c->opts.journal_reclaim_delay)))
 			min_nr = 1;
 
-		if (journal_low_on_space(j))
+		if (journal_med_on_space(j))
 			min_nr = 1;
 
 		size_t btree_cache_live = btree_cache_list_nr(&bc->live[0]) +

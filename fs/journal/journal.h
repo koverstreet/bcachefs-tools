@@ -121,6 +121,11 @@ static inline void journal_wake(struct journal *j)
 	closure_wake_up(&j->async_wait);
 }
 
+static inline bool journal_med_on_space(struct journal *j)
+{
+	return test_bit(JOURNAL_med_on_space, &j->flags);
+}
+
 static inline bool journal_low_on_space(struct journal *j)
 {
 	return test_bit(JOURNAL_low_on_space, &j->flags) ||

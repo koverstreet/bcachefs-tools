@@ -192,6 +192,7 @@ enum journal_space_from {
 	x(running)			\
 	x(may_skip_flush)		\
 	x(need_flush_write)		\
+	x(med_on_space)			\
 	x(low_on_space)			\
 	x(low_on_pin)			\
 	x(low_on_wb)
