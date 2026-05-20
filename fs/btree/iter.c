@@ -2599,7 +2599,8 @@ static void __btree_iter_peek_trace(struct bch_fs *c, struct bkey_s_c k)
 	}));
 }
 
-static struct bkey_s_c __bch2_btree_iter_peek(struct btree_iter *iter, struct bpos *search_key)
+static struct bkey_s_c __bch2_btree_iter_peek(struct btree_iter *iter, struct bpos *search_key,
+					      const struct bpos *end)
 {
 	struct btree_trans *trans = iter->trans;
 	struct bkey_s_c k;
@@ -2645,7 +2646,10 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_iter *iter, struct bp
 		if (unlikely(trans->nr_updates))
 			bch2_btree_trans_peek_updates(trans, iter, *search_key, &k);
 
-		if (k.k && bkey_deleted(k.k)) {
+		if (likely(k.k)) {
+			if (!bkey_deleted(k.k))
+				break;
+
 			/*
 			 * If we've got a whiteout, and it's after the search
 			 * key, advance the search key to the whiteout instead
@@ -2656,12 +2660,7 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_iter *iter, struct bp
 			*search_key = !bpos_eq(*search_key, k.k->p)
 				? k.k->p
 				: bpos_successor(k.k->p);
-			continue;
-		}
-
-		if (likely(k.k)) {
-			break;
-		} else if (likely(!bpos_eq(l->b->key.k.p, SPOS_MAX))) {
+		} else if (likely(bpos_lt(l->b->key.k.p, *end))) {
 			/* Advance to next leaf node: */
 			*search_key = bpos_successor(l->b->key.k.p);
 		} else {
@@ -2727,7 +2726,7 @@ struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *iter, const struct b
 	}
 
 	while (1) {
-		k = __bch2_btree_iter_peek(iter, &search_key);
+		k = __bch2_btree_iter_peek(iter, &search_key, end);
 		if (unlikely(!k.k))
 			goto end;
 		if (unlikely(bkey_err(k)))
