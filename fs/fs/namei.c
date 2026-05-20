@@ -49,11 +49,12 @@ int bch2_create_trans(struct btree_trans *trans,
 	u64 dir_target;
 	unsigned dir_type = mode_to_type(mode);
 
-	u32 snapshot;
-	try(bch2_subvol_is_ro_trans(trans, dir.subvol, &snapshot));
+	u32 dir_snapshot;
+	try(bch2_subvol_is_ro_trans(trans, dir.subvol, &dir_snapshot));
 
 	try(bch2_inode_peek_snapshot(trans, &dir_iter, dir_u, dir,
-				     snapshot, BTREE_ITER_intent));
+				     dir_snapshot, BTREE_ITER_intent));
+	u32 child_snapshot = dir_snapshot;
 
 	if (!(flags & BCH_CREATE_SNAPSHOT)) {
 		/* Normal create path - allocate a new inode: */
@@ -62,7 +63,7 @@ int bch2_create_trans(struct btree_trans *trans,
 		if (flags & BCH_CREATE_TMPFILE)
 			new_inode->bi_flags |= BCH_INODE_unlinked;
 
-		try(bch2_inode_create(trans, &inode_iter, new_inode, snapshot, cpu,
+		try(bch2_inode_create(trans, &inode_iter, new_inode, dir_snapshot, cpu,
 				      inode_opt_get(c, dir_u, inodes_32bit)));
 
 		snapshot_src = (subvol_inum) { 0 };
@@ -102,12 +103,12 @@ int bch2_create_trans(struct btree_trans *trans,
 	dir_target	= new_inode->bi_inum;
 
 	if (flags & BCH_CREATE_SUBVOL) {
-		u32 new_subvol, dir_snapshot;
+		u32 new_subvol;
 
 		try(bch2_subvolume_create(trans, new_inode->bi_inum,
 					  dir.subvol,
 					  snapshot_src.subvol,
-					  &new_subvol, &snapshot,
+					  &new_subvol, &child_snapshot,
 					  (flags & BCH_CREATE_SNAPSHOT_RO) != 0));
 
 		new_inode->bi_parent_subvol	= dir.subvol;
@@ -136,12 +137,12 @@ int bch2_create_trans(struct btree_trans *trans,
 		dir_u->bi_mtime = dir_u->bi_ctime = now;
 
 		u64 dir_offset;
-		try(bch2_dirent_create(trans, dir, dir_u,
-				       dir_type,
-				       name,
-				       dir_target,
-				       &dir_offset,
-				       STR_HASH_must_create));
+		try(bch2_dirent_create_snapshot(trans, dir.subvol, dir_snapshot, dir_u,
+						dir_type,
+						name,
+						dir_target,
+						&dir_offset,
+						STR_HASH_must_create));
 		try(bch2_inode_write(trans, &dir_iter, dir_u));
 
 		new_inode->bi_dir		= dir_u->bi_inum;
@@ -160,7 +161,7 @@ int bch2_create_trans(struct btree_trans *trans,
 		new_inode->bi_depth = dir_u->bi_depth + 1;
 
 	inode_iter.flags &= ~BTREE_ITER_all_snapshots;
-	bch2_btree_iter_set_snapshot(&inode_iter, snapshot);
+	bch2_btree_iter_set_snapshot(&inode_iter, child_snapshot);
 
 	try(bch2_btree_iter_traverse(&inode_iter));
 	try(bch2_inode_write(trans, &inode_iter, new_inode));
