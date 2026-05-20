@@ -271,6 +271,15 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 
+# dkms sizes its build parallelism from nproc, ignoring the -j passed to
+# `make dkms-reload`. In a memory-constrained VM — ktest runs tests in
+# VMs with as little as 4G — that OOMs while compiling debug-enabled
+# bcachefs. Budget 512M per compile job, and never exceed nproc (dkms's
+# own default).
+DKMS_PARALLEL_JOBS:=$(shell \
+	j=$$(( $$(awk '/^MemTotal:/{print $$2}' /proc/meminfo) / 1024 / 512 )); \
+	c=$$(nproc); [ $$c -lt $$j ] && j=$$c; [ $$j -lt 1 ] && j=1; echo $$j)
+
 # Build the kernel module via DKMS and load it. Must run as root
 # (sudo make dkms-reload). Idempotent — re-running rebuilds + reloads.
 .PHONY: dkms-reload
@@ -282,7 +291,7 @@ dkms-reload: all
 	@echo "    [DKMS]   bcachefs/$(VERSION)"
 	$(Q)dkms remove  -m bcachefs -v $(VERSION) --all 2>/dev/null || true
 	$(Q)dkms add     -m bcachefs -v $(VERSION)
-	$(Q)dkms build   -m bcachefs -v $(VERSION)
+	$(Q)dkms build   -m bcachefs -v $(VERSION) -j $(DKMS_PARALLEL_JOBS)
 	$(Q)dkms install -m bcachefs -v $(VERSION)
 	$(Q)modprobe -r bcachefs 2>/dev/null || true
 	$(Q)modprobe bcachefs
