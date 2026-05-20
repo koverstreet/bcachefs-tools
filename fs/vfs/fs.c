@@ -511,7 +511,8 @@ __bch2_vfs_inode_get_trans(struct btree_trans *trans, subvol_inum inum, const ch
 	struct bch_inode_unpacked inode_u;
 	struct bch_subvolume subvol;
 	int ret = bch2_subvolume_get(trans, inum.subvol, warn, &subvol) ?:
-		__bch2_inode_find_by_inum_trans(trans, inum, &inode_u, warn) ?:
+		bch2_inode_find_by_inum_snapshot2(trans, inum, le32_to_cpu(subvol.snapshot),
+						  &inode_u, 0, warn) ?:
 		PTR_ERR_OR_ZERO(inode = bch2_inode_hash_init_insert(trans, inum, &inode_u, &subvol));
 
 	return ret ? ERR_PTR(ret) : inode;
