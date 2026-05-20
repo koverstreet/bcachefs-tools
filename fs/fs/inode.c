@@ -377,28 +377,7 @@ int __bch2_inode_peek(struct btree_trans *trans,
 {
 	u32 snapshot;
 	try(__bch2_subvolume_get_snapshot(trans, inum.subvol, &snapshot, warn));
-
-	bch2_trans_iter_init(trans, iter, BTREE_ID_inodes, SPOS(0, inum.inum, snapshot),
-			     flags|BTREE_ITER_cached);
-	struct bkey_s_c k = bch2_btree_iter_peek_slot(iter);
-	int ret = bkey_err(k);
-	if (ret)
-		goto err;
-
-	ret = bkey_is_inode(k.k) ? 0 : bch_err_throw(trans->c, ENOENT_inode);
-	if (ret)
-		goto err;
-
-	ret = bch2_inode_unpack(k, inode);
-	if (ret)
-		goto err;
-
-	return 0;
-err:
-	if (warn)
-		bch_err_msg(trans->c, ret, "%s(): looking up inum %llu:%llu:",
-			    warn, inum.subvol, inum.inum);
-	return ret;
+	return __bch2_inode_peek_snapshot(trans, iter, inode, inum, snapshot, flags, warn);
 }
 
 int bch2_inode_find_by_inum_snapshot(struct btree_trans *trans,
@@ -413,6 +392,16 @@ int bch2_inode_find_by_inum_snapshot(struct btree_trans *trans,
 	return bkey_is_inode(k.k)
 		? bch2_inode_unpack(k, inode)
 		: -BCH_ERR_ENOENT_inode;
+}
+
+int bch2_inode_find_by_inum_snapshot2(struct btree_trans *trans,
+				      subvol_inum inum, u32 snapshot,
+				      struct bch_inode_unpacked *inode,
+				      unsigned flags,
+				      const char *warn)
+{
+	CLASS(btree_iter_uninit, iter)(trans);
+	return __bch2_inode_peek_snapshot(trans, &iter, inode, inum, snapshot, 0, warn);
 }
 
 int __bch2_inode_find_by_inum_trans(struct btree_trans *trans,

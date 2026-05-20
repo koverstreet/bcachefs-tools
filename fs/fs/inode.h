@@ -117,8 +117,7 @@ void bch2_inode_unpacked_to_text(struct printbuf *, struct bch_inode_unpacked *)
 int __bch2_inode_peek_snapshot(struct btree_trans *,
 			       struct btree_iter *,
 			       struct bch_inode_unpacked *,
-			       subvol_inum, u32,
-			       unsigned, const char *);
+			       subvol_inum, u32, unsigned, const char *);
 
 #define bch2_inode_peek_snapshot(_trans, _iter, _inode, _inum, _snapshot, _flags)	\
 	__bch2_inode_peek_snapshot(_trans, _iter, _inode, _inum, _snapshot, _flags, __func__)
@@ -139,6 +138,9 @@ static inline int bch2_inode_peek_nowarn(struct btree_trans *trans,
 
 int bch2_inode_find_by_inum_snapshot(struct btree_trans *, u64, u32,
 				     struct bch_inode_unpacked *, unsigned);
+int bch2_inode_find_by_inum_snapshot2(struct btree_trans *, subvol_inum, u32,
+				      struct bch_inode_unpacked *,
+				      unsigned, const char *);
 
 int __bch2_inode_find_by_inum_trans(struct btree_trans *, subvol_inum,
 				    struct bch_inode_unpacked *, const char *);
