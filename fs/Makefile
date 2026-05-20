@@ -4,6 +4,15 @@ ifdef BCACHEFS_DKMS
 	# Enable other features here?
 endif
 
+# DKMS / external module builds: bcachefs isn't in the host kernel's
+# .config, so CONFIG_BCACHEFS_DEBUG never gets set the normal way. ktest
+# sets BCACHEFS_DEBUG=1 in env when it wants the debug build (see
+# tests/fs/bcachefs/bcachefs-test-libs.sh); forward it as a -D for the
+# module compile.
+ifdef BCACHEFS_DEBUG
+	subdir-ccflags-y += -DCONFIG_BCACHEFS_DEBUG=1
+endif
+
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
