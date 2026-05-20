@@ -13,6 +13,12 @@ ifdef BCACHEFS_DEBUG
 	subdir-ccflags-y += -DCONFIG_BCACHEFS_DEBUG=1
 endif
 
+# Likewise for transaction-restart injection — ktest sets this in env
+# for the restart-injection test variant.
+ifdef BCACHEFS_INJECT_TRANSACTION_RESTARTS
+	subdir-ccflags-y += -DCONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS=1
+endif
+
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
 bcachefs-y		:=			\
