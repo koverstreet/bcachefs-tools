@@ -84,13 +84,13 @@ struct bkey_i_dirent *bch2_dirent_create_key(struct btree_trans *,
 				const struct bch_hash_info *, subvol_inum, u8,
 				const struct qstr *, const struct qstr *, u64);
 
-int bch2_dirent_create_snapshot(struct btree_trans *, u32, u64, u32,
-			const struct bch_hash_info *, u8,
-			const struct qstr *, u64, u64 *,
-			enum btree_iter_update_trigger_flags);
+int bch2_dirent_create_snapshot(struct btree_trans *, u32, u32,
+				struct bch_inode_unpacked *dir_u,
+				u8, const struct qstr *, u64, u64 *,
+				enum btree_iter_update_trigger_flags);
 int bch2_dirent_create(struct btree_trans *, subvol_inum,
-		       const struct bch_hash_info *, u8,
-		       const struct qstr *, u64, u64 *,
+		       struct bch_inode_unpacked *dir_u,
+		       u8, const struct qstr *, u64, u64 *,
 		       enum btree_iter_update_trigger_flags);
 
 static inline unsigned vfs_d_type(unsigned type)

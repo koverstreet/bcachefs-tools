@@ -301,6 +301,7 @@ struct bkey_i_dirent *bch2_dirent_create_key(struct btree_trans *trans,
 
 	bkey_dirent_init(&dirent->k_i);
 	dirent->k.u64s = BKEY_U64s_MAX;
+	dirent->k.p.inode = dir.inum;
 
 	if (type != DT_SUBVOL) {
 		dirent->v.d_inum = cpu_to_le64(dst);
@@ -321,36 +322,39 @@ struct bkey_i_dirent *bch2_dirent_create_key(struct btree_trans *trans,
 }
 
 int bch2_dirent_create_snapshot(struct btree_trans *trans,
-			u32 dir_subvol, u64 dir, u32 snapshot,
-			const struct bch_hash_info *hash_info,
+			u32 dir_subvol, u32 snapshot,
+			struct bch_inode_unpacked *dir_u,
 			u8 type, const struct qstr *name, u64 dst_inum,
 			u64 *dir_offset,
 			enum btree_iter_update_trigger_flags flags)
 {
-	subvol_inum dir_inum = { .subvol = dir_subvol, .inum = dir };
+	subvol_inum dir = { .subvol = dir_subvol, .inum = dir_u->bi_inum };
+
+	struct bch_hash_info dir_hash;
+	try(bch2_hash_info_init(trans->c, dir_u, &dir_hash));
 
 	struct bkey_i_dirent *dirent =
-		errptr_try(bch2_dirent_create_key(trans, hash_info, dir_inum, type, name, NULL, dst_inum));
+		errptr_try(bch2_dirent_create_key(trans, &dir_hash, dir, type, name, NULL, dst_inum));
 
-	dirent->k.p.inode	= dir;
-	dirent->k.p.snapshot	= snapshot;
-
-	int ret = bch2_hash_set_in_snapshot(trans, bch2_dirent_hash_desc, hash_info,
-					    dir_inum, snapshot, &dirent->k_i, flags);
+	int ret = bch2_hash_set_in_snapshot(trans, bch2_dirent_hash_desc, &dir_hash,
+					    dir, snapshot, &dirent->k_i, flags);
 	*dir_offset = dirent->k.p.offset;
 	return ret;
 }
 
 int bch2_dirent_create(struct btree_trans *trans, subvol_inum dir,
-		       const struct bch_hash_info *hash_info,
+		       struct bch_inode_unpacked *dir_u,
 		       u8 type, const struct qstr *name, u64 dst_inum,
 		       u64 *dir_offset,
 		       enum btree_iter_update_trigger_flags flags)
 {
-	struct bkey_i_dirent *dirent =
-		errptr_try(bch2_dirent_create_key(trans, hash_info, dir, type, name, NULL, dst_inum));
+	struct bch_hash_info dir_hash;
+	try(bch2_hash_info_init(trans->c, dir_u, &dir_hash));
 
-	int ret = bch2_hash_set(trans, bch2_dirent_hash_desc, hash_info, dir, &dirent->k_i, flags);
+	struct bkey_i_dirent *dirent =
+		errptr_try(bch2_dirent_create_key(trans, &dir_hash, dir, type, name, NULL, dst_inum));
+
+	int ret = bch2_hash_set(trans, bch2_dirent_hash_desc, &dir_hash, dir, &dirent->k_i, flags);
 	*dir_offset = dirent->k.p.offset;
 	return ret;
 }

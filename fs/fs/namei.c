@@ -132,19 +132,16 @@ int bch2_create_trans(struct btree_trans *trans,
 	}
 
 	if (!(flags & BCH_CREATE_TMPFILE)) {
-		struct bch_hash_info dir_hash;
-		try(bch2_hash_info_init(c, dir_u, &dir_hash));
-
 		dir_u->bi_nlink += is_subdir_for_nlink(new_inode);
 		dir_u->bi_mtime = dir_u->bi_ctime = now;
 
 		u64 dir_offset;
-		try(bch2_dirent_create(trans, dir, &dir_hash,
-					   dir_type,
-					   name,
-					   dir_target,
-					   &dir_offset,
-					   STR_HASH_must_create));
+		try(bch2_dirent_create(trans, dir, dir_u,
+				       dir_type,
+				       name,
+				       dir_target,
+				       &dir_offset,
+				       STR_HASH_must_create));
 		try(bch2_inode_write(trans, &dir_iter, dir_u));
 
 		new_inode->bi_dir		= dir_u->bi_inum;
@@ -197,10 +194,7 @@ int bch2_link_trans(struct btree_trans *trans,
 
 	dir_u->bi_mtime = dir_u->bi_ctime = now;
 
-	struct bch_hash_info dir_hash;
-	try(bch2_hash_info_init(c, dir_u, &dir_hash));
-
-	try(bch2_dirent_create(trans, dir, &dir_hash,
+	try(bch2_dirent_create(trans, dir, dir_u,
 			       mode_to_type(inode_u->bi_mode),
 			       name, inum.inum,
 			       &dir_offset,

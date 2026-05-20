@@ -115,7 +115,6 @@ static struct qstr lostfound_str = QSTR("lost+found");
 static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 			    subvol_inum root_inum,
 			    struct bch_inode_unpacked *root_inode,
-			    struct bch_hash_info *root_hash_info,
 			    struct bch_inode_unpacked *lostfound)
 {
 	struct bch_fs *c = trans->c;
@@ -151,7 +150,7 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	try(bch2_btree_iter_traverse(&lostfound_iter));
 
 	try(bch2_dirent_create_snapshot(trans,
-				0, root_inode->bi_inum, snapshot, root_hash_info,
+				0, snapshot, root_inode,
 				mode_to_type(lostfound->bi_mode),
 				&lostfound_str,
 				lostfound->bi_inum,
@@ -219,8 +218,7 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 		 * We always create lost_found in its own transaction; this will
 		 * return a transaction restart:
 		 */
-		ret = create_lostfound(trans, snapshot_tree, root_inum,
-				       &root_inode, &root_hash_info, lostfound);
+		ret = create_lostfound(trans, snapshot_tree, root_inum, &root_inode, lostfound);
 		bch_err_msg(c, ret, "creating lost+found");
 		return ret;
 	}
@@ -345,16 +343,14 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 
 	try(__bch2_fsck_write_inode(trans, &lostfound));
 
-	struct bch_hash_info dir_hash;
-	try(bch2_hash_info_init(c, &lostfound, &dir_hash));
 	struct qstr name = QSTR(name_buf);
 
 	inode->bi_dir = lostfound.bi_inum;
 
 	ret = bch2_dirent_create_snapshot(trans,
-				inode->bi_parent_subvol, lostfound.bi_inum,
+				inode->bi_parent_subvol,
 				dirent_snapshot,
-				&dir_hash,
+				&lostfound,
 				inode_d_type(inode),
 				&name,
 				inode->bi_subvol ?: inode->bi_inum,
