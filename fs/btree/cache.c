@@ -1118,16 +1118,52 @@ static inline void btree_check_header(struct bch_fs *c, struct btree *b)
 		btree_bad_header(c, b);
 }
 
+noinline __cold
+static void btree_node_reused_trace(struct btree_trans *trans, struct btree_path *path)
+{
+	__event_trace(trans->c, trans_restart_btree_node_reused, buf, ({
+		prt_printf(&buf, "%s\n", trans->fn);
+		bch2_btree_path_to_text(&buf, trans, path - trans->paths, path);
+	}));
+}
+
+noinline
+static void btree_node_mem_ptr_set(struct btree_trans *trans,
+				   struct btree_path *path,
+				   unsigned plevel, struct btree *b)
+{
+	struct btree_path_level *l = &path->l[plevel];
+	bool locked = btree_node_locked(path, plevel);
+	struct bkey_packed *k;
+	struct bch_btree_ptr_v2 *bp;
+
+	if (!bch2_btree_node_relock(trans, path, plevel))
+		return;
+
+	k = bch2_btree_node_iter_peek_all(&l->iter, l->b);
+	EBUG_ON(k->type != KEY_TYPE_btree_ptr_v2);
+
+	bp = (void *) bkeyp_val(&l->b->format, k);
+	bp->mem_ptr = (unsigned long)b;
+
+	if (!locked)
+		btree_node_unlock(trans, path, plevel);
+}
+
 static struct btree *__bch2_btree_node_get(struct btree_trans *trans, struct btree_path *path,
 					   const struct bkey_i *k, unsigned level,
 					   enum six_lock_type lock_type,
-					   enum btree_iter_update_trigger_flags flags,
-					   unsigned long trace_ip)
+					   enum btree_iter_update_trigger_flags flags)
 {
 	struct bch_fs *c = trans->c;
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 	struct btree *b;
 	int ret;
+
+	if (!bch2_btree_node_relock(trans, path, level + 1)) {
+		event_inc_trace_fn(c, trans_restart_btree_node_reused, btree_node_reused_trace(trans, path));
+		return ERR_PTR(btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_node_reused));
+	}
 
 	EBUG_ON(level >= BTREE_MAX_DEPTH);
 retry:
@@ -1154,7 +1190,7 @@ retry:
 		if (btree_node_read_locked(path, level + 1))
 			btree_node_unlock(trans, path, level + 1);
 
-		ret = btree_node_lock(trans, path, &b->c, level, lock_type, trace_ip);
+		ret = btree_node_lock(trans, path, &b->c, level, lock_type);
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			return ERR_PTR(ret);
 
@@ -1167,10 +1203,7 @@ retry:
 			if (bch2_btree_node_relock(trans, path, level + 1))
 				goto retry;
 
-			event_inc_trace(c, trans_restart_btree_node_reused, buf, ({
-				prt_printf(&buf, "%s\n", trans->fn);
-				bch2_btree_path_to_text(&buf, trans, path - trans->paths, path);
-			}));
+			event_inc_trace_fn(c, trans_restart_btree_node_reused, btree_node_reused_trace(trans, path));
 			return ERR_PTR(btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_node_reused));
 		}
 
@@ -1200,6 +1233,11 @@ retry:
 			goto retry;
 	}
 
+	if (unlikely(btree_node_read_error(b))) {
+		six_unlock_type(&b->c.lock, lock_type);
+		return ERR_PTR(-BCH_ERR_btree_node_read_err_cached);
+	}
+
 	prefetch(b->aux_data);
 
 	for_each_bset(b, t) {
@@ -1210,14 +1248,14 @@ retry:
 		prefetch(p + L1_CACHE_BYTES * 2);
 	}
 
-	if (unlikely(btree_node_read_error(b))) {
-		six_unlock_type(&b->c.lock, lock_type);
-		return ERR_PTR(-BCH_ERR_btree_node_read_err_cached);
-	}
-
 	EBUG_ON(b->c.btree_id != path->btree_id);
 	EBUG_ON(BTREE_NODE_LEVEL(b->data) != level);
 	btree_check_header(c, b);
+
+	if (unlikely(b != btree_node_mem_ptr(&trans->btree_path_down)) &&
+	    likely(!trans->journal_replay_not_finished &&
+		   trans->btree_path_down.k.type == KEY_TYPE_btree_ptr_v2))
+		btree_node_mem_ptr_set(trans, path, level + 1, b);
 
 	return b;
 }
@@ -1241,57 +1279,41 @@ retry:
 struct btree *bch2_btree_node_get(struct btree_trans *trans, struct btree_path *path,
 				  const struct bkey_i *k, unsigned level,
 				  enum six_lock_type lock_type,
-				  enum btree_iter_update_trigger_flags flags,
-				  unsigned long trace_ip)
+				  enum btree_iter_update_trigger_flags flags)
 {
-	struct bch_fs *c = trans->c;
-	struct btree *b;
-	int ret;
-
 	EBUG_ON(level >= BTREE_MAX_DEPTH);
 	EBUG_ON(level + 1 != path->level);
 
-	b = btree_node_mem_ptr(k);
+	struct btree *b = btree_node_mem_ptr(k);
 	prefetch(&b->c.lock);
-
 
 	/*
 	 * Check b->hash_val _before_ calling btree_node_lock() - this might not
 	 * be the node we want anymore, and trying to lock the wrong node could
 	 * cause an unneccessary transaction restart:
 	 */
-	if (unlikely(!c->opts.btree_node_mem_ptr_optimization ||
-		     !b ||
-		     b->hash_val != btree_ptr_hash_val(k)))
-		return __bch2_btree_node_get(trans, path, k, level, lock_type, flags, trace_ip);
+	if (unlikely(!b || b->hash_val != btree_ptr_hash_val(k)))
+		return __bch2_btree_node_get(trans, path, k, level, lock_type, flags);
 
 	if (btree_node_read_locked(path, level + 1))
 		btree_node_unlock(trans, path, level + 1);
 
-	ret = btree_node_lock(trans, path, &b->c, level, lock_type, trace_ip);
-	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+	int ret = btree_node_lock(trans, path, &b->c, level, lock_type);
+	if (ret)
 		return ERR_PTR(ret);
-
-	BUG_ON(ret);
 
 	if (unlikely(b->hash_val != btree_ptr_hash_val(k) ||
 		     b->c.level != level ||
-		     race_fault())) {
+		     race_fault() ||
+		     btree_node_read_in_flight(b) ||
+		     btree_node_read_error(b))) {
 		six_unlock_type(&b->c.lock, lock_type);
-		if (bch2_btree_node_relock(trans, path, level + 1))
-			return __bch2_btree_node_get(trans, path, k, level, lock_type, flags, trace_ip);
-
-		event_inc_trace(c, trans_restart_btree_node_reused, buf, ({
-			prt_printf(&buf, "%s\n", trans->fn);
-			bch2_btree_path_to_text(&buf, trans, path - trans->paths, path);
-		}));
-		return ERR_PTR(btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_node_reused));
+		return __bch2_btree_node_get(trans, path, k, level, lock_type, flags);
 	}
 
-	if (unlikely(btree_node_read_in_flight(b))) {
-		six_unlock_type(&b->c.lock, lock_type);
-		return __bch2_btree_node_get(trans, path, k, level, lock_type, flags, trace_ip);
-	}
+	/* avoid atomic set bit if it's not needed: */
+	if (!btree_node_accessed(b))
+		set_btree_node_accessed(b);
 
 	prefetch(b->aux_data);
 
@@ -1303,18 +1325,9 @@ struct btree *bch2_btree_node_get(struct btree_trans *trans, struct btree_path *
 		prefetch(p + L1_CACHE_BYTES * 2);
 	}
 
-	/* avoid atomic set bit if it's not needed: */
-	if (!btree_node_accessed(b))
-		set_btree_node_accessed(b);
-
-	if (unlikely(btree_node_read_error(b))) {
-		six_unlock_type(&b->c.lock, lock_type);
-		return ERR_PTR(-BCH_ERR_btree_node_read_err_cached);
-	}
-
 	EBUG_ON(b->c.btree_id != path->btree_id);
 	EBUG_ON(BTREE_NODE_LEVEL(b->data) != level);
-	btree_check_header(c, b);
+	btree_check_header(trans->c, b);
 
 	return b;
 }
@@ -1332,11 +1345,9 @@ struct btree *bch2_btree_node_get_noiter(struct btree_trans *trans,
 
 	EBUG_ON(level >= BTREE_MAX_DEPTH);
 
-	if (c->opts.btree_node_mem_ptr_optimization) {
-		b = btree_node_mem_ptr(k);
-		if (b)
-			goto lock_node;
-	}
+	b = btree_node_mem_ptr(k);
+	if (b)
+		goto lock_node;
 retry:
 	b = btree_cache_find(bc, k);
 	if (unlikely(!b)) {

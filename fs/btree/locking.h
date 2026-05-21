@@ -330,8 +330,7 @@ static inline int btree_node_lock(struct btree_trans *trans,
 			struct btree_path *path,
 			struct btree_bkey_cached_common *b,
 			unsigned level,
-			enum six_lock_type type,
-			unsigned long ip)
+			enum six_lock_type type)
 {
 	int ret = 0;
 
@@ -368,7 +367,7 @@ bch2_btree_node_lock_with_path(struct btree_trans *trans,
 				b->btree_id, b->level, btree_node_pos(b), b->cached);
 
 	struct btree_path *path = trans->paths + path_idx;
-	int ret = btree_node_lock(trans, path, b, b->level, type, _THIS_IP_);
+	int ret = btree_node_lock(trans, path, b, b->level, type);
 	if (ret) {
 		bch2_path_put(trans, path_idx, true);
 		return ret;

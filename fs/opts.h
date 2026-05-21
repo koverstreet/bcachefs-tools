@@ -251,11 +251,6 @@ enum fsck_err_opts {
 	  OPT_UINT(0, 8),						\
 	  BCH_SB_SHARD_INUMS_NBITS,	0,				\
 	  NULL,		"Shard new inode numbers by CPU id")		\
-	x(btree_node_mem_ptr_optimization, u8,				\
-	  OPT_FS|OPT_MOUNT|OPT_RUNTIME|OPT_NODOC,			\
-	  OPT_BOOL(),							\
-	  BCH2_NO_SB_OPT,		true,				\
-	  NULL,		"Stash pointer to in memory btree node in btree ptr")\
 	x(gc_reserve_percent,		u8,				\
 	  OPT_FS|OPT_FORMAT|OPT_MOUNT|OPT_RUNTIME,			\
 	  OPT_UINT(5, 21),						\

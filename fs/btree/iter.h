@@ -262,10 +262,8 @@ bch2_btree_path_set_pos(struct btree_trans *trans,
 		: path;
 }
 
-int __must_check bch2_btree_path_traverse_one(struct btree_trans *,
-					      btree_path_idx_t,
-					      enum btree_iter_update_trigger_flags,
-					      unsigned long);
+int __must_check bch2_btree_path_traverse_one(struct btree_trans *, btree_path_idx_t,
+					      enum btree_iter_update_trigger_flags);
 
 static inline void bch2_trans_verify_not_unlocked_or_in_restart(struct btree_trans *);
 
@@ -278,7 +276,7 @@ static inline int __must_check bch2_btree_path_traverse(struct btree_trans *tran
 	if (trans->paths[path].uptodate < BTREE_ITER_NEED_RELOCK)
 		return 0;
 
-	return bch2_btree_path_traverse_one(trans, path, flags, _RET_IP_);
+	return bch2_btree_path_traverse_one(trans, path, flags);
 }
 
 btree_path_idx_t bch2_path_get(struct btree_trans *,
