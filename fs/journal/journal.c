@@ -379,13 +379,11 @@ void bch2_journal_halt(struct journal *j)
 	bch2_journal_halt_locked(j);
 }
 
-static bool journal_entry_close_locked(struct journal *j)
+static void journal_entry_close_locked(struct journal *j)
 {
-	bool ret = !journal_entry_is_open(j) ||
-		fifo_used(&j->in_flight) == 1;
-
 	/* Don't close it yet if we already have a write in flight: */
-	if (ret)
+	if (journal_entry_is_open(j) &&
+	    fifo_used(&j->in_flight) == 1)
 		__journal_entry_close(j, JOURNAL_ENTRY_CLOSED_VAL, true);
 	else if (nr_unwritten_journal_entries(j)) {
 		struct journal_buf *buf = journal_cur_buf(j);
@@ -395,14 +393,12 @@ static bool journal_entry_close_locked(struct journal *j)
 			buf->expires = jiffies;
 		}
 	}
-
-	return ret;
 }
 
-bool bch2_journal_entry_close(struct journal *j)
+void bch2_journal_entry_close(struct journal *j)
 {
 	guard(spinlock)(&j->lock);
-	return journal_entry_close_locked(j);
+	journal_entry_close_locked(j);
 }
 
 /*
