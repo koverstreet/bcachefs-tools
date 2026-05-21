@@ -33,6 +33,7 @@ int bch2_create_trans(struct btree_trans *trans,
 		      subvol_inum dir,
 		      struct bch_inode_unpacked *dir_u,
 		      struct bch_inode_unpacked *new_inode,
+		      struct bch_subvolume *new_subvol,
 		      const struct qstr *name,
 		      uid_t uid, gid_t gid, umode_t mode, dev_t rdev,
 		      struct posix_acl *default_acl,
@@ -49,12 +50,16 @@ int bch2_create_trans(struct btree_trans *trans,
 	u64 dir_target;
 	unsigned dir_type = mode_to_type(mode);
 
-	u32 dir_snapshot;
-	try(bch2_subvol_is_ro_trans(trans, dir.subvol, &dir_snapshot));
+	try(bch2_subvolume_get(trans, dir.subvol, true, new_subvol));
+	if (BCH_SUBVOLUME_RO(new_subvol) ||
+	    BCH_SUBVOLUME_UNLINKED(new_subvol))
+		return -EROFS;
+
+	u32 dir_snapshot = le32_to_cpu(new_subvol->snapshot);
+	u32 child_snapshot = dir_snapshot;
 
 	try(bch2_inode_peek_snapshot(trans, &dir_iter, dir_u, dir,
 				     dir_snapshot, BTREE_ITER_intent));
-	u32 child_snapshot = dir_snapshot;
 
 	if (!(flags & BCH_CREATE_SNAPSHOT)) {
 		/* Normal create path - allocate a new inode: */
@@ -103,18 +108,19 @@ int bch2_create_trans(struct btree_trans *trans,
 	dir_target	= new_inode->bi_inum;
 
 	if (flags & BCH_CREATE_SUBVOL) {
-		u32 new_subvol;
+		u32 new_subvolid;
 
 		try(bch2_subvolume_create(trans, new_inode->bi_inum,
 					  dir.subvol,
 					  snapshot_src.subvol,
-					  &new_subvol, &child_snapshot,
+					  &new_subvolid, &child_snapshot,
+					  new_subvol,
 					  (flags & BCH_CREATE_SNAPSHOT_RO) != 0));
 
 		new_inode->bi_parent_subvol	= dir.subvol;
-		new_inode->bi_subvol		= new_subvol;
-		new_inum.subvol			= new_subvol;
-		dir_target			= new_subvol;
+		new_inode->bi_subvol		= new_subvolid;
+		new_inum.subvol			= new_subvolid;
+		dir_target			= new_subvolid;
 		dir_type			= DT_SUBVOL;
 
 		try(bch2_subvolume_get_snapshot(trans, dir.subvol, &dir_snapshot));

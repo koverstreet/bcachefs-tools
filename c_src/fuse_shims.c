@@ -119,11 +119,12 @@ int rust_fuse_create(struct bch_fs *c, subvol_inum dir,
 	gid_t gid = 0;
 
 	bch2_inode_init_early(c, new_inode);
+	struct bch_subvolume new_subvol;
 
 	return bch2_trans_commit_do(c, NULL, NULL, 0,
 		bch2_create_trans(trans,
 			dir, &dir_u,
-			new_inode, &qstr,
+			new_inode, &new_subvol, &qstr,
 			uid, gid, mode, rdev, NULL, NULL,
 			(subvol_inum) { 0 }, 0));
 }
