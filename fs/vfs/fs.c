@@ -588,7 +588,7 @@ retry:
 	bch2_trans_begin(trans);
 
 	ret   = bch2_create_trans(trans,
-				  inode_inum(dir), &dir_u, &inode_u,
+				  inode_inum(dir), &dir_u, &inode_u, &subvol,
 				  !(flags & BCH_CREATE_TMPFILE)
 				  ? &dentry->d_name : NULL,
 				  from_kuid(i_user_ns(&dir->v), kuid),
@@ -603,8 +603,7 @@ retry:
 	inum.subvol = inode_u.bi_subvol ?: dir->ei_inum.subvol;
 	inum.inum = inode_u.bi_inum;
 
-	ret   = bch2_subvolume_get(trans, inum.subvol, true, &subvol) ?:
-		bch2_trans_commit(trans, NULL, NULL, 0);
+	ret = bch2_trans_commit(trans, NULL, NULL, 0);
 	if (unlikely(ret)) {
 		bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, -1,
 				KEY_TYPE_QUOTA_WARN);
@@ -985,9 +984,10 @@ retry:
 			goto err_tx_restart;
 		bch2_inode_init_early(c, whiteout_inode_u);
 
+		struct bch_subvolume new_subvol;
 		ret = bch2_create_trans(trans,
 					inode_inum(src_dir), &src_dir_u,
-					whiteout_inode_u,
+					whiteout_inode_u, &new_subvol,
 					&src_dentry->d_name,
 					from_kuid(i_user_ns(&src_dir->v), current_fsuid()),
 					from_kgid(i_user_ns(&src_dir->v), current_fsgid()),

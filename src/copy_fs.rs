@@ -281,6 +281,7 @@ fn create_or_update_file(
     };
 
     let mut child_inode: c::bch_inode_unpacked = Default::default();
+    let mut child_subvol : c::bch_subvolume = Default::default();
 
     if errcode::ret_to_result(ret as i32).is_ok() {
         // Already exists — update
@@ -316,6 +317,7 @@ fn create_or_update_file(
                         dir_inum,
                         dir,
                         &mut child_inode,
+                        &mut child_subvol,
                         &qname,
                         uid,
                         gid,

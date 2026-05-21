@@ -76,7 +76,8 @@ bch2_btree_iter_peek_in_subvolume_max_type(struct btree_iter *iter, struct bpos 
 })
 
 int bch2_subvolume_unlink(struct btree_trans *, u32);
-int bch2_subvolume_create(struct btree_trans *, u64, u32, u32, u32 *, u32 *, bool);
+int bch2_subvolume_create(struct btree_trans *, u64, u32, u32, u32 *, u32 *,
+			  struct bch_subvolume *, bool);
 
 int bch2_initialize_subvolumes(struct bch_fs *);
 int bch2_fs_upgrade_for_subvolumes(struct bch_fs *);

@@ -546,6 +546,7 @@ int bch2_subvolume_create(struct btree_trans *trans, u64 inode,
 			  u32 src_subvolid,
 			  u32 *new_subvolid,
 			  u32 *new_snapshotid,
+			  struct bch_subvolume *new_subvol_out,
 			  bool ro)
 {
 	struct bch_fs *c = trans->c;
@@ -600,6 +601,7 @@ int bch2_subvolume_create(struct btree_trans *trans, u64 inode,
 
 	*new_subvolid	= new_subvol->k.p.offset;
 	*new_snapshotid	= new_nodes[0];
+	*new_subvol_out	= new_subvol->v;
 	return 0;
 }
 
