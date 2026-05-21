@@ -36,10 +36,52 @@
 #define FSOP_GOING_FLAGS_LOGFLUSH	0x1	/* flush log but not data */
 #define FSOP_GOING_FLAGS_NOLOGFLUSH	0x2	/* don't flush log nor data */
 
+/*
+ * The VFS gained start_removing_user_path_at()/end_removing_path() in 6.18.
+ * The create-side helpers map straight onto user_path_create()/
+ * done_path_create(), which already bundle the mount write ref — but the
+ * removal side needs a real wrapper: user_path_locked_at() only does the
+ * locked lookup, leaving the write ref to the caller.
+ */
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,18,0)
 #define start_creating_user_path	user_path_create
 #define end_creating_path		done_path_create
-#define start_removing_user_path_at	user_path_locked_at
+#define end_removing_path		done_path_create
+
+static inline struct dentry *
+start_removing_user_path_at(int dfd, const char __user *name, struct path *path)
+{
+	struct dentry *victim = user_path_locked_at(dfd, name, path);
+	if (IS_ERR(victim))
+		return victim;
+
+	struct inode *dir = path->dentry->d_inode;
+
+	/*
+	 * sb_writers nests outside i_rwsem: drop the parent lock that
+	 * user_path_locked_at() took, acquire the write ref, relock, and
+	 * revalidate the victim across the unlocked window. (>=6.18's
+	 * start_removing_user_path_at() takes the write ref before the
+	 * locked lookup and so has no such window.)
+	 */
+	inode_unlock(dir);
+	int ret = mnt_want_write(path->mnt);
+	inode_lock(dir);
+
+	if (!ret && (d_unhashed(victim) || victim->d_parent != path->dentry)) {
+		mnt_drop_write(path->mnt);
+		ret = -ENOENT;
+	}
+
+	if (ret) {
+		inode_unlock(dir);
+		dput(victim);
+		path_put(path);
+		return ERR_PTR(ret);
+	}
+
+	return victim;
+}
 #endif
 
 static int bch2_reinherit_attrs_fn(struct btree_trans *trans,
@@ -368,54 +410,33 @@ static long __bch2_ioctl_subvolume_destroy(struct bch_fs *c, struct file *filp,
 					   struct bch_ioctl_subvolume_v2 arg,
 					   struct printbuf *err)
 {
-	const char __user *name = (void __user *)(unsigned long)arg.dst_ptr;
-	struct path path;
-	struct inode *dir;
-	struct dentry *victim;
 	int ret = 0;
 
 	if (arg.flags)
 		return bch_err_throw(c, EINVAL_subvol_destroy_bad_flags);
 
-	victim = start_removing_user_path_at(arg.dirfd, name, &path);
-	if (IS_ERR(victim))
-		return PTR_ERR(victim);
+	const char __user *name = (void __user *)(unsigned long)arg.dst_ptr;
+	struct path path;
+	struct dentry *victim = errptr_try(start_removing_user_path_at(arg.dirfd, name, &path));
 
-	dir = d_inode(path.dentry);
+	struct inode *dir = d_inode(path.dentry);
 	if (victim->d_sb->s_fs_info != c) {
 		ret = -EXDEV;
 		goto err;
 	}
 
 	/*
-	 * Must acquire sb_writers before inode_lock to match the ordering used
-	 * by the create path (user_path_create → mnt_want_write → inode_lock).
-	 * Drop and reacquire inode_lock around mnt_want_write(), then
-	 * revalidate the victim dentry.
+	 * start_removing_user_path_at() returns with the parent locked and
+	 * the mount write ref held; end_removing_path() drops both.
 	 */
-	inode_unlock(dir);
-	ret = mnt_want_write(path.mnt);
-	inode_lock(dir);
-	if (ret)
-		goto err;
-
-	if (d_unhashed(victim) || victim->d_parent != path.dentry) {
-		ret = -ENOENT;
-		goto err_write;
-	}
-
 	ret =   inode_permission(file_mnt_idmap(filp), d_inode(victim), MAY_WRITE) ?:
 		__bch2_unlink(dir, victim, true);
 	if (!ret) {
 		fsnotify_rmdir(dir, victim);
 		d_invalidate(victim);
 	}
-err_write:
-	mnt_drop_write(path.mnt);
 err:
-	inode_unlock(dir);
-	dput(victim);
-	path_put(&path);
+	end_removing_path(&path, victim);
 	return ret;
 }
 
