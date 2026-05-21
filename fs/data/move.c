@@ -764,7 +764,7 @@ static int evacuate_ec_orphan_pred(struct btree_trans *trans, void *_arg,
 	struct evacuate_ec_orphan_arg *arg = _arg;
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
+	struct extent_ptr_decoded p = {};
 	unsigned ptr_bit = 1;
 
 	data_opts->read_dev = -1;
@@ -813,7 +813,7 @@ static int evacuate_bucket_pred(struct btree_trans *trans, void *_arg,
 	data_opts->read_dev = -1;
 
 	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
+	struct extent_ptr_decoded p = {};
 	unsigned i = 0;
 	bkey_for_each_ptr_decode(k.k, bch2_bkey_ptrs_c(k), p, entry) {
 		if (p.ptr.dev == arg->bucket.inode &&
