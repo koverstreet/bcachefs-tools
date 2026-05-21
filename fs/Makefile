@@ -19,6 +19,11 @@ ifdef BCACHEFS_INJECT_TRANSACTION_RESTARTS
 	subdir-ccflags-y += -DCONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS=1
 endif
 
+# Likewise for the in-kernel unit tests (CONFIG_BCACHEFS_TESTS).
+ifdef BCACHEFS_TESTS
+	subdir-ccflags-y += -DCONFIG_BCACHEFS_TESTS=1
+endif
+
 # Quota is gated by CONFIG_BCACHEFS_QUOTA, which a DKMS build never gets
 # from a .config. Mirror the Kconfig's `default y if QUOTA`: the host
 # kernel's CONFIG_QUOTA reaches the module build via its auto.conf, so
