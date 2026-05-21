@@ -627,6 +627,28 @@ void bch2_btree_node_lock_write_nofail(struct btree_trans *trans,
 	BUG_ON(ret);
 }
 
+int bch2_btree_node_lock_slowpath(struct btree_trans *trans,
+			struct btree_path *path,
+			struct btree_bkey_cached_common *b,
+			unsigned level,
+			enum six_lock_type type)
+{
+	if (!btree_node_lock_increment(trans, b, level, (enum btree_node_locked_type) type)) {
+#ifdef CONFIG_BCACHEFS_LOCK_TIME_STATS
+		u64 contended_start = local_clock();
+#endif
+		int ret = __btree_node_lock_nopath(trans, b, type, false, btree_path_ip_allocated(path), true);
+#ifdef CONFIG_BCACHEFS_LOCK_TIME_STATS
+		__bch2_time_stats_update(&btree_trans_stats(trans)->lock_wait_times,
+					 contended_start, local_clock());
+#endif
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
 /* relock */
 
 static int btree_path_get_locks(struct btree_trans *trans,
