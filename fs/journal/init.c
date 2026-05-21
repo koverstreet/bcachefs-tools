@@ -334,8 +334,6 @@ void bch2_fs_journal_stop(struct journal *j)
 	bch2_journal_reclaim_stop(j);
 	bch2_journal_flush_all_pins(j);
 
-	wait_event(j->wait, bch2_journal_entry_close(j));
-
 	/*
 	 * Always write a new journal entry, to make sure the clock hands are up
 	 * to date (and match the superblock)
