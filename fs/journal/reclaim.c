@@ -1012,7 +1012,7 @@ static int journal_flush_done(struct journal *j, u64 seq_to_flush,
 			return 0;
 		}
 
-	if (seq_to_flush > journal_cur_seq(j))
+	if (seq_to_flush >= journal_cur_seq(j))
 		bch2_journal_entry_close(j);
 
 	/*
