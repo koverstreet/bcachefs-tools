@@ -28,6 +28,7 @@ config BCACHEFS_FS
 config BCACHEFS_QUOTA
 	bool "bcachefs quota support"
 	depends on BCACHEFS_FS
+	default y if QUOTA
 	select QUOTACTL
 
 config BCACHEFS_DEBUG
