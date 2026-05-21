@@ -309,8 +309,7 @@ static inline int btree_node_lock(struct btree_trans *trans,
 			struct btree_path *path,
 			struct btree_bkey_cached_common *b,
 			unsigned level,
-			enum six_lock_type type,
-			unsigned long ip)
+			enum six_lock_type type)
 {
 	EBUG_ON(level >= BTREE_MAX_DEPTH);
 	bch2_trans_verify_not_unlocked_or_in_restart(trans);

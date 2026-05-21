@@ -733,7 +733,7 @@ bch2_btree_node_lock_with_path(struct btree_trans *trans,
 	 * check; we're acquiring on a node the caller already validated. */
 	trans->locking_hash_val = 0;
 	trans->locking_root_id	= -1;
-	int ret = btree_node_lock(trans, path, b, b->level, type, _THIS_IP_);
+	int ret = btree_node_lock(trans, path, b, b->level, type);
 	if (ret) {
 		bch2_path_put(trans, path_idx, true);
 		return ret;

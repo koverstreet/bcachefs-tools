@@ -377,7 +377,7 @@ retry:
 
 	enum six_lock_type lock_want = __btree_lock_want(path, 0);
 
-	try(btree_node_lock(trans, path, (void *) ck, 0, lock_want, _THIS_IP_));
+	try(btree_node_lock(trans, path, (void *) ck, 0, lock_want));
 
 	if (ck->key.btree_id != path->btree_id ||
 	    !bpos_eq(ck->key.pos, path->pos)) {
