@@ -2088,7 +2088,7 @@ long bch2_ioctl_fsck_online(struct bch_fs *c, struct bch_ioctl_fsck_online arg)
 		return bch_err_throw(c, EINVAL_fsck_online_bad_flags);
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	struct bch_opts opts = bch2_opts_empty();
 	if (arg.opts)

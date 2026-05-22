@@ -92,7 +92,7 @@ int bch2_create_trans(struct btree_trans *trans,
 		if (uid &&
 		    !capable(CAP_FOWNER) &&
 		    new_inode->bi_uid != uid)
-			return -EPERM;
+			return bch_err_throw(c, EPERM_non_admin_or_owner);
 
 		flags |= BCH_CREATE_SUBVOL;
 	}

@@ -97,7 +97,7 @@ int bch2_copy_ioctl_err_msg(struct bch_ioctl_err_msg *dst, struct printbuf *src,
 static long bch2_ioctl_disk_add(struct bch_fs *c, struct bch_ioctl_disk arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (arg.flags || arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_add_bad_flags);
@@ -113,7 +113,7 @@ static long bch2_ioctl_disk_add(struct bch_fs *c, struct bch_ioctl_disk arg)
 static long bch2_ioctl_disk_add_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (arg.flags || arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_add_v2_bad_flags);
@@ -128,7 +128,7 @@ static long bch2_ioctl_disk_add_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 ar
 static long bch2_ioctl_disk_remove(struct bch_fs *c, struct bch_ioctl_disk arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -151,7 +151,7 @@ static long bch2_ioctl_disk_remove(struct bch_fs *c, struct bch_ioctl_disk arg)
 static long bch2_ioctl_disk_remove_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -172,7 +172,7 @@ static long bch2_ioctl_disk_remove_v2(struct bch_fs *c, struct bch_ioctl_disk_v2
 static long bch2_ioctl_disk_online(struct bch_fs *c, struct bch_ioctl_disk arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (arg.flags || arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_online_bad_flags);
@@ -189,7 +189,7 @@ static long bch2_ioctl_disk_online(struct bch_fs *c, struct bch_ioctl_disk arg)
 static long bch2_ioctl_disk_online_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (arg.flags || arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_online_v2_bad_flags);
@@ -204,7 +204,7 @@ static long bch2_ioctl_disk_online_v2(struct bch_fs *c, struct bch_ioctl_disk_v2
 static long bch2_ioctl_disk_offline(struct bch_fs *c, struct bch_ioctl_disk arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -227,7 +227,7 @@ static long bch2_ioctl_disk_offline(struct bch_fs *c, struct bch_ioctl_disk arg)
 static long bch2_ioctl_disk_offline_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -249,7 +249,7 @@ static long bch2_ioctl_disk_set_state(struct bch_fs *c,
 			struct bch_ioctl_disk_set_state arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -274,7 +274,7 @@ static long bch2_ioctl_disk_set_state_v2(struct bch_fs *c,
 	CLASS(printbuf, err)();
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -373,7 +373,7 @@ static long bch2_ioctl_data(struct bch_fs *c,
 		return -EROFS;
 
 	if (!capable(CAP_SYS_ADMIN)) {
-		ret = -EPERM;
+		ret = bch_err_throw(c, EPERM_non_admin);
 		goto put_ref;
 	}
 
@@ -546,7 +546,7 @@ static long bch2_ioctl_read_super(struct bch_fs *c,
 	struct bch_sb *sb;
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_BY_INDEX|BCH_READ_DEV)) ||
 	    arg.pad)
@@ -575,7 +575,7 @@ static long bch2_ioctl_disk_get_idx(struct bch_fs *c,
 	dev_t dev = huge_decode_dev(arg.dev);
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (!dev)
 		return bch_err_throw(c, EINVAL_ioctl_disk_get_idx_bad_dev);
@@ -592,7 +592,7 @@ static long bch2_ioctl_disk_resize(struct bch_fs *c,
 				   struct bch_ioctl_disk_resize arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~BCH_BY_INDEX) ||
 	    arg.pad)
@@ -613,7 +613,7 @@ static long bch2_ioctl_disk_resize_v2(struct bch_fs *c,
 				      struct bch_ioctl_disk_resize_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~BCH_BY_INDEX) ||
 	    arg.pad)
@@ -632,7 +632,7 @@ static long bch2_ioctl_disk_resize_journal(struct bch_fs *c,
 				   struct bch_ioctl_disk_resize_journal arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~BCH_BY_INDEX) ||
 	    arg.pad)
@@ -652,7 +652,7 @@ static long bch2_ioctl_disk_resize_journal_v2(struct bch_fs *c,
 				   struct bch_ioctl_disk_resize_journal_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~BCH_BY_INDEX) ||
 	    arg.pad)
