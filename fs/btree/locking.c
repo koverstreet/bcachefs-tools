@@ -572,6 +572,22 @@ out:
 
 int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w)
 {
+	/*
+	 * Full barrier paired with every inserter's spin_unlock(&lock->wait_lock)
+	 * that published their wait_fifo slot. The lockless walker about to run
+	 * reads other trans's ->locking, ->paths, ->nodes_locked, and other locks'
+	 * wait_fifo slots - all written under unrelated wait_locks the walker
+	 * never acquires, so the writers' releases don't pair with anything on
+	 * our side. On weakly-ordered architectures, without smp_mb() here the
+	 * walker can read a stale snapshot and miss a cycle whose closing edge
+	 * was just published on another CPU.
+	 *
+	 * The walker's "cycles missed this pass are caught next" reassurance
+	 * doesn't fire once every cycle participant is parked: nobody issues
+	 * another lock request, so there is no next pass.
+	 */
+	smp_mb();
+
 	struct btree_trans *trans = container_of(w, struct btree_trans, locking_wait);
 
 	return bch2_check_for_deadlock(trans, NULL);
