@@ -372,7 +372,7 @@ int bch2_set_acl(struct mnt_idmap *idmap,
 
 	guard(mutex)(&inode->ei_update_lock);
 	CLASS(btree_trans, trans)(c);
-	return lockrestart_do(trans, __bch2_set_acl(trans, idmap, inode, acl, type));
+	return bch2_err_class(lockrestart_do(trans, __bch2_set_acl(trans, idmap, inode, acl, type)));
 }
 
 int bch2_acl_chmod(struct btree_trans *trans, subvol_inum inum,
