@@ -282,8 +282,12 @@ DKMS_PARALLEL_JOBS:=$(shell \
 
 # Build the kernel module via DKMS and load it. Must run as root
 # (sudo make dkms-reload). Idempotent — re-running rebuilds + reloads.
+#
+# No prerequisites: the recipe runs install_dkms itself, and the DKMS
+# module build uses nothing from the userspace `all` target — depending
+# on it would just force an unnecessary rebuild of the bcachefs binary.
 .PHONY: dkms-reload
-dkms-reload: all
+dkms-reload:
 	@if [ "$$(id -u)" -ne 0 ]; then \
 		echo "dkms-reload: must run as root (sudo make $@)"; exit 1; \
 	fi
