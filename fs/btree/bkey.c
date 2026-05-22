@@ -588,7 +588,7 @@ static bool set_inc_field_lossy(struct pack_state *state, unsigned field, u64 v)
 
 static bool bkey_packed_successor(struct bkey_packed *out,
 				  const struct btree *b,
-				  struct bkey_packed k)
+				  const struct bkey_packed *k)
 {
 	const struct bkey_format *f = &b->format;
 	unsigned nr_key_bits = b->nr_key_bits;
@@ -600,7 +600,7 @@ static bool bkey_packed_successor(struct bkey_packed *out,
 	if (!nr_key_bits)
 		return false;
 
-	*out = k;
+	*out = *k;
 
 	first_bit = high_bit_offset + nr_key_bits - 1;
 	p = nth_word(high_word(f, out), first_bit >> 6);
@@ -612,7 +612,7 @@ static bool bkey_packed_successor(struct bkey_packed *out,
 
 		if ((*p & mask) != mask) {
 			*p += 1ULL << offset;
-			EBUG_ON(bch2_bkey_cmp_packed(b, out, &k) <= 0);
+			EBUG_ON(bch2_bkey_cmp_packed(b, out, k) <= 0);
 			return true;
 		}
 
@@ -718,7 +718,7 @@ enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
 			struct bkey_packed_padded successor;
 
 			BUG_ON(bkey_cmp_left_packed(b, out, &orig) >= 0);
-			BUG_ON(bkey_packed_successor(&successor.k, b, *out) &&
+			BUG_ON(bkey_packed_successor(&successor.k, b, out) &&
 			       bkey_cmp_left_packed(b, &successor.k, &orig) < 0 &&
 			       !bkey_format_has_too_big_fields(f));
 		}
