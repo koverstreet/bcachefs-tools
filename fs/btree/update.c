@@ -31,11 +31,11 @@ static inline int btree_insert_entry_cmp(const struct btree_insert_entry *l,
 		 bpos_cmp(l->k->k.p,	r->k->k.p);
 }
 
-static int __must_check
-bch2_trans_update_by_path(struct btree_trans *, btree_path_idx_t,
-			  struct bkey_i *, unsigned,
-			  enum btree_iter_update_trigger_flags,
-			  unsigned long ip);
+static struct btree_insert_entry *
+btree_trans_update_by_path(struct btree_trans *, btree_path_idx_t,
+			   struct bkey_i *, unsigned,
+			   enum btree_iter_update_trigger_flags,
+			   unsigned long ip);
 
 static noinline int extent_front_merge(struct btree_trans *trans,
 				       struct btree_iter *iter,
@@ -226,9 +226,9 @@ int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
 
 		bch2_cut_front(c, new.k->p, update);
 
-		try(bch2_trans_update_by_path(trans, iter->path, update, update->k.u64s,
-					  BTREE_UPDATE_internal_snapshot_node|
-					  flags, _RET_IP_));
+		btree_trans_update_by_path(trans, iter->path, update, update->k.u64s,
+					   BTREE_UPDATE_internal_snapshot_node|
+					   flags, _RET_IP_);
 	}
 
 	return 0;
@@ -312,12 +312,12 @@ void __update_by_path_trace(struct btree_trans *trans, unsigned overwrite,
 	}));
 }
 
-static inline struct btree_insert_entry *
-__btree_trans_update_by_path(struct btree_trans *trans,
-			     btree_path_idx_t path_idx,
-			     struct bkey_i *k, unsigned k_buf_u64s,
-			     enum btree_iter_update_trigger_flags flags,
-			     unsigned long ip)
+static struct btree_insert_entry *
+btree_trans_update_by_path(struct btree_trans *trans,
+			   btree_path_idx_t path_idx,
+			   struct bkey_i *k, unsigned k_buf_u64s,
+			   enum btree_iter_update_trigger_flags flags,
+			   unsigned long ip)
 {
 	struct bch_fs *c = trans->c;
 	struct btree_insert_entry *i, n;
@@ -433,7 +433,7 @@ static noinline int flush_new_cached_update(struct btree_trans *trans,
 	struct bkey old_k		= i->old_k;
 	const struct bch_val *old_v	= i->old_v;
 
-	i = __btree_trans_update_by_path(trans, iter.path, i->k, i->k_buf_u64s, flags, ip);
+	i = btree_trans_update_by_path(trans, iter.path, i->k, i->k_buf_u64s, flags, ip);
 
 	i->old_k		= old_k;
 	i->old_v		= old_v;
@@ -445,29 +445,6 @@ static inline bool key_cache_needs_flush(struct btree_path *path)
 {
 	struct bkey_cached *ck = (void *) path->l[0].b;
 	return test_bit(BKEY_CACHED_IMMEDIATE_FLUSH, &ck->flags);
-}
-
-static int __must_check
-bch2_trans_update_by_path(struct btree_trans *trans, btree_path_idx_t path_idx,
-			  struct bkey_i *k, unsigned k_buf_u64s,
-			  enum btree_iter_update_trigger_flags flags,
-			  unsigned long ip)
-{
-	struct btree_insert_entry *i = __btree_trans_update_by_path(trans, path_idx, k,
-								    k_buf_u64s, flags, ip);
-
-	/*
-	 * If a key is present in the key cache, it must also exist in the
-	 * btree - this is necessary for cache coherency. When iterating over
-	 * a btree that's cached in the key cache, the btree iter code checks
-	 * the key cache - but the key has to exist in the btree for that to
-	 * work:
-	 */
-	return i->cached && (!i->old_btree_u64s ||
-			     bkey_deleted(&k->k) ||
-			     key_cache_needs_flush(trans->paths + path_idx))
-		? flush_new_cached_update(trans, i, flags, ip)
-		: 0;
 }
 
 static noinline int bch2_trans_update_get_key_cache(struct btree_trans *trans,
@@ -541,7 +518,21 @@ int __must_check bch2_trans_update_ip(struct btree_trans *trans, struct btree_it
 		path_idx = iter->key_cache_path;
 	}
 
-	return bch2_trans_update_by_path(trans, path_idx, k, k_buf_u64s, flags, ip);
+	struct btree_insert_entry *i = btree_trans_update_by_path(trans, path_idx, k,
+								  k_buf_u64s, flags, ip);
+
+	/*
+	 * If a key is present in the key cache, it must also exist in the
+	 * btree - this is necessary for cache coherency. When iterating over
+	 * a btree that's cached in the key cache, the btree iter code checks
+	 * the key cache - but the key has to exist in the btree for that to
+	 * work:
+	 */
+	return i->cached && (!i->old_btree_u64s ||
+			     bkey_deleted(&k->k) ||
+			     key_cache_needs_flush(trans->paths + path_idx))
+		? flush_new_cached_update(trans, i, flags, ip)
+		: 0;
 }
 
 /*
