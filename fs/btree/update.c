@@ -448,8 +448,7 @@ static inline bool key_cache_needs_flush(struct btree_path *path)
 }
 
 static noinline int bch2_trans_update_get_key_cache(struct btree_trans *trans,
-						    struct btree_iter *iter,
-						    struct btree_path *path)
+						    struct btree_iter *iter)
 {
 	struct btree_path *key_cache_path = btree_iter_key_cache_path(trans, iter);
 
@@ -458,12 +457,12 @@ static noinline int bch2_trans_update_get_key_cache(struct btree_trans *trans,
 	    !bpos_eq(key_cache_path->pos, iter->pos)) {
 		if (!iter->key_cache_path)
 			iter->key_cache_path =
-				bch2_path_get(trans, path->btree_id, &path->pos, 1, 0,
+				bch2_path_get(trans, iter->btree_id, &iter->pos, 1, 0,
 					      BTREE_ITER_intent|
 					      BTREE_ITER_cached, _THIS_IP_);
 
 		iter->key_cache_path =
-			bch2_btree_path_set_pos(trans, iter->key_cache_path, &path->pos,
+			bch2_btree_path_set_pos(trans, iter->key_cache_path, &iter->pos,
 						iter->flags & BTREE_ITER_intent,
 						_THIS_IP_);
 
@@ -489,8 +488,6 @@ int __must_check bch2_trans_update_ip(struct btree_trans *trans, struct btree_it
 {
 	kmsan_check_memory(k, bkey_bytes(&k->k));
 
-	btree_path_idx_t path_idx = iter->update_path ?: iter->path;
-
 	if (iter->flags & BTREE_ITER_is_extents)
 		return bch2_trans_update_extent(trans, iter, k, k_buf_u64s, flags);
 
@@ -505,15 +502,26 @@ int __must_check bch2_trans_update_ip(struct btree_trans *trans, struct btree_it
 			k->k.type = KEY_TYPE_whiteout;
 	}
 
+	btree_path_idx_t path_idx = iter->update_path ?: iter->path;
+	struct btree_path *path = trans->paths + path_idx;
+
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG)) {
+		BUG_ON(!bpos_eq(k->k.p, iter->pos));
+		if (!bpos_eq(k->k.p, path->pos)) {
+			BUG_ON(!(iter->flags & BTREE_ITER_filter_snapshots));
+			BUG_ON(!bkey_eq(k->k.p, path->pos));
+			BUG_ON(!bch2_snapshot_is_ancestor(trans, k->k.p.snapshot, path->pos.snapshot));
+		}
+	}
+
 	/*
 	 * Ensure that updates to cached btrees go to the key cache:
 	 */
-	struct btree_path *path = trans->paths + path_idx;
 	if (!(flags & BTREE_UPDATE_key_cache_reclaim) &&
 	    !path->cached &&
 	    !path->level &&
 	    btree_id_cached(path->btree_id)) {
-		try(bch2_trans_update_get_key_cache(trans, iter, path));
+		try(bch2_trans_update_get_key_cache(trans, iter));
 
 		path_idx = iter->key_cache_path;
 	}
