@@ -197,7 +197,7 @@ static int bch2_ioc_setlabel(struct bch_fs *c,
 			     const char __user *user_label)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	char label[BCH_SB_LABEL_SIZE];
 	if (copy_from_user(label, user_label, sizeof(label)))
@@ -226,7 +226,7 @@ static int bch2_ioc_setlabel(struct bch_fs *c,
 static int bch2_ioc_goingdown(struct bch_fs *c, u32 __user *arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	u32 flags;
 	try(get_user(flags, arg));
@@ -720,7 +720,7 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 
 	/* Querying a specific tree by ID requires CAP_SYS_ADMIN */
 	if (arg.tree_id && !capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	u32 tree_id = arg.tree_id;
 	struct bch_snapshot_tree st;
@@ -825,7 +825,7 @@ static long bch2_ioc_set_reflink_p_may_update_opts(struct bch_fs *c,
 						   struct bch_inode_info *inode)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	try(bch2_request_incompat_feature(c, bcachefs_metadata_version_reflink_p_may_update_opts));
 
@@ -867,7 +867,7 @@ static long bch2_ioc_propagate_reflink_p_opts(struct bch_fs *c,
 {
 	if (!inode_owner_or_capable(file_mnt_idmap(file), &inode->v) &&
 	    !capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin_or_owner);
 
 	subvol_inum inum = inode_inum(inode);
 
@@ -899,6 +899,7 @@ static long bch2_ioc_pread_raw(struct file *file,
 			       struct bch_ioctl_pread_raw __user *uarg)
 {
 	struct bch_ioctl_pread_raw arg;
+	struct bch_fs *c = file->f_inode->i_sb->s_fs_info;
 
 	if (copy_from_user(&arg, uarg, sizeof(arg)))
 		return -EFAULT;
@@ -911,7 +912,7 @@ static long bch2_ioc_pread_raw(struct file *file,
 	if (!(file->f_flags & O_DIRECT))
 		return -EINVAL;
 	if (!inode_owner_or_capable(file_mnt_idmap(file), &inode->v))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin_or_owner);
 
 	loff_t pos = arg.offset;
 	int ret = rw_verify_area(READ, file, &pos, arg.len);
@@ -995,7 +996,7 @@ static long bch2_ioc_unpoison(struct bch_fs *c, struct file *file,
 		return 0;
 
 	if (!inode_owner_or_capable(file_mnt_idmap(file), &inode->v))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin_or_owner);
 
 	subvol_inum inum = inode_inum(inode);
 	struct bpos start = POS(inum.inum, arg.offset >> 9);
