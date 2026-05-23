@@ -559,7 +559,6 @@ static inline bool six_optimistic_spin(struct six_lock *lock,
 
 #endif
 
-noinline
 __always_inline
 static int __six_lock_slowpath(struct six_lock *lock, enum six_lock_type type,
 			     struct six_lock_waiter *wait,
