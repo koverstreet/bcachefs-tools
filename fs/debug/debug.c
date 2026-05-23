@@ -704,6 +704,7 @@ restart:
 
 		u32 seq = seqmutex_unlock(&c->btree.trans.lock);
 
+		guard(printbuf_atomic)(out);
 		bool found = bch2_check_for_deadlock(trans, out) != 0;
 
 		closure_put(&trans->ref);
