@@ -1100,7 +1100,7 @@ static inline void __bch2_trans_unlock(struct btree_trans *trans)
 }
 
 noinline __cold
-static inline int bch2_trans_relock_trace(struct btree_trans *trans, ulong ip)
+static inline int bch2_trans_relock_trace(struct btree_trans *trans)
 {
 	struct btree_path *path;
 	unsigned i;
@@ -1148,16 +1148,14 @@ static inline int bch2_trans_relock_trace(struct btree_trans *trans, ulong ip)
 	return 0;
 }
 
-static inline int __bch2_trans_relock(struct btree_trans *trans, bool trace, ulong ip)
+int __bch2_trans_relock(struct btree_trans *trans, bool trace)
 {
 	bch2_trans_verify_locks(trans);
 
 	if (unlikely(trans->restarted))
 		return -((int) trans->restarted);
-	if (unlikely(trans->locked))
-		goto out;
 	if (unlikely(trace_trans_restart_relock_enabled() && trace))
-		return bch2_trans_relock_trace(trans, ip);
+		return bch2_trans_relock_trace(trans);
 
 	struct btree_path *path;
 	unsigned i;
@@ -1178,19 +1176,13 @@ static inline int __bch2_trans_relock(struct btree_trans *trans, bool trace, ulo
 	}
 
 	trans_set_locked(trans, true);
-out:
 	bch2_trans_verify_locks(trans);
 	return 0;
 }
 
-int bch2_trans_relock(struct btree_trans *trans)
-{
-	return __bch2_trans_relock(trans, true, _RET_IP_);
-}
-
 int bch2_trans_relock_notrace(struct btree_trans *trans)
 {
-	return __bch2_trans_relock(trans, false, _RET_IP_);
+	return __bch2_trans_relock(trans, false);
 }
 
 void bch2_trans_unlock(struct btree_trans *trans)
