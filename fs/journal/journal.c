@@ -966,23 +966,28 @@ out:
 
 int bch2_journal_flush_seq(struct journal *j, u64 seq, unsigned task_state)
 {
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	u64 start_time = local_clock();
-	int ret, ret2;
 
-	/*
-	 * Don't update time_stats when @seq is already flushed:
-	 */
-	if (seq <= j->flushed_seq_ondisk)
-		return 0;
+	CLASS(closure_stack, cl)();
+	int ret = bch2_journal_flush_seq_async(j, seq, 0, &cl);
 
-	ret = wait_event_state(j->wait,
-			       (ret2 = bch2_journal_flush_seq_async(j, seq, 0, NULL)),
-			       task_state);
+	if (closure_sync_timeout(&cl, HZ * 10)) {
+		CLASS(printbuf, buf)();
+		prt_printf(&buf, bch2_fmt(c,
+			"bch2_journal_flush_seq stuck? Waited 10s for seq %llu"), seq);
+		bch2_journal_debug_to_text(&buf, j);
+		bch2_print_str(c, KERN_ERR, buf.buf);
+		closure_sync(&cl);
+	}
 
+	/* Don't update time_stats when @seq is already flushed: */
 	if (!ret)
 		bch2_time_stats_update(j->flush_seq_time, start_time);
 
-	return ret ?: ret2 < 0 ? ret2 : 0;
+	return j->err_seq && seq >= j->err_seq
+		? bch_err_throw(c, journal_flush_err)
+		: 0;
 }
 
 /*
