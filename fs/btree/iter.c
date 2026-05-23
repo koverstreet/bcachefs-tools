@@ -1662,6 +1662,26 @@ void bch2_path_put(struct btree_trans *trans, btree_path_idx_t path_idx, bool in
 	__bch2_path_free(trans, path_idx);
 }
 
+int bch2_trans_restart_foreign_task(struct btree_trans *trans, int err, unsigned long ip)
+{
+	BUG_ON(err <= 0);
+	BUG_ON(!bch2_err_matches(-err, BCH_ERR_transaction_restart));
+
+	trans->restarted = err;
+	trans->last_restarted_ip = ip;
+	return -err;
+}
+
+int bch2_trans_restart_ip(struct btree_trans *trans, int err, unsigned long ip)
+{
+	bch2_trans_restart_foreign_task(trans, err, ip);
+#ifdef CONFIG_BCACHEFS_DEBUG
+	darray_exit(&trans->last_restarted_trace);
+	bch2_save_backtrace(&trans->last_restarted_trace, current, 0, GFP_NOWAIT);
+#endif
+	return -err;
+}
+
 noinline __cold __noreturn
 void bch2_trans_restart_error(struct btree_trans *trans, u32 restart_count)
 {
@@ -3613,7 +3633,7 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 		trans->realloc_bytes_required = new_bytes;
 		event_inc_trace_fn(c, trans_restart_mem_realloced,
 				   __bch2_trans_mem_realloced_trace(trans, new_bytes));
-		return ERR_PTR(btree_trans_restart_ip(trans,
+		return ERR_PTR(bch2_trans_restart_ip(trans,
 					BCH_ERR_transaction_restart_mem_realloced, _RET_IP_));
 	}
 
