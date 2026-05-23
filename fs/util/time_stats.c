@@ -138,7 +138,7 @@ void __bch2_time_stats_update(struct bch2_time_stats *stats, u64 start, u64 end)
 						 GFP_ATOMIC);
 		spin_unlock_irqrestore(&stats->lock, flags);
 	} else {
-		guard(preempt)();
+		guard(irqsave)();
 		struct time_stat_buffer *b = this_cpu_ptr(stats->buffer);
 
 		BUG_ON(b->nr >= ARRAY_SIZE(b->entries));
