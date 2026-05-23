@@ -4196,6 +4196,7 @@ void bch2_fs_btree_iter_exit(struct bch_fs *c)
 		darray_exit(&s->trans_kmalloc_trace);
 #endif
 		kfree(s->max_paths_text);
+		bch2_time_stats_exit(&s->duration);
 		bch2_time_stats_exit(&s->lock_hold_times);
 		bch2_time_stats_exit(&s->lock_wait_times);
 	}
