@@ -184,7 +184,9 @@ static int check_nlinks_update_inode(struct btree_trans *trans, struct btree_ite
 		link = &links->d[++*idx];
 	}
 
-	if (fsck_err_on(bch2_inode_nlink_get(&u) != link->count,
+	if (fsck_err_on(bch2_inode_nlink_get(&u) != link->count ||
+			((u.bi_flags & BCH_INODE_unlinked) &&
+			 u.bi_nlink),
 			trans, inode_wrong_nlink,
 			"inode %llu type %s has wrong i_nlink (%u, should be %u)",
 			u.bi_inum, bch2_d_types[mode_to_type(u.bi_mode)],
