@@ -564,30 +564,6 @@ void bch2_bkey_unpack(const struct btree *b, struct bkey_i *dst,
 		    bkeyp_val_u64s(&b->format, src));
 }
 
-/**
- * bch2_bkey_pack -- pack the key and the value
- * @dst:	packed result
- * @src:	unpacked input
- * @format:	format of packed result
- *
- * Returns: true on success, false on failure
- */
-bool bch2_bkey_pack(struct bkey_packed *dst, const struct bkey_i *src,
-		    const struct bkey_format *format)
-{
-	struct bkey_packed tmp;
-
-	if (!bch2_bkey_pack_key(&tmp, &src->k, format))
-		return false;
-
-	memmove_u64s((u64 *) dst + format->key_u64s,
-		     &src->v,
-		     bkey_val_u64s(&src->k));
-	memcpy_u64s_small(dst, &tmp, format->key_u64s);
-
-	return true;
-}
-
 __always_inline
 static bool set_inc_field_lossy(struct pack_state *state, unsigned field, u64 v)
 {

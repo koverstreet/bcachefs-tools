@@ -434,8 +434,6 @@ bool bch2_bkey_pack_pos(struct bkey_packed *, struct bpos, const struct btree *)
 
 void bch2_bkey_unpack(const struct btree *, struct bkey_i *,
 		 const struct bkey_packed *);
-bool bch2_bkey_pack(struct bkey_packed *, const struct bkey_i *,
-	       const struct bkey_format *);
 
 typedef void (*compiled_unpack_fn)(struct bkey *, const struct bkey_packed *);
 
