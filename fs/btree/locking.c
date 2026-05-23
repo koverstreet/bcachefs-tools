@@ -427,11 +427,27 @@ static bool lock_type_conflicts(enum six_lock_type t1, enum six_lock_type t2)
 	return t1 + t2 > 1;
 }
 
+noinline __cold
+static int waitlist_alloc_failed(struct lock_graph *g, struct printbuf *cycle)
+{
+	struct bch_fs *c = g->g->trans->c;
+
+	if (cycle)
+		return -1;
+
+	event_inc_trace(c, trans_restart_deadlock_waitlist_alloc, buf, ({
+		guard(printbuf_atomic)(&buf);
+		prt_str(&buf, g->g->trans->fn);
+	}));
+
+	return btree_trans_restart(g->g->trans, BCH_ERR_transaction_restart_deadlock_waitlist_alloc);
+}
+
 int bch2_check_for_deadlock(struct btree_trans *trans, struct printbuf *cycle)
 {
-	struct bch_fs *c = trans->c;
 	btree_path_idx_t path_idx;
-	int ret = 0;
+
+	EBUG_ON(cycle && !cycle->atomic);
 
 	/* trans->paths is rcu protected vs. freeing */
 	guard(rcu)();
@@ -449,19 +465,14 @@ int bch2_check_for_deadlock(struct btree_trans *trans, struct printbuf *cycle)
 	}
 
 	lock_graph_down(g, trans);
-
-	if (cycle)
-		cycle->atomic++;
 next:
 	if (!g->nr)
-		goto out;
+		return 0;
 
 	struct trans_waiting_for_lock *top = &g->g[g->nr - 1];
 
 	if (top->waitlist_idx < top->waitlist.nr) {
-		ret = lock_graph_descend(g, top->waitlist.data[top->waitlist_idx++], cycle);
-		if (ret)
-			goto out;
+		try(lock_graph_descend(g, top->waitlist.data[top->waitlist_idx++], cycle));
 
 		goto next;
 	}
@@ -543,18 +554,7 @@ next:
 				    lock_type_conflicts(lock_held, i->start_time & SIX_LOCK_WANT_MASK)) {
 					if (unlikely(darray_push_gfp(&top->waitlist, trans,
 								     GFP_NOWAIT|__GFP_NOWARN))) {
-						if (cycle) {
-							ret = -1;
-							goto out;
-						}
-
-						event_inc_trace(c, trans_restart_deadlock_waitlist_alloc, buf, ({
-							guard(printbuf_atomic)(&buf);
-							prt_str(&buf, g->g->trans->fn);
-						}));
-						ret = btree_trans_restart(g->g->trans,
-								BCH_ERR_transaction_restart_deadlock_waitlist_alloc);
-						goto out;
+						return waitlist_alloc_failed(g, cycle);
 					}
 				}
 			}
@@ -570,10 +570,6 @@ up:
 		print_chain(cycle, g);
 	--g->nr;
 	goto next;
-out:
-	if (cycle)
-		--cycle->atomic;
-	return ret;
 }
 
 int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w)
