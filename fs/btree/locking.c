@@ -311,7 +311,7 @@ static int abort_lock(struct lock_graph *g, struct trans_waiting_for_lock *i,
 {
 	if (i == g->g) {
 		trace_would_deadlock(g, i->trans);
-		return btree_trans_restart_foreign_task(i->trans,
+		return bch2_trans_restart_foreign_task(i->trans,
 					BCH_ERR_transaction_restart_would_deadlock,
 					_THIS_IP_);
 	} else {
