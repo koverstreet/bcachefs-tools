@@ -386,31 +386,37 @@ static noinline int break_cycle(struct lock_graph *g, struct printbuf *cycle,
 	return ret;
 }
 
+noinline __cold
+static int lock_graph_recursion_limit(struct lock_graph *g, struct btree_trans *trans,
+				      struct printbuf *cycle)
+{
+	if (!cycle)
+		event_inc_trace(trans->c, trans_restart_would_deadlock_recursion_limit, buf, ({
+			guard(printbuf_atomic)(&buf);
+			prt_str(&buf, trans->fn);
+		}));
+
+	struct btree_trans *orig_trans = g->g->trans;
+
+	if (orig_trans->lock_may_not_fail) {
+		/* Other threads will have to rerun the cycle detector: */
+		for (struct trans_waiting_for_lock *i = g->g + 1; i < g->g + g->nr; i++)
+			wake_up_trans(i->trans);
+		return 0;
+	}
+
+	return break_cycle(g, cycle, g->g, BCH_ERR_transaction_restart_deadlock_recursion_limit);
+}
+
 static inline int lock_graph_descend(struct lock_graph *g, struct btree_trans *trans,
 				     struct printbuf *cycle)
 {
-	struct btree_trans *orig_trans = g->g->trans;
-
 	for (struct trans_waiting_for_lock *i = g->g; i < g->g + g->nr; i++)
 		if (i->trans == trans)
 			return break_cycle(g, cycle, i, BCH_ERR_transaction_restart_would_deadlock);
 
-	if (unlikely(g->nr == ARRAY_SIZE(g->g))) {
-		if (!cycle)
-			event_inc_trace(trans->c, trans_restart_would_deadlock_recursion_limit, buf, ({
-				guard(printbuf_atomic)(&buf);
-				prt_str(&buf, trans->fn);
-			}));
-
-		if (orig_trans->lock_may_not_fail) {
-			/* Other threads will have to rerun the cycle detector: */
-			for (struct trans_waiting_for_lock *i = g->g + 1; i < g->g + g->nr; i++)
-				wake_up_trans(i->trans);
-			return 0;
-		}
-
-		return break_cycle(g, cycle, g->g, BCH_ERR_transaction_restart_deadlock_recursion_limit);
-	}
+	if (unlikely(g->nr == ARRAY_SIZE(g->g)))
+		return lock_graph_recursion_limit(g, trans, cycle);
 
 	lock_graph_down(g, trans);
 	return 0;
