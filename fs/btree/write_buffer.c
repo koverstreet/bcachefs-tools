@@ -280,6 +280,19 @@ btree_write_buffered_insert(struct btree_trans *trans,
 				  BTREE_UPDATE_internal_snapshot_node);
 }
 
+static int wb_keys_resize(struct btree_write_buffer_keys *wb, size_t new_size)
+{
+	if (wb->keys.size >= new_size)
+		return 0;
+
+	if (!mutex_trylock(&wb->lock))
+		return -EINTR;
+
+	int ret = darray_resize(&wb->keys, new_size);
+	mutex_unlock(&wb->lock);
+	return ret;
+}
+
 static void move_keys_from_inc_to_flushing(struct bch_fs_btree_write_buffer *wb)
 {
 	struct bch_fs *c = wb->c;
@@ -1239,6 +1252,17 @@ int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_
 		mutex_unlock(&wb->inc.lock);
 
 		if (bch_wb_btree_should_flush(wb)) {
+			/*
+			 * If we're already flushing and producers are still
+			 * pushing fast enough to re-arm should_flush, the
+			 * flusher isn't keeping up. Grow inc so the next
+			 * burst doesn't trip must_wait().
+			 */
+			if (work_busy(&wb->flush_work))
+				wb_keys_resize(&wb->inc,
+					       min_t(size_t, 1U << 24,
+						     wb->inc.keys.size * 2));
+
 			WRITE_ONCE(wb->flush_work_caller, WB_FLUSH_thread);
 			queue_work(c->btree.write_buffer_wq, &wb->flush_work);
 		}
@@ -1251,19 +1275,6 @@ int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_
 	 */
 	closure_wake_up(&c->btree.write_buffer_flush_wait);
 
-	return ret;
-}
-
-static int wb_keys_resize(struct btree_write_buffer_keys *wb, size_t new_size)
-{
-	if (wb->keys.size >= new_size)
-		return 0;
-
-	if (!mutex_trylock(&wb->lock))
-		return -EINTR;
-
-	int ret = darray_resize(&wb->keys, new_size);
-	mutex_unlock(&wb->lock);
 	return ret;
 }
 
