@@ -1364,7 +1364,7 @@ retry:
 			goto out;
 	} else {
 lock_node:
-		ret = btree_node_lock_nopath(trans, &b->c, SIX_LOCK_read, _THIS_IP_);
+		ret = btree_node_lock_nopath(trans, &b->c, SIX_LOCK_read, false, _THIS_IP_, false);
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
 			b = ERR_PTR(ret);
 			goto out;
@@ -1453,8 +1453,9 @@ wait_on_io:
 	bch2_btree_node_wait_on_read(trans, b);
 	bch2_btree_node_wait_on_write(trans, b);
 
-	btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_intent);
-	btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_write);
+	btree_node_lock_nopath(trans, &b->c, SIX_LOCK_intent, true, _THIS_IP_, false);
+	btree_node_lock_nopath(trans, &b->c, SIX_LOCK_write, true, _THIS_IP_, false);
+
 	if (unlikely(b->hash_val != btree_ptr_hash_val(k)))
 		goto out;
 
