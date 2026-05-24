@@ -1179,6 +1179,12 @@ static noinline int bch2_trans_commit_btree_write_ratelimit(struct btree_trans *
 	}));
 }
 
+noinline __cold
+static void transaction_commit_trace(struct btree_trans *trans)
+{
+	__event_trace(trans->c, transaction_commit, buf, prt_str(&buf, trans->fn));
+}
+
 int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags flags)
 {
 	struct btree_insert_entry *errored_at = NULL;
@@ -1302,7 +1308,7 @@ retry:
 	if (ret)
 		goto err;
 
-	event_inc_trace(c, transaction_commit, buf, prt_str(&buf, trans->fn));
+	event_inc_trace_fn(c, transaction_commit, transaction_commit_trace(trans));
 out:
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_check_rw)))
 		enumerated_ref_put(&c->writes, BCH_WRITE_REF_trans);
