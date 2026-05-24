@@ -472,7 +472,7 @@ static int wb_flush_sorted_range(struct btree_trans *trans,
  * fork/join + per-shard btree_trans setup isn't free, and we need each
  * shard to do enough work to amortize that. Tune empirically.
  */
-#define WB_FLUSH_SHARD_MIN_KEYS		(1UL << 12)
+#define WB_FLUSH_SHARD_MIN_KEYS		(1UL << 10)
 
 static unsigned wb_flush_n_shards(size_t n_keys)
 {
