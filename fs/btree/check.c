@@ -635,7 +635,7 @@ recover:
 		 * a thin "lock holder record" that isn't a full path. Either
 		 * is bigger than this commit wants to be.
 		 */
-		btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_read);
+		btree_node_lock_nopath(trans, &b->c, SIX_LOCK_read, true, _THIS_IP_, false);
 		int ret = btree_check_root_boundaries(trans, b) ?:
 			  bch2_btree_repair_topology_recurse(trans, b);
 		six_unlock_read(&b->c.lock);
