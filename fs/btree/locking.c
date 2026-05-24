@@ -593,38 +593,26 @@ int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w
 	return bch2_check_for_deadlock(trans, NULL);
 }
 
-int __bch2_btree_node_lock_write(struct btree_trans *trans, struct btree_path *path,
-				 struct btree_bkey_cached_common *b,
-				 bool lock_may_not_fail)
+/*
+ * Lock a btree node if we already have it locked on one of our linked
+ * iterators:
+ */
+static inline bool btree_node_lock_increment(struct btree_trans *trans,
+					     struct btree_bkey_cached_common *b,
+					     unsigned level,
+					     enum btree_node_locked_type want)
 {
-	int readers = bch2_btree_node_lock_counts(trans, NULL, b, b->level).n[SIX_LOCK_read];
-	int ret;
+	struct btree_path *path;
+	unsigned i;
 
-	/*
-	 * Must drop our read locks before calling six_lock_write() -
-	 * six_unlock() won't do wakeups until the reader count
-	 * goes to 0, and it's safe because we have the node intent
-	 * locked:
-	 */
-	if (readers)
-		six_lock_readers_add(&b->lock, -readers);
-	ret = __btree_node_lock_nopath(trans, b, SIX_LOCK_write,
-				       lock_may_not_fail, _RET_IP_, !readers);
-	if (readers)
-		six_lock_readers_add(&b->lock, readers);
+	trans_for_each_path(trans, path, i)
+		if (&path->l[level].b->c == b &&
+		    btree_node_locked_type(path, level) >= want) {
+			six_lock_increment(&b->lock, (enum six_lock_type) want);
+			return true;
+		}
 
-	if (ret)
-		mark_btree_node_locked_noreset(path, b->level, BTREE_NODE_INTENT_LOCKED);
-
-	return ret;
-}
-
-void bch2_btree_node_lock_write_nofail(struct btree_trans *trans,
-				       struct btree_path *path,
-				       struct btree_bkey_cached_common *b)
-{
-	int ret = __btree_node_lock_write(trans, path, b, true);
-	BUG_ON(ret);
+	return false;
 }
 
 int bch2_btree_node_lock_slowpath(struct btree_trans *trans,
@@ -637,7 +625,8 @@ int bch2_btree_node_lock_slowpath(struct btree_trans *trans,
 #ifdef CONFIG_BCACHEFS_LOCK_TIME_STATS
 		u64 contended_start = local_clock();
 #endif
-		int ret = __btree_node_lock_nopath(trans, b, type, false, btree_path_ip_allocated(path), true);
+		int ret = btree_node_lock_nopath(trans, b, type, false,
+						 btree_path_ip_allocated(path), true);
 #ifdef CONFIG_BCACHEFS_LOCK_TIME_STATS
 		__bch2_time_stats_update(&btree_trans_stats(trans)->lock_wait_times,
 					 contended_start, local_clock());
@@ -646,6 +635,65 @@ int bch2_btree_node_lock_slowpath(struct btree_trans *trans,
 			return ret;
 	}
 
+	return 0;
+}
+
+int bch2_btree_node_lock_write_contended(struct btree_trans *trans, struct btree_path *path,
+				 struct btree_bkey_cached_common *b,
+				 bool lock_may_not_fail)
+{
+	/*
+	 * Must drop our read locks before calling six_lock_write() -
+	 * six_unlock() won't do wakeups until the reader count
+	 * goes to 0, and it's safe because we have the node intent
+	 * locked:
+	 */
+	int readers = bch2_btree_node_lock_counts(trans, NULL, b, b->level).n[SIX_LOCK_read];
+	if (readers)
+		six_lock_readers_add(&b->lock, -readers);
+
+	int ret = btree_node_lock_nopath(trans, b, SIX_LOCK_write,
+					 lock_may_not_fail, _RET_IP_, !readers);
+	if (readers)
+		six_lock_readers_add(&b->lock, readers);
+
+	if (ret)
+		mark_btree_node_locked_noreset(path, b->level, BTREE_NODE_INTENT_LOCKED);
+
+	return ret;
+}
+
+/*
+ * Lock @b when the caller doesn't already have a path for it: create a
+ * temporary unlocked path, take the lock, then record the lock on the path
+ * so the cycle detector can find us as the holder.
+ *
+ * Caller releases via bch2_btree_node_unlock_with_path().
+ *
+ * May return a transaction_restart; wrap in lockrestart_do().
+ */
+int __must_check
+bch2_btree_node_lock_with_path(struct btree_trans *trans,
+			       struct btree_bkey_cached_common *b,
+			       enum six_lock_type type,
+			       btree_path_idx_t *path_idx_out)
+{
+	btree_path_idx_t path_idx = bch2_path_get_unlocked_mut(trans,
+				b->btree_id, b->level, btree_node_pos(b), b->cached);
+
+	struct btree_path *path = trans->paths + path_idx;
+	int ret = btree_node_lock(trans, path, b, b->level, type, _THIS_IP_);
+	if (ret) {
+		bch2_path_put(trans, path_idx, true);
+		return ret;
+	}
+
+	mark_btree_node_locked(trans, path, b->level,
+			       (enum btree_node_locked_type) type);
+	path->l[b->level].lock_seq	= six_lock_seq(&b->lock);
+	path->l[b->level].b		= (struct btree *) b;
+
+	*path_idx_out = path_idx;
 	return 0;
 }
 
