@@ -338,10 +338,19 @@ void bch2_journal_space_available(struct journal *j)
 	clean		= j->space[journal_space_clean].total;
 	total		= j->space[journal_space_total].total;
 
+	/*
+	 * Also force a flush when local last_seq has run far past
+	 * last_seq_ondisk: the pin fifo carries one slot per seq from
+	 * last_seq_ondisk to seq, and only a flush write carries an updated
+	 * last_seq to disk. If we keep emitting noflush writes the fifo fills
+	 * with empty slots even though all the pins have actually been
+	 * released, eventually tripping low_on_pin and wedging producers.
+	 */
 	if ((j->space[journal_space_clean_ondisk].next_entry <
 	     j->space[journal_space_clean_ondisk].total) &&
 	    (clean - clean_ondisk <= total / 8) &&
-	    (clean_ondisk * 2 > clean))
+	    (clean_ondisk * 2 > clean) &&
+	    (j->last_seq - j->last_seq_ondisk <= j->pin.size / 4))
 		set_bit(JOURNAL_may_skip_flush, &j->flags);
 	else
 		clear_bit(JOURNAL_may_skip_flush, &j->flags);
