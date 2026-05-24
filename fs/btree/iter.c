@@ -900,7 +900,6 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	enum six_lock_type lock_type;
 	unsigned i;
-	int ret;
 
 	EBUG_ON(path->nodes_locked);
 
@@ -931,10 +930,13 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 		}
 
 		lock_type = __btree_lock_want(path, path->level);
+		trans->locking_hash_val = 0;
+		trans->locking_root_id	= path->btree_id;
 
-		try(btree_node_lock(trans, path, &b->c, path->level, lock_type, trace_ip));
+		int ret = btree_node_lock(trans, path, &b->c, path->level, lock_type, trace_ip);
 
-		if (likely(root_packed == bch2_btree_id_root_packed(c, path->btree_id) &&
+		if (likely(!ret &&
+			   root_packed == bch2_btree_id_root_packed(c, path->btree_id) &&
 			   !race_fault())) {
 			if (unlikely(!bpos_eq(b->data->min_key, POS_MIN) ||
 				     !bpos_eq(b->key.k.p, SPOS_MAX))) {
@@ -955,7 +957,11 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 			return 0;
 		}
 
-		six_unlock_type(&b->c.lock, lock_type);
+		if (!ret)
+			six_unlock_type(&b->c.lock, lock_type);
+		if (ret == -BCH_ERR_no_btree_node_reused)
+			ret = 0;
+		try(ret);
 	}
 }
 
