@@ -1207,22 +1207,26 @@ retry:
 		if (btree_node_read_locked(path, level + 1))
 			btree_node_unlock(trans, path, level + 1);
 
+		trans->locking_hash_val = btree_ptr_hash_val(k);
+		trans->locking_root_id	= -1;
 		ret = btree_node_lock(trans, path, &b->c, level, lock_type);
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			return ERR_PTR(ret);
 
-		BUG_ON(ret);
-
-		if (unlikely(b->hash_val != btree_ptr_hash_val(k) ||
+		if (unlikely(ret == -BCH_ERR_no_btree_node_reused ||
+			     b->hash_val != btree_ptr_hash_val(k) ||
 			     b->c.level != level ||
 			     race_fault())) {
-			six_unlock_type(&b->c.lock, lock_type);
+			if (!ret)
+				six_unlock_type(&b->c.lock, lock_type);
 			if (bch2_btree_node_relock(trans, path, level + 1))
 				goto retry;
 
 			event_inc_trace_fn(c, trans_restart_btree_node_reused, btree_node_reused_trace(trans, path));
 			return ERR_PTR(btree_trans_restart(trans, BCH_ERR_transaction_restart_lock_node_reused));
 		}
+
+		BUG_ON(ret);
 
 		/* avoid atomic set bit if it's not needed: */
 		if (!btree_node_accessed(b))
@@ -1315,9 +1319,13 @@ struct btree *bch2_btree_node_get(struct btree_trans *trans, struct btree_path *
 	if (btree_node_read_locked(path, level + 1))
 		btree_node_unlock(trans, path, level + 1);
 
+	trans->locking_hash_val = btree_ptr_hash_val(k);
+	trans->locking_root_id	= -1;
 	int ret = btree_node_lock(trans, path, &b->c, level, lock_type);
-	if (ret)
-		return ERR_PTR(ret);
+	if (unlikely(ret))
+		return ret == -BCH_ERR_no_btree_node_reused
+			? __bch2_btree_node_get(trans, path, k, level, lock_type, flags)
+			: ERR_PTR(ret);
 
 	if (unlikely(b->hash_val != btree_ptr_hash_val(k) ||
 		     b->c.level != level ||
@@ -1386,11 +1394,16 @@ retry:
 			goto out;
 	} else {
 lock_node:
+		trans->locking_hash_val = btree_ptr_hash_val(k);
+		trans->locking_root_id	= -1;
 		ret = btree_node_lock_nopath(trans, &b->c, SIX_LOCK_read, false, _THIS_IP_, false);
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
 			b = ERR_PTR(ret);
 			goto out;
 		}
+
+		if (bch2_err_matches(ret, BCH_ERR_no_btree_node_reused))
+			goto retry;
 
 		BUG_ON(ret);
 
@@ -1475,6 +1488,8 @@ wait_on_io:
 	bch2_btree_node_wait_on_read(trans, b);
 	bch2_btree_node_wait_on_write(trans, b);
 
+	trans->locking_hash_val = 0;
+	trans->locking_root_id	= -1;
 	btree_node_lock_nopath(trans, &b->c, SIX_LOCK_intent, true, _THIS_IP_, false);
 	btree_node_lock_nopath(trans, &b->c, SIX_LOCK_write, true, _THIS_IP_, false);
 

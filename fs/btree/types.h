@@ -689,11 +689,19 @@ struct btree_trans {
 #endif
 	unsigned long		last_unlock_ip;
 	unsigned long		srcu_lock_time;
+	int			srcu_idx;
+	enum btree_id		locking_root_id;
+
+	u64			locking_hash_val;
+	struct btree_bkey_cached_common *locking;
+	/*
+	 * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
+	 * bch2_six_check_for_deadlock() to detect that the node identity
+	 * rotated while we were about to sleep on it. 0 for cached entries.
+	 */
+	struct six_lock_waiter	locking_wait;
 
 	const char		*fn;
-	struct btree_bkey_cached_common *locking;
-	struct six_lock_waiter	locking_wait;
-	int			srcu_idx;
 
 	/* update path: */
 	struct btree_trans_subbuf journal_entries;

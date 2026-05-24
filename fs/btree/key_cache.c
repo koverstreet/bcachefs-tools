@@ -373,6 +373,8 @@ retry:
 	if (!ck)
 		return -ENOENT;
 
+	EBUG_ON(!ck->c.cached);
+
 	enum six_lock_type lock_want = __btree_lock_want(path, 0);
 
 	try(btree_node_lock(trans, path, (void *) ck, 0, lock_want));

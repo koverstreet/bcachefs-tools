@@ -572,6 +572,24 @@ up:
 	goto next;
 }
 
+static inline struct btree *locking_node(struct six_lock *lock)
+{
+	struct btree_bkey_cached_common *b = container_of(lock, struct btree_bkey_cached_common, lock);
+	return !b->cached
+		? container_of(b, struct btree, c)
+		: NULL;
+}
+
+static inline bool node_reuse_race(struct btree_trans *trans, struct btree *b)
+{
+	if (trans->locking_hash_val)
+		return trans->locking_hash_val != b->hash_val;
+	else if (trans->locking_root_id != -1)
+		return bch2_btree_id_root_b(trans->c, trans->locking_root_id) != b;
+	else
+		return false;
+}
+
 int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w)
 {
 	/*
@@ -590,7 +608,32 @@ int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w
 	 */
 	smp_mb();
 
+	/*
+	 * The btree node we're about to sleep on may have been reclaimed/reused
+	 * since the caller picked the lock — the path's b pointer is still
+	 * valid memory, but the identity behind it is gone. Don't sleep on a
+	 * phantom; force a restart so the trans re-traverses to the real
+	 * current node (or learns there isn't one).
+	 *
+	 * Only btree nodes need this: interior updates take node locks
+	 * off-path (e.g. via btree_node_reclaim's six_trylock_intent), so the
+	 * cycle detector can't see the holder. Key cache entries don't have
+	 * that pattern — they're always held via a path the detector walks.
+	 *
+	 * Compare against the hash_val snapshotted at lock-attempt time in
+	 * btree_node_lock_nopath. Checking !hash_val alone is insufficient:
+	 * the node may already have been freed *and* re-hashed to a different
+	 * identity, in which case hash_val is non-zero but ≠ what we wanted.
+	 *
+	 * Publish order on the reclaim side:
+	 * bch2_btree_node_transition_state_locked clears (or rotates)
+	 * hash_val, smp_mb(), six_lock_wakeup_all() — pairs with the
+	 * smp_mb() above.
+	 */
 	struct btree_trans *trans = container_of(w, struct btree_trans, locking_wait);
+	struct btree *b = locking_node(lock);
+	if (b && node_reuse_race(trans, b))
+		return bch_err_throw(trans->c, no_btree_node_reused);
 
 #ifdef __KERNEL__
 	/*
@@ -658,6 +701,9 @@ int bch2_btree_node_lock_write_contended(struct btree_trans *trans, struct btree
 				 struct btree_bkey_cached_common *b,
 				 bool lock_may_not_fail)
 {
+	trans->locking_hash_val = 0;
+	trans->locking_root_id	= -1;
+
 	/*
 	 * Must drop our read locks before calling six_lock_write() -
 	 * six_unlock() won't do wakeups until the reader count
@@ -698,6 +744,10 @@ bch2_btree_node_lock_with_path(struct btree_trans *trans,
 				b->btree_id, b->level, btree_node_pos(b), b->cached);
 
 	struct btree_path *path = trans->paths + path_idx;
+	/* No key context here — caller already has the b. Skip the hash_val
+	 * check; we're acquiring on a node the caller already validated. */
+	trans->locking_hash_val = 0;
+	trans->locking_root_id	= -1;
 	int ret = btree_node_lock(trans, path, b, b->level, type);
 	if (ret) {
 		bch2_path_put(trans, path_idx, true);
