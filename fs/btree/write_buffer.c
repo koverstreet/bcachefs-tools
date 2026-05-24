@@ -511,6 +511,8 @@ static int wb_flush_sorted_sharded(struct btree_trans *trans,
 	size_t n_keys = wb->sorted.nr;
 	unsigned n_shards = wb_flush_n_shards(n_keys);
 
+	wb->nr_shards_total += n_shards;
+
 	if (n_shards <= 1)
 		return wb_flush_sorted_range(trans, wb, 0, n_keys,
 					     accounting_replay_done, cnt);
@@ -1306,6 +1308,13 @@ __cold void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs 
 		prt_printf(out, "keys flushed:\t%llu\n",	wb->nr_keys_flushed);
 		prt_printf(out, "keys fast:\t%llu\n",		wb->nr_keys_fast);
 		prt_printf(out, "keys slowpath:\t%llu\n",	wb->nr_keys_slowpath);
+		prt_printf(out, "shards total:\t%llu\n",	wb->nr_shards_total);
+		if (wb->nr_flushes)
+			prt_printf(out, "avg shards/flush:\t%llu\n",
+				   wb->nr_shards_total / wb->nr_flushes);
+		if (wb->nr_shards_total)
+			prt_printf(out, "avg shard size:\t%llu\n",
+				   wb->nr_keys_flushed / wb->nr_shards_total);
 
 		prt_printf(out, "flush work:\t%s\n",
 			   work_busy(&wb->flush_work) ? "busy" : "idle");
