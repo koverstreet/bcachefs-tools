@@ -248,7 +248,7 @@ enum fsck_err_opts {
 	  NULL,		"Constrain inode numbers to 32 bits")		\
 	x(shard_inode_numbers_bits,	u8,				\
 	  OPT_FS|OPT_FORMAT,						\
-	  OPT_UINT(0, 8),						\
+	  OPT_UINT(0, 16),						\
 	  BCH_SB_SHARD_INUMS_NBITS,	0,				\
 	  NULL,		"Shard new inode numbers by CPU id")		\
 	x(btree_node_mem_ptr_optimization, u8,				\
