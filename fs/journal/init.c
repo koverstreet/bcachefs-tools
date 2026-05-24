@@ -407,6 +407,11 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 		return bch_err_throw(c, ENOMEM_journal_pin_fifo);
 	}
 
+	for (struct journal_entry_pin_list *pin = j->pin.data;
+	     pin < j->pin.data + j->pin.size;
+	     pin++)
+		spin_lock_init(&pin->lock);
+
 	j->replay_journal_seq	= last_seq;
 	j->replay_journal_seq_end = cur_seq;
 	j->last_seq_ondisk	= last_seq;

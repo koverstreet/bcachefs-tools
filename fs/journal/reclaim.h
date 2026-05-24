@@ -41,7 +41,7 @@ journal_seq_pin(struct journal *j, u64 seq)
 {
 	EBUG_ON(seq < j->pin.front || seq >= j->pin.back);
 
-	return &j->pin.data[seq & j->pin.mask];
+	return &fifo_entry(&j->pin, seq);
 }
 
 void bch2_journal_update_last_seq(struct journal *);
