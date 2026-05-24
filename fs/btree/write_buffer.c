@@ -760,6 +760,7 @@ err:
 	wb->nr_keys_flushed		+= nr_flushing;
 	wb->nr_keys_fast		+= cnt.fast;
 	wb->nr_keys_slowpath		+= cnt.slowpath;
+	wb->last_active_jiffies		= jiffies;
 
 	event_inc_trace(c, write_buffer_flush, buf,
 		prt_printf(&buf, "flushed %llu fast %zu noop %zu",
@@ -1281,6 +1282,13 @@ __cold void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs 
 
 	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
 		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
+
+		/* Skip btrees that are empty AND haven't flushed recently — keeps
+		 * the dump focused on what's actually doing work. */
+		if (!wb->inc.keys.nr &&
+		    !wb->flushing.keys.nr &&
+		    time_after(jiffies, wb->last_active_jiffies + 60 * HZ))
+			continue;
 
 		prt_printf(out, "=== %s ===\n", bch_wb_btree_names[i]);
 
