@@ -422,6 +422,23 @@ int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struc
 		b->hash_val = 0;
 		clear_btree_node_just_written(b);
 
+		/*
+		 * The node identity is now gone. Any waiters parked on b->c.lock
+		 * were waiting on the *old* identity and have no business
+		 * waiting now — wake them all so they re-run the cycle detector
+		 * (and the upcoming identity check) and bail out of any wedge
+		 * caused by an invisible off-path intent holder (e.g. via
+		 * six_trylock_intent from btree_node_reclaim, which doesn't
+		 * publish itself on any btree_path the detector walks).
+		 *
+		 * Memory barrier pairs with the smp_mb() in
+		 * bch2_six_check_for_deadlock — without it, the lockless walker
+		 * can read a stale hash_val after wake and still think this is
+		 * the node it was looking for.
+		 */
+		smp_mb();
+		six_lock_wakeup_all(&b->c.lock);
+
 		if (b->c.btree_id < BTREE_ID_NR)
 			--bc->nr_by_btree[b->c.btree_id];
 		bc->nr_vmalloc -= is_vmalloc_addr(b->data);
