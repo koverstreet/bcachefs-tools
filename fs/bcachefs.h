@@ -330,6 +330,10 @@ BCH_DEBUG_PARAMS_ALL()
 	  "scan btree key cache for eviction")				\
 	x(btree_write_buffer_flush,					\
 	  "Flush btree write buffer to btree")				\
+	x(btree_write_buffer_flush_shard_sched_delay,			\
+	  "Per-shard: queued to start of execution (workqueue scheduling delay)") \
+	x(btree_write_buffer_flush_shard_work,				\
+	  "Per-shard: actual flush work duration (wb_flush_sorted_range)") \
 	x(btree_gc,							\
 	  "GC pass recalculating oldest generation numbers")		\
 	x(data_write,							\

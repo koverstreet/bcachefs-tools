@@ -501,6 +501,7 @@ typedef struct {
 	bool				accounting_replay_done;
 	struct wb_flush_counters	cnt;
 	int				ret;
+	u64				queued_time;
 } wb_flush_shard;
 DEFINE_DARRAY(wb_flush_shard);
 
@@ -509,8 +510,15 @@ static CLOSURE_CALLBACK(wb_flush_shard_work)
 	closure_type(s, wb_flush_shard, cl);
 	CLASS(btree_trans, trans)(s->c);
 
+	u64 work_start = local_clock();
+	bch2_time_stats_update(&s->c->times[BCH_TIME_btree_write_buffer_flush_shard_sched_delay],
+			       s->queued_time);
+
 	s->ret = wb_flush_sorted_range(trans, s->wb, s->start, s->end,
 				       s->accounting_replay_done, &s->cnt);
+
+	bch2_time_stats_update(&s->c->times[BCH_TIME_btree_write_buffer_flush_shard_work],
+			       work_start);
 
 	closure_return(cl);
 }
@@ -548,8 +556,10 @@ static int wb_flush_sorted_sharded(struct btree_trans *trans,
 			.accounting_replay_done	= accounting_replay_done,
 		}));
 
-	darray_for_each(shards, i)
+	darray_for_each(shards, i) {
+		i->queued_time = local_clock();
 		closure_call(&i->cl, wb_flush_shard_work, c->btree.write_buffer_shard_wq, &cl);
+	}
 
 	closure_sync_unbounded(&cl);
 
