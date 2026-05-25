@@ -927,6 +927,15 @@ revert_fs_usage:
 	return ret;
 }
 
+static noinline int bch2_trans_commit_extra_disk_res(struct btree_trans *trans,
+						     enum bch_trans_commit_flags flags)
+{
+	return bch2_disk_reservation_add(trans->c, trans->disk_res,
+				trans->extra_disk_res,
+				(flags & BCH_TRANS_COMMIT_no_enospc)
+				? BCH_DISK_RESERVATION_NOFAIL : 0);
+}
+
 static noinline int bch2_trans_commit_btree_write_ratelimit(struct btree_trans *trans)
 {
 	struct bch_fs_btree_cache *bc = &trans->c->btree.cache;
@@ -1310,11 +1319,8 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 			journal_u64s += jset_u64s(i->old_k.u64s);
 	}
 
-	if (trans->extra_disk_res) {
-		ret = bch2_disk_reservation_add(c, trans->disk_res,
-				trans->extra_disk_res,
-				(flags & BCH_TRANS_COMMIT_no_enospc)
-				? BCH_DISK_RESERVATION_NOFAIL : 0);
+	if (unlikely(trans->extra_disk_res)) {
+		ret = bch2_trans_commit_extra_disk_res(trans, flags);
 		if (ret)
 			goto err;
 	}
