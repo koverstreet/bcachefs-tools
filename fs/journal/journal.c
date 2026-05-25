@@ -381,6 +381,16 @@ void bch2_journal_halt_locked(struct journal *j)
 	if (!j->err_seq)
 		j->err_seq = journal_cur_seq(j);
 	journal_wake(j);
+
+	/*
+	 * Wake closure waiters who'd otherwise be parked indefinitely once
+	 * we enter error state: no future write_done will fire, so the
+	 * usual per-write wake-ups (and reclaim-side wake-ups) won't reach
+	 * them. They re-check on wake, see the journal is shutting down,
+	 * and return the appropriate error.
+	 */
+	__closure_wake_up(&j->flush_wait);
+	__closure_wake_up(&j->reclaim_flush_wait);
 }
 
 void bch2_journal_halt(struct journal *j)
