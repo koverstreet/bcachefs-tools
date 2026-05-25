@@ -473,27 +473,6 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         })
         .collect::<Result<_>>()?;
 
-    // Pick a default for shard_inode_numbers_bits if the user didn't.
-    //
-    // Sharding the inode-number space spreads concurrent allocators across
-    // disjoint cursor entries (and, with the planned pre-split, disjoint
-    // inode-btree nodes) so create/unlink/rename ops on many threads don't
-    // serialize on the same btree node. Scaling with nr_cpus * 2 leaves
-    // headroom for thread oversubscription without overshooting; clamped to
-    // the [0, 8] range the option supports.
-    if !bch_bindgen::opts::opt_defined_by_id(&cfg.fs_opts, c::bch_opt_id::Opt_shard_inode_numbers_bits) {
-        let nr = std::thread::available_parallelism()
-            .map(|n| n.get())
-            .unwrap_or(1);
-        let target = (nr * 2).next_power_of_two();
-        let bits = (target.trailing_zeros() as u64).min(8);
-        bch_bindgen::opts::opt_set_by_id(
-            &mut cfg.fs_opts,
-            c::bch_opt_id::Opt_shard_inode_numbers_bits,
-            bits,
-        );
-    }
-
     // Open all devices for format
     for (i, dev) in devices.iter_mut().enumerate() {
         if let Some(mpath_dev) = find_multipath_holder(Path::new(&cfg.devices[i].path)) {
@@ -509,6 +488,64 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         dev.open(0, cfg.force).map_err(|e| {
             anyhow!("Error opening {}: {}", dev.path.to_string_lossy(), io::Error::from_raw_os_error(e))
         })?;
+    }
+
+    // Pick a default for shard_inode_numbers_bits if the user didn't.
+    //
+    // Sharding the inode-number space spreads concurrent allocators across
+    // disjoint cursor entries (and, with the pre-split shard boundaries
+    // recovery pass, disjoint inode-btree nodes) so create/unlink/rename ops
+    // on many threads don't serialize on the same btree node.
+    //
+    // Two constraints combined:
+    //  - CPU-based: scale with nr_cpus * 2 (rounded up to power of two)
+    //    so we don't oversubscribe on small machines but leave headroom
+    //    for thread oversubscription on real workloads.
+    //  - Size-based: each shard pre-splits 4 sharded btrees by one btree
+    //    node each, plus alloc-tree / journal / parent-update overhead.
+    //    Cap total pre-split metadata at 0.1% of fs size so small fses
+    //    don't blow their metadata budget at format time.
+    if !bch_bindgen::opts::opt_defined_by_id(&cfg.fs_opts, c::bch_opt_id::Opt_shard_inode_numbers_bits) {
+        let nr = std::thread::available_parallelism()
+            .map(|n| n.get())
+            .unwrap_or(1);
+        let cpu_bits = ((nr * 2).next_power_of_two().trailing_zeros() as u64).min(8);
+
+        // Total fs size in bytes, populating per-device sizes from fd if
+        // the user didn't specify them.
+        let total_fs_size: u64 = devices.iter_mut().map(|d| {
+            if d.fs_size == 0 {
+                d.fs_size = crate::wrappers::bdev::get_size(d.fd);
+            }
+            d.fs_size
+        }).sum();
+
+        // btree_node_size in bytes. cfg.fs_opts.btree_node_size is 0 here
+        // if the user didn't override (the default isn't materialized until
+        // format_util.rs:191 later); fall back to the same default
+        // (256K) the format path will pick.
+        let btree_node_bytes = if cfg.fs_opts.btree_node_size != 0 {
+            cfg.fs_opts.btree_node_size as u64
+        } else {
+            256 << 10
+        };
+
+        // 4 btrees pre-split per shard. Cap total at 1% of fs:
+        //   2^bits * 4 * btree_node_bytes  ≤  0.01 * fs_size
+        //   2^bits  ≤  fs_size / (400 * btree_node_bytes)
+        let denom = 400u64.saturating_mul(btree_node_bytes);
+        let size_bits = if denom > 0 && total_fs_size >= denom {
+            (64 - (total_fs_size / denom).leading_zeros() as u64).saturating_sub(1)
+        } else {
+            0
+        };
+
+        let bits = cpu_bits.min(size_bits).min(8);
+        bch_bindgen::opts::opt_set_by_id(
+            &mut cfg.fs_opts,
+            c::bch_opt_id::Opt_shard_inode_numbers_bits,
+            bits,
+        );
     }
 
     let sb = crate::commands::format_util::format(fs_opt_strs, cfg.fs_opts, fmt_opts, &mut devices);
