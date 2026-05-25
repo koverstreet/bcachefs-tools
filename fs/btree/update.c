@@ -633,6 +633,20 @@ void *__bch2_trans_subbuf_alloc(struct btree_trans *trans,
 	return p;
 }
 
+int bch2_trans_subbuf_reserve(struct btree_trans *trans,
+			      struct btree_trans_subbuf *buf,
+			      unsigned u64s)
+{
+	if (buf->u64s + u64s > buf->size) {
+		unsigned old_u64s = buf->u64s;
+		void *p = __bch2_trans_subbuf_alloc(trans, buf, u64s, _THIS_IP_);
+		if (IS_ERR(p))
+			return PTR_ERR(p);
+		buf->u64s = old_u64s;
+	}
+	return 0;
+}
+
 int bch2_bkey_get_empty_slot(struct btree_trans *trans, struct btree_iter *iter,
 			     enum btree_id btree, struct bpos start, struct bpos end)
 {
