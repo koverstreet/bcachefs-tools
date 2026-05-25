@@ -857,6 +857,10 @@ static int btree_update_nodes_written_trans(struct btree_trans *trans,
 /* If the node has been reused, we might be reading uninitialized memory - that's fine: */
 static noinline __no_kmsan_checks bool btree_node_seq_matches(struct btree *b, __le64 seq)
 {
+	/* b->data is not stable while read in flight */
+	if (btree_node_read_in_flight(b))
+		return false;
+
 	struct btree_node *b_data = READ_ONCE(b->data);
 
 	return (b_data ? b_data->keys.seq : 0) == seq;
