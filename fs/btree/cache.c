@@ -1055,6 +1055,13 @@ static noinline struct btree *bch2_btree_node_fill(struct btree_trans *trans,
 	b->c.level	= level;
 	b->c.btree_id	= btree_id;
 	if (!bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_CLEAN)) {
+		/*
+		 * Must be set with node write locked - b->data is not stable
+		 * while node is write locked or read_in_flight is set, read
+		 * path will do a buffer swap
+		 *
+		 * and also cache coherency
+		 */
 		set_btree_node_read_in_flight(b);
 		six_unlock_write(&b->c.lock);
 
