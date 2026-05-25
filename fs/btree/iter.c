@@ -1352,7 +1352,7 @@ int bch2_btree_path_traverse_one(struct btree_trans *trans,
 	 * and re-traverse the path without a transaction restart:
 	 */
 	if (path->should_be_locked) {
-		ret = bch2_btree_path_relock(trans, path, _THIS_IP_);
+		ret = bch2_btree_path_relock(trans, path);
 		goto out;
 	}
 
@@ -2539,7 +2539,7 @@ static int btree_trans_peek_key_cache(struct btree_iter *iter, struct bkey_s_c *
 
 	int ret = bch2_btree_path_traverse(trans, iter->key_cache_path,
 					   iter->flags|BTREE_ITER_cached) ?:
-		  bch2_btree_path_relock(trans, btree_iter_path(trans, iter), _THIS_IP_);
+		  bch2_btree_path_relock(trans, btree_iter_path(trans, iter));
 	if (unlikely(ret)) {
 		bch2_btree_iter_set_pos(iter, iter->pos);
 		*k = bkey_s_c_err(ret);
@@ -2861,7 +2861,7 @@ struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *iter, const struct b
 	btree_path_set_should_be_locked(trans, btree_iter_path(trans, iter));
 out_no_locked:
 	if (iter->update_path) {
-		ret = bch2_btree_path_relock(trans, trans->paths + iter->update_path, _THIS_IP_);
+		ret = bch2_btree_path_relock(trans, trans->paths + iter->update_path);
 		if (unlikely(ret))
 			k = bkey_s_c_err(ret);
 		else

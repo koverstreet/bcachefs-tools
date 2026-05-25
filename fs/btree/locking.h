@@ -408,15 +408,13 @@ bch2_btree_node_lock_with_path(struct btree_trans *,
 /* relock: */
 
 bool bch2_btree_path_relock_norestart(struct btree_trans *, struct btree_path *);
-int __bch2_btree_path_relock(struct btree_trans *,
-			     struct btree_path *, unsigned long);
+int __bch2_btree_path_relock(struct btree_trans *, struct btree_path *);
 
-static inline int bch2_btree_path_relock(struct btree_trans *trans,
-				struct btree_path *path, unsigned long trace_ip)
+static inline int bch2_btree_path_relock(struct btree_trans *trans, struct btree_path *path)
 {
 	return btree_node_locked(path, path->level)
 		? 0
-		: __bch2_btree_path_relock(trans, path, trace_ip);
+		: __bch2_btree_path_relock(trans, path);
 }
 
 bool __bch2_btree_node_relock(struct btree_trans *, struct btree_path *, unsigned, bool trace);

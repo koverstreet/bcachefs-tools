@@ -936,8 +936,7 @@ bool bch2_btree_path_relock_norestart(struct btree_trans *trans, struct btree_pa
 	return ret;
 }
 
-int __bch2_btree_path_relock(struct btree_trans *trans,
-			struct btree_path *path, unsigned long trace_ip)
+int __bch2_btree_path_relock(struct btree_trans *trans, struct btree_path *path)
 {
 	if (!bch2_btree_path_relock_norestart(trans, path)) {
 		event_inc_trace(trans->c, trans_restart_relock_path, buf, ({
