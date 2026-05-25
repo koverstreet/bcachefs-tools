@@ -1032,7 +1032,7 @@ static noinline struct btree *bch2_btree_node_fill(struct btree_trans *trans,
 	 * been freed:
 	 */
 	if (path) {
-		int ret = bch2_btree_path_relock(trans, path, _THIS_IP_);
+		int ret = bch2_btree_path_relock(trans, path);
 		if (ret)
 			return ERR_PTR(ret);
 	}
@@ -1100,7 +1100,7 @@ static noinline struct btree *bch2_btree_node_fill(struct btree_trans *trans,
 	 */
 	if (path) {
 		int ret = bch2_trans_relock(trans) ?:
-			  bch2_btree_path_relock(trans, path, _THIS_IP_);
+			  bch2_btree_path_relock(trans, path);
 		if (ret) {
 			if (b)
 				six_unlock_type(&b->c.lock, lock_type);
@@ -1253,7 +1253,7 @@ retry:
 		bch2_btree_node_wait_on_read(trans, b);
 
 		ret =   bch2_trans_relock(trans) ?:
-			bch2_btree_path_relock(trans, path, _THIS_IP_);
+			bch2_btree_path_relock(trans, path);
 		if (ret)
 			return ERR_PTR(ret);
 
