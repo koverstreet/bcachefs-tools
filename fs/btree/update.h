@@ -315,6 +315,7 @@ static inline void bch2_trans_reset_updates(struct btree_trans *trans)
 	trans->hooks			= NULL;
 	trans->extra_disk_res		= 0;
 	trans->extra_journal_u64s	= 0;
+	trans->has_interior_updates	= 0;
 }
 
 /**
