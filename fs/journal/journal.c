@@ -878,8 +878,15 @@ int bch2_journal_flush_seq_async(struct journal *j, u64 seq,
 		      seq, journal_cur_seq(j)))
 		goto out;
 
-	/* Recheck under lock: */
-	if (j->err_seq && seq >= j->err_seq) {
+	/*
+	 * In error state, any seq that wasn't already durable before the
+	 * error fired won't ever flush — write_done's flushed_seq_ondisk
+	 * update is gated on !err_seq, so seqs in flight at the moment of
+	 * error are stranded with seq_ondisk advanced but
+	 * flushed_seq_ondisk not. Return -EIO for those instead of
+	 * waiting forever; fsync gets the error and unblocks.
+	 */
+	if (j->err_seq && seq > j->flushed_seq_ondisk) {
 		ret = bch_err_throw(c, journal_flush_err);
 		goto out;
 	}
@@ -971,7 +978,7 @@ int bch2_journal_flush_seq(struct journal *j, u64 seq, unsigned task_state)
 	if (!ret)
 		bch2_time_stats_update(j->flush_seq_time, start_time);
 
-	return j->err_seq && seq >= j->err_seq
+	return j->err_seq && seq > j->flushed_seq_ondisk
 		? bch_err_throw(c, journal_flush_err)
 		: 0;
 }
