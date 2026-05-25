@@ -97,3 +97,11 @@ enum bch_errcode zstd_err_to_bch_err(ZSTD_ErrorCode err)
 		default:		return BCH_ERR_ZSTD_error_unknown;
 	}
 }
+
+int __bch2_err_throw(struct bch_fs *c, int err)
+{
+	BUG_ON(err >= 0);
+	this_cpu_inc(c->counters.now[BCH_COUNTER_error_throw]);
+	trace_error_throw(c, bch2_err_str(err));
+	return err;
+}

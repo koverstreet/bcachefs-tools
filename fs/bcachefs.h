@@ -808,13 +808,7 @@ struct bch_fs {
 
 /* Error tracking: */
 
-static inline int __bch2_err_throw(struct bch_fs *c, int err)
-{
-	BUG_ON(err >= 0);
-	this_cpu_inc(c->counters.now[BCH_COUNTER_error_throw]);
-	trace_error_throw(c, bch2_err_str(err));
-	return err;
-}
+int __bch2_err_throw(struct bch_fs *, int);
 
 #define bch_err_throw(_c, _err) __bch2_err_throw(_c, -BCH_ERR_##_err)
 
