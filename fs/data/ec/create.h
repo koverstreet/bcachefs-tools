@@ -132,6 +132,8 @@ unsigned bch2_disk_label_ec_devs(struct bch_fs *, unsigned, struct bch_devs_mask
 void bch2_disk_label_ec_rw_member_devs(struct bch_fs *, unsigned,
 				       struct bch_devs_mask *, unsigned);
 
+bool bch2_can_form_ec_stripe(struct bch_fs *, unsigned, unsigned);
+
 /*
  * Lazy per-(disk_label, sectors) cache of RW member counts (the can_widen
  * target); shared by callers that walk stripes and need the widening target

@@ -532,6 +532,26 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 
 	if (r->need_rb & BIT(BCH_RECONCILE_erasure_code)) {
 		if (r->erasure_code) {
+			/*
+			 * Can a stripe form right now? If not (e.g. not enough
+			 * RW devs in target with matching bucket_size), queueing
+			 * the data_update would just keep failing and re-queueing
+			 * forever. If EC is the only thing to do, park the extent
+			 * on the pending list — a device add/remove/state change
+			 * will re-evaluate. Otherwise drop EC from the rb mask and
+			 * fall through to do the other work.
+			 */
+			if (!bch2_can_form_ec_stripe(c, r->background_target, r->data_replicas)) {
+				if (r->need_rb == BIT(BCH_RECONCILE_erasure_code))
+					return bch2_extent_reconcile_pending_mod(trans, iter, level, k, true);
+				/*
+				 * Downstream rb-bit handling doesn't read the EC
+				 * bit, so we don't need to clear it from r->need_rb
+				 * (which is const). Just skip the EC action.
+				 */
+				goto skip_ec;
+			}
+
 			/* XXX: we'll need ratelimiting */
 			if (extent_ec_pending(trans, ptrs))
 				return false;
@@ -551,6 +571,7 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 			}
 		}
 	}
+skip_ec:
 
 	scoped_guard(rcu) {
 		unsigned ptr_bit = 1;

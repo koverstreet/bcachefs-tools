@@ -822,6 +822,35 @@ unsigned bch2_disk_label_ec_devs(struct bch_fs *c, unsigned disk_label,
 }
 
 /*
+ * Can a stripe with @redundancy parity blocks be formed in @target right now?
+ *
+ * Minimum stripe size is redundancy + 1 (one data block + parity), and all
+ * blocks in a stripe must share a single bucket_size. So we need at least
+ * redundancy + 1 RW devices in the target that agree on bucket_size.
+ *
+ * bch2_disk_label_ec_devs already returns the filtered device mask (RW members
+ * with durability > 0, narrowed to the picked best bucket_size).
+ *
+ * Used by reconcile to avoid queueing EC work that can't make progress —
+ * otherwise reconcile spins re-queueing data_update_fail forever.
+ */
+bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redundancy)
+{
+	if (!redundancy)
+		return false;
+
+	struct target t = target_decode(target);
+	unsigned disk_label = t.type == TARGET_GROUP && t.group <= U8_MAX
+		? t.group + 1
+		: 0;
+
+	struct bch_devs_mask devs;
+	bch2_disk_label_ec_devs(c, disk_label, &devs, 0);
+
+	return dev_mask_nr(&devs) >= redundancy + 1;
+}
+
+/*
  * RW-member view of bch2_disk_label_ec_devs: returns devs in this disk_label
  * group whose configured state is BCH_MEMBER_STATE_rw, regardless of whether
  * they're currently online. This is the target for stripe.can_widen so that
