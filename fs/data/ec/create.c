@@ -322,6 +322,9 @@ static int stripe_update_extent(struct btree_trans *trans,
 	if (p.has_ec)
 		bch2_bkey_drop_stripe_ptr(c, bkey_i_to_s(n), p.ec.idx);
 
+	if (old_block.dev != new_block.dev)
+		bch2_bkey_drop_device_noerror(c, bkey_i_to_s(n), new_block.dev);
+
 	struct bch_extent_ptr *ec_ptr = bch2_bkey_has_device(c, bkey_i_to_s(n), old_block.dev);
 	ec_ptr->dev	= new_block.dev;
 	ec_ptr->offset	-= old_block.offset;
