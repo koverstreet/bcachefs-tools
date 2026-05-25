@@ -156,25 +156,13 @@ unsigned ptr_mask_remap(struct bch_fs *c,
 	return newmask;
 }
 
-static unsigned bkey_has_device_mask(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
-{
-	unsigned ptr_bit = 1;
-	bkey_for_each_ptr(bch2_bkey_ptrs_c(k), ptr) {
-		if (ptr->dev == dev)
-			return ptr_bit;
-		ptr_bit <<= 1;
-	}
-
-	return 0;
-}
-
 /* Returns mask of pointers in @k1 that conflict with pointers in @k2 */
 static unsigned bkey_ptr_conflicts_mask(struct bch_fs *c, struct bkey_s_c k1, struct bkey_s_c k2)
 {
 	unsigned ptrs_conflict = 0;
 
 	bkey_for_each_ptr(bch2_bkey_ptrs_c(k2), ptr)
-		ptrs_conflict |= bkey_has_device_mask(c, k1, ptr->dev);
+		ptrs_conflict |= bch2_bkey_dev_ptr_bit(c, k1, ptr->dev);
 	return ptrs_conflict;
 }
 
@@ -186,7 +174,7 @@ static unsigned bkey_ptr_noncached_conflicts_mask(struct bch_fs *c, struct bkey_
 
 	bkey_for_each_ptr(bch2_bkey_ptrs_c(k2), ptr)
 		if (!ptr->cached)
-			ptrs_conflict |= bkey_has_device_mask(c, k1, ptr->dev);
+			ptrs_conflict |= bch2_bkey_dev_ptr_bit(c, k1, ptr->dev);
 	return ptrs_conflict;
 }
 

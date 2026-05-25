@@ -608,6 +608,19 @@ static inline struct bch_extent_ptr *bch2_bkey_has_device(const struct bch_fs *c
 	return (void *) bch2_bkey_has_device_c(c, k.s_c, dev);
 }
 
+/* Returns the ptr_bit (bit-position-as-mask) of the first ptr matching @dev,
+ * or 0 if no such ptr exists. */
+static inline unsigned bch2_bkey_dev_ptr_bit(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
+{
+	unsigned ptr_bit = 1;
+	bkey_for_each_ptr(bch2_bkey_ptrs_c(k), ptr) {
+		if (ptr->dev == dev)
+			return ptr_bit;
+		ptr_bit <<= 1;
+	}
+	return 0;
+}
+
 bool bch2_bkey_devs_rw(struct bch_fs *, struct bkey_s_c);
 
 bool bch2_bkey_has_target(struct bch_fs *, struct bkey_s_c, unsigned);
