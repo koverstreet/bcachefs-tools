@@ -961,6 +961,21 @@ static void transaction_commit_trace(struct btree_trans *trans)
 	__event_trace(trans->c, transaction_commit, buf, prt_str(&buf, trans->fn));
 }
 
+static inline bool update_is_noop(struct btree_insert_entry *i, enum bch_trans_commit_flags flags)
+{
+	struct bkey_s_c old = { &i->old_k, i->old_v };
+
+	/*
+	 * We can't drop noop inode updates because fsync relies
+	 * on grabbing the journal_seq of the latest update from
+	 * the inode - and the journal_seq isn't updated until
+	 * the atomic trigger:
+	 */
+	return likely(!(flags & BCH_TRANS_COMMIT_no_skip_noops) &&
+		      i->bkey_type != BKEY_TYPE_inodes &&
+		      bkey_and_val_eq(old, bkey_i_to_s_c(i->k)));
+}
+
 static inline int
 bch2_trans_commit_write_locked(struct btree_trans *trans,
 			       enum bch_trans_commit_flags flags,
@@ -1232,7 +1247,6 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 {
 	struct btree_insert_entry *errored_at = NULL;
 	struct bch_fs *c = trans->c;
-	unsigned journal_u64s = 0;
 	int ret = 0;
 
 	bch2_trans_verify_not_unlocked_or_in_restart(trans);
@@ -1257,41 +1271,7 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 	if (ret)
 		goto out_reset;
 
-	if (likely(!(flags & BCH_TRANS_COMMIT_no_skip_noops))) {
-		struct btree_insert_entry *dst = trans->updates;
-		trans_for_each_update(trans, i) {
-			struct bkey_s_c old = { &i->old_k, i->old_v };
-
-			/*
-			 * We can't drop noop inode updates because fsync relies
-			 * on grabbing the journal_seq of the latest update from
-			 * the inode - and the journal_seq isn't updated until
-			 * the atomic trigger:
-			 */
-			if (likely(i->bkey_type == BKEY_TYPE_inodes ||
-				   !bkey_and_val_eq(old, bkey_i_to_s_c(i->k))))
-				*dst++ = *i;
-			else
-				bch2_path_put(trans, i->path, true);
-		}
-		trans->nr_updates = dst - trans->updates;
-
-		if (!bch2_trans_has_updates(trans))
-			goto out_reset;
-	}
-
-	if (!(flags & BCH_TRANS_COMMIT_no_check_rw) &&
-	    unlikely(!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_trans))) {
-		if (unlikely(!test_bit(BCH_FS_may_go_rw, &c->flags)))
-			ret = do_bch2_trans_commit_to_journal_replay(trans, flags);
-		else
-			ret = bch_err_throw(c, erofs_trans_commit);
-		goto out_reset;
-	}
-
-	EBUG_ON(test_bit(BCH_FS_clean_shutdown, &c->flags));
-
-	journal_u64s = 0;
+	unsigned journal_u64s = 0;
 
 	trans->journal_transaction_names = READ_ONCE(c->opts.journal_transaction_names);
 	if (trans->journal_transaction_names)
@@ -1300,14 +1280,22 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 	if (trans->accounting.u64s)
 		journal_u64s += jset_u64s(trans->accounting.u64s);
 
+	struct btree_insert_entry *dst = trans->updates;
 	trans_for_each_update(trans, i) {
+		if (unlikely(update_is_noop(i, flags))) {
+			bch2_path_put(trans, i->path, true);
+			continue;
+		}
+
+		*dst++ = *i;
+
 		struct btree_path *path = trans->paths + i->path;
 
 		EBUG_ON(!path->should_be_locked);
 
 		ret = bch2_btree_path_upgrade(trans, path, i->level + 1);
 		if (unlikely(ret))
-			goto out;
+			goto out_reset;
 
 		EBUG_ON(!btree_node_intent_locked(path, i->level));
 
@@ -1325,11 +1313,26 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 			journal_u64s += jset_u64s(i->old_k.u64s);
 	}
 
+	trans->nr_updates = dst - trans->updates;
+	if (!bch2_trans_has_updates(trans))
+		goto out_reset;
+
 	if (unlikely(trans->extra_disk_res)) {
 		ret = bch2_trans_commit_extra_disk_res(trans, flags);
 		if (ret)
-			goto err;
+			goto out_reset;
 	}
+
+	if (!(flags & BCH_TRANS_COMMIT_no_check_rw) &&
+	    unlikely(!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_trans))) {
+		if (unlikely(!test_bit(BCH_FS_may_go_rw, &c->flags)))
+			ret = do_bch2_trans_commit_to_journal_replay(trans, flags);
+		else
+			ret = bch_err_throw(c, erofs_trans_commit);
+		goto out_reset;
+	}
+
+	EBUG_ON(test_bit(BCH_FS_clean_shutdown, &c->flags));
 retry:
 	errored_at = NULL;
 	bch2_trans_verify_not_unlocked_or_in_restart(trans);
