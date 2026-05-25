@@ -904,6 +904,12 @@ static struct dentry *bch2_mkdir(struct mnt_idmap *idmap,
 	return ERR_PTR(bch2_mknod(idmap, vdir, dentry, mode|S_IFDIR, 0));
 }
 
+#if IS_ENABLED(CONFIG_UNICODE)
+static void bch2_d_op_update_for_parent(struct dentry *, struct inode *);
+static void bch2_d_op_update_from_bi_dir(struct super_block *, struct dentry *,
+					 struct inode *);
+#endif
+
 static int bch2_rename2(struct mnt_idmap *idmap,
 			struct inode *src_vdir, struct dentry *src_dentry,
 			struct inode *dst_vdir, struct dentry *dst_dentry,
@@ -1024,6 +1030,19 @@ err_tx_restart:
 	if (dst_inode)
 		bch2_inode_update_after_write(trans, dst_inode, &dst_inode_u,
 					      ATTR_CTIME);
+
+#if IS_ENABLED(CONFIG_UNICODE)
+	/*
+	 * __d_move (run by VFS after we return) doesn't re-run .d_init, so the
+	 * moved dentry keeps its old casefold d_op. If we crossed a CF boundary,
+	 * fix it up before d_move sees the dentry. (RENAME_EXCHANGE swaps both.)
+	 */
+	if (src_vdir != dst_vdir) {
+		bch2_d_op_update_for_parent(src_dentry, dst_vdir);
+		if (mode == BCH_RENAME_EXCHANGE)
+			bch2_d_op_update_for_parent(dst_dentry, src_vdir);
+	}
+#endif
 err:
 	bch2_fs_quota_transfer(c, src_inode,
 			       bch_qid(&src_inode->ei_inode),
@@ -1634,6 +1653,15 @@ static struct inode *bch2_nfs_get_inode(struct super_block *sb,
 	return vinode;
 }
 
+static struct dentry *bch2_fh_alias(struct super_block *sb, struct inode *vinode)
+{
+	struct dentry *dentry = d_obtain_alias(vinode);
+#if IS_ENABLED(CONFIG_UNICODE)
+	bch2_d_op_update_from_bi_dir(sb, dentry, vinode);
+#endif
+	return dentry;
+}
+
 static struct dentry *bch2_fh_to_dentry(struct super_block *sb, struct fid *_fid,
 		int fh_len, int fh_type)
 {
@@ -1642,7 +1670,7 @@ static struct dentry *bch2_fh_to_dentry(struct super_block *sb, struct fid *_fid
 	if (!bcachefs_fid_valid(fh_len, fh_type))
 		return NULL;
 
-	return d_obtain_alias(bch2_nfs_get_inode(sb, *fid));
+	return bch2_fh_alias(sb, bch2_nfs_get_inode(sb, *fid));
 }
 
 static struct dentry *bch2_fh_to_parent(struct super_block *sb, struct fid *_fid,
@@ -1654,7 +1682,7 @@ static struct dentry *bch2_fh_to_parent(struct super_block *sb, struct fid *_fid
 	    fh_type != FILEID_BCACHEFS_WITH_PARENT)
 		return NULL;
 
-	return d_obtain_alias(bch2_nfs_get_inode(sb, fid->dir));
+	return bch2_fh_alias(sb, bch2_nfs_get_inode(sb, fid->dir));
 }
 
 static struct dentry *bch2_get_parent(struct dentry *child)
@@ -1668,7 +1696,7 @@ static struct dentry *bch2_get_parent(struct dentry *child)
 	};
 
 	/* needs nowarn */
-	return d_obtain_alias(bch2_vfs_inode_get(c, parent_inum, NULL));
+	return bch2_fh_alias(inode->v.i_sb, bch2_vfs_inode_get(c, parent_inum, NULL));
 }
 
 static int bch2_get_name(struct dentry *parent, char *name, struct dentry *child)
@@ -2149,6 +2177,116 @@ static int bch2_unfreeze(struct super_block *sb)
 	return bch2_fs_read_write(c);
 }
 
+#if IS_ENABLED(CONFIG_UNICODE)
+/*
+ * Per-directory casefold d_ops: only install d_compare/d_hash on dentries
+ * descended from a casefolded directory. The dcache hot path
+ * (__d_lookup_rcu) gates the slow d_compare on parent->d_flags &
+ * DCACHE_OP_COMPARE — if we leave DCACHE_OP_COMPARE clear on non-casefolded
+ * directory dentries, child lookups use the inline dentry_cmp fast path.
+ *
+ * The decision is made at d_alloc-time via .d_init, using parent-inheritance
+ * as an approximation: if the parent directory is casefolded, this dentry
+ * preemptively gets the heavy ops. This is correct in the common case
+ * (casefold inherits in typical usage) and the failure mode for mixed trees
+ * (non-casefolded subdir under a casefolded parent) is only a missed
+ * optimization — d_compare still hits its memcmp fast path for exact matches.
+ *
+ * Note: we can't call d_set_d_op() here (it's static and WARNs on
+ * already-set d_op). The d_op was already set to bch2_dentry_ops_default
+ * by d_alloc reading sb->__s_d_op. We override the field directly and
+ * update d_flags to match what d_op_flags() would compute for the new ops.
+ */
+static const struct dentry_operations bch2_dentry_ops_casefolded = {
+	.d_hash		= generic_ci_d_hash,
+	.d_compare	= generic_ci_d_compare,
+};
+
+static int bch2_d_init(struct dentry *dentry)
+{
+	struct dentry *parent = dentry->d_parent;
+
+	if (parent && parent->d_inode && IS_CASEFOLDED(parent->d_inode)) {
+		dentry->d_op = &bch2_dentry_ops_casefolded;
+		dentry->d_flags |= DCACHE_OP_HASH | DCACHE_OP_COMPARE;
+	}
+	return 0;
+}
+
+static const struct dentry_operations bch2_dentry_ops_default = {
+	.d_init		= bch2_d_init,
+};
+
+/*
+ * Rename moves an existing dentry (via __d_move) rather than re-allocating it,
+ * so .d_init doesn't re-run with the new parent. If the new parent's
+ * IS_CASEFOLDED state differs from the d_op we baked in at d_alloc time, we
+ * have to update the dentry's d_op + flags by hand.
+ *
+ * Concurrency: __d_lookup_rcu walks read both dentry->d_flags and
+ * dentry->d_op without locking, so updating either alone races (e.g. seeing
+ * OP_COMPARE set with a default d_op whose d_compare is NULL → crash). Use
+ * dentry->d_seq the same way __d_move does so RCU readers detect the mutation
+ * and retry; hold dentry->d_lock to serialize against other writers.
+ */
+static void bch2_d_op_update_for_parent(struct dentry *dentry, struct inode *new_parent)
+{
+	bool want_cf = new_parent && IS_CASEFOLDED(new_parent);
+	bool has_cf = dentry->d_op == &bch2_dentry_ops_casefolded;
+
+	if (want_cf == has_cf)
+		return;
+
+	spin_lock(&dentry->d_lock);
+	write_seqcount_begin(&dentry->d_seq);
+	if (want_cf) {
+		dentry->d_op = &bch2_dentry_ops_casefolded;
+		dentry->d_flags |= DCACHE_OP_HASH | DCACHE_OP_COMPARE;
+	} else {
+		dentry->d_op = &bch2_dentry_ops_default;
+		dentry->d_flags &= ~(DCACHE_OP_HASH | DCACHE_OP_COMPARE);
+	}
+	write_seqcount_end(&dentry->d_seq);
+	spin_unlock(&dentry->d_lock);
+}
+
+/*
+ * fhandle resolution (d_obtain_alias from .fh_to_dentry / .fh_to_parent /
+ * .get_parent) returns a disconnected dentry whose .d_init ran with
+ * parent=self / parent->d_inode=NULL, so it gets default ops. Once VFS
+ * splices it into the namespace via __d_move it'll keep that stale d_op.
+ *
+ * Look up the inode's parent dir via bi_dir and update the dentry's d_op to
+ * match the parent's IS_CASEFOLDED state. Misses for hard-linked files
+ * accessed through a non-bi_dir path (bi_dir tracks one parent only); for
+ * directories there's a single parent, so this is exact.
+ */
+static void bch2_d_op_update_from_bi_dir(struct super_block *sb,
+					 struct dentry *dentry,
+					 struct inode *vinode)
+{
+	if (IS_ERR_OR_NULL(dentry) || !vinode)
+		return;
+
+	struct bch_inode_info *inode = to_bch_ei(vinode);
+	if (!inode->ei_inode.bi_dir)
+		return;
+
+	struct bch_fs *c = sb->s_fs_info;
+	subvol_inum parent_inum = {
+		.subvol = inode->ei_inode.bi_parent_subvol ?: inode->ei_inum.subvol,
+		.inum = inode->ei_inode.bi_dir,
+	};
+
+	struct inode *parent_vinode = bch2_vfs_inode_get(c, parent_inum, NULL);
+	if (IS_ERR(parent_vinode))
+		return;
+
+	bch2_d_op_update_for_parent(dentry, parent_vinode);
+	iput(parent_vinode);
+}
+#endif
+
 static const struct super_operations bch_super_operations = {
 	.alloc_inode	= bch2_alloc_inode,
 	.free_inode	= bch2_free_inode,
@@ -2323,7 +2461,12 @@ got_sb:
 #if IS_ENABLED(CONFIG_UNICODE)
 	if (!bch2_fs_casefold_enabled(c))
 		sb->s_encoding = c->cf_encoding;
-	generic_set_sb_d_ops(sb);
+	/*
+	 * Use our own default ops (just .d_init) instead of
+	 * generic_set_sb_d_ops()'s generic_ci_dentry_ops — keeps
+	 * DCACHE_OP_COMPARE clear on non-casefolded directories.
+	 */
+	set_default_d_op(sb, &bch2_dentry_ops_default);
 #endif
 
 	vinode = bch2_vfs_inode_get(c, BCACHEFS_ROOT_SUBVOL_INUM, __func__);
@@ -2338,6 +2481,18 @@ got_sb:
 		ret = -ENOMEM;
 		goto err_put_super;
 	}
+
+#if IS_ENABLED(CONFIG_UNICODE)
+	/*
+	 * Root has no parent dentry for .d_init's inheritance to read; if the
+	 * root inode is casefolded, install the heavy ops on the root dentry
+	 * directly so lookups in / use the utf8 compare path.
+	 */
+	if (IS_CASEFOLDED(d_inode(sb->s_root))) {
+		sb->s_root->d_op = &bch2_dentry_ops_casefolded;
+		sb->s_root->d_flags |= DCACHE_OP_HASH | DCACHE_OP_COMPARE;
+	}
+#endif
 
 	sb->s_flags |= SB_ACTIVE;
 out:
