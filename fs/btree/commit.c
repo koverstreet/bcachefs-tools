@@ -527,45 +527,46 @@ static int run_one_trans_trigger(struct btree_trans *trans, struct btree_insert_
 {
 	verify_update_old_key(trans, i);
 
-	if ((i->flags & BTREE_TRIGGER_norun) ||
-	    !btree_node_type_has_trans_triggers(i->bkey_type))
-		return 0;
-
+	struct bkey_i deleted;
+	bkey_init(&deleted.k);
+	deleted.k.p = i->k->k.p;
 	/*
 	 * Transactional triggers create new btree_insert_entries, so we can't
 	 * pass them a pointer to a btree_insert_entry, that memory is going to
 	 * move:
 	 */
 	struct bkey old_k = i->old_k;
-	struct bkey_s_c old = { &old_k, i->old_v };
-	const struct bkey_ops *old_ops = bch2_bkey_type_ops(old.k->type);
+	struct btree_trigger_op op = {
+		.btree		= i->btree_id,
+		.level		= i->level,
+		.old		= (struct bkey_s_c) { &old_k, i->old_v },
+		.new		= bkey_i_to_s(i->k),
+		.new_buf_u64s	= i->k_buf_u64s,
+		.flags		= i->flags|BTREE_TRIGGER_transactional,
+	};
+
+	const struct bkey_ops *old_ops = bch2_bkey_type_ops(old_k.type);
 	const struct bkey_ops *new_ops = bch2_bkey_type_ops(i->k->k.type);
-	unsigned flags = i->flags|BTREE_TRIGGER_transactional;
 
 	if (!i->insert_trigger_run &&
 	    !i->overwrite_trigger_run &&
 	    old_ops->trigger == new_ops->trigger) {
 		i->overwrite_trigger_run = true;
 		i->insert_trigger_run = true;
-		return bch2_key_trigger(trans, (struct btree_trigger_op) {
-			.btree		= i->btree_id,
-			.level		= i->level,
-			.old		= old,
-			.new		= bkey_i_to_s(i->k),
-			.new_buf_u64s	= i->k_buf_u64s,
-			.flags		= BTREE_TRIGGER_insert|
-					  BTREE_TRIGGER_overwrite|flags,
-		}) ?: 1;
+		op.flags |= BTREE_TRIGGER_insert|BTREE_TRIGGER_overwrite;
 	} else if (!i->overwrite_trigger_run) {
 		i->overwrite_trigger_run = true;
-		return bch2_key_trigger_old(trans, i->btree_id, i->level, old, flags) ?: 1;
+		op.flags |= BTREE_TRIGGER_overwrite;
+		op.new = bkey_i_to_s(&deleted);
+		op.new_buf_u64s = 0;
 	} else if (!i->insert_trigger_run) {
 		i->insert_trigger_run = true;
-		return bch2_key_trigger_new(trans, i->btree_id, i->level, bkey_i_to_s(i->k),
-					    i->k_buf_u64s, flags) ?: 1;
-	} else {
-		return 0;
+		op.flags |= BTREE_TRIGGER_insert;
+		op.old = bkey_i_to_s_c(&deleted);
+		old_ops = new_ops;
 	}
+
+	return old_ops->trigger ? old_ops->trigger(trans, op) : 0;
 }
 
 static int bch2_trans_commit_run_triggers(struct btree_trans *trans)
@@ -573,7 +574,7 @@ static int bch2_trans_commit_run_triggers(struct btree_trans *trans)
 	unsigned sort_id_start = 0;
 
 	while (sort_id_start < trans->nr_updates) {
-		unsigned i, sort_id = trans->updates[sort_id_start].sort_order;
+		unsigned idx, sort_id = trans->updates[sort_id_start].sort_order;
 		bool trans_trigger_run;
 
 		/*
@@ -588,23 +589,26 @@ static int bch2_trans_commit_run_triggers(struct btree_trans *trans)
 		do {
 			trans_trigger_run = false;
 
-			for (i = sort_id_start;
-			     i < trans->nr_updates && trans->updates[i].sort_order <= sort_id;
-			     i++) {
-				if (trans->updates[i].sort_order < sort_id) {
-					sort_id_start = i;
+			for (idx = sort_id_start;
+			     idx < trans->nr_updates && trans->updates[idx].sort_order <= sort_id;
+			     idx++) {
+				struct btree_insert_entry *i = trans->updates + idx;
+				if (i->sort_order < sort_id) {
+					sort_id_start = idx;
 					continue;
 				}
 
-				int ret = run_one_trans_trigger(trans, trans->updates + i);
-				if (ret < 0)
-					return ret;
-				if (ret)
-					trans_trigger_run = true;
+				if ((i->flags & BTREE_TRIGGER_norun) ||
+				    !btree_node_type_has_trans_triggers(i->bkey_type) ||
+				    (i->insert_trigger_run && i->overwrite_trigger_run))
+					continue;
+
+				try(run_one_trans_trigger(trans, i));
+				trans_trigger_run = true;
 			}
 		} while (trans_trigger_run);
 
-		sort_id_start = i;
+		sort_id_start = idx;
 	}
 
 #ifdef CONFIG_BCACHEFS_DEBUG
