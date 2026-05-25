@@ -195,6 +195,14 @@ struct bch_inode_info *
 __bch2_create(struct mnt_idmap *, struct bch_inode_info *,
 	      struct dentry *, umode_t, dev_t, subvol_inum, unsigned);
 
+#if IS_ENABLED(CONFIG_UNICODE)
+void bch2_dentry_set_casefold_ops(struct dentry *, struct inode *);
+void bch2_dir_casefold_changed(struct dentry *);
+#else
+static inline void bch2_dentry_set_casefold_ops(struct dentry *dentry, struct inode *vinode) {}
+static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
+#endif
+
 int bch2_inode_or_descendents_is_open(struct btree_trans *trans, struct bpos p);
 
 int bch2_fs_quota_transfer(struct bch_fs *,

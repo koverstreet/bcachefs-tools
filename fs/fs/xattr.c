@@ -569,6 +569,9 @@ static int __bch2_xattr_bcachefs_set(const struct xattr_handler *handler,
 		try(bch2_write_inode(c, inode, inode_opt_set_fn, &s, 0));
 	}
 
+	if (inode_opt_id == Inode_opt_casefold)
+		bch2_dir_casefold_changed(dentry);
+
 	bch2_opt_hook_post_set(c, NULL, inode->ei_inode.bi_inum, opt_id, v);
 	return 0;
 }

@@ -376,6 +376,7 @@ static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 	if (error)
 		goto err3;
 
+	bch2_dentry_set_casefold_ops(dst_dentry, &inode->v);
 	d_instantiate(dst_dentry, &inode->v);
 	fsnotify_mkdir(dir, dst_dentry);
 err3:

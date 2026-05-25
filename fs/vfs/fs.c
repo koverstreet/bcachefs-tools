@@ -769,6 +769,105 @@ static struct bch_inode_info *bch2_lookup_trans(struct btree_trans *trans,
 	return ret ? ERR_PTR(ret) : inode;
 }
 
+#if IS_ENABLED(CONFIG_UNICODE)
+/*
+ * Per-directory casefold d_ops: directory dentries that may become casefolded
+ * use d_ops with utf8 d_hash/d_compare, but DCACHE_OP_HASH/DCACHE_OP_COMPARE
+ * are set only while the directory is actually casefolded. __d_lookup_rcu gates
+ * the slow d_compare on the *parent* dentry's DCACHE_OP_COMPARE, so
+ * non-casefolded directories keep the inline dentry_cmp fast path.
+ *
+ * The d_op can't be chosen in .d_init: d_alloc calls it before the inode is
+ * attached and with d_parent still pointing at the dentry itself, so the
+ * dentry's own casefold state is not knowable yet. Instead, when a directory
+ * inode is attached, set d_op before publication and derive the OP flags from
+ * IS_CASEFOLDED(). Runtime casefold changes only update d_flags; d_op remains
+ * casefold-capable so lockless readers never see OP flags with missing
+ * callbacks.
+ */
+static const struct dentry_operations bch2_dentry_ops_casefolded = {
+	.d_hash		= generic_ci_d_hash,
+	.d_compare	= generic_ci_d_compare,
+};
+
+static inline unsigned bch2_dentry_casefold_flags(struct inode *vinode)
+{
+	return IS_CASEFOLDED(vinode)
+		? DCACHE_OP_HASH|DCACHE_OP_COMPARE
+		: 0;
+}
+
+static void bch2_dentry_apply_casefold_flags(struct dentry *dentry,
+					     unsigned flags)
+{
+	unsigned d_flags = READ_ONCE(dentry->d_flags);
+
+	if (flags)
+		d_flags |= flags;
+	else
+		d_flags &= ~(DCACHE_OP_HASH|DCACHE_OP_COMPARE);
+
+	WRITE_ONCE(dentry->d_flags, d_flags);
+}
+
+/*
+ * Set a directory dentry's casefold d_ops from its inode before the dentry is
+ * published. Not yet reachable by RCU lookups, so a plain assignment is safe.
+ */
+void bch2_dentry_set_casefold_ops(struct dentry *dentry, struct inode *vinode)
+{
+	if (!S_ISDIR(vinode->i_mode))
+		return;
+
+	dentry->d_op = &bch2_dentry_ops_casefolded;
+	bch2_dentry_apply_casefold_flags(dentry, bch2_dentry_casefold_flags(vinode));
+}
+
+/*
+ * d_obtain_alias() attaches the dentry before returning it. Disconnected
+ * aliases are not reachable by parent lookup yet, but existing aliases can be.
+ * Hold d_lock to serialize against other writers. Lockless readers may sample
+ * either the old or new flags, so keep the flag update to a single transition.
+ */
+static void bch2_dentry_set_casefold_ops_locked(struct dentry *dentry, struct inode *vinode)
+{
+	unsigned flags;
+
+	if (!S_ISDIR(vinode->i_mode))
+		return;
+
+	flags = bch2_dentry_casefold_flags(vinode);
+
+	spin_lock(&dentry->d_lock);
+	dentry->d_op = &bch2_dentry_ops_casefolded;
+	bch2_dentry_apply_casefold_flags(dentry, flags);
+	spin_unlock(&dentry->d_lock);
+}
+
+/*
+ * Refresh a published directory dentry's casefold OP flags after its casefold
+ * state changed at runtime. d_op is already casefold-capable and is not changed
+ * here, so lockless d_hash/d_compare users never see flags without callbacks.
+ */
+static void bch2_dentry_update_casefold_flags(struct dentry *dentry)
+{
+	unsigned flags = bch2_dentry_casefold_flags(d_inode(dentry));
+
+	spin_lock(&dentry->d_lock);
+	bch2_dentry_apply_casefold_flags(dentry, flags);
+	spin_unlock(&dentry->d_lock);
+}
+
+void bch2_dir_casefold_changed(struct dentry *dentry)
+{
+	if (!d_is_dir(dentry))
+		return;
+
+	shrink_dcache_parent(dentry);
+	bch2_dentry_update_casefold_flags(dentry);
+}
+#endif
+
 static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 				  unsigned int flags)
 {
@@ -803,7 +902,11 @@ static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 		return NULL;
 	}
 
-	return d_splice_alias(&inode->v, dentry);
+	struct inode *vinode = inode ? &inode->v : NULL;
+
+	if (vinode)
+		bch2_dentry_set_casefold_ops(dentry, vinode);
+	return d_splice_alias(vinode, dentry);
 }
 
 static int bch2_mknod(struct mnt_idmap *idmap,
@@ -817,6 +920,7 @@ static int bch2_mknod(struct mnt_idmap *idmap,
 	if (IS_ERR(inode))
 		return bch2_err_class(PTR_ERR(inode));
 
+	bch2_dentry_set_casefold_ops(dentry, &inode->v);
 	d_instantiate(dentry, &inode->v);
 	return 0;
 }
@@ -1075,6 +1179,7 @@ err_tx_restart:
 	if (dst_inode)
 		bch2_inode_update_after_write(trans, dst_inode, &dst_inode_u,
 					      ATTR_CTIME);
+
 err:
 	bch2_fs_quota_transfer(c, src_inode,
 			       bch_qid(&src_inode->ei_inode),
@@ -1501,6 +1606,9 @@ static int bch2_fileattr_set(struct mnt_idmap *idmap,
 		bch2_write_inode(c, inode, fssetxattr_inode_update_fn, &s,
 			       ATTR_CTIME);
 	mutex_unlock(&inode->ei_update_lock);
+
+	if (!ret && s.set_casefold)
+		bch2_dir_casefold_changed(dentry);
 err:
 	return bch2_err_class(ret);
 }
@@ -1688,6 +1796,14 @@ static struct inode *bch2_nfs_get_inode(struct super_block *sb,
 	return vinode;
 }
 
+static struct dentry *bch2_fh_alias(struct super_block *sb, struct inode *vinode)
+{
+	struct dentry *dentry = d_obtain_alias(vinode);
+	if (!IS_ERR(dentry))
+		bch2_dentry_set_casefold_ops_locked(dentry, vinode);
+	return dentry;
+}
+
 static struct dentry *bch2_fh_to_dentry(struct super_block *sb, struct fid *_fid,
 		int fh_len, int fh_type)
 {
@@ -1696,7 +1812,7 @@ static struct dentry *bch2_fh_to_dentry(struct super_block *sb, struct fid *_fid
 	if (!bcachefs_fid_valid(fh_len, fh_type))
 		return NULL;
 
-	return d_obtain_alias(bch2_nfs_get_inode(sb, *fid));
+	return bch2_fh_alias(sb, bch2_nfs_get_inode(sb, *fid));
 }
 
 static struct dentry *bch2_fh_to_parent(struct super_block *sb, struct fid *_fid,
@@ -1708,7 +1824,7 @@ static struct dentry *bch2_fh_to_parent(struct super_block *sb, struct fid *_fid
 	    fh_type != FILEID_BCACHEFS_WITH_PARENT)
 		return NULL;
 
-	return d_obtain_alias(bch2_nfs_get_inode(sb, fid->dir));
+	return bch2_fh_alias(sb, bch2_nfs_get_inode(sb, fid->dir));
 }
 
 static struct dentry *bch2_get_parent(struct dentry *child)
@@ -1722,7 +1838,7 @@ static struct dentry *bch2_get_parent(struct dentry *child)
 	};
 
 	/* needs nowarn */
-	return d_obtain_alias(bch2_vfs_inode_get(c, parent_inum, NULL));
+	return bch2_fh_alias(inode->v.i_sb, bch2_vfs_inode_get(c, parent_inum, NULL));
 }
 
 static int bch2_get_name(struct dentry *parent, char *name, struct dentry *child)
@@ -2377,7 +2493,12 @@ got_sb:
 #if IS_ENABLED(CONFIG_UNICODE)
 	if (!bch2_fs_casefold_enabled(c))
 		sb->s_encoding = c->cf_encoding;
-	generic_set_sb_d_ops(sb);
+	/*
+	 * Avoid generic_set_sb_d_ops()'s generic_ci_dentry_ops default:
+	 * directory dentries that need casefold support get utf8 ops installed
+	 * when their inode is attached (see bch2_dentry_set_casefold_ops),
+	 * keeping DCACHE_OP_COMPARE clear on non-casefolded directories.
+	 */
 #endif
 
 	vinode = bch2_vfs_inode_get(c, BCACHEFS_ROOT_SUBVOL_INUM, __func__);
@@ -2392,6 +2513,11 @@ got_sb:
 		ret = -ENOMEM;
 		goto err_put_super;
 	}
+
+#if IS_ENABLED(CONFIG_UNICODE)
+	/* Root has no attach site of its own; set its ops from its own inode. */
+	bch2_dentry_set_casefold_ops(sb->s_root, d_inode(sb->s_root));
+#endif
 
 	sb->s_flags |= SB_ACTIVE;
 out:
