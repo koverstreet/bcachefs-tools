@@ -828,6 +828,16 @@ int bch2_trans_commit_error(struct btree_trans *trans, unsigned flags,
 {
 	ret = __bch2_trans_commit_error(trans, flags, i, ret, trace_ip);
 
+	/*
+	 * We might have done another transaction commit in the error path -
+	 * i.e. btree write buffer flush - which will have made use of
+	 * trans->journal_res, but with BCH_TRANS_COMMIT_no_journal_res that is
+	 * how the journal sequence number to pin is passed in - so we must
+	 * restart:
+	 */
+	if (!ret && (flags & BCH_TRANS_COMMIT_no_journal_res))
+		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+
 	BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart) != !!trans->restarted);
 
 	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOSPC) &&
@@ -1365,18 +1375,6 @@ err:
 	ret = bch2_trans_commit_error(trans, flags, errored_at, ret, _RET_IP_);
 	if (ret)
 		goto out;
-
-	/*
-	 * We might have done another transaction commit in the error path -
-	 * i.e. btree write buffer flush - which will have made use of
-	 * trans->journal_res, but with BCH_TRANS_COMMIT_no_journal_res that is
-	 * how the journal sequence number to pin is passed in - so we must
-	 * restart:
-	 */
-	if (flags & BCH_TRANS_COMMIT_no_journal_res) {
-		ret = bch_err_throw(c, transaction_restart_nested);
-		goto out;
-	}
 
 	goto retry;
 }
