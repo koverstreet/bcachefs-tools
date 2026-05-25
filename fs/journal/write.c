@@ -747,10 +747,6 @@ CLOSURE_CALLBACK(bch2_journal_write)
 
 	j->write_start_time = local_clock();
 
-	ret = bch2_journal_error(j);
-	if (unlikely(ret && test_bit(JOURNAL_need_flush_write, &j->flags)))
-		goto err;
-
 	scoped_guard(mutex, &j->buf_lock) {
 		journal_buf_realloc(j, w);
 
@@ -758,6 +754,10 @@ CLOSURE_CALLBACK(bch2_journal_write)
 	}
 
 	if (unlikely(ret))
+		goto err;
+
+	ret = bch2_journal_error(j);
+	if (unlikely(ret && test_bit(JOURNAL_need_flush_write, &j->flags)))
 		goto err;
 
 	unsigned replicas_allocated = 0;
