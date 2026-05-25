@@ -986,6 +986,22 @@ static inline bool update_is_noop(struct btree_insert_entry *i, enum bch_trans_c
 		      bkey_and_val_eq(old, bkey_i_to_s_c(i->k)));
 }
 
+noinline __cold
+static int trans_commit_merge(struct btree_trans *trans, struct btree_insert_entry *i,
+			      enum bch_trans_commit_flags flags)
+{
+	struct bch_fs *c = trans->c;
+
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_trans))
+		return 0;
+
+	flags = btree_update_set_watermark_hipri(flags);
+	int ret = __bch2_foreground_maybe_merge(trans, i->path, i->level, flags, NULL);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_trans);
+
+	return ret;
+}
+
 static inline int
 bch2_trans_commit_write_locked(struct btree_trans *trans,
 			       enum bch_trans_commit_flags flags,
@@ -1200,31 +1216,6 @@ do_bch2_trans_commit(struct btree_trans *trans,
 		     unsigned long trace_ip)
 {
 	struct bch_fs *c = trans->c;
-	int u64s_delta = 0;
-
-	for (unsigned idx = 0; idx < trans->nr_updates; idx++) {
-		struct btree_insert_entry *i = trans->updates + idx;
-		if (i->cached)
-			continue;
-
-		u64s_delta += !bkey_deleted(&i->k->k) ? i->k->k.u64s : 0;
-		u64s_delta -= i->old_btree_u64s;
-
-		if (!same_leaf_as_next(trans, i)) {
-			if (!trans->has_interior_updates) {
-				struct btree_path *path = trans->paths + i->path;
-				struct btree *b = path->l[i->level].b;
-
-				if (unlikely(btree_node_needs_merge(c, b, u64s_delta))) {
-					flags = btree_update_set_watermark_hipri(flags);
-
-					try(__bch2_foreground_maybe_merge(trans, i->path, i->level, flags, NULL));
-				}
-			}
-
-			u64s_delta = 0;
-		}
-	}
 
 	/*
 	 * Pre-grow journal entries subbuf for write buffer updates
@@ -1290,6 +1281,7 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 	if (trans->accounting.u64s)
 		journal_u64s += jset_u64s(trans->accounting.u64s);
 
+	int u64s_delta = 0;
 	struct btree_insert_entry *dst = trans->updates;
 	trans_for_each_update(trans, i) {
 		if (unlikely(update_is_noop(i, flags))) {
@@ -1321,6 +1313,25 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 		/* and we're also going to log the overwrite: */
 		if (trans->journal_transaction_names)
 			journal_u64s += jset_u64s(i->old_k.u64s);
+
+		if (!i->cached) {
+			u64s_delta += !bkey_deleted(&i->k->k) ? i->k->k.u64s : 0;
+			u64s_delta -= i->old_btree_u64s;
+
+			if (!same_leaf_as_next(trans, i) &&
+			    !trans->has_interior_updates) {
+				struct btree_path *path = trans->paths + i->path;
+				struct btree *b = path->l[i->level].b;
+
+				if (unlikely(btree_node_needs_merge(c, b, u64s_delta))) {
+					ret = trans_commit_merge(trans, i, flags);
+					if (ret)
+						goto out_reset;
+				}
+
+				u64s_delta = 0;
+			}
+		}
 	}
 
 	trans->nr_updates = dst - trans->updates;
