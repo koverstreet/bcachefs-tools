@@ -331,14 +331,26 @@ static int stripe_update_extent(struct btree_trans *trans,
 	ec_ptr->offset	+= new_block.offset;
 	ec_ptr->gen	= new_block.gen;
 
-	bch2_bkey_drop_ptrs_noerror(bkey_i_to_s(n), p, entry, p.ptr.dev != new_block.dev);
-
 	ec_ptr = bch2_bkey_has_device(c, bkey_i_to_s(n), new_block.dev);
 	__extent_entry_insert(c, n,
 			(union bch_extent_entry *) ec_ptr,
 			(union bch_extent_entry *) &stripe_ptr);
 
-	try(bch2_trans_update_buf(trans, &iter, n, BKEY_EXTENT_U64s_MAX, 0));
+	/*
+	 * Drop excess data replicas (down to data_replicas), preferentially
+	 * keeping ec_ptr — the one we just migrated.
+	 */
+	unsigned ec_ptr_bit = bch2_bkey_dev_ptr_bit(c, bkey_i_to_s_c(n), new_block.dev);
+
+	struct bch_inode_opts opts;
+	try(bch2_bkey_get_io_opts(trans, NULL, bkey_i_to_s_c(n), &opts));
+	try(bch2_bkey_drop_extra_durability(trans, &opts, n, ~ec_ptr_bit, true));
+	try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(n),
+					  BKEY_EXTENT_U64s_MAX,
+					  SET_NEEDS_RECONCILE_other, 0));
+
+	try(bch2_trans_update_buf(trans, &iter, n, BKEY_EXTENT_U64s_MAX,
+				  BTREE_TRIGGER_set_needs_reconcile_done));
 	try(bch2_trans_commit(trans, res, NULL,
 			BCH_TRANS_COMMIT_no_check_rw|
 			BCH_TRANS_COMMIT_no_enospc));
