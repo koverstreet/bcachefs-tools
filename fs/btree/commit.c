@@ -681,210 +681,6 @@ static int trans_commit_invalid_key(struct btree_trans *trans,
 	return ret;
 }
 
-static inline int
-bch2_trans_commit_write_locked(struct btree_trans *trans,
-			       enum bch_trans_commit_flags flags,
-			       struct btree_insert_entry **stopped_at,
-			       unsigned long trace_ip)
-{
-	struct bch_fs *c = trans->c;
-	struct btree_trans_commit_hook *h;
-	unsigned u64s = 0;
-	int ret = 0;
-
-	bch2_trans_verify_not_unlocked_or_in_restart(trans);
-#if 0
-	/* todo: bring back dynamic fault injection */
-	if (race_fault()) {
-		event_inc_trace(c, trans_restart_fault_inject, buf);
-		return btree_trans_restart(trans, BCH_ERR_transaction_restart_fault_inject);
-	}
-#endif
-	/*
-	 * Check if the insert will fit in the leaf node with the write lock
-	 * held, otherwise another thread could write the node changing the
-	 * amount of space available:
-	 */
-
-	prefetch(&trans->c->journal.flags);
-
-	trans_for_each_update(trans, i) {
-		/* Multiple inserts might go to same leaf: */
-		if (!same_leaf_as_prev(trans, i))
-			u64s = 0;
-
-		u64s += i->k->k.u64s;
-		ret = !i->cached
-			? btree_key_can_insert(trans, insert_l(trans, i)->b, u64s)
-			: btree_key_can_insert_cached(trans, flags, trans->paths + i->path, u64s);
-		if (ret) {
-			*stopped_at = i;
-			return ret;
-		}
-
-		i->k->k.needs_whiteout = false;
-	}
-
-	/*
-	 * Don't get journal reservation until after we know insert will
-	 * succeed:
-	 */
-	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
-		try(bch2_trans_journal_res_get(trans,
-				(flags & BCH_WATERMARK_MASK)|
-				JOURNAL_RES_GET_NONBLOCK));
-
-		if (unlikely(trans->journal_transaction_names))
-			journal_transaction_name(trans);
-	}
-
-	/*
-	 * Not allowed to fail after we've gotten our journal reservation - we
-	 * have to use it:
-	 */
-
-	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
-	    !(flags & BCH_TRANS_COMMIT_no_journal_res)) {
-		if (static_branch_unlikely(&bch2_journal_seq_verify))
-			trans_for_each_update(trans, i)
-				i->k->k.bversion.lo = trans->journal_res.seq;
-		else if (static_branch_unlikely(&bch2_inject_invalid_keys))
-			trans_for_each_update(trans, i)
-				i->k->k.bversion = MAX_VERSION;
-	}
-
-	h = trans->hooks;
-	while (h) {
-		try(h->fn(trans, h));
-		h = h->next;
-	}
-
-	scoped_guard(percpu_read, &c->capacity.mark_lock)
-		for (struct bkey_i *accounting = btree_trans_subbuf_base(trans, &trans->accounting);
-		     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
-		     accounting = bkey_next(accounting)) {
-			ret = bch2_accounting_trans_commit_hook(trans,
-						bkey_i_to_accounting(accounting), flags);
-			if (unlikely(ret))
-				return trans_commit_accounting_revert(trans, flags, ret, accounting);
-		}
-
-	/* XXX: we only want to run this if deltas are nonzero */
-	bch2_trans_account_disk_usage_change(trans);
-
-	trans_for_each_update(trans, i)
-		if (btree_node_type_has_atomic_triggers(i->bkey_type)) {
-			ret = run_one_mem_trigger(trans, i, BTREE_TRIGGER_atomic|i->flags);
-			if (unlikely(ret))
-				return trans_commit_fatal_err(trans, ret);
-		}
-
-	if (unlikely(c->gc.pos.phase)) {
-		ret = bch2_trans_commit_run_gc_triggers(trans);
-		if (unlikely(ret))
-			return trans_commit_fatal_err(trans, ret);
-	}
-
-	struct bkey_validate_context validate_context = { .from	= BKEY_VALIDATE_commit };
-
-	if (!(flags & BCH_TRANS_COMMIT_no_journal_res))
-		validate_context.flags = BCH_VALIDATE_write|BCH_VALIDATE_commit;
-
-	for (struct jset_entry *i = btree_trans_journal_entries_start(trans);
-	     i != btree_trans_journal_entries_top(trans);
-	     i = vstruct_next(i)) {
-		ret = bch2_journal_entry_validate(c, NULL, i,
-						  bcachefs_metadata_version_current,
-						  CPU_BIG_ENDIAN, validate_context);
-		if (unlikely(ret))
-			return trans_commit_invalid_entry(trans, ret);
-	}
-
-	trans_for_each_update(trans, i) {
-		validate_context.level	= i->level;
-		validate_context.btree	= i->btree_id;
-
-		ret = bch2_bkey_validate(c, bkey_i_to_s_c(i->k), &validate_context);
-		if (unlikely(ret))
-			return trans_commit_invalid_key(trans, i, ret);
-		btree_insert_entry_checks(trans, i);
-	}
-
-	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
-		struct journal *j = &c->journal;
-		struct jset_entry *entry;
-
-		trans_for_each_update(trans, i) {
-			if (i->key_cache_already_flushed)
-				continue;
-
-			if (i->flags & BTREE_UPDATE_nojournal)
-				continue;
-
-			verify_update_old_key(trans, i);
-
-			if (trans->journal_transaction_names) {
-				entry = bch2_journal_add_entry(j, &trans->journal_res,
-						       BCH_JSET_ENTRY_overwrite,
-						       i->btree_id, i->level,
-						       i->old_k.u64s);
-				bkey_reassemble((struct bkey_i *) entry->start,
-						(struct bkey_s_c) { &i->old_k, i->old_v });
-			}
-
-			entry = bch2_journal_add_entry(j, &trans->journal_res,
-					       BCH_JSET_ENTRY_btree_keys,
-					       i->btree_id, i->level,
-					       i->k->k.u64s);
-			bkey_copy((struct bkey_i *) entry->start, i->k);
-		}
-
-		memcpy_u64s_small(journal_res_entry(&c->journal, &trans->journal_res),
-				  btree_trans_journal_entries_start(trans),
-				  trans->journal_entries.u64s);
-
-		EBUG_ON(trans->journal_res.u64s < trans->journal_entries.u64s);
-
-		trans->journal_res.offset	+= trans->journal_entries.u64s;
-		trans->journal_res.u64s		-= trans->journal_entries.u64s;
-
-		if (trans->accounting.u64s)
-			memcpy_u64s_small(bch2_journal_add_entry(j, &trans->journal_res,
-							BCH_JSET_ENTRY_write_buffer_keys,
-							BTREE_ID_accounting, 0,
-							trans->accounting.u64s)->_data,
-					  btree_trans_subbuf_base(trans, &trans->accounting),
-					  trans->accounting.u64s);
-
-		if (trans->journal_seq)
-			*trans->journal_seq = trans->journal_res.seq;
-
-		if (trans->journal_pin)
-			bch2_journal_pin_add(&c->journal, trans->journal_res.seq,
-					     trans->journal_pin,
-					     bch2_trans_commit_journal_pin_flush);
-
-		if (trans->flush)
-			bch2_journal_res_flush(&c->journal, &trans->journal_res, trans->flush);
-
-		if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res)))
-			bch2_journal_res_put(&c->journal, &trans->journal_res);
-	}
-
-	trans_for_each_update(trans, i) {
-		struct btree_path *path = trans->paths + i->path;
-
-		if (!i->cached)
-			bch2_btree_insert_key_leaf(trans, path, i->k, trans->journal_res.seq);
-		else if (!i->key_cache_already_flushed)
-			bch2_btree_insert_key_cached(trans, flags, i);
-		else
-			bch2_btree_key_cache_drop(trans, path);
-	}
-
-	return 0;
-}
-
 __cold
 static int bch2_check_drop_overwrites_from_journal(struct btree_trans *trans, bool check)
 {
@@ -934,69 +730,6 @@ static void trans_commit_to_journal_replay_post(struct btree_trans *trans, int r
 	if (!ret)
 		bch2_check_drop_overwrites_from_journal(trans, false);
 	mutex_unlock(&trans->c->journal_keys.overwrite_lock);
-}
-
-/*
- * Get journal reservation, take write locks, and attempt to do btree update(s):
- */
-static inline int do_bch2_trans_commit(struct btree_trans *trans,
-				       enum bch_trans_commit_flags flags,
-				       struct btree_insert_entry **stopped_at,
-				       unsigned long trace_ip)
-{
-	struct bch_fs *c = trans->c;
-	int u64s_delta = 0;
-
-	for (unsigned idx = 0; idx < trans->nr_updates; idx++) {
-		struct btree_insert_entry *i = trans->updates + idx;
-		if (i->cached)
-			continue;
-
-		u64s_delta += !bkey_deleted(&i->k->k) ? i->k->k.u64s : 0;
-		u64s_delta -= i->old_btree_u64s;
-
-		if (!same_leaf_as_next(trans, i)) {
-			if (!trans->has_interior_updates) {
-				struct btree_path *path = trans->paths + i->path;
-				struct btree *b = path->l[i->level].b;
-
-				if (unlikely(btree_node_needs_merge(c, b, u64s_delta))) {
-					flags = btree_update_set_watermark_hipri(flags);
-
-					try(bch2_foreground_maybe_merge(trans, i->path, i->level,
-									flags, u64s_delta, NULL));
-				}
-			}
-
-			u64s_delta = 0;
-		}
-	}
-
-	/*
-	 * Pre-grow journal entries subbuf for write buffer updates
-	 * that will be added during atomic triggers (can't realloc
-	 * after journal reservation):
-	 */
-	if (trans->extra_journal_u64s)
-		try(bch2_trans_subbuf_reserve(trans, &trans->journal_entries,
-					      trans->extra_journal_u64s));
-
-	try(bch2_trans_lock_write(trans));
-
-	if (unlikely(trans->journal_replay_not_finished))
-		try(trans_commit_to_journal_replay_pre(trans, flags));
-
-	int ret = bch2_trans_commit_write_locked(trans, flags, stopped_at, trace_ip);
-
-	if (unlikely(trans->journal_replay_not_finished))
-		trans_commit_to_journal_replay_post(trans, ret);
-
-	bch2_trans_unlock_updates_write(trans);
-
-	if (unlikely(trans->journal_res.ref))
-		bch2_journal_res_put(&c->journal, &trans->journal_res);
-
-	return ret;
 }
 
 static int journal_reclaim_wait_done(struct bch_fs *c)
@@ -1217,6 +950,273 @@ noinline __cold
 static void transaction_commit_trace(struct btree_trans *trans)
 {
 	__event_trace(trans->c, transaction_commit, buf, prt_str(&buf, trans->fn));
+}
+
+static inline int
+bch2_trans_commit_write_locked(struct btree_trans *trans,
+			       enum bch_trans_commit_flags flags,
+			       struct btree_insert_entry **stopped_at,
+			       unsigned long trace_ip)
+{
+	struct bch_fs *c = trans->c;
+	struct btree_trans_commit_hook *h;
+	unsigned u64s = 0;
+	int ret = 0;
+
+	bch2_trans_verify_not_unlocked_or_in_restart(trans);
+#if 0
+	/* todo: bring back dynamic fault injection */
+	if (race_fault()) {
+		event_inc_trace(c, trans_restart_fault_inject, buf);
+		return btree_trans_restart(trans, BCH_ERR_transaction_restart_fault_inject);
+	}
+#endif
+	/*
+	 * Check if the insert will fit in the leaf node with the write lock
+	 * held, otherwise another thread could write the node changing the
+	 * amount of space available:
+	 */
+
+	prefetch(&trans->c->journal.flags);
+
+	trans_for_each_update(trans, i) {
+		/* Multiple inserts might go to same leaf: */
+		if (!same_leaf_as_prev(trans, i))
+			u64s = 0;
+
+		u64s += i->k->k.u64s;
+		ret = !i->cached
+			? btree_key_can_insert(trans, insert_l(trans, i)->b, u64s)
+			: btree_key_can_insert_cached(trans, flags, trans->paths + i->path, u64s);
+		if (ret) {
+			*stopped_at = i;
+			return ret;
+		}
+
+		i->k->k.needs_whiteout = false;
+	}
+
+	/*
+	 * Don't get journal reservation until after we know insert will
+	 * succeed:
+	 */
+	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
+		try(bch2_trans_journal_res_get(trans,
+				(flags & BCH_WATERMARK_MASK)|
+				JOURNAL_RES_GET_NONBLOCK));
+
+		if (unlikely(trans->journal_transaction_names))
+			journal_transaction_name(trans);
+	}
+
+	/*
+	 * Not allowed to fail after we've gotten our journal reservation - we
+	 * have to use it:
+	 */
+
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    !(flags & BCH_TRANS_COMMIT_no_journal_res)) {
+		if (static_branch_unlikely(&bch2_journal_seq_verify))
+			trans_for_each_update(trans, i)
+				i->k->k.bversion.lo = trans->journal_res.seq;
+		else if (static_branch_unlikely(&bch2_inject_invalid_keys))
+			trans_for_each_update(trans, i)
+				i->k->k.bversion = MAX_VERSION;
+	}
+
+	h = trans->hooks;
+	while (h) {
+		try(h->fn(trans, h));
+		h = h->next;
+	}
+
+	scoped_guard(percpu_read, &c->capacity.mark_lock)
+		for (struct bkey_i *accounting = btree_trans_subbuf_base(trans, &trans->accounting);
+		     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
+		     accounting = bkey_next(accounting)) {
+			ret = bch2_accounting_trans_commit_hook(trans,
+						bkey_i_to_accounting(accounting), flags);
+			if (unlikely(ret))
+				return trans_commit_accounting_revert(trans, flags, ret, accounting);
+		}
+
+	/* XXX: we only want to run this if deltas are nonzero */
+	bch2_trans_account_disk_usage_change(trans);
+
+	trans_for_each_update(trans, i)
+		if (btree_node_type_has_atomic_triggers(i->bkey_type)) {
+			ret = run_one_mem_trigger(trans, i, BTREE_TRIGGER_atomic|i->flags);
+			if (unlikely(ret))
+				return trans_commit_fatal_err(trans, ret);
+		}
+
+	if (unlikely(c->gc.pos.phase)) {
+		ret = bch2_trans_commit_run_gc_triggers(trans);
+		if (unlikely(ret))
+			return trans_commit_fatal_err(trans, ret);
+	}
+
+	struct bkey_validate_context validate_context = { .from	= BKEY_VALIDATE_commit };
+
+	if (!(flags & BCH_TRANS_COMMIT_no_journal_res))
+		validate_context.flags = BCH_VALIDATE_write|BCH_VALIDATE_commit;
+
+	for (struct jset_entry *i = btree_trans_journal_entries_start(trans);
+	     i != btree_trans_journal_entries_top(trans);
+	     i = vstruct_next(i)) {
+		ret = bch2_journal_entry_validate(c, NULL, i,
+						  bcachefs_metadata_version_current,
+						  CPU_BIG_ENDIAN, validate_context);
+		if (unlikely(ret))
+			return trans_commit_invalid_entry(trans, ret);
+	}
+
+	trans_for_each_update(trans, i) {
+		validate_context.level	= i->level;
+		validate_context.btree	= i->btree_id;
+
+		ret = bch2_bkey_validate(c, bkey_i_to_s_c(i->k), &validate_context);
+		if (unlikely(ret))
+			return trans_commit_invalid_key(trans, i, ret);
+		btree_insert_entry_checks(trans, i);
+	}
+
+	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
+		struct journal *j = &c->journal;
+		struct jset_entry *entry;
+
+		trans_for_each_update(trans, i) {
+			if (i->key_cache_already_flushed)
+				continue;
+
+			if (i->flags & BTREE_UPDATE_nojournal)
+				continue;
+
+			verify_update_old_key(trans, i);
+
+			if (trans->journal_transaction_names) {
+				entry = bch2_journal_add_entry(j, &trans->journal_res,
+						       BCH_JSET_ENTRY_overwrite,
+						       i->btree_id, i->level,
+						       i->old_k.u64s);
+				bkey_reassemble((struct bkey_i *) entry->start,
+						(struct bkey_s_c) { &i->old_k, i->old_v });
+			}
+
+			entry = bch2_journal_add_entry(j, &trans->journal_res,
+					       BCH_JSET_ENTRY_btree_keys,
+					       i->btree_id, i->level,
+					       i->k->k.u64s);
+			bkey_copy((struct bkey_i *) entry->start, i->k);
+		}
+
+		memcpy_u64s_small(journal_res_entry(&c->journal, &trans->journal_res),
+				  btree_trans_journal_entries_start(trans),
+				  trans->journal_entries.u64s);
+
+		EBUG_ON(trans->journal_res.u64s < trans->journal_entries.u64s);
+
+		trans->journal_res.offset	+= trans->journal_entries.u64s;
+		trans->journal_res.u64s		-= trans->journal_entries.u64s;
+
+		if (trans->accounting.u64s)
+			memcpy_u64s_small(bch2_journal_add_entry(j, &trans->journal_res,
+							BCH_JSET_ENTRY_write_buffer_keys,
+							BTREE_ID_accounting, 0,
+							trans->accounting.u64s)->_data,
+					  btree_trans_subbuf_base(trans, &trans->accounting),
+					  trans->accounting.u64s);
+
+		if (trans->journal_seq)
+			*trans->journal_seq = trans->journal_res.seq;
+
+		if (unlikely(trans->journal_pin))
+			bch2_journal_pin_set(&c->journal, trans->journal_res.seq,
+					     trans->journal_pin,
+					     bch2_trans_commit_journal_pin_flush);
+
+		if (trans->flush)
+			bch2_journal_res_flush(&c->journal, &trans->journal_res, trans->flush);
+
+		if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res)))
+			bch2_journal_res_put(&c->journal, &trans->journal_res);
+	}
+
+	trans_for_each_update(trans, i) {
+		struct btree_path *path = trans->paths + i->path;
+
+		if (!i->cached)
+			bch2_btree_insert_key_leaf(trans, path, i->k, trans->journal_res.seq);
+		else if (!i->key_cache_already_flushed)
+			bch2_btree_insert_key_cached(trans, flags, i);
+		else
+			bch2_btree_key_cache_drop(trans, path);
+	}
+
+	return 0;
+}
+
+/*
+ * Get journal reservation, take write locks, and attempt to do btree update(s):
+ */
+static inline int
+do_bch2_trans_commit(struct btree_trans *trans,
+		     enum bch_trans_commit_flags flags,
+		     struct btree_insert_entry **stopped_at,
+		     unsigned long trace_ip)
+{
+	struct bch_fs *c = trans->c;
+	int u64s_delta = 0;
+
+	for (unsigned idx = 0; idx < trans->nr_updates; idx++) {
+		struct btree_insert_entry *i = trans->updates + idx;
+		if (i->cached)
+			continue;
+
+		u64s_delta += !bkey_deleted(&i->k->k) ? i->k->k.u64s : 0;
+		u64s_delta -= i->old_btree_u64s;
+
+		if (!same_leaf_as_next(trans, i)) {
+			if (!trans->has_interior_updates) {
+				struct btree_path *path = trans->paths + i->path;
+				struct btree *b = path->l[i->level].b;
+
+				if (unlikely(btree_node_needs_merge(c, b, u64s_delta))) {
+					flags = btree_update_set_watermark_hipri(flags);
+
+					try(__bch2_foreground_maybe_merge(trans, i->path, i->level, flags, NULL));
+				}
+			}
+
+			u64s_delta = 0;
+		}
+	}
+
+	/*
+	 * Pre-grow journal entries subbuf for write buffer updates
+	 * that will be added during atomic triggers (can't realloc
+	 * after journal reservation):
+	 */
+	if (trans->extra_journal_u64s)
+		try(bch2_trans_subbuf_reserve(trans, &trans->journal_entries,
+					      trans->extra_journal_u64s));
+
+	try(bch2_trans_lock_write(trans));
+
+	if (unlikely(trans->journal_replay_not_finished))
+		try(trans_commit_to_journal_replay_pre(trans, flags));
+
+	int ret = bch2_trans_commit_write_locked(trans, flags, stopped_at, trace_ip);
+
+	if (unlikely(trans->journal_replay_not_finished))
+		trans_commit_to_journal_replay_post(trans, ret);
+
+	bch2_trans_unlock_updates_write(trans);
+
+	if (unlikely(trans->journal_res.ref))
+		bch2_journal_res_put(&c->journal, &trans->journal_res);
+
+	return ret;
 }
 
 int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags flags)
