@@ -752,6 +752,32 @@ bch2_btree_node_lock_with_path(struct btree_trans *trans,
 
 /* relock */
 
+static void get_locks_fail_to_text(struct printbuf *out, struct btree_trans *trans,
+				   struct btree_path *old_path,
+				   struct btree_path *path,
+				   struct get_locks_fail *f)
+{
+	bch2_bpos_to_text(out, path->pos);
+	prt_printf(out, " %s l=%u seq=%u node seq=",
+		   bch2_btree_id_str(path->btree_id),
+		   f->l, path->l[f->l].lock_seq);
+	if (IS_ERR_OR_NULL(f->b)) {
+		prt_str(out, bch2_err_str(PTR_ERR(f->b)));
+	} else {
+		prt_printf(out, "%u", f->b->c.lock.seq);
+
+		struct six_lock_count c =
+			bch2_btree_node_lock_counts(trans, NULL, &f->b->c, f->l);
+		prt_printf(out, " self locked %u.%u.%u", c.n[0], c.n[1], c.n[2]);
+
+		c = six_lock_counts(&f->b->c.lock);
+		prt_printf(out, " total locked %u.%u.%u", c.n[0], c.n[1], c.n[2]);
+	}
+
+	prt_newline(out);
+	bch2_btree_path_to_text(out, trans, path - trans->paths, old_path);
+}
+
 static int btree_path_get_locks(struct btree_trans *trans,
 				struct btree_path *path,
 				bool upgrade,
@@ -892,17 +918,38 @@ bool bch2_btree_path_relock_norestart(struct btree_trans *trans, struct btree_pa
 	return ret;
 }
 
-int __bch2_btree_path_relock(struct btree_trans *trans, struct btree_path *path)
+noinline __cold
+static int bch2_btree_path_relock_trace(struct btree_trans *trans, struct btree_path *path)
 {
-	if (!bch2_btree_path_relock_norestart(trans, path)) {
+	struct get_locks_fail f;
+	struct btree_path old_path = *path;
+	int ret = 0;
+
+	if (btree_path_get_locks(trans, path, false, &f, 0)) {
 		event_inc_trace(trans->c, trans_restart_relock_path, buf, ({
 			prt_printf(&buf, "%s\n", trans->fn);
-			bch2_btree_path_to_text(&buf, trans, path - trans->paths, path);
+			get_locks_fail_to_text(&buf, trans, &old_path, path, &f);
 		}));
-		return btree_trans_restart(trans, BCH_ERR_transaction_restart_relock_path);
+		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_relock_path);
 	}
 
-	return 0;
+	bch2_trans_verify_locks(trans);
+	return ret;
+}
+
+int __bch2_btree_path_relock(struct btree_trans *trans, struct btree_path *path)
+{
+	if (unlikely(trace_trans_restart_relock_path_enabled()))
+		return bch2_btree_path_relock_trace(trans, path);
+
+	int ret = 0;
+	if (btree_path_get_locks(trans, path, false, NULL, 0)) {
+		event_inc(trans->c, trans_restart_relock_path);
+		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_relock_path);
+	}
+
+	bch2_trans_verify_locks(trans);
+	return ret;
 }
 
 bool __bch2_btree_path_upgrade_norestart(struct btree_trans *trans,
@@ -1088,25 +1135,7 @@ static int bch2_trans_relock_trace(struct btree_trans *trans)
 		if (ret) {
 			event_inc_trace(trans->c, trans_restart_relock, buf, ({
 				prt_printf(&buf, "%s\n", trans->fn);
-				bch2_bpos_to_text(&buf, path->pos);
-				prt_printf(&buf, " %s l=%u seq=%u node seq=",
-					   bch2_btree_id_str(path->btree_id),
-					   f.l, path->l[f.l].lock_seq);
-				if (IS_ERR_OR_NULL(f.b)) {
-					prt_str(&buf, bch2_err_str(PTR_ERR(f.b)));
-				} else {
-					prt_printf(&buf, "%u", f.b->c.lock.seq);
-
-					struct six_lock_count c =
-						bch2_btree_node_lock_counts(trans, NULL, &f.b->c, f.l);
-					prt_printf(&buf, " self locked %u.%u.%u", c.n[0], c.n[1], c.n[2]);
-
-					c = six_lock_counts(&f.b->c.lock);
-					prt_printf(&buf, " total locked %u.%u.%u", c.n[0], c.n[1], c.n[2]);
-				}
-
-				prt_newline(&buf);
-				bch2_btree_path_to_text(&buf, trans, path - trans->paths, &old_path);
+				get_locks_fail_to_text(&buf, trans, &old_path, path, &f);
 			}));
 
 			__bch2_trans_unlock(trans);
