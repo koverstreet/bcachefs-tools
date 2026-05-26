@@ -1251,8 +1251,6 @@ static void bch2_btree_interior_update_will_free_node(struct btree_update *as,
 	if (btree_node_fake(b))
 		return;
 
-	mutex_lock(&c->btree.interior_updates.lock);
-
 	/*
 	 * Does this node have any btree_update operations preventing
 	 * it from being written?
@@ -1261,16 +1259,17 @@ static void bch2_btree_interior_update_will_free_node(struct btree_update *as,
 	 * write out our new nodes, but we won't make them visible until those
 	 * operations complete
 	 */
-	list_for_each_entry_safe(p, n, &b->write_blocked, write_blocked_list) {
-		list_del_init(&p->write_blocked_list);
-		btree_update_reparent(as, p);
+	scoped_guard(mutex, &c->btree.interior_updates.lock)
+		list_for_each_entry_safe(p, n, &b->write_blocked, write_blocked_list) {
+			list_del_init(&p->write_blocked_list);
+			btree_update_reparent(as, p);
 
-		/*
-		 * for flush_held_btree_writes() waiting on updates to flush or
-		 * nodes to be writeable:
-		 */
-		closure_wake_up(&c->btree.interior_updates.wait);
-	}
+			/*
+			 * for flush_held_btree_writes() waiting on updates to flush or
+			 * nodes to be writeable:
+			 */
+			closure_wake_up(&c->btree.interior_updates.wait);
+		}
 
 	clear_btree_node_dirty(b);
 	clear_btree_node_need_write(b);
@@ -1293,8 +1292,6 @@ static void bch2_btree_interior_update_will_free_node(struct btree_update *as,
 	bch2_journal_pin_copy(&c->journal, &as->journal, &w->journal,
 			      bch2_btree_update_will_free_node_journal_pin_flush);
 	bch2_journal_pin_drop(&c->journal, &w->journal);
-
-	mutex_unlock(&c->btree.interior_updates.lock);
 
 	bch2_btree_update_add_node(c, &as->old_nodes, b);
 }
