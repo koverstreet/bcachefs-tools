@@ -344,6 +344,7 @@ struct journal {
 	 */
 	FIFO_U64_IDX(struct journal_entry_pin_list) pin;
 	struct percpu_rw_semaphore pin_resize_lock;
+	struct work_struct	pin_resize_work;
 
 	u64			last_seq;
 
