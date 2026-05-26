@@ -243,6 +243,12 @@ static CLOSURE_CALLBACK(journal_write_done)
 			       ? j->flush_write_time
 			       : j->noflush_write_time, j->write_start_time);
 
+	/*
+	 * pin_resize_lock held across the entire body — we hold the pin_list
+	 * pointer `r` across replicas_entry_put/get and into the j->lock'd
+	 * window below. Released after the j->lock-held block.
+	 */
+	percpu_down_read(&j->pin_resize_lock);
 	struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, seq_wrote)->devs.e;
 
 	if (unlikely(w->failed.nr)) {
@@ -428,6 +434,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 	 */
 	bch2_journal_do_writes_locked(j);
 	spin_unlock(&j->lock);
+	percpu_up_read(&j->pin_resize_lock);
 
 	if (last_seq_ondisk_updated) {
 		bch2_reset_alloc_cursors(c);
@@ -802,6 +809,7 @@ CLOSURE_CALLBACK(bch2_journal_write)
 		 * the write completes, so the filesystem isn't marked dirty
 		 * before anything is in the journal:
 		 */
+		guard(percpu_read)(&j->pin_resize_lock);
 		struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, le64_to_cpu(w->data->seq))->devs.e;
 		bch2_devlist_to_replicas(r, BCH_DATA_journal, w->devs_written);
 

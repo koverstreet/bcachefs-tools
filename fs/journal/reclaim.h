@@ -39,6 +39,7 @@ static inline bool journal_pin_active(struct journal_entry_pin *pin)
 static inline struct journal_entry_pin_list *
 journal_seq_pin(struct journal *j, u64 seq)
 {
+	lockdep_assert_held(&j->pin_resize_lock);
 	EBUG_ON(seq < j->pin.front || seq >= j->pin.back);
 
 	return &fifo_entry(&j->pin, seq);
