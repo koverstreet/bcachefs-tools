@@ -851,7 +851,7 @@ int bch2_fs_init_rw(struct bch_fs *c)
 
 	try(bch2_fs_btree_init_rw(c));
 	try(bch2_fs_io_write_init(c));
-	try(bch2_fs_journal_init(&c->journal));
+	try(bch2_fs_journal_init_rw(&c->journal));
 	try(bch2_fs_vfs_init_rw(c));
 	try(bch2_journal_reclaim_start(&c->journal));
 	try(bch2_btree_write_buffer_start(c));
@@ -1309,6 +1309,7 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 	try(bch2_fs_errors_init(c));
 	try(bch2_fs_encryption_init(c));
 	try(bch2_fs_io_read_init(c));
+	try(bch2_fs_journal_init(&c->journal));
 	try(bch2_fs_snapshots_init(c));
 	try(bch2_fs_vfs_init(c));
 	try(bch2_io_clock_init(&c->io_clock[READ]));

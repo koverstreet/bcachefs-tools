@@ -241,8 +241,9 @@ journal_error_check_stuck(struct journal *j, int error, unsigned flags)
  * dropped. Drop the pin list reference acquired at journal entry open and write
  * the buffer, if requested.
  */
-void bch2_journal_buf_put_final(struct journal *j, u64 seq)
+void __bch2_journal_buf_put_final(struct journal *j, u64 seq)
 {
+	lockdep_assert_held(&j->pin_resize_lock);
 	lockdep_assert_held(&j->lock);
 
 	if (__bch2_journal_pin_put(j, seq))
@@ -257,6 +258,13 @@ void bch2_journal_buf_put_final(struct journal *j, u64 seq)
 	 * seq_write_started above).
 	 */
 	journal_wake(j);
+}
+
+void bch2_journal_buf_put_final(struct journal *j, u64 seq)
+{
+	guard(percpu_read)(&j->pin_resize_lock);
+	guard(spinlock)(&j->lock);
+	__bch2_journal_buf_put_final(j, seq);
 }
 
 /*
@@ -280,6 +288,8 @@ static void __journal_entry_close_one(struct journal *j, unsigned closed_val, bo
 	BUG_ON(closed_val != JOURNAL_ENTRY_CLOSED_VAL &&
 	       closed_val != JOURNAL_ENTRY_ERROR_VAL);
 
+	if (closed_val != JOURNAL_ENTRY_ERROR_VAL)
+		lockdep_assert_held(&j->pin_resize_lock);
 	lockdep_assert_held(&j->lock);
 
 	old.v = atomic64_read(&j->reservations.counter);
@@ -296,16 +306,20 @@ static void __journal_entry_close_one(struct journal *j, unsigned closed_val, bo
 	if (!__journal_entry_is_open(old))
 		return;
 
+	u64 seq = journal_cur_seq(j);
+
 	if (old.cur_entry_offset == JOURNAL_ENTRY_BLOCKED_VAL)
 		old.cur_entry_offset = j->cur_entry_offset_if_blocked;
 
 	/* Close out old buffer: */
 	buf->data->u64s		= cpu_to_le32(old.cur_entry_offset);
 
-	size_t bytes = roundup_pow_of_two(vstruct_bytes(buf->data));
+	if (closed_val != JOURNAL_ENTRY_ERROR_VAL) {
+		size_t bytes = roundup_pow_of_two(vstruct_bytes(buf->data));
 
-	journal_seq_pin(j, journal_cur_seq(j))->bytes = bytes;
-	j->dirty_entry_bytes += bytes;
+		journal_seq_pin(j, seq)->bytes = bytes;
+		j->dirty_entry_bytes += bytes;
+	}
 
 	if (trace)
 		event_trace(c, journal_entry_close, msg, ({
@@ -358,9 +372,22 @@ static void __journal_entry_close_one(struct journal *j, unsigned closed_val, bo
 
 	cancel_delayed_work(&j->write_work);
 
-	bch2_journal_space_available(j);
-
-	__bch2_journal_buf_put(j, le64_to_cpu(buf->data->seq));
+	/*
+	 * bch2_journal_halt may or may not be called with pin_resize_lock held,
+	 * and we don't have a recursive version of this lock.
+	 *
+	 * So, on emergency ERO skip the journal_buf_put - this leaks a ref, but
+	 * it's for updating last_seq, so it's ok:
+	 */
+	if (closed_val != JOURNAL_ENTRY_ERROR_VAL) {
+		__bch2_journal_buf_put(j, seq);
+		bch2_journal_space_available(j);
+	} else {
+		unsigned idx = seq & JOURNAL_STATE_BUF_MASK;
+		union journal_res_state s = journal_state_buf_put(j, idx);
+		if (!journal_state_count(s, idx))
+			bch2_journal_do_writes_locked(j);
+	}
 }
 
 /*
@@ -373,6 +400,7 @@ static int __journal_entry_open_one(struct journal *j)
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	union journal_res_state old, new;
 
+	lockdep_assert_held(&j->pin_resize_lock);
 	lockdep_assert_held(&j->lock);
 
 	if (journal_entry_is_open(j))
@@ -543,6 +571,7 @@ static inline bool journal_has_flush_waiters(struct journal *j)
  */
 int bch2_journal_cycle(struct journal *j, bool need_fresh)
 {
+	lockdep_assert_held(&j->pin_resize_lock);
 	lockdep_assert_held(&j->lock);
 
 	while (1) {
@@ -591,12 +620,14 @@ void bch2_journal_halt(struct journal *j)
 
 void bch2_journal_entry_close(struct journal *j)
 {
+	guard(percpu_read)(&j->pin_resize_lock);
 	guard(spinlock)(&j->lock);
 	bch2_journal_cycle(j, false);
 }
 
 static bool journal_quiesced(struct journal *j)
 {
+	guard(percpu_read)(&j->pin_resize_lock);
 	guard(spinlock)(&j->lock);
 	bool ret = atomic64_read(&j->seq) == j->seq_ondisk;
 
@@ -626,6 +657,7 @@ void bch2_journal_quiesce(struct journal *j)
  */
 static bool journal_shutdown_quiesced(struct journal *j)
 {
+	guard(percpu_read)(&j->pin_resize_lock);
 	guard(spinlock)(&j->lock);
 	u64 seq = atomic64_read(&j->seq);
 	bool ret = (bch2_journal_error(j)
@@ -653,6 +685,7 @@ void bch2_journal_write_work(struct work_struct *work)
 {
 	struct journal *j = container_of(work, struct journal, write_work.work);
 
+	guard(percpu_read)(&j->pin_resize_lock);
 	guard(spinlock)(&j->lock);
 	bch2_journal_cycle(j, true);
 }
@@ -705,6 +738,7 @@ retry:
 		goto out;
 	}
 
+	percpu_down_read(&j->pin_resize_lock);
 	spin_lock(&j->lock);
 
 	journal_buf_prealloc(j);
@@ -733,6 +767,7 @@ retry:
 	ret = bch2_journal_cycle(j, true) ?: -BCH_ERR_journal_retry_open;
 unlock:
 	spin_unlock(&j->lock);
+	percpu_up_read(&j->pin_resize_lock);
 out:
 	if (likely(!ret))
 		return 0;
@@ -839,6 +874,7 @@ void bch2_journal_entry_res_resize(struct journal *j,
 	union journal_res_state state;
 	int d = new_u64s - res->u64s;
 
+	guard(percpu_read)(&j->pin_resize_lock);
 	guard(spinlock)(&j->lock);
 
 	j->entry_u64s_reserved	+= d;

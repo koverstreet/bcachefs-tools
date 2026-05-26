@@ -303,6 +303,78 @@ int bch2_fs_journal_alloc(struct bch_fs *c)
 	return 0;
 }
 
+/*
+ * Double the size of the journal pin fifo.
+ *
+ * We can't just fifo_grow() — that bit-copies entries into both halves of the
+ * new buffer, which corrupts journal_entry_pin_list's list_heads (the chain's
+ * prev/next still point at old-address list_heads after the copy). Allocate a
+ * fresh buffer, init every entry, then for each live slot list_replace_init
+ * the unflushed/flushed chains to re-anchor them at the new addresses.
+ *
+ * Concurrency: pin_resize_lock held for write excludes all readers; readers
+ * are expected to hold it for read across any access to &j->pin (including
+ * acquiring entry->lock and walking the per-type lists).
+ *
+ * Must NOT be called with j->lock held — alloc + percpu_down_write may sleep.
+ *
+ * Trigger: TODO — wire from journal_entry_open()'s journal_pin_full path
+ * (workqueue, or wake journal_reclaim_thread with a "needs resize" flag).
+ *
+ * Reader-side wrapping: TODO — every site that accesses &j->pin needs
+ * percpu_down_read(&j->pin_resize_lock) / percpu_up_read() around it.
+ * `git grep 'j->pin\b' fs/journal/ fs/btree/` for the list.
+ */
+int bch2_journal_pin_fifo_resize(struct journal *j)
+{
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+
+	size_t old_size		= j->pin.size;
+	size_t new_size		= old_size * 2;
+	size_t new_buf_elems	= roundup_pow_of_two(new_size);
+	u64 new_mask		= new_buf_elems - 1;
+
+	struct journal_entry_pin_list *new_data =
+		kvmalloc(new_buf_elems * sizeof(*new_data), GFP_KERNEL);
+	if (!new_data)
+		return bch_err_throw(c, ENOMEM_journal_pin_fifo);
+
+	for (struct journal_entry_pin_list *p = new_data;
+	     p < new_data + new_buf_elems;
+	     p++) {
+		spin_lock_init(&p->lock);
+		journal_pin_list_init(p, 0);
+	}
+
+	percpu_down_write(&j->pin_resize_lock);
+
+	for (u64 seq = j->pin.front; seq != j->pin.back; seq++) {
+		struct journal_entry_pin_list *old_pin = &j->pin.data[seq & j->pin.mask];
+		struct journal_entry_pin_list *new_pin = &new_data[seq & new_mask];
+
+		atomic_set(&new_pin->count,	atomic_read(&old_pin->count));
+		new_pin->unreplayed		= old_pin->unreplayed;
+		new_pin->devs			= old_pin->devs;
+		new_pin->bytes			= old_pin->bytes;
+
+		for (unsigned i = 0; i < JOURNAL_PIN_TYPE_NR; i++) {
+			list_replace_init(&old_pin->unflushed[i], &new_pin->unflushed[i]);
+			list_replace_init(&old_pin->flushed[i],   &new_pin->flushed[i]);
+		}
+	}
+
+	struct journal_entry_pin_list *old_data = j->pin.data;
+	j->pin.data	= new_data;
+	j->pin.size	= new_size;
+	j->pin.mask	= new_mask;
+	/* front/back preserved — same absolute indices, new mask */
+
+	percpu_up_write(&j->pin_resize_lock);
+
+	kvfree(old_data);
+	return 0;
+}
+
 /* startup/shutdown: */
 
 static bool bch2_journal_writing_to_device(struct journal *j, unsigned dev_idx)
@@ -389,6 +461,7 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 	nr += nr / 4;
 
 	nr = max(nr, JOURNAL_PIN);
+
 	init_fifo(&j->pin, roundup_pow_of_two(nr), GFP_KERNEL);
 	if (!j->pin.data) {
 		bch_err(c, "error allocating journal fifo (%llu open entries)", nr);
@@ -448,7 +521,7 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 			darray_for_each(i->ptrs, ptr)
 				seq_devs.data[seq_devs.nr++] = ptr->dev;
 
-			p = journal_seq_pin(j, seq);
+			p = &fifo_entry(&j->pin, seq);
 			bch2_devlist_to_replicas(&p->devs.e, BCH_DATA_journal, seq_devs);
 
 			CLASS(printbuf, buf)();
@@ -595,6 +668,7 @@ void bch2_fs_journal_exit(struct journal *j)
 
 	kvfree(j->free_buf);
 	free_fifo(&j->pin);
+	percpu_free_rwsem(&j->pin_resize_lock);
 }
 
 void bch2_fs_journal_init_early(struct journal *j)
@@ -617,7 +691,7 @@ void bch2_fs_journal_init_early(struct journal *j)
 		 { .cur_entry_offset = JOURNAL_ENTRY_CLOSED_VAL }).v);
 }
 
-int bch2_fs_journal_init(struct journal *j)
+int bch2_fs_journal_init_rw(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
@@ -658,5 +732,11 @@ int bch2_fs_journal_init(struct journal *j)
 				WQ_HIGHPRI|WQ_FREEZABLE|WQ_UNBOUND|WQ_MEM_RECLAIM, 512);
 	if (!j->discard_wq)
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
+	return 0;
+}
+
+int bch2_fs_journal_init(struct journal *j)
+{
+	try(percpu_init_rwsem(&j->pin_resize_lock));
 	return 0;
 }
