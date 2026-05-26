@@ -442,6 +442,8 @@ void bch2_journal_update_last_seq(struct journal *j)
 
 static void bch2_journal_maybe_update_last_seq(struct journal *j)
 {
+	lockdep_assert_held(&j->pin_resize_lock);
+
 	if (!atomic_read(&fifo_entry(&j->pin, j->last_seq).count)) {
 		guard(spinlock)(&j->lock);
 		bch2_journal_update_last_seq(j);
@@ -488,6 +490,8 @@ void bch2_journal_replay_pins_put(struct journal *j, u64 seq)
 
 	seq = min(seq, j->replay_journal_seq_end);
 
+	guard(percpu_read)(&j->pin_resize_lock);
+
 	while (j->replay_journal_seq < seq) {
 		struct journal_entry_pin_list *pin_list =
 			journal_seq_pin(j, j->replay_journal_seq++);
@@ -532,6 +536,8 @@ void bch2_journal_pin_drop(struct journal *j,
 			   struct journal_entry_pin *pin)
 {
 	bool reclaim = false;
+
+	guard(percpu_read)(&j->pin_resize_lock);
 
 	while (true) {
 		u64 seq = READ_ONCE(pin->seq);
@@ -608,6 +614,8 @@ void bch2_journal_pin_copy(struct journal *j,
 			   struct journal_entry_pin *src,
 			   journal_pin_flush_fn flush_fn)
 {
+	guard(percpu_read)(&j->pin_resize_lock);
+
 	while (true) {
 		u64 src_seq = READ_ONCE(src->seq);
 		u64 dst_seq = READ_ONCE(dst->seq);
@@ -654,6 +662,8 @@ void bch2_journal_pin_set(struct journal *j, u64 new_seq,
 			  struct journal_entry_pin *pin,
 			  journal_pin_flush_fn flush_fn)
 {
+	guard(percpu_read)(&j->pin_resize_lock);
+
 	while (true) {
 		u64 old_seq = READ_ONCE(pin->seq);
 
@@ -720,6 +730,8 @@ journal_get_next_pin(struct journal *j,
 		     unsigned allowed_above_seq,
 		     u64 *seq, journal_pin_flush_fn *flush_fn)
 {
+	guard(percpu_read)(&j->pin_resize_lock);
+
 	struct journal_entry_pin_list *pin_list;
 	struct journal_entry_pin *ret = NULL;
 
@@ -788,6 +800,13 @@ static size_t journal_flush_pins(struct journal *j,
 
 		j->last_flushed = jiffies;
 
+		/*
+		 * Hold pin_resize_lock for the entire grab→flush→clear context.
+		 * journal_get_next_pin returns a pin and stashes it in
+		 * j->flush_in_progress; the post-flush re-lookup of pin_l by seq
+		 * (and the spinlock + list_move that follows) must see the same
+		 * pin.data/mask snapshot, so resize can't run mid-iteration.
+		 */
 		u64 seq;
 		journal_pin_flush_fn flush_fn;
 		pin = journal_get_next_pin(j, seq_to_flush, allowed_below, allowed_above,
@@ -804,9 +823,10 @@ static size_t journal_flush_pins(struct journal *j,
 		u64 start_time = local_clock();
 		err = flush_fn(j, pin, seq);
 
-		struct journal_entry_pin_list *pin_l = &fifo_entry(&j->pin, seq);
+		scoped_guard(percpu_read, &j->pin_resize_lock) {
+			struct journal_entry_pin_list *pin_l = &fifo_entry(&j->pin, seq);
 
-		scoped_guard(spinlock, &pin_l->lock) {
+			guard(spinlock)(&pin_l->lock);
 			enum journal_pin_type type = journal_pin_type(pin, flush_fn);
 
 			enum bch_time_stats flush_time =
@@ -1064,6 +1084,7 @@ int bch2_journal_reclaim_start(struct journal *j)
 static bool journal_pins_still_flushing(struct journal *j, u64 seq_to_flush,
 					unsigned types)
 {
+	guard(percpu_read)(&j->pin_resize_lock);
 	u64 start = READ_ONCE(j->pin.front);
 	u64 end = READ_ONCE(j->pin.back);
 
@@ -1167,6 +1188,7 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 	struct journal_entry_pin_list *p;
 	u64 iter, seq = 0;
 
+	scoped_guard(percpu_read, &j->pin_resize_lock)
 	scoped_guard(spinlock, &j->lock)
 		fifo_for_each_entry_ptr(p, &j->pin, iter)
 			if (dev_idx >= 0
@@ -1193,6 +1215,7 @@ __cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *
 	if (*seq >= j->pin.back)
 		return true;
 
+	guard(percpu_read)(&j->pin_resize_lock);
 	struct journal_entry_pin_list *pin_list = &fifo_entry(&j->pin, *seq);
 	guard(spinlock)(&pin_list->lock);
 	guard(printbuf_atomic)(out);

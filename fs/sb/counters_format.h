@@ -195,6 +195,8 @@ enum bch_counters_flags {
 	  "Journal reclaim starts")					\
 	x(journal_write,			29,  TYPE_COUNTER,	\
 	  "Journal writes")						\
+	x(journal_pin_resize,			134, TYPE_COUNTER,	\
+	  "increase size of journal pin fifo")				\
 	x(gc_gens_end,				42,  TYPE_COUNTER,	\
 	  "GC generation pass completions")				\
 	x(gc_gens_start,			43,  TYPE_COUNTER,	\

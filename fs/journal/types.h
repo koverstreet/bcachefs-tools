@@ -364,6 +364,8 @@ struct journal {
 	 * longer needed, the bucket can be discarded and reused.
 	 */
 	FIFO_U64_IDX(struct journal_entry_pin_list) pin;
+	struct percpu_rw_semaphore pin_resize_lock;
+
 	u64			last_seq;
 
 	size_t			dirty_entry_bytes;

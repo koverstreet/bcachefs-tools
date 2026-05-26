@@ -388,6 +388,7 @@ enum journal_cycle_flags {
 int bch2_journal_cycle_locked(struct journal *, enum journal_cycle_flags flags);
 void bch2_journal_cycle(struct journal *, enum journal_cycle_flags flags);
 
+void __bch2_journal_buf_put_final(struct journal *, u64);
 void bch2_journal_buf_put_final(struct journal *, u64);
 
 static inline void __bch2_journal_buf_put(struct journal *j, u64 seq)
@@ -397,7 +398,7 @@ static inline void __bch2_journal_buf_put(struct journal *j, u64 seq)
 
 	s = journal_state_buf_put(j, idx);
 	if (!journal_state_count(s, idx))
-		bch2_journal_buf_put_final(j, seq);
+		__bch2_journal_buf_put_final(j, seq);
 }
 
 static inline void bch2_journal_buf_put(struct journal *j, u64 seq)
@@ -407,7 +408,6 @@ static inline void bch2_journal_buf_put(struct journal *j, u64 seq)
 
 	s = journal_state_buf_put(j, idx);
 	if (!journal_state_count(s, idx)) {
-		guard(spinlock)(&j->lock);
 		bch2_journal_buf_put_final(j, seq);
 	} else if (unlikely(s.cur_entry_offset == JOURNAL_ENTRY_BLOCKED_VAL))
 		closure_wake_up(&j->async_wait);
@@ -565,6 +565,8 @@ static inline void *class_journal_block_lock_ptr(class_journal_block_t *_T)
 {
 	return _T;
 }
+
+int bch2_journal_pin_fifo_resize(struct journal *);
 
 struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *, u64, bool *);
 
