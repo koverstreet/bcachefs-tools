@@ -338,7 +338,7 @@ static inline union journal_res_state journal_state_buf_put(struct journal *j, u
 	return s;
 }
 
-void bch2_journal_entry_close_locked(struct journal *);
+int bch2_journal_cycle(struct journal *, bool);
 void bch2_journal_entry_close(struct journal *);
 
 void bch2_journal_buf_put_final(struct journal *, u64);

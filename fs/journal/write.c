@@ -418,7 +418,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 	 */
 	if (journal_buf_must_flush(journal_cur_buf(j)) ||
 	    j->flush_wait.list.first)
-		bch2_journal_entry_close_locked(j);
+		bch2_journal_cycle(j, false);
 
 	/*
 	 * We don't typically trigger journal writes from here - the next journal
