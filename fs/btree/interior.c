@@ -1004,17 +1004,24 @@ static void btree_update_nodes_written(struct btree_update *as)
 					bch2_btree_node_unlock_with_path(trans, path_idx,
 									 b->c.level);
 				} else {
-					mutex_lock(&c->btree.interior_updates.lock);
+					bool do_pin;
 
-					list_del(&as->write_blocked_list);
-					if (list_empty(&b->write_blocked))
-						clear_btree_node_write_blocked(b);
+					scoped_guard(mutex, &c->btree.interior_updates.lock) {
+						list_del(&as->write_blocked_list);
+						if (list_empty(&b->write_blocked))
+							clear_btree_node_write_blocked(b);
 
-					/*
-					 * Node might have been freed, recheck under
-					 * btree_interior_updates.lock:
-					 */
-					if (as->b == b) {
+						/*
+						 * Node might have been freed, recheck under
+						 * btree_interior_updates.lock; b's write lock
+						 * keeps it valid past the mutex drop, so the
+						 * journal pin work can happen outside the
+						 * mutex.
+						 */
+						do_pin = as->b == b;
+					}
+
+					if (do_pin) {
 						BUG_ON(!b->c.level);
 						BUG_ON(!btree_node_dirty(b));
 
@@ -1036,8 +1043,6 @@ static void btree_update_nodes_written(struct btree_update *as)
 							set_btree_node_never_write(b);
 						}
 					}
-
-					mutex_unlock(&c->btree.interior_updates.lock);
 
 					mark_btree_node_locked_noreset(path, b->c.level,
 								       BTREE_NODE_INTENT_LOCKED);
