@@ -370,8 +370,8 @@ static inline void bch2_journal_buf_put(struct journal *j, u64 seq)
  * This function releases the journal write structure so other threads can
  * then proceed to add their keys as well.
  */
-static inline void bch2_journal_res_put(struct journal *j,
-				       struct journal_res *res)
+static inline void bch2_journal_res_put_inlined(struct journal *j,
+						struct journal_res *res)
 {
 	if (!res->ref)
 		return;
@@ -387,6 +387,8 @@ static inline void bch2_journal_res_put(struct journal *j,
 
 	res->ref = 0;
 }
+
+void bch2_journal_res_put(struct journal *, struct journal_res *);
 
 int bch2_journal_res_get_slowpath(struct journal *, struct journal_res *,
 				  unsigned, struct btree_trans *);

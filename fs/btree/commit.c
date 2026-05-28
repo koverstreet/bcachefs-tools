@@ -1262,8 +1262,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		if (trans->flush)
 			bch2_journal_res_flush(&c->journal, &trans->journal_res, trans->flush);
 
-		if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res)))
-			bch2_journal_res_put(&c->journal, &trans->journal_res);
+		bch2_journal_res_put_inlined(&c->journal, &trans->journal_res);
 	}
 
 	trans_for_each_update(trans, i) {

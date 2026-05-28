@@ -877,6 +877,11 @@ int bch2_journal_res_get_slowpath(struct journal *j, struct journal_res *res,
 	return ret;
 }
 
+void bch2_journal_res_put(struct journal *j, struct journal_res *res)
+{
+	bch2_journal_res_put_inlined(j, res);
+}
+
 /* journal_entry_res: */
 
 void bch2_journal_entry_res_resize(struct journal *j,
