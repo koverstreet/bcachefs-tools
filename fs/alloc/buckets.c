@@ -59,11 +59,11 @@ __bch2_fs_usage_read_short(struct bch_fs *c)
 	u64 data, reserved;
 
 	ret.capacity = c->capacity.capacity -
-		percpu_u64_get(&c->capacity.usage->hidden);
+		percpu_u64_get(&c->capacity.pcpu->usage.hidden);
 
-	data		= percpu_u64_get(&c->capacity.usage->data) +
-		percpu_u64_get(&c->capacity.usage->btree);
-	reserved	= percpu_u64_get(&c->capacity.usage->reserved) +
+	data		= percpu_u64_get(&c->capacity.pcpu->usage.data) +
+		percpu_u64_get(&c->capacity.pcpu->usage.btree);
+	reserved	= percpu_u64_get(&c->capacity.pcpu->usage.reserved) +
 		percpu_u64_get(&c->capacity.pcpu->online_reserved);
 
 	ret.used	= min(ret.capacity, data + reserve_factor(reserved));
@@ -573,7 +573,7 @@ void bch2_trans_account_disk_usage_change(struct btree_trans *trans)
 	}
 
 	scoped_guard(preempt) {
-		struct bch_fs_usage_base *dst = this_cpu_ptr(c->capacity.usage);
+		struct bch_fs_usage_base *dst = &this_cpu_ptr(c->capacity.pcpu)->usage;
 		acc_u64s((u64 *) dst, (u64 *) src, sizeof(*src) / sizeof(u64));
 	}
 

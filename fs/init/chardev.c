@@ -457,7 +457,7 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 	if (ret)
 		return ret;
 
-	arg.capacity		= c->capacity.capacity - percpu_u64_get(&c->capacity.usage->hidden);
+	arg.capacity		= c->capacity.capacity - percpu_u64_get(&c->capacity.pcpu->usage.hidden);
 	arg.used		= bch2_fs_usage_read_short(c).used;
 	arg.online_reserved	= percpu_u64_get(&c->capacity.pcpu->online_reserved);
 	arg.accounting_u64s	= accounting.nr / sizeof(u64);

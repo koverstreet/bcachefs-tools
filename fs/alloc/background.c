@@ -1736,7 +1736,6 @@ void bch2_fs_capacity_exit(struct bch_fs *c)
 	}
 
 	free_percpu(c->capacity.pcpu);
-	free_percpu(c->capacity.usage);
 }
 
 int bch2_fs_capacity_init(struct bch_fs *c)
@@ -1745,8 +1744,7 @@ int bch2_fs_capacity_init(struct bch_fs *c)
 
 	try(percpu_init_rwsem(&c->capacity.mark_lock));
 
-	if (!(c->capacity.pcpu = alloc_percpu(struct bch_fs_capacity_pcpu)) ||
-	    !(c->capacity.usage = alloc_percpu(struct bch_fs_usage_base)))
+	if (!(c->capacity.pcpu = alloc_percpu(struct bch_fs_capacity_pcpu)))
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
 	return 0;
