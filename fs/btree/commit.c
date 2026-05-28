@@ -1272,7 +1272,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		if (!i->cached)
 			bch2_btree_insert_key_leaf(trans, path, i->k, trans->journal_res.seq);
 		else if (!i->key_cache_already_flushed)
-			bch2_btree_insert_key_cached(trans, flags, i);
+			bch2_btree_insert_key_cached(trans, i);
 		else
 			bch2_btree_key_cache_drop(trans, path);
 	}

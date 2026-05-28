@@ -682,8 +682,7 @@ rcu_done:;
 	return any_done;
 }
 
-bool bch2_btree_insert_key_cached(struct btree_trans *trans,
-				  unsigned flags,
+void bch2_btree_insert_key_cached(struct btree_trans *trans,
 				  struct btree_insert_entry *insert_entry)
 {
 	struct bch_fs *c = trans->c;
@@ -726,7 +725,6 @@ bool bch2_btree_insert_key_cached(struct btree_trans *trans,
 
 	if (kick_reclaim)
 		journal_reclaim_kick(&c->journal);
-	return true;
 }
 
 void bch2_btree_key_cache_drop(struct btree_trans *trans,
