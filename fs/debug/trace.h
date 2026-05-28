@@ -11,7 +11,7 @@ DECLARE_EVENT_CLASS(fs_str,
 	TP_ARGS(c, str),
 
 	TP_STRUCT__entry(
-		__array(char,		fs, 32			)
+		__array(char,		fs, 40			)
 		__string(str,		str			)
 	),
 
