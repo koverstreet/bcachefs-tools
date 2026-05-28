@@ -404,6 +404,15 @@ static inline void btree_insert_entry_checks(struct btree_trans *trans,
 		!bch2_snapshot_exists(trans->c, i->k->k.p.snapshot));
 }
 
+noinline __cold
+static int journal_transaction_names_changed(struct btree_trans *trans)
+{
+	struct journal *j = &trans->c->journal;
+
+	bch2_journal_res_put(j, &trans->journal_res);
+	return btree_trans_restart(trans, BCH_ERR_transaction_restart_journal_overwrites_changed);
+}
+
 static __always_inline int bch2_trans_journal_res_get(struct btree_trans *trans,
 						      unsigned flags)
 {
@@ -413,11 +422,8 @@ static __always_inline int bch2_trans_journal_res_get(struct btree_trans *trans,
 				 trans->journal_u64s, flags, trans));
 
 	if (unlikely(trans->journal_res.has_overwrites !=
-		     trans->journal_transaction_names)) {
-		bch2_journal_res_put(j, &trans->journal_res);
-		return btree_trans_restart(trans,
-			BCH_ERR_transaction_restart_journal_overwrites_changed);
-	}
+		     trans->journal_transaction_names))
+		return journal_transaction_names_changed(trans);
 
 	return 0;
 }
