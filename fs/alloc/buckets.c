@@ -571,11 +571,13 @@ int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 void bch2_trans_account_disk_usage_change(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
+
+	lockdep_assert_held(&c->capacity.mark_lock);
+
 	u64 disk_res_sectors = trans->disk_res ? trans->disk_res->sectors : 0;
 	static int warned_disk_usage = 0;
 	bool warn = false;
 
-	guard(percpu_read)(&c->capacity.mark_lock);
 	struct bch_fs_usage_base *src = &trans->fs_usage_delta;
 
 	s64 added = src->btree + src->data + src->reserved;
