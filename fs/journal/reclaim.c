@@ -70,9 +70,8 @@ void bch2_journal_set_watermark(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
-	bool med_on_space = (j->space[journal_space_clean].total * 2 <=
-			     j->space[journal_space_total].total) ||
-		(fifo_free(&j->pin) < j->pin.size / 2);
+	bool med_on_space = (j->space[journal_space_clean].total * 4 <=
+			     j->space[journal_space_total].total * 3);
 
 	bool low_on_space = j->space[journal_space_clean].total * 4 <=
 		j->space[journal_space_total].total;
