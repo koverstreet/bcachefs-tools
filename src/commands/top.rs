@@ -1,13 +1,15 @@
-use std::collections::HashMap;
-use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::collections::{HashMap, VecDeque};
+use std::fs::{self, OpenOptions};
+use std::io::{self, IsTerminal, Read, Write};
 use std::mem;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::process;
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bch_bindgen::c::bch_ioctl_query_counters;
-use bch_bindgen::sb::COUNTERS;
+use bch_bindgen::sb::{COUNTERS, CounterInfo};
 use clap::Parser;
 use crossterm::{
     cursor,
@@ -112,6 +114,157 @@ fn fmt_counter(val: u64, sectors: bool, human_readable: bool) -> String {
     }
 }
 
+// Live tracepoint drill-down (ftrace)
+//
+// Every counter has a corresponding bcachefs tracepoint (trace.h generates
+// them from BCH_PERSISTENT_COUNTERS()), all of the fs_str class - one
+// preformatted string per event, with the fs name in a filterable `fs` field.
+// We enable the one tracepoint in a dedicated tracefs instance, scope it to
+// this mount, and tail trace_pipe live.
+
+fn tracefs_root() -> Option<PathBuf> {
+    ["/sys/kernel/tracing", "/sys/kernel/debug/tracing"]
+        .into_iter()
+        .map(PathBuf::from)
+        .find(|p| p.join("instances").is_dir())
+}
+
+const TRACE_MAX_LINES: usize = 5000;
+
+fn event_dir(instance_dir: &Path, event: &str) -> PathBuf {
+    instance_dir.join("events/bcachefs").join(event)
+}
+
+struct TraceView {
+    event:        String,
+    instance_dir: PathBuf,
+    pipe:         Option<fs::File>,
+    lines:        VecDeque<String>,
+    partial:      String,
+    /// rows scrolled up from the live tail; 0 == following the tail
+    scroll_back:  usize,
+    paused:       bool,
+    backtrace:    bool,
+}
+
+impl TraceView {
+    fn start(event: &str, fs_name: &str) -> Result<TraceView> {
+        let root = tracefs_root()
+            .context("tracefs not found at /sys/kernel/tracing (need root)")?;
+
+        let instance_dir = root.join("instances")
+            .join(format!("bcachefs-top-{}", process::id()));
+        fs::create_dir_all(&instance_dir)
+            .with_context(|| format!("creating trace instance {}", instance_dir.display()))?;
+
+        let event_dir = event_dir(&instance_dir, event);
+
+        // Scope to this mount before enabling. fs_str records c->name in the
+        // `fs` field (40 bytes, so full UUIDs fit), so an exact match works.
+        fs::write(event_dir.join("filter"), format!("fs == \"{fs_name}\"\n"))
+            .with_context(|| format!("scoping bcachefs:{event} to this mount"))?;
+        fs::write(event_dir.join("enable"), b"1\n")
+            .with_context(|| format!("enabling tracepoint bcachefs:{event}"))?;
+
+        let pipe = OpenOptions::new()
+            .read(true)
+            .custom_flags(libc::O_NONBLOCK)
+            .open(instance_dir.join("trace_pipe"))
+            .context("opening trace_pipe")?;
+
+        Ok(TraceView {
+            event: event.to_string(),
+            instance_dir,
+            pipe: Some(pipe),
+            lines: VecDeque::new(),
+            partial: String::new(),
+            scroll_back: 0,
+            paused: false,
+            backtrace: false,
+        })
+    }
+
+    /// Pause/resume the live tail. We also stop recording into the instance
+    /// (tracing_on) so a long pause doesn't fill the ring buffer; resume
+    /// picks up new events from that point.
+    fn set_paused(&mut self, paused: bool) {
+        self.paused = paused;
+        let _ = fs::write(self.instance_dir.join("tracing_on"),
+                          if paused { b"0\n" } else { b"1\n" });
+    }
+
+    /// Toggle a kernel stack dump after each event via the event's trigger.
+    fn set_backtrace(&mut self, on: bool) {
+        self.backtrace = on;
+        let trigger = event_dir(&self.instance_dir, &self.event).join("trigger");
+        let _ = fs::write(&trigger, if on { "stacktrace\n" } else { "!stacktrace\n" });
+    }
+
+    /// Non-blocking: pull queued events into the ring buffer. Bounded per
+    /// call so a hot event (trace_pipe continuously fed) can't spin here
+    /// forever and hang the UI - whatever's left stays in the kernel buffer
+    /// and we pick it up next cycle (or it ages out, fine for a live tail).
+    fn drain(&mut self) {
+        let Some(pipe) = self.pipe.as_mut() else { return };
+        let mut buf = [0u8; 16384];
+        for _ in 0..16 {
+            match pipe.read(&mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    self.partial.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    while let Some(nl) = self.partial.find('\n') {
+                        let line: String = self.partial.drain(..=nl).collect();
+                        let line = line.trim_end();
+                        // trace_pipe interleaves '#'-prefixed header/comment lines
+                        if line.is_empty() || line.starts_with('#') { continue; }
+                        self.lines.push_back(line.to_string());
+                        if self.lines.len() > TRACE_MAX_LINES { self.lines.pop_front(); }
+                    }
+                }
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => break,
+                Err(_) => break,
+            }
+        }
+    }
+
+    fn scroll_up(&mut self, n: usize)   { self.scroll_back = self.scroll_back.saturating_add(n); }
+    fn scroll_down(&mut self, n: usize) { self.scroll_back = self.scroll_back.saturating_sub(n); }
+}
+
+impl Drop for TraceView {
+    fn drop(&mut self) {
+        self.pipe = None; // close trace_pipe before tearing down the instance
+        let _ = fs::write(event_dir(&self.instance_dir, &self.event).join("enable"), b"0\n");
+        let _ = fs::remove_dir(&self.instance_dir);
+    }
+}
+
+fn render_trace(tv: &mut TraceView, stdout: &mut io::Stdout) -> io::Result<()> {
+    let (_, term_h) = terminal::size().unwrap_or((120, 40));
+    let visible = (term_h as usize).saturating_sub(3).max(1);
+    let total = tv.lines.len();
+
+    /* Clamp scroll so Home / over-scrolling pins to the oldest visible window
+     * instead of running off into a blank view (and so Down works after). */
+    tv.scroll_back = tv.scroll_back.min(total.saturating_sub(visible));
+
+    execute!(stdout, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
+    let st = if tv.paused { " [PAUSED]" }
+             else if tv.scroll_back == 0 { " (live)" }
+             else { "" };
+    let bt = if tv.backtrace { " [backtrace]" } else { "" };
+    write!(stdout, "{}\r\n",
+        format!("bcachefs:{}  {} events{}{}", tv.event, tv.lines.len(), st, bt).reversed())?;
+    write!(stdout, "  q:back  Space:pause  b:backtrace  \u{2191}\u{2193}/PgUp/PgDn:scroll  End:follow\r\n\r\n")?;
+
+    let end   = total.saturating_sub(tv.scroll_back);
+    let start = end.saturating_sub(visible);
+    for line in tv.lines.iter().skip(start).take(end - start) {
+        write!(stdout, "{}\r\n", line)?;
+    }
+    stdout.flush()
+}
+
 // CLI
 
 #[derive(Parser, Debug)]
@@ -180,6 +333,9 @@ struct TopState {
     page:           Page,
     cursor:         usize,
     scroll_offset:  usize,
+    fs_name:        String,             // c->name (= sysfs dir), for trace scoping
+    trace:          Option<TraceView>,  // Some => live-trace drill-down active
+    status:         Option<String>,     // transient message (e.g. trace-start error)
 }
 
 impl TopState {
@@ -192,6 +348,9 @@ impl TopState {
         let prev_vals  = read_counters(ioctl_fd, 0, nr_stable)?;
 
         let sysfs_path = sysfs_path_from_fd(handle.sysfs_fd())?;
+        let fs_name = sysfs_path.file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
 
         Ok(TopState {
             ioctl_fd, nr_stable,
@@ -202,6 +361,9 @@ impl TopState {
             page: Page::Base,
             cursor: 0,
             scroll_offset: 0,
+            fs_name,
+            trace: None,
+            status: None,
         })
     }
 
@@ -209,6 +371,27 @@ impl TopState {
         let idx = stable_id as usize;
         if idx < vals.len() { vals[idx] } else { 0 }
     }
+
+    /// Name of the counter under the cursor on the counters page (same
+    /// v_mount != 0 filtering as build_frame), for trace drill-down.
+    fn counter_at_cursor(&self, curr: &[u64]) -> Option<String> {
+        if self.page != Page::Base { return None; }
+        active_counters(curr, &self.mount_vals)
+            .nth(self.cursor)
+            .map(|c| c.name.to_string())
+    }
+}
+
+/* Counters with activity since mount, in display order. Single source of
+ * truth for which rows the counters page shows - build_frame renders these,
+ * counter_at_cursor maps the cursor into the same sequence, so the two can't
+ * disagree about what's at a given row. (Counters are monotonic since mount,
+ * so "changed since mount" is just curr != mount.) */
+fn active_counters<'a>(curr: &'a [u64], mount: &'a [u64])
+    -> impl Iterator<Item = &'static CounterInfo> + 'a
+{
+    COUNTERS.iter().filter(move |c|
+        TopState::get_val(curr, c.stable_id) != TopState::get_val(mount, c.stable_id))
 }
 
 /* Build the current frame as Vec<String>, return the line index of the
@@ -219,12 +402,14 @@ fn build_frame(state: &TopState, curr: &[u64], dev_io: &[DevIoEntry])
 {
     let mut lines = Vec::new();
     let mut cursor_line = None;
-    let mut row = 0usize;
 
-    lines.push("All counters have a corresponding tracepoint; for more info on any given event, try e.g.".into());
-    lines.push("  trace-cmd stream -e bcachefs:data_update_pred".into());
+    lines.push("Every counter has a corresponding tracepoint; Enter drills into a live trace of the".into());
+    lines.push("selected event, scoped to this mount.".into());
     lines.push(String::new());
-    lines.push("  q:quit  h:human-readable  Tab:page  \u{2191}\u{2193}:scroll  PgUp/PgDn  1-9:interval".into());
+    lines.push("  q:quit  Enter:live-trace  h:human-readable  Tab:page  \u{2191}\u{2193}:scroll  PgUp/PgDn  1-9:interval".into());
+    if let Some(s) = &state.status {
+        lines.push(format!("  {}", s));
+    }
 
     /* Page tab bar */
     let mut tabs = String::from("  ");
@@ -248,17 +433,15 @@ fn build_frame(state: &TopState, curr: &[u64], dev_io: &[DevIoEntry])
             lines.push(format!("{:<40} {:>14} {:>14} {:>14}",
                 "", format!("{}/s", state.interval_secs), "total", "mount"));
 
-            for c in COUNTERS {
+            for (row, c) in active_counters(curr, &state.mount_vals).enumerate() {
                 let cv = TopState::get_val(curr, c.stable_id);
                 let pv = TopState::get_val(&state.prev_vals, c.stable_id);
                 let sv = TopState::get_val(&state.start_vals, c.stable_id);
                 let mv = TopState::get_val(&state.mount_vals, c.stable_id);
 
-                let v_mount = cv.wrapping_sub(mv);
-                if v_mount == 0 { continue }
-
                 let v_rate  = cv.wrapping_sub(pv);
                 let v_total = cv.wrapping_sub(sv);
+                let v_mount = cv.wrapping_sub(mv);
 
                 let row_str = format!("{:<40} {:>12}/s {:>14} {:>14}",
                     c.name,
@@ -272,14 +455,13 @@ fn build_frame(state: &TopState, curr: &[u64], dev_io: &[DevIoEntry])
                 } else {
                     lines.push(format!("  {}", row_str));
                 }
-                row += 1;
             }
         }
         Page::Devices => {
             lines.push(format!("{:<40} {:>14} {:>14} {:>14} {:>14}",
                 "", "read/s", "read", "write/s", "write"));
 
-            for dev in dev_io {
+            for (row, dev) in dev_io.iter().enumerate() {
                 let (prev_r, prev_w) = state.prev_dev_io
                     .get(&dev.label)
                     .copied()
@@ -298,12 +480,15 @@ fn build_frame(state: &TopState, curr: &[u64], dev_io: &[DevIoEntry])
                 } else {
                     lines.push(format!("  {}", row_str));
                 }
-                row += 1;
             }
         }
     }
 
-    (lines, cursor_line, row)
+    let total_rows = match state.page {
+        Page::Base    => active_counters(curr, &state.mount_vals).count(),
+        Page::Devices => dev_io.len(),
+    };
+    (lines, cursor_line, total_rows)
 }
 
 fn render(state: &mut TopState, curr: &[u64], dev_io: &[DevIoEntry], stdout: &mut io::Stdout)
@@ -418,14 +603,50 @@ fn run_interactive(handle: BcachefsHandle, human_readable: bool, delay: u32) -> 
     let mut state = TopState::new(&handle, human_readable)?;
     state.interval_secs = delay.max(1);
 
-    run_tui(|stdout| loop {
-        let curr = read_counters(state.ioctl_fd, 0, state.nr_stable)?;
-        let dev_io = read_device_io(&state.sysfs_path);
+    /* Sample once up front; prev == curr so the first frame shows zero rates.
+     * curr/dev_io persist across iterations: we only take a fresh sample (and
+     * advance the rate baseline) on the interval timeout, never on a keypress -
+     * otherwise scrolling would resample with ~no elapsed time and zero the
+     * rate column. */
+    let mut curr = read_counters(state.ioctl_fd, 0, state.nr_stable)?;
+    state.prev_vals = curr.clone();
+    let mut dev_io = read_device_io(&state.sysfs_path);
+    state.prev_dev_io = dev_io.iter()
+        .map(|d| (d.label.clone(), (d.read_bytes, d.write_bytes)))
+        .collect();
+
+    run_tui(move |stdout| loop {
+        /* Live trace drill-down: tail the selected tracepoint instead of the
+         * counter tables. Poll fast so events show up promptly; trace_pipe is
+         * non-blocking so the UI never stalls waiting on events. */
+        if state.trace.is_some() {
+            {
+                let tv = state.trace.as_mut().unwrap();
+                if !tv.paused { tv.drain(); }
+                render_trace(tv, stdout)?;
+            }
+            if event::poll(Duration::from_millis(200))? {
+                if let Event::Key(key) = event::read()? {
+                    match key.code {
+                        KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
+                        KeyCode::Char('q') | KeyCode::Esc | KeyCode::Backspace => state.trace = None,
+                        KeyCode::Char(' ') => { let tv = state.trace.as_mut().unwrap(); let p = !tv.paused;    tv.set_paused(p); }
+                        KeyCode::Char('b') => { let tv = state.trace.as_mut().unwrap(); let b = !tv.backtrace; tv.set_backtrace(b); }
+                        KeyCode::Up       => state.trace.as_mut().unwrap().scroll_up(1),
+                        KeyCode::Down     => state.trace.as_mut().unwrap().scroll_down(1),
+                        KeyCode::PageUp   => state.trace.as_mut().unwrap().scroll_up(20),
+                        KeyCode::PageDown => state.trace.as_mut().unwrap().scroll_down(20),
+                        KeyCode::Home     => state.trace.as_mut().unwrap().scroll_up(usize::MAX),
+                        KeyCode::End      => state.trace.as_mut().unwrap().scroll_back = 0,
+                        _ => {}
+                    }
+                }
+                while event::poll(Duration::ZERO)? { let _ = event::read()?; }
+            }
+            continue;
+        }
+
         let total_rows = render(&mut state, &curr, &dev_io, stdout)?;
-        state.prev_vals = curr;
-        state.prev_dev_io = dev_io.into_iter()
-            .map(|d| (d.label, (d.read_bytes, d.write_bytes)))
-            .collect();
 
         /* Clamp cursor to current page's row count (e.g. counters can drop
          * out from under us when v_mount goes back to zero between ticks). */
@@ -438,8 +659,18 @@ fn run_interactive(handle: BcachefsHandle, human_readable: bool, delay: u32) -> 
                 let (_, term_h) = terminal::size().unwrap_or((120, 40));
                 let page_step = (term_h as usize).saturating_sub(1).max(1);
 
+                state.status = None;    // any key clears a transient message
+
                 match key.code {
                     KeyCode::Char('q') | KeyCode::Esc => return Ok(()),
+                    KeyCode::Enter => {
+                        if let Some(name) = state.counter_at_cursor(&curr) {
+                            match TraceView::start(&name, &state.fs_name) {
+                                Ok(tv) => state.trace = Some(tv),
+                                Err(e) => state.status = Some(format!("trace start failed: {e:#}")),
+                            }
+                        }
+                    }
                     KeyCode::Char('c') if key.modifiers.contains(KeyModifiers::CONTROL) => return Ok(()),
                     KeyCode::Tab => {
                         state.page = if key.modifiers.contains(KeyModifiers::SHIFT) {
@@ -473,6 +704,16 @@ fn run_interactive(handle: BcachefsHandle, human_readable: bool, delay: u32) -> 
                 }
             }
             while event::poll(Duration::ZERO)? { let _ = event::read()?; }
+        } else {
+            /* Interval elapsed with no input: advance the rate baseline and
+             * take a fresh sample. (Keypresses fall through here only on
+             * timeout, so scrolling never resamples.) */
+            state.prev_vals = curr;
+            state.prev_dev_io = dev_io.into_iter()
+                .map(|d| (d.label, (d.read_bytes, d.write_bytes)))
+                .collect();
+            curr = read_counters(state.ioctl_fd, 0, state.nr_stable)?;
+            dev_io = read_device_io(&state.sysfs_path);
         }
     })
 }
