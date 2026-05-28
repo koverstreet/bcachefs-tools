@@ -639,6 +639,7 @@ static noinline int bch2_dir_emit_slow(struct btree_trans *trans, struct bkey_bu
 
 #ifdef __KERNEL__
 #include <linux/fs.h>
+#include <linux/pagemap.h>
 
 struct linux_dirent64 {
 	u64		d_ino;
@@ -767,6 +768,21 @@ int bch2_readdir(struct bch_fs *c, subvol_inum inum,
 		 struct bch_hash_info *hash_info,
 		 struct dir_context *ctx)
 {
+#ifdef __KERNEL__
+	/*
+	 * If this is getdents64, fault in the user buffer up front so the
+	 * lock-holding fast path in bch2_dir_emit() doesn't fault - and fall
+	 * back to the unlock/relock slow path - the first time it writes into
+	 * each page. Best-effort: any residual is still handled by the fallback
+	 * in bch2_dir_emit(). Must be before we take btree locks.
+	 */
+	if (ctx->actor == filldir64_sym) {
+		struct getdents_callback64 *buf =
+			container_of(ctx, struct getdents_callback64, ctx);
+		fault_in_writeable((char __user *) buf->current_dir, ctx->count);
+	}
+#endif
+
 	struct bkey_buf sk __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&sk);
 
@@ -870,8 +886,34 @@ void bch2_dirent_init(void)
 		unregister_kprobe(&kp);
 	}
 }
+
+void bch2_filldir64_specialization_to_text(struct printbuf *out)
+{
+	prt_printf(out, "filldir64 fast path:\t");
+	/*
+	 * Real address (not hashed) so it can be compared against the
+	 * filldir64 symbol in /proc/kallsyms: a mismatch means the kprobe
+	 * resolved a different entry than ctx->actor points at (e.g. an
+	 * IBT/CFI prologue adjustment that's off by a few bytes); a NULL
+	 * means register_kprobe() failed (lockdown, !CONFIG_KPROBES,
+	 * blacklist).
+	 */
+	if (!IS_ERR_OR_NULL(filldir64_sym))
+		prt_printf(out, "%px", filldir64_sym);
+	else if (IS_ERR(filldir64_sym))
+		prt_printf(out, "%s", bch2_err_str(PTR_ERR(filldir64_sym)));
+	else
+		prt_str(out, "unavailable");
+	prt_newline(out);
+
+}
 #else
 void bch2_dirent_init(void)
 {
+}
+
+void bch2_filldir64_specialization_to_text(struct printbuf *out)
+{
+	prt_str(out, "filldir64 fast path:\tunavailable (userspace)\n");
 }
 #endif

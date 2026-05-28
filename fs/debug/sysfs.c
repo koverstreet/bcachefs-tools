@@ -36,6 +36,7 @@
 #include "debug/sysfs.h"
 #include "debug/tests.h"
 
+#include "fs/dirent.h"
 #include "fs/inode.h"
 
 #include "init/error.h"
@@ -216,6 +217,7 @@ read_attribute(disk_groups);
 read_attribute(has_data);
 read_attribute(alloc_debug);
 read_attribute(usage_base);
+read_attribute(filldir64_specialization);
 
 #define x(t, n, ...)							\
 	static struct attribute sysfs_counter_##t = { .name = #t, .mode = 0644 };
@@ -418,6 +420,9 @@ SHOW(bch2_fs)
 
 	if (attr == &sysfs_usage_base)
 		bch2_fs_usage_base_to_text(out, c);
+
+	if (attr == &sysfs_filldir64_specialization)
+		bch2_filldir64_specialization_to_text(out);
 
 	return 0;
 }
@@ -659,6 +664,7 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_disk_groups,
 	&sysfs_alloc_debug,
 	&sysfs_usage_base,
+	&sysfs_filldir64_specialization,
 	NULL
 };
 
