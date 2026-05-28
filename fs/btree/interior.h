@@ -397,7 +397,7 @@ static inline bool bch2_btree_node_compact_fits(struct bch_fs *c,
 
 static inline bool btree_bkey_and_val_eq(struct bkey_s_c l, struct bkey_s_c r)
 {
-	if (!bkey_fields_eq(*l.k, *r.k))
+	if (!bkey_fields_eq(l.k, r.k))
 		return false;
 
 	/* Skip mem_ptr field */
