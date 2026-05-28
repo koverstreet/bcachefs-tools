@@ -418,7 +418,7 @@ static __always_inline int bch2_trans_journal_res_get(struct btree_trans *trans,
 
 #define JSET_ENTRY_LOG_U64s		4
 
-static noinline void journal_transaction_name(struct btree_trans *trans)
+static inline void journal_transaction_name(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
 	struct journal *j = &c->journal;
@@ -1110,7 +1110,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 				(flags & BCH_WATERMARK_MASK)|
 				JOURNAL_RES_GET_NONBLOCK));
 
-		if (unlikely(trans->journal_transaction_names))
+		if (trans->journal_transaction_names)
 			journal_transaction_name(trans);
 	}
 
