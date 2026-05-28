@@ -160,7 +160,6 @@ struct bch_fs_capacity {
 
 	struct percpu_rw_semaphore	mark_lock;
 
-	seqcount_t			usage_lock;
 	struct bch_fs_usage_base __percpu *usage;
 };
 
