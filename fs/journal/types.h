@@ -144,15 +144,34 @@ union journal_res_state {
 		u64		v;
 	};
 
+	/*
+	 * Field order is reversed on big-endian so the on-word bit layout is
+	 * identical on both: cur_entry_offset at bit 0, idx at 22, then the four
+	 * counts at bit 24 + idx*10. That invariant lets journal_state_count() /
+	 * _inc() / _buf_put() index a count with a single shift, not a switch.
+	 */
 	struct {
+#ifdef __LITTLE_ENDIAN_BITFIELD
 		u64		cur_entry_offset:22,
 				idx:2,
 				buf0_count:10,
 				buf1_count:10,
 				buf2_count:10,
 				buf3_count:10;
+#else
+		u64		buf3_count:10,
+				buf2_count:10,
+				buf1_count:10,
+				buf0_count:10,
+				idx:2,
+				cur_entry_offset:22;
+#endif
 	};
 };
+
+#define JOURNAL_STATE_BUF_COUNT_BITS	10	/* matches bufN_count:10 above */
+#define JOURNAL_STATE_BUF_COUNT_MAX	((1U << JOURNAL_STATE_BUF_COUNT_BITS) - 1)
+#define JOURNAL_STATE_BUF0_SHIFT	24	/* cur_entry_offset:22 + idx:2 */
 
 /* bytes: */
 #define JOURNAL_ENTRY_SIZE_MIN		(64U << 10) /* 64k */

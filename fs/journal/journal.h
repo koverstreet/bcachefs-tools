@@ -198,13 +198,8 @@ journal_res_data(struct journal *j, struct journal_res *res)
 
 static inline int journal_state_count(union journal_res_state s, int idx)
 {
-	switch (idx) {
-	case 0: return s.buf0_count;
-	case 1: return s.buf1_count;
-	case 2: return s.buf2_count;
-	case 3: return s.buf3_count;
-	}
-	BUG();
+	return (s.v >> (JOURNAL_STATE_BUF0_SHIFT + idx * JOURNAL_STATE_BUF_COUNT_BITS))
+		& JOURNAL_STATE_BUF_COUNT_MAX;
 }
 
 static inline int journal_state_seq_count(struct journal *j,
@@ -216,12 +211,14 @@ static inline int journal_state_seq_count(struct journal *j,
 		return 0;
 }
 
-static inline void journal_state_inc(union journal_res_state *s)
+/* Returns false (without incrementing) if the count would overflow: */
+static inline bool journal_state_inc(union journal_res_state *s)
 {
-	s->buf0_count += s->idx == 0;
-	s->buf1_count += s->idx == 1;
-	s->buf2_count += s->idx == 2;
-	s->buf3_count += s->idx == 3;
+	if (journal_state_count(*s, s->idx) == JOURNAL_STATE_BUF_COUNT_MAX)
+		return false;
+
+	s->v += 1ULL << (JOURNAL_STATE_BUF0_SHIFT + s->idx * JOURNAL_STATE_BUF_COUNT_BITS);
+	return true;
 }
 
 /*
@@ -334,12 +331,8 @@ static inline union journal_res_state journal_state_buf_put(struct journal *j, u
 {
 	union journal_res_state s;
 
-	s.v = atomic64_sub_return(((union journal_res_state) {
-				    .buf0_count = idx == 0,
-				    .buf1_count = idx == 1,
-				    .buf2_count = idx == 2,
-				    .buf3_count = idx == 3,
-				    }).v, &j->reservations.counter);
+	s.v = atomic64_sub_return(1ULL << (JOURNAL_STATE_BUF0_SHIFT + idx * JOURNAL_STATE_BUF_COUNT_BITS),
+				  &j->reservations.counter);
 	return s;
 }
 
@@ -430,13 +423,12 @@ static inline int journal_res_get_fast(struct journal *j,
 			return 0;
 
 		new.cur_entry_offset += res->u64s;
-		journal_state_inc(&new);
 
 		/*
 		 * If the refcount would overflow, we have to wait:
 		 * XXX - tracepoint this:
 		 */
-		if (!journal_state_count(new, new.idx))
+		if (!journal_state_inc(&new))
 			return 0;
 
 		if (flags & JOURNAL_RES_GET_CHECK)
