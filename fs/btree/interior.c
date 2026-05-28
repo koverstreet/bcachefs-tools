@@ -3564,7 +3564,15 @@ void bch2_journal_entry_to_btree_root(struct bch_fs *c, struct jset_entry *entry
 {
 	struct btree_root *r = bch2_btree_id_root(c, entry->btree_id);
 
-	guard(mutex)(&c->btree.interior_updates.lock);
+	/*
+	 * The on-disk root fields (key/level/alive) are owned by root_lock:
+	 * that's what bch2_btree_set_root_inmem() takes for ->b, and what the
+	 * journal replay path takes for ->key. Taking interior_updates.lock
+	 * here was incidental (roots are interior-update machinery), and it
+	 * dragged interior_updates.lock into the journal write path under
+	 * sb_lock — closing a lockdep cycle with pin_resize_lock.
+	 */
+	guard(mutex)(&c->btree.cache.root_lock);
 
 	r->level = entry->level;
 	r->alive = true;
@@ -3576,7 +3584,8 @@ bch2_btree_roots_to_journal_entries(struct bch_fs *c,
 				    struct jset_entry *end,
 				    unsigned long skip)
 {
-	guard(mutex)(&c->btree.interior_updates.lock);
+	/* root_lock owns the on-disk root fields; see above */
+	guard(mutex)(&c->btree.cache.root_lock);
 
 	for (unsigned i = 0; i < btree_id_nr_alive(c); i++) {
 		struct btree_root *r = bch2_btree_id_root(c, i);
