@@ -553,28 +553,43 @@ static int run_one_mem_trigger(struct btree_trans *trans,
 {
 	verify_update_old_key(trans, i);
 
-	if (unlikely(flags & BTREE_TRIGGER_norun))
-		return 0;
+	struct bkey_i deleted;
+	bkey_init(&deleted.k);
+	deleted.k.p = i->k->k.p;
 
-	struct bkey_s_c old = { &i->old_k, i->old_v };
-	struct bkey_i *new = i->k;
-	const struct bkey_ops *old_ops = bch2_bkey_type_ops(old.k->type);
+	struct bkey old_k = i->old_k;
+	struct btree_trigger_op op = {
+		.btree		= i->btree_id,
+		.level		= i->level,
+		.old		= (struct bkey_s_c) { &old_k, i->old_v },
+		.new		= bkey_i_to_s(i->k),
+		.new_buf_u64s	= i->k_buf_u64s,
+	};
+
+	const struct bkey_ops *old_ops = bch2_bkey_type_ops(old_k.type);
 	const struct bkey_ops *new_ops = bch2_bkey_type_ops(i->k->k.type);
 
-	if (old_ops->trigger == new_ops->trigger)
-		return bch2_key_trigger(trans, (struct btree_trigger_op) {
-			.btree		= i->btree_id,
-			.level		= i->level,
-			.old		= old,
-			.new		= bkey_i_to_s(new),
-			.new_buf_u64s	= i->k_buf_u64s,
-			.flags		= BTREE_TRIGGER_insert|BTREE_TRIGGER_overwrite|flags,
-		});
-	else
-		return bch2_key_trigger_new(trans, i->btree_id, i->level,
-				bkey_i_to_s(new), i->k_buf_u64s, flags) ?:
-		       bch2_key_trigger_old(trans, i->btree_id, i->level,
-				old, flags);
+	if (old_ops->trigger &&
+	    old_ops->trigger == new_ops->trigger) {
+		op.flags = flags|BTREE_TRIGGER_insert|BTREE_TRIGGER_overwrite;
+		return old_ops->trigger(trans, op);
+	}
+
+	if (new_ops->trigger) {
+		op.flags = flags|BTREE_TRIGGER_insert;
+		op.old = bkey_i_to_s_c(&deleted);
+		try(new_ops->trigger(trans, op));
+	}
+
+	if (old_ops->trigger) {
+		op.flags	= flags|BTREE_TRIGGER_overwrite;
+		op.old		= (struct bkey_s_c) { &old_k, i->old_v },
+		op.new		= bkey_i_to_s(&deleted);
+		op.new_buf_u64s = 0;
+		try(old_ops->trigger(trans, op));
+	}
+
+	return 0;
 }
 
 static int run_one_trans_trigger(struct btree_trans *trans, struct btree_insert_entry *i)
@@ -678,6 +693,7 @@ static noinline int bch2_trans_commit_run_gc_triggers(struct btree_trans *trans)
 {
 	trans_for_each_update(trans, i)
 		if (btree_node_type_has_triggers(i->bkey_type) &&
+		    !(i->flags & BTREE_TRIGGER_norun) &&
 		    gc_visited(trans->c, gc_pos_btree(i->btree_id, i->level, i->k->k.p)))
 			try(run_one_mem_trigger(trans, i, i->flags|BTREE_TRIGGER_gc));
 
@@ -1133,7 +1149,8 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 	bch2_trans_account_disk_usage_change(trans);
 
 	trans_for_each_update(trans, i)
-		if (btree_node_type_has_atomic_triggers(i->bkey_type)) {
+		if (btree_node_type_has_atomic_triggers(i->bkey_type) &&
+		    !(i->flags & BTREE_TRIGGER_norun)) {
 			ret = run_one_mem_trigger(trans, i, BTREE_TRIGGER_atomic|i->flags);
 			if (unlikely(ret))
 				return trans_commit_fatal_err(trans, ret);
