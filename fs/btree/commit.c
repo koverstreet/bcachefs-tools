@@ -919,11 +919,15 @@ do_bch2_trans_commit_to_journal_replay(struct btree_trans *trans,
 				       enum bch_trans_commit_flags flags)
 {
 	struct bch_fs *c = trans->c;
-	int ret = 0;
+
+	/* we're actually shutting down */
+	if (test_bit(BCH_FS_may_go_rw, &c->flags))
+		return bch_err_throw(c, erofs_trans_commit);
 
 	BUG_ON(current != c->recovery_task);
 
 	struct bkey_i *accounting;
+	int ret = 0;
 retry:
 	memset(&trans->fs_usage_delta, 0, sizeof(trans->fs_usage_delta));
 	percpu_down_read(&c->capacity.mark_lock);
@@ -1367,10 +1371,7 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 
 	if (!(flags & BCH_TRANS_COMMIT_no_check_rw) &&
 	    unlikely(!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_trans))) {
-		if (unlikely(!test_bit(BCH_FS_may_go_rw, &c->flags)))
-			ret = do_bch2_trans_commit_to_journal_replay(trans, flags);
-		else
-			ret = bch_err_throw(c, erofs_trans_commit);
+		ret = do_bch2_trans_commit_to_journal_replay(trans, flags);
 		goto out_reset;
 	}
 
