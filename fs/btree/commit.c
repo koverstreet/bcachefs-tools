@@ -141,7 +141,8 @@ static noinline int trans_lock_write_fail(struct btree_trans *trans, struct btre
 	return btree_trans_restart(trans, BCH_ERR_transaction_restart_would_deadlock_write);
 }
 
-static inline int bch2_trans_lock_write(struct btree_trans *trans)
+__always_inline
+static int bch2_trans_lock_write_inlined(struct btree_trans *trans)
 {
 	EBUG_ON(trans->write_locked);
 
@@ -158,6 +159,11 @@ static inline int bch2_trans_lock_write(struct btree_trans *trans)
 
 	trans->write_locked = true;
 	return 0;
+}
+
+static int bch2_trans_lock_write(struct btree_trans *trans)
+{
+	return bch2_trans_lock_write_inlined(trans);
 }
 
 static inline void bch2_trans_unlock_updates_write(struct btree_trans *trans)
