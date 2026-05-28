@@ -444,52 +444,46 @@ static inline int btree_key_can_insert(struct btree_trans *trans,
 
 noinline static int
 btree_key_can_insert_cached_slowpath(struct btree_trans *trans,
+				     enum bch_trans_commit_flags flags,
 				     struct btree_path *path, unsigned u64s)
-{
-	struct bkey_cached *ck = (void *) path->l[0].b;
-
-	unsigned new_u64s	= roundup_pow_of_two(u64s);
-	struct bkey_i *new_k	= kmalloc(new_u64s * sizeof(u64), GFP_NOWAIT);
-	if (unlikely(!new_k)) {
-		bch2_trans_unlock_updates_write(trans);
-		bch2_trans_unlock(trans);
-
-		new_k = kmalloc(new_u64s * sizeof(u64), GFP_KERNEL);
-		if (!new_k) {
-			struct bch_fs *c = trans->c;
-			bch_err(c, "error allocating memory for key cache key, btree %s u64s %u",
-				bch2_btree_id_str(path->btree_id), new_u64s);
-			return bch_err_throw(c, ENOMEM_btree_key_cache_insert);
-		}
-
-		int ret = bch2_trans_relock(trans) ?:
-			  bch2_trans_lock_write(trans);
-		if (unlikely(ret)) {
-			kfree(new_k);
-			return ret;
-		}
-	}
-
-	memcpy(new_k, ck->k, ck->u64s * sizeof(u64));
-	kfree(ck->k);
-
-	trans_for_each_update(trans, i)
-		if (i->old_v == &ck->k->v)
-			i->old_v = &new_k->v;
-
-	ck->u64s	= new_u64s;
-	ck->k		= new_k;
-	return 0;
-}
-
-static int btree_key_can_insert_cached(struct btree_trans *trans, unsigned flags,
-				       struct btree_path *path, unsigned u64s)
 {
 	struct bch_fs *c = trans->c;
 	struct bkey_cached *ck = (void *) path->l[0].b;
 	unsigned watermark = flags & BCH_WATERMARK_MASK;
 
-	EBUG_ON(path->level);
+	if (u64s > ck->u64s) {
+		unsigned new_u64s	= roundup_pow_of_two(u64s + u64s / 2);
+		struct bkey_i *new_k	= kmalloc(new_u64s * sizeof(u64), GFP_NOWAIT);
+		if (unlikely(!new_k)) {
+			bch2_trans_unlock_updates_write(trans);
+			bch2_trans_unlock(trans);
+
+			new_k = kmalloc(new_u64s * sizeof(u64), GFP_KERNEL);
+			if (!new_k) {
+				struct bch_fs *c = trans->c;
+				bch_err(c, "error allocating memory for key cache key, btree %s u64s %u",
+					bch2_btree_id_str(path->btree_id), new_u64s);
+				return bch_err_throw(c, ENOMEM_btree_key_cache_insert);
+			}
+
+			int ret = bch2_trans_relock(trans) ?:
+				  bch2_trans_lock_write(trans);
+			if (unlikely(ret)) {
+				kfree(new_k);
+				return ret;
+			}
+		}
+
+		memcpy(new_k, ck->k, ck->u64s * sizeof(u64));
+		kfree(ck->k);
+
+		trans_for_each_update(trans, i)
+			if (i->old_v == &ck->k->v)
+				i->old_v = &new_k->v;
+
+		ck->u64s	= new_u64s;
+		ck->k		= new_k;
+	}
 
 	if (watermark < BCH_WATERMARK_reclaim &&
 	    !test_bit(BKEY_CACHED_DIRTY, &ck->flags) &&
@@ -497,15 +491,24 @@ static int btree_key_can_insert_cached(struct btree_trans *trans, unsigned flags
 	    test_bit(JOURNAL_replay_done, &c->journal.flags))
 		return bch_err_throw(c, btree_insert_need_journal_reclaim);
 
+	return 0;
+}
+
+static inline int btree_key_can_insert_cached(struct btree_trans *trans,
+					      enum bch_trans_commit_flags flags,
+					      struct btree_path *path, unsigned u64s)
+{
+	struct bkey_cached *ck = (void *) path->l[0].b;
+
 	/*
 	 * bch2_varint_decode can read past the end of the buffer by at most 7
 	 * bytes (it won't be used):
 	 */
 	u64s += 1;
 
-	return likely(u64s <= ck->u64s)
+	return likely(u64s <= ck->u64s && test_bit(BKEY_CACHED_DIRTY, &ck->flags))
 		? 0
-		: btree_key_can_insert_cached_slowpath(trans, path, u64s);
+		: btree_key_can_insert_cached_slowpath(trans, flags, path, u64s);
 }
 
 /* Triggers: */
