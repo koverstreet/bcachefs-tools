@@ -931,10 +931,10 @@ retry:
 		if (ret)
 			goto revert_fs_usage;
 	}
-	percpu_up_read(&c->capacity.mark_lock);
 
 	/* Only fatal errors are possible later, so no need to revert this */
 	bch2_trans_account_disk_usage_change(trans);
+	percpu_up_read(&c->capacity.mark_lock);
 
 	trans_for_each_update(trans, i) {
 		ret = bch2_journal_key_insert(c, i->btree_id, i->level, i->k);
@@ -1102,7 +1102,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		h = h->next;
 	}
 
-	scoped_guard(percpu_read, &c->capacity.mark_lock)
+	scoped_guard(percpu_read, &c->capacity.mark_lock) {
 		for (struct bkey_i *accounting = btree_trans_subbuf_base(trans, &trans->accounting);
 		     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
 		     accounting = bkey_next(accounting)) {
@@ -1112,8 +1112,10 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 				return trans_commit_accounting_revert(trans, flags, ret, accounting);
 		}
 
-	/* XXX: we only want to run this if deltas are nonzero */
-	bch2_trans_account_disk_usage_change(trans);
+		struct bch_fs_usage_base *d = &trans->fs_usage_delta;
+		if (d->hidden | d->btree | d->data | d->cached | d->reserved)
+			bch2_trans_account_disk_usage_change(trans);
+	}
 
 	trans_for_each_update(trans, i)
 		if (btree_node_type_has_atomic_triggers(i->bkey_type) &&
