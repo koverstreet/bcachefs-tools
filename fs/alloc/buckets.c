@@ -36,8 +36,21 @@
 
 void bch2_dev_usage_read_fast(struct bch_dev *ca, struct bch_dev_usage *usage)
 {
-	for (unsigned i = 0; i < BCH_DATA_NR; i++)
-		usage->buckets[i] = percpu_u64_get(&ca->usage->d[i].buckets);
+	memset(usage, 0, sizeof(*usage));
+
+	/*
+	 * One sweep over the cpus instead of BCH_DATA_NR of them: each cpu's
+	 * usage is read once while its cache lines are hot. (We don't use the
+	 * full-struct reader here to avoid a bch_dev_usage_full sized temporary
+	 * on the allocation hot path.)
+	 */
+	int cpu;
+	for_each_possible_cpu(cpu) {
+		struct bch_dev_usage_full *u = per_cpu_ptr(ca->usage, cpu);
+
+		for (unsigned i = 0; i < BCH_DATA_NR; i++)
+			usage->buckets[i] += u->d[i].buckets;
+	}
 }
 
 void bch2_dev_usage_full_read_fast(struct bch_dev *ca, struct bch_dev_usage_full *usage)
