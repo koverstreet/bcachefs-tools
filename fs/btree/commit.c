@@ -416,11 +416,45 @@ static noinline void journal_transaction_name(struct btree_trans *trans)
 		       trans->fn, strlen(trans->fn), 0);
 }
 
+noinline
+static int btree_key_can_insert_slowpath(struct btree_trans *trans,
+					 enum bch_trans_commit_flags flags)
+{
+	struct bch_fs_btree_cache *bc = &trans->c->btree.cache;
+
+	if ((flags & BCH_WATERMARK_MASK) <= BCH_WATERMARK_normal &&
+	    unlikely(atomic_long_read(&bc->nr_in_flight_inner) > BTREE_WRITE_IO_LIMIT(c) ||
+		     btree_cache_nr_dirty(bc) > btree_cache_nr_live(bc) * 4 / 5)) {
+		/*
+		 * Journal reclaim doesn't run ahead of journal replay, to avoid journal
+		 * deadlocks - it'll be blocked if replay isn't done:
+		 */
+		if (unlikely(!test_bit(JOURNAL_replay_done, &trans->c->journal.flags)))
+			return 0;
+
+		bch2_trans_unlock_updates_write(trans);
+		bch2_trans_unlock(trans);
+
+		trans_wait_event(trans, &bc->nr_in_flight_wait,
+			atomic_long_read(&bc->nr_in_flight_inner) < BTREE_WRITE_IO_LIMIT(c) * 3 / 4 &&
+			btree_cache_nr_dirty(bc) < btree_cache_nr_live(bc) * 3 / 4);
+
+		try(bch2_trans_relock(trans));
+		try(bch2_trans_lock_write(trans));
+	}
+
+	return 0;
+}
+
 static inline int btree_key_can_insert(struct btree_trans *trans,
+				       enum bch_trans_commit_flags flags,
 				       struct btree *b, unsigned u64s)
 {
 	if (!bch2_btree_node_insert_fits(b, u64s))
 		return bch_err_throw(trans->c, btree_insert_btree_node_full);
+
+	if (!btree_node_dirty(b))
+		try(btree_key_can_insert_slowpath(trans, flags));
 
 	return 0;
 }
@@ -953,25 +987,6 @@ static noinline int bch2_trans_commit_extra_disk_res(struct btree_trans *trans,
 				? BCH_DISK_RESERVATION_NOFAIL : 0);
 }
 
-static noinline int bch2_trans_commit_btree_write_ratelimit(struct btree_trans *trans)
-{
-	struct bch_fs_btree_cache *bc = &trans->c->btree.cache;
-
-	/*
-	 * Journal reclaim doesn't run ahead of journal replay, to avoid journal
-	 * deadlocks - it'll be blocked if replay isn't done:
-	 */
-	if (unlikely(!test_bit(JOURNAL_replay_done, &trans->c->journal.flags)))
-		return 0;
-
-	return drop_locks_do(trans, ({
-		trans_wait_event(trans, &bc->nr_in_flight_wait,
-			atomic_long_read(&bc->nr_in_flight_inner) < BTREE_WRITE_IO_LIMIT(c) * 3 / 4 &&
-			btree_cache_nr_dirty(bc) < btree_cache_nr_live(bc) * 3 / 4);
-		0;
-	}));
-}
-
 noinline __cold
 static void transaction_commit_trace(struct btree_trans *trans)
 {
@@ -1027,7 +1042,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 
 		u64s += i->k->k.u64s;
 		ret = !i->cached
-			? btree_key_can_insert(trans, insert_l(trans, i)->b, u64s)
+			? btree_key_can_insert(trans, flags, insert_l(trans, i)->b, u64s)
 			: btree_key_can_insert_cached(trans, flags, trans->paths + i->path, u64s);
 		if (ret) {
 			*stopped_at = i;
@@ -1268,15 +1283,6 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 
 	if (!bch2_trans_has_updates(trans))
 		goto out_reset;
-
-	struct bch_fs_btree_cache *bc = &trans->c->btree.cache;
-	if ((flags & BCH_WATERMARK_MASK) <= BCH_WATERMARK_normal &&
-	    unlikely(atomic_long_read(&bc->nr_in_flight_inner) > BTREE_WRITE_IO_LIMIT(c) ||
-		     btree_cache_nr_dirty(bc) > btree_cache_nr_live(bc) * 4 / 5)) {
-		ret = bch2_trans_commit_btree_write_ratelimit(trans);
-		if (ret)
-			goto out_reset;
-	}
 
 	ret = bch2_trans_commit_run_triggers(trans);
 	if (ret)
