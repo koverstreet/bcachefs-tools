@@ -721,7 +721,7 @@ int bch2_gc_accounting_done(struct bch_fs *c)
 								BCH_ACCOUNTING_normal, true);
 
 					guard(preempt)();
-					struct bch_fs_usage_base *dst = this_cpu_ptr(c->capacity.usage);
+					struct bch_fs_usage_base *dst = &this_cpu_ptr(c->capacity.pcpu)->usage;
 					struct bch_fs_usage_base *src = &trans->fs_usage_delta;
 					acc_u64s((u64 *) dst, (u64 *) src, sizeof(*src) / sizeof(u64));
 				}
@@ -1048,7 +1048,7 @@ static int accounting_read_mem_fixups(struct btree_trans *trans)
 		accounting_key_check_sanity(&underflow_err.m, c, &k, v, acc->k.data[i].nr_counters);
 
 		guard(preempt)();
-		struct bch_fs_usage_base *usage = this_cpu_ptr(c->capacity.usage);
+		struct bch_fs_usage_base *usage = &this_cpu_ptr(c->capacity.pcpu)->usage;
 
 		switch (k.type) {
 		case BCH_DISK_ACCOUNTING_persistent_reserved:
@@ -1106,7 +1106,7 @@ int bch2_accounting_read(struct bch_fs *c)
 	acc->k.nr = 0;
 	for_each_member_device(c, ca)
 		percpu_memset(ca->usage, 0, sizeof(*ca->usage));
-	percpu_memset(c->capacity.usage, 0, sizeof(*c->capacity.usage));
+	percpu_memset(&c->capacity.pcpu->usage, 0, sizeof(struct bch_fs_usage_base));
 
 	struct journal_keys *keys = &c->journal_keys;
 	struct journal_key *jk = keys->data;
@@ -1351,7 +1351,7 @@ void bch2_verify_accounting_clean(struct bch_fs *c)
 		0;
 	}));
 
-	acc_u64s_percpu(&base_inmem.hidden, &c->capacity.usage->hidden,
+	acc_u64s_percpu(&base_inmem.hidden, &c->capacity.pcpu->usage.hidden,
 			sizeof(base_inmem) / sizeof(u64));
 
 #define check(x)										\

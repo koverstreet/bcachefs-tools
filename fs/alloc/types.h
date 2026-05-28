@@ -7,6 +7,7 @@
 
 #include "init/dev_types.h"
 
+#include "alloc/buckets_types.h"
 #include "util/clock_types.h"
 #include "util/fifo.h"
 
@@ -134,9 +135,8 @@ struct write_point_specifier {
 	unsigned long		v;
 };
 
-struct bch_fs_usage_base;
-
 struct bch_fs_capacity_pcpu {
+	struct bch_fs_usage_base	usage;
 	u64			sectors_available;
 	u64			online_reserved;
 };
@@ -159,8 +159,6 @@ struct bch_fs_capacity {
 	struct bch_fs_capacity_pcpu __percpu	*pcpu;
 
 	struct percpu_rw_semaphore	mark_lock;
-
-	struct bch_fs_usage_base __percpu *usage;
 };
 
 struct bch_fs_allocator {

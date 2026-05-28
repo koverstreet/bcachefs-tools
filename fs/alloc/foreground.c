@@ -1684,11 +1684,11 @@ __cold void bch2_fs_alloc_debug_to_text(struct printbuf *out, struct bch_fs *c)
 	prt_printf(out, "capacity\t%llu\n",		c->capacity.capacity);
 	prt_printf(out, "used\t%llu\n",			bch2_fs_usage_read_short(c).used);
 	prt_printf(out, "reserved\t%llu\n",		c->capacity.reserved);
-	prt_printf(out, "hidden\t%llu\n",		percpu_u64_get(&c->capacity.usage->hidden));
-	prt_printf(out, "btree\t%llu\n",		percpu_u64_get(&c->capacity.usage->btree));
-	prt_printf(out, "data\t%llu\n",			percpu_u64_get(&c->capacity.usage->data));
-	prt_printf(out, "cached\t%llu\n",		percpu_u64_get(&c->capacity.usage->cached));
-	prt_printf(out, "reserved\t%llu\n",		percpu_u64_get(&c->capacity.usage->reserved));
+	prt_printf(out, "hidden\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.hidden));
+	prt_printf(out, "btree\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.btree));
+	prt_printf(out, "data\t%llu\n",			percpu_u64_get(&c->capacity.pcpu->usage.data));
+	prt_printf(out, "cached\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.cached));
+	prt_printf(out, "reserved\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.reserved));
 	prt_printf(out, "online_reserved\t%llu\n",	percpu_u64_get(&c->capacity.pcpu->online_reserved));
 
 	prt_newline(out);
