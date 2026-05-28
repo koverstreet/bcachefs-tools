@@ -181,11 +181,12 @@ static inline void bch2_trans_unlock_updates_write(struct btree_trans *trans)
 /* Inserting into a given leaf node (last stage of insert): */
 
 /* Handle overwrites and do insert, for non extents: */
-bool bch2_btree_bset_insert_key(struct btree_trans *trans,
-				struct btree_path *path,
-				struct btree *b,
-				struct btree_node_iter *node_iter,
-				struct bkey_i *insert)
+static __always_inline bool
+bch2_btree_bset_insert_key_inlined(struct btree_trans *trans,
+				   struct btree_path *path,
+				   struct btree *b,
+				   struct btree_node_iter *node_iter,
+				   struct bkey_i *insert)
 {
 	EBUG_ON(btree_node_just_written(b));
 	EBUG_ON(bset_written(b, btree_bset_last(b)));
@@ -207,6 +208,8 @@ bool bch2_btree_bset_insert_key(struct btree_trans *trans,
 	if (bkey_deleted(&insert->k) && !k)
 		return false;
 
+	bool k_writeable = k >= btree_bset_last(b)->start;
+
 	if (k) {
 		btree_account_key_drop(b, k);
 		k->type = KEY_TYPE_deleted;
@@ -219,17 +222,17 @@ bool bch2_btree_bset_insert_key(struct btree_trans *trans,
 			k->needs_whiteout = false;
 		}
 
-		if (k < btree_bset_last(b)->start)
+		if (!k_writeable)
 			bch2_btree_path_fix_key_modified(trans, b, k);
 	}
 
-	unsigned clobber_u64s = k >= btree_bset_last(b)->start ? k->u64s : 0;
+	unsigned clobber_u64s = k_writeable ? k->u64s : 0;
 
 	if (bkey_deleted(&insert->k)) {
-		if (k >= btree_bset_last(b)->start)
+		if (k_writeable)
 			bch2_bset_delete(b, k, clobber_u64s);
 	} else {
-		if (k < btree_bset_last(b)->start)
+		if (!k_writeable)
 			k = bch2_btree_node_iter_bset_pos(node_iter, b, bset_tree_last(b));
 
 		bch2_bset_insert(b, k, insert, clobber_u64s);
@@ -240,6 +243,15 @@ bool bch2_btree_bset_insert_key(struct btree_trans *trans,
 		bch2_btree_node_iter_fix(trans, path, b, node_iter, k, clobber_u64s, new_u64s);
 
 	return true;
+}
+
+bool bch2_btree_bset_insert_key(struct btree_trans *trans,
+				struct btree_path *path,
+				struct btree *b,
+				struct btree_node_iter *node_iter,
+				struct bkey_i *insert)
+{
+	return bch2_btree_bset_insert_key_inlined(trans, path, b, node_iter, insert);
 }
 
 static int __btree_node_flush(struct journal *j, struct journal_entry_pin *pin,
@@ -298,6 +310,21 @@ inline void bch2_btree_add_journal_pin(struct bch_fs *c,
 			     : bch2_btree_node_flush1);
 }
 
+noinline
+static int btree_insert_topology_check(struct btree_trans *trans, struct btree *b)
+{
+	CLASS(bch_log_msg, msg)(trans->c);
+	msg.m.suppress = true;
+
+	int ret = bch2_btree_node_check_topology_msg(trans, b, &msg.m);
+	if (ret) {
+		prt_str(&msg.m, "Btree update created topology error:\n");
+		bch2_trans_updates_to_text(&msg.m, trans);
+		bch2_fs_emergency_read_only(trans->c, &msg.m);
+	}
+	return ret;
+}
+
 /**
  * bch2_btree_insert_key_leaf() - insert a key one key into a leaf node
  * @trans:		btree transaction object
@@ -316,36 +343,23 @@ inline void bch2_btree_insert_key_leaf(struct btree_trans *trans,
 	struct bset *i = bset(b, t);
 	int old_u64s = bset_u64s(t);
 	int old_live_u64s = b->nr.live_u64s;
-	int live_u64s_added, u64s_added;
 
-	if (unlikely(!bch2_btree_bset_insert_key(trans, path, b,
+	if (unlikely(!bch2_btree_bset_insert_key_inlined(trans, path, b,
 					&path_l(path)->iter, insert)))
 		return;
 
-	if (unlikely(b->c.level)) {
-		CLASS(bch_log_msg, msg)(c);
-		msg.m.suppress = true;
-
-		int ret = bch2_btree_node_check_topology_msg(trans, b, &msg.m);
-		if (ret) {
-			prt_str(&msg.m, "Btree update created topology error:\n");
-			bch2_trans_updates_to_text(&msg.m, trans);
-			bch2_fs_emergency_read_only(c, &msg.m);
-			return;
-		}
-	}
+	if (unlikely(b->c.level && btree_insert_topology_check(trans, b)))
+		return;
 
 	i->journal_seq = cpu_to_le64(max(journal_seq, le64_to_cpu(i->journal_seq)));
 
 	bch2_btree_add_journal_pin(c, b, journal_seq);
 
-	if (unlikely(!btree_node_dirty(b))) {
-		EBUG_ON(test_bit(BCH_FS_clean_shutdown, &c->flags));
+	if (unlikely(!btree_node_dirty(b)))
 		bch2_btree_node_set_dirty(c, b);
-	}
 
-	live_u64s_added = (int) b->nr.live_u64s - old_live_u64s;
-	u64s_added = (int) bset_u64s(t) - old_u64s;
+	int live_u64s_added = (int) b->nr.live_u64s - old_live_u64s;
+	int u64s_added = (int) bset_u64s(t) - old_u64s;
 
 	if (b->sib_u64s[0] != U16_MAX && live_u64s_added < 0)
 		b->sib_u64s[0] = max(b->nr.live_u64s, (int) b->sib_u64s[0] + live_u64s_added);
@@ -353,7 +367,7 @@ inline void bch2_btree_insert_key_leaf(struct btree_trans *trans,
 		b->sib_u64s[1] = max(b->nr.live_u64s, (int) b->sib_u64s[1] + live_u64s_added);
 
 	if (u64s_added > live_u64s_added &&
-	    bch2_maybe_compact_whiteouts(c, b))
+	    unlikely(bch2_maybe_compact_whiteouts(c, b)))
 		bch2_trans_node_reinit_iter(trans, b);
 }
 

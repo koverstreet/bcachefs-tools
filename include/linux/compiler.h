@@ -25,7 +25,7 @@
 #define __always_inline	inline
 #endif
 
-#define noinline
+#define noinline		__attribute__((__noinline__))
 #define noinline_for_stack noinline
 
 #define __user
