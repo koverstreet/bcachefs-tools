@@ -53,16 +53,19 @@ static u64 reserve_factor(u64 r)
 static struct bch_fs_usage_short
 __bch2_fs_usage_read_short(struct bch_fs *c)
 {
+	/*
+	 * Sum the whole per-cpu struct in a single sweep (one cache line per
+	 * cpu); sectors_available is summed into the throwaway and ignored.
+	 */
+	struct bch_fs_capacity_pcpu b = {};
+	acc_u64s_percpu((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
+			sizeof(b) / sizeof(u64));
+
 	struct bch_fs_usage_short ret;
-	u64 data, reserved;
+	ret.capacity	= c->capacity.capacity - b.usage.hidden;
 
-	ret.capacity = c->capacity.capacity -
-		percpu_u64_get(&c->capacity.pcpu->usage.hidden);
-
-	data		= percpu_u64_get(&c->capacity.pcpu->usage.data) +
-		percpu_u64_get(&c->capacity.pcpu->usage.btree);
-	reserved	= percpu_u64_get(&c->capacity.pcpu->usage.reserved) +
-		percpu_u64_get(&c->capacity.pcpu->online_reserved);
+	u64 data	= b.usage.data + b.usage.btree;
+	u64 reserved	= b.usage.reserved + b.online_reserved;
 
 	ret.used	= min(ret.capacity, data + reserve_factor(reserved));
 	ret.free	= ret.capacity - ret.used;
