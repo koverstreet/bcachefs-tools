@@ -1024,6 +1024,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 		for_each_member_device(c, ca) {
 			struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 			SET_BCH_MEMBER_FREESPACE_INITIALIZED(m, false);
+			SET_BCH_MEMBER_INITIALIZED(m, BCH_MEMBER_INITIALIZED_pre_dev_usage);
 		}
 
 		bch2_write_super(c);
@@ -1033,9 +1034,6 @@ int bch2_fs_initialize(struct bch_fs *c)
 		bch2_btree_root_alloc_fake(c, i, 0);
 
 	set_bit(BCH_FS_btree_running, &c->flags);
-
-	for_each_member_device(c, ca)
-		try(bch2_dev_usage_init(ca, false));
 
 	/*
 	 * Write out the superblock and journal buckets, now that we can do
@@ -1047,8 +1045,6 @@ int bch2_fs_initialize(struct bch_fs *c)
 	if (ret)
 		return ret;
 
-	try(bch2_fs_journal_alloc(c));
-
 	/*
 	 * journal_res_get() will crash if called before this has
 	 * set up the journal.pin FIFO and journal.cur pointer:
@@ -1058,7 +1054,6 @@ int bch2_fs_initialize(struct bch_fs *c)
 
 	try(bch2_set_may_go_rw(c));
 	try(bch2_journal_replay(c));
-	try(bch2_fs_freespace_init(c));
 	try(bch2_initialize_subvolumes(c));
 	try(bch2_snapshots_read(c));
 
