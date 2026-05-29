@@ -163,6 +163,28 @@ int bch2_btree_split_leaf(struct btree_trans *, btree_path_idx_t,
 
 struct bpos bch2_btree_node_shard_pivot(struct bch_fs *, const struct btree *);
 
+static inline int btree_node_shard(struct bch_fs *c, struct btree *b)
+{
+	if (!c->opts.shard_inode_numbers_bits)
+		return -1;
+
+	u64 field;
+	switch (b->c.btree_id) {
+	case BTREE_ID_inodes:
+		field = b->key.k.p.offset;
+		break;
+	case BTREE_ID_extents:
+	case BTREE_ID_dirents:
+	case BTREE_ID_xattrs:
+		field = b->key.k.p.inode;
+		break;
+	default:
+		return -1;
+	}
+
+	return (field << 1) >> (64 - c->opts.shard_inode_numbers_bits);
+}
+
 int bch2_btree_increase_depth(struct btree_trans *, btree_path_idx_t, unsigned);
 
 int __bch2_foreground_maybe_merge(struct btree_trans *, btree_path_idx_t,
