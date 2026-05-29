@@ -825,47 +825,56 @@ void bch2_trans_revalidate_updates_in_node(struct btree_trans *trans, struct btr
  * A btree node is being replaced - update the iterator to point to the new
  * node:
  */
-void bch2_trans_node_add(struct btree_trans *trans,
-			 struct btree_path *path,
-			 struct btree *b)
-{
-	struct btree_path *prev;
-
-	EBUG_ON(!btree_path_pos_in_node(path, b));
-
-	while ((prev = prev_btree_path(trans, path)) &&
-	       btree_path_pos_in_node(prev, b))
-		path = prev;
-
-	for (;
-	     path && btree_path_pos_in_node(path, b);
-	     path = next_btree_path(trans, path))
-		if (path->uptodate == BTREE_ITER_UPTODATE && !path->cached) {
-			enum btree_node_locked_type t =
-				btree_lock_want(path, b->c.level);
-
-			if (t != BTREE_NODE_UNLOCKED) {
-				btree_node_unlock(trans, path, b->c.level);
-				six_lock_increment(&b->c.lock, (enum six_lock_type) t);
-				mark_btree_node_locked(trans, path, b->c.level, t);
-			}
-
-			bch2_btree_path_level_init(trans, path, b->c.level, b);
-		}
-
-	bch2_trans_revalidate_updates_in_node(trans, b);
-}
-
-void bch2_trans_node_drop(struct btree_trans *trans,
-			  struct btree *b)
+void bch2_trans_node_add(struct btree_trans *trans, struct btree *b)
 {
 	struct btree_path *path;
 	unsigned i, level = b->c.level;
 
 	trans_for_each_path(trans, path, i)
-		if (path->l[level].b == b) {
+		if (!path->cached &&
+		    level >= path->level &&
+		    btree_path_pos_in_node(path, b)) {
+			enum btree_node_locked_type t = path->nodes_locked
+				? btree_lock_want(path, b->c.level)
+				: BTREE_NODE_UNLOCKED;
+
 			btree_node_unlock(trans, path, level);
-			path->l[level].b = ERR_PTR(-BCH_ERR_no_btree_node_init);
+
+			if (t != BTREE_NODE_UNLOCKED) {
+				six_lock_increment(&b->c.lock, (enum six_lock_type) t);
+				mark_btree_node_locked(trans, path, level, t);
+			}
+
+			BUG_ON(btree_node_locked_type(path, level) != t);
+			bch2_btree_path_level_init(trans, path, level, b);
+		}
+
+	bch2_trans_revalidate_updates_in_node(trans, b);
+}
+
+void bch2_trans_node_verify_not_in_iters(struct btree_trans *trans, struct btree *b)
+{
+	struct btree_path *path;
+	unsigned i, level = b->c.level;
+
+	/*
+	 * path->l[level].b is also a cache for fast relock: a path can carry
+	 * a node pointer at a level it has released the lock on. When the
+	 * btree node cache slot for that previously-cached node is recycled
+	 * for an unrelated node (different btree, even), the cached pointer
+	 * stale-coincides with whatever now occupies the slot. Only flag a
+	 * leak when the path is actually still holding a lock at this level
+	 * - that's the case bch2_trans_node_add couldn't migrate.
+	 */
+	trans_for_each_path(trans, path, i)
+		if (unlikely(path->l[level].b == b &&
+			     btree_node_locked(path, level))) {
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "path still references btree node being freed, level %u:\n", level);
+			bch2_btree_pos_to_text(&buf, trans->c, b);
+			prt_newline(&buf);
+			bch2_btree_path_to_text(&buf, trans, i, path);
+			panic("%s\n", buf.buf);
 		}
 }
 
@@ -2849,6 +2858,19 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_iter *iter, stru
 		}
 	}
 
+	/*
+	 * TODO: unlike bch2_btree_iter_peek_max(), which does a normalizing
+	 * bch2_btree_path_set_pos(&k.k->p) on return, peek_prev sets path->pos
+	 * directly (btree_path_level_prev / the k.k->p store above) and never
+	 * re-runs up_until_good_node - so on return path->pos may be
+	 * inconsistent with path->l[level].b above the leaf. The only guard is
+	 * bch2_btree_iter_verify (static-branch gated, runs rarely in CI), so
+	 * the inconsistency escapes to the always-on
+	 * bch2_trans_node_verify_not_in_iters() BUG in a later node split
+	 * (seen: copygc_torture_no_checksum, inject_transaction_restarts=1).
+	 * Fix likely mirrors peek_max's trailing set_pos, but the reverse-
+	 * iteration pos semantics need thought first.
+	 */
 	bch2_btree_iter_verify(iter);
 	return k;
 }
