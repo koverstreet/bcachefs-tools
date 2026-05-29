@@ -6,6 +6,8 @@
 #include "btree/sort.h"
 #include "btree/write.h"
 
+#include "fs/inode.h"
+
 #include "data/reconcile/trigger.h"
 #include "data/write.h"
 
@@ -126,6 +128,7 @@ static void btree_node_write_work(struct work_struct *work)
 	struct btree *b		= wbio->wbio.bio.bi_private;
 
 	CLASS(btree_trans, trans)(c);
+	trans->shard_cpu = c->inode_shard_cpu[btree_node_shard(c, b)];
 
 	/*
 	 * btree_node_write_update_key commits through the journal; on a dead
@@ -227,7 +230,15 @@ static void btree_node_write_endio(struct bio *bio)
 	smp_mb__after_atomic();
 	wake_up_bit(&b->flags, BTREE_NODE_write_in_flight_inner);
 	INIT_WORK(&wb->work, btree_node_write_work);
-	queue_work(c->btree.write_complete_wq, &wb->work);
+#ifdef __KERNEL__
+	int shard = btree_node_shard(c, b);
+
+	if (shard >= 0)
+		queue_work_on(c->inode_shard_cpu[shard],
+			      c->btree.write_complete_wq, &wb->work);
+	else
+#endif
+		queue_work(c->btree.write_complete_wq, &wb->work);
 }
 
 static int validate_bset_for_write(struct bch_fs *c, struct btree *b,
