@@ -1105,7 +1105,7 @@ static inline void __bch2_trans_unlock(struct btree_trans *trans)
 }
 
 noinline __cold
-static inline int bch2_trans_relock_trace(struct btree_trans *trans)
+static int bch2_trans_relock_trace(struct btree_trans *trans)
 {
 	struct btree_path *path;
 	unsigned i;
