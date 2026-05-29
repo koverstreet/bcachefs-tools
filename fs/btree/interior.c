@@ -1415,7 +1415,8 @@ bch2_btree_update_start(struct btree_trans *trans, struct btree_path *path,
 			return ERR_PTR(-BCH_ERR_journal_reclaim_would_deadlock);
 
 		ret = drop_locks_do(trans,
-			({ wait_event(c->journal.wait, !journal_low_on_space(&c->journal)); 0; }));
+			({ closure_wait_event(&c->journal.async_wait,
+					      !journal_low_on_space(&c->journal)); 0; }));
 		if (ret)
 			return ERR_PTR(ret);
 	}

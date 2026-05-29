@@ -1256,7 +1256,7 @@ struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *j,
 	struct journal_buf *ret;
 	*blocked = false;
 
-	wait_event(j->wait, (ret = __bch2_next_write_buffer_flush_journal_buf(j,
+	closure_wait_event(&j->async_wait, (ret = __bch2_next_write_buffer_flush_journal_buf(j,
 						max_seq, blocked)) != ERR_PTR(-EAGAIN));
 	if (IS_ERR_OR_NULL(ret) && *blocked)
 		bch2_journal_unblock(j);

@@ -312,7 +312,6 @@ struct journal {
 	unsigned		flushes_outstanding;
 
 	/* Used when waiting because the journal was full */
-	wait_queue_head_t	wait;
 	struct closure_waitlist	async_wait;
 	struct closure_waitlist	reclaim_flush_wait;
 
