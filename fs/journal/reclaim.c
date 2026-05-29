@@ -155,9 +155,30 @@ journal_dev_space_available(struct journal *j, struct bch_dev *ca,
 		sectors = bucket_size_aligned;
 	}
 
+	/*
+	 * Cap .total (but NOT journal_space_total, returned above) by the
+	 * in-memory dirty budget - we can't keep more than RAM/4 of journal
+	 * dirty in memory. This is a global (fs-wide) budget applied per-device;
+	 * the nr_devs_want-th largest pick in __journal_space_available() keeps
+	 * the aggregate bounded by it. Leaving journal_space_total at the true
+	 * device capacity is the point: the clean/total watermark ratios stay
+	 * undistorted as dirty grows, instead of total shrinking toward 0 and
+	 * strangling the journal once the device is larger than RAM/4.
+	 *
+	 * Only .total is clamped, not next_entry: .total feeds the watermark
+	 * (a soft throttle - low-priority writers wait, reclaim-priority writes
+	 * still proceed), whereas next_entry feeds cur_entry_sectors, the hard
+	 * reservation limit. Clamping next_entry would let the budget drive
+	 * cur_entry_sectors to 0, blocking even the journal writes that advance
+	 * last_seq and let dirty drain - a self-deadlock. The RAM budget must
+	 * stay a soft limit.
+	 */
+	size_t mem_limit = max_t(ssize_t, 0,
+			(totalram_pages() * PAGE_SIZE) / 4 - j->dirty_entry_bytes);
+
 	return (struct journal_space) {
 		.next_entry	= sectors,
-		.total		= sectors + buckets * bucket_size_aligned,
+		.total		= min(sectors + buckets * bucket_size_aligned, mem_limit >> 9),
 	};
 }
 
@@ -170,9 +191,6 @@ static struct journal_space __journal_space_available(struct journal *j, unsigne
 	unsigned min_bucket_size = U32_MAX;
 
 	BUG_ON(nr_devs_want > ARRAY_SIZE(dev_space));
-
-	size_t mem_limit = max_t(ssize_t, 0,
-			(totalram_pages() * PAGE_SIZE) / 4 - j->dirty_entry_bytes);
 
 	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal]) {
 		if (!ca->journal.nr)
@@ -205,7 +223,6 @@ static struct journal_space __journal_space_available(struct journal *j, unsigne
 	 * @nr_devs_want largest devices:
 	 */
 	space = dev_space[nr_devs_want - 1];
-	space.total = min(space.total, mem_limit >> 9);
 	space.next_entry = min(space.next_entry, min_bucket_size);
 	return space;
 }
