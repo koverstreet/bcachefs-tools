@@ -650,7 +650,7 @@ static bool journal_quiesced(struct journal *j)
 
 void bch2_journal_quiesce(struct journal *j)
 {
-	wait_event(j->wait, journal_quiesced(j));
+	closure_wait_event(&j->async_wait, journal_quiesced(j));
 }
 
 /*
@@ -684,7 +684,7 @@ static bool journal_shutdown_quiesced(struct journal *j)
 
 void bch2_journal_shutdown_quiesce(struct journal *j)
 {
-	wait_event(j->wait, journal_shutdown_quiesced(j));
+	closure_wait_event(&j->async_wait, journal_shutdown_quiesced(j));
 }
 
 /*
