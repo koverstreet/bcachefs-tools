@@ -721,6 +721,7 @@ static int trans_commit_fatal_err(struct btree_trans *trans, int ret)
 	return ret;
 }
 
+#ifdef CONFIG_BCACHEFS_DEBUG
 noinline __cold
 static int trans_commit_invalid_entry(struct btree_trans *trans, int ret)
 {
@@ -749,6 +750,7 @@ static int trans_commit_invalid_key(struct btree_trans *trans,
 	bch2_prt_task_backtrace(&msg.m, current, 1, GFP_KERNEL);
 	return ret;
 }
+#endif
 
 __cold
 static int bch2_check_drop_overwrites_from_journal(struct btree_trans *trans, bool check)
@@ -1147,6 +1149,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 			return trans_commit_fatal_err(trans, ret);
 	}
 
+#ifdef CONFIG_BCACHEFS_DEBUG
 	struct bkey_validate_context validate_context = { .from	= BKEY_VALIDATE_commit };
 
 	if (!(flags & BCH_TRANS_COMMIT_no_journal_res))
@@ -1171,6 +1174,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 			return trans_commit_invalid_key(trans, i, ret);
 		btree_insert_entry_checks(trans, i);
 	}
+#endif
 
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
 		struct journal *j = &c->journal;
