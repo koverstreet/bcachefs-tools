@@ -27,6 +27,7 @@
 
 #include "journal/init.h"
 
+#include "init/dev.h"
 #include "init/error.h"
 #include "init/recovery.h"
 #include "init/passes.h"
@@ -1107,7 +1108,14 @@ int bch2_trans_mark_dev_sbs_flags(struct bch_fs *c,
 			enum btree_iter_update_trigger_flags flags)
 {
 	for_each_online_member(c, ca, BCH_DEV_READ_REF_trans_mark_dev_sbs) {
-		int ret = bch2_trans_mark_dev_sb(c, ca, flags);
+		/* We unconditionally call bch2_trans_mark_dev_sb() again for an
+		 * extra bit of safety; it's harmless if it wasn't needed, and
+		 * double allocating a superblock or journal bucket would be
+		 * particularly painful
+		 */
+
+		int ret = bch2_dev_add_initialize(c, ca) ?:
+			  bch2_trans_mark_dev_sb(c, ca, flags);
 		if (ret) {
 			enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_trans_mark_dev_sbs);
 			return ret;
