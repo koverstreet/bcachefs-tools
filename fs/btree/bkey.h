@@ -65,12 +65,12 @@ static inline void bkey_p_copy(struct bkey_packed *dst, const struct bkey_packed
 
 static inline void bkey_copy(struct bkey_i *dst, const struct bkey_i *src)
 {
-	memcpy_u64s_small(dst, src, src->k.u64s);
+	memcpy_u64s(dst, src, src->k.u64s);
 }
 
 static inline void bkey_val_copy(struct bkey_i *dst, const struct bkey_i *src)
 {
-	memcpy_u64s_small(&dst->v, &src->v, bkey_val_u64s(&src->k));
+	memcpy_u64s(&dst->v, &src->v, bkey_val_u64s(&src->k));
 	dst->k.type	= src->k.type;
 	dst->k.u64s	= src->k.u64s;
 }
@@ -561,7 +561,7 @@ static inline void bkey_reassemble(struct bkey_i *dst,
 				   struct bkey_s_c src)
 {
 	dst->k = *src.k;
-	memcpy_u64s_small(&dst->v, src.v, bkey_val_u64s(src.k));
+	memcpy_u64s(&dst->v, src.v, bkey_val_u64s(src.k));
 }
 
 /* byte order helpers */

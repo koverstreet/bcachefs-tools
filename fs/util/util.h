@@ -491,10 +491,20 @@ static inline void __memcpy_u64s(void *dst, const void *src,
 		      "dst is a u64s array sized by the caller, not a single field");
 }
 
+/*
+ * For small, bounded copies (a key, a handful of u64s): the open-coded loop is
+ * tighter codegen than a memcpy() call / its inline expansion. For larger or
+ * variable-size copies (key + value, bulk), use memcpy_u64s() so we get the
+ * fast-string path.
+ */
 static inline void memcpy_u64s_small(void *dst, const void *src,
 				     unsigned u64s)
 {
-	__memcpy_u64s(dst, src, u64s);
+	u64 *d = dst;
+	const u64 *s = src;
+
+	while (u64s--)
+		*d++ = *s++;
 }
 
 static inline void memcpy_u64s(void *dst, const void *src,
