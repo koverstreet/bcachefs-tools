@@ -509,6 +509,15 @@ static inline void memcpy_u64s(void *dst, const void *src,
 	__memcpy_u64s(dst, src, u64s);
 }
 
+static inline void memset_u64s_small(void *dst, u64 c,
+			       unsigned u64s)
+{
+	u64 *d = dst;
+
+	while (u64s--)
+		*d++ = c;
+}
+
 static inline void __memmove_u64s_down(void *dst, const void *src,
 				       unsigned u64s)
 {
