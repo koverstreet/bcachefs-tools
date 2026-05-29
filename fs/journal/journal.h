@@ -274,7 +274,7 @@ static inline unsigned journal_entry_set(struct jset_entry *entry, unsigned type
 {
 	unsigned ret = journal_entry_init(entry, type, id, level, u64s);
 
-	memcpy_u64s_small(entry->_data, data, u64s);
+	memcpy_u64s(entry->_data, data, u64s);
 	return ret;
 }
 

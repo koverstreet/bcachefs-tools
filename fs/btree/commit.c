@@ -1213,19 +1213,19 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 			bkey_copy((struct bkey_i *) e->start, i->k);
 		}
 
-		memcpy_u64s_small(entry,
-				  btree_trans_journal_entries_start(trans),
-				  trans->journal_entries.u64s);
+		memcpy_u64s(entry,
+			    btree_trans_journal_entries_start(trans),
+			    trans->journal_entries.u64s);
 
 		entry = (struct jset_entry *) ((u64 *) entry + trans->journal_entries.u64s);
 
 		if (trans->accounting.u64s)
-			memcpy_u64s_small(__bch2_journal_add_entry(&entry,
-							BCH_JSET_ENTRY_write_buffer_keys,
-							BTREE_ID_accounting, 0,
-							trans->accounting.u64s)->_data,
-					  btree_trans_subbuf_base(trans, &trans->accounting),
-					  trans->accounting.u64s);
+			memcpy_u64s(__bch2_journal_add_entry(&entry,
+						BCH_JSET_ENTRY_write_buffer_keys,
+						BTREE_ID_accounting, 0,
+						trans->accounting.u64s)->_data,
+				    btree_trans_subbuf_base(trans, &trans->accounting),
+				    trans->accounting.u64s);
 
 		/*
 		 * Partial revert: advance res->offset/u64s past what the fill
