@@ -826,48 +826,38 @@ void bch2_trans_revalidate_updates_in_node(struct btree_trans *trans, struct btr
  * A btree node is being replaced - update the iterator to point to the new
  * node:
  */
-void bch2_trans_node_add(struct btree_trans *trans,
-			 struct btree_path *path,
-			 struct btree *b)
-{
-	struct btree_path *prev;
-
-	EBUG_ON(!btree_path_pos_in_node(path, b));
-
-	while ((prev = prev_btree_path(trans, path)) &&
-	       btree_path_pos_in_node(prev, b))
-		path = prev;
-
-	for (;
-	     path && btree_path_pos_in_node(path, b);
-	     path = next_btree_path(trans, path))
-		if (path->uptodate == BTREE_ITER_UPTODATE && !path->cached) {
-			enum btree_node_locked_type t =
-				btree_lock_want(path, b->c.level);
-
-			if (t != BTREE_NODE_UNLOCKED) {
-				btree_node_unlock(trans, path, b->c.level);
-				six_lock_increment(&b->c.lock, (enum six_lock_type) t);
-				mark_btree_node_locked(trans, path, b->c.level, t);
-			}
-
-			bch2_btree_path_level_init(trans, path, b->c.level, b);
-		}
-
-	bch2_trans_revalidate_updates_in_node(trans, b);
-}
-
-void bch2_trans_node_drop(struct btree_trans *trans,
-			  struct btree *b)
+void bch2_trans_node_add(struct btree_trans *trans, struct btree *b)
 {
 	struct btree_path *path;
 	unsigned i, level = b->c.level;
 
 	trans_for_each_path(trans, path, i)
-		if (path->l[level].b == b) {
+		if (!path->cached && btree_path_pos_in_node(path, b)) {
+			enum btree_node_locked_type t = path->nodes_locked
+				? btree_lock_want(path, b->c.level)
+				: BTREE_NODE_UNLOCKED;
+
 			btree_node_unlock(trans, path, level);
-			path->l[level].b = ERR_PTR(-BCH_ERR_no_btree_node_init);
+
+			if (t != BTREE_NODE_UNLOCKED) {
+				six_lock_increment(&b->c.lock, (enum six_lock_type) t);
+				mark_btree_node_locked(trans, path, level, t);
+			}
+
+			BUG_ON(btree_node_locked_type(path, level) != t);
+			bch2_btree_path_level_init(trans, path, level, b);
 		}
+
+	bch2_trans_revalidate_updates_in_node(trans, b);
+}
+
+void bch2_trans_node_verify_not_in_iters(struct btree_trans *trans, struct btree *b)
+{
+	struct btree_path *path;
+	unsigned i, level = b->c.level;
+
+	trans_for_each_path(trans, path, i)
+		BUG_ON(path->l[level].b == b);
 }
 
 /*

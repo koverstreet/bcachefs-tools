@@ -278,8 +278,6 @@ static void bch2_btree_node_free_inmem(struct btree_trans *trans,
 	__btree_node_free(trans, b);
 
 	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_FREEABLE);
-
-	bch2_trans_node_drop(trans, b);
 }
 
 /*
@@ -340,8 +338,6 @@ static void btree_reserve_drop_consumed(struct btree_update *as,
 	clear_btree_node_need_write(b);
 
 	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_NONE);
-
-	bch2_trans_node_drop(trans, b);
 }
 
 static bool can_use_btree_node(struct bch_fs *c,
@@ -2115,10 +2111,11 @@ static int btree_split(struct btree_update *as, struct btree_trans *trans,
 	bch2_btree_node_free_inmem(trans, trans->paths + path, b);
 
 	if (n3)
-		bch2_trans_node_add(trans, trans->paths + path, n3);
+		bch2_trans_node_add(trans, n3);
 	darray_for_each_reverse(dsts, d)
-		bch2_trans_node_add(trans, trans->paths + d->path_idx, d->b);
+		bch2_trans_node_add(trans, d->b);
 
+	bch2_trans_node_verify_not_in_iters(trans, b);
 out:
 	darray_for_each_reverse(dsts, d) {
 		if (d->path_idx) {
@@ -2315,7 +2312,7 @@ static int __btree_increase_depth(struct btree_update *as, struct btree_trans *t
 		return ret;
 
 	bch2_btree_update_write_new_node(as, trans, n);
-	bch2_trans_node_add(trans, path, n);
+	bch2_trans_node_add(trans, n);
 
 	bch2_btree_node_unlock_write(trans, path, b);
 
@@ -3167,7 +3164,10 @@ int __bch2_foreground_maybe_merge(struct btree_trans *trans,
 		bch2_btree_node_free_inmem(trans, trans->paths + s->path_idx, s->b);
 
 	darray_for_each(dsts, d)
-		bch2_trans_node_add(trans, trans->paths + d->path_idx, d->b);
+		bch2_trans_node_add(trans, d->b);
+
+	darray_for_each(srcs, s)
+		bch2_trans_node_verify_not_in_iters(trans, s->b);
 
 	bch2_trans_verify_paths(trans);
 
@@ -3271,7 +3271,9 @@ static int bch2_btree_node_rewrite(struct btree_trans *trans,
 
 	bch2_btree_node_free_inmem(trans, btree_iter_path(trans, iter), b);
 
-	bch2_trans_node_add(trans, trans->paths + iter->path, n);
+	bch2_trans_node_add(trans, n);
+
+	bch2_trans_node_verify_not_in_iters(trans, b);
 
 	bch2_btree_update_done(as, trans);
 out:
