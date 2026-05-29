@@ -1023,6 +1023,38 @@ err:
 	return ret;
 }
 
+static int bch2_dev_set_initialized(struct bch_fs *c, struct bch_dev *ca,
+				    enum bch_member_initialized state)
+{
+	guard(mutex)(&c->sb_lock);
+	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+	SET_BCH_MEMBER_INITIALIZED(m, state);
+	return bch2_write_super(c);
+}
+
+int bch2_dev_add_initialize(struct bch_fs *c, struct bch_dev *ca)
+{
+	switch (ca->mi.initialized) {
+	case BCH_MEMBER_INITIALIZED_pre_dev_usage:
+		try(bch2_dev_usage_init(ca, false));
+		try(bch2_dev_set_initialized(c, ca, BCH_MEMBER_INITIALIZED_pre_mark_sb));
+		fallthrough;
+	case BCH_MEMBER_INITIALIZED_pre_mark_sb:
+		try(bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional));
+		try(bch2_dev_set_initialized(c, ca, BCH_MEMBER_INITIALIZED_pre_freespace_init));
+		fallthrough;
+	case BCH_MEMBER_INITIALIZED_pre_freespace_init:
+		try(bch2_fs_freespace_init(c));
+		try(bch2_dev_set_initialized(c, ca, BCH_MEMBER_INITIALIZED_pre_journal_alloc));
+		fallthrough;
+	case BCH_MEMBER_INITIALIZED_pre_journal_alloc:
+		try(bch2_dev_journal_alloc(ca, false));
+		try(bch2_dev_set_initialized(c, ca, BCH_MEMBER_INITIALIZED_initialized));
+	}
+
+	return 0;
+}
+
 /* Add new device to running filesystem: */
 int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 {
@@ -1103,6 +1135,8 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 			/* success: */
 
 			dev_mi.last_mount = cpu_to_le64(ktime_get_real_seconds());
+			SET_BCH_MEMBER_INITIALIZED(&dev_mi, BCH_MEMBER_INITIALIZED_pre_dev_usage);
+
 			*bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx) = dev_mi;
 
 			ca->disk_sb.sb->dev_idx	= dev_idx;
@@ -1129,34 +1163,20 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 			 */
 			c->sb.nr_devices = c->disk_sb.sb->nr_devices;
 
-			bch2_write_super(c);
+			ret = bch2_write_super(c);
+			if (ret)
+				goto err_late;
 		}
 
-		ret = bch2_dev_usage_init(ca, false);
-		if (ret)
-			goto err_late;
-
 		if (test_bit(BCH_FS_started, &c->flags)) {
-			ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
+			ret = bch2_dev_add_initialize(c, ca);
 			if (ret) {
 				prt_printf(err, "error marking new superblock: %s\n", bch2_err_str(ret));
 				goto err_late;
 			}
 
-			ret = bch2_fs_freespace_init(c);
-			if (ret) {
-				prt_printf(err, "error initializing free space: %s\n", bch2_err_str(ret));
-				goto err_late;
-			}
-
 			if (ca->mi.state == BCH_MEMBER_STATE_rw)
 				__bch2_dev_read_write(c, ca);
-
-			ret = bch2_dev_journal_alloc(ca, false);
-			if (ret) {
-				prt_printf(err, "error allocating journal: %s\n", bch2_err_str(ret));
-				goto err_late;
-			}
 		}
 
 		/*

@@ -27,6 +27,8 @@ int bch2_dev_set_state(struct bch_fs *, struct bch_dev *,
 		       enum bch_member_state, int,
 		       struct printbuf *);
 
+int bch2_dev_add_initialize(struct bch_fs *, struct bch_dev *);
+
 int bch2_dev_remove(struct bch_fs *, struct bch_dev *, int, struct printbuf *);
 int bch2_dev_add(struct bch_fs *, const char *, struct printbuf *);
 int bch2_dev_online(struct bch_fs *, const char *, struct printbuf *);
