@@ -173,7 +173,7 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 	u32 snapshot_tree = bch2_snapshot_tree(c, snapshot);
 	int ret;
 
-	u32 subvolid;
+	u32 subvolid = 0;
 	ret = find_snapshot_tree_subvol(trans, snapshot_tree, &subvolid);
 	bch_err_msg(c, ret, "finding subvol associated with snapshot tree %u",
 		    bch2_snapshot_tree(c, snapshot));
