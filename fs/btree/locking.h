@@ -122,6 +122,17 @@ static inline bool btree_node_locked(struct btree_path *path, unsigned level)
 	return btree_node_locked_type(path, level) != BTREE_NODE_UNLOCKED;
 }
 
+static inline int __must_check bch2_btree_path_traverse(struct btree_trans *trans,
+					  btree_path_idx_t path,
+					  enum btree_iter_update_trigger_flags flags)
+{
+	bch2_trans_verify_not_unlocked_or_in_restart(trans);
+
+	return !trans->paths[path].nodes_locked
+		? bch2_btree_path_traverse_one(trans, path, flags)
+		: 0;
+}
+
 static inline void mark_btree_node_locked_noreset(struct btree_path *path,
 						  unsigned level,
 						  enum btree_node_locked_type type)
@@ -240,8 +251,6 @@ static inline void btree_node_unlock(struct btree_trans *trans,
 static inline void __bch2_btree_path_unlock(struct btree_trans *trans,
 					    struct btree_path *path)
 {
-	btree_path_set_dirty(trans, path, BTREE_ITER_NEED_RELOCK);
-
 	while (path->nodes_locked)
 		btree_node_unlock(trans, path, btree_path_lowest_level_locked(path));
 }
@@ -438,7 +447,6 @@ static inline int bch2_btree_path_upgrade(struct btree_trans *trans,
 static inline void btree_path_set_should_be_locked(struct btree_trans *trans, struct btree_path *path)
 {
 	EBUG_ON(!btree_node_locked(path, path->level));
-	EBUG_ON(path->uptodate);
 
 	if (!path->should_be_locked) {
 		path->should_be_locked = true;
@@ -463,7 +471,6 @@ static inline void btree_path_set_level_up(struct btree_trans *trans,
 				    struct btree_path *path)
 {
 	__btree_path_set_level_up(trans, path, path->level++);
-	btree_path_set_dirty(trans, path, BTREE_ITER_NEED_TRAVERSE);
 }
 
 /* debug */

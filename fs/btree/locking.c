@@ -772,10 +772,7 @@ static int btree_path_get_locks(struct btree_trans *trans,
 		l++;
 	} while (l < path->locks_want);
 
-	if (path->uptodate == BTREE_ITER_NEED_RELOCK)
-		path->uptodate = BTREE_ITER_UPTODATE;
-
-	return path->uptodate < BTREE_ITER_NEED_RELOCK ? 0 : -1;
+	return 0;
 err:
 	if (f) {
 		f->l	= l;
@@ -795,7 +792,6 @@ err:
 	}
 
 	__bch2_btree_path_unlock(trans, path);
-	btree_path_set_dirty(trans, path, BTREE_ITER_NEED_TRAVERSE);
 
 	/*
 	 * When we fail to get a lock, we have to ensure that any child nodes
@@ -1239,7 +1235,6 @@ void __bch2_btree_path_verify_locks(struct btree_trans *trans, struct btree_path
 		 * there is no node at path->level, which generally means we were
 		 * iterating over all nodes and got to the end of the btree
 		 */
-		BUG_ON(path->uptodate == BTREE_ITER_UPTODATE);
 		BUG_ON(path->should_be_locked && trans->locked && !trans->restarted);
 	}
 

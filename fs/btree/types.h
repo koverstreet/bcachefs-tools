@@ -427,12 +427,6 @@ struct btree_trigger_op {
 
 /* Btree paths and iterators: */
 
-enum btree_path_uptodate {
-	BTREE_ITER_UPTODATE		= 0,
-	BTREE_ITER_NEED_RELOCK		= 1,
-	BTREE_ITER_NEED_TRAVERSE	= 2,
-};
-
 #if defined(CONFIG_BCACHEFS_LOCK_TIME_STATS) || defined(CONFIG_BCACHEFS_DEBUG)
 #define TRACK_PATH_ALLOCATED
 #endif
@@ -447,10 +441,9 @@ struct btree_path {
 	/* btree_iter_copy starts here: */
 	struct bpos		pos;
 
-	enum btree_id		btree_id:5;
+	enum btree_id		btree_id:7;
 	bool			cached:1;
 	bool			preserve:1;
-	enum btree_path_uptodate uptodate:2;
 	/*
 	 * When true, failing to relock this path will cause the transaction to
 	 * restart:

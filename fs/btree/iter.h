@@ -74,14 +74,6 @@ static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path
 	return --path->ref == 0;
 }
 
-static inline void btree_path_set_dirty(struct btree_trans *trans,
-					struct btree_path *path,
-					enum btree_path_uptodate u)
-{
-	EBUG_ON(path->should_be_locked && trans->locked && !trans->restarted);
-	path->uptodate = max_t(unsigned, path->uptodate, u);
-}
-
 static inline struct btree *btree_path_node(struct btree_path *path,
 					    unsigned level)
 {
@@ -266,18 +258,6 @@ int __must_check bch2_btree_path_traverse_one(struct btree_trans *, btree_path_i
 					      enum btree_iter_update_trigger_flags);
 
 static inline void bch2_trans_verify_not_unlocked_or_in_restart(struct btree_trans *);
-
-static inline int __must_check bch2_btree_path_traverse(struct btree_trans *trans,
-					  btree_path_idx_t path,
-					  enum btree_iter_update_trigger_flags flags)
-{
-	bch2_trans_verify_not_unlocked_or_in_restart(trans);
-
-	if (trans->paths[path].uptodate < BTREE_ITER_NEED_RELOCK)
-		return 0;
-
-	return bch2_btree_path_traverse_one(trans, path, flags);
-}
 
 btree_path_idx_t bch2_path_get(struct btree_trans *,
 			       enum btree_id, const struct bpos *,
