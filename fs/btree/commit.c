@@ -216,7 +216,7 @@ bch2_btree_bset_insert_key_inlined(struct btree_trans *trans,
 
 		if (k->needs_whiteout) {
 			if (bkey_deleted(&insert->k))
-				push_whiteout(b, insert->k.p);
+				bch2_push_whiteout(b, insert->k.p);
 			else
 				insert->k.needs_whiteout = true;
 			k->needs_whiteout = false;
