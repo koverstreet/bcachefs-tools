@@ -484,33 +484,17 @@ static inline void bch2_maybe_corrupt_bio(struct bio *bio, unsigned ratio)
 
 void bch2_bio_to_text(struct printbuf *, struct bio *);
 
-static inline void memcpy_u64s_small(void *dst, const void *src,
-				     unsigned u64s)
-{
-	u64 *d = dst;
-	const u64 *s = src;
-
-	while (u64s--)
-		*d++ = *s++;
-}
-
 static inline void __memcpy_u64s(void *dst, const void *src,
 				 unsigned u64s)
 {
-#if defined(CONFIG_X86_64) && !defined(CONFIG_KMSAN)
-	long d0, d1, d2;
+	unsafe_memcpy(dst, src, u64s * 8,
+		      "dst is a u64s array sized by the caller, not a single field");
+}
 
-	asm volatile("rep ; movsq"
-		     : "=&c" (d0), "=&D" (d1), "=&S" (d2)
-		     : "0" (u64s), "1" (dst), "2" (src)
-		     : "memory");
-#else
-	u64 *d = dst;
-	const u64 *s = src;
-
-	while (u64s--)
-		*d++ = *s++;
-#endif
+static inline void memcpy_u64s_small(void *dst, const void *src,
+				     unsigned u64s)
+{
+	__memcpy_u64s(dst, src, u64s);
 }
 
 static inline void memcpy_u64s(void *dst, const void *src,
@@ -534,6 +518,7 @@ static inline void memset_u64s_small(void *dst, u64 c,
 static inline void __memmove_u64s_down(void *dst, const void *src,
 				       unsigned u64s)
 {
+	/* dst <= src: a forward copy can't clobber unread source */
 	__memcpy_u64s(dst, src, u64s);
 }
 
@@ -548,6 +533,7 @@ static inline void memmove_u64s_down(void *dst, const void *src,
 static inline void __memmove_u64s_down_small(void *dst, const void *src,
 				       unsigned u64s)
 {
+	/* dst <= src: a forward copy can't clobber unread source */
 	memcpy_u64s_small(dst, src, u64s);
 }
 
