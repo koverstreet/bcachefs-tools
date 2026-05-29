@@ -430,21 +430,6 @@ static __always_inline int bch2_trans_journal_res_get(struct btree_trans *trans,
 
 #define JSET_ENTRY_LOG_U64s		4
 
-static inline void journal_transaction_name(struct btree_trans *trans)
-{
-	struct bch_fs *c = trans->c;
-	struct journal *j = &c->journal;
-	struct jset_entry *entry =
-		bch2_journal_add_entry(j, &trans->journal_res,
-				       BCH_JSET_ENTRY_log, 0, 0,
-				       JSET_ENTRY_LOG_U64s);
-	struct jset_entry_log *l =
-		container_of(entry, struct jset_entry_log, entry);
-
-	memcpy_and_pad(l->d, JSET_ENTRY_LOG_U64s * sizeof(u64),
-		       trans->fn, strlen(trans->fn), 0);
-}
-
 noinline
 static int btree_key_can_insert_slowpath(struct btree_trans *trans,
 					 enum bch_trans_commit_flags flags)
@@ -1121,14 +1106,10 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 	 * Don't get journal reservation until after we know insert will
 	 * succeed:
 	 */
-	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
+	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res)))
 		try(bch2_trans_journal_res_get(trans,
 				(flags & BCH_WATERMARK_MASK)|
 				JOURNAL_RES_GET_NONBLOCK));
-
-		if (trans->journal_transaction_names)
-			journal_transaction_name(trans);
-	}
 
 	/*
 	 * Not allowed to fail after we've gotten our journal reservation - we
@@ -1207,7 +1188,19 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
 		struct journal *j = &c->journal;
-		struct jset_entry *entry;
+		struct jset_entry *entry = journal_res_entry(j, &trans->journal_res);
+		struct jset_entry *end = (struct jset_entry *) ((u64 *) entry + trans->journal_res.u64s);
+
+		if (trans->journal_transaction_names) {
+			struct jset_entry_log *l =
+				container_of(__bch2_journal_add_entry(&entry,
+						       BCH_JSET_ENTRY_log, 0, 0,
+						       JSET_ENTRY_LOG_U64s),
+					     struct jset_entry_log, entry);
+
+			memcpy_and_pad(l->d, JSET_ENTRY_LOG_U64s * sizeof(u64),
+				       trans->fn, strlen(trans->fn), 0);
+		}
 
 		trans_for_each_update(trans, i) {
 			if (i->key_cache_already_flushed)
@@ -1219,32 +1212,31 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 			verify_update_old_key(trans, i);
 
 			if (trans->journal_transaction_names) {
-				entry = bch2_journal_add_entry(j, &trans->journal_res,
+				struct jset_entry *e =
+					__bch2_journal_add_entry(&entry,
 						       BCH_JSET_ENTRY_overwrite,
 						       i->btree_id, i->level,
 						       i->old_k.u64s);
-				bkey_reassemble((struct bkey_i *) entry->start,
+				bkey_reassemble((struct bkey_i *) e->start,
 						(struct bkey_s_c) { &i->old_k, i->old_v });
 			}
 
-			entry = bch2_journal_add_entry(j, &trans->journal_res,
+			struct jset_entry *e =
+				__bch2_journal_add_entry(&entry,
 					       BCH_JSET_ENTRY_btree_keys,
 					       i->btree_id, i->level,
 					       i->k->k.u64s);
-			bkey_copy((struct bkey_i *) entry->start, i->k);
+			bkey_copy((struct bkey_i *) e->start, i->k);
 		}
 
-		memcpy_u64s_small(journal_res_entry(&c->journal, &trans->journal_res),
+		memcpy_u64s_small(entry,
 				  btree_trans_journal_entries_start(trans),
 				  trans->journal_entries.u64s);
 
-		EBUG_ON(trans->journal_res.u64s < trans->journal_entries.u64s);
-
-		trans->journal_res.offset	+= trans->journal_entries.u64s;
-		trans->journal_res.u64s		-= trans->journal_entries.u64s;
+		entry = (struct jset_entry *) ((u64 *) entry + trans->journal_entries.u64s);
 
 		if (trans->accounting.u64s)
-			memcpy_u64s_small(bch2_journal_add_entry(j, &trans->journal_res,
+			memcpy_u64s_small(__bch2_journal_add_entry(&entry,
 							BCH_JSET_ENTRY_write_buffer_keys,
 							BTREE_ID_accounting, 0,
 							trans->accounting.u64s)->_data,
@@ -1262,7 +1254,13 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		if (trans->flush)
 			bch2_journal_res_flush(&c->journal, &trans->journal_res, trans->flush);
 
-		bch2_journal_res_put_inlined(&c->journal, &trans->journal_res);
+		EBUG_ON(entry > end);
+		if (unlikely(end != entry))
+			memset_u64s_small(entry, 0, (u64 *) end - (u64 *) entry);
+
+		lock_release(&c->journal.res_map, _THIS_IP_);
+		bch2_journal_buf_put(&c->journal, trans->journal_res.seq);
+		trans->journal_res.ref = 0;
 	}
 
 	trans_for_each_update(trans, i) {

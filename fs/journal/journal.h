@@ -293,6 +293,18 @@ static inline unsigned journal_entry_set(struct jset_entry *entry, unsigned type
 }
 
 static inline struct jset_entry *
+__bch2_journal_add_entry(struct jset_entry **cur,
+			 unsigned type, enum btree_id id,
+			 unsigned level, unsigned u64s)
+{
+	struct jset_entry *entry = *cur;
+	unsigned actual = journal_entry_init(entry, type, id, level, u64s);
+
+	*cur = (struct jset_entry *) ((u64 *) entry + actual);
+	return entry;
+}
+
+static inline struct jset_entry *
 bch2_journal_add_entry(struct journal *j, struct journal_res *res,
 			 unsigned type, enum btree_id id,
 			 unsigned level, unsigned u64s)
