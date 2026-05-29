@@ -434,6 +434,20 @@ void bch2_fs_journal_stop(struct journal *j)
 	     "journal shutdown error: cur seq %llu but last empty seq %llu",
 	     journal_cur_seq(j), j->last_empty_seq);
 
+	/*
+	 * All pins have been flushed and the journal quiesced, so every dirty
+	 * entry has been reclaimed - dirty_entry_bytes must have drained to 0.
+	 * A nonzero remainder means the accounting (journal.c entry-close +/
+	 * bch2_journal_update_last_seq_ondisk -) has leaked, which silently
+	 * shrinks the in-memory journal-space budget (see mem_limit in
+	 * bch2_journal_space_available()).
+	 */
+	WARN(!bch2_journal_error(j) &&
+	     test_bit(JOURNAL_replay_done, &j->flags) &&
+	     j->dirty_entry_bytes,
+	     "journal shutdown error: %zu dirty entry bytes remaining after flushing all pins",
+	     j->dirty_entry_bytes);
+
 	if (!bch2_journal_error(j))
 		clear_bit(JOURNAL_running, &j->flags);
 }
