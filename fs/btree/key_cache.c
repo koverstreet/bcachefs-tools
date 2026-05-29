@@ -295,7 +295,6 @@ static int btree_key_cache_create(struct btree_trans *trans,
 	if (lock_want == SIX_LOCK_read)
 		six_lock_downgrade(&ck->c.lock);
 	btree_path_cached_set(trans, ck_path, ck, (enum btree_node_locked_type) lock_want);
-	ck_path->uptodate = BTREE_ITER_UPTODATE;
 	return 0;
 err:
 	bkey_cached_free(trans, bc, ck);
@@ -389,7 +388,6 @@ retry:
 		set_bit(BKEY_CACHED_ACCESSED, &ck->flags);
 
 	btree_path_cached_set(trans, path, ck, (enum btree_node_locked_type) lock_want);
-	path->uptodate = BTREE_ITER_UPTODATE;
 	return 0;
 }
 
@@ -409,15 +407,12 @@ int bch2_btree_path_traverse_cached(struct btree_trans *trans,
 	struct btree_path *path = trans->paths + path_idx;
 
 	if (unlikely(ret)) {
-		path->uptodate = BTREE_ITER_NEED_TRAVERSE;
 		if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
 			btree_node_unlock(trans, path, 0);
 			path->l[0].b = ERR_PTR(ret);
 		}
-	} else if (!(flags & BTREE_ITER_cached_nofill)) {
-		BUG_ON(path->uptodate);
+	} else if (!(flags & BTREE_ITER_cached_nofill))
 		BUG_ON(!path->nodes_locked);
-	}
 
 	return ret;
 }
@@ -763,7 +758,6 @@ void bch2_btree_key_cache_drop(struct btree_trans *trans,
 			path2->should_be_locked = false;
 			__bch2_btree_path_unlock(trans, path2);
 			path2->l[0].b = ERR_PTR(-BCH_ERR_no_btree_node_drop);
-			btree_path_set_dirty(trans, path2, BTREE_ITER_NEED_TRAVERSE);
 		}
 
 	bch2_trans_verify_locks(trans);
