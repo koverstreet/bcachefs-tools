@@ -117,7 +117,6 @@ struct bch_fs;
 
 static inline void journal_wake(struct journal *j)
 {
-	wake_up(&j->wait);
 	closure_wake_up(&j->async_wait);
 }
 
@@ -369,7 +368,7 @@ static inline void bch2_journal_buf_put(struct journal *j, u64 seq)
 		guard(spinlock)(&j->lock);
 		bch2_journal_buf_put_final(j, seq);
 	} else if (unlikely(s.cur_entry_offset == JOURNAL_ENTRY_BLOCKED_VAL))
-		wake_up(&j->wait);
+		closure_wake_up(&j->async_wait);
 }
 
 /*

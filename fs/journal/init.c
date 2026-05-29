@@ -326,7 +326,7 @@ static bool bch2_journal_writing_to_device(struct journal *j, unsigned dev_idx)
 
 void bch2_dev_journal_stop(struct journal *j, struct bch_dev *ca)
 {
-	wait_event(j->wait, !bch2_journal_writing_to_device(j, ca->dev_idx));
+	closure_wait_event(&j->async_wait, !bch2_journal_writing_to_device(j, ca->dev_idx));
 	cancel_work_sync(&ca->journal.discard);
 }
 
@@ -611,7 +611,6 @@ void bch2_fs_journal_init_early(struct journal *j)
 	mutex_init(&j->buf_lock);
 	spin_lock_init(&j->lock);
 	spin_lock_init(&j->err_lock);
-	init_waitqueue_head(&j->wait);
 	INIT_DELAYED_WORK(&j->write_work, bch2_journal_write_work);
 	init_waitqueue_head(&j->reclaim_wait);
 	init_waitqueue_head(&j->pin_flush_wait);

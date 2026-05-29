@@ -1705,7 +1705,7 @@ void bch2_dev_allocator_remove(struct bch_fs *c, struct bch_dev *ca)
 	 * journal_res_get() can block waiting for free space in the journal -
 	 * it needs to notice there may not be devices to allocate from anymore:
 	 */
-	wake_up(&c->journal.wait);
+	closure_wake_up(&c->journal.async_wait);
 
 	/* Now wait for any in flight writes: */
 

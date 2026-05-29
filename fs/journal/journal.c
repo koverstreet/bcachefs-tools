@@ -253,11 +253,10 @@ void bch2_journal_buf_put_final(struct journal *j, u64 seq)
 	bch2_journal_do_writes_locked(j);
 
 	/*
-	 * Wake both j->wait (for __bch2_next_write_buffer_flush_journal_buf(),
-	 * when quiescing an open journal entry) and j->async_wait (for
-	 * journal_res_get_slowpath() waiters blocked on journal_max_open — the
-	 * refcount drop may have enabled do_writes_locked() to advance
-	 * seq_write_started above).
+	 * Waiters include __bch2_next_write_buffer_flush_journal_buf(),
+	 * when quiescing an open journal entry journal_res_get_slowpath()
+	 * waiters blocked on journal_max_open — the refcount drop may have
+	 * enabled do_writes_locked() to advance seq_write_started above).
 	 */
 	journal_wake(j);
 }
@@ -556,7 +555,7 @@ static bool journal_quiesced(struct journal *j)
 
 void bch2_journal_quiesce(struct journal *j)
 {
-	wait_event(j->wait, journal_quiesced(j));
+	closure_wait_event(&j->async_wait, journal_quiesced(j));
 }
 
 /*
@@ -588,7 +587,7 @@ static bool journal_shutdown_quiesced(struct journal *j)
 
 void bch2_journal_shutdown_quiesce(struct journal *j)
 {
-	wait_event(j->wait, journal_shutdown_quiesced(j));
+	closure_wait_event(&j->async_wait, journal_shutdown_quiesced(j));
 }
 
 /*
@@ -1195,7 +1194,7 @@ struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *j,
 	struct journal_buf *ret;
 	*blocked = false;
 
-	wait_event(j->wait, (ret = __bch2_next_write_buffer_flush_journal_buf(j,
+	closure_wait_event(&j->async_wait, (ret = __bch2_next_write_buffer_flush_journal_buf(j,
 						max_seq, blocked)) != ERR_PTR(-EAGAIN));
 	if (IS_ERR_OR_NULL(ret) && *blocked)
 		bch2_journal_unblock(j);
