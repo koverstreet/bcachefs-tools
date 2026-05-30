@@ -888,33 +888,6 @@ success:
 
 /* Btree path locking: */
 
-/*
- * Only for btree_cache.c - only relocks intent locks
- */
-int bch2_btree_path_relock_intent(struct btree_trans *trans,
-				  struct btree_path *path)
-{
-	unsigned l;
-
-	for (l = path->level;
-	     l < path->locks_want && btree_path_node(path, l);
-	     l++) {
-		if (!bch2_btree_node_relock(trans, path, l)) {
-			__bch2_btree_path_unlock(trans, path);
-			btree_path_set_dirty(trans, path, BTREE_ITER_NEED_TRAVERSE);
-
-			event_inc_trace(trans->c, trans_restart_relock_path_intent, buf, ({
-				prt_printf(&buf, "%s\n", trans->fn);
-				bch2_btree_path_to_text(&buf, trans, path - trans->paths, path);
-			}));
-
-			return btree_trans_restart(trans, BCH_ERR_transaction_restart_relock_path_intent);
-		}
-	}
-
-	return 0;
-}
-
 __flatten
 bool bch2_btree_path_relock_norestart(struct btree_trans *trans, struct btree_path *path)
 {
