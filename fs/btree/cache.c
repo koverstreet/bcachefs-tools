@@ -1265,6 +1265,9 @@ retry:
 			goto retry;
 	}
 
+	if (btree_node_read_locked(path, level + 1))
+		btree_node_unlock(trans, path, level + 1);
+
 	if (unlikely(btree_node_read_error(b))) {
 		six_unlock_type(&b->c.lock, lock_type);
 		return ERR_PTR(-BCH_ERR_btree_node_read_err_cached);
