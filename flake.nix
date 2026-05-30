@@ -109,7 +109,36 @@
                   localSystem = system;
                   pkgs' = import nixpkgs {
                     inherit crossSystem localSystem;
-                    overlays = [ self.overlays.default ];
+                    overlays =
+                      # Cross builds exist only to check our tools compile for the
+                      # target; a dependency's own test suite isn't ours to run
+                      # here. util-linux(-minimal) lists sqlite in buildInputs
+                      # unconditionally but builds with --disable-liblastlog2
+                      # (sqlite's only consumer) - so the i686 sqlite gets built,
+                      # and runs its tcl test suite which fails on i686, for a
+                      # library nothing links. fuse and our own libuuid both pull
+                      # util-linux-minimal; drop sqlite at the source. This must
+                      # precede the default overlay so overlay.nix's
+                      # prev.callPackage sees the stripped util-linux too.
+                      lib.optionals (crossSystem != localSystem) [
+                        (
+                          final: prev:
+                          let
+                            dropSqlite =
+                              u:
+                              u.overrideAttrs (old: {
+                                buildInputs = builtins.filter (
+                                  p: (p.pname or "") != "sqlite"
+                                ) old.buildInputs;
+                              });
+                          in
+                          {
+                            util-linux = dropSqlite prev.util-linux;
+                            util-linuxMinimal = dropSqlite prev.util-linuxMinimal;
+                          }
+                        )
+                      ]
+                      ++ [ self.overlays.default ];
                   };
 
                   withCrossName =
