@@ -85,6 +85,8 @@ void bch2_journal_set_watermark(struct journal *j)
 			prt_printf(&buf, "low_on_space %u\n",	low_on_space);
 			prt_printf(&buf, "low_on_pin %u\n",	low_on_pin);
 			prt_printf(&buf, "low_on_wb %u\n",	low_on_wb);
+			if (low_on_wb)
+				bch2_btree_write_buffer_to_text(&buf, c);
 		}));
 
 	mod_bit(JOURNAL_low_on_space,	&j->flags, low_on_space);
