@@ -121,7 +121,6 @@ struct bch_fs_btree_write_buffer {
 	u64				nr_keys_fast;
 	u64				nr_keys_slowpath;
 	u64				nr_shards_total;
-	unsigned long			last_active_jiffies;
 
 	DARRAY(struct btree_write_buffered_key) accounting;
 };
