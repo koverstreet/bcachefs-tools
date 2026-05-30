@@ -280,6 +280,14 @@ btree_write_buffered_insert(struct btree_trans *trans,
 				  BTREE_UPDATE_internal_snapshot_node);
 }
 
+static int __wb_keys_resize(struct btree_write_buffer_keys *wb, size_t new_size)
+{
+	if (wb->keys.size >= new_size)
+		return 0;
+
+	return darray_resize(&wb->keys, new_size);
+}
+
 static int wb_keys_resize(struct btree_write_buffer_keys *wb, size_t new_size)
 {
 	if (wb->keys.size >= new_size)
@@ -590,8 +598,13 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 	try(bch2_journal_error(&c->journal));
 
 	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		guard(mutex)(&wb->inc.lock);
-		move_keys_from_inc_to_flushing(wb);
+		if (!wb->flushing.keys.nr) {
+			guard(mutex)(&wb->inc.lock);
+			move_keys_from_inc_to_flushing(wb);
+		} else if (mutex_trylock(&wb->inc.lock)) {
+			move_keys_from_inc_to_flushing(wb);
+			mutex_unlock(&wb->inc.lock);
+		}
 	}
 
 	if (!wb->flushing.keys.nr)
@@ -790,6 +803,12 @@ err:
 	event_inc_trace(c, write_buffer_flush, buf,
 		prt_printf(&buf, "flushed %llu fast %zu noop %zu",
 			   nr_flushing, cnt.fast, cnt.noop));
+
+	if (test_bit(JOURNAL_low_on_wb, &c->journal.flags) &&
+	    !bch2_btree_write_buffer_must_wait(c)) {
+		guard(spinlock)(&c->journal.lock);
+		bch2_journal_set_watermark(&c->journal);
+	}
 
 	return ret;
 }
@@ -1061,34 +1080,23 @@ static void bch2_btree_write_buffer_flush_work_fn(struct work_struct *work)
 	struct bch_fs_btree_write_buffer *wb =
 		container_of(work, struct bch_fs_btree_write_buffer, flush_work);
 	struct bch_fs *c = wb->c;
+	enum wb_flush_caller caller = READ_ONCE(wb->flush_work_caller);
 
 	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
 		guard(mutex)(&wb->flushing.lock);
 		CLASS(btree_trans, trans)(c);
-		while (!bch2_journal_error(&c->journal) &&
-		       (wb->inc.keys.nr || wb->flushing.keys.nr)) {
-			size_t before = wb->inc.keys.nr + wb->flushing.keys.nr;
-			enum wb_flush_caller caller =
-				READ_ONCE(wb->flush_work_caller);
-
+		while (1) {
 			bch2_trans_unlock_long(trans);
-			bch2_btree_write_buffer_flush_locked(trans, wb->idx, caller);
 
 			/*
-			 * Stuck-keys guard: during recovery, accounting keys can
-			 * be left in flushing if !BCH_FS_accounting_replay_done.
-			 * Bail rather than spin; a later flush after the bit is
-			 * set will drain them.
+			 * Accounting keys can't be flushed until
+			 * BCH_FS_accounting_replay_done - don't spin:
 			 */
-			if (wb->inc.keys.nr + wb->flushing.keys.nr >= before)
+			if (bch2_btree_write_buffer_flush_locked(trans, wb->idx, caller) ||
+			    (!wb->inc.keys.nr && !wb->flushing.keys.nr) ||
+			    !test_bit(BCH_FS_accounting_replay_done, &c->flags))
 				break;
 		}
-	}
-
-	if (test_bit(JOURNAL_low_on_wb, &c->journal.flags) &&
-	    !bch2_btree_write_buffer_must_wait(c)) {
-		guard(spinlock)(&c->journal.lock);
-		bch2_journal_set_watermark(&c->journal);
 	}
 
 	closure_wake_up(&c->btree.write_buffer_flush_wait);
@@ -1219,6 +1227,16 @@ void bch2_journal_keys_to_write_buffer_start(struct bch_fs *c,
 	}
 }
 
+static inline bool bch_wb_btree_should_flush(struct bch_fs_btree_write_buffer *wb)
+{
+	return wb->inc.keys.nr + wb->flushing.keys.nr > wb->inc.keys.size / 4;
+}
+
+static inline bool bch_wb_btree_should_resize(struct bch_fs_btree_write_buffer *wb)
+{
+	return wb->inc.keys.nr + wb->flushing.keys.nr > wb->inc.keys.size / 2;
+}
+
 int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_to_wb *dst)
 {
 	int ret = 0;
@@ -1257,25 +1275,24 @@ int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_
 			bch2_journal_pin_add(&c->journal, dst->seq, &pb->wb->pin,
 					     bch2_btree_write_buffer_journal_flush);
 
-		if (pb->wb == &wb->flushing)
-			mutex_unlock(&wb->flushing.lock);
-		mutex_unlock(&wb->inc.lock);
-
 		if (bch_wb_btree_should_flush(wb)) {
-			/*
-			 * If we're already flushing and producers are still
-			 * pushing fast enough to re-arm should_flush, the
-			 * flusher isn't keeping up. Grow inc so the next
-			 * burst doesn't trip must_wait().
-			 */
-			if (work_busy(&wb->flush_work))
-				wb_keys_resize(&wb->inc,
-					       min_t(size_t, 1U << 24,
-						     wb->inc.keys.size * 2));
-
 			WRITE_ONCE(wb->flush_work_caller, WB_FLUSH_thread);
 			queue_work(c->btree.write_buffer_wq, &wb->flush_work);
 		}
+
+		if (bch_wb_btree_should_resize(wb)) {
+			if (pb->wb == &wb->flushing)
+				__wb_keys_resize(&wb->flushing,
+						 min_t(size_t, 1U << 24,
+						       wb->inc.keys.size * 2));
+			__wb_keys_resize(&wb->inc,
+					 min_t(size_t, 1U << 24,
+					       wb->inc.keys.size * 2));
+		}
+
+		if (pb->wb == &wb->flushing)
+			mutex_unlock(&wb->flushing.lock);
+		mutex_unlock(&wb->inc.lock);
 	}
 
 	/*
