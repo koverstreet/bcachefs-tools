@@ -63,6 +63,8 @@ static const char * const bch_wb_btree_names[] = {
 static int bch2_btree_write_buffer_journal_flush(struct journal *,
 				struct journal_entry_pin *, u64);
 
+static int __bch2_journal_keys_to_write_buffer_end(struct bch_fs *, struct journal_keys_to_wb *);
+
 static inline bool __wb_key_ref_cmp(const struct wb_key_ref *l, const struct wb_key_ref *r)
 {
 	return (cmp_int(l->hi, r->hi) ?:
@@ -813,43 +815,134 @@ err:
 	return ret;
 }
 
-static int bch2_journal_keys_to_write_buffer(struct bch_fs *c, struct journal_buf *buf)
+/*
+ * Acquire locks + intake state for one per-btree instance during one journal
+ * intake pass. Called from _start() for every btree up front — eager, not
+ * lazy, so the lock ordering is trivially "always ascending idx" and the
+ * caller doesn't need to care about which btrees a journal buf actually
+ * touches. Released in _end().
+ *
+ * Takes inc.lock (always), and flushing.lock (opportunistically, to let us
+ * skip staging via inc if flushing has room).
+ */
+static void bch2_journal_keys_to_write_buffer_lock(struct bch_fs *c,
+						   struct journal_keys_to_wb *dst)
 {
-	struct journal_keys_to_wb dst;
-	int ret = 0;
+	memset(dst, 0, sizeof(*dst));
 
-	bch2_journal_keys_to_write_buffer_start(c, &dst, le64_to_cpu(buf->data->seq));
+	for (enum bch_wb_btree idx = 0; idx < BCH_WB_BTREE_NR; idx++) {
+		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[idx];
+		struct journal_keys_to_wb_btree *pb = &dst->per_btree[idx];
 
-	for_each_jset_entry_type(entry, buf->data, BCH_JSET_ENTRY_write_buffer_keys) {
-		jset_entry_for_each_key(entry, k) {
-			ret = bch2_journal_key_to_wb(c, &dst, entry->btree_id, k);
-			if (ret)
-				goto out;
+		if (mutex_trylock(&wb->flushing.lock)) {
+			mutex_lock(&wb->inc.lock);
+			move_keys_from_inc_to_flushing(wb);
+
+			if (!wb->inc.keys.nr) {
+				pb->wb = &wb->flushing;
+			} else {
+				mutex_unlock(&wb->flushing.lock);
+				pb->wb = &wb->inc;
+			}
+		} else {
+			mutex_lock(&wb->inc.lock);
+			pb->wb = &wb->inc;
 		}
+
+		pb->room = darray_room(pb->wb->keys);
+		if (pb->wb == &wb->flushing)
+			pb->room = min(pb->room, wb->sorted.size - wb->flushing.keys.nr);
+	}
+}
+
+static inline bool bch_wb_btree_should_flush(struct bch_fs_btree_write_buffer *wb)
+{
+	return wb->inc.keys.nr + wb->flushing.keys.nr > wb->inc.keys.size / 4;
+}
+
+static inline bool bch_wb_btree_should_resize(struct bch_fs_btree_write_buffer *wb)
+{
+	return wb->inc.keys.nr + wb->flushing.keys.nr > wb->inc.keys.size / 2;
+}
+
+static void bch2_journal_keys_to_write_buffer_unlock(struct bch_fs *c, struct journal_keys_to_wb *dst)
+{
+	/*
+	 * For each btree: inject live (non-zero) accounting accumulators into
+	 * that btree's intake buffer, compact the darray if mostly-zero, then
+	 * drop the empty-keys pin and release the locks taken in _start().
+	 */
+	for (enum bch_wb_btree idx = 0; idx < BCH_WB_BTREE_NR; idx++) {
+		struct journal_keys_to_wb_btree *pb = &dst->per_btree[idx];
+		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[idx];
+
+		if (bch_wb_btree_should_flush(wb)) {
+			WRITE_ONCE(wb->flush_work_caller, WB_FLUSH_thread);
+			queue_work(c->btree.write_buffer_wq, &wb->flush_work);
+		}
+
+		if (bch_wb_btree_should_resize(wb)) {
+			if (pb->wb == &wb->flushing)
+				__wb_keys_resize(&wb->flushing,
+						 min_t(size_t, 1U << 24,
+						       wb->inc.keys.size * 2));
+			__wb_keys_resize(&wb->inc,
+					 min_t(size_t, 1U << 24,
+					       wb->inc.keys.size * 2));
+		}
+
+		if (pb->wb == &wb->flushing)
+			mutex_unlock(&wb->flushing.lock);
+		mutex_unlock(&wb->inc.lock);
+	}
+
+	/*
+	 * Pins may have advanced (per-btree pin_drops above, plus any seqs
+	 * advanced by move_keys_from_inc_to_flushing inside bch_wb_acquire) —
+	 * wake any sync flushers blocked on a target seq.
+	 */
+	closure_wake_up(&c->btree.write_buffer_flush_wait);
+}
+
+static int bch2_journal_keys_to_write_buffer(struct bch_fs *c,
+					     struct journal_keys_to_wb *dst,
+					     struct journal_buf *buf)
+{
+	for_each_jset_entry_type(entry, buf->data, BCH_JSET_ENTRY_write_buffer_keys) {
+		jset_entry_for_each_key(entry, k)
+			try(bch2_journal_key_to_wb(c, dst, entry->btree_id, k));
 
 		entry->type = BCH_JSET_ENTRY_btree_keys;
 	}
-out:
-	ret = bch2_journal_keys_to_write_buffer_end(c, &dst) ?: ret;
-	return ret;
+
+	return 0;
 }
 
 static int fetch_wb_keys_from_journal(struct bch_fs *c, u64 max_seq)
 {
 	struct journal *j = &c->journal;
 	struct journal_buf *buf;
+	struct journal_keys_to_wb dst;
 	bool blocked;
 	int ret = 0;
 
+	guard(mutex)(&j->buf_lock);
+	bch2_journal_keys_to_write_buffer_lock(c, &dst);
+
 	while (!ret && (buf = bch2_next_write_buffer_flush_journal_buf(j, max_seq, &blocked))) {
-		ret = bch2_journal_keys_to_write_buffer(c, buf);
+		dst.seq = le64_to_cpu(buf->data->seq);
+
+		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[BCH_WB_BTREE_accounting];
+		darray_for_each(wb->accounting, i)
+			memset(&i->k.v, 0, bkey_val_bytes(&i->k.k));
+
+		ret = bch2_journal_keys_to_write_buffer(c, &dst, buf);
+		ret = __bch2_journal_keys_to_write_buffer_end(c, &dst) ?: ret;
 
 		if (!blocked && !ret) {
 			guard(spinlock)(&j->lock);
 			buf->need_flush_to_write_buffer = false;
 		}
-
-		mutex_unlock(&j->buf_lock);
 
 		if (blocked) {
 			bch2_journal_unblock(j);
@@ -857,6 +950,7 @@ static int fetch_wb_keys_from_journal(struct bch_fs *c, u64 max_seq)
 		}
 	}
 
+	bch2_journal_keys_to_write_buffer_unlock(c, &dst);
 	return ret;
 }
 
@@ -1128,43 +1222,6 @@ int bch2_accounting_key_to_wb_slowpath(struct bch_fs *c, enum btree_id btree,
 	return 0;
 }
 
-/*
- * Acquire locks + intake state for one per-btree instance during one journal
- * intake pass. Called from _start() for every btree up front — eager, not
- * lazy, so the lock ordering is trivially "always ascending idx" and the
- * caller doesn't need to care about which btrees a journal buf actually
- * touches. Released in _end().
- *
- * Takes inc.lock (always), and flushing.lock (opportunistically, to let us
- * skip staging via inc if flushing has room).
- */
-static void bch_wb_acquire(struct bch_fs *c,
-			   struct journal_keys_to_wb *dst,
-			   enum bch_wb_btree idx)
-{
-	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[idx];
-	struct journal_keys_to_wb_btree *pb = &dst->per_btree[idx];
-
-	if (mutex_trylock(&wb->flushing.lock)) {
-		mutex_lock(&wb->inc.lock);
-		move_keys_from_inc_to_flushing(wb);
-
-		if (!wb->inc.keys.nr) {
-			pb->wb = &wb->flushing;
-		} else {
-			mutex_unlock(&wb->flushing.lock);
-			pb->wb = &wb->inc;
-		}
-	} else {
-		mutex_lock(&wb->inc.lock);
-		pb->wb = &wb->inc;
-	}
-
-	pb->room = darray_room(pb->wb->keys);
-	if (pb->wb == &wb->flushing)
-		pb->room = min(pb->room, wb->sorted.size - wb->flushing.keys.nr);
-}
-
 int bch2_journal_key_to_wb_slowpath(struct bch_fs *c,
 			     struct journal_keys_to_wb *dst,
 			     enum bch_wb_btree idx,
@@ -1207,37 +1264,23 @@ void bch2_journal_keys_to_write_buffer_start(struct bch_fs *c,
 {
 	BUG_ON(seq > journal_cur_seq(&c->journal));
 
-	memset(dst, 0, sizeof(*dst));
+	bch2_journal_keys_to_write_buffer_lock(c, dst);
+
 	dst->seq = seq;
 
-	for (enum bch_wb_btree idx = 0; idx < BCH_WB_BTREE_NR; idx++) {
-		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[idx];
-
-		bch_wb_acquire(c, dst, idx);
-
-		/*
-		 * Zero accounting accumulators so per-buf deltas start fresh.
-		 * wb->accounting is invariantly protected by wb->inc.lock (all
-		 * intake paths that touch it — this reset, accumulate via
-		 * bch2_accounting_key_to_wb(), slowpath, and _end() inject /
-		 * compact / sort — run with inc.lock held).
-		 */
-		darray_for_each(wb->accounting, i)
-			memset(&i->k.v, 0, bkey_val_bytes(&i->k.k));
-	}
+	/*
+	 * Zero accounting accumulators so per-buf deltas start fresh.
+	 * wb->accounting is invariantly protected by wb->inc.lock (all
+	 * intake paths that touch it — this reset, accumulate via
+	 * bch2_accounting_key_to_wb(), slowpath, and _end() inject /
+	 * compact / sort — run with inc.lock held).
+	 */
+	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[BCH_WB_BTREE_accounting];
+	darray_for_each(wb->accounting, i)
+		memset(&i->k.v, 0, bkey_val_bytes(&i->k.k));
 }
 
-static inline bool bch_wb_btree_should_flush(struct bch_fs_btree_write_buffer *wb)
-{
-	return wb->inc.keys.nr + wb->flushing.keys.nr > wb->inc.keys.size / 4;
-}
-
-static inline bool bch_wb_btree_should_resize(struct bch_fs_btree_write_buffer *wb)
-{
-	return wb->inc.keys.nr + wb->flushing.keys.nr > wb->inc.keys.size / 2;
-}
-
-int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_to_wb *dst)
+static int __bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_to_wb *dst)
 {
 	int ret = 0;
 
@@ -1274,34 +1317,15 @@ int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_
 		if (pb->wb->keys.nr)
 			bch2_journal_pin_add(&c->journal, dst->seq, &pb->wb->pin,
 					     bch2_btree_write_buffer_journal_flush);
-
-		if (bch_wb_btree_should_flush(wb)) {
-			WRITE_ONCE(wb->flush_work_caller, WB_FLUSH_thread);
-			queue_work(c->btree.write_buffer_wq, &wb->flush_work);
-		}
-
-		if (bch_wb_btree_should_resize(wb)) {
-			if (pb->wb == &wb->flushing)
-				__wb_keys_resize(&wb->flushing,
-						 min_t(size_t, 1U << 24,
-						       wb->inc.keys.size * 2));
-			__wb_keys_resize(&wb->inc,
-					 min_t(size_t, 1U << 24,
-					       wb->inc.keys.size * 2));
-		}
-
-		if (pb->wb == &wb->flushing)
-			mutex_unlock(&wb->flushing.lock);
-		mutex_unlock(&wb->inc.lock);
 	}
 
-	/*
-	 * Pins may have advanced (per-btree pin_drops above, plus any seqs
-	 * advanced by move_keys_from_inc_to_flushing inside bch_wb_acquire) —
-	 * wake any sync flushers blocked on a target seq.
-	 */
-	closure_wake_up(&c->btree.write_buffer_flush_wait);
+	return ret;
+}
 
+int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_to_wb *dst)
+{
+	int ret = __bch2_journal_keys_to_write_buffer_end(c, dst);
+	bch2_journal_keys_to_write_buffer_unlock(c, dst);
 	return ret;
 }
 

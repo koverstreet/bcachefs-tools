@@ -857,7 +857,12 @@ void bch2_trans_node_verify_not_in_iters(struct btree_trans *trans, struct btree
 	unsigned i, level = b->c.level;
 
 	trans_for_each_path(trans, path, i)
-		BUG_ON(path->l[level].b == b);
+		if (unlikely(path->l[level].b == b)) {
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "path still references btree node being freed, level %u:\n", level);
+			bch2_btree_path_to_text(&buf, trans, i, path);
+			panic("%s\n", buf.buf);
+		}
 }
 
 /*
@@ -2960,6 +2965,19 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_iter *iter, stru
 		}
 	}
 
+	/*
+	 * TODO: unlike bch2_btree_iter_peek_max(), which does a normalizing
+	 * bch2_btree_path_set_pos(&k.k->p) on return, peek_prev sets path->pos
+	 * directly (btree_path_level_prev / the k.k->p store above) and never
+	 * re-runs up_until_good_node - so on return path->pos may be
+	 * inconsistent with path->l[level].b above the leaf. The only guard is
+	 * bch2_btree_iter_verify (static-branch gated, runs rarely in CI), so
+	 * the inconsistency escapes to the always-on
+	 * bch2_trans_node_verify_not_in_iters() BUG in a later node split
+	 * (seen: copygc_torture_no_checksum, inject_transaction_restarts=1).
+	 * Fix likely mirrors peek_max's trailing set_pos, but the reverse-
+	 * iteration pos semantics need thought first.
+	 */
 	bch2_btree_iter_verify(iter);
 	return k;
 }

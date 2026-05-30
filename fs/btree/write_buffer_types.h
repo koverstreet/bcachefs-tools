@@ -14,12 +14,12 @@
  * btree requires a matching entry here.
  */
 #define BCH_WRITE_BUFFER_BTREES()	\
+	x(accounting)			\
 	x(lru)				\
 	x(need_discard)			\
 	x(backpointers)			\
 	x(deleted_inodes)		\
 	x(reconcile_work)		\
-	x(accounting)			\
 	x(reconcile_hipri)		\
 	x(reconcile_pending)		\
 	x(reconcile_work_phys)		\

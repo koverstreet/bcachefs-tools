@@ -1216,7 +1216,6 @@ static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct jou
 
 	/* We're inside wait_event(), but using mutex_lock(: */
 	sched_annotate_sleep();
-	mutex_lock(&j->buf_lock);
 	guard(spinlock)(&j->lock);
 	max_seq = min(max_seq, journal_cur_seq(j));
 
@@ -1245,8 +1244,6 @@ static struct journal_buf *__bch2_next_write_buffer_flush_journal_buf(struct jou
 		}
 	}
 
-	if (IS_ERR_OR_NULL(ret))
-		mutex_unlock(&j->buf_lock);
 	return ret;
 }
 
