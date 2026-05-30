@@ -82,8 +82,8 @@ void bch2_journal_set_watermark(struct journal *j)
 		? BCH_WATERMARK_reclaim
 		: BCH_WATERMARK_stripe;
 
-	if (track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_space], low_on_space) ||
-	    track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_pin], low_on_pin) ||
+	if (track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_space], low_on_space) |
+	    track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_pin], low_on_pin) |
 	    track_event_change(&c->times[BCH_TIME_blocked_write_buffer_full], low_on_wb))
 		event_inc_trace(c, journal_full, buf, ({
 			guard(printbuf_atomic)(&buf);
