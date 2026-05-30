@@ -167,7 +167,17 @@
                 }
               );
 
-            nixos-test = pkgs.testers.nixosTest (import ./nixos-test.nix self');
+            # The test derivation hardcodes "kvm" into requiredSystemFeatures
+            # for any Linux test, which GitHub's hosted aarch64 runners don't
+            # provide — so it won't schedule there. Strip it via
+            # overrideTestDerivation (overrideAttrs for the test): qemu.forceAccel
+            # defaults to false, so the driver falls back to TCG emulation when
+            # /dev/kvm is absent (KVM used where available, emulated otherwise).
+            nixos-test =
+              (pkgs.testers.nixosTest (import ./nixos-test.nix self')).overrideTestDerivation
+                (_: prev: {
+                  requiredSystemFeatures = lib.remove "kvm" (prev.requiredSystemFeatures or [ ]);
+                });
           };
 
           devShells.default = pkgs.mkShell {
