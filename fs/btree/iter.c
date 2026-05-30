@@ -1339,12 +1339,15 @@ int bch2_btree_path_traverse_one(struct btree_trans *trans,
 	event_trace_fn(trans->c, btree_path_traverse_start,
 		       __btree_path_traverse_start_trace(trans, path_idx));
 
+	if (bch2_btree_path_relock_norestart(trans, path))
+		goto out;
+
 	/*
 	 * Ensure we obey path->should_be_locked: if it's set, we can't unlock
 	 * and re-traverse the path without a transaction restart:
 	 */
 	if (path->should_be_locked) {
-		ret = bch2_btree_path_relock(trans, path);
+		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_relock_path);
 		goto out;
 	}
 
