@@ -2440,6 +2440,18 @@ err:
 	bch2_write_done(&op->cl);
 }
 
+noinline __cold
+static void data_write_trace(struct bch_write_op *op)
+{
+	__event_trace(op->c, data_write, buf, bch2_write_op_to_text(&buf, op));
+}
+
+noinline __cold
+static void data_update_write_trace(struct bch_write_op *op)
+{
+	__event_trace(op->c, data_update_write, buf, bch2_write_op_to_text(&buf, op));
+}
+
 /**
  * bch2_write() - handle a write to a cache device or flash only volume
  * @cl:		&bch_write_op->cl
@@ -2465,11 +2477,9 @@ CLOSURE_CALLBACK(bch2_write)
 	unsigned data_len;
 
 	if (!(op->flags & BCH_WRITE_move))
-		event_add_trace(c, data_write, bio_sectors(bio), buf,
-				bch2_write_op_to_text(&buf, op));
+		event_add_trace_fn(c, data_write, bio_sectors(bio), data_write_trace(op));
 	else
-		event_add_trace(c, data_update_write, bio_sectors(bio), buf,
-				bch2_write_op_to_text(&buf, op));
+		event_add_trace_fn(c, data_update_write, bio_sectors(bio), data_update_write_trace(op));
 
 	EBUG_ON(op->cl.parent);
 	BUG_ON(!op->nr_replicas);
