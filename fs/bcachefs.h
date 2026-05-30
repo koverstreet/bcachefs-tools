@@ -372,7 +372,7 @@ BCH_DEBUG_PARAMS_ALL()
 	x(blocked_journal_max_open,					\
 	  "Blocked: too many journal entries open, "			\
 	  "not yet closed for writing")					\
-	x(blocked_journal_write_buffer_flush,				\
+	x(blocked_journal_blocked,					\
 	  "Blocked: waiting for write buffer flush")			\
 	x(blocked_key_cache_flush,					\
 	  "Blocked: waiting for key cache flush")			\
