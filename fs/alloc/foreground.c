@@ -848,7 +848,7 @@ static int add_new_bucket(struct bch_fs *c,
 
 	ob_push(c, &req->ptrs, ob);
 
-	if (req->nr_effective >= req->nr_replicas)
+	if (req->nr_effective >= req->nr_replicas || (req->flags & BCH_WRITE_cached))
 		return 1;
 	if (ob->ec)
 		return 1;
@@ -1316,7 +1316,7 @@ retry:
 	req->trace_alloc_failed		= false;
 	req->ptrs.nr			= 0;
 	req->nr_effective		= 0;
-	req->have_cache			= req->flags & BCH_WRITE_move;
+	req->have_cache			= (req->flags & BCH_WRITE_move) && !(req->flags & BCH_WRITE_cached);
 	req->trace.nr			= 0;
 	write_points_nr			= a->write_points_nr;
 
@@ -1411,7 +1411,7 @@ retry:
 		if (ret)
 			goto err;
 
-		BUG_ON(!req->nr_effective);
+		BUG_ON(!req->nr_effective && !(req->flags & BCH_WRITE_cached));
 		break;
 	}
 
