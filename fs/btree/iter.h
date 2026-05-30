@@ -342,8 +342,6 @@ void bch2_btree_node_iter_fix(struct btree_trans *trans, struct btree_path *,
 			      struct btree *, struct btree_node_iter *,
 			      struct bkey_packed *, unsigned, unsigned);
 
-int bch2_btree_path_relock_intent(struct btree_trans *, struct btree_path *);
-
 void bch2_path_put(struct btree_trans *, btree_path_idx_t, bool);
 
 int __bch2_trans_relock(struct btree_trans *, bool);
