@@ -440,6 +440,16 @@ fn main() {
         .opaque_type("gc_stripe")
         .opaque_type("open_bucket.*")
         .opaque_type("replicas_delta_list")
+        // bch_replicas_padded is a union of a flexible-array entry and a
+        // struct_size_t()-sized byte array; bindgen can't represent it and
+        // emits bogus empty anon structs (which then get arch-dependent
+        // alignment, breaking cross builds). Rust never touches its internals,
+        // so let clang compute the size and emit an opaque blob.
+        .opaque_type("bch_replicas_padded")
+        // bindgen still hoists the union's anonymous members to top-level empty
+        // structs even with the parent opaque; they're now unreferenced, and
+        // their layout tests get arch-dependent alignment. Drop them entirely.
+        .blocklist_type("bch_replicas_padded__bindgen_ty_.*")
         .allowlist_type("sb_names")
         .no_copy("btree_trans")
         .no_copy("printbuf")
@@ -607,28 +617,6 @@ fn packed_and_align_fix(bindings: std::string::String) -> std::string::String {
     } else {
         bindings
     };
-
-    // On aarch64, AAPCS64 gives empty structs alignment 4, but Rust's repr(C)
-    // gives them alignment 1. Fix the anonymous union member types in
-    // bch_replicas_padded to match what clang reports.
-    #[cfg(target_arch = "aarch64")]
-    let bindings = bindings
-        .replace(
-            "#[repr(C)]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_replicas_padded__bindgen_ty_1 {}",
-            "#[repr(C, align(4))]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_replicas_padded__bindgen_ty_1 {}",
-        )
-        .replace(
-            "#[repr(C)]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_replicas_padded__bindgen_ty_2 {}",
-            "#[repr(C, align(4))]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_replicas_padded__bindgen_ty_2 {}",
-        )
-        .replace(
-            "#[repr(C)]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_replicas_padded__bindgen_ty_3 {}",
-            "#[repr(C, align(4))]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_replicas_padded__bindgen_ty_3 {}",
-        )
-        .replace(
-            "#[repr(C)]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_replicas_padded__bindgen_ty_4 {}",
-            "#[repr(C, align(4))]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_replicas_padded__bindgen_ty_4 {}",
-        );
 
     bindings
 }
