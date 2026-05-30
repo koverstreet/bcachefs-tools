@@ -2,8 +2,15 @@ self': {
   name = "bcachefs-nixos";
 
   nodes.machine =
-    { config, ... }:
+    { config, pkgs, ... }:
     {
+      # modulePackage defaults to the module built for boot.kernelPackages;
+      # pin to linuxPackages_latest so it matches bcachefs-module-linux-latest
+      # (the kernel we ship that module for) and the assertion below compares
+      # like-for-like. The default kernel lags linuxPackages_latest, which made
+      # the assertion spuriously fail.
+      boot.kernelPackages = pkgs.linuxPackages_latest;
+
       assertions = [
         {
           assertion =
