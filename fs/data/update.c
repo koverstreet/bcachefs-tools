@@ -832,7 +832,7 @@ int bch2_update_unwritten_extent(struct btree_trans *trans,
 				update->op.nr_replicas,
 				update->op.nr_replicas,
 				update->op.watermark,
-				0, &cl, &wp);
+				update->op.flags, &cl, &wp);
 		if (bch2_err_matches(ret, BCH_ERR_operation_blocked)) {
 			bch2_trans_unlock(trans);
 			closure_sync(&cl);
