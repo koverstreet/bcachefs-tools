@@ -1306,14 +1306,11 @@ __cold void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs 
 	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
 		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
 
-		/* Skip btrees that are empty AND haven't flushed recently — keeps
-		 * the dump focused on what's actually doing work. */
-		if (!wb->inc.keys.nr &&
-		    !wb->flushing.keys.nr &&
-		    time_after(jiffies, wb->last_active_jiffies + 60 * HZ))
+		if (!wb->nr_flushes)
 			continue;
 
-		prt_printf(out, "=== %s ===\n", bch_wb_btree_names[i]);
+		prt_printf(out, "%s\n", bch_wb_btree_names[i]);
+		guard(printbuf_indent)(out);
 
 		prt_printf(out, "inc keys:\t%zu/%zu\n",		wb->inc.keys.nr, wb->inc.keys.size);
 		prt_printf(out, "inc seq pinned:\t%llu\n",	wb->inc.pin.seq);
