@@ -739,7 +739,7 @@ out:
 		ret = bch_err_throw(c, journal_stuck);
 
 	if (ret == -BCH_ERR_journal_blocked)
-		track_event_change(&c->times[BCH_TIME_blocked_journal_write_buffer_flush], true);
+		track_event_change(&c->times[BCH_TIME_blocked_journal_blocked], true);
 
 	if (ret == -BCH_ERR_journal_max_in_flight)
 		track_event_change(&c->times[BCH_TIME_blocked_journal_max_in_flight], true);
@@ -1123,7 +1123,7 @@ void bch2_journal_unblock(struct journal *j)
 			} while (!atomic64_try_cmpxchg(&j->reservations.counter, &old.v, new.v));
 
 			struct bch_fs *c = container_of(j, struct bch_fs, journal);
-			track_event_change(&c->times[BCH_TIME_blocked_journal_write_buffer_flush], false);
+			track_event_change(&c->times[BCH_TIME_blocked_journal_blocked], false);
 		}
 
 	journal_wake(j);

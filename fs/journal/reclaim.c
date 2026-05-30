@@ -1188,12 +1188,11 @@ __cold void bch2_journal_reclaim_to_text(struct printbuf *out, struct journal *j
 
 	prt_newline(out);
 	prt_printf(out, "Blocked time stats:\tcount\tavg\tmax\n");
-	bch2_time_stats_summary_to_text(out, "  low_on_space",       &c->times[BCH_TIME_blocked_journal_low_on_space]);
-	bch2_time_stats_summary_to_text(out, "  low_on_pin",         &c->times[BCH_TIME_blocked_journal_low_on_pin]);
-	bch2_time_stats_summary_to_text(out, "  max_in_flight",      &c->times[BCH_TIME_blocked_journal_max_in_flight]);
-	bch2_time_stats_summary_to_text(out, "  max_open",           &c->times[BCH_TIME_blocked_journal_max_open]);
-	bch2_time_stats_summary_to_text(out, "  write_buffer_flush", &c->times[BCH_TIME_blocked_journal_write_buffer_flush]);
-	bch2_time_stats_summary_to_text(out, "  write_buffer_full",  &c->times[BCH_TIME_blocked_write_buffer_full]);
+	bch2_time_stats_summary_to_text(out, "  low_on_space",		&c->times[BCH_TIME_blocked_journal_low_on_space]);
+	bch2_time_stats_summary_to_text(out, "  low_on_pin",		&c->times[BCH_TIME_blocked_journal_low_on_pin]);
+	bch2_time_stats_summary_to_text(out, "  max_in_flight",		&c->times[BCH_TIME_blocked_journal_max_in_flight]);
+	bch2_time_stats_summary_to_text(out, "  max_open",		&c->times[BCH_TIME_blocked_journal_max_open]);
+	bch2_time_stats_summary_to_text(out, "  write_buffer_full",	&c->times[BCH_TIME_blocked_write_buffer_full]);
 
 	prt_newline(out);
 	prt_printf(out, "Oldest pins:\n");
