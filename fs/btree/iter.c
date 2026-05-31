@@ -307,7 +307,7 @@ static void path_verify_level_err(struct btree_path *path, unsigned level,
 }
 
 static void __bch2_btree_path_verify_level(struct btree_trans *trans,
-				struct btree_path *path, unsigned level)
+					   struct btree_path *path, unsigned level)
 {
 	struct btree_path_level *l = &path->l[level];
 	bool locked = btree_node_locked(path, level);
@@ -324,7 +324,14 @@ static void __bch2_btree_path_verify_level(struct btree_trans *trans,
 	if (!bch2_btree_node_relock_notrace(trans, path, level))
 		return;
 
-	BUG_ON(!btree_path_pos_in_node(path, l->b));
+	if (!btree_path_pos_in_node(path, l->b)) {
+		CLASS(printbuf, buf)();
+		prt_printf(&buf, "level %u path->pos ", level);
+		bch2_bpos_to_text(&buf, path->pos);
+		prt_newline(&buf);
+		bch2_btree_pos_to_text(&buf, trans->c, l->b);
+		panic("%s\n", buf.buf);
+	}
 
 	bch2_btree_node_iter_verify(&l->iter, l->b);
 
@@ -361,11 +368,13 @@ static void __bch2_btree_path_verify_level(struct btree_trans *trans,
 }
 
 static void __bch2_btree_path_verify(struct btree_trans *trans,
-				   struct btree_path *path)
+				     struct btree_path *path)
 {
 	struct bch_fs *c = trans->c;
 
 	for (unsigned i = 0; i < (!path->cached ? BTREE_MAX_DEPTH : 1); i++) {
+		BUG_ON(i < path->level && !IS_ERR(path->l[i].b));
+
 		if (!path->l[i].b) {
 			BUG_ON(!path->cached &&
 			       bch2_btree_id_root(c, path->btree_id)->b->c.level > i);
