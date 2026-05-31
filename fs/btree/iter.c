@@ -870,6 +870,8 @@ void bch2_trans_node_verify_not_in_iters(struct btree_trans *trans, struct btree
 		if (unlikely(path->l[level].b == b)) {
 			CLASS(printbuf, buf)();
 			prt_printf(&buf, "path still references btree node being freed, level %u:\n", level);
+			bch2_btree_pos_to_text(&buf, trans->c, b);
+			prt_newline(&buf);
 			bch2_btree_path_to_text(&buf, trans, i, path);
 			panic("%s\n", buf.buf);
 		}
