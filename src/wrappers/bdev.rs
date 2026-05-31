@@ -7,10 +7,7 @@
 
 use std::os::unix::io::RawFd;
 
-use libc::{
-    BLKPBSZGET,
-    BLKSSZGET,
-};
+use libc::BLKPBSZGET;
 
 // linux/fs.h ioctl constants not exposed by libc crate
 const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
