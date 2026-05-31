@@ -741,7 +741,6 @@ static inline struct bkey_s_c btree_path_level_prev(struct btree_trans *trans,
 
 	path->pos = k.k ? k.k->p : l->b->data->min_key;
 	trans->paths_sorted = false;
-	bch2_btree_path_verify_level(trans, path, l - path->l);
 	return k;
 }
 
@@ -2938,8 +2937,6 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_iter *iter, stru
 			k = btree_path_level_prev(trans, path, l, &iter->k);
 
 			EBUG_ON(k.k && bpos_gt(k.k->p, search_key));
-		} else if (k.k) {
-			path->pos = k.k->p;
 		}
 
 		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
@@ -2967,19 +2964,6 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_iter *iter, stru
 		}
 	}
 
-	/*
-	 * TODO: unlike bch2_btree_iter_peek_max(), which does a normalizing
-	 * bch2_btree_path_set_pos(&k.k->p) on return, peek_prev sets path->pos
-	 * directly (btree_path_level_prev / the k.k->p store above) and never
-	 * re-runs up_until_good_node - so on return path->pos may be
-	 * inconsistent with path->l[level].b above the leaf. The only guard is
-	 * bch2_btree_iter_verify (static-branch gated, runs rarely in CI), so
-	 * the inconsistency escapes to the always-on
-	 * bch2_trans_node_verify_not_in_iters() BUG in a later node split
-	 * (seen: copygc_torture_no_checksum, inject_transaction_restarts=1).
-	 * Fix likely mirrors peek_max's trailing set_pos, but the reverse-
-	 * iteration pos semantics need thought first.
-	 */
 	bch2_btree_iter_verify(iter);
 	return k;
 }
