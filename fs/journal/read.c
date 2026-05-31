@@ -62,7 +62,7 @@ void bch2_journal_ptrs_to_text(struct printbuf *out, struct bch_fs *c, struct jo
 {
 	darray_for_each(j->ptrs, i) {
 		if (i != j->ptrs.data)
-			prt_printf(out, " ");
+			prt_char(out, ' ');
 		bch2_journal_ptr_to_text(out, c, i);
 	}
 }
@@ -172,8 +172,6 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 	struct journal_replay **_i, *i, *dup;
 	u64 last_seq = !JSET_NO_FLUSH(j) ? le64_to_cpu(j->last_seq) : 0;
 	u64 seq = le64_to_cpu(j->seq);
-	CLASS(printbuf, buf)();
-	int ret = JOURNAL_ENTRY_ADD_OK;
 
 	if (last_seq && c->opts.journal_rewind)
 		last_seq = min(last_seq, c->opts.journal_rewind);
@@ -194,6 +192,13 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 	if (!c->journal_entries_base_seq)
 		c->journal_entries_base_seq = max_t(s64, 1, seq - S32_MAX);
 
+	if (seq - c->journal_entries_base_seq > (u64) U32_MAX) {
+		bch_err(c, "journal entry sequence numbers span too large a range: cannot replay, contact developers\n"
+			"base %llu last_seq currently %llu, but have seq %llu",
+			c->journal_entries_base_seq, jlist->last_seq, seq);
+		return bch_err_throw(c, ENOMEM_journal_entry_add);
+	}
+
 	/* Drop entries we don't need anymore */
 	if (last_seq > jlist->last_seq && !c->opts.read_entire_journal) {
 		genradix_for_each_from(&c->journal_entries, iter, _i,
@@ -210,19 +215,11 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 		}
 	}
 
+	jlist->last_seq = max(jlist->last_seq, last_seq);
+
 	journal_replay_maybe_drop_overwrites(c, j);
 
 	size_t bytes = vstruct_bytes(j);
-
-	jlist->last_seq = max(jlist->last_seq, last_seq);
-
-	if (seq <  c->journal_entries_base_seq ||
-	    seq >= c->journal_entries_base_seq + U32_MAX) {
-		bch_err(c, "journal entry sequence numbers span too large a range: cannot replay, contact developers\n"
-			"base %llu last_seq currently %llu, but have seq %llu",
-			c->journal_entries_base_seq, jlist->last_seq, seq);
-		return bch_err_throw(c, ENOMEM_journal_entry_add);
-	}
 
 	_i = genradix_ptr_alloc(&c->journal_entries, journal_entry_radix_idx(c, seq), GFP_KERNEL);
 	if (!_i)
@@ -234,6 +231,11 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 	 */
 	dup = *_i;
 	if (dup) {
+		WARN(seq != le64_to_cpu(dup->j.seq),
+		     "seq %llu != dup %llu base %llu",
+		     seq, le64_to_cpu(dup->j.seq),
+		     c->journal_entries_base_seq);
+
 		bool identical = bytes == vstruct_bytes(&dup->j) &&
 			!memcmp(j, &dup->j, bytes);
 		bool not_identical = !identical &&
@@ -244,31 +246,35 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 		darray_for_each(dup->ptrs, ptr) {
 			if (ptr->dev == ca->dev_idx) {
 				if (ptr->sector == entry_ptr.sector)
-					return ret; /* same physical location, re-read */
+					return 0; /* same physical location, re-read */
 				same_device = true;
 			}
 		}
 
+		CLASS(printbuf, buf)();
+		bch2_journal_replay_to_text(&buf, c, dup);
+		prt_newline(&buf);
+		prt_printf(&buf, "seq %llu ", seq);
+		bch2_journal_datetime_to_text(&buf, j);
+		prt_char(&buf, ' ');
+		bch2_journal_ptr_to_text(&buf, c, &entry_ptr);
+
 		try(darray_push(&dup->ptrs, entry_ptr));
 
-		bch2_journal_replay_to_text(&buf, c, dup);
-
-		fsck_err_on(same_device,
+		ret_fsck_err_on(same_device,
 			    c, journal_entry_dup_same_device,
 			    "duplicate journal entry on same device\n%s",
 			    buf.buf);
 
-		fsck_err_on(not_identical,
+		ret_fsck_err_on(not_identical,
 			    c, journal_entry_replicas_data_mismatch,
 			    "found duplicate but non identical journal entries\n%s",
 			    buf.buf);
 
-		if (entry_ptr.csum_good && !identical)
-			goto replace;
-
-		return ret;
+		if (identical || !entry_ptr.csum_good)
+			return 0;
 	}
-replace:
+
 	i = kvmalloc(offsetof(struct journal_replay, j) + bytes, GFP_KERNEL);
 	if (!i)
 		return bch_err_throw(c, ENOMEM_journal_entry_add);
@@ -289,8 +295,7 @@ replace:
 	}
 
 	*_i = i;
-fsck_err:
-	return ret;
+	return 0;
 }
 
 struct journal_read_buf {
