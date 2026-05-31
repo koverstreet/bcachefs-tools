@@ -525,19 +525,16 @@ static inline void memset_u64s_small(void *dst, u64 c,
 		*d++ = c;
 }
 
-static inline void __memmove_u64s_down(void *dst, const void *src,
-				       unsigned u64s)
-{
-	/* dst <= src: a forward copy can't clobber unread source */
-	__memcpy_u64s(dst, src, u64s);
-}
-
 static inline void memmove_u64s_down(void *dst, const void *src,
 				     unsigned u64s)
 {
 	EBUG_ON(dst > src);
 
-	__memmove_u64s_down(dst, src, u64s);
+#ifdef _LINUX_FORTIFY_STRING_H_
+	__underlying_memmove(dst, src, u64s * 8);
+#else
+	memmove(dst, src, u64s * 8);
+#endif
 }
 
 static inline void __memmove_u64s_down_small(void *dst, const void *src,
@@ -573,42 +570,26 @@ static inline void memmove_u64s_up_small(void *dst, const void *src,
 	__memmove_u64s_up_small(dst, src, u64s);
 }
 
-static inline void __memmove_u64s_up(void *_dst, const void *_src,
-				     unsigned u64s)
-{
-	u64 *dst = (u64 *) _dst + u64s - 1;
-	u64 *src = (u64 *) _src + u64s - 1;
-
-#if defined(CONFIG_X86_64) && !defined(CONFIG_KMSAN)
-	long d0, d1, d2;
-
-	asm volatile("std ;\n"
-		     "rep ; movsq\n"
-		     "cld ;\n"
-		     : "=&c" (d0), "=&D" (d1), "=&S" (d2)
-		     : "0" (u64s), "1" (dst), "2" (src)
-		     : "memory");
-#else
-	while (u64s--)
-		*dst-- = *src--;
-#endif
-}
-
-static inline void memmove_u64s_up(void *dst, const void *src,
+static inline void memmove_u64s_up(void *dst, void *src,
 				   unsigned u64s)
 {
 	EBUG_ON(dst < src);
 
-	__memmove_u64s_up(dst, src, u64s);
+#ifdef _LINUX_FORTIFY_STRING_H_
+	__underlying_memmove(dst, src, u64s * 8);
+#else
+	memmove(dst, src, u64s * 8);
+#endif
 }
 
-static inline void memmove_u64s(void *dst, const void *src,
+static inline void memmove_u64s(void *dst, void *src,
 				unsigned u64s)
 {
-	if (dst < src)
-		__memmove_u64s_down(dst, src, u64s);
-	else
-		__memmove_u64s_up(dst, src, u64s);
+#ifdef _LINUX_FORTIFY_STRING_H_
+	__underlying_memmove(dst, src, u64s * 8);
+#else
+	memmove(dst, src, u64s * 8);
+#endif
 }
 
 /* Set the last few bytes up to a u64 boundary given an offset into a buffer. */

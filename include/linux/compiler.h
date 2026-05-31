@@ -6,6 +6,12 @@
 #define barrier() __asm__ __volatile__("": : :"memory")
 #define barrier_data(ptr) __asm__ __volatile__("": :"r"(ptr) :"memory")
 
+#ifndef OPTIMIZER_HIDE_VAR
+/* Make the optimizer believe the variable can be manipulated arbitrarily. */
+#define OPTIMIZER_HIDE_VAR(var)						\
+	__asm__ ("" : "=r" (var) : "0" (var))
+#endif
+
 #ifndef __always_inline
 # define __always_inline	inline __attribute__((always_inline))
 #endif
