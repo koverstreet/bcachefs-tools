@@ -656,13 +656,30 @@ err_trans:
 
 /* methods */
 
+static int dirent_to_missing_inode(struct btree_trans *trans,
+				   subvol_inum dir,
+				   struct bkey_s_c_dirent d,
+				   int ret)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(bch_log_msg, msg)(c);
+	msg.m.suppress = true;
+
+	prt_printf(&msg.m, "dirent to missing inode: (%s)\n", bch2_err_str(ret));
+	bch2_bkey_val_to_text(&msg.m, c, d.s_c);
+	prt_str(&msg.m, "\n in: ");
+	try(bch2_inum_to_path(trans, dir, &msg.m));
+	prt_newline(&msg.m);
+	__bch2_inconsistent_error(c, &msg.m);
+	return 0;
+}
+
 static struct bch_inode_info *bch2_lookup_trans(struct btree_trans *trans,
 			subvol_inum dir, struct bch_hash_info *dir_hash_info,
 			const struct qstr *name)
 {
 	struct bch_fs *c = trans->c;
 	subvol_inum inum = {};
-	CLASS(printbuf, buf)();
 
 	struct qstr lookup_name;
 	int ret = bch2_maybe_casefold(trans, dir_hash_info, name, &lookup_name);
@@ -708,12 +725,10 @@ static struct bch_inode_info *bch2_lookup_trans(struct btree_trans *trans,
 	 * don't remove it: check_inodes might find another inode that points
 	 * back to this dirent
 	 */
-	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOENT),
-				c, "dirent to missing inode:\n%s",
-				(bch2_bkey_val_to_text(&buf, c, d.s_c), buf.buf));
-	if (ret)
-		return ERR_PTR(ret);
-	return inode;
+	if (bch2_err_matches(ret, ENOENT))
+		ret = dirent_to_missing_inode(trans, dir, d, ret) ?: ret;
+
+	return ret ? ERR_PTR(ret) : inode;
 }
 
 static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
