@@ -41,7 +41,11 @@
       nix-github-actions,
     }:
     let
-      systems = nixpkgs.lib.filter (s: nixpkgs.lib.hasSuffix "-linux" s) nixpkgs.lib.systems.flakeExposed;
+      # i686-linux dropped: no real consumers, and cross sqlite tcltest
+      # tries to run on i686 and fails.
+      systems = nixpkgs.lib.filter
+        (s: nixpkgs.lib.hasSuffix "-linux" s && s != "i686-linux")
+        nixpkgs.lib.systems.flakeExposed;
 
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
       rustfmtToml = builtins.fromTOML (builtins.readFile ./rustfmt.toml);
@@ -109,36 +113,7 @@
                   localSystem = system;
                   pkgs' = import nixpkgs {
                     inherit crossSystem localSystem;
-                    overlays =
-                      # Cross builds exist only to check our tools compile for the
-                      # target; a dependency's own test suite isn't ours to run
-                      # here. util-linux(-minimal) lists sqlite in buildInputs
-                      # unconditionally but builds with --disable-liblastlog2
-                      # (sqlite's only consumer) - so the i686 sqlite gets built,
-                      # and runs its tcl test suite which fails on i686, for a
-                      # library nothing links. fuse and our own libuuid both pull
-                      # util-linux-minimal; drop sqlite at the source. This must
-                      # precede the default overlay so overlay.nix's
-                      # prev.callPackage sees the stripped util-linux too.
-                      lib.optionals (crossSystem != localSystem) [
-                        (
-                          final: prev:
-                          let
-                            dropSqlite =
-                              u:
-                              u.overrideAttrs (old: {
-                                buildInputs = builtins.filter (
-                                  p: (p.pname or "") != "sqlite"
-                                ) old.buildInputs;
-                              });
-                          in
-                          {
-                            util-linux = dropSqlite prev.util-linux;
-                            util-linuxMinimal = dropSqlite prev.util-linuxMinimal;
-                          }
-                        )
-                      ]
-                      ++ [ self.overlays.default ];
+                    overlays = [ self.overlays.default ];
                   };
 
                   withCrossName =
@@ -174,7 +149,6 @@
               bcachefs-tools
               bcachefs-tools-aarch64-linux
               bcachefs-tools-fuse
-              bcachefs-tools-fuse-i686-linux
               bcachefs-module-linux-latest
               bcachefs-module-linux-testing
               ;
