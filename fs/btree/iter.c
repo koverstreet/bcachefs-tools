@@ -735,7 +735,6 @@ static inline struct bkey_s_c btree_path_level_prev(struct btree_trans *trans,
 
 	path->pos = k.k ? k.k->p : l->b->data->min_key;
 	trans->paths_sorted = false;
-	bch2_btree_path_verify_level(trans, path, l - path->l);
 	return k;
 }
 
@@ -2871,9 +2870,7 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_iter *iter, stru
 		if (!k.k || bpos_gt(k.k->p, search_key)) {
 			k = btree_path_level_prev(trans, path, l, &iter->k);
 
-			BUG_ON(k.k && bpos_gt(k.k->p, search_key));
-		} else if (k.k) {
-			path->pos = k.k->p;
+			EBUG_ON(k.k && bpos_gt(k.k->p, search_key));
 		}
 
 		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
