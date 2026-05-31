@@ -832,7 +832,9 @@ void bch2_trans_node_add(struct btree_trans *trans, struct btree *b)
 	unsigned i, level = b->c.level;
 
 	trans_for_each_path(trans, path, i)
-		if (!path->cached && btree_path_pos_in_node(path, b)) {
+		if (!path->cached &&
+		    level >= path->level &&
+		    btree_path_pos_in_node(path, b)) {
 			enum btree_node_locked_type t = path->nodes_locked
 				? btree_lock_want(path, b->c.level)
 				: BTREE_NODE_UNLOCKED;
