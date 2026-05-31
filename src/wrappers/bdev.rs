@@ -7,10 +7,7 @@
 
 use std::os::unix::io::RawFd;
 
-use libc::{
-    BLKPBSZGET,
-    BLKSSZGET,
-};
+use libc::BLKPBSZGET;
 
 // linux/fs.h ioctl constants not exposed by libc crate
 const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
@@ -41,21 +38,6 @@ pub fn get_blocksize_physical_hint(fd: RawFd) -> u32 {
         let mut bs: libc::c_uint = 0;
         unsafe { libc::ioctl(fd, BLKPBSZGET, &mut bs) };
         bs
-    } else {
-        stat.st_blksize as u32
-    }
-}
-
-/// Returns logical block size (LBA) of a block device (the smaller of the two),
-/// with fallback to the filesystem block size hint for regular files, in bytes.
-/// (suitable for use as an alignment for direct I/O or similar)
-pub fn get_blocksize_logical(fd: RawFd) -> u32 {
-    let stat = fstat(fd);
-
-    if is_blk(stat.st_mode) {
-        let mut bs: libc::c_uint = 0;
-        unsafe { libc::ioctl(fd, BLKSSZGET, &mut bs) };
-        bs as u32
     } else {
         stat.st_blksize as u32
     }
