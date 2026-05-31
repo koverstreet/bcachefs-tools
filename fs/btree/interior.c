@@ -1304,6 +1304,8 @@ bch2_btree_update_start(struct btree_trans *trans, struct btree_path *path,
 	int ret = 0;
 	u32 restart_count = trans->restart_count;
 
+	bch2_trans_verify_paths(trans);
+
 	BUG_ON(!path->should_be_locked);
 
 	if (watermark == BCH_WATERMARK_stripe) {
@@ -1850,6 +1852,8 @@ static int btree_split(struct btree_update *as, struct btree_trans *trans,
 	struct btree *n3 = NULL;
 	u64 start_time = local_clock();
 	int ret = 0;
+
+	bch2_trans_verify_paths(trans);
 
 	struct btree_merge_node dst_storage[2] = {};
 	darray_merge_node dsts = {
