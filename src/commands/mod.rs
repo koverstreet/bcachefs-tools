@@ -85,6 +85,7 @@ pub mod fusemount;
 pub mod image;
 pub mod key;
 pub mod kill_btree_node;
+pub mod journal_rewind_info;
 pub mod list;
 pub mod list_journal;
 pub mod migrate;
@@ -205,7 +206,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
     ]},
     GroupDef { heading: "Images",                   commands: &[&image::CMD] },
     GroupDef { heading: "Mount",                    commands: &[&mount::CMD, &fusemount::CMD, &wait_devices::CMD] },
-    GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &recovery_pass::CMD] },
+    GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &journal_rewind_info::CMD, &recovery_pass::CMD] },
     GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD] },
     GroupDef { heading: "Devices",                  commands: &[&device::CMD] },
     GroupDef { heading: "Subvolumes and snapshots", commands: &[&subvolume::CMD] },
