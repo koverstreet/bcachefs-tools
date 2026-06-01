@@ -315,7 +315,8 @@ static ssize_t bch2_read_bfloat_failed(struct file *file, char __user *buf,
 				i->prev_node = l->b->key.k.p;
 			}
 
-			bch2_bfloat_to_text(&i->buf, l->b, _k);
+			if (_k)
+				bch2_bfloat_to_text(&i->buf, l->b, _k);
 			bch2_trans_unlock(trans);
 			i->from = bpos_successor(iter.pos);
 			bch2_debugfs_flush_buf(i);
