@@ -744,14 +744,6 @@ static int check_btree_root_to_backpointers(struct btree_trans *trans,
 	return check_extent_to_backpointers(trans, s, btree_id, b->c.level + 1, k);
 }
 
-static u64 system_totalram_bytes(void)
-{
-	struct sysinfo i;
-	si_meminfo(&i);
-
-	return i.totalram * i.mem_unit;
-}
-
 static u64 mem_may_pin_bytes(struct bch_fs *c)
 {
 	return div_u64(system_totalram_bytes() * c->opts.fsck_memory_usage_percent, 100);
