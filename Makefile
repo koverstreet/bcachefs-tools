@@ -228,6 +228,18 @@ initramfs/hook: initramfs/hook.in
 .PHONY: install
 BASH_COMPLETION_DIR?=$(shell $(PKG_CONFIG) --variable=completionsdir bash-completion 2>/dev/null || echo $(PREFIX)/share/bash-completion/completions)
 
+# True cross compile? (target arch != host arch). CARGO_BUILD_TARGET is
+# sometimes set to a triple whose arch matches the host (Debian packaging
+# passes --target x86_64-unknown-linux-gnu on x86_64 build hosts) - the
+# binary still runs natively in that case. Computed here at top level
+# because a variable assignment inside the install recipe terminates it
+# in some make versions.
+ifdef CARGO_BUILD_TARGET
+ifneq ($(firstword $(subst -, ,$(CARGO_BUILD_TARGET))),$(shell uname -m))
+SKIP_COMPLETIONS := 1
+endif
+endif
+
 install: INITRAMFS_HOOK=$(INITRAMFS_DIR)/hooks/bcachefs
 install: INITRAMFS_SCRIPT=$(INITRAMFS_DIR)/scripts/local-premount/bcachefs
 install: all install_dkms $(optional_install)
@@ -239,20 +251,8 @@ install: all install_dkms $(optional_install)
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/fsck.bcachefs
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.bcachefs
 	$(INSTALL) -d $(DESTDIR)$(BASH_COMPLETION_DIR)
-# Generating completions runs the built binary; when cross compiling it's the
-# target arch and won't execute on the build host. Statically linking
-# libbcachefs.a + the C deps makes a native side-build impractical, so just
-# skip completions on cross builds (and say so).
-#
-# CARGO_BUILD_TARGET is sometimes set to a triple whose arch matches the
-# host (Debian packaging passes --target x86_64-unknown-linux-gnu on x86_64
-# build hosts) - the binary still runs natively, so check arch rather than
-# just "is CARGO_BUILD_TARGET set".
-ifdef CARGO_BUILD_TARGET
-ifneq ($(firstword $(subst -, ,$(CARGO_BUILD_TARGET))),$(shell uname -m))
-SKIP_COMPLETIONS = 1
-endif
-endif
+# Generating completions runs the built binary; on a true cross compile
+# we can't, so skip (SKIP_COMPLETIONS is computed at top level above).
 ifdef SKIP_COMPLETIONS
 	@echo "    [SKIP]   bash completions (cross compiling for $(CARGO_BUILD_TARGET); can't run target binary on host)"
 else
