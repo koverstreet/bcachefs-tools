@@ -2366,6 +2366,12 @@ err:
 		bio->bi_private	= &op->cl;
 		bio->bi_opf |= REQ_OP_WRITE;
 
+		/* If it's an internal move, do FUA writes so the journal
+		 * doesn't have to flush them:
+		 */
+		if (op->flags & BCH_WRITE_move)
+			bio->bi_opf |= REQ_FUA;
+
 		closure_get(bio->bi_private);
 
 		key_to_write = (void *) (op->insert_keys.keys_p +
