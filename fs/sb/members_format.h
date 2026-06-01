@@ -6,7 +6,7 @@
  * We refer to members with bitmasks in various places - but we need to get rid
  * of this limit:
  */
-#define BCH_SB_MEMBERS_MAX		64
+#define BCH_SB_MEMBERS_MAX		256
 
 /*
  * Sentinal value - indicates a device that does not exist
