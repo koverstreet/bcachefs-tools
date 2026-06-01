@@ -460,10 +460,10 @@ int bch2_trigger_indirect_inline_data(struct btree_trans *trans, struct btree_tr
 
 /* create */
 
-static int bch2_make_extent_indirect(struct btree_trans *trans,
-				     struct btree_iter *extent_iter,
-				     struct bkey_i *orig,
-				     bool reflink_p_may_update_opts_field)
+int bch2_make_extent_indirect(struct btree_trans *trans,
+			      struct btree_iter *extent_iter,
+			      struct bkey_i *orig,
+			      bool reflink_p_may_update_opts_field)
 {
 	struct bch_fs *c = trans->c;
 
