@@ -4,6 +4,7 @@
   stdenvNoCC,
 
   # build time
+  jq,
   pkg-config,
   rustPlatform,
   versionCheckHook,
@@ -52,6 +53,7 @@ let
     dontStrip = true;
 
     nativeBuildInputs = [
+      jq
       pkg-config
       rustPlatform.bindgenHook
     ];
