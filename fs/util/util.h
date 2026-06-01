@@ -920,4 +920,12 @@ void __bch2_alloc_percpu_init(void *pcv,
 		(void (*)(void *, void *, unsigned))(_init), (_ctx))
 #endif
 
+static inline u64 system_totalram_bytes(void)
+{
+	struct sysinfo i;
+	si_meminfo(&i);
+
+	return i.totalram * i.mem_unit;
+}
+
 #endif /* _BCACHEFS_UTIL_H */
