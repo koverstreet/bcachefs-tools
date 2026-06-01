@@ -238,13 +238,26 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
         None
     };
 
+    // If the user explicitly set recovery_passes, skip the "fsck" option:
+    // with fsck=1 the kernel ORs in the full PASS_FSCK default set on top
+    // of the user's request, so -o recovery_passes=check_dirents would
+    // still run check_allocations, check_alloc_info, etc. Dropping fsck
+    // lets the user's pass selection be the actual set that runs.
+    let user_set_recovery_passes = cli.opts.iter().any(|o| {
+        o.split(',').any(|tok| {
+            tok == "recovery_passes" || tok.starts_with("recovery_passes=")
+        })
+    });
+
     let mut opts: Vec<String> = vec![
         "degraded".into(),
-        "fsck".into(),
         "fix_errors=ask".into(),
         "read_only".into(),
         "noreconcile_enabled".into(),
     ];
+    if !user_set_recovery_passes {
+        opts.insert(1, "fsck".into());
+    }
 
     if cli.yes {
         opts.push("fix_errors=yes".into());
