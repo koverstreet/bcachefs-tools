@@ -785,7 +785,9 @@ static int bch2_sb_member_find_slot(struct bch_fs *c)
 	u64 best_last_mount = 0;
 	unsigned nr_deleted = 0;
 
-	if (c->sb.nr_devices < BCH_SB_MEMBERS_MAX)
+	/* The sentinel must never be allocated as a real device: */
+	if (c->sb.nr_devices < BCH_SB_MEMBERS_MAX &&
+	    c->sb.nr_devices != BCH_SB_MEMBER_INVALID)
 		return c->sb.nr_devices;
 
 	for (unsigned dev_idx = 0; dev_idx < BCH_SB_MEMBERS_MAX; dev_idx++) {
@@ -821,6 +823,8 @@ int bch2_sb_member_alloc(struct bch_fs *c)
 	int dev_idx = bch2_sb_member_find_slot(c);
 	if (dev_idx < 0)
 		return dev_idx;
+
+	EBUG_ON(dev_idx == BCH_SB_MEMBER_INVALID);
 
 	struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 
