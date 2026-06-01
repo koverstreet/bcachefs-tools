@@ -3,6 +3,8 @@
 
 #include "bcachefs.h"
 
+#include "alloc/buckets.h"
+
 #include "btree/update.h"
 
 #include "journal/reclaim.h"
@@ -449,6 +451,47 @@ static int test_extent_create_overlapping(struct bch_fs *c, u64 inum)
 		insert_test_overlapping_extent(c, inum, 64,  8, U32_MAX);
 }
 
+/*
+ * Inject a duplicate-physical-extent corruption: find an existing extent in
+ * `inum` and insert a copy at a fresh logical offset, leaving both extents
+ * pointing at the same physical bucket+offset. fsck's
+ * check_extents_to_backpointers should reflinkify them.
+ */
+static int test_extent_create_dup(struct bch_fs *c, u64 inum)
+{
+	CLASS(btree_trans, trans)(c);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_extents,
+				POS(inum, 0), BTREE_ITER_all_snapshots);
+	CLASS(disk_reservation, res)(c);
+
+	int ret = commit_do(trans, &res.r, NULL, 0, ({
+		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, POS(inum, U64_MAX)));
+
+		int _ret = !k.k || k.k->type != KEY_TYPE_extent ? -ENOENT : 0;
+		if (!_ret) {
+			struct bkey_i *dup = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+
+			/* place the copy well past the original */
+			u64 src_end = dup->k.p.offset;
+			dup->k.p.offset = round_up(src_end + 1024, 64) + dup->k.size;
+
+			/* top up the reservation for the duplicate's sectors */
+			if (dup->k.size > res.r.sectors)
+				_ret = bch2_disk_reservation_add(c, &res.r,
+								 dup->k.size - res.r.sectors, 0);
+			if (!_ret)
+				_ret = bch2_btree_insert_nonextent(trans, BTREE_ID_extents, dup, dup->k.u64s,
+								   BTREE_UPDATE_internal_snapshot_node);
+		}
+		_ret;
+	}));
+
+	if (ret == -ENOENT)
+		bch_err(c, "test_extent_create_dup: no extent found for inum %llu", inum);
+	bch_err_fn(c, ret);
+	return ret;
+}
+
 /* snapshot unit tests */
 
 /* Test skipping over keys in unrelated snapshots: */
@@ -772,6 +815,7 @@ int bch2_btree_perf_test(struct bch_fs *c, const char *testname,
 	perf_test(test_extent_overwrite_middle);
 	perf_test(test_extent_overwrite_all);
 	perf_test(test_extent_create_overlapping);
+	perf_test(test_extent_create_dup);
 
 	perf_test(test_snapshots);
 
@@ -796,11 +840,13 @@ int bch2_btree_perf_test(struct bch_fs *c, const char *testname,
 
 	scnprintf(name_buf, sizeof(name_buf), "%s:", testname);
 	prt_human_readable_u64(&nr_buf, nr);
-	prt_human_readable_u64(&per_sec_buf, div64_u64(nr * NSEC_PER_SEC, time));
+	prt_human_readable_u64(&per_sec_buf, time ? div64_u64(nr * NSEC_PER_SEC, time) : 0);
+
+	u64 nsec_per_iter = nr ? div64_u64(time * nr_threads, nr) : 0;
 	printk(KERN_INFO "%-12s %s with %u threads in %5llu sec, %5llu nsec per iter, %5s per sec\n",
 		name_buf, nr_buf.buf, nr_threads,
 		div_u64(time, NSEC_PER_SEC),
-		div_u64(time * nr_threads, nr),
+		nsec_per_iter,
 		per_sec_buf.buf);
 	return j.ret;
 }

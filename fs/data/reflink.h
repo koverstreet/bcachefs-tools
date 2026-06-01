@@ -76,6 +76,9 @@ struct bkey_s_c bch2_lookup_indirect_extent(struct btree_trans *, struct btree_i
 					    s64 *, struct bkey_s_c_reflink_p,
 					    bool, unsigned);
 
+int bch2_make_extent_indirect(struct btree_trans *, struct btree_iter *,
+			      struct bkey_i *, bool);
+
 s64 bch2_remap_range(struct bch_fs *, subvol_inum, u64,
 		     subvol_inum, u64, u64, u64, s64 *,
 		     bool);
