@@ -243,7 +243,17 @@ install: all install_dkms $(optional_install)
 # target arch and won't execute on the build host. Statically linking
 # libbcachefs.a + the C deps makes a native side-build impractical, so just
 # skip completions on cross builds (and say so).
+#
+# CARGO_BUILD_TARGET is sometimes set to a triple whose arch matches the
+# host (Debian packaging passes --target x86_64-unknown-linux-gnu on x86_64
+# build hosts) - the binary still runs natively, so check arch rather than
+# just "is CARGO_BUILD_TARGET set".
 ifdef CARGO_BUILD_TARGET
+ifneq ($(firstword $(subst -, ,$(CARGO_BUILD_TARGET))),$(shell uname -m))
+SKIP_COMPLETIONS = 1
+endif
+endif
+ifdef SKIP_COMPLETIONS
 	@echo "    [SKIP]   bash completions (cross compiling for $(CARGO_BUILD_TARGET); can't run target binary on host)"
 else
 	$(BUILT_BIN) completions bash > $(DESTDIR)$(BASH_COMPLETION_DIR)/bcachefs
