@@ -277,8 +277,7 @@ int bch2_dev_journal_alloc(struct bch_dev *ca, bool new_fs)
 	 */
 	nr = clamp_t(unsigned, nr,
 		     BCH_JOURNAL_BUCKETS_MIN,
-		     min(1 << 13,
-			 (1 << 24) / ca->mi.bucket_size));
+		     system_totalram_bytes() / 4 / bucket_bytes(ca));
 
 	ret = bch2_set_nr_journal_buckets_loop(c, ca, nr, new_fs);
 err:
