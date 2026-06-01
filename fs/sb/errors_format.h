@@ -373,7 +373,8 @@ enum bch_fsck_flags {
 	x(vfs_unlink_got_wrong_inum,				349,	0)		\
 	x(device_bad_flush,					357,	0)		\
 	x(journal_bucket_seq_not_monotonic,			358,	0)		\
-	x(MAX,							362,	0)
+	x(dup_extents_to_reflink,				362,	FSCK_AUTOFIX)	\
+	x(MAX,							363,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,

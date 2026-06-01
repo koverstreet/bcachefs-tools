@@ -13,6 +13,7 @@
 #include "btree/write_buffer.h"
 
 #include "data/checksum.h"
+#include "data/reflink.h"
 
 #include "sb/io.h"
 
@@ -588,6 +589,55 @@ static bool bkey_dev_ptr_stale(struct bch_fs *c, struct bkey_s_c k, unsigned dev
 	return false;
 }
 
+/*
+ * Two leaf extents reference an overlapping physical range from distinct
+ * logical positions. Convert just the overlapping portion of each to a
+ * reflink_p, both pointing at a shared reflink_v carrying the physical
+ * pointer; the non-overlapping prefix/suffix of each extent stays as a
+ * regular extent, split off automatically by the btree extent-update path
+ * when the smaller reflink_p key is inserted.
+ *
+ * @k{1,2}_overlap_start/_end are logical positions within each extent
+ * delimiting the overlap; the caller derived them from the backpointers.
+ * For the full-extent case (same size, same start) the cuts become no-ops.
+ */
+static int extents_to_reflink(struct btree_trans *trans,
+			      enum btree_id b1, unsigned l1, struct bkey_s_c k1,
+			      u64 k1_overlap_start, u64 k1_overlap_end,
+			      enum btree_id b2, unsigned l2, struct bkey_s_c k2,
+			      u64 k2_overlap_start, u64 k2_overlap_end)
+{
+	struct bch_fs *c = trans->c;
+	u32 overlap_size = k1_overlap_end - k1_overlap_start;
+
+	BUG_ON(overlap_size != k2_overlap_end - k2_overlap_start);
+
+	CLASS(btree_node_iter, iter1)(trans, b1, k1.k->p, 0, l1, BTREE_ITER_intent);
+	try(bch2_btree_iter_traverse(&iter1));
+
+	struct bkey_i *k1_mut = errptr_try(bch2_bkey_make_mut_noupdate(trans, k1));
+	bch2_cut_front(c, SPOS(k1.k->p.inode, k1_overlap_start, k1.k->p.snapshot), k1_mut);
+	bch2_cut_back(SPOS(k1.k->p.inode, k1_overlap_end, k1.k->p.snapshot), k1_mut);
+
+	try(bch2_make_extent_indirect(trans, &iter1, k1_mut, false));
+
+	u64 r_v_idx = REFLINK_P_IDX(&bkey_i_to_reflink_p(k1_mut)->v);
+
+	CLASS(btree_node_iter, iter2)(trans, b2, k2.k->p, 0, l2, BTREE_ITER_intent);
+	try(bch2_btree_iter_traverse(&iter2));
+
+	struct bkey_i_reflink_p *rp =
+		errptr_try(bch2_trans_kmalloc(trans, sizeof(*rp)));
+	bkey_reflink_p_init(&rp->k_i);
+	rp->k.p		= SPOS(k2.k->p.inode, k2_overlap_end, k2.k->p.snapshot);
+	rp->k.size	= overlap_size;
+	rp->k.bversion	= k2.k->bversion;
+	SET_REFLINK_P_IDX(&rp->v, r_v_idx);
+
+	return bch2_trans_update(trans, &iter2, &rp->k_i,
+				 BTREE_UPDATE_internal_snapshot_node);
+}
+
 static int check_bp_dup(struct btree_trans *trans,
 			struct extents_to_bp_state *s,
 			struct bkey_s_c extent,
@@ -645,6 +695,58 @@ static int check_bp_dup(struct btree_trans *trans,
 		if (ret)
 			return 0;
 
+		/*
+		 * Both replicas verify clean: a physical region is referenced
+		 * from two distinct logical positions, possibly with partial
+		 * overlap. This can happen after btree topology recovery from
+		 * media errors - convert the overlapping portion to a
+		 * reflink_v shared by two reflink_p's so neither file loses
+		 * data. Non-overlapping prefix/suffix of each extent stays as
+		 * a regular extent.
+		 *
+		 * Only valid for leaf extents; btree pointers can't be reflinked.
+		 */
+		if (extent.k->type == KEY_TYPE_extent &&
+		    other_extent.k->type == KEY_TYPE_extent) {
+			u32 bp_sub, other_bp_sub;
+			scoped_guard(rcu) {
+				struct bch_dev *ca = bch2_dev_rcu_noerror(c, bp->k.p.inode);
+				if (!ca)
+					return 0;
+				bp_pos_to_bucket_and_offset(ca, bp->k.p,       &bp_sub);
+				bp_pos_to_bucket_and_offset(ca, other_bp.k->p, &other_bp_sub);
+			}
+
+			u32 overlap_sub_start = max(bp_sub, other_bp_sub);
+			u32 overlap_sub_end   = min(bp_sub       + bp->v.bucket_len,
+						    other_bp_sub + other_bp.v->bucket_len);
+			if (overlap_sub_end <= overlap_sub_start)
+				return 0; /* bps don't actually overlap */
+
+			u32 overlap_len = overlap_sub_end - overlap_sub_start;
+			u64 k1_overlap_start = bkey_start_offset(extent.k) +
+					       (overlap_sub_start - bp_sub);
+			u64 k1_overlap_end   = k1_overlap_start + overlap_len;
+			u64 k2_overlap_start = bkey_start_offset(other_extent.k) +
+					       (overlap_sub_start - other_bp_sub);
+			u64 k2_overlap_end   = k2_overlap_start + overlap_len;
+
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "duplicate extents pointing to overlapping space on dev %llu, converting overlap to reflink\n",
+				   bp->k.p.inode);
+			bch2_bkey_val_to_text(&buf, c, extent);
+			prt_newline(&buf);
+			bch2_bkey_val_to_text(&buf, c, other_extent);
+
+			if (fsck_err(trans, dup_extents_to_reflink, "%s", buf.buf))
+				try(extents_to_reflink(trans,
+						       bp->v.btree_id, bp->v.level, extent,
+						       k1_overlap_start, k1_overlap_end,
+						       other_bp.v->btree_id, other_bp.v->level, other_extent,
+						       k2_overlap_start, k2_overlap_end));
+			return 0;
+		}
+
 		CLASS(printbuf, buf)();
 		prt_printf(&buf, "duplicate extents pointing to same space on dev %llu\n", bp->k.p.inode);
 		bch2_bkey_val_to_text(&buf, c, extent);
@@ -652,6 +754,8 @@ static int check_bp_dup(struct btree_trans *trans,
 		bch2_bkey_val_to_text(&buf, c, other_extent);
 		bch_err(c, "%s", buf.buf);
 		return bch_err_throw(c, fsck_repair_unimplemented);
+fsck_err:
+		return ret;
 	}
 }
 
