@@ -250,6 +250,9 @@ struct journal {
 	} __aligned(SMP_CACHE_BYTES);
 
 	unsigned long		flags;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	struct task_struct	*stop_thread;
+#endif
 
 	/* Max size of current journal entry */
 	unsigned		cur_entry_u64s;

@@ -416,6 +416,10 @@ void bch2_fs_journal_stop(struct journal *j)
 		return;
 
 	bch2_journal_reclaim_stop(j);
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = current;
+#endif
 	bch2_journal_flush_all_pins(j);
 
 	/*
@@ -426,6 +430,10 @@ void bch2_fs_journal_stop(struct journal *j)
 
 	bch2_journal_shutdown_quiesce(j);
 	cancel_delayed_work_sync(&j->write_work);
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = ERR_PTR(-EROFS);
+#endif
 
 	WARN(!bch2_journal_error(j) &&
 	     test_bit(JOURNAL_replay_done, &j->flags) &&
@@ -765,5 +773,8 @@ int bch2_fs_journal_init_rw(struct journal *j)
 int bch2_fs_journal_init(struct journal *j)
 {
 	try(percpu_init_rwsem(&j->pin_resize_lock));
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = ERR_PTR(-EROFS);
+#endif
 	return 0;
 }
