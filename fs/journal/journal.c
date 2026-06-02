@@ -674,6 +674,26 @@ static void journal_buf_prealloc(struct journal *j)
 	}
 }
 
+/*
+ * Close any blocked-state stats that the slowpath wait may have opened. Called
+ * on every __journal_res_get() success so durations reflect "for how long was
+ * a writer blocked on this condition". Cheap when nothing was open
+ * (track_event_change is a single compare-against-prior-state).
+ *
+ * blocked_journal_blocked and blocked_journal_max_in_flight are *not* closed
+ * here: those track the actual system condition (j->blocked / journal write
+ * in-flight count) and have their own close sites tied to the condition
+ * clearing.
+ */
+static inline void journal_res_unblocked(struct bch_fs *c)
+{
+	track_event_change(&c->times[BCH_TIME_blocked_journal_max_open],	false);
+	track_event_change(&c->times[BCH_TIME_blocked_journal_full],		false);
+	track_event_change(&c->times[BCH_TIME_blocked_journal_pin_full],	false);
+	track_event_change(&c->times[BCH_TIME_blocked_journal_buf_enomem],	false);
+	track_event_change(&c->times[BCH_TIME_blocked_journal_stuck],		false);
+}
+
 static int __journal_res_get(struct journal *j, struct journal_res *res,
 			     unsigned flags)
 {
@@ -681,8 +701,10 @@ static int __journal_res_get(struct journal *j, struct journal_res *res,
 	struct journal_buf *buf;
 	int ret;
 retry:
-	if (journal_res_get_fast(j, res, flags))
-		return 0;
+	if (journal_res_get_fast(j, res, flags)) {
+		ret = 0;
+		goto out;
+	}
 
 	ret = bch2_journal_error(j);
 	if (unlikely(ret))
@@ -726,22 +748,39 @@ retry:
 unlock:
 	spin_unlock(&j->lock);
 out:
-	if (likely(!ret))
+	if (likely(!ret)) {
+		journal_res_unblocked(c);
 		return 0;
+	}
 	if (ret == -BCH_ERR_journal_retry_open)
 		goto retry;
 
 	if (journal_error_check_stuck(j, ret, flags))
 		ret = bch_err_throw(c, journal_stuck);
 
-	if (ret == -BCH_ERR_journal_blocked)
+	switch (ret) {
+	case -BCH_ERR_journal_blocked:
 		track_event_change(&c->times[BCH_TIME_blocked_journal_blocked], true);
-
-	if (ret == -BCH_ERR_journal_max_in_flight)
+		break;
+	case -BCH_ERR_journal_max_in_flight:
 		track_event_change(&c->times[BCH_TIME_blocked_journal_max_in_flight], true);
-
-	if (ret == -BCH_ERR_journal_max_open)
+		break;
+	case -BCH_ERR_journal_max_open:
 		track_event_change(&c->times[BCH_TIME_blocked_journal_max_open], true);
+		break;
+	case -BCH_ERR_journal_full:
+		track_event_change(&c->times[BCH_TIME_blocked_journal_full], true);
+		break;
+	case -BCH_ERR_journal_pin_full:
+		track_event_change(&c->times[BCH_TIME_blocked_journal_pin_full], true);
+		break;
+	case -BCH_ERR_journal_buf_enomem:
+		track_event_change(&c->times[BCH_TIME_blocked_journal_buf_enomem], true);
+		break;
+	case -BCH_ERR_journal_stuck:
+		track_event_change(&c->times[BCH_TIME_blocked_journal_stuck], true);
+		break;
+	}
 
 	if (bch2_err_matches(ret, BCH_ERR_operation_blocked))
 		event_inc_trace(c, journal_res_get_blocked, buf, ({

@@ -374,6 +374,18 @@ BCH_DEBUG_PARAMS_ALL()
 	  "not yet closed for writing")					\
 	x(blocked_journal_blocked,					\
 	  "Blocked: waiting for write buffer flush")			\
+	x(blocked_journal_full,						\
+	  "Blocked: writer hit journal_full (no room in current "	\
+	  "entry, reclaim not keeping up)")				\
+	x(blocked_journal_pin_full,					\
+	  "Blocked: writer hit journal_pin_full (pin fifo full, "	\
+	  "btree node / key cache flushers not keeping up)")		\
+	x(blocked_journal_buf_enomem,					\
+	  "Blocked: writer hit journal_buf_enomem (preallocated "	\
+	  "data buffer not topped up)")					\
+	x(blocked_journal_stuck,					\
+	  "Blocked: writer hit journal_stuck (10s timeout fired "	\
+	  "in slowpath wait)")						\
 	x(blocked_key_cache_flush,					\
 	  "Blocked: waiting for key cache flush")			\
 	x(blocked_allocate,						\
