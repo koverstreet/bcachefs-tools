@@ -858,9 +858,7 @@ err:
 
 static int bch2_unlink(struct inode *vdir, struct dentry *dentry)
 {
-	struct bch_inode_info *dir= to_bch_ei(vdir);
-	struct bch_fs *c = dir->v.i_sb->s_fs_info;
-
+	struct bch_inode_info *dir = to_bch_ei(vdir);
 	int ret = __bch2_unlink(vdir, dentry, false);
 	return bch2_err_class(ret);
 }
