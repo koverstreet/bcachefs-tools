@@ -44,6 +44,51 @@ else
 	BUILT_BIN = target/release/bcachefs
 endif
 
+# Persist build-option vars across invocations: `make debug` writes
+# build.vars; subsequent `make` / `make install` re-reads it. `make clean`
+# wipes it. This makes `make debug; make install` install a debug DKMS.
+-include build.vars
+
+# Vars that propagate from the userspace build into the host-side
+# `dkms build`. install_dkms writes whichever are set into
+# $(DKMSDIR)/build.vars; dkms/Makefile re-includes that file and exports
+# the same names so fs/Makefile's ifdefs fire during the module build.
+BCACHEFS_DKMS_FORWARD := BCACHEFS_DEBUG \
+                        BCACHEFS_TESTS \
+                        BCACHEFS_INJECT_TRANSACTION_RESTARTS
+
+# Vars persisted into the *local* build.vars across invocations - a
+# superset of BCACHEFS_DKMS_FORWARD that also covers MAKE_DEBUG, the
+# userspace-side debug switch (see below).
+BCACHEFS_LOCAL_PERSIST := MAKE_DEBUG $(BCACHEFS_DKMS_FORWARD)
+
+# `make debug` is a convenience alias that sets:
+#   MAKE_DEBUG:        userspace `bcachefs` binary built with
+#                      -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
+#   BCACHEFS_DEBUG:    DKMS kernel-module debug build (forwarded via
+#                      $(DKMSDIR)/build.vars and fs/Makefile's ifdef)
+#   BCACHEFS_TESTS:    in-kernel unit tests in the DKMS module
+# All three are persisted via build.vars for the entire invocation and
+# any followups (`make debug; make install`).
+#
+# MAKE_DEBUG is intentionally distinct from BCACHEFS_DEBUG: ktest sets
+# BCACHEFS_DEBUG=1 in env to flip the DKMS module debug build, and must
+# not, on its own, also flip the userspace binary into a debug build
+# (the userspace debug checks blow CI test timeouts).
+#
+# BCACHEFS_INJECT_TRANSACTION_RESTARTS is deliberately not included -
+# the restart-injection build is only useful for its dedicated test
+# variant and shouldn't ride along with everyday debug builds.
+ifeq ($(filter debug,$(MAKECMDGOALS)),debug)
+    MAKE_DEBUG := 1
+    BCACHEFS_DEBUG := 1
+    BCACHEFS_TESTS := 1
+endif
+
+ifdef MAKE_DEBUG
+    EXTRA_CFLAGS += -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
+endif
+
 # Prevent recursive expansions of $(CFLAGS) to avoid repeatedly performing
 # compile tests
 CFLAGS:=$(CFLAGS)
@@ -163,8 +208,11 @@ endif	# PKGCONFIG_SERVICEDIR
 all: bcachefs initramfs/hook dkms/dkms.conf $(optional_build)
 
 .PHONY: debug
-debug: -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
-debug: bcachefs
+debug: write-build-vars bcachefs
+
+.PHONY: write-build-vars
+write-build-vars:
+	@( :; $(foreach v,$(BCACHEFS_LOCAL_PERSIST),$(if $($(v)),printf '%s := %s\n' '$(v)' '$($(v))';)) ) > build.vars
 
 .PHONY: TAGS tags
 TAGS:
@@ -288,6 +336,7 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	(cd fs; find -name '*.[ch]' -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
+	@( :; $(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),printf '%s := %s\n' '$(v)' '$($(v))';)) ) > $(DESTDIR)$(DKMSDIR)/build.vars
 
 # dkms sizes its build parallelism from nproc, ignoring the -j passed to
 # `make dkms-reload`. In a memory-constrained VM — ktest runs tests in
@@ -322,7 +371,7 @@ dkms-reload:
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
-	$(Q)$(RM) libbcachefs.a c_src/libbcachefs.a .version dkms/dkms.conf *.tar.xz $(OBJS) $(DEPS) $(DOCGENERATED)
+	$(Q)$(RM) libbcachefs.a c_src/libbcachefs.a .version dkms/dkms.conf build.vars *.tar.xz $(OBJS) $(DEPS) $(DOCGENERATED)
 	$(Q)$(CARGO_CLEAN)
 	$(Q)$(RM) -f $(built_scripts)
 
