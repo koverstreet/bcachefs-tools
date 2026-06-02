@@ -243,6 +243,25 @@ impl fmt::Display for Bpos {
     }
 }
 
+/// Parse a bpos field that holds a u64 (inode, offset). Accepts the literal
+/// tokens "U64_MAX" / "U32_MAX" as their respective sentinel values, matching
+/// how positions are printed in dmesg / bcachefs_to_text output.
+fn parse_bpos_u64(s: &str) -> Result<u64, BchToolsErr> {
+    match s {
+        "U64_MAX" => Ok(u64::MAX),
+        "U32_MAX" => Ok(u32::MAX as u64),
+        _        => s.parse().map_err(|_| BchToolsErr::InvalidBpos),
+    }
+}
+
+/// Same for the snapshot field (u32).
+fn parse_bpos_u32(s: &str) -> Result<u32, BchToolsErr> {
+    match s {
+        "U32_MAX" => Ok(u32::MAX),
+        _        => s.parse().map_err(|_| BchToolsErr::InvalidBpos),
+    }
+}
+
 impl FromStr for c::bpos {
     type Err = BchToolsErr;
 
@@ -264,9 +283,12 @@ impl FromStr for c::bpos {
         let off_str = fields.next().ok_or(BchToolsErr::InvalidBpos)?;
         let snp_str = fields.next();
 
-        let ino: u64 = ino_str.parse().map_err(|_| BchToolsErr::InvalidBpos)?;
-        let off: u64 = off_str.parse().map_err(|_| BchToolsErr::InvalidBpos)?;
-        let snp: u32 = snp_str.and_then(|s| s.parse().ok()).unwrap_or(0);
+        let ino: u64 = parse_bpos_u64(ino_str)?;
+        let off: u64 = parse_bpos_u64(off_str)?;
+        let snp: u32 = snp_str
+            .map(parse_bpos_u32)
+            .transpose()?
+            .unwrap_or(0);
 
         Ok(c::bpos {
             inode:    ino,
