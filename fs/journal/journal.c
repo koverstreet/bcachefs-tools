@@ -437,7 +437,7 @@ static int __journal_entry_open_one(struct journal *j)
 	if (!fifo_free(&j->in_flight))
 		return bch_err_throw(c, journal_max_in_flight);
 
-	if (atomic64_read(&j->seq) - j->seq_write_started == JOURNAL_STATE_BUF_NR)
+	if (journal_state_count(j->reservations, (journal_cur_seq(j) + 1) & JOURNAL_STATE_BUF_MASK))
 		return bch_err_throw(c, journal_max_open);
 
 	if (unlikely(journal_cur_seq(j) >= JOURNAL_SEQ_MAX)) {
