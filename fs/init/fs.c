@@ -1365,6 +1365,9 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 		try(bch2_fs_opt_version_init(c, out));
 	}
 
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG))
+		prt_printf(out, "*** DEBUG BUILD ***\n");
+
 	scoped_guard(mutex, &bch2_fs_list_lock)
 		try(bch2_fs_online(c));
 
