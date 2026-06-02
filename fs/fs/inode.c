@@ -495,7 +495,7 @@ int bch2_inode_find_by_inum_snapshot(struct btree_trans *trans,
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	if (!bkey_is_inode(k.k))
-		return -BCH_ERR_ENOENT_inode;
+		return bch_err_throw(trans->c, ENOENT_inode);
 	bch2_inode_unpack(trans->c, k, inode);
 	return 0;
 }
@@ -530,21 +530,21 @@ int bch2_inode_find_oldest_snapshot(struct btree_trans *trans, u64 inum, u32 sna
 				    struct bch_inode_unpacked *root)
 {
 	struct bkey_s_c k;
-	int ret = -BCH_ERR_ENOENT_inode, ret2;
+	int ret;
 
 	for_each_btree_key_norestart(trans, iter, BTREE_ID_inodes,
 				     SPOS(0, inum, snapshot),
-				     BTREE_ITER_all_snapshots, k, ret2) {
+				     BTREE_ITER_all_snapshots, k, ret) {
 		if (k.k->p.offset != inum)
 			break;
 		if (!bkey_is_inode(k.k) ||
 		    !bch2_snapshot_is_ancestor(trans, snapshot, k.k->p.snapshot))
 			continue;
 		bch2_inode_unpack(trans->c, k, root);
-		ret = 0;
+		return 0;
 	}
 
-	return ret2 ?: ret;
+	return ret ?: bch_err_throw(trans->c, ENOENT_inode);
 }
 
 int bch2_inode_write_flags(struct btree_trans *trans,
