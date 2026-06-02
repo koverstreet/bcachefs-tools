@@ -590,6 +590,9 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 	scoped_guard(spinlock, &c->journal.lock) {
 		set_bit(JOURNAL_need_flush_write, &c->journal.flags);
 		set_bit(JOURNAL_running, &c->journal.flags);
+#ifdef CONFIG_BCACHEFS_DEBUG
+		c->journal.stop_thread = NULL;
+#endif
 		bch2_journal_space_available(&c->journal);
 	}
 

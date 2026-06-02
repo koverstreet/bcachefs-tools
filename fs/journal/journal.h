@@ -322,6 +322,12 @@ static inline bool journal_entry_empty(struct jset *j)
 	return true;
 }
 
+static inline int bch2_journal_error(struct journal *j)
+{
+	return j->reservations.cur_entry_offset == JOURNAL_ENTRY_ERROR_VAL
+		? -BCH_ERR_journal_shutdown : 0;
+}
+
 /*
  * Drop reference on a buffer index and return true if the count has hit zero.
  */
@@ -454,6 +460,7 @@ static inline int bch2_journal_res_get(struct journal *j, struct journal_res *re
 {
 	EBUG_ON(res->ref);
 	EBUG_ON(!test_bit(JOURNAL_running, &j->flags));
+	EBUG_ON(j->stop_thread && j->stop_thread != current && !bch2_journal_error(j));
 
 	res->u64s = u64s;
 
@@ -494,12 +501,6 @@ int bch2_journal_meta(struct journal *);
 
 void bch2_journal_halt_locked(struct journal *);
 void bch2_journal_halt(struct journal *);
-
-static inline int bch2_journal_error(struct journal *j)
-{
-	return j->reservations.cur_entry_offset == JOURNAL_ENTRY_ERROR_VAL
-		? -BCH_ERR_journal_shutdown : 0;
-}
 
 struct bch_dev;
 

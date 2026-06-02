@@ -336,6 +336,10 @@ void bch2_fs_journal_stop(struct journal *j)
 		return;
 
 	bch2_journal_reclaim_stop(j);
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = current;
+#endif
 	bch2_journal_flush_all_pins(j);
 
 	wait_event(j->wait, bch2_journal_entry_close(j));
@@ -348,6 +352,10 @@ void bch2_fs_journal_stop(struct journal *j)
 
 	bch2_journal_shutdown_quiesce(j);
 	cancel_delayed_work_sync(&j->write_work);
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = ERR_PTR(-EROFS);
+#endif
 
 	WARN(!bch2_journal_error(j) &&
 	     test_bit(JOURNAL_replay_done, &j->flags) &&
@@ -621,6 +629,10 @@ void bch2_fs_journal_init_early(struct journal *j)
 int bch2_fs_journal_init(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = ERR_PTR(-EROFS);
+#endif
 
 	j->free_buf_size = j->buf_size_want = JOURNAL_ENTRY_SIZE_MIN;
 	j->free_buf = kvmalloc(j->free_buf_size, GFP_KERNEL);
