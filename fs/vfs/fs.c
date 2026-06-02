@@ -657,8 +657,10 @@ err_trans:
 /* methods */
 
 static int dirent_to_missing_inode(struct btree_trans *trans,
-				   subvol_inum dir,
 				   struct bkey_s_c_dirent d,
+				   subvol_inum dir,
+				   subvol_inum inum,
+				   u32 snapshot,
 				   int ret)
 {
 	struct bch_fs *c = trans->c;
@@ -669,7 +671,8 @@ static int dirent_to_missing_inode(struct btree_trans *trans,
 	bch2_bkey_val_to_text(&msg.m, c, d.s_c);
 	prt_str(&msg.m, "\n in: ");
 	try(bch2_inum_to_path(trans, dir, &msg.m));
-	prt_newline(&msg.m);
+	prt_printf(&msg.m, "\ndir subvol %llu inum subvol %llu snapshot %u\n",
+		   dir.subvol, inum.subvol, snapshot);
 	__bch2_inconsistent_error(c, &msg.m);
 	return 0;
 }
@@ -726,7 +729,9 @@ static struct bch_inode_info *bch2_lookup_trans(struct btree_trans *trans,
 	 * back to this dirent
 	 */
 	if (bch2_err_matches(ret, ENOENT))
-		ret = dirent_to_missing_inode(trans, dir, d, ret) ?: ret;
+		ret = dirent_to_missing_inode(trans, d, dir, inum,
+					      le32_to_cpu(subvol.snapshot),
+					      ret) ?: ret;
 
 	return ret ? ERR_PTR(ret) : inode;
 }
