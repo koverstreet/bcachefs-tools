@@ -163,7 +163,7 @@ endif	# PKGCONFIG_SERVICEDIR
 all: bcachefs initramfs/hook dkms/dkms.conf $(optional_build)
 
 .PHONY: debug
-debug: CFLAGS+=-Werror -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
+debug: -DCONFIG_BCACHEFS_DEBUG=y -DCONFIG_VALGRIND=y
 debug: bcachefs
 
 .PHONY: TAGS tags
