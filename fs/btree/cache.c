@@ -891,6 +891,19 @@ static struct btree *btree_node_cannibalize(struct btree_trans *trans, bool pcpu
 	}
 }
 
+static bool system_memory_usage_high(struct bch_fs *c)
+{
+	size_t avail = si_mem_available();
+	size_t total = totalram_pages();
+	if (avail >= total >> 2)
+		return false;
+
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+	size_t pinned_pages = ((btree_cache_nr_live(bc) + bc->nr_freeable) *
+			       c->opts.btree_node_size) >> PAGE_SHIFT;
+	return pinned_pages > (total - avail) >> 2;
+}
+
 struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_read_locks)
 {
 	struct bch_fs *c = trans->c;
@@ -902,6 +915,16 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_rea
 
 	struct btree *b = bch2_btree_node_grab(c, &bc->freeable, pcpu_read_locks, 0);
 	if (b)
+		goto got_mem;
+
+	/*
+	 * If MM is tight AND we're a meaningful fraction of in-use memory,
+	 * reclaim from our own cache instead of asking MM. MM's shrinker
+	 * callbacks haven't been aggressive enough to keep bcachefs out of
+	 * OOM under heavy load (TiCPU report).
+	 */
+	if (system_memory_usage_high(c) &&
+	    (b = bch2_btree_node_grab(c, &bc->live[pcpu_read_locks].clean, pcpu_read_locks, 0)))
 		goto got_mem;
 
 	struct btree_node_bufs bufs = { .byte_order = ilog2(c->opts.btree_node_size) };
