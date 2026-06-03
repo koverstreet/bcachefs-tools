@@ -40,4 +40,11 @@ static inline unsigned long totalram_pages(void)
 	return _totalram_pages;
 }
 
+static inline long si_mem_available(void)
+{
+	struct sysinfo si;
+	si_meminfo(&si);
+	return (si.freeram * si.mem_unit) >> PAGE_SHIFT;
+}
+
 #endif /* _TOOLS_LINUX_MM_H */

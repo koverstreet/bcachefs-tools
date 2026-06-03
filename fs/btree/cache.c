@@ -921,6 +921,35 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_rea
 	if (b)
 		goto got_mem;
 
+	/*
+	 * If MM is tight AND we're a meaningful fraction of in-use memory,
+	 * reclaim from our own cache instead of asking MM. MM's shrinker
+	 * callbacks haven't been aggressive enough to keep bcachefs out of
+	 * OOM under heavy load (TiCPU report).
+	 *
+	 * Low water: si_mem_available() < totalram >> 2 (25%).
+	 * Worth-doing: our pinned pages > (totalram - avail) >> 3 — only
+	 * self-reclaim when we're hoarding > 1/8 of what's actually used.
+	 */
+	long avail = si_mem_available();
+	long total = totalram_pages();
+	if (avail < total >> 2) {
+		long pinned_pages =
+			((long)(btree_cache_nr_live(bc) + bc->nr_freeable) *
+			 c->opts.btree_node_size) >> PAGE_SHIFT;
+		if (pinned_pages > (total - avail) >> 3) {
+			struct shrink_control sc = {
+				.nr_to_scan	= 16,
+				.gfp_mask	= GFP_KERNEL,
+			};
+			bch2_btree_cache_scan(bc->live[0].shrink, &sc);
+			b = bch2_btree_node_grab(c, &bc->freeable, pcpu_read_locks, 0);
+			if (b)
+				goto got_mem;
+			/* fall through and try MM as last resort */
+		}
+	}
+
 	struct btree_node_bufs bufs = { .byte_order = ilog2(c->opts.btree_node_size) };
 	if (__btree_node_data_alloc(c, &bufs, GFP_NOWAIT, true)) {
 		bch2_trans_unlock(trans);
