@@ -866,8 +866,18 @@ void bch2_trans_node_verify_not_in_iters(struct btree_trans *trans, struct btree
 	struct btree_path *path;
 	unsigned i, level = b->c.level;
 
+	/*
+	 * path->l[level].b is also a cache for fast relock: a path can carry
+	 * a node pointer at a level it has released the lock on. When the
+	 * btree node cache slot for that previously-cached node is recycled
+	 * for an unrelated node (different btree, even), the cached pointer
+	 * stale-coincides with whatever now occupies the slot. Only flag a
+	 * leak when the path is actually still holding a lock at this level
+	 * - that's the case bch2_trans_node_add couldn't migrate.
+	 */
 	trans_for_each_path(trans, path, i)
-		if (unlikely(path->l[level].b == b)) {
+		if (unlikely(path->l[level].b == b &&
+			     btree_node_locked(path, level))) {
 			CLASS(printbuf, buf)();
 			prt_printf(&buf, "path still references btree node being freed, level %u:\n", level);
 			bch2_btree_pos_to_text(&buf, trans->c, b);
