@@ -2650,7 +2650,7 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_iter *iter, struct bp
 			*search_key = !bpos_eq(*search_key, k.k->p)
 				? k.k->p
 				: bpos_successor(k.k->p);
-		} else if (likely(bpos_lt(l->b->key.k.p, *end))) {
+		} else if (likely(bkey_lt(l->b->key.k.p, *end))) {
 			/* Advance to next leaf node: */
 			*search_key = bpos_successor(l->b->key.k.p);
 		} else {
