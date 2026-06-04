@@ -170,6 +170,8 @@ write_attribute(trigger_reconcile_wakeup);
 write_attribute(trigger_reconcile_pending_wakeup);
 write_attribute(trigger_delete_dead_snapshots);
 write_attribute(trigger_emergency_read_only);
+write_attribute(test_snapshot_is_ancestor);
+write_attribute(test_inode_find_by_inum_snapshot);
 read_attribute(gc_gens_pos);
 
 read_attribute(uuid);
@@ -510,6 +512,77 @@ STORE(bch2_fs)
 		bch2_fs_emergency_read_only(c, &msg.m);
 	}
 
+	if (attr == &sysfs_test_snapshot_is_ancestor) {
+		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+		char *p = tmp;
+		char *id_str		= strsep(&p, " \t\n");
+		char *ancestor_str	= strsep(&p, " \t\n");
+		u32 id, ancestor;
+
+		if (!id_str || !ancestor_str ||
+		    kstrtou32(id_str,       0, &id) ||
+		    kstrtou32(ancestor_str, 0, &ancestor))
+			return -EINVAL;
+
+		bool r = bch2_snapshot_is_ancestor_early(c, id, ancestor);
+		bch_notice(c, "is_ancestor(id=%u, ancestor=%u) = %s",
+			   id, ancestor, r ? "true" : "false");
+	}
+
+	if (attr == &sysfs_test_inode_find_by_inum_snapshot) {
+		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL);
+		if (!tmp)
+			return -ENOMEM;
+		char *p = tmp;
+		char *inum_str		= strsep(&p, " \t\n");
+		char *snap_str		= strsep(&p, " \t\n");
+		char *cached_str	= strsep(&p, " \t\n");
+		u64 inum;
+		u32 snapshot;
+		unsigned cached = false;
+
+		if (!inum_str || !snap_str ||
+		    kstrtou64(inum_str, 0, &inum) ||
+		    kstrtou32(snap_str, 0, &snapshot) ||
+		    (cached_str && kstrtouint(cached_str, 0, &cached)))
+			return -EINVAL;
+
+		unsigned flags = cached ? BTREE_ITER_cached : 0;
+
+		CLASS(btree_trans, trans)(c);
+		struct bch_inode_unpacked inode;
+		int ret = lockrestart_do(trans,
+			bch2_inode_find_by_inum_snapshot(trans, inum, snapshot, &inode, flags));
+
+		CLASS(bch_log_msg, msg)(c);
+		if (ret) {
+			prt_printf(&msg.m, "find_by_inum_snapshot(%llu, %u, cached=%d) = %s\n",
+				   inum, snapshot, cached, bch2_err_str(ret));
+		} else {
+			prt_printf(&msg.m, "find_by_inum_snapshot(%llu, %u, cached=%d):\n",
+				   inum, snapshot, cached);
+			bch2_inode_unpacked_to_text(&msg.m, &inode);
+		}
+
+		{
+			CLASS(btree_iter, iter)(trans, BTREE_ID_inodes,
+						SPOS(0, inum, snapshot), flags);
+			struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+			prt_printf(&msg.m, "peek_slot:\n");
+			bch2_bkey_val_to_text(&msg.m, c, k);
+		}
+
+		{
+			CLASS(btree_iter, iter)(trans, BTREE_ID_inodes,
+						SPOS(0, inum, snapshot), flags);
+			struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &SPOS(0, inum, U32_MAX)));
+			prt_printf(&msg.m, "peek:\n");
+			bch2_bkey_val_to_text(&msg.m, c, k);
+		}
+	}
+
 #ifdef CONFIG_BCACHEFS_TESTS
 	if (attr == &sysfs_perf_test) {
 		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL), *p = tmp;
@@ -651,6 +724,8 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_trigger_reconcile_pending_wakeup,
 	&sysfs_trigger_delete_dead_snapshots,
 	&sysfs_trigger_emergency_read_only,
+	&sysfs_test_snapshot_is_ancestor,
+	&sysfs_test_inode_find_by_inum_snapshot,
 
 	&sysfs_gc_gens_pos,
 
