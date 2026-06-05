@@ -335,6 +335,10 @@ int bch2_journal_pin_fifo_resize(struct journal *j)
 
 	struct journal_entry_pin_list *new_data =
 		kvmalloc(new_buf_elems * sizeof(*new_data), GFP_KERNEL);
+
+	event_inc_trace(c, journal_pin_resize, buf,
+			prt_printf(&buf, "new size: %zu", new_size));
+
 	if (!new_data)
 		return bch_err_throw(c, ENOMEM_journal_pin_fifo);
 
