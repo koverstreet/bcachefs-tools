@@ -360,10 +360,11 @@ static CLOSURE_CALLBACK(journal_write_done)
 			j->last_empty_seq = seq;
 		j->seq_ondisk = seq;
 
-		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, JOURNAL_BUF_NOFLUSH) }};
-
-		if (wait.list.first > JOURNAL_BUF_NOFLUSH)
-			closure_wake_up(&wait);
+		if (w->wait.list.first != JOURNAL_BUF_NOFLUSH) {
+			struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, JOURNAL_BUF_NOFLUSH) }};
+			if (wait.list.first > JOURNAL_BUF_NOFLUSH)
+				closure_wake_up(&wait);
+		}
 
 		completed = true;
 
@@ -446,6 +447,28 @@ static CLOSURE_CALLBACK(journal_write_done)
 	closure_put(&c->cl);
 }
 
+static CLOSURE_CALLBACK(journal_write_done_flush)
+{
+	closure_type(w, struct journal_buf, io);
+	struct journal *j = w->j;
+
+	/*
+	 * Wake up flush waiters early, if there wasn't an error:
+	 *
+	 * Flush writes wait for previous outstanding writes, so there's no
+	 * ordering concerns here (as journal_write_done normally has to
+	 * handle). Don't mark it as closed to new flush waiters yet, since
+	 * we're not taking j->lock and updating the various seq_ondisk fields
+	 * yet:
+	 */
+	if (!w->failed.nr && w->wait.list.first > JOURNAL_BUF_NOFLUSH) {
+		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, NULL) }};
+		closure_wake_up(&wait);
+	}
+
+	continue_at(cl, journal_write_done, j->wq);
+}
+
 static void journal_write_endio(struct bio *bio)
 {
 	struct journal_bio *jbio = container_of(bio, struct journal_bio, bio);
@@ -475,12 +498,11 @@ static CLOSURE_CALLBACK(journal_write_submit)
 	struct journal *j = w->j;
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	unsigned sectors = vstruct_sectors(w->data, c->block_bits);
+	bool flush = !JSET_NO_FLUSH(w->data);
 
 	event_inc_trace(c, journal_write, buf, ({
 		prt_printf(&buf, "seq %llu flush %u sectors %u\n",
-			   le64_to_cpu(w->data->seq),
-			   !JSET_NO_FLUSH(w->data),
-			   sectors);
+			   le64_to_cpu(w->data->seq), flush, sectors);
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&w->key));
 	}));
 
@@ -504,9 +526,9 @@ static CLOSURE_CALLBACK(journal_write_submit)
 		 * REQ_SYNC and REQ_IDLE set...
 		 */
 		blk_opf_t opf = REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|REQ_META;
-		if (!JSET_NO_FLUSH(w->data))
+		if (flush)
 			opf |= REQ_FUA;
-		if (!JSET_NO_FLUSH(w->data) && !w->separate_flush)
+		if (flush && !w->separate_flush)
 			opf |= REQ_PREFLUSH;
 
 		/*
@@ -536,7 +558,10 @@ static CLOSURE_CALLBACK(journal_write_submit)
 
 	blk_finish_plug(&plug);
 
-	continue_at(cl, journal_write_done, j->wq);
+	if (flush)
+		continue_at(cl, journal_write_done_flush, NULL);
+	else
+		continue_at(cl, journal_write_done, j->wq);
 }
 
 static CLOSURE_CALLBACK(journal_write_preflush)
