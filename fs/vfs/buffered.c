@@ -791,7 +791,7 @@ readpage:
 	if (ret)
 		goto err;
 out:
-	ret = bch2_folio_set(c, inode_inum(inode), &folio, 1);
+	ret = bch2_folio_set(c, inode, &folio, 1);
 	if (ret)
 		goto err;
 
@@ -931,7 +931,7 @@ static int __bch2_buffered_write(struct bch_fs *c,
 		}
 	}
 
-	ret = bch2_folio_set(c, inode_inum(inode), fs.data, fs.nr);
+	ret = bch2_folio_set(c, inode, fs.data, fs.nr);
 	if (ret)
 		goto out;
 

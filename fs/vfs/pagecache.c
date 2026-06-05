@@ -186,14 +186,16 @@ static void __bch2_folio_set(struct folio *folio,
  * Initialize bch_folio state (allocated/unallocated, nr_replicas) from the
  * extents btree:
  */
-int bch2_folio_set(struct bch_fs *c, subvol_inum inum,
+int bch2_folio_set(struct bch_fs *c,
+		   struct bch_inode_info *inode,
 		   struct folio **fs, unsigned nr_folios)
 {
 	u64 offset = folio_sector(fs[0]);
 	bool need_set = false;
 
 	for (unsigned folio_idx = 0; folio_idx < nr_folios; folio_idx++) {
-		struct bch_folio *s = bch2_folio_create(fs[folio_idx], GFP_KERNEL);
+		struct folio *f = fs[folio_idx];
+		struct bch_folio *s = bch2_folio_create(f, GFP_KERNEL);
 		if (!s)
 			return -ENOMEM;
 
@@ -207,9 +209,9 @@ int bch2_folio_set(struct bch_fs *c, subvol_inum inum,
 
 	return bch2_trans_run(c,
 		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
-				   POS(inum.inum, offset),
-				   POS(inum.inum, U64_MAX),
-				   inum.subvol, BTREE_ITER_slots, k, ({
+				   POS(inode->ei_inum.inum, offset),
+				   POS(inode->ei_inum.inum, U64_MAX),
+				   inode->ei_inum.subvol, BTREE_ITER_slots, k, ({
 			unsigned nr_ptrs = bch2_bkey_nr_ptrs_fully_allocated(c, k);
 			unsigned state = bkey_to_sector_state(c, k);
 
@@ -713,7 +715,7 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 
 	len = min_t(unsigned, len, isize - file_offset);
 
-	if (bch2_folio_set(c, inode_inum(inode), &folio, 1) ?:
+	if (bch2_folio_set(c, inode, &folio, 1) ?:
 	    bch2_folio_reservation_get(c, inode, folio, &res, offset, len)) {
 		folio_unlock(folio);
 		ret = VM_FAULT_SIGBUS;
