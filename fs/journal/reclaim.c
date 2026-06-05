@@ -115,10 +115,46 @@ journal_dev_space_available(struct journal *j, struct bch_dev *ca,
 	struct journal_device *ja = &ca->journal;
 	unsigned bucket_size_aligned = round_down(ca->mi.bucket_size, block_sectors(c));
 
+	/*
+	 * Both .total values are capped by the in-memory dirty budget: we
+	 * can't keep more than RAM/4 of journal dirty in memory, so the space
+	 * the watermark sees is bounded by RAM, not by raw device capacity.
+	 * (A global budget, applied per-device; the nr_devs_want-th largest
+	 * pick in __journal_space_available() keeps the aggregate bounded.)
+	 *
+	 * The cap is asymmetric, and that asymmetry is the point: the watermark
+	 * ratio (clean * 4 <= total, see bch2_journal_set_watermark()) has to
+	 * measure how full the dirty budget is, not how big the disk is. So:
+	 *
+	 *  - journal_space_total is capped at a flat RAM/4 - dirty is NOT
+	 *    subtracted, so it's a constant ceiling.
+	 *  - journal_space_clean/_clean_ondisk are capped at RAM/4 - dirty,
+	 *    so they shrink as dirty grows, and the ratio falls as the budget
+	 *    fills. That's the intended soft throttle.
+	 *
+	 * Both halves matter. Leaving journal_space_total at true device
+	 * capacity (as it once was) breaks it the other way: any fs whose
+	 * journal is larger than RAM has clean permanently small vs total, so
+	 * low_on_space is stuck on even when the journal is nearly empty.
+	 * Conversely, subtracting dirty from journal_space_total too would let
+	 * total shrink toward 0 as dirty grows and strangle the journal. A flat
+	 * RAM/4 ceiling for total is what keeps both failure modes away.
+	 *
+	 * Only .total is clamped, not next_entry: .total feeds the watermark
+	 * (a soft throttle - low-priority writers wait, reclaim-priority writes
+	 * still proceed), whereas next_entry feeds cur_entry_sectors, the hard
+	 * reservation limit. Clamping next_entry would let the budget drive
+	 * cur_entry_sectors to 0, blocking even the journal writes that advance
+	 * last_seq and let dirty drain - a self-deadlock. The RAM budget must
+	 * stay a soft limit.
+	 */
+	size_t mem_limit = totalram_pages() * PAGE_SIZE / 4;
+
 	if (from == journal_space_total)
 		return (struct journal_space) {
 			.next_entry	= bucket_size_aligned,
-			.total		= bucket_size_aligned * ja->nr,
+			.total		= min(bucket_size_aligned * ja->nr,
+					      mem_limit >> 9),
 		};
 
 	unsigned buckets = bch2_journal_dev_buckets_available(j, ja, from);
@@ -157,26 +193,7 @@ journal_dev_space_available(struct journal *j, struct bch_dev *ca,
 		sectors = bucket_size_aligned;
 	}
 
-	/*
-	 * Cap .total (but NOT journal_space_total, returned above) by the
-	 * in-memory dirty budget - we can't keep more than RAM/4 of journal
-	 * dirty in memory. This is a global (fs-wide) budget applied per-device;
-	 * the nr_devs_want-th largest pick in __journal_space_available() keeps
-	 * the aggregate bounded by it. Leaving journal_space_total at the true
-	 * device capacity is the point: the clean/total watermark ratios stay
-	 * undistorted as dirty grows, instead of total shrinking toward 0 and
-	 * strangling the journal once the device is larger than RAM/4.
-	 *
-	 * Only .total is clamped, not next_entry: .total feeds the watermark
-	 * (a soft throttle - low-priority writers wait, reclaim-priority writes
-	 * still proceed), whereas next_entry feeds cur_entry_sectors, the hard
-	 * reservation limit. Clamping next_entry would let the budget drive
-	 * cur_entry_sectors to 0, blocking even the journal writes that advance
-	 * last_seq and let dirty drain - a self-deadlock. The RAM budget must
-	 * stay a soft limit.
-	 */
-	size_t mem_limit = max_t(ssize_t, 0,
-			(totalram_pages() * PAGE_SIZE) / 4 - j->dirty_entry_bytes);
+	mem_limit = max_t(ssize_t, 0, mem_limit - j->dirty_entry_bytes);
 
 	return (struct journal_space) {
 		.next_entry	= sectors,
