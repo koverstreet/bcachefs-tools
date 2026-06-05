@@ -138,7 +138,8 @@ static inline void bch2_folio_reservation_init(struct bch_fs *c,
 	res->disk.nr_replicas = inode_nr_replicas(c, inode);
 }
 
-int bch2_folio_set(struct bch_fs *, subvol_inum, struct folio **, unsigned);
+int bch2_folio_set(struct bch_fs *, struct bch_inode_info *,
+		   struct folio **, unsigned);
 void bch2_bio_page_state_set(const struct bch_fs *, struct bio *, struct bkey_s_c);
 
 void bch2_mark_pagecache_unallocated(struct bch_inode_info *, u64, u64);

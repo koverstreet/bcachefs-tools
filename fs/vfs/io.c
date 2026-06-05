@@ -353,7 +353,7 @@ static int __bch2_truncate_folio(struct bch_inode_info *inode,
 			goto unlock;
 	}
 
-	ret = bch2_folio_set(c, inode_inum(inode), &folio, 1);
+	ret = bch2_folio_set(c, inode, &folio, 1);
 	if (ret)
 		goto unlock;
 
