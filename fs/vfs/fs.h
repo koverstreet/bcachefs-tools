@@ -35,6 +35,26 @@ struct bch_inode_info {
 	struct rhlist_head	by_inum_hash;
 	subvol_inum		ei_inum;
 
+	/*
+	 * Cached extent allocation state for [start, end), for skipping btree
+	 * lookups when initializing bch_folio state in sequential buffered
+	 * writes.
+	 *
+	 * Staleness contract: extents may change toward allocated without
+	 * notice (worst case we over-reserve); anything that deallocates must
+	 * clear the range, under pagecache_block so no fill (under
+	 * pagecache_add) can straddle the deallocation. Fillers build their
+	 * result in locals and publish it in one go: fillers aren't
+	 * serialized against each other (page_mkwrite fills without i_rwsem),
+	 * and incremental publishing would let two fills interleave into a
+	 * range neither of them scanned.
+	 */
+	u64			ei_reserved_start;
+	u64			ei_reserved_end;
+	u8			ei_reserved_replicas;
+	u8			ei_reserved_state;
+	spinlock_t		ei_reserved_lock;
+
 	unsigned		ei_inodes_idx;
 	unsigned long		ei_flags;
 

@@ -481,6 +481,9 @@ static struct bch_inode_info *__bch2_new_inode(struct bch_fs *c, gfp_t gfp)
 	}
 
 	inode_init_once(&inode->v);
+	spin_lock_init(&inode->ei_reserved_lock);
+	inode->ei_reserved_start	= 0;
+	inode->ei_reserved_end		= 0;
 	mutex_init(&inode->ei_update_lock);
 	two_state_lock_init(&inode->ei_pagecache_lock);
 	inode->ei_inodes_idx = idx;

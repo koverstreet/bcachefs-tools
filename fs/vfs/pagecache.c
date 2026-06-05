@@ -199,6 +199,20 @@ int bch2_folio_set(struct bch_fs *c,
 		if (!s)
 			return -ENOMEM;
 
+		if (!s->uptodate &&
+		    folio_pos(f)	>= inode->ei_reserved_start &&
+		    folio_end_pos(f)	<= inode->ei_reserved_end) {
+			guard(spinlock)(&inode->ei_reserved_lock);
+
+			if (folio_pos(f)	>= inode->ei_reserved_start &&
+			    folio_end_pos(f)	<= inode->ei_reserved_end) {
+				__bch2_folio_set(f, 0, folio_sectors(f),
+						 inode->ei_reserved_replicas,
+						 inode->ei_reserved_state);
+				inode->ei_reserved_start = folio_end_pos(f);
+			}
+		}
+
 		need_set |= !s->uptodate;
 	}
 
@@ -206,8 +220,13 @@ int bch2_folio_set(struct bch_fs *c,
 		return 0;
 
 	unsigned folio_idx = 0;
+	unsigned nr_after = 0;
+	u64 res_start	= folio_end_pos(fs[nr_folios - 1]);
+	u64 res_end	= 0;
+	u8 res_replicas	= 0;
+	u8 res_state	= 0;
 
-	return bch2_trans_run(c,
+	int ret = bch2_trans_run(c,
 		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
 				   POS(inode->ei_inum.inum, offset),
 				   POS(inode->ei_inum.inum, U64_MAX),
@@ -235,10 +254,32 @@ int bch2_folio_set(struct bch_fs *c,
 				folio_idx++;
 			}
 
-			if (folio_idx == nr_folios)
-				break;
+			if (folio_idx == nr_folios) {
+				if (!nr_after) {
+					res_replicas	= nr_ptrs;
+					res_state	= state;
+				} else if (res_replicas	!= nr_ptrs ||
+					   res_state	!= state ||
+					   nr_after > 16) {
+					break;
+				}
+
+				res_end = k.k->p.offset << 9;
+				nr_after++;
+			}
 			0;
 		})));
+
+	/* Build up in locals, publish once: see ei_reserved_start */
+	if (!ret && nr_after) {
+		guard(spinlock)(&inode->ei_reserved_lock);
+		inode->ei_reserved_start	= res_start;
+		inode->ei_reserved_end		= res_end;
+		inode->ei_reserved_replicas	= res_replicas;
+		inode->ei_reserved_state	= res_state;
+	}
+
+	return ret;
 }
 
 void bch2_bio_page_state_set(const struct bch_fs *c, struct bio *bio, struct bkey_s_c k)
