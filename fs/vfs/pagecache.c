@@ -199,6 +199,20 @@ int bch2_folio_set(struct bch_fs *c,
 		if (!s)
 			return -ENOMEM;
 
+		if (!s->uptodate &&
+		    folio_pos(f)	>= inode->ei_reserved_start &&
+		    folio_end_pos(f)	<= inode->ei_reserved_end) {
+			guard(spinlock)(&inode->ei_reserved_lock);
+
+			if (folio_pos(f)	>= inode->ei_reserved_start &&
+			    folio_end_pos(f)	<= inode->ei_reserved_end) {
+				__bch2_folio_set(f, 0, folio_sectors(f),
+						 inode->ei_reserved_replicas,
+						 inode->ei_reserved_state);
+				inode->ei_reserved_start = folio_end_pos(f);
+			}
+		}
+
 		need_set |= !s->uptodate;
 	}
 
@@ -206,6 +220,7 @@ int bch2_folio_set(struct bch_fs *c,
 		return 0;
 
 	unsigned folio_idx = 0;
+	unsigned nr_after = 0;
 
 	return bch2_trans_run(c,
 		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
@@ -235,8 +250,22 @@ int bch2_folio_set(struct bch_fs *c,
 				folio_idx++;
 			}
 
-			if (folio_idx == nr_folios)
-				break;
+			if (folio_idx == nr_folios) {
+				guard(spinlock)(&inode->ei_reserved_lock);
+
+				if (!nr_after) {
+					inode->ei_reserved_start	= folio_end_pos(fs[nr_folios - 1]);
+					inode->ei_reserved_replicas	= nr_ptrs;
+					inode->ei_reserved_state	= state;
+				} else if (inode->ei_reserved_replicas	!= nr_ptrs ||
+					   inode->ei_reserved_state	!= state ||
+					   nr_after > 64) {
+					break;
+				}
+
+				inode->ei_reserved_end = k.k->p.offset << 9;
+				nr_after++;
+			}
 			0;
 		})));
 }

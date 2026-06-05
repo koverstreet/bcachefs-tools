@@ -35,6 +35,12 @@ struct bch_inode_info {
 	struct rhlist_head	by_inum_hash;
 	subvol_inum		ei_inum;
 
+	u64			ei_reserved_start;
+	u64			ei_reserved_end;
+	u8			ei_reserved_replicas;
+	u8			ei_reserved_state;
+	spinlock_t		ei_reserved_lock;
+
 	unsigned		ei_inodes_idx;
 	unsigned long		ei_flags;
 
