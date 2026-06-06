@@ -8,8 +8,7 @@ void bch2_reflink_p_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c)
 bool bch2_reflink_p_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 int bch2_trigger_reflink_p(struct btree_trans *, struct btree_trigger_op);
 int bch2_reflink_p_check_repair(struct btree_trans *, struct btree_iter *,
-				enum btree_id, unsigned, struct bkey_s_c,
-				enum btree_iter_update_trigger_flags);
+				enum btree_id, unsigned, struct bkey_s_c);
 
 #define bch2_bkey_ops_reflink_p ((struct bkey_ops) {		\
 	.key_validate	= bch2_reflink_p_validate,		\

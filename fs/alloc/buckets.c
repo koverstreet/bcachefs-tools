@@ -15,6 +15,7 @@
 
 #include "btree/bset.h"
 #include "btree/check.h"
+#include "btree/interior.h"
 #include "btree/update.h"
 
 #include "data/copygc.h"
@@ -353,8 +354,7 @@ static int bch2_no_valid_pointers_repair(struct btree_trans *trans,
 }
 
 int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
-			enum btree_id btree, unsigned level, struct bkey_s_c k,
-			enum btree_iter_update_trigger_flags flags)
+			enum btree_id btree, unsigned level, struct bkey_s_c k)
 {
 	struct bch_fs *c = trans->c;
 
@@ -410,44 +410,22 @@ int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 						  BKEY_EXTENT_U64s_MAX,
 						  SET_NEEDS_RECONCILE_opt_change, 0));
 
-		if (!(flags & BTREE_TRIGGER_is_root)) {
+		if (!level) {
 			try(bch2_trans_update(trans, iter, new,
 					      BTREE_UPDATE_internal_snapshot_node|
 					      BTREE_TRIGGER_norun));
-
-			if (level)
-				bch2_btree_node_update_key_early(trans, btree, level - 1, k, new);
 		} else {
-			struct jset_entry *e = errptr_try(bch2_trans_jset_entry_alloc(trans,
-							       jset_u64s(new->k.u64s)));
+			CLASS(btree_node_iter, node_iter)(trans, btree, k.k->p,
+							  0, level - 1, BTREE_ITER_intent);
+			struct btree *b = errptr_try(bch2_btree_iter_peek_node(&node_iter));
 
-			journal_entry_set(e,
-					  BCH_JSET_ENTRY_btree_root,
-					  btree, level - 1,
-					  new, new->k.u64s);
-
-			/*
-			 * no locking, we're single threaded and not rw yet, see
-			 * the big assertino above that we repeat here:
-			 */
-			BUG_ON(test_bit(BCH_FS_rw, &c->flags));
-
-			struct btree *b = bch2_btree_id_root(c, btree)->b;
-			bkey_copy(&b->key, new);
+			return bch2_btree_node_update_key(trans, &node_iter, b, new,
+							  BCH_TRANS_COMMIT_no_enospc, false) ?:
+				bch_err_throw(c, transaction_restart_commit);
 		}
 	}
 
 	return 0;
-}
-
-int bch2_bkey_check_repair(struct btree_trans *trans, struct btree_iter *iter,
-			   enum btree_id btree, unsigned level, struct bkey_s_c k,
-			   enum btree_iter_update_trigger_flags flags)
-{
-	const struct bkey_ops *ops = bch2_bkey_type_ops(k.k->type);
-	return ops->check_repair
-		? ops->check_repair(trans, iter, btree, level, k, flags)
-		: 0;
 }
 
 static int bucket_ref_update_err(struct btree_trans *trans, struct printbuf *buf,

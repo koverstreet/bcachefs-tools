@@ -299,11 +299,7 @@ int bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
 			   s64, enum bch_data_type, u8, u8, u32 *);
 
 int bch2_check_fix_ptrs(struct btree_trans *, struct btree_iter *,
-			enum btree_id, unsigned, struct bkey_s_c,
-			enum btree_iter_update_trigger_flags);
-int bch2_bkey_check_repair(struct btree_trans *, struct btree_iter *,
-			   enum btree_id, unsigned, struct bkey_s_c,
-			   enum btree_iter_update_trigger_flags);
+			enum btree_id, unsigned, struct bkey_s_c);
 
 int bch2_trigger_extent(struct btree_trans *, struct btree_trigger_op);
 int bch2_trigger_reservation(struct btree_trans *, struct btree_trigger_op);

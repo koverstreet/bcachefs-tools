@@ -438,8 +438,7 @@ int bch2_trigger_reflink_p(struct btree_trans *trans, struct btree_trigger_op op
 }
 
 int bch2_reflink_p_check_repair(struct btree_trans *trans, struct btree_iter *iter,
-				enum btree_id btree, unsigned level, struct bkey_s_c k,
-				enum btree_iter_update_trigger_flags flags)
+				enum btree_id btree, unsigned level, struct bkey_s_c k)
 {
 	struct bkey_s_c_reflink_p p = bkey_s_c_to_reflink_p(k);
 	u64 idx = REFLINK_P_IDX(p.v) - le32_to_cpu(p.v->front_pad);

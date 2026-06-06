@@ -543,28 +543,6 @@ int bch2_btree_node_transition_state(struct bch_fs_btree_cache *bc, struct btree
 	return bch2_btree_node_transition_state_locked(bc, b, target);
 }
 
-void bch2_btree_node_update_key_early(struct btree_trans *trans,
-				      enum btree_id btree, unsigned level,
-				      struct bkey_s_c old, struct bkey_i *new)
-{
-	struct bch_fs_btree_cache *bc = &trans->c->btree.cache;
-	struct btree *b;
-	struct bkey_buf tmp __cleanup(bch2_bkey_buf_exit);
-
-	bch2_bkey_buf_init(&tmp);
-	bch2_bkey_buf_reassemble(&tmp, old);
-
-	b = bch2_btree_node_get_noiter(trans, tmp.k, btree, level, true);
-	if (!IS_ERR_OR_NULL(b)) {
-		/* unhash, rehash */
-		BUG_ON(bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREEABLE));
-		bkey_copy(&b->key, new);
-		BUG_ON(bch2_btree_node_transition_state(bc, b, btree_node_live_state(b)));
-
-		six_unlock_read(&b->c.lock);
-	}
-}
-
 __flatten
 static inline struct btree *btree_cache_find(struct bch_fs_btree_cache *bc,
 					     const struct bkey_i *k)
