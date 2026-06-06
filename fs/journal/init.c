@@ -763,7 +763,7 @@ int bch2_fs_journal_init_rw(struct journal *j)
 		buf->wait.list.first = JOURNAL_BUF_NOFLUSH;
 
 	j->wq = alloc_workqueue("bcachefs_journal",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_UNBOUND|WQ_MEM_RECLAIM, 512);
+				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM, 512);
 	if (!j->wq)
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
