@@ -697,9 +697,7 @@ void bch2_journal_write_work(struct work_struct *work)
 {
 	struct journal *j = container_of(work, struct journal, write_work.work);
 
-	guard(percpu_read)(&j->pin_resize_lock);
-	guard(spinlock)(&j->lock);
-	bch2_journal_cycle(j, true);
+	bch2_journal_flush_async(j, NULL);
 }
 
 static void journal_buf_prealloc(struct journal *j)
