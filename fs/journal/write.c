@@ -257,21 +257,25 @@ static CLOSURE_CALLBACK(journal_write_done)
 
 	/*
 	 * pin_resize_lock held across the journal pin FIFO updates below; it
-	 * guards the pin_list pointer `r` against pin FIFO resize.
+	 * keeps the pin_list stable while we rebuild temp replicas entries from
+	 * the compact device list for refcount updates.
 	 */
 	percpu_down_read(&j->pin_resize_lock);
-	struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, seq_wrote)->devs.e;
+	struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
 
 	if (unlikely(w->failed.nr)) {
-		bch2_replicas_entry_put(c, r);
-		r->nr_devs = 0;
+		union bch_replicas_padded r;
+		journal_pin_devs_to_replicas(&r, pin);
+		bch2_replicas_entry_put(c, &r.e);
+		pin->devs.nr = 0;
 	}
 
-	if (!r->nr_devs && !w->empty) {
-		bch2_devlist_to_replicas(r, BCH_DATA_journal, w->devs_written);
-		err = bch2_replicas_entry_get(c, r);
-		if (err)
-			r->nr_devs = 0;
+	if (!pin->devs.nr && !w->empty) {
+		union bch_replicas_padded r;
+		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
+		err = bch2_replicas_entry_get(c, &r.e);
+		if (!err)
+			journal_pin_set_devs(pin, &w->devs_written);
 	}
 
 	if (unlikely(w->failed.nr || err)) {
@@ -853,14 +857,17 @@ CLOSURE_CALLBACK(bch2_journal_write)
 		 * early ahead of the deferred superblock write.
 		 */
 		guard(percpu_read)(&j->pin_resize_lock);
-		struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, le64_to_cpu(w->data->seq))->devs.e;
-		bch2_devlist_to_replicas(r, BCH_DATA_journal, w->devs_written);
+		struct journal_entry_pin_list *pin = journal_seq_pin(j, le64_to_cpu(w->data->seq));
+		union bch_replicas_padded r;
+		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
 
-		ret = bch2_replicas_entry_get(c, r);
+		ret = bch2_replicas_entry_get(c, &r.e);
 		if (ret) {
-			r->nr_devs = 0;
+			pin->devs.nr = 0;
 			goto err;
 		}
+
+		journal_pin_set_devs(pin, &w->devs_written);
 	}
 
 	if (c->opts.nochanges)
