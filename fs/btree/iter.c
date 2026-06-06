@@ -1291,22 +1291,6 @@ static inline bool btree_path_good_node(struct btree_trans *trans,
 		btree_path_check_pos_in_node(path, l, check_pos);
 }
 
-static void btree_path_set_level_down(struct btree_trans *trans,
-				      struct btree_path *path,
-				      unsigned new_level)
-{
-	unsigned l;
-
-	path->level = new_level;
-
-	for (l = path->level + 1; l < BTREE_MAX_DEPTH; l++)
-		if (btree_lock_want(path, l) == BTREE_NODE_UNLOCKED)
-			btree_node_unlock(trans, path, l);
-
-	btree_path_set_dirty(trans, path, BTREE_ITER_NEED_TRAVERSE);
-	bch2_btree_path_verify(trans, path);
-}
-
 static noinline unsigned __btree_path_up_until_good_node(struct btree_trans *trans,
 							 struct btree_path *path,
 							 int check_pos)
@@ -2152,148 +2136,33 @@ bch2_btree_iter_traverse(struct btree_iter *iter)
 	return 0;
 }
 
-/* Iterate across nodes (leaf and interior nodes) */
-
 struct btree *bch2_btree_iter_peek_node(struct btree_iter *iter)
 {
 	struct btree_trans *trans = iter->trans;
-	struct btree *b = NULL;
-	int ret;
 
 	EBUG_ON(trans->paths[iter->path].cached);
 	bch2_btree_iter_verify(iter);
 
-	ret = bch2_btree_path_traverse(trans, iter->path, iter->flags);
-	if (ret)
-		goto err;
+	int ret = bch2_btree_iter_traverse(iter);
+	struct btree *b = unlikely(ret)
+		? ERR_PTR(ret)
+		: path_l(btree_iter_path(trans, iter))->b;
 
-	struct btree_path *path = btree_iter_path(trans, iter);
-	b = btree_path_node(path, path->level);
-	if (!b)
-		goto out;
+	if (!IS_ERR_OR_NULL(b)) {
+		BUG_ON(bpos_lt(b->key.k.p, iter->pos));
 
-	BUG_ON(bpos_lt(b->key.k.p, iter->pos));
+		bkey_init(&iter->k);
+		iter->k.p = iter->pos = b->data->min_key;
 
-	bkey_init(&iter->k);
-	iter->k.p = iter->pos = b->key.k.p;
+		iter->path = bch2_btree_path_set_pos(trans, iter->path, b->key.k.p,
+						     iter->flags & BTREE_ITER_intent,
+						     btree_iter_ip_allocated(iter));
+		btree_path_set_should_be_locked(trans, btree_iter_path(trans, iter));
+	}
 
-	iter->path = bch2_btree_path_set_pos(trans, iter->path, b->key.k.p,
-					iter->flags & BTREE_ITER_intent,
-					btree_iter_ip_allocated(iter));
-	btree_path_set_should_be_locked(trans, btree_iter_path(trans, iter));
-out:
 	bch2_btree_iter_verify_entry_exit(iter);
 	bch2_btree_iter_verify(iter);
-
 	return b;
-err:
-	b = ERR_PTR(ret);
-	goto out;
-}
-
-/* Only kept for -tools */
-struct btree *bch2_btree_iter_peek_node_and_restart(struct btree_iter *iter)
-{
-	struct btree *b;
-
-	lockrestart_do(iter->trans,
-		       PTR_ERR_OR_ZERO(b = bch2_btree_iter_peek_node(iter)));
-
-	return b;
-}
-
-struct btree *bch2_btree_iter_next_node(struct btree_iter *iter)
-{
-	struct btree_trans *trans = iter->trans;
-	struct btree *b = NULL;
-	int ret;
-
-	EBUG_ON(trans->paths[iter->path].cached);
-	bch2_trans_verify_not_unlocked_or_in_restart(trans);
-	bch2_btree_iter_verify(iter);
-
-	ret = bch2_btree_path_traverse(trans, iter->path, iter->flags);
-	if (ret)
-		goto err;
-
-
-	struct btree_path *path = btree_iter_path(trans, iter);
-
-	/* already at end? */
-	if (!btree_path_node(path, path->level))
-		return NULL;
-
-	/* got to end? */
-	if (!btree_path_node(path, path->level + 1)) {
-		path->should_be_locked = false;
-		btree_path_set_level_up(trans, path);
-		return NULL;
-	}
-
-	/*
-	 * We don't correctly handle nodes with extra intent locks here:
-	 * downgrade so we don't violate locking invariants
-	 */
-	bch2_btree_path_downgrade(trans, path);
-
-	if (!bch2_btree_node_relock(trans, path, path->level + 1)) {
-		event_inc_trace(trans->c, trans_restart_relock_next_node, buf, ({
-			prt_printf(&buf, "%s\n", trans->fn);
-			bch2_btree_path_to_text(&buf, trans, iter->path, path);
-		}));
-		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_relock);
-
-		__bch2_btree_path_unlock(trans, path);
-		path->l[path->level].b		= ERR_PTR(-BCH_ERR_no_btree_node_relock);
-		path->l[path->level + 1].b	= ERR_PTR(-BCH_ERR_no_btree_node_relock);
-		btree_path_set_dirty(trans, path, BTREE_ITER_NEED_TRAVERSE);
-		goto err;
-	}
-
-	b = btree_path_node(path, path->level + 1);
-
-	if (bpos_eq(iter->pos, b->key.k.p)) {
-		__btree_path_set_level_up(trans, path, path->level++);
-	} else {
-		if (btree_lock_want(path, path->level + 1) == BTREE_NODE_UNLOCKED)
-			btree_node_unlock(trans, path, path->level + 1);
-
-		/*
-		 * Haven't gotten to the end of the parent node: go back down to
-		 * the next child node
-		 */
-		iter->path = bch2_btree_path_set_pos(trans, iter->path,
-					bpos_successor(iter->pos),
-					iter->flags & BTREE_ITER_intent,
-					btree_iter_ip_allocated(iter));
-
-		path = btree_iter_path(trans, iter);
-		btree_path_set_level_down(trans, path, iter->min_depth);
-
-		ret = bch2_btree_path_traverse(trans, iter->path, iter->flags);
-		if (ret)
-			goto err;
-
-		path = btree_iter_path(trans, iter);
-		b = path->l[path->level].b;
-	}
-
-	bkey_init(&iter->k);
-	iter->k.p = iter->pos = b->key.k.p;
-
-	iter->path = bch2_btree_path_set_pos(trans, iter->path, b->key.k.p,
-					iter->flags & BTREE_ITER_intent,
-					btree_iter_ip_allocated(iter));
-	btree_path_set_should_be_locked(trans, btree_iter_path(trans, iter));
-	EBUG_ON(btree_iter_path(trans, iter)->uptodate);
-out:
-	bch2_btree_iter_verify_entry_exit(iter);
-	bch2_btree_iter_verify(iter);
-
-	return b;
-err:
-	b = ERR_PTR(ret);
-	goto out;
 }
 
 /* Iterate across keys (in leaf nodes only) */

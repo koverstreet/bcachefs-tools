@@ -52,69 +52,75 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    let mut iter = BtreeNodeIter::new(
-        &trans,
-        opt.btree,
-        opt.start,
-        0,
-        opt.level,
-        BtreeIterFlags::PREFETCH,
-    );
+    for level in opt.level..(bcachefs::BTREE_MAX_DEPTH as u32) {
+        let mut iter = BtreeNodeIter::new(
+            &trans,
+            opt.btree,
+            opt.start,
+            0,
+            level,
+            BtreeIterFlags::PREFETCH,
+        );
 
-    iter.for_each(&trans, |b| {
-        if b.key.k.p > opt.end {
-            return ControlFlow::Break(());
-        }
+        iter.for_each(&trans, |b| {
+            if b.key.k.p > opt.end {
+                return ControlFlow::Break(());
+            }
 
-        println!("{}", b.to_text(fs));
-        ControlFlow::Continue(())
-    })?;
+            println!("{}", b.to_text(fs));
+            ControlFlow::Continue(())
+        })?;
+    }
 
     Ok(())
 }
 
 fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    let mut iter = BtreeNodeIter::new(
-        &trans,
-        opt.btree,
-        opt.start,
-        0,
-        opt.level,
-        BtreeIterFlags::PREFETCH,
-    );
+    for level in opt.level..(bcachefs::BTREE_MAX_DEPTH as u32) {
+        let mut iter = BtreeNodeIter::new(
+            &trans,
+            opt.btree,
+            opt.start,
+            0,
+            level,
+            BtreeIterFlags::PREFETCH,
+        );
 
-    iter.for_each(&trans, |b| {
-        if b.key.k.p > opt.end {
-            return ControlFlow::Break(());
-        }
+        iter.for_each(&trans, |b| {
+            if b.key.k.p > opt.end {
+                return ControlFlow::Break(());
+            }
 
-        println!("{}", BkeySC::from(&b.key).to_text(fs));
-        ControlFlow::Continue(())
-    })?;
+            println!("{}", BkeySC::from(&b.key).to_text(fs));
+            ControlFlow::Continue(())
+        })?;
+    }
 
     Ok(())
 }
 
 fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    let mut iter = BtreeNodeIter::new(
-        &trans,
-        opt.btree,
-        opt.start,
-        0,
-        opt.level,
-        BtreeIterFlags::PREFETCH,
-    );
+    for level in opt.level..(bcachefs::BTREE_MAX_DEPTH as u32) {
+        let mut iter = BtreeNodeIter::new(
+            &trans,
+            opt.btree,
+            opt.start,
+            0,
+            level,
+            BtreeIterFlags::PREFETCH,
+        );
 
-    iter.for_each(&trans, |b| {
-        if b.key.k.p > opt.end {
-            return ControlFlow::Break(());
-        }
+        iter.for_each(&trans, |b| {
+            if b.key.k.p > opt.end {
+                return ControlFlow::Break(());
+            }
 
-        println!("{}", b.ondisk_to_text(fs));
-        ControlFlow::Continue(())
-    })?;
+            println!("{}", b.ondisk_to_text(fs));
+            ControlFlow::Continue(())
+        })?;
+    }
 
     Ok(())
 }

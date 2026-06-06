@@ -579,33 +579,30 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
         return Err(anyhow!("{}", err));
     }
 
-    // Walk all btree types (including dynamic) to collect metadata locations
+    // Walk all btree types (including dynamic) to collect metadata locations.
+    // The node iterator is per-level, so loop every level and dump each node's
+    // own location (b.key) -- this reaches the root and every interior level,
+    // no special-casing. Walking via the iterator (not a raw DFS) applies the
+    // journal overlay, so nodes reachable only through not-yet-replayed journal
+    // entries are captured too.
     for id in 0..fs.btree_id_nr_alive() {
         let trans = BtreeTrans::new(fs);
-        let mut node_iter = BtreeNodeIter::new(
-            &trans,
-            id,
-            POS_MIN,
-            0, // locks_want
-            1, // depth
-            BtreeIterFlags::PREFETCH,
-        );
 
-        node_iter.for_each(&trans, |b| {
-            let _ = b.for_each_key(|k| {
-                dump_node(fs, &mut devs, k, btree_node_size);
+        for level in 0..(c::BTREE_MAX_DEPTH as u32) {
+            let mut node_iter = BtreeNodeIter::new(
+                &trans,
+                id,
+                POS_MIN,
+                0, // locks_want
+                level,
+                BtreeIterFlags::PREFETCH,
+            );
+
+            node_iter.for_each(&trans, |b| {
+                dump_node(fs, &mut devs, BkeySC::from(&b.key), btree_node_size);
                 ControlFlow::Continue(())
-            });
-            ControlFlow::Continue(())
-        }).map_err(|e| anyhow!("error walking btree {}: {}",
-            accounting::btree_id_str(id), e))?;
-
-        // Also dump the root node itself
-        if let Some(b) = fs.btree_id_root(id) {
-            if !b.is_fake() {
-                let k = BkeySC::from(&b.key);
-                dump_node(fs, &mut devs, k, btree_node_size);
-            }
+            }).map_err(|e| anyhow!("error walking btree {}: {}",
+                accounting::btree_id_str(id), e))?;
         }
     }
 
