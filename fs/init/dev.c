@@ -1162,6 +1162,10 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 			 * device:
 			 */
 			c->sb.nr_devices = c->disk_sb.sb->nr_devices;
+
+			ret = bch2_write_super(c);
+			if (ret)
+				goto err_late;
 		}
 
 		if (test_bit(BCH_FS_started, &c->flags)) {
