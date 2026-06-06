@@ -329,7 +329,12 @@ int bch2_journal_pin_fifo_resize(struct journal *j)
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
 	size_t old_size		= j->pin.size;
-	size_t new_size		= old_size * 2;
+
+	/*
+	 * Resizing the journal pin fifo is particularly expensive, thanks to
+	 * the percpu rwsem - grow in bigger increments
+	 */
+	size_t new_size		= old_size * 4;
 	size_t new_buf_elems	= roundup_pow_of_two(new_size);
 	u64 new_mask		= new_buf_elems - 1;
 
@@ -360,10 +365,9 @@ int bch2_journal_pin_fifo_resize(struct journal *j)
 		new_pin->devs			= old_pin->devs;
 		new_pin->bytes			= old_pin->bytes;
 
-		for (unsigned i = 0; i < JOURNAL_PIN_TYPE_NR; i++) {
+		for (unsigned i = 0; i < JOURNAL_PIN_TYPE_NR; i++)
 			list_replace_init(&old_pin->unflushed[i], &new_pin->unflushed[i]);
-			list_replace_init(&old_pin->flushed[i],   &new_pin->flushed[i]);
-		}
+		list_replace_init(&old_pin->flushed,   &new_pin->flushed);
 	}
 
 	struct journal_entry_pin_list *old_data = j->pin.data;
@@ -555,24 +559,28 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 			j->last_empty_seq = le64_to_cpu(i->j.seq);
 
 		if (!info.clean) {
-			struct bch_devs_list seq_devs = {};
-			darray_for_each(i->ptrs, ptr)
-				seq_devs.data[seq_devs.nr++] = ptr->dev;
-
 			p = &fifo_entry(&j->pin, seq);
-			bch2_devlist_to_replicas(&p->devs.e, BCH_DATA_journal, seq_devs);
+			p->devs.nr = 0;
+
+			darray_for_each(i->ptrs, ptr)
+				p->devs.data[p->devs.nr++] = ptr->dev;
 
 			CLASS(printbuf, buf)();
-			bch2_replicas_entry_to_text(&buf, &p->devs.e);
+			struct bch_devs_list seq_devs = {};
+			darray_for_each(i->ptrs, ptr)
+				bch2_dev_list_add_dev(&seq_devs, ptr->dev);
+			union bch_replicas_padded r;
+			bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, seq_devs);
+			bch2_replicas_entry_to_text(&buf, &r.e);
 
 			fsck_err_on(!test_bit(JOURNAL_degraded, &j->flags) &&
-				    !bch2_replicas_marked(c, &p->devs.e),
+				    !bch2_replicas_marked(c, &r.e),
 				    c, journal_entry_replicas_not_marked,
 				    "superblock not marked as containing replicas for journal entry %llu\n%s",
 				    le64_to_cpu(i->j.seq), buf.buf);
 
-			if (bch2_replicas_entry_get(c, &p->devs.e))
-				p->devs.e.nr_devs = 0;
+			if (bch2_replicas_entry_get(c, &r.e))
+				p->devs.nr = 0;
 		}
 
 		had_entries = true;

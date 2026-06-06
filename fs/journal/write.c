@@ -244,23 +244,30 @@ static CLOSURE_CALLBACK(journal_write_done)
 			       : j->noflush_write_time, j->write_start_time);
 
 	/*
-	 * pin_resize_lock held across the entire body — we hold the pin_list
-	 * pointer `r` across replicas_entry_put/get and into the j->lock'd
+	 * pin_resize_lock held across the entire body — keeps the pin_list
+	 * stable across the replicas_entry_put/get and into the j->lock'd
 	 * window below. Released after the j->lock-held block.
+	 *
+	 * The pin only stores the device list; the replicas refcount lives in
+	 * the superblock table, so we rebuild a temp replicas entry from the
+	 * compact list to put/get the ref.
 	 */
 	percpu_down_read(&j->pin_resize_lock);
-	struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, seq_wrote)->devs.e;
+	struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
 
 	if (unlikely(w->failed.nr)) {
-		bch2_replicas_entry_put(c, r);
-		r->nr_devs = 0;
+		union bch_replicas_padded r;
+		journal_pin_devs_to_replicas(&r, pin);
+		bch2_replicas_entry_put(c, &r.e);
+		pin->devs.nr = 0;
 	}
 
-	if (!r->nr_devs && !w->empty) {
-		bch2_devlist_to_replicas(r, BCH_DATA_journal, w->devs_written);
-		err = bch2_replicas_entry_get(c, r);
-		if (err)
-			r->nr_devs = 0;
+	if (!pin->devs.nr && !w->empty) {
+		union bch_replicas_padded r;
+		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
+		err = bch2_replicas_entry_get(c, &r.e);
+		if (!err)
+			journal_pin_set_devs(pin, &w->devs_written);
 	}
 
 	if (unlikely(w->failed.nr || err)) {
@@ -842,14 +849,17 @@ CLOSURE_CALLBACK(bch2_journal_write)
 		 * before anything is in the journal:
 		 */
 		guard(percpu_read)(&j->pin_resize_lock);
-		struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, le64_to_cpu(w->data->seq))->devs.e;
-		bch2_devlist_to_replicas(r, BCH_DATA_journal, w->devs_written);
+		struct journal_entry_pin_list *pin = journal_seq_pin(j, le64_to_cpu(w->data->seq));
+		union bch_replicas_padded r;
+		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
 
-		ret = bch2_replicas_entry_get(c, r);
+		ret = bch2_replicas_entry_get(c, &r.e);
 		if (ret) {
-			r->nr_devs = 0;
+			pin->devs.nr = 0;
 			goto err;
 		}
+
+		journal_pin_set_devs(pin, &w->devs_written);
 	}
 
 	if (c->opts.nochanges)

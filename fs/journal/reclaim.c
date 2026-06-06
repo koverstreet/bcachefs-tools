@@ -443,20 +443,23 @@ int bch2_journal_update_last_seq_ondisk(struct journal *j, u64 last_seq_ondisk,
 	for (u64 seq = j->last_seq_ondisk; seq < last_seq_ondisk; seq++) {
 		struct journal_entry_pin_list *pin_list = journal_seq_pin(j, seq);
 
-		if (pin_list->devs.e.nr_devs) {
+		if (pin_list->devs.nr) {
+			union bch_replicas_padded devs_r;
+			journal_pin_devs_to_replicas(&devs_r, pin_list);
+
 			replicas_entry_refs *e = darray_find_p(*refs, i,
-			    bch2_replicas_entry_eq(&i->replicas.e, &pin_list->devs.e));
+			    bch2_replicas_entry_eq(&i->replicas.e, &devs_r.e));
 
 			if (e) {
 				e->nr_refs++;
 			} else {
 				try(darray_push_gfp(refs, ((replicas_entry_refs) {
 						    .nr_refs = 1,
-						    .replicas = pin_list->devs,
+						    .replicas = devs_r,
 				}), GFP_ATOMIC));
 			}
 
-			pin_list->devs.e.nr_devs = 0;
+			pin_list->devs.nr = 0;
 		}
 
 		if (WARN_ON(j->dirty_entry_bytes < pin_list->bytes))
@@ -824,7 +827,7 @@ static size_t journal_flush_pins(struct journal *j,
 
 			/* Pin might have been dropped or rearmed: */
 			if (likely(!err && !j->flush_in_progress_dropped))
-				list_move(&pin->list, &pin_l->flushed[type]);
+				list_move(&pin->list, &pin_l->flushed);
 			j->flush_in_progress = NULL;
 			j->flush_in_progress_dropped = false;
 		}
@@ -1070,7 +1073,6 @@ static bool journal_pins_still_flushing(struct journal *j, u64 seq_to_flush,
 					unsigned types)
 {
 	guard(percpu_read)(&j->pin_resize_lock);
-	guard(spinlock)(&j->lock);
 
 	struct journal_entry_pin_list *pin_list;
 	u64 seq;
@@ -1078,11 +1080,18 @@ static bool journal_pins_still_flushing(struct journal *j, u64 seq_to_flush,
 		if (seq > seq_to_flush)
 			break;
 
+		guard(spinlock)(&pin_list->lock);
+
 		for (unsigned i = 0; i < JOURNAL_PIN_TYPE_NR; i++)
 			if ((BIT(i) & types) &&
-			    (!list_empty(&pin_list->unflushed[i]) ||
-			     !list_empty(&pin_list->flushed[i])))
+			    !list_empty(&pin_list->unflushed[i]))
 				return true;
+
+		struct journal_entry_pin *pin;
+		list_for_each_entry(pin, &pin_list->flushed, list)
+			if (BIT(journal_pin_type(pin, pin->flush) & types))
+				return true;
+
 	}
 
 	return false;
@@ -1174,8 +1183,8 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 	scoped_guard(spinlock, &j->lock)
 		fifo_for_each_entry_ptr(p, &j->pin, iter)
 			if (dev_idx >= 0
-			    ? bch2_replicas_entry_has_dev(&p->devs.e, dev_idx)
-			    : p->devs.e.nr_devs < c->opts.metadata_replicas)
+			    ? journal_pin_has_dev(p, dev_idx)
+			    : p->devs.nr < c->opts.metadata_replicas)
 				seq = iter;
 
 	bch2_journal_flush_pins(j, seq);
@@ -1208,7 +1217,9 @@ __cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *
 	prt_newline(out);
 	guard(printbuf_indent)(out);
 
-	bch2_replicas_entry_to_text(out, &pin_list->devs.e);
+	union bch_replicas_padded devs_r;
+	journal_pin_devs_to_replicas(&devs_r, pin_list);
+	bch2_replicas_entry_to_text(out, &devs_r.e);
 	prt_newline(out);
 
 	prt_printf(out, "unflushed:\n");
@@ -1217,9 +1228,8 @@ __cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *
 			prt_printf(out, "\t%px %ps\n", pin, pin->flush);
 
 	prt_printf(out, "flushed:\n");
-	for (unsigned i = 0; i < ARRAY_SIZE(pin_list->flushed); i++)
-		list_for_each_entry(pin, &pin_list->flushed[i], list)
-			prt_printf(out, "\t%px %ps\n", pin, pin->flush);
+	list_for_each_entry(pin, &pin_list->flushed, list)
+		prt_printf(out, "\t%px %ps\n", pin, pin->flush);
 
 	return false;
 }
