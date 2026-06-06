@@ -154,48 +154,27 @@ static int bch2_dev_usrdata_drop(struct bch_fs *c,
 	return 0;
 }
 
-static int dev_metadata_drop_one(struct btree_trans *trans,
-				 struct btree_iter *iter,
-				 struct progress_indicator *progress,
-				 unsigned dev_idx,
-				 unsigned flags, struct printbuf *err)
-{
-	struct btree *b = errptr_try(bch2_btree_iter_peek_node(iter));
-	if (!b)
-		return 1;
-
-	try(bch2_progress_update_iter(trans, progress, iter));
-	try(drop_btree_ptrs(trans, iter, b, dev_idx, flags, err));
-	return 0;
-}
-
 static int bch2_dev_metadata_drop(struct bch_fs *c,
 				  struct progress_indicator *progress,
 				  unsigned dev_idx,
 				  unsigned flags, struct printbuf *err)
 {
-	int ret = 0;
-
 	/* don't handle this yet: */
 	if (flags & BCH_FORCE_IF_METADATA_LOST)
 		return bch_err_throw(c, remove_with_metadata_missing_unimplemented);
 
 	CLASS(btree_trans, trans)(c);
 
-	for (unsigned id = 0; id < btree_id_nr_alive(c) && !ret; id++) {
-		CLASS(btree_node_iter, iter)(trans, id, POS_MIN, 0, 0, BTREE_ITER_prefetch);
-
-		while (!(ret = lockrestart_do(trans,
-					dev_metadata_drop_one(trans, &iter, progress, dev_idx, flags, err))))
-			bch2_btree_iter_next_node(&iter);
-	}
+	for (unsigned btree = 0; btree < btree_id_nr_alive(c); btree++)
+		for (unsigned level = 0; level < BTREE_MAX_DEPTH; level++)
+			try(for_each_btree_node(trans, iter, btree, POS_MIN, level, 0, b, ({
+				bch2_progress_update_iter(trans, progress, &iter) ?:
+				drop_btree_ptrs(trans, &iter, b, dev_idx, flags, err);
+			})));
 
 	bch2_trans_unlock(trans);
 	bch2_btree_interior_updates_flush(c);
-
-	BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
-
-	return min(ret, 0);
+	return 0;
 }
 
 static int data_drop_bp(struct btree_trans *trans, unsigned dev_idx,

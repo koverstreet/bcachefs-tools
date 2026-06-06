@@ -554,8 +554,6 @@ int __must_check __bch2_btree_iter_traverse(struct btree_iter *iter);
 int __must_check bch2_btree_iter_traverse(struct btree_iter *);
 
 struct btree *bch2_btree_iter_peek_node(struct btree_iter *);
-struct btree *bch2_btree_iter_peek_node_and_restart(struct btree_iter *);
-struct btree *bch2_btree_iter_next_node(struct btree_iter *);
 
 struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *, struct bpos);
 struct bkey_s_c bch2_btree_iter_next(struct btree_iter *);
@@ -906,21 +904,23 @@ static inline int __bch2_bkey_get_val_typed(struct btree_trans *trans,
 
 u32 bch2_trans_begin(struct btree_trans *);
 
-#define __for_each_btree_node(_trans, _iter, _btree_id, _start,			\
-			      _locks_want, _depth, _flags, _b, _do)		\
+#define for_each_btree_node(_trans, _iter, _btree_id, _start,			\
+			    _depth, _flags, _b, _do)				\
 ({										\
 	bch2_trans_begin((_trans));						\
 										\
 	CLASS(btree_node_iter, _iter)((_trans), (_btree_id), _start,		\
-				      _locks_want, _depth, _flags);		\
+				      0, _depth, _flags);			\
+	struct btree *_b;							\
 	int _ret3 = 0;								\
 	do {									\
 		u32 _restart_count = bch2_trans_begin((_trans));		\
 										\
-		struct btree *_b = bch2_btree_iter_peek_node(&_iter);		\
+		_b = bch2_btree_iter_peek_node(&(_iter));			\
 		_ret3 = PTR_ERR_OR_ZERO(_b);					\
 		if (_ret3)							\
 			continue; /* may be restart; re-evaluated below */	\
+										\
 		if (!_b)							\
 			break;							\
 										\
@@ -928,19 +928,17 @@ u32 bch2_trans_begin(struct btree_trans *);
 		if (_ret3)							\
 			continue;						\
 										\
-		_ret3 = PTR_ERR_OR_ZERO(bch2_btree_iter_next_node(&_iter));	\
-		if (!_ret3)							\
-			bch2_trans_verify_not_restarted((_trans), _restart_count);\
+		bch2_trans_verify_not_restarted((_trans), _restart_count);	\
+										\
+		if (bpos_eq((_b)->key.k.p, SPOS_MAX))				\
+			break;							\
+										\
+		bch2_btree_iter_set_pos(&(_iter), bpos_successor((_b)->key.k.p));\
 	} while (bch2_err_matches(_ret3, BCH_ERR_transaction_restart) ||	\
 		 !_ret3);							\
 										\
 	_ret3;									\
 })
-
-#define for_each_btree_node(_trans, _iter, _btree_id, _start,		\
-			    _flags, _b, _do)				\
-	__for_each_btree_node(_trans, _iter, _btree_id, _start,	\
-			      0, 0, _flags, _b, _do)
 
 static inline struct bkey_s_c bch2_btree_iter_peek_prev_type(struct btree_iter *iter,
 							     enum btree_iter_update_trigger_flags flags)
