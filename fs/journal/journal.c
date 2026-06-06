@@ -1014,9 +1014,9 @@ void __bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *
 	if (!found)
 		BUG_ON(!closure_wait(&j->flush_wait, cl));
 
-	if (journal_entry_is_open(j)
-	    ? fifo_used(&j->in_flight) == 1
-	    : j->flush_wait.list.first != NULL)
+	smp_mb();
+
+	if (fifo_used(&j->in_flight) <= 1)
 		bch2_journal_entry_close(j);
 }
 
