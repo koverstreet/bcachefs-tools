@@ -719,14 +719,7 @@ static int bch2_gc_mark_key(struct btree_trans *trans, enum btree_id btree_id,
 				 buf.buf)))
 		bch2_dev_btree_bitmap_mark(c, k);
 
-	/*
-	 * We require a commit before key_trigger() because
-	 * key_trigger(BTREE_TRIGGER_GC) is not idempotant; we'll calculate the
-	 * wrong result if we run it multiple times.
-	 */
-	unsigned flags = !iter ? BTREE_TRIGGER_is_root : 0;
-
-	try(bch2_bkey_check_repair(trans, iter, btree_id, level, k, flags));
+	try(bch2_bkey_check_repair(trans, iter, btree_id, level, k));
 
 	if (bch2_trans_has_updates(trans)) {
 		CLASS(disk_reservation, res)(c);
@@ -740,7 +733,7 @@ static int bch2_gc_mark_key(struct btree_trans *trans, enum btree_id btree_id,
 		.old		= old,
 		.new		= unsafe_bkey_s_c_to_s(k),
 		.new_buf_u64s	= k.k->u64s,
-		.flags		= BTREE_TRIGGER_gc|BTREE_TRIGGER_insert|flags,
+		.flags		= BTREE_TRIGGER_gc|BTREE_TRIGGER_insert,
 	};
 	try(bch2_key_trigger(trans, op));
 fsck_err:

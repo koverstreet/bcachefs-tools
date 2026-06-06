@@ -29,8 +29,7 @@ struct bkey_ops {
 	bool		(*key_merge)(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 	int		(*trigger)(struct btree_trans *, struct btree_trigger_op);
 	int		(*check_repair)(struct btree_trans *, struct btree_iter *,
-					enum btree_id, unsigned, struct bkey_s_c,
-					enum btree_iter_update_trigger_flags);
+					enum btree_id, unsigned, struct bkey_s_c);
 	void		(*compat)(enum btree_id id, unsigned version,
 				  unsigned big_endian, int write,
 				  struct bkey_s);
@@ -123,6 +122,15 @@ static inline int bch2_key_trigger_new(struct btree_trans *trans,
 		.new_buf_u64s	= new_buf_u64s,
 		.flags		= BTREE_TRIGGER_insert|flags,
 	});
+}
+
+static inline int bch2_bkey_check_repair(struct btree_trans *trans, struct btree_iter *iter,
+					 enum btree_id btree, unsigned level, struct bkey_s_c k)
+{
+	const struct bkey_ops *ops = bch2_bkey_type_ops(k.k->type);
+	return ops->check_repair
+		? ops->check_repair(trans, iter, btree, level, k)
+		: 0;
 }
 
 void bch2_bkey_renumber(enum btree_node_type, struct bkey_packed *, int);

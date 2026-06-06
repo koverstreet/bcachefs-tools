@@ -25,9 +25,6 @@ void bch2_btree_cache_unpin(struct bch_fs *);
 void bch2_btree_node_set_dirty(struct bch_fs *, struct btree *);
 void bch2_btree_node_write_done_clean(struct bch_fs *, struct btree *);
 
-void bch2_btree_node_update_key_early(struct btree_trans *, enum btree_id, unsigned,
-				      struct bkey_s_c, struct bkey_i *);
-
 void bch2_btree_cache_cannibalize_unlock(struct btree_trans *);
 int bch2_btree_cache_cannibalize_lock(struct btree_trans *, struct closure *);
 

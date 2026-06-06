@@ -349,7 +349,6 @@ struct btree_node_iter {
 	x(gc)					\
 	x(insert)				\
 	x(overwrite)				\
-	x(is_root)				\
 	x(is_discard)				\
 	x(set_needs_reconcile_done)
 
