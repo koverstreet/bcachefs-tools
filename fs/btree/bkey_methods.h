@@ -28,6 +28,9 @@ struct bkey_ops {
 	void		(*swab)(const struct bch_fs *, struct bkey_s);
 	bool		(*key_merge)(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 	int		(*trigger)(struct btree_trans *, struct btree_trigger_op);
+	int		(*check_repair)(struct btree_trans *, struct btree_iter *,
+					enum btree_id, unsigned, struct bkey_s_c,
+					enum btree_iter_update_trigger_flags);
 	void		(*compat)(enum btree_id id, unsigned version,
 				  unsigned big_endian, int write,
 				  struct bkey_s);

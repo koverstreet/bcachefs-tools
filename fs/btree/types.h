@@ -374,7 +374,6 @@ struct btree_node_iter {
 	x(norun)				\
 	x(transactional)			\
 	x(atomic)				\
-	x(check_repair)				\
 	x(gc)					\
 	x(insert)				\
 	x(overwrite)				\

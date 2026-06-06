@@ -352,7 +352,7 @@ static int bch2_no_valid_pointers_repair(struct btree_trans *trans,
 	return 0;
 }
 
-int bch2_check_fix_ptrs(struct btree_trans *trans,
+int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 			enum btree_id btree, unsigned level, struct bkey_s_c k,
 			enum btree_iter_update_trigger_flags flags)
 {
@@ -411,11 +411,7 @@ int bch2_check_fix_ptrs(struct btree_trans *trans,
 						  SET_NEEDS_RECONCILE_opt_change, 0));
 
 		if (!(flags & BTREE_TRIGGER_is_root)) {
-			CLASS(btree_node_iter, iter)(trans, btree, new->k.p, 0, level,
-						     BTREE_ITER_intent|BTREE_ITER_all_snapshots);
-
-			try(bch2_btree_iter_traverse(&iter));
-			try(bch2_trans_update(trans, &iter, new,
+			try(bch2_trans_update(trans, iter, new,
 					      BTREE_UPDATE_internal_snapshot_node|
 					      BTREE_TRIGGER_norun));
 
@@ -442,6 +438,16 @@ int bch2_check_fix_ptrs(struct btree_trans *trans,
 	}
 
 	return 0;
+}
+
+int bch2_bkey_check_repair(struct btree_trans *trans, struct btree_iter *iter,
+			   enum btree_id btree, unsigned level, struct bkey_s_c k,
+			   enum btree_iter_update_trigger_flags flags)
+{
+	const struct bkey_ops *ops = bch2_bkey_type_ops(k.k->type);
+	return ops->check_repair
+		? ops->check_repair(trans, iter, btree, level, k, flags)
+		: 0;
 }
 
 static int bucket_ref_update_err(struct btree_trans *trans, struct printbuf *buf,
@@ -907,9 +913,6 @@ int bch2_trigger_extent(struct btree_trans *trans, struct btree_trigger_op op)
 	struct bkey_ptrs_c old_ptrs = bch2_bkey_ptrs_c(op.old);
 	unsigned new_ptrs_bytes = (void *) new_ptrs.end - (void *) new_ptrs.start;
 	unsigned old_ptrs_bytes = (void *) old_ptrs.end - (void *) old_ptrs.start;
-
-	if (unlikely(op.flags & BTREE_TRIGGER_check_repair))
-		return bch2_check_fix_ptrs(trans, op.btree, op.level, op.new.s_c, op.flags);
 
 	/* if pointers aren't changing - nothing to do: */
 	if (new_ptrs_bytes == old_ptrs_bytes &&

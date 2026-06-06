@@ -13,6 +13,7 @@ int bch2_trigger_stripe(struct btree_trans *, struct btree_trigger_op);
 	.val_to_text	= bch2_stripe_to_text,		\
 	.swab		= bch2_ptr_swab,		\
 	.trigger	= bch2_trigger_stripe,		\
+	.check_repair	= bch2_check_fix_ptrs,		\
 	.min_val_size	= 8,				\
 })
 
