@@ -637,15 +637,7 @@ void bch2_journal_write_work(struct work_struct *work)
 {
 	struct journal *j = container_of(work, struct journal, write_work.work);
 
-	guard(spinlock)(&j->lock);
-	if (__journal_entry_is_open(j->reservations)) {
-		long delta = journal_cur_buf(j)->expires - jiffies;
-
-		if (delta > 0)
-			mod_delayed_work(j->wq, &j->write_work, delta);
-		else
-			__journal_entry_close(j, JOURNAL_ENTRY_CLOSED_VAL, true);
-	}
+	bch2_journal_flush_async(j, 0, NULL);
 }
 
 static void journal_buf_prealloc(struct journal *j)
