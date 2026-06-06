@@ -1050,6 +1050,10 @@ int __bch2_btree_path_upgrade(struct btree_trans *trans,
 			struct six_lock_count c = six_lock_counts(&f.b->c.lock);
 			prt_printf(&buf, " locked %u.%u.%u", c.n[0], c.n[1], c.n[2]);
 		}
+		prt_printf(&buf, "\npath idx %zu", path - trans->paths);
+#ifdef TRACK_PATH_ALLOCATED
+		prt_printf(&buf, " allocated: %ps", (void *) path->ip_allocated);
+#endif
 		prt_newline(&buf);
 	}));
 out:
