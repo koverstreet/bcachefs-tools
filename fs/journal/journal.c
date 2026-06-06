@@ -1018,6 +1018,9 @@ void __bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *
 
 	if (fifo_used(&j->in_flight) <= 1)
 		bch2_journal_entry_close(j);
+
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	event_inc_trace(c, journal_flush, buf, prt_printf(&buf, "seq %llu", seq));
 }
 
 /**

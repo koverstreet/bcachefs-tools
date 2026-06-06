@@ -17,7 +17,7 @@ enum bch_counters_flags {
 	x(data_read_inline,			80,  TYPE_SECTORS,	\
 	  "Sectors read from inline data extents")			\
 	x(data_read_hole,			81,  TYPE_SECTORS,	\
-	  "Sectors read as holes (zero-filled)")				\
+	  "Sectors read as holes (zero-filled)")			\
 	x(data_read_promote,			30,  TYPE_SECTORS,	\
 	  "Sectors promoted to cache on read")				\
 	x(data_read_nopromote,			85,  TYPE_COUNTER,	\
@@ -62,7 +62,7 @@ enum bch_counters_flags {
 	x(data_update_write,			36,  TYPE_SECTORS,	\
 	  "Sectors written for data update")				\
 	x(data_update_key,			37,  TYPE_SECTORS,	\
-	  "Sectors where btree key was updated")				\
+	  "Sectors where btree key was updated")			\
 	x(data_update_key_fail,			38,  TYPE_SECTORS,	\
 	  "Failed btree key update sectors")				\
 	x(data_update_useless_write_fail,	128, TYPE_SECTORS,	\
@@ -82,7 +82,7 @@ enum bch_counters_flags {
 	x(reconcile_scan_device,		116, TYPE_SECTORS,	\
 	  "Sectors scanned for device reconcile")			\
 	x(reconcile_scan_inum,			117, TYPE_SECTORS,	\
-	  "Sectors scanned for inode reconcile")				\
+	  "Sectors scanned for inode reconcile")			\
 	x(reconcile_clear_scan,			129, TYPE_COUNTER,	\
 	  "Reconcile scan entries cleared")				\
 	x(reconcile_btree,			118, TYPE_SECTORS,	\
@@ -94,7 +94,7 @@ enum bch_counters_flags {
 	x(reconcile_stripe,			130, TYPE_SECTORS,	\
 	  "Stripe sectors reconciled")					\
 	x(reconcile_set_pending,		83,  TYPE_SECTORS,	\
-	  "Sectors marked as pending reconcile")				\
+	  "Sectors marked as pending reconcile")			\
 	x(evacuate_bucket,			84,  TYPE_COUNTER,	\
 	  "Buckets evacuated by copygc")				\
 	x(stripe_alloc,				125, TYPE_COUNTER,	\
@@ -183,6 +183,8 @@ enum bch_counters_flags {
 	  "Btree path lock upgrade failures")				\
 	x(btree_reserve_get_fail,		24,  TYPE_COUNTER,	\
 	  "Btree reservation failures")					\
+	x(journal_flush,			135, TYPE_COUNTER,	\
+	  "Journal flush requested")					\
 	x(journal_res_get_blocked,		25,  TYPE_COUNTER,	\
 	  "Journal reservation blocked")				\
 	x(journal_full,				26,  TYPE_COUNTER,	\
@@ -215,10 +217,10 @@ enum bch_counters_flags {
 	  "Transaction restart: journal reclaim")			\
 	x(trans_restart_journal_res_get,	51,  TYPE_COUNTER,	\
 	  "Transaction restart: journal reservation")			\
-	x(trans_restart_key_cache_key_realloced,	52,  TYPE_COUNTER,	\
+	x(trans_restart_key_cache_key_realloced,52,  TYPE_COUNTER,	\
 	  "Transaction restart: key cache key reallocated")		\
 	x(trans_restart_key_cache_raced,	53,  TYPE_COUNTER,	\
-	  "Transaction restart: key cache race")				\
+	  "Transaction restart: key cache race")			\
 	x(trans_restart_mark_replicas,		54,  TYPE_COUNTER,	\
 	  "Transaction restart: mark replicas")				\
 	x(trans_restart_mem_realloced,		55,  TYPE_COUNTER,	\
@@ -231,7 +233,7 @@ enum bch_counters_flags {
 	  "Transaction restart: relock after fill")			\
 	x(trans_restart_relock_key_cache_fill_obsolete,			\
 						59,  TYPE_COUNTER,	\
-	  "Obsolete: transaction restart relock key cache fill")		\
+	  "Obsolete: transaction restart relock key cache fill")	\
 	x(trans_restart_relock_next_node,	60,  TYPE_COUNTER,	\
 	  "Transaction restart: relock next node")			\
 	x(trans_restart_relock_parent_for_fill_obsolete,		\
@@ -248,7 +250,7 @@ enum bch_counters_flags {
 	x(trans_restart_upgrade,		66,  TYPE_COUNTER,	\
 	  "Transaction restart: lock upgrade")				\
 	x(trans_restart_would_deadlock,		67,  TYPE_COUNTER,	\
-	  "Transaction restart: would deadlock")				\
+	  "Transaction restart: would deadlock")			\
 	x(trans_restart_would_deadlock_write,	68,  TYPE_COUNTER,	\
 	  "Transaction restart: would deadlock on write")		\
 	x(trans_restart_injected,		69,  TYPE_COUNTER,	\
