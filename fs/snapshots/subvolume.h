@@ -72,33 +72,44 @@ bch2_btree_iter_peek_in_subvolume_max_type(struct btree_iter *iter, struct bpos 
 	_ret3;									\
 })
 
-#define for_each_btree_key_in_subvolume_max_continue_in_trans(_trans, _iter,\
+static inline bool
+febk_in_subvolume_in_trans_cond(struct btree_trans *trans,
+				struct btree_iter *iter,
+				u32 *restart_count,
+				u32 *snapshot,
+				int *ret)
+{
+	if (!*ret) {
+		bch2_trans_verify_not_restarted(trans, *restart_count);
+		return bch2_btree_iter_advance(iter);
+	}
+
+	if (bch2_err_matches(*ret, BCH_ERR_transaction_restart)) {
+		*restart_count = bch2_trans_begin(trans);
+		*snapshot = 0;
+		*ret = 0;
+		return true;
+	}
+
+	return false;
+}
+
+#define for_each_btree_key_in_subvolume_max_continue_in_trans(_trans, _iter,	\
 					 _end, _subvolid, _flags, _k, _do)	\
 ({										\
 	u32 _restart_count = (_trans)->restart_count;				\
 	u32 _snapshot = 0;							\
 	int _ret3 = 0;								\
 										\
-	while (true) {								\
-		_ret3 = 0;							\
-										\
+	do {									\
 		struct bkey_s_c _k = bch2_btree_iter_peek_in_subvolume_max_type(&(_iter),\
 					_end, _subvolid, &_snapshot, (_flags));	\
 		if (!(_k).k)							\
 			break;							\
 										\
 		_ret3 = bkey_err(_k) ?: (_do);					\
-		if (!_ret3) {							\
-			bch2_trans_verify_not_restarted(_trans, _restart_count);\
-			if (!bch2_btree_iter_advance(&(_iter)))			\
-				break;						\
-		} else if (bch2_err_matches(_ret3, BCH_ERR_transaction_restart)) {\
-			_restart_count = bch2_trans_begin(_trans);		\
-			_snapshot = 0;						\
-		} else {							\
-			break;							\
-		}								\
-	}									\
+	} while (febk_in_subvolume_in_trans_cond(_trans, &(_iter),		\
+				 &_restart_count, &_snapshot, &_ret3));		\
 										\
 	_ret3;									\
 })
