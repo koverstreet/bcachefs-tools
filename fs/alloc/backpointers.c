@@ -861,7 +861,6 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	s64 mem_may_pin = mem_may_pin_bytes(c);
-	int ret = 0;
 
 	bch2_btree_cache_unpin(c);
 
@@ -873,7 +872,7 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 	c->btree.cache.pinned_nodes_end			= *end = BBPOS_MAX;
 
 	for (enum btree_id btree = start.btree;
-	     btree < BTREE_ID_NR && !ret;
+	     btree < BTREE_ID_NR;
 	     btree++) {
 		unsigned depth = (BIT_ULL(btree) & btree_leaf_mask) ? 0 : 1;
 
@@ -881,9 +880,9 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 		    !(BIT_ULL(btree) & btree_interior_mask))
 			continue;
 
-		ret = __for_each_btree_node(trans, iter, btree,
+		try(for_each_btree_node(trans, iter, btree,
 				      btree == start.btree ? start.pos : POS_MIN,
-				      0, depth, BTREE_ITER_prefetch, b, ({
+				      depth, BTREE_ITER_prefetch, b, ({
 			mem_may_pin -= btree_buf_bytes(b);
 			if (mem_may_pin <= 0) {
 				c->btree.cache.pinned_nodes_end = *end =
@@ -892,10 +891,10 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 			}
 			bch2_node_pin(c, b);
 			0;
-		}));
+		})));
 	}
 
-	return ret;
+	return 0;
 }
 
 static int bch2_check_extents_to_backpointers_pass(struct btree_trans *trans,

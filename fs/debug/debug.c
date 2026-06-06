@@ -267,18 +267,18 @@ static ssize_t bch2_read_btree_formats(struct file *file, char __user *buf,
 
 	try(bch2_debugfs_flush_buf(i));
 
-	if (bpos_eq(SPOS_MAX, i->from))
-		return i->ret;
-
 	CLASS(btree_trans, trans)(i->c);
-	return for_each_btree_node(trans, iter, i->id, i->from, 0, b, ({
-		bch2_btree_node_to_text(&i->buf, i->c, b);
-		i->from = !bpos_eq(SPOS_MAX, b->key.k.p)
-			? bpos_successor(b->key.k.p)
-			: b->key.k.p;
+	for (; i->level < BTREE_MAX_DEPTH; i->level++, i->from = POS_MIN)
+		try(for_each_btree_node(trans, iter, i->id, i->from, i->level, 0, b, ({
+			bch2_btree_node_to_text(&i->buf, i->c, b);
+			i->from = !bpos_eq(SPOS_MAX, b->key.k.p)
+				? bpos_successor(b->key.k.p)
+				: b->key.k.p;
 
-		drop_locks_do(trans, bch2_debugfs_flush_buf(i));
-	})) ?: i->ret;
+			drop_locks_do(trans, bch2_debugfs_flush_buf(i));
+		})));
+
+	return i->ret;
 }
 
 static const struct file_operations btree_format_debug_ops = {

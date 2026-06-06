@@ -1821,7 +1821,7 @@ static inline bool btree_id_recovers_from_scan(enum btree_id btree)
 	return btree == BTREE_ID_alloc || !btree_id_can_reconstruct(btree);
 }
 
-#define BTREE_MAX_DEPTH		4U
+enum { BTREE_MAX_DEPTH = 4 };
 
 /* Btree nodes */
 

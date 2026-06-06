@@ -221,7 +221,7 @@ TAGS:
 tags:
 	ctags -R .
 
-SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './debian/*' -iname '*.c'))
+SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './debian/*' ! -path './target/*' -iname '*.c'))
 # KUnit test — kernel-only, no userspace equivalent for <kunit/test.h>
 SRCS:=$(filter-out %/mean_and_variance_test.c, $(SRCS))
 DEPS:=$(SRCS:.c=.d)

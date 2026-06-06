@@ -364,33 +364,30 @@ impl<'t> BtreeNodeIter<'t> {
         loop {
             let restart_count = trans.begin();
             let b = unsafe { c::bch2_btree_iter_peek_node(raw) };
-
-            match errptr_to_result_c(b) {
+            let b = match errptr_to_result_c(b) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
                 Ok(b) if b.is_null() => return Ok(()),
-                Ok(b) => {
-                    trans.verify_not_restarted(restart_count);
-                    if let ControlFlow::Break(()) = f(unsafe { &*b }) {
-                        return Ok(());
-                    }
-                }
+                Ok(b) => unsafe { &*b },
+            };
+
+            trans.verify_not_restarted(restart_count);
+
+            // peek_node() leaves iter->pos at the node's min_key (so a restart
+            // re-finds the node across splits/merges), so we can't use
+            // bch2_btree_iter_advance(); advance explicitly off the node's
+            // max_key. set_pos + bpos_successor re-traverses from the root, so
+            // the journal overlay applies and journal-only nodes aren't skipped
+            // the way next_node()'s sibling walk did. Matches for_each_btree_node().
+            let end = b.key.k.p;
+            if let ControlFlow::Break(()) = f(b) {
+                return Ok(());
             }
-            unsafe { c::bch2_btree_iter_next_node(raw) };
-        }
-    }
 
-    pub fn advance(&mut self) {
-        unsafe {
-            c::bch2_btree_iter_next_node(&mut self.raw);
-        }
-    }
-
-    #[allow(clippy::should_implement_trait)]
-    pub fn next(&mut self) -> Result<Option<&c::btree>, BchError> {
-        unsafe {
-            let b = c::bch2_btree_iter_next_node(&mut self.raw);
-            errptr_to_result_c(b).map(|b| if !b.is_null() { Some(&*b) } else { None })
+            if end == SPOS_MAX {
+                return Ok(());
+            }
+            unsafe { c::bch2_btree_iter_set_pos(raw, c::bpos_successor(end)) };
         }
     }
 }

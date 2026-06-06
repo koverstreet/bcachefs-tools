@@ -398,6 +398,7 @@ fn main() {
         .allowlist_function("match_string")
         .allowlist_function("printbuf.*")
         .allowlist_function("_bch2_err_matches")
+        .allowlist_function("bpos_.*")
         // tools-util and libbcachefs types/functions for Rust command conversions
         .allowlist_type("format_opts")
         .allowlist_type("dev_opts")
@@ -411,10 +412,16 @@ fn main() {
         .allowlist_function("bch_sb_crypt_init")
         .allowlist_function("read_passphrase")
         .blocklist_function("bch2_prt_vprintf")
+        // wrap_static_fns can't emit a valid C wrapper for these: bindgen
+        // renames the returned `enum snapshot_id_state` to a name that isn't a
+        // real C type, so the wrapper's return type is incomplete. Unused from
+        // Rust, so just drop them.
+        .blocklist_function(".*bch2_snapshot_id_state")
         .blocklist_type("rhash_lock_head")
         .blocklist_type("srcu_struct")
         .blocklist_type("bch_ioctl_data_event")
         .allowlist_var("BCH_.*")
+        .allowlist_var("BTREE_MAX_DEPTH")
         .allowlist_var("KEY_SPEC_.*")
         .allowlist_var("Fix753_.*")
         .allowlist_var("bch.*")
@@ -457,6 +464,12 @@ fn main() {
         .no_partialeq("bkey")
         .no_partialeq("bpos")
         .generate_inline_functions(true)
+        // Emit C wrappers for static inline functions (e.g.
+        // bch2_btree_iter_set_pos, bpos_successor) so they're callable from
+        // Rust; generate_inline_functions alone only binds external-linkage
+        // inlines, not static inlines in headers.
+        .wrap_static_fns(true)
+        .wrap_static_fns_path(out_dir.join("extern.c"))
         .parse_callbacks(Box::new(Fix753 {}))
         .generate()
         .expect("BindGen Generation Failiure: [libbcachefs_wrapper]");
@@ -466,6 +479,26 @@ fn main() {
         packed_and_align_fix(bindings.to_string()),
     )
     .expect("Writing to output file failed for: `bcachefs.rs`");
+
+    // Compile the static-inline wrappers bindgen just generated and link them
+    // in, matching the clang args bindgen parsed the headers with.
+    let mut wrappers = cc::Build::new();
+    wrappers
+        .file(out_dir.join("extern.c"))
+        .include(top_dir.join(".."))
+        .include(top_dir.join("../fs"))
+        .include(top_dir.join("../c_src"))
+        .include(top_dir.join("../include"))
+        .define("ZSTD_STATIC_LINKING_ONLY", None)
+        .define("NO_BCACHEFS_FS", None)
+        .define("_GNU_SOURCE", None)
+        .define("RUST_BINDGEN", None)
+        .flag("-fkeep-inline-functions")
+        .warnings(false);
+    for p in &urcu.include_paths {
+        wrappers.include(p);
+    }
+    wrappers.compile("bcachefs_static_wrappers");
 
     // Generate from x-macros in bcachefs_format.h
     let format_h = std::fs::read_to_string(top_dir.join("../fs/bcachefs_format.h"))
