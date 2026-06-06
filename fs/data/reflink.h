@@ -7,12 +7,16 @@ int bch2_reflink_p_validate(struct bch_fs *, struct bkey_s_c,
 void bch2_reflink_p_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 bool bch2_reflink_p_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 int bch2_trigger_reflink_p(struct btree_trans *, struct btree_trigger_op);
+int bch2_reflink_p_check_repair(struct btree_trans *, struct btree_iter *,
+				enum btree_id, unsigned, struct bkey_s_c,
+				enum btree_iter_update_trigger_flags);
 
 #define bch2_bkey_ops_reflink_p ((struct bkey_ops) {		\
 	.key_validate	= bch2_reflink_p_validate,		\
 	.val_to_text	= bch2_reflink_p_to_text,		\
 	.key_merge	= bch2_reflink_p_merge,			\
 	.trigger	= bch2_trigger_reflink_p,		\
+	.check_repair	= bch2_reflink_p_check_repair,		\
 	.min_val_size	= 16,					\
 })
 
@@ -26,6 +30,7 @@ int bch2_trigger_reflink_v(struct btree_trans *, struct btree_trigger_op);
 	.val_to_text	= bch2_reflink_v_to_text,		\
 	.swab		= bch2_ptr_swab,			\
 	.trigger	= bch2_trigger_reflink_v,		\
+	.check_repair	= bch2_check_fix_ptrs,			\
 	.min_val_size	= 8,					\
 })
 

@@ -419,6 +419,7 @@ void bch2_btree_ptr_v2_compat(enum btree_id, unsigned, unsigned,
 	.val_to_text	= bch2_btree_ptr_to_text,		\
 	.swab		= bch2_ptr_swab,			\
 	.trigger	= bch2_trigger_extent,			\
+	.check_repair	= bch2_check_fix_ptrs,			\
 })
 
 #define bch2_bkey_ops_btree_ptr_v2 ((struct bkey_ops) {		\
@@ -427,6 +428,7 @@ void bch2_btree_ptr_v2_compat(enum btree_id, unsigned, unsigned,
 	.swab		= bch2_ptr_swab,			\
 	.compat		= bch2_btree_ptr_v2_compat,		\
 	.trigger	= bch2_trigger_extent,			\
+	.check_repair	= bch2_check_fix_ptrs,			\
 	.min_val_size	= 40,					\
 })
 
@@ -440,6 +442,7 @@ bool bch2_extent_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 	.swab		= bch2_ptr_swab,			\
 	.key_merge	= bch2_extent_merge,			\
 	.trigger	= bch2_trigger_extent,			\
+	.check_repair	= bch2_check_fix_ptrs,			\
 })
 
 /* KEY_TYPE_reservation: */
