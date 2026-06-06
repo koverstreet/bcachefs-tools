@@ -1049,6 +1049,9 @@ __bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *cl)
 	    : j->flush_wait.list.first != NULL)
 		bch2_journal_cycle(j, 0);
 
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	event_inc_trace(c, journal_flush, buf, prt_printf(&buf, "seq %llu", seq));
+
 	return wait;
 }
 
