@@ -125,7 +125,7 @@ inline void bch2_btree_node_prep_for_write(struct btree_trans *trans,
 		bch2_btree_init_next(trans, b);
 }
 
-static noinline int trans_lock_write_fail(struct btree_trans *trans, struct btree_insert_entry *i)
+static noinline int trans_lock_write_fail(struct btree_trans *trans, struct btree_insert_entry *i, int ret)
 {
 	while (--i >= trans->updates) {
 		if (same_leaf_as_prev(trans, i))
@@ -134,11 +134,7 @@ static noinline int trans_lock_write_fail(struct btree_trans *trans, struct btre
 		bch2_btree_node_unlock_write(trans, trans->paths + i->path, insert_l(trans, i)->b);
 	}
 
-	event_inc_trace(trans->c, trans_restart_would_deadlock_write, buf, ({
-		prt_printf(&buf, "%s\n", trans->fn);
-		bch2_btree_path_to_text(&buf, trans, i->path, trans->paths + i->path);
-	}));
-	return btree_trans_restart(trans, BCH_ERR_transaction_restart_would_deadlock_write);
+	return ret;
 }
 
 __always_inline
@@ -150,8 +146,9 @@ static int bch2_trans_lock_write_inlined(struct btree_trans *trans)
 		if (same_leaf_as_prev(trans, i))
 			continue;
 
-		if (bch2_btree_node_lock_write(trans, trans->paths + i->path, &insert_l(trans, i)->b->c))
-			return trans_lock_write_fail(trans, i);
+		int ret = bch2_btree_node_lock_write(trans, trans->paths + i->path, &insert_l(trans, i)->b->c);
+		if (unlikely(ret))
+			return trans_lock_write_fail(trans, i, ret);
 
 		if (!i->cached)
 			bch2_btree_node_prep_for_write(trans, trans->paths + i->path, insert_l(trans, i)->b);
