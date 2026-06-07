@@ -26,7 +26,7 @@ build.vars
 bcachefs-principles-of-operation.*
 doc/generated/
 
-bch_bindgen/Cargo.lock
+fs/bcachefs-kernel/Cargo.lock
 
 # will have compiled files and executables
 /build/

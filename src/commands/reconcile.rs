@@ -14,11 +14,9 @@ use crossterm::{
 };
 
 use crate::util::run_tui;
-use crate::wrappers::accounting::{
-    self, DiskAccountingKind, disk_accounting_type, reconcile_accounting_type,
-};
+use crate::wrappers::accounting::{disk_accounting_type, reconcile_accounting_type, DiskAccountingKind};
 use crate::wrappers::handle::BcachefsHandle;
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::sysfs;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -131,7 +129,7 @@ fn reconcile_status_to_text(
         let idx = t.as_c().0 as usize;
         if idx < nr {
             write!(out, "  ").unwrap();
-            accounting::prt_reconcile_type(out, t.as_c());
+            bcachefs_kernel::opts::prt_reconcile_type(out, t.as_c());
             write!(out, ":\t").unwrap();
             out.units_sectors(v[idx][0]);
             write!(out, "\r").unwrap();
