@@ -12,12 +12,11 @@ use std::ops::ControlFlow;
 use std::path::PathBuf;
 
 use anyhow::{anyhow, bail, Result};
-use bch_bindgen::bcachefs;
-use bch_bindgen::bkey::BkeySC;
-use bch_bindgen::btree::{BtreeIterFlags, BtreeNodeIter, BtreeTrans};
-use bch_bindgen::c;
-use bch_bindgen::data::extents::bkey_ptrs;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::c;
+use bcachefs_kernel::btree::bkey::BkeySC;
+use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeTrans};
+use bcachefs_kernel::data::extents::bkey_ptrs;
+use bcachefs_kernel::opt_set;
 use clap::Parser;
 
 struct KillNode {
@@ -85,7 +84,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
         .map(|s| parse_kill_node(s))
         .collect::<Result<Vec<_>>>()?;
 
-    let mut fs_opts = bcachefs::bch_opts::default();
+    let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, read_only, 1);
 
     let fs = crate::device_scan::open_scan(&cli.devices, fs_opts)?;

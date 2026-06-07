@@ -1,9 +1,8 @@
 use std::ffi::CString;
 
 use anyhow::{bail, Result};
-use bch_bindgen::bcachefs;
-use bch_bindgen::c;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::c;
+use bcachefs_kernel::opt_set;
 use clap::{Arg, ArgAction, Command};
 
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
@@ -107,7 +106,7 @@ fn set_option_offline(
 ) -> Result<()> {
     let devs: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
 
-    let mut fs_opts = bcachefs::bch_opts::default();
+    let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, nostart, 1);
 
     let fs = crate::device_scan::open_scan(&devs, fs_opts)?;

@@ -1,20 +1,19 @@
-use crate::bcachefs;
-use crate::bcachefs::*;
-use crate::errcode::BchError;
-use crate::path_to_cstr;
+use bcachefs_kernel::c;
+use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::path_to_cstr;
 use anyhow::anyhow;
 
-pub use crate::bcachefs::bch2_free_super;
+pub use c::bch2_free_super;
 
 pub fn read_super_opts(
     path: &std::path::Path,
-    mut opts: bch_opts,
-) -> anyhow::Result<bch_sb_handle> {
+    mut opts: c::bch_opts,
+) -> anyhow::Result<c::bch_sb_handle> {
     let path = path_to_cstr(path);
     let mut sb = std::mem::MaybeUninit::zeroed();
 
     let ret =
-        unsafe { crate::bcachefs::bch2_read_super(path.as_ptr(), &mut opts, sb.as_mut_ptr()) };
+        unsafe { c::bch2_read_super(path.as_ptr(), &mut opts, sb.as_mut_ptr()) };
 
     if ret != 0 {
         Err(anyhow!(BchError::from_raw(ret)))
@@ -23,20 +22,20 @@ pub fn read_super_opts(
     }
 }
 
-pub fn read_super(path: &std::path::Path) -> anyhow::Result<bch_sb_handle> {
-    let opts = bcachefs::bch_opts::default();
+pub fn read_super(path: &std::path::Path) -> anyhow::Result<c::bch_sb_handle> {
+    let opts = c::bch_opts::default();
     read_super_opts(path, opts)
 }
 
 pub fn read_super_silent(
     path: &std::path::Path,
-    mut opts: bch_opts,
-) -> Result<bch_sb_handle, BchError> {
+    mut opts: c::bch_opts,
+) -> Result<c::bch_sb_handle, BchError> {
     let path = path_to_cstr(path);
     let mut sb = std::mem::MaybeUninit::zeroed();
 
     let ret = unsafe {
-        crate::bcachefs::bch2_read_super_silent(path.as_ptr(), &mut opts, sb.as_mut_ptr())
+        c::bch2_read_super_silent(path.as_ptr(), &mut opts, sb.as_mut_ptr())
     };
 
     if ret != 0 {

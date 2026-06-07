@@ -12,13 +12,13 @@ use std::ffi::CString;
 use std::ops::ControlFlow;
 
 use anyhow::{anyhow, Result};
-use bch_bindgen::bcachefs;
-use bch_bindgen::c;
-use bch_bindgen::opt_set;
+use bch_bindgen::fs::FsExt;
+use bcachefs_kernel::c;
+use bcachefs_kernel::opt_set;
+use bcachefs_kernel::sb::sb_field_type;
 use clap::Parser;
 
-use bch_bindgen::printbuf::Printbuf;
-use bch_bindgen::sb::sb_field_type;
+use bcachefs_kernel::util::printbuf::Printbuf;
 
 /// Print superblock information to stdout
 #[derive(Parser, Debug)]
@@ -79,13 +79,13 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         print_default_fields = false;
     }
 
-    let mut fs_opts = bcachefs::bch_opts::default();
+    let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, noexcl, 1);
     opt_set!(fs_opts, nochanges, 1);
     opt_set!(fs_opts, no_version_check, 1);
     opt_set!(fs_opts, nostart, 1);
 
-    let fs = bch_bindgen::fs::Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
+    let fs = bcachefs_kernel::fs::Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
 
     // Use the per-device superblock, not c->disk_sb.sb — the filesystem-level
     // copy omits fields like magic and layout that __copy_super doesn't transfer.

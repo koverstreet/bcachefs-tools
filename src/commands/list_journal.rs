@@ -2,16 +2,16 @@ use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
-use bch_bindgen::bkey::bkey_start_pos;
-use bch_bindgen::{BbposRange, bbpos_range_parse};
-use bch_bindgen::journal::{
+use bcachefs_kernel::btree::bkey::bkey_start_pos;
+use bcachefs_kernel::{BbposRange, bbpos_range_parse};
+use bcachefs_kernel::journal::{
     jset_entries, jset_entry_keys, entry_type, entry_btree_id, entry_log_str_eq,
     entry_type_is_known, journal_entry_type, jset_vstruct_bytes, jset_vstruct_sectors, jset_no_flush,
 };
-use bch_bindgen::opt_set;
+use bcachefs_kernel::opt_set;
 use clap::Parser;
 
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::util::read_flag_list;
 
 // ---- RAII wrapper for C-allocated journal entries array ----
@@ -633,7 +633,7 @@ pub struct Cli {
 
 fn cmd_list_journal(cli: Cli) -> Result<()> {
 
-    let mut opts = bch_bindgen::opts::parse_mount_opts_vec(&cli.opts, false)
+    let mut opts = bcachefs_kernel::opts::parse_mount_opts_vec(&cli.opts, false)
         .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);

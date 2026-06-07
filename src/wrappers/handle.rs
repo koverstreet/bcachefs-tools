@@ -18,8 +18,8 @@ use bch_bindgen::accounting::data_type;
 use crate::wrappers::ioctl::{bch_ioc_w, bch_ioc_wr};
 use crate::wrappers::sysfs;
 use bch_bindgen::c::bch_sb;
-use bch_bindgen::errcode::BchError;
-use bch_bindgen::path_to_cstr;
+use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
 use rustix::ioctl::{self, CompileTimeOpcode, Setter, WriteOpcode};
 
@@ -252,11 +252,11 @@ impl BcachefsHandle {
 
     /// Open by reading superblock from a device/file path.
     fn open_via_superblock(path: &Path) -> Result<Self, BchError> {
-        use bch_bindgen::bcachefs;
+        use bcachefs_kernel::c;
 
-        let mut opts = bcachefs::bch_opts::default();
-        bch_bindgen::opt_set!(opts, noexcl, 1);
-        bch_bindgen::opt_set!(opts, nochanges, 1);
+        let mut opts = c::bch_opts::default();
+        bcachefs_kernel::opt_set!(opts, noexcl, 1);
+        bcachefs_kernel::opt_set!(opts, nochanges, 1);
 
         let sb = bch_bindgen::sb::io::read_super_opts(path, opts)
             .map_err(|e| match e.downcast::<BchError>() {

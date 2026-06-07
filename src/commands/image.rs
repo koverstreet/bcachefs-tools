@@ -10,19 +10,22 @@ use std::path::PathBuf;
 use std::process;
 
 use anyhow::{anyhow, bail, Result};
-use bch_bindgen::accounting::{DiskAccountingKind, compression_type, data_type};
-use bch_bindgen::bkey::bkey_type;
-use bch_bindgen::btree::{BtreeIter, BtreeTrans, lockrestart_do};
+use bch_bindgen::fs::FsExt;
+use bcachefs_kernel::accounting::{compression_type, data_type, DiskAccountingKind};
+use bcachefs_kernel::btree::bkey::bkey_type;
+use bcachefs_kernel::btree_id;
+use bcachefs_kernel::opts::{prt_compression_type, prt_data_type};
+use bcachefs_kernel::btree::iter::{BtreeIter, BtreeTrans, lockrestart_do};
 use bch_bindgen::c;
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bch_bindgen::data::moving::MovingContext;
-use bch_bindgen::fs::{Fs, btree_id_is_alloc, bucket_bytes, bucket_to_sector, dev_to_target,
+use bcachefs_kernel::fs::{Fs, btree_id_is_alloc, bucket_bytes, bucket_to_sector, dev_to_target,
                       writepoint_hashed};
-use bch_bindgen::opt_set;
-use bch_bindgen::printbuf::Printbuf;
-use bch_bindgen::sb;
-use bch_bindgen::sb::sb_field_type;
-use bch_bindgen::{POS_MIN, SPOS_MAX, btree_id, pos};
+use bcachefs_kernel::opt_set;
+use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::sb;
+use bcachefs_kernel::sb::sb_field_type;
+use bcachefs_kernel::{POS_MIN, SPOS_MAX, pos};
 use clap::Parser;
 
 use crate::commands::format::{
@@ -125,7 +128,7 @@ unsafe extern "C" fn move_btree_pred(
         return 0;
     }
 
-    if !args.move_alloc && btree_id_is_alloc(btree as u32) {
+    if !args.move_alloc && btree_id_is_alloc(u32::from(btree)) {
         return 0;
     }
 
@@ -177,7 +180,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
         &trans,
         btree_id::alloc,
         pos(0, u64::MAX),
-        bch_bindgen::btree::BtreeIterFlags::empty(),
+        bcachefs_kernel::btree::iter::BtreeIterFlags::empty(),
     );
 
     // Extract type and offset inside the closure to avoid lifetime escape
@@ -185,7 +188,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
         let k = iter.peek_prev()?;
         match k {
             Some(k) => Ok((k.k.type_, k.k.p.offset)),
-            None => Err(bch_bindgen::errcode::BchError::from_raw(-libc::ENOENT)),
+            None => Err(bcachefs_kernel::errcode::BchError::from_raw(-libc::ENOENT)),
         }
     });
 
@@ -215,11 +218,11 @@ fn print_data_type_usage(
 ) {
     let d = &usage.d[data_type.0 as usize];
     if d.buckets != 0 {
-        bch_bindgen::accounting::prt_data_type(out, data_type);
+        prt_data_type(out, data_type);
         prt_sectors(out, bucket_to_sector(ca, d.buckets));
     }
     if d.fragmented != 0 {
-        bch_bindgen::accounting::prt_data_type(out, data_type);
+        prt_data_type(out, data_type);
         write!(out, " fragmented").ok();
         prt_sectors(out, d.fragmented);
     }
@@ -310,7 +313,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
         let sectors_uncompressed = v[1];
         let sectors_compressed = v[2];
 
-        bch_bindgen::accounting::prt_compression_type(&mut buf, c::bch_compression_type(i));
+        prt_compression_type(&mut buf, c::bch_compression_type(i));
         write!(&mut buf, "\t").ok();
 
         buf.human_readable_u64(sectors_compressed << 9);
@@ -417,7 +420,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     let member_bytes = u16::from_le(mi.member_bytes);
     let u64s = (std::mem::size_of::<c::bch_sb_field_members_v2>() as u32 + member_bytes as u32)
         .div_ceil(8) as u32;
-    sb::sb_field_resize::<c::bch_sb_field_members_v2>(disk_sb, u64s);
+    sb::io::sb_field_resize::<c::bch_sb_field_members_v2>(disk_sb, u64s);
     disk_sb.sb_mut().nr_devices = 1;
     disk_sb.sb_mut().set_sb_multi_device(0);
 
@@ -465,8 +468,7 @@ fn image_create_inner(
         opt_set!(
             meta_opts,
             data_allowed,
-            (data_type::journal.bit()
-                | data_type::btree.bit()) as u8
+            (data_type::journal.bit() | data_type::btree.bit()) as u8
         );
     }
     devs.push(meta_dev);
@@ -479,8 +481,9 @@ fn image_create_inner(
         dev.open(bdev::BLK_OPEN_CREAT, false).map_err(|e| {
             anyhow!("Error opening {}: {}", dev.path.to_string_lossy(), std::io::Error::from_raw_os_error(e))
         })?;
-        rustix::fs::ftruncate(dev.as_fd(), target_size)
-            .map_err(|e| anyhow!("ftruncate error: {}", e))?;
+        if unsafe { libc::ftruncate(dev.fd, target_size as libc::off_t) } != 0 {
+            bail!("ftruncate error: {}", std::io::Error::last_os_error());
+        }
     }
 
     format_opts.no_sb_at_end = true;
@@ -555,7 +558,7 @@ fn image_create_inner(
     if ret != 0 {
         bail!(
             "error shutting down new filesystem: {}",
-            bch_bindgen::errcode::BchError::from_raw(ret).msg()
+            bcachefs_kernel::errcode::BchError::from_raw(ret).msg()
         );
     }
 
@@ -624,8 +627,9 @@ fn image_update_inner(
         ),
     );
 
-    rustix::fs::ftruncate(dev_opts.as_fd(), metadata_dev_size)
-        .map_err(|e| anyhow!("ftruncate error: {}", e))?;
+    if unsafe { libc::ftruncate(dev_opts.fd, metadata_dev_size as libc::off_t) } != 0 {
+        bail!("ftruncate error: {}", std::io::Error::last_os_error());
+    }
 
     let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
     let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
@@ -634,7 +638,7 @@ fn image_update_inner(
     );
     if ret != 0 {
         bail!("formatting metadata device: {}",
-            bch_bindgen::errcode::BchError::from_raw(ret).msg());
+            bcachefs_kernel::errcode::BchError::from_raw(ret).msg());
     }
 
     fs.dev_add(&metadata_path)
@@ -690,7 +694,7 @@ fn image_update_inner(
     if exit_ret != 0 {
         bail!(
             "error shutting down filesystem: {}",
-            bch_bindgen::errcode::BchError::from_raw(exit_ret).msg()
+            bcachefs_kernel::errcode::BchError::from_raw(exit_ret).msg()
         );
     }
 
@@ -802,9 +806,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                         None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
                             if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
-                                bch_bindgen::opts::opt_set_by_id(&mut dev_opts, opt_id, v);
+                                bcachefs_kernel::opts::opt_set_by_id(&mut dev_opts, opt_id, v);
                             } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
-                                bch_bindgen::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
+                                bcachefs_kernel::opts::opt_set_by_id(&mut fs_opts, opt_id, v);
                             }
                         }
                     }

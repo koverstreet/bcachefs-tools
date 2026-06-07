@@ -446,16 +446,17 @@ fn main() {
         .allowlist_var("linux_page_size")
         .allowlist_function("cmd_.*")
         .allowlist_function(".*_cmds")
-        .allowlist_function(".*bch2_.*")
         .allowlist_function("bio_.*")
         .allowlist_function("derive_passphrase")
         .allowlist_function("request_key")
         .allowlist_function("add_key")
         .allowlist_function("keyctl_search")
         .allowlist_function("match_string")
-        .allowlist_function("printbuf.*")
-        .allowlist_function("_bch2_err_matches")
-        .allowlist_function("bpos_.*")
+        .allowlist_function("bch2_add_key")
+        .allowlist_function("bch2_opt_strs_free")
+        .allowlist_function("bch2_parse_opts")
+        .allowlist_function("bch2_passphrase_check")
+        .allowlist_function("bch2_sb_is_encrypted")
         // tools-util and libbcachefs types/functions for Rust command conversions
         .allowlist_type("format_opts")
         .allowlist_type("dev_opts")
@@ -464,27 +465,52 @@ fn main() {
         .allowlist_function("read_file_u64")
         .allowlist_function("copy_fs")
         .allowlist_function("rust_.*")
-        .allowlist_function("bch2_dev_resize")
-        .allowlist_function("bch2_set_nr_journal_buckets")
         .allowlist_function("bch_sb_crypt_init")
         .allowlist_function("read_passphrase")
         .blocklist_function("bch2_prt_vprintf")
+        .blocklist_function("bch2_inode_opts_get_inode")
+        .blocklist_function("linux_shrinkers_init")
+        .blocklist_function("rust_read_submit")
+        .blocklist_function("rust_write_submit")
         // wrap_static_fns can't emit a valid C wrapper for these: bindgen
         // renames the returned `enum snapshot_id_state` to a name that isn't a
         // real C type, so the wrapper's return type is incomplete. Unused from
         // Rust, so just drop them.
         .blocklist_function(".*bch2_snapshot_id_state")
         .blocklist_type("rhash_lock_head")
+        .blocklist_type("rhash.*")
         .blocklist_type("srcu_struct")
         .blocklist_type("bch_ioctl_data_event")
-        .allowlist_var("BCH_.*")
-        .allowlist_var("BTREE_MAX_DEPTH")
+        .blocklist_type("__.*")
+        .blocklist_type("_bindgen_ty_.*")
+        .blocklist_type("accounting_.*")
+        .blocklist_type("bbpos")
+        .blocklist_type("bio.*")
+        .blocklist_type("bkey.*")
+        .blocklist_type("bpos")
+        .blocklist_type("btree.*")
+        .blocklist_type("bucket")
+        .blocklist_type("bucket_table")
+        .blocklist_type("disk_accounting_type")
+        .blocklist_type("darray.*")
+        .blocklist_type("fsck_err_opts")
+        .blocklist_type("genradix.*")
+        .blocklist_type("jset.*")
+        .blocklist_type("journal.*")
+        .blocklist_type("nonce")
+        .blocklist_type("opt_flags")
+        .blocklist_type("opt_type")
+        .blocklist_type("printbuf")
+        .blocklist_type("sb_names")
+        .blocklist_type("subvol_inum")
+        .blocklist_type("bch_[a-n].*")
+        .blocklist_type("bch_[p-z].*")
+        .blocklist_type("bch_opt_fn")
+        .blocklist_type("bch_opt_id")
+        .blocklist_type("bch_option")
+        .blocklist_type("bch_opts.*")
         .allowlist_var("KEY_SPEC_.*")
         .allowlist_var("Fix753_.*")
-        .allowlist_var("bch.*")
-        .allowlist_var("__bch2.*")
-        .allowlist_var("__BTREE_ITER.*")
-        .allowlist_var("BTREE_ITER.*")
         .blocklist_item("bch2_bkey_ops")
         .allowlist_type("bch_.*")
         .allowlist_type("bkey_i_.*")
@@ -541,10 +567,10 @@ fn main() {
         .expect("BindGen Generation Failiure: [libbcachefs_wrapper]");
 
     std::fs::write(
-        out_dir.join("bcachefs.rs"),
+        out_dir.join("non_fs.rs"),
         packed_and_align_fix(bindings.to_string()),
     )
-    .expect("Writing to output file failed for: `bcachefs.rs`");
+    .expect("Writing to output file failed for: `non_fs.rs`");
 
     // Compile the static-inline wrappers bindgen just generated and link them
     // in, matching the clang args bindgen parsed the headers with.

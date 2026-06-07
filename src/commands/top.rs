@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result};
 use bch_bindgen::c::bch_ioctl_query_counters;
-use bch_bindgen::sb::{COUNTERS, CounterInfo};
+use bcachefs_kernel::sb::io::{COUNTERS, CounterInfo};
 use clap::Parser;
 use crossterm::{
     cursor,

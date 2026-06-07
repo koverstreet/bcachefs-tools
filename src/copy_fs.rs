@@ -10,14 +10,14 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 
-use bch_bindgen::{btree, btree_id};
+use bch_bindgen::fs::FsExt;
+use bcachefs_kernel::{btree, btree_id};
 use bch_bindgen::c;
 use bch_bindgen::data::io::{block_on, MAX_IO_SIZE};
-use bch_bindgen::errcode::{self, BchError, bch_errcode};
-use bch_bindgen::fs::Fs;
-use rustix::fs::{AtFlags, FileType, Stat, StatExt};
+use bcachefs_kernel::errcode::{self, BchError, bch_errcode};
+use bcachefs_kernel::fs::Fs;
 
 use crate::util::AlignedBuf;
 
@@ -28,7 +28,6 @@ const BCACHEFS_ROOT_SUBVOL: u64 = 1;
 const DT_DIR: u8  = 4;
 const DT_REG: u8  = 8;
 const DT_LNK: u8  = 10;
-const S_IFREG: u32 = 0o100000;
 
 /// Xattr namespace indices matching KEY_TYPE_XATTR_INDEX_* in xattr_format.h.
 const XATTR_INDEX_USER: i32     = 0;
@@ -41,20 +40,13 @@ fn mode_to_type(mode: u32) -> u8 {
     ((mode >> 12) & 15) as u8
 }
 
-fn mode_file_type(mode: u32) -> FileType {
-    FileType::from_raw_mode(mode)
-}
-
-fn stat_is_regular(stat: &Stat) -> bool {
-    mode_file_type(stat.st_mode) == FileType::RegularFile
-}
-
-fn stat_is_dir(stat: &Stat) -> bool {
-    mode_file_type(stat.st_mode) == FileType::Directory
-}
-
 fn ret_to_result(ret: i32) -> Result<(), BchError> {
     errcode::ret_to_result(ret).map(|_| ())
+}
+
+/// Convert the last OS error (errno) into a BchError.
+fn last_err() -> BchError {
+    BchError::from_raw(-std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO))
 }
 
 /// Convert a rustix error into a BchError.
@@ -64,6 +56,7 @@ fn rustix_err(e: rustix::io::Errno) -> BchError {
 
 /// Convert a rustix FileType to a DT_* constant.
 fn file_type_to_dtype(ft: rustix::fs::FileType) -> u8 {
+    use rustix::fs::FileType;
     match ft {
         FileType::RegularFile     => DT_REG,
         FileType::Directory       => DT_DIR,
@@ -179,7 +172,7 @@ fn unlink_and_rm(
     let qstr = make_qstr(child_name);
     let mut child: c::bch_inode_unpacked = Default::default();
 
-    btree::trans_commit_do(
+    btree::iter::trans_commit_do(
         fs,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
@@ -254,7 +247,7 @@ fn create_or_update_link(
     let mut dir_u: c::bch_inode_unpacked = Default::default();
     let mut inode: c::bch_inode_unpacked = Default::default();
 
-    btree::trans_commit_do(
+    btree::iter::trans_commit_do(
         fs,
         std::ptr::null_mut(),
         std::ptr::null_mut(),
@@ -313,7 +306,7 @@ fn create_or_update_file(
     } else {
         unsafe { c::bch2_inode_init_early(fs.raw, &mut child_inode) };
 
-        btree::trans_commit_do(
+        btree::iter::trans_commit_do(
             fs,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -362,12 +355,12 @@ fn xattr_resolve_name(name: &[u8]) -> Option<(i32, &[u8])> {
     }
 }
 
-fn copy_times(fs: &Fs, dst: &mut c::bch_inode_unpacked, src: &Stat) {
-    let make_ts = |sec, nsec| c::timespec { tv_sec: sec, tv_nsec: nsec as i64 };
+fn copy_times(fs: &Fs, dst: &mut c::bch_inode_unpacked, src: &libc::stat) {
+    let make_ts = |sec, nsec| c::timespec { tv_sec: sec, tv_nsec: nsec };
     unsafe {
-        dst.bi_atime = c::rust_timespec_to_bch2_time(fs.raw, make_ts(src.atime(), src.st_atime_nsec)) as u64;
-        dst.bi_mtime = c::rust_timespec_to_bch2_time(fs.raw, make_ts(src.mtime(), src.st_mtime_nsec)) as u64;
-        dst.bi_ctime = c::rust_timespec_to_bch2_time(fs.raw, make_ts(src.ctime(), src.st_ctime_nsec)) as u64;
+        dst.bi_atime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_atime, src.st_atime_nsec)) as u64;
+        dst.bi_mtime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_mtime, src.st_mtime_nsec)) as u64;
+        dst.bi_ctime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_ctime, src.st_ctime_nsec)) as u64;
     }
 }
 
@@ -411,7 +404,7 @@ fn copy_xattrs(
 
         let stripped_cstr = CString::new(stripped).unwrap();
 
-        btree::trans_commit_do(
+        btree::iter::trans_commit_do(
             fs,
             std::ptr::null_mut(),
             std::ptr::null_mut(),
@@ -815,9 +808,7 @@ fn simple_readdir(
         entries: &mut entries,
     };
 
-    ret_to_result(unsafe {
-        c::bch2_readdir(fs.raw, dir_inum, &mut hash_info, &mut rctx.ctx)
-    })?;
+    ret_to_result(unsafe { c::bch2_readdir(fs.raw, dir_inum, &mut hash_info, &mut rctx.ctx) })?;
 
     // Sort by (type, name) like the C code
     entries.sort_by(|a, b| {
@@ -838,7 +829,7 @@ fn recursive_remove(
     let mut child: c::bch_inode_unpacked = Default::default();
     ret_to_result(unsafe { c::bch2_inode_find_by_inum(fs.raw, child_inum, &mut child) })?;
 
-    if mode_file_type(child.bi_mode as u32) == FileType::Directory {
+    if (child.bi_mode as u32 & libc::S_IFMT) == libc::S_IFDIR {
         let child_dirents = simple_readdir(fs, child_inum, &mut child)?;
         for entry in &child_dirents {
             recursive_remove(fs, child_inum, &mut child, entry)?;
@@ -898,7 +889,7 @@ struct DirEntryInfo {
     _inum:  u64,
     dtype:  u8,
     name:   CString,
-    stat:   Stat,
+    stat:   libc::stat,
 }
 
 fn copy_dir(
@@ -909,7 +900,7 @@ fn copy_dir(
     src_path: &CStr,
 ) -> Result<(), BchError> {
     // Dir::read_from borrows the fd (creating an internal dup for iteration),
-    // so src_fd remains available for statat/openat/fchdir below.
+    // so src_fd remains available for fstatat/openat/fchdir below.
     let mut dir = rustix::fs::Dir::read_from(&src_fd).map_err(rustix_err)?;
 
     let mut dirents = Vec::new();
@@ -919,10 +910,13 @@ fn copy_dir(
 
         let name = entry.file_name();
 
-        let stat = match rustix::fs::statat(&src_fd, name, AtFlags::SYMLINK_NOFOLLOW) {
-            Ok(stat) => stat,
-            Err(_) => continue,
+        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+        let ret = unsafe {
+            libc::fstatat(src_fd.as_raw_fd(), name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
         };
+        if ret < 0 {
+            continue;
+        }
 
         dirents.push(DirEntryInfo {
             _inum: entry.ino(),
@@ -946,7 +940,7 @@ fn copy_dir(
     let oflags = rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOATIME;
 
     for d in &dirents {
-        rustix::process::fchdir(&src_fd).map_err(rustix_err)?;
+        unsafe { libc::fchdir(src_fd.as_raw_fd()) };
 
         let name_str = d.name.to_str().unwrap_or("?");
         if name_str == "." || name_str == ".." || name_str == "lost+found" {
@@ -971,7 +965,7 @@ fn copy_dir(
         }
 
         // Hardlink handling
-        if stat_is_regular(&d.stat) && d.stat.st_nlink > 1 {
+        if (d.stat.st_mode & libc::S_IFMT) == libc::S_IFREG && d.stat.st_nlink > 1 {
             let src_ino = d.stat.st_ino as u64;
             if let Some(&dst_ino) = s.hardlinks.get(&src_ino) {
                 create_or_update_link(
@@ -991,7 +985,7 @@ fn copy_dir(
         let dst_child_inum = subvol_inum(inode.bi_inum);
 
         // Record hardlink destination
-        if stat_is_regular(&d.stat) && d.stat.st_nlink > 1 {
+        if (d.stat.st_mode & libc::S_IFMT) == libc::S_IFREG && d.stat.st_nlink > 1 {
             s.hardlinks.insert(d.stat.st_ino as u64, inode.bi_inum);
         }
 
@@ -1048,7 +1042,7 @@ fn reserve_old_fs_space(
     let name = CString::new("old_migrated_filesystem").unwrap();
     let mut dst = create_or_update_file(
         fs, root_inum, root_inode,
-        &name, 0, 0, S_IFREG | 0o400, 0,
+        &name, 0, 0, libc::S_IFREG | 0o400, 0,
     )?;
     dst.bi_size = total_sectors << 9;
 
@@ -1074,8 +1068,9 @@ pub fn copy_fs(
     src_fd: BorrowedFd,
     src_path: &CStr,
 ) -> Result<(), BchError> {
-    let stat = rustix::fs::fstat(src_fd).map_err(rustix_err)?;
-    if !stat_is_dir(&stat) {
+    let raw_fd = src_fd.as_raw_fd();
+    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(raw_fd, &mut stat) } < 0 || (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR {
         eprintln!("{} is not a directory", src_path.to_string_lossy());
         return Err(BchError::from_raw(-libc::ENOTDIR));
     }
@@ -1093,7 +1088,9 @@ pub fn copy_fs(
         )
     })?;
 
-    rustix::process::fchdir(src_fd).map_err(rustix_err)?;
+    if unsafe { libc::fchdir(raw_fd) } < 0 {
+        return Err(last_err());
+    }
 
     copy_times(fs, &mut root_inode, &stat);
 

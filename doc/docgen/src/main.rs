@@ -15,7 +15,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 // ---------------------------------------------------------------------------
-// X-macro parsing (adapted from bch_bindgen/build.rs)
+// X-macro parsing (adapted from fs/bch_bindgen/build.rs)
 // ---------------------------------------------------------------------------
 
 fn parse_xmacro(source: &str, macro_name: &str) -> Vec<Vec<String>> {
