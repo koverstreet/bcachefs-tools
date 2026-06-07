@@ -884,6 +884,22 @@ no_io:
 	continue_at(cl, journal_write_done, j->wq);
 }
 
+static bool flush_would_free_space(struct journal *j, u64 new_last_seq)
+{
+	guard(rcu)();
+
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal]) {
+		struct journal_device *ja = &ca->journal;
+
+		if (ja->dirty_idx_ondisk != ja->dirty_idx &&
+		    ja->bucket_seq[ja->dirty_idx_ondisk] < new_last_seq)
+			return true;
+	}
+
+	return false;
+}
+
 static int __should_flush(struct journal *j, struct journal_buf *w, u64 seq)
 {
 	/*
@@ -914,7 +930,9 @@ static int __should_flush(struct journal *j, struct journal_buf *w, u64 seq)
 		return false;
 
 	/* does journal reclaim need a flush? */
-	if (!test_bit(JOURNAL_may_skip_flush, &j->flags))
+	if (!test_bit(JOURNAL_may_skip_flush, &j->flags) &&
+	    w->last_seq != j->last_seq_ondisk &&
+	    flush_would_free_space(j, w->last_seq))
 		return true;
 
 	bool must_flush = journal_buf_must_flush(w);
