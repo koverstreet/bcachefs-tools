@@ -2,7 +2,7 @@ use std::ffi::CString;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use crate::c;
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 
 extern crate tiny_http;
 

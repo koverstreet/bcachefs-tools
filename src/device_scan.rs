@@ -30,11 +30,13 @@ use std::{
 };
 
 use anyhow::Result;
-use bch_bindgen::{bcachefs, darray::DarrayVec, opt_get, opt_set};
-use bch_bindgen::errcode::BchError;
-use bch_bindgen::fs::Fs;
-use bcachefs::bch_sb_handle;
-use bcachefs::bch_opts;
+use bch_bindgen::fs::FsExt;
+use bcachefs_kernel::{c, opt_get, opt_set};
+use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::util::darray::DarrayVec;
+use c::bch_sb_handle;
+use c::bch_opts;
 use uuid::Uuid;
 use log::debug;
 
@@ -187,11 +189,11 @@ pub fn filter_current_sbs(
 	let handles = sbs.into_iter()
 		.map(|(_, sb)| sb)
 		.collect::<Vec<_>>();
-	let mut handles = DarrayVec::<bcachefs::bch_sb_handles, bch_sb_handle>::from_vec(handles);
+	let mut handles = DarrayVec::<c::bch_sb_handles, bch_sb_handle>::from_vec(handles);
 	let mut opts = *opts;
 
 	let ret = unsafe {
-		bcachefs::bch2_sbs_filter_dead(handles.as_mut(), &mut opts, std::ptr::null_mut())
+		c::bch2_sbs_filter_dead(handles.as_mut(), &mut opts, std::ptr::null_mut())
 	};
 	if ret != 0 {
 		return Err(BchError::from_raw(-ret));
@@ -333,7 +335,7 @@ pub fn scan_devices(device: &String, opts: &bch_opts) -> Result<OsString> {
 pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<Fs, BchError> {
     let devs = if devs.len() == 1 {
         let dev_str = devs[0].to_string_lossy().into_owned();
-        let scan_opts = bch_bindgen::opts::parse_mount_opts(None, None, true)
+	let scan_opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true)
             .unwrap_or_default();
         match scan_sbs(&dev_str, &scan_opts) {
             Ok(sbs) if !sbs.is_empty() => sbs.into_iter().map(|(p, _)| p).collect(),
@@ -352,7 +354,7 @@ pub fn bch2_scan_devices(device: *const c_char) -> *mut c_char {
     let device = device.to_string_lossy().into_owned();
 
     // how to initialize to default/empty?
-    let opts = bch_bindgen::opts::parse_mount_opts(None, None, true).unwrap_or_default();
+    let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
 
     let devs = scan_devices(&device, &opts).unwrap_or_else(|e| {
         eprintln!("bcachefs ({}): error reading superblock: {}", device, e);
