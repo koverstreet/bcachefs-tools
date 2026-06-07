@@ -1,0 +1,194 @@
+// SPDX-License-Identifier: GPL-2.0
+
+//! bcachefs Rust support — crate root.
+//!
+//! The Rust sources live alongside the C they bind, organized by subsystem
+//! (`fs/btree/*.rs` next to `fs/btree/*.c`, …); this file is the crate root
+//! that ties them together. The generated C bindings are namespaced as `c`;
+//! the kernel-compat types they reference (bio, locks, `__le*`/`__u*`) are
+//! resolved from `bcachefs-shim` in userspace or the `kernel` crate in-kernel.
+
+#![cfg_attr(not(feature = "std"), no_std)]
+// This crate is edition 2021, where unsafe ops inside unsafe fns don't need an
+// inner unsafe block; the in-kernel build compiles us with -D
+// unsafe-op-in-unsafe-fn (the kernel's policy), so opt back out crate-wide
+// rather than re-styling the hand-written fs/ code and bindgen's output.
+#![allow(unsafe_op_in_unsafe_fn)]
+// The in-kernel build enables missing_docs; the generated bindings (bindgen's C
+// enums + the codegen BkeyVal* enums) have undocumented variants. The kernel's
+// own bindings crate allows it for the same reason.
+#![allow(missing_docs)]
+// Generated extern blocks reference kernel types bindgen flags as not FFI-safe
+// (e.g. its_array); harmless, and allowed on the kernel's own bindings crate.
+#![allow(improper_ctypes)]
+
+#[path = "alloc/accounting.rs"] pub mod accounting;
+pub mod btree;
+#[path = "init/fs.rs"]          pub mod fs;
+#[path = "journal/read.rs"]     pub mod journal;
+pub mod sb;
+pub mod util;
+pub mod data {
+    pub mod extents;
+}
+pub mod errcode;
+pub mod opts;
+
+pub use paste::paste;
+
+pub mod c {
+    #![allow(clippy::missing_safety_doc)]
+    #![allow(clippy::too_many_arguments)]
+    #![allow(clippy::transmute_int_to_bool)]
+    #![allow(clippy::unnecessary_cast)]
+    #![allow(clippy::useless_transmute)]
+    #![allow(non_upper_case_globals)]
+    #![allow(non_camel_case_types)]
+    #![allow(non_snake_case)]
+    #![allow(unused)]
+    #![allow(unnecessary_transmutes)]
+
+    // Kernel types (bio, __u64, locks, …) that the fs/ bindings reference are
+    // blocklisted by build.rs and resolved here. Userspace and local builds
+    // source them from bcachefs-shim; the in-kernel build (`--cfg kernel`)
+    // sources them from the kernel crate's raw bindings instead.
+    #[cfg(not(kernel))]
+    pub use bcachefs_shim::c::*;
+    #[cfg(kernel)]
+    pub use kernel::bindings::*;
+
+    // Userspace #defines timespec64 → timespec (include/linux/time64.h), so
+    // bindgen never emits a timespec64; alias it so fs/ can name the kernel's
+    // real return type (timespec64) uniformly across both builds.
+    #[cfg(not(kernel))]
+    pub type timespec64 = timespec;
+
+    include!(concat!(env!("OUT_DIR"), "/bcachefs.rs"));
+
+    crate::impl_darray!(bch_sb_handles, bch_sb_handle);
+
+    use bitfield::bitfield;
+    bitfield! {
+        pub struct bch_scrypt_flags(u64);
+        pub N, _: 15, 0;
+        pub R, _: 31, 16;
+        pub P, _: 47, 32;
+    }
+    bitfield! {
+        pub struct bch_crypt_flags(u64);
+        pub TYPE, _: 4, 0;
+    }
+    impl bch_sb_field_crypt {
+        pub fn scrypt_flags(&self) -> Option<bch_scrypt_flags> {
+            use core::convert::TryInto;
+            match bch_kdf_types(bch_crypt_flags(self.flags).TYPE().try_into().ok()?) {
+                bch_kdf_types::BCH_KDF_SCRYPT => Some(bch_scrypt_flags(self.kdf_flags)),
+                _ => None,
+            }
+        }
+        pub fn key(&self) -> &bch_encrypted_key {
+            &self.key
+        }
+    }
+
+    // Opaque kernel types the fs/ bindings reference but never deref. In-kernel
+    // they come from kernel::bindings; userspace's shim doesn't provide them, so
+    // define opaque stand-ins there.
+    #[cfg(not(kernel))]
+    pub enum rhash_lock_head {}
+    #[cfg(not(kernel))]
+    pub enum srcu_struct {}
+}
+
+#[allow(non_camel_case_types)]
+pub type metadata_version = c::bcachefs_metadata_version;
+#[allow(non_camel_case_types)]
+pub type opt_id = c::bch_opt_id;
+#[allow(non_camel_case_types)]
+pub type btree_id = c::btree_id;
+
+include!(concat!(env!("OUT_DIR"), "/newtype_enum_aliases_gen.rs"));
+include!(concat!(env!("OUT_DIR"), "/btree_ids_gen.rs"));
+
+// Position constructors/sentinels live with bkey; re-exported here for the
+// `crate::POS_MIN` / `crate::SPOS_MAX` spelling used across the tree and the
+// tools binary.
+pub use btree::bkey::{pos, spos, POS_MAX, POS_MIN, SPOS_MAX};
+#[cfg(feature = "std")]
+pub use util::printbuf::printbuf_to_formatter;
+#[cfg(feature = "std")]
+pub use btree::bbpos::{bbpos_range_parse, BbposRange};
+
+// ---------------------------------------------------------------------------
+// path_to_cstr may not belong in fs/ at all; parked here for now, relocate later.
+
+#[cfg(feature = "std")]
+use std::ffi::CString;
+
+/// Convert a filesystem path to a CString. Userspace-only — gated out of the
+/// no_std (in-kernel) build, which has no std path/OsStr types.
+#[cfg(feature = "std")]
+pub fn path_to_cstr<P: AsRef<std::path::Path>>(p: P) -> CString {
+    use std::os::unix::ffi::OsStrExt;
+    CString::new(p.as_ref().as_os_str().as_bytes()).unwrap()
+}
+
+impl c::bch_sb_field_type {
+    pub fn bit(self) -> u32 {
+        1u32 << self.0
+    }
+}
+
+impl c::bch_data_type {
+    pub fn bit(self) -> u64 {
+        1u64 << self.0
+    }
+}
+
+impl c::disk_accounting_type {
+    pub fn bit(self) -> u32 {
+        1u32 << self.0
+    }
+}
+
+impl From<c::bch_data_type> for u32 {
+    fn from(t: c::bch_data_type) -> u32 {
+        t.0
+    }
+}
+
+impl From<c::bch_compression_type> for u32 {
+    fn from(t: c::bch_compression_type) -> u32 {
+        t.0
+    }
+}
+
+impl From<c::bcachefs_metadata_version> for u32 {
+    fn from(v: c::bcachefs_metadata_version) -> u32 {
+        v.0
+    }
+}
+
+impl From<c::bch_opt_id> for u32 {
+    fn from(id: c::bch_opt_id) -> u32 {
+        id.0
+    }
+}
+
+impl From<c::bch_bkey_type> for u32 {
+    fn from(t: c::bch_bkey_type) -> u32 {
+        t.0
+    }
+}
+
+impl From<c::disk_accounting_type> for u32 {
+    fn from(t: c::disk_accounting_type) -> u32 {
+        t.0
+    }
+}
+
+impl From<c::bch_reconcile_accounting_type> for u32 {
+    fn from(t: c::bch_reconcile_accounting_type) -> u32 {
+        t.0
+    }
+}

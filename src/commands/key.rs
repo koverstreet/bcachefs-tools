@@ -1,10 +1,10 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
-use bch_bindgen::bcachefs::bch_key;
+use bcachefs_kernel::c::bch_key;
 use bch_bindgen::c;
-use bch_bindgen::fs::Fs;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
@@ -134,7 +134,7 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
 /// Caller must hold sb_lock.
 unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
     let disk_sb = &mut (*fs.raw).disk_sb;
-    let crypt: &mut c::bch_sb_field_crypt = bch_bindgen::sb::sb_field_get_mut(disk_sb)
+    let crypt: &mut c::bch_sb_field_crypt = bcachefs_kernel::sb::io::sb_field_get_mut(disk_sb)
         .expect("filesystem has no crypt field");
     crypt.key = key;
 }

@@ -1,7 +1,7 @@
 [workspace]
 resolver = "2"
-members = [".", "bch_bindgen", "doc/docgen"]
-default-members = [".", "bch_bindgen"]
+members = [".", "fs", "bcachefs-shim", "bch_bindgen", "doc/docgen"]
+default-members = [".", "fs"]
 
 [package]
 name = "bcachefs-tools"
@@ -31,6 +31,7 @@ udev = "0.7.0"
 uuid = { version = "1.2.2", features = ["v4"] }
 errno = "0.3"
 either = "1.5"
+bcachefs-kernel = { path = "fs" }
 bch_bindgen = { path = "bch_bindgen" }
 strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"

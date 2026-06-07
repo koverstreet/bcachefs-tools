@@ -23,11 +23,12 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bch_bindgen::data::io::block_on;
-use bch_bindgen::errcode::BchError;
-use bch_bindgen::fs::Fs;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::opt_set;
 
 use crate::util::AlignedBuf;
 

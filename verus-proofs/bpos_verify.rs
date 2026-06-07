@@ -23,7 +23,7 @@ pub struct Bpos {
 }
 
 // ============================================================
-// bpos comparison functions — mirrors of bch_bindgen/src/bkey.rs
+// bpos comparison functions — mirrors of fs/bch_bindgen/src/bkey.rs
 // ============================================================
 
 pub open spec fn bpos_lt_spec(l: Bpos, r: Bpos) -> bool {

@@ -7,7 +7,8 @@ use std::{
 };
 
 use anyhow::{ensure, Result};
-use bch_bindgen::{bcachefs, bcachefs::bch_sb_handle, path_to_cstr};
+use bcachefs_kernel::c::bch_sb_handle;
+use bcachefs_kernel::path_to_cstr;
 use clap::Parser;
 use log::{debug, error, info};
 use crate::device_scan;
@@ -142,7 +143,7 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
 
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     let (optstr, mountflags) = parse_mountflag_options(&cli.options);
-    let opts = bch_bindgen::opts::parse_mount_opts(None, optstr.as_deref(), true)
+    let opts = bcachefs_kernel::opts::parse_mount_opts(None, optstr.as_deref(), true)
         .unwrap_or_default();
 
     let sbs = device_scan::scan_sbs(&cli.dev, &opts)?;
@@ -152,7 +153,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     let devices = device_scan::joined_device_str(&sbs);
 
     let first_sb = &sbs[0].1;
-    if unsafe { bcachefs::bch2_sb_is_encrypted(first_sb.sb) } {
+    if unsafe { bch_bindgen::c::bch2_sb_is_encrypted(first_sb.sb) } {
         handle_unlock(cli, first_sb)?;
     }
 

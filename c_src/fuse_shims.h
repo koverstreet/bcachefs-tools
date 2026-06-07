@@ -19,13 +19,6 @@ void rust_fuse_ensure_current(void);
 void rust_fuse_rcu_register(void);
 void rust_fuse_rcu_unregister(void);
 
-/* Inline function wrappers */
-u32 rust_block_bytes(struct bch_fs *c);
-u32 rust_inode_nlink_get(struct bch_inode_unpacked *bi);
-struct timespec64 rust_bch2_time_to_timespec(struct bch_fs *c, s64 time);
-s64 rust_timespec_to_bch2_time(struct bch_fs *c, struct timespec64 ts);
-s64 rust_bch2_current_time(struct bch_fs *c);
-
 /* Filesystem operations */
 
 int rust_fuse_lookup(struct bch_fs *c, subvol_inum dir,

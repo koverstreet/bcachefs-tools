@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use bch_bindgen::c;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::opt_set;
 use anyhow::bail;
 use clap::Parser;
 use crate::wrappers::bch_err_str;

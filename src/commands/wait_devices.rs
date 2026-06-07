@@ -6,8 +6,8 @@ use std::{
 };
 
 use anyhow::bail;
-use bch_bindgen::bcachefs;
-use bcachefs::bch_sb_handle;
+use bcachefs_kernel::c;
+use c::bch_sb_handle;
 use clap::Parser;
 use log::{debug, warn};
 use rustix::event::{poll, PollFd, PollFlags};
@@ -96,7 +96,7 @@ impl WaitInitialized {
         if device_scan::should_skip_multipath_component(device) {
             return Ok(());
         }
-        let opts = bcachefs::bch_opts::default();
+	let opts = c::bch_opts::default();
         let sb_handle = match device_scan::read_super_silent(devnode, opts) {
             Ok(handle) => handle,
             Err(err) if err.raw() == libc::ENOENT => return Ok(()),
@@ -151,7 +151,7 @@ impl WaitInitialized {
     }
 
     fn every_device_is_initialized(&mut self) -> anyhow::Result<bool> {
-	let opts = bcachefs::bch_opts::default();
+	let opts = c::bch_opts::default();
 	self.sbs = device_scan::filter_current_sbs(std::mem::take(&mut self.sbs), &opts)?;
 
 	let Some((_, best)) = self.sbs.first() else {

@@ -1,21 +1,21 @@
 use std::ffi::CString;
 use std::fmt::Write;
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 use std::path::Path;
 use std::process;
 
 use anyhow::{anyhow, Result};
-use bch_bindgen::bcachefs;
-use bch_bindgen::c;
-use bch_bindgen::fs::Fs;
-use bch_bindgen::metadata_version;
-use bch_bindgen::opt_set;
+use bch_bindgen::fs::FsExt;
+use bcachefs_kernel::c;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::metadata_version;
+use bcachefs_kernel::opt_set;
 use clap::Parser;
 use rustix::event::{poll, PollFd, PollFlags};
 
 use crate::wrappers::handle::BcachefsHandle;
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::wrappers::sysfs;
 use crate::device_scan;
@@ -99,32 +99,30 @@ fn do_splice(rfd: BorrowedFd, wfd: BorrowedFd) -> io::Result<bool> {
     Ok(false)
 }
 
-fn splice_fd_to_stdinout(fd: OwnedFd) -> i32 {
+fn splice_fd_to_stdinout(fd: BorrowedFd) -> i32 {
     let stdin = io::stdin();
     let stdout = io::stdout();
 
-    let borrowed_fd = fd.as_fd();
-
     setnonblocking(stdin.as_fd());
-    setnonblocking(borrowed_fd);
+    setnonblocking(fd);
 
     let mut stdin_closed = false;
 
     loop {
-        let mut pollfds = vec![PollFd::new(&borrowed_fd, PollFlags::IN)];
+        let mut pollfds = vec![PollFd::new(&fd, PollFlags::IN)];
         if !stdin_closed {
             pollfds.push(PollFd::new(&stdin, PollFlags::IN));
         }
         let _ = poll(&mut pollfds, -1);
 
-        match do_splice(borrowed_fd, stdout.as_fd()) {
+        match do_splice(fd, stdout.as_fd()) {
             Ok(true) => break,
             Err(_) => return -1,
             _ => {}
         }
 
         if !stdin_closed {
-            match do_splice(stdin.as_fd(), borrowed_fd) {
+            match do_splice(stdin.as_fd(), fd) {
                 Ok(true) => stdin_closed = true,
                 Err(_) => return -1,
                 _ => {}
@@ -133,8 +131,7 @@ fn splice_fd_to_stdinout(fd: OwnedFd) -> i32 {
     }
 
     // The return code from fsck is returned via close() on this fd
-    let fd = fd.into_raw_fd();
-    unsafe { rustix::io::try_close(fd) }.map_or(-1, |_| 0)
+    unsafe { libc::close(fd.as_raw_fd()) }
 }
 
 fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
@@ -152,7 +149,7 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
         return Err(anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}", crate::wrappers::bch_err_str(errno)));
     }
 
-    let fd = unsafe { OwnedFd::from_raw_fd(fsck_fd) };
+    let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
     Ok(splice_fd_to_stdinout(fd))
 }
 
@@ -168,7 +165,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
     }
 
     let dev_paths: Vec<std::path::PathBuf> = devs.iter().map(|d| d.as_str().into()).collect();
-    let mut opts = bcachefs::bch_opts::default();
+    let mut opts = c::bch_opts::default();
     opt_set!(opts, nostart, 1);
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);
@@ -289,7 +286,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
     }
 
     let opts_str = opts.join(",");
-    let fs_opts = bch_bindgen::opts::parse_mount_opts_vec(&opts, false)
+    let fs_opts = bcachefs_kernel::opts::parse_mount_opts_vec(&opts, false)
         .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
 
     // Check if any device is a mountpoint/directory (online fsck)
@@ -318,7 +315,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
     // specifies a single device, scan for other members by UUID — same
     // as mount does.
     let devices: Vec<String> = if devices.len() == 1 {
-        let scan_opts = bch_bindgen::opts::parse_mount_opts(None, None, true)
+        let scan_opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true)
             .unwrap_or_default();
         match device_scan::scan_sbs(&devices[0], &scan_opts) {
             Ok(sbs) => sbs.into_iter()
@@ -410,7 +407,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}", crate::wrappers::bch_err_str(errno)));
         }
 
-        let fd = unsafe { OwnedFd::from_raw_fd(fsck_fd) };
+        let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
         let ret = splice_fd_to_stdinout(fd);
         process::exit(ret);
     }
