@@ -50,8 +50,9 @@ fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32) -> Result<std::fs::
         op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub as u16,
         ..Default::default()
     };
-    cmd.__bindgen_anon_1.scrub.dev = dev_idx;
-    cmd.__bindgen_anon_1.scrub.data_types = data_types;
+    let scrub = unsafe { &mut cmd.__bindgen_anon_1.scrub };
+    scrub.dev = dev_idx;
+    scrub.data_types = data_types;
 
     let request = bch_ioc_w::<bch_ioctl_data>(BCH_IOCTL_DATA_NR);
     let ret = unsafe { libc::ioctl(ioctl_fd, request, &mut cmd as *mut bch_ioctl_data) };

@@ -85,20 +85,6 @@ void rust_strip_alloc_do(struct bch_fs *c)
 	mutex_unlock(&c->sb_lock);
 }
 
-/* online member iteration shim */
-
-struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,
-					 struct bch_dev *ca,
-					 unsigned ref_idx)
-{
-	return bch2_get_next_online_dev(c, ca, ~0U, READ, ref_idx);
-}
-
-void rust_put_online_dev_ref(struct bch_dev *ca, unsigned ref_idx)
-{
-	enumerated_ref_put(&ca->io_ref[READ], ref_idx);
-}
-
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
 {
 	struct rust_journal_entries ret = { NULL, 0 };
@@ -144,18 +130,6 @@ int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset)
 void rust_set_bit(unsigned long nr, unsigned long *addr)
 {
 	set_bit(nr, addr);
-}
-
-/* Device reference shims */
-
-struct bch_dev *rust_dev_tryget_noerror(struct bch_fs *c, unsigned dev)
-{
-	return bch2_dev_tryget_noerror(c, dev);
-}
-
-void rust_dev_put(struct bch_dev *ca)
-{
-	bch2_dev_put(ca);
 }
 
 /*

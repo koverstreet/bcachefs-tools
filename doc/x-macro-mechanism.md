@@ -1,7 +1,7 @@
 # X-macro import mechanism
 
 bcachefs uses C x-macros extensively for enums, string tables, and type
-dispatch. `bch_bindgen/build.rs` has a generic mechanism to import these
+dispatch. `fs/bch_bindgen/build.rs` has a generic mechanism to import these
 into Rust at build time.
 
 ## How it works

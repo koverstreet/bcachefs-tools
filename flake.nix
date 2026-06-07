@@ -194,6 +194,7 @@
             # dependencies (e.g. clippy or rust-analyzer).
             packages = with pkgs; [
               bear
+              rust-bindgen
               cargo-audit
               cargo-outdated
               clang-tools
