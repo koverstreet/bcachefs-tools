@@ -6,7 +6,7 @@ export BCACHEFS_DKMS=1
 # ifdefs in fs/Makefile. Empty / missing file is fine - unset names
 # export as no-ops.
 -include $(CURDIR)/build.vars
-export BCACHEFS_DEBUG BCACHEFS_TESTS BCACHEFS_INJECT_TRANSACTION_RESTARTS
+export BCACHEFS_DEBUG BCACHEFS_TESTS BCACHEFS_INJECT_TRANSACTION_RESTARTS BCACHEFS_RUST
 
 ifneq (${KERNELRELEASE},)
 ccflags-y := -I$(src)/include

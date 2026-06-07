@@ -2,8 +2,8 @@ use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
-use bch_bindgen::journal::{entry_type, journal_entry_type, jset_entries, jset_no_flush};
-use bch_bindgen::opt_set;
+use bcachefs_kernel::journal::{entry_type, journal_entry_type, jset_entries, jset_no_flush};
+use bcachefs_kernel::opt_set;
 use chrono::{TimeZone, Utc};
 use clap::Parser;
 
@@ -117,7 +117,7 @@ pub struct Cli {
 }
 
 fn cmd_journal_rewind_info(cli: Cli) -> Result<()> {
-    let mut opts = bch_bindgen::opts::parse_mount_opts_vec(&cli.opts, false)
+    let mut opts = bcachefs_kernel::opts::parse_mount_opts_vec(&cli.opts, false)
         .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);

@@ -412,6 +412,10 @@
 	x(EINVAL,			EINVAL_ioctl_query_counters_bad_flags)	\
 	x(EINVAL,			EINVAL_node_scan_no_nodes)		\
 	x(EINVAL,			EINVAL_node_scan_too_many_replicas)	\
+	x(EINVAL,			EINVAL_parse_btree_id)			\
+	x(EINVAL,			EINVAL_parse_bkey_type)			\
+	x(EINVAL,			EINVAL_parse_bpos)			\
+	x(EINVAL,			EINVAL_parse_bbpos)			\
 	x(BCH_ERR_topology_repair,	topology_repair_drop_this_node)		\
 	x(BCH_ERR_topology_repair,	topology_repair_drop_prev_node)		\
 	x(BCH_ERR_topology_repair,	topology_repair_did_fill_from_scan)	\

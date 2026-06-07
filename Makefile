@@ -55,7 +55,8 @@ endif
 # the same names so fs/Makefile's ifdefs fire during the module build.
 BCACHEFS_DKMS_FORWARD := BCACHEFS_DEBUG \
                         BCACHEFS_TESTS \
-                        BCACHEFS_INJECT_TRANSACTION_RESTARTS
+                        BCACHEFS_INJECT_TRANSACTION_RESTARTS \
+                        BCACHEFS_RUST
 
 # Vars persisted into the *local* build.vars across invocations - a
 # superset of BCACHEFS_DKMS_FORWARD that also covers MAKE_DEBUG, the
@@ -240,7 +241,7 @@ OBJS:=$(SRCS:.c=.o)
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 BCACHEFS_DEPS=libbcachefs.a
-RUST_SRCS:=$(shell find src bch_bindgen/src -type f -iname '*.rs')
+RUST_SRCS:=$(shell find src fs bch_bindgen/src -type f -iname '*.rs')
 
 bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 	$(Q)$(CARGO_BUILD)
@@ -339,8 +340,9 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	$(INSTALL) -m0644 -D dkms/Makefile		-t $(DESTDIR)$(DKMSDIR)
 	$(INSTALL) -m0644 -D dkms/dkms.conf		-t $(DESTDIR)$(DKMSDIR)
 	$(INSTALL) -m0644 -D fs/Makefile	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
-	(cd fs; find -name '*.[ch]' -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
+	(cd fs; find \( -name '*.[ch]' -o -name '*.rs' \) -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
 	$(INSTALL) -m0755 -D fs/scripts/getdents-layout.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
+	$(INSTALL) -m0755 -D fs/scripts/rust-is-available-dkms.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	@( :; $(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),printf '%s := %s\n' '$(v)' '$($(v))';)) ) > $(DESTDIR)$(DKMSDIR)/build.vars
@@ -404,7 +406,7 @@ doc: bcachefs-principles-of-operation.pdf
 .PHONY: cargo-update-msrv
 cargo-update-msrv:
 	cargo +nightly generate-lockfile -Zmsrv-policy
-	cargo +nightly generate-lockfile --manifest-path bch_bindgen/Cargo.toml -Zmsrv-policy
+	cargo +nightly generate-lockfile --manifest-path fs/Cargo.toml -Zmsrv-policy
 
 # Refresh the small set of kernel files we vendor verbatim (not bcachefs
 # source — that lives in fs/ and is developed in-tree now). See
