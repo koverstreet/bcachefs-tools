@@ -473,7 +473,7 @@ static CLOSURE_CALLBACK(journal_write_done_flush)
 		closure_wake_up(&wait);
 	}
 
-	continue_at(cl, journal_write_done, j->wq);
+	continue_at_nobarrier(cl, journal_write_done, j->wq);
 }
 
 static void journal_write_endio(struct bio *bio)
@@ -857,9 +857,9 @@ CLOSURE_CALLBACK(bch2_journal_write)
 		goto no_io;
 
 	if (!JSET_NO_FLUSH(w->data) && w->separate_flush)
-		continue_at(cl, journal_write_preflush, NULL);
+		continue_at_nobarrier(cl, journal_write_preflush, NULL);
 	else
-		continue_at(cl, journal_write_submit, NULL);
+		continue_at_nobarrier(cl, journal_write_submit, NULL);
 	return;
 err:
 	if (1) {
