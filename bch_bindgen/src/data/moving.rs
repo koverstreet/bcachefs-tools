@@ -9,8 +9,8 @@ use std::marker::PhantomPinned;
 use std::pin::Pin;
 
 use crate::c;
-use crate::errcode::{self, BchError};
-use crate::fs::Fs;
+use bcachefs_kernel::errcode::{self, BchError};
+use bcachefs_kernel::fs::Fs;
 
 fn ret_to_result(ret: i32) -> Result<(), BchError> {
     errcode::ret_to_result(ret).map(|_| ())

@@ -1,4 +1,3 @@
-
 use std::ops::ControlFlow;
 use std::os::fd::{AsFd, BorrowedFd};
 use std::path::Path;
@@ -7,15 +6,13 @@ use std::path::PathBuf;
 use anyhow::{anyhow, Result};
 use clap::Parser;
 
-use bch_bindgen::bkey::BkeySC;
-use bch_bindgen::bkey::bkey_type;
-use bch_bindgen::btree::*;
-use bch_bindgen::accounting;
-use bch_bindgen::c;
-use bch_bindgen::data::extents::bkey_ptrs_sc;
-use bch_bindgen::fs::Fs;
-use bch_bindgen::opt_set;
-use bch_bindgen::POS_MIN;
+use bcachefs_kernel::btree;
+use bcachefs_kernel::btree::bkey::bkey_type;
+use bcachefs_kernel::c;
+use bcachefs_kernel::data::extents::bkey_ptrs_sc;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::opt_set;
+use bcachefs_kernel::POS_MIN;
 
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 use crate::wrappers::super_io::vstruct_bytes_sb;
@@ -436,7 +433,7 @@ impl DumpDev {
     }
 }
 
-fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: BkeySC<'_>, btree_node_size: u64) {
+fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_size: u64) {
     let val = k.v();
     for ptr in bkey_ptrs_sc(&val) {
         let dev = ptr.dev() as usize;
@@ -586,23 +583,23 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     // journal overlay, so nodes reachable only through not-yet-replayed journal
     // entries are captured too.
     for id in 0..fs.btree_id_nr_alive() {
-        let trans = BtreeTrans::new(fs);
+        let trans = btree::BtreeTrans::new(fs);
 
         for level in 0..(c::BTREE_MAX_DEPTH as u32) {
-            let mut node_iter = BtreeNodeIter::new(
+            let mut node_iter = btree::BtreeNodeIter::new(
                 &trans,
                 id,
                 POS_MIN,
                 0, // locks_want
                 level,
-                BtreeIterFlags::PREFETCH,
+                btree::BtreeIterFlags::PREFETCH,
             );
 
             node_iter.for_each(&trans, |b| {
-                dump_node(fs, &mut devs, BkeySC::from(&b.key), btree_node_size);
+                dump_node(fs, &mut devs, btree::BkeySC::from(&b.key), btree_node_size);
                 ControlFlow::Continue(())
             }).map_err(|e| anyhow!("error walking btree {}: {}",
-                accounting::btree_id_str(id), e))?;
+                btree::types::btree_id_str(id), e))?;
         }
     }
 

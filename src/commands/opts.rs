@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use anyhow::{bail, Result};
 use bch_bindgen::c;
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 use clap::{Arg, ArgAction, ArgMatches};
 
 /// Leak a String to get a &'static str. Used for Clap args built from
@@ -14,7 +14,7 @@ fn leak(s: String) -> &'static str {
 
 /// Iterate bch2_opt_table entries matching flag_filter, calling f for each.
 fn for_each_opt(flag_filter: u32, mut f: impl FnMut(&'static str, &c::bch_option)) {
-    for opt in bch_bindgen::opts::opt_table() {
+    for opt in bcachefs_kernel::opts::opt_table() {
         if opt.flags as u32 & flag_filter == 0 { continue }
         if opt.flags as u32 & c::opt_flags::OPT_HIDDEN as u32 != 0 { continue }
         let Some(name) = opt.name() else { continue };
@@ -30,7 +30,7 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
     const HELPCOL: usize = 32;
     let mut out = String::new();
 
-    for opt in bch_bindgen::opts::opt_table() {
+    for opt in bcachefs_kernel::opts::opt_table() {
         if opt.flags as u32 & flags_all != flags_all { continue }
         if opt.flags as u32 & flags_none != 0 { continue }
         let Some(name) = opt.name() else { continue };
