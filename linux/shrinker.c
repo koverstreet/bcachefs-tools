@@ -10,6 +10,12 @@
 #include <linux/percpu.h>
 #include <linux/shrinker.h>
 
+#include <linux/futex.h>
+/* hack for mips: */
+#define CONFIG_RCU_HAVE_FUTEX 1
+#include <urcu/futex.h>
+#include <urcu.h>
+
 #include "tools-util.h"
 
 static LIST_HEAD(shrinker_list);

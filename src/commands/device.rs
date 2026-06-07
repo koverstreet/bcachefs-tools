@@ -5,16 +5,17 @@ use std::thread;
 use std::time::Duration;
 
 use anyhow::{anyhow, bail, Context, Result};
+use bch_bindgen::fs::FsExt;
 use bch_bindgen::c::{
     self,
     bch_degraded_actions,
     bch_member_state::*,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
 };
-use bch_bindgen::fs::Fs;
-use bch_bindgen::metadata_version;
-use bch_bindgen::opt_set;
-use bch_bindgen::path_to_cstr;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::metadata_version;
+use bcachefs_kernel::opt_set;
+use bcachefs_kernel::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches, parse_opt_val};
@@ -142,7 +143,7 @@ fn device_add_format(
         let Some((opt_id, opt)) = bch_opt_lookup(name) else { continue };
         let val = parse_opt_val(opt, value)?
             .ok_or_else(|| anyhow!("option {} requires open filesystem", name))?;
-        bch_bindgen::opts::opt_set_by_id(&mut dev_opts.opts, opt_id, val);
+        bcachefs_kernel::opts::opt_set_by_id(&mut dev_opts.opts, opt_id, val);
     }
 
     if let Some(mpath_dev) = find_multipath_holder(Path::new(dev_path)) {
@@ -434,7 +435,7 @@ fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
 
 /// Find the single online device in a filesystem.
 /// Offline operations (resize, resize-journal) require exactly one device.
-fn find_single_online_dev(fs: &Fs) -> Result<bch_bindgen::fs::DevRef> {
+fn find_single_online_dev(fs: &Fs) -> Result<bcachefs_kernel::fs::DevRef> {
     use std::ops::ControlFlow;
 
     let mut count = 0u32;
@@ -457,7 +458,7 @@ fn find_single_online_dev(fs: &Fs) -> Result<bch_bindgen::fs::DevRef> {
 }
 
 fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
-    use bch_bindgen::printbuf::Printbuf;
+    use bcachefs_kernel::util::printbuf::Printbuf;
 
     let opts: c::bch_opts = Default::default();
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
@@ -547,14 +548,11 @@ pub struct EvacuateCli {
 
 fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
 
-    let version_reconcile =
-        u32::from(metadata_version::reconcile) as u64;
-
-    if bcachefs_kernel_version() < version_reconcile {
+    if bcachefs_kernel_version() < u32::from(metadata_version::reconcile) as u64 {
         return Err(anyhow!(
             "Kernel too old for Rust evacuate path; \
              need bcachefs metadata version >= {} (reconcile)",
-            version_reconcile
+            u32::from(metadata_version::reconcile) as u64
         ));
     }
 
@@ -564,7 +562,7 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     // Reconcile drives evacuation — check the filesystem has been upgraded
     let sb_ver = handle.sb_version()
         .context("reading filesystem superblock")?;
-    if (sb_ver as u64) < version_reconcile {
+    if (sb_ver as u64) < u32::from(metadata_version::reconcile) as u64 {
         return Err(anyhow!(
             "Filesystem has not been upgraded to the reconcile version.\n\
              Device evacuation requires reconcile. Remount with:\n  \

@@ -1,14 +1,14 @@
 use std::ops::ControlFlow;
 
 use anyhow::Result;
-use bch_bindgen::bcachefs;
-use bch_bindgen::bkey::BkeySC;
-use bch_bindgen::btree::BtreeIter;
-use bch_bindgen::btree::BtreeIterFlags;
-use bch_bindgen::btree::BtreeNodeIter;
-use bch_bindgen::btree::BtreeTrans;
-use bch_bindgen::fs::Fs;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::{btree_id, c};
+use bcachefs_kernel::btree::bkey::BkeySC;
+use bcachefs_kernel::btree::iter::BtreeIter;
+use bcachefs_kernel::btree::iter::BtreeIterFlags;
+use bcachefs_kernel::btree::iter::BtreeNodeIter;
+use bcachefs_kernel::btree::iter::BtreeTrans;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::opt_set;
 use bch_bindgen::c::bch_degraded_actions;
 use clap::Parser;
 use std::io::{stdout, IsTerminal};
@@ -38,7 +38,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         }
 
         if let Some(ty) = opt.bkey_type {
-            if k.k.type_ != u32::from(ty) as u8 {
+            if k.k.type_ != ty.0 as u8 {
                 return ControlFlow::Continue(());
             }
         }
@@ -52,7 +52,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    for level in opt.level..(bcachefs::BTREE_MAX_DEPTH as u32) {
+    for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
         let mut iter = BtreeNodeIter::new(
             &trans,
             opt.btree,
@@ -77,7 +77,7 @@ fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    for level in opt.level..(bcachefs::BTREE_MAX_DEPTH as u32) {
+    for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
         let mut iter = BtreeNodeIter::new(
             &trans,
             opt.btree,
@@ -102,7 +102,7 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    for level in opt.level..(bcachefs::BTREE_MAX_DEPTH as u32) {
+    for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
         let mut iter = BtreeNodeIter::new(
             &trans,
             opt.btree,
@@ -149,12 +149,12 @@ pub struct Cli {
     mode: Mode,
 
     /// Btree to list from
-    #[arg(short, long, default_value_t=bcachefs::btree_id::extents)]
-    btree: bcachefs::btree_id,
+    #[arg(short, long, default_value_t=btree_id::extents)]
+    btree: c::btree_id,
 
     /// Bkey type to list
     #[arg(short = 'k', long)]
-    bkey_type: Option<bcachefs::bch_bkey_type>,
+    bkey_type: Option<c::bch_bkey_type>,
 
     /// Btree depth to descend to (0 == leaves)
     #[arg(short, long, default_value_t = 0)]
@@ -162,11 +162,11 @@ pub struct Cli {
 
     /// Start position to list from
     #[arg(short, long, default_value = "POS_MIN")]
-    start: bcachefs::bpos,
+    start: c::bpos,
 
     /// End position
     #[arg(short, long, default_value = "SPOS_MAX")]
-    end: bcachefs::bpos,
+    end: c::bpos,
 
     /// Check (fsck) the filesystem first
     #[arg(short, long)]
@@ -186,7 +186,7 @@ pub struct Cli {
 }
 
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
-    let mut fs_opts = bcachefs::bch_opts::default();
+    let mut fs_opts = c::bch_opts::default();
 
     opt_set!(fs_opts, noexcl, 1);
     opt_set!(fs_opts, nochanges, 1);
@@ -196,14 +196,14 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     opt_set!(
         fs_opts,
         errors,
-        bcachefs::bch_error_actions::BCH_ON_ERROR_continue as u8
+        c::bch_error_actions::BCH_ON_ERROR_continue as u8
     );
 
     if opt.fsck {
         opt_set!(
             fs_opts,
             fix_errors,
-            bcachefs::fsck_err_opts::FSCK_FIX_yes as u8
+            c::fsck_err_opts::FSCK_FIX_yes as u8
         );
         opt_set!(fs_opts, norecovery, 0);
     }

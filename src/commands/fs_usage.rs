@@ -2,14 +2,15 @@ use std::fmt::Write as FmtWrite;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::c;
-use bch_bindgen::metadata_version;
 use clap::Parser;
 
 use crate::wrappers::accounting::{
-    self, AccountingEntry, DiskAccountingKind, data_type, data_type_is_empty, disk_accounting_type,
+    AccountingEntry, DiskAccountingKind, data_type, data_type_is_empty, disk_accounting_type,
 };
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::{btree, metadata_version};
+use bcachefs_kernel::opts::{prt_data_type, prt_compression_type, prt_reconcile_type};
+use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::sysfs::{self, DevInfo, bcachefs_kernel_version};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -103,8 +104,8 @@ fn fs_usage_v1_to_text(
     let has = |f: Field| -> bool { fields.contains(&f) };
 
     let mut accounting_types: u32 =
-        disk_accounting_type::replicas.bit()
-            | disk_accounting_type::persistent_reserved.bit();
+        disk_accounting_type::replicas.bit() |
+        disk_accounting_type::persistent_reserved.bit();
 
     if has(Field::Compression) {
         accounting_types |= disk_accounting_type::compression.bit();
@@ -113,8 +114,7 @@ fn fs_usage_v1_to_text(
         accounting_types |= disk_accounting_type::btree.bit();
     }
     if has(Field::RebalanceWork) {
-        let version_reconcile =
-            u32::from(metadata_version::reconcile) as u64;
+        let version_reconcile = u32::from(metadata_version::reconcile) as u64;
         if bcachefs_kernel_version() < version_reconcile {
             accounting_types |= disk_accounting_type::rebalance_work.bit();
         } else {
@@ -171,7 +171,7 @@ fn fs_usage_v1_to_text(
                         let dev_list = &dev_list[..nr_devs as usize];
                         let dur = replicas_durability(nr_devs, nr_required, dev_list, devs);
 
-                        accounting::prt_data_type(sub, data_type);
+                        prt_data_type(sub, data_type);
                         write!(sub, ":\t{}/{}\t{}\t[", nr_required, nr_devs, dur.durability).unwrap();
 
                         prt_dev_list(sub, dev_list, devs);
@@ -198,7 +198,7 @@ fn fs_usage_v1_to_text(
 
                 for entry in &compr {
                     if let DiskAccountingKind::Compression { compression_type } = entry.pos.decode() {
-                        accounting::prt_compression_type(sub, compression_type);
+                        prt_compression_type(sub, compression_type);
                         write!(sub, "\t").unwrap();
 
                         let nr_extents = entry.counter(0);
@@ -231,7 +231,7 @@ fn fs_usage_v1_to_text(
                 write!(sub, "\nBtree usage:\n").unwrap();
                 for entry in &btrees {
                     if let DiskAccountingKind::Btree { id } = entry.pos.decode() {
-                        write!(sub, "{}:\t", accounting::btree_id_str(id)).unwrap();
+                        write!(sub, "{}:\t", btree::types::btree_id_str(id)).unwrap();
                         sub.units_sectors(entry.counter(0));
                         write!(sub, "\r\n").unwrap();
                     }
@@ -261,7 +261,7 @@ fn fs_usage_v1_to_text(
                 write!(sub, "\nPending reconcile:\tdata\rmetadata\r\n").unwrap();
                 for entry in &reconcile {
                     if let DiskAccountingKind::ReconcileWork { work_type } = entry.pos.decode() {
-                        accounting::prt_reconcile_type(sub, work_type);
+                        prt_reconcile_type(sub, work_type);
                         write!(sub, ":\t").unwrap();
                         sub.units_sectors(entry.counter(0));
                         write!(sub, "\r").unwrap();
@@ -531,7 +531,7 @@ fn devs_usage_to_text(
                 let capacity = d.usage.capacity_sectors() - hidden;
                 let used = d.usage.used_sectors() - hidden;
                 let label = d.info.label.as_deref().unwrap_or("(no label)");
-                let state = accounting::member_state_str(d.usage.state);
+                let state = bcachefs_kernel::sb::members::member_state_str(d.usage.state);
 
                 write!(sub, "{} (device {}):\t{}\t{}\t", label, d.info.idx, d.info.dev, state).unwrap();
 
@@ -561,7 +561,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
     let u = &d.usage;
 
     let label = d.info.label.as_deref().unwrap_or("(no label)");
-    let state = accounting::member_state_str(u.state);
+    let state = bcachefs_kernel::sb::members::member_state_str(u.state);
     let pct = if u.nr_buckets > 0 { u.used_buckets() * 100 / u.nr_buckets } else { 0 };
 
     out.aligned(|sub| {
@@ -572,7 +572,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
             write!(sub, "\tdata\rbuckets\rfragmented\r\n").unwrap();
 
             for (dt_type, dt) in u.iter_typed() {
-                accounting::prt_data_type(sub, dt_type);
+                prt_data_type(sub, dt_type);
                 write!(sub, ":\t").unwrap();
 
                 let sectors = if data_type_is_empty(dt_type) {

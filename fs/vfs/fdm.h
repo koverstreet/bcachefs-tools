@@ -25,7 +25,8 @@
 
 #include <linux/hash.h>
 #include <linux/random.h>
-#include <linux/closure.h>
+
+#include "vendor/closure.h"
 
 #define FDM_NR_HASH		3
 #define FDM_HASH_BITS		9

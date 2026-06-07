@@ -3,6 +3,7 @@
 #define _BCACHEFS_BKEY_H
 
 #include <linux/bug.h>
+#include <linux/static_key.h>
 #include "bcachefs_format.h"
 #include "btree/bkey_types.h"
 #include "btree/types.h"
@@ -76,6 +77,8 @@ static inline void bkey_val_copy(struct bkey_i *dst, const struct bkey_i *src)
 }
 
 struct btree;
+
+extern struct static_key_false bch2_debug_check_bkey_unpack;
 
 __pure
 unsigned bch2_bkey_greatest_differing_bit(const struct btree *,

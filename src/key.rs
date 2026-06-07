@@ -11,11 +11,11 @@ use std::{
 };
 
 use anyhow::{anyhow, ensure, Result};
-use bch_bindgen::{
-    bcachefs::{self, bch_key, bch_sb_handle},
-    c::{bch2_chacha20, bch_encrypted_key, bch_sb_field_crypt},
-    keyutils::{self, keyctl_search},
+use bcachefs_kernel::c::{
+    bch_key, bch_sb_handle,
+    bch2_chacha20, bch_encrypted_key, bch_sb_field_crypt,
 };
+use bch_bindgen::keyutils::{self, keyctl_search};
 use log::{debug, info};
 use rustix::termios;
 use uuid::Uuid;
@@ -263,7 +263,7 @@ impl Passphrase {
     fn derive(&self, crypt: &bch_sb_field_crypt) -> bch_key {
         let crypt_ptr = (crypt as *const bch_sb_field_crypt).cast_mut();
 
-        unsafe { bcachefs::derive_passphrase(crypt_ptr, self.get().as_ptr()) }
+        unsafe { bch_bindgen::c::derive_passphrase(crypt_ptr, self.get().as_ptr()) }
     }
 
     /// Re-encrypt a filesystem key with this passphrase.
