@@ -18,8 +18,6 @@
 #include <linux/types.h>
 #include <linux/uuid.h>
 
-#include "bcachefs.h"
-
 #define noreturn __attribute__((noreturn))
 
 void die(const char *, ...)

@@ -143,7 +143,7 @@ clean and make it easy to compare old vs new or revert.
 
 - **Rust**: Command dispatch (`src/bcachefs.rs`), all command
   implementations (`src/commands/`), wrappers over C APIs
-  (`src/wrappers/`, `bch_bindgen/`)
+  (`src/wrappers/`, `fs/bch_bindgen/`)
 - **C shims** (`c_src/rust_shims.c`): Thin wrappers around kernel macros
   and iteration patterns that can't be expressed through bindgen
   (LE64_BITMASK setters, `for_each_member_device`, btree node walking,

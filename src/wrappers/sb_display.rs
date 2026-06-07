@@ -13,9 +13,9 @@ use std::fmt::Write;
 use std::path::PathBuf;
 
 use bch_bindgen::c;
-use bch_bindgen::printbuf::Printbuf;
-use bch_bindgen::bcachefs::bch_sb_handle;
-use bch_bindgen::sb::{self, sb_field_type};
+use bcachefs_kernel::util::printbuf::Printbuf;
+use bcachefs_kernel::c::bch_sb_handle;
+use bcachefs_kernel::sb::{self, sb_field_type};
 
 use crate::device_scan;
 
@@ -97,7 +97,7 @@ pub unsafe fn sb_to_text_with_names(
     let uuid = uuid::Uuid::from_bytes(sb.user_uuid.b);
     let device_str = format!("UUID={}", uuid);
 
-    let opts = bch_bindgen::opts::parse_mount_opts(None, None, true).unwrap_or_default();
+    let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
     let sbs = device_scan::scan_sbs(&device_str, &opts).unwrap_or_default();
 
     let sb_ptr = sb as *const c::bch_sb as *mut c::bch_sb;
@@ -115,13 +115,13 @@ pub unsafe fn sb_to_text_with_names(
         c::bch2_sb_to_text(out.as_raw(), fs, sb_ptr, print_layout, fields & !member_mask);
 
         let gi: *mut c::bch_sb_field_disk_groups =
-            sb::sb_field_get::<c::bch_sb_field_disk_groups>(sb)
+            sb::io::sb_field_get::<c::bch_sb_field_disk_groups>(sb)
                 .map(|f| f as *const _ as *mut _)
                 .unwrap_or(std::ptr::null_mut());
 
         // members_v1
         if (fields & sb_field_type::members_v1.bit()) != 0 {
-            if let Some(mi1) = sb::members_v1(sb) {
+            if let Some(mi1) = sb::members::members_v1(sb) {
                 for i in 0..mi1.nr_devices() {
                     if let Some(mut m) = mi1.get(i) {
                         print_one_member(out, &sbs, sb_ptr, gi, &mut m, i);
@@ -132,7 +132,7 @@ pub unsafe fn sb_to_text_with_names(
 
         // members_v2
         if (fields & sb_field_type::members_v2.bit()) != 0 {
-            if let Some(mi2) = sb::members_v2(sb) {
+            if let Some(mi2) = sb::members::members_v2(sb) {
                 for i in 0..mi2.nr_devices() {
                     if let Some(mut m) = mi2.get(i) {
                         print_one_member(out, &sbs, sb_ptr, gi, &mut m, i);

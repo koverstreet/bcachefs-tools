@@ -10,10 +10,25 @@ struct mutex {
 #define DEFINE_MUTEX(mutexname) \
 	struct mutex mutexname = { .lock = PTHREAD_MUTEX_INITIALIZER }
 
-#define mutex_init(l)		pthread_mutex_init(&(l)->lock, NULL)
-#define mutex_lock(l)		pthread_mutex_lock(&(l)->lock)
-#define mutex_trylock(l)	(!pthread_mutex_trylock(&(l)->lock))
-#define mutex_unlock(l)		pthread_mutex_unlock(&(l)->lock)
+static inline void mutex_init(struct mutex *l)
+{
+	pthread_mutex_init(&l->lock, NULL);
+}
+
+static inline void mutex_lock(struct mutex *l)
+{
+	pthread_mutex_lock(&l->lock);
+}
+
+static inline bool mutex_trylock(struct mutex *l)
+{
+	return !pthread_mutex_trylock(&l->lock);
+}
+
+static inline void mutex_unlock(struct mutex *l)
+{
+	pthread_mutex_unlock(&l->lock);
+}
 
 DEFINE_GUARD(mutex, struct mutex *, mutex_lock(_T), mutex_unlock(_T))
 
