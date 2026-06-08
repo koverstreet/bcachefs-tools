@@ -51,7 +51,8 @@ self': {
       )
       compression = machine.succeed("cat /sys/fs/bcachefs/*/options/compression").strip()
       assert compression == "zstd", f"expected zstd, got {compression}"
-      machine.succeed("dd if=/dev/zero bs=1M count=4 of=/mnt/compressible 2>&1")
+      machine.succeed("dd if=/dev/zero bs=1M count=4 of=/tmp/src-compressible 2>&1")
+      machine.succeed("cp /tmp/src-compressible /mnt/compressible")
       machine.succeed("sync")
       usage = machine.succeed("bcachefs fs usage -a /mnt")
       print(f"fs usage:\n{usage}")
@@ -68,8 +69,11 @@ self': {
           found_zstd = True
           break
       assert found_zstd, "no zstd compression line in fs usage output"
-      machine.succeed("md5sum /mnt/compressible > /tmp/compressible.md5")
-      machine.succeed("md5sum -c /tmp/compressible.md5")
+      machine.succeed("cmp /tmp/src-compressible /mnt/compressible")
+      machine.succeed("umount /mnt")
+
+      machine.succeed("mount /dev/disk/by-id/virtio-test-disk /mnt")
+      machine.succeed("cmp /tmp/src-compressible /mnt/compressible")
       machine.succeed("umount /mnt")
 
     with subtest("zstd early abort skips incompressible data"):
@@ -77,7 +81,8 @@ self': {
         "mkfs.bcachefs --force --compression=zstd /dev/disk/by-id/virtio-test-disk",
         "mount /dev/disk/by-id/virtio-test-disk /mnt",
       )
-      machine.succeed("dd if=/dev/urandom bs=1M count=4 of=/mnt/incompressible 2>&1")
+      machine.succeed("dd if=/dev/urandom bs=1M count=4 of=/tmp/src-incompressible 2>&1")
+      machine.succeed("cp /tmp/src-incompressible /mnt/incompressible")
       machine.succeed("sync")
       usage = machine.succeed("bcachefs fs usage -a /mnt")
       print(f"fs usage:\n{usage}")
@@ -98,8 +103,11 @@ self': {
           assert compressed == uncompressed, f"incompressible data should be 1:1: {compressed} != {uncompressed}"
           break
       assert found, "no compression accounting line in fs usage output"
-      machine.succeed("md5sum /mnt/incompressible > /tmp/incompressible.md5")
-      machine.succeed("md5sum -c /tmp/incompressible.md5")
+      machine.succeed("cmp /tmp/src-incompressible /mnt/incompressible")
+      machine.succeed("umount /mnt")
+
+      machine.succeed("mount /dev/disk/by-id/virtio-test-disk /mnt")
+      machine.succeed("cmp /tmp/src-incompressible /mnt/incompressible")
       machine.succeed("umount /mnt")
 
     with subtest("in-kernel zstd compress tests"):
@@ -118,12 +126,32 @@ self': {
         "echo zstd > /sys/fs/bcachefs/*/options/compression",
       )
       machine.succeed(
-        "dd if=/dev/zero bs=1K count=4 > /mnt/small-compressible",
-        "dd if=/dev/urandom bs=1K count=4 > /mnt/small-incompressible",
-        "dd if=/dev/zero bs=1M count=4 > /mnt/large-compressible",
-        "dd if=/dev/urandom bs=1M count=4 > /mnt/large-incompressible",
-        "md5sum /mnt/small-compressible /mnt/small-incompressible /mnt/large-compressible /mnt/large-incompressible > /tmp/all.md5",
-        "md5sum -c /tmp/all.md5",
+        "dd if=/dev/zero bs=1K count=4 of=/tmp/src-small-compressible 2>&1",
+        "dd if=/dev/urandom bs=1K count=4 of=/tmp/src-small-incompressible 2>&1",
+        "dd if=/dev/zero bs=1M count=4 of=/tmp/src-large-compressible 2>&1",
+        "dd if=/dev/urandom bs=1M count=4 of=/tmp/src-large-incompressible 2>&1",
+      )
+      machine.succeed(
+        "cp /tmp/src-small-compressible /mnt/small-compressible",
+        "cp /tmp/src-small-incompressible /mnt/small-incompressible",
+        "cp /tmp/src-large-compressible /mnt/large-compressible",
+        "cp /tmp/src-large-incompressible /mnt/large-incompressible",
+      )
+      machine.succeed("sync")
+      machine.succeed(
+        "cmp /tmp/src-small-compressible /mnt/small-compressible",
+        "cmp /tmp/src-small-incompressible /mnt/small-incompressible",
+        "cmp /tmp/src-large-compressible /mnt/large-compressible",
+        "cmp /tmp/src-large-incompressible /mnt/large-incompressible",
+      )
+      machine.succeed("umount /mnt")
+
+      machine.succeed("mount /dev/disk/by-id/virtio-test-disk /mnt")
+      machine.succeed(
+        "cmp /tmp/src-small-compressible /mnt/small-compressible",
+        "cmp /tmp/src-small-incompressible /mnt/small-incompressible",
+        "cmp /tmp/src-large-compressible /mnt/large-compressible",
+        "cmp /tmp/src-large-incompressible /mnt/large-incompressible",
       )
       machine.succeed("umount /mnt")
   '';
