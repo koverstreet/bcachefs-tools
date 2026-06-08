@@ -500,6 +500,17 @@ fn main() {
     }
     wrappers.compile("bcachefs_static_wrappers");
 
+    // dh-cargo Built-Using (Debian): point the path at the top-level crate (the
+    // package root, == the dpkg build's $PWD), so dh-cargo-built-using sees this
+    // lib as built from our own in-tree source and skips it ("top-level crate
+    // being built, no need to add Built-Using") rather than running `dpkg -S` on
+    // a build path no Debian package owns. top_dir is bch_bindgen/; the workspace
+    // root ($PWD under dpkg-buildpackage) is its parent.
+    println!(
+        "dh-cargo:deb-built-using=bcachefs_static_wrappers=0={}",
+        top_dir.parent().expect("bch_bindgen has a parent dir").display()
+    );
+
     // Generate from x-macros in bcachefs_format.h
     let format_h = std::fs::read_to_string(top_dir.join("../fs/bcachefs_format.h"))
         .expect("reading bcachefs_format.h");
