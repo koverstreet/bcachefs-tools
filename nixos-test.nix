@@ -154,5 +154,35 @@ self': {
         "cmp /tmp/src-large-incompressible /mnt/large-incompressible",
       )
       machine.succeed("umount /mnt")
+
+    with subtest("zstd early abort option toggle"):
+      machine.succeed(
+        "mkfs.bcachefs --force --compression=zstd /dev/disk/by-id/virtio-test-disk",
+        "mount /dev/disk/by-id/virtio-test-disk /mnt",
+      )
+      ea = machine.succeed("cat /sys/fs/bcachefs/*/options/zstd_compression_early_abort").strip()
+      assert ea == "1", f"expected early_abort=1 by default, got {ea}"
+      machine.succeed("dd if=/dev/urandom bs=1M count=4 of=/tmp/src-ea-test 2>&1")
+      machine.succeed("cp /tmp/src-ea-test /mnt/with-early-abort")
+      machine.succeed("sync")
+      machine.succeed("echo 0 > /sys/fs/bcachefs/*/options/zstd_compression_early_abort")
+      ea = machine.succeed("cat /sys/fs/bcachefs/*/options/zstd_compression_early_abort").strip()
+      assert ea == "0", f"expected early_abort=0, got {ea}"
+      machine.succeed("cp /tmp/src-ea-test /mnt/without-early-abort")
+      machine.succeed("sync")
+      machine.succeed(
+        "cmp /tmp/src-ea-test /mnt/with-early-abort",
+        "cmp /tmp/src-ea-test /mnt/without-early-abort",
+      )
+      machine.succeed("umount /mnt")
+
+      machine.succeed("mount /dev/disk/by-id/virtio-test-disk /mnt")
+      ea = machine.succeed("cat /sys/fs/bcachefs/*/options/zstd_compression_early_abort").strip()
+      assert ea == "0", f"expected early_abort=0 persisted after remount, got {ea}"
+      machine.succeed(
+        "cmp /tmp/src-ea-test /mnt/with-early-abort",
+        "cmp /tmp/src-ea-test /mnt/without-early-abort",
+      )
+      machine.succeed("umount /mnt")
   '';
 }
