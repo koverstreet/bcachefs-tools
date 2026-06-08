@@ -488,7 +488,12 @@ static int attempt_compress(struct bch_fs *c,
 		if (!cstream)
 			return 0;
 
-		/* The first four bytes record the exact compressed byte count. */
+		/*
+		 * ZSTD requires that when we decompress we pass in the exact
+		 * compressed size - rounding it up to the nearest sector
+		 * doesn't work, so we use the first 4 bytes of the buffer for
+		 * that.
+		 */
 		zstd_out_buffer out_buf = {
 			.dst	= dst + 4,
 			.size	= dst_len - 4,
