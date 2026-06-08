@@ -455,6 +455,10 @@ static int attempt_compress(struct bch_fs *c,
 		return strm.total_out;
 	}
 	case BCH_COMPRESSION_TYPE_zstd: {
+		/*
+		 * rescale:
+		 * zstd max compression level is 22, our max level is 15
+		 */
 		unsigned level = min((compression.level * 3) / 2, zstd_max_clevel());
 		ZSTD_parameters params = zstd_get_params(level, c->opts.encoded_extent_max);
 		zstd_cstream *cstream;
@@ -464,9 +468,15 @@ static int attempt_compress(struct bch_fs *c,
 		if (!cstream)
 			return 0;
 
+		/*
+		 * ZSTD requires that when we decompress we pass in the exact
+		 * compressed size - rounding it up to the nearest sector
+		 * doesn't work, so we use the first 4 bytes of the buffer for
+		 * that.
+		 */
 		zstd_out_buffer out_buf = {
 			.dst	= dst + 4,
-			.size	= dst_len - 4 - 7,
+			.size	= dst_len - 4,
 			.pos	= 0,
 		};
 		zstd_in_buffer in_buf = {
