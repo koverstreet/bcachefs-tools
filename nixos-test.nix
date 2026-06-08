@@ -4,10 +4,15 @@ self': {
   nodes.machine = { config, pkgs, ... }: {
     boot.kernelPackages = pkgs.linuxPackages_latest;
 
+    boot.bcachefs.modulePackage =
+      self'.packages.bcachefs-module-linux-latest.overrideAttrs (old: {
+        makeFlags = (old.makeFlags or []) ++ [ "BCACHEFS_TESTS=1" ];
+      });
+
     assertions = [{
       assertion =
-        config.boot.bcachefs.modulePackage or null == self'.packages.bcachefs-module-linux-latest;
-      message = "Local bcachefs module isn't being used; update nixpkgs?";
+        config.boot.bcachefs.modulePackage or null != null;
+      message = "bcachefs module not set";
     }];
 
     virtualisation.emptyDiskImages = [{
@@ -95,6 +100,15 @@ self': {
       assert found, "no compression accounting line in fs usage output"
       machine.succeed("md5sum /mnt/incompressible > /tmp/incompressible.md5")
       machine.succeed("md5sum -c /tmp/incompressible.md5")
+      machine.succeed("umount /mnt")
+
+    with subtest("in-kernel zstd compress tests"):
+      machine.succeed(
+        "mkfs.bcachefs --force --compression=zstd /dev/disk/by-id/virtio-test-disk",
+        "mount /dev/disk/by-id/virtio-test-disk /mnt",
+      )
+      for test in ["test_zstd_compress_decompress", "test_zstd_early_abort_incompressible", "test_zstd_levels"]:
+        machine.succeed(f"echo '{test} 10' > /sys/fs/bcachefs/*/compress_test")
       machine.succeed("umount /mnt")
 
     with subtest("zstd mixed data integrity"):
