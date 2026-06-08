@@ -29,9 +29,9 @@ static int test_zstd_compress_decompress(struct bch_fs *c, u64 nr)
 
 	pr_info("zstd compress/decompress roundtrip test, src_len=%zu", src_len);
 
-	void *src __cleanup(kfree) = kmalloc(src_len, GFP_KERNEL);
-	void *dst __cleanup(kfree) = kmalloc(dst_len, GFP_KERNEL);
-	void *verify __cleanup(kfree) = kmalloc(src_len, GFP_KERNEL);
+	void *src __free(kvfree) = kvmalloc(src_len, GFP_KERNEL);
+	void *dst __free(kvfree) = kvmalloc(dst_len, GFP_KERNEL);
+	void *verify __free(kvfree) = kvmalloc(src_len, GFP_KERNEL);
 	if (!src || !dst || !verify)
 		return -ENOMEM;
 
@@ -100,8 +100,8 @@ static int test_zstd_early_abort_incompressible(struct bch_fs *c, u64 nr)
 
 	pr_info("zstd early abort test with random data, src_len=%zu", src_len);
 
-	void *src __cleanup(kfree) = kmalloc(src_len, GFP_KERNEL);
-	void *dst __cleanup(kfree) = kmalloc(dst_len, GFP_KERNEL);
+	void *src __free(kvfree) = kvmalloc(src_len, GFP_KERNEL);
+	void *dst __free(kvfree) = kvmalloc(dst_len, GFP_KERNEL);
 	if (!src || !dst)
 		return -ENOMEM;
 
@@ -145,9 +145,9 @@ static int test_zstd_levels(struct bch_fs *c, u64 nr)
 
 	pr_info("zstd levels test, testing all 15 levels");
 
-	void *src __cleanup(kfree) = kmalloc(src_len, GFP_KERNEL);
-	void *dst __cleanup(kfree) = kmalloc(dst_len, GFP_KERNEL);
-	void *verify __cleanup(kfree) = kmalloc(src_len, GFP_KERNEL);
+	void *src __free(kvfree) = kvmalloc(src_len, GFP_KERNEL);
+	void *dst __free(kvfree) = kvmalloc(dst_len, GFP_KERNEL);
+	void *verify __free(kvfree) = kvmalloc(src_len, GFP_KERNEL);
 	if (!src || !dst || !verify)
 		return -ENOMEM;
 
@@ -198,24 +198,12 @@ static int test_zstd_levels(struct bch_fs *c, u64 nr)
 	return 0;
 }
 
-typedef int (*perf_test_fn)(struct bch_fs *, u64);
-
-struct compress_test_job {
-	struct bch_fs		*c;
-	u64			nr;
-	perf_test_fn		fn;
-};
-
-static int compress_test_thread(void *data)
-{
-	struct compress_test_job *j = data;
-	return j->fn(j->c, j->nr);
-}
+typedef int (*compress_test_fn)(struct bch_fs *, u64);
 
 int bch2_compress_test(struct bch_fs *c, const char *testname,
 		       u64 nr, unsigned nr_threads)
 {
-	struct compress_test_job j = { .c = c, .nr = nr };
+	compress_test_fn fn = NULL;
 
 	if (nr == 0) {
 		pr_err("nr of iterations is not allowed to be 0");
@@ -228,18 +216,18 @@ int bch2_compress_test(struct bch_fs *c, const char *testname,
 	}
 
 #define compress_test(_test)			\
-	if (!strcmp(testname, #_test)) j.fn = _test
+	if (!strcmp(testname, #_test)) fn = _test
 
 	compress_test(test_zstd_compress_decompress);
 	compress_test(test_zstd_early_abort_incompressible);
 	compress_test(test_zstd_levels);
 
-	if (!j.fn) {
+	if (!fn) {
 		pr_err("unknown compress test %s", testname);
 		return -EINVAL;
 	}
 
-	int ret = j.fn(j.c, j.nr);
+	int ret = fn(c, nr);
 	if (ret)
 		bch_err(c, "compress test %s failed: %s", testname, bch2_err_str(ret));
 	else
