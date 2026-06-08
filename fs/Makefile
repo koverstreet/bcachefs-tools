@@ -158,6 +158,10 @@ ifdef CONFIG_DEBUG_FS
 	bcachefs-y += debug/async_objs.o
 endif
 
+ifdef BCACHEFS_TESTS
+	bcachefs-y += debug/compress_test.o
+endif
+
 ifndef BCACHEFS_DKMS
 	obj-$(CONFIG_MEAN_AND_VARIANCE_UNIT_TEST)   += util/mean_and_variance_test.o
 endif
