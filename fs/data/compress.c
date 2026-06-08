@@ -508,7 +508,8 @@ static int attempt_compress(struct bch_fs *c,
 
 			in_buf.size = src_len;
 
-			if (in_buf.pos > chunk_size &&
+			if (c->opts.zstd_compression_early_abort &&
+			    in_buf.pos > chunk_size &&
 			    out_buf.pos > in_buf.pos)
 				return 0;
 		}
