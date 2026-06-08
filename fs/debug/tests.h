@@ -11,6 +11,7 @@ struct bch_fs;
 #if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 
 int bch2_btree_perf_test(struct bch_fs *, const char *, u64, unsigned);
+int bch2_compress_test(struct bch_fs *, const char *, u64, unsigned);
 
 #else
 
