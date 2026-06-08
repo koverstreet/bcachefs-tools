@@ -466,6 +466,10 @@ static int attempt_compress(struct bch_fs *c,
 
 			while (in_buf.pos < in_buf.size) {
 				size_t prev_pos = in_buf.pos;
+
+				if (out_buf.pos >= out_buf.size)
+					return 0;
+
 				size_t ret = zstd_compress_stream(cstream,
 								  &out_buf,
 								  &in_buf);
@@ -482,7 +486,9 @@ static int attempt_compress(struct bch_fs *c,
 				return 0;
 		}
 
-		while (1) {
+		for (unsigned i = 0; i < 32; i++) {
+			if (out_buf.pos >= out_buf.size)
+				return 0;
 			size_t ret = zstd_end_stream(cstream, &out_buf);
 			if (zstd_is_error(ret))
 				return 0;
@@ -498,7 +504,7 @@ static int attempt_compress(struct bch_fs *c,
 	}
 }
 
-static unsigned bch2_compress(struct bch_fs *c,
+unsigned bch2_compress(struct bch_fs *c,
 			      void *dst, size_t *dst_len,
 			      void *src, size_t *src_len,
 			      unsigned compression_opt,

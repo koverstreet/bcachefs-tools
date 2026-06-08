@@ -65,6 +65,12 @@ unsigned bch2_bio_compress(struct bch_fs *, struct bio *, size_t *,
 			   struct bio *, size_t *, unsigned,
 			   struct bpos, bool);
 
+unsigned bch2_compress(struct bch_fs *c,
+		       void *dst, size_t *dst_len,
+		       void *src, size_t *src_len,
+		       unsigned compression_opt,
+		       struct bpos write_pos);
+
 int bch2_check_set_has_compressed_data(struct bch_fs *, unsigned);
 void bch2_fs_compress_exit(struct bch_fs *);
 int bch2_fs_compress_init(struct bch_fs *);
