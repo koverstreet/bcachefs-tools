@@ -55,6 +55,8 @@ debug = 2
 # downstream catch_unwind — it always aborts. The C SIGABRT handler then
 # prints the unified backtrace.
 panic = "abort"
+lto = true
+codegen-units = 1
 
 [package.metadata.vendor-filter]
 platforms = ["*-linux-*"]
