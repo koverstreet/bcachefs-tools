@@ -183,6 +183,9 @@ ifdef CONFIG_DEBUG_FS
 	bcachefs-y += debug/async_objs.o
 endif
 
+ifdef BCACHEFS_TESTS
+	bcachefs-y += debug/compress_test.o
+endif
 ifdef BCACHEFS_DKMS
 ifneq ($(wildcard $(src)/module-version.c),)
 	bcachefs-y += module-version.o
