@@ -196,6 +196,11 @@ enum fsck_err_opts {
 	  OPT_FN(bch2_opt_compression),					\
 	  BCH_SB_BACKGROUND_COMPRESSION_TYPE,BCH_COMPRESSION_OPT_none,	\
 	  NULL,		"Compression type for background moves")	\
+	x(zstd_compression_early_abort,	u8,				\
+	  OPT_FS|OPT_FORMAT|OPT_MOUNT|OPT_RUNTIME,			\
+	  OPT_BOOL(),							\
+	  BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT, true,			\
+	  NULL,		"Enable early abort for ZSTD compression")	\
 	x(str_hash,			u8,				\
 	  OPT_FS|OPT_FORMAT|OPT_MOUNT|OPT_RUNTIME,			\
 	  OPT_STR(bch2_str_hash_opts),					\
