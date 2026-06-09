@@ -250,18 +250,28 @@ Fix the stale `CLAUDE.md:60-61` line that says "kernel code is synced
 separately" — this is no longer true after the v6.18-rc1 removal. The
 correct guidance is "go slow on `fs/`, but `fs/` is the canonical source".
 
-### Phase 1: prerequisite patches (6 small commits)
+### Phase 1: prerequisite patches (small commits)
 
 Each patch is independently reviewable and useful on its own.
+
+The MT compression effort targets **zstd only**.  LZ4 has its own
+pre-existing userspace bugs (the stub doesn't link against `liblz4`)
+but those are not on the parallelisation critical path — single-threaded
+LZ4 already works in the kernel module, and a userspace LZ4 fix is
+orthogonal.  Gzip is also out of scope; we don't attempt to parallelise
+it because the typical bcachefs deployment uses zstd.
 
 | # | Patch | Files | Test |
 |---|---|---|---|
 | P1 | `mempool_alloc_noprof` macro rename explicit | `linux/mempool.c` | Build + `nm` check |
-| P2 | LZ4 userspace stub fix (link against liblz4) | `include/linux/lz4.h`, `linux/lz4.c` (new) | Roundtrip with `compression=lz4` |
 | P3 | `zstd_workspace_size` write-once + `READ_ONCE`/`WRITE_ONCE` | `fs/data/compress.c`, `compress_types.h` | KCSAN run, no race report |
 | P4 | Eager mempool init at mount (kill lazy `sb_lock` thundering herd, both compress + decompress paths) | `fs/data/compress.c`, `fs/init/fs.c` | First-write latency benchmark |
 | P5 | `bch2_verify_compress`: move `mempool_free` after verify | `fs/data/compress.c` | Existing roundtrip tests still pass |
 | P6 | Scale workspace + bounce mempools to `num_online_cpus()` (capped) | `fs/data/compress.c` | Verify pool sizing via debugfs |
+
+P2 was originally scoped as a LZ4 userspace stub fix and has been
+dropped from this series; the patch numbering is preserved so cross-
+references in commits and notes stay stable.
 
 ### Phase 2: userspace workqueue shim — multi-worker (1 commit)
 
@@ -339,7 +349,7 @@ on; see Configuration below).
 
 Tests (shell):
 
-- `debian/tests/compression-mt-roundtrip-{lz4,zstd,gzip}`: write a
+- `debian/tests/compression-mt-roundtrip-zstd`: write a
   multi-chunk file, read it back, byte-compare. Run with parallel
   path enabled and disabled, both must succeed and produce identical
   on-disk content (modulo encryption nonces, which are pre-assigned
@@ -380,15 +390,17 @@ Tests (shell):
 
 ## Memory budget
 
-| System | Workers (capped 32) | Workspace mempool reserve (zstd+gzip+lz4) | Bounce reserve (2× workers) | Total static |
+| System | Workers (capped 32) | zstd workspace mempool reserve | Bounce reserve (2× workers) | Total static |
 |---|---|---|---|---|
 | 8-core | 8 | 8 × ~2 MB = 16 MB | 16 × 256 KB = 4 MB | ~20 MB |
 | 32-core | 32 | 32 × ~2 MB = 64 MB | 64 × 256 KB = 16 MB | ~80 MB |
 | 64-core | 32 (capped) | 64 MB | 16 MB | ~80 MB |
 
-zstd-only (most common config) cuts these roughly in half. Numbers are
-mempool *reserves* — actual allocations come from `kvmalloc` first and
-only hit the reserve under memory pressure.
+Numbers are mempool *reserves* — actual allocations come from `kvmalloc`
+first and only hit the reserve under memory pressure.  Only the zstd
+workspace is multiplied by worker count; LZ4 and gzip workspace pools
+are unchanged from the existing `min_nr=1` because those algorithms
+are not parallelised.
 
 ## Risks and mitigations
 

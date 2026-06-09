@@ -429,7 +429,8 @@ static int attempt_compress(struct bch_fs *c,
 		 */
 		unsigned level = min((compression.level * 3) / 2, zstd_max_clevel());
 		ZSTD_parameters params = zstd_get_params(level, c->opts.encoded_extent_max);
-		ZSTD_CCtx *ctx = zstd_init_cctx(workspace, c->compress.zstd_workspace_size);
+		ZSTD_CCtx *ctx = zstd_init_cctx(workspace,
+						 READ_ONCE(c->compress.zstd_workspace_size));
 
 		/*
 		 * ZSTD requires that when we decompress we pass in the exact
@@ -675,10 +676,22 @@ void bch2_fs_compress_exit(struct bch_fs *c)
 
 static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 {
-	ZSTD_parameters params = zstd_get_params(zstd_max_clevel(),
-						 c->opts.encoded_extent_max);
+	/*
+	 * zstd_workspace_size is mount-immutable: both inputs
+	 * (zstd_max_clevel() and c->opts.encoded_extent_max) are fixed at
+	 * mount time, so the computed value never changes across calls.
+	 * Compute and publish it exactly once.  Lazy re-init via
+	 * bch2_check_set_has_compressed_data() may race with the
+	 * lock-free reader in attempt_compress(); pair the publish with
+	 * WRITE_ONCE / READ_ONCE.
+	 */
+	if (!READ_ONCE(c->compress.zstd_workspace_size)) {
+		ZSTD_parameters params = zstd_get_params(zstd_max_clevel(),
+							 c->opts.encoded_extent_max);
 
-	c->compress.zstd_workspace_size = zstd_cctx_workspace_bound(&params.cParams);
+		WRITE_ONCE(c->compress.zstd_workspace_size,
+			   zstd_cctx_workspace_bound(&params.cParams));
+	}
 
 	struct {
 		unsigned			feature;
@@ -691,7 +704,7 @@ static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 			max(zlib_deflate_workspacesize(MAX_WBITS, DEF_MEM_LEVEL),
 			    zlib_inflate_workspacesize()) },
 		{ BCH_FEATURE_zstd, BCH_COMPRESSION_OPT_zstd,
-			max(c->compress.zstd_workspace_size,
+			max(READ_ONCE(c->compress.zstd_workspace_size),
 			    zstd_dctx_workspace_bound()) },
 	}, *i;
 	bool have_compressed = false;
