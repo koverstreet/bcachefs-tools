@@ -1236,12 +1236,16 @@ __cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *
 	return false;
 }
 
-__cold void bch2_journal_pins_to_text(struct printbuf *out, struct journal *j)
+__cold void bch2_journal_pins_to_text(struct printbuf *out, struct journal *j,
+				      unsigned limit)
 {
 	u64 seq = 0;
+	unsigned nr = 0;
 
-	while (!bch2_journal_seq_pins_to_text(out, j, &seq))
+	while (nr < limit && !bch2_journal_seq_pins_to_text(out, j, &seq)) {
 		seq++;
+		nr++;
+	}
 }
 
 static __cold void bch2_time_stats_summary_to_text(struct printbuf *out,
@@ -1297,16 +1301,8 @@ __cold void bch2_journal_reclaim_to_text(struct printbuf *out, struct journal *j
 	bch2_time_stats_summary_to_text(out, "  write_buffer_full",	&c->times[BCH_TIME_blocked_write_buffer_full]);
 
 	prt_newline(out);
-	prt_printf(out, "Oldest pins:\n");
-	{
-		u64 seq = 0;
-		unsigned nr = 0;
-
-		while (nr < 8 && !bch2_journal_seq_pins_to_text(out, j, &seq)) {
-			seq++;
-			nr++;
-		}
-	}
+	prt_printf(out, "Oldest journal pins:\n");
+	bch2_journal_pins_to_text(out, j, 8);
 
 	struct task_struct *t = READ_ONCE(j->reclaim_thread);
 	if (t)

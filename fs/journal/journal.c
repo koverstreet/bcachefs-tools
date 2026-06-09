@@ -225,12 +225,8 @@ journal_error_check_stuck(struct journal *j, int error, unsigned flags)
 
 	prt_printf(&msg.m, "Journal stuck! Have a pre-reservation but journal full (error %s)",
 		   bch2_err_str(error));
-	bch2_journal_debug_to_text(&msg.m, j);
-	if (test_bit(JOURNAL_low_on_wb, &j->flags))
-		bch2_btree_write_buffer_to_text(&msg.m, c);
 
-	prt_printf(&msg.m, "Journal pins:\n");
-	bch2_journal_pins_to_text(&msg.m, j);
+	bch2_journal_debug_to_text(&msg.m, j);
 
 	bch2_fs_emergency_read_only(c, &msg.m);
 	return true;
@@ -904,8 +900,6 @@ int bch2_journal_res_get_slowpath(struct journal *j, struct journal_res *res,
 	CLASS(printbuf, buf)();
 	prt_printf(&buf, bch2_fmt(c, "Journal stuck? Waited for 10 seconds, err %s"), bch2_err_str(ret));
 	bch2_journal_debug_to_text(&buf, j);
-	if (test_bit(JOURNAL_low_on_wb, &j->flags))
-		bch2_btree_write_buffer_to_text(&buf, c);
 	bch2_print_str(c, KERN_ERR, buf.buf);
 
 	trans_wait_event(trans, &j->async_wait,
@@ -1412,6 +1406,14 @@ __cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j
 
 __cold void bch2_journal_debug_to_text(struct printbuf *out, struct journal *j)
 {
-	guard(spinlock)(&j->lock);
-	__bch2_journal_debug_to_text(out, j);
+	scoped_guard(spinlock, &j->lock)
+		__bch2_journal_debug_to_text(out, j);
+
+	prt_printf(out, "Oldest journal pins:\n");
+	bch2_journal_pins_to_text(out, j, 8);
+
+	if (test_bit(JOURNAL_low_on_wb, &j->flags)) {
+		struct bch_fs *c = container_of(j, struct bch_fs, journal);
+		bch2_btree_write_buffer_to_text(out, c);
+	}
 }
