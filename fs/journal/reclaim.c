@@ -246,7 +246,9 @@ void bch2_journal_space_available(struct journal *j)
 		can_discard |= __should_discard_bucket(j, ja);
 
 		if (__should_discard_bucket(j, ja) &&
-		    test_bit(BCH_FS_rw_init_done, &c->flags))
+		    test_bit(BCH_FS_rw_init_done, &c->flags) &&
+		    test_bit(JOURNAL_running, &j->flags) &&
+		    !bch2_journal_error(j))
 			queue_work(j->discard_wq, &ja->discard);
 	}
 

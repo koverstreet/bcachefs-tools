@@ -381,6 +381,13 @@ static void __bch2_fs_read_only(struct bch_fs *c)
 	for_each_member_device(c, ca) {
 		bch2_dev_io_ref_stop(ca, WRITE);
 		bch2_dev_allocator_remove(c, ca);
+
+		/*
+		 * Queued from bch2_journal_space_available(); not cancelled
+		 * anywhere else on the going-RO path, so cancel it here, after
+		 * the journal is stopped, or it can run against a freed device.
+		 */
+		cancel_work_sync(&ca->journal.discard);
 	}
 }
 
