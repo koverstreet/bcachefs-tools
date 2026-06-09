@@ -10,6 +10,7 @@
 #include "btree/iter.h"
 #include "btree/locking.h"
 #include "btree/read.h"
+#include "btree/write.h"
 #include "btree/sort.h"
 #include "btree/update.h"
 
@@ -73,11 +74,23 @@ void bch2_btree_node_io_lock(struct btree *b)
 
 void bch2_btree_node_wait_on_read(struct btree_trans *trans, struct btree *b)
 {
+	if (unlikely(trans->queued_write_bios))
+		bch2_trans_submit_write_bios(trans);
+
 	trans_wait_on_bit_io(trans, &b->flags, BTREE_NODE_read_in_flight);
 }
 
 void bch2_btree_node_wait_on_write(struct btree_trans *trans, struct btree *b)
 {
+	/*
+	 * The write we're about to wait on may be sitting unsubmitted on
+	 * our own queued_write_bios (e.g. the btree cache cannibalize and
+	 * evict paths write a node and immediately wait on it) — submit
+	 * before sleeping, or we'd wait on ourselves forever:
+	 */
+	if (unlikely(trans->queued_write_bios))
+		bch2_trans_submit_write_bios(trans);
+
 	trans_wait_on_bit_io(trans, &b->flags, BTREE_NODE_write_in_flight);
 }
 

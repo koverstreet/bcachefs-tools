@@ -103,6 +103,7 @@
 #include "btree/bbpos.h"
 #include "btree/cache.h"
 #include "btree/locking.h"
+#include "btree/write.h"
 
 #include "sb/counters.h"
 
@@ -1083,6 +1084,13 @@ static inline void __bch2_trans_unlock(struct btree_trans *trans)
 
 	trans_for_each_path(trans, path, i)
 		__bch2_btree_path_unlock(trans, path);
+
+	/*
+	 * All locks dropped: submit any btree node writes queued in this
+	 * trans's context.
+	 */
+	if (unlikely(trans->queued_write_bios))
+		bch2_trans_submit_write_bios(trans);
 }
 
 static inline int __bch2_trans_relock(struct btree_trans *trans, bool trace, ulong ip)

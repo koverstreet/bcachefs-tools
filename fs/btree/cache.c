@@ -869,7 +869,7 @@ static struct btree *btree_node_cannibalize(struct btree_trans *trans, bool pcpu
 							       BTREE_NODE_RECLAIM_allow_dirty);
 			if (b) {
 				if (btree_node_dirty(b))
-					__bch2_btree_node_write(c, b, BTREE_WRITE_cache_reclaim);
+					__bch2_btree_node_write(trans, b, BTREE_WRITE_cache_reclaim);
 
 				bch2_btree_node_wait_on_read(trans, b);
 				bch2_btree_node_wait_on_write(trans, b);
@@ -1490,7 +1490,7 @@ wait_on_io:
 		goto out;
 
 	if (btree_node_dirty(b)) {
-		__bch2_btree_node_write(c, b, BTREE_WRITE_cache_reclaim);
+		__bch2_btree_node_write(trans, b, BTREE_WRITE_cache_reclaim);
 		six_unlock_write(&b->c.lock);
 		six_unlock_intent(&b->c.lock);
 		goto wait_on_io;
