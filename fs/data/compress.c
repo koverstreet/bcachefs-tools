@@ -227,7 +227,7 @@ static inline void zlib_set_workspace(z_stream *strm, void *workspace)
 #endif
 }
 
-static int buf_uncompress(struct bch_fs *c,
+int buf_uncompress(struct bch_fs *c,
 			  void *dst, void *src,
 			  struct bch_extent_crc_unpacked crc)
 {

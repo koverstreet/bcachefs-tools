@@ -244,6 +244,8 @@ read_attribute(recent_counters);
 
 #ifdef CONFIG_BCACHEFS_TESTS
 write_attribute(perf_test);
+write_attribute(compress_test);
+write_attribute(mt_compress_bench);
 #endif /* CONFIG_BCACHEFS_TESTS */
 
 #define x(_name, ...)						\
@@ -528,6 +530,47 @@ STORE(bch2_fs)
 		if (ret)
 			size = ret;
 	}
+
+	if (attr == &sysfs_compress_test) {
+		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL), *p = tmp;
+		char *test		= strsep(&p, " \t\n");
+		char *nr_str		= strsep(&p, " \t\n");
+		char *threads_str	= strsep(&p, " \t\n");
+		unsigned threads = 1;
+		u64 nr;
+		int ret = -EINVAL;
+
+		if (nr_str &&
+		    !(ret = bch2_strtoull_h(nr_str, &nr)) &&
+		    (!threads_str ||
+		     !(ret = kstrtouint(threads_str, 10, &threads))))
+			ret = bch2_compress_test(c, test, nr, threads);
+
+		if (ret)
+			size = ret;
+	}
+
+	if (attr == &sysfs_mt_compress_bench) {
+		/*
+		 * Triggers the MT compression micro-benchmark.  Takes a
+		 * single positional argument - the compression opt as
+		 * accepted by bcachefs (e.g. "lz4", "zstd:3", "gzip:6").
+		 * Results are emitted to dmesg with an "MT_COMPRESS_BENCH:"
+		 * prefix; the test wrapper (tests/mt_compress_bench.sh)
+		 * greps them.
+		 */
+		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL), *p = tmp;
+		char *mode_str = strsep(&p, " \t\n");
+		u64 opt = 0;
+		int ret = -EINVAL;
+
+		if (mode_str &&
+		    !(ret = bch2_opt_compression_parse(c, mode_str, &opt, NULL)))
+			ret = bch2_compress_bench(c, opt);
+
+		if (ret)
+			size = ret;
+	}
 #endif
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_sysfs);
 	return size;
@@ -549,6 +592,8 @@ struct attribute *bch2_fs_files[] = {
 
 #ifdef CONFIG_BCACHEFS_TESTS
 	&sysfs_perf_test,
+	&sysfs_compress_test,
+	&sysfs_mt_compress_bench,
 #endif
 	NULL
 };

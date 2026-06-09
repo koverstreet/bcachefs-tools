@@ -34,6 +34,8 @@ static inline enum bch_compression_type bch2_compression_opt_to_type(unsigned v)
 }
 
 struct bch_write_op;
+int buf_uncompress(struct bch_fs *, void *, void *,
+		    struct bch_extent_crc_unpacked);
 int bch2_bio_uncompress_inplace(struct bch_write_op *, struct bio *);
 int bch2_bio_uncompress(struct bch_fs *, struct bio *, struct bio *,
 		       struct bvec_iter, struct bch_extent_crc_unpacked);

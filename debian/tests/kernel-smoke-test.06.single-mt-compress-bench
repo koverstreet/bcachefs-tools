@@ -1,0 +1,181 @@
+#!/bin/sh
+
+# SPDX-License-Identifier: GPL-2.0
+#
+# MT compression micro-benchmark: prove the MT path actually runs in
+# parallel, not just claims to.  Triggers fs/debug/mt_compress_bench.c in
+# the bcachefs kernel module via its sysfs entry, then parses the
+# dmesg output for the "MT_COMPRESS_BENCH:" lines and asserts that the
+# parallel run is meaningfully faster than the serial run.
+#
+# Requires the kernel module to be built with BCACHEFS_TESTS=1 (see
+# /usr/src/bcachefs-*/build.vars in the dkms tree).
+#
+# Runs three opt modes - lz4 (fast), zstd:3 (default), gzip:6 (slow) - so
+# parallelism is tested across codecs with very different per-thread
+# footprints.  A failure in any mode is a failure of the test.
+
+set +e
+set -x
+
+echo "MT compression micro-benchmark: serial vs parallel wall time"
+
+STORAGE_SIZE_MB=256
+STORAGE="$(mktemp)"
+dd if=/dev/zero of="$STORAGE" bs=1M count=$STORAGE_SIZE_MB > /dev/null 2>&1
+LODEVICE="$(losetup --find --show $STORAGE)"
+
+cleanup() {
+	if mountpoint -q "$MOUNTPOINT" 2>/dev/null; then
+		umount "$MOUNTPOINT" 2>/dev/null
+	fi
+	losetup -d "$LODEVICE" 2>/dev/null
+	rm -rf "$MOUNTPOINT" 2>/dev/null
+}
+trap cleanup EXIT
+
+bcachefs format --compression=zstd "$LODEVICE"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs format with compression=zstd failed, exit code=$ret"
+	exit 1
+fi
+
+MOUNTPOINT="$(mktemp -d)"
+mount -t bcachefs "$LODEVICE" "$MOUNTPOINT"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs mount failed, exit code=$ret"
+	exit 1
+fi
+
+# Wait for sysfs entry to appear.  The bench attribute is only registered
+# once the filesystem is fully started, which is a beat after mount.
+SYSFS_BASE=""
+for i in 1 2 3 4 5 10 20 50; do
+	SYSFS_BASE="$(ls -d /sys/fs/bcachefs/*/mt_compress_bench 2>/dev/null | head -1)"
+	if [ -n "$SYSFS_BASE" ]; then
+		break
+	fi
+	sleep 0.1
+done
+if [ -z "$SYSFS_BASE" ]; then
+	echo "FAILED: mt_compress_bench sysfs attribute not present"
+	echo "  (kernel module was likely built without BCACHEFS_TESTS=1)"
+	exit 1
+fi
+
+# --- helper: run one bench mode and assert on its output -------------------
+# $1 = mode string ("lz4", "zstd:3", "gzip:6")
+# Returns 0 on PASS, 1 on FAIL.
+run_mode() {
+	mode="$1"
+
+	# dmesg --since=<date> isn't reliable to ms across reboots, so
+	# just grep the whole buffer for the bench's stable prefix after
+	# the run completes.
+	dmesg -c > /dev/null 2>&1
+	echo "$mode" > "$SYSFS_BASE"
+
+	# Bench is synchronous from the sysfs write's perspective (it
+	# closure_sync()s the parallel run, then returns), so by the time
+	# the write returns, output is already in the ring buffer.
+	BENCH_OUT="$(dmesg | grep '^MT_COMPRESS_BENCH:' || true)"
+	if [ -z "$BENCH_OUT" ]; then
+		echo "FAILED: no MT_COMPRESS_BENCH: output for mode=$mode"
+		dmesg | tail -50
+		return 1
+	fi
+
+	echo "--- bench output (mode=$mode) ---"
+	printf '%s\n' "$BENCH_OUT"
+	echo "--- end bench output ---"
+
+	# Header carries the worker count - we need it to decide whether
+	# the parallelism assertion is meaningful.
+	header="$(printf '%s\n' "$BENCH_OUT" | grep 'opt=' | head -1)"
+	workers="$(printf '%s' "$header" | awk -F'nr_workers=' '{print $2}' | awk '{print $1}')"
+	if [ -z "$workers" ] || [ "$workers" -lt 1 ]; then
+		echo "FAILED: could not parse nr_workers from header: $header"
+		return 1
+	fi
+
+	# If the WQ came up with <2 workers, the parallel path serializes
+	# and a speedup assertion is meaningless.  Treat that as a SKIP, not
+	# a FAIL - it's not the bench's fault.
+	if [ "$workers" -lt 2 ]; then
+		echo "SKIP: mode=$mode only $workers worker(s); parallel path is effectively serial"
+		return 0
+	fi
+
+	# Pull serial / parallel ns.
+	serial_ns="$(printf '%s\n' "$BENCH_OUT" | awk -F'serial_ns=' '/serial_ns=/{print $2}' | awk '{print $1}' | head -1)"
+	parallel_ns="$(printf '%s\n' "$BENCH_OUT" | awk -F'parallel_ns=' '/parallel_ns=/{print $2}' | awk '{print $1}' | head -1)"
+	if [ -z "$serial_ns" ] || [ -z "$parallel_ns" ]; then
+		echo "FAILED: could not parse serial/parallel ns from bench output"
+		printf '%s\n' "$BENCH_OUT"
+		return 1
+	fi
+
+	# Express the speedup in decipercent so we can compare with awk
+	# without floating-point - shell arithmetic is integer-only.
+	# speedup_deci = serial_ns * 10 / parallel_ns
+	if [ "$parallel_ns" -le 0 ]; then
+		echo "FAILED: parallel_ns is 0 or negative ($parallel_ns)"
+		return 1
+	fi
+	speedup_deci=$(( serial_ns * 10 / parallel_ns ))
+
+	echo "  mode=$mode workers=$workers serial=${serial_ns}ns parallel=${parallel_ns}ns speedup=${speedup_deci}/10"
+
+	# Last line is PASS / FAIL / SKIP - assert PASS.
+	last_line="$(printf '%s\n' "$BENCH_OUT" | tail -1)"
+	case "$last_line" in
+		*PASS*)
+			echo "  kernel-side: PASS"
+			;;
+		*SKIP*)
+			echo "  kernel-side: SKIP ($last_line)"
+			return 0
+			;;
+		*FAIL*)
+			echo "FAILED: kernel-side bench reported FAIL: $last_line"
+			return 1
+			;;
+		*)
+			echo "FAILED: kernel-side bench did not end with PASS/FAIL/SKIP"
+			return 1
+			;;
+	esac
+
+	# Belt-and-suspenders: also require the parsed speedup to be at
+	# least 1.5x.  The kernel check uses 2x; the wrapper uses 1.5x as
+	# a softer floor that tolerates scheduling noise on busy CI VMs
+	# where the parallel WQ workers don't get pinned to distinct CPUs.
+	if [ "$speedup_deci" -lt 15 ]; then
+		echo "FAILED: speedup is only ${speedup_deci}/10 (need >= 15/10) for mode=$mode"
+		return 1
+	fi
+
+	return 0
+}
+
+OVERALL=0
+for mode in lz4 zstd:3 gzip:6; do
+	run_mode "$mode" || OVERALL=1
+done
+
+umount "$MOUNTPOINT"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs umount failed, exit code=$ret"
+	exit 1
+fi
+
+if [ "$OVERALL" -ne 0 ]; then
+	echo "FAILED: at least one bench mode did not meet the speedup threshold"
+	exit 1
+fi
+
+echo "PASSED"
+exit 0
