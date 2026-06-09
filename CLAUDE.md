@@ -69,11 +69,17 @@ see what's been analyzed and what was decided.
 
 ### Calibrate to the risk
 
-- **Kernel code** (`fs/`, `fs/bcachefs/`): Go slow. Research
-  thoroughly. Always discuss design before implementing. Pay special
-  attention to error paths, transaction restart handling, and locking.
-  Don't commit kernel C changes to the tools tree — kernel code is
-  synced separately.
+- **Kernel code** (`fs/`): Go slow. Research thoroughly. Always
+  discuss design before implementing. Pay special attention to error
+  paths, transaction restart handling, and locking. `fs/` is the
+  *canonical* home for bcachefs core code — bcachefs was removed from
+  the mainline kernel in v6.18-rc1 (Sept 2025) and is now distributed
+  as a DKMS module built from this tree. The same source under `fs/`
+  feeds both the userspace `bcachefs` binary and the DKMS-built kernel
+  module. See `doc/vendored-kernel-files.md`. (Only a small set of
+  general-purpose helpers under `include/linux/` and `linux/` —
+  xxhash, generic-radix-tree, etc. — are still snapshotted from the
+  upstream kernel via `make update-vendored-kernel-sources`.)
 
 - **Tools leaf code** (Rust commands, argument parsing, display logic):
   More autonomy is appropriate here. Use good judgment, make clean
