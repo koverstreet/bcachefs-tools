@@ -54,7 +54,9 @@ unsigned bch2_sort_keys_keep_unwritten_whiteouts(struct bkey_packed *, struct so
 unsigned bch2_sort_keys(struct bkey_packed *, struct sort_iter *);
 
 void bch2_btree_bounce_free(struct bch_fs *, size_t, bool, void *);
-void *bch2_btree_bounce_alloc(struct bch_fs *, size_t, bool *);
+void *bch2_btree_bounce_alloc_noprof(struct bch_fs *, size_t, bool *);
+#define bch2_btree_bounce_alloc(...)						\
+	alloc_hooks(bch2_btree_bounce_alloc_noprof(__VA_ARGS__))
 
 enum compact_mode {
 	COMPACT_LAZY,
