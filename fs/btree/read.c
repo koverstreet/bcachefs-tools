@@ -795,12 +795,17 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 
 	b->data->keys.u64s = sorted->keys.u64s;
 	*sorted = *b->data;
-	swap(sorted, b->data);
+
+	if (!mem_alloc_profiling_enabled()) {
+		swap(sorted, b->data);
+		btree_node_buf_swap_account(c, sorted, b->data);
+	} else {
+		memcpy(b->data, sorted, vstruct_bytes(b->data));
+	}
+
 	set_btree_bset(b, b->set, &b->data->keys);
 	b->nsets = 1;
 	b->data->keys.journal_seq = cpu_to_le64(max_journal_seq);
-
-	btree_node_buf_swap_account(c, sorted, b->data);
 
 	BUG_ON(b->nr.live_u64s != le16_to_cpu(b->data->keys.u64s));
 
