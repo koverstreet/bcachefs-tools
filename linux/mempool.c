@@ -370,8 +370,15 @@ EXPORT_SYMBOL(mempool_resize);
  * Note: using __GFP_ZERO is not supported.
  *
  * Return: pointer to the allocated element or %NULL on error.
+ *
+ * NB: defined as mempool_alloc_noprof so it matches the kernel's
+ * allocation-profiling rename. The header provides mempool_alloc()
+ * as a macro that expands to mempool_alloc_noprof(); see
+ * include/linux/mempool.h. The #undef below stops the macro from
+ * also rewriting our function definition into something unreadable.
  */
-void *mempool_alloc(mempool_t *pool, gfp_t gfp_mask)
+#undef mempool_alloc
+void *mempool_alloc_noprof(mempool_t *pool, gfp_t gfp_mask)
 {
 	void *element;
 	unsigned long flags;
@@ -424,7 +431,7 @@ repeat_alloc:
 	finish_wait(&pool->wait, &wait);
 	goto repeat_alloc;
 }
-EXPORT_SYMBOL(mempool_alloc);
+EXPORT_SYMBOL(mempool_alloc_noprof);
 
 /**
  * mempool_free - return an element to the pool.
