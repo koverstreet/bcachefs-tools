@@ -476,7 +476,8 @@ void bch2_btree_node_sort(struct bch_fs *c, struct btree *b,
 		seq = max(seq, le64_to_cpu(bset(b, t)->journal_seq));
 	start_bset->journal_seq = cpu_to_le64(seq);
 
-	if (sorting_entire_node) {
+	if (sorting_entire_node &&
+	    !mem_alloc_profiling_enabled()) {
 		u64s = le16_to_cpu(out->keys.u64s);
 
 		BUG_ON(bytes != btree_buf_bytes(b));

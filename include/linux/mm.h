@@ -40,4 +40,9 @@ static inline unsigned long totalram_pages(void)
 	return _totalram_pages;
 }
 
+static inline bool mem_alloc_profiling_enabled(void)
+{
+	return false;
+}
+
 #endif /* _TOOLS_LINUX_MM_H */
