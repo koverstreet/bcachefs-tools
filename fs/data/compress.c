@@ -488,6 +488,94 @@ static int attempt_compress(struct bch_fs *c,
 	}
 }
 
+unsigned bch2_compress_locked(struct bch_fs *c,
+			      void *dst, size_t *dst_len,
+			      void *src, size_t *src_len,
+			      unsigned compression_opt,
+			      struct bpos write_pos,
+			      void *workspace,
+			      void *verify_buf)
+{
+	union bch_compression_opt compression =
+		(union bch_compression_opt) { .value = compression_opt };
+
+	enum bch_compression_type compression_type =
+		__bch2_compression_opt_to_type[compression.type];
+
+	BUG_ON(compression.type >= BCH_COMPRESSION_OPT_NR);
+
+	int ret = 0;
+
+	while (1) {
+		if (*src_len <= block_bytes(c)) {
+			ret = -1;
+			break;
+		}
+
+		ret = attempt_compress(c, workspace,
+				       dst, *dst_len,
+				       src, *src_len,
+				       compression);
+		if (ret > 0) {
+			*dst_len = ret;
+			ret = 0;
+			break;
+		}
+
+		if (*src_len <= *dst_len) {
+			ret = -1;
+			break;
+		}
+
+		BUG_ON(-ret >= *src_len);
+
+		if (ret < 0)
+			*src_len = -ret;
+		else
+			*src_len -= (*src_len - *dst_len) / 2;
+		*src_len = round_down(*src_len, block_bytes(c));
+	}
+
+	if (ret)
+		return BCH_COMPRESSION_TYPE_incompressible;
+
+	if (round_up(*dst_len, block_bytes(c)) >= *src_len)
+		return BCH_COMPRESSION_TYPE_incompressible;
+
+	unsigned pad = round_up(*dst_len, block_bytes(c)) - *dst_len;
+
+	memset(dst + *dst_len, 0, pad);
+	*dst_len += pad;
+
+	if (unlikely(bch2_verify_compress)) {
+		struct bch_extent_crc_unpacked crc = {
+			.compressed_size	= *dst_len >> 9,
+			.uncompressed_size	= *src_len >> 9,
+			.compression_type	= compression_type,
+		};
+
+		ret = buf_uncompress(c, verify_buf, dst, crc);
+		BUG_ON(ret);
+
+		if (memcmp(verify_buf, src, *src_len)) {
+			CLASS(bch_log_msg, msg)(c);
+			prt_printf(&msg.m, "Decompressing compressed data did not produce the same result (%s)",
+				   __bch2_compression_types[compression_type]);
+
+			CLASS(btree_trans, trans)(c);
+			bch2_inum_offset_err_msg_trans(trans, &msg.m, 0, write_pos);
+			prt_printf(&msg.m, " len %zu\n", *src_len);
+
+			msg.m.suppress = bch2_count_fsck_err(c, compression_error, &msg.m);
+			return BCH_COMPRESSION_TYPE_incompressible;
+		}
+	}
+
+	BUG_ON(*dst_len & (block_bytes(c) - 1));
+	BUG_ON(*src_len & (block_bytes(c) - 1));
+	return compression_type;
+}
+
 static unsigned bch2_compress(struct bch_fs *c,
 			      void *dst, size_t *dst_len,
 			      void *src, size_t *src_len,
@@ -497,15 +585,9 @@ static unsigned bch2_compress(struct bch_fs *c,
 	union bch_compression_opt compression =
 		(union bch_compression_opt) { .value = compression_opt };
 
-	/* If it's only one block, don't bother trying to compress: */
 	if (*src_len <= c->opts.block_size)
 		return BCH_COMPRESSION_TYPE_incompressible;
 
-	enum bch_compression_type compression_type =
-		__bch2_compression_opt_to_type[compression.type];
-	int ret = 0;
-
-	/* bch2_compression_decode catches unknown compression types: */
 	BUG_ON(compression.type >= BCH_COMPRESSION_OPT_NR);
 
 	mempool_t *workspace_pool = &c->compress.workspace[compression.type];
@@ -523,8 +605,8 @@ static unsigned bch2_compress(struct bch_fs *c,
 		if (ret_fsck_err(c, compression_opt_not_marked_in_sb,
 			     "compression opt %s set but not marked in superblock",
 			     bch2_compression_opts[compression.type])) {
-			ret = bch2_check_set_has_compressed_data(c, compression.type);
-			if (ret) /* memory allocation failure, don't compress */
+			int ret = bch2_check_set_has_compressed_data(c, compression.type);
+			if (ret)
 				return 0;
 		} else {
 			return 0;
@@ -532,103 +614,17 @@ static unsigned bch2_compress(struct bch_fs *c,
 	}
 
 	void *workspace = mempool_alloc(workspace_pool, GFP_NOFS);
+	struct bbuf verify_buf = {};
+	if (bch2_verify_compress)
+		verify_buf = __bounce_alloc(c, c->opts.encoded_extent_max, WRITE);
 
-	/*
-	 * XXX: this algorithm sucks when the compression code doesn't tell us
-	 * how much would fit, like LZ4 does:
-	 */
-	while (1) {
-		if (*src_len <= block_bytes(c)) {
-			ret = -1;
-			break;
-		}
-
-		ret = attempt_compress(c, workspace,
-				       dst, *dst_len,
-				       src, *src_len,
-				       compression);
-		if (ret > 0) {
-			*dst_len = ret;
-			ret = 0;
-			break;
-		}
-
-		/* Didn't fit: should we retry with a smaller amount?  */
-		if (*src_len <= *dst_len) {
-			ret = -1;
-			break;
-		}
-
-		/*
-		 * If ret is negative, it's a hint as to how much data would fit
-		 */
-		BUG_ON(-ret >= *src_len);
-
-		if (ret < 0)
-			*src_len = -ret;
-		else
-			*src_len -= (*src_len - *dst_len) / 2;
-		*src_len = round_down(*src_len, block_bytes(c));
-	}
-
-	if (ret) {
-		mempool_free(workspace, workspace_pool);
-		return BCH_COMPRESSION_TYPE_incompressible;
-	}
-
-	/* Didn't get smaller: */
-	if (round_up(*dst_len, block_bytes(c)) >= *src_len) {
-		mempool_free(workspace, workspace_pool);
-		return BCH_COMPRESSION_TYPE_incompressible;
-	}
-
-	unsigned pad = round_up(*dst_len, block_bytes(c)) - *dst_len;
-
-	memset(dst + *dst_len, 0, pad);
-	*dst_len += pad;
-
-	/*
-	 * Hold the compression workspace across the verify step.  Under
-	 * multithreaded compression, freeing the workspace before verify
-	 * would let a concurrent compress on another thread acquire the
-	 * same buffer from the pool and scribble over it - corrupting our
-	 * in-flight compressed output.  buf_uncompress() (zstd) decompresses
-	 * whatever bytes it's handed, so the resulting plaintext would
-	 * silently mismatch the original source.  That mismatch is exactly
-	 * what the memcmp() below is designed to catch, but it can only
-	 * catch it if we still own this workspace exclusively here.
-	 */
-	if (unlikely(bch2_verify_compress)) {
-		struct bch_extent_crc_unpacked crc = {
-			.compressed_size	= *dst_len >> 9,
-			.uncompressed_size	= *src_len >> 9,
-			.compression_type	= compression_type,
-		};
-
-		struct bbuf verify __cleanup(bbuf_exit) = __bounce_alloc(c, *src_len, WRITE);
-		ret = buf_uncompress(c, verify.b, dst, crc);
-		BUG_ON(ret);
-
-		if (memcmp(verify.b, src, *src_len)) {
-			CLASS(bch_log_msg, msg)(c);
-			prt_printf(&msg.m, "Decompressing compressed data did not produce the same result (%s)",
-				   __bch2_compression_types[compression_type]);
-
-			CLASS(btree_trans, trans)(c);
-			bch2_inum_offset_err_msg_trans(trans, &msg.m, 0, write_pos);
-			prt_printf(&msg.m, " len %zu\n", *src_len);
-
-			msg.m.suppress = bch2_count_fsck_err(c, compression_error, &msg.m);
-			mempool_free(workspace, workspace_pool);
-			return BCH_COMPRESSION_TYPE_incompressible;
-		}
-	}
+	unsigned result = bch2_compress_locked(c, dst, dst_len, src, src_len,
+					       compression_opt, write_pos,
+					       workspace, verify_buf.b);
 
 	mempool_free(workspace, workspace_pool);
-
-	BUG_ON(*dst_len & (block_bytes(c) - 1));
-	BUG_ON(*src_len & (block_bytes(c) - 1));
-	return compression_type;
+	bbuf_exit(&verify_buf);
+	return result;
 }
 
 unsigned bch2_bio_compress(struct bch_fs *c,
