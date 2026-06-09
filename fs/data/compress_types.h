@@ -2,9 +2,12 @@
 #ifndef _BCACHEFS_DATA_COMPRESS_TYPES_H
 #define _BCACHEFS_DATA_COMPRESS_TYPES_H
 
+struct bch_compress_wq;
+
 struct bch_fs_compress {
 	mempool_t		bounce[2];
 	mempool_t		workspace[BCH_COMPRESSION_OPT_NR];
+	struct bch_compress_wq	*mt_wq;
 	/*
 	 * Mount-immutable after first __bch2_fs_compress_init() call.
 	 * Derived from zstd_max_clevel() and c->opts.encoded_extent_max,

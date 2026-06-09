@@ -26,6 +26,7 @@
 
 #include "data/checksum.h"
 #include "data/compress.h"
+#include "data/compress_workers.h"
 #include "data/extents.h"
 #include "data/write.h"
 
@@ -720,6 +721,8 @@ void bch2_fs_compress_exit(struct bch_fs *c)
 {
 	unsigned i;
 
+	bch2_compress_wq_destroy(c);
+
 	for (i = 0; i < ARRAY_SIZE(c->compress.workspace); i++)
 		mempool_exit(&c->compress.workspace[i]);
 	mempool_exit(&c->compress.bounce[WRITE]);
@@ -848,7 +851,16 @@ int bch2_fs_compress_init(struct bch_fs *c)
 	if (c->opts.background_compression)
 		f |= compression_opt_to_feature(c->opts.background_compression);
 
-	return __bch2_fs_compress_init(c, f);
+	try(__bch2_fs_compress_init(c, f));
+
+	/*
+	 * Init the MT compression workqueue after mempools are set up.
+	 * Failure is non-fatal: mt_wq stays NULL and writes fall back
+	 * to serial compression.
+	 */
+	bch2_compress_wq_init(c);
+
+	return 0;
 }
 
 int bch2_opt_compression_parse(struct bch_fs *c, const char *_val, u64 *res,
