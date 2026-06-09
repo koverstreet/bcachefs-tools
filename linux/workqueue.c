@@ -4,6 +4,7 @@
 
 #include "tools-util.h"
 
+#include <linux/atomic.h>
 #include <linux/errname.h>
 #include <linux/kthread.h>
 #include <linux/percpu.h>
@@ -13,7 +14,7 @@
 static pthread_mutex_t	wq_lock = PTHREAD_MUTEX_INITIALIZER;
 static LIST_HEAD(wq_list);
 
-#define WQ_SHIM_MAX_WORKERS	1
+#define WQ_SHIM_MAX_WORKERS	min(num_online_cpus(), 32U)
 
 struct workqueue_struct {
 	struct list_head	list;
@@ -24,7 +25,8 @@ struct workqueue_struct {
 	struct task_struct	**worker_tasks;
 	unsigned int		nr_workers;
 
-	struct work_struct	*current_work;
+	atomic_t		active_count;
+	struct work_struct	**worker_current;
 	struct list_head	pending;
 };
 
@@ -51,6 +53,7 @@ static int wq_worker_thread(void *arg)
 {
 	struct workqueue_struct *wq = arg;
 	struct work_struct *work;
+	unsigned int i;
 
 	pthread_mutex_lock(&wq_lock);
 	while (1) {
@@ -58,10 +61,9 @@ static int wq_worker_thread(void *arg)
 
 		work = list_first_entry_or_null(&wq->pending,
 				struct work_struct, entry);
-		wq->current_work = work;
 
 		if (kthread_should_stop()) {
-			BUG_ON(wq->current_work);
+			BUG_ON(work);
 			break;
 		}
 
@@ -73,15 +75,24 @@ static int wq_worker_thread(void *arg)
 		}
 		__set_current_state(TASK_RUNNING);
 
+		for (i = 0; i < wq->nr_workers; i++)
+			if (wq->worker_tasks[i] == current)
+				break;
+
+		BUG_ON(i == wq->nr_workers);
+		wq->worker_current[i] = work;
+
 		BUG_ON(!work_pending(work));
 		list_del_init(&work->entry);
 		clear_work_pending(work);
+		atomic_inc(&wq->active_count);
 
 		pthread_mutex_unlock(&wq_lock);
 		work->func(work);
 		pthread_mutex_lock(&wq_lock);
 
-		wq->current_work = NULL;
+		wq->worker_current[i] = NULL;
+		atomic_dec(&wq->active_count);
 	}
 	pthread_mutex_unlock(&wq_lock);
 
@@ -215,10 +226,13 @@ retry:
 static bool work_running(struct work_struct *work)
 {
 	struct workqueue_struct *wq;
+	unsigned int i;
 
-	list_for_each_entry(wq, &wq_list, list)
-		if (wq->current_work == work)
-			return true;
+	list_for_each_entry(wq, &wq_list, list) {
+		for (i = 0; i < wq->nr_workers; i++)
+			if (wq->worker_current[i] == work)
+				return true;
+	}
 
 	return false;
 }
@@ -315,7 +329,7 @@ bool cancel_delayed_work_sync(struct delayed_work *dwork)
 void drain_workqueue(struct workqueue_struct *wq)
 {
 	pthread_mutex_lock(&wq_lock);
-	while (!list_empty(&wq->pending) || wq->current_work) {
+	while (!list_empty(&wq->pending) || atomic_read(&wq->active_count) > 0) {
 		pthread_mutex_unlock(&wq_lock);
 		schedule();
 		pthread_mutex_lock(&wq_lock);
@@ -344,6 +358,7 @@ void destroy_workqueue(struct workqueue_struct *wq)
 		put_task_struct(tasks[i]);
 	}
 
+	free(wq->worker_current);
 	free(tasks);
 	kfree(wq);
 }
@@ -377,6 +392,7 @@ struct workqueue_struct *alloc_workqueue(const char *fmt,
 		return NULL;
 
 	INIT_LIST_HEAD(&wq->pending);
+	atomic_set(&wq->active_count, 0);
 	wq->max_active = compute_nr_workers(max_active);
 
 	va_start(args, max_active);
@@ -385,6 +401,13 @@ struct workqueue_struct *alloc_workqueue(const char *fmt,
 
 	wq->worker_tasks = calloc(wq->max_active, sizeof(struct task_struct *));
 	if (!wq->worker_tasks) {
+		kfree(wq);
+		return NULL;
+	}
+
+	wq->worker_current = calloc(wq->max_active, sizeof(struct work_struct *));
+	if (!wq->worker_current) {
+		free(wq->worker_tasks);
 		kfree(wq);
 		return NULL;
 	}
