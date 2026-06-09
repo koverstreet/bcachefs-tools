@@ -47,4 +47,9 @@ static inline long si_mem_available(void)
 	return (si.freeram * si.mem_unit) >> PAGE_SHIFT;
 }
 
+static inline bool mem_alloc_profiling_enabled(void)
+{
+	return false;
+}
+
 #endif /* _TOOLS_LINUX_MM_H */
