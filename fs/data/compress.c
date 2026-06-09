@@ -217,13 +217,26 @@ static int buf_uncompress(struct bch_fs *c,
 {
 	enum bch_compression_opts opt = bch2_compression_type_to_opt(crc.compression_type);
 	mempool_t *workspace_pool = &c->compress.workspace[opt];
+
+	/*
+	 * Workspaces for every compression type the fs has used are now
+	 * initialised eagerly in bch2_fs_compress_init() (foreground +
+	 * background opts) and bch2_opt_hook_pre_set() (runtime option
+	 * changes), so this should never fire under normal operation.
+	 *
+	 * If it does, we're being asked to decompress an extent with a type
+	 * the fs is not configured for - return an error rather than call
+	 * bch2_check_set_has_compressed_data() here.  The decompress path
+	 * can run from btree transaction context (read path), which is at
+	 * best a might_sleep violation and at worst a deadlock risk, since
+	 * that helper takes c->sb_lock and issues a synchronous
+	 * bch2_write_super().
+	 */
 	if (unlikely(!mempool_initialized(workspace_pool))) {
-		if (ret_fsck_err(c, compression_type_not_marked_in_sb,
-			     "compression type %s set but not marked in superblock",
-			     __bch2_compression_types[crc.compression_type]))
-			try(bch2_check_set_has_compressed_data(c, opt));
-		else
-			return bch_err_throw(c, compression_workspace_not_initialized);
+		bch2_fs_inconsistent(c,
+			"compression type %s set but workspace not initialised - run fsck",
+			__bch2_compression_types[crc.compression_type]);
+		return bch_err_throw(c, compression_workspace_not_initialized);
 	}
 
 	size_t src_len = crc.compressed_size << 9;
@@ -479,6 +492,16 @@ static unsigned bch2_compress(struct bch_fs *c,
 	BUG_ON(compression.type >= BCH_COMPRESSION_OPT_NR);
 
 	mempool_t *workspace_pool = &c->compress.workspace[compression.type];
+	/*
+	 * Workspaces for foreground/background compression types are
+	 * initialised eagerly in bch2_fs_compress_init() and on runtime
+	 * option changes in bch2_opt_hook_pre_set() (fs/opts.c), so this
+	 * should not fire under normal operation.  Kept as a defence-in-
+	 * depth fallback: the write path is sleepable, so we can still
+	 * recover correctly by going through bch2_check_set_has_compressed_data
+	 * - but the synchronous sb write that helper performs is exactly
+	 * the hot-path latency we wanted to avoid.
+	 */
 	if (unlikely(!mempool_initialized(workspace_pool))) {
 		if (ret_fsck_err(c, compression_opt_not_marked_in_sb,
 			     "compression opt %s set but not marked in superblock",
@@ -754,10 +777,33 @@ static u64 compression_opt_to_feature(unsigned v)
 
 int bch2_fs_compress_init(struct bch_fs *c)
 {
+	/*
+	 * Eagerly initialise the workspace mempools for every compression
+	 * algorithm the fs is configured to use, before any IO can hit the
+	 * compress/decompress paths.  Without this, the first writer to
+	 * trigger an algorithm whose workspace was not yet allocated would
+	 * fall into the lazy-init detour in bch2_compress()/buf_uncompress(),
+	 * which serialises on c->sb_lock and issues a synchronous
+	 * bch2_write_super() - a thundering herd of concurrent first-writers
+	 * pays that latency, and the decompress side can be reached from
+	 * btree-transaction context where sleeping under sb_lock is unsafe.
+	 *
+	 * c->sb.features covers every algorithm the fs has ever marked on
+	 * disk; we additionally union in the current foreground and
+	 * background compression opts so a fresh fs with compression enabled
+	 * is ready before its first write.
+	 *
+	 * Runtime option changes (sysfs etc.) are handled separately by
+	 * bch2_opt_hook_pre_set() (fs/opts.c), which calls
+	 * bch2_check_set_has_compressed_data() from sleepable user context
+	 * - so this path stays a no-op outside of mount.
+	 */
 	u64 f = c->sb.features;
 
-	f |= compression_opt_to_feature(c->opts.compression);
-	f |= compression_opt_to_feature(c->opts.background_compression);
+	if (c->opts.compression)
+		f |= compression_opt_to_feature(c->opts.compression);
+	if (c->opts.background_compression)
+		f |= compression_opt_to_feature(c->opts.background_compression);
 
 	return __bch2_fs_compress_init(c, f);
 }
