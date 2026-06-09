@@ -52,6 +52,7 @@ int bch2_check_set_has_compressed_data(struct bch_fs *, unsigned);
 void bch2_fs_compress_exit(struct bch_fs *);
 int bch2_fs_compress_init(struct bch_fs *);
 
+extern bool bch2_verify_compress;
 extern unsigned bch2_compress_workers;
 unsigned bch2_compress_nr_workers(void);
 

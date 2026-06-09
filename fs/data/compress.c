@@ -40,7 +40,7 @@
 
 #include <linux/module.h>
 
-static bool bch2_verify_compress = IS_ENABLED(CONFIG_BCACHEFS_DEBUG);
+bool bch2_verify_compress = IS_ENABLED(CONFIG_BCACHEFS_DEBUG);
 module_param_named(verify_compress, bch2_verify_compress, bool, 0644);
 MODULE_PARM_DESC(verify_compress, "Decompress data immediately after compressing, and verify the result");
 

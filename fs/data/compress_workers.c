@@ -70,10 +70,12 @@ int bch2_compress_wq_init(struct bch_fs *c)
 			goto err_free_workers;
 		}
 
-		worker->verify_buf = kvzalloc(extent_max, GFP_KERNEL);
-		if (!worker->verify_buf) {
-			ret = -ENOMEM;
-			goto err_free_workers;
+		if (bch2_verify_compress) {
+			worker->verify_buf = kvzalloc(extent_max, GFP_KERNEL);
+			if (!worker->verify_buf) {
+				ret = -ENOMEM;
+				goto err_free_workers;
+			}
 		}
 	}
 
