@@ -856,7 +856,8 @@ int bch2_fs_compress_init(struct bch_fs *c)
 	 * Failure is non-fatal: mt_wq stays NULL and writes fall back
 	 * to serial compression.
 	 */
-	bch2_compress_wq_init(c);
+	if (bch2_compress_wq_init(c))
+		pr_notice("bcachefs: MT compression workqueue init failed, using serial path");
 
 	return 0;
 }
