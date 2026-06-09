@@ -245,17 +245,19 @@ void bch2_btree_bounce_free(struct bch_fs *c, size_t size, bool used_mempool, vo
 		kvfree(p);
 }
 
-void *bch2_btree_bounce_alloc(struct bch_fs *c, size_t size, bool *used_mempool)
+void *bch2_btree_bounce_alloc_noprof(struct bch_fs *c, size_t size, bool *used_mempool)
 {
 	BUG_ON(size > c->opts.btree_node_size);
 
 	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
 
 	*used_mempool = false;
-	void *p = kvmalloc(size, GFP_NOWAIT|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
+	void *p = kvmalloc_node_align_noprof(size, 1,
+					     GFP_NOWAIT|__GFP_ACCOUNT|__GFP_RECLAIMABLE,
+					     NUMA_NO_NODE);
 	if (!p) {
 		*used_mempool = true;
-		p = mempool_alloc(&c->btree.bounce_pool, GFP_NOFS|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
+		p = mempool_alloc_noprof(&c->btree.bounce_pool, GFP_NOFS|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
 	}
 	return p;
 }
