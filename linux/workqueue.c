@@ -1,24 +1,31 @@
 #include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "tools-util.h"
 
 #include <linux/errname.h>
 #include <linux/kthread.h>
+#include <linux/percpu.h>
 #include <linux/slab.h>
 #include <linux/workqueue.h>
 
 static pthread_mutex_t	wq_lock = PTHREAD_MUTEX_INITIALIZER;
-static pthread_cond_t	work_finished = PTHREAD_COND_INITIALIZER;
 static LIST_HEAD(wq_list);
+
+#define WQ_SHIM_MAX_WORKERS	1
 
 struct workqueue_struct {
 	struct list_head	list;
 
-	struct work_struct	*current_work;
-	struct list_head	pending_work;
+	char			name[64];
+	unsigned int		max_active;
 
-	struct task_struct	*worker;
-	char			name[24];
+	struct task_struct	**worker_tasks;
+	unsigned int		nr_workers;
+
+	struct work_struct	*current_work;
+	struct list_head	pending;
 };
 
 enum {
@@ -40,7 +47,7 @@ static bool set_work_pending(struct work_struct *work)
 	return !test_and_set_bit(WORK_PENDING_BIT, work_data_bits(work));
 }
 
-static int worker_thread(void *arg)
+static int wq_worker_thread(void *arg)
 {
 	struct workqueue_struct *wq = arg;
 	struct work_struct *work;
@@ -48,7 +55,8 @@ static int worker_thread(void *arg)
 	pthread_mutex_lock(&wq_lock);
 	while (1) {
 		set_current_state(TASK_INTERRUPTIBLE);
-		work = list_first_entry_or_null(&wq->pending_work,
+
+		work = list_first_entry_or_null(&wq->pending,
 				struct work_struct, entry);
 		wq->current_work = work;
 
@@ -73,11 +81,34 @@ static int worker_thread(void *arg)
 		work->func(work);
 		pthread_mutex_lock(&wq_lock);
 
-		pthread_cond_broadcast(&work_finished);
+		wq->current_work = NULL;
 	}
 	pthread_mutex_unlock(&wq_lock);
 
 	return 0;
+}
+
+static struct task_struct *create_wq_worker(struct workqueue_struct *wq)
+{
+	struct task_struct *p;
+	unsigned int idx = wq->nr_workers;
+
+	if (idx >= wq->max_active)
+		return NULL;
+
+	p = kthread_run(wq_worker_thread, wq, "%s/%u", wq->name, idx);
+	if (IS_ERR(p))
+		return p;
+
+	wq->worker_tasks[idx] = p;
+	wq->nr_workers++;
+	return p;
+}
+
+static void wake_up_wq_workers(struct workqueue_struct *wq)
+{
+	for (unsigned int i = 0; i < wq->nr_workers; i++)
+		wake_up_process(wq->worker_tasks[i]);
 }
 
 static void __queue_work(struct workqueue_struct *wq,
@@ -86,15 +117,12 @@ static void __queue_work(struct workqueue_struct *wq,
 	BUG_ON(!work_pending(work));
 	BUG_ON(!list_empty(&work->entry));
 
-	list_add_tail(&work->entry, &wq->pending_work);
+	list_add_tail(&work->entry, &wq->pending);
 
-	if (!wq->worker) {
-		wq->worker = kthread_run(worker_thread, wq, "%s", wq->name);
-		int ret = PTR_ERR_OR_ZERO(wq->worker);
-		if (ret)
-			die("error creating workqueue thread: %s\n", errname(ret));
-	}
-	wake_up_process(wq->worker);
+	if (wq->nr_workers == 0)
+		create_wq_worker(wq);
+
+	wake_up_wq_workers(wq);
 }
 
 bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
@@ -201,7 +229,9 @@ bool flush_work(struct work_struct *work)
 
 	pthread_mutex_lock(&wq_lock);
 	while (work_pending(work) || work_running(work)) {
-		pthread_cond_wait(&work_finished, &wq_lock);
+		pthread_mutex_unlock(&wq_lock);
+		schedule();
+		pthread_mutex_lock(&wq_lock);
 		ret = true;
 	}
 	pthread_mutex_unlock(&wq_lock);
@@ -214,7 +244,9 @@ static bool __flush_work(struct work_struct *work)
 	bool ret = false;
 
 	while (work_running(work)) {
-		pthread_cond_wait(&work_finished, &wq_lock);
+		pthread_mutex_unlock(&wq_lock);
+		schedule();
+		pthread_mutex_lock(&wq_lock);
 		ret = true;
 	}
 
@@ -283,21 +315,53 @@ bool cancel_delayed_work_sync(struct delayed_work *dwork)
 void drain_workqueue(struct workqueue_struct *wq)
 {
 	pthread_mutex_lock(&wq_lock);
-	while (!list_empty(&wq->pending_work) || wq->current_work)
-		pthread_cond_wait(&work_finished, &wq_lock);
+	while (!list_empty(&wq->pending) || wq->current_work) {
+		pthread_mutex_unlock(&wq_lock);
+		schedule();
+		pthread_mutex_lock(&wq_lock);
+	}
 	pthread_mutex_unlock(&wq_lock);
+}
+
+void flush_workqueue(struct workqueue_struct *wq)
+{
+	drain_workqueue(wq);
 }
 
 void destroy_workqueue(struct workqueue_struct *wq)
 {
-	if (wq->worker)
-		kthread_stop(wq->worker);
+	struct task_struct **tasks;
+	unsigned int n;
 
 	pthread_mutex_lock(&wq_lock);
 	list_del(&wq->list);
+	tasks = wq->worker_tasks;
+	n = wq->nr_workers;
 	pthread_mutex_unlock(&wq_lock);
 
+	for (unsigned int i = 0; i < n; i++) {
+		kthread_stop(tasks[i]);
+		put_task_struct(tasks[i]);
+	}
+
+	free(tasks);
 	kfree(wq);
+}
+
+static unsigned int compute_nr_workers(int max_active)
+{
+	unsigned int nr;
+
+	if (max_active <= 0)
+		nr = 1;
+	else if ((unsigned int)max_active > WQ_MAX_ACTIVE)
+		nr = WQ_SHIM_MAX_WORKERS;
+	else
+		nr = (unsigned int)max_active;
+
+	if (nr > WQ_SHIM_MAX_WORKERS)
+		nr = WQ_SHIM_MAX_WORKERS;
+	return nr;
 }
 
 struct workqueue_struct *alloc_workqueue(const char *fmt,
@@ -312,12 +376,18 @@ struct workqueue_struct *alloc_workqueue(const char *fmt,
 	if (!wq)
 		return NULL;
 
-	INIT_LIST_HEAD(&wq->list);
-	INIT_LIST_HEAD(&wq->pending_work);
+	INIT_LIST_HEAD(&wq->pending);
+	wq->max_active = compute_nr_workers(max_active);
 
 	va_start(args, max_active);
 	vsnprintf(wq->name, sizeof(wq->name), fmt, args);
 	va_end(args);
+
+	wq->worker_tasks = calloc(wq->max_active, sizeof(struct task_struct *));
+	if (!wq->worker_tasks) {
+		kfree(wq);
+		return NULL;
+	}
 
 	pthread_mutex_lock(&wq_lock);
 	list_add(&wq->list, &wq_list);
