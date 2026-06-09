@@ -43,6 +43,23 @@ static bool bch2_verify_compress = IS_ENABLED(CONFIG_BCACHEFS_DEBUG);
 module_param_named(verify_compress, bch2_verify_compress, bool, 0644);
 MODULE_PARM_DESC(verify_compress, "Decompress data immediately after compressing, and verify the result");
 
+#define BCH_COMPRESS_WORKERS_MAX	32U
+
+unsigned bch2_compress_workers;
+module_param_named(compress_workers, bch2_compress_workers, uint, 0644);
+MODULE_PARM_DESC(compress_workers,
+	"Max concurrent compression workers (0 = auto = min(num_online_cpus(), 32)). "
+	"Takes effect on next filesystem mount.");
+
+unsigned bch2_compress_nr_workers(void)
+{
+	unsigned n = READ_ONCE(bch2_compress_workers);
+
+	if (!n)
+		n = num_online_cpus();
+	return clamp(n, 1U, BCH_COMPRESS_WORKERS_MAX);
+}
+
 static inline enum bch_compression_opts bch2_compression_type_to_opt(enum bch_compression_type type)
 {
 	switch (type) {
@@ -756,14 +773,25 @@ static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 	if (!have_compressed)
 		return 0;
 
+	/*
+	 * Size the mempool reserves to the expected MT-compression worker
+	 * count.  bounce[WRITE] needs 2x because bch2_verify_compress holds
+	 * the dst bounce buffer AND a verify bounce buffer simultaneously
+	 * (see bch2_compress() and __bounce_alloc() at ~bbuf line).
+	 * bounce[READ] needs 1x.  Only the zstd workspace pool is sized to
+	 * the worker count because the MT compression series targets zstd
+	 * only; lz4 and gzip workspaces stay at min_nr=1.
+	 */
+	unsigned nr_workers = bch2_compress_nr_workers();
+
 	if (!mempool_initialized(&c->compress.bounce[READ]) &&
 	    mempool_init_kvmalloc_pool(&c->compress.bounce[READ],
-				       1, c->opts.encoded_extent_max))
+				       nr_workers, c->opts.encoded_extent_max))
 		return bch_err_throw(c, ENOMEM_compression_bounce_read_init);
 
 	if (!mempool_initialized(&c->compress.bounce[WRITE]) &&
 	    mempool_init_kvmalloc_pool(&c->compress.bounce[WRITE],
-				       1, c->opts.encoded_extent_max))
+				       nr_workers * 2, c->opts.encoded_extent_max))
 		return bch_err_throw(c, ENOMEM_compression_bounce_write_init);
 
 	for (i = compression_types;
@@ -775,9 +803,12 @@ static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 		if (mempool_initialized(&c->compress.workspace[i->type]))
 			continue;
 
+		unsigned ws_nr = i->type == BCH_COMPRESSION_OPT_zstd
+			? nr_workers : 1;
+
 		if (mempool_init_kvmalloc_pool(
 				&c->compress.workspace[i->type],
-				1, i->compress_workspace))
+				ws_nr, i->compress_workspace))
 			return bch_err_throw(c, ENOMEM_compression_workspace_init);
 	}
 
