@@ -65,6 +65,7 @@ bcachefs-y		:=			\
 	btree/write_buffer.o			\
 	data/checksum.o				\
 	data/compress.o				\
+	data/compress_workers.o			\
 	data/copygc.o				\
 	data/ec/create.o			\
 	data/ec/init.o				\

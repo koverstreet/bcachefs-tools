@@ -542,7 +542,7 @@ STORE(bch2_fs)
 
 		if (nr_str &&
 		    !(ret = bch2_strtoull_h(nr_str, &nr)) &&
-		    (!threads_str ||
+		    (!threads_str || !*threads_str ||
 		     !(ret = kstrtouint(threads_str, 10, &threads))))
 			ret = bch2_compress_test(c, test, nr, threads);
 

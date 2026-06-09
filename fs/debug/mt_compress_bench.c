@@ -249,8 +249,13 @@ int bch2_compress_bench(struct bch_fs *c, unsigned compression_opt)
 
 	pr_info("MT_COMPRESS_BENCH: serial_ns=%llu\n", serial_ns);
 	pr_info("MT_COMPRESS_BENCH: parallel_ns=%llu\n", parallel_ns);
-	pr_info("MT_COMPRESS_BENCH: speedup=%.2fx\n",
-		parallel_ns ? (double) serial_ns / (double) parallel_ns : 0.0);
+	if (parallel_ns) {
+		unsigned int speedup_100 = (unsigned int)(serial_ns * 100 / parallel_ns);
+		pr_info("MT_COMPRESS_BENCH: speedup=%u.%02ux\n",
+			speedup_100 / 100, speedup_100 % 100);
+	} else {
+		pr_info("MT_COMPRESS_BENCH: speedup=N/A (parallel_ns=0)\n");
+	}
 
 	if (nr_workers < 2) {
 		pr_notice("MT_COMPRESS_BENCH: SKIP - mt_wq has %u worker(s); parallel path is effectively serial\n",

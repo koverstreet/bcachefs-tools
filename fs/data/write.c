@@ -1760,6 +1760,7 @@ static int bch2_write_extent_mt(struct bch_write_op *op, struct write_point *wp,
 
 			chunk_src_len[batch] = chunk;
 			chunk_iter[batch] = si;
+			chunk_iter[batch].bi_size = chunk;
 
 			sectors_free -= chunk >> 9;
 			bio_advance_iter(src, &si, chunk);
