@@ -554,20 +554,33 @@ static unsigned bch2_compress(struct bch_fs *c,
 		*src_len = round_down(*src_len, block_bytes(c));
 	}
 
-	mempool_free(workspace, workspace_pool);
-
-	if (ret)
+	if (ret) {
+		mempool_free(workspace, workspace_pool);
 		return BCH_COMPRESSION_TYPE_incompressible;
+	}
 
 	/* Didn't get smaller: */
-	if (round_up(*dst_len, block_bytes(c)) >= *src_len)
+	if (round_up(*dst_len, block_bytes(c)) >= *src_len) {
+		mempool_free(workspace, workspace_pool);
 		return BCH_COMPRESSION_TYPE_incompressible;
+	}
 
 	unsigned pad = round_up(*dst_len, block_bytes(c)) - *dst_len;
 
 	memset(dst + *dst_len, 0, pad);
 	*dst_len += pad;
 
+	/*
+	 * Hold the compression workspace across the verify step.  Under
+	 * multithreaded compression, freeing the workspace before verify
+	 * would let a concurrent compress on another thread acquire the
+	 * same buffer from the pool and scribble over it - corrupting our
+	 * in-flight compressed output.  buf_uncompress() (zstd) decompresses
+	 * whatever bytes it's handed, so the resulting plaintext would
+	 * silently mismatch the original source.  That mismatch is exactly
+	 * what the memcmp() below is designed to catch, but it can only
+	 * catch it if we still own this workspace exclusively here.
+	 */
 	if (unlikely(bch2_verify_compress)) {
 		struct bch_extent_crc_unpacked crc = {
 			.compressed_size	= *dst_len >> 9,
@@ -589,9 +602,12 @@ static unsigned bch2_compress(struct bch_fs *c,
 			prt_printf(&msg.m, " len %zu\n", *src_len);
 
 			msg.m.suppress = bch2_count_fsck_err(c, compression_error, &msg.m);
+			mempool_free(workspace, workspace_pool);
 			return BCH_COMPRESSION_TYPE_incompressible;
 		}
 	}
+
+	mempool_free(workspace, workspace_pool);
 
 	BUG_ON(*dst_len & (block_bytes(c) - 1));
 	BUG_ON(*src_len & (block_bytes(c) - 1));
