@@ -20,6 +20,7 @@
 #include "util/darray.h"
 #include "util/six.h"
 
+struct bio;
 struct open_bucket;
 struct btree_update;
 struct btree_trans;
@@ -682,6 +683,15 @@ struct btree_trans {
 	 */
 	struct six_lock_waiter	locking_wait;
 
+	/*
+	 * btree node writes issued in this trans's context are queued here
+	 * (singly linked via bi_next) instead of being submitted directly —
+	 * no block layer work happens while we hold btree node locks.
+	 * Submitted when the trans unlocks, and before waiting on btree
+	 * node IO (see bch2_btree_node_wait_on_write()).
+	 */
+	struct bio		*queued_write_bios;
+
 	const char		*fn;
 
 	/* update path: */
@@ -877,7 +887,6 @@ struct bch_fs_btree {
 	struct ratelimit_state			read_errors_soft;
 	struct ratelimit_state			read_errors_hard;
 
-	struct workqueue_struct			*write_submit_wq;
 	struct workqueue_struct			*write_complete_wq;
 
 	struct journal_entry_res		root_journal_res;
