@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <linux/percpu.h>
 
@@ -56,6 +57,16 @@ __thread int   bch_percpu_my_id = -1;
 void   *bch_percpu_chunks[BCH_PERCPU_MAX_CPUS];
 int     bch_percpu_nr_cpus;
 size_t  bch_percpu_static_size;
+
+unsigned num_online_cpus(void)
+{
+	static unsigned cached;
+	if (!cached) {
+		long n = sysconf(_SC_NPROCESSORS_ONLN);
+		cached = n > 0 ? (unsigned)n : 1;
+	}
+	return cached;
+}
 
 #define BCH_PERCPU_GRAIN	8
 

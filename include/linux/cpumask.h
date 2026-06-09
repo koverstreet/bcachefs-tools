@@ -11,7 +11,7 @@
  */
 extern int bch_percpu_nr_cpus;
 
-#define num_online_cpus()	((unsigned) bch_percpu_nr_cpus)
+unsigned num_online_cpus(void);
 #define num_possible_cpus()	((unsigned) bch_percpu_nr_cpus)
 #define num_present_cpus()	((unsigned) bch_percpu_nr_cpus)
 #define num_active_cpus()	((unsigned) bch_percpu_nr_cpus)
