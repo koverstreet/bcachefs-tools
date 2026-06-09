@@ -42,6 +42,8 @@ unsigned bch2_compress_locked(struct bch_fs *, void *, size_t *,
 			      void *, size_t *, unsigned,
 			      struct bpos, void *, void *);
 
+#define BCH_COMPRESS_WORKERS_MAX		32U
+
 unsigned bch2_bio_compress(struct bch_fs *, struct bio *, size_t *,
 			   struct bio *, size_t *, unsigned,
 			   struct bpos, bool);

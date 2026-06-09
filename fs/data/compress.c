@@ -44,8 +44,6 @@ static bool bch2_verify_compress = IS_ENABLED(CONFIG_BCACHEFS_DEBUG);
 module_param_named(verify_compress, bch2_verify_compress, bool, 0644);
 MODULE_PARM_DESC(verify_compress, "Decompress data immediately after compressing, and verify the result");
 
-#define BCH_COMPRESS_WORKERS_MAX	32U
-
 unsigned bch2_compress_workers;
 module_param_named(compress_workers, bch2_compress_workers, uint, 0644);
 MODULE_PARM_DESC(compress_workers,

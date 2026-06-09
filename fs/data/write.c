@@ -715,6 +715,7 @@
 
 #include "data/checksum.h"
 #include "data/compress.h"
+#include "data/compress_workers.h"
 #include "data/ec/create.h"
 #include "data/extent_update.h"
 #include "data/keylist.h"
@@ -1707,6 +1708,194 @@ csum_err:
 	return bch_err_throw(c, data_write_csum);
 }
 
+static inline bool bch2_write_should_mt_compress(struct bch_write_op *op,
+						   struct bio *src,
+						   struct bch_fs *c)
+{
+	return op->compression_opt != 0 &&
+	       !(op->flags & BCH_WRITE_data_encoded) &&
+	       !op->incompressible &&
+	       c->compress.mt_wq != NULL &&
+	       bch2_compress_nr_workers() > 1 &&
+	       src->bi_iter.bi_size > c->opts.encoded_extent_max;
+}
+
+static int bch2_write_extent_mt(struct bch_write_op *op, struct write_point *wp,
+				struct bio *src, struct bio *dst,
+				unsigned *out_total_input)
+{
+	struct bch_fs *c = op->c;
+	struct bch_compress_wq *cwq = c->compress.mt_wq;
+	unsigned nr_workers = cwq->nr_workers;
+	unsigned extent_max = c->opts.encoded_extent_max;
+	unsigned max_batch = min_t(unsigned, nr_workers, BCH_COMPRESS_WORKERS_MAX);
+	int ret;
+
+	unsigned batch = 0;
+	size_t chunk_src_len[BCH_COMPRESS_WORKERS_MAX];
+	struct bvec_iter chunk_iter[BCH_COMPRESS_WORKERS_MAX];
+	struct bversion versions[BCH_COMPRESS_WORKERS_MAX];
+	u16 nonces[BCH_COMPRESS_WORKERS_MAX];
+	void *src_bufs[BCH_COMPRESS_WORKERS_MAX] = {};
+	struct bch_compress_work works[BCH_COMPRESS_WORKERS_MAX];
+
+	{
+		struct bvec_iter si = src->bi_iter;
+		unsigned sectors_free = wp->sectors_free;
+
+		while (si.bi_size && batch < max_batch) {
+			size_t chunk = min_t(unsigned, si.bi_size, extent_max);
+			chunk = min_t(unsigned, chunk, sectors_free << 9);
+			if (op->csum_type)
+				chunk = min_t(unsigned, chunk, extent_max);
+			chunk = round_down(chunk, block_bytes(c));
+			if (!chunk)
+				break;
+
+			if (bch2_keylist_realloc(&op->insert_keys,
+						 op->inline_keys,
+						 ARRAY_SIZE(op->inline_keys),
+						 BKEY_EXTENT_U64s_MAX))
+				break;
+
+			chunk_src_len[batch] = chunk;
+			chunk_iter[batch] = si;
+
+			sectors_free -= chunk >> 9;
+			bio_advance_iter(src, &si, chunk);
+			batch++;
+		}
+	}
+
+	if (batch < 2)
+		return -1;
+
+	for (unsigned i = 0; i < batch; i++) {
+		src_bufs[i] = kvmalloc(chunk_src_len[i], GFP_NOFS);
+		if (!src_bufs[i]) {
+			ret = -ENOMEM;
+			goto err_src_bufs;
+		}
+		memcpy_from_bio(src_bufs[i], src, chunk_iter[i]);
+	}
+
+	u64 orig_pos_offset = op->pos.offset;
+	u64 orig_nonce = op->nonce;
+	struct bpos chunk_pos[BCH_COMPRESS_WORKERS_MAX];
+
+	for (unsigned i = 0; i < batch; i++) {
+		chunk_pos[i] = op->pos;
+		op->pos.offset += chunk_src_len[i] >> 9;
+
+		if (bch2_csum_type_is_encryption(op->csum_type)) {
+			if (bversion_zero(op->version)) {
+				versions[i].lo = atomic64_inc_return(&c->key_version);
+				versions[i].hi = 0;
+			} else {
+				nonces[i] = op->nonce;
+				versions[i] = op->version;
+			}
+			op->nonce += chunk_src_len[i] >> 9;
+		} else {
+			versions[i] = op->version;
+		}
+	}
+
+	struct closure cl;
+	closure_init_stack(&cl);
+
+	for (unsigned i = 0; i < batch; i++) {
+		struct bch_compress_worker *w = &cwq->workers[i % nr_workers];
+		bch2_compress_wq_submit(&works[i], cwq, &cl,
+					op->compression_opt,
+					chunk_pos[i],
+					src_bufs[i], chunk_src_len[i],
+					w->dst_buf, extent_max,
+					w);
+	}
+
+	closure_sync_unbounded(&cl);
+
+	op->pos.offset = orig_pos_offset;
+
+	unsigned total_output = 0, total_input = 0;
+	size_t saved = 0;
+
+	for (unsigned i = 0; i < batch; i++) {
+		struct bch_extent_crc_unpacked crc = { 0 };
+		size_t this_dst_len, this_src_len;
+		unsigned compression_type = works[i].compression_type;
+
+		crc.compression_type = compression_type;
+
+		if (crc_is_compressed(crc)) {
+			this_dst_len = works[i].dst_len;
+			this_src_len = works[i].src_len;
+		} else {
+			this_src_len = chunk_src_len[i];
+			this_dst_len = this_src_len;
+		}
+
+		BUG_ON(!this_src_len || !this_dst_len);
+
+		crc.compressed_size	= this_dst_len >> 9;
+		crc.uncompressed_size	= this_src_len >> 9;
+		crc.live_size		= this_src_len >> 9;
+
+		if (bch2_csum_type_is_encryption(op->csum_type)) {
+			if (bversion_zero(op->version))
+				crc.nonce = 0;
+			else
+				crc.nonce = nonces[i];
+		}
+
+		saved = dst->bi_iter.bi_size;
+		dst->bi_iter.bi_size = this_dst_len;
+
+		if (crc_is_compressed(crc))
+			memcpy_to_bio(dst, dst->bi_iter,
+				      cwq->workers[i % nr_workers].dst_buf);
+		else
+			memcpy_to_bio(dst, dst->bi_iter, src_bufs[i]);
+
+		ret = bch2_encrypt_bio(c, op->csum_type,
+				       extent_nonce(versions[i], crc), dst);
+		if (ret)
+			goto err_encrypt;
+
+		crc.csum = bch2_checksum_bio(c, op->csum_type,
+					     extent_nonce(versions[i], crc), dst);
+		crc.csum_type = op->csum_type;
+
+		dst->bi_iter.bi_size = saved;
+		bio_advance(dst, this_dst_len);
+
+		init_append_extent(op, wp, versions[i], crc);
+
+		total_output	+= this_dst_len;
+		total_input	+= this_src_len;
+	}
+
+	bio_advance(src, total_input);
+
+	for (unsigned i = 0; i < batch; i++)
+		kvfree(src_bufs[i]);
+
+	op->nonce = orig_nonce + (total_input >> 9);
+
+	*out_total_input = total_input;
+	return total_output;
+
+err_encrypt:
+	dst->bi_iter.bi_size = saved;
+	op->nonce = orig_nonce;
+	op->pos.offset = orig_pos_offset;
+err_src_bufs:
+	for (unsigned i = 0; i < batch; i++)
+		kvfree(src_bufs[i]);
+	return ret;
+}
+
 static int bch2_write_extent(struct bch_write_op *op, struct write_point *wp,
 			     struct bio **_dst)
 {
@@ -1766,6 +1955,20 @@ static int bch2_write_extent(struct bch_write_op *op, struct write_point *wp,
 	}
 #endif
 	saved_iter = dst->bi_iter;
+
+	if (bounce && bch2_write_should_mt_compress(op, src, c)) {
+		int mt_ret = bch2_write_extent_mt(op, wp, src, dst,
+						    &total_input);
+		if (mt_ret > 0) {
+			more = src->bi_iter.bi_size != 0;
+			total_output = mt_ret;
+			goto mt_done;
+		}
+		if (mt_ret != -1) {
+			ret = mt_ret;
+			goto err;
+		}
+	}
 
 	do {
 		struct bch_extent_crc_unpacked crc = { 0 };
@@ -1901,6 +2104,7 @@ static int bch2_write_extent(struct bch_write_op *op, struct write_point *wp,
 
 	more = src->bi_iter.bi_size != 0;
 
+mt_done:
 	dst->bi_iter = saved_iter;
 
 	if (dst == src && more) {
