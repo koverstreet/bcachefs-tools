@@ -1,5 +1,41 @@
 # Changelog
 
+## v1.38.5 - Wed Jun 10 2026
+
+Bugfix release on top of v1.38.4. No on-disk format changes.
+
+### Bug fixes
+
+Mounting after an unclean shutdown could OOM during journal replay on
+filesystems whose journal is large relative to system memory (i.e. many
+devices): journal replay's sorted-order fastpath holds every journal pin
+until replay finishes, which prevents journal reclaim from writing back
+and freeing dirty btree nodes — so on a large journal the btree node
+cache could eat all of memory before the journal-space fallback ever
+triggered. Journal replay now watches the btree node allocator's
+memory-pressure self reclaim counter (also newly shown in the btree_cache
+debug output) and switches to sequential replay, which releases journal
+pins as it goes. Reported by ZorbaTHut.
+
+The DKMS build was broken on kernels older than 6.18
+(`kvmalloc_node_align` is a 6.18+ API; one call site was missing a
+version guard). Reported by marcin.
+
+`bch2_update_unwritten_extent()` was dropping the write op's flags when
+allocating for an unwritten extent conversion.
+
+Fixed a NULL pointer dereference in the `bfloat_failed` debugfs file.
+
+### Userspace
+
+`bcachefs fsck -o recovery_passes=<passes>` now honors the explicit pass
+selection: previously the fsck option was still set, which ORed in the
+full fsck pass set on top of the user's request.
+
+### Other
+
+- Debug builds now announce themselves in the log at startup.
+
 ## v1.38.4 - Tue Jun 9 2026
 
 Bugfix release on top of v1.38.3. No on-disk format changes.
