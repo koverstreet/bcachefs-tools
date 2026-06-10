@@ -434,8 +434,18 @@ int bch2_journal_replay(struct bch_fs *c)
 		if (k->allocated)
 			immediate_flush = true;
 
-		/* Skip fastpath if we're low on space in the journal */
-		ret = c->journal.watermark ? -1 :
+		/*
+		 * Skip the fastpath if we're low on space in the journal, or
+		 * if btree node allocation has hit the memory-pressure self
+		 * reclaim path: the fastpath holds every journal pin until
+		 * replay finishes, but self reclaim needs pins to be released
+		 * so that journal reclaim can write back and free btree nodes
+		 * - with enough devices the journal can be bigger than RAM,
+		 * and the btree node cache will eat all of memory before the
+		 * journal-space watermark ever trips.
+		 */
+		ret = c->journal.watermark ||
+		      READ_ONCE(c->btree.cache.nr_self_reclaim) ? -1 :
 			commit_do(trans, NULL, NULL,
 				  BCH_TRANS_COMMIT_journal_replay|
 				  BCH_TRANS_COMMIT_no_enospc|

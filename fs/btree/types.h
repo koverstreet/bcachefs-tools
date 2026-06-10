@@ -279,6 +279,14 @@ struct bch_fs_btree_cache {
 	u64			not_freed[BCH_BTREE_CACHE_NOT_FREED_REASONS_NR];
 
 	/*
+	 * Times the allocator hit the memory-pressure self reclaim path:
+	 * journal replay watches for this going nonzero to switch off the
+	 * sorted-order fastpath, which holds every journal pin until replay
+	 * finishes - pins must be released for reclaim to clean btree nodes.
+	 */
+	unsigned long		nr_self_reclaim;
+
+	/*
 	 * If we need to allocate memory for a new btree node and that
 	 * allocation fails, we can cannibalize another node in the btree cache
 	 * to satisfy the allocation - lock to guarantee only one thread does

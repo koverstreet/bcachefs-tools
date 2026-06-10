@@ -918,9 +918,12 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *trans, bool pcpu_rea
 	 * callbacks haven't been aggressive enough to keep bcachefs out of
 	 * OOM under heavy load (TiCPU report).
 	 */
-	if (system_memory_usage_high(c) &&
-	    (b = bch2_btree_node_grab(c, &bc->live[pcpu_read_locks].clean, pcpu_read_locks, 0)))
-		goto got_mem;
+	if (unlikely(system_memory_usage_high(c))) {
+		bc->nr_self_reclaim++;
+		b = bch2_btree_node_grab(c, &bc->live[pcpu_read_locks].clean, pcpu_read_locks, 0);
+		if (b)
+			goto got_mem;
+	}
 
 	struct btree_node_bufs bufs = { .byte_order = ilog2(c->opts.btree_node_size) };
 	if (__btree_node_data_alloc(c, &bufs, GFP_NOWAIT, true)) {
@@ -1854,6 +1857,7 @@ void bch2_btree_cache_to_text(struct printbuf *out, const struct bch_fs_btree_ca
 	prt_printf(out, "counters since mount:\n");
 	prt_printf(out, "requested:\t%zu\n",	bc->nr_requested);
 	prt_printf(out, "freed:\t%zu\n",	bc->nr_freed);
+	prt_printf(out, "self reclaim:\t%lu\n",	bc->nr_self_reclaim);
 	prt_printf(out, "not freed:\n");
 
 	for (unsigned i = 0; i < ARRAY_SIZE(bc->not_freed); i++)
