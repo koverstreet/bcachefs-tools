@@ -789,42 +789,27 @@ void *bch2_writepoint_ec_buf(struct bch_fs *c, struct write_point *wp)
 	return ob->ec->new_stripe.data[ob->ec_idx] + (offset << 9);
 }
 
-static int unsigned_cmp(const void *_l, const void *_r)
-{
-	unsigned l = *((const unsigned *) _l);
-	unsigned r = *((const unsigned *) _r);
-
-	return cmp_int(l, r);
-}
-
 /* pick most common bucket size: */
 static unsigned pick_blocksize(struct bch_fs *c,
 			       struct bch_devs_mask *devs)
 {
-	unsigned nr = 0, sizes[BCH_SB_MEMBERS_MAX];
 	struct {
 		unsigned nr, size;
-	} cur = { 0, 0 }, best = { 0, 0 };
+	} best = { 0, 0 };
 
-	for_each_member_device_rcu(c, ca, devs)
-		sizes[nr++] = ca->mi.bucket_size;
+	for_each_member_device_rcu(c, ca, devs) {
+		unsigned size = ca->mi.bucket_size, nr = 0;
 
-	sort(sizes, nr, sizeof(unsigned), unsigned_cmp, NULL);
+		for_each_member_device_rcu(c, ca2, devs)
+			nr += ca2->mi.bucket_size == size;
 
-	for (unsigned i = 0; i < nr; i++) {
-		if (sizes[i] != cur.size) {
-			if (cur.nr > best.nr)
-				best = cur;
-
-			cur.nr = 0;
-			cur.size = sizes[i];
+		/* on a tie, prefer the smaller size: */
+		if (nr > best.nr ||
+		    (nr == best.nr && size < best.size)) {
+			best.nr   = nr;
+			best.size = size;
 		}
-
-		cur.nr++;
 	}
-
-	if (cur.nr > best.nr)
-		best = cur;
 
 	return best.size;
 }
