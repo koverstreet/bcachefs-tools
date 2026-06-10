@@ -1,5 +1,55 @@
 # Changelog
 
+## v1.38.4 - Tue Jun 9 2026
+
+Bugfix release on top of v1.38.3. No on-disk format changes.
+
+### Userspace
+
+`bcachefs fs top` gained live tracepoint drill-down: every counter on the
+counters page now has an interactive drill-down (Enter) into a live tail
+of the corresponding tracepoint, scoped to the current mount. Scrollback
+with arrows/PgUp/PgDn, End to resume following the tail.
+
+### Bug fixes
+
+`bch2_dev_add()` is now transactionally correct — the device add path was
+missing a superblock write, and the bucket-usage accounting was not
+idempotent across recovery, so a half-finished device add on a crashed
+filesystem would double-count free space, and the device label would not
+be persisted.
+
+A number of btree-update error-path bugs were fixed — under heavy
+split/rewrite load (copygc, tiering, rebalance) a failed interior update
+could leak btree node locks and open-bucket refs, eventually wedging the
+filesystem at shutdown.
+
+Two erasure coding bugs were fixed — a pointer collision when migrating
+stripe blocks between devices, and a bug where evacuated buckets ignored
+EC (erasure coding) data, so some blocks were left behind on device
+removal. Also, `stripe_update_extent` had been dropping excess replicas
+without calling `set_needs_reconcile`, so the filesystem wasn't
+re-replicating degraded stripes.
+
+An OOM under memory pressure was fixed — the btree-key-cache shrinker was
+giving the VM a zero-cost hint (`seeks=0`), causing pathological cache
+refill, and the btree buffer cache wasn't self-reclaiming when the system
+was tight. Reported by TiCPU.
+
+Backpointers repair in fsck can now repair duplicate extents pointing to the
+same data.
+
+### Other
+
+- `bch2_subvol_is_ro_trans()` now returns true for subvolumes that are
+  being deleted — create/rename/setattr could previously modify a subvol
+  mid-deletion.
+- Promotes to cache devices no longer risk landing on a zero-durability
+  device.
+- `shard_inode_numbers_bits` is now capped by filesystem size — on small
+  filesystems pre-split metadata was blowing the filesystem create budget.
+- Journal discard workqueue no longer use-after-frees on going read-only.
+- DKMS build fixes.
 ## v1.38.3 - Sun May 10 2026
 
 Maintenance release on top of v1.38.2. No on-disk format changes.
@@ -27,6 +77,13 @@ stripe and let the old one age out via copygc.
   issues on some fileserver workloads. This will in the future be rolled into
   the generalized backpressure subsystem; we'll be watching to see how this
   affects performance.
+
+### Userspace
+
+`bcachefs fs top` gained live tracepoint drill-down: every counter on the
+counters page now has an interactive drill-down (Enter) into a live tail
+of the corresponding tracepoint, scoped to the current mount. Scrollback
+with arrows/PgUp/PgDn, End to resume following the tail.
 
 ### Bug fixes
 
@@ -100,6 +157,13 @@ to be present before exiting. Intended as a `WantedBy=` of a `.mount`
 unit so systemd doesn't try to mount before all members are visible.
 Ships with a `bcachefs-wait-devices@.service` template unit in the
 Debian package.
+
+### Userspace
+
+`bcachefs fs top` gained live tracepoint drill-down: every counter on the
+counters page now has an interactive drill-down (Enter) into a live tail
+of the corresponding tracepoint, scoped to the current mount. Scrollback
+with arrows/PgUp/PgDn, End to resume following the tail.
 
 ### Bug fixes
 
@@ -248,6 +312,13 @@ that limit is ever hit it's now trivial to make growable at runtime.
 Users with large numbers of snapshots should notice dramatically faster mount
 times; an accidental O(n^2) from incorrectly growing the in-memory snapshot
 table has been fixed.
+
+### Userspace
+
+`bcachefs fs top` gained live tracepoint drill-down: every counter on the
+counters page now has an interactive drill-down (Enter) into a live tail
+of the corresponding tracepoint, scoped to the current mount. Scrollback
+with arrows/PgUp/PgDn, End to resume following the tail.
 
 ### Bug fixes
 
@@ -468,6 +539,13 @@ Highlights:
   replicated filesystems) - or if the data is not recoverable we'll automatically
   rewind to the last good state. By default, we won't rewind more than 10
   seconds, controlled by the `scrub_journal_max_rewind_secs` option.
+
+### Userspace
+
+`bcachefs fs top` gained live tracepoint drill-down: every counter on the
+counters page now has an interactive drill-down (Enter) into a live tail
+of the corresponding tracepoint, scoped to the current mount. Scrollback
+with arrows/PgUp/PgDn, End to resume following the tail.
 
 ### Bug fixes
 
