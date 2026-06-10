@@ -195,7 +195,7 @@ static struct journal_space __journal_space_available(struct journal *j, unsigne
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	unsigned pos, nr_devs = 0;
-	struct journal_space space, dev_space[BCH_SB_MEMBERS_MAX];
+	struct journal_space space, dev_space[BCH_REPLICAS_MAX];
 	unsigned min_bucket_size = U32_MAX;
 
 	BUG_ON(nr_devs_want > ARRAY_SIZE(dev_space));
@@ -210,11 +210,24 @@ static struct journal_space __journal_space_available(struct journal *j, unsigne
 		if (!space.next_entry)
 			continue;
 
-		for (pos = 0; pos < nr_devs; pos++)
+		/*
+		 * Only the @nr_devs_want largest matter: top-k insertion
+		 * sort, largest to smallest, entries past nr_devs_want fall
+		 * off. nr_devs still counts every qualifying device.
+		 */
+		unsigned nr_kept = min(nr_devs, nr_devs_want);
+
+		for (pos = 0; pos < nr_kept; pos++)
 			if (space.total > dev_space[pos].total)
 				break;
 
-		array_insert_item(dev_space, nr_devs, pos, space);
+		if (pos < nr_devs_want) {
+			memmove(&dev_space[pos + 1],
+				&dev_space[pos],
+				(min(nr_kept, nr_devs_want - 1) - pos) * sizeof(dev_space[0]));
+			dev_space[pos] = space;
+		}
+		nr_devs++;
 	}
 
 	if (nr_devs < nr_devs_want)
