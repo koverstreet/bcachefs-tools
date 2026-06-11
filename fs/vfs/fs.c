@@ -105,6 +105,34 @@ void bch2_inode_update_after_write(struct btree_trans *trans,
 	bch2_inode_flags_to_vfs(c, inode);
 }
 
+/*
+ * The VFS inode - not the btree - is the source of truth for atime, and ONLY
+ * atime: a btree transaction per atime update would be too expensive, so the
+ * VFS tracks it (I_DIRTY_TIME) and persists it via ->write_inode: sync,
+ * eviction, dirtytime expiry. Every other inode field is btree-truth and must
+ * never be copied from the VFS inode.
+ *
+ * That covers every lazytime persistence point except one: "inode written for
+ * an unrelated change" (see mount(8)). Traditional filesystems get that leg
+ * from their setattr calling mark_inode_dirty; our out-of-band btree updates
+ * never dirty the VFS inode. So fold the VFS-truth atime into every
+ * transactional inode update we're already doing - the atime then lands
+ * atomically with the change itself, with no writeback window. generic/622
+ * tests exactly this (atime update, chmod, crash).
+ *
+ * Straight assignment, not max(): timestamps aren't monotonic - userspace can
+ * set atime backwards (utimensat) - and the VFS copy is the truth
+ * unconditionally. Callers run this before their own modifications, so an
+ * explicit ATTR_ATIME setattr still overwrites the fold.
+ */
+static void bch2_inode_fold_atime(struct bch_inode_info *inode,
+				  struct bch_inode_unpacked *inode_u)
+{
+	struct bch_fs *c = inode->v.i_sb->s_fs_info;
+
+	inode_u->bi_atime = timespec_to_bch2_time(c, inode_get_atime(&inode->v));
+}
+
 static int bch2_write_inode_trans(struct btree_trans *trans,
 				  struct bch_inode_info *inode,
 				  inode_set_fn set,
@@ -117,6 +145,8 @@ static int bch2_write_inode_trans(struct btree_trans *trans,
 	try(bch2_inode_peek(trans, &iter, &inode_u, inode_inum(inode), BTREE_ITER_intent));
 
 	struct bch_extent_reconcile old_r = bch2_inode_reconcile_opts_get(c, &inode_u);
+
+	bch2_inode_fold_atime(inode, &inode_u);
 
 	if (set)
 	       try(set(trans, inode, &inode_u, p));
@@ -1115,6 +1145,7 @@ static int bch2_setattr_nonsize_trans(struct btree_trans *trans,
 	struct bch_inode_unpacked inode_u;
 	try(bch2_inode_peek(trans, &inode_iter, &inode_u, inode_inum(inode), BTREE_ITER_intent));
 
+	bch2_inode_fold_atime(inode, &inode_u);
 	bch2_setattr_copy(idmap, inode, &inode_u, attr);
 
 	if (attr->ia_valid & ATTR_MODE)
