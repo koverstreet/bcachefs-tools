@@ -13,6 +13,7 @@
 
 #include "init/error.h"
 #include "init/passes.h"
+#include "sb/errors.h"
 
 #include <linux/string_choices.h>
 
@@ -283,9 +284,18 @@ static int bch2_ec_do_recov(struct bch_fs *c, struct ec_stripe_buf *buf)
 
 /* Validate */
 
+/* A stale read on an unpinned stripe is an expected race, not an error */
+static bool stripe_read_maybe_spurious(struct ec_stripe_buf *buf, unsigned i,
+				       int err, bool is_open)
+{
+	return err == -BCH_ERR_stripe_read_ptr_stale &&
+		!test_bit(i, buf->stale) &&
+		!is_open;
+}
+
 static __cold void __stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
 				      struct ec_stripe_buf *buf,
-				      enum bch_stripe_buf_err e)
+				      enum bch_stripe_buf_err e, bool is_open)
 {
 	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
 		int err = buf->err[e][i];
@@ -303,24 +313,28 @@ static __cold void __stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs
 				bch2_csum_to_text(out, buf->key.v.csum_type, buf->csum_bad[i]);
 			}
 
+			if (e == STRIPE_BUF_PRE_RECOV &&
+			    stripe_read_maybe_spurious(buf, i, err, is_open))
+				prt_str(out, " (possibly spurious: stripe not pinned)");
+
 			prt_newline(out);
 		}
 	}
 }
 
 static __cold void stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
-				    struct ec_stripe_buf *buf)
+				    struct ec_stripe_buf *buf, bool is_open)
 {
 	if (ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV)) {
 		prt_printf(out, "Errors pre recovery\n");
 		scoped_guard(printbuf_indent, out)
-			__stripe_buf_errs_to_text(out, c, buf, STRIPE_BUF_PRE_RECOV);
+			__stripe_buf_errs_to_text(out, c, buf, STRIPE_BUF_PRE_RECOV, is_open);
 	}
 
 	if (ec_nr_failed(buf, STRIPE_BUF_POST_RECOV)) {
 		prt_printf(out, "Errors post recovery\n");
 		scoped_guard(printbuf_indent, out)
-			__stripe_buf_errs_to_text(out, c, buf, STRIPE_BUF_POST_RECOV);
+			__stripe_buf_errs_to_text(out, c, buf, STRIPE_BUF_POST_RECOV, is_open);
 	}
 }
 
@@ -336,10 +350,20 @@ static int bch2_stripe_buf_validate(struct bch_fs *c, struct ec_stripe_buf *buf,
 	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
 		int err = buf->err[STRIPE_BUF_PRE_RECOV][i];
 
-		bool stale_race = err == -BCH_ERR_stripe_read_ptr_stale &&
-			!test_bit(i, buf->stale) &&
-			!is_open;
+		bool stale_race = stripe_read_maybe_spurious(buf, i, err, is_open);
 		have_stale_race |= stale_race;
+
+		/*
+		 * A pinned stripe's blocks cannot legitimately go stale under
+		 * us - that's the allocator invalidating a bucket a pinned
+		 * stripe references, i.e. a filesystem inconsistency: count
+		 * it so it's visible in the field and fails tests. Device
+		 * offline and IO errors are environmental, not
+		 * inconsistencies, and stale reads on unpinned stripes are
+		 * an expected race - neither counts.
+		 */
+		if (is_open && err == -BCH_ERR_stripe_read_ptr_stale)
+			bch2_sb_error_count(c, BCH_FSCK_ERR_stripe_read_ptr_stale);
 	}
 	int ret = bch2_ec_do_recov(c, buf);
 
@@ -366,7 +390,7 @@ int bch2_stripe_buf_validate_msg(struct bch_fs *c, struct ec_stripe_buf *buf, bo
 	bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&buf->key.k_i));
 	prt_newline(&msg.m);
 
-	stripe_buf_errs_to_text(&msg.m, c, buf);
+	stripe_buf_errs_to_text(&msg.m, c, buf, is_open);
 
 	if (!ret) {
 		prt_printf(&msg.m, "successful reconstruct\n");
@@ -580,7 +604,7 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		memcpy_to_bio(&rbio->bio, rbio->bio.bi_iter,
 			      buf->data[rbio->pick.ec.block] + ((offset - buf->offset) << 9));
 
-	stripe_buf_errs_to_text(msg, c, buf);
+	stripe_buf_errs_to_text(msg, c, buf, false);
 
 	if (!ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV) &&
 	    !ec_nr_failed(buf, STRIPE_BUF_POST_RECOV))
