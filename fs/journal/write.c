@@ -285,6 +285,17 @@ static CLOSURE_CALLBACK(journal_write_done)
 
 	CLASS(darray_replicas_entry_refs, replicas_refs)();
 
+	/*
+	 * j->buf_lock guards journal buf data lifetime against the btree write
+	 * buffer flush path: fetch_wb_keys_from_journal() walks buf->data with
+	 * buf_lock held, and on the error path (emergency shutdown) we can get
+	 * here with need_flush_to_write_buffer still set - i.e. with a flush
+	 * concurrently reading the buf we're about to free.
+	 *
+	 * Lock ordering: buf_lock, then j->lock - same as the flusher and the
+	 * journal write path.
+	 */
+	mutex_lock(&j->buf_lock);
 	spin_lock(&j->lock);
 	BUG_ON(seq_wrote < j->pin.front);
 	if (err && (!j->err_seq || seq_wrote < j->err_seq))
@@ -299,6 +310,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 	void *buf_to_free __free(kvfree) = w->data;
 	w->data = NULL;
 	w->buf_size = 0;
+	mutex_unlock(&j->buf_lock);
 
 	bool completed = false;
 	bool last_seq_ondisk_updated = false;
