@@ -7,16 +7,30 @@
 STATE_DIR="/home/aptbcachefsorg/package-ci"
 PID_FILE="$STATE_DIR/orchestrator.pid"
 
+queue_build() {
+    local commit=$1
+
+    echo "$commit" > "$STATE_DIR/desired"
+    echo "CI: queued build for ${commit:0:12}"
+
+    if [ -f "$PID_FILE" ]; then
+        kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null || true
+    fi
+}
+
 while read oldrev newrev refname; do
     case "$refname" in
         refs/heads/master)
-            echo "$newrev" > "$STATE_DIR/desired"
-            echo "CI: queued build for ${newrev:0:12}"
-
-            # Wake up the orchestrator
-            if [ -f "$PID_FILE" ]; then
-                kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null || true
-            fi
+            queue_build "$newrev"
+            ;;
+        refs/tags/v*)
+            # Release tags may be pushed without (or after) a branch
+            # update - e.g. tagged on the stable branch. The orchestrator
+            # publishes to the release suite for any exact-tagged commit
+            # (git describe --exact-match), it just needs to be told to
+            # build it. Resolve annotated tag objects to the commit:
+            commit=$(git rev-parse "$newrev^{commit}" 2>/dev/null) || continue
+            queue_build "$commit"
             ;;
     esac
 done
