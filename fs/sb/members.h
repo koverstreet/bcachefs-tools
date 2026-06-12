@@ -166,6 +166,25 @@ static inline void bch2_dev_put(struct bch_dev *ca)
 }
 DEFINE_FREE(bch2_dev_put, struct bch_dev *, bch2_dev_put(_T))
 
+/*
+ * Memory-lifetime-only reference: keeps the bch_dev allocation alive, but
+ * does NOT imply the device is still a member of the filesystem - removal
+ * can complete while you hold this. Use it (never ca->ref) in any context
+ * that blocks on state_lock, and recheck ca->removing under the lock
+ * before touching member state. Drained by bch2_dev_free(), outside
+ * state_lock. See the comment at ca->ref_outer.
+ */
+static inline void bch2_dev_get_outer(struct bch_dev *ca)
+{
+	refcount_inc(&ca->ref_outer);
+}
+
+static inline void bch2_dev_put_outer(struct bch_dev *ca)
+{
+	if (refcount_dec_and_test(&ca->ref_outer))
+		complete(&ca->ref_outer_completion);
+}
+
 /* Device iteration (refcounted): */
 
 static inline struct bch_dev *bch2_get_next_dev(struct bch_fs *c, struct bch_dev *ca)

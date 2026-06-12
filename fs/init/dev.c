@@ -470,10 +470,23 @@ KTYPE(bch2_dev);
 
 void bch2_dev_free(struct bch_dev *ca)
 {
+	/*
+	 * ref_outer holders (io_error_work, ioctl lookups) may block on
+	 * state_lock before noticing the device is going away - so we must
+	 * not drain them while holding it:
+	 */
+	if (ca->fs)
+		lockdep_assert_not_held(&ca->fs->state_lock);
+
+	/*
+	 * io_error_work is never cancelled - it owns a ref_outer per queued
+	 * instance, so this drain waits for it to run and put:
+	 */
+	bch2_dev_put_outer(ca);
+	wait_for_completion(&ca->ref_outer_completion);
+
 	WARN_ON(!enumerated_ref_is_zero(&ca->io_ref[WRITE]));
 	WARN_ON(!enumerated_ref_is_zero(&ca->io_ref[READ]));
-
-	cancel_work_sync(&ca->io_error_work);
 
 	bch2_dev_unlink(ca);
 
@@ -560,6 +573,8 @@ static struct bch_dev *__bch2_dev_alloc(struct bch_fs *c,
 
 	kobject_init(&ca->kobj, &bch2_dev_ktype);
 	init_completion(&ca->ref_completion);
+	refcount_set(&ca->ref_outer, 1);
+	init_completion(&ca->ref_outer_completion);
 
 	INIT_WORK(&ca->io_error_work, bch2_io_error_work);
 
@@ -879,16 +894,14 @@ int bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 
 /* Device add/removal: */
 
-int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
-		    struct printbuf *err)
+static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
+			     bool fast_device_removal, int flags,
+			     struct printbuf *err)
 {
-	unsigned dev_idx = ca->dev_idx, data;
-	bool fast_device_removal = (c->sb.compat & BIT_ULL(BCH_COMPAT_no_stale_ptrs)) &&
-		!bch2_request_incompat_feature(c,
-					bcachefs_metadata_version_fast_device_removal);
+	unsigned data;
 	int ret;
 
-	guard(rwsem_write)(&c->state_lock);
+	lockdep_assert_held(&c->state_lock);
 
 	/*
 	 * We consume a reference to ca->ref, regardless of whether we succeed
@@ -995,7 +1008,46 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
 	bch2_dev_put(ca);
 #endif
 	wait_for_completion(&ca->ref_completion);
+	return 0;
+err:
+	if (test_bit(BCH_FS_rw, &c->flags) &&
+	    ca->mi.state == BCH_MEMBER_STATE_rw &&
+	    !enumerated_ref_is_zero(&ca->io_ref[READ]))
+		__bch2_dev_read_write(c, ca);
+	return ret;
+}
 
+int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
+		    struct printbuf *err)
+{
+	unsigned dev_idx = ca->dev_idx;
+	bool fast_device_removal = (c->sb.compat & BIT_ULL(BCH_COMPAT_no_stale_ptrs)) &&
+		!bch2_request_incompat_feature(c,
+					bcachefs_metadata_version_fast_device_removal);
+
+	scoped_guard(rwsem_write, &c->state_lock) {
+		/*
+		 * Mark the device as going away before the teardown protocol
+		 * starts: ref_outer holders that acquire state_lock after us
+		 * (io_error_work, ioctl handlers) check this and keep their
+		 * hands off member state - the slot may already be wiped.
+		 */
+		WRITE_ONCE(ca->removing, true);
+
+		int ret = __bch2_dev_remove(c, ca, fast_device_removal, flags, err);
+		if (ret) {
+			/* The device is staying; allow new references again: */
+			WRITE_ONCE(ca->removing, false);
+			return ret;
+		}
+	}
+
+	/*
+	 * The device is now unreachable - not in c->devs, ca->ref drained,
+	 * ca->removing set. Drain ref_outer holders and free outside
+	 * state_lock: they may be blocked on it (io_error_work), and will
+	 * bail via ca->removing once they acquire it.
+	 */
 	bch2_dev_free(ca);
 
 	/*
@@ -1015,12 +1067,6 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
 	}
 
 	return 0;
-err:
-	if (test_bit(BCH_FS_rw, &c->flags) &&
-	    ca->mi.state == BCH_MEMBER_STATE_rw &&
-	    !enumerated_ref_is_zero(&ca->io_ref[READ]))
-		__bch2_dev_read_write(c, ca);
-	return ret;
 }
 
 static int bch2_dev_set_initialized(struct bch_fs *c, struct bch_dev *ca,

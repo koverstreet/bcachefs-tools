@@ -758,8 +758,6 @@ int bch2_fs_stop(struct bch_fs *c)
 		/* btree prefetch might have kicked off reads in the background: */
 		bch2_btree_flush_all_reads(c);
 
-		for_each_member_device(c, ca)
-			cancel_work_sync(&ca->io_error_work);
 
 		cancel_work_sync(&c->read_only_work);
 

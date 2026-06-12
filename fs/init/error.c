@@ -147,32 +147,44 @@ void bch2_io_error_work(struct work_struct *work)
 
 	/* XXX: if it's reads or checksums that are failing, set it to failed */
 
-	guard(rwsem_write)(&c->state_lock);
 	unsigned long write_errors_start = READ_ONCE(ca->write_errors_start);
 
 	if (write_errors_start &&
 	    time_after(jiffies,
 		       write_errors_start + c->opts.write_error_timeout * HZ)) {
-		if (ca->mi.state >= BCH_MEMBER_STATE_ro)
-			return;
+		guard(rwsem_write)(&c->state_lock);
 
-		bool print = true;
-		CLASS(printbuf, buf)();
-		__bch2_log_msg_start(ca->name, &buf);
+		/*
+		 * We hold ref_outer, not ca->ref: device removal may have
+		 * completed while we waited for state_lock, and the member
+		 * slot is no longer ours to touch. Same if the fs is
+		 * shutting down - don't flip member states mid-teardown.
+		 * Never cancelled: we own a ref, so teardown drains us
+		 * instead (bch2_dev_free()) and we always run and put:
+		 */
+		if (!READ_ONCE(ca->removing) &&
+		    !test_bit(BCH_FS_stopping, &c->flags) &&
+		    ca->mi.state < BCH_MEMBER_STATE_ro) {
+			bool print = true;
+			CLASS(printbuf, buf)();
+			__bch2_log_msg_start(ca->name, &buf);
 
-		prt_printf(&buf, "writes erroring for %u seconds\n",
-			c->opts.write_error_timeout);
+			prt_printf(&buf, "writes erroring for %u seconds\n",
+				c->opts.write_error_timeout);
 
-		bool dev = !__bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_ro,
-						 BCH_FORCE_IF_DEGRADED, &buf);
+			bool dev = !__bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_ro,
+							 BCH_FORCE_IF_DEGRADED, &buf);
 
-		prt_printf(&buf, "setting %s ro", dev ? "device" : "filesystem");
-		if (!dev)
-			print = bch2_fs_emergency_read_only(c, &buf);
+			prt_printf(&buf, "setting %s ro", dev ? "device" : "filesystem");
+			if (!dev)
+				print = bch2_fs_emergency_read_only(c, &buf);
 
-		if (print)
-			bch2_print_str(c, KERN_ERR, buf.buf);
+			if (print)
+				bch2_print_str(c, KERN_ERR, buf.buf);
+		}
 	}
+
+	bch2_dev_put_outer(ca);
 }
 
 void bch2_io_error(struct bch_dev *ca, enum bch_member_error_type type)
@@ -182,7 +194,14 @@ void bch2_io_error(struct bch_dev *ca, enum bch_member_error_type type)
 	if (type == BCH_MEMBER_ERROR_write && !ca->write_errors_start)
 		ca->write_errors_start = jiffies;
 
-	queue_work(system_long_wq, &ca->io_error_work);
+	/*
+	 * The work blocks on state_lock, which device removal holds while
+	 * draining ca->ref - so it owns a ref_outer (memory lifetime only),
+	 * never a ca->ref. One ref per queued instance:
+	 */
+	bch2_dev_get_outer(ca);
+	if (!queue_work(system_long_wq, &ca->io_error_work))
+		bch2_dev_put_outer(ca);
 }
 
 enum ask_yn {

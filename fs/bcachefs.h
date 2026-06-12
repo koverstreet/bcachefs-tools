@@ -472,11 +472,31 @@ struct bch_dev {
 	struct percpu_ref	ref;
 #endif
 	struct completion	ref_completion;
+	/*
+	 * ref_outer keeps the bch_dev allocation alive - nothing more.
+	 * Unlike ca->ref, holding it does NOT mean the device is still a
+	 * member of the filesystem.
+	 *
+	 * ca->ref drains inside the device removal protocol, under
+	 * state_lock - so a ca->ref holder must never block on state_lock.
+	 * Contexts that do block on state_lock with a device in hand (work
+	 * items, ioctl lookups) hold ref_outer instead, and recheck
+	 * ca->removing under the lock before touching member state.
+	 */
+	refcount_t		ref_outer;
+	struct completion	ref_outer_completion;
 	struct enumerated_ref	io_ref[2];
 
 	struct bch_fs		*fs;
 
 	u8			dev_idx;
+	/*
+	 * Device removal in progress (or completed - it stays set if removal
+	 * succeeds): set/cleared by bch2_dev_remove() under state_lock.
+	 * ref_outer holders must check this under state_lock before touching
+	 * member state; the member slot may already be wiped.
+	 */
+	bool			removing;
 	/*
 	 * Cached version of this device's member info from superblock
 	 * Committed by bch2_write_super() -> bch_fs_mi_update()
