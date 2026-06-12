@@ -562,7 +562,16 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		return bch_err_throw(c, stripe_reconstruct);
 	}
 
-	/* Check for stale pointers while we still have btree locks held */
+	/*
+	 * Check for stale pointers while we still have btree locks held: the
+	 * stripe key was just read under lock, so it's the current live key,
+	 * and a live stripe key referencing a stale-gen bucket is an
+	 * allocator inconsistency regardless of whether the stripe is pinned
+	 * - hence no is_open gating here, unlike the validate-time check.
+	 * Lock-currency is the liveness witness at this site; the pin is the
+	 * witness post-IO in bch2_stripe_buf_validate(), where the key may
+	 * have been legitimately deleted while the IO was in flight.
+	 */
 	bool have_stale = false;
 	scoped_guard(rcu) {
 		for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
