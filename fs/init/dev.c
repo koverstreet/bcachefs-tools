@@ -889,6 +889,10 @@ int bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 		       struct printbuf *err)
 {
 	guard(rwsem_write)(&c->state_lock);
+
+	if (READ_ONCE(ca->removing))
+		return bch_err_throw(c, device_has_been_removed);
+
 	return __bch2_dev_set_state(c, ca, new_state, flags, err);
 }
 
@@ -904,10 +908,12 @@ static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 	lockdep_assert_held(&c->state_lock);
 
 	/*
-	 * We consume a reference to ca->ref, regardless of whether we succeed
-	 * or fail:
+	 * We consume the caller's ref_outer, regardless of whether we succeed
+	 * or fail - the lookup no longer takes a ca->ref, which we'd deadlock
+	 * against draining below, and holding ref_outer across bch2_dev_free()
+	 * would deadlock against the ref_outer drain:
 	 */
-	bch2_dev_put(ca);
+	bch2_dev_put_outer(ca);
 
 	try(__bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_evacuating, flags, err));
 
@@ -1353,6 +1359,9 @@ int bch2_dev_offline(struct bch_fs *c, struct bch_dev *ca, int flags, struct pri
 {
 	guard(rwsem_write)(&c->state_lock);
 
+	if (READ_ONCE(ca->removing))
+		return bch_err_throw(c, device_has_been_removed);
+
 	if (!bch2_dev_is_online(ca)) {
 		prt_printf(err, "Already offline\n");
 		return 0;
@@ -1370,6 +1379,10 @@ int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets, struct p
 	int ret = 0;
 
 	guard(rwsem_write)(&c->state_lock);
+
+	if (READ_ONCE(ca->removing))
+		return bch_err_throw(c, device_has_been_removed);
+
 	old_nbuckets = ca->mi.nbuckets;
 
 	if (nbuckets < ca->mi.nbuckets) {

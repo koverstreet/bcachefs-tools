@@ -183,6 +183,10 @@ int bch2_set_nr_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 				unsigned nr)
 {
 	guard(rwsem_write)(&c->state_lock);
+
+	if (READ_ONCE(ca->removing))
+		return bch_err_throw(c, device_has_been_removed);
+
 	int ret = bch2_set_nr_journal_buckets_loop(c, ca, nr, false);
 	bch_err_fn(c, ret);
 	return ret;

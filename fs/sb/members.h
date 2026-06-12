@@ -181,7 +181,8 @@ static inline void bch2_dev_get_outer(struct bch_dev *ca)
 
 static inline void bch2_dev_put_outer(struct bch_dev *ca)
 {
-	if (refcount_dec_and_test(&ca->ref_outer))
+	if (!IS_ERR_OR_NULL(ca) &&
+	    refcount_dec_and_test(&ca->ref_outer))
 		complete(&ca->ref_outer_completion);
 }
 

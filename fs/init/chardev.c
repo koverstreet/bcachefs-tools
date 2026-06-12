@@ -57,6 +57,30 @@ DEFINE_CLASS(bch2_device_lookup, struct bch_dev *,
       bch2_device_lookup(c, dev, flags),
       struct bch_fs *c, u64 dev, unsigned flags);
 
+/*
+ * Lookup variant for handlers that block on state_lock (set-state,
+ * offline, resize, remove): device removal drains ca->ref under
+ * state_lock, so holding ca->ref across a state_lock acquisition
+ * deadlocks against it. These handlers hold ref_outer (memory lifetime
+ * only) instead; their callees recheck ca->removing under the lock.
+ */
+static struct bch_dev *bch2_device_lookup_outer(struct bch_fs *c, u64 dev,
+						unsigned flags)
+{
+	struct bch_dev *ca = bch2_device_lookup(c, dev, flags);
+
+	if (!IS_ERR_OR_NULL(ca)) {
+		bch2_dev_get_outer(ca);
+		bch2_dev_put(ca);
+	}
+	return ca;
+}
+
+DEFINE_CLASS(bch2_device_lookup_outer, struct bch_dev *,
+      bch2_dev_put_outer(_T),
+      bch2_device_lookup_outer(c, dev, flags),
+      struct bch_fs *c, u64 dev, unsigned flags);
+
 static long bch2_global_ioctl(unsigned cmd, void __user *arg)
 {
 	long ret;
@@ -137,14 +161,15 @@ static long bch2_ioctl_disk_remove(struct bch_fs *c, struct bch_ioctl_disk arg)
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_remove_bad_flags);
 
-	struct bch_dev *ca = bch2_device_lookup(c, arg.dev, arg.flags);
+	struct bch_dev *ca = bch2_device_lookup_outer(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
 	CLASS(printbuf, err)();
+	/* consumes our ref_outer - no using ca after this: */
 	int ret = bch2_dev_remove(c, ca, arg.flags, &err);
 	if (ret)
-		bch_err_dev(ca, "%s", err.buf);
+		bch_err(c, "%s", err.buf);
 	return ret;
 }
 
@@ -160,11 +185,12 @@ static long bch2_ioctl_disk_remove_v2(struct bch_fs *c, struct bch_ioctl_disk_v2
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_remove_v2_bad_flags);
 
-	struct bch_dev *ca = bch2_device_lookup(c, arg.dev, arg.flags);
+	struct bch_dev *ca = bch2_device_lookup_outer(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
 	CLASS(printbuf, err)();
+	/* consumes our ref_outer - no using ca after this: */
 	int ret = bch2_dev_remove(c, ca, arg.flags, &err);
 	return bch2_copy_ioctl_err_msg(&arg.err, &err, ret);
 }
@@ -213,7 +239,7 @@ static long bch2_ioctl_disk_offline(struct bch_fs *c, struct bch_ioctl_disk arg)
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_offline_bad_flags);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
@@ -236,7 +262,7 @@ static long bch2_ioctl_disk_offline_v2(struct bch_fs *c, struct bch_ioctl_disk_v
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_offline_v2_bad_flags);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
@@ -259,7 +285,7 @@ static long bch2_ioctl_disk_set_state(struct bch_fs *c,
 	    arg.new_state >= BCH_MEMBER_STATE_NR)
 		return bch_err_throw(c, EINVAL_ioctl_disk_set_state_bad_args);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	errptr_try(ca);
 
 	CLASS(printbuf, err)();
@@ -284,7 +310,7 @@ static long bch2_ioctl_disk_set_state_v2(struct bch_fs *c,
 	    arg.new_state >= BCH_MEMBER_STATE_NR)
 		return bch_err_throw(c, EINVAL_ioctl_disk_set_state_v2_bad_args);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	errptr_try(ca);
 
 	int ret = bch2_dev_set_state(c, ca, arg.new_state, arg.flags, &err);
@@ -598,7 +624,7 @@ static long bch2_ioctl_disk_resize(struct bch_fs *c,
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_resize_bad_flags);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
@@ -641,7 +667,7 @@ static long bch2_ioctl_disk_resize_journal(struct bch_fs *c,
 	if (arg.nbuckets > U32_MAX)
 		return bch_err_throw(c, EINVAL_ioctl_disk_resize_journal_too_big);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
