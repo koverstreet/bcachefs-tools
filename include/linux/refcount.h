@@ -258,7 +258,7 @@ static inline void refcount_inc(refcount_t *r)
 
 static inline __must_check bool __refcount_sub_and_test(int i, refcount_t *r, int *oldp)
 {
-	int old = atomic_sub_return_release(i, &r->refs);
+	int old = atomic_fetch_sub_release(i, &r->refs);
 
 	if (oldp)
 		*oldp = old;
