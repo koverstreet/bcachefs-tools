@@ -4,7 +4,7 @@
 
 int bch2_invalidate_stripe_to_dev(struct btree_trans *, struct btree_iter *,
 				  struct bkey_s_c, unsigned,
-				  unsigned, struct printbuf *);
+				  unsigned, struct printbuf *, bool *);
 int bch2_dev_remove_stripes(struct bch_fs *, unsigned, unsigned, struct printbuf *);
 
 void bch2_ec_stop_dev(struct bch_fs *, struct bch_dev *);

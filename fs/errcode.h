@@ -304,6 +304,7 @@
 	x(EINVAL,			remove_with_metadata_missing_unimplemented)\
 	x(EINVAL,			remove_would_lose_data)			\
 	x(EINVAL,			remove_by_backpointer_did_not_terminate)\
+	x(EINVAL,			remove_stripes_did_not_terminate)\
 	x(EINVAL,			no_resize_with_buckets_nouse)		\
 	x(EINVAL,			inode_unpack_error)			\
 	x(EINVAL,			inode_not_unlinked)			\

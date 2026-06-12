@@ -179,7 +179,7 @@ static int bch2_dev_metadata_drop(struct bch_fs *c,
 
 static int data_drop_bp(struct btree_trans *trans, unsigned dev_idx,
 			struct bkey_s_c_backpointer bp, struct wb_maybe_flush *last_flushed,
-			unsigned flags, struct printbuf *err)
+			unsigned flags, struct printbuf *err, bool *had_open_stripe)
 {
 	CLASS(btree_iter_uninit, iter)(trans);
 	struct bkey_s_c k = bch2_backpointer_get_key(trans, bp, &iter, BTREE_ITER_intent,
@@ -201,7 +201,8 @@ static int data_drop_bp(struct btree_trans *trans, unsigned dev_idx,
 	if (bkey_is_btree_ptr(k.k))
 		return bch2_dev_btree_drop_key(trans, bp, dev_idx, last_flushed, flags, err);
 	else if (k.k->type == KEY_TYPE_stripe)
-		return bch2_invalidate_stripe_to_dev(trans, &iter, k, dev_idx, flags, err);
+		return bch2_invalidate_stripe_to_dev(trans, &iter, k, dev_idx, flags, err,
+						     had_open_stripe);
 	else
 		return bch2_dev_usrdata_drop_key(trans, &iter, k, dev_idx, flags, err);
 }
@@ -241,6 +242,8 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 	 */
 	unsigned max_iter = 10, i;
 	for (i = 0; i < max_iter; i++) {
+		bool had_open_stripe = false;
+
 		try(bch2_btree_write_buffer_flush_sync(trans));
 
 		try(backpointer_scan_for_each(trans, iter, BTREE_ID_backpointers,
@@ -248,12 +251,23 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 						  &last_flushed, &progress, bp, ({
 			wb_maybe_flush_inc(&last_flushed);
 			CLASS(disk_reservation, res)(c);
-			data_drop_bp(trans, dev_idx, bp, &last_flushed, flags, err) ?:
+			data_drop_bp(trans, dev_idx, bp, &last_flushed, flags, err,
+				     &had_open_stripe) ?:
 			bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
 		})));
 
 		if (!dev_has_data(c, ca))
 			return 0;
+
+		/*
+		 * Skipped open stripes are owned by in-flight stripe creates;
+		 * wait for those to close before rescanning or we'd spin
+		 * through our iterations while they're still rewriting.
+		 */
+		if (had_open_stripe) {
+			bch2_trans_unlock(trans);
+			bch2_fs_ec_flush_outstanding(c);
+		}
 	}
 
 	prt_printf(err, "%s(): did not terminate after %u iterations\n",

@@ -23,12 +23,34 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 				  struct btree_iter *iter,
 				  struct bkey_s_c k,
 				  unsigned dev_idx,
-				  unsigned flags, struct printbuf *err)
+				  unsigned flags, struct printbuf *err,
+				  bool *had_open)
 {
 	if (k.k->type != KEY_TYPE_stripe)
 		return 0;
 
 	struct bch_fs *c = trans->c;
+
+	/*
+	 * An open stripe is being rewritten by the EC machinery - typically
+	 * the reconcile create that an earlier invalidate pass provoked by
+	 * setting needs_reconcile. That create owns the stripe's blocks,
+	 * including their buckets' gens: invalidating out from under it
+	 * means its in-flight reads, validated against the old key, see
+	 * stale pointers (stripe_read_ptr_stale, an alloc inconsistency).
+	 * Skip - the create rewrites the stripe without the dying device,
+	 * and the data-drop scan retries until the device is empty.
+	 *
+	 * Important: check stripe_is_open with the stripe key intent-locked
+	 * (both callers' iterators), same discipline as ec_stripe_delete() -
+	 * otherwise a create can open the stripe and load the pre-update key
+	 * between our check and commit.
+	 */
+	if (bch2_stripe_is_open(c, k.k->p.offset)) {
+		*had_open = true;
+		return 0;
+	}
+
 	struct bkey_i_stripe *s =
 		errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, stripe));
 
@@ -89,26 +111,58 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 
 static int bch2_invalidate_stripe_to_dev_from_alloc(struct btree_trans *trans,
 						    unsigned dev_idx, u64 stripe_idx,
-						    unsigned flags, struct printbuf *err)
+						    unsigned flags, struct printbuf *err,
+						    bool *had_open)
 {
-	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx), 0);
-	struct bkey_s_c_stripe s = bkey_try(bch2_bkey_get_typed(&iter, stripe));
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx),
+				BTREE_ITER_intent);
+	/*
+	 * Raw peek, not get_typed: the stripe may have been deleted since the
+	 * bucket_to_stripe scan (the flush in our caller lets creates finish,
+	 * and stripe reshape deletes the old idx) - a vanished stripe no
+	 * longer references the device, which is success, not an error.
+	 * bch2_invalidate_stripe_to_dev() returns 0 for non-stripe keys.
+	 */
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
-	return bch2_invalidate_stripe_to_dev(trans, &iter, s.s_c, dev_idx, flags, err);
+	return bch2_invalidate_stripe_to_dev(trans, &iter, k, dev_idx, flags, err, had_open);
 }
 
 int bch2_dev_remove_stripes(struct bch_fs *c, unsigned dev_idx,
 			    unsigned flags, struct printbuf *err)
 {
 	CLASS(btree_trans, trans)(c);
-	int ret = for_each_btree_key_max_commit(trans, iter,
-				  BTREE_ID_bucket_to_stripe,
-				  POS(bucket_to_u64(POS(dev_idx, 0)), 0),
-				  POS(bucket_to_u64(POS(dev_idx, U64_MAX)), U64_MAX),
-				  BTREE_ITER_intent, k,
-				  NULL, NULL, 0, ({
-		bch2_invalidate_stripe_to_dev_from_alloc(trans, dev_idx, k.k->p.offset, flags, err);
-	}));
+	int ret = 0;
+
+	/*
+	 * Open stripes are skipped - the EC machinery owns their migration -
+	 * so flush in-flight creates and retry until a pass encounters none,
+	 * or we'd return with stripes still pointing at the device.
+	 */
+	unsigned max_iter = 10, i;
+	for (i = 0; i < max_iter; i++) {
+		bool had_open = false;
+
+		ret = for_each_btree_key_max_commit(trans, iter,
+					  BTREE_ID_bucket_to_stripe,
+					  POS(bucket_to_u64(POS(dev_idx, 0)), 0),
+					  POS(bucket_to_u64(POS(dev_idx, U64_MAX)), U64_MAX),
+					  BTREE_ITER_intent, k,
+					  NULL, NULL, 0, ({
+			bch2_invalidate_stripe_to_dev_from_alloc(trans, dev_idx, k.k->p.offset,
+								 flags, err, &had_open);
+		}));
+		if (ret || !had_open)
+			goto out;
+
+		bch2_trans_unlock(trans);
+		bch2_fs_ec_flush_outstanding(c);
+	}
+
+	prt_printf(err, "%s(): stripes still open after %u iterations\n",
+		   __func__, i);
+	ret = bch_err_throw(c, remove_stripes_did_not_terminate);
+out:
 	bch_err_fn(c, ret);
 	return ret;
 }
