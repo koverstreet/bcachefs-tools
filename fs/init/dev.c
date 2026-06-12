@@ -915,7 +915,26 @@ static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 	 */
 	bch2_dev_put_outer(ca);
 
-	try(__bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_evacuating, flags, err));
+	/*
+	 * Fence stripe creates before we start deleting this device's alloc
+	 * info and stripe pointers: a stripe create that reused an existing
+	 * stripe holds pre-invalidation copies of its pointers, and may not
+	 * commit (or seal, if still accumulating writes) until after our data
+	 * drop walks have passed it by:
+	 */
+	WRITE_ONCE(ca->removing, true);
+
+	ret = __bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_evacuating, flags, err);
+	if (ret)
+		goto err;
+
+	/*
+	 * __bch2_dev_read_only() flushes outstanding stripe creates, but only
+	 * runs if the device wasn't already evacuating: flush explicitly so
+	 * creates that passed the ->removing check before we set it complete
+	 * before the data drop, which needs to see their backpointers:
+	 */
+	bch2_fs_ec_flush_outstanding(c);
 
 	ret = fast_device_removal
 		? bch2_dev_data_drop_by_backpointers(c, ca, flags, err)
@@ -1016,6 +1035,9 @@ static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 	wait_for_completion(&ca->ref_completion);
 	return 0;
 err:
+	/* The device is staying; allow new references to it again: */
+	WRITE_ONCE(ca->removing, false);
+
 	if (test_bit(BCH_FS_rw, &c->flags) &&
 	    ca->mi.state == BCH_MEMBER_STATE_rw &&
 	    !enumerated_ref_is_zero(&ca->io_ref[READ]))
@@ -1031,22 +1053,8 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
 		!bch2_request_incompat_feature(c,
 					bcachefs_metadata_version_fast_device_removal);
 
-	scoped_guard(rwsem_write, &c->state_lock) {
-		/*
-		 * Mark the device as going away before the teardown protocol
-		 * starts: ref_outer holders that acquire state_lock after us
-		 * (io_error_work, ioctl handlers) check this and keep their
-		 * hands off member state - the slot may already be wiped.
-		 */
-		WRITE_ONCE(ca->removing, true);
-
-		int ret = __bch2_dev_remove(c, ca, fast_device_removal, flags, err);
-		if (ret) {
-			/* The device is staying; allow new references again: */
-			WRITE_ONCE(ca->removing, false);
-			return ret;
-		}
-	}
+	scoped_guard(rwsem_write, &c->state_lock)
+		try(__bch2_dev_remove(c, ca, fast_device_removal, flags, err));
 
 	/*
 	 * The device is now unreachable - not in c->devs, ca->ref drained,

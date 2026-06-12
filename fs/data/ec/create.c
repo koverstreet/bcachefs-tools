@@ -539,6 +539,17 @@ void bch2_ec_stripe_new_free(struct bch_fs *c, struct ec_stripe_new *s)
 	kfree(s);
 }
 
+static bool stripe_has_removing_dev(struct bch_fs *c, struct bch_stripe *v)
+{
+	guard(rcu)();
+	for (unsigned i = 0; i < v->nr_blocks; i++) {
+		struct bch_dev *ca = bch2_dev_rcu(c, v->ptrs[i].dev);
+		if (ca && READ_ONCE(ca->removing))
+			return true;
+	}
+	return false;
+}
+
 static int __ec_stripe_create(struct ec_stripe_new *s)
 {
 	struct bch_fs *c = s->c;
@@ -550,6 +561,26 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 			bch_err(c, "error creating stripe: error writing data buckets");
 		return s->err;
 	}
+
+	/*
+	 * Device removal is about to delete alloc info and invalidate stripe
+	 * pointers; if we reused an existing stripe, our copies of its
+	 * pointers may be stale, and we must not commit new references to the
+	 * device. bch2_dev_remove() sets ->removing before the data drop,
+	 * then flushes outstanding creates: checking here, before we commit,
+	 * is sufficient.
+	 *
+	 * Only the new key's pointers are checked: a create that's moving
+	 * data off the device (old stripe references it, blocks_moving) gets
+	 * fresh buckets for those blocks and commits a clean key - and
+	 * reading from the device during the data drop is fine, that's how
+	 * the data gets moved. The dangerous population is creates that
+	 * copied pointers while the device was healthy (blocks_gotten,
+	 * pointer retained in the new key) and seal after the removal walk
+	 * has passed: those would resurrect pointers to a removed device.
+	 */
+	if (stripe_has_removing_dev(c, v))
+		return bch_err_throw(c, stripe_create_device_removing);
 
 	for (unsigned i = s->old_blocks_nr; i < nr_data; i++) {
 		struct open_bucket *ob = c->allocator.open_buckets + s->blocks[i];

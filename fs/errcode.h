@@ -523,6 +523,7 @@
 	x(EIO,				insufficient_journal_devices)		\
 	x(EIO,				device_offline)				\
 	x(EIO,				stripe_create_device_offline)		\
+	x(EROFS,			stripe_create_device_removing)		\
 	x(EIO,				EIO_fault_injected)			\
 	x(EIO,				ec_block_read)				\
 	x(EIO,				ec_block_write)				\

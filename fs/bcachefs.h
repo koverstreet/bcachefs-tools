@@ -491,10 +491,11 @@ struct bch_dev {
 
 	u8			dev_idx;
 	/*
-	 * Device removal in progress (or completed - it stays set if removal
-	 * succeeds): set/cleared by bch2_dev_remove() under state_lock.
-	 * ref_outer holders must check this under state_lock before touching
-	 * member state; the member slot may already be wiped.
+	 * Device is being removed and its alloc info and stripe pointers are
+	 * about to be deleted: new references must not be created. Checked by
+	 * __ec_stripe_create(), which may hold pre-invalidation copies of
+	 * stripe pointers; set by bch2_dev_remove() before the data drop,
+	 * cleared if removal fails.
 	 */
 	bool			removing;
 	/*
