@@ -2083,7 +2083,7 @@ int bch2_cut_back_s(struct bpos where, struct bkey_s k)
 	case KEY_TYPE_inline_data:
 	case KEY_TYPE_indirect_inline_data:
 		new_val_u64s = (bkey_inline_data_offset(k.k) +
-				min(bkey_inline_data_bytes(k.k), k.k->size << 9)) >> 3;
+				min(bkey_inline_data_bytes(k.k), (u64) k.k->size << 9)) >> 3;
 		break;
 	}
 
