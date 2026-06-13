@@ -12,6 +12,7 @@
 #include "sb/members.h"
 #include "sb/io.h"
 
+#include "init/dev.h"
 #include "init/error.h"
 #include "init/passes.h"
 #include "init/progress.h"
@@ -863,9 +864,41 @@ void bch2_sb_members_clean_deleted(struct bch_fs *c)
 		bch2_write_super(c);
 }
 
+static void dev_mi_update_str(void *dst, size_t dst_size, const char *src,
+			      bool *write_sb)
+{
+	u8 padded[sizeof(((struct bch_member *)NULL)->device_model)] = {};
+
+	if (!src[0])
+		return;
+
+	if (WARN_ON_ONCE(dst_size > sizeof(padded)))
+		return;
+
+	memcpy_and_pad(padded, dst_size, src, strnlen(src, dst_size), '\0');
+
+	if (memcmp(dst, padded, dst_size)) {
+		memcpy(dst, padded, dst_size);
+		*write_sb = true;
+	}
+}
+
 void __bch2_dev_mi_field_upgrades(struct bch_fs *c, struct bch_dev *ca, bool *write_sb)
 {
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+
+	char name[sizeof(m->device_name) + 1];
+	char model[sizeof(m->device_model) + 1];
+	char serial[sizeof(m->device_serial) + 1];
+
+	bch2_dev_read_identity(ca->disk_sb.bdev,
+			       name, sizeof(name),
+			       model, sizeof(model),
+			       serial, sizeof(serial));
+
+	dev_mi_update_str(m->device_name, sizeof(m->device_name), name, write_sb);
+	dev_mi_update_str(m->device_model, sizeof(m->device_model), model, write_sb);
+	dev_mi_update_str(m->device_serial, sizeof(m->device_serial), serial, write_sb);
 
 	if (!BCH_MEMBER_ROTATIONAL_SET(m)) {
 		SET_BCH_MEMBER_ROTATIONAL(m, bdev_rot(ca->disk_sb.bdev));

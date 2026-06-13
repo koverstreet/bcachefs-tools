@@ -687,8 +687,8 @@ static int read_file_str(const char *path, darray_char *ret)
 }
 
 /*
- * Read a sysfs device attribute (e.g. "model", "serial") into @ret, resolving
- * partitions to their parent disk.
+ * Read a sysfs device file (e.g. "device/model", "device/serial") into @ret,
+ * resolving partitions to their parent disk.
  *
  * device/model and device/serial live under the whole disk, not its partitions.
  * Look the device up by dev_t under /sys/dev/block/<maj>:<min>/ (present for
@@ -696,16 +696,18 @@ static int read_file_str(const char *path, darray_char *ret)
  * fall back to the parent disk via "..". Mirrors fd_to_dev_model() in the
  * userspace tools (src/wrappers/bdev.rs).
  */
-static void read_dev_sysfs_attr(dev_t dev, const char *attr, darray_char *ret)
+static void read_dev_sysfs_file(dev_t dev, const char *file, darray_char *ret)
 {
 	static const char * const fmts[] = {
-		"/sys/dev/block/%u:%u/device/%s",
-		"/sys/dev/block/%u:%u/../device/%s",
+		"/sys/dev/block/%u:%u/%s",
+		"/sys/dev/block/%u:%u/../%s",
 	};
+
+	ret->nr = 0;
 
 	for (unsigned i = 0; i < ARRAY_SIZE(fmts); i++) {
 		CLASS(printbuf, path)();
-		prt_printf(&path, fmts[i], MAJOR(dev), MINOR(dev), attr);
+		prt_printf(&path, fmts[i], MAJOR(dev), MINOR(dev), file);
 
 		read_file_str(path.buf, ret);
 
@@ -714,6 +716,44 @@ static void read_dev_sysfs_attr(dev_t dev, const char *attr, darray_char *ret)
 
 		if (ret->nr)
 			return;
+	}
+}
+
+static void read_dev_sysfs_attr(dev_t dev, const char *attr, darray_char *ret)
+{
+	CLASS(printbuf, file)();
+	prt_printf(&file, "device/%s", attr);
+	read_dev_sysfs_file(dev, file.buf, ret);
+}
+
+void bch2_dev_read_identity(struct block_device *bdev,
+			    char *name, size_t name_size,
+			    char *model, size_t model_size,
+			    char *serial, size_t serial_size)
+{
+	CLASS(printbuf, bdevname)();
+	prt_bdevname(&bdevname, bdev);
+
+	strscpy(name, bdevname.buf, name_size);
+	if (model_size)
+		model[0] = '\0';
+	if (serial_size)
+		serial[0] = '\0';
+
+	CLASS(darray_char, sysfs_model)();
+	if (model_size && !darray_make_room(&sysfs_model, model_size)) {
+		read_dev_sysfs_attr(bdev->bd_dev, "model", &sysfs_model);
+		if (!sysfs_model.nr)
+			read_dev_sysfs_file(bdev->bd_dev, "loop/backing_file", &sysfs_model);
+		if (sysfs_model.nr)
+			strscpy(model, sysfs_model.data, model_size);
+	}
+
+	CLASS(darray_char, sysfs_serial)();
+	if (serial_size && !darray_make_room(&sysfs_serial, serial_size)) {
+		read_dev_sysfs_attr(bdev->bd_dev, "serial", &sysfs_serial);
+		if (sysfs_serial.nr)
+			strscpy(serial, sysfs_serial.data, serial_size);
 	}
 }
 
@@ -744,27 +784,6 @@ static int __bch2_dev_attach_bdev(struct bch_fs *c, struct bch_dev *ca,
 	CLASS(printbuf, name)();
 	prt_bdevname(&name, sb->bdev);
 	strscpy(ca->name, name.buf, sizeof(ca->name));
-
-	CLASS(darray_char, model)();
-	darray_make_room(&model, 128);
-	read_dev_sysfs_attr(sb->bdev->bd_dev, "model", &model);
-
-	CLASS(darray_char, serial)();
-	darray_make_room(&serial, 128);
-	read_dev_sysfs_attr(sb->bdev->bd_dev, "serial", &serial);
-
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		guard(mutex)(&c->sb_lock);
-		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
-
-		strtomem_pad(m->device_name, name.buf, '\0');
-
-		if (model.nr)
-			strtomem_pad(m->device_model, model.data, '\0');
-
-		if (serial.nr)
-			strtomem_pad(m->device_serial, serial.data, '\0');
-	}
 
 	/* Commit: */
 	ca->disk_sb = *sb;
