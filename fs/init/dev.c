@@ -686,6 +686,37 @@ static int read_file_str(const char *path, darray_char *ret)
 	return r < 0 ? r : 0;
 }
 
+/*
+ * Read a sysfs device attribute (e.g. "model", "serial") into @ret, resolving
+ * partitions to their parent disk.
+ *
+ * device/model and device/serial live under the whole disk, not its partitions.
+ * Look the device up by dev_t under /sys/dev/block/<maj>:<min>/ (present for
+ * both disks and partitions); a partition has no device/ link of its own, so
+ * fall back to the parent disk via "..". Mirrors fd_to_dev_model() in the
+ * userspace tools (src/wrappers/bdev.rs).
+ */
+static void read_dev_sysfs_attr(dev_t dev, const char *attr, darray_char *ret)
+{
+	static const char * const fmts[] = {
+		"/sys/dev/block/%u:%u/device/%s",
+		"/sys/dev/block/%u:%u/../device/%s",
+	};
+
+	for (unsigned i = 0; i < ARRAY_SIZE(fmts); i++) {
+		CLASS(printbuf, path)();
+		prt_printf(&path, fmts[i], MAJOR(dev), MINOR(dev), attr);
+
+		read_file_str(path.buf, ret);
+
+		if (ret->nr && ret->data[ret->nr - 1] == '\n')
+			ret->data[--ret->nr] = '\0';
+
+		if (ret->nr)
+			return;
+	}
+}
+
 static int __bch2_dev_attach_bdev(struct bch_fs *c, struct bch_dev *ca,
 				  struct bch_sb_handle *sb, struct printbuf *err)
 {
@@ -716,25 +747,11 @@ static int __bch2_dev_attach_bdev(struct bch_fs *c, struct bch_dev *ca,
 
 	CLASS(darray_char, model)();
 	darray_make_room(&model, 128);
-
-	CLASS(printbuf, model_path)();
-	prt_printf(&model_path, "/sys/block/%s/device/model", name.buf);
-
-	read_file_str(model_path.buf, &model);
-
-	if (model.nr && model.data[model.nr - 1] == '\n')
-		model.data[--model.nr] = '\0';
+	read_dev_sysfs_attr(sb->bdev->bd_dev, "model", &model);
 
 	CLASS(darray_char, serial)();
 	darray_make_room(&serial, 128);
-
-	CLASS(printbuf, serial_path)();
-	prt_printf(&serial_path, "/sys/block/%s/device/serial", name.buf);
-
-	read_file_str(serial_path.buf, &serial);
-
-	if (serial.nr && serial.data[serial.nr - 1] == '\n')
-		serial.data[--serial.nr] = '\0';
+	read_dev_sysfs_attr(sb->bdev->bd_dev, "serial", &serial);
 
 	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
 		guard(mutex)(&c->sb_lock);
