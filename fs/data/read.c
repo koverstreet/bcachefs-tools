@@ -209,6 +209,14 @@ static inline int should_promote(struct bch_fs *c, struct bkey_s_c k,
 	return 0;
 }
 
+static void promote_free_rcu(struct rcu_head *rcu)
+{
+	struct promote_op *op = container_of(rcu, struct promote_op, write.rcu);
+
+	bch2_bkey_buf_exit(&op->write.k);
+	kfree(op);
+}
+
 static noinline void promote_free(struct bch_read_bio *rbio, int ret)
 {
 	struct promote_op *op = container_of(rbio, struct promote_op, write.rbio);
@@ -222,7 +230,7 @@ static noinline void promote_free(struct bch_read_bio *rbio, int ret)
 	bch2_data_update_exit(&op->write, ret);
 
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_promote);
-	kfree_rcu(op, write.rcu);
+	call_rcu(&op->write.rcu, promote_free_rcu);
 }
 
 static void promote_done(struct bch_write_op *wop)
@@ -317,10 +325,6 @@ static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
 	op->start_time = local_clock();
 	op->cpu	= cpu;
 
-	ret = async_object_list_add(c, promote, op, &op->list_idx);
-	if (ret < 0)
-		goto err;
-
 	ret = bch2_data_update_init(trans, NULL, NULL, &op->write,
 			writepoint_hashed((unsigned long) current),
 			&orig->opts,
@@ -331,16 +335,15 @@ static struct bch_read_bio *__promote_alloc(struct btree_trans *trans,
 	 * -BCH_ERR_ENOSPC_disk_reservation:
 	 */
 	if (ret)
-		goto err_remove_list;
+		goto err;
 
 	rbio_init_fragment(&op->write.rbio.bio, orig, failed);
 	op->write.rbio.bounce	= true;
 	op->write.rbio.promote	= true;
 	op->write.op.end_io = promote_done;
+	async_object_list_add(c, promote, op, &op->list_idx);
 
 	return &op->write.rbio;
-err_remove_list:
-	async_object_list_del(c, promote, op->list_idx);
 err:
 	bch2_bio_free_pages_pool(c, &op->write.op.wbio.bio);
 	/* We may have added to the rhashtable and thus need rcu freeing: */

@@ -58,6 +58,14 @@ static int evacuate_bucket_pred(struct btree_trans *, void *,
 				struct bch_inode_opts *,
 				struct data_update_opts *);
 
+static void data_update_free_rcu(struct rcu_head *rcu)
+{
+	struct data_update *u = container_of(rcu, struct data_update, rcu);
+
+	bch2_bkey_buf_exit(&u->k);
+	kfree(u);
+}
+
 static void move_write_done(struct bch_write_op *op)
 {
 	struct data_update *u = container_of(op, struct data_update, op);
@@ -75,7 +83,7 @@ static void move_write_done(struct bch_write_op *op)
 		bch2_data_update_ec_alloc_failed(u);
 
 	bch2_data_update_exit(u, op->error);
-	kfree_rcu(u, rcu);
+	call_rcu(&u->rcu, data_update_free_rcu);
 	closure_put(&ctxt->cl);
 }
 

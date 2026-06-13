@@ -788,7 +788,6 @@ void bch2_data_update_exit(struct data_update *update, int ret)
 		bch2_bkey_nocow_unlock(c, k, update->cas, 0);
 	bkey_put_dev_refs(c, k, update->cas);
 	bch2_disk_reservation_put(c, &update->op.res);
-	bch2_bkey_buf_exit(&update->k);
 }
 
 static noinline_for_stack
