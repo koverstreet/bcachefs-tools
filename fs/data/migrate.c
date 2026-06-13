@@ -207,14 +207,15 @@ static int data_drop_bp(struct btree_trans *trans, unsigned dev_idx,
 		return bch2_dev_usrdata_drop_key(trans, &iter, k, dev_idx, flags, err);
 }
 
-static bool dev_has_data(struct bch_fs *c, struct bch_dev *ca)
+static u64 dev_data_buckets(struct bch_dev *ca)
 {
 	struct bch_dev_usage usage = bch2_dev_usage_read(ca);
+	u64 nr = 0;
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
-		if (!data_type_is_empty(i) && !data_type_is_hidden(i) && usage.buckets[i])
-			return true;
+		if (!data_type_is_empty(i) && !data_type_is_hidden(i))
+			nr += usage.buckets[i];
 
-	return false;
+	return nr;
 }
 
 int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
@@ -240,8 +241,23 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 	 * outside the scan's already-walked range. Both create races with the
 	 * scan that can only be handled by retrying.
 	 */
-	unsigned max_iter = 10, i;
-	for (i = 0; i < max_iter; i++) {
+	/*
+	 * Terminate on progress, not a fixed iteration count. An EC evacuation
+	 * off a failing device can take many scan/flush cycles to drain: the
+	 * migration creates that move data off the device are deliberately not
+	 * fenced (see "Fence stripe creates against device removal"), so they
+	 * run concurrently with the scan as open stripes that we skip and flush.
+	 * A fixed cap fires mid-migration. Instead, track the device's data and
+	 * keep going as long as it keeps hitting new lows - that's forward
+	 * progress. Only bail after max_stalled scans in a row with no new low,
+	 * which catches a genuine livelock (or a flush that never drains)
+	 * without aborting a slow-but-working drain.
+	 */
+	const unsigned max_stalled = 10;
+	u64 min_data_buckets = U64_MAX;
+	unsigned nr_stalled = 0;
+
+	while (true) {
 		bool had_open_stripe = false;
 
 		try(bch2_btree_write_buffer_flush_sync(trans));
@@ -256,23 +272,30 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 			bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
 		})));
 
-		if (!dev_has_data(c, ca))
+		u64 data_buckets = dev_data_buckets(ca);
+		if (!data_buckets)
 			return 0;
+
+		if (data_buckets < min_data_buckets) {
+			min_data_buckets = data_buckets;
+			nr_stalled = 0;
+		} else if (++nr_stalled >= max_stalled) {
+			prt_printf(err, "%s(): no progress after %u scans, %llu data buckets remain\n",
+				   __func__, nr_stalled, data_buckets);
+			return bch_err_throw(c, remove_by_backpointer_did_not_terminate);
+		}
 
 		/*
 		 * Skipped open stripes are owned by in-flight stripe creates;
-		 * wait for those to close before rescanning or we'd spin
-		 * through our iterations while they're still rewriting.
+		 * wait for those to close before rescanning so the next scan can
+		 * invalidate them. The flush isn't itself counted as progress: if
+		 * it never drains, the stall counter still terminates us.
 		 */
 		if (had_open_stripe) {
 			bch2_trans_unlock(trans);
 			bch2_fs_ec_flush_outstanding(c);
 		}
 	}
-
-	prt_printf(err, "%s(): did not terminate after %u iterations\n",
-		   __func__, i);
-	return bch_err_throw(c, remove_by_backpointer_did_not_terminate);
 }
 
 int bch2_dev_data_drop(struct bch_fs *c, unsigned dev_idx,
