@@ -855,10 +855,11 @@ static int bch2_propagate_has_case_insensitive(struct btree_trans *trans, subvol
 int bch2_maybe_propagate_has_case_insensitive(struct btree_trans *trans, subvol_inum inum,
 					      struct bch_inode_unpacked *inode)
 {
-	if (!bch2_inode_casefold(trans->c, inode))
-		return 0;
+	if (bch2_inode_casefold(trans->c, inode))
+		inode->bi_flags |= BCH_INODE_has_case_insensitive;
 
-	inode->bi_flags |= BCH_INODE_has_case_insensitive;
+	if (!(inode->bi_flags & BCH_INODE_has_case_insensitive))
+		return 0;
 
 	return bch2_propagate_has_case_insensitive(trans, parent_inum(inum, inode));
 }
