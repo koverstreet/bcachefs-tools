@@ -217,6 +217,92 @@ The complete list of recovery passes, in execution order:
 
 \bchdoc{recovery-passes}
 
+\subsection{Durability and fsync semantics}
+
+Because all metadata updates pass through a single, totally ordered journal,
+bcachefs provides a particularly simple crash recovery contract: \emph{prefix
+consistency}. The state recovered after a crash is exactly the state of the
+filesystem as of some recent moment $T$: every operation that completed before
+$T$ is present, every operation after $T$ is absent, and no other outcomes are
+possible. There is no reordering and no partial visibility --- recovery never
+shows operation $B$ without an operation $A$ that preceded it, whether or not
+the two were related. This is strictly stronger than the ``strictly ordered
+metadata consistency'' (SOMC) provided by ext4 and XFS, which promises ordering
+only between \emph{dependent} operations.
+
+\texttt{fsync(2)} constrains $T$: it completes the file's outstanding data
+writeback, then flushes the journal through the inode's most recent
+modification, guaranteeing $T$ is at least that point. Together with prefix
+consistency this gives fsync the following concrete meaning:
+
+\begin{itemize}
+\item Everything that ever modified the fsynced inode is persisted: writes,
+truncates, timestamps, extended attributes --- and link count changes, so an
+fsync of a file persists all of that file's hard link directory entries
+(creating or removing a hard link updates the inode in the same transaction as
+the directory entry).
+\item All operations system-wide that preceded the inode's last modification
+are also persisted, related to the fsynced file or not.
+\item An fsync of a directory persists all entry creations, removals and
+renames in that directory up to its last modification (directory entry
+updates modify the directory inode in the same transaction).
+\end{itemize}
+
+What is \emph{not} guaranteed: operations that occurred \emph{after} the
+fsynced inode's last modification, even if they preceded the fsync call
+itself. If file A is modified, then file B is modified, then A is fsynced,
+B's modification is not covered --- it will often be persisted anyway, because
+journal writes carry everything up to the journal's current position, but this
+is an accident of batching, not a promise. (Some filesystems' fsync
+implementations track fine-grained dependencies and may persist more, or less,
+in this situation; a number of xfstests in the crash-consistency family encode
+one such implementation's behavior rather than any standardized contract.)
+
+Data writes participate in the prefix property in normal (copy on write)
+operation: an extent is never journalled until the write of its data has
+completed, so if recovery shows an extent, the data it points to is intact.
+
+Exceptions, both opt-in:
+
+\begin{itemize}
+\item \texttt{lazytime}: timestamp-only updates are deliberately buffered in
+memory and may be lost on crash, up to the lazytime persistence points (sync,
+fsync, inode eviction, periodic expiry).
+\item \texttt{nocow}: data is overwritten in place, so the data prefix
+property is weakened --- after a crash, a nocow extent may contain newer data
+than moment $T$, and without checksums this cannot be detected.
+\end{itemize}
+
+The common write-temporary-then-rename-over pattern gets a stronger
+guarantee: when a rename \emph{overwrites} an existing file, bcachefs first
+completes writeback of the source file's data, so the data's extents are
+journalled before the rename is. Combined with prefix consistency this makes
+the replacement atomic and complete without any fsync: after a crash, either
+the old file is intact, or the rename happened and all of the new file's data
+is present --- the empty-or-truncated-file outcome cannot occur. Note this
+orders the rename behind the data but does not make the rename itself durable
+(no journal flush is issued); an application that must know the replacement
+has happened still needs fsync. Plain renames that don't overwrite anything
+get no implicit writeback.
+
+Related interfaces, briefly: \texttt{fdatasync(2)} is implemented
+identically to \texttt{fsync(2)} (stronger than POSIX requires).
+\texttt{syncfs(2)} and \texttt{sync(2)} flush the entire journal, making
+every operation completed before the call durable. \texttt{O\_DIRECT}
+confers no durability: completion means the data has been transferred to the
+device, but the extent describing it is journalled metadata like any other,
+so until a journal flush a crash simply recovers to a moment before the
+write. Crash semantics are identical to a buffered write whose writeback has
+completed; fsync or fdatasync is still what makes the write survive. The \texttt{O\_TMPFILE}-then-\texttt{linkat} pattern is
+covered by fsync's own-inode completeness: the link updates the inode, so a
+subsequent fsync of the file persists it. Finally, truncate-then-rewrite of an existing file
+(\texttt{O\_TRUNC}) is inherently unsafe as a replacement strategy on any
+filesystem: the old contents are destroyed before the new contents exist, so
+no placement of fsync can provide an old-or-new guarantee --- a crash after
+the truncate persists but before the rewrite does recovers an empty file,
+and fsync only narrows that window. Atomic replacement is what
+rename-over is for.
+
 \subsection{Bucket based allocation}
 
 As mentioned, bcachefs is descended from bcache, where the ability to efficiently
