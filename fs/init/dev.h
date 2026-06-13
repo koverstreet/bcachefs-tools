@@ -14,6 +14,10 @@ void bch2_dev_unlink(struct bch_dev *);
 void bch2_dev_free(struct bch_dev *);
 void __bch2_dev_offline(struct bch_fs *, struct bch_dev *);
 int bch2_dev_sysfs_online(struct bch_fs *, struct bch_dev *);
+void bch2_dev_read_identity(struct block_device *bdev,
+			    char *name, size_t name_size,
+			    char *model, size_t model_size,
+			    char *serial, size_t serial_size);
 int bch2_dev_alloc(struct bch_fs *, unsigned);
 int bch2_dev_attach_bdev(struct bch_fs *, struct bch_sb_handle *, struct printbuf *);
 
@@ -42,4 +46,3 @@ struct bch_dev *bch2_dev_lookup(struct bch_fs *, const char *);
 extern const struct blk_holder_ops bch2_sb_handle_bdev_ops;
 
 #endif /* _BCACHEFS_INIT_DEV_H */
-
