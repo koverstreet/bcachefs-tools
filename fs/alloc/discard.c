@@ -314,6 +314,16 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 
 	struct bkey_i_alloc_v4 *a = errptr_try(bch2_alloc_to_v4_mut(trans, k));
 
+	if (fastpath && a->v.journal_seq_empty) {
+		/*
+		 * Queued to the discard fastpath (skip journal commit), but
+		 * multiple nonempty <-> need_discard transitions mean it wasn't
+		 * actually a fastpath discard
+		 */
+		s->need_journal_commit += bucket_size;
+		return 0;
+	}
+
 	if (a->v.journal_seq_empty > c->journal.flushed_seq_ondisk) {
 		s->need_journal_commit += bucket_size;
 		return 0;
