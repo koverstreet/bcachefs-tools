@@ -139,6 +139,7 @@ static void __printbuf_do_indent(struct printbuf *out, unsigned pos)
 				pos += pad;
 			}
 
+			pos = min(pos, out->pos);
 			out->last_field = pos;
 			out->cur_tabstop++;
 			break;
@@ -153,6 +154,7 @@ static void __printbuf_do_indent(struct printbuf *out, unsigned pos)
 				--out->pos;
 			}
 
+			pos = min(pos, out->pos);
 			out->last_field = pos;
 			out->cur_tabstop++;
 			break;
