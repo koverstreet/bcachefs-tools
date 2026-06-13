@@ -204,14 +204,24 @@ struct stripe_update_bucket_stats {
 	u32			sectors_done;
 };
 
-static void bch2_bkey_drop_stripe_ptr(const struct bch_fs *c, struct bkey_s k, u64 idx)
+static void bch2_bkey_drop_stripe_ptr(const struct bch_fs *c, struct bkey_s k,
+				      struct bch_extent_stripe_ptr ec)
 {
 	struct bkey_ptrs ptrs = bch2_bkey_ptrs(k);
 	union bch_extent_entry *entry;
 
+	/*
+	 * Match on (idx, block), not idx alone: an extent can have two of its
+	 * blocks in the same stripe, and we must drop the stripe_ptr belonging
+	 * to the pointer being migrated - not whichever one happens to share
+	 * the stripe idx. Dropping by idx alone could drop a sibling block's
+	 * stripe_ptr and leave the migrated pointer carrying two, which fails
+	 * validation as a redundant stripe entry.
+	 */
 	bkey_extent_entry_for_each(ptrs, entry)
 		if (extent_entry_type(entry) == BCH_EXTENT_ENTRY_stripe_ptr &&
-		    entry->stripe_ptr.idx == idx) {
+		    entry->stripe_ptr.idx == ec.idx &&
+		    entry->stripe_ptr.block == ec.block) {
 			extent_entry_drop(c, k, entry);
 			return;
 		}
@@ -320,7 +330,7 @@ static int stripe_update_extent(struct btree_trans *trans,
 	bkey_reassemble(n, k);
 
 	if (p.has_ec)
-		bch2_bkey_drop_stripe_ptr(c, bkey_i_to_s(n), p.ec.idx);
+		bch2_bkey_drop_stripe_ptr(c, bkey_i_to_s(n), p.ec);
 
 	if (old_block.dev != new_block.dev)
 		bch2_bkey_drop_device_noerror(c, bkey_i_to_s(n), new_block.dev);
