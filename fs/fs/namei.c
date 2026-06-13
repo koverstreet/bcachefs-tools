@@ -441,10 +441,6 @@ int bch2_rename_trans(struct btree_trans *trans,
 		    S_ISDIR(dst_inode_u->bi_mode))
 			return -EXDEV;
 
-		try(bch2_maybe_propagate_has_case_insensitive(trans, src_inum, src_inode_u));
-		if (mode == BCH_RENAME_EXCHANGE)
-			try(bch2_maybe_propagate_has_case_insensitive(trans, dst_inum, dst_inode_u));
-
 		if (is_subdir_for_nlink(src_inode_u)) {
 			src_dir_u->bi_nlink--;
 			dst_dir_u->bi_nlink++;
@@ -488,6 +484,12 @@ int bch2_rename_trans(struct btree_trans *trans,
 	try(bch2_inode_write(trans, &src_inode_iter, src_inode_u));
 	if (dst_inum.inum)
 		try(bch2_inode_write(trans, &dst_inode_iter, dst_inode_u));
+
+	if (!subvol_inum_eq(dst_dir, src_dir)) {
+		try(bch2_maybe_propagate_has_case_insensitive(trans, src_inum, src_inode_u));
+		if (mode == BCH_RENAME_EXCHANGE)
+			try(bch2_maybe_propagate_has_case_insensitive(trans, dst_inum, dst_inode_u));
+	}
 
 	return 0;
 }
