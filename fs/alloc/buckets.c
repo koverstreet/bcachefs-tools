@@ -20,6 +20,7 @@
 
 #include "data/copygc.h"
 #include "data/ec/trigger.h"
+#include "data/extents.h"
 #include "data/reconcile/trigger.h"
 #include "data/reflink.h"
 
@@ -409,6 +410,9 @@ int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 		try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(new),
 						  BKEY_EXTENT_U64s_MAX,
 						  SET_NEEDS_RECONCILE_opt_change, 0));
+		if (bkey_is_btree_ptr(&new->k))
+			trans->extra_disk_res = (u64) bch2_bkey_nr_ptrs_allocated(c, bkey_i_to_s_c(new)) *
+				btree_sectors(c);
 
 		if (!level) {
 			try(bch2_trans_update(trans, iter, new,
