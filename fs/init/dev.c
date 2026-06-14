@@ -1197,6 +1197,9 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 	if (ret)
 		goto err;
 
+	struct bch_dev_identity identity;
+	bch2_dev_mi_field_read(ca, &identity);
+
 	struct reconcile_scan s = { .type = RECONCILE_SCAN_pending };
 	if (test_bit(BCH_FS_started, &c->flags)) {
 		/*
@@ -1249,7 +1252,7 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 
 
 			bool write_sb = false;
-			__bch2_dev_mi_field_upgrades(c, ca, &write_sb);
+			bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
 
 			/*
 			 * We don't call bch2_sb_update() until after the

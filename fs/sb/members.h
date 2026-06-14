@@ -500,7 +500,16 @@ void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *);
 int bch2_sb_member_alloc(struct bch_fs *);
 void bch2_sb_members_clean_deleted(struct bch_fs *);
 
-void __bch2_dev_mi_field_upgrades(struct bch_fs *, struct bch_dev *, bool *);
+struct bch_dev_identity {
+	char name[sizeof(((struct bch_member *) NULL)->device_name) + 1];
+	char model[sizeof(((struct bch_member *) NULL)->device_model) + 1];
+	char serial[sizeof(((struct bch_member *) NULL)->device_serial) + 1];
+	bool rotational;
+};
+
+void bch2_dev_mi_field_read(struct bch_dev *, struct bch_dev_identity *);
+void bch2_dev_mi_field_upgrades_locked(struct bch_fs *, struct bch_dev *,
+				       const struct bch_dev_identity *, bool *);
 void bch2_dev_mi_field_upgrades(struct bch_dev *);
 void bch2_fs_mi_field_upgrades(struct bch_fs *);
 

@@ -883,25 +883,29 @@ static void dev_mi_update_str(void *dst, size_t dst_size, const char *src,
 	}
 }
 
-void __bch2_dev_mi_field_upgrades(struct bch_fs *c, struct bch_dev *ca, bool *write_sb)
+void bch2_dev_mi_field_read(struct bch_dev *ca, struct bch_dev_identity *identity)
 {
+	bch2_dev_read_identity(ca->disk_sb.bdev,
+			       identity->name, sizeof(identity->name),
+			       identity->model, sizeof(identity->model),
+			       identity->serial, sizeof(identity->serial));
+	identity->rotational = bdev_rot(ca->disk_sb.bdev);
+}
+
+void bch2_dev_mi_field_upgrades_locked(struct bch_fs *c, struct bch_dev *ca,
+				       const struct bch_dev_identity *identity,
+				       bool *write_sb)
+{
+	lockdep_assert_held(&c->sb_lock);
+
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 
-	char name[sizeof(m->device_name) + 1];
-	char model[sizeof(m->device_model) + 1];
-	char serial[sizeof(m->device_serial) + 1];
-
-	bch2_dev_read_identity(ca->disk_sb.bdev,
-			       name, sizeof(name),
-			       model, sizeof(model),
-			       serial, sizeof(serial));
-
-	dev_mi_update_str(m->device_name, sizeof(m->device_name), name, write_sb);
-	dev_mi_update_str(m->device_model, sizeof(m->device_model), model, write_sb);
-	dev_mi_update_str(m->device_serial, sizeof(m->device_serial), serial, write_sb);
+	dev_mi_update_str(m->device_name, sizeof(m->device_name), identity->name, write_sb);
+	dev_mi_update_str(m->device_model, sizeof(m->device_model), identity->model, write_sb);
+	dev_mi_update_str(m->device_serial, sizeof(m->device_serial), identity->serial, write_sb);
 
 	if (!BCH_MEMBER_ROTATIONAL_SET(m)) {
-		SET_BCH_MEMBER_ROTATIONAL(m, bdev_rot(ca->disk_sb.bdev));
+		SET_BCH_MEMBER_ROTATIONAL(m, identity->rotational);
 		SET_BCH_MEMBER_ROTATIONAL_SET(m, true);
 		*write_sb = true;
 	}
@@ -911,11 +915,14 @@ void bch2_dev_mi_field_upgrades(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 
+	struct bch_dev_identity identity;
+	bch2_dev_mi_field_read(ca, &identity);
+
 	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
 	guard(mutex)(&c->sb_lock);
 	bool write_sb = false;
 
-	__bch2_dev_mi_field_upgrades(c, ca, &write_sb);
+	bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
 
 	if (write_sb)
 		bch2_write_super(c);
@@ -926,14 +933,21 @@ void bch2_dev_mi_field_upgrades(struct bch_dev *ca)
  */
 void bch2_fs_mi_field_upgrades(struct bch_fs *c)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
 	bool write_sb = false;
 
-	scoped_guard(rcu)
-		for_each_online_member_rcu(c, ca)
-			__bch2_dev_mi_field_upgrades(c, ca, &write_sb);
+	for_each_online_member(c, ca, BCH_DEV_READ_REF_fs_mi_field_upgrades) {
+		struct bch_dev_identity identity;
 
-	if (write_sb)
+		bch2_dev_mi_field_read(ca, &identity);
+
+		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(mutex)(&c->sb_lock);
+		bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
+	}
+
+	if (write_sb) {
+		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(mutex)(&c->sb_lock);
 		bch2_write_super(c);
+	}
 }
