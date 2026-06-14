@@ -3,10 +3,13 @@
 
 #include "bcachefs.h"
 
+#include "alloc/backpointers.h"
 #include "alloc/buckets.h"
 
 #include "btree/interior.h"
 #include "btree/update.h"
+
+#include "data/extents.h"
 
 #include "journal/reclaim.h"
 
@@ -546,6 +549,60 @@ static int test_btree_ptr_stale_dirty(struct bch_fs *c, u64 nr)
 	return lockrestart_do(trans, test_btree_ptr_stale_dirty_level(trans, 1));
 }
 
+static int test_btree_ptr_missing_backpointer_dev_once(struct btree_trans *trans,
+						       unsigned int dev)
+{
+	struct bch_fs *c = trans->c;
+
+	for (unsigned int btree = 0; btree < btree_id_nr_alive(c); btree++)
+		for (unsigned int level = 0; level < BTREE_MAX_DEPTH; level++)
+			try(for_each_btree_node(trans, iter, btree, POS_MIN, level, 0, b, ({
+				struct bkey_s_c k = bkey_i_to_s_c(&b->key);
+				struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+				const union bch_extent_entry *entry;
+				struct extent_ptr_decoded p;
+
+				bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+					if (p.ptr.dev != dev)
+						continue;
+
+					unsigned int node_l = b->c.level + 1;
+					struct bkey_i_backpointer bp;
+
+					bch2_extent_ptr_to_bp(c, btree, node_l, k, p, entry, &bp);
+
+					bch_info(c, "%s: deleting backpointer for btree %s level %u node %llu:%llu:%u dev %u offset %llu gen %u",
+						 __func__, bch2_btree_id_str(btree), b->c.level,
+						 k.k->p.inode, k.k->p.offset, k.k->p.snapshot,
+						 p.ptr.dev, (u64)p.ptr.offset, p.ptr.gen);
+
+					return bch2_bucket_backpointer_mod(trans, k, &bp, false) ?:
+					       bch2_trans_commit(trans, NULL, NULL,
+								 BCH_TRANS_COMMIT_no_enospc) ?: 1;
+				}
+				0;
+			})));
+
+	return 0;
+}
+
+static int test_btree_ptr_missing_backpointer_dev(struct bch_fs *c, u64 dev_plus_one)
+{
+	if (!dev_plus_one)
+		return -EINVAL;
+
+	u64 dev = dev_plus_one - 1;
+
+	if (dev >= c->sb.nr_devices)
+		return -EINVAL;
+
+	CLASS(btree_trans, trans)(c);
+	int ret = lockrestart_do(trans,
+		test_btree_ptr_missing_backpointer_dev_once(trans, dev));
+
+	return ret <= 0 ? ret ?: -ENOENT : 0;
+}
+
 /* snapshot unit tests */
 
 /* Test skipping over keys in unrelated snapshots: */
@@ -871,6 +928,7 @@ int bch2_btree_perf_test(struct bch_fs *c, const char *testname,
 	perf_test(test_extent_create_overlapping);
 	perf_test(test_extent_create_dup);
 	perf_test(test_btree_ptr_stale_dirty);
+	perf_test(test_btree_ptr_missing_backpointer_dev);
 
 	perf_test(test_snapshots);
 

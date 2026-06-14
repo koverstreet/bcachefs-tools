@@ -7,6 +7,7 @@
 
 #include "alloc/backpointers.h"
 #include "alloc/buckets.h"
+#include "alloc/disk_groups.h"
 #include "alloc/replicas.h"
 
 #include "btree/bkey_buf.h"
@@ -89,6 +90,51 @@ static int drop_btree_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 	return bch2_btree_node_update_key(trans, iter, b, n, 0, false);
 }
 
+static unsigned int btree_ptr_rewrite_target(struct bch_fs *c)
+{
+	if (c->opts.metadata_target &&
+	    bch2_target_accepts_data(c, BCH_DATA_btree, c->opts.metadata_target))
+		return c->opts.metadata_target;
+
+	if (c->opts.foreground_target &&
+	    bch2_target_accepts_data(c, BCH_DATA_btree, c->opts.foreground_target))
+		return c->opts.foreground_target;
+
+	return 0;
+}
+
+static int drop_or_rewrite_btree_ptrs(struct btree_trans *trans,
+				      struct btree_iter *iter,
+				      struct btree *b, unsigned int dev_idx,
+				      unsigned int flags, struct printbuf *err)
+{
+	struct printbuf drop_err = PRINTBUF;
+	int ret = drop_btree_ptrs(trans, iter, b, dev_idx, flags, &drop_err);
+	bool drop_would_degrade = bch2_err_matches(ret, BCH_ERR_remove_would_lose_data);
+
+	if (drop_would_degrade)
+		ret = bch2_btree_node_rewrite_pos(trans, iter->btree_id,
+						  b->c.level + 1, b->key.k.p,
+						  btree_ptr_rewrite_target(trans->c),
+						  BCH_TRANS_COMMIT_no_enospc, 0);
+
+	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+		goto out;
+
+	if (ret && drop_would_degrade) {
+		prt_printf(err,
+			   "cannot drop device metadata ptr without degrading metadata; "
+			   "btree node rewrite failed: %s\n  ",
+			   bch2_err_str(ret));
+		prt_str(err, bch2_printbuf_str(&drop_err));
+	} else if (ret) {
+		prt_str(err, bch2_printbuf_str(&drop_err));
+	}
+out:
+	printbuf_exit(&drop_err);
+	return ret;
+}
+
 static int bch2_dev_usrdata_drop_key(struct btree_trans *trans,
 				     struct btree_iter *iter,
 				     struct bkey_s_c k,
@@ -122,7 +168,7 @@ static int bch2_dev_btree_drop_key(struct btree_trans *trans,
 	if (ret)
 		return ret == -BCH_ERR_backpointer_to_overwritten_btree_node ? 0 : ret;
 
-	return drop_btree_ptrs(trans, &iter, b, dev_idx, flags, err);
+	return drop_or_rewrite_btree_ptrs(trans, &iter, b, dev_idx, flags, err);
 }
 
 static int bch2_dev_usrdata_drop(struct bch_fs *c,
@@ -169,7 +215,7 @@ static int bch2_dev_metadata_drop(struct bch_fs *c,
 		for (unsigned level = 0; level < BTREE_MAX_DEPTH; level++)
 			try(for_each_btree_node(trans, iter, btree, POS_MIN, level, 0, b, ({
 				bch2_progress_update_iter(trans, progress, &iter) ?:
-				drop_btree_ptrs(trans, &iter, b, dev_idx, flags, err);
+				drop_or_rewrite_btree_ptrs(trans, &iter, b, dev_idx, flags, err);
 			})));
 
 	bch2_trans_unlock(trans);
@@ -271,6 +317,9 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 				     &had_open_stripe) ?:
 			bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
 		})));
+
+		bch2_trans_unlock_long(trans);
+		bch2_btree_interior_updates_flush(c);
 
 		u64 data_buckets = dev_data_buckets(ca);
 		if (!data_buckets)
