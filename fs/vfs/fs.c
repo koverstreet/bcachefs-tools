@@ -2545,6 +2545,10 @@ static const struct super_operations bch_super_operations = {
 
 static int bch2_set_super(struct super_block *s, struct fs_context *fc)
 {
+	int ret = set_anon_super(s, fc);
+	if (ret)
+		return ret;
+
 	s->s_fs_info = fc->s_fs_info;
 	return 0;
 }
@@ -2691,9 +2695,7 @@ got_sb:
 		for_each_online_member_rcu(c, ca) {
 			struct block_device *bdev = ca->disk_sb.bdev;
 
-			/* XXX: create an anonymous device for multi device filesystems */
 			sb->s_bdev	= bdev;
-			sb->s_dev	= bdev->bd_dev;
 			break;
 		}
 	}
@@ -2767,7 +2769,7 @@ static void bch2_kill_sb(struct super_block *sb)
 {
 	struct bch_fs *c = sb->s_fs_info;
 
-	generic_shutdown_super(sb);
+	kill_anon_super(sb);
 	bch2_fs_exit(c);
 }
 
