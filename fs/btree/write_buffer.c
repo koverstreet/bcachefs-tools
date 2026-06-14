@@ -358,6 +358,12 @@ static void move_keys_from_inc_to_flushing(struct bch_fs_btree_write_buffer *wb)
 		}
 	}
 out:
+	/*
+	 * wb_pin_le() reads inc before flushing without taking locks; make sure
+	 * clearing inc cannot become visible before the flushing pin is visible.
+	 */
+	smp_wmb();
+
 	if (!wb->inc.keys.nr)
 		bch2_journal_pin_drop(j, &wb->inc.pin);
 	else
@@ -957,13 +963,21 @@ static bool wb_pin_le(struct bch_fs_btree_write_buffer *wb, u64 max_seq)
 {
 	/*
 	 * move_keys_from_inc_to_flushing writes flushing.pin.seq (set), then
-	 * drops inc.pin.seq (clear) under j->lock — releases between the two.
-	 * Read inc first with acquire so observing inc=0 (post-drop) means we
-	 * must also observe flushing=N (set before the drop's release). Reading
-	 * the other way round can see flushing=0 (pre-set) AND inc=0 (post-drop)
-	 * and miss the in-flight pin entirely.
+	 * drops inc.pin.seq (clear).  Read inc first so that observing inc=0
+	 * after the drop means the following flushing read must observe the set
+	 * that preceded it.
 	 */
-	u64 inc      = smp_load_acquire(&wb->inc.pin.seq);
+#if BITS_PER_LONG == 32
+	/*
+	 * Journal pin seqs are always in the live journal window, so 32 bit
+	 * half loads are sufficient here; torn reads may only make us think
+	 * there is still work to do.
+	 */
+	u64 inc = READ_ONCE(wb->inc.pin.seq);
+	smp_rmb();
+#else
+	u64 inc = smp_load_acquire(&wb->inc.pin.seq);
+#endif
 	u64 flushing = READ_ONCE(wb->flushing.pin.seq);
 	return (inc      && inc      <= max_seq) ||
 	       (flushing && flushing <= max_seq);
