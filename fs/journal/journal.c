@@ -945,11 +945,12 @@ static int journal_buf_wait(struct journal_buf *buf, struct closure *cl)
 	return 1 + (first != NULL);
 }
 
-void __bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *cl)
+struct closure_waitlist *
+__bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *cl)
 {
 	BUG_ON(atomic_read(&cl->remaining) & CLOSURE_WAITING);
 
-	bool found = false;
+	struct closure_waitlist *wait = NULL;
 
 	/*
 	 * Walk forward to the first live entry (open or in flight) and attach cl
@@ -961,13 +962,15 @@ void __bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *
 	 * written-but-not-flushed entry — where we want a newer flushable seq.
 	 */
 	for (;; seq++) {
+		struct journal_buf *buf = &fifo_entry(&j->in_flight, seq);
 		int r = journal_buf_wait(&fifo_entry(&j->in_flight, seq), cl);
 		if (r) {
 			/* If the waitlist already had waiters we can skip the
 			 * barrier and close check */
+			if (r > 0)
+				wait = &buf->wait;
 			if (r > 1)
-				return;
-			found = r > 0;
+				return wait;
 			break;
 		}
 	}
@@ -980,8 +983,10 @@ void __bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *
 	 * noflush-tailed journal; without it fsync of such a seq returns before the
 	 * data is durable.
 	 */
-	if (!found)
-		BUG_ON(!closure_wait(&j->flush_wait, cl));
+	if (!wait) {
+		wait = &j->flush_wait;
+		BUG_ON(!closure_wait(wait, cl));
+	}
 
 	smp_mb();
 
@@ -989,6 +994,24 @@ void __bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *
 	    ? fifo_used(&j->in_flight) == 1
 	    : j->flush_wait.list.first != NULL)
 		bch2_journal_entry_close(j);
+
+	return wait;
+}
+
+/*
+ * Slowpath: wake a journal flush waitlist after the journal errored.
+ *
+ * Sentinel-safe: buf->wait.list.first multiplexes journal sentinels
+ * (NOT_IN_FLIGHT/NOFLUSH/FLUSH_NO_WAIT) with closure-list pointers, so grab
+ * into a local and wake only real closures. xchg to NULL races cleanly with
+ * the journal_write_done{,_flush}() grabbers - they just get NULL, and
+ * closure_wake_up() on a NULL list is a no-op, so no sentinel is ever walked.
+ */
+static noinline void journal_flush_seq_err_wake(struct closure_waitlist *wait)
+{
+	struct closure_waitlist w = {{ xchg(&wait->list.first, NULL) }};
+	if (w.list.first > JOURNAL_BUF_FLUSH_NO_WAIT)
+		closure_wake_up(&w);
 }
 
 /**
@@ -1038,8 +1061,18 @@ int bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *cl)
 			break;
 	} while (!try_cmpxchg(&j->flushing_seq, &old, seq));
 
-	__bch2_journal_flush_seq_async(j, seq, cl);
-	return 0;
+	struct closure_waitlist *wait = __bch2_journal_flush_seq_async(j, seq, cl);
+
+	/*
+	 * Memory barrier between wait and checking for journal error is in
+	 * __bch2_journal_flush_seq_async(); bch2_journal_res_flush() doesn't
+	 * require this check because it has a journal res
+	 */
+
+	int ret = bch2_journal_error(j);
+	if (unlikely(ret))
+		journal_flush_seq_err_wake(wait);
+	return ret;
 }
 
 int bch2_journal_flush_seq(struct journal *j, u64 seq, unsigned task_state)
