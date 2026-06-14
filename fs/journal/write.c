@@ -1071,8 +1071,11 @@ void bch2_journal_do_writes_locked(struct journal *j)
 			 * commits first, close + write the open entry in at most
 			 * journal_flush_delay.
 			 */
-			mod_delayed_work(j->wq, &j->write_work,
-					 msecs_to_jiffies(c->opts.journal_flush_delay));
+			if (seq != journal_cur_seq(j))
+				mod_delayed_work(j->wq, &j->write_work,
+						 msecs_to_jiffies(c->opts.journal_flush_delay));
+			else
+				cancel_delayed_work(&j->write_work);
 
 			if (!c->opts.journal_rewind_discard_buffer_percent)
 				j->rewind_seq = le64_to_cpu(jset->seq) + 1;

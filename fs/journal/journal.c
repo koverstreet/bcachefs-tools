@@ -351,8 +351,6 @@ static void __journal_entry_close_one(struct journal *j, unsigned closed_val, bo
 	buf->data->last_seq	= cpu_to_le64(buf->last_seq);
 	BUG_ON(buf->last_seq > le64_to_cpu(buf->data->seq));
 
-	cancel_delayed_work(&j->write_work);
-
 	bch2_journal_space_available(j);
 
 	__bch2_journal_buf_put(j, le64_to_cpu(buf->data->seq));
