@@ -449,7 +449,7 @@ fn print_flat(dir: &Path, recursive: bool, show_snapshots: bool,
                 let sb = sizes.as_ref().and_then(|s| s.get(&b.1.subvolid)).copied().unwrap_or(0);
                 sb.cmp(&sa)
             }),
-            SortBy::Time => entries.sort_by(|a, b| b.1.otime_sec.cmp(&a.1.otime_sec)),
+            SortBy::Time => entries.sort_by_key(|b| std::cmp::Reverse(b.1.otime_sec)),
         }
     }
 
@@ -690,7 +690,7 @@ fn print_snapshot_flat(dir: &Path, readonly: bool, sort: Option<SortBy>) -> Resu
     if let Some(ref sort) = sort {
         match sort {
             SortBy::Name => entries.sort_by(|a, b| a.0.cmp(&b.0)),
-            SortBy::Size => entries.sort_by(|a, b| b.2.cmp(&a.2)),
+            SortBy::Size => entries.sort_by_key(|b| std::cmp::Reverse(b.2)),
             SortBy::Time => {}
         }
     }

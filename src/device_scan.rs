@@ -265,7 +265,7 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
 
     let udev = opt_get!(opts, mount_trusts_udev) != 0;
 
-    if let Some(uuid) = parse_uuid_equals(&device)? {
+    if let Some(uuid) = parse_uuid_equals(device)? {
         get_devices_by_uuid(uuid, opts, udev)
     } else {
         devs_str_sbs_from_device(Path::new(device), opts, udev)

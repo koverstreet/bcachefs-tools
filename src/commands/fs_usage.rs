@@ -127,7 +127,7 @@ fn fs_usage_v1_to_text(
 
     // Sort entries by bpos
     let mut sorted: Vec<&AccountingEntry> = result.entries.iter().collect();
-    sorted.sort_by(|a, b| a.pos.cmp(&b.pos));
+    sorted.sort_by_key(|a| a.pos);
 
     // Header
     let uuid = uuid::Uuid::from_bytes(handle.uuid());

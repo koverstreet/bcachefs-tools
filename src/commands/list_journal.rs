@@ -190,10 +190,8 @@ fn transaction_matches_transaction_filter(
     // Check negative ranges first - must NOT match any
     if has_negative {
         for (sign, range) in &f.ranges {
-            if *sign < 0 {
-                if entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
-                    return false;
-                }
+            if *sign < 0 && entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
+                return false;
             }
         }
     }
@@ -201,10 +199,8 @@ fn transaction_matches_transaction_filter(
     // Check positive ranges - must match at least one (if any exist)
     if has_positive {
         for (sign, range) in &f.ranges {
-            if *sign >= 0 {
-                if entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
-                    return true;
-                }
+            if *sign >= 0 && entries.iter().skip(1).any(|e| entry_matches_range(e, range)) {
+                return true;
             }
         }
         return false;

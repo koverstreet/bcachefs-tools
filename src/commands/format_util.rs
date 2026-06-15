@@ -270,7 +270,7 @@ pub fn format(
         + std::mem::size_of::<c::bch_member>() * dev_slice.len();
     let mi_u64s = mi_size / std::mem::size_of::<u64>();
 
-    let mi = bch_bindgen::sb::sb_field_resize::<c::bch_sb_field_members_v2>(&mut *sb, mi_u64s as u32)
+    let mi = bch_bindgen::sb::sb_field_resize::<c::bch_sb_field_members_v2>(&mut sb, mi_u64s as u32)
         .unwrap_or_else(|| die("failed to resize members_v2 field"));
     mi.member_bytes = (std::mem::size_of::<c::bch_member>() as u16).to_le();
 
