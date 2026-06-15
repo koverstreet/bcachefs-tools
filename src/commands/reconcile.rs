@@ -209,7 +209,9 @@ fn reconcile_wait_tui(
         let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)?;
 
         execute!(stdout, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
-        write!(stdout, "{}", out)?;
+        for line in out.as_str().lines() {
+            write!(stdout, "{}\r\n", line)?;
+        }
         stdout.flush()?;
 
         if !pending {
