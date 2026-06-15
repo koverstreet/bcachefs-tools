@@ -366,7 +366,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 
 		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, JOURNAL_BUF_NOT_IN_FLIGHT) }};
 
-		if (wait.list.first > JOURNAL_BUF_NOFLUSH)
+		if (wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT)
 			closure_wake_up(&wait);
 
 		completed = true;
@@ -468,7 +468,7 @@ static CLOSURE_CALLBACK(journal_write_done_flush)
 	 * we're not taking j->lock and updating the various seq_ondisk fields
 	 * yet:
 	 */
-	if (!w->failed.nr && w->wait.list.first > JOURNAL_BUF_NOFLUSH) {
+	if (!w->failed.nr && w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT) {
 		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, NULL) }};
 		closure_wake_up(&wait);
 	}
@@ -834,14 +834,16 @@ CLOSURE_CALLBACK(bch2_journal_write)
 
 	w->devs_written = bch2_bkey_devs(c, bkey_i_to_s_c(&w->key));
 
-	if (!c->sb.clean) {
+	if (w->wait.list.first != JOURNAL_BUF_FLUSH_NO_WAIT) {
 		/*
 		 * Mark journal replicas before we submit the write to guarantee
 		 * recovery will find the journal entries after a crash.
 		 *
-		 * If the filesystem is clean, we have to defer this until after
-		 * the write completes, so the filesystem isn't marked dirty
-		 * before anything is in the journal:
+		 * The clean->dirty transition entry (FLUSH_NO_WAIT) is the
+		 * exception: we defer this until after the write completes, so the
+		 * fs isn't marked dirty before its journal entry is on disk - and
+		 * flushers can't wait on that entry, so there's no one to wake
+		 * early ahead of the deferred superblock write.
 		 */
 		struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, le64_to_cpu(w->data->seq))->devs.e;
 		bch2_devlist_to_replicas(r, BCH_DATA_journal, w->devs_written);
@@ -892,7 +894,7 @@ static bool journal_waitlist_add_batch(struct llist_node *first,
 	struct llist_node *old = READ_ONCE(wait->list.first);
 
 	do {
-		if (old && old <= JOURNAL_BUF_NOFLUSH)
+		if (old && old <= JOURNAL_BUF_FLUSH_NO_WAIT)
 			return false;
 
 		last->next = old;
@@ -906,7 +908,7 @@ static bool journal_waitlist_splice(struct journal_buf *from,
 {
 	struct llist_node *first = xchg(&from->wait.list.first, JOURNAL_BUF_NOFLUSH), *last;
 
-	if (!first || first <= JOURNAL_BUF_NOFLUSH)
+	if (!first || first <= JOURNAL_BUF_FLUSH_NO_WAIT)
 		return true;
 
 	for (last = first; last->next; last = last->next)
@@ -975,9 +977,13 @@ static int __should_flush(struct journal *j, struct journal_buf *w, u64 seq)
 
 	/*
 	 * To demote a flush, we have to move waiters to the next entry - if
-	 * there isn't a next entry, we can't demote:
+	 * there isn't a next entry, we can't demote. Only entries with real
+	 * flush waiters can be demoted; a FLUSH_NO_WAIT transition entry has
+	 * none (flushers skip it) and must stay a flush write - and splicing
+	 * it would clobber the sentinel:
 	 */
-	if (must_flush && j->flushes_outstanding > 1) {
+	if (w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT &&
+	    j->flushes_outstanding > 1) {
 		struct journal_buf *next = seq < journal_cur_seq(j)
 			? journal_seq_to_buf(j, seq + 1)
 			: NULL;

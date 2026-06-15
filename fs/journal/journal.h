@@ -160,9 +160,25 @@ journal_seq_to_buf(struct journal *j, u64 seq)
 
 #define JOURNAL_BUF_NOT_IN_FLIGHT	((struct llist_node *) 1)
 #define JOURNAL_BUF_NOFLUSH		((struct llist_node *) 2)
+/*
+ * Stamped on the first entry opened after the journal was clean (the
+ * clean->dirty transition): this entry must be a flush write - its write
+ * completion marks the fs dirty (the superblock write in journal_write_done())
+ * - but flushers must not wait on it, since that mark happens after the early
+ * flush-completion signal. Flushers skip it (like NOFLUSH) and attach to a
+ * later entry, which by construction completes only after this one's sb write.
+ */
+#define JOURNAL_BUF_FLUSH_NO_WAIT	((struct llist_node *) 3)
 
 static inline bool journal_buf_must_flush(struct journal_buf *buf)
 {
+	/*
+	 * "must be written as a flush" - true for entries with real flush
+	 * waiters AND for the FLUSH_NO_WAIT transition entry (which has no
+	 * waiters but must still flush, to mark the fs dirty). The close/cycle
+	 * logic keys on this, so FLUSH_NO_WAIT must count here or its entry
+	 * never gets closed and written.
+	 */
 	return buf->wait.list.first > JOURNAL_BUF_NOFLUSH;
 }
 

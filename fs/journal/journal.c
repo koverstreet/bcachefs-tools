@@ -519,8 +519,25 @@ static int journal_entry_open(struct journal *j)
 	buf->data->seq	= cpu_to_le64(seq);
 	buf->data->u64s	= 0;
 
-	BUG_ON(xchg(&buf->wait.list.first,
-		    xchg(&j->flush_wait.list.first, NULL)) != JOURNAL_BUF_NOT_IN_FLIGHT);
+	/*
+	 * last_seq_ondisk == seq means the journal was clean before this entry
+	 * (the on-disk last_seq has caught up to seq - nothing older is pinned):
+	 * this is the clean->dirty transition. Stamp it FLUSH_NO_WAIT so it's
+	 * forced to a flush write (its completion marks the fs dirty), but
+	 * flushers don't wait on it - they'd be signalled before that mark lands.
+	 * Leave flush_wait alone; its waiters migrate onto the next entry, which
+	 * completes only after this entry's superblock write.
+	 *
+	 * This doesn't re-arm on an empty forced flush the way a "journal was
+	 * empty" test would: the entry pins itself while in flight, so its
+	 * recorded last_seq is its own seq, and last_seq_ondisk only catches back
+	 * up to a new seq once the journal is genuinely clean again.
+	 */
+	struct llist_node *new_first = j->last_seq_ondisk == seq
+		? JOURNAL_BUF_FLUSH_NO_WAIT
+		: xchg(&j->flush_wait.list.first, NULL);
+
+	BUG_ON(xchg(&buf->wait.list.first, new_first) != JOURNAL_BUF_NOT_IN_FLIGHT);
 
 	/*
 	 * Publish to the reservation fastpath ring slot. Must happen before
@@ -898,9 +915,9 @@ static int journal_buf_wait(struct journal_buf *buf, struct closure *cl)
 {
 	struct llist_node *first;
 
-	/* Optimistic check: bail without touching closure state if visibly poisoned */
+	/* Optimistic check: bail without touching closure state if not waitable */
 	first = READ_ONCE(buf->wait.list.first);
-	if (first && first <= JOURNAL_BUF_NOFLUSH)
+	if (first && first <= JOURNAL_BUF_FLUSH_NO_WAIT)
 		return first == JOURNAL_BUF_NOT_IN_FLIGHT ? -1 : 0;
 
 	/* Commit to waiting */
@@ -915,9 +932,9 @@ static int journal_buf_wait(struct journal_buf *buf, struct closure *cl)
 	 * iteration.
 	 */
 	do {
-		if (first && first <= JOURNAL_BUF_NOFLUSH) {
-			/* Poisoned after we committed waiting state — roll back.
-			 * Safe because cl isn't on any list yet, so no concurrent
+		if (first && first <= JOURNAL_BUF_FLUSH_NO_WAIT) {
+			/* Became non-waitable after we committed waiting state — roll
+			 * back. Safe because cl isn't on any list yet, so no concurrent
 			 * writer can touch cl->remaining. */
 			atomic_sub(CLOSURE_WAITING + 1, &cl->remaining);
 			return first == JOURNAL_BUF_NOT_IN_FLIGHT ? -1 : 0;
