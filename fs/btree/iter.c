@@ -1072,6 +1072,26 @@ static int btree_node_missing_err(struct btree_trans *trans,
 	return __bch2_topology_error(c, &msg.m);
 }
 
+static void btree_node_gap_err_print_iter_key(struct printbuf *out,
+					      struct bch_fs *c,
+					      struct btree *b,
+					      const char *label,
+					      struct bkey_packed *k)
+{
+	prt_str(out, label);
+
+	if (k) {
+		struct bkey_buf tmp __cleanup(bch2_bkey_buf_exit);
+		bch2_bkey_buf_init(&tmp);
+		bch2_bkey_buf_unpack(&tmp, b, k);
+		bch2_bkey_val_to_text(out, c, bkey_i_to_s_c(tmp.k));
+	} else {
+		prt_str(out, "(none)");
+	}
+
+	prt_newline(out);
+}
+
 noinline __cold
 static int btree_node_gap_err(struct btree_trans *trans,
 			      struct btree_path *path,
@@ -1080,20 +1100,63 @@ static int btree_node_gap_err(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	CLASS(bch_log_msg, msg)(c);
 
-	struct btree *b = path_l(path)->b;
+	struct btree_path_level *l = path_l(path);
+	struct btree *b = l->b;
+	bool have_min = k->k.type == KEY_TYPE_btree_ptr_v2;
+	struct bpos child_min = have_min
+		? bkey_i_to_btree_ptr_v2_c(k)->v.min_key
+		: POS_MIN;
+	struct bpos child_max = k->k.p;
+	struct btree_node_iter prev_iter = l->iter;
+	struct btree_node_iter next_iter = l->iter;
+	struct bkey_packed *prev = bch2_btree_node_iter_prev(&prev_iter, b);
+	struct bkey_packed *cur = bch2_btree_node_iter_peek(&next_iter, b);
+	struct bkey_packed *next = NULL;
+	if (cur) {
+		bch2_btree_node_iter_advance(&next_iter, b);
+		next = bch2_btree_node_iter_peek(&next_iter, b);
+	}
 
 	prt_str(&msg.m, "lookup found topology error:\n");
-	prt_str(&msg.m, "node doesn't cover expected range at pos: ");
+	bch2_btree_id_level_to_text(&msg.m, path->btree_id, path->level);
+	prt_str(&msg.m, " lookup at ");
 	bch2_bpos_to_text(&msg.m, path->pos);
 	prt_newline(&msg.m);
 
 	scoped_guard(printbuf_indent, &msg.m) {
-		prt_str(&msg.m, "within parent node ");
-		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&path_l(path)->b->key));
+		prt_str(&msg.m, "parent:     ");
+		bch2_btree_id_level_to_text(&msg.m, b->c.btree_id, b->c.level);
+		prt_str(&msg.m, " ");
+		bch2_bpos_to_text(&msg.m, b->data->min_key);
+		prt_str(&msg.m, " - ");
+		bch2_bpos_to_text(&msg.m, b->data->max_key);
 		prt_newline(&msg.m);
 
-		prt_printf(&msg.m, "but got node: ");
+		prt_str(&msg.m, "parent key:  ");
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&b->key));
+		prt_newline(&msg.m);
+
+		prt_str(&msg.m, "selected:   ");
 		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(k));
+		prt_newline(&msg.m);
+
+		prt_str(&msg.m, "parent iter:\n");
+		scoped_guard(printbuf_indent, &msg.m) {
+			btree_node_gap_err_print_iter_key(&msg.m, c, b, "prev:    ", prev);
+			btree_node_gap_err_print_iter_key(&msg.m, c, b, "current: ", cur);
+			btree_node_gap_err_print_iter_key(&msg.m, c, b, "next:    ", next);
+		}
+
+		prt_str(&msg.m, "reason:      ");
+		if (have_min && bpos_lt(path->pos, child_min)) {
+			prt_str(&msg.m, "lookup position is before child min_key ");
+			bch2_bpos_to_text(&msg.m, child_min);
+		} else if (bpos_gt(path->pos, child_max)) {
+			prt_str(&msg.m, "lookup position is after child max_key ");
+			bch2_bpos_to_text(&msg.m, child_max);
+		} else {
+			prt_str(&msg.m, "child pointer does not cover lookup position");
+		}
 		prt_newline(&msg.m);
 	}
 
