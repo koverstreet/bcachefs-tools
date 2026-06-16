@@ -5,6 +5,8 @@
 //! Pure Rust replacements for get_size(), get_blocksize(), fd_to_dev_model()
 //! from tools-util.c. These work on any fd (block device or regular file).
 
+use std::fs::Metadata;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
 
 use libc::BLKPBSZGET;
@@ -17,14 +19,14 @@ const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
 /// For block devices, uses BLKGETSIZE64 ioctl.
 /// For regular files, returns st_size from fstat.
 pub fn get_size(fd: RawFd) -> u64 {
-    let stat = fstat(fd);
+    let metadata = fd_metadata(fd);
 
-    if is_blk(stat.st_mode) {
+    if metadata.file_type().is_block_device() {
         let mut size: u64 = 0;
         unsafe { libc::ioctl(fd, BLKGETSIZE64, &mut size) };
         size
     } else {
-        stat.st_size as u64
+        metadata.size()
     }
 }
 
@@ -32,28 +34,28 @@ pub fn get_size(fd: RawFd) -> u64 {
 /// with fallback to the filesystem block size hint for regular files, in bytes.
 /// (to be used as a performance hint only)
 pub fn get_blocksize_physical_hint(fd: RawFd) -> u32 {
-    let stat = fstat(fd);
+    let metadata = fd_metadata(fd);
 
-    if is_blk(stat.st_mode) {
+    if metadata.file_type().is_block_device() {
         let mut bs: libc::c_uint = 0;
         unsafe { libc::ioctl(fd, BLKPBSZGET, &mut bs) };
         bs
     } else {
-        stat.st_blksize as u32
+        metadata.blksize() as u32
     }
 }
 
 /// Returns the device model string for a block device fd, or a
 /// fallback description for regular files / unknown devices.
 pub fn fd_to_dev_model(fd: RawFd) -> String {
-    let stat = fstat(fd);
+    let metadata = fd_metadata(fd);
 
-    if !is_blk(stat.st_mode) {
+    if !metadata.file_type().is_block_device() {
         return "(image file)".to_string();
     }
 
-    let major = libc::major(stat.st_rdev);
-    let minor = libc::minor(stat.st_rdev);
+    let major = rustix::fs::major(metadata.rdev());
+    let minor = rustix::fs::minor(metadata.rdev());
     let sysfs = format!("/sys/dev/block/{}:{}", major, minor);
 
     // Try device/model, then parent's device/model (partition),
@@ -74,14 +76,14 @@ pub fn fd_to_dev_model(fd: RawFd) -> String {
 /// Returns the device serial number for a block device fd, or None
 /// if not available (image files, devices without serial sysfs entry).
 pub fn fd_to_dev_serial(fd: RawFd) -> Option<String> {
-    let stat = fstat(fd);
+    let metadata = fd_metadata(fd);
 
-    if !is_blk(stat.st_mode) {
+    if !metadata.file_type().is_block_device() {
         return None;
     }
 
-    let major = libc::major(stat.st_rdev);
-    let minor = libc::minor(stat.st_rdev);
+    let major = rustix::fs::major(metadata.rdev());
+    let minor = rustix::fs::minor(metadata.rdev());
     let sysfs = format!("/sys/dev/block/{}:{}", major, minor);
 
     // Try device/serial, then parent's device/serial (partition)
@@ -163,15 +165,11 @@ pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
     unsafe { blkid_check(fd, path.as_ptr(), force) }
 }
 
-fn fstat(fd: RawFd) -> libc::stat {
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let ret = unsafe { libc::fstat(fd, &mut stat) };
-    if ret != 0 {
-        crate::wrappers::super_io::die("stat error");
+fn fd_metadata(fd: RawFd) -> Metadata {
+    match std::fs::metadata(format!("/proc/self/fd/{}", fd)) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            crate::wrappers::super_io::die("stat error");
+        }
     }
-    stat
-}
-
-fn is_blk(mode: libc::mode_t) -> bool {
-    (mode & libc::S_IFMT) == libc::S_IFBLK
 }
