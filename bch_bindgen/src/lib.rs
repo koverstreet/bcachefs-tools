@@ -116,6 +116,30 @@ impl From<c::btree_id> for u32 {
     }
 }
 
+impl c::bch_sb_field_type {
+    pub fn bit(self) -> u32 {
+        1u32 << self.0
+    }
+}
+
+impl c::bch_data_type {
+    pub fn bit(self) -> u64 {
+        1u64 << self.0
+    }
+}
+
+impl From<c::bch_data_type> for u32 {
+    fn from(t: c::bch_data_type) -> u32 {
+        t.0
+    }
+}
+
+impl From<c::bch_compression_type> for u32 {
+    fn from(t: c::bch_compression_type) -> u32 {
+        t.0
+    }
+}
+
 impl fmt::Display for c::btree_id {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self)) };

@@ -196,7 +196,7 @@ impl<'t> BtreeIter<'t> {
             c::bch2_trans_iter_init_outlined(
                 trans.raw,
                 iter.as_mut_ptr(),
-                std::mem::transmute::<u32, c::btree_id>(btree.into()),
+                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 c::btree_iter_update_trigger_flags(flags.bits),
                 0
@@ -222,7 +222,7 @@ impl<'t> BtreeIter<'t> {
             c::__bch2_trans_node_iter_init(
                 trans.raw,
                 iter.as_mut_ptr(),
-                std::mem::transmute::<u32, c::btree_id>(btree.into()),
+                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 0,
                 level,
@@ -335,7 +335,7 @@ impl<'t> BtreeNodeIter<'t> {
             c::__bch2_trans_node_iter_init(
                 trans.raw,
                 iter.as_mut_ptr(),
-                std::mem::transmute::<u32, c::btree_id>(btree.into()),
+                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
                 locks_want,
                 depth,
