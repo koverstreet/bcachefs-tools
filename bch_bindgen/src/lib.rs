@@ -18,6 +18,16 @@ pub mod c {
     pub use crate::bcachefs::*;
 }
 
+#[allow(non_camel_case_types)]
+pub type metadata_version = c::bcachefs_metadata_version;
+#[allow(non_camel_case_types)]
+pub type opt_id = c::bch_opt_id;
+#[allow(non_camel_case_types)]
+pub type btree_id = c::btree_id;
+
+include!(concat!(env!("OUT_DIR"), "/newtype_enum_aliases_gen.rs"));
+include!(concat!(env!("OUT_DIR"), "/btree_ids_gen.rs"));
+
 use c::bpos as Bpos;
 
 pub const fn spos(inode: u64, offset: u64, snapshot: u32) -> Bpos {
@@ -84,7 +94,7 @@ impl PartialOrd for c::bbpos {
 
 impl Ord for c::bbpos {
     fn cmp(&self, other: &Self) -> Ordering {
-        (self.btree as u32).cmp(&(other.btree as u32))
+        u32::from(self.btree).cmp(&u32::from(other.btree))
             .then(self.pos.cmp(&other.pos))
     }
 }
@@ -93,20 +103,14 @@ use std::ffi::CStr;
 use std::fmt;
 
 impl c::btree_id {
-    /// Convert from raw u32. Returns None for unknown btree IDs (>= BTREE_ID_NR).
+    /// Convert from raw u32. Returns None for unknown built-in btree IDs.
     pub fn from_raw(id: u32) -> Option<Self> {
-        if id < Self::BTREE_ID_NR as u32 {
-            // SAFETY: id is in [0, BTREE_ID_NR), a valid discriminant
-            Some(unsafe { std::mem::transmute::<u32, Self>(id) })
-        } else {
-            None
-        }
+        BTREE_IDS_KNOWN.get(id as usize).copied()
     }
 
     /// Iterate over all known btree IDs.
     pub fn iter_known() -> impl Iterator<Item = Self> {
-        (0..Self::BTREE_ID_NR as u32)
-            .map(|id| unsafe { std::mem::transmute::<u32, Self>(id) })
+        BTREE_IDS_KNOWN.iter().copied()
     }
 }
 
@@ -136,6 +140,42 @@ impl From<c::bch_data_type> for u32 {
 
 impl From<c::bch_compression_type> for u32 {
     fn from(t: c::bch_compression_type) -> u32 {
+        t.0
+    }
+}
+
+impl From<c::bcachefs_metadata_version> for u32 {
+    fn from(v: c::bcachefs_metadata_version) -> u32 {
+        v.0
+    }
+}
+
+impl From<c::bch_opt_id> for u32 {
+    fn from(id: c::bch_opt_id) -> u32 {
+        id.0
+    }
+}
+
+impl From<c::bch_bkey_type> for u32 {
+    fn from(t: c::bch_bkey_type) -> u32 {
+        t.0
+    }
+}
+
+impl c::disk_accounting_type {
+    pub fn bit(self) -> u32 {
+        1u32 << self.0
+    }
+}
+
+impl From<c::disk_accounting_type> for u32 {
+    fn from(t: c::disk_accounting_type) -> u32 {
+        t.0
+    }
+}
+
+impl From<c::bch_reconcile_accounting_type> for u32 {
+    fn from(t: c::bch_reconcile_accounting_type) -> u32 {
         t.0
     }
 }
@@ -240,7 +280,7 @@ impl FromStr for c::bch_bkey_type {
 
         let v = unsafe { c::match_string(c::bch2_bkey_types[..].as_ptr(), (-1_isize) as usize, p) };
         if v >= 0 {
-            Ok(unsafe { std::mem::transmute::<i32, bcachefs::bch_bkey_type>(v) })
+            Ok(bcachefs::bch_bkey_type(v as u32))
         } else {
             Err(BchToolsErr::InvalidBkeyType)
         }

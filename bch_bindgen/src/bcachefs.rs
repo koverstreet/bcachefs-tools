@@ -142,13 +142,13 @@ impl Drop for bch_sb_handle {
 }
 
 impl bch_opt_strs {
-    /// Set a deferred option string by opt table index.
+    /// Set a deferred option string by option id.
     ///
     /// The string is strdup'd into C heap memory so it can be freed
     /// by `bch2_opt_strs_free`.
-    pub fn set(&mut self, id: usize, val: &std::ffi::CStr) {
+    pub fn set(&mut self, id: bch_opt_id, val: &std::ffi::CStr) {
         unsafe {
-            self.__bindgen_anon_1.by_id[id] = libc::strdup(val.as_ptr());
+            self.__bindgen_anon_1.by_id[id.0 as usize] = libc::strdup(val.as_ptr());
         }
     }
 

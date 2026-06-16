@@ -18,6 +18,7 @@ use bch_bindgen::opt_set;
 use clap::Parser;
 
 use bch_bindgen::printbuf::Printbuf;
+use bch_bindgen::sb::sb_field_type;
 
 /// Print superblock information to stdout
 #[derive(Parser, Debug)]
@@ -45,7 +46,7 @@ pub struct ShowSuperCli {
 
 fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
-    let ext_bit = c::bch_sb_field_type::BCH_SB_FIELD_ext.bit();
+    let ext_bit = sb_field_type::ext.bit();
     let mut fields = ext_bit;
     let mut field_only: i32 = -1;
     let mut print_default_fields = true;
@@ -94,11 +95,11 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         let mut fields = fields;
         if print_default_fields {
             if sb.field::<c::bch_sb_field_members_v2>().is_some() {
-                fields |= c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit();
+                fields |= sb_field_type::members_v2.bit();
             } else {
-                fields |= c::bch_sb_field_type::BCH_SB_FIELD_members_v1.bit();
+                fields |= sb_field_type::members_v1.bit();
             }
-            fields |= c::bch_sb_field_type::BCH_SB_FIELD_errors.bit();
+            fields |= sb_field_type::errors.bit();
         }
 
         let mut buf = Printbuf::new();

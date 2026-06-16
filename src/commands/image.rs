@@ -10,7 +10,8 @@ use std::path::PathBuf;
 use std::process;
 
 use anyhow::{anyhow, bail, Result};
-use bch_bindgen::accounting::DiskAccountingKind;
+use bch_bindgen::accounting::{DiskAccountingKind, compression_type, data_type};
+use bch_bindgen::bkey::bkey_type;
 use bch_bindgen::btree::{BtreeIter, BtreeTrans, lockrestart_do};
 use bch_bindgen::c;
 use crate::copy_fs::{CopyFsState, copy_fs};
@@ -20,7 +21,8 @@ use bch_bindgen::fs::{Fs, btree_id_is_alloc, bucket_bytes, bucket_to_sector, dev
 use bch_bindgen::opt_set;
 use bch_bindgen::printbuf::Printbuf;
 use bch_bindgen::sb;
-use bch_bindgen::{POS_MIN, SPOS_MAX, pos};
+use bch_bindgen::sb::sb_field_type;
+use bch_bindgen::{POS_MIN, SPOS_MAX, btree_id, pos};
 use clap::Parser;
 
 use crate::commands::format::{
@@ -84,12 +86,12 @@ fn set_data_allowed_for_image_update(fs: &Fs) {
     let _lock = fs.sb_lock();
 
     let m0 = unsafe { fs.member_mut(0) };
-    m0.set_member_data_allowed(c::bch_data_type::BCH_DATA_user.bit());
+    m0.set_member_data_allowed(data_type::user.bit());
 
     let m1 = unsafe { fs.member_mut(1) };
     m1.set_member_data_allowed(
-        c::bch_data_type::BCH_DATA_journal.bit()
-            | c::bch_data_type::BCH_DATA_btree.bit(),
+        data_type::journal.bit()
+            | data_type::btree.bit(),
     );
 
     fs.write_super();
@@ -119,7 +121,7 @@ unsafe extern "C" fn move_btree_pred(
 
     opts.target = args.target;
 
-    if (*k.k).type_ != c::bch_bkey_type::KEY_TYPE_btree_ptr_v2 as u8 {
+    if (*k.k).type_ != u32::from(bkey_type::btree_ptr_v2) as u8 {
         return 0;
     }
 
@@ -141,7 +143,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
     };
 
     let mut ctxt = MovingContext::new(fs, writepoint_hashed(1), false);
-    let btree_id_nr = c::btree_id::BTREE_ID_NR as u32;
+    let btree_id_nr = u32::from(btree_id::nr);
 
     for btree in 0..btree_id_nr {
         if !move_alloc && btree_id_is_alloc(btree) {
@@ -173,7 +175,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     let trans = BtreeTrans::new(fs);
     let mut iter = BtreeIter::new(
         &trans,
-        c::btree_id::BTREE_ID_alloc,
+        btree_id::alloc,
         pos(0, u64::MAX),
         bch_bindgen::btree::BtreeIterFlags::empty(),
     );
@@ -190,7 +192,7 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     let (key_type, offset) = result
         .map_err(|e| anyhow!("error looking up last alloc key: {}", e))?;
 
-    if key_type == c::bch_bkey_type::KEY_TYPE_alloc_v4 as u8 {
+    if key_type == u32::from(bkey_type::alloc_v4) as u8 {
         Ok(offset + 1)
     } else {
         bail!("error looking up last alloc key: no alloc_v4 found")
@@ -231,14 +233,14 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     let usage = fs.dev_usage_full_read(0);
     let ca = unsafe { &*fs.dev_raw(0) };
 
-    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_sb);
-    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_journal);
-    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_btree);
+    print_data_type_usage(&mut buf, ca, &usage, data_type::sb);
+    print_data_type_usage(&mut buf, ca, &usage, data_type::journal);
+    print_data_type_usage(&mut buf, ca, &usage, data_type::btree);
 
     {
         let mut indented = buf.indent(2);
 
-        let btree_id_nr = c::btree_id::BTREE_ID_NR as u32;
+        let btree_id_nr = u32::from(btree_id::nr);
         for i in 0..btree_id_nr {
             if btree_id_is_alloc(i) && !keep_alloc {
                 continue;
@@ -261,7 +263,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
 
     // User data via replicas accounting
     let acc_pos = DiskAccountingKind::Replicas {
-        data_type: c::bch_data_type::BCH_DATA_user,
+        data_type: data_type::user,
         nr_devs: 1,
         nr_required: 1,
         devs: {
@@ -276,7 +278,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     write!(&mut buf, "user").ok();
     prt_sectors(&mut buf, v[0]);
 
-    let user_idx = c::bch_data_type::BCH_DATA_user.0 as usize;
+    let user_idx = data_type::user.0 as usize;
     if usage.d[user_idx].fragmented != 0 {
         write!(&mut buf, "user fragmented").ok();
         prt_sectors(&mut buf, usage.d[user_idx].fragmented);
@@ -286,7 +288,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
 
     // Compression stats
     let mut compression_header = false;
-    let comp_nr = u32::from(c::bch_compression_type::BCH_COMPRESSION_TYPE_NR);
+    let comp_nr = u32::from(compression_type::nr);
     for i in 1..comp_nr {
         let acc_pos = DiskAccountingKind::Compression {
             compression_type: c::bch_compression_type(i),
@@ -314,7 +316,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
         buf.human_readable_u64(sectors_compressed << 9);
         write!(&mut buf, "\r").ok();
 
-        if i == u32::from(c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible) {
+        if i == u32::from(compression_type::incompressible) {
             buf.newline();
             continue;
         }
@@ -352,7 +354,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     {
         let _lock = fs.sb_lock();
         let m = unsafe { fs.member_mut(0) };
-        let allowed = m.member_data_allowed() | c::bch_data_type::BCH_DATA_btree.bit();
+        let allowed = m.member_data_allowed() | data_type::btree.bit();
         m.set_member_data_allowed(allowed);
         fs.write_super();
     }
@@ -392,7 +394,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
     // Allow journal on primary device
     let m = unsafe { fs.member_mut(0) };
-    let allowed = m.member_data_allowed() | c::bch_data_type::BCH_DATA_journal.bit();
+    let allowed = m.member_data_allowed() | data_type::journal.bit();
     m.set_member_data_allowed(allowed);
 
     // Set nbuckets
@@ -456,15 +458,15 @@ fn image_create_inner(
 
     {
         let dev0_opts = &mut devs[0].opts;
-        opt_set!(dev0_opts, data_allowed, c::bch_data_type::BCH_DATA_user.bit() as u8);
+        opt_set!(dev0_opts, data_allowed, data_type::user.bit() as u8);
     }
     {
         let meta_opts = &mut meta_dev.opts;
         opt_set!(
             meta_opts,
             data_allowed,
-            (c::bch_data_type::BCH_DATA_journal.bit()
-                | c::bch_data_type::BCH_DATA_btree.bit()) as u8
+            (data_type::journal.bit()
+                | data_type::btree.bit()) as u8
         );
     }
     devs.push(meta_dev);
@@ -496,7 +498,7 @@ fn image_create_inner(
                 std::ptr::null_mut(),
                 &*sb,
                 false,
-                c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit(),
+                sb_field_type::members_v2.bit(),
             );
         }
         print!("{}", buf);
@@ -653,7 +655,7 @@ fn image_update_inner(
         println!("Deleting xattrs");
     }
     fs.btree_delete_range(
-        c::btree_id::BTREE_ID_xattrs,
+        btree_id::xattrs,
         POS_MIN,
         SPOS_MAX,
         c::btree_iter_update_trigger_flags::BTREE_ITER_all_snapshots,
@@ -760,7 +762,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     let mut dev_opts: c::bch_opts = Default::default();
 
     let mut fs_opts: c::bch_opts = Default::default();
-    let mut deferred_opts: Vec<(usize, String)> = Vec::new();
+    let mut deferred_opts: Vec<(c::bch_opt_id, String)> = Vec::new();
 
     let mut image_path: Option<String> = None;
 
@@ -797,7 +799,7 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
                     };
 
                     match parse_opt_val(opt, &val_str)? {
-                        None => deferred_opts.push((opt_id as usize, val_str)),
+                        None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
                             if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
                                 bch_bindgen::opts::opt_set_by_id(&mut dev_opts, opt_id, v);

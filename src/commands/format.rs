@@ -24,6 +24,8 @@ use std::process;
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
+use bch_bindgen::metadata_version;
+use bch_bindgen::opt_id;
 use bch_bindgen::opt_set;
 
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
@@ -31,13 +33,14 @@ use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
 use bch_bindgen::printbuf::Printbuf;
+use bch_bindgen::sb::sb_field_type;
 use crate::wrappers::super_io::SUPERBLOCK_SIZE_DEFAULT;
 use crate::wrappers::sysfs;
 
 const BCH_REPLICAS_MAX: u32 = 4;
 
 pub(crate) fn metadata_version_current() -> u32 {
-    c::bcachefs_metadata_version::bcachefs_metadata_version_max as u32 - 1
+    u32::from(metadata_version::max) - 1
 }
 
 /// Parse a version string "major.minor" or just "minor" (major defaults to 0).
@@ -154,7 +157,7 @@ struct FormatConfig {
     format_version:  Option<u32>,
     superblock_size: u32,
     fs_opts:         c::bch_opts,
-    deferred_opts:   Vec<(usize, String)>,
+    deferred_opts:   Vec<(c::bch_opt_id, String)>,
 }
 
 fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
@@ -182,7 +185,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     let mut unconsumed_dev_option = false;
 
     let mut fs_opts: c::bch_opts = Default::default();
-    let mut deferred_opts: Vec<(usize, String)> = Vec::new();
+    let mut deferred_opts: Vec<(c::bch_opt_id, String)> = Vec::new();
 
     macro_rules! push_device {
         ($path:expr) => {{
@@ -234,7 +237,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                     };
 
                     match parse_opt_val(opt, &val_str)? {
-                        None => deferred_opts.push((opt_id as usize, val_str)),
+                        None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => {
                             if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
                                 bch_bindgen::opts::opt_set_by_id(&mut cur_dev_opts, opt_id, v);
@@ -494,7 +497,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     // (cpu-scaled, fs-size-capped, clamped to [0, 8]) lives in C —
     // bch2_shard_inode_numbers_bits_default() — so the format-time default and
     // the kernel sb_validate rewrite of legacy bits=0 filesystems can't diverge.
-    if !bch_bindgen::opts::opt_defined_by_id(&cfg.fs_opts, c::bch_opt_id::Opt_shard_inode_numbers_bits) {
+    if !bch_bindgen::opts::opt_defined_by_id(&cfg.fs_opts, opt_id::shard_inode_numbers_bits) {
         let nr_cpus = std::thread::available_parallelism()
             .map(|n| n.get())
             .unwrap_or(1) as u32;
@@ -522,7 +525,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         } as u64;
         bch_bindgen::opts::opt_set_by_id(
             &mut cfg.fs_opts,
-            c::bch_opt_id::Opt_shard_inode_numbers_bits,
+            opt_id::shard_inode_numbers_bits,
             bits,
         );
     }
@@ -536,7 +539,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     if !cfg.quiet {
         let mut buf = Printbuf::new();
         buf.set_human_readable(true);
-        let fields = c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit();
+        let fields = sb_field_type::members_v2.bit();
         unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, std::ptr::null_mut(), &*sb, false, fields, -1) };
         print!("{}", buf);
     }

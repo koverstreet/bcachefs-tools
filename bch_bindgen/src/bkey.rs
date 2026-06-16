@@ -7,6 +7,8 @@ use crate::printbuf_to_formatter;
 use std::fmt;
 use std::marker::PhantomData;
 
+pub type bkey_type = c::bch_bkey_type;
+
 pub struct BkeySC<'a> {
     pub k:           &'a c::bkey,
     pub v:           &'a c::bch_val,

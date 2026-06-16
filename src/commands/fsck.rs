@@ -9,6 +9,7 @@ use anyhow::{anyhow, Result};
 use bch_bindgen::bcachefs;
 use bch_bindgen::c;
 use bch_bindgen::fs::Fs;
+use bch_bindgen::metadata_version;
 use bch_bindgen::opt_set;
 use clap::Parser;
 use rustix::event::{poll, PollFd, PollFlags};
@@ -161,7 +162,7 @@ fn should_use_kernel_fsck(devs: &[String]) -> bool {
         return false;
     }
 
-    let current = c::bcachefs_metadata_version::bcachefs_metadata_version_max as u64 - 1;
+    let current = u32::from(metadata_version::max) as u64 - 1;
     if kernel_version == current {
         return false;
     }

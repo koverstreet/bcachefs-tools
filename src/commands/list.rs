@@ -38,7 +38,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         }
 
         if let Some(ty) = opt.bkey_type {
-            if k.k.type_ != ty as u8 {
+            if k.k.type_ != u32::from(ty) as u8 {
                 return ControlFlow::Continue(());
             }
         }
@@ -149,7 +149,7 @@ pub struct Cli {
     mode: Mode,
 
     /// Btree to list from
-    #[arg(short, long, default_value_t=bcachefs::btree_id::BTREE_ID_extents)]
+    #[arg(short, long, default_value_t=bcachefs::btree_id::extents)]
     btree: bcachefs::btree_id,
 
     /// Bkey type to list

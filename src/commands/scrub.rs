@@ -7,8 +7,9 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
 use bch_bindgen::c::{
-    bch_data_type, bch_ioctl_data, bch_ioctl_data_event_ret, bch_ioctl_data_progress,
+    bch_ioctl_data, bch_ioctl_data_event_ret, bch_ioctl_data_progress,
 };
+use bch_bindgen::accounting::data_type;
 use clap::Parser;
 
 use crate::util::{fmt_bytes_human, fmt_sectors_human};
@@ -113,7 +114,7 @@ fn scrub(cli: Cli) -> Result<()> {
     unsafe { libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t); }
 
     let data_types: u32 = if cli.metadata {
-        1 << u32::from(bch_data_type::BCH_DATA_btree)
+        1 << u32::from(data_type::btree)
     } else {
         !0u32
     };

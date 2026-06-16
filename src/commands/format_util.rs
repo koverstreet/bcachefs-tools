@@ -7,6 +7,7 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::FileExt;
 
 use bch_bindgen::c;
+use bch_bindgen::metadata_version;
 use bch_bindgen::{opt_defined, opt_get, opt_set};
 
 use crate::wrappers::super_io::{die, BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
@@ -229,7 +230,7 @@ pub fn format(
     sb.sb_mut().set_sb_extent_bp_shift(16);
 
     let version_threshold =
-        c::bcachefs_metadata_version::bcachefs_metadata_version_disk_accounting_big_endian as u32;
+        u32::from(metadata_version::disk_accounting_big_endian);
     if opts.version > version_threshold {
         sb.sb_mut().features[0] |= BCH_SB_FEATURES_ALL.to_le();
     }
@@ -412,7 +413,7 @@ pub(crate) fn format_opts_default() -> c::format_opts {
 
     let kernel_version = crate::wrappers::sysfs::bcachefs_kernel_version() as u32;
     let current =
-        c::bcachefs_metadata_version::bcachefs_metadata_version_max as u32 - 1;
+        u32::from(metadata_version::max) - 1;
 
     let version = if kernel_version > 0 {
         current.min(kernel_version)
