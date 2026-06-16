@@ -45,7 +45,7 @@ pub struct ShowSuperCli {
 
 fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
-    let ext_bit = 1u32 << c::bch_sb_field_type::BCH_SB_FIELD_ext as u32;
+    let ext_bit = c::bch_sb_field_type::BCH_SB_FIELD_ext.bit();
     let mut fields = ext_bit;
     let mut field_only: i32 = -1;
     let mut print_default_fields = true;
@@ -94,11 +94,11 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         let mut fields = fields;
         if print_default_fields {
             if sb.field::<c::bch_sb_field_members_v2>().is_some() {
-                fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
+                fields |= c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit();
             } else {
-                fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32;
+                fields |= c::bch_sb_field_type::BCH_SB_FIELD_members_v1.bit();
             }
-            fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_errors as u32;
+            fields |= c::bch_sb_field_type::BCH_SB_FIELD_errors.bit();
         }
 
         let mut buf = Printbuf::new();

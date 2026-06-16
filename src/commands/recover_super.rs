@@ -296,7 +296,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
             std::ptr::null_mut(),
             buf_as_sb(&sb_buf),
             true,
-            1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32,
+            c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit(),
         );
     }
     println!("Found superblock:\n{}", buf);

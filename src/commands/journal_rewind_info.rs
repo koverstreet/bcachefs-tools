@@ -68,7 +68,7 @@ fn jset_seq(p: &c::journal_replay) -> u64 {
 /// seconds-since-epoch, or None if absent.
 fn jset_datetime(p: &c::journal_replay) -> Option<u64> {
     for e in jset_entries(&p.j) {
-        if entry_type(e) == Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_datetime) {
+        if entry_type(e) == c::bch_jset_entry_type::BCH_JSET_ENTRY_datetime {
             return Some(entry_datetime_seconds(e));
         }
     }
@@ -78,7 +78,7 @@ fn jset_datetime(p: &c::journal_replay) -> Option<u64> {
 /// Scan a jset for its first BCH_JSET_ENTRY_rewind_limit and return the seq.
 fn jset_rewind_limit(p: &c::journal_replay) -> Option<u64> {
     for e in jset_entries(&p.j) {
-        if entry_type(e) == Some(c::bch_jset_entry_type::BCH_JSET_ENTRY_rewind_limit) {
+        if entry_type(e) == c::bch_jset_entry_type::BCH_JSET_ENTRY_rewind_limit {
             return Some(entry_rewind_limit_seq(e));
         }
     }

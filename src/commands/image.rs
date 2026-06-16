@@ -84,12 +84,12 @@ fn set_data_allowed_for_image_update(fs: &Fs) {
     let _lock = fs.sb_lock();
 
     let m0 = unsafe { fs.member_mut(0) };
-    m0.set_member_data_allowed(1 << c::bch_data_type::BCH_DATA_user as u64);
+    m0.set_member_data_allowed(c::bch_data_type::BCH_DATA_user.bit());
 
     let m1 = unsafe { fs.member_mut(1) };
     m1.set_member_data_allowed(
-        (1 << c::bch_data_type::BCH_DATA_journal as u64)
-            | (1 << c::bch_data_type::BCH_DATA_btree as u64),
+        c::bch_data_type::BCH_DATA_journal.bit()
+            | c::bch_data_type::BCH_DATA_btree.bit(),
     );
 
     fs.write_super();
@@ -148,7 +148,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
             continue;
         }
 
-        let btree_id = unsafe { std::mem::transmute::<u32, c::btree_id>(btree) };
+        let btree_id = c::btree_id::from_raw(btree).expect("invalid btree id");
 
         for level in 1..BTREE_MAX_DEPTH {
             unsafe {
@@ -209,19 +209,15 @@ fn print_data_type_usage(
     out: &mut Printbuf,
     ca: &c::bch_dev,
     usage: &c::bch_dev_usage_full,
-    data_type: u32,
+    data_type: c::bch_data_type,
 ) {
-    let d = &usage.d[data_type as usize];
+    let d = &usage.d[data_type.0 as usize];
     if d.buckets != 0 {
-        bch_bindgen::accounting::prt_data_type(out, unsafe {
-            std::mem::transmute::<u32, c::bch_data_type>(data_type)
-        });
+        bch_bindgen::accounting::prt_data_type(out, data_type);
         prt_sectors(out, bucket_to_sector(ca, d.buckets));
     }
     if d.fragmented != 0 {
-        bch_bindgen::accounting::prt_data_type(out, unsafe {
-            std::mem::transmute::<u32, c::bch_data_type>(data_type)
-        });
+        bch_bindgen::accounting::prt_data_type(out, data_type);
         write!(out, " fragmented").ok();
         prt_sectors(out, d.fragmented);
     }
@@ -235,9 +231,9 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     let usage = fs.dev_usage_full_read(0);
     let ca = unsafe { &*fs.dev_raw(0) };
 
-    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_sb as u32);
-    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_journal as u32);
-    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_btree as u32);
+    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_sb);
+    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_journal);
+    print_data_type_usage(&mut buf, ca, &usage, c::bch_data_type::BCH_DATA_btree);
 
     {
         let mut indented = buf.indent(2);
@@ -252,7 +248,12 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
             let v = fs.accounting_mem_read(acc_pos.as_bpos(), 1);
 
             if v[0] != 0 {
-                unsafe { c::bch2_btree_id_to_text(indented.as_raw(), std::mem::transmute::<u32, c::btree_id>(i)) };
+                unsafe {
+                    c::bch2_btree_id_to_text(
+                        indented.as_raw(),
+                        c::btree_id::from_raw(i).expect("invalid btree id"),
+                    )
+                };
                 prt_sectors(&mut indented, v[0]);
             }
         }
@@ -275,7 +276,7 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
     write!(&mut buf, "user").ok();
     prt_sectors(&mut buf, v[0]);
 
-    let user_idx = c::bch_data_type::BCH_DATA_user as usize;
+    let user_idx = c::bch_data_type::BCH_DATA_user.0 as usize;
     if usage.d[user_idx].fragmented != 0 {
         write!(&mut buf, "user fragmented").ok();
         prt_sectors(&mut buf, usage.d[user_idx].fragmented);
@@ -285,10 +286,10 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
 
     // Compression stats
     let mut compression_header = false;
-    let comp_nr = c::bch_compression_type::BCH_COMPRESSION_TYPE_NR as u32;
+    let comp_nr = u32::from(c::bch_compression_type::BCH_COMPRESSION_TYPE_NR);
     for i in 1..comp_nr {
         let acc_pos = DiskAccountingKind::Compression {
-            compression_type: unsafe { std::mem::transmute::<u32, c::bch_compression_type>(i) },
+            compression_type: c::bch_compression_type(i),
         }
         .encode();
 
@@ -307,15 +308,13 @@ fn print_image_usage(fs: &Fs, keep_alloc: bool, nbuckets: u64) {
         let sectors_uncompressed = v[1];
         let sectors_compressed = v[2];
 
-        bch_bindgen::accounting::prt_compression_type(&mut buf, unsafe {
-            std::mem::transmute::<u32, c::bch_compression_type>(i)
-        });
+        bch_bindgen::accounting::prt_compression_type(&mut buf, c::bch_compression_type(i));
         write!(&mut buf, "\t").ok();
 
         buf.human_readable_u64(sectors_compressed << 9);
         write!(&mut buf, "\r").ok();
 
-        if i == c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible as u32 {
+        if i == u32::from(c::bch_compression_type::BCH_COMPRESSION_TYPE_incompressible) {
             buf.newline();
             continue;
         }
@@ -353,7 +352,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     {
         let _lock = fs.sb_lock();
         let m = unsafe { fs.member_mut(0) };
-        let allowed = m.member_data_allowed() | (1 << c::bch_data_type::BCH_DATA_btree as u64);
+        let allowed = m.member_data_allowed() | c::bch_data_type::BCH_DATA_btree.bit();
         m.set_member_data_allowed(allowed);
         fs.write_super();
     }
@@ -393,7 +392,7 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
 
     // Allow journal on primary device
     let m = unsafe { fs.member_mut(0) };
-    let allowed = m.member_data_allowed() | (1 << c::bch_data_type::BCH_DATA_journal as u64);
+    let allowed = m.member_data_allowed() | c::bch_data_type::BCH_DATA_journal.bit();
     m.set_member_data_allowed(allowed);
 
     // Set nbuckets
@@ -457,15 +456,15 @@ fn image_create_inner(
 
     {
         let dev0_opts = &mut devs[0].opts;
-        opt_set!(dev0_opts, data_allowed, (1u64 << c::bch_data_type::BCH_DATA_user as u64) as u8);
+        opt_set!(dev0_opts, data_allowed, c::bch_data_type::BCH_DATA_user.bit() as u8);
     }
     {
         let meta_opts = &mut meta_dev.opts;
         opt_set!(
             meta_opts,
             data_allowed,
-            ((1u64 << c::bch_data_type::BCH_DATA_journal as u64)
-                | (1u64 << c::bch_data_type::BCH_DATA_btree as u64)) as u8
+            (c::bch_data_type::BCH_DATA_journal.bit()
+                | c::bch_data_type::BCH_DATA_btree.bit()) as u8
         );
     }
     devs.push(meta_dev);
@@ -497,7 +496,7 @@ fn image_create_inner(
                 std::ptr::null_mut(),
                 &*sb,
                 false,
-                1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32,
+                c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit(),
             );
         }
         print!("{}", buf);

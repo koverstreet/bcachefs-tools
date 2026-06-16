@@ -9,7 +9,6 @@ use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bch_bindgen::printbuf::Printbuf;
 use crate::wrappers::sysfs::{self, DevInfo, bcachefs_kernel_version};
 
-use c::bch_data_type::*;
 use c::disk_accounting_type::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -416,7 +415,7 @@ fn replicas_summary_to_text(
                 reserved += entry.counter(0);
             }
             DiskAccountingKind::Replicas { data_type, nr_devs, nr_required, devs: dev_list } => {
-                if data_type == BCH_DATA_cached {
+                if data_type == c::bch_data_type::BCH_DATA_cached {
                     cached += entry.counter(0);
                     continue;
                 }

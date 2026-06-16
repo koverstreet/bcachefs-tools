@@ -103,15 +103,15 @@ pub unsafe fn sb_to_text_with_names(
     let sb_ptr = sb as *const c::bch_sb as *mut c::bch_sb;
 
     if field_only >= 0 {
-        let f = c::bch2_sb_field_get_id(sb_ptr, std::mem::transmute::<u32, c::bch_sb_field_type>(field_only as u32));
+        let f = c::bch2_sb_field_get_id(sb_ptr, c::bch_sb_field_type(field_only as u32));
         if !f.is_null() {
             c::__bch2_sb_field_to_text(out.as_raw(), fs, sb_ptr, f);
         }
     } else {
         out.tabstop_push(44);
 
-        let member_mask = (1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32)
-            | (1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32);
+        let member_mask = c::bch_sb_field_type::BCH_SB_FIELD_members_v1.bit()
+            | c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit();
         c::bch2_sb_to_text(out.as_raw(), fs, sb_ptr, print_layout, fields & !member_mask);
 
         let gi: *mut c::bch_sb_field_disk_groups =
@@ -120,7 +120,7 @@ pub unsafe fn sb_to_text_with_names(
                 .unwrap_or(std::ptr::null_mut());
 
         // members_v1
-        if (fields & (1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32)) != 0 {
+        if (fields & c::bch_sb_field_type::BCH_SB_FIELD_members_v1.bit()) != 0 {
             if let Some(mi1) = sb::members_v1(sb) {
                 for i in 0..mi1.nr_devices() {
                     if let Some(mut m) = mi1.get(i) {
@@ -131,7 +131,7 @@ pub unsafe fn sb_to_text_with_names(
         }
 
         // members_v2
-        if (fields & (1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32)) != 0 {
+        if (fields & c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit()) != 0 {
             if let Some(mi2) = sb::members_v2(sb) {
                 for i in 0..mi2.nr_devices() {
                     if let Some(mut m) = mi2.get(i) {

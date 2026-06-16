@@ -107,14 +107,13 @@ pub fn jset_entry_keys(entry: &c::jset_entry) -> JsetEntryKeyIter<'_> {
 
 // ---- entry type conversion ----
 
-/// Convert entry type byte to the enum, if it's a known type.
-pub fn entry_type(entry: &c::jset_entry) -> Option<c::bch_jset_entry_type> {
-    let raw = entry.type_ as u32;
-    if raw < c::bch_jset_entry_type::BCH_JSET_ENTRY_NR as u32 {
-        Some(unsafe { std::mem::transmute::<u32, c::bch_jset_entry_type>(raw) })
-    } else {
-        None
-    }
+/// Convert entry type byte to the raw journal entry type.
+pub fn entry_type(entry: &c::jset_entry) -> c::bch_jset_entry_type {
+    c::bch_jset_entry_type(entry.type_ as u32)
+}
+
+pub fn entry_type_is_known(t: c::bch_jset_entry_type) -> bool {
+    t.0 < c::bch_jset_entry_type::BCH_JSET_ENTRY_NR.0
 }
 
 /// Convert entry btree_id byte to the enum, if it's a known btree.
