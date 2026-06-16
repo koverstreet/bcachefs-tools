@@ -1,6 +1,9 @@
 use crate::c;
 use std::marker::PhantomData;
 
+#[allow(non_camel_case_types)]
+pub type journal_entry_type = c::bch_jset_entry_type;
+
 // ---- vstruct pointer arithmetic ----
 
 /// jset_entry is 8 bytes; _data is at offset 0 (u64 flexible array).
@@ -113,7 +116,7 @@ pub fn entry_type(entry: &c::jset_entry) -> c::bch_jset_entry_type {
 }
 
 pub fn entry_type_is_known(t: c::bch_jset_entry_type) -> bool {
-    t.0 < c::bch_jset_entry_type::BCH_JSET_ENTRY_NR.0
+    t.0 < journal_entry_type::nr.0
 }
 
 /// Convert entry btree_id byte to the enum, if it's a known btree.

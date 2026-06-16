@@ -2,14 +2,15 @@ use std::fmt::Write as FmtWrite;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::c;
+use bch_bindgen::metadata_version;
 use clap::Parser;
 
-use crate::wrappers::accounting::{self, AccountingEntry, DiskAccountingKind, data_type_is_empty};
+use crate::wrappers::accounting::{
+    self, AccountingEntry, DiskAccountingKind, data_type, data_type_is_empty, disk_accounting_type,
+};
 use crate::wrappers::handle::{BcachefsHandle, DevUsage};
 use bch_bindgen::printbuf::Printbuf;
 use crate::wrappers::sysfs::{self, DevInfo, bcachefs_kernel_version};
-
-use c::disk_accounting_type::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "snake_case")]
@@ -102,23 +103,23 @@ fn fs_usage_v1_to_text(
     let has = |f: Field| -> bool { fields.contains(&f) };
 
     let mut accounting_types: u32 =
-        (1 << BCH_DISK_ACCOUNTING_replicas as u32) |
-        (1 << BCH_DISK_ACCOUNTING_persistent_reserved as u32);
+        disk_accounting_type::replicas.bit()
+            | disk_accounting_type::persistent_reserved.bit();
 
     if has(Field::Compression) {
-        accounting_types |= 1 << BCH_DISK_ACCOUNTING_compression as u32;
+        accounting_types |= disk_accounting_type::compression.bit();
     }
     if has(Field::Btree) {
-        accounting_types |= 1 << BCH_DISK_ACCOUNTING_btree as u32;
+        accounting_types |= disk_accounting_type::btree.bit();
     }
     if has(Field::RebalanceWork) {
         let version_reconcile =
-            c::bcachefs_metadata_version::bcachefs_metadata_version_reconcile as u64;
+            u32::from(metadata_version::reconcile) as u64;
         if bcachefs_kernel_version() < version_reconcile {
-            accounting_types |= 1 << BCH_DISK_ACCOUNTING_rebalance_work as u32;
+            accounting_types |= disk_accounting_type::rebalance_work.bit();
         } else {
-            accounting_types |= 1 << BCH_DISK_ACCOUNTING_reconcile_work as u32;
-            accounting_types |= 1 << BCH_DISK_ACCOUNTING_dev_leaving as u32;
+            accounting_types |= disk_accounting_type::reconcile_work.bit();
+            accounting_types |= disk_accounting_type::dev_leaving.bit();
         }
     }
 
@@ -188,7 +189,7 @@ fn fs_usage_v1_to_text(
     // Compression
     if has(Field::Compression) {
         let compr: Vec<_> = sorted.iter()
-            .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_compression))
+            .filter(|e| e.pos.accounting_type() == Some(disk_accounting_type::compression))
             .collect();
         if !compr.is_empty() {
             out.aligned(|sub| {
@@ -223,7 +224,7 @@ fn fs_usage_v1_to_text(
     // Btree usage
     if has(Field::Btree) {
         let btrees: Vec<_> = sorted.iter()
-            .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_btree))
+            .filter(|e| e.pos.accounting_type() == Some(disk_accounting_type::btree))
             .collect();
         if !btrees.is_empty() {
             out.aligned(|sub| {
@@ -242,7 +243,7 @@ fn fs_usage_v1_to_text(
     // Rebalance / reconcile work
     if has(Field::RebalanceWork) {
         let rebalance: Vec<_> = sorted.iter()
-            .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_rebalance_work))
+            .filter(|e| e.pos.accounting_type() == Some(disk_accounting_type::rebalance_work))
             .collect();
         if !rebalance.is_empty() {
             write!(out, "\nPending rebalance work:\n").unwrap();
@@ -253,7 +254,7 @@ fn fs_usage_v1_to_text(
         }
 
         let reconcile: Vec<_> = sorted.iter()
-            .filter(|e| e.pos.accounting_type() == Some(BCH_DISK_ACCOUNTING_reconcile_work))
+            .filter(|e| e.pos.accounting_type() == Some(disk_accounting_type::reconcile_work))
             .collect();
         if !reconcile.is_empty() {
             out.aligned(|sub| {
@@ -415,7 +416,7 @@ fn replicas_summary_to_text(
                 reserved += entry.counter(0);
             }
             DiskAccountingKind::Replicas { data_type, nr_devs, nr_required, devs: dev_list } => {
-                if data_type == c::bch_data_type::BCH_DATA_cached {
+                if data_type == data_type::cached {
                     cached += entry.counter(0);
                     continue;
                 }
@@ -487,7 +488,7 @@ fn devs_usage_to_text(
     let has = |f: Field| -> bool { fields.contains(&f) };
 
     // Query dev_leaving accounting if available
-    let dev_leaving_map = match handle.query_accounting(1 << BCH_DISK_ACCOUNTING_dev_leaving as u32) {
+    let dev_leaving_map = match handle.query_accounting(disk_accounting_type::dev_leaving.bit()) {
         Ok(result) => result.entries,
         Err(_) => Vec::new(),
     };

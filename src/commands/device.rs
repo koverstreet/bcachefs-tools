@@ -9,10 +9,10 @@ use bch_bindgen::c::{
     self,
     bch_degraded_actions,
     bch_member_state::*,
-    bcachefs_metadata_version::bcachefs_metadata_version_reconcile,
     BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
 };
 use bch_bindgen::fs::Fs;
+use bch_bindgen::metadata_version;
 use bch_bindgen::opt_set;
 use bch_bindgen::path_to_cstr;
 use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
@@ -547,11 +547,14 @@ pub struct EvacuateCli {
 
 fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
 
-    if bcachefs_kernel_version() < bcachefs_metadata_version_reconcile as u64 {
+    let version_reconcile =
+        u32::from(metadata_version::reconcile) as u64;
+
+    if bcachefs_kernel_version() < version_reconcile {
         return Err(anyhow!(
             "Kernel too old for Rust evacuate path; \
              need bcachefs metadata version >= {} (reconcile)",
-            bcachefs_metadata_version_reconcile as u64
+            version_reconcile
         ));
     }
 
@@ -561,7 +564,7 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     // Reconcile drives evacuation — check the filesystem has been upgraded
     let sb_ver = handle.sb_version()
         .context("reading filesystem superblock")?;
-    if (sb_ver as u64) < bcachefs_metadata_version_reconcile as u64 {
+    if (sb_ver as u64) < version_reconcile {
         return Err(anyhow!(
             "Filesystem has not been upgraded to the reconcile version.\n\
              Device evacuation requires reconcile. Remount with:\n  \
