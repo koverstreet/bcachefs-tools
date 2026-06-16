@@ -91,7 +91,7 @@ fn do_splice(rfd: BorrowedFd, wfd: BorrowedFd) -> io::Result<bool> {
         match rustix::io::write(wfd, &buf[off..n]) {
             Ok(w) => off += w,
             Err(rustix::io::Errno::AGAIN) => {
-                poll(&mut [PollFd::new(&wfd, PollFlags::OUT)], -1)?;
+                poll(&mut [PollFd::new(&wfd, PollFlags::OUT)], None)?;
             }
             Err(e) => return Err(e.into()),
         }
@@ -113,7 +113,7 @@ fn splice_fd_to_stdinout(fd: BorrowedFd) -> i32 {
         if !stdin_closed {
             pollfds.push(PollFd::new(&stdin, PollFlags::IN));
         }
-        let _ = poll(&mut pollfds, -1);
+        let _ = poll(&mut pollfds, None);
 
         match do_splice(fd, stdout.as_fd()) {
             Ok(true) => break,

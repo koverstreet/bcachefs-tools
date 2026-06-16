@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::{btree, btree_id};
@@ -42,11 +42,6 @@ fn mode_to_type(mode: u32) -> u8 {
 
 fn ret_to_result(ret: i32) -> Result<(), BchError> {
     errcode::ret_to_result(ret).map(|_| ())
-}
-
-/// Convert the last OS error (errno) into a BchError.
-fn last_err() -> BchError {
-    BchError::from_raw(-std::io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO))
 }
 
 /// Convert a rustix error into a BchError.
@@ -355,12 +350,12 @@ fn xattr_resolve_name(name: &[u8]) -> Option<(i32, &[u8])> {
     }
 }
 
-fn copy_times(fs: &Fs, dst: &mut c::bch_inode_unpacked, src: &libc::stat) {
+fn copy_times(fs: &Fs, dst: &mut c::bch_inode_unpacked, src: &rustix::fs::Stat) {
     let make_ts = |sec, nsec| c::timespec { tv_sec: sec, tv_nsec: nsec };
     unsafe {
-        dst.bi_atime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_atime, src.st_atime_nsec)) as u64;
-        dst.bi_mtime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_mtime, src.st_mtime_nsec)) as u64;
-        dst.bi_ctime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_ctime, src.st_ctime_nsec)) as u64;
+        dst.bi_atime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_atime, src.st_atime_nsec as _)) as u64;
+        dst.bi_mtime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_mtime, src.st_mtime_nsec as _)) as u64;
+        dst.bi_ctime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_ctime, src.st_ctime_nsec as _)) as u64;
     }
 }
 
@@ -370,16 +365,20 @@ fn copy_xattrs(
     src: &CStr,
 ) -> Result<(), BchError> {
     let mut attrs_buf = vec![0u8; 65536]; // XATTR_LIST_MAX
-    let attrs_size = unsafe {
-        libc::llistxattr(src.as_ptr(), attrs_buf.as_mut_ptr() as *mut libc::c_char, attrs_buf.len())
+    let attrs_size = match rustix::fs::llistxattr(src, &mut attrs_buf) {
+        Ok(n) => n,
+        Err(_) => {
+            return Ok(()); // silently skip if xattrs not supported
+        }
     };
-    if attrs_size < 0 {
+
+    if attrs_size == 0 {
         return Ok(()); // silently skip if xattrs not supported
     }
 
     let mut pos = 0usize;
-    while pos < attrs_size as usize {
-        let end = attrs_buf[pos..].iter().position(|&b| b == 0).unwrap() + pos;
+    while pos < attrs_size {
+        let end = attrs_buf[pos..attrs_size].iter().position(|&b| b == 0).unwrap() + pos;
         let attr_name = &attrs_buf[pos..end];
         pos = end + 1;
 
@@ -390,17 +389,10 @@ fn copy_xattrs(
 
         let mut val_buf = vec![0u8; 65536]; // XATTR_SIZE_MAX
         let attr_cstr = CString::new(attr_name).unwrap();
-        let val_size = unsafe {
-            libc::lgetxattr(
-                src.as_ptr(),
-                attr_cstr.as_ptr(),
-                val_buf.as_mut_ptr() as *mut libc::c_void,
-                val_buf.len(),
-            )
+        let val_size = match rustix::fs::lgetxattr(src, &attr_cstr, &mut val_buf) {
+            Ok(n) => n,
+            Err(_) => continue,
         };
-        if val_size < 0 {
-            continue;
-        }
 
         let stripped_cstr = CString::new(stripped).unwrap();
 
@@ -417,7 +409,7 @@ fn copy_xattrs(
                         dst,
                         stripped_cstr.as_ptr(),
                         val_buf.as_ptr() as *const std::ffi::c_void,
-                        val_size as usize,
+                        val_size,
                         xattr_type,
                         0,
                     )
@@ -633,11 +625,11 @@ fn align_range(r: Range, bs: u64) -> Range {
 
 fn seek_data(fd: BorrowedFd, i_size: u64, offset: u64) -> Range {
     use rustix::fs::{seek, SeekFrom};
-    let s = match seek(fd, SeekFrom::Data(offset as i64)) {
+    let s = match seek(fd, SeekFrom::Data(offset)) {
         Ok(s) => s,
         Err(_) => return Range { start: 0, end: 0 },
     };
-    let e = seek(fd, SeekFrom::Hole(s as i64)).unwrap_or(i_size);
+    let e = seek(fd, SeekFrom::Hole(s)).unwrap_or(i_size);
     Range { start: s, end: e }
 }
 
@@ -889,7 +881,7 @@ struct DirEntryInfo {
     _inum:  u64,
     dtype:  u8,
     name:   CString,
-    stat:   libc::stat,
+    stat:   rustix::fs::Stat,
 }
 
 fn copy_dir(
@@ -910,13 +902,14 @@ fn copy_dir(
 
         let name = entry.file_name();
 
-        let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-        let ret = unsafe {
-            libc::fstatat(src_fd.as_raw_fd(), name.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW)
+        let stat = match rustix::fs::statat(
+            &src_fd,
+            name,
+            rustix::fs::AtFlags::SYMLINK_NOFOLLOW,
+        ) {
+            Ok(stat) => stat,
+            Err(_) => continue,
         };
-        if ret < 0 {
-            continue;
-        }
 
         dirents.push(DirEntryInfo {
             _inum: entry.ino(),
@@ -940,7 +933,7 @@ fn copy_dir(
     let oflags = rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::NOATIME;
 
     for d in &dirents {
-        unsafe { libc::fchdir(src_fd.as_raw_fd()) };
+        rustix::process::fchdir(&src_fd).map_err(rustix_err)?;
 
         let name_str = d.name.to_str().unwrap_or("?");
         if name_str == "." || name_str == ".." || name_str == "lost+found" {
@@ -1068,9 +1061,8 @@ pub fn copy_fs(
     src_fd: BorrowedFd,
     src_path: &CStr,
 ) -> Result<(), BchError> {
-    let raw_fd = src_fd.as_raw_fd();
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    if unsafe { libc::fstat(raw_fd, &mut stat) } < 0 || (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR {
+    let stat = rustix::fs::fstat(src_fd).map_err(rustix_err)?;
+    if (stat.st_mode & libc::S_IFMT) != libc::S_IFDIR {
         eprintln!("{} is not a directory", src_path.to_string_lossy());
         return Err(BchError::from_raw(-libc::ENOTDIR));
     }
@@ -1088,9 +1080,7 @@ pub fn copy_fs(
         )
     })?;
 
-    if unsafe { libc::fchdir(raw_fd) } < 0 {
-        return Err(last_err());
-    }
+    rustix::process::fchdir(src_fd).map_err(rustix_err)?;
 
     copy_times(fs, &mut root_inode, &stat);
 

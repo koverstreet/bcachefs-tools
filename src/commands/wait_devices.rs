@@ -56,7 +56,7 @@ fn cmd_wait_devices(cli: Cli) -> anyhow::Result<()> {
         let socket_fd = unsafe { BorrowedFd::borrow_raw(socket.as_raw_fd()) };
 
         let mut fds = [PollFd::new(&socket_fd, PollFlags::IN)];
-        poll(&mut fds, -1)?;
+        poll(&mut fds, None)?;
         if fds.iter().any(|fd| fd.revents().contains(PollFlags::ERR)) {
             bail!("error on udev socket fd");
         }
