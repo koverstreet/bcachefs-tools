@@ -28,6 +28,7 @@ use bch_bindgen::c;
 use bch_bindgen::data::io::block_on;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::inode;
 use bcachefs_kernel::opt_set;
 
 use crate::util::AlignedBuf;
@@ -139,6 +140,11 @@ fn err(ret: i32) -> Errno {
 /// Convert a BchError to a fuser Errno.
 fn bch_err(e: &BchError) -> Errno {
     Errno::from_i32(e.errno())
+}
+
+fn start_fs(raw: *mut c::bch_fs) -> Result<(), BchError> {
+    let fs = unsafe { Fs::borrow_raw(raw) };
+    fs.start()
 }
 
 struct BcachefsFs {
@@ -259,7 +265,8 @@ impl Filesystem for BcachefsFs {
         let inum = map_root_ino(ino);
         eprintln!("fuse_getattr(inum={})", inum.inum);
 
-        let bi = match self.fs().inode_find_by_inum(inum) {
+        let fs = self.fs();
+        let bi = match inode::find_by_inum(&fs, inum) {
             Ok(bi) => bi,
             Err(e) => {
                 eprintln!("  getattr -> err {}", e.raw());
@@ -342,7 +349,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_readlink(inum={})", inum.inum);
 
         let fs = self.fs();
-        let bi = match fs.inode_find_by_inum(inum) {
+        let bi = match inode::find_by_inum(&fs, inum) {
             Ok(bi) => bi,
             Err(e) => { reply.error(bch_err(&e)); return; }
         };
@@ -485,7 +492,8 @@ impl Filesystem for BcachefsFs {
         }
 
         // Re-read inode to get updated state
-        let new_inode = match self.fs().inode_find_by_inum(sym_inum) {
+        let fs = self.fs();
+        let new_inode = match inode::find_by_inum(&fs, sym_inum) {
             Ok(bi) => bi,
             Err(e) => { reply.error(bch_err(&e)); return; }
         };
@@ -583,7 +591,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_read(ino={}, offset={}, size={})", inum.inum, offset, size);
 
         let fs = self.fs();
-        let bi = match fs.inode_find_by_inum(inum) {
+        let bi = match inode::find_by_inum(&fs, inum) {
             Ok(bi) => bi,
             Err(e) => { reply.error(bch_err(&e)); return; }
         };
@@ -629,7 +637,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_write(ino={}, offset={}, size={})", inum.inum, offset, size);
 
         let fs = self.fs();
-        let bi = match fs.inode_find_by_inum(inum) {
+        let bi = match inode::find_by_inum(&fs, inum) {
             Ok(bi) => bi,
             Err(e) => { reply.error(bch_err(&e)); return; }
         };
@@ -671,8 +679,7 @@ impl Filesystem for BcachefsFs {
         buf[pad_start..pad_start + size].copy_from_slice(data);
 
         // Get inode opts for replicas
-        let mut opts: c::bch_inode_opts = Default::default();
-        unsafe { c::bch2_inode_opts_get_inode(self.c, &bi as *const _ as *mut _, &mut opts) };
+        let opts = inode::opts_get_inode(&fs, &bi);
         let replicas = std::cmp::max(opts.data_replicas as u32, 1);
 
         // Write aligned buffer
@@ -873,10 +880,9 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     if cli.foreground {
         unsafe { c::linux_shrinkers_init() };
-        let ret = unsafe { c::bch2_fs_start(fs_raw) };
-        if ret != 0 {
+        if let Err(e) = start_fs(fs_raw) {
             unsafe { c::bch2_fs_exit(fs_raw) };
-            anyhow::bail!("Error starting filesystem: {}", ret);
+            anyhow::bail!("Error starting filesystem: {}", e);
         }
         let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: None };
         fuser::mount2(bcachefs_fs, &cli.mountpoint, &config)?;
@@ -927,9 +933,8 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     unsafe { c::linux_shrinkers_init() };
 
     eprintln!("fusemount: starting filesystem");
-    let ret = unsafe { c::bch2_fs_start(fs_raw) };
-    if ret != 0 {
-        eprintln!("fusemount: bch2_fs_start failed: {}", BchError::from_raw(-ret));
+    if let Err(e) = start_fs(fs_raw) {
+        eprintln!("fusemount: bch2_fs_start failed: {}", e);
         unsafe { c::bch2_fs_exit(fs_raw) };
         signal_parent(write_fd, 1);
         std::process::exit(1);

@@ -3,6 +3,7 @@
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::{btree, btree_id};
 
 pub fn find_by_inum(
     fs:   &Fs,
@@ -19,6 +20,39 @@ pub fn init_early(fs: &Fs, inode: &mut c::bch_inode_unpacked) {
     unsafe { c::bch2_inode_init_early(fs.raw, inode) };
 }
 
+pub fn opts_get_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> c::bch_inode_opts {
+    let mut opts: c::bch_inode_opts = Default::default();
+    unsafe {
+        c::bch2_inode_opts_get_inode(fs.raw, inode as *const _ as *mut _, &mut opts);
+    }
+    opts
+}
+
 pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     ret_to_result(unsafe { c::bch2_inode_rm(fs.raw, inum) })
+}
+
+pub fn fsck_write_inode(
+    trans: &btree::iter::BtreeTrans,
+    inode: &mut c::bch_inode_unpacked,
+) -> Result<(), BchError> {
+    ret_to_result(unsafe {
+        c::bch2_fsck_write_inode(trans.raw(), inode)
+    })
+}
+
+pub fn insert_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
+    unsafe {
+        let mut packed: c::bkey_inode_buf = Default::default();
+        c::bch2_inode_pack(fs.raw, &mut packed, inode);
+        packed.inode.__bindgen_anon_1.k.as_mut().p.snapshot = u32::MAX;
+        ret_to_result(c::bch2_btree_insert(
+            fs.raw,
+            btree_id::inodes,
+            packed.inode.__bindgen_anon_1.k_i.as_mut(),
+            core::ptr::null_mut(),
+            c::bch_trans_commit_flags(0u32),
+            c::btree_iter_update_trigger_flags::BTREE_ITER_cached,
+        ))
+    }
 }
