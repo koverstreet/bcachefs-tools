@@ -1,9 +1,5 @@
 use crate::c;
-use crate::errcode::{self, BchError};
-
-fn ret_to_result(ret: i32) -> Result<(), BchError> {
-    errcode::ret_to_result(ret).map(|_| ())
-}
+use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use core::ops::ControlFlow;
 
 /// RAII guard for a device reference. Calls bch2_dev_put on drop.

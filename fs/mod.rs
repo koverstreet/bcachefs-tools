@@ -24,12 +24,17 @@
 
 #[path = "alloc/accounting.rs"] pub mod accounting;
 pub mod btree;
+#[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
+#[path = "fs/inode.rs"]        pub mod inode;
 #[path = "journal/read.rs"]     pub mod journal;
+#[path = "fs/namei.rs"]        pub mod namei;
 pub mod sb;
+#[path = "fs/str_hash.rs"]     pub mod str_hash;
 pub mod util;
 pub mod data {
     pub mod extents;
+    pub mod io_misc;
 }
 pub mod errcode;
 pub mod opts;
