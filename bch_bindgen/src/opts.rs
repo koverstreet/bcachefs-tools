@@ -2,6 +2,9 @@ use crate::c;
 use crate::fs::Fs;
 use std::ffi::{CStr, CString, c_char};
 
+#[allow(non_camel_case_types)]
+pub type opt_id = c::bch_opt_id;
+
 /// Return the opt table as a proper slice.
 ///
 /// bindgen generates `bch2_opt_table` as a zero-length array since it can't
@@ -10,7 +13,7 @@ pub fn opt_table() -> &'static [c::bch_option] {
     unsafe {
         std::slice::from_raw_parts(
             c::bch2_opt_table.as_ptr(),
-            c::bch_opt_id::bch2_opts_nr as usize,
+            opt_id::nr.0 as usize,
         )
     }
 }
@@ -55,9 +58,8 @@ macro_rules! opt_get {
 ///
 /// Panics if idx >= bch2_opts_nr (i.e. out of the opt_table range).
 pub fn opt_id(idx: usize) -> c::bch_opt_id {
-    assert!(idx < c::bch_opt_id::bch2_opts_nr as usize);
-    // SAFETY: idx is in 0..bch2_opts_nr, the valid range for bch_opt_id
-    unsafe { std::mem::transmute(idx as u32) }
+    assert!(idx < opt_id::nr.0 as usize);
+    c::bch_opt_id(idx as u32)
 }
 
 /// Check whether an option is explicitly defined in the opts struct.

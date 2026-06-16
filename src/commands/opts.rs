@@ -157,7 +157,7 @@ pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::bch_opt_id, &'static c::
 pub fn bch_opt_lookup(name: &str) -> Option<(c::bch_opt_id, &'static c::bch_option)> {
     let c_name = std::ffi::CString::new(name).ok()?;
     let id = unsafe { c::bch2_opt_lookup(c_name.as_ptr()) };
-    if id < 0 || id as u32 >= c::bch_opt_id::bch2_opts_nr as u32 {
+    if id < 0 || id as u32 >= bch_bindgen::opt_id::nr.0 {
         return None;
     }
     let opt_id = bch_bindgen::opts::opt_id(id as usize);

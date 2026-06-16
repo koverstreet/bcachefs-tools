@@ -7,6 +7,7 @@ use bch_bindgen::bcachefs;
 use bch_bindgen::c;
 use bch_bindgen::opt_set;
 use bch_bindgen::sb::io as sb_io;
+use bch_bindgen::sb::sb_field_type;
 use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
@@ -219,8 +220,8 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     }
 
     unsafe {
-        c::bch2_sb_field_delete(&mut src_sb, c::bch_sb_field_type::BCH_SB_FIELD_journal);
-        c::bch2_sb_field_delete(&mut src_sb, c::bch_sb_field_type::BCH_SB_FIELD_journal_v2);
+        c::bch2_sb_field_delete(&mut src_sb, sb_field_type::journal);
+        c::bch2_sb_field_delete(&mut src_sb, sb_field_type::journal_v2);
     }
     src_sb.sb_mut().dev_idx = dev_idx as u8;
 
@@ -296,7 +297,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
             std::ptr::null_mut(),
             buf_as_sb(&sb_buf),
             true,
-            c::bch_sb_field_type::BCH_SB_FIELD_members_v2.bit(),
+            sb_field_type::members_v2.bit(),
         );
     }
     println!("Found superblock:\n{}", buf);

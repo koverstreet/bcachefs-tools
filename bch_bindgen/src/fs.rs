@@ -171,7 +171,7 @@ impl Fs {
     pub fn btree_id_root(&self, id: u32) -> Option<&c::btree> {
         unsafe {
             let c = &*self.raw;
-            let nr_known = c::btree_id::BTREE_ID_NR as u32;
+            let nr_known = u32::from(c::btree_id::nr);
 
             let r = if id < nr_known {
                 &c.btree.cache.roots_known[id as usize]
@@ -192,7 +192,7 @@ impl Fs {
     pub fn btree_id_nr_alive(&self) -> u32 {
         unsafe {
             let c = &*self.raw;
-            c::btree_id::BTREE_ID_NR as u32 + c.btree.cache.roots_extra.nr as u32
+            u32::from(c::btree_id::nr) + c.btree.cache.roots_extra.nr as u32
         }
     }
 
@@ -402,20 +402,19 @@ pub fn dev_to_target(dev: u32) -> u16 {
 
 /// Check if a btree ID is an allocator btree.
 pub fn btree_id_is_alloc(id: u32) -> bool {
-    use c::btree_id::*;
     matches!(
         c::btree_id::from_raw(id),
-        Some(BTREE_ID_alloc
-            | BTREE_ID_backpointers
-            | BTREE_ID_stripe_backpointers
-            | BTREE_ID_need_discard
-            | BTREE_ID_freespace
-            | BTREE_ID_bucket_gens
-            | BTREE_ID_lru
-            | BTREE_ID_accounting
-            | BTREE_ID_reconcile_work
-            | BTREE_ID_reconcile_hipri
-            | BTREE_ID_reconcile_pending
-            | BTREE_ID_reconcile_scan)
+        Some(c::btree_id::alloc
+            | c::btree_id::backpointers
+            | c::btree_id::stripe_backpointers
+            | c::btree_id::need_discard
+            | c::btree_id::freespace
+            | c::btree_id::bucket_gens
+            | c::btree_id::lru
+            | c::btree_id::accounting
+            | c::btree_id::reconcile_work
+            | c::btree_id::reconcile_hipri
+            | c::btree_id::reconcile_pending
+            | c::btree_id::reconcile_scan)
     )
 }

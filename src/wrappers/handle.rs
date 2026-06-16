@@ -5,7 +5,6 @@ use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
 
 use bch_bindgen::c::{
-    bch_data_type,
     bch_ioctl_dev_usage, bch_ioctl_dev_usage_v2,
     bch_ioctl_dev_usage_bch_ioctl_dev_usage_type,
     bch_ioctl_disk, bch_ioctl_disk_v2,
@@ -15,6 +14,7 @@ use bch_bindgen::c::{
     bch_ioctl_subvolume, bch_ioctl_subvolume_v2,
     BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE,
 };
+use bch_bindgen::accounting::data_type;
 use crate::wrappers::ioctl::{bch_ioc_w, bch_ioc_wr};
 use crate::wrappers::sysfs;
 use bch_bindgen::c::bch_sb;
@@ -470,7 +470,7 @@ impl BcachefsHandle {
 
     /// Query device usage (v2 with flex array, v1 fallback).
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
-        let nr_data_types = bch_data_type::BCH_DATA_NR.0 as usize;
+        let nr_data_types = data_type::nr.0 as usize;
         let entry_size = mem::size_of::<bch_ioctl_dev_usage_bch_ioctl_dev_usage_type>();
         let hdr_size = mem::size_of::<bch_ioctl_dev_usage_v2>();
         let buf_size = hdr_size + nr_data_types * entry_size;
@@ -548,9 +548,9 @@ pub(crate) struct DevUsage {
 impl DevUsage {
     /// Iterate data types with their typed enum key.
     /// Caps at BCH_DATA_NR to avoid UB if the kernel returns more types than we know.
-    pub fn iter_typed(&self) -> impl Iterator<Item = (bch_data_type, &DevUsageType)> {
+    pub fn iter_typed(&self) -> impl Iterator<Item = (data_type, &DevUsageType)> {
         use super::accounting::data_type_from_u8;
-        let max = bch_data_type::BCH_DATA_NR.0 as usize;
+        let max = data_type::nr.0 as usize;
         self.data_types.iter().enumerate()
             .take(max)
             .map(|(i, dt)| (data_type_from_u8(i as u8), dt))
@@ -573,7 +573,7 @@ impl DevUsage {
     /// Used sectors (all data types except unstriped).
     pub fn used_sectors(&self) -> u64 {
         self.iter_typed()
-            .filter(|(t, _)| *t != bch_data_type::BCH_DATA_unstriped)
+            .filter(|(t, _)| *t != data_type::unstriped)
             .map(|(_, dt)| dt.sectors)
             .sum()
     }

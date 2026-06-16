@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::ffi::{CStr, CString};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
-use bch_bindgen::btree;
+use bch_bindgen::{btree, btree_id};
 use bch_bindgen::c;
 use bch_bindgen::data::io::{block_on, MAX_IO_SIZE};
 use bch_bindgen::errcode::{self, BchError, bch_errcode};
@@ -214,7 +214,7 @@ fn update_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> 
         packed.inode.__bindgen_anon_1.k.as_mut().p.snapshot = u32::MAX;
         ret_to_result(c::bch2_btree_insert(
             fs.raw,
-            c::btree_id::BTREE_ID_inodes,
+            btree_id::inodes,
             packed.inode.__bindgen_anon_1.k_i.as_mut(),
             std::ptr::null_mut(),
             c::bch_trans_commit_flags(0u32),

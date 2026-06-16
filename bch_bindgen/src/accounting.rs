@@ -4,18 +4,14 @@ use crate::printbuf::Printbuf;
 pub use c::bch_data_type;
 pub use c::bch_compression_type;
 pub use c::bch_reconcile_accounting_type;
-
-macro_rules! enum_from_u8 {
-    ($ty:ty, $nr:expr, $v:expr) => {{
-        let v = $v as u32;
-        if v < $nr as u32 {
-            // SAFETY: v is in [0, NR), all valid #[repr(u32)] discriminants
-            unsafe { std::mem::transmute::<u32, $ty>(v) }
-        } else {
-            $nr
-        }
-    }}
-}
+#[allow(non_camel_case_types)]
+pub type data_type = c::bch_data_type;
+#[allow(non_camel_case_types)]
+pub type compression_type = c::bch_compression_type;
+#[allow(non_camel_case_types)]
+pub type disk_accounting_type = c::disk_accounting_type;
+#[allow(non_camel_case_types)]
+pub type reconcile_accounting_type = c::bch_reconcile_accounting_type;
 
 pub fn data_type_from_u8(v: u8) -> bch_data_type {
     bch_data_type(v as u32)
@@ -26,7 +22,7 @@ pub fn compression_type_from_u8(v: u8) -> bch_compression_type {
 }
 
 pub fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
-    enum_from_u8!(bch_reconcile_accounting_type, bch_reconcile_accounting_type::BCH_RECONCILE_ACCOUNTING_NR, v)
+    bch_reconcile_accounting_type(v as u32)
 }
 
 /// Size of a bpos in bytes — maximum size of any accounting key payload.
@@ -68,8 +64,8 @@ impl DiskAccountingPos {
     /// Get the accounting type discriminant without full decode.
     pub fn accounting_type(&self) -> Option<disk_accounting_type> {
         let t = self.type_byte() as u32;
-        if t < BCH_DISK_ACCOUNTING_TYPE_NR as u32 {
-            Some(unsafe { std::mem::transmute::<u32, disk_accounting_type>(t) })
+        if t < u32::from(disk_accounting_type::nr) {
+            Some(c::disk_accounting_type(t))
         } else {
             None
         }
@@ -110,11 +106,8 @@ pub enum DiskAccountingKind {
     Unknown(u8),
 }
 
-use c::disk_accounting_type;
-use disk_accounting_type::*;
-
 // Compile-time check: update DiskAccountingKind when new disk_accounting_type values are added.
-const _: () = assert!(BCH_DISK_ACCOUNTING_TYPE_NR as u32 == 11);
+const _: () = assert!(disk_accounting_type::nr.0 == 11);
 
 impl DiskAccountingKind {
     /// Encode into a DiskAccountingPos (reverse of decode).
@@ -123,14 +116,14 @@ impl DiskAccountingKind {
         let mut raw = [0u8; BPOS_SIZE];
         match *self {
             Self::NrInodes => {
-                raw[0] = BCH_DISK_ACCOUNTING_nr_inodes as u8;
+                raw[0] = disk_accounting_type::nr_inodes.0 as u8;
             }
             Self::PersistentReserved { nr_replicas } => {
-                raw[0] = BCH_DISK_ACCOUNTING_persistent_reserved as u8;
+                raw[0] = disk_accounting_type::persistent_reserved.0 as u8;
                 raw[1] = nr_replicas;
             }
             Self::Replicas { data_type, nr_devs, nr_required, devs } => {
-                raw[0] = BCH_DISK_ACCOUNTING_replicas as u8;
+                raw[0] = disk_accounting_type::replicas.0 as u8;
                 raw[1] = data_type.0 as u8;
                 raw[2] = nr_devs;
                 raw[3] = nr_required;
@@ -138,35 +131,35 @@ impl DiskAccountingKind {
                 raw[4..4 + n].copy_from_slice(&devs[..n]);
             }
             Self::DevDataType { dev, data_type } => {
-                raw[0] = BCH_DISK_ACCOUNTING_dev_data_type as u8;
+                raw[0] = disk_accounting_type::dev_data_type.0 as u8;
                 raw[1] = dev;
                 raw[2] = data_type.0 as u8;
             }
             Self::Compression { compression_type } => {
-                raw[0] = BCH_DISK_ACCOUNTING_compression as u8;
+                raw[0] = disk_accounting_type::compression.0 as u8;
                 raw[1] = compression_type.0 as u8;
             }
             Self::Snapshot { id } => {
-                raw[0] = BCH_DISK_ACCOUNTING_snapshot as u8;
+                raw[0] = disk_accounting_type::snapshot.0 as u8;
                 raw[1..5].copy_from_slice(&id.to_ne_bytes());
             }
             Self::Btree { id } => {
-                raw[0] = BCH_DISK_ACCOUNTING_btree as u8;
+                raw[0] = disk_accounting_type::btree.0 as u8;
                 raw[1..5].copy_from_slice(&id.to_ne_bytes());
             }
             Self::RebalanceWork => {
-                raw[0] = BCH_DISK_ACCOUNTING_rebalance_work as u8;
+                raw[0] = disk_accounting_type::rebalance_work.0 as u8;
             }
             Self::Inum { inum } => {
-                raw[0] = BCH_DISK_ACCOUNTING_inum as u8;
+                raw[0] = disk_accounting_type::inum.0 as u8;
                 raw[1..9].copy_from_slice(&inum.to_ne_bytes());
             }
             Self::ReconcileWork { work_type } => {
-                raw[0] = BCH_DISK_ACCOUNTING_reconcile_work as u8;
-                raw[1] = work_type as u8;
+                raw[0] = disk_accounting_type::reconcile_work.0 as u8;
+                raw[1] = work_type.0 as u8;
             }
             Self::DevLeaving { dev } => {
-                raw[0] = BCH_DISK_ACCOUNTING_dev_leaving as u8;
+                raw[0] = disk_accounting_type::dev_leaving.0 as u8;
                 raw[1..5].copy_from_slice(&dev.to_ne_bytes());
             }
             Self::Unknown(t) => {
@@ -217,17 +210,17 @@ fn bpos_to_accounting_kind(p: &c::bpos) -> DiskAccountingKind {
     raw.reverse();
 
     // Match on raw discriminant — no transmute, unknown types safely fall to Unknown
-    const NR_INODES:            u32 = BCH_DISK_ACCOUNTING_nr_inodes as u32;
-    const PERSISTENT_RESERVED:  u32 = BCH_DISK_ACCOUNTING_persistent_reserved as u32;
-    const REPLICAS:             u32 = BCH_DISK_ACCOUNTING_replicas as u32;
-    const DEV_DATA_TYPE:        u32 = BCH_DISK_ACCOUNTING_dev_data_type as u32;
-    const COMPRESSION:          u32 = BCH_DISK_ACCOUNTING_compression as u32;
-    const SNAPSHOT:             u32 = BCH_DISK_ACCOUNTING_snapshot as u32;
-    const BTREE:                u32 = BCH_DISK_ACCOUNTING_btree as u32;
-    const REBALANCE_WORK:       u32 = BCH_DISK_ACCOUNTING_rebalance_work as u32;
-    const INUM:                 u32 = BCH_DISK_ACCOUNTING_inum as u32;
-    const RECONCILE_WORK:       u32 = BCH_DISK_ACCOUNTING_reconcile_work as u32;
-    const DEV_LEAVING:          u32 = BCH_DISK_ACCOUNTING_dev_leaving as u32;
+    const NR_INODES:            u32 = disk_accounting_type::nr_inodes.0;
+    const PERSISTENT_RESERVED:  u32 = disk_accounting_type::persistent_reserved.0;
+    const REPLICAS:             u32 = disk_accounting_type::replicas.0;
+    const DEV_DATA_TYPE:        u32 = disk_accounting_type::dev_data_type.0;
+    const COMPRESSION:          u32 = disk_accounting_type::compression.0;
+    const SNAPSHOT:             u32 = disk_accounting_type::snapshot.0;
+    const BTREE:                u32 = disk_accounting_type::btree.0;
+    const REBALANCE_WORK:       u32 = disk_accounting_type::rebalance_work.0;
+    const INUM:                 u32 = disk_accounting_type::inum.0;
+    const RECONCILE_WORK:       u32 = disk_accounting_type::reconcile_work.0;
+    const DEV_LEAVING:          u32 = disk_accounting_type::dev_leaving.0;
 
     match raw[0] as u32 {
         NR_INODES => DiskAccountingKind::NrInodes,
@@ -281,14 +274,14 @@ fn bpos_to_accounting_kind(p: &c::bpos) -> DiskAccountingKind {
 
 /// Free/empty data types — not counted as "used" space.
 pub fn data_type_is_empty(t: bch_data_type) -> bool {
-    t == bch_data_type::BCH_DATA_free
-        || t == bch_data_type::BCH_DATA_need_gc_gens
-        || t == bch_data_type::BCH_DATA_need_discard
+    t == data_type::free
+        || t == data_type::need_gc_gens
+        || t == data_type::need_discard
 }
 
 /// Internal/hidden data types — not user-visible (superblock, journal).
 pub fn data_type_is_hidden(t: bch_data_type) -> bool {
-    t == bch_data_type::BCH_DATA_sb || t == bch_data_type::BCH_DATA_journal
+    t == data_type::sb || t == data_type::journal
 }
 
 /// Print a data type directly into a Printbuf via bch2_prt_data_type.

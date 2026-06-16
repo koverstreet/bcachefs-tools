@@ -8,6 +8,7 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 
 use bch_bindgen::bkey::BkeySC;
+use bch_bindgen::bkey::bkey_type;
 use bch_bindgen::btree::*;
 use bch_bindgen::accounting;
 use bch_bindgen::c;
@@ -182,18 +183,17 @@ fn vstruct_aligned_bytes(bytes: usize, block_bits: usize) -> usize {
 ///  - indirect_inline_data: refcount(8), data — zero data
 ///  - dirent:               d_inum(8), d_type(1), d_name — fill with 'X'
 fn sanitize_val(val: &mut [u8], key_type: u8, sanitize_filenames: bool) -> bool {
-    use c::bch_bkey_type::*;
     let t = key_type as u32;
 
-    if t == KEY_TYPE_inline_data as u32 {
+    if t == u32::from(bkey_type::inline_data) {
         val.fill(0);
         true
-    } else if t == KEY_TYPE_indirect_inline_data as u32 {
+    } else if t == u32::from(bkey_type::indirect_inline_data) {
         if val.len() > 8 {
             val[8..].fill(0);
         }
         true
-    } else if t == KEY_TYPE_dirent as u32 && sanitize_filenames {
+    } else if t == u32::from(bkey_type::dirent) && sanitize_filenames {
         if val.len() > 9 {
             val[9..].fill(b'X');
         }

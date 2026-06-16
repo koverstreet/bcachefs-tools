@@ -3,6 +3,9 @@ pub mod io;
 use crate::c;
 use crate::bitmask_accessors;
 
+#[allow(non_camel_case_types)]
+pub type sb_field_type = c::bch_sb_field_type;
+
 // SbField trait + impls — generated from BCH_SB_FIELDS() x-macro
 include!(concat!(env!("OUT_DIR"), "/sb_field_types_gen.rs"));
 

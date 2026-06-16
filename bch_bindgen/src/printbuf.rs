@@ -140,9 +140,7 @@ impl Printbuf {
 
     /// Print a bcachefs metadata version number.
     pub fn version(&mut self, v: u32) {
-        // bch2_version_to_text takes an enum bcachefs_metadata_version,
-        // which is #[repr(u32)]. We transmute from u32.
-        unsafe { c::bch2_version_to_text(&mut self.0, std::mem::transmute::<u32, c::bcachefs_metadata_version>(v)) };
+        unsafe { c::bch2_version_to_text(&mut self.0, c::bcachefs_metadata_version(v)) };
     }
 
     /// Print superblock contents.

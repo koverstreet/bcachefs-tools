@@ -587,7 +587,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
     let mut force = false;
 
     let mut fs_opts: c::bch_opts = Default::default();
-    let mut deferred_opts: Vec<(usize, String)> = Vec::new();
+    let mut deferred_opts: Vec<(c::bch_opt_id, String)> = Vec::new();
 
     let mut i = 1;
     while i < argv.len() {
@@ -614,7 +614,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
                     };
 
                     match parse_opt_val(opt, &val_str)? {
-                        None => deferred_opts.push((opt_id as usize, val_str)),
+                        None => deferred_opts.push((opt_id, val_str)),
                         Some(v) => bch_bindgen::opts::opt_set_by_id(&mut fs_opts, opt_id, v),
                     }
                     i += 1;
