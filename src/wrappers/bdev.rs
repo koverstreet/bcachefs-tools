@@ -6,6 +6,7 @@
 //! from tools-util.c. These work on any fd (block device or regular file).
 
 use std::fs::Metadata;
+use std::os::fd::OwnedFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
 
@@ -124,37 +125,33 @@ pub const BLK_OPEN_CREAT: u32    = 1 << 6;
 /// Open a block device or file for formatting.
 ///
 /// Translates BLK_OPEN_* flags to POSIX open flags.
-/// Returns the raw fd on success, or a negative errno on failure.
-pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<RawFd, i32> {
-    let mut flags = 0i32;
+/// Returns the owned fd on success, or a negative errno on failure.
+pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<OwnedFd, i32> {
+    let mut flags = rustix::fs::OFlags::empty();
 
     let rw = mode & (BLK_OPEN_READ | BLK_OPEN_WRITE);
     if rw == (BLK_OPEN_READ | BLK_OPEN_WRITE) {
-        flags = libc::O_RDWR;
+        flags = rustix::fs::OFlags::RDWR;
     } else if mode & BLK_OPEN_READ != 0 {
-        flags = libc::O_RDONLY;
+        flags = rustix::fs::OFlags::RDONLY;
     } else if mode & BLK_OPEN_WRITE != 0 {
-        flags = libc::O_WRONLY;
+        flags = rustix::fs::OFlags::WRONLY;
     }
 
     if mode & BLK_OPEN_BUFFERED == 0 {
-        flags |= libc::O_DIRECT;
+        flags |= rustix::fs::OFlags::DIRECT;
     }
 
     if mode & BLK_OPEN_EXCL != 0 {
-        flags |= libc::O_EXCL;
+        flags |= rustix::fs::OFlags::EXCL;
     }
 
     if mode & BLK_OPEN_CREAT != 0 {
-        flags |= libc::O_CREAT;
+        flags |= rustix::fs::OFlags::CREATE;
     }
 
-    let fd = unsafe { libc::open(path.as_ptr(), flags, 0o600) };
-    if fd < 0 {
-        Err(unsafe { *libc::__errno_location() })
-    } else {
-        Ok(fd)
-    }
+    rustix::fs::open(path, flags, rustix::fs::Mode::from_raw_mode(0o600))
+        .map_err(|e| e.raw_os_error())
 }
 
 /// Call the C blkid_check function to probe for existing filesystems.

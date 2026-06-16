@@ -97,8 +97,8 @@ fn for_each_hole(ranges: &[CRange], max: u64) -> Vec<CRange> {
 
 /// Resolve a dev_t to a device path via /sys/dev/block/.
 fn dev_t_to_path(dev: libc::dev_t) -> Result<String> {
-    let major = libc::major(dev);
-    let minor = libc::minor(dev);
+    let major = rustix::fs::major(dev);
+    let minor = rustix::fs::minor(dev);
     let sysfs = format!("/sys/dev/block/{}:{}", major, minor);
 
     let link = fs::read_link(&sysfs)
@@ -352,7 +352,7 @@ fn migrate_fs(
     let file_path = format!("{}/bcachefs", fs_path);
     println!("Creating new filesystem on {} in space reserved at {}", dev_path, file_path);
 
-    let dev_size = crate::wrappers::bdev::get_size(c_dev.fd);
+    let dev_size = crate::wrappers::bdev::get_size(c_dev.fd());
     c_dev.fs_size = dev_size;
 
     let block_size = crate::commands::format_util::pick_block_size(&fs_opts, std::slice::from_ref(&c_dev));

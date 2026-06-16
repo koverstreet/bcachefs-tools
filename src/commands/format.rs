@@ -503,7 +503,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         // user didn't specify them.
         let total_fs_size: u64 = devices.iter_mut().map(|d| {
             if d.fs_size == 0 {
-                d.fs_size = crate::wrappers::bdev::get_size(d.fd);
+                d.fs_size = crate::wrappers::bdev::get_size(d.fd());
             }
             d.fs_size
         }).sum();

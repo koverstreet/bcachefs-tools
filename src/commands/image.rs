@@ -478,9 +478,8 @@ fn image_create_inner(
         dev.open(bdev::BLK_OPEN_CREAT, false).map_err(|e| {
             anyhow!("Error opening {}: {}", dev.path.to_string_lossy(), std::io::Error::from_raw_os_error(e))
         })?;
-        if unsafe { libc::ftruncate(dev.fd, target_size as libc::off_t) } != 0 {
-            bail!("ftruncate error: {}", std::io::Error::last_os_error());
-        }
+        rustix::fs::ftruncate(dev.as_fd(), target_size)
+            .map_err(|e| anyhow!("ftruncate error: {}", e))?;
     }
 
     format_opts.no_sb_at_end = true;
@@ -624,9 +623,8 @@ fn image_update_inner(
         ),
     );
 
-    if unsafe { libc::ftruncate(dev_opts.fd, metadata_dev_size as libc::off_t) } != 0 {
-        bail!("ftruncate error: {}", std::io::Error::last_os_error());
-    }
+    rustix::fs::ftruncate(dev_opts.as_fd(), metadata_dev_size)
+        .map_err(|e| anyhow!("ftruncate error: {}", e))?;
 
     let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
     let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
