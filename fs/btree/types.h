@@ -287,6 +287,7 @@ struct bch_fs_btree_cache {
 	atomic_long_t		nr_in_flight;
 	atomic_long_t		nr_in_flight_inner;
 	struct closure_waitlist	nr_in_flight_wait;
+	bool			should_throttle ____cacheline_aligned_in_smp;
 
 	/* shrinker stats */
 	size_t			nr_freed;

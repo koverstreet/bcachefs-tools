@@ -424,45 +424,11 @@ static __always_inline int bch2_trans_journal_res_get(struct btree_trans *trans,
 
 #define JSET_ENTRY_LOG_U64s		4
 
-noinline
-static int btree_key_can_insert_slowpath(struct btree_trans *trans,
-					 enum bch_trans_commit_flags flags)
-{
-	struct bch_fs_btree_cache *bc = &trans->c->btree.cache;
-
-	if ((flags & BCH_WATERMARK_MASK) <= BCH_WATERMARK_normal &&
-	    unlikely(atomic_long_read(&bc->nr_in_flight_inner) > BTREE_WRITE_IO_LIMIT(c) ||
-		     btree_cache_nr_dirty(bc) > btree_cache_nr_live(bc) * 4 / 5)) {
-		/*
-		 * Journal reclaim doesn't run ahead of journal replay, to avoid journal
-		 * deadlocks - it'll be blocked if replay isn't done:
-		 */
-		if (unlikely(!test_bit(JOURNAL_replay_done, &trans->c->journal.flags)))
-			return 0;
-
-		bch2_trans_unlock_updates_write(trans);
-		bch2_trans_unlock(trans);
-
-		trans_wait_event(trans, &bc->nr_in_flight_wait,
-			atomic_long_read(&bc->nr_in_flight_inner) < BTREE_WRITE_IO_LIMIT(c) * 3 / 4 &&
-			btree_cache_nr_dirty(bc) < btree_cache_nr_live(bc) * 3 / 4);
-
-		try(bch2_trans_relock(trans));
-		try(bch2_trans_lock_write(trans));
-	}
-
-	return 0;
-}
-
 static inline int btree_key_can_insert(struct btree_trans *trans,
-				       enum bch_trans_commit_flags flags,
 				       struct btree *b, unsigned u64s)
 {
 	if (!bch2_btree_node_insert_fits(b, u64s))
 		return bch_err_throw(trans->c, btree_insert_btree_node_full);
-
-	if (!btree_node_dirty(b))
-		try(btree_key_can_insert_slowpath(trans, flags));
 
 	return 0;
 }
@@ -1008,13 +974,64 @@ revert_fs_usage:
 	return ret;
 }
 
-static noinline int bch2_trans_commit_extra_disk_res(struct btree_trans *trans,
-						     enum bch_trans_commit_flags flags)
+noinline __cold
+static int bch2_trans_commit_extra_disk_res(struct btree_trans *trans,
+					    enum bch_trans_commit_flags flags)
 {
 	return bch2_disk_reservation_add(trans->c, trans->disk_res,
 				trans->extra_disk_res,
 				(flags & BCH_TRANS_COMMIT_no_enospc)
 				? BCH_DISK_RESERVATION_NOFAIL : 0);
+}
+
+noinline __cold
+static void trans_commit_compact_tail(struct btree_trans *trans,
+				      struct btree_insert_entry *dst,
+				      struct btree_insert_entry *i)
+{
+	/*
+	 * Finish compacting the updates array, copying down the entries we
+	 * hadn't scanned yet: called when trans->updates must be made
+	 * consistent mid-compaction - on error, so that
+	 * bch2_trans_reset_updates() sees each surviving path exactly once
+	 * (the noops' paths have already been put, and entries between dst
+	 * and i are stale duplicates), and before btree node merge.
+	 */
+	while (++i < trans->updates + trans->nr_updates)
+		*dst++ = *i;
+	trans->nr_updates = dst - trans->updates;
+}
+
+noinline __cold
+static int trans_commit_merge(struct btree_trans *trans,
+			      enum bch_trans_commit_flags flags,
+			      struct btree_insert_entry **ip,
+			      struct btree_insert_entry **dstp)
+{
+	struct bch_fs *c = trans->c;
+
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_trans))
+		return 0;
+
+	/* Put trans->updates in a consistent state in case we error: */
+	trans_commit_compact_tail(trans, *dstp, *ip);
+	*ip = *dstp - 1;
+
+	unsigned dst_idx = *dstp - trans->updates;
+
+	flags = btree_update_set_watermark_hipri(flags);
+	int ret = __bch2_foreground_maybe_merge(trans, (*ip)->path, (*ip)->level, flags, NULL);
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_trans);
+
+	/*
+	 * The merge takes paths on the siblings; if that grows the paths
+	 * table, trans->updates moves with it - they're a single allocation,
+	 * see btree_paths_realloc():
+	 */
+	*dstp	= trans->updates + dst_idx;
+	*ip	= *dstp - 1;
+
+	return ret;
 }
 
 noinline __cold
@@ -1072,7 +1089,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 
 		u64s += i->k->k.u64s;
 		ret = !i->cached
-			? btree_key_can_insert(trans, flags, insert_l(trans, i)->b, u64s)
+			? btree_key_can_insert(trans, insert_l(trans, i)->b, u64s)
 			: btree_key_can_insert_cached(trans, flags, trans->paths + i->path, u64s);
 		if (ret) {
 			*stopped_at = i;
@@ -1297,54 +1314,17 @@ do_bch2_trans_commit(struct btree_trans *trans,
 	return ret;
 }
 
-noinline __cold
-static void trans_commit_compact_tail(struct btree_trans *trans,
-				      struct btree_insert_entry *dst,
-				      struct btree_insert_entry *i)
-{
-	/*
-	 * Finish compacting the updates array, copying down the entries we
-	 * hadn't scanned yet: called when trans->updates must be made
-	 * consistent mid-compaction - on error, so that
-	 * bch2_trans_reset_updates() sees each surviving path exactly once
-	 * (the noops' paths have already been put, and entries between dst
-	 * and i are stale duplicates), and before btree node merge.
-	 */
-	while (++i < trans->updates + trans->nr_updates)
-		*dst++ = *i;
-	trans->nr_updates = dst - trans->updates;
-}
-
-noinline __cold
-static int trans_commit_merge(struct btree_trans *trans,
-			      enum bch_trans_commit_flags flags,
-			      struct btree_insert_entry **ip,
-			      struct btree_insert_entry **dstp)
+static noinline int bch2_trans_commit_btree_write_ratelimit(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
-	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_trans))
-		return 0;
-
-	/* Put trans->updates in a consistent state in case we error: */
-	trans_commit_compact_tail(trans, *dstp, *ip);
-	*ip = *dstp - 1;
-
-	unsigned dst_idx = *dstp - trans->updates;
-
-	flags = btree_update_set_watermark_hipri(flags);
-	int ret = __bch2_foreground_maybe_merge(trans, (*ip)->path, (*ip)->level, flags, NULL);
-	enumerated_ref_put(&c->writes, BCH_WRITE_REF_trans);
-
-	/*
-	 * The merge takes paths on the siblings; if that grows the paths
-	 * table, trans->updates moves with it - they're a single allocation,
-	 * see btree_paths_realloc():
-	 */
-	*dstp	= trans->updates + dst_idx;
-	*ip	= *dstp - 1;
-
-	return ret;
+	return drop_locks_do(trans, ({
+		closure_wait_event(&bc->nr_in_flight_wait,
+			atomic_long_read(&bc->nr_in_flight_inner) < BTREE_WRITE_IO_LIMIT(c) * 3 / 4 &&
+			!bch2_btree_cache_should_throttle(c));
+		0;
+	}));
 }
 
 int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags flags)
@@ -1361,6 +1341,14 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 
 	if (!bch2_trans_has_updates(trans))
 		goto out_reset;
+
+	if ((flags & BCH_WATERMARK_MASK) <= BCH_WATERMARK_normal &&
+	    likely(test_bit(JOURNAL_replay_done, &c->journal.flags)) &&
+	    unlikely(bch2_btree_cache_should_throttle(c))) {
+		ret = bch2_trans_commit_btree_write_ratelimit(trans);
+		if (ret)
+			goto out_reset;
+	}
 
 	ret = bch2_trans_commit_run_triggers(trans);
 	if (ret)

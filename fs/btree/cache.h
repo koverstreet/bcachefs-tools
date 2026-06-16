@@ -168,6 +168,23 @@ static inline unsigned btree_blocks(const struct bch_fs *c)
 
 #define BTREE_WRITE_IO_LIMIT(c)			64
 
+static inline bool bch2_btree_cache_should_throttle(struct bch_fs *c)
+{
+	return READ_ONCE(c->btree.cache.should_throttle);
+}
+
+static inline void bch2_btree_cache_update_throttle(struct bch_fs *c)
+{
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+	size_t live	= btree_cache_nr_live(bc);
+	size_t dirty	= btree_cache_nr_dirty(bc);
+	bool throttle	= atomic_long_read(&bc->nr_in_flight_inner) > BTREE_WRITE_IO_LIMIT(c) ||
+			  (live && dirty > live * 3 / 4);
+
+	if (throttle != READ_ONCE(bc->should_throttle))
+		WRITE_ONCE(bc->should_throttle, throttle);
+}
+
 #define BTREE_SPLIT_THRESHOLD(c)		(btree_max_u64s(c) * 3 / 4)
 
 #define BTREE_FOREGROUND_MERGE_THRESHOLD(c)	(btree_max_u64s(c) * 1 / 3)

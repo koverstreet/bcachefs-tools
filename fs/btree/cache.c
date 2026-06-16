@@ -489,6 +489,7 @@ int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struc
 		break;
 	}
 
+	bch2_btree_cache_update_throttle(container_of(bc, struct bch_fs, btree.cache));
 	closure_wake_up(&bc->nr_in_flight_wait);
 
 	b->cache_state = new;

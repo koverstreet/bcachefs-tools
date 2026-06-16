@@ -222,6 +222,7 @@ static void btree_node_write_endio(struct bio *bio)
 		wb->data);
 
 	atomic_long_dec(&c->btree.cache.nr_in_flight_inner);
+	bch2_btree_cache_update_throttle(c);
 	closure_wake_up(&c->btree.cache.nr_in_flight_wait);
 
 	clear_btree_node_write_in_flight_inner(b);
@@ -544,6 +545,7 @@ do_write:
 	async_object_list_add(c, btree_write_bio, wbio, &wbio->list_idx);
 
 	atomic_long_inc(&c->btree.cache.nr_in_flight_inner);
+	bch2_btree_cache_update_throttle(c);
 
 	/*
 	 * Queue the bio on the trans — no block layer work while we hold
