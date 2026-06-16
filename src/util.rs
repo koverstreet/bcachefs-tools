@@ -7,7 +7,7 @@ use std::os::unix::fs::FileTypeExt;
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
 use crossterm::{cursor, execute, terminal};
-use rustix::ioctl::{self, Getter, ReadOpcode};
+use rustix::ioctl::{self, Getter};
 
 /// Page-aligned buffer for O_DIRECT IO.
 ///
@@ -104,8 +104,8 @@ pub fn file_size(f: &File) -> Result<u64> {
     let meta = f.metadata()?;
     if meta.file_type().is_block_device() {
         // BLKGETSIZE64 = _IOR(0x12, 114, size_t)
-        type BlkGetSize64 = ReadOpcode<0x12, 114, u64>;
-        Ok(unsafe { ioctl::ioctl(f, Getter::<BlkGetSize64, u64>::new()) }?)
+        const BLKGETSIZE64: ioctl::Opcode = ioctl::opcode::read::<u64>(0x12, 114);
+        Ok(unsafe { ioctl::ioctl(f, Getter::<BLKGETSIZE64, u64>::new()) }?)
     } else {
         Ok(meta.len())
     }
