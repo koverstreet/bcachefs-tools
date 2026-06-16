@@ -15,9 +15,9 @@ use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
 use bch_bindgen::data::io::{block_on, MAX_IO_SIZE};
-use bcachefs_kernel::{btree, btree_id};
+use bcachefs_kernel::btree;
 use bcachefs_kernel::data::io_misc;
-use bcachefs_kernel::{dirent, inode, namei, str_hash};
+use bcachefs_kernel::{dirent, inode, namei, str_hash, xattr};
 use bcachefs_kernel::errcode::{ret_to_result_void as ret_to_result, BchError, bch_errcode};
 use bcachefs_kernel::fs::Fs;
 
@@ -192,19 +192,7 @@ fn unlink_and_rm(
 }
 
 fn update_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
-    unsafe {
-        let mut packed: c::bkey_inode_buf = Default::default();
-        c::bch2_inode_pack(fs.raw, &mut packed, inode);
-        packed.inode.__bindgen_anon_1.k.as_mut().p.snapshot = u32::MAX;
-        ret_to_result(c::bch2_btree_insert(
-            fs.raw,
-            btree_id::inodes,
-            packed.inode.__bindgen_anon_1.k_i.as_mut(),
-            std::ptr::null_mut(),
-            c::bch_trans_commit_flags(0u32),
-            c::btree_iter_update_trigger_flags::BTREE_ITER_cached,
-        ))
-    }
+    inode::insert_cached(fs, inode)
 }
 
 fn create_or_update_link(
@@ -277,9 +265,7 @@ fn create_or_update_file(
         // don't wrap it in trans_commit_do or it double-nests.
         {
             let trans = btree::BtreeTrans::new(fs);
-            ret_to_result(unsafe {
-                c::bch2_fsck_write_inode(trans.raw(), &mut child_inode)
-            })?;
+            inode::fsck_write_inode(&trans, &mut child_inode)?;
         }
     } else {
         inode::init_early(fs, &mut child_inode);
@@ -290,24 +276,20 @@ fn create_or_update_file(
             std::ptr::null_mut(),
             c::bch_trans_commit_flags(0u32),
             |trans| {
-                ret_to_result(unsafe {
-                    c::bch2_create_trans(
-                        trans.raw(),
-                        dir_inum,
-                        dir,
-                        &mut child_inode,
-                        &mut child_subvol,
-                        &qname,
-                        uid,
-                        gid,
-                        mode as u16,
-                        rdev,
-                        std::ptr::null_mut(),
-                        std::ptr::null_mut(),
-                        zeroed_subvol_inum(),
-                        0,
-                    )
-                })
+                namei::create_trans(
+                    trans,
+                    dir_inum,
+                    dir,
+                    &mut child_inode,
+                    &mut child_subvol,
+                    &qname,
+                    uid,
+                    gid,
+                    mode as _,
+                    rdev as _,
+                    zeroed_subvol_inum(),
+                    0,
+                )
             },
         )?;
     }
@@ -334,12 +316,11 @@ fn xattr_resolve_name(name: &[u8]) -> Option<(i32, &[u8])> {
 }
 
 fn copy_times(fs: &Fs, dst: &mut c::bch_inode_unpacked, src: &rustix::fs::Stat) {
-    let make_ts = |sec, nsec| c::timespec { tv_sec: sec, tv_nsec: nsec };
-    unsafe {
-        dst.bi_atime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_atime, src.st_atime_nsec as _)) as u64;
-        dst.bi_mtime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_mtime, src.st_mtime_nsec as _)) as u64;
-        dst.bi_ctime = c::timespec_to_bch2_time(fs.raw, make_ts(src.st_ctime, src.st_ctime_nsec as _)) as u64;
-    }
+    let make_ts = |sec, nsec| c::timespec64 { tv_sec: sec, tv_nsec: nsec };
+
+    dst.bi_atime = fs.timespec_to_time(make_ts(src.st_atime, src.st_atime_nsec as _)) as u64;
+    dst.bi_mtime = fs.timespec_to_time(make_ts(src.st_mtime, src.st_mtime_nsec as _)) as u64;
+    dst.bi_ctime = fs.timespec_to_time(make_ts(src.st_ctime, src.st_ctime_nsec as _)) as u64;
 }
 
 fn copy_xattrs(
@@ -385,18 +366,15 @@ fn copy_xattrs(
             std::ptr::null_mut(),
             c::bch_trans_commit_flags(0u32),
             |trans| {
-                ret_to_result(unsafe {
-                    c::bch2_xattr_set(
-                        trans.raw(),
-                        subvol_inum(dst.bi_inum),
-                        dst,
-                        stripped_cstr.as_ptr(),
-                        val_buf.as_ptr() as *const std::ffi::c_void,
-                        val_size,
-                        xattr_type,
-                        0,
-                    )
-                })
+                xattr::set(
+                    trans,
+                    subvol_inum(dst.bi_inum),
+                    dst,
+                    &stripped_cstr,
+                    &val_buf[..val_size],
+                    xattr_type,
+                    0,
+                )
             },
         )?;
     }
@@ -1000,10 +978,8 @@ fn copy_dir(
 }
 
 fn first_device_total_sectors(fs: &Fs) -> u64 {
-    unsafe {
-        let ca = &*(*fs.raw).devs[0];
-        ca.mi.nbuckets * ca.mi.bucket_size as u64
-    }
+    let ca = fs.dev_get(0).expect("device 0 should exist");
+    ca.mi.nbuckets * ca.mi.bucket_size as u64
 }
 
 fn reserve_old_fs_space(

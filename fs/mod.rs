@@ -32,6 +32,7 @@ pub mod btree;
 pub mod sb;
 #[path = "fs/str_hash.rs"]     pub mod str_hash;
 pub mod util;
+#[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {
     pub mod extents;
     pub mod io_misc;
