@@ -5,10 +5,6 @@ pub use c::bch_data_type;
 pub use c::bch_compression_type;
 pub use c::bch_reconcile_accounting_type;
 
-use bch_data_type::*;
-
-/// Safely convert a raw u8 to a bindgen #[repr(u32)] enum.
-/// Out-of-range values return the NR sentinel.
 macro_rules! enum_from_u8 {
     ($ty:ty, $nr:expr, $v:expr) => {{
         let v = $v as u32;
@@ -22,11 +18,11 @@ macro_rules! enum_from_u8 {
 }
 
 pub fn data_type_from_u8(v: u8) -> bch_data_type {
-    enum_from_u8!(bch_data_type, BCH_DATA_NR, v)
+    bch_data_type(v as u32)
 }
 
 pub fn compression_type_from_u8(v: u8) -> bch_compression_type {
-    enum_from_u8!(bch_compression_type, bch_compression_type::BCH_COMPRESSION_TYPE_NR, v)
+    bch_compression_type(v as u32)
 }
 
 pub fn reconcile_type_from_u8(v: u8) -> bch_reconcile_accounting_type {
@@ -135,7 +131,7 @@ impl DiskAccountingKind {
             }
             Self::Replicas { data_type, nr_devs, nr_required, devs } => {
                 raw[0] = BCH_DISK_ACCOUNTING_replicas as u8;
-                raw[1] = data_type as u8;
+                raw[1] = data_type.0 as u8;
                 raw[2] = nr_devs;
                 raw[3] = nr_required;
                 let n = (nr_devs as usize).min(BPOS_SIZE - 4);
@@ -144,11 +140,11 @@ impl DiskAccountingKind {
             Self::DevDataType { dev, data_type } => {
                 raw[0] = BCH_DISK_ACCOUNTING_dev_data_type as u8;
                 raw[1] = dev;
-                raw[2] = data_type as u8;
+                raw[2] = data_type.0 as u8;
             }
             Self::Compression { compression_type } => {
                 raw[0] = BCH_DISK_ACCOUNTING_compression as u8;
-                raw[1] = compression_type as u8;
+                raw[1] = compression_type.0 as u8;
             }
             Self::Snapshot { id } => {
                 raw[0] = BCH_DISK_ACCOUNTING_snapshot as u8;
@@ -285,12 +281,14 @@ fn bpos_to_accounting_kind(p: &c::bpos) -> DiskAccountingKind {
 
 /// Free/empty data types — not counted as "used" space.
 pub fn data_type_is_empty(t: bch_data_type) -> bool {
-    matches!(t, BCH_DATA_free | BCH_DATA_need_gc_gens | BCH_DATA_need_discard)
+    t == bch_data_type::BCH_DATA_free
+        || t == bch_data_type::BCH_DATA_need_gc_gens
+        || t == bch_data_type::BCH_DATA_need_discard
 }
 
 /// Internal/hidden data types — not user-visible (superblock, journal).
 pub fn data_type_is_hidden(t: bch_data_type) -> bool {
-    matches!(t, BCH_DATA_sb | BCH_DATA_journal)
+    t == bch_data_type::BCH_DATA_sb || t == bch_data_type::BCH_DATA_journal
 }
 
 /// Print a data type directly into a Printbuf via bch2_prt_data_type.

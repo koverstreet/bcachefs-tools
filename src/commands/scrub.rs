@@ -113,7 +113,7 @@ fn scrub(cli: Cli) -> Result<()> {
     unsafe { libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t); }
 
     let data_types: u32 = if cli.metadata {
-        1 << (bch_data_type::BCH_DATA_btree as u32)
+        1 << u32::from(bch_data_type::BCH_DATA_btree)
     } else {
         !0u32
     };
