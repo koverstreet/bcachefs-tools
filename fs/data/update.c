@@ -1029,12 +1029,10 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 		if (!ca)
 			continue;
 
-		u64 free = write_flags & BCH_WRITE_alloc_nowait
-			? dev_buckets_free(ca, watermark)
-			: dev_buckets_available(ca, watermark);
+		u64 free = dev_buckets_free(ca, watermark);
 		if (free)
 			durability += (write_flags & BCH_WRITE_cached) ? 1 : ca->mi.durability;
-		else if (!bch2_copygc_dev_wait_amount(ca)) {
+		else if (bch2_copygc_can_make_progress(ca)) {
 			*need_copygc = true;
 			bch2_copygc_wakeup(c);
 		}
@@ -1119,10 +1117,6 @@ static int __bch2_can_do_write(struct bch_fs *c,
 	unsigned target = data_opts->write_flags & BCH_WRITE_only_specified_devs
 		? data_opts->target
 		: 0;
-
-	if ((data_opts->write_flags & BCH_WRITE_alloc_nowait) &&
-	    unlikely(c->allocator.open_buckets_nr_free <= bch2_open_buckets_reserved(watermark)))
-		return bch_err_throw(c, data_update_fail_would_block);
 
 	if (btree &&
 	    data_opts->type == BCH_DATA_UPDATE_reconcile &&
