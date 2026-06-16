@@ -16,6 +16,9 @@
 
 use std::cell::Cell;
 use std::ffi::OsStr;
+use std::fs::File;
+use std::io::{Read, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -73,6 +76,15 @@ use fuser::{
 const TTL: Duration = Duration::MAX;
 
 const BCACHEFS_ROOT_INO: u64 = 4096;
+const S_IFDIR: u32 = 0o040000;
+const S_IFLNK: u32 = 0o120000;
+const DT_FIFO: u32 = 1;
+const DT_CHR:  u32 = 2;
+const DT_DIR:  u32 = 4;
+const DT_BLK:  u32 = 6;
+const DT_REG:  u32 = 8;
+const DT_LNK:  u32 = 10;
+const DT_SOCK: u32 = 12;
 
 fn map_root_ino(ino: INodeNo) -> c::subvol_inum {
     let ino: u64 = ino.0;
@@ -87,16 +99,33 @@ fn unmap_root_ino(ino: u64) -> u64 {
 }
 
 fn mode_to_filetype(mode: u32) -> FileType {
-    match mode & libc::S_IFMT {
-        m if m == libc::S_IFREG => FileType::RegularFile,
-        m if m == libc::S_IFDIR => FileType::Directory,
-        m if m == libc::S_IFLNK => FileType::Symlink,
-        m if m == libc::S_IFBLK => FileType::BlockDevice,
-        m if m == libc::S_IFCHR => FileType::CharDevice,
-        m if m == libc::S_IFIFO => FileType::NamedPipe,
-        m if m == libc::S_IFSOCK => FileType::Socket,
-        _ => FileType::RegularFile,
+    match rustix::fs::FileType::from_raw_mode(mode) {
+        rustix::fs::FileType::RegularFile     => FileType::RegularFile,
+        rustix::fs::FileType::Directory       => FileType::Directory,
+        rustix::fs::FileType::Symlink         => FileType::Symlink,
+        rustix::fs::FileType::BlockDevice     => FileType::BlockDevice,
+        rustix::fs::FileType::CharacterDevice => FileType::CharDevice,
+        rustix::fs::FileType::Fifo            => FileType::NamedPipe,
+        rustix::fs::FileType::Socket          => FileType::Socket,
+        _                                     => FileType::RegularFile,
     }
+}
+
+fn dtype_to_filetype(dtype: u32) -> FileType {
+    match dtype {
+        DT_DIR  => FileType::Directory,
+        DT_REG  => FileType::RegularFile,
+        DT_LNK  => FileType::Symlink,
+        DT_BLK  => FileType::BlockDevice,
+        DT_CHR  => FileType::CharDevice,
+        DT_FIFO => FileType::NamedPipe,
+        DT_SOCK => FileType::Socket,
+        _       => FileType::RegularFile,
+    }
+}
+
+fn signal_parent(fd: OwnedFd, byte: u8) {
+    let _ = File::from(fd).write_all(&[byte]);
 }
 
 /// Convert a raw C return value (negative bcachefs error code) to a fuser Errno.
@@ -115,7 +144,7 @@ struct BcachefsFs {
     c: *mut c::bch_fs,
     /// Write end of a pipe used to signal the parent process that the
     /// FUSE mount is established. Written in init(), None in foreground mode.
-    signal_fd: Option<i32>,
+    signal_fd: Option<OwnedFd>,
 }
 
 // Safety: bch_fs is internally synchronized with its own locking.
@@ -168,12 +197,8 @@ impl Filesystem for BcachefsFs {
         eprintln!("bcachefs fuse: init callback fired");
         // Signal parent that mount is established
         if let Some(fd) = self.signal_fd.take() {
-            eprintln!("bcachefs fuse: signaling parent (fd={})", fd);
-            unsafe {
-                let byte = 0u8;
-                libc::write(fd, &byte as *const _ as *const _, 1);
-                libc::close(fd);
-            }
+            eprintln!("bcachefs fuse: signaling parent");
+            signal_parent(fd, 0);
         }
         eprintln!("bcachefs fuse: init returning Ok");
         Ok(())
@@ -381,7 +406,7 @@ impl Filesystem for BcachefsFs {
         reply: ReplyEntry,
     ) {
         eprintln!("fuse_mkdir(dir={}, name={:?})", parent.0, name);
-        self.mknod(req, parent, name, mode | libc::S_IFDIR, umask, 0, reply);
+        self.mknod(req, parent, name, mode | S_IFDIR, umask, 0, reply);
     }
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
@@ -431,7 +456,7 @@ impl Filesystem for BcachefsFs {
                 self.c, dir,
                 name_bytes.as_ptr() as *const _,
                 name_bytes.len() as u32,
-                (libc::S_IFLNK | 0o777) as u16, 0,
+                (S_IFLNK | 0o777) as u16, 0,
                 &mut new_inode,
             )
         };
@@ -711,16 +736,7 @@ impl Filesystem for BcachefsFs {
                 std::slice::from_raw_parts(name as *const u8, name_len as usize)
             };
             let name_str = OsStr::from_bytes(name_bytes);
-            let file_type = match dtype {
-                t if t == libc::DT_DIR as u32 => FileType::Directory,
-                t if t == libc::DT_REG as u32 => FileType::RegularFile,
-                t if t == libc::DT_LNK as u32 => FileType::Symlink,
-                t if t == libc::DT_BLK as u32 => FileType::BlockDevice,
-                t if t == libc::DT_CHR as u32 => FileType::CharDevice,
-                t if t == libc::DT_FIFO as u32 => FileType::NamedPipe,
-                t if t == libc::DT_SOCK as u32 => FileType::Socket,
-                _ => FileType::RegularFile,
-            };
+            let file_type = dtype_to_filetype(dtype);
             let full = reply.add(INodeNo(unmap_root_ino(ino)), pos, file_type, name_str);
             if full { -1 } else { 0 }
         }
@@ -875,10 +891,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     //
     // fork() must happen before spawning threads (linux_shrinkers_init,
     // bch2_fs_start) because only the calling thread survives fork().
-    let mut pipe_fds = [0i32; 2];
-    if unsafe { libc::pipe(pipe_fds.as_mut_ptr()) } != 0 {
-        anyhow::bail!("pipe() failed");
-    }
+    let (read_fd, write_fd) = rustix::pipe::pipe()?;
 
     let pid = unsafe { libc::fork() };
     if pid < 0 {
@@ -887,32 +900,27 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     if pid > 0 {
         // Parent: wait for child to signal mount readiness
-        unsafe { libc::close(pipe_fds[1]) };
+        drop(write_fd);
         let mut buf = [0u8; 1];
-        let n = unsafe {
-            libc::read(pipe_fds[0], buf.as_mut_ptr() as *mut _, 1)
-        };
-        unsafe { libc::close(pipe_fds[0]) };
+        let n = File::from(read_fd).read(&mut buf)?;
 
         if n == 1 && buf[0] == 0 {
             std::process::exit(0);
         } else {
-            let mut status = 0i32;
-            unsafe { libc::waitpid(pid, &mut status, 0) };
+            let pid = rustix::process::Pid::from_raw(pid)
+                .ok_or_else(|| anyhow::anyhow!("invalid child pid {}", pid))?;
+            let _ = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty());
             anyhow::bail!("FUSE mount failed in child process");
         }
     }
 
     // Child
-    unsafe {
-        libc::close(pipe_fds[0]);
-        libc::setsid();
-    }
+    drop(read_fd);
+    rustix::process::setsid()?;
 
     // Redirect stderr to a log file so debug output is visible
     if let Ok(f) = std::fs::File::create("/tmp/bcachefs-fuse.log") {
-        use std::os::unix::io::IntoRawFd;
-        unsafe { libc::dup2(f.into_raw_fd(), 2) };
+        rustix::stdio::dup2_stderr(&f)?;
     }
 
     unsafe { c::linux_shrinkers_init() };
@@ -922,16 +930,12 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     if ret != 0 {
         eprintln!("fusemount: bch2_fs_start failed: {}", BchError::from_raw(-ret));
         unsafe { c::bch2_fs_exit(fs_raw) };
-        unsafe {
-            let byte = 1u8;
-            libc::write(pipe_fds[1], &byte as *const _ as *const _, 1);
-            libc::close(pipe_fds[1]);
-        }
+        signal_parent(write_fd, 1);
         std::process::exit(1);
     }
     eprintln!("fusemount: filesystem started, calling fuser::mount2");
 
-    let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: Some(pipe_fds[1]) };
+    let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: Some(write_fd.try_clone()?) };
 
     match fuser::mount2(bcachefs_fs, &cli.mountpoint, &config) {
         Ok(()) => {
@@ -939,11 +943,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         }
         Err(e) => {
             eprintln!("fusemount: fuser::mount2 failed: {}", e);
-            unsafe {
-                let byte = 1u8;
-                libc::write(pipe_fds[1], &byte as *const _ as *const _, 1);
-                libc::close(pipe_fds[1]);
-            }
+            signal_parent(write_fd, 1);
             std::process::exit(1);
         }
     }

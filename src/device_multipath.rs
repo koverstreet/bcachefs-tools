@@ -19,8 +19,8 @@ use log::{debug, warn};
 const MAX_MULTIPATH_DEPTH: u32 = 8;
 
 fn sysfs_path_for_dev(dev: u64) -> PathBuf {
-    let major = libc::major(dev as libc::dev_t);
-    let minor = libc::minor(dev as libc::dev_t);
+    let major = rustix::fs::major(dev);
+    let minor = rustix::fs::minor(dev);
     PathBuf::from(format!("/sys/dev/block/{}:{}", major, minor))
 }
 
