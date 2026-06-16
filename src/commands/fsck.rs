@@ -1,7 +1,7 @@
 use std::ffi::CString;
 use std::fmt::Write;
 use std::io;
-use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::path::Path;
 use std::process;
 
@@ -98,30 +98,32 @@ fn do_splice(rfd: BorrowedFd, wfd: BorrowedFd) -> io::Result<bool> {
     Ok(false)
 }
 
-fn splice_fd_to_stdinout(fd: BorrowedFd) -> i32 {
+fn splice_fd_to_stdinout(fd: OwnedFd) -> i32 {
     let stdin = io::stdin();
     let stdout = io::stdout();
 
+    let borrowed_fd = fd.as_fd();
+
     setnonblocking(stdin.as_fd());
-    setnonblocking(fd);
+    setnonblocking(borrowed_fd);
 
     let mut stdin_closed = false;
 
     loop {
-        let mut pollfds = vec![PollFd::new(&fd, PollFlags::IN)];
+        let mut pollfds = vec![PollFd::new(&borrowed_fd, PollFlags::IN)];
         if !stdin_closed {
             pollfds.push(PollFd::new(&stdin, PollFlags::IN));
         }
         let _ = poll(&mut pollfds, -1);
 
-        match do_splice(fd, stdout.as_fd()) {
+        match do_splice(borrowed_fd, stdout.as_fd()) {
             Ok(true) => break,
             Err(_) => return -1,
             _ => {}
         }
 
         if !stdin_closed {
-            match do_splice(stdin.as_fd(), fd) {
+            match do_splice(stdin.as_fd(), borrowed_fd) {
                 Ok(true) => stdin_closed = true,
                 Err(_) => return -1,
                 _ => {}
@@ -130,7 +132,8 @@ fn splice_fd_to_stdinout(fd: BorrowedFd) -> i32 {
     }
 
     // The return code from fsck is returned via close() on this fd
-    unsafe { libc::close(fd.as_raw_fd()) }
+    let fd = fd.into_raw_fd();
+    unsafe { rustix::io::try_close(fd) }.map_or(-1, |_| 0)
 }
 
 fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
@@ -148,7 +151,7 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
         return Err(anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}", crate::wrappers::bch_err_str(errno)));
     }
 
-    let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
+    let fd = unsafe { OwnedFd::from_raw_fd(fsck_fd) };
     Ok(splice_fd_to_stdinout(fd))
 }
 
@@ -406,7 +409,7 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}", crate::wrappers::bch_err_str(errno)));
         }
 
-        let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
+        let fd = unsafe { OwnedFd::from_raw_fd(fsck_fd) };
         let ret = splice_fd_to_stdinout(fd);
         process::exit(ret);
     }
