@@ -21,7 +21,7 @@ use bch_bindgen::c::bch_sb;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
-use rustix::ioctl::{self, CompileTimeOpcode, Setter, WriteOpcode};
+use rustix::ioctl::{self, Setter};
 
 /// Try a v2 ioctl (with error message buffer), falling back to v1 on ENOTTY.
 macro_rules! v2_v1_ioctl {
@@ -46,26 +46,27 @@ macro_rules! v2_v1_ioctl {
 }
 
 // Subvolume ioctl opcodes
-type SubvolCreateOpcode    = WriteOpcode<0xbc, 16, bch_ioctl_subvolume>;
-type SubvolCreateV2Opcode  = WriteOpcode<0xbc, 29, bch_ioctl_subvolume_v2>;
-type SubvolDestroyOpcode   = WriteOpcode<0xbc, 17, bch_ioctl_subvolume>;
-type SubvolDestroyV2Opcode = WriteOpcode<0xbc, 30, bch_ioctl_subvolume_v2>;
+const SUBVOL_CREATE_OPCODE:     ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_subvolume>(0xbc, 16);
+const SUBVOL_CREATE_V2_OPCODE:  ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_subvolume_v2>(0xbc, 29);
+const SUBVOL_DESTROY_OPCODE:    ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_subvolume>(0xbc, 17);
+const SUBVOL_DESTROY_V2_OPCODE: ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_subvolume_v2>(0xbc, 30);
 
 // Disk ioctl opcodes (_IOW(0xbc, N, struct))
-type DiskAddOpcode         = WriteOpcode<0xbc, 4,  bch_ioctl_disk>;
-type DiskAddV2Opcode       = WriteOpcode<0xbc, 23, bch_ioctl_disk_v2>;
-type DiskRemoveOpcode      = WriteOpcode<0xbc, 5,  bch_ioctl_disk>;
-type DiskRemoveV2Opcode    = WriteOpcode<0xbc, 24, bch_ioctl_disk_v2>;
-type DiskOnlineOpcode      = WriteOpcode<0xbc, 6,  bch_ioctl_disk>;
-type DiskOnlineV2Opcode    = WriteOpcode<0xbc, 25, bch_ioctl_disk_v2>;
-type DiskOfflineOpcode     = WriteOpcode<0xbc, 7,  bch_ioctl_disk>;
-type DiskOfflineV2Opcode   = WriteOpcode<0xbc, 26, bch_ioctl_disk_v2>;
-type DiskSetStateOpcode    = WriteOpcode<0xbc, 8,  bch_ioctl_disk_set_state>;
-type DiskSetStateV2Opcode  = WriteOpcode<0xbc, 22, bch_ioctl_disk_set_state_v2>;
-type DiskResizeOpcode      = WriteOpcode<0xbc, 14, bch_ioctl_disk_resize>;
-type DiskResizeV2Opcode    = WriteOpcode<0xbc, 27, bch_ioctl_disk_resize_v2>;
-type DiskResizeJournalOpcode   = WriteOpcode<0xbc, 15, bch_ioctl_disk_resize_journal>;
-type DiskResizeJournalV2Opcode = WriteOpcode<0xbc, 28, bch_ioctl_disk_resize_journal_v2>;
+const DISK_ADD_OPCODE:               ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk>(0xbc, 4);
+const DISK_ADD_V2_OPCODE:            ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_v2>(0xbc, 23);
+const DISK_REMOVE_OPCODE:            ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk>(0xbc, 5);
+const DISK_REMOVE_V2_OPCODE:         ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_v2>(0xbc, 24);
+const DISK_ONLINE_OPCODE:            ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk>(0xbc, 6);
+const DISK_ONLINE_V2_OPCODE:         ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_v2>(0xbc, 25);
+const DISK_OFFLINE_OPCODE:           ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk>(0xbc, 7);
+const DISK_OFFLINE_V2_OPCODE:        ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_v2>(0xbc, 26);
+const DISK_SET_STATE_OPCODE:         ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_set_state>(0xbc, 8);
+const DISK_SET_STATE_V2_OPCODE:      ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_set_state_v2>(0xbc, 22);
+const DISK_RESIZE_OPCODE:            ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_resize>(0xbc, 14);
+const DISK_RESIZE_V2_OPCODE:         ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_resize_v2>(0xbc, 27);
+const DISK_RESIZE_JOURNAL_OPCODE:    ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_resize_journal>(0xbc, 15);
+const DISK_RESIZE_JOURNAL_V2_OPCODE: ioctl::Opcode =
+    ioctl::opcode::write::<bch_ioctl_disk_resize_journal_v2>(0xbc, 28);
 
 const SYSFS_BASE: &str = "/sys/fs/bcachefs/";
 
@@ -289,7 +290,7 @@ impl BcachefsHandle {
         self.ioctl_fd.as_fd()
     }
 
-    fn subvol_ioctl<V2: CompileTimeOpcode, V1: CompileTimeOpcode>(
+    fn subvol_ioctl<const V2: ioctl::Opcode, const V1: ioctl::Opcode>(
         &self,
         flags: u32,
         dirfd: u32,
@@ -308,7 +309,7 @@ impl BcachefsHandle {
     /// at the given path
     pub fn create_subvolume<P: AsRef<Path>>(&self, dst: P) -> Result<(), Errno> {
         let dst = path_to_cstr(dst);
-        self.subvol_ioctl::<SubvolCreateV2Opcode, SubvolCreateOpcode>(
+        self.subvol_ioctl::<SUBVOL_CREATE_V2_OPCODE, SUBVOL_CREATE_OPCODE>(
             0,
             libc::AT_FDCWD as u32,
             0o777,
@@ -321,7 +322,7 @@ impl BcachefsHandle {
     /// for this bcachefs filesystem
     pub fn delete_subvolume<P: AsRef<Path>>(&self, dst: P) -> Result<(), Errno> {
         let dst = path_to_cstr(dst);
-        self.subvol_ioctl::<SubvolDestroyV2Opcode, SubvolDestroyOpcode>(
+        self.subvol_ioctl::<SUBVOL_DESTROY_V2_OPCODE, SUBVOL_DESTROY_OPCODE>(
             0,
             libc::AT_FDCWD as u32,
             0o777,
@@ -340,7 +341,7 @@ impl BcachefsHandle {
     ) -> Result<(), Errno> {
         let src = src.map(|src| path_to_cstr(src));
         let dst = path_to_cstr(dst);
-        self.subvol_ioctl::<SubvolCreateV2Opcode, SubvolCreateOpcode>(
+        self.subvol_ioctl::<SUBVOL_CREATE_V2_OPCODE, SUBVOL_CREATE_OPCODE>(
             BCH_SUBVOL_SNAPSHOT_CREATE | extra_flags,
             libc::AT_FDCWD as u32,
             0o777,
@@ -349,7 +350,7 @@ impl BcachefsHandle {
         )
     }
 
-    fn disk_ioctl<V2: CompileTimeOpcode, V1: CompileTimeOpcode>(
+    fn disk_ioctl<const V2: ioctl::Opcode, const V1: ioctl::Opcode>(
         &self, flags: u32, dev: u64,
     ) -> Result<(), Errno> {
         v2_v1_ioctl!(
@@ -361,28 +362,28 @@ impl BcachefsHandle {
 
     /// Add a new device to this filesystem.
     pub(crate) fn disk_add(&self, dev_path: &CStr) -> Result<(), Errno> {
-        self.disk_ioctl::<DiskAddV2Opcode, DiskAddOpcode>(
+        self.disk_ioctl::<DISK_ADD_V2_OPCODE, DISK_ADD_OPCODE>(
             0, dev_path.as_ptr() as u64,
         )
     }
 
     /// Remove a device (by index) from this filesystem.
     pub(crate) fn disk_remove(&self, dev_idx: u32, flags: u32) -> Result<(), Errno> {
-        self.disk_ioctl::<DiskRemoveV2Opcode, DiskRemoveOpcode>(
+        self.disk_ioctl::<DISK_REMOVE_V2_OPCODE, DISK_REMOVE_OPCODE>(
             flags | BCH_BY_INDEX, dev_idx as u64,
         )
     }
 
     /// Re-add an offline device to this filesystem.
     pub(crate) fn disk_online(&self, dev_path: &CStr) -> Result<(), Errno> {
-        self.disk_ioctl::<DiskOnlineV2Opcode, DiskOnlineOpcode>(
+        self.disk_ioctl::<DISK_ONLINE_V2_OPCODE, DISK_ONLINE_OPCODE>(
             0, dev_path.as_ptr() as u64,
         )
     }
 
     /// Take a device offline without removing it.
     pub(crate) fn disk_offline(&self, dev_idx: u32, flags: u32) -> Result<(), Errno> {
-        self.disk_ioctl::<DiskOfflineV2Opcode, DiskOfflineOpcode>(
+        self.disk_ioctl::<DISK_OFFLINE_V2_OPCODE, DISK_OFFLINE_OPCODE>(
             flags | BCH_BY_INDEX, dev_idx as u64,
         )
     }
@@ -390,7 +391,7 @@ impl BcachefsHandle {
     /// Change device state (rw, ro, evacuating, spare).
     pub(crate) fn disk_set_state(&self, dev_idx: u32, new_state: u32, flags: u32) -> Result<(), Errno> {
         v2_v1_ioctl!(
-            self.ioctl_fd(), DiskSetStateV2Opcode, DiskSetStateOpcode,
+            self.ioctl_fd(), DISK_SET_STATE_V2_OPCODE, DISK_SET_STATE_OPCODE,
             bch_ioctl_disk_set_state_v2 { flags: flags | BCH_BY_INDEX, new_state: new_state as u8, dev: dev_idx as u64, ..Default::default() },
             bch_ioctl_disk_set_state    { flags: flags | BCH_BY_INDEX, new_state: new_state as u8, dev: dev_idx as u64, ..Default::default() }
         )
@@ -399,7 +400,7 @@ impl BcachefsHandle {
     /// Resize filesystem on a device.
     pub(crate) fn disk_resize(&self, dev_idx: u32, nbuckets: u64) -> Result<(), Errno> {
         v2_v1_ioctl!(
-            self.ioctl_fd(), DiskResizeV2Opcode, DiskResizeOpcode,
+            self.ioctl_fd(), DISK_RESIZE_V2_OPCODE, DISK_RESIZE_OPCODE,
             bch_ioctl_disk_resize_v2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
             bch_ioctl_disk_resize    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
         )
@@ -408,7 +409,7 @@ impl BcachefsHandle {
     /// Resize journal on a device.
     pub(crate) fn disk_resize_journal(&self, dev_idx: u32, nbuckets: u64) -> Result<(), Errno> {
         v2_v1_ioctl!(
-            self.ioctl_fd(), DiskResizeJournalV2Opcode, DiskResizeJournalOpcode,
+            self.ioctl_fd(), DISK_RESIZE_JOURNAL_V2_OPCODE, DISK_RESIZE_JOURNAL_OPCODE,
             bch_ioctl_disk_resize_journal_v2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
             bch_ioctl_disk_resize_journal    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
         )
