@@ -775,9 +775,13 @@ unsafe extern "C" fn readdir_actor(
     inum: u64,
     dtype: u32,
 ) -> i32 {
-    let rctx = ctx as *mut ReadDirCtx;
-    let entries = unsafe { &mut *(*rctx).entries };
-    let name_slice = unsafe { std::slice::from_raw_parts(name as *const u8, name_len as usize) };
+    let (entries, name_slice) = unsafe {
+        let rctx = &mut *(ctx as *mut ReadDirCtx);
+        (
+            &mut *rctx.entries,
+            std::slice::from_raw_parts(name as *const u8, name_len as usize),
+        )
+    };
     let cname = CString::new(name_slice).unwrap_or_else(|_| CString::new("?").unwrap());
     entries.push(DirEntry { inum, dtype: dtype as u8, name: cname });
     0
@@ -1020,16 +1024,20 @@ fn copy_dir(
     Ok(())
 }
 
+fn first_device_total_sectors(fs: &Fs) -> u64 {
+    unsafe {
+        let ca = &*(*fs.raw).devs[0];
+        ca.mi.nbuckets * ca.mi.bucket_size as u64
+    }
+}
+
 fn reserve_old_fs_space(
     fs: &Fs,
     root_inode: &mut c::bch_inode_unpacked,
     extents: &mut Vec<(u64, u64)>,
     reserve_start: u64,
 ) -> Result<(), BchError> {
-    let ca_ptr = unsafe { (*fs.raw).devs[0] };
-    let nbuckets = unsafe { (*ca_ptr).mi.nbuckets };
-    let bucket_size = unsafe { (*ca_ptr).mi.bucket_size } as u64;
-    let total_sectors = nbuckets * bucket_size;
+    let total_sectors = first_device_total_sectors(fs);
 
     let root_inum = subvol_inum(root_inode.bi_inum);
     let name = CString::new("old_migrated_filesystem").unwrap();
