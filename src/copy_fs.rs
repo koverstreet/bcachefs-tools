@@ -13,10 +13,12 @@ use std::ffi::{CStr, CString};
 use std::os::fd::{AsFd, BorrowedFd, OwnedFd};
 
 use bch_bindgen::fs::FsExt;
-use bcachefs_kernel::{btree, btree_id};
 use bch_bindgen::c;
 use bch_bindgen::data::io::{block_on, MAX_IO_SIZE};
-use bcachefs_kernel::errcode::{self, BchError, bch_errcode};
+use bcachefs_kernel::{btree, btree_id};
+use bcachefs_kernel::data::io_misc;
+use bcachefs_kernel::{dirent, inode, namei, str_hash};
+use bcachefs_kernel::errcode::{ret_to_result_void as ret_to_result, BchError, bch_errcode};
 use bcachefs_kernel::fs::Fs;
 
 use crate::util::AlignedBuf;
@@ -38,10 +40,6 @@ const XATTR_INDEX_SECURITY: i32 = 4;
 
 fn mode_to_type(mode: u32) -> u8 {
     ((mode >> 12) & 15) as u8
-}
-
-fn ret_to_result(ret: i32) -> Result<(), BchError> {
-    errcode::ret_to_result(ret).map(|_| ())
 }
 
 /// Convert a rustix error into a BchError.
@@ -173,17 +171,15 @@ fn unlink_and_rm(
         std::ptr::null_mut(),
         c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc,
         |trans| {
-            ret_to_result(unsafe {
-                c::bch2_unlink_trans(
-                    trans.raw(),
-                    dir_inum,
-                    dir,
-                    zeroed_subvol_inum(),
-                    &mut child,
-                    &qstr,
-                    false,
-                )
-            })
+            namei::unlink_trans(
+                trans,
+                dir_inum,
+                dir,
+                zeroed_subvol_inum(),
+                &mut child,
+                &qstr,
+                false,
+            )
         },
     )?;
 
@@ -192,7 +188,7 @@ fn unlink_and_rm(
     }
 
     let child_inum = c::subvol_inum { subvol: dir_inum.subvol, inum: child.bi_inum };
-    ret_to_result(unsafe { c::bch2_inode_rm(fs.raw, child_inum) })
+    inode::rm(fs, child_inum)
 }
 
 fn update_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
@@ -218,20 +214,16 @@ fn create_or_update_link(
     name: &CStr,
     inum: c::subvol_inum,
 ) -> Result<(), BchError> {
-    let mut dir_hash: c::bch_hash_info = Default::default();
-    ret_to_result(unsafe { c::bch2_hash_info_init(fs.raw, dir, &mut dir_hash) })?;
+    let dir_hash = str_hash::hash_info_init(fs, dir)?;
 
     let qstr = make_qstr(name);
-    let mut old_inum: c::subvol_inum = Default::default();
-    let ret = unsafe { c::bch2_dirent_lookup(fs.raw, dir_inum, &dir_hash, &qstr, &mut old_inum) };
-    let lookup_err = errcode::ret_to_result(ret as i32);
 
-    match lookup_err {
+    match dirent::lookup(fs, dir_inum, &dir_hash, &qstr) {
         Err(e) if e.matches(bch_errcode::BCH_ERR_ENOENT_str_hash_lookup) => {
             // Fall through to create
         }
         Err(e) => return Err(e),
-        Ok(_) => {
+        Ok(old_inum) => {
             if subvol_inum_eq(inum, old_inum) {
                 return Ok(());
             }
@@ -248,9 +240,7 @@ fn create_or_update_link(
         std::ptr::null_mut(),
         c::bch_trans_commit_flags(0u32),
         |trans| {
-            ret_to_result(unsafe {
-                c::bch2_link_trans(trans.raw(), dir_inum, &mut dir_u, inum, &mut inode, &qstr)
-            })
+            namei::link_trans(trans, dir_inum, &mut dir_u, inum, &mut inode, &qstr)
         },
     )
 }
@@ -266,24 +256,17 @@ fn create_or_update_file(
     mode: u32,
     rdev: u64,
 ) -> Result<c::bch_inode_unpacked, BchError> {
-    let mut dir_hash: c::bch_hash_info = Default::default();
-    ret_to_result(unsafe { c::bch2_hash_info_init(fs.raw, dir, &mut dir_hash) })?;
+    let dir_hash = str_hash::hash_info_init(fs, dir)?;
 
     let qname = make_qstr(name);
-    let mut child_inum: c::subvol_inum = Default::default();
-
-    let ret = unsafe {
-        c::bch2_dirent_lookup(fs.raw, dir_inum, &dir_hash, &qname, &mut child_inum)
-    };
+    let child_inum = dirent::lookup(fs, dir_inum, &dir_hash, &qname);
 
     let mut child_inode: c::bch_inode_unpacked = Default::default();
     let mut child_subvol : c::bch_subvolume = Default::default();
 
-    if errcode::ret_to_result(ret as i32).is_ok() {
+    if let Ok(child_inum) = child_inum {
         // Already exists — update
-        ret_to_result(unsafe {
-            c::bch2_inode_find_by_inum(fs.raw, child_inum, &mut child_inode)
-        })?;
+        child_inode = inode::find_by_inum(fs, child_inum)?;
 
         child_inode.bi_mode = mode as u16;
         child_inode.bi_uid = uid;
@@ -299,7 +282,7 @@ fn create_or_update_file(
             })?;
         }
     } else {
-        unsafe { c::bch2_inode_init_early(fs.raw, &mut child_inode) };
+        inode::init_early(fs, &mut child_inode);
 
         btree::iter::trans_commit_do(
             fs,
@@ -483,9 +466,7 @@ fn copy_link(
     let block_size = fs.block_bytes();
 
     let mut i_sectors_delta: i64 = 0;
-    ret_to_result(unsafe {
-        c::bch2_fpunch(fs.raw, dst_inum, 0, u64::MAX, &mut i_sectors_delta)
-    })?;
+    io_misc::fpunch(fs, dst_inum, 0, u64::MAX, &mut i_sectors_delta)?;
     dst.bi_sectors = (dst.bi_sectors as i64 + i_sectors_delta) as u64;
 
     let target = rustix::fs::readlinkat(rustix::fs::CWD, src, Vec::new())
@@ -735,9 +716,7 @@ fn copy_sync_file_data(
         }
 
         if next.start != 0 {
-            ret_to_result(unsafe {
-                c::bch2_fpunch(fs.raw, dst_inum, prev.end >> 9, next.start >> 9, &mut i_sectors_delta)
-            })?;
+            io_misc::fpunch(fs, dst_inum, prev.end >> 9, next.start >> 9, &mut i_sectors_delta)?;
         }
 
         copy_sync_file_range(fs, s, dst_inum, dst, src_fd, src_size, &next)?;
@@ -746,9 +725,7 @@ fn copy_sync_file_data(
     }
 
     // End of file — truncate remaining
-    ret_to_result(unsafe {
-        c::bch2_fpunch(fs.raw, dst_inum, prev.end >> 9, u64::MAX, &mut i_sectors_delta)
-    })?;
+    io_misc::fpunch(fs, dst_inum, prev.end >> 9, u64::MAX, &mut i_sectors_delta)?;
 
     Ok(())
 }
@@ -792,8 +769,7 @@ fn simple_readdir(
     dir_inum: c::subvol_inum,
     dir: &mut c::bch_inode_unpacked,
 ) -> Result<Vec<DirEntry>, BchError> {
-    let mut hash_info: c::bch_hash_info = Default::default();
-    ret_to_result(unsafe { c::bch2_hash_info_init(fs.raw, dir, &mut hash_info) })?;
+    let mut hash_info = str_hash::hash_info_init(fs, dir)?;
 
     let mut entries = Vec::new();
     let mut rctx = ReadDirCtx {
@@ -804,7 +780,7 @@ fn simple_readdir(
         entries: &mut entries,
     };
 
-    ret_to_result(unsafe { c::bch2_readdir(fs.raw, dir_inum, &mut hash_info, &mut rctx.ctx) })?;
+    dirent::readdir(fs, dir_inum, &mut hash_info, &mut rctx.ctx)?;
 
     // Sort by (type, name) like the C code
     entries.sort_by(|a, b| {
@@ -822,8 +798,7 @@ fn recursive_remove(
 ) -> Result<(), BchError> {
     let child_inum = c::subvol_inum { subvol: dir_inum.subvol, inum: d.inum };
 
-    let mut child: c::bch_inode_unpacked = Default::default();
-    ret_to_result(unsafe { c::bch2_inode_find_by_inum(fs.raw, child_inum, &mut child) })?;
+    let mut child = inode::find_by_inum(fs, child_inum)?;
 
     if (child.bi_mode as u32 & libc::S_IFMT) == libc::S_IFDIR {
         let child_dirents = simple_readdir(fs, child_inum, &mut child)?;
@@ -1079,14 +1054,7 @@ pub fn copy_fs(
         rustix::fs::syncfs(src_fd).map_err(rustix_err)?;
     }
 
-    let mut root_inode: c::bch_inode_unpacked = Default::default();
-    ret_to_result(unsafe {
-        c::bch2_inode_find_by_inum(
-            fs.raw,
-            root_subvol_inum(),
-            &mut root_inode,
-        )
-    })?;
+    let mut root_inode = inode::find_by_inum(fs, root_subvol_inum())?;
 
     rustix::process::fchdir(src_fd).map_err(rustix_err)?;
 
