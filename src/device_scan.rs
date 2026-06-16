@@ -30,7 +30,7 @@ use std::{
 };
 
 use anyhow::Result;
-use bch_bindgen::{bcachefs, opt_get, opt_set};
+use bch_bindgen::{bcachefs, darray::DarrayVec, opt_get, opt_set};
 use bch_bindgen::errcode::BchError;
 use bch_bindgen::fs::Fs;
 use bcachefs::bch_sb_handle;
@@ -144,27 +144,66 @@ fn read_sbs_matching_uuid(
     devices: &[PathBuf],
     opts: &bch_opts,
     filter_multipath: bool,
-) -> Vec<(PathBuf, bch_sb_handle)> {
-    devices
-        .iter()
-        .filter(|dev| {
-            // When not using udev (which already filters), skip multipath components
-            if filter_multipath && find_multipath_holder(dev).is_some() {
-                debug!(
-                    "Skipping multipath component device in fallback scan: {}",
-                    dev.display()
-                );
-                return false;
-            }
-            true
-        })
-        .filter_map(|dev| {
-            read_super_silent(dev, *opts)
-                .ok()
-                .map(|sb| (PathBuf::from(dev), sb))
-        })
-        .filter(|(_, sb)| sb.sb().uuid() == uuid)
-        .collect::<Vec<_>>()
+) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+	let sbs = devices
+		.iter()
+		.filter(|dev| {
+			// When not using udev (which already filters), skip multipath components
+			if filter_multipath && find_multipath_holder(dev).is_some() {
+				debug!(
+					"Skipping multipath component device in fallback scan: {}",
+					dev.display()
+				);
+				return false;
+			}
+			true
+		})
+		.filter_map(|dev| {
+			read_super_silent(dev, *opts)
+				.ok()
+				.map(|sb| (PathBuf::from(dev), sb))
+		})
+		.filter(|(_, sb)| sb.sb().uuid() == uuid)
+		.collect::<Vec<_>>();
+
+	filter_current_sbs(sbs, opts)
+}
+
+fn sb_handle_path(sb: &bch_sb_handle) -> PathBuf {
+	if sb.sb_name.is_null() {
+		PathBuf::new()
+	} else {
+		unsafe {
+			PathBuf::from(OsString::from_vec(
+				CStr::from_ptr(sb.sb_name).to_bytes().to_vec()))
+		}
+	}
+}
+
+pub fn filter_current_sbs(
+	sbs: Vec<(PathBuf, bch_sb_handle)>,
+	opts: &bch_opts,
+) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+	let handles = sbs.into_iter()
+		.map(|(_, sb)| sb)
+		.collect::<Vec<_>>();
+	let mut handles = DarrayVec::<bcachefs::bch_sb_handles, bch_sb_handle>::from_vec(handles);
+	let mut opts = *opts;
+
+	let ret = unsafe {
+		bcachefs::bch2_sbs_filter_dead(handles.as_mut(), &mut opts, std::ptr::null_mut())
+	};
+	if ret != 0 {
+		return Err(BchError::from_raw(-ret));
+	}
+
+	let handles = handles.into_vec();
+	let mut filtered = Vec::with_capacity(handles.len());
+	for sb in handles {
+		filtered.push((sb_handle_path(&sb), sb));
+	}
+
+	Ok(filtered)
 }
 
 fn get_devices_by_uuid(
@@ -176,7 +215,7 @@ fn get_devices_by_uuid(
         let devs_from_udev = get_devices_by_uuid_udev(uuid)?;
 
         if !devs_from_udev.is_empty() {
-            let sbs = read_sbs_matching_uuid(uuid, &devs_from_udev, opts, false);
+	    let sbs = read_sbs_matching_uuid(uuid, &devs_from_udev, opts, false)?;
 
             // Check if udev found all expected devices. During early boot,
             // udev may not have finished processing all devices yet — if we
@@ -198,7 +237,7 @@ fn get_devices_by_uuid(
     // without udevd running. Remaining TODO: wait for devices to appear
     // (poll or udev events) with a timeout, then attempt degraded mount.
     let all_devs = get_all_block_devnodes()?;
-    Ok(read_sbs_matching_uuid(uuid, &all_devs, opts, true))
+    Ok(read_sbs_matching_uuid(uuid, &all_devs, opts, true)?)
 }
 
 fn devs_str_sbs_from_device(

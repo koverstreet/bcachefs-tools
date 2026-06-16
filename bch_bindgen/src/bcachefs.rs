@@ -13,6 +13,8 @@ use crate::c;
 
 include!(concat!(env!("OUT_DIR"), "/bcachefs.rs"));
 
+crate::impl_darray!(bch_sb_handles, bch_sb_handle);
+
 use bitfield::bitfield;
 bitfield! {
     pub struct bch_scrypt_flags(u64);

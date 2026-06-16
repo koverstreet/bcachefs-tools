@@ -4,6 +4,7 @@ pub mod bitmask;
 pub mod bkey;
 pub mod btree;
 pub mod data;
+pub mod darray;
 pub mod errcode;
 pub mod fs;
 pub mod journal;
