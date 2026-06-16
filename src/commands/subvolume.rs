@@ -98,7 +98,7 @@ machine-readable output. Sort by name, size, or creation time with \
         #[arg(long, value_enum)]
         sort: Option<SortBy>,
 
-        /// Filesystem (device, mountpoint, or UUID)
+	/// Directory in a mounted filesystem
         target: PathBuf,
     },
 
@@ -130,7 +130,7 @@ relationships, and sector counts.")]
         #[arg(long, value_enum)]
         sort: Option<SortBy>,
 
-        /// Filesystem (device, mountpoint, or UUID)
+	/// Directory in a mounted filesystem
         target: PathBuf,
     },
 }
