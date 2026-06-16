@@ -82,6 +82,10 @@ pub fn ret_to_result(ret: c_int) -> Result<c_int, BchError> {
     }
 }
 
+pub fn ret_to_result_void(ret: c_int) -> Result<(), BchError> {
+    ret_to_result(ret).map(|_| ())
+}
+
 pub fn errptr_to_result<T>(p: *mut T) -> Result<*mut T, BchError> {
     let addr = p as usize;
     let max_err: isize = -4096;
