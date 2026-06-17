@@ -1,4 +1,5 @@
 use crate::c;
+use crate::fs::Fs;
 
 pub use c::bch_data_type;
 pub use c::bch_compression_type;
@@ -176,6 +177,27 @@ impl DiskAccountingKind {
             inode:    u64::from_ne_bytes(raw[12..20].try_into().unwrap()),
         })
     }
+}
+
+pub fn mem_read(fs: &Fs, pos: DiskAccountingPos, counters: &mut [u64]) {
+    unsafe {
+        c::bch2_accounting_mem_read(
+            fs.raw,
+            pos.as_bpos(),
+            counters.as_mut_ptr(),
+            counters.len() as u32,
+        );
+    }
+}
+
+pub fn nr_inodes(fs: &Fs) -> u64 {
+    let mut nr_inodes = 0;
+    mem_read(
+        fs,
+        DiskAccountingKind::NrInodes.encode(),
+        core::slice::from_mut(&mut nr_inodes),
+    );
+    nr_inodes
 }
 
 /// A single accounting entry (from ioctl or btree iteration). Tools-only —

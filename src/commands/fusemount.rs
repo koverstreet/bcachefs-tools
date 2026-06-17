@@ -28,7 +28,7 @@ use bch_bindgen::c;
 use bch_bindgen::data::io::block_on;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::fs::Fs;
-use bcachefs_kernel::{btree, dirent, namei, str_hash};
+use bcachefs_kernel::{accounting, btree, dirent, namei, str_hash};
 use bcachefs_kernel::inode;
 use bcachefs_kernel::opt_set;
 
@@ -290,7 +290,7 @@ fn fuse_setattr(
         std::ptr::null_mut(),
         c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc,
         |t| {
-            let now = unsafe { c::bch2_current_time(fs.raw) } as u64;
+            let now = fs.current_time();
             let mut iter = btree::iter::BtreeIter::uninit();
             let mut inode_u: c::bch_inode_unpacked = Default::default();
 
@@ -343,7 +343,7 @@ fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), Bc
         std::ptr::null_mut(),
         c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc,
         |t| {
-            let now = unsafe { c::bch2_current_time(fs.raw) } as u64;
+            let now = fs.current_time();
             let mut iter = btree::iter::BtreeIter::uninit();
             let mut inode_u: c::bch_inode_unpacked = Default::default();
 
@@ -930,12 +930,12 @@ impl Filesystem for BcachefsFs {
         ensure_thread_init();
         eprintln!("fuse_statfs");
 
-        let usage = unsafe { c::rust_bch2_fs_usage_read_short(self.c) };
-        let block_size = self.fs().block_bytes();
+        let fs = self.fs();
+        let usage = fs.usage_read_short();
+        let block_size = fs.block_bytes();
         let shift = unsafe { (*self.c).block_bits } as u64;
 
-        let mut nr_inodes: u64 = 0;
-        unsafe { c::rust_fuse_count_inodes(self.c, &mut nr_inodes) };
+        let nr_inodes = accounting::nr_inodes(&fs);
 
         reply.statfs(
             usage.capacity >> shift,

@@ -98,18 +98,4 @@ int rust_fuse_readdir(struct bch_fs *c, subvol_inum dir,
 	return bch2_readdir(c, dir, &dir_hash, &rctx.ctx);
 }
 
-/* ---- statfs ---- */
-
-struct bch_fs_usage_short rust_bch2_fs_usage_read_short(struct bch_fs *c)
-{
-	return bch2_fs_usage_read_short(c);
-}
-
-void rust_fuse_count_inodes(struct bch_fs *c, u64 *out)
-{
-	struct disk_accounting_pos k;
-	disk_accounting_key_init(k, nr_inodes);
-	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&k), out, 1);
-}
-
 #endif /* BCACHEFS_FUSE */
