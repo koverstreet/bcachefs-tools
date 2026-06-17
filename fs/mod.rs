@@ -22,11 +22,17 @@
 // (e.g. its_array); harmless, and allowed on the kernel's own bindings crate.
 #![allow(improper_ctypes)]
 
+#[cfg(kernel)]
+const __LOG_PREFIX: &[u8] = b"bcachefs\0";
+
 #[path = "alloc/accounting.rs"] pub mod accounting;
 pub mod alloc {
     pub mod buckets;
 }
 pub mod btree;
+pub mod debug {
+    pub mod tests;
+}
 #[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
 #[path = "fs/inode.rs"]        pub mod inode;
