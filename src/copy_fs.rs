@@ -128,18 +128,6 @@ impl CopyFsState {
     }
 }
 
-fn make_qstr(name: &CStr) -> c::qstr {
-    c::qstr {
-        __bindgen_anon_1: c::qstr__bindgen_ty_1 {
-            __bindgen_anon_1: c::qstr__bindgen_ty_1__bindgen_ty_1 {
-                hash: 0,
-                len: name.to_bytes().len() as u32,
-            },
-        },
-        name: name.as_ptr() as *const u8,
-    }
-}
-
 fn root_subvol_inum() -> c::subvol_inum {
     c::subvol_inum { subvol: BCACHEFS_ROOT_SUBVOL, inum: BCACHEFS_ROOT_INO }
 }
@@ -162,7 +150,7 @@ fn unlink_and_rm(
     dir: &mut c::bch_inode_unpacked,
     child_name: &CStr,
 ) -> Result<(), BchError> {
-    let qstr = make_qstr(child_name);
+    let qstr = dirent::qstr(child_name.to_bytes());
     let mut child: c::bch_inode_unpacked = Default::default();
 
     btree::iter::trans_commit_do(
@@ -204,7 +192,7 @@ fn create_or_update_link(
 ) -> Result<(), BchError> {
     let dir_hash = str_hash::hash_info_init(fs, dir)?;
 
-    let qstr = make_qstr(name);
+    let qstr = dirent::qstr(name.to_bytes());
 
     match dirent::lookup(fs, dir_inum, &dir_hash, &qstr) {
         Err(e) if e.matches(bch_errcode::BCH_ERR_ENOENT_str_hash_lookup) => {
@@ -244,7 +232,7 @@ fn create_or_update_file(
 ) -> Result<c::bch_inode_unpacked, BchError> {
     let dir_hash = str_hash::hash_info_init(fs, dir)?;
 
-    let qname = make_qstr(name);
+    let qname = dirent::qstr(name.to_bytes());
     let child_inum = dirent::lookup(fs, dir_inum, &dir_hash, &qname);
 
     let mut child_inode: c::bch_inode_unpacked = Default::default();

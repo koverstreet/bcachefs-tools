@@ -3,6 +3,7 @@
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, TransError};
 use crate::{btree, btree_id};
 
 pub fn find_by_inum(
@@ -39,6 +40,37 @@ pub fn fsck_write_inode(
     ret_to_result(unsafe {
         c::bch2_fsck_write_inode(trans.raw(), inode)
     })
+}
+
+pub fn peek<'a, 't>(
+    t:     TransAttempt<'a, 't>,
+    iter:  &mut BtreeIter<'t>,
+    inode: &mut c::bch_inode_unpacked,
+    inum:  c::subvol_inum,
+    flags: BtreeIterFlags,
+) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+    let ret = unsafe {
+        c::__bch2_inode_peek(
+            t.raw(),
+            iter.raw_mut(),
+            inode,
+            inum,
+            flags.bits(),
+            core::ptr::null(),
+        )
+    };
+    t.result(ret)
+}
+
+pub fn write<'a, 't>(
+    t:     TransAttempt<'a, 't>,
+    iter:  &mut BtreeIter<'t>,
+    inode: &mut c::bch_inode_unpacked,
+) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+    let ret = unsafe {
+        c::bch2_inode_write(t.raw(), iter.raw_mut(), inode)
+    };
+    t.result(ret)
 }
 
 pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
