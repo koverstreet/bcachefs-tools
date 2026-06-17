@@ -32,6 +32,35 @@ pub fn unlink_trans<'a, 't>(
     t.result(ret)
 }
 
+pub fn rename_trans<'a, 't>(
+    t:           TransAttempt<'a, 't>,
+    src_dir:     c::subvol_inum,
+    src_dir_u:   &mut c::bch_inode_unpacked,
+    dst_dir:     c::subvol_inum,
+    dst_dir_u:   &mut c::bch_inode_unpacked,
+    src_inode_u: &mut c::bch_inode_unpacked,
+    dst_inode_u: &mut c::bch_inode_unpacked,
+    src_name:    &c::qstr,
+    dst_name:    &c::qstr,
+    mode:        c::bch_rename_mode,
+) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+    let ret = unsafe {
+        c::bch2_rename_trans(
+            t.raw(),
+            src_dir,
+            src_dir_u,
+            dst_dir,
+            dst_dir_u,
+            src_inode_u,
+            dst_inode_u,
+            src_name,
+            dst_name,
+            mode,
+        )
+    };
+    t.result(ret)
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn create_trans<'a, 't>(
     t:            TransAttempt<'a, 't>,
