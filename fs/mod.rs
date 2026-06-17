@@ -23,6 +23,9 @@
 #![allow(improper_ctypes)]
 
 #[path = "alloc/accounting.rs"] pub mod accounting;
+pub mod alloc {
+    pub mod buckets;
+}
 pub mod btree;
 #[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
