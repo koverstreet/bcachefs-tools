@@ -1,5 +1,7 @@
 use crate::c;
+use crate::btree::bkey::AsBkeyI;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
+use crate::alloc::buckets::DiskReservation;
 use core::ops::ControlFlow;
 
 /// RAII guard for a device reference. Calls bch2_dev_put on drop.
@@ -213,6 +215,11 @@ impl Fs {
         }
     }
 
+    /// Flush pins up to the current journal sequence.
+    pub fn journal_flush_outstanding_pins(&self) -> bool {
+        unsafe { c::bch2_journal_flush_outstanding_pins(&mut (*self.raw).journal) }
+    }
+
     /// Delete a range of keys in a btree.
     pub fn btree_delete_range(
         &self,
@@ -223,6 +230,30 @@ impl Fs {
     ) -> Result<(), BchError> {
         ret_to_result(unsafe {
             c::bch2_btree_delete_range(self.raw, btree_id, start, end, flags)
+        })
+    }
+
+    pub fn btree_insert(
+        &self,
+        btree_id:     c::btree_id,
+        key:          &mut impl AsBkeyI,
+        disk_res:     Option<&mut DiskReservation<'_>>,
+        commit_flags: c::bch_trans_commit_flags,
+        iter_flags:   c::btree_iter_update_trigger_flags,
+    ) -> Result<(), BchError> {
+        let disk_res = disk_res
+            .map(|r| r.as_mut_ptr())
+            .unwrap_or(core::ptr::null_mut());
+
+        ret_to_result(unsafe {
+            c::bch2_btree_insert(
+                self.raw,
+                btree_id,
+                key.as_bkey_i_mut(),
+                disk_res,
+                commit_flags,
+                iter_flags,
+            )
         })
     }
 
