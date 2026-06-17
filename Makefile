@@ -93,7 +93,7 @@ endif
 # compile tests
 CFLAGS:=$(CFLAGS)
 
-CFLAGS+=-std=gnu11 -O2 -g -MMD -Wall -fPIC			\
+CFLAGS+=-std=gnu11 -O2 -g -MMD -MP -Wall -fPIC		\
 	-Wno-pointer-sign					\
 	-Wno-deprecated-declarations				\
 	-fno-strict-aliasing					\
@@ -226,6 +226,12 @@ SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -pat
 SRCS:=$(filter-out %/mean_and_variance_test.c, $(SRCS))
 DEPS:=$(SRCS:.c=.d)
 -include $(DEPS)
+
+# Old depfiles may mention headers that were removed or renamed. GCC's -MP
+# emits empty header rules for new depfiles; this keeps pre-existing stale
+# depfiles from failing before the object can be rebuilt.
+%.h:
+	@:
 
 OBJS:=$(SRCS:.c=.o)
 
