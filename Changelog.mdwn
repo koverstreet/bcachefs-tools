@@ -1,6 +1,6 @@
 # Changelog
 
-## v1.39.0 - Wed Jun 17 2026
+## v1.38.6 - Wed Jun 17 2026
 
 Feature and performance release on top of v1.38.5. No on-disk format changes.
 
