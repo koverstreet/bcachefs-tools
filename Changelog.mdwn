@@ -1,5 +1,64 @@
 # Changelog
 
+## v1.39.0 - Wed Jun 17 2026
+
+Feature and performance release on top of v1.38.5. No on-disk format changes.
+
+### Performance
+
+Performance work spanned much of the codebase, quite a few workloads and
+benchmarks were profiled. Some highlights:
+
+- Many performance improvements in the journalling code, primarily targeting
+  lock contention. Journal flushes are now fully lockless, significantly
+  improving performance on multithreaded O_SYNC/fsync workloads.
+
+  Journal pin lists now have per-pin-list locks instead of sharing the main
+  journal lock, and the journal pin fifo can now be resized at runtime; this
+  avoids unnecessary throttling on O_SYNC/fsync heavy workloads.
+
+  Journal read now has to read significantly less of the journal by using a
+  binary search to find the most recent entry on each device, which we're also
+  taking advantage of by increasing the default journal size.
+
+- The core btree iterator and transaction commit code saw significant profiling
+  and optimization, greatly reducing icache usage in particular.
+
+- Btree sharding was greatly improved; we now shard new inode allocations based
+  on pid, not the current cpu, enforce that btree nodes do not cross shard
+  boundaries, and on lock contention we try to migrate threads to the CPU for
+  their data's shard. This drastically reduces lock contention; high client
+  count dbench particularly benefited.
+
+- Multithreaded btree write-buffer flushing saw more improvements, reducing
+  stalls due to lock inversion, and runtime introspection was greatly improved.
+
+### Features
+
+- We now support up to 255 devices in a filesystem
+
+- Ubuntu 26.04 now has packages available at apt.bcachefs.org
+
+### Bugfixes
+
+- Some OOM issues were fixed; throttling when the btree node cache is too dirty
+  was significantly improved
+
+- Reconcile won't get stuck in hysterises when there's high priority work to do
+
+- Reconcile no longer spins when btree nodes need to be moved, but can't be
+  written with the full requested durability
+
+- A few EC corner cases were fixed, including in device removal
+
+- Device add is now fully transactional; crashing partway through won't leave
+  accounting/allocation info for the new device in an inconsistent state
+
+- Some rare deadlocks in the device error handling paths were fixed
+
+- bcachefs wait-devices now uses the same superblock filtering logic as mount,
+  so stale superblocks from removed devices are ignored consistently.
+
 ## v1.38.5 - Wed Jun 10 2026
 
 Bugfix release on top of v1.38.4. No on-disk format changes.
