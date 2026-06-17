@@ -30,6 +30,9 @@ pub mod alloc {
     pub mod buckets;
 }
 pub mod btree;
+pub mod debug {
+    pub mod tests;
+}
 #[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
 #[path = "fs/inode.rs"]        pub mod inode;

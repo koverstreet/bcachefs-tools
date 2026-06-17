@@ -242,9 +242,9 @@ read_attribute(moving_ctxts);
 
 read_attribute(recent_counters);
 
-#ifdef CONFIG_BCACHEFS_TESTS
+#if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 write_attribute(perf_test);
-#endif /* CONFIG_BCACHEFS_TESTS */
+#endif
 
 #define x(_name, ...)						\
 	static struct attribute sysfs_time_stat_##_name =		\
@@ -510,7 +510,7 @@ STORE(bch2_fs)
 		bch2_fs_emergency_read_only(c, &msg.m);
 	}
 
-#ifdef CONFIG_BCACHEFS_TESTS
+#if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 	if (attr == &sysfs_perf_test) {
 		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL), *p = tmp;
 		char *test		= strsep(&p, " \t\n");
@@ -547,7 +547,7 @@ struct attribute *bch2_fs_files[] = {
 	&sysfs_compression_stats,
 	&sysfs_errors,
 
-#ifdef CONFIG_BCACHEFS_TESTS
+#if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 	&sysfs_perf_test,
 #endif
 	NULL
