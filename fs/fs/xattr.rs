@@ -2,22 +2,21 @@
 
 use core::ffi::{c_void, CStr};
 
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::{TransAttempt, TransError};
 use crate::c;
-use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 
-pub fn set(
-    trans: &BtreeTrans,
+pub fn set<'a, 't>(
+    t:     TransAttempt<'a, 't>,
     inum:  c::subvol_inum,
     inode: &mut c::bch_inode_unpacked,
     name:  &CStr,
     val:   &[u8],
     typ:   i32,
     flags: i32,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe {
+) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+    let ret = unsafe {
         c::bch2_xattr_set(
-            trans.raw(),
+            t.raw(),
             inum,
             inode,
             name.as_ptr(),
@@ -26,5 +25,6 @@ pub fn set(
             typ,
             flags,
         )
-    })
+    };
+    t.result(ret)
 }

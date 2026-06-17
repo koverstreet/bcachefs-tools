@@ -1,6 +1,12 @@
 use super::bkey::*;
 use crate::c;
-use crate::errcode::{BchError, bch_errcode, errptr_to_result_c};
+use crate::errcode::{
+    BchError,
+    bch_errcode,
+    errptr_to_result,
+    errptr_to_result_c,
+    ret_to_result_void as ret_to_result,
+};
 use crate::fs::Fs;
 #[cfg(feature = "std")]
 use crate::printbuf_to_formatter;
@@ -9,8 +15,9 @@ use bitflags::bitflags;
 #[cfg(feature = "std")]
 use core::fmt;
 use core::marker::PhantomData;
-use core::mem::MaybeUninit;
-use core::ops::ControlFlow;
+use core::mem::{size_of, MaybeUninit};
+use core::ptr::NonNull;
+use core::ops::{ControlFlow, Deref};
 
 use c::bpos;
 
@@ -29,8 +36,16 @@ impl<'f> BtreeTrans<'f> {
         }
     }
 
-    pub fn begin(&self) -> u32 {
+    fn begin_raw(&self) -> u32 {
         unsafe { c::bch2_trans_begin(self.raw) }
+    }
+
+    pub fn begin<'a>(&'a self) -> TransAttempt<'a, 'f> {
+        TransAttempt {
+            trans:         self,
+            restart_count: self.begin_raw(),
+            t:             PhantomData,
+        }
     }
 
     pub fn verify_not_restarted(&self, restart_count: u32) {
@@ -73,9 +88,161 @@ impl<'f> Drop for BtreeTrans<'f> {
             // Clear any pending restart state — bch2_trans_put() BUG_ONs
             // if the transaction is in restart, which can happen if Rust
             // code propagates a restart error via ? and unwinds.
-            c::bch2_trans_begin(self.raw);
+            self.begin_raw();
             c::bch2_trans_put(&mut *self.raw)
         }
+    }
+}
+
+pub struct TransAttempt<'a, 't> {
+    trans:         &'a BtreeTrans<'t>,
+    restart_count: u32,
+    t:             PhantomData<&'a mut ()>,
+}
+
+pub enum TransError<'a, 't> {
+    Restart(BchError),
+    Error {
+        attempt: TransAttempt<'a, 't>,
+        error:   BchError,
+    },
+}
+
+pub type TransResult<'a, 't, T = ()> = Result<(TransAttempt<'a, 't>, T), TransError<'a, 't>>;
+
+pub struct TransBkey<'a, 't> {
+    ptr:      NonNull<c::bkey_i>,
+    buf_u64s: u32,
+    t:        PhantomData<&'a mut TransAttempt<'a, 't>>,
+}
+
+impl<'a, 't> TransAttempt<'a, 't> {
+    pub fn trans(&self) -> &'a BtreeTrans<'t> {
+        self.trans
+    }
+
+    /// Get the raw transaction pointer for passing to C functions.
+    pub fn raw(&self) -> *mut c::btree_trans {
+        self.trans.raw()
+    }
+
+    pub fn verify_not_restarted(&self) {
+        self.trans.verify_not_restarted(self.restart_count);
+    }
+
+    pub fn commit(
+        self,
+        disk_res:    *mut c::disk_reservation,
+        journal_seq: *mut u64,
+        flags:       c::bch_trans_commit_flags,
+    ) -> Result<Self, TransError<'a, 't>> {
+        unsafe {
+            (*self.raw()).disk_res = disk_res;
+            (*self.raw()).journal_seq = journal_seq;
+        }
+        let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags) };
+        self.result(ret)
+    }
+
+    pub fn result(self, ret: i32) -> Result<Self, TransError<'a, 't>> {
+        match ret_to_result(ret) {
+            Ok(()) => Ok(self),
+            Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => {
+                Err(TransError::Restart(e))
+            }
+            Err(e) => Err(TransError::Error {
+                attempt: self,
+                error:   e,
+            }),
+        }
+    }
+
+    pub fn error(self, error: BchError) -> TransError<'a, 't> {
+        if error.matches(bch_errcode::BCH_ERR_transaction_restart) {
+            TransError::Restart(error)
+        } else {
+            TransError::Error {
+                attempt: self,
+                error,
+            }
+        }
+    }
+
+    pub fn result_value<T>(self, result: Result<T, BchError>) -> TransResult<'a, 't, T> {
+        match result {
+            Ok(v) => Ok((self, v)),
+            Err(e) => Err(self.error(e)),
+        }
+    }
+
+    pub fn try_do<F>(self, f: F) -> Result<Self, TransError<'a, 't>>
+    where
+        F: FnOnce(&BtreeTrans<'t>) -> Result<(), BchError>,
+    {
+        match f(self.trans) {
+            Ok(()) => Ok(self),
+            Err(e) => Err(self.error(e)),
+        }
+    }
+
+    pub fn bkey_alloc(&self, u64s: u32) -> Result<TransBkey<'a, 't>, BchError> {
+        let bytes = u64s as usize * size_of::<u64>();
+        let ptr = unsafe { c::bch2_trans_kmalloc(self.raw(), bytes) };
+        let ptr = errptr_to_result(ptr)? as *mut c::bkey_i;
+
+        Ok(TransBkey {
+            ptr:      NonNull::new(ptr).expect("bch2_trans_kmalloc returned NULL"),
+            buf_u64s: u64s,
+            t:        PhantomData,
+        })
+    }
+
+    pub fn bkey_clone(&self, k: &c::bkey_i) -> Result<TransBkey<'a, 't>, BchError> {
+        let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                k as *const c::bkey_i as *const u8,
+                dst.ptr.as_mut() as *mut c::bkey_i as *mut u8,
+                k.k.u64s as usize * size_of::<u64>(),
+            );
+        }
+        Ok(dst)
+    }
+
+    pub fn update(
+        self,
+        iter:  &mut BtreeIter<'t>,
+        key:   TransBkey<'_, 't>,
+        flags: c::btree_iter_update_trigger_flags,
+    ) -> Result<Self, TransError<'a, 't>> {
+        let ret = unsafe {
+            c::bch2_trans_update_buf(
+                self.raw(),
+                &mut iter.raw,
+                key.ptr.as_ptr(),
+                key.buf_u64s,
+                flags,
+            )
+        };
+        self.result(ret)
+    }
+}
+
+impl<'a, 't> TransBkey<'a, 't> {
+    pub fn as_mut(&mut self) -> &mut c::bkey_i {
+        unsafe { self.ptr.as_mut() }
+    }
+
+    pub fn as_ptr(&self) -> *mut c::bkey_i {
+        self.ptr.as_ptr()
+    }
+}
+
+impl<'a, 't> Deref for TransAttempt<'a, 't> {
+    type Target = BtreeTrans<'t>;
+
+    fn deref(&self) -> &Self::Target {
+        self.trans
     }
 }
 
@@ -98,18 +265,18 @@ bitflags! {
     }
 }
 
-pub fn lockrestart_do<T, F>(trans: &BtreeTrans, mut f: F) -> Result<T, BchError>
+pub fn lockrestart_do<'t, T, F>(trans: &BtreeTrans<'t>, mut f: F) -> Result<T, BchError>
 where
-    F: FnMut() -> Result<T, BchError>
+    F: for<'a> FnMut(TransAttempt<'a, 't>) -> TransResult<'a, 't, T>
 {
     loop {
-        let restart_count = trans.begin();
+        let t = trans.begin();
 
-        match f() {
-            Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
-            Err(e) => return Err(e),
-            Ok(v) => {
-                trans.verify_not_restarted(restart_count);
+        match f(t) {
+            Err(TransError::Restart(_)) => continue,
+            Err(TransError::Error { error, .. }) => return Err(error),
+            Ok((t, v)) => {
+                t.verify_not_restarted();
                 return Ok(v);
             }
         }
@@ -120,34 +287,35 @@ where
 ///
 /// Equivalent to the C `commit_do` macro: runs the closure, and if it
 /// succeeds, commits the transaction. Retries on transaction restart.
-pub fn commit_do<F>(
-    trans: &BtreeTrans,
+pub fn commit_do<'t, F>(
+    trans: &BtreeTrans<'t>,
     disk_res: *mut c::disk_reservation,
     journal_seq: *mut u64,
     flags: c::bch_trans_commit_flags,
     mut f: F,
 ) -> Result<(), BchError>
 where
-    F: FnMut(&BtreeTrans) -> Result<(), BchError>,
+    F: for<'a> FnMut(TransAttempt<'a, 't>) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>>,
 {
-    lockrestart_do(trans, || {
-        f(trans)?;
-        trans.commit(disk_res, journal_seq, flags)
+    lockrestart_do(trans, |t| {
+        let t = f(t)?;
+        let t = t.commit(disk_res, journal_seq, flags)?;
+        Ok((t, ()))
     })
 }
 
 /// Create a transaction and run a closure with commit retry.
 ///
 /// Equivalent to the C `bch2_trans_commit_do` macro.
-pub fn trans_commit_do<F>(
-    fs: &Fs,
+pub fn trans_commit_do<'t, F>(
+    fs: &'t Fs,
     disk_res: *mut c::disk_reservation,
     journal_seq: *mut u64,
     flags: c::bch_trans_commit_flags,
     f: F,
 ) -> Result<(), BchError>
 where
-    F: FnMut(&BtreeTrans) -> Result<(), BchError>,
+    F: for<'a> FnMut(TransAttempt<'a, 't>) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>>,
 {
     let trans = BtreeTrans::new(fs);
     commit_do(&trans, disk_res, journal_seq, flags, f)
@@ -156,9 +324,9 @@ where
 /// Create a transaction and run a closure with restart retry (no commit).
 ///
 /// Equivalent to the C `bch2_trans_run` macro.
-pub fn trans_run<T, F>(fs: &Fs, f: F) -> Result<T, BchError>
+pub fn trans_run<'t, T, F>(fs: &'t Fs, f: F) -> Result<T, BchError>
 where
-    F: FnMut() -> Result<T, BchError>,
+    F: for<'a> FnMut(TransAttempt<'a, 't>) -> TransResult<'a, 't, T>,
 {
     let trans = BtreeTrans::new(fs);
     lockrestart_do(&trans, f)
@@ -280,7 +448,7 @@ impl<'t> BtreeIter<'t> {
     {
         let raw = &mut self.raw as *mut c::btree_iter;
         loop {
-            let restart_count = trans.begin();
+            let t = trans.begin();
             let k = unsafe { c::bch2_btree_iter_peek_max(raw, &end) };
 
             match bkey_s_c_to_result(k) {
@@ -288,7 +456,7 @@ impl<'t> BtreeIter<'t> {
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(()),
                 Ok(Some(k)) => {
-                    trans.verify_not_restarted(restart_count);
+                    t.verify_not_restarted();
                     if let ControlFlow::Break(()) = f(k) {
                         return Ok(());
                     }
@@ -364,7 +532,7 @@ impl<'t> BtreeNodeIter<'t> {
     {
         let raw = &mut self.raw as *mut c::btree_iter;
         loop {
-            let restart_count = trans.begin();
+            let t = trans.begin();
             let b = unsafe { c::bch2_btree_iter_peek_node(raw) };
             let b = match errptr_to_result_c(b) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
@@ -373,7 +541,7 @@ impl<'t> BtreeNodeIter<'t> {
                 Ok(b) => unsafe { &*b },
             };
 
-            trans.verify_not_restarted(restart_count);
+            t.verify_not_restarted();
 
             // peek_node() leaves iter->pos at the node's min_key (so a restart
             // re-finds the node across splits/merges), so we can't use
