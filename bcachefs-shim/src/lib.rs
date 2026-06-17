@@ -19,3 +19,5 @@ pub mod c {
     )]
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
+
+pub mod workqueue;
