@@ -18,6 +18,132 @@ use c::bpos as Bpos;
 
 use core::cmp::Ordering;
 
+pub struct Bkey<K: BkeyInit> {
+    raw: K,
+}
+
+pub trait AsBkeyI {
+    fn as_bkey_i(&self) -> &c::bkey_i;
+    fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i;
+
+    fn as_bkey(&self) -> &c::bkey {
+        &self.as_bkey_i().k
+    }
+
+    fn as_bkey_mut(&mut self) -> &mut c::bkey {
+        &mut self.as_bkey_i_mut().k
+    }
+}
+
+impl<K: BkeyInit> Bkey<K> {
+    pub fn new() -> Self {
+        let mut raw = K::default();
+        raw.init();
+        Self { raw }
+    }
+
+    pub fn raw(&self) -> &K {
+        &self.raw
+    }
+
+    pub fn raw_mut(&mut self) -> &mut K {
+        &mut self.raw
+    }
+
+    pub fn k(&self) -> &c::bkey {
+        self.raw.k()
+    }
+
+    pub fn k_mut(&mut self) -> &mut c::bkey {
+        self.raw.k_mut()
+    }
+
+    pub fn k_i(&self) -> &c::bkey_i {
+        self.raw.k_i()
+    }
+
+    pub fn k_i_mut(&mut self) -> &mut c::bkey_i {
+        self.raw.k_i_mut()
+    }
+}
+
+impl<K: BkeyInit> AsBkeyI for Bkey<K> {
+    fn as_bkey_i(&self) -> &c::bkey_i {
+        self.k_i()
+    }
+
+    fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i {
+        self.k_i_mut()
+    }
+}
+
+impl AsBkeyI for c::bkey_i {
+    fn as_bkey_i(&self) -> &c::bkey_i {
+        self
+    }
+
+    fn as_bkey_i_mut(&mut self) -> &mut c::bkey_i {
+        self
+    }
+}
+
+impl<K: BkeyInit> Default for Bkey<K> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl c::bkey {
+    pub fn pos(&self) -> c::bpos {
+        self.p
+    }
+
+    pub fn set_pos(&mut self, pos: c::bpos) {
+        self.p = pos;
+    }
+
+    pub fn set_snapshot(&mut self, snapshot: u32) {
+        self.p.snapshot = snapshot;
+    }
+
+    pub fn size(&self) -> u32 {
+        self.size
+    }
+
+    pub fn set_size(&mut self, size: u32) {
+        self.size = size;
+    }
+
+    pub fn set_range(&mut self, inode: u64, start: u64, end: u64, snapshot: u32) {
+        self.p = spos(inode, end, snapshot);
+        self.size = (end - start) as u32;
+    }
+
+    pub fn key_type(&self) -> c::bch_bkey_type {
+        c::bch_bkey_type(self.type_ as u32)
+    }
+
+    pub fn set_version_lo(&mut self, version: u64) {
+        self.bversion.lo = version;
+    }
+
+    pub fn start_pos(&self) -> c::bpos {
+        bkey_start_pos(self)
+    }
+
+    pub fn start_offset(&self) -> u64 {
+        bkey_start_offset(self)
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        bkey_deleted(self)
+    }
+
+    pub fn is_btree_ptr(&self) -> bool {
+        bkey_is_btree_ptr(self)
+    }
+}
+
 impl PartialEq for Bpos {
     fn eq(&self, other: &Self) -> bool {
         self.cmp(other) == Ordering::Equal
@@ -154,6 +280,37 @@ impl<'a> BkeySC<'a> {
 
     pub fn v(&self) -> BkeyValSC<'a> {
         unsafe { BkeyValSC::from_raw(self.k, self.v) }
+    }
+
+    pub fn pos(&self) -> c::bpos {
+        self.k.p
+    }
+
+    pub fn size(&self) -> u32 {
+        self.k.size
+    }
+
+    pub fn key_type(&self) -> c::bch_bkey_type {
+        c::bch_bkey_type(self.k.type_ as u32)
+    }
+
+    pub fn is_deleted(&self) -> bool {
+        self.key_type() == c::bch_bkey_type::KEY_TYPE_deleted
+    }
+
+    pub fn is_btree_ptr(&self) -> bool {
+        matches!(
+            self.key_type(),
+            c::bch_bkey_type::KEY_TYPE_btree_ptr | c::bch_bkey_type::KEY_TYPE_btree_ptr_v2
+        )
+    }
+
+    pub fn start_pos(&self) -> c::bpos {
+        bkey_start_pos(self.k)
+    }
+
+    pub fn start_offset(&self) -> u64 {
+        bkey_start_offset(self.k)
     }
 }
 
@@ -300,4 +457,19 @@ pub fn bkey_start_pos(k: &c::bkey) -> c::bpos {
         offset: k.p.offset.wrapping_sub(k.size as u64),
         snapshot: k.p.snapshot,
     }
+}
+
+pub fn bkey_start_offset(k: &c::bkey) -> u64 {
+    k.p.offset.wrapping_sub(k.size as u64)
+}
+
+pub fn bkey_deleted(k: &c::bkey) -> bool {
+    c::bch_bkey_type(k.type_ as u32) == c::bch_bkey_type::KEY_TYPE_deleted
+}
+
+pub fn bkey_is_btree_ptr(k: &c::bkey) -> bool {
+    matches!(
+        c::bch_bkey_type(k.type_ as u32),
+        c::bch_bkey_type::KEY_TYPE_btree_ptr | c::bch_bkey_type::KEY_TYPE_btree_ptr_v2
+    )
 }

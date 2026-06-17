@@ -31,7 +31,7 @@ const HEADERS: &[&str] = &[
 ];
 
 // Translated 1:1 from the bindgen builder calls in build.rs.
-const ALLOWLIST_FUNCTION: &[&str] = &[".*bch2_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches", "bpos_.*", "enumerated_ref_put"];
+const ALLOWLIST_FUNCTION: &[&str] = &[".*bch2_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches", "bpos_.*", "bkey_.*_init", "enumerated_ref_put"];
 const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf", ".*bch2_snapshot_id_state"];
 const BLOCKLIST_TYPE: &[&str] = &["rhash_lock_head", "srcu_struct", "bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];
 const BLOCKLIST_ITEM: &[&str] = &["bch2_bkey_ops"];
@@ -530,12 +530,40 @@ fn generate_bkey_types(entries: &[Vec<String>]) -> String {
 
     for e in entries {
         let name = &e[0];
+        let type_name = format!("Bkey{}", snake_to_pascal(name));
+        out.push_str(&format!("pub type {type_name} = Bkey<c::bkey_i_{name}>;\n"));
+    }
+    out.push('\n');
+
+    for e in entries {
+        let name = &e[0];
         out.push_str(&format!(
             "impl c::bkey_i_{name} {{\n\
              \x20   pub fn k(&self) -> &c::bkey {{ unsafe {{ self.__bindgen_anon_1.k.as_ref() }} }}\n\
              \x20   pub fn k_mut(&mut self) -> &mut c::bkey {{ unsafe {{ self.__bindgen_anon_1.k.as_mut() }} }}\n\
              \x20   pub fn k_i(&self) -> &c::bkey_i {{ unsafe {{ self.__bindgen_anon_1.k_i.as_ref() }} }}\n\
              \x20   pub fn k_i_mut(&mut self) -> &mut c::bkey_i {{ unsafe {{ self.__bindgen_anon_1.k_i.as_mut() }} }}\n\
+             }}\n\n"
+        ));
+    }
+
+    out.push_str("pub trait BkeyInit: Default {\n");
+    out.push_str("    fn init(&mut self);\n");
+    out.push_str("    fn k(&self) -> &c::bkey;\n");
+    out.push_str("    fn k_mut(&mut self) -> &mut c::bkey;\n");
+    out.push_str("    fn k_i(&self) -> &c::bkey_i;\n");
+    out.push_str("    fn k_i_mut(&mut self) -> &mut c::bkey_i;\n");
+    out.push_str("}\n\n");
+
+    for e in entries {
+        let name = &e[0];
+        out.push_str(&format!(
+            "impl BkeyInit for c::bkey_i_{name} {{\n\
+             \x20   fn init(&mut self) {{ unsafe {{ c::bkey_{name}_init(self.k_i_mut()) }}; }}\n\
+             \x20   fn k(&self) -> &c::bkey {{ c::bkey_i_{name}::k(self) }}\n\
+             \x20   fn k_mut(&mut self) -> &mut c::bkey {{ c::bkey_i_{name}::k_mut(self) }}\n\
+             \x20   fn k_i(&self) -> &c::bkey_i {{ c::bkey_i_{name}::k_i(self) }}\n\
+             \x20   fn k_i_mut(&mut self) -> &mut c::bkey_i {{ c::bkey_i_{name}::k_i_mut(self) }}\n\
              }}\n\n"
         ));
     }
@@ -593,6 +621,20 @@ fn generate_bkey_types(entries: &[Vec<String>]) -> String {
     out.push_str("        match type_ as u32 {\n");
     for e in entries { out.push_str(&format!("            {} => BkeyValS::{}(&mut k.k, unsafe {{ core::mem::transmute(&mut k.v) }}),\n", e[1], e[0])); }
     out.push_str("            _ => BkeyValS::unknown(&mut k.k, type_),\n        }\n    }\n}\n");
+    out
+}
+
+fn snake_to_pascal(s: &str) -> String {
+    let mut out = String::new();
+
+    for word in s.split('_') {
+        let mut chars = word.chars();
+        if let Some(c) = chars.next() {
+            out.extend(c.to_uppercase());
+            out.push_str(chars.as_str());
+        }
+    }
+
     out
 }
 

@@ -62,6 +62,14 @@ impl<'f> BtreeTrans<'f> {
         self.raw
     }
 
+    pub fn unlock(&self) {
+        unsafe { c::bch2_trans_unlock(self.raw) };
+    }
+
+    pub fn unlock_long(&self) {
+        unsafe { c::bch2_trans_unlock_long(self.raw) };
+    }
+
     /// Commit the transaction.
     ///
     /// Equivalent to the static inline bch2_trans_commit() which sets
@@ -230,6 +238,22 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(dst)
     }
 
+    pub fn bkey_make_mut_noupdate(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
+        let raw = c::bkey_s_c {
+            k: k.k,
+            v: k.v,
+        };
+        let ptr = unsafe { c::bch2_bkey_make_mut_noupdate(self.raw(), raw) };
+        let ptr = errptr_to_result(ptr)?;
+        let u64s = unsafe { (*ptr).k.u64s as u32 };
+
+        Ok(TransBkey {
+            ptr:      NonNull::new(ptr).expect("bch2_bkey_make_mut_noupdate returned NULL"),
+            buf_u64s: u64s,
+            t:        PhantomData,
+        })
+    }
+
     pub fn update(
         self,
         iter:  &mut BtreeIter<'t>,
@@ -247,11 +271,118 @@ impl<'a, 't> TransAttempt<'a, 't> {
         };
         self.result(ret)
     }
+
+    pub fn insert(
+        self,
+        btree: impl Into<u32>,
+        key:   TransBkey<'_, 't>,
+        flags: c::btree_iter_update_trigger_flags,
+    ) -> Result<Self, TransError<'a, 't>> {
+        let ret = unsafe {
+            c::bch2_btree_insert_trans(
+                self.raw(),
+                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                key.as_ptr(),
+                flags,
+            )
+        };
+        self.result(ret)
+    }
+
+    pub fn insert_nonextent(
+        self,
+        btree: impl Into<u32>,
+        key:   TransBkey<'_, 't>,
+        flags: c::btree_iter_update_trigger_flags,
+    ) -> Result<Self, TransError<'a, 't>> {
+        let key_ref: &c::bkey_i = key.as_ref();
+        let ret = unsafe {
+            c::bch2_btree_insert_nonextent(
+                self.raw(),
+                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                key.as_ptr(),
+                key_ref.k.u64s as u32,
+                flags,
+            )
+        };
+        self.result(ret)
+    }
+
+    pub fn delete_at(
+        self,
+        iter:  &mut BtreeIter<'t>,
+        flags: c::btree_iter_update_trigger_flags,
+    ) -> Result<Self, TransError<'a, 't>> {
+        let ret = unsafe { c::bch2_btree_delete_at(self.raw(), iter.raw_mut(), flags) };
+        self.result(ret)
+    }
+
+    pub fn delete(
+        self,
+        btree: impl Into<u32>,
+        pos:   c::bpos,
+        flags: c::btree_iter_update_trigger_flags,
+    ) -> Result<Self, TransError<'a, 't>> {
+        let ret = unsafe {
+            c::bch2_btree_delete(
+                self.raw(),
+                c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
+                pos,
+                flags,
+            )
+        };
+        self.result(ret)
+    }
+
+    pub fn snapshot_node_create(
+        self,
+        parent:           u32,
+        new_snapids:      &mut [u32],
+        snapshot_subvols: &[u32],
+    ) -> Result<Self, TransError<'a, 't>> {
+        if new_snapids.len() != snapshot_subvols.len() {
+            return Err(self.error(BchError::from_errcode(bch_errcode::BCH_ERR_invalid_snapshot_node)));
+        }
+
+        let ret = unsafe {
+            c::bch2_snapshot_node_create(
+                self.raw(),
+                parent,
+                new_snapids.as_mut_ptr(),
+                snapshot_subvols.as_ptr() as *mut u32,
+                new_snapids.len() as u32,
+            )
+        };
+        self.result(ret)
+    }
+
+    pub fn iter_traverse(self, iter: &mut BtreeIter<'t>) -> Result<Self, TransError<'a, 't>> {
+        let ret = unsafe { c::bch2_btree_iter_traverse(iter.raw_mut()) };
+        self.result(ret)
+    }
 }
 
 impl<'a, 't> TransBkey<'a, 't> {
     pub fn as_ptr(&self) -> *mut c::bkey_i {
         self.ptr.as_ptr()
+    }
+
+    pub fn k(&self) -> &c::bkey {
+        let k: &c::bkey_i = self.as_ref();
+        &k.k
+    }
+
+    pub fn k_mut(&mut self) -> &mut c::bkey {
+        let k: &mut c::bkey_i = self.as_mut();
+        &mut k.k
+    }
+
+    pub fn k_i(&self) -> &c::bkey_i {
+        AsRef::<c::bkey_i>::as_ref(self)
+    }
+
+    pub fn k_i_mut(&mut self) -> &mut c::bkey_i {
+        AsMut::<c::bkey_i>::as_mut(self)
     }
 
     pub fn as_u64s(&self) -> &[u64] {
@@ -414,6 +545,18 @@ impl<'t> BtreeIter<'t> {
         &mut self.raw
     }
 
+    pub fn pos(&self) -> c::bpos {
+        self.raw.pos
+    }
+
+    pub fn set_pos(&mut self, pos: c::bpos) {
+        unsafe { c::bch2_btree_iter_set_pos(&mut self.raw, pos) };
+    }
+
+    pub fn set_pos_to_extent_start(&mut self) {
+        unsafe { c::bch2_btree_iter_set_pos_to_extent_start(&mut self.raw) };
+    }
+
     pub fn new(
         trans: &'t BtreeTrans<'t>,
         btree: impl Into<u32>,
@@ -487,6 +630,17 @@ impl<'t> BtreeIter<'t> {
         }
     }
 
+    pub fn peek_max_type<'i>(&'i mut self, end: bpos, flags: BtreeIterFlags) ->
+            Result<Option<BkeySC<'i>>, BchError> {
+        unsafe {
+            bkey_s_c_to_result(c::bch2_btree_iter_peek_max_type(
+                &mut self.raw,
+                end,
+                c::btree_iter_update_trigger_flags(flags.bits()),
+            ))
+        }
+    }
+
     pub fn peek(&mut self) -> Result<Option<BkeySC<'_>>, BchError> {
         self.peek_max(SPOS_MAX)
     }
@@ -497,8 +651,26 @@ impl<'t> BtreeIter<'t> {
         }
     }
 
+    pub fn peek_prev_type<'i>(&'i mut self, flags: BtreeIterFlags) ->
+            Result<Option<BkeySC<'i>>, BchError> {
+        unsafe {
+            bkey_s_c_to_result(c::bch2_btree_iter_peek_prev_type(
+                &mut self.raw,
+                c::btree_iter_update_trigger_flags(flags.bits()),
+            ))
+        }
+    }
+
     pub fn peek_prev(&mut self) -> Result<Option<BkeySC<'_>>, BchError> {
         self.peek_prev_min(c::bpos { inode: 0, offset: 0, snapshot: 0 })
+    }
+
+    pub fn traverse<'a>(
+        &mut self,
+        t: TransAttempt<'a, 't>,
+    ) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+        let ret = unsafe { c::bch2_btree_iter_traverse(self.raw_mut()) };
+        t.result(ret)
     }
 
     pub fn for_each_max<F>(&mut self, trans: &BtreeTrans, end: bpos, mut f: F)
@@ -506,12 +678,26 @@ impl<'t> BtreeIter<'t> {
     where
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
     {
+        // Respect the iterator's SLOTS flag: a slots iterator must visit every
+        // slot — including holes — via peek_slot, not skip ahead to the next
+        // present key via peek_max. Mirrors `peek_max_flags`.
+        let slots = (self.raw.flags as u32) & BtreeIterFlags::SLOTS.bits() != 0;
         let raw = &mut self.raw as *mut c::btree_iter;
         loop {
             let t = trans.begin();
-            let k = unsafe { c::bch2_btree_iter_peek_max(raw, &end) };
+            let res = unsafe {
+                if slots {
+                    if bkey_le((*raw).pos, end) {
+                        bkey_s_c_to_result(c::bch2_btree_iter_peek_slot(raw))
+                    } else {
+                        Ok(None)
+                    }
+                } else {
+                    bkey_s_c_to_result(c::bch2_btree_iter_peek_max(raw, &end))
+                }
+            };
 
-            match bkey_s_c_to_result(k) {
+            match res {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
                 Ok(None) => return Ok(()),
@@ -531,6 +717,163 @@ impl<'t> BtreeIter<'t> {
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
     {
         self.for_each_max(trans, SPOS_MAX, f)
+    }
+
+    pub fn for_each_commit<F>(
+        &mut self,
+        trans:       &BtreeTrans<'t>,
+        disk_res:    *mut c::disk_reservation,
+        journal_seq: *mut u64,
+        flags:       c::bch_trans_commit_flags,
+        mut f:       F,
+    ) -> Result<(), BchError>
+    where
+        F: for<'a, 'k> FnMut(
+            TransAttempt<'a, 't>,
+            BkeySC<'k>,
+        ) -> Result<(TransAttempt<'a, 't>, ControlFlow<()>), TransError<'a, 't>>,
+    {
+        let raw = &mut self.raw as *mut c::btree_iter;
+        loop {
+            let t = trans.begin();
+            let k = unsafe { c::bch2_btree_iter_peek(raw) };
+
+            match bkey_s_c_to_result(k) {
+                Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
+                Err(e) => return Err(e),
+                Ok(None) => return Ok(()),
+                Ok(Some(k)) => match f(t, k) {
+                    Err(TransError::Restart(_)) => continue,
+                    Err(TransError::Error { error, .. }) => return Err(error),
+                    Ok((t, flow)) => match t.commit(disk_res, journal_seq, flags) {
+                        Err(TransError::Restart(_)) => continue,
+                        Err(TransError::Error { error, .. }) => return Err(error),
+                        Ok(t) => {
+                            t.verify_not_restarted();
+                            if let ControlFlow::Break(()) = flow {
+                                return Ok(());
+                            }
+                        }
+                    },
+                },
+            }
+
+            unsafe { c::bch2_btree_iter_advance(raw) };
+        }
+    }
+
+    pub fn for_each_max_commit<F>(
+        &mut self,
+        trans:       &BtreeTrans<'t>,
+        end:         bpos,
+        iter_flags:  BtreeIterFlags,
+        disk_res:    *mut c::disk_reservation,
+        journal_seq: *mut u64,
+        flags:       c::bch_trans_commit_flags,
+        mut f:       F,
+    ) -> Result<(), BchError>
+    where
+        F: for<'a, 'k> FnMut(
+            TransAttempt<'a, 't>,
+            BkeySC<'k>,
+        ) -> Result<(TransAttempt<'a, 't>, ControlFlow<()>), TransError<'a, 't>>,
+    {
+        let raw = &mut self.raw as *mut c::btree_iter;
+        loop {
+            let t = trans.begin();
+            let k = unsafe {
+                c::bch2_btree_iter_peek_max_type(
+                    raw,
+                    end,
+                    c::btree_iter_update_trigger_flags(iter_flags.bits()),
+                )
+            };
+
+            match bkey_s_c_to_result(k) {
+                Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
+                Err(e) => return Err(e),
+                Ok(None) => return Ok(()),
+                Ok(Some(k)) => match f(t, k) {
+                    Err(TransError::Restart(_)) => continue,
+                    Err(TransError::Error { error, .. }) => return Err(error),
+                    Ok((t, flow)) => match t.commit(disk_res, journal_seq, flags) {
+                        Err(TransError::Restart(_)) => continue,
+                        Err(TransError::Error { error, .. }) => return Err(error),
+                        Ok(t) => {
+                            t.verify_not_restarted();
+                            if let ControlFlow::Break(()) = flow {
+                                return Ok(());
+                            }
+                        }
+                    },
+                },
+            }
+
+            unsafe { c::bch2_btree_iter_advance(raw) };
+        }
+    }
+
+    pub fn for_each_reverse<F>(&mut self, trans: &BtreeTrans, min: bpos, mut f: F)
+        -> Result<(), BchError>
+    where
+        F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
+    {
+        let raw = &mut self.raw as *mut c::btree_iter;
+        loop {
+            let t = trans.begin();
+            let k = unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) };
+
+            match bkey_s_c_to_result(k) {
+                Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
+                Err(e) => return Err(e),
+                Ok(None) => return Ok(()),
+                Ok(Some(k)) => {
+                    t.verify_not_restarted();
+                    if let ControlFlow::Break(()) = f(k) {
+                        return Ok(());
+                    }
+                }
+            }
+            if !unsafe { c::bch2_btree_iter_rewind(raw) } {
+                return Ok(());
+            }
+        }
+    }
+
+    pub fn for_each_reverse_flags<F>(
+        &mut self,
+        trans: &BtreeTrans,
+        flags: BtreeIterFlags,
+        mut f: F,
+    ) -> Result<(), BchError>
+    where
+        F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
+    {
+        let raw = &mut self.raw as *mut c::btree_iter;
+        loop {
+            let t = trans.begin();
+            let k = unsafe {
+                c::bch2_btree_iter_peek_prev_type(
+                    raw,
+                    c::btree_iter_update_trigger_flags(flags.bits()),
+                )
+            };
+
+            match bkey_s_c_to_result(k) {
+                Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
+                Err(e) => return Err(e),
+                Ok(None) => return Ok(()),
+                Ok(Some(k)) => {
+                    t.verify_not_restarted();
+                    if let ControlFlow::Break(()) = f(k) {
+                        return Ok(());
+                    }
+                }
+            }
+            if !unsafe { c::bch2_btree_iter_rewind(raw) } {
+                return Ok(());
+            }
+        }
     }
 
     pub fn advance(&mut self) {
