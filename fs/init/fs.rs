@@ -275,6 +275,16 @@ impl Fs {
         unsafe { c::timespec_to_bch2_time(self.raw, ts) }
     }
 
+    /// Current time in bcachefs internal time format.
+    pub fn current_time(&self) -> u64 {
+        unsafe { c::bch2_current_time(self.raw) as u64 }
+    }
+
+    /// Short filesystem usage summary.
+    pub fn usage_read_short(&self) -> c::bch_fs_usage_short {
+        unsafe { c::bch2_fs_usage_read_short(self.raw) }
+    }
+
     /// Get the link count for an inode.
     pub fn inode_nlink_get(bi: &c::bch_inode_unpacked) -> u32 {
         unsafe { c::bch2_inode_nlink_get(bi as *const _ as *mut _) }

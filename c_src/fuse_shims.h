@@ -27,8 +27,4 @@ typedef int (*rust_fuse_filldir_fn)(void *ctx,
 int rust_fuse_readdir(struct bch_fs *c, subvol_inum dir,
 		      u64 pos, void *ctx, rust_fuse_filldir_fn filldir);
 
-/* Accounting */
-struct bch_fs_usage_short rust_bch2_fs_usage_read_short(struct bch_fs *c);
-void rust_fuse_count_inodes(struct bch_fs *c, u64 *nr_inodes);
-
 #endif /* _FUSE_SHIMS_H */
