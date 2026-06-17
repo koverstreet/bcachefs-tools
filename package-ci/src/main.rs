@@ -239,6 +239,20 @@ impl BuildState {
         Ok(())
     }
 
+    fn ensure_status(&self, commit: &str, job_name: &str, status: JobStatus) -> Result<bool> {
+        let dir = self.job_dir(commit, job_name);
+        let path = dir.join("status");
+        if path.exists() {
+            return Ok(false);
+        }
+
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("creating job dir {}", dir.display()))?;
+        fs::write(&path, status.as_str())
+            .with_context(|| format!("writing status to {}", path.display()))?;
+        Ok(true)
+    }
+
     fn regenerate_html(&self) {
         let script = self.state_dir.join("scripts/generate-status-html.sh");
         if script.exists() {
@@ -380,6 +394,9 @@ impl Orchestrator {
             self.last_desired = Some(commit.clone());
         }
 
+        let matrix = build_matrix();
+        self.materialize_commit_jobs(&commit, &matrix)?;
+
         // Phase 1: source package
         let source_status = self.effective_status(&commit, "source");
         match source_status {
@@ -400,7 +417,6 @@ impl Orchestrator {
         }
 
         // Phase 2: binary builds
-        let matrix = build_matrix();
         let mut still_running = false;
         let mut any_failed = false;
 
@@ -437,6 +453,22 @@ impl Orchestrator {
                 }
                 self.spawn_publish(&commit)?;
             }
+        }
+
+        Ok(())
+    }
+
+    fn materialize_commit_jobs(&self, commit: &str, matrix: &[Job]) -> Result<()> {
+        let mut changed = false;
+
+        changed |= self.state.ensure_status(commit, "source", JobStatus::Pending)?;
+        for job in matrix {
+            changed |= self.state.ensure_status(commit, &job.name(), JobStatus::Pending)?;
+        }
+        changed |= self.state.ensure_status(commit, "publish", JobStatus::Pending)?;
+
+        if changed {
+            self.state.regenerate_html();
         }
 
         Ok(())
