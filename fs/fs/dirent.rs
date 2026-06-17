@@ -4,6 +4,18 @@ use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 
+pub fn qstr(name: &[u8]) -> c::qstr {
+    c::qstr {
+        __bindgen_anon_1: c::qstr__bindgen_ty_1 {
+            __bindgen_anon_1: c::qstr__bindgen_ty_1__bindgen_ty_1 {
+                hash: 0,
+                len:  name.len() as u32,
+            },
+        },
+        name: name.as_ptr(),
+    }
+}
+
 pub fn lookup(
     fs:        &Fs,
     dir_inum:  c::subvol_inum,
