@@ -1,39 +1,40 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::iter::BtreeTrans;
+use crate::btree::iter::{TransAttempt, TransError};
 use crate::c;
-use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 
-pub fn link_trans(
-    trans:    &BtreeTrans,
+pub fn link_trans<'a, 't>(
+    t:        TransAttempt<'a, 't>,
     dir_inum: c::subvol_inum,
     dir:      &mut c::bch_inode_unpacked,
     inum:     c::subvol_inum,
     inode:    &mut c::bch_inode_unpacked,
     name:     &c::qstr,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe {
-        c::bch2_link_trans(trans.raw(), dir_inum, dir, inum, inode, name)
-    })
+) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+    let ret = unsafe {
+        c::bch2_link_trans(t.raw(), dir_inum, dir, inum, inode, name)
+    };
+    t.result(ret)
 }
 
-pub fn unlink_trans(
-    trans:    &BtreeTrans,
+pub fn unlink_trans<'a, 't>(
+    t:        TransAttempt<'a, 't>,
     dir_inum: c::subvol_inum,
     dir:      &mut c::bch_inode_unpacked,
     target:   c::subvol_inum,
     inode:    &mut c::bch_inode_unpacked,
     name:     &c::qstr,
     deleting: bool,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe {
-        c::bch2_unlink_trans(trans.raw(), dir_inum, dir, target, inode, name, deleting)
-    })
+) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+    let ret = unsafe {
+        c::bch2_unlink_trans(t.raw(), dir_inum, dir, target, inode, name, deleting)
+    };
+    t.result(ret)
 }
 
 #[allow(clippy::too_many_arguments)]
-pub fn create_trans(
-    trans:        &BtreeTrans,
+pub fn create_trans<'a, 't>(
+    t:            TransAttempt<'a, 't>,
     dir_inum:     c::subvol_inum,
     dir:          &mut c::bch_inode_unpacked,
     inode:        &mut c::bch_inode_unpacked,
@@ -45,10 +46,10 @@ pub fn create_trans(
     rdev:         c::dev_t,
     snapshot_src: c::subvol_inum,
     flags:        u32,
-) -> Result<(), BchError> {
-    ret_to_result(unsafe {
+) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+    let ret = unsafe {
         c::bch2_create_trans(
-            trans.raw(),
+            t.raw(),
             dir_inum,
             dir,
             inode,
@@ -63,5 +64,6 @@ pub fn create_trans(
             snapshot_src,
             flags,
         )
-    })
+    };
+    t.result(ret)
 }

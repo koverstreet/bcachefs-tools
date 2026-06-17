@@ -170,9 +170,9 @@ fn unlink_and_rm(
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc,
-        |trans| {
+        |t| {
             namei::unlink_trans(
-                trans,
+                t,
                 dir_inum,
                 dir,
                 zeroed_subvol_inum(),
@@ -192,7 +192,7 @@ fn unlink_and_rm(
 }
 
 fn update_inode(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
-    inode::insert_cached(fs, inode)
+    inode::write_cached(fs, inode)
 }
 
 fn create_or_update_link(
@@ -227,9 +227,7 @@ fn create_or_update_link(
         std::ptr::null_mut(),
         std::ptr::null_mut(),
         c::bch_trans_commit_flags(0u32),
-        |trans| {
-            namei::link_trans(trans, dir_inum, &mut dir_u, inum, &mut inode, &qstr)
-        },
+        |t| namei::link_trans(t, dir_inum, &mut dir_u, inum, &mut inode, &qstr),
     )
 }
 
@@ -275,9 +273,9 @@ fn create_or_update_file(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             c::bch_trans_commit_flags(0u32),
-            |trans| {
+            |t| {
                 namei::create_trans(
-                    trans,
+                    t,
                     dir_inum,
                     dir,
                     &mut child_inode,
@@ -365,9 +363,9 @@ fn copy_xattrs(
             std::ptr::null_mut(),
             std::ptr::null_mut(),
             c::bch_trans_commit_flags(0u32),
-            |trans| {
+            |t| {
                 xattr::set(
-                    trans,
+                    t,
                     subvol_inum(dst.bi_inum),
                     dst,
                     &stripped_cstr,
