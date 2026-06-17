@@ -866,7 +866,7 @@ void bch2_dir_casefold_changed(struct dentry *dentry)
 	shrink_dcache_parent(dentry);
 	bch2_dentry_update_casefold_flags(dentry);
 }
-#endif
+#endif /* IS_ENABLED(CONFIG_UNICODE) */
 
 static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 				  unsigned int flags)
@@ -887,6 +887,7 @@ static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 	if (IS_ERR(inode))
 		inode = NULL;
 
+#if IS_ENABLED(CONFIG_UNICODE)
 	if (!inode && IS_CASEFOLDED(vdir)) {
 		/*
 		 * Do not cache a negative dentry in casefolded directories
@@ -907,6 +908,9 @@ static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
 	if (vinode)
 		bch2_dentry_set_casefold_ops(dentry, vinode);
 	return d_splice_alias(vinode, dentry);
+#else
+	return d_splice_alias(&inode->v, dentry);
+#endif
 }
 
 static int bch2_mknod(struct mnt_idmap *idmap,
@@ -920,7 +924,9 @@ static int bch2_mknod(struct mnt_idmap *idmap,
 	if (IS_ERR(inode))
 		return bch2_err_class(PTR_ERR(inode));
 
+#if IS_ENABLED(CONFIG_UNICODE)
 	bch2_dentry_set_casefold_ops(dentry, &inode->v);
+#endif
 	d_instantiate(dentry, &inode->v);
 	return 0;
 }
@@ -1005,8 +1011,10 @@ int __bch2_unlink(struct inode *vdir, struct dentry *dentry,
 	bch2_inode_update_after_write(trans, inode, &inode_u,
 				      ATTR_CTIME);
 
+#if IS_ENABLED(CONFIG_UNICODE)
 	if (IS_CASEFOLDED(vdir))
 		d_invalidate(dentry);
+#endif
 err:
 	bch2_unlock_inodes(INODE_UPDATE_LOCK, dir, inode);
 
@@ -1607,8 +1615,10 @@ static int bch2_fileattr_set(struct mnt_idmap *idmap,
 			       ATTR_CTIME);
 	mutex_unlock(&inode->ei_update_lock);
 
+#if IS_ENABLED(CONFIG_UNICODE)
 	if (!ret && s.set_casefold)
 		bch2_dir_casefold_changed(dentry);
+#endif
 err:
 	return bch2_err_class(ret);
 }
@@ -1799,8 +1809,10 @@ static struct inode *bch2_nfs_get_inode(struct super_block *sb,
 static struct dentry *bch2_fh_alias(struct super_block *sb, struct inode *vinode)
 {
 	struct dentry *dentry = d_obtain_alias(vinode);
+#if IS_ENABLED(CONFIG_UNICODE)
 	if (!IS_ERR(dentry))
 		bch2_dentry_set_casefold_ops_locked(dentry, vinode);
+#endif
 	return dentry;
 }
 
