@@ -124,7 +124,6 @@ bcachefs-y		:=			\
 	data/write.o				\
 	debug/debug.o				\
 	debug/sysfs.o				\
-	debug/tests.o				\
 	debug/trace.o				\
 	errcode.o				\
 	fs/acl.o				\
@@ -233,6 +232,11 @@ endif
 endif
 
 ifeq ($(bcachefs-rust-y),y)
+
+# Tell the C side that bcachefs's Rust is actually compiled in. This is NOT
+# CONFIG_RUST: the DKMS auto-probe (bcachefs-rust-y) can drop Rust even when
+# CONFIG_RUST=y, so C that calls into Rust must gate on CONFIG_BCACHEFS_RUST.
+subdir-ccflags-y += -DCONFIG_BCACHEFS_RUST=1
 
 # bindgen must see the headers exactly as the C build does, or struct layouts
 # diverge silently (e.g. NO_BCACHEFS_FS gates bch_fs.vfs; -fplan9-extensions

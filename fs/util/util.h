@@ -445,6 +445,23 @@ do {									\
 u64 bch2_get_random_u64_below(u64);
 
 /*
+ * Rust-facing wrappers: local_clock() is a static inline and cond_resched() is a
+ * macro, so neither binds through bindgen. Wrapping them as bch2_* static
+ * inlines (allowlisted, so the codegen's wrap_static_fns emits callable
+ * wrappers) lets fs/ Rust call them uniformly across the kernel and userspace
+ * builds, with the macro expanded at C-compile time.
+ */
+static inline u64 bch2_local_clock(void)
+{
+	return local_clock();
+}
+
+static inline void bch2_cond_resched(void)
+{
+	cond_resched();
+}
+
+/*
  * All-ones mask of width @bits, defined for the full range 0..64 — unlike
  * (1ULL << bits) - 1 (UB at 64) or ~0ULL >> (64 - bits) (UB at 0).
  * Compiles branchless (cmov).
