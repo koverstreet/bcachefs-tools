@@ -17,6 +17,7 @@ use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
 use core::ptr::NonNull;
+use core::slice;
 use core::ops::{ControlFlow, Deref};
 
 use c::bpos;
@@ -199,15 +200,33 @@ impl<'a, 't> TransAttempt<'a, 't> {
         })
     }
 
-    pub fn bkey_clone(&self, k: &c::bkey_i) -> Result<TransBkey<'a, 't>, BchError> {
+    pub fn bkey_copy(&self, k: &c::bkey_i) -> Result<TransBkey<'a, 't>, BchError> {
         let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
         unsafe {
             core::ptr::copy_nonoverlapping(
                 k as *const c::bkey_i as *const u8,
-                dst.ptr.as_mut() as *mut c::bkey_i as *mut u8,
+                dst.as_mut() as *mut c::bkey_i as *mut u8,
                 k.k.u64s as usize * size_of::<u64>(),
             );
         }
+        Ok(dst)
+    }
+
+    pub fn bkey_reassemble(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
+        const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
+
+        let mut dst = self.bkey_alloc(k.k.u64s as u32)?;
+        let dst_key: &mut c::bkey_i = dst.as_mut();
+
+        unsafe {
+            core::ptr::copy_nonoverlapping(k.k, &mut dst_key.k, 1);
+            core::ptr::copy_nonoverlapping(
+                k.v as *const c::bch_val as *const u64,
+                &mut dst.as_mut_u64s()[BKEY_U64S] as *mut u64,
+                k.k.u64s as usize - BKEY_U64S,
+            );
+        }
+
         Ok(dst)
     }
 
@@ -221,7 +240,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
             c::bch2_trans_update_buf(
                 self.raw(),
                 &mut iter.raw,
-                key.ptr.as_ptr(),
+                key.as_ptr(),
                 key.buf_u64s,
                 flags,
             )
@@ -231,12 +250,40 @@ impl<'a, 't> TransAttempt<'a, 't> {
 }
 
 impl<'a, 't> TransBkey<'a, 't> {
-    pub fn as_mut(&mut self) -> &mut c::bkey_i {
-        unsafe { self.ptr.as_mut() }
-    }
-
     pub fn as_ptr(&self) -> *mut c::bkey_i {
         self.ptr.as_ptr()
+    }
+
+    pub fn as_u64s(&self) -> &[u64] {
+        self.as_ref()
+    }
+
+    pub fn as_mut_u64s(&mut self) -> &mut [u64] {
+        self.as_mut()
+    }
+}
+
+impl AsRef<c::bkey_i> for TransBkey<'_, '_> {
+    fn as_ref(&self) -> &c::bkey_i {
+        unsafe { self.ptr.as_ref() }
+    }
+}
+
+impl AsMut<c::bkey_i> for TransBkey<'_, '_> {
+    fn as_mut(&mut self) -> &mut c::bkey_i {
+        unsafe { self.ptr.as_mut() }
+    }
+}
+
+impl AsRef<[u64]> for TransBkey<'_, '_> {
+    fn as_ref(&self) -> &[u64] {
+        unsafe { slice::from_raw_parts(self.ptr.as_ptr() as *const u64, self.buf_u64s as usize) }
+    }
+}
+
+impl AsMut<[u64]> for TransBkey<'_, '_> {
+    fn as_mut(&mut self) -> &mut [u64] {
+        unsafe { slice::from_raw_parts_mut(self.ptr.as_ptr() as *mut u64, self.buf_u64s as usize) }
     }
 }
 
