@@ -11,7 +11,7 @@
 #
 # Usage: build-binary.sh DISTRO ARCH COMMIT SOURCE_DIR RESULT_DIR RUST_VERSION
 #
-# DISTRO:     unstable|forky|trixie|questing|plucky
+# DISTRO:     unstable|forky|trixie|resolute|questing|plucky
 # ARCH:       amd64|ppc64el|arm64
 # SOURCE_DIR: directory containing .dsc from source build
 # RESULT_DIR: where to write output .deb files
@@ -44,8 +44,9 @@ case "$DISTRO" in
     unstable) BASE_IMAGE="debian:unstable-slim" ;;
     forky)    BASE_IMAGE="debian:forky-slim" ;;
     trixie)   BASE_IMAGE="debian:trixie-slim" ;;
-    plucky)   BASE_IMAGE="ubuntu:plucky" ;;
+    resolute) BASE_IMAGE="ubuntu:resolute" ;;
     questing) BASE_IMAGE="ubuntu:questing" ;;
+    plucky)   BASE_IMAGE="ubuntu:plucky" ;;
     *) echo "ERROR: unknown distro $DISTRO"; exit 1 ;;
 esac
 

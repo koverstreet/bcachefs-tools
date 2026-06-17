@@ -38,6 +38,7 @@ enum Distro {
     Unstable,
     Forky,
     Trixie,
+    Resolute,
     Questing,
     Plucky,
 }
@@ -47,12 +48,13 @@ impl Distro {
         Distro::Unstable,
         Distro::Forky,
         Distro::Trixie,
+        Distro::Resolute,
         Distro::Questing,
         Distro::Plucky,
     ];
 
     fn is_ubuntu(self) -> bool {
-        matches!(self, Distro::Plucky | Distro::Questing)
+        matches!(self, Distro::Plucky | Distro::Questing | Distro::Resolute)
     }
 
     fn as_str(self) -> &'static str {
@@ -60,6 +62,7 @@ impl Distro {
             Distro::Unstable => "unstable",
             Distro::Forky => "forky",
             Distro::Trixie => "trixie",
+            Distro::Resolute => "resolute",
             Distro::Questing => "questing",
             Distro::Plucky => "plucky",
         }

@@ -23,6 +23,7 @@ commit + SIGUSR1 → orchestrator wakes up → builds → publishes.
 | **unstable** | local | cross (local) | remote (farm1) |
 | **forky** | local | cross (local) | remote (farm1) |
 | **trixie** | local | cross (local) | remote (farm1) |
+| **resolute** | local | — | remote (farm1) |
 | **questing** | local | — | remote (farm1) |
 | **plucky** | local | — | remote (farm1) |
 
