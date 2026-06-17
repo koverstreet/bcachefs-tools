@@ -3378,7 +3378,7 @@ int bch2_btree_node_rewrite_pos(struct btree_trans *trans,
 	BUG_ON(!level);
 
 	/* Traverse one depth lower to get a pointer to the node itself: */
-	CLASS(btree_node_iter, iter)(trans, btree, pos, 0, level - 1, 0);
+	CLASS(btree_node_iter, iter)(trans, btree, pos, level + 1, level - 1, 0);
 	struct btree *b = errptr_try(bch2_btree_iter_peek_node(&iter));
 
 	return bch2_btree_node_rewrite(trans, &iter, b, target, commit_flags, write_flags);
