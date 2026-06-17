@@ -41,7 +41,7 @@ pub fn fsck_write_inode(
     })
 }
 
-pub fn insert_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
+pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchError> {
     unsafe {
         let mut packed: c::bkey_inode_buf = Default::default();
         c::bch2_inode_pack(fs.raw, &mut packed, inode);
