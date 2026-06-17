@@ -1308,8 +1308,10 @@ static void reconcile_wait(struct bch_fs *c)
 	u64 now = atomic64_read(&clock->now);
 	u64 min_member_capacity = bch2_min_rw_member_capacity(c);
 
-	if (reconcile_hipri_work_pending(c))
+	if (reconcile_hipri_work_pending(c)) {
+		cond_resched();
 		return;
+	}
 
 	if (min_member_capacity == U64_MAX)
 		min_member_capacity = 128 * 2048;
