@@ -1476,9 +1476,13 @@ int bch2_btree_path_traverse_one(struct btree_trans *trans,
 		struct btree_path *linked;
 		unsigned iter;
 
-		trans_for_each_path_with_node(trans, path_l(path)->b, linked, iter)
+		trans_for_each_path_with_node(trans, path_l(path)->b, linked, iter) {
+			if (!btree_path_pos_in_node(linked, path_l(path)->b))
+				continue;
+
 			for (unsigned j = path->level + 1; j < max_level; j++)
 				linked->l[j] = path->l[j];
+		}
 	}
 
 out_uptodate:
