@@ -401,6 +401,17 @@ fn bkey_s_c_to_result<'i>(k: c::bkey_s_c) -> Result<Option<BkeySC<'i>>, BchError
 }
 
 impl<'t> BtreeIter<'t> {
+    pub fn uninit() -> BtreeIter<'t> {
+        BtreeIter {
+            raw:   Default::default(),
+            trans: PhantomData,
+        }
+    }
+
+    pub(crate) fn raw_mut(&mut self) -> *mut c::btree_iter {
+        &mut self.raw
+    }
+
     pub fn new(
         trans: &'t BtreeTrans<'t>,
         btree: impl Into<u32>,
