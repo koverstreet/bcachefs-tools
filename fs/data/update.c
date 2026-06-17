@@ -1053,9 +1053,9 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 static unsigned bch2_btree_ptr_durability_on_target(struct bch_fs *c, struct bkey_s_c k,
 					       unsigned target)
 {
-	/* Doesn't handle stripe pointers: */
+	/* Doesn't handle stripe pointers; btree ptrs should not have any. */
 
-	struct bch_devs_mask devs = target_rw_devs(c, BCH_DATA_user, target);
+	struct bch_devs_mask devs = target_rw_devs(c, BCH_DATA_btree, target);
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
@@ -1070,6 +1070,47 @@ static unsigned bch2_btree_ptr_durability_on_target(struct bch_fs *c, struct bke
 	return durability;
 }
 
+static bool bch2_btree_ptr_has_dev_evacuating(struct bch_fs *c, struct bkey_s_c k)
+{
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	guard(rcu)();
+	bkey_for_each_ptr(ptrs, ptr) {
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, ptr->dev);
+		if (ca && ca->mi.state == BCH_MEMBER_STATE_evacuating)
+			return true;
+	}
+
+	return false;
+}
+
+static bool btree_rewrite_can_make_progress(unsigned available,
+					    unsigned have,
+					    unsigned replicas_want,
+					    bool evacuating)
+{
+	/*
+	 * Btree node rewrites allocate a full replacement node; they do not
+	 * preserve the old non-killed pointers the way extent data updates do.
+	 *
+	 * A full-durability rewrite is always ok; it may be needed to change
+	 * target placement or to drop excess replicas.
+	 *
+	 * A degraded rewrite is worthwhile in exactly two cases:
+	 *
+	 * - it increases durability: have < replicas_want && available > have
+	 * - it moves a node off an evacuating device: evacuating && available
+	 *
+	 * Missing/offline devices are not enough by themselves; rewriting at the
+	 * same durability would just burn IO and keep the same degraded state.
+	 * Evacuation is different because changing placement is progress even
+	 * when the replacement is still under-replicated.
+	 */
+	return available >= replicas_want ||
+		(have < replicas_want && available > have) ||
+		(evacuating && available);
+}
+
 static int bch2_can_do_write_btree(struct bch_fs *c,
 				   struct bch_inode_opts *opts,
 				   struct data_update_opts *data_opts, struct bkey_s_c k,
@@ -1078,22 +1119,44 @@ static int bch2_can_do_write_btree(struct bch_fs *c,
 	enum bch_watermark watermark = data_opts->commit_flags & BCH_WATERMARK_MASK;
 	struct bch_devs_list empty = {};
 	bool need_copygc = false;
+	bool evacuating = bch2_btree_ptr_has_dev_evacuating(c, k);
 
 	if (bch2_bkey_nr_dirty_ptrs(c, k) > opts->data_replicas)
 		return 0;
 
-	if (durability_available_on_target(c, watermark, data_opts->write_flags,
-					   BCH_DATA_btree, data_opts->target, &empty,
-					   trace, &need_copygc) >
-	    bch2_btree_ptr_durability_on_target(c, k, data_opts->target))
+	unsigned target_available =
+		durability_available_on_target(c, watermark, data_opts->write_flags,
+					       BCH_DATA_btree, data_opts->target, &empty,
+					       trace, &need_copygc);
+	unsigned target_durability = bch2_btree_ptr_durability_on_target(c, k, data_opts->target);
+	unsigned durability = bch2_btree_ptr_durability(c, k).total;
+
+	/*
+	 * First try the requested target: background target migration is
+	 * progress if we can increase durability on that target. If the target
+	 * write would be degraded, compare against total current durability:
+	 * moving to a target is not allowed to reduce replication unless the
+	 * node is on an evacuating device.
+	 */
+	if (target_available > target_durability &&
+	    btree_rewrite_can_make_progress(target_available, durability,
+					    opts->data_replicas, evacuating))
 		return 0;
 
 	if (!(data_opts->write_flags & BCH_WRITE_only_specified_devs)) {
-		unsigned d = bch2_btree_ptr_durability(c, k).total;
-		if (d < opts->data_replicas &&
-		    d < durability_available_on_target(c, watermark, data_opts->write_flags,
-						       BCH_DATA_btree, 0, &empty,
-						       trace, &need_copygc))
+		/*
+		 * If the target-specific check did not prove progress, check
+		 * whether a full-filesystem replacement can improve total
+		 * durability or move the node off an evacuating device.
+		 */
+		unsigned available = data_opts->target
+			? durability_available_on_target(c, watermark, data_opts->write_flags,
+							 BCH_DATA_btree, 0, &empty,
+							 trace, &need_copygc)
+			: target_available;
+
+		if (btree_rewrite_can_make_progress(available, durability,
+						    opts->data_replicas, evacuating))
 			return 0;
 	}
 
@@ -1119,8 +1182,7 @@ static int __bch2_can_do_write(struct bch_fs *c,
 		: 0;
 
 	if (btree &&
-	    data_opts->type == BCH_DATA_UPDATE_reconcile &&
-	    !bch2_bkey_has_dev_bad_or_evacuating(c, k))
+	    data_opts->type == BCH_DATA_UPDATE_reconcile)
 		return bch2_can_do_write_btree(c, opts, data_opts, k, trace);
 
 	if (trace) {
