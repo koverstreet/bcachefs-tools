@@ -40,7 +40,12 @@ const ALLOWLIST_TYPE: &[&str] = &["bch_.*", "bkey_i_.*", "bkey_s_c_.*", "bkey_s_
     // genradix: kernel::bindings doesn't bind it, so we emit it ourselves from a
     // build-time copy of the kernel header (see run_bindgen + fs/Makefile).
     "genradix.*", "__genradix.*"];
-const BITFIELD_ENUM: &[&str] = &["btree_iter_update_trigger_flags", "bch_trans_commit_flags", "bch_write_flags"];
+const BITFIELD_ENUM: &[&str] = &[
+    "btree_iter_update_trigger_flags",
+    "bch_reservation_flags",
+    "bch_trans_commit_flags",
+    "bch_write_flags",
+];
 const RUSTIFIED_ENUM: &[&str] = &["fsck_err_opts", "bch_key_types"];
 const NEWTYPE_ENUM: &[&str] = &[
     "bcachefs_metadata_version",
