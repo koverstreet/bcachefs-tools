@@ -183,12 +183,12 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
         bcachefs_kernel::btree::iter::BtreeIterFlags::empty(),
     );
 
-    // Extract type and offset inside the closure to avoid lifetime escape
-    let result: Result<(u8, u64), _> = lockrestart_do(&trans, || {
-        let k = iter.peek_prev()?;
+    // Extract type and offset inside the closure to avoid lifetime escape.
+    let result: Result<(u8, u64), _> = lockrestart_do(&trans, |t| {
+        let (t, k) = t.result_value(iter.peek_prev())?;
         match k {
-            Some(k) => Ok((k.k.type_, k.k.p.offset)),
-            None => Err(bcachefs_kernel::errcode::BchError::from_raw(-libc::ENOENT)),
+            Some(k) => Ok((t, (k.k.type_, k.k.p.offset))),
+            None => Err(t.error(bcachefs_kernel::errcode::BchError::from_raw(-libc::ENOENT))),
         }
     });
 
