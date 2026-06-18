@@ -7,6 +7,7 @@
   jq,
   pkg-config,
   rustPlatform,
+  rust-bindgen,
   versionCheckHook,
 
   # run time
@@ -40,6 +41,7 @@ let
     strictDeps = true;
 
     env = {
+      BINDGEN = "${rust-bindgen}/bin/bindgen";
       PKG_CONFIG_SYSTEMD_SYSTEMDSYSTEMUNITDIR = "${placeholder "out"}/lib/systemd/system";
       PKG_CONFIG_UDEV_UDEVDIR = "${placeholder "out"}/lib/udev";
     };
@@ -56,6 +58,7 @@ let
       jq
       pkg-config
       rustPlatform.bindgenHook
+      rust-bindgen
     ];
 
     buildInputs = [
