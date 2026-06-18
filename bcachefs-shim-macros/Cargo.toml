@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0
+[package]
+name = "bcachefs-shim-macros"
+version = "0.1.0"
+authors = [ "Kent Overstreet <kent.overstreet@linux.dev>" ]
+edition = "2021"
+rust-version = "1.85.0"
+
+[lib]
+proc-macro = true
+
+[dependencies]
+syn = { version = "2.0", features = ["full"] }
+quote = "1.0"

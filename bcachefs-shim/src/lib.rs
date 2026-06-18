@@ -8,6 +8,11 @@
 //! lists — from here. In a real kernel build those come from the kernel
 //! itself, and this crate is swapped out behind a cfg.
 
+/// Userspace stand-in for the in-kernel `#[pin_data]` attribute (a no-op — see
+/// `bcachefs-shim-macros`). fs/ code imports this under `#[cfg(not(kernel))]`
+/// and `kernel`'s real one otherwise.
+pub use bcachefs_shim_macros::pin_data;
+
 pub mod c {
     #![allow(
         non_camel_case_types,
