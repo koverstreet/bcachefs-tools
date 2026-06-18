@@ -82,12 +82,10 @@ impl<'f> BtreeTrans<'f> {
     pub fn commit(
         &self,
         disk_res: *mut c::disk_reservation,
-        journal_seq: *mut u64,
         flags: c::bch_trans_commit_flags,
     ) -> Result<(), BchError> {
         unsafe {
             (*self.raw).disk_res = disk_res;
-            (*self.raw).journal_seq = journal_seq;
         }
         let ret = unsafe {
             c::__bch2_trans_commit(self.raw, flags)
@@ -187,13 +185,11 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn commit(
         self,
-        disk_res:    *mut c::disk_reservation,
-        journal_seq: *mut u64,
-        flags:       c::bch_trans_commit_flags,
+        disk_res: *mut c::disk_reservation,
+        flags:    c::bch_trans_commit_flags,
     ) -> Result<Self, TransError> {
         unsafe {
             (*self.raw()).disk_res = disk_res;
-            (*self.raw()).journal_seq = journal_seq;
         }
         let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags) };
         self.result(ret)
@@ -531,7 +527,6 @@ where
 pub fn commit_do<'t, F>(
     trans: &BtreeTrans<'t>,
     disk_res: *mut c::disk_reservation,
-    journal_seq: *mut u64,
     flags: c::bch_trans_commit_flags,
     mut f: F,
 ) -> Result<(), BchError>
@@ -540,7 +535,7 @@ where
 {
     lockrestart_do(trans, |t| {
         let t = f(t)?;
-        let t = t.commit(disk_res, journal_seq, flags)?;
+        let t = t.commit(disk_res, flags)?;
         t.done(())
     })
 }
@@ -551,7 +546,6 @@ where
 pub fn trans_commit_do<'t, F>(
     fs: &'t Fs,
     disk_res: *mut c::disk_reservation,
-    journal_seq: *mut u64,
     flags: c::bch_trans_commit_flags,
     f: F,
 ) -> Result<(), BchError>
@@ -559,7 +553,7 @@ where
     F: for<'a> FnMut(TransAttempt<'a, 't>) -> Result<TransAttempt<'a, 't>, TransError>,
 {
     let trans = BtreeTrans::new(fs);
-    commit_do(&trans, disk_res, journal_seq, flags, f)
+    commit_do(&trans, disk_res, flags, f)
 }
 
 /// Create a transaction and run a closure with restart retry (no commit).
@@ -796,7 +790,6 @@ impl<'t> BtreeIter<'t> {
         &mut self,
         trans:       &BtreeTrans<'t>,
         disk_res:    *mut c::disk_reservation,
-        journal_seq: *mut u64,
         flags:       c::bch_trans_commit_flags,
         mut f:       F,
     ) -> Result<(), BchError>
@@ -819,7 +812,7 @@ impl<'t> BtreeIter<'t> {
                     let Some((t, flow)) = retry_restart(f(t, k))? else {
                         continue;
                     };
-                    let Some(t) = retry_restart(t.commit(disk_res, journal_seq, flags))? else {
+                    let Some(t) = retry_restart(t.commit(disk_res, flags))? else {
                         continue;
                     };
 
@@ -840,7 +833,6 @@ impl<'t> BtreeIter<'t> {
         end:         bpos,
         iter_flags:  BtreeIterFlags,
         disk_res:    *mut c::disk_reservation,
-        journal_seq: *mut u64,
         flags:       c::bch_trans_commit_flags,
         mut f:       F,
     ) -> Result<(), BchError>
@@ -869,7 +861,7 @@ impl<'t> BtreeIter<'t> {
                     let Some((t, flow)) = retry_restart(f(t, k))? else {
                         continue;
                     };
-                    let Some(t) = retry_restart(t.commit(disk_res, journal_seq, flags))? else {
+                    let Some(t) = retry_restart(t.commit(disk_res, flags))? else {
                         continue;
                     };
 
