@@ -225,7 +225,7 @@ enum fsck_err_opts {
 	  OPT_FS|OPT_INODE|OPT_FORMAT|OPT_MOUNT_OLD|OPT_RUNTIME,	\
 	  OPT_BOOL(),							\
 	  BCH_SB_ERASURE_CODE,		false,				\
-	  NULL,		"Enable erasure coding (DO NOT USE YET)")	\
+	  NULL,		"Enable erasure coding (RAID5/6, but no write hole)")\
 	x(ec_max_data_blocks,		u8,				\
 	  OPT_FS|OPT_FORMAT|OPT_MOUNT|OPT_RUNTIME,			\
 	  OPT_UINT(0, 15),						\
