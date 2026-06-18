@@ -155,7 +155,7 @@ fn unlink_and_rm(
 
     btree::iter::trans_commit_do(
         fs,
-        std::ptr::null_mut(),
+        None,
         c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc,
         |t| {
             namei::unlink_trans(
@@ -211,7 +211,7 @@ fn create_or_update_link(
 
     btree::iter::trans_commit_do(
         fs,
-        std::ptr::null_mut(),
+        None,
         c::bch_trans_commit_flags(0u32),
         |t| namei::link_trans(t, dir_inum, &mut dir_u, inum, &mut inode, &qstr),
     )
@@ -256,7 +256,7 @@ fn create_or_update_file(
 
         btree::iter::trans_commit_do(
             fs,
-            std::ptr::null_mut(),
+            None,
             c::bch_trans_commit_flags(0u32),
             |t| {
                 namei::create_trans(
@@ -345,7 +345,7 @@ fn copy_xattrs(
 
         btree::iter::trans_commit_do(
             fs,
-            std::ptr::null_mut(),
+            None,
             c::bch_trans_commit_flags(0u32),
             |t| {
                 xattr::set(

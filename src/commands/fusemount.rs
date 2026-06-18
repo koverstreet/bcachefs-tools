@@ -164,7 +164,7 @@ fn fuse_create_inode(
 
     btree::iter::trans_commit_do(
         fs,
-        std::ptr::null_mut(),
+        None,
         c::bch_trans_commit_flags(0u32),
         |t| {
             namei::create_trans(
@@ -194,7 +194,7 @@ fn fuse_unlink(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<(), BchError
 
     btree::iter::trans_commit_do(
         fs,
-        std::ptr::null_mut(),
+        None,
         c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc,
         |t| {
             namei::unlink_trans(
@@ -222,7 +222,7 @@ fn fuse_link(
 
     btree::iter::trans_commit_do(
         fs,
-        std::ptr::null_mut(),
+        None,
         c::bch_trans_commit_flags(0u32),
         |t| namei::link_trans(t, newparent, &mut dir_u, inum, &mut inode, &qstr),
     )?;
@@ -246,7 +246,7 @@ fn fuse_rename(
 
     btree::iter::trans_commit_do(
         fs,
-        std::ptr::null_mut(),
+        None,
         c::bch_trans_commit_flags(0u32),
         |t| {
             namei::rename_trans(
@@ -282,7 +282,7 @@ fn fuse_setattr(
 
     btree::iter::trans_commit_do(
         fs,
-        std::ptr::null_mut(),
+        None,
         c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc,
         |t| {
             let now = fs.current_time();
@@ -334,7 +334,7 @@ fn fuse_setattr(
 fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     btree::iter::trans_commit_do(
         fs,
-        std::ptr::null_mut(),
+        None,
         c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc,
         |t| {
             let now = fs.current_time();
