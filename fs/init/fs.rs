@@ -2,6 +2,7 @@ use crate::c;
 use crate::btree::bkey::AsBkeyI;
 use crate::errcode::{bch_err_throw, bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
+use crate::btree::iter::{BtreeIterFlags, UpdateTriggerFlags};
 use core::ops::ControlFlow;
 
 /// RAII guard for a device reference. Calls bch2_dev_put on drop.
@@ -213,8 +214,8 @@ impl Fs {
     }
 
     /// Mark device superblock buckets in btree metadata.
-    pub fn trans_mark_dev_sb(&self, ca: &DevRef, flags: c::btree_iter_update_trigger_flags) -> Result<(), BchError> {
-        ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.raw, ca.as_mut_ptr(), flags) })
+    pub fn trans_mark_dev_sb(&self, ca: &DevRef, flags: UpdateTriggerFlags) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.raw, ca.as_mut_ptr(), c::btree_iter_update_trigger_flags(flags.bits())) })
     }
 
     /// Write superblock to disk (locked version). Caller must hold sb_lock.
@@ -268,10 +269,10 @@ impl Fs {
         btree_id: c::btree_id,
         start: c::bpos,
         end: c::bpos,
-        flags: c::btree_iter_update_trigger_flags,
+        flags: BtreeIterFlags,
     ) -> Result<(), BchError> {
         ret_to_result(unsafe {
-            c::bch2_btree_delete_range(self.raw, btree_id, start, end, flags)
+            c::bch2_btree_delete_range(self.raw, btree_id, start, end, c::btree_iter_update_trigger_flags(flags.bits()))
         })
     }
 
@@ -281,7 +282,7 @@ impl Fs {
         key:          &mut impl AsBkeyI,
         disk_res:     Option<&DiskReservation<'_>>,
         commit_flags: c::bch_trans_commit_flags,
-        iter_flags:   c::btree_iter_update_trigger_flags,
+        iter_flags:   UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         let disk_res = disk_res
             .map(|r| r.as_mut_ptr())
@@ -294,7 +295,7 @@ impl Fs {
                 key.as_bkey_i_mut(),
                 disk_res,
                 commit_flags,
-                iter_flags,
+                c::btree_iter_update_trigger_flags(iter_flags.bits()),
             )
         })
     }
