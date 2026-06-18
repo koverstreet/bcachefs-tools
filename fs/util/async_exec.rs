@@ -12,12 +12,17 @@
 //! which gives the "polled by one thread at a time" guarantee for free (so,
 //! unlike a per-wake-`spawn` design, no hand-rolled state machine).
 //!
-//! Not yet here: a join handle (await a task's result) and a `block_on` for sync
-//! callers. Those are the integration layer the perf test will need.
+//! On top of that core sit [`WaitGroup`] (an async fork-join barrier — the last
+//! task to finish wakes the waiter) and [`block_on`] (drive a future to
+//! completion from a synchronous caller, parking the thread until it is ready).
+//! `block_on`'s parker — a completion in the kernel, a condvar in userspace — is
+//! the one genuinely platform-specific piece; localizing it here is what lets
+//! callers like the perf test stay cfg-free.
 
 use core::cell::UnsafeCell;
 use core::future::Future;
 use core::pin::Pin;
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
 
 #[cfg(kernel)]
@@ -28,9 +33,9 @@ use kernel::{
 };
 
 #[cfg(not(kernel))]
-use bcachefs_shim::workqueue::{Queue, Work, WorkItem};
+use bcachefs_shim::workqueue::{AllocError, Queue, Work, WorkItem};
 #[cfg(not(kernel))]
-use std::sync::Arc;
+use std::sync::{Arc, Condvar, Mutex};
 
 #[cfg_attr(kernel, pin_data)]
 struct Task<F: Future<Output = ()> + Send + 'static> {
@@ -99,15 +104,24 @@ kernel::impl_has_work! {
     impl{F: Future<Output = ()> + Send + 'static} HasWork<Self> for Task<F> { self.work }
 }
 
-/// Spawn `future` onto `queue`. Fire-and-forget for now (no join handle yet).
+/// Spawn `future` onto `queue` to run to completion. Fire-and-forget: the output
+/// is discarded — pair it with a [`WaitGroup`] to learn when a batch is done.
+///
+/// Returns `Result` on both platforms — kernel task allocation is fallible; the
+/// userspace path is infallible but mirrors the signature — so callers handling
+/// the error (e.g. `.map_err(...)` / `.is_err()`) stay cfg-free.
 #[cfg(not(kernel))]
-pub fn spawn<F: Future<Output = ()> + Send + 'static>(queue: &'static Queue, future: F) {
+pub fn spawn<F: Future<Output = ()> + Send + 'static>(
+    queue: &'static Queue,
+    future: F,
+) -> Result<(), AllocError> {
     let task = Arc::new(Task {
         work: Work::new(),
         queue,
         future: UnsafeCell::new(future),
     });
     queue.enqueue(task);
+    Ok(())
 }
 
 // FLAG(kernel, verify): the kernel half. `Work` is `#[pin]`, so construction is
@@ -128,6 +142,197 @@ pub fn spawn<F: Future<Output = ()> + Send + 'static>(
     )?;
     queue.enqueue(task);
     Ok(())
+}
+
+/// The system-wide unbound workqueue — the default executor for [`spawn`].
+#[cfg(not(kernel))]
+pub fn system_unbound() -> &'static Queue {
+    bcachefs_shim::workqueue::system_unbound()
+}
+
+#[cfg(kernel)]
+pub fn system_unbound() -> &'static Queue {
+    kernel::workqueue::system_unbound()
+}
+
+// ---- WaitGroup: an async fork-join barrier ----
+
+/// A counting fork-join barrier. `n` tasks each call [`done`](WaitGroup::done)
+/// when they finish; [`wait`](WaitGroup::wait) resolves once all `n` have. This is
+/// the async analogue of a counting completion: the last `done` wakes the waiter
+/// through the executor's waker, so the forking thread can park on it in
+/// [`block_on`].
+pub struct WaitGroup {
+    remaining: AtomicU32,
+    waker: WakerSlot,
+}
+
+impl WaitGroup {
+    /// Create a group expecting `n` [`done`](WaitGroup::done) calls, shared via
+    /// `Arc` between the workers and the waiter. `Result` on both platforms (see
+    /// [`spawn`]) so callers stay cfg-free.
+    #[cfg(not(kernel))]
+    pub fn new(n: u32) -> Result<Arc<Self>, AllocError> {
+        Ok(Arc::new(WaitGroup {
+            remaining: AtomicU32::new(n),
+            waker: WakerSlot::new(),
+        }))
+    }
+
+    #[cfg(kernel)]
+    pub fn new(n: u32) -> Result<Arc<Self>> {
+        Arc::new(
+            WaitGroup {
+                remaining: AtomicU32::new(n),
+                waker: WakerSlot::new(),
+            },
+            GFP_KERNEL,
+        )
+    }
+
+    /// Signal that one task has finished. The last one wakes the waiter.
+    pub fn done(&self) {
+        if self.remaining.fetch_sub(1, Ordering::AcqRel) == 1 {
+            if let Some(waker) = self.waker.take() {
+                waker.wake();
+            }
+        }
+    }
+
+    /// A future that resolves once every expected [`done`](WaitGroup::done) has
+    /// been called.
+    pub fn wait(self: &Arc<Self>) -> WaitGroupWait {
+        WaitGroupWait { wg: self.clone() }
+    }
+}
+
+/// The future returned by [`WaitGroup::wait`].
+pub struct WaitGroupWait {
+    wg: Arc<WaitGroup>,
+}
+
+impl Future for WaitGroupWait {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        // Register before the count check so a `done` landing in between can't be
+        // lost: either we observe zero here, or `done` finds our waker and the
+        // re-poll observes it.
+        self.wg.waker.register(cx.waker().clone());
+        if self.wg.remaining.load(Ordering::Acquire) == 0 {
+            Poll::Ready(())
+        } else {
+            Poll::Pending
+        }
+    }
+}
+
+/// A single-slot waker cell guarded by a tiny spinlock. Pure `core`, so it is
+/// identical on kernel and userspace — no lock type, no pin-init, no allocation.
+/// The critical section only moves an `Option<Waker>`, so it is O(1) and never
+/// sleeps; the only contenders are the waiter and the task that wakes it.
+struct WakerSlot {
+    locked: AtomicBool,
+    waker: UnsafeCell<Option<Waker>>,
+}
+
+// SAFETY: every access to `waker` happens under the `locked` spinlock.
+unsafe impl Sync for WakerSlot {}
+
+impl WakerSlot {
+    fn new() -> Self {
+        WakerSlot {
+            locked: AtomicBool::new(false),
+            waker: UnsafeCell::new(None),
+        }
+    }
+
+    fn guard(&self) -> WakerGuard<'_> {
+        while self.locked.swap(true, Ordering::Acquire) {
+            core::hint::spin_loop();
+        }
+        WakerGuard(self)
+    }
+
+    fn register(&self, waker: Waker) {
+        let g = self.guard();
+        // SAFETY: held under the spinlock.
+        unsafe { *g.0.waker.get() = Some(waker); }
+    }
+
+    fn take(&self) -> Option<Waker> {
+        let g = self.guard();
+        // SAFETY: held under the spinlock.
+        unsafe { (*g.0.waker.get()).take() }
+    }
+}
+
+struct WakerGuard<'a>(&'a WakerSlot);
+
+impl Drop for WakerGuard<'_> {
+    fn drop(&mut self) {
+        self.0.locked.store(false, Ordering::Release);
+    }
+}
+
+// ---- block_on: drive a future to completion from a synchronous caller ----
+// The parker — what actually blocks the calling thread until the future is ready
+// — is the one genuinely platform-specific primitive: a condvar in userspace, a
+// kernel wait primitive in the kernel. Everything above this line is shared.
+
+/// Drive `future` to completion on the calling thread, parking when it is pending
+/// and re-polling on each wake.
+#[cfg(not(kernel))]
+pub fn block_on<F: Future>(future: F) -> F::Output {
+    use std::task::Wake;
+
+    struct Parker {
+        signalled: Mutex<bool>,
+        cond: Condvar,
+    }
+
+    impl Parker {
+        fn park(&self) {
+            let mut signalled = self.signalled.lock().unwrap();
+            while !*signalled {
+                signalled = self.cond.wait(signalled).unwrap();
+            }
+            *signalled = false;
+        }
+    }
+
+    impl Wake for Parker {
+        fn wake(self: Arc<Self>) {
+            *self.signalled.lock().unwrap() = true;
+            self.cond.notify_one();
+        }
+    }
+
+    let parker = Arc::new(Parker {
+        signalled: Mutex::new(false),
+        cond: Condvar::new(),
+    });
+    let waker: Waker = parker.clone().into();
+    let mut cx = Context::from_waker(&waker);
+
+    let mut future = core::pin::pin!(future);
+    loop {
+        match future.as_mut().poll(&mut cx) {
+            Poll::Ready(value) => return value,
+            Poll::Pending => parker.park(),
+        }
+    }
+}
+
+// FLAG(kernel, verify): the kernel parker. Mirror of the condvar version using the
+// kernel crate's wait primitive (e.g. `kernel::sync::CondVar` + a guarded flag,
+// both pin-init / stack-pinned) and a waker built from `Arc<Parker>` via
+// `ForeignOwnable` (cf. the waker-bridge note below). This is the single spot the
+// perf test can't be made cfg-free without — it needs design against this tree's
+// kernel crate.
+#[cfg(kernel)]
+pub fn block_on<F: Future>(_future: F) -> F::Output {
+    todo!("async_exec::block_on: wire up the kernel parker (see FLAG above)")
 }
 
 // ---- Waker bridge: Arc<Task> <-> core::task::Waker ----
