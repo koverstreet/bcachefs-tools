@@ -574,7 +574,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .ok_or_else(|| anyhow!("device 0 not found"))?;
     fs.trans_mark_dev_sb(
         &ca_ref,
-        c::btree_iter_update_trigger_flags::BTREE_TRIGGER_transactional,
+        bcachefs_kernel::btree::iter::UpdateTriggerFlags::TRANSACTIONAL,
     ).map_err(|e| anyhow!("Error marking superblock buckets: {}", e))?;
     drop(ca_ref);
 

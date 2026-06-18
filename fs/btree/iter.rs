@@ -299,7 +299,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self,
         iter:  &mut BtreeIter<'t>,
         key:   TransBkey<'_, 't>,
-        flags: c::btree_iter_update_trigger_flags,
+        flags: UpdateTriggerFlags,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
             c::bch2_trans_update_buf(
@@ -307,7 +307,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 &mut iter.raw,
                 key.as_ptr(),
                 key.buf_u64s,
-                flags,
+                c::btree_iter_update_trigger_flags(flags.bits()),
             )
         };
         self.result(ret)
@@ -317,14 +317,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self,
         btree: impl Into<u32>,
         key:   TransBkey<'_, 't>,
-        flags: c::btree_iter_update_trigger_flags,
+        flags: UpdateTriggerFlags,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
             c::bch2_btree_insert_trans(
                 self.raw(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 key.as_ptr(),
-                flags,
+                c::btree_iter_update_trigger_flags(flags.bits()),
             )
         };
         self.result(ret)
@@ -334,7 +334,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self,
         btree: impl Into<u32>,
         key:   TransBkey<'_, 't>,
-        flags: c::btree_iter_update_trigger_flags,
+        flags: UpdateTriggerFlags,
     ) -> Result<Self, TransError> {
         let key_ref: &c::bkey_i = key.as_ref();
         let ret = unsafe {
@@ -343,7 +343,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 key.as_ptr(),
                 key_ref.k.u64s as u32,
-                flags,
+                c::btree_iter_update_trigger_flags(flags.bits()),
             )
         };
         self.result(ret)
@@ -352,9 +352,15 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn delete_at(
         self,
         iter:  &mut BtreeIter<'t>,
-        flags: c::btree_iter_update_trigger_flags,
+        flags: UpdateTriggerFlags,
     ) -> Result<Self, TransError> {
-        let ret = unsafe { c::bch2_btree_delete_at(self.raw(), iter.raw_mut(), flags) };
+        let ret = unsafe {
+            c::bch2_btree_delete_at(
+                self.raw(),
+                iter.raw_mut(),
+                c::btree_iter_update_trigger_flags(flags.bits()),
+            )
+        };
         self.result(ret)
     }
 
@@ -383,14 +389,14 @@ impl<'a, 't> TransAttempt<'a, 't> {
         self,
         btree: impl Into<u32>,
         pos:   c::bpos,
-        flags: c::btree_iter_update_trigger_flags,
+        flags: UpdateTriggerFlags,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
             c::bch2_btree_delete(
                 self.raw(),
                 c::btree_id::from_raw(btree.into()).expect("invalid btree id"),
                 pos,
-                flags,
+                c::btree_iter_update_trigger_flags(flags.bits()),
             )
         };
         self.result(ret)
@@ -504,6 +510,29 @@ bitflags! {
         const NOPRESERVE = c::btree_iter_update_trigger_flags::BTREE_ITER_nopreserve.0;
         const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.0;
         const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.0;
+    }
+}
+
+bitflags! {
+    /// The `BTREE_UPDATE_*` / `BTREE_TRIGGER_*` half of the C
+    /// `btree_iter_update_trigger_flags` enum: the flags that control how an
+    /// update commits and which triggers it runs. These combine freely with each
+    /// other but never with the iter/str_hash half (verified against the C tree),
+    /// so they get their own type. (The str_hash flags, which *do* combine with
+    /// iter flags, belong with `BtreeIterFlags` and will join it when str_hash is
+    /// converted to Rust.)
+    pub struct UpdateTriggerFlags: u32 {
+        const INTERNAL_SNAPSHOT_NODE   = c::btree_iter_update_trigger_flags::BTREE_UPDATE_internal_snapshot_node.0;
+        const NOJOURNAL                = c::btree_iter_update_trigger_flags::BTREE_UPDATE_nojournal.0;
+        const KEY_CACHE_RECLAIM        = c::btree_iter_update_trigger_flags::BTREE_UPDATE_key_cache_reclaim.0;
+        const NORUN                    = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_norun.0;
+        const TRANSACTIONAL            = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_transactional.0;
+        const ATOMIC                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_atomic.0;
+        const GC                       = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_gc.0;
+        const INSERT                   = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_insert.0;
+        const OVERWRITE                = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_overwrite.0;
+        const IS_DISCARD               = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_is_discard.0;
+        const SET_NEEDS_RECONCILE_DONE = c::btree_iter_update_trigger_flags::BTREE_TRIGGER_set_needs_reconcile_done.0;
     }
 }
 
