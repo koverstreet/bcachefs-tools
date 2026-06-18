@@ -1,5 +1,6 @@
 use crate::btree::bkey::BkeyValSC;
 use crate::c;
+use crate::fs::Fs;
 use core::marker::PhantomData;
 use core::mem::size_of;
 
@@ -8,16 +9,23 @@ include!(concat!(env!("OUT_DIR"), "/extent_entry_types_gen.rs"));
 
 trait ExtentUnionField<T> {
     unsafe fn as_union_ref(&self) -> &T;
+    unsafe fn as_union_mut(&mut self) -> &mut T;
 }
 
 impl<T> ExtentUnionField<T> for c::__BindgenUnionField<T> {
     unsafe fn as_union_ref(&self) -> &T {
         unsafe { self.as_ref() }
     }
+    unsafe fn as_union_mut(&mut self) -> &mut T {
+        unsafe { self.as_mut() }
+    }
 }
 
 impl ExtentUnionField<core::ffi::c_ulong> for core::ffi::c_ulong {
     unsafe fn as_union_ref(&self) -> &core::ffi::c_ulong {
+        self
+    }
+    unsafe fn as_union_mut(&mut self) -> &mut core::ffi::c_ulong {
         self
     }
 }
@@ -26,10 +34,17 @@ impl ExtentUnionField<c::bch_extent_ptr> for c::bch_extent_ptr {
     unsafe fn as_union_ref(&self) -> &c::bch_extent_ptr {
         self
     }
+    unsafe fn as_union_mut(&mut self) -> &mut c::bch_extent_ptr {
+        self
+    }
 }
 
 unsafe fn extent_union_field_ref<T, F: ExtentUnionField<T>>(field: &F) -> &T {
     unsafe { field.as_union_ref() }
+}
+
+unsafe fn extent_union_field_mut<T, F: ExtentUnionField<T>>(field: &mut F) -> &mut T {
+    unsafe { field.as_union_mut() }
 }
 
 /// Get extent entry type from bit-position encoding (__ffs equivalent).
@@ -139,4 +154,73 @@ pub fn bkey_ptrs_sc<'a>(sc: &BkeyValSC<'a>) -> ExtentPtrIter<'a> {
 /// Iterate over extent pointers in a `bkey_i`.
 pub fn bkey_ptrs(k: &c::bkey_i) -> ExtentPtrIter<'_> {
     bkey_ptrs_sc(&BkeyValSC::from_bkey_i(k))
+}
+
+pub struct ExtentEntryIterMut<'a> {
+    fs:       &'a Fs,
+    cur:      *mut c::bch_extent_entry,
+    end:      *mut c::bch_extent_entry,
+    _phantom: PhantomData<&'a mut c::bch_extent_entry>,
+}
+
+impl<'a> Iterator for ExtentEntryIterMut<'a> {
+    type Item = &'a mut c::bch_extent_entry;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.cur >= self.end {
+            return None;
+        }
+
+        let entry = unsafe { &mut *self.cur };
+        let u64s = unsafe { c::extent_entry_u64s(self.fs.raw, self.cur) as usize };
+        if u64s == 0 {
+            return None;
+        }
+
+        let next = unsafe { (self.cur as *mut u64).add(u64s) as *mut c::bch_extent_entry };
+        if next > self.end {
+            return None;
+        }
+
+        self.cur = next;
+        Some(entry)
+    }
+}
+
+pub(crate) fn bkey_extent_entries_mut<'a>(
+    fs: &'a Fs,
+    k:  &'a mut c::bkey_i,
+) -> ExtentEntryIterMut<'a> {
+    let ptrs = unsafe { c::bch2_bkey_ptrs(c::bkey_i_to_s(k)) };
+
+    ExtentEntryIterMut {
+        fs,
+        cur:      ptrs.start,
+        end:      ptrs.end,
+        _phantom: PhantomData,
+    }
+}
+
+pub struct ExtentPtrIterMut<'a> {
+    inner: ExtentEntryIterMut<'a>,
+}
+
+impl<'a> Iterator for ExtentPtrIterMut<'a> {
+    type Item = &'a mut c::bch_extent_ptr;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        for entry in self.inner.by_ref() {
+            if extent_entry_type(entry) == c::bch_extent_entry_type::BCH_EXTENT_ENTRY_ptr as u32 {
+                return Some(unsafe { extent_union_field_mut(&mut entry.ptr) });
+            }
+        }
+        None
+    }
+}
+
+pub(crate) fn bkey_ptrs_mut<'a>(
+    fs: &'a Fs,
+    k:  &'a mut c::bkey_i,
+) -> ExtentPtrIterMut<'a> {
+    ExtentPtrIterMut { inner: bkey_extent_entries_mut(fs, k) }
 }

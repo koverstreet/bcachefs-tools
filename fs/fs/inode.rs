@@ -48,7 +48,7 @@ pub fn peek<'a, 't>(
     inode: &mut c::bch_inode_unpacked,
     inum:  c::subvol_inum,
     flags: BtreeIterFlags,
-) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::__bch2_inode_peek(
             t.raw(),
@@ -66,7 +66,7 @@ pub fn write<'a, 't>(
     t:     TransAttempt<'a, 't>,
     iter:  &mut BtreeIter<'t>,
     inode: &mut c::bch_inode_unpacked,
-) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::bch2_inode_write(t.raw(), iter.raw_mut(), inode)
     };

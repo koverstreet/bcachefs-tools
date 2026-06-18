@@ -4,6 +4,8 @@ use core::fmt;
 
 pub use crate::c::bch_errcode;
 
+include!(concat!(env!("OUT_DIR"), "/errcodes_gen.rs"));
+
 /// Safe wrapper for bcachefs/errno error codes.
 /// Stores the positive error code — either a standard errno (1..2047)
 /// or a bcachefs-specific code (BCH_ERR_START=2048..).
@@ -73,6 +75,10 @@ impl fmt::Debug for BchError {
 }
 
 impl core::error::Error for BchError {}
+
+pub fn bch_err_throw(code: bch_errcode) -> BchError {
+    BchError::from_errcode(code)
+}
 
 pub fn ret_to_result(ret: c_int) -> Result<c_int, BchError> {
     if ret < 0 && ret > -4096 {

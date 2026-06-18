@@ -10,7 +10,7 @@ pub fn link_trans<'a, 't>(
     inum:     c::subvol_inum,
     inode:    &mut c::bch_inode_unpacked,
     name:     &c::qstr,
-) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::bch2_link_trans(t.raw(), dir_inum, dir, inum, inode, name)
     };
@@ -25,7 +25,7 @@ pub fn unlink_trans<'a, 't>(
     inode:    &mut c::bch_inode_unpacked,
     name:     &c::qstr,
     deleting: bool,
-) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::bch2_unlink_trans(t.raw(), dir_inum, dir, target, inode, name, deleting)
     };
@@ -43,7 +43,7 @@ pub fn rename_trans<'a, 't>(
     src_name:    &c::qstr,
     dst_name:    &c::qstr,
     mode:        c::bch_rename_mode,
-) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::bch2_rename_trans(
             t.raw(),
@@ -75,7 +75,7 @@ pub fn create_trans<'a, 't>(
     rdev:         c::dev_t,
     snapshot_src: c::subvol_inum,
     flags:        u32,
-) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::bch2_create_trans(
             t.raw(),
