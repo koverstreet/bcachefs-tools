@@ -1,6 +1,6 @@
 use crate::c;
 use crate::btree::bkey::AsBkeyI;
-use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_err_throw, bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use core::ops::ControlFlow;
 
@@ -45,6 +45,29 @@ pub struct Fs {
     pub raw: *mut c::bch_fs,
 }
 
+#[derive(Copy, Clone)]
+pub struct BorrowedFs(*mut c::bch_fs);
+
+// SAFETY: BorrowedFs is a non-owning pointer to a live filesystem supplied by
+// C. Users must ensure the borrowed bch_fs outlives all cross-thread users.
+unsafe impl Send for BorrowedFs {}
+// SAFETY: bch_fs internal synchronization is handled by the filesystem code.
+unsafe impl Sync for BorrowedFs {}
+
+impl BorrowedFs {
+    /// Create a cross-thread non-owning `Fs` handle.
+    ///
+    /// Callers must ensure the underlying bch_fs remains live while any
+    /// resulting borrowed Fs views are in use.
+    pub fn new(fs: &Fs) -> Self {
+        Self(fs.raw)
+    }
+
+    pub fn get(&self) -> core::mem::ManuallyDrop<Fs> {
+        unsafe { Fs::borrow_raw(self.0) }
+    }
+}
+
 impl Fs {
     /// Create a non-owning `Fs` view from a raw pointer.
     ///
@@ -76,6 +99,25 @@ impl Fs {
     /// Write superblock to disk. Caller must hold sb_lock.
     pub fn write_super(&self) {
         unsafe { c::bch2_write_super(self.raw) };
+    }
+
+    pub fn throw<T>(&self, error: bch_errcode) -> Result<T, BchError> {
+        Err(bch_err_throw(error))
+    }
+
+    pub fn require<T>(&self, value: Option<T>, error: bch_errcode) -> Result<T, BchError> {
+        match value {
+            Some(v) => Ok(v),
+            None    => self.throw(error),
+        }
+    }
+
+    pub fn ensure(&self, condition: bool, error: bch_errcode) -> Result<(), BchError> {
+        if condition {
+            Ok(())
+        } else {
+            self.throw(error)
+        }
     }
 
     /// Get a mutable reference to a member entry in the superblock.
