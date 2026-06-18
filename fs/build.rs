@@ -54,4 +54,17 @@ fn main() {
         w.flag(f);
     }
     w.compile("bcachefs_static_wrappers");
+
+    // dh-cargo Built-Using (Debian): point the path at the package root (the
+    // workspace root, == the dpkg build's $PWD) so dh-cargo-built-using sees
+    // this lib as built from our own in-tree source and skips it, rather than
+    // aborting on a build path no Debian package owns. Mirrors the same
+    // declaration in bch_bindgen/build.rs; `src` is fs/, its parent is the root.
+    println!(
+        "dh-cargo:deb-built-using=bcachefs_static_wrappers=0={}",
+        std::path::Path::new(&src)
+            .parent()
+            .expect("fs crate has a parent dir")
+            .display()
+    );
 }
