@@ -83,13 +83,13 @@ impl<'f> BtreeTrans<'f> {
     pub fn commit(
         &self,
         disk_res: Option<&DiskReservation>,
-        flags: c::bch_trans_commit_flags,
+        flags: CommitOpts,
     ) -> Result<(), BchError> {
         unsafe {
             (*self.raw).disk_res = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
         }
         let ret = unsafe {
-            c::__bch2_trans_commit(self.raw, flags)
+            c::__bch2_trans_commit(self.raw, flags.to_c())
         };
         crate::errcode::ret_to_result(ret).map(|_| ())
     }
@@ -187,12 +187,12 @@ impl<'a, 't> TransAttempt<'a, 't> {
     pub fn commit(
         self,
         disk_res: Option<&DiskReservation>,
-        flags:    c::bch_trans_commit_flags,
+        flags:    CommitOpts,
     ) -> Result<Self, TransError> {
         unsafe {
             (*self.raw()).disk_res = disk_res.map_or(core::ptr::null_mut(), |r| r.as_mut_ptr());
         }
-        let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags) };
+        let ret = unsafe { c::__bch2_trans_commit(self.raw(), flags.to_c()) };
         self.result(ret)
     }
 
@@ -367,7 +367,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
         iter:          &mut BtreeIter<'t>,
         node:          BtreeNodeRef,
         key:           TransBkey<'_, 't>,
-        flags:         c::bch_trans_commit_flags,
+        flags:         CommitOpts,
         iter_searched: bool,
     ) -> Result<Self, TransError> {
         let ret = unsafe {
@@ -376,7 +376,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
                 iter.raw_mut(),
                 node.as_ptr(),
                 key.as_ptr(),
-                flags.0,
+                flags.bits(),
                 iter_searched,
             )
         };
@@ -534,6 +534,67 @@ bitflags! {
     }
 }
 
+bitflags! {
+    /// The flag half of the C `bch_trans_commit_flags` word — the bits above the
+    /// watermark. Composed onto a [`CommitOpts`] via [`CommitOpts::flags`].
+    pub struct CommitFlags: u32 {
+        const NO_ENOSPC             = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_enospc.0;
+        const NO_CHECK_RW           = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_check_rw.0;
+        const NO_JOURNAL_RES        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_journal_res.0;
+        const NO_SKIP_NOOPS         = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_no_skip_noops.0;
+        const JOURNAL_RECLAIM       = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_reclaim.0;
+        const JOURNAL_REPLAY        = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_journal_replay.0;
+        const SKIP_ACCOUNTING_APPLY = c::bch_trans_commit_flags::BCH_TRANS_COMMIT_skip_accounting_apply.0;
+    }
+}
+
+/// Allocation watermark — the low bits of the commit-flags word, selecting how
+/// deep into the reserves the commit may dip. Unset (`stripe`/0) the commit path
+/// treats the same as `normal` for the ENOSPC gate, so it usually isn't set.
+#[derive(Clone, Copy)]
+pub struct Watermark(c::bch_watermark);
+
+impl Watermark {
+    pub const STRIPE:           Self = Watermark(c::bch_watermark::BCH_WATERMARK_stripe);
+    pub const NORMAL:           Self = Watermark(c::bch_watermark::BCH_WATERMARK_normal);
+    pub const COPYGC:           Self = Watermark(c::bch_watermark::BCH_WATERMARK_copygc);
+    pub const BTREE:            Self = Watermark(c::bch_watermark::BCH_WATERMARK_btree);
+    pub const BTREE_COPYGC:     Self = Watermark(c::bch_watermark::BCH_WATERMARK_btree_copygc);
+    pub const RECLAIM:          Self = Watermark(c::bch_watermark::BCH_WATERMARK_reclaim);
+    pub const INTERIOR_UPDATES: Self = Watermark(c::bch_watermark::BCH_WATERMARK_interior_updates);
+}
+
+/// A commit-flags word, built from a [`Watermark`] (defaulting to `stripe`/0) and
+/// a set of [`CommitFlags`]. The watermark usually isn't set, so the common path
+/// is `CommitOpts::new()` or `CommitOpts::new().flags(...)`.
+#[derive(Clone, Copy, Default)]
+pub struct CommitOpts(u32);
+
+impl CommitOpts {
+    /// Mask of the watermark bits: everything below the lowest flag bit.
+    const WATERMARK_MASK: u32 = CommitFlags::NO_ENOSPC.bits() - 1;
+
+    pub const fn new() -> Self {
+        CommitOpts(0)
+    }
+
+    pub const fn flags(self, flags: CommitFlags) -> Self {
+        CommitOpts(self.0 | flags.bits())
+    }
+
+    pub const fn watermark(self, w: Watermark) -> Self {
+        CommitOpts((self.0 & !Self::WATERMARK_MASK) | (w.0 as u32 & Self::WATERMARK_MASK))
+    }
+
+    pub(crate) const fn bits(self) -> u32 {
+        self.0
+    }
+
+    pub(crate) const fn to_c(self) -> c::bch_trans_commit_flags {
+        c::bch_trans_commit_flags(self.0)
+    }
+}
+
 pub fn lockrestart_do<'t, T, F>(trans: &BtreeTrans<'t>, mut f: F) -> Result<T, BchError>
 where
     F: for<'a> FnMut(TransAttempt<'a, 't>) -> TransResult<'a, 't, T>
@@ -557,7 +618,7 @@ where
 pub fn commit_do<'t, F>(
     trans: &BtreeTrans<'t>,
     disk_res: Option<&DiskReservation>,
-    flags: c::bch_trans_commit_flags,
+    flags: CommitOpts,
     mut f: F,
 ) -> Result<(), BchError>
 where
@@ -576,7 +637,7 @@ where
 pub fn trans_commit_do<'t, F>(
     fs: &'t Fs,
     disk_res: Option<&DiskReservation>,
-    flags: c::bch_trans_commit_flags,
+    flags: CommitOpts,
     f: F,
 ) -> Result<(), BchError>
 where
@@ -806,7 +867,7 @@ impl<'t> BtreeIter<'t> {
         &mut self,
         trans:       &BtreeTrans<'t>,
         disk_res:    Option<&DiskReservation>,
-        flags:       c::bch_trans_commit_flags,
+        flags:       CommitOpts,
         mut f:       F,
     ) -> Result<(), BchError>
     where
@@ -849,7 +910,7 @@ impl<'t> BtreeIter<'t> {
         end:         bpos,
         iter_flags:  BtreeIterFlags,
         disk_res:    Option<&DiskReservation>,
-        flags:       c::bch_trans_commit_flags,
+        flags:       CommitOpts,
         mut f:       F,
     ) -> Result<(), BchError>
     where
