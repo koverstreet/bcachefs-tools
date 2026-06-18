@@ -375,6 +375,37 @@ dkms-reload:
 	$(Q)modprobe bcachefs
 	@modinfo bcachefs | grep -E '^(version|filename|srcversion):'
 
+# Interactive incremental rebuild for the edit/build/test loop. DKMS is built for
+# packaging, not iteration: dkms-reload wipes and re-copies the build tree
+# (`dkms remove --all` + `add`) and keys on a per-commit git-describe VERSION, so
+# every cycle is a full rebuild. This skips DKMS and builds in place against a
+# persistent tree. The ktest VM is snapshotted fresh each run, so the tree lives
+# host-side (default under /ktest-out). `cp -a` preserves source mtimes so kbuild
+# only recompiles what changed -- install(1), which dkms-reload uses, stamps every
+# file "now" and would defeat that. Pass BCACHEFS_DEBUG=1 BCACHEFS_TESTS=1 (etc.)
+# the same way ktest does for dkms-reload.
+KDIR			?= /lib/modules/$(shell uname -r)/build
+DKMS_INTERACTIVE_DIR	?= /ktest-out/bcachefs-module
+
+.PHONY: dkms-reload-interactive
+dkms-reload-interactive: version.h
+	@if [ "$$(id -u)" -ne 0 ]; then \
+		echo "$@: must run as root"; exit 1; \
+	fi
+	$(Q)mkdir -p $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs
+	$(Q)cp -a fs/. $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs/
+	$(Q)cp -a dkms/Makefile $(DKMS_INTERACTIVE_DIR)/Makefile
+	$(Q)cp -a dkms/module-version.c version.h $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs/
+	$(Q)( :; $(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),printf '%s := %s\n' '$(v)' '$($(v))';)) ) > $(DKMS_INTERACTIVE_DIR)/build.vars
+	@echo "    [KBUILD] bcachefs.ko  (incremental @ $(DKMS_INTERACTIVE_DIR))"
+	$(Q)$(MAKE) -C $(KDIR) M=$(DKMS_INTERACTIVE_DIR) modules -j$(DKMS_PARALLEL_JOBS)
+	# Be the only bcachefs.ko under /ktest-out so gdb's lx-symbols loads THIS
+	# build's symbols, not a stale dkms-staged copy (it loads the first match).
+	$(Q)find /ktest-out -name bcachefs.ko -not -path '$(DKMS_INTERACTIVE_DIR)/*' -delete 2>/dev/null || true
+	$(Q)rmmod bcachefs 2>/dev/null || true
+	$(Q)insmod $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs/bcachefs.ko
+	@modinfo bcachefs | grep -E '^(version|filename|srcversion):'
+
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
