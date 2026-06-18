@@ -282,7 +282,7 @@ impl Fs {
         key:          &mut impl AsBkeyI,
         disk_res:     Option<&DiskReservation<'_>>,
         commit_flags: CommitOpts,
-        iter_flags:   UpdateTriggerFlags,
+        iter_flags:   BtreeIterFlags,
     ) -> Result<(), BchError> {
         let disk_res = disk_res
             .map(|r| r.as_mut_ptr())
