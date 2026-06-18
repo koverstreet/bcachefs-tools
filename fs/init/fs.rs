@@ -279,7 +279,7 @@ impl Fs {
         &self,
         btree_id:     c::btree_id,
         key:          &mut impl AsBkeyI,
-        disk_res:     Option<&mut DiskReservation<'_>>,
+        disk_res:     Option<&DiskReservation<'_>>,
         commit_flags: c::bch_trans_commit_flags,
         iter_flags:   c::btree_iter_update_trigger_flags,
     ) -> Result<(), BchError> {
