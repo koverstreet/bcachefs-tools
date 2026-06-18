@@ -212,6 +212,31 @@ impl BuildState {
         }
     }
 
+    /// Read the desired *release* commit (written by post-receive for v* tags).
+    /// A queued release is built to completion before any snapshot, so a master
+    /// push can't preempt it. Mirrors desired_commit().
+    fn desired_release(&self) -> Result<Option<String>> {
+        let path = self.state_dir.join("desired-release");
+        match fs::read_to_string(&path) {
+            Ok(s) => {
+                let commit = s.trim().to_string();
+                Ok(if commit.is_empty() { None } else { Some(commit) })
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).context("reading desired-release commit"),
+        }
+    }
+
+    /// Clear the queued release once its build has finished (published or failed).
+    fn clear_desired_release(&self) -> Result<()> {
+        let path = self.state_dir.join("desired-release");
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).context("clearing desired-release"),
+        }
+    }
+
     fn commit_dir(&self, commit: &str) -> PathBuf {
         self.state_dir.join("builds").join(commit)
     }
@@ -378,12 +403,39 @@ impl Orchestrator {
         }
     }
 
+    /// Choose the commit to build: a queued release is built to completion
+    /// before any snapshot, so a master push can't preempt it (that's how
+    /// v1.38.6 got stranded). Once the release publishes, fall through to the
+    /// latest master commit.
+    fn pick_commit(&self) -> Result<Option<String>> {
+        if let Some(rel) = self.state.desired_release()? {
+            if !self.is_build_finished(&rel) {
+                return Ok(Some(rel));
+            }
+            // Release published (or can't build) — stop pinning it.
+            self.state.clear_desired_release()?;
+        }
+        self.state.desired_commit()
+    }
+
+    /// A build is finished once it can make no further progress: its source
+    /// failed (nothing to publish), or publish reached a terminal state.
+    fn is_build_finished(&self, commit: &str) -> bool {
+        if self.state.read_status(commit, "source") == JobStatus::Failed {
+            return true;
+        }
+        matches!(
+            self.effective_status(commit, "publish"),
+            JobStatus::Done | JobStatus::Failed
+        )
+    }
+
     /// One iteration of the reconcile loop
     fn reconcile(&mut self) -> Result<()> {
         // Reap finished children first
         self.reap_children()?;
 
-        let commit = match self.state.desired_commit()? {
+        let commit = match self.pick_commit()? {
             Some(c) => c,
             None => return Ok(()),
         };

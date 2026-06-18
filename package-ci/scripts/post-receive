@@ -7,11 +7,17 @@
 STATE_DIR="/home/aptbcachefsorg/package-ci"
 PID_FILE="$STATE_DIR/orchestrator.pid"
 
+# queue_build COMMIT [FILE]
+#   FILE defaults to "desired" (master snapshots, freely preempted by newer).
+#   Pass "desired-release" for v* tags: the orchestrator builds a queued release
+#   to completion before any snapshot, so a later master push can't strand it
+#   (which is how v1.38.6 got abandoned mid-build).
 queue_build() {
     local commit=$1
+    local file=${2:-desired}
 
-    echo "$commit" > "$STATE_DIR/desired"
-    echo "CI: queued build for ${commit:0:12}"
+    echo "$commit" > "$STATE_DIR/$file"
+    echo "CI: queued build for ${commit:0:12} ($file)"
 
     if [ -f "$PID_FILE" ]; then
         kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null || true
@@ -30,7 +36,7 @@ while read oldrev newrev refname; do
             # (git describe --exact-match), it just needs to be told to
             # build it. Resolve annotated tag objects to the commit:
             commit=$(git rev-parse "$newrev^{commit}" 2>/dev/null) || continue
-            queue_build "$commit"
+            queue_build "$commit" desired-release
             ;;
     esac
 done
