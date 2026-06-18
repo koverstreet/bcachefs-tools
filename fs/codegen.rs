@@ -20,9 +20,9 @@ use std::process::Command;
 
 const HEADERS: &[&str] = &[
     "bcachefs.h", "opts.h",
-    "btree/cache.h", "btree/iter.h",
+    "btree/cache.h", "btree/interior.h", "btree/iter.h",
     "alloc/accounting.h", "alloc/background.h", "alloc/buckets.h", "alloc/disk_groups.h",
-    "data/checksum.h", "data/io_misc.h", "data/move.h", "data/read.h", "data/update.h", "data/write.h",
+    "data/checksum.h", "data/extents.h", "data/io_misc.h", "data/move.h", "data/read.h", "data/update.h", "data/write.h",
     "debug/debug.h",
     "init/dev.h", "init/error.h", "init/fs.h", "init/passes.h",
     "fs/check.h", "fs/dirent.h", "fs/inode.h", "fs/namei.h", "fs/xattr.h",
@@ -31,7 +31,11 @@ const HEADERS: &[&str] = &[
 ];
 
 // Translated 1:1 from the bindgen builder calls in build.rs.
-const ALLOWLIST_FUNCTION: &[&str] = &[".*bch2_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches", "bpos_.*", "bkey_.*_init", "enumerated_ref_put"];
+const ALLOWLIST_FUNCTION: &[&str] = &[
+    ".*bch2_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches",
+    "bpos_.*", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
+    "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
+];
 const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf", ".*bch2_snapshot_id_state"];
 const BLOCKLIST_TYPE: &[&str] = &["rhash_lock_head", "srcu_struct", "bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];
 const BLOCKLIST_ITEM: &[&str] = &["bch2_bkey_ops"];
@@ -181,6 +185,13 @@ pub fn default_blocklist(src: &str) -> Vec<String> {
 pub fn gen_xmacros(src: &str, out: &str) {
     let format_h = std::fs::read_to_string(format!("{src}/bcachefs_format.h"))
         .expect("reading bcachefs_format.h");
+
+    let errcode_h = std::fs::read_to_string(format!("{src}/errcode.h"))
+        .expect("reading errcode.h");
+    let errcodes = parse_xmacro(&errcode_h, "BCH_ERRCODES");
+    assert!(!errcodes.is_empty(), "failed to parse BCH_ERRCODES()");
+    std::fs::write(format!("{out}/errcodes_gen.rs"), generate_errcodes(&errcodes))
+        .expect("write errcodes_gen.rs");
 
     let bkey_types = parse_xmacro(&format_h, "BCH_BKEY_TYPES");
     assert!(!bkey_types.is_empty(), "failed to parse BCH_BKEY_TYPES()");
@@ -479,6 +490,25 @@ fn generate_extent_entry_u64s(entries: &[Vec<String>]) -> String {
     out.push_str("        _ => return None,\n");
     out.push_str("    })\n");
     out.push_str("}\n");
+    out
+}
+
+fn generate_errcodes(entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    out.push_str("// Auto-generated from BCH_ERRCODES() — do not edit\n\n");
+
+    for e in entries {
+        if e.len() < 2 {
+            continue;
+        }
+
+        let name = rust_ident(&e[1]);
+        out.push_str(&format!(
+            "#[allow(non_upper_case_globals)]\n\
+             pub const {name}: bch_errcode = bch_errcode::BCH_ERR_{name};\n"
+        ));
+    }
+
     out
 }
 

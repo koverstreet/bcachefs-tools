@@ -187,8 +187,8 @@ fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
     let result: Result<(u8, u64), _> = lockrestart_do(&trans, |t| {
         let (t, k) = t.result_value(iter.peek_prev())?;
         match k {
-            Some(k) => Ok((t, (k.k.type_, k.k.p.offset))),
-            None => Err(t.error(bcachefs_kernel::errcode::BchError::from_raw(-libc::ENOENT))),
+            Some(k) => t.done((k.k.type_, k.k.p.offset)),
+            None => Err(bcachefs_kernel::errcode::BchError::from_raw(libc::ENOENT).into()),
         }
     });
 

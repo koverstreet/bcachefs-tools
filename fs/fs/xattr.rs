@@ -13,7 +13,7 @@ pub fn set<'a, 't>(
     val:   &[u8],
     typ:   i32,
     flags: i32,
-) -> Result<TransAttempt<'a, 't>, TransError<'a, 't>> {
+) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::bch2_xattr_set(
             t.raw(),

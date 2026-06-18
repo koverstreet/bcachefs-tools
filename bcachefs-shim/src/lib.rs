@@ -20,4 +20,27 @@ pub mod c {
     include!(concat!(env!("OUT_DIR"), "/bindings.rs"));
 }
 
+pub mod print {
+    use crate::c;
+    use std::ffi::CString;
+    use std::fmt;
+
+    pub fn pr_info(args: fmt::Arguments<'_>) {
+        let Ok(msg) = CString::new(args.to_string()) else {
+            return;
+        };
+
+        unsafe {
+            c::printk(b"%s\0".as_ptr().cast(), msg.as_ptr());
+        }
+    }
+}
+
+#[macro_export]
+macro_rules! pr_info {
+    ($($arg:tt)*) => {
+        $crate::print::pr_info(::std::format_args!($($arg)*))
+    };
+}
+
 pub mod workqueue;
