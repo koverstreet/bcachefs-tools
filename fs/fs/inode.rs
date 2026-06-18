@@ -3,7 +3,7 @@
 use crate::c;
 use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
-use crate::btree::iter::{BtreeIter, BtreeIterFlags, TransAttempt, TransError};
+use crate::btree::iter::{BtreeIter, BtreeIterFlags, CommitOpts, TransAttempt, TransError};
 use crate::{btree, btree_id};
 
 pub fn find_by_inum(
@@ -78,13 +78,12 @@ pub fn write_cached(fs: &Fs, inode: &c::bch_inode_unpacked) -> Result<(), BchErr
         let mut packed: c::bkey_inode_buf = Default::default();
         c::bch2_inode_pack(fs.raw, &mut packed, inode);
         packed.inode.__bindgen_anon_1.k.as_mut().p.snapshot = u32::MAX;
-        ret_to_result(c::bch2_btree_insert(
-            fs.raw,
+        fs.btree_insert(
             btree_id::inodes,
             packed.inode.__bindgen_anon_1.k_i.as_mut(),
-            core::ptr::null_mut(),
-            c::bch_trans_commit_flags(0u32),
-            c::btree_iter_update_trigger_flags::BTREE_ITER_cached,
-        ))
+            None,
+            CommitOpts::new(),
+            BtreeIterFlags::CACHED,
+        )
     }
 }
