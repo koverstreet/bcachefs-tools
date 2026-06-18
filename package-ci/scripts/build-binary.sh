@@ -27,7 +27,7 @@ RUST_VERSION="$6"
 
 CACHE_DIR="${CACHE_DIR:-/home/aptbcachefsorg/package-ci/cache}"
 CONTAINER="ci-binary-${DISTRO}-${ARCH}-$$"
-CACHE_VERSION=3  # bump to force cache rebuild
+CACHE_VERSION=4  # bump to force cache rebuild
 CACHE_IMAGE="ci-deps:${DISTRO}-${ARCH}-rust${RUST_VERSION}-v${CACHE_VERSION}"
 
 mkdir -p "$RESULT_DIR"
@@ -166,6 +166,12 @@ EOF
         podman exec "$BUILD_CONTAINER" chmod +x /usr/share/cargo/bin/cargo
     fi
     rm -f "$SHIM"
+
+    # fs/codegen.rs shells out to the bindgen CLI (since the nix-bindgen-cli
+    # switch); the build env must provide it on PATH. Pin to the bindgen library
+    # version used in-tree (bch_bindgen/Cargo.toml) so codegen's flags match.
+    # Installed into the cached image, so it's compiled once per distro×arch.
+    crun 'cargo install bindgen-cli --version 0.72.1 --locked --root /usr/local'
 
     # Clean apt caches to keep the image small
     crun 'apt-get clean && rm -rf /var/lib/apt/lists/*'
