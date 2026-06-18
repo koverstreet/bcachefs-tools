@@ -2,7 +2,7 @@ use crate::c;
 use crate::btree::bkey::AsBkeyI;
 use crate::errcode::{bch_err_throw, bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::iter::{BtreeIterFlags, UpdateTriggerFlags};
+use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use core::ops::ControlFlow;
 
 /// RAII guard for a device reference. Calls bch2_dev_put on drop.
@@ -281,7 +281,7 @@ impl Fs {
         btree_id:     c::btree_id,
         key:          &mut impl AsBkeyI,
         disk_res:     Option<&DiskReservation<'_>>,
-        commit_flags: c::bch_trans_commit_flags,
+        commit_flags: CommitOpts,
         iter_flags:   UpdateTriggerFlags,
     ) -> Result<(), BchError> {
         let disk_res = disk_res
@@ -294,7 +294,7 @@ impl Fs {
                 btree_id,
                 key.as_bkey_i_mut(),
                 disk_res,
-                commit_flags,
+                commit_flags.to_c(),
                 c::btree_iter_update_trigger_flags(iter_flags.bits()),
             )
         })
