@@ -112,9 +112,18 @@ dependencies = [
 name = "bcachefs-shim"
 version = "0.1.0"
 dependencies = [
+ "bcachefs-shim-macros",
  "bindgen",
  "cc",
  "pkg-config",
+]
+
+[[package]]
+name = "bcachefs-shim-macros"
+version = "0.1.0"
+dependencies = [
+ "quote",
+ "syn",
 ]
 
 [[package]]

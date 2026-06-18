@@ -9,6 +9,7 @@ rust-version = "1.85.0"
 crate-type = ["lib"]
 
 [dependencies]
+bcachefs-shim-macros = { path = "../bcachefs-shim-macros" }
 
 [build-dependencies]
 pkg-config = "0.3"
