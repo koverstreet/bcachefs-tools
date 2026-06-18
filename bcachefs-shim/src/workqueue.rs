@@ -7,6 +7,8 @@
 
 use crate::c;
 use core::cell::UnsafeCell;
+use core::marker::PhantomData;
+use std::sync::Arc;
 
 pub type AllocFlags = c::gfp_t;
 
@@ -68,6 +70,36 @@ impl Queue {
             Err(AllocError)
         }
     }
+
+    /// Enqueue a persistent work item — a task that owns an embedded [`Work`].
+    ///
+    /// Re-enqueueing while the item is still pending is a no-op (the C
+    /// `work_struct`'s pending bit dedups), which is exactly what lets an
+    /// executor re-poll a task on wake without a fresh allocation.
+    pub fn enqueue<W: WorkItem>(&self, item: Arc<W>) {
+        // Leak one reference to the work queue; the trampoline reclaims it.
+        let ptr = Arc::into_raw(item);
+
+        // SAFETY: `WORK_OFFSET` locates the embedded `Work<W>` (a transparent
+        // wrapper over `work_struct`) inside `*ptr`.
+        let work = unsafe { (ptr as *const u8).add(W::WORK_OFFSET) as *mut c::work_struct };
+
+        unsafe {
+            // Lazy one-time init. The first enqueue happens from the spawner,
+            // before the task is shared, so this is not racy; later enqueues
+            // (wakes) see `func` already set and skip it.
+            if (*work).func.is_none() {
+                (*work).entry.next = &mut (*work).entry;
+                (*work).entry.prev = &mut (*work).entry;
+                (*work).func = Some(run_work_fn::<W>);
+            }
+
+            if !c::queue_work(self.0.get(), work) {
+                // Already pending: drop the reference we just leaked.
+                drop(Arc::from_raw(ptr));
+            }
+        }
+    }
 }
 
 struct ClosureWork<T> {
@@ -85,6 +117,64 @@ where
     if let Some(func) = work.func.take() {
         func();
     }
+}
+
+/// An embedded `work_struct`, tagged with its containing task type. Mirrors
+/// `kernel::workqueue::Work<T>`. Construct with [`Work::new`]; it is initialised
+/// lazily on the first [`Queue::enqueue`], which is fine because by then it
+/// lives at its final address inside an `Arc`.
+#[repr(transparent)]
+pub struct Work<T: ?Sized> {
+    work: UnsafeCell<c::work_struct>,
+    _owner: PhantomData<fn(T)>,
+}
+
+// SAFETY: the inner `work_struct` is only touched via `Queue::enqueue` (which
+// the C workqueue serializes) and the owning task; the handle is thread-safe.
+unsafe impl<T: ?Sized> Send for Work<T> {}
+unsafe impl<T: ?Sized> Sync for Work<T> {}
+
+impl<T: ?Sized> Work<T> {
+    pub fn new() -> Self {
+        let mut work = c::work_struct::default();
+        work.data.counter = 0;
+        // `func` stays null; `Queue::enqueue` sets it on first use, once the
+        // concrete `WorkItem` and the work's final address are known.
+        Work {
+            work: UnsafeCell::new(work),
+            _owner: PhantomData,
+        }
+    }
+}
+
+impl<T: ?Sized> Default for Work<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// A task that can be re-run on a [`Queue`]. Mirrors `kernel::workqueue::WorkItem`.
+///
+/// # Safety
+///
+/// `WORK_OFFSET` must be the byte offset of an embedded `Work<Self>` field
+/// within `Self`, so [`Queue::enqueue`]'s trampoline can recover `Arc<Self>`
+/// from the `work_struct` pointer.
+pub unsafe trait WorkItem: Send + Sync + Sized + 'static {
+    /// Offset of the embedded `Work<Self>` field within `Self`.
+    const WORK_OFFSET: usize;
+
+    /// Run the work item, on a workqueue thread.
+    fn run(self: Arc<Self>);
+}
+
+/// C trampoline: recover the `Arc<W>` that `enqueue` leaked and run it.
+unsafe extern "C" fn run_work_fn<W: WorkItem>(work: *mut c::work_struct) {
+    // SAFETY: `work` points at the embedded `Work<W>` field; back out to the
+    // containing `W` — exactly the pointer `enqueue` produced via `into_raw`.
+    let ptr = unsafe { (work as *const u8).sub(W::WORK_OFFSET) as *const W };
+    let item = unsafe { Arc::from_raw(ptr) };
+    W::run(item);
 }
 
 pub fn system_unbound() -> &'static Queue {
