@@ -4,24 +4,31 @@ ifdef BCACHEFS_DKMS
 	# Enable other features here?
 endif
 
-# DKMS / external module builds: bcachefs isn't in the host kernel's
-# .config, so CONFIG_BCACHEFS_DEBUG never gets set the normal way. ktest
-# sets BCACHEFS_DEBUG=1 in env when it wants the debug build (see
-# tests/fs/bcachefs/bcachefs-test-libs.sh); forward it as a -D for the
-# module compile.
+# DKMS / external module builds: bcachefs isn't in the host kernel's .config,
+# so its CONFIG_BCACHEFS_* options never get set the normal way. ktest forwards
+# them via env (BCACHEFS_DEBUG=1 etc., see tests/fs/bcachefs/bcachefs-test-libs.sh);
+# we turn them into -D defines.
+#
+# CRITICAL: collect them in bcachefs-config-cppflags, which is fed to BOTH the C
+# compile (subdir-ccflags-y, below) AND bindgen (bcachefs-codegen-cflags, further
+# down). Several of these change struct layout — e.g. CONFIG_BCACHEFS_DEBUG
+# enables TRACK_PATH_ALLOCATED, adding btree_iter.ip_allocated; CONFIG_BCACHEFS_QUOTA
+# adds inode quota fields. If bindgen and the C compile disagree on even one -D,
+# struct sizes diverge silently and the C code writes past Rust-allocated structs
+# (e.g. the MaybeUninit<btree_iter> in BtreeIter::new) — stack-smashing corruption.
+bcachefs-config-cppflags :=
 ifdef BCACHEFS_DEBUG
-	subdir-ccflags-y += -DCONFIG_BCACHEFS_DEBUG=1
+	bcachefs-config-cppflags += -DCONFIG_BCACHEFS_DEBUG=1
 endif
 
-# Likewise for transaction-restart injection — ktest sets this in env
-# for the restart-injection test variant.
+# Transaction-restart injection — ktest sets this for the restart-injection variant.
 ifdef BCACHEFS_INJECT_TRANSACTION_RESTARTS
-	subdir-ccflags-y += -DCONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS=1
+	bcachefs-config-cppflags += -DCONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS=1
 endif
 
-# Likewise for the in-kernel unit tests (CONFIG_BCACHEFS_TESTS).
+# The in-kernel unit tests (CONFIG_BCACHEFS_TESTS).
 ifdef BCACHEFS_TESTS
-	subdir-ccflags-y += -DCONFIG_BCACHEFS_TESTS=1
+	bcachefs-config-cppflags += -DCONFIG_BCACHEFS_TESTS=1
 endif
 
 # Verify the hand-copied struct getdents_callback64 in fs/dirent.c against
@@ -53,9 +60,14 @@ clean-files += bch2_getdents_layout.h
 # CONFIG_BCACHEFS_QUOTA=n a no-op.
 ifdef BCACHEFS_DKMS
 ifdef CONFIG_QUOTA
-	subdir-ccflags-y += -DCONFIG_BCACHEFS_QUOTA=1
+	bcachefs-config-cppflags += -DCONFIG_BCACHEFS_QUOTA=1
 endif
 endif
+
+# Feed the collected bcachefs CONFIG defines to the C compile. bindgen gets the
+# same set via bcachefs-codegen-cflags, so the two cannot diverge (see the big
+# comment above bcachefs-config-cppflags).
+subdir-ccflags-y += $(bcachefs-config-cppflags)
 
 obj-$(CONFIG_BCACHEFS_FS)	+= bcachefs.o
 
@@ -265,6 +277,7 @@ bcachefs-codegen-skip-cflags := \
 bcachefs-codegen-cflags := \
 	$(LINUXINCLUDE) $(KBUILD_CPPFLAGS) \
 	$(filter-out -funsigned-char $(bcachefs-codegen-skip-cflags),$(KBUILD_CFLAGS)) \
+	$(bcachefs-config-cppflags) \
 	-I$(src) -include $(srctree)/include/linux/compiler_types.h \
 	-w -D__BINDGEN__ -DRUST_BINDGEN
 
