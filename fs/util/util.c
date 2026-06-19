@@ -194,7 +194,7 @@ STRTO_H(strtoll, long long)
 STRTO_H(strtoull, unsigned long long)
 STRTO_H(strtou64, u64)
 
-u64 bch2_read_flag_list(const char *opt, const char * const list[])
+u64 bch2_read_flag_list_mask(const char *opt, const char * const list[], u64 choices_allowed_mask)
 {
 	u64 ret = 0;
 
@@ -207,11 +207,18 @@ u64 bch2_read_flag_list(const char *opt, const char * const list[])
 		int flag = match_string(list, -1, p);
 		if (flag < 0)
 			return -1;
+		if (!(choices_allowed_mask & BIT_ULL(flag)))
+			return -1;
 
 		ret |= BIT_ULL(flag);
 	}
 
 	return ret;
+}
+
+u64 bch2_read_flag_list(const char *opt, const char * const list[])
+{
+	return bch2_read_flag_list_mask(opt, list, U64_MAX);
 }
 
 bool bch2_is_zero(const void *_p, size_t n)
