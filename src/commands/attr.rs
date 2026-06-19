@@ -98,7 +98,7 @@ setting a new compression algorithm will cause existing data to be \
 rewritten with the new algorithm. Use --option=- to remove a specific \
 option, or --remove-all to clear all per-file options.")
         .after_help("To remove a specific option, use: --option=-")
-        .args(opts::bch_option_args(c::opt_flags::OPT_INODE as u32))
+        .args(opts::bch_option_args(c::opt_flags::OPT_INODE as u32, true))
         .arg(Arg::new("remove-all")
             .long("remove-all")
             .action(ArgAction::SetTrue)
