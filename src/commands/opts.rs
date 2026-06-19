@@ -86,7 +86,12 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
 }
 
 /// Build Clap arguments from bch2_opt_table entries matching flag_filter.
-pub fn bch_option_args(flag_filter: u32) -> Vec<Arg> {
+///
+/// `allow_remove` adds "-" as an accepted value for choice-typed (BCH_OPT_STR)
+/// options — the sentinel set-file-option uses to delete a per-file option.
+/// Without it, clap's choice validation rejects "-" before the command sees it.
+/// Commands with no removal semantics (set-option, device add) pass false.
+pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
     let mut args = Vec::new();
 
     for_each_opt(flag_filter, |name, opt| {
@@ -124,8 +129,11 @@ pub fn bch_option_args(flag_filter: u32) -> Vec<Arg> {
                 args.push(no_arg);
             }
             c::opt_type::BCH_OPT_STR => {
-                let choices = opt.choices();
+                let mut choices = opt.choices();
                 if !choices.is_empty() {
+                    if allow_remove {
+                        choices.push("-");
+                    }
                     arg = arg.value_parser(choices);
                 }
             }

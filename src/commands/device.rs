@@ -31,7 +31,7 @@ fn device_add_opt_flags() -> u32 {
 fn device_add_cmd() -> Command {
     Command::new("add")
         .about("Add a new device to an existing filesystem")
-        .args(bch_option_args(device_add_opt_flags()))
+        .args(bch_option_args(device_add_opt_flags(), false))
         .arg(Arg::new("label")
             .short('l')
             .long("label")

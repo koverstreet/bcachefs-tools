@@ -22,7 +22,7 @@ Set a filesystem or device option on a running filesystem. Changes \
 are persisted to the superblock. Use -d to target a specific device \
 for device-scoped options. See <<sec:options>> for the full list of \
 available options.")
-        .args(bch_option_args(opt_flags()))
+        .args(bch_option_args(opt_flags(), false))
         .arg(Arg::new("dev-idx")
             .short('d')
             .long("dev-idx")
