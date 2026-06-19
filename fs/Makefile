@@ -299,11 +299,22 @@ $(obj)/codegen: $(src)/codegen_main.rs $(src)/codegen.rs FORCE
 # Run it: emits bcachefs.rs, the *_gen.rs files, and extern.c into $(obj)/rust/.
 # --target is left to default to the host triple (native DKMS builds only).
 quiet_cmd_bch_codegen = CODEGEN $(obj)/rust
-      cmd_bch_codegen = cp $(srctree)/include/linux/generic-radix-tree.h $(src)/ && \
-	$(obj)/codegen --src $(src) --out $(obj)/rust \
+      cmd_bch_codegen = $(obj)/codegen --src $(src) --out $(obj)/rust \
 	--cflags '$(bcachefs-codegen-cflags)' \
 	--blocklist '$(bcachefs-codegen-blocklist)' \
 	--ptr-width $(if $(CONFIG_64BIT),64,32)
+
+# genradix: bindgen emits the generic radix tree itself (kernel::bindings doesn't
+# bind it) from a copy of the kernel header — the in-tree <linux/generic-radix-tree.h>
+# is blocklisted. Copy it into the *build* dir via a real rule that bcachefs.rs
+# depends on, so make orders it. It must NOT be a codegen recipe side-effect into
+# $(src): writing a generated file into the (shared) source tree raced under -j —
+# a concurrent codegen run's half-written copy got read by bindgen, a truncated
+# header that desynced the parse into an "expected ')'" cascade (and it polluted
+# $(src) for later userspace builds). The build dir is per-build: no sharing.
+$(obj)/rust/generic-radix-tree.h: $(srctree)/include/linux/generic-radix-tree.h
+	$(Q)mkdir -p $(@D)
+	$(Q)cp $< $@
 
 # Every fs/ header feeds bindgen via codegen-wrapper.h, so a struct/define edit
 # must regenerate the bindings — list them as prerequisites. FORCE alone does
@@ -316,7 +327,7 @@ quiet_cmd_bch_codegen = CODEGEN $(obj)/rust
 # or a full rebuild.)
 bcachefs-codegen-headers := $(shell find $(src) -name '*.h')
 
-$(obj)/rust/bcachefs.rs: $(obj)/codegen $(bcachefs-codegen-headers) FORCE
+$(obj)/rust/bcachefs.rs: $(obj)/codegen $(obj)/rust/generic-radix-tree.h $(bcachefs-codegen-headers) FORCE
 	$(call if_changed,bch_codegen)
 
 # extern.c falls out of the same codegen run. Its wrappers are global functions

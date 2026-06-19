@@ -35,6 +35,6 @@ fn main() {
         None => default_blocklist(&src),
     };
 
-    run_bindgen(&src, &out, &clang_args, &blocklist, &ptr_width);
+    run_bindgen(&out, &clang_args, &blocklist, &ptr_width);
     gen_xmacros(&src, &out);
 }

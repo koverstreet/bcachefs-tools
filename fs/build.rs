@@ -42,7 +42,7 @@ fn main() {
     let clang_args = userspace_clang_args(&src, &target);
     let blocklist = default_blocklist(&src);
 
-    run_bindgen(&src, &out, &clang_args, &blocklist, &ptr_width);
+    run_bindgen(&out, &clang_args, &blocklist, &ptr_width);
     gen_xmacros(&src, &out);
 
     // Compile the static-inline wrappers bindgen just emitted and link them in,

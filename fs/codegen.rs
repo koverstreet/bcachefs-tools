@@ -81,18 +81,20 @@ const DERIVE_READD: &[&str] = &[
 /// into `out`. The caller supplies `clang_args` and `blocklist_dirs` — userspace
 /// computes them via [`userspace_clang_args`]/[`default_blocklist`], the kernel
 /// build passes Kbuild's set.
-pub fn run_bindgen(src: &str, out: &str, clang_args: &[String], blocklist_dirs: &[String], ptr_width: &str) {
+pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], ptr_width: &str) {
     std::fs::create_dir_all(out).expect("create out dir");
 
     // bindgen CLI takes one header; emit a wrapper that #includes the fs/ set.
     let wrapper = format!("{out}/codegen-wrapper.h");
     let mut body = String::new();
-    // Kernel build only: the kernel's generic-radix-tree.h is copied into src/
-    // at codegen time because kernel::bindings doesn't bind genradix. Include it
-    // *first* so its include-guard wins over the bcachefs headers' blocklisted
-    // <linux/generic-radix-tree.h> — that makes genradix emit from this
-    // non-blocklisted copy. Absent in userspace (genradix comes from the shim).
-    if std::path::Path::new(&format!("{src}/generic-radix-tree.h")).exists() {
+    // Kernel build only: the kernel's generic-radix-tree.h is copied into the
+    // *build* dir ({out}) by a make rule because kernel::bindings doesn't bind
+    // genradix. Include it *first* so its include-guard wins over the bcachefs
+    // headers' blocklisted <linux/generic-radix-tree.h> — that makes genradix
+    // emit from this non-blocklisted copy. The wrapper lives in {out}, so the
+    // quote-include resolves to it there. Absent in userspace (genradix comes
+    // from the shim), so the check is false and it's skipped.
+    if std::path::Path::new(&format!("{out}/generic-radix-tree.h")).exists() {
         body.push_str("#include \"generic-radix-tree.h\"\n");
     }
     body.push_str(&HEADERS.iter().map(|h| format!("#include \"{h}\"\n")).collect::<String>());
