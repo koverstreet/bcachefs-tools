@@ -558,7 +558,8 @@ enum fsck_err_opts {
 			"to have already been replicated n times")	\
 	x(data_allowed,			u8,				\
 	  OPT_DEVICE|OPT_FORMAT,					\
-	  OPT_BITFIELD(__bch2_data_types),				\
+	  OPT_BITFIELD_MASK(__bch2_data_types,				\
+		  BIT(BCH_DATA_journal)|BIT(BCH_DATA_btree)|BIT(BCH_DATA_user)),\
 	  BCH_MEMBER_DATA_ALLOWED,	BIT(BCH_DATA_journal)|BIT(BCH_DATA_btree)|BIT(BCH_DATA_user),\
 	  "types",	"Allowed data types for this device: journal, btree, and/or user")\
 	x(discard,			u8,				\
@@ -648,6 +649,7 @@ struct bch_option {
 	u64			min, max;
 
 	const char * const *choices;
+	u64			choices_allowed_mask;
 
 	struct bch_opt_fn	fn;
 
