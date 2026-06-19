@@ -29,6 +29,7 @@ doc/generated/
 fs/bcachefs-kernel/Cargo.lock
 
 # will have compiled files and executables
+/build/
 /debug/
 /target/
 /vendor/
