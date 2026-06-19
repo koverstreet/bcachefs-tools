@@ -221,10 +221,17 @@ TAGS:
 tags:
 	ctags -R .
 
-SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './debian/*' ! -path './target/*' -iname '*.c'))
+SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
 # KUnit test — kernel-only, no userspace equivalent for <kunit/test.h>
 SRCS:=$(filter-out %/mean_and_variance_test.c, $(SRCS))
-DEPS:=$(SRCS:.c=.d)
+# Strip find(1)'s leading './' so objects land at build/<path>, not build/./<path>.
+SRCS:=$(patsubst ./%,%,$(SRCS))
+
+# Objects and depfiles live under build/, never beside the source. fs/*.c is
+# shared with the kernel module build, which compiles it -mcmodel=kernel (non-PIC);
+# keeping the userspace -fPIC objects out of the source tree means the two builds
+# can't contaminate each other, and a `cp -a` of the source stays clean.
+DEPS:=$(SRCS:%.c=build/%.d)
 -include $(DEPS)
 
 # Old depfiles may mention headers that were removed or renamed. GCC's -MP
@@ -233,10 +240,11 @@ DEPS:=$(SRCS:.c=.d)
 %.h:
 	@:
 
-OBJS:=$(SRCS:.c=.o)
+OBJS:=$(SRCS:%.c=build/%.o)
 
-%.o: %.c
+build/%.o: %.c
 	@echo "    [CC]     $@"
+	@mkdir -p $(@D)
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 BCACHEFS_DEPS=libbcachefs.a
@@ -265,8 +273,8 @@ version.h: force
 generate_version: .version version.h
 
 # Rebuild the 'version' command any time the version string changes
-c_src/cmd_version.o : version.h
-dkms/module-version.o : version.h
+build/c_src/cmd_version.o : version.h
+build/dkms/module-version.o : version.h
 
 
 .PHONY: dkms/dkms.conf
@@ -409,7 +417,8 @@ dkms-reload-interactive: version.h
 .PHONY: clean
 clean:
 	@echo "Cleaning all"
-	$(Q)$(RM) libbcachefs.a c_src/libbcachefs.a .version dkms/dkms.conf build.vars *.tar.xz $(OBJS) $(DEPS) $(DOCGENERATED)
+	$(Q)$(RM) libbcachefs.a c_src/libbcachefs.a .version dkms/dkms.conf build.vars *.tar.xz $(DOCGENERATED)
+	$(Q)$(RM) -r build
 	$(Q)$(CARGO_CLEAN)
 	$(Q)$(RM) -f $(built_scripts)
 
