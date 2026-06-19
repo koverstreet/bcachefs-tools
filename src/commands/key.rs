@@ -15,7 +15,7 @@ use crate::key::{sb_is_encrypted, unencrypted_key, KeyHandle, Keyring, Passphras
 #[derive(Parser, Debug)]
 #[command(about = "Unlock an encrypted filesystem prior to running/mounting")]
 pub struct UnlockCli {
-    /// Check if a device is encrypted
+    /// Report the device's encryption and lock state, then exit
     #[arg(short, long)]
     check: bool,
 
@@ -36,12 +36,23 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
     let sb = sb_io::read_super(Path::new(&cli.device))
         .with_context(|| format!("Error opening {}", cli.device))?;
 
-    if !sb_is_encrypted(&sb) {
-        bail!("{} is not encrypted", cli.device);
+    let encrypted = sb_is_encrypted(&sb);
+
+    // --check reports state without prompting or unlocking. "Unlocked" means
+    // the key for this filesystem's UUID is already present in a keyring.
+    if cli.check {
+        if !encrypted {
+            println!("Device has no encryption");
+        } else if KeyHandle::new_from_search(&sb.sb().uuid()).is_ok() {
+            println!("Device is encrypted and unlocked");
+        } else {
+            println!("Device is encrypted and locked");
+        }
+        return Ok(());
     }
 
-    if cli.check {
-        return Ok(());
+    if !encrypted {
+        bail!("{} is not encrypted", cli.device);
     }
 
     let uuid = sb.sb().uuid();
