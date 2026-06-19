@@ -203,6 +203,11 @@ u64 bch2_read_flag_list_mask(const char *opt, const char * const list[], u64 cho
 		return -ENOMEM;
 
 	char *p, *s = strim(d);
+
+	bool invert = *s == '-';
+	if (invert)
+		s++;
+
 	while ((p = strsep(&s, ",;"))) {
 		int flag = match_string(list, -1, p);
 		if (flag < 0)
@@ -211,6 +216,14 @@ u64 bch2_read_flag_list_mask(const char *opt, const char * const list[], u64 cho
 			return -1;
 
 		ret |= BIT_ULL(flag);
+	}
+
+	if (invert) {
+		u64 choices_mask = 0;
+		for (unsigned i = 0; list[i]; i++)
+			choices_mask |= BIT_ULL(i);
+
+		ret = ~ret & choices_mask & choices_allowed_mask;
 	}
 
 	return ret;

@@ -137,6 +137,12 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
                     arg = arg.value_parser(choices);
                 }
             }
+            c::opt_type::BCH_OPT_BITFIELD => {
+                if let Some(h) = opt.hint() {
+                    arg = arg.value_name(h);
+                }
+                arg = arg.allow_hyphen_values(true);
+            }
             _ => {
                 if let Some(h) = opt.hint() {
                     arg = arg.value_name(h);
