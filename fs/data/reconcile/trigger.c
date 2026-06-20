@@ -488,8 +488,7 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	unsigned csum_type	= !opts->nocow ? bch2_data_checksum_type_rb(c, r) : 0;
 
 	bool incompressible = false, unwritten = false, ec = false;
-	unsigned durability = 0, durability_acct = 0, invalid = 0, min_durability = INT_MAX;
-	unsigned ec_redundancy = 0;
+	unsigned invalid = 0, ec_redundancy = 0;
 
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
@@ -528,18 +527,6 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 				r.ptrs_moving |= ptr_bit;
 		}
 
-		int d = bch2_extent_ptr_desired_durability(trans, &p);
-		if (d < 0)
-			return d;
-
-		durability_acct += d;
-
-		if (evacuating)
-			d = 0;
-
-		if (!p.ptr.cached)
-			min_durability = min(min_durability, d);
-
 		if (p.has_ec && r.erasure_code)
 			ec_redundancy = max_t(unsigned, ec_redundancy, p.ec.redundancy);
 		ec |= p.has_ec;
@@ -563,13 +550,16 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 		r.need_rb &= ~BIT(BCH_RECONCILE_data_checksum);
 
 	/*
-	 * Whole-key durability, so a device shared between the extent's stripes
-	 * is counted once - the per-pointer sum can't see that, and getting it
-	 * wrong here would mis-set need_rb and trigger (or skip) reconcile work.
+	 * Whole-key durability in one pass: a device shared between the extent's
+	 * stripes is counted once (the per-pointer sum can't see that), and the
+	 * per-pointer accounting and minimum come back from the same stripe reads
+	 * rather than a separate walk.
 	 */
 	struct bkey_durability dur;
 	try(bch2_bkey_durability(trans, k, &dur));
-	durability = dur.total;
+	unsigned durability		= dur.total;
+	unsigned durability_acct	= dur.acct;
+	unsigned min_durability		= dur.min_durability;
 
 	if (max(durability, ec_redundancy + 1) < r.data_replicas) {
 		r.need_rb |= BIT(BCH_RECONCILE_data_replicas);

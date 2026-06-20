@@ -604,6 +604,7 @@ static inline int bch2_extent_ptr_durability(struct btree_trans *trans, struct e
 
 struct bkey_durability {
 	unsigned	online, total;
+	unsigned	acct, min_durability;
 };
 
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);

@@ -858,6 +858,7 @@ static unsigned __bch2_dev_durability(struct bch_fs *c, unsigned dev, bool desir
 struct stripe_dev_durability {
 	u8	dev;
 	u8	durability;
+	u8	durability_desired;
 	bool	online;
 };
 
@@ -873,8 +874,9 @@ struct durability_dedup {
 };
 
 static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
-				  bool desired, struct bkey_durability *ret,
-				  struct durability_dedup *seen)
+				  struct bkey_durability *ret,
+				  struct durability_dedup *seen,
+				  unsigned *desired_total)
 {
 	struct bch_fs *c = trans->c;
 	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx), 0);
@@ -904,11 +906,10 @@ static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
 		for (unsigned i = 0; i < s.v->nr_blocks; i++) {
 			unsigned dev = s.v->ptrs[i].dev;
 			struct stripe_dev_durability d = {
-				.dev		= dev,
-				.durability	= desired
-					? bch2_dev_durability_desired(c, dev)
-					: bch2_dev_durability(c, dev),
-				.online		= test_bit(dev, c->devs_online.d),
+				.dev			= dev,
+				.durability		= bch2_dev_durability(c, dev),
+				.durability_desired	= bch2_dev_durability_desired(c, dev),
+				.online			= test_bit(dev, c->devs_online.d),
 			};
 			online_count += d.online;
 
@@ -950,6 +951,31 @@ static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
 				ret->online += d->durability;
 		}
 	}
+
+	/*
+	 * Desired durability - what the stripe will hold once degraded devices
+	 * recover - is the same least-durable-few sum over desired per-device
+	 * durability. Deduped within the stripe (a device backing two of its
+	 * blocks fails once, so counts once) but per-pointer, not across the
+	 * key's stripes via @seen: it feeds the per-pointer accounting, not the
+	 * whole-key total. Computed from the same stripe read.
+	 */
+	if (desired_total) {
+		for (unsigned i = 1; i < devs.nr; i++) {
+			struct stripe_dev_durability d = devs.data[i];
+			unsigned pos = i;
+			while (pos && d.durability_desired < devs.data[pos - 1].durability_desired) {
+				devs.data[pos] = devs.data[pos - 1];
+				--pos;
+			}
+			devs.data[pos] = d;
+		}
+
+		struct bch_devs_mask desired_seen = {};
+		for (unsigned i = 0; i < devs.nr && i < total_keep; i++)
+			if (!__test_and_set_bit(devs.data[i].dev, desired_seen.d))
+				*desired_total += devs.data[i].durability_desired;
+	}
 out:
 	darray_exit(&devs);
 	return ret2;
@@ -967,8 +993,10 @@ int __bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_de
 
 	struct durability_dedup seen = {};
 	struct bkey_durability d = {};
-	int ret = bch2_stripe_durability(trans, p->ec.idx, desired, &d, &seen);
-	return ret ?: (int) d.total;
+	unsigned desired_total = 0;
+	int ret = bch2_stripe_durability(trans, p->ec.idx, &d, &seen,
+					 desired ? &desired_total : NULL);
+	return ret ?: (int) (desired ? desired_total : d.total);
 }
 
 int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bkey_durability *ret)
@@ -979,11 +1007,13 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 	struct extent_ptr_decoded p;
 	struct durability_dedup seen = {};
 
-	*ret = (struct bkey_durability) {};
+	*ret = (struct bkey_durability) { .min_durability = INT_MAX };
 
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
 		if (p.ptr.cached)
 			continue;
+
+		unsigned desired = 0;
 
 		if (p.has_ec) {
 			/*
@@ -993,18 +1023,32 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 			 * devices rather than its own (placeholder) device. @seen
 			 * dedups devices shared with the key's other stripes.
 			 */
-			int ret2 = bch2_stripe_durability(trans, p.ec.idx, false, ret, &seen);
+			int ret2 = bch2_stripe_durability(trans, p.ec.idx, ret, &seen, &desired);
 			if (ret2 < 0)
 				return ret2;
 		} else if (p.ptr.dev != BCH_SB_MEMBER_INVALID) {
-			unsigned d = bch2_dev_durability(c, p.ptr.dev);
+			guard(rcu)();
+			unsigned cur = bch2_dev_durability(c, p.ptr.dev);
+			desired = bch2_dev_durability_desired(c, p.ptr.dev);
 
 			if (!__test_and_set_bit(p.ptr.dev, seen.total.d))
-				ret->total += d;
+				ret->total += cur;
 			if (bch2_dev_idx_is_online(c, p.ptr.dev) &&
 			    !__test_and_set_bit(p.ptr.dev, seen.online.d))
-				ret->online += d;
+				ret->online += cur;
 		}
+		/* else: BCH_SB_MEMBER_INVALID placeholder contributes nothing */
+
+		/*
+		 * durability_acct (per-pointer desired sum) and min_durability are
+		 * what the reconcile trigger needs alongside the whole-key total;
+		 * gathering them here keeps it to one stripe read per pointer. An
+		 * evacuating device reads as durability 0 for the minimum.
+		 */
+		ret->acct += desired;
+		unsigned d_min = !p.has_ec && bch2_dev_bad_or_evacuating(c, p.ptr.dev)
+			? 0 : desired;
+		ret->min_durability = min(ret->min_durability, d_min);
 	}
 	return 0;
 }
