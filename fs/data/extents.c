@@ -1621,40 +1621,33 @@ int bch2_bkey_drop_extra_durability(struct btree_trans *trans,
 		return 0;
 
 	struct bch_fs *c = trans->c;
-	u8 ptr_durability[BCH_BKEY_PTRS_MAX];
-	unsigned durability = 0, nr_ptrs = 0;
 
-	memset(ptr_durability, 0, sizeof(ptr_durability));
+	/*
+	 * Work on a copy: tentatively mark each candidate cached (excluding it
+	 * from durability) and keep the drop only if durability still clears
+	 * data_replicas. Recomputing over the whole key accounts for device
+	 * sharing and the online/total split, which a per-pointer delta can't.
+	 * online <= total always, so checking online is the binding constraint.
+	 */
+	struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, bkey_i_to_s_c(k)));
 
-	union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
+	unsigned ptr_bit = 1, ptrs_kill = 0;
+	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(n));
 
-	bkey_for_each_ptr_decode(&k->k, bch2_bkey_ptrs(bkey_i_to_s(k)), p, entry) {
-		BUG_ON(nr_ptrs >= ARRAY_SIZE(ptr_durability));
+	bkey_for_each_ptr(ptrs, ptr) {
+		if ((mask & ptr_bit) && !ptr->cached) {
+			ptr->cached = true;
 
-		if (p.ptr.cached)
-			mask &= ~BIT(nr_ptrs);
+			struct bkey_durability durability;
+			try(bch2_bkey_durability(trans, bkey_i_to_s_c(n), &durability));
 
-		int d = bch2_dev_idx_is_online(c, p.ptr.dev)
-			? bch2_extent_ptr_durability(trans, &p)
-			: 0;
-		if (d < 0)
-			return d;
-
-		BUG_ON(d > U8_MAX);
-
-		ptr_durability[nr_ptrs++] = d;
-		durability += d;
-	}
-
-	u8 ptrs_kill = 0;
-	for (unsigned i = 0; i < nr_ptrs; i++)
-		if ((mask & BIT(i)) &&
-		    durability - ptr_durability[i] >= opts->data_replicas) {
-			durability -= ptr_durability[i];
-			ptr_durability[i] = 0;
-			ptrs_kill |= BIT(i);
+			if (durability.online >= opts->data_replicas)
+				ptrs_kill |= ptr_bit;
+			else
+				ptr->cached = false;
 		}
+		ptr_bit <<= 1;
+	}
 
 	if (kill)
 		bch2_bkey_drop_ptrs_mask(c, k, ptrs_kill);
@@ -1670,33 +1663,35 @@ int bch2_bkey_drop_extra_ec_durability(struct btree_trans *trans,
 	if (!mask)
 		return 0;
 
-	struct bkey_durability durability;
-	try(bch2_bkey_durability(trans, bkey_i_to_s_c(k), &durability));
-
 	struct bch_fs *c = trans->c;
-	union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
-	unsigned ptr_bit = 1;
 
-	bkey_for_each_ptr_decode(&k->k, bch2_bkey_ptrs(bkey_i_to_s(k)), p, entry) {
-		if (mask & ptr_bit) {
-			int d;
-			if (bch2_dev_idx_is_online(c, p.ptr.dev)) {
-				d = bch2_extent_ptr_durability(trans, &p);
-				if (d < 0)
-					return d;
+	/*
+	 * Gather the candidate devices up front: dropping a stripe pointer
+	 * rewrites the entry list, so we can't iterate and drop at once. Then,
+	 * for each, measure a copy of the key with that stripe pointer dropped
+	 * and commit the drop to @k only if durability still clears
+	 * data_replicas - recomputed whole-key, so device sharing and the
+	 * online/total split are accounted for (online <= total, so online is
+	 * the binding check).
+	 */
+	u8 devs[BCH_BKEY_PTRS_MAX];
+	unsigned ptr_bit = 1, nr_devs = 0;
 
-				d -= bch2_dev_durability(c, p.ptr.dev);
-			} else {
-				d = 0;
-			}
-
-			if (durability.online - d >= opts->data_replicas) {
-				durability.online -= d;
-				bch2_bkey_drop_ec(c, k, p.ptr.dev);
-			}
-		}
+	bkey_for_each_ptr(bch2_bkey_ptrs(bkey_i_to_s(k)), ptr) {
+		if (mask & ptr_bit)
+			devs[nr_devs++] = ptr->dev;
 		ptr_bit <<= 1;
+	}
+
+	for (unsigned i = 0; i < nr_devs; i++) {
+		struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, bkey_i_to_s_c(k)));
+		bch2_bkey_drop_ec(c, n, devs[i]);
+
+		struct bkey_durability durability;
+		try(bch2_bkey_durability(trans, bkey_i_to_s_c(n), &durability));
+
+		if (durability.online >= opts->data_replicas)
+			bch2_bkey_drop_ec(c, k, devs[i]);
 	}
 
 	return 0;
