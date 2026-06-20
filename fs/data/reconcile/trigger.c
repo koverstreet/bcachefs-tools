@@ -537,7 +537,6 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 		if (evacuating)
 			d = 0;
 
-		durability += d;
 		if (!p.ptr.cached)
 			min_durability = min(min_durability, d);
 
@@ -562,6 +561,15 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 
 	if (unwritten)
 		r.need_rb &= ~BIT(BCH_RECONCILE_data_checksum);
+
+	/*
+	 * Whole-key durability, so a device shared between the extent's stripes
+	 * is counted once - the per-pointer sum can't see that, and getting it
+	 * wrong here would mis-set need_rb and trigger (or skip) reconcile work.
+	 */
+	struct bkey_durability dur;
+	try(bch2_bkey_durability(trans, k, &dur));
+	durability = dur.total;
 
 	if (max(durability, ec_redundancy + 1) < r.data_replicas) {
 		r.need_rb |= BIT(BCH_RECONCILE_data_replicas);
