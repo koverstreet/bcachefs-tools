@@ -599,6 +599,7 @@ static inline bool btree_id_cached(enum btree_id btree)
 		(BIT_ULL(BTREE_ID_alloc)|
 		 BIT_ULL(BTREE_ID_inodes)|
 		 BIT_ULL(BTREE_ID_logged_ops)|
+		 BIT_ULL(BTREE_ID_stripes)|
 		 BIT_ULL(BTREE_ID_subvolumes));
 }
 
