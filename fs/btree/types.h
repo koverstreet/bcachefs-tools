@@ -361,7 +361,8 @@ struct btree_node_iter {
 #define BTREE_UPDATE_FLAGS()			\
 	x(internal_snapshot_node)		\
 	x(nojournal)				\
-	x(key_cache_reclaim)
+	x(key_cache_reclaim)			\
+	x(overwrite_triggered)
 
 
 /*

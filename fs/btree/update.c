@@ -368,7 +368,14 @@ btree_trans_update_by_path(struct btree_trans *trans,
 	bool overwrite = !cmp && i < trans->updates + trans->nr_updates;
 
 	if (overwrite) {
-		EBUG_ON(i->insert_trigger_run || i->overwrite_trigger_run);
+		/*
+		 * Overwriting an update whose triggers already ran normally
+		 * loses or duplicates their effects - unless the caller has
+		 * handled that, e.g. deleting a key from its own trigger, where
+		 * the new (deleted) key re-runs triggers via the key cache flush.
+		 */
+		EBUG_ON((i->insert_trigger_run || i->overwrite_trigger_run) &&
+			!(flags & BTREE_UPDATE_overwrite_triggered));
 
 		bch2_path_put(trans, i->path, true);
 		i->flags	= n.flags;

@@ -393,16 +393,17 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 		u64 old_lru_pos = stripe_lru_pos(old_s);
 		u64 new_lru_pos = stripe_lru_pos(new_s);
 
+		/*
+		 * stripes is key-cached: delete via bch2_trans_update() (which
+		 * routes through flush_new_cached_update) rather than mutating
+		 * op.new in place, or the cached deletion bypasses the flush and
+		 * trips the commit-time assert. The flushed btree-side delete
+		 * re-runs this trigger to do the lru/reconcile/accounting cleanup.
+		 */
 		if (unlikely(new_lru_pos == STRIPE_LRU_POS_EMPTY) &&
-		    !bch2_stripe_is_open(c, idx)) {
-			op.new.k->type = KEY_TYPE_deleted;
-			set_bkey_val_u64s(op.new.k, 0);
-			new_s = NULL;
-			new_lru_pos = 0;
-			needs_reconcile_delta =
-				stripe_needs_reconcile(new_s) -
-				stripe_needs_reconcile(old_s);
-		}
+		    !bch2_stripe_is_open(c, idx))
+			return bch2_btree_delete(trans, BTREE_ID_stripes, op.new.k->p,
+						 BTREE_UPDATE_overwrite_triggered);
 
 		try(bch2_lru_change(trans,
 				    BCH_LRU_STRIPE_FRAGMENTATION, idx,
