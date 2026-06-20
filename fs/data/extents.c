@@ -856,12 +856,25 @@ static unsigned __bch2_dev_durability(struct bch_fs *c, unsigned dev, bool desir
 }
 
 struct stripe_dev_durability {
+	u8	dev;
 	u8	durability;
 	bool	online;
 };
 
+/*
+ * Devices already counted toward a key's durability. A device shared between
+ * two of the key's stripe pointers - or between a stripe and a plain pointer -
+ * may fail only once, so it must count toward durability only once. Total and
+ * online select different device sets, so they're deduplicated separately.
+ */
+struct durability_dedup {
+	struct bch_devs_mask	total;
+	struct bch_devs_mask	online;
+};
+
 static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
-				  bool desired, struct bkey_durability *ret)
+				  bool desired, struct bkey_durability *ret,
+				  struct durability_dedup *seen)
 {
 	struct bch_fs *c = trans->c;
 	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx), 0);
@@ -891,10 +904,11 @@ static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
 		for (unsigned i = 0; i < s.v->nr_blocks; i++) {
 			unsigned dev = s.v->ptrs[i].dev;
 			struct stripe_dev_durability d = {
-				.durability = desired
+				.dev		= dev,
+				.durability	= desired
 					? bch2_dev_durability_desired(c, dev)
 					: bch2_dev_durability(c, dev),
-				.online = test_bit(dev, c->devs_online.d),
+				.online		= test_bit(dev, c->devs_online.d),
 			};
 			online_count += d.online;
 
@@ -915,19 +929,25 @@ static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
 	 * data is readable now if at least nr_data are online, so the online
 	 * redundancy is online_count - nr_data, and online durability is the sum
 	 * of the (online_count - nr_data + 1) least durable online devices - zero
-	 * when fewer than nr_data are online.
+	 * when fewer than nr_data are online. A device already counted (via @seen)
+	 * by another of the key's stripe pointers fills its slot but isn't summed
+	 * again.
 	 */
 	unsigned total_keep = s.v->nr_redundant + 1;
 	int online_keep = (int) online_count - (int) nr_data + 1;
 	unsigned online_taken = 0;
 
 	for (unsigned i = 0; i < devs.nr; i++) {
-		if (i < total_keep)
-			ret->total += devs.data[i].durability;
-		if (online_keep > 0 && devs.data[i].online &&
+		struct stripe_dev_durability *d = &devs.data[i];
+
+		if (i < total_keep && !__test_and_set_bit(d->dev, seen->total.d))
+			ret->total += d->durability;
+
+		if (online_keep > 0 && d->online &&
 		    online_taken < (unsigned) online_keep) {
-			ret->online += devs.data[i].durability;
 			online_taken++;
+			if (!__test_and_set_bit(d->dev, seen->online.d))
+				ret->online += d->durability;
 		}
 	}
 out:
@@ -945,8 +965,9 @@ int __bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_de
 		return __bch2_dev_durability(trans->c, p->ptr.dev, desired);
 	}
 
+	struct durability_dedup seen = {};
 	struct bkey_durability d = {};
-	int ret = bch2_stripe_durability(trans, p->ec.idx, desired, &d);
+	int ret = bch2_stripe_durability(trans, p->ec.idx, desired, &d, &seen);
 	return ret ?: (int) d.total;
 }
 
@@ -956,6 +977,7 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
+	struct durability_dedup seen = {};
 
 	*ret = (struct bkey_durability) {};
 
@@ -968,17 +990,20 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 			 * An erasure coded pointer - including a
 			 * BCH_SB_MEMBER_INVALID placeholder for data not yet moved -
 			 * gets its durability, online vs total, from the stripe's
-			 * devices rather than its own (placeholder) device.
+			 * devices rather than its own (placeholder) device. @seen
+			 * dedups devices shared with the key's other stripes.
 			 */
-			int ret2 = bch2_stripe_durability(trans, p.ec.idx, false, ret);
+			int ret2 = bch2_stripe_durability(trans, p.ec.idx, false, ret, &seen);
 			if (ret2 < 0)
 				return ret2;
 		} else if (p.ptr.dev != BCH_SB_MEMBER_INVALID) {
 			unsigned d = bch2_dev_durability(c, p.ptr.dev);
 
-			if (bch2_dev_idx_is_online(c, p.ptr.dev))
+			if (!__test_and_set_bit(p.ptr.dev, seen.total.d))
+				ret->total += d;
+			if (bch2_dev_idx_is_online(c, p.ptr.dev) &&
+			    !__test_and_set_bit(p.ptr.dev, seen.online.d))
 				ret->online += d;
-			ret->total += d;
 		}
 	}
 	return 0;
