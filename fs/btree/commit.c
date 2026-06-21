@@ -1327,7 +1327,8 @@ static noinline int bch2_trans_commit_btree_write_ratelimit(struct btree_trans *
 	}));
 }
 
-int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags flags)
+int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags flags,
+			bool lazy)
 {
 	struct btree_insert_entry *errored_at = NULL;
 	struct bch_fs *c = trans->c;
@@ -1457,9 +1458,12 @@ retry:
 out:
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_check_rw)))
 		enumerated_ref_put(&c->writes, BCH_WRITE_REF_trans);
-out_reset:
+
 	if (!ret)
 		bch2_trans_downgrade(trans);
+	if (lazy)
+		ret = bch_err_throw(trans->c, transaction_restart_commit);
+out_reset:
 	bch2_trans_reset_updates(trans);
 
 	return ret;

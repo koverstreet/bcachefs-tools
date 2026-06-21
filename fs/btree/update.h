@@ -270,7 +270,7 @@ static inline int __must_check bch2_trans_update_buffered(struct btree_trans *tr
 
 void bch2_trans_commit_hook(struct btree_trans *,
 			    struct btree_trans_commit_hook *);
-int __bch2_trans_commit(struct btree_trans *, enum bch_trans_commit_flags);
+int __bch2_trans_commit(struct btree_trans *, enum bch_trans_commit_flags, bool);
 
 int bch2_trans_log_str(struct btree_trans *, const char *);
 int bch2_trans_log_msg(struct btree_trans *, struct printbuf *);
@@ -325,7 +325,7 @@ static inline int bch2_trans_commit(struct btree_trans *trans,
 	trans->journal_seq	= journal_seq;
 	trans->flush		= NULL;
 
-	return __bch2_trans_commit(trans, flags);
+	return __bch2_trans_commit(trans, flags, false);
 }
 
 static inline int bch2_trans_commit_flush(struct btree_trans *trans,
@@ -338,7 +338,7 @@ static inline int bch2_trans_commit_flush(struct btree_trans *trans,
 	trans->journal_seq	= journal_seq;
 	trans->flush		= flush;
 
-	return __bch2_trans_commit(trans, flags);
+	return __bch2_trans_commit(trans, flags, false);
 }
 
 static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
@@ -346,10 +346,14 @@ static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
 					 u64 *journal_seq,
 					 unsigned flags)
 {
-	return bch2_trans_has_updates(trans)
-		? (bch2_trans_commit(trans, disk_res, journal_seq, flags) ?:
-		   bch_err_throw(trans->c, transaction_restart_commit))
-		: 0;
+	if (bch2_trans_has_updates(trans))
+		return 0;
+
+	trans->disk_res		= disk_res;
+	trans->journal_seq	= journal_seq;
+	trans->flush		= NULL;
+
+	return __bch2_trans_commit(trans, flags, true);
 }
 
 #define commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
