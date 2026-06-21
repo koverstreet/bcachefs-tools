@@ -572,8 +572,15 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	if (!unwritten && r.erasure_code != ec)
 		r.need_rb |= BIT(BCH_RECONCILE_erasure_code);
 
+	/*
+	 * Floor the EC contribution at the stripe's repairable durability: a
+	 * removed stripe device reads as durability_desired 0, dropping
+	 * durability_acct below ec_redundancy + 1, but stripe repair reconstructs
+	 * the block and restores it - so don't pad with placeholders for
+	 * durability the stripe will get back on its own.
+	 */
 	*need_update_invalid_devs =
-		min_t(int, durability_acct + invalid - r.data_replicas, invalid);
+		min_t(int, max(durability_acct, ec_redundancy + 1) + invalid - r.data_replicas, invalid);
 
 	/* Multiple pointers to BCH_SB_MEMBER_INVALID is an incompat feature: */
 	if (*need_update_invalid_devs < 0 &&
