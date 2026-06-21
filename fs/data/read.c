@@ -1192,10 +1192,7 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 	 * Unlock the iterator while the btree node's lock is still in cache,
 	 * before allocating the clone/fragment (if any) and doing the IO:
 	 */
-	if (!(flags & BCH_READ_in_retry))
-		bch2_trans_unlock(trans);
-	else
-		bch2_trans_unlock_long(trans);
+	bch2_trans_unlock(trans);
 
 	if (!read_full) {
 		EBUG_ON(crc_is_compressed(pick.crc));
