@@ -1523,8 +1523,13 @@ __cold void bch2_new_stripes_to_text(struct printbuf *out, struct bch_fs *c)
 	struct ec_stripe_head *h;
 	struct ec_stripe_new *s;
 
+	unsigned long limit = (totalram_pages() << PAGE_SHIFT) / 100 *
+		c->opts.ec_stripe_buf_limit;
+
 	prt_printf(out, "stripe buf memory: ");
 	prt_human_readable_u64(out, c->ec.stripe_buf_bytes);
+	prt_char(out, '/');
+	prt_human_readable_u64(out, limit);
 	prt_newline(out);
 
 	scoped_guard(mutex, &c->ec.stripe_head_lock)
