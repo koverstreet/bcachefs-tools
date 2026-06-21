@@ -3204,24 +3204,32 @@ struct bkey_s_c bch2_btree_iter_peek_slot(struct btree_iter *iter)
 
 	if ((iter->flags & BTREE_ITER_cached) ||
 	    !(iter->flags & (BTREE_ITER_is_extents|BTREE_ITER_filter_snapshots))) {
-		k = bkey_s_c_null;
-
-		if (unlikely(trans->nr_updates)) {
-			bch2_btree_trans_peek_slot_updates(trans, iter, &k);
-			if (k.k)
-				goto out;
-		}
-
-		if (unlikely(iter->flags & BTREE_ITER_with_journal) &&
-		    (k = btree_trans_peek_slot_journal(trans, iter)).k)
-			goto out;
-
+		/*
+		 * Consult sources in the same order as bch2_btree_iter_peek_max():
+		 * btree, then key cache, then journal, then the transaction's own
+		 * updates - each overlaying the last, so an in-transaction update
+		 * wins. Crucially the key cache is peeked before trans updates, so
+		 * the key_cache_path is established even when we already have an
+		 * update for this key; otherwise a second update to the same cached
+		 * key in one transaction would skip the cache and livelock against
+		 * a dirty cached entry in bch2_trans_update_get_key_cache().
+		 */
 		k = bch2_btree_path_peek_slot(btree_iter_path(trans, iter), &iter->k);
-		if (unlikely(!k.k))
-			goto out;
 
 		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
 		    btree_trans_peek_key_cache(iter, &k))
+			goto out;
+
+		if (unlikely(iter->flags & BTREE_ITER_with_journal)) {
+			struct bkey_s_c j = btree_trans_peek_slot_journal(trans, iter);
+			if (j.k)
+				k = j;
+		}
+
+		if (unlikely(trans->nr_updates))
+			bch2_btree_trans_peek_slot_updates(trans, iter, &k);
+
+		if (unlikely(!k.k))
 			goto out;
 
 		if (unlikely(bkey_extent_whiteout(k.k) &&
