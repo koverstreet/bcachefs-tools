@@ -563,7 +563,7 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	if (unwritten)
 		r.need_rb &= ~BIT(BCH_RECONCILE_data_checksum);
 
-	if (max(durability, ec_redundancy) < r.data_replicas) {
+	if (max(durability, ec_redundancy + 1) < r.data_replicas) {
 		r.need_rb |= BIT(BCH_RECONCILE_data_replicas);
 		r.hipri = 1;
 	}
