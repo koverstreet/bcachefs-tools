@@ -784,7 +784,7 @@ static int do_retry_stripe(struct moving_context *ctxt, u64 idx)
 {
 	struct btree_trans *trans = ctxt->trans;
 
-	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, idx), BTREE_ITER_intent);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, idx), BTREE_ITER_cached|BTREE_ITER_intent);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	return do_reconcile_stripe(ctxt, &iter, k, NULL);

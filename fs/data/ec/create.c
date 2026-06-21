@@ -495,7 +495,7 @@ int bch2_resume_logged_op_stripe_update(struct btree_trans *trans, struct bkey_i
 	bch2_bkey_buf_init(&old_sk);
 
 	/* Read new stripe */
-	CLASS(btree_iter, new_iter)(trans, BTREE_ID_stripes, POS(0, new_idx), 0);
+	CLASS(btree_iter, new_iter)(trans, BTREE_ID_stripes, POS(0, new_idx), BTREE_ITER_cached);
 	struct bkey_s_c new_k = bkey_try(bch2_btree_iter_peek_slot(&new_iter));
 
 	if (new_k.k->type != KEY_TYPE_stripe) {
@@ -507,7 +507,7 @@ int bch2_resume_logged_op_stripe_update(struct btree_trans *trans, struct bkey_i
 
 	/* Read old stripe (may be same as new, or may be gone) */
 	if (old_idx && old_idx != new_idx) {
-		CLASS(btree_iter, old_iter)(trans, BTREE_ID_stripes, POS(0, old_idx), 0);
+		CLASS(btree_iter, old_iter)(trans, BTREE_ID_stripes, POS(0, old_idx), BTREE_ITER_cached);
 		struct bkey_s_c old_k = bkey_try(bch2_btree_iter_peek_slot(&old_iter));
 
 		if (old_k.k->type == KEY_TYPE_stripe)

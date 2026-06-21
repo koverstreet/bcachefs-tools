@@ -879,7 +879,7 @@ static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
 				  unsigned *desired_total)
 {
 	struct bch_fs *c = trans->c;
-	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx), 0);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx), BTREE_ITER_cached);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	if (k.k->type != KEY_TYPE_stripe)
