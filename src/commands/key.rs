@@ -43,6 +43,13 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
     if cli.check {
         if !encrypted {
             println!("Device has no encryption");
+            // Exit nonzero on the unencrypted case. Boot scripts (notably the
+            // NixOS initramfs) branch on --check's exit code to decide whether
+            // to prompt for unlock; returning 0 here makes an unencrypted root
+            // read as "needs unlocking" and prompt for a nonexistent passphrase.
+            // Encrypted (locked or unlocked) still exits 0, matching the
+            // behaviour from before --check grew the three-state output.
+            std::process::exit(1);
         } else if KeyHandle::new_from_search(&sb.sb().uuid()).is_ok() {
             println!("Device is encrypted and unlocked");
         } else {
