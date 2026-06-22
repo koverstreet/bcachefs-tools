@@ -960,6 +960,20 @@ use_clean:
 		    !test_bit(BCH_FS_error, &c->flags) &&
 		    !test_bit(BCH_FS_errors_not_fixed, &c->flags)) {
 			SET_BCH_SB_HAS_ERRORS(c->disk_sb.sb, 0);
+			write_sb = true;
+		}
+
+		/*
+		 * BCH_SB_HAS_TOPOLOGY_ERRORS forces check_topology on every mount,
+		 * not just fsck mounts (see the "superblock requires" path in
+		 * bch2_fs_recovery() startup) - so clear it whenever that pass has
+		 * run clean, not only under fsck. Otherwise a plain mount re-runs
+		 * the full (potentially very slow) pass every time and never clears
+		 * the flag.
+		 */
+		if ((c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_check_topology)) &&
+		    !test_bit(BCH_FS_error, &c->flags) &&
+		    !test_bit(BCH_FS_errors_not_fixed, &c->flags)) {
 			SET_BCH_SB_HAS_TOPOLOGY_ERRORS(c->disk_sb.sb, 0);
 			write_sb = true;
 		}
