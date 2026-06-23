@@ -408,6 +408,14 @@ static struct bch_read_bio *promote_alloc(struct btree_trans *trans,
 				k, pos, pick, flags, sectors, orig, failed);
 	int ret = PTR_ERR_OR_ZERO(promote);
 	if (unlikely(ret)) {
+		/*
+		 * A transaction restart can't be swallowed as a best-effort
+		 * nopromote - it would leave the transaction poisoned and panic
+		 * at bch2_trans_put. Return it so the read retries; this is the
+		 * only error promote_alloc passes back as an ERR_PTR.
+		 */
+		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+			return ERR_PTR(ret);
 		event_inc_trace(c, data_read_nopromote, buf, ({
 			prt_printf(&buf, "%s\n", bch2_err_str(ret));
 			bch2_bkey_val_to_text(&buf, c, k);
@@ -1178,6 +1186,12 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 		? promote_alloc(trans, iter, k, &pick, flags, orig,
 				&bounce, &read_full, failed)
 		: NULL;
+	/*
+	 * promote_alloc() returns an ERR_PTR only on transaction restart;
+	 * propagate it before we consume @ca or unlock so the read retries:
+	 */
+	if (IS_ERR(rbio))
+		return rbio;
 
 	/*
 	 * If it's being moved internally, we don't want to flag it as a cache
@@ -1526,6 +1540,15 @@ int __bch2_read_extent(struct btree_trans *trans,
 		read_extent_rbio_alloc(trans, orig, iter, read_pos, data_btree, k,
 				       pick, ca, offset_into_extent, failed, flags,
 				       bounce, read_full, narrow_crcs);
+	if (IS_ERR(rbio)) {
+		/*
+		 * Transaction restart during promote setup; @ca was not
+		 * consumed by read_extent_rbio_alloc() on this path:
+		 */
+		if (ca)
+			enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_io_read);
+		return PTR_ERR(rbio);
+	}
 
 	if (likely(!rbio->pick.do_ec_reconstruct)) {
 		if (unlikely(!rbio->ca)) {
