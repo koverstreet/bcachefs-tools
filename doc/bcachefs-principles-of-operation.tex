@@ -809,6 +809,30 @@ disks. \texttt{bcachefs image update} incrementally updates an existing image
 to reflect changes in the source directory, minimizing the amount of data
 rewritten.
 
+\section{Compatibility and versioning}
+
+The on-disk format gains features from release to release, with two
+compatibility guarantees that keep upgrading --- and going back --- predictable.
+
+Forwards: a newer release can always mount a filesystem an older release made.
+It upgrades the format while mounting, by running the recovery passes that bring
+the metadata up to date --- automatically, with nothing asked of you. It is
+worth knowing this happens: the format is updated in place, so once you mount
+with a newer release the filesystem is on the newer format. (Support for the
+very oldest formats is eventually dropped, so a very large version gap may need
+an intermediate release.)
+
+Backwards, by default: an older release can still mount and use a filesystem a
+newer release has touched. The exception is an \emph{incompatible} upgrade, which
+you ask for explicitly with \texttt{version\_upgrade=incompatible}; it turns on
+newer format features older releases cannot read, and so is a one-way step ---
+until you run \texttt{bcachefs downgrade}, which runs the recovery passes that
+convert the filesystem back to a form an older release accepts.
+
+So: upgrading is automatic and, by default, never costs you the ability to go
+back; only an explicit incompatible upgrade does, and \texttt{bcachefs downgrade}
+undoes even that.
+
 \section{Management}
 
 \subsection{Formatting}
