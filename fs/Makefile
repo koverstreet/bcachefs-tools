@@ -216,7 +216,10 @@ endif
 # back to the C-only module when they are not usable. BCACHEFS_RUST=1 forces the
 # Rust build (useful for debugging); BCACHEFS_RUST=0 disables it explicitly.
 ifdef CONFIG_RUST
-bcachefs-rust-y := y
+# The Rust build shells out to bindgen even outside DKMS; if bindgen isn't
+# installed, fall back to the C-only module rather than failing the build
+# (reported by feedc0de). DKMS refines this further via the auto-probe below.
+bcachefs-rust-y := $(if $(shell command -v $(BINDGEN) 2>/dev/null),y,n)
 ifdef BCACHEFS_DKMS
 BCACHEFS_RUST ?= auto
 ifeq ($(BCACHEFS_RUST),1)
