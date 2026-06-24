@@ -864,6 +864,33 @@ would be missing.
 The \texttt{-o verbose} option enables additional log output during the mount
 process.
 
+\subsubsection{Mounting at boot}
+
+At boot the system may attempt to mount a multi device filesystem before udev
+has finished probing all of its component devices. Since mounting normally
+requires every device to be present, this is a race: the mount can fail
+reporting missing devices even though they are all attached, simply because
+some had not been probed yet when the mount was attempted.
+
+bcachefs-tools ships a templated systemd service to close this race,
+\texttt{bcachefs-wait-devices@.service}, which runs \texttt{bcachefs
+wait-devices UUID=<uuid>}. It uses udev to watch the block subsystem and does
+not complete until every device belonging to the filesystem has been
+initialized. Make the mount depend on it by adding to the fstab entry's mount
+options
+\begin{quote} \begin{verbatim}
+x-systemd.requires=bcachefs-wait-devices@<uuid>.service
+\end{verbatim} \end{quote}
+where \texttt{<uuid>} is the filesystem UUID---the \texttt{@} instance is passed
+through to \texttt{wait-devices} as the UUID to wait for. systemd then holds the
+mount until all of the filesystem's devices have appeared.
+
+Because the service waits for \emph{every} member device, it should not be
+combined with \texttt{-o degraded} when a device is permanently missing: the
+service would never complete and the mount would time out. Use the wait service
+for the normal, all-devices-present case, and \texttt{degraded} without the
+requirement when intentionally mounting a filesystem that is missing a device.
+
 \subsection{Monitoring}
 
 Three commands provide a comprehensive view of filesystem health and
