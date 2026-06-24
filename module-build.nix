@@ -27,6 +27,7 @@ bcachefs-tools:
   stdenv,
   kernelModuleMakeFlags,
   kernel,
+  rustPlatform
 }:
 
 stdenv.mkDerivation {
@@ -45,6 +46,7 @@ stdenv.mkDerivation {
   makeFlags = kernelModuleMakeFlags ++ [
     "KDIR=${kernel.dev}/lib/modules/${kernel.modDirVersion}/build"
     "INSTALL_MOD_PATH=${placeholder "out"}"
+    "RUST_LIB_SRC=${rustPlatform.rustLibSrc}"
   ];
 
   postPatch = ''
