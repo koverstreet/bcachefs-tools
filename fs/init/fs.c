@@ -1117,11 +1117,16 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 		}
 	}
 
-#if defined(__KERNEL__) && !defined(CONFIG_RUST)
-	bch_warn(c, "kernel does not have CONFIG_RUST enabled; "
-		 "this will be required for bcachefs in the near future - "
-		 "please alert your distribution or kernel developers "
-		 "if your kernel does not support CONFIG_RUST");
+#ifdef __KERNEL__
+#ifdef CONFIG_BCACHEFS_RUST
+	prt_str(out, "Rust support enabled\n");
+#else
+	prt_str(out,
+		"built without Rust support; this will be required in the near "
+		"future - ensure your kernel has CONFIG_RUST enabled and a "
+		"compatible Rust toolchain (rustc + bindgen) is available at "
+		"build time\n");
+#endif
 #endif
 
 	bch2_fs_mi_field_upgrades(c);
