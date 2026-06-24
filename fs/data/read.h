@@ -136,15 +136,13 @@ int __bch2_read_extent(struct btree_trans *, struct bch_read_bio *,
 		       struct bkey_s_c, unsigned,
 		       struct bch_io_failures *, enum bch_read_flags, int);
 
-static inline void bch2_read_extent(struct btree_trans *trans,
+static inline int bch2_read_extent(struct btree_trans *trans,
 			struct bch_read_bio *rbio, struct bpos read_pos,
 			enum btree_id data_btree, struct bkey_s_c k,
 			unsigned offset_into_extent, enum bch_read_flags flags)
 {
-	int ret = __bch2_read_extent(trans, rbio, rbio->bio.bi_iter, read_pos,
+	return __bch2_read_extent(trans, rbio, rbio->bio.bi_iter, read_pos,
 				     data_btree, k, offset_into_extent, NULL, flags, -1);
-	/* __bch2_read_extent only returns errors if BCH_READ_in_retry is set */
-	WARN(ret, "unhandled error from __bch2_read_extent(): %s", bch2_err_str(ret));
 }
 
 int bch2_read(struct btree_trans *, struct bch_read_bio *, struct bvec_iter,

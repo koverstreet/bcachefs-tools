@@ -251,8 +251,10 @@ static void bchfs_read(struct btree_trans *trans,
 
 		bch2_bio_page_state_set(c, &rbio->bio, k);
 
-		bch2_read_extent(trans, rbio, iter.pos,
-				 data_btree, k, offset_into_extent, flags);
+		ret = bch2_read_extent(trans, rbio, iter.pos,
+				       data_btree, k, offset_into_extent, flags);
+		if (ret)
+			goto err;
 		/*
 		 * Careful there's a landmine here if bch2_read_extent() ever
 		 * starts returning transaction restarts here.
