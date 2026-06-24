@@ -255,6 +255,8 @@ static int buf_uncompress(struct bch_fs *c,
 
 		if (ret != Z_STREAM_END)
 			return bch_err_throw(c, decompress_gzip);
+		if (strm.avail_out)
+			return bch_err_throw(c, decompress_gzip_size_mismatch);
 		break;
 	}
 	case BCH_COMPRESSION_TYPE_zstd: {

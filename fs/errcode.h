@@ -537,6 +537,7 @@
 	x(BCH_ERR_decompress,		decompress_exceeded_max_encoded_extent)	\
 	x(BCH_ERR_decompress,		decompress_lz4)				\
 	x(BCH_ERR_decompress,		decompress_gzip)			\
+	x(BCH_ERR_decompress,		decompress_gzip_size_mismatch)		\
 	x(BCH_ERR_decompress,		decompress_zstd_src_len_bad)		\
 	x(BCH_ERR_decompress,		decompress_zstd_size_mismatch)		\
 	x(EIO,				data_write)				\
