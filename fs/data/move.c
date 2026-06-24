@@ -255,13 +255,7 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 	u->rbio.bio.bi_end_io	= move_read_endio;
 	u->rbio.bio.bi_ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
 
-	if (ctxt->rate)
-		bch2_ratelimit_increment(ctxt->rate, k.k->size);
-
-	if (ctxt->stats) {
-		atomic64_inc(&ctxt->stats->keys_moved);
-		atomic64_add(u->k.k->k.size, &ctxt->stats->sectors_moved);
-	}
+	u32 size = k.k->size;
 
 	if (bucket_in_flight) {
 		u->b = bucket_in_flight;
@@ -283,14 +277,47 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 	 * ctxt when doing wakeup
 	 */
 	closure_get(&ctxt->cl);
-	__bch2_read_extent(trans, &u->rbio,
-			   u->rbio.bio.bi_iter,
-			   bkey_start_pos(k.k),
-			   iter->btree_id, k, 0,
-			   NULL,
-			   data_opts->read_flags|BCH_READ_last_fragment,
-			   data_opts->read_dev);
+	ret = __bch2_read_extent(trans, &u->rbio,
+				 u->rbio.bio.bi_iter,
+				 bkey_start_pos(k.k),
+				 iter->btree_id, k, 0,
+				 NULL,
+				 data_opts->read_flags|BCH_READ_last_fragment,
+				 data_opts->read_dev);
+	if (ret) {
+		/*
+		 * __bch2_read_extent() only returns an error synchronously
+		 * (transaction restart or ENOMEM during promote setup) before it
+		 * has touched the rbio - move_read_endio() never runs, so the
+		 * read-side setup above has to be unwound by hand.
+		 *
+		 * bch2_data_update_exit() reverses bch2_data_update_init() and
+		 * also drops the in-flight bucket count we took above (update->b
+		 * is its only decrement, tree-wide). What it does NOT cover is
+		 * move.c's own read-side state: the closure ref, the read
+		 * accounting, and read_list.
+		 */
+		closure_put(&ctxt->cl);
+
+		scoped_guard(mutex, &ctxt->lock) {
+			atomic_sub(u->k.k->k.size, &ctxt->read_sectors);
+			atomic_dec(&ctxt->read_ios);
+			list_del(&u->read_list);
+		}
+
+		bch2_data_update_exit(u, ret);
+		u = NULL;
+		return ret;
+	}
 	u = NULL;
+
+	if (ctxt->rate)
+		bch2_ratelimit_increment(ctxt->rate, size);
+
+	if (ctxt->stats) {
+		atomic64_inc(&ctxt->stats->keys_moved);
+		atomic64_add(size, &ctxt->stats->sectors_moved);
+	}
 	return 0;
 }
 
