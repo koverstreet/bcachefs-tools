@@ -530,12 +530,14 @@ next:
 			}
 
 			/*
-			 * Lockless walk of wait_fifo: we're under guard(rcu),
-			 * trans memory is RCU-deferred in bch2_trans_put, and
-			 * wait_fifo slots only transition between NULL and a
-			 * valid pointer (never torn). Per-CPU cache reuse inside
-			 * a grace period can aim us at a reused trans — benign,
-			 * cycles missed this pass are caught next.
+			 * Lockless walk of wait_fifo: we're under guard(rcu).
+			 * The fifo is rcu_dereference'd and, on realloc, the old
+			 * buffer is freed via kfree_rcu_mightsleep; trans memory
+			 * is RCU-deferred in bch2_trans_put; and slots only
+			 * transition between NULL and a valid pointer (never torn -
+			 * insert publishes .w via smp_store_release). Per-CPU cache
+			 * reuse inside a grace period can aim us at a reused trans —
+			 * benign, cycles missed this pass are caught next.
 			 *
 			 * Snapshot the conflicting trans pointers into a per-frame
 			 * darray so iteration is stable across concurrent wakeups.
@@ -548,7 +550,14 @@ next:
 			struct six_lock_wait_fifo *wf =
 				rcu_dereference(top->node_have->lock.wait_fifo);
 			darray_for_each(*wf, i) {
-				trans = container_of_or_null(i->w, struct btree_trans, locking_wait);
+				/*
+				 * Acquire pairs with the smp_store_release(&.w)
+				 * in six_lock_wait_fifo_insert: orders this slot's
+				 * sibling .start_time read and the container_of(.w)
+				 * -> trans held-lock reads after we observe .w.
+				 */
+				struct six_lock_waiter *w = smp_load_acquire(&i->w);
+				trans = container_of_or_null(w, struct btree_trans, locking_wait);
 
 				if (trans &&
 				    trans != top->trans &&
@@ -594,18 +603,33 @@ static inline bool node_reuse_race(struct btree_trans *trans, struct btree *b)
 int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w)
 {
 	/*
-	 * Full barrier paired with every inserter's spin_unlock(&lock->wait_lock)
-	 * that published their wait_fifo slot. The lockless walker about to run
-	 * reads other trans's ->locking, ->paths, ->nodes_locked, and other locks'
-	 * wait_fifo slots - all written under unrelated wait_locks the walker
-	 * never acquires, so the writers' releases don't pair with anything on
-	 * our side. On weakly-ordered architectures, without smp_mb() here the
-	 * walker can read a stale snapshot and miss a cycle whose closing edge
-	 * was just published on another CPU.
+	 * Store->load fence: orders publishing ourselves as a waiter (done by
+	 * six_lock_wait_fifo_insert before should_sleep_fn ran) before the two
+	 * reads of shared state that follow. Both are the store-buffer litmus
+	 * test - {publish self; read shared state} racing the mirror op on
+	 * another CPU - and only a full barrier forbids the both-miss outcome.
+	 * smp_rmb() is not enough (it orders load->load, but the publish is a
+	 * store), and the fence cannot fold into the publish as a release: a
+	 * release is one-way, it orders the publish after prior writes but
+	 * can't fence it before these later reads. So one full barrier here,
+	 * serving both reads:
 	 *
-	 * The walker's "cycles missed this pass are caught next" reassurance
-	 * doesn't fire once every cycle participant is parked: nobody issues
-	 * another lock request, so there is no next pass.
+	 *  1. The walk below reads every other waiter. Two waiters closing a
+	 *     cycle each do {publish; look for the other}; both missing means
+	 *     both park with the cycle undetected - and once every participant
+	 *     is parked there is no next lock request, hence no next pass to
+	 *     catch it ("missed this pass, caught next" does not fire). The
+	 *     cycle must be caught on the spot.
+	 *
+	 *  2. The node-reuse check just below reads b->hash_val, pairing with
+	 *     the reclaim side (clear hash_val; smp_mb; six_lock_wakeup_all in
+	 *     bch2_btree_node_transition_state_locked). Both missing means we
+	 *     read a stale-valid hash_val and park on a reused node while the
+	 *     waker misses our just-published entry.
+	 *
+	 * Per-edge ordering - reading a waiter's held-lock state once we
+	 * observe its slot - is the separate smp_store_release(&.w)/
+	 * smp_load_acquire(&.w) pair in the wait_fifo, not this barrier.
 	 */
 	smp_mb();
 
@@ -626,10 +650,9 @@ int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w
 	 * the node may already have been freed *and* re-hashed to a different
 	 * identity, in which case hash_val is non-zero but ≠ what we wanted.
 	 *
-	 * Publish order on the reclaim side:
-	 * bch2_btree_node_transition_state_locked clears (or rotates)
-	 * hash_val, smp_mb(), six_lock_wakeup_all() — pairs with the
-	 * smp_mb() above.
+	 * The store->load ordering against the reclaim side
+	 * (bch2_btree_node_transition_state_locked) is the smp_mb() above,
+	 * point 2.
 	 */
 	struct btree_trans *trans = container_of(w, struct btree_trans, locking_wait);
 	struct btree *b = locking_node(lock);

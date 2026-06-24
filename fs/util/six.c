@@ -232,7 +232,13 @@ static inline void six_lock_wait_fifo_shrink(struct six_lock_wait_fifo *wf)
  */
 static inline void six_lock_wait_fifo_remove(struct six_lock_wait_fifo *wf, u16 idx)
 {
-	wf->data[idx].w = NULL;
+	/*
+	 * WRITE_ONCE: the lockless cycle detector reads this slot via
+	 * smp_load_acquire(&.w); clearing to NULL just makes it skip the slot
+	 * (no dependent data, so no release needed), but it's a concurrently
+	 * read shared location, so the store must be marked.
+	 */
+	WRITE_ONCE(wf->data[idx].w, NULL);
 	wf->next_free_hint = min(wf->next_free_hint, idx);
 }
 
@@ -260,12 +266,28 @@ static inline int six_lock_wait_fifo_insert(struct six_lock *lock,
 
 	return 0;
 fill:
-	wf->data[i].w		= wait;
+	/*
+	 * Publish this waiter for the lockless cycle detector
+	 * (bch2_check_for_deadlock), which walks this fifo without taking
+	 * wait_lock, gates each slot on a non-NULL .w, then reads the sibling
+	 * .start_time and follows container_of(.w) -> trans to read the
+	 * waiter's held-lock state.
+	 *
+	 * .w is the publish gate: stored last, with a release that orders the
+	 * sibling slot fields and all of the trans's held-lock state (->paths,
+	 * ->nodes_locked, l[].b) before the slot becomes visible. Pairs with
+	 * the smp_load_acquire(&i->w) in the walk.
+	 *
+	 * This release is *not* the store->load fence that lets two waiters
+	 * closing a cycle see each other - that is the smp_mb() in
+	 * bch2_check_for_deadlock.
+	 */
 	wf->data[i].start_time	= (wait->trans_start_time << SIX_LOCK_WANT_BITS) |
 				  ((u8) wait->lock_want & SIX_LOCK_WANT_MASK);
 	wait->slot_idx		= i;
 	wf->next_free_hint	= (i + 1) & (wf->size - 1);
 	wf->nr			= max(wf->nr, i + 1);
+	smp_store_release(&wf->data[i].w, wait);
 	return 1;
 }
 
