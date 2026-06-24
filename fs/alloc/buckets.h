@@ -142,7 +142,7 @@ static inline struct bucket *PTR_GC_BUCKET(struct bch_dev *ca,
 
 static inline void alloc_to_bucket(struct bucket *dst, struct bch_alloc_v4 src)
 {
-	dst->gen		= src.gen;
+	dst->generation		= src.generation;
 	dst->data_type		= src.data_type;
 	dst->stripe_sectors	= src.stripe_sectors;
 	dst->dirty_sectors	= src.dirty_sectors;
@@ -151,7 +151,7 @@ static inline void alloc_to_bucket(struct bucket *dst, struct bch_alloc_v4 src)
 
 static inline void __bucket_m_to_alloc(struct bch_alloc_v4 *dst, struct bucket src)
 {
-	dst->gen		= src.gen;
+	dst->generation		= src.generation;
 	dst->data_type		= src.data_type;
 	dst->stripe_sectors	= src.stripe_sectors;
 	dst->dirty_sectors	= src.dirty_sectors;
@@ -191,7 +191,7 @@ static inline s64 ptr_disk_sectors(s64 sectors, struct extent_ptr_decoded p)
 static inline int dev_ptr_stale_rcu(struct bch_dev *ca, const struct bch_extent_ptr *ptr)
 {
 	int gen = bucket_gen_get_rcu(ca, PTR_BUCKET_NR(ca, ptr));
-	return gen < 0 ? gen : gen_after(gen, ptr->gen);
+	return gen < 0 ? gen : gen_after(gen, ptr->generation);
 }
 
 /**
@@ -383,7 +383,7 @@ bch2_disk_reservation_init(struct bch_fs *c, unsigned nr_replicas)
 		.sectors	= 0,
 #if 0
 		/* not used yet: */
-		.gen		= c->capacity_gen,
+		.generation		= c->capacity_gen,
 #endif
 		.nr_replicas	= nr_replicas,
 	};

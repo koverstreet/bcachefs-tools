@@ -424,7 +424,7 @@ bool bch2_extent_merge(struct bch_fs *c, struct bkey_s l, struct bkey_s_c r)
 		if (lp.ptr.offset + lp.crc.offset + lp.crc.live_size !=
 		    rp.ptr.offset + rp.crc.offset ||
 		    lp.ptr.dev			!= rp.ptr.dev ||
-		    lp.ptr.gen			!= rp.ptr.gen ||
+		    lp.ptr.generation			!= rp.ptr.generation ||
 		    lp.ptr.unwritten		!= rp.ptr.unwritten ||
 		    lp.has_ec			!= rp.has_ec)
 			return false;
@@ -1376,7 +1376,7 @@ bool bch2_bkey_matches_ptr(struct bch_fs *c, struct bkey_s_c k,
 
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry)
 		if (p.ptr.dev	== m.dev &&
-		    p.ptr.gen	== m.gen &&
+		    p.ptr.generation	== m.generation &&
 		    (s64) p.ptr.offset + p.crc.offset - bkey_start_offset(k.k) ==
 		    (s64) m.offset  - offset)
 			return true;
@@ -1392,7 +1392,7 @@ bool bch2_bkey_ptrs_match(struct bkey_s_c k1, struct extent_ptr_decoded p1,
 		  p1.ec.idx		== p2.ec.idx &&
 		  p1.ec.block		== p2.ec.block)) &&
 
-		p1.ptr.gen		== p2.ptr.gen &&
+		p1.ptr.generation		== p2.ptr.generation &&
 
 		/*
 		 * This checks that the two pointers point
@@ -1457,7 +1457,7 @@ bch2_extent_has_ptr(const struct bch_fs *c, struct bkey_s_c k1,
 
 	bkey_for_each_ptr_decode(k2.k, ptrs2, p2, entry2)
 		if (p1.ptr.dev		== p2.ptr.dev &&
-		    p1.ptr.gen		== p2.ptr.gen &&
+		    p1.ptr.generation		== p2.ptr.generation &&
 		    (s64) p1.ptr.offset + p1.crc.offset - bkey_start_offset(k1.k) ==
 		    (s64) p2.ptr.offset + p2.crc.offset - bkey_start_offset(k2.k))
 			return &entry2->ptr;
@@ -1746,13 +1746,13 @@ __cold void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *c, cons
 	struct bch_dev *ca = c ? bch2_dev_rcu_noerror(c, ptr->dev) : NULL;
 	if (!ca) {
 		prt_printf(out, "%u:%llu gen %u", ptr->dev,
-			   (u64) ptr->offset, ptr->gen);
+			   (u64) ptr->offset, ptr->generation);
 	} else {
 		u32 offset;
 		u64 b = sector_to_bucket_and_offset(ca, ptr->offset, &offset);
 
 		prt_printf(out, "%6s %u:%llu:%u gen %u",
-			   ca->name, ptr->dev, b, offset, ptr->gen);
+			   ca->name, ptr->dev, b, offset, ptr->generation);
 		if (ca->mi.durability != 1)
 			prt_printf(out, " d=%u", ca->mi.durability);
 		int stale = dev_ptr_stale_rcu(ca, ptr);

@@ -149,7 +149,7 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 	if (!deleting) {
 		if (bch2_trans_inconsistent_on(parity && bch2_bucket_sectors_total(*a), trans,
 				"bucket %llu:%llu gen %u data type %s dirty_sectors %u stripe_sectors %u cached_sectors %u: data already in parity bucket\n%s",
-				bucket.inode, bucket.offset, a->gen,
+				bucket.inode, bucket.offset, a->generation,
 				bch2_data_type_str(a->data_type),
 				a->dirty_sectors,
 				a->stripe_sectors,
@@ -159,13 +159,13 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 	} else {
 		if (bch2_trans_inconsistent_on(!a->stripe_refcount, trans,
 				"bucket %llu:%llu gen %u: not marked as stripe when deleting stripe\n%s",
-				bucket.inode, bucket.offset, a->gen,
+				bucket.inode, bucket.offset, a->generation,
 				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
 			return bch_err_throw(c, mark_stripe);
 
 		if (bch2_trans_inconsistent_on(a->data_type != data_type, trans,
 				"bucket %llu:%llu gen %u data type %s: wrong data type when stripe, should be %s\n%s",
-				bucket.inode, bucket.offset, a->gen,
+				bucket.inode, bucket.offset, a->generation,
 				bch2_data_type_str(a->data_type),
 				bch2_data_type_str(data_type),
 				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
@@ -175,7 +175,7 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 					       (a->dirty_sectors != -sectors ||
 						a->cached_sectors), trans,
 				"bucket %llu:%llu gen %u dirty_sectors %u cached_sectors %u: wrong sectors when deleting parity block of stripe\n%s",
-				bucket.inode, bucket.offset, a->gen,
+				bucket.inode, bucket.offset, a->generation,
 				a->dirty_sectors,
 				a->cached_sectors,
 				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
@@ -184,7 +184,7 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 
 	if (sectors)
 		try(bch2_bucket_ref_update(trans, ca, s.s_c, ptr, sectors, data_type,
-					   a->gen, a->data_type, &a->dirty_sectors));
+					   a->generation, a->data_type, &a->dirty_sectors));
 
 	if (flags & BTREE_TRIGGER_transactional)
 		try(bch2_btree_bit_mod(trans, BTREE_ID_bucket_to_stripe,

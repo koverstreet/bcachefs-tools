@@ -997,7 +997,7 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 		struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(bp_k);
 
 		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_backpointer_bucket_gen &&
-		    (bp.v->bucket_gen != a->gen ||
+		    (bp.v->bucket_gen != a->generation ||
 		     bp.v->flags)) {
 			try(bch2_backpointer_del(trans, bp_k.k->p));
 			nr_deletes++;
@@ -1011,7 +1011,7 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 			continue;
 		}
 
-		if (bp.v->bucket_gen != a->gen)
+		if (bp.v->bucket_gen != a->generation)
 			continue;
 
 		int alloc_counter = data_type_to_alloc_counter(bp.v->data_type);

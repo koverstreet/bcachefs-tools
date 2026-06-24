@@ -390,7 +390,7 @@ static inline struct bch_extent_ptr bch2_ob_ptr(struct bch_fs *c, struct open_bu
 
 	return (struct bch_extent_ptr) {
 		.type	= 1 << BCH_EXTENT_ENTRY_ptr,
-		.gen	= ob->gen,
+		.generation	= ob->generation,
 		.dev	= ob->dev,
 		.offset	= bucket_to_sector(ca, ob->bucket) +
 			ca->mi.bucket_size -

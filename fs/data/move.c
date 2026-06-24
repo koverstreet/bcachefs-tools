@@ -48,7 +48,7 @@ const char * const bch2_data_ops_strs[] = {
 
 struct evacuate_bucket_arg {
 	struct bpos		bucket;
-	int			gen;
+	int			generation;
 	u32			sectors;
 	struct data_update_opts	data_opts;
 };
@@ -395,7 +395,7 @@ static int bch2_move_extent_pred(struct moving_context *ctxt,
 
 		if (pred == evacuate_bucket_pred) {
 			struct evacuate_bucket_arg *e = arg;
-			prt_printf(&buf, " gen=%u", e->gen);
+			prt_printf(&buf, " gen=%u", e->generation);
 		}
 
 		prt_newline(&buf);
@@ -852,7 +852,7 @@ static int evacuate_bucket_pred(struct btree_trans *trans, void *_arg,
 	unsigned i = 0;
 	bkey_for_each_ptr_decode(k.k, bch2_bkey_ptrs_c(k), p, entry) {
 		if (p.ptr.dev == arg->bucket.inode &&
-		    (arg->gen < 0 || arg->gen == p.ptr.gen) &&
+		    (arg->generation < 0 || arg->generation == p.ptr.generation) &&
 		    !p.ptr.cached) {
 			data_opts->ptrs_kill |= BIT(i);
 			arg->sectors += p.crc.compressed_size;

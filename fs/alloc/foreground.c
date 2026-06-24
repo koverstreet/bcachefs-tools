@@ -308,7 +308,7 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 		ob->valid	= true;
 		ob->sectors_free = ca->mi.bucket_size;
 		ob->dev		= ca->dev_idx;
-		ob->gen		= gen;
+		ob->generation		= gen;
 		ob->bucket	= bucket;
 	}
 
@@ -413,7 +413,7 @@ again:
 
 			ob = may_alloc_bucket(c, req, k.k->p) &&
 			     may_alloc_bucket_journal_seq(c, req, a->journal_seq_empty)
-				? __try_alloc_bucket(c, req, k.k->p.offset, a->gen)
+				? __try_alloc_bucket(c, req, k.k->p.offset, a->generation)
 				: NULL;
 			if (ob)
 				break;
@@ -1563,7 +1563,7 @@ __cold void bch2_open_bucket_to_text(struct printbuf *out, struct bch_fs *c, str
 		   atomic_read(&ob->pin));
 	bch2_prt_data_type(out, data_type);
 	prt_printf(out, " %u:%llu gen %u allocated %u/%u",
-		   ob->dev, ob->bucket, ob->gen,
+		   ob->dev, ob->bucket, ob->generation,
 		   ca->mi.bucket_size - ob->sectors_free, ca->mi.bucket_size);
 	if (ob->ec)
 		prt_printf(out, " ec idx %llu", ob->ec->new_stripe.key.k.p.offset);

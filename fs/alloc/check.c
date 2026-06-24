@@ -189,10 +189,10 @@ int bch2_check_alloc_key(struct btree_trans *trans,
 	bch2_btree_iter_set_pos(bucket_gens_iter, alloc_gens_pos(alloc_k.k->p, &gens_offset));
 	k = bkey_try(bch2_btree_iter_peek_slot(bucket_gens_iter));
 
-	if (ret_fsck_err_on(a->v.gen != alloc_gen(k, gens_offset),
+	if (ret_fsck_err_on(a->v.generation != alloc_gen(k, gens_offset),
 			trans, bucket_gens_key_wrong,
 			"incorrect gen in bucket_gens btree (got %u should be %u)\n%s",
-			alloc_gen(k, gens_offset), a->v.gen,
+			alloc_gen(k, gens_offset), a->v.generation,
 			(printbuf_reset(&buf),
 			 bch2_bkey_val_to_text(&buf, c, alloc_k), buf.buf))) {
 		struct bkey_i_bucket_gens *g =
@@ -205,7 +205,7 @@ int bch2_check_alloc_key(struct btree_trans *trans,
 			g->k.p = alloc_gens_pos(alloc_k.k->p, &gens_offset);
 		}
 
-		g->v.gens[gens_offset] = a->v.gen;
+		g->v.gens[gens_offset] = a->v.generation;
 
 		try(bch2_trans_update(trans, bucket_gens_iter, &g->k_i, 0));
 	}
@@ -470,7 +470,7 @@ int __bch2_check_freespace_key(struct btree_trans *trans, struct btree_iter *ite
 		goto out;
 	}
 
-	*gen = a->gen;
+	*gen = a->generation;
 	if (journal_seq_empty)
 		*journal_seq_empty = a->journal_seq_empty;
 out:

@@ -339,7 +339,7 @@ static int stripe_update_extent(struct btree_trans *trans,
 	ec_ptr->dev	= new_block.dev;
 	ec_ptr->offset	-= old_block.offset;
 	ec_ptr->offset	+= new_block.offset;
-	ec_ptr->gen	= new_block.gen;
+	ec_ptr->generation	= new_block.generation;
 
 	ec_ptr = bch2_bkey_has_device(c, bkey_i_to_s(n), new_block.dev);
 	__extent_entry_insert(c, n,

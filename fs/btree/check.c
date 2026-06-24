@@ -856,7 +856,7 @@ static int bch2_gc_start(struct bch_fs *c)
 static inline bool bch2_alloc_v4_cmp(struct bch_alloc_v4 l,
 				     struct bch_alloc_v4 r)
 {
-	return  l.gen != r.gen				||
+	return  l.generation != r.generation				||
 		l.oldest_gen != r.oldest_gen		||
 		l.data_type != r.data_type		||
 		l.dirty_sectors	!= r.dirty_sectors	||
@@ -929,7 +929,7 @@ static int bch2_alloc_write_key(struct btree_trans *trans,
 			"bucket %llu:%llu gen %u has wrong data_type"
 			": got %s, should be %s",
 			iter->pos.inode, iter->pos.offset,
-			gc.gen,
+			gc.generation,
 			bch2_data_type_str(new.data_type),
 			bch2_data_type_str(gc.data_type))) {
 		new.data_type = gc.data_type;
@@ -952,12 +952,12 @@ static int bch2_alloc_write_key(struct btree_trans *trans,
 			"bucket %llu:%llu gen %u data type %s has wrong " #_f	\
 			": got %llu, should be %llu",			\
 			iter->pos.inode, iter->pos.offset,		\
-			gc.gen,						\
+			gc.generation,						\
 			bch2_data_type_str(gc.data_type),		\
 			(u64) new._f, (u64) gc._f))				\
 		new._f = gc._f;						\
 
-	copy_bucket_field(alloc_key_gen_wrong,			gen);
+	copy_bucket_field(alloc_key_gen_wrong,			generation);
 	copy_bucket_field(alloc_key_dirty_sectors_wrong,	dirty_sectors);
 	copy_bucket_field(alloc_key_stripe_sectors_wrong,	stripe_sectors);
 	copy_bucket_field(alloc_key_cached_sectors_wrong,	cached_sectors);

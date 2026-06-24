@@ -2193,7 +2193,7 @@ retry:
 				struct bch_dev *ca = cas[i++];
 
 				int gen = bucket_gen_get(ca, PTR_BUCKET_NR(ca, ptr));
-				stale = gen < 0 ? gen : gen_after(gen, ptr->gen);
+				stale = gen < 0 ? gen : gen_after(gen, ptr->generation);
 				if (unlikely(stale)) {
 					stale_at = ptr;
 					goto err_bucket_stale;

@@ -1051,7 +1051,7 @@ void bch2_inode_alloc_cursor_to_text(struct printbuf *out, struct bch_fs *c,
 	cursor_idx_min_max(c, k.k->p.offset, &min, &max);
 
 	prt_printf(out, "min %llu max %llu consumed %llu idx %llu generation %llu",
-		   min, max, idx - min, idx, le64_to_cpu(i.v->gen));
+		   min, max, idx - min, idx, le64_to_cpu(i.v->generation));
 }
 
 static struct bkey_i_inode_alloc_cursor *
@@ -1086,7 +1086,7 @@ bch2_inode_alloc_cursor_get(struct btree_trans *trans, u64 *min, u64 *max,
 
 	if (le64_to_cpu(cursor->v.idx) >= *max) {
 		cursor->v.idx = cpu_to_le64(*min);
-		le32_add_cpu(&cursor->v.gen, 1);
+		le32_add_cpu(&cursor->v.generation, 1);
 	}
 
 	return cursor;
@@ -1118,7 +1118,7 @@ int bch2_inode_create(struct btree_trans *trans,
 			    (k.k->type == KEY_TYPE_inode_generation &&
 			     bch2_snapshot_is_ancestor(trans, snapshot, k.k->p.snapshot))) {
 				inode_u->bi_inum	= pos;
-				inode_u->bi_generation	= le64_to_cpu(cursor->v.gen);
+				inode_u->bi_generation	= le64_to_cpu(cursor->v.generation);
 				cursor->v.idx		= cpu_to_le64(pos + 1);
 
 				if (k.k)
@@ -1140,7 +1140,7 @@ int bch2_inode_create(struct btree_trans *trans,
 		/* Retry from start */
 		pos = start = min;
 		bch2_btree_iter_set_pos(iter, POS(0, pos));
-		le32_add_cpu(&cursor->v.gen, 1);
+		le32_add_cpu(&cursor->v.generation, 1);
 	}
 }
 

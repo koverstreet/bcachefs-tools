@@ -32,7 +32,7 @@ static inline struct bpos u64_to_bucket(u64 bucket)
 
 static inline u8 alloc_gc_gen(struct bch_alloc_v4 a)
 {
-	return a.gen - a.oldest_gen;
+	return a.generation - a.oldest_gen;
 }
 
 /* Data type computation */

@@ -250,7 +250,7 @@ int rust_link_data(struct bch_fs *c,
 		bch2_bkey_append_ptr(c, &e->k_i, (struct bch_extent_ptr) {
 					.offset = physical,
 					.dev = 0,
-					.gen = *bucket_gen(ca, b),
+					.generation = *bucket_gen(ca, b),
 				  });
 
 		ret = bch2_disk_reservation_get(c, &res, sectors, 1,

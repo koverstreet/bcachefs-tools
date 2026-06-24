@@ -180,7 +180,7 @@ struct bch_inode_alloc_cursor {
 	struct bch_val		v;
 	__u8			bits;
 	__u8			pad;
-	__le32			gen;
+	__le32			generation;
 	__le64			idx;
 };
 

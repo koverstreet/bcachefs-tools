@@ -1716,7 +1716,7 @@ static const struct address_space_operations bch_address_space_operations = {
 struct bcachefs_fid {
 	u64		inum;
 	u32		subvol;
-	u32		gen;
+	u32		generation;
 } __packed;
 
 struct bcachefs_fid_with_parent {
@@ -1741,7 +1741,7 @@ static struct bcachefs_fid bch2_inode_to_fid(struct bch_inode_info *inode)
 	return (struct bcachefs_fid) {
 		.inum	= inode->ei_inum.inum,
 		.subvol	= inode->ei_inum.subvol,
-		.gen	= inode->ei_inode.bi_generation,
+		.generation	= inode->ei_inode.bi_generation,
 	};
 }
 
@@ -1789,7 +1789,7 @@ static struct inode *bch2_nfs_get_inode(struct super_block *sb,
 				    .subvol = fid.subvol,
 				    .inum = fid.inum,
 	}, NULL);
-	if (!IS_ERR(vinode) && vinode->i_generation != fid.gen) {
+	if (!IS_ERR(vinode) && vinode->i_generation != fid.generation) {
 		iput(vinode);
 		vinode = ERR_PTR(-ESTALE);
 	}

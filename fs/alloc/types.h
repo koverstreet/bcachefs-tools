@@ -57,7 +57,7 @@ struct open_bucket {
 	bool			do_discards_fast:1;
 
 	u8			dev;
-	u8			gen;
+	u8			generation;
 	u32			sectors_free;
 	u64			bucket;
 	struct ec_stripe_new	*ec;

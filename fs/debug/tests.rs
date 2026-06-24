@@ -406,7 +406,7 @@ fn test_btree_ptr_stale_dirty_key<'a, 't>(
     let mut updated = false;
     for ptr_entry in bkey_ptrs_mut(t.fs(), update.as_mut()) {
         if ptr_entry.cached() == 0 && ptr_entry.dev() != c::BCH_SB_MEMBER_INVALID as u64 {
-            ptr_entry.set_gen(ptr_entry.gen_().wrapping_sub(1));
+            ptr_entry.set_generation(ptr_entry.generation().wrapping_sub(1));
             updated = true;
             break;
         }

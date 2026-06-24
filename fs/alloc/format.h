@@ -5,7 +5,7 @@
 struct bch_alloc {
 	struct bch_val		v;
 	__u8			fields;
-	__u8			gen;
+	__u8			generation;
 	__u8			data[];
 } __packed __aligned(8);
 
@@ -28,7 +28,7 @@ enum {
 struct bch_alloc_v2 {
 	struct bch_val		v;
 	__u8			nr_fields;
-	__u8			gen;
+	__u8			generation;
 	__u8			oldest_gen;
 	__u8			data_type;
 	__u8			data[];
@@ -47,7 +47,7 @@ struct bch_alloc_v3 {
 	__le64			journal_seq;
 	__le32			flags;
 	__u8			nr_fields;
-	__u8			gen;
+	__u8			generation;
 	__u8			oldest_gen;
 	__u8			data_type;
 	__u8			data[];
@@ -83,7 +83,7 @@ struct bch_alloc_v4 {
 	struct bch_val		v;
 	__u64			journal_seq_nonempty;
 	__u32			flags;
-	__u8			gen;
+	__u8			generation;
 	__u8			oldest_gen;
 	__u8			data_type;
 	__u8			stripe_redundancy_obsolete;

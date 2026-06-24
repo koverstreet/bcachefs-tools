@@ -769,7 +769,7 @@ static int invalidate_one_bucket(struct btree_trans *trans,
 		return 0;
 	}
 
-	u8 gen = a->gen;
+	u8 gen = a->generation;
 
 	struct bkey_buf orig_alloc_k __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&orig_alloc_k);
