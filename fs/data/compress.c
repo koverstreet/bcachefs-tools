@@ -97,7 +97,37 @@ static struct bbuf __bounce_alloc(struct bch_fs *c, unsigned size, int rw)
 
 	BUG_ON(size > c->opts.encoded_extent_max);
 
-	b = kmalloc(size, GFP_NOFS|__GFP_NOWARN);
+	/*
+	 * __GFP_SKIP_ZERO: opt out of CONFIG_INIT_ON_ALLOC_DEFAULT_ON, which
+	 * distributions frequently enable to zero every allocation as a
+	 * hardening measure. That's reasonable for data structures, but bounce
+	 * buffers are hot, never interpreted by the kernel, and the zeroing is
+	 * redundant here: every bounce is either fully overwritten before it is
+	 * read, or its unwritten tail is never consumed. By case:
+	 *
+	 *  - READ bounces (compression input, decompression compressed-input):
+	 *    bio_bounce() memcpy_from_bio()s the entire buffer before anything
+	 *    reads it.
+	 *
+	 *  - decompression output: buf_uncompress() verifies it produced the
+	 *    full uncompressed_size (lz4/zstd check the returned length, gzip
+	 *    checks avail_out); on a decompress error the buffer is discarded,
+	 *    not consumed.
+	 *
+	 *  - compression output: the compressor fills the compressed data and
+	 *    bch2_compress() memsets the block-alignment pad. The output bio is
+	 *    trimmed to the compressed size before submission, so the unwritten
+	 *    tail past it (copied into the bio by memcpy_to_bio, but never
+	 *    submitted) does not reach disk.
+	 *
+	 * The one hole is no_data_io, which can hand an unwritten buffer to
+	 * userspace - but it is root-only and explicitly unsafe, so we ignore
+	 * it.
+	 *
+	 * The mempool fallback below is not flagged: mempool reuse returns
+	 * elements without re-zeroing, so it never pays the init_on_alloc cost.
+	 */
+	b = kmalloc(size, GFP_NOFS|__GFP_NOWARN|__GFP_SKIP_ZERO);
 	if (b)
 		return (struct bbuf) { .c = c, .b = b, .type = BB_kmalloc, .rw = rw };
 

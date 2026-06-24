@@ -1247,7 +1247,21 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 						  &c->bio_read_split),
 				 orig, failed);
 
-		bch2_bio_alloc_pages_pool(c, &rbio->bio, 512, sectors << 9);
+		gfp_t gfp = GFP_NOFS;
+
+		/*
+		 * Only skip zeroing if we can detect if the device lied and
+		 * didn't DMA.
+		 *
+		 * If @failed is set, we might be in the extended read call that
+		 * allows returning data to userspace that didn't pass the
+		 * checksum check, so userspace can get back mangled data to
+		 * attempt its own recovery:
+		 */
+		if (pick.crc.csum_type && !failed)
+			gfp |= __GFP_SKIP_ZERO;
+
+		bch2_bio_alloc_pages_pool(c, &rbio->bio, 512, sectors << 9, gfp);
 		rbio->bounce	= true;
 	} else if (flags & BCH_READ_must_clone) {
 		/*
