@@ -3777,6 +3777,10 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 		     time_after(jiffies, trans->srcu_lock_time + msecs_to_jiffies(10))))
 		bch2_trans_unlock_long(trans);
 
+	/* Fresh attempt — re-arm the srcu-held-too-long warning (cleared after
+	 * the unlock_long above has had its chance to fire). */
+	trans->srcu_io_submitted = false;
+
 	if (!trans->restarted)
 		trans->locking_wait.trans_start_time = now;
 	trans->last_begin_time = now;

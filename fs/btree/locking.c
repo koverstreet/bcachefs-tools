@@ -1159,6 +1159,8 @@ static int bch2_trans_relock_trace(struct btree_trans *trans)
 	}
 
 	trans_set_locked(trans, true);
+	/* Fresh locked section — re-arm the srcu-held-too-long warning. */
+	trans->srcu_io_submitted = false;
 	bch2_trans_verify_locks(trans);
 	return 0;
 }
@@ -1191,6 +1193,8 @@ int __bch2_trans_relock(struct btree_trans *trans, bool trace)
 	}
 
 	trans_set_locked(trans, true);
+	/* Fresh locked section — re-arm the srcu-held-too-long warning. */
+	trans->srcu_io_submitted = false;
 	bch2_trans_verify_locks(trans);
 	return 0;
 }
@@ -1233,14 +1237,16 @@ void bch2_trans_unlock_long(struct btree_trans *trans)
 			if (path->cached && !btree_node_locked(path, 0))
 				path->l[0].b = ERR_PTR(-BCH_ERR_no_btree_node_srcu_reset);
 
-		if (unlikely(trans->srcu_held && time_after(jiffies, trans->srcu_lock_time + HZ * 10))) {
-			CLASS(printbuf, buf)();
+		if (unlikely(trans->srcu_held &&
+			     !trans->srcu_io_submitted &&
+			     time_after(jiffies, trans->srcu_lock_time + HZ * 10))) {
+			CLASS(bch_log_msg_ratelimited, msg)(c);
 
-			prt_printf(&buf, "btree trans held srcu lock (delaying memory reclaim) for %lu seconds\n",
+			prt_printf(&msg.m, "btree trans held srcu lock (delaying memory reclaim) for %lu seconds\n",
 				   (jiffies - trans->srcu_lock_time) / HZ);
-			bch2_sb_recent_counters_to_text(&buf, &trans->c->counters);
+			bch2_sb_recent_counters_to_text(&msg.m, &trans->c->counters);
 
-			WARN_RATELIMIT(true, "%s", buf.buf);
+			bch2_prt_task_backtrace(&msg.m, current, 1, GFP_KERNEL);
 		}
 
 		srcu_read_unlock(&c->btree.trans.barrier, trans->srcu_idx);

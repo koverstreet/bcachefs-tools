@@ -1565,6 +1565,14 @@ int __bch2_read_extent(struct btree_trans *trans,
 			if (likely(!(flags & BCH_READ_in_retry)))
 				bio_endio(&rbio->bio);
 		} else {
+			/*
+			 * submit_bio() can block for an unbounded time on a
+			 * congested device; flag it so the long srcu hold that
+			 * results doesn't trip the warning in
+			 * bch2_trans_unlock_long() — it's legitimate IO, not a
+			 * stuck codepath.
+			 */
+			trans->srcu_io_submitted = true;
 			if (likely(!(flags & BCH_READ_in_retry)))
 				submit_bio(&rbio->bio);
 			else
