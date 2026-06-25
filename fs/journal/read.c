@@ -956,13 +956,10 @@ static bool journal_has_any_missing(struct bch_fs *c, u64 start_seq, u64 end_seq
  */
 static int journal_retry_full_read(struct bch_fs *c, struct journal_list *jlist)
 {
-	struct journal_list retry_jlist;
+	struct journal_list retry_jlist = { .last_seq = jlist->last_seq, .full_read = true };
 
 	closure_init_stack(&retry_jlist.cl);
 	mutex_init(&retry_jlist.lock);
-	retry_jlist.last_seq	= jlist->last_seq;
-	retry_jlist.ret		= 0;
-	retry_jlist.full_read	= true;
 
 	for_each_member_device(c, ca) {
 		struct journal_device *ja = &ca->journal;
@@ -1074,11 +1071,9 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 	if (need_from >= c->journal_replay_seq_start)
 		return 0; /* nothing extra needed */
 
-	struct journal_list jlist;
+	struct journal_list jlist = { .last_seq = need_from };
 	closure_init_stack(&jlist.cl);
 	mutex_init(&jlist.lock);
-	jlist.last_seq = need_from;
-	jlist.ret = 0;
 
 	for_each_member_device(c, ca) {
 		struct journal_device *ja = &ca->journal;
@@ -1139,7 +1134,7 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 
 int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 {
-	struct journal_list jlist;
+	struct journal_list jlist = { .last_seq = 0 };
 	struct journal_replay *i, **_i;
 	struct genradix_iter radix_iter;
 	bool last_write_torn = false;
@@ -1151,8 +1146,6 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 
 	closure_init_stack(&jlist.cl);
 	mutex_init(&jlist.lock);
-	jlist.last_seq = 0;
-	jlist.ret = 0;
 
 	for_each_member_device(c, ca) {
 		if (!c->opts.read_entire_journal &&
