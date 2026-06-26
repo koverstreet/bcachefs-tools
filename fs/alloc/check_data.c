@@ -271,23 +271,22 @@ static int bch2_check_fix_ptr(struct btree_trans *trans,
 			bch2_data_type_str(data_type),
 			(printbuf_reset(&buf),
 			 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-		if (p.ptr.cached ||
-		    data_type != BCH_DATA_btree)
-			return drop_this_ptr(r, ptr_bit);
-
-		switch (g->data_type) {
-		case BCH_DATA_sb:
-			bch_err(c, "btree and superblock in the same bucket - cannot repair");
-			return bch_err_throw(c, fsck_repair_unimplemented);
-		case BCH_DATA_journal:
+		if (g->data_type == BCH_DATA_journal) {
 			try(bch2_dev_journal_bucket_delete(ca, PTR_BUCKET_NR(ca, &p.ptr)));
-			break;
+			g->data_type		= data_type;
+			g->stripe_sectors	= 0;
+			g->dirty_sectors	= 0;
+			g->cached_sectors	= 0;
+			return 0;
 		}
 
-		g->data_type		= data_type;
-		g->stripe_sectors	= 0;
-		g->dirty_sectors	= 0;
-		g->cached_sectors	= 0;
+		if (!p.ptr.cached && data_type == BCH_DATA_btree &&
+		    g->data_type == BCH_DATA_sb) {
+			bch_err(c, "btree and superblock in the same bucket - cannot repair");
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+
+		g->data_type = BCH_DATA_multiple;
 	}
 
 	if (p.has_ec) {
