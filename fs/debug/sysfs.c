@@ -831,10 +831,20 @@ static ssize_t sysfs_opt_store(struct bch_fs *c,
 			BUG();
 		}
 
-		if (changed) {
+		/*
+		 * Re-writing a filesystem-wide inode/IO option is an explicit
+		 * request to make existing data converge to that policy.  This
+		 * matters when the superblock already has e.g. background_target
+		 * set, but older extents were never scanned under that policy.
+		 */
+		bool reconcile = !ca && (opt->flags & OPT_FS) && bch2_opt_is_inode_opt(id);
+
+		if (changed || reconcile) {
 			if (!ca) {
-				bch2_opt_set_by_id(&c->opts, id, v);
-				clear_bit(id, c->mount_opts.d);
+				if (changed) {
+					bch2_opt_set_by_id(&c->opts, id, v);
+					clear_bit(id, c->mount_opts.d);
+				}
 			}
 
 			bch2_opt_hook_post_set(c, ca, 0, id, v);
