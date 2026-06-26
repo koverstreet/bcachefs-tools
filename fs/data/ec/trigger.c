@@ -163,14 +163,6 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
 			return bch_err_throw(c, mark_stripe);
 
-		if (bch2_trans_inconsistent_on(a->data_type != data_type, trans,
-				"bucket %llu:%llu gen %u data type %s: wrong data type when stripe, should be %s\n%s",
-				bucket.inode, bucket.offset, a->generation,
-				bch2_data_type_str(a->data_type),
-				bch2_data_type_str(data_type),
-				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
-			return bch_err_throw(c, mark_stripe);
-
 		if (bch2_trans_inconsistent_on(parity &&
 					       (a->dirty_sectors != -sectors ||
 						a->cached_sectors), trans,
