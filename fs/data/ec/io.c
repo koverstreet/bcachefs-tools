@@ -102,6 +102,13 @@ static void raid_rec(int nr, int *ir, int nd, int np, size_t size, void **v)
 
 void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
 {
+	/*
+	 * Drain in-flight stripe IO before freeing the buffers it reads/writes
+	 * into: the bios are mapped directly at buf->data[] and hold refs on
+	 * buf->io, so freeing first is a use-after-free.
+	 */
+	closure_sync(&buf->io);
+
 	if (buf->c) {
 		struct bch_fs *c = buf->c;
 		buf->c = NULL;
@@ -119,7 +126,6 @@ void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
 		}
 	}
 
-	closure_sync(&buf->io);
 	closure_debug_destroy(&buf->io);
 }
 
