@@ -20,7 +20,7 @@ void bch2_snapshot_to_text(struct printbuf *, const struct bch_snapshot *);
 void bch2_snapshot_key_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 int bch2_snapshot_validate(struct bch_fs *, struct bkey_s_c,
 			   const struct bkey_validate_context *);
-int bch2_mark_snapshot(struct btree_trans *, struct btree_trigger_op);
+int bch2_snapshot_trigger(struct btree_trans *, struct btree_trigger_op);
 
 int bch2_snapshot_tree_keys_to_text(struct printbuf *, struct btree_trans *, u32);
 
@@ -29,7 +29,7 @@ int bch2_check_snapshot_needs_deletion(struct btree_trans *, struct bkey_s_c, u3
 #define bch2_bkey_ops_snapshot ((struct bkey_ops) {		\
 	.key_validate	= bch2_snapshot_validate,		\
 	.val_to_text	= bch2_snapshot_key_to_text,		\
-	.trigger	= bch2_mark_snapshot,			\
+	.trigger	= bch2_snapshot_trigger,		\
 	.min_val_size	= 24,					\
 })
 

@@ -487,18 +487,14 @@ fsck_err:
 
 /* Snapshot btree triggers: */
 
-static int __bch2_mark_snapshot(struct btree_trans *trans,
-		       enum btree_id btree, unsigned level,
-		       struct bkey_s_c old, struct bkey_s_c new,
-		       enum btree_iter_update_trigger_flags flags)
+static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 {
 	struct bch_fs *c = trans->c;
-	struct snapshot_t *t;
 	u32 id = new.k->p.offset;
 
 	guard(mutex)(&c->snapshots.table_lock);
 
-	t = bch2_snapshot_t_mut(c, id);
+	struct snapshot_t *t = bch2_snapshot_t_mut(c, id);
 	if (!t)
 		return bch_err_throw(c, ENOMEM_mark_snapshot);
 
@@ -555,9 +551,12 @@ static int __bch2_mark_snapshot(struct btree_trans *trans,
 	return 0;
 }
 
-int bch2_mark_snapshot(struct btree_trans *trans, struct btree_trigger_op op)
+int bch2_snapshot_trigger(struct btree_trans *trans, struct btree_trigger_op op)
 {
-	return __bch2_mark_snapshot(trans, op.btree, op.level, op.old, op.new.s_c, op.flags);
+	if (op.flags & BTREE_TRIGGER_atomic)
+		try(bch2_mark_snapshot(trans, op.new.s_c));
+
+	return 0;
 }
 
 /* Snapshot tree traversal: */
@@ -700,8 +699,7 @@ static int create_snapids(struct btree_trans *trans, u32 parent, u32 tree,
 		bubble_sort(n->v.skip, ARRAY_SIZE(n->v.skip), cmp_le32);
 		SET_BCH_SNAPSHOT_SUBVOL(&n->v, true);
 
-		try(__bch2_mark_snapshot(trans, BTREE_ID_snapshots, 0,
-					 bkey_s_c_null, bkey_i_to_s_c(&n->k_i), 0));
+		try(bch2_mark_snapshot(trans, bkey_i_to_s_c(&n->k_i)));
 
 		new_snapids[i]	= iter.pos.offset;
 	}
@@ -798,7 +796,7 @@ int bch2_snapshots_read(struct bch_fs *c)
 	CLASS(btree_trans, trans)(c);
 	u32 nr_empty_interior = 0;
 	try(for_each_btree_key_reverse(trans, iter, BTREE_ID_snapshots, POS_MAX, 0, k,
-		__bch2_mark_snapshot(trans, BTREE_ID_snapshots, 0, bkey_s_c_null, k, 0) ?:
+		bch2_mark_snapshot(trans, k) ?:
 		bch2_check_snapshot_needs_deletion(trans, k, &nr_empty_interior)));
 
 	if (nr_empty_interior) {
