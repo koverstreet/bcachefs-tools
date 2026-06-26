@@ -1015,7 +1015,6 @@ err:
 
 static int bch2_unlink(struct inode *vdir, struct dentry *dentry)
 {
-	struct bch_inode_info *dir = to_bch_ei(vdir);
 	int ret = __bch2_unlink(vdir, dentry, false);
 	return bch2_err_class(ret);
 }
