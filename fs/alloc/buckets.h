@@ -294,9 +294,28 @@ static inline u64 dev_buckets_available(struct bch_dev *ca,
 struct bch_fs_usage_short
 bch2_fs_usage_read_short(struct bch_fs *);
 
-int bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
-			   struct bkey_s_c, const struct bch_extent_ptr *,
-			   s64, enum bch_data_type, u8, u8 *, u32 *);
+int __bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
+			     struct bkey_s_c, const struct bch_extent_ptr *,
+			     s64, enum bch_data_type, u8, u8 *, u32 *);
+
+static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
+					 struct bkey_s_c k,
+					 const struct bch_extent_ptr *ptr,
+					 s64 sectors, enum bch_data_type ptr_data_type,
+					 u8 b_gen, u8 *bucket_data_type,
+					 u32 *bucket_sectors)
+{
+	BUG_ON(!sectors);
+
+	if (unlikely(b_gen != ptr->generation ||
+		     bucket_data_type_mismatch(*bucket_data_type, ptr_data_type) ||
+		     (u64) *bucket_sectors + sectors > U32_MAX))
+		return __bch2_bucket_ref_update(trans, ca, k, ptr, sectors, ptr_data_type,
+						b_gen, bucket_data_type, bucket_sectors);
+
+	*bucket_sectors += sectors;
+	return 0;
+}
 
 int bch2_check_fix_ptrs(struct btree_trans *, struct btree_iter *,
 			enum btree_id, unsigned, struct bkey_s_c);

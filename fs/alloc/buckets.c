@@ -465,12 +465,13 @@ static int bucket_ref_update_err(struct btree_trans *trans, struct printbuf *buf
 	return ret;
 }
 
-int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
-			   struct bkey_s_c k,
-			   const struct bch_extent_ptr *ptr,
-			   s64 sectors, enum bch_data_type ptr_data_type,
-			   u8 b_gen, u8 *bucket_data_type,
-			   u32 *bucket_sectors)
+noinline __cold
+int __bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
+			     struct bkey_s_c k,
+			     const struct bch_extent_ptr *ptr,
+			     s64 sectors, enum bch_data_type ptr_data_type,
+			     u8 b_gen, u8 *bucket_data_type,
+			     u32 *bucket_sectors)
 {
 	struct bch_fs *c = trans->c;
 	size_t bucket_nr = PTR_BUCKET_NR(ca, ptr);

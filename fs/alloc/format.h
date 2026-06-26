@@ -115,4 +115,35 @@ struct bch_bucket_gens {
 	u8			gens[KEY_TYPE_BUCKET_GENS_NR];
 } __packed __aligned(8);
 
+/* Data type computation */
+
+/*
+ * Normalize data_type to the type of data stored in the bucket: cached and
+ * stripe data are both user data from the bucket's perspective.
+ */
+static inline enum bch_data_type bucket_data_type(enum bch_data_type data_type)
+{
+	switch (data_type) {
+	case BCH_DATA_cached:
+	case BCH_DATA_stripe:
+		return BCH_DATA_user;
+	default:
+		return data_type;
+	}
+}
+
+static inline bool bucket_data_type_mismatch(enum bch_data_type bucket,
+					     enum bch_data_type ptr)
+{
+	return !data_type_is_empty(bucket) &&
+		bucket != BCH_DATA_multiple &&
+		bucket_data_type(bucket) != bucket_data_type(ptr);
+}
+
+#define DATA_TYPES_MOVABLE		\
+	(BIT(BCH_DATA_btree)|		\
+	 BIT(BCH_DATA_user)|		\
+	 BIT(BCH_DATA_stripe)|		\
+	 BIT(BCH_DATA_multiple))
+
 #endif /* _BCACHEFS_ALLOC_BACKGROUND_FORMAT_H */
