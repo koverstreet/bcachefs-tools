@@ -184,7 +184,7 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 
 	if (sectors)
 		try(bch2_bucket_ref_update(trans, ca, s.s_c, ptr, sectors, data_type,
-					   a->generation, a->data_type, &a->dirty_sectors));
+					   a->generation, &a->data_type, &a->dirty_sectors));
 
 	if (flags & BTREE_TRIGGER_transactional)
 		try(bch2_btree_bit_mod(trans, BTREE_ID_bucket_to_stripe,

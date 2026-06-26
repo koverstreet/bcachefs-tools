@@ -296,7 +296,7 @@ bch2_fs_usage_read_short(struct bch_fs *);
 
 int bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
 			   struct bkey_s_c, const struct bch_extent_ptr *,
-			   s64, enum bch_data_type, u8, u8, u32 *);
+			   s64, enum bch_data_type, u8, u8 *, u32 *);
 
 int bch2_check_fix_ptrs(struct btree_trans *, struct btree_iter *,
 			enum btree_id, unsigned, struct bkey_s_c);

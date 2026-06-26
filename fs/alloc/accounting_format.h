@@ -63,7 +63,8 @@ struct bch_accounting {
 	x(stripe,	7)		\
 	x(need_gc_gens,	8)		\
 	x(need_discard,	9)		\
-	x(unstriped,	10)
+	x(unstriped,	10)		\
+	x(multiple,	11)
 
 enum bch_data_type {
 #define x(t, n) BCH_DATA_##t,

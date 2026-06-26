@@ -56,13 +56,15 @@ static inline bool bucket_data_type_mismatch(enum bch_data_type bucket,
 					     enum bch_data_type ptr)
 {
 	return !data_type_is_empty(bucket) &&
+		bucket != BCH_DATA_multiple &&
 		bucket_data_type(bucket) != bucket_data_type(ptr);
 }
 
 #define DATA_TYPES_MOVABLE		\
 	((1U << BCH_DATA_btree)|	\
 	 (1U << BCH_DATA_user)|		\
-	 (1U << BCH_DATA_stripe))
+	 (1U << BCH_DATA_stripe)|	\
+	 (1U << BCH_DATA_multiple))
 
 static inline bool data_type_movable(enum bch_data_type type)
 {
@@ -124,6 +126,8 @@ static inline s64 bch2_bucket_sectors_unstriped(struct bch_alloc_v4 a)
 static inline enum bch_data_type alloc_data_type(struct bch_alloc_v4 a,
 						 enum bch_data_type data_type)
 {
+	if (a.data_type == BCH_DATA_multiple)
+		return BCH_DATA_multiple;
 	if (a.stripe_refcount)
 		return data_type == BCH_DATA_parity ? data_type : BCH_DATA_stripe;
 	if (bch2_bucket_sectors_dirty(a))

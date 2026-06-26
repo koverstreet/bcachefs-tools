@@ -433,7 +433,7 @@ int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 }
 
 static int bucket_ref_update_err(struct btree_trans *trans, struct printbuf *buf,
-				 struct bkey_s_c k, bool insert, enum bch_sb_error_id id)
+				 struct bkey_s_c k, bool fatal, enum bch_sb_error_id id)
 {
 	struct bch_fs *c = trans->c;
 
@@ -446,7 +446,7 @@ static int bucket_ref_update_err(struct btree_trans *trans, struct printbuf *buf
 	int ret = bch2_run_explicit_recovery_pass(c, buf,
 					BCH_RECOVERY_PASS_check_allocations, 0);
 
-	if (insert) {
+	if (fatal) {
 		bch2_trans_updates_to_text(buf, trans);
 		__bch2_inconsistent_error(c, buf);
 		/*
@@ -460,7 +460,7 @@ static int bucket_ref_update_err(struct btree_trans *trans, struct printbuf *buf
 		ret = 0;
 	}
 
-	if (print || insert)
+	if (print || fatal)
 		bch2_print_str(c, KERN_ERR, buf->buf);
 	return ret;
 }
@@ -469,7 +469,7 @@ int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 			   struct bkey_s_c k,
 			   const struct bch_extent_ptr *ptr,
 			   s64 sectors, enum bch_data_type ptr_data_type,
-			   u8 b_gen, u8 bucket_data_type,
+			   u8 b_gen, u8 *bucket_data_type,
 			   u32 *bucket_sectors)
 {
 	struct bch_fs *c = trans->c;
@@ -484,7 +484,7 @@ int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 		prt_printf(&buf,
 			"bucket %u:%zu gen %u data type %s: ptr gen %u newer than bucket gen",
 			ptr->dev, bucket_nr, b_gen,
-			bch2_data_type_str(bucket_data_type ?: ptr_data_type),
+			bch2_data_type_str(*bucket_data_type ?: ptr_data_type),
 			ptr->generation);
 
 		return bucket_ref_update_err(trans, &buf, k, inserting,
@@ -496,7 +496,7 @@ int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 		prt_printf(&buf,
 			"bucket %u:%zu gen %u data type %s: ptr gen %u too stale",
 			ptr->dev, bucket_nr, b_gen,
-			bch2_data_type_str(bucket_data_type ?: ptr_data_type),
+			bch2_data_type_str(*bucket_data_type ?: ptr_data_type),
 			ptr->generation);
 
 		return bucket_ref_update_err(trans, &buf, k, inserting,
@@ -522,22 +522,23 @@ int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 			"bucket %u:%zu gen %u (mem gen %u) data type %s: stale dirty ptr (gen %u)",
 			ptr->dev, bucket_nr, b_gen,
 			bucket_gen_get(ca, bucket_nr),
-			bch2_data_type_str(bucket_data_type ?: ptr_data_type),
+			bch2_data_type_str(*bucket_data_type ?: ptr_data_type),
 			ptr->generation);
 
 		return bucket_ref_update_err(trans, &buf, k, inserting,
 					     BCH_FSCK_ERR_stale_dirty_ptr);
 	}
 
-	if (unlikely(bucket_data_type_mismatch(bucket_data_type, ptr_data_type))) {
+	if (unlikely(bucket_data_type_mismatch(*bucket_data_type, ptr_data_type))) {
 		bch2_log_msg_start(c, &buf);
 		prt_printf(&buf, "bucket %u:%zu gen %u different types of data in same bucket: %s, %s",
 			   ptr->dev, bucket_nr, b_gen,
-			   bch2_data_type_str(bucket_data_type),
+			   bch2_data_type_str(*bucket_data_type),
 			   bch2_data_type_str(ptr_data_type));
 
-		return bucket_ref_update_err(trans, &buf, k, inserting,
-					    BCH_FSCK_ERR_ptr_bucket_data_type_mismatch);
+		try(bucket_ref_update_err(trans, &buf, k, false,
+					  BCH_FSCK_ERR_ptr_bucket_data_type_mismatch));
+		*bucket_data_type = BCH_DATA_multiple;
 	}
 
 	if (unlikely((u64) *bucket_sectors + sectors > U32_MAX)) {
@@ -545,7 +546,7 @@ int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 		prt_printf(&buf,
 			"bucket %u:%zu gen %u data type %s sector count overflow: %u + %lli > U32_MAX",
 			ptr->dev, bucket_nr, b_gen,
-			bch2_data_type_str(bucket_data_type ?: ptr_data_type),
+			bch2_data_type_str(*bucket_data_type ?: ptr_data_type),
 			*bucket_sectors, sectors);
 
 		sectors = -*bucket_sectors;
@@ -618,7 +619,7 @@ static int __mark_pointer(struct btree_trans *trans, struct bch_dev *ca,
 		!p->ptr.cached		? &a->dirty_sectors :
 					  &a->cached_sectors;
 	try(bch2_bucket_ref_update(trans, ca, k, &p->ptr, sectors, ptr_data_type,
-				   a->generation, a->data_type, dst_sectors));
+				   a->generation, &a->data_type, dst_sectors));
 
 	if (insert)
 		alloc_data_type_set(a, ptr_data_type);
