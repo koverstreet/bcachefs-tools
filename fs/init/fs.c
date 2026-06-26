@@ -613,7 +613,8 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 	int ret = bch2_journal_reclaim_start(&c->journal) ?:
 		  bch2_btree_write_buffer_start(c) ?:
 		  bch2_copygc_start(c);
-	if (!ret && c->opts.background_target)
+	if (!ret && c->opts.background_target &&
+	    c->opts.background_target != c->opts.foreground_target)
 		ret = bch2_set_fs_needs_reconcile(c);
 	if (!ret && !c->opts.read_only)
 		ret = bch2_reconcile_start(c);
