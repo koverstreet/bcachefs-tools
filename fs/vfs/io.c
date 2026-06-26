@@ -144,8 +144,8 @@ void __bch2_i_sectors_acct(struct bch_fs *c, struct bch_inode_info *inode,
 {
 	if (unlikely((s64) inode->v.i_blocks + sectors < 0)) {
 		CLASS(bch_log_msg, msg)(c);
-		prt_printf(&msg.m, "inode %lu i_blocks underflow: %llu + %lli < 0 (ondisk %lli)",
-			   inode->v.i_ino, (u64) inode->v.i_blocks, sectors,
+		prt_printf(&msg.m, "inode %llu i_blocks underflow: %llu + %lli < 0 (ondisk %lli)",
+			   (u64) inode->v.i_ino, (u64) inode->v.i_blocks, sectors,
 			   inode->ei_inode.bi_sectors);
 
 		msg.m.suppress = !bch2_count_fsck_err(c, vfs_inode_i_blocks_underflow, &msg.m);
@@ -548,8 +548,8 @@ int bchfs_truncate(struct mnt_idmap *idmap,
 		     !bch2_journal_error(&c->journal))) {
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m,
-			   "inode %lu truncated to 0 but i_blocks %llu (ondisk %lli)",
-			   inode->v.i_ino, (u64) inode->v.i_blocks,
+			   "inode %llu truncated to 0 but i_blocks %llu (ondisk %lli)",
+			   (u64) inode->v.i_ino, (u64) inode->v.i_blocks,
 			   inode->ei_inode.bi_sectors);
 
 		msg.m.suppress = !bch2_count_fsck_err(c, vfs_inode_i_blocks_not_zero_at_truncate, &msg.m);
