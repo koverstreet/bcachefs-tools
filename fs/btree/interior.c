@@ -3271,12 +3271,12 @@ int bch2_btree_node_get_iter(struct btree_trans *trans, struct btree_iter *iter,
 	return 0;
 }
 
-static int bch2_btree_node_rewrite(struct btree_trans *trans,
-				   struct btree_iter *iter,
-				   struct btree *b,
-				   unsigned target,
-				   enum bch_trans_commit_flags commit_flags,
-				   enum bch_write_flags write_flags)
+int bch2_btree_node_rewrite(struct btree_trans *trans,
+			    struct btree_iter *iter,
+			    struct btree *b,
+			    unsigned target,
+			    enum bch_trans_commit_flags commit_flags,
+			    enum bch_write_flags write_flags)
 {
 	BUG_ON(btree_node_fake(b));
 
@@ -3617,6 +3617,17 @@ int bch2_btree_node_update_key(struct btree_trans *trans, struct btree_iter *ite
 					       commit_flags, skip_triggers);
 	--path->intent_ref;
 	return ret;
+}
+
+int bch2_btree_node_update_key_at_pos(struct btree_trans *trans, enum btree_id btree,
+				      unsigned level, struct bkey_i *new_key)
+{
+	BUG_ON(!bkey_is_btree_ptr(&new_key->k));
+
+	CLASS(btree_node_iter, iter2)(trans, btree, new_key->k.p, 0, level - 1, 0);
+	struct btree *b = errptr_try(bch2_btree_iter_peek_node(&iter2));
+
+	return bch2_btree_node_update_key(trans, &iter2, b, new_key, BCH_TRANS_COMMIT_no_enospc, false);
 }
 
 /* Init code: */

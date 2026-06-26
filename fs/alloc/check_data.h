@@ -2,8 +2,9 @@
 #ifndef _BCACHEFS_ALLOC_CHECK_DATA_H
 #define _BCACHEFS_ALLOC_CHECK_DATA_H
 
-int bch2_drop_dev_and_update(struct btree_trans *, enum btree_id, unsigned,
-			     struct bkey_s_c, unsigned);
+int bch2_bkey_drop_device_and_update(struct btree_trans *, enum btree_id, unsigned,
+				     struct bkey_s_c, unsigned, enum bch_key_type_errors);
+
 int bch2_kill_replica_if_checksum_bad(struct btree_trans *, enum btree_id,
 				      unsigned, struct bkey_s_c, enum btree_id,
 				      struct bkey_s_c, unsigned);

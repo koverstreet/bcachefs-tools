@@ -15,6 +15,7 @@
 #include "data/extents.h"
 
 #include "init/error.h"
+#include "init/recovery.h"
 
 #include "journal/init.h"
 
@@ -24,16 +25,59 @@
 
 #include <linux/bio.h>
 
-int bch2_drop_dev_and_update(struct btree_trans *trans, enum btree_id btree,
-			     unsigned level, struct bkey_s_c extent, unsigned dev)
+/*
+ * Drop @dev's pointer from @k and write the result back. If dropping it leaves
+ * a non-btree key with no readable data, it's replaced with an error key of
+ * type @error.
+ */
+int bch2_bkey_drop_device_and_update(struct btree_trans *trans, enum btree_id btree,
+				     unsigned level, struct bkey_s_c k, unsigned dev,
+				     enum bch_key_type_errors error)
 {
 	struct bch_fs *c = trans->c;
-	struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, extent));
+	struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
 
 	bch2_bkey_drop_device(c, bkey_i_to_s(n), dev);
 
+	/*
+	 * A btree node pointer is part of the btree topology - updating its key
+	 * is a node-key update, not a leaf-key write.
+	 */
+	if (bkey_is_btree_ptr(&n->k)) {
+		if (bch2_bkey_can_read(c, bkey_i_to_s_c(n)))
+			return bch2_btree_node_update_key_at_pos(trans, btree, level, n);
+
+		/*
+		 * No readable replica left: if the node is still cached we can
+		 * rewrite it from memory, otherwise it's lost - delete the
+		 * dangling pointer and queue topology repair.
+		 */
+		CLASS(btree_node_iter, node_iter)(trans, btree, n->k.p, level + 1, level - 1,
+						  BTREE_ITER_nofill);
+		struct btree *b = bch2_btree_iter_peek_node(&node_iter);
+		int ret = PTR_ERR_OR_ZERO(b);
+		if (!ret)
+			return bch2_btree_node_rewrite(trans, &node_iter, b, 0, 0, 0);
+		if (!bch2_err_matches(ret, BCH_ERR_no_btree_node_nofill))
+			return ret;
+
+		CLASS(btree_node_iter, del_iter)(trans, btree, n->k.p, 0, level,
+						 BTREE_ITER_intent);
+		try(bch2_btree_iter_traverse(&del_iter));
+		try(bch2_btree_delete_at(trans, &del_iter, 0));
+
+		/*
+		 * Flag the topology error: the returned error rewinds recovery
+		 * to run check_topology, which repairs the hole if it can.
+		 */
+		CLASS(printbuf, buf)();
+		prt_printf(&buf, "btree node with no readable replicas, dropping pointer:\n");
+		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(n));
+		return bch2_btree_lost_data(c, &buf, btree);
+	}
+
 	if (!bch2_bkey_can_read(c, bkey_i_to_s_c(n)))
-		bch2_set_bkey_error(c, n, KEY_TYPE_ERROR_double_allocation);
+		bch2_set_bkey_error(c, n, error);
 
 	CLASS(btree_node_iter, iter)(trans, btree, n->k.p, 0, level, BTREE_ITER_intent);
 	return bch2_btree_iter_traverse(&iter) ?:
@@ -129,7 +173,8 @@ found:
 	bch2_bkey_val_to_text(&buf, c, extent2);
 
 	if (fsck_err(trans, dup_backpointer_to_bad_csum_extent, "%s", buf.buf))
-		ret = bch2_drop_dev_and_update(trans, btree, level, extent, dev) ?: 1;
+		ret = bch2_bkey_drop_device_and_update(trans, btree, level, extent, dev,
+						       KEY_TYPE_ERROR_double_allocation) ?: 1;
 fsck_err:
 out:
 err:

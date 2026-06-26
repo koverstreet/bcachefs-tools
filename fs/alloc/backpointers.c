@@ -546,7 +546,8 @@ static int check_bp_dup(struct btree_trans *trans,
 		return bp_missing(trans, extent, bp, other_bp.s_c);
 
 	if (bkey_dev_ptr_stale(c, other_extent, bp->k.p.inode)) {
-		try(bch2_drop_dev_and_update(trans, other_bp.v->btree_id, other_bp.v->level, other_extent, bp->k.p.inode));
+		try(bch2_bkey_drop_device_and_update(trans, other_bp.v->btree_id, other_bp.v->level, other_extent,
+						     bp->k.p.inode, KEY_TYPE_ERROR_double_allocation));
 		return 0;
 	}
 
@@ -558,10 +559,12 @@ static int check_bp_dup(struct btree_trans *trans,
 		bch2_bkey_val_to_text(&msg.m, c, other_extent);
 
 		if (other_extent.k->size <= extent.k->size) {
-			try(bch2_drop_dev_and_update(trans, other_bp.v->btree_id, other_bp.v->level, other_extent, bp->k.p.inode));
+			try(bch2_bkey_drop_device_and_update(trans, other_bp.v->btree_id, other_bp.v->level, other_extent,
+							     bp->k.p.inode, KEY_TYPE_ERROR_double_allocation));
 			return 0;
 		} else {
-			try(bch2_drop_dev_and_update(trans, bp->v.btree_id, bp->v.level, extent, bp->k.p.inode));
+			try(bch2_bkey_drop_device_and_update(trans, bp->v.btree_id, bp->v.level, extent,
+							     bp->k.p.inode, KEY_TYPE_ERROR_double_allocation));
 			return bp_missing(trans, extent, bp, other_bp.s_c);
 		}
 	} else {

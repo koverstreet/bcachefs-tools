@@ -257,17 +257,6 @@ static int check_reconcile_work_phys(struct btree_trans *trans)
 	}
 }
 
-static int btree_node_update_key_get_node(struct btree_trans *trans, struct btree_iter *iter,
-					  unsigned level, struct bkey_i *new_key)
-{
-	BUG_ON(!bkey_is_btree_ptr(&new_key->k));
-
-	CLASS(btree_node_iter, iter2)(trans, iter->btree_id, iter->pos, 0, level - 1, 0);
-	struct btree *b = errptr_try(bch2_btree_iter_peek_node(&iter2));
-
-	return bch2_btree_node_update_key(trans, &iter2, b, new_key, BCH_TRANS_COMMIT_no_enospc, false);
-}
-
 static int check_reconcile_work_btree_key(struct btree_trans *trans,
 					  struct btree_iter *iter,
 					  unsigned level, struct bkey_s_c k)
@@ -295,7 +284,7 @@ static int check_reconcile_work_btree_key(struct btree_trans *trans,
 		try(reconcile_bp_add(trans, iter->btree_id, level, bkey_i_to_s(n), &bp_pos));
 		bch2_bkey_set_reconcile_bp(c, bkey_i_to_s(n),
 					   BKEY_BTREE_PTR_U64s_MAX, bp_pos.offset);
-		return btree_node_update_key_get_node(trans, iter, level, n);
+		return bch2_btree_node_update_key_at_pos(trans, iter->btree_id, level, n);
 	}
 
 	if (ret_fsck_err_on(!bp_pos.inode && bp_pos.offset,
@@ -309,7 +298,7 @@ static int check_reconcile_work_btree_key(struct btree_trans *trans,
 		bch2_bkey_set_reconcile_bp(c, bkey_i_to_s(n),
 					   BKEY_BTREE_PTR_U64s_MAX, 0);
 
-		return btree_node_update_key_get_node(trans, iter, level, n);
+		return bch2_btree_node_update_key_at_pos(trans, iter->btree_id, level, n);
 	}
 
 	if (!bpos_eq(bp_pos, POS_MIN)) {
@@ -345,7 +334,7 @@ static int check_reconcile_work_btree_key(struct btree_trans *trans,
 							   BKEY_BTREE_PTR_U64s_MAX,
 							   rb_iter.pos.offset);
 
-				return btree_node_update_key_get_node(trans, iter, level, n);
+				return bch2_btree_node_update_key_at_pos(trans, iter->btree_id, level, n);
 			}
 		}
 	}
