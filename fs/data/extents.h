@@ -3,6 +3,7 @@
 #define _BCACHEFS_EXTENTS_H
 
 #include "bcachefs.h"
+#include "alloc/check_data.h"
 #include "btree/bkey.h"
 #include "extents_types.h"
 

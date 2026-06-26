@@ -77,6 +77,7 @@ bcachefs-y		:=			\
 	alloc/backpointers.o			\
 	alloc/buckets.o				\
 	alloc/check.o				\
+	alloc/check_data.o			\
 	alloc/discard.o				\
 	alloc/disk_groups.o			\
 	alloc/foreground.o			\

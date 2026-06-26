@@ -317,9 +317,6 @@ static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_d
 	return 0;
 }
 
-int bch2_check_fix_ptrs(struct btree_trans *, struct btree_iter *,
-			enum btree_id, unsigned, struct bkey_s_c);
-
 int bch2_trigger_extent(struct btree_trans *, struct btree_trigger_op);
 int bch2_trigger_reservation(struct btree_trans *, struct btree_trigger_op);
 
