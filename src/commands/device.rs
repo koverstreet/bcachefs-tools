@@ -315,7 +315,7 @@ fn device_size(dev: &str) -> Result<u64> {
 }
 
 #[derive(Parser, Debug)]
-#[command(about = "Change the state of a device")]
+#[command(about = "Set a device state (rw, ro, evacuating, or spare)")]
 pub struct SetStateCli {
     /// Force if data redundancy will be degraded
     #[arg(short, long)]
@@ -329,7 +329,7 @@ pub struct SetStateCli {
     #[arg(short = 'o', long)]
     offline: bool,
 
-    /// Device state
+    /// New member state: rw, ro, evacuating, or spare
     #[arg(value_enum)]
     new_state: MemberState,
 

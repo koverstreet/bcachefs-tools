@@ -53,7 +53,7 @@ Take a device offline, without removing it
 .It Ic device evacuate
 Migrate data off of a specific device
 .It Ic device set-state
-Change the state of a device
+Set a device state
 .It Ic device resize
 Resize filesystem on a device
 .It Ic device resize-journal
@@ -502,7 +502,10 @@ Force, if data redundancy will be degraded
 Move data off of a given device
 .It Nm Ic device Ic set-state Oo Ar options Oc Ar new-state Ar device
 .Bl -tag -width Ds
-.It Ar  new-state Ns = Ns ( Ar rw | ro | failed | spare )
+.It Ar  new-state Ns = Ns ( Ar rw | ro | evacuating | spare )
+New member state. Use
+.Ar rw
+to cancel an in-progress evacuation and return the device to normal use.
 .It Fl f , Fl -force
 Force, if data redundancy will be degraded
 .It Fl -force-if-data-lost
