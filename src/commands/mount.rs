@@ -142,6 +142,10 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
 }
 
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {
+    if cli.no_mtab {
+        debug!("ignoring -n/--no-mtab; mount.bcachefs does not update /etc/mtab");
+    }
+
     let (optstr, mountflags) = parse_mountflag_options(&cli.options);
     let opts = bcachefs_kernel::opts::parse_mount_opts(None, optstr.as_deref(), true)
         .unwrap_or_default();
@@ -215,6 +219,10 @@ pub struct Cli {
     /// Mount options
     #[arg(short, default_value = "")]
     options: String,
+
+    /// Do not update /etc/mtab; accepted for mount(8) compatibility
+    #[arg(short = 'n', long = "no-mtab")]
+    no_mtab: bool,
 
     #[arg(short = 't', long = "type", default_value = "")]
     fs_type: String,
