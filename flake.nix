@@ -49,6 +49,7 @@
 
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
       rustfmtToml = builtins.fromTOML (builtins.readFile ./rustfmt.toml);
+      rustVersion = cargoToml.package.rust-version;
 
       rev = self.shortRev or self.dirtyShortRev or (nixpkgs.lib.substring 0 8 self.lastModifiedDate);
       version = "${cargoToml.package.version}+${rev}";
@@ -77,7 +78,7 @@
 
       flake.overlays.default = nixpkgs.lib.composeManyExtensions [
         (import rust-overlay)
-        (import ./overlay.nix { inherit inputs version; })
+        (import ./overlay.nix { inherit inputs rustVersion version; })
       ];
 
       perSystem =
@@ -146,13 +147,13 @@
 
           checks = {
             inherit (self'.packages)
+              bcachefs-module-linux-latest
+              bcachefs-module-linux-testing
               bcachefs-tools
               bcachefs-tools-aarch64-linux
               bcachefs-tools-fuse
-              bcachefs-module-linux-latest
-              bcachefs-module-linux-testing
               ;
-            inherit (pkgs.callPackage ./crane-build.nix { inherit crane version; })
+            inherit (pkgs.callPackage ./crane-build.nix { inherit crane rustVersion version; })
               # cargo-clippy
               cargo-test
               ;
