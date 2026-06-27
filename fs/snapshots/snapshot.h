@@ -173,8 +173,9 @@ static inline u32 bch2_snapshot_depth(struct bch_fs *c, u32 parent)
  * We can have partially deleted snapshot nodes in the NO_KEYS state: they're
  * part of the tree of snapshots - we can't remove them from the tree of
  * snapshots at runtime - but all keys with that snapshot ID have been removed
- * and we can't create new ones. There will be a single descendent that we can
- * use instead:
+ * and we can't create new ones. Walk to the single live descendant we can use
+ * instead - or return 0 if the subtree has been fully deleted and there is none
+ * (a stray key in such a node has no live home and should just be dropped).
  */
 static inline u32 bch2_snapshot_live_descendent(struct bch_fs *c, u32 id)
 {
@@ -182,11 +183,15 @@ static inline u32 bch2_snapshot_live_descendent(struct bch_fs *c, u32 id)
 	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
 
 	while (true) {
-		struct snapshot_t *s = __snapshot_t(t, id);
+		const struct snapshot_t *s = __snapshot_t(t, id);
+		if (!s)
+			return 0;
 		if (s->state == SNAPSHOT_ID_live)
 			return id;
 
-		BUG_ON(!s->children[0] || s->children[1]);
+		EBUG_ON(s->children[1]);	/* deleted nodes are single-child */
+		if (!s->children[0])
+			return 0;
 		id = s->children[0];
 	}
 }
@@ -323,6 +328,9 @@ static inline int bch2_key_has_snapshot_overwrites(struct btree_trans *trans,
 
 	return __bch2_key_has_snapshot_overwrites(trans, id, pos);
 }
+
+int bch2_delete_dead_snapshot_key(struct btree_trans *, struct btree_iter *,
+				  struct bkey_s_c, u32);
 
 int __bch2_delete_dead_snapshots(struct bch_fs *);
 int bch2_delete_dead_snapshots(struct bch_fs *);

@@ -595,15 +595,35 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 	if (!iter)
 		return 1;
 
-	/* Snapshot was definitively deleted, this error is marked autofix */
-	if (fsck_err_on(state == SNAPSHOT_ID_deleted,
-			trans, bkey_in_deleted_snapshot,
-			"key in deleted snapshot %s, delete?",
-			(bch2_btree_id_to_text(&buf, iter->btree_id),
-			 prt_char(&buf, ' '),
-			 bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
-		ret = bch2_btree_delete_at(trans, iter,
-					   BTREE_UPDATE_internal_snapshot_node) ?: 1;
+	/*
+	 * Snapshot was deleted. If there's no live descendant (a leaf, or an
+	 * interior node whose subtree is entirely deleted) the key is genuinely
+	 * orphaned - nothing can see it - so delete it. If there is a live
+	 * descendant the key is still visible to it via inheritance and should
+	 * have been migrated there during deletion; migrate it now rather than
+	 * dropping it (the deleted node retains a child pointer so
+	 * bch2_snapshot_live_descendent() can find the target). Both autofix.
+	 */
+	if (state == SNAPSHOT_ID_deleted) {
+		u32 live_child = bch2_snapshot_live_descendent(c, k.k->p.snapshot);
+
+		if (fsck_err_on(!live_child,
+				trans, bkey_in_deleted_snapshot,
+				"key in deleted snapshot %s, delete?",
+				(bch2_btree_id_to_text(&buf, iter->btree_id),
+				 prt_char(&buf, ' '),
+				 bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
+			ret = bch2_btree_delete_at(trans, iter,
+						   BTREE_UPDATE_internal_snapshot_node) ?: 1;
+
+		if (fsck_err_on(live_child,
+				trans, bkey_in_deleted_interior_snapshot,
+				"key in deleted interior snapshot %s, migrate to live descendant?",
+				(bch2_btree_id_to_text(&buf, iter->btree_id),
+				 prt_char(&buf, ' '),
+				 bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
+			ret = bch2_delete_dead_snapshot_key(trans, iter, k, live_child) ?: 1;
+	}
 
 	if (state == SNAPSHOT_ID_empty) {
 		/*

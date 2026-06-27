@@ -375,7 +375,8 @@ enum bch_fsck_flags {
 	x(journal_bucket_seq_not_monotonic,			358,	0)		\
 	x(dup_extents_to_reflink,				362,	FSCK_AUTOFIX)	\
 	x(stripe_read_ptr_stale,				363,	0)		\
-	x(MAX,							364,	0)
+	x(bkey_in_deleted_interior_snapshot,			364,	FSCK_AUTOFIX)	\
+	x(MAX,							365,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,

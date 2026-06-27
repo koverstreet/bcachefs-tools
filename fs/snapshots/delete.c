@@ -313,7 +313,14 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 	if (!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)) {
 		SET_BCH_SNAPSHOT_DELETED(&s->v, true);
 		s->v.parent		= 0;
-		s->v.children[0]	= 0;
+		/*
+		 * Retain the pointer to our live descendant: the node is spliced
+		 * out of the live tree, but a stray key later found in this
+		 * deleted snapshot must still be migrated to where it's visible,
+		 * and bch2_snapshot_live_descendent() walks children[0] to find
+		 * it. (child_id is 0 for a leaf - nothing to retain.)
+		 */
+		s->v.children[0]	= cpu_to_le32(child_id);
 		s->v.children[1]	= 0;
 		s->v.subvol		= 0;
 		s->v.tree		= 0;
@@ -396,6 +403,43 @@ static const struct snapshot_interior_delete *snapshot_id_dying(struct snapshot_
 	return ret;
 }
 
+/*
+ * Remove a key from a dying/deleted snapshot node, migrating it to that node's
+ * live descendant first when there is one (live_child != 0): the key is still
+ * visible to the descendant via inheritance, so dropping it outright would lose
+ * data. Only copy it down if the descendant doesn't already have its own key at
+ * that position. With no live descendant (a leaf) the key is just deleted.
+ *
+ * Shared by the deletion pass (delete_dead_snapshots_process_key) and the fsck
+ * repair (bch2_check_key_has_snapshot).
+ */
+int bch2_delete_dead_snapshot_key(struct btree_trans *trans, struct btree_iter *iter,
+				  struct bkey_s_c k, u32 live_child)
+{
+	struct bch_fs *c = trans->c;
+
+	if (live_child) {
+		BUG_ON(!bch2_snapshot_exists(c, live_child));
+
+		struct bpos dst = k.k->p;
+		dst.snapshot = live_child;
+
+		CLASS(btree_iter, dst_iter)(trans, iter->btree_id, dst,
+					    BTREE_ITER_all_snapshots|BTREE_ITER_intent);
+		struct bkey_s_c dst_k = bkey_try(bch2_btree_iter_peek_slot(&dst_iter));
+
+		if (bkey_deleted(dst_k.k)) {
+			struct bkey_i *new = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+
+			new->k.p = dst;
+			try(bch2_trans_update(trans, &dst_iter, new,
+					      BTREE_UPDATE_internal_snapshot_node));
+		}
+	}
+
+	return bch2_btree_delete_at(trans, iter, BTREE_UPDATE_internal_snapshot_node);
+}
+
 static int delete_dead_snapshots_process_key(struct btree_trans *trans,
 					     struct btree_iter *iter,
 					     struct bkey_s_c k)
@@ -413,28 +457,7 @@ static int delete_dead_snapshots_process_key(struct btree_trans *trans,
 	if (!dying)
 		return 0;
 
-	if (dying->live_child) {
-		BUG_ON(!bch2_snapshot_exists(c, dying->live_child));
-
-		struct bpos dst = k.k->p;
-		dst.snapshot = dying->live_child;
-
-		CLASS(btree_iter, dst_iter)(trans, iter->btree_id, dst,
-					    BTREE_ITER_all_snapshots|BTREE_ITER_intent);
-		struct bkey_s_c dst_k = bkey_try(bch2_btree_iter_peek_slot(&dst_iter));
-
-		if (bkey_deleted(dst_k.k)) {
-			struct bkey_i *new = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
-
-			new->k.p = dst;
-			try(bch2_trans_update(trans, &dst_iter, new,
-					      BTREE_UPDATE_internal_snapshot_node));
-		}
-	}
-
-	try(bch2_btree_delete_at(trans, iter,
-				 BTREE_UPDATE_internal_snapshot_node));
-	return 0;
+	return bch2_delete_dead_snapshot_key(trans, iter, k, dying->live_child);
 }
 
 static bool skip_unrelated_snapshot_tree(struct btree_trans *trans, struct btree_iter *iter, u64 *prev_inum)
