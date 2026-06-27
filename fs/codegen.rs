@@ -749,7 +749,10 @@ fn parent(p: &str) -> String {
 }
 
 fn pkg_config_includes(lib: &str) -> Vec<String> {
-    let o = Command::new("pkg-config").args(["--cflags-only-I", lib]).output().expect("run pkg-config");
+    // Honor $PKG_CONFIG so cross builds use the target's pkg-config wrapper
+    // (e.g. aarch64-unknown-linux-gnu-pkg-config); fall back to the plain name.
+    let pkg_config = std::env::var("PKG_CONFIG").unwrap_or_else(|_| "pkg-config".into());
+    let o = Command::new(pkg_config).args(["--cflags-only-I", lib]).output().expect("run pkg-config");
     String::from_utf8_lossy(&o.stdout).split_whitespace().map(String::from).collect()
 }
 
