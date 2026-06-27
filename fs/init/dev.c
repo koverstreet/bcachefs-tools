@@ -932,6 +932,26 @@ int bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 	return __bch2_dev_set_state(c, ca, new_state, flags, err);
 }
 
+int bch2_dev_evacuating_startup_scan(struct bch_fs *c)
+{
+	int ret = 0;
+
+	for_each_online_member(c, ca, BCH_DEV_READ_REF_evacuating_startup_scan) {
+		if (ca->mi.state != BCH_MEMBER_STATE_evacuating)
+			continue;
+
+		ret = bch2_set_reconcile_needs_scan(c,
+			(struct reconcile_scan) {
+				.type	= RECONCILE_SCAN_device,
+				.dev	= ca->dev_idx,
+			}, true);
+		if (ret)
+			break;
+	}
+
+	return ret;
+}
+
 /* Device add/removal: */
 
 static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,

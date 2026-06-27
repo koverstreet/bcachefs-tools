@@ -30,6 +30,7 @@ int __bch2_dev_set_state(struct bch_fs *, struct bch_dev *,
 int bch2_dev_set_state(struct bch_fs *, struct bch_dev *,
 		       enum bch_member_state, int,
 		       struct printbuf *);
+int bch2_dev_evacuating_startup_scan(struct bch_fs *);
 
 int bch2_dev_add_initialize(struct bch_fs *, struct bch_dev *);
 
