@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::io::FromRawFd;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -177,6 +177,7 @@ fn scrub(cli: Cli) -> Result<()> {
     let mut exit_code = 0i32;
     let mut last = Instant::now();
     let mut first = true;
+    let live_output = io::stdout().is_terminal();
 
     loop {
         let now = Instant::now();
@@ -231,28 +232,31 @@ fn scrub(cli: Cli) -> Result<()> {
             }
         }
 
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
+        let interrupted = INTERRUPTED.load(Ordering::Relaxed);
+        if live_output || all_done || interrupted {
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
 
-        if !first {
-            for i in 0..scrub_devs.len() {
-                if i > 0 { write!(out, "\x1b[1A")?; }
-                write!(out, "\x1b[2K\r")?;
+            if live_output && !first {
+                for i in 0..scrub_devs.len() {
+                    if i > 0 { write!(out, "\x1b[1A")?; }
+                    write!(out, "\x1b[2K\r")?;
+                }
             }
-        }
 
-        for (i, line) in lines.iter().enumerate() {
-            write!(out, "{}", line)?;
-            if i < lines.len() - 1 { writeln!(out)?; }
+            for (i, line) in lines.iter().enumerate() {
+                write!(out, "{}", line)?;
+                if i < lines.len() - 1 { writeln!(out)?; }
+            }
+            out.flush()?;
         }
-        out.flush()?;
 
         if all_done {
             writeln!(io::stdout())?;
             break;
         }
 
-        if INTERRUPTED.load(Ordering::Relaxed) {
+        if interrupted {
             writeln!(io::stdout())?;
             eprintln!("Interrupted");
             exit_code |= 1;
