@@ -107,6 +107,7 @@ pub struct DevInfo {
     pub dev:        String,
     pub label:      Option<String>,
     pub durability: u32,
+    pub online:     bool,
 }
 
 /// Enumerate devices for a mounted filesystem from its sysfs directory.
@@ -127,6 +128,7 @@ pub fn fs_get_devices(sysfs_path: &Path) -> Result<Vec<DevInfo>> {
         };
 
         let dev_path = entry.path();
+        let online = fs::symlink_metadata(dev_path.join("block")).is_ok();
         let dev = dev_name_from_sysfs(&dev_path);
 
         let label = fs::read_to_string(dev_path.join("label"))
@@ -137,8 +139,42 @@ pub fn fs_get_devices(sysfs_path: &Path) -> Result<Vec<DevInfo>> {
         let durability = read_sysfs_u64(&dev_path.join("durability"))
             .unwrap_or(1) as u32;
 
-        devs.push(DevInfo { idx, dev, label, durability });
+        devs.push(DevInfo { idx, dev, label, durability, online });
     }
     devs.sort_by_key(|d| d.idx);
     Ok(devs)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::unix::fs::symlink;
+
+    use super::*;
+
+    #[test]
+    fn fs_get_devices_marks_missing_block_symlink_offline() {
+        let root = std::env::temp_dir().join(format!(
+            "bcachefs-tools-sysfs-test-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&root);
+
+        fs::create_dir(&root).unwrap();
+        let dev0 = root.join("dev-0");
+        let dev1 = root.join("dev-1");
+        fs::create_dir(&dev0).unwrap();
+        fs::create_dir(&dev1).unwrap();
+        symlink("../sda", dev0.join("block")).unwrap();
+        fs::write(dev0.join("durability"), "1\n").unwrap();
+        fs::write(dev1.join("durability"), "1\n").unwrap();
+
+        let devs = fs_get_devices(&root).unwrap();
+        fs::remove_dir_all(&root).unwrap();
+
+        assert_eq!(devs.len(), 2);
+        assert_eq!(devs[0].dev, "sda");
+        assert!(devs[0].online);
+        assert_eq!(devs[1].dev, "dev-1");
+        assert!(!devs[1].online);
+    }
 }
