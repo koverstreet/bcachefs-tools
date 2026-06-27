@@ -3,6 +3,7 @@ use std::{
     ffi::OsStr,
     os::fd::{AsRawFd, BorrowedFd},
     path::{Path, PathBuf},
+    time::{Duration, Instant},
 };
 
 use anyhow::bail;
@@ -10,7 +11,7 @@ use bcachefs_kernel::c;
 use c::bch_sb_handle;
 use clap::Parser;
 use log::{debug, warn};
-use rustix::event::{poll, PollFd, PollFlags};
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use uuid::Uuid;
 
 use crate::device_scan;
@@ -27,6 +28,10 @@ exit status means that an error was encountered."
 pub struct Cli {
     /// A device string in the UUID=\<UUID\> format.
     device: String,
+
+    /// Maximum seconds to wait. The default is to wait forever.
+    #[arg(long)]
+    timeout: Option<u64>,
 }
 
 fn cmd_wait_devices(cli: Cli) -> anyhow::Result<()> {
@@ -34,7 +39,20 @@ fn cmd_wait_devices(cli: Cli) -> anyhow::Result<()> {
         bail!("invalid device string: {}", cli.device);
     };
 
-    let mut wait_initialized = WaitInitialized::new(uuid);
+    let opts = c::bch_opts::default();
+    if !wait_for_devices(uuid, cli.timeout.map(Duration::from_secs), &opts)? {
+        bail!("timed out waiting for all devices for UUID={uuid}");
+    }
+
+    Ok(())
+}
+
+pub fn wait_for_devices(
+    uuid: Uuid,
+    timeout: Option<Duration>,
+    opts: &c::bch_opts,
+) -> anyhow::Result<bool> {
+    let mut wait_initialized = WaitInitialized::new(uuid, *opts);
 
     let socket = udev::MonitorBuilder::new()?
         .match_subsystem("block")?
@@ -53,10 +71,20 @@ fn cmd_wait_devices(cli: Cli) -> anyhow::Result<()> {
     }
 
     while !wait_initialized.every_device_is_initialized()? {
+        let poll_timeout = timeout
+            .and_then(|timeout| deadline_remaining(wait_initialized.started_at, timeout))
+            .map(duration_to_timespec);
+        if timeout.is_some() && poll_timeout.is_none() {
+            return Ok(false);
+        }
+
         let socket_fd = unsafe { BorrowedFd::borrow_raw(socket.as_raw_fd()) };
 
         let mut fds = [PollFd::new(&socket_fd, PollFlags::IN)];
-        poll(&mut fds, None)?;
+        let event_count = poll(&mut fds, poll_timeout.as_ref())?;
+        if event_count == 0 {
+            return Ok(false);
+        }
         if fds.iter().any(|fd| fd.revents().contains(PollFlags::ERR)) {
             bail!("error on udev socket fd");
         }
@@ -64,19 +92,34 @@ fn cmd_wait_devices(cli: Cli) -> anyhow::Result<()> {
         wait_initialized.process_events(&socket)?;
     }
 
-    Ok(())
+    Ok(true)
+}
+
+fn deadline_remaining(started_at: Instant, timeout: Duration) -> Option<Duration> {
+    timeout.checked_sub(started_at.elapsed())
+}
+
+fn duration_to_timespec(duration: Duration) -> Timespec {
+    Timespec {
+        tv_sec: duration.as_secs().try_into().unwrap_or(i64::MAX),
+        tv_nsec: duration.subsec_nanos().into(),
+    }
 }
 
 struct WaitInitialized {
     uuid: Uuid,
+    opts: c::bch_opts,
     sbs:  Vec<(PathBuf, bch_sb_handle)>,
+    started_at: Instant,
 }
 
 impl WaitInitialized {
-    fn new(uuid: Uuid) -> Self {
+    fn new(uuid: Uuid, opts: c::bch_opts) -> Self {
         WaitInitialized {
             uuid,
+            opts,
 	    sbs: Vec::new(),
+            started_at: Instant::now(),
         }
     }
 
@@ -96,8 +139,7 @@ impl WaitInitialized {
         if device_scan::should_skip_multipath_component(device) {
             return Ok(());
         }
-	let opts = c::bch_opts::default();
-        let sb_handle = match device_scan::read_super_silent(devnode, opts) {
+        let sb_handle = match device_scan::read_super_silent(devnode, self.opts) {
             Ok(handle) => handle,
             Err(err) if err.raw() == libc::ENOENT => return Ok(()),
             Err(err) => return Err(err.into()),
@@ -151,8 +193,7 @@ impl WaitInitialized {
     }
 
     fn every_device_is_initialized(&mut self) -> anyhow::Result<bool> {
-	let opts = c::bch_opts::default();
-	self.sbs = device_scan::filter_current_sbs(std::mem::take(&mut self.sbs), &opts)?;
+	self.sbs = device_scan::filter_current_sbs(std::mem::take(&mut self.sbs), &self.opts)?;
 
 	let Some((_, best)) = self.sbs.first() else {
 	    return Ok(false);

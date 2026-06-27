@@ -1,22 +1,29 @@
 use std::{
+    collections::HashSet,
+    env,
     ffi::{CString, OsString},
     io::{stdout, IsTerminal},
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
     ptr, str,
+    time::Duration,
 };
 
 use anyhow::{ensure, Result};
 use bcachefs_kernel::c::bch_sb_handle;
+use bcachefs_kernel::opt_get;
 use bcachefs_kernel::path_to_cstr;
 use clap::Parser;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
 use crate::device_scan;
 
 use crate::{
     key::{KeyHandle, Keyring, Passphrase, UnlockPolicy},
     logging,
 };
+
+const DEFAULT_MOUNT_DEVICE_WAIT_SECS: u64 = 10;
+const MOUNT_DEVICE_WAIT_ENV: &str = "BCACHEFS_MOUNT_DEVICE_WAIT_SECS";
 
 fn mount_inner(
     src: OsString,
@@ -141,12 +148,82 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
         .or_else(|_| Passphrase::new(&uuid).and_then(|p| KeyHandle::new(sb, &p, Keyring::User)))
 }
 
+fn incomplete_device_scan(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<(uuid::Uuid, usize, usize)> {
+    let (_, first) = sbs.first()?;
+    let expected = first.sb().number_of_devices() as usize;
+    if expected <= 1 {
+        return None;
+    }
+
+    let found = sbs
+        .iter()
+        .map(|(_, sb)| sb.sb().dev_idx)
+        .collect::<HashSet<_>>()
+        .len();
+
+    (found < expected).then_some((first.sb().uuid(), found, expected))
+}
+
+fn mount_device_wait_timeout() -> Option<Duration> {
+    let secs = env::var(MOUNT_DEVICE_WAIT_ENV)
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_MOUNT_DEVICE_WAIT_SECS);
+
+    (secs != 0).then_some(Duration::from_secs(secs))
+}
+
+fn mount_allows_degraded(opts: &bcachefs_kernel::c::bch_opts) -> bool {
+    opt_get!(opts, degraded) != 0
+}
+
+fn mount_should_wait_for_devices(
+    uuid: Option<uuid::Uuid>,
+    opts: &bcachefs_kernel::c::bch_opts,
+    mountflags: libc::c_ulong,
+    sbs: &[(PathBuf, bch_sb_handle)],
+) -> Option<(uuid::Uuid, usize, usize)> {
+    if mountflags & libc::MS_REMOUNT != 0 || mount_allows_degraded(opts) {
+        return None;
+    }
+
+    let uuid = uuid?;
+    incomplete_device_scan(sbs).map(|(_, found, expected)| (uuid, found, expected))
+}
+
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     let (optstr, mountflags) = parse_mountflag_options(&cli.options);
     let opts = bcachefs_kernel::opts::parse_mount_opts(None, optstr.as_deref(), true)
         .unwrap_or_default();
 
-    let sbs = device_scan::scan_sbs(&cli.dev, &opts)?;
+    let mut sbs = device_scan::scan_sbs(&cli.dev, &opts)?;
+    let mount_uuid = device_scan::parse_uuid_equals(&cli.dev)?;
+
+    if let Some((uuid, found, expected)) = mount_should_wait_for_devices(mount_uuid, &opts, mountflags, &sbs) {
+        if let Some(timeout) = mount_device_wait_timeout() {
+            info!(
+                "found {found}/{expected} devices for UUID={uuid}; waiting up to {}s for late devices",
+                timeout.as_secs()
+            );
+
+            match super::wait_devices::wait_for_devices(uuid, Some(timeout), &opts) {
+                Ok(true) => {
+                    info!("all devices appeared for UUID={uuid}; rescanning before mount");
+                }
+                Ok(false) => {
+                    warn!(
+                        "timed out waiting for all devices for UUID={uuid}; rescanning before mount"
+                    );
+                }
+                Err(e) => {
+                    warn!(
+                        "error while waiting for all devices for UUID={uuid}: {e}; rescanning before mount"
+                    );
+                }
+            }
+            sbs = device_scan::scan_sbs(&cli.dev, &opts)?;
+        }
+    }
 
     ensure!(!sbs.is_empty(), "No device(s) to mount specified");
 
