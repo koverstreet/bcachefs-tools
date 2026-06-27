@@ -1088,7 +1088,7 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 			continue;
 
 		struct journal_read_buf buf = { NULL, 0 };
-		int ret = journal_read_buf_realloc(c, &buf, PAGE_SIZE);
+		int ret = journal_read_buf_realloc(c, &buf, bucket_bytes(ca));
 		if (ret) {
 			enumerated_ref_put(&ca->io_ref[READ],
 					   BCH_DEV_READ_REF_journal_read);
