@@ -932,6 +932,40 @@ int bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 	return __bch2_dev_set_state(c, ca, new_state, flags, err);
 }
 
+int bch2_dev_start_member_reconcile_scans(struct bch_fs *c)
+{
+	int ret = 0;
+
+	for_each_online_member(c, ca, BCH_DEV_READ_REF_member_reconcile_scan) {
+		struct bch_member m;
+
+		scoped_guard(mutex, &c->sb_lock)
+			m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
+
+		if (!BCH_MEMBER_NEEDS_RECONCILE_SCAN(&m))
+			continue;
+
+		ret = bch2_set_reconcile_needs_scan(c,
+			(struct reconcile_scan) {
+				.type	= RECONCILE_SCAN_device,
+				.dev	= ca->dev_idx,
+			}, true);
+		if (ret)
+			break;
+
+		scoped_guard(mutex, &c->sb_lock) {
+			struct bch_member *member =
+				bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+			SET_BCH_MEMBER_NEEDS_RECONCILE_SCAN(member, false);
+			ret = bch2_write_super(c);
+		}
+		if (ret)
+			break;
+	}
+
+	return ret;
+}
+
 /* Device add/removal: */
 
 static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,

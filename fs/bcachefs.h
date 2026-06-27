@@ -430,6 +430,7 @@ struct io_count {
 	x(journal_read)					\
 	x(fs_journal_alloc)				\
 	x(fs_resize_on_mount)				\
+	x(member_reconcile_scan)			\
 	x(fs_mi_field_upgrades)				\
 	x(sb_journal_sort)				\
 	x(btree_node_read)				\
