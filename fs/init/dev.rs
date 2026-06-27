@@ -1121,6 +1121,36 @@ impl StateLockWrite<'_> {
 }
 
 impl Fs {
+    /// The reconcile scans that offline set-state to evacuating asked for,
+    /// queued - and their marks cleared, once the queued scan is durable: a
+    /// crash before costs the mark, kept, not the scan. Best effort: a
+    /// failure is logged and doesn't fail the read-write transition, and the
+    /// mark kept retries it on the next.
+    pub fn start_member_reconcile_scans(&self) {
+        let fs = self;
+        let nr_devices = fs.nr_devices();
+
+        for dev in 0..nr_devices {
+            let marked = fs.sb_lock().member_mut(dev).is_some_and(|m| m.needs_reconcile_scan());
+            if !marked {
+                continue;
+            }
+
+            let ret = fs.request_scan(c::ReconcileScan::device(dev), true)
+                .and_then(|()| fs.journal.flush());
+            if let Err(e) = ret {
+                crate::bch_err_fn!(fs, Err::<(), _>(e)).ok();
+                continue;
+            }
+
+            let mut sb = fs.sb_lock();
+            if let Some(m) = sb.member_mut(dev) {
+                m.set_needs_reconcile_scan(false);
+            }
+            fs.write_super(&mut sb);
+        }
+    }
+
     pub fn dev_set_state(&self, ca: &Dev, new_state: MemberState, flags: u32,
                          err: Option<&mut Printbuf>) -> Result<(), BchError>
     {

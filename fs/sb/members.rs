@@ -55,6 +55,7 @@ pub struct bch_member_cpu {
     pub freespace_initialized: bool,
     pub initialized: MemberInitialized,
     pub resize_on_mount: bool,
+    pub needs_reconcile_scan: bool,
     pub rotational: bool,
     pub btree_bitmap_shift: u8,
     pub btree_allocated_bitmap: u64,
@@ -535,6 +536,7 @@ pub fn member_to_text<S: SbState>(out: &mut Printbuf, m: &c::bch_member, sb: &c:
     write!(out, "Discard:\t{}\n", m.discard() as u8);
     write!(out, "Freespace initialized:\t{}\n", m.freespace_initialized() as u8);
     write!(out, "Resize on mount:\t{}\n", m.resize_on_mount() as u8);
+    write!(out, "Needs reconcile scan:\t{}\n", m.needs_reconcile_scan() as u8);
     write!(out, "Unpark on online:\t{}\n", m.unpark_on_online() as u8);
 
     for (name, f) in [("Last device name", &m.device_name[..]),
@@ -616,6 +618,7 @@ impl c::bch_member {
             freespace_initialized:  self.freespace_initialized(),
             initialized:            self.initialized(),
             resize_on_mount:        self.resize_on_mount(),
+            needs_reconcile_scan:   self.needs_reconcile_scan(),
             rotational:             self.rotational(),
             btree_bitmap_shift:     self.btree_bitmap_shift,
             btree_allocated_bitmap: self.btree_allocated_bitmap.get(),

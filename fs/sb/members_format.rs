@@ -109,7 +109,10 @@ pub struct bch_member_flags {
     rotational_set:                 bool,
     #[bits(4)]  initialized:        MemberInitialized,
     /* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
-    __:                             u9,
+    __:                             u8,
+    /// An offline set-state to evacuating can't scan: the device's reconcile
+    /// scan is queued, and this cleared, on the next read-write transition
+    needs_reconcile_scan:           bool,
     /// Reconcile parked work that can't be read without this device: the
     /// pending list is retried when it's next online
     unpark_on_online:               bool,
