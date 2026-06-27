@@ -280,19 +280,28 @@ pub struct Cli {
     verbose: u8,
 }
 
-fn check_bcachefs_module() -> bool {
-    let path = Path::new("/sys/module/bcachefs");
+struct ModuleCheck {
+    loaded:         bool,
+    modprobe_error: Option<String>,
+}
 
-    path.exists() || {
-        let _ = std::process::Command::new("modprobe")
-            .arg("bcachefs")
-            .status();
-        path.exists()
+fn check_bcachefs_module() -> ModuleCheck {
+    let path = Path::new("/sys/module/bcachefs");
+    if path.exists() {
+        return ModuleCheck { loaded: true, modprobe_error: None };
     }
+
+    let modprobe_error = match std::process::Command::new("modprobe").arg("bcachefs").status() {
+        Ok(s) if s.success() => None,
+        Ok(_)  => Some("modprobe bcachefs exited unsuccessfully".to_string()),
+        Err(e) => Some(format!("could not run modprobe bcachefs: {e}")),
+    };
+
+    ModuleCheck { loaded: path.exists(), modprobe_error }
 }
 
 fn mount(cli: Cli) -> std::process::ExitCode {
-    let module_loaded = check_bcachefs_module();
+    let module = check_bcachefs_module();
 
     if cli.fs_type == "bcachefs.fuse" {
         #[cfg(feature = "fuse")]
@@ -327,8 +336,11 @@ fn mount(cli: Cli) -> std::process::ExitCode {
         Ok(_)   => std::process::ExitCode::SUCCESS,
         Err(e)   => {
             error!("Mount failed for {}: {e}", cli.dev);
-            if !module_loaded {
+            if !module.loaded {
                 error!("bcachefs module not loaded?");
+                if let Some(e) = module.modprobe_error {
+                    error!("{e}");
+                }
             }
             std::process::ExitCode::FAILURE
         }
