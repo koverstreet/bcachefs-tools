@@ -39,6 +39,11 @@
 #include <linux/ioprio.h>
 #include <linux/kthread.h>
 
+static inline u16 bch2_move_ioprio(struct data_update_opts *opts)
+{
+	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+}
+
 const char * const bch2_data_ops_strs[] = {
 #define x(t, n, ...) [n] = #t,
 	BCH_DATA_OPS()
@@ -253,7 +258,7 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 
 	u->op.end_io		= move_write_done;
 	u->rbio.bio.bi_end_io	= move_read_endio;
-	u->rbio.bio.bi_ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+	u->rbio.bio.bi_ioprio	= bch2_move_ioprio(data_opts);
 
 	u32 size = k.k->size;
 
