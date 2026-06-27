@@ -618,6 +618,8 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 		ret = bch2_set_fs_needs_reconcile(c);
 	if (!ret && !c->opts.read_only)
 		ret = bch2_reconcile_start(c);
+	if (!ret && !c->opts.read_only)
+		ret = bch2_dev_evacuating_startup_scan(c);
 	if (ret) {
 		bch2_fs_read_only(c);
 		return ret;
