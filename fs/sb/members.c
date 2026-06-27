@@ -293,6 +293,7 @@ __cold void bch2_member_to_text(struct printbuf *out,
 	prt_printf(out, "Discard:\t%llu\n", BCH_MEMBER_DISCARD(m));
 	prt_printf(out, "Freespace initialized:\t%llu\n", BCH_MEMBER_FREESPACE_INITIALIZED(m));
 	prt_printf(out, "Resize on mount:\t%llu\n", BCH_MEMBER_RESIZE_ON_MOUNT(m));
+	prt_printf(out, "Needs reconcile scan:\t%llu\n", BCH_MEMBER_NEEDS_RECONCILE_SCAN(m));
 
 	prt_printf(out, "Last device name:\t%.*s\n", (int) sizeof(m->device_name), m->device_name);
 	prt_printf(out, "Last device model:\t%.*s\n", (int) sizeof(m->device_model), m->device_model);
