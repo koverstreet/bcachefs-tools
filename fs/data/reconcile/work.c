@@ -33,6 +33,7 @@
 #include "util/clock.h"
 
 #include <linux/freezer.h>
+#include <linux/ioprio.h>
 #include <linux/kthread.h>
 #include <linux/sched/cputime.h>
 
@@ -434,6 +435,8 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 
 	data_opts->type			= BCH_DATA_UPDATE_reconcile;
 	data_opts->target		= r->background_target;
+	if (r->hipri)
+		data_opts->ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7);
 
 	/*
 	 * Never wait on the allocator mid-write: a blocked data update holds a
