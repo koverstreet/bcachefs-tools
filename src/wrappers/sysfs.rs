@@ -150,6 +150,7 @@ pub struct DevInfo {
     pub dev:        String,
     pub label:      Option<String>,
     pub durability: u32,
+    pub online:     bool,
 }
 
 /// Enumerate devices for a mounted filesystem from its sysfs directory.
@@ -173,6 +174,9 @@ pub fn fs_get_devices(
         };
 
         let dev_path = entry.path();
+        // metadata() follows the symlink (not symlink_metadata): a hot-removed
+        // device can leave dev-N/block dangling, and that should read as offline.
+        let online = fs::metadata(dev_path.join("block")).is_ok();
         let dev = dev_display_name_from_sysfs(&dev_path, name_mode);
 
         let label = fs::read_to_string(dev_path.join("label"))
@@ -183,7 +187,7 @@ pub fn fs_get_devices(
         let durability = read_sysfs_u64(&dev_path.join("durability"))
             .unwrap_or(1) as u32;
 
-        devs.push(DevInfo { idx, dev, label, durability });
+        devs.push(DevInfo { idx, dev, label, durability, online });
     }
     devs.sort_by_key(|d| d.idx);
     Ok(devs)
