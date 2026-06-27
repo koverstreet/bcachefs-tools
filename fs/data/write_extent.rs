@@ -60,8 +60,8 @@ struct AllocShort {
 
 /// A bio of the extent's own for @len bytes of the op's data, written with
 /// @opf: bounced into pages of its own, or the write point's stripe buffer.
-fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u32, short: &mut AllocShort,
-                   buf: *mut c_void) -> ExtentBio {
+fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u32, ioprio: u16,
+                   short: &mut AllocShort, buf: *mut c_void) -> ExtentBio {
     let mut output_available = (wp.sectors_free() << 9).min(len);
     let offset = if buf.is_null() { 0 } else { (buf.addr() & (PAGE_SIZE - 1)) as u32 };
 
@@ -82,7 +82,10 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u3
     if !buf.is_null() {
         let buf = unsafe { core::slice::from_raw_parts_mut(buf.cast::<u8>(), output_available as usize) };
         return fs.bio_write.alloc(ptr::null_mut(), Buffer::nr_vecs(&buf), opf,
-                                  |b| b.init_from(|bio| Ok(ExtentBuf::Stripe(Buffer::fill(bio, buf)))))
+                                  |b| b.init_from(|bio| {
+                bio.set_ioprio(ioprio);
+                Ok(ExtentBuf::Stripe(Buffer::fill(bio, buf)))
+            }))
             .unwrap_or_else(|e: BchError| panic!("a write's bio for its stripe: its bioset waits, but {e}"));
     }
 
@@ -101,6 +104,7 @@ fn write_bio_alloc(fs: &'static Fs, wp: &LockedWritePoint<'_>, len: u32, opf: u3
         let _noio = MemallocFlags::noio();
         let size = output_available as usize;
         fs.bio_write.alloc(ptr::null_mut(), pages::nr_vecs(size), opf, |b| b.init_from(|bio| {
+            bio.set_ioprio(ioprio);
             Pages::fill(bio, &fs.bio_bounce, block_size, size, required as usize, flags::NOIO | flags::SKIP_ZERO)
                 .map(ExtentBuf::Bounce)
         }))
@@ -386,6 +390,8 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
     assert!(data.len() >> 9 != 0, "writing an empty bio");
 
     let ec_buf = wp.ec_buf();
+    // a bio of our own is the wbio's priority too: a move's isn't the default
+    let ioprio = update.map_or(0, |u| crate::data::update::move_ioprio(&u.opts));
 
     if unlikely(op.has(w::data_encoded)) {
         match write_prep_encoded_data(op, data, update, wp) {
@@ -393,7 +399,7 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
                 let all = *data;
                 data.advance(all.len());
                 let extent = if !ec_buf.is_null() {
-                    let stripe = write_bio_alloc(fs, wp, all.len(), opf, &mut short, ec_buf);
+                    let stripe = write_bio_alloc(fs, wp, all.len(), opf, ioprio, &mut short, ec_buf);
                     stripe.range().copy_from_range(all);
                     ExtentData::Own(stripe)
                 } else {
@@ -412,14 +418,14 @@ pub(crate) fn write_extent<'a>(op: &mut Op, data: &mut BioRange<'a>, opf: u32,
        op.bits.compression_opt() != 0 ||
        (op.bits.csum_type() != c::CsumType::none && !op.has(w::pages_stable)) ||
        (op.bits.csum_type().is_encryption() && !op.has(w::pages_owned)) {
-        dst = Some(write_bio_alloc(fs, wp, data.len(), opf, &mut short, ec_buf));
+        dst = Some(write_bio_alloc(fs, wp, data.len(), opf, ioprio, &mut short, ec_buf));
     }
 
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     let write_corrupt_ratio = crate::data::write::write_corrupt_ratio.get();
     #[cfg(CONFIG_BCACHEFS_DEBUG)]
     if dst.is_none() && write_corrupt_ratio != 0 {
-        dst = Some(write_bio_alloc(fs, wp, data.len(), opf, &mut short, ec_buf));
+        dst = Some(write_bio_alloc(fs, wp, data.len(), opf, ioprio, &mut short, ec_buf));
     }
     let bounce = dst.is_some();
     let start = *data;
