@@ -81,6 +81,8 @@ fn write_bio_alloc(fs: &Fs, wp: &LockedWritePoint<'_>, src: &c::bio, buf: *mut c
     wbio.wbio.bits.set_put_bio(1);
     /* copy WRITE_SYNC flag */
     wbio.bio_mut().set_opf(src.bi_opf);
+    // a move's priority isn't the default: the extent's own bio keeps it
+    wbio.bio_mut().set_ioprio(src.bi_ioprio);
 
     if !buf.is_null() {
         unsafe { crate::util::bio::bch2_bio_map(bio, buf, output_available as usize) };

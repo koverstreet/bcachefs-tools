@@ -23,7 +23,7 @@ use crate::c::Errcode;
 use crate::data::moving::{Moving, MovingIo};
 use crate::data::ptrs::{BkeyVPtrs, Ptrs};
 use crate::data::scrub_journal::BadRef;
-use crate::data::update::{read_err_benign, IOPRIO_IDLE};
+use crate::data::update::{move_ioprio, read_err_benign};
 use crate::errcode::BchError;
 use crate::data::update_task::{self, Body, Update};
 use crate::util::refcount::RefGuard;
@@ -125,7 +125,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
         Err(e) if e.matches(Errcode::data_update_done) => return Ok(()),
         Err(e) => return Err(e),
     };
-    u.rbio.bio.lend().bio_mut().set_ioprio(IOPRIO_IDLE);
+    u.rbio.bio.lend().bio_mut().set_ioprio(move_ioprio(data_opts));
     u.set_found(found);
     u.io_seq = moving.update_issue(u.turn().get());
 

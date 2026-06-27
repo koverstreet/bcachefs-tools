@@ -102,6 +102,8 @@ nest! {
         pub read_flags: c::ReadFlags,
         pub write_flags: c::WriteFlags,
         pub commit_flags: c::TransCommitFlags,
+        /// 0: IOPRIO_IDLE, as moves have it
+        pub ioprio: u16,
     }
 }
 
@@ -255,6 +257,8 @@ impl Fs {
         // an unset read_dev is -1
         prt!(out, "read_dev:\t{}\n", data_opts.read_dev as i32);
         prt!(out, "checksum_paranoia:\t{}\n", u8::from(data_opts.bits.checksum_paranoia()));
+        let ioprio = move_ioprio(data_opts);
+        prt!(out, "ioprio:\t{}:{}\n", ioprio_class_str(ioprio), ioprio & 0x1fff);
 
         prt!(out, "io path options:\t");
         crate::inode_opts::opts_to_text(out, self, io_opts);
@@ -302,6 +306,24 @@ pub fn data_update_inflight_to_text(out: &mut Printbuf, m: &c::data_update) {
 
 /// IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0): background IO yields to everyone else's.
 pub(crate) const IOPRIO_IDLE: u16 = 3 << 13;
+/// IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7): best-effort, the lowest level.
+pub(crate) const IOPRIO_BE_LOWEST: u16 = (2 << 13) | 7;
+
+/// The IO priority of @opts's moves: bch2_move_ioprio().
+pub(crate) fn move_ioprio(opts: &c::data_update_opts) -> u16 {
+    if opts.ioprio != 0 { opts.ioprio } else { IOPRIO_IDLE }
+}
+
+/// The name of @ioprio's class, as the kernel's ioprio names them.
+fn ioprio_class_str(ioprio: u16) -> &'static str {
+    match ioprio >> 13 {
+        0 => "none",
+        1 => "realtime",
+        2 => "best-effort",
+        3 => "idle",
+        _ => "unknown",
+    }
+}
 
 /// Both scrub types read to check, and must never rewrite what they're checking.
 pub(crate) fn is_scrub(t: Type) -> bool {
@@ -428,7 +450,7 @@ impl c::data_update {
 
         let iter = c::bvec_iter { bi_sector: self.key().k.start_offset(), bi_size: buf_bytes, ..Default::default() };
         unsafe { self.rbio.bio.lend().bio_mut().set_iter(iter) };
-        self.op.wbio.bio_mut().set_ioprio(IOPRIO_IDLE);
+        self.op.wbio.bio_mut().set_ioprio(move_ioprio(&self.opts));
         Ok(())
     }
 
