@@ -138,10 +138,6 @@ With erasure coding enabled, this is currently capped at
 .Pq RAID6 .
 .It Fl -metadata_replicas Ns = Ns Ar number
 Number of metadata replicas
-.It Fl -data_replicas_required Ns = Ns Ar number
-
-.It Fl -metadata_replicas_required Ns = Ns Ar number
-
 .It Fl -encoded_extent_max Ns = Ns Ar size
 Maximum size of checksummed/compressed extents
 .It Fl -metadata_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
@@ -203,7 +199,7 @@ Snapshots and reflink will still cause writes to be COW.
 This flag implicitly disables data checksumming, compression and
 encryption.
 .It Fl -replicas Ns = Ns Ar number
-Sets both data and metadata replicas
+Sets both data and metadata replicas.
 .It Fl -encrypted
 Enable whole filesystem encryption (chacha20/poly1305);
 passphrase will be prompted for.
@@ -269,10 +265,6 @@ Number of data replicas.
 With erasure coding enabled, this is currently capped at
 .Ar 3
 .Pq RAID6 .
-.It Fl -metadata_replicas_required Ns = Ns Ar number
-
-.It Fl -data_replicas_required Ns = Ns Ar number
-
 .It Fl -metadata_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
 Set metadata checksum type (default:
 .Cm crc32c ) .
