@@ -37,7 +37,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
 ];
 const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf", ".*bch2_snapshot_id_state"];
-const BLOCKLIST_TYPE: &[&str] = &["rhash_lock_head", "srcu_struct", "bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];
+const BLOCKLIST_TYPE: &[&str] = &["bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];
 const BLOCKLIST_ITEM: &[&str] = &["bch2_bkey_ops"];
 const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "Fix753_.*", "bch.*", "__bch2.*", "__BTREE_ITER.*", "BTREE_ITER.*"];
 const ALLOWLIST_TYPE: &[&str] = &["bch_.*", "bkey_i_.*", "bkey_s_c_.*", "bkey_s_.*", "btree_flags", "disk_accounting_type", "fsck_err_opts", "nonce", "sb_names",
@@ -175,12 +175,29 @@ pub fn userspace_clang_args(src: &str, target: &str) -> Vec<String> {
     a
 }
 
+/// Escape regex metacharacters so a literal directory path can be used as a
+/// bindgen `--blocklist-file` regex. Without this, a path like
+/// `linux-headers-7.0.13+deb14-common` is interpreted as a regex — the `+`
+/// quantifies the preceding `3` — and silently fails to match, so the kernel
+/// headers under it never get blocklisted and their types leak into the
+/// generated bindings (e.g. a second `struct mutex` distinct from the kernel's).
+fn regex_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if "\\.+*?()|[]{}^$".contains(c) {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// Default blocklist dirs for the userspace build: types from the kernel-compat
 /// `include/` shim and from `/usr` are resolved through bcachefs-shim, not
 /// re-emitted. The kernel build passes its own header trees instead.
 pub fn default_blocklist(src: &str) -> Vec<String> {
     let include_dir = format!("{}/include", parent(src));
-    vec![format!("{include_dir}/.*"), ".*/usr/.*".to_string()]
+    vec![format!("{}/.*", regex_escape(&include_dir)), ".*/usr/.*".to_string()]
 }
 
 /// Generate the x-macro-derived *_gen.rs files from the *_format.h headers.

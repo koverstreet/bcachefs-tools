@@ -42,7 +42,7 @@ fn main() {
         None => userspace_clang_args(&src, &target),
     };
     let blocklist: Vec<String> = match opt(args, "--blocklist") {
-        Some(v) => v.split(':').map(|s| format!("{s}/.*")).collect(),
+        Some(v) => v.split(':').map(|s| format!("{}/.*", regex_escape(s))).collect(),
         None => default_blocklist(&src),
     };
 
