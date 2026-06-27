@@ -229,19 +229,43 @@ pub struct Cli {
     verbose: u8,
 }
 
-fn check_bcachefs_module() -> bool {
-    let path = Path::new("/sys/module/bcachefs");
+struct ModuleCheck {
+    loaded: bool,
+    modprobe_error: Option<String>,
+}
 
-    path.exists() || {
-        let _ = std::process::Command::new("modprobe")
-            .arg("bcachefs")
-            .status();
-        path.exists()
+fn check_bcachefs_module_at<F>(path: &Path, run_modprobe: F) -> ModuleCheck
+where
+    F: FnOnce() -> Result<bool, String>,
+{
+    if path.exists() {
+        return ModuleCheck { loaded: true, modprobe_error: None };
+    }
+
+    let modprobe_error = match run_modprobe() {
+        Ok(true) => None,
+        Ok(false) => Some("modprobe bcachefs exited unsuccessfully".to_string()),
+        Err(e) => Some(format!("could not run modprobe bcachefs: {e}")),
+    };
+
+    ModuleCheck {
+        loaded: path.exists(),
+        modprobe_error,
     }
 }
 
+fn check_bcachefs_module() -> ModuleCheck {
+    check_bcachefs_module_at(Path::new("/sys/module/bcachefs"), || {
+        std::process::Command::new("modprobe")
+            .arg("bcachefs")
+            .status()
+            .map(|status| status.success())
+            .map_err(|e| e.to_string())
+    })
+}
+
 fn mount(cli: Cli) -> std::process::ExitCode {
-    let module_loaded = check_bcachefs_module();
+    let module = check_bcachefs_module();
 
     if cli.fs_type == "bcachefs.fuse" {
         let fuse_cli = super::fusemount::Cli {
@@ -268,8 +292,11 @@ fn mount(cli: Cli) -> std::process::ExitCode {
         Ok(_)   => std::process::ExitCode::SUCCESS,
         Err(e)   => {
             error!("Mount failed for {}: {e}", cli.dev);
-            if !module_loaded {
+            if !module.loaded {
                 error!("bcachefs module not loaded?");
+                if let Some(e) = module.modprobe_error {
+                    error!("{e}");
+                }
             }
             std::process::ExitCode::FAILURE
         }
@@ -286,3 +313,44 @@ pub static CMD: super::CmdDef = {
         kind: super::CmdKind::Typed { cmd: __cmd, run: __run },
     }
 };
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn module_check_reports_missing_modprobe_when_module_stays_unloaded() {
+        let missing_path = std::env::temp_dir().join(format!(
+            "bcachefs-tools-missing-module-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_file(&missing_path);
+
+        let check = check_bcachefs_module_at(&missing_path, || {
+            Err("No such file or directory".to_string())
+        });
+
+        assert!(!check.loaded);
+        assert_eq!(
+            check.modprobe_error.as_deref(),
+            Some("could not run modprobe bcachefs: No such file or directory")
+        );
+    }
+
+    #[test]
+    fn module_check_is_quiet_when_module_is_already_loaded() {
+        let loaded_path = std::env::temp_dir().join(format!(
+            "bcachefs-tools-loaded-module-{}",
+            std::process::id()
+        ));
+        std::fs::write(&loaded_path, "").unwrap();
+
+        let check = check_bcachefs_module_at(&loaded_path, || {
+            panic!("modprobe should not run when module path exists")
+        });
+        std::fs::remove_file(&loaded_path).unwrap();
+
+        assert!(check.loaded);
+        assert!(check.modprobe_error.is_none());
+    }
+}
