@@ -143,6 +143,56 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
 	return 0;
 }
 
+/*
+ * Sanity check before a destructive snapshot-node transition (emptying or
+ * deleting a node): the per-snapshot disk accounting counter must be zero.
+ *
+ * That counter tracks on-disk data sectors (the same values as the replicas
+ * counter, aggregated by snapshot id). A nonzero count means the deletion is
+ * about to drop data still accounted to this node, and one of two things is
+ * wrong:
+ *
+ *  - the accounting is stale/incorrect, or
+ *  - the inodes btree is missing an entry: the deletion scan relies on "an
+ *    extent/dirent/xattr in snapshot X implies an inode in snapshot X" to find
+ *    the keys to remove, so a missing inode strands that snapshot's keys.
+ *
+ * Refuse the transition and schedule check_allocations (recompute accounting)
+ * and check_inodes (revalidate the inode<->snapshot mapping) to resolve which,
+ * rather than dropping the data.
+ *
+ * Note this is a data (sectors) check, not a keys check: metadata-only keys
+ * carry no sectors and don't show up here - those are caught by the relevant
+ * check_dirents/check_xattrs/check_inodes passes. This guards the catastrophic
+ * (data) case at the cheapest possible cost (one in-memory read).
+ */
+static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
+{
+	struct bch_fs *c = trans->c;
+
+	struct disk_accounting_pos acc;
+	memset(&acc, 0, sizeof(acc));
+	acc.type = BCH_DISK_ACCOUNTING_snapshot;
+	acc.snapshot.id = id;
+
+	u64 sectors = 0;
+	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), &sectors, 1);
+
+	if (likely(!sectors))
+		return 0;
+
+	CLASS(printbuf, buf)();
+	prt_printf(&buf, "snapshot node %u still has %llu sectors of data accounted to it - refusing to delete/empty, to prevent data loss; scheduling repair:\n",
+		   id, sectors);
+
+	int ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_allocations);
+	ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_inodes) ?: ret;
+
+	bch_err(c, "%s", buf.buf);
+
+	return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
+}
+
 static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
 {
 	struct bkey_i_snapshot *s =
@@ -151,6 +201,8 @@ static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
 	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOENT), trans->c, "missing snapshot %u", id);
 	if (unlikely(ret))
 		return ret;
+
+	try(bch2_snapshot_node_check_no_data(trans, id));
 
 	SET_BCH_SNAPSHOT_NO_KEYS(&s->v,		true);
 	SET_BCH_SNAPSHOT_WILL_DELETE(&s->v,	false);
@@ -176,6 +228,8 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 
 	if (ret)
 		return ret;
+
+	try(bch2_snapshot_node_check_no_data(trans, id));
 
 	BUG_ON(BCH_SNAPSHOT_DELETED(&s->v));
 
