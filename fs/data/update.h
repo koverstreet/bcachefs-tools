@@ -8,14 +8,21 @@
 #include "data/read.h"
 #include "data/write_gen.h"
 
-#include "data/update_gen.h"
+ #include "data/update_gen.h"
 
-/* Both scrub types read to check, and must never rewrite what they're checking */
-static inline bool data_update_is_scrub(enum bch_data_update_types type)
-{
-	return type == BCH_DATA_UPDATE_scrub ||
-	       type == BCH_DATA_UPDATE_scrub_no_repair;
-}
+ #include <linux/ioprio.h>
+
+ /* Both scrub types read to check, and must never rewrite what they're checking */
+ static inline bool data_update_is_scrub(enum bch_data_update_types type)
+ {
+ 	return type == BCH_DATA_UPDATE_scrub ||
+ 	       type == BCH_DATA_UPDATE_scrub_no_repair;
+ }
+
+ static inline u16 bch2_move_ioprio(struct data_update_opts *opts)
+ {
+ 	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+ }
 
 void bch2_data_update_opts_to_text(struct printbuf *, struct bch_fs *,
 				   struct bch_inode_opts *, struct data_update_opts *);
