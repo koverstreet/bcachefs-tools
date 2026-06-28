@@ -385,7 +385,7 @@ int bch2_opt_validate(const struct bch_option *opt, u64 v, struct printbuf *err)
 	if (opt->max && v >= opt->max) {
 		if (err)
 			prt_printf(err, "%s: too big (max %llu)",
-			       opt->attr.name, opt->max);
+			       opt->attr.name, opt->max - 1);
 		return -BCH_ERR_ERANGE_option_too_big;
 	}
 
