@@ -419,6 +419,10 @@ but all steps preceding mounting the filesystem (e.g. asking for passphrase) wil
 .Bl -tag -width Ds
 .It Fl o Ar options
 Mount options provided as a comma-separated list. See user guide for complete list.
+.Pp
+Use
+.Cm subvol Ns = Ns Ar path
+to mount a subvolume or snapshot path as the mount root.
 .Bl -tag -width Ds -compact
 .It Cm degraded
 Allow mounting with missing devices.
