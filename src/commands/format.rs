@@ -15,6 +15,7 @@
 // bch_opt_strs. When a bare path argument is seen, it captures whatever
 // per-device options preceded it.
 
+use std::collections::HashMap;
 use std::ffi::{CString, c_char};
 use std::io;
 use std::os::fd::AsFd;
@@ -29,6 +30,7 @@ use bcachefs_kernel::sb::sb_field_type;
 use bcachefs_kernel::{metadata_version, opt_id};
 use bcachefs_kernel::opt_set;
 
+use crate::commands::format_util::DevOpts;
 use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
@@ -158,6 +160,67 @@ struct FormatConfig {
     superblock_size: u32,
     fs_opts:         c::bch_opts,
     deferred_opts:   Vec<(c::bch_opt_id, String)>,
+}
+
+fn requested_replicas(fs_opts: &c::bch_opts) -> u8 {
+    let defaults = bcachefs_kernel::opts::opts_default();
+    let data = if fs_opts.data_replicas != 0 {
+        fs_opts.data_replicas
+    } else {
+        defaults.data_replicas
+    };
+    let metadata = if fs_opts.metadata_replicas != 0 {
+        fs_opts.metadata_replicas
+    } else {
+        defaults.metadata_replicas
+    };
+
+    data.max(metadata)
+}
+
+fn warn_same_parent_disk_replicas(cfg: &FormatConfig, devices: &[DevOpts]) {
+    if cfg.quiet {
+        return;
+    }
+
+    let replicas = requested_replicas(&cfg.fs_opts);
+    if replicas <= 1 {
+        return;
+    }
+
+    let mut by_parent: HashMap<String, Vec<String>> = HashMap::new();
+    for dev in devices {
+        if let Some(parent) = crate::wrappers::bdev::fd_to_parent_disk_sysfs(dev.fd) {
+            by_parent
+                .entry(parent.display().to_string())
+                .or_default()
+                .push(dev.path.to_string_lossy().into_owned());
+        }
+    }
+
+    if by_parent.is_empty() || by_parent.len() >= replicas as usize {
+        return;
+    }
+
+    let duplicate_parents: Vec<String> = by_parent.values()
+        .filter(|paths| paths.len() > 1)
+        .map(|paths| paths.join(", "))
+        .collect();
+
+    if duplicate_parents.is_empty() {
+        return;
+    }
+
+    eprintln!(
+        "warning: requested {} replicas, but the devices resolve to only {} physical disk{}",
+        replicas,
+        by_parent.len(),
+        if by_parent.len() == 1 { "" } else { "s" },
+    );
+    eprintln!(
+        "warning: multiple format devices share a parent disk: {}",
+        duplicate_parents.join("; "),
+    );
 }
 
 fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
@@ -463,9 +526,6 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         fs_opt_strs.set(id, &cstr);
     }
 
-    // Build DevOpts
-    use crate::commands::format_util::DevOpts;
-
     let mut devices: Vec<DevOpts> = cfg.devices.iter()
         .map(|dev| {
             let mut d = DevOpts::new(CString::new(dev.path.as_str())?);
@@ -492,6 +552,8 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
             anyhow!("Error opening {}: {}", dev.path.to_string_lossy(), io::Error::from_raw_os_error(e))
         })?;
     }
+
+    warn_same_parent_disk_replicas(&cfg, &devices);
 
     // Default shard_inode_numbers_bits if the user didn't set it. The policy
     // (cpu-scaled, fs-size-capped, clamped to [0, 8]) lives in C —
