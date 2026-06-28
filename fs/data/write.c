@@ -2189,7 +2189,7 @@ retry:
 
 		bch2_trans_unlock(trans);
 
-		bch2_bkey_nocow_lock(c, ptrs, cas, BUCKET_NOCOW_LOCK_UPDATE);
+		bch2_bkey_nocow_lock(c, trans, ptrs, cas, BUCKET_NOCOW_LOCK_UPDATE);
 
 		/*
 		 * This could be handled better: If we're able to trylock the

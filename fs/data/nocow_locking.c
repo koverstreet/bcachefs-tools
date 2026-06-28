@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 #include "bcachefs.h"
+#include "btree/iter.h"
 #include "btree/bkey_methods.h"
 #include "closure.h"
 #include "nocow_locking.h"
@@ -156,8 +157,16 @@ static inline int bucket_to_lock_cmp(struct bucket_to_lock l,
 	return cmp_int(l.l, r.l);
 }
 
-void bch2_bkey_nocow_lock(struct bch_fs *c, struct bkey_ptrs_c ptrs,
-			  struct bch_dev **cas, int flags)
+#define nocow_lock_wait(_trans, _l, _condition)			\
+do {								\
+	if (_trans)						\
+		trans_wait_event(_trans, &(_l)->wait, _condition);	\
+	else							\
+		__closure_wait_event(&(_l)->wait, _condition);		\
+} while (0)
+
+void bch2_bkey_nocow_lock(struct bch_fs *c, struct btree_trans *trans,
+			  struct bkey_ptrs_c ptrs, struct bch_dev **cas, int flags)
 {
 	if (bch2_bkey_nocow_trylock(c, ptrs, cas, flags))
 		return;
@@ -195,8 +204,8 @@ retake_all:
 		u64 start_time = local_clock();
 
 		if (ret == -BCH_ERR_nocow_trylock_contended)
-			__closure_wait_event(&i->l->wait,
-					(ret = __bch2_bucket_nocow_trylock(c, i->l, i->b, flags)) != -BCH_ERR_nocow_trylock_contended);
+			nocow_lock_wait(trans, i->l,
+				(ret = __bch2_bucket_nocow_trylock(c, i->l, i->b, flags)) != -BCH_ERR_nocow_trylock_contended);
 		if (!ret) {
 			bch2_time_stats_update(&c->times[BCH_TIME_nocow_lock_contended], start_time);
 			continue;
@@ -210,7 +219,7 @@ retake_all:
 			__bch2_bucket_nocow_unlock(&c->nocow_locks, i2->b, flags);
 		}
 
-		__closure_wait_event(&i->l->wait, nocow_bucket_empty(i->l));
+		nocow_lock_wait(trans, i->l, nocow_bucket_empty(i->l));
 		bch2_time_stats_update(&c->times[BCH_TIME_nocow_lock_contended], start_time);
 		goto retake_all;
 	}
