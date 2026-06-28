@@ -572,7 +572,8 @@ static bool req_dev_sizes_mismatched(struct bch_fs *c, struct alloc_request *req
 /*
  * Decide whether an alloc that came up empty-handed on the current candidate
  * device should bail (committing the request with whatever replicas it
- * already has) instead of waiting on freelist_wait. Bails iff any of:
+ * already has) instead of waiting on freelist_wait. Bails iff the request
+ * has at least one replica's worth to commit AND any of:
  *
  *  - copygc_can_make_progress is false: the per-device check (set above by
  *    the caller from bch2_copygc_can_make_progress(ca)) says copygc can't
@@ -597,6 +598,11 @@ static bool req_dev_sizes_mismatched(struct bch_fs *c, struct alloc_request *req
  */
 static bool req_alloc_should_bail(struct bch_fs *c, struct alloc_request *req)
 {
+	bool have_replicas = req->nr_effective ||
+		(req->devs_have && req->devs_have->nr);
+	if (!have_replicas)
+		return false;
+
 	return !req->copygc_can_make_progress ||
 	       (req->watermark == BCH_WATERMARK_copygc &&
 		req->data_type != BCH_DATA_btree) ||
