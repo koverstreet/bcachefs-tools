@@ -1547,13 +1547,19 @@ typedef struct {
 
 DEFINE_DARRAY(reconcile_phys_thr);
 
+static struct write_point_specifier reconcile_phys_writepoint(reconcile_phys_thr *thr)
+{
+	return writepoint_hashed(((unsigned long) thr->reconcile_phase << (BITS_PER_LONG / 2)) |
+				 ((unsigned long) thr->dev << 1));
+}
+
 static void reconcile_phys_dev(reconcile_phys_thr *thr)
 {
 	struct bch_fs *c = thr->c;
 
 	struct moving_context ctxt __cleanup(bch2_moving_ctxt_exit);
 	bch2_moving_ctxt_init(&ctxt, c, NULL, &thr->stats,
-			      writepoint_ptr(&c->allocator.reconcile_write_point),
+			      reconcile_phys_writepoint(thr),
 			      true);
 
 	struct btree_trans *trans = ctxt.trans;
@@ -1619,16 +1625,23 @@ static int reconcile_phys_thread(void *arg)
 
 static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 {
+	struct bch_fs_reconcile *r = &c->reconcile;
 	CLASS(darray_reconcile_phys_thr, thrs)();
+	u64 considered = 0, writepoints_distinct = 0;
 
-	for_each_member_device(c, ca)
+	for_each_member_device(c, ca) {
 		if (ca->mi.rotational &&
-		    bch2_dev_is_online(ca))
+		    bch2_dev_is_online(ca)) {
+			considered++;
 			try(darray_push(&thrs, ((reconcile_phys_thr) {
 						.c			= c,
 						.dev			= ca->dev_idx,
 						.reconcile_phase	= reconcile_phase,
 						})));
+		}
+	}
+
+	WRITE_ONCE(r->phys_workers_considered, considered);
 
 	int ret = 0;
 	unsigned nr_started = 0;
@@ -1643,6 +1656,23 @@ static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 			break;
 		nr_started++;
 	}
+
+	for (reconcile_phys_thr *i = thrs.data; i < thrs.data + nr_started; i++) {
+		struct write_point_specifier wp = reconcile_phys_writepoint(i);
+		bool seen = false;
+
+		for (reconcile_phys_thr *j = thrs.data; j < i; j++)
+			if (reconcile_phys_writepoint(j).v == wp.v) {
+				seen = true;
+				break;
+			}
+
+		if (!seen)
+			writepoints_distinct++;
+	}
+
+	WRITE_ONCE(r->phys_workers_started, nr_started);
+	WRITE_ONCE(r->phys_worker_writepoints_distinct, writepoints_distinct);
 
 	/* The threads freeze in place, so our wait for them must be freezable too: */
 	for (unsigned i = 0; i < nr_started; i++)
@@ -2086,6 +2116,11 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 			}
 		}
 	}
+
+	prt_printf(out, "phys workers last phase: considered %llu started %llu distinct writepoints %llu\n",
+		   READ_ONCE(r->phys_workers_considered),
+		   READ_ONCE(r->phys_workers_started),
+		   READ_ONCE(r->phys_worker_writepoints_distinct));
 
 	struct task_struct *t;
 	scoped_guard(rcu) {
