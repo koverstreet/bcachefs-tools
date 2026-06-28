@@ -128,7 +128,7 @@ unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
 // ---- set-passphrase ----
 
 #[derive(Parser, Debug)]
-#[command(about = "Change passphrase on an existing (unmounted) filesystem")]
+#[command(about = "Change passphrase on an existing encrypted (unmounted) filesystem")]
 pub struct SetPassphraseCli {
     /// Devices (colon-separated or multiple arguments)
     #[arg(required = true)]
@@ -155,7 +155,7 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
 // ---- remove-passphrase ----
 
 #[derive(Parser, Debug)]
-#[command(about = "Remove passphrase on an existing (unmounted) filesystem")]
+#[command(about = "Remove passphrase protection from an existing encrypted (unmounted) filesystem")]
 pub struct RemovePassphraseCli {
     /// Devices (colon-separated or multiple arguments)
     #[arg(required = true)]
@@ -172,5 +172,5 @@ fn cmd_remove_passphrase(cli: RemovePassphraseCli) -> Result<()> {
 }
 
 pub const CMD_UNLOCK: super::CmdDef = typed_cmd!("unlock", "Unlock an encrypted filesystem", UnlockCli, cmd_unlock);
-pub const CMD_SET_PASSPHRASE: super::CmdDef = typed_cmd!("set-passphrase", "Set or change passphrase", SetPassphraseCli, cmd_set_passphrase);
-pub const CMD_REMOVE_PASSPHRASE: super::CmdDef = typed_cmd!("remove-passphrase", "Remove passphrase", RemovePassphraseCli, cmd_remove_passphrase);
+pub const CMD_SET_PASSPHRASE: super::CmdDef = typed_cmd!("set-passphrase", "Set or change encryption passphrase", SetPassphraseCli, cmd_set_passphrase);
+pub const CMD_REMOVE_PASSPHRASE: super::CmdDef = typed_cmd!("remove-passphrase", "Remove encryption passphrase", RemovePassphraseCli, cmd_remove_passphrase);
