@@ -213,7 +213,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
     GroupDef { heading: "Filesystem data",          commands: &[&reconcile::CMD, &scrub::CMD] },
     GroupDef { heading: "Encryption",               commands: &[&key::CMD_UNLOCK, &key::CMD_SET_PASSPHRASE, &key::CMD_REMOVE_PASSPHRASE] },
     GroupDef { heading: "Migrate",                  commands: &[&migrate::CMD_MIGRATE, &migrate::CMD_MIGRATE_SUPERBLOCK] },
-    GroupDef { heading: "File options",             commands: &[&attr::CMD_SETATTR, &attr::CMD_REFLINK_PROPAGATE] },
+    GroupDef { heading: "File options",             commands: &[&attr::CMD_SETATTR, &attr::CMD_GETATTR, &attr::CMD_REFLINK_PROPAGATE] },
     GroupDef { heading: "Debug", commands: &[
         &dump::CMD_DUMP, &dump::CMD_UNDUMP, &list::CMD, &list_journal::CMD,
         &kill_btree_node::CMD, &data_read::CMD, &unpoison::CMD,
