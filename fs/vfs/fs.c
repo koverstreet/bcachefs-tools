@@ -2258,6 +2258,11 @@ static int bch2_show_devname(struct seq_file *seq, struct dentry *root)
 	struct bch_fs *c = root->d_sb->s_fs_info;
 	bool first = true;
 
+	if (c->sb.multi_device) {
+		seq_printf(seq, "/dev/disk/by-uuid/%pU", c->sb.user_uuid.b);
+		return 0;
+	}
+
 	guard(rcu)();
 	for_each_online_member_rcu(c, ca) {
 		if (!first)
