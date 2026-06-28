@@ -67,7 +67,7 @@ pub enum UnlockPolicy {
 }
 
 impl UnlockPolicy {
-    pub fn apply(&self, sb: &bch_sb_handle) -> Result<KeyHandle> {
+    pub fn apply(&self, sb: &bch_sb_handle, keyring: Keyring) -> Result<KeyHandle> {
         let uuid = sb.sb().uuid();
 
         info!("Using filesystem unlock policy '{self}' on {uuid}");
@@ -80,14 +80,14 @@ impl UnlockPolicy {
                 let passphrase_correct = passphrase
                     .check(sb)
                     .ok_or_else(|| anyhow!("incorrect passphrase"))?;
-                KeyHandle::new(&passphrase_correct, Keyring::User)
+                KeyHandle::new(&passphrase_correct, keyring)
             }
             Self::Stdin => {
                 let passphrase = Passphrase::read_from_stdin()?;
                 let passphrase_correct = passphrase
                     .check(sb)
                     .ok_or_else(|| anyhow!("incorrect passphrase"))?;
-                KeyHandle::new(&passphrase_correct, Keyring::User)
+                KeyHandle::new(&passphrase_correct, keyring)
             }
         }
     }

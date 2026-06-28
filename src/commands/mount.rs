@@ -18,6 +18,8 @@ use crate::{
     logging,
 };
 
+const MOUNT_KEYRING: Keyring = Keyring::Session;
+
 fn mount_inner(
     src: OsString,
     target: &std::path::Path,
@@ -129,14 +131,14 @@ fn parse_mountflag_options(options: impl AsRef<str>) -> (Option<String>, libc::c
 /// used, then search for the key or ask for it.
 fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
     if let Some(policy) = cli.unlock_policy.as_ref() {
-        return policy.apply(sb);
+        return policy.apply(sb, MOUNT_KEYRING);
     }
 
     if let Some(path) = cli.passphrase_file.as_deref() {
         let passphrase_correct = Passphrase::read_from_file(path)?
             .check(sb)
             .ok_or_else(|| anyhow::anyhow!("incorrect passphrase"))?;
-        return KeyHandle::new(&passphrase_correct, Keyring::User);
+        return KeyHandle::new(&passphrase_correct, MOUNT_KEYRING);
     }
 
     let uuid = sb.sb().uuid();
@@ -145,7 +147,7 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
     }
 
     let passphrase_correct = Passphrase::ask_and_check(sb)?;
-    KeyHandle::new(&passphrase_correct, Keyring::User)
+    KeyHandle::new(&passphrase_correct, MOUNT_KEYRING)
 }
 
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {
@@ -196,8 +198,9 @@ entirely in userspace.\n\n\
 Use OLD_BLKID_UUID=<uuid> in fstab entries when systemd consumes \
 UUID=<uuid> before the bcachefs mount helper can scan all members.\n\n\
 If the filesystem is encrypted, the passphrase will be looked up in \
-the kernel keyring first; if not found, the user is prompted \
-interactively (or reads from stdin if not a terminal). Use -k or -f \
+the kernel keyrings first; if not found, the user is prompted \
+interactively (or reads from stdin if not a terminal) and the key is \
+added to the session keyring for the mount. Use -k or -f \
 to specify alternative unlock methods.")]
 pub struct Cli {
     /// Path to passphrase file
