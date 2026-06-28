@@ -361,6 +361,8 @@ static int bch2_copygc(struct moving_context *ctxt,
 		*i = NULL;
 
 		move_bucket_in_flight_add(buckets_in_flight, b);
+		if (bch2_dev_rotational(c, b->k.bucket.inode))
+			bch2_moving_ctxt_set_rotational_limits(ctxt);
 
 		ret = bch2_evacuate_bucket(ctxt, b, b->k.bucket, b->k.generation, data_opts);
 		if (ret)

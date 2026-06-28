@@ -1434,6 +1434,9 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 			      writepoint_ptr(&c->allocator.reconcile_write_point),
 			      true);
 
+	if (bch2_dev_rotational(c, thr->dev))
+		bch2_moving_ctxt_set_rotational_limits(&ctxt);
+
 	struct btree_trans *trans = ctxt.trans;
 
 	CLASS(darray_reconcile_work, work)();

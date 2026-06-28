@@ -198,6 +198,8 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 	ctxt->stats	= stats;
 	ctxt->wp	= wp;
 	ctxt->wait_on_copygc = wait_on_copygc;
+	ctxt->max_sectors_in_flight = c->opts.move_bytes_in_flight >> 9;
+	ctxt->max_ios_in_flight = c->opts.move_ios_in_flight;
 
 	closure_init_stack(&ctxt->cl);
 
@@ -208,6 +210,17 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 
 	scoped_guard(mutex, &c->moving_context_lock)
 		list_add(&ctxt->list, &c->moving_context_list);
+}
+
+#define MOVE_ROTATIONAL_IOS_IN_FLIGHT		8U
+#define MOVE_ROTATIONAL_BYTES_IN_FLIGHT		(1U << 20)
+
+void bch2_moving_ctxt_set_rotational_limits(struct moving_context *ctxt)
+{
+	ctxt->max_ios_in_flight = min(ctxt->max_ios_in_flight,
+				      MOVE_ROTATIONAL_IOS_IN_FLIGHT);
+	ctxt->max_sectors_in_flight = min(ctxt->max_sectors_in_flight,
+					  MOVE_ROTATIONAL_BYTES_IN_FLIGHT >> 9);
 }
 
 void bch2_move_stats_exit(struct bch_move_stats *stats, struct bch_fs *c)
@@ -441,15 +454,11 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 		}
 	} while (delay);
 
-	/*
-	 * XXX: these limits really ought to be per device, SSDs and hard drives
-	 * will want different limits
-	 */
 	move_ctxt_wait_event(ctxt,
-		atomic_read(&ctxt->write_sectors) < c->opts.move_bytes_in_flight >> 9 &&
-		atomic_read(&ctxt->read_sectors) < c->opts.move_bytes_in_flight >> 9 &&
-		atomic_read(&ctxt->write_ios) < c->opts.move_ios_in_flight &&
-		atomic_read(&ctxt->read_ios) < c->opts.move_ios_in_flight);
+		atomic_read(&ctxt->write_sectors) < ctxt->max_sectors_in_flight &&
+		atomic_read(&ctxt->read_sectors) < ctxt->max_sectors_in_flight &&
+		atomic_read(&ctxt->write_ios) < ctxt->max_ios_in_flight &&
+		atomic_read(&ctxt->read_ios) < ctxt->max_ios_in_flight);
 
 	return 0;
 }
@@ -719,6 +728,9 @@ int bch2_move_data_phys(struct bch_fs *c,
 {
 	struct moving_context ctxt __cleanup(bch2_moving_ctxt_exit);
 	bch2_moving_ctxt_init(&ctxt, c, rate, stats, wp, wait_on_copygc);
+
+	if (bch2_dev_rotational(c, dev))
+		bch2_moving_ctxt_set_rotational_limits(&ctxt);
 
 	if (ctxt.stats) {
 		ctxt.stats->phys = true;
@@ -1206,15 +1218,15 @@ static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs 
 
 	prt_printf(out, "reads: ios %u/%u sectors %u/%u\n",
 		   atomic_read(&ctxt->read_ios),
-		   c->opts.move_ios_in_flight,
+		   ctxt->max_ios_in_flight,
 		   atomic_read(&ctxt->read_sectors),
-		   c->opts.move_bytes_in_flight >> 9);
+		   ctxt->max_sectors_in_flight);
 
 	prt_printf(out, "writes: ios %u/%u sectors %u/%u\n",
 		   atomic_read(&ctxt->write_ios),
-		   c->opts.move_ios_in_flight,
+		   ctxt->max_ios_in_flight,
 		   atomic_read(&ctxt->write_sectors),
-		   c->opts.move_bytes_in_flight >> 9);
+		   ctxt->max_sectors_in_flight);
 
 	guard(printbuf_indent)(out);
 
