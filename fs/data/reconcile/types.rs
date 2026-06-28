@@ -29,6 +29,9 @@ pub struct bch_fs_reconcile {
     pub work_pos: c::bbpos,
     pub work_stats: c::bch_move_stats,
     pub progress: c::progress_indicator,
+    pub phys_workers_considered: u64,
+    pub phys_workers_started: u64,
+    pub phys_worker_writepoints_distinct: u64,
 
     pub scan_start: c::bbpos,
     pub scan_end: c::bbpos,
