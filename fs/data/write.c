@@ -2407,6 +2407,9 @@ err:
 		bio->bi_private	= &op->cl;
 		bio->bi_opf |= REQ_OP_WRITE;
 
+		if (op->flags & BCH_WRITE_move)
+			bio->bi_opf |= REQ_SYNC|REQ_IDLE;
+
 		/*
 		 * Internal moves can be issued FUA, making the journal's cache
 		 * flush a no-op for them. Off by default: the per-write FUA
