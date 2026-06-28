@@ -121,6 +121,12 @@ Together, these options can be used for writeback caching, like so:
   background_target=hdd
   promote_target=ssd
 
+With this configuration, application writes land on the foreground target and
+reconcile later copies them to the background target. The cached foreground copy
+may then be evicted when the allocator needs space; bcachefs does not currently
+provide a cache-fill threshold for delaying background-target movement until the
+foreground target reaches a configured percentage.
+
 Writethrough caching requires telling bcachefs not to trust the cache device,
 which does require a per-device option and thus can't completely be done with
 per-file options. This is done by setting the device's durability to 0.
