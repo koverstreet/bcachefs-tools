@@ -92,12 +92,13 @@ pub struct WaitCli {
 }
 
 /// Query reconcile accounting and format status.
-/// Returns true if any work is pending.
+/// Returns true if any selected work is pending.
 fn reconcile_status_to_text(
     out: &mut Printbuf,
     handle: &BcachefsHandle,
     sysfs_path: &std::path::Path,
-    types: &[ReconcileType],
+    display_types: &[ReconcileType],
+    wait_types: &[ReconcileType],
 ) -> Result<bool> {
     let scan_pending = std::fs::read_to_string(sysfs_path.join("reconcile_scan_pending"))
         .map(|s| s.trim().parse::<u64>().unwrap_or(0))
@@ -125,7 +126,7 @@ fn reconcile_status_to_text(
 
     let mut have_pending = scan_pending != 0;
 
-    for t in types {
+    for t in display_types {
         let idx = t.as_c().0 as usize;
         if idx < nr {
             write!(out, "  ").unwrap();
@@ -135,7 +136,9 @@ fn reconcile_status_to_text(
             write!(out, "\r").unwrap();
             out.units_sectors(v[idx][1]);
             write!(out, "\r\n").unwrap();
-            have_pending |= v[idx][0] != 0 || v[idx][1] != 0;
+            if wait_types.contains(t) {
+                have_pending |= v[idx][0] != 0 || v[idx][1] != 0;
+            }
         }
     }
     out.tabstop_align();
@@ -157,7 +160,7 @@ fn cmd_reconcile_status(cli: StatusCli) -> Result<()> {
 
     let mut out = Printbuf::new();
     out.set_human_readable(true);
-    reconcile_status_to_text(&mut out, &handle, &sysfs_path, &types)?;
+    reconcile_status_to_text(&mut out, &handle, &sysfs_path, &types, &types)?;
 
     out.newline();
 
@@ -173,10 +176,10 @@ fn cmd_reconcile_status(cli: StatusCli) -> Result<()> {
 
 fn cmd_reconcile_wait(cli: WaitCli) -> Result<()> {
 
-    let types = if cli.types.is_empty() {
-        ReconcileType::all_except_pending()
+    let (display_types, wait_types) = if cli.types.is_empty() {
+        (ReconcileType::all(), ReconcileType::all_except_pending())
     } else {
-        cli.types
+        (cli.types.clone(), cli.types)
     };
 
     let handle = BcachefsHandle::open(&cli.filesystem)
@@ -187,9 +190,9 @@ fn cmd_reconcile_wait(cli: WaitCli) -> Result<()> {
     let _ = std::fs::write(sysfs_path.join("internal/trigger_reconcile_wakeup"), "1");
 
     if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        reconcile_wait_tui(&handle, &sysfs_path, &types)
+        reconcile_wait_tui(&handle, &sysfs_path, &display_types, &wait_types)
     } else {
-        reconcile_wait_headless(&handle, &sysfs_path, &types)
+        reconcile_wait_headless(&handle, &sysfs_path, &display_types, &wait_types)
     }
 }
 
@@ -197,13 +200,15 @@ fn cmd_reconcile_wait(cli: WaitCli) -> Result<()> {
 fn reconcile_wait_tui(
     handle: &BcachefsHandle,
     sysfs_path: &std::path::Path,
-    types: &[ReconcileType],
+    display_types: &[ReconcileType],
+    wait_types: &[ReconcileType],
 ) -> Result<()> {
     run_tui(|stdout| loop {
         let mut out = Printbuf::new();
         out.set_human_readable(true);
 
-        let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)?;
+        let pending = reconcile_status_to_text(
+            &mut out, handle, sysfs_path, display_types, wait_types)?;
 
         execute!(stdout, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
         for line in out.as_str().lines() {
@@ -232,13 +237,15 @@ fn reconcile_wait_tui(
 fn reconcile_wait_headless(
     handle: &BcachefsHandle,
     sysfs_path: &std::path::Path,
-    types: &[ReconcileType],
+    display_types: &[ReconcileType],
+    wait_types: &[ReconcileType],
 ) -> Result<()> {
     loop {
         let mut out = Printbuf::new();
         out.set_human_readable(true);
 
-        let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)?;
+        let pending = reconcile_status_to_text(
+            &mut out, handle, sysfs_path, display_types, wait_types)?;
 
         if !pending {
             return Ok(());
