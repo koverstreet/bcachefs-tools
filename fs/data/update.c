@@ -50,7 +50,7 @@ static const struct rhashtable_params bch_update_params = {
 
 static inline u16 bch2_move_ioprio(struct data_update_opts *opts)
 {
-	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7);
 }
 
 static const char *bch2_ioprio_class_str(u16 ioprio)
