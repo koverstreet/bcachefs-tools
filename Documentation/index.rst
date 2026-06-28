@@ -28,6 +28,7 @@ At this moment, only a few of these are described here.
    :numbered:
 
    casefolding
+   qemu_direct_io
    errorcodes
 
 Future design
