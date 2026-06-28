@@ -12,6 +12,11 @@ u64 bch2_recovery_passes_from_stable(u64 v);
 
 u64 bch2_fsck_recovery_passes(void);
 
+static inline void bch2_recovery_passes_apply_excludes(struct bch_fs *c)
+{
+	c->opts.recovery_passes &= ~c->opts.recovery_passes_exclude;
+}
+
 void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *, enum bch_recovery_pass);
 
 enum bch_run_recovery_pass_flags {

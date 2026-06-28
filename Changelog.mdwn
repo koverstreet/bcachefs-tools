@@ -59,6 +59,9 @@ benchmarks were profiled. Some highlights:
 - bcachefs wait-devices now uses the same superblock filtering logic as mount,
   so stale superblocks from removed devices are ignored consistently.
 
+- Mount now accepts an explicit `nofsck` option for disaster-recovery mounts
+  that need to avoid fsck recovery passes while still using `nochanges`.
+
 ## v1.38.5 - Wed Jun 10 2026
 
 Bugfix release on top of v1.38.4. No on-disk format changes.
