@@ -465,6 +465,23 @@ Show disk usage.
 .It Fl h , Fl -human-readable
 Print human readable sizes.
 .El
+.It Nm Ic fs Ic top Oo Ar options Oc Op Ar filesystem
+Show live filesystem performance counters.
+When stdout is a terminal, this starts an interactive display.
+When stdout is not a terminal, it prints one sample and exits.
+.Bl -tag -width Ds
+.It Fl h , Fl -human-readable
+Print human readable sizes.
+.It Fl -once
+Print one sample and exit; equivalent to specifying a count of 1.
+.It Fl n , Fl -count Ns = Ns Ar count
+Print
+.Ar count
+samples and exit.
+A count of 0 keeps the interactive display running.
+.It Fl d , Fl -delay Ns = Ns Ar seconds
+Delay between samples, in seconds.
+.El
 .El
 .Sh Commands for managing devices within a running filesystem
 .Bl -tag -width Ds
