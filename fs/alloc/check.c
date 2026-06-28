@@ -12,6 +12,7 @@
 #include "data/ec/init.h"
 
 #include "init/error.h"
+#include "init/passes.h"
 #include "init/progress.h"
 
 /*
@@ -559,6 +560,8 @@ static int check_btree_alloc_iter(struct btree_trans *trans,
 				  struct progress_indicator *progress,
 				  struct wb_maybe_flush *last_flushed)
 {
+	try(bch2_recovery_cancelled(trans->c));
+
 	struct bkey hole;
 	struct bkey_s_c k = bkey_try(bch2_get_key_or_real_bucket_hole(iter, ca, &hole));
 
@@ -637,6 +640,7 @@ int bch2_check_alloc_info(struct bch_fs *c)
 				BTREE_ID_need_discard, POS_MIN,
 				BTREE_ITER_prefetch, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+			bch2_recovery_cancelled(c) ?:
 			bch2_check_discard_key(trans, &iter, &last_flushed)));
 	}
 
@@ -648,6 +652,8 @@ int bch2_check_alloc_info(struct bch_fs *c)
 		CLASS(btree_iter, iter)(trans, BTREE_ID_freespace, POS_MIN,
 				     BTREE_ITER_prefetch);
 		while (1) {
+			try(bch2_recovery_cancelled(c));
+
 			bch2_trans_begin(trans);
 			struct bkey_s_c k = bch2_btree_iter_peek(&iter);
 			if (!k.k)
@@ -674,6 +680,7 @@ int bch2_check_alloc_info(struct bch_fs *c)
 			BTREE_ID_bucket_gens, POS_MIN,
 			BTREE_ITER_prefetch, k,
 			NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+		bch2_recovery_cancelled(c) ?:
 		bch2_check_bucket_gens_key(trans, &iter, k)));
 
 	return 0;
