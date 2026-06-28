@@ -145,9 +145,8 @@
             };
 
           checks = {
-            inherit (self'.packages)
+            inherit (pkgs.bcachefsPackages)
               bcachefs-tools
-              bcachefs-tools-aarch64-linux
               bcachefs-tools-fuse
               bcachefs-module-linux-latest
               bcachefs-module-linux-testing
