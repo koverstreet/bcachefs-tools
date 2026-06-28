@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::io::FromRawFd;
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -109,6 +109,14 @@ impl ScrubDev {
     }
 }
 
+fn print_scrub_table(lines: &[String]) {
+    println!("{:<16} {:>12} {:>12} {:>12} {:>12} {:>6}",
+        "device", "checked", "corrected", "uncorrected", "total", "");
+    for line in lines {
+        println!("{}", line);
+    }
+}
+
 #[derive(Parser, Debug)]
 #[command(about = "Verify checksums and correct errors, if possible")]
 pub struct Cli {
@@ -166,8 +174,10 @@ fn scrub(cli: Cli) -> Result<()> {
     println!("Starting scrub on {} devices: {}",
         scrub_devs.len(), dev_names.join(" "));
 
-    println!("{:<16} {:>12} {:>12} {:>12} {:>12} {:>6}",
-        "device", "checked", "corrected", "uncorrected", "total", "");
+    let interactive = io::stdout().is_terminal();
+    if interactive {
+        print_scrub_table(&[]);
+    }
 
     let mut exit_code = 0i32;
     let mut last = Instant::now();
@@ -226,29 +236,39 @@ fn scrub(cli: Cli) -> Result<()> {
             }
         }
 
-        let stdout = io::stdout();
-        let mut out = stdout.lock();
+        if interactive {
+            let stdout = io::stdout();
+            let mut out = stdout.lock();
 
-        if !first {
-            for i in 0..scrub_devs.len() {
-                if i > 0 { write!(out, "\x1b[1A")?; }
-                write!(out, "\x1b[2K\r")?;
+            if !first {
+                for i in 0..scrub_devs.len() {
+                    if i > 0 { write!(out, "\x1b[1A")?; }
+                    write!(out, "\x1b[2K\r")?;
+                }
             }
-        }
 
-        for (i, line) in lines.iter().enumerate() {
-            write!(out, "{}", line)?;
-            if i < lines.len() - 1 { writeln!(out)?; }
+            for (i, line) in lines.iter().enumerate() {
+                write!(out, "{}", line)?;
+                if i < lines.len() - 1 { writeln!(out)?; }
+            }
+            out.flush()?;
         }
-        out.flush()?;
 
         if all_done {
-            writeln!(io::stdout())?;
+            if interactive {
+                writeln!(io::stdout())?;
+            } else {
+                print_scrub_table(&lines);
+            }
             break;
         }
 
         if INTERRUPTED.load(Ordering::Relaxed) {
-            writeln!(io::stdout())?;
+            if interactive {
+                writeln!(io::stdout())?;
+            } else {
+                print_scrub_table(&lines);
+            }
             eprintln!("Interrupted");
             exit_code |= 1;
             break;
