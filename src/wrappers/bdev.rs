@@ -9,6 +9,7 @@ use std::fs::Metadata;
 use std::os::fd::OwnedFd;
 use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
+use std::path::PathBuf;
 
 use libc::BLKPBSZGET;
 
@@ -121,6 +122,27 @@ pub fn fd_to_dev_serial(fd: RawFd) -> Option<String> {
     }
 
     None
+}
+
+/// Returns a stable sysfs identity for the whole disk backing this block
+/// device. Partitions are resolved to their parent disk.
+pub fn fd_to_parent_disk_sysfs(fd: RawFd) -> Option<PathBuf> {
+    let metadata = fd_metadata(fd);
+
+    if !metadata.file_type().is_block_device() {
+        return None;
+    }
+
+    let major = rustix::fs::major(metadata.rdev());
+    let minor = rustix::fs::minor(metadata.rdev());
+    let sysfs = PathBuf::from(format!("/sys/dev/block/{}:{}", major, minor));
+    let path = std::fs::canonicalize(sysfs).ok()?;
+
+    if path.join("partition").exists() {
+        path.parent().map(PathBuf::from)
+    } else {
+        Some(path)
+    }
 }
 
 /// Returns true if the block device is non-rotational (SSD).
