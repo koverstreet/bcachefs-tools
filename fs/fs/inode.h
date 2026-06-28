@@ -185,6 +185,8 @@ void bch2_inode_init_late(struct bch_fs *, struct bch_inode_unpacked *, u64,
 void bch2_inode_init(struct bch_fs *, struct bch_inode_unpacked *,
 		     uid_t, gid_t, umode_t, dev_t,
 		     struct bch_inode_unpacked *);
+int bch2_inode_set_31bit_dirent_offset(struct bch_fs *,
+				       struct bch_inode_unpacked *);
 
 int bch2_inode_create(struct btree_trans *, struct btree_iter *,
 		      struct bch_inode_unpacked *, u32, bool);
