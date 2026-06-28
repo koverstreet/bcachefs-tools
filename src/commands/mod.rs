@@ -85,6 +85,7 @@ pub mod fusemount;
 pub mod image;
 pub mod key;
 pub mod kill_btree_node;
+pub mod label;
 pub mod journal_rewind_info;
 pub mod list;
 pub mod list_journal;
@@ -203,6 +204,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
     GroupDef { heading: "Superblock commands", commands: &[
         &format::CMD, &super_cmd::CMD, &recover_super::CMD,
         &set_option::CMD, &counters::CMD, &strip_alloc::CMD,
+        &label::CMD_GET_LABEL, &label::CMD_SET_LABEL,
     ]},
     GroupDef { heading: "Images",                   commands: &[&image::CMD] },
     GroupDef { heading: "Mount",                    commands: &[&mount::CMD, &fusemount::CMD, &wait_devices::CMD] },

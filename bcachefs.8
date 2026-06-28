@@ -22,6 +22,10 @@ Format one or a list of devices with bcachefs data structures.
 Dump superblock information to stdout.
 .It Ic set-fs-option
 Set a filesystem option
+.It Ic get-label
+Print filesystem label
+.It Ic set-label
+Set filesystem label
 .El
 .Ss Mount commands
 .Bl -tag -width 18n -compact
@@ -370,6 +374,16 @@ move path needed if nocow will ever be in use
 Skip submit_bio() for data reads and writes,
 for performance testing purposes
 .El
+.It Nm Ic get-label Ar target
+Print the filesystem label for a mounted bcachefs filesystem.
+.Ar target
+may be any path on the mounted filesystem.
+.It Nm Ic set-label Ar target Ar label
+Set the filesystem label for a mounted bcachefs filesystem.
+.Ar target
+may be any path on the mounted filesystem.
+.Ar label
+must fit in the bcachefs filesystem label field.
 .El
 .Sh Mount commands
 .Bl -tag -width Ds
