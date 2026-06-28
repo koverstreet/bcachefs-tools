@@ -178,11 +178,11 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     }
 }
 
-/// Mount a bcachefs filesystem by its UUID.
+/// Mount a bcachefs filesystem by its UUID or label.
 #[derive(Parser, Debug)]
 #[command(author, version, about,
     long_about = "Mounts a bcachefs filesystem. Devices are discovered automatically \
-by scanning for the filesystem UUID---unlike btrfs, this is handled \
+by scanning for the filesystem UUID or label---unlike btrfs, this is handled \
 entirely in userspace.\n\n\
 If the filesystem is encrypted, the passphrase will be looked up in \
 the kernel keyring first; if not found, the user is prompted \
@@ -204,7 +204,7 @@ pub struct Cli {
     #[arg(short = 'k', long = "key_location", value_enum)]
     unlock_policy: Option<UnlockPolicy>,
 
-    /// Device, or UUID=\<UUID\>
+    /// Device, UUID=\<UUID\>, or LABEL=\<label\>
     dev: String,
 
     /// Where the filesystem should be mounted. If not set, then the filesystem
