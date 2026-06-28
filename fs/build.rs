@@ -54,4 +54,10 @@ fn main() {
         w.flag(f);
     }
     w.compile("bcachefs_static_wrappers");
+
+    // dh-cargo Built-Using (Debian): this static archive is generated from
+    // in-tree bindgen output for the bcachefs-kernel crate, so point dh-cargo
+    // at the crate source rather than leaving it to run dpkg -S on Cargo's
+    // build output path.
+    println!("dh-cargo:deb-built-using=bcachefs_static_wrappers=0={src}");
 }
