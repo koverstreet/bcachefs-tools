@@ -196,6 +196,21 @@ of the filesystem. Replication and device durability requirements still limit
 usable space: a device or target may have free buckets that cannot satisfy a
 write if the filesystem cannot place enough durable copies elsewhere.
 
+FIEMAP and block-level writes
+-----------------------------
+
+Tools such as ``filefrag`` use the kernel FIEMAP interface to report the
+physical locations of a file's extents. On bcachefs, those locations are an
+observation, not a stable userspace write ABI: background data movement such as
+copygc, rebalance, evacuation, or normal filesystem updates may relocate extents,
+and userspace has no interface to lock those moves out.
+
+Writing directly to the block device locations reported by FIEMAP, for example
+through a manually constructed device-mapper table, is therefore unsafe while
+the filesystem is mounted. This remains true even for preallocated files and
+files using ``nocow``; any block-level write path must be coordinated by the
+filesystem itself.
+
 Data protection
 ---------------
 
