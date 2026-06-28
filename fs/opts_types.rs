@@ -123,7 +123,7 @@ c_xmacro! {
          BCH_SB_DATA_REPLICAS_WANT,     1,
          "#",           "Number of data replicas (erasure coding currently caps this at 3, RAID6)"),
         (encoded_extent_max,            u32,
-         OPT_FS | OPT_FORMAT |
+         OPT_FS | OPT_FORMAT | OPT_RUNTIME |
          OPT_HUMAN_READABLE | OPT_MUST_BE_POW_2 | OPT_SB_FIELD_SECTORS | OPT_SB_FIELD_ILOG2,
          OPT_UINT(4096, 2U << 20),
          BCH_SB_ENCODED_EXTENT_MAX_BITS, 256 << 10,
