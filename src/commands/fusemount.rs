@@ -1075,8 +1075,9 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     drop(read_fd);
     rustix::process::setsid()?;
 
-    // Redirect stderr to a log file so debug output is visible
-    if let Ok(f) = std::fs::File::create("/tmp/bcachefs-fuse.log") {
+    // Daemon mode must not inherit the caller's stderr or grow a fixed log
+    // file under /tmp; foreground mode still leaves debug output visible.
+    if let Ok(f) = std::fs::File::create("/dev/null") {
         rustix::stdio::dup2_stderr(&f)?;
     }
 
