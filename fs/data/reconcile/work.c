@@ -1696,7 +1696,7 @@ static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
 
 		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
 			bch2_trans_unlock_long(trans);
-			bch2_copygc_wakeup(c);
+			bch2_copygc_wakeup_for_pressure(c);
 			wait_event(c->copygc.running_wq,
 				   c->copygc.run_count != *p->copygc_run_count ||
 				   kthread_should_stop());
