@@ -185,13 +185,13 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     }
 }
 
-/// Mount a bcachefs filesystem by its UUID.
+/// Mount a bcachefs filesystem by its UUID or label.
 #[derive(Parser, Debug)]
 #[command(author, version, about,
     long_about = "`mount -t bcachefs` invokes the installed mount.bcachefs helper; \
 this is the same mount path exposed as `bcachefs mount`.\n\n\
 Mounts a bcachefs filesystem. Devices are discovered automatically \
-by scanning for the filesystem UUID---unlike btrfs, this is handled \
+by scanning for the filesystem UUID or label---unlike btrfs, this is handled \
 entirely in userspace.\n\n\
 Use OLD_BLKID_UUID=<uuid> in fstab entries when systemd consumes \
 UUID=<uuid> before the bcachefs mount helper can scan all members.\n\n\
@@ -215,7 +215,7 @@ pub struct Cli {
     #[arg(short = 'k', long = "key_location", value_enum)]
     unlock_policy: Option<UnlockPolicy>,
 
-    /// Device, UUID=\<UUID\>, or OLD_BLKID_UUID=\<UUID\> for fstab
+    /// Device, UUID=\<UUID\>, OLD_BLKID_UUID=\<UUID\> (fstab), or LABEL=\<label\>
     dev: String,
 
     /// Where the filesystem should be mounted. If not set, then the filesystem

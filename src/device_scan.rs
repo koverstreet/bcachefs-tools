@@ -98,6 +98,19 @@ fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<PathBuf>> {
         .collect::<Vec<_>>())
 }
 
+fn get_bcachefs_devnodes_udev() -> anyhow::Result<Vec<PathBuf>> {
+    let mut enumerator = udev::Enumerator::new()?;
+    enumerator.match_is_initialized()?;
+    enumerator.match_subsystem("block")?;
+    enumerator.match_property("ID_FS_TYPE", "bcachefs")?;
+
+    Ok(enumerator
+        .scan_devices()?
+        .filter(|dev| !should_skip_multipath_component(dev))
+        .filter_map(|dev| dev.devnode().map(Path::to_path_buf))
+        .collect::<Vec<_>>())
+}
+
 fn get_all_block_devnodes_udev() -> anyhow::Result<Vec<PathBuf>> {
     let mut udev = udev::Enumerator::new()?;
     udev.match_is_initialized()?;
@@ -176,6 +189,43 @@ fn read_sbs_matching_uuid(
 	filter_current_sbs(sbs, opts)
 }
 
+fn sb_label_matches(sb: &c::bch_sb, label: &str) -> bool {
+    let label_len = sb.label.iter()
+        .position(|&b| b == 0)
+        .unwrap_or(sb.label.len());
+
+    &sb.label[..label_len] == label.as_bytes()
+}
+
+fn read_sbs_matching_label(
+    label: &str,
+    devices: &[PathBuf],
+    opts: &bch_opts,
+    filter_multipath: bool,
+) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+    let sbs = devices
+        .iter()
+        .filter(|dev| {
+            if filter_multipath && find_multipath_holder(dev).is_some() {
+                debug!(
+                    "Skipping multipath component device in fallback scan: {}",
+                    dev.display()
+                );
+                return false;
+            }
+            true
+        })
+        .filter_map(|dev| {
+            read_super_silent(dev, *opts)
+                .ok()
+                .map(|sb| (PathBuf::from(dev), sb))
+        })
+        .filter(|(_, sb)| sb_label_matches(sb.sb(), label))
+        .collect::<Vec<_>>();
+
+    filter_current_sbs(sbs, opts)
+}
+
 fn sb_handle_path(sb: &bch_sb_handle) -> PathBuf {
 	if sb.sb_name.is_null() {
 		PathBuf::new()
@@ -249,6 +299,42 @@ fn get_devices_by_uuid(
     Ok(read_sbs_matching_uuid(uuid, &all_devs, opts, true)?)
 }
 
+fn get_devices_by_label(
+    label: &str,
+    opts: &bch_opts,
+    use_udev: bool,
+) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
+    let sbs = if use_udev {
+        let devs_from_udev = get_bcachefs_devnodes_udev()?;
+        if devs_from_udev.is_empty() {
+            Vec::new()
+        } else {
+            read_sbs_matching_label(label, &devs_from_udev, opts, false)?
+        }
+    } else {
+        Vec::new()
+    };
+
+    let sbs = if sbs.is_empty() {
+        let all_devs = get_all_block_devnodes()?;
+        read_sbs_matching_label(label, &all_devs, opts, true)?
+    } else {
+        sbs
+    };
+
+    let mut uuids = sbs.iter()
+        .map(|(_, sb)| sb.sb().uuid())
+        .collect::<Vec<_>>();
+    uuids.sort();
+    uuids.dedup();
+
+    match uuids.as_slice() {
+        [] => Ok(Vec::new()),
+        [uuid] => get_devices_by_uuid(*uuid, opts, use_udev),
+        _ => anyhow::bail!("multiple bcachefs filesystems found with label '{}'", label),
+    }
+}
+
 fn devs_str_sbs_from_device(
     device: &Path,
     opts: &bch_opts,
@@ -285,7 +371,24 @@ pub fn parse_uuid_equals(s: &str) -> Result<Option<Uuid>> {
     Ok(Some(Uuid::parse_str(uuid)?))
 }
 
+fn parse_label_equals(s: &str) -> Option<&str> {
+    let ("LABEL", label) = s.split_once('=')? else {
+        return None;
+    };
+    Some(label)
+}
+
 pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb_handle)>> {
+    let udev = opt_get!(opts, mount_trusts_udev) != 0;
+
+    if let Some(uuid) = parse_uuid_equals(device)? {
+        return get_devices_by_uuid(uuid, opts, udev);
+    }
+
+    if let Some(label) = parse_label_equals(device) {
+        return get_devices_by_label(label, opts, udev);
+    }
+
     if device.contains(':') {
         let mut opts = *opts;
         opt_set!(opts, noexcl, 1);
@@ -311,13 +414,7 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
             .collect::<Result<Vec<_>>>()
     }
 
-    let udev = opt_get!(opts, mount_trusts_udev) != 0;
-
-    if let Some(uuid) = parse_uuid_equals(device)? {
-        get_devices_by_uuid(uuid, opts, udev)
-    } else {
-        devs_str_sbs_from_device(Path::new(device), opts, udev)
-    }
+    devs_str_sbs_from_device(Path::new(device), opts, udev)
 }
 
 pub fn joined_device_str(sbs: &[(PathBuf, bch_sb_handle)]) -> OsString {
