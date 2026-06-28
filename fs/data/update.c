@@ -1059,7 +1059,7 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 			durability += (write_flags & BCH_WRITE_cached) ? 1 : ca->mi.durability;
 		else if (bch2_copygc_can_make_progress(ca)) {
 			*need_copygc = true;
-			bch2_copygc_wakeup(c);
+			bch2_copygc_wakeup_for_pressure(c);
 		}
 
 		if (trace)

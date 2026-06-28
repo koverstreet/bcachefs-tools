@@ -50,6 +50,7 @@
 #include "util/clock.h"
 
 #include <linux/freezer.h>
+#include <linux/ioprio.h>
 #include <linux/kthread.h>
 #include <linux/math64.h>
 #include <linux/sched/task.h>
@@ -326,6 +327,7 @@ err:
 noinline
 static int bch2_copygc(struct moving_context *ctxt,
 		       struct buckets_in_flight *buckets_in_flight,
+		       bool pressure,
 		       bool *did_work)
 {
 	struct btree_trans *trans = ctxt->trans;
@@ -333,6 +335,9 @@ static int bch2_copygc(struct moving_context *ctxt,
 	struct data_update_opts data_opts = {
 		.type		= BCH_DATA_UPDATE_copygc,
 		.commit_flags	= (unsigned) BCH_WATERMARK_copygc,
+		.ioprio		= pressure
+			? IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7)
+			: 0,
 	};
 	u64 sectors_seen	= atomic64_read(&ctxt->stats->sectors_seen);
 	u64 sectors_moved	= atomic64_read(&ctxt->stats->sectors_moved);
@@ -464,6 +469,7 @@ __cold void bch2_copygc_wait_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	printbuf_tabstop_push(out, 32);
 	prt_printf(out, "running:\t%u\n",		c->copygc.running);
+	prt_printf(out, "pressure pending:\t%u\n",	READ_ONCE(c->copygc.pressure_pending));
 	prt_printf(out, "run count:\t%u\n",		c->copygc.run_count);
 	prt_printf(out, "copygc_wait:\t%llu\n",		c->copygc.wait);
 	prt_printf(out, "copygc_wait_at:\t%llu\n",	c->copygc.wait_at);
@@ -569,9 +575,10 @@ static int bch2_copygc_thread(void *arg)
 
 		kick = READ_ONCE(c->copygc.kick_count);
 		c->copygc.wait = 0;
+		bool pressure = xchg(&c->copygc.pressure_pending, false);
 
 		c->copygc.running = true;
-		ret = bch2_copygc(&ctxt, &buckets, &did_work);
+		ret = bch2_copygc(&ctxt, &buckets, pressure, &did_work);
 		c->copygc.running = false;
 		c->copygc.run_count++;
 
