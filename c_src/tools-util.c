@@ -169,8 +169,8 @@ void blkid_check(int fd, const char *path, bool force)
 	}
 
 	blkid_probe pr;
-	const char *fs_type = NULL, *fs_label = NULL;
-	size_t fs_type_len, fs_label_len;
+	const char *fs_type = NULL, *fs_label = NULL, *pt_type = NULL;
+	size_t fs_type_len, fs_label_len, pt_type_len;
 
 	if (!(pr = blkid_new_probe()))
 		die("blkid error 1");
@@ -186,6 +186,15 @@ void blkid_check(int fd, const char *path, bool force)
 
 	blkid_probe_lookup_value(pr, "TYPE", &fs_type, &fs_type_len);
 	blkid_probe_lookup_value(pr, "LABEL", &fs_label, &fs_label_len);
+	blkid_probe_lookup_value(pr, "PTTYPE", &pt_type, &pt_type_len);
+
+	if (pt_type)
+		fprintf(stderr,
+			"%s contains a %s partition table; old filesystem signatures inside\n"
+			"former partitions may remain visible to blkid after formatting the\n"
+			"whole device. If this is an old partitioned disk, wipe the old\n"
+			"partition devices too before relying on UUID based device discovery.\n",
+			path, pt_type);
 
 	if (fs_type) {
 		if (fs_label)
@@ -382,4 +391,3 @@ u32 crc32c(u32 crc, const void *buf, size_t size)
 }
 
 #endif /* HAVE_WORKING_IFUNC */
-
