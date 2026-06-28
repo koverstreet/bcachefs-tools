@@ -47,6 +47,40 @@ dnf install -y @c-development libaio-devel libsodium-devel \
     findutils systemd-devel clang-devel llvm-devel rust cargo
 ```
 
+Building a loadable kernel module without DKMS
+----------------------------------------------
+
+Immutable/rpm-ostree systems such as Fedora CoreOS may not support DKMS in the
+running host, but they can still load a packaged `bcachefs.ko` built elsewhere
+for the exact target kernel and architecture.
+
+To stage the out-of-tree module sources without registering them with DKMS:
+
+```shell
+mkdir build
+make DESTDIR="$PWD/build" DKMSDIR="" install_dkms
+```
+
+Then build the module against a target kernel build tree:
+
+```shell
+KERNEL="$(uname -r)"
+make -C "/usr/lib/modules/${KERNEL}/build" M="$PWD/build" modules
+```
+
+The resulting module is `build/src/fs/bcachefs/bcachefs.ko`. Install it under
+the target system's module tree, for example:
+
+```shell
+install -D -m 0644 build/src/fs/bcachefs/bcachefs.ko \
+    "/lib/modules/${KERNEL}/extra/fs/bcachefs/bcachefs.ko"
+depmod "${KERNEL}"
+```
+
+`Module.symvers` is a build-time artifact for module symbol versioning and for
+other modules that depend on bcachefs symbols; it is not normally needed beside
+the installed `.ko`.
+
 openSUSE: install build dependencies with:
 ```shell
 zypper in -y libaio-devel libsodium-devel libblkid-devel liburcu-devel \
