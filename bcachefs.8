@@ -386,7 +386,13 @@ but all steps preceding mounting the filesystem (e.g. asking for passphrase) wil
 Mount options provided as a comma-separated list. See user guide for complete list.
 .Bl -tag -width Ds -compact
 .It Cm degraded
-Allow mounting with data degraded
+Allow mounting with missing devices.
+Use
+.Cm degraded=run
+to allow normal operation with devices missing, and
+.Cm degraded=very
+only when writes are allowed to continue even if the requested replica count
+cannot be maintained.
 .It Cm verbose
 Extra debugging info during mount/recovery
 .It Cm fsck
@@ -519,6 +525,9 @@ Make snapshot read-only
 .It Nm Ic data Ic rereplicate Ar filesystem
 Walks existing data in a filesystem,
 writing additional copies of any degraded data.
+This can be used after a degraded mount or device replacement to restore
+redundancy on the available devices; mounted filesystems may also queue
+reconcile work automatically when degraded extents are detected.
 .It Nm Ic data Ic job Ar job filesystem
 Kick off a data job and report progress
 .sp
