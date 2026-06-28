@@ -78,7 +78,7 @@ fn mount_inner(
 
 /// Parse a comma-separated mount options and split out mountflags and filesystem
 /// specific options.
-fn parse_mountflag_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulong) {
+pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulong) {
     use either::Either::{Left, Right};
 
     debug!("parsing mount options: {}", options.as_ref());
@@ -122,6 +122,28 @@ fn parse_mountflag_options(options: impl AsRef<str>) -> (Option<String>, libc::c
         },
         flags,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_mountflag_options;
+
+    #[test]
+    fn parse_mountflag_options_splits_kernel_and_fs_options() {
+        let (opts, flags) = parse_mountflag_options("ro,noexec,metadata_replicas=2,norecovery");
+
+        assert_eq!(opts.as_deref(), Some("metadata_replicas=2,norecovery"));
+        assert_ne!(flags & libc::MS_RDONLY, 0);
+        assert_ne!(flags & libc::MS_NOEXEC, 0);
+    }
+
+    #[test]
+    fn parse_mountflag_options_drops_userspace_fstab_options() {
+        let (opts, flags) = parse_mountflag_options("nofail,_netdev,x-systemd.device-timeout=5");
+
+        assert_eq!(opts, None);
+        assert_eq!(flags, 0);
+    }
 }
 
 /// If a user explicitly specifies `unlock_policy` or `passphrase_file` then use

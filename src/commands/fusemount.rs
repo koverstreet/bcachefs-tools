@@ -1000,11 +1000,56 @@ pub struct Cli {
     pub mountpoint: String,
 }
 
+fn parse_fuse_mount_options(
+    device: &str,
+    options: Option<&str>,
+) -> anyhow::Result<(c::bch_opts, Vec<MountOption>)> {
+    let mut mount_options = vec![
+        MountOption::FSName(device.to_string()),
+        // Use CUSTOM instead of Subtype — fuser categorizes Subtype as
+        // "Fusermount" group, which is only passed when using the fusermount3
+        // helper. With a direct mount syscall (as root), Subtype gets
+        // silently dropped and the mount shows as "fuse" instead of
+        // "fuse.bcachefs" in /proc/mounts.
+        MountOption::CUSTOM("subtype=bcachefs".to_string()),
+    ];
+    let (optstr, mountflags) = options
+        .map(super::mount::parse_mountflag_options)
+        .unwrap_or((None, 0));
+    let mut bch_opts = bcachefs_kernel::opts::parse_mount_opts(None, optstr.as_deref(), true)?;
+
+    opt_set!(bch_opts, nostart, 1);
+
+    if mountflags & libc::MS_RDONLY != 0 {
+        opt_set!(bch_opts, read_only, 1);
+        mount_options.push(MountOption::RO);
+    }
+    if mountflags & libc::MS_NODEV != 0 {
+        mount_options.push(MountOption::NoDev);
+    }
+    if mountflags & libc::MS_NOSUID != 0 {
+        mount_options.push(MountOption::NoSuid);
+    }
+    if mountflags & libc::MS_NOEXEC != 0 {
+        mount_options.push(MountOption::NoExec);
+    }
+    if mountflags & libc::MS_NOATIME != 0 {
+        mount_options.push(MountOption::NoAtime);
+    }
+    if mountflags & libc::MS_DIRSYNC != 0 {
+        mount_options.push(MountOption::DirSync);
+    }
+    if mountflags & libc::MS_SYNCHRONOUS != 0 {
+        mount_options.push(MountOption::Sync);
+    }
+
+    Ok((bch_opts, mount_options))
+}
+
 pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     use crate::device_scan::scan_sbs;
 
-    let mut bch_opts = c::bch_opts::default();
-    opt_set!(bch_opts, nostart, 1);
+    let (bch_opts, mount_options) = parse_fuse_mount_options(&cli.device, cli.options.as_deref())?;
 
     let sbs = scan_sbs(&cli.device, &bch_opts)?;
     let devs: Vec<_> = sbs.iter().map(|(p, _)| p.clone()).collect();
@@ -1016,15 +1061,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     std::mem::forget(fs);
 
     let mut config = Config::default();
-    config.mount_options = vec![
-        MountOption::FSName(cli.device.clone()),
-        // Use CUSTOM instead of Subtype — fuser categorizes Subtype as
-        // "Fusermount" group, which is only passed when using the fusermount3
-        // helper. With a direct mount syscall (as root), Subtype gets
-        // silently dropped and the mount shows as "fuse" instead of
-        // "fuse.bcachefs" in /proc/mounts.
-        MountOption::CUSTOM("subtype=bcachefs".to_string()),
-    ];
+    config.mount_options = mount_options;
     // Worker threads get current + RCU via ensure_thread_init() with
     // a Drop guard for cleanup. No need to restrict to single-threaded.
 
@@ -1108,3 +1145,41 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 }
 
 pub const CMD: super::CmdDef = typed_cmd!("fusemount", "FUSE mount", Cli, cmd_fusemount);
+
+#[cfg(test)]
+mod tests {
+    use super::parse_fuse_mount_options;
+    use bcachefs_kernel::opt_get;
+    use fuser::MountOption;
+
+    #[test]
+    fn parse_fuse_mount_options_sets_bcachefs_read_only_and_fuse_ro() {
+        let (opts, mount_options) =
+            parse_fuse_mount_options("/dev/test", Some("ro,norecovery")).unwrap();
+
+        assert_eq!(opt_get!(opts, read_only), 1);
+        assert!(mount_options.contains(&MountOption::RO));
+        assert!(mount_options.contains(&MountOption::FSName("/dev/test".to_string())));
+        assert!(mount_options.contains(&MountOption::CUSTOM("subtype=bcachefs".to_string())));
+    }
+
+    #[test]
+    fn parse_fuse_mount_options_preserves_supported_fuse_flags() {
+        let (_opts, mount_options) = parse_fuse_mount_options(
+            "/dev/test",
+            Some("nodev,nosuid,noexec,noatime,dirsync,sync"),
+        )
+        .unwrap();
+
+        for option in [
+            MountOption::NoDev,
+            MountOption::NoSuid,
+            MountOption::NoExec,
+            MountOption::NoAtime,
+            MountOption::DirSync,
+            MountOption::Sync,
+        ] {
+            assert!(mount_options.contains(&option));
+        }
+    }
+}
