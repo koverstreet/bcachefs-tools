@@ -19,7 +19,9 @@ struct bch_read_bio;
  *  - write_sectors/write_ios: read completion -> write completion
  *
  * bch2_move_ratelimit() blocks the caller until all counters are below
- * c->opts.move_bytes_in_flight / move_ios_in_flight.
+ * max_sectors_in_flight / max_ios_in_flight. These default to the global
+ * fs options, but callers may lower them when a move context is tied to
+ * a slower device class.
  *
  * Extent moves (bch2_move_extent) and stripe repairs (bch2_stripe_repair)
  * both account through these counters.
@@ -37,6 +39,9 @@ struct moving_context {
 	struct bch_move_stats	*stats;
 	struct write_point_specifier wp;
 	bool			wait_on_copygc;
+
+	unsigned		max_sectors_in_flight;
+	unsigned		max_ios_in_flight;
 
 	/* For waiting on outstanding reads and writes: */
 	struct closure		cl;
@@ -102,6 +107,7 @@ void bch2_moving_ctxt_exit(struct moving_context *);
 void bch2_moving_ctxt_init(struct moving_context *, struct bch_fs *,
 			   struct bch_ratelimit *, struct bch_move_stats *,
 			   struct write_point_specifier, bool);
+void bch2_moving_ctxt_set_rotational_limits(struct moving_context *);
 struct data_update *bch2_moving_ctxt_next_pending_write(struct moving_context *);
 void bch2_moving_ctxt_do_pending_writes(struct moving_context *);
 int bch2_moving_ctxt_flush_all(struct moving_context *);
