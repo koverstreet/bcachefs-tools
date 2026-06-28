@@ -810,6 +810,38 @@ static unsigned move_alloc_dev_busy(struct bch_fs *c,
 	return busy;
 }
 
+#ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
+static u32 move_alloc_dev_congested(struct bch_dev *ca, u64 now)
+{
+	s64 congested = atomic_read(&ca->congested);
+	u64 last = READ_ONCE(ca->congested_last);
+
+	if (time_after64(now, last))
+		congested -= (now - last) >> 12;
+
+	return clamp(congested, 0LL, CONGESTED_MAX);
+}
+#else
+static u32 move_alloc_dev_congested(struct bch_dev *ca, u64 now)
+{
+	return 0;
+}
+#endif
+
+static u32 move_alloc_dev_pressure(struct bch_fs *c,
+				   struct alloc_request *req,
+				   unsigned dev, u64 now)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+
+	if (!ca)
+		return U32_MAX;
+
+	return move_alloc_dev_congested(ca, now) +
+		move_alloc_dev_busy(c, req, dev);
+}
+
 static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 				       struct alloc_request *req)
 {
@@ -818,21 +850,26 @@ static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 	    req->devs_sorted.nr <= 1)
 		return;
 
-	unsigned busy[BCH_SB_MEMBERS_MAX];
+	u32 pressure[BCH_SB_MEMBERS_MAX];
+	u64 now = local_clock();
+
 	for (unsigned i = 0; i < req->devs_sorted.nr; i++)
-		busy[i] = move_alloc_dev_busy(c, req, req->devs_sorted.data[i]);
+		pressure[i] = move_alloc_dev_pressure(c, req,
+						      req->devs_sorted.data[i],
+						      now);
 
 	/*
 	 * Background moves can otherwise pick the same emptiest device that
-	 * foreground writepoints or other movers are already filling. Keep all
-	 * candidates as fallbacks, but try quieter devices first.
+	 * foreground writepoints or other movers are already filling, or a
+	 * device that is currently congested from unrelated IO. Keep the
+	 * free-space weighted allocator order primary; only let contention
+	 * break adjacent ties, so we do not defeat free-space balancing.
 	 */
-	for (unsigned i = 0; i + 1 < req->devs_sorted.nr; i++)
-		for (unsigned j = 0; j + 1 < req->devs_sorted.nr - i; j++)
-			if (busy[j] > busy[j + 1]) {
-				swap(req->devs_sorted.data[j], req->devs_sorted.data[j + 1]);
-				swap(busy[j], busy[j + 1]);
-			}
+	for (unsigned j = 0; j + 1 < req->devs_sorted.nr; j++)
+		if (pressure[j] > pressure[j + 1]) {
+			swap(req->devs_sorted.data[j], req->devs_sorted.data[j + 1]);
+			swap(pressure[j], pressure[j + 1]);
+		}
 }
 
 static const u64 stripe_clock_hand_rescale	= 1ULL << 62; /* trigger rescale at */
