@@ -547,9 +547,14 @@ Keyring to add to (default:
 .Cm user )
 .El
 .It Nm Ic set-passphrase Ar devices\ ...
-Change passphrase on an existing (unmounted) filesystem.
+Change passphrase on an existing encrypted (unmounted) filesystem.
+This rewraps the existing filesystem encryption key; it does not enable
+encryption on a filesystem formatted without
+.Fl -encrypted .
 .It Nm Ic remove-passphrase Ar devices\ ...
-Remove passphrase on an existing (unmounted) filesystem.
+Remove passphrase protection from an existing encrypted (unmounted) filesystem.
+This stores the existing filesystem encryption key without passphrase
+protection; it does not decrypt existing data or disable filesystem encryption.
 .El
 .Sh Commands for migration
 .Bl -tag -width Ds
