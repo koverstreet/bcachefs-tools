@@ -489,7 +489,10 @@ Force, if data will be lost
 Set state of an offline device
 .El
 .It Nm Ic device Ic resize Ar device Op Ar size
-Resize filesystem on a device
+Resize filesystem on a device.
+Online shrinking is passed to the mounted filesystem kernel; if that kernel
+does not support shrinking, the resize ioctl fails.  Offline shrinking is still
+unsupported by the bundled userspace filesystem implementation.
 .It Nm Ic device Ic resize-journal Ar device Op Ar size
 Resize journal on a device
 .El

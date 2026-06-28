@@ -414,14 +414,17 @@ fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
             let usage = handle.dev_usage(dev_idx)
                 .context("querying device usage")?;
             let nbuckets = size_sectors / usage.bucket_size as u64;
-
-            if nbuckets < usage.nr_buckets {
-                return Err(anyhow!("Shrinking not supported yet"));
-            }
+            let shrinking = nbuckets < usage.nr_buckets;
 
             println!("resizing {} to {} buckets", cli.device, nbuckets);
             handle.disk_resize(dev_idx, nbuckets)
-                .context("resizing device")?;
+                .with_context(|| {
+                    if shrinking {
+                        "shrinking device (requires kernel shrink support)"
+                    } else {
+                        "resizing device"
+                    }
+                })?;
         }
         Err(_) if Path::new(&cli.device).exists() => {
             println!("Doing offline resize of {}", cli.device);
