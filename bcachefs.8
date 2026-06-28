@@ -54,6 +54,8 @@ Take a device offline, without removing it
 Migrate data off of a specific device
 .It Ic device set-state
 Change the state of a device
+.It Ic device set-label
+Set a device label
 .It Ic device resize
 Resize filesystem on a device
 .It Ic device resize-journal
@@ -488,6 +490,13 @@ Force, if data will be lost
 .It Fl o , Fl -offline
 Set state of an offline device
 .El
+.It Nm Ic device Ic set-label Ar device Ar label Op Ar filesystem
+Set a label on a device in a mounted filesystem.
+.Ar device
+may be a block device path or numeric device index. When specifying a numeric
+device index,
+.Ar filesystem
+must be a mounted filesystem path.
 .It Nm Ic device Ic resize Ar device Op Ar size
 Resize filesystem on a device
 .It Nm Ic device Ic resize-journal Ar device Op Ar size
