@@ -271,4 +271,9 @@ fn scrub(cli: Cli) -> Result<()> {
     Ok(())
 }
 
-pub const CMD: super::CmdDef = typed_cmd!("scrub", "Verify data checksums", Cli, scrub);
+pub const CMD: super::CmdDef = typed_cmd!(
+    "scrub",
+    "Verify data checksums; affected paths are logged to dmesg",
+    Cli,
+    scrub
+);

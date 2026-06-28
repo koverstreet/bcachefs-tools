@@ -542,6 +542,14 @@ Make snapshot read-only
 .El
 .Sh Commands for managing filesystem data
 .Bl -tag -width Ds
+.It Nm Ic scrub Oo Fl -metadata Oc Ar filesystem
+Verify checksums and correct errors, if possible.
+When scrub finds checksum errors, affected file paths are currently reported in
+the kernel log.
+.Bl -tag -width Ds
+.It Fl -metadata
+Check metadata only
+.El
 .It Nm Ic data Ic rereplicate Ar filesystem
 Walks existing data in a filesystem,
 writing additional copies of any degraded data.
