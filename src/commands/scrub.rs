@@ -25,6 +25,7 @@ extern "C" fn sigint_handler(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
 }
 
+const NO_PROGRESS_WARN_AFTER: Duration = Duration::from_secs(30);
 /// bch_ioctl_data_event is blocklisted from bindgen (packed+aligned conflict),
 /// so we read raw bytes and extract fields manually.
 /// Layout: u8 type, u8 ret, u8 pad[6], bch_ioctl_data_progress, padding to 128.
@@ -173,6 +174,8 @@ fn scrub(cli: Cli) -> Result<()> {
 
     let mut exit_code = 0i32;
     let mut last = Instant::now();
+    let mut no_progress_since = Instant::now();
+    let mut no_progress_warned = false;
     let mut first = true;
     let live_output = io::stdout().is_terminal();
 
@@ -227,6 +230,25 @@ fn scrub(cli: Cli) -> Result<()> {
             if dev.progress_fd.is_some() {
                 all_done = false;
             }
+        }
+
+        let any_progress = scrub_devs.iter().any(|d| {
+            d.done > 0 || d.total > 0 || d.corrected > 0 || d.uncorrected > 0
+        });
+        if any_progress {
+            no_progress_since = now;
+            no_progress_warned = false;
+        } else if !all_done
+            && !no_progress_warned
+            && now.duration_since(no_progress_since) >= NO_PROGRESS_WARN_AFTER
+        {
+            writeln!(
+                io::stderr(),
+                "warning: scrub has not reported progress for {} seconds; \
+                 check that the running kernel or DKMS module matches this bcachefs-tools version",
+                NO_PROGRESS_WARN_AFTER.as_secs()
+            )?;
+            no_progress_warned = true;
         }
 
         let interrupted = INTERRUPTED.load(Ordering::Relaxed);
