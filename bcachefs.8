@@ -70,10 +70,10 @@ Create a snapshot
 .El
 .Ss Commands for managing filesystem data
 .Bl -tag -width 18n -compact
-.It Ic data rereplicate
-Rereplicate degraded data
-.It Ic data job
-Kick off low level data jobs
+.It Ic reconcile
+Query or wait for background data reconciliation
+.It Ic scrub
+Verify data checksums
 .El
 .Ss Commands for encryption
 .Bl -tag -width 18n -compact
@@ -588,34 +588,30 @@ Make snapshot read-only
 .El
 .Sh Commands for managing filesystem data
 .Bl -tag -width Ds
-.It Nm Ic scrub Oo Fl -metadata Oc Ar filesystem
+.It Nm Ic scrub Oo Fl m | Fl -metadata Oc Ar filesystem
 Verify checksums and correct errors, if possible.
 When scrub finds checksum errors, affected file paths are currently reported in
 the kernel log.
 .Bl -tag -width Ds
-.It Fl -metadata
+.It Fl m , Fl -metadata
 Check metadata only
 .El
-.It Nm Ic data Ic rereplicate Ar filesystem
-Walks existing data in a filesystem,
-writing additional copies of any degraded data.
-This can be used after a degraded mount or device replacement to restore
-redundancy on the available devices; mounted filesystems may also queue
-reconcile work automatically when degraded extents are detected.
-.It Nm Ic data Ic job Ar job filesystem
-Kick off a data job and report progress
-.sp
-.Ar job
-is one of (
-.Cm scrub | rereplicate | migrate | rewrite_old_nodes
-)
+.It Nm Ic reconcile Ic status Op Fl t Ar type Ns Op , Ns Ar ...
+.Op Ar filesystem
+Show pending background reconciliation work.
+Reconcile restores redundancy after a degraded mount or device replacement;
+mounted filesystems also queue reconcile work automatically when degraded
+extents are detected.
 .Bl -tag -width Ds
-.It Fl b Ar btree
-Btree to operate on
-.It Fl s Ar inode Ns Cm \&: Ns Ar offset
-Start position
-.It Fl e Ar inode Ns Cm \&: Ns Ar offset
-End position
+.It Fl t , Fl -types Ar type Ns Op , Ns Ar ...
+Limit output to the selected reconciliation types.
+.El
+.It Nm Ic reconcile Ic wait Op Fl t Ar type Ns Op , Ns Ar ...
+.Op Ar filesystem
+Wait for background reconciliation work to finish.
+.Bl -tag -width Ds
+.It Fl t , Fl -types Ar type Ns Op , Ns Ar ...
+Wait only for the selected reconciliation types.
 .El
 .El
 .Sh Commands for encryption
