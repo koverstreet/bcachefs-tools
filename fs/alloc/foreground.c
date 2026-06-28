@@ -772,6 +772,69 @@ void bch2_dev_alloc_list(struct bch_fs *c,
 	bubble_sort(ret->data, ret->nr, dev_stripe_cmp);
 }
 
+static bool open_bucket_is_on_writepoint(struct bch_fs *c,
+					 struct write_point *wp,
+					 struct open_bucket *ob)
+{
+	struct open_bucket *wp_ob;
+	unsigned i;
+
+	open_bucket_for_each(c, &wp->ptrs, wp_ob, i)
+		if (wp_ob == ob)
+			return true;
+
+	return false;
+}
+
+static unsigned move_alloc_dev_busy(struct bch_fs *c,
+				    struct alloc_request *req,
+				    unsigned dev)
+{
+	struct bch_fs_allocator *a = &c->allocator;
+	unsigned busy = 0;
+
+	for (struct open_bucket *ob = a->open_buckets;
+	     ob < a->open_buckets + ARRAY_SIZE(a->open_buckets);
+	     ob++) {
+		guard(spinlock)(&ob->lock);
+
+		if (!ob->valid ||
+		    ob->dev != dev ||
+		    ob->data_type != BCH_DATA_user ||
+		    open_bucket_is_on_writepoint(c, req->wp, ob))
+			continue;
+
+		busy++;
+	}
+
+	return busy;
+}
+
+static void move_alloc_avoid_busy_devs(struct bch_fs *c,
+				       struct alloc_request *req)
+{
+	if (!(req->flags & BCH_WRITE_move) ||
+	    req->data_type != BCH_DATA_user ||
+	    req->devs_sorted.nr <= 1)
+		return;
+
+	unsigned busy[BCH_SB_MEMBERS_MAX];
+	for (unsigned i = 0; i < req->devs_sorted.nr; i++)
+		busy[i] = move_alloc_dev_busy(c, req, req->devs_sorted.data[i]);
+
+	/*
+	 * Background moves can otherwise pick the same emptiest device that
+	 * foreground writepoints or other movers are already filling. Keep all
+	 * candidates as fallbacks, but try quieter devices first.
+	 */
+	for (unsigned i = 0; i + 1 < req->devs_sorted.nr; i++)
+		for (unsigned j = 0; j + 1 < req->devs_sorted.nr - i; j++)
+			if (busy[j] > busy[j + 1]) {
+				swap(req->devs_sorted.data[j], req->devs_sorted.data[j + 1]);
+				swap(busy[j], busy[j + 1]);
+			}
+}
+
 static const u64 stripe_clock_hand_rescale	= 1ULL << 62; /* trigger rescale at */
 static const u64 stripe_clock_hand_max		= 1ULL << 56; /* max after rescale */
 static const u64 stripe_clock_hand_inv		= 1ULL << 52; /* max increment, if a device is empty */
@@ -870,6 +933,7 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *trans,
 	BUG_ON(req->nr_effective >= req->nr_replicas);
 
 	bch2_dev_alloc_list(c, stripe, &req->devs_may_alloc, &req->devs_sorted);
+	move_alloc_avoid_busy_devs(c, req);
 
 	if (req->devs_sorted.nr <= 1)
 		req->will_retry_target_devices = false;
