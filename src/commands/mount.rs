@@ -184,6 +184,8 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     long_about = "Mounts a bcachefs filesystem. Devices are discovered automatically \
 by scanning for the filesystem UUID---unlike btrfs, this is handled \
 entirely in userspace.\n\n\
+Use OLD_BLKID_UUID=<uuid> in fstab entries when systemd consumes \
+UUID=<uuid> before the bcachefs mount helper can scan all members.\n\n\
 If the filesystem is encrypted, the passphrase will be looked up in \
 the kernel keyring first; if not found, the user is prompted \
 interactively (or reads from stdin if not a terminal). Use -k or -f \
@@ -204,7 +206,7 @@ pub struct Cli {
     #[arg(short = 'k', long = "key_location", value_enum)]
     unlock_policy: Option<UnlockPolicy>,
 
-    /// Device, or UUID=\<UUID\>
+    /// Device, UUID=\<UUID\>, or OLD_BLKID_UUID=\<UUID\> for fstab
     dev: String,
 
     /// Where the filesystem should be mounted. If not set, then the filesystem
