@@ -6,15 +6,18 @@
 \usepackage{bookmark}
 \usepackage{longtable}
 \usepackage{upquote}
+\DeclareUnicodeCharacter{2194}{\ensuremath{\leftrightarrow}}
 
 % Include auto-generated fragments from bch-docgen.
 % Run: cargo run -p bch-docgen
 \newcommand{\bchdoc}[1]{\input{doc/generated/#1}}
+\providecommand{\bchdocversion}{unknown}
+\InputIfFileExists{doc/generated/build-version.tex}{}{}
 
 \title{bcachefs: Principles of Operation}
 \author{Kent Overstreet (and others)}
 
-\date{\today}
+\date{Revision \texttt{\bchdocversion}\\\today}
 
 \begin{document}
 
