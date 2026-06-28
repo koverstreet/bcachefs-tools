@@ -92,6 +92,7 @@ use c::Errcode as err;
 use c::ReconcileWorkId as w;
 use core::cell::Cell;
 use core::ops::ControlFlow;
+use core::sync::atomic::AtomicU64;
 use core::sync::atomic::Ordering::Relaxed;
 use crate::format::{Bpos, Btree, BkeyType, MetadataVersion};
 
@@ -194,6 +195,17 @@ pub enum Status {
     /// Waiting for the write io clock to reach @iotime_end, from
     /// @iotime_start - since @since, ktime_get_ns() - or a kick.
     Waiting { iotime_start: u64, iotime_end: u64, since: u64 },
+}
+
+/// The last phys phase's rotational online devices, workers started, and
+/// the write points they hashed to - distinct tags, not allocator objects.
+#[derive(Clone, Copy)]
+pub struct PhysWorkers { considered: u64, started: u64, distinct: u64 }
+
+impl PhysWorkers {
+    pub const fn new() -> Self {
+        PhysWorkers { considered: 0, started: 0, distinct: 0 }
+    }
 }
 
 impl Status {
@@ -627,11 +639,19 @@ impl<'a, 'f> Walker<'a, 'f> {
 
 // ── Phys: a thread per rotational device ─────────────────────────────────
 
+/// A write point of the phase and device's own, stable across passes: the
+/// workers all sharing the one reconcile write point serialized on its lock,
+/// with background compression in the way, while the phase waits for the
+/// whole batch.
+fn phys_write_point(phase: &Phase, dev: u32) -> c::write_point_specifier {
+    c::write_point_specifier::hashed(((phase.btree.0 as usize) << (usize::BITS / 2)) | ((dev as usize) << 1))
+}
+
 /// Phase @phase's work on device @dev, in its own moving context, until it's
 /// done - or anything fails: the next pass tries again. reconcile_phys_dev().
 fn phys_dev(fs: &Fs, phase: &Phase, dev: u32) -> Result<(), BchError> {
     let stats = MoveStats::default();
-    let ctxt = MovingCtxt::new(fs, &stats, c::write_point_specifier::RECONCILE, true)?;
+    let ctxt = MovingCtxt::new(fs, &stats, phys_write_point(phase, dev), true)?;
     let mut walker = Walker::new(&ctxt)?;
     let mut work_pos = c::bbpos { btree: phase.btree, pos: pos(dev.into(), 0) };
 
@@ -664,9 +684,14 @@ fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
     }
     let name = fs.name().to_str().unwrap_or("?");
 
-    par::scope_freezable(Backend::Kthreads, fs.tasks(), |sc| {
+    // a bit per device index, the 256 there can be: the tags are of the
+    // workers that ran
+    let started: [AtomicU64; 4] = core::array::from_fn(|_| AtomicU64::new(0));
+    let ret = par::scope_freezable(Backend::Kthreads, fs.tasks(), |sc| {
         for &dev in devs.iter() {
+            let started = &started;
             sc.spawn(format_args!("bch-reconcile/{name}:{dev}"), move || {
+                started[dev as usize / 64].fetch_or(1 << (dev % 64), Relaxed);
                 if let Err(e) = phys_dev(fs, phase, dev) {
                     bch_err!(fs, "reconcile phys thread for device {dev}: {e}");
                 }
@@ -674,7 +699,20 @@ fn reconcile_phys(fs: &Fs, phase: &'static Phase) -> Result<(), BchError> {
             })?;
         }
         Ok(())
-    })
+    });
+
+    // together, after the phase: status reads one phase's
+    let ran = |dev: u32| started[dev as usize / 64].load(Relaxed) & (1 << (dev % 64)) != 0;
+    let tag = |dev: u32| phys_write_point(phase, dev).v;
+    let distinct = devs.iter().enumerate()
+        .filter(|&(i, &d)| ran(d) && !devs[..i].iter().any(|&e| ran(e) && tag(e) == tag(d)))
+        .count();
+    fs.reconcile.phys_workers.write(|pw| *pw = PhysWorkers {
+        considered: devs.len() as u64,
+        started: started.iter().map(|bits| u64::from(bits.load(Relaxed).count_ones())).sum(),
+        distinct: distinct as u64,
+    });
+    ret
 }
 
 // ── A pass ───────────────────────────────────────────────────────────────
@@ -1104,6 +1142,10 @@ impl Fs {
                 write!(out, "\n");
             }
         }
+
+        let pw = self.reconcile.phys_workers.read();
+        prt!(out, "phys workers last phase: considered {} started {} distinct writepoint-tags {}\n",
+             pw.considered, pw.started, pw.distinct);
 
         write!(out, "\n");
         let exit_ret = self.reconcile.thread_exit_ret.load(Relaxed);
