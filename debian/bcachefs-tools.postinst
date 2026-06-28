@@ -1,0 +1,50 @@
+#!/bin/sh
+# Stage Secure Boot enrollment of the bcachefs module-signing CA, using the
+# consent and one-time password gathered by debian/bcachefs-tools.config.
+#
+# All guards fail open: missing mokutil, no efivars, Secure Boot off, already
+# enrolled, or no password collected -> do nothing. Enrollment is only ever
+# *staged* here; the user completes it via the MOK Manager at the next reboot.
+set -e
+
+. /usr/share/debconf/confmodule
+
+CERT=/usr/share/bcachefs-tools/bcachefs-signing-ca.der
+CA_CN="bcachefs kernel module CA"
+
+stage_mok_enrollment() {
+	command -v mokutil >/dev/null 2>&1 || return 0
+	[ -f "$CERT" ] || return 0
+	mokutil --sb-state 2>/dev/null | grep -qi "SecureBoot enabled" || return 0
+
+	# Already trusted, or already staged for enrollment this boot? Don't
+	# re-prompt or re-stage on every upgrade.
+	mokutil --test-key "$CERT" 2>/dev/null | grep -qi "already enrolled" && return 0
+	mokutil --list-new 2>/dev/null | grep -qi "$CA_CN" && return 0
+
+	db_get bcachefs-tools/enroll-mok || return 0
+	[ "$RET" = "true" ] || return 0
+	db_get bcachefs-tools/mok-password || return 0
+	pw="$RET"
+	[ -n "$pw" ] || return 0
+
+	if printf '%s\n%s\n' "$pw" "$pw" | mokutil --import "$CERT" >/dev/null 2>&1; then
+		db_input high bcachefs-tools/mok-reboot || true
+		db_go || true
+	else
+		echo "bcachefs-tools: failed to schedule Secure Boot key enrollment via mokutil" >&2
+	fi
+}
+
+case "$1" in
+configure)
+	stage_mok_enrollment
+	# A MOK password is a one-time secret; never leave it in the debconf db.
+	db_set bcachefs-tools/mok-password "" || true
+	db_set bcachefs-tools/mok-password-again "" || true
+	;;
+esac
+
+#DEBHELPER#
+
+exit 0
