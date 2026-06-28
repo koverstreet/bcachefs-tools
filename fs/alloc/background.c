@@ -422,6 +422,9 @@
  * \texttt{foreground\_target=/dev/sda1}). Internally, both device references
  * and label references resolve to entries in the disk groups superblock field,
  * which maps label strings to device sets.
+ * Disk group entries may be retained after the last device in a label is
+ * removed, because filesystem and per-file target options may still refer to
+ * the label; preserving the entry avoids creating dangling target references.
  *
  * Four target options control where data is placed:
  *
