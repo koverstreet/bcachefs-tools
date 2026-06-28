@@ -76,7 +76,8 @@ fn fs_usage(cli: Cli) -> Result<()> {
 
 struct DevContext {
     info: DevInfo,
-    usage: DevUsage,
+    usage: Option<DevUsage>,
+    usage_error: Option<String>,
     leaving: u64,
 }
 
@@ -495,10 +496,12 @@ fn devs_usage_to_text(
 
     let mut dev_ctxs: Vec<DevContext> = Vec::new();
     for dev in devs {
-        let usage = handle.dev_usage(dev.idx)
-            .map_err(|e| anyhow!("getting usage for device {}: {}", dev.idx, e))?;
+        let (usage, usage_error) = match handle.dev_usage(dev.idx) {
+            Ok(usage) => (Some(usage), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
         let leaving = dev_leaving_sectors(&dev_leaving_map, dev.idx);
-        dev_ctxs.push(DevContext { info: dev.clone(), usage, leaving });
+        dev_ctxs.push(DevContext { info: dev.clone(), usage, usage_error, leaving });
     }
 
     // Sort by label, then dev name, then idx
@@ -527,22 +530,28 @@ fn devs_usage_to_text(
             sub.newline();
 
             for d in &dev_ctxs {
-                let hidden = d.usage.hidden_sectors();
-                let capacity = d.usage.capacity_sectors() - hidden;
-                let used = d.usage.used_sectors() - hidden;
                 let label = d.info.label.as_deref().unwrap_or("(no label)");
-                let state = bcachefs_kernel::sb::members::member_state_str(d.usage.state);
 
-                write!(sub, "{} (device {}):\t{}\t{}\t", label, d.info.idx, d.info.dev, state).unwrap();
+                write!(sub, "{} (device {}):\t{}\t", label, d.info.idx, d.info.dev).unwrap();
 
-                sub.units_sectors(capacity);
-                write!(sub, "\r").unwrap();
-                sub.units_sectors(used);
+                if let Some(usage) = &d.usage {
+                    let hidden = usage.hidden_sectors();
+                    let capacity = usage.capacity_sectors() - hidden;
+                    let used = usage.used_sectors() - hidden;
+                    let state = bcachefs_kernel::sb::members::member_state_str(usage.state);
 
-                let pct = if d.usage.nr_buckets > 0 {
-                    d.usage.used_buckets() * 100 / d.usage.nr_buckets
-                } else { 0 };
-                write!(sub, "\r{:>2}%\r", pct).unwrap();
+                    write!(sub, "{}\t", state).unwrap();
+                    sub.units_sectors(capacity);
+                    write!(sub, "\r").unwrap();
+                    sub.units_sectors(used);
+
+                    let pct = if usage.nr_buckets > 0 {
+                        usage.used_buckets() * 100 / usage.nr_buckets
+                    } else { 0 };
+                    write!(sub, "\r{:>2}%\r", pct).unwrap();
+                } else {
+                    write!(sub, "unavailable\t-\r-\r-\r").unwrap();
+                }
 
                 if d.leaving > 0 {
                     sub.units_sectors(d.leaving);
@@ -558,12 +567,17 @@ fn devs_usage_to_text(
 }
 
 fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
-    let u = &d.usage;
-
     let label = d.info.label.as_deref().unwrap_or("(no label)");
+    let Some(u) = &d.usage else {
+        let err = d.usage_error.as_deref().unwrap_or("device usage unavailable");
+        writeln!(out, "{} (device {}):\t{}\tunavailable", label, d.info.idx, d.info.dev).unwrap();
+        writeln!(out, "  usage unavailable: {}", err).unwrap();
+        out.newline();
+        return;
+    };
+
     let state = bcachefs_kernel::sb::members::member_state_str(u.state);
     let pct = if u.nr_buckets > 0 { u.used_buckets() * 100 / u.nr_buckets } else { 0 };
-
     out.aligned(|sub| {
         writeln!(sub, "{} (device {}):\t{}\t{}\t{:>2}%", label, d.info.idx, d.info.dev, state, pct).unwrap();
 
