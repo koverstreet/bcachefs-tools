@@ -821,8 +821,36 @@ static u32 move_alloc_dev_congested(struct bch_dev *ca, u64 now)
 
 	return clamp(congested, 0LL, CONGESTED_MAX);
 }
+
+static u32 move_alloc_dev_write_congested(struct bch_dev *ca)
+{
+	struct bch2_time_stats *stats = &ca->io_latency[WRITE].stats;
+	u64 latency = atomic64_read(&ca->cur_latency[WRITE]);
+	s64 typical = mean_and_variance_get_median(stats->duration_stats_weighted);
+	u64 threshold;
+	u64 over;
+	u32 max_pressure = max_t(u32, CONGESTED_MAX >> 3, 1);
+
+	if (stats->duration_stats.n < 32 || typical <= 0)
+		return 0;
+
+	threshold = (u64) typical << 3;
+	if (!threshold || latency <= threshold)
+		return 0;
+
+	over = latency - threshold;
+	if (over >= threshold)
+		return max_pressure;
+
+	return max_t(u32, div64_u64(over * max_pressure, threshold), 1);
+}
 #else
 static u32 move_alloc_dev_congested(struct bch_dev *ca, u64 now)
+{
+	return 0;
+}
+
+static u32 move_alloc_dev_write_congested(struct bch_dev *ca)
 {
 	return 0;
 }
@@ -838,7 +866,10 @@ static u32 move_alloc_dev_pressure(struct bch_fs *c,
 	if (!ca)
 		return U32_MAX;
 
-	return move_alloc_dev_congested(ca, now) +
+	return min_t(u32,
+		     move_alloc_dev_congested(ca, now) +
+		     move_alloc_dev_write_congested(ca),
+		     CONGESTED_MAX) +
 		move_alloc_dev_busy(c, req, dev);
 }
 
@@ -861,9 +892,14 @@ static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 	/*
 	 * Background moves can otherwise pick the same emptiest device that
 	 * foreground writepoints or other movers are already filling, or a
-	 * device that is currently congested from unrelated IO. Keep the
-	 * free-space weighted allocator order primary; only let contention
-	 * break adjacent ties, so we do not defeat free-space balancing.
+	 * device that is currently congested from unrelated IO. Include a small
+	 * write-latency term here too: the global congestion counter is
+	 * read-oriented, but moving data should avoid a destination whose
+	 * write/flush path is already far slower than its recent norm.
+	 *
+	 * Keep the free-space weighted allocator order primary; only let
+	 * contention break adjacent ties, so we do not defeat free-space
+	 * balancing.
 	 */
 	for (unsigned j = 0; j + 1 < req->devs_sorted.nr; j++)
 		if (pressure[j] > pressure[j + 1]) {
