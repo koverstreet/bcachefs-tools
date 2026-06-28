@@ -41,7 +41,7 @@
 
 static inline u16 bch2_move_ioprio(struct data_update_opts *opts)
 {
-	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7);
 }
 
 const char * const bch2_data_ops_strs[] = {
