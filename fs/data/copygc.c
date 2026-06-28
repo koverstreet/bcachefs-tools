@@ -610,6 +610,7 @@ static int bch2_copygc_thread(void *arg)
 	}
 
 	move_buckets_wait(&ctxt, &buckets, true);
+	ret = ret ?: bch2_moving_ctxt_flush_all(&ctxt);
 	bch2_moving_ctxt_exit(&ctxt);
 	bch2_move_stats_exit(&move_stats, c);
 out:
