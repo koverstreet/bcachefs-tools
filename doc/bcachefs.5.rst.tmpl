@@ -85,6 +85,11 @@ For example, given disks formatted with these labels:
 Configuration options such as foreground_target may then refer to controller1,
 or controller1.hdd, or controller1.hdd1 - or to /dev/sda directly.
 
+Label entries are also retained when they no longer have member devices, if
+filesystem or per-file options may still refer to them. Such entries can appear
+in the internal disk-groups listing with an empty device set after removing a
+device; this avoids turning existing target references into dangling names.
+
 Data placement, caching
 -----------------------
 
