@@ -84,6 +84,30 @@ fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Resul
     Ok(())
 }
 
+fn read_bcachefs_attr(path: &Path, attr: &str) -> Result<Option<String>> {
+    use rustix::fs::getxattr;
+    use rustix::io::Errno;
+
+    // "no value here" rather than an error: NODATA (option unset), NOTSUP (not
+    // a bcachefs filesystem), INVAL (not a recognized option).
+    let read = |buf: &mut [u8]| -> Result<Option<usize>> {
+        match getxattr(path, attr, buf) {
+            Ok(len) => Ok(Some(len)),
+            Err(Errno::NODATA | Errno::NOTSUP | Errno::INVAL) => Ok(None),
+            Err(e) => Err(e).with_context(|| format!("reading {attr} from {}", path.display())),
+        }
+    };
+
+    // An empty buffer returns the attribute's size.
+    let Some(len) = read(&mut [])? else { return Ok(None) };
+
+    let mut buf = vec![0u8; len];
+    let Some(len) = read(&mut buf)? else { return Ok(None) };
+
+    buf.truncate(len);
+    Ok(Some(String::from_utf8_lossy(&buf).into_owned()))
+}
+
 pub(super) fn setattr_cmd() -> Command {
     Command::new("set-file-option")
         .about("Set attributes on files in a bcachefs filesystem")
@@ -118,6 +142,65 @@ fn cmd_setattr(argv: Vec<String>) -> Result<()> {
     for path in files {
         do_setattr(Path::new(path), &opts, remove_all)?;
     }
+    Ok(())
+}
+
+pub(super) fn getattr_cmd() -> Command {
+    Command::new("get-file-option")
+        .about("Show file-level options")
+        .long_about("\
+Shows per-file or per-directory IO path options stored in a bcachefs \
+filesystem. By default only explicitly set file options are printed. Use \
+--effective to show inherited/effective options, or --all to include unset \
+options.")
+        .arg(Arg::new("effective")
+            .long("effective")
+            .short('e')
+            .action(ArgAction::SetTrue)
+            .help("Show inherited/effective file options"))
+        .arg(Arg::new("all")
+            .long("all")
+            .short('a')
+            .action(ArgAction::SetTrue)
+            .help("Show unset options as '-'"))
+        .arg(Arg::new("files")
+            .action(ArgAction::Append)
+            .required(true))
+}
+
+fn cmd_getattr(argv: Vec<String>) -> Result<()> {
+    let matches = getattr_cmd().get_matches_from(argv);
+    let effective = matches.get_flag("effective");
+    let all = matches.get_flag("all");
+    let prefix = if effective { "bcachefs_effective" } else { "bcachefs" };
+    let files: Vec<&String> = matches.get_many("files").unwrap().collect();
+    let names = opts::bch_option_names(c::opt_flags::OPT_INODE as u32);
+    let multi_file = files.len() > 1;
+
+    for file in files {
+        let path = Path::new(file);
+        for name in &names {
+            let attr = format!("{prefix}.{name}");
+            match read_bcachefs_attr(path, &attr)? {
+                Some(value) => {
+                    if multi_file {
+                        println!("{file}\t{name}\t{value}");
+                    } else {
+                        println!("{name}\t{value}");
+                    }
+                }
+                None if all => {
+                    if multi_file {
+                        println!("{file}\t{name}\t-");
+                    } else {
+                        println!("{name}\t-");
+                    }
+                }
+                None => {}
+            }
+        }
+    }
+
     Ok(())
 }
 
@@ -191,4 +274,5 @@ fn cmd_reflink_option_propagate(argv: Vec<String>) -> Result<()> {
 }
 
 pub const CMD_SETATTR: super::CmdDef = raw_cmd!("set-file-option", "Set file-level options", cmd_setattr);
+pub const CMD_GETATTR: super::CmdDef = raw_cmd!("get-file-option", "Show file-level options", cmd_getattr);
 pub const CMD_REFLINK_PROPAGATE: super::CmdDef = raw_cmd!("reflink-option-propagate", "Propagate options to reflinked files", cmd_reflink_option_propagate);
