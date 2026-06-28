@@ -404,7 +404,10 @@ helper; this is the same mount path exposed as
 .Pp
 Mount a filesystem. The
 .Ar device
-can be a device, a colon-separated list of devices, or UUID=<UUID>. The
+can be a device, a colon-separated list of devices, UUID=<UUID>, or
+OLD_BLKID_UUID=<UUID>. Use OLD_BLKID_UUID=<UUID> in fstab entries when
+systemd consumes UUID=<UUID> before the bcachefs mount helper can scan all
+members. The
 .Ar mountpoint
 is the path where the filesystem should be mounted. If not set, then the filesystem won't actually be mounted
 but all steps preceding mounting the filesystem (e.g. asking for passphrase) will still be performed.
