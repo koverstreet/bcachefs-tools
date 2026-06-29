@@ -780,6 +780,42 @@ static bool stripe_retry_must_wait(struct moving_context *ctxt,
 	return u && u->io_seq <= stripe_io_seq;
 }
 
+static bool reconcile_target_has_rotational(struct bch_fs *c,
+					    struct bch_inode_opts *opts,
+					    struct data_update_opts *data_opts)
+{
+	unsigned target = data_opts->target ?:
+		opts->background_target ?:
+		opts->foreground_target;
+	struct bch_devs_mask devs = target_rw_devs(c, BCH_DATA_user, target);
+
+	guard(rcu)();
+	for_each_member_device_rcu(c, ca, &devs)
+		if (bch2_dev_rotational(c, ca->dev_idx))
+			return true;
+
+	return false;
+}
+
+static void reconcile_set_move_limits(struct moving_context *ctxt,
+				      struct bch_inode_opts *opts,
+				      struct data_update_opts *data_opts,
+				      struct bbpos work)
+{
+	struct bch_fs *c = ctxt->trans->c;
+
+	bch2_moving_ctxt_reset_limits(ctxt);
+
+	if (!reconcile_target_has_rotational(c, opts, data_opts))
+		return;
+
+	bch2_moving_ctxt_set_rotational_limits(ctxt,
+			work.btree == BTREE_ID_reconcile_hipri ||
+			work.btree == BTREE_ID_reconcile_hipri_phys
+			? MOVE_ROTATIONAL_LIMIT_hipri
+			: MOVE_ROTATIONAL_LIMIT_background);
+}
+
 static int do_retry_stripe(struct moving_context *ctxt, u64 idx)
 {
 	struct btree_trans *trans = ctxt->trans;
@@ -862,6 +898,7 @@ static int __do_reconcile_extent(struct moving_context *ctxt,
 		}
 	}
 
+	reconcile_set_move_limits(ctxt, opts, data_opts, work);
 	ret = bch2_move_extent(ctxt, NULL, opts, data_opts, iter, level, k);
 	BUG_ON(ret > 0);
 	ret = check_reconcile_pending_err(trans, opts, data_opts, k, ret);

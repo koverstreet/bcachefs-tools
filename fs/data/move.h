@@ -103,6 +103,7 @@ void bch2_moving_ctxt_exit(struct moving_context *);
 void bch2_moving_ctxt_init(struct moving_context *, struct bch_fs *,
 			   struct bch_ratelimit *, struct bch_move_stats *,
 			   struct write_point_specifier, bool);
+void bch2_moving_ctxt_reset_limits(struct moving_context *);
 enum move_rotational_limit {
 	MOVE_ROTATIONAL_LIMIT_background,
 	MOVE_ROTATIONAL_LIMIT_hipri,
