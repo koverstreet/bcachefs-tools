@@ -908,8 +908,9 @@ static void bi_sectors_underflow(struct btree_trans *trans,
 	s64 bi_sectors = le64_to_cpu(inode->v.bi_sectors);
 
 	CLASS(bch_log_msg, msg)(trans->c);
-	prt_printf(&msg.m, "inode %llu i_sectors underflow: %lli + %lli < 0",
-		   inode->k.p.offset, bi_sectors, *i_sectors_delta);
+	prt_printf(&msg.m, "inode %llu snapshot %u i_sectors underflow: %lli + %lli < 0",
+		   inode->k.p.offset, inode->k.p.snapshot,
+		   bi_sectors, *i_sectors_delta);
 
 	msg.m.suppress = !bch2_count_fsck_err(trans->c, inode_i_sectors_underflow, &msg.m);
 
