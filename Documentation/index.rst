@@ -39,6 +39,7 @@ At this moment, only a few of these are described here.
    casefolding
    qemu_direct_io
    errorcodes
+   limits
 
 Future design
 -------------
