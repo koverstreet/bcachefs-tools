@@ -302,7 +302,7 @@ Usage: bcachefs migrate [OPTION]...
 Options:
   -f fs                        Root of filesystem to migrate(s)
       --encrypted              Enable whole filesystem encryption (chacha20/poly1305)
-      --no_passphrase          Don't encrypt master encryption key
+      --no_passphrase          Store master encryption key unencrypted in superblock
   -F                           Force, even if metadata file already exists
   -h, --help                   Display this help and exit
 

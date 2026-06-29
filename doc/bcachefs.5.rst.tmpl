@@ -38,6 +38,21 @@ OPTIONS
 -------
 OPTIONS_TABLE
 
+Encryption key storage
+----------------------
+
+When a filesystem is formatted with ``--encrypted``, bcachefs creates a random
+master key for encrypting filesystem data and metadata. By default that master
+key is stored in the superblock encrypted by a key derived from the passphrase;
+unlocking supplies the passphrase-derived key to the kernel keyring so the
+kernel can decrypt the stored master key.
+
+The ``--no_passphrase`` option does not create a detached or externally supplied
+master key. It stores the master key unencrypted in the superblock, which allows
+the filesystem to use encryption-format metadata without requiring an unlock
+secret. Detached raw master-key storage would require a different unlock and
+superblock contract.
+
 Device management
 -----------------
 Devices can be added, removed, and resized at will, at runtime. There is no
