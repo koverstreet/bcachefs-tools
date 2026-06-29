@@ -774,7 +774,8 @@ static inline void bch2_congested_acct(struct bch_dev *ca, u64 io_latency,
 	}
 }
 
-void bch2_latency_acct(struct bch_dev *ca, u64 submit_time, int rw)
+void bch2_latency_acct(struct bch_dev *ca, u64 submit_time, int rw,
+		       bool account_congestion)
 {
 	atomic64_t *latency = &ca->cur_latency[rw];
 	u64 now = local_clock();
@@ -799,9 +800,10 @@ void bch2_latency_acct(struct bch_dev *ca, u64 submit_time, int rw)
 
 	/*
 	 * Only track read latency for congestion accounting: writes are subject
-	 * to heavy queuing delays from page cache writeback:
+	 * to heavy queuing delays from page cache writeback. Internal move
+	 * writes opt in because their latency is used to steer more move IO.
 	 */
-	if (rw == READ)
+	if (rw == READ || account_congestion)
 		bch2_congested_acct(ca, io_latency, now, rw);
 
 	__bch2_time_stats_update(&ca->io_latency[rw].stats, submit_time, now);
@@ -1476,8 +1478,15 @@ static void bch2_write_endio(struct bio *bio)
 	struct bch_fs *c		= wbio->c;
 	struct bch_dev *ca		= wbio->ca;
 
-	bch2_account_io_completion(ca, BCH_MEMBER_ERROR_write,
-				   wbio->submit_time, !bio->bi_status);
+	if (op->flags & BCH_WRITE_move) {
+		if (ca)
+			bch2_latency_acct(ca, wbio->submit_time, WRITE, true);
+		bch2_account_io_success_fail(ca, BCH_MEMBER_ERROR_write,
+					     !bio->bi_status);
+	} else {
+		bch2_account_io_completion(ca, BCH_MEMBER_ERROR_write,
+					   wbio->submit_time, !bio->bi_status);
+	}
 
 	if (unlikely(bio->bi_status)) {
 		guard(spinlock_irqsave)(&c->write_error_lock);
