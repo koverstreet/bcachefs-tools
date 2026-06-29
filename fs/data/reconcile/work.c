@@ -1435,7 +1435,10 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 			      true);
 
 	if (bch2_dev_rotational(c, thr->dev))
-		bch2_moving_ctxt_set_rotational_limits(&ctxt);
+		bch2_moving_ctxt_set_rotational_limits(&ctxt,
+				reconcile_phases[thr->reconcile_phase].priority == RECONCILE_WORK_hipri
+				? MOVE_ROTATIONAL_LIMIT_hipri
+				: MOVE_ROTATIONAL_LIMIT_background);
 
 	struct btree_trans *trans = ctxt.trans;
 
