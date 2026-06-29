@@ -58,7 +58,9 @@
  * the read path's target-congestion check.
  */
 #define MOVE_ALLOC_CONGESTION_DECAY_SHIFT	24
-#define MOVE_ALLOC_STALLED_THRESHOLD		(CONGESTED_MAX >> 3)
+#define MOVE_ALLOC_STALLED_THRESHOLD_SHIFT	3
+#define MOVE_ALLOC_STALLED_THRESHOLD		(CONGESTED_MAX >> MOVE_ALLOC_STALLED_THRESHOLD_SHIFT)
+#define MOVE_ALLOC_WRITE_LATENCY_SHIFT		3
 #define MOVE_ALLOC_BUSY_BUCKET_WEIGHT		(CONGESTED_MAX >> 1)
 
 static void bch2_trans_mutex_lock_norelock(struct btree_trans *trans,
@@ -876,7 +878,7 @@ static u32 move_alloc_dev_write_congested(struct bch_dev *ca)
 	if (stats->duration_stats.n < 32 || typical <= 0)
 		return 0;
 
-	threshold = (u64) typical << 3;
+	threshold = (u64) typical << MOVE_ALLOC_WRITE_LATENCY_SHIFT;
 	if (!threshold || latency <= threshold)
 		return 0;
 
@@ -952,7 +954,9 @@ static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 	 * not congested. Once a device is visibly falling behind, sink it behind
 	 * less stalled choices; otherwise a much larger, mostly empty disk can keep
 	 * winning move allocations until it is saturated hard enough to leave move
-	 * writes stuck in the block layer.
+	 * writes stuck in the block layer. The threshold is intentionally lower
+	 * than the read path's target-congested cutoff: background moves should
+	 * step away before they can monopolize a slow write target.
 	 */
 	for (unsigned j = 1; j < req->devs_sorted.nr; j++)
 		for (unsigned i = j; i &&
