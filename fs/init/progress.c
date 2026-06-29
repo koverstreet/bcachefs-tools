@@ -101,6 +101,14 @@ __cold void bch2_progress_to_text(struct printbuf *out, struct progress_indicato
 	unsigned percent = s->nodes_total
 		? div64_u64(s->nodes_seen * 100, s->nodes_total)
 		: 0;
+
+	/*
+	 * nodes_total is an estimate from accounting, and scans may rescan or
+	 * rewrite nodes while running. Keep the raw counters visible, but don't
+	 * print impossible percentages.
+	 */
+	percent = min(percent, 100U);
+
 	prt_printf(out, "%d%%, done %llu/%llu nodes, at ",
 		   percent, s->nodes_seen, s->nodes_total);
 	bch2_bbpos_to_text(out, s->pos);
