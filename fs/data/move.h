@@ -42,6 +42,7 @@ struct moving_context {
 
 	unsigned		max_sectors_in_flight;
 	unsigned		max_ios_in_flight;
+	unsigned		noflush_sectors_limit;
 
 	/* For waiting on outstanding reads and writes: */
 	struct closure		cl;

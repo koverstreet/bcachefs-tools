@@ -210,10 +210,8 @@ void bch2_moving_ctxt_account_noflush_commit(struct moving_context *ctxt, u32 se
 
 static bool bch2_moving_ctxt_needs_flush(struct moving_context *ctxt)
 {
-	struct bch_fs *c = ctxt->trans->c;
-
 	guard(mutex)(&ctxt->lock);
-	return ctxt->noflush_sectors >= c->opts.move_bytes_in_flight >> 9;
+	return ctxt->noflush_sectors >= ctxt->noflush_sectors_limit;
 }
 
 void bch2_moving_ctxt_exit(struct moving_context *ctxt)
@@ -260,6 +258,7 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 	ctxt->wait_on_copygc = wait_on_copygc;
 	ctxt->max_sectors_in_flight = c->opts.move_bytes_in_flight >> 9;
 	ctxt->max_ios_in_flight = c->opts.move_ios_in_flight;
+	ctxt->noflush_sectors_limit = c->opts.move_bytes_in_flight >> 9;
 
 	closure_init_stack(&ctxt->cl);
 
@@ -1326,7 +1325,7 @@ static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs 
 		   ctxt->max_sectors_in_flight);
 	prt_printf(out, "noflush sectors:\t%llu/%llu seq %llu\n",
 		   noflush_sectors,
-		   (u64) ctxt->max_sectors_in_flight,
+		   (u64) ctxt->noflush_sectors_limit,
 		   noflush_seq);
 
 	guard(printbuf_indent)(out);
