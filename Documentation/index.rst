@@ -29,6 +29,7 @@ At this moment, only a few of these are described here.
 
    casefolding
    errorcodes
+   limits
 
 Future design
 -------------
