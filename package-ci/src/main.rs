@@ -188,11 +188,19 @@ impl JobStatus {
 /// Filesystem-backed state for one commit's builds
 struct BuildState {
     state_dir: PathBuf,
+    /// Web root where ci.html is written. Defaults next to state_dir (the bash
+    /// generator's /home/aptbcachefsorg/public_html), overridable via PUBLIC_HTML.
+    public_html: PathBuf,
 }
 
 impl BuildState {
     fn new(state_dir: PathBuf) -> Self {
-        Self { state_dir }
+        let public_html = std::env::var_os("PUBLIC_HTML")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                state_dir.parent().unwrap_or(Path::new("/")).join("public_html")
+            });
+        Self { state_dir, public_html }
     }
 
     /// Read the desired commit hash (written by post-receive hook)
@@ -278,13 +286,30 @@ impl BuildState {
         Ok(true)
     }
 
+    /// Render the static status page in-process via the shared ci-dashboard
+    /// crate (was scripts/generate-status-html.sh). The build tree is the
+    /// filesystem-as-state contract: builds/<commit>/<job>/ each with a `status`
+    /// file and a `log`. Best-effort — a failed render must not break a build.
     fn regenerate_html(&self) {
-        let script = self.state_dir.join("scripts/generate-status-html.sh");
-        if script.exists() {
-            let _ = Command::new("bash")
-                .arg(&script)
-                .env("STATE_DIR", &self.state_dir)
-                .status();
+        let root = self.state_dir.join("builds");
+        let tmpl = ci_dashboard::Template::parse("{commit}/{job}");
+        let cols: Vec<String> = tmpl.column_names().iter().map(|s| s.to_string()).collect();
+        let jobs = tmpl.discover(&root, &[]);
+        let opts = ci_dashboard::RenderOpts {
+            title: "bcachefs-tools CI".into(),
+            refresh_secs: 30,
+            // httpd maps /ci-builds → builds/, so {commit}/{job}/log resolves.
+            log_url_prefix: Some("/ci-builds".into()),
+            section_by: None,          // first column (commit) becomes the section
+            group_building_by: None,   // no shared toolchain to surface here
+            stuck_mins: 120,           // matches build_timeout; pid recovery is primary
+        };
+        let html = ci_dashboard::render(&jobs, &cols, &[], &opts, std::time::SystemTime::now());
+
+        let out = self.public_html.join("ci.html");
+        let tmp = out.with_extension("html.tmp");
+        if let Err(e) = std::fs::write(&tmp, &html).and_then(|_| std::fs::rename(&tmp, &out)) {
+            warn!("regenerate ci.html ({}): {e}", out.display());
         }
     }
 

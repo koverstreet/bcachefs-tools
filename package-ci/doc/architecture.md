@@ -79,6 +79,17 @@ Phase 3: publish
             └── log
 ```
 
+## Status page
+
+`$PUBLIC_HTML/ci.html` (https://apt.bcachefs.org/ci.html) is regenerated on
+every status change by `BuildState::regenerate_html()`, which renders the
+`builds/` tree in-process via the shared **ci-dashboard** crate
+(`https://evilpiepirate.org/git/ci-dashboard.git`) — the same renderer the
+module server uses, so there is one status-page implementation, not two. It
+walks `builds/<commit>/<job>/` (template `{commit}/{job}`), reading each job's
+`status` file; failures and stuck builds sort to the top, logs link to
+`/ci-builds/...`. The old `scripts/generate-status-html.sh` is gone.
+
 ## Stale build recovery
 
 When the orchestrator restarts, `self.running` is empty. On the next

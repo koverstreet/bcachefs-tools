@@ -18,3 +18,6 @@ serde_json = "1"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 libc = "0.2"
 signal-hook = "0.3"
+# Shared CI status-page renderer (also used by the module server). Replaces the
+# old scripts/generate-status-html.sh — single source for the dashboard.
+ci-dashboard = { git = "https://evilpiepirate.org/git/ci-dashboard.git" }
