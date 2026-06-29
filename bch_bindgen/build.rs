@@ -384,6 +384,14 @@ fn watch_dir(dir: &str) {
     }
 }
 
+fn clang_target_for_rust_target(target: &str) -> &str {
+    match target {
+        "riscv64gc-unknown-linux-gnu" => "riscv64-unknown-linux-gnu",
+        "riscv32gc-unknown-linux-gnu" => "riscv32-unknown-linux-gnu",
+        _ => target,
+    }
+}
+
 fn main() {
     use std::path::PathBuf;
 
@@ -406,6 +414,7 @@ fn main() {
     // Tell bindgen/clang the target triple so it computes correct type
     // layout (size, alignment) for the target architecture, not the host.
     let target = std::env::var("TARGET").unwrap();
+    let clang_target = clang_target_for_rust_target(&target);
 
     let bindings = bindgen::builder()
         .formatter(bindgen::Formatter::Prettyplease)
@@ -416,7 +425,7 @@ fn main() {
                 .display()
                 .to_string(),
         )
-        .clang_arg(format!("--target={}", target))
+        .clang_arg(format!("--target={}", clang_target))
         .clang_args(
             urcu.include_paths
                 .iter()
@@ -782,6 +791,7 @@ fn main() {
                 .iter()
                 .map(|p| format!("-I{}", p.display())),
         )
+        .clang_arg(format!("--target={}", clang_target))
         .generate()
         .expect("BindGen Generation Failiure: [Keyutils]");
     bindings
