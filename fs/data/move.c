@@ -247,6 +247,8 @@ static bool bch2_moving_ctxt_needs_flush(struct moving_context *ctxt)
 	return ctxt->noflush_sectors >= ctxt->noflush_sectors_limit;
 }
 
+#define MOVE_NOFLUSH_MIN_BYTES			(16U << 20)
+
 void bch2_moving_ctxt_exit(struct moving_context *ctxt)
 {
 	struct bch_fs *c = ctxt->trans->c;
@@ -291,7 +293,8 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 	ctxt->wait_on_copygc = wait_on_copygc;
 	ctxt->max_sectors_in_flight = c->opts.move_bytes_in_flight >> 9;
 	ctxt->max_ios_in_flight = c->opts.move_ios_in_flight;
-	ctxt->noflush_sectors_limit = c->opts.move_bytes_in_flight >> 9;
+	ctxt->noflush_sectors_limit =
+		max_t(u32, c->opts.move_bytes_in_flight, MOVE_NOFLUSH_MIN_BYTES) >> 9;
 
 	closure_init_stack(&ctxt->cl);
 
