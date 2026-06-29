@@ -50,13 +50,17 @@ fn cmd_set_option(argv: Vec<String>) -> Result<()> {
     let online = devices.iter().any(|dev| sysfs::dev_mounted(dev));
 
     if online {
-        set_option_online(&devices, &opts)
+        set_option_online(&devices, &dev_idxs, &opts)
     } else {
         set_option_offline(&devices, &dev_idxs, &opts)
     }
 }
 
-fn set_option_online(devices: &[&String], opts: &[(String, String)]) -> Result<()> {
+fn set_option_online(
+    devices: &[&String],
+    dev_idxs: &[u32],
+    opts: &[(String, String)],
+) -> Result<()> {
     let fs = BcachefsHandle::open(devices[0].as_str())?;
 
     for dev in &devices[1..] {
@@ -78,16 +82,26 @@ fn set_option_online(devices: &[&String], opts: &[(String, String)]) -> Result<(
             continue;
         }
 
-        if flags & c::opt_flags::OPT_FS as u32 != 0 {
+        let is_fs_opt = flags & c::opt_flags::OPT_FS as u32 != 0;
+        let is_device_opt = flags & c::opt_flags::OPT_DEVICE as u32 != 0;
+
+        if is_fs_opt && !is_device_opt {
             sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value);
         }
 
-        if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
+        if is_device_opt {
+            if !dev_idxs.is_empty() {
+                for dev_idx in dev_idxs {
+                    sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value);
+                }
+                continue;
+            }
+
             for dev in devices {
                 let fs2 = BcachefsHandle::open(dev.as_str())?;
                 let dev_idx = fs2.dev_idx();
                 if dev_idx < 0 {
-                    eprintln!("Couldn't determine device index for {dev}");
+                    eprintln!("Couldn't determine device index for {dev}; use --dev-idx");
                     continue;
                 }
 
