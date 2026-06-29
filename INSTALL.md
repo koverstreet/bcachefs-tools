@@ -25,7 +25,13 @@ the minimum supported Rust version (MSRV).
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --no-modify-path
 ```
 
-Debian (Bullseye or later) and Ubuntu (20.04 or later): you can install these with
+Debian and Devuan releases older than Trixie do not provide a new enough
+toolchain and dependency stack for current bcachefs-tools master. In
+particular, Jessie, Bullseye, and Bookworm are no longer supported build
+environments for current master.
+
+Debian Trixie or later, or an Ubuntu release with comparable package versions:
+you can install the userspace build dependencies with
 
 ``` shell
 apt install -y pkg-config libaio-dev libblkid-dev libkeyutils-dev \
@@ -34,10 +40,16 @@ apt install -y pkg-config libaio-dev libblkid-dev libkeyutils-dev \
     python3 python3-docutils libclang-dev debhelper dh-python
 ```
 
-Starting from Debian Trixie and Ubuntu 23.10, you will additionally need:
+These releases also need systemd development headers:
 ```shell
 apt install -y systemd-dev
 ```
+
+Building the bundled kernel module or DKMS package additionally requires kernel
+headers, kernel Rust support, and userspace tools new enough for the vendored
+bcachefs kernel sources. If a distribution kernel is older than the bcachefs
+source snapshot in this repository, build against a newer kernel tree or use a
+packaged bcachefs-tools build for that distribution instead.
 
 Fedora: install build dependencies either with `dnf builddep bcachefs-tools` or with:
 ```shell
