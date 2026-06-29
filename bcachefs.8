@@ -209,6 +209,11 @@ Don't encrypt master encryption key
 .It Fl L , Fl -fs_label Ns = Ns Ar label
 Create the filesystem with the specified
 .Ar label
+This is the filesystem label, distinct from per-device labels used for target
+selection. On a mounted filesystem it can be changed by tools that issue the
+standard Linux
+.Dv FS_IOC_SETFSLABEL
+ioctl.
 .It Fl U , Fl -uuid Ns = Ns Ar uuid
 Create the filesystem with the specified
 .Ar uuid
