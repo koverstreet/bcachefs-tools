@@ -248,8 +248,7 @@ static void open_bucket_free_unused(struct bch_fs *c, struct open_bucket *ob)
 		bch2_alloc_wake_dev(bch2_dev_have_ref(c, ob->dev));
 }
 
-static void open_bucket_reclaim_unused_partials(struct bch_fs *c,
-						enum bch_watermark watermark)
+void bch2_open_bucket_reclaim_unused_partials(struct bch_fs *c, unsigned min_free)
 {
 	struct bch_fs_allocator *a = &c->allocator;
 
@@ -258,8 +257,7 @@ static void open_bucket_reclaim_unused_partials(struct bch_fs *c,
 		unsigned dev;
 
 		scoped_guard(spinlock, &a->freelist_lock) {
-			if (a->open_buckets_nr_free > bch2_open_buckets_reserved(watermark) ||
-			    !a->open_buckets_partial_nr)
+			if (a->open_buckets_nr_free > min_free || !a->open_buckets_partial_nr)
 				return;
 
 			ob = a->open_buckets +
@@ -326,7 +324,7 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 		return NULL;
 	}
 
-	open_bucket_reclaim_unused_partials(c, req->watermark);
+	bch2_open_bucket_reclaim_unused_partials(c, bch2_open_buckets_reserved(req->watermark));
 
 	guard(spinlock)(&c->allocator.freelist_lock);
 
