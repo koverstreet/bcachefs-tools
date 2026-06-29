@@ -23,11 +23,14 @@ static u32 dev_bucket_size(struct bch_fs *c, unsigned dev)
 	return ca ? ca->mi.bucket_size : 0;
 }
 
-static bool dev_bucket_nouse(struct bch_fs *c, struct bpos bucket)
+static bool bch2_discard_blocked_by_resize(struct bch_fs *c, struct bpos bucket)
 {
 	guard(rcu)();
 	struct bch_dev *ca = bch2_dev_rcu_noerror(c, bucket.inode);
-	return ca ? bch2_bucket_nouse(ca, bucket.offset) : true;
+
+	return ca &&
+		bch2_dev_is_shrinking(ca) &&
+		bucket.offset >= bch2_dev_resize_target(ca);
 }
 
 #define DEV_IN_FLIGHT_MAX		4
@@ -294,7 +297,7 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	if (unlikely(dev_bucket_nouse(c, bucket)))
+	if (unlikely(bch2_discard_blocked_by_resize(c, bucket)))
 		return 0;
 
 	int ret = discard_in_flight_add(c, NULL, bucket, fastpath, true);
@@ -481,16 +484,6 @@ static void calculate_discard_sectors_to_release(struct btree_trans *trans)
 	if (s->r.free < s->r.reserve * 2 &&
 	    s->r.new_rewind_seq > c->journal.rewind_seq)
 		s->r.flush_journal = true;
-}
-
-static bool bch2_discard_blocked_by_resize(struct bch_fs *c, struct bpos bucket)
-{
-	guard(rcu)();
-	struct bch_dev *ca = bch2_dev_rcu_noerror(c, bucket.inode);
-
-	return ca &&
-		bch2_dev_is_shrinking(ca) &&
-		bucket.offset >= bch2_dev_resize_target(ca);
 }
 
 static void bch2_do_discards(struct bch_fs *c)
