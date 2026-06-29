@@ -245,6 +245,7 @@ static void open_bucket_reclaim_unused_partials(struct bch_fs *c,
 
 	while (1) {
 		struct open_bucket *ob;
+		unsigned dev;
 
 		scoped_guard(spinlock, &a->freelist_lock) {
 			if (a->open_buckets_nr_free > bch2_open_buckets_reserved(watermark) ||
@@ -253,6 +254,7 @@ static void open_bucket_reclaim_unused_partials(struct bch_fs *c,
 
 			ob = a->open_buckets +
 				a->open_buckets_partial[--a->open_buckets_partial_nr];
+			dev = ob->dev;
 			ob->on_partial_list = false;
 
 			scoped_guard(rcu)
@@ -260,6 +262,13 @@ static void open_bucket_reclaim_unused_partials(struct bch_fs *c,
 		}
 
 		bch2_open_bucket_put(c, ob);
+
+		scoped_guard(rcu) {
+			struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+
+			if (ca)
+				bch2_alloc_wake_dev(ca);
+		}
 	}
 }
 
