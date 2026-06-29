@@ -718,6 +718,9 @@ static void __bch2_fs_free(struct bch_fs *c)
 	bch2_free_pending_node_rewrites(c);
 	bch2_free_fsck_errs(c);
 	bch2_fs_vfs_exit(c);
+	if (cancel_delayed_work_sync(&c->snapshots.wait_for_pagecache_and_delete_work))
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_snapshot_delete_pagecache);
+
 	percpu_free_rwsem(&c->snapshots.create_lock);
 	bch2_fs_replicas_exit(c);
 	bch2_fs_reconcile_exit(c);
