@@ -939,7 +939,7 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 	     crc.csum_type == BCH_CSUM_crc32c_nonzero) &&
 	    !crc_is_compressed(crc)) {
 		int repair_ret = bch2_try_bitflip_repair_bio(c, src,
-					&crc, rbio->pick.crc.csum);
+					&crc, nonce, rbio->pick.crc.csum);
 		if (!repair_ret) {
 			csum_good = true;
 			/*
