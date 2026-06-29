@@ -135,7 +135,9 @@ be used to pin a specific file or directory to a specific device or target:
   promote_target=
 
 Note that if the target specified is full, the write will spill over to the rest
-of the filesystem.
+of the filesystem. Replication and device durability requirements still limit
+usable space: a device or target may have free buckets that cannot satisfy a
+write if the filesystem cannot place enough durable copies elsewhere.
 
 Data protection
 ---------------
