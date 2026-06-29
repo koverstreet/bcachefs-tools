@@ -155,10 +155,9 @@ static inline void bio_flip_bit(struct bio *bio, unsigned long bit_pos)
 
 	bio_for_each_segment(bv, bio, iter) {
 		if (byte_pos < offset + bv.bv_len) {
-			unsigned page_off = bv.bv_offset + (byte_pos - offset);
-			u8 *p = kmap_local_page(bv.bv_page);
+			u8 *p = bvec_kmap_local(&bv);
 
-			p[page_off] ^= 0x80U >> bit_off;
+			p[byte_pos - offset] ^= 0x80U >> bit_off;
 			kunmap_local(p);
 			return;
 		}
@@ -174,12 +173,12 @@ static inline void bio_flip_bit(struct bio *bio, unsigned long bit_pos)
  */
 int bch2_try_bitflip_repair_bio(struct bch_fs *c, struct bio *bio,
 				struct bch_extent_crc_unpacked *crc,
-				struct bch_csum expected)
+				struct nonce nonce, struct bch_csum expected)
 {
 	struct bch_csum computed;
-	struct nonce nonce = { .d = { 0 } };
 	struct syndrome_entry *table, *match;
 	unsigned long total_bytes, total_bits;
+	u32 bit_pos;
 	u32 syndrome;
 
 	if (crc->csum_type != BCH_CSUM_crc32c &&
@@ -212,18 +211,19 @@ int bch2_try_bitflip_repair_bio(struct bch_fs *c, struct bio *bio,
 		return -ENODATA; /* multi-bit error, can't fix */
 	}
 
-	bio_flip_bit(bio, match->bit_pos);
+	bit_pos = match->bit_pos;
+	bio_flip_bit(bio, bit_pos);
 	kvfree(table);
 
 	/* Verify repair by recomputing checksum */
 	computed = bch2_checksum_bio(c, crc->csum_type, nonce, bio);
 	if (bch2_crc_cmp(computed, expected)) {
 		/* Shouldn't happen for a true 1-bit error; undo */
-		bio_flip_bit(bio, match->bit_pos);
+		bio_flip_bit(bio, bit_pos);
 		return -ENODATA;
 	}
 
 	bch_info(c, "bitflip repair: corrected single-bit error at bit %u (byte %u, bit %u in byte)",
-		 match->bit_pos, match->bit_pos / 8, match->bit_pos % 8);
+		 bit_pos, bit_pos / 8, bit_pos % 8);
 	return 0;
 }
