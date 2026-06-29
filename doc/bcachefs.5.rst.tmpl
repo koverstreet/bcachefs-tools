@@ -50,6 +50,18 @@ We generally avoid per-device options, preferring instead options that can be
 overridden on files or directories, but there are some:
 
  *durability*
+ *data_allowed*
+
+The ``data_allowed`` per-device option restricts which data types may be placed
+on a device. The accepted values are ``journal``, ``btree``, and ``user``; pass
+one or more of them as a comma-separated list. For example, a metadata device
+may use ``data_allowed=journal,btree``, while a bulk data device may use
+``data_allowed=user``.
+
+``show-super`` and usage reports may display additional data types under
+``Has data``, such as ``parity``. Those are internal allocation/accounting data
+types that describe what is currently present on the device. They are not extra
+values accepted by ``data_allowed``.
 
 Multipath devices
 -----------------
