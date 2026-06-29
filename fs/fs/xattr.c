@@ -479,18 +479,12 @@ static int inode_opt_set_fn(struct btree_trans *trans,
 	if (s->id == Inode_opt_casefold)
 		try(bch2_inode_set_casefold(trans, inode_inum(inode), bi, s->v));
 
-	if (s->id == Inode_opt_inodes_32bit &&
-	    !bch2_request_incompat_feature(trans->c, bcachefs_metadata_version_31bit_dirent_offset)) {
+	if (s->id == Inode_opt_inodes_32bit) {
 		/*
 		 * Make sure the dir is empty, as otherwise we'd need to
 		 * rehash everything and update the dirent keys.
 		 */
 		try(bch2_empty_dir_trans(trans, inode_inum(inode)));
-
-		if (s->defined)
-			bi->bi_flags |= BCH_INODE_31bit_dirent_offset;
-		else
-			bi->bi_flags &= ~BCH_INODE_31bit_dirent_offset;
 	}
 
 	if (s->defined)
@@ -499,6 +493,9 @@ static int inode_opt_set_fn(struct btree_trans *trans,
 		bi->bi_fields_set &= ~(1U << s->id);
 
 	bch2_inode_opt_set(bi, s->id, s->v);
+
+	if (s->id == Inode_opt_inodes_32bit)
+		try(bch2_inode_set_31bit_dirent_offset(trans->c, bi));
 
 	return 0;
 }
