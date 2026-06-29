@@ -61,10 +61,21 @@ static inline void chacha20_crypt(struct chacha_state *state, u8 *dst, const u8 
 {
 	u32 *key = state->x + 4;
 	u32 *iv  = state->x + 12;
+
+	/* libsodium reads key/nonce via LOAD32_LE, so re-serialize the
+	 * native-order words LE. */
+	u8 k[CHACHA_KEY_SIZE];
+	u8 n[8];
+	int i;
+	for (i = 0; i < CHACHA_KEY_WORDS; i++)
+		put_unaligned_le32(key[i], k + i * 4);
+	put_unaligned_le32(iv[2], n + 0);
+	put_unaligned_le32(iv[3], n + 4);
+
 	int ret = crypto_stream_chacha20_xor_ic(dst, src, bytes,
-						(void *) &iv[2],
+						n,
 						iv[0] | ((u64) iv[1] << 32),
-						(void *) key);
+						k);
 	BUG_ON(ret);
 }
 

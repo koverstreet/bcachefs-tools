@@ -30,14 +30,14 @@ pub fn sb_is_encrypted(sb: &bch_sb_handle) -> bool {
     let bch_key_magic = u64::from_le_bytes(*BCH_KEY_MAGIC);
     sb.sb()
         .crypt()
-        .map(|c| c.key().magic != bch_key_magic)
+        .map(|c| u64::from_le(c.key().magic) != bch_key_magic)
         .unwrap_or(false)
 }
 
 /// Create an unencrypted (plaintext) key for the crypt field (remove-passphrase).
 pub fn unencrypted_key(key: &bch_key) -> bch_encrypted_key {
     bch_encrypted_key {
-        magic: u64::from_le_bytes(*BCH_KEY_MAGIC),
+        magic: u64::from_le_bytes(*BCH_KEY_MAGIC).to_le(),
         key: *key,
     }
 }
@@ -275,7 +275,7 @@ impl Passphrase {
     ) -> bch_encrypted_key {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
         let mut new_key = bch_encrypted_key {
-            magic: u64::from_le_bytes(*BCH_KEY_MAGIC),
+            magic: u64::from_le_bytes(*BCH_KEY_MAGIC).to_le(),
             key: *key,
         };
 
@@ -303,7 +303,7 @@ impl Passphrase {
         let mut sb_key = *crypt.key();
 
         ensure!(
-            sb_key.magic != bch_key_magic,
+            u64::from_le(sb_key.magic) != bch_key_magic,
             "filesystem encryption key is not passphrase-protected"
         );
 
@@ -317,7 +317,7 @@ impl Passphrase {
                 mem::size_of_val(&sb_key),
             )
         };
-        ensure!(sb_key.magic == bch_key_magic, "incorrect passphrase");
+        ensure!(u64::from_le(sb_key.magic) == bch_key_magic, "incorrect passphrase");
 
         Ok((passphrase_key, sb_key))
     }
