@@ -144,8 +144,9 @@ void __bch2_i_sectors_acct(struct bch_fs *c, struct bch_inode_info *inode,
 {
 	if (unlikely((s64) inode->v.i_blocks + sectors < 0)) {
 		CLASS(bch_log_msg, msg)(c);
-		prt_printf(&msg.m, "inode %llu i_blocks underflow: %llu + %lli < 0 (ondisk %lli)",
-			   (u64) inode->v.i_ino, (u64) inode->v.i_blocks, sectors,
+		prt_printf(&msg.m, "subvol %llu inode %llu i_blocks underflow: %llu + %lli < 0 (ondisk %lli)",
+			   (u64) inode->ei_inum.subvol, (u64) inode->v.i_ino,
+			   (u64) inode->v.i_blocks, sectors,
 			   inode->ei_inode.bi_sectors);
 
 		msg.m.suppress = !bch2_count_fsck_err(c, vfs_inode_i_blocks_underflow, &msg.m);
