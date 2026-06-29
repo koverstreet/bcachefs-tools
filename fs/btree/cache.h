@@ -179,7 +179,7 @@ static inline void bch2_btree_cache_update_throttle(struct bch_fs *c)
 	size_t live	= btree_cache_nr_live(bc);
 	size_t dirty	= btree_cache_nr_dirty(bc);
 	bool throttle	= atomic_long_read(&bc->nr_in_flight_inner) > BTREE_WRITE_IO_LIMIT(c) ||
-			  (live && dirty > live * 3 / 4);
+			  (live && dirty > live / 2);
 
 	if (throttle != READ_ONCE(bc->should_throttle))
 		WRITE_ONCE(bc->should_throttle, throttle);
