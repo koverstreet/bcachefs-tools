@@ -58,6 +58,8 @@
  * the read path's target-congestion check.
  */
 #define MOVE_ALLOC_CONGESTION_DECAY_SHIFT	24
+#define MOVE_ALLOC_STALLED_THRESHOLD		(CONGESTED_MAX >> 1)
+#define MOVE_ALLOC_BUSY_BUCKET_WEIGHT		(CONGESTED_MAX >> 1)
 
 static void bch2_trans_mutex_lock_norelock(struct btree_trans *trans,
 					   struct mutex *lock)
@@ -790,9 +792,9 @@ static bool open_bucket_is_on_writepoint(struct bch_fs *c,
 	return false;
 }
 
-static unsigned move_alloc_dev_busy(struct bch_fs *c,
-				    struct alloc_request *req,
-				    unsigned dev)
+static u32 move_alloc_dev_busy(struct bch_fs *c,
+			       struct alloc_request *req,
+			       unsigned dev)
 {
 	struct bch_fs_allocator *a = &c->allocator;
 	unsigned busy = 0;
@@ -811,7 +813,7 @@ static unsigned move_alloc_dev_busy(struct bch_fs *c,
 		busy++;
 	}
 
-	return busy;
+	return min_t(u32, busy, 2) * MOVE_ALLOC_BUSY_BUCKET_WEIGHT;
 }
 
 #ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
@@ -876,6 +878,16 @@ static u32 move_alloc_dev_pressure(struct bch_fs *c,
 		move_alloc_dev_busy(c, req, dev);
 }
 
+static bool move_alloc_dev_stalled(struct bch_fs *c,
+				   struct alloc_request *req,
+				   unsigned dev, u64 now)
+{
+	return (req->flags & BCH_WRITE_move) &&
+		req->data_type == BCH_DATA_user &&
+		move_alloc_dev_pressure(c, req, dev, now) >=
+		MOVE_ALLOC_STALLED_THRESHOLD;
+}
+
 static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 				       struct alloc_request *req)
 {
@@ -899,14 +911,17 @@ static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 	 * write-latency term here too: moving data should avoid a destination
 	 * whose write/flush path is already far slower than its recent norm.
 	 *
-	 * Keep the free-space weighted allocator order primary; only let
-	 * contention break adjacent ties, so we do not defeat free-space
-	 * balancing.
+	 * Keep the free-space weighted allocator order primary while devices are
+	 * only mildly busy. Once a device is clearly stalled, sink it behind less
+	 * stalled choices; otherwise a much larger, mostly empty disk can keep
+	 * winning move allocations while it is already saturated.
 	 */
-	for (unsigned j = 0; j + 1 < req->devs_sorted.nr; j++)
-		if (pressure[j] > pressure[j + 1]) {
-			swap(req->devs_sorted.data[j], req->devs_sorted.data[j + 1]);
-			swap(pressure[j], pressure[j + 1]);
+	for (unsigned j = 1; j < req->devs_sorted.nr; j++)
+		for (unsigned i = j; i &&
+		     pressure[i - 1] >= MOVE_ALLOC_STALLED_THRESHOLD &&
+		     pressure[i - 1] > pressure[i]; i--) {
+			swap(req->devs_sorted.data[i - 1], req->devs_sorted.data[i]);
+			swap(pressure[i - 1], pressure[i]);
 		}
 }
 
@@ -1112,6 +1127,9 @@ static bool want_bucket(struct bch_fs *c,
 		return false;
 
 	if (req->ec != (ob->ec != NULL))
+		return false;
+
+	if (move_alloc_dev_stalled(c, req, ob->dev, local_clock()))
 		return false;
 
 	return true;
