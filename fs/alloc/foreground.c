@@ -227,8 +227,11 @@ static inline bool is_superblock_bucket(struct bch_fs *c, struct bch_dev *ca, u6
 
 static void open_bucket_free_unused(struct bch_fs *c, struct open_bucket *ob)
 {
-	BUG_ON(c->allocator.open_buckets_partial_nr >=
-	       ARRAY_SIZE(c->allocator.open_buckets_partial));
+	if (unlikely(c->allocator.open_buckets_partial_nr >=
+		     ARRAY_SIZE(c->allocator.open_buckets_partial))) {
+		bch2_open_bucket_put(c, ob);
+		return;
+	}
 
 	scoped_guard(spinlock, &c->allocator.freelist_lock) {
 		guard(rcu)();
@@ -243,6 +246,31 @@ static void open_bucket_free_unused(struct bch_fs *c, struct open_bucket *ob)
 
 	scoped_guard(rcu)
 		bch2_alloc_wake_dev(bch2_dev_have_ref(c, ob->dev));
+}
+
+static void open_bucket_reclaim_unused_partials(struct bch_fs *c,
+						enum bch_watermark watermark)
+{
+	struct bch_fs_allocator *a = &c->allocator;
+
+	while (1) {
+		struct open_bucket *ob;
+
+		scoped_guard(spinlock, &a->freelist_lock) {
+			if (a->open_buckets_nr_free > bch2_open_buckets_reserved(watermark) ||
+			    !a->open_buckets_partial_nr)
+				return;
+
+			ob = a->open_buckets +
+				a->open_buckets_partial[--a->open_buckets_partial_nr];
+			ob->on_partial_list = false;
+
+			scoped_guard(rcu)
+				bch2_dev_rcu(c, ob->dev)->nr_partial_buckets--;
+		}
+
+		bch2_open_bucket_put(c, ob);
+	}
 }
 
 static inline bool may_alloc_bucket(struct bch_fs *c,
@@ -288,6 +316,8 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 		req->counters.skipped_nouse++;
 		return NULL;
 	}
+
+	open_bucket_reclaim_unused_partials(c, req->watermark);
 
 	guard(spinlock)(&c->allocator.freelist_lock);
 
