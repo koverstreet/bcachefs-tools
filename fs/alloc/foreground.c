@@ -813,7 +813,7 @@ static u32 move_alloc_dev_congested(struct bch_dev *ca, u64 now)
 	u64 last = READ_ONCE(ca->congested_last);
 
 	if (time_after64(now, last))
-		congested -= (now - last) >> 12;
+		congested -= (now - last) >> 20;
 
 	return clamp(congested, 0LL, CONGESTED_MAX);
 }
