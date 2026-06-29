@@ -417,6 +417,19 @@ static int extent_ec_pending(struct btree_trans *trans, struct bkey_ptrs_c ptrs)
 	return false;
 }
 
+static bool crc_unpacked_same_layout(struct bch_extent_crc_unpacked l,
+				     struct bch_extent_crc_unpacked r)
+{
+	return l.csum_type		== r.csum_type &&
+		l.compression_type	== r.compression_type &&
+		l.compressed_size	== r.compressed_size &&
+		l.uncompressed_size	== r.uncompressed_size &&
+		l.live_size		== r.live_size &&
+		l.offset		== r.offset &&
+		l.nonce			== r.nonce &&
+		!bch2_crc_cmp(l.csum, r.csum);
+}
+
 int bch2_extent_reconcile_pending_mod(struct btree_trans *, struct btree_iter *,
 				      unsigned, struct bkey_s_c, bool);
 
@@ -448,6 +461,8 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 
 	unsigned csum_type = bch2_data_checksum_type_rb(c, *r);
 	unsigned compression_type = bch2_compression_opt_to_type(r->background_compression);
+	bool rechecksum_only = k.k->type == KEY_TYPE_extent &&
+		r->need_rb == BIT(BCH_RECONCILE_data_checksum);
 
 	if (r->need_rb & BIT(BCH_RECONCILE_data_replicas)) {
 		struct bkey_durability durability;
@@ -600,10 +615,37 @@ skip_ec:
 
 	scoped_guard(rcu) {
 		unsigned ptr_bit = 1;
+		unsigned checksum_ptrs_kill = 0;
+		bool can_rechecksum = rechecksum_only;
+		bool have_rechecksum_crc = false;
+		struct bch_extent_crc_unpacked rechecksum_crc = {};
+
 		bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+			if (can_rechecksum &&
+			    (p.ptr.cached ||
+			     p.has_ec ||
+			     !p.crc.csum_type ||
+			     p.crc.csum_type == csum_type ||
+			     crc_is_compressed(p.crc) ||
+			     p.crc.offset ||
+			     p.crc.live_size != p.crc.uncompressed_size ||
+			     p.crc.compressed_size != p.crc.uncompressed_size ||
+			     bch2_csum_type_is_encryption(p.crc.csum_type) !=
+			     bch2_csum_type_is_encryption(csum_type)))
+				can_rechecksum = false;
+
+			if (can_rechecksum) {
+				if (!have_rechecksum_crc) {
+					rechecksum_crc = p.crc;
+					have_rechecksum_crc = true;
+				} else if (!crc_unpacked_same_layout(p.crc, rechecksum_crc)) {
+					can_rechecksum = false;
+				}
+			}
+
 			if ((r->need_rb & BIT(BCH_RECONCILE_data_checksum)) &&
 			    p.crc.csum_type != csum_type)
-				data_opts->ptrs_kill |= ptr_bit;
+				checksum_ptrs_kill |= ptr_bit;
 
 			if ((r->need_rb & BIT(BCH_RECONCILE_background_compression)) &&
 			    p.crc.compression_type != compression_type)
@@ -616,11 +658,17 @@ skip_ec:
 
 			ptr_bit <<= 1;
 		}
+
+		if (can_rechecksum && have_rechecksum_crc)
+			data_opts->type = BCH_DATA_UPDATE_rechecksum;
+		else
+			data_opts->ptrs_kill |= checksum_ptrs_kill;
 	}
 
 	bool ret = (data_opts->ptrs_kill ||
 		    data_opts->ptrs_kill_ec ||
-		    data_opts->extra_replicas);
+		    data_opts->extra_replicas ||
+		    data_opts->type == BCH_DATA_UPDATE_rechecksum);
 	if (!ret) {
 		if (r->need_rb == BIT(BCH_RECONCILE_data_replicas)) {
 			/*
