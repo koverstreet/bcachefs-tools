@@ -291,10 +291,7 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 	ctxt->stats	= stats;
 	ctxt->wp	= wp;
 	ctxt->wait_on_copygc = wait_on_copygc;
-	ctxt->max_sectors_in_flight = c->opts.move_bytes_in_flight >> 9;
-	ctxt->max_ios_in_flight = c->opts.move_ios_in_flight;
-	ctxt->noflush_sectors_limit =
-		max_t(u32, c->opts.move_bytes_in_flight, MOVE_NOFLUSH_MIN_BYTES) >> 9;
+	bch2_moving_ctxt_reset_limits(ctxt);
 
 	closure_init_stack(&ctxt->cl);
 
@@ -312,6 +309,16 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 
 #define MOVE_ROTATIONAL_HIPRI_IOS_IN_FLIGHT	128U
 #define MOVE_ROTATIONAL_HIPRI_BYTES_IN_FLIGHT	(16U << 20)
+
+void bch2_moving_ctxt_reset_limits(struct moving_context *ctxt)
+{
+	struct bch_fs *c = ctxt->trans->c;
+
+	ctxt->max_sectors_in_flight = c->opts.move_bytes_in_flight >> 9;
+	ctxt->max_ios_in_flight = c->opts.move_ios_in_flight;
+	ctxt->noflush_sectors_limit =
+		max_t(u32, c->opts.move_bytes_in_flight, MOVE_NOFLUSH_MIN_BYTES) >> 9;
+}
 
 void bch2_moving_ctxt_set_rotational_limits(struct moving_context *ctxt,
 					    enum move_rotational_limit limit)
