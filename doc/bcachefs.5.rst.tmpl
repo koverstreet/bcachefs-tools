@@ -38,6 +38,18 @@ OPTIONS
 -------
 OPTIONS_TABLE
 
+Filesystem label
+----------------
+
+The filesystem label is set at format time with ``--fs_label``/``-L``. It is
+separate from per-device labels used for target selection, such as
+``foreground_target=ssd`` or ``--label=ssd`` on an individual device.
+
+On a mounted filesystem, the filesystem label can be changed through the
+standard Linux ``FS_IOC_SETFSLABEL`` ioctl, and read through
+``FS_IOC_GETFSLABEL``. Tools that issue those ioctls operate on the filesystem
+label, not the per-device target labels.
+
 Device management
 -----------------
 Devices can be added, removed, and resized at will, at runtime. There is no
