@@ -33,6 +33,7 @@
 //! themselves: fold_times_trans() writes the folded times first, in the same
 //! transaction.
 
+use crate::util::alloc::KVVec;
 use crate::data_structures::array_vec::ArrayVec;
 use core::ffi::{c_long, c_ulong, CStr};
 use core::ops::{Deref, DerefMut};
@@ -307,15 +308,11 @@ impl InodeInfo {
     }
 }
 
-/// Have @subvols' inodes evicted as soon as they're unused, and wait for them
-/// all to be freed.
-pub fn evict_subvolume_inodes(fs: &Fs, subvols: &[u32]) {
-    // Initially, we scan for inodes without I_DONTCACHE, then mark them to be
-    // pruned with d_mark_dontcache().
-    //
-    // Once we've had a clean pass where we didn't find any inodes without
-    // I_DONTCACHE, we wait for them to be freed.
-    //
+/// Have @subvols' inodes evicted as soon as they're unused, and say which of
+/// the subvolumes still have one: those held - by a loop device, an NFS export,
+/// a leaked file descriptor - for as long as they are. Not waiting for them:
+/// that parked the delete work in D-state, indefinitely.
+pub fn evict_subvolume_inodes(fs: &Fs, subvols: &[u32]) -> Result<KVVec<u32>, BchError> {
     // The scan tracks position by slot, so we can drop rcu around the dcache
     // work (held safe by our igrab ref) and resume from the next slot.
     let ours = |inode: &InodeInfo| subvols.contains(&(inode.inum().subvol as u32));
@@ -336,27 +333,17 @@ pub fn evict_subvolume_inodes(fs: &Fs, subvols: &[u32]) {
         pos = i + 1;
     }
 
-    loop {
-        let mut found = false;
-        let mut pos = 0;
-        loop {
-            let next = {
-                let g = read_lock();
-                vfs_inodes_from(fs, pos, &g).find(|(_, inode)| ours(inode))
-                    .map(|(i, inode)| (i, NonNull::from(inode.vfs())))
-            };
-            let Some((i, inode)) = next else { break };
-            found = true;
-            VfsInode::wait_new_bit(inode, || {
-                let g = read_lock();
-                vfs_inodes_from(fs, i, &g).next().is_some_and(|(j, still)| j == i && NonNull::from(still.vfs()) == inode)
-            }, c_long::MAX); // MAX_SCHEDULE_TIMEOUT
-            pos = i + 1;
-        }
-        if !found {
-            break;
+    // Room for every one up front, outside the RCU section: only ids of
+    // @subvols are ever added, each once, and a resize there would sleep
+    let mut busy = KVVec::with_capacity(subvols.len())?;
+    let g = read_lock();
+    for (_, inode) in vfs_inodes_from(fs, 0, &g) {
+        let subvol = inode.inum().subvol as u32;
+        if subvols.contains(&subvol) && !busy.contains(&subvol) {
+            busy.push(subvol).expect("room for every pending subvolume");
         }
     }
+    Ok(busy)
 }
 
 /// The filesystem's inodes, from slot @pos on.
