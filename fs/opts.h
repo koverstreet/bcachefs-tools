@@ -366,7 +366,7 @@ enum fsck_err_opts {
 	x(move_ios_in_flight,		u32,				\
 	  OPT_FS|OPT_MOUNT|OPT_RUNTIME|OPT_NODOC,			\
 	  OPT_UINT(1, 1024),						\
-	  BCH2_NO_SB_OPT,		64,				\
+	  BCH2_NO_SB_OPT,		1024,				\
 	  NULL,		"Maximum number of IOs to keep in flight by the move path")\
 	x(fsck,				u8,				\
 	  OPT_FS|OPT_MOUNT,						\
