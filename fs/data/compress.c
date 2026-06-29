@@ -12,8 +12,15 @@
  * The main tradeoff to be aware of: small random reads within a compressed
  * extent must read and decompress the entire extent (up to 128K) because the
  * checksum covers the whole extent. For workloads dominated by small random
- * reads (e.g. databases), compression may hurt read performance. Sequential
- * reads and large-block random reads are largely unaffected.
+ * reads (e.g. virtual machine images or databases), compression may hurt read
+ * performance. Sequential reads and large-block random reads are largely
+ * unaffected.
+ *
+ * The `encoded_extent_max` option bounds the amount of data that a small
+ * compressed read may have to pull in and decode. Lower values reduce random
+ * read amplification at the cost of compression ratio and metadata efficiency.
+ * Random-read-heavy workloads should prefer lz4 and/or a smaller
+ * `encoded_extent_max` over high-level zstd with large encoded extents.
  *
  * Data can be recompressed in the background with a different algorithm or
  * level via the `background_compression` option — for example, writing with
