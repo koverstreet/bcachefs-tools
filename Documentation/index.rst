@@ -17,6 +17,15 @@ Development notes specific to bcachefs. These are intended to supplement
    CodingStyle
    SubmittingPatches
 
+Operations
+----------
+
+.. toctree::
+   :maxdepth: 1
+   :numbered:
+
+   recovery
+
 Filesystem implementation
 -------------------------
 
