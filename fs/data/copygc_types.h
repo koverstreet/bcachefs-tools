@@ -15,6 +15,7 @@ struct bch_fs_copygc {
 	u32			last_pressure_run;
 	u32			run_count;
 	u32			kick_count;
+	struct bpos		bucket_fragmentation_cursor;
 	wait_queue_head_t	running_wq;
 
 	/* Dedicated workqueue for btree updates: */
