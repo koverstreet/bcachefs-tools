@@ -124,6 +124,18 @@ struct data_update *bch2_moving_ctxt_next_pending_write(struct moving_context *c
 	return u && u->read_done ? u : NULL;
 }
 
+static bool bch2_moving_ctxt_can_submit_write(struct moving_context *ctxt)
+{
+	return atomic_read(&ctxt->write_sectors) < ctxt->max_sectors_in_flight &&
+		atomic_read(&ctxt->write_ios) < ctxt->max_ios_in_flight;
+}
+
+bool bch2_moving_ctxt_pending_write_ready(struct moving_context *ctxt)
+{
+	return bch2_moving_ctxt_next_pending_write(ctxt) &&
+		bch2_moving_ctxt_can_submit_write(ctxt);
+}
+
 static void move_read_endio(struct bio *bio)
 {
 	struct data_update *u = container_of(bio, struct data_update, rbio.bio);
@@ -141,7 +153,8 @@ void bch2_moving_ctxt_do_pending_writes(struct moving_context *ctxt)
 {
 	struct data_update *u;
 
-	while ((u = bch2_moving_ctxt_next_pending_write(ctxt))) {
+	while (bch2_moving_ctxt_can_submit_write(ctxt) &&
+	       (u = bch2_moving_ctxt_next_pending_write(ctxt))) {
 		bch2_trans_unlock_long(ctxt->trans);
 		list_del(&u->read_list);
 		move_write(u);

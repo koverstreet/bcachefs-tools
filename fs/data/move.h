@@ -75,7 +75,7 @@ struct moving_context {
 			break;							\
 		bch2_trans_unlock_long((_ctxt)->trans);				\
 		_ret = __wait_event_timeout((_ctxt)->wait,			\
-			     bch2_moving_ctxt_next_pending_write(_ctxt) ||	\
+			     bch2_moving_ctxt_pending_write_ready(_ctxt) ||	\
 			     (cond_finished = (_cond)), _timeout);		\
 		if (_ret || ( cond_finished))					\
 			break;							\
@@ -92,7 +92,7 @@ do {									\
 		break;							\
 	bch2_trans_unlock_long((_ctxt)->trans);				\
 	__wait_event((_ctxt)->wait,					\
-		     bch2_moving_ctxt_next_pending_write(_ctxt) ||	\
+		     bch2_moving_ctxt_pending_write_ready(_ctxt) ||	\
 		     (cond_finished = (_cond)));			\
 	if (cond_finished)						\
 		break;							\
@@ -109,6 +109,7 @@ void bch2_moving_ctxt_init(struct moving_context *, struct bch_fs *,
 			   struct write_point_specifier, bool);
 void bch2_moving_ctxt_set_rotational_limits(struct moving_context *);
 struct data_update *bch2_moving_ctxt_next_pending_write(struct moving_context *);
+bool bch2_moving_ctxt_pending_write_ready(struct moving_context *);
 void bch2_moving_ctxt_do_pending_writes(struct moving_context *);
 int bch2_moving_ctxt_flush_all(struct moving_context *);
 void bch2_moving_ctxt_account_noflush_commit(struct moving_context *, u32, u64);
