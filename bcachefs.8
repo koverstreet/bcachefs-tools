@@ -208,7 +208,7 @@ Sets both data and metadata replicas
 Enable whole filesystem encryption (chacha20/poly1305);
 passphrase will be prompted for.
 .It Fl -no_passphrase
-Don't encrypt master encryption key
+Store master encryption key unencrypted in superblock
 .It Fl L , Fl -fs_label Ns = Ns Ar label
 Create the filesystem with the specified
 .Ar label
@@ -649,7 +649,7 @@ Root of filesystem to migrate
 .It Fl -encrypted
 Enable whole filesystem encryption (chacha20/poly1305)
 .It Fl -no_passphrase
-Don't encrypt master encryption key
+Store master encryption key unencrypted in superblock
 .It Fl F
 Force, even if metadata file already exists
 .El

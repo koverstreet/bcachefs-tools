@@ -69,11 +69,12 @@ see what's been analyzed and what was decided.
 
 ### Calibrate to the risk
 
-- **Kernel code** (`fs/`, `fs/bcachefs/`): Go slow. Research
-  thoroughly. Always discuss design before implementing. Pay special
-  attention to error paths, transaction restart handling, and locking.
-  Don't commit kernel C changes to the tools tree — kernel code is
-  synced separately.
+- **Kernel code** (`fs/`): Go slow. Research thoroughly. Always discuss
+  design before implementing. Pay special attention to error paths,
+  transaction restart handling, and locking. `fs/` is the canonical
+  bcachefs source (dual-build: the userspace tools and the kernel
+  module). bcachefs ships DKMS-only and is not synced to any kernel
+  tree — changes land here, full stop.
 
 - **Tools leaf code** (Rust commands, argument parsing, display logic):
   More autonomy is appropriate here. Use good judgment, make clean

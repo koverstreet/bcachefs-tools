@@ -726,7 +726,7 @@ Options:
                                With erasure coding, data replicas are capped at 3 (RAID6)
       --encrypted              Enable whole filesystem encryption (chacha20/poly1305)
       --passphrase_file=file   File containing passphrase used for encryption/decryption
-      --no_passphrase          Don't encrypt master encryption key
+      --no_passphrase          Store master encryption key unencrypted in superblock
   -L, --fs_label=label
   -U, --uuid=uuid
       --superblock_size=size
