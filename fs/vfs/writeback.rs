@@ -176,8 +176,14 @@ fn throttle_writes(fs: &Fs) {
 
     let mut start = 0;
     loop {
+        // before the reclaim, so a bucket put on the partial list meanwhile
+        // changes the count and the wait doesn't sleep through it
         let open_buckets_seen = fs.allocator.open_buckets_events.snapshot();
         let journal_seen = fs.journal.async_wait.snapshot();
+
+        // the partial list's unused buckets are free ones: not worth blocking for
+        fs.open_bucket_reclaim_unused_partials(reserved);
+
         let open_buckets_low = unlikely(u32::from(fs.allocator.freelist_lock.open_buckets_nr_free.get()) <= reserved);
         let journal_low = (c::Watermark::normal as u32) < fs.journal.watermark() as u32 && fs.journal.error().is_ok();
         if !open_buckets_low && !journal_low {
