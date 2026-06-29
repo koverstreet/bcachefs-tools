@@ -165,7 +165,11 @@ int bch2_moving_ctxt_flush_all(struct moving_context *ctxt)
 		seq = ctxt->noflush_seq;
 
 	if (seq) {
-		int ret = bch2_journal_flush_seq(&c->journal, seq, TASK_UNINTERRUPTIBLE);
+		int ret = bch2_btree_write_buffer_flush_sync(ctxt->trans);
+		if (ret)
+			return ret;
+
+		ret = bch2_journal_flush_seq(&c->journal, seq, TASK_UNINTERRUPTIBLE);
 		if (ret)
 			return ret;
 
