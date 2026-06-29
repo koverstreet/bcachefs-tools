@@ -1320,7 +1320,7 @@ static noinline int bch2_trans_commit_btree_write_ratelimit(struct btree_trans *
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
 	return drop_locks_do(trans, ({
-		closure_wait_event(&bc->nr_in_flight_wait,
+		trans_wait_event(trans, &bc->nr_in_flight_wait,
 			atomic_long_read(&bc->nr_in_flight_inner) < BTREE_WRITE_IO_LIMIT(c) * 3 / 4 &&
 			!bch2_btree_cache_should_throttle(c));
 		0;
