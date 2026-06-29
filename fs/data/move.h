@@ -54,6 +54,7 @@ struct moving_context {
 
 	/* Moved data indexed without FUA; must be ordered by a journal flush. */
 	u64			noflush_sectors;
+	u64			noflush_sectors_limit;
 	u64			noflush_seq;
 
 	wait_queue_head_t	wait;
