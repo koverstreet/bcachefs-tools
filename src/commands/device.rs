@@ -215,6 +215,126 @@ fn open_dev_by_path_or_index(device: &str, fs_path: Option<&str>) -> Result<(Bca
     }
 }
 
+const BCH_SB_MEMBER_DELETED_UUID: [u8; 16] = [
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
+];
+
+fn member_alive(m: &c::bch_member) -> bool {
+    let zero = [0u8; 16];
+    m.uuid.b != zero && m.uuid.b != BCH_SB_MEMBER_DELETED_UUID
+}
+
+fn find_scanned_path(
+    sbs: &[(PathBuf, c::bch_sb_handle)],
+    idx: u32,
+) -> Option<&Path> {
+    sbs.iter()
+        .find(|(_, sb)| sb.sb().dev_idx as u32 == idx)
+        .map(|(path, _)| path.as_path())
+}
+
+fn member_error_counts(m: &c::bch_member) -> [u64; 3] {
+    [
+        u64::from_le(m.errors[0]),
+        u64::from_le(m.errors[1]),
+        u64::from_le(m.errors[2]),
+    ]
+}
+
+fn issue_summary(m: &c::bch_member, found: bool) -> String {
+    let mut issues = Vec::new();
+    if !found {
+        issues.push("missing".to_string());
+    }
+
+    let state = m.member_state() as u8;
+    if state != BCH_MEMBER_STATE_rw as u8 {
+        issues.push(format!("state={}", bcachefs_kernel::sb::members::member_state_str(state)));
+    }
+
+    let [read, write, checksum] = member_error_counts(m);
+    if read != 0 {
+        issues.push(format!("read_errors={read}"));
+    }
+    if write != 0 {
+        issues.push(format!("write_errors={write}"));
+    }
+    if checksum != 0 {
+        issues.push(format!("checksum_errors={checksum}"));
+    }
+
+    if issues.is_empty() {
+        "ok".to_string()
+    } else {
+        issues.join(",")
+    }
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "List filesystem member devices and recorded device issues")]
+pub struct ListCli {
+    /// Device path or UUID= filesystem selector
+    device: String,
+}
+
+fn cmd_device_list(cli: ListCli) -> Result<()> {
+    let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
+    let sbs = crate::device_scan::scan_sbs(&cli.device, &opts)
+        .with_context(|| format!("scanning bcachefs devices for '{}'", cli.device))?;
+    let sbs = if sbs.is_empty() && !cli.device.contains(':') {
+        vec![(
+            PathBuf::from(&cli.device),
+            crate::device_scan::read_super_silent(&cli.device, opts)
+                .with_context(|| format!("reading bcachefs superblock from '{}'", cli.device))?,
+        )]
+    } else {
+        sbs
+    };
+    let sb = sbs.first()
+        .ok_or_else(|| anyhow!("no bcachefs devices found for '{}'", cli.device))?
+        .1
+        .sb();
+
+    println!("DEV\tPATH\tSTATE\tREAD_ERR\tWRITE_ERR\tCHECKSUM_ERR\tISSUES");
+
+    let print_member = |idx: u32, m: c::bch_member| {
+        if !member_alive(&m) {
+            return;
+        }
+
+        let path = find_scanned_path(&sbs, idx)
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(not found)".to_string());
+        let state = m.member_state() as u8;
+        let [read, write, checksum] = member_error_counts(&m);
+        let issues = issue_summary(&m, path != "(not found)");
+
+        println!(
+            "{idx}\t{path}\t{}\t{read}\t{write}\t{checksum}\t{issues}",
+            bcachefs_kernel::sb::members::member_state_str(state),
+        );
+    };
+
+    if let Some(members) = bcachefs_kernel::sb::members::members_v2(sb) {
+        for idx in 0..members.nr_devices() {
+            if let Some(m) = members.get(idx) {
+                print_member(idx, m);
+            }
+        }
+    } else if let Some(members) = bcachefs_kernel::sb::members::members_v1(sb) {
+        for idx in 0..members.nr_devices() {
+            if let Some(m) = members.get(idx) {
+                print_member(idx, m);
+            }
+        }
+    } else {
+        bail!("superblock has no members field");
+    }
+
+    Ok(())
+}
+
 #[derive(Parser, Debug)]
 #[command(about = "Re-add a device to a running filesystem")]
 pub struct OnlineCli {
@@ -608,6 +728,7 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
 }
 
 pub const CMD_ADD: super::CmdDef = raw_cmd!("add", "Add a device to a filesystem", cmd_device_add);
+pub const CMD_LIST: super::CmdDef = typed_cmd!("list", "List member devices and recorded issues", ListCli, cmd_device_list);
 pub const CMD_ONLINE: super::CmdDef = typed_cmd!("online", "Bring a device online", OnlineCli, cmd_device_online);
 pub const CMD_OFFLINE: super::CmdDef = typed_cmd!("offline", "Take a device offline", OfflineCli, cmd_device_offline);
 pub const CMD_REMOVE: super::CmdDef = typed_cmd!("remove", "Remove a device", RemoveCli, cmd_device_remove);
@@ -618,7 +739,7 @@ pub const CMD_RESIZE_JOURNAL: super::CmdDef = typed_cmd!("resize-journal", "Resi
 pub const CMD: super::CmdDef = super::CmdDef {
     name: "device", about: "Manage devices within a filesystem", aliases: &[],
     kind: super::CmdKind::Group { children: &[
-        &CMD_ADD, &CMD_ONLINE, &CMD_OFFLINE, &CMD_REMOVE,
+        &CMD_ADD, &CMD_LIST, &CMD_ONLINE, &CMD_OFFLINE, &CMD_REMOVE,
         &CMD_EVACUATE, &CMD_SET_STATE, &CMD_RESIZE, &CMD_RESIZE_JOURNAL,
     ]},
 };
