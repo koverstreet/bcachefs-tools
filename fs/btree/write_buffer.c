@@ -1017,14 +1017,14 @@ static int btree_write_buffer_flush_seq(struct btree_trans *trans, u64 max_seq,
 	struct bch_fs *c = trans->c;
 	int ret = 0, fetch_from_journal_err;
 
-	bch2_trans_unlock_long(trans);
+	bch2_trans_unlock(trans);
 
 	do {
 		fetch_from_journal_err = fetch_wb_keys_from_journal(c, max_seq);
 
-		closure_wait_event(&c->btree.write_buffer_flush_wait,
-				   !any_wb_pin_le(c, max_seq, did_work, caller) ||
-				   (ret = bch2_journal_error(&c->journal)));
+		trans_wait_event(trans, &c->btree.write_buffer_flush_wait,
+				 !any_wb_pin_le(c, max_seq, did_work, caller) ||
+				 (ret = bch2_journal_error(&c->journal)));
 	} while (!ret && fetch_from_journal_err);
 
 	return ret;
