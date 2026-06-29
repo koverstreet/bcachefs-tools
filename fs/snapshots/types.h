@@ -95,7 +95,7 @@ struct bch_fs_snapshots {
 	bool					need_table_rebuild;
 	struct percpu_rw_semaphore		create_lock;
 	struct snapshot_delete			delete;
-	struct work_struct			wait_for_pagecache_and_delete_work;
+	struct delayed_work			wait_for_pagecache_and_delete_work;
 	snapshot_id_list			unlinked;
 	struct mutex				unlinked_lock;
 };
