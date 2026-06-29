@@ -51,6 +51,14 @@
 #include <linux/rcupdate.h>
 #include <linux/sched/signal.h>
 
+/*
+ * Move allocation uses congestion to steer background relocation away from
+ * devices that are already slow. Rotational devices can stay throughput-limited
+ * for seconds after a bad write/flush sample, so use a slower decay here than
+ * the read path's target-congestion check.
+ */
+#define MOVE_ALLOC_CONGESTION_DECAY_SHIFT	24
+
 static void bch2_trans_mutex_lock_norelock(struct btree_trans *trans,
 					   struct mutex *lock)
 {
@@ -817,7 +825,7 @@ static u32 move_alloc_dev_congested(struct bch_dev *ca, u64 now)
 	u64 last = READ_ONCE(ca->congested_last);
 
 	if (time_after64(now, last))
-		congested -= (now - last) >> 20;
+		congested -= (now - last) >> MOVE_ALLOC_CONGESTION_DECAY_SHIFT;
 
 	return clamp(congested, 0LL, CONGESTED_MAX);
 }
