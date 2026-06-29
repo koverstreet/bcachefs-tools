@@ -272,15 +272,26 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 		list_add(&ctxt->list, &c->moving_context_list);
 }
 
-#define MOVE_ROTATIONAL_IOS_IN_FLIGHT		8U
-#define MOVE_ROTATIONAL_BYTES_IN_FLIGHT		(1U << 20)
+#define MOVE_ROTATIONAL_BG_IOS_IN_FLIGHT	8U
+#define MOVE_ROTATIONAL_BG_BYTES_IN_FLIGHT	(1U << 20)
 
-void bch2_moving_ctxt_set_rotational_limits(struct moving_context *ctxt)
+#define MOVE_ROTATIONAL_HIPRI_IOS_IN_FLIGHT	128U
+#define MOVE_ROTATIONAL_HIPRI_BYTES_IN_FLIGHT	(16U << 20)
+
+void bch2_moving_ctxt_set_rotational_limits(struct moving_context *ctxt,
+					    enum move_rotational_limit limit)
 {
+	u32 max_ios = limit == MOVE_ROTATIONAL_LIMIT_hipri
+		? MOVE_ROTATIONAL_HIPRI_IOS_IN_FLIGHT
+		: MOVE_ROTATIONAL_BG_IOS_IN_FLIGHT;
+	u32 max_bytes = limit == MOVE_ROTATIONAL_LIMIT_hipri
+		? MOVE_ROTATIONAL_HIPRI_BYTES_IN_FLIGHT
+		: MOVE_ROTATIONAL_BG_BYTES_IN_FLIGHT;
+
 	ctxt->max_ios_in_flight = min(ctxt->max_ios_in_flight,
-				      MOVE_ROTATIONAL_IOS_IN_FLIGHT);
+				      max_ios);
 	ctxt->max_sectors_in_flight = min(ctxt->max_sectors_in_flight,
-					  MOVE_ROTATIONAL_BYTES_IN_FLIGHT >> 9);
+					  max_bytes >> 9);
 }
 
 void bch2_move_stats_exit(struct bch_move_stats *stats, struct bch_fs *c)
@@ -787,7 +798,8 @@ int bch2_move_data_phys(struct bch_fs *c,
 	bch2_moving_ctxt_init(&ctxt, c, rate, stats, wp, wait_on_copygc);
 
 	if (bch2_dev_rotational(c, dev))
-		bch2_moving_ctxt_set_rotational_limits(&ctxt);
+		bch2_moving_ctxt_set_rotational_limits(&ctxt,
+				MOVE_ROTATIONAL_LIMIT_background);
 
 	if (ctxt.stats) {
 		ctxt.stats->phys = true;
