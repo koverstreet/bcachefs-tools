@@ -4,8 +4,13 @@
 # expansion — so HEAD moving mid-recipe (e.g. a commit/rebase landing during
 # a long `make install_dkms`) can land the six install steps in two
 # different /usr/src/bcachefs-vN/ trees. Lock VERSION once at make start.
+#
+# --dirty: a modified working tree describes as <tag>-dirty, which both marks
+# the build non-pristine and gates the DKMS prebuilt-module fetch — the farm
+# only builds clean refs, so a -dirty version never matches a published module
+# and we always build locally from the modified source (see fs/Makefile).
 ifneq ($(wildcard .git),)
-VERSION:=$(shell git -c safe.directory=$$PWD -c core.abbrev=12 describe)
+VERSION:=$(shell git -c safe.directory=$$PWD -c core.abbrev=12 describe --dirty)
 else ifneq ($(wildcard .version),)
 VERSION:=$(shell cat .version)
 else
@@ -356,6 +361,7 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	(cd fs; find \( -name '*.[ch]' -o -name '*.rs' \) -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
 	$(INSTALL) -m0755 -D fs/scripts/getdents-layout.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0755 -D fs/scripts/rust-is-available-dkms.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
+	$(INSTALL) -m0755 -D fs/scripts/fetch-module.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	@( :; $(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),printf '%s := %s\n' '$(v)' '$($(v))';)) ) > $(DESTDIR)$(DKMSDIR)/build.vars

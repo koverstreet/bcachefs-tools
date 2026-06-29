@@ -1,7 +1,22 @@
 
 ifdef BCACHEFS_DKMS
-	CONFIG_BCACHEFS_FS := m
-	# Enable other features here?
+CONFIG_BCACHEFS_FS := m
+# Enable other features here?
+
+# Prebuilt-module fast path: before compiling, try to download a signed
+# bcachefs.ko already built for this exact kernel + bcachefs version. On a hit,
+# fetch-module.sh drops it where kbuild would emit the module and we build
+# nothing (empty CONFIG_BCACHEFS_FS) — DKMS then collects the fetched .ko as if
+# it had been compiled. Any miss (offline, no matching build, wrong vermagic, a
+# -dirty source tree the farm never builds) falls through to a normal local
+# compile. fetch-module.sh logs only to stderr, so stdout is empty unless a
+# module was placed, making the `hit` test unambiguous.
+bcachefs-version := $(shell sed -n 's/.*bcachefs_version "\(.*\)".*/\1/p' $(src)/version.h 2>/dev/null)
+ifneq ($(bcachefs-version),)
+ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' '$(bcachefs-version)' '$(obj)/bcachefs.ko' && echo hit),hit)
+CONFIG_BCACHEFS_FS :=
+endif
+endif
 endif
 
 # DKMS / external module builds: bcachefs isn't in the host kernel's .config,
