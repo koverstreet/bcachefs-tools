@@ -58,7 +58,7 @@
  * the read path's target-congestion check.
  */
 #define MOVE_ALLOC_CONGESTION_DECAY_SHIFT	24
-#define MOVE_ALLOC_STALLED_THRESHOLD		(CONGESTED_MAX >> 1)
+#define MOVE_ALLOC_STALLED_THRESHOLD		(CONGESTED_MAX >> 3)
 #define MOVE_ALLOC_BUSY_BUCKET_WEIGHT		(CONGESTED_MAX >> 1)
 
 static void bch2_trans_mutex_lock_norelock(struct btree_trans *trans,
@@ -918,9 +918,10 @@ static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 	 * write/flush path is already far slower than its recent norm.
 	 *
 	 * Keep the free-space weighted allocator order primary while devices are
-	 * only mildly busy. Once a device is clearly stalled, sink it behind less
-	 * stalled choices; otherwise a much larger, mostly empty disk can keep
-	 * winning move allocations while it is already saturated.
+	 * not congested. Once a device is visibly falling behind, sink it behind
+	 * less stalled choices; otherwise a much larger, mostly empty disk can keep
+	 * winning move allocations until it is saturated hard enough to leave move
+	 * writes stuck in the block layer.
 	 */
 	for (unsigned j = 1; j < req->devs_sorted.nr; j++)
 		for (unsigned i = j; i &&
