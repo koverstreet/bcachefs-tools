@@ -404,6 +404,12 @@ static int attempt_compress(struct bch_fs *c,
 			    void *src, size_t src_len,
 			    union bch_compression_opt compression)
 {
+	/*
+	 * LZ4HC uses LZ4_wildCopy(), which may overwrite up to 7 bytes past
+	 * its requested copy end. Keep that inside our bounce buffer even when
+	 * the compressed output ends exactly at the supplied limit.
+	 */
+	const size_t lz4hc_output_slop = 7;
 	enum bch_compression_type compression_type =
 		__bch2_compression_opt_to_type[compression.type];
 
@@ -423,9 +429,12 @@ static int attempt_compress(struct bch_fs *c,
 
 			return ret;
 		} else {
+			if (dst_len <= lz4hc_output_slop)
+				return -1;
+
 			int ret = LZ4_compress_HC(
 					src,		dst,
-					src_len,	dst_len,
+					src_len,	dst_len - lz4hc_output_slop,
 					compression.level,
 					workspace);
 
