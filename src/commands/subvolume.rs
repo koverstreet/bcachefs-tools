@@ -112,7 +112,8 @@ cumulative (total) usage per snapshot. Cumulative usage is the sum of \
 a snapshot's own usage plus all ancestors back to the root, \
 representing the total space that would be freed if deleted.\n\n\
 Use --json for machine-readable output including snapshot IDs, parent \
-relationships, and sector counts.")]
+relationships, and sector counts. Use --recursive (-R) to list snapshot \
+trees for nested subvolumes too.")]
     ListSnapshots {
         /// Show flat list instead of tree
         #[arg(long, short)]
@@ -129,6 +130,10 @@ relationships, and sector counts.")]
         /// Sort order (flat view only)
         #[arg(long, value_enum)]
         sort: Option<SortBy>,
+
+        /// List snapshots for nested subvolumes too
+        #[arg(long, short = 'R')]
+        recursive: bool,
 
 	/// Directory in a mounted filesystem
         target: PathBuf,
@@ -711,7 +716,7 @@ fn print_snapshot_flat(dir: &Path, readonly: bool, sort: Option<SortBy>) -> Resu
     Ok(())
 }
 
-fn print_snapshot_json(dir: &Path) -> Result<()> {
+fn snapshot_json_value(dir: &Path) -> Result<serde_json::Value> {
     let fd = open_dir(dir)?;
     let tree = query_snapshot_tree(&fd, 0)?;
 
@@ -745,11 +750,29 @@ fn print_snapshot_json(dir: &Path) -> Result<()> {
         query_root["path"] = path.into();
     }
 
-    println!("{}", serde_json::to_string_pretty(&serde_json::json!({
+    Ok(serde_json::json!({
         "query_root": query_root,
         "nodes":      nodes_json,
-    }))?);
+    }))
+}
+
+fn print_snapshot_json(dir: &Path) -> Result<()> {
+    println!("{}", serde_json::to_string_pretty(&snapshot_json_value(dir)?)?);
     Ok(())
+}
+
+fn collect_snapshot_targets(dir: &Path, recursive: bool) -> Result<Vec<(String, PathBuf)>> {
+    let mut targets = vec![(dir.display().to_string(), dir.to_path_buf())];
+
+    if recursive {
+        for (path, entry) in collect_entries(dir, "", true)? {
+            if entry.snapshot_parent == 0 {
+                targets.push((path.clone(), dir.join(path)));
+            }
+        }
+    }
+
+    Ok(targets)
 }
 
 // ---- Command handlers ----
@@ -762,7 +785,8 @@ fn subvolume(cli: Cli) -> Result<()> {
         Subcommands::Snapshot { read_only, source, dest }                       => cmd_snapshot(read_only, source, dest),
         Subcommands::List { json, tree, recursive, snapshots, readonly, sort, target }
                                                                                 => cmd_list(json, tree, recursive, snapshots, readonly, sort, target),
-        Subcommands::ListSnapshots { flat, json, readonly, sort, target }       => cmd_list_snapshots(flat, json, readonly, sort, target),
+        Subcommands::ListSnapshots { flat, json, readonly, sort, recursive, target }
+                                                                                => cmd_list_snapshots(flat, json, readonly, sort, recursive, target),
     }
 }
 
@@ -833,13 +857,40 @@ fn cmd_list(json: bool, tree: bool, recursive: bool, snapshots: bool,
 }
 
 fn cmd_list_snapshots(flat: bool, json: bool, readonly: bool,
-                      sort: Option<SortBy>, target: PathBuf) -> Result<()> {
-    if json {
+                      sort: Option<SortBy>, recursive: bool, target: PathBuf) -> Result<()> {
+    let targets = collect_snapshot_targets(&target, recursive)?;
+
+    if json && recursive {
+        let mut result = Vec::new();
+        for (path, dir) in &targets {
+            result.push(serde_json::json!({
+                "path": path,
+                "snapshots": snapshot_json_value(dir)?,
+            }));
+        }
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    } else if json {
         print_snapshot_json(&target)?;
     } else if flat {
-        print_snapshot_flat(&target, readonly, sort)?;
+        for (i, (path, dir)) in targets.iter().enumerate() {
+            if recursive {
+                if i != 0 {
+                    println!();
+                }
+                println!("{}:", path);
+            }
+            print_snapshot_flat(dir, readonly, sort.clone())?;
+        }
     } else {
-        print_snapshot_tree(&target)?;
+        for (i, (path, dir)) in targets.iter().enumerate() {
+            if recursive {
+                if i != 0 {
+                    println!();
+                }
+                println!("{}:", path);
+            }
+            print_snapshot_tree(dir)?;
+        }
     }
     Ok(())
 }
