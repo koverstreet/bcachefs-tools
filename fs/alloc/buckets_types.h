@@ -5,6 +5,8 @@
 #include "bcachefs_format.h"
 #include "util/util.h"
 
+#include <linux/rcupdate.h>
+
 #define BUCKET_JOURNAL_SEQ_BITS		16
 
 /*
