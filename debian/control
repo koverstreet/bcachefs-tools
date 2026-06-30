@@ -61,6 +61,7 @@ Package: bcachefs-kernel-dkms
 Architecture: linux-any
 Section: kernel
 Depends: ${misc:Depends},
+	 openssl,
 	 initramfs-tools | linux-initramfs-tool,
 	 linux-headers-generic (>= 6.16) |
 	 proxmox-headers-6.17 [amd64] |

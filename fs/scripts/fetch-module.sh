@@ -34,19 +34,22 @@
 #           dkms.conf PACKAGE_VERSION) — which build of bcachefs we want.
 #
 # TRUST MODEL:
-#   * Transport integrity: HTTPS (curl/wget validate the TLS certificate).
-#   * Secure Boot: we drop the module where DKMS expects a freshly-built one, so
-#     DKMS strips it (harmlessly discarding the farm's appended signature, which
-#     sits past the ELF end) and re-signs it with the *machine's* own DKMS MOK —
-#     the key the user already enrolled to run any DKMS module. A fetched module
-#     therefore loads through the exact same path as a locally-built one, and no
-#     separate bcachefs CA needs enrolling for this path.
-#   * vermagic is the one real gate: a module whose vermagic doesn't match this
-#     kernel can't load, so we reject it and build locally instead.
-#
-# The published layout is still being finalized — the farm currently publishes a
-# flatter, repo-channel-keyed tree. This codes to the target layout above; the
-# publish side will be moved to match it.
+#   * Authenticity: we verify the module's appended PKCS#7 signature chains to
+#     the bcachefs signing CA (bundled next to this script) before accepting it.
+#     HTTPS only proves we reached the server; the signature proves the bytes are
+#     a genuine bcachefs build, so a compromised mirror or TLS path can't slip us
+#     a module that DKMS would then sign with the machine's MOK and load. The CA
+#     is trusted because it ships in this (distro-signed) package. If we can't
+#     verify for any reason (no openssl, no CA, bad signature) we build locally.
+#   * ABI: vermagic must match this kernel exactly or modprobe rejects it; we
+#     check it and build locally on mismatch.
+#   * Secure Boot at load is DKMS's job, not ours: DKMS installs this module
+#     unstripped (dkms.conf STRIP=no), so the farm signature is retained. Where
+#     DKMS is configured for its own MOK signing (e.g. Ubuntu's shim-signed
+#     default) it appends a signature the kernel verifies instead; where it is
+#     not (default Debian) the retained farm signature loads it via the enrolled
+#     bcachefs CA (see the debian/ MOK-enrollment flow). Either way a miss falls
+#     back to a local build. (Analysis: .claude/2026-06-29-module-pipeline-trust-model.md.)
 
 set -e
 
@@ -69,6 +72,18 @@ fall_back()
 [ -n "$ref" ]       || fall_back "no bcachefs version"
 [ -n "$dest" ]      || fall_back "no destination path"
 command -v modinfo >/dev/null 2>&1 || fall_back "no modinfo to verify the module"
+command -v openssl >/dev/null 2>&1 || fall_back "no openssl to verify the module signature"
+
+# The signing CA (public root) is bundled next to this script; an env override
+# helps testing. Resolve it up front so we fail fast before downloading.
+signing_ca=${BCACHEFS_SIGNING_CA:-}
+if [ -z "$signing_ca" ]; then
+	for c in "$(dirname "$0")/bcachefs-signing-ca.pem" \
+		 /usr/share/bcachefs-tools/bcachefs-signing-ca.pem; do
+		[ -f "$c" ] && { signing_ca=$c; break; }
+	done
+fi
+[ -f "$signing_ca" ] || fall_back "no bcachefs signing CA to verify the module against"
 
 # Fetch $1 to $2. Only a clean 200 counts as a hit; any error (404, offline,
 # timeout) returns nonzero so we build. Time-bounded on purpose: this can run
@@ -82,6 +97,47 @@ download()
 		wget -q --tries=2 --timeout=15 -O "$2" "$1"
 	else
 		return 127
+	fi
+}
+
+# Verify the farm's appended PKCS#7 signature chains to the bcachefs signing CA.
+# HTTPS only proves we reached the server; this proves the bytes are a genuine
+# bcachefs build, so a compromised mirror or TLS path can't slip us a module that
+# DKMS would then sign with the machine's MOK and load. Any failure => fall back.
+#
+# The module ends with (see include/uapi/linux/module_signature.h):
+#   [ signed module ][ PKCS#7 sig ][ struct module_signature, 12B ][ marker, 28B ]
+# Split off the detached signature using the trailer's big-endian sig_len, then
+# verify the chain to the CA (the leaf cert is embedded in the signature).
+verify_signature()
+{
+	ko=$1
+	sz=$(wc -c < "$ko" | tr -d ' ') || fall_back "cannot size the downloaded module"
+	[ "$sz" -gt 40 ] || fall_back "downloaded module too small to be signed"
+
+	printf '~Module signature appended~\n' > "$work/marker"
+	tail -c 28 "$ko" | cmp -s "$work/marker" - ||
+		fall_back "downloaded module carries no appended signature"
+
+	# id_type (offset 2 of the 12-byte info block at sz-40) must be 2 (PKCS#7).
+	idt=$(dd if="$ko" bs=1 skip=$((sz - 38)) count=1 2>/dev/null | od -An -tu1 | tr -d ' ')
+	[ "$idt" = 2 ] || fall_back "module signature is not PKCS#7 (id_type=$idt)"
+
+	# sig_len: big-endian u32, the last 4 bytes of the info block (sz-32).
+	sl=$(dd if="$ko" bs=1 skip=$((sz - 32)) count=4 2>/dev/null | od -An -tu1 |
+		awk '{print $1*16777216 + $2*65536 + $3*256 + $4}')
+	{ [ -n "$sl" ] && [ "$sl" -gt 0 ] && [ "$sl" -lt $((sz - 40)) ]; } ||
+		fall_back "module signature length implausible ($sl)"
+
+	clen=$((sz - 40 - sl))
+	head -c "$clen" "$ko" > "$work/content"
+	dd if="$ko" bs=1 skip="$clen" count="$sl" of="$work/sig.p7" 2>/dev/null
+
+	if ! openssl cms -verify -binary -inform DER -in "$work/sig.p7" \
+		-content "$work/content" -CAfile "$signing_ca" -purpose any \
+		-out /dev/null 2>"$work/openssl.err"; then
+		sed 's/^/bcachefs:   openssl: /' "$work/openssl.err" >&2
+		fall_back "module signature did not verify against the bcachefs CA — refusing it (tampering or mirror compromise?)"
 	fi
 }
 
@@ -152,6 +208,10 @@ ko=$work/bcachefs.ko
 echo "bcachefs: trying prebuilt module $url" >&2
 download "$url" "$ko" ||
 	fall_back "not available for $distro/$arch/$pkgver bcachefs $ref"
+
+# Authenticity gate: refuse anything not signed by the bcachefs key, so a bad
+# mirror or MITM can't get a module installed. (ABI gate — vermagic — follows.)
+verify_signature "$ko"
 
 # The module must carry this kernel's exact vermagic or modprobe rejects it.
 # Read the target vermagic from any module the kernel already ships.
