@@ -128,4 +128,12 @@ of the filesystem.
 Data protection
 ---------------
 
-foo
+Bcachefs supports user, group, and project quotas via the ``usrquota``,
+``grpquota``, and ``prjquota`` options. Snapshot trees are charged through their
+master subvolume's inode ownership and project IDs; snapshot subvolumes do not
+have independent quota enforcement, and quota accounting for a snapshot tree is
+skipped if its master subvolume has been deleted.
+
+Subvolume and snapshot disk usage can be inspected with ``bcachefs subvolume
+list`` and ``bcachefs subvolume list-snapshots``. These commands report usage;
+they do not set btrfs-style qgroup/subvolume limits.
