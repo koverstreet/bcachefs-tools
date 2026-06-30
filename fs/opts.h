@@ -340,6 +340,14 @@ enum fsck_err_opts {
 	  NULL,		"Disable journal flush on sync/fsync\n"		\
 			"If enabled, writes can be lost, but only since the\n"\
 			"last journal write (default 1 second)")	\
+	x(move_writes_fua,		u8,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
+	  OPT_BOOL(),							\
+	  BCH_SB_MOVE_WRITES_FUA,	false,				\
+	  NULL,		"Issue writes from background data moves (copygc,\n"\
+			"rebalance) with FUA, making them durable on\n"	\
+			"completion rather than relying on the journal's\n"\
+			"periodic cache flush")				\
 	x(journal_reclaim_delay,	u32,				\
 	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
 	  OPT_UINT(0, U32_MAX),						\

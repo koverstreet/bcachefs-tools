@@ -2407,10 +2407,13 @@ err:
 		bio->bi_private	= &op->cl;
 		bio->bi_opf |= REQ_OP_WRITE;
 
-		/* If it's an internal move, do FUA writes so the journal
-		 * doesn't have to flush them:
+		/*
+		 * Internal moves can be issued FUA, making the journal's cache
+		 * flush a no-op for them. Off by default: the per-write FUA
+		 * regresses background-move throughput, and the journal flushes
+		 * every device on commit regardless, so durability is unchanged.
 		 */
-		if (op->flags & BCH_WRITE_move)
+		if ((op->flags & BCH_WRITE_move) && c->opts.move_writes_fua)
 			bio->bi_opf |= REQ_FUA;
 
 		closure_get(bio->bi_private);
