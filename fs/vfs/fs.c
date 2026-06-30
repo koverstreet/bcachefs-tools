@@ -866,6 +866,9 @@ void bch2_dir_casefold_changed(struct dentry *dentry)
 	shrink_dcache_parent(dentry);
 	bch2_dentry_update_casefold_flags(dentry);
 }
+#else
+static void bch2_dentry_set_casefold_ops_locked(struct dentry *dentry,
+						struct inode *vinode) {}
 #endif
 
 static struct dentry *bch2_lookup(struct inode *vdir, struct dentry *dentry,
