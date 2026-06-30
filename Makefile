@@ -232,7 +232,11 @@ TAGS:
 tags:
 	ctags -R .
 
-SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
+# fs/vendor/kernel-rust/ is the kernel's Rust support stack, vendored (checked
+# in) for the CONFIG_RUST=n module build. Its *.c are kernel helpers that need
+# kernel headers — not part of the userspace tools — so keep them out of the
+# userspace C build.
+SRCS:=$(sort $(shell find . -type f ! -path '*/.*/*' ! -path './vendor/*' ! -path './fs/vendor/kernel-rust/*' ! -path './debian/*' ! -path './target/*' ! -path './build/*' ! -path './ktest-out/*' -iname '*.c'))
 # KUnit test — kernel-only, no userspace equivalent for <kunit/test.h>
 SRCS:=$(filter-out %/mean_and_variance_test.c, $(SRCS))
 # Strip find(1)'s leading './' so objects land at build/<path>, not build/./<path>.
@@ -259,7 +263,7 @@ build/%.o: %.c
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 BCACHEFS_DEPS=libbcachefs.a
-RUST_SRCS:=$(shell find src fs bch_bindgen/src -type f -iname '*.rs')
+RUST_SRCS:=$(shell find src fs bch_bindgen/src -type f ! -path 'fs/vendor/kernel-rust/*' -iname '*.rs')
 
 bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 	$(Q)$(CARGO_BUILD)
@@ -358,7 +362,13 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	$(INSTALL) -m0644 -D dkms/Makefile		-t $(DESTDIR)$(DKMSDIR)
 	$(INSTALL) -m0644 -D dkms/dkms.conf		-t $(DESTDIR)$(DKMSDIR)
 	$(INSTALL) -m0644 -D fs/Makefile	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
-	(cd fs; find \( -name '*.[ch]' -o -name '*.rs' \) -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
+# vendor/kernel-rust is staged whole below, so prune it from the per-file copy.
+	(cd fs; find . -path ./vendor/kernel-rust -prune -o \( -name '*.[ch]' -o -name '*.rs' \) -exec install -m0644 -D {} $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/{} \; )
+# The vendored kernel Rust stack (fs/Makefile.rust.vendor builds it into $(obj)
+# on CONFIG_RUST=n) needs ALL its files — Makefile, *.rs.S templates,
+# bindgen_parameters — not just the *.c/*.h/*.rs the find above copies.
+	mkdir -p $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/vendor
+	cp -a fs/vendor/kernel-rust $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/vendor/
 	$(INSTALL) -m0755 -D fs/scripts/getdents-layout.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0755 -D fs/scripts/rust-is-available-dkms.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0755 -D fs/scripts/fetch-module.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
@@ -426,7 +436,9 @@ dkms-reload-interactive: version.h
 	$(Q)find /ktest-out -name bcachefs.ko -not -path '$(DKMS_INTERACTIVE_DIR)/*' -delete 2>/dev/null || true
 	$(Q)rmmod bcachefs 2>/dev/null || true
 	$(Q)insmod $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs/bcachefs.ko
-	@modinfo bcachefs | grep -E '^(version|filename|srcversion):'
+	# modinfo by path: the module is insmod'd directly, not installed into the
+	# module tree, so a by-name lookup wouldn't find it.
+	@modinfo $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs/bcachefs.ko | grep -E '^(version|filename|srcversion):'
 
 .PHONY: clean
 clean:
