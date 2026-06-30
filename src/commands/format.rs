@@ -76,6 +76,7 @@ Usage: bcachefs format [OPTION]... <devices>
 Options:
 {fs_opts}\
       --replicas=#             Sets both data and metadata replicas
+                               With erasure coding, data replicas are capped at 3 (RAID6)
       --encrypted              Enable whole filesystem encryption (chacha20/poly1305)
       --passphrase_file=file   File containing passphrase used for encryption/decryption
       --no_passphrase          Don't encrypt master encryption key
