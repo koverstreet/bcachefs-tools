@@ -580,6 +580,9 @@ Offset of existing superblock
 Set various per-file attributes on files and directories in a bcachefs filesystem.
 When applied to directories, attributes are propagated recursively to all files
 and subdirectories within.
+Changed options take effect immediately for new writes. For existing data,
+background reconcile applies changed IO options asynchronously, for example
+rewriting existing extents with a new compression algorithm or replica count.
 .Bl -tag -width Ds
 .It Fl -data_replicas Ns = Ns Ar number
 Number of data replicas
@@ -615,6 +618,16 @@ To remove specific options, use
 Options can be chained together to perform multiple operations in a single command, for example:
 .Dl bcachefs set-file-option --remove-all --compression=lz4 .
 .Dl bcachefs set-file-option --compression=- --background_compression=zstd:10 --data_replicas=- file.txt
+.It Nm Ic reflink-option-propagate Oo Fl -set-may-update Oc Ar files Ns ...
+Propagate each file's current IO options, including compression, checksum,
+replicas, and targets, to its extents. This includes indirect, reflinked
+extents where the reflink pointer permits option updates.
+.Bl -tag -width Ds
+.It Fl -set-may-update
+Enable option propagation on old reflink pointers that predate the
+may-update-options permission flag. This requires administrative privileges and
+is only needed once per affected file.
+.El
 .El
 .Sh Commands for debugging
 These commands work on offline, unmounted filesystems.
