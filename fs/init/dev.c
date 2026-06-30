@@ -2024,8 +2024,8 @@ static int bch2_dev_shrink_invalidate_tail_cached(struct bch_fs *c, struct bch_d
 		if (bch2_bucket_is_open_safe(c, k.k->p.inode, k.k->p.offset))
 			continue;
 
-		try(bch2_dev_shrink_invalidate_cached_bucket(trans, ca, k.k->p,
-							     a->gen, &last_flushed));
+			try(bch2_dev_shrink_invalidate_cached_bucket(trans, ca, k.k->p,
+								     a->generation, &last_flushed));
 		*invalidated = true;
 		0;
 	}));
@@ -2102,13 +2102,11 @@ static int bch2_dev_shrink_wait_reconcile(struct bch_dev *ca, u64 new_nbuckets,
 			return 0;
 		}
 
-		ret = wait_event_killable_timeout(c->reconcile.wait,
+		ret = wait_event_timeout(c->reconcile.wait,
 			bch2_reconcile_completed_kick(c) >= kick ||
 			bch2_dev_resize_seq(ca) != seq ||
 			kthread_should_stop(),
 			HZ);
-		if (ret < 0)
-			return -EINTR;
 		if (!ret) {
 			*kick_complete = false;
 			return 0;
