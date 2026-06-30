@@ -5,6 +5,12 @@ Userspace tools and docs for bcachefs
 Bcachefs is an advanced new filesystem for Linux, with an emphasis on reliability and robustness
 and the complete set of features one would expect from a modern filesystem.
 
+This is the official development repository for bcachefs userspace tools,
+documentation, and the bcachefs filesystem source used for kernel exports. The
+kernel-side `fs/bcachefs/` tree is downstream of the source in this repository;
+see [doc/vendored-kernel-files.md](./doc/vendored-kernel-files.md) for the
+source layout and export notes.
+
 This repo primarily consists of the following:
 
 - bcachefs tool, the reason this repo exists.
@@ -33,5 +39,7 @@ Refer to [INSTALL.md](./INSTALL.md)
 Bug reports and contributions
 -----------------------------
 
+- GitHub issues for bug reports and focused feature requests
+- GitHub Discussions for support questions and general usage discussion
 - The official mailing list, linux-bcachefs@vger.kernel.org
-- IRC: #bcache on OFTC (irc.oftc.net). Although, note that it can be easily missed.
+- IRC: #bcache on OFTC (irc.oftc.net). Note that IRC messages can be easily missed.
