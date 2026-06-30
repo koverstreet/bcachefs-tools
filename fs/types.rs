@@ -331,6 +331,7 @@ pub struct bch_dev {
      */
     pub mi: c::bch_member_cpu,
     pub btree_allocated_bitmap_gc: u64,
+    pub btree_allocated_bitmap_gc_shift: u8,
     pub errors: [c::atomic64_t; c::BCH_MEMBER_ERROR_NR as usize],
     pub write_errors_start: c_ulong,
     pub flags: c_ulong,
