@@ -568,33 +568,23 @@ static void bch2_do_discards(struct bch_fs *c)
 								    s, false);
 				if (!__ret)
 					s->seen += bucket_size;
+
+				/*
+				 * Keep the forced restart inside lockrestart_do():
+				 * btree_trans_restart() leaves trans->restarted set
+				 * until the retry loop begins the next transaction.
+				 */
+				if (__ret == -BCH_ERR_max_discards_in_flight ||
+				    (!__ret && READ_ONCE(d->in_flight.nr) > READ_ONCE(d->ref))) {
+					if (!__ret)
+						pos = next;
+					__ret = bch2_discards_complete(trans, s, false, false) ?:
+						btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+				} else if (!__ret) {
+					pos = next;
+				}
 				__ret;
 			}));
-			/*
-			 * Reap completed discards as we go: in_flight entries
-			 * are only freed in bch2_discards_complete(), so if we
-			 * never reach DEV_IN_FLIGHT_MAX - the device completes
-			 * discards inline, or doesn't support REQ_OP_DISCARD -
-			 * the in_flight darray would otherwise grow without
-			 * bound and turn the linear scans in
-			 * discard_in_flight_add()/discard_endio() into O(n^2).
-			 * in_flight.nr > ref means there are completed entries
-			 * waiting to be reaped.
-			 *
-			 * On success the bucket's been handled, so advance the
-			 * detached need_discard cursor before the nested restart;
-			 * on -max_discards_in_flight leave it put so we retry the
-			 * bucket after draining.
-			 */
-			if (ret == -BCH_ERR_max_discards_in_flight ||
-			    (!ret && READ_ONCE(d->in_flight.nr) > READ_ONCE(d->ref))) {
-				if (!ret)
-					pos = next;
-				ret = bch2_discards_complete(trans, s, false, false) ?:
-				      btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
-			} else if (!ret) {
-				pos = next;
-			}
 		}
 
 		ret = bch2_discards_complete(trans, s, false, true) ?: ret;
