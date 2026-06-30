@@ -67,6 +67,10 @@ Create a new subvolume
 Delete an existing subvolume
 .It Ic subvolume snapshot
 Create a snapshot
+.It Ic subvolume list
+List subvolumes
+.It Ic subvolume list-snapshots
+List snapshots and their disk usage
 .El
 .Ss Commands for managing filesystem data
 .Bl -tag -width 18n -compact
@@ -512,6 +516,34 @@ if not specified the snapshot will be of the subvolume containing
 .Bl -tag -width Ds
 .It Fl r
 Make snapshot read-only
+.El
+.It Ic subvolume list Oo Ar options Oc Ar target
+List subvolumes in a mounted filesystem.
+.Bl -tag -width Ds
+.It Fl -json
+Output machine-readable JSON.
+.It Fl t , Fl -tree
+Show a hierarchical view.
+.It Fl R , Fl -recursive
+List subvolumes recursively.
+.It Fl s , Fl -snapshots
+Include snapshot subvolumes.
+.It Fl -readonly
+Only show read-only subvolumes.
+.It Fl -sort Ns = Ns ( Cm name | size | time )
+Sort output.
+.El
+.It Ic subvolume list-snapshots Oo Ar options Oc Ar target
+List snapshots and their disk usage in a mounted filesystem.
+.Bl -tag -width Ds
+.It Fl f , Fl -flat
+Show a flat list instead of the default tree.
+.It Fl -json
+Output machine-readable JSON, including snapshot IDs and parent relationships.
+.It Fl -readonly
+Only show read-only snapshots in flat view.
+.It Fl -sort Ns = Ns ( Cm name | size | time )
+Sort flat output.
 .El
 .El
 .Sh Commands for managing filesystem data
