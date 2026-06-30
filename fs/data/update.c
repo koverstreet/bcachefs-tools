@@ -969,23 +969,23 @@ static int bch2_extent_drop_ptrs(struct btree_trans *trans,
 		bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
 }
 
-static int bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
-				      struct bch_inode_opts *io_opts,
-				      unsigned buf_bytes)
+static int __bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
+					struct bch_inode_opts *io_opts,
+					unsigned buf_bytes, gfp_t gfp)
 {
 	/* be paranoid */
 	buf_bytes = round_up(buf_bytes, c->opts.block_size);
 
 	unsigned nr_vecs = DIV_ROUND_UP(buf_bytes, PAGE_SIZE);
 
-	m->bvecs = kmalloc_array(nr_vecs, sizeof*(m->bvecs), GFP_KERNEL);
+	m->bvecs = kmalloc_array(nr_vecs, sizeof*(m->bvecs), gfp);
 	if (!m->bvecs)
 		return -ENOMEM;
 
 	bio_init(&m->rbio.bio,		NULL, m->bvecs, nr_vecs, REQ_OP_READ);
 	bio_init(&m->op.wbio.bio,	NULL, m->bvecs, nr_vecs, 0);
 
-	if (bch2_bio_alloc_pages(&m->op.wbio.bio, c->opts.block_size, buf_bytes, GFP_KERNEL)) {
+	if (bch2_bio_alloc_pages(&m->op.wbio.bio, c->opts.block_size, buf_bytes, gfp)) {
 		kfree(m->bvecs);
 		m->bvecs = NULL;
 		return -ENOMEM;
@@ -997,6 +997,21 @@ static int bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
 	m->rbio.bio.bi_iter.bi_sector	= bkey_start_offset(&m->k.k->k);
 	m->op.wbio.bio.bi_ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
 	return 0;
+}
+
+static int bch2_data_update_bios_init(struct btree_trans *trans,
+				      struct data_update *m, struct bch_fs *c,
+				      struct bch_inode_opts *io_opts,
+				      unsigned buf_bytes)
+{
+	int ret = __bch2_data_update_bios_init(m, c, io_opts, buf_bytes, GFP_NOWAIT);
+
+	if (ret == -ENOMEM) {
+		bch2_trans_unlock_long(trans);
+		ret = __bch2_data_update_bios_init(m, c, io_opts, buf_bytes, GFP_KERNEL);
+	}
+
+	return ret;
 }
 
 static unsigned durability_available_on_target(struct bch_fs *c,
@@ -1526,7 +1541,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 
 	bch2_trans_unlock(trans);
 
-	ret = bch2_data_update_bios_init(m, c, io_opts, buf_bytes);
+	ret = bch2_data_update_bios_init(trans, m, c, io_opts, buf_bytes);
 	if (ret)
 		goto out_nocow_unlock;
 
