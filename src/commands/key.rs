@@ -73,7 +73,11 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
 
     match KeyHandle::new(&sb, &passphrase, cli.keyring) {
         Ok(_) => return Ok(()),
-        Err(e) if e.to_string().contains("incorrect passphrase") => {}
+        Err(e) if e.to_string().contains("incorrect passphrase") => {
+            if cli.file.is_some() {
+                return Err(e);
+            }
+        }
         Err(e) => return Err(e),
     }
 
