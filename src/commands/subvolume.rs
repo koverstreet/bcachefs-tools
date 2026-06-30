@@ -34,7 +34,9 @@ enum Subcommands {
     #[command(visible_aliases = ["new"],
         long_about = "Creates a new subvolume at the given path. Subvolumes are \
 independently mountable filesystem trees, each with their own inode \
-number space.")]
+number space. Subvolume roots may be renamed or moved as subvolume \
+roots, but ordinary files and directories cannot be renamed across \
+subvolume boundaries.")]
     Create {
         /// Paths
         #[arg(required = true)]
