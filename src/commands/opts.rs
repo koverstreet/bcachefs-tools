@@ -36,7 +36,11 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
         let Some(name) = opt.name() else { continue };
 
         let mut col = 0;
-        let s = format!("      --{name}");
+        let s = if opt.type_ == c::opt_type::BCH_OPT_BOOL {
+            format!("      --{name}, --no{name}")
+        } else {
+            format!("      --{name}")
+        };
         col += s.len();
         out.push_str(&s);
 

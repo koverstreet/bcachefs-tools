@@ -710,7 +710,7 @@ fn image_create_usage() {
     );
     let dev_opts = opts_usage_str(
         c::opt_flags::OPT_DEVICE as u32,
-        c::opt_flags::OPT_FS as u32,
+        0,
     );
 
     print!("\
