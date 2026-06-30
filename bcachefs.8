@@ -356,6 +356,16 @@ Reconstruct alloc btree
 .It Fl -version_upgrade Ns = Ns ( Cm compatible | incompatible | none )
 Set superblock to latest version, allowing any new features
 to be used
+.Pp
+.Cm compatible
+is the default: compatible metadata upgrades may be applied automatically, and
+the filesystem may still downgrade those compatible version fields when mounted
+by an older kernel. Use
+.Cm incompatible
+only for an intentional one-way metadata upgrade that may prevent mounting with
+older kernels, and use
+.Cm none
+to avoid optional version upgrades.
 .It Fl -nocow
 Nocow mode: Writes will be done in place when possible.
 .sp
