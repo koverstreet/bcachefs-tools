@@ -228,7 +228,6 @@
  */
 
 #include "alloc/buckets.h"
-#include "asm-generic/bug.h"
 #include "bcachefs.h"
 
 #include "alloc/accounting.h"
