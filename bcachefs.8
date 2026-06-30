@@ -132,7 +132,10 @@ Btree node size, default 256k
 .It Fl -errors Ns = Ns ( Cm continue | ro | panic )
 Action to take on filesystem error
 .It Fl -data_replicas Ns = Ns Ar number
-Number of data replicas
+Number of data replicas.
+With erasure coding enabled, this is currently capped at
+.Ar 3
+.Pq RAID6 .
 .It Fl -metadata_replicas Ns = Ns Ar number
 Number of metadata replicas
 .It Fl -data_replicas_required Ns = Ns Ar number
@@ -163,7 +166,7 @@ Device or label to move data to in the background
 .It Fl -promote_target Ns = Ns Ar target
 Device or label to promote data to on read
 .It Fl -erasure_code
-Enable erasure coding (DO NOT USE YET)
+Enable erasure coding (RAID5/6; data replicas are capped at 3)
 .It Fl -inodes_32bit
 Constrain inode numbers to 32 bits
 .It Fl -shared_inode_numbers
@@ -257,7 +260,10 @@ Action to take on filesystem error
 .It Fl -metadata_replicas Ns = Ns Ar number
 Number of metadata replicas
 .It Fl -data_replicas Ns = Ns Ar number
-Number of data replicas
+Number of data replicas.
+With erasure coding enabled, this is currently capped at
+.Ar 3
+.Pq RAID6 .
 .It Fl -metadata_replicas_required Ns = Ns Ar number
 
 .It Fl -data_replicas_required Ns = Ns Ar number
@@ -284,7 +290,7 @@ Device or label to move data to in the background
 .It Fl -promote_target Ns = Ns Ar target
 Device or label to promote data to on read
 .It Fl -erasure_code
-Enable erasure coding (DO NOT USE YET)
+Enable erasure coding (RAID5/6; data replicas are capped at 3)
 .It Fl -inodes_32bit
 Constrain inode numbers to 32 bits
 .It Fl -shared_inode_numbers
@@ -582,7 +588,10 @@ When applied to directories, attributes are propagated recursively to all files
 and subdirectories within.
 .Bl -tag -width Ds
 .It Fl -data_replicas Ns = Ns Ar number
-Number of data replicas
+Number of data replicas.
+With erasure coding enabled, this is currently capped at
+.Ar 3
+.Pq RAID6 .
 .It Fl -data_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
 Set data checksum type (default:
 .Cm crc32c ) .
@@ -600,7 +609,7 @@ Device or label to move data to in the background
 .It Fl -promote_target Ns = Ns Ar target
 Device or label to promote data to on read
 .It Fl -erasure_code
-Enable erasure coding (DO NOT USE YET)
+Enable erasure coding (RAID5/6; data replicas are capped at 3)
 .It Fl -project
 
 .It Fl -nocow

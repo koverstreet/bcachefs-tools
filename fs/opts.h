@@ -164,7 +164,7 @@ enum fsck_err_opts {
 	  OPT_FS|OPT_INODE|OPT_FORMAT|OPT_MOUNT_OLD|OPT_RUNTIME,	\
 	  OPT_UINT(1, BCH_REPLICAS_MAX + 1),				\
 	  BCH_SB_DATA_REPLICAS_WANT,	1,				\
-	  "#",		"Number of data replicas")			\
+	  "#",		"Number of data replicas (erasure coding currently caps this at 3, RAID6)")\
 	x(encoded_extent_max,		u32,				\
 	  OPT_FS|OPT_FORMAT|						\
 	  OPT_HUMAN_READABLE|OPT_MUST_BE_POW_2|OPT_SB_FIELD_SECTORS|OPT_SB_FIELD_ILOG2,\
@@ -225,7 +225,7 @@ enum fsck_err_opts {
 	  OPT_FS|OPT_INODE|OPT_FORMAT|OPT_MOUNT_OLD|OPT_RUNTIME,	\
 	  OPT_BOOL(),							\
 	  BCH_SB_ERASURE_CODE,		false,				\
-	  NULL,		"Enable erasure coding (RAID5/6, but no write hole)")\
+	  NULL,		"Enable erasure coding (RAID5/6; data replicas are capped at 3)")\
 	x(ec_max_data_blocks,		u8,				\
 	  OPT_FS|OPT_FORMAT|OPT_MOUNT|OPT_RUNTIME,			\
 	  OPT_UINT(0, 15),						\
