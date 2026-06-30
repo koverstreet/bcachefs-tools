@@ -1943,6 +1943,7 @@ static int bch2_dev_shrink_invalidate_bp(struct btree_trans *trans,
 					 struct bkey_s_c_backpointer bp,
 					 struct wb_maybe_flush *last_flushed)
 {
+	u32 restart_count = trans->restart_count;
 	struct bch_fs *c = trans->c;
 
 	CLASS(btree_iter_uninit, iter)(trans);
@@ -1958,7 +1959,7 @@ static int bch2_dev_shrink_invalidate_bp(struct btree_trans *trans,
 	if (!bch2_bkey_can_read(c, bkey_i_to_s_c(n)))
 		bch2_set_bkey_error(c, n, KEY_TYPE_ERROR_device_removed);
 
-	return 0;
+	return trans_was_restarted(trans, restart_count);
 }
 
 static int bch2_dev_shrink_invalidate_cached_bucket(struct btree_trans *trans,
@@ -1967,6 +1968,7 @@ static int bch2_dev_shrink_invalidate_cached_bucket(struct btree_trans *trans,
 						    u8 gen,
 						    struct wb_maybe_flush *last_flushed)
 {
+	u32 restart_count = trans->restart_count;
 	struct bpos bp_start = bucket_pos_to_bp_start(ca, bucket);
 	struct bpos bp_end = bucket_pos_to_bp_end(ca, bucket);
 
@@ -1983,9 +1985,8 @@ static int bch2_dev_shrink_invalidate_cached_bucket(struct btree_trans *trans,
 		if (bp.v->bucket_gen != gen)
 			continue;
 
-		try(bch2_dev_shrink_invalidate_bp(trans, ca, bp, last_flushed));
-		0;
-	}));
+		bch2_dev_shrink_invalidate_bp(trans, ca, bp, last_flushed);
+	})) ?: trans_was_restarted(trans, restart_count);
 }
 
 static int bch2_dev_shrink_invalidate_tail_cached(struct bch_fs *c, struct bch_dev *ca,
@@ -2023,10 +2024,11 @@ static int bch2_dev_shrink_invalidate_tail_cached(struct bch_fs *c, struct bch_d
 		if (bch2_bucket_is_open_safe(c, k.k->p.inode, k.k->p.offset))
 			continue;
 
-			try(bch2_dev_shrink_invalidate_cached_bucket(trans, ca, k.k->p,
-								     a->generation, &last_flushed));
-		*invalidated = true;
-		0;
+		int ret = bch2_dev_shrink_invalidate_cached_bucket(trans, ca, k.k->p,
+								   a->generation, &last_flushed);
+		if (!ret)
+			*invalidated = true;
+		ret;
 	}));
 }
 
