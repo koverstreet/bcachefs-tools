@@ -532,6 +532,39 @@ void __bch2_dev_offline(struct bch_fs *c, struct bch_dev *ca)
 	bch2_dev_journal_exit(ca);
 }
 
+static int bch2_dev_mark_ro_after_offline(struct bch_fs *c, struct bch_dev *ca,
+					  struct printbuf *err)
+{
+	lockdep_assert_held(&c->state_lock);
+
+	if (ca->mi.state != BCH_MEMBER_STATE_rw)
+		return 0;
+
+	bch_notice_dev(ca, "%s", bch2_member_states[BCH_MEMBER_STATE_ro]);
+	ca->mi.state = BCH_MEMBER_STATE_ro;
+
+	scoped_guard(mutex, &c->sb_lock) {
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+
+		SET_BCH_MEMBER_STATE(m, BCH_MEMBER_STATE_ro);
+
+		int ret = bch2_write_super(c);
+		if (ret) {
+			prt_printf(err, "bch2_write_super() error marking device ro: %s\n",
+				   bch2_err_str(ret));
+			return ret;
+		}
+	}
+
+	int ret = bch2_set_reconcile_needs_scan(c,
+		(struct reconcile_scan) { .type = RECONCILE_SCAN_stripes }, false);
+	if (ret)
+		prt_printf(err, "error scheduling stripe scan after device offline: %s\n",
+			   bch2_err_str(ret));
+
+	return ret;
+}
+
 #ifndef CONFIG_BCACHEFS_DEBUG
 static void bch2_dev_ref_complete(struct percpu_ref *ref)
 {
@@ -1592,6 +1625,11 @@ static void bch2_fs_bdev_mark_dead(struct block_device *bdev, bool surprise)
 		}
 
 		__bch2_dev_offline(c, ca);
+		if (dev) {
+			int ret = bch2_dev_mark_ro_after_offline(c, ca, &buf);
+			if (ret)
+				print = true;
+		}
 
 		if (print)
 			bch2_print_str(c, KERN_ERR, buf.buf);
