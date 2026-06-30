@@ -249,6 +249,27 @@ bcachefs-rust-y := $(shell RUSTC='$(RUSTC)' HOSTRUSTC='$(HOSTRUSTC)'	\
 	$(CONFIG_SHELL) $(src)/scripts/rust-is-available-dkms.sh)
 endif
 endif
+# Kernel ships Rust; use it, don't vendor.
+bcachefs-vendor-rust :=
+else
+# CONFIG_RUST=n: no kernel Rust to link against — build bcachefs's own vendored
+# stack instead (Makefile.rust.vendor), if we can. BCACHEFS_RUST=1 forces; auto
+# needs rustc + its rust-src + bindgen, and the kernel tree's Rust target spec
+# (scripts/target.json + include/generated/rustc_cfg, present even on a Rust-off
+# kernel).
+BCACHEFS_RUST ?= auto
+ifeq ($(BCACHEFS_RUST),1)
+bcachefs-rust-y := y
+else ifeq ($(BCACHEFS_RUST),0)
+bcachefs-rust-y := n
+else
+bcachefs-rust-y := $(shell command -v $(RUSTC) >/dev/null 2>&1 &&		\
+	command -v $(BINDGEN) >/dev/null 2>&1 &&				\
+	[ -r '$(objtree)/scripts/target.json' ] &&			\
+	[ -r '$(objtree)/include/generated/rustc_cfg' ] && echo y || echo n)
+endif
+bcachefs-vendor-rust := $(bcachefs-rust-y)
+endif
 
 ifeq ($(bcachefs-rust-y),y)
 
@@ -397,7 +418,7 @@ quiet_cmd_bch_library = RUSTC L  $@
       cmd_bch_library = $(RUSTC) $(rust_flags) \
 	--emit=dep-info=$(depfile) --emit=obj=$@ \
 	--emit=metadata=$(dir $@)lib$(patsubst %.o,%,$(notdir $@)).rmeta \
-	--crate-type rlib -L$(objtree)/rust --sysroot=/dev/null \
+	--crate-type rlib -L$(objtree)/rust -L$(obj)/vrust --sysroot=/dev/null \
 	-Zunstable-options --crate-name $(patsubst %.o,%,$(notdir $@)) $<
 
 $(obj)/bitfield.o: $(src)/vendor/bitfield/src/lib.rs FORCE
@@ -424,11 +445,16 @@ targets += codegen rust/bcachefs.rs libpaste.so bitfield.o bitflags.o uuid.o
 # object. bitfield.o/bitflags.o/uuid.o: the vendored rlibs' objects, linked in.
 bcachefs-y += mod.o rust/extern.o bitfield.o bitflags.o uuid.o
 
+# CONFIG_RUST=n: build the vendored Rust stack into $(obj) and bundle it (it also
+# provides a custom mod.o rule linking against $(obj), since kbuild's Rust rule
+# wires mod.o to the kernel's rmeta). CONFIG_RUST=y leaves mod.o to kbuild.
+ifeq ($(bcachefs-vendor-rust),y)
+include $(src)/Makefile.rust.vendor
+endif
+
 else
 $(warning bcachefs: skipping optional Rust support for DKMS module; set BCACHEFS_RUST=1 to force)
 endif # bcachefs-rust-y
-
-endif # CONFIG_RUST
 
 # Silence "note: xyz changed in GCC X.X" messages
 subdir-ccflags-y += $(call cc-disable-warning, psabi)
