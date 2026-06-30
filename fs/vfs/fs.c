@@ -1798,8 +1798,11 @@ static struct inode *bch2_nfs_get_inode(struct super_block *sb,
 static struct dentry *bch2_fh_alias(struct super_block *sb, struct inode *vinode)
 {
 	struct dentry *dentry = d_obtain_alias(vinode);
-	if (!IS_ERR(dentry))
+	if (!IS_ERR(dentry)) {
+#if IS_ENABLED(CONFIG_UNICODE)
 		bch2_dentry_set_casefold_ops_locked(dentry, vinode);
+#endif
+	}
 	return dentry;
 }
 
