@@ -509,6 +509,10 @@ Resize journal on a device
 Create a new subvolume
 .It Ic subvolume delete Oo Ar options Oc Ar path
 Delete an existing subvolume
+.Pp
+Subvolume roots may be renamed or moved as subvolume roots.
+Ordinary files and directories cannot be renamed across subvolume boundaries;
+copy or reflink data when reorganizing contents between subvolumes.
 .It Ic subvolume snapshot Oo Ar options Oc Ar source dest
 Create a snapshot of
 .Ar source
