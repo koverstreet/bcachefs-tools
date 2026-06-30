@@ -1123,9 +1123,8 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 #else
 	prt_str(out,
 		"built without Rust support; this will be required in the near "
-		"future - ensure your kernel has CONFIG_RUST enabled and a "
-		"compatible Rust toolchain (rustc + bindgen) is available at "
-		"build time\n");
+		"future - ensure a compatible Rust toolchain (rustc + bindgen + "
+		"rust-src) is available at module build time\n");
 #endif
 #endif
 
