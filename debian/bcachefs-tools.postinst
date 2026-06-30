@@ -38,10 +38,18 @@ stage_mok_enrollment() {
 
 case "$1" in
 configure)
-	stage_mok_enrollment
+	# Disabled by default: we no longer enroll the bcachefs signing CA. Fetched
+	# modules are signature-verified at install time (fs/scripts/fetch-module.sh),
+	# and Secure Boot loading uses DKMS's own MOK workflow — so a separate
+	# bcachefs key need not be enrolled. To instead enroll the bcachefs CA (one
+	# enrollment, no per-machine DKMS key), uncomment the three lines below AND
+	# the prompt block in debian/bcachefs-tools.config; stage_mok_enrollment()
+	# above is the preserved implementation.
+	#stage_mok_enrollment
 	# A MOK password is a one-time secret; never leave it in the debconf db.
-	db_set bcachefs-tools/mok-password "" || true
-	db_set bcachefs-tools/mok-password-again "" || true
+	#db_set bcachefs-tools/mok-password "" || true
+	#db_set bcachefs-tools/mok-password-again "" || true
+	:
 	;;
 esac
 
