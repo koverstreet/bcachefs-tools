@@ -262,7 +262,6 @@
 #include "init/fs.h"
 
 #include "linux/bitmap.h"
-#include <linux/byteorder.h>
 #include "linux/kthread.h"
 #include "linux/sched.h"
 #include "linux/sched/signal.h"
