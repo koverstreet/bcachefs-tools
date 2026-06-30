@@ -1049,6 +1049,28 @@ int bch2_buckets_nouse_alloc(struct bch_fs *c)
 	return 0;
 }
 
+static int bch2_dev_buckets_nouse_resize(struct bch_fs *c, struct bch_dev *ca,
+					 u64 old_size, u64 new_size)
+{
+	if (!ca->buckets_nouse)
+		return 0;
+
+	unsigned long *n = bch2_kvmalloc(BITS_TO_LONGS(new_size) *
+					 sizeof(unsigned long),
+					 GFP_KERNEL|__GFP_ZERO);
+	if (!n)
+		return bch_err_throw(c, ENOMEM_buckets_nouse);
+
+	memcpy(n, ca->buckets_nouse,
+	       BITS_TO_LONGS(min(old_size, new_size)) * sizeof(unsigned long));
+
+	unsigned long *old = ca->buckets_nouse;
+	ca->buckets_nouse = n;
+	kvfree_rcu_mightsleep(old);
+
+	return 0;
+}
+
 static void bucket_gens_free_rcu(struct rcu_head *rcu)
 {
 	struct bucket_gens *buckets =
@@ -1065,9 +1087,6 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 
 	if (resize)
 		lockdep_assert_held(&c->state_lock);
-
-	if (resize && ca->buckets_nouse)
-		return bch_err_throw(c, no_resize_with_buckets_nouse); // TODO: make this work
 
 	bucket_gens = bch2_kvmalloc(struct_size(bucket_gens, b, nbuckets),
 				    GFP_KERNEL|__GFP_ZERO);
@@ -1091,6 +1110,7 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 
 	try(bch2_bucket_bitmap_resize(ca, &ca->bucket_backpointer_mismatch, ca->mi.nbuckets, nbuckets));
 	try(bch2_bucket_bitmap_resize(ca, &ca->bucket_backpointer_empty, ca->mi.nbuckets, nbuckets));
+	try(bch2_dev_buckets_nouse_resize(c, ca, ca->mi.nbuckets, nbuckets));
 
 	rcu_assign_pointer(ca->bucket_gens, bucket_gens);
 	bucket_gens	= old_bucket_gens;
