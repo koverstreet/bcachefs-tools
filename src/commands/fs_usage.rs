@@ -1,4 +1,5 @@
 use std::fmt::Write as FmtWrite;
+use std::os::unix::fs::MetadataExt;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::c;
@@ -19,6 +20,7 @@ enum Field {
     Replicas,
     Btree,
     Compression,
+    Inodes,
     RebalanceWork,
     Devices,
 }
@@ -27,7 +29,8 @@ enum Field {
 #[command(name = "usage", about = "Display detailed filesystem usage",
     long_about = "Displays filesystem space usage broken down by category. \
 Output modes: replicas (data/metadata replication), btree (per-btree \
-space), compression (ratios and savings), rebalance_work (pending \
+space), compression (ratios and savings), inodes (selected path inode \
+usage, not recursive directory totals), rebalance_work (pending \
 reconcile work), devices (per-device breakdown). Use -f to select \
 specific fields, -a for all, -h for human-readable sizes.",
     disable_help_flag = true)]
@@ -57,7 +60,7 @@ fn fs_usage(cli: Cli) -> Result<()> {
 
     let fields: Vec<Field> = if cli.all {
         vec![Field::Replicas, Field::Btree, Field::Compression,
-             Field::RebalanceWork, Field::Devices]
+             Field::Inodes, Field::RebalanceWork, Field::Devices]
     } else if cli.fields.is_empty() {
         vec![Field::RebalanceWork]
     } else {
@@ -81,13 +84,19 @@ struct DevContext {
 }
 
 fn fs_usage_to_text(out: &mut Printbuf, path: &str, fields: &[Field]) -> Result<()> {
+    let path_inum = if fields.contains(&Field::Inodes) {
+        std::fs::metadata(path).ok().map(|m| m.ino())
+    } else {
+        None
+    };
+
     let handle = BcachefsHandle::open(path)
         .map_err(|e| anyhow!("opening filesystem '{}': {}", path, e))?;
 
     let sysfs_path = sysfs::sysfs_path_from_fd(handle.sysfs_fd())?;
     let devs = sysfs::fs_get_devices(&sysfs_path)?;
 
-    fs_usage_v1_to_text(out, &handle, &devs, fields)
+    fs_usage_v1_to_text(out, &handle, &devs, fields, path, path_inum)
         .map_err(|e| anyhow!("query_accounting ioctl failed (kernel too old?): {}", e))?;
 
     devs_usage_to_text(out, &handle, &devs, fields)?;
@@ -100,6 +109,8 @@ fn fs_usage_v1_to_text(
     handle: &BcachefsHandle,
     devs: &[DevInfo],
     fields: &[Field],
+    path: &str,
+    path_inum: Option<u64>,
 ) -> Result<(), errno::Errno> {
     let has = |f: Field| -> bool { fields.contains(&f) };
 
@@ -112,6 +123,9 @@ fn fs_usage_v1_to_text(
     }
     if has(Field::Btree) {
         accounting_types |= disk_accounting_type::btree.bit();
+    }
+    if has(Field::Inodes) {
+        accounting_types |= disk_accounting_type::inum.bit();
     }
     if has(Field::RebalanceWork) {
         let version_reconcile = u32::from(metadata_version::reconcile) as u64;
@@ -240,6 +254,10 @@ fn fs_usage_v1_to_text(
         }
     }
 
+    if has(Field::Inodes) {
+        inode_usage_to_text(out, &sorted, path, path_inum);
+    }
+
     // Rebalance / reconcile work
     if has(Field::RebalanceWork) {
         let rebalance: Vec<_> = sorted.iter()
@@ -274,6 +292,46 @@ fn fs_usage_v1_to_text(
     }
 
     Ok(())
+}
+
+fn inode_usage_to_text(
+    out: &mut Printbuf,
+    sorted: &[&AccountingEntry],
+    path: &str,
+    path_inum: Option<u64>,
+) {
+    write!(out, "\nInode usage for selected path").unwrap();
+    if let Some(inum) = path_inum {
+        write!(out, " (inum {})", inum).unwrap();
+    }
+    writeln!(out, ":\nnot recursive directory totals").unwrap();
+
+    let Some(inum) = path_inum else {
+        writeln!(out, "{}:\tno local path inode available", path).unwrap();
+        return;
+    };
+
+    let entry = sorted.iter().find(|e| matches!(
+        e.pos.decode(),
+        DiskAccountingKind::Inum { inum: entry_inum } if entry_inum == inum
+    ));
+
+    out.aligned(|sub| {
+        write!(sub, "Path\tExtents\tLogical\rOn disk\r\n").unwrap();
+        write!(sub, "{}:\t", path).unwrap();
+        if let Some(entry) = entry {
+            write!(sub, "{}\t", entry.counter(0)).unwrap();
+            sub.units_sectors(entry.counter(1));
+            write!(sub, "\r").unwrap();
+            sub.units_sectors(entry.counter(2));
+        } else {
+            write!(sub, "0\t").unwrap();
+            sub.units_sectors(0);
+            write!(sub, "\r").unwrap();
+            sub.units_sectors(0);
+        }
+        write!(sub, "\r\n").unwrap();
+    });
 }
 
 // ──────────────────────────── Replicas summary ──────────────────────────────
