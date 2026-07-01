@@ -338,6 +338,19 @@ pub struct SetStateCli {
     path: Option<String>,
 }
 
+#[derive(Parser, Debug)]
+#[command(about = "Set a device label")]
+pub struct SetLabelCli {
+    /// Device path or numeric device index
+    device: String,
+
+    /// New device label
+    label: String,
+
+    /// Filesystem path (required when specifying device by index)
+    path: Option<String>,
+}
+
 fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
 
     let new_state = cli.new_state.as_u32();
@@ -359,6 +372,21 @@ fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
 
     handle.disk_set_state(dev_idx, new_state, flags)
         .context("setting device state")
+}
+
+fn cmd_device_set_label(cli: SetLabelCli) -> Result<()> {
+    let (handle, dev_idx) = open_dev_by_path_or_index(&cli.device, cli.path.as_deref())?;
+    let sysfs_path = sysfs::sysfs_path_from_fd(handle.sysfs_fd())?;
+    let label_path = sysfs_path.join(format!("dev-{dev_idx}/label"));
+
+    std::fs::write(&label_path, cli.label.as_bytes())
+        .with_context(|| {
+            format!(
+                "setting label for device {} via {}",
+                cli.device,
+                label_path.display()
+            )
+        })
 }
 
 fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
@@ -613,12 +641,14 @@ pub const CMD_OFFLINE: super::CmdDef = typed_cmd!("offline", "Take a device offl
 pub const CMD_REMOVE: super::CmdDef = typed_cmd!("remove", "Remove a device", RemoveCli, cmd_device_remove);
 pub const CMD_EVACUATE: super::CmdDef = typed_cmd!("evacuate", "Evacuate data from a device", EvacuateCli, cmd_device_evacuate);
 pub const CMD_SET_STATE: super::CmdDef = typed_cmd!("set-state", "Set device state", SetStateCli, cmd_device_set_state);
+pub const CMD_SET_LABEL: super::CmdDef = typed_cmd!("set-label", "Set device label", SetLabelCli, cmd_device_set_label);
 pub const CMD_RESIZE: super::CmdDef = typed_cmd!("resize", "Resize filesystem on a device", ResizeCli, cmd_device_resize);
 pub const CMD_RESIZE_JOURNAL: super::CmdDef = typed_cmd!("resize-journal", "Resize journal on a device", ResizeJournalCli, cmd_device_resize_journal);
 pub const CMD: super::CmdDef = super::CmdDef {
     name: "device", about: "Manage devices within a filesystem", aliases: &[],
     kind: super::CmdKind::Group { children: &[
         &CMD_ADD, &CMD_ONLINE, &CMD_OFFLINE, &CMD_REMOVE,
-        &CMD_EVACUATE, &CMD_SET_STATE, &CMD_RESIZE, &CMD_RESIZE_JOURNAL,
+        &CMD_EVACUATE, &CMD_SET_STATE, &CMD_SET_LABEL,
+        &CMD_RESIZE, &CMD_RESIZE_JOURNAL,
     ]},
 };
