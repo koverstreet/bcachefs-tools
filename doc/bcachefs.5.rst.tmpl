@@ -51,6 +51,40 @@ overridden on files or directories, but there are some:
 
  *durability*
 
+To add devices after the initial format, point ``bcachefs device add`` at a
+mounted filesystem path or an existing member device, then the new device. Labels
+assigned during add can immediately be used by target options:
+
+.. code-block:: bash
+
+  bcachefs device add --label=ssd /mnt /dev/nvme1n1
+  bcachefs device add --label=hdd /mnt /dev/sdb
+  bcachefs set-fs-option --foreground_target=ssd \
+                         --promote_target=ssd \
+                         --background_target=hdd /mnt
+
+Adding another device with the same label expands that target. For example, a
+second background disk can be added and then selected for replicated user data:
+
+.. code-block:: bash
+
+  bcachefs device add --label=hdd /mnt /dev/sdc
+  bcachefs set-fs-option --data_replicas=2 --background_target=hdd /mnt
+
+Cache-like devices that should accelerate reads or writes without counting as a
+durable replica should be added with ``--durability=0``:
+
+.. code-block:: bash
+
+  bcachefs device add --label=ssd --durability=0 /mnt /dev/nvme1n1
+
+For an already-added member, device options such as durability can be changed
+with ``bcachefs set-fs-option`` by passing the member device path:
+
+.. code-block:: bash
+
+  bcachefs set-fs-option --durability=0 /dev/nvme1n1
+
 Multipath devices
 -----------------
 When using device-mapper multipath, use the multipath device (e.g.
