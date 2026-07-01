@@ -934,10 +934,40 @@ int bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 
 /* Device add/removal: */
 
+static void bch2_dev_remove_rebind_vfs_dev(struct bch_fs *c, dev_t removed)
+{
+#ifndef NO_BCACHEFS_FS
+	struct super_block *sb = c->vfs_sb;
+	struct block_device *bdev = NULL;
+
+	lockdep_assert_held(&c->state_lock);
+
+	if (!sb || sb->s_dev != removed)
+		return;
+
+	guard(rcu)();
+	for_each_online_member_rcu(c, ca) {
+		bdev = ca->disk_sb.bdev;
+		break;
+	}
+
+	if (!bdev)
+		return;
+
+	sb->s_bdev = bdev;
+	sb->s_dev = bdev->bd_dev;
+	c->dev = sb->s_dev;
+#else
+	(void) c;
+	(void) removed;
+#endif
+}
+
 static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 			     bool fast_device_removal, int flags,
 			     struct printbuf *err)
 {
+	dev_t removed = ca->dev;
 	unsigned data;
 	int ret;
 
@@ -1061,6 +1091,8 @@ static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 
 	scoped_guard(mutex, &c->sb_lock)
 		rcu_assign_pointer(c->devs[ca->dev_idx], NULL);
+
+	bch2_dev_remove_rebind_vfs_dev(c, removed);
 
 #ifndef CONFIG_BCACHEFS_DEBUG
 	percpu_ref_kill(&ca->ref);
