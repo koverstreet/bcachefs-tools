@@ -1075,6 +1075,7 @@ static int bch2_rename2(struct mnt_idmap *idmap,
 		: dst_dentry->d_inode
 		? BCH_RENAME_OVERWRITE : BCH_RENAME;
 	bool whiteout = !!(flags & RENAME_WHITEOUT);
+	bool reconcile_changed = false;
 	int ret;
 
 	if (flags & ~(RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT))
