@@ -188,7 +188,9 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
 /// Mount a bcachefs filesystem by its UUID.
 #[derive(Parser, Debug)]
 #[command(author, version, about,
-    long_about = "Mounts a bcachefs filesystem. Devices are discovered automatically \
+    long_about = "`mount -t bcachefs` invokes the installed mount.bcachefs helper; \
+this is the same mount path exposed as `bcachefs mount`.\n\n\
+Mounts a bcachefs filesystem. Devices are discovered automatically \
 by scanning for the filesystem UUID---unlike btrfs, this is handled \
 entirely in userspace.\n\n\
 If the filesystem is encrypted, the passphrase will be looked up in \
