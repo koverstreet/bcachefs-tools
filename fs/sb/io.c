@@ -1659,10 +1659,11 @@ __cold void bch2_sb_to_text(struct printbuf *out,
 	prt_printf(out, "Device index:\t%u\n", sb->dev_idx);
 
 	prt_printf(out, "Label:\t");
-	if (!strlen(sb->label))
+	size_t label_len = strnlen(sb->label, sizeof(sb->label));
+	if (!label_len)
 		prt_printf(out, "(none)");
 	else
-		prt_printf(out, "%.*s", (int) sizeof(sb->label), sb->label);
+		prt_printf(out, "%.*s", (int) label_len, sb->label);
 	prt_newline(out);
 
 	prt_printf(out, "Version:\t");
