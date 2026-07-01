@@ -89,6 +89,7 @@ Device specific options:
 {dev_opts}\
       --fs_size=size           Size of filesystem on device
   -l, --label=label            Disk label
+      --group=label            Alias for --label, kept for old format examples
 
   -f, --force
   -q, --quiet                  Only print errors
@@ -288,7 +289,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                     let size = parse_human_size(&val)?;
                     superblock_size = (size >> 9) as u32;
                 }
-                "label" => {
+                "label" | "group" => {
                     cur_label = Some(take_opt_value(inline_val, &argv, &mut i, raw_name)?);
                     unconsumed_dev_option = true;
                 }
@@ -386,6 +387,37 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
         fs_opts,
         deferred_opts,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn format_accepts_group_as_label_alias() {
+        let cfg = parse_format_args(vec![
+            "format".to_string(),
+            "--group=ssd".to_string(),
+            "/dev/sdb".to_string(),
+        ])
+        .unwrap();
+
+        assert_eq!(cfg.devices.len(), 1);
+        assert_eq!(cfg.devices[0].label.as_deref(), Some("ssd"));
+    }
+
+    #[test]
+    fn format_keeps_metadata_replicas_as_fs_option() {
+        let cfg = parse_format_args(vec![
+            "format".to_string(),
+            "--metadata_replicas=2".to_string(),
+            "/dev/sdb".to_string(),
+        ])
+        .unwrap();
+
+        let opts = cfg.fs_opts;
+        assert_eq!(bcachefs_kernel::opt_get!(opts, metadata_replicas), 2);
+    }
 }
 
 fn cmd_format(argv: Vec<String>) -> Result<()> {
