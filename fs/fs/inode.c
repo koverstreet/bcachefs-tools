@@ -962,6 +962,23 @@ void bch2_inode_init(struct bch_fs *c, struct bch_inode_unpacked *inode_u,
 			     uid, gid, mode, rdev, parent);
 }
 
+int bch2_inode_set_31bit_dirent_offset(struct bch_fs *c,
+				       struct bch_inode_unpacked *inode_u)
+{
+	if (!S_ISDIR(inode_u->bi_mode))
+		return 0;
+
+	if (!inode_opt_get(c, inode_u, inodes_32bit)) {
+		inode_u->bi_flags &= ~BCH_INODE_31bit_dirent_offset;
+		return 0;
+	}
+
+	try(bch2_request_incompat_feature(c, bcachefs_metadata_version_31bit_dirent_offset));
+
+	inode_u->bi_flags |= BCH_INODE_31bit_dirent_offset;
+	return 0;
+}
+
 int bch2_inode_alloc_cursor_validate(struct bch_fs *c, struct bkey_s_c k,
 				   const struct bkey_validate_context *from)
 {

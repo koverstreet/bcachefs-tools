@@ -469,6 +469,43 @@ struct inode_opt_set {
 	bool			defined;
 };
 
+static bool inode_opt_set_effective_bool(struct inode_opt_set *s,
+					 bool fs_default)
+{
+	return s->v ? s->v - 1 : fs_default;
+}
+
+static int bch2_inodes_32bit_check_ancestors(struct dentry *dentry,
+					     struct bch_inode_info *inode)
+{
+	if (inode->v.i_ino > INT_MAX)
+		return -EOVERFLOW;
+
+	int ret = 0;
+	struct dentry *cur = dget(dentry);
+
+	while (!ret) {
+		struct dentry *parent = dget_parent(cur);
+
+		if (parent == cur) {
+			dput(parent);
+			break;
+		}
+
+		struct bch_inode_info *parent_inode = to_bch_ei(d_inode(parent));
+
+		if (parent_inode->v.i_ino > INT_MAX ||
+		    !(parent_inode->ei_inode.bi_flags & BCH_INODE_31bit_dirent_offset))
+			ret = -EOVERFLOW;
+
+		dput(cur);
+		cur = parent;
+	}
+
+	dput(cur);
+	return ret;
+}
+
 static int inode_opt_set_fn(struct btree_trans *trans,
 			    struct bch_inode_info *inode,
 			    struct bch_inode_unpacked *bi,
@@ -479,18 +516,12 @@ static int inode_opt_set_fn(struct btree_trans *trans,
 	if (s->id == Inode_opt_casefold)
 		try(bch2_inode_set_casefold(trans, inode_inum(inode), bi, s->v));
 
-	if (s->id == Inode_opt_inodes_32bit &&
-	    !bch2_request_incompat_feature(trans->c, bcachefs_metadata_version_31bit_dirent_offset)) {
+	if (s->id == Inode_opt_inodes_32bit) {
 		/*
 		 * Make sure the dir is empty, as otherwise we'd need to
 		 * rehash everything and update the dirent keys.
 		 */
 		try(bch2_empty_dir_trans(trans, inode_inum(inode)));
-
-		if (s->defined)
-			bi->bi_flags |= BCH_INODE_31bit_dirent_offset;
-		else
-			bi->bi_flags &= ~BCH_INODE_31bit_dirent_offset;
 	}
 
 	if (s->defined)
@@ -499,6 +530,9 @@ static int inode_opt_set_fn(struct btree_trans *trans,
 		bi->bi_fields_set &= ~(1U << s->id);
 
 	bch2_inode_opt_set(bi, s->id, s->v);
+
+	if (s->id == Inode_opt_inodes_32bit)
+		try(bch2_inode_set_31bit_dirent_offset(trans->c, bi));
 
 	return 0;
 }
@@ -557,6 +591,10 @@ static int __bch2_xattr_bcachefs_set(const struct xattr_handler *handler,
 			s.v = bch2_inode_opt_get(&dir->ei_inode, inode_opt_id);
 		}
 	}
+
+	if (inode_opt_id == Inode_opt_inodes_32bit &&
+	    inode_opt_set_effective_bool(&s, c->opts.inodes_32bit))
+		try(bch2_inodes_32bit_check_ancestors(dentry, inode));
 
 	scoped_guard(mutex, &inode->ei_update_lock) {
 		/*
