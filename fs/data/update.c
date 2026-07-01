@@ -1496,24 +1496,23 @@ int bch2_data_update_init(struct btree_trans *trans,
 	if (c->opts.nocow_enabled) {
 		if (!bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) {
 			if (!ctxt) {
-				/* We're being called from the promote path:
-				 * there is a btree_trans on the stack that's
-				 * holding locks, but we don't have a pointer to
-				 * it. Ouch - this needs to be fixed.
+				/*
+				 * Promote path: we have @trans, but promotes must
+				 * not block on a nocow lock or they'd pile up - bail
+				 * and let the caller retry.
 				 */
 				ret = bch_err_throw(c, nocow_lock_blocked);
 				goto out;
 			}
 
+			/* @trans == ctxt->trans here (see __bch2_move_extent) */
 			bool locked = false;
-			if (ctxt)
-				move_ctxt_wait_event(ctxt,
-					(locked = bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) ||
-					list_empty(&ctxt->ios));
+			move_ctxt_wait_event(ctxt,
+				(locked = bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) ||
+				list_empty(&ctxt->ios));
 			if (!locked) {
-				if (ctxt)
-					bch2_trans_unlock(ctxt->trans);
-				bch2_bkey_nocow_lock(c, ctxt ? ctxt->trans : NULL, ptrs, m->cas, 0);
+				bch2_trans_unlock(trans);
+				bch2_bkey_nocow_lock(c, trans, ptrs, m->cas, 0);
 			}
 		}
 	}
