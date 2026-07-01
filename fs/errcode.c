@@ -65,9 +65,19 @@ int __bch2_err_class(int bch_err)
 
 const char *bch2_blk_status_to_str(blk_status_t status)
 {
+	/*
+	 * blk_status_to_str() was unexported in 7.2 (commit 82aaa55a3162), so
+	 * name the statuses ourselves off the BLK_ERRS() x-macro.
+	 */
 	if (status == BLK_STS_REMOVED)
 		return "device removed";
-	return blk_status_to_str(status);
+
+	switch (status) {
+#define BLK_STS(n) case BLK_STS_##n:	return #n;
+	BLK_ERRS()
+#undef BLK_STS
+	default:			return "(invalid)";
+	}
 }
 
 enum bch_errcode blk_status_to_bch_err(blk_status_t err)
