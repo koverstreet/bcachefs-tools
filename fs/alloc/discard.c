@@ -67,7 +67,8 @@ __cold void bch2_discards_to_text(struct printbuf *out, struct bch_fs *c, struct
 
 	struct journal *j = &c->journal;
 	prt_printf(out, "journal seq:\t%llu\n",			journal_cur_seq(j));
-	prt_printf(out, "journal flushed seq:\t%llu -> %llu\n",	j->flushing_seq, j->flushed_seq_ondisk);
+	prt_printf(out, "journal flushed seq:\t%llu -> %llu\n",
+		   atomic64_read(&j->flushing_seq), j->flushed_seq_ondisk);
 	prt_printf(out, "journal rewind seq:\t%llu -> %llu\n",	j->rewind_seq, j->rewind_seq_ondisk);
 
 	prt_printf(out, "In flight:\n");
