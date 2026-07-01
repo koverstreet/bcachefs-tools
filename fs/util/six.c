@@ -204,7 +204,7 @@ static int __do_six_trylock(struct six_lock *lock, enum six_lock_type type,
 		}
 	}
 
-	if (ret > 0)
+	if (ret > 0 && type == SIX_LOCK_intent)
 		six_set_owner(lock, type, old, task);
 
 	EBUG_ON(type == SIX_LOCK_write && try && ret <= 0 &&
