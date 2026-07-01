@@ -477,6 +477,8 @@ void memcpy_from_bio(void *, struct bio *, struct bvec_iter);
 void bch2_bio_copy_data_iter(struct bio *, struct bvec_iter *,
 			     struct bio *, struct bvec_iter *);
 void bch2_zero_fill_bio_iter(struct bio *, struct bvec_iter);
+void bch2_bio_set_pages_dirty(struct bio *);
+void bch2_bio_check_pages_dirty(struct bio *);
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 void bch2_corrupt_bio(struct bio *);

@@ -27,7 +27,7 @@
 static void bio_check_or_release(struct bio *bio, bool check_dirty)
 {
 	if (check_dirty) {
-		bio_check_pages_dirty(bio);
+		bch2_bio_check_pages_dirty(bio);
 	} else {
 		bio_release_pages(bio, false);
 		bio_put(bio);
@@ -164,7 +164,7 @@ start:
 		offset += rbio->bio.bi_iter.bi_size;
 
 		if (dio->should_dirty)
-			bio_set_pages_dirty(&rbio->bio);
+			bch2_bio_set_pages_dirty(&rbio->bio);
 
 		if (iter->count)
 			closure_get(&dio->cl);

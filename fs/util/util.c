@@ -840,6 +840,74 @@ void bch2_zero_fill_bio_iter(struct bio *bio, struct bvec_iter start)
 	}
 }
 
+#ifdef __KERNEL__
+#include <linux/pagemap.h>	/* folio_lock()/folio_unlock() */
+
+/*
+ * DIO read dirty-page handling. 7.2 unexported bio_set_pages_dirty() and
+ * bio_check_pages_dirty(); reinstate them (the kernel's implementation) as
+ * bcachefs helpers. bio_set_pages_dirty() marks the destination pages dirty on
+ * the (sleepable) submit side; bio_check_pages_dirty() runs at completion, which
+ * can be atomic (bio endio), so the rare "a page was cleaned mid-IO, re-dirty it"
+ * case — which needs folio_lock() — is punted to a workqueue.
+ */
+void bch2_bio_set_pages_dirty(struct bio *bio)
+{
+	struct folio_iter fi;
+
+	bio_for_each_folio_all(fi, bio) {
+		folio_lock(fi.folio);
+		folio_mark_dirty(fi.folio);
+		folio_unlock(fi.folio);
+	}
+}
+
+static void bch2_bio_dirty_fn(struct work_struct *work);
+
+static DECLARE_WORK(bch2_bio_dirty_work, bch2_bio_dirty_fn);
+static DEFINE_SPINLOCK(bch2_bio_dirty_lock);
+static struct bio *bch2_bio_dirty_list;
+
+/* runs in process context */
+static void bch2_bio_dirty_fn(struct work_struct *work)
+{
+	struct bio *bio, *next;
+
+	spin_lock_irq(&bch2_bio_dirty_lock);
+	next = bch2_bio_dirty_list;
+	bch2_bio_dirty_list = NULL;
+	spin_unlock_irq(&bch2_bio_dirty_lock);
+
+	while ((bio = next) != NULL) {
+		next = bio->bi_private;
+
+		bio_release_pages(bio, true);
+		bio_put(bio);
+	}
+}
+
+void bch2_bio_check_pages_dirty(struct bio *bio)
+{
+	struct folio_iter fi;
+	unsigned long flags;
+
+	bio_for_each_folio_all(fi, bio) {
+		if (!folio_test_dirty(fi.folio))
+			goto defer;
+	}
+
+	bio_release_pages(bio, false);
+	bio_put(bio);
+	return;
+defer:
+	spin_lock_irqsave(&bch2_bio_dirty_lock, flags);
+	bio->bi_private = bch2_bio_dirty_list;
+	bch2_bio_dirty_list = bio;
+	spin_unlock_irqrestore(&bch2_bio_dirty_lock, flags);
+	schedule_work(&bch2_bio_dirty_work);
+}
+#endif /* __KERNEL__ */
+
 #ifdef CONFIG_BCACHEFS_DEBUG
 void bch2_corrupt_bio(struct bio *bio)
 {
