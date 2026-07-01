@@ -171,13 +171,16 @@ static struct bbuf __bio_map_or_bounce(struct bch_fs *c, struct bio *bio,
 	BUG_ON(start.bi_size > c->opts.encoded_extent_max);
 
 #ifndef CONFIG_HIGHMEM
-	if (bio_phys_contig(bio, start))
+	if (bio_phys_contig(bio, start)) {
+		struct bio_vec bv = bio_iter_iovec(bio, start);
+
 		return (struct bbuf) {
 			.c	= c,
-			.b	= bvec_virt(&bio_iter_iovec(bio, start)),
+			.b	= bvec_virt(&bv),
 			.type	= BB_none,
 			.rw	= rw
 		};
+	}
 #endif
 
 #ifdef __KERNEL__
