@@ -2335,23 +2335,23 @@ static const struct super_operations bch_super_operations = {
 	.unfreeze_fs	= bch2_unfreeze,
 };
 
-static int bch2_set_super(struct super_block *s, void *data)
+static int bch2_set_super(struct super_block *s, struct fs_context *fc)
 {
-	s->s_fs_info = data;
+	s->s_fs_info = fc->s_fs_info;
 	return 0;
 }
 
-static int bch2_noset_super(struct super_block *s, void *data)
+static int bch2_noset_super(struct super_block *s, struct fs_context *fc)
 {
 	return -EBUSY;
 }
 
 typedef DARRAY(struct bch_fs *) darray_fs;
 
-static int bch2_test_super(struct super_block *s, void *data)
+static int bch2_test_super(struct super_block *s, struct fs_context *fc)
 {
 	struct bch_fs *c = s->s_fs_info;
-	darray_fs *d = data;
+	darray_fs *d = fc->s_fs_info;
 
 	if (!c)
 		return false;
@@ -2394,7 +2394,11 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 			goto err;
 	}
 
-	sb = sget(fc->fs_type, bch2_test_super, bch2_noset_super, fc->sb_flags|SB_NOSEC, &devs_to_fs);
+	/* sget_fc() passes the payload to the callbacks via fc->s_fs_info, and
+	 * takes the sb flags from fc->sb_flags (no flags argument). */
+	fc->s_fs_info = &devs_to_fs;
+	fc->sb_flags |= SB_NOSEC;
+	sb = sget_fc(fc, bch2_test_super, bch2_noset_super);
 	if (!IS_ERR(sb))
 		goto got_sb;
 
@@ -2428,7 +2432,8 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	if (c->opts.read_only)
 		fc->sb_flags |= SB_RDONLY;
 
-	sb = sget(fc->fs_type, NULL, bch2_set_super, fc->sb_flags|SB_NOSEC, c);
+	fc->s_fs_info = c;
+	sb = sget_fc(fc, NULL, bch2_set_super);
 	ret = PTR_ERR_OR_ZERO(sb);
 	if (ret)
 		goto err_stop_fs;
