@@ -271,6 +271,18 @@ endif
 bcachefs-vendor-rust := $(bcachefs-rust-y)
 endif
 
+# The shared leaf crates (cmd_bch_library) link core/compiler_builtins from the
+# active Rust stack: point -L at the vendored $(obj)/vrust on CONFIG_RUST=n, the
+# kernel's $(objtree)/rust otherwise — never both. A CONFIG_RUST=n devel tree can
+# still ship a stale prebuilt $(objtree)/rust (built with a different rustc); if
+# both are on -L, rustc sees two `core` candidates (E0464) and picks a core that
+# predates the current rustc's lang items (meta_sized).
+ifeq ($(bcachefs-vendor-rust),y)
+bch-rust-L := -L$(obj)/vrust
+else
+bch-rust-L := -L$(objtree)/rust
+endif
+
 ifeq ($(bcachefs-rust-y),y)
 
 # Tell the C side that bcachefs's Rust is actually compiled in. This is NOT
@@ -418,7 +430,7 @@ quiet_cmd_bch_library = RUSTC L  $@
       cmd_bch_library = $(RUSTC) $(rust_flags) \
 	--emit=dep-info=$(depfile) --emit=obj=$@ \
 	--emit=metadata=$(dir $@)lib$(patsubst %.o,%,$(notdir $@)).rmeta \
-	--crate-type rlib -L$(objtree)/rust -L$(obj)/vrust --sysroot=/dev/null \
+	--crate-type rlib $(bch-rust-L) --sysroot=/dev/null \
 	-Zunstable-options --crate-name $(patsubst %.o,%,$(notdir $@)) $<
 
 $(obj)/bitfield.o: $(src)/vendor/bitfield/src/lib.rs FORCE
