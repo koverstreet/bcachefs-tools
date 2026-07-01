@@ -2716,7 +2716,7 @@ int bch2_fs_vfs_init_rw(struct bch_fs *c)
 		return bch_err_throw(c, ENOMEM_nocow_flush_bioset_init);
 
 	c->vfs.writeback_wq = alloc_workqueue("bcachefs_vfs_writeback",
-					      WQ_MEM_RECLAIM|WQ_FREEZABLE, 1);
+					      WQ_MEM_RECLAIM|WQ_FREEZABLE|WQ_UNBOUND, 1);
 	if (!c->vfs.writeback_wq)
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 

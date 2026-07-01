@@ -850,9 +850,9 @@ int bch2_fs_init_rw(struct bch_fs *c)
 	if (!(c->btree_update_wq = alloc_workqueue("bcachefs",
 				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_UNBOUND, 512)) ||
 	    !(c->write_ref_wq = alloc_workqueue("bcachefs_write_ref",
-				WQ_FREEZABLE, 0)) ||
+				WQ_FREEZABLE|WQ_PERCPU, 0)) ||
 	    !(c->promote_wq = alloc_workqueue("bcachefs_promotes",
-				WQ_FREEZABLE, 2)))
+				WQ_FREEZABLE|WQ_PERCPU, 2)))
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
 	try(bch2_fs_btree_init_rw(c));

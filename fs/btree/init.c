@@ -319,7 +319,7 @@ int bch2_fs_btree_init(struct bch_fs *c)
 		sizeof(struct sort_iter_set);
 
 	if (!(c->btree.read_complete_wq = alloc_workqueue("bcachefs_btree_read_complete",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM, 512)) ||
+				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_PERCPU, 512)) ||
 	    mempool_init_kmalloc_pool(&c->btree.fill_iter, 1, iter_size) ||
 	    bioset_init(&c->btree.bio, 1,
 			max(offsetof(struct btree_read_bio, bio),
@@ -342,7 +342,7 @@ int bch2_fs_btree_init(struct bch_fs *c)
 int bch2_fs_btree_init_rw(struct bch_fs *c)
 {
 	if (!(c->btree.write_complete_wq = alloc_workqueue("bcachefs_btree_write_complete",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM, 1)))
+				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_PERCPU, 1)))
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
 	try(bch2_fs_btree_interior_update_init(c));

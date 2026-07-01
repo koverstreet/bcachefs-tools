@@ -619,7 +619,7 @@ int bch2_copygc_start(struct bch_fs *c)
 
 	if (!c->copygc.wq &&
 	    !(c->copygc.wq = alloc_workqueue("bcachefs_copygc",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_CPU_INTENSIVE, 1)))
+				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_UNBOUND, 1)))
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
 	if (!c->copygc.thread) {
