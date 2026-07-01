@@ -373,6 +373,11 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		false,				\
 	  NULL,		"Run fsck on mount")				\
+	x(nofsck,			u8,				\
+	  OPT_MOUNT,							\
+	  OPT_BOOL(),							\
+	  BCH2_NO_SB_OPT,		false,				\
+	  NULL,		"Do not run fsck recovery passes on mount")	\
 	x(fsck_memory_usage_percent,	u8,				\
 	  OPT_FS|OPT_MOUNT,						\
 	  OPT_UINT(20, 70),						\

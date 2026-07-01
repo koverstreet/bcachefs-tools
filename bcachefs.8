@@ -345,6 +345,8 @@ Maximum Amount of IO to keep in flight by the move path
 Maximum number of IOs to keep in flight by the move path
 .It Fl -fsck
 Run fsck on mount
+.It Fl -nofsck
+Do not run fsck recovery passes on mount
 .It Fl -fix_errors Ns = Ns Ar error
 Fix errors during fsck without asking
 .It Fl -ratelimit_errors
@@ -439,8 +441,14 @@ are available, or assemble the complete filesystem before allowing writes.
 Extra debugging info during mount/recovery
 .It Cm fsck
 Run fsck during mount
+.It Cm nofsck
+Do not run fsck recovery passes during mount
 .It Cm fix_errors
 Fix errors without asking during fsck
+.It Cm nochanges
+Super read only mode: do not issue writes
+.It Cm norecovery
+Exit recovery before journal replay
 .It Cm read_only
 Mount in read only mode
 .It Cm version_upgrade
