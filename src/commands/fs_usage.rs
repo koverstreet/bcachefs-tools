@@ -1,4 +1,5 @@
 use std::fmt::Write as FmtWrite;
+use std::os::unix::fs::MetadataExt;
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::c;
@@ -25,6 +26,7 @@ enum Field {
     Replicas,
     Btree,
     Compression,
+    Inodes,
     RebalanceWork,
     Devices,
 }
@@ -33,8 +35,8 @@ enum Field {
 #[command(name = "usage", about = "Display detailed filesystem usage",
     long_about = "Displays filesystem space usage broken down by category. \
 Output modes: replicas (data/metadata replication), btree (per-btree \
-space), compression (ratios and savings), inodes (admin-only inode \
-usage across snapshots, not recursive directory totals), rebalance_work (pending \
+space), compression (ratios and savings), inodes (selected path inode \
+usage, not recursive directory totals), rebalance_work (pending \
 reconcile work), devices (per-device breakdown). Use -f to select \
 specific fields, -a for all, -h for human-readable sizes.",
     disable_help_flag = true)]
@@ -67,7 +69,7 @@ fn fs_usage(cli: Cli) -> Result<()> {
 
     let fields: Vec<Field> = if cli.all {
         vec![Field::Replicas, Field::Btree, Field::Compression,
-             Field::RebalanceWork, Field::Devices]
+             Field::Inodes, Field::RebalanceWork, Field::Devices]
     } else if cli.fields.is_empty() {
         vec![Field::RebalanceWork]
     } else {
@@ -128,6 +130,8 @@ fn fs_usage_v1_to_text(
     handle: &BcachefsHandle,
     devs: &[DevInfo],
     fields: &[Field],
+    path: &str,
+    path_inum: Option<u64>,
 ) -> Result<()> {
     let has = |f: Field| -> bool { fields.contains(&f) };
 
@@ -140,6 +144,9 @@ fn fs_usage_v1_to_text(
     }
     if has(Field::Btree) {
         accounting_types |= disk_accounting_type::btree.bit();
+    }
+    if has(Field::Inodes) {
+        accounting_types |= disk_accounting_type::inum.bit();
     }
     if has(Field::RebalanceWork) {
         let version_reconcile = u32::from(metadata_version::reconcile) as u64;
@@ -353,7 +360,6 @@ fn inode_accounting_entry(handle: &BcachefsHandle, inum: u64) -> Result<Option<A
         counters: parse_accounting_counters(key.val_bytes()),
     }))
 }
-
 fn inode_usage_to_text(
     out: &mut Printbuf,
     sorted: &[&AccountingEntry],
@@ -394,6 +400,7 @@ fn inode_usage_to_text(
         write!(sub, "\r\n").unwrap();
     });
 }
+
 // ──────────────────────────── Replicas summary ──────────────────────────────
 
 pub struct Durability {
