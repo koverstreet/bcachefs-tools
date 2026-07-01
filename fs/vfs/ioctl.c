@@ -82,6 +82,49 @@ start_removing_user_path_at(int dfd, const char __user *name, struct path *path)
 
 	return victim;
 }
+#elif LINUX_VERSION_CODE >= KERNEL_VERSION(7,2,0)
+/*
+ * 7.2 removed start_removing_user_path_at() (commit e6666aef1105), leaving no
+ * dfd + user-pointer removal-lookup helper. Rebuild it from the pieces that
+ * remain: user_path_at() honours the dfd and resolves the victim, then
+ * start_removing_dentry() locks the parent and revalidates that victim under
+ * the lock (d_parent/d_unhashed). The mount write ref is taken here, since
+ * start_removing_dentry() does only the lock -- matching the contract
+ * end_removing_path() expects (parent locked, write ref held).
+ */
+static inline struct dentry *
+start_removing_user_path_at(int dfd, const char __user *name, struct path *path)
+{
+	struct path victim;
+	int ret = user_path_at(dfd, name, 0, &victim);
+	if (ret)
+		return ERR_PTR(ret);
+
+	ret = mnt_want_write(victim.mnt);
+	if (ret) {
+		path_put(&victim);
+		return ERR_PTR(ret);
+	}
+
+	struct dentry *parent = dget_parent(victim.dentry);
+	struct dentry *child = start_removing_dentry(parent, victim.dentry);
+	if (IS_ERR(child)) {
+		dput(parent);
+		mnt_drop_write(victim.mnt);
+		path_put(&victim);
+		return child;
+	}
+
+	/*
+	 * Hand back the parent path (locked, write ref held) plus the victim.
+	 * Transfer victim.mnt into *path (keeping its ref and the write ref);
+	 * release the resolved victim dentry -- child is a fresh ref.
+	 */
+	path->mnt	= victim.mnt;
+	path->dentry	= parent;
+	dput(victim.dentry);
+	return child;
+}
 #endif
 
 static int bch2_reinherit_attrs_fn(struct btree_trans *trans,
