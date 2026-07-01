@@ -1,14 +1,14 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use bcachefs_kernel::c::bch_key;
+use anyhow::{anyhow, bail, Context, Result};
+use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
 use bch_bindgen::c;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
-use crate::key::{sb_is_encrypted, unencrypted_key, KeyHandle, Keyring, Passphrase};
+use crate::key::{sb_is_encrypted, KeyHandle, Keyring, Passphrase, PassphraseCorrect};
 
 // ---- unlock ----
 
@@ -62,33 +62,15 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
         bail!("{} is not encrypted", cli.device);
     }
 
-    let uuid = sb.sb().uuid();
-
-    // First attempt
-    let passphrase = if let Some(ref file) = cli.file {
-        Passphrase::new_from_file(file)?
-    } else {
-        Passphrase::new(&uuid)?
+    let passphrase_correct = match cli.file {
+        Some(ref file) => Passphrase::read_from_file(file)?
+            .check(&sb)
+            .ok_or_else(|| anyhow!("incorrect passphrase"))?,
+        None => Passphrase::ask_and_check(&sb)?,
     };
+    KeyHandle::new(&passphrase_correct, cli.keyring)?;
 
-    match KeyHandle::new(&sb, &passphrase, cli.keyring) {
-        Ok(_) => return Ok(()),
-        Err(e) if e.to_string().contains("incorrect passphrase") => {}
-        Err(e) => return Err(e),
-    }
-
-    // Retry up to 2 more times, always interactive
-    for _ in 0..2 {
-        eprintln!("incorrect passphrase");
-        let passphrase = Passphrase::new_from_prompt(&uuid)?;
-        match KeyHandle::new(&sb, &passphrase, cli.keyring) {
-            Ok(_) => return Ok(()),
-            Err(e) if e.to_string().contains("incorrect passphrase") => continue,
-            Err(e) => return Err(e),
-        }
-    }
-
-    bail!("incorrect passphrase limit reached");
+    Ok(())
 }
 
 // ---- shared helpers for set/remove-passphrase ----
@@ -123,12 +105,9 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
     }
 
     if sb_is_encrypted(sb_handle) {
-        let uuid = sb_handle.sb().uuid();
-        let old_passphrase = Passphrase::new_from_prompt(&uuid)
-            .context("reading current passphrase")?;
-        let (_, sb_key) = old_passphrase.check(sb_handle)
-            .context("verifying current passphrase")?;
-        Ok((fs, sb_key.key.clone()))
+        let PassphraseCorrect { cleartext_sb_key, .. } =
+            Passphrase::ask_and_check(sb_handle)?;
+        Ok((fs, cleartext_sb_key.into_key()))
     } else {
         let raw_key = sb_handle.sb().crypt().unwrap().key().key.clone();
         Ok((fs, raw_key))
@@ -159,10 +138,10 @@ pub struct SetPassphraseCli {
 fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
-    let new_passphrase = Passphrase::new_from_prompt_twice()
+    let new_passphrase = Passphrase::ask_for_new_passphrase()
         .context("reading new passphrase")?;
 
-    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), &raw_key);
+    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), raw_key);
 
     unsafe {
         set_crypt_key(&fs, encrypted_key);
@@ -186,7 +165,7 @@ pub struct RemovePassphraseCli {
 fn cmd_remove_passphrase(cli: RemovePassphraseCli) -> Result<()> {
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
-    unsafe { set_crypt_key(&fs, unencrypted_key(&raw_key)); }
+    unsafe { set_crypt_key(&fs, bch_encrypted_key::new_unencrypted(raw_key)); }
     fs.write_super();
 
     Ok(())

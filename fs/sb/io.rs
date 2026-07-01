@@ -30,6 +30,12 @@ impl bch_sb {
         uuid::Uuid::from_bytes(self.user_uuid.b)
     }
 
+    /// The filesystem label, as bytes up to the first NUL.
+    pub fn label(&self) -> &[u8] {
+        let len = self.label.iter().position(|b| *b == 0).unwrap_or(self.label.len());
+        &self.label[..len]
+    }
+
     pub fn number_of_devices(&self) -> u32 {
         unsafe { c::bch2_sb_nr_devices(self) }
     }

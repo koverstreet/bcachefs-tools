@@ -133,12 +133,19 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
     }
 
     if let Some(path) = cli.passphrase_file.as_deref() {
-        return Passphrase::new_from_file(path).and_then(|p| KeyHandle::new(sb, &p, Keyring::User));
+        let passphrase_correct = Passphrase::read_from_file(path)?
+            .check(sb)
+            .ok_or_else(|| anyhow::anyhow!("incorrect passphrase"))?;
+        return KeyHandle::new(&passphrase_correct, Keyring::User);
     }
 
     let uuid = sb.sb().uuid();
-    KeyHandle::new_from_search(&uuid)
-        .or_else(|_| Passphrase::new(&uuid).and_then(|p| KeyHandle::new(sb, &p, Keyring::User)))
+    if let Ok(handle) = KeyHandle::new_from_search(&uuid) {
+        return Ok(handle);
+    }
+
+    let passphrase_correct = Passphrase::ask_and_check(sb)?;
+    KeyHandle::new(&passphrase_correct, Keyring::User)
 }
 
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {
