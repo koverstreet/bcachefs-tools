@@ -372,15 +372,22 @@ pub fn format(
         crate::wrappers::super_io::bch2_super_write(fd, sb.sb);
     }
 
-    // udevadm trigger --settle <devices>
-    let mut udevadm = std::process::Command::new("udevadm");
-    udevadm.args(["trigger", "--settle"]);
-    for dev in dev_slice.iter() {
-        udevadm.arg(dev.path.to_str().unwrap_or(""));
-    }
-    let _ = udevadm.status();
+    let paths: Vec<&str> = dev_slice
+        .iter()
+        .map(|dev| dev.path.to_str().unwrap_or(""))
+        .collect();
+    trigger_udev_for_paths(&paths);
 
     sb.sb
+}
+
+pub fn trigger_udev_for_paths(paths: &[&str]) {
+    let mut udevadm = std::process::Command::new("udevadm");
+    udevadm.args(["trigger", "--settle"]);
+    for path in paths {
+        udevadm.arg(path);
+    }
+    let _ = udevadm.status();
 }
 
 /// Format a single device for addition to an existing filesystem.
