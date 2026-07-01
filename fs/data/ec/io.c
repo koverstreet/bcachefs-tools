@@ -41,6 +41,18 @@ static inline void xor_gen(void *dest, void **srcs,
 }
 #endif
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7,2,0)
+/*
+ * 7.2 renamed the raid6 public interface (raid6: improve the public interface):
+ * raid6_call.gen_syndrome() -> raid6_gen_syndrome(), and
+ * raid6_{2data,datap}_recov() -> raid6_recov_{2data,datap}(). Map the new names
+ * onto the old API on older kernels so the callers below stay version-agnostic.
+ */
+#define raid6_gen_syndrome(disks, bytes, ptrs)	raid6_call.gen_syndrome(disks, bytes, ptrs)
+#define raid6_recov_2data			raid6_2data_recov
+#define raid6_recov_datap			raid6_datap_recov
+#endif
+
 static void raid5_recov(unsigned disks, unsigned failed_idx,
 			size_t size, void **data)
 {
@@ -57,7 +69,7 @@ static void raid_gen(int nd, int np, size_t size, void **v)
 	if (np >= 1)
 		raid5_recov(nd + np, nd, size, v);
 	if (np >= 2)
-		raid6_call.gen_syndrome(nd + np, size, v);
+		raid6_gen_syndrome(nd + np, size, v);
 	BUG_ON(np > 2);
 }
 
@@ -70,20 +82,20 @@ static void raid_rec(int nr, int *ir, int nd, int np, size_t size, void **v)
 		if (ir[0] < nd + 1)
 			raid5_recov(nd + 1, ir[0], size, v);
 		else
-			raid6_call.gen_syndrome(nd + np, size, v);
+			raid6_gen_syndrome(nd + np, size, v);
 		break;
 	case 2:
 		if (ir[1] < nd) {
 			/* data+data failure. */
-			raid6_2data_recov(nd + np, size, ir[0], ir[1], v);
+			raid6_recov_2data(nd + np, size, ir[0], ir[1], v);
 		} else if (ir[0] < nd) {
 			/* data + p/q failure */
 
 			if (ir[1] == nd) /* data + p failure */
-				raid6_datap_recov(nd + np, size, ir[0], v);
+				raid6_recov_datap(nd + np, size, ir[0], v);
 			else { /* data + q failure */
 				raid5_recov(nd + 1, ir[0], size, v);
-				raid6_call.gen_syndrome(nd + np, size, v);
+				raid6_gen_syndrome(nd + np, size, v);
 			}
 		} else {
 			raid_gen(nd, np, size, v);
