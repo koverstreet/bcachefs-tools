@@ -1,7 +1,6 @@
 use std::ops::ControlFlow;
 
-use anyhow::Result;
-use bcachefs_kernel::{btree_id, c};
+use anyhow::{bail, Result};
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
@@ -9,6 +8,7 @@ use bcachefs_kernel::btree::iter::BtreeNodeIter;
 use bcachefs_kernel::btree::iter::BtreeTrans;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
+use bcachefs_kernel::{btree_id, c};
 use bch_bindgen::c::bch_degraded_actions;
 use clap::Parser;
 use std::io::{stdout, IsTerminal};
@@ -24,13 +24,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         flags |= BtreeIterFlags::ALL_SNAPSHOTS;
     }
 
-    let mut iter = BtreeIter::new_level(
-        &trans,
-        opt.btree,
-        opt.start,
-        opt.level,
-        flags,
-    );
+    let mut iter = BtreeIter::new_level(&trans, opt.btree, opt.start, opt.level, flags);
 
     iter.for_each(&trans, |k| {
         if k.k.p > opt.end {
@@ -39,6 +33,15 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
         if let Some(ty) = opt.bkey_type {
             if k.k.type_ != ty.0 as u8 {
+                return ControlFlow::Continue(());
+            }
+        }
+
+        if let Some(min_replicas) = opt.replicas_min {
+            let replicas = unsafe {
+                c::bch2_bkey_nr_ptrs_fully_allocated(fs.raw, c::bkey_s_c { k: k.k, v: k.v })
+            };
+            if replicas < min_replicas {
                 return ControlFlow::Continue(());
             }
         }
@@ -125,7 +128,7 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
-#[derive(Clone, clap::ValueEnum, Debug)]
+#[derive(Clone, clap::ValueEnum, Debug, PartialEq, Eq)]
 enum Mode {
     Keys,
     Formats,
@@ -143,7 +146,9 @@ nodes-ondisk shows the raw on-disk representation.\n\n\
 Use -b to select a btree (default: extents), -s/-e for start/end \
 position, -l for btree depth, -k to filter by key type. With -c, \
 runs fsck before listing. Output is used for debugging filesystem \
-state, verifying btree contents, and inspecting on-disk layout.")]
+state, verifying btree contents, and inspecting on-disk layout.\n\n\
+Use --replicas-min with the extents btree to find file extents whose \
+stored data has at least the requested number of fully allocated replicas.")]
 pub struct Cli {
     #[arg(short, long, default_value = "keys")]
     mode: Mode,
@@ -168,6 +173,10 @@ pub struct Cli {
     #[arg(short, long, default_value = "SPOS_MAX")]
     end: c::bpos,
 
+    /// Only list extents with at least this many fully allocated replicas
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    replicas_min: Option<u32>,
+
     /// Check (fsck) the filesystem first
     #[arg(short, long)]
     fsck: bool,
@@ -186,13 +195,29 @@ pub struct Cli {
 }
 
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
+    if opt.replicas_min.is_some() {
+        if opt.btree != btree_id::extents {
+            bail!("--replicas-min can only be used with the extents btree");
+        }
+        if opt.mode != Mode::Keys {
+            bail!("--replicas-min can only be used with --mode keys");
+        }
+        if opt.level != 0 {
+            bail!("--replicas-min can only be used at leaf level");
+        }
+    }
+
     let mut fs_opts = c::bch_opts::default();
 
     opt_set!(fs_opts, noexcl, 1);
     opt_set!(fs_opts, nochanges, 1);
     opt_set!(fs_opts, read_only, 1);
     opt_set!(fs_opts, norecovery, 1);
-    opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
+    opt_set!(
+        fs_opts,
+        degraded,
+        bch_degraded_actions::BCH_DEGRADED_very as u8
+    );
     opt_set!(
         fs_opts,
         errors,
@@ -200,11 +225,7 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     );
 
     if opt.fsck {
-        opt_set!(
-            fs_opts,
-            fix_errors,
-            c::fsck_err_opts::FSCK_FIX_yes as u8
-        );
+        opt_set!(fs_opts, fix_errors, c::fsck_err_opts::FSCK_FIX_yes as u8);
         opt_set!(fs_opts, norecovery, 0);
     }
 
@@ -223,7 +244,6 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
 }
 
 fn list(opt: Cli) -> Result<()> {
-
     // TODO: centralize this on the top level CLI
     logging::setup(opt.verbose, opt.colorize);
 
