@@ -267,7 +267,7 @@ struct bch_ioctl_data_event {
 	struct bch_ioctl_data_progress p;
 	__u64			pad2[15];
 	};
-} __packed __aligned(8);
+} __aligned(8);
 
 struct bch_replicas_usage {
 	__u64			sectors;
