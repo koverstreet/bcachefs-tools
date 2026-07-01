@@ -579,12 +579,103 @@ static int __trigger_extent(struct btree_trans *trans,
 	return 0;
 }
 
+static int bch2_trigger_extent_same_backpointers(struct btree_trans *trans,
+						 struct btree_trigger_op op,
+						 bool *handled)
+{
+	struct bch_fs *c = trans->c;
+	struct bkey_i_backpointer old_bp[BCH_REPLICAS_MAX * 2];
+	struct bkey_i_backpointer new_bp[BCH_REPLICAS_MAX * 2];
+	struct bkey_ptrs_c ptrs;
+	const union bch_extent_entry *entry;
+	struct extent_ptr_decoded p;
+	unsigned nr_old = 0, nr_new = 0;
+	unsigned i;
+
+	*handled = false;
+	if (op.level)
+		return 0;
+
+	/*
+	 * Reconcile-only updates do not move the extent, they only toggle the
+	 * phys-work flag that is cached in rotational-data backpointers.  Do
+	 * not delete+reinsert those backpointers through the write buffer when
+	 * the key itself is unchanged: update the existing entry in place and
+	 * adjust the reconcile_work_phys bit separately.
+	 */
+	ptrs = bch2_bkey_ptrs_c(op.old);
+	bkey_for_each_ptr_decode(op.old.k, ptrs, p, entry) {
+		BUG_ON(nr_old == ARRAY_SIZE(old_bp));
+		bch2_extent_ptr_to_bp(c, op.btree, op.level, op.old, p, entry, &old_bp[nr_old++]);
+	}
+
+	ptrs = bch2_bkey_ptrs_c(op.new.s_c);
+	bkey_for_each_ptr_decode(op.new.k, ptrs, p, entry) {
+		BUG_ON(nr_new == ARRAY_SIZE(new_bp));
+		bch2_extent_ptr_to_bp(c, op.btree, op.level, op.new.s_c, p, entry, &new_bp[nr_new++]);
+	}
+
+	if (nr_old != nr_new)
+		return 0;
+
+	for (i = 0; i < nr_old; i++) {
+		struct bch_backpointer old_v = old_bp[i].v;
+		struct bch_backpointer new_v = new_bp[i].v;
+
+		SET_BACKPOINTER_RECONCILE_PHYS(&old_v, 0);
+		SET_BACKPOINTER_RECONCILE_PHYS(&new_v, 0);
+
+		if (!bpos_eq(old_bp[i].k.p, new_bp[i].k.p) ||
+		    memcmp(&old_v, &new_v, sizeof(old_v)))
+			return 0;
+	}
+
+	for (i = 0; i < nr_old; i++) {
+		unsigned old_phys = BACKPOINTER_RECONCILE_PHYS(&old_bp[i].v);
+		unsigned new_phys = BACKPOINTER_RECONCILE_PHYS(&new_bp[i].v);
+
+		if (!old_phys && !new_phys)
+			continue;
+
+		if (old_phys)
+			try(bch2_btree_bit_mod_buffered(trans,
+					reconcile_work_phys_btree[old_phys],
+					old_bp[i].k.p, false));
+
+		if (new_phys)
+			try(bch2_btree_bit_mod_buffered(trans,
+					reconcile_work_phys_btree[new_phys],
+					new_bp[i].k.p, true));
+
+		try(bch2_trans_update_buffered(trans,
+				backpointer_btree(&new_bp[i].v),
+				&new_bp[i].k_i));
+	}
+
+	*handled = true;
+	return 0;
+}
+
 int bch2_trigger_extent(struct btree_trans *trans, struct btree_trigger_op op)
 {
 	struct bkey_ptrs_c new_ptrs = bch2_bkey_ptrs_c(op.new.s_c);
 	struct bkey_ptrs_c old_ptrs = bch2_bkey_ptrs_c(op.old);
 	unsigned new_ptrs_bytes = (void *) new_ptrs.end - (void *) new_ptrs.start;
 	unsigned old_ptrs_bytes = (void *) old_ptrs.end - (void *) old_ptrs.start;
+
+	/*
+	 * Reconcile-only updates keep the same physical pointers.  Update
+	 * their backpointer flags in place so buffered delete+insert churn
+	 * cannot drop the key, then let reconcile accounting/work tracking
+	 * see the logical-state change.
+	 */
+	if (op.level == 0) {
+		bool handled;
+
+		try(bch2_trigger_extent_same_backpointers(trans, op, &handled));
+		if (handled)
+			return bch2_trigger_extent_reconcile(trans, op);
+	}
 
 	/* if pointers aren't changing - nothing to do: */
 	if (new_ptrs_bytes == old_ptrs_bytes &&
@@ -925,25 +1016,57 @@ int __bch2_disk_reservation_add(struct bch_fs *c, struct disk_reservation *res,
 
 /* Startup/shutdown: */
 
+void bch2_dev_buckets_nouse_free(struct bch_fs *c, struct bch_dev *ca)
+{
+	kvfree_rcu_mightsleep(ca->buckets_nouse);
+	ca->buckets_nouse = NULL;
+}
 void bch2_buckets_nouse_free(struct bch_fs *c)
 {
 	for_each_member_device(c, ca) {
-		kvfree_rcu_mightsleep(ca->buckets_nouse);
-		ca->buckets_nouse = NULL;
+		bch2_dev_buckets_nouse_free(c, ca);
 	}
 }
 
+int bch2_dev_buckets_nouse_alloc(struct bch_fs *c, struct bch_dev *ca)
+{
+	BUG_ON(ca->buckets_nouse);
+
+	ca->buckets_nouse = bch2_kvmalloc(BITS_TO_LONGS(ca->mi.nbuckets) *
+				    sizeof(unsigned long),
+				    GFP_KERNEL|__GFP_ZERO);
+	if (!ca->buckets_nouse)
+		return bch_err_throw(c, ENOMEM_buckets_nouse);
+
+	return 0;
+}
 int bch2_buckets_nouse_alloc(struct bch_fs *c)
 {
 	for_each_member_device(c, ca) {
-		BUG_ON(ca->buckets_nouse);
-
-		ca->buckets_nouse = bch2_kvmalloc(BITS_TO_LONGS(ca->mi.nbuckets) *
-					    sizeof(unsigned long),
-					    GFP_KERNEL|__GFP_ZERO);
-		if (!ca->buckets_nouse)
-			return bch_err_throw(c, ENOMEM_buckets_nouse);
+		try(bch2_dev_buckets_nouse_alloc(c, ca));
 	}
+
+	return 0;
+}
+
+static int bch2_dev_buckets_nouse_resize(struct bch_fs *c, struct bch_dev *ca,
+					 u64 old_size, u64 new_size)
+{
+	if (!ca->buckets_nouse)
+		return 0;
+
+	unsigned long *n = bch2_kvmalloc(BITS_TO_LONGS(new_size) *
+					 sizeof(unsigned long),
+					 GFP_KERNEL|__GFP_ZERO);
+	if (!n)
+		return bch_err_throw(c, ENOMEM_buckets_nouse);
+
+	memcpy(n, ca->buckets_nouse,
+	       BITS_TO_LONGS(min(old_size, new_size)) * sizeof(unsigned long));
+
+	unsigned long *old = ca->buckets_nouse;
+	ca->buckets_nouse = n;
+	kvfree_rcu_mightsleep(old);
 
 	return 0;
 }
@@ -964,9 +1087,6 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 
 	if (resize)
 		lockdep_assert_held(&c->state_lock);
-
-	if (resize && ca->buckets_nouse)
-		return bch_err_throw(c, no_resize_with_buckets_nouse);
 
 	bucket_gens = bch2_kvmalloc(struct_size(bucket_gens, b, nbuckets),
 				    GFP_KERNEL|__GFP_ZERO);
@@ -990,6 +1110,7 @@ int bch2_dev_buckets_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets)
 
 	try(bch2_bucket_bitmap_resize(ca, &ca->bucket_backpointer_mismatch, ca->mi.nbuckets, nbuckets));
 	try(bch2_bucket_bitmap_resize(ca, &ca->bucket_backpointer_empty, ca->mi.nbuckets, nbuckets));
+	try(bch2_dev_buckets_nouse_resize(c, ca, ca->mi.nbuckets, nbuckets));
 
 	rcu_assign_pointer(ca->bucket_gens, bucket_gens);
 	bucket_gens	= old_bucket_gens;

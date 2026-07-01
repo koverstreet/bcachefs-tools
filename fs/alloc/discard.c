@@ -23,11 +23,14 @@ static u32 dev_bucket_size(struct bch_fs *c, unsigned dev)
 	return ca ? ca->mi.bucket_size : 0;
 }
 
-static bool dev_bucket_nouse(struct bch_fs *c, struct bpos bucket)
+static bool bch2_discard_blocked_by_resize(struct bch_fs *c, struct bpos bucket)
 {
 	guard(rcu)();
 	struct bch_dev *ca = bch2_dev_rcu_noerror(c, bucket.inode);
-	return ca ? bch2_bucket_nouse(ca, bucket.offset) : true;
+
+	return ca &&
+		bch2_dev_is_shrinking(ca) &&
+		bucket.offset >= bch2_dev_resize_target(ca);
 }
 
 #define DEV_IN_FLIGHT_MAX		4
@@ -294,7 +297,7 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	if (unlikely(dev_bucket_nouse(c, bucket)))
+	if (unlikely(bch2_discard_blocked_by_resize(c, bucket)))
 		return 0;
 
 	int ret = discard_in_flight_add(c, NULL, bucket, fastpath, true);
@@ -378,6 +381,37 @@ static int bch2_discard_one_bucket(struct btree_trans *trans,
 	enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_discard_bucket);
 
 	return ret;
+}
+
+int bch2_dev_clear_need_discard(struct bch_fs *c, struct bch_dev *ca, u64 cutoff)
+{
+	/*
+	 * Shrink is about to delete the tail's alloc keys entirely, so we only
+	 * need to remove the derived need_discard index entries. Avoid updating
+	 * alloc keys here: that would also fire freespace/reconcile triggers
+	 * while reconcile is still draining the shrinking device, which can
+	 * deadlock with btree node rewrites in the move path.
+	 *
+	 * need_discard is ordered by (journal seq, encoded bucket), not by
+	 * device bucket space, so tail truncation has to scan and filter by the
+	 * decoded bucket position.
+	 */
+	CLASS(btree_trans, trans)(c);
+	unsigned dev_idx = ca->dev_idx;
+
+	return for_each_btree_key_commit(trans, iter,
+			BTREE_ID_need_discard, POS_MIN,
+			BTREE_ITER_intent|BTREE_ITER_prefetch, k,
+			NULL, NULL,
+			BCH_WATERMARK_reclaim|
+			BCH_TRANS_COMMIT_no_check_rw|
+			BCH_TRANS_COMMIT_no_enospc, ({
+		struct bpos bucket = u64_to_bucket(k.k->p.offset);
+
+		(bucket.inode == dev_idx && bucket.offset >= cutoff)
+			? bch2_btree_delete_at(trans, &iter, BTREE_TRIGGER_norun)
+			: 0;
+	}));
 }
 
 static void calculate_discard_sectors_to_release(struct btree_trans *trans)
@@ -467,52 +501,91 @@ static void bch2_do_discards(struct bch_fs *c)
 		struct discard_state *s = &c->discards.s;
 		memset(s, 0, sizeof(*s));
 
+		struct bpos pos = POS_MIN;
 		/*
 		 * Iterate need_discard btree (sorted by journal_seq).
 		 * Stop when we hit a seq beyond rewind_seq_ondisk.
 		 */
-		ret = for_each_btree_key(trans, iter,
-				BTREE_ID_need_discard, POS_MIN, 0, k, ({
-			u64 journal_seq		= k.k->p.inode;
-			struct bpos bucket	= u64_to_bucket(k.k->p.offset);
-			u32 bucket_size		= dev_bucket_size(c, bucket.inode);
+		while (!ret) {
+			struct bpos next = POS_MAX;
+			struct bpos bucket = POS_MAX;
+			u64 journal_seq = 0;
+			u32 bucket_size = 0;
+			bool done = false;
+
+			/*
+			 * Drop the need_discard iterator before we update alloc and
+			 * commit: the discard path removes the corresponding index
+			 * entry, and keeping the original iterator pinned across that
+			 * commit can deadlock against the alloc/freespace updates.
+			 */
+			ret = lockrestart_do(trans, ({
+				int __ret = 0;
+				CLASS(btree_iter, iter)(trans, BTREE_ID_need_discard, pos, 0);
+				struct bkey_s_c k = bch2_btree_iter_peek(&iter);
+				int _ret = bkey_err(k);
+
+				if (_ret) {
+					__ret = _ret;
+				} else if (!k.k) {
+					done = true;
+				} else {
+					journal_seq = k.k->p.inode;
+					bucket = u64_to_bucket(k.k->p.offset);
+					bucket_size = dev_bucket_size(c, bucket.inode);
+					next = bpos_successor(k.k->p);
+					s->pos = next;
+				}
+				__ret;
+			}));
+			if (ret || done)
+				break;
 
 			if (journal_seq >= min(c->journal.rewind_seq_ondisk,
 					       c->journal.flushed_seq_ondisk + 1))
 				break;
 
-			if (!bpos_eq(s->pos, iter.pos))
-				s->seen += bucket_size;
-			s->pos = iter.pos;
-
-			int ret2 = bch2_discard_one_bucket(trans,
-						bucket, bucket_size,
-						s, false);
 			/*
-			 * Reap completed discards as we go: in_flight entries
-			 * are only freed in bch2_discards_complete(), so if we
-			 * never reach DEV_IN_FLIGHT_MAX - the device completes
-			 * discards inline, or doesn't support REQ_OP_DISCARD -
-			 * the in_flight darray would otherwise grow without
-			 * bound and turn the linear scans in
-			 * discard_in_flight_add()/discard_endio() into O(n^2).
-			 * in_flight.nr > ref means there are completed entries
-			 * waiting to be reaped.
+			 * need_discard is only advisory trim bookkeeping. If this
+			 * bucket sits in the tail of a device that is currently
+			 * shrinking, leave the entry queued for the tail cleanup
+			 * pass: discard's alloc update can deadlock with
+			 * resize/reconcile on the region being evacuated.
 			 *
-			 * On success the bucket's been handled, so advance the
-			 * iterator before the nested restart so we don't
-			 * reprocess it; on -max_discards_in_flight leave it put
-			 * so we retry the bucket after draining.
+			 * Buckets that remain below the shrink target still need
+			 * discard progress so the allocator can reuse retained
+			 * space on the shrinking device during the long-running
+			 * evacuation.
 			 */
-			if (ret2 == -BCH_ERR_max_discards_in_flight ||
-			    (!ret2 && READ_ONCE(d->in_flight.nr) > READ_ONCE(d->ref))) {
-				if (!ret2)
-					bch2_btree_iter_advance(&iter);
-				ret2 = bch2_discards_complete(trans, s, false, false) ?:
-				btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+			if (bch2_discard_blocked_by_resize(c, bucket)) {
+				pos = next;
+				continue;
 			}
-			ret2;
-		}));
+
+			ret = lockrestart_do(trans, ({
+				int __ret = bch2_discard_one_bucket(trans,
+								    bucket, bucket_size,
+								    s, false);
+				if (!__ret)
+					s->seen += bucket_size;
+
+				/*
+				 * Keep the forced restart inside lockrestart_do():
+				 * btree_trans_restart() leaves trans->restarted set
+				 * until the retry loop begins the next transaction.
+				 */
+				if (__ret == -BCH_ERR_max_discards_in_flight ||
+				    (!__ret && READ_ONCE(d->in_flight.nr) > READ_ONCE(d->ref))) {
+					if (!__ret)
+						pos = next;
+					__ret = bch2_discards_complete(trans, s, false, false) ?:
+						btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+				} else if (!__ret) {
+					pos = next;
+				}
+				__ret;
+			}));
+		}
 
 		ret = bch2_discards_complete(trans, s, false, true) ?: ret;
 

@@ -1095,6 +1095,55 @@ int bch2_alloc_read(struct bch_fs *c)
 	return ret;
 }
 
+int bch2_dev_remove_bucket_gens(struct bch_fs *c, struct bch_dev *ca, u64 cutoff)
+{
+	unsigned offset;
+	struct bpos pos = alloc_gens_pos(POS(ca->dev_idx, cutoff), &offset);
+	int ret;
+
+	if (!offset)
+		return bch2_btree_delete_range(c, BTREE_ID_bucket_gens,
+					       pos,
+					       POS(ca->dev_idx, U64_MAX),
+					       BTREE_TRIGGER_norun);
+
+	{
+		CLASS(btree_trans, trans)(c);
+		bool need_commit = false;
+
+		ret = lockrestart_do(trans, ({
+			CLASS(btree_iter, iter)(trans, BTREE_ID_bucket_gens, pos, BTREE_ITER_intent);
+			struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+			try(bkey_err(k));
+
+			if (k.k->type == KEY_TYPE_bucket_gens) {
+				struct bkey_i_bucket_gens *g =
+					errptr_try(bch2_trans_kmalloc(trans, sizeof(*g)));
+
+				bkey_reassemble(&g->k_i, k);
+				memset(&g->v.gens[offset], 0, sizeof(g->v.gens) - offset);
+				try(bch2_trans_update(trans, &iter, &g->k_i, 0));
+				need_commit = true;
+			}
+			0;
+		}));
+		if (ret)
+			return ret;
+
+		if (need_commit) {
+			ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+			if (ret)
+				return ret;
+		}
+	}
+
+	return bch2_btree_delete_range(c, BTREE_ID_bucket_gens,
+				       bpos_nosnap_successor(pos),
+				       POS(ca->dev_idx, U64_MAX),
+				       BTREE_TRIGGER_norun);
+}
+
 /* Free space/discard btree: */
 
 int bch2_bucket_do_freespace_index(struct btree_trans *trans,
@@ -1491,28 +1540,38 @@ static int bch2_dev_remove_need_discard(struct bch_fs *c, struct bch_dev *ca)
 	}));
 }
 
-int bch2_dev_remove_alloc(struct bch_fs *c, struct bch_dev *ca)
+int bch2_dev_remove_alloc(struct bch_fs *c, struct bch_dev *ca, u64 cutoff)
 {
-	struct bpos start	= POS(ca->dev_idx, 0);
+	struct bpos start	= POS(ca->dev_idx, cutoff);
 	struct bpos end		= POS(ca->dev_idx, U64_MAX);
+	struct bpos bp_start	= bucket_pos_to_bp_start(ca, start);
+	struct bpos bp_end	= POS(ca->dev_idx + 1, 0);
 	int ret;
 
 	/*
 	 * We clear the LRU and need_discard btrees first so that we don't race
-	 * with bch2_do_invalidates() and bch2_do_discards_async()
+	 * with bch2_do_invalidates() and bch2_do_discards()
 	 */
-	ret =   bch2_dev_remove_lrus(c, ca) ?:
-		bch2_dev_remove_need_discard(c, ca) ?:
+	ret =   bch2_dev_remove_lrus(c, ca, cutoff) ?:
+		(cutoff
+		 ? bch2_dev_clear_need_discard(c, ca, cutoff)
+		 : bch2_dev_remove_need_discard(c, ca)) ?:
 		bch2_btree_delete_range(c, BTREE_ID_freespace, start, end,
 					BTREE_TRIGGER_norun) ?:
-		bch2_btree_delete_range(c, BTREE_ID_backpointers, start, end,
+		/*
+		 * Backpointer keys are indexed by device + sector, not device +
+		 * bucket.  A shrink cutoff in bucket space must be translated
+		 * before deleting the truncated tail, otherwise we wipe
+		 * backpointers that still belong to buckets below @cutoff.
+		 */
+		bch2_btree_delete_range(c, BTREE_ID_backpointers, bp_start, bp_end,
 					BTREE_TRIGGER_norun) ?:
-		bch2_btree_delete_range(c, BTREE_ID_bucket_gens, start, end,
-					BTREE_TRIGGER_norun) ?:
+		bch2_dev_remove_bucket_gens(c, ca, cutoff) ?:
 		bch2_btree_delete_range(c, BTREE_ID_alloc, start, end,
 					BTREE_TRIGGER_norun) ?:
-		bch2_dev_usage_remove(c, ca);
-	bch_err_msg_dev(ca, ret, "removing dev alloc info");
+		(cutoff == 0 ? bch2_dev_usage_remove(c, ca) : 0);
+	bch_err_msg_dev(ca, ret, "%s dev alloc info",
+			cutoff ? "truncating" : "removing");
 	return ret;
 }
 
@@ -1693,7 +1752,7 @@ void bch2_dev_allocator_remove(struct bch_fs *c, struct bch_dev *ca)
 	 */
 	bch2_recalc_capacity(c);
 
-	bch2_open_buckets_stop(c, ca, false);
+	bch2_open_buckets_stop(c, ca, false, 0);
 
 	/*
 	 * Wake up threads that were blocked on allocation, so they can notice

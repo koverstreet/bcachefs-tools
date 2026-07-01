@@ -205,6 +205,29 @@ static int validate_member(struct printbuf *err,
 		return -BCH_ERR_invalid_sb_members;
 	}
 
+	u64 target_nbuckets = le64_to_cpu(m.target_nbuckets);
+
+	if (target_nbuckets) {
+		if (target_nbuckets < first_bucket) {
+			prt_printf(err, "device %u: target buckets starts before first bucket (got %llu, first %u)",
+				   i, target_nbuckets, first_bucket);
+			return -BCH_ERR_invalid_sb_members;
+		}
+
+		if (target_nbuckets < nbuckets &&
+		    target_nbuckets - first_bucket < BCH_MIN_NR_NBUCKETS) {
+			prt_printf(err, "device %u: not enough target buckets (got %llu, min %u)",
+				   i, target_nbuckets - first_bucket, BCH_MIN_NR_NBUCKETS);
+			return -BCH_ERR_invalid_sb_members;
+		}
+
+		if (target_nbuckets > BCH_MEMBER_NBUCKETS_MAX) {
+			prt_printf(err, "device %u: target buckets too big (got %llu, max %u)",
+				   i, target_nbuckets, BCH_MEMBER_NBUCKETS_MAX);
+			return -BCH_ERR_invalid_sb_members;
+		}
+	}
+
 	return 0;
 }
 
@@ -216,6 +239,7 @@ __cold void bch2_member_to_text(struct printbuf *out,
 {
 	u64 bucket_size = le16_to_cpu(m->bucket_size);
 	u64 device_size = le64_to_cpu(m->nbuckets) * bucket_size;
+	u64 target_device_size = le64_to_cpu(m->target_nbuckets) * bucket_size;
 
 	prt_printf(out, "Label:\t");
 	if (BCH_MEMBER_GROUP(m))
@@ -233,6 +257,14 @@ __cold void bch2_member_to_text(struct printbuf *out,
 	prt_units_u64(out, device_size << 9);
 	prt_newline(out);
 
+	prt_printf(out, "Target size:\t");
+	if (target_device_size) {
+		prt_units_u64(out, target_device_size << 9);
+	} else {
+		prt_printf(out, "Inactive");
+	}
+	prt_newline(out);
+
 	for (unsigned i = 0; i < BCH_MEMBER_ERROR_NR; i++)
 		prt_printf(out, "%s errors:\t%llu\n", bch2_member_error_strs[i], le64_to_cpu(m->errors[i]));
 
@@ -245,6 +277,14 @@ __cold void bch2_member_to_text(struct printbuf *out,
 
 	prt_printf(out, "First bucket:\t%u\n", le16_to_cpu(m->first_bucket));
 	prt_printf(out, "Buckets:\t%llu\n", le64_to_cpu(m->nbuckets));
+
+	prt_printf(out, "Target buckets:\t");
+	if (target_device_size) {
+		prt_printf(out, "%llu", le64_to_cpu(m->target_nbuckets));
+	} else {
+		prt_printf(out, "Inactive");
+	}
+	prt_newline(out);
 
 	prt_printf(out, "Last mount:\t");
 	if (m->last_mount)
