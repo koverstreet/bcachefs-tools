@@ -374,6 +374,13 @@ for performance testing purposes
 .Sh Mount commands
 .Bl -tag -width Ds
 .It Nm Ic mount Oo Ar options Oc Ar device mountpoint
+The
+.Ic mount Fl t Cm bcachefs
+path invokes the installed
+.Nm mount.bcachefs
+helper; this is the same mount path exposed as
+.Nm Ic mount .
+.Pp
 Mount a filesystem. The
 .Ar device
 can be a device, a colon-separated list of devices, or UUID=<UUID>. The
