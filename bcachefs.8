@@ -410,6 +410,14 @@ prompt the user for password.
 .El
 .It Fl c , Fl -colorize Ns = Ns ( Cm true | false )
 Force color on/off. Default: auto-detect TTY
+.It Fl n , Fl -no-mtab
+Do not update
+.Pa /etc/mtab .
+This is accepted for compatibility with
+.Xr mount 8 ;
+.Nm
+uses the mount syscall directly and does not update
+.Pa /etc/mtab .
 .It Fl v
 Be verbose. Can be specified more than once.
 .El
