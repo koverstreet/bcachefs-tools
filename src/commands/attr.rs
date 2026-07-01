@@ -70,8 +70,21 @@ fn do_setattr(path: &Path, opts: &[(String, String)], remove_all: bool) -> Resul
         if value == "-" {
             remove_bcachefs_attr(path, &attr);
         } else {
-            setxattr(path, &attr, value.as_bytes(), XattrFlags::empty())
-                .with_context(|| format!("setting {} on {}", attr, path.display()))?;
+            if let Err(e) = setxattr(path, &attr, value.as_bytes(), XattrFlags::empty()) {
+                if name == "inodes_32bit" && value != "0" && e == rustix::io::Errno::OVERFLOW {
+                    return Err(anyhow!(
+                        "setting {} on {}: parent chain is not 32-bit-dirent-safe\n\n\
+                         bcachefs.inodes_32bit requires the target directory and all visible \
+                         parents to have been created with inodes_32bit/31-bit dirent offsets. \
+                         Recreate or move this tree under a parent chain that already has \
+                         inodes_32bit set, or format the filesystem with --inodes_32bit.",
+                        attr,
+                        path.display()
+                    ));
+                }
+
+                Err(e).with_context(|| format!("setting {} on {}", attr, path.display()))?;
+            }
         }
     }
 
