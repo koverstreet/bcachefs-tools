@@ -106,6 +106,7 @@ dependencies = [
  "cc",
  "paste 1.0.15",
  "uuid",
+ "zeroize",
 ]
 
 [[package]]

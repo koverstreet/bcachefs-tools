@@ -38,7 +38,7 @@ pub fn sb_is_encrypted(sb: &bch_sb_handle) -> bool {
 pub fn unencrypted_key(key: &bch_key) -> bch_encrypted_key {
     bch_encrypted_key {
         magic: u64::from_le_bytes(*BCH_KEY_MAGIC).to_le(),
-        key: *key,
+        key: key.clone(),
     }
 }
 
@@ -276,7 +276,7 @@ impl Passphrase {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
         let mut new_key = bch_encrypted_key {
             magic: u64::from_le_bytes(*BCH_KEY_MAGIC).to_le(),
-            key: *key,
+            key: key.clone(),
         };
 
         let mut passphrase_key: bch_key = self.derive(crypt);
@@ -300,7 +300,7 @@ impl Passphrase {
             .sb()
             .crypt()
             .ok_or_else(|| anyhow!("filesystem is not encrypted"))?;
-        let mut sb_key = *crypt.key();
+        let mut sb_key = crypt.key().clone();
 
         ensure!(
             u64::from_le(sb_key.magic) != bch_key_magic,

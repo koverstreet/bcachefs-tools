@@ -106,6 +106,91 @@ pub mod c {
         }
     }
 
+    // ── Encryption key material ─────────────────────────────────────
+    //
+    // bch_key/bch_encrypted_key hold the filesystem encryption key. They're
+    // kept out of DERIVE_READD (see codegen.rs) so they derive neither Copy (a
+    // Drop type can't be Copy) nor Debug (don't leak key bytes). The key is
+    // wiped on drop — via the `zeroize` crate in userspace, and a hand-rolled
+    // volatile memset in-kernel, which can't pull in the `zeroize` crate.
+
+    impl Clone for bch_key {
+        fn clone(&self) -> Self {
+            Self { key: self.key }
+        }
+    }
+
+    impl Clone for bch_encrypted_key {
+        fn clone(&self) -> Self {
+            Self { magic: self.magic, key: self.key.clone() }
+        }
+    }
+
+    impl bch_encrypted_key {
+        pub const MAGIC: &[u8; 8] = b"bch**key";
+
+        /// Plaintext (unencrypted) key for the crypt field (remove-passphrase).
+        pub fn new_unencrypted(key: bch_key) -> Self {
+            Self { magic: u64::from_le_bytes(*Self::MAGIC).to_le(), key }
+        }
+
+        pub fn is_encrypted(&self) -> bool {
+            u64::from_le(self.magic) != u64::from_le_bytes(*Self::MAGIC)
+        }
+
+        pub fn into_key(self) -> bch_key {
+            self.key.clone()
+        }
+    }
+
+    #[cfg(feature = "std")]
+    use zeroize::{Zeroize, ZeroizeOnDrop};
+
+    #[cfg(feature = "std")]
+    impl Zeroize for bch_key {
+        fn zeroize(&mut self) { self.key.zeroize(); }
+    }
+    #[cfg(feature = "std")]
+    impl Drop for bch_key {
+        fn drop(&mut self) { self.zeroize(); }
+    }
+    #[cfg(feature = "std")]
+    impl ZeroizeOnDrop for bch_key {}
+
+    #[cfg(feature = "std")]
+    impl Zeroize for bch_encrypted_key {
+        fn zeroize(&mut self) {
+            self.magic.zeroize();
+            self.key.zeroize();
+        }
+    }
+    #[cfg(feature = "std")]
+    impl Drop for bch_encrypted_key {
+        fn drop(&mut self) { self.zeroize(); }
+    }
+    #[cfg(feature = "std")]
+    impl ZeroizeOnDrop for bch_encrypted_key {}
+
+    // In-kernel: no `zeroize` crate. Overwrite the bytes with volatile writes +
+    // a compiler fence so the store can't be optimized away as dead — the wipe
+    // is the point (same technique the `zeroize` crate uses internally).
+    #[cfg(not(feature = "std"))]
+    fn wipe<T>(v: &mut T) {
+        let p = (v as *mut T).cast::<u8>();
+        for i in 0..core::mem::size_of::<T>() {
+            unsafe { core::ptr::write_volatile(p.add(i), 0) };
+        }
+        core::sync::atomic::compiler_fence(core::sync::atomic::Ordering::SeqCst);
+    }
+    #[cfg(not(feature = "std"))]
+    impl Drop for bch_key {
+        fn drop(&mut self) { wipe(&mut self.key); }
+    }
+    #[cfg(not(feature = "std"))]
+    impl Drop for bch_encrypted_key {
+        fn drop(&mut self) { wipe(self); }
+    }
+
     // Opaque kernel types the fs/ bindings reference but never deref. In-kernel
     // they come from kernel::bindings; userspace's shim doesn't provide them, so
     // define opaque stand-ins there.

@@ -82,9 +82,13 @@ const NO_PARTIALEQ: &[&str] = &["bkey", "bpos"];
 const DERIVE_READD: &[&str] = &[
     "bpos", "bbpos",
     "subvol_inum", "bch_opts",
-    "bch_key", "bch_encrypted_key",
     "bch_ioctl_snapshot_node",
 ];
+
+// bch_key/bch_encrypted_key hold key material: they get a hand-written Clone
+// and a zeroize-on-drop (see mod.rs), so they must NOT derive Copy (a Drop type
+// can't be Copy) and we don't want a derived Debug leaking key bytes. Kept out
+// of DERIVE_READD deliberately.
 
 /// Run the bindgen CLI over the fs/ headers and write `bcachefs.rs` + `extern.c`
 /// into `out`. The caller supplies `clang_args` and `blocklist_dirs` — userspace
@@ -118,6 +122,10 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], 
     flag!("--default-enum-style", "rust_non_exhaustive");
     a.push("--generate-inline-functions".into());
     a.push("--wrap-static-fns".into());
+    // Key material: bch_key/bch_encrypted_key get a hand-written zeroize-on-drop
+    // (see mod.rs), so they must not derive Copy (a Drop type can't be Copy).
+    flag!("--no-copy", "bch_key");
+    flag!("--no-copy", "bch_encrypted_key");
     flag!("--wrap-static-fns-path", format!("{out}/extern.c"));
 
     for x in BITFIELD_ENUM      { flag!("--bitfield-enum", *x); }

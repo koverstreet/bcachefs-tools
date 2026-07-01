@@ -128,9 +128,9 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
             .context("reading current passphrase")?;
         let (_, sb_key) = old_passphrase.check(sb_handle)
             .context("verifying current passphrase")?;
-        Ok((fs, sb_key.key))
+        Ok((fs, sb_key.key.clone()))
     } else {
-        let raw_key = sb_handle.sb().crypt().unwrap().key().key;
+        let raw_key = sb_handle.sb().crypt().unwrap().key().key.clone();
         Ok((fs, raw_key))
     }
 }
