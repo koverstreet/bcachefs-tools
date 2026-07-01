@@ -424,6 +424,17 @@ to allow normal operation with devices missing, and
 .Cm degraded=very
 only when writes are allowed to continue even if the requested replica count
 cannot be maintained.
+.Pp
+Use degraded read-write mounts for recovery and maintenance when some
+members are temporarily unavailable. Do not mount different subsets of the
+same filesystem read-write, or mount one subset read-write and later mount a
+different subset read-write before the full filesystem has been assembled and
+reconciled. That creates split-brain history: each subset can accept writes
+that the other subset never saw, and when the members are later brought back
+together there may be no single correct value for conflicting files.
+.Pp
+When in doubt, mount degraded filesystems read-only until the missing members
+are available, or assemble the complete filesystem before allowing writes.
 .It Cm verbose
 Extra debugging info during mount/recovery
 .It Cm fsck
