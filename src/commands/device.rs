@@ -575,12 +575,12 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     if usage.state == BCH_MEMBER_STATE_rw as u8 {
         println!("Setting {} readonly", cli.device);
         handle.disk_set_state(dev_idx, BCH_MEMBER_STATE_ro as u32, BCH_FORCE_IF_DEGRADED)
-            .context("setting device readonly")?;
+            .map_err(|e| evacuate_state_error(&cli.device, "readonly", e))?;
     }
 
     println!("Setting {} evacuating", cli.device);
     handle.disk_set_state(dev_idx, BCH_MEMBER_STATE_evacuating as u32, BCH_FORCE_IF_DEGRADED)
-        .context("setting device evacuating")?;
+        .map_err(|e| evacuate_state_error(&cli.device, "evacuating", e))?;
 
     // Trigger reconcile wakeup so it starts processing the evacuation
     let _ = std::fs::write(sysfs_path.join("internal/trigger_reconcile_wakeup"), "1");
@@ -604,6 +604,47 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
         }
 
         thread::sleep(Duration::from_secs(1));
+    }
+}
+
+fn evacuate_state_error(device: &str, state: &str, err: errno::Errno) -> anyhow::Error {
+    if err.0 == libc::EINVAL {
+        anyhow!(
+            "setting {device} {state} failed: {err}\n\
+             The kernel rejected this device-state transition because the \
+             filesystem would not remain writable with this member out of rw. \
+             If another device evacuation is already running, wait for that \
+             evacuation to finish before evacuating another required device. \
+             Otherwise, add or restore enough writable redundancy first and \
+             check `bcachefs fs usage` plus member states before retrying."
+        )
+    } else {
+        anyhow!("setting {device} {state} failed: {err}")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::evacuate_state_error;
+
+    #[test]
+    fn evacuate_einval_explains_required_writable_member() {
+        let err = evacuate_state_error("/dev/sdc1", "readonly", errno::Errno(libc::EINVAL));
+        let msg = err.to_string();
+
+        assert!(msg.contains("setting /dev/sdc1 readonly failed"));
+        assert!(msg.contains("filesystem would not remain writable"));
+        assert!(msg.contains("another device evacuation is already running"));
+        assert!(msg.contains("bcachefs fs usage"));
+    }
+
+    #[test]
+    fn evacuate_non_einval_keeps_short_error() {
+        let err = evacuate_state_error("/dev/sdc1", "evacuating", errno::Errno(libc::EIO));
+        let msg = err.to_string();
+
+        assert!(msg.contains("setting /dev/sdc1 evacuating failed"));
+        assert!(!msg.contains("another device evacuation"));
     }
 }
 
