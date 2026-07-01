@@ -108,15 +108,28 @@ pub mod wait_devices;
 
 impl CmdDef {
     pub fn dispatch(&self, argv: Vec<String>) -> ExitCode {
+        self.dispatch_with_path(argv, format!("bcachefs {}", self.name))
+    }
+
+    fn dispatch_with_path(&self, mut argv: Vec<String>, command_path: String) -> ExitCode {
         match &self.kind {
-            CmdKind::Typed { run, .. } | CmdKind::Raw { run } => run(argv),
+            CmdKind::Typed { run, .. } => {
+                if !argv.is_empty() {
+                    argv[0] = command_path;
+                }
+                run(argv)
+            }
+            CmdKind::Raw { run } => run(argv),
             CmdKind::Group { children } => {
                 // argv[0] is the group name, argv[1] is the subcommand
                 let subcmd = argv.get(1).map(|s| s.as_str());
                 for child in *children {
                     if subcmd == Some(child.name) ||
                        child.aliases.iter().any(|a| subcmd == Some(*a)) {
-                        return child.dispatch(argv[1..].to_vec());
+                        return child.dispatch_with_path(
+                            argv[1..].to_vec(),
+                            format!("{} {}", command_path, child.name),
+                        );
                     }
                 }
                 println!("bcachefs {} - {}", self.name, self.about);
