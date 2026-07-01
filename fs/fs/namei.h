@@ -38,7 +38,8 @@ int bch2_rename_trans(struct btree_trans *,
 		      struct bch_inode_unpacked *,
 		      const struct qstr *,
 		      const struct qstr *,
-		      enum bch_rename_mode);
+		      enum bch_rename_mode,
+		      bool *);
 
 bool bch2_reinherit_attrs(struct bch_inode_unpacked *,
 			  struct bch_inode_unpacked *);

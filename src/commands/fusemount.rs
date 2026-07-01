@@ -244,6 +244,7 @@ fn fuse_rename(
     let mut dst_dir_u: c::bch_inode_unpacked = Default::default();
     let mut src_inode_u: c::bch_inode_unpacked = Default::default();
     let mut dst_inode_u: c::bch_inode_unpacked = Default::default();
+    let mut reconcile_changed = false;
 
     btree::iter::trans_commit_do(
         fs,
@@ -261,6 +262,7 @@ fn fuse_rename(
                 &src_qstr,
                 &dst_qstr,
                 c::bch_rename_mode::BCH_RENAME,
+                &mut reconcile_changed,
             )
         },
     )
