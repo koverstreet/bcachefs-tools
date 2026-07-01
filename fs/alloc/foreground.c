@@ -257,7 +257,7 @@ static inline bool may_alloc_bucket_journal_seq(struct bch_fs *c,
 						u64 journal_seq_empty)
 {
 	if (journal_seq_empty > c->journal.flushed_seq_ondisk) {
-		if (journal_seq_empty > c->journal.flushing_seq)
+		if (journal_seq_empty > atomic64_read(&c->journal.flushing_seq))
 			req->counters.need_journal_commit++;
 		req->counters.skipped_need_journal_commit++;
 		return false;

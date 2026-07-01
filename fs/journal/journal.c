@@ -1159,11 +1159,11 @@ int bch2_journal_flush_seq_async(struct journal *j, u64 seq, struct closure *cl)
 	/* if seq was written, but not flushed - flush a newer one instead */
 	seq = max(seq, READ_ONCE(j->in_flight.front));
 
-	u64 old = READ_ONCE(j->flushing_seq);
+	s64 old = atomic64_read(&j->flushing_seq);
 	do {
-		if (old >= seq)
+		if ((u64) old >= seq)
 			break;
-	} while (!try_cmpxchg(&j->flushing_seq, &old, seq));
+	} while (!atomic64_try_cmpxchg(&j->flushing_seq, &old, seq));
 
 	struct closure_waitlist *wait = __bch2_journal_flush_seq_async(j, seq, cl);
 
