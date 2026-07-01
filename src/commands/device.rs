@@ -88,6 +88,7 @@ fn cmd_device_add_online(
     let c_dev_path = path_to_cstr(dev_path);
     handle.disk_add(&c_dev_path)
         .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
+    crate::commands::format_util::trigger_udev_for_paths(&[dev_path]);
 
     Ok(())
 }
@@ -118,6 +119,7 @@ fn cmd_device_add_offline(
 
     fs.dev_add(dev_path)
         .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
+    crate::commands::format_util::trigger_udev_for_paths(&[dev_path]);
 
     fs.start()
         .map_err(|e| anyhow!("starting filesystem: {}", e))?;
