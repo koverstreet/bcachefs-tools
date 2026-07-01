@@ -474,6 +474,9 @@ static inline u64 u64_bitmask(unsigned bits)
 
 void memcpy_to_bio(struct bio *, struct bvec_iter, const void *);
 void memcpy_from_bio(void *, struct bio *, struct bvec_iter);
+void bch2_bio_copy_data_iter(struct bio *, struct bvec_iter *,
+			     struct bio *, struct bvec_iter *);
+void bch2_zero_fill_bio_iter(struct bio *, struct bvec_iter);
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 void bch2_corrupt_bio(struct bio *);

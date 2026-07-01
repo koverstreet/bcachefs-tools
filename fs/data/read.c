@@ -960,7 +960,7 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 			if (rbio->bounce) {
 				struct bvec_iter src_iter = src->bi_iter;
 
-				bio_copy_data_iter(dst, &dst_iter, src, &src_iter);
+				bch2_bio_copy_data_iter(dst, &dst_iter, src, &src_iter);
 			}
 		}
 	} else {
@@ -991,7 +991,7 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 		if (rbio->bounce) {
 			struct bvec_iter src_iter = src->bi_iter;
 
-			bio_copy_data_iter(dst, &dst_iter, src, &src_iter);
+			bch2_bio_copy_data_iter(dst, &dst_iter, src, &src_iter);
 		}
 	}
 
@@ -1355,7 +1355,7 @@ static noinline int read_extent_inline(struct bch_fs *c,
 
 	unsigned bytes = min(iter.bi_size, offset_into_extent << 9);
 	swap(iter.bi_size, bytes);
-	zero_fill_bio_iter(&rbio->bio, iter);
+	bch2_zero_fill_bio_iter(&rbio->bio, iter);
 	swap(iter.bi_size, bytes);
 
 	bio_advance_iter(&rbio->bio, &iter, bytes);
@@ -1368,7 +1368,7 @@ static noinline int read_extent_inline(struct bch_fs *c,
 
 	bio_advance_iter(&rbio->bio, &iter, bytes);
 
-	zero_fill_bio_iter(&rbio->bio, iter);
+	bch2_zero_fill_bio_iter(&rbio->bio, iter);
 
 	return read_extent_done(rbio, flags, 0);
 }
@@ -1393,7 +1393,7 @@ static noinline int read_extent_hole(struct bch_fs *c,
 	if (rbio->data_update)
 		rbio->ret = bch_err_throw(c, data_read_key_overwritten);
 
-	zero_fill_bio_iter(&rbio->bio, iter);
+	bch2_zero_fill_bio_iter(&rbio->bio, iter);
 
 	return read_extent_done(rbio, flags, 0);
 }
