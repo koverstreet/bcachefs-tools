@@ -64,6 +64,7 @@ Depends: ${misc:Depends},
 	 openssl,
 	 initramfs-tools | linux-initramfs-tool,
 	 linux-headers-generic (>= 6.16) |
+	 linux-headers-generic-hwe-24.04 (>= 6.16) |
 	 proxmox-headers-6.17 [amd64] |
 	 linux-headers-amd64 (>= 6.16) [amd64] | linux-headers-cloud-amd64 (>= 6.16) [amd64] | linux-headers-rt-amd64 (>= 6.16) [amd64] |
 	 linux-headers-arm64 (>= 6.16) [arm64] | linux-headers-cloud-arm64 (>= 6.16) [arm64] | linux-headers-rt-arm64 (>= 6.16) [arm64] |
