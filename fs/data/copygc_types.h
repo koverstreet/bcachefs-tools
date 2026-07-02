@@ -10,6 +10,7 @@ struct bch_fs_copygc {
 	bool			running;
 	u32			run_count;
 	u32			kick_count;
+	struct bpos		bucket_fragmentation_cursor;
 	wait_queue_head_t	running_wq;
 
 	/* Dedicated workqueue for btree updates: */
@@ -17,4 +18,3 @@ struct bch_fs_copygc {
 };
 
 #endif /* _BCACHEFS_COPYGC_TYPES_H */
-

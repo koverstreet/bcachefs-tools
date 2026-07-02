@@ -1003,6 +1003,11 @@ static int bucket_alloc_set_partial(struct bch_fs *c,
 {
 	struct bch_fs_allocator *a = &c->allocator;
 
+	if ((req->flags & BCH_WRITE_move) &&
+	    req->data_type == BCH_DATA_user &&
+	    req->wp == &c->allocator.reconcile_write_point)
+		return 0;
+
 	if (!a->open_buckets_partial_nr)
 		return 0;
 

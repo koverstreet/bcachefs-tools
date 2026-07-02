@@ -65,6 +65,12 @@ struct buckets_in_flight {
 	DARRAY(struct move_bucket *) to_evacuate;
 };
 
+struct copygc_lru_scan {
+	struct buckets_in_flight	*buckets_in_flight;
+	struct bpos		next_pos;
+	bool			saw_key;
+};
+
 static const struct rhashtable_params bch_move_bucket_params = {
 	.head_offset		= offsetof(struct move_bucket, hash),
 	.key_offset		= offsetof(struct move_bucket, k),
@@ -207,21 +213,69 @@ static int try_add_copygc_bucket(struct btree_trans *trans,
 	return buckets_in_flight->to_evacuate.nr >= nr_to_get;
 }
 
-static int bch2_copygc_get_buckets(struct moving_context *ctxt,
-			struct buckets_in_flight *buckets_in_flight)
+static int try_add_copygc_lru_bucket(struct btree_trans *trans,
+				     struct copygc_lru_scan *scan,
+				     struct bpos lru_pos)
+{
+	int ret = try_add_copygc_bucket(trans, scan->buckets_in_flight,
+					u64_to_bucket(lru_pos.offset),
+					lru_pos_time(lru_pos));
+
+	if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+		scan->saw_key = true;
+		scan->next_pos = bpos_successor(lru_pos);
+	}
+
+	return ret;
+}
+
+static int __bch2_copygc_get_buckets(struct moving_context *ctxt,
+			struct copygc_lru_scan *scan,
+			struct bpos start,
+			struct bpos end)
 {
 	struct btree_trans *trans = ctxt->trans;
 
-	int ret = for_each_btree_key_max(trans, iter, BTREE_ID_lru,
-				  lru_start(BCH_LRU_BUCKET_FRAGMENTATION),
-				  lru_end(BCH_LRU_BUCKET_FRAGMENTATION),
-				  0, k,
-		try_add_copygc_bucket(trans, buckets_in_flight,
-				      u64_to_bucket(k.k->p.offset),
-				      lru_pos_time(k.k->p))
-	);
+	return for_each_btree_key_max(trans, iter, BTREE_ID_lru,
+				      start, end, 0, k,
+		try_add_copygc_lru_bucket(trans, scan, k.k->p));
+}
 
-	return ret < 0 ? ret : 0;
+static int bch2_copygc_get_buckets(struct moving_context *ctxt,
+			struct buckets_in_flight *buckets_in_flight)
+{
+	struct bch_fs *c = ctxt->trans->c;
+	struct bpos start = bpos_eq(c->copygc.bucket_fragmentation_cursor, POS_MIN)
+		? lru_start(BCH_LRU_BUCKET_FRAGMENTATION)
+		: c->copygc.bucket_fragmentation_cursor;
+	struct bpos end = lru_end(BCH_LRU_BUCKET_FRAGMENTATION);
+
+	if (bpos_lt(start, lru_start(BCH_LRU_BUCKET_FRAGMENTATION)) ||
+	    bpos_gt(start, end))
+		start = lru_start(BCH_LRU_BUCKET_FRAGMENTATION);
+
+	struct copygc_lru_scan scan = {
+		.buckets_in_flight	= buckets_in_flight,
+		.next_pos		= start,
+	};
+
+	int ret = __bch2_copygc_get_buckets(ctxt, &scan, start, end);
+	if (ret > 0)
+		ret = 0;
+	if (!ret && !scan.saw_key && !bpos_eq(start, lru_start(BCH_LRU_BUCKET_FRAGMENTATION))) {
+		scan.next_pos = lru_start(BCH_LRU_BUCKET_FRAGMENTATION);
+		ret = __bch2_copygc_get_buckets(ctxt, &scan, scan.next_pos, end);
+		if (ret > 0)
+			ret = 0;
+	}
+
+	if (!ret) {
+		if (!scan.saw_key || bpos_gt(scan.next_pos, end))
+			scan.next_pos = lru_start(BCH_LRU_BUCKET_FRAGMENTATION);
+		c->copygc.bucket_fragmentation_cursor = scan.next_pos;
+	}
+
+	return ret;
 }
 
 static int bch2_copygc_get_stripe_buckets(struct moving_context *ctxt,
@@ -361,6 +415,9 @@ static int bch2_copygc(struct moving_context *ctxt,
 		*i = NULL;
 
 		move_bucket_in_flight_add(buckets_in_flight, b);
+		if (bch2_dev_rotational(c, b->k.bucket.inode))
+			bch2_moving_ctxt_set_rotational_limits(ctxt,
+					MOVE_ROTATIONAL_LIMIT_background);
 
 		ret = bch2_evacuate_bucket(ctxt, b, b->k.bucket, b->k.generation, data_opts);
 		if (ret)
