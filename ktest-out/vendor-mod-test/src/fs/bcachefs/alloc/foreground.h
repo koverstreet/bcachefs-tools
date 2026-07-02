@@ -1,0 +1,474 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _BCACHEFS_ALLOC_FOREGROUND_H
+#define _BCACHEFS_ALLOC_FOREGROUND_H
+
+#include "bcachefs.h"
+#include "alloc/buckets.h"
+#include "alloc/types.h"
+#include "btree/iter.h"
+#include "data/extents.h"
+#include "data/write_types.h"
+#include "sb/members.h"
+
+#include <linux/hash.h>
+
+struct bkey;
+struct bch_dev;
+struct bch_fs;
+struct bch_devs_List;
+
+extern const char * const bch2_watermarks[];
+
+void bch2_reset_alloc_cursors(struct bch_fs *);
+
+struct dev_alloc_list {
+	unsigned	nr;
+	u8		data[BCH_SB_MEMBERS_MAX];
+};
+
+typedef struct {
+	u8	dev;
+	bool	new_stripe_alloc:1;
+	bool	will_retry_all_devices:1;
+	bool	will_retry_target_devices:1;
+	bool	will_retry_set_devices:1;
+	bool	copygc_can_make_progress:1;
+	bool	have_cl:1;
+	s16	err;
+	u32	wake_counter_snapshot;
+	u64	free_buckets;
+} alloc_trace_entry;
+
+struct alloc_request {
+	struct closure		*cl;
+	u8			nr_replicas;
+	u8			ec_replicas;
+	u8			ec_max_data_blocks;	/* 0 = no cap */
+	unsigned		target;
+	bool			ec:1;
+	bool			new_stripe_alloc:1;
+	bool			will_retry_all_devices:1;
+	bool			will_retry_target_devices:1;
+	bool			will_retry_set_devices:1;
+	bool			copygc_can_make_progress:1;
+	bool			trace_alloc_failed:1;
+	enum bch_watermark	watermark;
+	enum bch_write_flags	flags;
+	enum bch_data_type	data_type;
+	struct bch_devs_list	*devs_have;
+	struct write_point	*wp;
+
+	/* These fields are used primarily by open_bucket_add_buckets */
+	struct open_buckets	ptrs;
+	unsigned		nr_effective;	/* sum of @ptrs durability */
+	bool			have_cache;	/* have we allocated from a 0 durability dev */
+	struct bch_devs_mask	devs_may_alloc;
+
+	/* bch2_bucket_alloc_set_trans(): */
+	struct dev_alloc_list	devs_sorted;
+	struct bch_dev_usage	usage;
+
+	/* bch2_bucket_alloc_trans(): */
+	struct bch_dev		*ca;
+
+	enum {
+				BTREE_BITMAP_NO,
+				BTREE_BITMAP_YES,
+				BTREE_BITMAP_ANY,
+	}			btree_bitmap;
+
+	struct {
+		u64		buckets_seen;
+		u64		skipped_open;
+		u64		skipped_need_journal_commit;
+		u64		need_journal_commit;
+		u64		skipped_nocow;
+		u64		skipped_nouse;
+		u64		skipped_mi_btree_bitmap;
+	} counters;
+
+	unsigned		scratch_nr_replicas;
+	unsigned		scratch_nr_effective;
+	enum bch_write_flags	scratch_flags;
+	bool			scratch_have_cache;
+	enum bch_data_type	scratch_data_type;
+	struct open_buckets	scratch_ptrs;
+	struct bch_devs_mask	scratch_devs_may_alloc;
+
+	/* Allocation attempt trace — dumped on allocator stuck */
+	DARRAY_PREALLOCATED(alloc_trace_entry, 16) trace;
+};
+
+/*
+ * wake_counter_snapshot must be sampled by the caller *before* it adds
+ * itself to freelist_wait via closure_wait(), otherwise a wake racing
+ * between closure_wait() and the snapshot read is lost (we'd record the
+ * already-bumped counter and then never notice the bump in the wait loop).
+ */
+static inline int alloc_trace_add(struct alloc_request *req,
+				  u8 dev, int err,
+				  u32 wake_counter_snapshot,
+				  u64 free_buckets,
+				  bool copygc_can_make_progress)
+{
+	if (darray_push(&req->trace, ((alloc_trace_entry) {
+		.dev				= dev,
+		.new_stripe_alloc		= req->new_stripe_alloc,
+		.will_retry_all_devices		= req->will_retry_all_devices,
+		.will_retry_target_devices	= req->will_retry_target_devices,
+		.will_retry_set_devices		= req->will_retry_set_devices,
+		.copygc_can_make_progress	= copygc_can_make_progress,
+		.have_cl			= req->cl != NULL,
+		.err				= err,
+		.wake_counter_snapshot		= wake_counter_snapshot,
+		.free_buckets			= free_buckets,
+	    })))
+		req->trace_alloc_failed = true;
+
+	return err;
+}
+
+void bch2_dev_alloc_list(struct bch_fs *,
+			 struct dev_stripe_state *,
+			 struct bch_devs_mask *,
+			 struct dev_alloc_list *);
+void bch2_dev_stripe_increment(struct bch_dev *, struct dev_stripe_state *);
+
+static inline struct bch_dev *ob_dev(struct bch_fs *c, struct open_bucket *ob)
+{
+	return bch2_dev_have_ref(c, ob->dev);
+}
+
+static inline unsigned bch2_open_buckets_reserved(enum bch_watermark watermark)
+{
+	switch (watermark) {
+	case BCH_WATERMARK_interior_updates:
+		return 0;
+	case BCH_WATERMARK_reclaim:
+		return OPEN_BUCKETS_COUNT / 6;
+	case BCH_WATERMARK_btree:
+	case BCH_WATERMARK_btree_copygc:
+		return OPEN_BUCKETS_COUNT / 4;
+	case BCH_WATERMARK_copygc:
+		return OPEN_BUCKETS_COUNT / 3;
+	default:
+		return OPEN_BUCKETS_COUNT / 2;
+	}
+}
+
+struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *, struct alloc_request *);
+
+/*
+ * freelist_wait wake helpers. Every wake_up site on
+ * c->allocator.freelist_wait should go through these so the per-device
+ * alloc_wake_counter is maintained in lockstep with waitlist wakeups —
+ * it's the signal waiters use to filter spurious wakes from devices
+ * they don't care about.
+ *
+ * _dev: bump one device's counter and wake (use when the caller knows
+ *       which device changed state in a way that might unblock allocs).
+ * _all: bump every member device's counter and wake (use for events
+ *       that might unblock allocs on any device — journal state
+ *       changes, fsck progress, debug knobs).
+ * _waiters_unpark: wake without bumping any counter; used to drop our own
+ *       closure off the waitlist when we can't continue waiting. Real
+ *       waiters see no counter advance and re-park silently.
+ */
+void bch2_alloc_wake_dev(struct bch_dev *);
+void bch2_alloc_wake_all(struct bch_fs *);
+void bch2_alloc_waiters_unpark(struct bch_fs *);
+
+static inline void ob_push(struct bch_fs *c, struct open_buckets *obs,
+			   struct open_bucket *ob)
+{
+	BUG_ON(obs->nr >= ARRAY_SIZE(obs->v));
+
+	obs->v[obs->nr++] = ob - c->allocator.open_buckets;
+}
+
+#define open_bucket_for_each(_c, _obs, _ob, _i)					\
+	for ((_i) = 0;								\
+	     (_i) < (_obs)->nr &&						\
+	     ((_ob) = (_c)->allocator.open_buckets + (_obs)->v[_i], true);	\
+	     (_i)++)
+
+static inline struct open_bucket *ec_open_bucket(struct bch_fs *c,
+						 struct open_buckets *obs)
+{
+	struct open_bucket *ob;
+	unsigned i;
+
+	open_bucket_for_each(c, obs, ob, i)
+		if (ob->ec)
+			return ob;
+
+	return NULL;
+}
+
+void bch2_open_bucket_write_error(struct bch_fs *,
+			struct open_buckets *, unsigned, int);
+
+void __bch2_open_bucket_put(struct bch_fs *, struct open_bucket *);
+
+static inline void bch2_open_bucket_put(struct bch_fs *c, struct open_bucket *ob)
+{
+	if (atomic_dec_and_test(&ob->pin))
+		__bch2_open_bucket_put(c, ob);
+}
+
+static inline void bch2_open_buckets_put(struct bch_fs *c,
+					 struct open_buckets *ptrs)
+{
+	struct open_bucket *ob;
+	unsigned i;
+
+	open_bucket_for_each(c, ptrs, ob, i)
+		bch2_open_bucket_put(c, ob);
+	ptrs->nr = 0;
+}
+
+static inline void bch2_alloc_sectors_done_inlined(struct bch_fs *c, struct write_point *wp)
+{
+	struct open_buckets ptrs = { .nr = 0 }, keep = { .nr = 0 };
+	struct open_bucket *ob;
+	unsigned i;
+
+	open_bucket_for_each(c, &wp->ptrs, ob, i)
+		ob_push(c, ob->sectors_free < block_sectors(c)
+			? &ptrs
+			: &keep, ob);
+	wp->ptrs = keep;
+
+	unsigned sectors = wp->prev_sectors_free - wp->sectors_free;
+	event_add_trace(c, sectors_alloc, sectors, buf, ({
+		prt_str(&buf, bch2_data_type_str(wp->data_type));
+	}));
+
+	mutex_unlock(&wp->lock);
+
+	bch2_open_buckets_put(c, &ptrs);
+}
+
+static inline void bch2_open_bucket_get(struct bch_fs *c,
+					struct write_point *wp,
+					struct open_buckets *ptrs)
+{
+	struct open_bucket *ob;
+	unsigned i;
+
+	open_bucket_for_each(c, &wp->ptrs, ob, i) {
+		ob->data_type = wp->data_type;
+		atomic_inc(&ob->pin);
+		ob_push(c, ptrs, ob);
+	}
+}
+
+static inline open_bucket_idx_t *open_bucket_hashslot(struct bch_fs *c,
+						  unsigned dev, u64 bucket)
+{
+	return c->allocator.open_buckets_hash +
+		(jhash_3words(dev, bucket, bucket >> 32, 0) &
+		 (OPEN_BUCKETS_COUNT - 1));
+}
+
+static inline struct open_bucket *bch2_bucket_is_open(struct bch_fs *c, unsigned dev, u64 bucket)
+{
+	open_bucket_idx_t slot = *open_bucket_hashslot(c, dev, bucket);
+
+	while (slot) {
+		struct open_bucket *ob = &c->allocator.open_buckets[slot];
+
+		if (ob->dev == dev && ob->bucket == bucket)
+			return ob;
+
+		slot = ob->hash;
+	}
+
+	return NULL;
+}
+
+static inline bool bch2_bucket_is_open_safe(struct bch_fs *c, unsigned dev, u64 bucket)
+{
+	if (bch2_bucket_is_open(c, dev, bucket))
+		return true;
+
+	guard(spinlock)(&c->allocator.freelist_lock);
+	return bch2_bucket_is_open(c, dev, bucket);
+}
+
+static inline bool bch2_bucket_set_discard_fast(struct bch_fs *c, unsigned dev, u64 bucket)
+{
+	struct open_bucket *ob = bch2_bucket_is_open(c, dev, bucket);
+	if (ob) {
+		guard(spinlock)(&ob->lock);
+		if (ob->dev == dev && ob->bucket == bucket) {
+			ob->do_discards_fast = true;
+			return true;
+		}
+	}
+
+	return false;
+}
+
+enum bch_write_flags;
+int bch2_bucket_alloc_set_trans(struct btree_trans *, struct alloc_request *,
+				struct dev_stripe_state *);
+
+int bch2_alloc_sectors_req(struct btree_trans *, struct alloc_request *,
+			   struct write_point_specifier,
+			   struct write_point **);
+
+DEFINE_FREE(alloc_request_put, struct alloc_request *,
+	    if (!IS_ERR_OR_NULL(_T)) darray_exit(&_T->trace))
+
+static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
+						      unsigned target,
+						      unsigned erasure_code,
+						      struct bch_devs_list *devs_have,
+						      unsigned nr_replicas,
+						      unsigned ec_replicas,
+						      enum bch_watermark watermark,
+						      enum bch_write_flags flags,
+						      struct closure *cl)
+{
+	struct alloc_request *req = bch2_trans_kmalloc_nomemzero(trans, sizeof(*req));
+	if (IS_ERR(req))
+		return req;
+
+	if (ec_replicas < 2)
+		erasure_code = false;
+
+	req->ca				= NULL;
+	req->cl				= cl;
+	req->nr_replicas		= nr_replicas;
+	req->nr_effective		= 0;
+	req->ec_replicas		= ec_replicas;
+	req->ec				= erasure_code;
+	req->target			= target;
+	req->watermark			= watermark;
+	req->flags			= flags;
+	req->devs_have			= devs_have;
+	req->have_cache			= false;
+	req->will_retry_all_devices	= false;
+	req->will_retry_target_devices	= false;
+	req->will_retry_set_devices	= false;
+	req->copygc_can_make_progress	= false;
+	req->trace_alloc_failed		= false;
+	req->devs_sorted.nr		= 0;
+	/* bch2_alloc_sectors_req() overwrites this; bch2_bucket_alloc_trans()
+	 * callers (e.g. journal resize) don't, so zero it here for them: */
+	memset(&req->devs_may_alloc, 0, sizeof(req->devs_may_alloc));
+	darray_init(&req->trace);
+	return req;
+}
+
+static inline int bch2_alloc_sectors_start_trans(struct btree_trans *trans,
+			     unsigned target,
+			     unsigned erasure_code,
+			     struct write_point_specifier write_point,
+			     struct bch_devs_list *devs_have,
+			     unsigned nr_replicas,
+			     unsigned ec_replicas,
+			     enum bch_watermark watermark,
+			     enum bch_write_flags flags,
+			     struct closure *cl,
+			     struct write_point **wp_ret)
+{
+	struct alloc_request *req = errptr_try(alloc_request_get(trans, target, erasure_code,
+								 devs_have,
+								 nr_replicas,
+								 ec_replicas,
+								 watermark, flags, cl));
+	int ret = bch2_alloc_sectors_req(trans, req, write_point, wp_ret);
+	darray_exit(&req->trace);
+	return ret;
+}
+
+static inline struct bch_extent_ptr bch2_ob_ptr(struct bch_fs *c, struct open_bucket *ob)
+{
+	struct bch_dev *ca = ob_dev(c, ob);
+
+	return (struct bch_extent_ptr) {
+		.type	= 1 << BCH_EXTENT_ENTRY_ptr,
+		.generation	= ob->generation,
+		.dev	= ob->dev,
+		.offset	= bucket_to_sector(ca, ob->bucket) +
+			ca->mi.bucket_size -
+			ob->sectors_free,
+	};
+}
+
+/*
+ * Append pointers to the space we just allocated to @k, and mark @sectors space
+ * as allocated out of @ob
+ */
+static inline void
+bch2_alloc_sectors_append_ptrs_inlined(struct bch_fs *c, struct write_point *wp,
+				       struct bkey_i *k, unsigned sectors,
+				       bool cached)
+{
+	struct open_bucket *ob;
+	unsigned i;
+
+	BUG_ON(sectors > wp->sectors_free);
+	wp->sectors_free	-= sectors;
+	wp->sectors_allocated	+= sectors;
+
+	open_bucket_for_each(c, &wp->ptrs, ob, i) {
+		struct bch_dev *ca = ob_dev(c, ob);
+		struct bch_extent_ptr ptr = bch2_ob_ptr(c, ob);
+
+		ptr.cached = cached ||
+			(!ca->mi.durability &&
+			 wp->data_type == BCH_DATA_user);
+
+		bch2_bkey_append_ptr(c, k, ptr);
+
+		BUG_ON(sectors > ob->sectors_free);
+		ob->sectors_free -= sectors;
+	}
+}
+
+void bch2_alloc_sectors_append_ptrs(struct bch_fs *, struct write_point *,
+				    struct bkey_i *, unsigned, bool);
+void bch2_alloc_sectors_done(struct bch_fs *, struct write_point *);
+
+void bch2_open_buckets_stop(struct bch_fs *c, struct bch_dev *, bool);
+
+static inline struct write_point_specifier writepoint_hashed(unsigned long v)
+{
+	return (struct write_point_specifier) { .v = v | 1 };
+}
+
+static inline struct write_point_specifier writepoint_ptr(struct write_point *wp)
+{
+	return (struct write_point_specifier) { .v = (unsigned long) wp };
+}
+
+void bch2_fs_allocator_foreground_init(struct bch_fs *);
+
+void bch2_open_bucket_to_text(struct printbuf *, struct bch_fs *, struct open_bucket *);
+void bch2_open_buckets_to_text(struct printbuf *, struct bch_fs *, struct bch_dev *);
+void bch2_open_buckets_partial_to_text(struct printbuf *, struct bch_fs *);
+
+void bch2_write_points_to_text(struct printbuf *, struct bch_fs *);
+
+void bch2_fs_open_buckets_to_text(struct printbuf *, struct bch_fs *);
+void bch2_fs_alloc_debug_to_text(struct printbuf *, struct bch_fs *);
+void bch2_dev_alloc_debug_to_text(struct printbuf *, struct bch_dev *);
+
+void bch2_alloc_request_to_text(struct printbuf *, struct bch_fs *,
+				struct alloc_request *);
+void __bch2_wait_on_allocator(struct btree_trans *, struct alloc_request *,
+			      int, struct closure *);
+
+static inline void bch2_wait_on_allocator(struct btree_trans *trans,
+					  struct alloc_request *req,
+					  int err,
+					  struct closure *cl)
+{
+	if (closure_nr_remaining(cl) > 1)
+		__bch2_wait_on_allocator(trans, req, err, cl);
+}
+
+#endif /* _BCACHEFS_ALLOC_FOREGROUND_H */

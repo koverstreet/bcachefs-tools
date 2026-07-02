@@ -456,7 +456,13 @@ deb: all
 rpm: clean
 	rpmbuild --build-in-place -bb --define "_version $(subst -,_,$(VERSION))" bcachefs-tools.spec
 
-bcachefs-principles-of-operation.pdf: doc/bcachefs-principles-of-operation.tex docgen
+DOCGENERATED=doc/generated/build-version.tex
+
+doc/generated/build-version.tex: force
+	$(Q)mkdir -p doc/generated
+	$(Q)printf '\\renewcommand{\\bchdocversion}{%s}\n' '$(VERSION)' > $@
+
+bcachefs-principles-of-operation.pdf: doc/bcachefs-principles-of-operation.tex docgen doc/generated/build-version.tex
 	pdflatex doc/bcachefs-principles-of-operation.tex
 	pdflatex doc/bcachefs-principles-of-operation.tex
 

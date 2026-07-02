@@ -1,0 +1,730 @@
+Running test single_device.ktest
+P+q6E616D65\[18t[!p]104\[0m[?7h[1G[0J]3008;start=3c842835515e4d27bd7f7be8eaff6b12;user=root;hostname=shelob-kvm;machineid=56678b2c94444096ab1a7ae73d625f93;bootid=f48681c872204d519ce81a36c83e961d;pid=1;pidfdid=1;comm=systemd;type=boot\NFSD: Using nfsdcld client tracking operations.
+NFSD: no clients to reclaim, skipping NFSv4 grace period (net effffff9)
+nfsdctl (398) used greatest stack depth: 12240 bytes left
+Kernel version: 7.1.2-ktest
+hook init_build_bcachefs_tools
+make: Entering directory '/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools'
+    [CC]     build/c_src/crypto.o
+    [CC]     build/c_src/fuse_shims.o
+    [CC]     build/c_src/libbcachefs.o
+    [CC]     build/c_src/ida.o
+    [CC]     build/c_src/rust_shims.o
+    [CC]     build/c_src/tools-util.o
+    [CC]     build/fs/alloc/accounting.o
+    [CC]     build/fs/alloc/background.o
+    [CC]     build/fs/alloc/backpointers.o
+    [CC]     build/fs/alloc/buckets.o
+    [CC]     build/fs/alloc/check.o
+    [CC]     build/fs/alloc/check_data.o
+    [CC]     build/fs/alloc/discard.o
+    [CC]     build/fs/alloc/disk_groups.o
+    [CC]     build/fs/alloc/foreground.o
+    [CC]     build/fs/alloc/lru.o
+    [CC]     build/fs/alloc/replicas.o
+    [CC]     build/fs/btree/bkey.o
+    [CC]     build/fs/btree/bkey_methods.o
+    [CC]     build/fs/btree/bset.o
+    [CC]     build/fs/btree/cache.o
+    [CC]     build/fs/btree/check.o
+    [CC]     build/fs/btree/commit.o
+    [CC]     build/fs/btree/init.o
+    [CC]     build/fs/btree/interior.o
+    [CC]     build/fs/btree/iter.o
+    [CC]     build/fs/btree/journal_overlay.o
+    [CC]     build/fs/btree/key_cache.o
+    [CC]     build/fs/btree/locking.o
+    [CC]     build/fs/btree/node_scan.o
+    [CC]     build/fs/btree/read.o
+    [CC]     build/fs/btree/sort.o
+    [CC]     build/fs/btree/update.o
+    [CC]     build/fs/btree/write.o
+    [CC]     build/fs/btree/write_buffer.o
+    [CC]     build/fs/data/checksum.o
+    [CC]     build/fs/data/compress.o
+    [CC]     build/fs/data/copygc.o
+    [CC]     build/fs/data/ec/create.o
+    [CC]     build/fs/data/ec/init.o
+    [CC]     build/fs/data/ec/io.o
+    [CC]     build/fs/data/ec/trigger.o
+    [CC]     build/fs/data/extent_update.o
+    [CC]     build/fs/data/extents.o
+    [CC]     build/fs/data/extents_sb.o
+    [CC]     build/fs/data/io_misc.o
+    [CC]     build/fs/data/keylist.o
+    [CC]     build/fs/data/migrate.o
+    [CC]     build/fs/data/move.o
+    [CC]     build/fs/data/nocow_locking.o
+    [CC]     build/fs/data/read.o
+    [CC]     build/fs/data/reconcile/check.o
+    [CC]     build/fs/data/reconcile/trigger.o
+    [CC]     build/fs/data/reconcile/work.o
+    [CC]     build/fs/data/reflink.o
+    [CC]     build/fs/data/update.o
+    [CC]     build/fs/data/write.o
+    [CC]     build/fs/debug/async_objs.o
+    [CC]     build/fs/debug/debug.o
+    [CC]     build/fs/debug/sysfs.o
+    [CC]     build/fs/debug/trace.o
+    [CC]     build/fs/errcode.o
+    [CC]     build/fs/fs/acl.o
+fs/errcode.c: In function 'bch2_blk_status_to_str':
+fs/errcode.c:76:9: warning: 'BLK_STS' redefined
+   76 | #define BLK_STS(n) case BLK_STS_##n:    return #n;
+      |         ^~~~~~~
+In file included from fs/bcachefs.h:58,
+                 from fs/errcode.c:3:
+fs/errcode.h:29:9: note: this is the location of the previous definition
+   29 | #define BLK_STS(n)                              \
+      |         ^~~~~~~
+    [CC]     build/fs/fs/check.o
+    [CC]     build/fs/fs/check_dir_structure.o
+    [CC]     build/fs/fs/check_extents.o
+    [CC]     build/fs/fs/check_nlinks.o
+    [CC]     build/fs/fs/dirent.o
+    [CC]     build/fs/fs/inode.o
+    [CC]     build/fs/fs/logged_ops.o
+    [CC]     build/fs/fs/namei.o
+    [CC]     build/fs/fs/quota.o
+    [CC]     build/fs/fs/str_hash.o
+    [CC]     build/fs/fs/xattr.o
+    [CC]     build/fs/init/chardev.o
+    [CC]     build/fs/init/dev.o
+    [CC]     build/fs/init/error.o
+    [CC]     build/fs/init/fs.o
+    [CC]     build/fs/init/passes.o
+    [CC]     build/fs/init/progress.o
+    [CC]     build/fs/init/recovery.o
+    [CC]     build/fs/journal/init.o
+    [CC]     build/fs/journal/journal.o
+    [CC]     build/fs/journal/read.o
+    [CC]     build/fs/journal/reclaim.o
+    [CC]     build/fs/journal/sb.o
+    [CC]     build/fs/journal/seq_blacklist.o
+    [CC]     build/fs/journal/validate.o
+    [CC]     build/fs/journal/write.o
+    [CC]     build/fs/opts.o
+    [CC]     build/fs/sb/clean.o
+    [CC]     build/fs/sb/counters.o
+    [CC]     build/fs/sb/downgrade.o
+    [CC]     build/fs/sb/errors.o
+    [CC]     build/fs/sb/io.o
+    [CC]     build/fs/sb/members.o
+    [CC]     build/fs/snapshots/check_snapshots.o
+    [CC]     build/fs/snapshots/delete.o
+    [CC]     build/fs/snapshots/snapshot.o
+    [CC]     build/fs/snapshots/subvolume.o
+    [CC]     build/fs/util/clock.o
+    [CC]     build/fs/util/enumerated_ref.o
+    [CC]     build/fs/util/fast_list.o
+    [CC]     build/fs/util/printbuf.o
+    [CC]     build/fs/util/rcu_pending.o
+    [CC]     build/fs/util/six.o
+    [CC]     build/fs/util/thread_with_file.o
+    [CC]     build/fs/util/two_state_shared_lock.o
+    [CC]     build/fs/util/util.o
+    [CC]     build/fs/util/varint.o
+    [CC]     build/fs/vendor/closure.o
+    [CC]     build/fs/vfs/buffered.o
+    [CC]     build/fs/vfs/direct.o
+    [CC]     build/fs/vfs/fiemap.o
+    [CC]     build/fs/vfs/fs.o
+    [CC]     build/fs/vfs/io.o
+    [CC]     build/fs/vfs/ioctl.o
+    [CC]     build/fs/vfs/pagecache.o
+    [CC]     build/linux/kobject.o
+    [CC]     build/linux/percpu.o
+    [CC]     build/linux/percpu_register.o
+    [CC]     build/linux/printk.o
+    [SED]    initramfs/hook
+    [SED]    dkms/dkms.conf
+install -m0644 -D bcachefs-wait-devices@.service -t /tmp/tmp.gO7TltASsU/usr/lib/systemd/system
+    [CC]     build/dkms/module-version.o
+install -m0644 -D dkms/Makefile		-t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d
+install -m0644 -D dkms/dkms.conf		-t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d
+install -m0644 -D fs/Makefile	-t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs
+(cd fs; find . -path ./vendor/kernel-rust -prune -o \( -name '*.[ch]' -o -name '*.rs' \) -exec install -m0644 -D {} /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs/{} \; )
+    [AR]     libbcachefs.a
+mkdir -p /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs/vendor
+cp -a fs/vendor/kernel-rust /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs/vendor/
+install -m0755 -D fs/scripts/getdents-layout.sh -t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs/scripts
+install -m0755 -D fs/scripts/rust-is-available-dkms.sh -t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs/scripts
+install -m0755 -D fs/scripts/fetch-module.sh -t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs/scripts
+install -m0644 -D signing/bcachefs-signing-ca.pem -t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs/scripts
+install -m0644 -D dkms/module-version.c	-t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs
+install -m0644 -D version.h			-t /tmp/tmp.gO7TltASsU/usr/src/bcachefs-v1.38.6-121-g22b09e555f5d/src/fs/bcachefs
+warning: /host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools/fs/vendor/bitfield/Cargo.toml: no edition set: defaulting to the 2015 edition while the latest is 2024
+   Compiling bcachefs-shim v0.1.0 (/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools/bcachefs-shim)
+   Compiling bcachefs-kernel v0.1.0 (/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools/fs)
+   Compiling bch_bindgen v0.1.0 (/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools/bch_bindgen)
+   Compiling bcachefs-tools v1.38.6 (/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools)
+warning: value assigned to `k_start` is never read
+   --> src/commands/list_journal.rs:144:23
+    |
+144 |       let mut k_start = c::bbpos {
+    |  _______________________^
+145 | |         btree,
+146 | |         pos: bkey_start_pos(&k.k),
+147 | |     };
+    | |_____^
+    |
+    = help: maybe it is overwritten before being read?
+    = note: `#[warn(unused_assignments)]` (part of `#[warn(unused)]`) on by default
+
+warning: value assigned to `k_start` is never read
+   --> src/commands/list_journal.rs:154:9
+    |
+154 |         k_start.pos.snapshot = 0;
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^
+    |
+    = help: maybe it is overwritten before being read?
+
+warning: direct cast of function item into an integer
+   --> src/commands/scrub.rs:125:56
+    |
+125 |     unsafe { libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t); }
+    |                                                        ^^^^^^^^^^^^^^^^^^^^^
+    |
+    = note: `#[warn(function_casts_as_integer)]` on by default
+help: first cast to a pointer `as *const ()`
+    |
+125 |     unsafe { libc::signal(libc::SIGINT, sigint_handler as *const () as libc::sighandler_t); }
+    |                                                        ++++++++++++
+
+warning: `bcachefs-tools` (bin "bcachefs") generated 3 warnings (run `cargo fix --bin "bcachefs" -p bcachefs-tools` to apply 1 suggestion)
+    Finished `release` profile [optimized + debuginfo] target(s) in 41.51s
+install -m0755 -D target/release/bcachefs  -t /tmp/tmp.gO7TltASsU/sbin
+install -m0644 -D bcachefs.8    -t /tmp/tmp.gO7TltASsU/usr/share/man/man8/
+install -m0755 -D initramfs/hook   /tmp/tmp.gO7TltASsU/usr/share/initramfs-tools/hooks/bcachefs
+install -m0644 -D udev/64-bcachefs.rules -t /tmp/tmp.gO7TltASsU/usr/lib/udev/rules.d/
+ln -sfr /tmp/tmp.gO7TltASsU/sbin/bcachefs /tmp/tmp.gO7TltASsU/sbin/mkfs.bcachefs
+ln -sfr /tmp/tmp.gO7TltASsU/sbin/bcachefs /tmp/tmp.gO7TltASsU/sbin/fsck.bcachefs
+ln -sfr /tmp/tmp.gO7TltASsU/sbin/bcachefs /tmp/tmp.gO7TltASsU/sbin/mount.bcachefs
+install -d /tmp/tmp.gO7TltASsU/usr/share/bash-completion/completions
+target/release/bcachefs completions bash > /tmp/tmp.gO7TltASsU/usr/share/bash-completion/completions/bcachefs
+ln -sfr /tmp/tmp.gO7TltASsU/sbin/bcachefs /tmp/tmp.gO7TltASsU/sbin/mkfs.fuse.bcachefs
+ln -sfr /tmp/tmp.gO7TltASsU/sbin/bcachefs /tmp/tmp.gO7TltASsU/sbin/fsck.fuse.bcachefs
+ln -sfr /tmp/tmp.gO7TltASsU/sbin/bcachefs /tmp/tmp.gO7TltASsU/sbin/mount.fuse.bcachefs
+make: Leaving directory '/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools'
+init_build_bcachefs_tools: tools cache store (d7a2b72b487537d3f0f476fbfb593732dc53f67ce9f32b0b8cb0ee5b8380c084)
+make: Entering directory '/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools'
+    [KBUILD] bcachefs.ko  (incremental @ /ktest-out/bcachefs-module)
+make[1]: Entering directory '/host/home/kent/.ktest/kernels/upstream/stable-default/x86_64/7.1.2/lib/modules/7.1.2-ktest/build'
+make[1]: warning: -j7 forced in submake: resetting jobserver mode.
+make[2]: Entering directory '/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools/ktest-out/bcachefs-module'
+make[4]: Warning: File '/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools/ktest-out/bcachefs-module/build.vars' has modification time 0.48 s in the future
+bcachefs: no prebuilt module — building locally (no bcachefs signing CA to verify the module against)
+  CC [M]  src/fs/bcachefs/alloc/accounting.o
+  CC [M]  src/fs/bcachefs/alloc/background.o
+  CC [M]  src/fs/bcachefs/alloc/backpointers.o
+  CC [M]  src/fs/bcachefs/alloc/buckets.o
+  CC [M]  src/fs/bcachefs/alloc/check.o
+  CC [M]  src/fs/bcachefs/alloc/check_data.o
+  CC [M]  src/fs/bcachefs/alloc/discard.o
+  CC [M]  src/fs/bcachefs/alloc/disk_groups.o
+  CC [M]  src/fs/bcachefs/alloc/foreground.o
+  CC [M]  src/fs/bcachefs/alloc/lru.o
+  CC [M]  src/fs/bcachefs/alloc/replicas.o
+  CC [M]  src/fs/bcachefs/btree/bkey.o
+  CC [M]  src/fs/bcachefs/btree/bkey_methods.o
+  CC [M]  src/fs/bcachefs/btree/bset.o
+  CC [M]  src/fs/bcachefs/btree/cache.o
+  CC [M]  src/fs/bcachefs/btree/check.o
+  CC [M]  src/fs/bcachefs/btree/commit.o
+  CC [M]  src/fs/bcachefs/btree/init.o
+  CC [M]  src/fs/bcachefs/btree/interior.o
+  CC [M]  src/fs/bcachefs/btree/iter.o
+  CC [M]  src/fs/bcachefs/btree/journal_overlay.o
+  CC [M]  src/fs/bcachefs/btree/key_cache.o
+  CC [M]  src/fs/bcachefs/btree/locking.o
+  CC [M]  src/fs/bcachefs/btree/node_scan.o
+  CC [M]  src/fs/bcachefs/btree/read.o
+  CC [M]  src/fs/bcachefs/btree/sort.o
+  CC [M]  src/fs/bcachefs/btree/update.o
+  CC [M]  src/fs/bcachefs/btree/write.o
+  CC [M]  src/fs/bcachefs/btree/write_buffer.o
+  CC [M]  src/fs/bcachefs/data/checksum.o
+  CC [M]  src/fs/bcachefs/data/compress.o
+  CC [M]  src/fs/bcachefs/data/copygc.o
+  CC [M]  src/fs/bcachefs/data/ec/create.o
+  CC [M]  src/fs/bcachefs/data/ec/init.o
+  CC [M]  src/fs/bcachefs/data/ec/io.o
+  CC [M]  src/fs/bcachefs/data/ec/trigger.o
+  CC [M]  src/fs/bcachefs/data/extents.o
+  CC [M]  src/fs/bcachefs/data/extents_sb.o
+  CC [M]  src/fs/bcachefs/data/extent_update.o
+  CC [M]  src/fs/bcachefs/data/io_misc.o
+  CC [M]  src/fs/bcachefs/data/keylist.o
+  CC [M]  src/fs/bcachefs/data/migrate.o
+  CC [M]  src/fs/bcachefs/data/move.o
+  CC [M]  src/fs/bcachefs/data/nocow_locking.o
+  CC [M]  src/fs/bcachefs/data/read.o
+clocksource: Watchdog remote CPU 3 read timed out
+  CC [M]  src/fs/bcachefs/data/reconcile/check.o
+  CC [M]  src/fs/bcachefs/data/reconcile/trigger.o
+  CC [M]  src/fs/bcachefs/data/reconcile/work.o
+  CC [M]  src/fs/bcachefs/data/reflink.o
+  CC [M]  src/fs/bcachefs/data/update.o
+  CC [M]  src/fs/bcachefs/data/write.o
+  CC [M]  src/fs/bcachefs/debug/debug.o
+  CC [M]  src/fs/bcachefs/debug/sysfs.o
+  CC [M]  src/fs/bcachefs/debug/trace.o
+  CC [M]  src/fs/bcachefs/errcode.o
+  CC [M]  src/fs/bcachefs/fs/acl.o
+src/fs/bcachefs/errcode.c: In function 'bch2_blk_status_to_str':
+src/fs/bcachefs/errcode.c:76:9: warning: 'BLK_STS' redefined
+   76 | #define BLK_STS(n) case BLK_STS_##n:    return #n;
+      |         ^~~~~~~
+In file included from src/fs/bcachefs/bcachefs.h:58,
+                 from src/fs/bcachefs/errcode.c:3:
+src/fs/bcachefs/errcode.h:29:9: note: this is the location of the previous definition
+   29 | #define BLK_STS(n)                              \
+      |         ^~~~~~~
+  CC [M]  src/fs/bcachefs/fs/check.o
+  CC [M]  src/fs/bcachefs/fs/check_dir_structure.o
+  CC [M]  src/fs/bcachefs/fs/check_extents.o
+  CC [M]  src/fs/bcachefs/fs/check_nlinks.o
+  CC [M]  src/fs/bcachefs/fs/inode.o
+  CC [M]  src/fs/bcachefs/fs/logged_ops.o
+  CC [M]  src/fs/bcachefs/fs/namei.o
+  CC [M]  src/fs/bcachefs/fs/quota.o
+  CC [M]  src/fs/bcachefs/fs/str_hash.o
+  CC [M]  src/fs/bcachefs/fs/xattr.o
+  CC [M]  src/fs/bcachefs/init/chardev.o
+  CC [M]  src/fs/bcachefs/init/dev.o
+  CC [M]  src/fs/bcachefs/init/error.o
+  CC [M]  src/fs/bcachefs/init/fs.o
+  CC [M]  src/fs/bcachefs/init/progress.o
+  CC [M]  src/fs/bcachefs/init/recovery.o
+  CC [M]  src/fs/bcachefs/init/passes.o
+  CC [M]  src/fs/bcachefs/journal/init.o
+  CC [M]  src/fs/bcachefs/journal/journal.o
+  CC [M]  src/fs/bcachefs/journal/read.o
+  CC [M]  src/fs/bcachefs/journal/reclaim.o
+  CC [M]  src/fs/bcachefs/journal/sb.o
+  CC [M]  src/fs/bcachefs/journal/seq_blacklist.o
+  CC [M]  src/fs/bcachefs/journal/validate.o
+  CC [M]  src/fs/bcachefs/journal/write.o
+  CC [M]  src/fs/bcachefs/opts.o
+  CC [M]  src/fs/bcachefs/sb/clean.o
+  CC [M]  src/fs/bcachefs/sb/counters.o
+  CC [M]  src/fs/bcachefs/sb/downgrade.o
+  CC [M]  src/fs/bcachefs/sb/errors.o
+  CC [M]  src/fs/bcachefs/sb/io.o
+  CC [M]  src/fs/bcachefs/sb/members.o
+  CC [M]  src/fs/bcachefs/snapshots/check_snapshots.o
+  CC [M]  src/fs/bcachefs/snapshots/delete.o
+  CC [M]  src/fs/bcachefs/snapshots/snapshot.o
+  CC [M]  src/fs/bcachefs/snapshots/subvolume.o
+  CC [M]  src/fs/bcachefs/util/clock.o
+  CC [M]  src/fs/bcachefs/util/enumerated_ref.o
+  CC [M]  src/fs/bcachefs/util/fast_list.o
+  CC [M]  src/fs/bcachefs/util/printbuf.o
+  CC [M]  src/fs/bcachefs/util/rcu_pending.o
+  CC [M]  src/fs/bcachefs/util/six.o
+  CC [M]  src/fs/bcachefs/util/thread_with_file.o
+  CC [M]  src/fs/bcachefs/util/two_state_shared_lock.o
+  CC [M]  src/fs/bcachefs/util/util.o
+  CC [M]  src/fs/bcachefs/util/varint.o
+  CC [M]  src/fs/bcachefs/vendor/closure.o
+  CC [M]  src/fs/bcachefs/vfs/fiemap.o
+  CC [M]  src/fs/bcachefs/vfs/fs.o
+  CC [M]  src/fs/bcachefs/vfs/ioctl.o
+  CC [M]  src/fs/bcachefs/vfs/io.o
+  CC [M]  src/fs/bcachefs/vfs/buffered.o
+  CC [M]  src/fs/bcachefs/vfs/direct.o
+  CC [M]  src/fs/bcachefs/vfs/pagecache.o
+  CC [M]  src/fs/bcachefs/debug/async_objs.o
+  CC [M]  src/fs/bcachefs/module-version.o
+src/fs/bcachefs/debug/async_objs.c: In function 'bch2_async_obj_list_read':
+src/fs/bcachefs/debug/async_objs.c:82:17: warning: unused variable 'ret' [-Wunused-variable]
+   82 |         ssize_t ret = 0;
+      |                 ^~~
+  HOSTRUSTC src/fs/bcachefs/codegen
+  CC [M]  src/fs/bcachefs/fs/dirent.o
+  CODEGEN src/fs/bcachefs/rust
+  RUSTC [M] src/fs/bcachefs/mod.o
+  CC [M]  src/fs/bcachefs/rust/extern.o
+warning: hidden lifetime parameters in types are deprecated
+  --> src/fs/bcachefs/btree/iter.rs:85:27
+   |
+85 |         disk_res: Option<&DiskReservation>,
+   |                           ^^^^^^^^^^^^^^^ expected lifetime parameter
+   |
+   = note: `-W elided-lifetimes-in-paths` implied by `-W rust-2018-idioms`
+   = help: to override `-W rust-2018-idioms` add `#[allow(elided_lifetimes_in_paths)]`
+help: indicate the anonymous lifetime
+   |
+85 |         disk_res: Option<&DiskReservation<'_>>,
+   |                                          ++++
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/btree/iter.rs:189:27
+    |
+189 |         disk_res: Option<&DiskReservation>,
+    |                           ^^^^^^^^^^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+189 |         disk_res: Option<&DiskReservation<'_>>,
+    |                                          ++++
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/btree/iter.rs:622:23
+    |
+622 |     disk_res: Option<&DiskReservation>,
+    |                       ^^^^^^^^^^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+622 |     disk_res: Option<&DiskReservation<'_>>,
+    |                                      ++++
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/btree/iter.rs:641:23
+    |
+641 |     disk_res: Option<&DiskReservation>,
+    |                       ^^^^^^^^^^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+641 |     disk_res: Option<&DiskReservation<'_>>,
+    |                                      ++++
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/btree/iter.rs:836:47
+    |
+836 |     pub fn for_each_max<F>(&mut self, trans: &BtreeTrans, end: bpos, mut f: F)
+    |                                               ^^^^^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+836 |     pub fn for_each_max<F>(&mut self, trans: &BtreeTrans<'_>, end: bpos, mut f: F)
+    |                                                         ++++
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/btree/iter.rs:875:43
+    |
+875 |     pub fn for_each<F>(&mut self, trans: &BtreeTrans, f: F) -> Result<(), BchError>
+    |                                           ^^^^^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+875 |     pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, f: F) -> Result<(), BchError>
+    |                                                     ++++
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/btree/iter.rs:885:30
+    |
+885 |         disk_res:    Option<&DiskReservation>,
+    |                              ^^^^^^^^^^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+885 |         disk_res:    Option<&DiskReservation<'_>>,
+    |                                             ++++
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/btree/iter.rs:928:30
+    |
+928 |         disk_res:    Option<&DiskReservation>,
+    |                              ^^^^^^^^^^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+928 |         disk_res:    Option<&DiskReservation<'_>>,
+    |                                             ++++
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/btree/iter.rs:972:51
+    |
+972 |     pub fn for_each_reverse<F>(&mut self, trans: &BtreeTrans, min: bpos, mut f: F)
+    |                                                   ^^^^^^^^^^ expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+972 |     pub fn for_each_reverse<F>(&mut self, trans: &BtreeTrans<'_>, min: bpos, mut f: F)
+    |                                                             ++++
+
+warning: hidden lifetime parameters in types are deprecated
+    --> src/fs/bcachefs/btree/iter.rs:1001:17
+     |
+1001 |         trans: &BtreeTrans,
+     |                 ^^^^^^^^^^ expected lifetime parameter
+     |
+help: indicate the anonymous lifetime
+     |
+1001 |         trans: &BtreeTrans<'_>,
+     |                           ++++
+
+warning: hidden lifetime parameters in types are deprecated
+    --> src/fs/bcachefs/btree/iter.rs:1102:43
+     |
+1102 |     pub fn for_each<F>(&mut self, trans: &BtreeTrans, mut f: F) -> Result<(), BchError>
+     |                                           ^^^^^^^^^^ expected lifetime parameter
+     |
+help: indicate the anonymous lifetime
+     |
+1102 |     pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, mut f: F) -> Result<(), BchError>
+     |                                                     ++++
+
+warning: hidden lifetime parameters in types are deprecated
+  --> src/fs/bcachefs/fs/inode.rs:37:26
+   |
+37 |     trans: &btree::iter::BtreeTrans,
+   |             -------------^^^^^^^^^^
+   |             |
+   |             expected lifetime parameter
+   |
+help: indicate the anonymous lifetime
+   |
+37 |     trans: &btree::iter::BtreeTrans<'_>,
+   |                                    ++++
+
+warning: unused import: `core::marker::PhantomData`
+ --> src/fs/bcachefs/util/darray.rs:1:5
+  |
+1 | use core::marker::PhantomData;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: `#[warn(unused_imports)]` (part of `#[warn(unused)]`) on by default
+
+warning: hidden lifetime parameters in types are deprecated
+   --> src/fs/bcachefs/util/printbuf.rs:189:32
+    |
+189 |     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    |                           -----^^^^^^^^^
+    |                           |
+    |                           expected lifetime parameter
+    |
+help: indicate the anonymous lifetime
+    |
+189 |     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+    |                                         ++++
+
+warning: hidden lifetime parameters in types are deprecated
+  --> src/fs/bcachefs/errcode.rs:66:32
+   |
+66 |     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+   |                           -----^^^^^^^^^
+   |                           |
+   |                           expected lifetime parameter
+   |
+help: indicate the anonymous lifetime
+   |
+66 |     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+   |                                         ++++
+
+warning: hidden lifetime parameters in types are deprecated
+  --> src/fs/bcachefs/errcode.rs:72:32
+   |
+72 |     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+   |                           -----^^^^^^^^^
+   |                           |
+   |                           expected lifetime parameter
+   |
+help: indicate the anonymous lifetime
+   |
+72 |     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+   |                                         ++++
+
+warning: unused attribute
+  --> <crate attribute>:1:1
+   |
+ 1 | #![no_std]
+   | ^^^^^^^^^^ help: remove this attribute
+   |
+note: attribute also specified here
+  --> src/fs/bcachefs/mod.rs:11:35
+   |
+11 | #![cfg_attr(not(feature = "std"), no_std)]
+   |                                   ^^^^^^
+   = note: `#[warn(unused_attributes)]` (part of `#[warn(unused)]`) on by default
+
+warning: unused `core::result::Result` that must be used
+  --> src/fs/bcachefs/util/async_exec.rs:74:9
+   |
+74 |         queue.enqueue(self);
+   |         ^^^^^^^^^^^^^^^^^^^
+   |
+   = note: this `Result` may be an `Err` variant, which should be handled
+   = note: `#[warn(unused_must_use)]` (part of `#[warn(unused)]`) on by default
+help: use `let _ = ...` to ignore the resulting value
+   |
+74 |         let _ = queue.enqueue(self);
+   |         +++++++
+
+warning: unused `core::result::Result` that must be used
+   --> src/fs/bcachefs/util/async_exec.rs:148:5
+    |
+148 |     queue.enqueue(task);
+    |     ^^^^^^^^^^^^^^^^^^^
+    |
+    = note: this `Result` may be an `Err` variant, which should be handled
+help: use `let _ = ...` to ignore the resulting value
+    |
+148 |     let _ = queue.enqueue(task);
+    |     +++++++
+
+warning: 19 warnings emitted
+
+  LD [M]  src/fs/bcachefs/bcachefs.o
+make[4]: warning:  Clock skew detected.  Your build may be incomplete.
+make[4]: Warning: File 'modules.order' has modification time 0.74 s in the future
+  MODPOST Module.symvers
+make[4]: warning:  Clock skew detected.  Your build may be incomplete.
+make[4]: Warning: File 'src/fs/bcachefs/bcachefs.mod.c' has modification time 0.72 s in the future
+  CC [M]  src/fs/bcachefs/bcachefs.mod.o
+  LD [M]  src/fs/bcachefs/bcachefs.ko
+make[4]: warning:  Clock skew detected.  Your build may be incomplete.
+make[2]: Leaving directory '/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools/ktest-out/bcachefs-module'
+make[1]: Leaving directory '/host/home/kent/.ktest/kernels/upstream/stable-default/x86_64/7.1.2/lib/modules/7.1.2-ktest/build'
+# Be the only bcachefs.ko under /ktest-out so gdb's lx-symbols loads THIS
+# build's symbols, not a stale dkms-staged copy (it loads the first match).
+bcachefs: loading out-of-tree module taints kernel.
+bcachefs: bch2_dirent_init() bcachefs: filldir64 fastpath disabled: struct layout unverified for this kernel
+
+# modinfo by path: the module is insmod'd directly, not installed into the
+# module tree, so a by-name lookup wouldn't find it.
+filename:       /ktest-out/bcachefs-module/src/fs/bcachefs/bcachefs.ko
+version:        v1.38.6-121-g22b09e555f5d
+srcversion:     6BB03CE8212A29783EDB206
+make: Leaving directory '/host/home/kent/ktest/tests/fs/bcachefs/bcachefs-tools'
+hook init_noop
+
+Running tests crc32c
+
+========= TEST   crc32c
+WATCHDOG 1200
+bcachefs (vdb): Using encoding defined by superblock: utf8-12.1.0
+starting version need_discard_by_journal_seq (1.38)
+  with options: errors=ro,fsck
+  features: new_siphash,new_extent_overwrite,btree_ptr_v2,extents_above_btree_updates,btree_updates_journalled,new_varint,journal_no_flush,alloc_v2,extents_across_btree_nodes,incompat_version_field
+  Rust support enabled
+  *** DEBUG BUILD ***
+bcachefs (vdb): initializing new filesystem
+bcachefs (vdb): marking superblocks
+bcachefs (vdb): initializing freespace
+bcachefs (vdb): done initializing freespace
+bcachefs (vdb): going read-write
+bcachefs (vdb): presplit_shard_boundaries: 31 splits in btree inodes
+bcachefs (vdb): presplit_shard_boundaries: 31 splits in btree extents
+bcachefs (vdb): presplit_shard_boundaries: 31 splits in btree dirents
+bcachefs (vdb): presplit_shard_boundaries: 31 splits in btree xattrs
+bcachefs (vdb): fs initialized, journal seq 5 rewind_seq 6
+mount.bcachefs (3097) used greatest stack depth: 7904 bytes left
+WATCHDOG 1200
+randrw: (g=0): rw=randrw, bs=(R) 4096B-1024KiB, (W) 4096B-1024KiB, (T) 4096B-1024KiB, ioengine=libaio, iodepth=64
+fio-3.41
+Starting 1 process
+randrw: Laying out IO file (1 file / 3500MiB)
+Jobs: 1 (f=1)Jobs: 1 (f=1): [m(1)][10.7%][r=352MiB/s,w=358MiB/s][r=903,w=937 IOPS][eta 00m:25s]Jobs: 1 (f=1): [m(1)][14.8%][r=434MiB/s,w=441MiB/s][r=1288,w=1345 IOPS][eta 00m:23s]Jobs: 1 (f=1): [m(1)][19.2%][r=481MiB/s,w=443MiB/s][r=1721,w=1643 IOPS][eta 00m:21s]Jobs: 1 (f=1): [V(1)][22.2%][r=618MiB/s,w=98.9MiB/s][r=1608,w=395 IOPS][eta 00m:21s]Jobs: 1 (f=1): [V(1)][25.9%][r=660MiB/s][r=1918 IOPS][eta 00m:20s]                  Jobs: 1 (f=1): [m(1)][28.6%][r=612MiB/s,w=49.2MiB/s][r=2207,w=100 IOPS][eta 00m:20s]Jobs: 1 (f=1): [m(1)][33.3%][r=499MiB/s,w=507MiB/s][r=1162,w=1194 IOPS][eta 00m:18s]Jobs: 1 (f=1): [m(1)][38.5%][r=488MiB/s,w=496MiB/s][r=1353,w=1428 IOPS][eta 00m:16s]Jobs: 1 (f=1): [m(1)][42.3%][r=525MiB/s,w=501MiB/s][r=1774,w=1753 IOPS][eta 00m:15s]Jobs: 1 (f=1): [V(1)][46.2%][r=602MiB/s,w=195MiB/s][r=1721,w=765 IOPS][eta 00m:14s] Jobs: 1 (f=1): [V(1)][50.0%][r=631MiB/s][r=1765 IOPS][eta 00m:13s]                 Jobs: 1 (f=1): [V(1)][51.9%][r=568MiB/s][r=1991 IOPS][eta 00m:13s]Jobs: 1 (f=1): [m(1)][55.6%][r=437MiB/s,w=307MiB/s][r=1203,w=673 IOPS][eta 00m:12s]Jobs: 1 (f=1): [m(1)][59.3%][r=424MiB/s,w=429MiB/s][r=1074,w=1098 IOPS][eta 00m:11s]Jobs: 1 (f=1): [m(1)][63.0%][r=421MiB/s,w=425MiB/s][r=1226,w=1293 IOPS][eta 00m:10s]Jobs: 1 (f=1): [m(1)][66.7%][r=456MiB/s,w=433MiB/s][r=1589,w=1573 IOPS][eta 00m:09s]Jobs: 1 (f=1): [V(1)][70.4%][r=611MiB/s,w=154MiB/s][r=1690,w=603 IOPS][eta 00m:08s] Jobs: 1 (f=1): [V(1)][74.1%][r=670MiB/s][r=1906 IOPS][eta 00m:07s]                 Jobs: 1 (f=1): [m(1)][77.8%][r=630MiB/s,w=2930KiB/s][r=2312,w=5 IOPS][eta 00m:06s]Jobs: 1 (f=1): [m(1)][81.5%][r=503MiB/s,w=516MiB/s][r=1151,w=1196 IOPS][eta 00m:05s]Jobs: 1 (f=1): [m(1)][88.5%][r=508MiB/s,w=508MiB/s][r=1382,w=1447 IOPS][eta 00m:03s]Jobs: 1 (f=1): [m(1)][92.3%][r=525MiB/s,w=505MiB/s][r=1777,w=1755 IOPS][eta 00m:02s]Jobs: 1 (f=1): [V(1)][96.2%][r=599MiB/s,w=217MiB/s][r=1741,w=837 IOPS][eta 00m:01s] Jobs: 1 (f=1): [V(1)][100.0%][r=675MiB/s][r=1871 IOPS][eta 00m:00s]                Jobs: 1 (f=1): [V(1)][100.0%][r=666MiB/s][r=2415 IOPS][eta 00m:00s]
+randrw: (groupid=0, jobs=1): err= 0: pid=3133: Wed Jul  1 16:16:54 2026
+  read: IOPS=1605, BW=539MiB/s (565MB/s)(13.7GiB/25974msec)
+    slat (usec): min=3, max=15780, avg=58.43, stdev=327.82
+    clat (usec): min=64, max=60826, avg=27007.79, stdev=8621.98
+     lat (usec): min=108, max=60980, avg=27066.22, stdev=8637.91
+    clat percentiles (usec):
+     |  1.00th=[ 9765],  5.00th=[13829], 10.00th=[16057], 20.00th=[19268],
+     | 30.00th=[22152], 40.00th=[24511], 50.00th=[26608], 60.00th=[28705],
+     | 70.00th=[31065], 80.00th=[34341], 90.00th=[39060], 95.00th=[42206],
+     | 99.00th=[46924], 99.50th=[48497], 99.90th=[52167], 99.95th=[53216],
+     | 99.99th=[58983]
+   bw (  KiB/s): min=90520, max=563488, per=76.48%, avg=422135.56, stdev=122689.43, samples=34
+   iops        : min=  176, max= 1924, avg=1219.85, stdev=429.93, samples=34
+  write: IOPS=1382, BW=461MiB/s (484MB/s)(6991MiB/15156msec); 0 zone resets
+    slat (usec): min=9, max=15956, avg=634.80, stdev=670.06
+    clat (usec): min=91, max=77059, avg=23809.73, stdev=9010.41
+     lat (usec): min=512, max=77860, avg=24444.52, stdev=9174.52
+    clat percentiles (usec):
+     |  1.00th=[11338],  5.00th=[13173], 10.00th=[14746], 20.00th=[16909],
+     | 30.00th=[18744], 40.00th=[20579], 50.00th=[22414], 60.00th=[24511],
+     | 70.00th=[26346], 80.00th=[29230], 90.00th=[33162], 95.00th=[38011],
+     | 99.00th=[62653], 99.50th=[70779], 99.90th=[73925], 99.95th=[76022],
+     | 99.99th=[77071]
+   bw (  KiB/s): min=91976, max=530264, per=89.14%, avg=421067.06, stdev=116666.21, samples=34
+   iops        : min=  184, max= 1884, avg=1232.32, stdev=410.78, samples=34
+  lat (usec)   : 100=0.02%, 250=0.06%, 500=0.04%, 750=0.02%, 1000=0.01%
+  lat (msec)   : 2=0.08%, 4=0.14%, 10=0.45%, 20=26.62%, 50=71.69%
+  lat (msec)   : 100=0.88%
+  cpu          : usr=83.71%, sys=11.07%, ctx=50056, majf=0, minf=199
+  IO depths    : 1=0.0%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.2%, 32=0.4%, >=64=99.2%
+     submit    : 0=0.0%, 4=99.9%, 8=0.1%, 16=0.1%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=41692,20952,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=539MiB/s (565MB/s), 539MiB/s-539MiB/s (565MB/s-565MB/s), io=13.7GiB (14.7GB), run=25974-25974msec
+  WRITE: bw=461MiB/s (484MB/s), 461MiB/s-461MiB/s (484MB/s-484MB/s), io=6991MiB (7331MB), run=15156-15156msec
+
+Disk stats (read/write):
+  vdb: ios=85332/62650, sectors=44194376/22985328, merge=39065/94, ticks=12756/7444, in_queue=20537, util=22.74%
+bcachefs (vdb): shutting down
+bcachefs (vdb): going read-only
+bcachefs (vdb): finished waiting for writes to stop
+bcachefs (vdb): flushing journal and stopping allocators, journal seq 817
+bcachefs (vdb): flushing journal and stopping allocators complete, journal seq 818
+bcachefs (vdb): clean shutdown complete, journal seq 819
+bcachefs (vdb): shutdown complete
+modprobe: FATAL: Module bcachefs not found in directory /lib/modules/7.1.2-ktest
+Running in-kernel offline fsck
+bcachefs (vdb): Using encoding defined by superblock: utf8-12.1.0
+starting version need_discard_by_journal_seq (1.38)
+  with options: degraded=yes,fsck,fix_errors=no,noratelimit_errors,nochanges,read_only,noreconcile_enabled
+  features: new_siphash,new_extent_overwrite,btree_ptr_v2,extents_above_btree_updates,btree_updates_journalled,new_varint,journal_no_flush,alloc_v2,extents_across_btree_nodes,incompat_version_field
+  Rust support enabled
+  *** DEBUG BUILD ***
+bcachefs (vdb): recovering from clean shutdown, journal seq 819
+bcachefs (vdb): Journal keys: 0 read, 0 after sorting and compactingbcachefs (vdb): accounting_read... done (0 seconds)
+bcachefs (vdb): alloc_read... done (0 seconds)
+bcachefs (vdb): snapshots_read... done (0 seconds)
+bcachefs (vdb): check_allocations... done (0 seconds)
+bcachefs (vdb): going read-write
+bcachefs (vdb): journal_replay... done (0 seconds)
+bcachefs (vdb): presplit_shard_boundaries... done (0 seconds)
+bcachefs (vdb): check_alloc_info... done (0 seconds)
+bcachefs (vdb): check_lrus... done (0 seconds)
+bcachefs (vdb): check_btree_backpointers... done (0 seconds)
+bcachefs (vdb): check_extents_to_backpointers...bcachefs (vdb): scanning for missing backpointers in 0/4096 buckets, 0 buckets with no backpointers
+ done (0 seconds)
+bcachefs (vdb): check_alloc_to_lru_refs... done (0 seconds)
+bcachefs (vdb): check_snapshot_trees... done (0 seconds)
+bcachefs (vdb): check_snapshots... done (0 seconds)
+bcachefs (vdb): check_subvols... done (0 seconds)
+bcachefs (vdb): check_subvol_children... done (0 seconds)
+bcachefs (vdb): delete_dead_snapshots... done (0 seconds)
+bcachefs (vdb): check_inodes... done (0 seconds)
+bcachefs (vdb): check_extents... done (0 seconds)
+bcachefs (vdb): check_indirect_extents... done (0 seconds)
+bcachefs (vdb): check_dirents... done (0 seconds)
+bcachefs (vdb): check_xattrs... done (0 seconds)
+bcachefs (vdb): check_root... done (0 seconds)
+bcachefs (vdb): check_unreachable_inodes... done (0 seconds)
+bcachefs (vdb): check_subvolume_structure... done (0 seconds)
+bcachefs (vdb): check_directory_structure... done (0 seconds)
+bcachefs (vdb): check_nlinks... done (0 seconds)
+bcachefs (vdb): check_reconcile_work... done (1 seconds)
+bcachefs (vdb): resume_logged_ops... done (0 seconds)
+bcachefs (vdb): delete_dead_inodes... done (0 seconds)
+bcachefs (vdb): going read-only
+bcachefs (vdb): finished waiting for writes to stop
+bcachefs (vdb): flushing journal and stopping allocators, journal seq 819
+bcachefs (vdb): flushing journal and stopping allocators complete, journal seq 819
+bcachefs (vdb): clean shutdown complete, journal seq 821
+bcachefs (vdb): shutting down
+bcachefs (vdb): shutdown complete
+grep: /proc/allocinfo: No such file or directory
+Error: No such file or directory
+Error: No such file or directory
+Error: No such file or directory
+Error: No such file or directory
+Error: No such file or directory
+
+========= PASSED crc32c in 34s
+
+Passed: crc32c
+Failed: 
+NOTICE: Automounting of tracing to debugfs is deprecated and will be removed in 2030
+Kernel version: 7.1.2-ktest
+TEST SUCCESS
