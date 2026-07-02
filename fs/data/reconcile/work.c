@@ -33,6 +33,7 @@
 #include "util/clock.h"
 
 #include <linux/freezer.h>
+#include <linux/ioprio.h>
 #include <linux/kthread.h>
 #include <linux/sched/cputime.h>
 
@@ -434,6 +435,8 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 
 	data_opts->type			= BCH_DATA_UPDATE_reconcile;
 	data_opts->target		= r->background_target;
+	if (r->hipri)
+		data_opts->ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7);
 
 	/*
 	 * we can't add/drop replicas from btree nodes incrementally, we always
@@ -1632,7 +1635,7 @@ static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
 
 		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
 			bch2_trans_unlock_long(trans);
-			bch2_copygc_wakeup(c);
+			bch2_copygc_wakeup_for_pressure(c);
 			wait_event(c->copygc.running_wq,
 				   c->copygc.run_count != *p->copygc_run_count ||
 				   kthread_should_stop());

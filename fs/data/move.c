@@ -39,6 +39,11 @@
 #include <linux/ioprio.h>
 #include <linux/kthread.h>
 
+static inline u16 bch2_move_ioprio(struct data_update_opts *opts)
+{
+	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7);
+}
+
 const char * const bch2_data_ops_strs[] = {
 #define x(t, n, ...) [n] = #t,
 	BCH_DATA_OPS()
@@ -253,7 +258,7 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 
 	u->op.end_io		= move_write_done;
 	u->rbio.bio.bi_end_io	= move_read_endio;
-	u->rbio.bio.bi_ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+	u->rbio.bio.bi_ioprio	= bch2_move_ioprio(data_opts);
 
 	u32 size = k.k->size;
 
@@ -1196,6 +1201,25 @@ __cold void bch2_move_stats_to_text(struct printbuf *out, struct bch_move_stats 
 	prt_newline(out);
 }
 
+static const char *bch2_moving_ctxt_wait_reason(struct bch_fs *c,
+						struct moving_context *ctxt)
+{
+	u32 sectors_limit = c->opts.move_bytes_in_flight >> 9;
+
+	if (ctxt->wait_on_copygc && READ_ONCE(c->copygc.running))
+		return "copygc running";
+	if (atomic_read(&ctxt->write_ios) >= c->opts.move_ios_in_flight)
+		return "write ios in flight";
+	if (atomic_read(&ctxt->read_ios) >= c->opts.move_ios_in_flight)
+		return "read ios in flight";
+	if (atomic_read(&ctxt->write_sectors) >= sectors_limit)
+		return "write bytes in flight";
+	if (atomic_read(&ctxt->read_sectors) >= sectors_limit)
+		return "read bytes in flight";
+
+	return "none";
+}
+
 static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs *c, struct moving_context *ctxt)
 {
 	if (!out->nr_tabstops)
@@ -1203,6 +1227,9 @@ static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs 
 
 	bch2_move_stats_to_text(out, ctxt->stats);
 	guard(printbuf_indent)(out);
+
+	prt_printf(out, "wait reason:\t%s\n", bch2_moving_ctxt_wait_reason(c, ctxt));
+	prt_printf(out, "wait on copygc:\t%u\n", ctxt->wait_on_copygc);
 
 	prt_printf(out, "reads: ios %u/%u sectors %u/%u\n",
 		   atomic_read(&ctxt->read_ios),
