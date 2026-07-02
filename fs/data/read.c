@@ -81,7 +81,7 @@ static inline u32 bch2_dev_congested_read(struct bch_dev *ca, u64 now)
 	s64 congested = atomic_read(&ca->congested);
 	u64 last = READ_ONCE(ca->congested_last);
 	if (time_after64(now, last))
-		congested -= (now - last) >> 12;
+		congested -= (now - last) >> 20;
 
 	return clamp(congested, 0LL, CONGESTED_MAX);
 }

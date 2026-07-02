@@ -48,6 +48,27 @@ static const struct rhashtable_params bch_update_params = {
 	.automatic_shrinking	= true,
 };
 
+static inline u16 bch2_move_ioprio(struct data_update_opts *opts)
+{
+	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7);
+}
+
+static const char *bch2_ioprio_class_str(u16 ioprio)
+{
+	switch (IOPRIO_PRIO_CLASS(ioprio)) {
+	case IOPRIO_CLASS_NONE:
+		return "none";
+	case IOPRIO_CLASS_RT:
+		return "realtime";
+	case IOPRIO_CLASS_BE:
+		return "best-effort";
+	case IOPRIO_CLASS_IDLE:
+		return "idle";
+	default:
+		return "unknown";
+	}
+}
+
 bool bch2_data_update_in_flight(struct bch_fs *c, struct bbpos *pos,
 				enum bch_data_update_types type)
 {
@@ -468,10 +489,20 @@ static int data_update_index_update_key(struct btree_trans *trans,
 	try(bch2_trans_update(trans, iter, insert,
 			      BTREE_UPDATE_internal_snapshot_node|
 			      BTREE_TRIGGER_set_needs_reconcile_done));
-	try(bch2_trans_commit(trans, &u->op.res, NULL,
-			      BCH_TRANS_COMMIT_no_check_rw|
-			      BCH_TRANS_COMMIT_no_enospc|
-			      u->opts.commit_flags));
+	bool flush = (u->op.flags & BCH_WRITE_flush) &&
+		bkey_next(insert) == u->op.insert_keys.top;
+	bool noflush = u->op.flags & BCH_WRITE_move_noflush;
+	u64 journal_seq = 0;
+
+	try(bch2_trans_commit_flush(trans, &u->op.res,
+				    noflush ? &journal_seq : NULL,
+				    flush ? &u->op.cl : NULL,
+				    BCH_TRANS_COMMIT_no_check_rw|
+				    BCH_TRANS_COMMIT_no_enospc|
+				    u->opts.commit_flags));
+
+	if (noflush)
+		bch2_moving_ctxt_account_noflush_commit(u->ctxt, new->k.size, journal_seq);
 
 	bch2_btree_iter_set_pos(iter, next_pos);
 
@@ -894,6 +925,10 @@ __cold void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c
 
 	prt_printf(out, "read_dev:\t%i\n", data_opts->read_dev);
 	prt_printf(out, "checksum_paranoia:\t%i\n", data_opts->checksum_paranoia);
+	u16 ioprio = bch2_move_ioprio(data_opts);
+	prt_printf(out, "ioprio:\t%s:%u\n",
+		   bch2_ioprio_class_str(ioprio),
+		   (unsigned) IOPRIO_PRIO_DATA(ioprio));
 
 	prt_str(out, "io path options:\t");
 	bch2_inode_opts_to_text(out, c, *io_opts);
@@ -995,7 +1030,7 @@ static int bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
 	m->rbio.data_update		= true;
 	m->rbio.bio.bi_iter.bi_size	= buf_bytes;
 	m->rbio.bio.bi_iter.bi_sector	= bkey_start_offset(&m->k.k->k);
-	m->op.wbio.bio.bi_ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+	m->op.wbio.bio.bi_ioprio	= bch2_move_ioprio(&m->opts);
 	return 0;
 }
 
@@ -1034,7 +1069,7 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 			durability += (write_flags & BCH_WRITE_cached) ? 1 : ca->mi.durability;
 		else if (bch2_copygc_can_make_progress(ca)) {
 			*need_copygc = true;
-			bch2_copygc_wakeup(c);
+			bch2_copygc_wakeup_for_pressure(c);
 		}
 
 		if (trace)
@@ -1352,6 +1387,12 @@ int bch2_data_update_init(struct btree_trans *trans,
 		BCH_WRITE_data_encoded|
 		BCH_WRITE_move|
 		m->opts.write_flags;
+	if (ctxt) {
+		m->op.flags &= ~BCH_WRITE_flush;
+		m->op.flags |= BCH_WRITE_move_noflush;
+	} else {
+		m->op.flags |= BCH_WRITE_flush;
+	}
 	m->op.compression_opt	= io_opts->background_compression;
 	m->op.watermark		= max(m->opts.commit_flags & BCH_WATERMARK_MASK,
 				      BCH_WATERMARK_normal);

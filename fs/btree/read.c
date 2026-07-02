@@ -1080,7 +1080,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 
 		if (sync) {
 			submit_bio_wait(bio);
-			bch2_latency_acct(ca, rb->start_time, READ);
+			bch2_latency_acct(ca, rb->start_time, READ, true);
 			btree_node_read_work(&rb->work);
 		} else {
 			submit_bio(bio);

@@ -542,6 +542,8 @@ static bool can_write_now(struct bch_fs *c, unsigned replicas_want, struct closu
 	unsigned reserved = OPEN_BUCKETS_COUNT -
 		(OPEN_BUCKETS_COUNT - bch2_open_buckets_reserved(BCH_WATERMARK_normal)) / 2;
 
+	bch2_open_bucket_reclaim_unused_partials(c, reserved);
+
 	if (unlikely(c->allocator.open_buckets_nr_free <= reserved)) {
 		closure_wait(&c->allocator.open_buckets_wait, cl);
 		return false;
