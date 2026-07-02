@@ -102,7 +102,7 @@ static inline u64 btree_ptr_hash_val(const struct bkey_i *k)
 static inline struct btree *btree_node_mem_ptr(const struct bkey_i *k)
 {
 	return k->k.type == KEY_TYPE_btree_ptr_v2
-		? (void *)(unsigned long)bkey_i_to_btree_ptr_v2_c(k)->v.mem_ptr
+		? (void *)(unsigned long)READ_ONCE(bkey_i_to_btree_ptr_v2_c(k)->v.mem_ptr)
 		: NULL;
 }
 
