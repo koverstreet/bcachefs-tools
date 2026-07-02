@@ -19,6 +19,7 @@
 
 #include "data/checksum.h"
 #include "data/compress.h"
+#include "data/ec/trigger.h"
 #include "data/extents.h"
 #include "data/reconcile/trigger.h"
 
@@ -873,19 +874,29 @@ struct durability_dedup {
 	struct bch_devs_mask	online;
 };
 
-static int bch2_stripe_durability(struct btree_trans *trans, u64 stripe_idx,
+static int bch2_stripe_durability(struct btree_trans *trans, struct extent_ptr_decoded p,
 				  struct bkey_durability *ret,
 				  struct durability_dedup *seen,
 				  unsigned *desired_total)
 {
 	struct bch_fs *c = trans->c;
-	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx), BTREE_ITER_cached);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, p.ec.idx), BTREE_ITER_cached);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	if (k.k->type != KEY_TYPE_stripe)
 		return 0;
 
 	struct bkey_s_c_stripe s = bkey_s_c_to_stripe(k);
+
+	/*
+	 * The pointer must actually match the stripe: a stale stripe pointer
+	 * (e.g. the bucket was reused and the gen no longer matches) gets no
+	 * durability from it, or we'd report redundancy the data doesn't have.
+	 * Same check the stripe_ptr trigger uses to gate stripe accounting.
+	 */
+	if (!bch2_ptr_matches_stripe(s.v, p))
+		return 0;
+
 	unsigned nr_data = s.v->nr_blocks - s.v->nr_redundant;
 
 	/*
@@ -994,7 +1005,7 @@ int __bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_de
 	struct durability_dedup seen = {};
 	struct bkey_durability d = {};
 	unsigned desired_total = 0;
-	int ret = bch2_stripe_durability(trans, p->ec.idx, &d, &seen,
+	int ret = bch2_stripe_durability(trans, *p, &d, &seen,
 					 desired ? &desired_total : NULL);
 	return ret ?: (int) (desired ? desired_total : d.total);
 }
@@ -1023,7 +1034,7 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 			 * devices rather than its own (placeholder) device. @seen
 			 * dedups devices shared with the key's other stripes.
 			 */
-			int ret2 = bch2_stripe_durability(trans, p.ec.idx, ret, &seen, &desired);
+			int ret2 = bch2_stripe_durability(trans, p, ret, &seen, &desired);
 			if (ret2 < 0)
 				return ret2;
 		} else if (p.ptr.dev != BCH_SB_MEMBER_INVALID) {
