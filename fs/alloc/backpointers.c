@@ -525,6 +525,42 @@ static int extents_to_reflink(struct btree_trans *trans,
 				 BTREE_UPDATE_internal_snapshot_node);
 }
 
+static int extent_to_existing_reflink(struct btree_trans *trans,
+				      enum btree_id extent_btree, unsigned extent_level,
+				      struct bkey_s_c extent,
+				      u32 extent_overlap_start, u32 extent_overlap_end,
+				      struct bkey_s_c reflink_v,
+				      u32 reflink_v_overlap_start)
+{
+	u32 overlap_size = extent_overlap_end - extent_overlap_start;
+
+	BUG_ON(extent.k->type != KEY_TYPE_extent);
+	BUG_ON(reflink_v.k->type != KEY_TYPE_reflink_v);
+	BUG_ON(!overlap_size);
+
+	u64 extent_end = bkey_start_offset(extent.k) + extent_overlap_end;
+	u64 reflink_v_idx = bkey_start_offset(reflink_v.k) + reflink_v_overlap_start;
+
+	if (extent_overlap_end > extent.k->size ||
+	    reflink_v_idx + overlap_size > reflink_v.k->p.offset)
+		return bch_err_throw(trans->c, fsck_repair_unimplemented);
+
+	CLASS(btree_node_iter, iter)(trans, extent_btree, extent.k->p, 0,
+				     extent_level, BTREE_ITER_intent);
+	try(bch2_btree_iter_traverse(&iter));
+
+	struct bkey_i_reflink_p *rp =
+		errptr_try(bch2_trans_kmalloc(trans, sizeof(*rp)));
+	bkey_reflink_p_init(&rp->k_i);
+	rp->k.p		= SPOS(extent.k->p.inode, extent_end, extent.k->p.snapshot);
+	rp->k.size	= overlap_size;
+	rp->k.bversion	= extent.k->bversion;
+	SET_REFLINK_P_IDX(&rp->v, reflink_v_idx);
+
+	return bch2_trans_update(trans, &iter, &rp->k_i,
+				 BTREE_UPDATE_internal_snapshot_node);
+}
+
 static int check_bp_dup(struct btree_trans *trans,
 			struct extents_to_bp_state *s,
 			struct bkey_s_c extent,
@@ -633,6 +669,61 @@ static int check_bp_dup(struct btree_trans *trans,
 						       k1_overlap_start, k1_overlap_end,
 						       other_bp.v->btree_id, other_bp.v->level, other_extent,
 						       k2_overlap_start, k2_overlap_end));
+			return 0;
+		}
+
+		if ((extent.k->type == KEY_TYPE_extent &&
+		     other_extent.k->type == KEY_TYPE_reflink_v) ||
+		    (extent.k->type == KEY_TYPE_reflink_v &&
+		     other_extent.k->type == KEY_TYPE_extent)) {
+			struct bkey_s_c direct_extent =
+				extent.k->type == KEY_TYPE_extent ? extent : other_extent;
+			struct bkey_s_c reflink_v =
+				extent.k->type == KEY_TYPE_reflink_v ? extent : other_extent;
+			enum btree_id direct_btree =
+				extent.k->type == KEY_TYPE_extent ? bp->v.btree_id : other_bp.v->btree_id;
+			unsigned direct_level =
+				extent.k->type == KEY_TYPE_extent ? bp->v.level : other_bp.v->level;
+			const struct bkey *direct_bp_k =
+				extent.k->type == KEY_TYPE_extent ? &bp->k : other_bp.k;
+			const struct bch_backpointer *direct_bp =
+				extent.k->type == KEY_TYPE_extent ? &bp->v : other_bp.v;
+			const struct bkey *reflink_bp_k =
+				extent.k->type == KEY_TYPE_reflink_v ? &bp->k : other_bp.k;
+			const struct bch_backpointer *reflink_bp =
+				extent.k->type == KEY_TYPE_reflink_v ? &bp->v : other_bp.v;
+			u32 direct_bp_sub, reflink_bp_sub;
+
+			scoped_guard(rcu) {
+				struct bch_dev *ca = bch2_dev_rcu_noerror(c, bp->k.p.inode);
+				if (!ca)
+					return 0;
+				bp_pos_to_bucket_and_offset(ca, direct_bp_k->p,  &direct_bp_sub);
+				bp_pos_to_bucket_and_offset(ca, reflink_bp_k->p, &reflink_bp_sub);
+			}
+
+			u32 overlap_sub_start = max(direct_bp_sub, reflink_bp_sub);
+			u32 overlap_sub_end   = min(direct_bp_sub + direct_bp->bucket_len,
+						    reflink_bp_sub + reflink_bp->bucket_len);
+			if (overlap_sub_end <= overlap_sub_start)
+				return 0;
+
+			u32 direct_overlap_start = overlap_sub_start - direct_bp_sub;
+			u32 direct_overlap_end   = overlap_sub_end   - direct_bp_sub;
+			u32 reflink_overlap_start = overlap_sub_start - reflink_bp_sub;
+
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "duplicate extent and reflink_v pointing to overlapping space on dev %llu, converting direct extent overlap to reflink_p\n",
+				   bp->k.p.inode);
+			bch2_bkey_val_to_text(&buf, c, extent);
+			prt_newline(&buf);
+			bch2_bkey_val_to_text(&buf, c, other_extent);
+
+			if (ret_fsck_err(trans, dup_extents_to_reflink, "%s", buf.buf))
+				try(extent_to_existing_reflink(trans,
+						       direct_btree, direct_level, direct_extent,
+						       direct_overlap_start, direct_overlap_end,
+						       reflink_v, reflink_overlap_start));
 			return 0;
 		}
 
