@@ -1441,6 +1441,24 @@ Valid hash types for string hash tables are:
 \section{Debugging tools}
 \label{sec:debugging}
 
+\subsection{Making a ktest reproducer}
+\label{sec:ktest-reproducer}
+
+When reporting a bug, first collect the facts from the machine that is failing:
+
+\begin{itemize}
+	\item what command or workload triggered it;
+	\item what happened, and what should have happened instead;
+	\item kernel version and \texttt{bcachefs-tools} version;
+	\item mount options and filesystem options;
+	\item relevant \texttt{dmesg}, journal, sysfs, or debugfs output.
+\end{itemize}
+
+A small ktest reproducer is useful even without a patch: maintainers can run it,
+debug it, and keep it as a regression test after the bug is fixed. ktest lives
+in a separate test harness repository\footnote{\url{https://evilpiepirate.org/git/ktest.git/}};
+bcachefs tests are under \texttt{tests/fs/bcachefs/}.
+
 \subsection{Sysfs interface}
 
 Mounted filesystems are available in sysfs at \texttt{/sys/fs/bcachefs/<uuid>/}

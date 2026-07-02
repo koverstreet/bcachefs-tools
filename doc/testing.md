@@ -9,7 +9,12 @@
 
 ## ktest
 
-Tests live in `~/ktest/tests/fs/bcachefs/` (e.g. `subvol.ktest`).
+ktest is a separate test harness repository:
+<https://evilpiepirate.org/git/ktest.git/>. It is also available on GitHub as
+`koverstreet/ktest`.
+
+After checking out ktest locally, bcachefs tests live in
+`~/ktest/tests/fs/bcachefs/` (e.g. `subvol.ktest`).
 
 ```bash
 # Run a test
