@@ -1,5 +1,7 @@
+use std::collections::BTreeMap;
 use std::io::{self, IsTerminal, Read, Write};
 use std::os::unix::io::FromRawFd;
+use std::path::{Path, PathBuf};
 use std::process;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
@@ -12,6 +14,7 @@ use bch_bindgen::c::{
 };
 use bch_bindgen::accounting::data_type;
 use clap::Parser;
+use serde::{Deserialize, Serialize};
 
 use crate::commands::DeviceNameArgs;
 use crate::util::{fmt_bytes_human, fmt_sectors_human};
@@ -32,6 +35,50 @@ const BCH_IOCTL_DATA_NR: u32 = 10;
 /// Layout: u8 type, u8 ret, u8 pad[6], bch_ioctl_data_progress, padding to 128.
 const DATA_EVENT_SIZE: usize = 128;
 
+#[derive(Default, Serialize, Deserialize)]
+struct ScrubCheckpoint {
+    version: u32,
+    devices: BTreeMap<u32, ScrubCheckpointDev>,
+}
+
+#[derive(Default, Serialize, Deserialize)]
+struct ScrubCheckpointDev {
+    name: String,
+    offset: u64,
+    complete: bool,
+}
+
+fn new_checkpoint() -> ScrubCheckpoint {
+    ScrubCheckpoint { version: 1, ..Default::default() }
+}
+
+fn load_checkpoint(path: Option<&Path>) -> Result<ScrubCheckpoint> {
+    let Some(path) = path else {
+        return Ok(new_checkpoint());
+    };
+
+    match std::fs::read(path) {
+        Ok(data) => serde_json::from_slice(&data)
+            .with_context(|| format!("reading scrub checkpoint '{}'", path.display())),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(new_checkpoint()),
+        Err(e) => Err(e)
+            .with_context(|| format!("opening scrub checkpoint '{}'", path.display())),
+    }
+}
+
+fn save_checkpoint(path: &Path, checkpoint: &ScrubCheckpoint) -> Result<()> {
+    let mut tmp = path.as_os_str().to_os_string();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+
+    let data = serde_json::to_vec_pretty(checkpoint)?;
+    std::fs::write(&tmp, data)
+        .with_context(|| format!("writing scrub checkpoint '{}'", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("replacing scrub checkpoint '{}'", path.display()))?;
+    Ok(())
+}
+
 fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data_progress)> {
     let mut buf = [0u8; DATA_EVENT_SIZE];
     let n = fd.read(&mut buf)?;
@@ -47,11 +94,12 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
     Ok((event_type, event_ret, p))
 }
 
-fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
+fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32, start_sector: u64) -> Result<std::fs::File> {
     let mut cmd = bch_ioctl_data {
         op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub as u16,
         ..Default::default()
     };
+    cmd.start_pos.offset = start_sector;
     // bch_ioctl_data's op-params union is emitted as either a native Rust union or
     // the __BindgenUnionField wrapper, depending on the host libclang's Copy analysis
     // of its blocklisted __u32 members — non-deterministic across build hosts, and
@@ -74,8 +122,10 @@ fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32) -> Result<std::fs::
 }
 
 struct ScrubDev {
+    idx:            u32,
     name:           String,
     progress_fd:    Option<std::fs::File>,
+    checkpointed:   bool,
     done:           u64,
     corrected:      u64,
     uncorrected:    u64,
@@ -122,11 +172,15 @@ pub struct Cli {
 
     /// Filesystem path or device
     filesystem: String,
+
+    /// Save and resume per-device scrub progress from this JSON file
+    #[arg(long, value_name = "PATH")]
+    checkpoint_file: Option<PathBuf>,
 }
 
 fn scrub(cli: Cli) -> Result<()> {
 
-    unsafe { libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t); }
+    unsafe { libc::signal(libc::SIGINT, sigint_handler as *const () as libc::sighandler_t); }
 
     let data_types: u32 = if cli.metadata {
         1 << u32::from(data_type::btree)
@@ -143,28 +197,63 @@ fn scrub(cli: Cli) -> Result<()> {
 
     let ioctl_fd = handle.ioctl_fd_raw();
     let dev_idx = handle.dev_idx();
+    let mut checkpoint = load_checkpoint(cli.checkpoint_file.as_deref())?;
 
     let mut scrub_devs: Vec<ScrubDev> = Vec::new();
 
     if dev_idx >= 0 {
+        let idx = dev_idx as u32;
         let name = devices.iter()
             .find(|d| d.idx == dev_idx as u32)
             .map(|d| d.dev.clone())
             .unwrap_or_else(|| format!("dev-{}", dev_idx));
 
-        let fd = start_scrub(ioctl_fd, dev_idx as u32, data_types)?;
-        scrub_devs.push(ScrubDev {
-            name, progress_fd: Some(fd),
-            done: 0, corrected: 0, uncorrected: 0, total: 0, ret_status: 0,
-        });
-    } else {
-        for dev in &devices {
-            let fd = start_scrub(ioctl_fd, dev.idx, data_types)?;
+        let checkpoint_dev = checkpoint.devices.entry(idx)
+            .or_insert_with(|| ScrubCheckpointDev {
+                name: name.clone(),
+                ..Default::default()
+            });
+        checkpoint_dev.name = name.clone();
+
+        if !checkpoint_dev.complete {
+            let fd = start_scrub(ioctl_fd, idx, data_types, checkpoint_dev.offset)?;
             scrub_devs.push(ScrubDev {
-                name: dev.dev.clone(), progress_fd: Some(fd),
+                idx, name, progress_fd: Some(fd), checkpointed: false,
                 done: 0, corrected: 0, uncorrected: 0, total: 0, ret_status: 0,
             });
         }
+    } else {
+        for dev in &devices {
+            let checkpoint_dev = checkpoint.devices.entry(dev.idx)
+                .or_insert_with(|| ScrubCheckpointDev {
+                    name: dev.dev.clone(),
+                    ..Default::default()
+                });
+            checkpoint_dev.name = dev.dev.clone();
+
+            if checkpoint_dev.complete {
+                continue;
+            }
+
+            let fd = start_scrub(ioctl_fd, dev.idx, data_types, checkpoint_dev.offset)?;
+            scrub_devs.push(ScrubDev {
+                idx: dev.idx, name: dev.dev.clone(), progress_fd: Some(fd), checkpointed: false,
+                done: 0, corrected: 0, uncorrected: 0, total: 0, ret_status: 0,
+            });
+        }
+    }
+
+    if scrub_devs.is_empty() {
+        if let Some(path) = &cli.checkpoint_file {
+            println!("Scrub already complete according to checkpoint '{}'", path.display());
+        } else {
+            println!("No devices selected for scrub");
+        }
+        return Ok(());
+    }
+
+    if let Some(path) = &cli.checkpoint_file {
+        save_checkpoint(path, &checkpoint)?;
     }
 
     let dev_names: Vec<&str> = scrub_devs.iter().map(|d| d.name.as_str()).collect();
@@ -185,6 +274,7 @@ fn scrub(cli: Cli) -> Result<()> {
 
         let mut all_done = true;
         let mut lines: Vec<String> = Vec::new();
+        let mut checkpoint_changed = false;
 
         for dev in &mut scrub_devs {
             let mut rate = 0u64;
@@ -211,6 +301,22 @@ fn scrub(cli: Cli) -> Result<()> {
                         dev.uncorrected = p.sectors_error_uncorrected;
                         dev.total = p.sectors_total;
 
+                        if cli.checkpoint_file.is_some() {
+                            let checkpoint_dev = checkpoint.devices.entry(dev.idx)
+                                .or_insert_with(|| ScrubCheckpointDev {
+                                    name: dev.name.clone(),
+                                    ..Default::default()
+                                });
+                            checkpoint_dev.name = dev.name.clone();
+                            checkpoint_dev.offset = checkpoint_dev.offset.max(p.pos.offset);
+                            dev.checkpointed = true;
+                            checkpoint_changed = true;
+
+                            if event_ret == bch_ioctl_data_event_ret::BCH_IOCTL_DATA_EVENT_RET_done as u8 {
+                                checkpoint_dev.complete = true;
+                            }
+                        }
+
                         if dev.corrected > 0 { exit_code |= 2; }
                         if dev.uncorrected > 0 { exit_code |= 4; }
 
@@ -229,6 +335,12 @@ fn scrub(cli: Cli) -> Result<()> {
 
             if dev.progress_fd.is_some() {
                 all_done = false;
+            }
+        }
+
+        if checkpoint_changed {
+            if let Some(path) = &cli.checkpoint_file {
+                save_checkpoint(path, &checkpoint)?;
             }
         }
 
@@ -257,6 +369,18 @@ fn scrub(cli: Cli) -> Result<()> {
         }
 
         if interrupted {
+            if let Some(path) = &cli.checkpoint_file {
+                for dev in &scrub_devs {
+                    if !dev.checkpointed {
+                        checkpoint.devices.entry(dev.idx)
+                            .or_insert_with(|| ScrubCheckpointDev {
+                                name: dev.name.clone(),
+                                ..Default::default()
+                            });
+                    }
+                }
+                save_checkpoint(path, &checkpoint)?;
+            }
             writeln!(io::stdout())?;
             eprintln!("Interrupted");
             exit_code |= 1;
@@ -266,6 +390,19 @@ fn scrub(cli: Cli) -> Result<()> {
         last = now;
         first = false;
         thread::sleep(Duration::from_secs(1));
+    }
+
+    if exit_code & 1 == 0 {
+        if let Some(path) = &cli.checkpoint_file {
+            if checkpoint.devices.values().all(|d| d.complete) {
+                match std::fs::remove_file(path) {
+                    Ok(()) => {}
+                    Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+                    Err(e) => return Err(e)
+                        .with_context(|| format!("removing scrub checkpoint '{}'", path.display())),
+                }
+            }
+        }
     }
 
     if exit_code != 0 {
