@@ -1,0 +1,261 @@
+# SPDX-License-Identifier: GPL-2.0
+#
+# Vendored Rust stack for CONFIG_RUST=n kernels — included from fs/Makefile.rust
+# when bcachefs-vendor-rust=y.
+#
+# Builds bcachefs's checked-in copy of the kernel Rust support stack
+# (fs/vendor/kernel-rust/, a patched 7.1 rust/) into $(obj)/vrust, then bundles
+# the objects into bcachefs.ko. The kernel tree is read READ-ONLY — we reuse its
+# scripts/target.json + include/generated/rustc_cfg (present even on a Rust-off
+# kernel) and its headers for bindgen, but never write to it.
+#
+# Flags: the kernel's own KBUILD_RUSTFLAGS is populated even on CONFIG_RUST=n
+# (the top + arch Makefiles set it unconditionally; its --target points at the
+# present scripts/target.json). We reuse it verbatim — so the vendored objects
+# match the target kernel's ABI exactly — and only add -Awarnings (the vendored
+# crates predate this rustc's newer lints) + -Zunstable-options. We deliberately
+# do NOT use $(rust_flags): it carries bcachefs's `--cfg kernel` (rustflags-y),
+# wrong for core and the kernel crate. The crates are self-contained: their Rust
+# symbols stay module-local; only the kernel's C ABI crosses the .ko boundary.
+
+VRD	:= $(obj)/vrust
+VENDOR	:= $(src)/vendor/kernel-rust
+RUST_LIB_SRC := $(shell $(RUSTC) --print sysroot)/lib/rustlib/src/rust/library
+
+# Crate objects include! their generated bindings via env!("OBJTREE") +
+# "/rust/<crate>/<file>", so the generated files live under $(VRD)/rust and we
+# point OBJTREE at $(VRD).
+bch-vr-objtree := $(abspath $(VRD))
+
+bch-vr-cfg := @$(objtree)/include/generated/rustc_cfg
+# Target crates (no-std, kernel ABI). Filter --edition out of KBUILD_RUSTFLAGS:
+# it carries --edition=2021, and each crate sets its own (core wants 2024) —
+# rustc rejects --edition given twice.
+bch-vr-tflags = $(filter-out --edition=%,$(KBUILD_RUSTFLAGS)) $(bch-vr-cfg) \
+	--cfg CONFIG_RUST -Awarnings -Zunstable-options --sysroot=/dev/null -L$(VRD)
+# Host crates (proc_macro2/quote/syn): real host std, no kernel target:
+bch-vr-hflags = $(filter-out --edition=%,$(rust_common_flags)) -Awarnings \
+	-Zunstable-options -L$(VRD)
+# Proc-macros (macros/pin_init_internal/zerocopy_derive): host + proc-macro link:
+bch-vr-pflags = $(bch-vr-hflags) $(bch-vr-cfg) -Clinker-flavor=gcc -Clinker=$(HOSTCC) \
+	-Clink-args='$(call escsq,$(KBUILD_PROCMACROLDFLAGS))' \
+	--extern proc_macro --crate-type proc-macro
+
+# bindgen: the blocklist/opaque/newtype set comes from the carried
+# bindgen_parameters (same as the kernel's rule); c_flags parse the kernel
+# headers (libclang-incompatible gcc flags filtered out, as the kernel does).
+bch-vr-bindgen-params := $(shell grep -Ev '^\#|^$$' $(VENDOR)/bindgen_parameters)
+# No --target: let clang default to the host triple (native DKMS builds), as
+# bcachefs's own codegen does — the kernel's BINDGEN_TARGET var isn't reachable
+# out-of-tree, and an empty --target makes clang reject every x86 flag.
+# -I the kernel's rust/bindings: the vendored *_helper.h keep the kernel's
+# relative includes (e.g. "../../drivers/base/base.h"), which resolve from
+# $(srctree)/rust/bindings (2 dirs up = srctree), not from our vendored copy.
+bch-vr-bindgen-cflags := $(LINUXINCLUDE) -I$(srctree)/rust/bindings $(KBUILD_CPPFLAGS) \
+	$(filter-out $(bcachefs-codegen-skip-cflags),$(KBUILD_CFLAGS)) \
+	-fno-builtin -D__BINDGEN__ -DMODULE -DKBUILD_MODNAME='"bcachefs"' -w
+
+# ---- generic build commands (per-crate specifics via `private vr-*` vars) ----
+quiet_cmd_bch_vr_lib = VRUSTC L $@
+      cmd_bch_vr_lib = RUSTC_BOOTSTRAP=1 OBJTREE=$(bch-vr-objtree) $(vr-env) $(RUSTC) \
+	$(bch-vr-tflags) $(vr-flags) --crate-type rlib --crate-name $(vr-name) \
+	--emit=metadata=$(VRD)/lib$(vr-name).rmeta --emit=obj=$@ $< $(vr-post)
+
+quiet_cmd_bch_vr_host = VRUSTC H $@
+      cmd_bch_vr_host = RUSTC_BOOTSTRAP=1 $(RUSTC) $(bch-vr-hflags) $(vr-flags) \
+	--crate-type rlib --crate-name $(vr-name) --emit=metadata=$@ \
+	--emit=link=$(VRD)/lib$(vr-name).rlib $<
+
+quiet_cmd_bch_vr_pmac = VRUSTC P $@
+      cmd_bch_vr_pmac = RUSTC_BOOTSTRAP=1 $(RUSTC) $(bch-vr-pflags) $(vr-flags) \
+	--crate-name $(vr-name) --emit=link=$@ $<
+
+quiet_cmd_bch_vr_bindgen = VBINDGEN $@
+      cmd_bch_vr_bindgen = $(BINDGEN) $< $(vr-bindgen-flags) --rust-target 1.85 \
+	--use-core --with-derive-default --ctypes-prefix ffi --no-layout-tests \
+	--no-debug '.*' --enable-function-attribute-detection -o $@ \
+	-- $(bch-vr-bindgen-cflags) $(vr-bindgen-cflags) $(vr-bindgen-extra)
+
+quiet_cmd_bch_vr_rscpp = VRSCPP  $@
+      cmd_bch_vr_rscpp = $(CPP) $(c_flags) -xc -C -P $< | sed '1,/^\/\/ Cut here.$$/d' >$@
+
+# ---- host crates -----------------------------------------------------------
+$(VRD)/libproc_macro2.rmeta: private vr-name := proc_macro2
+$(VRD)/libproc_macro2.rmeta: private vr-flags := --edition=2021 \
+	--cfg 'feature="proc-macro"' --cfg wrap_proc_macro --cfg proc_macro_span_file --cfg proc_macro_span_location
+$(VRD)/libproc_macro2.rmeta: $(VENDOR)/proc-macro2/lib.rs FORCE
+	$(call if_changed,bch_vr_host)
+
+$(VRD)/libquote.rmeta: private vr-name := quote
+$(VRD)/libquote.rmeta: private vr-flags := --edition=2018 --cfg 'feature="proc-macro"' \
+	--extern proc_macro2=$(VRD)/libproc_macro2.rlib
+$(VRD)/libquote.rmeta: $(VENDOR)/quote/lib.rs $(VRD)/libproc_macro2.rmeta FORCE
+	$(call if_changed,bch_vr_host)
+
+$(VRD)/libsyn.rmeta: private vr-name := syn
+$(VRD)/libsyn.rmeta: private vr-flags := --edition=2021 \
+	--cfg 'feature="clone-impls"' --cfg 'feature="derive"' --cfg 'feature="full"' \
+	--cfg 'feature="parsing"' --cfg 'feature="printing"' --cfg 'feature="proc-macro"' \
+	--cfg 'feature="visit"' --cfg 'feature="visit-mut"' \
+	--extern proc_macro2=$(VRD)/libproc_macro2.rlib --extern quote=$(VRD)/libquote.rlib
+$(VRD)/libsyn.rmeta: $(VENDOR)/syn/lib.rs $(VRD)/libquote.rmeta FORCE
+	$(call if_changed,bch_vr_host)
+
+# ---- proc-macros -----------------------------------------------------------
+vr-pmac-externs = --extern proc_macro2=$(VRD)/libproc_macro2.rlib \
+	--extern quote=$(VRD)/libquote.rlib --extern syn=$(VRD)/libsyn.rlib
+vr-pmac-deps = $(VRD)/libproc_macro2.rmeta $(VRD)/libquote.rmeta $(VRD)/libsyn.rmeta
+
+$(VRD)/libmacros.so: private vr-name := macros
+$(VRD)/libmacros.so: private vr-flags := --edition=2021 $(vr-pmac-externs)
+$(VRD)/libmacros.so: $(VENDOR)/macros/lib.rs $(vr-pmac-deps) FORCE
+	$(call if_changed,bch_vr_pmac)
+
+$(VRD)/libpin_init_internal.so: private vr-name := pin_init_internal
+$(VRD)/libpin_init_internal.so: private vr-flags := --edition=2021 --cfg kernel --cfg USE_RUSTC_FEATURES $(vr-pmac-externs)
+$(VRD)/libpin_init_internal.so: $(VENDOR)/pin-init/internal/src/lib.rs $(vr-pmac-deps) FORCE
+	$(call if_changed,bch_vr_pmac)
+
+$(VRD)/libzerocopy_derive.so: private vr-name := zerocopy_derive
+$(VRD)/libzerocopy_derive.so: private vr-flags := --edition=2021 $(vr-pmac-externs)
+$(VRD)/libzerocopy_derive.so: $(VENDOR)/zerocopy-derive/lib.rs $(vr-pmac-deps) FORCE
+	$(call if_changed,bch_vr_pmac)
+
+# ---- core + compiler_builtins (the no-std base) ----------------------------
+# core: route soft-float/u128 intrinsics to __rust* (compiler_builtins stubs them).
+vr-redirect-intrinsics := __addsf3 __eqsf2 __extendsfdf2 __gesf2 __lesf2 __ltsf2 \
+	__mulsf3 __nesf2 __truncdfsf2 __unordsf2 __adddf3 __eqdf2 __ledf2 __ltdf2 \
+	__muldf3 __unorddf2 __muloti4 __multi3 __udivmodti4 __udivti3 __umodti3
+$(VRD)/core.o: private vr-name := core
+$(VRD)/core.o: private vr-flags := --edition=2024 --cfg no_fp_fmt_parse
+$(VRD)/core.o: private vr-post = ; objcopy $(foreach s,$(vr-redirect-intrinsics),--redefine-sym $(s)=__rust$(s)) $@
+$(VRD)/core.o: $(RUST_LIB_SRC)/core/src/lib.rs FORCE
+	$(call if_changed,bch_vr_lib)
+
+# The shared leaf crates (bitfield/bitflags/uuid, built by cmd_bch_library) are
+# no_std and link our vendored core (cmd_bch_library now -L's $(obj)/vrust) —
+# order them after it.
+$(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o: $(VRD)/core.o $(VRD)/compiler_builtins.o
+
+vr-core-extern = --extern core=$(VRD)/libcore.rmeta
+$(VRD)/compiler_builtins.o: private vr-name := compiler_builtins
+$(VRD)/compiler_builtins.o: private vr-flags := --edition=2021 $(vr-core-extern)
+$(VRD)/compiler_builtins.o: private vr-post = ; objcopy -w -W '__*' $@
+$(VRD)/compiler_builtins.o: $(VENDOR)/compiler_builtins.rs $(VRD)/core.o FORCE
+	$(call if_changed,bch_vr_lib)
+
+# ---- leaf crates -----------------------------------------------------------
+vr-base-externs = $(vr-core-extern) --extern compiler_builtins=$(VRD)/libcompiler_builtins.rmeta
+vr-base-deps = $(VRD)/core.o $(VRD)/compiler_builtins.o
+
+$(VRD)/ffi.o: private vr-name := ffi
+$(VRD)/ffi.o: private vr-flags := --edition=2021 $(vr-base-externs)
+$(VRD)/ffi.o: $(VENDOR)/ffi.rs $(vr-base-deps) FORCE
+	$(call if_changed,bch_vr_lib)
+
+$(VRD)/build_error.o: private vr-name := build_error
+$(VRD)/build_error.o: private vr-flags := --edition=2021 $(vr-base-externs)
+$(VRD)/build_error.o: $(VENDOR)/build_error.rs $(vr-base-deps) FORCE
+	$(call if_changed,bch_vr_lib)
+
+$(VRD)/zerocopy.o: private vr-name := zerocopy
+$(VRD)/zerocopy.o: private vr-env := CARGO_PKG_VERSION=0.8.50
+$(VRD)/zerocopy.o: private vr-flags := --edition=2021 --cap-lints=allow $(vr-base-externs) \
+	--extern zerocopy_derive=$(VRD)/libzerocopy_derive.so
+$(VRD)/zerocopy.o: $(VENDOR)/zerocopy/src/lib.rs $(vr-base-deps) $(VRD)/libzerocopy_derive.so FORCE
+	$(call if_changed,bch_vr_lib)
+
+$(VRD)/pin_init.o: private vr-name := pin_init
+$(VRD)/pin_init.o: private vr-flags := --edition=2021 --cfg kernel --cfg USE_RUSTC_FEATURES \
+	$(vr-base-externs) --extern pin_init_internal=$(VRD)/libpin_init_internal.so --extern macros=$(VRD)/libmacros.so
+$(VRD)/pin_init.o: $(VENDOR)/pin-init/src/lib.rs $(vr-base-deps) $(VRD)/libpin_init_internal.so $(VRD)/libmacros.so FORCE
+	$(call if_changed,bch_vr_lib)
+
+# ---- bindings + uapi (bindgen on the kernel headers) -----------------------
+$(VRD)/rust/bindings/bindings_generated.rs: private vr-bindgen-flags = $(bch-vr-bindgen-params)
+$(VRD)/rust/bindings/bindings_generated.rs: private vr-bindgen-extra = ; \
+	sed -Ei 's/pub const RUST_CONST_HELPER_([a-zA-Z0-9_]*)/pub const \1/g' $@
+$(VRD)/rust/bindings/bindings_generated.rs: $(VENDOR)/bindings/bindings_helper.h $(VENDOR)/bindgen_parameters FORCE
+	$(Q)mkdir -p $(@D)
+	$(call if_changed,bch_vr_bindgen)
+
+$(VRD)/rust/bindings/bindings_helpers_generated.rs: private vr-bindgen-flags = \
+	--blocklist-type '.*' --allowlist-var '' --allowlist-function 'rust_helper_.*'
+$(VRD)/rust/bindings/bindings_helpers_generated.rs: private vr-bindgen-cflags = -I$(VRD)/rust/bindings -Wno-missing-prototypes -Wno-missing-declarations
+$(VRD)/rust/bindings/bindings_helpers_generated.rs: private vr-bindgen-extra = ; \
+	sed -Ei 's/pub fn rust_helper_([a-zA-Z0-9_]*)/#[link_name="rust_helper_\1"]\n    pub fn \1/g' $@
+$(VRD)/rust/bindings/bindings_helpers_generated.rs: $(VENDOR)/helpers/helpers.c FORCE
+	$(Q)mkdir -p $(@D)
+	$(call if_changed,bch_vr_bindgen)
+
+$(VRD)/rust/uapi/uapi_generated.rs: private vr-bindgen-flags = $(bch-vr-bindgen-params)
+$(VRD)/rust/uapi/uapi_generated.rs: $(VENDOR)/uapi/uapi_helper.h $(VENDOR)/bindgen_parameters FORCE
+	$(Q)mkdir -p $(@D)
+	$(call if_changed,bch_vr_bindgen)
+
+vr-ffi-pin-externs = --extern ffi=$(VRD)/libffi.rmeta --extern pin_init=$(VRD)/libpin_init.rmeta
+$(VRD)/bindings.o: private vr-name := bindings
+$(VRD)/bindings.o: private vr-flags := --edition=2021 $(vr-base-externs) $(vr-ffi-pin-externs)
+$(VRD)/bindings.o: $(VENDOR)/bindings/lib.rs $(vr-base-deps) $(VRD)/ffi.o $(VRD)/pin_init.o \
+	$(VRD)/rust/bindings/bindings_generated.rs $(VRD)/rust/bindings/bindings_helpers_generated.rs FORCE
+	$(call if_changed,bch_vr_lib)
+
+$(VRD)/uapi.o: private vr-name := uapi
+$(VRD)/uapi.o: private vr-flags := --edition=2021 $(vr-base-externs) $(vr-ffi-pin-externs)
+$(VRD)/uapi.o: $(VENDOR)/uapi/lib.rs $(vr-base-deps) $(VRD)/ffi.o $(VRD)/pin_init.o \
+	$(VRD)/rust/uapi/uapi_generated.rs FORCE
+	$(call if_changed,bch_vr_lib)
+
+# ---- kernel crate (+ arch-generated .rs via RSCPP from the .rs.S templates) -
+vr-arch-gen := generated_arch_static_branch_asm generated_arch_warn_asm generated_arch_reachable_asm
+vr-arch-gen-rs := $(addprefix $(VRD)/rust/kernel/,$(addsuffix .rs,$(vr-arch-gen)))
+$(vr-arch-gen-rs): $(VRD)/rust/kernel/%.rs: $(VENDOR)/kernel/%.rs.S FORCE
+	$(Q)mkdir -p $(@D)
+	$(call if_changed,bch_vr_rscpp)
+
+$(VRD)/kernel.o: private vr-name := kernel
+$(VRD)/kernel.o: private vr-flags := --edition=2021 $(vr-base-externs) $(vr-ffi-pin-externs) \
+	--extern build_error=$(VRD)/libbuild_error.rmeta --extern macros=$(VRD)/libmacros.so \
+	--extern bindings=$(VRD)/libbindings.rmeta --extern uapi=$(VRD)/libuapi.rmeta \
+	--extern zerocopy=$(VRD)/libzerocopy.rmeta --extern zerocopy_derive=$(VRD)/libzerocopy_derive.so
+$(VRD)/kernel.o: $(VENDOR)/kernel/lib.rs $(vr-base-deps) $(VRD)/ffi.o $(VRD)/pin_init.o \
+	$(VRD)/build_error.o $(VRD)/libmacros.so $(VRD)/bindings.o $(VRD)/uapi.o \
+	$(VRD)/zerocopy.o $(VRD)/libzerocopy_derive.so $(vr-arch-gen-rs) FORCE
+	$(call if_changed,bch_vr_lib)
+
+# ---- rust_helper_* C glue (the kernel crate calls these) -------------------
+quiet_cmd_bch_vr_helpers = VHELPER $@
+      cmd_bch_vr_helpers = $(CC) $(c_flags) -I$(VENDOR)/include -c -o $@ $<
+# helpers.c #includes the per-file helper sources (helpers/*.c). List them as
+# explicit prereqs so editing one triggers a rebuild, and use if_changed_dep so
+# the compiler depfile also tracks the kernel headers they pull in.
+$(VRD)/helpers.o: $(VENDOR)/helpers/helpers.c $(wildcard $(VENDOR)/helpers/*.c) FORCE
+	$(Q)mkdir -p $(@D)
+	$(call if_changed_dep,bch_vr_helpers)
+
+# ---- mod.o: bcachefs's Rust glue, linked against the vendored crates --------
+# Unlike the CONFIG_RUST=y path (kbuild's Rust rule + the kernel's rmeta), here
+# we build it ourselves so the externs resolve to $(VRD). It still gets --cfg
+# kernel + the bcachefs codegen output (OUT_DIR) + the small vendored crates.
+quiet_cmd_bch_vr_mod = VRUSTC M $@
+      cmd_bch_vr_mod = RUSTC_BOOTSTRAP=1 OUT_DIR=$(abspath $(obj)/rust) $(RUSTC) \
+	$(bch-vr-tflags) --edition=2021 --cfg kernel \
+	-Zcrate-attr='feature($(rust_allowed_features))' \
+	--crate-type rlib --crate-name bcachefs_mod \
+	--extern core=$(VRD)/libcore.rmeta --extern kernel=$(VRD)/libkernel.rmeta \
+	--extern pin_init=$(VRD)/libpin_init.rmeta --extern bindings=$(VRD)/libbindings.rmeta \
+	$(RUSTFLAGS_mod.o) --emit=obj=$@ $<
+$(obj)/mod.o: $(src)/mod.rs $(obj)/rust/bcachefs.rs $(VRD)/kernel.o \
+	$(obj)/libpaste.so $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o FORCE
+	$(call if_changed,bch_vr_mod)
+
+# ---- bundle ----------------------------------------------------------------
+bch-vr-objs := vrust/core.o vrust/compiler_builtins.o vrust/ffi.o vrust/build_error.o \
+	vrust/zerocopy.o vrust/pin_init.o vrust/bindings.o vrust/uapi.o vrust/kernel.o \
+	vrust/helpers.o
+bcachefs-y += $(bch-vr-objs)
+targets += $(bch-vr-objs) \
+	vrust/libproc_macro2.rmeta vrust/libquote.rmeta vrust/libsyn.rmeta \
+	vrust/libmacros.so vrust/libpin_init_internal.so vrust/libzerocopy_derive.so \
+	rust/bindings/bindings_generated.rs rust/bindings/bindings_helpers_generated.rs \
+	rust/uapi/uapi_generated.rs $(addprefix rust/kernel/,$(addsuffix .rs,$(vr-arch-gen)))

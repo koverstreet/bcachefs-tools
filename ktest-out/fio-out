@@ -1,0 +1,47 @@
+WATCHDOG 1200
+randrw: (g=0): rw=randrw, bs=(R) 4096B-1024KiB, (W) 4096B-1024KiB, (T) 4096B-1024KiB, ioengine=libaio, iodepth=64
+fio-3.41
+Starting 1 process
+randrw: Laying out IO file (1 file / 3500MiB)
+Jobs: 1 (f=1)Jobs: 1 (f=1): [m(1)][11.1%][r=416MiB/s,w=428MiB/s][r=1067,w=1106 IOPS][eta 00m:24s]Jobs: 1 (f=1): [m(1)][15.4%][r=423MiB/s,w=416MiB/s][r=1289,w=1313 IOPS][eta 00m:22s]Jobs: 1 (f=1): [m(1)][18.5%][r=377MiB/s,w=352MiB/s][r=1323,w=1303 IOPS][eta 00m:22s]Jobs: 1 (f=1): [V(1)][22.2%][r=559MiB/s,w=160MiB/s][r=1571,w=632 IOPS][eta 00m:21s] Jobs: 1 (f=1): [V(1)][25.0%][r=648MiB/s][r=1804 IOPS][eta 00m:21s]                 Jobs: 1 (f=1): [V(1)][27.6%][r=649MiB/s][r=2321 IOPS][eta 00m:21s]Jobs: 1 (f=1): [m(1)][32.1%][r=435MiB/s,w=396MiB/s][r=1067,w=894 IOPS][eta 00m:19s]Jobs: 1 (f=1): [m(1)][35.7%][r=411MiB/s,w=424MiB/s][r=1053,w=1099 IOPS][eta 00m:18s]Jobs: 1 (f=1): [m(1)][39.3%][r=401MiB/s,w=404MiB/s][r=1215,w=1270 IOPS][eta 00m:17s]Jobs: 1 (f=1): [m(1)][42.9%][r=401MiB/s,w=370MiB/s][r=1409,w=1372 IOPS][eta 00m:16s]Jobs: 1 (f=1): [V(1)][46.4%][r=554MiB/s,w=154MiB/s][r=1554,w=603 IOPS][eta 00m:15s] Jobs: 1 (f=1): [V(1)][50.0%][r=634MiB/s][r=1767 IOPS][eta 00m:14s]                 Jobs: 1 (f=1): [V(1)][51.7%][r=645MiB/s][r=2278 IOPS][eta 00m:14s]Jobs: 1 (f=1): [m(1)][55.2%][r=439MiB/s,w=379MiB/s][r=1107,w=856 IOPS][eta 00m:13s]Jobs: 1 (f=1): [m(1)][60.7%][r=403MiB/s,w=416MiB/s][r=1041,w=1076 IOPS][eta 00m:11s]Jobs: 1 (f=1): [m(1)][64.3%][r=398MiB/s,w=395MiB/s][r=1179,w=1221 IOPS][eta 00m:10s]Jobs: 1 (f=1): [m(1)][67.9%][r=419MiB/s,w=391MiB/s][r=1461,w=1429 IOPS][eta 00m:09s]Jobs: 1 (f=1): [V(1)][71.4%][r=524MiB/s,w=167MiB/s][r=1487,w=657 IOPS][eta 00m:08s] Jobs: 1 (f=1): [V(1)][72.4%][r=625MiB/s][r=1707 IOPS][eta 00m:08s]                 Jobs: 1 (f=1): [V(1)][75.9%][r=638MiB/s][r=2231 IOPS][eta 00m:07s]Jobs: 1 (f=1): [m(1)][79.3%][r=450MiB/s,w=337MiB/s][r=1215,w=740 IOPS][eta 00m:06s]Jobs: 1 (f=1): [m(1)][82.8%][r=399MiB/s,w=405MiB/s][r=1016,w=1046 IOPS][eta 00m:05s]Jobs: 1 (f=1): [m(1)][89.3%][r=400MiB/s,w=395MiB/s][r=1155,w=1196 IOPS][eta 00m:03s]Jobs: 1 (f=1): [m(1)][89.7%][r=369MiB/s,w=357MiB/s][r=1255,w=1268 IOPS][eta 00m:03s]Jobs: 1 (f=1): [V(1)][96.4%][r=524MiB/s,w=255MiB/s][r=1624,w=990 IOPS][eta 00m:01s] Jobs: 1 (f=1): [V(1)][96.6%][r=652MiB/s][r=1710 IOPS][eta 00m:01s]                 Jobs: 1 (f=1): [V(1)][100.0%][r=643MiB/s][r=2210 IOPS][eta 00m:00s]
+randrw: (groupid=0, jobs=1): err= 0: pid=2147: Sun Jun 21 17:00:02 2026
+  read: IOPS=1477, BW=496MiB/s (520MB/s)(13.7GiB/28219msec)
+    slat (usec): min=3, max=13949, avg=46.07, stdev=324.51
+    clat (usec): min=604, max=85014, avg=28441.85, stdev=8561.87
+     lat (usec): min=637, max=85029, avg=28487.93, stdev=8577.02
+    clat percentiles (usec):
+     |  1.00th=[ 6980],  5.00th=[14746], 10.00th=[18220], 20.00th=[21890],
+     | 30.00th=[24249], 40.00th=[26084], 50.00th=[28181], 60.00th=[30016],
+     | 70.00th=[32113], 80.00th=[34866], 90.00th=[40109], 95.00th=[43779],
+     | 99.00th=[47973], 99.50th=[50594], 99.90th=[55313], 99.95th=[56886],
+     | 99.99th=[68682]
+   bw (  KiB/s): min=231920, max=471576, per=78.47%, avg=398659.00, stdev=53261.91, samples=36
+   iops        : min=  664, max= 1720, avg=1151.97, stdev=231.06, samples=36
+  write: IOPS=1210, BW=404MiB/s (423MB/s)(6991MiB/17311msec); 0 zone resets
+    slat (usec): min=11, max=13827, avg=729.92, stdev=704.58
+    clat (usec): min=136, max=141731, avg=27696.66, stdev=11319.68
+     lat (usec): min=579, max=141965, avg=28426.58, stdev=11413.63
+    clat percentiles (msec):
+     |  1.00th=[    9],  5.00th=[   16], 10.00th=[   18], 20.00th=[   21],
+     | 30.00th=[   23], 40.00th=[   25], 50.00th=[   27], 60.00th=[   29],
+     | 70.00th=[   31], 80.00th=[   33], 90.00th=[   37], 95.00th=[   45],
+     | 99.00th=[   74], 99.50th=[   92], 99.90th=[  128], 99.95th=[  134],
+     | 99.99th=[  142]
+   bw (  KiB/s): min=236408, max=462336, per=96.16%, avg=397652.92, stdev=53413.56, samples=36
+   iops        : min=  724, max= 1646, avg=1163.78, stdev=196.98, samples=36
+  lat (usec)   : 250=0.01%, 750=0.01%, 1000=0.02%
+  lat (msec)   : 2=0.08%, 4=0.27%, 10=1.33%, 20=14.37%, 50=82.35%
+  lat (msec)   : 100=1.46%, 250=0.10%
+  cpu          : usr=80.71%, sys=8.29%, ctx=52239, majf=0, minf=198
+  IO depths    : 1=0.0%, 2=0.1%, 4=0.1%, 8=0.1%, 16=0.2%, 32=0.4%, >=64=99.2%
+     submit    : 0=0.0%, 4=99.9%, 8=0.1%, 16=0.1%, 32=0.0%, 64=0.0%, >=64=0.0%
+     complete  : 0=0.0%, 4=100.0%, 8=0.0%, 16=0.0%, 32=0.0%, 64=0.1%, >=64=0.0%
+     issued rwts: total=41692,20952,0,0 short=0,0,0,0 dropped=0,0,0,0
+     latency   : target=0, window=0, percentile=100.00%, depth=64
+
+Run status group 0 (all jobs):
+   READ: bw=496MiB/s (520MB/s), 496MiB/s-496MiB/s (520MB/s-520MB/s), io=13.7GiB (14.7GB), run=28219-28219msec
+  WRITE: bw=404MiB/s (423MB/s), 404MiB/s-404MiB/s (423MB/s-423MB/s), io=6991MiB (7331MB), run=17311-17311msec
+
+Disk stats (read/write):
+  vdb: ios=0/0, sectors=0/0, merge=0/0, ticks=0/0, in_queue=0, util=0.00%
