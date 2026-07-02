@@ -476,8 +476,24 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 	if (!test_bit(BCH_FS_started, &c->flags))
 		return bch_err_throw(c, EINVAL_ioctl_query_accounting_not_started);
 
-	int ret = copy_from_user_errcode(&arg, user_arg, sizeof(arg)) ?:
-		bch2_fs_accounting_read(c, &accounting, arg.accounting_types_mask) ?:
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	/*
+	 * Per-inode and per-snapshot accounting expose per-object usage - other
+	 * users' file sizes (logical and on-disk, keyed by inode number) and the
+	 * existence and size of snapshots - so they're admin-only. The remaining
+	 * types are fs-wide or per-device aggregates and stay unprivileged, so
+	 * 'bcachefs fs usage' still works for normal users. This ioctl is
+	 * reachable by any user via the file ioctl path, not just the root-owned
+	 * control device.
+	 */
+	unsigned privileged_types = BIT(BCH_DISK_ACCOUNTING_inum) |
+				    BIT(BCH_DISK_ACCOUNTING_snapshot);
+	if ((arg.accounting_types_mask & privileged_types) &&
+	    !capable(CAP_SYS_ADMIN))
+		return bch_err_throw(c, EPERM_non_admin);
+
+	int ret = bch2_fs_accounting_read(c, &accounting, arg.accounting_types_mask) ?:
 		(arg.accounting_u64s * sizeof(u64) < accounting.nr ? -ERANGE : 0) ?:
 		copy_to_user_errcode(&user_arg->accounting, accounting.data, accounting.nr);
 	if (ret)
