@@ -577,7 +577,9 @@ static bool req_dev_sizes_mismatched(struct bch_fs *c, struct alloc_request *req
  *
  *  - copygc_can_make_progress is false: the per-device check (set above by
  *    the caller from bch2_copygc_can_make_progress(ca)) says copygc can't
- *    free buckets here. No reason to wait — copygc isn't going to help.
+ *    free buckets here. No reason to wait — copygc isn't going to help. If the
+ *    caller still has target/all-device retries available, those retries run
+ *    before this check is reached.
  *
  *  - watermark == copygc and data_type != btree: the request itself is
  *    issued at copygc watermark, i.e. it IS the thing trying to free

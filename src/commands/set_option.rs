@@ -13,32 +13,57 @@ fn opt_flags() -> u32 {
     c::opt_flags::OPT_FS as u32 | c::opt_flags::OPT_DEVICE as u32
 }
 
+fn schedule_reconcile_after_offline_io_opt_change(fs: &bcachefs_kernel::fs::Fs) -> Result<()> {
+    unsafe {
+        let _sb_lock = fs.sb_lock();
+
+        let ext_u64s =
+            (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+        let ext: &mut c::bch_sb_field_ext =
+            bcachefs_kernel::sb::io::sb_field_get_minsize(&mut (*fs.raw).disk_sb, ext_u64s)
+                .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
+
+        let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
+        ext.recovery_passes_required[0] |= c::bch2_recovery_passes_to_stable(pass).to_le();
+        fs.write_super();
+    }
+
+    Ok(())
+}
+
 fn set_option_cmd() -> Command {
     Command::new("set-fs-option")
         .about("Set a filesystem option")
-        .long_about("\
+        .long_about(
+            "\
 Set a filesystem or device option on a running filesystem. Changes \
 are persisted to the superblock. Use -d to target a specific device \
 for device-scoped options. See <<sec:options>> for the full list of \
-available options.")
+available options.",
+        )
         .args(bch_option_args(opt_flags(), false))
-        .arg(Arg::new("dev-idx")
-            .short('d')
-            .long("dev-idx")
-            .action(ArgAction::Append)
-            .value_parser(clap::value_parser!(u32))
-            .help("Device index for device-specific options"))
-        .arg(Arg::new("devices")
-            .required(true)
-            .action(ArgAction::Append)
-            .help("Device path(s)"))
+        .arg(
+            Arg::new("dev-idx")
+                .short('d')
+                .long("dev-idx")
+                .action(ArgAction::Append)
+                .value_parser(clap::value_parser!(u32))
+                .help("Device index for device-specific options"),
+        )
+        .arg(
+            Arg::new("devices")
+                .required(true)
+                .action(ArgAction::Append)
+                .help("Device path(s)"),
+        )
 }
 
 fn cmd_set_option(argv: Vec<String>) -> Result<()> {
     let matches = set_option_cmd().get_matches_from(argv);
 
     let devices: Vec<&String> = matches.get_many::<String>("devices").unwrap().collect();
-    let dev_idxs: Vec<u32> = matches.get_many::<u32>("dev-idx")
+    let dev_idxs: Vec<u32> = matches
+        .get_many::<u32>("dev-idx")
         .map(|v| v.copied().collect())
         .unwrap_or_default();
 
@@ -140,7 +165,13 @@ fn set_option_offline(
         let c_value = CString::new(value.as_str())?;
         let mut val: u64 = 0;
         let ret = unsafe {
-            c::bch2_opt_parse(fs.raw, opt, c_value.as_ptr(), &mut val, std::ptr::null_mut())
+            c::bch2_opt_parse(
+                fs.raw,
+                opt,
+                c_value.as_ptr(),
+                &mut val,
+                std::ptr::null_mut(),
+            )
         };
         if ret < 0 {
             eprintln!("Error parsing {name}={value}");
@@ -149,22 +180,34 @@ fn set_option_offline(
 
         if flags & c::opt_flags::OPT_FS as u32 != 0 {
             let ret = unsafe {
-                c::bch2_opt_hook_pre_set(fs.raw, std::ptr::null_mut(), 0, opt_id, val, true, std::ptr::null_mut())
+                c::bch2_opt_hook_pre_set(
+                    fs.raw,
+                    std::ptr::null_mut(),
+                    0,
+                    opt_id,
+                    val,
+                    true,
+                    std::ptr::null_mut(),
+                )
             };
             if ret < 0 {
                 eprintln!("Error setting {name}: {ret}");
                 continue;
             }
-            unsafe { c::bch2_opt_set_sb(fs.raw, std::ptr::null_mut(), opt, val); }
+            let _changed = unsafe { c::bch2_opt_set_sb(fs.raw, std::ptr::null_mut(), opt, val) };
+            if unsafe { c::bch2_opt_is_inode_opt(opt_id) } {
+                schedule_reconcile_after_offline_io_opt_change(&fs)?;
+            }
         }
 
         if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
             let indices: Vec<u32> = if !dev_idxs.is_empty() {
                 dev_idxs.to_vec()
             } else {
-                devices.iter().filter_map(|dev| {
-                    name_to_dev_idx(fs.raw, dev).map(|i| i as u32)
-                }).collect()
+                devices
+                    .iter()
+                    .filter_map(|dev| name_to_dev_idx(fs.raw, dev).map(|i| i as u32))
+                    .collect()
             };
 
             for idx in indices {
@@ -181,7 +224,9 @@ fn set_option_offline(
                     eprintln!("Error setting {name}: {ret}");
                     continue;
                 }
-                unsafe { c::bch2_opt_set_sb(fs.raw, ca, opt, val); }
+                unsafe {
+                    c::bch2_opt_set_sb(fs.raw, ca, opt, val);
+                }
             }
         }
     }
@@ -193,15 +238,16 @@ fn name_to_dev_idx(c: *mut c::bch_fs, name: &str) -> Option<usize> {
     let devs_len = unsafe { (*c).devs.len() };
     for i in 0..devs_len {
         let ca = unsafe { (*c).devs[i] };
-        if ca.is_null() { continue; }
+        if ca.is_null() {
+            continue;
+        }
         // bch_dev.name is a [c_char; 32] array, not a pointer
         let ca_name_bytes = unsafe { &(*ca).name };
         // Find the null terminator
         let len = ca_name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
         // c_char is i8, but from_utf8 wants u8 - use from_raw_parts to reinterpret
-        let ca_name_bytes_u8 = unsafe {
-            std::slice::from_raw_parts(ca_name_bytes[..len].as_ptr() as *const u8, len)
-        };
+        let ca_name_bytes_u8 =
+            unsafe { std::slice::from_raw_parts(ca_name_bytes[..len].as_ptr() as *const u8, len) };
         let ca_name = std::str::from_utf8(ca_name_bytes_u8).ok()?;
         if ca_name == name {
             return Some(i);

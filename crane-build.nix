@@ -56,6 +56,7 @@ let
       # referencing the (cross) host package here drags in a from-source cross
       # rust toolchain (rustc/cargo/rustfmt-nightly).
       BINDGEN = "${pkgs.buildPackages.rust-bindgen}/bin/bindgen";
+      PKG_CONFIG = "${pkgs.buildPackages.pkg-config}/bin/pkg-config";
       PKG_CONFIG_SYSTEMD_SYSTEMDSYSTEMUNITDIR = "${placeholder "out"}/lib/systemd/system";
       PKG_CONFIG_UDEV_UDEVDIR = "${placeholder "out"}/lib/udev";
     };
@@ -70,9 +71,9 @@ let
 
     nativeBuildInputs = [
       jq
-      pkg-config
-      rustPlatform.bindgenHook
-      rust-bindgen
+      pkgs.buildPackages.pkg-config
+      pkgs.buildPackages.rustPlatform.bindgenHook
+      pkgs.buildPackages.rust-bindgen
     ];
 
     buildInputs = [

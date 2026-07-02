@@ -1,9 +1,10 @@
-{ inputs, version }:
+{ inputs, rustVersion, version }:
 final: prev:
 let
   craneBuild = prev.callPackage ./crane-build.nix {
     inherit version;
     inherit (inputs) crane;
+    inherit rustVersion;
   };
 in
 {
