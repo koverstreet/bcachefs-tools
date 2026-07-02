@@ -1,0 +1,645 @@
+// SPDX-License-Identifier: GPL-2.0
+
+#include "bcachefs.h"
+
+#include "alloc/buckets.h"
+
+#include "btree/iter.h"
+
+#include "data/checksum.h"
+#include "data/ec/io.h"
+#include "data/ec/trigger.h"
+#include "data/read.h"
+
+#include "init/error.h"
+#include "init/passes.h"
+#include "sb/errors.h"
+
+#include <linux/string_choices.h>
+
+#ifdef __KERNEL__
+
+#include <linux/raid/pq.h>
+#include <linux/raid/xor.h>
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7,1,0)
+/*
+ * 7.1 replaced xor_blocks() with xor_gen(), which handles MAX_XOR_BLOCKS
+ * chunking internally. Shim for older kernels so the caller below stays
+ * version-agnostic.
+ */
+static inline void xor_gen(void *dest, void **srcs,
+			   unsigned int src_cnt, unsigned int bytes)
+{
+	unsigned int i = 0;
+
+	while (i < src_cnt) {
+		unsigned int nr = min_t(unsigned int, src_cnt - i, MAX_XOR_BLOCKS);
+		xor_blocks(nr, bytes, dest, srcs + i);
+		i += nr;
+	}
+}
+#endif
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7,2,0)
+/*
+ * 7.2 renamed the raid6 public interface (raid6: improve the public interface):
+ * raid6_call.gen_syndrome() -> raid6_gen_syndrome(), and
+ * raid6_{2data,datap}_recov() -> raid6_recov_{2data,datap}(). Map the new names
+ * onto the old API on older kernels so the callers below stay version-agnostic.
+ */
+#define raid6_gen_syndrome(disks, bytes, ptrs)	raid6_call.gen_syndrome(disks, bytes, ptrs)
+#define raid6_recov_2data			raid6_2data_recov
+#define raid6_recov_datap			raid6_datap_recov
+#endif
+
+static void raid5_recov(unsigned disks, unsigned failed_idx,
+			size_t size, void **data)
+{
+	BUG_ON(failed_idx >= disks);
+
+	swap(data[0], data[failed_idx]);
+	memcpy(data[0], data[1], size);
+	xor_gen(data[0], data + 2, disks - 2, size);
+	swap(data[0], data[failed_idx]);
+}
+
+static void raid_gen(int nd, int np, size_t size, void **v)
+{
+	if (np >= 1)
+		raid5_recov(nd + np, nd, size, v);
+	if (np >= 2)
+		raid6_gen_syndrome(nd + np, size, v);
+	BUG_ON(np > 2);
+}
+
+static void raid_rec(int nr, int *ir, int nd, int np, size_t size, void **v)
+{
+	switch (nr) {
+	case 0:
+		break;
+	case 1:
+		if (ir[0] < nd + 1)
+			raid5_recov(nd + 1, ir[0], size, v);
+		else
+			raid6_gen_syndrome(nd + np, size, v);
+		break;
+	case 2:
+		if (ir[1] < nd) {
+			/* data+data failure. */
+			raid6_recov_2data(nd + np, size, ir[0], ir[1], v);
+		} else if (ir[0] < nd) {
+			/* data + p/q failure */
+
+			if (ir[1] == nd) /* data + p failure */
+				raid6_recov_datap(nd + np, size, ir[0], v);
+			else { /* data + q failure */
+				raid5_recov(nd + 1, ir[0], size, v);
+				raid6_gen_syndrome(nd + np, size, v);
+			}
+		} else {
+			raid_gen(nd, np, size, v);
+		}
+		break;
+	default:
+		BUG();
+	}
+}
+
+#else
+
+#include <raid/raid.h>
+
+#endif
+
+void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
+{
+	/*
+	 * Drain in-flight stripe IO before freeing the buffers it reads/writes
+	 * into: the bios are mapped directly at buf->data[] and hold refs on
+	 * buf->io, so freeing first is a use-after-free.
+	 */
+	closure_sync(&buf->io);
+
+	if (buf->c) {
+		struct bch_fs *c = buf->c;
+		buf->c = NULL;
+		scoped_guard(spinlock, &c->ec.stripe_buf_lock) {
+			size_t buf_bytes = ((unsigned long)buf->size << 9) * buf->key.v.nr_blocks;
+			c->ec.stripe_buf_bytes -= buf_bytes;
+			closure_wake_up(&c->ec.stripe_buf_wait);
+		}
+	}
+
+	if (buf->key.k.type == KEY_TYPE_stripe) {
+		for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
+			kvfree(buf->data[i]);
+			buf->data[i] = NULL;
+		}
+	}
+
+	closure_debug_destroy(&buf->io);
+}
+
+int bch2_ec_stripe_buf_init(struct bch_fs *c,
+			    struct ec_stripe_buf *buf,
+			    unsigned offset, unsigned size,
+			    struct closure *cl)
+{
+	unsigned csum_granularity = 1U << buf->key.v.csum_granularity_bits;
+	unsigned end = offset + size;
+
+	BUG_ON(end > le16_to_cpu(buf->key.v.sectors));
+
+	offset	= round_down(offset, csum_granularity);
+	end	= min_t(unsigned, le16_to_cpu(buf->key.v.sectors),
+			round_up(end, csum_granularity));
+
+	unsigned long buf_bytes = ((unsigned long)(end - offset) << 9) *
+		buf->key.v.nr_blocks;
+	unsigned long limit = (totalram_pages() << PAGE_SHIFT) / 100 *
+		c->opts.ec_stripe_buf_limit;
+
+	scoped_guard(spinlock, &c->ec.stripe_buf_lock) {
+		if (cl &&
+		    c->ec.stripe_buf_bytes &&
+		    c->ec.stripe_buf_bytes + buf_bytes > limit) {
+			closure_wait(&c->ec.stripe_buf_wait, cl);
+			return bch_err_throw(c, stripe_buf_mem_blocked);
+		}
+
+		c->ec.stripe_buf_bytes += buf_bytes;
+	}
+
+	buf->c		= c;
+	buf->offset	= offset;
+	buf->size	= end - offset;
+
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
+		buf->data[i] = kvmalloc(buf->size << 9, GFP_KERNEL);
+		if (!buf->data[i]) {
+			bch2_ec_stripe_buf_exit(buf);
+			buf->c = NULL;
+			return bch_err_throw(c, ENOMEM_stripe_buf);
+		}
+	}
+
+	closure_init(&buf->io, NULL);
+
+	return 0;
+}
+
+/* Checksumming: */
+
+static struct bch_csum ec_block_checksum(struct ec_stripe_buf *buf,
+					 unsigned block, unsigned offset)
+{
+	unsigned csum_granularity = 1U << buf->key.v.csum_granularity_bits;
+	unsigned end = buf->offset + buf->size;
+	unsigned len = min(csum_granularity, end - offset);
+
+	BUG_ON(offset >= end);
+	BUG_ON(offset <  buf->offset);
+	BUG_ON(offset & (csum_granularity - 1));
+	BUG_ON(offset + len != le16_to_cpu(buf->key.v.sectors) &&
+	       (len & (csum_granularity - 1)));
+
+	return bch2_checksum(NULL, buf->key.v.csum_type,
+			     null_nonce(),
+			     buf->data[block] + ((offset - buf->offset) << 9),
+			     len << 9);
+}
+
+void bch2_ec_generate_checksums(struct ec_stripe_buf *buf)
+{
+	unsigned csums_per_device = stripe_csums_per_device(&buf->key.v);
+
+	if (!buf->key.v.csum_type)
+		return;
+
+	BUG_ON(buf->offset);
+	BUG_ON(buf->size != le16_to_cpu(buf->key.v.sectors));
+
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
+		for (unsigned j = 0; j < csums_per_device; j++)
+			stripe_csum_set(&buf->key.v, i, j,
+				ec_block_checksum(buf, i, j << buf->key.v.csum_granularity_bits));
+}
+
+static void bch2_ec_validate_checksums(struct bch_fs *c, struct ec_stripe_buf *buf,
+				       bool data_only, enum bch_stripe_buf_err e)
+{
+	unsigned nr_data = buf->key.v.nr_blocks - buf->key.v.nr_redundant;
+	unsigned csum_granularity = 1U << buf->key.v.csum_granularity_bits;
+
+	if (!buf->key.v.csum_type)
+		return;
+
+	for (unsigned i = 0; i < (data_only ? nr_data : buf->key.v.nr_blocks); i++) {
+		unsigned offset = buf->offset;
+		unsigned end = buf->offset + buf->size;
+
+		if (buf->err[e][i])
+			continue;
+
+		while (offset < end) {
+			unsigned j = offset >> buf->key.v.csum_granularity_bits;
+			unsigned len = min(csum_granularity, end - offset);
+			struct bch_csum want = stripe_csum_get(&buf->key.v, i, j);
+			struct bch_csum got = ec_block_checksum(buf, i, offset);
+
+			if (bch2_crc_cmp(want, got)) {
+				buf->err[e][i] = bch_err_throw(c, stripe_read_csum_err);
+				buf->csum_good[i] = want;
+				buf->csum_bad[i] = got;
+
+				/*
+				 * Can't error on invalid device, we no longer
+				 * have the bkey locked
+				 */
+				CLASS(bch2_dev_tryget_noerror, ca)(c, buf->key.v.ptrs[i].dev);
+				if (ca)
+					bch2_io_error(ca, BCH_MEMBER_ERROR_checksum);
+				break;
+			}
+
+			offset += len;
+		}
+	}
+}
+
+void bch2_ec_generate_ec(struct ec_stripe_buf *buf)
+{
+	unsigned nr_data = buf->key.v.nr_blocks - buf->key.v.nr_redundant;
+	unsigned bytes = le16_to_cpu(buf->key.v.sectors) << 9;
+
+	raid_gen(nr_data, buf->key.v.nr_redundant, bytes, buf->data);
+}
+
+/* Recov */
+
+static int bch2_ec_do_recov(struct bch_fs *c, struct ec_stripe_buf *buf)
+{
+	unsigned failed[BCH_BKEY_PTRS_MAX], nr_failed = 0;
+	unsigned nr_data = buf->key.v.nr_blocks - buf->key.v.nr_redundant;
+	unsigned bytes = buf->size << 9;
+
+	if (ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV) > buf->key.v.nr_redundant)
+		return bch_err_throw(c, stripe_reconstruct_insufficient_blocks);
+
+	for (unsigned i = 0; i < nr_data; i++)
+		if (buf->err[STRIPE_BUF_PRE_RECOV][i])
+			failed[nr_failed++] = i;
+
+	raid_rec(nr_failed, failed, nr_data, buf->key.v.nr_redundant, bytes, buf->data);
+
+	bch2_ec_validate_checksums(c, buf, true, STRIPE_BUF_POST_RECOV);
+
+	return ec_nr_failed(buf, STRIPE_BUF_POST_RECOV)
+		? bch_err_throw(c, stripe_read_csum_err)
+		: 0;
+}
+
+/* Validate */
+
+/* A stale read on an unpinned stripe is an expected race, not an error */
+static bool stripe_read_maybe_spurious(struct ec_stripe_buf *buf, unsigned i,
+				       int err, bool is_open)
+{
+	return err == -BCH_ERR_stripe_read_ptr_stale &&
+		!test_bit(i, buf->stale) &&
+		!is_open;
+}
+
+static __cold void __stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
+				      struct ec_stripe_buf *buf,
+				      enum bch_stripe_buf_err e, bool is_open)
+{
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
+		int err = buf->err[e][i];
+		if (err) {
+			CLASS(bch2_dev_tryget_noerror, ca)(c, buf->key.v.ptrs[i].dev);
+			prt_printf(out, "block %u %s: %s",
+				   i,
+				   ca ? ca->name : "(invalid device)",
+				   bch2_err_str(err));
+
+			if (err == -BCH_ERR_stripe_read_csum_err) {
+				prt_str(out, " expected ");
+				bch2_csum_to_text(out, buf->key.v.csum_type, buf->csum_good[i]);
+				prt_str(out, " got ");
+				bch2_csum_to_text(out, buf->key.v.csum_type, buf->csum_bad[i]);
+			}
+
+			if (e == STRIPE_BUF_PRE_RECOV &&
+			    stripe_read_maybe_spurious(buf, i, err, is_open))
+				prt_str(out, " (possibly spurious: stripe not pinned)");
+
+			prt_newline(out);
+		}
+	}
+}
+
+static __cold void stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
+				    struct ec_stripe_buf *buf, bool is_open)
+{
+	if (ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV)) {
+		prt_printf(out, "Errors pre recovery\n");
+		scoped_guard(printbuf_indent, out)
+			__stripe_buf_errs_to_text(out, c, buf, STRIPE_BUF_PRE_RECOV, is_open);
+	}
+
+	if (ec_nr_failed(buf, STRIPE_BUF_POST_RECOV)) {
+		prt_printf(out, "Errors post recovery\n");
+		scoped_guard(printbuf_indent, out)
+			__stripe_buf_errs_to_text(out, c, buf, STRIPE_BUF_POST_RECOV, is_open);
+	}
+}
+
+static int bch2_stripe_buf_validate(struct bch_fs *c, struct ec_stripe_buf *buf, bool is_open)
+{
+	closure_sync(&buf->io);
+
+	bch2_ec_validate_checksums(c, buf, false, STRIPE_BUF_PRE_RECOV);
+	if (!ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV))
+		return 0;
+
+	bool have_stale_race = false;
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
+		int err = buf->err[STRIPE_BUF_PRE_RECOV][i];
+
+		bool stale_race = stripe_read_maybe_spurious(buf, i, err, is_open);
+		have_stale_race |= stale_race;
+
+		/*
+		 * A pinned stripe's blocks cannot legitimately go stale under
+		 * us - that's the allocator invalidating a bucket a pinned
+		 * stripe references, i.e. a filesystem inconsistency: count
+		 * it so it's visible in the field and fails tests. Device
+		 * offline and IO errors are environmental, not
+		 * inconsistencies, and stale reads on unpinned stripes are
+		 * an expected race - neither counts.
+		 */
+		if (is_open && err == -BCH_ERR_stripe_read_ptr_stale)
+			bch2_sb_error_count(c, BCH_FSCK_ERR_stripe_read_ptr_stale);
+	}
+	int ret = bch2_ec_do_recov(c, buf);
+
+	if (ret && !is_open && have_stale_race)
+		ret = bch_err_throw(c, stripe_reconstruct_stale_race);
+	return ret;
+}
+
+int bch2_stripe_buf_validate_msg(struct bch_fs *c, struct ec_stripe_buf *buf, bool is_open)
+{
+	int ret = bch2_stripe_buf_validate(c, buf, is_open);
+
+	if (!ret &&
+	    !ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV) &&
+	    !ec_nr_failed(buf, STRIPE_BUF_POST_RECOV))
+		return 0;
+
+	if (ret == -BCH_ERR_stripe_reconstruct_stale_race)
+		return ret;
+
+	CLASS(bch_log_msg, msg)(c);
+
+	prt_printf(&msg.m, "%ps(): error reading stripe:\n", (void *) _RET_IP_);
+	bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&buf->key.k_i));
+	prt_newline(&msg.m);
+
+	stripe_buf_errs_to_text(&msg.m, c, buf, is_open);
+
+	if (!ret) {
+		prt_printf(&msg.m, "successful reconstruct\n");
+		/* Separate ratelimit state for hard errors */
+		msg.m.suppress = bch2_ratelimit(c);
+	} else {
+		prt_printf(&msg.m, "error: %s\n", bch2_err_str(ret));
+		msg.m.suppress = bch2_ratelimit(c);
+	}
+
+	return ret;
+}
+
+/* IO: */
+
+static void ec_block_endio(struct bio *bio)
+{
+	struct ec_bio *ec_bio = container_of(bio, struct ec_bio, bio);
+	struct ec_stripe_buf *buf = ec_bio->buf;
+	struct bch_extent_ptr *ptr = &buf->key.v.ptrs[ec_bio->idx];
+	struct bch_dev *ca = ec_bio->ca;
+	int rw = ec_bio->rw;
+	unsigned ref = rw == READ
+		? (unsigned) BCH_DEV_READ_REF_ec_block
+		: (unsigned) BCH_DEV_WRITE_REF_ec_block;
+
+	bch2_account_io_completion(ca, bio_data_dir(bio),
+				   ec_bio->submit_time, !bio->bi_status);
+
+	if (bio->bi_status)
+		buf->err[STRIPE_BUF_PRE_RECOV][ec_bio->idx] = -blk_status_to_bch_err(bio->bi_status);
+	else if (dev_ptr_stale(ca, ptr))
+		buf->err[STRIPE_BUF_PRE_RECOV][ec_bio->idx] = bch_err_throw(ca->fs, stripe_read_ptr_stale);
+
+	bio_put(&ec_bio->bio);
+	enumerated_ref_put(&ca->io_ref[rw], ref);
+	closure_put(&buf->io);
+}
+
+void bch2_ec_block_io(struct bch_fs *c, struct ec_stripe_buf *buf,
+		      blk_opf_t opf, unsigned idx)
+{
+	bch2_ec_block_io_range(c, buf, opf, idx, buf->offset, buf->size);
+}
+
+void bch2_ec_block_io_range(struct bch_fs *c, struct ec_stripe_buf *buf,
+			    blk_opf_t opf, unsigned idx,
+			    unsigned sector_offset, unsigned sectors)
+{
+	unsigned offset = 0, bytes = sectors << 9;
+	struct bch_extent_ptr *ptr = &buf->key.v.ptrs[idx];
+	unsigned nr_data = buf->key.v.nr_blocks - buf->key.v.nr_redundant;
+	enum bch_data_type data_type = idx < nr_data
+		? BCH_DATA_user
+		: BCH_DATA_parity;
+	int rw = op_is_write(opf);
+	unsigned ref = rw == READ
+		? (unsigned) BCH_DEV_READ_REF_ec_block
+		: (unsigned) BCH_DEV_WRITE_REF_ec_block;
+
+	struct bch_dev *ca = bch2_dev_get_ioref(c, ptr->dev, rw, ref);
+	if (!ca) {
+		buf->err[STRIPE_BUF_PRE_RECOV][idx] = bch_err_throw(c, stripe_read_device_offline);
+		return;
+	}
+
+	int stale = dev_ptr_stale(ca, ptr);
+	if (stale) {
+		buf->err[STRIPE_BUF_PRE_RECOV][idx] = bch_err_throw(c, stripe_read_ptr_stale);
+		enumerated_ref_put(&ca->io_ref[rw], ref);
+		return;
+	}
+
+	this_cpu_add(ca->io_done->sectors[rw][data_type], sectors);
+
+	while (offset < bytes) {
+		unsigned nr_iovecs = min_t(size_t, BIO_MAX_VECS,
+					   DIV_ROUND_UP(bytes, PAGE_SIZE));
+		unsigned b = min_t(size_t, bytes - offset,
+				   nr_iovecs << PAGE_SHIFT);
+		struct ec_bio *ec_bio;
+
+		ec_bio = container_of(bio_alloc_bioset(ca->disk_sb.bdev,
+						       nr_iovecs,
+						       opf,
+						       GFP_KERNEL,
+						       &c->ec.block_bioset),
+				      struct ec_bio, bio);
+
+		ec_bio->ca			= ca;
+		ec_bio->buf			= buf;
+		ec_bio->idx			= idx;
+		ec_bio->rw			= rw;
+		ec_bio->submit_time		= local_clock();
+
+		ec_bio->bio.bi_iter.bi_sector	= ptr->offset + sector_offset + (offset >> 9);
+		ec_bio->bio.bi_end_io		= ec_block_endio;
+
+		bch2_bio_map(&ec_bio->bio, buf->data[idx] + ((sector_offset - buf->offset) << 9) + offset, b);
+
+		closure_get(&buf->io);
+		enumerated_ref_get(&ca->io_ref[rw], ref);
+
+		submit_bio(&ec_bio->bio);
+
+		offset += b;
+	}
+
+	enumerated_ref_put(&ca->io_ref[rw], ref);
+}
+
+void bch2_stripe_buf_read(struct bch_fs *c, struct ec_stripe_buf *buf)
+{
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
+		bch2_ec_block_io(c, buf, REQ_OP_READ, i);
+}
+
+/* recovery read path: */
+
+static int get_stripe_key_trans(struct btree_trans *trans, u64 idx,
+				struct ec_stripe_buf *stripe)
+{
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, idx), BTREE_ITER_slots);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+	if (k.k->type != KEY_TYPE_stripe)
+		return -ENOENT;
+	bkey_reassemble(&stripe->key.k_i, k);
+	return 0;
+}
+
+int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
+			struct bkey_s_c orig_k,
+			struct printbuf *msg)
+{
+	/*
+	 * We need the original extent to read to still be locked when we check
+	 * for non-spurious stale stripe pointers
+	 */
+	try(bch2_trans_relock(trans));
+
+	struct bch_fs *c = trans->c;
+
+	BUG_ON(!rbio->pick.has_ec);
+
+	struct ec_stripe_buf *buf __free(ec_stripe_buf_free) = kzalloc(sizeof(*buf), GFP_KERNEL);
+	if (!buf) {
+		prt_printf(msg, "error allocating struct ec_stripe_buf\n");
+		return bch_err_throw(c, stripe_reconstruct_enomem);
+	}
+
+	int ret = lockrestart_do(trans, get_stripe_key_trans(trans, rbio->pick.ec.idx, buf));
+	if (ret) {
+		prt_printf(msg, "error looking up stripe\n");
+		return bch_err_throw(c, stripe_reconstruct);
+	}
+
+	if (!bch2_ptr_matches_stripe(&buf->key.v, rbio->pick)) {
+		prt_printf(msg, "pointer doesn't match stripe\n");
+		bch2_bkey_val_to_text(msg, c, bkey_i_to_s_c(&buf->key.k_i));
+		prt_newline(msg);
+		return bch_err_throw(c, stripe_reconstruct);
+	}
+
+	unsigned offset = rbio->bio.bi_iter.bi_sector - buf->key.v.ptrs[rbio->pick.ec.block].offset;
+	if (offset + bio_sectors(&rbio->bio) > le16_to_cpu(buf->key.v.sectors)) {
+		prt_printf(msg, "read is biffer than stripe\n");
+		bch2_bkey_val_to_text(msg, c, bkey_i_to_s_c(&buf->key.k_i));
+		prt_newline(msg);
+		return bch_err_throw(c, stripe_reconstruct);
+	}
+
+	/*
+	 * Check for stale pointers while we still have btree locks held: the
+	 * stripe key was just read under lock, so it's the current live key,
+	 * and a live stripe key referencing a stale-gen bucket is an
+	 * allocator inconsistency regardless of whether the stripe is pinned
+	 * - hence no is_open gating here, unlike the validate-time check.
+	 * Lock-currency is the liveness witness at this site; the pin is the
+	 * witness post-IO in bch2_stripe_buf_validate(), where the key may
+	 * have been legitimately deleted while the IO was in flight.
+	 */
+	bool have_stale = false;
+	scoped_guard(rcu) {
+		for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
+			struct bch_dev *ca = bch2_dev_rcu_noerror(c, buf->key.v.ptrs[i].dev);
+			if (ca && dev_ptr_stale(ca, &buf->key.v.ptrs[i])) {
+				__set_bit(i, buf->stale);
+				have_stale = true;
+			}
+		}
+	}
+
+	if (have_stale) {
+		CLASS(bch_log_msg_ratelimited, msg)(c);
+		prt_printf(&msg.m, "Stripe with stale pointer(s):\n");
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&buf->key.k_i));
+
+		bch2_count_fsck_err(c, stale_dirty_ptr, &msg.m);
+		bch2_run_explicit_recovery_pass(c, &msg.m, BCH_RECOVERY_PASS_check_allocations, 0);
+	}
+
+	/* Don't hold btree locks for stripe buffer allocations, or IO */
+	bch2_trans_unlock(trans);
+
+	ret = bch2_ec_stripe_buf_init(c, buf, offset, bio_sectors(&rbio->bio), NULL);
+	if (ret) {
+		prt_printf(msg, "error allocating stripe data buffers\n");
+		bch2_bkey_val_to_text(msg, c, bkey_i_to_s_c(&buf->key.k_i));
+		prt_newline(msg);
+		return bch_err_throw(c, stripe_reconstruct_enomem);
+	}
+
+	bch2_stripe_buf_read(c, buf);
+
+	ret = bch2_stripe_buf_validate(c, buf, false);
+	if (ret == -BCH_ERR_stripe_reconstruct_stale_race)
+		return bch_err_throw(c, data_read_ptr_stale_race);
+
+	if (!ret)
+		memcpy_to_bio(&rbio->bio, rbio->bio.bi_iter,
+			      buf->data[rbio->pick.ec.block] + ((offset - buf->offset) << 9));
+
+	stripe_buf_errs_to_text(msg, c, buf, false);
+
+	if (!ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV) &&
+	    !ec_nr_failed(buf, STRIPE_BUF_POST_RECOV))
+		;
+	else if (!ret)
+		prt_printf(msg, "successful reconstruct\n");
+	else
+		prt_printf(msg, "error: %s\n", bch2_err_str(ret));
+
+	return ret;
+}

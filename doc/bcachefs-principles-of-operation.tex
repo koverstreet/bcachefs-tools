@@ -6,6 +6,7 @@
 \usepackage{bookmark}
 \usepackage{longtable}
 \usepackage{upquote}
+\DeclareUnicodeCharacter{2194}{\ensuremath{\leftrightarrow}}
 
 % Include auto-generated fragments from bch-docgen.
 % Run: cargo run -p bch-docgen
@@ -800,6 +801,35 @@ bcachefs filesystem. After migration, \texttt{bcachefs migrate-superblock}
 writes a standard superblock so the filesystem can be mounted normally.
 Migration from btrfs is not currently supported because its FIEMAP
 implementation does not report which device an extent resides on.
+
+For planning a staged migration, separate three cases:
+
+\begin{itemize}
+\item \textbf{Converting an existing filesystem in place.}
+  Use \texttt{bcachefs migrate} when the source filesystem and block-device
+  stack are supported. This avoids building a second full-size pool, but the
+  source filesystem remains the rollback boundary until
+  \texttt{migrate-superblock} is completed.
+\item \textbf{Juggling disks into a new pool.}
+  If an in-place conversion is not possible, create the new bcachefs filesystem
+  on the devices you can free first, copy data over, then add more devices as
+  they become available. New writes use the current target, replication, and
+  erasure-coding options; existing data that does not match the new policy is
+  repaired by reconcile in the background.
+\item \textbf{Changing layout after data already exists.}
+  To change from replicated data to erasure coding, increase redundancy, or
+  widen EC stripes, change the relevant file or directory IO options, then let
+  reconcile rewrite old extents. For example, moving from two replicated copies
+  to RAID5-style EC means enabling \texttt{erasure\_code} and using
+  \texttt{data\_replicas=2}; moving to RAID6-style EC uses
+  \texttt{data\_replicas=3}. Higher parity counts are not currently supported.
+\end{itemize}
+
+Use \texttt{bcachefs fs usage} to see which layouts still exist on disk, and
+\texttt{bcachefs reconcile status} or \texttt{bcachefs reconcile wait} to track
+the rewrite. Reconcile can only make progress when the requested policy is
+possible with the currently online devices and free space; otherwise the work
+is left pending until the device topology changes.
 
 \subsection{Images}
 

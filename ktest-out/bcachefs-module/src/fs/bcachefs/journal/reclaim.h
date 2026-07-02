@@ -1,0 +1,154 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _BCACHEFS_JOURNAL_RECLAIM_H
+#define _BCACHEFS_JOURNAL_RECLAIM_H
+
+#include "alloc/replicas.h"
+#include "sb/members.h"
+
+#define JOURNAL_PIN	(32 * 1024)
+
+static inline void journal_reclaim_kick(struct journal *j)
+{
+	struct task_struct *p = READ_ONCE(j->reclaim_thread);
+
+	j->reclaim_kicked = true;
+	if (p)
+		wake_up_process(p);
+}
+
+unsigned bch2_journal_dev_buckets_available(struct journal *,
+					    struct journal_device *,
+					    enum journal_space_from);
+void bch2_journal_set_watermark(struct journal *);
+void bch2_journal_space_available(struct journal *);
+
+static inline void journal_pin_list_init(struct journal_entry_pin_list *p, int count)
+{
+	for (unsigned i = 0; i < ARRAY_SIZE(p->unflushed); i++)
+		INIT_LIST_HEAD(&p->unflushed[i]);
+	INIT_LIST_HEAD(&p->flushed);
+	atomic_set(&p->count, count);
+	p->unreplayed = false;
+	p->devs.nr = 0;
+	p->bytes = 0;
+}
+
+static inline bool journal_pin_has_dev(const struct journal_entry_pin_list *p, unsigned dev)
+{
+	for (unsigned i = 0; i < p->devs.nr; i++)
+		if (p->devs.data[i] == dev)
+			return true;
+	return false;
+}
+
+/*
+ * The pin only stores the device list (the key); the refcount lives in the
+ * superblock replicas table. Rebuild a replicas entry from the compact list
+ * for the get/put/eq/to_text calls.
+ */
+static inline void journal_pin_devs_to_replicas(union bch_replicas_padded *r,
+						const struct journal_entry_pin_list *p)
+{
+	struct bch_devs_list devs = {};
+	for (unsigned i = 0; i < p->devs.nr; i++)
+		bch2_dev_list_add_dev(&devs, p->devs.data[i]);
+	bch2_devlist_to_replicas(&r->e, BCH_DATA_journal, devs);
+}
+
+/* @devs is bounded by metadata_replicas <= BCH_REPLICAS_MAX (journal write) */
+static inline void journal_pin_set_devs(struct journal_entry_pin_list *p,
+					const struct bch_devs_list *devs)
+{
+	p->devs.nr = 0;
+	for (unsigned i = 0; i < devs->nr; i++)
+		p->devs.data[p->devs.nr++] = devs->data[i];
+}
+
+static inline bool journal_pin_active(struct journal_entry_pin *pin)
+{
+	return pin->seq != 0;
+}
+
+static inline struct journal_entry_pin_list *
+journal_seq_pin(struct journal *j, u64 seq)
+{
+	lockdep_assert_held(&j->pin_resize_lock);
+	EBUG_ON(seq < j->pin.front || seq >= j->pin.back);
+
+	return &fifo_entry(&j->pin, seq);
+}
+
+void bch2_journal_update_last_seq(struct journal *);
+
+typedef struct {
+	unsigned			nr_refs;
+	union bch_replicas_padded	replicas;
+} replicas_entry_refs;
+
+DEFINE_DARRAY_PREALLOCATED(replicas_entry_refs, 16);
+
+int bch2_journal_update_last_seq_ondisk(struct journal *, u64,
+					darray_replicas_entry_refs *);
+
+static inline bool __bch2_journal_pin_put(struct journal *j, u64 seq)
+{
+	struct journal_entry_pin_list *pin_list = journal_seq_pin(j, seq);
+
+	return atomic_dec_and_test(&pin_list->count);
+}
+
+void bch2_journal_replay_pins_put(struct journal *, u64);
+void bch2_journal_pin_drop(struct journal *, struct journal_entry_pin *);
+
+void bch2_journal_pin_set(struct journal *, u64, struct journal_entry_pin *,
+			  journal_pin_flush_fn);
+
+static inline void bch2_journal_pin_add(struct journal *j, u64 seq,
+					struct journal_entry_pin *pin,
+					journal_pin_flush_fn flush_fn)
+{
+	if (unlikely(!journal_pin_active(pin) || pin->seq > seq))
+		bch2_journal_pin_set(j, seq, pin, flush_fn);
+}
+
+void bch2_journal_pin_copy(struct journal *,
+			   struct journal_entry_pin *,
+			   struct journal_entry_pin *,
+			   journal_pin_flush_fn);
+
+static inline void bch2_journal_pin_update(struct journal *j, u64 seq,
+					   struct journal_entry_pin *pin,
+					   journal_pin_flush_fn flush_fn)
+{
+	if (unlikely(!journal_pin_active(pin) || pin->seq < seq))
+		bch2_journal_pin_set(j, seq, pin, flush_fn);
+}
+
+void bch2_journal_pin_flush(struct journal *, struct journal_entry_pin *);
+
+void bch2_journal_discard_work(struct work_struct *);
+void bch2_journal_do_discards(struct journal *);
+int bch2_journal_reclaim(struct journal *);
+
+void bch2_journal_reclaim_stop(struct journal *);
+int bch2_journal_reclaim_start(struct journal *);
+
+bool bch2_journal_flush_pins(struct journal *, u64);
+
+static inline bool bch2_journal_flush_all_pins(struct journal *j)
+{
+	return bch2_journal_flush_pins(j, U64_MAX);
+}
+
+static inline bool bch2_journal_flush_outstanding_pins(struct journal *j)
+{
+	return bch2_journal_flush_pins(j, journal_cur_seq(j));
+}
+
+int bch2_journal_flush_device_pins(struct journal *, int);
+
+bool bch2_journal_seq_pins_to_text(struct printbuf *, struct journal *, u64 *);
+void bch2_journal_pins_to_text(struct printbuf *, struct journal *, unsigned);
+void bch2_journal_reclaim_to_text(struct printbuf *, struct journal *);
+
+#endif /* _BCACHEFS_JOURNAL_RECLAIM_H */
