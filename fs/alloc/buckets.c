@@ -416,9 +416,17 @@ static int bch2_trigger_stripe_ptr(struct btree_trans *trans,
 		}
 
 		if (!bch2_ptr_matches_stripe(&s->v, p)) {
-			bch2_trans_inconsistent(trans,
-				"stripe pointer doesn't match stripe %llu",
-				(u64) p.ec.idx);
+			CLASS(bch_log_msg_ratelimited, msg)(c);
+			prt_printf(&msg.m, "stripe pointer doesn't match stripe %llu\n  while marking ",
+				   (u64) p.ec.idx);
+			bch2_bkey_val_to_text(&msg.m, c, k);
+			prt_newline(&msg.m);
+
+			bch2_count_fsck_err(c, stripe_update_stale_stripe_ptr, &msg.m);
+
+			try(bch2_run_explicit_recovery_pass(c, &msg.m,
+					BCH_RECOVERY_PASS_check_allocations, 0));
+
 			return bch_err_throw(c, trigger_stripe_pointer);
 		}
 
