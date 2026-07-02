@@ -421,6 +421,7 @@ static inline struct bch_member_cpu bch2_mi_to_cpu(struct bch_member *mi)
 		.bucket_size	= le16_to_cpu(mi->bucket_size),
 		.group		= BCH_MEMBER_GROUP(mi),
 		.state		= BCH_MEMBER_STATE(mi),
+		.needs_reconcile_scan = BCH_MEMBER_NEEDS_RECONCILE_SCAN(mi),
 		.discard	= BCH_MEMBER_DISCARD(mi),
 		.data_allowed	= BCH_MEMBER_DATA_ALLOWED(mi),
 		.durability	= BCH_MEMBER_DURABILITY(mi)
