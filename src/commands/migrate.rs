@@ -111,6 +111,22 @@ fn dev_t_to_path(dev: libc::dev_t) -> Result<String> {
     Ok(format!("/dev/{}", name.to_string_lossy()))
 }
 
+fn migrate_dev_path(dev: libc::dev_t, override_path: Option<&str>) -> Result<String> {
+    if let Some(path) = override_path {
+        use std::os::unix::fs::FileTypeExt;
+
+        let meta = fs::metadata(path)
+            .map_err(|e| anyhow!("Error looking up device {}: {}", path, e))?;
+        if !meta.file_type().is_block_device() {
+            bail!("{} is not a block device", path);
+        }
+
+        Ok(path.to_string())
+    } else {
+        dev_t_to_path(dev)
+    }
+}
+
 /// Check if a path is a filesystem mount point.
 fn path_is_fs_root(path: &str) -> Result<bool> {
     let mountinfo = fs::read_to_string("/proc/self/mountinfo")
@@ -303,6 +319,7 @@ Options:
   -f fs                        Root of filesystem to migrate(s)
       --encrypted              Enable whole filesystem encryption (chacha20/poly1305)
       --no_passphrase          Store master encryption key unencrypted in superblock
+  -d, --dev dev                Backing block device for filesystems with synthetic st_dev
   -F                           Force, even if metadata file already exists
   -h, --help                   Display this help and exit
 
@@ -316,6 +333,7 @@ fn migrate_fs(
     mut fs_opts: c::bch_opts,
     format_opts: c::format_opts,
     force: bool,
+    backing_dev_path: Option<&str>,
 ) -> Result<()> {
     if !path_is_fs_root(fs_path)? {
         bail!("{} is not a filesystem root", fs_path);
@@ -339,8 +357,9 @@ fn migrate_fs(
 
     let fs_dev = fs_meta.dev();
 
-    // Find the underlying block device
-    let dev_path = dev_t_to_path(fs_dev)?;
+    // Find the underlying block device. Some filesystems, such as btrfs, may
+    // report a synthetic st_dev that cannot be resolved through /sys/dev/block.
+    let dev_path = migrate_dev_path(fs_dev, backing_dev_path)?;
 
     // Set up DevOpts and open the device
     let mut c_dev = DevOpts::new(CString::new(dev_path.as_str())?);
@@ -591,6 +610,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
     let mut encrypted = false;
     let mut no_passphrase = false;
     let mut force = false;
+    let mut backing_dev_path: Option<String> = None;
 
     let mut fs_opts: c::bch_opts = Default::default();
     let mut deferred_opts: Vec<(c::bch_opt_id, String)> = Vec::new();
@@ -631,6 +651,9 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
             match name.as_str() {
                 "encrypted" => encrypted = true,
                 "no_passphrase" => no_passphrase = true,
+                "dev" => {
+                    backing_dev_path = Some(take_opt_value(inline_val, &argv, &mut i, raw_name)?);
+                }
                 "help" => {
                     migrate_usage();
                     return Ok(());
@@ -650,6 +673,13 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
                         bail!("-f requires a value");
                     }
                     fs_path = Some(argv[i].clone());
+                }
+                b'd' => {
+                    i += 1;
+                    if i >= argv.len() {
+                        bail!("-d requires a value");
+                    }
+                    backing_dev_path = Some(argv[i].clone());
                 }
                 b'F' => force = true,
                 b'h' => {
@@ -693,7 +723,14 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
         fs_opt_strs.set(id, &cstr);
     }
 
-    let result = migrate_fs(&fs_path, fs_opt_strs, fs_opts, fmt_opts, force);
+    let result = migrate_fs(
+        &fs_path,
+        fs_opt_strs,
+        fs_opts,
+        fmt_opts,
+        force,
+        backing_dev_path.as_deref(),
+    );
 
     fs_opt_strs.free();
 
