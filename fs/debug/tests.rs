@@ -6,7 +6,10 @@ use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
     BtreeTrans, CommitFlags, CommitOpts, TransAttempt, TransError, UpdateTriggerFlags,
 };
-use crate::data::extents::bkey_ptrs_mut;
+use crate::data::extents::{
+    bkey_extent_entries_mut, bkey_extent_entries_sc, bkey_ptrs_mut, entry_stripe_ptr_mut,
+    extent_entry_type,
+};
 use crate::errcode::{
     bch_err_throw,
     bch_errcode,
@@ -445,6 +448,66 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
     })
 }
 
+/// Error injector: corrupt one extent's stripe pointer so it no longer
+/// matches its stripe, reproducing the "stripe pointer doesn't match stripe"
+/// inconsistency (as seen in the field on d5cf3484) for iterating on the
+/// erasure-coding repair path without a large real filesystem.
+///
+/// Walks the extents btree for the first extent carrying a stripe_ptr entry
+/// and bumps that entry's block index. `bch2_ptr_matches_stripe()` then fails
+/// against the (still-present, so the error names it) stripe, while the data
+/// pointer's generation is left valid against its bucket -- so the mismatch
+/// surfaces as the stripe inconsistency and not as a stale pointer.
+///
+/// The update runs with triggers disabled (`NORUN`) so the bad key is written
+/// verbatim, exactly as an on-disk inconsistency fsck must later repair. The
+/// caller must lay down erasure-coded data first (see ec.ktest); this errors
+/// out if no striped extent is found.
+fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
+    const STRIPE_PTR: u32 = c::bch_extent_entry_type::BCH_EXTENT_ENTRY_stripe_ptr as u32;
+
+    let trans = BtreeTrans::new(fs);
+    let mut iter = BtreeIter::new(
+        &trans,
+        c::btree_id::extents,
+        POS_MIN,
+        BtreeIterFlags::INTENT | BtreeIterFlags::ALL_SNAPSHOTS,
+    );
+
+    loop {
+        let outcome = lockrestart_do(&trans, |t| {
+            let Some(k) = iter.peek_max(SPOS_MAX)? else {
+                return t.done(Some(false));
+            };
+
+            let striped = bkey_extent_entries_sc(&k.v())
+                .any(|e| extent_entry_type(e) == STRIPE_PTR);
+            if !striped {
+                return t.done(None);
+            }
+
+            let mut u = t.bkey_make_mut_noupdate(k)?;
+            for entry in bkey_extent_entries_mut(t.fs(), u.as_mut()) {
+                if extent_entry_type(entry) == STRIPE_PTR {
+                    let sp = entry_stripe_ptr_mut(entry);
+                    sp.set_block(sp.block() + 1);
+                    break;
+                }
+            }
+
+            let t = t.update(&mut iter, u, UpdateTriggerFlags::NORUN)?;
+            let t = t.commit(None, NO_ENOSPC)?;
+            t.done(Some(true))
+        })?;
+
+        match outcome {
+            Some(true) => return Ok(()),
+            Some(false) => return fs.throw(ENOENT_bkey_type_mismatch),
+            None => iter.advance(),
+        }
+    }
+}
+
 fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
     let mut cookie = BkeyCookie::new();
     cookie.k_mut().p.snapshot = snapid_hi;
@@ -649,6 +712,7 @@ fn lookup_test(testname: &CStr) -> Option<(&'static [u8], TestFn)> {
         (b"test_extent_create_overlapping", test_extent_create_overlapping),
         (b"test_extent_create_dup", test_extent_create_dup),
         (b"test_btree_ptr_stale_dirty", test_btree_ptr_stale_dirty),
+        (b"test_inject_stripe_ptr_mismatch", test_inject_stripe_ptr_mismatch),
         (b"test_snapshots", test_snapshots),
     ];
 
