@@ -192,6 +192,9 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     if cli.no_mtab {
         debug!("ignoring -n/--no-mtab; mount.bcachefs does not update /etc/mtab");
     }
+    if cli.sloppy {
+        debug!("ignoring -s/--sloppy; bcachefs already ignores unrecognized options");
+    }
 
     let parsed = parse_mountflag_options(&cli.options);
     let opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)
@@ -211,6 +214,14 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     drop(sbs);
 
     if let Some(mountpoint) = cli.mountpoint.as_deref() {
+        if cli.fake {
+            info!(
+                "fake mount (-f/--fake): skipping the mount syscall for {}",
+                mountpoint.to_string_lossy()
+            );
+            return Ok(());
+        }
+
         info!(
             "mounting with params: device: {:?}, target: {}, options: {}",
             devices,
@@ -241,7 +252,7 @@ Use OLD_BLKID_UUID=<uuid> in fstab entries when systemd consumes \
 UUID=<uuid> before the bcachefs mount helper can scan all members.\n\n\
 If the filesystem is encrypted, the passphrase will be looked up in \
 the kernel keyring first; if not found, the user is prompted \
-interactively (or reads from stdin if not a terminal). Use -k or -f \
+interactively (or reads from stdin if not a terminal). Use -k or --passphrase-file \
 to specify alternative unlock methods.")]
 pub struct Cli {
     /// Path to passphrase file
@@ -249,7 +260,7 @@ pub struct Cli {
     /// This can be used to optionally specify a file to read the passphrase
     /// from. An explictly specified key_location/unlock_policy overrides this
     /// argument.
-    #[arg(short = 'f', long)]
+    #[arg(long)]
     passphrase_file: Option<PathBuf>,
 
     /// Passphrase policy to use in case of an encrypted filesystem. If not
@@ -274,6 +285,15 @@ pub struct Cli {
     /// Do not update /etc/mtab; accepted for mount(8) compatibility
     #[arg(short = 'n', long = "no-mtab")]
     no_mtab: bool,
+
+    /// Fake mount: do everything except the mount syscall (mount(8) -f)
+    #[arg(short = 'f', long)]
+    fake: bool,
+
+    /// Ignore unrecognized mount options instead of failing (mount(8) -s).
+    /// bcachefs already ignores unknown options, so this is accepted as a no-op.
+    #[arg(short = 's', long)]
+    sloppy: bool,
 
     #[arg(short = 't', long = "type", default_value = "")]
     fs_type: String,
@@ -312,6 +332,10 @@ fn mount(cli: Cli) -> std::process::ExitCode {
     let module = check_bcachefs_module();
 
     if cli.fs_type == "bcachefs.fuse" {
+        if cli.fake {
+            info!("fake mount (-f/--fake): skipping FUSE mount");
+            return std::process::ExitCode::SUCCESS;
+        }
         #[cfg(feature = "fuse")]
         {
             let fuse_cli = super::fusemount::Cli {
