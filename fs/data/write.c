@@ -2413,9 +2413,8 @@ err:
 
 		/*
 		 * Internal moves can be issued FUA, making the journal's cache
-		 * flush a no-op for them. Off by default: the per-write FUA
-		 * regresses background-move throughput, and the journal flushes
-		 * every device on commit regardless, so durability is unchanged.
+		 * flush a no-op for them. Otherwise, the data update path
+		 * flushes the journal commit that indexes the moved data.
 		 */
 		if ((op->flags & BCH_WRITE_move) && c->opts.move_writes_fua)
 			bio->bi_opf |= REQ_FUA;
