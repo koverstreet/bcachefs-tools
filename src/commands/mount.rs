@@ -295,21 +295,29 @@ fn mount(cli: Cli) -> std::process::ExitCode {
     let module_loaded = check_bcachefs_module();
 
     if cli.fs_type == "bcachefs.fuse" {
-        let fuse_cli = super::fusemount::Cli {
-            options: if cli.options.is_empty() { None } else { Some(cli.options.clone()) },
-            foreground: false,
-            device: cli.dev.clone(),
-            mountpoint: cli.mountpoint.as_ref()
-                .map(|p| p.to_string_lossy().into_owned())
-                .unwrap_or_default(),
-        };
-        return match super::fusemount::cmd_fusemount(fuse_cli) {
-            Ok(()) => std::process::ExitCode::SUCCESS,
-            Err(e) => {
-                error!("FUSE mount failed: {e}");
-                std::process::ExitCode::FAILURE
-            }
-        };
+        #[cfg(feature = "fuse")]
+        {
+            let fuse_cli = super::fusemount::Cli {
+                options: if cli.options.is_empty() { None } else { Some(cli.options.clone()) },
+                foreground: false,
+                device: cli.dev.clone(),
+                mountpoint: cli.mountpoint.as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default(),
+            };
+            return match super::fusemount::cmd_fusemount(fuse_cli) {
+                Ok(()) => std::process::ExitCode::SUCCESS,
+                Err(e) => {
+                    error!("FUSE mount failed: {e}");
+                    std::process::ExitCode::FAILURE
+                }
+            };
+        }
+        #[cfg(not(feature = "fuse"))]
+        {
+            error!("FUSE support not compiled in (build with the 'fuse' feature)");
+            return std::process::ExitCode::FAILURE;
+        }
     }
 
     // TODO: centralize this on the top level CLI

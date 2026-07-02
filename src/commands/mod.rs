@@ -96,6 +96,7 @@ pub mod format;
 pub mod format_util;
 pub mod fs_usage;
 pub mod fsck;
+#[cfg(feature = "fuse")]
 pub mod fusemount;
 pub mod image;
 pub mod key;
@@ -220,7 +221,12 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
         &set_option::CMD, &counters::CMD, &strip_alloc::CMD,
     ]},
     GroupDef { heading: "Images",                   commands: &[&image::CMD] },
-    GroupDef { heading: "Mount",                    commands: &[&mount::CMD, &fusemount::CMD, &wait_devices::CMD] },
+    GroupDef { heading: "Mount",                    commands: &[
+        &mount::CMD,
+        #[cfg(feature = "fuse")]
+        &fusemount::CMD,
+        &wait_devices::CMD,
+    ]},
     GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &journal_rewind_info::CMD, &recovery_pass::CMD] },
     GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD] },
     GroupDef { heading: "Devices",                  commands: &[&device::CMD] },
