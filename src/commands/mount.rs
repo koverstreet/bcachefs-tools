@@ -76,52 +76,70 @@ fn mount_inner(
     }
 }
 
-/// Parse a comma-separated mount options and split out mountflags and filesystem
-/// specific options.
-pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> (Option<String>, libc::c_ulong) {
-    use either::Either::{Left, Right};
+/// A comma-separated mount option string split into its consumers.
+///
+/// The same option vocabulary feeds three places - the mount(2) syscall
+/// (`flags`), the FUSE mount (`fuse_options`), and the filesystem itself
+/// (`fs_opts`, handed to parse_mount_opts later) - so it's tabulated once in
+/// [`parse_mountflag_options`] rather than re-derived per caller.
+#[derive(Default)]
+pub(crate) struct ParsedMountOptions {
+    /// Filesystem-specific options: everything not consumed as a kernel flag.
+    pub fs_opts:      Option<String>,
+    /// Kernel mount flags for mount(2).
+    pub flags:        libc::c_ulong,
+    /// `flags` expressed as fuser options, for the FUSE path. Flags with no
+    /// fuser equivalent are omitted here but still apply via `flags`.
+    #[cfg(feature = "fuse")]
+    pub fuse_options: Vec<fuser::MountOption>,
+}
 
+/// Parse a comma-separated mount option string, splitting kernel mount flags
+/// (and their fuser equivalents) from filesystem-specific options.
+pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOptions {
     debug!("parsing mount options: {}", options.as_ref());
-    let (opts, flags) = options
-        .as_ref()
-        .split(',')
-        .map(|o| match o {
-            "dirsync" => Left(libc::MS_DIRSYNC),
-            "lazytime" => Left(1 << 25), // MS_LAZYTIME
-            "mand" => Left(libc::MS_MANDLOCK),
-            "noatime" => Left(libc::MS_NOATIME),
-            "nodev" => Left(libc::MS_NODEV),
-            "nodiratime" => Left(libc::MS_NODIRATIME),
-            "noexec" => Left(libc::MS_NOEXEC),
-            "nosuid" => Left(libc::MS_NOSUID),
-            "relatime" => Left(libc::MS_RELATIME),
-            "remount" => Left(libc::MS_REMOUNT),
-            "ro" => Left(libc::MS_RDONLY),
-            "rw" | "" => Left(0),
-            "strictatime" => Left(libc::MS_STRICTATIME),
-            "sync" => Left(libc::MS_SYNCHRONOUS),
-            // Userspace-only fstab options — not passed to the kernel
-            "auto" | "noauto" | "nofail" | "_netdev" |
-            "user" | "nouser" | "users" | "group" | "owner" => Left(0),
-            o if o.starts_with("x-") || o.starts_with("comment=") => Left(0),
-            o => Right(o),
-        })
-        .fold((Vec::new(), 0), |(mut opts, flags), next| match next {
-            Left(f) => (opts, flags | f),
-            Right(o) => {
-                opts.push(o);
-                (opts, flags)
-            }
-        });
 
-    (
-        if opts.is_empty() {
-            None
-        } else {
-            Some(opts.join(","))
-        },
-        flags,
-    )
+    let mut parsed = ParsedMountOptions::default();
+    let mut fs_opts: Vec<&str> = Vec::new();
+
+    // A kernel flag, optionally paired with its fuser option. The fuser arm is
+    // only referenced under the `fuse` feature, so its tokens must live inside
+    // the cfg - hence the macro rather than a plain match value.
+    macro_rules! flag {
+        ($ms:expr) => {{ parsed.flags |= $ms; }};
+        ($ms:expr, $fuse:expr) => {{
+            parsed.flags |= $ms;
+            #[cfg(feature = "fuse")]
+            parsed.fuse_options.push($fuse);
+        }};
+    }
+
+    for opt in options.as_ref().split(',') {
+        match opt {
+            "dirsync"     => flag!(libc::MS_DIRSYNC, fuser::MountOption::DirSync),
+            "lazytime"    => flag!(1 << 25), // MS_LAZYTIME
+            "mand"        => flag!(libc::MS_MANDLOCK),
+            "noatime"     => flag!(libc::MS_NOATIME, fuser::MountOption::NoAtime),
+            "nodev"       => flag!(libc::MS_NODEV, fuser::MountOption::NoDev),
+            "nodiratime"  => flag!(libc::MS_NODIRATIME),
+            "noexec"      => flag!(libc::MS_NOEXEC, fuser::MountOption::NoExec),
+            "nosuid"      => flag!(libc::MS_NOSUID, fuser::MountOption::NoSuid),
+            "relatime"    => flag!(libc::MS_RELATIME),
+            "remount"     => flag!(libc::MS_REMOUNT),
+            "ro"          => flag!(libc::MS_RDONLY, fuser::MountOption::RO),
+            "rw" | ""     => {}
+            "strictatime" => flag!(libc::MS_STRICTATIME),
+            "sync"        => flag!(libc::MS_SYNCHRONOUS, fuser::MountOption::Sync),
+            // Userspace-only fstab options - not passed to the kernel:
+            "auto" | "noauto" | "nofail" | "_netdev"
+            | "user" | "nouser" | "users" | "group" | "owner" => {}
+            o if o.starts_with("x-") || o.starts_with("comment=") => {}
+            o => fs_opts.push(o),
+        }
+    }
+
+    parsed.fs_opts = (!fs_opts.is_empty()).then(|| fs_opts.join(","));
+    parsed
 }
 
 #[cfg(test)]
@@ -130,19 +148,19 @@ mod tests {
 
     #[test]
     fn parse_mountflag_options_splits_kernel_and_fs_options() {
-        let (opts, flags) = parse_mountflag_options("ro,noexec,metadata_replicas=2,norecovery");
+        let p = parse_mountflag_options("ro,noexec,metadata_replicas=2,norecovery");
 
-        assert_eq!(opts.as_deref(), Some("metadata_replicas=2,norecovery"));
-        assert_ne!(flags & libc::MS_RDONLY, 0);
-        assert_ne!(flags & libc::MS_NOEXEC, 0);
+        assert_eq!(p.fs_opts.as_deref(), Some("metadata_replicas=2,norecovery"));
+        assert_ne!(p.flags & libc::MS_RDONLY, 0);
+        assert_ne!(p.flags & libc::MS_NOEXEC, 0);
     }
 
     #[test]
     fn parse_mountflag_options_drops_userspace_fstab_options() {
-        let (opts, flags) = parse_mountflag_options("nofail,_netdev,x-systemd.device-timeout=5");
+        let p = parse_mountflag_options("nofail,_netdev,x-systemd.device-timeout=5");
 
-        assert_eq!(opts, None);
-        assert_eq!(flags, 0);
+        assert_eq!(p.fs_opts, None);
+        assert_eq!(p.flags, 0);
     }
 }
 
@@ -171,8 +189,8 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
 }
 
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {
-    let (optstr, mountflags) = parse_mountflag_options(&cli.options);
-    let opts = bcachefs_kernel::opts::parse_mount_opts(None, optstr.as_deref(), true)
+    let parsed = parse_mountflag_options(&cli.options);
+    let opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)
         .unwrap_or_default();
 
     let sbs = device_scan::scan_sbs(&cli.dev, &opts)?;
@@ -196,7 +214,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             &cli.options
         );
 
-        mount_inner(devices, mountpoint, "bcachefs", mountflags, optstr)
+        mount_inner(devices, mountpoint, "bcachefs", parsed.flags, parsed.fs_opts)
     } else {
         info!(
             "would mount with params: device: {:?}, options: {}",

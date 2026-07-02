@@ -1013,35 +1013,20 @@ fn parse_fuse_mount_options(
         // "fuse.bcachefs" in /proc/mounts.
         MountOption::CUSTOM("subtype=bcachefs".to_string()),
     ];
-    let (optstr, mountflags) = options
+    let parsed = options
         .map(super::mount::parse_mountflag_options)
-        .unwrap_or((None, 0));
-    let mut bch_opts = bcachefs_kernel::opts::parse_mount_opts(None, optstr.as_deref(), true)?;
+        .unwrap_or_default();
+    let mut bch_opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)?;
 
     opt_set!(bch_opts, nostart, 1);
 
-    if mountflags & libc::MS_RDONLY != 0 {
+    // read-only is both a fuser option (carried in parsed.fuse_options) and a
+    // filesystem-open concern - the latter isn't a mount flag, so set it here:
+    if parsed.flags & libc::MS_RDONLY != 0 {
         opt_set!(bch_opts, read_only, 1);
-        mount_options.push(MountOption::RO);
     }
-    if mountflags & libc::MS_NODEV != 0 {
-        mount_options.push(MountOption::NoDev);
-    }
-    if mountflags & libc::MS_NOSUID != 0 {
-        mount_options.push(MountOption::NoSuid);
-    }
-    if mountflags & libc::MS_NOEXEC != 0 {
-        mount_options.push(MountOption::NoExec);
-    }
-    if mountflags & libc::MS_NOATIME != 0 {
-        mount_options.push(MountOption::NoAtime);
-    }
-    if mountflags & libc::MS_DIRSYNC != 0 {
-        mount_options.push(MountOption::DirSync);
-    }
-    if mountflags & libc::MS_SYNCHRONOUS != 0 {
-        mount_options.push(MountOption::Sync);
-    }
+
+    mount_options.extend(parsed.fuse_options);
 
     Ok((bch_opts, mount_options))
 }
