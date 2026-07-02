@@ -63,6 +63,8 @@ int __bch2_err_class(int bch_err)
 	return -std_err;
 }
 
+#undef BLK_STS
+
 const char *bch2_blk_status_to_str(blk_status_t status)
 {
 	/*
