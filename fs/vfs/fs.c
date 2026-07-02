@@ -627,6 +627,8 @@ static int bch2_inode_init_security(struct btree_trans *trans,
 					    bch2_initxattrs, &ctx);
 }
 
+DEFINE_FREE(posix_acl, struct posix_acl *, posix_acl_release(_T))
+
 struct bch_inode_info *
 __bch2_create(struct mnt_idmap *idmap,
 	      struct bch_inode_info *dir, struct dentry *dentry,
@@ -637,7 +639,8 @@ __bch2_create(struct mnt_idmap *idmap,
 	struct bch_inode_unpacked dir_u;
 	struct bch_inode_info *inode;
 	struct bch_inode_unpacked inode_u;
-	struct posix_acl *default_acl = NULL, *acl = NULL;
+	struct posix_acl *default_acl __free(posix_acl) = NULL;
+	struct posix_acl *acl __free(posix_acl) = NULL;
 	subvol_inum inum;
 	struct bch_subvolume subvol;
 	kuid_t kuid = mapped_fsuid(idmap, i_user_ns(&dir->v));
@@ -656,11 +659,8 @@ __bch2_create(struct mnt_idmap *idmap,
 	}
 
 	inode = __bch2_new_inode(c, GFP_NOFS);
-	if (unlikely(!inode)) {
-		posix_acl_release(default_acl);
-		posix_acl_release(acl);
+	if (unlikely(!inode))
 		return ERR_PTR(-ENOMEM);
-	}
 
 	bch2_inode_init_early(c, &inode_u);
 
@@ -701,7 +701,13 @@ retry:
 err_before_quota:
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
 			goto retry;
-		goto err_trans;
+
+		if (!(flags & BCH_CREATE_TMPFILE))
+			mutex_unlock(&dir->ei_update_lock);
+
+		make_bad_inode(&inode->v);
+		iput(&inode->v);
+		return ERR_PTR(ret);
 	}
 
 	if (!(flags & BCH_CREATE_TMPFILE)) {
@@ -730,19 +736,7 @@ err_before_quota:
 	 * that we just created, and we _really_ can't take a transaction
 	 * restart here.
 	 */
-	inode = bch2_inode_hash_insert(c, NULL, inode);
-err:
-	posix_acl_release(default_acl);
-	posix_acl_release(acl);
-	return inode;
-err_trans:
-	if (!(flags & BCH_CREATE_TMPFILE))
-		mutex_unlock(&dir->ei_update_lock);
-
-	make_bad_inode(&inode->v);
-	iput(&inode->v);
-	inode = ERR_PTR(ret);
-	goto err;
+	return bch2_inode_hash_insert(c, NULL, inode);
 }
 
 /* methods */
