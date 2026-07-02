@@ -1285,6 +1285,15 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 			SET_BCH_ALLOC_V4_NEED_DISCARD(new_a, true);
 		}
 
+		/*
+		 * These are normal-operation invariants; fsck's alloc-info
+		 * repair legitimately re-establishes bucket state from the
+		 * stripes/backpointers and drives these transitions itself
+		 * (e.g. need_discard -> parity when re-marking a stripe's parity
+		 * bucket), so don't WARN during fsck.
+		 */
+		bool in_fsck = test_bit(BCH_FS_in_fsck, &c->flags);
+
 		if (statechange_to(a->data_type == BCH_DATA_free)) {
 			/*
 			 * Legitimate paths to free:
@@ -1294,15 +1303,18 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 			 *     oldest_gen (bucket was empty the whole time;
 			 *     no discard needed)
 			 */
-			WARN_ON(old_a->data_type != BCH_DATA_need_discard &&
+			WARN_ON(!in_fsck &&
+				old_a->data_type != BCH_DATA_need_discard &&
 				old_a->data_type != BCH_DATA_need_gc_gens);
 		}
 
 		if (statechange_from(a->data_type == BCH_DATA_need_discard)) {
 			if (data_type_is_empty(new_a->data_type))
-				WARN_ON(!(op.flags & BTREE_TRIGGER_is_discard));
+				WARN_ON(!in_fsck &&
+					!(op.flags & BTREE_TRIGGER_is_discard));
 			else
-				WARN_ON(!bch2_bucket_is_open_safe(c, op.new.k->p.inode, op.new.k->p.offset));
+				WARN_ON(!in_fsck &&
+					!bch2_bucket_is_open_safe(c, op.new.k->p.inode, op.new.k->p.offset));
 		}
 
 		/*
