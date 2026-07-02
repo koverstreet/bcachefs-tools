@@ -39,6 +39,15 @@ impl ExtentUnionField<c::bch_extent_ptr> for c::bch_extent_ptr {
     }
 }
 
+impl ExtentUnionField<c::bch_extent_stripe_ptr> for c::bch_extent_stripe_ptr {
+    unsafe fn as_union_ref(&self) -> &c::bch_extent_stripe_ptr {
+        self
+    }
+    unsafe fn as_union_mut(&mut self) -> &mut c::bch_extent_stripe_ptr {
+        self
+    }
+}
+
 unsafe fn extent_union_field_ref<T, F: ExtentUnionField<T>>(field: &F) -> &T {
     unsafe { field.as_union_ref() }
 }
@@ -223,4 +232,14 @@ pub(crate) fn bkey_ptrs_mut<'a>(
     k:  &'a mut c::bkey_i,
 ) -> ExtentPtrIterMut<'a> {
     ExtentPtrIterMut { inner: bkey_extent_entries_mut(fs, k) }
+}
+
+/// Mutable access to an entry's `stripe_ptr` union field.
+///
+/// The caller must have checked that this entry is a stripe_ptr, i.e.
+/// `extent_entry_type(entry) == BCH_EXTENT_ENTRY_stripe_ptr`.
+pub(crate) fn entry_stripe_ptr_mut(
+    entry: &mut c::bch_extent_entry,
+) -> &mut c::bch_extent_stripe_ptr {
+    unsafe { extent_union_field_mut(&mut entry.stripe_ptr) }
 }
