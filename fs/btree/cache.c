@@ -1173,7 +1173,7 @@ static void btree_node_mem_ptr_set(struct btree_trans *trans,
 	EBUG_ON(k->type != KEY_TYPE_btree_ptr_v2);
 
 	bp = (void *) bkeyp_val(&l->b->format, k);
-	bp->mem_ptr = (unsigned long)b;
+	WRITE_ONCE(bp->mem_ptr, (unsigned long)b);
 
 	if (!locked)
 		btree_node_unlock(trans, path, plevel);
