@@ -212,6 +212,10 @@ pub(crate) fn parse_opt_val(
     opt: &c::bch_option,
     val_str: &str,
 ) -> Result<Option<u64>> {
+    if opt.name() == Some("fs_label") {
+        return Ok(None);
+    }
+
     let c_val = CString::new(val_str)?;
     let mut v: u64 = 0;
     let mut err = Printbuf::new();

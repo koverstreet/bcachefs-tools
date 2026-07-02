@@ -197,6 +197,42 @@ static __cold void bch2_opt_fix_errors_to_text(struct printbuf *out,
 	.to_text = bch2_opt_fix_errors_to_text,		\
 }
 
+static int bch2_opt_fs_label_parse(struct bch_fs *c, const char *val, u64 *res,
+				   struct printbuf *err)
+{
+	if (!val) {
+		if (err)
+			prt_str(err, "fs_label: required value");
+		return -BCH_ERR_EINVAL_opt_parse_str_required;
+	}
+
+	if (strlen(val) >= BCH_SB_LABEL_SIZE) {
+		if (err)
+			prt_printf(err, "fs_label: too long (max %u bytes)",
+				   BCH_SB_LABEL_SIZE - 1);
+		return -BCH_ERR_EINVAL_setlabel_too_long;
+	}
+
+	*res = (unsigned long) val;
+	return 0;
+}
+
+static __cold void bch2_opt_fs_label_to_text(struct printbuf *out,
+					     struct bch_fs *c,
+					     struct bch_sb *sb,
+					     u64 v)
+{
+	const char *label = sb ? (const char *) sb->label : (const char *) (unsigned long) v;
+
+	if (label)
+		prt_printf(out, "%.*s", BCH_SB_LABEL_SIZE, label);
+}
+
+#define bch2_opt_fs_label (struct bch_opt_fn) {		\
+	.parse = bch2_opt_fs_label_parse,		\
+	.to_text = bch2_opt_fs_label_to_text,		\
+}
+
 const char * const bch2_d_types[BCH_DT_MAX] = {
 	[DT_UNKNOWN]	= "unknown",
 	[DT_FIFO]	= "fifo",
@@ -274,6 +310,20 @@ __maybe_unused static const member_opt_get_fn	BCH2_NO_MEMBER_OPT = NULL;
 __maybe_unused static const member_opt_set_fn	SET_BCH2_NO_MEMBER_OPT = NULL;
 __maybe_unused static const ext_opt_get_fn	BCH2_NO_EXT_OPT = NULL;
 __maybe_unused static const ext_opt_set_fn	SET_BCH2_NO_EXT_OPT = NULL;
+
+static u64 BCH_SB_LABEL(const struct bch_sb *sb)
+{
+	return (unsigned long) sb->label;
+}
+
+static void SET_BCH_SB_LABEL(struct bch_sb *sb, u64 v)
+{
+	memset(sb->label, 0, BCH_SB_LABEL_SIZE);
+
+	if (v)
+		strscpy((char *) sb->label, (const char *) (unsigned long) v,
+			BCH_SB_LABEL_SIZE);
+}
 
 #define type_compatible_or_null(_p, _type)				\
 	__builtin_choose_expr(						\
@@ -910,7 +960,15 @@ bool __bch2_opt_set_sb(struct bch_sb *sb, int dev_idx,
 
 	if ((opt->flags & OPT_FS) && dev_idx < 0) {
 		if (opt->set_sb) {
-			changed = v != opt->get_sb(sb);
+			if (opt == &bch2_opt_table[Opt_fs_label])
+				changed = v
+					? strncmp((const char *) opt->get_sb(sb),
+						  (const char *) (unsigned long) v,
+						  BCH_SB_LABEL_SIZE)
+					: strnlen((const char *) opt->get_sb(sb),
+						  BCH_SB_LABEL_SIZE);
+			else
+				changed = v != opt->get_sb(sb);
 			opt->set_sb(sb, v);
 		} else if (opt->set_ext) {
 			struct bch_sb_field_ext *ext = bch2_sb_field_get(sb, ext);

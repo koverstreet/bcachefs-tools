@@ -1,0 +1,1217 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _BCACHEFS_BTREE_TYPES_H
+#define _BCACHEFS_BTREE_TYPES_H
+
+#include <linux/list.h>
+#include <linux/rhashtable.h>
+
+#include "alloc/buckets_types.h"
+#include "alloc/replicas_types.h"
+
+#include "btree/bbpos_types.h"
+#include "btree/bkey_types.h"
+#include "btree/interior_types.h"
+#include "btree/key_cache_types.h"
+#include "btree/node_scan_types.h"
+#include "btree/write_buffer_types.h"
+
+#include "journal/types.h"
+
+#include "util/darray.h"
+#include "util/six.h"
+
+struct bio;
+struct open_bucket;
+struct btree_update;
+struct btree_trans;
+struct lock_graph;
+
+/* Btree nodes: */
+
+#define MAX_BSETS		3U
+
+struct btree_nr_keys {
+
+	/*
+	 * Amount of live metadata (i.e. size of node after a compaction) in
+	 * units of u64s
+	 */
+	u16			live_u64s;
+	u16			bset_u64s[MAX_BSETS];
+
+	/* live keys only: */
+	u16			packed_keys;
+	u16			unpacked_keys;
+};
+
+struct bset_tree {
+	/*
+	 * We construct a binary tree in an array as if the array
+	 * started at 1, so that things line up on the same cachelines
+	 * better: see comments in bset.c at cacheline_to_bkey() for
+	 * details
+	 */
+
+	/* size of the binary tree and prev array */
+	u16			size;
+
+	/* function of size - precalculated for to_inorder() */
+	u16			extra;
+
+	u16			data_offset;
+	u16			aux_data_offset;
+	u16			end_offset;
+};
+
+struct btree_write {
+	struct journal_entry_pin	journal;
+};
+
+struct btree_bkey_cached_common {
+	struct six_lock		lock;
+	u8			level;
+	u8			btree_id;
+	bool			cached;
+};
+
+/*
+ * Membership state of a struct btree in the btree node cache.
+ *
+ * Stored in b->cache_state and maintained by bch2_btree_node_transition_state().
+ * See the DOC block at the top of btree/cache.c for the state machine and
+ * the bookkeeping each state implies.
+ */
+enum btree_node_cache_state {
+	BTREE_NODE_CACHE_NONE,		/* off all lists; not in cache (kzalloc default) */
+	BTREE_NODE_CACHE_FREED,		/* on bc->freed_{pcpu,nonpcpu}; no data buffer */
+	BTREE_NODE_CACHE_FREEABLE,	/* on bc->freeable; has data; not hashed */
+	BTREE_NODE_CACHE_CLEAN,		/* on bc->live[pinned].clean; hashed; has data */
+	BTREE_NODE_CACHE_DIRTY,		/* on bc->live[pinned].dirty; hashed; has data */
+};
+
+struct btree {
+	struct btree_bkey_cached_common c;
+
+	struct rhash_head	hash;
+	u64			hash_val;
+
+	unsigned long		flags;
+	u16			written;
+	u8			nsets;
+	u8			nr_key_bits;
+	u16			version_ondisk;
+
+	struct bkey_format	format;
+
+	/*
+	 * Per-field unpack constants, derived from @format at node init.
+	 * Extract each field with:
+	 *
+	 *   field = (load_8_unaligned(bytes + byte_offset) >> (64 - bits))
+	 *           + field_offset
+	 *
+	 * Load position chosen so the field ends at the top of the loaded
+	 * value (load_offset + 8 == byte after field's MSB byte); junk from
+	 * earlier-in-memory fields lands in the low bits and shifts off.
+	 *
+	 * byte_offset is signed: for a field near the start of @in, the
+	 * load can need to start before @in. The byte(s) before @in are
+	 * always valid memory in the callers we care about (bset payload
+	 * after the bset header, or other bkeys in the same bset).
+	 *
+	 * Only handles formats where every field's MSB sits at a byte
+	 * boundary (field_msb_bit % 8 == 7). bch2_bkey_format_done()
+	 * rounds fields up to byte width when there are spare bits, so
+	 * this is the common case. Formats too tight to byte-align take
+	 * the slow path via byte_aligned_fields = false.
+	 */
+	bool				byte_aligned_fields;
+	struct bkey_unpack_field {
+		s8	byte_offset;
+		u8	shift_right;	/* 64 - bits, or 64 if field has no bits in packed */
+	} unpack[BKEY_NR_FIELDS];
+
+	struct btree_node	*data;
+	void			*aux_data;
+
+	/*
+	 * Sets of sorted keys - the real btree node - plus a binary search tree
+	 *
+	 * set[0] is special; set[0]->tree, set[0]->prev and set[0]->data point
+	 * to the memory we have allocated for this btree node. Additionally,
+	 * set[0]->data points to the entire btree node as it exists on disk.
+	 */
+	struct bset_tree	set[MAX_BSETS];
+
+	struct btree_nr_keys	nr;
+	u16			sib_u64s[2];
+	u16			whiteout_u64s;
+	u8			byte_order;
+	u8			unpack_fn_len;
+
+	struct btree_write	writes[2];
+
+	/* Key/pointer for this btree node */
+	__BKEY_PADDED(key, BKEY_BTREE_PTR_VAL_U64s_MAX);
+
+	/*
+	 * XXX: add a delete sequence number, so when bch2_btree_node_relock()
+	 * fails because the lock sequence number has changed - i.e. the
+	 * contents were modified - we can still relock the node if it's still
+	 * the one we want, without redoing the traversal
+	 */
+
+	/*
+	 * For asynchronous splits/interior node updates:
+	 * When we do a split, we allocate new child nodes and update the parent
+	 * node to point to them: we update the parent in memory immediately,
+	 * but then we must wait until the children have been written out before
+	 * the update to the parent can be written - this is a list of the
+	 * btree_updates that are blocking this node from being
+	 * written:
+	 */
+	struct list_head	write_blocked;
+
+	/*
+	 * Also for asynchronous splits/interior node updates:
+	 * If a btree node isn't reachable yet, we don't want to kick off
+	 * another write - because that write also won't yet be reachable and
+	 * marking it as completed before it's reachable would be incorrect:
+	 */
+	unsigned long		will_make_reachable;
+
+	struct open_buckets	ob;
+
+	/* lru list */
+	struct list_head	list;
+
+	enum btree_node_cache_state cache_state;
+};
+
+enum btree_node_sibling {
+	btree_prev_sib,
+	btree_next_sib,
+};
+
+/* Btree cache: */
+
+#define BCH_BTREE_CACHE_NOT_FREED_REASONS()	\
+	x(cache_reserve)			\
+	x(lock_intent)				\
+	x(lock_write)				\
+	x(dirty)				\
+	x(read_in_flight)			\
+	x(write_in_flight)			\
+	x(permanent)				\
+	x(noevict)				\
+	x(write_blocked)			\
+	x(will_make_reachable)			\
+	x(access_bit)
+
+enum bch_btree_cache_not_freed_reasons {
+#define x(n) BCH_BTREE_CACHE_NOT_FREED_##n,
+	BCH_BTREE_CACHE_NOT_FREED_REASONS()
+#undef x
+	BCH_BTREE_CACHE_NOT_FREED_REASONS_NR,
+};
+
+struct btree_cache_list {
+	unsigned		idx;
+	struct shrinker		*shrink;
+	size_t			nr_clean;
+	size_t			nr_dirty;
+	struct list_head	clean;
+	struct list_head	dirty;
+};
+
+static inline size_t btree_cache_list_nr(const struct btree_cache_list *l)
+{
+	return l->nr_clean + l->nr_dirty;
+}
+
+struct btree_root {
+	struct btree		*b;
+
+	/* On disk root - see async splits: */
+	__BKEY_PADDED(key, BKEY_BTREE_PTR_VAL_U64s_MAX);
+	u8			level;
+	u8			alive;
+	s16			error;
+};
+
+struct bch_fs_btree_cache {
+	/*
+	 * Hot path: btree_path_lock_root reads root pointer + level per
+	 * btree_id. We pack the level into the low 3 bits of the pointer so a
+	 * single load yields both atomically (no torn read between b and
+	 * b->c.level, no extra cacheline miss into the btree node to read
+	 * level). See bch2_btree_root_{pack,unpack_b,unpack_level} in cache.h.
+	 *
+	 * Splitting this out of struct btree_root also keeps the read-side
+	 * working set in a few cache lines instead of the full ~88 lines of
+	 * roots_known[].
+	 */
+	unsigned long		roots_b[BTREE_ID_NR];
+
+	struct btree_root	roots_known[BTREE_ID_NR];
+	DARRAY(struct btree_root) roots_extra;
+	struct mutex		root_lock;
+
+	struct rhashtable	table;
+	bool			table_init_done;
+	/*
+	 * We never free a struct btree, except on shutdown - we just put it on
+	 * the btree_cache_freed list and reuse it later. This simplifies the
+	 * code, and it doesn't cost us much memory as the memory usage is
+	 * dominated by buffers that hold the actual btree node data and those
+	 * can be freed - and the number of struct btrees allocated is
+	 * effectively bounded.
+	 *
+	 * btree_cache_freeable effectively is a small cache - we use it because
+	 * high order page allocations can be rather expensive, and it's quite
+	 * common to delete and allocate btree nodes in quick succession. It
+	 * should never grow past ~2-3 nodes in practice.
+	 */
+	struct mutex		lock;
+	struct list_head	freeable;
+	struct list_head	freed_pcpu;
+	struct list_head	freed_nonpcpu;
+	struct btree_cache_list	live[2];
+
+	size_t			nr_vmalloc;
+	size_t			nr_freeable;
+	size_t			nr_reserve;
+	size_t			nr_by_btree[BTREE_ID_NR];
+
+	/* Number of nodes with BTREE_NODE_write_in_flight set. */
+	atomic_long_t		nr_in_flight;
+	atomic_long_t		nr_in_flight_inner;
+	struct closure_waitlist	nr_in_flight_wait;
+	bool			should_throttle ____cacheline_aligned_in_smp;
+
+	/* shrinker stats */
+	size_t			nr_freed;
+	size_t			nr_requested;
+	u64			not_freed[BCH_BTREE_CACHE_NOT_FREED_REASONS_NR];
+
+	/*
+	 * Times the allocator hit the memory-pressure self reclaim path:
+	 * journal replay watches for this going nonzero to switch off the
+	 * sorted-order fastpath, which holds every journal pin until replay
+	 * finishes - pins must be released for reclaim to clean btree nodes.
+	 */
+	unsigned long		nr_self_reclaim;
+
+	/*
+	 * If we need to allocate memory for a new btree node and that
+	 * allocation fails, we can cannibalize another node in the btree cache
+	 * to satisfy the allocation - lock to guarantee only one thread does
+	 * this at a time:
+	 */
+	struct task_struct	*alloc_lock;
+	struct closure_waitlist	alloc_wait;
+
+	struct bbpos		pinned_nodes_start;
+	struct bbpos		pinned_nodes_end;
+	/* btree id mask: 0 for leaves, 1 for interior */
+	u64			pinned_nodes_mask[2];
+};
+
+static inline size_t btree_cache_nr_live(const struct bch_fs_btree_cache *bc)
+{
+	return btree_cache_list_nr(&bc->live[0]) +
+		btree_cache_list_nr(&bc->live[1]);
+}
+
+static inline size_t btree_cache_nr_dirty(const struct bch_fs_btree_cache *bc)
+{
+	return bc->live[0].nr_dirty + bc->live[1].nr_dirty;
+}
+
+/* Iterator, update, and trigger flags: */
+
+struct btree_node_iter {
+	struct btree_node_iter_set {
+		u16	k, end;
+	} data[MAX_BSETS];
+};
+
+#define BTREE_ITER_FLAGS()			\
+	x(slots)				\
+	x(intent)				\
+	x(prefetch)				\
+	x(is_extents)				\
+	x(not_extents)				\
+	x(cached)				\
+	x(with_key_cache)			\
+	x(with_journal)				\
+	x(snapshot_field)			\
+	x(all_snapshots)			\
+	x(filter_snapshots)			\
+	x(nofilter_whiteouts)			\
+	x(nopreserve)				\
+	x(nofill)				\
+	x(cached_nofill)			\
+	x(key_cache_fill)			\
+
+#define STR_HASH_FLAGS()			\
+	x(must_create)				\
+	x(must_replace)
+
+#define BTREE_UPDATE_FLAGS()			\
+	x(internal_snapshot_node)		\
+	x(nojournal)				\
+	x(key_cache_reclaim)			\
+	x(overwrite_triggered)
+
+
+/*
+ * BTREE_TRIGGER_norun - don't run triggers at all
+ *
+ * BTREE_TRIGGER_transactional - we're running transactional triggers as part of
+ * a transaction commit: triggers may generate new updates
+ *
+ * BTREE_TRIGGER_atomic - we're running atomic triggers during a transaction
+ * commit: we have our journal reservation, we're holding btree node write
+ * locks, and we know the transaction is going to commit (returning an error
+ * here is a fatal error, causing us to go emergency read-only)
+ *
+ * BTREE_TRIGGER_gc - we're in gc/fsck: running triggers to recalculate e.g. disk usage
+ *
+ * BTREE_TRIGGER_insert - @new is entering the btree
+ * BTREE_TRIGGER_overwrite - @old is leaving the btree
+ */
+#define BTREE_TRIGGER_FLAGS()			\
+	x(norun)				\
+	x(transactional)			\
+	x(atomic)				\
+	x(gc)					\
+	x(insert)				\
+	x(overwrite)				\
+	x(is_discard)				\
+	x(set_needs_reconcile_done)
+
+enum {
+#define x(n) BTREE_ITER_FLAG_BIT_##n,
+	BTREE_ITER_FLAGS()
+	STR_HASH_FLAGS()
+	BTREE_UPDATE_FLAGS()
+	BTREE_TRIGGER_FLAGS()
+#undef x
+};
+
+/* iter flags must fit in a u16: */
+//BUILD_BUG_ON(BTREE_ITER_FLAG_BIT_key_cache_fill > 15);
+
+enum btree_iter_update_trigger_flags {
+#define x(n) BTREE_ITER_##n	= 1U << BTREE_ITER_FLAG_BIT_##n,
+	BTREE_ITER_FLAGS()
+#undef x
+#define x(n) STR_HASH_##n	= 1U << BTREE_ITER_FLAG_BIT_##n,
+	STR_HASH_FLAGS()
+#undef x
+#define x(n) BTREE_UPDATE_##n	= 1U << BTREE_ITER_FLAG_BIT_##n,
+	BTREE_UPDATE_FLAGS()
+#undef x
+#define x(n) BTREE_TRIGGER_##n	= 1U << BTREE_ITER_FLAG_BIT_##n,
+	BTREE_TRIGGER_FLAGS()
+#undef x
+};
+
+struct btree_trigger_op {
+	enum btree_id				btree;
+	unsigned				level;
+	struct bkey_s_c				old;
+	struct bkey_s				new;
+	unsigned				new_buf_u64s;
+	enum btree_iter_update_trigger_flags	flags;
+};
+
+/* Btree paths and iterators: */
+
+#if defined(CONFIG_BCACHEFS_LOCK_TIME_STATS) || defined(CONFIG_BCACHEFS_DEBUG)
+#define TRACK_PATH_ALLOCATED
+#endif
+
+typedef u16 btree_path_idx_t;
+
+struct btree_path {
+	btree_path_idx_t	sorted_idx;
+	u8			ref;
+	u8			intent_ref;
+
+	/* btree_iter_copy starts here: */
+	struct bpos		pos;
+
+	enum btree_id		btree_id:7;
+	bool			cached:1;
+	bool			preserve:1;
+	/*
+	 * When true, failing to relock this path will cause the transaction to
+	 * restart:
+	 */
+	bool			should_be_locked:1;
+	unsigned		level:3,
+				locks_want:3;
+	u8			nodes_locked;
+
+	struct btree_path_level {
+		struct btree	*b;
+		struct btree_node_iter iter;
+		u32		lock_seq;
+#ifdef CONFIG_BCACHEFS_LOCK_TIME_STATS
+		u64             lock_taken_time;
+#endif
+	}			l[BTREE_MAX_DEPTH];
+#ifdef TRACK_PATH_ALLOCATED
+	unsigned long		ip_allocated;
+#endif
+};
+
+static inline struct btree_path_level *path_l(struct btree_path *path)
+{
+	return path->l + path->level;
+}
+
+static inline unsigned long btree_path_ip_allocated(struct btree_path *path)
+{
+#ifdef TRACK_PATH_ALLOCATED
+	return path->ip_allocated;
+#else
+	return _THIS_IP_;
+#endif
+}
+
+/*
+ * btree_iter: the high level btree iterator API, iterates over keys.
+ * btree_path: the low level path to a btree node, holds locks.
+ *
+ * Multiple iterators can share the same btree_path via refcounting.
+ */
+struct btree_iter {
+	struct btree_trans	*trans;
+	btree_path_idx_t	path;
+	btree_path_idx_t	update_path;
+	btree_path_idx_t	key_cache_path;
+
+	enum btree_id		btree_id:8;
+	u8			min_depth;
+
+	/* btree_iter_copy starts here: */
+	u16			flags;
+
+	/* When we're filtering by snapshot, the snapshot ID we're looking for: */
+	unsigned		snapshot;
+
+	struct bpos		pos;
+	/*
+	 * Current unpacked key - so that bch2_btree_iter_next()/
+	 * bch2_btree_iter_next_slot() can correctly advance pos.
+	 */
+	struct bkey		k;
+
+	/* BTREE_ITER_with_journal: */
+	size_t			journal_idx;
+#ifdef TRACK_PATH_ALLOCATED
+	unsigned long		ip_allocated;
+#endif
+};
+
+struct get_locks_fail {
+	unsigned	l;
+	struct btree	*b;
+};
+
+/* Key cache: */
+
+#define BKEY_CACHED_ACCESSED		0
+#define BKEY_CACHED_DIRTY		1
+#define BKEY_CACHED_IMMEDIATE_FLUSH	2
+
+struct bkey_cached {
+	struct btree_bkey_cached_common c;
+
+	unsigned long		flags;
+	u16			u64s;
+	struct bkey_cached_key	key;
+
+	struct rhash_head	hash;
+
+	struct journal_entry_pin journal;
+	u64			seq;
+
+	struct bkey_i		*k;
+	struct rcu_head		rcu;
+};
+
+static inline struct bpos btree_node_pos(struct btree_bkey_cached_common *b)
+{
+	return !b->cached
+		? container_of(b, struct btree, c)->key.k.p
+		: container_of(b, struct bkey_cached, c)->key.pos;
+}
+
+/* Transaction types: */
+
+struct btree_insert_entry {
+	unsigned		flags;
+	u8			sort_order;
+	u8			bkey_type;
+	enum btree_id		btree_id:8;
+	u8			level:3;
+	bool			cached:1;
+	bool			insert_trigger_run:1;
+	bool			overwrite_trigger_run:1;
+	bool			key_cache_already_flushed:1;
+	bool			key_cache_flushing:1;
+	/*
+	 * @old_k may be a key from the journal or the key cache;
+	 * @old_btree_u64s always refers to the size of the key being
+	 * overwritten in the btree:
+	 */
+	u8			old_btree_u64s;
+	u8			k_buf_u64s;
+	btree_path_idx_t	path;
+	struct bkey_i		*k;
+	/* key being overwritten: */
+	struct bkey		old_k;
+	const struct bch_val	*old_v;
+	unsigned long		ip_allocated;
+};
+
+/* Number of btree paths we preallocate, usually enough */
+#define BTREE_ITER_INITIAL		64
+/*
+ * Lmiit for btree_trans_too_many_iters(); this is enough that almost all code
+ * paths should run inside this limit, and if they don't it usually indicates a
+ * bug (leaking/duplicated btree paths).
+ *
+ * exception: some fsck paths
+ *
+ * bugs with excessive path usage seem to have possibly been eliminated now, so
+ * we might consider eliminating this (and btree_trans_too_many_iter()) at some
+ * point.
+ */
+#define BTREE_ITER_NORMAL_LIMIT		256
+/* never exceed limit */
+#define BTREE_ITER_MAX			(1U << 10)
+
+struct btree_trans_commit_hook;
+typedef int (btree_trans_commit_hook_fn)(struct btree_trans *, struct btree_trans_commit_hook *);
+
+struct btree_trans_commit_hook {
+	btree_trans_commit_hook_fn	*fn;
+	struct btree_trans_commit_hook	*next;
+};
+
+#define BTREE_TRANS_MEM_MAX	(1U << 16)
+
+#define BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS	NSEC_PER_MSEC
+
+struct btree_trans_paths {
+	unsigned long		nr_paths;
+	struct btree_path	paths[];
+};
+
+struct trans_kmalloc_trace {
+	unsigned long		ip;
+	size_t			bytes;
+};
+typedef DARRAY(struct trans_kmalloc_trace) darray_trans_kmalloc_trace;
+
+struct btree_trans_subbuf {
+	u16			base;
+	u16			u64s;
+	u16			size;
+};
+
+/*
+ * Transaction context for btree operations.
+ *
+ * Holds iterators/paths, pending updates, locks, and a memory arena for a
+ * single logical btree operation.  On lock contention or memory pressure,
+ * the transaction restarts: releases all locks, resets state, and retries
+ * (via lockrestart_do() or similar retry loops).
+ *
+ *  - mem/mem_top: bump allocator, invalidated on every restart
+ *  - Paths kept sorted in lock order to prevent deadlocks
+ *  - SRCU read lock protects btree node memory from being freed;
+ *    released periodically to avoid stalling reclaim
+ */
+struct btree_trans {
+	struct bch_fs		*c;
+
+	unsigned long		*paths_allocated;
+	struct btree_path	*paths;
+	btree_path_idx_t	*sorted;
+	struct btree_insert_entry *updates;
+
+	/* bump allocator, invalidated on transaction restart */
+	void			*mem;
+	unsigned		mem_top;
+	unsigned		mem_bytes;
+	unsigned		realloc_bytes_required;
+#ifdef CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE
+	darray_trans_kmalloc_trace trans_kmalloc_trace;
+#endif
+
+	btree_path_idx_t	nr_sorted;
+	btree_path_idx_t	nr_paths;
+	btree_path_idx_t	nr_paths_max;
+	btree_path_idx_t	nr_updates;
+	s16			shard_cpu;
+	u8			fn_idx;
+	u8			lock_must_abort;
+	bool			lock_may_not_fail:1;
+	bool			locked:1;
+	bool			migrate_disabled:1;
+	bool			write_locked:1;
+	bool			srcu_held:1;
+	/*
+	 * IO was submitted under the srcu read lock (submit_bio() can block for
+	 * an unbounded time): suppress the next bch2_trans_unlock_long() "held
+	 * too long" warning. Scoped to one locked attempt — cleared on relock /
+	 * bch2_trans_begin().
+	 */
+	bool			srcu_io_submitted:1;
+	bool			btree_cache_cannibalize_locked:1;
+	bool			pf_memalloc_nofs:1;
+	bool			used_mempool:1;
+	bool			in_traverse_all:1;
+	bool			paths_sorted:1;
+	bool			memory_allocation_failure:1;
+	bool			journal_transaction_names:1;
+	bool			journal_replay_not_finished:1;
+	bool			notrace_relock_fail:1;
+	bool			has_interior_updates:1;
+	enum bch_errcode	restarted:16;
+	u32			restart_count;
+#ifdef CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS
+	u32			restart_count_this_trans;
+#endif
+
+	u64			last_begin_time;
+	unsigned long		last_begin_ip;
+	unsigned long		last_restarted_ip;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	bch_stacktrace		last_restarted_trace;
+#endif
+	unsigned long		last_unlock_ip;
+	unsigned long		srcu_lock_time;
+	int			srcu_idx;
+	enum btree_id		locking_root_id;
+
+	u64			locking_hash_val;
+	struct btree_bkey_cached_common *locking;
+	/*
+	 * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
+	 * bch2_six_check_for_deadlock() to detect that the node identity
+	 * rotated while we were about to sleep on it. 0 for cached entries.
+	 */
+	struct six_lock_waiter	locking_wait;
+
+	/*
+	 * btree node writes issued in this trans's context are queued here
+	 * (singly linked via bi_next) instead of being submitted directly —
+	 * no block layer work happens while we hold btree node locks.
+	 * Submitted when the trans unlocks, and before waiting on btree
+	 * node IO (see bch2_btree_node_wait_on_write()).
+	 */
+	struct bio		*queued_write_bios;
+
+	const char		*fn;
+
+	/* update path: */
+	struct btree_trans_subbuf journal_entries;
+	struct btree_trans_subbuf accounting;
+
+	struct btree_trans_commit_hook *hooks;
+	struct journal_entry_pin *journal_pin;
+
+	struct journal_res	journal_res;
+	u64			*journal_seq;
+	struct disk_reservation *disk_res;
+	struct closure		*flush;
+
+	struct bch_fs_usage_base fs_usage_delta;
+
+	unsigned		journal_u64s;
+	u32			extra_journal_u64s;
+	u64			extra_disk_res;
+
+	__BKEY_PADDED(btree_path_down, BKEY_BTREE_PTR_VAL_U64s_MAX);
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map	dep_map;
+#endif
+	/* Entries before this are zeroed out on every bch2_trans_get() call */
+
+	struct list_head	list;
+	struct closure		ref;
+	struct rcu_head		rcu;
+
+	unsigned long		_paths_allocated[BITS_TO_LONGS(BTREE_ITER_INITIAL)];
+	struct btree_trans_paths trans_paths;
+	struct btree_path	_paths[BTREE_ITER_INITIAL];
+	btree_path_idx_t	_sorted[BTREE_ITER_INITIAL + 4];
+	struct btree_insert_entry _updates[BTREE_ITER_INITIAL];
+};
+
+struct btree_trans_buf {
+	struct btree_trans	*trans;
+};
+
+struct btree_transaction_stats {
+	struct bch2_time_stats	duration;
+	struct bch2_time_stats	lock_hold_times;
+	struct bch2_time_stats	lock_wait_times;
+	struct mutex		lock;
+	unsigned		nr_max_paths;
+	unsigned		max_mem;
+#ifdef CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE
+	darray_trans_kmalloc_trace trans_kmalloc_trace;
+#endif
+	char			*max_paths_text;
+};
+
+#define BCH_TRANSACTIONS_NR 128
+
+struct bch_fs_btree_trans {
+	struct seqmutex			lock;
+	struct list_head		list;
+	mempool_t			pool;
+	mempool_t			malloc_pool;
+	struct btree_trans_buf		__percpu *bufs;
+
+	struct srcu_struct		barrier;
+	bool				barrier_initialized;
+
+	struct btree_transaction_stats	stats[BCH_TRANSACTIONS_NR];
+
+	struct mutex			stats_json_lock;
+	struct printbuf			stats_json_buf;
+};
+
+static inline struct btree_path *btree_iter_path(struct btree_trans *trans, struct btree_iter *iter)
+{
+	return trans->paths + iter->path;
+}
+
+static inline struct btree_path *btree_iter_key_cache_path(struct btree_trans *trans, struct btree_iter *iter)
+{
+	return iter->key_cache_path
+		? trans->paths + iter->key_cache_path
+		: NULL;
+}
+
+/* Btree node write types and flags: */
+
+#define BCH_BTREE_WRITE_TYPES()						\
+	x(initial,		0)					\
+	x(init_next_bset,	1)					\
+	x(cache_reclaim,	2)					\
+	x(journal_reclaim,	3)					\
+	x(interior,		4)
+
+enum btree_write_type {
+#define x(t, n) BTREE_WRITE_##t,
+	BCH_BTREE_WRITE_TYPES()
+#undef x
+	BTREE_WRITE_TYPE_NR,
+};
+
+#define BTREE_WRITE_TYPE_MASK	(roundup_pow_of_two(BTREE_WRITE_TYPE_NR) - 1)
+#define BTREE_WRITE_TYPE_BITS	ilog2(roundup_pow_of_two(BTREE_WRITE_TYPE_NR))
+
+#define BTREE_FLAGS()							\
+	x(read_in_flight)						\
+	x(read_error)							\
+	x(dirty)							\
+	x(need_write)							\
+	x(write_blocked)						\
+	x(will_make_reachable)						\
+	x(noevict)							\
+	x(write_idx)							\
+	x(accessed)							\
+	x(write_in_flight)						\
+	x(write_in_flight_inner)					\
+	x(just_written)							\
+	x(dying)							\
+	x(fake)								\
+	x(need_rewrite)							\
+	x(need_rewrite_error)						\
+	x(need_rewrite_ptr_written_zero)				\
+	x(never_write)							\
+	x(pinned)							\
+	x(permanent)
+
+enum btree_flags {
+	/* First bits for btree node write type */
+	BTREE_NODE_FLAGS_START = BTREE_WRITE_TYPE_BITS - 1,
+#define x(flag)	BTREE_NODE_##flag,
+	BTREE_FLAGS()
+#undef x
+};
+
+#define x(flag)								\
+static inline bool btree_node_ ## flag(const struct btree *b)		\
+{	return test_bit(BTREE_NODE_ ## flag, &b->flags); }		\
+									\
+static inline void set_btree_node_ ## flag(struct btree *b)		\
+{	set_bit(BTREE_NODE_ ## flag, &b->flags); }			\
+									\
+static inline void clear_btree_node_ ## flag(struct btree *b)		\
+{	clear_bit(BTREE_NODE_ ## flag, &b->flags); }
+
+BTREE_FLAGS()
+#undef x
+
+#define BTREE_NODE_REWRITE_REASON()					\
+	x(none)								\
+	x(unknown)							\
+	x(error)							\
+	x(ptr_written_zero)
+
+enum btree_node_rewrite_reason {
+#define x(n)	BTREE_NODE_REWRITE_##n,
+	BTREE_NODE_REWRITE_REASON()
+#undef x
+};
+
+/* Filesystem-level btree state: */
+
+/*
+ * Sidecar cache: when a btree node is evicted (transitioned out of the in-cache
+ * hash table) we stash its live_u64s here, keyed by btree_ptr_hash_val. The
+ * merge gate uses this as a cheap "what would be the combined size?" estimate
+ * for siblings that aren't currently in cache, before paying for a real read.
+ *
+ * Fixed-size, no chaining: insert overwrites whatever's in the slot. Lookup
+ * verifies the stored hash matches the request; collisions naturally degrade
+ * to "no info" and the caller falls back to reading the sibling. Sized at
+ * ~capacity/1000/btree_node_size entries, which keeps memory tiny.
+ */
+struct btree_evicted_size {
+	u64					mask;	/* table size - 1 (power of 2) */
+	u64					*entries;
+};
+
+#define BTREE_EVICTED_SIZE_HASH_BITS	48
+#define BTREE_EVICTED_SIZE_HASH_MASK	((1ULL << BTREE_EVICTED_SIZE_HASH_BITS) - 1)
+
+struct bch_fs_btree {
+	u16					foreground_merge_threshold;
+
+	mempool_t				bounce_pool;
+
+	struct btree_write_stats {
+		atomic64_t	nr;
+		atomic64_t	bytes;
+	}			write_stats[BTREE_WRITE_TYPE_NR];
+
+	struct bio_set				bio;
+	mempool_t				fill_iter;
+	struct workqueue_struct			*read_complete_wq;
+	struct ratelimit_state			read_errors_soft;
+	struct ratelimit_state			read_errors_hard;
+
+	struct workqueue_struct			*write_complete_wq;
+
+	struct journal_entry_res		root_journal_res;
+
+	struct bch_fs_btree_cache		cache;
+	struct btree_evicted_size		evicted_size;
+	struct bch_fs_btree_key_cache		key_cache;
+	/*
+	 * One per BTREE_IS_write_buffer btree (indexed by BCH_WB_BTREE_*, see
+	 * bch_wb_btree_idx()). Each instance has its own intake/flushing
+	 * buffers and locks.
+	 */
+	struct bch_fs_btree_write_buffer	write_buffer[BCH_WB_BTREE_NR];
+	/*
+	 * Per-btree flush_work runs on write_buffer_wq; once the sorted key
+	 * list crosses a threshold the flush parallelizes across CPUs by
+	 * queuing sub-shards on write_buffer_shard_wq and closure_sync()ing.
+	 * The two must be separate workqueues — the outer flush worker
+	 * blocks waiting for the inner shards to complete, so they can't
+	 * share a wq. WQ_MEM_RECLAIM on both because the flush sits in the
+	 * journal-reclaim path.
+	 */
+	struct workqueue_struct			*write_buffer_wq;
+	struct workqueue_struct			*write_buffer_shard_wq;
+	/*
+	 * Sync flushers (btree_write_buffer_flush_seq) wake the per-btree
+	 * flush_works and then wait here for the worker to drain pins past
+	 * their target seq. Waked from the flush worker after drain and from
+	 * journal_keys_to_write_buffer_end after pin drops.
+	 */
+	struct closure_waitlist			write_buffer_flush_wait;
+	struct bch_fs_btree_trans		trans;
+	struct bch_fs_btree_reserve_cache	reserve_cache;
+	struct bch_fs_btree_interior_updates	interior_updates;
+	struct bch_fs_btree_node_rewrites	node_rewrites;
+	struct find_btree_nodes			node_scan;
+};
+
+/* Btree node/bset accessors: */
+
+static inline enum btree_node_rewrite_reason btree_node_rewrite_reason(struct btree *b)
+{
+	if (btree_node_need_rewrite_ptr_written_zero(b))
+		return BTREE_NODE_REWRITE_ptr_written_zero;
+	if (btree_node_need_rewrite_error(b))
+		return BTREE_NODE_REWRITE_error;
+	if (btree_node_need_rewrite(b))
+		return BTREE_NODE_REWRITE_unknown;
+	return BTREE_NODE_REWRITE_none;
+}
+
+static inline struct btree_write *btree_current_write(struct btree *b)
+{
+	return b->writes + btree_node_write_idx(b);
+}
+
+static inline struct btree_write *btree_prev_write(struct btree *b)
+{
+	return b->writes + (btree_node_write_idx(b) ^ 1);
+}
+
+static inline struct bset_tree *bset_tree_last(struct btree *b)
+{
+	EBUG_ON(!b->nsets);
+	return b->set + b->nsets - 1;
+}
+
+static inline void *
+__btree_node_offset_to_ptr(const struct btree *b, u16 offset)
+{
+	return (void *) ((u64 *) b->data + offset);
+}
+
+static inline u16
+__btree_node_ptr_to_offset(const struct btree *b, const void *p)
+{
+	u16 ret = (u64 *) p - (u64 *) b->data;
+
+	EBUG_ON(__btree_node_offset_to_ptr(b, ret) != p);
+	return ret;
+}
+
+static inline struct bset *bset(const struct btree *b,
+				const struct bset_tree *t)
+{
+	return __btree_node_offset_to_ptr(b, t->data_offset);
+}
+
+static inline void set_btree_bset_end(struct btree *b, struct bset_tree *t)
+{
+	t->end_offset =
+		__btree_node_ptr_to_offset(b, vstruct_last(bset(b, t)));
+}
+
+static inline void set_btree_bset(struct btree *b, struct bset_tree *t,
+				  const struct bset *i)
+{
+	t->data_offset = __btree_node_ptr_to_offset(b, i);
+	set_btree_bset_end(b, t);
+}
+
+static inline struct bset *btree_bset_first(struct btree *b)
+{
+	return bset(b, b->set);
+}
+
+static inline struct bset *btree_bset_last(struct btree *b)
+{
+	return bset(b, bset_tree_last(b));
+}
+
+static inline u16
+__btree_node_key_to_offset(const struct btree *b, const struct bkey_packed *k)
+{
+	return __btree_node_ptr_to_offset(b, k);
+}
+
+static inline struct bkey_packed *
+__btree_node_offset_to_key(const struct btree *b, u16 k)
+{
+	return __btree_node_offset_to_ptr(b, k);
+}
+
+static inline unsigned btree_bkey_first_offset(const struct bset_tree *t)
+{
+	return t->data_offset + offsetof(struct bset, _data) / sizeof(u64);
+}
+
+#define btree_bkey_first(_b, _t)					\
+({									\
+	EBUG_ON(bset(_b, _t)->start !=					\
+		__btree_node_offset_to_key(_b, btree_bkey_first_offset(_t)));\
+									\
+	bset(_b, _t)->start;						\
+})
+
+#define btree_bkey_last(_b, _t)						\
+({									\
+	EBUG_ON(__btree_node_offset_to_key(_b, (_t)->end_offset) !=	\
+		vstruct_last(bset(_b, _t)));				\
+									\
+	__btree_node_offset_to_key(_b, (_t)->end_offset);		\
+})
+
+static inline unsigned bset_u64s(struct bset_tree *t)
+{
+	return t->end_offset - t->data_offset -
+		sizeof(struct bset) / sizeof(u64);
+}
+
+static inline unsigned bset_dead_u64s(struct btree *b, struct bset_tree *t)
+{
+	return bset_u64s(t) - b->nr.bset_u64s[t - b->set];
+}
+
+static inline unsigned bset_byte_offset(struct btree *b, void *i)
+{
+	return i - (void *) b->data;
+}
+
+/* Btree ID properties: */
+
+enum btree_node_type {
+	BKEY_TYPE_btree,
+#define x(kwd, val, ...) BKEY_TYPE_##kwd = val + 1,
+	BCH_BTREE_IDS()
+#undef x
+	BKEY_TYPE_NR
+};
+
+/* Type of a key in btree @id at level @level: */
+static inline enum btree_node_type __btree_node_type(unsigned level, enum btree_id id)
+{
+	return level ? BKEY_TYPE_btree : (unsigned) id + 1;
+}
+
+/* Type of keys @b contains: */
+static inline enum btree_node_type btree_node_type(struct btree *b)
+{
+	return __btree_node_type(b->c.level, b->c.btree_id);
+}
+
+const char *bch2_btree_node_type_str(enum btree_node_type);
+
+#define BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS		\
+	(BIT_ULL(BKEY_TYPE_extents)|			\
+	 BIT_ULL(BKEY_TYPE_alloc)|			\
+	 BIT_ULL(BKEY_TYPE_inodes)|			\
+	 BIT_ULL(BKEY_TYPE_stripes)|			\
+	 BIT_ULL(BKEY_TYPE_reflink)|			\
+	 BIT_ULL(BKEY_TYPE_subvolumes)|			\
+	 BIT_ULL(BKEY_TYPE_btree))
+
+#define BTREE_NODE_TYPE_HAS_ATOMIC_TRIGGERS		\
+	(BIT_ULL(BKEY_TYPE_alloc)|			\
+	 BIT_ULL(BKEY_TYPE_inodes)|			\
+	 BIT_ULL(BKEY_TYPE_stripes)|			\
+	 BIT_ULL(BKEY_TYPE_snapshots))
+
+#define BTREE_NODE_TYPE_HAS_TRIGGERS			\
+	(BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS|		\
+	 BTREE_NODE_TYPE_HAS_ATOMIC_TRIGGERS)
+
+static inline bool btree_node_type_has_trans_triggers(enum btree_node_type type)
+{
+	return BIT_ULL(type) & BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS;
+}
+
+static inline bool btree_node_type_has_atomic_triggers(enum btree_node_type type)
+{
+	return BIT_ULL(type) & BTREE_NODE_TYPE_HAS_ATOMIC_TRIGGERS;
+}
+
+static inline bool btree_node_type_has_triggers(enum btree_node_type type)
+{
+	return BIT_ULL(type) & BTREE_NODE_TYPE_HAS_TRIGGERS;
+}
+
+/* A mask of btree id bits that have triggers for their leaves */
+__maybe_unused
+static const u64 btree_leaf_has_triggers_mask = BTREE_NODE_TYPE_HAS_TRIGGERS >> 1;
+
+static const u64 btree_is_extents_mask = 0
+#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_extents)) << nr)
+BCH_BTREE_IDS()
+#undef x
+;
+
+static inline bool btree_id_is_extents(enum btree_id btree)
+{
+	return BIT_ULL(btree) & btree_is_extents_mask;
+}
+
+static inline bool btree_node_type_is_extents(enum btree_node_type type)
+{
+	return type != BKEY_TYPE_btree && btree_id_is_extents(type - 1);
+}
+
+static const u64 btree_has_snapshots_mask = 0
+#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_snapshots)) << nr)
+BCH_BTREE_IDS()
+#undef x
+;
+
+static inline bool btree_type_has_snapshots(enum btree_id btree)
+{
+	return BIT_ULL(btree) & btree_has_snapshots_mask;
+}
+
+static inline bool btree_id_is_extents_snapshots(enum btree_id btree)
+{
+	return BIT_ULL(btree) & btree_has_snapshots_mask & btree_is_extents_mask;
+}
+
+static inline bool btree_type_has_snapshot_field(enum btree_id btree)
+{
+	const u64 mask = 0
+#define x(name, nr, flags, ...)	|((!!((flags) & (BTREE_IS_snapshot_field|BTREE_IS_snapshots))) << nr)
+	BCH_BTREE_IDS()
+#undef x
+	;
+
+	return BIT_ULL(btree) & mask;
+}
+
+static const u64 btree_has_data_ptrs_mask = 0
+#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_data)) << nr)
+	BCH_BTREE_IDS()
+#undef x
+	;
+
+static inline bool btree_type_has_data_ptrs(enum btree_id btree)
+{
+	return BIT_ULL(btree) & btree_has_data_ptrs_mask;
+}
+
+static inline bool btree_type_uses_write_buffer(enum btree_id btree)
+{
+	const u64 mask = 0
+#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_write_buffer)) << nr)
+	BCH_BTREE_IDS()
+#undef x
+	;
+
+	return BIT_ULL(btree) & mask;
+}
+
+static inline u8 btree_trigger_order(enum btree_id btree)
+{
+	switch (btree) {
+	case BTREE_ID_alloc:
+		return U8_MAX;
+	case BTREE_ID_stripes:
+		return U8_MAX - 1;
+	default:
+		return btree;
+	}
+}
+
+#endif /* _BCACHEFS_BTREE_TYPES_H */
