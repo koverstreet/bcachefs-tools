@@ -22,6 +22,9 @@ struct bch_fs_reconcile {
 	struct bbpos			work_pos;
 	struct bch_move_stats		work_stats;
 	struct progress_indicator	progress;
+	u64				phys_workers_considered;
+	u64				phys_workers_started;
+	u64				phys_worker_writepoints_distinct;
 
 	struct bbpos			scan_start;
 	struct bbpos			scan_end;
