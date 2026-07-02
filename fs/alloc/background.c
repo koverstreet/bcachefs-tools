@@ -751,7 +751,8 @@ int bch2_alloc_v4_validate(struct bch_fs *c, struct bkey_s_c k,
 	case BCH_DATA_user:
 	case BCH_DATA_parity:
 		bkey_fsck_err_on(!a.dirty_sectors &&
-				 !stripe_sectors,
+				 !stripe_sectors &&
+				 !a.stripe_refcount,
 				 c, alloc_key_dirty_sectors_0,
 				 "data_type %s but dirty_sectors==0",
 				 bch2_data_type_str(a.data_type));
