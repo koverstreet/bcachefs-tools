@@ -35,6 +35,7 @@
 
 #include <linux/aio.h>
 #include <linux/backing-dev.h>
+#include <linux/compat.h>
 #include <linux/exportfs.h>
 #include <linux/fileattr.h>
 #include <linux/fs_context.h>
@@ -1480,10 +1481,141 @@ static int bch2_mmap(struct file *file, struct vm_area_struct *vma)
 
 /* Directories: */
 
+struct bch_dir_cookie_state {
+	bool		valid;
+	loff_t		cookie;
+	u64		next_pos;
+};
+
+#define BCH2_READDIR_32_FIRST	2
+#define BCH2_READDIR_32_EOF	INT_MAX
+
+static inline bool bch2_dir_32bit_api(void)
+{
+#ifdef CONFIG_COMPAT
+	return in_compat_syscall();
+#else
+	return BITS_PER_LONG == 32;
+#endif
+}
+
+static inline bool bch2_dir_32bit_dirents(struct file *file)
+{
+	return (file->f_mode & FMODE_32BITHASH) ||
+		(!(file->f_mode & FMODE_64BITHASH) && bch2_dir_32bit_api());
+}
+
+static inline unsigned bch2_dir_cookie_shift(const struct bch_hash_info *hash)
+{
+	if (hash->is_31bit)
+		return 0;
+	if (hash->type == BCH_STR_HASH_crc32c)
+		return 1;
+	return 32;
+}
+
+/*
+ * 32-bit readdir ABIs have to round-trip d_off through signed long and d_ino
+ * through unsigned long. Keep bcachefs' internal cursor 64-bit, but hand the
+ * caller values that its dirent layout can represent.
+ *
+ * Position translation never produces BCH2_READDIR_32_EOF - it's a pure
+ * sentinel, set only when a readdir exhausts the directory, so stateless
+ * consumers (NFS) terminate instead of rescanning the final cookie granule
+ * forever:
+ */
+static inline loff_t bch2_dir_pos_to_32(const struct bch_hash_info *hash, u64 pos)
+{
+	unsigned shift = bch2_dir_cookie_shift(hash);
+
+	if (pos < BCH2_READDIR_32_FIRST || !shift)
+		return min_t(loff_t, pos, BCH2_READDIR_32_EOF - 1);
+
+	return min_t(loff_t, BCH2_READDIR_32_EOF - 1,
+		     max_t(loff_t, BCH2_READDIR_32_FIRST,
+			   pos >> shift));
+}
+
+static inline u64 bch2_dir_pos_from_32(const struct bch_hash_info *hash, loff_t pos)
+{
+	unsigned shift = bch2_dir_cookie_shift(hash);
+
+	if (pos < BCH2_READDIR_32_FIRST || !shift)
+		return pos;
+	if (pos == BCH2_READDIR_32_FIRST)
+		return BCH2_READDIR_32_FIRST;
+	if (pos >= BCH2_READDIR_32_EOF)
+		return U64_MAX;
+	return (u64) pos << shift;
+}
+
+static inline u32 bch2_dir_ino_to_32(u64 ino)
+{
+	u32 ret = ino;
+
+	return ret ?: 1;
+}
+
+struct bch_readdir_ctx32 {
+	struct dir_context		ctx;
+	struct dir_context		*dst;
+	struct bch_dir_cookie_state	*state;
+	struct bch_hash_info		*hash;
+	/* an entry was refused: the iteration stopped at a full buffer, not EOF */
+	bool				full;
+};
+
+#if defined(__KERNEL__) && LINUX_VERSION_CODE >= KERNEL_VERSION(7,1,0)
+typedef bool bch2_filldir_ret_t;
+#define bch2_filldir_ret_success(_ret)	(_ret)
+#else
+typedef int bch2_filldir_ret_t;
+#define bch2_filldir_ret_success(_ret)	(!(_ret))
+#endif
+
+static bch2_filldir_ret_t bch2_readdir_emit32(struct dir_context *ctx,
+					      const char *name, int namelen,
+					      loff_t offset, u64 ino, unsigned type)
+{
+	struct bch_readdir_ctx32 *src = container_of(ctx, struct bch_readdir_ctx32, ctx);
+	loff_t cookie = bch2_dir_pos_to_32(src->hash, offset);
+	u32 ino32 = bch2_dir_ino_to_32(ino);
+	bch2_filldir_ret_t ret = src->dst->actor(src->dst, name, namelen, cookie, ino32, type);
+
+	if (bch2_filldir_ret_success(ret)) {
+		if (src->state) {
+			src->state->valid = true;
+			src->state->cookie = cookie;
+			src->state->next_pos = offset + 1;
+		}
+	} else {
+		src->full = true;
+	}
+
+	return ret;
+}
+
+static int bch2_dir_open(struct inode *vinode, struct file *file)
+{
+	file->private_data = kzalloc(sizeof(struct bch_dir_cookie_state), GFP_KERNEL);
+	return file->private_data ? 0 : -ENOMEM;
+}
+
+static int bch2_dir_release(struct inode *vinode, struct file *file)
+{
+	kfree(file->private_data);
+	return 0;
+}
+
 static loff_t bch2_dir_llseek(struct file *file, loff_t offset, int whence)
 {
-	return generic_file_llseek_size(file, offset, whence,
-					S64_MAX, S64_MAX);
+	struct bch_dir_cookie_state *state = file->private_data;
+	loff_t max = bch2_dir_32bit_dirents(file) ? BCH2_READDIR_32_EOF : S64_MAX;
+
+	if (state)
+		state->valid = false;
+
+	return generic_file_llseek_size(file, offset, whence, max, max);
 }
 
 static int bch2_vfs_readdir(struct file *file, struct dir_context *ctx)
@@ -1494,10 +1626,40 @@ static int bch2_vfs_readdir(struct file *file, struct dir_context *ctx)
 	struct bch_hash_info hash;
 	try(bch2_hash_info_init(c, &inode->ei_inode, &hash));
 
-	if (!dir_emit_dots(file, ctx))
-		return 0;
+	int ret;
 
-	int ret = bch2_readdir(c, inode_inum(inode), &hash, ctx);
+	if (bch2_dir_32bit_dirents(file)) {
+		struct bch_dir_cookie_state *state = file->private_data;
+		u64 start = state && state->valid && state->cookie == ctx->pos
+			? state->next_pos
+			: bch2_dir_pos_from_32(&hash, ctx->pos);
+		struct bch_readdir_ctx32 ctx32 = {
+			.ctx	= { .actor = bch2_readdir_emit32, .pos = start, },
+			.dst	= ctx,
+			.state	= state,
+			.hash	= &hash,
+		};
+
+		if (!dir_emit_dots(file, &ctx32.ctx)) {
+			ctx->pos = bch2_dir_pos_to_32(&hash, ctx32.ctx.pos);
+			return 0;
+		}
+
+		ret = bch2_readdir(c, inode_inum(inode), &hash, &ctx32.ctx);
+
+		/*
+		 * bch2_readdir() returning 0 means it stopped at a full buffer
+		 * or ran out of dirents; only the actor knows which:
+		 */
+		ctx->pos = !ret && !ctx32.full
+			? BCH2_READDIR_32_EOF
+			: bch2_dir_pos_to_32(&hash, ctx32.ctx.pos);
+	} else {
+		if (!dir_emit_dots(file, ctx))
+			return 0;
+
+		ret = bch2_readdir(c, inode_inum(inode), &hash, ctx);
+	}
 
 	bch_err_fn(c, ret);
 	return bch2_err_class(ret);
@@ -1718,6 +1880,8 @@ static const struct inode_operations bch_dir_inode_operations = {
 };
 
 static const struct file_operations bch_dir_file_operations = {
+	.open		= bch2_dir_open,
+	.release	= bch2_dir_release,
 	.llseek		= bch2_dir_llseek,
 	.read		= generic_read_dir,
 	.iterate_shared	= bch2_vfs_readdir,
