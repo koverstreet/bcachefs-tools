@@ -45,6 +45,7 @@ int bch2_btree_write_buffer_tryflush(struct btree_trans *);
 
 struct wb_maybe_flush {
 	struct bkey_buf	last_flushed;
+	u64		flushed_seq;
 	u64		nr_flushes;
 	u64		nr_done;
 	bool		seen_error;
