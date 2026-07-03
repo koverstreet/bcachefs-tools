@@ -1018,6 +1018,7 @@ static inline struct bch_log_msg bch2_log_msg_init(struct bch_fs *c,
 {
 	struct printbuf buf = PRINTBUF;
 	buf.atomic = atomic;
+	buf.suppress = suppress;
 	bch2_log_msg_start(c, &buf);
 	return (struct bch_log_msg) {
 		.c		= c,
