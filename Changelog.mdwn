@@ -1,5 +1,103 @@
 # Changelog
 
+## v1.38.7 - Fri Jul 3 2026
+
+Bugfix and kernel-support release on top of v1.38.6, adding Linux 7.2 support
+and DKMS Rust builds on kernels without CONFIG_RUST. No on-disk format changes.
+
+### Kernel support and packaging
+
+- Builds against Linux 7.2.
+
+- bcachefs.ko can now be built with its Rust components even on kernels
+  configured without CONFIG_RUST, by vendoring the kernel's Rust support tree.
+  DKMS can also fetch a prebuilt, signed module instead of building locally when
+  one is available, and module signing for Secure Boot is supported. Mount now
+  reports the actual Rust build status rather than CONFIG_RUST.
+
+### Erasure coding
+
+- Stripes now go through the key cache, with assorted cleanups to stripe
+  deletion and triggers; several EROs have been removed and can now be repaired
+  more gracefully.
+
+- Durability accounting for erasure-coded data was reworked and an off-by-one
+  fixed: reconcile now recomputes durability per candidate when selecting
+  replicas to drop, and floors invalid-device padding at the stripe's
+  repairable durability.
+
+### Features and tooling
+
+- Mount: mount by filesystem label; the mount helper honors mount(8)'s -f
+  (fake), -s (sloppy) and no-mtab compatibility flags and reports modprobe
+  failures; multi-device filesystems show the filesystem UUID as the mount
+  source. FUSE mount parses -o options and no longer writes daemon logs to /tmp.
+
+- Commands/CLI: new `get-file-option`; `set-file-option` can delete individual
+  choice-typed options; the CLI accepts negative values and mask values for
+  bitfield options; typed usage shows full option paths; `unlock --check`
+  reports encryption and lock state.
+
+- New `move_writes_fua` option. The previous release switched writes from
+  internal moves to REQ_FUA to avoid impacting fsync() latency, especially on
+  tiered setups where foreground writes that need to be synced would be on SSDs
+  and background moves would be to spinning rust, but this turned out to be a
+  drastic performance regression; using FUA for internal moves is now off by
+  default but available for further testing.
+
+- Online device shrink is delegated to the kernel, so a mounted filesystem can
+  be shrunk with `bcachefs device resize`.
+
+- format warns when replicas would share a disk, and wipes former-partition
+  filesystem signatures when formatting a partitioned whole disk (previously it
+  only warned).
+
+- subvolumes may now be listed recursively
+
+### Bug fixes
+
+- **fsck** could loop, repeatedly "repairing" the same need_discard/freespace
+  entry without converging: the write-buffer flush cache wasn't invalidated when
+  a repair committed, so the re-check read stale data and re-flagged a key it had
+  just fixed. fsck now tracks the journal commit sequence and re-flushes once a
+  repair has landed.
+
+- **fsck** was also drastically slowed by unratelimited repair logging: a log
+  class meant to ratelimit repeated messages never did (the suppress flag was
+  accepted but discarded), and a second path had its ratelimit inverted. Both
+  are fixed.
+
+- A stale or mismatched erasure-coding stripe pointer is now logged as a
+  repairable fsck error and repaired, instead of taking the filesystem
+  inconsistent.
+
+- Snapshot repair hardening: keys are migrated out of deleted interior nodes,
+  and accounting is checked before destructive node transitions.
+
+- Fixed a use-after-free in erasure-coding stripe buffer teardown; two journal
+  read bugs (an uninitialized full-read flag and an undersized journal-rewind
+  re-read buffer); HAS_TOPOLOGY_ERRORS is now cleared when check_topology passes
+  clean; and alloc-info checks are cancellable.
+
+- Encryption: fixed superblock encryption on big-endian systems; key material is
+  zeroed on drop; the systemd-ask-password key name is shared with cryptsetup.
+
+- Security and permissions: per-object accounting ioctls now require
+  CAP_SYS_ADMIN; security xattrs are initialized on inode creation.
+
+- Devices: udev is refreshed after device add; multipath prefers mapper paths
+  and verifies the underlying rdev before substituting a mapper devnode.
+
+- `bcachefs fs usage` tolerates offline devices; recovery logs journal-replay
+  progress; write-buffer and nocow lock waits are now SRCU-aware; and data reads
+  verify that gzip decompresses to the full extent size.
+
+### Documentation
+
+- Extensive manpage and documentation improvements, covering degraded and
+  split-brain mount recovery, superblock recovery, encryption key handling,
+  subvolume queries and quotas, device options, filesystem limits, and more.
+
 ## v1.38.6 - Wed Jun 17 2026
 
 Feature and performance release on top of v1.38.5. No on-disk format changes.
