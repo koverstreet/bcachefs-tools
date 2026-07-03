@@ -394,6 +394,30 @@ static int bch2_trigger_pointer(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * An extent's erasure-coded pointer references a stripe it's not part of: the
+ * stripe is gone, or it exists but its block pointers don't match. Either way,
+ * log it, count it as a repairable fsck error, and ask check_allocations to
+ * recompute the stripe's block accounting from scratch. The caller then skips
+ * this pointer's block accounting instead of going emergency read-only.
+ */
+static int mark_stripe_ptr_no_match(struct btree_trans *trans,
+				    struct bkey_s_c k, u64 idx)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(bch_log_msg_ratelimited, msg)(c);
+
+	prt_printf(&msg.m, "extent doesn't match stripe %llu, not updating stripe block accounting\n  while marking ",
+		   idx);
+	bch2_bkey_val_to_text(&msg.m, c, k);
+	prt_newline(&msg.m);
+
+	bch2_count_fsck_err(c, stripe_update_stale_stripe_ptr, &msg.m);
+
+	return bch2_run_explicit_recovery_pass(c, &msg.m,
+			BCH_RECOVERY_PASS_check_allocations, 0);
+}
+
 static int bch2_trigger_stripe_ptr(struct btree_trans *trans,
 				struct bkey_s_c k,
 				struct extent_ptr_decoded p,
@@ -408,36 +432,16 @@ static int bch2_trigger_stripe_ptr(struct btree_trans *trans,
 							BTREE_ID_stripes, POS(0, p.ec.idx),
 							BTREE_ITER_cached, stripe);
 		int ret = PTR_ERR_OR_ZERO(s);
-		if (unlikely(ret)) {
-			bch2_trans_inconsistent_on(bch2_err_matches(ret, ENOENT), trans,
-				"pointer to nonexistent stripe %llu",
-				(u64) p.ec.idx);
+		if (ret && !bch2_err_matches(ret, ENOENT))
 			return ret;
-		}
 
-		if (!bch2_ptr_matches_stripe(&s->v, p)) {
-			CLASS(bch_log_msg_ratelimited, msg)(c);
-			prt_printf(&msg.m, "extent doesn't match stripe %llu, not updating stripe block accounting\n  while marking ",
-				   (u64) p.ec.idx);
-			bch2_bkey_val_to_text(&msg.m, c, k);
-			prt_newline(&msg.m);
-
-			bch2_count_fsck_err(c, stripe_update_stale_stripe_ptr, &msg.m);
-
-			/*
-			 * If check_allocations hasn't run yet, restart and let it
-			 * recompute the stripe's block accounting from scratch:
-			 */
-			try(bch2_run_explicit_recovery_pass(c, &msg.m,
-					BCH_RECOVERY_PASS_check_allocations, 0));
-
-			/*
-			 * Otherwise the extent simply isn't part of this stripe:
-			 * don't touch the stripe's block accounting, and don't go
-			 * emergency read-only over it - just skip it.
-			 */
-			return 0;
-		}
+		/*
+		 * The stripe is gone (ENOENT), or it exists but doesn't match
+		 * this extent's pointer: either way the extent isn't part of
+		 * the stripe, so skip its block accounting.
+		 */
+		if (ret || !bch2_ptr_matches_stripe(&s->v, p))
+			return mark_stripe_ptr_no_match(trans, k, p.ec.idx);
 
 		stripe_blockcount_set(&s->v, p.ec.block,
 			stripe_blockcount_get(&s->v, p.ec.block) +
@@ -461,15 +465,9 @@ static int bch2_trigger_stripe_ptr(struct btree_trans *trans,
 
 		gc_stripe_lock(m);
 
-		if (!m || !m->alive) {
+		if (!m->alive || !bch2_ptr_matches_stripe_m(m, p)) {
 			gc_stripe_unlock(m);
-
-			CLASS(bch_log_msg, msg)(c);
-			prt_printf(&msg.m, "pointer to nonexistent stripe %llu\n  while marking ",
-				   (u64) p.ec.idx);
-			bch2_bkey_val_to_text(&msg.m, c, k);
-			__bch2_inconsistent_error(c, &msg.m);
-			return bch_err_throw(c, trigger_stripe_pointer);
+			return mark_stripe_ptr_no_match(trans, k, p.ec.idx);
 		}
 
 		m->block_sectors[p.ec.block] += sectors;
