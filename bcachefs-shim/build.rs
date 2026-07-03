@@ -115,4 +115,14 @@ fn main() {
         wrappers.include(p);
     }
     wrappers.compile("bcachefs_shim_static_wrappers");
+
+    // dh-cargo Built-Using (Debian): point at the workspace root (== the dpkg
+    // build's $PWD) so dh-cargo-built-using sees this lib as built from our own
+    // in-tree source and skips it, rather than aborting on a build path no
+    // Debian package owns. Mirrors the same declaration in fs/build.rs and
+    // bch_bindgen/build.rs. `root` is top_dir's parent, i.e. the workspace root.
+    println!(
+        "dh-cargo:deb-built-using=bcachefs_shim_static_wrappers=0={}",
+        root.display()
+    );
 }
