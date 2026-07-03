@@ -1,5 +1,10 @@
 # Changelog
 
+## v1.38.8 - Fri Jul 3 2026
+
+- Fix dpkg builds.
+- Fix journal preflushes being throttled by writeback throttling
+
 ## v1.38.7 - Fri Jul 3 2026
 
 Bugfix and kernel-support release on top of v1.38.6, adding Linux 7.2 support
