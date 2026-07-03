@@ -1069,6 +1069,9 @@ LE64_BITMASK(BCH_SB_EXT_DISCARD_BUFFER,		struct bch_sb_field_ext, flags0, 38, 42
 	x(need_discard_by_journal_seq,	BCH_VERSION(1, 38),			\
 	  "need_discard btree reindexed by journal seq for O(1) "		\
 	  "discard eligibility checks",				"2026-03")	\
+	x(per_dev_fragmentation_lru,	BCH_VERSION(1, 39),			\
+	  "Per-device bucket fragmentation LRUs, so copygc can reason "		\
+	  "about fragmentation per device",			"2026-07")
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,

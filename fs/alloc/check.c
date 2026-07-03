@@ -707,7 +707,8 @@ static int bch2_check_alloc_to_lru_ref(struct btree_trans *trans,
 
 	u64 lru_idx = alloc_lru_idx_fragmentation(*a, ca);
 	if (lru_idx)
-		try(bch2_lru_check_set(trans, BCH_LRU_BUCKET_FRAGMENTATION,
+		try(bch2_lru_check_set(trans,
+				       bucket_fragmentation_lru(alloc_k.k->p.inode),
 				       bucket_to_u64(alloc_k.k->p),
 				       lru_idx, alloc_k, last_flushed));
 

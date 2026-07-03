@@ -181,15 +181,37 @@ static int bch2_check_lru_key(struct btree_trans *trans,
 	enum bch_lru_type type = lru_type(lru_k);
 	u64 idx = bkey_lru_type_idx(c, type, k);
 
-	if (lru_pos_time(lru_k.k->p) != idx) {
+	/*
+	 * Read and bucket fragmentation lrus are per-device: check the entry is
+	 * in the lru its bucket's device says it belongs to. This is also what
+	 * deletes entries in the old fs-wide fragmentation lru
+	 * (BCH_LRU_BUCKET_FRAGMENTATION_OLD) after the per_dev_fragmentation_lru
+	 * upgrade:
+	 */
+	u16 lru_id = lru_pos_id(lru_k.k->p);
+	u16 want_id = lru_id;
+
+	switch (type) {
+	case BCH_LRU_read:
+		want_id = u64_to_bucket(lru_k.k->p.offset).inode;
+		break;
+	case BCH_LRU_fragmentation:
+		want_id = bucket_fragmentation_lru(u64_to_bucket(lru_k.k->p.offset).inode);
+		break;
+	default:
+		break;
+	}
+
+	if (lru_id != want_id ||
+	    lru_pos_time(lru_k.k->p) != idx) {
 		try(bch2_btree_write_buffer_maybe_flush(trans, lru_k, last_flushed));
 
 		if (ret_fsck_err(trans, lru_entry_bad,
-			     "incorrect lru entry: lru %s time %llu\n"
+			     "incorrect lru entry: lru %s, expected id %u time %llu\n"
 			     "%s\n"
 			     "for %s",
 			     bch2_lru_types[type],
-			     lru_pos_time(lru_k.k->p),
+			     want_id, idx,
 			     (bch2_bkey_val_to_text(&buf1, c, lru_k), buf1.buf),
 			     (bch2_bkey_val_to_text(&buf2, c, k), buf2.buf)))
 			return bch2_btree_bit_mod_buffered(trans, BTREE_ID_lru, lru_iter->pos, false);

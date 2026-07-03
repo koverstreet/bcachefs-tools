@@ -1394,7 +1394,7 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 				    alloc_lru_idx_read(*new_a)));
 
 		try(bch2_lru_change(trans,
-				    BCH_LRU_BUCKET_FRAGMENTATION,
+				    bucket_fragmentation_lru(op.new.k->p.inode),
 				    bucket_to_u64(op.new.k->p),
 				    alloc_lru_idx_fragmentation(*old_a, ca),
 				    alloc_lru_idx_fragmentation(*new_a, ca)));
