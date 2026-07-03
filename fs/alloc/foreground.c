@@ -515,6 +515,8 @@ static noinline __cold void bucket_alloc_to_text(struct printbuf *out,
 	if (req->ca) {
 		prt_printf(out, "dev\t%s (%u)\n",	req->ca->name, req->ca->dev_idx);
 		prt_printf(out, "avail\t%llu\n",	__dev_buckets_free(req->ca, req->usage, req->watermark));
+		scoped_guard(percpu_read, &c->capacity.mark_lock)
+			prt_printf(out, "copygc dev wait\t%lli\n", bch2_copygc_dev_wait_amount(req->ca));
 	}
 
 	prt_printf(out, "watermark\t%s\n",	bch2_watermarks[req->watermark]);
@@ -525,8 +527,7 @@ static noinline __cold void bucket_alloc_to_text(struct printbuf *out,
 	prt_printf(out, "blocking\t%u\n", !(req->flags & BCH_WRITE_alloc_nowait));
 	prt_printf(out, "free\t%llu\n",		req->usage.buckets[BCH_DATA_free]);
 	prt_printf(out, "need_discard\t%llu\n",	req->usage.buckets[BCH_DATA_need_discard]);
-	prt_printf(out, "copygc_wait\t%llu/%lli\n",
-		   bch2_copygc_wait_amount(c),
+	prt_printf(out, "copygc_wait\t%lli\n",
 		   c->copygc.wait - atomic64_read(&c->io_clock[WRITE].now));
 	prt_printf(out, "seen\t%llu\n",	req->counters.buckets_seen);
 	prt_printf(out, "open\t%llu\n",	req->counters.skipped_open);
@@ -646,8 +647,9 @@ again:
 		    c->recovery.pass_done < BCH_RECOVERY_PASS_check_allocations)
 			goto alloc;
 
-		if (bch2_copygc_can_make_progress(ca)) {
-			copygc_can_make_progress = true;
+		scoped_guard(percpu_read, &c->capacity.mark_lock)
+			copygc_can_make_progress = bch2_copygc_can_make_progress(ca);
+		if (copygc_can_make_progress) {
 			req->copygc_can_make_progress = true;
 			bch2_copygc_wakeup(c);
 		}
@@ -1928,6 +1930,7 @@ static bool alloc_wait_advanced(struct bch_fs *c, struct alloc_request *req)
 	if (unlikely(req->trace_alloc_failed))
 		return true;
 
+	guard(percpu_read)(&c->capacity.mark_lock);
 	guard(rcu)();
 	bool found = false;
 

@@ -706,10 +706,26 @@ static int bch2_check_alloc_to_lru_ref(struct btree_trans *trans,
 	a = bch2_alloc_to_v4(alloc_k, &a_convert);
 
 	u64 lru_idx = alloc_lru_idx_fragmentation(*a, ca);
-	if (lru_idx)
-		try(bch2_lru_check_set(trans, BCH_LRU_BUCKET_FRAGMENTATION,
-				       bucket_to_u64(alloc_k.k->p),
-				       lru_idx, alloc_k, last_flushed));
+	if (lru_idx) {
+		/*
+		 * per_dev_fragmentation_lru upgrade: the per-device entry is
+		 * either missing or was just written by check_lrus' migration
+		 * and is sitting unflushed in the write buffer, which reads as
+		 * missing - either way the lookup can't win, and the write
+		 * buffer flush it triggers is far more expensive than just
+		 * recreating the entry unconditionally:
+		 */
+		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_per_dev_fragmentation_lru)
+			try(bch2_lru_set(trans,
+					 bucket_fragmentation_lru(alloc_k.k->p.inode),
+					 bucket_to_u64(alloc_k.k->p),
+					 lru_idx));
+		else
+			try(bch2_lru_check_set(trans,
+					       bucket_fragmentation_lru(alloc_k.k->p.inode),
+					       bucket_to_u64(alloc_k.k->p),
+					       lru_idx, alloc_k, last_flushed));
+	}
 
 	if (a->data_type == BCH_DATA_cached) {
 		if (ret_fsck_err_on(!a->io_time[READ],

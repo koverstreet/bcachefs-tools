@@ -34,12 +34,22 @@ static inline struct bpos lru_end(u16 lru_id)
 	return lru_pos(lru_id, U64_MAX, LRU_TIME_MAX);
 }
 
+static inline u16 bucket_fragmentation_lru(unsigned dev)
+{
+	return BCH_LRU_BUCKET_FRAGMENTATION_START + dev;
+}
+
 static inline enum bch_lru_type lru_type(struct bkey_s_c l)
 {
 	u16 lru_id = l.k->p.inode >> 48;
 
+	if (lru_id < BCH_LRU_READ_MAX)
+		return BCH_LRU_read;
+	if (lru_id < BCH_LRU_BUCKET_FRAGMENTATION_END)
+		return BCH_LRU_fragmentation;
+
 	switch (lru_id) {
-	case BCH_LRU_BUCKET_FRAGMENTATION:
+	case BCH_LRU_BUCKET_FRAGMENTATION_OLD:
 		return BCH_LRU_fragmentation;
 	case BCH_LRU_STRIPE_FRAGMENTATION:
 		return BCH_LRU_stripes;
@@ -59,6 +69,7 @@ void bch2_lru_pos_to_text(struct printbuf *, struct bpos);
 	.min_val_size	= 8,			\
 })
 
+int bch2_lru_set(struct btree_trans *, u16, u64, u64);
 int __bch2_lru_change(struct btree_trans *, u16, u64, u64, u64);
 
 static inline int bch2_lru_change(struct btree_trans *trans,

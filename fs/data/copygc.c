@@ -29,6 +29,7 @@
 
 #include "bcachefs.h"
 
+#include "alloc/accounting.h"
 #include "alloc/background.h"
 #include "alloc/backpointers.h"
 #include "alloc/buckets.h"
@@ -53,6 +54,7 @@
 #include <linux/kthread.h>
 #include <linux/math64.h>
 #include <linux/sched/task.h>
+#include <linux/sort.h>
 #include <linux/wait.h>
 
 struct buckets_in_flight {
@@ -174,6 +176,14 @@ static bool bucket_in_flight(struct buckets_in_flight *list,
 	return rhashtable_lookup_fast(list->table, &k, bch_move_bucket_params);
 }
 
+static bool copygc_batch_full(struct buckets_in_flight *buckets_in_flight)
+{
+	size_t nr_to_get = max_t(size_t, 16U, buckets_in_flight->nr / 4);
+
+	return buckets_in_flight->to_evacuate.nr >= nr_to_get;
+}
+
+/* Returns 1 if the bucket was added to the batch, 0 if skipped: */
 static int try_add_copygc_bucket(struct btree_trans *trans,
 				 struct buckets_in_flight *buckets_in_flight,
 				 struct bpos bucket, u64 lru_time)
@@ -203,25 +213,140 @@ static int try_add_copygc_bucket(struct btree_trans *trans,
 					    bch_move_bucket_params);
 	BUG_ON(ret);
 
-	size_t nr_to_get = max_t(size_t, 16U, buckets_in_flight->nr / 4);
-	return buckets_in_flight->to_evacuate.nr >= nr_to_get;
+	return 1;
 }
 
-static int bch2_copygc_get_buckets(struct moving_context *ctxt,
-			struct buckets_in_flight *buckets_in_flight)
+struct copygc_dev {
+	unsigned	dev;
+	s64		wait;
+	struct bpos	pos;
+	/* lru exhausted, or the device no longer needs copygc: */
+	bool		done;
+};
+
+DEFINE_DARRAY_NAMED(darray_copygc_dev, struct copygc_dev)
+
+static int copygc_dev_cmp(const void *_l, const void *_r)
+{
+	const struct copygc_dev *l = _l, *r = _r;
+
+	return cmp_int(l->wait, r->wait);
+}
+
+/*
+ * The devices that currently need copygc - fragmented space over their
+ * allowance, i.e. wait amount exhausted - sorted neediest first. When the list
+ * is empty, *wait is the amount of io (in sectors, by the write io clock)
+ * until the closest device will need it.
+ */
+static int copygc_dev_list(struct bch_fs *c, darray_copygc_dev *devs, u64 *wait)
+{
+	devs->nr = 0;
+	*wait = U64_MAX;
+
+	try(darray_make_room(devs, c->sb.nr_devices));
+
+	scoped_guard(percpu_read, &c->capacity.mark_lock)
+		scoped_guard(rcu)
+			for_each_rw_member_rcu(c, ca) {
+				s64 v = bch2_copygc_dev_wait_amount(ca);
+
+				/* No allocating under rcu - skip if a device raced in: */
+				if (v <= 0 && devs->nr < devs->size)
+					darray_push(devs, ((struct copygc_dev) {
+						.dev	= ca->dev_idx,
+						.wait	= v,
+					}));
+				else if (v > 0)
+					*wait = min(*wait, (u64) v);
+			}
+
+	sort(devs->data, devs->nr, sizeof(devs->data[0]), copygc_dev_cmp, NULL);
+
+	if (devs->nr)
+		*wait = 0;
+	return 0;
+}
+
+/*
+ * Get one bucket from this device's fragmentation lru, resuming from where we
+ * left off. Returns 1 if a bucket was added to the batch, 0 if the lru is
+ * exhausted:
+ */
+static int copygc_dev_get_bucket(struct moving_context *ctxt,
+			struct buckets_in_flight *buckets_in_flight,
+			struct copygc_dev *d)
 {
 	struct btree_trans *trans = ctxt->trans;
 
 	int ret = for_each_btree_key_max(trans, iter, BTREE_ID_lru,
-				  lru_start(BCH_LRU_BUCKET_FRAGMENTATION),
-				  lru_end(BCH_LRU_BUCKET_FRAGMENTATION),
-				  0, k,
-		try_add_copygc_bucket(trans, buckets_in_flight,
-				      u64_to_bucket(k.k->p.offset),
-				      lru_pos_time(k.k->p))
-	);
+				  d->pos,
+				  lru_end(bucket_fragmentation_lru(d->dev)),
+				  0, k, ({
+		int ret2 = try_add_copygc_bucket(trans, buckets_in_flight,
+					      u64_to_bucket(k.k->p.offset),
+					      lru_pos_time(k.k->p));
+		d->pos = bpos_successor(k.k->p);
+		ret2;
+	}));
 
-	return ret < 0 ? ret : 0;
+	if (!ret)
+		d->done = true;
+	return ret;
+}
+
+/*
+ * In-flight evacuations completing and reconcile moving data off can bring a
+ * device back under its allowance mid batch - pop it off the list when it no
+ * longer needs copygc:
+ */
+static bool copygc_dev_still_needed(struct bch_fs *c, struct copygc_dev *d)
+{
+	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, d->dev);
+
+	return ca && bch2_copygc_can_make_progress(ca);
+}
+
+static int bch2_copygc_get_buckets(struct moving_context *ctxt,
+			struct buckets_in_flight *buckets_in_flight,
+			darray_copygc_dev *devs)
+{
+	darray_for_each(*devs, i) {
+		i->pos	= lru_start(bucket_fragmentation_lru(i->dev));
+		i->done	= false;
+	}
+
+	/*
+	 * Round robin among the devices that need evacuating, one bucket per
+	 * device per pass, so that no single device monopolizes the batch and
+	 * every pressured device makes progress:
+	 */
+	unsigned done;
+	do {
+		done = 0;
+
+		darray_for_each(*devs, i) {
+			if (!i->done &&
+			    !copygc_dev_still_needed(ctxt->trans->c, i))
+				i->done = true;
+
+			if (i->done) {
+				done++;
+				continue;
+			}
+
+			int ret = copygc_dev_get_bucket(ctxt, buckets_in_flight, i);
+			if (ret < 0)
+				return ret;
+
+			if (copygc_batch_full(buckets_in_flight))
+				return 0;
+		}
+	} while (done < devs->nr);
+
+	return 0;
 }
 
 static int bch2_copygc_get_stripe_buckets(struct moving_context *ctxt,
@@ -260,6 +385,10 @@ static int bch2_copygc_get_stripe_buckets(struct moving_context *ctxt,
 
 			ret2 = try_add_copygc_bucket(trans, buckets_in_flight,
 						     PTR_BUCKET_POS(ca, ptr), U64_MAX);
+			if (ret2 < 0)
+				break;
+
+			ret2 = copygc_batch_full(buckets_in_flight);
 			if (ret2)
 				break;
 		}
@@ -270,7 +399,7 @@ err:
 	return ret < 0 ? ret : 0;
 }
 
-static bool should_do_ec_copygc(struct btree_trans *trans)
+static bool should_do_ec_copygc(struct btree_trans *trans, darray_copygc_dev *devs)
 {
 	u64 stripe_frag_ratio = 0;
 
@@ -311,13 +440,28 @@ err:
 		ret;
 	}));
 
-	CLASS(btree_iter, iter)(trans, BTREE_ID_lru, lru_start(BCH_LRU_BUCKET_FRAGMENTATION), 0);
-	struct bkey_s_c lru_k;
-	struct bpos lru_end_pos = lru_end(BCH_LRU_BUCKET_FRAGMENTATION);
+	/*
+	 * Compare against the best bucket candidate this round can actually
+	 * evacuate - the emptiest lru head across the devices that need
+	 * copygc:
+	 */
+	u64 bucket_frag_ratio = 0;
+	darray_for_each(*devs, i) {
+		u16 lru_id = bucket_fragmentation_lru(i->dev);
 
-	lockrestart_do(trans, bkey_err(lru_k = bch2_btree_iter_peek_max(&iter, &lru_end_pos)));
+		CLASS(btree_iter, iter)(trans, BTREE_ID_lru, lru_start(lru_id), 0);
+		struct bkey_s_c lru_k;
+		struct bpos lru_end_pos = lru_end(lru_id);
 
-	u64 bucket_frag_ratio = lru_k.k && !bkey_err(lru_k) ? lru_pos_time(lru_k.k->p) : 0;
+		lockrestart_do(trans, bkey_err(lru_k = bch2_btree_iter_peek_max(&iter, &lru_end_pos)));
+
+		if (lru_k.k && !bkey_err(lru_k)) {
+			u64 t = lru_pos_time(lru_k.k->p);
+
+			if (!bucket_frag_ratio || t < bucket_frag_ratio)
+				bucket_frag_ratio = t;
+		}
+	}
 
 	/* Prefer normal bucket copygc */
 	return stripe_frag_ratio && stripe_frag_ratio * 2 < bucket_frag_ratio;
@@ -326,6 +470,7 @@ err:
 noinline
 static int bch2_copygc(struct moving_context *ctxt,
 		       struct buckets_in_flight *buckets_in_flight,
+		       darray_copygc_dev *devs,
 		       bool *did_work)
 {
 	struct btree_trans *trans = ctxt->trans;
@@ -347,9 +492,9 @@ static int bch2_copygc(struct moving_context *ctxt,
 	if (bch2_fs_fatal_err_on(ret, c, "%s: from bch2_btree_write_buffer_tryflush()", bch2_err_str(ret)))
 		goto err;
 
-	ret = should_do_ec_copygc(trans)
+	ret = should_do_ec_copygc(trans, devs)
 		? bch2_copygc_get_stripe_buckets(ctxt, buckets_in_flight)
-		: bch2_copygc_get_buckets(ctxt, buckets_in_flight);
+		: bch2_copygc_get_buckets(ctxt, buckets_in_flight, devs);
 	if (ret)
 		goto err;
 
@@ -390,74 +535,71 @@ err:
 	return ret;
 }
 
+/*
+ * Will copygc run on this device? The allocator uses this on the blocked path
+ * to decide whether to kick copygc and wait for it, or bail: it must be the
+ * same criterion copygc uses to build its device list, so the allocator never
+ * waits on a copygc run that isn't coming - and never bails when one is.
+ */
 bool bch2_copygc_can_make_progress(struct bch_dev *ca)
 {
-	struct bch_dev_usage_full usage_full = bch2_dev_usage_full_read(ca);
-	u64 fragmented = 0;
-
-	for (unsigned i = 0; i < BCH_DATA_NR; i++)
-		if (data_type_movable(i))
-			fragmented += usage_full.d[i].fragmented;
-
-	/*
-	 * Hysteresis to avoid waking copygc for trivial fragmentation. The
-	 * threshold has to stay low enough that the alloc-blocked wakeup
-	 * path in bch2_bucket_alloc_trans() fires before the allocator
-	 * starves; using the full stripe-watermark reserve was too high and
-	 * could leave the allocator hung with non-trivial fragmentation
-	 * sitting just below threshold.
-	 */
-	return fragmented > ca->mi.bucket_size *
-		bch2_dev_buckets_reserved(ca, BCH_WATERMARK_stripe) / 4;
+	return bch2_copygc_dev_wait_amount(ca) <= 0;
 }
 
-u64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
+/*
+ * Returns how much io (in sectors, by the write io clock) until this device
+ * will need copygc: <= 0 means it needs it now, and the magnitude is how far
+ * past its fragmented-space allowance it is - the sort key for picking which
+ * device needs copygc the most.
+ *
+ * Caller must hold mark_lock (read), for the dev_leaving accounting read -
+ * and must take it outside any rcu read section, mark_lock can block.
+ *
+ * The allowance at the limit - when the device is full - is the space we
+ * reserved in bch2_recalc_capacity; we can't have more than that amount of
+ * disk space stranded due to fragmentation and store everything we have
+ * promised to store. But we don't want to be running copygc unnecessarily
+ * when the device still has plenty of free space - rather, we want copygc to
+ * smoothly run every so often and continually reduce the amount of fragmented
+ * space as the device fills up - so we increase the allowance by half the
+ * current free space.
+ */
+s64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
 {
+	struct bch_fs *c = ca->fs;
 	struct bch_dev_usage_full usage_full = bch2_dev_usage_full_read(ca);
 	struct bch_dev_usage usage;
 
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
 		usage.buckets[i] = usage_full.d[i].buckets;
 
-	/* Don't start until less than 20% of the device is free */
-	s64 wait = (usage.buckets[BCH_DATA_free] * 5 - ca->mi.nbuckets) * ca->mi.bucket_size;
+	/*
+	 * Sectors that reconcile is scheduled to move off this device count as
+	 * free-to-be: a full device whose data is mostly leaving doesn't need
+	 * copygc, it needs reconcile to run.
+	 */
+	struct disk_accounting_pos pos;
+	disk_accounting_key_init(pos, dev_leaving, .dev = ca->dev_idx);
+	s64 leaving;
+	bch2_accounting_mem_read_locked(c, disk_accounting_pos_to_bpos(&pos), &leaving, 1);
+	leaving = max(0LL, leaving);
+
+	/* Don't start until less than 20% of the device is free: */
+	s64 free = usage.buckets[BCH_DATA_free] * ca->mi.bucket_size + leaving;
+	s64 wait = free * 5 - ca->mi.nbuckets * ca->mi.bucket_size;
 	if (wait > 0)
 		return wait;
 
-	s64 fragmented_allowed = (((__dev_buckets_free(ca, usage, BCH_WATERMARK_stripe) +
-				    bch2_dev_buckets_reserved(ca, BCH_WATERMARK_stripe)) *
-				   ca->mi.bucket_size) >> 1);
+	s64 fragmented_allowed = ((__dev_buckets_free(ca, usage, BCH_WATERMARK_stripe) +
+				   bch2_dev_buckets_reserved(ca, BCH_WATERMARK_stripe)) *
+				  ca->mi.bucket_size + leaving) >> 1;
 	s64 fragmented = 0;
 
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
 		if (data_type_movable(i))
 			fragmented += usage_full.d[i].fragmented;
 
-	return max(0LL, fragmented_allowed - fragmented);
-}
-
-/*
- * Copygc runs when the amount of fragmented data is above some arbitrary
- * threshold:
- *
- * The threshold at the limit - when the device is full - is the amount of space
- * we reserved in bch2_recalc_capacity; we can't have more than that amount of
- * disk space stranded due to fragmentation and store everything we have
- * promised to store.
- *
- * But we don't want to be running copygc unnecessarily when the device still
- * has plenty of free space - rather, we want copygc to smoothly run every so
- * often and continually reduce the amount of fragmented space as the device
- * fills up. So, we increase the threshold by half the current free space.
- */
-u64 bch2_copygc_wait_amount(struct bch_fs *c)
-{
-	u64 wait = U64_MAX;
-
-	guard(rcu)();
-	for_each_rw_member_rcu(c, ca)
-		wait = min(wait, bch2_copygc_dev_wait_amount(ca));
-	return wait;
+	return fragmented_allowed - fragmented;
 }
 
 __cold void bch2_copygc_wait_to_text(struct printbuf *out, struct bch_fs *c)
@@ -482,12 +624,13 @@ __cold void bch2_copygc_wait_to_text(struct printbuf *out, struct bch_fs *c)
 	bch2_printbuf_make_room(out, 4096);
 
 	struct task_struct *t;
+	scoped_guard(percpu_read, &c->capacity.mark_lock)
 	scoped_guard(rcu) {
 		guard(printbuf_atomic)(out);
 		prt_printf(out, "Currently calculated wait:\n");
 		for_each_rw_member_rcu(c, ca) {
 			prt_printf(out, "  %s:\t", ca->name);
-			prt_human_readable_u64(out, bch2_copygc_dev_wait_amount(ca));
+			prt_human_readable_s64(out, bch2_copygc_dev_wait_amount(ca));
 			prt_newline(out);
 		}
 
@@ -509,6 +652,7 @@ static int bch2_copygc_thread(void *arg)
 	struct bch_move_stats move_stats;
 	struct io_clock *clock = &c->io_clock[WRITE];
 	struct buckets_in_flight buckets = {};
+	CLASS(darray_copygc_dev, devs)();
 	u64 last, wait;
 	u32 kick = c->copygc.kick_count;
 
@@ -555,9 +699,11 @@ static int bch2_copygc_thread(void *arg)
 		}
 
 		last = atomic64_read(&clock->now);
-		wait = bch2_copygc_wait_amount(c);
+		ret = copygc_dev_list(c, &devs, &wait);
+		if (ret)
+			break;
 
-		if (wait > clock->max_slop &&
+		if (!devs.nr &&
 		    kick == READ_ONCE(c->copygc.kick_count)) {
 			c->copygc.wait_at = last;
 			c->copygc.wait = last + wait;
@@ -582,7 +728,7 @@ static int bch2_copygc_thread(void *arg)
 		c->copygc.wait = 0;
 
 		c->copygc.running = true;
-		ret = bch2_copygc(&ctxt, &buckets, &did_work);
+		ret = bch2_copygc(&ctxt, &buckets, &devs, &did_work);
 		c->copygc.running = false;
 		c->copygc.run_count++;
 

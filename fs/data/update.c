@@ -1016,6 +1016,8 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 		printbuf_atomic_inc(trace);
 	}
 
+	/* bch2_copygc_can_make_progress needs to read accounting for dev_leaving */
+	guard(percpu_read)(&c->capacity.mark_lock);
 	guard(rcu)();
 	struct bch_devs_mask devs = target_rw_devs(c, data_type, target);
 	unsigned durability = 0;
