@@ -33,6 +33,7 @@
 #include "util/clock.h"
 
 #include <linux/freezer.h>
+#include <linux/ioprio.h>
 #include <linux/kthread.h>
 #include <linux/sched/cputime.h>
 
@@ -434,6 +435,8 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 
 	data_opts->type			= BCH_DATA_UPDATE_reconcile;
 	data_opts->target		= r->background_target;
+	if (r->hipri)
+		data_opts->ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7);
 
 	/*
 	 * we can't add/drop replicas from btree nodes incrementally, we always
@@ -780,6 +783,42 @@ static bool stripe_retry_must_wait(struct moving_context *ctxt,
 	return u && u->io_seq <= stripe_io_seq;
 }
 
+static bool reconcile_target_has_rotational(struct bch_fs *c,
+					    struct bch_inode_opts *opts,
+					    struct data_update_opts *data_opts)
+{
+	unsigned target = data_opts->target ?:
+		opts->background_target ?:
+		opts->foreground_target;
+	struct bch_devs_mask devs = target_rw_devs(c, BCH_DATA_user, target);
+
+	guard(rcu)();
+	for_each_member_device_rcu(c, ca, &devs)
+		if (bch2_dev_rotational(c, ca->dev_idx))
+			return true;
+
+	return false;
+}
+
+static void reconcile_set_move_limits(struct moving_context *ctxt,
+				      struct bch_inode_opts *opts,
+				      struct data_update_opts *data_opts,
+				      struct bbpos work)
+{
+	struct bch_fs *c = ctxt->trans->c;
+
+	bch2_moving_ctxt_reset_limits(ctxt);
+
+	if (!reconcile_target_has_rotational(c, opts, data_opts))
+		return;
+
+	bch2_moving_ctxt_set_rotational_limits(ctxt,
+			work.btree == BTREE_ID_reconcile_hipri ||
+			work.btree == BTREE_ID_reconcile_hipri_phys
+			? MOVE_ROTATIONAL_LIMIT_hipri
+			: MOVE_ROTATIONAL_LIMIT_background);
+}
+
 static int do_retry_stripe(struct moving_context *ctxt, u64 idx)
 {
 	struct btree_trans *trans = ctxt->trans;
@@ -862,6 +901,7 @@ static int __do_reconcile_extent(struct moving_context *ctxt,
 		}
 	}
 
+	reconcile_set_move_limits(ctxt, opts, data_opts, work);
 	ret = bch2_move_extent(ctxt, NULL, opts, data_opts, iter, level, k);
 	BUG_ON(ret > 0);
 	ret = check_reconcile_pending_err(trans, opts, data_opts, k, ret);
@@ -1331,6 +1371,8 @@ static void reconcile_wait(struct bch_fs *c)
 	struct io_clock *clock = &c->io_clock[WRITE];
 	u64 now = atomic64_read(&clock->now);
 	u64 min_member_capacity = bch2_min_rw_member_capacity(c);
+	/* WRITE io_clock may not advance while the fs is idle. */
+	unsigned long wallclock_timeout = 5 * HZ;
 
 	if (reconcile_hipri_work_pending(c)) {
 		cond_resched();
@@ -1348,7 +1390,7 @@ static void reconcile_wait(struct bch_fs *c)
 		r->running		= false;
 	}
 
-	bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, MAX_SCHEDULE_TIMEOUT);
+	bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, wallclock_timeout);
 }
 
 struct reconcile_phase {
@@ -1434,6 +1476,12 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 			      writepoint_ptr(&c->allocator.reconcile_write_point),
 			      true);
 
+	if (bch2_dev_rotational(c, thr->dev))
+		bch2_moving_ctxt_set_rotational_limits(&ctxt,
+				reconcile_phases[thr->reconcile_phase].priority == RECONCILE_WORK_hipri
+				? MOVE_ROTATIONAL_LIMIT_hipri
+				: MOVE_ROTATIONAL_LIMIT_background);
+
 	struct btree_trans *trans = ctxt.trans;
 
 	CLASS(darray_reconcile_work, work)();
@@ -1455,7 +1503,9 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 	struct bbpos work_pos = BBPOS(reconcile_phases[thr->reconcile_phase].btree,
 				      POS(thr->dev, 0));
 
-	while (!bch2_move_ratelimit(&ctxt)) {
+	int ret = 0;
+
+	while (!(ret = bch2_move_ratelimit(&ctxt))) {
 		if (!bch2_reconcile_enabled(c) ||
 		    test_bit(BCH_FS_going_ro, &c->flags))
 			break;
@@ -1468,7 +1518,7 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 		    k.k->p.inode != thr->dev)
 			break;
 
-		int ret = lockrestart_do(trans,
+		ret = lockrestart_do(trans,
 			do_reconcile_extent_phys(&ctxt, &snapshot_io_opts,
 						 BBPOS(work_pos.btree, k.k->p),
 						 &last_flushed,
@@ -1477,23 +1527,88 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 			break;
 	}
 
+	if (ret > 0)
+		ret = 0;
+	ret = ret ?: bch2_moving_ctxt_flush_all(&ctxt);
+	if (ret)
+		bch_err_fn(c, ret);
+
 	bch2_moving_ctxt_exit(&ctxt);
 	closure_return(cl);
 }
 
+static int reconcile_phys_dev_has_work(struct bch_fs *c, unsigned reconcile_phase,
+				       unsigned dev, bool *has_work)
+{
+	enum btree_id btree = reconcile_phases[reconcile_phase].btree;
+	bool found = false;
+
+	*has_work = false;
+
+	int ret = bch2_trans_do(c, ({
+		found = false;
+
+		CLASS(btree_iter, iter)(trans, btree, POS(dev, 0), BTREE_ITER_prefetch);
+		int ret = 0;
+
+		while (true) {
+			struct bkey_s_c k = bch2_btree_iter_peek(&iter);
+
+			ret = bkey_err(k);
+			if (ret)
+				break;
+
+			if (!k.k || k.k->p.inode != dev)
+				break;
+
+			if (k.k->type == KEY_TYPE_set) {
+				found = true;
+				break;
+			}
+
+			bch2_btree_iter_advance(&iter);
+		}
+
+		ret;
+	}));
+
+	if (!ret)
+		*has_work = found;
+
+	return ret;
+}
+
 static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 {
+	struct bch_fs_reconcile *r = &c->reconcile;
 	CLASS(darray_reconcile_phys_thr, thrs)();
 	CLASS(closure_stack, cl)();
+	u64 considered = 0, started = 0, skipped_empty = 0;
 
-	for_each_member_device(c, ca)
+	for_each_member_device(c, ca) {
+		bool has_work;
+
 		if (ca->mi.rotational &&
-		    bch2_dev_is_online(ca))
+		    bch2_dev_is_online(ca)) {
+			considered++;
+			try(reconcile_phys_dev_has_work(c, reconcile_phase, ca->dev_idx, &has_work));
+			if (!has_work) {
+				skipped_empty++;
+				continue;
+			}
+
 			try(darray_push(&thrs, ((reconcile_phys_thr) {
 						.c			= c,
 						.dev			= ca->dev_idx,
 						.reconcile_phase	= reconcile_phase,
 						})));
+			started++;
+		}
+	}
+
+	WRITE_ONCE(r->phys_workers_considered, considered);
+	WRITE_ONCE(r->phys_workers_started, started);
+	WRITE_ONCE(r->phys_workers_skipped_empty, skipped_empty);
 
 	darray_for_each(thrs, i)
 		closure_call(&i->cl, do_reconcile_phys_thread, system_unbound_wq, &cl);
@@ -1632,7 +1747,7 @@ static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
 
 		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
 			bch2_trans_unlock_long(trans);
-			bch2_copygc_wakeup(c);
+			bch2_copygc_wakeup_for_pressure(c);
 			wait_event(c->copygc.running_wq,
 				   c->copygc.run_count != *p->copygc_run_count ||
 				   kthread_should_stop());
@@ -1717,7 +1832,7 @@ static int do_reconcile(struct moving_context *ctxt)
 	struct bkey_i_cookie pending_cookie;
 	bkey_init(&pending_cookie.k);
 
-	bch2_moving_ctxt_flush_all(ctxt);
+	try(bch2_moving_ctxt_flush_all(ctxt));
 
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
@@ -1737,10 +1852,12 @@ static int do_reconcile(struct moving_context *ctxt)
 
 	r->running = true;
 
-	while (!bch2_move_ratelimit(ctxt) &&
+	while (!(ret = bch2_move_ratelimit(ctxt)) &&
 	       !test_bit(BCH_FS_going_ro, &c->flags)) {
 		if (!bch2_reconcile_enabled(c)) {
-			bch2_moving_ctxt_flush_all(ctxt);
+			ret = bch2_moving_ctxt_flush_all(ctxt);
+			if (ret)
+				goto out;
 			kthread_wait_freezable(bch2_reconcile_enabled(c) ||
 					       kthread_should_stop());
 			if (kthread_should_stop())
@@ -1777,12 +1894,17 @@ static int do_reconcile(struct moving_context *ctxt)
 			work.nr = 0;
 
 			if (kick != r->kick ||
-			    test_bit(BCH_FS_going_ro, &c->flags) ||
-			    bch2_move_ratelimit(ctxt))
+			    test_bit(BCH_FS_going_ro, &c->flags))
+				break;
+
+			ret = bch2_move_ratelimit(ctxt);
+			if (ret)
 				break;
 
 			/* Drain pending moves before the next phase. */
-			bch2_moving_ctxt_flush_all(ctxt);
+			ret = bch2_moving_ctxt_flush_all(ctxt);
+			if (ret)
+				goto out;
 		}
 
 		/* Completed a clean pass through all phases — we're done. */
@@ -1796,14 +1918,19 @@ out:
 
 	bch2_move_stats_exit(&r->work_stats, c);
 
+	if (ret > 0)
+		ret = 0;
+
 	if (!ret &&
 	    !kthread_should_stop() &&
 	    !atomic64_read(&r->work_stats.sectors_seen) &&
 	    !sectors_scanned &&
 	    kick == r->kick) {
-		bch2_moving_ctxt_flush_all(ctxt);
-		bch2_trans_unlock_long(trans);
-		reconcile_wait(c);
+		ret = bch2_moving_ctxt_flush_all(ctxt);
+		if (!ret) {
+			bch2_trans_unlock_long(trans);
+			reconcile_wait(c);
+		}
 	}
 
 	if (!bch2_err_matches(ret, EROFS))
@@ -1903,6 +2030,11 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 			}
 		}
 	}
+
+	prt_printf(out, "phys workers last phase: considered %llu started %llu skipped empty %llu\n",
+		   READ_ONCE(r->phys_workers_considered),
+		   READ_ONCE(r->phys_workers_started),
+		   READ_ONCE(r->phys_workers_skipped_empty));
 
 	struct task_struct *t;
 	scoped_guard(rcu) {

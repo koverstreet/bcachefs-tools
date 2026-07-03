@@ -248,9 +248,10 @@ void bch2_io_error_work(struct work_struct *);
 void bch2_io_error(struct bch_dev *, enum bch_member_error_type);
 
 #ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
-void bch2_latency_acct(struct bch_dev *, u64, int);
+void bch2_latency_acct(struct bch_dev *, u64, int, bool);
 #else
-static inline void bch2_latency_acct(struct bch_dev *ca, u64 submit_time, int rw) {}
+static inline void bch2_latency_acct(struct bch_dev *ca, u64 submit_time, int rw,
+				     bool account_congestion) {}
 #endif
 
 static inline void bch2_account_io_success_fail(struct bch_dev *ca,
@@ -274,7 +275,7 @@ static inline void bch2_account_io_completion(struct bch_dev *ca,
 		return;
 
 	if (type != BCH_MEMBER_ERROR_checksum)
-		bch2_latency_acct(ca, submit_time, type);
+		bch2_latency_acct(ca, submit_time, type, type == BCH_MEMBER_ERROR_read);
 
 	bch2_account_io_success_fail(ca, type, success);
 }

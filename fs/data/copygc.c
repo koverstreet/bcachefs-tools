@@ -50,6 +50,7 @@
 #include "util/clock.h"
 
 #include <linux/freezer.h>
+#include <linux/ioprio.h>
 #include <linux/kthread.h>
 #include <linux/math64.h>
 #include <linux/sched/task.h>
@@ -63,6 +64,12 @@ struct buckets_in_flight {
 	size_t			sectors;
 
 	DARRAY(struct move_bucket *) to_evacuate;
+};
+
+struct copygc_lru_scan {
+	struct buckets_in_flight	*buckets_in_flight;
+	struct bpos		next_pos;
+	bool			saw_key;
 };
 
 static const struct rhashtable_params bch_move_bucket_params = {
@@ -207,21 +214,69 @@ static int try_add_copygc_bucket(struct btree_trans *trans,
 	return buckets_in_flight->to_evacuate.nr >= nr_to_get;
 }
 
-static int bch2_copygc_get_buckets(struct moving_context *ctxt,
-			struct buckets_in_flight *buckets_in_flight)
+static int try_add_copygc_lru_bucket(struct btree_trans *trans,
+				     struct copygc_lru_scan *scan,
+				     struct bpos lru_pos)
+{
+	int ret = try_add_copygc_bucket(trans, scan->buckets_in_flight,
+					u64_to_bucket(lru_pos.offset),
+					lru_pos_time(lru_pos));
+
+	if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+		scan->saw_key = true;
+		scan->next_pos = bpos_successor(lru_pos);
+	}
+
+	return ret;
+}
+
+static int __bch2_copygc_get_buckets(struct moving_context *ctxt,
+			struct copygc_lru_scan *scan,
+			struct bpos start,
+			struct bpos end)
 {
 	struct btree_trans *trans = ctxt->trans;
 
-	int ret = for_each_btree_key_max(trans, iter, BTREE_ID_lru,
-				  lru_start(BCH_LRU_BUCKET_FRAGMENTATION),
-				  lru_end(BCH_LRU_BUCKET_FRAGMENTATION),
-				  0, k,
-		try_add_copygc_bucket(trans, buckets_in_flight,
-				      u64_to_bucket(k.k->p.offset),
-				      lru_pos_time(k.k->p))
-	);
+	return for_each_btree_key_max(trans, iter, BTREE_ID_lru,
+				      start, end, 0, k,
+		try_add_copygc_lru_bucket(trans, scan, k.k->p));
+}
 
-	return ret < 0 ? ret : 0;
+static int bch2_copygc_get_buckets(struct moving_context *ctxt,
+			struct buckets_in_flight *buckets_in_flight)
+{
+	struct bch_fs *c = ctxt->trans->c;
+	struct bpos start = bpos_eq(c->copygc.bucket_fragmentation_cursor, POS_MIN)
+		? lru_start(BCH_LRU_BUCKET_FRAGMENTATION)
+		: c->copygc.bucket_fragmentation_cursor;
+	struct bpos end = lru_end(BCH_LRU_BUCKET_FRAGMENTATION);
+
+	if (bpos_lt(start, lru_start(BCH_LRU_BUCKET_FRAGMENTATION)) ||
+	    bpos_gt(start, end))
+		start = lru_start(BCH_LRU_BUCKET_FRAGMENTATION);
+
+	struct copygc_lru_scan scan = {
+		.buckets_in_flight	= buckets_in_flight,
+		.next_pos		= start,
+	};
+
+	int ret = __bch2_copygc_get_buckets(ctxt, &scan, start, end);
+	if (ret > 0)
+		ret = 0;
+	if (!ret && !scan.saw_key && !bpos_eq(start, lru_start(BCH_LRU_BUCKET_FRAGMENTATION))) {
+		scan.next_pos = lru_start(BCH_LRU_BUCKET_FRAGMENTATION);
+		ret = __bch2_copygc_get_buckets(ctxt, &scan, scan.next_pos, end);
+		if (ret > 0)
+			ret = 0;
+	}
+
+	if (!ret) {
+		if (!scan.saw_key || bpos_gt(scan.next_pos, end))
+			scan.next_pos = lru_start(BCH_LRU_BUCKET_FRAGMENTATION);
+		c->copygc.bucket_fragmentation_cursor = scan.next_pos;
+	}
+
+	return ret;
 }
 
 static int bch2_copygc_get_stripe_buckets(struct moving_context *ctxt,
@@ -326,6 +381,7 @@ err:
 noinline
 static int bch2_copygc(struct moving_context *ctxt,
 		       struct buckets_in_flight *buckets_in_flight,
+		       bool pressure,
 		       bool *did_work)
 {
 	struct btree_trans *trans = ctxt->trans;
@@ -333,6 +389,9 @@ static int bch2_copygc(struct moving_context *ctxt,
 	struct data_update_opts data_opts = {
 		.type		= BCH_DATA_UPDATE_copygc,
 		.commit_flags	= (unsigned) BCH_WATERMARK_copygc,
+		.ioprio		= pressure
+			? IOPRIO_PRIO_VALUE(IOPRIO_CLASS_BE, 7)
+			: 0,
 	};
 	u64 sectors_seen	= atomic64_read(&ctxt->stats->sectors_seen);
 	u64 sectors_moved	= atomic64_read(&ctxt->stats->sectors_moved);
@@ -361,6 +420,11 @@ static int bch2_copygc(struct moving_context *ctxt,
 		*i = NULL;
 
 		move_bucket_in_flight_add(buckets_in_flight, b);
+		if (bch2_dev_rotational(c, b->k.bucket.inode))
+			bch2_moving_ctxt_set_rotational_limits(ctxt,
+					pressure
+					? MOVE_ROTATIONAL_LIMIT_hipri
+					: MOVE_ROTATIONAL_LIMIT_background);
 
 		ret = bch2_evacuate_bucket(ctxt, b, b->k.bucket, b->k.generation, data_opts);
 		if (ret)
@@ -464,6 +528,11 @@ __cold void bch2_copygc_wait_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	printbuf_tabstop_push(out, 32);
 	prt_printf(out, "running:\t%u\n",		c->copygc.running);
+	prt_printf(out, "pressure pending:\t%u\n",	READ_ONCE(c->copygc.pressure_pending));
+	prt_printf(out, "current run pressure:\t%u\n",	READ_ONCE(c->copygc.current_run_pressure));
+	prt_printf(out, "last run pressure:\t%u\n",	READ_ONCE(c->copygc.last_run_pressure));
+	prt_printf(out, "pressure run count:\t%u\n",	READ_ONCE(c->copygc.pressure_run_count));
+	prt_printf(out, "last pressure run:\t%u\n",	READ_ONCE(c->copygc.last_pressure_run));
 	prt_printf(out, "run count:\t%u\n",		c->copygc.run_count);
 	prt_printf(out, "copygc_wait:\t%llu\n",		c->copygc.wait);
 	prt_printf(out, "copygc_wait_at:\t%llu\n",	c->copygc.wait_at);
@@ -569,10 +638,20 @@ static int bch2_copygc_thread(void *arg)
 
 		kick = READ_ONCE(c->copygc.kick_count);
 		c->copygc.wait = 0;
+		bool pressure = xchg(&c->copygc.pressure_pending, false);
+		u32 run = READ_ONCE(c->copygc.run_count) + 1;
+		if (pressure) {
+			WRITE_ONCE(c->copygc.pressure_run_count,
+				   READ_ONCE(c->copygc.pressure_run_count) + 1);
+			WRITE_ONCE(c->copygc.last_pressure_run, run);
+		}
 
+		WRITE_ONCE(c->copygc.current_run_pressure, pressure);
 		c->copygc.running = true;
-		ret = bch2_copygc(&ctxt, &buckets, &did_work);
+		ret = bch2_copygc(&ctxt, &buckets, pressure, &did_work);
 		c->copygc.running = false;
+		WRITE_ONCE(c->copygc.last_run_pressure, pressure);
+		WRITE_ONCE(c->copygc.current_run_pressure, false);
 		c->copygc.run_count++;
 
 		wake_up(&c->copygc.running_wq);
@@ -590,6 +669,7 @@ static int bch2_copygc_thread(void *arg)
 	}
 
 	move_buckets_wait(&ctxt, &buckets, true);
+	ret = ret ?: bch2_moving_ctxt_flush_all(&ctxt);
 	bch2_moving_ctxt_exit(&ctxt);
 	bch2_move_stats_exit(&move_stats, c);
 out:

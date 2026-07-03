@@ -61,7 +61,8 @@ endif
 BCACHEFS_DKMS_FORWARD := BCACHEFS_DEBUG \
                         BCACHEFS_TESTS \
                         BCACHEFS_INJECT_TRANSACTION_RESTARTS \
-                        BCACHEFS_RUST
+                        BCACHEFS_RUST \
+                        CC
 
 # Vars persisted into the *local* build.vars across invocations - a
 # superset of BCACHEFS_DKMS_FORWARD that also covers MAKE_DEBUG, the
