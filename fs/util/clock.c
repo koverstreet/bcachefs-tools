@@ -75,6 +75,13 @@ void bch2_io_clock_schedule_timeout(struct io_clock *clock, u64 until)
 	bch2_io_timer_del(clock, &wait.io_timer);
 }
 
+/*
+ * The caller must set TASK_INTERRUPTIBLE before calling: after setting it (and
+ * before calling) the caller can recheck its wakeup condition, and a waker
+ * that changes the condition and then calls wake_up_process() is guaranteed to
+ * either be seen by that check or to wake the schedule_timeout() - no lost
+ * wakeups. This also covers the io timer itself firing as soon as it's added.
+ */
 unsigned long bch2_kthread_io_clock_wait_once(struct io_clock *clock,
 				     u64 io_until, unsigned long cpu_timeout)
 {
@@ -88,7 +95,6 @@ unsigned long bch2_kthread_io_clock_wait_once(struct io_clock *clock,
 
 	bch2_io_timer_add(clock, &wait.io_timer);
 
-	set_current_state(TASK_INTERRUPTIBLE);
 	if (!(kthread && kthread_should_stop())) {
 		cpu_timeout = schedule_timeout(cpu_timeout);
 		try_to_freeze();
@@ -106,8 +112,10 @@ void bch2_kthread_io_clock_wait(struct io_clock *clock,
 
 	while (!(kthread && kthread_should_stop()) &&
 	       cpu_timeout &&
-	       atomic64_read(&clock->now) < io_until)
+	       atomic64_read(&clock->now) < io_until) {
+		set_current_state(TASK_INTERRUPTIBLE);
 		cpu_timeout = bch2_kthread_io_clock_wait_once(clock, io_until, cpu_timeout);
+	}
 }
 
 static struct io_timer *get_expired_timer(struct io_clock *clock, u64 now)

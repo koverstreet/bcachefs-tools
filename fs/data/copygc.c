@@ -562,8 +562,19 @@ static int bch2_copygc_thread(void *arg)
 			c->copygc.wait_at = last;
 			c->copygc.wait = last + wait;
 			move_buckets_wait(&ctxt, &buckets, true);
-			bch2_kthread_io_clock_wait_once(clock, last + wait,
-					MAX_SCHEDULE_TIMEOUT);
+
+			/*
+			 * Recheck the kick after setting TASK_INTERRUPTIBLE:
+			 * the allocator's kick + wake_up_process() is either
+			 * seen here or wakes the sleep - no lost wakeups (the
+			 * io clock only advances with write throughput, which
+			 * may be stalled on the kicker):
+			 */
+			set_current_state(TASK_INTERRUPTIBLE);
+			if (kick == READ_ONCE(c->copygc.kick_count))
+				bch2_kthread_io_clock_wait_once(clock, last + wait,
+						MAX_SCHEDULE_TIMEOUT);
+			__set_current_state(TASK_RUNNING);
 			continue;
 		}
 
@@ -584,8 +595,12 @@ static int bch2_copygc_thread(void *arg)
 				min_member_capacity = 128 * 2048;
 
 			move_buckets_wait(&ctxt, &buckets, true);
-			bch2_kthread_io_clock_wait_once(clock, last + (min_member_capacity >> 6),
-					MAX_SCHEDULE_TIMEOUT);
+
+			set_current_state(TASK_INTERRUPTIBLE);
+			if (kick == READ_ONCE(c->copygc.kick_count))
+				bch2_kthread_io_clock_wait_once(clock, last + (min_member_capacity >> 6),
+						MAX_SCHEDULE_TIMEOUT);
+			__set_current_state(TASK_RUNNING);
 		}
 	}
 

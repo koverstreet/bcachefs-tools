@@ -1325,7 +1325,7 @@ static bool reconcile_hipri_work_pending(struct bch_fs *c)
 	return v[0] || v[1];
 }
 
-static void reconcile_wait(struct bch_fs *c)
+static void reconcile_wait(struct bch_fs *c, u32 kick)
 {
 	struct bch_fs_reconcile *r = &c->reconcile;
 	struct io_clock *clock = &c->io_clock[WRITE];
@@ -1348,7 +1348,15 @@ static void reconcile_wait(struct bch_fs *c)
 		r->running		= false;
 	}
 
-	bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, MAX_SCHEDULE_TIMEOUT);
+	/*
+	 * Recheck the kick after setting TASK_INTERRUPTIBLE: a kick +
+	 * wake_up_process() is either seen here or wakes the sleep - no lost
+	 * wakeups:
+	 */
+	set_current_state(TASK_INTERRUPTIBLE);
+	if (kick == READ_ONCE(r->kick))
+		bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, MAX_SCHEDULE_TIMEOUT);
+	__set_current_state(TASK_RUNNING);
 }
 
 struct reconcile_phase {
@@ -1803,7 +1811,7 @@ out:
 	    kick == r->kick) {
 		bch2_moving_ctxt_flush_all(ctxt);
 		bch2_trans_unlock_long(trans);
-		reconcile_wait(c);
+		reconcile_wait(c, kick);
 	}
 
 	if (!bch2_err_matches(ret, EROFS))
