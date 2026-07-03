@@ -29,6 +29,7 @@
 
 #include "init/error.h"
 
+#include "journal/journal.h"
 #include "journal/reclaim.h"
 
 #include "sb/counters.h"
@@ -151,18 +152,63 @@ void bch2_move_ctxt_wait_for_io(struct moving_context *ctxt)
 		atomic_read(&ctxt->write_sectors) != sectors_pending);
 }
 
-void bch2_moving_ctxt_flush_all(struct moving_context *ctxt)
+int bch2_moving_ctxt_flush_all(struct moving_context *ctxt)
 {
+	struct bch_fs *c = ctxt->trans->c;
+	u64 seq;
+
 	move_ctxt_wait_event(ctxt, list_empty(&ctxt->reads));
 	bch2_trans_unlock_long(ctxt->trans);
 	closure_sync(&ctxt->cl);
+
+	scoped_guard(mutex, &ctxt->lock)
+		seq = ctxt->noflush_seq;
+
+	if (seq) {
+		int ret = bch2_btree_write_buffer_flush_sync(ctxt->trans);
+		if (ret)
+			return ret;
+
+		ret = bch2_journal_flush_seq(&c->journal, seq, TASK_UNINTERRUPTIBLE);
+		if (ret)
+			return ret;
+
+		scoped_guard(mutex, &ctxt->lock) {
+			if (ctxt->noflush_seq <= seq) {
+				ctxt->noflush_sectors = 0;
+				ctxt->noflush_seq = 0;
+			}
+		}
+	}
+
+	return 0;
 }
+
+void bch2_moving_ctxt_account_noflush_commit(struct moving_context *ctxt, u32 sectors, u64 seq)
+{
+	if (!seq)
+		return;
+
+	guard(mutex)(&ctxt->lock);
+	ctxt->noflush_sectors += sectors;
+	ctxt->noflush_seq = max(ctxt->noflush_seq, seq);
+}
+
+static bool bch2_moving_ctxt_needs_flush(struct moving_context *ctxt)
+{
+	guard(mutex)(&ctxt->lock);
+	return ctxt->noflush_sectors >= ctxt->noflush_sectors_limit;
+}
+
+#define MOVE_NOFLUSH_MIN_BYTES			(16U << 20)
 
 void bch2_moving_ctxt_exit(struct moving_context *ctxt)
 {
 	struct bch_fs *c = ctxt->trans->c;
 
-	bch2_moving_ctxt_flush_all(ctxt);
+	int ret = bch2_moving_ctxt_flush_all(ctxt);
+	if (ret)
+		bch_err_fn(c, ret);
 
 	EBUG_ON(atomic_read(&ctxt->write_sectors));
 	EBUG_ON(atomic_read(&ctxt->write_ios));
@@ -198,6 +244,8 @@ void bch2_moving_ctxt_init(struct moving_context *ctxt,
 	ctxt->stats	= stats;
 	ctxt->wp	= wp;
 	ctxt->wait_on_copygc = wait_on_copygc;
+	ctxt->noflush_sectors_limit =
+		max_t(u32, c->opts.move_bytes_in_flight, MOVE_NOFLUSH_MIN_BYTES) >> 9;
 
 	closure_init_stack(&ctxt->cl);
 
@@ -416,13 +464,6 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 	bool is_kthread = current->flags & PF_KTHREAD;
 	u64 delay;
 
-	if (ctxt->wait_on_copygc && c->copygc.running) {
-		bch2_moving_ctxt_flush_all(ctxt);
-		wait_event_freezable(c->copygc.running_wq,
-				    !c->copygc.running ||
-				    (is_kthread && kthread_should_stop()));
-	}
-
 	do {
 		delay = ctxt->rate ? bch2_ratelimit_delay(ctxt->rate) : 0;
 
@@ -436,10 +477,15 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 					delay);
 
 		if (unlikely(freezing(current))) {
-			bch2_moving_ctxt_flush_all(ctxt);
+			int ret = bch2_moving_ctxt_flush_all(ctxt);
+			if (ret)
+				return ret;
 			try_to_freeze();
 		}
 	} while (delay);
+
+	if (bch2_moving_ctxt_needs_flush(ctxt))
+		try(bch2_moving_ctxt_flush_all(ctxt));
 
 	/*
 	 * XXX: these limits really ought to be per device, SSDs and hard drives
@@ -734,7 +780,9 @@ int bch2_move_data_phys(struct bch_fs *c,
 		.sector_end	= end,
 	};
 
-	return __bch2_move_data_phys(&ctxt, NULL, &w, data_types, false, pred, arg);
+	int ret = __bch2_move_data_phys(&ctxt, NULL, &w, data_types, false, pred, arg);
+
+	return ret ?: bch2_moving_ctxt_flush_all(&ctxt);
 }
 
 struct evacuate_arg {
@@ -1023,7 +1071,9 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 			}
 		}
 
-		bch2_moving_ctxt_flush_all(&ctxt);
+		ret = bch2_moving_ctxt_flush_all(&ctxt);
+		if (ret)
+			move_ret = ret;
 
 		if (move_ret)
 			bch_err(c, "journal scrub: move error %s in flush range seq %llu-%llu",
@@ -1198,8 +1248,15 @@ __cold void bch2_move_stats_to_text(struct printbuf *out, struct bch_move_stats 
 
 static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs *c, struct moving_context *ctxt)
 {
+	u64 noflush_sectors, noflush_seq;
+
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 32);
+
+	scoped_guard(mutex, &ctxt->lock) {
+		noflush_sectors = ctxt->noflush_sectors;
+		noflush_seq = ctxt->noflush_seq;
+	}
 
 	bch2_move_stats_to_text(out, ctxt->stats);
 	guard(printbuf_indent)(out);
@@ -1215,6 +1272,10 @@ static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs 
 		   c->opts.move_ios_in_flight,
 		   atomic_read(&ctxt->write_sectors),
 		   c->opts.move_bytes_in_flight >> 9);
+	prt_printf(out, "noflush sectors:\t%llu/%llu seq %llu\n",
+		   noflush_sectors,
+		   ctxt->noflush_sectors_limit,
+		   noflush_seq);
 
 	guard(printbuf_indent)(out);
 

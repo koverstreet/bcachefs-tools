@@ -1455,7 +1455,9 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 	struct bbpos work_pos = BBPOS(reconcile_phases[thr->reconcile_phase].btree,
 				      POS(thr->dev, 0));
 
-	while (!bch2_move_ratelimit(&ctxt)) {
+	int ret = 0;
+
+	while (!(ret = bch2_move_ratelimit(&ctxt))) {
 		if (!bch2_reconcile_enabled(c) ||
 		    test_bit(BCH_FS_going_ro, &c->flags))
 			break;
@@ -1468,7 +1470,7 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 		    k.k->p.inode != thr->dev)
 			break;
 
-		int ret = lockrestart_do(trans,
+		ret = lockrestart_do(trans,
 			do_reconcile_extent_phys(&ctxt, &snapshot_io_opts,
 						 BBPOS(work_pos.btree, k.k->p),
 						 &last_flushed,
@@ -1476,6 +1478,12 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 		if (ret)
 			break;
 	}
+
+	if (ret > 0)
+		ret = 0;
+	ret = ret ?: bch2_moving_ctxt_flush_all(&ctxt);
+	if (ret)
+		bch_err_fn(c, ret);
 
 	bch2_moving_ctxt_exit(&ctxt);
 	closure_return(cl);
@@ -1717,7 +1725,7 @@ static int do_reconcile(struct moving_context *ctxt)
 	struct bkey_i_cookie pending_cookie;
 	bkey_init(&pending_cookie.k);
 
-	bch2_moving_ctxt_flush_all(ctxt);
+	try(bch2_moving_ctxt_flush_all(ctxt));
 
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
@@ -1737,10 +1745,12 @@ static int do_reconcile(struct moving_context *ctxt)
 
 	r->running = true;
 
-	while (!bch2_move_ratelimit(ctxt) &&
+	while (!(ret = bch2_move_ratelimit(ctxt)) &&
 	       !test_bit(BCH_FS_going_ro, &c->flags)) {
 		if (!bch2_reconcile_enabled(c)) {
-			bch2_moving_ctxt_flush_all(ctxt);
+			ret = bch2_moving_ctxt_flush_all(ctxt);
+			if (ret)
+				goto out;
 			kthread_wait_freezable(bch2_reconcile_enabled(c) ||
 					       kthread_should_stop());
 			if (kthread_should_stop())
@@ -1777,12 +1787,17 @@ static int do_reconcile(struct moving_context *ctxt)
 			work.nr = 0;
 
 			if (kick != r->kick ||
-			    test_bit(BCH_FS_going_ro, &c->flags) ||
-			    bch2_move_ratelimit(ctxt))
+			    test_bit(BCH_FS_going_ro, &c->flags))
+				break;
+
+			ret = bch2_move_ratelimit(ctxt);
+			if (ret)
 				break;
 
 			/* Drain pending moves before the next phase. */
-			bch2_moving_ctxt_flush_all(ctxt);
+			ret = bch2_moving_ctxt_flush_all(ctxt);
+			if (ret)
+				goto out;
 		}
 
 		/* Completed a clean pass through all phases — we're done. */
@@ -1796,14 +1811,19 @@ out:
 
 	bch2_move_stats_exit(&r->work_stats, c);
 
+	if (ret > 0)
+		ret = 0;
+
 	if (!ret &&
 	    !kthread_should_stop() &&
 	    !atomic64_read(&r->work_stats.sectors_seen) &&
 	    !sectors_scanned &&
 	    kick == r->kick) {
-		bch2_moving_ctxt_flush_all(ctxt);
-		bch2_trans_unlock_long(trans);
-		reconcile_wait(c);
+		ret = bch2_moving_ctxt_flush_all(ctxt);
+		if (!ret) {
+			bch2_trans_unlock_long(trans);
+			reconcile_wait(c);
+		}
 	}
 
 	if (!bch2_err_matches(ret, EROFS))

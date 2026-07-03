@@ -468,10 +468,20 @@ static int data_update_index_update_key(struct btree_trans *trans,
 	try(bch2_trans_update(trans, iter, insert,
 			      BTREE_UPDATE_internal_snapshot_node|
 			      BTREE_TRIGGER_set_needs_reconcile_done));
-	try(bch2_trans_commit(trans, &u->op.res, NULL,
-			      BCH_TRANS_COMMIT_no_check_rw|
-			      BCH_TRANS_COMMIT_no_enospc|
-			      u->opts.commit_flags));
+	bool flush = (u->op.flags & BCH_WRITE_flush) &&
+		bkey_next(insert) == u->op.insert_keys.top;
+	bool noflush = u->op.flags & BCH_WRITE_move_noflush;
+	u64 journal_seq = 0;
+
+	try(bch2_trans_commit_flush(trans, &u->op.res,
+				    noflush ? &journal_seq : NULL,
+				    flush ? &u->op.cl : NULL,
+				    BCH_TRANS_COMMIT_no_check_rw|
+				    BCH_TRANS_COMMIT_no_enospc|
+				    u->opts.commit_flags));
+
+	if (noflush)
+		bch2_moving_ctxt_account_noflush_commit(u->ctxt, new->k.size, journal_seq);
 
 	bch2_btree_iter_set_pos(iter, next_pos);
 
@@ -1352,6 +1362,12 @@ int bch2_data_update_init(struct btree_trans *trans,
 		BCH_WRITE_data_encoded|
 		BCH_WRITE_move|
 		m->opts.write_flags;
+	if (ctxt) {
+		m->op.flags &= ~BCH_WRITE_flush;
+		m->op.flags |= BCH_WRITE_move_noflush;
+	} else {
+		m->op.flags |= BCH_WRITE_flush;
+	}
 	m->op.compression_opt	= io_opts->background_compression;
 	m->op.watermark		= max(m->opts.commit_flags & BCH_WATERMARK_MASK,
 				      BCH_WATERMARK_normal);
