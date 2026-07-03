@@ -165,7 +165,26 @@ static __cold void bch2_journal_buf_to_text(struct printbuf *out, struct journal
 		prt_newline(out);
 	}
 
-	prt_printf(out, "waiters:\t%u\n", buf->wait.list.first != NULL);
+	prt_printf(out, "waiters:\t");
+	switch ((unsigned long) READ_ONCE(buf->wait.list.first)) {
+	case (unsigned long) NULL:
+		prt_str(out, "none");
+		break;
+	case (unsigned long) JOURNAL_BUF_NOT_IN_FLIGHT:
+		prt_str(out, "not in flight");
+		break;
+	case (unsigned long) JOURNAL_BUF_NOFLUSH:
+		prt_str(out, "noflush");
+		break;
+	case (unsigned long) JOURNAL_BUF_FLUSH_NO_WAIT:
+		prt_str(out, "flush no wait");
+		break;
+	default:
+		prt_str(out, "(waiters)");
+		break;
+	}
+	prt_newline(out);
+
 	prt_printf(out, "flags:\t");
 	if (buf->separate_flush)
 		prt_str(out, "separate_flush ");
