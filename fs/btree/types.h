@@ -689,6 +689,11 @@ struct btree_trans {
 #ifdef CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS
 	u32			restart_count_this_trans;
 #endif
+	/*
+	 * Incremented on every successful (non-empty) commit; for detecting
+	 * that cached state derived from btree reads may be stale:
+	 */
+	u32			commit_count;
 
 	u64			last_begin_time;
 	unsigned long		last_begin_ip;
