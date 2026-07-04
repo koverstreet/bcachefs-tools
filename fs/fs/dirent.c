@@ -784,6 +784,13 @@ static int bch2_dir_emit(struct btree_trans *trans,
 			 struct dir_context *ctx,
 			 struct bkey_s_c_dirent d, subvol_inum target)
 {
+	/*
+	 * The FUSE readdir actor computes each entry's resume-after cookie as
+	 * its pos argument + 1: only correct if ctx->pos is the entry's own
+	 * offset when it's emitted, same as the kernel path above.
+	 */
+	ctx->pos = d.k->p.offset;
+
 	return bch2_dir_emit_slow(trans, sk, ctx, d, target);
 }
 #endif

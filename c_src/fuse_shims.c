@@ -71,6 +71,14 @@ static int rust_fuse_readdir_actor(struct dir_context *_ctx,
 {
 	struct rust_readdir_ctx *rctx =
 		container_of(_ctx, struct rust_readdir_ctx, ctx);
+
+	/*
+	 * A fuse dirent's offset field is the cookie to resume the listing
+	 * *after* that entry; pos is the entry's own dirent offset
+	 * (bch2_dir_emit() sets ctx->pos before emitting). If we reject on a
+	 * full reply buffer, ctx->pos never advances past this entry and the
+	 * next readdir re-reads it.
+	 */
 	return rctx->filldir(rctx->opaque, name, (unsigned)namelen,
 			     ino, type, (u64)(pos + 1));
 }
