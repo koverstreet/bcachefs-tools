@@ -46,6 +46,8 @@ struct inode_walker {
 	bool				have_inodes;
 	bool				recalculate_sums;
 	struct bpos			last_pos;
+	/* cached inodes are valid while trans->commit_count is unchanged: */
+	u32				commit_count;
 
 	DARRAY(struct inode_walker_entry) inodes;
 	snapshot_id_list		deletes;

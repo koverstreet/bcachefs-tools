@@ -656,6 +656,7 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 
 	w->first_this_inode = true;
 	w->have_inodes = true;
+	w->commit_count = trans->commit_count;
 	return 0;
 }
 
@@ -766,6 +767,17 @@ struct inode_walker_entry *bch2_walk_inode(struct btree_trans *trans,
 		int ret = get_inodes_all_snapshots(trans, w, k.k->p.inode);
 		if (ret)
 			return ERR_PTR(ret);
+	} else if (w->commit_count != trans->commit_count) {
+		/*
+		 * A commit may have updated inodes we have cached: revalidate.
+		 * We're mid way through walking this inode's keys, so per-inode
+		 * accumulations (i_sectors, subdir counts) are now partial -
+		 * recount instead of complaining:
+		 */
+		int ret = get_inodes_all_snapshots(trans, w, k.k->p.inode);
+		if (ret)
+			return ERR_PTR(ret);
+		w->recalculate_sums = true;
 	}
 
 	w->last_pos = k.k->p;
@@ -1398,6 +1410,9 @@ static int check_subdir_count_notnested(struct btree_trans *trans, struct inode_
 		count2 = bch2_count_subdirs(trans, w->last_pos.inode, i->inode.bi_snapshot);
 		if (count2 < 0)
 			return count2;
+
+		if (w->recalculate_sums)
+			i->count = count2;
 
 		if (i->count != count2) {
 			bch_err_ratelimited(c, "fsck counted subdirectories wrong for inum %llu:%u: got %llu should be %llu",
