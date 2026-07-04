@@ -1454,6 +1454,7 @@ retry:
 	if (ret)
 		goto err;
 
+	trans->commit_count++;
 	event_inc_trace_fn(c, transaction_commit, transaction_commit_trace(trans));
 out:
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_check_rw)))
