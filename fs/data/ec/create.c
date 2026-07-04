@@ -1135,6 +1135,119 @@ static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * Once all blocks are allocated the centroid is settled: try to reallocate
+ * outliers closer to it. New blocks are open buckets nothing has been
+ * written to, so a swap is just open_bucket_put() + allocate closer - but
+ * only new blocks: pre-existing blocks (stripe reuse) are fixed anchors, and
+ * blocks a writer has already claimed (blocks_allocated) can't move.
+ *
+ * Best effort: an attempt that fails or doesn't halve the block's distance
+ * to the centroid keeps the original, so this never makes things worse and
+ * never turns a successful stripe allocation into a failure.
+ */
+static int stripe_reallocate_outliers(struct btree_trans *trans,
+				      struct alloc_request *req,
+				      struct ec_stripe_new *s,
+				      unsigned long *blocks_had)
+{
+	struct bch_fs *c = trans->c;
+	struct bch_stripe *v = &s->new_stripe.key.v;
+	u64 frac[BCH_BKEY_PTRS_MAX];
+	unsigned long frac_valid[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)] = {};
+	unsigned i, j, nr = 0;
+	u64 sum = 0;
+	int ret = 0;
+
+	/*
+	 * All positions as device fractions (device sizes may differ, so raw
+	 * offsets aren't comparable):
+	 */
+	scoped_guard(rcu)
+		for_each_set_bit(i, s->blocks_gotten, v->nr_blocks) {
+			if (v->ptrs[i].dev == BCH_SB_MEMBER_INVALID)
+				continue;
+
+			struct bch_dev *ca = bch2_dev_rcu_noerror(c, v->ptrs[i].dev);
+			if (!ca)
+				continue;
+
+			frac[i] = dev_offset_to_frac(ca, v->ptrs[i].offset);
+			__set_bit(i, frac_valid);
+			sum += frac[i];
+			nr++;
+		}
+	if (nr < 3)
+		return 0;
+
+	enum bch_write_flags saved_flags = req->flags;
+	req->flags |= BCH_WRITE_alloc_nowait;
+
+	for_each_set_bit(i, frac_valid, v->nr_blocks) {
+		if (test_bit(i, blocks_had) ||
+		    test_bit(i, s->blocks_allocated))
+			continue;
+
+		/*
+		 * Each block's deviation is measured against the centroid and
+		 * mean absolute deviation of the *other* blocks: a single
+		 * large outlier inflates a global mad enough to mask itself:
+		 */
+		u64 centroid = div_u64(sum - frac[i], nr - 1);
+		u64 mad = 0;
+		for_each_set_bit(j, frac_valid, v->nr_blocks)
+			if (j != i)
+				mad += abs_diff(frac[j], centroid);
+		mad = div_u64(mad, nr - 1);
+
+		u64 dist = abs_diff(frac[i], centroid);
+		if (dist <= mad * 2)
+			continue;
+
+		struct bch_dev *ca = bch2_dev_tryget_noerror(c, v->ptrs[i].dev);
+		if (!ca)
+			continue;
+
+		/* can't meaningfully improve within a bucket: */
+		if (dist <= dev_offset_to_frac(ca, ca->mi.bucket_size)) {
+			bch2_dev_put(ca);
+			continue;
+		}
+
+		req->target_frac = centroid;
+		req->ca = ca;
+		struct open_bucket *ob = bch2_bucket_alloc_trans(trans, req);
+		req->ca = NULL;
+
+		if (IS_ERR(ob)) {
+			bch2_dev_put(ca);
+			ret = PTR_ERR(ob);
+			if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+				break;
+			ret = 0;	/* best effort */
+			continue;
+		}
+
+		struct bch_extent_ptr new_ptr = bch2_ob_ptr(c, ob);
+		u64 new_frac = dev_offset_to_frac(ca, new_ptr.offset);
+		bch2_dev_put(ca);
+
+		if (abs_diff(new_frac, centroid) < dist / 2) {
+			bch2_open_bucket_put(c, c->allocator.open_buckets + s->blocks[i]);
+			s->blocks[i]	= ob - c->allocator.open_buckets;
+			sum		+= new_frac - frac[i];
+			frac[i]		= new_frac;
+			v->ptrs[i]	= new_ptr;
+		} else {
+			bch2_open_bucket_put(c, ob);
+		}
+	}
+
+	req->flags	= saved_flags;
+	req->target_frac = 0;
+	return ret;
+}
+
 static bool copygc_can_run_on_devs(struct bch_fs *c,
 				   struct bch_devs_mask *devs)
 {
@@ -1170,6 +1283,11 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 
 	if (bitmap_weight(s->blocks_gotten, v->nr_blocks) == v->nr_blocks)
 		return 0;
+
+	/* pre-existing blocks can't be reallocated by the outlier pass: */
+	unsigned long blocks_had[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)];
+	bitmap_copy(blocks_had, s->blocks_gotten, BCH_BKEY_PTRS_MAX);
+	bool shrunk = false;
 
 	req->scratch_flags		= req->flags;
 	req->scratch_data_type		= req->data_type;
@@ -1246,6 +1364,7 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 			v->nr_blocks = new_nr_blocks;
 			v->nr_redundant = nr_parity_gotten;
 			ret = 0;
+			shrunk = true;
 
 			struct bch_devs_list d = {};
 			for_each_data_parity_block(i, new_nr_data, nr_parity_gotten) {
@@ -1261,6 +1380,16 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 			ret = bch_err_throw(c, stripe_insufficient_devices);
 		}
 	}
+
+	/*
+	 * Fully allocated: the centroid is settled, see if any blocks are
+	 * outliers we can reallocate closer to it. Not after shrinking: the
+	 * slot shift invalidates blocks_had, and a stripe we could barely
+	 * allocate at all has no spare buckets to improve placement with.
+	 */
+	if (!ret && !shrunk &&
+	    bitmap_weight(s->blocks_gotten, v->nr_blocks) == v->nr_blocks)
+		ret = stripe_reallocate_outliers(trans, req, s, blocks_had);
 
 	req->flags		= req->scratch_flags;
 	req->data_type		= req->scratch_data_type;
