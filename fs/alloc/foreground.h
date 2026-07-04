@@ -71,6 +71,18 @@ struct alloc_request {
 	/* bch2_bucket_alloc_trans(): */
 	struct bch_dev		*ca;
 
+	/*
+	 * Allocate the free bucket nearest this device position (a 32.32
+	 * fixed point fraction of the device, see dev_frac_to_offset()),
+	 * instead of allocating from the device cursor; 0 = no target.
+	 *
+	 * A fraction rather than a sector offset so it means the same thing
+	 * on devices of different sizes: erasure coding uses it to allocate
+	 * a stripe's blocks at equivalent positions on each device, and the
+	 * device is chosen after the target is set:
+	 */
+	u64			target_frac;
+
 	enum {
 				BTREE_BITMAP_NO,
 				BTREE_BITMAP_YES,
@@ -354,6 +366,7 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 	req->will_retry_set_devices	= false;
 	req->copygc_can_make_progress	= false;
 	req->trace_alloc_failed		= false;
+	req->target_frac			= 0;
 	req->devs_sorted.nr		= 0;
 	/* bch2_alloc_sectors_req() overwrites this; bch2_bucket_alloc_trans()
 	 * callers (e.g. journal resize) don't, so zero it here for them: */

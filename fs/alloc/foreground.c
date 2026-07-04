@@ -321,19 +321,22 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 	return ob;
 }
 
-static struct open_bucket *try_alloc_bucket(struct btree_trans *trans,
-					    struct alloc_request *req,
-					    struct btree_iter *freespace_iter)
+static struct open_bucket *try_alloc_bucket_pos(struct btree_trans *trans,
+						struct alloc_request *req,
+						u64 pos)
 {
 	struct bch_fs *c = trans->c;
-	u64 b = freespace_iter->pos.offset & ~(~0ULL << 56);
+	u64 b = pos & ~(~0ULL << 56);
 
 	if (!may_alloc_bucket(c, req, POS(req->ca->dev_idx, b)))
 		return NULL;
 
+	CLASS(btree_iter, iter)(trans, BTREE_ID_freespace,
+				POS(req->ca->dev_idx, pos), 0);
+
 	u8 gen;
 	u64 journal_seq_empty;
-	int ret = bch2_check_freespace_key_async(trans, freespace_iter, &gen, &journal_seq_empty);
+	int ret = bch2_check_freespace_key_async(trans, &iter, &gen, &journal_seq_empty);
 	if (ret < 0)
 		return ERR_PTR(ret);
 	if (ret)
@@ -433,76 +436,187 @@ again:
 	return ob;
 }
 
+/*
+ * Scan for the nearest bucket we can allocate, forwards or backwards from
+ * @start, within one genbits class of the freespace btree: candidates come
+ * from peeking the freespace btree (extents - every bucket in a returned
+ * extent is free), and candidates we can't allocate - held open, btree
+ * bitmap mismatches - advance the scan.
+ */
+static struct open_bucket *
+bucket_alloc_scan(struct btree_trans *trans, struct alloc_request *req,
+		  u64 genbits, u64 start, bool forwards)
+{
+	struct bch_dev *ca = req->ca;
+	const u64 bucket_mask = ~(~0ULL << 56);
+	struct bpos end	= POS(ca->dev_idx, genbits | bucket_mask);
+	struct bpos min	= POS(ca->dev_idx, genbits | ca->mi.first_bucket);
+	u64 pos = start;
+
+	if (!forwards) {
+		/* @start itself belongs to the forwards scan: */
+		if (pos == min.offset)
+			return NULL;
+		pos--;
+	}
+
+	CLASS(btree_iter, iter)(trans, BTREE_ID_freespace,
+				POS(ca->dev_idx, pos), 0);
+
+	while (1) {
+		if (!forwards && pos < min.offset)
+			return NULL;
+
+		bch2_btree_iter_set_pos(&iter, POS(ca->dev_idx, pos));
+
+		struct bkey_s_c k = forwards
+			? bch2_btree_iter_peek_max(&iter, &end)
+			: bch2_btree_iter_peek_prev_min(&iter, min);
+		int ret = bkey_err(k);
+		if (ret)
+			return ERR_PTR(ret);
+		if (!k.k)
+			return NULL;
+
+		u64 cand = forwards
+			? max(pos, bkey_start_offset(k.k))
+			: min(pos, k.k->p.offset - 1);
+		u64 bucket = cand & bucket_mask;
+
+		req->counters.buckets_seen++;
+
+		if (req->btree_bitmap != BTREE_BITMAP_ANY &&
+		    req->btree_bitmap != bch2_dev_btree_bitmap_marked_sectors(ca,
+				bucket_to_sector(ca, bucket), ca->mi.bucket_size)) {
+			u64 shift = ca->mi.btree_bitmap_shift;
+
+			req->counters.skipped_mi_btree_bitmap++;
+
+			/* skip to the next bitmap granule: */
+			if (forwards) {
+				if (req->btree_bitmap == BTREE_BITMAP_YES &&
+				    bucket_to_sector(ca, bucket) > 64ULL << shift)
+					return NULL;
+				pos = genbits | sector_to_bucket(ca,
+						round_up(bucket_to_sector(ca, bucket + 1),
+							 1ULL << shift));
+			} else {
+				u64 granule = round_down(bucket_to_sector(ca, bucket),
+							 1ULL << shift);
+				if (!granule)
+					return NULL;
+				pos = genbits | (sector_to_bucket(ca, granule) - 1);
+			}
+			continue;
+		}
+
+		struct open_bucket *ob = try_alloc_bucket_pos(trans, req, cand);
+		if (ob)
+			return ob;
+
+		if (forwards)
+			pos = cand + 1;
+		else if (cand == min.offset)
+			return NULL;
+		else
+			pos = cand - 1;
+	}
+}
+
+/*
+ * Allocate from the device cursor: forward scans from the cursor position
+ * through the genbits classes above it, wrapping around to the start of the
+ * device if nothing was found:
+ */
 static struct open_bucket *bch2_bucket_alloc_freelist(struct btree_trans *trans,
 						      struct alloc_request *req)
 {
 	struct bch_dev *ca = req->ca;
-	struct bkey_s_c k;
-	struct open_bucket *ob = NULL;
 	u64 *dev_alloc_cursor = &ca->alloc_cursor[req->btree_bitmap];
-	u64 alloc_start = max_t(u64, ca->mi.first_bucket, READ_ONCE(*dev_alloc_cursor));
-	u64 alloc_cursor = alloc_start;
-	int ret;
-again:
-	for_each_btree_key_max_norestart(trans, iter, BTREE_ID_freespace,
-					 POS(ca->dev_idx, alloc_cursor),
-					 POS(ca->dev_idx, U64_MAX),
-					 0, k, ret) {
-		/*
-		 * peek normally dosen't trim extents - they can span iter.pos,
-		 * which is not what we want here:
-		 */
-		iter.k.size = iter.k.p.offset - iter.pos.offset;
+	u64 start = max_t(u64, ca->mi.first_bucket, READ_ONCE(*dev_alloc_cursor));
 
-		while (iter.k.size) {
-			req->counters.buckets_seen++;
-
-			u64 bucket = iter.pos.offset & ~(~0ULL << 56);
-			if (req->btree_bitmap != BTREE_BITMAP_ANY &&
-			    req->btree_bitmap != bch2_dev_btree_bitmap_marked_sectors(ca,
-					bucket_to_sector(ca, bucket), ca->mi.bucket_size)) {
-				if (req->btree_bitmap == BTREE_BITMAP_YES &&
-				    bucket_to_sector(ca, bucket) > 64ULL << ca->mi.btree_bitmap_shift)
-					goto fail;
-
-				bucket = sector_to_bucket(ca,
-						round_up(bucket_to_sector(ca, bucket + 1),
-							 1ULL << ca->mi.btree_bitmap_shift));
-				alloc_cursor = bucket|(iter.pos.offset & (~0ULL << 56));
-
-				bch2_btree_iter_set_pos(&iter, POS(ca->dev_idx, alloc_cursor));
-				req->counters.skipped_mi_btree_bitmap++;
-				goto next;
-			}
-
-			ob = try_alloc_bucket(trans, req, &iter);
+	for (unsigned pass = 0; pass < 2; pass++) {
+		for (u64 g = start >> 56; g < BCH_FREESPACE_GENBITS_NR; g++) {
+			u64 genbits = g << 56;
+			struct open_bucket *ob = bucket_alloc_scan(trans, req, genbits,
+					max(start, genbits | ca->mi.first_bucket), true);
 			if (ob) {
 				if (!IS_ERR(ob))
-					*dev_alloc_cursor = iter.pos.offset;
-				bch2_set_btree_iter_dontneed(&iter);
-				break;
+					*dev_alloc_cursor = genbits | ob->bucket;
+				return ob;
+			}
+		}
+
+		if (start == ca->mi.first_bucket)
+			break;
+		start = ca->mi.first_bucket;
+	}
+
+	return NULL;
+}
+
+/*
+ * Targeted allocation, for erasure coding: allocate the free bucket nearest
+ * req->target_frac (a fixed point fraction of the device, see
+ * dev_frac_to_offset()), so that a stripe's blocks land at equivalent
+ * positions on each device.
+ *
+ * The freespace btree sorts by (genbits, bucket), so each genbits class (gen
+ * wraparound avoidance) is scanned separately: forwards and backwards from
+ * the target, each direction allocating the nearest bucket it can, keeping
+ * whichever candidate is closest overall. An exact hit returns immediately;
+ * otherwise every class is searched - proximity beats the cursor path's
+ * strict genbits ordering here, and the open bucket get/put on candidates we
+ * don't keep is cheap.
+ *
+ * Unlike bch2_bucket_alloc_freelist() this neither reads nor updates
+ * ca->alloc_cursor: targeted allocations don't drag the shared cursors
+ * around, and concurrent stripe creates don't interfere with each other.
+ */
+
+static struct open_bucket *bch2_bucket_alloc_target(struct btree_trans *trans,
+						    struct alloc_request *req)
+{
+	struct bch_fs *c = trans->c;
+	struct bch_dev *ca = req->ca;
+	u64 target_bucket = clamp(sector_to_bucket(ca,
+					dev_frac_to_offset(ca, req->target_frac)),
+				  (u64) ca->mi.first_bucket,
+				  ca->mi.nbuckets - 1);
+	struct open_bucket *best = NULL;
+
+	for (u64 g = 0; g < BCH_FREESPACE_GENBITS_NR; g++) {
+		u64 genbits = g << 56;
+		u64 target = genbits | target_bucket;
+
+		for (unsigned forwards = 0; forwards < 2; forwards++) {
+			struct open_bucket *ob =
+				bucket_alloc_scan(trans, req, genbits,
+							      target, forwards);
+			if (IS_ERR(ob)) {
+				if (best)
+					bch2_open_bucket_put(c, best);
+				return ob;
+			}
+			if (!ob)
+				continue;
+
+			if (!best) {
+				best = ob;
+			} else if (abs_diff(ob->bucket, target_bucket) <
+				   abs_diff(best->bucket, target_bucket)) {
+				bch2_open_bucket_put(c, best);
+				best = ob;
+			} else {
+				bch2_open_bucket_put(c, ob);
 			}
 
-			iter.k.size--;
-			iter.pos.offset++;
+			if (best->bucket == target_bucket)
+				return best;
 		}
-next:
-		if (ob || ret)
-			break;
-	}
-fail:
-
-	BUG_ON(ob && ret);
-
-	if (ret)
-		ob = ERR_PTR(ret);
-
-	if (!ob && alloc_start > ca->mi.first_bucket) {
-		alloc_cursor = alloc_start = ca->mi.first_bucket;
-		goto again;
 	}
 
-	return ob;
+	return best;
 }
 
 static noinline __cold void bucket_alloc_to_text(struct printbuf *out,
@@ -681,7 +795,9 @@ again:
 		bch2_alloc_wake_dev(ca);
 alloc:
 	ob = likely(freespace)
-		? bch2_bucket_alloc_freelist(trans, req)
+		? (req->target_frac
+		   ? bch2_bucket_alloc_target(trans, req)
+		   : bch2_bucket_alloc_freelist(trans, req))
 		: bch2_bucket_alloc_early(trans, req);
 
 	if (!ob && req->btree_bitmap != BTREE_BITMAP_ANY) {

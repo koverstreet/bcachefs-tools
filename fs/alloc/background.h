@@ -144,6 +144,8 @@ static inline u64 alloc_lru_idx_fragmentation(struct bch_alloc_v4 a,
 	return div_u64(d * (1ULL << 31), ca->mi.bucket_size);
 }
 
+#define BCH_FREESPACE_GENBITS_NR	(((unsigned) U8_MAX >> 4) + 1)
+
 static inline u64 alloc_freespace_genbits(struct bch_alloc_v4 a)
 {
 	return ((u64) alloc_gc_gen(a) >> 4) << 56;

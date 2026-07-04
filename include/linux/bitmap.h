@@ -49,6 +49,12 @@ static inline int __bitmap_and(unsigned long *dst, const unsigned long *bitmap1,
 	return result != 0;
 }
 
+static inline void bitmap_copy(unsigned long *dst, const unsigned long *src,
+			       unsigned int bits)
+{
+	memcpy(dst, src, BITS_TO_LONGS(bits) * sizeof(unsigned long));
+}
+
 static inline void bitmap_complement(unsigned long *dst, const unsigned long *src,
 				     unsigned int bits)
 {

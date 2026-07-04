@@ -53,6 +53,15 @@ static inline u64 div64_u64(u64 dividend, u64 divisor)
 }
 
 /**
+ * mul_u64_u64_div_u64 - unsigned 64bit multiply then divide, with a 128bit
+ * intermediate
+ */
+static inline u64 mul_u64_u64_div_u64(u64 a, u64 b, u64 c)
+{
+	return (unsigned __int128) a * b / c;
+}
+
+/**
  * div64_s64 - signed 64bit divide with 64bit divisor
  */
 static inline s64 div64_s64(s64 dividend, s64 divisor)
