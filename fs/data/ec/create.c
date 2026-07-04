@@ -1009,6 +1009,35 @@ static struct ec_stripe_new *ec_new_stripe_alloc(struct bch_fs *c,
 	return s;
 }
 
+/*
+ * The centroid of the blocks the stripe has so far, as a mean device
+ * position fraction (see dev_offset_to_frac(); device sizes may differ, so
+ * raw offsets aren't comparable): each new block is allocated as close to it
+ * as possible, so that a stripe's blocks sit at equivalent positions on each
+ * device:
+ */
+static u64 stripe_blocks_centroid(struct bch_fs *c, struct bch_stripe *v,
+				  unsigned long *blocks_gotten)
+{
+	u64 sum = 0;
+	unsigned nr = 0, i;
+
+	guard(rcu)();
+	for_each_set_bit(i, blocks_gotten, v->nr_blocks) {
+		if (v->ptrs[i].dev == BCH_SB_MEMBER_INVALID)
+			continue;
+
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, v->ptrs[i].dev);
+		if (!ca)
+			continue;
+
+		sum += dev_offset_to_frac(ca, v->ptrs[i].offset);
+		nr++;
+	}
+
+	return nr ? div_u64(sum, nr) : 0;
+}
+
 static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 				    struct alloc_request *req,
 				    struct ec_dev_stripe_state *dev_stripe,
@@ -1046,11 +1075,18 @@ static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 	BUG_ON(nr_have_data	> nr_data);
 	BUG_ON(nr_have_parity	> nr_parity);
 
-	req->ptrs.nr = 0;
-	if (nr_have_parity < nr_parity) {
-		req->nr_replicas	= nr_parity;
+	/*
+	 * Allocate one block per bch2_bucket_alloc_set_trans() call,
+	 * recomputing the centroid as blocks accumulate, so every block -
+	 * including the parity blocks allocated first - is targeted at the
+	 * stripe's emerging region:
+	 */
+	while (nr_have_parity < nr_parity) {
+		req->ptrs.nr		= 0;
+		req->nr_replicas	= nr_have_parity + 1;
 		req->nr_effective	= nr_have_parity;
 		req->data_type		= BCH_DATA_parity;
+		req->target_frac		= stripe_blocks_centroid(c, v, s->blocks_gotten);
 
 		int ret = bch2_bucket_alloc_set_trans(trans, req, &dev_stripe->parity_stripe);
 
@@ -1063,17 +1099,20 @@ static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 			s->blocks[j] = req->ptrs.v[i];
 			v->ptrs[j] = bch2_ob_ptr(c, ob);
 			__set_bit(j, s->blocks_gotten);
+			__clear_bit(ob->dev, req->devs_may_alloc.d);
+			nr_have_parity++;
 		}
 
 		if (ret)
 			return ret;
 	}
 
-	req->ptrs.nr = 0;
-	if (nr_have_data < nr_data) {
-		req->nr_replicas	= nr_data;
+	while (nr_have_data < nr_data) {
+		req->ptrs.nr		= 0;
+		req->nr_replicas	= nr_have_data + 1;
 		req->nr_effective	= nr_have_data;
 		req->data_type		= BCH_DATA_user;
+		req->target_frac		= stripe_blocks_centroid(c, v, s->blocks_gotten);
 
 		int ret = bch2_bucket_alloc_set_trans(trans, req, &dev_stripe->block_stripe);
 
@@ -1085,6 +1124,8 @@ static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 			s->blocks[j] = req->ptrs.v[i];
 			v->ptrs[j] = bch2_ob_ptr(c, ob);
 			__set_bit(j, s->blocks_gotten);
+			__clear_bit(ob->dev, req->devs_may_alloc.d);
+			nr_have_data++;
 		}
 
 		if (ret)
@@ -1228,6 +1269,7 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 	req->nr_effective	= req->scratch_nr_effective;
 	req->have_cache		= req->scratch_have_cache;
 	req->devs_may_alloc	= req->scratch_devs_may_alloc;
+	req->target_frac		= 0;
 	return ret;
 }
 
