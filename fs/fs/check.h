@@ -38,7 +38,6 @@ struct inode_walker_entry {
 	struct bch_inode_unpacked inode;
 	bool			whiteout;
 	u64			count;
-	u64			i_size;
 };
 
 struct inode_walker {

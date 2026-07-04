@@ -741,7 +741,6 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 
 		new_entry.inode.bi_snapshot	= k.k->p.snapshot;
 		new_entry.count			= 0;
-		new_entry.i_size		= 0;
 
 		while (i > w->inodes.data && i[-1].inode.bi_snapshot > k.k->p.snapshot)
 			--i;
@@ -1765,11 +1764,9 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 
 	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 
-	for_each_visible_inode(trans, s, dir, d.k->p.snapshot, i) {
-		if (have_dir)
+	if (have_dir)
+		for_each_visible_inode(trans, s, dir, d.k->p.snapshot, i)
 			i->count++;
-		i->i_size += bkey_bytes(d.k);
-	}
 fsck_err:
 	return ret;
 }
