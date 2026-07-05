@@ -436,6 +436,15 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 	data_opts->target		= r->background_target;
 
 	/*
+	 * Never wait on the allocator mid-write: a blocked data update holds a
+	 * read-time snapshot of the extent while other movers rewrite it, and
+	 * the stale write is then discarded at index update time
+	 * (data_update_useless_write_fail). Better to fail with freelist_empty
+	 * and retry from a fresh read.
+	 */
+	data_opts->write_flags |= BCH_WRITE_alloc_nowait;
+
+	/*
 	 * we can't add/drop replicas from btree nodes incrementally, we always
 	 * need to be able to spill over to the whole fs
 	 */
