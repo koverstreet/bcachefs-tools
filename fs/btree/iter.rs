@@ -868,7 +868,13 @@ impl<'t> BtreeIter<'t> {
                     }
                 }
             }
-            unsafe { c::bch2_btree_iter_advance(raw) };
+            // advance() returns false when the key just visited ended at
+            // SPOS_MAX and the position can't move forward — true for the
+            // rightmost key of any interior node level. Looping again would
+            // peek the same key forever.
+            if !unsafe { c::bch2_btree_iter_advance(raw) } {
+                return Ok(());
+            }
         }
     }
 
@@ -916,7 +922,9 @@ impl<'t> BtreeIter<'t> {
                 }
             }
 
-            unsafe { c::bch2_btree_iter_advance(raw) };
+            if !unsafe { c::bch2_btree_iter_advance(raw) } {
+                return Ok(());
+            }
         }
     }
 
@@ -965,7 +973,9 @@ impl<'t> BtreeIter<'t> {
                 }
             }
 
-            unsafe { c::bch2_btree_iter_advance(raw) };
+            if !unsafe { c::bch2_btree_iter_advance(raw) } {
+                return Ok(());
+            }
         }
     }
 
