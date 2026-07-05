@@ -412,10 +412,14 @@ dkms-reload:
 # (`dkms remove --all` + `add`) and keys on a per-commit git-describe VERSION, so
 # every cycle is a full rebuild. This skips DKMS and builds in place against a
 # persistent tree. The ktest VM is snapshotted fresh each run, so the tree lives
-# host-side (default under /ktest-out). `cp -a` preserves source mtimes so kbuild
-# only recompiles what changed -- install(1), which dkms-reload uses, stamps every
-# file "now" and would defeat that. Pass BCACHEFS_DEBUG=1 BCACHEFS_TESTS=1 (etc.)
-# the same way ktest does for dkms-reload.
+# host-side (default under /ktest-out). The tar pipe preserves source mtimes so
+# kbuild only recompiles what changed -- install(1), which dkms-reload uses,
+# stamps every file "now" and would defeat that. Userspace builds drop .o/.d
+# next to the sources in fs/; those must never reach the kbuild tree, or kbuild
+# links userspace objects into bcachefs.ko whenever their mtimes beat the
+# sources (modpost then fails with libc/liburcu undefined symbols). Pass
+# BCACHEFS_DEBUG=1 BCACHEFS_TESTS=1 (etc.) the same way ktest does for
+# dkms-reload.
 KDIR			?= /lib/modules/$(shell uname -r)/build
 DKMS_INTERACTIVE_DIR	?= /ktest-out/bcachefs-module
 
@@ -425,7 +429,8 @@ dkms-reload-interactive: version.h
 		echo "$@: must run as root"; exit 1; \
 	fi
 	$(Q)mkdir -p $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs
-	$(Q)cp -a fs/. $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs/
+	$(Q)tar -C fs --exclude='*.o' --exclude='*.d' --exclude='.*.cmd' -cf - . | \
+		tar -C $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs -xf -
 	$(Q)cp -a dkms/Makefile $(DKMS_INTERACTIVE_DIR)/Makefile
 	$(Q)cp -a dkms/module-version.c version.h $(DKMS_INTERACTIVE_DIR)/src/fs/bcachefs/
 	$(Q)( :; $(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),printf '%s := %s\n' '$(v)' '$($(v))';)) ) > $(DKMS_INTERACTIVE_DIR)/build.vars
