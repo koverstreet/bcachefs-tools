@@ -448,6 +448,22 @@ bool bch2_extent_merge(struct bch_fs *c, struct bkey_s l, struct bkey_s_c r)
 		    lp.crc.nonce		!= rp.crc.nonce)
 			return false;
 
+		/*
+		 * Compressed extents may only merge if they're pieces of the
+		 * same compressed blob. The address continuity check above
+		 * doesn't establish that: for compressed extents it adds
+		 * uncompressed sectors (crc.offset, live_size) to a device
+		 * address (ptr.offset), so pieces of two different blobs can
+		 * satisfy it by coincidence - and then merging remaps one
+		 * range onto the other blob's data:
+		 */
+		if (crc_is_compressed(lp.crc) &&
+		    (lp.ptr.offset		!= rp.ptr.offset ||
+		     lp.crc.uncompressed_size	!= rp.crc.uncompressed_size ||
+		     lp.crc.compressed_size	!= rp.crc.compressed_size ||
+		     bch2_crc_cmp(lp.crc.csum, rp.crc.csum)))
+			return false;
+
 		if (lp.crc.offset + lp.crc.live_size + rp.crc.live_size <=
 		    lp.crc.uncompressed_size) {
 			/* can use left extent's crc entry */
