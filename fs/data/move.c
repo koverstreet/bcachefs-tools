@@ -75,11 +75,13 @@ static void move_write_done(struct bch_write_op *op)
 	atomic_dec(&ctxt->write_ios);
 
 	/*
-	 * EC allocation failed — the write never happened but the extent
-	 * still needs erasure coding. Mark it pending so reconcile retries
-	 * from the pending list instead of the main scan.
+	 * Allocation failed outright (EC stripe, or a reconcile write on a
+	 * full target): park it so reconcile retries from the pending list
+	 * instead of the main scan.
 	 */
-	if (bch2_err_matches(op->error, BCH_ERR_ec_alloc_failed))
+	if (bch2_err_matches(op->error, BCH_ERR_ec_alloc_failed) ||
+	    (u->opts.type == BCH_DATA_UPDATE_reconcile &&
+	     bch2_err_matches(op->error, BCH_ERR_freelist_empty)))
 		bch2_data_update_ec_alloc_failed(u);
 
 	bch2_data_update_exit(u, op->error);
