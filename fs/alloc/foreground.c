@@ -331,8 +331,14 @@ static struct open_bucket *try_alloc_bucket_pos(struct btree_trans *trans,
 	if (!may_alloc_bucket(c, req, POS(req->ca->dev_idx, b)))
 		return NULL;
 
+	/*
+	 * nopreserve: we're called for a fresh candidate position each time,
+	 * so a preserved path is never reused - and a scan over a long run of
+	 * unallocatable buckets would accumulate a dead path per candidate
+	 * until the transaction overflows:
+	 */
 	CLASS(btree_iter, iter)(trans, BTREE_ID_freespace,
-				POS(req->ca->dev_idx, pos), 0);
+				POS(req->ca->dev_idx, pos), BTREE_ITER_nopreserve);
 
 	u8 gen;
 	u64 journal_seq_empty;
