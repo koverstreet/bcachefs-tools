@@ -872,9 +872,16 @@ static void dev_stripe_state_sync(struct dev_stripe_state *stripe,
 			if (!test_bit(i, added.d))
 				min_va = min(min_va, stripe->next_alloc[i]);
 
+		/*
+		 * Raise to min, never lower: a device rejoining the mask (e.g.
+		 * excluded for one sort because it holds the previous replica)
+		 * keeps its allocation history - assigning would erase it,
+		 * letting the same device win every equal-hand tie forever
+		 * while its siblings starve:
+		 */
 		if (min_va != U64_MAX)
 			for_each_set_bit(i, added.d, BCH_SB_MEMBERS_MAX)
-				stripe->next_alloc[i] = min_va;
+				stripe->next_alloc[i] = max(stripe->next_alloc[i], min_va);
 	}
 
 	stripe->cached_devs = *devs;
