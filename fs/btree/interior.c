@@ -23,6 +23,7 @@
 #include "data/extents.h"
 #include "data/keylist.h"
 #include "data/reconcile/trigger.h"
+#include "data/reconcile/work.h"
 #include "data/write.h"
 
 #include "init/error.h"
@@ -871,15 +872,20 @@ static int btree_update_nodes_written_trans(struct btree_trans *trans,
 						  BKEY_BTREE_PTR_U64s_MAX,
 						  SET_NEEDS_RECONCILE_foreground, 0));
 
+		bch2_reconcile_maybe_park_new_node(c, &i->key);
+
 		/*
 		 * This is not strictly the best way of doing this, what we
 		 * really want is a flag for 'did
-		 * bch2_bkey_set_needs_reconcile() change anything, and do we
-		 * need to update the node key'; there's no reason we couldn't
-		 * be calling bch2_bkey_set_needs_reconcile() at node allocation
-		 * time to better handle the case where we have to pad with
-		 * invalid pointers because we don't currently have devices
-		 * available to meet the desired replication level.
+		 * bch2_bkey_set_needs_reconcile() or
+		 * bch2_reconcile_maybe_park_new_node() change anything, and do
+		 * we need to update the node key' - note that the latter can
+		 * set pending when the former changed nothing; there's no
+		 * reason we couldn't be calling
+		 * bch2_bkey_set_needs_reconcile() at node allocation time to
+		 * better handle the case where we have to pad with invalid
+		 * pointers because we don't currently have devices available
+		 * to meet the desired replication level.
 		 */
 
 		if (bkey_has_reconcile(c, bkey_i_to_s_c(&i->key))) {

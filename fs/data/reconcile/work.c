@@ -650,6 +650,31 @@ static void bkey_reconcile_pending_mod(struct bch_fs *c, struct bkey_i *k, bool 
 	r->pending = set;
 }
 
+/*
+ * Called on a btree node key about to be committed by an interior update.
+ * The node was just allocated with target preference (all btree node
+ * allocation goes through the effective metadata target,
+ * bch2_btree_update_start()), so its placement is the allocator's best
+ * current effort: if the key still wants target placement, a rewrite
+ * through the same allocator can't do better right now. Park it - btree
+ * node allocation falls back off target rather than failing, so the
+ * data update path never generates the error that parks extents, and an
+ * unparked key would be rewritten to the same placement forever.
+ *
+ * Only target-only keys park: anything with a replicas component (hipri:
+ * degraded, evacuating) must stay live.
+ *
+ * There's still a potential problem if other BCH_RECONCILE flags are spinning; they will all wait for the others to be done before parking.
+ */
+void bch2_reconcile_maybe_park_new_node(struct bch_fs *c, struct bkey_i *k)
+{
+	struct bch_extent_reconcile *r = (struct bch_extent_reconcile *)
+		bch2_bkey_reconcile_opts(c, bkey_i_to_s_c(k));
+
+	if (r && r->need_rb == BIT(BCH_RECONCILE_background_target))
+		r->pending = true;
+}
+
 int bch2_extent_reconcile_pending_mod(struct btree_trans *trans, struct btree_iter *iter,
 				      unsigned level, struct bkey_s_c k, bool set)
 {

@@ -81,6 +81,7 @@ static inline int bch2_reconcile_pending_wakeup(struct bch_fs *c)
 
 int bch2_extent_reconcile_pending_mod(struct btree_trans *, struct btree_iter *,
 				      unsigned, struct bkey_s_c, bool);
+void bch2_reconcile_maybe_park_new_node(struct bch_fs *, struct bkey_i *);
 
 void bch2_reconcile_status_to_text(struct printbuf *, struct bch_fs *);
 void bch2_reconcile_scan_pending_to_text(struct printbuf *, struct bch_fs *);
