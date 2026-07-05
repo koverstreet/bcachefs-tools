@@ -321,6 +321,33 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 	return 0;
 }
 
+/*
+ * Btree node rewrites don't construct a data_update, so they don't get
+ * data_update_trace()'s success/failure events on exit - record the
+ * outcome here so btree moves trace like extent moves. @k was copied
+ * before the rewrite: the rewrite frees the node the original key's
+ * memory lived in.
+ */
+static void move_btree_node_trace(struct bch_fs *c,
+				  struct bch_inode_opts *opts,
+				  struct data_update_opts *data_opts,
+				  struct bkey_s_c k, int ret)
+{
+	if (!ret)
+		event_add_trace(c, data_update, c->opts.btree_node_size >> 9, buf, ({
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_newline(&buf);
+			bch2_data_update_opts_to_text(&buf, c, opts, data_opts);
+		}));
+	else
+		event_add_trace(c, data_update_fail, c->opts.btree_node_size >> 9, buf, ({
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_newline(&buf);
+			bch2_data_update_opts_to_text(&buf, c, opts, data_opts);
+			prt_printf(&buf, "\nret:\t%s\n", bch2_err_str(ret));
+		}));
+}
+
 int bch2_move_extent(struct moving_context *ctxt,
 		     struct move_bucket *bucket_in_flight,
 		     struct bch_inode_opts *opts,
@@ -338,8 +365,23 @@ int bch2_move_extent(struct moving_context *ctxt,
 	if (!bkey_is_btree_ptr(k.k))
 		ret = __bch2_move_extent(ctxt, bucket_in_flight, iter, k, opts, data_opts);
 	else if (data_opts->type != BCH_DATA_UPDATE_scrub) {
-		if (data_opts->type != BCH_DATA_UPDATE_copygc)
-			try(bch2_can_do_data_update(trans, opts, data_opts, k, NULL));
+		if (data_opts->type != BCH_DATA_UPDATE_copygc) {
+			ret = bch2_can_do_data_update(trans, opts, data_opts, k, NULL);
+			if (ret) {
+				/*
+				 * The extent leg records pre-check refusals via
+				 * data_update_exit(); no data_update exists here,
+				 * so trace them ourselves:
+				 */
+				if (!bch2_err_matches(ret, BCH_ERR_transaction_restart))
+					move_btree_node_trace(c, opts, data_opts, k, ret);
+				return ret;
+			}
+		}
+
+		struct bkey_buf node_key __cleanup(bch2_bkey_buf_exit);
+		bch2_bkey_buf_init(&node_key);
+		bch2_bkey_buf_reassemble(&node_key, k);
 
 		enum bch_trans_commit_flags commit_flags = data_opts->commit_flags;
 		if ((commit_flags & BCH_WATERMARK_MASK) == BCH_WATERMARK_copygc)
@@ -349,6 +391,12 @@ int bch2_move_extent(struct moving_context *ctxt,
 						  data_opts->target,
 						  data_opts->commit_flags,
 						  data_opts->write_flags);
+
+		/* ENOMEM becomes a restart below and gets retried - not an outcome */
+		if (!bch2_err_matches(ret, BCH_ERR_transaction_restart) &&
+		    !bch2_err_matches(ret, ENOMEM))
+			move_btree_node_trace(c, opts, data_opts,
+					      bkey_i_to_s_c(node_key.k), ret);
 	} else
 		ret = bch2_btree_node_scrub(trans, iter->btree_id, level, k, data_opts->read_dev);
 
