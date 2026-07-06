@@ -402,6 +402,12 @@ $(obj)/rust/bcachefs.rs: $(obj)/codegen $(obj)/rust/generic-radix-tree.h $(bcach
 $(obj)/rust/extern.c: $(obj)/rust/bcachefs.rs ;
 CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations
 
+# Kernel trees < 6.18 pass -Zno-jump-tables in KBUILD_RUSTFLAGS, written for
+# their era's pinned rustc; ours has it stabilized as -Cjump-tables=n. Rewrite
+# the underlying variable - rust_flags expands it lazily, so this covers every
+# Rust rule below and in the vendored includes.
+KBUILD_RUSTFLAGS := $(patsubst -Zno-jump-tables,-Cjump-tables=n,$(KBUILD_RUSTFLAGS))
+
 # mod.rs keys on cfg(kernel) to source the kernel-compat types from the kernel
 # crate (vs bcachefs-shim in userspace); the kernel build doesn't set it on its
 # own, so do it here for every Rust object in this dir.
