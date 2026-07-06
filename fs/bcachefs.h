@@ -54,6 +54,14 @@
 #include <linux/zstd.h>
 #include <linux/unicode.h>
 
+/* WQ_PERCPU is 6.17+; before that, per-cpu was the unflagged default: */
+#ifdef __KERNEL__
+#include <linux/version.h>
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,17,0)
+#define WQ_PERCPU	0
+#endif
+#endif
+
 #include "bcachefs_format.h"
 #include "errcode.h"
 #include "opts.h"
