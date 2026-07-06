@@ -1578,7 +1578,7 @@ int bch2_fs_btree_cache_init(struct bch_fs *c)
 #ifdef HAVE_SHRINKER_TO_TEXT
 	shrink->to_text		= bch2_btree_cache_shrinker_to_text;
 #endif
-	shrink->seeks		= 2;
+	shrink->seeks		= c->opts.btree_cache_shrinker_seeks;
 	shrink->private_data	= &bc->live[0];
 	shrinker_register(shrink);
 
@@ -1591,7 +1591,7 @@ int bch2_fs_btree_cache_init(struct bch_fs *c)
 #ifdef HAVE_SHRINKER_TO_TEXT
 	shrink->to_text		= bch2_btree_cache_shrinker_to_text;
 #endif
-	shrink->seeks		= 8;
+	shrink->seeks		= c->opts.btree_cache_shrinker_seeks * 4;
 	shrink->private_data	= &bc->live[1];
 	shrinker_register(shrink);
 

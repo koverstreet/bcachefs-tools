@@ -586,6 +586,15 @@ enum fsck_err_opts {
 	  BCH2_NO_SB_OPT,		true,				\
 	  NULL,		"BTREE_ITER_prefetch causes btree nodes to be\n"\
 	  " prefetched sequentially")				\
+	x(btree_cache_shrinker_seeks,	u8,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
+	  OPT_UINT(1, 100),						\
+	  BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS,	4,		\
+	  NULL,		"Shrinker cost of re-reading a btree node;\n"	\
+	  " higher means the btree cache is evicted less\n"	\
+	  " aggressively under memory pressure. Consider\n"	\
+	  " raising on rotational storage, where re-reading\n"	\
+	  " evicted nodes is expensive (pinned nodes use 4x)")	\
 	x(dev_readahead,		u64,				\
 	  OPT_FS|OPT_MOUNT|OPT_RUNTIME|OPT_HUMAN_READABLE|OPT_SB_FIELD_SECTORS,\
 	  OPT_UINT(0, BCH_SB_EXT_DEV_READAHEAD_MAX << 9),		\
