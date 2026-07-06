@@ -103,6 +103,8 @@ int bch2_can_do_data_update(struct btree_trans *, struct bch_inode_opts *,
 			    struct data_update_opts *, struct bkey_s_c,
 			    struct printbuf *);
 
+bool bch2_data_update_fail_should_trace(enum bch_data_update_types, int);
+
 void bch2_data_update_ec_alloc_failed(struct data_update *);
 void bch2_data_update_exit(struct data_update *, int);
 int bch2_data_update_init(struct btree_trans *, struct btree_iter *,
