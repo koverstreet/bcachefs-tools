@@ -42,6 +42,8 @@ struct bch_fs_btree_node_rewrites {
 	struct list_head	pending;
 	spinlock_t		lock;
 	struct closure_waitlist	wait;
+	struct rhashtable	table;
+	bool			table_init_done;
 	struct workqueue_struct	*worker;
 };
 
