@@ -3424,6 +3424,16 @@ static const struct rhashtable_params bch_async_btree_rewrite_params = {
 	.automatic_shrinking	= true,
 };
 
+/*
+ * Ops are small and deduped, but a large fsck can touch millions of nodes -
+ * don't let deferred housekeeping pile up without bound. The triggers
+ * re-fire until the work actually happens, so a dropped op is re-noticed
+ * later; for the same reason allocation failure is fine to eat, and the
+ * allocation shouldn't work reclaim (GFP_NORETRY) - dropping the op IS the
+ * memory-pressure response.
+ */
+#define ASYNC_BTREE_OPS_MAX	8192
+
 static void async_btree_node_rewrite_work(struct work_struct *work)
 {
 	struct async_btree_rewrite *a =
@@ -3439,6 +3449,7 @@ static void async_btree_node_rewrite_work(struct work_struct *work)
 
 	BUG_ON(rhashtable_remove_fast(&c->btree.node_rewrites.table, &a->hash,
 				      bch_async_btree_rewrite_params));
+	atomic_dec(&c->btree.node_rewrites.nr);
 
 	scoped_guard(spinlock, &c->btree.node_rewrites.lock)
 		list_del(&a->list);
@@ -3455,6 +3466,9 @@ void bch2_async_btree_op(struct bch_fs *c, struct btree *b,
 	struct bch_fs_btree_node_rewrites *r = &c->btree.node_rewrites;
 	struct blbpos pos = BLBPOS(b->c.btree_id, b->c.level, b->key.k.p);
 
+	if (atomic_read(&r->nr) >= ASYNC_BTREE_OPS_MAX)
+		return;
+
 	/*
 	 * Dedup: the triggers fire repeatedly (e.g. every write buffer key
 	 * flushed into a node that needs merging) until the op actually runs
@@ -3463,7 +3477,8 @@ void bch2_async_btree_op(struct bch_fs *c, struct btree *b,
 	if (rhashtable_lookup_fast(&r->table, &pos, bch_async_btree_rewrite_params))
 		return;
 
-	struct async_btree_rewrite *a = kzalloc(sizeof(*a), GFP_NOFS);
+	struct async_btree_rewrite *a =
+		kzalloc(sizeof(*a), GFP_NOFS|__GFP_NORETRY|__GFP_NOWARN);
 	if (!a)
 		return;
 
@@ -3478,6 +3493,8 @@ void bch2_async_btree_op(struct bch_fs *c, struct btree *b,
 		kfree(a);
 		return;
 	}
+
+	atomic_inc(&r->nr);
 
 	bool now = false, pending = false;
 
@@ -3499,6 +3516,7 @@ void bch2_async_btree_op(struct bch_fs *c, struct btree *b,
 	} else {
 		BUG_ON(rhashtable_remove_fast(&r->table, &a->hash,
 					      bch_async_btree_rewrite_params));
+		atomic_dec(&r->nr);
 		kfree_rcu(a, rcu);
 	}
 }
@@ -3545,6 +3563,7 @@ void bch2_free_pending_node_rewrites(struct bch_fs *c)
 
 		BUG_ON(rhashtable_remove_fast(&r->table, &a->hash,
 					      bch_async_btree_rewrite_params));
+		atomic_dec(&r->nr);
 		kfree_rcu(a, rcu);
 	}
 }
