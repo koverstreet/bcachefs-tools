@@ -79,7 +79,6 @@ static ssize_t bch2_async_obj_list_read(struct file *file, char __user *buf,
 {
 	struct dump_iter *i = file->private_data;
 	struct async_obj_list *list = i->list;
-	ssize_t ret = 0;
 	bool done = false;
 
 	i->ubuf = buf;
