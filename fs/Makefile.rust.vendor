@@ -6,17 +6,20 @@
 # Builds bcachefs's checked-in copy of the kernel Rust support stack
 # (fs/vendor/kernel-rust/, a patched 7.1 rust/) into $(obj)/vrust, then bundles
 # the objects into bcachefs.ko. The kernel tree is read READ-ONLY — we reuse its
-# scripts/target.json + include/generated/rustc_cfg (present even on a Rust-off
-# kernel) and its headers for bindgen, but never write to it.
+# include/generated/rustc_cfg (generated unconditionally by syncconfig) and its
+# headers for bindgen, but never write to it. scripts/target.json is
+# always-$(CONFIG_RUST), so a Rust-off kernel doesn't have one: fs/Makefile
+# generates our own under $(obj)/vrust with the kernel's own generator and
+# rewrites --target in KBUILD_RUSTFLAGS to point at it.
 #
 # Flags: the kernel's own KBUILD_RUSTFLAGS is populated even on CONFIG_RUST=n
-# (the top + arch Makefiles set it unconditionally; its --target points at the
-# present scripts/target.json). We reuse it verbatim — so the vendored objects
-# match the target kernel's ABI exactly — and only add -Awarnings (the vendored
-# crates predate this rustc's newer lints) + -Zunstable-options. We deliberately
-# do NOT use $(rust_flags): it carries bcachefs's `--cfg kernel` (rustflags-y),
-# wrong for core and the kernel crate. The crates are self-contained: their Rust
-# symbols stay module-local; only the kernel's C ABI crosses the .ko boundary.
+# (the top + arch Makefiles set it unconditionally). We reuse it (with the
+# --target rewrite above) — so the vendored objects match the target kernel's
+# ABI exactly — and only add -Awarnings (the vendored crates predate this
+# rustc's newer lints) + -Zunstable-options. We deliberately do NOT use
+# $(rust_flags): it carries bcachefs's `--cfg kernel` (rustflags-y), wrong for
+# core and the kernel crate. The crates are self-contained: their Rust symbols
+# stay module-local; only the kernel's C ABI crosses the .ko boundary.
 
 VRD	:= $(obj)/vrust
 VENDOR	:= $(src)/vendor/kernel-rust

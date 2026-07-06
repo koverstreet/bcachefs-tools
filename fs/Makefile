@@ -254,9 +254,10 @@ bcachefs-vendor-rust :=
 else
 # CONFIG_RUST=n: no kernel Rust to link against — build bcachefs's own vendored
 # stack instead (Makefile.rust.vendor), if we can. BCACHEFS_RUST=1 forces; auto
-# needs rustc + its rust-src + bindgen, and the kernel tree's Rust target spec
-# (scripts/target.json + include/generated/rustc_cfg, present even on a Rust-off
-# kernel).
+# needs rustc + its rust-src + bindgen, plus the kernel's rustc_cfg (generated
+# unconditionally by syncconfig) and its target-spec generator source.
+# scripts/target.json itself is always-$(CONFIG_RUST), so a Rust-off tree
+# doesn't have one — we generate our own below rather than requiring it.
 BCACHEFS_RUST ?= auto
 ifeq ($(BCACHEFS_RUST),1)
 bcachefs-rust-y := y
@@ -265,7 +266,7 @@ bcachefs-rust-y := n
 else
 bcachefs-rust-y := $(shell command -v $(RUSTC) >/dev/null 2>&1 &&		\
 	command -v $(BINDGEN) >/dev/null 2>&1 &&				\
-	[ -r '$(objtree)/scripts/target.json' ] &&			\
+	[ -r '$(objtree)/scripts/generate_rust_target.rs' ] &&		\
 	[ -r '$(objtree)/include/generated/rustc_cfg' ] && echo y || echo n)
 endif
 bcachefs-vendor-rust := $(bcachefs-rust-y)
@@ -279,6 +280,29 @@ endif
 # predates the current rustc's lang items (meta_sized).
 ifeq ($(bcachefs-vendor-rust),y)
 bch-rust-L := -L$(obj)/vrust
+
+# A Rust-off kernel never generates scripts/target.json (it's
+# always-$(CONFIG_RUST)), but its KBUILD_RUSTFLAGS still point --target at
+# it. Generate our own copy under $(obj)/vrust with the kernel's own
+# generator — same invocation as scripts/Makefile's filechk_rust_target —
+# and rewrite --target to match. The kernel tree stays read-only. Done
+# eagerly at parse time so every Rust rule in this file and the vendored
+# includes sees a present, current file; the -nt check skips the rebuild
+# when the generator binary is already newer than its source.
+bch-target-json := $(abspath $(obj))/vrust/target.json
+$(shell	mkdir -p '$(abspath $(obj))/vrust' &&				\
+	{ [ '$(abspath $(obj))/vrust/generate_rust_target' -nt		\
+	    '$(objtree)/scripts/generate_rust_target.rs' ] ||		\
+	  $(HOSTRUSTC) --edition=2021 -Copt-level=0			\
+	    '$(objtree)/scripts/generate_rust_target.rs'		\
+	    -o '$(abspath $(obj))/vrust/generate_rust_target'; } &&	\
+	'$(abspath $(obj))/vrust/generate_rust_target'			\
+	    < '$(objtree)/include/config/auto.conf' > '$(bch-target-json)')
+ifneq ($(wildcard $(bch-target-json)),)
+KBUILD_RUSTFLAGS := $(patsubst --target=$(objtree)/scripts/target.json,--target=$(bch-target-json),$(KBUILD_RUSTFLAGS))
+else
+$(warning bcachefs: failed to generate $(bch-target-json); leaving --target unchanged)
+endif
 else
 bch-rust-L := -L$(objtree)/rust
 endif
