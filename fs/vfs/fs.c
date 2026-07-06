@@ -1565,24 +1565,16 @@ struct bch_readdir_ctx32 {
 	bool				full;
 };
 
-#if defined(__KERNEL__) && LINUX_VERSION_CODE >= KERNEL_VERSION(7,1,0)
-typedef bool bch2_filldir_ret_t;
-#define bch2_filldir_ret_success(_ret)	(_ret)
-#else
-typedef int bch2_filldir_ret_t;
-#define bch2_filldir_ret_success(_ret)	(!(_ret))
-#endif
-
-static bch2_filldir_ret_t bch2_readdir_emit32(struct dir_context *ctx,
-					      const char *name, int namelen,
-					      loff_t offset, u64 ino, unsigned type)
+static bool bch2_readdir_emit32(struct dir_context *ctx,
+				const char *name, int namelen,
+				loff_t offset, u64 ino, unsigned type)
 {
 	struct bch_readdir_ctx32 *src = container_of(ctx, struct bch_readdir_ctx32, ctx);
 	loff_t cookie = bch2_dir_pos_to_32(src->hash, offset);
 	u32 ino32 = bch2_dir_ino_to_32(ino);
-	bch2_filldir_ret_t ret = src->dst->actor(src->dst, name, namelen, cookie, ino32, type);
+	bool ret = src->dst->actor(src->dst, name, namelen, cookie, ino32, type);
 
-	if (bch2_filldir_ret_success(ret)) {
+	if (ret) {
 		if (src->state) {
 			src->state->valid = true;
 			src->state->cookie = cookie;
