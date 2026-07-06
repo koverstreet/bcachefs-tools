@@ -440,6 +440,7 @@ void bch2_btree_reserve_cache_to_text(struct printbuf *, struct bch_fs *);
 
 void bch2_fs_btree_interior_update_exit(struct bch_fs *);
 void bch2_fs_btree_interior_update_init_early(struct bch_fs *);
+int bch2_fs_btree_node_rewrites_init(struct bch_fs *);
 int bch2_fs_btree_interior_update_init(struct bch_fs *);
 
 #endif /* _BCACHEFS_BTREE_INTERIOR_H */

@@ -332,6 +332,7 @@ int bch2_fs_btree_init(struct bch_fs *c)
 	try(bch2_fs_btree_cache_init(c));
 	try(bch2_fs_btree_iter_init(c));
 	try(bch2_fs_btree_key_cache_init(&c->btree.key_cache));
+	try(bch2_fs_btree_node_rewrites_init(c));
 
 	ratelimit_default_init(&c->btree.read_errors_soft);
 	ratelimit_default_init(&c->btree.read_errors_hard);

@@ -108,6 +108,7 @@
 	x(ENOMEM,			ENOMEM_journal_entry_add)		\
 	x(ENOMEM,			ENOMEM_journal_read_buf_realloc)	\
 	x(ENOMEM,			ENOMEM_btree_interior_update_worker_init)\
+	x(ENOMEM,			ENOMEM_btree_node_rewrites_table_init)	\
 	x(ENOMEM,			ENOMEM_btree_interior_update_pool_init)	\
 	x(ENOMEM,			ENOMEM_bio_read_init)			\
 	x(ENOMEM,			ENOMEM_bio_read_split_init)		\
