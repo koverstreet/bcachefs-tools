@@ -67,6 +67,24 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb, struct bch_sb_field *
 		}
 	}
 
+	/*
+	 * Parents are walked in bch2_sb_disk_groups_to_cpu() (bounded, so a
+	 * cycle is tolerated) and bch2_disk_path_to_text_sb(): an out of range
+	 * parent reads out of bounds, so reject those. Parents pointing at
+	 * deleted groups are tolerated - chains through deleted groups work.
+	 */
+	for (unsigned i = 0; i < nr_groups; i++) {
+		if (BCH_GROUP_DELETED(&groups->entries[i]))
+			continue;
+
+		u64 parent = BCH_GROUP_PARENT(&groups->entries[i]);
+		if (parent > nr_groups) {
+			prt_printf(err, "label %u has invalid parent %llu (have %u)",
+				   i, parent - 1, nr_groups);
+			return -BCH_ERR_invalid_sb_disk_groups;
+		}
+	}
+
 	struct bch_disk_group *sorted __free(kfree) =
 		kmalloc_array(nr_groups, sizeof(*sorted), GFP_KERNEL);
 	if (!sorted)
