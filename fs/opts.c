@@ -733,6 +733,15 @@ void bch2_opt_hook_post_set(struct bch_fs *c, struct bch_dev *ca, u64 inum,
 	case Opt_read_only:
 		bch2_reconcile_wakeup(c);
 		break;
+	case Opt_btree_cache_shrinker_seeks: {
+		struct bch_fs_btree_cache *bc = &c->btree.cache;
+
+		if (bc->live[0].shrink)
+			bc->live[0].shrink->seeks = v;
+		if (bc->live[1].shrink)
+			bc->live[1].shrink->seeks = v * 4;
+		break;
+	}
 	default:
 		break;
 	}

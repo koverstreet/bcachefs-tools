@@ -1251,6 +1251,9 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 		if (!BCH_SB_EXT_EC_STRIPE_BUF_LIMIT(ext))
 			SET_BCH_SB_EXT_EC_STRIPE_BUF_LIMIT(ext, 5);
 
+		if (!BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS(ext))
+			SET_BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS(ext, 4);
+
 		if (le16_to_cpu(sb->version) <= bcachefs_metadata_version_erasure_coding &&
 		    !BCH_SB_EXT_DISCARD_BUFFER(ext))
 			SET_BCH_SB_EXT_DISCARD_BUFFER(ext, 4);

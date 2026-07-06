@@ -907,6 +907,8 @@ LE64_BITMASK(BCH_SB_EXT_DEV_READAHEAD,		struct bch_sb_field_ext, flags0, 0, 20);
 LE64_BITMASK(BCH_SB_EXT_EC_STRIPE_BUF_LIMIT,	struct bch_sb_field_ext, flags0, 20, 26);
 LE64_BITMASK(BCH_SB_EXT_SCRUB_MAX_REWIND_SECS,	struct bch_sb_field_ext, flags0, 26, 38);
 LE64_BITMASK(BCH_SB_EXT_DISCARD_BUFFER,		struct bch_sb_field_ext, flags0, 38, 42);
+LE64_BITMASK(BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS,
+						struct bch_sb_field_ext, flags0, 42, 49);
 
 /* Superblock: */
 
