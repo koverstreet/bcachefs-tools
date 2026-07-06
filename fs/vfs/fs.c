@@ -2477,15 +2477,6 @@ static int bch2_show_devname(struct seq_file *seq, struct dentry *root)
 	struct bch_fs *c = root->d_sb->s_fs_info;
 	bool first = true;
 
-	if (c->sb.multi_device) {
-		CLASS(printbuf, buf)();
-		prt_str(&buf, "/dev/disk/by-uuid/");
-		pr_uuid(&buf, c->sb.user_uuid.b);
-		printbuf_nul_terminate(&buf);
-		seq_printf(seq, "%s", buf.buf);
-		return buf.allocation_failure ? -ENOMEM : 0;
-	}
-
 	guard(rcu)();
 	for_each_online_member_rcu(c, ca) {
 		if (!first)
