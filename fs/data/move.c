@@ -339,7 +339,7 @@ static void move_btree_node_trace(struct bch_fs *c,
 			prt_newline(&buf);
 			bch2_data_update_opts_to_text(&buf, c, opts, data_opts);
 		}));
-	else
+	else if (bch2_data_update_fail_should_trace(data_opts->type, ret))
 		event_add_trace(c, data_update_fail, c->opts.btree_node_size >> 9, buf, ({
 			bch2_bkey_val_to_text(&buf, c, k);
 			prt_newline(&buf);

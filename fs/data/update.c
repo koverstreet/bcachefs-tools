@@ -727,12 +727,23 @@ void bch2_data_update_read_done(struct data_update *u)
 	closure_call(&u->op.cl, bch2_write, NULL, NULL);
 }
 
-static inline bool should_trace_update_err(struct data_update *u, int ret)
+/*
+ * Failures that are the expected outcome of a routine control-flow path
+ * aren't worth a data_update_fail event: in-flight collisions and
+ * need_copygc retries resolve themselves, blocked/would_block means the
+ * caller waits for that condition and retries, and no_rw_devs for
+ * reconcile/promote means the work parks on the pending list (recorded by
+ * the reconcile_set_pending event). Shared with the btree node rewrite leg
+ * in move.c, which has no struct data_update.
+ */
+bool bch2_data_update_fail_should_trace(enum bch_data_update_types type, int ret)
 {
 	if (bch2_err_matches(ret, BCH_ERR_data_update_fail_in_flight) ||
 	    bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc) ||
-	    ((u->opts.type == BCH_DATA_UPDATE_reconcile ||
-	      u->opts.type == BCH_DATA_UPDATE_promote) &&
+	    bch2_err_matches(ret, BCH_ERR_data_update_fail_would_block) ||
+	    bch2_err_matches(ret, BCH_ERR_operation_blocked) ||
+	    ((type == BCH_DATA_UPDATE_reconcile ||
+	      type == BCH_DATA_UPDATE_promote) &&
 	     bch2_err_matches(ret, BCH_ERR_data_update_fail_no_rw_devs)))
 		return false;
 
@@ -751,7 +762,7 @@ static void data_update_trace(struct data_update *u, int ret)
 				bch2_data_update_to_text(&buf, u);
 				prt_printf(&buf, "\nret:\t%s\n", bch2_err_str(ret));
 		}));
-	else if (should_trace_update_err(u, ret))
+	else if (bch2_data_update_fail_should_trace(u->opts.type, ret))
 		event_add_trace(c, data_update_fail, u->k.k->k.size, buf, ({
 				bch2_data_update_to_text(&buf, u);
 				prt_printf(&buf, "\nret:\t%s\n", bch2_err_str(ret));
