@@ -223,6 +223,15 @@ impl Passphrase {
         let old = termios::tcgetattr(stdin())?;
         let mut new = old.clone();
         new.local_modes.remove(termios::LocalModes::ECHO);
+        /*
+         * We may be prompting on an early-boot console (initramfs) that no
+         * shell has ever configured: without ICRNL, enter sends '\r', which
+         * read_line() doesn't terminate on - keystrokes appear eaten, and
+         * the eventually-assembled passphrase has embedded '\r's and is
+         * rejected. Ensure line-input sanity rather than inheriting it:
+         */
+        new.input_modes.insert(termios::InputModes::ICRNL);
+        new.local_modes.insert(termios::LocalModes::ICANON);
         termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &new)?;
 
         eprint!("{}", prompt);
@@ -233,7 +242,7 @@ impl Passphrase {
         eprintln!();
         res?;
 
-        Ok(Self(CString::new(line.trim_end_matches('\n'))?))
+        Ok(Self(CString::new(line.trim_end_matches(['\n', '\r']))?))
     }
 
     // blocks indefinitely if no input is available on stdin
