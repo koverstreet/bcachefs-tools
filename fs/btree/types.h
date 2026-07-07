@@ -353,6 +353,7 @@ struct btree_node_iter {
 	x(nofill)				\
 	x(cached_nofill)			\
 	x(key_cache_fill)			\
+	x(committed)				\
 
 #define STR_HASH_FLAGS()			\
 	x(must_create)				\
@@ -400,8 +401,8 @@ enum {
 #undef x
 };
 
-/* iter flags must fit in a u16: */
-//BUILD_BUG_ON(BTREE_ITER_FLAG_BIT_key_cache_fill > 15);
+/* iter flags must fit in struct btree_iter.flags: */
+static_assert(BTREE_ITER_FLAG_BIT_committed < 32);
 
 enum btree_iter_update_trigger_flags {
 #define x(n) BTREE_ITER_##n	= 1U << BTREE_ITER_FLAG_BIT_##n,
@@ -498,7 +499,7 @@ struct btree_iter {
 	u8			min_depth;
 
 	/* btree_iter_copy starts here: */
-	u16			flags;
+	u32			flags;
 
 	/* When we're filtering by snapshot, the snapshot ID we're looking for: */
 	unsigned		snapshot;

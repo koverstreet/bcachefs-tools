@@ -381,8 +381,9 @@ bch2_bucket_alloc_early(struct btree_trans *trans,
 	 * bucket.
 	 */
 again:
+	/* BTREE_ITER_committed: see bucket_alloc_scan() */
 	for_each_btree_key_norestart(trans, iter, BTREE_ID_alloc, POS(ca->dev_idx, alloc_cursor),
-			   BTREE_ITER_slots, k, ret) {
+			   BTREE_ITER_slots|BTREE_ITER_committed, k, ret) {
 		u64 bucket = alloc_cursor = k.k->p.offset;
 
 		if (bkey_ge(k.k->p, POS(ca->dev_idx, ca->mi.nbuckets)))
@@ -410,7 +411,8 @@ again:
 			continue;
 
 		/* now check the cached key to serialize concurrent allocs of the bucket */
-		CLASS(btree_iter, citer)(trans, BTREE_ID_alloc, k.k->p, BTREE_ITER_cached|BTREE_ITER_nopreserve);
+		CLASS(btree_iter, citer)(trans, BTREE_ID_alloc, k.k->p,
+					 BTREE_ITER_cached|BTREE_ITER_nopreserve|BTREE_ITER_committed);
 		struct bkey_s_c ck = bch2_btree_iter_peek_slot(&citer);
 		ret = bkey_err(ck);
 		if (ret)
@@ -466,8 +468,21 @@ bucket_alloc_scan(struct btree_trans *trans, struct alloc_request *req,
 		pos--;
 	}
 
+	/*
+	 * BTREE_ITER_committed: bucket allocation is an irrevocable side
+	 * effect - the open bucket, and btree nodes created from it, outlive
+	 * a transaction restart - so it must only consume commit-durable
+	 * state, never this transaction's own pending updates.
+	 *
+	 * Notably, a transaction that frees a bucket (the discard path's
+	 * mark_free) can trigger node allocation from within its own commit
+	 * via a split: allocating the bucket being freed consumes state that
+	 * may never commit, and, by making the bucket open, prevents the
+	 * retried commit from ever freeing it. Every alloc-state read on the
+	 * allocation path must carry this flag.
+	 */
 	CLASS(btree_iter, iter)(trans, BTREE_ID_freespace,
-				POS(ca->dev_idx, pos), 0);
+				POS(ca->dev_idx, pos), BTREE_ITER_committed);
 
 	while (1) {
 		if (!forwards && pos < min.offset)
