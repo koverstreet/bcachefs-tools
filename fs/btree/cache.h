@@ -11,8 +11,6 @@ extern const char * const bch2_btree_node_flags[];
 struct btree_iter;
 
 void bch2_recalc_btree_reserve(struct bch_fs *);
-int  bch2_btree_cache_add_reserve(struct bch_fs *, unsigned count);
-void bch2_btree_cache_remove_reserve(struct bch_fs *, unsigned count);
 
 void bch2_btree_node_mem_free(struct bch_fs *, struct btree *);
 

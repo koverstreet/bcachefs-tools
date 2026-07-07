@@ -331,7 +331,7 @@ static __always_inline long bch2_dio_write_done(struct dio_write *dio)
 	struct bch_inode_info *inode = dio->inode;
 	bool sync = dio->sync;
 
-	if (!IS_SWAPFILE(&inode->v))
+	if (dio->pagecache_blocked)
 		bch2_pagecache_block_put(inode);
 
 	kfree(dio->iov);
@@ -465,10 +465,7 @@ static __always_inline long bch2_dio_write_loop(struct dio_write *dio)
 			dio->op.flags |= BCH_WRITE_sync;
 		if (dio->flush)
 			dio->op.flags |= BCH_WRITE_flush;
-		if (IS_SWAPFILE(&inode->v))
-			dio->op.flags |= BCH_WRITE_swap;
-		else
-			dio->op.flags |= BCH_WRITE_check_enospc;
+		dio->op.flags |= BCH_WRITE_check_enospc;
 
 		ret = bch2_quota_reservation_add(c, inode, &dio->quota_res,
 						 bio_sectors(bio), true);
@@ -550,6 +547,7 @@ ssize_t bch2_direct_write(struct kiocb *req, struct iov_iter *iter)
 	struct dio_write *dio;
 	struct bio *bio;
 	bool locked = true, extending;
+	bool swap = IS_SWAPFILE(&inode->v);
 	ssize_t ret;
 
 	prefetch(&c->opts);
@@ -560,43 +558,35 @@ ssize_t bch2_direct_write(struct kiocb *req, struct iov_iter *iter)
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_dio_write))
 		return -EROFS;
 
-	/*
-	 * Swap I/O: the VFS sets IS_SWAPFILE on the inode during swapon.
-	 * Skip generic_write_checks (rejects swap files with ETXTBSY),
-	 * inode locking, and mtime updates.  Swap I/O is serialized by
-	 * the swap subsystem; PF_MEMALLOC is set by bch2_swap_rw().
-	 */
-	if (IS_SWAPFILE(&inode->v)) {
+	if (!swap)
+		inode_lock(&inode->v);
+	else
 		locked = false;
-		goto swap_skip_checks;
+
+	if (!swap) {
+		ret = generic_write_checks(req, iter);
+		if (unlikely(ret <= 0))
+			goto err_put_write_ref;
+
+		ret = file_remove_privs(file);
+		if (unlikely(ret))
+			goto err_put_write_ref;
+
+		ret = file_update_time(file);
+		if (unlikely(ret))
+			goto err_put_write_ref;
 	}
 
-	inode_lock(&inode->v);
-
-	ret = generic_write_checks(req, iter);
-	if (unlikely(ret <= 0))
-		goto err_put_write_ref;
-
-	ret = file_remove_privs(file);
-	if (unlikely(ret))
-		goto err_put_write_ref;
-
-	ret = file_update_time(file);
-	if (unlikely(ret))
-		goto err_put_write_ref;
-
-swap_skip_checks:
 	if (unlikely((req->ki_pos|iter->count) & (block_bytes(c) - 1))) {
 		ret = bch_err_throw(c, EINVAL_unaligned_io);
 		goto err_put_write_ref;
 	}
 
 	inode_dio_begin(&inode->v);
-	if (!IS_SWAPFILE(&inode->v))
+	if (!swap)
 		bch2_pagecache_block_get(inode);
 
-	extending = !IS_SWAPFILE(&inode->v) &&
-		    req->ki_pos + iter->count > inode->v.i_size;
+	extending = !swap && req->ki_pos + iter->count > inode->v.i_size;
 	if (!extending) {
 		if (locked)
 			inode_unlock(&inode->v);
@@ -618,12 +608,13 @@ swap_skip_checks:
 	dio->extending		= extending;
 	dio->sync		= is_sync_kiocb(req) || extending;
 	dio->flush		= iocb_is_dsync(req) && !c->opts.journal_flush_disabled;
+	dio->pagecache_blocked	= !swap;
 	dio->quota_res.sectors	= 0;
 	dio->written		= 0;
 	dio->iter		= *iter;
 	dio->op.c		= c;
 
-	if (!IS_SWAPFILE(&inode->v) && unlikely(mapping->nrpages)) {
+	if (!swap && unlikely(mapping->nrpages)) {
 		ret = bch2_write_invalidate_inode_pages_range(mapping,
 						req->ki_pos,
 						req->ki_pos + iter->count - 1);
@@ -637,7 +628,7 @@ out:
 		inode_unlock(&inode->v);
 	return ret;
 err_put_bio:
-	if (!IS_SWAPFILE(&inode->v))
+	if (!swap)
 		bch2_pagecache_block_put(inode);
 	bio_put(bio);
 	inode_dio_end(&inode->v);
