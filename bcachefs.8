@@ -605,9 +605,12 @@ If specified,
 must be a subvolume;
 if not specified the snapshot will be of the subvolume containing
 .Ar dest .
+Snapshots are read-only by default.
 .Bl -tag -width Ds
-.It Fl r
-Make snapshot read-only
+.It Fl -rw
+Make snapshot writable
+.It Fl r , Fl -read-only
+Make snapshot read-only (the default; kept for compatibility)
 .El
 .It Ic subvolume list Oo Ar options Oc Ar target
 List subvolumes in a mounted filesystem.
