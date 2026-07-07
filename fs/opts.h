@@ -589,7 +589,7 @@ enum fsck_err_opts {
 	x(btree_cache_shrinker_seeks,	u8,				\
 	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
 	  OPT_UINT(1, 100),						\
-	  BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS,	4,		\
+	  BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS,	2,		\
 	  NULL,		"Shrinker cost of re-reading a btree node;\n"	\
 	  " higher means the btree cache is evicted less\n"	\
 	  " aggressively under memory pressure. Consider\n"	\
