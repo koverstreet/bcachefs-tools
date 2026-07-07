@@ -434,8 +434,14 @@ int __bch2_check_freespace_key(struct btree_trans *trans, struct btree_iter *ite
 	bucket.offset &= ~(~0ULL << 56);
 	u64 genbits = iter->pos.offset & (~0ULL << 56);
 
+	/*
+	 * async_repair means we're the allocator: committed-only reads, see
+	 * bucket_alloc_scan(). fsck's synchronous use keeps normal semantics:
+	 */
 	CLASS(btree_iter, alloc_iter)(trans, BTREE_ID_alloc, bucket,
-						     async_repair ? BTREE_ITER_cached : 0);
+						     async_repair
+						     ? BTREE_ITER_cached|BTREE_ITER_committed
+						     : 0);
 	struct bkey_s_c alloc_k = bkey_try(bch2_btree_iter_peek_slot(&alloc_iter));
 
 	if (!bch2_dev_bucket_exists(c, bucket)) {
