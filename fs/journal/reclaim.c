@@ -1208,6 +1208,17 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 
 	try(bch2_journal_error(j));
 
+	/*
+	 * flush_pins() only advances the in-memory last_seq past @seq. The
+	 * device's journal replicas entries aren't dropped until last_seq_ondisk
+	 * advances past them (in journal_write_done()), and that requires a
+	 * journal write recording the new last_seq. Force one here so we don't
+	 * depend on a caller flushing afterwards: otherwise dev_idx lingers in
+	 * the on-disk journal replicas set, and once it's taken offline the next
+	 * superblock write can't satisfy that entry and goes emergency read-only.
+	 */
+	try(bch2_journal_meta(j));
+
 	return 0;
 }
 
