@@ -1374,6 +1374,15 @@ static int __bch2_write_super(struct bch_fs *c)
 
 	CLASS(bch_log_msg, msg)(c);
 
+	/*
+	 * A degraded write (wrote to fewer devices, but still enough to mount)
+	 * repeats on every superblock write while a device is failing, so
+	 * ratelimit it. A fatal failure goes emergency read-only below and
+	 * always prints.
+	 */
+	if (!fatal)
+		msg.m.suppress = bch2_ratelimit(c);
+
 	prt_printf(&msg.m, "Error writing superblock, wrote to %u/%u devices:\n",
 		   nr_wrote, nr_members);
 
