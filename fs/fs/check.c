@@ -1299,8 +1299,12 @@ static int count_inode_keys(struct btree_trans *trans,
 					 inode_pos,
 					 POS(inode_pos.inode, U64_MAX),
 					 0, k, ret) {
-		if (k.k->type == KEY_TYPE_error ||
-		    k.k->type == KEY_TYPE_hash_whiteout)
+		/*
+		 * Error keys count: they're placeholders for unreadable data,
+		 * evidence the inode had contents. Hash whiteouts are just
+		 * tombstones:
+		 */
+		if (k.k->type == KEY_TYPE_hash_whiteout)
 			continue;
 
 		nr_keys++;
@@ -1323,7 +1327,9 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 {
 	errptr_try(i);
 
-	if (bkey_extent_whiteout(k.k))
+	/* whiteouts and hash whiteouts are tombstones - they need no inode: */
+	if (bkey_extent_whiteout(k.k) ||
+	    k.k->type == KEY_TYPE_hash_whiteout)
 		return 0;
 
 	bool have_inode = i && !i->whiteout;
