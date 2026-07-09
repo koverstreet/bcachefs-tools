@@ -1222,6 +1222,70 @@ int bch2_journal_flush_device_pins(struct journal *j, int dev_idx)
 	return 0;
 }
 
+/*
+ * Before a device leaves the journal write set (going RO/evacuating), push
+ * journal reclaim until the *other* journal devices have free space to write
+ * to. Otherwise, if @dev_idx held the journal's only free space, dropping it
+ * from rw_devs[journal] strands the journal: reclaim can no longer advance
+ * last_seq_ondisk (which needs a journal write, hence a writable device) to
+ * free anyone else's buckets, and we deadlock in journal_full - with the task
+ * taking the device offline wedged in journal_res_get while holding state_lock.
+ *
+ * Must run before @dev_idx is pulled from rw_devs[journal], so reclaim can
+ * still use it to write the last_seq advance that frees the remaining devices.
+ * Can't fail: the only way out of the loop besides success is the whole
+ * filesystem going read-only, which stops reclaim.
+ */
+void bch2_journal_flush_dev_ro(struct journal *j, unsigned dev_idx)
+{
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	unsigned want = READ_ONCE(c->opts.metadata_replicas);
+
+	while (true) {
+		unsigned nr_devs = 0, nr_with_space = 0;
+		bool flush_needed;
+
+		scoped_guard(spinlock, &j->lock) {
+			scoped_guard(rcu)
+				for_each_member_device_rcu(c, ca,
+						&c->allocator.rw_devs[BCH_DATA_journal]) {
+					if (ca->dev_idx == dev_idx || !ca->journal.nr)
+						continue;
+					nr_devs++;
+					if (bch2_journal_dev_buckets_available(j, &ca->journal,
+								journal_space_discarded))
+						nr_with_space++;
+				}
+
+			/*
+			 * Reclaim advances last_seq (in memory) as it flushes
+			 * pins, but the buckets it frees can't be discarded until
+			 * last_seq_ondisk catches up, which only happens when a
+			 * journal write completes (journal_write_done()). Only
+			 * force a write when there's such an advance to persist.
+			 */
+			flush_needed = j->last_seq_ondisk < j->last_seq;
+		}
+
+		/*
+		 * Enough other devices have free journal space that the journal
+		 * can keep writing once @dev_idx leaves the write set:
+		 */
+		if (nr_with_space >= min(want, nr_devs))
+			break;
+
+		int ret;
+		if (flush_needed) {
+			ret = bch2_journal_meta(j);
+		} else {
+			scoped_guard(mutex, &j->reclaim_lock)
+				ret = bch2_journal_reclaim(j);
+		}
+		if (ret)	/* filesystem read-only */
+			break;
+	}
+}
+
 __cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 *seq)
 {
 	struct journal_entry_pin *pin;
