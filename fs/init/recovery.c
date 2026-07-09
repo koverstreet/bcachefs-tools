@@ -837,14 +837,19 @@ use_clean:
 	}
 
 	/*
-	 * After an unclean shutdown, skip then next few journal sequence
-	 * numbers as they may have been referenced by btree writes that
-	 * happened before their corresponding journal writes - those btree
-	 * writes need to be ignored, by skipping and blacklisting the next few
-	 * journal sequence numbers:
+	 * After an unclean shutdown, skip the next several journal sequence
+	 * numbers: btree nodes may have been written referencing journal
+	 * sequences whose journal writes never became durable (btree writes
+	 * lead the journal). Those sequences are blacklisted below, so btree
+	 * writes referencing them are ignored on replay.
+	 *
+	 * The skip must exceed how far a btree write can lead the durable
+	 * journal, which is bounded by the journal pipeline depth
+	 * (j->in_flight.size, currently 256). Use a large margin so this
+	 * can't silently break if pipelining is increased.
 	 */
 	if (!c->sb.clean)
-		journal_start.cur_seq += 64;
+		journal_start.cur_seq += 4096;
 
 	if (journal_start.replay_end &&
 	    journal_start.replay_end + 1 != journal_start.cur_seq) {
