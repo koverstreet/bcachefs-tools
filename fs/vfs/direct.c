@@ -331,7 +331,8 @@ static __always_inline long bch2_dio_write_done(struct dio_write *dio)
 	struct bch_inode_info *inode = dio->inode;
 	bool sync = dio->sync;
 
-	bch2_pagecache_block_put(inode);
+	if (dio->pagecache_blocked)
+		bch2_pagecache_block_put(inode);
 
 	kfree(dio->iov);
 
@@ -546,6 +547,7 @@ ssize_t bch2_direct_write(struct kiocb *req, struct iov_iter *iter)
 	struct dio_write *dio;
 	struct bio *bio;
 	bool locked = true, extending;
+	bool swap = IS_SWAPFILE(&inode->v);
 	ssize_t ret;
 
 	prefetch(&c->opts);
@@ -556,19 +558,24 @@ ssize_t bch2_direct_write(struct kiocb *req, struct iov_iter *iter)
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_dio_write))
 		return -EROFS;
 
-	inode_lock(&inode->v);
+	if (!swap)
+		inode_lock(&inode->v);
+	else
+		locked = false;
 
-	ret = generic_write_checks(req, iter);
-	if (unlikely(ret <= 0))
-		goto err_put_write_ref;
+	if (!swap) {
+		ret = generic_write_checks(req, iter);
+		if (unlikely(ret <= 0))
+			goto err_put_write_ref;
 
-	ret = file_remove_privs(file);
-	if (unlikely(ret))
-		goto err_put_write_ref;
+		ret = file_remove_privs(file);
+		if (unlikely(ret))
+			goto err_put_write_ref;
 
-	ret = file_update_time(file);
-	if (unlikely(ret))
-		goto err_put_write_ref;
+		ret = file_update_time(file);
+		if (unlikely(ret))
+			goto err_put_write_ref;
+	}
 
 	if (unlikely((req->ki_pos|iter->count) & (block_bytes(c) - 1))) {
 		ret = bch_err_throw(c, EINVAL_unaligned_io);
@@ -576,11 +583,13 @@ ssize_t bch2_direct_write(struct kiocb *req, struct iov_iter *iter)
 	}
 
 	inode_dio_begin(&inode->v);
-	bch2_pagecache_block_get(inode);
+	if (!swap)
+		bch2_pagecache_block_get(inode);
 
-	extending = req->ki_pos + iter->count > inode->v.i_size;
+	extending = !swap && req->ki_pos + iter->count > inode->v.i_size;
 	if (!extending) {
-		inode_unlock(&inode->v);
+		if (locked)
+			inode_unlock(&inode->v);
 		locked = false;
 	}
 
@@ -599,12 +608,13 @@ ssize_t bch2_direct_write(struct kiocb *req, struct iov_iter *iter)
 	dio->extending		= extending;
 	dio->sync		= is_sync_kiocb(req) || extending;
 	dio->flush		= iocb_is_dsync(req) && !c->opts.journal_flush_disabled;
+	dio->pagecache_blocked	= !swap;
 	dio->quota_res.sectors	= 0;
 	dio->written		= 0;
 	dio->iter		= *iter;
 	dio->op.c		= c;
 
-	if (unlikely(mapping->nrpages)) {
+	if (!swap && unlikely(mapping->nrpages)) {
 		ret = bch2_write_invalidate_inode_pages_range(mapping,
 						req->ki_pos,
 						req->ki_pos + iter->count - 1);
@@ -618,7 +628,8 @@ out:
 		inode_unlock(&inode->v);
 	return ret;
 err_put_bio:
-	bch2_pagecache_block_put(inode);
+	if (!swap)
+		bch2_pagecache_block_put(inode);
 	bio_put(bio);
 	inode_dio_end(&inode->v);
 err_put_write_ref:

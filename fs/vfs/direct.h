@@ -24,7 +24,8 @@ struct dio_write {
 					extending:1,
 					sync:1,
 					sync_done:1,
-					flush:1;
+					flush:1,
+					pagecache_blocked:1;
 	struct quota_res		quota_res;
 	u64				written;
 
