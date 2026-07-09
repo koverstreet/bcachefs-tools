@@ -1652,9 +1652,46 @@ static noinline int bch2_write_prep_encoded_data(struct bch_write_op *op, struct
 	     bch2_csum_type_is_encryption(op->csum_type)) &&
 	    (op->crc.compression_type == bch2_compression_opt_to_type(op->compression_opt) ||
 	     op->incompressible)) {
-		if (!crc_is_compressed(op->crc) &&
-		    op->csum_type != op->crc.csum_type)
-			try(bch2_write_rechecksum(c, op, op->csum_type));
+		if (op->csum_type != op->crc.csum_type) {
+			if (!crc_is_compressed(op->crc)) {
+				try(bch2_write_rechecksum(c, op, op->csum_type));
+			} else {
+				/*
+				 * bch2_rechecksum_bio() works in uncompressed
+				 * units and can't split compressed extents -
+				 * but changing the checksum type of a whole
+				 * encoded extent doesn't need to: recompute
+				 * and verify over the encoded payload.
+				 *
+				 * The nonce doesn't depend on the checksum
+				 * type, so readers derive the same nonce to
+				 * verify the new checksum, and the payload -
+				 * ciphertext, if encrypted - is untouched:
+				 * we're never relabelling between encrypted
+				 * and unencrypted checksum types, per the
+				 * encryption check above:
+				 */
+				EBUG_ON(bch2_csum_type_is_encryption(op->crc.csum_type) !=
+					bch2_csum_type_is_encryption(op->csum_type));
+
+				/*
+				 * Calculate the new checksum first, then
+				 * verify: data corrupted in between gets
+				 * caught on read, instead of being blessed
+				 * with a fresh valid checksum:
+				 */
+				struct nonce nonce = extent_nonce(op->version, op->crc);
+				struct bch_csum new_csum =
+					bch2_checksum_bio(c, op->csum_type, nonce, bio);
+
+				csum = bch2_checksum_bio(c, op->crc.csum_type, nonce, bio);
+				if (bch2_crc_cmp(op->crc.csum, csum) && !c->opts.no_data_io)
+					goto csum_err;
+
+				op->crc.csum_type = op->csum_type;
+				op->crc.csum = new_csum;
+			}
+		}
 
 		return 1;
 	}
