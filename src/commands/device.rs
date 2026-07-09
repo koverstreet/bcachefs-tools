@@ -32,11 +32,8 @@ fn device_add_opt_flags() -> u32 {
 fn device_add_cmd() -> Command {
     Command::new("add")
         .about("Add a new device to an existing filesystem")
-        .args(bch_option_args(device_add_opt_flags(), false))
-        .arg(Arg::new("label")
-            .short('l')
-            .long("label")
-            .help("Disk label"))
+        .args(bch_option_args(device_add_opt_flags(), false).into_iter()
+            .map(|a| if a.get_id() == "label" { a.short('l') } else { a }))
         .arg(Arg::new("force")
             .short('f')
             .long("force")
@@ -55,22 +52,20 @@ fn cmd_device_add(argv: Vec<String>) -> Result<()> {
 
     let fs_path = matches.get_one::<String>("filesystem").unwrap();
     let dev_path = matches.get_one::<String>("device").unwrap();
-    let label = matches.get_one::<String>("label");
     let force = matches.get_flag("force");
 
     // Try online first — works for mountpoints, and for block devices
     // or files with a bcachefs superblock if the filesystem is mounted.
     // If the filesystem isn't mounted, fall back to offline add.
     match BcachefsHandle::open(fs_path) {
-        Ok(handle) => cmd_device_add_online(handle, dev_path, label, force, &matches),
-        Err(_) => cmd_device_add_offline(fs_path, dev_path, label, force, &matches),
+        Ok(handle) => cmd_device_add_online(handle, dev_path, force, &matches),
+        Err(_) => cmd_device_add_offline(fs_path, dev_path, force, &matches),
     }
 }
 
 fn cmd_device_add_online(
     handle: BcachefsHandle,
     dev_path: &str,
-    label: Option<&String>,
     force: bool,
     matches: &clap::ArgMatches,
 ) -> Result<()> {
@@ -83,7 +78,7 @@ fn cmd_device_add_online(
             .context("reading btree_node_size from sysfs")?,
     ).context("parsing btree_node_size")?;
 
-    drop(device_add_format(dev_path, label, force, matches,
+    drop(device_add_format(dev_path, force, matches,
         block_size as u32, btree_node_size as u32)?);
     let c_dev_path = path_to_cstr(dev_path);
     handle.disk_add(&c_dev_path)
@@ -96,7 +91,6 @@ fn cmd_device_add_online(
 fn cmd_device_add_offline(
     fs_path: &str,
     dev_path: &str,
-    label: Option<&String>,
     force: bool,
     matches: &clap::ArgMatches,
 ) -> Result<()> {
@@ -114,7 +108,7 @@ fn cmd_device_add_offline(
     let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
     let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
 
-    device_add_format(dev_path, label, force, matches,
+    device_add_format(dev_path, force, matches,
         block_size, btree_node_size)?;
 
     fs.dev_add(dev_path)
@@ -129,7 +123,6 @@ fn cmd_device_add_offline(
 
 fn device_add_format(
     dev_path: &str,
-    label: Option<&String>,
     force: bool,
     matches: &clap::ArgMatches,
     block_size: u32,
@@ -138,14 +131,16 @@ fn device_add_format(
     use crate::commands::format_util::DevOpts;
 
     let mut dev_opts = DevOpts::new(CString::new(dev_path)?);
-    dev_opts.label = label.map(|l| CString::new(l.as_str())).transpose()?;
 
     let bch_opts = bch_options_from_matches(matches, device_add_opt_flags());
     for (name, value) in &bch_opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else { continue };
-        let val = parse_opt_val(opt, value)?
-            .ok_or_else(|| anyhow!("option {} requires open filesystem", name))?;
-        bcachefs_kernel::opts::opt_set_by_id(&mut dev_opts.opts, opt_id, val);
+        match parse_opt_val(opt, value)? {
+            Some(val) => bcachefs_kernel::opts::opt_set_by_id(&mut dev_opts.opts, opt_id, val),
+            // Values that resolve against a superblock (labels) - the
+            // new device's sb, once format_for_device_add builds it:
+            None => dev_opts.opt_strs.push((opt_id, CString::new(value.as_str())?)),
+        }
     }
 
     if let Some(mpath_dev) = find_multipath_holder(Path::new(dev_path)) {

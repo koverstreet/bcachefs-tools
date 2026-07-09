@@ -988,7 +988,9 @@ fn cmd_image_create(argv: Vec<String>) -> Result<()> {
     let mut d = DevOpts::new(path_cstr);
     d.fs_size = dev_fs_size;
     d.opts = dev_opts;
-    d.label = dev_label_cstr;
+    if let Some(l) = dev_label_cstr {
+        d.opt_strs.push((c::bch_opt_id::Opt_label, l));
+    }
 
     let result = image_create_inner(
         fs_opt_strs,

@@ -108,7 +108,8 @@ Report bugs to <linux-bcachefs@vger.kernel.org>
 /// Per-device configuration accumulated during parsing.
 struct DevConfig {
     path: String,
-    label: Option<String>,
+    /// Device options that can only be resolved once the sb exists (labels):
+    opt_strs: Vec<(c::bch_opt_id, String)>,
     fs_size: u64,
     opts: c::bch_opts,
 }
@@ -243,7 +244,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     let mut superblock_size: u32 = SUPERBLOCK_SIZE_DEFAULT;
 
     // Per-device accumulator
-    let mut cur_label: Option<String> = None;
+    let mut cur_dev_opt_strs: Vec<(c::bch_opt_id, String)> = Vec::new();
     let mut cur_fs_size: u64 = 0;
     let mut cur_dev_opts: c::bch_opts = Default::default();
     let mut unconsumed_dev_option = false;
@@ -257,11 +258,21 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
             // devices until overridden by a new value.
             devices.push(DevConfig {
                 path: $path,
-                label: cur_label.clone(),
+                opt_strs: cur_dev_opt_strs.clone(),
                 fs_size: cur_fs_size,
                 opts: cur_dev_opts,
             });
             unconsumed_dev_option = false;
+        }};
+    }
+
+    // Sticky like cur_dev_opts: a new value for the same option replaces
+    // the old one.
+    macro_rules! push_dev_opt_str {
+        ($id:expr, $val:expr) => {{
+            cur_dev_opt_strs.retain(|(id, _)| *id != $id);
+            cur_dev_opt_strs.push(($id, $val));
+            unconsumed_dev_option = true;
         }};
     }
 
@@ -301,7 +312,16 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                     };
 
                     match parse_opt_val(opt, &val_str)? {
-                        None => deferred_opts.push((opt_id, val_str)),
+                        None => {
+                            // Value needs a superblock to resolve against
+                            // (labels, targets); device option values are
+                            // per device, fs option values resolve once:
+                            if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
+                                push_dev_opt_str!(opt_id, val_str);
+                            } else {
+                                deferred_opts.push((opt_id, val_str));
+                            }
+                        }
                         Some(v) => {
                             if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut cur_dev_opts, opt_id, v);
@@ -352,10 +372,6 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                     let size = parse_human_size(&val)?;
                     superblock_size = (size >> 9) as u32;
                 }
-                "label" => {
-                    cur_label = Some(take_opt_value(inline_val, &argv, &mut i, raw_name)?);
-                    unconsumed_dev_option = true;
-                }
                 "version" => {
                     let val = take_opt_value(inline_val, &argv, &mut i, raw_name)?;
                     format_version = Some(version_parse(&val)?);
@@ -385,8 +401,8 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                     fs_label = Some(take_short_value(arg, &argv, &mut i, 'L')?);
                 }
                 b'l' => {
-                    cur_label = Some(take_short_value(arg, &argv, &mut i, 'l')?);
-                    unconsumed_dev_option = true;
+                    let val = take_short_value(arg, &argv, &mut i, 'l')?;
+                    push_dev_opt_str!(c::bch_opt_id::Opt_label, val);
                 }
                 b'U' => {
                     let val = take_short_value(arg, &argv, &mut i, 'U')?;
@@ -530,7 +546,9 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
     let mut devices: Vec<DevOpts> = cfg.devices.iter()
         .map(|dev| {
             let mut d = DevOpts::new(CString::new(dev.path.as_str())?);
-            d.label = dev.label.as_ref().map(|l| CString::new(l.as_str())).transpose()?;
+            d.opt_strs = dev.opt_strs.iter()
+                .map(|(id, v)| Ok((*id, CString::new(v.as_str())?)))
+                .collect::<Result<_>>()?;
             d.fs_size = dev.fs_size;
             d.opts = dev.opts;
             Ok(d)
