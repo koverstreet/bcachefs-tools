@@ -391,6 +391,15 @@ void bch2_dev_io_ref_stop(struct bch_dev *ca, int rw)
 static void __bch2_dev_read_only(struct bch_fs *c, struct bch_dev *ca)
 {
 	/*
+	 * Push journal reclaim so the remaining devices have free journal space
+	 * before we drop ca from the journal write set below. Otherwise, if ca
+	 * held the journal's only free space, dropping it strands the journal in
+	 * journal_full (see bch2_journal_flush_dev_ro()). Must come before
+	 * bch2_dev_allocator_remove(), which pulls ca from rw_devs[journal].
+	 */
+	bch2_journal_flush_dev_ro(&c->journal, ca->dev_idx);
+
+	/*
 	 * The allocator thread itself allocates btree nodes, so stop it first:
 	 */
 	bch2_dev_allocator_remove(c, ca);
