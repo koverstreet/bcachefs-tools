@@ -1254,9 +1254,11 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 
 			if (BCH_MEMBER_GROUP(&dev_mi)) {
 				ret = __bch2_dev_group_set(c, ca, label.buf);
-				prt_printf(err, "error creating new label: %s\n", bch2_err_str(ret));
-				if (ret)
+				if (ret) {
+					prt_printf(err, "error creating new label: %s\n",
+						   bch2_err_str(ret));
 					goto err_late;
+				}
 			}
 
 
