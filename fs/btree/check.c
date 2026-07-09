@@ -426,6 +426,14 @@ again:
 			if (ret)
 				break;
 
+			/*
+			 * cur is still read-locked, and goto again jumps over the
+			 * unlock at the end of the loop; drop it here or it leaks
+			 * (and later self-deadlocks a write lock on the same node).
+			 */
+			six_unlock_read(&cur->c.lock);
+			cur = NULL;
+
 			bch2_btree_and_journal_iter_exit(&iter);
 			goto again;
 		} else if (ret)
