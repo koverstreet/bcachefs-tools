@@ -224,8 +224,6 @@ read_attribute(filldir64_specialization);
 BCH_PERSISTENT_COUNTERS()
 #undef x
 
-rw_attribute(label);
-
 read_attribute(copy_gc_wait);
 
 read_attribute(reconcile_status);
@@ -1001,12 +999,6 @@ SHOW(bch2_dev)
 	sysfs_print(first_bucket,	ca->mi.first_bucket);
 	sysfs_print(nbuckets,		ca->mi.nbuckets);
 
-	if (attr == &sysfs_label) {
-		if (ca->mi.group)
-			bch2_disk_path_to_text(out, c, ca->mi.group - 1);
-		prt_char(out, '\n');
-	}
-
 	if (attr == &sysfs_has_data) {
 		prt_bitflags(out, __bch2_data_types, bch2_dev_has_data(c, ca));
 		prt_char(out, '\n');
@@ -1065,14 +1057,6 @@ STORE(bch2_dev)
 	struct bch_dev *ca = container_of(kobj, struct bch_dev, kobj);
 	struct bch_fs *c = ca->fs;
 
-	if (attr == &sysfs_label) {
-		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL);
-		if (!tmp)
-			return -ENOMEM;
-
-		try(bch2_dev_group_set(c, ca, strim(tmp)));
-	}
-
 	if (attr == &sysfs_io_errors_reset)
 		bch2_dev_errors_reset(ca);
 
@@ -1088,9 +1072,6 @@ struct attribute *bch2_dev_files[] = {
 	&sysfs_uuid,
 	&sysfs_first_bucket,
 	&sysfs_nbuckets,
-
-	/* settings: */
-	&sysfs_label,
 
 	&sysfs_has_data,
 	&sysfs_io_done,

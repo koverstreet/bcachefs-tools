@@ -553,6 +553,11 @@ enum fsck_err_opts {
 	  OPT_STR(bch2_member_states),					\
 	  BCH_MEMBER_STATE,		BCH_MEMBER_STATE_rw,		\
 	  "state",	"rw,ro,failed,spare")				\
+	x(label,			u16,				\
+	  OPT_DEVICE|OPT_FORMAT|OPT_RUNTIME,				\
+	  OPT_FN(bch2_opt_disk_label),					\
+	  BCH_MEMBER_GROUP,		0,				\
+	  "(label)",	"Device label: position in the label tree")	\
 	x(bucket_size,			u32,				\
 	  OPT_DEVICE|OPT_HUMAN_READABLE|OPT_SB_FIELD_SECTORS,		\
 	  OPT_UINT(0, S64_MAX),						\
