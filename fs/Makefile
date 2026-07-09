@@ -350,6 +350,12 @@ bcachefs-codegen-skip-cflags := \
 	-fdiagnostics-show-context -fdiagnostics-show-context=% \
 	--param=% --param asan-% -fno-isolate-erroneous-paths-dereference
 
+# Also drop $(CC_FLAGS_LTO): bindgen skips functions with hidden visibility,
+# so its -fvisibility=hidden strips every plain extern declaration from the
+# bindings. Visibility doesn't affect layout, and the kernel's own bindgen
+# pass filters the same group via bindgen_c_flags_lto.
+bcachefs-codegen-skip-cflags += $(CC_FLAGS_LTO)
+
 # Also drop -funsigned-char: the kernel builds char unsigned, which makes bindgen
 # bind `char *` as `*const u8`, but the fs/ Rust (shared with userspace, where
 # char is signed) expects `c_char`. Char signedness doesn't affect layout, so
