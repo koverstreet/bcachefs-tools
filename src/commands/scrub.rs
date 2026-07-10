@@ -126,7 +126,10 @@ pub struct Cli {
 
 fn scrub(cli: Cli) -> Result<()> {
 
-    unsafe { libc::signal(libc::SIGINT, sigint_handler as libc::sighandler_t); }
+    unsafe {
+        libc::signal(libc::SIGINT,
+                     sigint_handler as extern "C" fn(libc::c_int) as libc::sighandler_t);
+    }
 
     let data_types: u32 = if cli.metadata {
         1 << u32::from(data_type::btree)
