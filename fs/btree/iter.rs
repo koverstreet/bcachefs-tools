@@ -671,7 +671,15 @@ fn bkey_s_c_to_result<'i>(k: c::bkey_s_c) -> Result<Option<BkeySC<'i>>, BchError
             unsafe {
                 Some(BkeySC {
                     k:    &*k.k,
-                    v:    &*k.v,
+                    // Hole slots (peek_slot) return a deleted key with a NULL
+                    // val; bch_val is zero-sized, so a dangling well-aligned
+                    // reference is legal - the val is never read through (a
+                    // deleted key's val length is zero).
+                    v:    if !k.v.is_null() {
+                        &*k.v
+                    } else {
+                        NonNull::dangling().as_ref()
+                    },
                     iter: PhantomData,
                 })
             }
