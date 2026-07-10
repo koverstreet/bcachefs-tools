@@ -127,29 +127,41 @@ static bool bch2_moving_ctxt_can_submit_write(struct moving_context *ctxt,
 		  sectors <= ctxt->max_sectors_in_flight - write_sectors));
 }
 
-static bool bch2_moving_ctxt_reserve_write(struct moving_context *ctxt,
-					   struct data_update *u)
+static bool bch2_moving_ctxt_reserve_io(struct moving_context *ctxt,
+					atomic_t *sectors_in_flight,
+					atomic_t *ios_in_flight,
+					u32 sectors)
 {
-	u32 sectors = u->k.k->k.size;
 	u32 old, new;
 
-	/* Reserve the write window before submitting; check-then-add can overshoot. */
+	/* Reserve before submitting; check-then-add can overshoot under completion. */
 	do {
-		old = atomic_read(&ctxt->write_sectors);
+		old = atomic_read(sectors_in_flight);
 		if (old && (old >= ctxt->max_sectors_in_flight ||
 			    sectors > ctxt->max_sectors_in_flight - old))
 			return false;
 		new = old + sectors;
-	} while (atomic_cmpxchg(&ctxt->write_sectors, old, new) != old);
+	} while (atomic_cmpxchg(sectors_in_flight, old, new) != old);
 
 	do {
-		old = atomic_read(&ctxt->write_ios);
+		old = atomic_read(ios_in_flight);
 		if (old >= ctxt->max_ios_in_flight) {
-			atomic_sub(sectors, &ctxt->write_sectors);
+			atomic_sub(sectors, sectors_in_flight);
 			return false;
 		}
 		new = old + 1;
-	} while (atomic_cmpxchg(&ctxt->write_ios, old, new) != old);
+	} while (atomic_cmpxchg(ios_in_flight, old, new) != old);
+
+	return true;
+}
+
+static bool bch2_moving_ctxt_reserve_write(struct moving_context *ctxt,
+					   struct data_update *u)
+{
+	if (!bch2_moving_ctxt_reserve_io(ctxt,
+			&ctxt->write_sectors, &ctxt->write_ios,
+			u->k.k->k.size))
+		return false;
 
 	closure_get(&ctxt->cl);
 	return true;
@@ -338,15 +350,16 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 
 	u32 size = k.k->size;
 
+	move_ctxt_wait_event(ctxt,
+		bch2_moving_ctxt_reserve_io(ctxt,
+			&ctxt->read_sectors, &ctxt->read_ios, size));
+
 	if (bucket_in_flight) {
 		u->b = bucket_in_flight;
 		atomic_inc(&u->b->count);
 	}
 
 	scoped_guard(mutex, &ctxt->lock) {
-		atomic_add(u->k.k->k.size, &ctxt->read_sectors);
-		atomic_inc(&ctxt->read_ios);
-
 		list_add_tail(&u->read_list, &ctxt->reads);
 		list_add_tail(&u->io_list, &ctxt->ios);
 
