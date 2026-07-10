@@ -716,57 +716,78 @@ fn post_process(src: String, ptr_width: &str) -> String {
 }
 
 fn readd_derives(src: String) -> String {
-    let mut out = String::with_capacity(src.len());
-    let mut prev = "";
-
-    for line in src.lines() {
-        if let Some(name) = line.strip_prefix("pub struct ").and_then(|s| s.split_once(' ').map(|(name, _)| name)) {
-            if DERIVE_READD.contains(&name) && !prev.starts_with("#[derive(") {
-                out.push_str("#[derive(Debug, Copy, Clone)]\n");
+    let mut lines: Vec<String> = src.lines().map(str::to_owned).collect();
+    let mut i = 0;
+    while i < lines.len() {
+        if let Some(name) = lines[i]
+            .strip_prefix("pub struct ")
+            .and_then(|s| s.split_once(' ').map(|(name, _)| name))
+        {
+            if DERIVE_READD.contains(&name) {
+                if i > 0 && lines[i - 1].starts_with("#[derive(") {
+                    // bindgen dropped the builtin derives (blocklisted field
+                    // types) but still emitted the injected custom ones
+                    // (TypeInfo); merge ours into that list.
+                    if !lines[i - 1].contains("Debug") {
+                        lines[i - 1] = lines[i - 1]
+                            .replacen("#[derive(", "#[derive(Debug, Copy, Clone, ", 1);
+                    }
+                } else {
+                    lines.insert(i, "#[derive(Debug, Copy, Clone)]".to_owned());
+                    i += 1;
+                }
             }
         }
-
-        out.push_str(line);
-        out.push('\n');
-        prev = line;
+        i += 1;
     }
 
+    let mut out = lines.join("\n");
+    out.push('\n');
     out
 }
 
-// Verbatim from build.rs (with the env read replaced by a parameter).
+// Same fixups as bch_bindgen/build.rs's packed_and_align_fix, but structural:
+// find the struct by name and rewrite its repr attribute, scanning back over
+// any attribute lines in between. The old fixed-string matching broke silently
+// whenever the attribute block changed shape (the injected TypeInfo derives
+// did exactly that).
 fn packed_and_align_fix(bindings: String, ptr_width: &str) -> String {
-    let bindings = bindings
-        .replace("#[repr(C, packed(8))]\npub struct btree_node {",
-                 "#[repr(C, align(8))]\npub struct btree_node {")
-        .replace("#[repr(C, packed(8))]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_extent_crc128 {",
-                 "#[repr(C, align(8))]\n#[derive(Debug, Default, Copy, Clone)]\npub struct bch_extent_crc128 {")
-        .replace("#[repr(C, packed(8))]\npub struct jset {",
-                 "#[repr(C, align(8))]\npub struct jset {")
-        .replace("#[repr(C, packed(8))]\npub struct btree_node_entry {",
-                 "#[repr(C, align(8))]\npub struct btree_node_entry {")
-        .replace("#[repr(C, packed(8))]\npub struct bch_sb {",
-                 "#[repr(C, align(8))]\npub struct bch_sb {");
+    const PACKED_TO_ALIGN8: &[&str] =
+        &["btree_node", "bch_extent_crc128", "jset", "btree_node_entry", "bch_sb"];
+    const ALIGN8_32BIT: &[&str] =
+        &["btree_node__bindgen_ty_1", "btree_node_entry__bindgen_ty_1",
+          "bch_ioctl_query_accounting"];
 
-    if ptr_width != "32" {
-        return bindings;
-    }
-    let mut result = String::with_capacity(bindings.len());
-    let mut lines = bindings.lines().peekable();
-    while let Some(line) = lines.next() {
-        if line == "#[repr(C)]" {
-            let needs_align8 = lines.peek().is_some_and(|n|
-                n.contains("pub struct bkey_i_")
-                || n.contains("pub struct btree_node__bindgen_ty_1")
-                || n.contains("pub struct btree_node_entry__bindgen_ty_1")
-                || n.contains("pub struct bch_ioctl_query_accounting"));
-            result.push_str(if needs_align8 { "#[repr(C, align(8))]" } else { line });
-        } else {
-            result.push_str(line);
+    let mut lines: Vec<String> = bindings.lines().map(str::to_owned).collect();
+
+    for i in 0..lines.len() {
+        let Some(rest) = lines[i].strip_prefix("pub struct ") else { continue };
+        let Some(name) = rest.split([' ', '{', '<']).next() else { continue };
+
+        let fix_packed = PACKED_TO_ALIGN8.contains(&name);
+        let fix_32bit = ptr_width == "32"
+            && (ALIGN8_32BIT.contains(&name) || name.starts_with("bkey_i_"));
+        if !fix_packed && !fix_32bit {
+            continue;
         }
-        result.push('\n');
+
+        let mut j = i;
+        while j > 0 && lines[j - 1].starts_with("#[") {
+            j -= 1;
+            if fix_packed && lines[j] == "#[repr(C, packed(8))]" {
+                lines[j] = "#[repr(C, align(8))]".into();
+                break;
+            }
+            if fix_32bit && lines[j] == "#[repr(C)]" {
+                lines[j] = "#[repr(C, align(8))]".into();
+                break;
+            }
+        }
     }
-    result
+
+    let mut out = lines.join("\n");
+    out.push('\n');
+    out
 }
 
 fn parent(p: &str) -> String {
