@@ -130,6 +130,17 @@ static inline int bitmap_and(unsigned long *dst, const unsigned long *src1,
 	return __bitmap_and(dst, src1, src2, nbits);
 }
 
+static inline void bitmap_or(unsigned long *dst, const unsigned long *src1,
+			     const unsigned long *src2, unsigned int nbits)
+{
+	if (small_const_nbits(nbits)) {
+		*dst = *src1 | *src2;
+		return;
+	}
+	for (unsigned k = 0; k < BITS_TO_LONGS(nbits); k++)
+		dst[k] = src1[k] | src2[k];
+}
+
 static inline unsigned long _find_next_bit(const unsigned long *addr,
 		unsigned long nbits, unsigned long start, unsigned long invert)
 {
