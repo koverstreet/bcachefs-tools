@@ -265,6 +265,13 @@ fn main() -> ExitCode {
     // backtrace via bch2_prt_task_backtrace before the kernel core-dumps.
     unsafe { c::bch2_install_fatal_signal_handlers(); }
 
+    // The Rust runtime starts with SIGPIPE ignored, so writing to a closed
+    // pipe returns EPIPE - which println! reports by panicking. Restore
+    // SIG_DFL: `bcachefs list | head` should die silently like any other
+    // CLI tool. Threads that write to sockets and must survive client
+    // disconnects block SIGPIPE locally instead (see http.rs).
+    unsafe { libc::signal(libc::SIGPIPE, libc::SIG_DFL); }
+
     // glibc and Rust stdlib buffer stdout independently; when piped, both
     // switch to block buffering which can reorder or lose output.
     // Set both to line-buffered.

@@ -9,33 +9,43 @@ extern crate tiny_http;
 fn http_thread(server: tiny_http::Server) {
     use tiny_http::{Response};
 
+    // The process-wide SIGPIPE disposition is SIG_DFL for normal CLI pipe
+    // semantics (see main). A client disconnecting mid-response must not
+    // kill the process, so block SIGPIPE in this thread: writes to a dead
+    // socket then fail with EPIPE, which we log and survive.
+    unsafe {
+        let mut set: libc::sigset_t = std::mem::zeroed();
+        libc::sigemptyset(&mut set);
+        libc::sigaddset(&mut set, libc::SIGPIPE);
+        libc::pthread_sigmask(libc::SIG_BLOCK, &set, std::ptr::null_mut());
+    }
+
     for request in server.incoming_requests() {
         let (_, path) = request.url().split_once('/').unwrap();
 
         let c_path = CString::new(path).unwrap();
 
-        match request.method() {
+        let response = match request.method() {
             tiny_http::Method::Get => {
                 let mut buf = Printbuf::new();
 
                 let ret = unsafe { c::sysfs_read_or_html_dirlist(c_path.as_ptr(), buf.as_raw()) };
 
                 if ret < 0 {
-                    let response = Response::from_string(format!("Error {}", ret))
-                        .with_status_code(403);
-                    request.respond(response).expect("Responded");
+                    Response::from_string(format!("Error {}", ret))
+                        .with_status_code(403)
                 } else {
-                    let response = Response::from_string(buf.as_str());
-                    request.respond(response).expect("Responded");
+                    Response::from_string(buf.as_str())
                 }
             }
 
-            _ => {
-                let response = Response::from_string("Unsupported HTTP method")
-                    .with_status_code(405);
-                request.respond(response).expect("Responded");
-            }
+            _ => Response::from_string("Unsupported HTTP method")
+                    .with_status_code(405),
         };
+
+        if let Err(e) = request.respond(response) {
+            eprintln!("bcachefs http: error sending response: {e}");
+        }
     }
 }
 
