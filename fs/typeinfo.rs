@@ -349,6 +349,11 @@ fn fields_to_text(
     indent: usize,
 ) -> core::fmt::Result {
     for f in info.fields {
+        // bch_val and friends: zero-size markers, nothing to show (their
+        // flexible-array member would misreport the rest of the value).
+        if matches!(&f.kind, FieldKind::Struct(inner) if inner.size == 0) {
+            continue;
+        }
         let offset = base + f.offset;
         write!(out, "{:indent$}{}: ", "", f.name)?;
         match &f.kind {
