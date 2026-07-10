@@ -253,7 +253,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
     iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
         assert_eq!(k.k.start_offset(), i + 8);
-        assert_eq!(k.k.size, 8);
+        assert_eq!({ k.k.size }, 8);
         i += 16;
         ControlFlow::Continue(())
     })?;
@@ -267,7 +267,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
         }
         assert_eq!(k.k.is_deleted(), i % 16 == 0);
         assert_eq!(k.k.start_offset(), i);
-        assert_eq!(k.k.size, 8);
+        assert_eq!({ k.k.size }, 8);
         i = k.k.p.offset;
         ControlFlow::Continue(())
     })
