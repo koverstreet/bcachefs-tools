@@ -41,6 +41,7 @@ typedef struct {
 
 struct alloc_request {
 	struct closure		*cl;
+	u32			wake_all_counter_snapshot;
 	u8			nr_replicas;
 	u8			ec_replicas;
 	u8			ec_max_data_blocks;	/* 0 = no cap */
@@ -351,6 +352,7 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 
 	req->ca				= NULL;
 	req->cl				= cl;
+	req->wake_all_counter_snapshot	= atomic_read(&trans->c->allocator.wake_all_counter);
 	req->nr_replicas		= nr_replicas;
 	req->nr_effective		= 0;
 	req->ec_replicas		= ec_replicas;

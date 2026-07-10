@@ -164,6 +164,7 @@ struct bch_fs_capacity {
 struct bch_fs_allocator {
 	struct bch_devs_mask	rw_devs[BCH_DATA_NR];
 	unsigned long		rw_devs_change_count;
+	atomic_t		wake_all_counter;
 
 	spinlock_t		freelist_lock;
 	struct closure_waitlist	freelist_wait;
