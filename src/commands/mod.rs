@@ -101,6 +101,7 @@ pub mod fusemount;
 pub mod image;
 pub mod key;
 pub mod kill_btree_node;
+pub mod kvdb;
 pub mod journal_rewind_info;
 pub mod list;
 pub mod list_journal;
@@ -250,7 +251,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
     GroupDef { heading: "File options",             commands: &[&attr::CMD_SETATTR, &attr::CMD_GETATTR, &attr::CMD_REFLINK_PROPAGATE] },
     GroupDef { heading: "Debug", commands: &[
         &dump::CMD_DUMP, &dump::CMD_UNDUMP, &list::CMD, &list_journal::CMD,
-        &kill_btree_node::CMD, &data_read::CMD, &unpoison::CMD,
+        &kvdb::CMD, &kill_btree_node::CMD, &data_read::CMD, &unpoison::CMD,
     ]},
     GroupDef { heading: "Miscellaneous",            commands: &[&completions::CMD, &VERSION_CMD] },
 ];

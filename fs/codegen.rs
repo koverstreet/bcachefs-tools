@@ -33,7 +33,7 @@ const HEADERS: &[&str] = &[
 // Translated 1:1 from the bindgen builder calls in build.rs.
 const ALLOWLIST_FUNCTION: &[&str] = &[
     ".*bch2_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches",
-    "bpos_.*", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
+    "bpos_.*", "bkey_init", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
     "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
 ];
 const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf", ".*bch2_snapshot_id_state"];
