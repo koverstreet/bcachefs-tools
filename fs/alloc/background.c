@@ -1676,19 +1676,21 @@ static bool bch2_dev_has_open_write_point(struct bch_fs *c, struct bch_dev *ca)
 
 void bch2_dev_allocator_set_rw(struct bch_fs *c, struct bch_dev *ca, bool rw)
 {
-	/* BCH_DATA_free == all rw devs */
-
 	for (unsigned i = 0; i < ARRAY_SIZE(c->allocator.rw_devs); i++) {
 		bool data_type_rw = rw;
 
-		if (i != BCH_DATA_free &&
-		    !(ca->mi.data_allowed & BIT(i)))
-			data_type_rw = false;
-
-		if ((i == BCH_DATA_journal ||
-		     i == BCH_DATA_btree) &&
-		    !ca->mi.durability)
-			data_type_rw = false;
+		switch (i) {
+		case BCH_DATA_free:	/* all rw devs */
+			break;
+		case BCH_DATA_cached:	/* user data on durability 0 devices */
+			data_type_rw &= (ca->mi.data_allowed & BIT(BCH_DATA_user)) &&
+					!ca->mi.durability;
+			break;
+		default:
+			data_type_rw &= (ca->mi.data_allowed & BIT(i)) &&
+					ca->mi.durability;
+			break;
+		}
 
 		mod_bit(ca->dev_idx, c->allocator.rw_devs[i].d, data_type_rw);
 	}

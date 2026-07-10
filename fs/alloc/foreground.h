@@ -61,7 +61,6 @@ struct alloc_request {
 	/* These fields are used primarily by open_bucket_add_buckets */
 	struct open_buckets	ptrs;
 	unsigned		nr_effective;	/* sum of @ptrs durability */
-	bool			have_cache;	/* have we allocated from a 0 durability dev */
 	struct bch_devs_mask	devs_may_alloc;
 
 	/* bch2_bucket_alloc_set_trans(): */
@@ -360,7 +359,6 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 	req->watermark			= watermark;
 	req->flags			= flags;
 	req->devs_have			= devs_have;
-	req->have_cache			= false;
 	req->will_retry_all_devices	= false;
 	req->will_retry_target_devices	= false;
 	req->will_retry_set_devices	= false;

@@ -1300,11 +1300,9 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 	req->scratch_ptrs		= req->ptrs;
 	req->scratch_nr_replicas	= req->nr_replicas;
 	req->scratch_nr_effective	= req->nr_effective;
-	req->scratch_have_cache		= req->have_cache;
 	req->scratch_devs_may_alloc	= req->devs_may_alloc;
 
 	req->devs_may_alloc	= s->devs;
-	req->have_cache		= true;
 
 	if (req->watermark == BCH_WATERMARK_copygc)
 		req->flags |= BCH_WRITE_alloc_nowait;
@@ -1402,7 +1400,6 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 	req->ptrs		= req->scratch_ptrs;
 	req->nr_replicas	= req->scratch_nr_replicas;
 	req->nr_effective	= req->scratch_nr_effective;
-	req->have_cache		= req->scratch_have_cache;
 	req->devs_may_alloc	= req->scratch_devs_may_alloc;
 	req->target_frac		= 0;
 	return ret;

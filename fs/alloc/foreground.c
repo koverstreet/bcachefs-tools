@@ -991,11 +991,10 @@ static int add_new_bucket(struct bch_fs *c,
 {
 	unsigned durability = ob_dev(c, ob)->mi.durability;
 
-	BUG_ON(req->nr_effective >= req->nr_replicas);
+	BUG_ON(req->nr_effective >= req->nr_replicas && durability);
 
 	__clear_bit(ob->dev, req->devs_may_alloc.d);
 	req->nr_effective	+= durability;
-	req->have_cache	|= !durability;
 
 	ob_push(c, &req->ptrs, ob);
 
@@ -1003,6 +1002,9 @@ static int add_new_bucket(struct bch_fs *c,
 		return 1;
 	if (ob->ec)
 		return 1;
+	if (!durability) /* only allocate one cached copy */
+		return 1;
+
 	return 0;
 }
 
@@ -1024,12 +1026,6 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *trans,
 		req->ca = bch2_dev_tryget_noerror(c, *i);
 		if (!req->ca)
 			continue;
-
-		if (!req->ca->mi.durability && req->have_cache) {
-			bch2_dev_put(req->ca);
-			req->ca = NULL;
-			continue;
-		}
 
 		req->will_retry_set_devices =
 			i + 1 < req->devs_sorted.data + req->devs_sorted.nr;
@@ -1106,16 +1102,10 @@ static bool want_bucket(struct bch_fs *c,
 			struct alloc_request *req,
 			struct open_bucket *ob)
 {
-	struct bch_dev *ca = ob_dev(c, ob);
-
 	if (!test_bit(ob->dev, req->devs_may_alloc.d))
 		return false;
 
 	if (ob->data_type != req->wp->data_type)
-		return false;
-
-	if (!ca->mi.durability &&
-	    (req->wp->data_type == BCH_DATA_btree || req->ec || req->have_cache))
 		return false;
 
 	if (req->ec != (ob->ec != NULL))
@@ -1144,6 +1134,24 @@ static int bucket_alloc_set_writepoint(struct bch_fs *c,
 	return ret;
 }
 
+static int partial_bucket_alloc(struct bch_fs *c,
+				struct alloc_request *req,
+				unsigned idx)
+{
+	struct bch_fs_allocator *a = &c->allocator;
+	struct open_bucket *ob = a->open_buckets + a->open_buckets_partial[idx];
+
+	array_remove_item(a->open_buckets_partial,
+			  a->open_buckets_partial_nr,
+			  idx);
+	ob->on_partial_list = false;
+
+	scoped_guard(rcu)
+		bch2_dev_rcu(c, ob->dev)->nr_partial_buckets--;
+
+	return add_new_bucket(c, req, ob);
+}
+
 static int bucket_alloc_set_partial(struct bch_fs *c,
 				    struct alloc_request *req)
 {
@@ -1169,19 +1177,60 @@ static int bucket_alloc_set_partial(struct bch_fs *c,
 			if (!avail)
 				continue;
 
-			array_remove_item(a->open_buckets_partial,
-					  a->open_buckets_partial_nr,
-					  i);
-			ob->on_partial_list = false;
-
-			scoped_guard(rcu)
-				bch2_dev_rcu(c, ob->dev)->nr_partial_buckets--;
-
-			try(add_new_bucket(c, req, ob));
+			try(partial_bucket_alloc(c, req, i));
 		}
 	}
 
 	return 0;
+}
+
+noinline
+static int bucket_alloc_cached(struct btree_trans *trans, struct alloc_request *req)
+{
+	struct bch_fs *c = trans->c;
+	struct bch_fs_allocator *a = &c->allocator;
+	struct open_bucket *ob;
+	unsigned i;
+
+	open_bucket_for_each(c, &req->wp->ptrs, ob, i)
+		if (test_bit(ob->dev, req->devs_may_alloc.d)) {
+			add_new_bucket(c, req, ob);
+			array_remove_item(req->wp->ptrs.v,
+					  req->wp->ptrs.nr,
+					  i);
+			return 0;
+		}
+
+	if (a->open_buckets_partial_nr) {
+		guard(spinlock)(&a->freelist_lock);
+
+		for (unsigned i = 0; i < a->open_buckets_partial_nr; i++) {
+			struct open_bucket *ob = a->open_buckets + a->open_buckets_partial[i];
+
+			if (ob->data_type == req->wp->data_type &&
+			    test_bit(ob->dev, req->devs_may_alloc.d)) {
+				partial_bucket_alloc(c, req, i);
+				return 0;
+			}
+		}
+	}
+
+	/*
+	 * The request is already complete in durability terms - ask for one
+	 * more bucket, and never block: a write doesn't wait for its cache
+	 * copy, and not getting one isn't an error:
+	 */
+	req->scratch_nr_replicas	= req->nr_replicas;
+	struct closure *cl		= req->cl;
+	req->nr_replicas		= req->nr_effective + 1;
+	req->cl				= NULL;
+
+	int ret = bch2_bucket_alloc_set_trans(trans, req, &req->wp->stripe);
+
+	req->nr_replicas		= req->scratch_nr_replicas;
+	req->cl				= cl;
+
+	return bch2_err_matches(ret, BCH_ERR_transaction_restart) ? ret : 0;
 }
 
 /**
@@ -1456,6 +1505,7 @@ int bch2_alloc_sectors_req(struct btree_trans *trans,
 	struct bch_fs_allocator *a = &c->allocator;
 	struct open_bucket *ob;
 	unsigned write_points_nr;
+	unsigned orig_target = req->target;
 	int i;
 
 	BUG_ON(!req->nr_replicas);
@@ -1467,7 +1517,6 @@ retry:
 	req->trace_alloc_failed		= false;
 	req->ptrs.nr			= 0;
 	req->nr_effective		= 0;
-	req->have_cache			= (req->flags & BCH_WRITE_move) && !(req->flags & BCH_WRITE_cached);
 	req->trace.nr			= 0;
 	write_points_nr			= a->write_points_nr;
 
@@ -1475,16 +1524,24 @@ retry:
 
 	req->data_type		= req->wp->data_type;
 
-	/* metadata may not allocate on cache devices: */
-	if (req->data_type != BCH_DATA_user)
-		req->have_cache = true;
-
 	int ret = bch2_trans_relock(trans);
 	if (ret)
 		goto err;
 
 	while (1) {
-		req->devs_may_alloc = target_rw_devs(c, req->wp->data_type, req->target);
+		req->devs_may_alloc = target_rw_devs(c, req->data_type, req->target);
+
+		/*
+		 * Writes of cached data (promotes) allocate their one copy
+		 * from durability 0 devices and durable devices alike:
+		 */
+		if (req->flags & BCH_WRITE_cached) {
+			struct bch_devs_mask cached_devs =
+				target_rw_devs(c, BCH_DATA_cached, req->target);
+
+			bitmap_or(req->devs_may_alloc.d, req->devs_may_alloc.d,
+				  cached_devs.d, BCH_SB_MEMBERS_MAX);
+		}
 
 		/* Don't allocate from devices we already have pointers to: */
 		darray_for_each(*req->devs_have, i)
@@ -1507,13 +1564,7 @@ retry:
 			goto err;
 
 		if (ret && req->will_retry_all_devices) {
-			/*
-			 * Only try to allocate cache (durability = 0 devices) from the
-			 * specified target:
-			 *
-			 * Only allocate stripes on the specified target
-			 */
-			req->have_cache			= true;
+			/* Only allocate stripes on the specified target */
 			req->ec				= false;
 			req->target			= 0;
 			req->will_retry_all_devices	= false;
@@ -1571,6 +1622,33 @@ retry:
 	    !ec_open_bucket(c, &req->ptrs)) {
 		ret = bch_err_throw(c, ec_alloc_failed);
 		goto err;
+	}
+
+	/*
+	 * If the specified target has durability=0 devices, also write one
+	 * cached copy to one of those. Not for moves - they only move the
+	 * data that exists - and not for writes of cached data, which
+	 * allocate from the cache devices directly:
+	 */
+	if (!(req->flags & (BCH_WRITE_move|BCH_WRITE_cached)) &&
+	    req->data_type == BCH_DATA_user) {
+		/*
+		 * Rebuilt from scratch: devs_may_alloc has been through
+		 * per-device clears and possibly a widened target - the cache
+		 * copy comes from the target the caller specified:
+		 */
+		req->devs_may_alloc = target_rw_devs(c, BCH_DATA_cached, orig_target);
+
+		darray_for_each(*req->devs_have, d)
+			__clear_bit(*d, req->devs_may_alloc.d);
+		open_bucket_for_each(c, &req->ptrs, ob, i)
+			__clear_bit(ob->dev, req->devs_may_alloc.d);
+
+		if (dev_mask_nr(&req->devs_may_alloc)) {
+			ret = bucket_alloc_cached(trans, req);
+			if (ret)
+				goto err;
+		}
 	}
 
 	if (req->nr_effective > req->nr_replicas)
