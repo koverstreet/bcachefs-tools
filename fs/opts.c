@@ -633,9 +633,10 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 		 * reads the group devs masks. Errors here (ENOMEM) just leave
 		 * the cpu copy stale until the next superblock swap:
 		 */
-		if (post)
+		if (post) {
 			scoped_guard(mutex, &c->sb_lock)
 				bch_err_fn(c, bch2_sb_disk_groups_to_cpu(c));
+		}
 
 		try(reconcile_scan_bracket(c,
 			(struct reconcile_scan) { .type = RECONCILE_SCAN_pending }, post, scope));
