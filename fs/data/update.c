@@ -9,6 +9,7 @@
 #include "btree/bkey_buf.h"
 #include "btree/update.h"
 
+#include "data/checksum.h"
 #include "data/compress.h"
 #include "data/copygc.h"
 #include "data/extents.h"
@@ -225,6 +226,60 @@ static void count_data_update_key_fail(struct data_update *u,
 		prt_printf(&buf, "%s\n", msg);
 		data_update_key_to_text(&buf, u, new, wrote, insert);
 	}));
+}
+
+/*
+ * Offending-pointer count for the still-set need_rb bits that are per-ptr
+ * measurable (checksum, compression, target, ec removal): an update that
+ * can't clear a bit outright - e.g. background_target with more replicas
+ * than the target can hold - still makes progress if it shrinks this.
+ *
+ * Bits with no per-ptr measure (data_replicas, ec creation) contribute
+ * nothing, falling back to cleared-or-parked semantics.
+ *
+ * XXX: these are the same per-ptr conformance tests the producer
+ * (bch2_bkey_needs_reconcile()) and consumer (reconcile_set_data_opts())
+ * make - candidates for a shared helper.
+ */
+static unsigned bkey_need_rb_offenders(struct bch_fs *c, struct bkey_s_c k,
+				       const struct bch_extent_reconcile *r,
+				       unsigned need_rb)
+{
+	unsigned csum_type		= bch2_data_checksum_type_rb(c, *r);
+	unsigned compression_type	= bch2_compression_opt_to_type(r->background_compression);
+	unsigned nr = 0;
+
+	guard(rcu)();
+
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+	const union bch_extent_entry *entry;
+	struct extent_ptr_decoded p;
+
+	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+		if (p.ptr.cached)
+			continue;
+
+		if ((need_rb & BIT(BCH_RECONCILE_data_checksum)) &&
+		    p.crc.csum_type != csum_type)
+			nr++;
+
+		if ((need_rb & BIT(BCH_RECONCILE_background_compression)) &&
+		    p.crc.compression_type != compression_type &&
+		    p.crc.compression_type != BCH_COMPRESSION_TYPE_incompressible)
+			nr++;
+
+		if ((need_rb & BIT(BCH_RECONCILE_background_target)) &&
+		    r->background_target &&
+		    !bch2_dev_in_target_rcu(c, p.ptr.dev, r->background_target))
+			nr++;
+
+		if ((need_rb & BIT(BCH_RECONCILE_erasure_code)) &&
+		    !r->erasure_code &&
+		    p.has_ec)
+			nr++;
+	}
+
+	return nr;
 }
 
 static int data_update_index_update_key(struct btree_trans *trans,
@@ -483,6 +538,46 @@ static int data_update_index_update_key(struct btree_trans *trans,
 		prt_str(&buf, "\nnew: ");
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
 	}));
+
+	/*
+	 * Convergence check: a completed reconcile data update must make
+	 * progress on the extent's need_rb set - clear a bit, park it, or
+	 * shrink the count of offending pointers for a divisible bit (a
+	 * partially satisfiable background_target improves placement without
+	 * clearing) - anything else means reconcile will re-queue the
+	 * identical update forever. Skipped when options changed mid-flight
+	 * (the work was computed against old opts), and for stripe-creation
+	 * updates (extra_replicas), whose erasure_code bit legitimately
+	 * clears asynchronously when the stripe pointer is attached.
+	 */
+	if (u->opts.type == BCH_DATA_UPDATE_reconcile &&
+	    !u->opts.extra_replicas &&
+	    u->op.opts.change_cookie == c->opt_change_cookie) {
+		const struct bch_extent_reconcile *r_old = bch2_bkey_reconcile_opts(c, k);
+		const struct bch_extent_reconcile *r_new =
+			bch2_bkey_reconcile_opts(c, bkey_i_to_s_c(insert));
+		unsigned old_rb = r_old ? r_old->need_rb : 0;
+		unsigned new_rb = r_new ? r_new->need_rb : 0;
+
+		if (old_rb && r_new &&
+		    !(old_rb & ~new_rb) &&
+		    !r_new->pending) {
+			/* Both keys measured against the same (new) targets: */
+			unsigned nr_old = bkey_need_rb_offenders(c, k, r_new, old_rb);
+			unsigned nr_new = bkey_need_rb_offenders(c, bkey_i_to_s_c(insert),
+								 r_new, old_rb);
+
+			if (nr_new >= nr_old)
+				event_add_trace(c, data_update_no_progress_fail,
+						insert->k.size, buf, ({
+					prt_printf(&buf, "offending ptrs %u -> %u", nr_old, nr_new);
+					prt_str(&buf, "\nold: ");
+					bch2_bkey_val_to_text(&buf, c, k);
+					prt_str(&buf, "\nnew: ");
+					bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(insert));
+				}));
+		}
+	}
 
 	return 0;
 }
