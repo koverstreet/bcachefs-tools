@@ -370,8 +370,12 @@ bcachefs-codegen-blocklist := \
 
 # The codegen tool: zero-dep, plain host rustc. codegen_main.rs include!s
 # codegen.rs, so list the latter as a prereq to rebuild on either change.
+#
+# Also, link with $(HOSTCC) like the kernel's own host Rust rules do
+# (see scripts/Makefile.host).
 quiet_cmd_bch_codegen_host = HOSTRUSTC $@
-      cmd_bch_codegen_host = $(HOSTRUSTC) --edition 2021 -O $< -o $@
+      cmd_bch_codegen_host = $(HOSTRUSTC) --edition 2021 -O \
+	-Clinker-flavor=gcc -Clinker=$(HOSTCC) $< -o $@
 
 $(obj)/codegen: $(src)/codegen_main.rs $(src)/codegen.rs FORCE
 	$(call if_changed,bch_codegen_host)
