@@ -47,10 +47,21 @@ int bch2_dev_missing_bkey(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
 
 void bch2_dev_missing_atomic(struct bch_fs *c, unsigned dev)
 {
-	if (dev != BCH_SB_MEMBER_INVALID)
-		bch2_fs_inconsistent(c, "pointer to %s device %u",
-				     test_bit(dev, c->devs_removed.d)
-				     ? "removed" : "nonexistent", dev);
+	if (dev == BCH_SB_MEMBER_INVALID)
+		return;
+
+	CLASS(printbuf, buf)();
+	guard(printbuf_atomic)(&buf);
+
+	bch2_log_msg_start(c, &buf);
+
+	prt_printf(&buf, "pointer to %s device %u\n",
+		   test_bit(dev, c->devs_removed.d)
+		   ? "removed" : "nonexistent", dev);
+	bch2_prt_task_backtrace(&buf, current, 1, GFP_ATOMIC);
+
+	__bch2_inconsistent_error(c, &buf);
+	bch2_print_str(c, KERN_ERR, buf.buf);
 }
 
 void bch2_dev_bucket_missing(struct bch_dev *ca, u64 bucket)
