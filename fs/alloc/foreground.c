@@ -82,11 +82,15 @@ void bch2_alloc_wake_dev(struct bch_dev *ca)
 	closure_wake_up(&ca->fs->allocator.freelist_wait);
 }
 
+/*
+ * Fs-wide wake: bump wake_all_counter so every parked waiter forces a full
+ * allocator retry (see alloc_wait_advanced()), rather than filtering on the
+ * per-device counters in its failed-alloc trace. Eligibility may have changed
+ * for a device outside any trace — e.g. a newly added one.
+ */
 void bch2_alloc_wake_all(struct bch_fs *c)
 {
-	guard(rcu)();
-	for_each_member_device_rcu(c, ca, NULL)
-		atomic_inc(&ca->alloc_wake_counter);
+	atomic_inc(&c->allocator.wake_all_counter);
 	closure_wake_up(&c->allocator.freelist_wait);
 }
 
@@ -1511,6 +1515,7 @@ int bch2_alloc_sectors_req(struct btree_trans *trans,
 	BUG_ON(!req->nr_replicas);
 retry:
 	req->ca				= NULL;
+	req->wake_all_counter_snapshot	= atomic_read(&c->allocator.wake_all_counter);
 	req->will_retry_all_devices	= req->target && !(req->flags & BCH_WRITE_only_specified_devs);
 	req->will_retry_target_devices	= !(req->flags & BCH_WRITE_alloc_nowait);
 	req->copygc_can_make_progress	= false;
@@ -2149,6 +2154,15 @@ static noinline void bch2_print_allocator_stuck(struct bch_fs *c, struct alloc_r
  */
 static bool alloc_wait_advanced(struct bch_fs *c, struct alloc_request *req)
 {
+	/*
+	 * A global wake means allocation eligibility may have changed outside
+	 * the devices recorded in this request's trace (for example, a newly
+	 * added device).  Force a full allocator retry in that case.
+	 */
+	if (atomic_read(&c->allocator.wake_all_counter) !=
+	    req->wake_all_counter_snapshot)
+		return true;
+
 	if (unlikely(req->trace_alloc_failed))
 		return true;
 
@@ -2191,6 +2205,17 @@ void __bch2_wait_on_allocator(struct btree_trans *trans,
 	bch2_trans_unlock(trans);
 
 	while (1) {
+		/*
+		 * A wake may race with closure_wait() before our closure is on
+		 * the waitlist.  Check the snapshots before sleeping; unpark is
+		 * required to remove our closure from the llist on this path.
+		 */
+		if (bch2_err_matches(err, BCH_ERR_bucket_alloc_blocked) &&
+		    alloc_wait_advanced(c, req)) {
+			bch2_alloc_waiters_unpark(c);
+			return;
+		}
+
 		long t = until - jiffies;
 
 		if (t > 0 && trans_closure_sync_timeout(trans, cl, t)) {
