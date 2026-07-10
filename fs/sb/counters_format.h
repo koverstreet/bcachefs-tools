@@ -67,6 +67,8 @@ enum bch_counters_flags {
 	  "Failed btree key update sectors")				\
 	x(data_update_useless_write_fail,	128, TYPE_SECTORS,	\
 	  "Useless data update write failures")				\
+	x(data_update_no_progress_fail,		136, TYPE_SECTORS,	\
+	  "Reconcile data updates that cleared no need_rb bits")	\
 	x(data_update_start_fail_obsolete,	39,  TYPE_COUNTER,	\
 	  "Obsolete: data update start failures")			\
 	x(data_update_noop_obsolete,		92,  TYPE_COUNTER,	\
