@@ -1731,6 +1731,59 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		if (!target->inodes.nr)
 			try(maybe_reconstruct_inum(trans, le64_to_cpu(d.v->d_inum), d.k->p.snapshot));
 
+		/*
+		 * The inode must exist in an ancestor snapshot of the dirent:
+		 * that's what makes the dirent resolvable from every
+		 * subvolume leaf that can see it. get_visible_inodes() also
+		 * accepts inodes in descendant snapshots - reachable from
+		 * *some* leaf, but a subvolume in a sibling branch sees the
+		 * dirent and not the inode, and lookups there return ENOENT.
+		 *
+		 * It iterates from the dirent's snapshot downward, so an
+		 * ancestor inode, if there is one, is first in the list:
+		 */
+		bool have_ancestor = target->inodes.nr &&
+			bch2_snapshot_is_ancestor(trans, d.k->p.snapshot,
+						  target->inodes.data[0].inode.bi_snapshot);
+
+		if (target->inodes.nr && !have_ancestor) {
+			/*
+			 * Deleting the dirent would orphan those inodes:
+			 * instead, move it to the snapshot(s) where the inode
+			 * exists. The second pass revisits the copies for the
+			 * target checks and directory counts:
+			 */
+			if (fsck_err(trans, dirent_to_inode_in_descendant_snapshot,
+				     "dirent with inode(s) only in descendant snapshots:\n%s",
+				     (printbuf_reset(&buf),
+				      bch2_bkey_val_to_text(&buf, c, k),
+				      buf.buf))) {
+				darray_for_each(target->inodes, i) {
+					struct bkey_i *n =
+						errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+
+					n->k.p.snapshot = i->inode.bi_snapshot;
+					try(bch2_btree_insert_trans(trans, BTREE_ID_dirents, n,
+							BTREE_UPDATE_internal_snapshot_node));
+				}
+
+				/*
+				 * Delete with the hash info we already have -
+				 * bch2_fsck_remove_dirent() rederives it via
+				 * lookup_first_inode(), which takes whatever
+				 * snapshot's inode it finds first:
+				 */
+				CLASS(btree_iter, del_iter)(trans, BTREE_ID_dirents,
+							    d.k->p, BTREE_ITER_intent);
+				try(bch2_btree_iter_traverse(&del_iter));
+				try(bch2_hash_delete_at(trans, bch2_dirent_hash_desc,
+							hash_info, &del_iter,
+							BTREE_UPDATE_internal_snapshot_node));
+				*need_second_pass = true;
+				return 0;
+			}
+		}
+
 		if (fsck_err_on(!target->inodes.nr,
 				trans, dirent_to_missing_inode,
 				"dirent points to missing inode:\n%s",

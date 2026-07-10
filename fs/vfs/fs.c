@@ -22,6 +22,7 @@
 #include "init/chardev.h"
 #include "init/dev.h"
 #include "init/fs.h"
+#include "init/passes.h"
 
 #include "journal/journal.h"
 
@@ -751,7 +752,6 @@ static int dirent_to_missing_inode(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	CLASS(bch_log_msg, msg)(c);
-	msg.m.suppress = true;
 
 	prt_printf(&msg.m, "dirent to missing inode: (%s)\n", bch2_err_str(ret));
 	bch2_bkey_val_to_text(&msg.m, c, d.s_c);
@@ -759,8 +759,17 @@ static int dirent_to_missing_inode(struct btree_trans *trans,
 	try(bch2_inum_to_path(trans, dir, &msg.m));
 	prt_printf(&msg.m, "\ndir subvol %llu inum subvol %llu snapshot %u\n",
 		   dir.subvol, inum.subvol, snapshot);
-	__bch2_inconsistent_error(c, &msg.m);
-	return 0;
+
+	/*
+	 * Not a reason to take the whole filesystem read only: log it,
+	 * schedule check_dirents, and the lookup returns ENOENT.
+	 *
+	 * Scheduling the pass takes sb_lock and may write the superblock;
+	 * we're on the error return path, nothing here needs btree locks:
+	 */
+	bch2_trans_unlock(trans);
+	return bch2_run_explicit_recovery_pass(c, &msg.m,
+					       BCH_RECOVERY_PASS_check_dirents, 0);
 }
 
 static struct bch_inode_info *bch2_lookup_trans(struct btree_trans *trans,
