@@ -41,6 +41,7 @@ typedef struct {
 
 struct alloc_request {
 	struct closure		*cl;
+	u32			wake_all_counter_snapshot;
 	u8			nr_replicas;
 	u8			ec_replicas;
 	u8			ec_max_data_blocks;	/* 0 = no cap */
@@ -171,16 +172,19 @@ struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *, struct alloc_r
 
 /*
  * freelist_wait wake helpers. Every wake_up site on
- * c->allocator.freelist_wait should go through these so the per-device
- * alloc_wake_counter is maintained in lockstep with waitlist wakeups —
- * it's the signal waiters use to filter spurious wakes from devices
- * they don't care about.
+ * c->allocator.freelist_wait should go through these so the wake counters
+ * are maintained in lockstep with waitlist wakeups — they're the signal
+ * waiters use to filter spurious wakes they don't care about.
  *
- * _dev: bump one device's counter and wake (use when the caller knows
- *       which device changed state in a way that might unblock allocs).
- * _all: bump every member device's counter and wake (use for events
- *       that might unblock allocs on any device — journal state
- *       changes, fsck progress, debug knobs).
+ * _dev: bump one device's alloc_wake_counter and wake (use when the caller
+ *       knows which device changed state in a way that might unblock
+ *       allocs). Waiters retry only if a device in their failed-alloc trace
+ *       advanced.
+ * _all: bump the fs-wide wake_all_counter and wake (use for events that
+ *       might unblock allocs on any device — capacity/device changes,
+ *       journal state changes, fsck progress, debug knobs). This forces a
+ *       full allocator retry, since eligibility may have changed for a
+ *       device outside any waiter's trace (e.g. a newly added device).
  * _waiters_unpark: wake without bumping any counter; used to drop our own
  *       closure off the waitlist when we can't continue waiting. Real
  *       waiters see no counter advance and re-park silently.
@@ -351,6 +355,7 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 
 	req->ca				= NULL;
 	req->cl				= cl;
+	req->wake_all_counter_snapshot	= atomic_read(&trans->c->allocator.wake_all_counter);
 	req->nr_replicas		= nr_replicas;
 	req->nr_effective		= 0;
 	req->ec_replicas		= ec_replicas;

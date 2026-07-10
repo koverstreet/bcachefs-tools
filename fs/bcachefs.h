@@ -559,11 +559,13 @@ struct bch_dev {
 	u64			alloc_cursor[3];
 
 	/*
-	 * Incremented by bch2_alloc_wake_dev() / _all() at every site that
-	 * wakes freelist_wait. Waiters on c->allocator.freelist_wait
-	 * snapshot the counters for the devices they need at park time and
-	 * compare on wake: if none have advanced, the wake didn't concern
-	 * this waiter and it re-parks without the full alloc retry.
+	 * Incremented by bch2_alloc_wake_dev() at every site that wakes
+	 * freelist_wait for a specific device. Waiters on
+	 * c->allocator.freelist_wait snapshot the counters for the devices
+	 * they need at park time and compare on wake: if none have advanced,
+	 * the wake didn't concern this waiter and it re-parks without the
+	 * full alloc retry. Fs-wide wakes bump allocator.wake_all_counter
+	 * instead (see bch2_alloc_wake_all()).
 	 */
 	atomic_t		alloc_wake_counter;
 
