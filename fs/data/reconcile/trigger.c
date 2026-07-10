@@ -934,8 +934,24 @@ int bch2_update_reconcile_opts(struct btree_trans *trans,
 	struct bch_extent_reconcile new;
 
 	int ret = bch2_bkey_needs_reconcile(trans, k, opts, &need_update_invalid_devs, &new);
-	if (ret <= 0)
+	if (ret < 0)
 		return ret;
+	if (!ret) {
+		/*
+		 * A scan may be replaying after the reconcile work indexes were
+		 * lost or never created. If the extent's reconcile opts already
+		 * match, the trigger path won't fire; make the work bit match the
+		 * extent metadata here.
+		 */
+		if (!level) {
+			enum reconcile_work_id w = bch2_bkey_reconcile_work_id(c, k);
+
+			if (w)
+				return bch2_btree_bit_mod_buffered(trans, reconcile_work_btree[w],
+					data_to_rb_work_pos(iter->btree_id, k.k->p), true);
+		}
+		return 0;
+	}
 
 	if (!level) {
 		unsigned buf_u64s = k.k->u64s + 1 + BCH_REPLICAS_MAX;
