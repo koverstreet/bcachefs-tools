@@ -1161,10 +1161,16 @@ static int stripe_reallocate_outliers(struct btree_trans *trans,
 
 	/*
 	 * All positions as device fractions (device sizes may differ, so raw
-	 * offsets aren't comparable):
+	 * offsets aren't comparable). Iteration bounds are BCH_BKEY_PTRS_MAX,
+	 * not v->nr_blocks: they're equivalent (nr_blocks is strictly
+	 * limited), but the compiler can't see that and warns about frac[]
+	 * indexing otherwise:
 	 */
+	BUILD_BUG_ON(sizeof(s->blocks_gotten) * 8 < BCH_BKEY_PTRS_MAX);
+	EBUG_ON(v->nr_blocks > BCH_BKEY_PTRS_MAX);
+
 	scoped_guard(rcu)
-		for_each_set_bit(i, s->blocks_gotten, v->nr_blocks) {
+		for_each_set_bit(i, s->blocks_gotten, BCH_BKEY_PTRS_MAX) {
 			if (v->ptrs[i].dev == BCH_SB_MEMBER_INVALID)
 				continue;
 
@@ -1183,7 +1189,7 @@ static int stripe_reallocate_outliers(struct btree_trans *trans,
 	enum bch_write_flags saved_flags = req->flags;
 	req->flags |= BCH_WRITE_alloc_nowait;
 
-	for_each_set_bit(i, frac_valid, v->nr_blocks) {
+	for_each_set_bit(i, frac_valid, BCH_BKEY_PTRS_MAX) {
 		if (test_bit(i, blocks_had) ||
 		    test_bit(i, s->blocks_allocated))
 			continue;
@@ -1195,7 +1201,7 @@ static int stripe_reallocate_outliers(struct btree_trans *trans,
 		 */
 		u64 centroid = div_u64(sum - frac[i], nr - 1);
 		u64 mad = 0;
-		for_each_set_bit(j, frac_valid, v->nr_blocks)
+		for_each_set_bit(j, frac_valid, BCH_BKEY_PTRS_MAX)
 			if (j != i)
 				mad += abs_diff(frac[j], centroid);
 		mad = div_u64(mad, nr - 1);
