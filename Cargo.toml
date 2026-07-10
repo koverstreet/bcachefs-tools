@@ -1,6 +1,6 @@
 [workspace]
 resolver = "2"
-members = [".", "fs", "bcachefs-shim", "bcachefs-shim-macros", "bch_bindgen", "doc/docgen"]
+members = [".", "fs", "fs/typeinfo-macros", "bcachefs-shim", "bcachefs-shim-macros", "bch_bindgen", "doc/docgen"]
 default-members = [".", "fs"]
 
 [package]

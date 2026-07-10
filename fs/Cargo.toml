@@ -20,6 +20,7 @@ std = ["dep:zeroize"]
 
 [dependencies]
 bcachefs-shim = { path = "../bcachefs-shim" }
+bcachefs-typeinfo-macros = { path = "typeinfo-macros" }
 bitfield = { path = "vendor/bitfield" }
 bitflags = { path = "vendor/bitflags" }
 paste    = { path = "vendor/paste" }

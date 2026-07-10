@@ -127,6 +127,17 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], 
     flag!("--no-copy", "bch_key");
     flag!("--no-copy", "bch_encrypted_key");
     flag!("--wrap-static-fns-path", format!("{out}/extern.c"));
+    // Runtime type information (fs/typeinfo.rs): inject #[derive(TypeInfo)] on
+    // the bch_* family so field names/offsets/endianness are available at
+    // runtime — the btree REPL's field-level get/set. Unions and enums degrade
+    // to size-only entries, but must still be derived: they appear as field
+    // types inside derived structs. The regex must stay in sync with
+    // derives_type_info() in typeinfo-macros/src/lib.rs.
+    for f in ["--with-derive-custom-struct",
+              "--with-derive-custom-union",
+              "--with-derive-custom-enum"] {
+        flag!(f, "(bch_.*|bpos|bkey|bversion)=TypeInfo");
+    }
 
     for x in BITFIELD_ENUM      { flag!("--bitfield-enum", *x); }
     for x in RUSTIFIED_ENUM     { flag!("--rustified-enum", *x); }
@@ -224,6 +235,8 @@ pub fn gen_xmacros(src: &str, out: &str) {
     assert!(!bkey_types.is_empty(), "failed to parse BCH_BKEY_TYPES()");
     std::fs::write(format!("{out}/bkey_types_gen.rs"), generate_bkey_types(&bkey_types))
         .expect("write bkey_types_gen.rs");
+    std::fs::write(format!("{out}/typeinfo_gen.rs"), generate_bkey_typeinfo(&bkey_types))
+        .expect("write typeinfo_gen.rs");
 
     let sb_fields = parse_xmacro(&format_h, "BCH_SB_FIELDS");
     assert!(!sb_fields.is_empty(), "failed to parse BCH_SB_FIELDS()");
@@ -561,6 +574,41 @@ fn generate_newtype_enum_aliases(
         "    #[allow(non_upper_case_globals)]\n    pub const {nr_alias}: Self = Self::{nr_const};\n"
     ));
     out.push_str("}\n");
+
+    out
+}
+
+fn generate_bkey_typeinfo(entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+
+    out.push_str("// Auto-generated from BCH_BKEY_TYPES() — do not edit\n\n");
+    out.push_str(
+        "/// A bkey type together with its val struct's type info.\n\
+         pub struct BkeyTypeInfo {\n\
+         \x20   pub name: &'static str,\n\
+         \x20   pub type_: u32,\n\
+         \x20   pub info: &'static StructInfo,\n\
+         }\n\n",
+    );
+
+    out.push_str("pub static BKEY_TYPE_INFO: &[BkeyTypeInfo] = &[\n");
+    for e in entries {
+        out.push_str(&format!(
+            "    BkeyTypeInfo {{ name: \"{0}\", type_: {1}, \
+                 info: <crate::c::bch_{0} as TypeInfo>::INFO }},\n",
+            e[0], e[1]
+        ));
+    }
+    out.push_str("];\n\n");
+
+    out.push_str(
+        "pub fn bkey_val_info(type_: u32) -> Option<&'static StructInfo> {\n\
+         \x20   BKEY_TYPE_INFO.iter().find(|t| t.type_ == type_).map(|t| t.info)\n\
+         }\n\n\
+         pub fn bkey_type_info_by_name(name: &str) -> Option<&'static BkeyTypeInfo> {\n\
+         \x20   BKEY_TYPE_INFO.iter().find(|t| t.name == name)\n\
+         }\n",
+    );
 
     out
 }

@@ -40,6 +40,7 @@ pub mod debug {
 #[path = "fs/namei.rs"]        pub mod namei;
 pub mod sb;
 #[path = "fs/str_hash.rs"]     pub mod str_hash;
+pub mod typeinfo;
 pub mod util;
 #[path = "fs/xattr.rs"]        pub mod xattr;
 pub mod data {
@@ -77,6 +78,10 @@ pub mod c {
     // real return type (timespec64) uniformly across both builds.
     #[cfg(not(kernel))]
     pub type timespec64 = timespec;
+
+    // The generated bindings carry #[derive(TypeInfo)] on the bch_* family
+    // (injected by codegen.rs); bring the derive macro into scope for them.
+    use typeinfo_macros::TypeInfo;
 
     include!(concat!(env!("OUT_DIR"), "/bcachefs.rs"));
 

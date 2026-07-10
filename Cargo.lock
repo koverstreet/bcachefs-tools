@@ -101,6 +101,7 @@ name = "bcachefs-kernel"
 version = "0.1.0"
 dependencies = [
  "bcachefs-shim",
+ "bcachefs-typeinfo-macros",
  "bitfield 0.14.0",
  "bitflags 2.11.1",
  "cc",
@@ -157,6 +158,10 @@ dependencies = [
  "uuid",
  "zeroize",
 ]
+
+[[package]]
+name = "bcachefs-typeinfo-macros"
+version = "0.1.0"
 
 [[package]]
 name = "bch-docgen"

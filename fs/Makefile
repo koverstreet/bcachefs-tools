@@ -437,21 +437,27 @@ KBUILD_RUSTFLAGS := $(patsubst -Zno-jump-tables,-Cjump-tables=n,$(KBUILD_RUSTFLA
 # own, so do it here for every Rust object in this dir.
 rustflags-y += --cfg kernel
 
-# Vendored Rust crates the kernel doesn't provide: paste (a proc-macro) and
-# bitfield (a plain rlib), both dependency-free, under fs/vendor/. We build them
-# here, replicating the kernel's own rustc_procmacro / rustc_library commands
-# (those live in rust/Makefile and aren't callable out-of-tree), then feed them
-# to mod.o via --extern. The flag vars they use ($(rust_common_flags),
-# $(rust_flags), $(KBUILD_PROCMACROLDFLAGS)) are all global, so reachable here.
+# Rust crates the kernel doesn't provide: the vendored paste (a proc-macro),
+# bitfield/bitflags/uuid (plain rlibs) under fs/vendor/, and our own
+# typeinfo-macros (a proc-macro, deliberately dependency-free so this recipe
+# can build it). We build them here, replicating the kernel's own
+# rustc_procmacro / rustc_library commands (those live in rust/Makefile and
+# aren't callable out-of-tree), then feed them to mod.o via --extern. The flag
+# vars they use ($(rust_common_flags), $(rust_flags),
+# $(KBUILD_PROCMACROLDFLAGS)) are all global, so reachable here.
+# Proc-macro crate name is derived from the target: lib<name>.so.
 quiet_cmd_bch_procmacro = RUSTC P  $@
       cmd_bch_procmacro = $(RUSTC) $(rust_common_flags) \
 	-Clinker-flavor=gcc -Clinker=$(HOSTCC) \
 	-Clink-args='$(call escsq,$(KBUILD_PROCMACROLDFLAGS))' \
 	--emit=dep-info=$(depfile) --emit=link=$@ --extern proc_macro \
-	--crate-type proc-macro --crate-name paste \
+	--crate-type proc-macro --crate-name $(patsubst lib%.so,%,$(notdir $@)) \
 	@$(objtree)/include/generated/rustc_cfg $<
 
 $(obj)/libpaste.so: $(src)/vendor/paste/src/lib.rs FORCE
+	$(call if_changed_dep,bch_procmacro)
+
+$(obj)/libtypeinfo_macros.so: $(src)/typeinfo-macros/src/lib.rs FORCE
 	$(call if_changed_dep,bch_procmacro)
 
 # Generic leaf-rlib build (crate name derived from the object stem), shared by
@@ -473,15 +479,15 @@ $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 	$(call if_changed_dep,bch_library)
 
 # mod.o (only — not the crates' own builds) gets them as externs.
-RUSTFLAGS_mod.o += --extern paste=$(obj)/libpaste.so --extern bitfield=$(obj)/libbitfield.rmeta --extern bitflags=$(obj)/libbitflags.rmeta --extern uuid=$(obj)/libuuid.rmeta
-$(obj)/mod.o: $(obj)/libpaste.so $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o
+RUSTFLAGS_mod.o += --extern paste=$(obj)/libpaste.so --extern typeinfo_macros=$(obj)/libtypeinfo_macros.so --extern bitfield=$(obj)/libbitfield.rmeta --extern bitflags=$(obj)/libbitflags.rmeta --extern uuid=$(obj)/libuuid.rmeta
+$(obj)/mod.o: $(obj)/libpaste.so $(obj)/libtypeinfo_macros.so $(obj)/bitfield.o $(obj)/bitflags.o $(obj)/uuid.o
 
 # mod.rs finds the generated files via env!("OUT_DIR"); point it at the gen dir
 # (absolute, since include! concatenates it) and make mod.o wait for them.
 $(obj)/mod.o: export OUT_DIR := $(abspath $(obj)/rust)
 $(obj)/mod.o: $(obj)/rust/bcachefs.rs
 
-targets += codegen rust/bcachefs.rs libpaste.so bitfield.o bitflags.o uuid.o
+targets += codegen rust/bcachefs.rs libpaste.so libtypeinfo_macros.so bitfield.o bitflags.o uuid.o
 
 # mod.o: Rust glue. rust/extern.o: the static-inline wrappers, a normal kernel C
 # object. bitfield.o/bitflags.o/uuid.o: the vendored rlibs' objects, linked in.

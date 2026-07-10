@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: GPL-2.0
+[package]
+name = "bcachefs-typeinfo-macros"
+version = "0.1.0"
+authors = [ "Kent Overstreet <kent.overstreet@linux.dev>" ]
+edition = "2021"
+rust-version = "1.85.0"
+
+[lib]
+name = "typeinfo_macros"
+proc-macro = true
+
+# Deliberately zero dependencies (no syn/quote): the kernel/DKMS build compiles
+# this with a plain `rustc --crate-type proc-macro src/lib.rs` (same recipe as
+# the vendored `paste`), so it must be a single self-contained file.
+[dependencies]
