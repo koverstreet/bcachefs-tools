@@ -4,9 +4,38 @@
 
 use crate::cstructs::c;
 use crate::types::c_default;
-use core::ffi::{c_int, c_void};
-use cstruct_macros::{c_typedef, CStruct};
+use core::ffi::{c_int, c_uint, c_void};
+use cstruct_macros::{c_typedef, CStruct, c_enum, c_xmacro};
 
+c_xmacro! {
+    MOVE_LIMIT_SOURCES(x) {
+        (default),
+        (copygc_bucket),
+        (reconcile_target),
+        (phys_dev),
+    }
+}
+
+c_enum! {
+    #[closed]
+    pub enum move_limit_source: u32 {
+        MOVE_LIMIT_SOURCES(n) => MOVE_LIMITS_ ## n,
+    }
+}
+
+c_xmacro! {
+    MOVE_ROTATIONAL_LIMITS(x) {
+        (background),
+        (hipri),
+    }
+}
+
+c_enum! {
+    #[closed]
+    pub enum move_rotational_limit: u32 {
+        MOVE_ROTATIONAL_LIMITS(n) => MOVE_ROTATIONAL_LIMIT_ ## n,
+    }
+}
 /*
  * Tracks in-flight data movement IO for ratelimiting.
  *
@@ -35,6 +64,10 @@ pub struct moving_context {
     pub stats: *mut c::bch_move_stats,
     pub wp: c::write_point_specifier,
     pub wait_on_copygc: bool,
+    pub max_sectors_in_flight: c_uint,
+    pub max_ios_in_flight: c_uint,
+    pub limit_source: c::move_limit_source,
+    pub limit_source_id: c_uint,
 
     /* For waiting on outstanding reads and writes: */
     pub cl: c::closure,

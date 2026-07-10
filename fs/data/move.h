@@ -35,7 +35,7 @@
 		bch2_trans_unlock_long((_ctxt)->trans);				\
 		_ret = ___wait_event((_ctxt)->wait,				\
 			     ___wait_cond_timeout(				\
-				bch2_moving_ctxt_next_pending_write(_ctxt) ||	\
+				bch2_moving_ctxt_pending_write_ready(_ctxt) ||	\
 				(cond_finished = (_cond))),			\
 			     MOVE_CTXT_WAIT_STATE, 0, _timeout,			\
 			     __ret = schedule_timeout(__ret));			\
@@ -54,7 +54,7 @@ do {									\
 		break;							\
 	bch2_trans_unlock_long((_ctxt)->trans);				\
 	(void) ___wait_event((_ctxt)->wait,				\
-		     bch2_moving_ctxt_next_pending_write(_ctxt) ||	\
+		     bch2_moving_ctxt_pending_write_ready(_ctxt) ||	\
 		     (cond_finished = (_cond)),				\
 		     MOVE_CTXT_WAIT_STATE, 0, 0, schedule());		\
 	if (cond_finished)						\
@@ -63,7 +63,12 @@ do {									\
 
 extern const char * const bch2_data_ops_strs[];
 
+void bch2_moving_ctxt_reset_limits(struct moving_context *);
+void bch2_moving_ctxt_set_rotational_limits(struct moving_context *,
+					    enum move_rotational_limit,
+					    enum move_limit_source, unsigned);
 struct data_update *bch2_moving_ctxt_next_pending_write(struct moving_context *);
+bool bch2_moving_ctxt_pending_write_ready(struct moving_context *);
 void bch2_moving_ctxt_do_pending_writes(struct moving_context *);
 void bch2_moving_ctxt_flush_all(struct moving_context *);
 void bch2_move_ctxt_wait_for_io(struct moving_context *);
