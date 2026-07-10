@@ -448,36 +448,42 @@ void bch2_prt_human_readable_u64(struct printbuf *out, u64 v)
 	bch2_printbuf_make_room(out, 10);
 
 	static const char units[] = { 0, 'k', 'M', 'G', 'T', 'P', 'E', 'Z', 'Y' };
-	unsigned u = 0, r, base = out->si_units ? 1000 : 1024;
+	unsigned u = 0, r = 0, base = out->si_units ? 1000 : 1024;
 
 	while (u + 1 < ARRAY_SIZE(units) && v >= base) {
 		r = do_div(v, base);
 		u++;
 	}
 
-	unsigned prev_pos = out->pos;
-	bch2_prt_printf(out, "%llu", v);
-
-	if (u) {
-		int prec = 3 - (out->pos - prev_pos);
-		if (prec > 0) {
-			if (!out->si_units) {
-				/* express the remainder as a decimal.  It's currently the
-				 * numerator of a fraction whose denominator is
-				 * divisor[units_base], which is 1 << 10 for STRING_UNITS_2 */
-				r *= 1000;
-				r >>= 10;
-			}
-
-			prt_char(out, '.');
-			prev_pos = out->pos;
-			bch2_prt_printf(out, "%03u", r);
-			out->pos = min(out->pos, prev_pos + prec);
-			out->buf[out->pos] = '\0';
-		}
-
-		prt_char(out, units[u]);
+	if (!u) {
+		bch2_prt_printf(out, "%llu", v);
+		return;
 	}
+
+	/*
+	 * Up to three significant digits, decimals rounded to nearest -
+	 * not truncated, and not rounded up like df -h. Remainders from
+	 * earlier divisions (under a thousandth of the last digit shown)
+	 * are ignored:
+	 */
+	unsigned prec	= v < 10 ? 2 : v < 100 ? 1 : 0;
+	unsigned scale	= prec == 2 ? 100 : prec == 1 ? 10 : 1;
+	unsigned frac	= (r * scale + base / 2) / base;
+
+	if (frac >= scale) {	/* rounded all the way up: carry */
+		frac = 0;
+		v++;
+		if (v >= base && u + 1 < ARRAY_SIZE(units)) {
+			v = 1;
+			u++;
+		}
+		prec = v < 10 ? 2 : v < 100 ? 1 : 0;
+	}
+
+	if (prec)
+		bch2_prt_printf(out, "%llu.%0*u%c", v, prec, frac, units[u]);
+	else
+		bch2_prt_printf(out, "%llu%c", v, units[u]);
 }
 
 /**
