@@ -63,13 +63,13 @@ impl BchError {
 }
 
 impl fmt::Display for BchError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.msg())
     }
 }
 
 impl fmt::Debug for BchError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "BchError({}, {})", self.0, self)
     }
 }

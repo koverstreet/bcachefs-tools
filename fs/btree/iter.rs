@@ -82,7 +82,7 @@ impl<'f> BtreeTrans<'f> {
     /// disk_res/journal_seq then calls __bch2_trans_commit().
     pub fn commit(
         &self,
-        disk_res: Option<&DiskReservation>,
+        disk_res: Option<&DiskReservation<'_>>,
         flags: CommitOpts,
     ) -> Result<(), BchError> {
         unsafe {
@@ -186,7 +186,7 @@ impl<'a, 't> TransAttempt<'a, 't> {
 
     pub fn commit(
         self,
-        disk_res: Option<&DiskReservation>,
+        disk_res: Option<&DiskReservation<'_>>,
         flags:    CommitOpts,
     ) -> Result<Self, TransError> {
         unsafe {
@@ -619,7 +619,7 @@ where
 /// succeeds, commits the transaction. Retries on transaction restart.
 pub fn commit_do<'t, F>(
     trans: &BtreeTrans<'t>,
-    disk_res: Option<&DiskReservation>,
+    disk_res: Option<&DiskReservation<'_>>,
     flags: CommitOpts,
     mut f: F,
 ) -> Result<(), BchError>
@@ -638,7 +638,7 @@ where
 /// Equivalent to the C `bch2_trans_commit_do` macro.
 pub fn trans_commit_do<'t, F>(
     fs: &'t Fs,
-    disk_res: Option<&DiskReservation>,
+    disk_res: Option<&DiskReservation<'_>>,
     flags: CommitOpts,
     f: F,
 ) -> Result<(), BchError>
@@ -833,7 +833,7 @@ impl<'t> BtreeIter<'t> {
         t.result(ret)
     }
 
-    pub fn for_each_max<F>(&mut self, trans: &BtreeTrans, end: bpos, mut f: F)
+    pub fn for_each_max<F>(&mut self, trans: &BtreeTrans<'_>, end: bpos, mut f: F)
         -> Result<(), BchError>
     where
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
@@ -878,7 +878,7 @@ impl<'t> BtreeIter<'t> {
         }
     }
 
-    pub fn for_each<F>(&mut self, trans: &BtreeTrans, f: F) -> Result<(), BchError>
+    pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, f: F) -> Result<(), BchError>
     where
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
     {
@@ -888,7 +888,7 @@ impl<'t> BtreeIter<'t> {
     pub fn for_each_commit<F>(
         &mut self,
         trans:       &BtreeTrans<'t>,
-        disk_res:    Option<&DiskReservation>,
+        disk_res:    Option<&DiskReservation<'_>>,
         flags:       CommitOpts,
         mut f:       F,
     ) -> Result<(), BchError>
@@ -933,7 +933,7 @@ impl<'t> BtreeIter<'t> {
         trans:       &BtreeTrans<'t>,
         end:         bpos,
         iter_flags:  BtreeIterFlags,
-        disk_res:    Option<&DiskReservation>,
+        disk_res:    Option<&DiskReservation<'_>>,
         flags:       CommitOpts,
         mut f:       F,
     ) -> Result<(), BchError>
@@ -979,7 +979,7 @@ impl<'t> BtreeIter<'t> {
         }
     }
 
-    pub fn for_each_reverse<F>(&mut self, trans: &BtreeTrans, min: bpos, mut f: F)
+    pub fn for_each_reverse<F>(&mut self, trans: &BtreeTrans<'_>, min: bpos, mut f: F)
         -> Result<(), BchError>
     where
         F: for<'a> FnMut(BkeySC<'a>) -> ControlFlow<()>,
@@ -1008,7 +1008,7 @@ impl<'t> BtreeIter<'t> {
 
     pub fn for_each_reverse_flags<F>(
         &mut self,
-        trans: &BtreeTrans,
+        trans: &BtreeTrans<'_>,
         flags: BtreeIterFlags,
         mut f: F,
     ) -> Result<(), BchError>
@@ -1109,7 +1109,7 @@ impl<'t> BtreeNodeIter<'t> {
         }
     }
 
-    pub fn for_each<F>(&mut self, trans: &BtreeTrans, mut f: F) -> Result<(), BchError>
+    pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, mut f: F) -> Result<(), BchError>
     where
         F: for<'a> FnMut(&'a c::btree) -> ControlFlow<()>,
     {

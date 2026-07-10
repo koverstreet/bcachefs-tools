@@ -34,7 +34,7 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
 }
 
 pub fn fsck_write_inode(
-    trans: &btree::iter::BtreeTrans,
+    trans: &btree::iter::BtreeTrans<'_>,
     inode: &mut c::bch_inode_unpacked,
 ) -> Result<(), BchError> {
     ret_to_result(unsafe {

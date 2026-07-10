@@ -65,7 +65,7 @@ pub fn dev_display_name_from_sysfs(dev_sysfs_path: &Path, mode: DeviceNameMode) 
     }
 }
 
-pub fn sysfs_path_from_fd(fd: BorrowedFd) -> Result<PathBuf> {
+pub fn sysfs_path_from_fd(fd: BorrowedFd<'_>) -> Result<PathBuf> {
     use std::os::fd::AsRawFd;
     let raw = fd.as_raw_fd();
     let link = format!("/proc/self/fd/{}", raw);
@@ -81,7 +81,7 @@ pub fn read_sysfs_u64(path: &Path) -> io::Result<u64> {
 }
 
 /// Read a sysfs attribute as a string, relative to a directory fd.
-pub fn read_sysfs_fd_str(dirfd: BorrowedFd, path: &str) -> io::Result<String> {
+pub fn read_sysfs_fd_str(dirfd: BorrowedFd<'_>, path: &str) -> io::Result<String> {
     let flags = rustix::fs::OFlags::RDONLY;
     let fd = rustix::fs::openat(dirfd, path, flags, rustix::fs::Mode::empty())?;
     let mut buf = [0u8; 256];
@@ -135,7 +135,7 @@ pub fn dev_mounted(path: &str) -> bool {
 }
 
 /// Write a string value to a sysfs attribute file relative to a directory fd.
-pub fn sysfs_write_str(sysfs_fd: BorrowedFd, path: &str, value: &str) {
+pub fn sysfs_write_str(sysfs_fd: BorrowedFd<'_>, path: &str, value: &str) {
     let flags = rustix::fs::OFlags::WRONLY;
     if let Ok(fd) = rustix::fs::openat(sysfs_fd, path, flags, rustix::fs::Mode::empty()) {
         let _ = rustix::io::write(&fd, value.as_bytes());

@@ -186,7 +186,7 @@ impl Default for Printbuf {
 }
 
 impl fmt::Display for Printbuf {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(self.as_str())
     }
 }
@@ -208,7 +208,7 @@ impl Drop for c::printbuf {
 
 #[cfg(feature = "std")]
 impl fmt::Display for Bpos {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe { c::bch2_bpos_to_text(buf, *self) })
     }
 }

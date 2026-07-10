@@ -33,7 +33,7 @@ pub fn btree_id_str(id: u32) -> String {
 
 #[cfg(feature = "std")]
 impl fmt::Display for c::btree_id {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self)) };
         f.write_str(&s.to_string_lossy())
     }

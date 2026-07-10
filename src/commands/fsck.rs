@@ -70,14 +70,14 @@ pub struct FsckCli {
     devices: Vec<String>,
 }
 
-fn setnonblocking(fd: BorrowedFd) {
+fn setnonblocking(fd: BorrowedFd<'_>) {
     let flags = rustix::fs::fcntl_getfl(fd).unwrap();
     rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK).unwrap();
 }
 
 /// Transfer data from rfd to wfd.  Returns Ok(true) on EOF, Ok(false)
 /// when data was transferred (or EAGAIN), Err on real errors.
-fn do_splice(rfd: BorrowedFd, wfd: BorrowedFd) -> io::Result<bool> {
+fn do_splice(rfd: BorrowedFd<'_>, wfd: BorrowedFd<'_>) -> io::Result<bool> {
     let mut buf = [0u8; 4096];
     let n = match rustix::io::read(rfd, &mut buf) {
         Ok(0) => return Ok(true),
@@ -99,7 +99,7 @@ fn do_splice(rfd: BorrowedFd, wfd: BorrowedFd) -> io::Result<bool> {
     Ok(false)
 }
 
-fn splice_fd_to_stdinout(fd: BorrowedFd) -> i32 {
+fn splice_fd_to_stdinout(fd: BorrowedFd<'_>) -> i32 {
     let stdin = io::stdin();
     let stdout = io::stdout();
 

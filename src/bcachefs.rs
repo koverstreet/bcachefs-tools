@@ -16,7 +16,7 @@ use bch_bindgen::c;
 #[derive(Debug)]
 pub struct ErrnoError(pub errno::Errno);
 impl std::fmt::Display for ErrnoError {
-    fn fmt(&self, f: &mut std::fmt::Formatter) -> Result<(), std::fmt::Error> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
         self.0.fmt(f)
     }
 }

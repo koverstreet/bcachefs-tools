@@ -381,7 +381,7 @@ fn write_data(
 fn copy_data(
     fs: &Fs,
     dst_inode: &mut c::bch_inode_unpacked,
-    src_fd: BorrowedFd,
+    src_fd: BorrowedFd<'_>,
     start: u64,
     end: u64,
 ) -> Result<(), BchError> {
@@ -446,7 +446,7 @@ fn link_file_data(
     fs: &Fs,
     s: &mut CopyFsState,
     dst: &mut c::bch_inode_unpacked,
-    src_fd: BorrowedFd,
+    src_fd: BorrowedFd<'_>,
     src_path: &CStr,
     src_size: u64,
 ) -> Result<(), BchError> {
@@ -565,7 +565,7 @@ fn align_range(r: Range, bs: u64) -> Range {
     }
 }
 
-fn seek_data(fd: BorrowedFd, i_size: u64, offset: u64) -> Range {
+fn seek_data(fd: BorrowedFd<'_>, i_size: u64, offset: u64) -> Range {
     use rustix::fs::{seek, SeekFrom};
     let s = match seek(fd, SeekFrom::Data(offset)) {
         Ok(s) => s,
@@ -575,7 +575,7 @@ fn seek_data(fd: BorrowedFd, i_size: u64, offset: u64) -> Range {
     Range { start: s, end: e }
 }
 
-fn seek_data_aligned(fd: BorrowedFd, i_size: u64, offset: u64, bs: u64) -> Range {
+fn seek_data_aligned(fd: BorrowedFd<'_>, i_size: u64, offset: u64, bs: u64) -> Range {
     let mut r = align_range(seek_data(fd, i_size, offset), bs);
     if r.end == 0 {
         return r;
@@ -623,7 +623,7 @@ fn copy_sync_file_range(
     s: &mut CopyFsState,
     dst_inum: c::subvol_inum,
     dst: &mut c::bch_inode_unpacked,
-    src_fd: BorrowedFd,
+    src_fd: BorrowedFd<'_>,
     src_size: u64,
     range: &Range,
 ) -> Result<(), BchError> {
@@ -662,7 +662,7 @@ fn copy_sync_file_data(
     s: &mut CopyFsState,
     dst_inum: c::subvol_inum,
     dst: &mut c::bch_inode_unpacked,
-    src_fd: BorrowedFd,
+    src_fd: BorrowedFd<'_>,
     src_size: u64,
 ) -> Result<(), BchError> {
     let block_size = fs.block_bytes();
@@ -1000,7 +1000,7 @@ fn reserve_old_fs_space(
 pub fn copy_fs(
     fs: &Fs,
     s: &mut CopyFsState,
-    src_fd: BorrowedFd,
+    src_fd: BorrowedFd<'_>,
     src_path: &CStr,
 ) -> Result<(), BchError> {
     let stat = rustix::fs::fstat(src_fd).map_err(rustix_err)?;

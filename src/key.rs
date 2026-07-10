@@ -353,7 +353,7 @@ pub struct PassphraseCorrect {
     pub cleartext_sb_key: bch_encrypted_key,
 }
 
-fn is_dev_null(fd: BorrowedFd) -> io::Result<bool> {
+fn is_dev_null(fd: BorrowedFd<'_>) -> io::Result<bool> {
     let stat = rustix::fs::fstat(fd)?;
     let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
     if file_type != rustix::fs::FileType::CharacterDevice {

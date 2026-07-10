@@ -471,7 +471,7 @@ fn get_sb_journal(fs: &Fs, ca: &c::bch_dev, entire_journal: bool, d: &mut DumpDe
 }
 
 fn write_sanitized_ranges(
-    img: &mut Qcow2Image,
+    img: &mut Qcow2Image<'_>,
     fs_raw: *mut c::bch_fs,
     ranges: &mut Ranges,
     bucket_bytes: u64,
