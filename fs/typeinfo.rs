@@ -27,8 +27,13 @@
 //!   are only described up to their fixed header; the variable part shows up
 //!   as a `VarTail`. Editing those needs the real pack/unpack helpers, not
 //!   reflection.
-//! - `LE*_BITMASK` sub-fields (flags bits) are not yet described — that needs
-//!   parsing the bitmask macro invocations; deliberately deferred.
+//!
+//! `BITMASK`/`LE*_BITMASK` bit ranges are described too, but through a
+//! separate table (`BITMASK_FIELDS`): the macro invocations are freestanding,
+//! not part of the struct definition, so codegen.rs scans the headers for
+//! them rather than the derive. Bits resolve by bare name when it doesn't
+//! collide with a field (`no_keys`) or qualified as `<field>.<bit>`
+//! (`flags.subvol` — the `subvol` *field* wins the bare name).
 
 /// Byte order of an integer field. `Native` is for in-memory types bound as
 /// plain `u32`/`u64`; on-disk formats always use explicit `Little`/`Big`.
@@ -83,6 +88,46 @@ pub enum FieldKind {
 
 pub trait TypeInfo {
     const INFO: &'static StructInfo;
+}
+
+/// A named bit range within an integer field, from a `BITMASK`/`LE*_BITMASK`
+/// declaration. The instances live in the generated `BITMASK_FIELDS` table.
+pub struct BitmaskField {
+    pub struct_name: &'static str,
+    /// Field path within the struct, as written in the declaration —
+    /// resolvable, including an index (`"flags"`, `"flags[0]"`).
+    pub field: &'static str,
+    pub name: &'static str,
+    pub lo: u8,
+    pub hi: u8,
+}
+
+impl BitmaskField {
+    pub fn mask(&self) -> u64 {
+        let width = self.hi - self.lo;
+        if width >= 64 { !0 } else { (1u64 << width) - 1 }
+    }
+
+    /// Does this bit range live in `field` (`idx`: array element)?
+    fn matches_field(&self, name: &str, idx: Option<usize>) -> bool {
+        match idx {
+            None => self.field == name,
+            Some(i) => self
+                .field
+                .strip_prefix(name)
+                .and_then(|r| r.strip_prefix('['))
+                .and_then(|r| r.strip_suffix(']'))
+                .and_then(|n| n.parse::<usize>().ok())
+                == Some(i),
+        }
+    }
+}
+
+/// All bit ranges declared on a struct.
+pub fn bitmask_fields(
+    struct_name: &str,
+) -> impl Iterator<Item = &'static BitmaskField> + '_ {
+    BITMASK_FIELDS.iter().filter(move |b| b.struct_name == struct_name)
 }
 
 // ---------------------------------------------------------------------------
@@ -228,6 +273,39 @@ pub fn resolve<'p>(
     }
 }
 
+/// Resolve a path that may name either a field (`parent`, `btime.hi`) or a
+/// declared bit range (`no_keys`, `flags.subvol`). Fields always win the
+/// bare name; a bit whose name collides with a field stays reachable in the
+/// qualified `<field>.<bit>` form.
+pub fn resolve_with_bits<'p>(
+    info: &'static StructInfo,
+    path: &'p str,
+) -> Result<(FieldRef, Option<&'static BitmaskField>), ResolveError<'p>> {
+    let err = match resolve(info, path) {
+        Ok(r) => return Ok((r, None)),
+        Err(e) => e,
+    };
+
+    // bare bit name: "no_keys"
+    if !path.contains('.') {
+        if let Some(bm) = bitmask_fields(info.name).find(|b| b.name == path) {
+            return Ok((resolve(info, bm.field)?, Some(bm)));
+        }
+    }
+
+    // qualified: "<field>.<bit>", field as written in the declaration
+    // (so "flags[0].clean" for a bit of an array element)
+    if let Some((field, bit)) = path.rsplit_once('.') {
+        if let Some(bm) = bitmask_fields(info.name)
+            .find(|b| b.field == field && b.name == bit)
+        {
+            return Ok((resolve(info, bm.field)?, Some(bm)));
+        }
+    }
+
+    Err(err)
+}
+
 // ---------------------------------------------------------------------------
 // Scalar access on raw value bytes
 
@@ -239,6 +317,7 @@ pub enum AccessError {
     OutOfBounds { need: usize, have: usize },
     NotScalar,
     Overflow { bytes: u8, val: u64 },
+    BitsOverflow { bits: u8, val: u64 },
 }
 
 impl core::fmt::Display for AccessError {
@@ -250,6 +329,9 @@ impl core::fmt::Display for AccessError {
             AccessError::NotScalar => write!(f, "not a scalar field"),
             AccessError::Overflow { bytes, val } => {
                 write!(f, "value {val} doesn't fit in {bytes} bytes")
+            }
+            AccessError::BitsOverflow { bits, val } => {
+                write!(f, "value {val} doesn't fit in {bits} bits")
             }
         }
     }
@@ -318,6 +400,27 @@ pub fn write_scalar(buf: &mut [u8], r: &FieldRef, v: u64) -> Result<(), AccessEr
     Ok(())
 }
 
+/// Read a declared bit range of a scalar field.
+pub fn read_bits(buf: &[u8], r: &FieldRef, bm: &BitmaskField) -> Result<u64, AccessError> {
+    Ok((read_scalar(buf, r)? >> bm.lo) & bm.mask())
+}
+
+/// Write a declared bit range, read-modify-write on the containing field.
+/// Unlike the C `SET_*` macros (which silently mask), an oversized value is
+/// an error — an injection tool must not corrupt differently than asked.
+pub fn write_bits(
+    buf: &mut [u8],
+    r: &FieldRef,
+    bm: &BitmaskField,
+    v: u64,
+) -> Result<(), AccessError> {
+    if v & !bm.mask() != 0 {
+        return Err(AccessError::BitsOverflow { bits: bm.hi - bm.lo, val: v });
+    }
+    let old = read_scalar(buf, r)?;
+    write_scalar(buf, r, old & !(bm.mask() << bm.lo) | (v << bm.lo))
+}
+
 // ---------------------------------------------------------------------------
 // Text output: dump every field of a value
 
@@ -341,6 +444,43 @@ fn int_to_text(
     }
 }
 
+/// Append a field's declared bits, decoded: ` (subvol|no_keys)`,
+/// ` (state=1|durability=2)`. Prints nothing when no declared bit is set.
+fn bits_to_text(
+    out: &mut dyn core::fmt::Write,
+    info: &'static StructInfo,
+    name: &str,
+    idx: Option<usize>,
+    buf: &[u8],
+    offset: usize,
+    kind: &'static FieldKind,
+) -> core::fmt::Result {
+    let r = FieldRef { offset, kind, len: 0 };
+    let Ok(v) = read_scalar(buf, &r) else { return Ok(()) };
+
+    let mut first = true;
+    for bm in bitmask_fields(info.name) {
+        if !bm.matches_field(name, idx) {
+            continue;
+        }
+        let bits = (v >> bm.lo) & bm.mask();
+        if bits == 0 {
+            continue;
+        }
+        write!(out, "{}", if first { " (" } else { "|" })?;
+        first = false;
+        if bm.hi - bm.lo == 1 {
+            write!(out, "{}", bm.name)?;
+        } else {
+            write!(out, "{}={bits}", bm.name)?;
+        }
+    }
+    if !first {
+        write!(out, ")")?;
+    }
+    Ok(())
+}
+
 fn fields_to_text(
     out: &mut dyn core::fmt::Write,
     info: &'static StructInfo,
@@ -359,6 +499,7 @@ fn fields_to_text(
         match &f.kind {
             FieldKind::Int { .. } => {
                 int_to_text(out, buf, offset, &f.kind)?;
+                bits_to_text(out, info, f.name, None, buf, offset, &f.kind)?;
                 writeln!(out)?;
             }
             FieldKind::Struct(inner) => {
@@ -373,6 +514,8 @@ fn fields_to_text(
                             write!(out, ", ")?;
                         }
                         int_to_text(out, buf, offset + i * stride, elem)?;
+                        bits_to_text(out, info, f.name, Some(i), buf,
+                                     offset + i * stride, elem)?;
                     }
                     writeln!(out, "]")?;
                 }
@@ -510,6 +653,69 @@ mod tests {
         struct_to_text(&mut s, info, &buf).unwrap();
         assert!(s.contains("parent: 249"), "{s}");
         assert!(s.contains("children: [0, 0]"), "{s}");
+    }
+
+    #[test]
+    fn bitmask_resolution() {
+        let info = snapshot_info();
+
+        // bare bit name resolves to the containing field + bit range
+        let (r, bm) = resolve_with_bits(info, "no_keys").unwrap();
+        let bm = bm.expect("no_keys is a declared bit");
+        assert_eq!((bm.lo, bm.hi), (3, 4));
+        assert_eq!(r.offset, 0); // bch_snapshot.flags
+
+        // a field wins the bare name...
+        let (_, bm) = resolve_with_bits(info, "subvol").unwrap();
+        assert!(bm.is_none());
+        // ...the like-named bit stays reachable qualified
+        let (_, bm) = resolve_with_bits(info, "flags.subvol").unwrap();
+        assert_eq!(bm.expect("flags.subvol is a bit").lo, 1);
+
+        assert!(resolve_with_bits(info, "flags.nonexistent").is_err());
+    }
+
+    #[test]
+    fn bits_roundtrip() {
+        let info = snapshot_info();
+        let mut buf = [0u8; core::mem::size_of::<c::bch_snapshot>()];
+
+        let (r, bm) = resolve_with_bits(info, "no_keys").unwrap();
+        let bm = bm.unwrap();
+        write_bits(&mut buf, &r, bm, 1).unwrap();
+        assert_eq!(read_bits(&buf, &r, bm).unwrap(), 1);
+        assert_eq!(buf[0], 8); // NO_KEYS is bit 3
+
+        // read-modify-write leaves neighbouring bits alone
+        let (r2, bm2) = resolve_with_bits(info, "flags.subvol").unwrap();
+        assert_eq!(read_bits(&buf, &r2, bm2.unwrap()).unwrap(), 0);
+
+        assert!(matches!(
+            write_bits(&mut buf, &r, bm, 2),
+            Err(AccessError::BitsOverflow { bits: 1, val: 2 })
+        ));
+    }
+
+    #[test]
+    fn bits_decode_display() {
+        let info = snapshot_info();
+        let mut buf = [0u8; core::mem::size_of::<c::bch_snapshot>()];
+        buf[0] = 2 | 8; // SUBVOL | NO_KEYS
+
+        let mut s = String::new();
+        struct_to_text(&mut s, info, &buf).unwrap();
+        assert!(s.contains("flags: 10 (subvol|no_keys)"), "{s}");
+    }
+
+    #[test]
+    fn typed_accessors() {
+        let mut s = c::bch_snapshot::default();
+        s.set_no_keys(true);
+        assert!(s.no_keys());
+        assert_eq!(u32::from_le(s.flags), 8);
+        s.set_no_keys(false);
+        assert!(!s.no_keys());
+        assert_eq!(u32::from_le(s.flags), 0);
     }
 
     #[test]

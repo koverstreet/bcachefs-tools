@@ -235,7 +235,13 @@ pub fn gen_xmacros(src: &str, out: &str) {
     assert!(!bkey_types.is_empty(), "failed to parse BCH_BKEY_TYPES()");
     std::fs::write(format!("{out}/bkey_types_gen.rs"), generate_bkey_types(&bkey_types))
         .expect("write bkey_types_gen.rs");
-    std::fs::write(format!("{out}/typeinfo_gen.rs"), generate_bkey_typeinfo(&bkey_types))
+
+    let bitmasks = parse_bitmasks(src);
+    assert!(!bitmasks.is_empty(), "failed to parse any BITMASK() declarations");
+    std::fs::write(format!("{out}/typeinfo_gen.rs"),
+                   generate_bkey_typeinfo(&bkey_types)
+                       + &generate_bitmask_table(&bitmasks)
+                       + &generate_bitmask_accessors(&bitmasks, out))
         .expect("write typeinfo_gen.rs");
 
     let sb_fields = parse_xmacro(&format_h, "BCH_SB_FIELDS");
@@ -610,6 +616,238 @@ fn generate_bkey_typeinfo(entries: &[Vec<String>]) -> String {
          }\n",
     );
 
+    out
+}
+
+// ── BITMASK / LE*_BITMASK bit-range fields ──────────────────────────────────
+//
+// Bit ranges within flags fields are declared as freestanding macro
+// invocations (`LE32_BITMASK(BCH_SNAPSHOT_NO_KEYS, struct bch_snapshot,
+// flags, 3, 4)`), separate from the struct definition — so the TypeInfo
+// derive can never see them. We scan the headers for the invocations and
+// emit two faces from the one parse: a runtime table (kvdb's named-bit
+// access, decoded flags display) and typed accessors on the bindgen structs
+// (the native replacement for the C SET_* macros).
+
+struct Bitmask {
+    name: String,        // stripped + lowercased: "no_keys"
+    constant: String,    // as declared: BCH_SNAPSHOT_NO_KEYS
+    struct_name: String, // bch_snapshot
+    field: String,       // field within the struct: "flags", "flags[0]"
+    lo: u8,
+    hi: u8,
+    le_bits: Option<u8>, // Some(16|32|64) for LE*_BITMASK, None for native BITMASK
+}
+
+/// Accessor/table name for a bitmask constant: strip the struct-derived
+/// prefix (`BCH_SNAPSHOT_NO_KEYS` on `bch_snapshot` → `no_keys`), falling
+/// back to the full constant lowercased when the naming doesn't follow the
+/// convention (`INODEv1_STR_HASH` → `inodev1_str_hash`).
+fn bitmask_name(constant: &str, struct_name: &str) -> String {
+    let upper = struct_name.to_uppercase();
+    for prefix in [format!("{upper}_"),
+                   format!("{}_", upper.trim_start_matches("BCH_"))] {
+        if let Some(rest) = constant.strip_prefix(prefix.as_str()) {
+            return rest.to_lowercase();
+        }
+    }
+    constant.to_lowercase()
+}
+
+/// Drop `#if 0 ... #endif` regions: those declarations never compile, so we
+/// must not emit accessors for them. (An `#else` inside `#if 0` isn't
+/// handled - the live half would be dropped too - but the format headers
+/// don't do that; the scanner's job is the common shape, not cpp.)
+fn strip_if0(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    let mut depth = 0usize;
+    for line in text.lines() {
+        let t = line.trim();
+        if depth > 0 {
+            if t.starts_with("#if") {
+                depth += 1;
+            } else if t.starts_with("#endif") {
+                depth -= 1;
+            }
+            continue;
+        }
+        if t.starts_with("#if 0") {
+            depth = 1;
+            continue;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+    out
+}
+
+fn parse_bitmasks_in(text: &str, out: &mut Vec<Bitmask>) {
+    for (token, le_bits) in [("LE16_BITMASK(", Some(16u8)),
+                             ("LE32_BITMASK(", Some(32)),
+                             ("LE64_BITMASK(", Some(64)),
+                             ("BITMASK(", None)] {
+        let mut pos = 0;
+        while let Some(i) = text[pos..].find(token) {
+            let start = pos + i;
+            pos = start + token.len();
+
+            // Must begin its line: skips the macro #defines, the LE_BITMASK()
+            // dispatcher, and "BITMASK(" matching inside "LE64_BITMASK(".
+            let line_start = text[..start].rfind('\n').map_or(0, |n| n + 1);
+            if !text[line_start..start].trim().is_empty() {
+                continue;
+            }
+
+            // Args never contain parens; invocations may span lines.
+            let Some(close) = text[pos..].find(')') else { continue };
+            let args: Vec<&str> = text[pos..pos + close].split(',').map(str::trim).collect();
+            let [constant, struct_arg, field, lo, hi] = args[..] else { continue };
+            let Some(struct_name) = struct_arg.strip_prefix("struct ") else { continue };
+            let (Ok(lo), Ok(hi)) = (lo.parse::<u8>(), hi.parse::<u8>()) else { continue };
+
+            out.push(Bitmask {
+                name: bitmask_name(constant, struct_name),
+                constant: constant.to_string(),
+                struct_name: struct_name.to_string(),
+                field: field.to_string(),
+                lo,
+                hi,
+                le_bits,
+            });
+        }
+    }
+}
+
+fn parse_bitmasks(src: &str) -> Vec<Bitmask> {
+    fn walk(dir: &std::path::Path, headers: &mut Vec<std::path::PathBuf>) {
+        for e in std::fs::read_dir(dir).expect("read_dir") {
+            let p = e.expect("dir entry").path();
+            if p.is_dir() {
+                if p.file_name().is_some_and(|n| n != "vendor") {
+                    walk(&p, headers);
+                }
+            } else if p.extension().is_some_and(|x| x == "h") {
+                headers.push(p);
+            }
+        }
+    }
+
+    let mut headers = Vec::new();
+    walk(std::path::Path::new(src), &mut headers);
+    headers.sort(); // read_dir order is fs-dependent; output must be stable
+
+    let mut bms = Vec::new();
+    for h in headers {
+        let text = strip_if0(&std::fs::read_to_string(&h).expect("read header"));
+        parse_bitmasks_in(&text, &mut bms);
+    }
+    bms.sort_by(|a, b| (&a.struct_name, &a.field, a.lo).cmp(&(&b.struct_name, &b.field, b.lo)));
+
+    // A bit name that collides with another bit of the same struct would be
+    // unresolvable; fail the build so the naming heuristic gets fixed.
+    // (Colliding with a *field* name is fine: fields win bare-name lookup,
+    // the bit stays reachable as "<field>.<name>".)
+    for w in bms.windows(2) {
+        assert!(
+            w[0].struct_name != w[1].struct_name || w[0].name != w[1].name,
+            "bitmask name collision in {}: '{}' ({} vs {}) - fix bitmask_name()",
+            w[0].struct_name, w[0].name, w[0].constant, w[1].constant
+        );
+    }
+
+    bms
+}
+
+fn generate_bitmask_table(bms: &[Bitmask]) -> String {
+    let mut out = String::new();
+    out.push_str("\n// Generated from BITMASK()/LE*_BITMASK() declarations — do not edit\n\n");
+    out.push_str("pub static BITMASK_FIELDS: &[BitmaskField] = &[\n");
+    for b in bms {
+        out.push_str(&format!(
+            "    BitmaskField {{ struct_name: \"{}\", field: \"{}\", name: \"{}\", lo: {}, hi: {} }},\n",
+            b.struct_name, b.field, b.name, b.lo, b.hi
+        ));
+    }
+    out.push_str("];\n");
+    out
+}
+
+/// Typed accessors on the bindgen structs, mirroring the C macros'
+/// semantics (`SET_*` masks the value rather than range-checking it).
+/// Structs absent from the generated bindings are skipped.
+fn generate_bitmask_accessors(bms: &[Bitmask], out_dir: &str) -> String {
+    let bindings = std::fs::read_to_string(format!("{out_dir}/bcachefs.rs"))
+        .expect("read generated bindings");
+
+    let mut out = String::new();
+    let mut i = 0;
+    while i < bms.len() {
+        let st = &bms[i].struct_name;
+        let end = bms[i..].iter().position(|b| &b.struct_name != st)
+            .map_or(bms.len(), |n| i + n);
+        let group = &bms[i..end];
+        i = end;
+
+        if !bindings.contains(&format!("pub struct {st}")) {
+            continue;
+        }
+
+        out.push_str(&format!("\nimpl crate::c::{st} {{\n"));
+        for b in group {
+            let width = b.hi - b.lo;
+            let mask = if width >= 64 { !0u64 } else { (1u64 << width) - 1 };
+
+            // Compute in u64 regardless of the field's width; the write-back
+            // cast restores it. LE*_BITMASK names the field's width, so those
+            // convert explicitly; native BITMASK is type-generic in C (the
+            // field may be u8..u64), mirrored here by `as u64` / `as _`.
+            let (read, write_back) = match b.le_bits {
+                Some(64) => (format!("u64::from_le(self.{})", b.field),
+                             "f.to_le()".to_string()),
+                Some(n) => (format!("(u{n}::from_le(self.{}) as u64)", b.field),
+                            format!("(f as u{n}).to_le()")),
+                None => (format!("(self.{} as u64)", b.field),
+                         "f as _".to_string()),
+            };
+            // "128_bit_macs" and friends: not a legal method name (the
+            // setter is fine - its set_ prefix already de-digits it)
+            let m = if b.name.starts_with(|c: char| c.is_ascii_digit()) {
+                format!("_{}", b.name)
+            } else {
+                b.name.clone()
+            };
+            let set_m = format!("set_{}", b.name);
+
+            out.push_str(&format!("    /// {}: bits {}..{} of {}\n",
+                                  b.constant, b.lo, b.hi, b.field));
+            if width == 1 {
+                out.push_str(&format!(
+                    "    #[inline]\n    pub fn {m}(&self) -> bool {{\n\
+                     \x20       {read} >> {lo} & 1 != 0\n    }}\n",
+                    lo = b.lo
+                ));
+                out.push_str(&format!(
+                    "    #[inline]\n    pub fn {set_m}(&mut self, v: bool) {{\n\
+                     \x20       let f = {read} & !(1 << {lo}) | ((v as u64) << {lo});\n\
+                     \x20       self.{field} = {write_back};\n    }}\n",
+                    lo = b.lo, field = b.field
+                ));
+            } else {
+                out.push_str(&format!(
+                    "    #[inline]\n    pub fn {m}(&self) -> u64 {{\n\
+                     \x20       {read} >> {lo} & {mask:#x}\n    }}\n",
+                    lo = b.lo
+                ));
+                out.push_str(&format!(
+                    "    #[inline]\n    pub fn {set_m}(&mut self, v: u64) {{\n\
+                     \x20       let f = {read} & !({mask:#x} << {lo}) | ((v & {mask:#x}) << {lo});\n\
+                     \x20       self.{field} = {write_back};\n    }}\n",
+                    lo = b.lo, field = b.field
+                ));
+            }
+        }
+        out.push_str("}\n");
+    }
     out
 }
 

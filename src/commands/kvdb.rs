@@ -58,8 +58,11 @@ Commands:\n\
   update    <btree> <pos> <field=val>...     modify fields of an existing key\n\
   set       <btree> <pos> <type> [field=val]...  insert a whole new key\n\n\
 pos is inode:offset[:snapshot], or POS_MIN/POS_MAX/SPOS_MAX. Fields are \
-val struct fields: parent, children[1], btime.hi, ... Values are decimal, \
-0x hex, or negative decimal. `set <btree> <pos> deleted` deletes a key.\n\n\
+val struct fields: parent, children[1], btime.hi, ... Declared flag bits \
+(LE*_BITMASK) resolve by name too: no_keys=1, or qualified as flags.subvol=0 \
+when the name collides with a field. get decodes them: flags: 10 (subvol|no_keys). \
+Values are decimal, 0x hex, or negative decimal. `set <btree> <pos> deleted` \
+deletes a key.\n\n\
 Updates go through the normal transactional path: journalled, triggers run, \
 key validation applies. This tool can corrupt a filesystem in precise, \
 surgical ways - that is its purpose. Use accordingly.")]
@@ -139,11 +142,26 @@ fn render_key(fs: &Fs, k: &BkeySC<'_>, fields: bool) -> String {
     out
 }
 
-/// Resolve a field path against a key type's val struct.
-fn resolve_field<'p>(type_: u8, path: &'p str) -> Result<typeinfo::FieldRef> {
+/// A resolved assignment target: a field, or a declared bit range within one
+/// (`no_keys`, `flags.subvol`).
+type FieldTarget = (typeinfo::FieldRef, Option<&'static typeinfo::BitmaskField>);
+
+/// Resolve a field-or-bit path against a key type's val struct.
+fn resolve_field(type_: u8, path: &str) -> Result<FieldTarget> {
     let info = typeinfo::bkey_val_info(type_ as u32)
         .ok_or_else(|| anyhow!("unknown key type {type_}"))?;
-    typeinfo::resolve(info, path).map_err(|e| anyhow!("{e}"))
+    typeinfo::resolve_with_bits(info, path).map_err(|e| anyhow!("{e}"))
+}
+
+fn write_field(
+    val: &mut [u8],
+    (r, bm): &FieldTarget,
+    v: u64,
+) -> std::result::Result<(), typeinfo::AccessError> {
+    match bm {
+        Some(bm) => typeinfo::write_bits(val, r, bm, v),
+        None => typeinfo::write_scalar(val, r, v),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -242,7 +260,7 @@ fn cmd_update(
             let mut need = 0usize;
             for (path, _) in assigns {
                 match resolve_field(k.k.type_, path) {
-                    Ok(r) => need = need.max(r.offset + r.len),
+                    Ok((r, _)) => need = need.max(r.offset + r.len),
                     Err(e) => {
                         user_err = Some(e);
                         return Err(no_key_err());
@@ -272,8 +290,8 @@ fn cmd_update(
                 std::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, val.len() * 8)
             };
             for (path, v) in assigns {
-                let r = resolve_field(new.k().type_, path).expect("resolved above");
-                if let Err(e) = typeinfo::write_scalar(val, &r, *v) {
+                let target = resolve_field(new.k().type_, path).expect("resolved above");
+                if let Err(e) = write_field(val, &target, *v) {
                     user_err = Some(anyhow!("{path}: {e}"));
                     return Err(no_key_err());
                 }
@@ -321,14 +339,14 @@ fn cmd_set(
                 std::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, val.len() * 8)
             };
             for (path, v) in assigns {
-                let r = match typeinfo::resolve(ti.info, path) {
-                    Ok(r) => r,
+                let target = match typeinfo::resolve_with_bits(ti.info, path) {
+                    Ok(t) => t,
                     Err(e) => {
                         user_err = Some(anyhow!("{e}"));
                         return Err(no_key_err());
                     }
                 };
-                if let Err(e) = typeinfo::write_scalar(val, &r, *v) {
+                if let Err(e) = write_field(val, &target, *v) {
                     user_err = Some(anyhow!("{path}: {e}"));
                     return Err(no_key_err());
                 }
