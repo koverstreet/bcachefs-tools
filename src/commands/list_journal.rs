@@ -2,7 +2,6 @@ use std::fmt::Write;
 
 use anyhow::{anyhow, bail, Result};
 use bch_bindgen::c;
-use bcachefs_kernel::btree::bkey::bkey_start_pos;
 use bcachefs_kernel::{BbposRange, bbpos_range_parse};
 use bcachefs_kernel::journal::{
     jset_entries, jset_entry_keys, entry_type, entry_btree_id, entry_log_str_eq,
@@ -141,24 +140,18 @@ fn bkey_matches_range(
 ) -> bool {
     let Some(btree) = entry_btree_id(entry) else { return false };
 
-    let mut k_start = c::bbpos {
-        btree,
-        pos: bkey_start_pos(&k.k),
-    };
-    let mut k_end = c::bbpos {
+    // Match the C code: always point comparison on the key's position
+    // (it reads `true || !k.k.size`, so the extent start pos is unused)
+    let mut pos = c::bbpos {
         btree,
         pos: k.k.p,
     };
 
     if range.start.pos.snapshot == 0 && range.end.pos.snapshot == 0 {
-        k_start.pos.snapshot = 0;
-        k_end.pos.snapshot = 0;
+        pos.pos.snapshot = 0;
     }
 
-    // Match the C code: always use point comparison (true || !k.k.size)
-    k_start = k_end;
-
-    k_start >= range.start && k_end <= range.end
+    pos >= range.start && pos <= range.end
 }
 
 fn entry_matches_range(
