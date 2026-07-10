@@ -1340,6 +1340,8 @@ static void reconcile_wait(struct bch_fs *c, u32 kick)
 	struct io_clock *clock = &c->io_clock[WRITE];
 	u64 now = atomic64_read(&clock->now);
 	u64 min_member_capacity = bch2_min_rw_member_capacity(c);
+	/* WRITE io_clock may not advance while the fs is idle. */
+	unsigned long wallclock_timeout = 5 * HZ;
 
 	if (reconcile_hipri_work_pending(c)) {
 		cond_resched();
@@ -1364,7 +1366,7 @@ static void reconcile_wait(struct bch_fs *c, u32 kick)
 	 */
 	set_current_state(TASK_INTERRUPTIBLE);
 	if (kick == READ_ONCE(r->kick))
-		bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, MAX_SCHEDULE_TIMEOUT);
+		bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, wallclock_timeout);
 	__set_current_state(TASK_RUNNING);
 }
 
