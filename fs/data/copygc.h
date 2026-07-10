@@ -16,6 +16,12 @@ static inline void bch2_copygc_wakeup(struct bch_fs *c)
 		wake_up_process(p);
 }
 
+static inline void bch2_copygc_wakeup_for_pressure(struct bch_fs *c)
+{
+	WRITE_ONCE(c->copygc.pressure_pending, true);
+	bch2_copygc_wakeup(c);
+}
+
 void bch2_copygc_stop(struct bch_fs *);
 int bch2_copygc_start(struct bch_fs *);
 

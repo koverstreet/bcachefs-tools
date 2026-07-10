@@ -786,7 +786,7 @@ again:
 			copygc_can_make_progress = bch2_copygc_can_make_progress(ca);
 		if (copygc_can_make_progress) {
 			req->copygc_can_make_progress = true;
-			bch2_copygc_wakeup(c);
+			bch2_copygc_wakeup_for_pressure(c);
 		}
 
 		track_event_change(&c->times[BCH_TIME_blocked_allocate], true);
@@ -2174,7 +2174,7 @@ static bool alloc_wait_advanced(struct bch_fs *c, struct alloc_request *req)
 			    !bch2_copygc_can_make_progress(ca))
 				return true;
 
-			bch2_copygc_wakeup(c);
+			bch2_copygc_wakeup_for_pressure(c);
 		}
 	}
 	BUG_ON(!found);
