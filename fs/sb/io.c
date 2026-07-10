@@ -1550,6 +1550,14 @@ static __cold void bch2_sb_ext_to_text(struct printbuf *out,
 	prt_printf(out, "Btrees with missing data:\t");
 	prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_lost_data));
 	prt_newline(out);
+
+	/* Appended member - older superblocks may have a smaller field: */
+	if (vstruct_bytes(f) >= offsetof(struct bch_sb_field_ext, btrees_lost_data_ever) +
+				sizeof(e->btrees_lost_data_ever)) {
+		prt_printf(out, "Btrees that have ever lost data:\t");
+		prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_lost_data_ever));
+		prt_newline(out);
+	}
 }
 
 static const struct bch_sb_field_ops bch_sb_field_ops_ext = {

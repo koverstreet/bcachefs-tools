@@ -56,6 +56,9 @@ int bch2_btree_lost_data(struct bch_fs *c,
 	bool write_sb = false;
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 
+	/* Forensic record, never cleared: */
+	write_sb |= !__test_and_set_bit_le64(btree, &ext->btrees_lost_data_ever);
+
 	if (!(c->sb.btrees_lost_data & BIT_ULL(btree))) {
 		prt_printf(msg, "flagging btree ");
 		bch2_btree_id_to_text(msg, btree);

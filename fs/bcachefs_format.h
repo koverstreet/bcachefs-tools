@@ -901,6 +901,12 @@ struct bch_sb_field_ext {
 	__le64			errors_silent[8];
 	__le64			btrees_lost_data;
 	__le64			flags0;
+	/*
+	 * Like btrees_lost_data, but never cleared - btrees_lost_data gates
+	 * reconstruction and is cleared when repair completes; this is the
+	 * forensic record of every btree that has ever lost data:
+	 */
+	__le64			btrees_lost_data_ever;
 };
 
 LE64_BITMASK(BCH_SB_EXT_DEV_READAHEAD,		struct bch_sb_field_ext, flags0, 0, 20);
