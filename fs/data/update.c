@@ -1394,11 +1394,17 @@ int bch2_data_update_init(struct btree_trans *trans,
 		/*
 		 * op->csum_type is normally initialized from the fs/file's
 		 * current options - but if an extent is encrypted, we require
-		 * that it stays encrypted:
+		 * that it stays encrypted. Only the encryption *class* is
+		 * forced, not the exact type: chacha20_poly1305_80 <-> 128 is
+		 * a MAC width change within the class - same cipher, same
+		 * nonce discipline, only the stored tag width differs - and
+		 * reconcile must be able to make it, or a wide_macs change
+		 * livelocks re-queueing extents it can never convert:
 		 */
 		if (bch2_csum_type_is_encryption(p.crc.csum_type)) {
 			m->op.nonce	= p.crc.nonce + p.crc.offset;
-			m->op.csum_type = p.crc.csum_type;
+			if (!bch2_csum_type_is_encryption(m->op.csum_type))
+				m->op.csum_type = p.crc.csum_type;
 		}
 
 		if (p.crc.compression_type == BCH_COMPRESSION_TYPE_incompressible)
