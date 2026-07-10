@@ -55,9 +55,13 @@ subvolume boundaries.")]
     #[command(allow_missing_positional = true, visible_aliases = ["snap"],
         long_about = "Creates an instant, COW snapshot of a subvolume. Snapshots \
 initially share all data with the source and only consume additional \
-space as either diverges. Use --read-only for a frozen point-in-time \
-copy.")]
+space as either diverges. Snapshots are read-only by default; use --rw \
+for a writable snapshot.")]
     Snapshot {
+        /// Make snapshot writable
+        #[arg(long)]
+        rw: bool,
+
         /// Make snapshot read only
         #[arg(long, short)]
         read_only: bool,
@@ -784,7 +788,7 @@ fn subvolume(cli: Cli) -> Result<()> {
     match cli.subcommands {
         Subcommands::Create { targets }                                         => cmd_create(targets),
         Subcommands::Delete { targets }                                         => cmd_delete(targets),
-        Subcommands::Snapshot { read_only, source, dest }                       => cmd_snapshot(read_only, source, dest),
+        Subcommands::Snapshot { read_only, source, dest, rw: _ }                => cmd_snapshot(read_only, source, dest),
         Subcommands::List { json, tree, recursive, snapshots, readonly, sort, target }
                                                                                 => cmd_list(json, tree, recursive, snapshots, readonly, sort, target),
         Subcommands::ListSnapshots { flat, json, readonly, sort, recursive, target }
