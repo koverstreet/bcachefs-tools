@@ -770,7 +770,8 @@ int bch2_move_data_phys(struct bch_fs *c,
 
 	if (ctxt.stats) {
 		ctxt.stats->phys = true;
-		ctxt.stats->data_type = (int) DATA_PROGRESS_DATA_TYPE_phys;
+		ctxt.stats->dev = dev;
+		ctxt.stats->offset = start;
 	}
 
 	bch2_btree_write_buffer_flush_sync(ctxt.trans);
@@ -1197,13 +1198,18 @@ int bch2_data_job(struct bch_fs *c,
 
 	switch (op->op) {
 	case BCH_DATA_OP_scrub:
+		if (op->end_pos.offset && op->end_pos.offset < op->start_pos.offset)
+			return -EINVAL;
+
 		/*
 		 * prevent tests from spuriously failing, make sure we see all
 		 * btree nodes that need to be repaired
 		 */
 		bch2_btree_interior_updates_flush(c);
 
-		ret = bch2_move_data_phys(c, op->scrub.dev, 0, U64_MAX,
+		ret = bch2_move_data_phys(c, op->scrub.dev,
+					  op->start_pos.offset,
+					  op->end_pos.offset ?: U64_MAX,
 					  op->scrub.data_types,
 					  NULL,
 					  stats,
