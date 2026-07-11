@@ -437,6 +437,11 @@ fn kvdb(cli: Cli) -> Result<()> {
 
     let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
+    // An injection tool must not consume its own injections: with this on,
+    // writing WILL_DELETE to a snapshot node kicks the deletion worker in
+    // *this* fs instance, and the state under test is gone (root inode and
+    // all) before fsck ever sees the image.
+    opt_set!(fs_opts, auto_snapshot_deletion, 0);
     opt_set!(
         fs_opts,
         errors,
