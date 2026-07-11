@@ -1471,7 +1471,12 @@ out:
 
 	if (!ret)
 		bch2_trans_downgrade(trans);
-	if (lazy)
+	/*
+	 * Lazy commits signal success via transaction_restart_commit; a real
+	 * error must not be masked into a restart, or the caller's restart
+	 * loop retries a failing commit forever:
+	 */
+	if (lazy && !ret)
 		ret = bch_err_throw(trans->c, transaction_restart_commit);
 out_reset:
 	bch2_trans_reset_updates(trans);
