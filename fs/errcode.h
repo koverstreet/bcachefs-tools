@@ -378,6 +378,8 @@
 	x(EINVAL,			EINVAL_ioctl_dev_usage_bad_flags)		\
 	x(EINVAL,			EINVAL_ioctl_dev_usage_v2_not_started)		\
 	x(EINVAL,			EINVAL_ioctl_dev_usage_v2_bad_flags)		\
+	x(EINVAL,			EINVAL_ioctl_query_btree_keys_bad_flags)	\
+	x(EINVAL,			EINVAL_ioctl_query_btree_keys_bad_params)	\
 	x(EINVAL,			EINVAL_ioctl_read_super_bad_flags)		\
 	x(EINVAL,			EINVAL_ioctl_disk_get_idx_bad_dev)		\
 	x(EINVAL,			EINVAL_ioctl_disk_resize_bad_flags)		\

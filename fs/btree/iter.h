@@ -730,6 +730,38 @@ DEFINE_CLASS(btree_iter_copy, struct btree_iter,
 	     bch2_trans_iter_copy_class_init(src),
 	     struct btree_iter *src)
 
+bool bch2_btree_iter_params_valid(enum btree_id, unsigned,
+				  struct bpos, struct bpos,
+				  enum btree_iter_update_trigger_flags);
+
+/*
+ * Low-level iterator init: takes level and flags exactly as given - no
+ * defaulting of not_extents/snapshot_field/all_snapshots (the node iterator
+ * conventions). For callers that need per-level iteration with caller-chosen
+ * snapshot semantics, e.g. the query_btree_keys ioctl; validate untrusted
+ * parameters with bch2_btree_iter_params_valid() first:
+ */
+void __bch2_trans_iter_init_ll(struct btree_trans *, struct btree_iter *,
+			       enum btree_id, struct bpos,
+			       unsigned, unsigned,
+			       enum btree_iter_update_trigger_flags,
+			       unsigned long);
+
+#define bch2_trans_iter_ll_class_init(_trans, _btree, _pos, _locks_want, _depth, _flags)\
+({										\
+	struct btree_iter iter;							\
+	__bch2_trans_iter_init_ll(_trans, &iter, (_btree), (_pos),		\
+				  (_locks_want), (_depth), (_flags), _THIS_IP_);\
+	iter;									\
+})
+
+DEFINE_CLASS(btree_iter_ll, struct btree_iter,
+	     bch2_trans_iter_exit(&_T),
+	     bch2_trans_iter_ll_class_init(trans, btree, pos, locks_want, depth, flags),
+	     struct btree_trans *trans, enum btree_id btree, struct bpos pos,
+	     unsigned locks_want, unsigned depth,
+	     enum btree_iter_update_trigger_flags flags)
+
 void __bch2_trans_node_iter_init(struct btree_trans *, struct btree_iter *,
 				 enum btree_id, struct bpos,
 				 unsigned, unsigned,

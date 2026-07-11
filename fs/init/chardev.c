@@ -8,6 +8,9 @@
 #include "alloc/buckets.h"
 #include "alloc/replicas.h"
 
+#include "btree/bkey_methods.h"
+#include "btree/iter.h"
+
 #include "data/move.h"
 
 #include "fs/check.h"
@@ -712,19 +715,89 @@ static long bch2_ioctl_disk_resize_journal_v2(struct bch_fs *c,
 	return bch2_copy_ioctl_err_msg(&arg.err, &err, ret);
 }
 
+static const unsigned query_btree_keys_flags_to_iter_flags[] = {
+	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_slots)]		= BTREE_ITER_slots,
+	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_prev)]		= BTREE_ITER_prev,
+	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots)]	= BTREE_ITER_all_snapshots,
+};
+
+static long bch2_ioctl_query_btree_keys(struct bch_fs *c,
+			struct bch_ioctl_query_btree_keys __user *user_arg)
+{
+	struct bch_ioctl_query_btree_keys arg;
+
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	/*
+	 * Exposes all filesystem metadata - dirents, inodes, xattrs - and is
+	 * reachable by any user via the file ioctl path, so admin only:
+	 */
+	if (!capable(CAP_SYS_ADMIN))
+		return bch_err_throw(c, EPERM_non_admin);
+
+	if (arg.flags & ~map_defined(query_btree_keys_flags_to_iter_flags))
+		return bch_err_throw(c, EINVAL_ioctl_query_btree_keys_bad_flags);
+
+	unsigned iter_flags = map_flags(query_btree_keys_flags_to_iter_flags, arg.flags);
+
+	/* Interior nodes aren't extents - only meaningful at level 0: */
+	if (arg.level)
+		iter_flags |= BTREE_ITER_not_extents;
+
+	if (!bch2_btree_iter_params_valid(arg.btree, arg.level,
+					  arg.start, arg.end, iter_flags))
+		return bch_err_throw(c, EINVAL_ioctl_query_btree_keys_bad_params);
+
+	/* bound per-call kernel allocation; the caller loops anyways */
+	u32 buf_size = min_t(u32, arg.buf_size, 1U << 20);
+
+	CLASS(darray_u8, out)();
+
+	int ret;
+	{
+		CLASS(btree_trans, trans)(c);
+		CLASS(btree_iter_ll, iter)(trans, (enum btree_id) arg.btree,
+					   arg.start, 0, arg.level, iter_flags);
+
+		ret = for_each_btree_key_max_continue(trans, iter, arg.end, iter_flags, k, ({
+			/* if the buffer fills before this key, resume at it: */
+			arg.start = iter.pos;
+
+			unsigned bytes = bkey_bytes(k.k);
+			int ret2 = 0;
+
+			if (out.nr + bytes > buf_size) {
+				/* buffer full - or, if empty, can't fit even one key: */
+				ret2 = out.nr ? 1 : -ERANGE;
+			} else if (darray_make_room(&out, bytes)) {
+				ret2 = -ENOMEM;
+			} else {
+				bkey_reassemble((struct bkey_i *) (out.data + out.nr), k);
+				out.nr += bytes;
+			}
+			ret2;
+		}));
+	}
+	if (ret < 0)
+		return ret;
+
+	arg.done = !ret;
+	arg.used = out.nr;
+
+	return copy_to_user_errcode(u64_to_user_ptr(arg.buf), out.data, arg.used) ?:
+		copy_to_user_errcode(user_arg, &arg, sizeof(arg));
+}
+
 #define BCH_IOCTL(_name, _argtype)					\
 do {									\
 	_argtype i;							\
 									\
 	try(copy_from_user_errcode(&i, arg, sizeof(i)));		\
-	ret = bch2_ioctl_##_name(c, i);					\
-	goto out;							\
+	return bch2_ioctl_##_name(c, i);				\
 } while (0)
 
-long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
+static long __bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 {
-	long ret;
-
 	switch (cmd) {
 	case BCH_IOCTL_QUERY_UUID:
 		return bch2_ioctl_query_uuid(c, arg);
@@ -780,10 +853,16 @@ long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 		return bch2_ioctl_query_accounting(c, arg);
 	case BCH_IOCTL_QUERY_COUNTERS:
 		return bch2_ioctl_query_counters(c, arg);
+	case BCH_IOCTL_QUERY_BTREE_KEYS:
+		return bch2_ioctl_query_btree_keys(c, arg);
 	default:
 		return -ENOTTY;
 	}
-out:
+}
+
+long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
+{
+	long ret = __bch2_fs_ioctl(c, cmd, arg);
 	if (ret < 0)
 		ret = bch2_err_class(ret);
 	return ret;

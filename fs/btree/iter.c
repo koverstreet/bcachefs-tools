@@ -3519,6 +3519,67 @@ void bch2_trans_iter_init_outlined(struct btree_trans *trans,
 			       ip);
 }
 
+/*
+ * Check iterator parameters from an untrusted source (e.g. an ioctl) against
+ * the preconditions the iterator code enforces with assertions. Kernel
+ * callers know these rules; user-controlled (btree, level, range, flags)
+ * combinations must be validated first:
+ */
+bool bch2_btree_iter_params_valid(enum btree_id btree, unsigned level,
+				  struct bpos start, struct bpos end,
+				  enum btree_iter_update_trigger_flags flags)
+{
+	if (btree >= BTREE_ID_NR)
+		return false;
+
+	if (level >= BTREE_MAX_DEPTH)
+		return false;
+
+	/* Interior nodes span snapshots; filtering only makes sense at level 0: */
+	if (level && !(flags & BTREE_ITER_all_snapshots))
+		return false;
+
+	if (btree_type_has_snapshots(btree) &&
+	    !(flags & BTREE_ITER_all_snapshots)) {
+		/* No snapshot to filter against: */
+		if (!start.snapshot)
+			return false;
+
+		/* Whiteout filtering peeks ahead of the end pos: */
+		if (bpos_eq(end, POS_MAX))
+			return false;
+
+		/* Backwards filtered iteration requires a single inode: */
+		if ((flags & BTREE_ITER_prev) &&
+		    start.inode != end.inode)
+			return false;
+	}
+
+	return true;
+}
+
+void __bch2_trans_iter_init_ll(struct btree_trans *trans,
+			       struct btree_iter *iter,
+			       enum btree_id btree_id,
+			       struct bpos pos,
+			       unsigned locks_want,
+			       unsigned depth,
+			       enum btree_iter_update_trigger_flags flags,
+			       unsigned long ip)
+{
+	bch2_trans_iter_init_common(trans, iter, btree_id, pos, locks_want, depth,
+			       bch2_btree_iter_flags(trans, btree_id, depth, flags),
+			       ip);
+
+	iter->min_depth	= depth;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	struct btree_path *path = btree_iter_path(trans, iter);
+	BUG_ON(path->locks_want	 < min(locks_want, BTREE_MAX_DEPTH));
+	BUG_ON(path->level	!= depth);
+	BUG_ON(iter->min_depth	!= depth);
+#endif
+}
+
 void __bch2_trans_node_iter_init(struct btree_trans *trans,
 				 struct btree_iter *iter,
 				 enum btree_id btree_id,
@@ -3534,17 +3595,8 @@ void __bch2_trans_node_iter_init(struct btree_trans *trans,
 	if (!depth && btree_id_cached(btree_id))
 		flags |= BTREE_ITER_with_key_cache;
 
-	bch2_trans_iter_init_common(trans, iter, btree_id, pos, locks_want, depth,
-			       bch2_btree_iter_flags(trans, btree_id, depth, flags),
-			       _RET_IP_);
-
-	iter->min_depth	= depth;
-#ifdef CONFIG_BCACHEFS_DEBUG
-	struct btree_path *path = btree_iter_path(trans, iter);
-	BUG_ON(path->locks_want	 < min(locks_want, BTREE_MAX_DEPTH));
-	BUG_ON(path->level	!= depth);
-	BUG_ON(iter->min_depth	!= depth);
-#endif
+	__bch2_trans_iter_init_ll(trans, iter, btree_id, pos, locks_want, depth,
+				  flags, _RET_IP_);
 }
 
 void bch2_trans_copy_iter(struct btree_iter *dst, struct btree_iter *src)
