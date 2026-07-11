@@ -3757,6 +3757,17 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 	unsigned i;
 	u64 now;
 
+	/*
+	 * Discarding queued updates is correct after a transaction restart
+	 * (the restart loop re-queues them) and on error unwind — but a new
+	 * iteration starting with updates queued and no restart in flight
+	 * means the previous iteration forgot to commit them, and they're
+	 * about to be lost silently:
+	 */
+	WARN_ON_ONCE(IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+		     bch2_trans_has_updates(trans) &&
+		     !trans->restarted && !trans->in_traverse_all);
+
 	bch2_trans_reset_updates(trans);
 
 	trans->restart_count++;
