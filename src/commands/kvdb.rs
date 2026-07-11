@@ -509,11 +509,16 @@ fn kvdb(cli: Cli) -> Result<()> {
 
     let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
-    // An injection tool must not consume its own injections: with this on,
-    // writing WILL_DELETE to a snapshot node kicks the deletion worker in
-    // *this* fs instance, and the state under test is gone (root inode and
-    // all) before fsck ever sees the image.
+    // An injection tool must not consume its own injections: background
+    // workers in *this* fs instance would otherwise act on the state under
+    // test the moment we go read-write. Snapshot deletion reaps a snapshot
+    // node a test marked WILL_DELETE (root inode and all) before fsck ever
+    // sees the image; copygc evacuates fragmented buckets, rewriting
+    // backpointers a test just staged or is about to read; reconcile
+    // consumes pending needs_reconcile state.
     opt_set!(fs_opts, auto_snapshot_deletion, 0);
+    opt_set!(fs_opts, copygc_enabled, 0);
+    opt_set!(fs_opts, reconcile_enabled, 0);
     opt_set!(
         fs_opts,
         errors,
