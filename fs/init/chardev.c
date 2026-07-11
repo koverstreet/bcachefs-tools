@@ -8,6 +8,9 @@
 #include "alloc/buckets.h"
 #include "alloc/replicas.h"
 
+#include "btree/bkey_methods.h"
+#include "btree/iter.h"
+
 #include "data/move.h"
 
 #include "fs/check.h"
@@ -712,6 +715,91 @@ static long bch2_ioctl_disk_resize_journal_v2(struct bch_fs *c,
 	return bch2_copy_ioctl_err_msg(&arg.err, &err, ret);
 }
 
+static long bch2_ioctl_query_btree_keys(struct bch_fs *c,
+			struct bch_ioctl_query_btree_keys __user *user_arg)
+{
+	struct bch_ioctl_query_btree_keys arg;
+
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	/*
+	 * Exposes all filesystem metadata - dirents, inodes, xattrs - and is
+	 * reachable by any user via the file ioctl path, so admin only:
+	 */
+	if (!capable(CAP_SYS_ADMIN))
+		return bch_err_throw(c, EPERM_non_admin);
+
+	if (arg.flags & ~BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots)
+		return bch_err_throw(c, EINVAL_ioctl_query_btree_keys_bad_flags);
+
+	if (arg.btree >= BTREE_ID_NR)
+		return bch_err_throw(c, EINVAL_ioctl_query_btree_keys_bad_btree);
+
+	if (arg.level >= BTREE_MAX_DEPTH)
+		return bch_err_throw(c, EINVAL_ioctl_query_btree_keys_bad_level);
+
+	unsigned iter_flags = BTREE_ITER_prefetch;
+	if (arg.flags & BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots)
+		iter_flags |= BTREE_ITER_all_snapshots;
+
+	/* bound per-call kernel allocation; the caller loops anyways */
+	u32 buf_size = min_t(u32, arg.buf_size, 1U << 20);
+
+	arg.done = 0;
+
+	CLASS(printbuf, out)();
+	out.may_vmalloc = true;
+
+	{
+		CLASS(btree_trans, trans)(c);
+		CLASS(btree_node_iter, iter)(trans, (enum btree_id) arg.btree,
+					     arg.start, 0, arg.level, iter_flags);
+
+		while (1) {
+			bch2_trans_begin(trans);
+
+			struct bkey_s_c k = bch2_btree_iter_peek_max(&iter, &arg.end);
+			int ret = bkey_err(k);
+			if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+				continue;
+			if (ret)
+				return ret;
+			if (!k.k) {
+				arg.done = 1;
+				break;
+			}
+
+			unsigned prev = out.pos;
+			bch2_bkey_val_to_text(&out, c, k);
+			prt_newline(&out);
+
+			if (out.pos > buf_size) {
+				/* buffer full: this key wasn't returned, resume at it */
+				if (!prev)
+					return -ERANGE;
+				out.pos = prev;
+				arg.start = iter.pos;
+				break;
+			}
+
+			if (!bch2_btree_iter_advance(&iter)) {
+				arg.done = 1;
+				break;
+			}
+			arg.start = iter.pos;
+		}
+	}
+
+	if (out.allocation_failure)
+		return -ENOMEM;
+
+	arg.used = out.pos;
+
+	return copy_to_user_errcode((void __user *)(unsigned long) arg.buf,
+				    out.buf, arg.used) ?:
+		copy_to_user_errcode(user_arg, &arg, sizeof(arg));
+}
+
 #define BCH_IOCTL(_name, _argtype)					\
 do {									\
 	_argtype i;							\
@@ -780,6 +868,8 @@ long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 		return bch2_ioctl_query_accounting(c, arg);
 	case BCH_IOCTL_QUERY_COUNTERS:
 		return bch2_ioctl_query_counters(c, arg);
+	case BCH_IOCTL_QUERY_BTREE_KEYS:
+		return bch2_err_class(bch2_ioctl_query_btree_keys(c, arg));
 	default:
 		return -ENOTTY;
 	}

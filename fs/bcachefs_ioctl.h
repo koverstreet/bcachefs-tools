@@ -73,6 +73,7 @@
 #define BCH_IOCTL_SUBVOLUME_LIST	_IOWR(0xbc,	31, struct bch_ioctl_subvol_readdir)
 #define BCH_IOCTL_SUBVOLUME_TO_PATH	_IOWR(0xbc,	32, struct bch_ioctl_subvol_to_path)
 #define BCH_IOCTL_SNAPSHOT_TREE		_IOWR(0xbc,	33, struct bch_ioctl_snapshot_tree_query)
+#define BCH_IOCTL_QUERY_BTREE_KEYS	_IOWR(0xbc,	34, struct bch_ioctl_query_btree_keys)
 
 /* ioctl below act on a particular file, not the filesystem as a whole: */
 
@@ -636,6 +637,48 @@ struct bch_ioctl_unpoison {
 	__u64				len;
 	__u32				flags;		/* reserved, must be 0 */
 	__u32				pad;
+};
+
+/*
+ * BCH_IOCTL_QUERY_BTREE_KEYS: read keys from a btree, as text, range query
+ *
+ * Stateless: the cursor lives in userspace and each call is self-contained,
+ * so concurrent callers don't interact and an aborted caller leaves nothing
+ * behind. Modeled on BTRFS_IOC_TREE_SEARCH / FS_IOC_GETFSMAP.
+ *
+ * Keys are formatted by the kernel (bch2_bkey_val_to_text), one per line,
+ * identical to the debugfs btrees/<id>/keys output. Text output carries no
+ * stability promise — this is a debugging interface. @flags is validated so
+ * a packed binary mode can be added later.
+ *
+ * @btree	- btree id
+ * @level	- btree level to read keys from (0 = leaves)
+ * @flags	- BCH_IOCTL_QUERY_BTREE_KEYS_*
+ * @done	- out: nonzero once iteration has reached the end of the range
+ * @start	- in/out: cursor, advanced past the last key returned
+ * @end		- inclusive upper bound
+ * @buf		- pointer to userspace buffer for formatted keys
+ * @buf_size	- size of buffer in bytes
+ * @used	- out: bytes written to buffer
+ *
+ * To iterate: repeat the call, keeping @start from the previous call, until
+ * @done is set. The kernel bounds how much it returns per call, so @used may
+ * be well short of @buf_size while more keys remain.
+ *
+ * Returns -ERANGE if @buf_size is too small to hold even one key.
+ */
+#define BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots	(1U << 0)
+
+struct bch_ioctl_query_btree_keys {
+	__u32			btree;
+	__u32			level;
+	__u32			flags;
+	__u32			done;
+	struct bpos		start;
+	struct bpos		end;
+	__u64			buf;
+	__u32			buf_size;
+	__u32			used;
 };
 
 #endif /* _BCACHEFS_IOCTL_H */
