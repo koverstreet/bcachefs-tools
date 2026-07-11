@@ -525,11 +525,35 @@ static int extents_to_reflink(struct btree_trans *trans,
 				 BTREE_UPDATE_internal_snapshot_node);
 }
 
+static bool extent_bp_is_uncompressed(struct bch_fs *c, struct bkey_s_c k,
+				      struct bpos bp_pos)
+{
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+	const union bch_extent_entry *entry;
+	struct extent_ptr_decoded p;
+	bool found = false;
+
+	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+		if (!bpos_eq(bch2_extent_ptr_to_bp_pos(c, k, p), bp_pos))
+			continue;
+
+		if (crc_is_compressed(p.crc))
+			return false;
+		found = true;
+	}
+
+	return found;
+}
+
 static int extent_to_existing_reflink(struct btree_trans *trans,
 				      enum btree_id extent_btree, unsigned extent_level,
 				      struct bkey_s_c extent,
+				      struct bpos extent_bp_pos,
+				      u64 extent_disk_sectors,
 				      u64 extent_overlap_start, u64 extent_overlap_end,
 				      struct bkey_s_c reflink_v,
+				      struct bpos reflink_v_bp_pos,
+				      u64 reflink_v_disk_sectors,
 				      u64 reflink_v_overlap_start)
 {
 	struct bch_fs *c = trans->c;
@@ -539,11 +563,24 @@ static int extent_to_existing_reflink(struct btree_trans *trans,
 	BUG_ON(reflink_v.k->type != KEY_TYPE_reflink_v);
 	BUG_ON(!overlap_size);
 
-	u64 reflink_v_idx = bkey_start_offset(reflink_v.k) + reflink_v_overlap_start;
-	u64 reflink_v_end = reflink_v_idx + overlap_size;
+	/*
+	 * Backpointer offsets are physical sectors, while bkey offsets are
+	 * logical sectors.  They are interchangeable only for 1:1 mappings;
+	 * compressed extents need encoded-extent-aware overlap handling.
+	 */
+	if (!extent_bp_is_uncompressed(c, extent, extent_bp_pos) ||
+	    !extent_bp_is_uncompressed(c, reflink_v, reflink_v_bp_pos) ||
+	    extent_disk_sectors != extent.k->size ||
+	    reflink_v_disk_sectors != reflink_v.k->size)
+		return bch_err_throw(trans->c, fsck_repair_unimplemented);
+
+	u64 reflink_v_start = bkey_start_offset(reflink_v.k);
+	u64 reflink_v_idx;
+	u64 reflink_v_end;
 
 	if (extent_overlap_end > extent.k->size ||
-	    reflink_v_idx < bkey_start_offset(reflink_v.k) ||
+	    check_add_overflow(reflink_v_start, reflink_v_overlap_start, &reflink_v_idx) ||
+	    check_add_overflow(reflink_v_idx, overlap_size, &reflink_v_end) ||
 	    reflink_v_end > reflink_v.k->p.offset)
 		return bch_err_throw(trans->c, fsck_repair_unimplemented);
 
@@ -566,6 +603,8 @@ static int extent_to_existing_reflink(struct btree_trans *trans,
 	struct bkey_i_reflink_p *rp = bkey_i_to_reflink_p(k_mut);
 	memset(&rp->v, 0, sizeof(rp->v));
 	SET_REFLINK_P_IDX(&rp->v, reflink_v_idx);
+	rp->v.front_pad = cpu_to_le32(reflink_v_idx - reflink_v_start);
+	rp->v.back_pad = cpu_to_le32(reflink_v.k->p.offset - reflink_v_end);
 
 	return bch2_trans_update(trans, &iter, &rp->k_i,
 				 BTREE_UPDATE_internal_snapshot_node);
@@ -712,15 +751,15 @@ static int check_bp_dup(struct btree_trans *trans,
 				bp_pos_to_bucket_and_offset(ca, reflink_bp_k->p, &reflink_bp_sub);
 			}
 
-			u32 overlap_sub_start = max(direct_bp_sub, reflink_bp_sub);
-			u32 overlap_sub_end   = min(direct_bp_sub + direct_bp->bucket_len,
-						    reflink_bp_sub + reflink_bp->bucket_len);
+			u64 overlap_sub_start = max_t(u64, direct_bp_sub, reflink_bp_sub);
+			u64 overlap_sub_end   = min((u64) direct_bp_sub + direct_bp->bucket_len,
+						    (u64) reflink_bp_sub + reflink_bp->bucket_len);
 			if (overlap_sub_end <= overlap_sub_start)
 				return 0;
 
-			u32 direct_overlap_start = overlap_sub_start - direct_bp_sub;
-			u32 direct_overlap_end   = overlap_sub_end   - direct_bp_sub;
-			u32 reflink_overlap_start = overlap_sub_start - reflink_bp_sub;
+			u64 direct_overlap_start = overlap_sub_start - direct_bp_sub;
+			u64 direct_overlap_end   = overlap_sub_end   - direct_bp_sub;
+			u64 reflink_overlap_start = overlap_sub_start - reflink_bp_sub;
 
 			CLASS(printbuf, buf)();
 			prt_printf(&buf, "duplicate extent and reflink_v pointing to overlapping space on dev %llu, converting direct extent overlap to reflink_p\n",
@@ -732,8 +771,12 @@ static int check_bp_dup(struct btree_trans *trans,
 			if (ret_fsck_err(trans, dup_extents_to_reflink, "%s", buf.buf))
 				try(extent_to_existing_reflink(trans,
 						       direct_btree, direct_level, direct_extent,
+						       direct_bp_k->p,
+						       direct_bp->bucket_len,
 						       direct_overlap_start, direct_overlap_end,
-						       reflink_v, reflink_overlap_start));
+						       reflink_v, reflink_bp_k->p,
+						       reflink_bp->bucket_len,
+						       reflink_overlap_start));
 			return 0;
 		}
 
