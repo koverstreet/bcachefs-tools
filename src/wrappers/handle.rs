@@ -12,6 +12,7 @@ use bch_bindgen::c::{
     bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2,
     bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2,
     bch_ioctl_subvolume, bch_ioctl_subvolume_v2,
+    bch_ioctl_query_btree_keys,
     BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE,
 };
 use bch_bindgen::accounting::data_type;
@@ -140,12 +141,47 @@ impl BcachefsHandle {
                 .map_err(|e| BchError::from_raw(-e.0));
         }
 
-        // It's a path — open it
-        let path_fd = rustix::fs::open(
+        if let Some(handle) = Self::open_if_mounted(path)? {
+            return Ok(handle);
+        }
+
+        // Fallback: read superblock to get UUID
+        Self::open_via_superblock(path)
+    }
+
+    /// Opens the filesystem a path belongs to, if it's currently mounted:
+    /// a UUID, a path on a mounted filesystem, or a block device that's a
+    /// member of one. Returns Ok(None) — instead of falling back to reading
+    /// the superblock — when the path doesn't resolve to a mounted
+    /// filesystem.
+    ///
+    /// Regular files are never resolved: a filesystem image is not itself a
+    /// mounted filesystem, and an image stored on a mounted bcachefs would
+    /// otherwise resolve to the outer filesystem. Callers treat images as
+    /// offline superblocks.
+    pub(crate) fn open_if_mounted<P: AsRef<Path>>(path: P) -> Result<Option<Self>, BchError> {
+        let path = path.as_ref();
+
+        if let Ok(uuid) = parse_uuid(&path.to_string_lossy()) {
+            // No sysfs dir for the UUID means not mounted
+            return Ok(Self::open_by_name(&path.to_string_lossy(), Some(uuid)).ok());
+        }
+
+        let Ok(path_fd) = rustix::fs::open(
             path,
             rustix::fs::OFlags::RDONLY,
             rustix::fs::Mode::empty(),
-        ).map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+        ) else {
+            return Ok(None);
+        };
+
+        let stat = rustix::fs::fstat(&path_fd)
+            .map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+        let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+
+        if file_type == rustix::fs::FileType::RegularFile {
+            return Ok(None);
+        }
 
         // Try BCH_IOCTL_QUERY_UUID — if it succeeds, it's a mounted fs path
         let mut query_uuid = BchIoctlQueryUuid::default();
@@ -153,17 +189,13 @@ impl BcachefsHandle {
             libc::ioctl(path_fd.as_raw_fd(), BCH_IOCTL_QUERY_UUID, &mut query_uuid)
         };
         if ret == 0 {
-            return Self::open_mounted_path(path_fd, query_uuid.uuid);
+            return Self::open_mounted_path(path_fd, query_uuid.uuid).map(Some);
         }
-
-        // stat the path to distinguish block device vs file
-        let stat = rustix::fs::fstat(&path_fd)
-            .map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
 
         // Drop path_fd — we'll re-open via sysfs/ctl
         drop(path_fd);
 
-        if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::BlockDevice {
+        if file_type == rustix::fs::FileType::BlockDevice {
             // Block device: try sysfs symlink
             let major = rustix::fs::major(stat.st_rdev);
             let minor = rustix::fs::minor(stat.st_rdev);
@@ -178,13 +210,12 @@ impl BcachefsHandle {
                     let mut handle = Self::open_by_name(uuid_str, uuid)
                         .map_err(|e| BchError::from_raw(-e.0))?;
                     handle.dev_idx = dev_idx;
-                    return Ok(handle);
+                    return Ok(Some(handle));
                 }
             }
         }
 
-        // Fallback: read superblock to get UUID
-        Self::open_via_superblock(path)
+        Ok(None)
     }
 
     /// Open a mounted filesystem path. The fd becomes the ioctl fd.
@@ -456,6 +487,21 @@ impl BcachefsHandle {
                 continue;
             }
             return Err(Errno(err));
+        }
+    }
+
+    /// BCH_IOCTL_QUERY_BTREE_KEYS: fetch one buffer's worth of formatted
+    /// keys from a btree range. The cursor lives in `arg` — the kernel
+    /// advances `arg.start` past the last key returned; loop until
+    /// `arg.done` is set. Returns ERANGE if `arg.buf_size` can't hold even
+    /// a single key.
+    pub(crate) fn query_btree_keys(&self, arg: &mut bch_ioctl_query_btree_keys) -> Result<(), Errno> {
+        let request = bch_ioc_wr::<bch_ioctl_query_btree_keys>(34);
+        let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request, arg as *mut _) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(Errno(io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO)))
         }
     }
 

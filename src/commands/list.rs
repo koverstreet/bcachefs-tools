@@ -1,6 +1,7 @@
+use std::io::Write;
 use std::ops::ControlFlow;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use bcachefs_kernel::{btree_id, c};
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::BtreeIter;
@@ -14,6 +15,7 @@ use clap::Parser;
 use std::io::{stdout, IsTerminal};
 
 use crate::logging;
+use crate::wrappers::handle::BcachefsHandle;
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
@@ -125,6 +127,65 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// List keys from a mounted filesystem via BCH_IOCTL_QUERY_BTREE_KEYS.
+/// The kernel formats the keys and holds no state between calls: the
+/// cursor lives in `arg.start` and each call is self-contained.
+fn list_keys_online(fs: &BcachefsHandle, opt: &Cli) -> anyhow::Result<()> {
+    let mut flags = 0;
+    if opt.start.snapshot == 0 {
+        flags |= c::BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots;
+    }
+
+    let mut arg = c::bch_ioctl_query_btree_keys {
+        btree: opt.btree.into(),
+        level: opt.level,
+        flags,
+        start: opt.start,
+        end: opt.end,
+        ..Default::default()
+    };
+
+    let mut buf = vec![0u8; 1 << 20];
+    let mut out = stdout().lock();
+
+    loop {
+        arg.buf = buf.as_mut_ptr() as u64;
+        arg.buf_size = buf.len() as u32;
+
+        match fs.query_btree_keys(&mut arg) {
+            Ok(()) => {}
+            Err(e) if e.0 == libc::ERANGE => {
+                let new_len = buf.len() * 4;
+                buf = vec![0u8; new_len];
+                continue;
+            }
+            Err(e) => bail!("BCH_IOCTL_QUERY_BTREE_KEYS: {}", e),
+        }
+
+        out.write_all(&buf[..arg.used as usize])?;
+
+        if arg.done != 0 {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+fn list_online(fs: &BcachefsHandle, opt: &Cli) -> anyhow::Result<()> {
+    if !matches!(opt.mode, Mode::Keys) {
+        bail!("only 'keys' mode is supported on a mounted filesystem");
+    }
+    if opt.bkey_type.is_some() {
+        bail!("--bkey-type is not supported on a mounted filesystem");
+    }
+    if opt.fsck {
+        bail!("--fsck requires the filesystem to be unmounted; use 'bcachefs fsck' for online fsck");
+    }
+
+    list_keys_online(fs, opt)
+}
+
 #[derive(Clone, clap::ValueEnum, Debug)]
 enum Mode {
     Keys,
@@ -137,7 +198,9 @@ enum Mode {
 #[derive(Parser, Debug)]
 #[command(long_about = "\
 Lists btree contents in human-readable text. Operates on unmounted \
-devices in read-only mode. Modes: keys (default) prints key/value pairs, \
+devices in read-only mode; if the filesystem is mounted (device, \
+mount point, or UUID), keys are listed via the kernel instead. \
+Modes: keys (default) prints key/value pairs, \
 formats shows btree node packing format, nodes shows btree node keys, \
 nodes-ondisk shows the raw on-disk representation.\n\n\
 Use -b to select a btree (default: extents), -s/-e for start/end \
@@ -186,6 +249,13 @@ pub struct Cli {
 }
 
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
+    // A mounted filesystem can't be opened for reading directly, but the
+    // kernel can list keys for us:
+    if let Some(fs) = BcachefsHandle::open_if_mounted(&opt.devices[0])? {
+        log::info!("filesystem is mounted, listing via the kernel");
+        return list_online(&fs, opt);
+    }
+
     let mut fs_opts = c::bch_opts::default();
 
     opt_set!(fs_opts, noexcl, 1);
