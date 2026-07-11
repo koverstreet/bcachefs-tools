@@ -346,7 +346,7 @@ static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
 					 u64 *journal_seq,
 					 unsigned flags)
 {
-	if (bch2_trans_has_updates(trans))
+	if (!bch2_trans_has_updates(trans))
 		return 0;
 
 	trans->disk_res		= disk_res;
