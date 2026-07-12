@@ -445,6 +445,7 @@ static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 sub
 		new_inode.bi_subvol = subvolid;
 
 		try(bch2_inode_create(trans, &inode_iter, &new_inode, snapshotid, false));
+		bch2_btree_iter_set_snapshot(&inode_iter, snapshotid);
 		try(bch2_btree_iter_traverse(&inode_iter));
 		try(bch2_inode_write(trans, &inode_iter, &new_inode));
 
