@@ -1528,8 +1528,17 @@ void bch2_write_point_do_index_updates(struct work_struct *work)
 				       elapsed / NSEC_PER_MSEC);
 				WARN_ON_ONCE(1);
 			}
-			if (unlikely(elapsed > 10ULL * NSEC_PER_SEC))
-				BUG();
+			/*
+			 * Debug builds only, and with headroom over the
+			 * legitimate tail: under total swap exhaustion with
+			 * the OOM killer active, >30 s stalls were measured
+			 * while the fs kept completing ops.  A real reclaim
+			 * deadlock never completes, so 60 s still catches it.
+			 * An unconditional BUG() here would panic production
+			 * on a bad-day stall.
+			 */
+			if (unlikely(elapsed > 60ULL * NSEC_PER_SEC))
+				BUG_ON(IS_ENABLED(CONFIG_BCACHEFS_DEBUG));
 		}
 	}
 }

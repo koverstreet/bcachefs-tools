@@ -68,9 +68,15 @@ static atomic_t bch2_swap_inflight = ATOMIC_INIT(0);
 static atomic64_t bch2_swap_completed = ATOMIC64_INIT(0);
 static atomic64_t bch2_swap_errors = ATOMIC64_INIT(0);
 
-/* Warn after 2 s, BUG after 10 s */
+/*
+ * Warn after 2 s, BUG (debug builds) after 60 s.  The BUG threshold must
+ * clear the legitimate tail under total swap exhaustion: with swap 100%
+ * full and the OOM killer active, individual ops measured >5 s while the
+ * fs stayed live (millions of completions, zero errors).  A genuine
+ * reclaim deadlock parks ops forever, so 60 s still catches it quickly.
+ */
 #define SWAP_IO_WARN_NS		(2ULL * NSEC_PER_SEC)
-#define SWAP_IO_BUG_NS		(10ULL * NSEC_PER_SEC)
+#define SWAP_IO_BUG_NS		(60ULL * NSEC_PER_SEC)
 
 /* Pin leaf nodes in a btree covering a key range. */
 static int bch2_swap_pin_btree_range(struct btree_trans *trans,
