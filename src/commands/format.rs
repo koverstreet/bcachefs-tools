@@ -31,7 +31,7 @@ use bcachefs_kernel::{metadata_version, opt_id};
 use bcachefs_kernel::opt_set;
 
 use crate::commands::format_util::DevOpts;
-use crate::commands::opts::{bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
+use crate::commands::opts::{bch_opt_lookup, bch_opt_lookup_negated, opts_usage_str, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::key::Passphrase;
 use crate::util::parse_human_size;
@@ -407,7 +407,10 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
             // Short options
             match arg.as_bytes()[1] {
                 b'L' => {
-                    fs_label = Some(take_short_value(arg, &argv, &mut i, 'L')?);
+                    let val = take_short_value(arg, &argv, &mut i, 'L')?;
+                    let (_, opt) = bch_opt_lookup("fs_label").expect("fs_label option");
+                    parse_opt_val(opt, &val)?;
+                    fs_label = Some(val);
                 }
                 b'l' => {
                     let val = take_short_value(arg, &argv, &mut i, 'l')?;

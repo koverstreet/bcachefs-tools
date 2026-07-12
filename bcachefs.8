@@ -264,6 +264,8 @@ Print superblock layout
 .El
 .It Nm Ic set-fs-option Oo Ar options Oc Ar device
 .Bl -tag -width Ds
+.It Fl -fs_label Ns = Ns Ar label
+Set the filesystem label.
 .It Fl -errors Ns = Ns ( Cm continue | ro | panic )
 Action to take on filesystem error
 .It Fl -metadata_replicas Ns = Ns Ar number

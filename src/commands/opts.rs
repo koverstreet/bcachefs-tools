@@ -34,6 +34,7 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
         if opt.flags as u32 & flags_all != flags_all { continue }
         if opt.flags as u32 & flags_none != 0 { continue }
         let Some(name) = opt.name() else { continue };
+        if name == "fs_label" && flags_all & c::opt_flags::OPT_FORMAT as u32 != 0 { continue }
 
         let mut col = 0;
         let s = format!("      --{name}");
@@ -150,6 +151,17 @@ pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
             }
         }
 
+        if name == "fs_label" {
+            let max_label_bytes = c::BCH_SB_LABEL_SIZE as usize - 1;
+            arg = arg.value_parser(move |value: &str| {
+                if value.len() > max_label_bytes {
+                    Err(format!("fs_label: too long (max {max_label_bytes} bytes)"))
+                } else {
+                    Ok(value.to_owned())
+                }
+            });
+        }
+
         args.push(arg);
     });
 
@@ -206,17 +218,113 @@ pub(crate) fn parse_opt_val(
     opt: &c::bch_option,
     val_str: &str,
 ) -> Result<Option<u64>> {
+    let fs_label = opt.name() == Some("fs_label");
     let c_val = CString::new(val_str)?;
     let mut err = Printbuf::new();
-    match bcachefs_kernel::opts::opt_parse(None, opt, &c_val, Some(&mut err)) {
-        Ok(v) => Ok(Some(v)),
-        Err(e) if e == -(c::bch_errcode::BCH_ERR_option_needs_open_fs as i32) => Ok(None),
+    let parsed = match bcachefs_kernel::opts::opt_parse(None, opt, &c_val, Some(&mut err)) {
+        Ok(v) => v,
+        Err(e) if e == -(c::bch_errcode::BCH_ERR_option_needs_open_fs as i32) => return Ok(None),
         Err(_) => {
             let msg = err.as_str();
             if msg.is_empty() {
                 bail!("invalid option: {}", val_str);
             }
             bail!("invalid option: {}", msg);
+        }
+    };
+
+    if fs_label {
+        // The parsed value is a pointer into c_val, which is only needed for
+        // validation here. Keep the owned string in bch_opt_strs instead.
+        return Ok(None);
+    }
+
+    Ok(Some(parsed))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fs_label_parse_does_not_escape_into_scalar_opts() {
+        let (id, opt) = bch_opt_lookup("fs_label").unwrap();
+        let label = b"owned-superblock-label";
+        let label_len = label.len();
+        let source = unsafe { libc::malloc(label_len + 1) as *mut libc::c_char };
+        assert!(!source.is_null());
+        unsafe {
+            std::ptr::copy_nonoverlapping(label.as_ptr(), source as *mut u8, label_len);
+            *source.add(label_len) = 0;
+        }
+        let mut parsed = 0;
+
+        assert_eq!(
+            unsafe {
+                c::bch2_opt_parse(
+                    std::ptr::null_mut(),
+                    opt,
+                    source,
+                    &mut parsed,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+
+        let mut scalar_opts = c::bch_opts::default();
+        unsafe { c::bch2_opt_set_by_id(&mut scalar_opts, id, parsed) };
+        assert_eq!(unsafe { c::bch2_opt_get_by_id(&scalar_opts, id) }, 0);
+        let scalar_opts_copy = scalar_opts;
+        assert_eq!(unsafe { c::bch2_opt_get_by_id(&scalar_opts_copy, id) }, 0);
+
+        let mut sb = c::bch_sb_handle::default();
+        assert_eq!(unsafe { c::bch2_sb_realloc(&mut sb, 0) }, 0);
+        assert!(unsafe { c::__bch2_opt_set_sb(sb.sb, -1, opt, parsed) });
+
+        unsafe { libc::free(source as *mut libc::c_void) };
+        let poison = unsafe { libc::malloc(label_len + 1) as *mut libc::c_char };
+        assert_eq!(poison, source);
+        unsafe {
+            std::ptr::write_bytes(poison as *mut u8, b'X', label_len);
+            *poison.add(label_len) = 0;
+        }
+        assert_eq!(unsafe { c::bch2_sb_realloc(&mut sb, 1024) }, 0);
+
+        let mut from_sb = c::bch_opts::default();
+        assert_eq!(unsafe { c::bch2_opts_from_sb(&mut from_sb, sb.sb) }, 0);
+        assert_eq!(unsafe { c::bch2_opt_get_by_id(&from_sb, id) }, 0);
+
+        let mut no_sb = Printbuf::new();
+        unsafe {
+            c::bch2_opt_to_text(
+                no_sb.as_raw(),
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                opt,
+                parsed,
+                0,
+            )
+        };
+        assert_eq!(no_sb.as_str(), "");
+
+        let mut rendered = Printbuf::new();
+        unsafe {
+            c::bch2_opt_to_text(
+                rendered.as_raw(),
+                std::ptr::null_mut(),
+                sb.sb,
+                opt,
+                parsed,
+                0,
+            )
+        };
+        assert_eq!(rendered.as_str(), "owned-superblock-label");
+        assert_eq!(unsafe { *poison }, b'X' as libc::c_char);
+
+        unsafe {
+            libc::free(poison as *mut libc::c_void);
+            c::bch2_free_super(&mut sb);
         }
     }
 }
