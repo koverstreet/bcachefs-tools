@@ -449,6 +449,7 @@ static int snapshot_edge_ptr_available(struct btree_trans *trans,
 static int snapshot_edge_repair_commit(struct btree_trans *trans)
 {
 	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+	trans->c->snapshots.need_table_rebuild = true;
 	return bch_err_throw(trans->c, transaction_restart_nested);
 }
 
@@ -695,11 +696,16 @@ int bch2_check_snapshots_trans(struct btree_trans *trans)
 	 * We iterate backwards as checking/fixing the depth field requires that
 	 * the parent's depth already be correct:
 	 */
-	return for_each_btree_key_reverse_commit(trans, iter,
+	try(for_each_btree_key_reverse_commit(trans, iter,
 				BTREE_ID_snapshots, POS_MAX,
 				BTREE_ITER_prefetch, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-			check_snapshot(trans, &iter, k));
+			check_snapshot(trans, &iter, k)));
+
+	if (trans->c->snapshots.need_table_rebuild)
+		try(bch2_snapshot_table_rebuild(trans));
+
+	return 0;
 }
 
 

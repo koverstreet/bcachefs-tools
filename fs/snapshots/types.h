@@ -95,6 +95,8 @@ struct snapshot_delete {
 struct bch_fs_snapshots {
 	struct snapshot_table __rcu		*table;
 	struct mutex				table_lock;
+	/* a topology repair invalidated descendants' is_ancestor bitmaps: */
+	bool					need_table_rebuild;
 	struct percpu_rw_semaphore		create_lock;
 	struct snapshot_delete			delete;
 	struct work_struct			wait_for_pagecache_and_delete_work;

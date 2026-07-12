@@ -817,6 +817,22 @@ int bch2_snapshot_node_create(struct btree_trans *trans, u32 parent,
 
 /* Module init/exit: */
 
+/*
+ * A topology repair rewrote a parent pointer: mark_snapshot recomputed that
+ * node's table entry, but descendants' is_ancestor bitmaps were built under
+ * the old topology. Re-mark everything (reverse: ancestors first). Ancestor
+ * queries during check_snapshots itself use the parent-walking _early
+ * variants, so the stale window ends before anything trusts the bitmaps.
+ */
+int bch2_snapshot_table_rebuild(struct btree_trans *trans)
+{
+	try(for_each_btree_key_reverse(trans, iter, BTREE_ID_snapshots, POS_MAX, 0, k,
+		bch2_mark_snapshot(trans, k)));
+
+	trans->c->snapshots.need_table_rebuild = false;
+	return 0;
+}
+
 int bch2_snapshots_read(struct bch_fs *c)
 {
 	/*
