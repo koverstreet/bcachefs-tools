@@ -430,6 +430,33 @@ pub fn scan_devices(device: &String, opts: &bch_opts) -> Result<OsString> {
     Ok(joined_device_str(&sbs))
 }
 
+/// A filesystem opened either online (mounted: talk to the kernel via
+/// ioctl/sysfs) or offline (opened in userspace via libbcachefs):
+pub enum OpenedFs {
+    Online(crate::wrappers::handle::BcachefsHandle),
+    Offline(Fs),
+}
+
+/// The standard "operate on a filesystem that may or may not be mounted"
+/// open, shared by list/set-option/device-add et al: if any of the given
+/// paths resolves to a mounted filesystem (mount point, member block
+/// device, or UUID), returns a handle to it; otherwise opens offline with
+/// the given opts, discovering other members as needed.
+///
+/// "Couldn't tell" (e.g. a sysfs error on a mounted filesystem) is an
+/// error, never silently treated as offline - the offline fallback on a
+/// live filesystem is how you corrupt it.
+pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: bch_opts)
+    -> Result<OpenedFs, BchError>
+{
+    use crate::wrappers::handle::BcachefsHandle;
+
+    Ok(match BcachefsHandle::open_if_mounted_any(devs)? {
+        Some(h) => OpenedFs::Online(h),
+        None    => OpenedFs::Offline(open_scan(devs, offline_opts)?),
+    })
+}
+
 /// Discover all devices in a multi-device filesystem, then open it.
 ///
 /// When `devs` contains a single device that belongs to a multi-device

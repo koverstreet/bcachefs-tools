@@ -2,10 +2,12 @@ use std::ffi::CString;
 
 use anyhow::{bail, Result};
 use bcachefs_kernel::c;
+use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
 use clap::{Arg, ArgAction, Command};
 
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
+use crate::device_scan::OpenedFs;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs;
 
@@ -47,22 +49,23 @@ fn cmd_set_option(argv: Vec<String>) -> Result<()> {
         bail!("No options specified");
     }
 
-    let online = devices.iter().any(|dev| sysfs::dev_mounted(dev));
+    let devs: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
 
-    if online {
-        set_option_online(&devices, &dev_idxs, &opts)
-    } else {
-        set_option_offline(&devices, &dev_idxs, &opts)
+    let mut fs_opts = c::bch_opts::default();
+    opt_set!(fs_opts, nostart, 1);
+
+    match crate::device_scan::open_online_or_offline(&devs, fs_opts)? {
+        OpenedFs::Online(fs)  => set_option_online(fs, &devices, &dev_idxs, &opts),
+        OpenedFs::Offline(fs) => set_option_offline(fs, &devices, &dev_idxs, &opts),
     }
 }
 
 fn set_option_online(
+    fs: BcachefsHandle,
     devices: &[&String],
     dev_idxs: &[u32],
     opts: &[(String, String)],
 ) -> Result<()> {
-    let fs = BcachefsHandle::open(devices[0].as_str())?;
-
     for dev in &devices[1..] {
         let fs2 = BcachefsHandle::open(dev.as_str())?;
         if fs.uuid() != fs2.uuid() {
@@ -114,17 +117,11 @@ fn set_option_online(
 }
 
 fn set_option_offline(
+    fs: Fs,
     devices: &[&String],
     dev_idxs: &[u32],
     opts: &[(String, String)],
 ) -> Result<()> {
-    let devs: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
-
-    let mut fs_opts = c::bch_opts::default();
-    opt_set!(fs_opts, nostart, 1);
-
-    let fs = crate::device_scan::open_scan(&devs, fs_opts)?;
-
     for (name, value) in opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");

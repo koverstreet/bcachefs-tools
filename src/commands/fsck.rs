@@ -289,26 +289,12 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
     let fs_opts = bcachefs_kernel::opts::parse_mount_opts_vec(&opts, false)
         .map_err(|e| anyhow!("error parsing options: {}", crate::wrappers::bch_err_str(e.raw())))?;
 
-    // Check if any device is a mountpoint/directory (online fsck)
-    if devices.len() == 1 {
-        if let Ok(m) = std::fs::metadata(&devices[0]) {
-            if m.is_dir() {
-                println!("Running fsck online");
-                let fs = BcachefsHandle::open(&devices[0])?;
-                let ret = fsck_online(&fs, &opts_str)?;
-                process::exit(ret);
-            }
-        }
-    }
-
-    // Check if any device is mounted (online fsck)
-    for dev in devices {
-        if sysfs::dev_mounted(dev) {
-            println!("Running fsck online");
-            let fs = BcachefsHandle::open(dev)?;
-            let ret = fsck_online(&fs, &opts_str)?;
-            process::exit(ret);
-        }
+    // If any path resolves to a mounted filesystem - mount point, member
+    // block device, or UUID - fsck online:
+    if let Some(fs) = BcachefsHandle::open_if_mounted_any(devices)? {
+        println!("Running fsck online");
+        let ret = fsck_online(&fs, &opts_str)?;
+        process::exit(ret);
     }
 
     // Discover all devices in a multi-device filesystem. When the user

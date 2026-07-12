@@ -140,12 +140,54 @@ impl BcachefsHandle {
                 .map_err(|e| BchError::from_raw(-e.0));
         }
 
-        // It's a path — open it
-        let path_fd = rustix::fs::open(
+        if let Some(handle) = Self::open_if_mounted(path)? {
+            return Ok(handle);
+        }
+
+        // Fallback: read superblock to get UUID
+        Self::open_via_superblock(path)
+    }
+
+    /// Opens the filesystem a path belongs to, if it's currently mounted:
+    /// a UUID, a path on a mounted filesystem, or a block device that's a
+    /// member of one. Returns Ok(None) — instead of falling back to reading
+    /// the superblock — when the path doesn't resolve to a mounted
+    /// filesystem.
+    ///
+    /// Regular files are never resolved: a filesystem image is not itself a
+    /// mounted filesystem, and an image stored on a mounted bcachefs would
+    /// otherwise resolve to the outer filesystem. Callers treat images as
+    /// offline superblocks.
+    pub(crate) fn open_if_mounted<P: AsRef<Path>>(path: P) -> Result<Option<Self>, BchError> {
+        let path = path.as_ref();
+
+        if let Ok(uuid) = parse_uuid(&path.to_string_lossy()) {
+            // No sysfs dir for the UUID means not mounted; any other error
+            // (e.g. EACCES on the ctl device) is real and must not be
+            // mistaken for "not mounted", or callers fall back to offline
+            // superblock access on a live filesystem:
+            return match Self::open_by_name(&path.to_string_lossy(), Some(uuid)) {
+                Ok(h) => Ok(Some(h)),
+                Err(e) if e.0 == libc::ENOENT => Ok(None),
+                Err(e) => Err(BchError::from_raw(-e.0)),
+            };
+        }
+
+        let Ok(path_fd) = rustix::fs::open(
             path,
             rustix::fs::OFlags::RDONLY,
             rustix::fs::Mode::empty(),
-        ).map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+        ) else {
+            return Ok(None);
+        };
+
+        let stat = rustix::fs::fstat(&path_fd)
+            .map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
+        let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
+
+        if file_type == rustix::fs::FileType::RegularFile {
+            return Ok(None);
+        }
 
         // Try BCH_IOCTL_QUERY_UUID — if it succeeds, it's a mounted fs path
         let mut query_uuid = BchIoctlQueryUuid::default();
@@ -153,17 +195,13 @@ impl BcachefsHandle {
             libc::ioctl(path_fd.as_raw_fd(), BCH_IOCTL_QUERY_UUID, &mut query_uuid)
         };
         if ret == 0 {
-            return Self::open_mounted_path(path_fd, query_uuid.uuid);
+            return Self::open_mounted_path(path_fd, query_uuid.uuid).map(Some);
         }
-
-        // stat the path to distinguish block device vs file
-        let stat = rustix::fs::fstat(&path_fd)
-            .map_err(|e| BchError::from_raw(-e.raw_os_error()))?;
 
         // Drop path_fd — we'll re-open via sysfs/ctl
         drop(path_fd);
 
-        if rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::BlockDevice {
+        if file_type == rustix::fs::FileType::BlockDevice {
             // Block device: try sysfs symlink
             let major = rustix::fs::major(stat.st_rdev);
             let minor = rustix::fs::minor(stat.st_rdev);
@@ -178,13 +216,23 @@ impl BcachefsHandle {
                     let mut handle = Self::open_by_name(uuid_str, uuid)
                         .map_err(|e| BchError::from_raw(-e.0))?;
                     handle.dev_idx = dev_idx;
-                    return Ok(handle);
+                    return Ok(Some(handle));
                 }
             }
         }
 
-        // Fallback: read superblock to get UUID
-        Self::open_via_superblock(path)
+        Ok(None)
+    }
+
+    /// Multi-device form of open_if_mounted(): open the filesystem if any
+    /// of the given paths resolves to a mounted one.
+    pub(crate) fn open_if_mounted_any<P: AsRef<Path>>(paths: &[P]) -> Result<Option<Self>, BchError> {
+        for p in paths {
+            if let Some(h) = Self::open_if_mounted(p)? {
+                return Ok(Some(h));
+            }
+        }
+        Ok(None)
     }
 
     /// Open a mounted filesystem path. The fd becomes the ioctl fd.

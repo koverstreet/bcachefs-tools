@@ -20,6 +20,7 @@ use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
+use crate::device_scan::OpenedFs;
 use crate::util::{fmt_sectors_human, parse_human_size};
 use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
 use crate::wrappers::handle::BcachefsHandle;
@@ -54,12 +55,18 @@ fn cmd_device_add(argv: Vec<String>) -> Result<()> {
     let dev_path = matches.get_one::<String>("device").unwrap();
     let force = matches.get_flag("force");
 
-    // Try online first — works for mountpoints, and for block devices
-    // or files with a bcachefs superblock if the filesystem is mounted.
-    // If the filesystem isn't mounted, fall back to offline add.
-    match BcachefsHandle::open(fs_path) {
-        Ok(handle) => cmd_device_add_online(handle, dev_path, force, &matches),
-        Err(_) => cmd_device_add_offline(fs_path, dev_path, force, &matches),
+    // Open the filesystem without starting it if it isn't mounted - same
+    // approach as 'bcachefs image update'; works even when the allocator
+    // is stuck and the filesystem can't mount normally:
+    let mut offline_opts: c::bch_opts = Default::default();
+    opt_set!(offline_opts, nostart, 1u8);
+    opt_set!(offline_opts, copygc_enabled, 0u8);
+    opt_set!(offline_opts, reconcile_enabled, 0u8);
+
+    match crate::device_scan::open_online_or_offline(&[PathBuf::from(fs_path)], offline_opts)
+	    .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))? {
+        OpenedFs::Online(handle) => cmd_device_add_online(handle, dev_path, force, &matches),
+        OpenedFs::Offline(fs)    => cmd_device_add_offline(fs, dev_path, force, &matches),
     }
 }
 
@@ -89,22 +96,11 @@ fn cmd_device_add_online(
 }
 
 fn cmd_device_add_offline(
-    fs_path: &str,
+    fs: Fs,
     dev_path: &str,
     force: bool,
     matches: &clap::ArgMatches,
 ) -> Result<()> {
-    // Open the existing filesystem without starting it — same approach
-    // as 'bcachefs image update'. This works even when the allocator is
-    // stuck and the filesystem can't mount normally.
-    let mut opts: c::bch_opts = Default::default();
-    opt_set!(opts, nostart, 1u8);
-    opt_set!(opts, copygc_enabled, 0u8);
-    opt_set!(opts, reconcile_enabled, 0u8);
-
-    let fs = crate::device_scan::open_scan(&[PathBuf::from(fs_path)], opts)
-        .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))?;
-
     let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
     let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
 
