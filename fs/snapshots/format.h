@@ -43,6 +43,9 @@ struct bch_snapshot {
 	__le32			depth;
 	__le32			skip[3];
 	bch_le128		btime;
+
+	__le32			state;
+	__le32			pad;
 };
 
 /*
@@ -70,10 +73,45 @@ struct bch_snapshot {
  * by cross checking with the subvolume btree: delete_dead_snapshots() can take
  * out more data than any other codepath if it runs incorrectly
  */
-LE32_BITMASK(BCH_SNAPSHOT_WILL_DELETE,	struct bch_snapshot, flags,  0,  1)
-LE32_BITMASK(BCH_SNAPSHOT_SUBVOL,	struct bch_snapshot, flags,  1,  2)
-LE32_BITMASK(BCH_SNAPSHOT_DELETED,	struct bch_snapshot, flags,  2,  3)
-LE32_BITMASK(BCH_SNAPSHOT_NO_KEYS,	struct bch_snapshot, flags,  3,  4)
+/*
+ * The state field licenses the most destructive thing the filesystem can do -
+ * deleting user data - so corruption of it must be detectable, never
+ * misinterpretable. Every state is a randomly generated codeword: a stray
+ * memory stomper almost never lands on a legal state (4 legal values in a
+ * 2^32 space; zero and all-ones are illegal, so a wiped field is detected,
+ * not misread), and any two states are >= 14 bit flips apart (enforced
+ * below), so sparse bit corruption can't turn one legal state into another.
+ */
+#define BCH_SNAPSHOT_STATES()			\
+	x(live,			0x757c47a2)	\
+	x(will_delete,		0x3316a8d2)	\
+	x(no_keys,		0x372b5a01)	\
+	x(deleted,		0x7cd4a225)
+
+enum bch_snapshot_state {
+#define x(n, v) SNAPSHOT_STATE_##n = v,
+	BCH_SNAPSHOT_STATES()
+#undef x
+};
+
+/* pairwise Hamming distance; add a row per pair when adding a state: */
+static_assert(__builtin_popcount(SNAPSHOT_STATE_live        ^ SNAPSHOT_STATE_will_delete) >= 14);
+static_assert(__builtin_popcount(SNAPSHOT_STATE_live        ^ SNAPSHOT_STATE_no_keys)     >= 14);
+static_assert(__builtin_popcount(SNAPSHOT_STATE_live        ^ SNAPSHOT_STATE_deleted)     >= 14);
+static_assert(__builtin_popcount(SNAPSHOT_STATE_will_delete ^ SNAPSHOT_STATE_no_keys)     >= 14);
+static_assert(__builtin_popcount(SNAPSHOT_STATE_will_delete ^ SNAPSHOT_STATE_deleted)     >= 14);
+static_assert(__builtin_popcount(SNAPSHOT_STATE_no_keys     ^ SNAPSHOT_STATE_deleted)     >= 14);
+
+/* weight window: >= 14 flips from a zeroed field and from an all-ones one: */
+#define x(n, v) static_assert(__builtin_popcount(v) >= 14 && __builtin_popcount(v) <= 18);
+	BCH_SNAPSHOT_STATES()
+#undef x
+
+/* Obsolete */
+LE32_BITMASK(BCH_SNAPSHOT_WILL_DELETE_OBSOLETE,	struct bch_snapshot, flags,  0,  1)
+LE32_BITMASK(BCH_SNAPSHOT_SUBVOL_OBSOLETE,	struct bch_snapshot, flags,  1,  2)
+LE32_BITMASK(BCH_SNAPSHOT_DELETED_OBSOLETE,	struct bch_snapshot, flags,  2,  3)
+LE32_BITMASK(BCH_SNAPSHOT_NO_KEYS_OBSOLETE,	struct bch_snapshot, flags,  3,  4)
 
 /*
  * Snapshot trees:

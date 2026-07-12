@@ -129,7 +129,8 @@
 	  BIT_ULL(BCH_RECOVERY_PASS_check_lrus)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_alloc_to_lru_refs)|	\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|		\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_xattrs),		\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_xattrs)|		\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots),		\
 	  BCH_FSCK_ERR_lru_entry_bad,				\
 	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry,		\
 	  BCH_FSCK_ERR_inode_has_inode_opts_flag_wrong,		\

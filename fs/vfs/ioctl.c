@@ -795,7 +795,10 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 		struct bkey_s_c_snapshot snap = bkey_s_c_to_snapshot(k);
 		if (le32_to_cpu(snap.v->tree) != tree_id)
 			continue;
-		if (BCH_SNAPSHOT_DELETED(snap.v))
+
+		struct bch_snapshot s;
+		bkey_val_copy_pad(&s, snap);
+		if (bch2_snapshot_state_compat(&s) == SNAPSHOT_STATE_deleted)
 			continue;
 
 		u64 sectors[1] = {};

@@ -33,6 +33,31 @@ int bch2_check_snapshot_needs_deletion(struct btree_trans *, struct bkey_s_c, u3
 	.min_val_size	= 24,					\
 })
 
+static inline enum bch_snapshot_state bch2_snapshot_state(const struct bch_snapshot *s)
+{
+	return le32_to_cpu(s->state);
+}
+
+static inline enum bch_snapshot_state bch2_snapshot_state_from_flags(const struct bch_snapshot *s)
+{
+	if (BCH_SNAPSHOT_DELETED_OBSOLETE(s))
+		return SNAPSHOT_STATE_deleted;
+	if (BCH_SNAPSHOT_NO_KEYS_OBSOLETE(s))
+		return SNAPSHOT_STATE_no_keys;
+	if (BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(s))
+		return SNAPSHOT_STATE_will_delete;
+	return SNAPSHOT_STATE_live;
+}
+
+static inline enum bch_snapshot_state bch2_snapshot_state_compat(const struct bch_snapshot *s)
+{
+	return s->state
+		? bch2_snapshot_state(s)
+		: bch2_snapshot_state_from_flags(s);
+}
+
+void bch2_snapshot_state_set(struct bch_snapshot *, enum bch_snapshot_state);
+
 static inline struct snapshot_t *__snapshot_t(struct snapshot_table *t, u32 id)
 {
 	u32 idx = U32_MAX - id;

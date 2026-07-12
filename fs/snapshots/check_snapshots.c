@@ -267,6 +267,55 @@ static int snapshot_tree_ptr_repair(struct btree_trans *trans,
 	return 0;
 }
 
+static int check_snapshot_to_subvol(struct btree_trans *trans,
+			  struct btree_iter *iter,
+			  struct bkey_s_c k,
+			  struct bch_snapshot *s,
+			  struct bkey_i_snapshot *u)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(printbuf, buf)();
+
+	bool should_have_subvol = bch2_snapshot_state(s) == SNAPSHOT_STATE_live && !s->children[0];
+
+	if (should_have_subvol && s->subvol) {
+		/* dangling snapshot will be handled later */
+		u32 id = le32_to_cpu(s->subvol);
+
+		struct bch_subvolume subvol;
+		int ret = bch2_subvolume_get(trans, id, false, &subvol);
+		if (bch2_err_matches(ret, ENOENT))
+			bch_err(c, "snapshot points to nonexistent subvolume:\n  %s",
+				(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
+		if (ret)
+			return ret;
+	} else {
+		if (ret_fsck_err_on(s->subvol,
+				trans, snapshot_should_not_have_subvol,
+				"snapshot should not point to subvol:\n%s",
+				(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+
+			/* XXX: DANGEROUS */
+
+			u->v.subvol = 0;
+			*s = u->v;
+		}
+	}
+
+	if (ret_fsck_err_on(BCH_SNAPSHOT_SUBVOL_OBSOLETE(s) != (s->subvol != 0),
+			    trans, snapshot_subvol_flag_wrong,
+			    "snapshot node %llu has wrong subvol flag",
+			    k.k->p.offset)) {
+		u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+
+		SET_BCH_SNAPSHOT_SUBVOL_OBSOLETE(&u->v, s->subvol != 0);
+		*s = u->v;
+	}
+
+	return 0;
+}
+
 static int check_snapshot(struct btree_trans *trans,
 			  struct btree_iter *iter,
 			  struct bkey_s_c k)
@@ -282,7 +331,18 @@ static int check_snapshot(struct btree_trans *trans,
 	struct bch_snapshot s;
 	bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(k));
 
-	if (BCH_SNAPSHOT_DELETED(&s))
+	/*
+	 * On upgrade the flag bits are authoritative - an old kernel may have
+	 * written them while unable to maintain the state field:
+	 */
+	if (c->sb.version_upgrade_complete < bcachefs_metadata_version_per_dev_fragmentation_lru &&
+	    bch2_snapshot_state(&s) != bch2_snapshot_state_from_flags(&s)) {
+		u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+		u->v.state = cpu_to_le32(bch2_snapshot_state_from_flags(&s));
+		s = u->v;
+	}
+
+	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted)
 		return 0;
 
 	struct bch_snapshot parent;
@@ -318,37 +378,6 @@ static int check_snapshot(struct btree_trans *trans,
 			bch_err(c, "snapshot child %u has wrong parent (got %u should be %llu)",
 				child_id, le32_to_cpu(child.parent), k.k->p.offset);
 			return bch_err_throw(c, EINVAL_snapshot_child_bad_parent);
-		}
-	}
-
-	bool should_have_subvol = BCH_SNAPSHOT_SUBVOL(&s) &&
-		!BCH_SNAPSHOT_WILL_DELETE(&s);
-
-	if (should_have_subvol) {
-		u32 id = le32_to_cpu(s.subvol);
-
-		struct bch_subvolume subvol;
-		ret = bch2_subvolume_get(trans, id, false, &subvol);
-		if (bch2_err_matches(ret, ENOENT))
-			bch_err(c, "snapshot points to nonexistent subvolume:\n  %s",
-				(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
-		if (ret)
-			return ret;
-
-		if (BCH_SNAPSHOT_SUBVOL(&s) != (le32_to_cpu(subvol.snapshot) == k.k->p.offset)) {
-			bch_err(c, "snapshot node %llu has wrong BCH_SNAPSHOT_SUBVOL",
-				k.k->p.offset);
-			return bch_err_throw(c, EINVAL_snapshot_bad_subvol_flag);
-		}
-	} else {
-		if (ret_fsck_err_on(s.subvol,
-				trans, snapshot_should_not_have_subvol,
-				"snapshot should not point to subvol:\n%s",
-				(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-
-			u->v.subvol = 0;
-			s = u->v;
 		}
 	}
 
@@ -408,6 +437,8 @@ static int check_snapshot(struct btree_trans *trans,
 
 	if (u)
 		bubble_sort(u->v.skip, ARRAY_SIZE(u->v.skip), cmp_le32);
+
+	try(check_snapshot_to_subvol(trans, iter, k, &s, u));
 
 	return 0;
 }
@@ -475,10 +506,11 @@ static int check_snapshot_exists(struct btree_trans *trans, u32 id)
 		if (k.k->type == KEY_TYPE_subvolume &&
 		    le32_to_cpu(bkey_s_c_to_subvolume(k).v->snapshot) == id) {
 			snapshot->v.subvol = cpu_to_le32(k.k->p.offset);
-			SET_BCH_SNAPSHOT_SUBVOL(&snapshot->v, true);
 			break;
 		}
 	}
+
+	bch2_snapshot_state_set(&snapshot->v, SNAPSHOT_STATE_live);
 
 	return  bch2_snapshot_table_make_room(c, id) ?:
 		bch2_btree_insert_trans(trans, BTREE_ID_snapshots, &snapshot->k_i, 0);

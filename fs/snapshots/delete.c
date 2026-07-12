@@ -134,12 +134,11 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
 		return ret;
 
 	/* already deleted? */
-	if (BCH_SNAPSHOT_WILL_DELETE(&s->v))
+	if (bch2_snapshot_state(&s->v) != SNAPSHOT_STATE_live)
 		return 0;
 
-	SET_BCH_SNAPSHOT_WILL_DELETE(&s->v, true);
-	SET_BCH_SNAPSHOT_SUBVOL(&s->v, false);
 	s->v.subvol = 0;
+	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_will_delete);
 	return 0;
 }
 
@@ -204,9 +203,7 @@ static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
 
 	try(bch2_snapshot_node_check_no_data(trans, id));
 
-	SET_BCH_SNAPSHOT_NO_KEYS(&s->v,		true);
-	SET_BCH_SNAPSHOT_WILL_DELETE(&s->v,	false);
-	s->v.subvol = 0;
+	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_no_keys);
 	return 0;
 }
 
@@ -231,7 +228,9 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 
 	try(bch2_snapshot_node_check_no_data(trans, id));
 
-	BUG_ON(BCH_SNAPSHOT_DELETED(&s->v));
+	if (bch2_trans_inconsistent_on(bch2_snapshot_state(&s->v) == SNAPSHOT_STATE_deleted, trans,
+			"deleting snapshot node %u: already in state deleted", id))
+		return bch_err_throw(c, EINVAL_snapshot_delete_already_deleted);
 
 	if (s->v.children[1]) {
 		CLASS(bch_log_msg, msg)(c);
@@ -311,7 +310,6 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 	}
 
 	if (!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)) {
-		SET_BCH_SNAPSHOT_DELETED(&s->v, true);
 		s->v.parent		= 0;
 		/*
 		 * Retain the pointer to our live descendant: the node is spliced
@@ -328,6 +326,7 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 		s->v.skip[0]		= 0;
 		s->v.skip[1]		= 0;
 		s->v.skip[2]		= 0;
+		bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_deleted);
 	} else {
 		s->k.type = KEY_TYPE_deleted;
 		set_bkey_val_u64s(&s->k, 0);
@@ -614,8 +613,10 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 	struct bch_fs *c = trans->c;
 	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 
-	if (BCH_SNAPSHOT_SUBVOL(s.v) ||
-	    BCH_SNAPSHOT_DELETED(s.v))
+	if (bch2_snapshot_state(s.v) == SNAPSHOT_STATE_deleted)
+		return 0;
+
+	if (bch2_snapshot_state(s.v) == SNAPSHOT_STATE_live && s.v->subvol)
 		return 0;
 
 	struct snapshot_delete *d = &c->snapshots.delete;
@@ -638,7 +639,7 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 	if (nr_live_children == 2)
 		return 0;
 
-	if (!BCH_SNAPSHOT_NO_KEYS(s.v))
+	if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys)
 		try(snapshot_list_add_nodup(c, &d->deleting_from_trees,
 					    bch2_snapshot_tree(c, s.k->p.offset)));
 
@@ -658,7 +659,7 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 		 * but we still track them so that we can find the correct
 		 * live_child when deleting parents, above:
 		 */
-		if (!BCH_SNAPSHOT_NO_KEYS(s.v))
+		if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys)
 			try(darray_push(&d->delete_interior, n));
 		else
 			try(darray_push(&d->no_keys, n));
@@ -858,10 +859,7 @@ static int bch2_get_dead_interior_snapshots(struct btree_trans *trans, struct bk
 
 	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 
-	if (BCH_SNAPSHOT_DELETED(s.v))
-		return 0;
-
-	if (BCH_SNAPSHOT_NO_KEYS(s.v)) {
+	if (bch2_snapshot_state(s.v) == SNAPSHOT_STATE_no_keys) {
 		u32 live_child = 0, nr_live_children = 0;
 		for (unsigned i = 0; i < 2; i++) {
 			u32 id = le32_to_cpu(s.v->children[i]);
@@ -927,10 +925,10 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 	return 0;
 }
 
-static bool interior_snapshot_needs_delete(struct bkey_s_c_snapshot snap)
+static bool interior_snapshot_needs_delete(const struct bch_snapshot *s)
 {
 	/* If there's one child, it's redundant and keys will be moved to the child */
-	return !!snap.v->children[0] + !!snap.v->children[1] == 1;
+	return !!s->children[0] + !!s->children[1] == 1;
 }
 
 int bch2_check_snapshot_needs_deletion(struct btree_trans *trans, struct bkey_s_c k,
@@ -939,16 +937,18 @@ int bch2_check_snapshot_needs_deletion(struct btree_trans *trans, struct bkey_s_
 	if (k.k->type != KEY_TYPE_snapshot)
 		return 0;
 
-	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 	struct bch_fs *c = trans->c;
+	struct bch_snapshot s;
+	bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(k));
+	enum bch_snapshot_state state = bch2_snapshot_state_compat(&s);
 
-	if (BCH_SNAPSHOT_DELETED(s.v))
+	if (state == SNAPSHOT_STATE_deleted)
 		return 0;
 
-	if (BCH_SNAPSHOT_NO_KEYS(s.v))
+	if (state == SNAPSHOT_STATE_no_keys)
 		*nr_empty_interior += 1;
-	else if (BCH_SNAPSHOT_WILL_DELETE(s.v) ||
-		 interior_snapshot_needs_delete(s))
+	else if (state == SNAPSHOT_STATE_will_delete ||
+		 interior_snapshot_needs_delete(&s))
 		set_bit(BCH_FS_need_delete_dead_snapshots, &c->flags);
 
 	return 0;

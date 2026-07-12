@@ -472,7 +472,7 @@ static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 sub
 	u32 snapshot_tree = le32_to_cpu(s->v.tree);
 
 	s->v.subvol = cpu_to_le32(subvolid);
-	SET_BCH_SNAPSHOT_SUBVOL(&s->v, true);
+	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_live);
 
 	struct bkey_i_snapshot_tree *st = bch2_bkey_get_mut_typed(trans,
 			BTREE_ID_snapshot_trees, POS(0, snapshot_tree),

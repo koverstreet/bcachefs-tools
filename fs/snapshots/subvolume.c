@@ -622,7 +622,7 @@ int bch2_initialize_subvolumes(struct bch_fs *c)
 	root_snapshot.v.parent	= 0;
 	root_snapshot.v.subvol	= cpu_to_le32(BCACHEFS_ROOT_SUBVOL);
 	root_snapshot.v.tree	= cpu_to_le32(1);
-	SET_BCH_SNAPSHOT_SUBVOL(&root_snapshot.v, true);
+	bch2_snapshot_state_set(&root_snapshot.v, SNAPSHOT_STATE_live);
 
 	bkey_subvolume_init(&root_volume.k_i);
 	root_volume.k.p.offset = BCACHEFS_ROOT_SUBVOL;

@@ -395,19 +395,55 @@ struct snapshot_t *bch2_snapshot_t_mut(struct bch_fs *c, u32 id)
 	return __snapshot_t_mut(c, id);
 }
 
+/* Snapshot node state */
+
+static const char *bch2_snapshot_state_str(enum bch_snapshot_state s)
+{
+	switch (s) {
+#define x(n, v) case SNAPSHOT_STATE_##n: return #n;
+	BCH_SNAPSHOT_STATES()
+#undef x
+		default: return "(invalid state)";
+	}
+}
+
+/* SUBVOL_OBSOLETE is derived from s->subvol: assign that field before calling */
+void bch2_snapshot_state_set(struct bch_snapshot *s, enum bch_snapshot_state n)
+{
+	switch (n) {
+	case SNAPSHOT_STATE_live:
+		SET_BCH_SNAPSHOT_SUBVOL_OBSOLETE(s, s->subvol != 0);
+		SET_BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_DELETED_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_NO_KEYS_OBSOLETE(s, 0);
+		break;
+	case SNAPSHOT_STATE_will_delete:
+		SET_BCH_SNAPSHOT_SUBVOL_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(s, 1);
+		SET_BCH_SNAPSHOT_DELETED_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_NO_KEYS_OBSOLETE(s, 0);
+		break;
+	case SNAPSHOT_STATE_no_keys:
+		SET_BCH_SNAPSHOT_SUBVOL_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_DELETED_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_NO_KEYS_OBSOLETE(s, 1);
+		break;
+	case SNAPSHOT_STATE_deleted:
+		SET_BCH_SNAPSHOT_SUBVOL_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(s, 0);
+		SET_BCH_SNAPSHOT_DELETED_OBSOLETE(s, 1);
+		SET_BCH_SNAPSHOT_NO_KEYS_OBSOLETE(s, 0);
+		break;
+	}
+
+	s->state = cpu_to_le32(n);
+}
+
 /* Snapshot btree key to_text/validate: */
 
 __cold void bch2_snapshot_to_text(struct printbuf *out, const struct bch_snapshot *s)
 {
-	if (BCH_SNAPSHOT_SUBVOL(s))
-		prt_str(out, "subvol ");
-	if (BCH_SNAPSHOT_WILL_DELETE(s))
-		prt_str(out, "will_delete ");
-	if (BCH_SNAPSHOT_DELETED(s))
-		prt_str(out, "deleted ");
-	if (BCH_SNAPSHOT_NO_KEYS(s))
-		prt_str(out, "no_keys ");
-
 	prt_printf(out, "parent %10u children %10u %10u subvol %u tree %u",
 	       le32_to_cpu(s->parent),
 	       le32_to_cpu(s->children[0]),
@@ -420,6 +456,8 @@ __cold void bch2_snapshot_to_text(struct printbuf *out, const struct bch_snapsho
 		   le32_to_cpu(s->skip[0]),
 		   le32_to_cpu(s->skip[1]),
 		   le32_to_cpu(s->skip[2]));
+
+	prt_printf(out, " %s", bch2_snapshot_state_str(bch2_snapshot_state_compat(s)));
 }
 
 __cold void bch2_snapshot_key_to_text(struct printbuf *out, struct bch_fs *c,
@@ -481,6 +519,11 @@ int bch2_snapshot_validate(struct bch_fs *c, struct bkey_s_c k,
 					 "bad skiplist node %u", id);
 		}
 	}
+
+	if (bkey_val_bytes(k.k) > offsetof(struct bch_snapshot, pad))
+		bkey_fsck_err_on(s.v->pad,
+				 c, snapshot_pad_nonzero,
+				 "reserved pad field nonzero");
 fsck_err:
 	return ret;
 }
@@ -499,28 +542,23 @@ static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 		return bch_err_throw(c, ENOMEM_mark_snapshot);
 
 	if (new.k->type == KEY_TYPE_snapshot) {
-		struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(new);
+		struct bch_snapshot s;
+		bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(new));
+		enum bch_snapshot_state state = bch2_snapshot_state_compat(&s);
 
-		t->state	= !BCH_SNAPSHOT_DELETED(s.v) && !BCH_SNAPSHOT_NO_KEYS(s.v)
+		t->state	= (state != SNAPSHOT_STATE_no_keys &&
+				   state != SNAPSHOT_STATE_deleted)
 			? SNAPSHOT_ID_live
 			: SNAPSHOT_ID_deleted;
-		t->parent	= le32_to_cpu(s.v->parent);
-		t->children[0]	= le32_to_cpu(s.v->children[0]);
-		t->children[1]	= le32_to_cpu(s.v->children[1]);
-		t->subvol	= BCH_SNAPSHOT_SUBVOL(s.v) ? le32_to_cpu(s.v->subvol) : 0;
-		t->tree		= le32_to_cpu(s.v->tree);
-
-		if (bkey_val_bytes(s.k) > offsetof(struct bch_snapshot, depth)) {
-			t->depth	= le32_to_cpu(s.v->depth);
-			t->skip[0]	= le32_to_cpu(s.v->skip[0]);
-			t->skip[1]	= le32_to_cpu(s.v->skip[1]);
-			t->skip[2]	= le32_to_cpu(s.v->skip[2]);
-		} else {
-			t->depth	= 0;
-			t->skip[0]	= 0;
-			t->skip[1]	= 0;
-			t->skip[2]	= 0;
-		}
+		t->parent	= le32_to_cpu(s.parent);
+		t->children[0]	= le32_to_cpu(s.children[0]);
+		t->children[1]	= le32_to_cpu(s.children[1]);
+		t->subvol	= le32_to_cpu(s.subvol);
+		t->tree		= le32_to_cpu(s.tree);
+		t->depth	= le32_to_cpu(s.depth);
+		t->skip[0]	= le32_to_cpu(s.skip[0]);
+		t->skip[1]	= le32_to_cpu(s.skip[1]);
+		t->skip[2]	= le32_to_cpu(s.skip[2]);
 
 		unsigned long is_ancestor[BITS_TO_LONGS(IS_ANCESTOR_BITMAP)] = {};
 		u32 parent = id;
@@ -539,7 +577,7 @@ static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 		barrier_data(is_ancestor);
 		memcpy(t->is_ancestor, is_ancestor, sizeof(t->is_ancestor));
 
-		if (BCH_SNAPSHOT_WILL_DELETE(s.v)) {
+		if (state == SNAPSHOT_STATE_will_delete) {
 			set_bit(BCH_FS_need_delete_dead_snapshots, &c->flags);
 			if (c->recovery.pass_done > BCH_RECOVERY_PASS_delete_dead_snapshots)
 				bch2_delete_dead_snapshots_async(c);
@@ -697,7 +735,8 @@ static int create_snapids(struct btree_trans *trans, u32 parent, u32 tree,
 			n->v.skip[j] = cpu_to_le32(bch2_snapshot_skiplist_get(c, parent));
 
 		bubble_sort(n->v.skip, ARRAY_SIZE(n->v.skip), cmp_le32);
-		SET_BCH_SNAPSHOT_SUBVOL(&n->v, true);
+
+		bch2_snapshot_state_set(&n->v, SNAPSHOT_STATE_live);
 
 		try(bch2_mark_snapshot(trans, bkey_i_to_s_c(&n->k_i)));
 
@@ -737,7 +776,7 @@ static int bch2_snapshot_node_create_children(struct btree_trans *trans, u32 par
 	n_parent->v.children[0] = cpu_to_le32(new_snapids[0]);
 	n_parent->v.children[1] = cpu_to_le32(new_snapids[1]);
 	n_parent->v.subvol = 0;
-	SET_BCH_SNAPSHOT_SUBVOL(&n_parent->v, false);
+	bch2_snapshot_state_set(&n_parent->v, SNAPSHOT_STATE_live);
 	return 0;
 }
 
@@ -846,13 +885,9 @@ static int snapshot_get_print(struct printbuf *out, struct btree_trans *trans, u
 	if (ret) {
 		prt_str(out, bch2_err_str(ret));
 	} else {
-		if (BCH_SNAPSHOT_DELETED(&s))
-			prt_str(out, "deleted ");
-		if (BCH_SNAPSHOT_NO_KEYS(&s))
-			prt_str(out, "no_keys ");
-		if (BCH_SNAPSHOT_WILL_DELETE(&s))
-			prt_str(out, "will_delete ");
-		if (BCH_SNAPSHOT_SUBVOL(&s))
+		prt_str(out, bch2_snapshot_state_str(bch2_snapshot_state(&s)));
+		prt_char(out, ' ');
+		if (s.subvol)
 			prt_printf(out, "subvol %u", le32_to_cpu(s.subvol));
 
 		prt_tab(out);
