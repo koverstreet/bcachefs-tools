@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 #include "bcachefs.h"
 
+#include "alloc/accounting.h"
+
 #include "btree/cache.h"
 #include "btree/update.h"
 
@@ -316,6 +318,272 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * Parent <-> child edge checks and repair.
+ *
+ * An edge is repaired only when doubly attested: the surviving pointer plus
+ * corroboration (id ordering, tree, depth - checked before the depth/skip
+ * autofixes rewrite them). Ambiguous evidence fail-stops; a wrong join or
+ * split moves keys between subvolume visibilities. Never write "I don't
+ * know" to disk: a node with a zeroed parent masquerades as a tree root and
+ * gets consumed by the tree-pointer repair or the deletion machinery.
+ * Repairs commit and restart, so decisions only see settled state. The
+ * in-memory snapshot table serves as the reverse index (live nodes only:
+ * a tombstone's child pointer is a splice breadcrumb, not a claim - I1).
+ */
+
+enum { EDGE_PARENT, EDGE_CHILD };
+
+static bool snapshot_node_points_back(const struct bch_snapshot *s, unsigned side, u32 other)
+{
+	return side == EDGE_PARENT
+		? le32_to_cpu(s->children[0]) == other ||
+		  le32_to_cpu(s->children[1]) == other
+		: le32_to_cpu(s->parent) == other;
+}
+
+/*
+ * Find the unique live node in role @side claiming an edge with @id,
+ * excluding everything @s already references (intact edges, stale entries
+ * for the disputed pointer, cycles):
+ */
+static u32 snapshot_table_find_edge(struct bch_fs *c, const struct bch_snapshot *s,
+				    u32 id, unsigned side)
+{
+	guard(rcu)();
+	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
+	u32 found = 0;
+
+	for (size_t idx = 0; idx < t->nr; idx++) {
+		const struct snapshot_t *n = &t->s[idx];
+		u32 n_id = U32_MAX - idx;
+
+		if (n->state != SNAPSHOT_ID_live)
+			continue;
+
+		if (!(side == EDGE_PARENT
+		      ? n->children[0] == id || n->children[1] == id
+		      : n->parent == id))
+			continue;
+
+		if (n_id == le32_to_cpu(s->parent) ||
+		    n_id == le32_to_cpu(s->children[0]) ||
+		    n_id == le32_to_cpu(s->children[1]))
+			continue;
+
+		if (found)
+			return 0;	/* ambiguous */
+		found = n_id;
+	}
+	return found;
+}
+
+static u64 snapshot_data_sectors(struct bch_fs *c, u32 id)
+{
+	struct disk_accounting_pos acc;
+	memset(&acc, 0, sizeof(acc));
+	acc.type = BCH_DISK_ACCOUNTING_snapshot;
+	acc.snapshot.id = id;
+
+	u64 sectors = 0;
+	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), &sectors, 1);
+	return sectors;
+}
+
+static bool snapshot_parent_child_consistent(const struct bch_snapshot *s, u32 id, unsigned side,
+				       const struct bch_snapshot *o, u32 o_id)
+{
+	const struct bch_snapshot *pa = side == EDGE_PARENT ? s : o;
+	const struct bch_snapshot *ch = side == EDGE_PARENT ? o : s;
+	u32 pa_id = side == EDGE_PARENT ? id : o_id;
+	u32 ch_id = side == EDGE_PARENT ? o_id : id;
+
+	return ch_id < pa_id &&
+	       pa->tree == ch->tree &&
+	       le32_to_cpu(pa->depth) + 1 == le32_to_cpu(ch->depth);
+}
+
+/*
+ * Does @n (in role @side) have a pointer position that's empty, or whose
+ * current target doesn't reciprocate? Returns the displaced value in
+ * @old_id; empty positions are preferred, so a refuted value keeps its shot
+ * at repair via its own scan:
+ */
+static int snapshot_edge_ptr_available(struct btree_trans *trans,
+				       const struct bch_snapshot *n, u32 n_id,
+				       unsigned side, u32 *old_id)
+{
+	u32 ptrs[2];
+	unsigned nr;
+
+	if (side == EDGE_CHILD) {
+		ptrs[0]	= le32_to_cpu(n->parent);
+		nr	= 1;
+	} else {
+		ptrs[0]	= le32_to_cpu(n->children[0]);
+		ptrs[1]	= le32_to_cpu(n->children[1]);
+		nr	= 2;
+	}
+
+	for (unsigned i = 0; i < nr; i++)
+		if (!ptrs[i]) {
+			*old_id = 0;
+			return 1;
+		}
+
+	for (unsigned i = 0; i < nr; i++) {
+		struct bch_snapshot t;
+		int ret = bch2_snapshot_lookup(trans, ptrs[i], &t);
+		if (ret && !bch2_err_matches(ret, ENOENT))
+			return ret;
+
+		if (ret || !snapshot_node_points_back(&t, !side, n_id)) {
+			*old_id = ptrs[i];
+			return 1;
+		}
+	}
+
+	return 0;
+}
+
+static int snapshot_edge_repair_commit(struct btree_trans *trans)
+{
+	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+	return bch_err_throw(trans->c, transaction_restart_nested);
+}
+
+/* Rewrite @node_id's reference to @old_id (0 clears a child slot): */
+static int snapshot_edge_set_ptr(struct btree_trans *trans, u32 node_id,
+				 unsigned side, u32 old_id, u32 new_id)
+{
+	struct bkey_i_snapshot *n =
+		errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
+						   POS(0, node_id), 0, snapshot));
+
+	if (side == EDGE_CHILD) {
+		n->v.parent = cpu_to_le32(new_id);
+	} else {
+		for (unsigned i = 0; i < 2; i++)
+			if (le32_to_cpu(n->v.children[i]) == old_id) {
+				n->v.children[i] = cpu_to_le32(new_id);
+				break;
+			}
+
+		if (le32_to_cpu(n->v.children[0]) < le32_to_cpu(n->v.children[1]))
+			swap(n->v.children[0], n->v.children[1]);
+	}
+
+	return snapshot_edge_repair_commit(trans);
+}
+
+static int check_snapshot_edge(struct btree_trans *trans,
+			       const struct bch_snapshot *s, u32 id,
+			       unsigned side, u32 other_id)
+{
+	struct bch_fs *c = trans->c;
+
+	struct bch_snapshot other;
+	int other_ret = bch2_snapshot_lookup(trans, other_id, &other);
+	if (other_ret && !bch2_err_matches(other_ret, ENOENT))
+		return other_ret;
+	bool other_exists = !other_ret;
+
+	if (other_exists && snapshot_node_points_back(&other, !side, id))
+		return 0;
+
+	/*
+	 * Our claim completes the edge if the target's position toward us is
+	 * empty or refuted - but never un-tombstone a node:
+	 */
+	if (other_exists &&
+	    bch2_snapshot_state_compat(&other) != SNAPSHOT_STATE_deleted &&
+	    snapshot_parent_child_consistent(s, id, side, &other, other_id)) {
+		u32 old = 0;
+		int avail = snapshot_edge_ptr_available(trans, &other, other_id, !side, &old);
+		if (avail < 0)
+			return avail;
+
+		if (avail &&
+		    ret_fsck_err(trans, snapshot_edge_bad,
+				 "snapshot %u %s pointer %u is not reciprocated, but is corroborated by\n"
+				 "tree and depth and the target's position (%u) is unattested - completing the edge",
+				 id, side == EDGE_CHILD ? "parent" : "child", other_id, old))
+			return snapshot_edge_set_ptr(trans, other_id, !side, old, id);
+	}
+
+	/* Or a corroborated claimant is the true counterpart - re-aim ours: */
+	u32 repl = snapshot_table_find_edge(c, s, id, !side);
+
+	struct bch_snapshot r;
+	int repl_ret = repl ? bch2_snapshot_lookup(trans, repl, &r) : -ENOENT;
+	if (repl_ret && !bch2_err_matches(repl_ret, ENOENT))
+		return repl_ret;
+
+	if (!repl_ret &&
+	    snapshot_parent_child_consistent(s, id, side, &r, repl) &&
+	    ret_fsck_err(trans, snapshot_edge_bad,
+			 "snapshot %u %s pointer %u is broken (target %s), but node %u claims the\n"
+			 "edge, corroborated by tree and depth - repairing",
+			 id, side == EDGE_CHILD ? "parent" : "child", other_id,
+			 other_exists ? "does not reciprocate" : "does not exist",
+			 repl))
+		return snapshot_edge_set_ptr(trans, id, side, other_id, repl);
+
+	/* A dangling child pointer with no data accounted to it may be cleared: */
+	if (side == EDGE_PARENT && !other_exists) {
+		u32 sibling = le32_to_cpu(s->children[0]) == other_id
+			? le32_to_cpu(s->children[1])
+			: le32_to_cpu(s->children[0]);
+		u64 sectors = snapshot_data_sectors(c, other_id);
+
+		if (!sectors && sibling &&
+		    ret_fsck_err(trans, snapshot_edge_bad,
+				 "snapshot %u child pointer %u does not exist: nothing claims %u as\n"
+				 "parent and no data is accounted to it - clearing",
+				 id, other_id, id))
+			return snapshot_edge_set_ptr(trans, id, side, other_id, 0);
+	}
+
+	/*
+	 * A single stomped field always leaves the other side's intact
+	 * pointer for the repairs above to key off, so reaching here means
+	 * multiple corruptions or a destroyed node - beyond what local
+	 * evidence can repair. Rare enough that we report and stop rather
+	 * than attempt topology surgery on a conjunction of corruptions:
+	 */
+	{
+		CLASS(printbuf, buf)();
+		prt_printf(&buf, "snapshot topology damage is beyond single-corruption repair:\n"
+			   "node %u's %s pointer names %u, which %s\n",
+			   id, side == EDGE_CHILD ? "parent" : "child", other_id,
+			   other_exists
+			   ? "exists but does not point back, and tree/depth do not identify them as parent and child"
+			   : "does not exist");
+
+		prt_printf(&buf, "no other node passes the parent/child consistency checks for this edge\n");
+
+		prt_printf(&buf, "node:   ");
+		bch2_snapshot_to_text(&buf, s);
+		prt_newline(&buf);
+
+		if (other_exists) {
+			prt_printf(&buf, "target: ");
+			bch2_snapshot_to_text(&buf, &other);
+			prt_newline(&buf);
+		}
+
+		prt_printf(&buf, "not repairing: run fsck; if damage is extensive, reconstruct_snapshots rebuilds topology from key evidence");
+		bch_err(c, "%s", buf.buf);
+	}
+
+	if (!other_exists)
+		return other_ret;
+
+	return side == EDGE_CHILD
+		? bch_err_throw(c, EINVAL_snapshot_parent_missing_child_ptr)
+		: bch_err_throw(c, EINVAL_snapshot_child_bad_parent);
+}
+
 static int check_snapshot(struct btree_trans *trans,
 			  struct btree_iter *iter,
 			  struct bkey_s_c k)
@@ -345,41 +613,19 @@ static int check_snapshot(struct btree_trans *trans,
 	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted)
 		return 0;
 
-	struct bch_snapshot parent;
+	if (s.parent)
+		try(check_snapshot_edge(trans, &s, k.k->p.offset,
+					EDGE_CHILD, le32_to_cpu(s.parent)));
+
+	for (unsigned i = 0; i < 2; i++)
+		if (s.children[i])
+			try(check_snapshot_edge(trans, &s, k.k->p.offset,
+						EDGE_PARENT, le32_to_cpu(s.children[i])));
+
+	struct bch_snapshot parent = {};
 	u32 parent_id = le32_to_cpu(s.parent);
-	if (parent_id) {
-		ret = bch2_snapshot_lookup(trans, parent_id, &parent);
-		if (bch2_err_matches(ret, ENOENT))
-			bch_err(c, "snapshot with nonexistent parent:\n  %s",
-				(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
-		if (ret)
-			return ret;
-
-		if (le32_to_cpu(parent.children[0]) != k.k->p.offset &&
-		    le32_to_cpu(parent.children[1]) != k.k->p.offset) {
-			bch_err(c, "snapshot parent %u missing pointer to child %llu",
-				parent_id, k.k->p.offset);
-			return bch_err_throw(c, EINVAL_snapshot_parent_missing_child_ptr);
-		}
-	}
-
-	for (unsigned i = 0; i < 2 && s.children[i]; i++) {
-		u32 child_id = le32_to_cpu(s.children[i]);
-
-		struct bch_snapshot child;
-		ret = bch2_snapshot_lookup(trans, child_id, &child);
-		if (bch2_err_matches(ret, ENOENT))
-			bch_err(c, "snapshot node %llu has nonexistent child %u",
-				k.k->p.offset, child_id);
-		if (ret)
-			return ret;
-
-		if (le32_to_cpu(child.parent) != k.k->p.offset) {
-			bch_err(c, "snapshot child %u has wrong parent (got %u should be %llu)",
-				child_id, le32_to_cpu(child.parent), k.k->p.offset);
-			return bch_err_throw(c, EINVAL_snapshot_child_bad_parent);
-		}
-	}
+	if (parent_id)
+		try(bch2_snapshot_lookup(trans, parent_id, &parent));
 
 	ret = snapshot_tree_ptr_good(trans, k.k->p.offset, le32_to_cpu(s.tree));
 	if (ret < 0)
