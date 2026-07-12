@@ -704,12 +704,18 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 		if (ctxt->stats)
 			ctxt->stats->offset = bp.k->p.offset >> c->sb.extent_bp_shift;
 
-		if (!(data_types & BIT(bp.v->data_type)) ||
-		    (!bp.v->level && bp.v->btree_id == BTREE_ID_stripes)) {
-			bch2_btree_iter_advance(&bp_iter);
-			continue;
-		}
-
+		/*
+		 * Resolve every backpointer we walk, including ones we're not
+		 * moving: resolution is what repairs a dangling backpointer
+		 * (backpointer_to_missing_ptr, autofix), and the per-bucket
+		 * accounting check (bch2_check_bucket_backpointer_mismatch,
+		 * above) can only detect missing backpointers reliably if
+		 * dangling ones have been deleted first - a skipped dangling
+		 * backpointer keeps contributing its data_type/gen/len to the
+		 * sums, hiding the mismatch forever. Copygc then livelocks:
+		 * is_movable keeps approving the bucket, evacuation skips all
+		 * its backpointers and moves nothing, repeat.
+		 */
 		CLASS(btree_iter_uninit, iter)(trans);
 		k = bch2_backpointer_get_key(trans, bp, &iter, 0, &last_flushed);
 		ret = bkey_err(k);
@@ -718,6 +724,13 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 		if (ret)
 			break;
 		if (!k.k) {
+			bch2_btree_iter_advance(&bp_iter);
+			continue;
+		}
+
+		/* Not moving these; resolving them above still verified them: */
+		if (!(data_types & BIT(bp.v->data_type)) ||
+		    (!bp.v->level && bp.v->btree_id == BTREE_ID_stripes)) {
 			bch2_btree_iter_advance(&bp_iter);
 			continue;
 		}
