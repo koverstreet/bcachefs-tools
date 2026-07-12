@@ -1040,7 +1040,7 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 		if (!_ret3)						\
 			bch2_trans_verify_not_restarted(_trans, _restart_count);\
 	} while (bch2_err_matches(_ret3, BCH_ERR_transaction_restart) ||\
-		 (!_ret3 && bch2_btree_iter_advance(&(_iter))));	\
+		 (!_ret3 && bch2_btree_iter_advance_type(&(_iter), (_flags))));\
 									\
 	_ret3;								\
 })
@@ -1062,28 +1062,8 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 
 #define for_each_btree_key_reverse(_trans, _iter, _btree_id,			\
 				   _start, _flags, _k, _do)			\
-({										\
-	int _ret3 = 0;								\
-										\
-	CLASS(btree_iter, iter)((_trans), (_btree_id), (_start), (_flags));	\
-										\
-	do {									\
-		u32 _restart_count = bch2_trans_begin(_trans);			\
-		_ret3 = 0;							\
-										\
-		struct bkey_s_c _k =						\
-			bch2_btree_iter_peek_prev_type(&(_iter), (_flags));	\
-		if (!(_k).k)							\
-			break;							\
-										\
-		_ret3 = bkey_err(_k) ?: (_do);					\
-		if (!_ret3)							\
-			bch2_trans_verify_not_restarted(_trans, _restart_count);\
-	} while (bch2_err_matches(_ret3, BCH_ERR_transaction_restart) ||	\
-		 (!_ret3 && bch2_btree_iter_rewind(&(_iter))));			\
-										\
-	_ret3;									\
-})
+	for_each_btree_key_max(_trans, _iter, _btree_id, _start, POS_MIN,	\
+			       (_flags)|BTREE_ITER_prev, _k, _do)
 
 #define for_each_btree_key_commit(_trans, _iter, _btree_id,		\
 				  _start, _iter_flags, _k,		\
@@ -1128,7 +1108,7 @@ struct bkey_s_c bch2_btree_iter_peek_root(struct btree_trans *, struct btree_ite
 	for (CLASS(btree_iter, _iter)((_trans), (_btree_id), (_start), (_flags));	\
 	     (_k) = bch2_btree_iter_peek_max_type(&(_iter), _end, _flags),		\
 	     !((_ret) = bkey_err(_k)) && (_k).k;					\
-	     bch2_btree_iter_advance(&(_iter)))
+	     bch2_btree_iter_advance_type(&(_iter), (_flags)))
 
 #define for_each_btree_key_norestart(_trans, _iter, _btree_id,				\
 				     _start, _flags, _k, _ret)				\
@@ -1139,18 +1119,15 @@ struct bkey_s_c bch2_btree_iter_peek_root(struct btree_trans *, struct btree_ite
 	for (;										\
 	     (_k) = bch2_btree_iter_peek_max_type(&(_iter), _end, _flags),		\
 	     !((_ret) = bkey_err(_k)) && (_k).k;					\
-	     bch2_btree_iter_advance(&(_iter)))
+	     bch2_btree_iter_advance_type(&(_iter), (_flags)))
 
 #define for_each_btree_key_continue_norestart(_iter, _flags, _k, _ret)			\
 	for_each_btree_key_max_continue_norestart(_iter, SPOS_MAX, _flags, _k, _ret)
 
 #define for_each_btree_key_reverse_norestart(_trans, _iter, _btree_id,			\
 					     _start, _flags, _k, _ret)			\
-	for (CLASS(btree_iter, _iter)((_trans), (_btree_id),				\
-				      (_start), (_flags));				\
-	     (_k) = bch2_btree_iter_peek_prev_type(&(_iter), _flags),			\
-	     !((_ret) = bkey_err(_k)) && (_k).k;					\
-	     bch2_btree_iter_rewind(&(_iter)))
+	for_each_btree_key_max_norestart(_trans, _iter, _btree_id, _start,		\
+					 POS_MIN, (_flags)|BTREE_ITER_prev, _k, _ret)
 
 /*
  * This should not be used in a fastpath, without first trying _do in
