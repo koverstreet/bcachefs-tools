@@ -925,21 +925,46 @@ static inline struct bkey_s_c bch2_btree_iter_peek_prev_type(struct btree_iter *
 static inline struct bkey_s_c bch2_btree_iter_peek_type(struct btree_iter *iter,
 							enum btree_iter_update_trigger_flags flags)
 {
-	return  flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
+	return  flags & BTREE_ITER_prev	      ? bch2_btree_iter_peek_prev_type(iter, flags) :
+		flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
 						bch2_btree_iter_peek(iter);
 }
 
+/*
+ * Range iteration in either direction: with BTREE_ITER_prev, iteration runs
+ * from the iterator's position down to @end (now the inclusive *lower*
+ * bound) - the mirror image of the forward case. BTREE_ITER_prev, like
+ * BTREE_ITER_slots, is consumed entirely here in the dispatch helpers; the
+ * core iterator never sees it.
+ */
 static inline struct bkey_s_c bch2_btree_iter_peek_max_type(struct btree_iter *iter,
 							    struct bpos end,
 							    enum btree_iter_update_trigger_flags flags)
 {
-	if (!(flags & BTREE_ITER_slots))
+	if (!(flags & (BTREE_ITER_slots|BTREE_ITER_prev)))
 		return bch2_btree_iter_peek_max(iter, &end);
 
-	if (bkey_gt(iter->pos, end))
-		return bkey_s_c_null;
+	if (flags & BTREE_ITER_prev) {
+		if (!(flags & BTREE_ITER_slots))
+			return bch2_btree_iter_peek_prev_min(iter, end);
+
+		if (bkey_lt(iter->pos, end))
+			return bkey_s_c_null;
+	} else {
+		if (bkey_gt(iter->pos, end))
+			return bkey_s_c_null;
+	}
 
 	return bch2_btree_iter_peek_slot(iter);
+}
+
+/* Advance in iteration order: forwards, or backwards with BTREE_ITER_prev: */
+static inline bool bch2_btree_iter_advance_type(struct btree_iter *iter,
+						enum btree_iter_update_trigger_flags flags)
+{
+	return flags & BTREE_ITER_prev
+		? bch2_btree_iter_rewind(iter)
+		: bch2_btree_iter_advance(iter);
 }
 
 int __bch2_btree_trans_too_many_iters(struct btree_trans *);

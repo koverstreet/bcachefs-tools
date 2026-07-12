@@ -338,6 +338,7 @@ struct btree_node_iter {
 
 #define BTREE_ITER_FLAGS()			\
 	x(slots)				\
+	x(prev)					\
 	x(intent)				\
 	x(prefetch)				\
 	x(is_extents)				\
