@@ -1083,7 +1083,7 @@ int bch2_read_super(const char *path, struct bch_opts *opts,
 		bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error reading superblock: %s\n%s",
 				path, bch2_err_str(ret), err.buf);
 	else if (ret)
-		bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error reading superblock: %s",
+		bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error reading superblock: %s\n",
 				path, bch2_err_str(ret));
 	else if (err.pos) {
 		prt_printf(&err, "successful read from backup\n");
