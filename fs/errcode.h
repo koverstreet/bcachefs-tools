@@ -411,6 +411,7 @@
 	x(EINVAL,			EINVAL_snapshot_parent_missing_child_ptr)	\
 	x(EINVAL,			EINVAL_snapshot_child_bad_parent)		\
 	x(EINVAL,			EINVAL_snapshot_bad_subvol_flag)		\
+	x(EINVAL,			EINVAL_snapshot_subvol_edge_bad)		\
 	x(EINVAL,			EINVAL_opt_parse_uint_required)		\
 	x(EINVAL,			EINVAL_opt_parse_str_required)		\
 	x(EINVAL,			EINVAL_test_zero_nr_or_threads)		\
