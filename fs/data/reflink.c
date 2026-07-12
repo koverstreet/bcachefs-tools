@@ -154,9 +154,9 @@ __cold void bch2_indirect_inline_data_to_text(struct printbuf *out,
 	struct bkey_s_c_indirect_inline_data d = bkey_s_c_to_indirect_inline_data(k);
 	unsigned datalen = bkey_inline_data_bytes(k.k);
 
-	prt_printf(out, "refcount %llu datalen %u: %*phN",
-	       le64_to_cpu(d.v->refcount), datalen,
-	       min(datalen, 32U), d.v->data);
+	prt_printf(out, "refcount %llu datalen %u: ",
+	       le64_to_cpu(d.v->refcount), datalen);
+	prt_hex_bytes(out, d.v->data, min(datalen, 32U));
 }
 
 /* lookup */

@@ -138,8 +138,8 @@ static __cold void key_type_inline_data_to_text(struct printbuf *out, struct bch
 	struct bkey_s_c_inline_data d = bkey_s_c_to_inline_data(k);
 	unsigned datalen = bkey_inline_data_bytes(k.k);
 
-	prt_printf(out, "datalen %u: %*phN",
-	       datalen, min(datalen, 32U), d.v->data);
+	prt_printf(out, "datalen %u: ", datalen);
+	prt_hex_bytes(out, d.v->data, min(datalen, 32U));
 }
 
 #define bch2_bkey_ops_inline_data ((struct bkey_ops) {		\

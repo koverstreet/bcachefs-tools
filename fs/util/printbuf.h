@@ -288,6 +288,17 @@ static inline void prt_hex_byte_upper(struct printbuf *out, u8 byte)
 	printbuf_nul_terminate_reserved(out);
 }
 
+/*
+ * Contiguous hex dump, same output as printk's %*phN - which the userspace
+ * build can't use: libc vsnprintf prints kernel %p extensions as raw
+ * pointers.
+ */
+static inline void prt_hex_bytes(struct printbuf *out, const void *b, unsigned n)
+{
+	for (unsigned i = 0; i < n; i++)
+		prt_hex_byte(out, ((const u8 *) b)[i]);
+}
+
 static inline void printbuf_reset_keep_tabstops(struct printbuf *buf)
 {
 	buf->pos		= 0;
