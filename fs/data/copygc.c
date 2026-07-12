@@ -510,8 +510,6 @@ static int bch2_copygc(struct moving_context *ctxt,
 		ret = bch2_evacuate_bucket(ctxt, b, b->k.bucket, b->k.generation, data_opts);
 		if (ret)
 			goto err;
-
-		*did_work = true;
 	}
 err:
 	/* no entries in LRU btree found, or got to end: */
@@ -523,6 +521,20 @@ err:
 
 	sectors_seen	= atomic64_read(&ctxt->stats->sectors_seen) - sectors_seen;
 	sectors_moved	= atomic64_read(&ctxt->stats->sectors_moved) - sectors_moved;
+
+	/*
+	 * An evacuation that processed no extents is not work: a bucket whose
+	 * backpointers all fail or skip resolution (e.g. transient
+	 * backpointers to overwritten btree nodes under heavy interior-update
+	 * churn) evacuates as an instant no-op while is_movable keeps
+	 * approving it. Counting that as did_work skips the io-clock backoff
+	 * below and copygc respins on the same buckets - observed in the
+	 * field at ~230k no-op evacuations/sec. sectors_seen counts extents
+	 * the evacuations actually processed (synchronously, unlike
+	 * sectors_moved which completes async), so it distinguishes real
+	 * work from no-op spins:
+	 */
+	*did_work = sectors_seen != 0;
 	event_inc_trace(c, copygc, buf, ({
 		prt_printf(&buf, "buckets %zu sectors seen %llu moved %llu",
 			   buckets_in_flight->to_evacuate.nr, sectors_seen, sectors_moved);
