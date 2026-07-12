@@ -51,7 +51,7 @@ int bch2_create_trans(struct btree_trans *trans,
 
 	try(bch2_subvolume_get(trans, dir.subvol, true, new_subvol));
 	if (BCH_SUBVOLUME_RO(new_subvol) ||
-	    BCH_SUBVOLUME_UNLINKED(new_subvol))
+	    bch2_subvolume_state_compat(new_subvol) == SUBVOLUME_STATE_unlinked)
 		return -EROFS;
 
 	u32 dir_snapshot = le32_to_cpu(new_subvol->snapshot);

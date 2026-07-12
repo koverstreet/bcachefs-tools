@@ -22,6 +22,24 @@ struct bch_subvolume {
 	__le32			creation_parent;
 	__le32			fs_path_parent;
 	bch_le128		otime;
+
+	__le32			state;
+	__le32			pad;
+};
+
+/*
+ * Subvolume lifecycle state: same codeword scheme as bch_snapshot.state
+ * (below), additionally >= 14 bit flips from every snapshot state so a value
+ * copied across key types reads as garbage, not a legal state:
+ */
+#define BCH_SUBVOLUME_STATES()			\
+	x(live,			0x4ad5447e)	\
+	x(unlinked,		0x2d358e8f)
+
+enum bch_subvolume_state {
+#define x(n, v) SUBVOLUME_STATE_##n = v,
+	BCH_SUBVOLUME_STATES()
+#undef x
 };
 
 LE32_BITMASK(BCH_SUBVOLUME_RO,		struct bch_subvolume, flags,  0,  1)
@@ -30,7 +48,8 @@ LE32_BITMASK(BCH_SUBVOLUME_RO,		struct bch_subvolume, flags,  0,  1)
  * can delete it (or whether it should just be rm -rf'd)
  */
 LE32_BITMASK(BCH_SUBVOLUME_SNAP,	struct bch_subvolume, flags,  1,  2)
-LE32_BITMASK(BCH_SUBVOLUME_UNLINKED,	struct bch_subvolume, flags,  2,  3)
+/* Obsolete */
+LE32_BITMASK(BCH_SUBVOLUME_UNLINKED_OBSOLETE, struct bch_subvolume, flags,  2,  3)
 
 struct bch_snapshot {
 	struct bch_val		v;
@@ -104,6 +123,16 @@ static_assert(__builtin_popcount(SNAPSHOT_STATE_no_keys     ^ SNAPSHOT_STATE_del
 
 /* weight window: >= 14 flips from a zeroed field and from an all-ones one: */
 #define x(n, v) static_assert(__builtin_popcount(v) >= 14 && __builtin_popcount(v) <= 18);
+	BCH_SNAPSHOT_STATES()
+	BCH_SUBVOLUME_STATES()
+#undef x
+
+static_assert(__builtin_popcount(SUBVOLUME_STATE_live ^ SUBVOLUME_STATE_unlinked) >= 14);
+
+/* cross-type distance, snapshot states vs subvolume states: */
+#define x(n, v)										\
+	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_live)     >= 14);		\
+	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_unlinked) >= 14);
 	BCH_SNAPSHOT_STATES()
 #undef x
 

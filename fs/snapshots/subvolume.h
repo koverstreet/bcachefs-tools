@@ -5,6 +5,27 @@
 #include "util/darray.h"
 #include "snapshots/types.h"
 
+static inline enum bch_subvolume_state bch2_subvolume_state(const struct bch_subvolume *s)
+{
+	return le32_to_cpu(s->state);
+}
+
+static inline enum bch_subvolume_state bch2_subvolume_state_from_flags(const struct bch_subvolume *s)
+{
+	return BCH_SUBVOLUME_UNLINKED_OBSOLETE(s)
+		? SUBVOLUME_STATE_unlinked
+		: SUBVOLUME_STATE_live;
+}
+
+static inline enum bch_subvolume_state bch2_subvolume_state_compat(const struct bch_subvolume *s)
+{
+	return s->state
+		? bch2_subvolume_state(s)
+		: bch2_subvolume_state_from_flags(s);
+}
+
+void bch2_subvolume_state_set(struct bch_subvolume *, enum bch_subvolume_state);
+
 int bch2_check_subvols(struct bch_fs *);
 int bch2_check_subvol_children(struct bch_fs *);
 

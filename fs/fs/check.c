@@ -459,6 +459,7 @@ static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 sub
 	new_subvol->k.p.offset	= subvolid;
 	new_subvol->v.snapshot	= cpu_to_le32(snapshotid);
 	new_subvol->v.inode	= cpu_to_le64(inum);
+	bch2_subvolume_state_set(&new_subvol->v, SUBVOLUME_STATE_live);
 	try(bch2_btree_insert_trans(trans, BTREE_ID_subvolumes, &new_subvol->k_i, 0));
 
 	struct bkey_i_snapshot *s = bch2_bkey_get_mut_typed(trans,
@@ -2003,6 +2004,7 @@ static int check_root_trans(struct btree_trans *trans)
 		root_subvol->v.flags	= 0;
 		root_subvol->v.snapshot	= cpu_to_le32(snapshot);
 		root_subvol->v.inode	= cpu_to_le64(inum);
+		bch2_subvolume_state_set(&root_subvol->v, SUBVOLUME_STATE_live);
 		try(bch2_btree_insert_trans(trans, BTREE_ID_subvolumes, &root_subvol->k_i, 0));
 	}
 

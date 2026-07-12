@@ -57,6 +57,17 @@ static int check_subvol(struct btree_trans *trans,
 		return 0;
 
 	bkey_val_copy_pad(&subvol, bkey_s_c_to_subvolume(k));
+
+	/* on upgrade the flag bits are authoritative (see check_snapshot): */
+	if (c->sb.version_upgrade_complete < bcachefs_metadata_version_per_dev_fragmentation_lru &&
+	    bch2_subvolume_state(&subvol) != bch2_subvolume_state_from_flags(&subvol)) {
+		struct bkey_i_subvolume *n =
+			errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
+
+		n->v.state = cpu_to_le32(bch2_subvolume_state_from_flags(&subvol));
+		subvol = n->v;
+	}
+
 	snapid = le32_to_cpu(subvol.snapshot);
 	ret = bch2_snapshot_lookup(trans, snapid, &snapshot);
 
@@ -74,7 +85,7 @@ static int check_subvol(struct btree_trans *trans,
 	if (ret)
 		return ret;
 
-	if (BCH_SUBVOLUME_UNLINKED(&subvol)) {
+	if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_unlinked) {
 		ret = bch2_subvolume_delete(trans, iter->pos.offset);
 		bch_err_msg(c, ret, "deleting subvolume %llu", iter->pos.offset);
 		return ret ?: bch_err_throw(c, transaction_restart_nested);
@@ -236,8 +247,29 @@ int bch2_subvolume_validate(struct bch_fs *c, struct bkey_s_c k,
 	bkey_fsck_err_on(!subvol.v->inode,
 			 c, subvol_inode_bad,
 			 "invalid inode");
+
+	if (bkey_val_bytes(k.k) > offsetof(struct bch_subvolume, pad))
+		bkey_fsck_err_on(subvol.v->pad,
+				 c, subvol_pad_nonzero,
+				 "reserved pad field nonzero");
 fsck_err:
 	return ret;
+}
+
+static const char *bch2_subvolume_state_str(enum bch_subvolume_state s)
+{
+	switch (s) {
+#define x(n, v) case SUBVOLUME_STATE_##n: return #n;
+	BCH_SUBVOLUME_STATES()
+#undef x
+		default: return "(invalid state)";
+	}
+}
+
+void bch2_subvolume_state_set(struct bch_subvolume *s, enum bch_subvolume_state n)
+{
+	SET_BCH_SUBVOLUME_UNLINKED_OBSOLETE(s, n == SUBVOLUME_STATE_unlinked);
+	s->state = cpu_to_le32(n);
 }
 
 __cold void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
@@ -258,8 +290,10 @@ __cold void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
 		prt_printf(out, " ro");
 	if (BCH_SUBVOLUME_SNAP(s.v))
 		prt_printf(out, " snapshot");
-	if (BCH_SUBVOLUME_UNLINKED(s.v))
-		prt_printf(out, " unlinked");
+
+	struct bch_subvolume v;
+	bkey_val_copy_pad(&v, s);
+	prt_printf(out, " %s", bch2_subvolume_state_str(bch2_subvolume_state_compat(&v)));
 }
 
 static int subvolume_children_mod(struct btree_trans *trans, struct bpos pos, bool set)
@@ -321,7 +355,7 @@ int bch2_subvol_is_ro_trans(struct btree_trans *trans, u32 subvol, u32 *snapid)
 	*snapid = le32_to_cpu(s.snapshot);
 
 	if (BCH_SUBVOLUME_RO(&s) ||
-	    BCH_SUBVOLUME_UNLINKED(&s))
+	    bch2_subvolume_state_compat(&s) == SUBVOLUME_STATE_unlinked)
 		return -EROFS;
 	return 0;
 }
@@ -536,7 +570,7 @@ int bch2_subvolume_unlink(struct btree_trans *trans, u32 subvolid)
 	if (unlikely(ret))
 		return ret;
 
-	SET_BCH_SUBVOLUME_UNLINKED(&n->v, true);
+	bch2_subvolume_state_set(&n->v, SUBVOLUME_STATE_unlinked);
 	n->v.fs_path_parent = 0;
 	return ret;
 }
@@ -598,6 +632,7 @@ int bch2_subvolume_create(struct btree_trans *trans, u64 inode,
 
 	SET_BCH_SUBVOLUME_RO(&new_subvol->v, ro);
 	SET_BCH_SUBVOLUME_SNAP(&new_subvol->v, src_subvolid != 0);
+	bch2_subvolume_state_set(&new_subvol->v, SUBVOLUME_STATE_live);
 
 	*new_subvolid	= new_subvol->k.p.offset;
 	*new_snapshotid	= new_nodes[0];
@@ -629,6 +664,7 @@ int bch2_initialize_subvolumes(struct bch_fs *c)
 	root_volume.v.flags	= 0;
 	root_volume.v.snapshot	= cpu_to_le32(U32_MAX);
 	root_volume.v.inode	= cpu_to_le64(BCACHEFS_ROOT_INO);
+	bch2_subvolume_state_set(&root_volume.v, SUBVOLUME_STATE_live);
 
 	return  bch2_btree_insert(c, BTREE_ID_snapshot_trees,	&root_tree.k_i, NULL, 0, 0) ?:
 		bch2_btree_insert(c, BTREE_ID_snapshots,	&root_snapshot.k_i, NULL, 0, 0) ?:
