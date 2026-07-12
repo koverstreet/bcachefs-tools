@@ -564,6 +564,12 @@ static inline void bkey_reassemble(struct bkey_i *dst,
 				   struct bkey_s_c src)
 {
 	dst->k = *src.k;
+	/*
+	 * @src may have been unpacked by a path that doesn't write every
+	 * byte of the unpacked key - don't leak uninitialized memory when
+	 * the result is copied to userspace (BCH_IOCTL_QUERY_BTREE_KEYS):
+	 */
+	memset(dst->k.pad, 0, sizeof(dst->k.pad));
 	memcpy_u64s(&dst->v, src.v, bkey_val_u64s(src.k));
 }
 
