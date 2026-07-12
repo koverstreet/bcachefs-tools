@@ -12,6 +12,7 @@ use bch_bindgen::c::{
     bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2,
     bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2,
     bch_ioctl_subvolume, bch_ioctl_subvolume_v2,
+    bch_ioctl_query_btree_keys,
     BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE,
 };
 use bch_bindgen::accounting::data_type;
@@ -134,9 +135,10 @@ impl BcachefsHandle {
         let path = path.as_ref();
         let path_str = path.to_string_lossy();
 
-        // Try as UUID string first
+        // Try as UUID string first (normalized: the sysfs dir is canonical
+        // lowercase-with-dashes, the user's spelling may not be)
         if let Ok(uuid) = parse_uuid(&path_str) {
-            return Self::open_by_name(&path_str, Some(uuid))
+            return Self::open_by_name(&format_uuid(&uuid), Some(uuid))
                 .map_err(|e| BchError::from_raw(-e.0));
         }
 
@@ -165,8 +167,10 @@ impl BcachefsHandle {
             // No sysfs dir for the UUID means not mounted; any other error
             // (e.g. EACCES on the ctl device) is real and must not be
             // mistaken for "not mounted", or callers fall back to offline
-            // superblock access on a live filesystem:
-            return match Self::open_by_name(&path.to_string_lossy(), Some(uuid)) {
+            // superblock access on a live filesystem. Normalize the string
+            // through parse+format: the sysfs dir is canonical lowercase
+            // with dashes, the user's spelling may not be:
+            return match Self::open_by_name(&format_uuid(&uuid), Some(uuid)) {
                 Ok(h) => Ok(Some(h)),
                 Err(e) if e.0 == libc::ENOENT => Ok(None),
                 Err(e) => Err(BchError::from_raw(-e.0)),
@@ -233,6 +237,28 @@ impl BcachefsHandle {
             }
         }
         Ok(None)
+    }
+
+    /// The mounted filesystem's member block device paths, from sysfs
+    /// (/sys/fs/bcachefs/<uuid>/dev-N/block). The paths a caller resolved
+    /// the filesystem BY (mount point, UUID) aren't openable as devices -
+    /// these are.
+    pub(crate) fn member_devices(&self) -> Result<Vec<std::path::PathBuf>, BchError> {
+        let sysfs_path = sysfs::sysfs_path_from_fd(self.sysfs_fd())
+            .map_err(|_| BchError::from_raw(-libc::EIO))?;
+
+        let mut devs = Vec::new();
+        for d in sysfs::fs_get_devices(&sysfs_path, sysfs::DeviceNameMode::Raw)
+                .map_err(|_| BchError::from_raw(-libc::EIO))? {
+            if d.online {
+                devs.push(std::path::PathBuf::from(format!("/dev/{}", d.dev)));
+            }
+        }
+
+        if devs.is_empty() {
+            return Err(BchError::from_raw(-libc::ENOENT));
+        }
+        Ok(devs)
     }
 
     /// Open a mounted filesystem path. The fd becomes the ioctl fd.
@@ -504,6 +530,21 @@ impl BcachefsHandle {
                 continue;
             }
             return Err(Errno(err));
+        }
+    }
+
+    /// BCH_IOCTL_QUERY_BTREE_KEYS: fetch one buffer's worth of formatted
+    /// keys from a btree range. The cursor lives in `arg` — the kernel
+    /// advances `arg.start` past the last key returned; loop until
+    /// `arg.done` is set. Returns ERANGE if `arg.buf_size` can't hold even
+    /// a single key.
+    pub(crate) fn query_btree_keys(&self, arg: &mut bch_ioctl_query_btree_keys) -> Result<(), Errno> {
+        let request = bch_ioc_wr::<bch_ioctl_query_btree_keys>(34);
+        let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request, arg as *mut _) };
+        if ret == 0 {
+            Ok(())
+        } else {
+            Err(Errno(io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO)))
         }
     }
 

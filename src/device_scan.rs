@@ -465,7 +465,14 @@ pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: bch_opts)
 /// explicitly, passes them through as-is.
 pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<Fs, BchError> {
     let devs = if devs.len() == 1 {
-        let dev_str = devs[0].to_string_lossy().into_owned();
+        let mut dev_str = devs[0].to_string_lossy().into_owned();
+
+        // A bare UUID isn't a path - scan for the filesystem's devices
+        // (scan_sbs understands UUID= syntax):
+        if Uuid::parse_str(&dev_str).is_ok() {
+            dev_str = format!("UUID={}", dev_str);
+        }
+
 	let scan_opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true)
             .unwrap_or_default();
         match scan_sbs(&dev_str, &scan_opts) {

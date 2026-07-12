@@ -40,7 +40,10 @@ use bcachefs_kernel::typeinfo;
 use bch_bindgen::c::bch_degraded_actions;
 use clap::Parser;
 
+use crate::device_scan::OpenedFs;
 use crate::logging;
+use crate::wrappers::handle::BcachefsHandle;
+use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 
 const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
 
@@ -219,6 +222,49 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos) -> Result
     Ok(out)
 }
 
+/// One key from a mounted filesystem, or None. get: slot iteration at an
+/// exact pos; peek/peek_prev: first key at/after (at/before) pos.
+fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
+		  btree: c::btree_id, pos: c::bpos,
+		  flags: OnlineIterFlags, fields: bool) -> Result<String> {
+    // Small buffer: the kernel fills the whole thing per call, and we only
+    // want one key (it grows automatically if the key doesn't fit):
+    let mut iter = OnlineBtreeIter::with_buf_size(handle, btree, 0, pos,
+					if flags.0 & OnlineIterFlags::PREV.0 != 0 { POS_MIN } else { SPOS_MAX },
+					flags, 4096);
+    Ok(match iter.next().map_err(|e| anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {e}"))? {
+        Some(k) => render_key(fs, &k, fields),
+        None => "(no key)\n".to_string(),
+    })
+}
+
+fn cmd_get_online(handle: &BcachefsHandle, fs: &Fs,
+		  btree: c::btree_id, pos: c::bpos) -> Result<String> {
+    online_one_key(handle, fs, btree, pos,
+		   OnlineIterFlags::SLOTS | OnlineIterFlags::ALL_SNAPSHOTS, true)
+}
+
+fn cmd_peek_online(handle: &BcachefsHandle, fs: &Fs,
+		   btree: c::btree_id, pos: c::bpos, prev: bool) -> Result<String> {
+    let mut flags = OnlineIterFlags::ALL_SNAPSHOTS;
+    if prev {
+        flags = flags | OnlineIterFlags::PREV;
+    }
+    online_one_key(handle, fs, btree, pos, flags, true)
+}
+
+fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
+		   btree: c::btree_id, start: c::bpos, end: c::bpos) -> Result<String> {
+    let mut out = String::new();
+    let mut iter = OnlineBtreeIter::new(handle, btree, 0, start, end,
+					OnlineIterFlags::ALL_SNAPSHOTS);
+    iter.for_each(|k| {
+        out.push_str(&format!("{}\n", k.to_text(fs)));
+        ControlFlow::Continue(())
+    }).map_err(|e| anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {e}"))?;
+    Ok(out)
+}
+
 fn no_key_err() -> TransError {
     TransError::from(BchError::from_errcode(
         bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch,
@@ -375,7 +421,16 @@ set       <btree> <pos> <type> [field=val]...  insert a whole new key
 help                                           this text
 ";
 
-fn run_line(fs: &Fs, line: &str) -> Result<()> {
+/// A kvdb session: fully offline (read + write via libbcachefs), or against
+/// a mounted filesystem (reads via BCH_IOCTL_QUERY_BTREE_KEYS; the Fs is
+/// opened noexcl|nostart purely for key formatting - never started, journal
+/// never read - and writes are refused).
+enum KvdbFs {
+    Offline(Fs),
+    Online(BcachefsHandle, Fs),
+}
+
+fn run_line(kvdb_fs: &KvdbFs, line: &str) -> Result<()> {
     let args: Vec<&str> = line.split_whitespace().collect();
     let Some((&op, args)) = args.split_first() else {
         return Ok(());
@@ -387,10 +442,17 @@ fn run_line(fs: &Fs, line: &str) -> Result<()> {
                 bail!("usage: {op} <btree> <pos>");
             };
             let (btree, pos) = (parse_btree(btree)?, parse_pos(pos)?);
-            match op {
-                "get" => cmd_get(fs, btree, pos)?,
-                "peek" => cmd_peek(fs, btree, pos, false)?,
-                _ => cmd_peek(fs, btree, pos, true)?,
+            match kvdb_fs {
+                KvdbFs::Offline(fs) => match op {
+                    "get" => cmd_get(fs, btree, pos)?,
+                    "peek" => cmd_peek(fs, btree, pos, false)?,
+                    _ => cmd_peek(fs, btree, pos, true)?,
+                },
+                KvdbFs::Online(handle, fs) => match op {
+                    "get" => cmd_get_online(handle, fs, btree, pos)?,
+                    "peek" => cmd_peek_online(handle, fs, btree, pos, false)?,
+                    _ => cmd_peek_online(handle, fs, btree, pos, true)?,
+                },
             }
         }
         "list" => {
@@ -399,7 +461,11 @@ fn run_line(fs: &Fs, line: &str) -> Result<()> {
                 .ok_or_else(|| anyhow!("usage: list <btree> [start] [end]"))?;
             let start = rest.first().map_or(Ok(POS_MIN), |s| parse_pos(s))?;
             let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos(s))?;
-            cmd_list(fs, parse_btree(btree)?, start, end)?
+            let btree = parse_btree(btree)?;
+            match kvdb_fs {
+                KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end)?,
+                KvdbFs::Online(handle, fs) => cmd_list_online(handle, fs, btree, start, end)?,
+            }
         }
         "update" => {
             let [btree, pos, assigns @ ..] = args else {
@@ -408,6 +474,9 @@ fn run_line(fs: &Fs, line: &str) -> Result<()> {
             if assigns.is_empty() {
                 bail!("usage: update <btree> <pos> <field=val>...");
             }
+            let KvdbFs::Offline(fs) = kvdb_fs else {
+                bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
+            };
             let assigns = assigns
                 .iter()
                 .map(|s| parse_assign(s))
@@ -417,6 +486,9 @@ fn run_line(fs: &Fs, line: &str) -> Result<()> {
         "set" => {
             let [btree, pos, type_name, assigns @ ..] = args else {
                 bail!("usage: set <btree> <pos> <type> [field=val]...");
+            };
+            let KvdbFs::Offline(fs) = kvdb_fs else {
+                bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
             };
             let assigns = assigns
                 .iter()
@@ -451,11 +523,33 @@ fn kvdb(cli: Cli) -> Result<()> {
         opt_set!(fs_opts, verbose, 1);
     }
 
-    let fs = crate::device_scan::open_scan(&cli.devices, fs_opts)?;
+    let kvdb_fs = match crate::device_scan::open_online_or_offline(&cli.devices, fs_opts)? {
+        OpenedFs::Offline(fs) => KvdbFs::Offline(fs),
+        OpenedFs::Online(handle) => {
+            // Reads go through the kernel; the userspace Fs is opened
+            // noexcl|nostart purely for key formatting (never started,
+            // journal never read), from the member block devices - the
+            // path we were given may be a mount point or UUID:
+            log::info!("filesystem is mounted: reads via the kernel, writes disabled");
+
+            let devs = handle.member_devices()
+                .map_err(|e| anyhow!("getting member devices from sysfs: {e}"))?;
+
+            opt_set!(fs_opts, noexcl, 1);
+            opt_set!(fs_opts, nostart, 1);
+            opt_set!(fs_opts, read_only, 1);
+            let fs = crate::device_scan::open_scan(&devs, fs_opts)
+                .map_err(|e| anyhow!(
+                    "opening {devs:?} (noexcl/nostart, for formatting keys): {e}"))?;
+
+            KvdbFs::Online(handle, fs)
+        }
+    };
+    let fs = &kvdb_fs;
 
     if !cli.commands.is_empty() {
         for line in &cli.commands {
-            run_line(&fs, line)?;
+            run_line(fs, line)?;
         }
         return Ok(());
     }
@@ -471,7 +565,7 @@ fn kvdb(cli: Cli) -> Result<()> {
         let line = line?;
         // In a piped script an error must abort (a test's later commands
         // likely depend on earlier ones); interactively, report and go on.
-        match run_line(&fs, &line) {
+        match run_line(fs, &line) {
             Err(e) if interactive => eprintln!("{e}"),
             other => other?,
         }

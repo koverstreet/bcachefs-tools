@@ -1,6 +1,6 @@
 use std::ops::ControlFlow;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use bcachefs_kernel::{btree_id, c};
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::BtreeIter;
@@ -14,6 +14,9 @@ use clap::Parser;
 use std::io::{stdout, IsTerminal};
 
 use crate::logging;
+use crate::device_scan::OpenedFs;
+use crate::wrappers::handle::BcachefsHandle;
+use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
@@ -125,6 +128,49 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// List keys from a mounted filesystem: the keys come from the kernel via
+/// BCH_IOCTL_QUERY_BTREE_KEYS, and are formatted with a userspace bch_fs
+/// opened noexcl|nostart alongside the mount - never started, so the
+/// journal is never read; everything key formatting needs (extent entry
+/// tables, member names, disk groups) comes from the superblock. Output
+/// is identical to the offline path by construction.
+fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
+    let mut flags = OnlineIterFlags::default();
+    if opt.start.snapshot == 0 {
+        flags = flags | OnlineIterFlags::ALL_SNAPSHOTS;
+    }
+
+    let mut iter = OnlineBtreeIter::new(handle, opt.btree, opt.level,
+					opt.start, opt.end, flags);
+
+    while let Some(k) = iter.next().map_err(|e| anyhow::anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {}", e))? {
+        if k.k.p > opt.end {
+            break;
+        }
+
+        if let Some(ty) = opt.bkey_type {
+            if k.k.type_ != ty.0 as u8 {
+                continue;
+            }
+        }
+
+        println!("{}", k.to_text(fs));
+    }
+
+    Ok(())
+}
+
+fn list_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
+    if !matches!(opt.mode, Mode::Keys) {
+        bail!("only 'keys' mode is supported on a mounted filesystem");
+    }
+    if opt.fsck {
+        bail!("--fsck requires the filesystem to be unmounted; use 'bcachefs fsck' for online fsck");
+    }
+
+    list_keys_online(handle, fs, opt)
+}
+
 #[derive(Clone, clap::ValueEnum, Debug)]
 enum Mode {
     Keys,
@@ -137,7 +183,9 @@ enum Mode {
 #[derive(Parser, Debug)]
 #[command(long_about = "\
 Lists btree contents in human-readable text. Operates on unmounted \
-devices in read-only mode. Modes: keys (default) prints key/value pairs, \
+devices in read-only mode; if the filesystem is mounted (device, \
+mount point, or UUID), keys are listed via the kernel instead. \
+Modes: keys (default) prints key/value pairs, \
 formats shows btree node packing format, nodes shows btree node keys, \
 nodes-ondisk shows the raw on-disk representation.\n\n\
 Use -b to select a btree (default: extents), -s/-e for start/end \
@@ -212,13 +260,33 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
         opt_set!(fs_opts, verbose, 1);
     }
 
-    let fs = crate::device_scan::open_scan(&opt.devices, fs_opts)?;
+    match crate::device_scan::open_online_or_offline(&opt.devices, fs_opts)? {
+        OpenedFs::Online(handle) => {
+            // The filesystem is mounted: read keys through the kernel. For
+            // formatting them we still want a bch_fs - everything to_text
+            // needs is derived from the superblock - so open one
+            // noexcl|nostart: no exclusive claim on the mounted devices,
+            // never started, journal never read. Opened from the member
+            // block devices (from sysfs) - the path we were given may be a
+            // mount point or UUID, which aren't openable as devices.
+            log::info!("filesystem is mounted, listing via the kernel");
 
-    match opt.mode {
-        Mode::Keys => list_keys(&fs, opt),
-        Mode::Formats => list_btree_formats(&fs, opt),
-        Mode::Nodes => list_btree_nodes(&fs, opt),
-        Mode::NodesOndisk => list_nodes_ondisk(&fs, opt),
+            let devs = handle.member_devices()
+                .map_err(|e| anyhow::anyhow!("getting member devices from sysfs: {}", e))?;
+
+            opt_set!(fs_opts, nostart, 1);
+            let fs = crate::device_scan::open_scan(&devs, fs_opts)
+                .map_err(|e| anyhow::anyhow!(
+                    "opening {:?} (noexcl/nostart, for formatting keys): {}", devs, e))?;
+
+            list_online(&handle, &fs, opt)
+        }
+        OpenedFs::Offline(fs) => match opt.mode {
+            Mode::Keys => list_keys(&fs, opt),
+            Mode::Formats => list_btree_formats(&fs, opt),
+            Mode::Nodes => list_btree_nodes(&fs, opt),
+            Mode::NodesOndisk => list_nodes_ondisk(&fs, opt),
+        },
     }
 }
 
