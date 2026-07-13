@@ -388,6 +388,13 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		RATELIMIT_ERRORS_DEFAULT,	\
 	  NULL,		"Ratelimit error messages during fsck")		\
+	x(no_commit_validate,		u8,				\
+	  OPT_FS|OPT_MOUNT,						\
+	  OPT_BOOL(),							\
+	  BCH2_NO_SB_OPT,		false,				\
+	  NULL,		"Disable commit-time-only bkey validation;\n"\
+			"for error injection tools, which must be able\n"\
+			"to write the states fsck is tested against")	\
 	x(nochanges,			u8,				\
 	  OPT_FS|OPT_MOUNT,						\
 	  OPT_BOOL(),							\

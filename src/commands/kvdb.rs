@@ -576,6 +576,10 @@ fn kvdb(cli: Cli) -> Result<()> {
     opt_set!(fs_opts, auto_snapshot_deletion, 0);
     opt_set!(fs_opts, copygc_enabled, 0);
     opt_set!(fs_opts, reconcile_enabled, 0);
+    // ...and the write path must not refuse the states fsck is being tested
+    // against: commit-only validation (invalid state codewords, subvolume ->
+    // interior node references) stays off in this instance.
+    opt_set!(fs_opts, no_commit_validate, 1);
     opt_set!(
         fs_opts,
         errors,

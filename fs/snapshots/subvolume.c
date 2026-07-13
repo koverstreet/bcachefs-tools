@@ -277,6 +277,27 @@ int bch2_subvolume_validate(struct bch_fs *c, struct bkey_s_c k,
 		bkey_fsck_err_on(subvol.v->pad,
 				 c, subvol_pad_nonzero,
 				 "reserved pad field nonzero");
+
+	/*
+	 * Commit-only checks - defense in depth, never applied to existing
+	 * keys (see bch2_snapshot_validate). The leaf check skips snapshot
+	 * ids the table doesn't know: subvolume creation commits the
+	 * subvolume in the same transaction as its new snapshot nodes, before
+	 * the trigger has seen them:
+	 */
+	if (from->from == BKEY_VALIDATE_commit && !c->opts.no_commit_validate) {
+		if (bkey_val_bytes(k.k) > offsetof(struct bch_subvolume, state))
+			bkey_fsck_err_on(subvol.v->state &&
+					 !bch2_subvolume_state_valid(bch2_subvolume_state(subvol.v)),
+					 c, subvol_state_bad,
+					 "invalid state 0x%x", le32_to_cpu(subvol.v->state));
+
+		/* is_leaf < 0: id not in the table - skip, per above */
+		bkey_fsck_err_on(bch2_snapshot_is_leaf(c, le32_to_cpu(subvol.v->snapshot)) == 0,
+				 c, subvol_snapshot_not_leaf,
+				 "snapshot %u is an interior node (subvolumes only reference leaves)",
+				 le32_to_cpu(subvol.v->snapshot));
+	}
 fsck_err:
 	return ret;
 }

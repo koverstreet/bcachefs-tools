@@ -524,6 +524,26 @@ int bch2_snapshot_validate(struct bch_fs *c, struct bkey_s_c k,
 		bkey_fsck_err_on(s.v->pad,
 				 c, snapshot_pad_nonzero,
 				 "reserved pad field nonzero");
+
+	/*
+	 * Commit-only checks - defense in depth: catch the buggy writer in
+	 * the act, with a backtrace. Never applied to existing keys (the
+	 * invalid-bkey machinery's remedy is dropping the key; on-disk
+	 * violations are fsck's to handle, gently). Zero state is legal -
+	 * pre-upgrade keys are rewritten with only their other fields
+	 * touched:
+	 */
+	if (from->from == BKEY_VALIDATE_commit && !c->opts.no_commit_validate) {
+		if (bkey_val_bytes(k.k) > offsetof(struct bch_snapshot, state))
+			bkey_fsck_err_on(s.v->state &&
+					 !bch2_snapshot_state_valid(bch2_snapshot_state(s.v)),
+					 c, snapshot_state_bad,
+					 "invalid state 0x%x", le32_to_cpu(s.v->state));
+
+		bkey_fsck_err_on(s.v->children[0] && s.v->subvol,
+				 c, snapshot_should_not_have_subvol,
+				 "interior node with subvol (subvolumes only reference leaves)");
+	}
 fsck_err:
 	return ret;
 }
