@@ -68,6 +68,32 @@ static inline bool bch2_snapshot_state_valid(enum bch_snapshot_state state)
 	}
 }
 
+/*
+ * Nearest-codeword decode for a corrupted state field: the state codewords
+ * are >= 14 bits apart, so a corruption of <= 6 bits lands strictly nearest
+ * its original and >= 8 from every other - a uniquely decodable bitflip.
+ * Returns the nearest state; @dist is its Hamming distance from @v (0 iff @v
+ * is already a valid codeword). The caller corrects only within the
+ * uniquely-decodable radius.
+ */
+static inline enum bch_snapshot_state
+bch2_snapshot_state_nearest(u32 v, unsigned *dist)
+{
+	enum bch_snapshot_state best = SNAPSHOT_STATE_live;
+	unsigned best_dist = 33;
+
+#define x(n, val)						\
+	if (hweight32(v ^ (val)) < best_dist) {			\
+		best_dist = hweight32(v ^ (val));		\
+		best = SNAPSHOT_STATE_##n;			\
+	}
+	BCH_SNAPSHOT_STATES()
+#undef x
+	*dist = best_dist;
+	return best;
+}
+
+const char *bch2_snapshot_state_str(enum bch_snapshot_state);
 void bch2_snapshot_state_set(struct bch_snapshot *, enum bch_snapshot_state);
 
 static inline struct snapshot_t *__snapshot_t(struct snapshot_table *t, u32 id)

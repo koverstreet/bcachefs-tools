@@ -660,14 +660,47 @@ static int check_snapshot(struct btree_trans *trans,
 	 * on a state we can't read:
 	 */
 	if (!bch2_snapshot_state_valid(bch2_snapshot_state(&s))) {
-		CLASS(bch_log_msg, msg)(c);
+		unsigned dist;
+		enum bch_snapshot_state nearest =
+			bch2_snapshot_state_nearest(le32_to_cpu(s.state), &dist);
 
-		prt_printf(&msg.m, "snapshot has invalid state 0x%x:\n",
-			   le32_to_cpu(s.state));
-		bch2_bkey_val_to_text(&msg.m, c, k);
-		msg.m.suppress = !bch2_count_fsck_err(c, snapshot_state_bad, &msg.m);
+		/*
+		 * Codewords are >= 14 apart, so anything <= 6 bits out is
+		 * uniquely decodable and recoverable. <= 2 bits is a genuine
+		 * bitflip (its own error, so failing hardware shows up in the
+		 * counters); 3-6 is larger but still-recoverable corruption.
+		 * Further out is not a bitflip we can trust: fail-stop.
+		 */
+		if (dist <= 2) {
+			if (ret_fsck_err(trans, snapshot_state_bitflip,
+					 "snapshot state 0x%x is a %u-bit flip of %s - correcting:\n%s",
+					 le32_to_cpu(s.state), dist,
+					 bch2_snapshot_state_str(nearest),
+					 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+				u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+				bch2_snapshot_state_set(&u->v, nearest);
+				s = u->v;
+			}
+		} else if (dist <= 6) {
+			if (ret_fsck_err(trans, snapshot_state_bad,
+					 "snapshot state 0x%x is %u bits from %s - correcting:\n%s",
+					 le32_to_cpu(s.state), dist,
+					 bch2_snapshot_state_str(nearest),
+					 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+				u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+				bch2_snapshot_state_set(&u->v, nearest);
+				s = u->v;
+			}
+		} else {
+			CLASS(bch_log_msg, msg)(c);
 
-		return bch_err_throw(c, fsck_repair_unimplemented);
+			prt_printf(&msg.m, "snapshot has invalid state 0x%x (nearest codeword %s is %u bits away):\n",
+				   le32_to_cpu(s.state), bch2_snapshot_state_str(nearest), dist);
+			bch2_bkey_val_to_text(&msg.m, c, k);
+			msg.m.suppress = !bch2_count_fsck_err(c, snapshot_state_bad, &msg.m);
+
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
 	}
 
 	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted)

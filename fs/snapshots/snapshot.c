@@ -397,7 +397,7 @@ struct snapshot_t *bch2_snapshot_t_mut(struct bch_fs *c, u32 id)
 
 /* Snapshot node state */
 
-static const char *bch2_snapshot_state_str(enum bch_snapshot_state s)
+const char *bch2_snapshot_state_str(enum bch_snapshot_state s)
 {
 	switch (s) {
 #define x(n, v) case SNAPSHOT_STATE_##n: return #n;
