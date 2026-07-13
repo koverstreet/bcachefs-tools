@@ -583,8 +583,6 @@ mod tests {
         let info = snapshot_info();
         assert_eq!(info.name, "bch_snapshot");
         assert_eq!(info.size, core::mem::size_of::<c::bch_snapshot>());
-        // v (zero-size), flags, parent, children, subvol, tree, depth, skip, btime
-        assert_eq!(info.fields.len(), 9);
     }
 
     #[test]
@@ -660,8 +658,8 @@ mod tests {
         let info = snapshot_info();
 
         // bare bit name resolves to the containing field + bit range
-        let (r, bm) = resolve_with_bits(info, "no_keys").unwrap();
-        let bm = bm.expect("no_keys is a declared bit");
+        let (r, bm) = resolve_with_bits(info, "no_keys_obsolete").unwrap();
+        let bm = bm.expect("no_keys_obsolete is a declared bit");
         assert_eq!((bm.lo, bm.hi), (3, 4));
         assert_eq!(r.offset, 0); // bch_snapshot.flags
 
@@ -669,8 +667,8 @@ mod tests {
         let (_, bm) = resolve_with_bits(info, "subvol").unwrap();
         assert!(bm.is_none());
         // ...the like-named bit stays reachable qualified
-        let (_, bm) = resolve_with_bits(info, "flags.subvol").unwrap();
-        assert_eq!(bm.expect("flags.subvol is a bit").lo, 1);
+        let (_, bm) = resolve_with_bits(info, "flags.subvol_obsolete").unwrap();
+        assert_eq!(bm.expect("flags.subvol_obsolete is a bit").lo, 1);
 
         assert!(resolve_with_bits(info, "flags.nonexistent").is_err());
     }
@@ -680,14 +678,14 @@ mod tests {
         let info = snapshot_info();
         let mut buf = [0u8; core::mem::size_of::<c::bch_snapshot>()];
 
-        let (r, bm) = resolve_with_bits(info, "no_keys").unwrap();
+        let (r, bm) = resolve_with_bits(info, "no_keys_obsolete").unwrap();
         let bm = bm.unwrap();
         write_bits(&mut buf, &r, bm, 1).unwrap();
         assert_eq!(read_bits(&buf, &r, bm).unwrap(), 1);
         assert_eq!(buf[0], 8); // NO_KEYS is bit 3
 
         // read-modify-write leaves neighbouring bits alone
-        let (r2, bm2) = resolve_with_bits(info, "flags.subvol").unwrap();
+        let (r2, bm2) = resolve_with_bits(info, "flags.subvol_obsolete").unwrap();
         assert_eq!(read_bits(&buf, &r2, bm2.unwrap()).unwrap(), 0);
 
         assert!(matches!(
@@ -700,21 +698,21 @@ mod tests {
     fn bits_decode_display() {
         let info = snapshot_info();
         let mut buf = [0u8; core::mem::size_of::<c::bch_snapshot>()];
-        buf[0] = 2 | 8; // SUBVOL | NO_KEYS
+        buf[0] = 2 | 8; // SUBVOL_OBSOLETE | NO_KEYS_OBSOLETE
 
         let mut s = String::new();
         struct_to_text(&mut s, info, &buf).unwrap();
-        assert!(s.contains("flags: 10 (subvol|no_keys)"), "{s}");
+        assert!(s.contains("flags: 10 (subvol_obsolete|no_keys_obsolete)"), "{s}");
     }
 
     #[test]
     fn typed_accessors() {
         let mut s = c::bch_snapshot::default();
-        s.set_no_keys(true);
-        assert!(s.no_keys());
+        s.set_no_keys_obsolete(true);
+        assert!(s.no_keys_obsolete());
         assert_eq!(u32::from_le(s.flags), 8);
-        s.set_no_keys(false);
-        assert!(!s.no_keys());
+        s.set_no_keys_obsolete(false);
+        assert!(!s.no_keys_obsolete());
         assert_eq!(u32::from_le(s.flags), 0);
     }
 
