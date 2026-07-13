@@ -407,6 +407,7 @@
 	x(EINVAL,			EINVAL_snapshot_delete_with_data)		\
 	x(EINVAL,			EINVAL_snapshot_delete_already_deleted)		\
 	x(EINVAL,			EINVAL_snapshot_delete_bad_subvol)		\
+	x(EINVAL,			EINVAL_snapshot_delete_bad_topology)		\
 	x(EINVAL,			EINVAL_snapshot_parent_missing_child_ptr)	\
 	x(EINVAL,			EINVAL_snapshot_child_bad_parent)		\
 	x(EINVAL,			EINVAL_snapshot_bad_subvol_flag)		\

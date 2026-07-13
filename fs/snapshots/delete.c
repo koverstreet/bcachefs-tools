@@ -704,11 +704,15 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 	 * collection double-adds on replay. (Repairs invalidate collected
 	 * state differently: the deletion path resets the lists wholesale
 	 * and rescans.)
+	 *
 	 */
 	struct snapshot_delete *d = &c->snapshots.delete;
-	guard(mutex)(&d->progress_lock);
-
 	u32 live_child = 0, nr_live_children = 0;
+
+	/*
+	 * Collection is the only list writer, so reading needs no lock;
+	 * progress_lock is for sysfs readers and taken only for updates:
+	 */
 	for (unsigned i = 0; i < 2; i++) {
 		u32 id = le32_to_cpu(s.v->children[i]);
 		if (id && !snapshot_list_has_id(&d->delete_leaves, id)) {
@@ -717,38 +721,56 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 			live_child = interior_delete_has_id(&d->delete_interior, id) ?:
 				interior_delete_has_id(&d->no_keys, id) ?:
 				id;
-
-			BUG_ON(live_child && !bch2_snapshot_exists(c, live_child));
 		}
 	}
 
 	if (nr_live_children == 2)
 		return 0;
 
-	if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys)
-		try(snapshot_list_add_nodup(c, &d->deleting_from_trees,
-					    bch2_snapshot_tree(c, s.k->p.offset)));
+	/*
+	 * The resolved live child is about to license key migration and a
+	 * splice: if it isn't in the table, is self-referential, or isn't a
+	 * descendant, the topology is damaged - schedule repair and bail out
+	 * of deletion, which runs again once check_snapshots has fixed it:
+	 */
+	if (live_child &&
+	    (live_child == s.k->p.offset ||
+	     !bch2_snapshot_exists(c, live_child) ||
+	     !bch2_snapshot_is_ancestor(trans, live_child, s.k->p.offset))) {
+		CLASS(bch_log_msg, msg)(c);
 
-	if (!nr_live_children) {
-		try(snapshot_list_add(c, &d->delete_leaves, s.k->p.offset));
-	} else {
-		struct snapshot_interior_delete n = {
-			.id		= s.k->p.offset,
-			.live_child	= live_child,
-		};
+		prt_printf(&msg.m, "snapshot deletion found damaged topology (resolved live child %u):\n",
+			   live_child);
+		bch2_bkey_val_to_text(&msg.m, c, s.s_c);
 
-		BUG_ON(n.id == n.live_child);
-		BUG_ON(!bch2_snapshot_is_ancestor(trans, n.live_child, n.id));
+		int ret = bch2_run_explicit_recovery_pass(c, &msg.m,
+					BCH_RECOVERY_PASS_check_snapshots, 0);
+		return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_bad_topology);
+	}
 
-		/*
-		 * We're not doing any processing for NO_KEYS snapshot nodes,
-		 * but we still track them so that we can find the correct
-		 * live_child when deleting parents, above:
-		 */
+	scoped_guard(mutex, &d->progress_lock) {
 		if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys)
-			try(darray_push(&d->delete_interior, n));
-		else
-			try(darray_push(&d->no_keys, n));
+			try(snapshot_list_add_nodup(c, &d->deleting_from_trees,
+						    bch2_snapshot_tree(c, s.k->p.offset)));
+
+		if (!nr_live_children) {
+			try(snapshot_list_add(c, &d->delete_leaves, s.k->p.offset));
+		} else {
+			struct snapshot_interior_delete n = {
+				.id		= s.k->p.offset,
+				.live_child	= live_child,
+			};
+
+			/*
+			 * We're not doing any processing for NO_KEYS snapshot
+			 * nodes, but we still track them so that we can find
+			 * the correct live_child when deleting parents, above:
+			 */
+			if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys)
+				try(darray_push(&d->delete_interior, n));
+			else
+				try(darray_push(&d->no_keys, n));
+		}
 	}
 
 	return 0;
