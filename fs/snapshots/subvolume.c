@@ -141,16 +141,20 @@ static int check_subvol(struct btree_trans *trans,
 	 * this snapshot's keys, whether or not the backref still agrees:
 	 */
 	if (bch2_snapshot_state_compat(&snapshot) != SNAPSHOT_STATE_live) {
-		bch_err(c, "subvolume %llu points to snapshot %u in a deletion state:\n%s",
-			k.k->p.offset, snapid,
-			(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
+		prt_printf(&buf, "subvolume points to a snapshot that isn't live:\n");
+		bch2_bkey_val_to_text(&buf, c, k);
+		prt_str(&buf, "\n");
+		bch2_snapshot_to_text(&buf, &snapshot);
+		bch_err(c, "%s", buf.buf);
 		return bch_err_throw(c, EINVAL_snapshot_subvol_edge_bad);
 	}
 
 	if (le32_to_cpu(snapshot.subvol) != k.k->p.offset) {
-		bch_err(c, "subvolume points to snapshot %u that does not point back (snapshot -> subvolume %u):\n%s",
-			snapid, le32_to_cpu(snapshot.subvol),
-			(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
+		prt_printf(&buf, "subvolume points to a snapshot that doesn't point back:\n");
+		bch2_bkey_val_to_text(&buf, c, k);
+		prt_str(&buf, "\n");
+		bch2_snapshot_to_text(&buf, &snapshot);
+		bch_err(c, "%s", buf.buf);
 		return bch_err_throw(c, EINVAL_snapshot_subvol_edge_bad);
 	}
 
