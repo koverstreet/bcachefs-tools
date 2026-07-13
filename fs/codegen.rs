@@ -257,6 +257,18 @@ pub fn gen_xmacros(src: &str, out: &str) {
                    generate_str_table("MEMBER_STATE_NAMES", &member_states))
         .expect("write member_states_gen.rs");
 
+    let snapshots_h = std::fs::read_to_string(format!("{src}/snapshots/format.h"))
+        .expect("reading snapshots/format.h");
+    let snapshot_states = parse_xmacro(&snapshots_h, "BCH_SNAPSHOT_STATES");
+    assert!(!snapshot_states.is_empty(), "failed to parse BCH_SNAPSHOT_STATES()");
+    let subvolume_states = parse_xmacro(&snapshots_h, "BCH_SUBVOLUME_STATES");
+    assert!(!subvolume_states.is_empty(), "failed to parse BCH_SUBVOLUME_STATES()");
+    std::fs::write(format!("{out}/snapshot_states_gen.rs"),
+                   "// Auto-generated — do not edit\n\n".to_string() +
+                   &generate_value_table("SNAPSHOT_STATE_VALUES", &snapshot_states) +
+                   &generate_value_table("SUBVOLUME_STATE_VALUES", &subvolume_states))
+        .expect("write snapshot_states_gen.rs");
+
     let counters_h = std::fs::read_to_string(format!("{src}/sb/counters_format.h"))
         .expect("reading counters_format.h");
     let counters = parse_xmacro(&counters_h, "BCH_PERSISTENT_COUNTERS");
@@ -498,6 +510,15 @@ fn generate_str_table(name: &str, entries: &[Vec<String>]) -> String {
     out.push_str("// Auto-generated — do not edit\n\n");
     out.push_str(&format!("pub const {name}: &[&str] = &[\n"));
     for e in entries { out.push_str(&format!("    \"{}\",\n", e[0])); }
+    out.push_str("];\n");
+    out
+}
+
+/// Name <-> value table for an x-macro enum with explicit values: x(name, val)
+fn generate_value_table(name: &str, entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("pub const {name}: &[(&str, u64)] = &[\n"));
+    for e in entries { out.push_str(&format!("    (\"{}\", {}),\n", e[0], e[1])); }
     out.push_str("];\n");
     out
 }

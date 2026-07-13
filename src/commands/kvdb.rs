@@ -109,11 +109,52 @@ fn parse_int(s: &str) -> Result<u64> {
     }
 }
 
-fn parse_assign(s: &str) -> Result<(&str, u64)> {
+/// An assignment value: numbers resolve immediately, anything else is an
+/// enum value name, resolved once the field (and so the key type) is known.
+enum FieldVal {
+    Int(u64),
+    Name(String),
+}
+
+fn parse_assign(s: &str) -> Result<(&str, FieldVal)> {
     let (path, val) = s
         .split_once('=')
         .ok_or_else(|| anyhow!("expected field=value, got '{s}'"))?;
-    Ok((path, parse_int(val)?))
+    Ok((path, match parse_int(val) {
+        Ok(v) => FieldVal::Int(v),
+        Err(_) => FieldVal::Name(val.to_string()),
+    }))
+}
+
+/// The one piece of schema kvdb owns: which fields hold enum codewords. The
+/// name<->value tables come from the x-macro imports (fs/codegen.rs); this
+/// goes away when the format has a real schema:
+fn field_enum(type_: u8, path: &str) -> Option<&'static [(&'static str, u64)]> {
+    use bcachefs_kernel::snapshot_states::*;
+
+    match (type_ as u32, path) {
+        (t, "state") if t == c::bch_bkey_type::KEY_TYPE_snapshot.0 =>
+            Some(SNAPSHOT_STATE_VALUES),
+        (t, "state") if t == c::bch_bkey_type::KEY_TYPE_subvolume.0 =>
+            Some(SUBVOLUME_STATE_VALUES),
+        _ => None,
+    }
+}
+
+fn field_val(type_: u8, path: &str, v: &FieldVal) -> Result<u64> {
+    match v {
+        FieldVal::Int(v) => Ok(*v),
+        FieldVal::Name(n) => {
+            let vals = field_enum(type_, path)
+                .ok_or_else(|| anyhow!("{path}: expected integer, got '{n}'"))?;
+            vals.iter()
+                .find(|(name, _)| name == n)
+                .map(|(_, v)| *v)
+                .ok_or_else(|| anyhow!("{path}: unknown value '{n}' (valid: {})",
+                                       vals.iter().map(|(n, _)| *n)
+                                           .collect::<Vec<_>>().join(", ")))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -275,7 +316,7 @@ fn cmd_update(
     fs: &Fs,
     btree: c::btree_id,
     pos: c::bpos,
-    assigns: &[(&str, u64)],
+    assigns: &[(&str, FieldVal)],
 ) -> Result<String> {
     let trans = BtreeTrans::new(fs);
     let mut user_err: Option<anyhow::Error> = None;
@@ -302,11 +343,20 @@ fn cmd_update(
 
             // Byte extent the assignments need; the value may legally be
             // shorter than the current struct (older format version) - grow
-            // it, zero-filled, if a written field lies beyond the end.
+            // it, zero-filled, if a written field lies beyond the end. The
+            // key type is known now, so enum value names resolve here too:
             let mut need = 0usize;
-            for (path, _) in assigns {
+            let mut resolved = Vec::with_capacity(assigns.len());
+            for (path, fv) in assigns {
                 match resolve_field(k.k.type_, path) {
                     Ok((r, _)) => need = need.max(r.offset + r.len),
+                    Err(e) => {
+                        user_err = Some(e);
+                        return Err(no_key_err());
+                    }
+                }
+                match field_val(k.k.type_, path, fv) {
+                    Ok(v) => resolved.push((*path, v)),
                     Err(e) => {
                         user_err = Some(e);
                         return Err(no_key_err());
@@ -335,7 +385,7 @@ fn cmd_update(
             let val: &mut [u8] = unsafe {
                 std::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, val.len() * 8)
             };
-            for (path, v) in assigns {
+            for (path, v) in &resolved {
                 let target = resolve_field(new.k().type_, path).expect("resolved above");
                 if let Err(e) = write_field(val, &target, *v) {
                     user_err = Some(anyhow!("{path}: {e}"));
@@ -358,11 +408,16 @@ fn cmd_set(
     btree: c::btree_id,
     pos: c::bpos,
     type_name: &str,
-    assigns: &[(&str, u64)],
+    assigns: &[(&str, FieldVal)],
 ) -> Result<String> {
     let ti = typeinfo::bkey_type_info_by_name(type_name)
         .ok_or_else(|| anyhow!("unknown key type '{type_name}'"))?;
     let val_u64s = ti.info.size.div_ceil(8);
+
+    let assigns = assigns
+        .iter()
+        .map(|(path, fv)| Ok((*path, field_val(ti.type_ as u8, path, fv)?)))
+        .collect::<Result<Vec<(&str, u64)>>>()?;
 
     let trans = BtreeTrans::new(fs);
     let mut user_err: Option<anyhow::Error> = None;
@@ -384,7 +439,7 @@ fn cmd_set(
             let val: &mut [u8] = unsafe {
                 std::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, val.len() * 8)
             };
-            for (path, v) in assigns {
+            for (path, v) in &assigns {
                 let target = match typeinfo::resolve_with_bits(ti.info, path) {
                     Ok(t) => t,
                     Err(e) => {
@@ -418,6 +473,8 @@ peek_prev <btree> <pos>                        last key <= pos
 list      <btree> [start] [end]                keys in range
 update    <btree> <pos> <field=val>...         modify fields of an existing key
 set       <btree> <pos> <type> [field=val]...  insert a whole new key
+          values are integers; fields holding enum codewords (snapshot/
+          subvolume state) also accept the value name, e.g. state=will_delete
 help                                           this text
 ";
 

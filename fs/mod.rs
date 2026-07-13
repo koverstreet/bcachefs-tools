@@ -39,6 +39,11 @@ pub mod debug {
 #[path = "journal/read.rs"]     pub mod journal;
 #[path = "fs/namei.rs"]        pub mod namei;
 pub mod sb;
+/// Name<->value tables for the snapshot/subvolume state codewords, generated
+/// from the BCH_*_STATES() x-macros in snapshots/format.h:
+pub mod snapshot_states {
+    include!(concat!(env!("OUT_DIR"), "/snapshot_states_gen.rs"));
+}
 #[path = "fs/str_hash.rs"]     pub mod str_hash;
 pub mod typeinfo;
 pub mod util;
