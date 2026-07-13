@@ -144,6 +144,7 @@ static int check_subvol(struct btree_trans *trans,
 			errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
 
 		n->v.fs_path_parent = 0;
+		subvol = n->v;
 	}
 
 	if (subvol.fs_path_parent) {
