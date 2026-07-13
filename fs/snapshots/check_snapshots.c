@@ -279,7 +279,9 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	CLASS(printbuf, buf)();
 
-	bool should_have_subvol = bch2_snapshot_state(s) == SNAPSHOT_STATE_live && !s->children[0];
+	bool should_have_subvol = !s->children[0] &&
+		(bch2_snapshot_state(s) == SNAPSHOT_STATE_live ||
+		 bch2_snapshot_state(s) == SNAPSHOT_STATE_will_delete);
 
 	if (should_have_subvol && s->subvol) {
 		/* dangling snapshot will be handled later */

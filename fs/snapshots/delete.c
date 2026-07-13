@@ -12,6 +12,7 @@
 #include "init/passes.h"
 
 #include "snapshots/snapshot.h"
+#include "snapshots/subvolume.h"
 
 #include "util/enumerated_ref.h"
 
@@ -137,7 +138,12 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
 	if (bch2_snapshot_state(&s->v) != SNAPSHOT_STATE_live)
 		return 0;
 
-	s->v.subvol = 0;
+	/*
+	 * The backref is retained: it now points at the subvolume's
+	 * tombstone, and deletion requires that testimony - a will_delete
+	 * leaf without a subvolume pointing back is an invalid state
+	 * (check_should_delete_leaf):
+	 */
 	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_will_delete);
 	return 0;
 }
@@ -238,6 +244,23 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 		bch2_snapshot_tree_keys_to_text(&msg.m, trans, id);
 		bch2_snapshot_delete_nodes_to_text(&msg.m, &c->snapshots.delete, true);
 		return bch_err_throw(c, EINVAL_snapshot_delete_has_two_children);
+	}
+
+	if (s->v.subvol) {
+		struct bch_subvolume subvol;
+		try(bch2_subvolume_get(trans, le32_to_cpu(s->v.subvol), true, &subvol));
+
+		if (s->v.children[0] ||
+		    (bch2_subvolume_state(&subvol) != SUBVOLUME_STATE_deleted &&
+		     c->sb.version_upgrade_complete >=
+		     bcachefs_metadata_version_per_dev_fragmentation_lru)) {
+			CLASS(bch_log_msg, msg)(c);
+			prt_printf(&msg.m, "deleting node with bad subvolume pointer:\n");
+			bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&s->k_i));
+			return bch_err_throw(c, EINVAL_snapshot_delete_bad_subvol);
+		}
+
+		try(bch2_btree_delete(trans, BTREE_ID_subvolumes, POS(0, le32_to_cpu(s->v.subvol)), 0));
 	}
 
 	u32 parent_id = le32_to_cpu(s->v.parent);
@@ -600,6 +623,45 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 	return 0;
 }
 
+static int check_should_delete_leaf(struct btree_trans *trans, struct bkey_s_c_snapshot s)
+{
+	struct bch_fs *c = trans->c;
+
+	CLASS(printbuf, buf)();
+	bch2_bkey_val_to_text(&buf, c, s.s_c);
+
+	switch (bch2_snapshot_state(s.v)) {
+	case SNAPSHOT_STATE_live:
+		return 0;
+	case SNAPSHOT_STATE_will_delete:
+		if (!s.v->subvol) {
+			if (bch2_fs_inconsistent_on(c->sb.version_upgrade_complete >=
+						    bcachefs_metadata_version_per_dev_fragmentation_lru,
+						    c, "snapshot leaf in invalid state\n%s", buf.buf))
+				return 0;
+		} else {
+			struct bch_subvolume subvol;
+			try(bch2_subvolume_get(trans, le32_to_cpu(s.v->subvol), true, &subvol));
+
+			if (bch2_fs_inconsistent_on(bch2_subvolume_state(&subvol) != SUBVOLUME_STATE_deleted,
+						    c, "snapshot marked for deletion but subvolume not marked for deletion\n%s",
+						    buf.buf))
+				return 0;
+
+			if (bch2_fs_inconsistent_on(le32_to_cpu(subvol.snapshot) != s.k->p.offset,
+						    c, "snapshot marked for deletion but subvolume does not point back\n%s",
+						    buf.buf))
+				return 0;
+		}
+
+		return 1;
+	default: {
+		bch2_fs_inconsistent(c, "snapshot leaf in invalid state\n%s", buf.buf);
+		return 0;
+	}
+	}
+}
+
 /*
  * For a given snapshot, if it doesn't have a subvolume that points to it, and
  * it doesn't have child snapshot nodes - it's now redundant and we can mark it
@@ -616,8 +678,11 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 	if (bch2_snapshot_state(s.v) == SNAPSHOT_STATE_deleted)
 		return 0;
 
-	if (bch2_snapshot_state(s.v) == SNAPSHOT_STATE_live && s.v->subvol)
-		return 0;
+	if (!s.v->children[0]) {
+		int ret = check_should_delete_leaf(trans, s);
+		if (ret <= 0)
+			return ret;
+	}
 
 	struct snapshot_delete *d = &c->snapshots.delete;
 	guard(mutex)(&d->progress_lock);

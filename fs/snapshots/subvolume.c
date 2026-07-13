@@ -19,7 +19,7 @@
 
 #include <linux/random.h>
 
-static int bch2_subvolume_delete(struct btree_trans *, u32);
+static int bch2_subvolume_set_deleted(struct btree_trans *, u32);
 
 static int bch2_subvolume_missing(struct bch_fs *c, u32 subvolid)
 {
@@ -68,6 +68,14 @@ static int check_subvol(struct btree_trans *trans,
 		subvol = n->v;
 	}
 
+	/*
+	 * A tombstone: it exists only as deletion's witness, reaped when its
+	 * snapshot node is deleted - none of the live-subvolume invariants
+	 * apply (the sweep may already have erased its root inode):
+	 */
+	if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_deleted)
+		return 0;
+
 	snapid = le32_to_cpu(subvol.snapshot);
 	ret = bch2_snapshot_lookup(trans, snapid, &snapshot);
 
@@ -86,7 +94,7 @@ static int check_subvol(struct btree_trans *trans,
 		return ret;
 
 	if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_unlinked) {
-		ret = bch2_subvolume_delete(trans, iter->pos.offset);
+		ret = bch2_subvolume_set_deleted(trans, iter->pos.offset);
 		bch_err_msg(c, ret, "deleting subvolume %llu", iter->pos.offset);
 		return ret ?: bch_err_throw(c, transaction_restart_nested);
 	}
@@ -437,11 +445,28 @@ static int bch2_subvolumes_reparent(struct btree_trans *trans, u32 subvolid_to_d
 					subvolid_to_delete, le32_to_cpu(s.creation_parent)));
 }
 
+static int bch2_subvolume_set_state_trans(struct btree_trans *trans, u32 subvolid,
+					  enum bch_subvolume_state state)
+{
+	struct bkey_i_subvolume *n =
+		bch2_bkey_get_mut_typed(trans, BTREE_ID_subvolumes, POS(0, subvolid),
+					BTREE_ITER_cached, subvolume);
+	int ret = PTR_ERR_OR_ZERO(n);
+	if (bch2_err_matches(ret, ENOENT))
+		ret = bch2_subvolume_missing(trans->c, subvolid) ?: ret;
+	if (unlikely(ret))
+		return ret;
+
+	bch2_subvolume_state_set(&n->v, state);
+	n->v.fs_path_parent = 0;
+	return ret;
+}
+
 /*
  * Delete subvolume, mark snapshot ID as deleted, queue up snapshot
  * deletion/cleanup:
  */
-static int __bch2_subvolume_delete(struct btree_trans *trans, u32 subvolid)
+static int __bch2_subvolume_set_deleted(struct btree_trans *trans, u32 subvolid)
 {
 	CLASS(btree_iter, subvol_iter)(trans, BTREE_ID_subvolumes, POS(0, subvolid),
 				       BTREE_ITER_cached|BTREE_ITER_intent);
@@ -482,17 +507,15 @@ static int __bch2_subvolume_delete(struct btree_trans *trans, u32 subvolid)
 		snapshot_tree_mut->v.master_subvol = 0;
 	}
 
-	return  bch2_btree_delete_at(trans, &subvol_iter, 0) ?:
+	return  bch2_subvolume_set_state_trans(trans, subvolid, SUBVOLUME_STATE_deleted) ?:
 		bch2_snapshot_node_set_deleted(trans, snapid);
 }
 
-static int bch2_subvolume_delete(struct btree_trans *trans, u32 subvolid)
+static int bch2_subvolume_set_deleted(struct btree_trans *trans, u32 subvolid)
 {
 	int ret = bch2_subvolumes_reparent(trans, subvolid) ?:
 		commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-			  __bch2_subvolume_delete(trans, subvolid));
-
-	bch2_recovery_pass_set_no_ratelimit(trans->c, BCH_RECOVERY_PASS_check_subvols);
+			  __bch2_subvolume_set_deleted(trans, subvolid));
 	return ret;
 }
 
@@ -518,7 +541,7 @@ static void bch2_subvolume_wait_for_pagecache_and_delete(struct work_struct *wor
 		CLASS(btree_trans, trans)(c);
 
 		darray_for_each(s, id) {
-			ret = bch2_subvolume_delete(trans, *id);
+			ret = bch2_subvolume_set_deleted(trans, *id);
 			bch_err_msg(c, ret, "deleting subvolume %u", *id);
 			if (ret)
 				break;
@@ -561,18 +584,16 @@ int bch2_subvolume_unlink(struct btree_trans *trans, u32 subvolid)
 	h->subvol	= subvolid;
 	bch2_trans_commit_hook(trans, &h->h);
 
-	struct bkey_i_subvolume *n =
-		bch2_bkey_get_mut_typed(trans, BTREE_ID_subvolumes, POS(0, subvolid),
-					BTREE_ITER_cached, subvolume);
-	int ret = PTR_ERR_OR_ZERO(n);
-	if (bch2_err_matches(ret, ENOENT))
-		ret = bch2_subvolume_missing(trans->c, subvolid) ?: ret;
-	if (unlikely(ret))
-		return ret;
+	try(bch2_subvolume_set_state_trans(trans, subvolid, SUBVOLUME_STATE_unlinked));
 
-	bch2_subvolume_state_set(&n->v, SUBVOLUME_STATE_unlinked);
-	n->v.fs_path_parent = 0;
-	return ret;
+	/*
+	 * We don't have an "unlinked subvolumes" btree" like we do for unlinked
+	 * inodes, but subvolumes can also be held open by open file handles;
+	 * schedule check_subvolumes to find any unlinked subvolumes and delete
+	 * them if we crash after an unlink while they were still held open.
+	 */
+	bch2_recovery_pass_set_no_ratelimit(trans->c, BCH_RECOVERY_PASS_check_subvols);
+	return 0;
 }
 
 int bch2_subvolume_create(struct btree_trans *trans, u64 inode,

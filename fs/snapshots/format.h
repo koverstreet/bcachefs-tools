@@ -31,10 +31,14 @@ struct bch_subvolume {
  * Subvolume lifecycle state: same codeword scheme as bch_snapshot.state
  * (below), additionally >= 14 bit flips from every snapshot state so a value
  * copied across key types reads as garbage, not a legal state:
+ *
+ * unlinked: unlinked from filesystem tree but still has open files
+ * deleted:  no longer referenced, delete_dead_snapshots may delete
  */
 #define BCH_SUBVOLUME_STATES()			\
 	x(live,			0x4ad5447e)	\
-	x(unlinked,		0x2d358e8f)
+	x(unlinked,		0x2d358e8f)	\
+	x(deleted,		0x3c6b2d4c)
 
 enum bch_subvolume_state {
 #define x(n, v) SUBVOLUME_STATE_##n = v,
@@ -127,12 +131,15 @@ static_assert(__builtin_popcount(SNAPSHOT_STATE_no_keys     ^ SNAPSHOT_STATE_del
 	BCH_SUBVOLUME_STATES()
 #undef x
 
-static_assert(__builtin_popcount(SUBVOLUME_STATE_live ^ SUBVOLUME_STATE_unlinked) >= 14);
+static_assert(__builtin_popcount(SUBVOLUME_STATE_live     ^ SUBVOLUME_STATE_unlinked) >= 14);
+static_assert(__builtin_popcount(SUBVOLUME_STATE_live     ^ SUBVOLUME_STATE_deleted)  >= 14);
+static_assert(__builtin_popcount(SUBVOLUME_STATE_unlinked ^ SUBVOLUME_STATE_deleted)  >= 14);
 
 /* cross-type distance, snapshot states vs subvolume states: */
 #define x(n, v)										\
 	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_live)     >= 14);		\
-	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_unlinked) >= 14);
+	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_unlinked) >= 14);		\
+	static_assert(__builtin_popcount(v ^ SUBVOLUME_STATE_deleted)  >= 14);
 	BCH_SNAPSHOT_STATES()
 #undef x
 
