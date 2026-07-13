@@ -13,6 +13,33 @@ const char * const bch2_sb_error_strs[] = {
 #undef x
 };
 
+/*
+ * The ids are persistent indices into on-disk error counters: a duplicate
+ * silently aliases two errors' counts, and neither C nor the enum will
+ * complain. Enforce at build time that the ids are exactly 0..MAX:
+ *
+ * - the switch makes a duplicate id a compile error (duplicate case label)
+ * - given distinctness, the minimum possible sum of MAX+1 non-negative
+ *   integers is 0+1+...+MAX, achieved only by exactly that set - so the sum
+ *   check rules out gaps and strays above MAX in one shot
+ */
+static inline void __maybe_unused bch2_sb_errs_check_unique(void)
+{
+	switch (0) {
+	case -1:
+#define x(t, n, ...) case n:
+	BCH_SB_ERRS()
+#undef x
+		;
+	}
+}
+
+#define x(t, n, ...) + (n)
+static_assert((0ULL BCH_SB_ERRS()) ==
+	      (unsigned long long) BCH_FSCK_ERR_MAX * (BCH_FSCK_ERR_MAX + 1) / 2,
+	      "sb error ids are not dense: gap, duplicate, or id > MAX");
+#undef x
+
 __cold void bch2_sb_error_id_to_text(struct printbuf *out, enum bch_sb_error_id id)
 {
 	if (id < BCH_FSCK_ERR_MAX)
