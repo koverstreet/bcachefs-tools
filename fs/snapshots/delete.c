@@ -655,6 +655,18 @@ static int check_should_delete_leaf(struct btree_trans *trans, struct bkey_s_c_s
 		}
 
 		return 1;
+	case SNAPSHOT_STATE_no_keys:
+		/*
+		 * An emptied interior node whose children have all been
+		 * deleted is normally reaped in the same pass that deletes
+		 * its last child - each node deletion is its own commit, so a
+		 * childless no_keys node is what a crash in between leaves.
+		 * Shouldn't occur otherwise; handle it gracefully - it's
+		 * empty by construction and node_delete re-verifies no-data:
+		 */
+		return ret_fsck_err(trans, snapshot_no_keys_childless,
+				    "childless no_keys snapshot node, deleting:\n%s",
+				    buf.buf);
 	default: {
 		bch2_fs_inconsistent(c, "snapshot leaf in invalid state\n%s", buf.buf);
 		return 0;
@@ -684,6 +696,15 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 			return ret;
 	}
 
+	/*
+	 * The leaf check above is this body's last restart point: everything
+	 * below is in-memory table lookups and list pushes, so a transaction
+	 * restart replays the body having collected nothing. The lists aren't
+	 * transactional - keep restartable work above this line, or
+	 * collection double-adds on replay. (Repairs invalidate collected
+	 * state differently: the deletion path resets the lists wholesale
+	 * and rescans.)
+	 */
 	struct snapshot_delete *d = &c->snapshots.delete;
 	guard(mutex)(&d->progress_lock);
 
