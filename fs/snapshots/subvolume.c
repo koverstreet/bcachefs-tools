@@ -110,6 +110,25 @@ static int check_subvol(struct btree_trans *trans,
 	if (ret)
 		return ret;
 
+	/*
+	 * Subvolumes only reference leaves; an interior target means a pointer
+	 * was re-aimed by damage or a snapshot creation half-completed. No
+	 * repair yet - the right re-aim (which descendant?) isn't decidable
+	 * from this state alone. Checked before the unlinked branch:
+	 * set_deleted here would mark an interior node will_delete:
+	 */
+	if (snapshot.children[0]) {
+		CLASS(bch_log_msg, msg)(c);
+
+		prt_printf(&msg.m, "subvolume points to interior snapshot node:\n");
+		bch2_bkey_val_to_text(&msg.m, c, k);
+		prt_newline(&msg.m);
+		bch2_snapshot_to_text(&msg.m, &snapshot);
+		msg.m.suppress = !bch2_count_fsck_err(c, subvol_snapshot_not_leaf, &msg.m);
+
+		return bch_err_throw(c, fsck_repair_unimplemented);
+	}
+
 	if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_unlinked) {
 		ret = bch2_subvolume_set_deleted(trans, iter->pos.offset);
 		bch_err_msg(c, ret, "deleting subvolume %llu", iter->pos.offset);
