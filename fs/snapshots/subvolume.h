@@ -36,6 +36,25 @@ static inline bool bch2_subvolume_state_valid(enum bch_subvolume_state state)
 	}
 }
 
+/* Nearest-codeword decode for a corrupted state field (see snapshot.h): */
+static inline enum bch_subvolume_state
+bch2_subvolume_state_nearest(u32 v, unsigned *dist)
+{
+	enum bch_subvolume_state best = SUBVOLUME_STATE_live;
+	unsigned best_dist = 33;
+
+#define x(n, val)						\
+	if (hweight32(v ^ (val)) < best_dist) {			\
+		best_dist = hweight32(v ^ (val));		\
+		best = SUBVOLUME_STATE_##n;			\
+	}
+	BCH_SUBVOLUME_STATES()
+#undef x
+	*dist = best_dist;
+	return best;
+}
+
+const char *bch2_subvolume_state_str(enum bch_subvolume_state);
 void bch2_subvolume_state_set(struct bch_subvolume *, enum bch_subvolume_state);
 
 int bch2_check_subvols(struct bch_fs *);

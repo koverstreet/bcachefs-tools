@@ -75,14 +75,43 @@ static int check_subvol(struct btree_trans *trans,
 	 * on a state we can't read:
 	 */
 	if (!bch2_subvolume_state_valid(bch2_subvolume_state(&subvol))) {
-		CLASS(bch_log_msg, msg)(c);
+		unsigned dist;
+		enum bch_subvolume_state nearest =
+			bch2_subvolume_state_nearest(le32_to_cpu(subvol.state), &dist);
 
-		prt_printf(&msg.m, "subvolume has invalid state 0x%x:\n",
-			   le32_to_cpu(subvol.state));
-		bch2_bkey_val_to_text(&msg.m, c, k);
-		msg.m.suppress = !bch2_count_fsck_err(c, subvol_state_bad, &msg.m);
+		/* bitflip correction, see check_snapshot */
+		if (dist <= 2) {
+			if (fsck_err(trans, subvol_state_bitflip,
+				     "subvolume state 0x%x is a %u-bit flip of %s - correcting:\n%s",
+				     le32_to_cpu(subvol.state), dist,
+				     bch2_subvolume_state_str(nearest),
+				     (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+				struct bkey_i_subvolume *n =
+					errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
+				bch2_subvolume_state_set(&n->v, nearest);
+				subvol = n->v;
+			}
+		} else if (dist <= 6) {
+			if (fsck_err(trans, subvol_state_bad,
+				     "subvolume state 0x%x is %u bits from %s - correcting:\n%s",
+				     le32_to_cpu(subvol.state), dist,
+				     bch2_subvolume_state_str(nearest),
+				     (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+				struct bkey_i_subvolume *n =
+					errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
+				bch2_subvolume_state_set(&n->v, nearest);
+				subvol = n->v;
+			}
+		} else {
+			CLASS(bch_log_msg, msg)(c);
 
-		return bch_err_throw(c, fsck_repair_unimplemented);
+			prt_printf(&msg.m, "subvolume has invalid state 0x%x (nearest codeword %s is %u bits away):\n",
+				   le32_to_cpu(subvol.state), bch2_subvolume_state_str(nearest), dist);
+			bch2_bkey_val_to_text(&msg.m, c, k);
+			msg.m.suppress = !bch2_count_fsck_err(c, subvol_state_bad, &msg.m);
+
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
 	}
 
 	/*
@@ -351,7 +380,7 @@ fsck_err:
 	return ret;
 }
 
-static const char *bch2_subvolume_state_str(enum bch_subvolume_state s)
+const char *bch2_subvolume_state_str(enum bch_subvolume_state s)
 {
 	switch (s) {
 #define x(n, v) case SUBVOLUME_STATE_##n: return #n;
