@@ -259,6 +259,12 @@ static int check_subvol_child(struct btree_trans *trans,
 			"incorrect entry in subvolume_children btree %llu:%llu",
 			child_k.k->p.inode, child_k.k->p.offset))
 		try(bch2_btree_delete_at(trans, child_iter, 0));
+
+	/*
+	 * A missing subvolume was the verdict (entry is stray, deleted
+	 * above), not an error - don't fail the pass with it:
+	 */
+	ret = 0;
 fsck_err:
 	return ret;
 }
