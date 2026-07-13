@@ -614,6 +614,23 @@ static int check_snapshot(struct btree_trans *trans,
 		s = u->v;
 	}
 
+	/*
+	 * Pre-upgrade, the rewrite above always leaves a valid state, so this
+	 * only fires post-upgrade - where any invalid value (including zero)
+	 * is corruption. No repair yet, and state-keyed repairs must not run
+	 * on a state we can't read:
+	 */
+	if (!bch2_snapshot_state_valid(bch2_snapshot_state(&s))) {
+		CLASS(bch_log_msg, msg)(c);
+
+		prt_printf(&msg.m, "snapshot has invalid state 0x%x:\n",
+			   le32_to_cpu(s.state));
+		bch2_bkey_val_to_text(&msg.m, c, k);
+		msg.m.suppress = !bch2_count_fsck_err(c, snapshot_state_bad, &msg.m);
+
+		return bch_err_throw(c, fsck_repair_unimplemented);
+	}
+
 	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted)
 		return 0;
 

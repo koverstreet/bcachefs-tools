@@ -24,6 +24,18 @@ static inline enum bch_subvolume_state bch2_subvolume_state_compat(const struct 
 		: bch2_subvolume_state_from_flags(s);
 }
 
+static inline bool bch2_subvolume_state_valid(enum bch_subvolume_state state)
+{
+	switch (state) {
+#define x(n, v) case SUBVOLUME_STATE_##n:
+	BCH_SUBVOLUME_STATES()
+#undef x
+		return true;
+	default:
+		return false;
+	}
+}
+
 void bch2_subvolume_state_set(struct bch_subvolume *, enum bch_subvolume_state);
 
 int bch2_check_subvols(struct bch_fs *);

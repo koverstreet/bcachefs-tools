@@ -69,6 +69,23 @@ static int check_subvol(struct btree_trans *trans,
 	}
 
 	/*
+	 * Pre-upgrade, the rewrite above always leaves a valid state, so this
+	 * only fires post-upgrade - where any invalid value (including zero)
+	 * is corruption. No repair yet, and state-keyed repairs must not run
+	 * on a state we can't read:
+	 */
+	if (!bch2_subvolume_state_valid(bch2_subvolume_state(&subvol))) {
+		CLASS(bch_log_msg, msg)(c);
+
+		prt_printf(&msg.m, "subvolume has invalid state 0x%x:\n",
+			   le32_to_cpu(subvol.state));
+		bch2_bkey_val_to_text(&msg.m, c, k);
+		msg.m.suppress = !bch2_count_fsck_err(c, subvol_state_bad, &msg.m);
+
+		return bch_err_throw(c, fsck_repair_unimplemented);
+	}
+
+	/*
 	 * A tombstone: it exists only as deletion's witness, reaped when its
 	 * snapshot node is deleted - none of the live-subvolume invariants
 	 * apply (the sweep may already have erased its root inode):

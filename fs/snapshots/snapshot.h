@@ -56,6 +56,18 @@ static inline enum bch_snapshot_state bch2_snapshot_state_compat(const struct bc
 		: bch2_snapshot_state_from_flags(s);
 }
 
+static inline bool bch2_snapshot_state_valid(enum bch_snapshot_state state)
+{
+	switch (state) {
+#define x(n, v) case SNAPSHOT_STATE_##n:
+	BCH_SNAPSHOT_STATES()
+#undef x
+		return true;
+	default:
+		return false;
+	}
+}
+
 void bch2_snapshot_state_set(struct bch_snapshot *, enum bch_snapshot_state);
 
 static inline struct snapshot_t *__snapshot_t(struct snapshot_table *t, u32 id)
