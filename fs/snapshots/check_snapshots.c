@@ -1096,7 +1096,18 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 		 * dropping it (the deleted node retains a child pointer so
 		 * bch2_snapshot_live_descendent() can find the target).
 		 */
-		u32 live_child = bch2_snapshot_live_descendent(c, k.k->p.snapshot);
+		u32 live_child;
+		int r = bch2_snapshot_live_descendent(c, k.k->p.snapshot, &live_child);
+		if (r) {
+			/*
+			 * Dangling child pointer, on a table check_snapshots just
+			 * validated clean (we only reach here clean) - a real
+			 * inconsistency, not a stale table. Surface it; don't destroy
+			 * the key.
+			 */
+			ret = r;
+			goto fsck_err;
+		}
 
 		if (__fsck_err_on(!live_child,
 				trans, repair_flags, bkey_in_deleted_snapshot,
