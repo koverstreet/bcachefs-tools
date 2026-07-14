@@ -2339,25 +2339,23 @@ static void bch2_evict_inode(struct inode *vinode)
 	inode->ei_inodes_idx = 0;
 }
 
-void bch2_evict_subvolume_inodes(struct bch_fs *c, snapshot_id_list *s)
+int bch2_evict_subvolume_inodes(struct bch_fs *c,
+				snapshot_id_list *pending,
+				snapshot_id_list *busy)
 {
 	/*
-	 * Initially, we scan for inodes without I_DONTCACHE, then mark them to
-	 * be pruned with d_mark_dontcache().
-	 *
-	 * Once we've had a clean pass where we didn't find any inodes without
-	 * I_DONTCACHE, we wait for them to be freed.
-	 *
-	 * fast_list_iter tracks position by integer index, so we can drop rcu
-	 * around the dcache work (held safe by our igrab ref) and resume from
-	 * the same slot on the next iteration.
+	 * Mark matching inodes so VFS drops them when their external holders
+	 * release references, but do not wait here: subvolume deletion must not
+	 * park a worker in TASK_UNINTERRUPTIBLE behind loop/NFS/export holders.
 	 */
+	int ret = 0;
+
 	rcu_read_lock();
 	struct genradix_iter iter;
 	struct bch_inode_info *inode;
 
 	fast_list_for_each(&c->vfs.inodes, iter, inode) {
-		if (!snapshot_list_has_id(s, inode->ei_inum.subvol))
+		if (!snapshot_list_has_id(pending, inode->ei_inum.subvol))
 			continue;
 
 		if (!(inode_state_read_once(&inode->v) & I_DONTCACHE) &&
@@ -2370,30 +2368,14 @@ void bch2_evict_subvolume_inodes(struct bch_fs *c, snapshot_id_list *s)
 
 			rcu_read_lock();
 		}
+
+		ret = snapshot_list_add_nodup(c, busy, inode->ei_inum.subvol);
+		if (ret)
+			break;
 	}
-
-	bool found = false;
-	do {
-		found = false;
-
-		fast_list_for_each(&c->vfs.inodes, iter, inode) {
-			if (!snapshot_list_has_id(s, inode->ei_inum.subvol))
-				continue;
-
-			found = true;
-
-			struct wait_bit_queue_entry wqe;
-			struct wait_queue_head *wq_head = inode_bit_waitqueue(&wqe, &inode->v, __I_NEW);
-			prepare_to_wait_event(wq_head, &wqe.wq_entry,
-					      TASK_UNINTERRUPTIBLE);
-			rcu_read_unlock();
-
-			schedule();
-			finish_wait(wq_head, &wqe.wq_entry);
-			rcu_read_lock();
-		}
-	} while (found);
 	rcu_read_unlock();
+
+	return ret;
 }
 
 static int bch2_statfs(struct dentry *dentry, struct kstatfs *buf)
