@@ -137,7 +137,9 @@
 	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry,		\
 	  BCH_FSCK_ERR_inode_has_inode_opts_flag_wrong,		\
 	  BCH_FSCK_ERR_inode_has_access_acl_flag_wrong,		\
-	  BCH_FSCK_ERR_inode_has_default_acl_flag_wrong)
+	  BCH_FSCK_ERR_inode_has_default_acl_flag_wrong,	\
+	  BCH_FSCK_ERR_snapshot_state_bad,			\
+	  BCH_FSCK_ERR_subvol_state_bad)
 
 #define UPGRADE_TABLE_INCOMPAT()				\
 	x(reconcile,						\
