@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_RECOVERY_PASSES_TYPES_H
 #define _BCACHEFS_RECOVERY_PASSES_TYPES_H
 
+#include "passes_format.h"
+
 struct bch_fs_recovery {
 	/* counterpart to c->sb.recovery_passes_required */
 	u64			scheduled_passes_ephemeral;
@@ -18,6 +20,14 @@ struct bch_fs_recovery {
 	u64			passes_complete;
 	u64			passes_failing;
 	u64			passes_ratelimiting;
+
+	/*
+	 * Cost-model retry ratelimit for the passes in passes_failing, kept in
+	 * memory only: a failing pass must not write the sb recovery_pass_entry,
+	 * but we still want the same last_run/last_runtime throttle so automatic
+	 * recovery doesn't hammer a pass that keeps failing.
+	 */
+	struct recovery_pass_entry passes_failing_ratelimit[BCH_RECOVERY_PASS_NR];
 
 	spinlock_t		lock;
 	struct mutex		run_lock;
