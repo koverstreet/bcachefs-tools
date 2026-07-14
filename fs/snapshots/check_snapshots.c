@@ -627,6 +627,51 @@ static int check_snapshot_edge(struct btree_trans *trans,
 		: bch_err_throw(c, EINVAL_snapshot_child_bad_parent);
 }
 
+/*
+ * Is anything still pointing at this snapshot node - a subvolume whose
+ * snapshot is us, our parent listing us as a child, or a child naming us as
+ * its parent? Used to recover a node whose state field is garbage: if it's
+ * referenced it must be live, whatever the corrupted state says.
+ */
+static int snapshot_referenced(struct btree_trans *trans,
+			       const struct bch_snapshot *s, u32 id, bool *ref)
+{
+	*ref = true;
+
+	if (s->subvol) {
+		struct bch_subvolume subvol;
+		int ret = bch2_subvolume_get(trans, le32_to_cpu(s->subvol), false, &subvol);
+		if (ret && !bch2_err_matches(ret, ENOENT))
+			return ret;
+		if (!ret && le32_to_cpu(subvol.snapshot) == id)
+			return 0;
+	}
+
+	if (s->parent) {
+		struct bch_snapshot p;
+		int ret = bch2_snapshot_lookup(trans, le32_to_cpu(s->parent), &p);
+		if (ret && !bch2_err_matches(ret, ENOENT))
+			return ret;
+		if (!ret && snapshot_node_points_back(&p, EDGE_PARENT, id))
+			return 0;
+	}
+
+	for (unsigned i = 0; i < 2; i++) {
+		if (!s->children[i])
+			continue;
+
+		struct bch_snapshot ch;
+		int ret = bch2_snapshot_lookup(trans, le32_to_cpu(s->children[i]), &ch);
+		if (ret && !bch2_err_matches(ret, ENOENT))
+			return ret;
+		if (!ret && snapshot_node_points_back(&ch, EDGE_CHILD, id))
+			return 0;
+	}
+
+	*ref = false;
+	return 0;
+}
+
 static int check_snapshot(struct btree_trans *trans,
 			  struct btree_iter *iter,
 			  struct bkey_s_c k)
@@ -692,14 +737,36 @@ static int check_snapshot(struct btree_trans *trans,
 				s = u->v;
 			}
 		} else {
-			CLASS(bch_log_msg, msg)(c);
+			/*
+			 * Too far from any codeword to decode. But the rest of
+			 * the key is intact, so if anything still references
+			 * this node it must be live - mark it live. An
+			 * unreferenced garbage node we can't place: fail-stop.
+			 */
+			bool ref;
+			int ret2 = snapshot_referenced(trans, &s, k.k->p.offset, &ref);
+			if (ret2)
+				return ret2;
 
-			prt_printf(&msg.m, "snapshot has invalid state 0x%x (nearest codeword %s is %u bits away):\n",
-				   le32_to_cpu(s.state), bch2_snapshot_state_str(nearest), dist);
-			bch2_bkey_val_to_text(&msg.m, c, k);
-			msg.m.suppress = !bch2_count_fsck_err(c, snapshot_state_bad, &msg.m);
+			if (ref) {
+				if (ret_fsck_err(trans, snapshot_state_bad,
+						 "snapshot state 0x%x is garbage, but the node is referenced - marking live:\n%s",
+						 le32_to_cpu(s.state),
+						 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+					u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+					bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
+					s = u->v;
+				}
+			} else {
+				CLASS(bch_log_msg, msg)(c);
 
-			return bch_err_throw(c, fsck_repair_unimplemented);
+				prt_printf(&msg.m, "snapshot has invalid state 0x%x (nearest codeword %s is %u bits away, node unreferenced):\n",
+					   le32_to_cpu(s.state), bch2_snapshot_state_str(nearest), dist);
+				bch2_bkey_val_to_text(&msg.m, c, k);
+				msg.m.suppress = !bch2_count_fsck_err(c, snapshot_state_bad, &msg.m);
+
+				return bch_err_throw(c, fsck_repair_unimplemented);
+			}
 		}
 	}
 
