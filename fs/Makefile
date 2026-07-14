@@ -517,6 +517,18 @@ endif # bcachefs-rust-y
 # Silence "note: xyz changed in GCC X.X" messages
 subdir-ccflags-y += $(call cc-disable-warning, psabi)
 
+# Don't let a large stack frame fail the build (e.g. Proxmox ships
+# CONFIG_FRAME_WARN=1024, stricter than the usual 2048, + CONFIG_WERROR). The
+# functions that trip it — mainly the data-update path — run from kthread /
+# workqueue context with a full stack, and we're careful not to blow it, so
+# drop the error but keep the warning informational rather than playing
+# frame-size whack-a-mole.
+#
+# The trailing '=' is required, not a typo: -Wframe-larger-than takes a value
+# (-Wframe-larger-than=N), so -Wno-error= must name it as 'frame-larger-than=';
+# GCC 15 rejects the form without it.
+subdir-ccflags-y += -Wno-error=frame-larger-than=
+
 # kbuild weirdness - sometimes this gets passed automatically, other times we
 # need to specify it. no idea why:
 subdir-ccflags-y += -I$(src)
