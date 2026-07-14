@@ -1185,6 +1185,14 @@ static int bch2_inode_delete_keys(struct btree_trans *trans,
 	int ret = 0;
 
 	/*
+	 * Deleting a compressed extent that straddles a snapshot boundary splits
+	 * it, and __bch2_trans_commit() charges the split's extra_disk_res to our
+	 * disk reservation — so pass one in rather than NULL, or that charge
+	 * dereferences a NULL disk_reservation.
+	 */
+	CLASS(disk_reservation, res)(trans->c);
+
+	/*
 	 * We're never going to be deleting partial extents, no need to use an
 	 * extent iterator:
 	 */
@@ -1216,7 +1224,7 @@ static int bch2_inode_delete_keys(struct btree_trans *trans,
 					iter.pos.offset);
 
 		ret = bch2_trans_update(trans, &iter, &delete, 0) ?:
-		      bch2_trans_commit(trans, NULL, NULL,
+		      bch2_trans_commit(trans, &res.r, NULL,
 					BCH_TRANS_COMMIT_no_enospc);
 err:
 		if (ret && !bch2_err_matches(ret, BCH_ERR_transaction_restart))
