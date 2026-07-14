@@ -1391,10 +1391,17 @@ err:
 static inline void __wp_update_state(struct write_point *wp, enum write_point_state state)
 {
 	if (state != wp->state) {
-		struct task_struct *p = current;
 		u64 now = ktime_get_ns();
-		u64 runtime = p->se.sum_exec_runtime +
-			(now - p->se.exec_start);
+#ifndef CONFIG_SCHED_ALT
+		u64 runtime = current->se.sum_exec_runtime +
+			(now - current->se.exec_start);
+#else
+		/*
+		 * BMQ/PDS (CONFIG_SCHED_ALT) replace CFS and drop task_struct.se;
+		 * this is only write-point runtime accounting, so skip it there.
+		 */
+		u64 runtime = 0;
+#endif
 
 		if (state == WRITE_POINT_runnable)
 			wp->last_runtime = runtime;
