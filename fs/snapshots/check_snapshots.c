@@ -1049,20 +1049,57 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 	if (!iter)
 		return 1;
 
+	if (state != SNAPSHOT_ID_deleted &&
+	    state != SNAPSHOT_ID_empty)
+		return 0;
+
 	/*
-	 * Snapshot was deleted. If there's no live descendant (a leaf, or an
-	 * interior node whose subtree is entirely deleted) the key is genuinely
-	 * orphaned - nothing can see it - so delete it. If there is a live
-	 * descendant the key is still visible to it via inheritance and should
-	 * have been migrated there during deletion; migrate it now rather than
-	 * dropping it (the deleted node retains a child pointer so
-	 * bch2_snapshot_live_descendent() can find the target). Both autofix.
+	 * Both repairs below destroy or relocate a key based on the in-memory
+	 * snapshot table. Only trust it if the snapshots and subvolumes btrees
+	 * have both been validated consistent (by check_snapshots /
+	 * check_subvols) and not mutated since - the btrees_clean bits. If they
+	 * haven't, the table may simply be stale and acting on it would destroy
+	 * live data; schedule the passes and defer instead. Unlike
+	 * require_recovery_pass on its own, this doesn't trust a pass that merely
+	 * ran this mount (or was ratelimited) - it must have run since the last
+	 * mutation.
 	 */
+	bool snapshots_clean = bch2_btree_is_clean(c, BTREE_ID_snapshots) &&
+			       bch2_btree_is_clean(c, BTREE_ID_subvolumes);
+
+	if (!snapshots_clean) {
+		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_snapshots) ?: ret;
+		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_subvols) ?: ret;
+	}
+
+	/*
+	 * Snapshot missing entirely: we should have caught this with
+	 * btree_lost_data and kicked off reconstruct_snapshots, so if we end up
+	 * here we have no idea what happened - force reconstruct too.
+	 */
+	if (state == SNAPSHOT_ID_empty &&
+	    c->sb.btrees_lost_data & BIT_ULL(BTREE_ID_snapshots))
+		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_reconstruct_snapshots) ?: ret;
+
+	if (!snapshots_clean)
+		return ret;
+
+	unsigned repair_flags = FSCK_CAN_IGNORE | (!ret ? FSCK_CAN_FIX : 0);
+
 	if (state == SNAPSHOT_ID_deleted) {
+		/*
+		 * If there's no live descendant (a leaf, or an interior node whose
+		 * subtree is entirely deleted) the key is genuinely orphaned -
+		 * nothing can see it - so delete it. If there is a live descendant
+		 * the key is still visible to it via inheritance and should have
+		 * been migrated there during deletion; migrate it now rather than
+		 * dropping it (the deleted node retains a child pointer so
+		 * bch2_snapshot_live_descendent() can find the target).
+		 */
 		u32 live_child = bch2_snapshot_live_descendent(c, k.k->p.snapshot);
 
-		if (fsck_err_on(!live_child,
-				trans, bkey_in_deleted_snapshot,
+		if (__fsck_err_on(!live_child,
+				trans, repair_flags, bkey_in_deleted_snapshot,
 				"key in deleted snapshot %s, delete?",
 				(bch2_btree_id_to_text(&buf, iter->btree_id),
 				 prt_char(&buf, ' '),
@@ -1070,47 +1107,21 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 			ret = bch2_btree_delete_at(trans, iter,
 						   BTREE_UPDATE_internal_snapshot_node) ?: 1;
 
-		if (fsck_err_on(live_child,
-				trans, bkey_in_deleted_interior_snapshot,
+		if (__fsck_err_on(live_child,
+				trans, repair_flags, bkey_in_deleted_interior_snapshot,
 				"key in deleted interior snapshot %s, migrate to live descendant?",
 				(bch2_btree_id_to_text(&buf, iter->btree_id),
 				 prt_char(&buf, ' '),
 				 bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
 			ret = bch2_delete_dead_snapshot_key(trans, iter, k, live_child) ?: 1;
-	}
-
-	if (state == SNAPSHOT_ID_empty) {
-		/*
-		 * Snapshot missing: we should have caught this with btree_lost_data and
-		 * kicked off reconstruct_snapshots, so if we end up here we have no
-		 * idea what happened.
-		 *
-		 * Do not delete unless we know that subvolumes and snapshots
-		 * are consistent:
-		 *
-		 * XXX:
-		 *
-		 * We could be smarter here, and instead of using the generic
-		 * recovery pass ratelimiting, track if there have been any
-		 * changes to the snapshots or inodes btrees since those passes
-		 * last ran.
-		 */
-		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_snapshots) ?: ret;
-		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_subvols) ?: ret;
-
-		if (c->sb.btrees_lost_data & BIT_ULL(BTREE_ID_snapshots))
-			ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_reconstruct_snapshots) ?: ret;
-
-		unsigned repair_flags = FSCK_CAN_IGNORE | (!ret ? FSCK_CAN_FIX : 0);
-
+	} else {
 		if (__fsck_err(trans, repair_flags, bkey_in_missing_snapshot,
 			     "key in missing snapshot %s, delete?",
 			     (bch2_btree_id_to_text(&buf, iter->btree_id),
 			      prt_char(&buf, ' '),
-			      bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			      bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
 			ret = bch2_btree_delete_at(trans, iter,
 						   BTREE_UPDATE_internal_snapshot_node) ?: 1;
-		}
 	}
 fsck_err:
 	return ret;
