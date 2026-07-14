@@ -528,14 +528,17 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 		orig_passes_to_run &= ~bch2_recovery_passes_match(PASS_ALLOC);
 
 	/*
-	 * A failed recovery pass will be retried after another pass succeeds -
-	 * but not this iteration.
+	 * A failed recovery pass is retried after another pass succeeds - but
+	 * not this iteration - so automatic recovery doesn't loop on it (some
+	 * passes only succeed once another pass has repaired what they depend
+	 * on).
 	 *
-	 * This is because some passes depend on repair done by other passes: we
-	 * may want to retry, but we don't want to loop on failing passes.
+	 * An explicit fsck is different: the user asked for these passes, so
+	 * run them even if they failed before, and let them fail loudly again
+	 * rather than silently returning success having done nothing.
 	 */
-
-	orig_passes_to_run &= ~r->passes_failing;
+	if (!test_bit(BCH_FS_in_fsck, &c->flags))
+		orig_passes_to_run &= ~r->passes_failing;
 
 	r->current_passes = orig_passes_to_run;
 
