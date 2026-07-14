@@ -237,20 +237,32 @@ static inline u32 bch2_snapshot_depth(struct bch_fs *c, u32 parent)
  * part of the tree of snapshots - we can't remove them from the tree of
  * snapshots at runtime - but all keys with that snapshot ID have been removed
  * and we can't create new ones. Walk to the single live descendant we can use
- * instead - or return 0 if the subtree has been fully deleted and there is none
- * (a stray key in such a node has no live home and should just be dropped).
+ * instead.
+ *
+ * Returns 0, with *live set to the live descendant - or *live == 0 if the
+ * subtree has been fully deleted and there is none (a stray key in such a node
+ * has no live home and should just be dropped).
+ *
+ * A missing node mid-walk means a deleted interior node's child pointer is
+ * dangling - the tree is damaged - and is returned as an error rather than
+ * conflated with "no live descendant", so the caller doesn't drop a key a live
+ * descendant should still see.
  */
-static inline u32 bch2_snapshot_live_descendent(struct bch_fs *c, u32 id)
+static inline int bch2_snapshot_live_descendent(struct bch_fs *c, u32 id, u32 *live)
 {
+	*live = 0;
+
 	guard(rcu)();
 	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
 
 	while (true) {
 		const struct snapshot_t *s = __snapshot_t(t, id);
 		if (!s)
+			return bch_err_throw(c, invalid_snapshot_node);
+		if (s->state == SNAPSHOT_ID_live) {
+			*live = id;
 			return 0;
-		if (s->state == SNAPSHOT_ID_live)
-			return id;
+		}
 
 		EBUG_ON(s->children[1]);	/* deleted nodes are single-child */
 		if (!s->children[0])

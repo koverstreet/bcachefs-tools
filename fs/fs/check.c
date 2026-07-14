@@ -125,8 +125,9 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	struct bch_snapshot_tree st;
 	try(bch2_snapshot_tree_lookup(trans, snapshot_tree, &st));
 
-	u32 snapshot = bch2_snapshot_live_descendent(c, le32_to_cpu(st.root_snapshot));
-	if (!snapshot) {
+	u32 snapshot;
+	if (bch2_snapshot_live_descendent(c, le32_to_cpu(st.root_snapshot), &snapshot) ||
+	    !snapshot) {
 		bch_err(c, "snapshot tree %u has no live snapshot, cannot create lost+found",
 			snapshot_tree);
 		return bch_err_throw(c, ENOENT_snapshot);
