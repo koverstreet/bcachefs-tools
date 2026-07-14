@@ -227,7 +227,12 @@ fn loopdev_free(path: &str) {
 fn cmd_fsck(cli: FsckCli) -> Result<()> {
 
     if cli.auto_repair {
-        // Automatic run, called by the system — we don't need checks here
+        // -p (preen) is the automatic boot-time invocation (fsck.bcachefs -p,
+        // run by mount/systemd before mounting). bcachefs checks and repairs
+        // at mount time, so there's genuinely nothing to do here — but say so
+        // rather than exiting 0 in silence, which reads as "fsck ran and the
+        // filesystem is clean" when in fact no checking happened.
+        println!("bcachefs: nothing to do for -p (preen): the filesystem is checked and repaired at mount time");
         return Ok(());
     }
 
