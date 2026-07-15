@@ -729,6 +729,13 @@ static void bch2_sb_update(struct bch_fs *c)
 		le_bitvector_to_cpu(c->sb.errors_silent, (void *) ext->errors_silent,
 				    sizeof(c->sb.errors_silent) * 8);
 		c->sb.btrees_lost_data = le64_to_cpu(ext->btrees_lost_data);
+
+		/* Appended member - older superblocks may have a smaller field: */
+		c->sb.btrees_clean =
+			vstruct_bytes(&ext->field) >= offsetof(struct bch_sb_field_ext, btrees_clean) +
+						      sizeof(ext->btrees_clean)
+			? le64_to_cpu(ext->btrees_clean)
+			: 0;
 	} else {
 		memset(c->sb.errors_silent, 0, sizeof(c->sb.errors_silent));
 	}
@@ -1556,6 +1563,14 @@ static __cold void bch2_sb_ext_to_text(struct printbuf *out,
 				sizeof(e->btrees_lost_data_ever)) {
 		prt_printf(out, "Btrees that have ever lost data:\t");
 		prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_lost_data_ever));
+		prt_newline(out);
+	}
+
+	/* Appended member - older superblocks may have a smaller field: */
+	if (vstruct_bytes(f) >= offsetof(struct bch_sb_field_ext, btrees_clean) +
+				sizeof(e->btrees_clean)) {
+		prt_printf(out, "Btrees validated clean:\t");
+		prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_clean));
 		prt_newline(out);
 	}
 }

@@ -138,6 +138,46 @@ int bch2_btree_lost_data(struct bch_fs *c,
 	return ret;
 }
 
+/*
+ * btrees_clean: sibling to btrees_lost_data. A set bit means the btree was
+ * validated consistent by its check pass and has not been mutated since.
+ *
+ * The bit is mutated straight through to the superblock (a synchronous write),
+ * so the on-disk value is always current and doesn't depend on a clean
+ * shutdown; the double-checked lock keeps the common case (already in the
+ * wanted state) off c->sb_lock. Set on clean pass completion; cleared from the
+ * btree's transactional trigger on mutation. See bch2_btree_is_clean().
+ */
+void bch2_set_btree_clean(struct bch_fs *c, enum btree_id btree)
+{
+	if (c->sb.btrees_clean & BIT_ULL(btree))
+		return;
+
+	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(mutex)(&c->sb_lock);
+	if (!(c->sb.btrees_clean & BIT_ULL(btree))) {
+		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
+		__test_and_set_bit_le64(btree, &ext->btrees_clean);
+		c->sb.btrees_clean |= BIT_ULL(btree);
+		bch2_write_super(c);
+	}
+}
+
+void bch2_clear_btree_clean(struct bch_fs *c, enum btree_id btree)
+{
+	if (!(c->sb.btrees_clean & BIT_ULL(btree)))
+		return;
+
+	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(mutex)(&c->sb_lock);
+	if (c->sb.btrees_clean & BIT_ULL(btree)) {
+		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
+		__clear_bit_le64(btree, &ext->btrees_clean);
+		c->sb.btrees_clean &= ~BIT_ULL(btree);
+		bch2_write_super(c);
+	}
+}
+
 static void kill_btree(struct bch_fs *c, enum btree_id btree)
 {
 	bch2_btree_id_root(c, btree)->alive = false;
