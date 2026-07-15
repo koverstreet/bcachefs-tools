@@ -11,6 +11,7 @@
 
 #include "init/error.h"
 #include "init/passes.h"
+#include "init/recovery.h"
 
 #include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
@@ -430,6 +431,9 @@ static int subvolume_children_mod(struct btree_trans *trans, struct bpos pos, bo
 int bch2_subvolume_trigger(struct btree_trans *trans, struct btree_trigger_op op)
 {
 	if (op.flags & BTREE_TRIGGER_transactional) {
+		/* The subvolumes btree is being mutated - it's no longer known clean: */
+		bch2_clear_btree_clean(trans->c, BTREE_ID_subvolumes);
+
 		struct bpos children_pos_old = subvolume_children_pos(op.old);
 		struct bpos children_pos_new = subvolume_children_pos(op.new.s_c);
 
