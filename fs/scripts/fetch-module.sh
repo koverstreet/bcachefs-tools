@@ -19,7 +19,7 @@
 # module must match AND that a running system can reconstruct from its own
 # package database:
 #
-#   <base>/<distro>/<arch>/<pkgver>/bcachefs-<ref>.ko
+#   <base>/<distro>/<arch>/<pkgver>/bcachefs-v<ref>.ko
 #
 #   distro  os-release ID (debian, ubuntu, fedora, arch, ...)
 #   arch    the distro's own arch name (amd64 vs x86_64) — asked of the package
@@ -199,7 +199,10 @@ esac
 
 [ -n "$pkgver" ] || fall_back "could not determine the kernel package version"
 
-url=$base_url/$distro/$arch/$pkgver/bcachefs-$ref.ko
+# The farm publishes modules named after the git tag (bcachefs-v1.38.8.ko),
+# while $ref is the package version DKMS passes (1.38.8, no leading v) - so
+# normalize to the published "v"-prefixed form. (github #784)
+url=$base_url/$distro/$arch/$pkgver/bcachefs-v${ref#v}.ko
 
 work=$(mktemp -d) || fall_back "could not create a working directory"
 trap 'rm -rf "$work"' EXIT
