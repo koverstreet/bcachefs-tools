@@ -1,0 +1,71 @@
+#!/bin/sh
+
+set +e
+set -x
+
+# Drop dangling symlink that hinders testing
+rm -f ./bcachefs || /bin/true
+
+echo "Ensuring that the bcachefs module isn't already loaded"
+/sbin/lsmod | grep -q "^bcachefs"
+if [ $? -eq 0 ]; then
+  echo "Error: bcachefs module is already loaded."
+  exit 1
+fi
+
+echo "Loading the bcachefs module"
+/sbin/modprobe bcachefs
+if [ $? -ne 0 ]; then
+  echo "Error: failed to load bcachefs module."
+  exit 1
+fi
+
+/sbin/modinfo bcachefs
+if [ $? -ne 0 ]; then
+  echo "Error: failed to get bcachefs module info."
+  exit 1
+fi
+
+ls -lah $(/sbin/modinfo --filename bcachefs)
+if [ $? -ne 0 ]; then
+  echo "Error: failed to ls the loaded module."
+  exit 1
+fi
+
+bcachefs version
+if [ $? -ne 0 ]; then
+  echo "Error: failed to get bcachefs tools info."
+  exit 1
+fi
+
+FAILED_TESTS=0
+for t in ./debian/tests/$(basename "$0").*
+do
+	echo "Performing test $t"
+	echo "$t" | grep -q ".disabled$"
+	if [ $? -eq 0 ]; then
+		echo "Skipping disabled test $t"
+		continue
+	fi
+
+	TMPDIR="$(mktemp -d)"
+	if [ $? -ne 0 ]; then
+		echo "FATAL: failed create temporary directory for a test"
+		exit 1
+	fi
+
+	TMPDIR="$TMPDIR" /bin/sh $t
+	if [ $? -ne 0 ]; then
+		echo "Warning: test $t has FAILED!"
+		FAILED_TESTS=1
+	else
+		echo "Test $t: success."
+	fi
+
+	rm -rf "$TMPDIR"
+	if [ $? -ne 0 ]; then
+		echo "FATAL: failed to remove test's temporary directory"
+		exit 1
+	fi
+done
+exit $FAILED_TESTS

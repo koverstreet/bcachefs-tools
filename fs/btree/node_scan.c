@@ -228,7 +228,7 @@ static int read_btree_nodes_worker(void *p)
 		goto err;
 	}
 
-	bio = bio_alloc(NULL, buf_pages(b->data, c->opts.btree_node_size), 0, GFP_KERNEL);
+	bio = bio_alloc(NULL, buf_nr_bvecs(b->data, c->opts.btree_node_size), 0, GFP_KERNEL);
 	if (!bio) {
 		bch_err(c, "read_btree_nodes_worker: error allocating bio");
 		w->f->ret = -ENOMEM;
@@ -260,9 +260,10 @@ static int read_btree_nodes_worker(void *p)
 		}
 	}
 err:
-	if (b)
-		bch2_btree_node_data_free_locked(b);
-	kfree(b);
+	if (b) {
+		bch2_btree_node_data_free(b);
+		bch2_btree_node_mem_free(c, b);
+	}
 	bio_put(bio);
 	enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_btree_node_scan);
 	closure_put(w->cl);

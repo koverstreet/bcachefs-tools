@@ -1,0 +1,348 @@
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        required: true
+        type: string
+    outputs:
+      deb-src-artifact-id:
+        value: ${{ jobs.linux.outputs.deb-src-artifact-id }}
+    secrets:
+      GPG_SECRET_SUBKEYS:
+      GPG_SIGNING_SUBKEY_FINGERPRINT:
+
+jobs:
+  linux:
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      CONTAINER_DISTRO: trixie
+      RUST_VERSION: 1.89.0
+      DEBFULLNAME: apt.bcachefs.org CI bot
+      DEBEMAIL: linux-bcachefs@vger.kernel.org
+      DEBPKG_EPOCH: 1
+      SUITE: ${{ (github.event_name == 'push' && github.ref_type == 'tag') && 'release' || 'snapshot' }}
+    steps:
+      - name: Configure baseline system
+        timeout-minutes: 1
+        id: init
+        shell: sudo sh "{0}"
+        run: |
+          set -xe
+          mount -t tmpfs tmpfs ${{ github.workspace }}
+          echo "set man-db/auto-update false" | debconf-communicate
+          dpkg-reconfigure man-db
+          mkdir -p /etc/apt/apt.conf.d
+          mkdir -p /etc/dpkg/dpkg.cfg.d
+          tee /etc/apt/apt.conf.d/99gh > /dev/null <<EOT
+          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+          Acquire::Retries "10";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
+          APT::Get::Assume-Yes "true";
+          APT::Get::Fix-Missing "true";
+          EOT
+          tee /etc/dpkg/dpkg.cfg.d/99gh > /dev/null <<EOT
+          force-unsafe-io
+          force-confdef
+          EOT
+          rm -rf /var/lib/apt/lists/*
+          rm -rf /etc/apt/sources.list*
+          tee /etc/apt/sources.list > /dev/null <<EOT
+          deb http://archive.ubuntu.com/ubuntu noble main universe
+          EOT
+          apt update
+          apt install eatmydata
+          eatmydata apt install \
+            podman \
+          ;
+          apt clean
+      - name: Start the container
+        timeout-minutes: 1
+        shell: sudo eatmydata sh "{0}"
+        run: |
+          set -xe
+          export IMAGE=debian:${{ env.CONTAINER_DISTRO }}-slim
+          podman pull ${IMAGE}
+          podman run \
+            --name container \
+            --image-volume=tmpfs \
+            --tmpfs=/run \
+            --tmpfs=/tmp \
+            --tmpfs=/var/tmp \
+            --volume=/home/runner:/home/runner \
+            --volume=${{ github.workspace }}:${{ github.workspace }} \
+            --cap-add=SYS_ADMIN \
+            --security-opt=apparmor:unconfined \
+            --interactive \
+            --tty \
+            --detach \
+            ${IMAGE} \
+            /usr/bin/sh \
+          ;
+      - name: Install necessary packages
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container sh "{0}"
+        run: |
+          set -xe
+          mkdir -p /etc/apt/apt.conf.d
+          mkdir -p /etc/dpkg/dpkg.cfg.d
+          tee /etc/apt/apt.conf.d/99gh > /dev/null <<EOT
+          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+          Acquire::Retries "10";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
+          APT::Get::Assume-Yes "true";
+          APT::Get::Fix-Missing "true";
+          EOT
+          tee /etc/dpkg/dpkg.cfg.d/99gh > /dev/null <<EOT
+          force-unsafe-io
+          force-confdef
+          EOT
+          rm -rf /var/lib/apt/lists/*
+          rm -rf /etc/apt/sources.list*
+          tee /etc/apt/sources.list > /dev/null <<EOT
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }} main
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }}-updates main
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }}-backports main
+          EOT
+          apt update
+          apt install eatmydata
+          eatmydata apt full-upgrade
+          eatmydata apt install \
+            curl \
+            debian-keyring \
+            devscripts \
+            gcc \
+            git \
+            git-buildpackage \
+            gnupg \
+            iproute2 \
+            libc6-dev \
+            mmdebstrap \
+            patch \
+            sbuild \
+            tar \
+            uidmap \
+            xz-utils \
+            zip \
+          ;
+          apt clean
+          USER=`whoami`
+          usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+      - name: Import/Configure GPG
+        timeout-minutes: 1
+        id: gpg
+        if: github.event_name != 'pull_request'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          install -d -m 0755 /etc/apt/keyrings
+          gpg --import <<EOT
+          ${{ secrets.GPG_SECRET_SUBKEYS }}
+          EOT
+          gpg \
+            --output /etc/apt/keyrings/apt.bcachefs.org.pgp \
+            --export \
+            ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }} \
+          ;
+          gpg \
+            --output /etc/apt/keyrings/apt.bcachefs.org.asc \
+            --armor \
+            --export \
+            ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }} \
+          ;
+          rm -f ~/.gnupg/trustedkeys.gpg
+          gpg \
+            --no-default-keyring \
+            --keyring ~/.gnupg/trustedkeys.gpg \
+            --import \
+            /etc/apt/keyrings/apt.bcachefs.org.pgp \
+          ;
+          tee -a ~/.gnupg/gpg.conf > /dev/null <<EOT
+          default-key ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          trusted-key ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          EOT
+          tee -a ~/.gbp.conf > /dev/null <<EOT
+          [buildpackage]
+          sign-tags = True
+          keyid = ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          EOT
+          tee -a ~/.devscripts > /dev/null <<EOT
+          DEBSIGN_KEYID=${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          EOT
+          tee -a ~/.sbuildrc > /dev/null <<EOT
+          \$key_id = '${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}';
+          \$dpkg_buildpackage_user_options = [
+            '--sign-keyid=${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}',
+            '--force-sign'
+          ];
+          EOT
+      - name: Configure sbuild
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          BUILD_DIR="${{ github.workspace }}/deb-src"
+          mkdir -p "$BUILD_DIR"
+          tee -a ~/.sbuildrc > /dev/null <<EOT
+          \$verbose = 1;
+          \$build_dir = '$BUILD_DIR';
+          \$distribution = '${{ inputs.dist-version }}';
+          #\$host_arch = '${{ inputs.arch }}';
+          \$chroot_mode = 'unshare';
+          \$unshare_tmpdir_template = '/tmp/tmp.sbuild.XXXXXXXXXX';
+          EOT
+          tee -a ~/.sbuildrc > /dev/null <<EOT
+          \$external_commands = {
+            'chroot-setup-commands' => [
+              "export LD_PRELOAD=/usr/lib/$(dpkg-architecture -q DEB_BUILD_GNU_TYPE)/libeatmydata.so"
+            ]
+          };
+          \$build_environment = {
+            "LD_PRELOAD" =>
+              "/usr/lib/$(dpkg-architecture -q DEB_BUILD_GNU_TYPE)/libeatmydata.so"
+          };
+          \$environment_filter = [
+            Dpkg::BuildInfo::get_build_env_allowed(),
+            '^LD_PRELOAD$'
+          ];
+          push @{\$unshare_mmdebstrap_extra_args}, "*", [
+            '--include=eatmydata',
+            '--hook-dir=/usr/share/mmdebstrap/hooks/eatmydata',
+            'http://deb.debian.org/debian',
+            '--variant=apt',
+            '--keyring=/usr/share/keyrings/debian-keyring.gpg',
+            '--components=main'
+          ];
+          EOT
+      - name: Install Rust / cargo
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | \
+            sh -s -- --default-toolchain ${{ env.RUST_VERSION }} --profile minimal -y
+          . "$HOME/.cargo/env"
+      - name: Install cargo-vendor-filterer
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          . "$HOME/.cargo/env"
+          cargo install --locked cargo-vendor-filterer
+      - name: Fetch our git repository
+        timeout-minutes: 1
+        uses: actions/checkout@v4
+        with:
+          path: 'bcachefs-tools'
+          fetch-depth: 0
+          fetch-tags: true
+      - name: Update package version/changelog
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          export DEBFULLNAME="${{ env.DEBFULLNAME }}"
+          export DEBEMAIL="${{ env.DEBEMAIL }}"
+          git config --global user.email "${DEBFULLNAME}"
+          git config --global user.name "${DEBEMAIL}"
+          cd "${{ github.workspace }}/bcachefs-tools"
+          git config --global --add safe.directory .
+          CURR_TAG="$(git describe --abbrev=0 --tags --match "v*" $(git rev-list HEAD --tags --skip=0 --max-count=1))"
+          PREV_TAG="$(git describe --abbrev=0 --tags --match "v*" $(git rev-list HEAD --tags --skip=1 --max-count=1))"
+          NEW_VERSION="${{ env.DEBPKG_EPOCH }}:$(echo $CURR_TAG | sed 's/^v//')"
+          git checkout -B WIP
+          export EDITOR=/bin/true
+          if [ "${{ env.SUITE }}" = "release" ]; then
+          gbp dch --new-version="$NEW_VERSION" --since=$PREV_TAG --release
+          else
+          gbp dch --new-version="$NEW_VERSION" --since=$CURR_TAG --snapshot --snapshot-number=`date -u +%Y%m%d%H%M%S`
+          fi
+          DEB_VER="$(dpkg-parsechangelog --show-field Version | cut -d: -f2-)"
+          patch "Makefile" <<EOF
+          --- a/Makefile
+          +++ b/Makefile
+          @@ -1 +1 @@
+          -VERSION=\$(shell cargo metadata --format-version 1 | jq -r '.packages[] | select(.name | test("bcachefs-tools")) | .version')
+          +VERSION=$DEB_VER
+          EOF
+          rm -f "Makefile.orig"
+          if [ "${{ env.SUITE }}" != "release" ]; then
+          tee -a dkms/dkms.conf.in > /dev/null <<EOT
+          STRIP[0]=no
+          EOT
+          fi
+          git add -A
+          git commit --message="nobody sees this anyways"
+      - name: Build the source-only .deb package
+        timeout-minutes: 10
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          . "$HOME/.cargo/env"
+          export DEBFULLNAME="${{ env.DEBFULLNAME }}"
+          export DEBEMAIL="${{ env.DEBEMAIL }}"
+          cd "${{ github.workspace }}/bcachefs-tools"
+          mkdir -p "${{ github.workspace }}/deb-src"
+          # FIXME: pubkey is not avaliable in chroot, .dsc signature verification fails
+          echo '::group::Building the package'
+          gbp buildpackage \
+            --git-verbose \
+            --git-ignore-branch \
+            --no-clean \
+            --git-dist=${{ inputs.dist-version }} \
+            --git-builder=sbuild \
+            --source \
+            --source-only-changes \
+            --no-arch-all \
+            --no-arch-any \
+          ;
+          echo '::endgroup::'
+      - name: Ensure that all source artifacts are signed, or sign them
+        timeout-minutes: 1
+        if: steps.gpg.conclusion != 'skipped'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/deb-src"
+          find . -type f -not -iname '*.sig' -print0 | xargs --null -I'{}' sh -c "                     \
+            echo '::group::Signing {}' &&                                                              \
+            (                                                                                          \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}     || \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}.sig || \
+              gpg --verbose --detach-sign {}                                                           \
+            ) &&                                                                                       \
+            echo '::endgroup::'                                                                        \
+          "
+      - name: Archive source build artifacts
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/deb-src"
+          tar -cf "${{ github.workspace }}/deb-src/artifact-src.tar" *
+      - name: Attest the source-only .deb package artifact
+        timeout-minutes: 1
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-path: '${{ github.workspace }}/deb-src'
+      - name: Upload the source-only .deb package artifact archive
+        timeout-minutes: 1
+        id: deb-src-upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifact-src.tar
+          path: '${{ github.workspace }}/deb-src/artifact-src.tar'
+          if-no-files-found: error
+          compression-level: 0
+      - name: Attest the uploaded source-only .deb package artifact
+        timeout-minutes: 1
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@v3
+        id: upload
+        with:
+          subject-name: artifact-src.tar.zip
+          subject-digest: sha256:${{ steps.deb-src-upload.outputs.artifact-digest }}
+    outputs:
+      deb-src-artifact-id: ${{ steps.deb-src-upload.outputs.artifact-id }}

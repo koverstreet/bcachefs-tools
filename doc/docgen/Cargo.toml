@@ -1,0 +1,8 @@
+[package]
+name = "bch-docgen"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "bch-docgen"
+path = "src/main.rs"

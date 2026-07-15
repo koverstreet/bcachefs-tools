@@ -359,7 +359,7 @@ static noinline struct snapshot_t *__snapshot_t_mut(struct bch_fs *c, u32 id)
 	size_t idx = U32_MAX - id;
 	struct snapshot_table *new, *old;
 
-	size_t new_bytes = kmalloc_size_roundup(struct_size(new, s, idx + 1));
+	size_t new_bytes = roundup_pow_of_two(struct_size(new, s, idx + 1));
 	size_t new_size = (new_bytes - sizeof(*new)) / sizeof(new->s[0]);
 
 	if (unlikely(new_bytes > INT_MAX))
@@ -555,12 +555,9 @@ static int __bch2_mark_snapshot(struct btree_trans *trans,
 	return 0;
 }
 
-int bch2_mark_snapshot(struct btree_trans *trans,
-		       enum btree_id btree, unsigned level,
-		       struct bkey_s_c old, struct bkey_s new,
-		       enum btree_iter_update_trigger_flags flags)
+int bch2_mark_snapshot(struct btree_trans *trans, struct btree_trigger_op op)
 {
-	return __bch2_mark_snapshot(trans, btree, level, old, new.s_c, flags);
+	return __bch2_mark_snapshot(trans, op.btree, op.level, op.old, op.new.s_c, op.flags);
 }
 
 /* Snapshot tree traversal: */

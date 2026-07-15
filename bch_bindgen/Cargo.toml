@@ -1,0 +1,23 @@
+[package]
+name = "bch_bindgen"
+version = "0.1.0"
+authors = [ "Kayla Firestack <dev@kaylafire.me>", "Yuxuan Shui <yshuiv7@gmail.com>", "Kent Overstreet <kent.overstreet@linux.dev>" ]
+edition = "2021"
+rust-version = "1.85.0"
+
+[lib]
+crate-type = ["lib"]
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0"
+uuid = "1.2.2"
+bitfield = "0.14.0"
+bitflags = "1.3.2"
+fiemap = "0.2"
+libc = "0.2"
+paste = "1.0.11"
+
+[build-dependencies]
+pkg-config = "0.3"
+bindgen = "0.72.1"

@@ -1,0 +1,220 @@
+bcachefs-tools (1:1.31.2~3) unstable; urgency=medium
+
+  * Debian packaging: depend on linux-headers-generic, it will pull in the right one
+
+ -- Roman Lebedev <lebedev.ri@gmail.com>  Sat, 20 Sep 2025 21:18:15 +0300
+
+bcachefs-tools (1:1.31.2) UNRELEASED; urgency=medium
+
+  * DKMS now works on 6.16
+
+ -- Kent Overstreet <kent.overstreet@linux.dev>  Fri, 19 Sep 2025 02:30:19 -0400
+
+bcachefs-tools (1:1.31.1~1) unstable; urgency=medium
+
+  * Split DKMS into separate binary package
+
+ -- Roman Lebedev <lebedev.ri@gmail.com>  Thu, 18 Sep 2025 03:01:17 +0300
+
+bcachefs-tools (1:1.31.1) unstable; urgency=medium
+
+  * DKMS support
+
+ -- Kent Overstreet <kent.overstreet@linux.dev>  Wed, 17 Sep 2025 18:31:34 -0400
+
+bcachefs-tools (1:1.31.0) unstable; urgency=medium
+
+  * Fix package, build against vendored deps
+  * Implement apt.bcachefs.org repo
+
+ -- Roman Lebedev <lebedev.ri@gmail.com>  Tue, 16 Sep 2025 12:50:36 +0300
+
+bcachefs-tools (1:1.13.0-1~exp1) experimental; urgency=medium
+
+  * QA Upload
+  * New upstream release
+    - Regenerate dependency patch
+  * New build-dependency: librust-env-logger-dev
+  * New build-dependency: librust-owo-colors-dev
+  * Add missing character in previous changelog entry
+    (s/tom/toml)
+
+ -- Jonathan Carter <jcc@debian.org>  Mon, 06 Jan 2025 12:37:38 +0200
+
+bcachefs-tools (1:1.9.4-1~exp1) experimental; urgency=medium
+
+  * New upstream release
+  * Remove build-dependency on librust-colored-2-dev (no longer needed)
+  * New build-dependencies: librust-rustix-dev, rustfmt,
+                            librust-memoffset-06-dev -> librust-memoffset-dev
+  * Refresh build-deps patch
+  * Add upstream metadata
+  * Remove self from maintaners (orphaning package)
+
+ -- Jonathan Carter <jcc@debian.org>  Sat, 20 Jul 2024 04:19:03 +0200
+
+bcachefs-tools (1:1.9.2-1) experimental; urgency=medium
+
+  * New upstream release
+  * Fix Vcs fields in debian/control
+
+ -- Jonathan Carter <jcc@debian.org>  Thu, 11 Jul 2024 15:01:59 +0200
+
+bcachefs-tools (1:1.9.1-1) unstable; urgency=medium
+
+  * New upstream release
+  * New build-depency: librust-strum-dev
+  * Update copyright file
+
+ -- Jonathan Carter <jcc@debian.org>  Thu, 20 Jun 2024 17:28:12 +0200
+
+bcachefs-tools (1:1.7.0-1) unstable; urgency=medium
+
+  * Upload to unstable (Closes: #1066929)
+  * Bump epoch
+    - Ack from pochu:
+      https://lists.debian.org/msgid-search/1c5f86c9-1525-4d44-996f-3d4eed1e64d6@debian.org
+
+ -- Jonathan Carter <jcc@debian.org>  Wed, 15 May 2024 12:04:38 +0200
+
+bcachefs-tools (24+really1.7.0-1~exp1) experimental; urgency=medium
+
+  [ Steinar H. Gunderson ]
+  * New upstream release.
+    * Remove the do-not-install-mount-symlink patch.
+    * Add epoch to deal with new upstream versioning scheme,
+      and disable pristine-tar option in gbp.conf, since there is no
+      pristine-tar branch. (Closes: #1054620)
+    * revert-bindgen-changes.patch: New patch, reinstates upstream
+      hack that makes bcachefs-tools work with bindgen older than 0.69.4
+      (which isn't in Debian yet).
+  * Build-depend on systemd-dev, since udev.pc has moved there.
+  * Enable Rust parts, including mount.bcachefs. (Closes: #1060256)
+    * Include the right .mk flags to get DEB_HOST_RUST_TYPE etc., and
+      export that (needed for Debian's cargo wrapper).
+    * Override CARGO, and set CARGO_HOME during installation.
+    * Run prepare-debian in dh_auto_configure, and clean up the vendor dir
+      in dh_auto_clean.
+    * Remove Cargo.lock before the build, so that we can use Debian's versions
+      of all Rust crates. Also remove it in dh_auto_clean, so that it does not
+      take a diff.
+    * revert-bindgen-changes.patch: New patch, loosen required versions
+      of Rust crates
+      - errno (0.2 -> >= 0.2, < 1; Debian has 0.4)
+      - udev (0.7 -> >= 0.7, < 1; Debian has 0.8)
+      - memoffset (0.8.0 -> 0.6; Debian has 0.6.5, so a downgrade)
+      - paste (1.0.11 -> 1.0; Debian has 1.0.8, so a downgrade)
+      - bindgen (0.69.4 -> 0.66; see revert-bindgen-changes.patch above)
+    * Add build-dependency on all relevant Rust crates, and on python3:native
+      due to use of the Cargo wrapper.
+  * Build-Depend on pkgconf instead of pkg-config (Lintian warning).
+  * Add debhelper tokens to postinst and postrm scripts (Lintian warning).
+  * Depend on python3:any due to bcachefsck_all being a Python script
+    (Lintian warning).
+
+  [ Jonathan Carter ]
+  * Upload to experimental
+  * Add librust-chrono-dev, librust-getset-dev and
+    librust-gag-dev to build-depends
+  * Recreate dependencies patch to match new upstream source
+  * Update standards version to 4.7.0
+  * Update above mentioned revert-bindgen-changes.patch
+
+ -- Jonathan Carter <jcc@debian.org>  Thu, 25 Apr 2024 13:53:55 +0200
+
+bcachefs-tools (24+really1.3.4-2) unstable; urgency=medium
+
+  * Upload to unstable
+
+ -- Jonathan Carter <jcc@debian.org>  Wed, 03 Jan 2024 17:06:16 +0200
+
+bcachefs-tools (24+really1.3.4-2~exp1) experimental; urgency=medium
+
+  [ Chris Hofstaedtler ]
+  * Non-maintainer upload.
+  * Install files into /usr instead of /. (Closes: #1059373)
+
+  [ Jonathan Carter ]
+  * Do not install bcachefs.mount symlink (Closes: #1057295)
+
+ -- Jonathan Carter <jcc@debian.org>  Wed, 27 Dec 2023 19:22:06 +0200
+
+bcachefs-tools (24+really1.3.4-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Jonathan Carter <jcc@debian.org>  Tue, 21 Nov 2023 17:26:13 +0200
+
+bcachefs-tools (24+really1.2-1) unstable; urgency=medium
+
+  * New upstream release (Closes: #1054613)
+  * Disable new rust build
+    (dependencies currently unavailable in Debian, see debian/README.todo)
+  * Remove unneeded override_dh_auto_clean from debian/rules
+    (Closes: #1043654)
+
+ -- Jonathan Carter <jcc@debian.org>  Thu, 28 Sep 2023 19:54:47 +0200
+
+bcachefs-tools (24-1) unstable; urgency=medium
+
+  * New upstream release
+
+ -- Jonathan Carter <jcc@debian.org>  Tue, 29 Nov 2022 09:40:27 +0200
+
+bcachefs-tools (23-1) unstable; urgency=medium
+
+  * New upstream release
+  * Update standards version to 4.6.1
+
+ -- Jonathan Carter <jcc@debian.org>  Mon, 31 Oct 2022 11:45:25 +0200
+
+bcachefs-tools (0.1+git20220216.a1e928a-1) unstable; urgency=medium
+
+  * New upstream snapshot
+  * Grab patch from Ubuntu to reduce memory on amd64 builders
+    (http://launchpadlibrarian.net/580140160/bcachefs-tools_0.1+git20210805.6c42566-2_0.1+git20210805.6c42566-2ubuntu1.diff.gz)
+  * Update copyright years
+
+ -- Jonathan Carter <jcc@debian.org>  Wed, 16 Feb 2022 14:42:20 +0200
+
+bcachefs-tools (0.1+git20210805.6c42566-2) unstable; urgency=medium
+
+  * Remove valgrind as build-dependency, seems unneeded unless
+    doing debug work and is not available on all architectures.
+
+ -- Jonathan Carter <jcc@debian.org>  Fri, 03 Sep 2021 16:07:11 +0200
+
+bcachefs-tools (0.1+git20210805.6c42566-1) unstable; urgency=medium
+
+  * New upstream snapshot
+  * Update standards version to 4.6.0
+  * Add python3-docutils as dependency
+  * Do not run tests at package build time
+
+ -- Jonathan Carter <jcc@debian.org>  Tue, 06 Apr 2021 15:11:27 +0200
+
+bcachefs-tools (0.1+git20201025.742dbbdb-1) unstable; urgency=medium
+
+  * New upstream snapshot
+
+ -- Jonathan Carter <jcc@debian.org>  Mon, 26 Oct 2020 08:45:37 +0200
+
+bcachefs-tools (0.1+git20201017.8a4408-1~exp1) unstable; urgency=medium
+
+  * New upstream release
+  * Bump debhelper-compat to 13
+  * Update standards version to 4.5.0
+  * Declare Rules-Requires-Root: no
+  * debian/copyright:
+    - Update copyright years
+    - Update copyright owners
+    - Add intel and ccan copyright
+  * Add build-dep on libudev-dev, python3-pytest  and valgrind
+
+ -- Jonathan Carter <jcc@debian.org>  Sun, 18 Oct 2020 17:29:27 +0200
+
+bcachefs-tools (0.1+git20190829.aa2a42b-1~exp1) experimental; urgency=medium
+
+  * Initial Release (Closes: #935178)
+
+ -- Jonathan Carter <jcc@debian.org>  Mon, 16 Sep 2019 10:36:04 +0000

@@ -1,0 +1,41 @@
+#!/bin/sh
+
+set +e
+set -x
+
+echo "kernel smoke test, create/mount/umount bcachefs filesystem"
+
+STORAGE_SIZE_MB=128
+STORAGE="$(mktemp)"
+dd if=/dev/zero of="$STORAGE" bs=1M count=$STORAGE_SIZE_MB > /dev/null 2>&1
+LODEVICE="$(losetup --find --show $STORAGE)"
+
+cleanup() {
+	losetup -d "$LODEVICE"
+}
+trap cleanup EXIT
+
+bcachefs format "$LODEVICE"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs format failed, exit code=$ret"
+	exit 1
+fi
+
+MOUNTPOINT="$(mktemp -d)"
+mount -t bcachefs "$LODEVICE" "$MOUNTPOINT"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs mount failed, exit code=$ret"
+	exit 1
+fi
+
+umount "$MOUNTPOINT"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs umount failed, exit code=$ret"
+	exit 1
+fi
+
+echo "PASSED"
+exit 0

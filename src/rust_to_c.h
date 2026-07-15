@@ -1,0 +1,4 @@
+#ifndef _BCACHEFS_TOOLS_RUST_TO_C_H
+#define _BCACHEFS_TOOLS_RUST_TO_C_H
+
+#endif /* _BCACHEFS_TOOLS_RUST_TO_C_H */

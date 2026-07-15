@@ -1,0 +1,22 @@
+#!/bin/bash
+# Git post-receive hook for bcachefs-tools.git
+#
+# Updates the desired commit for the CI orchestrator and wakes it up.
+# Install: cp to /var/www/git/bcachefs-tools.git/hooks/post-receive
+
+STATE_DIR="/home/aptbcachefsorg/package-ci"
+PID_FILE="$STATE_DIR/orchestrator.pid"
+
+while read oldrev newrev refname; do
+    case "$refname" in
+        refs/heads/master)
+            echo "$newrev" > "$STATE_DIR/desired"
+            echo "CI: queued build for ${newrev:0:12}"
+
+            # Wake up the orchestrator
+            if [ -f "$PID_FILE" ]; then
+                kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null || true
+            fi
+            ;;
+    esac
+done

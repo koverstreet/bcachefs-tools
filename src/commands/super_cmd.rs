@@ -1,0 +1,114 @@
+// show-super: Display superblock contents for a bcachefs device.
+//
+// Key detail: we use ca->disk_sb.sb (per-device superblock) not c->disk_sb.sb
+// (filesystem-level copy), because __copy_super deliberately omits fields like
+// magic and layout from the fs-level copy. The per-device copy has everything.
+//
+// Field selection: by default prints ext + members + errors sections. The -f
+// flag selects specific sections (or "all"), -F prints a single field with no
+// header for scripting use (e.g. `bcachefs show-super -F version`).
+
+use std::ffi::CString;
+use std::ops::ControlFlow;
+
+use anyhow::{anyhow, Result};
+use bch_bindgen::bcachefs;
+use bch_bindgen::c;
+use bch_bindgen::opt_set;
+use clap::Parser;
+
+use bch_bindgen::printbuf::Printbuf;
+
+/// Print superblock information to stdout
+#[derive(Parser, Debug)]
+#[command(about = "Print superblock information to stdout", disable_help_flag = true)]
+pub struct ShowSuperCli {
+    /// Print help
+    #[arg(long = "help", action = clap::ArgAction::Help)]
+    _help: (),
+
+    /// Superblock fields to print (comma-separated, or "all")
+    #[arg(short = 'f', long = "fields")]
+    fields: Option<String>,
+
+    /// Print a single superblock field only (no header)
+    #[arg(short = 'F', long = "field-only")]
+    field_only: Option<String>,
+
+    /// Print superblock layout
+    #[arg(short, long)]
+    layout: bool,
+
+    /// Device path
+    device: String,
+}
+
+fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
+
+    let ext_bit = 1u32 << c::bch_sb_field_type::BCH_SB_FIELD_ext as u32;
+    let mut fields = ext_bit;
+    let mut field_only: i32 = -1;
+    let mut print_default_fields = true;
+
+    if let Some(ref f) = cli.fields {
+        if f == "all" {
+            fields = !0;
+        } else {
+            let c_str = CString::new(f.as_str())?;
+            let v = unsafe {
+                c::bch2_read_flag_list(c_str.as_ptr(), c::bch2_sb_fields.as_ptr())
+            };
+            if v == u64::MAX {
+                return Err(anyhow!("invalid superblock field: {}", f));
+            }
+            fields = v as u32;
+        }
+        print_default_fields = false;
+    }
+
+    if let Some(ref f) = cli.field_only {
+        let c_str = CString::new(f.as_str())?;
+        let v = unsafe {
+            c::match_string(c::bch2_sb_fields.as_ptr(), usize::MAX, c_str.as_ptr())
+        };
+        if v < 0 {
+            return Err(anyhow!("invalid superblock field: {}", f));
+        }
+        field_only = v as i32;
+        print_default_fields = false;
+    }
+
+    let mut fs_opts = bcachefs::bch_opts::default();
+    opt_set!(fs_opts, noexcl, 1);
+    opt_set!(fs_opts, nochanges, 1);
+    opt_set!(fs_opts, no_version_check, 1);
+    opt_set!(fs_opts, nostart, 1);
+
+    let fs = bch_bindgen::fs::Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
+
+    // Use the per-device superblock, not c->disk_sb.sb — the filesystem-level
+    // copy omits fields like magic and layout that __copy_super doesn't transfer.
+    let _ = fs.for_each_online_member(|ca| {
+        let sb = unsafe { &*ca.disk_sb.sb };
+
+        let mut fields = fields;
+        if print_default_fields {
+            if sb.field::<c::bch_sb_field_members_v2>().is_some() {
+                fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
+            } else {
+                fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32;
+            }
+            fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_errors as u32;
+        }
+
+        let mut buf = Printbuf::new();
+        buf.set_human_readable(true);
+        unsafe { crate::wrappers::sb_display::sb_to_text_with_names(&mut buf, fs.raw, sb, cli.layout, fields, field_only) };
+        print!("{}", buf);
+        ControlFlow::Continue(())
+    });
+
+    Ok(())
+}
+
+pub const CMD: super::CmdDef = typed_cmd!("show-super", "Print superblock information", ShowSuperCli, cmd_show_super);

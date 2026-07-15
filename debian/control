@@ -1,0 +1,103 @@
+Source: bcachefs-tools
+Maintainer: Roman Lebedev <lebedev.ri@gmail.com>
+Section: utils
+Priority: optional
+Standards-Version: 4.7.0
+Build-Depends: debhelper-compat (= 13),
+               cargo:native,
+               dh-cargo,
+               dh-dkms,
+               gcc:native,
+               jq,
+               libaio-dev (>= 0.3.111),
+               libblkid-dev,
+               libclang-dev:native,
+#              libfuse3-dev,
+               libkeyutils-dev,
+               liblz4-dev,
+               libscrypt-dev,
+               libsodium-dev,
+               libstd-rust-dev,
+               libstd-rust-dev:native,
+               libudev-dev,
+               libunwind-dev,
+               liburcu-dev (>= 0.15),
+               libzstd-dev,
+               linux-libc-dev (>= 6.12),
+               pkgconf,
+               python3-docutils,
+               python3:native,
+               rustc:native (>= 1.77),
+               systemd-dev,
+               uuid-dev,
+               zlib1g-dev,
+Homepage: https://bcachefs.org/
+Vcs-Git: git://evilpiepirate.org/bcachefs-tools.git
+Vcs-Browser: https://evilpiepirate.org/git/bcachefs-tools.git
+Rules-Requires-Root: no
+Testsuite: autopkgtest-pkg-dkms
+
+Package: bcachefs-tools
+Architecture: linux-any
+Depends: ${shlibs:Depends}, ${misc:Depends}, python3:any
+Recommends: bcachefs-kernel-dkms (= ${binary:Version}),
+            initramfs-tools | linux-initramfs-tool,
+Breaks: bcachefs-kernel-dkms (<< ${binary:Version}),
+        bcachefs-kernel-dkms (>> ${binary:Version}),
+Replaces: bcachefs-kernel-dkms (<< ${binary:Version}),
+          bcachefs-kernel-dkms (>> ${binary:Version}),
+Built-Using: ${cargo:Built-Using}
+Static-Built-Using: ${cargo:Static-Built-Using}
+Description: bcachefs userspace tools
+ Userspace tools for bcachefs, a modern copy on write, checksumming, multi
+ device filesystem.
+ .
+ Note: The current Debian kernels do not come with bcachefs support, you
+ will have to install bcachefs-kernel-dkms package or build your own kernel
+ or one provided by a 3rd party that contains bcachefs support.
+
+Package: bcachefs-kernel-dkms
+Architecture: linux-any
+Section: kernel
+Depends: ${misc:Depends},
+	 initramfs-tools | linux-initramfs-tool,
+	 linux-headers-generic (>= 6.16) |
+	 proxmox-headers-6.17 [amd64] |
+	 linux-headers-amd64 (>= 6.16) [amd64] | linux-headers-cloud-amd64 (>= 6.16) [amd64] | linux-headers-rt-amd64 (>= 6.16) [amd64] |
+	 linux-headers-arm64 (>= 6.16) [arm64] | linux-headers-cloud-arm64 (>= 6.16) [arm64] | linux-headers-rt-arm64 (>= 6.16) [arm64] |
+	 linux-headers-ppc64el (>= 6.16) [ppc64el] | linux-headers-cloud-ppc64el (>= 6.16) [ppc64el] | linux-headers-rt-ppc64el (>= 6.16) [ppc64el] |
+	 linux-headers (>= 6.16)
+Pre-Depends: bcachefs-tools (= ${binary:Version}),
+Provides: bcachefs-kernel
+Description: bcachefs kernel module DKMS source
+ "The COW filesystem for Linux that won't eat your data".
+ .
+ Bcachefs is an advanced new filesystem for Linux, with an emphasis
+ on reliability and robustness and the complete set of features
+ one would expect from a modern filesystem.
+ .
+  * Copy on write (COW) - like zfs
+  * Full data and metadata checksumming, for full data integrity:
+    the filesystem should always detect (and where possible,
+    recover from) damage; it should never return incorrect data.
+  * Multiple devices
+  * Replication
+  * Erasure coding (incomplete) High performance: doesn't fragment
+    your writes (like ZFS), no RAID hole
+  * Caching, data placement
+  * Compression
+  * Encryption
+  * Snapshots
+  * Nocow mode
+  * Reflink
+  * Extended attributes, ACLs, quotas
+  * Petabyte scalability
+  * Full online fsck, check and repair (in progress)
+  * Robustness and rock solid repair. Damage and breakage are a fact of life,
+    it's not a matter of if, but when. It doesn't matter what happened
+    to the filesystem: bad hardware, lightning strikes, an errant dd,
+    you can expect that bcachefs will repair the damage and keep going,
+    usually with no user intervention required.
+ .
+ It's the job of the filesystem to never lose your data:
+ anything that can be repaired, will be.

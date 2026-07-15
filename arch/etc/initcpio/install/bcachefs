@@ -1,0 +1,17 @@
+#!/bin/bash
+
+build() {
+    add_module bcachefs
+    add_binary bcachefs
+
+    add_runscript
+}
+
+help() {
+    cat <<HELPEOF
+This hook adds bcachefs support to the image. This is needed to unlock encrypted root
+devices on boot. A graphical passphrase prompt using Plymouth is optionally supported.
+HELPEOF
+}
+
+# vim set ft=sh ts=4 sw=4 et:

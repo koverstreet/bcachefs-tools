@@ -1,0 +1,4 @@
+Tests: kernel-smoke-test
+Architecture: amd64 arm64
+Restrictions: needs-root, allow-stderr, isolation-machine
+Depends: bcachefs-kernel-dkms

@@ -1,0 +1,623 @@
+use std::ffi::CString;
+use std::io::{self, Write};
+use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
+
+use anyhow::{anyhow, bail, Context, Result};
+use bch_bindgen::c::{
+    self,
+    bch_degraded_actions,
+    bch_member_state::*,
+    bcachefs_metadata_version::bcachefs_metadata_version_reconcile,
+    BCH_FORCE_IF_DATA_LOST, BCH_FORCE_IF_DEGRADED, BCH_FORCE_IF_METADATA_LOST,
+};
+use bch_bindgen::fs::Fs;
+use bch_bindgen::opt_set;
+use bch_bindgen::path_to_cstr;
+use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
+
+use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches, parse_opt_val};
+use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
+use crate::util::{fmt_sectors_human, parse_human_size};
+use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
+use crate::wrappers::handle::BcachefsHandle;
+use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
+
+fn device_add_opt_flags() -> u32 {
+    c::opt_flags::OPT_FORMAT as u32 | c::opt_flags::OPT_DEVICE as u32
+}
+
+fn device_add_cmd() -> Command {
+    Command::new("add")
+        .about("Add a new device to an existing filesystem")
+        .args(bch_option_args(device_add_opt_flags()))
+        .arg(Arg::new("label")
+            .short('l')
+            .long("label")
+            .help("Disk label"))
+        .arg(Arg::new("force")
+            .short('f')
+            .long("force")
+            .action(ArgAction::SetTrue)
+            .help("Use device even if it appears to already be formatted"))
+        .arg(Arg::new("filesystem")
+            .required(true)
+            .help("Filesystem path, mountpoint, or device"))
+        .arg(Arg::new("device")
+            .required(true)
+            .help("Device to add"))
+}
+
+fn cmd_device_add(argv: Vec<String>) -> Result<()> {
+    let matches = device_add_cmd().get_matches_from(argv);
+
+    let fs_path = matches.get_one::<String>("filesystem").unwrap();
+    let dev_path = matches.get_one::<String>("device").unwrap();
+    let label = matches.get_one::<String>("label");
+    let force = matches.get_flag("force");
+
+    // Try online first — works for mountpoints, and for block devices
+    // or files with a bcachefs superblock if the filesystem is mounted.
+    // If the filesystem isn't mounted, fall back to offline add.
+    match BcachefsHandle::open(fs_path) {
+        Ok(handle) => cmd_device_add_online(handle, dev_path, label, force, &matches),
+        Err(_) => cmd_device_add_offline(fs_path, dev_path, label, force, &matches),
+    }
+}
+
+fn cmd_device_add_online(
+    handle: BcachefsHandle,
+    dev_path: &str,
+    label: Option<&String>,
+    force: bool,
+    matches: &clap::ArgMatches,
+) -> Result<()> {
+    let block_size = parse_human_size(
+        &sysfs::read_sysfs_fd_str(handle.sysfs_fd(), "options/block_size")
+            .context("reading block_size from sysfs")?,
+    ).context("parsing block_size")?;
+    let btree_node_size = parse_human_size(
+        &sysfs::read_sysfs_fd_str(handle.sysfs_fd(), "options/btree_node_size")
+            .context("reading btree_node_size from sysfs")?,
+    ).context("parsing btree_node_size")?;
+
+    drop(device_add_format(dev_path, label, force, matches,
+        block_size as u32, btree_node_size as u32)?);
+    let c_dev_path = path_to_cstr(dev_path);
+    handle.disk_add(&c_dev_path)
+        .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
+
+    Ok(())
+}
+
+fn cmd_device_add_offline(
+    fs_path: &str,
+    dev_path: &str,
+    label: Option<&String>,
+    force: bool,
+    matches: &clap::ArgMatches,
+) -> Result<()> {
+    // Open the existing filesystem without starting it — same approach
+    // as 'bcachefs image update'. This works even when the allocator is
+    // stuck and the filesystem can't mount normally.
+    let mut opts: c::bch_opts = Default::default();
+    opt_set!(opts, nostart, 1u8);
+    opt_set!(opts, copygc_enabled, 0u8);
+    opt_set!(opts, reconcile_enabled, 0u8);
+
+    let fs = crate::device_scan::open_scan(&[PathBuf::from(fs_path)], opts)
+        .map_err(|e| anyhow!("opening filesystem '{}': {}", fs_path, e))?;
+
+    let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
+    let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
+
+    device_add_format(dev_path, label, force, matches,
+        block_size, btree_node_size)?;
+
+    fs.dev_add(dev_path)
+        .map_err(|e| anyhow!("adding device '{}': {}", dev_path, e))?;
+
+    fs.start()
+        .map_err(|e| anyhow!("starting filesystem: {}", e))?;
+
+    Ok(())
+}
+
+fn device_add_format(
+    dev_path: &str,
+    label: Option<&String>,
+    force: bool,
+    matches: &clap::ArgMatches,
+    block_size: u32,
+    btree_node_size: u32,
+) -> Result<crate::commands::format_util::DevOpts> {
+    use crate::commands::format_util::DevOpts;
+
+    let mut dev_opts = DevOpts::new(CString::new(dev_path)?);
+    dev_opts.label = label.map(|l| CString::new(l.as_str())).transpose()?;
+
+    let bch_opts = bch_options_from_matches(matches, device_add_opt_flags());
+    for (name, value) in &bch_opts {
+        let Some((opt_id, opt)) = bch_opt_lookup(name) else { continue };
+        let val = parse_opt_val(opt, value)?
+            .ok_or_else(|| anyhow!("option {} requires open filesystem", name))?;
+        bch_bindgen::opts::opt_set_by_id(&mut dev_opts.opts, opt_id, val);
+    }
+
+    if let Some(mpath_dev) = find_multipath_holder(Path::new(dev_path)) {
+        warn_multipath_component(Path::new(dev_path), &mpath_dev);
+        if !force {
+            bail!("device appears to be a multipath component, use -f/--force to add anyway");
+        }
+    }
+
+    dev_opts.open(0, force).map_err(|e| {
+        anyhow!("error opening {}: {}", dev_path, std::io::Error::from_raw_os_error(e))
+    })?;
+
+    let ret = crate::commands::format_util::format_for_device_add(
+        &mut dev_opts, block_size, btree_node_size,
+    );
+    if ret != 0 {
+        return Err(anyhow!("error formatting {}: {}",
+            dev_path, std::io::Error::from_raw_os_error(-ret)));
+    }
+
+    Ok(dev_opts)
+}
+
+/// Open a filesystem by block device path and return its handle + device index.
+fn open_dev(path: &str) -> Result<(BcachefsHandle, u32)> {
+    let handle = BcachefsHandle::open(path)
+        .with_context(|| format!("opening filesystem for '{}'", path))?;
+    let dev_idx = handle.dev_idx();
+    if dev_idx < 0 {
+        return Err(anyhow!("'{}' does not appear to be a block device member", path));
+    }
+    Ok((handle, dev_idx as u32))
+}
+
+/// Resolve a device identifier (path or numeric index) to a dev_idx
+/// on a given filesystem handle.
+fn resolve_dev(handle: &BcachefsHandle, dev_str: &str) -> Result<u32> {
+    if let Ok(idx) = dev_str.parse::<u32>() {
+        return Ok(idx);
+    }
+
+    let dev_handle = BcachefsHandle::open(dev_str)
+        .with_context(|| format!("opening '{}'", dev_str))?;
+
+    if handle.uuid() != dev_handle.uuid() {
+        return Err(anyhow!("{} does not appear to be a member of this filesystem", dev_str));
+    }
+
+    let idx = dev_handle.dev_idx();
+    if idx < 0 {
+        return Err(anyhow!("Could not determine device index for '{}'", dev_str));
+    }
+    Ok(idx as u32)
+}
+
+/// Open a device by path or numeric index, with optional filesystem path.
+/// When device is a numeric index, fs_path is required.
+fn open_dev_by_path_or_index(device: &str, fs_path: Option<&str>) -> Result<(BcachefsHandle, u32)> {
+    if let Some(fs_path) = fs_path {
+        let handle = BcachefsHandle::open(fs_path)
+            .with_context(|| format!("opening filesystem '{}'", fs_path))?;
+        let dev_idx = resolve_dev(&handle, device)?;
+        Ok((handle, dev_idx))
+    } else if device.parse::<u32>().is_err() {
+        open_dev(device)
+    } else {
+        Err(anyhow!("Filesystem path required when specifying device by index"))
+    }
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Re-add a device to a running filesystem")]
+pub struct OnlineCli {
+    /// Device path
+    device: String,
+}
+
+fn cmd_device_online(cli: OnlineCli) -> Result<()> {
+
+    let handle = BcachefsHandle::open(&cli.device)
+        .with_context(|| format!("opening filesystem for '{}'", cli.device))?;
+
+    let dev_path = path_to_cstr(&cli.device);
+    handle.disk_online(&dev_path)
+        .with_context(|| format!("onlining device '{}'", cli.device))
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Take a device offline, without removing it")]
+pub struct OfflineCli {
+    /// Force, if data redundancy will be degraded
+    #[arg(short, long)]
+    force: bool,
+
+    /// Device path
+    device: String,
+}
+
+fn cmd_device_offline(cli: OfflineCli) -> Result<()> {
+    let (handle, dev_idx) = open_dev(&cli.device)?;
+
+    let flags = if cli.force { BCH_FORCE_IF_DEGRADED } else { 0 };
+    handle.disk_offline(dev_idx, flags)
+        .with_context(|| format!("offlining device '{}'", cli.device))
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Remove a device from a filesystem")]
+pub struct RemoveCli {
+    /// Force removal, even if some data couldn't be migrated
+    #[arg(short, long)]
+    force: bool,
+
+    /// Force removal, even if some metadata couldn't be migrated
+    #[arg(short = 'F', long)]
+    force_metadata: bool,
+
+    /// Device path or numeric device index
+    device: String,
+
+    /// Filesystem path (required when specifying device by index)
+    path: Option<String>,
+}
+
+fn cmd_device_remove(cli: RemoveCli) -> Result<()> {
+
+    let mut flags = BCH_FORCE_IF_DEGRADED;
+    if cli.force {
+        flags |= BCH_FORCE_IF_DATA_LOST;
+    }
+    if cli.force_metadata {
+        flags |= BCH_FORCE_IF_METADATA_LOST;
+    }
+
+    let (handle, dev_idx) = open_dev_by_path_or_index(
+        &cli.device, cli.path.as_deref())?;
+
+    handle.disk_remove(dev_idx, flags)
+        .with_context(|| format!("removing device '{}'", cli.device))
+}
+
+#[derive(Clone, Copy, Debug, ValueEnum)]
+enum MemberState {
+    Rw,
+    Ro,
+    Evacuating,
+    Spare,
+}
+
+impl MemberState {
+    fn as_u32(self) -> u32 {
+        match self {
+            MemberState::Rw         => BCH_MEMBER_STATE_rw as u32,
+            MemberState::Ro         => BCH_MEMBER_STATE_ro as u32,
+            MemberState::Evacuating => BCH_MEMBER_STATE_evacuating as u32,
+            MemberState::Spare      => BCH_MEMBER_STATE_spare as u32,
+        }
+    }
+}
+
+fn device_size(dev: &str) -> Result<u64> {
+    let f = std::fs::File::open(dev)
+        .with_context(|| format!("opening {}", dev))?;
+    crate::util::file_size(&f)
+        .with_context(|| format!("getting size of {}", dev))
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Change the state of a device")]
+pub struct SetStateCli {
+    /// Force if data redundancy will be degraded
+    #[arg(short, long)]
+    force: bool,
+
+    /// Force even if data will be lost
+    #[arg(short = 'F', long)]
+    force_if_data_lost: bool,
+
+    /// Set state of an offline device
+    #[arg(short = 'o', long)]
+    offline: bool,
+
+    /// Device state
+    #[arg(value_enum)]
+    new_state: MemberState,
+
+    /// Device path or numeric device index
+    device: String,
+
+    /// Filesystem path (required when specifying device by index)
+    path: Option<String>,
+}
+
+fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
+
+    let new_state = cli.new_state.as_u32();
+
+    if cli.offline {
+        if cli.device.parse::<u32>().is_ok() {
+            return Err(anyhow!("Cannot specify offline device by id"));
+        }
+        return set_state_offline(&cli.device, new_state);
+    }
+
+    let mut flags = if cli.force { BCH_FORCE_IF_DEGRADED } else { 0 };
+    if cli.force_if_data_lost {
+        flags |= BCH_FORCE_IF_DEGRADED | BCH_FORCE_IF_DATA_LOST | BCH_FORCE_IF_METADATA_LOST;
+    }
+
+    let (handle, dev_idx) = open_dev_by_path_or_index(
+        &cli.device, cli.path.as_deref())?;
+
+    handle.disk_set_state(dev_idx, new_state, flags)
+        .context("setting device state")
+}
+
+fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
+    use crate::wrappers::bch_err_str;
+
+    let c_path = CString::new(device)?;
+    let mut opts: c::bch_opts = Default::default();
+    opt_set!(opts, nostart, 1);
+    opt_set!(opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
+
+    // Read superblock to get dev_idx
+    let mut sb_handle: c::bch_sb_handle = Default::default();
+    let ret = unsafe { c::bch2_read_super(c_path.as_ptr(), &mut opts, &mut sb_handle) };
+    if ret != 0 {
+        return Err(anyhow!("error opening {}: {}", device, bch_err_str(ret)));
+    }
+    let dev_idx = sb_handle.sb().dev_idx as u32;
+    drop(sb_handle);
+
+    let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
+        .map_err(|e| anyhow!("Error opening filesystem: {}", e))?;
+
+    {
+        let _lock = fs.sb_lock();
+        unsafe { fs.member_mut(dev_idx) }.set_member_state(new_state as u64);
+        fs.write_super();
+    }
+    Ok(())
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Resize the filesystem on a device")]
+pub struct ResizeCli {
+    /// Device path
+    device: String,
+
+    /// New size (human-readable, e.g. 1G); defaults to device size
+    size: Option<String>,
+}
+
+fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
+
+    let size_bytes = match cli.size {
+        Some(ref s) => parse_human_size(s)?,
+        None => device_size(&cli.device)?,
+    };
+    let size_sectors = size_bytes >> 9;
+
+    match open_dev(&cli.device) {
+        Ok((handle, dev_idx)) => {
+            println!("Doing online resize of {}", cli.device);
+
+            let usage = handle.dev_usage(dev_idx)
+                .context("querying device usage")?;
+            let nbuckets = size_sectors / usage.bucket_size as u64;
+
+            if nbuckets < usage.nr_buckets {
+                return Err(anyhow!("Shrinking not supported yet"));
+            }
+
+            println!("resizing {} to {} buckets", cli.device, nbuckets);
+            handle.disk_resize(dev_idx, nbuckets)
+                .context("resizing device")?;
+        }
+        Err(_) if Path::new(&cli.device).exists() => {
+            println!("Doing offline resize of {}", cli.device);
+            resize_offline(&cli.device, size_sectors)?;
+        }
+        Err(e) => return Err(e),
+    }
+
+    Ok(())
+}
+
+/// Find the single online device in a filesystem.
+/// Offline operations (resize, resize-journal) require exactly one device.
+fn find_single_online_dev(fs: &Fs) -> Result<bch_bindgen::fs::DevRef> {
+    use std::ops::ControlFlow;
+
+    let mut count = 0u32;
+    let mut found_idx = 0u32;
+    let _ = fs.for_each_online_member(|ca| {
+        found_idx = ca.dev_idx as u32;
+        count += 1;
+        ControlFlow::Continue(())
+    });
+
+    if count == 0 {
+        bail!("no online device found");
+    }
+    if count > 1 {
+        bail!("multiple devices online, offline resize requires exactly one");
+    }
+
+    fs.dev_get(found_idx)
+        .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))
+}
+
+fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
+    use bch_bindgen::printbuf::Printbuf;
+
+    let opts: c::bch_opts = Default::default();
+    let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
+        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
+
+    let ca = find_single_online_dev(&fs)?;
+
+    let nbuckets = size_sectors / ca.mi.bucket_size as u64;
+
+    if nbuckets < ca.mi.nbuckets {
+        bail!("shrinking not supported (requested {} buckets, have {})",
+            nbuckets, ca.mi.nbuckets);
+    }
+
+    println!("resizing to {} buckets", nbuckets);
+
+    let mut err = Printbuf::new();
+    let ret = unsafe {
+        c::bch2_dev_resize(fs.raw, ca.as_mut_ptr(), nbuckets, err.as_raw())
+    };
+    if ret != 0 {
+        bail!("resize error: {}\n{}", crate::wrappers::bch_err_str(ret), err);
+    }
+    Ok(())
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Resize the journal on a device")]
+pub struct ResizeJournalCli {
+    /// Device path
+    device: String,
+
+    /// New journal size (human-readable, e.g. 1G)
+    size: String,
+}
+
+fn cmd_device_resize_journal(cli: ResizeJournalCli) -> Result<()> {
+
+    let size_bytes = parse_human_size(&cli.size)?;
+    let size_sectors = size_bytes >> 9;
+
+    match open_dev(&cli.device) {
+        Ok((handle, dev_idx)) => {
+            let usage = handle.dev_usage(dev_idx)
+                .context("querying device usage")?;
+            let nbuckets = size_sectors / usage.bucket_size as u64;
+
+            println!("resizing journal on {} to {} buckets", cli.device, nbuckets);
+            handle.disk_resize_journal(dev_idx, nbuckets)
+                .context("resizing journal")?;
+        }
+        Err(_) if Path::new(&cli.device).exists() => {
+            println!("{} is offline - starting:", cli.device);
+            resize_journal_offline(&cli.device, size_sectors)?;
+        }
+        Err(e) => return Err(e),
+    }
+
+    Ok(())
+}
+
+fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
+    let opts: c::bch_opts = Default::default();
+    let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
+        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
+
+    let ca = find_single_online_dev(&fs)?;
+
+    let nbuckets = size_sectors / ca.mi.bucket_size as u64;
+
+    println!("resizing journal to {} buckets", nbuckets);
+    let ret = unsafe {
+        c::bch2_set_nr_journal_buckets(fs.raw, ca.as_mut_ptr(), nbuckets as u32)
+    };
+    if ret != 0 {
+        bail!("resize error: {}", crate::wrappers::bch_err_str(ret));
+    }
+    Ok(())
+}
+
+#[derive(Parser, Debug)]
+#[command(about = "Migrate data off a device")]
+pub struct EvacuateCli {
+    /// Device path
+    device: String,
+}
+
+fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
+
+    if bcachefs_kernel_version() < bcachefs_metadata_version_reconcile as u64 {
+        return Err(anyhow!(
+            "Kernel too old for Rust evacuate path; \
+             need bcachefs metadata version >= {} (reconcile)",
+            bcachefs_metadata_version_reconcile as u64
+        ));
+    }
+
+    let (handle, dev_idx) = open_dev(&cli.device)?;
+    let sysfs_path = sysfs::sysfs_path_from_fd(handle.sysfs_fd())?;
+
+    // Reconcile drives evacuation — check the filesystem has been upgraded
+    let sb_ver = handle.sb_version()
+        .context("reading filesystem superblock")?;
+    if (sb_ver as u64) < bcachefs_metadata_version_reconcile as u64 {
+        return Err(anyhow!(
+            "Filesystem has not been upgraded to the reconcile version.\n\
+             Device evacuation requires reconcile. Remount with:\n  \
+             mount -o remount,version_upgrade=incompatible <mountpoint>"));
+    }
+
+    let usage = handle.dev_usage(dev_idx)
+        .context("querying device usage")?;
+
+    if usage.state == BCH_MEMBER_STATE_rw as u8 {
+        println!("Setting {} readonly", cli.device);
+        handle.disk_set_state(dev_idx, BCH_MEMBER_STATE_ro as u32, BCH_FORCE_IF_DEGRADED)
+            .context("setting device readonly")?;
+    }
+
+    println!("Setting {} evacuating", cli.device);
+    handle.disk_set_state(dev_idx, BCH_MEMBER_STATE_evacuating as u32, BCH_FORCE_IF_DEGRADED)
+        .context("setting device evacuating")?;
+
+    // Trigger reconcile wakeup so it starts processing the evacuation
+    let _ = std::fs::write(sysfs_path.join("internal/trigger_reconcile_wakeup"), "1");
+
+    loop {
+        let usage = handle.dev_usage(dev_idx)
+            .context("querying device usage")?;
+
+        let data_sectors: u64 = usage.iter_typed()
+            .filter(|(t, _)| !data_type_is_empty(*t) && !data_type_is_hidden(*t))
+            .map(|(_, dt)| dt.sectors)
+            .sum();
+
+        print!("\x1b[2K\r{}", fmt_sectors_human(data_sectors));
+        io::stdout().flush().ok();
+
+        if data_sectors == 0 {
+            println!("\nEvacuation complete — device ready to remove with \
+                      'bcachefs device remove {}'", cli.device);
+            return Ok(());
+        }
+
+        thread::sleep(Duration::from_secs(1));
+    }
+}
+
+pub const CMD_ADD: super::CmdDef = raw_cmd!("add", "Add a device to a filesystem", cmd_device_add);
+pub const CMD_ONLINE: super::CmdDef = typed_cmd!("online", "Bring a device online", OnlineCli, cmd_device_online);
+pub const CMD_OFFLINE: super::CmdDef = typed_cmd!("offline", "Take a device offline", OfflineCli, cmd_device_offline);
+pub const CMD_REMOVE: super::CmdDef = typed_cmd!("remove", "Remove a device", RemoveCli, cmd_device_remove);
+pub const CMD_EVACUATE: super::CmdDef = typed_cmd!("evacuate", "Evacuate data from a device", EvacuateCli, cmd_device_evacuate);
+pub const CMD_SET_STATE: super::CmdDef = typed_cmd!("set-state", "Set device state", SetStateCli, cmd_device_set_state);
+pub const CMD_RESIZE: super::CmdDef = typed_cmd!("resize", "Resize filesystem on a device", ResizeCli, cmd_device_resize);
+pub const CMD_RESIZE_JOURNAL: super::CmdDef = typed_cmd!("resize-journal", "Resize journal on a device", ResizeJournalCli, cmd_device_resize_journal);
+pub const CMD: super::CmdDef = super::CmdDef {
+    name: "device", about: "Manage devices within a filesystem", aliases: &[],
+    kind: super::CmdKind::Group { children: &[
+        &CMD_ADD, &CMD_ONLINE, &CMD_OFFLINE, &CMD_REMOVE,
+        &CMD_EVACUATE, &CMD_SET_STATE, &CMD_RESIZE, &CMD_RESIZE_JOURNAL,
+    ]},
+};

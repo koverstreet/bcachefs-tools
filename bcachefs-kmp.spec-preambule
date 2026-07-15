@@ -1,0 +1,6 @@
+Requires:	%{name} = %{version}-%{release}
+Requires:	kernel-%1
+Provides:	multiversion(kernel)
+Enhances:	kernel-%1
+Supplements:	(bcachefs-tools and kernel-%1)
+Recommends:	%{name}-ueficert = %{version}

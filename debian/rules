@@ -1,0 +1,73 @@
+#!/usr/bin/make -f
+
+export DH_VERBOSE = 1
+
+export DPKG_EXPORT_BUILDFLAGS = 1
+export DPKG_EXPORT_BUILDTOOLS = 1
+
+export DEB_BUILD_OPTIONS += nolto
+export DEB_BUILD_MAINT_OPTIONS += optimize=-lto
+
+export DEB_BUILD_MAINT_OPTIONS += hardening=+all
+
+include /usr/share/dpkg/default.mk
+include /usr/share/rustc/architecture.mk
+
+export DEB_HOST_RUST_TYPE
+export DEB_HOST_GNU_TYPE
+
+export PATH := /usr/share/cargo/bin:$(PATH)
+export CARGO = /usr/share/cargo/bin/cargo
+export CARGO_HOME = $(CURDIR)/debian/cargo_home
+export DEB_CARGO_CRATE = bcachefs-tools_$(DEB_VERSION_UPSTREAM)
+
+export PKG_CONFIG = ${DEB_HOST_MULTIARCH}-pkg-config
+export PKG_CONFIG_PATH = /usr/lib/${DEB_HOST_MULTIARCH}/pkgconfig:/usr/share/pkgconfig
+export PKG_CONFIG_LIBDIR = /usr/lib/${DEB_HOST_MULTIARCH}/pkgconfig
+
+PREFIX := /usr
+ROOT_SBINDIR := /usr/sbin
+
+export PREFIX ROOT_SBINDIR
+
+export CARGO_ARGS = --frozen
+export CARGO_BUILD_TARGET = ${DEB_HOST_RUST_TYPE}
+
+# WARNING: split debug info makes the package unreproducible!
+#
+# export CFLAGS += -gsplit-dwarf
+# export RUSTFLAGS += -C split-debuginfo=packed
+#
+# override_dh_dwz:
+# 	# Skipping DWZ since debug info is split.
+
+# WARNING: compressed debug info without split debug info results in
+#          size increase(!), and breaks DWZ.
+#
+# export CFLAGS += -gz=zlib
+# export LDFLAGS += -Wl,--compress-debug-sections=zlib
+# export RUSTFLAGS += -C link-arg=-Wl,--compress-debug-sections=zlib
+
+%:
+	dh $@ --parallel --with dkms
+
+override_dh_auto_clean:
+	$(CARGO) prepare-debian vendor
+	dh_auto_clean
+
+override_dh_auto_configure:
+	$(CARGO) prepare-debian vendor
+	dh_auto_configure
+
+override_dh_clean:
+	# HACK: breaks cargo checksumming by deleting some vendored files.
+
+override_dh_usrlocal:
+	# FIXME: fails with
+	# dh_usrlocal: error: debian/bcachefs-tools/usr/local/libexec/bcachefsck_all is not a directory
+
+override_dh_auto_test:
+
+# Generate (Static-)Built-Using
+execute_after_dh_auto_install:
+	/usr/share/cargo/bin/dh-cargo-built-using bcachefs-tools

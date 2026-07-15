@@ -1,0 +1,17 @@
+#!/bin/sh
+
+run_hook() {
+    if _bcachefs_rootdev="$(resolve_device "$root")" && bcachefs unlock -c "$_bcachefs_rootdev" >/dev/null 2>&1
+    then
+        if [ -e "/run/plymouth/pid" ]
+        then
+            echo "Unlocking $_bcachefs_rootdev using plymouth"
+            plymouth ask-for-password --prompt "Enter passphrase" --command "bcachefs unlock $_bcachefs_rootdev" --number-of-tries=3
+        else
+            echo "Unlocking $_bcachefs_rootdev"
+            bcachefs unlock "$_bcachefs_rootdev"
+        fi
+    fi
+}
+
+# vim: set ft=sh ts=4 sw=4 et:

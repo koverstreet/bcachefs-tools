@@ -1,0 +1,365 @@
+on:
+  workflow_call:
+    inputs:
+      runs-on:
+        required: true
+        type: string
+    secrets:
+      GPG_SECRET_SUBKEYS:
+        required: true
+      GPG_SIGNING_SUBKEY_FINGERPRINT:
+        required: true
+      GPG_AUTH_SUBKEY_KEYGRIP:
+        required: true
+      SSH_HOST:
+        required: true
+      SSH_SERVER_KEYS:
+        required: true
+
+jobs:
+  linux:
+    concurrency: apt.bcachefs.org
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      CONTAINER_DISTRO: trixie
+      SUITE: ${{ (github.event_name == 'push' && github.ref_type == 'tag') && 'release' || 'snapshot' }}
+    steps:
+      - name: Configure baseline system
+        timeout-minutes: 1
+        shell: sudo sh "{0}"
+        run: |
+          set -xe
+          mount -t tmpfs tmpfs ${{ github.workspace }}
+          echo "set man-db/auto-update false" | debconf-communicate
+          dpkg-reconfigure man-db
+          mkdir -p /etc/apt/apt.conf.d
+          mkdir -p /etc/dpkg/dpkg.cfg.d
+          tee /etc/apt/apt.conf.d/99gh > /dev/null <<EOT
+          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+          Acquire::Retries "10";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
+          APT::Get::Assume-Yes "true";
+          APT::Get::Fix-Missing "true";
+          EOT
+          tee /etc/dpkg/dpkg.cfg.d/99gh > /dev/null <<EOT
+          force-unsafe-io
+          force-confdef
+          EOT
+          rm -rf /var/lib/apt/lists/*
+          rm -rf /etc/apt/sources.list*
+          tee /etc/apt/sources.list > /dev/null <<EOT
+          deb http://archive.ubuntu.com/ubuntu noble main universe
+          EOT
+          apt update
+          apt install eatmydata
+          eatmydata apt install \
+            podman \
+          ;
+          apt clean
+      - name: Start the container
+        timeout-minutes: 1
+        shell: sudo eatmydata sh "{0}"
+        run: |
+          set -xe
+          export IMAGE=debian:${{ env.CONTAINER_DISTRO }}-slim
+          podman pull ${IMAGE}
+          podman run \
+            --name container \
+            --image-volume=tmpfs \
+            --device=/dev/fuse \
+            --tmpfs=/run \
+            --tmpfs=/tmp \
+            --tmpfs=/var/tmp \
+            --volume=/home/runner:/home/runner \
+            --volume=${{ github.workspace }}:${{ github.workspace }} \
+            --cap-add=SYS_ADMIN \
+            --security-opt=apparmor:unconfined \
+            --interactive \
+            --tty \
+            --detach \
+            ${IMAGE} \
+            /usr/bin/sh \
+          ;
+      - name: Install necessary packages
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container sh "{0}"
+        run: |
+          set -xe
+          mkdir -p /etc/apt/apt.conf.d
+          mkdir -p /etc/dpkg/dpkg.cfg.d
+          tee /etc/apt/apt.conf.d/99gh > /dev/null <<EOT
+          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+          Acquire::Retries "10";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
+          APT::Get::Assume-Yes "true";
+          APT::Get::Fix-Missing "true";
+          EOT
+          tee /etc/dpkg/dpkg.cfg.d/99gh > /dev/null <<EOT
+          force-unsafe-io
+          force-confdef
+          EOT
+          rm -rf /var/lib/apt/lists/*
+          rm -rf /etc/apt/sources.list*
+          tee /etc/apt/sources.list > /dev/null <<EOT
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }} main
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }}-updates main
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }}-backports main
+          EOT
+          apt update
+          apt install eatmydata
+          eatmydata apt full-upgrade
+          eatmydata apt install \
+            aptly \
+            debsig-verify \
+            devscripts \
+            gettext-base \
+            gnupg \
+            openssh-client \
+            pandoc \
+            sshfs \
+            tar \
+            xz-utils \
+            zip
+          apt clean
+      - name: Import/Configure GPG
+        timeout-minutes: 1
+        id: gpg
+        if: github.event_name != 'pull_request'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          install -d -m 0755 /etc/apt/keyrings
+          gpg --import <<EOT
+          ${{ secrets.GPG_SECRET_SUBKEYS }}
+          EOT
+          gpg \
+            --output /etc/apt/keyrings/apt.bcachefs.org.pgp \
+            --export \
+            ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }} \
+          ;
+          gpg \
+            --output /etc/apt/keyrings/apt.bcachefs.org.asc \
+            --armor \
+            --export \
+            ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }} \
+          ;
+          rm -f ~/.gnupg/trustedkeys.gpg
+          gpg \
+            --no-default-keyring \
+            --keyring ~/.gnupg/trustedkeys.gpg \
+            --import \
+            /etc/apt/keyrings/apt.bcachefs.org.pgp \
+          ;
+          tee -a ~/.gnupg/gpg.conf > /dev/null <<EOT
+          default-key ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          trusted-key ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          EOT
+          tee -a ~/.gbp.conf > /dev/null <<EOT
+          [buildpackage]
+          sign-tags = True
+          keyid = ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          EOT
+          tee -a ~/.devscripts > /dev/null <<EOT
+          DEBSIGN_KEYID=${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          EOT
+      - name: Ensure that the download directory does not exist
+        timeout-minutes: 1
+        run: |
+          set -xe
+          rm -rf "${{ github.workspace }}/packed-artifacts"
+      - name: Download all artifacts
+        timeout-minutes: 1
+        uses: actions/download-artifact@v5
+        with:
+          path: packed-artifacts
+      - name: Check attestation of all incoming artifact archives
+        timeout-minutes: 2
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/packed-artifacts"
+          find . -type f -print0 | xargs --null -I'{}' sh -c "                 \
+            echo '::group::Attestation check for {}' &&                        \
+            (                                                                  \
+              gh attestation verify                                            \
+                {}                                                             \
+                --repo        ${{ github.repository }}                         \
+                --signer-repo ${{ github.repository }}                         \
+                --source-digest ${{ github.sha }}                              \
+                --signer-digest ${{ github.sha }}                              \
+              ||                                                               \
+              (                                                                \
+                echo '::error file={}::NOT ATTESTED!' &&                       \
+                echo '::endgroup::' &&                                         \
+                exit 1                                                         \
+              )                                                                \
+            ) &&                                                               \
+            echo 'ok.' &&                                                      \
+            echo '::endgroup::'                                                \
+          "
+      - name: Unpack all artifacts
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          SRC_DIR="${{ github.workspace }}/incoming/src-artifacts"
+          mkdir -p "$SRC_DIR"
+          find "${{ github.workspace }}/packed-artifacts" -type f -name artifact-src.tar -exec tar -xf {} -C "$SRC_DIR" ';' -delete
+          BIN_DIR="${{ github.workspace }}/incoming/bin-artifacts"
+          mkdir -p "$BIN_DIR"
+          find "${{ github.workspace }}/packed-artifacts" -type f -name 'artifact-bin-*.tar' -exec tar -xf {} -C "$BIN_DIR" ';' -delete
+          rm -rf "${{ github.workspace }}/packed-artifacts"
+      - name: Ensure that all incoming artifacts are signed
+        timeout-minutes: 1
+        if: steps.gpg.conclusion != 'skipped'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/incoming"
+          find . -type f -not -iname '*.sig' -print0 | xargs --null -I'{}' sh -c "                     \
+            echo '::group::Signature check for {}' &&                                                  \
+            (                                                                                          \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}     || \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}.sig || \
+              (                                                                                        \
+                echo '::error file={}::NOT SIGNED!' &&                                                 \
+                echo '::endgroup::' &&                                                                 \
+                exit 1                                                                                 \
+              )                                                                                        \
+            ) &&                                                                                       \
+            echo 'ok.' &&                                                                              \
+            echo '::endgroup::'                                                                        \
+          "
+      - name: Ensure that all incoming deb's are signed
+        timeout-minutes: 1
+        if: steps.gpg.conclusion != 'skipped'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          POL_DIR="/etc/debsig/policies/${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}"
+          KEY_DIR="/usr/share/debsig/keyrings/${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}"
+          mkdir $POL_DIR
+          mkdir $KEY_DIR
+          cp /etc/apt/keyrings/apt.bcachefs.org.pgp "$KEY_DIR/apt.bcachefs.org.gpg"
+          tee $POL_DIR/pol.pol > /dev/null <<EOT
+          <?xml version="1.0"?>
+          <!DOCTYPE Policy SYSTEM "https://www.debian.org/debsig/1.0/policy.dtd">
+          <Policy xmlns="https://www.debian.org/debsig/1.0/">
+            <Origin Name="apt.bcachefs.org" id="${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}"/>
+            <Selection>
+              <Required Type="origin" File="apt.bcachefs.org.gpg" id="${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}"/>
+            </Selection>
+            <Verification MinOptional="0">
+              <Required Type="origin" File="apt.bcachefs.org.gpg" id="${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}"/>
+            </Verification>
+          </Policy>
+          EOT
+          cd "${{ github.workspace }}/incoming"
+          find . -type f \( -name '*.deb' -or -name '*.ddeb' \) -print0 | xargs --null -I'{}' sh -c "  \
+            echo '::group::Checking signature on {}' &&                                                \
+            (                                                                                          \
+              debsig-verify --verbose {}                                                               \
+            ) &&                                                                                       \
+            echo '::endgroup::'                                                                        \
+          "
+      - name: Create and populate repos
+        timeout-minutes: 60
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          SNAPSHOT_DATE=`date -u +%Y%m%d%H%M%S`
+          MOUNTPOINT="/home/aptbcachefsorg/uploads"
+          mkdir -p "$MOUNTPOINT"
+          if [ -n "${{ secrets.SSH_HOST }}" ]; then
+          mkdir -p ~/.ssh
+          echo "" >> ~/.gnupg/gpg-agent.conf
+          echo "enable-ssh-support" >> ~/.gnupg/gpg-agent.conf
+          echo "" >> /etc/ssh/ssh_known_hosts
+          echo "${{ secrets.SSH_SERVER_KEYS }}" >> /etc/ssh/ssh_known_hosts
+          gpgconf --kill gpg-agent
+          gpgconf --launch gpg-agent
+          export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
+          gpg-connect-agent 'keyattr ${{ secrets.GPG_AUTH_SUBKEY_KEYGRIP }} Use-for-ssh: true' /bye
+          sshfs ${{ secrets.SSH_HOST }}/uploads "$MOUNTPOINT"
+          fi
+          rm -f ~/.aptly.conf
+          APTLY_ROOT="$MOUNTPOINT/aptly"
+          PUBLIC_ROOT="$APTLY_ROOT/public"
+          tee -a ~/.aptly.conf <<EOT
+          root_dir: $APTLY_ROOT
+          gpg_disable_verify: false
+          skip_contents_publishing: true
+          filesystem_publish_endpoints:
+              public:
+                  root_dir: $APTLY_ROOT/public
+                  link_method: symlink
+          EOT
+          if [ "${{ steps.gpg.conclusion }}" = "skipped" ]; then
+          tee -a ~/.aptly.conf <<EOT
+          gpg_disable_sign: true
+          EOT
+          fi
+          mkdir -p "$PUBLIC_ROOT"
+          ln -sr "$PUBLIC_ROOT" "$PUBLIC_ROOT"/dists || /bin/true
+          if [ "${{ steps.gpg.conclusion }}" != "skipped" ]; then
+          cp -f /etc/apt/keyrings/apt.bcachefs.org.pgp "$PUBLIC_ROOT"
+          cp -f /etc/apt/keyrings/apt.bcachefs.org.asc "$PUBLIC_ROOT"
+          fi
+          if [ "${{ (github.event_name == 'push' && github.ref_type == 'branch' && github.ref_name == 'master') && 'true' || 'false' }}" = "true" ]; then
+          export GPG_SIGNING_SUBKEY_FINGERPRINT=${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}
+          mkdir -p "$PUBLIC_ROOT/.footer"
+          tar -xvf "${{ github.workspace }}/incoming/src-artifacts"/*.tar.xz -C "${{ github.workspace }}" --wildcards '*/doc/apt.bcachefs.org-README.md' --strip-components=2
+          envsubst < "${{ github.workspace }}/apt.bcachefs.org-README.md" | \
+            pandoc --from=markdown --to=html --output="$PUBLIC_ROOT/.footer/README"
+          tee "$PUBLIC_ROOT/.footer/README.html" <<EOT
+          <!--# block name="empty" --><!--# endblock -->
+          <!--# include file="README" stub="empty" -->
+          </body></html>
+          EOT
+          fi
+          setup_env() {
+            REPO_NAME="$DIST-${{ env.SUITE }}"
+            REPO_SUITE="bcachefs-tools-${{ env.SUITE }}"
+            SNAPSHOT_NAME="$REPO_NAME-$SNAPSHOT_DATE"
+            PUBLISH_PREFIX="filesystem:public:$DIST"
+          }
+          cd "${{ github.workspace }}/incoming/bin-artifacts"
+          echo "::group::Adding packages to repositories"
+          for DIST in *
+          do
+          echo "::group::Adding packages to repositories: $DIST"
+          setup_env
+          (aptly repo show $REPO_NAME > /dev/null 2>&1) || \
+            aptly repo create -distribution=$REPO_SUITE -component=main $REPO_NAME
+          aptly repo include -repo=$REPO_NAME -no-remove-files \
+            "${{ github.workspace }}/incoming/src-artifacts" \
+            "${{ github.workspace }}/incoming/bin-artifacts/$DIST" \
+          ;
+          echo '::endgroup::'
+          done
+          echo '::endgroup::'
+          echo "::group::Creating snapshots of repositories"
+          for DIST in *
+          do
+          echo "::group::Creating snapshots of repositories: $DIST"
+          setup_env
+          aptly snapshot create $SNAPSHOT_NAME from repo $REPO_NAME
+          echo '::endgroup::'
+          done
+          echo '::endgroup::'
+          echo "::group::Publishing repository snapshots"
+          for DIST in *
+          do
+          echo "::group::Publishing repository snapshots: $DIST"
+          setup_env
+          (aptly publish show $REPO_SUITE $PUBLISH_PREFIX > /dev/null 2>&1) || \
+            aptly publish snapshot -acquire-by-hash -origin="apt.bcachefs.org" -label="apt.bcachefs.org Packages" $SNAPSHOT_NAME $PUBLISH_PREFIX
+          aptly publish switch $REPO_SUITE $PUBLISH_PREFIX $SNAPSHOT_NAME
+          echo '::endgroup::'
+          done
+          echo '::endgroup::'
+          umount "$MOUNTPOINT" || /bin/true

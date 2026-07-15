@@ -20,9 +20,9 @@ static inline unsigned btree_ptr_sectors_written(struct bkey_s_c k)
 
 struct btree_read_bio {
 	struct bch_fs		*c;
+	struct bch_dev		*ca;	/* stashed at submit; see bch_write_bio */
 	struct btree		*b;
 	u64			start_time;
-	unsigned		have_ioref:1;
 	unsigned		idx:7;
 #ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
 	unsigned		list_idx;
@@ -34,10 +34,8 @@ struct btree_read_bio {
 
 void bch2_btree_node_io_unlock(struct btree *);
 void bch2_btree_node_io_lock(struct btree *);
-void __bch2_btree_node_wait_on_read(struct btree *);
-void __bch2_btree_node_wait_on_write(struct btree *);
-void bch2_btree_node_wait_on_read(struct btree *);
-void bch2_btree_node_wait_on_write(struct btree *);
+void bch2_btree_node_wait_on_read(struct btree_trans *, struct btree *);
+void bch2_btree_node_wait_on_write(struct btree_trans *, struct btree *);
 
 DEFINE_GUARD(btree_node_io_lock, struct btree *,
 	     bch2_btree_node_io_lock(_T),

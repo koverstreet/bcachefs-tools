@@ -1,0 +1,131 @@
+========
+bcachefs
+========
+
+--------------------------------------------------
+bcachefs overview, user's manual and configuration
+--------------------------------------------------
+:Manual section: 5
+
+DESCRIPTION
+-----------
+Bcachefs is a multi device copy on write filesystem that supports
+
+- Checksumming
+- Compression
+- Encryption
+- Reflink
+- Caching
+- Replication
+- Erasure coding (reed-solomon)
+
+And more. This document is intended to be an overview of the various features
+and use cases.
+
+Configuration
+-------------
+Most configuration is done via filesystem options that can be set at format
+time, mount time (as mount -o parameters), or changed at runtime via sysfs (via
+the /sys/fs/bcachefs/<UUID>/options/ directory).
+
+Many of those options (particularly those that control the IO path) can also be
+set on individual files and directories, via the bcachefs set-file-option
+command (which internally mostly works via the extended attribute interface, but
+the set-file-option command takes care to propagate options to children
+correctly).
+
+OPTIONS
+-------
+OPTIONS_TABLE
+
+Device management
+-----------------
+Devices can be added, removed, and resized at will, at runtime. There is no
+fixed topology or data layout, as with hardware RAID or ZFS, and devices need
+not be the same size - the allocator will stripe across multiple disks,
+preferring to allocate from disks with more free space so that disks all fill up
+at the same time.
+
+We generally avoid per-device options, preferring instead options that can be
+overridden on files or directories, but there are some:
+
+ *durability*
+
+Multipath devices
+-----------------
+When using device-mapper multipath, use the multipath device (e.g.
+``/dev/mapper/mpathX``) rather than component paths (e.g. ``/dev/sdX``). The
+tools skip multipath component devices during scans.
+
+Formatting or adding a component device requires ``-f/--force``. This is
+because locking applies to the selected
+device path only and is not coordinated across dm-mpath maps and component
+devices; using a component path may therefore cause unintended data loss.
+
+Device labels, targets
+----------------------
+
+Configuration options that point to targets (i.e. a disk or group of disks) may
+be passed either a device (i.e. /dev/sda), or a label. Labels are assigned to
+disks (and need not be unique), and these labels form a nested hierarchy: this
+allows disks to be grouped together and referred to either individually or as a
+group.
+
+For example, given disks formatted with these labels:
+
+.. code-block:: bash
+
+  bcachefs format -g controller1.hdd.hdd1 /dev/sda	\
+                  -g controller1.hdd.hdd2 /dev/sdb	\
+                  -g controller1.ssd.ssd1 /dev/sdc	\
+                  -g controller1.ssd.ssd1 /dev/sdd	\
+                  -g controller2.hdd1     /dev/sde	\
+                  -g controller2.hdd2     /dev/sdf
+
+Configuration options such as foreground_target may then refer to controller1,
+or controller1.hdd, or controller1.hdd1 - or to /dev/sda directly.
+
+Data placement, caching
+-----------------------
+
+The following options control which disks data is written to:
+
+- foreground_target
+- background_target
+- promote_target
+
+The foreground_target option is used to direct writes from applications. The
+background_target option, if set, will cause data to be moved to that target in
+the background by the reconcile thread some time after it has been initially
+written - leaving behind the original copy, but marking it cached so that it can
+be discarded by the allocator. The promote_target will cause reads to write
+a cached copy of the data being read to that target, if it doesn't exist.
+
+Together, these options can be used for writeback caching, like so:
+
+.. code-block:: bash
+
+  foreground_target=ssd
+  background_target=hdd
+  promote_target=ssd
+
+Writethrough caching requires telling bcachefs not to trust the cache device,
+which does require a per-device option and thus can't completely be done with
+per-file options. This is done by setting the device's durability to 0.
+
+These options can all be set on individual files or directories. They can also
+be used to pin a specific file or directory to a specific device or target:
+
+.. code-block:: bash
+
+  foreground_target=ssd
+  background_target=
+  promote_target=
+
+Note that if the target specified is full, the write will spill over to the rest
+of the filesystem.
+
+Data protection
+---------------
+
+foo

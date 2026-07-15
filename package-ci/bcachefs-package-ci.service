@@ -1,0 +1,26 @@
+[Unit]
+Description=bcachefs-tools .deb build orchestrator
+After=network.target
+
+[Service]
+Type=simple
+User=aptbcachefsorg
+ExecStart=/home/aptbcachefsorg/package-ci/bcachefs-package-ci
+Restart=on-failure
+RestartSec=30
+
+# Logging goes to journald (orchestrator also writes per-job logfiles)
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=bcachefs-package-ci
+
+# Environment
+Environment=RUST_LOG=info
+Environment=XDG_RUNTIME_DIR=/run/user/1034
+Environment=HOME=/home/aptbcachefsorg
+
+# No extra sandboxing — rootless podman manages its own namespaces,
+# and the service already runs as an unprivileged user.
+
+[Install]
+WantedBy=multi-user.target

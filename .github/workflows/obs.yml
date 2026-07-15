@@ -1,0 +1,376 @@
+on:
+  workflow_call:
+    inputs:
+      deb-src-artifact-id:
+        required: true
+        type: string
+      runs-on:
+        required: true
+        type: string
+      arch:
+        required: true
+        type: string
+      dist-name:
+        required: true
+        type: string
+      dist-version:
+        required: true
+        type: string
+    secrets:
+      GPG_SECRET_SUBKEYS:
+        required: true
+      GPG_SIGNING_SUBKEY_FINGERPRINT:
+        required: true
+      GPG_AUTH_SUBKEY_KEYGRIP:
+        required: true
+      OBS_SNAPSHOT_REPO_URL:
+        required: true
+      OBS_RELEASE_REPO_URL:
+        required: true
+
+jobs:
+  linux:
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      CONTAINER_DISTRO: trixie
+      DEBFULLNAME: apt.bcachefs.org CI bot
+      DEBEMAIL: linux-bcachefs@vger.kernel.org
+      SUITE: ${{ (github.event_name == 'push' && github.ref_type == 'tag') && 'RELEASE' || 'SNAPSHOT' }}
+    steps:
+      - name: Configure baseline system
+        timeout-minutes: 1
+        id: init
+        shell: sudo sh "{0}"
+        run: |
+          set -xe
+          mount -t tmpfs tmpfs ${{ github.workspace }}
+          echo "set man-db/auto-update false" | debconf-communicate
+          dpkg-reconfigure man-db
+          mkdir -p /etc/apt/apt.conf.d
+          mkdir -p /etc/dpkg/dpkg.cfg.d
+          tee /etc/apt/apt.conf.d/99gh > /dev/null <<EOT
+          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+          Acquire::Retries "10";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
+          APT::Get::Assume-Yes "true";
+          APT::Get::Fix-Missing "true";
+          EOT
+          tee /etc/dpkg/dpkg.cfg.d/99gh > /dev/null <<EOT
+          force-unsafe-io
+          force-confdef
+          EOT
+          rm -rf /var/lib/apt/lists/*
+          rm -rf /etc/apt/sources.list*
+          tee /etc/apt/sources.list > /dev/null <<EOT
+          deb http://archive.ubuntu.com/ubuntu noble main universe
+          EOT
+          apt update
+          apt install eatmydata
+          eatmydata apt install \
+            podman \
+          ;
+          apt clean
+      - name: Start the container
+        timeout-minutes: 1
+        shell: sudo eatmydata sh "{0}"
+        run: |
+          set -xe
+          export IMAGE=debian:${{ env.CONTAINER_DISTRO }}-slim
+          podman pull ${IMAGE}
+          podman run \
+            --name container \
+            --image-volume=tmpfs \
+            --tmpfs=/run \
+            --tmpfs=/tmp \
+            --tmpfs=/var/tmp \
+            --tmpfs=/var/lib/schroot/union/overlay \
+            --volume=/home/runner:/home/runner \
+            --volume=${{ github.workspace }}:${{ github.workspace }} \
+            --privileged \
+            --cap-add=SYS_ADMIN \
+            --security-opt=apparmor:unconfined \
+            --interactive \
+            --tty \
+            --detach \
+            ${IMAGE} \
+            /usr/bin/sh \
+          ;
+      - name: Install necessary packages
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container sh "{0}"
+        run: |
+          set -xe
+          mkdir -p /etc/apt/apt.conf.d
+          mkdir -p /etc/dpkg/dpkg.cfg.d
+          tee /etc/apt/apt.conf.d/99gh > /dev/null <<EOT
+          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+          Acquire::Retries "10";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
+          APT::Get::Assume-Yes "true";
+          APT::Get::Fix-Missing "true";
+          EOT
+          tee /etc/dpkg/dpkg.cfg.d/99gh > /dev/null <<EOT
+          force-unsafe-io
+          force-confdef
+          EOT
+          rm -rf /var/lib/apt/lists/*
+          rm -rf /etc/apt/sources.list*
+          tee /etc/apt/sources.list > /dev/null <<EOT
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }} main
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }}-updates main
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }}-backports main
+          EOT
+          apt update
+          apt install eatmydata
+          eatmydata apt full-upgrade
+          eatmydata apt install \
+            ca-certificates \
+            coreutils \
+            curl \
+            git \
+            git-lfs \
+            gnupg \
+            openssh-client \
+            patch \
+            tar \
+            xz-utils \
+            zip \
+          ;
+          apt clean
+          USER=`whoami`
+          usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+      - name: Import/Configure GPG
+        timeout-minutes: 1
+        id: gpg
+        if: github.event_name != 'pull_request'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          install -d -m 0755 /etc/apt/keyrings
+          gpg --import <<EOT
+          ${{ secrets.GPG_SECRET_SUBKEYS }}
+          EOT
+          gpg \
+            --output /etc/apt/keyrings/apt.bcachefs.org.pgp \
+            --export \
+            ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }} \
+          ;
+          gpg \
+            --output /etc/apt/keyrings/apt.bcachefs.org.asc \
+            --armor \
+            --export \
+            ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }} \
+          ;
+          rm -f ~/.gnupg/trustedkeys.gpg
+          gpg \
+            --no-default-keyring \
+            --keyring ~/.gnupg/trustedkeys.gpg \
+            --import \
+            /etc/apt/keyrings/apt.bcachefs.org.pgp \
+          ;
+          echo "" >> ~/.gnupg/gpg-agent.conf
+          echo "enable-ssh-support" >> ~/.gnupg/gpg-agent.conf
+          gpgconf --kill gpg-agent
+          gpgconf --launch gpg-agent
+          gpg-connect-agent 'keyattr ${{ secrets.GPG_AUTH_SUBKEY_KEYGRIP }} Use-for-ssh: true' /bye
+      - name: Ensure that the download directory does not exist
+        timeout-minutes: 1
+        run: |
+          set -xe
+          rm -rf "${{ github.workspace }}/deb-src"
+      - name: Download source-only .deb to be built
+        timeout-minutes: 1
+        uses: actions/download-artifact@v5
+        with:
+          artifact-ids: ${{ inputs.deb-src-artifact-id }}
+          path: deb-src
+      - name: Check attestation of all incoming artifact archives
+        timeout-minutes: 1
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/deb-src"
+          find . -type f -print0 | xargs --null -I'{}' sh -c "                 \
+            echo '::group::Attestation check for {}' &&                        \
+            (                                                                  \
+              gh attestation verify                                            \
+                {}                                                             \
+                --repo        ${{ github.repository }}                         \
+                --signer-repo ${{ github.repository }}                         \
+                --source-digest ${{ github.sha }}                              \
+                --signer-digest ${{ github.sha }}                              \
+              ||                                                               \
+              (                                                                \
+                echo '::error file={}::NOT ATTESTED!' &&                       \
+                echo '::endgroup::' &&                                         \
+                exit 1                                                         \
+              )                                                                \
+            ) &&                                                               \
+            echo 'ok.' &&                                                      \
+            echo '::endgroup::'                                                \
+          "
+      - name: Unpack the downloaded tarball
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/deb-src"
+          tar -xf "${{ github.workspace }}/deb-src/artifact-src.tar"
+          rm "${{ github.workspace }}/deb-src/artifact-src.tar"
+      - name: Ensure that all incoming source artifacts are signed
+        timeout-minutes: 1
+        if: steps.gpg.conclusion != 'skipped'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/deb-src"
+          find . -type f -not -iname '*.sig' -print0 | xargs --null -I'{}' sh -c "                     \
+            echo '::group::Signature check for {}' &&                                                  \
+            (                                                                                          \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}     || \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}.sig || \
+              (                                                                                        \
+                echo '::error file={}::NOT SIGNED!' &&                                                 \
+                echo '::endgroup::' &&                                                                 \
+                exit 1                                                                                 \
+              )                                                                                        \
+            ) &&                                                                                       \
+            echo 'ok.' &&                                                                              \
+            echo '::endgroup::'                                                                        \
+          "
+      - name: Checkout the OBS Repo
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          git config --global user.email "${{ env.DEBFULLNAME }}"
+          git config --global user.name "${{ env.DEBEMAIL }}"
+          git config --global user.signingkey "${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }}"
+          git config --global commit.gpgsign true
+          git lfs install
+          mkdir -p ~/.ssh
+          echo "" >> ~/.ssh/config
+          echo "StrictHostKeyChecking=accept-new" >> ~/.ssh/config
+          export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
+          OBS_REPO_URL="${{ secrets[format('OBS_{0}_REPO_URL', env.SUITE)] }}"
+          OBS_REPO_DIR="${{ github.workspace }}/bcachefs-obs"
+          git clone "$OBS_REPO_URL" "$OBS_REPO_DIR"
+          git config --global --add safe.directory "$OBS_REPO_DIR"
+      - name: Update OBS Repo state
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          OBS_REPO_DIR="${{ github.workspace }}/bcachefs-obs"
+          cd "$OBS_REPO_DIR"
+          git rm -rf --ignore-unmatch -- .
+          tee .gitattributes > /dev/null <<EOT
+          *.tar.xz filter=lfs diff=lfs merge=lfs -text
+          EOT
+          git add .gitattributes
+          for suffix in .dsc .tar.xz .tar.xz.sig; do
+          cp "${{ github.workspace }}/deb-src/"*$suffix .
+          done
+          VER_STR="$(basename --suffix=.tar.xz $(ls *.tar.xz))"
+          VER="${VER_STR##bcachefs-tools_}"
+          rm -f "$OBS_REPO_DIR/.git/COMMIT_EDITMSG"
+          tee -a "$OBS_REPO_DIR/.git/COMMIT_EDITMSG" > /dev/null <<EOT
+          Update to $VER_STR
+
+          EOT
+          tee dkms-bcachefs.rpmlintrc > /dev/null <<EOT
+          addFilter("dkms-bcachefs.noarch: E: devel-file-in-non-devel-package")
+          EOT
+          tar -xvf *.tar.xz -C "$OBS_REPO_DIR" --wildcards '*/bcachefs-tools.spec' --strip-components=1
+          tar -xvf *.tar.xz -C "$OBS_REPO_DIR" --wildcards '*/bcachefs-kmp.spec-preambule' --strip-components=1
+          tar -xvf *.tar.xz -C "$OBS_REPO_DIR" --wildcards '*/debian/cargo.config' --strip-components=2
+          patch "$OBS_REPO_DIR/bcachefs-tools.spec" <<EOF
+          --- a/bcachefs-tools.spec
+          +++ b/bcachefs-tools.spec
+          @@ -20 +20 @@ Name:           bcachefs-tools
+          -Version:        0%{?_version}
+          +Version:        $VER
+          EOF
+          rm -f "$OBS_REPO_DIR/bcachefs-tools.spec.orig"
+          git add .
+      - name: Ensure that all OBS repo state entries are signed, or sign them
+        timeout-minutes: 1
+        if: steps.gpg.conclusion != 'skipped'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          OBS_REPO_DIR="${{ github.workspace }}/bcachefs-obs"
+          cd "$OBS_REPO_DIR"
+          git ls-files --cached | grep -v '^\.' | grep -v '\.sig$' | xargs -I'{}' sh -c "              \
+            echo '::group::Signing {}' &&                                                              \
+            (                                                                                          \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}     || \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}.sig || \
+              gpg --verbose --detach-sign {}                                                           \
+            ) &&                                                                                       \
+            echo '::endgroup::'                                                                        \
+          "
+      - name: Produce OBS _service file
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          OBS_REPO_DIR="${{ github.workspace }}/bcachefs-obs"
+          cd "$OBS_REPO_DIR"
+          cp /etc/apt/keyrings/apt.bcachefs.org.pgp apt.bcachefs.org.keyring
+          rm -f "${{ github.workspace }}/_service"
+          tee -a "${{ github.workspace }}/_service" > /dev/null <<EOT
+          <services>
+          EOT
+          for FILENAME in *; do
+          CHECKSUM="$(sha256sum -b "$FILENAME" | awk '{print $1}')"
+          tee -a "${{ github.workspace }}/_service" > /dev/null <<EOT
+            <service name="verify_file">
+              <param name="file">$FILENAME</param>
+              <param name="verifier">sha256</param>
+              <param name="checksum">$CHECKSUM</param>
+            </service>
+          EOT
+          done
+          tee -a "${{ github.workspace }}/_service" > /dev/null <<EOT
+          </services>
+          EOT
+          mv "${{ github.workspace }}/_service" "$OBS_REPO_DIR"
+          for f in "$OBS_REPO_DIR/_service"; do
+            echo "::group::Signing $f"
+            gpg --verbose --detach-sign $f
+            echo '::endgroup::'
+          done
+          git add .
+      - name: Prepare OBS Repo state for attestation
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          OBS_REPO_DIR="${{ github.workspace }}/bcachefs-obs"
+          cd "$OBS_REPO_DIR"
+          (git ls-files --cached | xargs sha256sum -b) > "${{ github.workspace }}/bcachefs-obs.sha256sums"
+      - name: Attest the current OBS Repo state
+        timeout-minutes: 1
+        # if: github.event_name != 'pull_request'
+        id: attestation
+        uses: actions/attest-build-provenance@v3
+        with:
+          subject-checksums: '${{ github.workspace }}/bcachefs-obs.sha256sums'
+      - name: Push updated OBS Repo
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          export SSH_AUTH_SOCK=$(gpgconf --list-dirs agent-ssh-socket)
+          OBS_REPO_DIR="${{ github.workspace }}/bcachefs-obs"
+          tee -a "$OBS_REPO_DIR/.git/COMMIT_EDITMSG" > /dev/null <<EOT
+          Attestation: ${{ steps.attestation.outputs.attestation-url }}
+          EOT
+          cd "$OBS_REPO_DIR"
+          git commit --file="$OBS_REPO_DIR/.git/COMMIT_EDITMSG"
+          git push

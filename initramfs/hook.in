@@ -1,0 +1,26 @@
+#!/bin/sh
+
+PREREQ=""
+
+prereqs()
+{
+    echo "$PREREQ"
+}
+
+case $1 in
+prereqs)
+    prereqs
+    exit 0
+    ;;
+esac
+
+. /usr/share/initramfs-tools/hook-functions
+
+manual_add_modules 'bcachefs'
+
+# chacha20 and poly1305 are used for encrypted bcachefs filesystems.
+add_loaded_modules 'chacha20[-_]*'
+add_loaded_modules 'poly1305[-_]*'
+
+copy_exec @ROOT_SBINDIR@/bcachefs /sbin/bcachefs
+copy_exec @ROOT_SBINDIR@/mount.bcachefs /sbin/mount.bcachefs

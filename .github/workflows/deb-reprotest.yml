@@ -1,0 +1,292 @@
+on:
+  workflow_call:
+    inputs:
+      deb-src-artifact-id:
+        required: true
+        type: string
+      runs-on:
+        required: true
+        type: string
+      arch:
+        required: true
+        type: string
+      dist-name:
+        required: true
+        type: string
+      dist-version:
+        required: true
+        type: string
+    secrets:
+      GPG_SECRET_SUBKEYS:
+      GPG_SIGNING_SUBKEY_FINGERPRINT:
+
+jobs:
+  linux:
+    runs-on: ${{ inputs.runs-on }}
+    env:
+      CONTAINER_DISTRO: trixie
+      SUITE: ${{ (github.event_name == 'push' && github.ref_type == 'tag') && 'release' || 'snapshot' }}
+    permissions:
+      id-token: write
+      contents: read
+      attestations: write
+    steps:
+      - name: Configure baseline system
+        timeout-minutes: 1
+        id: init
+        shell: sudo sh "{0}"
+        run: |
+          set -xe
+          mount -t tmpfs tmpfs ${{ github.workspace }}
+          echo "set man-db/auto-update false" | debconf-communicate
+          dpkg-reconfigure man-db
+          mkdir -p /etc/apt/apt.conf.d
+          mkdir -p /etc/dpkg/dpkg.cfg.d
+          tee /etc/apt/apt.conf.d/99gh > /dev/null <<EOT
+          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+          Acquire::Retries "10";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
+          APT::Get::Assume-Yes "true";
+          APT::Get::Fix-Missing "true";
+          EOT
+          tee /etc/dpkg/dpkg.cfg.d/99gh > /dev/null <<EOT
+          force-unsafe-io
+          force-confdef
+          EOT
+          rm -rf /var/lib/apt/lists/*
+          rm -rf /etc/apt/sources.list*
+          tee /etc/apt/sources.list > /dev/null <<EOT
+          deb http://archive.ubuntu.com/ubuntu noble main universe
+          EOT
+          apt update
+          apt install eatmydata
+          eatmydata apt install \
+            podman \
+          ;
+          apt clean
+      - name: Start the container
+        timeout-minutes: 1
+        shell: sudo eatmydata sh "{0}"
+        run: |
+          set -xe
+          export IMAGE=debian:${{ env.CONTAINER_DISTRO }}-slim
+          podman pull ${IMAGE}
+          podman run \
+            --name container \
+            --image-volume=tmpfs \
+            --tmpfs=/run \
+            --tmpfs=/tmp \
+            --tmpfs=/var/tmp \
+            --tmpfs=/var/lib/schroot/union/overlay \
+            --volume=/home/runner:/home/runner \
+            --volume=${{ github.workspace }}:${{ github.workspace }} \
+            --privileged \
+            --cap-add=SYS_ADMIN \
+            --security-opt=apparmor:unconfined \
+            --interactive \
+            --tty \
+            --detach \
+            ${IMAGE} \
+            /usr/bin/sh \
+          ;
+      - name: Install necessary packages
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container sh "{0}"
+        run: |
+          set -xe
+          mkdir -p /etc/apt/apt.conf.d
+          mkdir -p /etc/dpkg/dpkg.cfg.d
+          tee /etc/apt/apt.conf.d/99gh > /dev/null <<EOT
+          APT::ExtractTemplates::TempDir "/tmp/apt/temp";
+          Acquire::Retries "10";
+          APT::Install-Recommends "false";
+          APT::Install-Suggests "false";
+          APT::Get::Assume-Yes "true";
+          APT::Get::Fix-Missing "true";
+          EOT
+          tee /etc/dpkg/dpkg.cfg.d/99gh > /dev/null <<EOT
+          force-unsafe-io
+          force-confdef
+          EOT
+          rm -rf /var/lib/apt/lists/*
+          rm -rf /etc/apt/sources.list*
+          tee /etc/apt/sources.list > /dev/null <<EOT
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }} main
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }}-updates main
+          deb http://deb.debian.org/debian ${{ env.CONTAINER_DISTRO }}-backports main
+          EOT
+          apt update
+          apt install eatmydata
+          eatmydata apt full-upgrade
+          eatmydata apt install \
+            ${{ inputs.dist-name }}-keyring \
+            curl \
+            dpkg-dev \
+            gnupg \
+            mmdebstrap \
+            reprotest \
+            schroot \
+            tar \
+            uidmap \
+            xz-utils \
+            zip \
+          ;
+          apt clean
+          USER=`whoami`
+          usermod --add-subuids 100000-165535 --add-subgids 100000-165535 $USER
+      - name: Import/Configure GPG
+        timeout-minutes: 1
+        id: gpg
+        if: github.event_name != 'pull_request'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          gpg --import <<EOT
+          ${{ secrets.GPG_SECRET_SUBKEYS }}
+          EOT
+          set -xe
+          install -d -m 0755 /etc/apt/keyrings
+          gpg \
+            --output /etc/apt/keyrings/apt.bcachefs.org.pgp \
+            --export \
+            ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }} \
+          ;
+          gpg \
+            --output /etc/apt/keyrings/apt.bcachefs.org.asc \
+            --armor \
+            --export \
+            ${{ secrets.GPG_SIGNING_SUBKEY_FINGERPRINT }} \
+          ;
+          rm -f ~/.gnupg/trustedkeys.gpg
+          gpg \
+            --no-default-keyring \
+            --keyring ~/.gnupg/trustedkeys.gpg \
+            --import \
+            /etc/apt/keyrings/apt.bcachefs.org.pgp \
+          ;
+      - name: Ensure that the download directory does not exist
+        timeout-minutes: 1
+        run: |
+          set -xe
+          rm -rf "${{ github.workspace }}/deb-src"
+      - name: Download source-only .deb to be built
+        timeout-minutes: 1
+        uses: actions/download-artifact@v5
+        with:
+          artifact-ids: ${{ inputs.deb-src-artifact-id }}
+          path: deb-src
+      - name: Check attestation of all incoming artifact archives
+        timeout-minutes: 1
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/deb-src"
+          find . -type f -print0 | xargs --null -I'{}' sh -c "                 \
+            echo '::group::Attestation check for {}' &&                        \
+            (                                                                  \
+              gh attestation verify                                            \
+                {}                                                             \
+                --repo        ${{ github.repository }}                         \
+                --signer-repo ${{ github.repository }}                         \
+                --source-digest ${{ github.sha }}                              \
+                --signer-digest ${{ github.sha }}                              \
+              ||                                                               \
+              (                                                                \
+                echo '::error file={}::NOT ATTESTED!' &&                       \
+                echo '::endgroup::' &&                                         \
+                exit 1                                                         \
+              )                                                                \
+            ) &&                                                               \
+            echo 'ok.' &&                                                      \
+            echo '::endgroup::'                                                \
+          "
+      - name: Unpack the downloaded tarball
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/deb-src"
+          tar -xf "${{ github.workspace }}/deb-src/artifact-src.tar"
+          rm "${{ github.workspace }}/deb-src/artifact-src.tar"
+      - name: Ensure that all incoming source artifacts are signed
+        timeout-minutes: 1
+        if: steps.gpg.conclusion != 'skipped'
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          cd "${{ github.workspace }}/deb-src"
+          find . -type f -not -iname '*.sig' -print0 | xargs --null -I'{}' sh -c "                     \
+            echo '::group::Signature check for {}' &&                                                  \
+            (                                                                                          \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}     || \
+              gpg --verbose --no-default-keyring --keyring ~/.gnupg/trustedkeys.gpg --verify {}.sig || \
+              (                                                                                        \
+                echo '::error file={}::NOT SIGNED!' &&                                                 \
+                echo '::endgroup::' &&                                                                 \
+                exit 1                                                                                 \
+              )                                                                                        \
+            ) &&                                                                                       \
+            echo 'ok.' &&                                                                              \
+            echo '::endgroup::'                                                                        \
+          "
+      - name: Create container for reprotest
+        timeout-minutes: 1
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          mkdir -p /tmp/chroot/unstable-amd64-sbuild
+          mmdebstrap \
+            --comp=main \
+            --variant=apt \
+            --skip=output/mknod \
+            --format=directory \
+            --include=eatmydata \
+            --hook-dir=/usr/share/mmdebstrap/hooks/eatmydata \
+            --aptopt='Acquire::Retries "10";' \
+            --aptopt='APT::Install-Recommends "false";' \
+            --aptopt='APT::Install-Suggests "false";' \
+            --aptopt='APT::Get::Assume-Yes "true";' \
+            --aptopt='APT::Get::Fix-Missing "true";' \
+            --dpkgopt='force-unsafe-io' \
+            --dpkgopt='force-confdef' \
+            unstable \
+            /tmp/chroot/unstable-amd64-sbuild \
+            http://deb.debian.org/debian \
+          ;
+          chroot /tmp/chroot/unstable-amd64-sbuild apt update
+          mkdir -p /etc/schroot/chroot.d
+          tee /etc/schroot/chroot.d/unstable-amd64-sbuild > /dev/null <<EOT
+          [unstable-amd64-sbuild]
+          type=directory
+          directory=/tmp/chroot/unstable-amd64-sbuild
+          union-type=overlay
+          command-prefix=eatmydata
+          EOT
+      - name: Run reprotest
+        timeout-minutes: 10
+        shell: sudo podman exec --interactive --tty container eatmydata sh "{0}"
+        run: |
+          set -xe
+          useradd -U first-user
+          useradd -U second-user
+          cd "${{ github.workspace }}/deb-src"
+          # FIXME: not reproducible without --vary=-build_path
+          if [ "${{ env.SUITE }}" != "release" ]; then
+          export DEB_BUILD_OPTIONS=nostrip
+          fi
+          echo '::group::Running reprotest'
+          reprotest \
+            --no-diffoscope \
+            --vary=-build_path \
+            --vary=user_group.available+=first-user:first-user \
+            --vary=user_group.available+=second-user:second-user \
+            --vary=domain_host.use_sudo=1 \
+            "${{ github.workspace }}/deb-src"/*.dsc \
+            -- \
+            schroot \
+            unstable-amd64-sbuild \
+          ;
+          echo '::endgroup::'
