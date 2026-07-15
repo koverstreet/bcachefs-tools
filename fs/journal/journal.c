@@ -1206,10 +1206,18 @@ int bch2_journal_flush_seq(struct journal *j, u64 seq, unsigned task_state)
 	CLASS(closure_stack, cl)();
 	int ret = bch2_journal_flush_seq_async(j, seq, &cl);
 
-	if (closure_sync_timeout(&cl, HZ * 10)) {
+	/*
+	 * Don't report stuck until we've waited longer than an IO could
+	 * legitimately take: twice the longest write latency we've seen, or 10s,
+	 * whichever is greater (matches bch2_journal_res_get_slowpath()).
+	 */
+	long total_wait = max(max_dev_latency(c) * 2, HZ * 10);
+
+	if (closure_sync_timeout(&cl, total_wait)) {
 		CLASS(printbuf, buf)();
 		prt_printf(&buf, bch2_fmt(c,
-			"bch2_journal_flush_seq stuck? Waited 10s for seq %llu"), seq);
+			"bch2_journal_flush_seq stuck? Waited %lis for seq %llu"),
+			total_wait / HZ, seq);
 		bch2_journal_debug_to_text(&buf, j);
 		bch2_print_str(c, KERN_ERR, buf.buf);
 		closure_sync(&cl);
