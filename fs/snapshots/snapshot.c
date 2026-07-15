@@ -142,6 +142,7 @@
 
 #include "init/error.h"
 #include "init/passes.h"
+#include "init/recovery.h"
 
 #include "snapshots/snapshot.h"
 
@@ -611,6 +612,9 @@ static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 
 int bch2_snapshot_trigger(struct btree_trans *trans, struct btree_trigger_op op)
 {
+	if (op.flags & BTREE_TRIGGER_transactional)
+		bch2_clear_btree_clean(trans->c, BTREE_ID_snapshots);
+
 	if (op.flags & BTREE_TRIGGER_atomic)
 		try(bch2_mark_snapshot(trans, op.new.s_c));
 
