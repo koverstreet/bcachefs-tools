@@ -530,7 +530,7 @@ static ssize_t bch2_journal_pins_read(struct file *file, char __user *buf,
 		if (done)
 			break;
 
-		done = bch2_journal_seq_pins_to_text(&i->buf, &c->journal, &i->iter);
+		done = bch2_journal_seq_pins_to_text(&i->buf, &c->journal, &i->iter, NULL);
 		i->iter++;
 	}
 

@@ -1297,7 +1297,8 @@ void bch2_journal_flush_dev_ro(struct journal *j, unsigned dev_idx)
 	}
 }
 
-__cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 *seq)
+__cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *j, u64 *seq,
+					  unsigned *nr)
 {
 	struct journal_entry_pin *pin;
 
@@ -1327,12 +1328,18 @@ __cold bool bch2_journal_seq_pins_to_text(struct printbuf *out, struct journal *
 
 	prt_printf(out, "unflushed:\n");
 	for (unsigned i = 0; i < ARRAY_SIZE(pin_list->unflushed); i++)
-		list_for_each_entry(pin, &pin_list->unflushed[i], list)
+		list_for_each_entry(pin, &pin_list->unflushed[i], list) {
 			prt_printf(out, "\t%px %ps\n", pin, pin->flush);
+			if (nr)
+				++*nr;
+		}
 
 	prt_printf(out, "flushed:\n");
-	list_for_each_entry(pin, &pin_list->flushed, list)
+	list_for_each_entry(pin, &pin_list->flushed, list) {
 		prt_printf(out, "\t%px %ps\n", pin, pin->flush);
+		if (nr)
+			++*nr;
+	}
 
 	return false;
 }
@@ -1343,10 +1350,9 @@ __cold void bch2_journal_pins_to_text(struct printbuf *out, struct journal *j,
 	u64 seq = 0;
 	unsigned nr = 0;
 
-	while (nr < limit && !bch2_journal_seq_pins_to_text(out, j, &seq)) {
+	/* limit the number of pins printed, not the number of seqs scanned */
+	while (nr < limit && !bch2_journal_seq_pins_to_text(out, j, &seq, &nr))
 		seq++;
-		nr++;
-	}
 }
 
 static __cold void bch2_time_stats_summary_to_text(struct printbuf *out,
