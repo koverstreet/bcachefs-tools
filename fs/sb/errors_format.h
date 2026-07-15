@@ -225,7 +225,7 @@ enum bch_fsck_flags {
 	x(snapshot_skiplist_bad,				181,	0)		\
 	x(snapshot_pad_nonzero,					370,	0)		\
 	x(snapshot_edge_bad,					371,	0)		\
-	x(snapshot_state_bad,					373,	0)		\
+	x(snapshot_state_bad,					373,	FSCK_AUTOFIX)	\
 	x(snapshot_state_bitflip,				379,	FSCK_AUTOFIX)	\
 	x(snapshot_will_delete_but_subvol_live,			376,	FSCK_AUTOFIX)		\
 	x(snapshot_deleted_has_live_children,			381,	FSCK_AUTOFIX)	\
