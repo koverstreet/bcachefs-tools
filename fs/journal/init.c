@@ -515,10 +515,20 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 		return bch_err_throw(c, ENOMEM_journal_pin_fifo);
 	}
 
+	/*
+	 * Initialize the whole buffer, not just the live [front, back) window
+	 * below: fifo_entry() masks without a range check (unlike
+	 * journal_seq_pin()), so a stray pin_set() for an out-of-window seq must
+	 * still land on a valid (empty) list_head rather than kvmalloc garbage.
+	 * The resize path (bch2_journal_pin_fifo_resize) inits the full buffer
+	 * for the same reason.
+	 */
 	for (struct journal_entry_pin_list *pin = j->pin.data;
 	     pin < j->pin.data + j->pin.size;
-	     pin++)
+	     pin++) {
 		spin_lock_init(&pin->lock);
+		journal_pin_list_init(pin, 0);
+	}
 
 	j->replay_journal_seq	= last_seq;
 	j->replay_journal_seq_end = cur_seq;
