@@ -1070,6 +1070,12 @@ typedef class_bch_log_msg_t class_bch_log_msg_ratelimited_t;
 
 static inline void class_bch_log_msg_ratelimited_destructor(class_bch_log_msg_t *p)
 { bch2_log_msg_exit(p); }
+
+/* btrees_clean: see bch_sb_field_ext.btrees_clean and bch2_set/clear_btree_clean() */
+static inline bool bch2_btree_is_clean(struct bch_fs *c, enum btree_id btree)
+{
+	return c->sb.btrees_clean & BIT_ULL(btree);
+}
 #define class_bch_log_msg_ratelimited_constructor(_c)		\
 	bch2_log_msg_init(_c, 3, bch2_ratelimit(_c), false)
 

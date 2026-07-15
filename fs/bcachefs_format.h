@@ -907,6 +907,16 @@ struct bch_sb_field_ext {
 	 * forensic record of every btree that has ever lost data:
 	 */
 	__le64			btrees_lost_data_ever;
+	/*
+	 * Btrees validated consistent by their check pass and not mutated
+	 * since. Written synchronously on every change (set on clean pass
+	 * completion, cleared from the btree's transactional trigger on
+	 * mutation) so the on-disk value is always current. Lets consistency
+	 * checks that would otherwise destroy data based on an in-memory table
+	 * they can't fully trust (check_key_has_snapshot) instead reschedule
+	 * the check pass. Runtime copy: bch_sb.btrees_clean.
+	 */
+	__le64			btrees_clean;
 };
 
 LE64_BITMASK(BCH_SB_EXT_DEV_READAHEAD,		struct bch_sb_field_ext, flags0, 0, 20);
