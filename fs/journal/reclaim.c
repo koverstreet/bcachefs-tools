@@ -667,6 +667,17 @@ void bch2_journal_pin_set(struct journal *j, u64 new_seq,
 {
 	guard(percpu_read)(&j->pin_resize_lock);
 
+	/*
+	 * fifo_entry() below masks without a range check, so a pin outside the
+	 * live window lands on an out-of-[front,back) slot: that pin is never
+	 * reclaimed (reclaim only walks the window) and is left dangling in the
+	 * old buffer when the fifo is resized+freed. Catch the offending caller
+	 * here rather than debugging the eventual use-after-free.
+	 */
+	WARN_ONCE(new_seq < j->pin.front || new_seq >= j->pin.back,
+		  "journal pin set for seq %llu outside live range [%llu, %llu)",
+		  new_seq, j->pin.front, j->pin.back);
+
 	while (true) {
 		u64 old_seq = READ_ONCE(pin->seq);
 
