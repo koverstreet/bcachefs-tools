@@ -264,7 +264,8 @@ static inline int bch2_snapshot_live_descendent(struct bch_fs *c, u32 id, u32 *l
 			return 0;
 		}
 
-		EBUG_ON(s->children[1]);	/* deleted nodes are single-child */
+		if (s->children[1])	/* deleted nodes are single-child */
+			return bch_err_throw(c, snapshot_multiple_descendents);
 		if (!s->children[0])
 			return 0;
 		id = s->children[0];
