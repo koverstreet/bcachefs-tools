@@ -771,6 +771,52 @@ static int check_snapshot(struct btree_trans *trans,
 		}
 	}
 
+	/*
+	 * A non-live node with two live children that both point back at it is a
+	 * lie: it's a branching interior that two subtrees still depend on as
+	 * their common ancestor, so it can't be gone. Reviving it is the simplest
+	 * repair back to a consistent tree.
+	 *
+	 * A single live child is legal, and does not trigger this: a no_keys node
+	 * is an emptied interior kept until the next remount, and it retains its
+	 * one live descendant so ancestry still resolves - non-live nodes are
+	 * single-child by construction.
+	 *
+	 * Children must reciprocate. A deleted node's child pointer can be a
+	 * splice breadcrumb (I1): a child reparented to the grandparent that no
+	 * longer names us as parent doesn't depend on us and isn't counted.
+	 *
+	 * Do this before the deleted early-out, then fall through so the
+	 * edge/depth/tree checks validate the now-live node.
+	 */
+	if (bch2_snapshot_state(&s) != SNAPSHOT_STATE_live) {
+		unsigned nr_live_children = 0;
+
+		for (unsigned i = 0; i < 2; i++) {
+			if (!s.children[i])
+				continue;
+
+			struct bch_snapshot child;
+			int ret2 = bch2_snapshot_lookup(trans, le32_to_cpu(s.children[i]), &child);
+			if (ret2 && !bch2_err_matches(ret2, ENOENT))
+				return ret2;
+
+			nr_live_children += !ret2 &&
+				bch2_snapshot_state_compat(&child) == SNAPSHOT_STATE_live &&
+				snapshot_node_points_back(&child, EDGE_CHILD, k.k->p.offset);
+		}
+
+		if (ret_fsck_err_on(nr_live_children == 2,
+				trans, snapshot_deleted_has_live_children,
+				"snapshot marked %s but has two live children - reviving:\n%s",
+				bch2_snapshot_state_str(bch2_snapshot_state(&s)),
+				(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
+			s = u->v;
+		}
+	}
+
 	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted)
 		return 0;
 
