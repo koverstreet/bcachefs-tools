@@ -290,10 +290,20 @@ fsck_err:
 int bch2_check_subvols(struct bch_fs *c)
 {
 	CLASS(btree_trans, trans)(c);
-	return for_each_btree_key_commit(trans, iter,
+	int ret = for_each_btree_key_commit(trans, iter,
 				BTREE_ID_subvolumes, POS_MIN, BTREE_ITER_prefetch, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 			check_subvol(trans, &iter, k));
+
+	/*
+	 * If the pass completed cleanly the subvolumes btree is consistent;
+	 * record it so check_key_has_snapshot can trust the in-memory table
+	 * (see bch2_btree_is_clean). Same gate the pass runner uses to mark a
+	 * pass complete.
+	 */
+	if (!ret && !test_bit(BCH_FS_error, &c->flags))
+		bch2_set_btree_clean(c, BTREE_ID_subvolumes);
+	return ret;
 }
 
 static int check_subvol_child(struct btree_trans *trans,
