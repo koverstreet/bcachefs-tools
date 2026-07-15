@@ -1350,7 +1350,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 	    k.k->p.snapshot &&
 	    unlikely(ret = bch2_check_key_has_snapshot(trans, iter, k))) {
 		if (ret > 0) /* key was deleted */
-			ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
+			ret = bch2_trans_commit(trans, &m->op.res, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
 				bch_err_throw(c, data_update_fail_no_snapshot);
 		if (bch2_err_matches(ret, BCH_ERR_recovery_will_run)) {
 			/* Can't repair yet, waiting on other recovery passes */
