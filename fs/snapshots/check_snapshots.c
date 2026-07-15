@@ -12,6 +12,7 @@
 #include "init/error.h"
 #include "init/passes.h"
 #include "init/progress.h"
+#include "init/recovery.h"
 
 static int bch2_snapshot_table_make_room(struct bch_fs *c, u32 id)
 {
@@ -875,7 +876,17 @@ int bch2_check_snapshots(struct bch_fs *c)
 	 * the parent's depth already be correct:
 	 */
 	CLASS(btree_trans, trans)(c);
-	return bch2_check_snapshots_trans(trans);
+	int ret = bch2_check_snapshots_trans(trans);
+
+	/*
+	 * If the pass completed cleanly the snapshots btree is consistent;
+	 * record it so check_key_has_snapshot can trust the in-memory snapshot
+	 * table (see bch2_btree_is_clean). This is the same gate the pass runner
+	 * uses to mark a pass complete.
+	 */
+	if (!ret && !test_bit(BCH_FS_error, &c->flags))
+		bch2_set_btree_clean(c, BTREE_ID_snapshots);
+	return ret;
 }
 
 static int check_snapshot_exists(struct btree_trans *trans, u32 id)
