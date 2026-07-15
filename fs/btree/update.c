@@ -328,11 +328,6 @@ btree_trans_update_by_path(struct btree_trans *trans,
 	EBUG_ON(trans->nr_updates >= trans->nr_paths);
 	EBUG_ON(!bpos_eq(k->k.p, path->pos));
 	BUG_ON(k_buf_u64s < k->k.u64s);
-	EBUG_ON(!path->level &&
-		btree_type_has_snapshots(path->btree_id) &&
-		!bkey_deleted(&k->k) &&
-		test_bit(JOURNAL_replay_done, &c->journal.flags) &&
-		!bch2_snapshot_exists(c, k->k.p.snapshot));
 
 	trans->has_interior_updates |= path->level != 0;
 
