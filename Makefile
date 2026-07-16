@@ -270,6 +270,7 @@ bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 
 libbcachefs.a: $(OBJS)
 	@echo "    [AR]     $@"
+	$(Q)$(RM) $@
 	$(Q)$(AR) -rc $@ $+
 
 .PHONY: force
