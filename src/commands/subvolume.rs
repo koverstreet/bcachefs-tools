@@ -8,7 +8,7 @@ use bch_bindgen::c::{
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::util::fmt_sectors_human;
+use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::bch_ioc_wr;
 
@@ -607,7 +607,8 @@ fn snapshot_node_label(id: u32, node: &SnapshotNode, names: &HashMap<u32, String
     let name = names.get(&id)
         .cloned()
         .unwrap_or_else(|| "(shared)".to_string());
-    let mut label = format!("{} [{}]", name, fmt_sectors_human(node.sectors));
+    let mut label = format!("{} [{}, {} keys]", name,
+        fmt_sectors_human(node.sectors), fmt_num_human(node.nr_keys));
     let f = flags_str(node.flags);
     if !f.is_empty() {
         label.push_str(&format!(" ({})", f));
@@ -706,15 +707,17 @@ fn print_snapshot_flat(dir: &Path, readonly: bool, sort: Option<SortBy>) -> Resu
         }
     }
 
-    println!("{:<24} {:<8} {:<12} {:<12} Flags",
-        "Path", "ID", "Own", "Total");
+    println!("{:<24} {:<8} {:<12} {:<10} {:<8} {:<12} Flags",
+        "Path", "ID", "Own", "Meta", "Keys", "Total");
 
     for (path, n, cumulative) in &entries {
         let f = flags_str(n.flags);
         let flags_display = if f.is_empty() { "-".to_string() } else { f };
-        println!("{:<24} {:<8} {:<12} {:<12} {}",
+        println!("{:<24} {:<8} {:<12} {:<10} {:<8} {:<12} {}",
             path, n.subvol,
             fmt_sectors_human(n.sectors),
+            fmt_bytes_human(n.key_bytes),
+            fmt_num_human(n.nr_keys),
             fmt_sectors_human(*cumulative),
             flags_display);
     }
@@ -735,6 +738,8 @@ fn snapshot_json_value(dir: &Path) -> Result<serde_json::Value> {
             "subvol":   n.subvol,
             "sectors":  n.sectors,
             "size":     fmt_sectors_human(n.sectors),
+            "nr_keys":  n.nr_keys,
+            "key_bytes": n.key_bytes,
         });
         let f = flags_str(n.flags);
         if !f.is_empty() {
