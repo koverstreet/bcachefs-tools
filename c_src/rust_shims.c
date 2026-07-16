@@ -110,20 +110,6 @@ struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
 	return ret;
 }
 
-/* dump sanitize shims — wraps crypto operations for encrypted fs dumps */
-
-int rust_jset_decrypt(struct bch_fs *c, struct jset *j)
-{
-	return bch2_encrypt(c, JSET_CSUM_TYPE(j), journal_nonce(j),
-			    j->encrypted_start,
-			    vstruct_end(j) - (void *) j->encrypted_start);
-}
-
-int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset)
-{
-	return bset_encrypt(c, i, offset);
-}
-
 
 /* Bitmap shim — set_bit is atomic (locked bitops) */
 

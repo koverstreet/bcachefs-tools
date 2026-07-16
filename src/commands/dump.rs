@@ -7,9 +7,9 @@ use anyhow::{anyhow, Result};
 use clap::Parser;
 
 use bcachefs_kernel::btree;
-use bcachefs_kernel::btree::bkey::bkey_type;
+use bcachefs_kernel::btree::bkey::BkeyS;
 use bcachefs_kernel::c;
-use bcachefs_kernel::data::extents::bkey_ptrs_sc;
+use bcachefs_kernel::data::extents::{bkey_ptrs_mut, bkey_ptrs_sc};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::POS_MIN;
@@ -17,9 +17,45 @@ use bcachefs_kernel::POS_MIN;
 use crate::qcow2::{self, Qcow2Image, Ranges, range_add, ranges_sort};
 use crate::wrappers::super_io::vstruct_bytes_sb;
 
-extern "C" {
-    fn rust_jset_decrypt(c: *mut c::bch_fs, j: *mut u8) -> i32;
-    fn rust_bset_decrypt(c: *mut c::bch_fs, i: *mut u8, offset: u32) -> i32;
+// Crypto for the sanitize path. These drive the wrapped bch2_encrypt /
+// bch2_checksum (and bset_encrypt) over the same byte ranges the kernel's
+// bset_encrypt() and csum_vstruct() macro cover, so the metadata dump can
+// decrypt, edit, and re-checksum bsets and journal entries without a C shim.
+// @vstruct_bytes is the whole vstruct's byte length; the checksum covers
+// everything after the leading csum field, and journal encryption everything
+// after the encrypted_start marker. Encryption is symmetric, so the same call
+// both decrypts and re-encrypts.
+
+fn jset_encrypt(fs: &Fs, j: *mut c::jset, csum_type: u32, vstruct_bytes: usize) -> i32 {
+    let off = std::mem::offset_of!(c::jset, encrypted_start);
+    unsafe {
+        c::bch2_encrypt(fs.raw, csum_type, c::journal_nonce(j),
+                        (j as *mut u8).add(off) as *mut core::ffi::c_void,
+                        vstruct_bytes - off)
+    }
+}
+
+fn jset_csum_set(fs: &Fs, j: *mut c::jset, csum_type: u32, vstruct_bytes: usize) {
+    let off = std::mem::size_of::<c::bch_csum>();
+    let csum = unsafe {
+        c::bch2_checksum(fs.raw, csum_type, c::journal_nonce(j),
+                         (j as *const u8).add(off) as *const core::ffi::c_void,
+                         vstruct_bytes - off)
+    };
+    unsafe { (*j).csum = csum };
+}
+
+/// @node points at the btree_node (first bset) or btree_node_entry, whose first
+/// field is the csum; @i is the bset within it, at byte @offset from the node.
+fn bset_csum_set(fs: &Fs, node: *mut u8, i: *mut c::bset, offset: u32,
+                 csum_type: u32, vstruct_bytes: usize) {
+    let off = std::mem::size_of::<c::bch_csum>();
+    let csum = unsafe {
+        c::bch2_checksum(fs.raw, csum_type, c::btree_nonce(i, offset),
+                         node.add(off) as *const core::ffi::c_void,
+                         vstruct_bytes - off)
+    };
+    unsafe { *(node as *mut c::bch_csum) = csum };
 }
 
 /// First 8 bytes of the superblock UUID interpreted as a little-endian u64.
@@ -58,6 +94,13 @@ pub struct DumpCli {
     /// Don't dump entire journal, just dirty entries
     #[arg(long)]
     nojournal: bool,
+
+    /// Dump only the lowest-device-index replica of each btree node, rewriting
+    /// the other replica pointers to an invalid device. Produces a much smaller
+    /// metadata image that still reads back cleanly (the surviving replica is
+    /// the only one the read path will consider).
+    #[arg(long)]
+    single_replica: bool,
 
     /// Open devices without O_EXCL
     #[arg(long)]
@@ -158,14 +201,6 @@ fn csum_type_is_encryption(csum_type: u32) -> bool {
     csum_type == 3 || csum_type == 4 // chacha20_poly1305_{80,128}
 }
 
-/// Zero the csum field (16 bytes at `csum_off`) and clear bits 0-3 of
-/// the le32 flags field at `flags_off`.
-fn clear_csum(buf: &mut [u8], csum_off: usize, flags_off: usize) {
-    buf[csum_off..csum_off + 16].fill(0);
-    let flags = read_le32(buf, flags_off);
-    buf[flags_off..flags_off + 4].copy_from_slice(&(flags & !0xf).to_le_bytes());
-}
-
 /// Round `bytes` up to the block alignment determined by `block_bits`,
 /// matching C `vstruct_sectors(s, block_bits) << 9`.
 fn vstruct_aligned_bytes(bytes: usize, block_bits: usize) -> usize {
@@ -179,33 +214,86 @@ fn vstruct_aligned_bytes(bytes: usize, block_bits: usize) -> usize {
 ///  - inline_data:          data at offset 0 — zero all
 ///  - indirect_inline_data: refcount(8), data — zero data
 ///  - dirent:               d_inum(8), d_type(1), d_name — fill with 'X'
-fn sanitize_val(val: &mut [u8], key_type: u8, sanitize_filenames: bool) -> bool {
-    let t = key_type as u32;
+/// What the write path should do to each buffer before dumping it.
+#[derive(Clone, Copy)]
+struct SanitizeOpts {
+    /// Zero inline data extents, and (with `sanitize_filenames`) scramble dirent
+    /// names.
+    sanitize:           bool,
+    sanitize_filenames: bool,
+    /// Keep only the lowest-device-index replica of each btree_ptr, rewriting
+    /// the rest to an invalid device.
+    single_replica:     bool,
+}
 
-    if t == u32::from(bkey_type::inline_data) {
-        val.fill(0);
-        true
-    } else if t == u32::from(bkey_type::indirect_inline_data) {
-        if val.len() > 8 {
-            val[8..].fill(0);
+/// A member index that names no device (`BCH_SB_MEMBER_INVALID`); the read
+/// path skips ptrs pointing at it.
+const MEMBER_INVALID: u64 = c::BCH_SB_MEMBER_INVALID as u64;
+
+/// De-replicate a btree pointer key in place: keep the pointer on the lowest
+/// device index and set every other pointer's device to `BCH_SB_MEMBER_INVALID`.
+/// Returns whether it changed anything. The surviving replica is the one the
+/// dump actually wrote, and the only one the read path will consider.
+fn derep(fs: &Fs, mut k: BkeyS) -> bool {
+    let min_dev = bkey_ptrs_mut(fs, &mut k)
+        .map(|p| p.dev())
+        .filter(|&d| d != MEMBER_INVALID)
+        .min();
+    let Some(min_dev) = min_dev else { return false };
+
+    let mut modified = false;
+    for p in bkey_ptrs_mut(fs, &mut k) {
+        if p.dev() != min_dev {
+            p.set_dev(MEMBER_INVALID);
+            modified = true;
         }
-        true
-    } else if t == u32::from(bkey_type::dirent) && sanitize_filenames {
-        if val.len() > 9 {
-            val[9..].fill(b'X');
+    }
+    modified
+}
+
+/// Per-value transform, dispatched by key type. Handles both `--single-replica`
+/// de-replication (btree pointers) and `--sanitize` scrubbing (inline data,
+/// filenames). Called for every key in both btree nodes and journal entries, so
+/// de-replication reaches the btree_root pointers carried in the journal as well
+/// as the interior/leaf pointers in btree nodes. Returns whether it modified.
+fn sanitize_val(fs: &Fs, mut k: BkeyS, opts: SanitizeOpts) -> bool {
+    const BTREE_PTR:            c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_btree_ptr;
+    const BTREE_PTR_V2:         c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_btree_ptr_v2;
+    const INLINE_DATA:          c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_inline_data;
+    const INDIRECT_INLINE_DATA: c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_indirect_inline_data;
+    const DIRENT:               c::bch_bkey_type = c::bch_bkey_type::KEY_TYPE_dirent;
+
+    match k.key_type() {
+        BTREE_PTR | BTREE_PTR_V2 if opts.single_replica => derep(fs, k),
+        INLINE_DATA if opts.sanitize => {
+            k.val_bytes_mut().fill(0);
+            true
         }
-        true
-    } else {
-        false
+        INDIRECT_INLINE_DATA if opts.sanitize => {
+            let val = k.val_bytes_mut();
+            if val.len() > 8 {
+                val[8..].fill(0);
+            }
+            true
+        }
+        DIRENT if opts.sanitize && opts.sanitize_filenames => {
+            let val = k.val_bytes_mut();
+            if val.len() > 9 {
+                val[9..].fill(b'X');
+            }
+            true
+        }
+        _ => false,
     }
 }
 
 /// Walk unpacked bkey_i entries in a jset_entry data region and sanitize.
 fn sanitize_journal_keys(
+    fs: &Fs,
     buf: &mut [u8],
     start: usize,
     end: usize,
-    sanitize_filenames: bool,
+    opts: SanitizeOpts,
 ) -> bool {
     let mut modified = false;
     let mut pos = start;
@@ -221,11 +309,9 @@ fn sanitize_journal_keys(
             break;
         }
 
-        let key_type = buf[pos + 2];
-        let val_off = BKEY_U64S * 8;
-        if val_off < key_bytes
-            && sanitize_val(&mut buf[pos + val_off..pos + key_bytes],
-                            key_type, sanitize_filenames) {
+        // Journal keys are always unpacked, so buf[pos..] is a bkey_i.
+        let ki = unsafe { &mut *(buf.as_mut_ptr().add(pos) as *mut c::bkey_i) };
+        if sanitize_val(fs, BkeyS::from(ki), opts) {
             modified = true;
         }
 
@@ -237,7 +323,8 @@ fn sanitize_journal_keys(
 
 /// Sanitize a journal buffer in-place: walk jset entries, handle encryption,
 /// zero inline data, optionally scramble filenames, clear checksums.
-fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bool) {
+fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
+    let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let jset_magic = jset_magic(unsafe { &*(*fs_raw).disk_sb.sb });
     let block_bits = unsafe { (*fs_raw).block_bits } as usize;
 
@@ -262,7 +349,8 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: 
                 return;
             }
 
-            let ret = unsafe { rust_jset_decrypt(fs_raw, buf.as_mut_ptr().add(pos)) };
+            let j = unsafe { buf.as_mut_ptr().add(pos) } as *mut c::jset;
+            let ret = jset_encrypt(&fs, j, csum_type, vstruct_bytes);
             if ret != 0 {
                 eprintln!("error decrypting journal entry: {}", ret);
                 return;
@@ -284,8 +372,8 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: 
             // jset_entry_is_key: btree_keys(0), btree_root(1), write_buffer_keys(11)
             let entry_type = buf[entry_pos + 4];
             if (entry_type == 0 || entry_type == 1 || entry_type == 11)
-                && sanitize_journal_keys(buf, entry_pos + JSET_ENTRY_HDR,
-                                         entry_end, sanitize_filenames) {
+                && sanitize_journal_keys(&fs, buf, entry_pos + JSET_ENTRY_HDR,
+                                         entry_end, opts) {
                 modified = true;
             }
 
@@ -293,7 +381,13 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: 
         }
 
         if modified {
-            clear_csum(buf, pos, pos + 36);
+            // Re-encrypt (symmetric) if encrypted, then recompute the csum so
+            // the entry stays checksum-valid instead of csum-cleared.
+            let j = unsafe { buf.as_mut_ptr().add(pos) } as *mut c::jset;
+            if csum_type_is_encryption(csum_type) {
+                jset_encrypt(&fs, j, csum_type, vstruct_bytes);
+            }
+            jset_csum_set(&fs, j, csum_type, vstruct_bytes);
         }
 
         pos += vstruct_aligned_bytes(vstruct_bytes, block_bits)
@@ -303,9 +397,16 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: 
 
 /// Sanitize a btree node buffer in-place: walk bset entries, handle
 /// encryption, zero inline data, optionally scramble filenames.
-fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bool) {
+fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
+    let fs = unsafe { Fs::borrow_raw(fs_raw) };
     let bset_magic = bset_magic(unsafe { &*(*fs_raw).disk_sb.sb });
     let block_bits = unsafe { (*fs_raw).block_bits } as usize;
+
+    // The node's packed-key format lives in the btree_node header at the start
+    // of the buffer; packed keys are unpacked against it.
+    let format_ptr = unsafe {
+        buf.as_ptr().add(std::mem::offset_of!(c::btree_node, format)) as *const c::bkey_format
+    };
 
     let mut first = true;
     let mut seq: u64 = 0;
@@ -358,8 +459,8 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bo
             }
 
             let ret = unsafe {
-                rust_bset_decrypt(fs_raw, buf.as_mut_ptr().add(bset_off),
-                                  bset_byte_offset as u32)
+                c::bset_encrypt(fs.raw, buf.as_mut_ptr().add(bset_off) as *mut c::bset,
+                                bset_byte_offset as u32)
             };
             if ret != 0 {
                 eprintln!("error decrypting btree node: {}", ret);
@@ -384,7 +485,6 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bo
                 break;
             }
 
-            let key_type = buf[key_pos + 2];
             let key_format = buf[key_pos + 1] & 0x7f;
             // KEY_FORMAT_LOCAL_BTREE (0) uses the btree node's packed format;
             // anything else (KEY_FORMAT_CURRENT = 1) is the canonical
@@ -392,19 +492,48 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], sanitize_filenames: bo
             let key_hdr_u64s = if key_format == 0 { format_key_u64s } else { BKEY_U64S };
             let val_off = key_hdr_u64s * 8;
 
-            if val_off < key_bytes
-                && sanitize_val(&mut buf[key_pos + val_off..key_pos + key_bytes],
-                                key_type, sanitize_filenames) {
-                modified = true;
+            if val_off < key_bytes {
+                let vs = key_pos + val_off;
+
+                // An unpacked key (KEY_FORMAT_CURRENT) is a bkey_i in place; a
+                // packed key is unpacked into a local bkey using the node format
+                // only -- no struct btree, so none of btree_node_read_done's
+                // repair runs. Either way the value is pointed at in place, so
+                // sanitize_val's edits land on the buffer.
+                let mut u: c::bkey;
+                let k = if key_format == 0 {
+                    u = unsafe { std::mem::zeroed() };
+                    unsafe {
+                        c::__bch2_bkey_unpack_key(
+                            format_ptr,
+                            &mut u,
+                            buf.as_ptr().add(key_pos) as *const c::bkey_packed,
+                        );
+                    }
+                    let v = unsafe { &mut *(buf.as_mut_ptr().add(vs) as *mut c::bch_val) };
+                    BkeyS { k: &mut u, v }
+                } else {
+                    let ki = unsafe { &mut *(buf.as_mut_ptr().add(key_pos) as *mut c::bkey_i) };
+                    BkeyS::from(ki)
+                };
+
+                if sanitize_val(&fs, k, opts) {
+                    modified = true;
+                }
             }
 
             key_pos += key_bytes;
         }
 
         if modified {
-            // Zero csum at start of btree_node or btree_node_entry
-            // Clear BSET_CSUM_TYPE in bset.flags
-            clear_csum(buf, pos, bset_off + 16);
+            // Re-encrypt (symmetric) if encrypted, then recompute the bset csum
+            // over the btree_node (first bset) or btree_node_entry.
+            let bset = unsafe { buf.as_mut_ptr().add(bset_off) } as *mut c::bset;
+            if csum_type_is_encryption(csum_type) {
+                unsafe { c::bset_encrypt(fs.raw, bset, bset_byte_offset as u32); }
+            }
+            let node = unsafe { buf.as_mut_ptr().add(pos) };
+            bset_csum_set(&fs, node, bset, bset_byte_offset as u32, csum_type, vstruct_bytes);
         }
 
         first = false;
@@ -433,12 +562,27 @@ impl DumpDev {
     }
 }
 
-fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_size: u64) {
+fn dump_node(fs: &Fs, devs: &mut [DumpDev], k: btree::BkeySC<'_>, btree_node_size: u64,
+             single_replica: bool) {
     let val = k.v();
-    for ptr in bkey_ptrs_sc(&val) {
-        let dev = ptr.dev() as usize;
-        if dev < devs.len() && fs.dev_exists(dev as u32) {
-            range_add(&mut devs[dev].btree, ptr.offset() << 9, btree_node_size);
+
+    // Capture the length by value so the filter closure doesn't borrow `devs`,
+    // which we mutate via range_add below.
+    let ndevs = devs.len();
+    let exists = |p: &&c::bch_extent_ptr| {
+        let dev = p.dev() as usize;
+        dev < ndevs && fs.dev_exists(dev as u32)
+    };
+
+    if single_replica {
+        // Dump only the replica on the lowest device index; the other ptrs are
+        // rewritten to an invalid device in the btree write path.
+        if let Some(ptr) = bkey_ptrs_sc(&val).filter(exists).min_by_key(|p| p.dev()) {
+            range_add(&mut devs[ptr.dev() as usize].btree, ptr.offset() << 9, btree_node_size);
+        }
+    } else {
+        for ptr in bkey_ptrs_sc(&val).filter(exists) {
+            range_add(&mut devs[ptr.dev() as usize].btree, ptr.offset() << 9, btree_node_size);
         }
     }
 }
@@ -475,8 +619,8 @@ fn write_sanitized_ranges(
     fs_raw: *mut c::bch_fs,
     ranges: &mut Ranges,
     bucket_bytes: u64,
-    sanitize_filenames: bool,
-    sanitize_fn: fn(*mut c::bch_fs, &mut [u8], bool),
+    opts: SanitizeOpts,
+    sanitize_fn: fn(*mut c::bch_fs, &mut [u8], SanitizeOpts),
 ) -> Result<()> {
     ranges_sort(ranges);
     let mut buf = vec![0u8; bucket_bytes as usize];
@@ -486,7 +630,7 @@ fn write_sanitized_ranges(
         assert!(len <= bucket_bytes as usize);
 
         qcow2::pread_exact(img.infd(), &mut buf[..len], r.start)?;
-        sanitize_fn(fs_raw, &mut buf[..len], sanitize_filenames);
+        sanitize_fn(fs_raw, &mut buf[..len], opts);
         img.write_buf(&buf[..len], r.start)?;
     }
 
@@ -501,6 +645,7 @@ fn write_dev_image(
     force: bool,
     sanitize: bool,
     sanitize_filenames: bool,
+    single_replica: bool,
     block_size: u32,
     d: &mut DumpDev,
 ) -> Result<()> {
@@ -520,19 +665,27 @@ fn write_dev_image(
 
     img.write_ranges(&mut d.sb)?;
 
-    if !sanitize {
-        img.write_ranges(&mut d.journal)?;
-        img.write_ranges(&mut d.btree)?;
+    let opts = SanitizeOpts { sanitize, sanitize_filenames, single_replica };
+    let bucket_bytes = (ca.mi.bucket_size as u64) << 9;
+
+    // The journal carries the btree_root pointers, so it goes through the
+    // modify path for --single-replica (to de-replicate them) as well as
+    // --sanitize.
+    if sanitize || single_replica {
+        write_sanitized_ranges(
+            &mut img, fs.raw, &mut d.journal, bucket_bytes, opts, sanitize_journal,
+        )?;
     } else {
-        let bucket_bytes = (ca.mi.bucket_size as u64) << 9;
+        img.write_ranges(&mut d.journal)?;
+    }
+
+    // Btree nodes go through the modify path for --sanitize or --single-replica.
+    if sanitize || single_replica {
         write_sanitized_ranges(
-            &mut img, fs.raw, &mut d.journal, bucket_bytes,
-            sanitize_filenames, sanitize_journal,
+            &mut img, fs.raw, &mut d.btree, bucket_bytes, opts, sanitize_btree,
         )?;
-        write_sanitized_ranges(
-            &mut img, fs.raw, &mut d.btree, bucket_bytes,
-            sanitize_filenames, sanitize_btree,
-        )?;
+    } else {
+        img.write_ranges(&mut d.btree)?;
     }
 
     img.finish()
@@ -555,7 +708,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     let mut nr_online = 0u32;
     let mut bucket_err: Option<String> = None;
     let _ = fs.for_each_online_member(|ca| {
-        if sanitize && (ca.mi.bucket_size as u32) % (block_size >> 9) != 0 {
+        if (sanitize || cli.single_replica) && (ca.mi.bucket_size as u32) % (block_size >> 9) != 0 {
             // bch_dev.name is a [c_char; 32] array
             let ca_name_bytes = &ca.name;
             let len = ca_name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
@@ -564,7 +717,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
                 std::slice::from_raw_parts(ca_name_bytes[..len].as_ptr() as *const u8, len)
             };
             let name = std::str::from_utf8(ca_name_bytes_u8).unwrap_or("?");
-            bucket_err = Some(format!("{} has unaligned buckets, cannot sanitize", name));
+            bucket_err = Some(format!("{} has unaligned buckets, cannot sanitize or de-replicate", name));
             return ControlFlow::Break(());
         }
 
@@ -596,7 +749,8 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
             );
 
             node_iter.for_each(&trans, |b| {
-                dump_node(fs, &mut devs, btree::BkeySC::from(&b.key), btree_node_size);
+                dump_node(fs, &mut devs, btree::BkeySC::from(&b.key), btree_node_size,
+                          cli.single_replica);
                 ControlFlow::Continue(())
             }).map_err(|e| anyhow!("error walking btree {}: {}",
                 btree::types::btree_id_str(id), e))?;
@@ -614,7 +768,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
         };
 
         match write_dev_image(fs, ca, &path, cli.force, sanitize, sanitize_filenames,
-                              block_size, &mut devs[dev_idx as usize]) {
+                              cli.single_replica, block_size, &mut devs[dev_idx as usize]) {
             Ok(()) => ControlFlow::Continue(()),
             Err(e) => {
                 write_err = Some(e);
