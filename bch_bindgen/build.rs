@@ -375,8 +375,17 @@ impl bindgen::callbacks::ParseCallbacks for Fix753 {
 fn watch_dir(dir: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
+        // file_type() reads the dirent directly - unlike Path::is_dir() it does
+        // NOT follow symlinks. This crate only walks bounded source dirs so it
+        // wasn't the one that stalled, but the shared shape follows the same
+        // trap: a symlink (e.g. ktest-out/kernel) into a large tree would
+        // stat-storm over virtiofs. Keep both watchers symlink-safe.
+        let Ok(file_type) = entry.file_type() else { continue };
         let path = entry.path();
-        if path.is_dir() {
+        if file_type.is_dir() {
+            if matches!(entry.file_name().to_str(), Some("target" | "ktest-out" | ".git")) {
+                continue;
+            }
             watch_dir(&path.to_string_lossy());
         } else if path.extension().is_some_and(|ext| ext == "h" || ext == "c") {
             println!("cargo:rerun-if-changed={}", path.display());
