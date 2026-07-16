@@ -1106,6 +1106,19 @@ static inline enum btree_node_type btree_node_type(struct btree *b)
 
 const char *bch2_btree_node_type_str(enum btree_node_type);
 
+/*
+ * Mask of btree ids that have snapshots; defined here, ahead of the other
+ * btree-id masks below, because the trigger masks build on it: every snapshot
+ * btree needs trans triggers so that bch2_trigger_snapshot_nr_keys() runs for
+ * its keys. (<< 1 maps btree_id space to btree_node_type space, where a leaf's
+ * node type is id + 1.)
+ */
+static const u64 btree_has_snapshots_mask = 0
+#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_snapshots)) << nr)
+BCH_BTREE_IDS()
+#undef x
+;
+
 #define BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS		\
 	(BIT_ULL(BKEY_TYPE_extents)|			\
 	 BIT_ULL(BKEY_TYPE_alloc)|			\
@@ -1114,7 +1127,8 @@ const char *bch2_btree_node_type_str(enum btree_node_type);
 	 BIT_ULL(BKEY_TYPE_reflink)|			\
 	 BIT_ULL(BKEY_TYPE_subvolumes)|			\
 	 BIT_ULL(BKEY_TYPE_snapshots)|			\
-	 BIT_ULL(BKEY_TYPE_btree))
+	 BIT_ULL(BKEY_TYPE_btree)|			\
+	 (btree_has_snapshots_mask << 1))
 
 #define BTREE_NODE_TYPE_HAS_ATOMIC_TRIGGERS		\
 	(BIT_ULL(BKEY_TYPE_alloc)|			\
@@ -1160,12 +1174,6 @@ static inline bool btree_node_type_is_extents(enum btree_node_type type)
 {
 	return type != BKEY_TYPE_btree && btree_id_is_extents(type - 1);
 }
-
-static const u64 btree_has_snapshots_mask = 0
-#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_snapshots)) << nr)
-BCH_BTREE_IDS()
-#undef x
-;
 
 static inline bool btree_type_has_snapshots(enum btree_id btree)
 {

@@ -562,8 +562,19 @@ static int __trigger_extent(struct btree_trans *trans,
 	if (acc_replicas_key.replicas.nr_devs)
 		try(bch2_disk_accounting_mod(trans, &acc_replicas_key, replicas_sectors, 1, gc));
 
-	if (acc_replicas_key.replicas.nr_devs && !level && k.k->p.snapshot)
-		try(bch2_disk_accounting_mod2(trans, gc, replicas_sectors, snapshot, k.k->p.snapshot));
+	/*
+	 * Per-snapshot accounting: sectors (as above) plus the key count.
+	 * KEY_TYPE_extent self-accounts its key here rather than through the
+	 * generic bch2_trigger_snapshot_nr_keys() hook, folding it into the
+	 * sectors emission it already does - one accounting delta on the data
+	 * hot path instead of two. The gate is looser than the sectors one
+	 * (no nr_devs): a pointerless extent still counts as a key.
+	 */
+	if (!level && k.k->p.snapshot) {
+		s64 v[2] = { replicas_sectors[0], insert ? 1 : -1 };
+
+		try(bch2_disk_accounting_mod2(trans, gc, v, snapshot, k.k->p.snapshot));
+	}
 
 	if (cur_compression_type) {
 		if (!insert)
@@ -648,16 +659,19 @@ static int __trigger_reservation(struct btree_trans *trans,
 				persistent_reserved, nr_replicas));
 
 		/*
-		 * Reservations reserve nr_replicas copies of the space but carry
-		 * no pointers, so they never fed the per-snapshot disk-usage
-		 * counter (summed from extent pointers). Count the reserved
-		 * physical sectors so a snapshot holding only reservations isn't
-		 * seen as empty by the snapshot-deletion no-data check.
+		 * Per-snapshot accounting. Reservations reserve nr_replicas
+		 * copies of the space but carry no pointers, so they never fed
+		 * the per-snapshot sectors counter (summed from extent pointers);
+		 * count the reserved physical sectors here. Like KEY_TYPE_extent,
+		 * reservations self-account their key count rather than going
+		 * through bch2_trigger_snapshot_nr_keys(), folding it into this
+		 * one emission.
 		 */
 		if (!level && k.k->p.snapshot) {
-			s64 snapshot_sectors[1] = { sectors[0] * (s64) nr_replicas };
+			s64 v[2] = { sectors[0] * (s64) nr_replicas,
+				     (flags & BTREE_TRIGGER_overwrite) ? -1 : 1 };
 
-			try(bch2_disk_accounting_mod2(trans, gc, snapshot_sectors,
+			try(bch2_disk_accounting_mod2(trans, gc, v,
 					snapshot, k.k->p.snapshot));
 		}
 	}
@@ -669,6 +683,46 @@ int bch2_trigger_reservation(struct btree_trans *trans, struct btree_trigger_op 
 {
 	return trigger_run_overwrite_then_insert(__trigger_reservation, trans,
 						 op.btree, op.level, op.old, op.new, op.flags);
+}
+
+/*
+ * Generic per-snapshot key-count accounting.
+ *
+ * Runs from the trigger dispatch (run_one_trans_trigger, run_one_mem_trigger,
+ * bch2_gc_mark_key) for every leaf key in a snapshot btree, counting keys per
+ * snapshot id so snapshot deletion can verify a node is empty before splicing
+ * it out. Whiteouts (bkey_extent_whiteout) don't count: they're exactly the
+ * set iteration treats as absent, so the deletion scan never visits them.
+ * KEY_TYPE_extent and KEY_TYPE_reservation self-account their keys in their
+ * own triggers - folded into the sectors emission they already do - so they
+ * are excluded here to avoid a redundant accounting delta on the hot path.
+ *
+ * The delta is net: count(new) - count(old). The trans dispatch substitutes a
+ * deleted key on whichever side isn't running, so net yields the correct
+ * per-side delta there; the gc/mem dispatch runs it once with the real old and
+ * new. Skipped in the atomic phase, which only applies already-staged deltas.
+ */
+static bool snapshot_key_counted(const struct bkey *k)
+{
+	return k->p.snapshot &&
+		!bkey_extent_whiteout(k) &&
+		k->type != KEY_TYPE_extent &&
+		k->type != KEY_TYPE_reservation;
+}
+
+int bch2_trigger_snapshot_nr_keys(struct btree_trans *trans, struct btree_trigger_op op)
+{
+	if (op.level || (op.flags & BTREE_TRIGGER_atomic))
+		return 0;
+
+	s64 delta = (s64) snapshot_key_counted(op.new.k) -
+		    (s64) snapshot_key_counted(op.old.k);
+	if (!delta)
+		return 0;
+
+	s64 v[2] = { 0, delta };
+	return bch2_disk_accounting_mod2(trans, op.flags & BTREE_TRIGGER_gc, v,
+					 snapshot, op.new.k->p.snapshot);
 }
 
 /* Mark superblocks: */

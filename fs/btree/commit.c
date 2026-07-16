@@ -521,6 +521,16 @@ static int run_one_mem_trigger(struct btree_trans *trans,
 	const struct bkey_ops *old_ops = bch2_bkey_type_ops(old_k.type);
 	const struct bkey_ops *new_ops = bch2_bkey_type_ops(i->k->k.type);
 
+	/*
+	 * Snapshot key accounting is a net old->new delta, so run it once here
+	 * with the real old and new keys, before the per-type dispatch below
+	 * rewrites op for its insert/overwrite split.
+	 */
+	if (btree_type_has_snapshots(op.btree)) {
+		op.flags = flags;
+		try(bch2_trigger_snapshot_nr_keys(trans, op));
+	}
+
 	if (old_ops->trigger &&
 	    old_ops->trigger == new_ops->trigger) {
 		op.flags = flags|BTREE_TRIGGER_insert|BTREE_TRIGGER_overwrite;
@@ -587,7 +597,11 @@ static int run_one_trans_trigger(struct btree_trans *trans, struct btree_insert_
 		old_ops = new_ops;
 	}
 
-	return old_ops->trigger ? old_ops->trigger(trans, op) : 0;
+	try(old_ops->trigger ? old_ops->trigger(trans, op) : 0);
+
+	return btree_type_has_snapshots(op.btree)
+		? bch2_trigger_snapshot_nr_keys(trans, op)
+		: 0;
 }
 
 static int bch2_trans_commit_run_triggers(struct btree_trans *trans)

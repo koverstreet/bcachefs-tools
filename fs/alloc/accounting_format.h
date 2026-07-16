@@ -108,7 +108,7 @@ static inline bool data_type_is_hidden(enum bch_data_type type)
 	x(replicas,		2,	1)	\
 	x(dev_data_type,	3,	3)	\
 	x(compression,		4,	3)	\
-	x(snapshot,		5,	1)	\
+	x(snapshot,		5,	2)	\
 	x(btree,		6,	3)	\
 	x(rebalance_work,	7,	1)	\
 	x(inum,			8,	3)	\
@@ -179,8 +179,14 @@ typedef struct {
 } bch_acct_compression;
 
 /*
- * On disk usage by snapshot id; counts same values as replicas counter, but
- * aggregated differently
+ * Per-snapshot-id accounting, two counters:
+ * [
+ *   on-disk sectors: same values as the replicas counter, aggregated by
+ *     snapshot id (reservations included)
+ *   number of keys stamped with this snapshot id, excluding whiteouts:
+ *     snapshot deletion checks this is zero before splicing a node out of
+ *     the tree, to catch keys that would otherwise be stranded
+ * ]
  */
 typedef struct {
 	__u32			id;
