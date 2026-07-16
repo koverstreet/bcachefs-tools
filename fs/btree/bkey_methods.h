@@ -71,14 +71,19 @@ static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct b
 
 bool bch2_bkey_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 
+/* Defined in alloc/buckets.c; forward-declared here to avoid an include cycle. */
+int bch2_trigger_snapshot_nr_keys(struct btree_trans *, struct btree_trigger_op);
+
 static inline int bch2_key_trigger(struct btree_trans *trans,
 				   struct btree_trigger_op op)
 {
 	const struct bkey_ops *ops = bch2_bkey_type_ops(op.old.k->type ?: op.new.k->type);
 
-	return ops->trigger
+	int ret = ops->trigger
 		? ops->trigger(trans, op)
 		: 0;
+
+	return ret ?: bch2_trigger_snapshot_nr_keys(trans, op);
 }
 
 static inline int bch2_key_trigger_old(struct btree_trans *trans,

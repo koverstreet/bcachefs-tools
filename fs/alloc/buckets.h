@@ -339,6 +339,7 @@ static inline int bch2_bucket_ref_update(struct btree_trans *trans, struct bch_d
 
 int bch2_trigger_extent(struct btree_trans *, struct btree_trigger_op);
 int bch2_trigger_reservation(struct btree_trans *, struct btree_trigger_op);
+int bch2_trigger_snapshot_nr_keys(struct btree_trans *, struct btree_trigger_op);
 
 #define trigger_run_overwrite_then_insert(_fn, _trans, _btree_id, _level, _old, _new, _flags)\
 ({												\
