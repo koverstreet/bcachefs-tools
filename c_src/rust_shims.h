@@ -43,15 +43,6 @@ struct rust_journal_entries {
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c);
 
 /*
- * Dump sanitize shims — wraps crypto operations for encrypted fs dumps.
- */
-struct jset;
-struct bset;
-
-int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
-int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
-
-/*
  * Bitmap shim — set_bit() is atomic (locked bitops in the kernel),
  * can't be inlined through bindgen.
  */
