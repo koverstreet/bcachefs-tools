@@ -150,12 +150,11 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
 
 /*
  * Sanity check before a destructive snapshot-node transition (emptying or
- * deleting a node): the per-snapshot disk accounting counter must be zero.
+ * deleting a node): the per-snapshot disk accounting counters must be zero.
  *
- * That counter tracks on-disk data sectors (the same values as the replicas
- * counter, aggregated by snapshot id). A nonzero count means the deletion is
- * about to drop data still accounted to this node, and one of two things is
- * wrong:
+ * The deletion scan should already have migrated or removed every key stamped
+ * with this snapshot id; this verifies it did. A nonzero count means a key is
+ * still accounted to the node, and one of two things is wrong:
  *
  *  - the accounting is stale/incorrect, or
  *  - the inodes btree is missing an entry: the deletion scan relies on "an
@@ -164,12 +163,13 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
  *
  * Refuse the transition and schedule check_allocations (recompute accounting)
  * and check_inodes (revalidate the inode<->snapshot mapping) to resolve which,
- * rather than dropping the data.
+ * rather than dropping the keys.
  *
- * Note this is a data (sectors) check, not a keys check: metadata-only keys
- * carry no sectors and don't show up here - those are caught by the relevant
- * check_dirents/check_xattrs/check_inodes passes. This guards the catastrophic
- * (data) case at the cheapest possible cost (one in-memory read).
+ * The key count catches metadata-only stranding (dirents, xattrs, empty
+ * inodes) that the sectors counter can't see. It's only trusted once
+ * check_allocations has rebuilt it (scheduled by the snapshot_nr_keys
+ * upgrade); before that version we fall back to the sectors-only check. Either
+ * way this is one in-memory read.
  */
 static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 {
@@ -180,15 +180,19 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 	acc.type = BCH_DISK_ACCOUNTING_snapshot;
 	acc.snapshot.id = id;
 
-	u64 sectors = 0;
-	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), &sectors, 1);
+	u64 v[2] = {};
+	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
 
-	if (likely(!sectors))
+	u64 sectors = v[0];
+	u64 nr_keys = c->sb.version_upgrade_complete >= bcachefs_metadata_version_snapshot_nr_keys
+		? v[1] : 0;
+
+	if (likely(!sectors && !nr_keys))
 		return 0;
 
 	CLASS(printbuf, buf)();
-	prt_printf(&buf, "snapshot node %u still has %llu sectors of data accounted to it - refusing to delete/empty, to prevent data loss; scheduling repair:\n",
-		   id, sectors);
+	prt_printf(&buf, "snapshot node %u still has %llu sectors / %llu keys accounted to it - refusing to delete/empty, to prevent data loss; scheduling repair:\n",
+		   id, sectors, nr_keys);
 
 	int ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_allocations);
 	ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_inodes) ?: ret;
