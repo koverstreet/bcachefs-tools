@@ -10,6 +10,7 @@ URIs: https://apt.bcachefs.org/unstable/
 # Or replace unstable with your distro's release name
 Suites: bcachefs-tools-release
 Components: main
+Architectures: $(dpkg --print-architecture)
 Signed-By: /etc/apt/keyrings/apt.bcachefs.org.asc
 EOF
 sudo apt update
