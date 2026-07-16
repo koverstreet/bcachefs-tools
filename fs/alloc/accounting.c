@@ -286,7 +286,8 @@ __cold void bch2_accounting_key_to_text(struct printbuf *out,
 		bch2_prt_compression_type(out, k->compression.type);
 		break;
 	case BCH_DISK_ACCOUNTING_snapshot:
-		prt_printf(out, "id=%u", k->snapshot.id);
+		prt_printf(out, "id=%u btree=", k->snapshot.id);
+		bch2_btree_id_to_text(out, k->snapshot.btree);
 		break;
 	case BCH_DISK_ACCOUNTING_btree:
 		prt_str(out, "btree=");
