@@ -238,7 +238,7 @@ enum bch_fsck_flags {
 	x(snapshot_bad_skiplist,				185,	FSCK_AUTOFIX)	\
 	x(subvol_pos_bad,					186,	0)		\
 	x(subvol_pad_nonzero,					372,	0)		\
-	x(subvol_state_bad,					374,	0)		\
+	x(subvol_state_bad,					374,	FSCK_AUTOFIX)	\
 	x(subvol_state_bitflip,					380,	FSCK_AUTOFIX)	\
 	x(subvol_snapshot_not_leaf,				375,	0)		\
 	x(subvol_not_master_and_not_snapshot,			187,	FSCK_AUTOFIX)	\

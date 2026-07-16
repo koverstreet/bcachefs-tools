@@ -689,14 +689,25 @@ static int check_snapshot(struct btree_trans *trans,
 	bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(k));
 
 	/*
-	 * On upgrade the flag bits are authoritative - an old kernel may have
-	 * written them while unable to maintain the state field:
+	 * A zero state field means the key predates the state field, or was
+	 * wiped: the legacy flag bits are then authoritative (old kernels
+	 * dual-wrote them). Derive the state from the bits whenever it's unset,
+	 * regardless of upgrade status - so a fs already on the new version but
+	 * carrying pre-state keys (never migrated, because no upgrade transition
+	 * ran) heals too. Mid-upgrade this is the expected migration and silent;
+	 * post-upgrade an unset state is unexpected, so surface it (autofix).
 	 */
-	if (c->sb.version_upgrade_complete < bcachefs_metadata_version_per_dev_fragmentation_lru &&
-	    bch2_snapshot_state(&s) != bch2_snapshot_state_from_flags(&s)) {
-		u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-		u->v.state = cpu_to_le32(bch2_snapshot_state_from_flags(&s));
-		s = u->v;
+	if (!bch2_snapshot_state(&s)) {
+		bool upgrading = c->sb.version_upgrade_complete <
+			bcachefs_metadata_version_per_dev_fragmentation_lru;
+		if (upgrading ||
+		    ret_fsck_err(trans, snapshot_state_bad,
+				 "snapshot state unset, recovering from legacy flags:\n%s",
+				 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			u->v.state = cpu_to_le32(bch2_snapshot_state_from_flags(&s));
+			s = u->v;
+		}
 	}
 
 	/*
