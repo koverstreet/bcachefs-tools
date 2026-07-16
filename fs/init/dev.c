@@ -2013,11 +2013,36 @@ static int bch2_dev_shrink_clear_target(struct bch_fs *c, struct bch_dev *ca,
 		try(bch2_dev_resize_set_target(c, ca, 0));
 	}
 
+	atomic64_set(&ca->shrinking_tail_free, 0);
+
 	/* allocations are now no longer blocked after the cutoff, so there may now be more usable space  */
 	int ret = bch2_reconcile_pending_wakeup(c);
 	if (ret)
 		bch_err_fn(c, ret);
 
+	return 0;
+}
+
+static int bch2_dev_count_tail_free(struct bch_fs *c, struct bch_dev *ca,
+				     u64 new_nbuckets)
+{
+	struct bpos start = POS(ca->dev_idx, new_nbuckets);
+	struct bpos end   = POS(ca->dev_idx, ca->mi.nbuckets);
+	u64 count = 0;
+
+	CLASS(btree_trans, trans)(c);
+	try(for_each_btree_key_max(trans, iter, BTREE_ID_freespace,
+				     start, end, 0, k, ({
+		u64 first = max_t(u64, new_nbuckets,
+				  bkey_start_offset(k.k));
+		u64 last  = min_t(u64, ca->mi.nbuckets,
+				  k.k->p.offset);
+		if (last > first)
+			count += last - first;
+		0;
+	})));
+
+	atomic64_set(&ca->shrinking_tail_free, count);
 	return 0;
 }
 
@@ -2117,6 +2142,7 @@ static int bch2_dev_shrink_finalize(struct bch_fs *c, struct bch_dev *ca,
 		}
 
 		bch2_recalc_capacity(c);
+		atomic64_set(&ca->shrinking_tail_free, 0);
 	}
 
 	return 0;
@@ -2178,6 +2204,9 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 	bool scan_device = true;
 	unsigned stalled_kicks = 0;
 
+	/* initialize, will be updated in the loop */
+	try(bch2_dev_count_tail_free(c, ca, new_nbuckets));
+
 	for (unsigned pass = 0; ; pass++) {
 		bool kick_complete;
 		struct shrink_tail_head head;
@@ -2204,6 +2233,9 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 
 		try(bch2_dev_shrink_wait_reconcile(ca, new_nbuckets, seq, kick,
 						     &head, &kick_complete, err));
+
+		/* Free buckets may have been changed during reconcile; refresh the count */
+		try(bch2_dev_count_tail_free(c, ca, new_nbuckets));
 
 		try(tail_head_snapshot(c, ca, new_nbuckets, &head));
 		if (shrink_tail_head_empty(&head))

@@ -575,6 +575,8 @@ struct bch_dev {
 	unsigned		nr_partial_buckets;
 	unsigned		nr_btree_reserve;
 
+	atomic64_t		shrinking_tail_free;
+
 	struct work_struct	invalidate_work;
 	spinlock_t		resize_lock;
 	u64			resize_seq;

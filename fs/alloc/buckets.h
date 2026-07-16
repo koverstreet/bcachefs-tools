@@ -246,7 +246,8 @@ static inline struct bch_dev_usage_full bch2_dev_usage_full_read(struct bch_dev 
 
 void bch2_dev_usage_to_text(struct printbuf *, struct bch_dev *, struct bch_dev_usage_full *);
 
-static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum bch_watermark watermark)
+static inline u64 __bch2_dev_buckets_reserved(u64 nbuckets, unsigned nr_btree_reserve,
+						      enum bch_watermark watermark)
 {
 	s64 reserved = 0;
 
@@ -254,16 +255,16 @@ static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum bch_waterma
 	case BCH_WATERMARK_NR:
 		BUG();
 	case BCH_WATERMARK_stripe:
-		reserved += ca->mi.nbuckets >> 6;
+		reserved += nbuckets >> 6;
 		fallthrough;
 	case BCH_WATERMARK_normal:
-		reserved += ca->mi.nbuckets >> 6;
+		reserved += nbuckets >> 6;
 		fallthrough;
 	case BCH_WATERMARK_copygc:
-		reserved += ca->nr_btree_reserve;
+		reserved += nr_btree_reserve;
 		fallthrough;
 	case BCH_WATERMARK_btree:
-		reserved += ca->nr_btree_reserve;
+		reserved += nr_btree_reserve;
 		fallthrough;
 	case BCH_WATERMARK_btree_copygc:
 	case BCH_WATERMARK_reclaim:
@@ -274,14 +275,29 @@ static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum bch_waterma
 	return reserved;
 }
 
+static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum bch_watermark watermark)
+{
+	return __bch2_dev_buckets_reserved(ca->mi.nbuckets, ca->nr_btree_reserve, watermark);
+}
+
 static inline u64 __dev_buckets_free(struct bch_dev *ca,
 				     struct bch_dev_usage usage,
 				     enum bch_watermark watermark)
 {
+	u64 free = usage.buckets[BCH_DATA_free];
+	u64 nbuckets = READ_ONCE(ca->mi.nbuckets);
+
+	/* buckets in shrink tail are not allocatable and thus shouldn't count as free */
+	u64 tail_free = atomic64_read(&ca->shrinking_tail_free);
+	if (unlikely(tail_free))
+		free -= min(free, tail_free);
+	if (unlikely(bch2_dev_is_shrinking(ca)))
+		nbuckets = bch2_dev_resize_target(ca);
+
 	return max_t(s64, 0,
-		     usage.buckets[BCH_DATA_free]-
+		     free -
 		     ca->nr_open_buckets -
-		     bch2_dev_buckets_reserved(ca, watermark));
+		     __bch2_dev_buckets_reserved(nbuckets, ca->nr_btree_reserve, watermark));
 }
 
 static inline u64 dev_buckets_free(struct bch_dev *ca,
