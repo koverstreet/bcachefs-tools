@@ -1,4 +1,4 @@
-use crate::btree::bkey::BkeyValSC;
+use crate::btree::bkey::{BkeyS, BkeyValSC};
 use crate::c;
 use crate::fs::Fs;
 use core::marker::PhantomData;
@@ -198,9 +198,9 @@ impl<'a> Iterator for ExtentEntryIterMut<'a> {
 
 pub(crate) fn bkey_extent_entries_mut<'a>(
     fs: &'a Fs,
-    k:  &'a mut c::bkey_i,
+    k:  &'a mut BkeyS<'_>,
 ) -> ExtentEntryIterMut<'a> {
-    let ptrs = unsafe { c::bch2_bkey_ptrs(c::bkey_i_to_s(k)) };
+    let ptrs = unsafe { c::bch2_bkey_ptrs(k.to_raw()) };
 
     ExtentEntryIterMut {
         fs,
@@ -227,9 +227,9 @@ impl<'a> Iterator for ExtentPtrIterMut<'a> {
     }
 }
 
-pub(crate) fn bkey_ptrs_mut<'a>(
+pub fn bkey_ptrs_mut<'a>(
     fs: &'a Fs,
-    k:  &'a mut c::bkey_i,
+    k:  &'a mut BkeyS<'_>,
 ) -> ExtentPtrIterMut<'a> {
     ExtentPtrIterMut { inner: bkey_extent_entries_mut(fs, k) }
 }
