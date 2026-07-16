@@ -563,17 +563,19 @@ static int __trigger_extent(struct btree_trans *trans,
 		try(bch2_disk_accounting_mod(trans, &acc_replicas_key, replicas_sectors, 1, gc));
 
 	/*
-	 * Per-snapshot accounting: sectors (as above) plus the key count.
-	 * KEY_TYPE_extent self-accounts its key here rather than through the
-	 * generic bch2_trigger_snapshot_nr_keys() hook, folding it into the
-	 * sectors emission it already does - one accounting delta on the data
-	 * hot path instead of two. The gate is looser than the sectors one
-	 * (no nr_devs): a pointerless extent still counts as a key.
+	 * Per-(snapshot, btree) accounting: [nr_keys, key_bytes, external
+	 * sectors]. KEY_TYPE_extent self-accounts its key here rather than
+	 * through the generic bch2_trigger_snapshot_nr_keys() hook, folding it
+	 * into the sectors emission it already does - one accounting delta on
+	 * the data hot path instead of two. The gate is looser than the sectors
+	 * one (no nr_devs): a pointerless extent still counts as a key.
 	 */
 	if (!level && k.k->p.snapshot) {
-		s64 v[2] = { replicas_sectors[0], insert ? 1 : -1 };
+		s64 nr = insert ? 1 : -1;
+		s64 v[3] = { nr, nr * (s64) bkey_bytes(k.k), replicas_sectors[0] };
 
-		try(bch2_disk_accounting_mod2(trans, gc, v, snapshot, k.k->p.snapshot));
+		try(bch2_disk_accounting_mod2(trans, gc, v, snapshot,
+				k.k->p.snapshot, btree_id));
 	}
 
 	if (cur_compression_type) {
@@ -668,11 +670,12 @@ static int __trigger_reservation(struct btree_trans *trans,
 		 * one emission.
 		 */
 		if (!level && k.k->p.snapshot) {
-			s64 v[2] = { sectors[0] * (s64) nr_replicas,
-				     (flags & BTREE_TRIGGER_overwrite) ? -1 : 1 };
+			s64 nr = (flags & BTREE_TRIGGER_overwrite) ? -1 : 1;
+			s64 v[3] = { nr, nr * (s64) bkey_bytes(k.k),
+				     sectors[0] * (s64) nr_replicas };
 
 			try(bch2_disk_accounting_mod2(trans, gc, v,
-					snapshot, k.k->p.snapshot));
+					snapshot, k.k->p.snapshot, btree_id));
 		}
 	}
 
@@ -689,13 +692,14 @@ int bch2_trigger_reservation(struct btree_trans *trans, struct btree_trigger_op 
  * Generic per-snapshot key-count accounting.
  *
  * Runs from the trigger dispatch (run_one_trans_trigger, run_one_mem_trigger,
- * bch2_gc_mark_key) for every leaf key in a snapshot btree, counting keys per
- * snapshot id so snapshot deletion can verify a node is empty before splicing
- * it out. Whiteouts (bkey_extent_whiteout) don't count: they're exactly the
- * set iteration treats as absent, so the deletion scan never visits them.
- * KEY_TYPE_extent and KEY_TYPE_reservation self-account their keys in their
- * own triggers - folded into the sectors emission they already do - so they
- * are excluded here to avoid a redundant accounting delta on the hot path.
+ * bch2_gc_mark_key) for every leaf key in a snapshot btree, counting keys and
+ * their bkey_bytes() per (snapshot id, btree) so snapshot deletion can verify
+ * a node is empty before splicing it out. Whiteouts (bkey_extent_whiteout)
+ * don't count: they're exactly the set iteration treats as absent, so the
+ * deletion scan never visits them. KEY_TYPE_extent and KEY_TYPE_reservation
+ * self-account in their own triggers - folded into the sectors emission they
+ * already do - so they are excluded here to avoid a redundant accounting delta
+ * on the hot path.
  *
  * The delta is net: count(new) - count(old). The trans dispatch substitutes a
  * deleted key on whichever side isn't running, so net yields the correct
@@ -715,14 +719,19 @@ int bch2_trigger_snapshot_nr_keys(struct btree_trans *trans, struct btree_trigge
 	if (op.level || (op.flags & BTREE_TRIGGER_atomic))
 		return 0;
 
-	s64 delta = (s64) snapshot_key_counted(op.new.k) -
-		    (s64) snapshot_key_counted(op.old.k);
-	if (!delta)
+	bool new_counted = snapshot_key_counted(op.new.k);
+	bool old_counted = snapshot_key_counted(op.old.k);
+
+	s64 nr = (s64) new_counted - (s64) old_counted;
+	s64 bytes = (new_counted ? (s64) bkey_bytes(op.new.k) : 0) -
+		    (old_counted ? (s64) bkey_bytes(op.old.k) : 0);
+	if (!nr && !bytes)
 		return 0;
 
-	s64 v[2] = { 0, delta };
+	/* [nr_keys, key_bytes, external_sectors]; extents/reservations emit sectors */
+	s64 v[3] = { nr, bytes, 0 };
 	return bch2_disk_accounting_mod2(trans, op.flags & BTREE_TRIGGER_gc, v,
-					 snapshot, op.new.k->p.snapshot);
+					 snapshot, op.new.k->p.snapshot, op.btree);
 }
 
 /* Mark superblocks: */

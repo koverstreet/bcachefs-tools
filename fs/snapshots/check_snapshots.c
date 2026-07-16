@@ -428,9 +428,10 @@ static u64 snapshot_data_sectors(struct bch_fs *c, u32 id)
 	acc.type = BCH_DISK_ACCOUNTING_snapshot;
 	acc.snapshot.id = id;
 
-	u64 sectors = 0;
-	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), &sectors, 1);
-	return sectors;
+	/* btree 0 (extents, the default) is the only one with external_sectors (counter 2) */
+	u64 v[3] = {};
+	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
+	return v[2];
 }
 
 static bool snapshot_parent_child_consistent(const struct bch_snapshot *s, u32 id, unsigned side,

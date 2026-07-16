@@ -167,37 +167,61 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
  *
  * The key count catches metadata-only stranding (dirents, xattrs, empty
  * inodes) that the sectors counter can't see. It's only trusted once
- * check_allocations has rebuilt it (scheduled by the snapshot_nr_keys
+ * check_allocations has rebuilt it (scheduled by the per_dev_fragmentation_lru
  * upgrade); before that version we fall back to the sectors-only check. Either
- * way this is one in-memory read.
+ * way it's an in-memory read per snapshot btree, and the per-btree breakdown
+ * points at where any stranded keys live.
  */
 static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 {
 	struct bch_fs *c = trans->c;
 
-	struct disk_accounting_pos acc;
-	memset(&acc, 0, sizeof(acc));
-	acc.type = BCH_DISK_ACCOUNTING_snapshot;
-	acc.snapshot.id = id;
-
-	u64 v[2] = {};
-	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
-
-	u64 sectors = v[0];
-	u64 nr_keys = c->sb.version_upgrade_complete >= bcachefs_metadata_version_per_dev_fragmentation_lru
-		? v[1] : 0;
-
-	if (likely(!sectors && !nr_keys))
-		return 0;
+	bool trust_keys = c->sb.version_upgrade_complete >=
+		bcachefs_metadata_version_per_dev_fragmentation_lru;
 
 	CLASS(printbuf, buf)();
-	prt_printf(&buf, "snapshot node %u still has %llu sectors / %llu keys accounted to it - refusing to delete/empty, to prevent data loss; scheduling repair:\n",
-		   id, sectors, nr_keys);
+	u64 total_keys = 0, total_sectors = 0;
 
-	int ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_allocations);
-	ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_inodes) ?: ret;
+	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
+		if (!btree_type_has_snapshots(btree))
+			continue;
 
-	bch_err(c, "%s", buf.buf);
+		struct disk_accounting_pos acc;
+		memset(&acc, 0, sizeof(acc));
+		acc.type = BCH_DISK_ACCOUNTING_snapshot;
+		acc.snapshot.id = id;
+		acc.snapshot.btree = btree;
+
+		u64 v[3] = {};
+		bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
+
+		u64 nr_keys	= trust_keys ? v[0] : 0;
+		u64 key_bytes	= trust_keys ? v[1] : 0;
+		u64 sectors	= v[2];
+
+		if (!nr_keys && !sectors)
+			continue;
+
+		total_keys	+= nr_keys;
+		total_sectors	+= sectors;
+
+		prt_str(&buf, "\n  ");
+		bch2_btree_id_to_text(&buf, btree);
+		prt_printf(&buf, ": %llu keys (%llu bytes), %llu sectors",
+			   nr_keys, key_bytes, sectors);
+	}
+
+	if (likely(!total_keys && !total_sectors))
+		return 0;
+
+	CLASS(printbuf, msg)();
+	prt_printf(&msg, "snapshot node %u still has %llu keys / %llu sectors accounted to it - refusing to delete/empty, to prevent data loss; scheduling repair:%s\n",
+		   id, total_keys, total_sectors, buf.buf);
+
+	int ret = bch2_require_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_allocations);
+	ret = bch2_require_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_inodes) ?: ret;
+
+	bch_err(c, "%s", msg.buf);
 
 	return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
 }
@@ -360,18 +384,24 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 	}
 
 	/*
-	 * Delete accounting: note that designated initializers will not
-	 * reliably cause a struct to be zeroed if it's a union:
+	 * Delete accounting - one key per snapshot btree. Note that designated
+	 * initializers will not reliably cause a struct to be zeroed if it's a
+	 * union:
 	 */
+	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
+		if (!btree_type_has_snapshots(btree))
+			continue;
 
-	struct disk_accounting_pos acc;
-	memset(&acc, 0, sizeof(acc));
-	acc.type = BCH_DISK_ACCOUNTING_snapshot;
-	acc.snapshot.id = id;
+		struct disk_accounting_pos acc;
+		memset(&acc, 0, sizeof(acc));
+		acc.type = BCH_DISK_ACCOUNTING_snapshot;
+		acc.snapshot.id = id;
+		acc.snapshot.btree = btree;
 
-	try(bch2_btree_bit_mod_buffered(trans, BTREE_ID_accounting,
-					disk_accounting_pos_to_bpos(&acc),
-					false));
+		try(bch2_btree_bit_mod_buffered(trans, BTREE_ID_accounting,
+						disk_accounting_pos_to_bpos(&acc),
+						false));
+	}
 
 	return 0;
 }

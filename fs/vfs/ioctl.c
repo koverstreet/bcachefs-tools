@@ -801,8 +801,9 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 		if (bch2_snapshot_state_compat(&s) == SNAPSHOT_STATE_deleted)
 			continue;
 
-		u64 sectors[1] = {};
-		int _ret = bch2_fs_accounting_read_key2(trans, sectors,
+		/* extents (btree 0, the default) holds external_sectors, counter 2 */
+		u64 v[3] = {};
+		int _ret = bch2_fs_accounting_read_key2(trans, v,
 				snapshot, .id = k.k->p.offset);
 		if (!_ret) {
 			total++;
@@ -817,7 +818,7 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 					},
 					.subvol		= le32_to_cpu(snap.v->subvol),
 					.flags		= le32_to_cpu(snap.v->flags),
-					.sectors	= sectors[0],
+					.sectors	= v[2],
 				};
 
 				_ret = copy_to_user_errcode(&user_arg->nodes[nr], &node,
