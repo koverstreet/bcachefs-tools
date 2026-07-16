@@ -637,13 +637,29 @@ static int __trigger_reservation(struct btree_trans *trans,
 			enum btree_iter_update_trigger_flags flags)
 {
 	if (flags & (BTREE_TRIGGER_transactional|BTREE_TRIGGER_gc)) {
+		bool gc = flags & BTREE_TRIGGER_gc;
+		unsigned nr_replicas = bkey_s_c_to_reservation(k).v->nr_replicas;
 		s64 sectors[1] = { k.k->size };
 
 		if (flags & BTREE_TRIGGER_overwrite)
 			sectors[0] = -sectors[0];
 
-		return bch2_disk_accounting_mod2(trans, flags & BTREE_TRIGGER_gc, sectors,
-				persistent_reserved, bkey_s_c_to_reservation(k).v->nr_replicas);
+		try(bch2_disk_accounting_mod2(trans, gc, sectors,
+				persistent_reserved, nr_replicas));
+
+		/*
+		 * Reservations reserve nr_replicas copies of the space but carry
+		 * no pointers, so they never fed the per-snapshot disk-usage
+		 * counter (summed from extent pointers). Count the reserved
+		 * physical sectors so a snapshot holding only reservations isn't
+		 * seen as empty by the snapshot-deletion no-data check.
+		 */
+		if (!level && k.k->p.snapshot) {
+			s64 snapshot_sectors[1] = { sectors[0] * (s64) nr_replicas };
+
+			try(bch2_disk_accounting_mod2(trans, gc, snapshot_sectors,
+					snapshot, k.k->p.snapshot));
+		}
 	}
 
 	return 0;
