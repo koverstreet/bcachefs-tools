@@ -20,7 +20,7 @@ use std::process::Command;
 
 const HEADERS: &[&str] = &[
     "bcachefs.h", "opts.h",
-    "btree/cache.h", "btree/interior.h", "btree/iter.h",
+    "btree/cache.h", "btree/interior.h", "btree/iter.h", "btree/read.h",
     "alloc/accounting.h", "alloc/background.h", "alloc/buckets.h", "alloc/disk_groups.h",
     "data/checksum.h", "data/extents.h", "data/io_misc.h", "data/move.h", "data/read.h", "data/update.h", "data/write.h",
     "debug/debug.h",
@@ -35,6 +35,10 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     ".*bch2_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches",
     "bpos_.*", "bkey_init", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
     "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
+    // crypto helpers for the dump sanitize path (static inlines, not
+    // bch2_-prefixed): nonce constructors + bset_encrypt, driven from Rust
+    // over the already-wrapped bch2_checksum / bch2_encrypt.
+    "journal_nonce", "btree_nonce", "bset_encrypt",
 ];
 const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf", ".*bch2_snapshot_id_state"];
 const BLOCKLIST_TYPE: &[&str] = &["bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];
