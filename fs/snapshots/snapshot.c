@@ -947,10 +947,15 @@ static int snapshot_get_print(struct printbuf *out, struct btree_trans *trans, u
 
 		prt_tab(out);
 
-		u64 v[1] = { 0 };
+		/*
+		 * external_sectors is counter 2, and only the extents btree
+		 * (btree 0, the default here) carries it - so this one read is
+		 * the snapshot's total on-disk usage.
+		 */
+		u64 v[3] = { 0 };
 		try(bch2_fs_accounting_read_key2(trans, v, snapshot, id));
 
-		prt_human_readable_u64(out, v[0] << 9);
+		prt_human_readable_u64(out, v[2] << 9);
 		prt_tab_rjust(out);
 	}
 

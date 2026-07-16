@@ -98,7 +98,7 @@ pub enum DiskAccountingKind {
     Replicas { data_type: bch_data_type, nr_devs: u8, nr_required: u8, devs: [u8; BPOS_SIZE] },
     DevDataType { dev: u8, data_type: bch_data_type },
     Compression { compression_type: bch_compression_type },
-    Snapshot { id: u32 },
+    Snapshot { id: u32, btree: u32 },
     Btree { id: u32 },
     RebalanceWork,
     Inum { inum: u64 },
@@ -140,9 +140,10 @@ impl DiskAccountingKind {
                 raw[0] = disk_accounting_type::compression.0 as u8;
                 raw[1] = compression_type.0 as u8;
             }
-            Self::Snapshot { id } => {
+            Self::Snapshot { id, btree } => {
                 raw[0] = disk_accounting_type::snapshot.0 as u8;
                 raw[1..5].copy_from_slice(&id.to_ne_bytes());
+                raw[5..9].copy_from_slice(&btree.to_ne_bytes());
             }
             Self::Btree { id } => {
                 raw[0] = disk_accounting_type::btree.0 as u8;
@@ -272,7 +273,8 @@ fn bpos_to_accounting_kind(p: &c::bpos) -> DiskAccountingKind {
         },
         SNAPSHOT => {
             let id = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
-            DiskAccountingKind::Snapshot { id }
+            let btree = u32::from_ne_bytes([raw[5], raw[6], raw[7], raw[8]]);
+            DiskAccountingKind::Snapshot { id, btree }
         }
         BTREE => {
             let id = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
