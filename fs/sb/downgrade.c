@@ -206,10 +206,12 @@
 	  BCH_FSCK_ERR_need_discard_key_wrong,			\
 	  BCH_FSCK_ERR_need_discard_freespace_key_to_invalid_dev_bucket)\
 	x(per_dev_fragmentation_lru,				\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_allocations)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_lrus)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_alloc_to_lru_refs),	\
 	  BCH_FSCK_ERR_lru_entry_bad,				\
-	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry)
+	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry,		\
+	  BCH_FSCK_ERR_accounting_mismatch)
 
 struct upgrade_downgrade_entry {
 	u64		recovery_passes;
