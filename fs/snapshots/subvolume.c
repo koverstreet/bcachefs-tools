@@ -59,14 +59,25 @@ static int check_subvol(struct btree_trans *trans,
 
 	bkey_val_copy_pad(&subvol, bkey_s_c_to_subvolume(k));
 
-	/* on upgrade the flag bits are authoritative (see check_snapshot): */
-	if (c->sb.version_upgrade_complete < bcachefs_metadata_version_per_dev_fragmentation_lru &&
-	    bch2_subvolume_state(&subvol) != bch2_subvolume_state_from_flags(&subvol)) {
-		struct bkey_i_subvolume *n =
-			errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
+	/*
+	 * A zero state field means the key predates the state field, or was
+	 * wiped: recover it from the legacy flag bits whenever it's unset,
+	 * regardless of upgrade status (see check_snapshot). Silent mid-upgrade
+	 * (the expected migration); post-upgrade it's unexpected, so surface it.
+	 */
+	if (!bch2_subvolume_state(&subvol)) {
+		bool upgrading = c->sb.version_upgrade_complete <
+			bcachefs_metadata_version_per_dev_fragmentation_lru;
+		if (upgrading ||
+		    fsck_err(trans, subvol_state_bad,
+			     "subvolume state unset, recovering from legacy flags:\n%s",
+			     (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			struct bkey_i_subvolume *n =
+				errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
 
-		n->v.state = cpu_to_le32(bch2_subvolume_state_from_flags(&subvol));
-		subvol = n->v;
+			n->v.state = cpu_to_le32(bch2_subvolume_state_from_flags(&subvol));
+			subvol = n->v;
+		}
 	}
 
 	/*
@@ -403,7 +414,15 @@ const char *bch2_subvolume_state_str(enum bch_subvolume_state s)
 
 void bch2_subvolume_state_set(struct bch_subvolume *s, enum bch_subvolume_state n)
 {
-	SET_BCH_SUBVOLUME_UNLINKED_OBSOLETE(s, n == SUBVOLUME_STATE_unlinked);
+	/*
+	 * There's only one legacy flag bit, but two non-live states (unlinked
+	 * and deleted). Mirror *any* non-live state into it: recovering a wiped
+	 * state field from the flags can't then tell unlinked from deleted, but
+	 * both resolve to unlinked -> the deletion pipeline reruns and completes,
+	 * rather than deriving a bare 'live' and reverting a pending deletion.
+	 * (Also what an old kernel needs to see to keep deleting a tombstone.)
+	 */
+	SET_BCH_SUBVOLUME_UNLINKED_OBSOLETE(s, n != SUBVOLUME_STATE_live);
 	s->state = cpu_to_le32(n);
 }
 
