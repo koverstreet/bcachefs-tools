@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::alloc::buckets::DiskReservation;
-use crate::btree::bkey::{pos, spos, BkeyCookie, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
     BtreeTrans, CommitFlags, CommitOpts, TransAttempt, TransError, UpdateTriggerFlags,
@@ -407,7 +407,8 @@ fn test_btree_ptr_stale_dirty_key<'a, 't>(
     let mut update = t.bkey_make_mut_noupdate(b.key_sc())?;
 
     let mut updated = false;
-    for ptr_entry in bkey_ptrs_mut(t.fs(), update.as_mut()) {
+    let mut update_k = BkeyS::from(update.as_mut());
+    for ptr_entry in bkey_ptrs_mut(t.fs(), &mut update_k) {
         if ptr_entry.cached() == 0 && ptr_entry.dev() != c::BCH_SB_MEMBER_INVALID as u64 {
             ptr_entry.set_generation(ptr_entry.generation().wrapping_sub(1));
             updated = true;
@@ -487,7 +488,8 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
             }
 
             let mut u = t.bkey_make_mut_noupdate(k)?;
-            for entry in bkey_extent_entries_mut(t.fs(), u.as_mut()) {
+            let mut u_k = BkeyS::from(u.as_mut());
+            for entry in bkey_extent_entries_mut(t.fs(), &mut u_k) {
                 if extent_entry_type(entry) == STRIPE_PTR {
                     let sp = entry_stripe_ptr_mut(entry);
                     sp.set_block(sp.block() + 1);
