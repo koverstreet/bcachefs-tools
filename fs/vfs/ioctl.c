@@ -801,10 +801,25 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 		if (bch2_snapshot_state_compat(&s) == SNAPSHOT_STATE_deleted)
 			continue;
 
-		/* extents (btree 0, the default) holds external_sectors, counter 2 */
-		u64 v[3] = {};
-		int _ret = bch2_fs_accounting_read_key2(trans, v,
-				snapshot, .id = k.k->p.offset);
+		/*
+		 * Sum [nr_keys, key_bytes, external_sectors] over the snapshot
+		 * btrees (sectors only lands in the extents entry, but the key
+		 * counters are per-btree):
+		 */
+		u64 nr_keys = 0, key_bytes = 0, sectors = 0;
+		int _ret = 0;
+		for (unsigned btree = 0; btree < BTREE_ID_NR && !_ret; btree++) {
+			if (!btree_type_has_snapshots(btree))
+				continue;
+
+			u64 v[3] = {};
+			_ret = bch2_fs_accounting_read_key2(trans, v, snapshot,
+					.id = k.k->p.offset, .btree = btree);
+			nr_keys		+= v[0];
+			key_bytes	+= v[1];
+			sectors		+= v[2];
+		}
+
 		if (!_ret) {
 			total++;
 
@@ -818,7 +833,9 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 					},
 					.subvol		= le32_to_cpu(snap.v->subvol),
 					.flags		= le32_to_cpu(snap.v->flags),
-					.sectors	= v[2],
+					.sectors	= sectors,
+					.nr_keys	= nr_keys,
+					.key_bytes	= key_bytes,
 				};
 
 				_ret = copy_to_user_errcode(&user_arg->nodes[nr], &node,

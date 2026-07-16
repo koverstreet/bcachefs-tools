@@ -587,7 +587,10 @@ struct bch_ioctl_snapshot_node {
 	__u32			subvol;		/* subvolume ID, 0 for interior */
 	__u32			flags;
 	__u32			pad[2];
-	__u64			sectors;	/* BCH_DISK_ACCOUNTING_snapshot */
+	/* BCH_DISK_ACCOUNTING_snapshot, summed over the snapshot btrees: */
+	__u64			sectors;	/* external (on-disk data) sectors */
+	__u64			nr_keys;
+	__u64			key_bytes;
 };
 
 struct bch_ioctl_snapshot_tree_query {
