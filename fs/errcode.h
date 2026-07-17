@@ -128,6 +128,7 @@
 	x(ENOMEM,			ENOMEM_backpointer_mismatches_bitmap)	\
 	x(EIO,				compression_workspace_not_initialized)	\
 	x(ENOMEM,			ENOMEM_bucket_gens)			\
+	x(ENOMEM,			ENOMEM_buckets_nouse)			\
 	x(ENOMEM,			ENOMEM_usage_init)			\
 	x(ENOMEM,			ENOMEM_btree_node_read_all_replicas)	\
 	x(ENOMEM,			ENOMEM_btree_node_reclaim)		\

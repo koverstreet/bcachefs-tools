@@ -1312,7 +1312,8 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 		if (statechange_to(!data_type_is_empty(a->data_type))) {
 			if ((new_a->data_type != BCH_DATA_sb &&
 			     new_a->data_type != BCH_DATA_journal) &&
-			    !bch2_bucket_is_open_safe(c, op.new.k->p.inode, op.new.k->p.offset)) {
+			    !bch2_bucket_is_open_safe(c, op.new.k->p.inode, op.new.k->p.offset) &&
+			    !bch2_bucket_nouse(ca, op.new.k->p.offset)) {
 				CLASS(printbuf, buf)();
 				prt_printf(&buf, "bucket going empty but not open\n");
 				bch2_bkey_val_to_text(&buf, c, op.new.s_c);

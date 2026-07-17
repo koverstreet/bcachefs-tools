@@ -278,8 +278,9 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 	if (unlikely(is_superblock_bucket(c, ca, bucket)))
 		return NULL;
 
-	if (unlikely(bch2_dev_is_shrinking(ca) &&
-		     bucket >= bch2_dev_resize_target(ca))) {
+	if (unlikely(bch2_bucket_nouse(ca, bucket) ||
+		     (bch2_dev_is_shrinking(ca) &&
+		      bucket >= bch2_dev_resize_target(ca)))) {
 		req->counters.skipped_nouse++;
 		return NULL;
 	}
