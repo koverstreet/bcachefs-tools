@@ -249,17 +249,21 @@ static int str_hash_dup_entries(struct btree_trans *trans,
 		ret = 1;
 	}
 
+	/*
+	 * @k is the key being checked; @dup_k was found via lookup from @k's
+	 * snapshot, so if they're in different snapshots @k is the descendant.
+	 * Deleting the loser at @k's (pre-swap) snapshot is correct for both
+	 * outcomes: if @dup_k loses, this whiteouts the ancestor's entry from
+	 * the descendant's view without touching the ancestor's own; if @k
+	 * loses, it's a deletion of @k at its own snapshot.
+	 */
+	u32 del_snapshot = k.k->p.snapshot;
+
 	if (ret)
 		swap(k, dup_k); /* @dup_k wins, delete @k */
 
-	/*
-	 * delete @dup_k, in @k's snapshot: if they're in different snapshots,
-	 * @dup is older
-	 */
-	BUG_ON(dup_k.k->p.snapshot < k.k->p.snapshot);
-
 	CLASS(btree_iter, del_iter)(trans, desc->btree_id,
-				    SPOS(dup_k.k->p.inode, dup_k.k->p.offset, k.k->p.snapshot),
+				    SPOS(dup_k.k->p.inode, dup_k.k->p.offset, del_snapshot),
 				    BTREE_ITER_slots);
 	try(bch2_btree_iter_traverse(&del_iter));
 	try(bch2_hash_delete_at(trans, *desc, hash_info, &del_iter, 0));
