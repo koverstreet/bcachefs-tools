@@ -459,6 +459,23 @@ __cold void bch2_snapshot_to_text(struct printbuf *out, const struct bch_snapsho
 		   le32_to_cpu(s->skip[2]));
 
 	prt_printf(out, " %s", bch2_snapshot_state_str(bch2_snapshot_state_compat(s)));
+
+	/*
+	 * The obsolete flags are dual-written shadows of the state field and
+	 * subvol pointer (bch2_snapshot_state_set()); recompute what the
+	 * dual-write would produce and print only divergence:
+	 */
+	struct bch_snapshot expect = *s;
+	bch2_snapshot_state_set(&expect, bch2_snapshot_state_compat(s));
+
+	if (BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(s) != BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(&expect))
+		prt_printf(out, " will_delete_obsolete=%llu", BCH_SNAPSHOT_WILL_DELETE_OBSOLETE(s));
+	if (BCH_SNAPSHOT_SUBVOL_OBSOLETE(s) != BCH_SNAPSHOT_SUBVOL_OBSOLETE(&expect))
+		prt_printf(out, " subvol_obsolete=%llu", BCH_SNAPSHOT_SUBVOL_OBSOLETE(s));
+	if (BCH_SNAPSHOT_DELETED_OBSOLETE(s) != BCH_SNAPSHOT_DELETED_OBSOLETE(&expect))
+		prt_printf(out, " deleted_obsolete=%llu", BCH_SNAPSHOT_DELETED_OBSOLETE(s));
+	if (BCH_SNAPSHOT_NO_KEYS_OBSOLETE(s) != BCH_SNAPSHOT_NO_KEYS_OBSOLETE(&expect))
+		prt_printf(out, " no_keys_obsolete=%llu", BCH_SNAPSHOT_NO_KEYS_OBSOLETE(s));
 }
 
 __cold void bch2_snapshot_key_to_text(struct printbuf *out, struct bch_fs *c,
