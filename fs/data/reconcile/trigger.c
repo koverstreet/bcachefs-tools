@@ -1025,25 +1025,35 @@ int bch2_bkey_get_io_opts(struct btree_trans *trans,
 			if (snapshot_opts->cur_inum != k.k->p.inode) {
 				snapshot_opts->d.nr = 0;
 
-				try(for_each_btree_key_max(trans, iter, BTREE_ID_inodes,
-							   SPOS(0, k.k->p.inode, 0),
-							   SPOS(0, k.k->p.inode, U32_MAX),
-							   BTREE_ITER_all_snapshots, inode_k, ({
-					struct bch_inode_unpacked inode;
+				/*
+				 * norestart: callers (e.g. fsck repair paths)
+				 * may have updates queued; an internal
+				 * trans_begin() would clobber them
+				 */
+				struct bkey_s_c inode_k;
+				int ret = 0;
+				for_each_btree_key_max_norestart(trans, iter, BTREE_ID_inodes,
+						SPOS(0, k.k->p.inode, 0),
+						SPOS(0, k.k->p.inode, U32_MAX),
+						BTREE_ITER_all_snapshots, inode_k, ret) {
 					if (!bkey_is_inode(inode_k.k))
 						continue;
+
+					struct bch_inode_unpacked inode;
 					bch2_inode_unpack(c, inode_k, &inode);
 
 					struct snapshot_io_opts_entry e = { .snapshot = inode_k.k->p.snapshot };
 					bch2_inode_opts_get_inode(c, &inode, &e.io_opts);
 
-					darray_push(&snapshot_opts->d, e);
-				})));
+					ret = darray_push(&snapshot_opts->d, e);
+					if (ret)
+						break;
+				}
+				if (ret)
+					return ret;
 
 				snapshot_opts->cur_inum	= k.k->p.inode;
 				snapshot_opts->inum_scan_cookie	= false;
-
-				return bch_err_throw(c, transaction_restart_nested);
 			}
 
 			struct snapshot_io_opts_entry *i =
