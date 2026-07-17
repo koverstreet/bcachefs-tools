@@ -545,7 +545,6 @@ void bch2_dev_free(struct bch_dev *ca)
 	WARN_ON(!enumerated_ref_is_zero(&ca->io_ref[READ]));
 
 	bch2_dev_resize_thread_stop(ca);
-	cancel_work_sync(&ca->io_error_work);
 
 	bch2_dev_unlink(ca);
 

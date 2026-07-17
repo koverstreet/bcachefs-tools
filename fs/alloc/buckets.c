@@ -688,10 +688,6 @@ int bch2_trigger_extent(struct btree_trans *trans, struct btree_trigger_op op)
 	unsigned new_ptrs_bytes = (void *) new_ptrs.end - (void *) new_ptrs.start;
 	unsigned old_ptrs_bytes = (void *) old_ptrs.end - (void *) old_ptrs.start;
 
-	/* if pointers aren't changing - nothing to do: */
-	if (unlikely(op.flags & BTREE_TRIGGER_check_repair))
-		return bch2_check_fix_ptrs(trans, op.btree, op.level, op.new.s_c, op.flags);
-
 	/* optimization for in-place updates to reconcile_phys to avoid delete-insert churn */
 	if (op.level == 0) {
 		bool handled;
