@@ -348,14 +348,27 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 		*s = u->v;
 	}
 
-	if (ret_fsck_err_on(BCH_SNAPSHOT_SUBVOL_OBSOLETE(s) != (s->subvol != 0),
-			    trans, snapshot_subvol_flag_wrong,
-			    "snapshot node %llu has wrong subvol flag",
-			    k.k->p.offset)) {
-		u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+	if (BCH_SNAPSHOT_SUBVOL_OBSOLETE(s) != (s->subvol != 0)) {
+		printbuf_reset(&buf);
+		prt_printf(&buf, "snapshot node %llu has wrong subvol flag:\n",
+			   k.k->p.offset);
+		bch2_bkey_val_to_text(&buf, c, k);
 
-		SET_BCH_SNAPSHOT_SUBVOL_OBSOLETE(&u->v, s->subvol != 0);
-		*s = u->v;
+		if (s->subvol) {
+			CLASS(btree_iter, subvol_iter)(trans, BTREE_ID_subvolumes,
+						       POS(0, le32_to_cpu(s->subvol)), 0);
+			struct bkey_s_c subvol_k = bkey_try(bch2_btree_iter_peek_slot(&subvol_iter));
+
+			prt_newline(&buf);
+			bch2_bkey_val_to_text(&buf, c, subvol_k);
+		}
+
+		if (ret_fsck_err(trans, snapshot_subvol_flag_wrong, "%s", buf.buf)) {
+			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+
+			SET_BCH_SNAPSHOT_SUBVOL_OBSOLETE(&u->v, s->subvol != 0);
+			*s = u->v;
+		}
 	}
 
 	return 0;
