@@ -1403,7 +1403,7 @@ static void reconcile_wait(struct bch_fs *c, u32 kick)
 	 * wakeups:
 	 */
 	set_current_state(TASK_INTERRUPTIBLE);
-	if (kick == READ_ONCE(r->kick))
+	if (kick == atomic_read(&r->kick))
 		bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, MAX_SCHEDULE_TIMEOUT);
 	__set_current_state(TASK_RUNNING);
 }
