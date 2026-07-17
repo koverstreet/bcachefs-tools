@@ -9,6 +9,8 @@ mod qcow2;
 mod util;
 mod wrappers;
 mod http;
+#[cfg(test)]
+mod eytzinger_test;
 
 use std::process::ExitCode;
 use bch_bindgen::c;
