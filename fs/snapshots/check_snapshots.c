@@ -6,6 +6,8 @@
 #include "btree/cache.h"
 #include "btree/update.h"
 
+#include "fs/inode.h"
+
 #include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
 
@@ -1107,6 +1109,38 @@ fsck_err:
 	return ret;
 }
 
+/*
+ * When we migrate a key out of a deleted snapshot to its live descendant, the
+ * snapshot-deletion scan's premise - "a key in snapshot X implies an inode in
+ * snapshot X" - has to hold at the destination too, or the key gets stranded
+ * again on the next deletion. If the inode is only inherited from an ancestor
+ * of the descendant, copy it down. A genuinely missing inode is left for a
+ * full fsck to reconstruct; we don't do that or schedule passes here.
+ */
+static int check_key_has_inode_in_snapshot(struct btree_trans *trans,
+					   enum btree_id btree, u64 inum, u32 snapshot)
+{
+	switch (btree) {
+	case BTREE_ID_extents:
+	case BTREE_ID_dirents:
+	case BTREE_ID_xattrs:
+		break;
+	default:
+		return 0;
+	}
+
+	struct bch_inode_unpacked inode;
+	int ret = bch2_inode_find_by_inum_snapshot(trans, inum, snapshot, &inode, 0);
+	if (ret)
+		return bch2_err_matches(ret, ENOENT) ? 0 : ret;
+
+	if (inode.bi_snapshot == snapshot)
+		return 0;
+
+	inode.bi_snapshot = snapshot;
+	return __bch2_fsck_write_inode(trans, &inode);
+}
+
 int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 				  struct btree_iter *iter,
 				  struct bkey_s_c k)
@@ -1195,7 +1229,10 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 				(bch2_btree_id_to_text(&buf, iter->btree_id),
 				 prt_char(&buf, ' '),
 				 bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
-			ret = bch2_delete_dead_snapshot_key(trans, iter, k, live_child) ?: 1;
+			ret = bch2_delete_dead_snapshot_key(trans, iter, k, live_child) ?:
+			      check_key_has_inode_in_snapshot(trans, iter->btree_id,
+							      k.k->p.inode, live_child) ?:
+			      1;
 	} else {
 		if (__fsck_err(trans, repair_flags, bkey_in_missing_snapshot,
 			     "key in missing snapshot %s, delete?",
