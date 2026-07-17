@@ -101,4 +101,12 @@ struct bpos;
 void rust_accounting_mem_read(struct bch_fs *c, struct bpos p,
 			      __u64 *v, unsigned nr);
 
+/*
+ * Unit test for the eytzinger sort/search primitive and the darray 1-based
+ * wrapper (snapshot_id_dying's lookup path). Runs under `cargo test` via a
+ * Rust #[test] wrapper. Returns the number of failed assertions (0 == pass);
+ * failure details are printed to stderr.
+ */
+int rust_eytzinger_test(void);
+
 #endif /* _RUST_SHIMS_H */
