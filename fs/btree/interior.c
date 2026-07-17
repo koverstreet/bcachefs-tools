@@ -1401,13 +1401,18 @@ static const char * const btree_node_reawrite_reason_strs[] = {
 };
 
 static struct btree_update *
-bch2_btree_update_start(struct btree_trans *trans, struct btree_path *path,
+bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 			unsigned level_start, bool split,
 			unsigned target,
 			enum bch_trans_commit_flags commit_flags,
 			enum bch_write_flags write_flags)
 {
 	struct bch_fs *c = trans->c;
+	/*
+	 * Only valid until bch2_btree_reserve_get(): the allocator's btree
+	 * iterators can grow and thus reallocate trans->paths
+	 */
+	struct btree_path *path = trans->paths + path_idx;
 	struct btree_update *as;
 	u64 start_time = local_clock();
 	int disk_res_flags = (commit_flags & BCH_TRANS_COMMIT_no_enospc)
@@ -2288,7 +2293,7 @@ int bch2_btree_split_leaf(struct btree_trans *trans,
 	int ret = 0;
 
 
-	as = bch2_btree_update_start(trans, trans->paths + path,
+	as = bch2_btree_update_start(trans, path,
 				     trans->paths[path].level,
 				     true, 0, flags, 0);
 	if (IS_ERR(as))
@@ -2373,7 +2378,7 @@ int bch2_btree_increase_depth(struct btree_trans *trans, btree_path_idx_t path, 
 		return bch2_btree_split_leaf(trans, path, 0, flags);
 
 	struct btree_update *as =
-		bch2_btree_update_start(trans, trans->paths + path, b->c.level,
+		bch2_btree_update_start(trans, path, b->c.level,
 					true, 0, flags, 0);
 	if (IS_ERR(as))
 		return PTR_ERR(as);
@@ -3063,7 +3068,7 @@ int __bch2_foreground_maybe_merge(struct btree_trans *trans,
 
 	BUG_ON(nr_dsts > 2);
 
-	as = bch2_btree_update_start(trans, trans->paths + path, level, nr_dsts == 2,
+	as = bch2_btree_update_start(trans, path, level, nr_dsts == 2,
 				     0, BCH_TRANS_COMMIT_no_enospc|flags, 0);
 	ret = PTR_ERR_OR_ZERO(as);
 	if (ret) {
@@ -3289,7 +3294,7 @@ int bch2_btree_node_rewrite(struct btree_trans *trans,
 	struct btree_path *path = btree_iter_path(trans, iter);
 	parent = btree_node_parent(path, b);
 	struct btree_update *as =
-		bch2_btree_update_start(trans, path, b->c.level, false, target,
+		bch2_btree_update_start(trans, iter->path, b->c.level, false, target,
 					commit_flags, write_flags);
 	int ret = PTR_ERR_OR_ZERO(as);
 	if (ret)
