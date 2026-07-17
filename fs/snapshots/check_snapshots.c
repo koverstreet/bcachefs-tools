@@ -1063,6 +1063,32 @@ static int get_snapshot_trees(struct bch_fs *c, struct snapshot_tree_reconstruct
 	return snapshot_list_add_nodup(c, &r->cur_ids, pos.snapshot);
 }
 
+/*
+ * Recreate one missing snapshot node, committed as a single unit: the
+ * fsck_err queues its journal log entry and check_snapshot_exists() queues the
+ * new node, and commit_do() commits both. Kept inside the commit_do() body (a
+ * lockrestart_do, which begins with bch2_trans_begin) so the queued log isn't
+ * discarded before the commit - the caller must not queue it outside.
+ */
+static int reconstruct_snapshot_node(struct btree_trans *trans, u32 id,
+				     unsigned tree_nr, struct printbuf *buf)
+{
+	struct bch_fs *c = trans->c;
+
+	if (ret_fsck_err_on(bch2_snapshot_id_state(c, id) == SNAPSHOT_ID_empty,
+			    trans, snapshot_node_missing,
+			    "snapshot node %u from tree %s missing, recreate?", id, buf->buf)) {
+		if (tree_nr > 1) {
+			bch_err(c, "cannot reconstruct snapshot trees with multiple nodes");
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+
+		return check_snapshot_exists(trans, id);
+	}
+
+	return 0;
+}
+
 int bch2_reconstruct_snapshots(struct bch_fs *c)
 {
 	CLASS(btree_trans, trans)(c);
@@ -1091,21 +1117,11 @@ int bch2_reconstruct_snapshots(struct bch_fs *c)
 		printbuf_reset(&buf);
 		bch2_snapshot_id_list_to_text(&buf, t);
 
-		darray_for_each(*t, id) {
-			if (fsck_err_on(bch2_snapshot_id_state(c, *id) == SNAPSHOT_ID_empty,
-					trans, snapshot_node_missing,
-					"snapshot node %u from tree %s missing, recreate?", *id, buf.buf)) {
-				if (t->nr > 1) {
-					bch_err(c, "cannot reconstruct snapshot trees with multiple nodes");
-					return bch_err_throw(c, fsck_repair_unimplemented);
-				}
-
-				try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-					      check_snapshot_exists(trans, *id)));
-			}
-		}
+		darray_for_each(*t, id)
+			try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+				      reconstruct_snapshot_node(trans, *id, t->nr, &buf)));
 	}
-fsck_err:
+
 	return ret;
 }
 
