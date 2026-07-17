@@ -15,6 +15,24 @@ fn opt_flags() -> u32 {
     c::opt_flags::OPT_FS as u32 | c::opt_flags::OPT_DEVICE as u32
 }
 
+fn schedule_reconcile_after_offline_io_opt_change(fs: &bcachefs_kernel::fs::Fs) -> Result<()> {
+    unsafe {
+        let _sb_lock = fs.sb_lock();
+
+        let ext_u64s =
+            (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+        let ext: &mut c::bch_sb_field_ext =
+            bcachefs_kernel::sb::io::sb_field_get_minsize(&mut (*fs.raw).disk_sb, ext_u64s)
+                .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
+
+        let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
+        ext.recovery_passes_required[0] |= c::bch2_recovery_passes_to_stable(pass).to_le();
+        fs.write_super();
+    }
+
+    Ok(())
+}
+
 fn set_option_cmd() -> Command {
     Command::new("set-fs-option")
         .about("Set a filesystem option")
@@ -153,6 +171,9 @@ fn set_option_offline(
                 continue;
             }
             unsafe { c::bch2_opt_set_sb(fs.raw, std::ptr::null_mut(), opt, val); }
+            if unsafe { c::bch2_opt_is_inode_opt(opt_id) } {
+                schedule_reconcile_after_offline_io_opt_change(&fs)?;
+            }
         }
 
         if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
