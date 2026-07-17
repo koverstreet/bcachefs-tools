@@ -587,7 +587,13 @@ static int bch2_topology_check_root(struct btree_trans *trans, enum btree_id btr
 		}
 	}
 
-	return 0;
+	/*
+	 * Commit any fsck_err log entry queued above before returning: this
+	 * runs pre-RW (so the commit is queued for journal replay), and the
+	 * caller's per-btree loop starts each iteration with a bch2_trans_begin
+	 * that would otherwise discard it.
+	 */
+	return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 }
 
 static void ratelimit_reset(struct ratelimit_state *rs)
