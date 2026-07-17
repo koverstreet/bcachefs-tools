@@ -711,7 +711,9 @@ static int check_reconcile_pending_err(struct btree_trans *trans,
 	     !bch2_err_matches(err, ENOSPC))
 		 return err;
 
-	event_add_trace(c, reconcile_set_pending, k.k->size, buf, ({
+	s64 sectors = bkey_is_btree_ptr(k.k) ? btree_sectors(c) : k.k->size;
+
+	event_add_trace(c, reconcile_set_pending, sectors, buf, ({
 		prt_printf(&buf, "%s\n", bch2_err_str(err));
 		bch2_bkey_val_to_text(&buf, c, k);
 		prt_newline(&buf);
@@ -1038,7 +1040,7 @@ static int update_reconcile_opts_scan(struct btree_trans *trans,
 {
 	switch (s.type) {
 #define x(n) case RECONCILE_SCAN_##n:						\
-		event_add_trace(trans->c, reconcile_scan_##n, k.k->size,	\
+		event_add_trace(trans->c, reconcile_scan_##n, !level ? k.k->size : btree_sectors(trans->c),	\
 				buf, bch2_bkey_val_to_text(&buf, trans->c, k));	\
 		break;
 		RECONCILE_SCAN_TYPES()
