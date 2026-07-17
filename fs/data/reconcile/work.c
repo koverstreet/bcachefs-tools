@@ -481,93 +481,92 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 				ptr_bit <<= 1;
 			}
 		} else {
-				/*
-				 * Over-replicated: propose drops on a working copy and
-				 * recompute the whole-key durability after each, so we only
-				 * ever propose drops the apply path (bch2_bkey_drop_extra_*
-				 * durability()) will actually take - otherwise reconcile
-				 * respins on work that can't complete. Drop offline devices
-				 * first, holding total durability; then hold online durability
-				 * at data_replicas. Whole-pointer drops use the cached flag (a
-				 * reversible exclusion); stripe-pointer drops measure a copy.
-				 */
-				struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
-				struct bkey_durability cur = durability;
+			/*
+			 * Over-replicated: propose drops on a working copy and
+			 * recompute the whole-key durability after each, so we only
+			 * ever propose drops the apply path (bch2_bkey_drop_extra_*
+			 * durability()) will actually take - otherwise reconcile
+			 * respins on work that can't complete. Drop offline devices
+			 * first, holding total durability; then hold online durability
+			 * at data_replicas. Whole-pointer drops use the cached flag (a
+			 * reversible exclusion); stripe-pointer drops measure a copy.
+			 */
+			struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+			struct bkey_durability cur = durability;
 
-				for (unsigned phase = 0; phase < 2; phase++) {
-					bool online_floor = phase == 1;
+			for (unsigned phase = 0; phase < 2; phase++) {
+				bool online_floor = phase == 1;
 
-					/* phase 0 (hold total) only matters if some durability is offline */
-					if (!online_floor && cur.total == cur.online)
-						continue;
+				/* phase 0 (hold total) only matters if some durability is offline */
+				if (!online_floor && cur.total == cur.online)
+					continue;
 
-					/* Drop entire pointers? */
-					unsigned ptr_bit = 1;
-					bkey_for_each_ptr(bch2_bkey_ptrs(bkey_i_to_s(n)), ptr) {
-						bool offline = ptr->dev == BCH_SB_MEMBER_INVALID ||
-							       !test_bit(ptr->dev, c->devs_online.d);
+				/* Drop entire pointers? */
+				unsigned ptr_bit = 1;
+				bkey_for_each_ptr(bch2_bkey_ptrs(bkey_i_to_s(n)), ptr) {
+					bool offline = ptr->dev == BCH_SB_MEMBER_INVALID ||
+						       !test_bit(ptr->dev, c->devs_online.d);
 
-						if (!ptr->cached && (online_floor || offline)) {
-							bool force = bch2_ptr_bad_or_evacuating(c, ptr);
+					if (!ptr->cached && (online_floor || offline)) {
+						bool force = bch2_ptr_bad_or_evacuating(c, ptr);
 
-							ptr->cached = true;
-							struct bkey_durability d;
-							try(bch2_bkey_durability(trans, bkey_i_to_s_c(n), &d));
-
-							unsigned have = online_floor ? d.online : d.total;
-							unsigned was  = online_floor ? cur.online : cur.total;
-
-							/*
-							 * Drop only if we still hold data_replicas, and
-							 * either the device is bad/evacuating (move its data
-							 * off) or the pointer actually contributed durability
-							 * (have < was). A durability=0 pointer that isn't
-							 * evacuating is a cache replica - it leaves durability
-							 * unchanged, so we keep it. An evacuating device also
-							 * reads as durability=0, but we drop it once the
-							 * required durability is held by other devices.
-							 */
-							if (have >= r->data_replicas &&
-							    (force || have < was)) {
-								data_opts->ptrs_kill |= ptr_bit;
-								cur = d;
-							} else {
-								ptr->cached = false;
-							}
-						}
-						ptr_bit <<= 1;
-					}
-
-					/* Stripe ec? Gather candidates first: dropping a stripe
-					 * pointer rewrites the entry list. */
-					unsigned ec_bits[BCH_BKEY_PTRS_MAX], nr_ec = 0;
-					const union bch_extent_entry *ec_entry;
-					struct extent_ptr_decoded ec_p = {};
-
-					ptr_bit = 1;
-					bkey_for_each_ptr_decode(&n->k, bch2_bkey_ptrs_c(bkey_i_to_s_c(n)), ec_p, ec_entry) {
-						bool offline = ec_p.ptr.dev == BCH_SB_MEMBER_INVALID ||
-							       !test_bit(ec_p.ptr.dev, c->devs_online.d);
-
-						if (ec_p.has_ec && !ec_p.ptr.cached &&
-						    (online_floor || offline))
-							ec_bits[nr_ec++] = ptr_bit;
-						ptr_bit <<= 1;
-					}
-
-					for (unsigned i = 0; i < nr_ec; i++) {
-						struct bkey_i *m = errptr_try(bch2_bkey_make_mut_noupdate(trans, bkey_i_to_s_c(n)));
-						bch2_bkey_drop_ec_mask(c, m, ec_bits[i]);
-
+						ptr->cached = true;
 						struct bkey_durability d;
-						try(bch2_bkey_durability(trans, bkey_i_to_s_c(m), &d));
+						try(bch2_bkey_durability(trans, bkey_i_to_s_c(n), &d));
 
 						unsigned have = online_floor ? d.online : d.total;
-						if (have >= r->data_replicas) {
-							data_opts->ptrs_kill_ec |= ec_bits[i];
-							bch2_bkey_drop_ec_mask(c, n, ec_bits[i]);
+						unsigned was  = online_floor ? cur.online : cur.total;
+
+						/*
+						 * Drop only if we still hold data_replicas, and
+						 * either the device is bad/evacuating (move its data
+						 * off) or the pointer actually contributed durability
+						 * (have < was). A durability=0 pointer that isn't
+						 * evacuating is a cache replica - it leaves durability
+						 * unchanged, so we keep it. An evacuating device also
+						 * reads as durability=0, but we drop it once the
+						 * required durability is held by other devices.
+						 */
+						if (have >= r->data_replicas &&
+						    (force || have < was)) {
+							data_opts->ptrs_kill |= ptr_bit;
 							cur = d;
+						} else {
+							ptr->cached = false;
 						}
+					}
+					ptr_bit <<= 1;
+				}
+
+				/* Stripe ec? Gather candidates first: dropping a stripe
+				 * pointer rewrites the entry list. */
+				unsigned ec_bits[BCH_BKEY_PTRS_MAX], nr_ec = 0;
+				const union bch_extent_entry *ec_entry;
+				struct extent_ptr_decoded ec_p = {};
+
+				ptr_bit = 1;
+				bkey_for_each_ptr_decode(&n->k, bch2_bkey_ptrs_c(bkey_i_to_s_c(n)), ec_p, ec_entry) {
+					bool offline = ec_p.ptr.dev == BCH_SB_MEMBER_INVALID ||
+						       !test_bit(ec_p.ptr.dev, c->devs_online.d);
+
+					if (ec_p.has_ec && !ec_p.ptr.cached &&
+					    (online_floor || offline))
+						ec_bits[nr_ec++] = ptr_bit;
+					ptr_bit <<= 1;
+				}
+
+				for (unsigned i = 0; i < nr_ec; i++) {
+					struct bkey_i *m = errptr_try(bch2_bkey_make_mut_noupdate(trans, bkey_i_to_s_c(n)));
+					bch2_bkey_drop_ec_mask(c, m, ec_bits[i]);
+
+					struct bkey_durability d;
+					try(bch2_bkey_durability(trans, bkey_i_to_s_c(m), &d));
+
+					unsigned have = online_floor ? d.online : d.total;
+					if (have >= r->data_replicas) {
+						data_opts->ptrs_kill_ec |= ec_bits[i];
+						bch2_bkey_drop_ec_mask(c, n, ec_bits[i]);
+						cur = d;
 					}
 				}
 			}
