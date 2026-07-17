@@ -2297,18 +2297,15 @@ static int bch2_dev_resize_kick(struct bch_dev *ca)
 	return bch2_dev_resize_wait(ca, seq);
 }
 
-int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 new_nbuckets, struct printbuf *err)
+int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 target_nbuckets, struct printbuf *err)
 {
-	u64 target_nbuckets;
-
 	scoped_guard(rwsem_write, &c->state_lock) {
-		target_nbuckets = new_nbuckets == ca->mi.nbuckets
-			? 0
-			: new_nbuckets;
+		try(bch2_dev_resize_validate_target(c, ca, target_nbuckets, err));
+
+		// normalize
+		target_nbuckets = target_nbuckets == ca->mi.nbuckets ? 0 : target_nbuckets;
 
 		try(bch2_dev_resize_thread_start(ca));
-
-		try(bch2_dev_resize_validate_target(c, ca, target_nbuckets, err));
 		try(bch2_dev_resize_set_target(c, ca, target_nbuckets));
 	}
 
