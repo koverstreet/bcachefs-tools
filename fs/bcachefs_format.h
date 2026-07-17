@@ -1271,6 +1271,8 @@ LE64_BITMASK(BCH_SB_EXTENT_BP_SHIFT,	struct bch_sb, flags[6], 40, 48);
 LE64_BITMASK(BCH_SB_SCRUB_JOURNAL,	struct bch_sb, flags[6], 48, 50);
 LE64_BITMASK(BCH_SB_EC_MAX_DATA_BLOCKS,	struct bch_sb, flags[6], 50, 58);
 LE64_BITMASK(BCH_SB_MOVE_WRITES_FUA,	struct bch_sb, flags[6], 58, 59);
+LE64_BITMASK(BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT,
+				struct bch_sb, flags[6], 59, 60);
 
 #define BCH_SB_EXTENT_BP_SHIFT_DEFAULT	10
 

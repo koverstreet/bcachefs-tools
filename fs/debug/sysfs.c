@@ -242,6 +242,7 @@ read_attribute(recent_counters);
 
 #if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 write_attribute(perf_test);
+write_attribute(compress_test);
 #endif
 
 #define x(_name, ...)						\
@@ -526,6 +527,21 @@ STORE(bch2_fs)
 		if (ret)
 			size = ret;
 	}
+
+	if (attr == &sysfs_compress_test) {
+		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL), *p = tmp;
+		char *test		= strsep(&p, " \t\n");
+		char *nr_str		= strsep(&p, " \t\n");
+		u64 nr;
+		int ret = -EINVAL;
+
+		if (nr_str &&
+		    !(ret = bch2_strtoull_h(nr_str, &nr)))
+			ret = bch2_compress_test(c, test, nr, 1);
+
+		if (ret)
+			size = ret;
+	}
 #endif
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_sysfs);
 	return size;
@@ -547,6 +563,7 @@ struct attribute *bch2_fs_files[] = {
 
 #if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 	&sysfs_perf_test,
+	&sysfs_compress_test,
 #endif
 	NULL
 };

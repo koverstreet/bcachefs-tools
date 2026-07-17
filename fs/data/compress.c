@@ -251,7 +251,7 @@ static inline void zlib_set_workspace(z_stream *strm, void *workspace)
 #endif
 }
 
-static int buf_uncompress(struct bch_fs *c,
+int buf_uncompress(struct bch_fs *c,
 			  void *dst, void *src,
 			  struct bch_extent_crc_unpacked crc)
 {
@@ -480,35 +480,78 @@ static int attempt_compress(struct bch_fs *c,
 		 */
 		unsigned level = min((compression.level * 3) / 2, zstd_max_clevel());
 		ZSTD_parameters params = zstd_get_params(level, c->opts.encoded_extent_max);
-		ZSTD_CCtx *ctx = zstd_init_cctx(workspace, c->compress.zstd_workspace_size);
+		zstd_cstream *cstream;
+
+		cstream = zstd_init_cstream(&params, src_len,
+					    workspace, c->compress.zstd_workspace_size);
+		if (!cstream)
+			return 0;
 
 		/*
 		 * ZSTD requires that when we decompress we pass in the exact
 		 * compressed size - rounding it up to the nearest sector
 		 * doesn't work, so we use the first 4 bytes of the buffer for
 		 * that.
-		 *
-		 * Additionally, the ZSTD code seems to have a bug where it will
-		 * write just past the end of the buffer - so subtract a fudge
-		 * factor (7 bytes) from the dst buffer size to account for
-		 * that.
 		 */
-		size_t len = zstd_compress_cctx(ctx,
-				dst + 4,	dst_len - 4 - 7,
-				src,		src_len,
-				&params);
-		if (zstd_is_error(len))
-			return 0;
+		zstd_out_buffer out_buf = {
+			.dst	= dst + 4,
+			.size	= dst_len - 4,
+			.pos	= 0,
+		};
+		zstd_in_buffer in_buf = {
+			.src	= src,
+			.size	= src_len,
+			.pos	= 0,
+		};
 
-		*((__le32 *) dst) = cpu_to_le32(len);
-		return len + 4;
+		size_t chunk_size = block_bytes(c) * 4;
+
+		while (in_buf.pos < src_len) {
+			size_t to_feed = min(chunk_size, src_len - in_buf.pos);
+			in_buf.size = in_buf.pos + to_feed;
+
+			while (in_buf.pos < in_buf.size) {
+				size_t prev_pos = in_buf.pos;
+
+				if (out_buf.pos >= out_buf.size)
+					return 0;
+
+				size_t ret = zstd_compress_stream(cstream,
+								  &out_buf,
+								  &in_buf);
+				if (zstd_is_error(ret))
+					return 0;
+				if (in_buf.pos == prev_pos)
+					return 0;
+			}
+
+			in_buf.size = src_len;
+
+			if (c->opts.zstd_compression_early_abort &&
+			    in_buf.pos > chunk_size &&
+			    out_buf.pos > in_buf.pos)
+				return 0;
+		}
+
+		for (unsigned i = 0; i < 32; i++) {
+			if (out_buf.pos >= out_buf.size)
+				return 0;
+			size_t ret = zstd_end_stream(cstream, &out_buf);
+			if (zstd_is_error(ret))
+				return 0;
+			if (ret == 0)
+				break;
+		}
+
+		*((__le32 *) dst) = cpu_to_le32(out_buf.pos);
+		return out_buf.pos + 4;
 	}
 	default:
 		BUG();
 	}
 }
 
-static unsigned bch2_compress(struct bch_fs *c,
+unsigned bch2_compress(struct bch_fs *c,
 			      void *dst, size_t *dst_len,
 			      void *src, size_t *src_len,
 			      unsigned compression_opt,
@@ -729,7 +772,7 @@ static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 	ZSTD_parameters params = zstd_get_params(zstd_max_clevel(),
 						 c->opts.encoded_extent_max);
 
-	c->compress.zstd_workspace_size = zstd_cctx_workspace_bound(&params.cParams);
+	c->compress.zstd_workspace_size = zstd_cstream_workspace_bound(&params.cParams);
 
 	struct {
 		unsigned			feature;
