@@ -1854,8 +1854,10 @@ static int do_reconcile(struct moving_context *ctxt)
 		}
 
 		/* Completed a clean pass through all phases — we're done. */
-		if (r->phase == ARRAY_SIZE(reconcile_phases))
+		if (r->phase == ARRAY_SIZE(reconcile_phases)) {
+			pass_complete = true;
 			break;
+		}
 	}
 out:
 	if (!ret && !bkey_deleted(&pending_cookie.k))
