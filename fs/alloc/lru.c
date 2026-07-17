@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: GPL-2.0
 
-#include "alloc/backpointers.h"
 #include "bcachefs.h"
 
+#include "alloc/backpointers.h"
 #include "alloc/background.h"
 #include "alloc/lru.h"
 
