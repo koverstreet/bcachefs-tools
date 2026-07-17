@@ -3295,6 +3295,13 @@ int bch2_btree_node_rewrite(struct btree_trans *trans,
 	if (ret)
 		goto out;
 
+	/*
+	 * update_start allocates btree nodes, and the allocator's btree
+	 * iterators can grow and thus reallocate trans->paths: re-resolve, so
+	 * the write lock is recorded on the live path, not the old array
+	 */
+	path = btree_iter_path(trans, iter);
+
 	ret = bch2_btree_node_lock_write(trans, path, &b->c);
 	if (ret)
 		goto err_free_update;
