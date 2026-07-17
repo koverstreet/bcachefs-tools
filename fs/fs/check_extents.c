@@ -384,14 +384,17 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 					i->inode.bi_inum, i->inode.bi_snapshot, i->inode.bi_size,
 					(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
 				try(snapshots_seen_add_inorder(c, s, i->inode.bi_snapshot));
+
+				/*
+				 * fpunch_snapshot() commits internally, so it
+				 * always returns transaction_restart_nested —
+				 * this try() never falls through
+				 */
 				try(bch2_fpunch_snapshot(trans,
 							 SPOS(i->inode.bi_inum,
 							      last_block,
 							      i->inode.bi_snapshot),
 							 POS(i->inode.bi_inum, U64_MAX)));
-
-				iter->k.type = KEY_TYPE_whiteout;
-				break;
 			}
 		}
 	}
