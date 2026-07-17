@@ -865,8 +865,16 @@ static int bch2_disk_accounting_validate_late(struct btree_trans *trans,
 				"accounting not marked in superblock replicas\n%s",
 				(printbuf_reset(&buf),
 				 bch2_accounting_key_to_text(&buf, c, acc),
-				 buf.buf)))
+				 buf.buf))) {
 			try(bch2_mark_replicas(c, &r.e));
+			/*
+			 * bch2_mark_replicas() updates the superblock, not the
+			 * transaction, so commit here to flush the fsck_err log
+			 * entry - the caller loops back into a lockrestart_do
+			 * whose trans_begin would otherwise discard it.
+			 */
+			try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+		}
 		break;
 	}
 
