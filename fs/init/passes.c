@@ -330,6 +330,11 @@ static bool recovery_pass_needs_rewind(struct bch_fs *c,
 		!(r->passes_complete & BIT_ULL(pass));
 }
 
+static bool recovery_pass_excluded(struct bch_fs *c, enum bch_recovery_pass pass)
+{
+	return c->opts.recovery_passes_exclude & BIT_ULL(pass);
+}
+
 static bool recovery_pass_needs_set(struct bch_fs *c,
 				    enum bch_recovery_pass pass,
 				    enum bch_run_recovery_pass_flags *flags)
@@ -388,6 +393,9 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	bch2_printbuf_make_room(out, 1024);
 	guard(printbuf_atomic)(out);
 	guard(spinlock_irq)(&r->lock);
+
+	if (recovery_pass_excluded(c, pass))
+		return 0;
 
 	if (!recovery_pass_needs_set(c, pass, &flags))
 		return 0;
@@ -477,6 +485,9 @@ int bch2_require_recovery_pass(struct bch_fs *c,
 			       struct printbuf *out,
 			       enum bch_recovery_pass pass)
 {
+	if (recovery_pass_excluded(c, pass))
+		return 0;
+
 	if (test_bit(BCH_FS_in_recovery, &c->flags) &&
 	    c->recovery.passes_complete & BIT_ULL(pass))
 		return 0;
@@ -635,6 +646,7 @@ static void bch2_async_recovery_passes_work(struct work_struct *work)
 		bch2_run_recovery_passes(c,
 			(c->sb.recovery_passes_required |
 			 r->scheduled_passes_ephemeral) &
+			~c->opts.recovery_passes_exclude &
 			~r->passes_ratelimiting &
 			bch2_recovery_passes_match(PASS_ONLINE),
 			false);

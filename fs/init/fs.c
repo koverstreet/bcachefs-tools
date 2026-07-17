@@ -966,6 +966,20 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 	if (c->opts.journal_rewind)
 		c->opts.fsck = true;
 
+	if (c->opts.nofsck) {
+		if (c->opts.journal_rewind) {
+			prt_str(out, "cannot mount with both journal_rewind and nofsck\n");
+			return bch_err_throw(c, mount_option);
+		}
+
+		u64 fsck_passes = bch2_fsck_recovery_passes() &
+			~bch2_recovery_passes_match(PASS_ALWAYS);
+
+		c->opts.fsck = false;
+		c->opts.recovery_passes_exclude |= fsck_passes;
+		bch2_recovery_passes_apply_excludes(c);
+	}
+
 	if (!(c->sb.features & (BIT_ULL(BCH_FEATURE_small_image)|
 			        BIT_ULL(BCH_FEATURE_no_default_sb))) ||
 	    bch2_fs_will_resize_on_mount(c))
@@ -1071,6 +1085,7 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 		}
 
 		c->opts.recovery_passes |= bch2_recovery_passes_from_stable(le64_to_cpu(ext->recovery_passes_required[0]));
+		bch2_recovery_passes_apply_excludes(c);
 
 		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_autofix_errors)
 			SET_BCH_SB_ERROR_ACTION(c->disk_sb.sb, BCH_ON_ERROR_fix_safe);

@@ -229,6 +229,7 @@ static void bch2_reconstruct_alloc(struct bch_fs *c)
 	c->sb.compat &= ~(1ULL << BCH_COMPAT_alloc_info);
 
 	c->opts.recovery_passes |= bch2_recovery_passes_from_stable(le64_to_cpu(ext->recovery_passes_required[0]));
+	bch2_recovery_passes_apply_excludes(c);
 
 	c->disk_sb.sb->features[0] &= ~cpu_to_le64(BIT_ULL(BCH_FEATURE_no_alloc_info));
 
@@ -945,6 +946,11 @@ use_clean:
 			prt_str(&msg.m, ")");
 
 			bch2_journal_log_msg(c, "%s", msg.m.buf);
+			if (c->opts.nofsck) {
+				bch_err(c, "cannot mount with nofsck: journal scrub requires journal rewind and fsck");
+				return bch_err_throw(c, mount_option);
+			}
+
 			c->opts.journal_rewind = rewind_seq;
 			c->opts.fsck = true;
 
