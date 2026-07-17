@@ -150,6 +150,16 @@ int bch2_fpunch_snapshot(struct btree_trans *trans, struct bpos start, struct bp
 	CLASS(disk_reservation, res)(c);
 	unsigned max_sectors	= KEY_SIZE_MAX & (~0 << c->block_bits);
 
+	/*
+	 * We run our own commit loop, and its leading trans_begin() would
+	 * discard the caller's queued updates — commit them instead: fsck
+	 * callers reach us right after an fsck_err() that queued the journal
+	 * log entry recording the repair, and once we've punched the extents
+	 * the repair won't re-trigger to re-queue it
+	 */
+	if (bch2_trans_has_updates(trans))
+		try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+
 	return for_each_btree_key_max_commit(trans, iter, BTREE_ID_extents,
 			start, end, 0, k,
 			&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
