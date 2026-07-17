@@ -251,18 +251,39 @@ static CLOSURE_CALLBACK(journal_write_done)
 			       ? j->flush_write_time
 			       : j->noflush_write_time, j->write_start_time);
 
-	struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, seq_wrote)->devs.e;
+	/*
+	 * j->buf_lock guards journal buf data lifetime against the btree write
+	 * buffer flush path: fetch_wb_keys_from_journal() walks buf->data with
+	 * buf_lock held, and on the error path (emergency shutdown) we can get
+	 * here with need_flush_to_write_buffer still set - i.e. with a flush
+	 * concurrently reading the buf we're about to free.
+	 *
+	 * Lock ordering: buf_lock, pin_resize_lock, then j->lock - same as the
+	 * flusher and the journal write path.
+	 */
+	mutex_lock(&j->buf_lock);
+
+	/*
+	 * pin_resize_lock held across the journal pin FIFO updates below; it
+	 * keeps the pin_list stable while we rebuild temp replicas entries from
+	 * the compact device list for refcount updates.
+	 */
+	percpu_down_read(&j->pin_resize_lock);
+	struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
 
 	if (unlikely(w->failed.nr)) {
-		bch2_replicas_entry_put(c, r);
-		r->nr_devs = 0;
+		union bch_replicas_padded r;
+		journal_pin_devs_to_replicas(&r, pin);
+		bch2_replicas_entry_put(c, &r.e);
+		pin->devs.nr = 0;
 	}
 
-	if (!r->nr_devs && !w->empty) {
-		bch2_devlist_to_replicas(r, BCH_DATA_journal, w->devs_written);
-		err = bch2_replicas_entry_get(c, r);
-		if (err)
-			r->nr_devs = 0;
+	if (!pin->devs.nr && !w->empty) {
+		union bch_replicas_padded r;
+		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
+		err = bch2_replicas_entry_get(c, &r.e);
+		if (!err)
+			journal_pin_set_devs(pin, &w->devs_written);
 	}
 
 	if (unlikely(w->failed.nr || err)) {
@@ -285,7 +306,9 @@ static CLOSURE_CALLBACK(journal_write_done)
 			prt_newline(&msg.m);
 		} else {
 			prt_printf(&msg.m, "error %s\n", bch2_err_str(err));
+			percpu_up_read(&j->pin_resize_lock);
 			bch2_fs_emergency_read_only(c, &msg.m);
+			percpu_down_read(&j->pin_resize_lock);
 		}
 	}
 
@@ -298,6 +321,8 @@ static CLOSURE_CALLBACK(journal_write_done)
 	if (err && (!j->err_seq || seq_wrote < j->err_seq))
 		j->err_seq = seq_wrote;
 
+	j->flushes_outstanding -= w->flush;
+
 	if (!j->free_buf || j->free_buf_size < w->buf_size) {
 		swap(j->free_buf,	w->data);
 		swap(j->free_buf_size,	w->buf_size);
@@ -307,6 +332,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 	void *buf_to_free __free(kvfree) = w->data;
 	w->data = NULL;
 	w->buf_size = 0;
+	mutex_unlock(&j->buf_lock);
 
 	bool completed = false;
 	bool last_seq_ondisk_updated = false;
@@ -315,7 +341,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 	while ((seq = last_uncompleted_write_seq(j, seq_wrote))) {
 		w = journal_seq_to_buf(j, seq);
 
-		if (!j->err_seq && !w->noflush) {
+		if (!j->err_seq && !journal_buf_must_not_flush(w)) {
 			BUG_ON(w->empty && w->last_seq != seq);
 
 			if (j->last_seq_ondisk < w->last_seq) {
@@ -358,7 +384,11 @@ static CLOSURE_CALLBACK(journal_write_done)
 			j->last_empty_seq = seq;
 		j->seq_ondisk = seq;
 
-		closure_wake_up(&w->wait);
+		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, JOURNAL_BUF_NOT_IN_FLIGHT) }};
+
+		if (wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT)
+			closure_wake_up(&wait);
+
 		completed = true;
 
 		/*
@@ -412,27 +442,28 @@ static CLOSURE_CALLBACK(journal_write_done)
 		journal_wake(j);
 	}
 
-	if (fifo_used(&j->in_flight) == 1 &&
-	    j->reservations.cur_entry_offset < JOURNAL_ENTRY_CLOSED_VAL) {
-		struct journal_buf *buf = journal_cur_buf(j);
-		long delta = buf->expires - jiffies;
+	/*
+	 * If the pipeline's drained and the open entry has a flush requested
+	 * (e.g. cascaded onto it from an earlier entry we demoted to noflush),
+	 * close it now so it gets written as the next flush - we don't close it
+	 * to write it while there are previous entries still in flight:
+	 *
+	 * Barrier needed between incrementing j->in_flight.front and checking
+	 * for waiters:
+	 */
+	smp_mb();
 
-		/*
-		 * We don't close a journal entry to write it while there's
-		 * previous entries still in flight - the current journal entry
-		 * might want to be written now:
-		 */
-		mod_delayed_work(j->wq, &j->write_work, max(0L, delta));
-	}
+	bch2_journal_cycle_locked(j, 0);
 
 	/*
-	 * We don't typically trigger journal writes from her - the next journal
+	 * We don't typically trigger journal writes from here - the next journal
 	 * write will be triggered immediately after the previous one is
 	 * allocated, in bch2_journal_write() - but the journal write error path
 	 * is special:
 	 */
 	bch2_journal_do_writes_locked(j);
 	spin_unlock(&j->lock);
+	percpu_up_read(&j->pin_resize_lock);
 
 	if (last_seq_ondisk_updated) {
 		bch2_reset_alloc_cursors(c);
@@ -440,6 +471,28 @@ static CLOSURE_CALLBACK(journal_write_done)
 	}
 
 	closure_put(&c->cl);
+}
+
+static CLOSURE_CALLBACK(journal_write_done_flush)
+{
+	closure_type(w, struct journal_buf, io);
+	struct journal *j = w->j;
+
+	/*
+	 * Wake up flush waiters early, if there wasn't an error:
+	 *
+	 * Flush writes wait for previous outstanding writes, so there's no
+	 * ordering concerns here (as journal_write_done normally has to
+	 * handle). Don't mark it as closed to new flush waiters yet, since
+	 * we're not taking j->lock and updating the various seq_ondisk fields
+	 * yet:
+	 */
+	if (!w->failed.nr && w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT) {
+		struct closure_waitlist	wait = {{ xchg(&w->wait.list.first, NULL) }};
+		closure_wake_up(&wait);
+	}
+
+	continue_at_nobarrier(cl, journal_write_done, j->wq);
 }
 
 static void journal_write_endio(struct bio *bio)
@@ -471,12 +524,11 @@ static CLOSURE_CALLBACK(journal_write_submit)
 	struct journal *j = w->j;
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	unsigned sectors = vstruct_sectors(w->data, c->block_bits);
+	bool flush = !JSET_NO_FLUSH(w->data);
 
 	event_inc_trace(c, journal_write, buf, ({
 		prt_printf(&buf, "seq %llu flush %u sectors %u\n",
-			   le64_to_cpu(w->data->seq),
-			   !JSET_NO_FLUSH(w->data),
-			   sectors);
+			   le64_to_cpu(w->data->seq), flush, sectors);
 		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&w->key));
 	}));
 
@@ -500,9 +552,9 @@ static CLOSURE_CALLBACK(journal_write_submit)
 		 * REQ_SYNC and REQ_IDLE set...
 		 */
 		blk_opf_t opf = REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|REQ_META;
-		if (!JSET_NO_FLUSH(w->data))
+		if (flush)
 			opf |= REQ_FUA;
-		if (!JSET_NO_FLUSH(w->data) && !w->separate_flush)
+		if (flush && !w->separate_flush)
 			opf |= REQ_PREFLUSH;
 
 		/*
@@ -532,7 +584,10 @@ static CLOSURE_CALLBACK(journal_write_submit)
 
 	blk_finish_plug(&plug);
 
-	continue_at(cl, journal_write_done, j->wq);
+	if (flush)
+		continue_at(cl, journal_write_done_flush, NULL);
+	else
+		continue_at(cl, journal_write_done, j->wq);
 }
 
 static CLOSURE_CALLBACK(journal_write_preflush)
@@ -541,21 +596,6 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 	struct journal *j = w->j;
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
-	/*
-	 * Wait for previous journal writes to comelete; they won't necessarily
-	 * be flushed if they're still in flight
-	 */
-	if (j->seq_ondisk + 1 != le64_to_cpu(w->data->seq)) {
-		spin_lock(&j->lock);
-		if (j->seq_ondisk + 1 != le64_to_cpu(w->data->seq)) {
-			closure_wait(&j->async_wait, cl);
-			spin_unlock(&j->lock);
-			continue_at(cl, journal_write_preflush, j->wq);
-			return;
-		}
-		spin_unlock(&j->lock);
-	}
-
 	if (w->separate_flush) {
 		for_each_rw_member(c, ca, BCH_DEV_WRITE_REF_journal_write) {
 			enumerated_ref_get(&ca->io_ref[WRITE],
@@ -563,7 +603,8 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 
 			struct journal_device *ja = &ca->journal;
 			struct bio *bio = bio_alloc_bioset(ca->disk_sb.bdev, 0,
-					REQ_OP_WRITE|REQ_SYNC|REQ_META|REQ_PREFLUSH,
+					REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|
+					REQ_META|REQ_PREFLUSH,
 					GFP_NOFS, &ja->bio_set);
 			struct journal_bio *jbio = container_of(bio, struct journal_bio, bio);
 
@@ -744,67 +785,6 @@ static int bch2_journal_write_checksum(struct journal *j, struct journal_buf *w)
 	return 0;
 }
 
-static int bch2_journal_write_pick_flush(struct journal *j, struct journal_buf *w)
-{
-	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	int error = bch2_journal_error(j);
-
-	/*
-	 * If the journal is in an error state - we did an emergency shutdown -
-	 * we prefer to continue doing journal writes. We just mark them as
-	 * noflush so they'll never be used, but they'll still be visible by the
-	 * list_journal tool - this helps in debugging.
-	 *
-	 * There's a caveat: the first journal write after marking the
-	 * superblock dirty must always be a flush write, because on startup
-	 * from a clean shutdown we didn't necessarily read the journal and the
-	 * new journal write might overwrite whatever was in the journal
-	 * previously - we can't leave the journal without any flush writes in
-	 * it.
-	 *
-	 * So if we're in an error state, and we're still starting up, we don't
-	 * write anything at all.
-	 */
-	if (error && test_bit(JOURNAL_need_flush_write, &j->flags))
-		return error;
-
-	if (error ||
-	    w->noflush ||
-	    (!w->must_flush &&
-	     time_before(jiffies, j->last_flush_write +
-		 msecs_to_jiffies(c->opts.journal_flush_delay)) &&
-	     test_bit(JOURNAL_may_skip_flush, &j->flags))) {
-		w->noflush = true;
-		SET_JSET_NO_FLUSH(w->data, true);
-		w->data->last_seq	= 0;
-		w->last_seq		= 0;
-
-		j->nr_noflush_writes++;
-	} else {
-		struct jset *jset = w->data;
-
-		w->must_flush = true;
-		j->last_flush_write = jiffies;
-		j->nr_flush_writes++;
-		clear_bit(JOURNAL_need_flush_write, &j->flags);
-
-		if (!c->opts.journal_rewind_discard_buffer_percent)
-			j->rewind_seq = le64_to_cpu(jset->seq) + 1;
-
-		struct jset_entry *end = vstruct_last(jset);
-		struct jset_entry_rewind_limit *r =
-			container_of(jset_entry_init(&end, sizeof(*r)),
-				     struct jset_entry_rewind_limit, entry);
-		r->entry.type	= BCH_JSET_ENTRY_rewind_limit;
-		r->seq		= cpu_to_le64(min(j->rewind_seq,
-						  le64_to_cpu(jset->seq) + 1));
-		le32_add_cpu(&jset->u64s,
-			     sizeof(*r) / sizeof(u64));
-	}
-
-	return 0;
-}
-
 CLOSURE_CALLBACK(bch2_journal_write)
 {
 	closure_type(w, struct journal_buf, io);
@@ -821,18 +801,6 @@ CLOSURE_CALLBACK(bch2_journal_write)
 
 	j->write_start_time = local_clock();
 
-	scoped_guard(spinlock, &j->lock) {
-		BUG_ON(journal_last_unallocated_seq(j) != le64_to_cpu(w->data->seq));
-
-		if (nr_rw_members > 1)
-			w->separate_flush = true;
-
-		ret = bch2_journal_write_pick_flush(j, w);
-	}
-
-	if (unlikely(ret))
-		goto err;
-
 	scoped_guard(mutex, &j->buf_lock) {
 		journal_buf_realloc(j, w);
 
@@ -840,6 +808,10 @@ CLOSURE_CALLBACK(bch2_journal_write)
 	}
 
 	if (unlikely(ret))
+		goto err;
+
+	ret = bch2_journal_error(j);
+	if (unlikely(ret && test_bit(JOURNAL_need_flush_write, &j->flags)))
 		goto err;
 
 	unsigned replicas_allocated = 0;
@@ -859,6 +831,8 @@ CLOSURE_CALLBACK(bch2_journal_write)
 		goto err;
 
 	scoped_guard(spinlock, &j->lock) {
+		BUG_ON(journal_last_unallocated_seq(j) != le64_to_cpu(w->data->seq));
+
 		/*
 		 * write is allocated, no longer need to account for it in
 		 * bch2_journal_space_available():
@@ -866,6 +840,9 @@ CLOSURE_CALLBACK(bch2_journal_write)
 		w->sectors = 0;
 		w->write_allocated = true;
 		j->entry_bytes_written += vstruct_bytes(w->data);
+
+		if (nr_rw_members > 1)
+			w->separate_flush = true;
 
 		/*
 		 * journal entry has been compacted and allocated, recalculate space
@@ -877,32 +854,38 @@ CLOSURE_CALLBACK(bch2_journal_write)
 
 	w->devs_written = bch2_bkey_devs(c, bkey_i_to_s_c(&w->key));
 
-	if (!c->sb.clean) {
+	if (w->wait.list.first != JOURNAL_BUF_FLUSH_NO_WAIT) {
 		/*
 		 * Mark journal replicas before we submit the write to guarantee
 		 * recovery will find the journal entries after a crash.
 		 *
-		 * If the filesystem is clean, we have to defer this until after
-		 * the write completes, so the filesystem isn't marked dirty
-		 * before anything is in the journal:
+		 * The clean->dirty transition entry (FLUSH_NO_WAIT) is the
+		 * exception: we defer this until after the write completes, so the
+		 * fs isn't marked dirty before its journal entry is on disk - and
+		 * flushers can't wait on that entry, so there's no one to wake
+		 * early ahead of the deferred superblock write.
 		 */
-		struct bch_replicas_entry_v1 *r = &journal_seq_pin(j, le64_to_cpu(w->data->seq))->devs.e;
-		bch2_devlist_to_replicas(r, BCH_DATA_journal, w->devs_written);
+		guard(percpu_read)(&j->pin_resize_lock);
+		struct journal_entry_pin_list *pin = journal_seq_pin(j, le64_to_cpu(w->data->seq));
+		union bch_replicas_padded r;
+		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
 
-		ret = bch2_replicas_entry_get(c, r);
+		ret = bch2_replicas_entry_get(c, &r.e);
 		if (ret) {
-			r->nr_devs = 0;
+			pin->devs.nr = 0;
 			goto err;
 		}
+
+		journal_pin_set_devs(pin, &w->devs_written);
 	}
 
 	if (c->opts.nochanges)
 		goto no_io;
 
-	if (!JSET_NO_FLUSH(w->data))
-		continue_at(cl, journal_write_preflush, j->wq);
+	if (!JSET_NO_FLUSH(w->data) && w->separate_flush)
+		continue_at_nobarrier(cl, journal_write_preflush, NULL);
 	else
-		continue_at(cl, journal_write_submit, j->wq);
+		continue_at_nobarrier(cl, journal_write_submit, NULL);
 	return;
 err:
 	if (1) {
@@ -926,4 +909,226 @@ no_io:
 	}
 
 	continue_at(cl, journal_write_done, j->wq);
+}
+
+static bool journal_waitlist_add_batch(struct llist_node *first,
+				       struct llist_node *last,
+				       struct closure_waitlist *wait)
+{
+	struct llist_node *old = READ_ONCE(wait->list.first);
+
+	do {
+		if (old && old <= JOURNAL_BUF_FLUSH_NO_WAIT)
+			return false;
+
+		last->next = old;
+	} while (!try_cmpxchg(&wait->list.first, &old, first));
+
+	return true;
+}
+
+static bool journal_waitlist_splice(struct journal_buf *from,
+				    struct journal_buf *to)
+{
+	struct llist_node *first = xchg(&from->wait.list.first, JOURNAL_BUF_NOFLUSH), *last;
+
+	if (!first || first <= JOURNAL_BUF_FLUSH_NO_WAIT)
+		return true;
+
+	for (last = first; last->next; last = last->next)
+		;
+
+	if (journal_waitlist_add_batch(first, last, &to->wait))
+		return true;
+
+	last->next = NULL;
+	BUG_ON(xchg(&from->wait.list.first, first) != JOURNAL_BUF_NOFLUSH);
+	return false;
+}
+
+static bool flush_would_free_space(struct journal *j, u64 new_last_seq)
+{
+	guard(rcu)();
+
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal]) {
+		struct journal_device *ja = &ca->journal;
+
+		if (ja->dirty_idx_ondisk != ja->dirty_idx &&
+		    ja->bucket_seq[ja->dirty_idx_ondisk] < new_last_seq)
+			return true;
+	}
+
+	return false;
+}
+
+static int __should_flush(struct journal *j, struct journal_buf *w, u64 seq)
+{
+	/*
+	 * If the journal is in an error state - we did an emergency shutdown -
+	 * we prefer to continue doing journal writes. We just mark them as
+	 * noflush so they'll never be used, but they'll still be visible by the
+	 * list_journal tool - this helps in debugging.
+	 *
+	 * There's a caveat: the first journal write after marking the
+	 * superblock dirty must always be a flush write, because on startup
+	 * from a clean shutdown we didn't necessarily read the journal and the
+	 * new journal write might overwrite whatever was in the journal
+	 * previously - we can't leave the journal without any flush writes in
+	 * it.
+	 *
+	 * So if we're in an error state, and we're still starting up, we don't
+	 * write anything at all.
+	 */
+	if (bch2_journal_error(j))
+		return false;
+
+	/* first write after filesystem was clean? */
+	if (test_bit(JOURNAL_need_flush_write, &j->flags))
+		return true;
+
+	/* did we promise the allocator this write wouldn't be a commit? */
+	if (journal_buf_must_not_flush(w))
+		return false;
+
+	/* does journal reclaim need a flush? */
+	if (!test_bit(JOURNAL_may_skip_flush, &j->flags) &&
+	    w->last_seq != j->last_seq_ondisk &&
+	    flush_would_free_space(j, w->last_seq))
+		return true;
+
+	bool must_flush = journal_buf_must_flush(w);
+
+	/*
+	 * To demote a flush, we have to move waiters to the next entry - if
+	 * there isn't a next entry, we can't demote. Only entries with real
+	 * flush waiters can be demoted; a FLUSH_NO_WAIT transition entry has
+	 * none (flushers skip it) and must stay a flush write - and splicing
+	 * it would clobber the sentinel:
+	 */
+	if (w->wait.list.first > JOURNAL_BUF_FLUSH_NO_WAIT &&
+	    j->flushes_outstanding > 1) {
+		struct journal_buf *next = seq < journal_cur_seq(j)
+			? journal_seq_to_buf(j, seq + 1)
+			: NULL;
+
+		if (next && journal_waitlist_splice(w, next)) {
+			/*
+			 * Demoting to noflush: a later write will be the flush,
+			 * and its preflush will sweep this entry's data to disk.
+			 * Carry any flush request and its waiters forward to the
+			 * next entry, which will ride that flush (cascading again
+			 * if it too gets demoted, until it lands on the entry
+			 * that becomes the flush). When that flush completes,
+			 * flushed_seq_ondisk advances past all of them, so waking
+			 * these waiters there is correct - no re-check needed.
+			 *
+			 * should_flush() never demotes the last in-flight entry
+			 * while it has a flush request, so next != NULL here
+			 * except on the emergency-read-only path - and there the
+			 * waiters get an error from bch2_journal_error() anyway,
+			 * so leaving them on this entry to wake at completion is
+			 * fine.
+			 */
+			return false;
+		}
+	}
+
+	if (must_flush)
+		return true;
+
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	return time_after_eq(jiffies, j->last_flush_write +
+			     msecs_to_jiffies(c->opts.journal_flush_delay));
+}
+
+static int should_flush(struct journal *j, struct journal_buf *w, u64 seq)
+{
+	int ret = __should_flush(j, w, seq);
+	if (!ret && !journal_buf_try_noflush(w))
+		ret = 1;
+	return ret;
+}
+
+void bch2_journal_do_writes_locked(struct journal *j)
+{
+	lockdep_assert_held(&j->lock);
+
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	u64 seq = journal_last_unallocated_seq(j);
+	struct journal_buf *w = seq ? journal_seq_to_buf(j, seq) : NULL;
+
+	if (!w || w->write_started || journal_state_seq_count(j, j->reservations, seq))
+		return;
+
+	EBUG_ON(seq != le64_to_cpu(w->data->seq));
+
+	if (!w->flush_picked) {
+		int flush = should_flush(j, w, seq);
+		if (flush < 0)
+			return;
+
+		if (!flush) {
+			SET_JSET_NO_FLUSH(w->data, true);
+			w->data->last_seq	= 0;
+			w->last_seq		= 0;
+
+			j->nr_noflush_writes++;
+		} else {
+			/* We have to defer until outstanding journal writes are
+			 * drained - if we also defer setting w->flush, we might
+			 * be able to convert it to a nonflush and submit it
+			 * later
+			 */
+			if (j->flushes_outstanding > 1)
+				return;
+
+			struct jset *jset = w->data;
+
+			w->flush	= true;
+			j->last_flush_write = jiffies;
+			j->nr_flush_writes++;
+
+			clear_bit(JOURNAL_need_flush_write, &j->flags);
+			j->flushes_outstanding++;
+
+			/*
+			 * (Re-)arm the auto-commit timer: if nothing else
+			 * commits first, close + write the open entry in at most
+			 * journal_flush_delay.
+			 */
+			if (seq != journal_cur_seq(j))
+				mod_delayed_work(j->wq, &j->write_work,
+						 msecs_to_jiffies(c->opts.journal_flush_delay));
+			else
+				cancel_delayed_work(&j->write_work);
+
+			if (!c->opts.journal_rewind_discard_buffer_percent)
+				j->rewind_seq = le64_to_cpu(jset->seq) + 1;
+
+			struct jset_entry *end = vstruct_last(jset);
+			struct jset_entry_rewind_limit *r =
+				container_of(jset_entry_init(&end, sizeof(*r)),
+					     struct jset_entry_rewind_limit, entry);
+			r->entry.type	= BCH_JSET_ENTRY_rewind_limit;
+			r->seq		= cpu_to_le64(min(j->rewind_seq, seq  + 1));
+			le32_add_cpu(&jset->u64s, sizeof(*r) / sizeof(u64));
+		}
+
+		w->flush_picked = true;
+	}
+
+	if (w->flush && j->seq_ondisk + 1 != seq)
+		return;
+
+	j->seq_write_started = seq;
+	w->write_started = true;
+	closure_get(&c->cl);
+	closure_call(&w->io, bch2_journal_write, j->wq, NULL);
+}
+
+void bch2_journal_do_writes(struct journal *j)
+{
+	guard(spinlock)(&j->lock);
+	bch2_journal_do_writes_locked(j);
 }

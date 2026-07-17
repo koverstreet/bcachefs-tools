@@ -12,6 +12,7 @@
 #include "data/ec/init.h"
 
 #include "init/error.h"
+#include "init/passes.h"
 #include "init/progress.h"
 
 /*
@@ -40,7 +41,7 @@ static struct bkey_s_c bch2_get_key_or_hole(struct btree_iter *iter, struct bpos
 		 * btree node min/max is a closed interval, upto takes a half
 		 * open interval:
 		 */
-		k = bch2_btree_iter_peek_max(&iter2, end);
+		k = bch2_btree_iter_peek_max(&iter2, &end);
 		if (bkey_err(k))
 			return k;
 
@@ -189,10 +190,10 @@ int bch2_check_alloc_key(struct btree_trans *trans,
 	bch2_btree_iter_set_pos(bucket_gens_iter, alloc_gens_pos(alloc_k.k->p, &gens_offset));
 	k = bkey_try(bch2_btree_iter_peek_slot(bucket_gens_iter));
 
-	if (ret_fsck_err_on(a->v.gen != alloc_gen(k, gens_offset),
+	if (ret_fsck_err_on(a->v.generation != alloc_gen(k, gens_offset),
 			trans, bucket_gens_key_wrong,
 			"incorrect gen in bucket_gens btree (got %u should be %u)\n%s",
-			alloc_gen(k, gens_offset), a->v.gen,
+			alloc_gen(k, gens_offset), a->v.generation,
 			(printbuf_reset(&buf),
 			 bch2_bkey_val_to_text(&buf, c, alloc_k), buf.buf))) {
 		struct bkey_i_bucket_gens *g =
@@ -205,7 +206,7 @@ int bch2_check_alloc_key(struct btree_trans *trans,
 			g->k.p = alloc_gens_pos(alloc_k.k->p, &gens_offset);
 		}
 
-		g->v.gens[gens_offset] = a->v.gen;
+		g->v.gens[gens_offset] = a->v.generation;
 
 		try(bch2_trans_update(trans, bucket_gens_iter, &g->k_i, 0));
 	}
@@ -433,8 +434,14 @@ int __bch2_check_freespace_key(struct btree_trans *trans, struct btree_iter *ite
 	bucket.offset &= ~(~0ULL << 56);
 	u64 genbits = iter->pos.offset & (~0ULL << 56);
 
+	/*
+	 * async_repair means we're the allocator: committed-only reads, see
+	 * bucket_alloc_scan(). fsck's synchronous use keeps normal semantics:
+	 */
 	CLASS(btree_iter, alloc_iter)(trans, BTREE_ID_alloc, bucket,
-						     async_repair ? BTREE_ITER_cached : 0);
+						     async_repair
+						     ? BTREE_ITER_cached|BTREE_ITER_committed
+						     : 0);
 	struct bkey_s_c alloc_k = bkey_try(bch2_btree_iter_peek_slot(&alloc_iter));
 
 	if (!bch2_dev_bucket_exists(c, bucket)) {
@@ -470,7 +477,7 @@ int __bch2_check_freespace_key(struct btree_trans *trans, struct btree_iter *ite
 		goto out;
 	}
 
-	*gen = a->gen;
+	*gen = a->generation;
 	if (journal_seq_empty)
 		*journal_seq_empty = a->journal_seq_empty;
 out:
@@ -559,6 +566,8 @@ static int check_btree_alloc_iter(struct btree_trans *trans,
 				  struct progress_indicator *progress,
 				  struct wb_maybe_flush *last_flushed)
 {
+	try(bch2_recovery_cancelled(trans->c));
+
 	struct bkey hole;
 	struct bkey_s_c k = bkey_try(bch2_get_key_or_real_bucket_hole(iter, ca, &hole));
 
@@ -637,6 +646,7 @@ int bch2_check_alloc_info(struct bch_fs *c)
 				BTREE_ID_need_discard, POS_MIN,
 				BTREE_ITER_prefetch, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+			bch2_recovery_cancelled(c) ?:
 			bch2_check_discard_key(trans, &iter, &last_flushed)));
 	}
 
@@ -648,6 +658,8 @@ int bch2_check_alloc_info(struct bch_fs *c)
 		CLASS(btree_iter, iter)(trans, BTREE_ID_freespace, POS_MIN,
 				     BTREE_ITER_prefetch);
 		while (1) {
+			try(bch2_recovery_cancelled(c));
+
 			bch2_trans_begin(trans);
 			struct bkey_s_c k = bch2_btree_iter_peek(&iter);
 			if (!k.k)
@@ -674,6 +686,7 @@ int bch2_check_alloc_info(struct bch_fs *c)
 			BTREE_ID_bucket_gens, POS_MIN,
 			BTREE_ITER_prefetch, k,
 			NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+		bch2_recovery_cancelled(c) ?:
 		bch2_check_bucket_gens_key(trans, &iter, k)));
 
 	return 0;
@@ -699,10 +712,26 @@ static int bch2_check_alloc_to_lru_ref(struct btree_trans *trans,
 	a = bch2_alloc_to_v4(alloc_k, &a_convert);
 
 	u64 lru_idx = alloc_lru_idx_fragmentation(*a, ca);
-	if (lru_idx)
-		try(bch2_lru_check_set(trans, BCH_LRU_BUCKET_FRAGMENTATION,
-				       bucket_to_u64(alloc_k.k->p),
-				       lru_idx, alloc_k, last_flushed));
+	if (lru_idx) {
+		/*
+		 * per_dev_fragmentation_lru upgrade: the per-device entry is
+		 * either missing or was just written by check_lrus' migration
+		 * and is sitting unflushed in the write buffer, which reads as
+		 * missing - either way the lookup can't win, and the write
+		 * buffer flush it triggers is far more expensive than just
+		 * recreating the entry unconditionally:
+		 */
+		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_per_dev_fragmentation_lru)
+			try(bch2_lru_set(trans,
+					 bucket_fragmentation_lru(alloc_k.k->p.inode),
+					 bucket_to_u64(alloc_k.k->p),
+					 lru_idx));
+		else
+			try(bch2_lru_check_set(trans,
+					       bucket_fragmentation_lru(alloc_k.k->p.inode),
+					       bucket_to_u64(alloc_k.k->p),
+					       lru_idx, alloc_k, last_flushed));
+	}
 
 	if (a->data_type == BCH_DATA_cached) {
 		if (ret_fsck_err_on(!a->io_time[READ],

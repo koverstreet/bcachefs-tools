@@ -23,6 +23,7 @@ static int bch2_fill_extent(struct bch_fs *c,
 			    struct bch_fiemap_extent *fe)
 {
 	struct bkey_s_c k = bkey_i_to_s_c(fe->kbuf.k);
+	u64 len = (u64) k.k->size << 9;
 	unsigned flags = fe->flags;
 
 	BUG_ON(!k.k->size);
@@ -54,20 +55,20 @@ static int bch2_fill_extent(struct bch_fs *c,
 			try(fiemap_fill_next_extent(info,
 						bkey_start_offset(k.k) << 9,
 						offset << 9,
-						k.k->size << 9, flags|flags2));
+						len, flags|flags2));
 		}
 
 		return 0;
 	} else if (bkey_extent_is_inline_data(k.k)) {
 		return fiemap_fill_next_extent(info,
 					       bkey_start_offset(k.k) << 9,
-					       0, k.k->size << 9,
+					       0, len,
 					       flags|
 					       FIEMAP_EXTENT_DATA_INLINE);
 	} else if (k.k->type == KEY_TYPE_reservation) {
 		return fiemap_fill_next_extent(info,
 					       bkey_start_offset(k.k) << 9,
-					       0, k.k->size << 9,
+					       0, len,
 					       flags|
 					       FIEMAP_EXTENT_DELALLOC|
 					       FIEMAP_EXTENT_UNWRITTEN);
@@ -172,7 +173,7 @@ static int bch2_next_fiemap_extent(struct btree_trans *trans,
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_extents,
 				SPOS(inode->ei_inum.inum, start, snapshot), 0);
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, POS(inode->ei_inum.inum, end)));
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(inode->ei_inum.inum, end)));
 
 	u64 pagecache_end = k.k ? max(start, bkey_start_offset(k.k)) : end;
 

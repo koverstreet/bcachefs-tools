@@ -6,14 +6,17 @@
 #include "btree/bkey_methods.h"
 #include "snapshots/snapshot.h"
 
+#include <linux/hash.h>
+#include <linux/sched.h>
+
 extern const char * const bch2_inode_opts[];
 
 int bch2_inode_validate(struct bch_fs *, struct bkey_s_c,
-			struct bkey_validate_context);
+			const struct bkey_validate_context *);
 int bch2_inode_v2_validate(struct bch_fs *, struct bkey_s_c,
-			   struct bkey_validate_context);
+			   const struct bkey_validate_context *);
 int bch2_inode_v3_validate(struct bch_fs *, struct bkey_s_c,
-			   struct bkey_validate_context);
+			   const struct bkey_validate_context *);
 void bch2_inode_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 int __bch2_inode_has_child_snapshots(struct btree_trans *, struct bpos);
@@ -56,7 +59,7 @@ static inline bool bkey_is_inode(const struct bkey *k)
 }
 
 int bch2_inode_generation_validate(struct bch_fs *, struct bkey_s_c,
-				   struct bkey_validate_context);
+				   const struct bkey_validate_context *);
 void bch2_inode_generation_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 #define bch2_bkey_ops_inode_generation ((struct bkey_ops) {	\
@@ -66,7 +69,7 @@ void bch2_inode_generation_to_text(struct printbuf *, struct bch_fs *, struct bk
 })
 
 int bch2_inode_alloc_cursor_validate(struct bch_fs *, struct bkey_s_c,
-				     struct bkey_validate_context);
+				     const struct bkey_validate_context *);
 void bch2_inode_alloc_cursor_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 #define bch2_bkey_ops_inode_alloc_cursor ((struct bkey_ops) {	\
@@ -108,11 +111,19 @@ struct bkey_inode_buf {
 #undef  x
 };
 
-void bch2_inode_pack(struct bkey_inode_buf *, const struct bch_inode_unpacked *);
-int bch2_inode_unpack(struct bkey_s_c, struct bch_inode_unpacked *);
+void bch2_inode_pack(struct bch_fs *, struct bkey_inode_buf *, const struct bch_inode_unpacked *);
+void bch2_inode_unpack(struct bch_fs *, struct bkey_s_c, struct bch_inode_unpacked *);
 struct bkey_i *bch2_inode_to_v3(struct btree_trans *, struct bkey_i *);
 
 void bch2_inode_unpacked_to_text(struct printbuf *, struct bch_inode_unpacked *);
+
+int __bch2_inode_peek_snapshot(struct btree_trans *,
+			       struct btree_iter *,
+			       struct bch_inode_unpacked *,
+			       subvol_inum, u32, unsigned, const char *);
+
+#define bch2_inode_peek_snapshot(_trans, _iter, _inode, _inum, _snapshot, _flags)	\
+	__bch2_inode_peek_snapshot(_trans, _iter, _inode, _inum, _snapshot, _flags, __func__)
 
 int __bch2_inode_peek(struct btree_trans *, struct btree_iter *,
 		      struct bch_inode_unpacked *, subvol_inum, unsigned, const char *);
@@ -130,6 +141,9 @@ static inline int bch2_inode_peek_nowarn(struct btree_trans *trans,
 
 int bch2_inode_find_by_inum_snapshot(struct btree_trans *, u64, u32,
 				     struct bch_inode_unpacked *, unsigned);
+int bch2_inode_find_by_inum_snapshot2(struct btree_trans *, subvol_inum, u32,
+				      struct bch_inode_unpacked *,
+				      unsigned, const char *);
 
 int __bch2_inode_find_by_inum_trans(struct btree_trans *, subvol_inum,
 				    struct bch_inode_unpacked *, const char *);
@@ -173,7 +187,10 @@ void bch2_inode_init(struct bch_fs *, struct bch_inode_unpacked *,
 		     struct bch_inode_unpacked *);
 
 int bch2_inode_create(struct btree_trans *, struct btree_iter *,
-		      struct bch_inode_unpacked *, u32, u64, bool);
+		      struct bch_inode_unpacked *, u32, bool);
+
+void bch2_fs_inode_shard_cpu_init(struct bch_fs *);
+unsigned bch2_shard_inode_numbers_bits_default(unsigned nr_cpus, u64 fs_size, u64 btree_node_bytes);
 
 int bch2_inode_rm(struct bch_fs *, subvol_inum);
 

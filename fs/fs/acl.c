@@ -17,7 +17,7 @@ static const char * const acl_types[] = {
 	NULL,
 };
 
-void bch2_acl_to_text(struct printbuf *out, const void *value, size_t size)
+__cold void bch2_acl_to_text(struct printbuf *out, const void *value, size_t size)
 {
 	const void *p, *end = value + size;
 
@@ -280,6 +280,20 @@ struct posix_acl *bch2_get_acl(struct inode *vinode, int type, bool rcu)
 	if (rcu)
 		return ERR_PTR(-ECHILD);
 
+	/*
+	 * Fast path: if the inode flag for this ACL type is clear, no acl
+	 * xattr exists and we can skip the btree lookup. Also populate the
+	 * VFS negative cache, so subsequent permission checks on this inode
+	 * short-circuit at the VFS layer:
+	 */
+	u64 flag = type == ACL_TYPE_ACCESS
+		? BCH_INODE_has_access_acl
+		: BCH_INODE_has_default_acl;
+	if (!(inode->ei_inode.bi_flags & flag)) {
+		set_cached_acl(&inode->v, type, NULL);
+		return NULL;
+	}
+
 	struct bch_hash_info hash;
 	struct xattr_search_key search = X_SEARCH(acl_to_xattr_type(type), "", 0);
 
@@ -290,8 +304,13 @@ struct posix_acl *bch2_get_acl(struct inode *vinode, int type, bool rcu)
 		lockrestart_do(trans,
 			bkey_err(k = bch2_hash_lookup(trans, &iter, bch2_xattr_hash_desc,
 					     &hash, inode_inum(inode), &search, 0)));
-	if (ret)
-		return bch2_err_matches(ret, ENOENT) ? NULL : ERR_PTR(ret);
+	if (ret) {
+		if (bch2_err_matches(ret, ENOENT)) {
+			set_cached_acl(&inode->v, type, NULL);
+			return NULL;
+		}
+		return ERR_PTR(ret);
+	}
 
 	struct bkey_s_c_xattr xattr = bkey_s_c_to_xattr(k);
 	struct posix_acl *acl = bch2_acl_from_disk(trans, xattr);
@@ -329,9 +348,22 @@ int bch2_set_acl_trans(struct btree_trans *trans, subvol_inum inum,
 
 		ret = bch2_hash_delete(trans, bch2_xattr_hash_desc, &hash_info,
 				       inum, &search);
+		if (bch2_err_matches(ret, ENOENT))
+			ret = 0;
 	}
 
-	return bch2_err_matches(ret, ENOENT) ? 0 : ret;
+	if (ret)
+		return ret;
+
+	u64 flag = type == ACL_TYPE_ACCESS
+		? BCH_INODE_has_access_acl
+		: BCH_INODE_has_default_acl;
+	if (acl)
+		inode_u->bi_flags |=  flag;
+	else
+		inode_u->bi_flags &= ~flag;
+
+	return 0;
 }
 
 static int __bch2_set_acl(struct btree_trans *trans,
@@ -339,7 +371,8 @@ static int __bch2_set_acl(struct btree_trans *trans,
 			  struct bch_inode_info *inode,
 			  struct posix_acl *acl, int type)
 {
-	try(bch2_subvol_is_ro_trans(trans, inode->ei_inum.subvol));
+	u32 snapshot;
+	try(bch2_subvol_is_ro_trans(trans, inode->ei_inum.subvol, &snapshot));
 
 	CLASS(btree_iter_uninit, inode_iter)(trans);
 	struct bch_inode_unpacked inode_u;
@@ -372,7 +405,7 @@ int bch2_set_acl(struct mnt_idmap *idmap,
 
 	guard(mutex)(&inode->ei_update_lock);
 	CLASS(btree_trans, trans)(c);
-	return lockrestart_do(trans, __bch2_set_acl(trans, idmap, inode, acl, type));
+	return bch2_err_class(lockrestart_do(trans, __bch2_set_acl(trans, idmap, inode, acl, type)));
 }
 
 int bch2_acl_chmod(struct btree_trans *trans, subvol_inum inum,

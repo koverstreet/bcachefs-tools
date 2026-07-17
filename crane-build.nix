@@ -4,8 +4,10 @@
   stdenvNoCC,
 
   # build time
+  jq,
   pkg-config,
   rustPlatform,
+  rust-bindgen,
   versionCheckHook,
 
   # run time
@@ -26,8 +28,19 @@
   version,
 }:
 let
+  # Use the build-platform toolchain with the target added, so cross builds
+  # cross-compile with the binary x86_64 rustc + the target's std rather than
+  # building a cross rustc from source (slow, and trips rustc bootstrap bugs).
+  # For native builds pkgsBuildHost == pkgs and the target is native, so this is
+  # a no-op.
   craneLib = (crane.mkLib pkgs).overrideToolchain (
-    p: p.rust-bin.stable."${rustVersion}".minimal.override { extensions = [ "clippy" ]; }
+    _: pkgs.pkgsBuildHost.rust-bin.stable."${rustVersion}".minimal.override {
+      extensions = [ "clippy" ];
+      # outer (cross) pkgs: the host platform is the cross target, so we add its
+      # rust-std to the build-platform toolchain. crane calls this with the
+      # build-platform pkgs, so taking the target from there would be a no-op.
+      targets = [ pkgs.stdenv.hostPlatform.rust.rustcTarget ];
+    }
   );
 
   args = {
@@ -39,6 +52,10 @@ let
     strictDeps = true;
 
     env = {
+      # bindgen runs at build time, so it must be the build-platform binary;
+      # referencing the (cross) host package here drags in a from-source cross
+      # rust toolchain (rustc/cargo/rustfmt-nightly).
+      BINDGEN = "${pkgs.buildPackages.rust-bindgen}/bin/bindgen";
       PKG_CONFIG_SYSTEMD_SYSTEMDSYSTEMUNITDIR = "${placeholder "out"}/lib/systemd/system";
       PKG_CONFIG_UDEV_UDEVDIR = "${placeholder "out"}/lib/udev";
     };
@@ -52,8 +69,10 @@ let
     dontStrip = true;
 
     nativeBuildInputs = [
+      jq
       pkg-config
       rustPlatform.bindgenHook
+      rust-bindgen
     ];
 
     buildInputs = [

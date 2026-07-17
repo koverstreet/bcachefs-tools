@@ -17,6 +17,15 @@ Development notes specific to bcachefs. These are intended to supplement
    CodingStyle
    SubmittingPatches
 
+Operations
+----------
+
+.. toctree::
+   :maxdepth: 1
+   :numbered:
+
+   recovery
+
 Filesystem implementation
 -------------------------
 
@@ -28,7 +37,9 @@ At this moment, only a few of these are described here.
    :numbered:
 
    casefolding
+   qemu_direct_io
    errorcodes
+   limits
 
 Future design
 -------------

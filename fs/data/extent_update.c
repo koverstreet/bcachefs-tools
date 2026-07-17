@@ -103,6 +103,17 @@ static int count_iters_for_insert(struct btree_trans *trans,
 	return ret2 ?: ret;
 }
 
+static noinline __cold
+void __extent_trim_atomic_trace(struct btree_trans *trans, struct bpos end,
+				struct bkey_i *insert)
+{
+	__event_trace(trans->c, extent_trim_atomic, buf, ({
+		bch2_bpos_to_text(&buf, end);
+		prt_newline(&buf);
+		bch2_bkey_val_to_text(&buf, trans->c, bkey_i_to_s_c(insert));
+	}));
+}
+
 int bch2_extent_trim_atomic(struct btree_trans *trans,
 			    struct btree_iter *iter,
 			    struct bkey_i *insert)
@@ -161,11 +172,8 @@ int bch2_extent_trim_atomic(struct btree_trans *trans,
 	/* tracepoint */
 
 	if (bpos_lt(end, insert->k.p)) {
-		event_trace(trans->c, extent_trim_atomic, buf, ({
-			bch2_bpos_to_text(&buf, end);
-			prt_newline(&buf);
-			bch2_bkey_val_to_text(&buf, trans->c, bkey_i_to_s_c(insert));
-		}));
+		event_trace_fn(trans->c, extent_trim_atomic,
+			       __extent_trim_atomic_trace(trans, end, insert));
 		bch2_cut_back(end, insert);
 	}
 	return 0;

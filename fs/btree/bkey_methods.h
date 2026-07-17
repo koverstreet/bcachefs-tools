@@ -22,12 +22,14 @@ extern const struct bkey_ops bch2_bkey_null_ops;
  */
 struct bkey_ops {
 	int		(*key_validate)(struct bch_fs *c, struct bkey_s_c k,
-					struct bkey_validate_context from);
+					const struct bkey_validate_context *from);
 	void		(*val_to_text)(struct printbuf *, struct bch_fs *,
 				       struct bkey_s_c);
 	void		(*swab)(const struct bch_fs *, struct bkey_s);
 	bool		(*key_merge)(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 	int		(*trigger)(struct btree_trans *, struct btree_trigger_op);
+	int		(*check_repair)(struct btree_trans *, struct btree_iter *,
+					enum btree_id, unsigned, struct bkey_s_c);
 	void		(*compat)(enum btree_id id, unsigned version,
 				  unsigned big_endian, int write,
 				  struct bkey_s);
@@ -46,14 +48,11 @@ static inline const struct bkey_ops *bch2_bkey_type_ops(enum bch_bkey_type type)
 }
 
 int bch2_bkey_val_validate(struct bch_fs *, struct bkey_s_c,
-			   struct bkey_validate_context);
+			   const struct bkey_validate_context *);
 int __bch2_bkey_validate(struct bch_fs *, struct bkey_s_c,
-			 struct bkey_validate_context);
+			 const struct bkey_validate_context *);
 int bch2_bkey_validate(struct bch_fs *, struct bkey_s_c,
-		       struct bkey_validate_context);
-int bch2_bkey_in_btree_node(struct bch_fs *, struct btree *, struct bkey_s_c,
-			    struct bkey_validate_context from);
-
+		       const struct bkey_validate_context *);
 void bch2_bpos_to_text(struct printbuf *, struct bpos);
 void bch2_bkey_to_text(struct printbuf *, const struct bkey *);
 void bch2_val_to_text(struct printbuf *, struct bch_fs *,
@@ -72,14 +71,19 @@ static inline bool bch2_bkey_maybe_mergable(const struct bkey *l, const struct b
 
 bool bch2_bkey_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 
+/* Defined in alloc/buckets.c; forward-declared here to avoid an include cycle. */
+int bch2_trigger_snapshot_nr_keys(struct btree_trans *, struct btree_trigger_op);
+
 static inline int bch2_key_trigger(struct btree_trans *trans,
 				   struct btree_trigger_op op)
 {
 	const struct bkey_ops *ops = bch2_bkey_type_ops(op.old.k->type ?: op.new.k->type);
 
-	return ops->trigger
+	int ret = ops->trigger
 		? ops->trigger(trans, op)
 		: 0;
+
+	return ret ?: bch2_trigger_snapshot_nr_keys(trans, op);
 }
 
 static inline int bch2_key_trigger_old(struct btree_trans *trans,
@@ -122,6 +126,15 @@ static inline int bch2_key_trigger_new(struct btree_trans *trans,
 	});
 }
 
+static inline int bch2_bkey_check_repair(struct btree_trans *trans, struct btree_iter *iter,
+					 enum btree_id btree, unsigned level, struct bkey_s_c k)
+{
+	const struct bkey_ops *ops = bch2_bkey_type_ops(k.k->type);
+	return ops->check_repair
+		? ops->check_repair(trans, iter, btree, level, k)
+		: 0;
+}
+
 void bch2_bkey_renumber(enum btree_node_type, struct bkey_packed *, int);
 
 void __bch2_bkey_compat(const struct bch_fs *, unsigned, enum btree_id, unsigned, unsigned,
@@ -133,7 +146,7 @@ static inline void bch2_bkey_compat(const struct bch_fs *c, unsigned level, enum
 			       struct bkey_format *f,
 			       struct bkey_packed *k)
 {
-	if (version < bcachefs_metadata_version_current ||
+	if (unlikely(version < bcachefs_metadata_version_current) ||
 	    big_endian != CPU_BIG_ENDIAN ||
 	    IS_ENABLED(CONFIG_BCACHEFS_DEBUG))
 		__bch2_bkey_compat(c, level, btree_id, version,

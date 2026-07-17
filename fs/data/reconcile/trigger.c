@@ -21,7 +21,7 @@
 
 int bch2_extent_reconcile_validate(struct bch_fs *c,
 				   struct bkey_s_c k,
-				   struct bkey_validate_context from,
+				   const struct bkey_validate_context *from,
 				   const struct bch_extent_reconcile *r)
 {
 	int ret = 0;
@@ -71,7 +71,7 @@ enum reconcile_work_id bch2_bkey_reconcile_work_id(const struct bch_fs *c, struc
 	}
 }
 
-void bch2_extent_rebalance_v1_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_extent_rebalance_v1_to_text(struct printbuf *out, struct bch_fs *c,
 				      const struct bch_extent_rebalance_v1 *r)
 {
 	prt_printf(out, "replicas=%u", r->data_replicas);
@@ -120,7 +120,7 @@ void bch2_extent_rebalance_v1_to_text(struct printbuf *out, struct bch_fs *c,
 	}
 }
 
-void bch2_extent_reconcile_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_extent_reconcile_to_text(struct printbuf *out, struct bch_fs *c,
 				      const struct bch_extent_reconcile *r)
 {
 	prt_str(out, "need_rb=");
@@ -488,8 +488,7 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	unsigned csum_type	= !opts->nocow ? bch2_data_checksum_type_rb(c, r) : 0;
 
 	bool incompressible = false, unwritten = false, ec = false;
-	unsigned durability = 0, durability_acct = 0, invalid = 0, min_durability = INT_MAX;
-	unsigned ec_redundancy = 0;
+	unsigned invalid = 0, ec_redundancy = 0;
 
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
@@ -528,19 +527,6 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 				r.ptrs_moving |= ptr_bit;
 		}
 
-		int d = bch2_extent_ptr_desired_durability(trans, &p);
-		if (d < 0)
-			return d;
-
-		durability_acct += d;
-
-		if (evacuating)
-			d = 0;
-
-		durability += d;
-		if (!p.ptr.cached)
-			min_durability = min(min_durability, d);
-
 		if (p.has_ec && r.erasure_code)
 			ec_redundancy = max_t(unsigned, ec_redundancy, p.ec.redundancy);
 		ec |= p.has_ec;
@@ -563,7 +549,19 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	if (unwritten)
 		r.need_rb &= ~BIT(BCH_RECONCILE_data_checksum);
 
-	if (max(durability, ec_redundancy) < r.data_replicas) {
+	/*
+	 * Whole-key durability in one pass: a device shared between the extent's
+	 * stripes is counted once (the per-pointer sum can't see that), and the
+	 * per-pointer accounting and minimum come back from the same stripe reads
+	 * rather than a separate walk.
+	 */
+	struct bkey_durability dur;
+	try(bch2_bkey_durability(trans, k, &dur));
+	unsigned durability		= dur.total;
+	unsigned durability_acct	= dur.acct;
+	unsigned min_durability		= dur.min_durability;
+
+	if (max(durability, ec_redundancy + 1) < r.data_replicas) {
 		r.need_rb |= BIT(BCH_RECONCILE_data_replicas);
 		r.hipri = 1;
 	}
@@ -574,8 +572,15 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	if (!unwritten && r.erasure_code != ec)
 		r.need_rb |= BIT(BCH_RECONCILE_erasure_code);
 
+	/*
+	 * Floor the EC contribution at the stripe's repairable durability: a
+	 * removed stripe device reads as durability_desired 0, dropping
+	 * durability_acct below ec_redundancy + 1, but stripe repair reconstructs
+	 * the block and restores it - so don't pad with placeholders for
+	 * durability the stripe will get back on its own.
+	 */
 	*need_update_invalid_devs =
-		min_t(int, durability_acct + invalid - r.data_replicas, invalid);
+		min_t(int, max(durability_acct, ec_redundancy + 1) + invalid - r.data_replicas, invalid);
 
 	/* Multiple pointers to BCH_SB_MEMBER_INVALID is an incompat feature: */
 	if (*need_update_invalid_devs < 0 &&
@@ -1042,9 +1047,9 @@ int bch2_bkey_get_io_opts(struct btree_trans *trans,
 							   SPOS(0, k.k->p.inode, U32_MAX),
 							   BTREE_ITER_all_snapshots, inode_k, ({
 					struct bch_inode_unpacked inode;
-					if (!bkey_is_inode(inode_k.k) ||
-					    bch2_inode_unpack(inode_k, &inode))
+					if (!bkey_is_inode(inode_k.k))
 						continue;
+					bch2_inode_unpack(c, inode_k, &inode);
 
 					struct snapshot_io_opts_entry e = { .snapshot = inode_k.k->p.snapshot };
 					bch2_inode_opts_get_inode(c, &inode, &e.io_opts);

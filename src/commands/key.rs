@@ -1,21 +1,21 @@
 use std::path::{Path, PathBuf};
 
-use anyhow::{bail, Context, Result};
-use bch_bindgen::bcachefs::bch_key;
+use anyhow::{anyhow, bail, Context, Result};
+use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
 use bch_bindgen::c;
-use bch_bindgen::fs::Fs;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
 use clap::Parser;
 
-use crate::key::{sb_is_encrypted, unencrypted_key, KeyHandle, Keyring, Passphrase};
+use crate::key::{sb_is_encrypted, KeyHandle, Keyring, Passphrase, PassphraseCorrect};
 
 // ---- unlock ----
 
 #[derive(Parser, Debug)]
 #[command(about = "Unlock an encrypted filesystem prior to running/mounting")]
 pub struct UnlockCli {
-    /// Check if a device is encrypted
+    /// Report the device's encryption and lock state, then exit
     #[arg(short, long)]
     check: bool,
 
@@ -36,41 +36,41 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
     let sb = sb_io::read_super(Path::new(&cli.device))
         .with_context(|| format!("Error opening {}", cli.device))?;
 
-    if !sb_is_encrypted(&sb) {
-        bail!("{} is not encrypted", cli.device);
-    }
+    let encrypted = sb_is_encrypted(&sb);
 
+    // --check reports state without prompting or unlocking. "Unlocked" means
+    // the key for this filesystem's UUID is already present in a keyring.
     if cli.check {
+        if !encrypted {
+            println!("Device has no encryption");
+            // Exit nonzero on the unencrypted case. Boot scripts (notably the
+            // NixOS initramfs) branch on --check's exit code to decide whether
+            // to prompt for unlock; returning 0 here makes an unencrypted root
+            // read as "needs unlocking" and prompt for a nonexistent passphrase.
+            // Encrypted (locked or unlocked) still exits 0, matching the
+            // behaviour from before --check grew the three-state output.
+            std::process::exit(1);
+        } else if KeyHandle::new_from_search(&sb.sb().uuid()).is_ok() {
+            println!("Device is encrypted and unlocked");
+        } else {
+            println!("Device is encrypted and locked");
+        }
         return Ok(());
     }
 
-    let uuid = sb.sb().uuid();
+    if !encrypted {
+        bail!("{} is not encrypted", cli.device);
+    }
 
-    // First attempt
-    let passphrase = if let Some(ref file) = cli.file {
-        Passphrase::new_from_file(file)?
-    } else {
-        Passphrase::new(&uuid)?
+    let passphrase_correct = match cli.file {
+        Some(ref file) => Passphrase::read_from_file(file)?
+            .check(&sb)
+            .ok_or_else(|| anyhow!("incorrect passphrase"))?,
+        None => Passphrase::ask_and_check(&sb)?,
     };
+    KeyHandle::new(&passphrase_correct, cli.keyring)?;
 
-    match KeyHandle::new(&sb, &passphrase, cli.keyring) {
-        Ok(_) => return Ok(()),
-        Err(e) if e.to_string().contains("incorrect passphrase") => {}
-        Err(e) => return Err(e),
-    }
-
-    // Retry up to 2 more times, always interactive
-    for _ in 0..2 {
-        eprintln!("incorrect passphrase");
-        let passphrase = Passphrase::new_from_prompt(&uuid)?;
-        match KeyHandle::new(&sb, &passphrase, cli.keyring) {
-            Ok(_) => return Ok(()),
-            Err(e) if e.to_string().contains("incorrect passphrase") => continue,
-            Err(e) => return Err(e),
-        }
-    }
-
-    bail!("incorrect passphrase limit reached");
+    Ok(())
 }
 
 // ---- shared helpers for set/remove-passphrase ----
@@ -105,14 +105,11 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
     }
 
     if sb_is_encrypted(sb_handle) {
-        let uuid = sb_handle.sb().uuid();
-        let old_passphrase = Passphrase::new_from_prompt(&uuid)
-            .context("reading current passphrase")?;
-        let (_, sb_key) = old_passphrase.check(sb_handle)
-            .context("verifying current passphrase")?;
-        Ok((fs, sb_key.key))
+        let PassphraseCorrect { cleartext_sb_key, .. } =
+            Passphrase::ask_and_check(sb_handle)?;
+        Ok((fs, cleartext_sb_key.into_key()))
     } else {
-        let raw_key = sb_handle.sb().crypt().unwrap().key().key;
+        let raw_key = sb_handle.sb().crypt().unwrap().key().key.clone();
         Ok((fs, raw_key))
     }
 }
@@ -123,7 +120,7 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
 /// Caller must hold sb_lock.
 unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
     let disk_sb = &mut (*fs.raw).disk_sb;
-    let crypt: &mut c::bch_sb_field_crypt = bch_bindgen::sb::sb_field_get_mut(disk_sb)
+    let crypt: &mut c::bch_sb_field_crypt = bcachefs_kernel::sb::io::sb_field_get_mut(disk_sb)
         .expect("filesystem has no crypt field");
     crypt.key = key;
 }
@@ -131,7 +128,7 @@ unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
 // ---- set-passphrase ----
 
 #[derive(Parser, Debug)]
-#[command(about = "Change passphrase on an existing (unmounted) filesystem")]
+#[command(about = "Change passphrase on an existing encrypted (unmounted) filesystem")]
 pub struct SetPassphraseCli {
     /// Devices (colon-separated or multiple arguments)
     #[arg(required = true)]
@@ -141,10 +138,10 @@ pub struct SetPassphraseCli {
 fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
-    let new_passphrase = Passphrase::new_from_prompt_twice()
+    let new_passphrase = Passphrase::ask_for_new_passphrase()
         .context("reading new passphrase")?;
 
-    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), &raw_key);
+    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), raw_key);
 
     unsafe {
         set_crypt_key(&fs, encrypted_key);
@@ -158,7 +155,7 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
 // ---- remove-passphrase ----
 
 #[derive(Parser, Debug)]
-#[command(about = "Remove passphrase on an existing (unmounted) filesystem")]
+#[command(about = "Remove passphrase protection from an existing encrypted (unmounted) filesystem")]
 pub struct RemovePassphraseCli {
     /// Devices (colon-separated or multiple arguments)
     #[arg(required = true)]
@@ -168,12 +165,12 @@ pub struct RemovePassphraseCli {
 fn cmd_remove_passphrase(cli: RemovePassphraseCli) -> Result<()> {
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
-    unsafe { set_crypt_key(&fs, unencrypted_key(&raw_key)); }
+    unsafe { set_crypt_key(&fs, bch_encrypted_key::new_unencrypted(raw_key)); }
     fs.write_super();
 
     Ok(())
 }
 
 pub const CMD_UNLOCK: super::CmdDef = typed_cmd!("unlock", "Unlock an encrypted filesystem", UnlockCli, cmd_unlock);
-pub const CMD_SET_PASSPHRASE: super::CmdDef = typed_cmd!("set-passphrase", "Set or change passphrase", SetPassphraseCli, cmd_set_passphrase);
-pub const CMD_REMOVE_PASSPHRASE: super::CmdDef = typed_cmd!("remove-passphrase", "Remove passphrase", RemovePassphraseCli, cmd_remove_passphrase);
+pub const CMD_SET_PASSPHRASE: super::CmdDef = typed_cmd!("set-passphrase", "Set or change encryption passphrase", SetPassphraseCli, cmd_set_passphrase);
+pub const CMD_REMOVE_PASSPHRASE: super::CmdDef = typed_cmd!("remove-passphrase", "Remove encryption passphrase", RemovePassphraseCli, cmd_remove_passphrase);

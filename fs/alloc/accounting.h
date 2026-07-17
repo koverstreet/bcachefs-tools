@@ -117,7 +117,7 @@ do {									\
 int bch2_mod_dev_cached_sectors(struct btree_trans *, unsigned, s64, bool);
 
 int bch2_accounting_validate(struct bch_fs *, struct bkey_s_c,
-			     struct bkey_validate_context);
+			     const struct bkey_validate_context *);
 void bch2_accounting_key_to_text(struct printbuf *, struct bch_fs *, struct disk_accounting_pos *);
 void bch2_accounting_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 void bch2_accounting_swab(const struct bch_fs *, struct bkey_s);
@@ -252,15 +252,23 @@ static inline void bch2_accounting_mem_read_counters(struct bch_accounting_mem *
 		v[i] = percpu_u64_get(e->v[gc] + i);
 }
 
-static inline void bch2_accounting_mem_read(struct bch_fs *c, struct bpos p,
-					    u64 *v, unsigned nr)
+static inline void bch2_accounting_mem_read_locked(struct bch_fs *c, struct bpos p,
+						   u64 *v, unsigned nr)
 {
-	guard(percpu_read)(&c->capacity.mark_lock);
+	percpu_rwsem_assert_held(&c->capacity.mark_lock);
+
 	struct bch_accounting_mem *acc = &c->accounting;
 	unsigned idx = eytzinger0_find(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
 				       accounting_pos_cmp, &p);
 
 	bch2_accounting_mem_read_counters(acc, idx, v, nr, false);
+}
+
+static inline void bch2_accounting_mem_read(struct bch_fs *c, struct bpos p,
+					    u64 *v, unsigned nr)
+{
+	guard(percpu_read)(&c->capacity.mark_lock);
+	bch2_accounting_mem_read_locked(c, p, v, nr);
 }
 
 static inline struct bversion journal_pos_to_bversion(struct journal_res *res, unsigned offset)

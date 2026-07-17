@@ -327,12 +327,12 @@ fn round_up(v: u64, align: u64) -> u64 {
 /// Get the size of a file or block device given a borrowed fd.
 fn file_size_fd(fd: BorrowedFd<'_>) -> Result<u64> {
     use rustix::fs::{fstat, FileType};
-    use rustix::ioctl::{Getter, ReadOpcode};
+    use rustix::ioctl::{self, Getter};
 
     let stat = fstat(fd)?;
     if FileType::from_raw_mode(stat.st_mode) == FileType::BlockDevice {
-        type BlkGetSize64 = ReadOpcode<0x12, 114, u64>;
-        Ok(unsafe { rustix::ioctl::ioctl(fd, Getter::<BlkGetSize64, u64>::new()) }?)
+        const BLKGETSIZE64: ioctl::Opcode = ioctl::opcode::read::<u64>(0x12, 114);
+        Ok(unsafe { rustix::ioctl::ioctl(fd, Getter::<BLKGETSIZE64, u64>::new()) }?)
     } else {
         Ok(stat.st_size as u64)
     }

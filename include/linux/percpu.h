@@ -48,7 +48,7 @@ extern char __start_bch_percpu[], __stop_bch_percpu[];
  * Static section is sized at link time (__stop_bch_percpu - __start_bch_percpu);
  * dynamic arena is BCH_PERCPU_DYNAMIC_SIZE bytes for alloc_percpu().
  */
-#define BCH_PERCPU_DYNAMIC_SIZE	(64 * 1024)
+#define BCH_PERCPU_DYNAMIC_SIZE	(512 * 1024)
 
 extern __thread void *bch_percpu_my_chunk;
 extern __thread int   bch_percpu_my_id;

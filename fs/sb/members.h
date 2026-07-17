@@ -166,6 +166,26 @@ static inline void bch2_dev_put(struct bch_dev *ca)
 }
 DEFINE_FREE(bch2_dev_put, struct bch_dev *, bch2_dev_put(_T))
 
+/*
+ * Memory-lifetime-only reference: keeps the bch_dev allocation alive, but
+ * does NOT imply the device is still a member of the filesystem - removal
+ * can complete while you hold this. Use it (never ca->ref) in any context
+ * that blocks on state_lock, and recheck ca->removing under the lock
+ * before touching member state. Drained by bch2_dev_free(), outside
+ * state_lock. See the comment at ca->ref_outer.
+ */
+static inline void bch2_dev_get_outer(struct bch_dev *ca)
+{
+	refcount_inc(&ca->ref_outer);
+}
+
+static inline void bch2_dev_put_outer(struct bch_dev *ca)
+{
+	if (!IS_ERR_OR_NULL(ca) &&
+	    refcount_dec_and_test(&ca->ref_outer))
+		complete(&ca->ref_outer_completion);
+}
+
 /* Device iteration (refcounted): */
 
 static inline struct bch_dev *bch2_get_next_dev(struct bch_fs *c, struct bch_dev *ca)
@@ -450,6 +470,7 @@ static inline struct bch_member_cpu bch2_mi_to_cpu(struct bch_member *mi)
 			? BCH_MEMBER_DURABILITY(mi) - 1
 			: 1,
 		.freespace_initialized	= BCH_MEMBER_FREESPACE_INITIALIZED(mi),
+		.initialized		= BCH_MEMBER_INITIALIZED(mi),
 		.resize_on_mount	= BCH_MEMBER_RESIZE_ON_MOUNT(mi),
 		.rotational		= BCH_MEMBER_ROTATIONAL(mi),
 		.valid			= bch2_member_alive(mi),
@@ -523,7 +544,16 @@ void bch2_maybe_schedule_btree_bitmap_gc(struct bch_fs *);
 int bch2_sb_member_alloc(struct bch_fs *);
 void bch2_sb_members_clean_deleted(struct bch_fs *);
 
-void __bch2_dev_mi_field_upgrades(struct bch_fs *, struct bch_dev *, bool *);
+struct bch_dev_identity {
+	char name[sizeof(((struct bch_member *) NULL)->device_name) + 1];
+	char model[sizeof(((struct bch_member *) NULL)->device_model) + 1];
+	char serial[sizeof(((struct bch_member *) NULL)->device_serial) + 1];
+	bool rotational;
+};
+
+void bch2_dev_mi_field_read(struct bch_dev *, struct bch_dev_identity *);
+void bch2_dev_mi_field_upgrades_locked(struct bch_fs *, struct bch_dev *,
+				       const struct bch_dev_identity *, bool *);
 void bch2_dev_mi_field_upgrades(struct bch_dev *);
 void bch2_fs_mi_field_upgrades(struct bch_fs *);
 

@@ -12,6 +12,7 @@
 #include "sb/members.h"
 #include "sb/io.h"
 
+#include "init/dev.h"
 #include "init/error.h"
 #include "init/passes.h"
 #include "init/progress.h"
@@ -46,10 +47,21 @@ int bch2_dev_missing_bkey(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
 
 void bch2_dev_missing_atomic(struct bch_fs *c, unsigned dev)
 {
-	if (dev != BCH_SB_MEMBER_INVALID)
-		bch2_fs_inconsistent(c, "pointer to %s device %u",
-				     test_bit(dev, c->devs_removed.d)
-				     ? "removed" : "nonexistent", dev);
+	if (dev == BCH_SB_MEMBER_INVALID)
+		return;
+
+	CLASS(printbuf, buf)();
+	guard(printbuf_atomic)(&buf);
+
+	bch2_log_msg_start(c, &buf);
+
+	prt_printf(&buf, "pointer to %s device %u\n",
+		   test_bit(dev, c->devs_removed.d)
+		   ? "removed" : "nonexistent", dev);
+	bch2_prt_task_backtrace(&buf, current, 1, GFP_ATOMIC);
+
+	__bch2_inconsistent_error(c, &buf);
+	bch2_print_str(c, KERN_ERR, buf.buf);
 }
 
 void bch2_dev_bucket_missing(struct bch_dev *ca, u64 bucket)
@@ -230,7 +242,7 @@ static int validate_member(struct printbuf *err,
 	return 0;
 }
 
-void bch2_member_to_text(struct printbuf *out,
+__cold void bch2_member_to_text(struct printbuf *out,
 			 struct bch_member *m,
 			 struct bch_sb_field_disk_groups *gi,
 			 struct bch_sb *sb,
@@ -401,7 +413,7 @@ void bch2_devs_mask_to_text_locked(struct printbuf *out, struct bch_fs *c,
 			bch2_member_to_text_short_locked(out, c, ca);
 }
 
-static void member_to_text(struct printbuf *out,
+static __cold void member_to_text(struct printbuf *out,
 			   struct bch_member m,
 			   struct bch_sb_field_disk_groups *gi,
 			   struct bch_sb *sb,
@@ -432,7 +444,7 @@ static int bch2_sb_members_v1_validate(struct bch_sb *sb, struct bch_sb_field *f
 	return 0;
 }
 
-static void bch2_sb_members_v1_to_text(struct printbuf *out,
+static __cold void bch2_sb_members_v1_to_text(struct printbuf *out,
 				       struct bch_fs *c,
 				       struct bch_sb *sb,
 				       struct bch_sb_field *f)
@@ -458,7 +470,7 @@ const struct bch_sb_field_ops bch_sb_field_ops_members_v1 = {
 	.to_text	= bch2_sb_members_v1_to_text,
 };
 
-static void bch2_sb_members_v2_to_text(struct printbuf *out,
+static __cold void bch2_sb_members_v2_to_text(struct printbuf *out,
 				       struct bch_fs *c,
 				       struct bch_sb *sb,
 				       struct bch_sb_field *f)
@@ -544,7 +556,7 @@ void bch2_sb_members_to_cpu(struct bch_fs *c)
 		}
 }
 
-void bch2_dev_io_errors_to_text(struct printbuf *out, struct bch_dev *ca)
+__cold void bch2_dev_io_errors_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 	struct bch_member m;
@@ -829,7 +841,9 @@ static int bch2_sb_member_find_slot(struct bch_fs *c)
 	u64 best_last_mount = 0;
 	unsigned nr_deleted = 0;
 
-	if (c->sb.nr_devices < BCH_SB_MEMBERS_MAX)
+	/* The sentinel must never be allocated as a real device: */
+	if (c->sb.nr_devices < BCH_SB_MEMBERS_MAX &&
+	    c->sb.nr_devices != BCH_SB_MEMBER_INVALID)
 		return c->sb.nr_devices;
 
 	for (unsigned dev_idx = 0; dev_idx < BCH_SB_MEMBERS_MAX; dev_idx++) {
@@ -866,6 +880,8 @@ int bch2_sb_member_alloc(struct bch_fs *c)
 	if (dev_idx < 0)
 		return dev_idx;
 
+	EBUG_ON(dev_idx == BCH_SB_MEMBER_INVALID);
+
 	struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 
 	unsigned nr_devices = max_t(unsigned, dev_idx + 1, c->sb.nr_devices);
@@ -899,12 +915,48 @@ void bch2_sb_members_clean_deleted(struct bch_fs *c)
 		bch2_write_super(c);
 }
 
-void __bch2_dev_mi_field_upgrades(struct bch_fs *c, struct bch_dev *ca, bool *write_sb)
+static void dev_mi_update_str(void *dst, size_t dst_size, const char *src,
+			      bool *write_sb)
 {
+	u8 padded[sizeof(((struct bch_member *)NULL)->device_model)] = {};
+
+	if (!src[0])
+		return;
+
+	if (WARN_ON_ONCE(dst_size > sizeof(padded)))
+		return;
+
+	memcpy_and_pad(padded, dst_size, src, strnlen(src, dst_size), '\0');
+
+	if (memcmp(dst, padded, dst_size)) {
+		memcpy(dst, padded, dst_size);
+		*write_sb = true;
+	}
+}
+
+void bch2_dev_mi_field_read(struct bch_dev *ca, struct bch_dev_identity *identity)
+{
+	bch2_dev_read_identity(ca->disk_sb.bdev,
+			       identity->name, sizeof(identity->name),
+			       identity->model, sizeof(identity->model),
+			       identity->serial, sizeof(identity->serial));
+	identity->rotational = bdev_rot(ca->disk_sb.bdev);
+}
+
+void bch2_dev_mi_field_upgrades_locked(struct bch_fs *c, struct bch_dev *ca,
+				       const struct bch_dev_identity *identity,
+				       bool *write_sb)
+{
+	lockdep_assert_held(&c->sb_lock);
+
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 
+	dev_mi_update_str(m->device_name, sizeof(m->device_name), identity->name, write_sb);
+	dev_mi_update_str(m->device_model, sizeof(m->device_model), identity->model, write_sb);
+	dev_mi_update_str(m->device_serial, sizeof(m->device_serial), identity->serial, write_sb);
+
 	if (!BCH_MEMBER_ROTATIONAL_SET(m)) {
-		SET_BCH_MEMBER_ROTATIONAL(m, bdev_rot(ca->disk_sb.bdev));
+		SET_BCH_MEMBER_ROTATIONAL(m, identity->rotational);
 		SET_BCH_MEMBER_ROTATIONAL_SET(m, true);
 		*write_sb = true;
 	}
@@ -914,11 +966,14 @@ void bch2_dev_mi_field_upgrades(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 
+	struct bch_dev_identity identity;
+	bch2_dev_mi_field_read(ca, &identity);
+
 	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
 	guard(mutex)(&c->sb_lock);
 	bool write_sb = false;
 
-	__bch2_dev_mi_field_upgrades(c, ca, &write_sb);
+	bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
 
 	if (write_sb)
 		bch2_write_super(c);
@@ -929,14 +984,21 @@ void bch2_dev_mi_field_upgrades(struct bch_dev *ca)
  */
 void bch2_fs_mi_field_upgrades(struct bch_fs *c)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
 	bool write_sb = false;
 
-	scoped_guard(rcu)
-		for_each_online_member_rcu(c, ca)
-			__bch2_dev_mi_field_upgrades(c, ca, &write_sb);
+	for_each_online_member(c, ca, BCH_DEV_READ_REF_fs_mi_field_upgrades) {
+		struct bch_dev_identity identity;
 
-	if (write_sb)
+		bch2_dev_mi_field_read(ca, &identity);
+
+		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(mutex)(&c->sb_lock);
+		bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
+	}
+
+	if (write_sb) {
+		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(mutex)(&c->sb_lock);
 		bch2_write_super(c);
+	}
 }

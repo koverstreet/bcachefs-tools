@@ -25,9 +25,6 @@ void bch2_btree_cache_unpin(struct bch_fs *);
 void bch2_btree_node_set_dirty(struct bch_fs *, struct btree *);
 void bch2_btree_node_write_done_clean(struct bch_fs *, struct btree *);
 
-void bch2_btree_node_update_key_early(struct btree_trans *, enum btree_id, unsigned,
-				      struct bkey_s_c, struct bkey_i *);
-
 void bch2_btree_cache_cannibalize_unlock(struct btree_trans *);
 int bch2_btree_cache_cannibalize_lock(struct btree_trans *, struct closure *);
 
@@ -38,8 +35,7 @@ struct btree *bch2_btree_node_mem_alloc(struct btree_trans *, bool);
 struct btree *bch2_btree_node_get(struct btree_trans *, struct btree_path *,
 				  const struct bkey_i *, unsigned,
 				  enum six_lock_type,
-				  enum btree_iter_update_trigger_flags,
-				  unsigned long);
+				  enum btree_iter_update_trigger_flags);
 
 struct btree *bch2_btree_node_get_noiter(struct btree_trans *, const struct bkey_i *,
 					 enum btree_id, unsigned, bool);
@@ -106,7 +102,7 @@ static inline u64 btree_ptr_hash_val(const struct bkey_i *k)
 static inline struct btree *btree_node_mem_ptr(const struct bkey_i *k)
 {
 	return k->k.type == KEY_TYPE_btree_ptr_v2
-		? (void *)(unsigned long)bkey_i_to_btree_ptr_v2_c(k)->v.mem_ptr
+		? (void *)(unsigned long)READ_ONCE(bkey_i_to_btree_ptr_v2_c(k)->v.mem_ptr)
 		: NULL;
 }
 
@@ -172,6 +168,23 @@ static inline unsigned btree_blocks(const struct bch_fs *c)
 
 #define BTREE_WRITE_IO_LIMIT(c)			64
 
+static inline bool bch2_btree_cache_should_throttle(struct bch_fs *c)
+{
+	return READ_ONCE(c->btree.cache.should_throttle);
+}
+
+static inline void bch2_btree_cache_update_throttle(struct bch_fs *c)
+{
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+	size_t live	= btree_cache_nr_live(bc);
+	size_t dirty	= btree_cache_nr_dirty(bc);
+	bool throttle	= atomic_long_read(&bc->nr_in_flight_inner) > BTREE_WRITE_IO_LIMIT(c) ||
+			  (live && dirty > live * 3 / 4);
+
+	if (throttle != READ_ONCE(bc->should_throttle))
+		WRITE_ONCE(bc->should_throttle, throttle);
+}
+
 #define BTREE_SPLIT_THRESHOLD(c)		(btree_max_u64s(c) * 3 / 4)
 
 #define BTREE_FOREGROUND_MERGE_THRESHOLD(c)	(btree_max_u64s(c) * 1 / 3)
@@ -198,6 +211,59 @@ static inline struct btree_root *bch2_btree_id_root(struct bch_fs *c, unsigned i
 
 		return &c->btree.cache.roots_extra.data[idx];
 	}
+}
+
+/*
+ * Pack root pointer + level: low 3 bits encode b->c.level (BTREE_MAX_DEPTH
+ * is 4, so values 0..3 fit comfortably; we reserve 3 bits to leave slack
+ * for future depth bumps). struct btree alignment is well over 8 bytes so
+ * the low bits are guaranteed free. Packing into a single word makes the
+ * read in btree_path_lock_root naturally atomic — no torn read across b
+ * and b->c.level — and avoids the cold-cacheline miss into the btree
+ * node just to learn its level.
+ */
+#define BTREE_ROOT_LEVEL_BITS	3
+#define BTREE_ROOT_LEVEL_MASK	((1UL << BTREE_ROOT_LEVEL_BITS) - 1)
+
+static inline unsigned long bch2_btree_root_pack(struct btree *b)
+{
+	BUILD_BUG_ON(BTREE_MAX_DEPTH > (1U << BTREE_ROOT_LEVEL_BITS));
+	if (!b)
+		return 0;
+	EBUG_ON((unsigned long)b & BTREE_ROOT_LEVEL_MASK);
+	EBUG_ON(b->c.level & ~BTREE_ROOT_LEVEL_MASK);
+	return (unsigned long)b | b->c.level;
+}
+
+static inline struct btree *bch2_btree_root_unpack_b(unsigned long v)
+{
+	return (struct btree *)(v & ~BTREE_ROOT_LEVEL_MASK);
+}
+
+static inline unsigned bch2_btree_root_unpack_level(unsigned long v)
+{
+	return v & BTREE_ROOT_LEVEL_MASK;
+}
+
+/*
+ * Hot read of packed root pointer + level — avoids touching struct
+ * btree_root, which is ~0xb0 (176 bytes) per entry, by reading from the
+ * dedicated side-array. For id < BTREE_ID_NR this is a tight L1 access
+ * (4 cache lines cover all standard btree roots); roots_extra still
+ * falls through to the full struct.
+ */
+static inline unsigned long bch2_btree_id_root_packed(struct bch_fs *c, unsigned btree_id)
+{
+	if (likely(btree_id < BTREE_ID_NR))
+		return READ_ONCE(c->btree.cache.roots_b[btree_id]);
+
+	struct btree_root *r = bch2_btree_id_root(c, btree_id);
+	return r ? bch2_btree_root_pack(READ_ONCE(r->b)) : 0;
+}
+
+static inline struct btree *bch2_btree_id_root_b(struct bch_fs *c, unsigned btree_id)
+{
+	return bch2_btree_root_unpack_b(bch2_btree_id_root_packed(c, btree_id));
 }
 
 static inline struct btree *btree_node_root(struct bch_fs *c, struct btree *b)

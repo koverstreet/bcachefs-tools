@@ -43,37 +43,10 @@ struct rust_journal_entries {
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c);
 
 /*
- * Online member iteration shim — wraps the static inline
- * bch2_get_next_online_dev() which handles ref counting internally.
- * rust_put_online_dev_ref() is for cleanup on early loop termination.
- */
-struct bch_dev;
-struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,
-					 struct bch_dev *ca,
-					 unsigned ref_idx);
-void rust_put_online_dev_ref(struct bch_dev *ca, unsigned ref_idx);
-
-/*
- * Dump sanitize shims — wraps crypto operations for encrypted fs dumps.
- */
-struct jset;
-struct bset;
-
-int rust_jset_decrypt(struct bch_fs *c, struct jset *j);
-int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset);
-
-/*
  * Bitmap shim — set_bit() is atomic (locked bitops in the kernel),
  * can't be inlined through bindgen.
  */
 void rust_set_bit(unsigned long nr, unsigned long *addr);
-
-/*
- * Device reference shims — wraps static inline bch2_dev_tryget_noerror()
- * and bch2_dev_put() for Rust.
- */
-struct bch_dev *rust_dev_tryget_noerror(struct bch_fs *c, unsigned dev);
-void rust_dev_put(struct bch_dev *ca);
 
 /*
  * Data IO shims — wraps static inlines not available through bindgen.

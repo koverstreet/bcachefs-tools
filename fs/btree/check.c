@@ -56,7 +56,7 @@ static const char * const bch2_gc_phase_strs[] = {
 	NULL
 };
 
-void bch2_gc_pos_to_text(struct printbuf *out, struct gc_pos *p)
+__cold void bch2_gc_pos_to_text(struct printbuf *out, struct gc_pos *p)
 {
 	prt_str(out, bch2_gc_phase_strs[p->phase]);
 	prt_char(out, ' ');
@@ -426,6 +426,14 @@ again:
 			if (ret)
 				break;
 
+			/*
+			 * cur is still read-locked, and goto again jumps over the
+			 * unlock at the end of the loop; drop it here or it leaks
+			 * (and later self-deadlocks a write lock on the same node).
+			 */
+			six_unlock_read(&cur->c.lock);
+			cur = NULL;
+
 			bch2_btree_and_journal_iter_exit(&iter);
 			goto again;
 		} else if (ret)
@@ -635,7 +643,9 @@ recover:
 		 * a thin "lock holder record" that isn't a full path. Either
 		 * is bigger than this commit wants to be.
 		 */
-		btree_node_lock_nopath_nofail(trans, &b->c, SIX_LOCK_read);
+		trans->locking_hash_val = 0;
+		trans->locking_root_id	= -1;
+		btree_node_lock_nopath(trans, &b->c, SIX_LOCK_read, true, _THIS_IP_, false);
 		int ret = btree_check_root_boundaries(trans, b) ?:
 			  bch2_btree_repair_topology_recurse(trans, b);
 		six_unlock_read(&b->c.lock);
@@ -644,7 +654,11 @@ recover:
 			bch2_btree_node_transition_state(&c->btree.cache, b,
 								  BTREE_NODE_CACHE_FREEABLE);
 
-			r->b = NULL;
+			scoped_guard(mutex, &c->btree.cache.root_lock) {
+				r->b = NULL;
+				if (likely(i < BTREE_ID_NR))
+					WRITE_ONCE(c->btree.cache.roots_b[i], 0);
+			}
 
 			if (!reconstructed_root) {
 				r->error = -EIO;
@@ -719,22 +733,7 @@ static int bch2_gc_mark_key(struct btree_trans *trans, enum btree_id btree_id,
 				 buf.buf)))
 		bch2_dev_btree_bitmap_mark(c, k);
 
-	/*
-	 * We require a commit before key_trigger() because
-	 * key_trigger(BTREE_TRIGGER_GC) is not idempotant; we'll calculate the
-	 * wrong result if we run it multiple times.
-	 */
-	unsigned flags = !iter ? BTREE_TRIGGER_is_root : 0;
-
-	struct btree_trigger_op op = {
-		.btree		= btree_id,
-		.level		= level,
-		.old		= old,
-		.new		= unsafe_bkey_s_c_to_s(k),
-		.new_buf_u64s	= k.k->u64s,
-		.flags		= BTREE_TRIGGER_check_repair|flags,
-	};
-	try(bch2_key_trigger(trans, op));
+	try(bch2_bkey_check_repair(trans, iter, btree_id, level, k));
 
 	if (bch2_trans_has_updates(trans)) {
 		CLASS(disk_reservation, res)(c);
@@ -742,7 +741,14 @@ static int bch2_gc_mark_key(struct btree_trans *trans, enum btree_id btree_id,
 			bch_err_throw(c, transaction_restart_commit);
 	}
 
-	op.flags = BTREE_TRIGGER_gc|BTREE_TRIGGER_insert|flags;
+	struct btree_trigger_op op = {
+		.btree		= btree_id,
+		.level		= level,
+		.old		= old,
+		.new		= unsafe_bkey_s_c_to_s(k),
+		.new_buf_u64s	= k.k->u64s,
+		.flags		= BTREE_TRIGGER_gc|BTREE_TRIGGER_insert,
+	};
 	try(bch2_key_trigger(trans, op));
 fsck_err:
 	return ret;
@@ -858,7 +864,7 @@ static int bch2_gc_start(struct bch_fs *c)
 static inline bool bch2_alloc_v4_cmp(struct bch_alloc_v4 l,
 				     struct bch_alloc_v4 r)
 {
-	return  l.gen != r.gen				||
+	return  l.generation != r.generation				||
 		l.oldest_gen != r.oldest_gen		||
 		l.data_type != r.data_type		||
 		l.dirty_sectors	!= r.dirty_sectors	||
@@ -931,7 +937,7 @@ static int bch2_alloc_write_key(struct btree_trans *trans,
 			"bucket %llu:%llu gen %u has wrong data_type"
 			": got %s, should be %s",
 			iter->pos.inode, iter->pos.offset,
-			gc.gen,
+			gc.generation,
 			bch2_data_type_str(new.data_type),
 			bch2_data_type_str(gc.data_type))) {
 		new.data_type = gc.data_type;
@@ -954,12 +960,12 @@ static int bch2_alloc_write_key(struct btree_trans *trans,
 			"bucket %llu:%llu gen %u data type %s has wrong " #_f	\
 			": got %llu, should be %llu",			\
 			iter->pos.inode, iter->pos.offset,		\
-			gc.gen,						\
+			gc.generation,						\
 			bch2_data_type_str(gc.data_type),		\
 			(u64) new._f, (u64) gc._f))				\
 		new._f = gc._f;						\
 
-	copy_bucket_field(alloc_key_gen_wrong,			gen);
+	copy_bucket_field(alloc_key_gen_wrong,			generation);
 	copy_bucket_field(alloc_key_dirty_sectors_wrong,	dirty_sectors);
 	copy_bucket_field(alloc_key_stripe_sectors_wrong,	stripe_sectors);
 	copy_bucket_field(alloc_key_cached_sectors_wrong,	cached_sectors);
@@ -1347,6 +1353,86 @@ int bch2_merge_btree_nodes(struct bch_fs *c)
 	}
 
 	return 0;
+}
+
+/*
+ * For each shard boundary in each shard-aware btree, look up the leaf
+ * containing it; if the leaf spans the boundary, rewrite it (which forces
+ * a split at the boundary, since bch2_btree_node_alloc_replacement honors
+ * the "leaves don't cross shard boundaries" constraint).
+ */
+static int presplit_shard_boundary_one(struct btree_trans *trans,
+				       enum btree_id btree, struct bpos pos,
+				       u64 *split_count)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(btree_node_iter, iter)(trans, btree, pos, 0, 0, 0);
+	try(bch2_btree_iter_traverse(&iter));
+
+	struct btree *b = path_l(btree_iter_path(trans, &iter))->b;
+
+	struct bpos pivot = bch2_btree_node_shard_pivot(c, b);
+	if (bpos_eq(pivot, POS_MIN) || bpos_eq(pivot, b->key.k.p))
+		return 1;
+
+	int ret = bch2_btree_split_leaf(trans, iter.path, 0, 0);
+	(*split_count) += !ret;
+	return ret;
+}
+
+int bch2_presplit_shard_boundaries(struct bch_fs *c)
+{
+	if (!c->opts.shard_inode_numbers_bits)
+		return 0;
+
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_presplit_shard_boundaries))
+		return 0;
+
+	static const enum btree_id sharded_btrees[] = {
+		BTREE_ID_inodes,
+		BTREE_ID_extents,
+		BTREE_ID_dirents,
+		BTREE_ID_xattrs,
+	};
+
+	unsigned shard_bits = c->opts.shard_inode_numbers_bits;
+	unsigned bits = 63 - shard_bits;
+	unsigned n_shards = 1U << shard_bits;
+	int ret = 0;
+
+	CLASS(btree_trans, trans)(c);
+
+	for (unsigned i = 0; i < ARRAY_SIZE(sharded_btrees); i++) {
+		u64 split_count = 0;
+		enum btree_id btree = sharded_btrees[i];
+
+		for (unsigned shard = 1; shard < n_shards; shard++) {
+			u64 boundary = (u64) shard << bits;
+			struct bpos pos = btree == BTREE_ID_inodes
+				? SPOS(0, boundary, 0)
+				: SPOS(boundary, 0, 0);
+			do {
+				ret = lockrestart_do(trans,
+					presplit_shard_boundary_one(trans, btree, pos, &split_count));
+			} while (!ret);
+
+			if (ret < 0) {
+				if (bch2_err_matches(ret, ENOSPC))
+					ret = 0;
+				break;
+			}
+			ret = 0;
+		}
+
+		if (split_count) {
+			CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_info);
+			prt_printf(&msg.m, "presplit_shard_boundaries: %llu splits in btree ", split_count);
+			bch2_btree_id_to_text(&msg.m, btree);
+		}
+	}
+
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_presplit_shard_boundaries);
+	return ret;
 }
 
 void bch2_fs_btree_gc_init_early(struct bch_fs *c)

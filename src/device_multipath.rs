@@ -2,8 +2,11 @@
 
 //! Helpers for detecting device-mapper multipath relationships.
 //!
-//! The core entrypoint is [`find_multipath_holder()`], which walks sysfs
-//! holders to determine whether a block device sits under a dm-multipath map.
+//! The core entrypoints are [`find_multipath_holder()`], which walks sysfs
+//! holders to determine whether a block device sits under a dm-multipath map,
+//! and [`preferred_multipath_devnode()`], which normalizes dm-multipath devices
+//! to their `/dev/mapper/` path when that path exists and refers to the same
+//! device.
 //! Both top-level maps (`mpath-...`) and partition maps
 //! (`part<N>-mpath-...`, including nested partition prefixes) are treated as
 //! multipath.
@@ -19,8 +22,8 @@ use log::{debug, warn};
 const MAX_MULTIPATH_DEPTH: u32 = 8;
 
 fn sysfs_path_for_dev(dev: u64) -> PathBuf {
-    let major = libc::major(dev as libc::dev_t);
-    let minor = libc::minor(dev as libc::dev_t);
+    let major = rustix::fs::major(dev);
+    let minor = rustix::fs::minor(dev);
     PathBuf::from(format!("/sys/dev/block/{}:{}", major, minor))
 }
 
@@ -64,6 +67,84 @@ fn is_multipath_dm_uuid(uuid: &str) -> bool {
 /// Returns the topmost multipath holder for a device, if any.
 pub fn find_multipath_holder(path: &Path) -> Option<PathBuf> {
     find_multipath_holder_inner(path, 0)
+}
+
+/// Returns the `/dev/mapper/` path for a dm-multipath block device, if one exists.
+pub fn preferred_multipath_devnode(path: &Path) -> Option<PathBuf> {
+    let metadata = match fs::metadata(path) {
+        Ok(m) => m,
+        Err(e) => {
+            debug!("Failed to stat {}: {}", path.display(), e);
+            return None;
+        }
+    };
+
+    if !metadata.file_type().is_block_device() {
+        debug!("Skipping non-block device {}", path.display());
+        return None;
+    }
+
+    let dev = metadata.rdev();
+    if dev == 0 {
+        return None;
+    }
+
+    preferred_multipath_devnode_from_sysfs(&sysfs_path_for_dev(dev))
+}
+
+/// Returns the `/dev/mapper/` path for a dm-multipath sysfs block name, if one exists.
+pub fn preferred_multipath_devnode_for_block_name(name: &str) -> Option<PathBuf> {
+    if !name.starts_with("dm-") {
+        return None;
+    }
+
+    let sysfs = PathBuf::from(format!("/sys/block/{}", name));
+    preferred_multipath_devnode_from_sysfs(&sysfs)
+}
+
+/// True if a sysfs block directory is a dm-multipath map (or map partition),
+/// per its dm UUID — the canonical discriminator, the same one udev,
+/// multipath-tools, and util-linux key on. Note this decides membership on the
+/// UUID alone: a map with an unreadable `name` attribute is still multipath.
+fn is_multipath_dm(block_sysfs: &Path) -> bool {
+    read_sysfs_attr(&block_sysfs.join("dm"), "uuid")
+        .is_some_and(|uuid| is_multipath_dm_uuid(&uuid))
+}
+
+/// The dm-multipath map name for a sysfs block dir, or None if it isn't a
+/// multipath map or its `name` attribute is unreadable.
+fn multipath_dm_name_from_sysfs(block_sysfs: &Path) -> Option<String> {
+    if !is_multipath_dm(block_sysfs) {
+        return None;
+    }
+    read_sysfs_attr(&block_sysfs.join("dm"), "name")
+}
+
+/// The dev_t of a sysfs block directory, parsed from its `dev` (`major:minor`)
+/// attribute.
+fn sysfs_block_dev(block_sysfs: &Path) -> Option<u64> {
+    let dev = read_sysfs_attr(block_sysfs, "dev")?;
+    let (major, minor) = dev.split_once(':')?;
+    Some(rustix::fs::makedev(major.parse().ok()?, minor.parse().ok()?))
+}
+
+/// `/dev/mapper/<dm_name>`, but only if it exists AND resolves to `expect_dev`.
+///
+/// The rdev match is the safety property: we substitute a friendlier *name*
+/// for a device, we never redirect to a different one. It closes the narrow
+/// window where a dm rename has left a stale `/dev/mapper/` node pointing at
+/// some other device.
+fn mapper_path_if_matches(dm_name: &str, expect_dev: u64) -> Option<PathBuf> {
+    let mapper_path = PathBuf::from(format!("/dev/mapper/{}", dm_name));
+    let meta = fs::metadata(&mapper_path).ok()?;
+    (meta.file_type().is_block_device() && meta.rdev() == expect_dev)
+        .then_some(mapper_path)
+}
+
+fn preferred_multipath_devnode_from_sysfs(block_sysfs: &Path) -> Option<PathBuf> {
+    let dm_name = multipath_dm_name_from_sysfs(block_sysfs)?;
+    let dev = sysfs_block_dev(block_sysfs)?;
+    mapper_path_if_matches(&dm_name, dev)
 }
 
 pub fn warn_multipath_component(path: &Path, mpath_dev: &Path) {
@@ -133,24 +214,16 @@ fn find_multipath_holder_inner(path: &Path, depth: u32) -> Option<PathBuf> {
         }
 
         let holder_sysfs = PathBuf::from(format!("/sys/block/{}", name));
-        let dm_path = holder_sysfs.join("dm");
-
-        // Check if this is a multipath dm UUID (map or map partition)
-        let uuid = read_sysfs_attr(&dm_path, "uuid").unwrap_or_default();
-        if !is_multipath_dm_uuid(&uuid) {
+        if !is_multipath_dm(&holder_sysfs) {
             continue;
         }
 
-        let mpath_dev = if let Some(dm_name) = read_sysfs_attr(&dm_path, "name") {
-            let mapper_path = PathBuf::from(format!("/dev/mapper/{}", dm_name));
-            if mapper_path.exists() {
-                mapper_path
-            } else {
-                PathBuf::from(format!("/dev/{}", name))
-            }
-        } else {
-            PathBuf::from(format!("/dev/{}", name))
-        };
+        // Prefer the /dev/mapper/<name> node; fall back to /dev/dm-N when it's
+        // absent, unverifiable, or the dm name attribute is unreadable. The
+        // holder still counts as multipath either way — membership was decided
+        // by the UUID above, not by whether we can resolve a mapper name.
+        let mpath_dev = preferred_multipath_devnode_from_sysfs(&holder_sysfs)
+            .unwrap_or_else(|| PathBuf::from(format!("/dev/{}", name)));
 
         if let Some(higher) = find_multipath_holder_inner(&mpath_dev, depth + 1) {
             debug!(
@@ -259,5 +332,26 @@ mod tests {
         assert!(!is_multipath_dm_uuid("part1-"));
         assert!(!is_multipath_dm_uuid("part1-crypt-foo"));
         assert!(!is_multipath_dm_uuid("foo-mpath-bar"));
+    }
+
+    #[test]
+    fn preferred_devnode_for_non_dm_block_name_returns_none() {
+        assert!(preferred_multipath_devnode_for_block_name("sda").is_none());
+    }
+
+    #[test]
+    fn sysfs_block_dev_parses_major_minor() {
+        let dir = TestTempDir::new("block-dev");
+        fs::write(dir.path().join("dev"), "253:7\n").unwrap();
+        assert_eq!(sysfs_block_dev(dir.path()), Some(rustix::fs::makedev(253, 7)));
+    }
+
+    #[test]
+    fn sysfs_block_dev_missing_or_malformed_returns_none() {
+        let dir = TestTempDir::new("block-dev-bad");
+        assert!(sysfs_block_dev(dir.path()).is_none());
+
+        fs::write(dir.path().join("dev"), "not-a-devt\n").unwrap();
+        assert!(sysfs_block_dev(dir.path()).is_none());
     }
 }

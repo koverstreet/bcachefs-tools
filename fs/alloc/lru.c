@@ -19,7 +19,7 @@
 
 /* KEY_TYPE_lru is obsolete: */
 int bch2_lru_validate(struct bch_fs *c, struct bkey_s_c k,
-		      struct bkey_validate_context from)
+		      const struct bkey_validate_context *from)
 {
 	int ret = 0;
 
@@ -30,7 +30,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_lru_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_lru_to_text(struct printbuf *out, struct bch_fs *c,
 		      struct bkey_s_c k)
 {
 	const struct bch_lru *lru = bkey_s_c_to_lru(k).v;
@@ -38,7 +38,7 @@ void bch2_lru_to_text(struct printbuf *out, struct bch_fs *c,
 	prt_printf(out, "idx %llu", le64_to_cpu(lru->idx));
 }
 
-void bch2_lru_pos_to_text(struct printbuf *out, struct bpos lru)
+__cold void bch2_lru_pos_to_text(struct printbuf *out, struct bpos lru)
 {
 	prt_printf(out, "%llu:%llu -> %llu:%llu",
 		   lru_pos_id(lru),
@@ -56,7 +56,7 @@ static int __bch2_lru_set(struct btree_trans *trans, u16 lru_id,
 		: 0;
 }
 
-static int bch2_lru_set(struct btree_trans *trans, u16 lru_id, u64 dev_bucket, u64 time)
+int bch2_lru_set(struct btree_trans *trans, u16 lru_id, u64 dev_bucket, u64 time)
 {
 	return __bch2_lru_set(trans, lru_id, dev_bucket, time, true);
 }
@@ -175,6 +175,16 @@ static int bch2_check_lru_key(struct btree_trans *trans,
 	CLASS(printbuf, buf1)();
 	CLASS(printbuf, buf2)();
 
+	/*
+	 * per_dev_fragmentation_lru upgrade: delete entries in the old
+	 * fs-wide fragmentation lru unconditionally - no need to verify
+	 * against the backing alloc key, check_alloc_to_lru_refs is
+	 * recreating the per-device entries from the alloc btree:
+	 */
+	if (lru_pos_id(lru_k.k->p) == BCH_LRU_BUCKET_FRAGMENTATION_OLD &&
+	    c->sb.version_upgrade_complete < bcachefs_metadata_version_per_dev_fragmentation_lru)
+		return bch2_btree_bit_mod_buffered(trans, BTREE_ID_lru, lru_iter->pos, false);
+
 	struct bbpos bp = lru_pos_to_bp(lru_k);
 
 	CLASS(btree_iter, iter)(trans, bp.btree, bp.pos, 0);
@@ -183,15 +193,37 @@ static int bch2_check_lru_key(struct btree_trans *trans,
 	enum bch_lru_type type = lru_type(lru_k);
 	u64 idx = bkey_lru_type_idx(c, type, k);
 
-	if (lru_pos_time(lru_k.k->p) != idx) {
+	/*
+	 * Read and bucket fragmentation lrus are per-device: check the entry is
+	 * in the lru its bucket's device says it belongs to. This is also what
+	 * deletes stragglers in the old fs-wide fragmentation lru
+	 * (BCH_LRU_BUCKET_FRAGMENTATION_OLD) found after the
+	 * per_dev_fragmentation_lru upgrade completed:
+	 */
+	u16 lru_id = lru_pos_id(lru_k.k->p);
+	u16 want_id = lru_id;
+
+	switch (type) {
+	case BCH_LRU_read:
+		want_id = u64_to_bucket(lru_k.k->p.offset).inode;
+		break;
+	case BCH_LRU_fragmentation:
+		want_id = bucket_fragmentation_lru(u64_to_bucket(lru_k.k->p.offset).inode);
+		break;
+	default:
+		break;
+	}
+
+	if (lru_id != want_id ||
+	    lru_pos_time(lru_k.k->p) != idx) {
 		try(bch2_btree_write_buffer_maybe_flush(trans, lru_k, last_flushed));
 
 		if (ret_fsck_err(trans, lru_entry_bad,
-			     "incorrect lru entry: lru %s time %llu\n"
+			     "incorrect lru entry: lru %s, expected id %u time %llu\n"
 			     "%s\n"
 			     "for %s",
 			     bch2_lru_types[type],
-			     lru_pos_time(lru_k.k->p),
+			     want_id, idx,
 			     (bch2_bkey_val_to_text(&buf1, c, lru_k), buf1.buf),
 			     (bch2_bkey_val_to_text(&buf2, c, k), buf2.buf)))
 			return bch2_btree_bit_mod_buffered(trans, BTREE_ID_lru, lru_iter->pos, false);

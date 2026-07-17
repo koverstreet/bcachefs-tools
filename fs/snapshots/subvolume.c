@@ -11,6 +11,7 @@
 
 #include "init/error.h"
 #include "init/passes.h"
+#include "init/recovery.h"
 
 #include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
@@ -19,7 +20,7 @@
 
 #include <linux/random.h>
 
-static int bch2_subvolume_delete(struct btree_trans *, u32);
+static int bch2_subvolume_set_deleted(struct btree_trans *, u32);
 
 static int bch2_subvolume_missing(struct bch_fs *c, u32 subvolid)
 {
@@ -57,6 +58,82 @@ static int check_subvol(struct btree_trans *trans,
 		return 0;
 
 	bkey_val_copy_pad(&subvol, bkey_s_c_to_subvolume(k));
+
+	/*
+	 * A zero state field means the key predates the state field, or was
+	 * wiped: recover it from the legacy flag bits whenever it's unset,
+	 * regardless of upgrade status (see check_snapshot). Silent mid-upgrade
+	 * (the expected migration); post-upgrade it's unexpected, so surface it.
+	 */
+	if (!bch2_subvolume_state(&subvol)) {
+		bool upgrading = c->sb.version_upgrade_complete <
+			bcachefs_metadata_version_per_dev_fragmentation_lru;
+		if (upgrading ||
+		    fsck_err(trans, subvol_state_bad,
+			     "subvolume state unset, recovering from legacy flags:\n%s",
+			     (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			struct bkey_i_subvolume *n =
+				errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
+
+			n->v.state = cpu_to_le32(bch2_subvolume_state_from_flags(&subvol));
+			subvol = n->v;
+		}
+	}
+
+	/*
+	 * Pre-upgrade, the rewrite above always leaves a valid state, so this
+	 * only fires post-upgrade - where any invalid value (including zero)
+	 * is corruption. No repair yet, and state-keyed repairs must not run
+	 * on a state we can't read:
+	 */
+	if (!bch2_subvolume_state_valid(bch2_subvolume_state(&subvol))) {
+		unsigned dist;
+		enum bch_subvolume_state nearest =
+			bch2_subvolume_state_nearest(le32_to_cpu(subvol.state), &dist);
+
+		/* bitflip correction, see check_snapshot */
+		if (dist <= 2) {
+			if (fsck_err(trans, subvol_state_bitflip,
+				     "subvolume state 0x%x is a %u-bit flip of %s - correcting:\n%s",
+				     le32_to_cpu(subvol.state), dist,
+				     bch2_subvolume_state_str(nearest),
+				     (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+				struct bkey_i_subvolume *n =
+					errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
+				bch2_subvolume_state_set(&n->v, nearest);
+				subvol = n->v;
+			}
+		} else if (dist <= 6) {
+			if (fsck_err(trans, subvol_state_bad,
+				     "subvolume state 0x%x is %u bits from %s - correcting:\n%s",
+				     le32_to_cpu(subvol.state), dist,
+				     bch2_subvolume_state_str(nearest),
+				     (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+				struct bkey_i_subvolume *n =
+					errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
+				bch2_subvolume_state_set(&n->v, nearest);
+				subvol = n->v;
+			}
+		} else {
+			CLASS(bch_log_msg, msg)(c);
+
+			prt_printf(&msg.m, "subvolume has invalid state 0x%x (nearest codeword %s is %u bits away):\n",
+				   le32_to_cpu(subvol.state), bch2_subvolume_state_str(nearest), dist);
+			bch2_bkey_val_to_text(&msg.m, c, k);
+			msg.m.suppress = !bch2_count_fsck_err(c, subvol_state_bad, &msg.m);
+
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+	}
+
+	/*
+	 * A tombstone: it exists only as deletion's witness, reaped when its
+	 * snapshot node is deleted - none of the live-subvolume invariants
+	 * apply (the sweep may already have erased its root inode):
+	 */
+	if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_deleted)
+		return 0;
+
 	snapid = le32_to_cpu(subvol.snapshot);
 	ret = bch2_snapshot_lookup(trans, snapid, &snapshot);
 
@@ -74,10 +151,52 @@ static int check_subvol(struct btree_trans *trans,
 	if (ret)
 		return ret;
 
-	if (BCH_SUBVOLUME_UNLINKED(&subvol)) {
-		ret = bch2_subvolume_delete(trans, iter->pos.offset);
+	/*
+	 * Subvolumes only reference leaves; an interior target means a pointer
+	 * was re-aimed by damage or a snapshot creation half-completed. No
+	 * repair yet - the right re-aim (which descendant?) isn't decidable
+	 * from this state alone. Checked before the unlinked branch:
+	 * set_deleted here would mark an interior node will_delete:
+	 */
+	if (snapshot.children[0]) {
+		CLASS(bch_log_msg, msg)(c);
+
+		prt_printf(&msg.m, "subvolume points to interior snapshot node:\n");
+		bch2_bkey_val_to_text(&msg.m, c, k);
+		prt_newline(&msg.m);
+		bch2_snapshot_to_text(&msg.m, &snapshot);
+		msg.m.suppress = !bch2_count_fsck_err(c, subvol_snapshot_not_leaf, &msg.m);
+
+		return bch_err_throw(c, fsck_repair_unimplemented);
+	}
+
+	if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_unlinked) {
+		ret = bch2_subvolume_set_deleted(trans, iter->pos.offset);
 		bch_err_msg(c, ret, "deleting subvolume %llu", iter->pos.offset);
 		return ret ?: bch_err_throw(c, transaction_restart_nested);
+	}
+
+	/*
+	 * A live subvolume's snapshot must be live, unconditionally - a
+	 * fraudulent deletion state poisons every later pass that touches
+	 * this snapshot's keys, whether or not the backref still agrees:
+	 */
+	if (bch2_snapshot_state_compat(&snapshot) != SNAPSHOT_STATE_live) {
+		prt_printf(&buf, "subvolume points to a snapshot that isn't live:\n");
+		bch2_bkey_val_to_text(&buf, c, k);
+		prt_str(&buf, "\n");
+		bch2_snapshot_to_text(&buf, &snapshot);
+		bch_err(c, "%s", buf.buf);
+		return bch_err_throw(c, EINVAL_snapshot_subvol_edge_bad);
+	}
+
+	if (le32_to_cpu(snapshot.subvol) != k.k->p.offset) {
+		prt_printf(&buf, "subvolume points to a snapshot that doesn't point back:\n");
+		bch2_bkey_val_to_text(&buf, c, k);
+		prt_str(&buf, "\n");
+		bch2_snapshot_to_text(&buf, &snapshot);
+		bch_err(c, "%s", buf.buf);
+		return bch_err_throw(c, EINVAL_snapshot_subvol_edge_bad);
 	}
 
 	if (fsck_err_on(k.k->p.offset == BCACHEFS_ROOT_SUBVOL &&
@@ -89,6 +208,7 @@ static int check_subvol(struct btree_trans *trans,
 			errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, subvolume));
 
 		n->v.fs_path_parent = 0;
+		subvol = n->v;
 	}
 
 	if (subvol.fs_path_parent) {
@@ -181,10 +301,20 @@ fsck_err:
 int bch2_check_subvols(struct bch_fs *c)
 {
 	CLASS(btree_trans, trans)(c);
-	return for_each_btree_key_commit(trans, iter,
+	int ret = for_each_btree_key_commit(trans, iter,
 				BTREE_ID_subvolumes, POS_MIN, BTREE_ITER_prefetch, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 			check_subvol(trans, &iter, k));
+
+	/*
+	 * If the pass completed cleanly the subvolumes btree is consistent;
+	 * record it so check_key_has_snapshot can trust the in-memory table
+	 * (see bch2_btree_is_clean). Same gate the pass runner uses to mark a
+	 * pass complete.
+	 */
+	if (!ret && !test_bit(BCH_FS_error, &c->flags))
+		bch2_set_btree_clean(c, BTREE_ID_subvolumes);
+	return ret;
 }
 
 static int check_subvol_child(struct btree_trans *trans,
@@ -203,6 +333,12 @@ static int check_subvol_child(struct btree_trans *trans,
 			"incorrect entry in subvolume_children btree %llu:%llu",
 			child_k.k->p.inode, child_k.k->p.offset))
 		try(bch2_btree_delete_at(trans, child_iter, 0));
+
+	/*
+	 * A missing subvolume was the verdict (entry is stray, deleted
+	 * above), not an error - don't fail the pass with it:
+	 */
+	ret = 0;
 fsck_err:
 	return ret;
 }
@@ -219,7 +355,7 @@ int bch2_check_subvol_children(struct bch_fs *c)
 /* Subvolumes: */
 
 int bch2_subvolume_validate(struct bch_fs *c, struct bkey_s_c k,
-			    struct bkey_validate_context from)
+			    const struct bkey_validate_context *from)
 {
 	struct bkey_s_c_subvolume subvol = bkey_s_c_to_subvolume(k);
 	int ret = 0;
@@ -236,11 +372,61 @@ int bch2_subvolume_validate(struct bch_fs *c, struct bkey_s_c k,
 	bkey_fsck_err_on(!subvol.v->inode,
 			 c, subvol_inode_bad,
 			 "invalid inode");
+
+	if (bkey_val_bytes(k.k) > offsetof(struct bch_subvolume, pad))
+		bkey_fsck_err_on(subvol.v->pad,
+				 c, subvol_pad_nonzero,
+				 "reserved pad field nonzero");
+
+	/*
+	 * Commit-only checks - defense in depth, never applied to existing
+	 * keys (see bch2_snapshot_validate). The leaf check skips snapshot
+	 * ids the table doesn't know: subvolume creation commits the
+	 * subvolume in the same transaction as its new snapshot nodes, before
+	 * the trigger has seen them:
+	 */
+	if (from->from == BKEY_VALIDATE_commit && !c->opts.no_commit_validate) {
+		if (bkey_val_bytes(k.k) > offsetof(struct bch_subvolume, state))
+			bkey_fsck_err_on(subvol.v->state &&
+					 !bch2_subvolume_state_valid(bch2_subvolume_state(subvol.v)),
+					 c, subvol_state_bad,
+					 "invalid state 0x%x", le32_to_cpu(subvol.v->state));
+
+		/* is_leaf < 0: id not in the table - skip, per above */
+		bkey_fsck_err_on(bch2_snapshot_is_leaf(c, le32_to_cpu(subvol.v->snapshot)) == 0,
+				 c, subvol_snapshot_not_leaf,
+				 "snapshot %u is an interior node (subvolumes only reference leaves)",
+				 le32_to_cpu(subvol.v->snapshot));
+	}
 fsck_err:
 	return ret;
 }
 
-void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
+const char *bch2_subvolume_state_str(enum bch_subvolume_state s)
+{
+	switch (s) {
+#define x(n, v) case SUBVOLUME_STATE_##n: return #n;
+	BCH_SUBVOLUME_STATES()
+#undef x
+		default: return "(invalid state)";
+	}
+}
+
+void bch2_subvolume_state_set(struct bch_subvolume *s, enum bch_subvolume_state n)
+{
+	/*
+	 * There's only one legacy flag bit, but two non-live states (unlinked
+	 * and deleted). Mirror *any* non-live state into it: recovering a wiped
+	 * state field from the flags can't then tell unlinked from deleted, but
+	 * both resolve to unlinked -> the deletion pipeline reruns and completes,
+	 * rather than deriving a bare 'live' and reverting a pending deletion.
+	 * (Also what an old kernel needs to see to keep deleting a tombstone.)
+	 */
+	SET_BCH_SUBVOLUME_UNLINKED_OBSOLETE(s, n != SUBVOLUME_STATE_live);
+	s->state = cpu_to_le32(n);
+}
+
+__cold void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
 	struct bkey_s_c_subvolume s = bkey_s_c_to_subvolume(k);
@@ -258,8 +444,10 @@ void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
 		prt_printf(out, " ro");
 	if (BCH_SUBVOLUME_SNAP(s.v))
 		prt_printf(out, " snapshot");
-	if (BCH_SUBVOLUME_UNLINKED(s.v))
-		prt_printf(out, " unlinked");
+
+	struct bch_subvolume v;
+	bkey_val_copy_pad(&v, s);
+	prt_printf(out, " %s", bch2_subvolume_state_str(bch2_subvolume_state_compat(&v)));
 }
 
 static int subvolume_children_mod(struct btree_trans *trans, struct bpos pos, bool set)
@@ -272,6 +460,9 @@ static int subvolume_children_mod(struct btree_trans *trans, struct bpos pos, bo
 int bch2_subvolume_trigger(struct btree_trans *trans, struct btree_trigger_op op)
 {
 	if (op.flags & BTREE_TRIGGER_transactional) {
+		/* The subvolumes btree is being mutated - it's no longer known clean: */
+		bch2_clear_btree_clean(trans->c, BTREE_ID_subvolumes);
+
 		struct bpos children_pos_old = subvolume_children_pos(op.old);
 		struct bpos children_pos_new = subvolume_children_pos(op.new.s_c);
 
@@ -313,12 +504,15 @@ int bch2_subvolume_get(struct btree_trans *trans, unsigned subvol,
 	return bch2_subvolume_get_inlined(trans, subvol, inconsistent_if_not_found, s);
 }
 
-int bch2_subvol_is_ro_trans(struct btree_trans *trans, u32 subvol)
+int bch2_subvol_is_ro_trans(struct btree_trans *trans, u32 subvol, u32 *snapid)
 {
 	struct bch_subvolume s;
 	try(bch2_subvolume_get_inlined(trans, subvol, true, &s));
 
-	if (BCH_SUBVOLUME_RO(&s))
+	*snapid = le32_to_cpu(s.snapshot);
+
+	if (BCH_SUBVOLUME_RO(&s) ||
+	    bch2_subvolume_state_compat(&s) == SUBVOLUME_STATE_unlinked)
 		return -EROFS;
 	return 0;
 }
@@ -326,7 +520,8 @@ int bch2_subvol_is_ro_trans(struct btree_trans *trans, u32 subvol)
 int bch2_subvol_is_ro(struct bch_fs *c, u32 subvol)
 {
 	CLASS(btree_trans, trans)(c);
-	return lockrestart_do(trans, bch2_subvol_is_ro_trans(trans, subvol));
+	u32 snapshot;
+	return lockrestart_do(trans, bch2_subvol_is_ro_trans(trans, subvol, &snapshot));
 }
 
 int bch2_snapshot_get_subvol(struct btree_trans *trans, u32 snapshot,
@@ -399,11 +594,28 @@ static int bch2_subvolumes_reparent(struct btree_trans *trans, u32 subvolid_to_d
 					subvolid_to_delete, le32_to_cpu(s.creation_parent)));
 }
 
+static int bch2_subvolume_set_state_trans(struct btree_trans *trans, u32 subvolid,
+					  enum bch_subvolume_state state)
+{
+	struct bkey_i_subvolume *n =
+		bch2_bkey_get_mut_typed(trans, BTREE_ID_subvolumes, POS(0, subvolid),
+					BTREE_ITER_cached, subvolume);
+	int ret = PTR_ERR_OR_ZERO(n);
+	if (bch2_err_matches(ret, ENOENT))
+		ret = bch2_subvolume_missing(trans->c, subvolid) ?: ret;
+	if (unlikely(ret))
+		return ret;
+
+	bch2_subvolume_state_set(&n->v, state);
+	n->v.fs_path_parent = 0;
+	return ret;
+}
+
 /*
  * Delete subvolume, mark snapshot ID as deleted, queue up snapshot
  * deletion/cleanup:
  */
-static int __bch2_subvolume_delete(struct btree_trans *trans, u32 subvolid)
+static int __bch2_subvolume_set_deleted(struct btree_trans *trans, u32 subvolid)
 {
 	CLASS(btree_iter, subvol_iter)(trans, BTREE_ID_subvolumes, POS(0, subvolid),
 				       BTREE_ITER_cached|BTREE_ITER_intent);
@@ -444,17 +656,15 @@ static int __bch2_subvolume_delete(struct btree_trans *trans, u32 subvolid)
 		snapshot_tree_mut->v.master_subvol = 0;
 	}
 
-	return  bch2_btree_delete_at(trans, &subvol_iter, 0) ?:
+	return  bch2_subvolume_set_state_trans(trans, subvolid, SUBVOLUME_STATE_deleted) ?:
 		bch2_snapshot_node_set_deleted(trans, snapid);
 }
 
-static int bch2_subvolume_delete(struct btree_trans *trans, u32 subvolid)
+static int bch2_subvolume_set_deleted(struct btree_trans *trans, u32 subvolid)
 {
 	int ret = bch2_subvolumes_reparent(trans, subvolid) ?:
 		commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-			  __bch2_subvolume_delete(trans, subvolid));
-
-	bch2_recovery_pass_set_no_ratelimit(trans->c, BCH_RECOVERY_PASS_check_subvols);
+			  __bch2_subvolume_set_deleted(trans, subvolid));
 	return ret;
 }
 
@@ -480,7 +690,7 @@ static void bch2_subvolume_wait_for_pagecache_and_delete(struct work_struct *wor
 		CLASS(btree_trans, trans)(c);
 
 		darray_for_each(s, id) {
-			ret = bch2_subvolume_delete(trans, *id);
+			ret = bch2_subvolume_set_deleted(trans, *id);
 			bch_err_msg(c, ret, "deleting subvolume %u", *id);
 			if (ret)
 				break;
@@ -523,18 +733,16 @@ int bch2_subvolume_unlink(struct btree_trans *trans, u32 subvolid)
 	h->subvol	= subvolid;
 	bch2_trans_commit_hook(trans, &h->h);
 
-	struct bkey_i_subvolume *n =
-		bch2_bkey_get_mut_typed(trans, BTREE_ID_subvolumes, POS(0, subvolid),
-					BTREE_ITER_cached, subvolume);
-	int ret = PTR_ERR_OR_ZERO(n);
-	if (bch2_err_matches(ret, ENOENT))
-		ret = bch2_subvolume_missing(trans->c, subvolid) ?: ret;
-	if (unlikely(ret))
-		return ret;
+	try(bch2_subvolume_set_state_trans(trans, subvolid, SUBVOLUME_STATE_unlinked));
 
-	SET_BCH_SUBVOLUME_UNLINKED(&n->v, true);
-	n->v.fs_path_parent = 0;
-	return ret;
+	/*
+	 * We don't have an "unlinked subvolumes" btree" like we do for unlinked
+	 * inodes, but subvolumes can also be held open by open file handles;
+	 * schedule check_subvolumes to find any unlinked subvolumes and delete
+	 * them if we crash after an unlink while they were still held open.
+	 */
+	bch2_recovery_pass_set_no_ratelimit(trans->c, BCH_RECOVERY_PASS_check_subvols);
+	return 0;
 }
 
 int bch2_subvolume_create(struct btree_trans *trans, u64 inode,
@@ -542,6 +750,7 @@ int bch2_subvolume_create(struct btree_trans *trans, u64 inode,
 			  u32 src_subvolid,
 			  u32 *new_subvolid,
 			  u32 *new_snapshotid,
+			  struct bch_subvolume *new_subvol_out,
 			  bool ro)
 {
 	struct bch_fs *c = trans->c;
@@ -593,9 +802,11 @@ int bch2_subvolume_create(struct btree_trans *trans, u64 inode,
 
 	SET_BCH_SUBVOLUME_RO(&new_subvol->v, ro);
 	SET_BCH_SUBVOLUME_SNAP(&new_subvol->v, src_subvolid != 0);
+	bch2_subvolume_state_set(&new_subvol->v, SUBVOLUME_STATE_live);
 
 	*new_subvolid	= new_subvol->k.p.offset;
 	*new_snapshotid	= new_nodes[0];
+	*new_subvol_out	= new_subvol->v;
 	return 0;
 }
 
@@ -616,13 +827,14 @@ int bch2_initialize_subvolumes(struct bch_fs *c)
 	root_snapshot.v.parent	= 0;
 	root_snapshot.v.subvol	= cpu_to_le32(BCACHEFS_ROOT_SUBVOL);
 	root_snapshot.v.tree	= cpu_to_le32(1);
-	SET_BCH_SNAPSHOT_SUBVOL(&root_snapshot.v, true);
+	bch2_snapshot_state_set(&root_snapshot.v, SNAPSHOT_STATE_live);
 
 	bkey_subvolume_init(&root_volume.k_i);
 	root_volume.k.p.offset = BCACHEFS_ROOT_SUBVOL;
 	root_volume.v.flags	= 0;
 	root_volume.v.snapshot	= cpu_to_le32(U32_MAX);
 	root_volume.v.inode	= cpu_to_le64(BCACHEFS_ROOT_INO);
+	bch2_subvolume_state_set(&root_volume.v, SUBVOLUME_STATE_live);
 
 	return  bch2_btree_insert(c, BTREE_ID_snapshot_trees,	&root_tree.k_i, NULL, 0, 0) ?:
 		bch2_btree_insert(c, BTREE_ID_snapshots,	&root_snapshot.k_i, NULL, 0, 0) ?:
@@ -644,8 +856,7 @@ static int __bch2_fs_upgrade_for_subvolumes(struct btree_trans *trans)
 	}
 
 	struct bch_inode_unpacked inode;
-	ret = bch2_inode_unpack(k, &inode);
-	BUG_ON(ret);
+	bch2_inode_unpack(trans->c, k, &inode);
 
 	inode.bi_subvol = BCACHEFS_ROOT_SUBVOL;
 

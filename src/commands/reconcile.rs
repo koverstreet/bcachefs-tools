@@ -14,13 +14,10 @@ use crossterm::{
 };
 
 use crate::util::run_tui;
-use crate::wrappers::accounting::{self, DiskAccountingKind};
+use crate::wrappers::accounting::{disk_accounting_type, reconcile_accounting_type, DiskAccountingKind};
 use crate::wrappers::handle::BcachefsHandle;
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::sysfs;
-
-use c::bch_reconcile_accounting_type::*;
-use c::disk_accounting_type::*;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 #[clap(rename_all = "snake_case")]
@@ -38,14 +35,14 @@ enum ReconcileType {
 impl ReconcileType {
     fn as_c(self) -> c::bch_reconcile_accounting_type {
         match self {
-            Self::Replicas     => BCH_RECONCILE_ACCOUNTING_replicas,
-            Self::Checksum     => BCH_RECONCILE_ACCOUNTING_checksum,
-            Self::ErasureCode  => BCH_RECONCILE_ACCOUNTING_erasure_code,
-            Self::Compression  => BCH_RECONCILE_ACCOUNTING_compression,
-            Self::Target       => BCH_RECONCILE_ACCOUNTING_target,
-            Self::HighPriority => BCH_RECONCILE_ACCOUNTING_high_priority,
-            Self::Pending      => BCH_RECONCILE_ACCOUNTING_pending,
-            Self::Stripes      => BCH_RECONCILE_ACCOUNTING_stripes,
+            Self::Replicas     => reconcile_accounting_type::replicas,
+            Self::Checksum     => reconcile_accounting_type::checksum,
+            Self::ErasureCode  => reconcile_accounting_type::erasure_code,
+            Self::Compression  => reconcile_accounting_type::compression,
+            Self::Target       => reconcile_accounting_type::target,
+            Self::HighPriority => reconcile_accounting_type::high_priority,
+            Self::Pending      => reconcile_accounting_type::pending,
+            Self::Stripes      => reconcile_accounting_type::stripes,
         }
     }
 
@@ -106,16 +103,16 @@ fn reconcile_status_to_text(
         .map(|s| s.trim().parse::<u64>().unwrap_or(0))
         .unwrap_or(0);
 
-    let result = handle.query_accounting(1 << BCH_DISK_ACCOUNTING_reconcile_work as u32)
+    let result = handle.query_accounting(disk_accounting_type::reconcile_work.bit())
         .map_err(|e| anyhow!("query_accounting: {}", e))?;
 
     // Build array of [data_sectors, metadata_sectors] per reconcile type
-    let nr = BCH_RECONCILE_ACCOUNTING_NR as usize;
+    let nr = reconcile_accounting_type::nr.0 as usize;
     let mut v = vec![[0u64; 2]; nr];
 
     for entry in &result.entries {
         if let DiskAccountingKind::ReconcileWork { work_type } = entry.pos.decode() {
-            let idx = work_type as usize;
+            let idx = work_type.0 as usize;
             if idx < nr {
                 v[idx][0] = entry.counter(0);
                 v[idx][1] = entry.counter(1);
@@ -129,10 +126,10 @@ fn reconcile_status_to_text(
     let mut have_pending = scan_pending != 0;
 
     for t in types {
-        let idx = t.as_c() as usize;
+        let idx = t.as_c().0 as usize;
         if idx < nr {
             write!(out, "  ").unwrap();
-            accounting::prt_reconcile_type(out, t.as_c());
+            bcachefs_kernel::opts::prt_reconcile_type(out, t.as_c());
             write!(out, ":\t").unwrap();
             out.units_sectors(v[idx][0]);
             write!(out, "\r").unwrap();
@@ -209,7 +206,9 @@ fn reconcile_wait_tui(
         let pending = reconcile_status_to_text(&mut out, handle, sysfs_path, types)?;
 
         execute!(stdout, cursor::MoveTo(0, 0), terminal::Clear(ClearType::All))?;
-        write!(stdout, "{}", out)?;
+        for line in out.as_str().lines() {
+            write!(stdout, "{}\r\n", line)?;
+        }
         stdout.flush()?;
 
         if !pending {

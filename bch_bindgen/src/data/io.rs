@@ -15,8 +15,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Context, Poll, Waker};
 
 use crate::c;
-use crate::errcode::{self, BchError};
-use crate::fs::Fs;
+use bcachefs_kernel::errcode::{self, BchError};
+use bcachefs_kernel::fs::Fs;
 
 /// Maximum single IO size (must match RUST_IO_MAX in rust_shims.h).
 pub const MAX_IO_SIZE: usize = 1 << 20;

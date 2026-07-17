@@ -30,7 +30,8 @@ static inline void bch2_bucket_nocow_unlock(struct bucket_nocow_lock_table *t, s
 
 void bch2_bkey_nocow_unlock(struct bch_fs *, struct bkey_s_c, struct bch_dev **, int);
 bool bch2_bkey_nocow_trylock(struct bch_fs *, struct bkey_ptrs_c, struct bch_dev **, int);
-void bch2_bkey_nocow_lock(struct bch_fs *, struct bkey_ptrs_c, struct bch_dev **, int);
+void bch2_bkey_nocow_lock(struct bch_fs *, struct btree_trans *,
+			  struct bkey_ptrs_c, struct bch_dev **, int);
 
 void bch2_nocow_locks_to_text(struct printbuf *, struct bucket_nocow_lock_table *);
 

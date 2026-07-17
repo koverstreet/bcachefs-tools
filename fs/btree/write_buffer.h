@@ -27,11 +27,6 @@ static inline enum btree_id bch_wb_btree_to_btree_id(enum bch_wb_btree idx)
 	return tbl[idx];
 }
 
-static inline bool bch_wb_btree_should_flush(struct bch_fs_btree_write_buffer *wb)
-{
-	return wb->inc.keys.nr + wb->flushing.keys.nr > wb->inc.keys.size / 4;
-}
-
 static inline bool bch2_btree_write_buffer_must_wait(struct bch_fs *c)
 {
 	size_t nr = 0, sz = 0;
@@ -50,6 +45,7 @@ int bch2_btree_write_buffer_tryflush(struct btree_trans *);
 
 struct wb_maybe_flush {
 	struct bkey_buf	last_flushed;
+	u64		flushed_seq;
 	u64		nr_flushes;
 	u64		nr_done;
 	bool		seen_error;

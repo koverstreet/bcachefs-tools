@@ -84,11 +84,11 @@ struct bch2_time_stats {
 	struct mean_and_variance	  duration_stats;
 	struct mean_and_variance	  freq_stats;
 
-/* default weight for weighted mean and variance calculations */
+/* default weight for streaming median+MAD: half-life ≈ 2^N samples */
 #define TIME_STATS_MV_WEIGHT	8
 
-	struct mean_and_variance_weighted duration_stats_weighted;
-	struct mean_and_variance_weighted freq_stats_weighted;
+	struct mean_and_variance	  duration_stats_weighted;
+	struct mean_and_variance	  freq_stats_weighted;
 };
 
 struct bch2_time_stats_quantiles {

@@ -32,13 +32,16 @@ typedef struct {
 	bool	will_retry_all_devices:1;
 	bool	will_retry_target_devices:1;
 	bool	will_retry_set_devices:1;
+	bool	copygc_can_make_progress:1;
 	bool	have_cl:1;
 	s16	err;
 	u32	wake_counter_snapshot;
+	u64	free_buckets;
 } alloc_trace_entry;
 
 struct alloc_request {
 	struct closure		*cl;
+	u32			wake_all_counter_snapshot;
 	u8			nr_replicas;
 	u8			ec_replicas;
 	u8			ec_max_data_blocks;	/* 0 = no cap */
@@ -59,7 +62,6 @@ struct alloc_request {
 	/* These fields are used primarily by open_bucket_add_buckets */
 	struct open_buckets	ptrs;
 	unsigned		nr_effective;	/* sum of @ptrs durability */
-	bool			have_cache;	/* have we allocated from a 0 durability dev */
 	struct bch_devs_mask	devs_may_alloc;
 
 	/* bch2_bucket_alloc_set_trans(): */
@@ -68,6 +70,18 @@ struct alloc_request {
 
 	/* bch2_bucket_alloc_trans(): */
 	struct bch_dev		*ca;
+
+	/*
+	 * Allocate the free bucket nearest this device position (a 32.32
+	 * fixed point fraction of the device, see dev_frac_to_offset()),
+	 * instead of allocating from the device cursor; 0 = no target.
+	 *
+	 * A fraction rather than a sector offset so it means the same thing
+	 * on devices of different sizes: erasure coding uses it to allocate
+	 * a stripe's blocks at equivalent positions on each device, and the
+	 * device is chosen after the target is set:
+	 */
+	u64			target_frac;
 
 	enum {
 				BTREE_BITMAP_NO,
@@ -105,7 +119,9 @@ struct alloc_request {
  */
 static inline int alloc_trace_add(struct alloc_request *req,
 				  u8 dev, int err,
-				  u32 wake_counter_snapshot)
+				  u32 wake_counter_snapshot,
+				  u64 free_buckets,
+				  bool copygc_can_make_progress)
 {
 	if (darray_push(&req->trace, ((alloc_trace_entry) {
 		.dev				= dev,
@@ -113,9 +129,11 @@ static inline int alloc_trace_add(struct alloc_request *req,
 		.will_retry_all_devices		= req->will_retry_all_devices,
 		.will_retry_target_devices	= req->will_retry_target_devices,
 		.will_retry_set_devices		= req->will_retry_set_devices,
+		.copygc_can_make_progress	= copygc_can_make_progress,
 		.have_cl			= req->cl != NULL,
 		.err				= err,
 		.wake_counter_snapshot		= wake_counter_snapshot,
+		.free_buckets			= free_buckets,
 	    })))
 		req->trace_alloc_failed = true;
 
@@ -154,16 +172,19 @@ struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *, struct alloc_r
 
 /*
  * freelist_wait wake helpers. Every wake_up site on
- * c->allocator.freelist_wait should go through these so the per-device
- * alloc_wake_counter is maintained in lockstep with waitlist wakeups —
- * it's the signal waiters use to filter spurious wakes from devices
- * they don't care about.
+ * c->allocator.freelist_wait should go through these so the wake counters
+ * are maintained in lockstep with waitlist wakeups — they're the signal
+ * waiters use to filter spurious wakes they don't care about.
  *
- * _dev: bump one device's counter and wake (use when the caller knows
- *       which device changed state in a way that might unblock allocs).
- * _all: bump every member device's counter and wake (use for events
- *       that might unblock allocs on any device — journal state
- *       changes, fsck progress, debug knobs).
+ * _dev: bump one device's alloc_wake_counter and wake (use when the caller
+ *       knows which device changed state in a way that might unblock
+ *       allocs). Waiters retry only if a device in their failed-alloc trace
+ *       advanced.
+ * _all: bump the fs-wide wake_all_counter and wake (use for events that
+ *       might unblock allocs on any device — capacity/device changes,
+ *       journal state changes, fsck progress, debug knobs). This forces a
+ *       full allocator retry, since eligibility may have changed for a
+ *       device outside any waiter's trace (e.g. a newly added device).
  * _waiters_unpark: wake without bumping any counter; used to drop our own
  *       closure off the waitlist when we can't continue waiting. Real
  *       waiters see no counter advance and re-park silently.
@@ -339,6 +360,7 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 
 	req->ca				= NULL;
 	req->cl				= cl;
+	req->wake_all_counter_snapshot	= atomic_read(&trans->c->allocator.wake_all_counter);
 	req->nr_replicas		= nr_replicas;
 	req->nr_effective		= 0;
 	req->ec_replicas		= ec_replicas;
@@ -347,12 +369,12 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 	req->watermark			= watermark;
 	req->flags			= flags;
 	req->devs_have			= devs_have;
-	req->have_cache			= false;
 	req->will_retry_all_devices	= false;
 	req->will_retry_target_devices	= false;
 	req->will_retry_set_devices	= false;
 	req->copygc_can_make_progress	= false;
 	req->trace_alloc_failed		= false;
+	req->target_frac			= 0;
 	req->devs_sorted.nr		= 0;
 	/* bch2_alloc_sectors_req() overwrites this; bch2_bucket_alloc_trans()
 	 * callers (e.g. journal resize) don't, so zero it here for them: */
@@ -389,7 +411,7 @@ static inline struct bch_extent_ptr bch2_ob_ptr(struct bch_fs *c, struct open_bu
 
 	return (struct bch_extent_ptr) {
 		.type	= 1 << BCH_EXTENT_ENTRY_ptr,
-		.gen	= ob->gen,
+		.generation	= ob->generation,
 		.dev	= ob->dev,
 		.offset	= bucket_to_sector(ca, ob->bucket) +
 			ca->mi.bucket_size -

@@ -1,293 +1,51 @@
-pub mod accounting;
-pub mod bcachefs;
-pub mod bitmask;
-pub mod bkey;
-pub mod btree;
-pub mod data;
-pub mod errcode;
-pub mod fs;
-pub mod journal;
-pub mod keyutils;
-pub mod opts;
-pub mod printbuf;
-pub mod sb;
-pub use paste::paste;
+// SPDX-License-Identifier: GPL-2.0
+//! Userspace-only bcachefs bindings - the std-dependent wrappers and the
+//! non-`fs/` C bindings that can't live in the no_std `bcachefs-kernel` crate
+//! yet. `bch_bindgen::c` is a superset: it re-exports the core crate's `fs/`
+//! bindings and adds the non-`fs/` userspace ones, so the tools reach all C
+//! symbols through it. Meant to shrink as this code is ported to no_std.
 
 pub mod c {
-    pub use crate::bcachefs::*;
+	#![allow(ambiguous_glob_reexports)]
+
+	pub use bcachefs_kernel::c::*;
+
+	// The bindgen lints apply only to the generated bindings, not the
+	// re-export above.
+	#[allow(
+		non_camel_case_types,
+		non_upper_case_globals,
+		non_snake_case,
+		dead_code,
+		improper_ctypes,
+		unnecessary_transmutes
+	)]
+	mod generated {
+		use bcachefs_kernel::c::*;
+
+		include!(concat!(env!("OUT_DIR"), "/non_fs.rs"));
+	}
+	pub use generated::*;
+
+	// sysfs_read_or_html_dirlist is declared in include/linux/kobject.h (the
+	// kernel-compat tree, bcachefs-shim's territory) but is really a tools HTTP
+	// helper that takes a printbuf (an fs/ type). It slips through every crate's
+	// origin filter - bcachefs-shim can't emit it (no printbuf), the fs/ and
+	// tools crates blocklist include/ - so bind it by hand here. Ideally its C
+	// declaration moves to c_src/.
+	extern "C" {
+		pub fn sysfs_read_or_html_dirlist(
+			path: *const ::core::ffi::c_char,
+			out: *mut printbuf,
+		) -> ::core::ffi::c_int;
+	}
 }
 
-use c::bpos as Bpos;
+pub mod data;
+pub mod fs;
+pub mod keyutils;
+pub mod opts;
+pub mod sb;
 
-pub const fn spos(inode: u64, offset: u64, snapshot: u32) -> Bpos {
-    Bpos {
-        inode,
-        offset,
-        snapshot,
-    }
-}
-
-pub const fn pos(inode: u64, offset: u64) -> Bpos {
-    spos(inode, offset, 0)
-}
-
-pub const POS_MIN: Bpos = spos(0, 0, 0);
-pub const POS_MAX: Bpos = spos(u64::MAX, u64::MAX, 0);
-pub const SPOS_MAX: Bpos = spos(u64::MAX, u64::MAX, u32::MAX);
-
-use std::cmp::Ordering;
-
-impl PartialEq for Bpos {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for Bpos {}
-
-impl PartialOrd for Bpos {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for Bpos {
-    fn cmp(&self, other: &Self) -> Ordering {
-        let l_inode = self.inode;
-        let r_inode = other.inode;
-        let l_offset = self.offset;
-        let r_offset = other.offset;
-        let l_snapshot = self.snapshot;
-        let r_snapshot = other.snapshot;
-
-        l_inode
-            .cmp(&r_inode)
-            .then(l_offset.cmp(&r_offset))
-            .then(l_snapshot.cmp(&r_snapshot))
-    }
-}
-
-impl PartialEq for c::bbpos {
-    fn eq(&self, other: &Self) -> bool {
-        self.cmp(other) == Ordering::Equal
-    }
-}
-
-impl Eq for c::bbpos {}
-
-impl PartialOrd for c::bbpos {
-    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl Ord for c::bbpos {
-    fn cmp(&self, other: &Self) -> Ordering {
-        (self.btree as u32).cmp(&(other.btree as u32))
-            .then(self.pos.cmp(&other.pos))
-    }
-}
-
-use std::ffi::CStr;
-use std::fmt;
-
-impl c::btree_id {
-    /// Convert from raw u32. Returns None for unknown btree IDs (>= BTREE_ID_NR).
-    pub fn from_raw(id: u32) -> Option<Self> {
-        if id < Self::BTREE_ID_NR as u32 {
-            // SAFETY: id is in [0, BTREE_ID_NR), a valid discriminant
-            Some(unsafe { std::mem::transmute::<u32, Self>(id) })
-        } else {
-            None
-        }
-    }
-
-    /// Iterate over all known btree IDs.
-    pub fn iter_known() -> impl Iterator<Item = Self> {
-        (0..Self::BTREE_ID_NR as u32)
-            .map(|id| unsafe { std::mem::transmute::<u32, Self>(id) })
-    }
-}
-
-impl From<c::btree_id> for u32 {
-    fn from(id: c::btree_id) -> u32 {
-        id as u32
-    }
-}
-
-impl fmt::Display for c::btree_id {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        let s = unsafe { CStr::from_ptr(c::bch2_btree_id_str(*self)) };
-        f.write_str(&s.to_string_lossy())
-    }
-}
-
-use std::ffi::CString;
-use std::str::FromStr;
-use std::{os::unix::ffi::OsStrExt, path::Path};
-
-pub fn path_to_cstr<P: AsRef<Path>>(p: P) -> CString {
-    CString::new(p.as_ref().as_os_str().as_bytes()).unwrap()
-}
-
-use std::error::Error;
-
-#[derive(Debug)]
-pub enum BchToolsErr {
-    InvalidBtreeId,
-    InvalidBkeyType,
-    InvalidBpos,
-    InvalidBbpos,
-}
-
-impl fmt::Display for BchToolsErr {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            BchToolsErr::InvalidBtreeId => write!(f, "invalid btree id"),
-            BchToolsErr::InvalidBkeyType => write!(f, "invalid bkey type"),
-            BchToolsErr::InvalidBpos => write!(f, "invalid bpos"),
-            BchToolsErr::InvalidBbpos => write!(f, "invalid bbpos"),
-        }
-    }
-}
-
-impl Error for BchToolsErr {}
-
-impl FromStr for c::btree_id {
-    type Err = BchToolsErr;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = CString::new(s).map_err(|_| BchToolsErr::InvalidBtreeId)?;
-        let p = s.as_ptr();
-
-        let v =
-            unsafe { c::match_string(c::__bch2_btree_ids[..].as_ptr(), (-1_isize) as usize, p) };
-        c::btree_id::from_raw(v as u32)
-            .ok_or(BchToolsErr::InvalidBtreeId)
-    }
-}
-
-impl FromStr for c::bbpos {
-    type Err = BchToolsErr;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let (btree_s, pos_s) = s.split_once(':')
-            .ok_or(BchToolsErr::InvalidBbpos)?;
-
-        let btree: c::btree_id = btree_s.parse()
-            .map_err(|_| BchToolsErr::InvalidBbpos)?;
-        let pos: c::bpos = pos_s.parse()
-            .map_err(|_| BchToolsErr::InvalidBbpos)?;
-
-        Ok(c::bbpos { btree, pos })
-    }
-}
-
-/// A range of btree positions (start..=end).
-#[derive(Clone, Copy)]
-pub struct BbposRange {
-    pub start: c::bbpos,
-    pub end:   c::bbpos,
-}
-
-/// Parse a bbpos range string "start-end" or just "pos" (start == end).
-pub fn bbpos_range_parse(s: &str) -> Result<BbposRange, BchToolsErr> {
-    let (start_s, end_s) = match s.split_once('-') {
-        Some((a, b)) => (a, Some(b)),
-        None => (s, None),
-    };
-
-    let start: c::bbpos = start_s.parse()?;
-    let end: c::bbpos = match end_s {
-        Some(e) => e.parse()?,
-        None => start,
-    };
-
-    Ok(BbposRange { start, end })
-}
-
-impl FromStr for c::bch_bkey_type {
-    type Err = BchToolsErr;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        let s = CString::new(s).map_err(|_| BchToolsErr::InvalidBkeyType)?;
-        let p = s.as_ptr();
-
-        let v = unsafe { c::match_string(c::bch2_bkey_types[..].as_ptr(), (-1_isize) as usize, p) };
-        if v >= 0 {
-            Ok(unsafe { std::mem::transmute::<i32, bcachefs::bch_bkey_type>(v) })
-        } else {
-            Err(BchToolsErr::InvalidBkeyType)
-        }
-    }
-}
-
-impl c::printbuf {
-    pub fn new() -> c::printbuf {
-        let mut buf: c::printbuf = Default::default();
-
-        buf.set_heap_allocated(true);
-        buf
-    }
-}
-
-impl Drop for c::printbuf {
-    fn drop(&mut self) {
-        unsafe { c::bch2_printbuf_exit(self) }
-    }
-}
-
-impl fmt::Display for Bpos {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        printbuf_to_formatter(f, |buf| unsafe { c::bch2_bpos_to_text(buf, *self) })
-    }
-}
-
-impl FromStr for c::bpos {
-    type Err = BchToolsErr;
-
-    fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if s == "POS_MIN" {
-            return Ok(POS_MIN);
-        }
-
-        if s == "POS_MAX" {
-            return Ok(POS_MAX);
-        }
-
-        if s == "SPOS_MAX" {
-            return Ok(SPOS_MAX);
-        }
-
-        let mut fields = s.split(':');
-        let ino_str = fields.next().ok_or(BchToolsErr::InvalidBpos)?;
-        let off_str = fields.next().ok_or(BchToolsErr::InvalidBpos)?;
-        let snp_str = fields.next();
-
-        let ino: u64 = ino_str.parse().map_err(|_| BchToolsErr::InvalidBpos)?;
-        let off: u64 = off_str.parse().map_err(|_| BchToolsErr::InvalidBpos)?;
-        let snp: u32 = snp_str.and_then(|s| s.parse().ok()).unwrap_or(0);
-
-        Ok(c::bpos {
-            inode:    ino,
-            offset:   off,
-            snapshot: snp,
-        })
-    }
-}
-
-pub fn printbuf_to_formatter<F>(f: &mut fmt::Formatter<'_>, func: F) -> fmt::Result
-where
-    F: Fn(*mut c::printbuf),
-{
-    let mut buf = c::printbuf::new();
-
-    func(&mut buf);
-
-    if buf.buf.is_null() {
-        return Ok(());
-    }
-
-    let s = unsafe { CStr::from_ptr(buf.buf) };
-    f.write_str(&s.to_string_lossy())
-}
+pub use bcachefs_kernel::accounting;
+pub use bcachefs_kernel::opt_id;

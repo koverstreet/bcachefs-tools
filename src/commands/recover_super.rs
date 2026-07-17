@@ -3,14 +3,14 @@ use std::os::unix::fs::FileExt;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
 use anyhow::{anyhow, bail, Result};
-use bch_bindgen::bcachefs;
-use bch_bindgen::c;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::c;
+use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
+use bch_bindgen::sb::sb_field_type;
 use clap::Parser;
 
 use crate::util::{file_size, parse_human_size};
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::wrappers::super_io::{self, BCACHE_MAGIC, BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
 
 // bch2_sb_validate's flags parameter is a bch_validate_flags enum in bindgen,
@@ -19,7 +19,7 @@ use crate::wrappers::super_io::{self, BCACHE_MAGIC, BCHFS_MAGIC, SUPERBLOCK_SIZE
 extern "C" {
     fn bch2_sb_validate(
         sb: *mut c::bch_sb,
-        opts: *mut bcachefs::bch_opts,
+        opts: *mut c::bch_opts,
         offset: u64,
         flags: u32,
         err: *mut c::printbuf,
@@ -94,7 +94,7 @@ fn sb_last_mount_time(sb: &c::bch_sb) -> u64 {
 
 fn validate_sb(sb: &mut c::bch_sb, offset_sectors: u64) -> (i32, Printbuf) {
     let mut err = Printbuf::new();
-    let mut opts = bcachefs::bch_opts::default();
+    let mut opts = c::bch_opts::default();
     let ret = unsafe { bch2_sb_validate(sb, &mut opts, offset_sectors, 0, err.as_raw()) };
     (ret, err)
 }
@@ -200,7 +200,7 @@ fn recover_from_scan(
 }
 
 fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<Vec<u8>> {
-    let mut opts = bcachefs::bch_opts::default();
+    let mut opts = c::bch_opts::default();
     opt_set!(opts, noexcl, 1);
     opt_set!(opts, nochanges, 1);
 
@@ -219,8 +219,8 @@ fn recover_from_member(src_device: &str, dev_idx: i32, dev_size: u64) -> Result<
     }
 
     unsafe {
-        c::bch2_sb_field_delete(&mut src_sb, c::bch_sb_field_type::BCH_SB_FIELD_journal);
-        c::bch2_sb_field_delete(&mut src_sb, c::bch_sb_field_type::BCH_SB_FIELD_journal_v2);
+        c::bch2_sb_field_delete(&mut src_sb, sb_field_type::journal);
+        c::bch2_sb_field_delete(&mut src_sb, sb_field_type::journal_v2);
     }
     src_sb.sb_mut().dev_idx = dev_idx as u8;
 
@@ -296,7 +296,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
             std::ptr::null_mut(),
             buf_as_sb(&sb_buf),
             true,
-            1u32 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32,
+            sb_field_type::members_v2.bit(),
         );
     }
     println!("Found superblock:\n{}", buf);
@@ -307,7 +307,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
         print!("Recover? ");
     }
 
-    if cli.yes || unsafe { c::ask_yn() } {
+    if cli.yes || unsafe { bch_bindgen::c::ask_yn() } {
         crate::wrappers::super_io::bch2_super_write(
             dev_file.as_raw_fd(),
             unsafe { buf_as_sb_mut(&mut sb_buf) },

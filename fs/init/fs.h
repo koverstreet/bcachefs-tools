@@ -3,6 +3,8 @@
 #define _BCACHEFS_SUPER_H
 
 #include "data/extents.h"
+#include "init/dev_types.h"
+#include "util/darray.h"
 
 #include "bcachefs_ioctl.h"
 
@@ -34,6 +36,10 @@ extern struct mutex bch2_fs_list_lock;
 
 struct bch_fs *__bch2_uuid_to_fs(__uuid_t uuid);
 struct bch_fs *bch2_uuid_to_fs(__uuid_t);
+
+typedef DARRAY(struct bch_sb_handle) bch_sb_handles;
+
+int bch2_sbs_filter_dead(bch_sb_handles *, struct bch_opts *, struct printbuf *);
 
 bool bch2_fs_emergency_read_only(struct bch_fs *, struct printbuf *);
 bool bch2_fs_emergency_read_only_locked(struct bch_fs *, struct printbuf *out);

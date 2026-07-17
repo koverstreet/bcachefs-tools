@@ -35,7 +35,7 @@ struct bch_move_stats {
 
 struct move_bucket_key {
 	struct bpos		bucket;
-	unsigned		gen;
+	unsigned		generation;
 };
 
 struct move_bucket {

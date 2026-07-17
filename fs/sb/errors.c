@@ -13,7 +13,34 @@ const char * const bch2_sb_error_strs[] = {
 #undef x
 };
 
-void bch2_sb_error_id_to_text(struct printbuf *out, enum bch_sb_error_id id)
+/*
+ * The ids are persistent indices into on-disk error counters: a duplicate
+ * silently aliases two errors' counts, and neither C nor the enum will
+ * complain. Enforce at build time that the ids are exactly 0..MAX:
+ *
+ * - the switch makes a duplicate id a compile error (duplicate case label)
+ * - given distinctness, the minimum possible sum of MAX+1 non-negative
+ *   integers is 0+1+...+MAX, achieved only by exactly that set - so the sum
+ *   check rules out gaps and strays above MAX in one shot
+ */
+static inline void __maybe_unused bch2_sb_errs_check_unique(void)
+{
+	switch (0) {
+	case -1:
+#define x(t, n, ...) case n:
+	BCH_SB_ERRS()
+#undef x
+		;
+	}
+}
+
+#define x(t, n, ...) + (n)
+static_assert((0ULL BCH_SB_ERRS()) ==
+	      (unsigned long long) BCH_FSCK_ERR_MAX * (BCH_FSCK_ERR_MAX + 1) / 2,
+	      "sb error ids are not dense: gap, duplicate, or id > MAX");
+#undef x
+
+__cold void bch2_sb_error_id_to_text(struct printbuf *out, enum bch_sb_error_id id)
 {
 	if (id < BCH_FSCK_ERR_MAX)
 		prt_str(out, bch2_sb_error_strs[id]);
@@ -67,7 +94,7 @@ static int error_entry_cmp(const void *_l, const void *_r)
 
 DEFINE_DARRAY(bch_sb_field_error_entry);
 
-static void bch2_sb_errors_to_text(struct printbuf *out,
+static __cold void bch2_sb_errors_to_text(struct printbuf *out,
 				   struct bch_fs *c,
 				   struct bch_sb *sb,
 				   struct bch_sb_field *f)
@@ -100,7 +127,7 @@ const struct bch_sb_field_ops bch_sb_field_ops_errors = {
 	.to_text	= bch2_sb_errors_to_text,
 };
 
-void bch2_fs_errors_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_fs_errors_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (out->nr_tabstops < 1)
 		printbuf_tabstop_push(out, 48);

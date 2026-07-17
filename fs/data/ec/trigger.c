@@ -43,7 +43,7 @@
 /* Stripes btree keys: */
 
 int bch2_stripe_validate(struct bch_fs *c, struct bkey_s_c k,
-			 struct bkey_validate_context from)
+			 const struct bkey_validate_context *from)
 {
 	const struct bch_stripe *s = bkey_s_c_to_stripe(k).v;
 	int ret = 0;
@@ -72,7 +72,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_stripe_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_stripe_to_text(struct printbuf *out, struct bch_fs *c,
 			 struct bkey_s_c k)
 {
 	const struct bch_stripe *sp = bkey_s_c_to_stripe(k).v;
@@ -146,45 +146,9 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 	if (deleting)
 		sectors = -sectors;
 
-	if (!deleting) {
-		if (bch2_trans_inconsistent_on(parity && bch2_bucket_sectors_total(*a), trans,
-				"bucket %llu:%llu gen %u data type %s dirty_sectors %u stripe_sectors %u cached_sectors %u: data already in parity bucket\n%s",
-				bucket.inode, bucket.offset, a->gen,
-				bch2_data_type_str(a->data_type),
-				a->dirty_sectors,
-				a->stripe_sectors,
-				a->cached_sectors,
-				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
-			return bch_err_throw(c, mark_stripe);
-	} else {
-		if (bch2_trans_inconsistent_on(!a->stripe_refcount, trans,
-				"bucket %llu:%llu gen %u: not marked as stripe when deleting stripe\n%s",
-				bucket.inode, bucket.offset, a->gen,
-				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
-			return bch_err_throw(c, mark_stripe);
-
-		if (bch2_trans_inconsistent_on(a->data_type != data_type, trans,
-				"bucket %llu:%llu gen %u data type %s: wrong data type when stripe, should be %s\n%s",
-				bucket.inode, bucket.offset, a->gen,
-				bch2_data_type_str(a->data_type),
-				bch2_data_type_str(data_type),
-				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
-			return bch_err_throw(c, mark_stripe);
-
-		if (bch2_trans_inconsistent_on(parity &&
-					       (a->dirty_sectors != -sectors ||
-						a->cached_sectors), trans,
-				"bucket %llu:%llu gen %u dirty_sectors %u cached_sectors %u: wrong sectors when deleting parity block of stripe\n%s",
-				bucket.inode, bucket.offset, a->gen,
-				a->dirty_sectors,
-				a->cached_sectors,
-				(bch2_bkey_val_to_text(&buf, c, s.s_c), buf.buf)))
-			return bch_err_throw(c, mark_stripe);
-	}
-
 	if (sectors)
 		try(bch2_bucket_ref_update(trans, ca, s.s_c, ptr, sectors, data_type,
-					   a->gen, a->data_type, &a->dirty_sectors));
+					   a->generation, &a->data_type, &a->dirty_sectors));
 
 	if (flags & BTREE_TRIGGER_transactional)
 		try(bch2_btree_bit_mod(trans, BTREE_ID_bucket_to_stripe,
@@ -350,9 +314,6 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 	const struct bch_stripe *new_s = op.new.k->type == KEY_TYPE_stripe
 		? bkey_s_c_to_stripe(op.new.s_c).v : NULL;
 
-	if (unlikely(op.flags & BTREE_TRIGGER_check_repair))
-		return bch2_check_fix_ptrs(trans, op.btree, op.level, op.new.s_c, op.flags);
-
 	BUG_ON(new_s && old_s &&
 	       (new_s->sectors		!= old_s->sectors ||
 		new_s->nr_blocks	!= old_s->nr_blocks ||
@@ -396,16 +357,17 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 		u64 old_lru_pos = stripe_lru_pos(old_s);
 		u64 new_lru_pos = stripe_lru_pos(new_s);
 
+		/*
+		 * stripes is key-cached: delete via bch2_trans_update() (which
+		 * routes through flush_new_cached_update) rather than mutating
+		 * op.new in place, or the cached deletion bypasses the flush and
+		 * trips the commit-time assert. The flushed btree-side delete
+		 * re-runs this trigger to do the lru/reconcile/accounting cleanup.
+		 */
 		if (unlikely(new_lru_pos == STRIPE_LRU_POS_EMPTY) &&
-		    !bch2_stripe_is_open(c, idx)) {
-			op.new.k->type = KEY_TYPE_deleted;
-			set_bkey_val_u64s(op.new.k, 0);
-			new_s = NULL;
-			new_lru_pos = 0;
-			needs_reconcile_delta =
-				stripe_needs_reconcile(new_s) -
-				stripe_needs_reconcile(old_s);
-		}
+		    !bch2_stripe_is_open(c, idx))
+			return bch2_btree_delete(trans, BTREE_ID_stripes, op.new.k->p,
+						 BTREE_UPDATE_overwrite_triggered);
 
 		try(bch2_lru_change(trans,
 				    BCH_LRU_STRIPE_FRAGMENTATION, idx,

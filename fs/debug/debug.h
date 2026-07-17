@@ -16,6 +16,7 @@ struct dump_iter {
 	struct bch_fs		*c;
 	struct async_obj_list	*list;
 	enum btree_id		id;
+	unsigned		level;
 	struct bpos		from;
 	struct bpos		prev_node;
 	u64			iter;

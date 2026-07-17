@@ -3,8 +3,6 @@
 
 #include "alloc/disk_groups.h"
 
-#include "data/reconcile/work.h"
-
 #include "init/dev.h"
 
 #include "sb/members.h"
@@ -67,6 +65,24 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb, struct bch_sb_field *
 		}
 	}
 
+	/*
+	 * Parents are walked in bch2_sb_disk_groups_to_cpu() (bounded, so a
+	 * cycle is tolerated) and bch2_disk_path_to_text_sb(): an out of range
+	 * parent reads out of bounds, so reject those. Parents pointing at
+	 * deleted groups are tolerated - chains through deleted groups work.
+	 */
+	for (unsigned i = 0; i < nr_groups; i++) {
+		if (BCH_GROUP_DELETED(&groups->entries[i]))
+			continue;
+
+		u64 parent = BCH_GROUP_PARENT(&groups->entries[i]);
+		if (parent > nr_groups) {
+			prt_printf(err, "label %u has invalid parent %llu (have %u)",
+				   i, parent - 1, nr_groups);
+			return -BCH_ERR_invalid_sb_disk_groups;
+		}
+	}
+
 	struct bch_disk_group *sorted __free(kfree) =
 		kmalloc_array(nr_groups, sizeof(*sorted), GFP_KERNEL);
 	if (!sorted)
@@ -87,7 +103,7 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb, struct bch_sb_field *
 	return 0;
 }
 
-static void bch2_sb_disk_groups_to_text(struct printbuf *out,
+static __cold void bch2_sb_disk_groups_to_text(struct printbuf *out,
 					struct bch_fs *c,
 					struct bch_sb *sb,
 					struct bch_sb_field *f)
@@ -342,7 +358,7 @@ static void disk_path_invalid(struct printbuf *out, unsigned v)
 	prt_printf(out, "invalid label %u", v);
 }
 
-static void __bch2_disk_path_to_text(struct printbuf *out, struct bch_disk_groups_cpu *g,
+static __cold void __bch2_disk_path_to_text(struct printbuf *out, struct bch_disk_groups_cpu *g,
 				     unsigned v)
 {
 	u16 path[32];
@@ -377,7 +393,7 @@ static void __bch2_disk_path_to_text(struct printbuf *out, struct bch_disk_group
 	}
 }
 
-void bch2_disk_groups_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_disk_groups_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	bch2_printbuf_make_room(out, 4096);
 
@@ -403,7 +419,7 @@ void bch2_disk_groups_to_text(struct printbuf *out, struct bch_fs *c)
 	}
 }
 
-void bch2_disk_path_to_text(struct printbuf *out, struct bch_fs *c, unsigned v)
+__cold void bch2_disk_path_to_text(struct printbuf *out, struct bch_fs *c, unsigned v)
 {
 	guard(printbuf_atomic)(out);
 	guard(rcu)();
@@ -448,40 +464,56 @@ void bch2_disk_path_to_text_sb(struct printbuf *out, struct bch_sb *sb, unsigned
 	}
 }
 
+/* Resolve a label name to a 1 based group index, creating it if new: */
+static int dev_label_resolve(struct bch_fs *c, const char *name)
+{
+	if (!strlen(name) || !strcmp(name, "none"))
+		return 0;
+
+	int v = bch2_disk_path_find_or_create(&c->disk_sb, name);
+	return v < 0 ? v : v + 1;
+}
+
 int __bch2_dev_group_set(struct bch_fs *c, struct bch_dev *ca, const char *name)
 {
 	lockdep_assert_held(&c->sb_lock);
 
-	if (!strlen(name) || !strcmp(name, "none")) {
-		struct bch_member *mi = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
-		SET_BCH_MEMBER_GROUP(mi, 0);
-	} else {
-		int v = bch2_disk_path_find_or_create(&c->disk_sb, name);
-		if (v < 0)
-			return v;
+	int v = dev_label_resolve(c, name);
+	if (v < 0)
+		return v;
 
-		struct bch_member *mi = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
-		SET_BCH_MEMBER_GROUP(mi, v + 1);
-	}
-
+	SET_BCH_MEMBER_GROUP(bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx), v);
 	return bch2_sb_disk_groups_to_cpu(c);
 }
 
-int bch2_dev_group_set(struct bch_fs *c, struct bch_dev *ca, const char *name)
+int bch2_opt_disk_label_parse(struct bch_fs *c, const char *val, u64 *res,
+			      struct printbuf *err)
 {
-	struct reconcile_scan s = { .type = RECONCILE_SCAN_pending };
+	if (!val)
+		return -EINVAL;
 
-	try(bch2_set_reconcile_needs_scan(c, s, false));
+	if (!c)
+		return -BCH_ERR_option_needs_open_fs;
 
-	/* bch2_reconcile_wakeup_pending goes here */
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
 	scoped_guard(mutex, &c->sb_lock) {
-		try(__bch2_dev_group_set(c, ca, name));
-		try(bch2_write_super(c));
+		int v = dev_label_resolve(c, val);
+		if (v < 0)
+			return v;
+		*res = v;
 	}
 
-	try(bch2_set_reconcile_needs_scan(c, s, true));
 	return 0;
+}
+
+void bch2_opt_disk_label_to_text(struct printbuf *out, struct bch_fs *c,
+				 struct bch_sb *sb, u64 v)
+{
+	if (!v)
+		prt_str(out, "none");
+	else if (c)
+		bch2_disk_path_to_text(out, c, v - 1);
+	else
+		bch2_disk_path_to_text_sb(out, sb, v - 1);
 }
 
 int bch2_opt_target_parse(struct bch_fs *c, const char *val, u64 *res,
@@ -520,7 +552,7 @@ int bch2_opt_target_parse(struct bch_fs *c, const char *val, u64 *res,
 	return bch_err_throw(c, EINVAL_opt_target_parse_not_found);
 }
 
-void bch2_target_to_text(struct printbuf *out, struct bch_fs *c, unsigned v)
+__cold void bch2_target_to_text(struct printbuf *out, struct bch_fs *c, unsigned v)
 {
 	struct target t = target_decode(v);
 
@@ -579,7 +611,7 @@ static void bch2_target_to_text_sb(struct printbuf *out, struct bch_sb *sb, unsi
 	}
 }
 
-void bch2_opt_target_to_text(struct printbuf *out,
+__cold void bch2_opt_target_to_text(struct printbuf *out,
 			     struct bch_fs *c,
 			     struct bch_sb *sb,
 			     u64 v)

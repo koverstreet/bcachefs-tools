@@ -10,3 +10,4 @@ usr/sbin/mount.fuse.bcachefs
 usr/share/man/man8/bcachefs.8
 usr/share/bash-completion/completions/bcachefs
 usr/share/initramfs-tools/hooks/bcachefs
+signing/bcachefs-signing-ca.der usr/share/bcachefs-tools/

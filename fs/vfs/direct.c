@@ -27,7 +27,7 @@
 static void bio_check_or_release(struct bio *bio, bool check_dirty)
 {
 	if (check_dirty) {
-		bio_check_pages_dirty(bio);
+		bch2_bio_check_pages_dirty(bio);
 	} else {
 		bio_release_pages(bio, false);
 		bio_put(bio);
@@ -164,7 +164,7 @@ start:
 		offset += rbio->bio.bi_iter.bi_size;
 
 		if (dio->should_dirty)
-			bio_set_pages_dirty(&rbio->bio);
+			bch2_bio_set_pages_dirty(&rbio->bio);
 
 		if (iter->count)
 			closure_get(&dio->cl);
@@ -324,66 +324,18 @@ static noinline int bch2_dio_write_copy_iov(struct dio_write *dio)
 	return 0;
 }
 
-static CLOSURE_CALLBACK(bch2_dio_write_flush_done)
-{
-	closure_type(dio, struct dio_write, op.cl);
-	struct bch_fs *c = dio->op.c;
-
-	closure_debug_destroy(cl);
-
-	dio->op.error = bch2_journal_error(&c->journal);
-
-	bch2_dio_write_done(dio);
-}
-
-static noinline void bch2_dio_write_flush(struct dio_write *dio)
-{
-	struct bch_fs *c = dio->op.c;
-	struct bch_inode_unpacked inode;
-	int ret;
-
-	dio->flush = 0;
-
-	closure_init(&dio->op.cl, NULL);
-
-	if (!dio->op.error) {
-		ret = bch2_inode_find_by_inum(c, inode_inum(dio->inode), &inode);
-		if (ret) {
-			dio->op.error = ret;
-		} else {
-			bch2_journal_flush_seq_async(&c->journal, inode.bi_journal_seq,
-						     0, &dio->op.cl);
-			bch2_inode_flush_nocow_writes_async(c, dio->inode, &dio->op.cl);
-		}
-	}
-
-	if (dio->sync) {
-		closure_sync(&dio->op.cl);
-		closure_debug_destroy(&dio->op.cl);
-	} else {
-		continue_at(&dio->op.cl, bch2_dio_write_flush_done, NULL);
-	}
-}
-
 static __always_inline long bch2_dio_write_done(struct dio_write *dio)
 {
 	struct bch_fs *c = dio->op.c;
 	struct kiocb *req = dio->req;
 	struct bch_inode_info *inode = dio->inode;
 	bool sync = dio->sync;
-	long ret;
-
-	if (unlikely(dio->flush)) {
-		bch2_dio_write_flush(dio);
-		if (!sync)
-			return -EIOCBQUEUED;
-	}
 
 	bch2_pagecache_block_put(inode);
 
 	kfree(dio->iov);
 
-	ret = dio->op.error ?: ((long) dio->written << 9);
+	long ret = dio->op.error ?: ((long) dio->written << 9);
 	bio_put(&dio->op.wbio.bio);
 
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_dio_write);
@@ -510,6 +462,8 @@ static __always_inline long bch2_dio_write_loop(struct dio_write *dio)
 
 		if (sync)
 			dio->op.flags |= BCH_WRITE_sync;
+		if (dio->flush)
+			dio->op.flags |= BCH_WRITE_flush;
 		dio->op.flags |= BCH_WRITE_check_enospc;
 
 		ret = bch2_quota_reservation_add(c, inode, &dio->quota_res,

@@ -293,8 +293,6 @@ void bch2_fs_btree_exit(struct bch_fs *c)
 
 	if (c->btree.read_complete_wq)
 		destroy_workqueue(c->btree.read_complete_wq);
-	if (c->btree.write_submit_wq)
-		destroy_workqueue(c->btree.write_submit_wq);
 	if (c->btree.write_complete_wq)
 		destroy_workqueue(c->btree.write_complete_wq);
 
@@ -321,7 +319,7 @@ int bch2_fs_btree_init(struct bch_fs *c)
 		sizeof(struct sort_iter_set);
 
 	if (!(c->btree.read_complete_wq = alloc_workqueue("bcachefs_btree_read_complete",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM, 512)) ||
+				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_PERCPU, 512)) ||
 	    mempool_init_kmalloc_pool(&c->btree.fill_iter, 1, iter_size) ||
 	    bioset_init(&c->btree.bio, 1,
 			max(offsetof(struct btree_read_bio, bio),
@@ -334,6 +332,7 @@ int bch2_fs_btree_init(struct bch_fs *c)
 	try(bch2_fs_btree_cache_init(c));
 	try(bch2_fs_btree_iter_init(c));
 	try(bch2_fs_btree_key_cache_init(&c->btree.key_cache));
+	try(bch2_fs_btree_node_rewrites_init(c));
 
 	ratelimit_default_init(&c->btree.read_errors_soft);
 	ratelimit_default_init(&c->btree.read_errors_hard);
@@ -343,10 +342,8 @@ int bch2_fs_btree_init(struct bch_fs *c)
 
 int bch2_fs_btree_init_rw(struct bch_fs *c)
 {
-	if (!(c->btree.write_submit_wq = alloc_workqueue("bcachefs_btree_write_sumit",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM, 1)) ||
-	    !(c->btree.write_complete_wq = alloc_workqueue("bcachefs_btree_write_complete",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM, 1)))
+	if (!(c->btree.write_complete_wq = alloc_workqueue("bcachefs_btree_write_complete",
+				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_PERCPU, 1)))
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
 	try(bch2_fs_btree_interior_update_init(c));

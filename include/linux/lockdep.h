@@ -27,6 +27,7 @@ struct task_struct;
 
 #define lockdep_assert_held(l)			do { (void)(l); } while (0)
 #define lockdep_assert_held_once(l)		do { (void)(l); } while (0)
+#define lockdep_assert_not_held(l)		do { (void)(l); } while (0)
 
 #define lock_acquire_shared(l, s, t, n, i)
 

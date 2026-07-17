@@ -38,7 +38,7 @@ struct bucket {
 	u8			lock;
 	u8			gen_valid:1;
 	u8			data_type:7;
-	u8			gen;
+	u8			generation;
 	u32			dirty_sectors;
 	u32			cached_sectors;
 	u32			stripe_sectors;
@@ -89,7 +89,7 @@ struct bch_fs_usage_short {
  */
 struct disk_reservation {
 	u64			sectors;
-	u32			gen;
+	u32			generation;
 	unsigned		nr_replicas;
 };
 

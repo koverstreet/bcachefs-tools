@@ -223,11 +223,24 @@ enum bch_fsck_flags {
 	x(snapshot_child_bad,					179,	0)		\
 	x(snapshot_skiplist_not_normalized,			180,	0)		\
 	x(snapshot_skiplist_bad,				181,	0)		\
+	x(snapshot_pad_nonzero,					370,	0)		\
+	x(snapshot_edge_bad,					371,	0)		\
+	x(snapshot_state_bad,					373,	FSCK_AUTOFIX)	\
+	x(snapshot_state_bitflip,				379,	FSCK_AUTOFIX)	\
+	x(snapshot_will_delete_but_subvol_live,			376,	FSCK_AUTOFIX)		\
+	x(snapshot_deleted_has_live_children,			381,	FSCK_AUTOFIX)	\
+	x(snapshot_subvol_backref_wrong,			377,	0)		\
+	x(snapshot_no_keys_childless,				378,	FSCK_AUTOFIX)	\
 	x(snapshot_should_not_have_subvol,			182,	0)		\
+	x(snapshot_subvol_flag_wrong,				369,	FSCK_AUTOFIX)	\
 	x(snapshot_to_bad_snapshot_tree,			183,	FSCK_AUTOFIX)	\
 	x(snapshot_bad_depth,					184,	FSCK_AUTOFIX)	\
 	x(snapshot_bad_skiplist,				185,	FSCK_AUTOFIX)	\
 	x(subvol_pos_bad,					186,	0)		\
+	x(subvol_pad_nonzero,					372,	0)		\
+	x(subvol_state_bad,					374,	FSCK_AUTOFIX)	\
+	x(subvol_state_bitflip,					380,	FSCK_AUTOFIX)	\
+	x(subvol_snapshot_not_leaf,				375,	0)		\
 	x(subvol_not_master_and_not_snapshot,			187,	FSCK_AUTOFIX)	\
 	x(subvol_to_missing_root,				188,	FSCK_AUTOFIX)	\
 	x(subvol_root_wrong_bi_subvol,				189,	FSCK_AUTOFIX)	\
@@ -373,7 +386,14 @@ enum bch_fsck_flags {
 	x(vfs_unlink_got_wrong_inum,				349,	0)		\
 	x(device_bad_flush,					357,	0)		\
 	x(journal_bucket_seq_not_monotonic,			358,	0)		\
-	x(MAX,							362,	0)
+	x(dup_extents_to_reflink,				362,	FSCK_AUTOFIX)	\
+	x(stripe_read_ptr_stale,				363,	0)		\
+	x(bkey_in_deleted_interior_snapshot,			364,	FSCK_AUTOFIX)	\
+	x(inode_has_inode_opts_flag_wrong,			365,	FSCK_AUTOFIX)	\
+	x(inode_has_access_acl_flag_wrong,			366,	FSCK_AUTOFIX)	\
+	x(inode_has_default_acl_flag_wrong,			367,	FSCK_AUTOFIX)	\
+	x(dirent_to_inode_in_descendant_snapshot,		368,	FSCK_AUTOFIX)	\
+	x(MAX,							382,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,

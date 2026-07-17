@@ -12,6 +12,7 @@
 #include "journal/sb.h"
 #include "journal/seq_blacklist.h"
 
+#include "fs/inode.h"
 #include "fs/quota.h"
 
 #include "init/dev.h"
@@ -182,7 +183,7 @@ static const struct bch2_metadata_version bch2_metadata_versions[] = {
 #undef x
 };
 
-void bch2_version_to_text(struct printbuf *out, enum bcachefs_metadata_version v)
+__cold void bch2_version_to_text(struct printbuf *out, enum bcachefs_metadata_version v)
 {
 	const char *str = "(unknown version)";
 
@@ -610,8 +611,17 @@ int bch2_sb_validate(struct bch_sb *sb, struct bch_opts *opts, u64 read_offset,
 		SET_BCH_SB_MULTI_DEVICE(sb, true);
 
 #ifdef __KERNEL__
-	if (!BCH_SB_SHARD_INUMS_NBITS(sb))
-		SET_BCH_SB_SHARD_INUMS_NBITS(sb, ilog2(roundup_pow_of_two(num_online_cpus())));
+	if (!BCH_SB_SHARD_INUMS_NBITS(sb)) {
+		u64 fs_size = 0;
+		for (unsigned i = 0; i < bch2_sb_nr_devices(sb); i++) {
+			struct bch_member m = bch2_sb_member_get(sb, i);
+			fs_size += le64_to_cpu(m.nbuckets) * le16_to_cpu(m.bucket_size);
+		}
+
+		SET_BCH_SB_SHARD_INUMS_NBITS(sb,
+			bch2_shard_inode_numbers_bits_default(num_online_cpus(),
+				fs_size << 9, (u64) BCH_SB_BTREE_NODE_SIZE(sb) << 9));
+	}
 #endif
 
 	/* validate layout */
@@ -719,6 +729,13 @@ static void bch2_sb_update(struct bch_fs *c)
 		le_bitvector_to_cpu(c->sb.errors_silent, (void *) ext->errors_silent,
 				    sizeof(c->sb.errors_silent) * 8);
 		c->sb.btrees_lost_data = le64_to_cpu(ext->btrees_lost_data);
+
+		/* Appended member - older superblocks may have a smaller field: */
+		c->sb.btrees_clean =
+			vstruct_bytes(&ext->field) >= offsetof(struct bch_sb_field_ext, btrees_clean) +
+						      sizeof(ext->btrees_clean)
+			? le64_to_cpu(ext->btrees_clean)
+			: 0;
 	} else {
 		memset(c->sb.errors_silent, 0, sizeof(c->sb.errors_silent));
 	}
@@ -1073,10 +1090,10 @@ int bch2_read_super(const char *path, struct bch_opts *opts,
 		bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error reading superblock: %s\n%s",
 				path, bch2_err_str(ret), err.buf);
 	else if (ret)
-		bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error reading superblock: %s",
+		bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error reading superblock: %s\n",
 				path, bch2_err_str(ret));
 	else if (err.pos) {
-		prt_printf(&err, "successful read from backup");
+		prt_printf(&err, "successful read from backup\n");
 		bch2_print_opts(opts, KERN_NOTICE "bcachefs (%s): %s", path, err.buf);
 	}
 
@@ -1364,6 +1381,15 @@ static int __bch2_write_super(struct bch_fs *c)
 
 	CLASS(bch_log_msg, msg)(c);
 
+	/*
+	 * A degraded write (wrote to fewer devices, but still enough to mount)
+	 * repeats on every superblock write while a device is failing, so
+	 * ratelimit it. A fatal failure goes emergency read-only below and
+	 * always prints.
+	 */
+	if (!fatal)
+		msg.m.suppress = bch2_ratelimit(c);
+
 	prt_printf(&msg.m, "Error writing superblock, wrote to %u/%u devices:\n",
 		   nr_wrote, nr_members);
 
@@ -1504,7 +1530,7 @@ static int bch2_sb_ext_validate(struct bch_sb *sb, struct bch_sb_field *f,
 	return 0;
 }
 
-static void bch2_sb_ext_to_text(struct printbuf *out,
+static __cold void bch2_sb_ext_to_text(struct printbuf *out,
 				struct bch_fs *c,
 				struct bch_sb *sb,
 				struct bch_sb_field *f)
@@ -1531,6 +1557,22 @@ static void bch2_sb_ext_to_text(struct printbuf *out,
 	prt_printf(out, "Btrees with missing data:\t");
 	prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_lost_data));
 	prt_newline(out);
+
+	/* Appended member - older superblocks may have a smaller field: */
+	if (vstruct_bytes(f) >= offsetof(struct bch_sb_field_ext, btrees_lost_data_ever) +
+				sizeof(e->btrees_lost_data_ever)) {
+		prt_printf(out, "Btrees that have ever lost data:\t");
+		prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_lost_data_ever));
+		prt_newline(out);
+	}
+
+	/* Appended member - older superblocks may have a smaller field: */
+	if (vstruct_bytes(f) >= offsetof(struct bch_sb_field_ext, btrees_clean) +
+				sizeof(e->btrees_clean)) {
+		prt_printf(out, "Btrees validated clean:\t");
+		prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_clean));
+		prt_newline(out);
+	}
 }
 
 static const struct bch_sb_field_ops bch_sb_field_ops_ext = {
@@ -1573,7 +1615,7 @@ static int bch2_sb_field_validate(struct bch_sb *sb, struct bch_sb_field *f,
 	return ret;
 }
 
-void __bch2_sb_field_to_text(struct printbuf *out,
+__cold void __bch2_sb_field_to_text(struct printbuf *out,
 			     struct bch_fs *c,
 			     struct bch_sb *sb,
 			     struct bch_sb_field *f)
@@ -1588,7 +1630,7 @@ void __bch2_sb_field_to_text(struct printbuf *out,
 		ops->to_text(out, c, sb, f);
 }
 
-void bch2_sb_field_to_text(struct printbuf *out,
+__cold void bch2_sb_field_to_text(struct printbuf *out,
 			   struct bch_fs *c,
 			   struct bch_sb *sb,
 			   struct bch_sb_field *f)
@@ -1606,7 +1648,7 @@ void bch2_sb_field_to_text(struct printbuf *out,
 	__bch2_sb_field_to_text(out, c, sb, f);
 }
 
-void bch2_sb_layout_to_text(struct printbuf *out, struct bch_sb_layout *l)
+__cold void bch2_sb_layout_to_text(struct printbuf *out, struct bch_sb_layout *l)
 {
 	prt_printf(out, "Type:                    %u", l->layout_type);
 	prt_newline(out);
@@ -1627,7 +1669,7 @@ void bch2_sb_layout_to_text(struct printbuf *out, struct bch_sb_layout *l)
 	prt_newline(out);
 }
 
-void bch2_sb_to_text(struct printbuf *out,
+__cold void bch2_sb_to_text(struct printbuf *out,
 		     struct bch_fs *c, struct bch_sb *sb,
 		     bool print_layout, unsigned fields)
 {
@@ -1649,10 +1691,11 @@ void bch2_sb_to_text(struct printbuf *out,
 	prt_printf(out, "Device index:\t%u\n", sb->dev_idx);
 
 	prt_printf(out, "Label:\t");
-	if (!strlen(sb->label))
+	size_t label_len = strnlen(sb->label, sizeof(sb->label));
+	if (!label_len)
 		prt_printf(out, "(none)");
 	else
-		prt_printf(out, "%.*s", (int) sizeof(sb->label), sb->label);
+		prt_printf(out, "%.*s", (int) label_len, sb->label);
 	prt_newline(out);
 
 	prt_printf(out, "Version:\t");

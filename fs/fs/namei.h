@@ -14,6 +14,7 @@ struct posix_acl;
 int bch2_create_trans(struct btree_trans *, subvol_inum,
 		      struct bch_inode_unpacked *,
 		      struct bch_inode_unpacked *,
+		      struct bch_subvolume *,
 		      const struct qstr *,
 		      uid_t, gid_t, umode_t, dev_t,
 		      struct posix_acl *,

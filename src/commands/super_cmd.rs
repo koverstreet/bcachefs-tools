@@ -12,12 +12,13 @@ use std::ffi::CString;
 use std::ops::ControlFlow;
 
 use anyhow::{anyhow, Result};
-use bch_bindgen::bcachefs;
-use bch_bindgen::c;
-use bch_bindgen::opt_set;
+use bch_bindgen::fs::FsExt;
+use bcachefs_kernel::c;
+use bcachefs_kernel::opt_set;
+use bcachefs_kernel::sb::sb_field_type;
 use clap::Parser;
 
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 
 /// Print superblock information to stdout
 #[derive(Parser, Debug)]
@@ -45,7 +46,7 @@ pub struct ShowSuperCli {
 
 fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
 
-    let ext_bit = 1u32 << c::bch_sb_field_type::BCH_SB_FIELD_ext as u32;
+    let ext_bit = sb_field_type::ext.bit();
     let mut fields = ext_bit;
     let mut field_only: i32 = -1;
     let mut print_default_fields = true;
@@ -78,13 +79,13 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         print_default_fields = false;
     }
 
-    let mut fs_opts = bcachefs::bch_opts::default();
+    let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, noexcl, 1);
     opt_set!(fs_opts, nochanges, 1);
     opt_set!(fs_opts, no_version_check, 1);
     opt_set!(fs_opts, nostart, 1);
 
-    let fs = bch_bindgen::fs::Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
+    let fs = bcachefs_kernel::fs::Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
 
     // Use the per-device superblock, not c->disk_sb.sb — the filesystem-level
     // copy omits fields like magic and layout that __copy_super doesn't transfer.
@@ -94,11 +95,11 @@ fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
         let mut fields = fields;
         if print_default_fields {
             if sb.field::<c::bch_sb_field_members_v2>().is_some() {
-                fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v2 as u32;
+                fields |= sb_field_type::members_v2.bit();
             } else {
-                fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_members_v1 as u32;
+                fields |= sb_field_type::members_v1.bit();
             }
-            fields |= 1 << c::bch_sb_field_type::BCH_SB_FIELD_errors as u32;
+            fields |= sb_field_type::errors.bit();
         }
 
         let mut buf = Printbuf::new();

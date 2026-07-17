@@ -1,14 +1,13 @@
 use bch_bindgen::c;
+use bcachefs_kernel::metadata_version;
 
 use super::handle::BcachefsHandle;
 use super::ioctl::bch_ioc_w;
 use super::sysfs::bcachefs_kernel_version;
 
-use c::bcachefs_metadata_version::*;
-
-// Re-export types and functions from bch_bindgen::accounting for consumers
+// Re-export types and functions from bcachefs_kernel::accounting for consumers
 // that were importing from this module.
-pub use bch_bindgen::accounting::*;
+pub use bcachefs_kernel::accounting::*;
 
 /// Result of query_accounting ioctl.
 pub struct AccountingResult {
@@ -86,7 +85,7 @@ fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
     let mut entries = Vec::new();
     let kernel_version = bcachefs_kernel_version();
     let need_swab = kernel_version > 0
-        && kernel_version < bcachefs_metadata_version_disk_accounting_big_endian as u64;
+        && kernel_version < u32::from(metadata_version::disk_accounting_big_endian) as u64;
 
     let mut offset = 0;
     while offset < data.len() {

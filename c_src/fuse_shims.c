@@ -56,187 +56,6 @@ void rust_fuse_rcu_unregister(void)
 	rcu_unregister_thread();
 }
 
-/* ---- inline function wrappers ---- */
-
-u32 rust_block_bytes(struct bch_fs *c)
-{
-	return block_bytes(c);
-}
-
-struct timespec64 rust_bch2_time_to_timespec(struct bch_fs *c, s64 time)
-{
-	return bch2_time_to_timespec(c, time);
-}
-
-s64 rust_timespec_to_bch2_time(struct bch_fs *c, struct timespec64 ts)
-{
-	return timespec_to_bch2_time(c, ts);
-}
-
-s64 rust_bch2_current_time(struct bch_fs *c)
-{
-	return bch2_current_time(c);
-}
-
-u32 rust_inode_nlink_get(struct bch_inode_unpacked *bi)
-{
-	return bch2_inode_nlink_get(bi);
-}
-
-/* ---- FUSE operations ---- */
-
-int rust_fuse_lookup(struct bch_fs *c, subvol_inum dir,
-		     const unsigned char *name, unsigned name_len,
-		     subvol_inum *inum_out,
-		     struct bch_inode_unpacked *inode_out)
-{
-	struct bch_inode_unpacked dir_u;
-	int ret = bch2_inode_find_by_inum(c, dir, &dir_u);
-	if (ret)
-		return ret;
-
-	struct bch_hash_info hash_info;
-	ret = bch2_hash_info_init(c, &dir_u, &hash_info);
-	if (ret)
-		return ret;
-
-	struct qstr qstr = QSTR_INIT(name, name_len);
-	ret = bch2_dirent_lookup(c, dir, &hash_info, &qstr, inum_out);
-	if (ret)
-		return ret;
-
-	return bch2_inode_find_by_inum(c, *inum_out, inode_out);
-}
-
-int rust_fuse_create(struct bch_fs *c, subvol_inum dir,
-		     const unsigned char *name, unsigned name_len,
-		     u16 mode, u64 rdev,
-		     struct bch_inode_unpacked *new_inode)
-{
-	struct qstr qstr = QSTR_INIT(name, name_len);
-	struct bch_inode_unpacked dir_u;
-	uid_t uid = 0;
-	gid_t gid = 0;
-
-	bch2_inode_init_early(c, new_inode);
-
-	return bch2_trans_commit_do(c, NULL, NULL, 0,
-		bch2_create_trans(trans,
-			dir, &dir_u,
-			new_inode, &qstr,
-			uid, gid, mode, rdev, NULL, NULL,
-			(subvol_inum) { 0 }, 0));
-}
-
-int rust_fuse_unlink(struct bch_fs *c, subvol_inum dir,
-		     const unsigned char *name, unsigned name_len)
-{
-	struct qstr qstr = QSTR_INIT(name, name_len);
-	struct bch_inode_unpacked dir_u, inode_u;
-
-	return bch2_trans_commit_do(c, NULL, NULL,
-			BCH_TRANS_COMMIT_no_enospc,
-		bch2_unlink_trans(trans, dir, &dir_u,
-				  (subvol_inum) {}, &inode_u,
-				  &qstr, false));
-}
-
-int rust_fuse_rename(struct bch_fs *c,
-		     subvol_inum src_dir, const unsigned char *src_name,
-		     unsigned src_len,
-		     subvol_inum dst_dir, const unsigned char *dst_name,
-		     unsigned dst_len)
-{
-	struct qstr src_qstr = QSTR_INIT(src_name, src_len);
-	struct qstr dst_qstr = QSTR_INIT(dst_name, dst_len);
-	struct bch_inode_unpacked src_dir_u, dst_dir_u;
-	struct bch_inode_unpacked src_inode_u, dst_inode_u;
-
-	/* XXX handle overwrites */
-	return bch2_trans_commit_do(c, NULL, NULL, 0,
-		bch2_rename_trans(trans,
-			src_dir, &src_dir_u,
-			dst_dir, &dst_dir_u,
-			&src_inode_u, &dst_inode_u,
-			&src_qstr, &dst_qstr,
-			BCH_RENAME));
-}
-
-int rust_fuse_link(struct bch_fs *c, subvol_inum inum, subvol_inum newparent,
-		   const unsigned char *name, unsigned name_len,
-		   struct bch_inode_unpacked *inode_u)
-{
-	struct qstr qstr = QSTR_INIT(name, name_len);
-	struct bch_inode_unpacked dir_u;
-
-	return bch2_trans_commit_do(c, NULL, NULL, 0,
-		bch2_link_trans(trans, newparent, &dir_u,
-				inum, inode_u, &qstr));
-}
-
-int rust_fuse_setattr(struct bch_fs *c, subvol_inum inum,
-		      struct bch_inode_unpacked *inode_out,
-		      int set_mode, u16 mode,
-		      int set_uid, u32 uid,
-		      int set_gid, u32 gid,
-		      int set_size, u64 size,
-		      int atime_flag, s64 atime,
-		      int mtime_flag, s64 mtime)
-{
-	CLASS(btree_trans, trans)(c);
-	return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		u64 now = bch2_current_time(c);
-
-		CLASS(btree_iter_uninit, iter)(trans);
-		struct bch_inode_unpacked inode_u;
-		int ret2 = bch2_inode_peek(trans, &iter, &inode_u, inum,
-					    BTREE_ITER_intent);
-		if (ret2)
-			goto setattr_err;
-
-		if (set_mode)
-			inode_u.bi_mode = mode;
-		if (set_uid)
-			inode_u.bi_uid = uid;
-		if (set_gid)
-			inode_u.bi_gid = gid;
-		if (set_size)
-			inode_u.bi_size = size;
-		if (atime_flag == 1)
-			inode_u.bi_atime = atime;
-		if (atime_flag == 2)
-			inode_u.bi_atime = now;
-		if (mtime_flag == 1)
-			inode_u.bi_mtime = mtime;
-		if (mtime_flag == 2)
-			inode_u.bi_mtime = now;
-
-		*inode_out = inode_u;
-setattr_err:
-		ret2 ?:
-		bch2_inode_write(trans, &iter, &inode_u);
-	}));
-}
-
-/* ---- post-write inode time update ---- */
-
-int rust_fuse_update_inode_after_write(struct bch_fs *c, subvol_inum inum)
-{
-	CLASS(btree_trans, trans)(c);
-	return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		u64 now = bch2_current_time(c);
-		CLASS(btree_iter_uninit, iter)(trans);
-		struct bch_inode_unpacked inode_u;
-		int ret2 = bch2_inode_peek(trans, &iter, &inode_u, inum,
-					    BTREE_ITER_intent);
-		if (!ret2) {
-			inode_u.bi_mtime = now;
-			inode_u.bi_ctime = now;
-			ret2 = bch2_inode_write(trans, &iter, &inode_u);
-		}
-		ret2;
-	}));
-}
 
 /* ---- readdir ---- */
 
@@ -252,6 +71,14 @@ static int rust_fuse_readdir_actor(struct dir_context *_ctx,
 {
 	struct rust_readdir_ctx *rctx =
 		container_of(_ctx, struct rust_readdir_ctx, ctx);
+
+	/*
+	 * A fuse dirent's offset field is the cookie to resume the listing
+	 * *after* that entry; pos is the entry's own dirent offset
+	 * (bch2_dir_emit() sets ctx->pos before emitting). If we reject on a
+	 * full reply buffer, ctx->pos never advances past this entry and the
+	 * next readdir re-reads it.
+	 */
 	return rctx->filldir(rctx->opaque, name, (unsigned)namelen,
 			     ino, type, (u64)(pos + 1));
 }
@@ -277,20 +104,6 @@ int rust_fuse_readdir(struct bch_fs *c, subvol_inum dir,
 	};
 
 	return bch2_readdir(c, dir, &dir_hash, &rctx.ctx);
-}
-
-/* ---- statfs ---- */
-
-struct bch_fs_usage_short rust_bch2_fs_usage_read_short(struct bch_fs *c)
-{
-	return bch2_fs_usage_read_short(c);
-}
-
-void rust_fuse_count_inodes(struct bch_fs *c, u64 *out)
-{
-	struct disk_accounting_pos k;
-	disk_accounting_key_init(k, nr_inodes);
-	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&k), out, 1);
 }
 
 #endif /* BCACHEFS_FUSE */

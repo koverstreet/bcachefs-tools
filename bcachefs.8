@@ -53,7 +53,7 @@ Take a device offline, without removing it
 .It Ic device evacuate
 Migrate data off of a specific device
 .It Ic device set-state
-Change the state of a device
+Set a device state
 .It Ic device resize
 Resize filesystem on a device
 .It Ic device resize-journal
@@ -67,13 +67,17 @@ Create a new subvolume
 Delete an existing subvolume
 .It Ic subvolume snapshot
 Create a snapshot
+.It Ic subvolume list
+List subvolumes
+.It Ic subvolume list-snapshots
+List snapshots and their disk usage
 .El
 .Ss Commands for managing filesystem data
 .Bl -tag -width 18n -compact
-.It Ic data rereplicate
-Rereplicate degraded data
-.It Ic data job
-Kick off low level data jobs
+.It Ic reconcile
+Query or wait for background data reconciliation
+.It Ic scrub
+Verify data checksums
 .El
 .Ss Commands for encryption
 .Bl -tag -width 18n -compact
@@ -132,7 +136,10 @@ Btree node size, default 256k
 .It Fl -errors Ns = Ns ( Cm continue | ro | panic )
 Action to take on filesystem error
 .It Fl -data_replicas Ns = Ns Ar number
-Number of data replicas
+Number of data replicas.
+With erasure coding enabled, this is currently capped at
+.Ar 3
+.Pq RAID6 .
 .It Fl -metadata_replicas Ns = Ns Ar number
 Number of metadata replicas
 .It Fl -data_replicas_required Ns = Ns Ar number
@@ -163,7 +170,7 @@ Device or label to move data to in the background
 .It Fl -promote_target Ns = Ns Ar target
 Device or label to promote data to on read
 .It Fl -erasure_code
-Enable erasure coding (DO NOT USE YET)
+Enable erasure coding (RAID5/6; data replicas are capped at 3)
 .It Fl -inodes_32bit
 Constrain inode numbers to 32 bits
 .It Fl -shared_inode_numbers
@@ -205,10 +212,15 @@ Sets both data and metadata replicas
 Enable whole filesystem encryption (chacha20/poly1305);
 passphrase will be prompted for.
 .It Fl -no_passphrase
-Don't encrypt master encryption key
+Store master encryption key unencrypted in superblock
 .It Fl L , Fl -fs_label Ns = Ns Ar label
 Create the filesystem with the specified
 .Ar label
+This is the filesystem label, distinct from per-device labels used for target
+selection. On a mounted filesystem it can be changed by tools that issue the
+standard Linux
+.Dv FS_IOC_SETFSLABEL
+ioctl.
 .It Fl U , Fl -uuid Ns = Ns Ar uuid
 Create the filesystem with the specified
 .Ar uuid
@@ -257,7 +269,10 @@ Action to take on filesystem error
 .It Fl -metadata_replicas Ns = Ns Ar number
 Number of metadata replicas
 .It Fl -data_replicas Ns = Ns Ar number
-Number of data replicas
+Number of data replicas.
+With erasure coding enabled, this is currently capped at
+.Ar 3
+.Pq RAID6 .
 .It Fl -metadata_replicas_required Ns = Ns Ar number
 
 .It Fl -data_replicas_required Ns = Ns Ar number
@@ -284,7 +299,7 @@ Device or label to move data to in the background
 .It Fl -promote_target Ns = Ns Ar target
 Device or label to promote data to on read
 .It Fl -erasure_code
-Enable erasure coding (DO NOT USE YET)
+Enable erasure coding (RAID5/6; data replicas are capped at 3)
 .It Fl -inodes_32bit
 Constrain inode numbers to 32 bits
 .It Fl -shared_inode_numbers
@@ -356,6 +371,16 @@ Reconstruct alloc btree
 .It Fl -version_upgrade Ns = Ns ( Cm compatible | incompatible | none )
 Set superblock to latest version, allowing any new features
 to be used
+.Pp
+.Cm compatible
+is the default: compatible metadata upgrades may be applied automatically, and
+the filesystem may still downgrade those compatible version fields when mounted
+by an older kernel. Use
+.Cm incompatible
+only for an intentional one-way metadata upgrade that may prevent mounting with
+older kernels, and use
+.Cm none
+to avoid optional version upgrades.
 .It Fl -nocow
 Nocow mode: Writes will be done in place when possible.
 .sp
@@ -374,9 +399,19 @@ for performance testing purposes
 .Sh Mount commands
 .Bl -tag -width Ds
 .It Nm Ic mount Oo Ar options Oc Ar device mountpoint
+The
+.Ic mount Fl t Cm bcachefs
+path invokes the installed
+.Nm mount.bcachefs
+helper; this is the same mount path exposed as
+.Nm Ic mount .
+.Pp
 Mount a filesystem. The
 .Ar device
-can be a device, a colon-separated list of devices, or UUID=<UUID>. The
+can be a device, a colon-separated list of devices, UUID=<UUID>,
+OLD_BLKID_UUID=<UUID>, or LABEL=<label>. Use OLD_BLKID_UUID=<UUID> in fstab
+entries when systemd consumes UUID=<UUID> before the bcachefs mount helper can
+scan all members. The
 .Ar mountpoint
 is the path where the filesystem should be mounted. If not set, then the filesystem won't actually be mounted
 but all steps preceding mounting the filesystem (e.g. asking for passphrase) will still be performed.
@@ -386,7 +421,24 @@ but all steps preceding mounting the filesystem (e.g. asking for passphrase) wil
 Mount options provided as a comma-separated list. See user guide for complete list.
 .Bl -tag -width Ds -compact
 .It Cm degraded
-Allow mounting with data degraded
+Allow mounting with missing devices.
+Use
+.Cm degraded=yes
+to allow normal operation with devices missing, and
+.Cm degraded=very
+only when writes are allowed to continue even if the requested replica count
+cannot be maintained.
+.Pp
+Use degraded read-write mounts for recovery and maintenance when some
+members are temporarily unavailable. Do not mount different subsets of the
+same filesystem read-write, or mount one subset read-write and later mount a
+different subset read-write before the full filesystem has been assembled and
+reconciled. That creates split-brain history: each subset can accept writes
+that the other subset never saw, and when the members are later brought back
+together there may be no single correct value for conflicting files.
+.Pp
+When in doubt, mount degraded filesystems read-only until the missing members
+are available, or assemble the complete filesystem before allowing writes.
 .It Cm verbose
 Extra debugging info during mount/recovery
 .It Cm fsck
@@ -410,6 +462,23 @@ prompt the user for password.
 .El
 .It Fl c , Fl -colorize Ns = Ns ( Cm true | false )
 Force color on/off. Default: auto-detect TTY
+.It Fl n , Fl -no-mtab
+Do not update
+.Pa /etc/mtab .
+This is accepted for compatibility with
+.Xr mount 8 ;
+.Nm
+uses the mount syscall directly and does not update
+.Pa /etc/mtab .
+.It Fl f , Fl -fake
+Do everything except the actual mount syscall. Accepted for compatibility with
+.Xr mount 8 .
+.It Fl s , Fl -sloppy
+Ignore unrecognized mount options instead of failing. Accepted for
+compatibility with
+.Xr mount 8 ;
+.Nm
+already ignores unrecognized options.
 .It Fl v
 Be verbose. Can be specified more than once.
 .El
@@ -442,6 +511,23 @@ Show disk usage.
 .Bl -tag -width Ds
 .It Fl h , Fl -human-readable
 Print human readable sizes.
+.El
+.It Nm Ic fs Ic top Oo Ar options Oc Op Ar filesystem
+Show live filesystem performance counters.
+When stdout is a terminal, this starts an interactive display.
+When stdout is not a terminal, it prints one sample and exits.
+.Bl -tag -width Ds
+.It Fl h , Fl -human-readable
+Print human readable sizes.
+.It Fl -once
+Print one sample and exit; equivalent to specifying a count of 1.
+.It Fl n , Fl -count Ns = Ns Ar count
+Print
+.Ar count
+samples and exit.
+A count of 0 keeps the interactive display running.
+.It Fl d , Fl -delay Ns = Ns Ar seconds
+Delay between samples, in seconds.
 .El
 .El
 .Sh Commands for managing devices within a running filesystem
@@ -480,7 +566,10 @@ Force, if data redundancy will be degraded
 Move data off of a given device
 .It Nm Ic device Ic set-state Oo Ar options Oc Ar new-state Ar device
 .Bl -tag -width Ds
-.It Ar  new-state Ns = Ns ( Ar rw | ro | failed | spare )
+.It Ar  new-state Ns = Ns ( Ar rw | ro | evacuating | spare )
+New member state. Use
+.Ar rw
+to cancel an in-progress evacuation and return the device to normal use.
 .It Fl f , Fl -force
 Force, if data redundancy will be degraded
 .It Fl -force-if-data-lost
@@ -489,7 +578,10 @@ Force, if data will be lost
 Set state of an offline device
 .El
 .It Nm Ic device Ic resize Ar device Op Ar size
-Resize filesystem on a device
+Resize filesystem on a device.
+Online shrinking is passed to the mounted filesystem kernel; if that kernel
+does not support shrinking, the resize ioctl fails.  Offline shrinking is still
+unsupported by the bundled userspace filesystem implementation.
 .It Nm Ic device Ic resize-journal Ar device Op Ar size
 Resize journal on a device
 .El
@@ -499,6 +591,10 @@ Resize journal on a device
 Create a new subvolume
 .It Ic subvolume delete Oo Ar options Oc Ar path
 Delete an existing subvolume
+.Pp
+Subvolume roots may be renamed or moved as subvolume roots.
+Ordinary files and directories cannot be renamed across subvolume boundaries;
+copy or reflink data when reorganizing contents between subvolumes.
 .It Ic subvolume snapshot Oo Ar options Oc Ar source dest
 Create a snapshot of
 .Ar source
@@ -513,26 +609,63 @@ if not specified the snapshot will be of the subvolume containing
 .It Fl r
 Make snapshot read-only
 .El
+.It Ic subvolume list Oo Ar options Oc Ar target
+List subvolumes in a mounted filesystem.
+.Bl -tag -width Ds
+.It Fl -json
+Output machine-readable JSON.
+.It Fl t , Fl -tree
+Show a hierarchical view.
+.It Fl R , Fl -recursive
+List subvolumes recursively.
+.It Fl s , Fl -snapshots
+Include snapshot subvolumes.
+.It Fl -readonly
+Only show read-only subvolumes.
+.It Fl -sort Ns = Ns ( Cm name | size | time )
+Sort output.
+.El
+.It Ic subvolume list-snapshots Oo Ar options Oc Ar target
+List snapshots and their disk usage in a mounted filesystem.
+.Bl -tag -width Ds
+.It Fl f , Fl -flat
+Show a flat list instead of the default tree.
+.It Fl R , Fl -recursive
+List snapshot trees for nested subvolumes too.
+.It Fl -json
+Output machine-readable JSON, including snapshot IDs and parent relationships.
+.It Fl -readonly
+Only show read-only snapshots in flat view.
+.It Fl -sort Ns = Ns ( Cm name | size | time )
+Sort flat output.
+.El
 .El
 .Sh Commands for managing filesystem data
 .Bl -tag -width Ds
-.It Nm Ic data Ic rereplicate Ar filesystem
-Walks existing data in a filesystem,
-writing additional copies of any degraded data.
-.It Nm Ic data Ic job Ar job filesystem
-Kick off a data job and report progress
-.sp
-.Ar job
-is one of (
-.Cm scrub | rereplicate | migrate | rewrite_old_nodes
-)
+.It Nm Ic scrub Oo Fl m | Fl -metadata Oc Ar filesystem
+Verify checksums and correct errors, if possible.
+When scrub finds checksum errors, affected file paths are currently reported in
+the kernel log.
 .Bl -tag -width Ds
-.It Fl b Ar btree
-Btree to operate on
-.It Fl s Ar inode Ns Cm \&: Ns Ar offset
-Start position
-.It Fl e Ar inode Ns Cm \&: Ns Ar offset
-End position
+.It Fl m , Fl -metadata
+Check metadata only
+.El
+.It Nm Ic reconcile Ic status Op Fl t Ar type Ns Op , Ns Ar ...
+.Op Ar filesystem
+Show pending background reconciliation work.
+Reconcile restores redundancy after a degraded mount or device replacement;
+mounted filesystems also queue reconcile work automatically when degraded
+extents are detected.
+.Bl -tag -width Ds
+.It Fl t , Fl -types Ar type Ns Op , Ns Ar ...
+Limit output to the selected reconciliation types.
+.El
+.It Nm Ic reconcile Ic wait Op Fl t Ar type Ns Op , Ns Ar ...
+.Op Ar filesystem
+Wait for background reconciliation work to finish.
+.Bl -tag -width Ds
+.It Fl t , Fl -types Ar type Ns Op , Ns Ar ...
+Wait only for the selected reconciliation types.
 .El
 .El
 .Sh Commands for encryption
@@ -547,9 +680,14 @@ Keyring to add to (default:
 .Cm user )
 .El
 .It Nm Ic set-passphrase Ar devices\ ...
-Change passphrase on an existing (unmounted) filesystem.
+Change passphrase on an existing encrypted (unmounted) filesystem.
+This rewraps the existing filesystem encryption key; it does not enable
+encryption on a filesystem formatted without
+.Fl -encrypted .
 .It Nm Ic remove-passphrase Ar devices\ ...
-Remove passphrase on an existing (unmounted) filesystem.
+Remove passphrase protection from an existing encrypted (unmounted) filesystem.
+This stores the existing filesystem encryption key without passphrase
+protection; it does not decrypt existing data or disable filesystem encryption.
 .El
 .Sh Commands for migration
 .Bl -tag -width Ds
@@ -561,7 +699,7 @@ Root of filesystem to migrate
 .It Fl -encrypted
 Enable whole filesystem encryption (chacha20/poly1305)
 .It Fl -no_passphrase
-Don't encrypt master encryption key
+Store master encryption key unencrypted in superblock
 .It Fl F
 Force, even if metadata file already exists
 .El
@@ -580,9 +718,15 @@ Offset of existing superblock
 Set various per-file attributes on files and directories in a bcachefs filesystem.
 When applied to directories, attributes are propagated recursively to all files
 and subdirectories within.
+Changed options take effect immediately for new writes. For existing data,
+background reconcile applies changed IO options asynchronously, for example
+rewriting existing extents with a new compression algorithm or replica count.
 .Bl -tag -width Ds
 .It Fl -data_replicas Ns = Ns Ar number
-Number of data replicas
+Number of data replicas.
+With erasure coding enabled, this is currently capped at
+.Ar 3
+.Pq RAID6 .
 .It Fl -data_checksum Ns = Ns ( Cm none | crc32c | crc64 | xxhash )
 Set data checksum type (default:
 .Cm crc32c ) .
@@ -600,7 +744,7 @@ Device or label to move data to in the background
 .It Fl -promote_target Ns = Ns Ar target
 Device or label to promote data to on read
 .It Fl -erasure_code
-Enable erasure coding (DO NOT USE YET)
+Enable erasure coding (RAID5/6; data replicas are capped at 3)
 .It Fl -project
 
 .It Fl -nocow
@@ -615,6 +759,16 @@ To remove specific options, use
 Options can be chained together to perform multiple operations in a single command, for example:
 .Dl bcachefs set-file-option --remove-all --compression=lz4 .
 .Dl bcachefs set-file-option --compression=- --background_compression=zstd:10 --data_replicas=- file.txt
+.It Nm Ic reflink-option-propagate Oo Fl -set-may-update Oc Ar files Ns ...
+Propagate each file's current IO options, including compression, checksum,
+replicas, and targets, to its extents. This includes indirect, reflinked
+extents where the reflink pointer permits option updates.
+.Bl -tag -width Ds
+.It Fl -set-may-update
+Enable option propagation on old reflink pointers that predate the
+may-update-options permission flag. This requires administrative privileges and
+is only needed once per affected file.
+.El
 .El
 .Sh Commands for debugging
 These commands work on offline, unmounted filesystems.

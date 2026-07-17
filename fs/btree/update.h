@@ -177,20 +177,9 @@ void *__bch2_trans_subbuf_alloc(struct btree_trans *,
 				struct btree_trans_subbuf *,
 				unsigned, ulong);
 
-static inline int
-bch2_trans_subbuf_reserve(struct btree_trans *trans,
-			  struct btree_trans_subbuf *buf,
-			  unsigned u64s)
-{
-	if (buf->u64s + u64s > buf->size) {
-		unsigned old_u64s = buf->u64s;
-		void *p = __bch2_trans_subbuf_alloc(trans, buf, u64s, _THIS_IP_);
-		if (IS_ERR(p))
-			return PTR_ERR(p);
-		buf->u64s = old_u64s;
-	}
-	return 0;
-}
+int bch2_trans_subbuf_reserve(struct btree_trans *,
+			      struct btree_trans_subbuf *,
+			      unsigned);
 
 static inline void *
 bch2_trans_subbuf_alloc_ip(struct btree_trans *trans,
@@ -281,7 +270,7 @@ static inline int __must_check bch2_trans_update_buffered(struct btree_trans *tr
 
 void bch2_trans_commit_hook(struct btree_trans *,
 			    struct btree_trans_commit_hook *);
-int __bch2_trans_commit(struct btree_trans *, enum bch_trans_commit_flags);
+int __bch2_trans_commit(struct btree_trans *, enum bch_trans_commit_flags, bool);
 
 int bch2_trans_log_str(struct btree_trans *, const char *);
 int bch2_trans_log_msg(struct btree_trans *, struct printbuf *);
@@ -315,6 +304,7 @@ static inline void bch2_trans_reset_updates(struct btree_trans *trans)
 	trans->hooks			= NULL;
 	trans->extra_disk_res		= 0;
 	trans->extra_journal_u64s	= 0;
+	trans->has_interior_updates	= 0;
 }
 
 /**
@@ -333,8 +323,22 @@ static inline int bch2_trans_commit(struct btree_trans *trans,
 {
 	trans->disk_res		= disk_res;
 	trans->journal_seq	= journal_seq;
+	trans->flush		= NULL;
 
-	return __bch2_trans_commit(trans, flags);
+	return __bch2_trans_commit(trans, flags, false);
+}
+
+static inline int bch2_trans_commit_flush(struct btree_trans *trans,
+					  struct disk_reservation *disk_res,
+					  u64 *journal_seq,
+					  struct closure *flush,
+					  enum bch_trans_commit_flags flags)
+{
+	trans->disk_res		= disk_res;
+	trans->journal_seq	= journal_seq;
+	trans->flush		= flush;
+
+	return __bch2_trans_commit(trans, flags, false);
 }
 
 static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
@@ -342,10 +346,14 @@ static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
 					 u64 *journal_seq,
 					 unsigned flags)
 {
-	return bch2_trans_has_updates(trans)
-		? (bch2_trans_commit(trans, disk_res, journal_seq, flags) ?:
-		   bch_err_throw(trans->c, transaction_restart_commit))
-		: 0;
+	if (!bch2_trans_has_updates(trans))
+		return 0;
+
+	trans->disk_res		= disk_res;
+	trans->journal_seq	= journal_seq;
+	trans->flush		= NULL;
+
+	return __bch2_trans_commit(trans, flags, true);
 }
 
 #define commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\

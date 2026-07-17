@@ -62,7 +62,7 @@ static void __bch2_bkey_pack_verify(const struct bkey_packed *packed,
 
 	BUG_ON(packed->u64s < bkeyp_key_u64s(format, packed));
 
-	tmp = __bch2_bkey_unpack_key(format, packed);
+	__bch2_bkey_unpack_key(format, &tmp, packed);
 
 	if (memcmp(&tmp, unpacked, sizeof(struct bkey))) {
 		struct printbuf buf = PRINTBUF;
@@ -101,7 +101,8 @@ static inline void bch2_bkey_pack_verify(const struct bkey_packed *packed,
 					 const struct bkey *unpacked,
 					 const struct bkey_format *format)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bkey_unpack))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bkey_unpack))
 		__bch2_bkey_pack_verify(packed, unpacked, format);
 }
 
@@ -267,135 +268,123 @@ bool bch2_bkey_transform(const struct bkey_format *out_f,
 	return true;
 }
 
-struct bkey __bch2_bkey_unpack_key(const struct bkey_format *format,
-			      const struct bkey_packed *in)
+void __bch2_bkey_unpack_key(const struct bkey_format *format,
+			    struct bkey *out,
+			    const struct bkey_packed *in)
 {
 	struct unpack_state state = unpack_state_init(format, in);
-	struct bkey out;
 
 	EBUG_ON(format->nr_fields != BKEY_NR_FIELDS);
 	EBUG_ON(in->u64s < format->key_u64s);
 	EBUG_ON(in->format != KEY_FORMAT_LOCAL_BTREE);
 	EBUG_ON(in->u64s - format->key_u64s + BKEY_U64s > U8_MAX);
 
-	out.u64s	= BKEY_U64s + in->u64s - format->key_u64s;
-	out.format	= KEY_FORMAT_CURRENT;
-	out.needs_whiteout = in->needs_whiteout;
-	out.type	= in->type;
-	out.pad[0]	= 0;
+	out->u64s	= BKEY_U64s + in->u64s - format->key_u64s;
+	out->format	= KEY_FORMAT_CURRENT;
+	out->needs_whiteout = in->needs_whiteout;
+	out->type	= in->type;
+	out->pad[0]	= 0;
 
-#define x(id, field)	out.field = get_inc_field(&state, id);
+#define x(id, field)	out->field = get_inc_field(&state, id);
 	bkey_fields()
 #undef x
-
-	return out;
 }
 
 /*
  * Precompute per-field unpack constants from b->format, stored in struct btree.
  *
- * For each field, picks the smallest aligned load (u8/u16/u32/u64) that
- * contains it, plus a shift and mask that extract the field value. This lets
- * the unpack fast path skip the per-field state machine in get_inc_field()
- * and instead emit straight-line, ILP-friendly load/shift/mask/add.
+ * For each field, picks byte_offset such that an 8-byte unaligned load ends
+ * exactly at the byte after the field's MSB byte. The field lands in the
+ * top of the loaded value, junk from earlier-in-memory fields lands in the
+ * low bits. A single >> (64 - bits) then extracts the field cleanly.
  *
- * Mirrors the logic in compile_bkey_field() (the JIT compiler) — anything
- * the JIT could compile cleanly, this can interpret with precomputed consts.
- * Fields wider than 64 bits or that don't fit a single aligned 8-byte load
- * are flagged with load_size = 0xff and the unpack falls back to slow path.
+ * Only works when each field's MSB is at a byte boundary
+ * (field_msb_bit % 8 == 7). bch2_bkey_format_done() rounds fields up to
+ * byte width when there are spare bits, so this is the common case.
+ * Formats too tight to byte-align fall back via byte_aligned_fields = false.
  */
 void bch2_compute_bkey_unpack_consts(struct btree *b)
 {
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
 	const struct bkey_format *format = &b->format;
 	unsigned bit_offset = format->key_u64s * 64;
-	unsigned i;
 
-	for (i = 0; i < BKEY_NR_FIELDS; i++) {
+	b->byte_aligned_fields = true;
+
+	for (unsigned i = 0; i < BKEY_NR_FIELDS; i++) {
 		struct bkey_unpack_field *uf = &b->unpack[i];
 		unsigned bits = format->bits_per_field[i];
-		unsigned byte, bit_in_byte, span_bits, align;
 
-		uf->shift = 0;
 		uf->byte_offset = 0;
+		uf->shift_right = 64;	/* sentinel: skip load, return offset */
 
-		if (!bits) {
-			uf->load_size = 0;	/* no bits in packed; offset only */
+		if (!bits)
 			continue;
+
+		if (bits > 64) {
+			b->byte_aligned_fields = false;
+			return;
 		}
 
 		bit_offset -= bits;
-		byte = bit_offset / 8;
-		bit_in_byte = bit_offset - byte * 8;
-		span_bits = bit_in_byte + bits;
+		unsigned field_msb_bit = bit_offset + bits - 1;
 
-		if (bit_in_byte == 0 && bits == 8) {
-			uf->load_size = 1;
-		} else if (bit_in_byte == 0 && bits == 16) {
-			uf->load_size = 2;
-		} else if (span_bits <= 32) {
-			align = min(4 - DIV_ROUND_UP(span_bits, 8), byte & 3);
-			byte -= align;
-			bit_in_byte += align * 8;
-			uf->load_size = 4;
-		} else if (span_bits <= 64) {
-			align = min(8 - DIV_ROUND_UP(span_bits, 8), byte & 7);
-			byte -= align;
-			bit_in_byte += align * 8;
-			uf->load_size = 8;
-		} else {
-			/* field doesn't fit in a single aligned load — fallback */
-			uf->load_size = 0xff;
-			continue;
+		/* Need MSB at a byte boundary for single-shift extraction */
+		if (field_msb_bit % 8 != 7) {
+			b->byte_aligned_fields = false;
+			return;
 		}
 
-		uf->byte_offset = byte;
-		uf->shift = bit_in_byte;
+		/* Load 8 bytes ending at field's MSB byte + 1 */
+		uf->byte_offset = (s8)((field_msb_bit + 1) / 8 - 8);
+		uf->shift_right = 64 - bits;
 	}
-
-	/*
-	 * Track whether any field needs the slow path so the fast path can
-	 * short-circuit the check.
-	 */
-	for (i = 0; i < BKEY_NR_FIELDS; i++)
-		if (b->unpack[i].load_size == 0xff) {
-			b->unpack[0].load_size = 0xff; /* sentinel */
-			break;
-		}
 #else
 	/* big-endian: not implemented yet, force fallback */
-	unsigned i;
-	for (i = 0; i < BKEY_NR_FIELDS; i++)
-		b->unpack[i].load_size = 0xff;
+	b->byte_aligned_fields = false;
 #endif
 }
 
 #if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+/*
+ * Pack-direction sibling of unpack_field_fast(): RMW into the same 8-byte
+ * window the unpack constants describe, OR'ing @v in at the field's bit
+ * position. Branchless even for the zero-width sentinel: @v is guaranteed 0
+ * by the caller's range check when bits==0, so the OR is a no-op. The
+ * `& 63` is to keep the shift defined when shift_right == 64.
+ *
+ * Correctness for negative byte_offset (lowest fields): the OR'd value has
+ * zeros below the field's LSB bit, so RMW preserves whatever was in those
+ * bytes (the byte(s) before @bytes, and the 3-byte bkey header).
+ */
+__always_inline
+static void pack_field_fast(u8 *bytes,
+			    const struct bkey_unpack_field *uf,
+			    u64 v)
+{
+	u64 raw = get_unaligned_le64(bytes + uf->byte_offset);
+	raw |= v << (uf->shift_right & 63);
+	put_unaligned_le64(raw, bytes + uf->byte_offset);
+}
+
 __always_inline
 static u64 unpack_field_fast(const u8 *bytes,
 			     const struct bkey_unpack_field *uf,
-			     unsigned bits, u64 offset)
+			     u64 offset)
 {
-	u64 raw;
-
-	if (!uf->load_size)
+	if (uf->shift_right == 64)
 		return offset;
 
-	switch (uf->load_size) {
-	case 1: raw = bytes[uf->byte_offset]; break;
-	case 2: raw = get_unaligned_le16(bytes + uf->byte_offset); break;
-	case 4: raw = get_unaligned_le32(bytes + uf->byte_offset); break;
-	default: raw = get_unaligned_le64(bytes + uf->byte_offset); break;
-	}
+	u64 raw = get_unaligned_le64(bytes + uf->byte_offset);
 
-	/* mask = ~0ULL >> (64 - bits); safe because bits > 0 here (load_size != 0) */
-	return ((raw >> uf->shift) & (~0ULL >> (64 - bits))) + offset;
+	/* Field ends at top of register; shr brings it to bit 0 cleanly */
+	return (raw >> uf->shift_right) + offset;
 }
 
-struct bkey __bch2_bkey_unpack_key_b(const struct btree *b,
-				     const struct bkey_packed *in)
+void __bch2_bkey_unpack_key_b(const struct btree *b,
+			      struct bkey *out,
+			      const struct bkey_packed *in)
 {
-	struct bkey out;
 	const u8 *bytes = (const u8 *) in;
 
 	/*
@@ -408,52 +397,54 @@ struct bkey __bch2_bkey_unpack_key_b(const struct btree *b,
 	EBUG_ON(in->format != KEY_FORMAT_LOCAL_BTREE);
 	EBUG_ON(in->u64s - b->format.key_u64s + BKEY_U64s > U8_MAX);
 
-	/* fall back to slow path if any field flagged */
-	if (unlikely(b->unpack[0].load_size == 0xff))
-		return __bch2_bkey_unpack_key(&b->format, in);
+	/* fall back to slow path if format has fields that don't fit a single load */
+	if (unlikely(!b->byte_aligned_fields)) {
+		__bch2_bkey_unpack_key(&b->format, out, in);
+		return;
+	}
 
 	/*
-	 * Header trick (mirrors compile_bkey_field's prologue): the first 4
-	 * bytes of struct bkey are { u64s, format/needs_whiteout, type, pad }.
-	 * Load as a u32, add an immediate that bumps u64s by
-	 * (BKEY_U64s - key_u64s) and changes format from LOCAL_BTREE (0) to
-	 * CURRENT (1) without disturbing needs_whiteout, then clear the pad
-	 * byte. One u32 load + one add + one and + one u32 store, replaces
-	 * three byte loads + three byte stores + bitfield manipulation.
+	 * Header trick: the first 4 bytes of struct bkey are
+	 * { u64s, format/needs_whiteout, type, pad }. Load 4 bytes
+	 * starting one byte BEFORE @in — so the loaded bytes are
+	 * [junk, u64s, format, type]. A single >> 8 drops the junk,
+	 * positions u64s/format/type at bytes 0/1/2, and zero-fills
+	 * byte 3 (the pad). Then add an immediate to bump u64s by
+	 * (BKEY_U64s - key_u64s) and change format from LOCAL_BTREE
+	 * (0) to CURRENT (1).
 	 *
-	 * The carry from u64s into the next byte can't fire: BKEY_U64s is
-	 * small (<= 16) and key_u64s <= BKEY_U64s, so the addition to byte 0
-	 * stays within byte 0.
+	 * The carry from u64s into the next byte can't fire: BKEY_U64s
+	 * is small (<= 16) and key_u64s <= BKEY_U64s, so the addition
+	 * to byte 0 stays within byte 0.
 	 */
 	{
-		u32 hdr = get_unaligned((const u32 *) in);
+		u32 hdr = get_unaligned((const u32 *)(bytes - 1)) >> 8;
 		hdr += (u32)(BKEY_U64s - b->format.key_u64s) |
 		       ((u32)(KEY_FORMAT_CURRENT - KEY_FORMAT_LOCAL_BTREE) << 8);
-		hdr &= 0x00ffffff;	/* clear pad byte */
-		put_unaligned(hdr, (u32 *) &out);
+		put_unaligned(hdr, (u32 *) out);
 	}
 
 #define x(id, field)							\
-	out.field = unpack_field_fast(bytes, &b->unpack[id],		\
-				      b->format.bits_per_field[id],	\
-				      le64_to_cpu(b->format.field_offset[id]));
+	out->field = unpack_field_fast(bytes, &b->unpack[id],		\
+				       le64_to_cpu(b->format.field_offset[id]));
 	bkey_fields()
 #undef x
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 	{
-		struct bkey check = __bch2_bkey_unpack_key(&b->format, in);
-		EBUG_ON(memcmp(&out, &check, sizeof(out)));
+		struct bkey check;
+
+		__bch2_bkey_unpack_key(&b->format, &check, in);
+		EBUG_ON(memcmp(out, &check, sizeof(*out)));
 	}
 #endif
-
-	return out;
 }
 #else
-struct bkey __bch2_bkey_unpack_key_b(const struct btree *b,
-				     const struct bkey_packed *in)
+void __bch2_bkey_unpack_key_b(const struct btree *b,
+			      struct bkey *out,
+			      const struct bkey_packed *in)
 {
-	return __bch2_bkey_unpack_key(&b->format, in);
+	__bch2_bkey_unpack_key(&b->format, out, in);
 }
 #endif
 
@@ -474,6 +465,54 @@ struct bpos __bkey_unpack_pos(const struct bkey_format *format,
 
 	return out;
 }
+
+/*
+ * Position-only sibling of __bch2_bkey_unpack_key_b: byte-aligned fast path
+ * for the 3 bpos fields, avoiding the bit-stream state machine. Mirrors the
+ * gate (byte_aligned_fields) and the precomputed @b->unpack[] constants.
+ *
+ * Profiling (sqlite-bench under FUSE, vtune): __bkey_unpack_pos was 7.5% of
+ * total instructions retired via get_inc_field()'s ~25-insn-per-field state
+ * machine. unpack_field_fast() is ~3 insns/field, so this trims ~70%+ of the
+ * per-call cost on byte-aligned formats - which is the common case.
+ */
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+struct bpos __bkey_unpack_pos_b(const struct btree *b,
+				const struct bkey_packed *in)
+{
+	const u8 *bytes = (const u8 *) in;
+
+	EBUG_ON(b->format.nr_fields != BKEY_NR_FIELDS);
+	EBUG_ON(in->u64s < b->format.key_u64s);
+	EBUG_ON(in->format != KEY_FORMAT_LOCAL_BTREE);
+
+	if (unlikely(!b->byte_aligned_fields))
+		return __bkey_unpack_pos(&b->format, in);
+
+	struct bpos out = {
+		.inode    = unpack_field_fast(bytes, &b->unpack[BKEY_FIELD_INODE],
+				le64_to_cpu(b->format.field_offset[BKEY_FIELD_INODE])),
+		.offset   = unpack_field_fast(bytes, &b->unpack[BKEY_FIELD_OFFSET],
+				le64_to_cpu(b->format.field_offset[BKEY_FIELD_OFFSET])),
+		.snapshot = (u32) unpack_field_fast(bytes, &b->unpack[BKEY_FIELD_SNAPSHOT],
+				le64_to_cpu(b->format.field_offset[BKEY_FIELD_SNAPSHOT])),
+	};
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	{
+		struct bpos check = __bkey_unpack_pos(&b->format, in);
+		EBUG_ON(memcmp(&out, &check, sizeof(out)));
+	}
+#endif
+	return out;
+}
+#else
+struct bpos __bkey_unpack_pos_b(const struct btree *b,
+				const struct bkey_packed *in)
+{
+	return __bkey_unpack_pos(&b->format, in);
+}
+#endif
 #endif
 
 /**
@@ -525,30 +564,6 @@ void bch2_bkey_unpack(const struct btree *b, struct bkey_i *dst,
 		    bkeyp_val_u64s(&b->format, src));
 }
 
-/**
- * bch2_bkey_pack -- pack the key and the value
- * @dst:	packed result
- * @src:	unpacked input
- * @format:	format of packed result
- *
- * Returns: true on success, false on failure
- */
-bool bch2_bkey_pack(struct bkey_packed *dst, const struct bkey_i *src,
-		    const struct bkey_format *format)
-{
-	struct bkey_packed tmp;
-
-	if (!bch2_bkey_pack_key(&tmp, &src->k, format))
-		return false;
-
-	memmove_u64s((u64 *) dst + format->key_u64s,
-		     &src->v,
-		     bkey_val_u64s(&src->k));
-	memcpy_u64s_small(dst, &tmp, format->key_u64s);
-
-	return true;
-}
-
 __always_inline
 static bool set_inc_field_lossy(struct pack_state *state, unsigned field, u64 v)
 {
@@ -570,7 +585,7 @@ static bool set_inc_field_lossy(struct pack_state *state, unsigned field, u64 v)
 
 static bool bkey_packed_successor(struct bkey_packed *out,
 				  const struct btree *b,
-				  struct bkey_packed k)
+				  const struct bkey_packed *k)
 {
 	const struct bkey_format *f = &b->format;
 	unsigned nr_key_bits = b->nr_key_bits;
@@ -582,7 +597,7 @@ static bool bkey_packed_successor(struct bkey_packed *out,
 	if (!nr_key_bits)
 		return false;
 
-	*out = k;
+	*out = *k;
 
 	first_bit = high_bit_offset + nr_key_bits - 1;
 	p = nth_word(high_word(f, out), first_bit >> 6);
@@ -594,7 +609,7 @@ static bool bkey_packed_successor(struct bkey_packed *out,
 
 		if ((*p & mask) != mask) {
 			*p += 1ULL << offset;
-			EBUG_ON(bch2_bkey_cmp_packed(b, out, &k) <= 0);
+			EBUG_ON(bch2_bkey_cmp_packed(b, out, k) <= 0);
 			return true;
 		}
 
@@ -633,13 +648,124 @@ static bool bkey_format_has_too_big_fields(const struct bkey_format *f)
  * legal to use a packed pos that isn't equivalent to the original pos,
  * _provided_ it compares <= to the original pos.
  */
-enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
-					   struct bpos in,
-					   const struct btree *b)
+/*
+ * Exact-pack slow path via the bit-stream state machine. Walks each field
+ * with set_inc_field(), checking field_offset underflow and bits overflow.
+ */
+static bool __bch2_bkey_pack_pos_exact(struct bkey_packed *out, struct bpos in,
+				       const struct bkey_format *f)
+{
+	struct pack_state state = pack_state_init(f, out);
+	u64 *w = out->_data;
+
+	for (unsigned i = 0; i < f->key_u64s; i++)
+		w[i] = 0;
+
+	if (in.snapshot < le64_to_cpu(f->field_offset[BKEY_FIELD_SNAPSHOT]) ||
+	    in.offset   < le64_to_cpu(f->field_offset[BKEY_FIELD_OFFSET]) ||
+	    in.inode    < le64_to_cpu(f->field_offset[BKEY_FIELD_INODE]))
+		return false;
+
+	if (!set_inc_field(&state, BKEY_FIELD_INODE,    in.inode)   ||
+	    !set_inc_field(&state, BKEY_FIELD_OFFSET,   in.offset)  ||
+	    !set_inc_field(&state, BKEY_FIELD_SNAPSHOT, in.snapshot))
+		return false;
+
+	pack_state_finish(&state, out);
+	out->u64s	= f->key_u64s;
+	out->format	= KEY_FORMAT_LOCAL_BTREE;
+	out->type	= KEY_TYPE_deleted;
+	return true;
+}
+
+/*
+ * Exact-pack fastpath: pack @in into @out, bailing on the first field
+ * that doesn't fit the format. Callers that don't want the lossy roll-
+ * to-next-field-MAX behavior (the only legitimate user of which is
+ * bset_search_tree's auxiliary-tree comparison) skip the exact tracking
+ * + field rolling that bch2_bkey_pack_pos_lossy() does on the slow side.
+ *
+ * For byte-aligned formats (the common case after bch2_bkey_format_done()
+ * rounds fields up to byte width), uses three pack_field_fast() RMWs
+ * against the precomputed per-field load windows. Range check folds
+ * underflow + overflow into one compare per field via the precomputed
+ * field_max[].
+ */
+bool bch2_bkey_pack_pos(struct bkey_packed *out, struct bpos in,
+			      const struct btree *b)
+{
+	const struct bkey_format *f = &b->format;
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	if (likely(b->byte_aligned_fields)) {
+		u64 i_off = le64_to_cpu(f->field_offset[BKEY_FIELD_INODE]);
+		u64 o_off = le64_to_cpu(f->field_offset[BKEY_FIELD_OFFSET]);
+		u64 s_off = le64_to_cpu(f->field_offset[BKEY_FIELD_SNAPSHOT]);
+
+		u64 i_v = in.inode    - i_off;
+		u64 o_v = in.offset   - o_off;
+		u64 s_v = (u64)in.snapshot - s_off;
+
+		/*
+		 * Single compare per field — folds underflow + overflow.
+		 * Relies on two invariants from bch2_bkey_format_field_overflows():
+		 *   bits == unpacked_bits  =>  field_offset == 0  (no underflow)
+		 *   field_offset + (2^bits - 1) <= unpacked_max   (underflow wraps
+		 *                                                  to fls64 == 64)
+		 * Bitwise | to keep this branchless.
+		 */
+		unsigned fail = 0;
+		fail |= (fls64(i_v) > f->bits_per_field[BKEY_FIELD_INODE]);
+		fail |= (fls64(o_v) > f->bits_per_field[BKEY_FIELD_OFFSET]);
+		fail |= (fls64(s_v) > f->bits_per_field[BKEY_FIELD_SNAPSHOT]);
+		if (unlikely(fail))
+			return false;
+
+		u64 *w = out->_data;
+		for (unsigned i = 0; i < f->key_u64s; i++)
+			w[i] = 0;
+
+		u8 *bytes = (u8 *) out;
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_INODE],    i_v);
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_OFFSET],   o_v);
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_SNAPSHOT], s_v);
+
+		out->u64s	= f->key_u64s;
+		out->format	= KEY_FORMAT_LOCAL_BTREE;
+		out->type	= KEY_TYPE_deleted;
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+		if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+			/* Packed key is always <= unpacked struct bkey in size */
+			struct {
+				struct bkey_packed k;
+				u64 _pad[BKEY_U64s];
+			} check;
+			bool slow_ok = __bch2_bkey_pack_pos_exact(&check.k, in, f);
+			BUG_ON(!slow_ok);
+			BUG_ON(memcmp(out, &check.k, f->key_u64s * sizeof(u64)));
+		}
+#endif
+		return true;
+	}
+#endif
+
+	return __bch2_bkey_pack_pos_exact(out, in, f);
+}
+
+/*
+ * Lossy slow path: handles underflow roll-up and overflow clamping per
+ * set_inc_field_lossy() semantics. Used directly by the fastpath gate
+ * below on any underflow/overflow.
+ */
+static enum bkey_pack_pos_ret
+__bch2_bkey_pack_pos_lossy(struct bkey_packed *out, const struct bpos *_in,
+			   const struct btree *b)
 {
 	const struct bkey_format *f = &b->format;
 	struct pack_state state = pack_state_init(f, out);
 	u64 *w = out->_data;
+	struct bpos in = *_in;
 	struct bpos orig = in;
 	bool exact = true;
 	unsigned i;
@@ -693,20 +819,143 @@ enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
 	out->format	= KEY_FORMAT_LOCAL_BTREE;
 	out->type	= KEY_TYPE_deleted;
 
-	if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
 		if (exact) {
 			BUG_ON(bkey_cmp_left_packed(b, out, &orig));
 		} else {
-			struct bkey_packed successor;
+			struct bkey_packed_padded successor;
 
 			BUG_ON(bkey_cmp_left_packed(b, out, &orig) >= 0);
-			BUG_ON(bkey_packed_successor(&successor, b, *out) &&
-			       bkey_cmp_left_packed(b, &successor, &orig) < 0 &&
+			BUG_ON(bkey_packed_successor(&successor.k, b, out) &&
+			       bkey_cmp_left_packed(b, &successor.k, &orig) < 0 &&
 			       !bkey_format_has_too_big_fields(f));
 		}
 	}
 
 	return exact ? BKEY_PACK_POS_EXACT : BKEY_PACK_POS_SMALLER;
+}
+
+/*
+ * Lossy pack: like bch2_bkey_pack_pos() but rounds @in down to the nearest
+ * representable bpos when an exact pack isn't possible.
+ *
+ * Fastpath handles the lossy semantics inline:
+ *   - underflow (in.X < field_offset): roll up — bump the next-higher
+ *     field and set this field (and all below) to MAX. Underflow on inode
+ *     is FAIL.
+ *   - overflow (delta > field_max): clamp this field to field_max and
+ *     set all lower fields to MAX (cascading), since once a higher field
+ *     has been rounded down, the only way to keep @out <= @in is to make
+ *     everything below it MAX too.
+ *
+ * Hot path (no underflow/overflow) is the same shape as the exact-pack
+ * fastpath; the unlikely() branches just bump exact = false when needed.
+ *
+ * Padding requirement is identical to bch2_bkey_pack_pos() — see
+ * struct bkey_packed_padded.
+ */
+enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *out,
+						const struct bpos *_in,
+						const struct btree *b)
+{
+	const struct bkey_format *f = &b->format;
+
+#if __BYTE_ORDER__ == __ORDER_LITTLE_ENDIAN__
+	if (likely(b->byte_aligned_fields)) {
+		struct bpos in = *_in;
+#ifdef CONFIG_BCACHEFS_DEBUG
+		struct bpos orig = in;
+#endif
+		bool exact = true;
+
+		u64 i_off = le64_to_cpu(f->field_offset[BKEY_FIELD_INODE]);
+		u64 o_off = le64_to_cpu(f->field_offset[BKEY_FIELD_OFFSET]);
+		u64 s_off = le64_to_cpu(f->field_offset[BKEY_FIELD_SNAPSHOT]);
+
+		/* Underflow roll-up — same logic as the slow path. */
+		if (unlikely(in.snapshot < s_off)) {
+			if (!in.offset-- &&
+			    !in.inode--)
+				return BKEY_PACK_POS_FAIL;
+			in.snapshot = KEY_SNAPSHOT_MAX;
+			exact = false;
+		}
+
+		if (unlikely(in.offset < o_off)) {
+			if (!in.inode--)
+				return BKEY_PACK_POS_FAIL;
+			in.offset = KEY_OFFSET_MAX;
+			in.snapshot = KEY_SNAPSHOT_MAX;
+			exact = false;
+		}
+
+		if (unlikely(in.inode < i_off))
+			return BKEY_PACK_POS_FAIL;
+
+		u64 i_v = in.inode    - i_off;
+		u64 o_v = in.offset   - o_off;
+		u64 s_v = (u64)in.snapshot - s_off;
+
+		unsigned i_bits = f->bits_per_field[BKEY_FIELD_INODE];
+		unsigned o_bits = f->bits_per_field[BKEY_FIELD_OFFSET];
+		unsigned s_bits = f->bits_per_field[BKEY_FIELD_SNAPSHOT];
+
+		/*
+		 * Overflow clamping with cascade: an overflowed field clamps
+		 * to its max and saturates the lower-order fields, giving the
+		 * largest packed key still <= the original pos.
+		 *
+		 * The cascaded fields' widths are independent of the branch
+		 * condition and can legitimately be 64 (e.g. offset in hash
+		 * btrees), hence u64_bitmask() and not (1ULL << bits) - 1.
+		 */
+		if (unlikely(fls64(i_v) > i_bits)) {
+			i_v = u64_bitmask(i_bits);
+			o_v = u64_bitmask(o_bits);
+			s_v = u64_bitmask(s_bits);
+			exact = false;
+		} else if (unlikely(fls64(o_v) > o_bits)) {
+			o_v = u64_bitmask(o_bits);
+			s_v = u64_bitmask(s_bits);
+			exact = false;
+		} else if (unlikely(fls64(s_v) > s_bits)) {
+			s_v = u64_bitmask(s_bits);
+			exact = false;
+		}
+
+		u64 *w = out->_data;
+		for (unsigned i = 0; i < f->key_u64s; i++)
+			w[i] = 0;
+
+		u8 *bytes = (u8 *) out;
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_INODE],    i_v);
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_OFFSET],   o_v);
+		pack_field_fast(bytes, &b->unpack[BKEY_FIELD_SNAPSHOT], s_v);
+
+		out->u64s   = f->key_u64s;
+		out->format = KEY_FORMAT_LOCAL_BTREE;
+		out->type   = KEY_TYPE_deleted;
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+		if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+			if (exact) {
+				BUG_ON(bkey_cmp_left_packed(b, out, &orig));
+			} else {
+				struct bkey_packed_padded successor;
+
+				BUG_ON(bkey_cmp_left_packed(b, out, &orig) >= 0);
+				BUG_ON(bkey_packed_successor(&successor.k, b, out) &&
+				       bkey_cmp_left_packed(b, &successor.k, &orig) < 0 &&
+				       !bkey_format_has_too_big_fields(f));
+			}
+		}
+#endif
+		return exact ? BKEY_PACK_POS_EXACT : BKEY_PACK_POS_SMALLER;
+	}
+#endif
+
+	return __bch2_bkey_pack_pos_lossy(out, _in, b);
 }
 
 void bch2_bkey_format_init(struct bkey_format_state *s)
@@ -785,7 +1034,8 @@ struct bkey_format bch2_bkey_format_done(struct bkey_format_state *s)
 		}
 	}
 
-	if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
 		CLASS(printbuf, buf)();
 		BUG_ON(bch2_bkey_format_invalid(NULL, &ret, 0, &buf));
 	}
@@ -836,7 +1086,7 @@ int bch2_bkey_format_invalid(struct bch_fs *c,
 	return 0;
 }
 
-void bch2_bkey_format_to_text(struct printbuf *out, const struct bkey_format *f)
+__cold void bch2_bkey_format_to_text(struct printbuf *out, const struct bkey_format *f)
 {
 	prt_printf(out, "u64s %u fields ", f->key_u64s);
 

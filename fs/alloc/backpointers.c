@@ -4,6 +4,7 @@
 #include "alloc/accounting.h"
 #include "alloc/background.h"
 #include "alloc/backpointers.h"
+#include "alloc/check_data.h"
 
 #include "btree/bbpos.h"
 #include "btree/cache.h"
@@ -13,6 +14,7 @@
 #include "btree/write_buffer.h"
 
 #include "data/checksum.h"
+#include "data/reflink.h"
 
 #include "sb/io.h"
 
@@ -33,7 +35,7 @@ static inline struct bbpos bp_to_bbpos(struct bch_backpointer bp)
 }
 
 int bch2_backpointer_validate(struct bch_fs *c, struct bkey_s_c k,
-			      struct bkey_validate_context from)
+			      const struct bkey_validate_context *from)
 {
 	struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(k);
 	int ret = 0;
@@ -50,7 +52,7 @@ fsck_err:
 	return ret;
 }
 
-void bch2_backpointer_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_backpointer_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(k);
 
@@ -435,120 +437,6 @@ struct extents_to_bp_state {
 	struct wb_maybe_flush	last_flushed;
 };
 
-static int drop_dev_and_update(struct btree_trans *trans, enum btree_id btree,
-			       unsigned level, struct bkey_s_c extent, unsigned dev)
-{
-	struct bch_fs *c = trans->c;
-	struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, extent));
-
-	bch2_bkey_drop_device(c, bkey_i_to_s(n), dev);
-
-	if (!bch2_bkey_can_read(c, bkey_i_to_s_c(n)))
-		bch2_set_bkey_error(c, n, KEY_TYPE_ERROR_double_allocation);
-
-	CLASS(btree_node_iter, iter)(trans, btree, n->k.p, 0, level, BTREE_ITER_intent);
-	return bch2_btree_iter_traverse(&iter) ?:
-	       bch2_trans_update(trans, &iter, n, 0);
-}
-
-/*
- * returns 0 if we didn't find a bad checksum, and did no work
- * returns 1 if we dropped bad replica
- */
-static int kill_replica_if_checksum_bad(struct btree_trans *trans,
-				 enum btree_id btree, unsigned level,
-				 struct bkey_s_c extent,
-				 enum btree_id o_btree, struct bkey_s_c extent2, unsigned dev)
-{
-	struct bch_fs *c = trans->c;
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(extent);
-	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
-	int ret = 0;
-
-	bkey_for_each_ptr_decode(extent.k, ptrs, p, entry)
-		if (p.ptr.dev == dev)
-			goto found;
-	BUG();
-found:
-	if (!bkey_is_btree_ptr(extent.k) && !p.crc.csum_type)
-		return false;
-
-	struct bch_dev *ca = bch2_dev_get_ioref(c, dev, READ,
-				BCH_DEV_READ_REF_check_extent_checksums);
-	if (!ca)
-		return false;
-
-	size_t bytes = bkey_is_btree_ptr(extent.k)
-		? c->opts.btree_node_size
-		: p.crc.compressed_size << 9;
-	void *data_buf __free(kvfree) = kvmalloc(bytes, GFP_KERNEL);
-	if (!data_buf) {
-		enumerated_ref_put(&ca->io_ref[READ],
-				   BCH_DEV_READ_REF_check_extent_checksums);
-		return -ENOMEM;
-	}
-
-	struct bio *bio __free(bio_put) =
-		bio_alloc(ca->disk_sb.bdev, buf_nr_bvecs(data_buf, bytes), REQ_OP_READ, GFP_KERNEL);
-
-	CLASS(printbuf, buf)(); /* before first goto */
-
-	bio->bi_iter.bi_sector = p.ptr.offset;
-	bch2_bio_map(bio, data_buf, bytes);
-	ret = submit_bio_wait(bio);
-	if (ret)
-		goto err;
-
-	bool bad;
-
-	if (bkey_is_btree_ptr(extent.k)) {
-		struct btree_node *bn = data_buf;
-
-		if (le64_to_cpu(bn->magic) != bset_magic(c)) {
-			bad = true;
-		} else if (bch2_checksum_type_valid(c, BSET_CSUM_TYPE(&bn->keys))) {
-			struct nonce nonce = btree_nonce(&bn->keys, 0);
-			struct bch_csum csum = csum_vstruct(c, BSET_CSUM_TYPE(&bn->keys),
-							    nonce, bn);
-			bad = bch2_crc_cmp(bn->csum, csum);
-		} else {
-			bad = false;
-		}
-
-		if (!bad && extent.k->type == KEY_TYPE_btree_ptr_v2)
-			bad = le64_to_cpu(bn->keys.seq) !=
-			      le64_to_cpu(bkey_s_c_to_btree_ptr_v2(extent).v->seq);
-	} else {
-		struct nonce nonce = extent_nonce(extent.k->bversion, p.crc);
-		struct bch_csum csum = bch2_checksum(c, p.crc.csum_type, nonce,
-						     data_buf, bytes);
-		bad = bch2_crc_cmp(csum, p.crc.csum);
-	}
-
-	if (!bad)
-		goto out;
-
-	prt_printf(&buf, "duplicate extents pointing to same space on dev %u, "
-		   "checksum bad or wrong btree node - dropping:\n", dev);
-	bch2_btree_id_to_text(&buf, btree);
-	prt_str(&buf, " ");
-	bch2_bkey_val_to_text(&buf, c, extent);
-	prt_newline(&buf);
-	bch2_btree_id_to_text(&buf, o_btree);
-	prt_str(&buf, " ");
-	bch2_bkey_val_to_text(&buf, c, extent2);
-
-	if (fsck_err(trans, dup_backpointer_to_bad_csum_extent, "%s", buf.buf))
-		ret = drop_dev_and_update(trans, btree, level, extent, dev) ?: 1;
-fsck_err:
-out:
-err:
-	enumerated_ref_put(&ca->io_ref[READ],
-			   BCH_DEV_READ_REF_check_extent_checksums);
-	return ret;
-}
-
 static int bp_missing(struct btree_trans *trans,
 		      struct bkey_s_c extent,
 		      struct bkey_i_backpointer *bp,
@@ -588,6 +476,55 @@ static bool bkey_dev_ptr_stale(struct bch_fs *c, struct bkey_s_c k, unsigned dev
 	return false;
 }
 
+/*
+ * Two leaf extents reference an overlapping physical range from distinct
+ * logical positions. Convert just the overlapping portion of each to a
+ * reflink_p, both pointing at a shared reflink_v carrying the physical
+ * pointer; the non-overlapping prefix/suffix of each extent stays as a
+ * regular extent, split off automatically by the btree extent-update path
+ * when the smaller reflink_p key is inserted.
+ *
+ * @k{1,2}_overlap_start/_end are logical positions within each extent
+ * delimiting the overlap; the caller derived them from the backpointers.
+ * For the full-extent case (same size, same start) the cuts become no-ops.
+ */
+static int extents_to_reflink(struct btree_trans *trans,
+			      enum btree_id b1, unsigned l1, struct bkey_s_c k1,
+			      u64 k1_overlap_start, u64 k1_overlap_end,
+			      enum btree_id b2, unsigned l2, struct bkey_s_c k2,
+			      u64 k2_overlap_start, u64 k2_overlap_end)
+{
+	struct bch_fs *c = trans->c;
+	u32 overlap_size = k1_overlap_end - k1_overlap_start;
+
+	BUG_ON(overlap_size != k2_overlap_end - k2_overlap_start);
+
+	CLASS(btree_node_iter, iter1)(trans, b1, k1.k->p, 0, l1, BTREE_ITER_intent);
+	try(bch2_btree_iter_traverse(&iter1));
+
+	struct bkey_i *k1_mut = errptr_try(bch2_bkey_make_mut_noupdate(trans, k1));
+	bch2_cut_front(c, SPOS(k1.k->p.inode, k1_overlap_start, k1.k->p.snapshot), k1_mut);
+	bch2_cut_back(SPOS(k1.k->p.inode, k1_overlap_end, k1.k->p.snapshot), k1_mut);
+
+	try(bch2_make_extent_indirect(trans, &iter1, k1_mut, false));
+
+	u64 r_v_idx = REFLINK_P_IDX(&bkey_i_to_reflink_p(k1_mut)->v);
+
+	CLASS(btree_node_iter, iter2)(trans, b2, k2.k->p, 0, l2, BTREE_ITER_intent);
+	try(bch2_btree_iter_traverse(&iter2));
+
+	struct bkey_i_reflink_p *rp =
+		errptr_try(bch2_trans_kmalloc(trans, sizeof(*rp)));
+	bkey_reflink_p_init(&rp->k_i);
+	rp->k.p		= SPOS(k2.k->p.inode, k2_overlap_end, k2.k->p.snapshot);
+	rp->k.size	= overlap_size;
+	rp->k.bversion	= k2.k->bversion;
+	SET_REFLINK_P_IDX(&rp->v, r_v_idx);
+
+	return bch2_trans_update(trans, &iter2, &rp->k_i,
+				 BTREE_UPDATE_internal_snapshot_node);
+}
+
 static int check_bp_dup(struct btree_trans *trans,
 			struct extents_to_bp_state *s,
 			struct bkey_s_c extent,
@@ -609,27 +546,29 @@ static int check_bp_dup(struct btree_trans *trans,
 		return bp_missing(trans, extent, bp, other_bp.s_c);
 
 	if (bkey_dev_ptr_stale(c, other_extent, bp->k.p.inode)) {
-		try(drop_dev_and_update(trans, other_bp.v->btree_id, other_bp.v->level, other_extent, bp->k.p.inode));
+		try(bch2_bkey_drop_device_and_update(trans, other_bp.v->btree_id, other_bp.v->level, other_extent,
+						     bp->k.p.inode, KEY_TYPE_ERROR_double_allocation));
 		return 0;
 	}
 
 	if (bch2_extents_match(c, extent, other_extent)) {
-		CLASS(printbuf, buf)();
-		prt_printf(&buf, "duplicate versions of same extent, deleting smaller\n");
-		bch2_bkey_val_to_text(&buf, c, extent);
-		prt_newline(&buf);
-		bch2_bkey_val_to_text(&buf, c, other_extent);
-		bch_err(c, "%s", buf.buf);
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "duplicate versions of same extent, deleting smaller\n");
+		bch2_bkey_val_to_text(&msg.m, c, extent);
+		prt_newline(&msg.m);
+		bch2_bkey_val_to_text(&msg.m, c, other_extent);
 
 		if (other_extent.k->size <= extent.k->size) {
-			try(drop_dev_and_update(trans, other_bp.v->btree_id, other_bp.v->level, other_extent, bp->k.p.inode));
+			try(bch2_bkey_drop_device_and_update(trans, other_bp.v->btree_id, other_bp.v->level, other_extent,
+							     bp->k.p.inode, KEY_TYPE_ERROR_double_allocation));
 			return 0;
 		} else {
-			try(drop_dev_and_update(trans, bp->v.btree_id, bp->v.level, extent, bp->k.p.inode));
+			try(bch2_bkey_drop_device_and_update(trans, bp->v.btree_id, bp->v.level, extent,
+							     bp->k.p.inode, KEY_TYPE_ERROR_double_allocation));
 			return bp_missing(trans, extent, bp, other_bp.s_c);
 		}
 	} else {
-		ret = kill_replica_if_checksum_bad(trans,
+		ret = bch2_kill_replica_if_checksum_bad(trans,
 					    other_bp.v->btree_id, other_bp.v->level, other_extent,
 					    bp->v.btree_id, extent,
 					    bp->k.p.inode);
@@ -638,19 +577,70 @@ static int check_bp_dup(struct btree_trans *trans,
 		if (ret)
 			return bp_missing(trans, extent, bp, other_bp.s_c);
 
-		ret = kill_replica_if_checksum_bad(trans, bp->v.btree_id, bp->v.level, extent,
+		ret = bch2_kill_replica_if_checksum_bad(trans, bp->v.btree_id, bp->v.level, extent,
 					    other_bp.v->btree_id, other_extent, bp->k.p.inode);
 		if (ret < 0)
 			return ret;
 		if (ret)
 			return 0;
 
-		CLASS(printbuf, buf)();
-		prt_printf(&buf, "duplicate extents pointing to same space on dev %llu\n", bp->k.p.inode);
-		bch2_bkey_val_to_text(&buf, c, extent);
-		prt_newline(&buf);
-		bch2_bkey_val_to_text(&buf, c, other_extent);
-		bch_err(c, "%s", buf.buf);
+		/*
+		 * Both replicas verify clean: a physical region is referenced
+		 * from two distinct logical positions, possibly with partial
+		 * overlap. This can happen after btree topology recovery from
+		 * media errors - convert the overlapping portion to a
+		 * reflink_v shared by two reflink_p's so neither file loses
+		 * data. Non-overlapping prefix/suffix of each extent stays as
+		 * a regular extent.
+		 *
+		 * Only valid for leaf extents; btree pointers can't be reflinked.
+		 */
+		if (extent.k->type == KEY_TYPE_extent &&
+		    other_extent.k->type == KEY_TYPE_extent) {
+			u32 bp_sub, other_bp_sub;
+			scoped_guard(rcu) {
+				struct bch_dev *ca = bch2_dev_rcu_noerror(c, bp->k.p.inode);
+				if (!ca)
+					return 0;
+				bp_pos_to_bucket_and_offset(ca, bp->k.p,       &bp_sub);
+				bp_pos_to_bucket_and_offset(ca, other_bp.k->p, &other_bp_sub);
+			}
+
+			u32 overlap_sub_start = max(bp_sub, other_bp_sub);
+			u32 overlap_sub_end   = min(bp_sub       + bp->v.bucket_len,
+						    other_bp_sub + other_bp.v->bucket_len);
+			if (overlap_sub_end <= overlap_sub_start)
+				return 0; /* bps don't actually overlap */
+
+			u32 overlap_len = overlap_sub_end - overlap_sub_start;
+			u64 k1_overlap_start = bkey_start_offset(extent.k) +
+					       (overlap_sub_start - bp_sub);
+			u64 k1_overlap_end   = k1_overlap_start + overlap_len;
+			u64 k2_overlap_start = bkey_start_offset(other_extent.k) +
+					       (overlap_sub_start - other_bp_sub);
+			u64 k2_overlap_end   = k2_overlap_start + overlap_len;
+
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "duplicate extents pointing to overlapping space on dev %llu, converting overlap to reflink\n",
+				   bp->k.p.inode);
+			bch2_bkey_val_to_text(&buf, c, extent);
+			prt_newline(&buf);
+			bch2_bkey_val_to_text(&buf, c, other_extent);
+
+			if (ret_fsck_err(trans, dup_extents_to_reflink, "%s", buf.buf))
+				try(extents_to_reflink(trans,
+						       bp->v.btree_id, bp->v.level, extent,
+						       k1_overlap_start, k1_overlap_end,
+						       other_bp.v->btree_id, other_bp.v->level, other_extent,
+						       k2_overlap_start, k2_overlap_end));
+			return 0;
+		}
+
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "duplicate extents pointing to same space on dev %llu\n", bp->k.p.inode);
+		bch2_bkey_val_to_text(&msg.m, c, extent);
+		prt_newline(&msg.m);
+		bch2_bkey_val_to_text(&msg.m, c, other_extent);
 		return bch_err_throw(c, fsck_repair_unimplemented);
 	}
 }
@@ -744,14 +734,6 @@ static int check_btree_root_to_backpointers(struct btree_trans *trans,
 	return check_extent_to_backpointers(trans, s, btree_id, b->c.level + 1, k);
 }
 
-static u64 system_totalram_bytes(void)
-{
-	struct sysinfo i;
-	si_meminfo(&i);
-
-	return i.totalram * i.mem_unit;
-}
-
 static u64 mem_may_pin_bytes(struct bch_fs *c)
 {
 	return div_u64(system_totalram_bytes() * c->opts.fsck_memory_usage_percent, 100);
@@ -769,7 +751,6 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	s64 mem_may_pin = mem_may_pin_bytes(c);
-	int ret = 0;
 
 	bch2_btree_cache_unpin(c);
 
@@ -781,7 +762,7 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 	c->btree.cache.pinned_nodes_end			= *end = BBPOS_MAX;
 
 	for (enum btree_id btree = start.btree;
-	     btree < BTREE_ID_NR && !ret;
+	     btree < BTREE_ID_NR;
 	     btree++) {
 		unsigned depth = (BIT_ULL(btree) & btree_leaf_mask) ? 0 : 1;
 
@@ -789,9 +770,9 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 		    !(BIT_ULL(btree) & btree_interior_mask))
 			continue;
 
-		ret = __for_each_btree_node(trans, iter, btree,
+		try(for_each_btree_node(trans, iter, btree,
 				      btree == start.btree ? start.pos : POS_MIN,
-				      0, depth, BTREE_ITER_prefetch, b, ({
+				      depth, BTREE_ITER_prefetch, b, ({
 			mem_may_pin -= btree_buf_bytes(b);
 			if (mem_may_pin <= 0) {
 				c->btree.cache.pinned_nodes_end = *end =
@@ -800,10 +781,10 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 			}
 			bch2_node_pin(c, b);
 			0;
-		}));
+		})));
 	}
 
-	return ret;
+	return 0;
 }
 
 static int bch2_check_extents_to_backpointers_pass(struct btree_trans *trans,
@@ -820,7 +801,7 @@ static int bch2_check_extents_to_backpointers_pass(struct btree_trans *trans,
 	for (enum btree_id btree_id = 0;
 	     btree_id < btree_id_nr_alive(c);
 	     btree_id++) {
-		int level, depth = btree_type_has_data_ptrs(btree_id) ? 0 : 1;
+		int level = 0, depth = btree_type_has_data_ptrs(btree_id) ? 0 : 1;
 
 		try(commit_do(trans, &res.r, NULL,
 			      BCH_TRANS_COMMIT_no_enospc,
@@ -906,7 +887,7 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 		struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(bp_k);
 
 		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_backpointer_bucket_gen &&
-		    (bp.v->bucket_gen != a->gen ||
+		    (bp.v->bucket_gen != a->generation ||
 		     bp.v->flags)) {
 			try(bch2_backpointer_del(trans, bp_k.k->p));
 			nr_deletes++;
@@ -920,7 +901,7 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 			continue;
 		}
 
-		if (bp.v->bucket_gen != a->gen)
+		if (bp.v->bucket_gen != a->generation)
 			continue;
 
 		int alloc_counter = data_type_to_alloc_counter(bp.v->data_type);

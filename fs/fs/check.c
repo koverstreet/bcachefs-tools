@@ -115,7 +115,6 @@ static struct qstr lostfound_str = QSTR("lost+found");
 static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 			    subvol_inum root_inum,
 			    struct bch_inode_unpacked *root_inode,
-			    struct bch_hash_info *root_hash_info,
 			    struct bch_inode_unpacked *lostfound)
 {
 	struct bch_fs *c = trans->c;
@@ -126,7 +125,13 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	struct bch_snapshot_tree st;
 	try(bch2_snapshot_tree_lookup(trans, snapshot_tree, &st));
 
-	u32 snapshot = bch2_snapshot_live_descendent(c, le32_to_cpu(st.root_snapshot));
+	u32 snapshot;
+	if (bch2_snapshot_live_descendent(c, le32_to_cpu(st.root_snapshot), &snapshot) ||
+	    !snapshot) {
+		bch_err(c, "snapshot tree %u has no live snapshot, cannot create lost+found",
+			snapshot_tree);
+		return bch_err_throw(c, ENOENT_snapshot);
+	}
 
 	CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_notice);
 	prt_printf(&msg.m, "creating ");
@@ -134,7 +139,6 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	prt_printf(&msg.m, "/lost+found in subvol %llu snapshot %u", root_inum.subvol, snapshot);
 
 	u64 now = bch2_current_time(c);
-	u64 cpu = raw_smp_processor_id();
 
 	bch2_inode_init_early(c, lostfound);
 	bch2_inode_init_late(c, lostfound, now, 0, 0, S_IFDIR|0700, 0, root_inode);
@@ -144,14 +148,14 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	root_inode->bi_nlink++;
 
 	CLASS(btree_iter_uninit, lostfound_iter)(trans);
-	try(bch2_inode_create(trans, &lostfound_iter, lostfound, snapshot, cpu,
+	try(bch2_inode_create(trans, &lostfound_iter, lostfound, snapshot,
 			      inode_opt_get(c, root_inode, inodes_32bit)));
 
 	bch2_btree_iter_set_snapshot(&lostfound_iter, snapshot);
 	try(bch2_btree_iter_traverse(&lostfound_iter));
 
 	try(bch2_dirent_create_snapshot(trans,
-				0, root_inode->bi_inum, snapshot, root_hash_info,
+				0, snapshot, root_inode,
 				mode_to_type(lostfound->bi_mode),
 				&lostfound_str,
 				lostfound->bi_inum,
@@ -174,7 +178,7 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 	u32 snapshot_tree = bch2_snapshot_tree(c, snapshot);
 	int ret;
 
-	u32 subvolid;
+	u32 subvolid = 0;
 	ret = find_snapshot_tree_subvol(trans, snapshot_tree, &subvolid);
 	bch_err_msg(c, ret, "finding subvol associated with snapshot tree %u",
 		    bch2_snapshot_tree(c, snapshot));
@@ -219,8 +223,7 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 		 * We always create lost_found in its own transaction; this will
 		 * return a transaction restart:
 		 */
-		ret = create_lostfound(trans, snapshot_tree, root_inum,
-				       &root_inode, &root_hash_info, lostfound);
+		ret = create_lostfound(trans, snapshot_tree, root_inum, &root_inode, lostfound);
 		bch_err_msg(c, ret, "creating lost+found");
 		return ret;
 	}
@@ -345,16 +348,14 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 
 	try(__bch2_fsck_write_inode(trans, &lostfound));
 
-	struct bch_hash_info dir_hash;
-	try(bch2_hash_info_init(c, &lostfound, &dir_hash));
 	struct qstr name = QSTR(name_buf);
 
 	inode->bi_dir = lostfound.bi_inum;
 
 	ret = bch2_dirent_create_snapshot(trans,
-				inode->bi_parent_subvol, lostfound.bi_inum,
+				inode->bi_parent_subvol,
 				dirent_snapshot,
-				&dir_hash,
+				&lostfound,
 				inode_d_type(inode),
 				&name,
 				inode->bi_subvol ?: inode->bi_inum,
@@ -399,7 +400,7 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 				continue;
 
 			struct bch_inode_unpacked child_inode;
-			try(bch2_inode_unpack(k, &child_inode));
+			bch2_inode_unpack(c, k, &child_inode);
 
 			if (!inode_should_reattach(&child_inode)) {
 				try(maybe_delete_dirent(trans,
@@ -438,14 +439,14 @@ static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 sub
 	if (!inum) {
 		CLASS(btree_iter_uninit, inode_iter)(trans);
 		struct bch_inode_unpacked new_inode;
-		u64 cpu = raw_smp_processor_id();
 
 		bch2_inode_init_early(c, &new_inode);
 		bch2_inode_init_late(c, &new_inode, bch2_current_time(c), 0, 0, S_IFDIR|0755, 0, NULL);
 
 		new_inode.bi_subvol = subvolid;
 
-		try(bch2_inode_create(trans, &inode_iter, &new_inode, snapshotid, cpu, false));
+		try(bch2_inode_create(trans, &inode_iter, &new_inode, snapshotid, false));
+		bch2_btree_iter_set_snapshot(&inode_iter, snapshotid);
 		try(bch2_btree_iter_traverse(&inode_iter));
 		try(bch2_inode_write(trans, &inode_iter, &new_inode));
 
@@ -460,6 +461,7 @@ static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 sub
 	new_subvol->k.p.offset	= subvolid;
 	new_subvol->v.snapshot	= cpu_to_le32(snapshotid);
 	new_subvol->v.inode	= cpu_to_le64(inum);
+	bch2_subvolume_state_set(&new_subvol->v, SUBVOLUME_STATE_live);
 	try(bch2_btree_insert_trans(trans, BTREE_ID_subvolumes, &new_subvol->k_i, 0));
 
 	struct bkey_i_snapshot *s = bch2_bkey_get_mut_typed(trans,
@@ -473,7 +475,7 @@ static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 sub
 	u32 snapshot_tree = le32_to_cpu(s->v.tree);
 
 	s->v.subvol = cpu_to_le32(subvolid);
-	SET_BCH_SNAPSHOT_SUBVOL(&s->v, true);
+	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_live);
 
 	struct bkey_i_snapshot_tree *st = bch2_bkey_get_mut_typed(trans,
 			BTREE_ID_snapshot_trees, POS(0, snapshot_tree),
@@ -623,12 +625,12 @@ static int add_inode(struct bch_fs *c, struct inode_walker *w,
 
 	struct inode_walker_entry *n = &darray_last(w->inodes);
 	if (!n->whiteout) {
-		return bch2_inode_unpack(inode, &n->inode);
+		bch2_inode_unpack(c, inode, &n->inode);
 	} else {
 		n->inode.bi_inum	= inode.k->p.offset;
 		n->inode.bi_snapshot	= inode.k->p.snapshot;
-		return 0;
 	}
+	return 0;
 }
 
 static int get_inodes_all_snapshots(struct btree_trans *trans,
@@ -657,6 +659,7 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 
 	w->first_this_inode = true;
 	w->have_inodes = true;
+	w->commit_count = trans->commit_count;
 	return 0;
 }
 
@@ -741,7 +744,6 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 
 		new_entry.inode.bi_snapshot	= k.k->p.snapshot;
 		new_entry.count			= 0;
-		new_entry.i_size		= 0;
 
 		while (i > w->inodes.data && i[-1].inode.bi_snapshot > k.k->p.snapshot)
 			--i;
@@ -767,6 +769,17 @@ struct inode_walker_entry *bch2_walk_inode(struct btree_trans *trans,
 		int ret = get_inodes_all_snapshots(trans, w, k.k->p.inode);
 		if (ret)
 			return ERR_PTR(ret);
+	} else if (w->commit_count != trans->commit_count) {
+		/*
+		 * A commit may have updated inodes we have cached: revalidate.
+		 * We're mid way through walking this inode's keys, so per-inode
+		 * accumulations (i_sectors, subdir counts) are now partial -
+		 * recount instead of complaining:
+		 */
+		int ret = get_inodes_all_snapshots(trans, w, k.k->p.inode);
+		if (ret)
+			return ERR_PTR(ret);
+		w->recalculate_sums = true;
 	}
 
 	w->last_pos = k.k->p;
@@ -886,6 +899,29 @@ fsck_err:
 	return ret;
 }
 
+/*
+ * Returns 1 if an xattr of the given type exists for @inode, 0 if not,
+ * negative on error. Used to verify the BCH_INODE_has_*_acl flags against
+ * what's actually in the xattr btree.
+ */
+static int inode_has_xattr_type(struct btree_trans *trans,
+				struct bch_inode_unpacked *inode,
+				unsigned xattr_type)
+{
+	struct bch_hash_info hash;
+	try(bch2_hash_info_init(trans->c, inode, &hash));
+
+	struct xattr_search_key search = X_SEARCH(xattr_type, "", 0);
+	CLASS(btree_iter_uninit, iter)(trans);
+	int ret = bkey_err(bch2_hash_lookup_in_snapshot(
+				trans, &iter, bch2_xattr_hash_desc, &hash,
+				(subvol_inum) { 0, inode->bi_inum },
+				&search, 0, inode->bi_snapshot));
+	if (bch2_err_matches(ret, ENOENT))
+		return 0;
+	return ret ?: 1;
+}
+
 static int check_inode(struct btree_trans *trans,
 		       struct btree_iter *iter,
 		       struct bkey_s_c k,
@@ -906,7 +942,7 @@ static int check_inode(struct btree_trans *trans,
 	if (!bkey_is_inode(k.k))
 		return 0;
 
-	try(bch2_inode_unpack(k, &u));
+	bch2_inode_unpack(c, k, &u);
 	BUG_ON(u.bi_snapshot != k.k->p.snapshot);
 
 	if (snapshot_root->bi_inum != u.bi_inum ||
@@ -1033,6 +1069,53 @@ static int check_inode(struct btree_trans *trans,
 		do_update = true;
 	}
 
+	bool has_opts = false;
+#define x(_name, _bits)  if (u.bi_##_name) has_opts = true;
+	BCH_INODE_OPTS()
+#undef x
+	if (fsck_err_on((bool) (u.bi_flags & BCH_INODE_has_inode_opts) != has_opts,
+			trans, inode_has_inode_opts_flag_wrong,
+			"inode %llu:%u has_inode_opts flag wrong, should be %u",
+			u.bi_inum, u.bi_snapshot, has_opts)) {
+		u.bi_flags &= ~BCH_INODE_has_inode_opts;
+		if (has_opts)
+			u.bi_flags |= BCH_INODE_has_inode_opts;
+		do_update = true;
+	}
+
+	/*
+	 * has_access_acl/has_default_acl: only the set direction is verified
+	 * here, an xattr lookup per flagged inode - inodes with ACLs are
+	 * rare. Flag clear but xattr present, the direction that would break
+	 * the bch2_get_acl() short circuit, is caught from the xattr side in
+	 * check_xattr():
+	 */
+	if (u.bi_flags & BCH_INODE_has_access_acl) {
+		int has = inode_has_xattr_type(trans, &u,
+					       KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS);
+		if (has < 0)
+			return has;
+		if (fsck_err_on(!has, trans, inode_has_access_acl_flag_wrong,
+				"inode %llu:%u has BCH_INODE_has_access_acl set but no acl xattr",
+				u.bi_inum, u.bi_snapshot)) {
+			u.bi_flags &= ~BCH_INODE_has_access_acl;
+			do_update = true;
+		}
+	}
+
+	if (u.bi_flags & BCH_INODE_has_default_acl) {
+		int has = inode_has_xattr_type(trans, &u,
+					       KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT);
+		if (has < 0)
+			return has;
+		if (fsck_err_on(!has, trans, inode_has_default_acl_flag_wrong,
+				"inode %llu:%u has BCH_INODE_has_default_acl set but no acl xattr",
+				u.bi_inum, u.bi_snapshot)) {
+			u.bi_flags &= ~BCH_INODE_has_default_acl;
+			do_update = true;
+		}
+	}
+
 	if (u.bi_subvol && bch2_snapshot_is_leaf(c, u.bi_snapshot)) {
 		struct bch_subvolume s;
 
@@ -1130,7 +1213,7 @@ static int find_oldest_inode_needs_reattach(struct btree_trans *trans,
 			break;
 
 		struct bch_inode_unpacked parent_inode;
-		try(bch2_inode_unpack(k, &parent_inode));
+		bch2_inode_unpack(trans->c, k, &parent_inode);
 
 		if (!inode_should_reattach(&parent_inode))
 			break;
@@ -1152,7 +1235,7 @@ static int check_unreachable_inode(struct btree_trans *trans,
 		return 0;
 
 	struct bch_inode_unpacked inode;
-	try(bch2_inode_unpack(k, &inode));
+	bch2_inode_unpack(trans->c, k, &inode);
 
 	if (!inode_should_reattach(&inode))
 		return 0;
@@ -1219,8 +1302,12 @@ static int count_inode_keys(struct btree_trans *trans,
 					 inode_pos,
 					 POS(inode_pos.inode, U64_MAX),
 					 0, k, ret) {
-		if (k.k->type == KEY_TYPE_error ||
-		    k.k->type == KEY_TYPE_hash_whiteout)
+		/*
+		 * Error keys count: they're placeholders for unreadable data,
+		 * evidence the inode had contents. Hash whiteouts are just
+		 * tombstones:
+		 */
+		if (k.k->type == KEY_TYPE_hash_whiteout)
 			continue;
 
 		nr_keys++;
@@ -1243,7 +1330,9 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 {
 	errptr_try(i);
 
-	if (bkey_extent_whiteout(k.k))
+	/* whiteouts and hash whiteouts are tombstones - they need no inode: */
+	if (bkey_extent_whiteout(k.k) ||
+	    k.k->type == KEY_TYPE_hash_whiteout)
 		return 0;
 
 	bool have_inode = i && !i->whiteout;
@@ -1399,6 +1488,9 @@ static int check_subdir_count_notnested(struct btree_trans *trans, struct inode_
 		count2 = bch2_count_subdirs(trans, w->last_pos.inode, i->inode.bi_snapshot);
 		if (count2 < 0)
 			return count2;
+
+		if (w->recalculate_sums)
+			i->count = count2;
 
 		if (i->count != count2) {
 			bch_err_ratelimited(c, "fsck counted subdirectories wrong for inum %llu:%u: got %llu should be %llu",
@@ -1642,6 +1734,59 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		if (!target->inodes.nr)
 			try(maybe_reconstruct_inum(trans, le64_to_cpu(d.v->d_inum), d.k->p.snapshot));
 
+		/*
+		 * The inode must exist in an ancestor snapshot of the dirent:
+		 * that's what makes the dirent resolvable from every
+		 * subvolume leaf that can see it. get_visible_inodes() also
+		 * accepts inodes in descendant snapshots - reachable from
+		 * *some* leaf, but a subvolume in a sibling branch sees the
+		 * dirent and not the inode, and lookups there return ENOENT.
+		 *
+		 * It iterates from the dirent's snapshot downward, so an
+		 * ancestor inode, if there is one, is first in the list:
+		 */
+		bool have_ancestor = target->inodes.nr &&
+			bch2_snapshot_is_ancestor(trans, d.k->p.snapshot,
+						  target->inodes.data[0].inode.bi_snapshot);
+
+		if (target->inodes.nr && !have_ancestor) {
+			/*
+			 * Deleting the dirent would orphan those inodes:
+			 * instead, move it to the snapshot(s) where the inode
+			 * exists. The second pass revisits the copies for the
+			 * target checks and directory counts:
+			 */
+			if (fsck_err(trans, dirent_to_inode_in_descendant_snapshot,
+				     "dirent with inode(s) only in descendant snapshots:\n%s",
+				     (printbuf_reset(&buf),
+				      bch2_bkey_val_to_text(&buf, c, k),
+				      buf.buf))) {
+				darray_for_each(target->inodes, i) {
+					struct bkey_i *n =
+						errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+
+					n->k.p.snapshot = i->inode.bi_snapshot;
+					try(bch2_btree_insert_trans(trans, BTREE_ID_dirents, n,
+							BTREE_UPDATE_internal_snapshot_node));
+				}
+
+				/*
+				 * Delete with the hash info we already have -
+				 * bch2_fsck_remove_dirent() rederives it via
+				 * lookup_first_inode(), which takes whatever
+				 * snapshot's inode it finds first:
+				 */
+				CLASS(btree_iter, del_iter)(trans, BTREE_ID_dirents,
+							    d.k->p, BTREE_ITER_intent);
+				try(bch2_btree_iter_traverse(&del_iter));
+				try(bch2_hash_delete_at(trans, bch2_dirent_hash_desc,
+							hash_info, &del_iter,
+							BTREE_UPDATE_internal_snapshot_node));
+				*need_second_pass = true;
+				return 0;
+			}
+		}
+
 		if (fsck_err_on(!target->inodes.nr,
 				trans, dirent_to_missing_inode,
 				"dirent points to missing inode:\n%s",
@@ -1681,11 +1826,9 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 
 	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 
-	for_each_visible_inode(trans, s, dir, d.k->p.snapshot, i) {
-		if (have_dir)
+	if (have_dir)
+		for_each_visible_inode(trans, s, dir, d.k->p.snapshot, i)
 			i->count++;
-		i->i_size += bkey_bytes(d.k);
-	}
 fsck_err:
 	return ret;
 }
@@ -1734,6 +1877,7 @@ again:
 static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		       struct bkey_s_c k,
 		       struct bch_hash_info *hash_info,
+		       struct snapshots_seen *s,
 		       struct inode_walker *inode)
 {
 	struct bch_fs *c = trans->c;
@@ -1743,6 +1887,8 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		return ret;
 	if (ret)
 		return 0;
+
+	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, inode, k));
 
@@ -1755,6 +1901,49 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		try(bch2_hash_info_init(c, &i->inode, hash_info));
 	inode->first_this_inode = false;
 
+	/*
+	 * The dangerous direction for the BCH_INODE_has_*_acl flags - flag
+	 * clear but an acl xattr exists, which would break the
+	 * bch2_get_acl() short circuit - is verified here, where we're
+	 * already walking the xattrs; the reverse direction is checked in
+	 * check_inode().
+	 *
+	 * The xattr is visible from every descendant snapshot version of
+	 * the inode that hasn't overwritten it - they all need the flag.
+	 *
+	 * Repairs are on attempt-local copies, without mutating the
+	 * walker's - a restarted commit must see the gating check fire
+	 * again, and when the repair commits the walker revalidates:
+	 */
+	if (k.k->type == KEY_TYPE_xattr) {
+		unsigned x_type = bkey_s_c_to_xattr(k).v->x_type;
+		struct inode_walker_entry *i2;
+
+		if (x_type == KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS)
+			for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i2)
+				if (!i2->whiteout &&
+				    fsck_err_on(!(i2->inode.bi_flags & BCH_INODE_has_access_acl),
+						trans, inode_has_access_acl_flag_wrong,
+						"inode %llu:%u has an access acl xattr but BCH_INODE_has_access_acl not set",
+						i2->inode.bi_inum, i2->inode.bi_snapshot)) {
+					struct bch_inode_unpacked inode_u = i2->inode;
+					inode_u.bi_flags |= BCH_INODE_has_access_acl;
+					try(__bch2_fsck_write_inode(trans, &inode_u));
+				}
+
+		if (x_type == KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT)
+			for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i2)
+				if (!i2->whiteout &&
+				    fsck_err_on(!(i2->inode.bi_flags & BCH_INODE_has_default_acl),
+						trans, inode_has_default_acl_flag_wrong,
+						"inode %llu:%u has a default acl xattr but BCH_INODE_has_default_acl not set",
+						i2->inode.bi_inum, i2->inode.bi_snapshot)) {
+					struct bch_inode_unpacked inode_u = i2->inode;
+					inode_u.bi_flags |= BCH_INODE_has_default_acl;
+					try(__bch2_fsck_write_inode(trans, &inode_u));
+				}
+	}
+
 	bool need_second_pass = false;
 	bool invalidated_inodes = false;
 	ret = bch2_str_hash_check_key(trans, NULL, &bch2_xattr_hash_desc, hash_info,
@@ -1764,7 +1953,9 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		return bch_err_throw(c, transaction_restart_nested);
 	}
 
-	return min(ret, 0);
+	ret = min(ret, 0);
+fsck_err:
+	return ret;
 }
 
 /*
@@ -1774,6 +1965,7 @@ int bch2_check_xattrs(struct bch_fs *c)
 {
 	struct bch_hash_info hash_info;
 	CLASS(btree_trans, trans)(c);
+	CLASS(snapshots_seen, s)();
 	CLASS(inode_walker, inode)();
 
 	struct progress_indicator progress;
@@ -1786,7 +1978,7 @@ int bch2_check_xattrs(struct bch_fs *c)
 			NULL, NULL,
 			BCH_TRANS_COMMIT_no_enospc, ({
 		bch2_progress_update_iter(trans, &progress, &iter) ?:
-		check_xattr(trans, &iter, k, &hash_info, &inode);
+		check_xattr(trans, &iter, k, &hash_info, &s, &inode);
 	}));
 	return ret;
 }
@@ -1814,6 +2006,7 @@ static int check_root_trans(struct btree_trans *trans)
 		root_subvol->v.flags	= 0;
 		root_subvol->v.snapshot	= cpu_to_le32(snapshot);
 		root_subvol->v.inode	= cpu_to_le64(inum);
+		bch2_subvolume_state_set(&root_subvol->v, SUBVOLUME_STATE_live);
 		try(bch2_btree_insert_trans(trans, BTREE_ID_subvolumes, &root_subvol->k_i, 0));
 	}
 
@@ -2088,7 +2281,7 @@ long bch2_ioctl_fsck_online(struct bch_fs *c, struct bch_ioctl_fsck_online arg)
 		return bch_err_throw(c, EINVAL_fsck_online_bad_flags);
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	struct bch_opts opts = bch2_opts_empty();
 	if (arg.opts)

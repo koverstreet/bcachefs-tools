@@ -169,14 +169,15 @@ void blkid_check(int fd, const char *path, bool force)
 	}
 
 	blkid_probe pr;
-	const char *fs_type = NULL, *fs_label = NULL;
-	size_t fs_type_len, fs_label_len;
+	const char *fs_type = NULL, *fs_label = NULL, *pt_type = NULL;
+	size_t fs_type_len, fs_label_len, pt_type_len;
 
 	if (!(pr = blkid_new_probe()))
 		die("blkid error 1");
 	if (blkid_probe_set_device(pr, fd, 0, 0))
 		die("blkid error 2");
 	if (blkid_probe_enable_partitions(pr, true) ||
+	    blkid_probe_set_partitions_flags(pr, BLKID_PARTS_MAGIC) ||
 	    blkid_probe_enable_superblocks(pr, true) ||
 	    blkid_probe_set_superblocks_flags(pr,
 			BLKID_SUBLKS_LABEL|BLKID_SUBLKS_TYPE|BLKID_SUBLKS_MAGIC))
@@ -186,19 +187,31 @@ void blkid_check(int fd, const char *path, bool force)
 
 	blkid_probe_lookup_value(pr, "TYPE", &fs_type, &fs_type_len);
 	blkid_probe_lookup_value(pr, "LABEL", &fs_label, &fs_label_len);
+	blkid_probe_lookup_value(pr, "PTTYPE", &pt_type, &pt_type_len);
 
-	if (fs_type) {
-		if (fs_label)
-			printf("%s contains a %s filesystem labelled '%s'\n",
-			       path, fs_type, fs_label);
-		else
-			printf("%s contains a %s filesystem\n",
-			       path, fs_type);
+	if (fs_type || pt_type) {
+		if (fs_type) {
+			if (fs_label)
+				printf("%s contains a %s filesystem labelled '%s'\n",
+				       path, fs_type, fs_label);
+			else
+				printf("%s contains a %s filesystem\n",
+				       path, fs_type);
+		}
+		if (pt_type)
+			printf("%s contains a %s partition table\n", path, pt_type);
+
 		if (!force) {
-			fputs("Proceed anyway?", stdout);
+			fputs("Proceed anyway (existing signatures will be wiped)?", stdout);
 			if (!ask_yn())
 				exit(EXIT_FAILURE);
 		}
+		/*
+		 * Wipe fs superblock and partition-table signatures both (the
+		 * probe enables BLKID_SUBLKS_MAGIC and BLKID_PARTS_MAGIC), so
+		 * former-partition fs signatures can't linger to confuse
+		 * UUID-based device discovery after a whole-disk format.
+		 */
 		while (blkid_do_probe(pr) == 0) {
 			if (blkid_do_wipe(pr, 0))
 				die("Failed to wipe preexisting metadata.");
@@ -382,4 +395,3 @@ u32 crc32c(u32 crc, const void *buf, size_t size)
 }
 
 #endif /* HAVE_WORKING_IFUNC */
-

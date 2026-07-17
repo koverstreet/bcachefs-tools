@@ -1,11 +1,11 @@
 [workspace]
 resolver = "2"
-members = [".", "bch_bindgen", "doc/docgen"]
-default-members = [".", "bch_bindgen"]
+members = [".", "fs", "fs/typeinfo-macros", "bcachefs-shim", "bcachefs-shim-macros", "bch_bindgen", "doc/docgen"]
+default-members = [".", "fs"]
 
 [package]
 name = "bcachefs-tools"
-version = "1.38.3"
+version = "1.38.8"
 authors = ["Yuxuan Shui <yshuiv7@gmail.com>", "Kayla Firestack <dev@kaylafire.me>", "Kent Overstreet <kent.overstreet@linux.dev>" ]
 edition = "2021"
 rust-version = "1.85.0"
@@ -31,13 +31,14 @@ udev = "0.7.0"
 uuid = { version = "1.2.2", features = ["v4"] }
 errno = "0.3"
 either = "1.5"
+bcachefs-kernel = { path = "fs" }
 bch_bindgen = { path = "bch_bindgen" }
 strum = { version = "0.26", features = ["derive"] }
 strum_macros = "0.26"
 zeroize = { version = "1", features = ["std", "zeroize_derive"] }
-rustix = { version = "0.38.34", features = ["event", "fs", "termios"] }
+rustix = { version = "1.1.4", features = ["event", "fs", "pipe", "process", "stdio", "system", "termios", "try_close"] }
 owo-colors = "4"
-crossterm = { version = "0.28", default-features = false, features = ["events"] }
+crossterm = { version = "0.29", default-features = false, features = ["events"] }
 tiny_http = "0.12.0"
 rustc-demangle = "0.1"
 chrono = { version = "0.4.43", default-features = false, features = ["clock"] }

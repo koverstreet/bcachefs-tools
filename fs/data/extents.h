@@ -3,6 +3,7 @@
 #define _BCACHEFS_EXTENTS_H
 
 #include "bcachefs.h"
+#include "alloc/check_data.h"
 #include "btree/bkey.h"
 #include "extents_types.h"
 
@@ -404,12 +405,12 @@ int bch2_bkey_pick_read_device(struct bch_fs *, struct bkey_s_c,
 /* KEY_TYPE_btree_ptr: */
 
 int bch2_btree_ptr_validate(struct bch_fs *, struct bkey_s_c,
-			    struct bkey_validate_context);
+			    const struct bkey_validate_context *);
 void bch2_btree_ptr_to_text(struct printbuf *, struct bch_fs *,
 			    struct bkey_s_c);
 
 int bch2_btree_ptr_v2_validate(struct bch_fs *, struct bkey_s_c,
-			       struct bkey_validate_context);
+			       const struct bkey_validate_context *);
 void bch2_btree_ptr_v2_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 void bch2_btree_ptr_v2_compat(enum btree_id, unsigned, unsigned,
 			      int, struct bkey_s);
@@ -419,6 +420,7 @@ void bch2_btree_ptr_v2_compat(enum btree_id, unsigned, unsigned,
 	.val_to_text	= bch2_btree_ptr_to_text,		\
 	.swab		= bch2_ptr_swab,			\
 	.trigger	= bch2_trigger_extent,			\
+	.check_repair	= bch2_check_fix_ptrs,			\
 })
 
 #define bch2_bkey_ops_btree_ptr_v2 ((struct bkey_ops) {		\
@@ -427,6 +429,7 @@ void bch2_btree_ptr_v2_compat(enum btree_id, unsigned, unsigned,
 	.swab		= bch2_ptr_swab,			\
 	.compat		= bch2_btree_ptr_v2_compat,		\
 	.trigger	= bch2_trigger_extent,			\
+	.check_repair	= bch2_check_fix_ptrs,			\
 	.min_val_size	= 40,					\
 })
 
@@ -440,12 +443,13 @@ bool bch2_extent_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 	.swab		= bch2_ptr_swab,			\
 	.key_merge	= bch2_extent_merge,			\
 	.trigger	= bch2_trigger_extent,			\
+	.check_repair	= bch2_check_fix_ptrs,			\
 })
 
 /* KEY_TYPE_reservation: */
 
 int bch2_reservation_validate(struct bch_fs *, struct bkey_s_c,
-			      struct bkey_validate_context);
+			      const struct bkey_validate_context *);
 void bch2_reservation_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 bool bch2_reservation_merge(struct bch_fs *, struct bkey_s, struct bkey_s_c);
 
@@ -586,15 +590,27 @@ unsigned bch2_bkey_sectors_compressed(const struct bch_fs *, struct bkey_s_c);
 unsigned bch2_bkey_replicas(struct bch_fs *, struct bkey_s_c);
 
 unsigned bch2_dev_durability(struct bch_fs *, unsigned);
-int bch2_extent_ptr_desired_durability(struct btree_trans *, struct extent_ptr_decoded *);
-int bch2_extent_ptr_durability(struct btree_trans *, struct extent_ptr_decoded *);
+
+int __bch2_extent_ptr_durability(struct btree_trans *, struct extent_ptr_decoded *, bool);
+
+static inline int bch2_extent_ptr_desired_durability(struct btree_trans *trans, struct extent_ptr_decoded *p)
+{
+	return __bch2_extent_ptr_durability(trans, p, true);
+}
+
+static inline int bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_decoded *p)
+{
+	return __bch2_extent_ptr_durability(trans, p, false);
+}
 
 struct bkey_durability {
 	unsigned	online, total;
+	unsigned	acct, min_durability;
 };
 
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);
 struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_c);
+
 bool bch2_bkey_can_read(const struct bch_fs *, struct bkey_s_c);
 
 const struct bch_extent_ptr *bch2_bkey_has_device_c(const struct bch_fs *,
@@ -606,6 +622,19 @@ static inline struct bch_extent_ptr *bch2_bkey_has_device(const struct bch_fs *c
 							  struct bkey_s k, unsigned dev)
 {
 	return (void *) bch2_bkey_has_device_c(c, k.s_c, dev);
+}
+
+/* Returns the ptr_bit (bit-position-as-mask) of the first ptr matching @dev,
+ * or 0 if no such ptr exists. */
+static inline unsigned bch2_bkey_dev_ptr_bit(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
+{
+	unsigned ptr_bit = 1;
+	bkey_for_each_ptr(bch2_bkey_ptrs_c(k), ptr) {
+		if (ptr->dev == dev)
+			return ptr_bit;
+		ptr_bit <<= 1;
+	}
+	return 0;
 }
 
 bool bch2_bkey_devs_rw(struct bch_fs *, struct bkey_s_c);
@@ -711,7 +740,7 @@ void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *, const struct
 void bch2_bkey_ptrs_to_text(struct printbuf *, struct bch_fs *,
 			    struct bkey_s_c);
 int bch2_bkey_ptrs_validate(struct bch_fs *, struct bkey_s_c,
-			    struct bkey_validate_context);
+			    const struct bkey_validate_context *);
 
 static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 				      struct bch_extent_ptr ptr2)
@@ -720,7 +749,7 @@ static inline bool bch2_extent_ptr_eq(struct bch_extent_ptr ptr1,
 		ptr1.unwritten	== ptr2.unwritten &&
 		ptr1.offset	== ptr2.offset &&
 		ptr1.dev	== ptr2.dev &&
-		ptr1.gen	== ptr2.gen);
+		ptr1.generation	== ptr2.generation);
 }
 
 void bch2_ptr_swab(const struct bch_fs *, struct bkey_s);

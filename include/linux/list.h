@@ -13,8 +13,7 @@
 #define __list_del(p, n)		__cds_list_del(p, n)
 #define list_del(l)			cds_list_del(l)
 #define list_del_init(l)		cds_list_del_init(l)
-#define list_replace(o, n)		cds_list_replace(o, n)
-#define list_replace_init(o, n)		cds_list_replace_init(o, n)
+/* list_replace{,_init} are shimmed below: liburcu's break on empty lists */
 #define list_move(l, h)			cds_list_move(l, h)
 #define list_empty(l)			cds_list_empty(l)
 #define list_splice(l, h)		cds_list_splice(l, h)
@@ -32,6 +31,28 @@ static inline int list_empty_careful(const struct list_head *head)
 {
 	struct list_head *next = head->next;
 	return (next == head) && (next == head->prev);
+}
+
+/*
+ * liburcu's cds_list_replace{,_init}() are broken for an empty @old: they use
+ * old->next (which is @old itself when empty) as the insertion point and leave
+ * @new pointing at @old rather than at itself. The kernel's versions self-point
+ * on empty. Match the kernel, so a caller moving a possibly-empty list (e.g. the
+ * journal pin-fifo resize) doesn't leave @new referencing @old's storage - a
+ * use-after-free if @old is then freed.
+ */
+static inline void list_replace(struct list_head *old, struct list_head *_new)
+{
+	if (list_empty(old))
+		INIT_LIST_HEAD(_new);
+	else
+		cds_list_replace(old, _new);
+}
+
+static inline void list_replace_init(struct list_head *old, struct list_head *_new)
+{
+	list_replace(old, _new);
+	INIT_LIST_HEAD(old);
 }
 
 static inline void list_move_tail(struct list_head *list,

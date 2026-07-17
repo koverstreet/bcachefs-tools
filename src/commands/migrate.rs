@@ -10,9 +10,10 @@ use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd};
 
 use anyhow::{anyhow, bail, Result};
+use bch_bindgen::fs::FsExt;
 use bch_bindgen::c;
-use bch_bindgen::fs::Fs;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::opt_set;
 use clap::Parser;
 
 use crate::commands::format::take_opt_value;
@@ -301,7 +302,7 @@ Usage: bcachefs migrate [OPTION]...
 Options:
   -f fs                        Root of filesystem to migrate(s)
       --encrypted              Enable whole filesystem encryption (chacha20/poly1305)
-      --no_passphrase          Don't encrypt master encryption key
+      --no_passphrase          Store master encryption key unencrypted in superblock
   -F                           Force, even if metadata file already exists
   -h, --help                   Display this help and exit
 
@@ -385,6 +386,11 @@ fn migrate_fs(
     c_dev.sb_offset = sb_offset;
     c_dev.sb_end = sb_end;
 
+    // format() consumes format_opts (it's no longer Copy — has a blocklisted
+    // bch_opts field), so capture the fields used afterward first.
+    let passphrase = format_opts.passphrase;
+    let superblock_size = format_opts.superblock_size;
+
     let sb = crate::commands::format_util::format(fs_opt_strs, fs_opts, format_opts, std::slice::from_mut(&mut c_dev));
     if sb.is_null() {
         bail!("format failed");
@@ -393,10 +399,10 @@ fn migrate_fs(
     let sb_offset_val = u64::from_le(unsafe { (*sb).layout.sb_offset[0] });
 
     // Add encryption key if needed
-    if !format_opts.passphrase.is_null() {
+    if !passphrase.is_null() {
         let type_cstr = CString::new("user").unwrap();
         let desc_cstr = CString::new("user").unwrap();
-        unsafe { c::bch2_add_key(sb, type_cstr.as_ptr(), desc_cstr.as_ptr(), format_opts.passphrase) };
+        unsafe { c::bch2_add_key(sb, type_cstr.as_ptr(), desc_cstr.as_ptr(), passphrase) };
     }
 
     unsafe { libc::free(sb as *mut _) };
@@ -433,7 +439,7 @@ fn migrate_fs(
     // Calculate reserve_start: round up (superblock_size * 2 + BCH_SB_SECTOR) sectors
     // to bucket boundary (in bytes)
     let bucket_bytes = unsafe { (*(*fs.raw).devs[0]).mi.bucket_size as u64 } << 9;
-    let reserve_start = (((format_opts.superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
+    let reserve_start = (((superblock_size as u64 * 2 + c::BCH_SB_SECTOR as u64) << 9)
         .div_ceil(bucket_bytes)) * bucket_bytes;
 
     // Copy the filesystem tree
@@ -568,7 +574,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .ok_or_else(|| anyhow!("device 0 not found"))?;
     fs.trans_mark_dev_sb(
         &ca_ref,
-        c::btree_iter_update_trigger_flags::BTREE_TRIGGER_transactional,
+        bcachefs_kernel::btree::iter::UpdateTriggerFlags::TRANSACTIONAL,
     ).map_err(|e| anyhow!("Error marking superblock buckets: {}", e))?;
     drop(ca_ref);
 
@@ -587,7 +593,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
     let mut force = false;
 
     let mut fs_opts: c::bch_opts = Default::default();
-    let mut deferred_opts: Vec<(usize, String)> = Vec::new();
+    let mut deferred_opts: Vec<(c::bch_opt_id, String)> = Vec::new();
 
     let mut i = 1;
     while i < argv.len() {
@@ -614,8 +620,8 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
                     };
 
                     match parse_opt_val(opt, &val_str)? {
-                        None => deferred_opts.push((opt_id as usize, val_str)),
-                        Some(v) => bch_bindgen::opts::opt_set_by_id(&mut fs_opts, opt_id, v),
+                        None => deferred_opts.push((opt_id, val_str)),
+                        Some(v) => bcachefs_kernel::opts::opt_set_by_id(&mut fs_opts, opt_id, v),
                     }
                     i += 1;
                     continue;
@@ -671,7 +677,7 @@ fn cmd_migrate(argv: Vec<String>) -> Result<()> {
 
     // Handle encryption passphrase
     let passphrase: Option<Passphrase> = if encrypted && !no_passphrase {
-        Some(Passphrase::new_from_prompt_twice()?)
+        Some(Passphrase::ask_for_new_passphrase()?)
     } else {
         None
     };

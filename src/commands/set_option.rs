@@ -1,12 +1,13 @@
 use std::ffi::CString;
 
 use anyhow::{bail, Result};
-use bch_bindgen::bcachefs;
-use bch_bindgen::c;
-use bch_bindgen::opt_set;
+use bcachefs_kernel::c;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::opt_set;
 use clap::{Arg, ArgAction, Command};
 
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches};
+use crate::device_scan::OpenedFs;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs;
 
@@ -22,7 +23,7 @@ Set a filesystem or device option on a running filesystem. Changes \
 are persisted to the superblock. Use -d to target a specific device \
 for device-scoped options. See <<sec:options>> for the full list of \
 available options.")
-        .args(bch_option_args(opt_flags()))
+        .args(bch_option_args(opt_flags(), false))
         .arg(Arg::new("dev-idx")
             .short('d')
             .long("dev-idx")
@@ -48,18 +49,23 @@ fn cmd_set_option(argv: Vec<String>) -> Result<()> {
         bail!("No options specified");
     }
 
-    let online = devices.iter().any(|dev| sysfs::dev_mounted(dev));
+    let devs: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
 
-    if online {
-        set_option_online(&devices, &opts)
-    } else {
-        set_option_offline(&devices, &dev_idxs, &opts)
+    let mut fs_opts = c::bch_opts::default();
+    opt_set!(fs_opts, nostart, 1);
+
+    match crate::device_scan::open_online_or_offline(&devs, fs_opts)? {
+        OpenedFs::Online(fs)  => set_option_online(fs, &devices, &dev_idxs, &opts),
+        OpenedFs::Offline(fs) => set_option_offline(fs, &devices, &dev_idxs, &opts),
     }
 }
 
-fn set_option_online(devices: &[&String], opts: &[(String, String)]) -> Result<()> {
-    let fs = BcachefsHandle::open(devices[0].as_str())?;
-
+fn set_option_online(
+    fs: BcachefsHandle,
+    devices: &[&String],
+    dev_idxs: &[u32],
+    opts: &[(String, String)],
+) -> Result<()> {
     for dev in &devices[1..] {
         let fs2 = BcachefsHandle::open(dev.as_str())?;
         if fs.uuid() != fs2.uuid() {
@@ -79,16 +85,26 @@ fn set_option_online(devices: &[&String], opts: &[(String, String)]) -> Result<(
             continue;
         }
 
-        if flags & c::opt_flags::OPT_FS as u32 != 0 {
+        let is_fs_opt = flags & c::opt_flags::OPT_FS as u32 != 0;
+        let is_device_opt = flags & c::opt_flags::OPT_DEVICE as u32 != 0;
+
+        if is_fs_opt && !is_device_opt {
             sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value);
         }
 
-        if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
+        if is_device_opt {
+            if !dev_idxs.is_empty() {
+                for dev_idx in dev_idxs {
+                    sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value);
+                }
+                continue;
+            }
+
             for dev in devices {
                 let fs2 = BcachefsHandle::open(dev.as_str())?;
                 let dev_idx = fs2.dev_idx();
                 if dev_idx < 0 {
-                    eprintln!("Couldn't determine device index for {dev}");
+                    eprintln!("Couldn't determine device index for {dev}; use --dev-idx");
                     continue;
                 }
 
@@ -101,17 +117,11 @@ fn set_option_online(devices: &[&String], opts: &[(String, String)]) -> Result<(
 }
 
 fn set_option_offline(
+    fs: Fs,
     devices: &[&String],
     dev_idxs: &[u32],
     opts: &[(String, String)],
 ) -> Result<()> {
-    let devs: Vec<std::path::PathBuf> = devices.iter().map(|d| d.as_str().into()).collect();
-
-    let mut fs_opts = bcachefs::bch_opts::default();
-    opt_set!(fs_opts, nostart, 1);
-
-    let fs = crate::device_scan::open_scan(&devs, fs_opts)?;
-
     for (name, value) in opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");

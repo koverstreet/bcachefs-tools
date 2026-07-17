@@ -2,202 +2,105 @@
 #ifndef MEAN_AND_VARIANCE_H_
 #define MEAN_AND_VARIANCE_H_
 
-#include <linux/types.h>
-#include <linux/limits.h>
-#include <linux/math.h>
+#include <linux/log2.h>
 #include <linux/math64.h>
-
-#define SQRT_U64_MAX 4294967295ULL
+#include <linux/types.h>
 
 /*
- * u128_u: u128 user mode, because not all architectures support a real int128
- * type
+ * Streaming median + MAD (median absolute deviation), via a
+ * stochastic-gradient estimator on the L1 losses:
  *
- * We don't use this version in userspace, because in userspace we link with
- * Rust and rustc has issues with u128.
+ *	median minimizes E[|X − m|]	→ ∇ = −sign(X − m)
+ *	MAD	minimizes E[||X − m| − d|]	→ ∇ = −sign(|X − m| − d)
+ *
+ * Two update modes share the same struct and the same step kernel:
+ *
+ *  - All-time:  mean_and_variance_update(s, x)
+ *	 step ≈ mad / n (Robbins-Monro 1/n schedule via ilog2(n) shift).
+ *	 Σα diverges, Σα² converges → the estimator is *consistent*,
+ *	 converging to the true (lifetime) median and MAD as n → ∞.
+ *	 Additionally maintains exact sum and count, so the true mean
+ *	 is available via mean_and_variance_get_mean().
+ *
+ *  - Exponentially-weighted: mean_and_variance_update_weighted(s, x, w)
+ *	 step = mad >> w (fixed weight). Asymptotic half-life is 2^w
+ *	 samples; steady-state wobble is ~mad/2^w. Tracks the median of
+ *	 the EW-weighted stream — sum and count fields are ignored.
+ *
+ * Per-sample work is shifts, adds, and sign bits: no multiplication,
+ * no division, no sqrt, no u128. MAD is robust to outliers — a single
+ * 100ms hiccup in a µs stream doesn't blow up the dispersion estimate.
+ * The mad-scaled step makes both modes scale-invariant: same convergence
+ * shape for ns- or s-magnitude inputs, no per-call-site tuning.
+ *
+ * For Gaussian inputs, σ ≈ 1.4826·MAD; the get_stddev helper returns
+ * that scaled value so existing "stddev" readout labels keep meaning
+ * roughly "spread around typical."
  */
-
-#if defined(__SIZEOF_INT128__) && defined(__KERNEL__) && !defined(CONFIG_PARISC)
-
-typedef struct {
-	unsigned __int128 v;
-} __aligned(16) u128_u;
-
-static inline u128_u u64_to_u128(u64 a)
-{
-	return (u128_u) { .v = a };
-}
-
-static inline u64 u128_lo(u128_u a)
-{
-	return a.v;
-}
-
-static inline u64 u128_hi(u128_u a)
-{
-	return a.v >> 64;
-}
-
-static inline u128_u u128_add(u128_u a, u128_u b)
-{
-	a.v += b.v;
-	return a;
-}
-
-static inline u128_u u128_sub(u128_u a, u128_u b)
-{
-	a.v -= b.v;
-	return a;
-}
-
-static inline u128_u u128_shl(u128_u a, s8 shift)
-{
-	a.v <<= shift;
-	return a;
-}
-
-static inline u128_u u128_square(u64 a)
-{
-	u128_u b = u64_to_u128(a);
-
-	b.v *= b.v;
-	return b;
-}
-
-#else
-
-typedef struct {
-	u64 hi, lo;
-} __aligned(16) u128_u;
-
-/* conversions */
-
-static inline u128_u u64_to_u128(u64 a)
-{
-	return (u128_u) { .lo = a };
-}
-
-static inline u64 u128_lo(u128_u a)
-{
-	return a.lo;
-}
-
-static inline u64 u128_hi(u128_u a)
-{
-	return a.hi;
-}
-
-/* arithmetic */
-
-static inline u128_u u128_add(u128_u a, u128_u b)
-{
-	u128_u c;
-
-	c.lo = a.lo + b.lo;
-	c.hi = a.hi + b.hi + (c.lo < a.lo);
-	return c;
-}
-
-static inline u128_u u128_sub(u128_u a, u128_u b)
-{
-	u128_u c;
-
-	c.lo = a.lo - b.lo;
-	c.hi = a.hi - b.hi - (c.lo > a.lo);
-	return c;
-}
-
-static inline u128_u u128_shl(u128_u i, s8 shift)
-{
-	u128_u r;
-
-	r.lo = i.lo << (shift & 63);
-	if (shift < 64)
-		r.hi = (i.hi << (shift & 63)) | (i.lo >> (-shift & 63));
-	else {
-		r.hi = i.lo << (-shift & 63);
-		r.lo = 0;
-	}
-	return r;
-}
-
-static inline u128_u u128_square(u64 i)
-{
-	u128_u r;
-	u64  h = i >> 32, l = i & U32_MAX;
-
-	r =             u128_shl(u64_to_u128(h*h), 64);
-	r = u128_add(r, u128_shl(u64_to_u128(h*l), 32));
-	r = u128_add(r, u128_shl(u64_to_u128(l*h), 32));
-	r = u128_add(r,          u64_to_u128(l*l));
-	return r;
-}
-
-#endif
-
-static inline u128_u u64s_to_u128(u64 hi, u64 lo)
-{
-	u128_u c = u64_to_u128(hi);
-
-	c = u128_shl(c, 64);
-	c = u128_add(c, u64_to_u128(lo));
-	return c;
-}
-
-u128_u u128_div(u128_u n, u64 d);
-
 struct mean_and_variance {
 	s64	n;
 	s64	sum;
-	u128_u	sum_squares;
-};
-
-/* expontentially weighted variant */
-struct mean_and_variance_weighted {
-	s64	mean;
-	u64	variance;
+	s64	median;
+	u64	mad;
 };
 
 /**
- * fast_divpow2() - fast approximation for n / (1 << d)
- * @n: numerator
- * @d: the power of 2 denominator.
- *
- * note: this rounds towards 0.
+ * sgm_median_mad_step() - one stochastic-gradient update of median + MAD.
+ * @median:	estimator state
+ * @mad:	estimator state
+ * @x:		new sample
+ * @weight:	log2 of step rate; step = max(mad >> weight, 1)
  */
-static inline s64 fast_divpow2(s64 n, u8 d)
+static inline void
+sgm_median_mad_step(s64 *median, u64 *mad, s64 x, u8 weight)
 {
-	return (n + ((n < 0) ? ((1 << d) - 1) : 0)) >> d;
+	u64 step = max_t(u64, *mad >> weight, 1);
+
+	if (x > *median)
+		*median += step;
+	else if (x < *median)
+		*median -= step;
+
+	u64 dev = abs(x - *median);
+
+	if (dev > *mad)
+		*mad += step;
+	else if (dev < *mad && *mad > step)
+		*mad -= step;
+	else if (dev < *mad)
+		*mad = 1;
 }
 
 /**
- * mean_and_variance_update() - update a mean_and_variance struct @s1 with a new sample @v1
- * and return it.
- * @s1: the mean_and_variance to update.
- * @v1: the new sample.
+ * mean_and_variance_update() - update a mean_and_variance struct with @x.
+ * @weight: 0 selects the all-time (Robbins-Monro 1/n) schedule;
+ *	    nonzero is the EW step weight (half-life ≈ 2^weight samples).
  *
- * see linked pdf equation 12.
+ * Always tracks exact sum + n. Median + MAD are updated via the same
+ * stochastic-gradient step kernel; the only difference between the
+ * all-time and EW variants is the step-rate schedule.
  */
 static inline void
-mean_and_variance_update(struct mean_and_variance *s, s64 v)
+mean_and_variance_update(struct mean_and_variance *s, s64 x, u8 weight)
 {
 	s->n++;
-	s->sum += v;
-	s->sum_squares = u128_add(s->sum_squares, u128_square(abs(v)));
+	s->sum += x;
+
+	if (s->n == 1) {
+		s->median = x;
+		s->mad = max_t(u64, abs(x), 1);
+		return;
+	}
+
+	if (!weight)
+		weight = ilog2(s->n);
+
+	sgm_median_mad_step(&s->median, &s->mad, x, weight);
 }
 
 s64 mean_and_variance_get_mean(struct mean_and_variance s);
-u64 mean_and_variance_get_variance(struct mean_and_variance s1);
+s64 mean_and_variance_get_median(struct mean_and_variance s);
+u64 mean_and_variance_get_mad(struct mean_and_variance s);
 u32 mean_and_variance_get_stddev(struct mean_and_variance s);
-
-void mean_and_variance_weighted_update(struct mean_and_variance_weighted *s,
-		s64 v, bool initted, u8 weight);
-
-s64 mean_and_variance_weighted_get_mean(struct mean_and_variance_weighted s,
-		u8 weight);
-u64 mean_and_variance_weighted_get_variance(struct mean_and_variance_weighted s,
-		u8 weight);
-u32 mean_and_variance_weighted_get_stddev(struct mean_and_variance_weighted s,
-		u8 weight);
 
 #endif // MEAN_AND_VAIRANCE_H_

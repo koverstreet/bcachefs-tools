@@ -7,6 +7,7 @@
 
 #include "data/extents.h"
 
+#include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
 
 #include "vfs/io.h"
@@ -185,16 +186,32 @@ static void __bch2_folio_set(struct folio *folio,
  * Initialize bch_folio state (allocated/unallocated, nr_replicas) from the
  * extents btree:
  */
-int bch2_folio_set(struct bch_fs *c, subvol_inum inum,
+int bch2_folio_set(struct bch_fs *c,
+		   struct bch_inode_info *inode,
 		   struct folio **fs, unsigned nr_folios)
 {
 	u64 offset = folio_sector(fs[0]);
 	bool need_set = false;
 
 	for (unsigned folio_idx = 0; folio_idx < nr_folios; folio_idx++) {
-		struct bch_folio *s = bch2_folio_create(fs[folio_idx], GFP_KERNEL);
+		struct folio *f = fs[folio_idx];
+		struct bch_folio *s = bch2_folio_create(f, GFP_KERNEL);
 		if (!s)
 			return -ENOMEM;
+
+		if (!s->uptodate &&
+		    folio_pos(f)	>= inode->ei_reserved_start &&
+		    folio_end_pos(f)	<= inode->ei_reserved_end) {
+			guard(spinlock)(&inode->ei_reserved_lock);
+
+			if (folio_pos(f)	>= inode->ei_reserved_start &&
+			    folio_end_pos(f)	<= inode->ei_reserved_end) {
+				__bch2_folio_set(f, 0, folio_sectors(f),
+						 inode->ei_reserved_replicas,
+						 inode->ei_reserved_state);
+				inode->ei_reserved_start = folio_end_pos(f);
+			}
+		}
 
 		need_set |= !s->uptodate;
 	}
@@ -203,12 +220,17 @@ int bch2_folio_set(struct bch_fs *c, subvol_inum inum,
 		return 0;
 
 	unsigned folio_idx = 0;
+	unsigned nr_after = 0;
+	u64 res_start	= folio_end_pos(fs[nr_folios - 1]);
+	u64 res_end	= 0;
+	u8 res_replicas	= 0;
+	u8 res_state	= 0;
 
-	return bch2_trans_run(c,
+	int ret = bch2_trans_run(c,
 		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
-				   POS(inum.inum, offset),
-				   POS(inum.inum, U64_MAX),
-				   inum.subvol, BTREE_ITER_slots, k, ({
+				   POS(inode->ei_inum.inum, offset),
+				   POS(inode->ei_inum.inum, U64_MAX),
+				   inode->ei_inum.subvol, BTREE_ITER_slots, k, ({
 			unsigned nr_ptrs = bch2_bkey_nr_ptrs_fully_allocated(c, k);
 			unsigned state = bkey_to_sector_state(c, k);
 
@@ -232,10 +254,32 @@ int bch2_folio_set(struct bch_fs *c, subvol_inum inum,
 				folio_idx++;
 			}
 
-			if (folio_idx == nr_folios)
-				break;
+			if (folio_idx == nr_folios) {
+				if (!nr_after) {
+					res_replicas	= nr_ptrs;
+					res_state	= state;
+				} else if (res_replicas	!= nr_ptrs ||
+					   res_state	!= state ||
+					   nr_after > 16) {
+					break;
+				}
+
+				res_end = k.k->p.offset << 9;
+				nr_after++;
+			}
 			0;
 		})));
+
+	/* Build up in locals, publish once: see ei_reserved_start */
+	if (!ret && nr_after) {
+		guard(spinlock)(&inode->ei_reserved_lock);
+		inode->ei_reserved_start	= res_start;
+		inode->ei_reserved_end		= res_end;
+		inode->ei_reserved_replicas	= res_replicas;
+		inode->ei_reserved_state	= res_state;
+	}
+
+	return ret;
 }
 
 void bch2_bio_page_state_set(const struct bch_fs *c, struct bio *bio, struct bkey_s_c k)
@@ -689,6 +733,7 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 
 	bch2_folio_reservation_init(c, inode, &res);
 
+	percpu_down_read(&c->snapshots.create_lock);
 	sb_start_pagefault(inode->v.i_sb);
 	file_update_time(file);
 
@@ -711,7 +756,7 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 
 	len = min_t(unsigned, len, isize - file_offset);
 
-	if (bch2_folio_set(c, inode_inum(inode), &folio, 1) ?:
+	if (bch2_folio_set(c, inode, &folio, 1) ?:
 	    bch2_folio_reservation_get(c, inode, folio, &res, offset, len)) {
 		folio_unlock(folio);
 		ret = VM_FAULT_SIGBUS;
@@ -730,6 +775,7 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 	ret = VM_FAULT_LOCKED;
 out:
 	sb_end_pagefault(inode->v.i_sb);
+	percpu_up_read(&c->snapshots.create_lock);
 
 	return ret;
 }

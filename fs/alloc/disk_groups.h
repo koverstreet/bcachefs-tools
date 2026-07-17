@@ -121,10 +121,17 @@ void bch2_opt_target_to_text(struct printbuf *, struct bch_fs *, struct bch_sb *
 	.to_text	= bch2_opt_target_to_text,	\
 }
 
+int bch2_opt_disk_label_parse(struct bch_fs *, const char *, u64 *, struct printbuf *);
+void bch2_opt_disk_label_to_text(struct printbuf *, struct bch_fs *, struct bch_sb *, u64);
+
+#define bch2_opt_disk_label (struct bch_opt_fn) {	\
+	.parse		= bch2_opt_disk_label_parse,	\
+	.to_text	= bch2_opt_disk_label_to_text,	\
+}
+
 int bch2_sb_disk_groups_to_cpu(struct bch_fs *);
 
 int __bch2_dev_group_set(struct bch_fs *, struct bch_dev *, const char *);
-int bch2_dev_group_set(struct bch_fs *, struct bch_dev *, const char *);
 
 const char *bch2_sb_validate_disk_groups(struct bch_sb *,
 					 struct bch_sb_field *);

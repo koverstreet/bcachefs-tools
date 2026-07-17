@@ -32,37 +32,8 @@ static inline struct bpos u64_to_bucket(u64 bucket)
 
 static inline u8 alloc_gc_gen(struct bch_alloc_v4 a)
 {
-	return a.gen - a.oldest_gen;
+	return a.generation - a.oldest_gen;
 }
-
-/* Data type computation */
-
-/*
- * Normalize data_type to the type of data stored in the bucket: cached and
- * stripe data are both user data from the bucket's perspective.
- */
-static inline enum bch_data_type bucket_data_type(enum bch_data_type data_type)
-{
-	switch (data_type) {
-	case BCH_DATA_cached:
-	case BCH_DATA_stripe:
-		return BCH_DATA_user;
-	default:
-		return data_type;
-	}
-}
-
-static inline bool bucket_data_type_mismatch(enum bch_data_type bucket,
-					     enum bch_data_type ptr)
-{
-	return !data_type_is_empty(bucket) &&
-		bucket_data_type(bucket) != bucket_data_type(ptr);
-}
-
-#define DATA_TYPES_MOVABLE		\
-	((1U << BCH_DATA_btree)|	\
-	 (1U << BCH_DATA_user)|		\
-	 (1U << BCH_DATA_stripe))
 
 static inline bool data_type_movable(enum bch_data_type type)
 {
@@ -124,6 +95,8 @@ static inline s64 bch2_bucket_sectors_unstriped(struct bch_alloc_v4 a)
 static inline enum bch_data_type alloc_data_type(struct bch_alloc_v4 a,
 						 enum bch_data_type data_type)
 {
+	if (a.data_type == BCH_DATA_multiple)
+		return BCH_DATA_multiple;
 	if (a.stripe_refcount)
 		return data_type == BCH_DATA_parity ? data_type : BCH_DATA_stripe;
 	if (bch2_bucket_sectors_dirty(a))
@@ -170,6 +143,8 @@ static inline u64 alloc_lru_idx_fragmentation(struct bch_alloc_v4 a,
 
 	return div_u64(d * (1ULL << 31), ca->mi.bucket_size);
 }
+
+#define BCH_FREESPACE_GENBITS_NR	(((unsigned) U8_MAX >> 4) + 1)
 
 static inline u64 alloc_freespace_genbits(struct bch_alloc_v4 a)
 {
@@ -272,13 +247,13 @@ struct bkey_i_alloc_v4 *bch2_alloc_to_v4_mut(struct btree_trans *, struct bkey_s
 int bch2_bucket_io_time_reset(struct btree_trans *, unsigned, size_t, int);
 
 int bch2_alloc_v1_validate(struct bch_fs *, struct bkey_s_c,
-			   struct bkey_validate_context);
+			   const struct bkey_validate_context *);
 int bch2_alloc_v2_validate(struct bch_fs *, struct bkey_s_c,
-			   struct bkey_validate_context);
+			   const struct bkey_validate_context *);
 int bch2_alloc_v3_validate(struct bch_fs *, struct bkey_s_c,
-			   struct bkey_validate_context);
+			   const struct bkey_validate_context *);
 int bch2_alloc_v4_validate(struct bch_fs *, struct bkey_s_c,
-			   struct bkey_validate_context);
+			   const struct bkey_validate_context *);
 void bch2_alloc_v4_swab(const struct bch_fs *, struct bkey_s);
 void bch2_alloc_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 void bch2_alloc_v4_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
@@ -313,7 +288,7 @@ void bch2_alloc_v4_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 })
 
 int bch2_bucket_gens_validate(struct bch_fs *, struct bkey_s_c,
-			      struct bkey_validate_context);
+			      const struct bkey_validate_context *);
 void bch2_bucket_gens_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 #define bch2_bkey_ops_bucket_gens ((struct bkey_ops) {	\

@@ -2,6 +2,9 @@
 #ifndef _BCACHEFS_SNAPSHOT_TYPES_H
 #define _BCACHEFS_SNAPSHOT_TYPES_H
 
+#include <linux/percpu-rwsem.h>
+#include <linux/rwsem.h>
+
 #include "btree/bbpos_types.h"
 #include "init/progress.h"
 #include "util/darray.h"
@@ -74,10 +77,27 @@ struct snapshot_delete {
 	struct progress_indicator	progress;
 };
 
+/*
+ * Snapshot creation must prevent userspace from dirtying the page cache while
+ * the snapshot is being taken: sync_inodes_sb flushes existing dirty pages
+ * before the snapshot transaction, but if new pages get dirtied in the window
+ * between sync_inodes_sb returning and the snapshot transaction running, those
+ * dirty pages can be partially flushed (e.g. data page flushed but redo log
+ * page not yet) such that the snapshot captures an inconsistent state — the
+ * shape that bit MySQL/InnoDB.
+ *
+ * Page-cache dirtying paths (buffered write_iter and mmap mkdirty) take this
+ * lock as readers; snapshot creation takes it as a writer. O_DIRECT doesn't
+ * need it — direct writes commit as atomic btree transactions, no page cache
+ * staleness window. Buffered writeback is fine too — each writeback insert
+ * is atomic w.r.t. the snapshot transaction.
+ */
 struct bch_fs_snapshots {
 	struct snapshot_table __rcu		*table;
 	struct mutex				table_lock;
-	struct rw_semaphore			create_lock;
+	/* a topology repair invalidated descendants' is_ancestor bitmaps: */
+	bool					need_table_rebuild;
+	struct percpu_rw_semaphore		create_lock;
 	struct snapshot_delete			delete;
 	struct work_struct			wait_for_pagecache_and_delete_work;
 	snapshot_id_list			unlinked;

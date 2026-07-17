@@ -3,6 +3,7 @@
 #define _BCACHEFS_BKEY_H
 
 #include <linux/bug.h>
+#include <linux/static_key.h>
 #include "bcachefs_format.h"
 #include "btree/bkey_types.h"
 #include "btree/types.h"
@@ -35,6 +36,29 @@ enum bkey_lr_packed {
 #define bkey_lr_packed(_l, _r)						\
 	((_l)->format + ((_r)->format << 1))
 
+/*
+ * Wrapper for stack-allocated struct bkey_packed.
+ *
+ * The byte-aligned fast-path unpackers (__bch2_bkey_unpack_key_b,
+ * __bkey_unpack_pos_b) issue an 8-byte unaligned load at @bytes +
+ * uf->byte_offset, where byte_offset is signed and can be as low as -7
+ * (and __bch2_bkey_unpack_key_b's header trick reads @bytes - 1). This
+ * is safe for bkeys inside a bset (preceded by the bset header or by
+ * another bkey), but reads into the stack redzone for a bare stack-local
+ * struct bkey_packed. Wrap stack copies in this to provide the leading
+ * padding.
+ */
+struct bkey_packed_padded {
+	u8			_pad[8];
+	struct bkey_packed	k;
+};
+
+/* Same trick for stack-local struct bkey_i (when used as pack target). */
+struct bkey_i_padded {
+	u8			_pad[8];
+	struct bkey_i		k;
+};
+
 static inline void bkey_p_copy(struct bkey_packed *dst, const struct bkey_packed *src)
 {
 	memcpy_u64s_small(dst, src, src->u64s);
@@ -42,17 +66,19 @@ static inline void bkey_p_copy(struct bkey_packed *dst, const struct bkey_packed
 
 static inline void bkey_copy(struct bkey_i *dst, const struct bkey_i *src)
 {
-	memcpy_u64s_small(dst, src, src->k.u64s);
+	memcpy_u64s(dst, src, src->k.u64s);
 }
 
 static inline void bkey_val_copy(struct bkey_i *dst, const struct bkey_i *src)
 {
-	memcpy_u64s_small(&dst->v, &src->v, bkey_val_u64s(&src->k));
+	memcpy_u64s(&dst->v, &src->v, bkey_val_u64s(&src->k));
 	dst->k.type	= src->k.type;
 	dst->k.u64s	= src->k.u64s;
 }
 
 struct btree;
+
+extern struct static_key_false bch2_debug_check_bkey_unpack;
 
 __pure
 unsigned bch2_bkey_greatest_differing_bit(const struct btree *,
@@ -210,18 +236,18 @@ static __always_inline bool bversion_eq(struct bversion l, struct bversion r)
 		l.lo == r.lo;
 }
 
-static inline bool bkey_fields_eq(const struct bkey l, const struct bkey r)
+static inline bool bkey_fields_eq(const struct bkey *l, const struct bkey *r)
 {
-	return (l.u64s == r.u64s &&
-		l.type == r.type &&
-		bpos_eq(l.p, r.p) &&
-		bversion_eq(l.bversion, r.bversion) &&
-		l.size == r.size);
+	return (l->u64s == r->u64s &&
+		l->type == r->type &&
+		bpos_eq(l->p, r->p) &&
+		bversion_eq(l->bversion, r->bversion) &&
+		l->size == r->size);
 }
 
 static inline bool bkey_and_val_eq(struct bkey_s_c l, struct bkey_s_c r)
 {
-	return bkey_fields_eq(*l.k, *r.k) &&
+	return bkey_fields_eq(l.k, r.k) &&
 		!memcmp(l.v, r.v, bkey_val_bytes(l.k));
 }
 
@@ -382,15 +408,17 @@ bool bch2_bkey_transform(const struct bkey_format *,
 			 const struct bkey_format *,
 			 const struct bkey_packed *);
 
-struct bkey __bch2_bkey_unpack_key(const struct bkey_format *,
-				   const struct bkey_packed *);
-struct bkey __bch2_bkey_unpack_key_b(const struct btree *,
-				     const struct bkey_packed *);
+void __bch2_bkey_unpack_key(const struct bkey_format *, struct bkey *,
+			    const struct bkey_packed *);
+void __bch2_bkey_unpack_key_b(const struct btree *, struct bkey *,
+			      const struct bkey_packed *);
 void bch2_compute_bkey_unpack_consts(struct btree *);
 
 #ifndef HAVE_BCACHEFS_COMPILED_UNPACK
 struct bpos __bkey_unpack_pos(const struct bkey_format *,
 			      const struct bkey_packed *);
+struct bpos __bkey_unpack_pos_b(const struct btree *,
+				const struct bkey_packed *);
 #endif
 
 bool bch2_bkey_pack_key(struct bkey_packed *, const struct bkey *,
@@ -402,19 +430,13 @@ enum bkey_pack_pos_ret {
 	BKEY_PACK_POS_FAIL,
 };
 
-enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *, struct bpos,
+enum bkey_pack_pos_ret bch2_bkey_pack_pos_lossy(struct bkey_packed *, const struct bpos *,
 					   const struct btree *);
 
-static inline bool bkey_pack_pos(struct bkey_packed *out, struct bpos in,
-				 const struct btree *b)
-{
-	return bch2_bkey_pack_pos_lossy(out, in, b) == BKEY_PACK_POS_EXACT;
-}
+bool bch2_bkey_pack_pos(struct bkey_packed *, struct bpos, const struct btree *);
 
 void bch2_bkey_unpack(const struct btree *, struct bkey_i *,
 		 const struct bkey_packed *);
-bool bch2_bkey_pack(struct bkey_packed *, const struct bkey_i *,
-	       const struct bkey_format *);
 
 typedef void (*compiled_unpack_fn)(struct bkey *, const struct bkey_packed *);
 
@@ -427,17 +449,21 @@ __bkey_unpack_key_format_checked(const struct btree *b,
 		compiled_unpack_fn unpack_fn = b->aux_data;
 		unpack_fn(dst, src);
 
-		if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
-			struct bkey dst2 = __bch2_bkey_unpack_key(&b->format, src);
+		if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+		    static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+			struct bkey dst2;
 
+			__bch2_bkey_unpack_key(&b->format, &dst2, src);
 			BUG_ON(memcmp(dst, &dst2, sizeof(*dst)));
 		}
 	} else {
-		*dst = __bch2_bkey_unpack_key_b(b, src);
+		__bch2_bkey_unpack_key_b(b, dst, src);
 
-		if (static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
-			struct bkey dst2 = __bch2_bkey_unpack_key(&b->format, src);
+		if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+		    static_branch_unlikely(&bch2_debug_check_bkey_unpack)) {
+			struct bkey dst2;
 
+			__bch2_bkey_unpack_key(&b->format, &dst2, src);
 			BUG_ON(memcmp(dst, &dst2, sizeof(*dst)));
 		}
 	}
@@ -481,7 +507,7 @@ bkey_unpack_pos_format_checked(const struct btree *b,
 #ifdef HAVE_BCACHEFS_COMPILED_UNPACK
 	return bkey_unpack_key_format_checked(b, src).p;
 #else
-	return __bkey_unpack_pos(&b->format, src);
+	return __bkey_unpack_pos_b(b, src);
 #endif
 }
 
@@ -538,7 +564,13 @@ static inline void bkey_reassemble(struct bkey_i *dst,
 				   struct bkey_s_c src)
 {
 	dst->k = *src.k;
-	memcpy_u64s_small(&dst->v, src.v, bkey_val_u64s(src.k));
+	/*
+	 * @src may have been unpacked by a path that doesn't write every
+	 * byte of the unpacked key - don't leak uninitialized memory when
+	 * the result is copied to userspace (BCH_IOCTL_QUERY_BTREE_KEYS):
+	 */
+	memset(dst->k.pad, 0, sizeof(dst->k.pad));
+	memcpy_u64s(&dst->v, src.v, bkey_val_u64s(src.k));
 }
 
 /* byte order helpers */

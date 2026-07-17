@@ -62,6 +62,27 @@ pacman -S base-devel libaio keyutils libsodium liburcu zstd valgrind llvm
 
 Then, just `make && make install`
 
+Building a kernel with bcachefs support
+---------------------------------------
+
+bcachefs is currently maintained out of mainline, so building a kernel with
+bcachefs support means adding it to your kernel source tree. The
+`install-to-kernel.sh` script does this — it copies the bcachefs source to
+`<kernel>/fs/bcachefs/` and wires it into the kernel's `fs/Kconfig` and
+`fs/Makefile`:
+
+```shell
+scripts/install-to-kernel.sh /path/to/linux
+```
+
+Then enable `CONFIG_BCACHEFS_FS` (under File systems in `make menuconfig`) and
+build your kernel as usual. Re-running the script refreshes the bcachefs source
+from this checkout.
+
+If you'd rather not build a kernel at all, install the `bcachefs-kernel-dkms`
+package: DKMS builds (or downloads a prebuilt, signed) module for your running
+kernel automatically.
+
 Nixos setup with flakes
 -----------------------
 

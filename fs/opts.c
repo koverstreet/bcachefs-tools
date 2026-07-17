@@ -184,7 +184,7 @@ static int bch2_opt_fix_errors_parse(struct bch_fs *c, const char *val, u64 *res
 	return 0;
 }
 
-static void bch2_opt_fix_errors_to_text(struct printbuf *out,
+static __cold void bch2_opt_fix_errors_to_text(struct printbuf *out,
 					struct bch_fs *c,
 					struct bch_sb *sb,
 					u64 v)
@@ -280,17 +280,20 @@ __maybe_unused static const ext_opt_set_fn	SET_BCH2_NO_EXT_OPT = NULL;
 		__builtin_types_compatible_p(typeof(_p), typeof(_type)), _p, NULL)
 
 const struct bch_option bch2_opt_table[] = {
-#define OPT_BOOL()		.type = BCH_OPT_BOOL, .min = 0, .max = 2
+/* .min and .max are both inclusive bounds; a value is valid iff min <= v <= max */
+#define OPT_BOOL()		.type = BCH_OPT_BOOL, .min = 0, .max = 1
 #define OPT_UINT(_min, _max)	.type = BCH_OPT_UINT,			\
 				.min = _min, .max = _max
 #define OPT_STR(_choices)	.type = BCH_OPT_STR,			\
-				.min = 0, .max = ARRAY_SIZE(_choices) - 1, \
+				.min = 0, .max = ARRAY_SIZE(_choices) - 2, \
 				.choices = _choices
 #define OPT_STR_NOLIMIT(_choices)	.type = BCH_OPT_STR,		\
 				.min = 0, .max = U64_MAX,		\
 				.choices = _choices
-#define OPT_BITFIELD(_choices)	.type = BCH_OPT_BITFIELD,		\
-				.choices = _choices
+#define OPT_BITFIELD(_choices)	OPT_BITFIELD_MASK(_choices, U64_MAX)
+#define OPT_BITFIELD_MASK(_choices, _choices_allowed_mask)	.type = BCH_OPT_BITFIELD,\
+				.choices = _choices,			\
+				.choices_allowed_mask = _choices_allowed_mask
 #define OPT_FN(_fn)		.type = BCH_OPT_FN, .fn	= _fn
 
 #define x(_name, _bits, _flags, _type, _sb_opt, _default, _hint, _help)	\
@@ -380,7 +383,7 @@ int bch2_opt_validate(const struct bch_option *opt, u64 v, struct printbuf *err)
 		return -BCH_ERR_ERANGE_option_too_small;
 	}
 
-	if (opt->max && v >= opt->max) {
+	if (opt->max && v > opt->max) {
 		if (err)
 			prt_printf(err, "%s: too big (max %llu)",
 			       opt->attr.name, opt->max);
@@ -472,7 +475,7 @@ int bch2_opt_parse(struct bch_fs *c,
 		*res = ret;
 		break;
 	case BCH_OPT_BITFIELD: {
-		s64 v = bch2_read_flag_list(val, opt->choices);
+		s64 v = bch2_read_flag_list_mask(val, opt->choices, opt->choices_allowed_mask);
 		if (v < 0)
 			return v;
 		*res = v;
@@ -495,7 +498,7 @@ int bch2_opt_parse(struct bch_fs *c,
 	return bch2_opt_validate(opt, *res, err);
 }
 
-void bch2_opt_to_text(struct printbuf *out,
+__cold void bch2_opt_to_text(struct printbuf *out,
 		      struct bch_fs *c, struct bch_sb *sb,
 		      const struct bch_option *opt, u64 v,
 		      unsigned flags)
@@ -520,7 +523,7 @@ void bch2_opt_to_text(struct printbuf *out,
 			prt_printf(out, "%lli", v);
 		break;
 	case BCH_OPT_STR:
-		if (v < opt->min || v >= opt->max)
+		if (v < opt->min || v > opt->max)
 			prt_printf(out, "(invalid option %lli)", v);
 		else if (flags & OPT_SHOW_FULL_LIST)
 			prt_string_option(out, opt->choices, v);
@@ -538,7 +541,7 @@ void bch2_opt_to_text(struct printbuf *out,
 	}
 }
 
-void bch2_opts_to_text(struct printbuf *out,
+__cold void bch2_opts_to_text(struct printbuf *out,
 		       struct bch_opts opts,
 		       struct bch_fs *c, struct bch_sb *sb,
 		       struct bch_opts_mask *mask,
@@ -623,6 +626,20 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 		 */
 		try(reconcile_scan_bracket(c,
 			(struct reconcile_scan) { .type = RECONCILE_SCAN_stripes }, post, scope));
+		break;
+	case Opt_label:
+		/*
+		 * Refresh the cpu label tree before the scan wakes: reconcile
+		 * reads the group devs masks. Errors here (ENOMEM) just leave
+		 * the cpu copy stale until the next superblock swap:
+		 */
+		if (post) {
+			scoped_guard(mutex, &c->sb_lock)
+				bch_err_fn(c, bch2_sb_disk_groups_to_cpu(c));
+		}
+
+		try(reconcile_scan_bracket(c,
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_pending }, post, scope));
 		break;
 	default:
 		break;
@@ -730,6 +747,15 @@ void bch2_opt_hook_post_set(struct bch_fs *c, struct bch_dev *ca, u64 inum,
 	case Opt_read_only:
 		bch2_reconcile_wakeup(c);
 		break;
+	case Opt_btree_cache_shrinker_seeks: {
+		struct bch_fs_btree_cache *bc = &c->btree.cache;
+
+		if (bc->live[0].shrink)
+			bc->live[0].shrink->seeks = v;
+		if (bc->live[1].shrink)
+			bc->live[1].shrink->seeks = v * 4;
+		break;
+	}
 	default:
 		break;
 	}
@@ -991,7 +1017,7 @@ bool bch2_opt_is_inode_opt(enum bch_opt_id id)
 	return false;
 }
 
-void bch2_inode_opts_to_text(struct printbuf *out, struct bch_fs *c, struct bch_inode_opts opts)
+__cold void bch2_inode_opts_to_text(struct printbuf *out, struct bch_fs *c, struct bch_inode_opts opts)
 {
 	bool first = true;
 

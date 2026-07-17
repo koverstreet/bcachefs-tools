@@ -141,7 +141,6 @@ struct six_lock_waiter {
 	struct task_struct	*task;
 	enum six_lock_type	lock_want;
 	bool			lock_acquired;
-	u64			start_time;
 	/* Index in wait_fifo->data[], set on insert, used for O(1) self-remove. */
 	u16			slot_idx;
 };
@@ -189,27 +188,19 @@ struct six_lock_wait_fifo {
 struct six_lock {
 	atomic_t		state;
 	u32			seq;
+	unsigned __percpu	*readers;
 	unsigned		intent_lock_recurse;
 	unsigned		write_lock_recurse;
 	struct task_struct	*owner;
 #ifdef CONFIG_BCACHEFS_DEBUG
 	bch_stacktrace		owner_stack;
 #endif
-	unsigned __percpu	*readers;
 	raw_spinlock_t		wait_lock;
 
 	struct six_lock_wait_fifo __rcu *wait_fifo;
 
-	/*
-	 * Inline wait list; layout-compatible with struct six_lock_wait_fifo
-	 * so (struct six_lock_wait_fifo *)&inline_fifo is a valid view.
-	 */
-	struct {
-		u16			size;
-		u16			nr;
-		u16			next_free_hint;
-		struct six_lock_wait_slot data[SIX_LOCK_INLINE_WAITERS];
-	} inline_fifo;
+	struct six_lock_wait_fifo	inline_fifo;
+	struct six_lock_wait_slot	inline_fifo_data[SIX_LOCK_INLINE_WAITERS];
 #ifdef CONFIG_DEBUG_LOCK_ALLOC
 	struct lockdep_map	dep_map;
 #endif
@@ -273,6 +264,19 @@ int six_lock_ip_waiter(struct six_lock *lock, enum six_lock_type type,
 		       struct six_lock_waiter *wait,
 		       six_lock_should_sleep_fn should_sleep_fn,
 		       unsigned long ip);
+
+/*
+ * As six_lock_ip_waiter(), but skip the initial trylock and go straight
+ * to the waitlist slowpath. Use this when the caller has already done a
+ * trylock and observed contention (e.g. btree_node_lock dispatching
+ * to btree_node_lock_nopath after its own fast-path trylock failed) —
+ * avoids burning a second locked CAS on a lock state we already know
+ * is contended.
+ */
+int six_lock_contended(struct six_lock *lock, enum six_lock_type type,
+				 struct six_lock_waiter *wait,
+				 six_lock_should_sleep_fn should_sleep_fn,
+				 unsigned long ip);
 
 /**
  * six_lock_waiter - take a lock, with full waitlist interface

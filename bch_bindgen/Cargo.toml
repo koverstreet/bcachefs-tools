@@ -1,3 +1,7 @@
+# Userspace-only bcachefs bindings: the non-fs/ C (tools-util, crypto, raid,
+# keyutils, libbcachefs userspace) plus the wrappers that still depend on std
+# and so can't live in the no_std bcachefs-kernel crate yet. This crate is meant
+# to shrink over time as that code is ported.
 [package]
 name = "bch_bindgen"
 version = "0.1.0"
@@ -7,9 +11,9 @@ rust-version = "1.85.0"
 
 [lib]
 crate-type = ["lib"]
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
+bcachefs-kernel = { path = "../fs" }
 anyhow = "1.0"
 uuid = "1.2.2"
 bitfield = "0.14.0"
@@ -21,3 +25,4 @@ paste = "1.0.11"
 [build-dependencies]
 pkg-config = "0.3"
 bindgen = "0.72.1"
+cc = "1.0"

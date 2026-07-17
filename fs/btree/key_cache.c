@@ -34,24 +34,6 @@ static inline bool btree_uses_pcpu_readers(enum btree_id id)
 
 static struct kmem_cache *bch2_key_cache;
 
-static int bch2_btree_key_cache_cmp_fn(struct rhashtable_compare_arg *arg,
-				       const void *obj)
-{
-	const struct bkey_cached *ck = obj;
-	const struct bkey_cached_key *key = arg->key;
-
-	return ck->key.btree_id != key->btree_id ||
-		!bpos_eq(ck->key.pos, key->pos);
-}
-
-static const struct rhashtable_params bch2_btree_key_cache_params = {
-	.head_offset		= offsetof(struct bkey_cached, hash),
-	.key_offset		= offsetof(struct bkey_cached, key),
-	.key_len		= sizeof(struct bkey_cached_key),
-	.obj_cmpfn		= bch2_btree_key_cache_cmp_fn,
-	.automatic_shrinking	= true,
-};
-
 static inline void btree_path_cached_set(struct btree_trans *trans, struct btree_path *path,
 					 struct bkey_cached *ck,
 					 enum btree_node_locked_type lock_held)
@@ -59,19 +41,6 @@ static inline void btree_path_cached_set(struct btree_trans *trans, struct btree
 	path->l[0].lock_seq	= six_lock_seq(&ck->c.lock);
 	path->l[0].b		= (void *) ck;
 	mark_btree_node_locked(trans, path, 0, lock_held);
-}
-
-__flatten
-inline struct bkey_cached *
-bch2_btree_key_cache_find(struct bch_fs *c, enum btree_id btree_id, struct bpos pos)
-{
-	struct bkey_cached_key key = {
-		.btree_id	= btree_id,
-		.pos		= pos,
-	};
-
-	return rhashtable_lookup_fast(&c->btree.key_cache.table, &key,
-				      bch2_btree_key_cache_params);
 }
 
 static bool bkey_cached_lock_for_evict(struct bkey_cached *ck)
@@ -326,7 +295,6 @@ static int btree_key_cache_create(struct btree_trans *trans,
 	if (lock_want == SIX_LOCK_read)
 		six_lock_downgrade(&ck->c.lock);
 	btree_path_cached_set(trans, ck_path, ck, (enum btree_node_locked_type) lock_want);
-	ck_path->uptodate = BTREE_ITER_UPTODATE;
 	return 0;
 err:
 	bkey_cached_free(trans, bc, ck);
@@ -404,9 +372,11 @@ retry:
 	if (!ck)
 		return -ENOENT;
 
+	EBUG_ON(!ck->c.cached);
+
 	enum six_lock_type lock_want = __btree_lock_want(path, 0);
 
-	try(btree_node_lock(trans, path, (void *) ck, 0, lock_want, _THIS_IP_));
+	try(btree_node_lock(trans, path, (void *) ck, 0, lock_want));
 
 	if (ck->key.btree_id != path->btree_id ||
 	    !bpos_eq(ck->key.pos, path->pos)) {
@@ -418,7 +388,6 @@ retry:
 		set_bit(BKEY_CACHED_ACCESSED, &ck->flags);
 
 	btree_path_cached_set(trans, path, ck, (enum btree_node_locked_type) lock_want);
-	path->uptodate = BTREE_ITER_UPTODATE;
 	return 0;
 }
 
@@ -438,15 +407,12 @@ int bch2_btree_path_traverse_cached(struct btree_trans *trans,
 	struct btree_path *path = trans->paths + path_idx;
 
 	if (unlikely(ret)) {
-		path->uptodate = BTREE_ITER_NEED_TRAVERSE;
 		if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
 			btree_node_unlock(trans, path, 0);
 			path->l[0].b = ERR_PTR(ret);
 		}
-	} else if (!(flags & BTREE_ITER_cached_nofill)) {
-		BUG_ON(path->uptodate);
+	} else if (!(flags & BTREE_ITER_cached_nofill))
 		BUG_ON(!path->nodes_locked);
-	}
 
 	return ret;
 }
@@ -711,8 +677,7 @@ rcu_done:;
 	return any_done;
 }
 
-bool bch2_btree_insert_key_cached(struct btree_trans *trans,
-				  unsigned flags,
+void bch2_btree_insert_key_cached(struct btree_trans *trans,
 				  struct btree_insert_entry *insert_entry)
 {
 	struct bch_fs *c = trans->c;
@@ -755,7 +720,6 @@ bool bch2_btree_insert_key_cached(struct btree_trans *trans,
 
 	if (kick_reclaim)
 		journal_reclaim_kick(&c->journal);
-	return true;
 }
 
 void bch2_btree_key_cache_drop(struct btree_trans *trans,
@@ -794,7 +758,6 @@ void bch2_btree_key_cache_drop(struct btree_trans *trans,
 			path2->should_be_locked = false;
 			__bch2_btree_path_unlock(trans, path2);
 			path2->l[0].b = ERR_PTR(-BCH_ERR_no_btree_node_drop);
-			btree_path_set_dirty(trans, path2, BTREE_ITER_NEED_TRAVERSE);
 		}
 
 	bch2_trans_verify_locks(trans);
@@ -954,7 +917,7 @@ rehash_wait:
 #ifdef HAVE_SHRINKER_TO_TEXT
 #include <linux/seq_buf.h>
 
-static void bch2_btree_key_cache_shrinker_to_text(struct seq_buf *s, struct shrinker *shrink)
+static __cold void bch2_btree_key_cache_shrinker_to_text(struct seq_buf *s, struct shrinker *shrink)
 {
 	struct bch_fs *c = shrink->private_data;
 	struct bch_fs_btree_key_cache *bc = &c->btree.key_cache;
@@ -995,13 +958,13 @@ int bch2_fs_btree_key_cache_init(struct bch_fs_btree_key_cache *bc)
 	shrink->to_text		= bch2_btree_key_cache_shrinker_to_text;
 #endif
 	shrink->batch		= 1 << 14;
-	shrink->seeks		= 0;
+	shrink->seeks		= 1;
 	shrink->private_data	= c;
 	shrinker_register(shrink);
 	return 0;
 }
 
-void bch2_btree_key_cache_to_text(struct printbuf *out, struct bch_fs_btree_key_cache *bc)
+__cold void bch2_btree_key_cache_to_text(struct printbuf *out, struct bch_fs_btree_key_cache *bc)
 {
 	printbuf_tabstop_push(out, 24);
 	printbuf_tabstop_push(out, 12);

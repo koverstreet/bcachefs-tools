@@ -194,7 +194,7 @@ STRTO_H(strtoll, long long)
 STRTO_H(strtoull, unsigned long long)
 STRTO_H(strtou64, u64)
 
-u64 bch2_read_flag_list(const char *opt, const char * const list[])
+u64 bch2_read_flag_list_mask(const char *opt, const char * const list[], u64 choices_allowed_mask)
 {
 	u64 ret = 0;
 
@@ -203,15 +203,35 @@ u64 bch2_read_flag_list(const char *opt, const char * const list[])
 		return -ENOMEM;
 
 	char *p, *s = strim(d);
+
+	bool invert = *s == '-';
+	if (invert)
+		s++;
+
 	while ((p = strsep(&s, ",;"))) {
 		int flag = match_string(list, -1, p);
 		if (flag < 0)
+			return -1;
+		if (!(choices_allowed_mask & BIT_ULL(flag)))
 			return -1;
 
 		ret |= BIT_ULL(flag);
 	}
 
+	if (invert) {
+		u64 choices_mask = 0;
+		for (unsigned i = 0; list[i]; i++)
+			choices_mask |= BIT_ULL(i);
+
+		ret = ~ret & choices_mask & choices_allowed_mask;
+	}
+
 	return ret;
+}
+
+u64 bch2_read_flag_list(const char *opt, const char * const list[])
+{
+	return bch2_read_flag_list_mask(opt, list, U64_MAX);
 }
 
 bool bch2_is_zero(const void *_p, size_t n)
@@ -364,7 +384,7 @@ static inline void pr_name_and_units(struct printbuf *out, const char *name, u64
 
 #define TABSTOP_SIZE 12
 
-void bch2_time_stats_to_text(struct printbuf *out, struct bch2_time_stats *stats)
+__cold void bch2_time_stats_to_text(struct printbuf *out, struct bch2_time_stats *stats)
 {
 	struct quantiles *quantiles = time_stats_to_quantiles(stats);
 	s64 f_mean = 0, d_mean = 0;
@@ -417,13 +437,13 @@ void bch2_time_stats_to_text(struct printbuf *out, struct bch2_time_stats *stats
 		prt_printf(out, "mean:\t");
 		bch2_pr_time_units_aligned(out, d_mean);
 		prt_tab(out);
-		bch2_pr_time_units_aligned(out, mean_and_variance_weighted_get_mean(stats->duration_stats_weighted, TIME_STATS_MV_WEIGHT));
+		bch2_pr_time_units_aligned(out, mean_and_variance_get_median(stats->duration_stats_weighted));
 		prt_newline(out);
 
 		prt_printf(out, "stddev:\t");
 		bch2_pr_time_units_aligned(out, d_stddev);
 		prt_tab(out);
-		bch2_pr_time_units_aligned(out, mean_and_variance_weighted_get_stddev(stats->duration_stats_weighted, TIME_STATS_MV_WEIGHT));
+		bch2_pr_time_units_aligned(out, mean_and_variance_get_stddev(stats->duration_stats_weighted));
 		prt_newline(out);
 	}
 
@@ -435,13 +455,13 @@ void bch2_time_stats_to_text(struct printbuf *out, struct bch2_time_stats *stats
 		prt_printf(out, "mean:\t");
 		bch2_pr_time_units_aligned(out, f_mean);
 		prt_tab(out);
-		bch2_pr_time_units_aligned(out, mean_and_variance_weighted_get_mean(stats->freq_stats_weighted, TIME_STATS_MV_WEIGHT));
+		bch2_pr_time_units_aligned(out, mean_and_variance_get_median(stats->freq_stats_weighted));
 		prt_newline(out);
 
 		prt_printf(out, "stddev:\t");
 		bch2_pr_time_units_aligned(out, f_stddev);
 		prt_tab(out);
-		bch2_pr_time_units_aligned(out, mean_and_variance_weighted_get_stddev(stats->freq_stats_weighted, TIME_STATS_MV_WEIGHT));
+		bch2_pr_time_units_aligned(out, mean_and_variance_get_stddev(stats->freq_stats_weighted));
 		prt_newline(out);
 	}
 
@@ -466,7 +486,7 @@ void bch2_time_stats_to_text(struct printbuf *out, struct bch2_time_stats *stats
 	}
 }
 
-void bch2_time_stats_json_to_text(struct printbuf *out, struct bch2_time_stats *stats,
+__cold void bch2_time_stats_json_to_text(struct printbuf *out, struct bch2_time_stats *stats,
 				  const char *epoch_name, unsigned int flags)
 {
 	char buf[1024];
@@ -576,7 +596,7 @@ void bch2_pd_controller_init(struct bch_pd_controller *pd)
 	pd->backpressure	= 1;
 }
 
-void bch2_pd_controller_debug_to_text(struct printbuf *out, struct bch_pd_controller *pd)
+__cold void bch2_pd_controller_debug_to_text(struct printbuf *out, struct bch_pd_controller *pd)
 {
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 20);
@@ -777,6 +797,117 @@ void memcpy_from_bio(void *dst, struct bio *src, struct bvec_iter src_iter)
 	}
 }
 
+/*
+ * Copy between two bios at caller-supplied iters, advancing both. Equivalent to
+ * the kernel's old bio_copy_data_iter(), which 7.2 removed in favour of the
+ * whole-bio bio_copy_data().
+ */
+void bch2_bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
+			     struct bio *src, struct bvec_iter *src_iter)
+{
+	while (src_iter->bi_size && dst_iter->bi_size) {
+		struct bio_vec src_bv = bio_iter_iovec(src, *src_iter);
+		struct bio_vec dst_bv = bio_iter_iovec(dst, *dst_iter);
+		unsigned int bytes = min(src_bv.bv_len, dst_bv.bv_len);
+		void *src_buf = bvec_kmap_local(&src_bv);
+		void *dst_buf = bvec_kmap_local(&dst_bv);
+
+		memcpy(dst_buf, src_buf, bytes);
+
+		kunmap_local(dst_buf);
+		kunmap_local(src_buf);
+
+		bio_advance_iter(src, src_iter, bytes);
+		bio_advance_iter(dst, dst_iter, bytes);
+	}
+}
+
+/*
+ * Zero-fill a bio starting at a caller-supplied iter. Equivalent to the kernel's
+ * old zero_fill_bio_iter(), which 7.2 removed in favour of the whole-bio
+ * zero_fill_bio().
+ */
+void bch2_zero_fill_bio_iter(struct bio *bio, struct bvec_iter start)
+{
+	struct bio_vec bv;
+	struct bvec_iter iter;
+
+	__bio_for_each_segment(bv, bio, iter, start) {
+		void *p = bvec_kmap_local(&bv);
+
+		memset(p, 0, bv.bv_len);
+		kunmap_local(p);
+	}
+}
+
+#ifdef __KERNEL__
+#include <linux/pagemap.h>	/* folio_lock()/folio_unlock() */
+
+/*
+ * DIO read dirty-page handling. 7.2 unexported bio_set_pages_dirty() and
+ * bio_check_pages_dirty(); reinstate them (the kernel's implementation) as
+ * bcachefs helpers. bio_set_pages_dirty() marks the destination pages dirty on
+ * the (sleepable) submit side; bio_check_pages_dirty() runs at completion, which
+ * can be atomic (bio endio), so the rare "a page was cleaned mid-IO, re-dirty it"
+ * case — which needs folio_lock() — is punted to a workqueue.
+ */
+void bch2_bio_set_pages_dirty(struct bio *bio)
+{
+	struct folio_iter fi;
+
+	bio_for_each_folio_all(fi, bio) {
+		folio_lock(fi.folio);
+		folio_mark_dirty(fi.folio);
+		folio_unlock(fi.folio);
+	}
+}
+
+static void bch2_bio_dirty_fn(struct work_struct *work);
+
+static DECLARE_WORK(bch2_bio_dirty_work, bch2_bio_dirty_fn);
+static DEFINE_SPINLOCK(bch2_bio_dirty_lock);
+static struct bio *bch2_bio_dirty_list;
+
+/* runs in process context */
+static void bch2_bio_dirty_fn(struct work_struct *work)
+{
+	struct bio *bio, *next;
+
+	spin_lock_irq(&bch2_bio_dirty_lock);
+	next = bch2_bio_dirty_list;
+	bch2_bio_dirty_list = NULL;
+	spin_unlock_irq(&bch2_bio_dirty_lock);
+
+	while ((bio = next) != NULL) {
+		next = bio->bi_private;
+
+		bio_release_pages(bio, true);
+		bio_put(bio);
+	}
+}
+
+void bch2_bio_check_pages_dirty(struct bio *bio)
+{
+	struct folio_iter fi;
+	unsigned long flags;
+
+	bio_for_each_folio_all(fi, bio) {
+		if (!folio_test_dirty(fi.folio))
+			goto defer;
+	}
+
+	bio_release_pages(bio, false);
+	bio_put(bio);
+	return;
+defer:
+	spin_lock_irqsave(&bch2_bio_dirty_lock, flags);
+	bio->bi_private = bch2_bio_dirty_list;
+	bch2_bio_dirty_list = bio;
+	spin_unlock_irqrestore(&bch2_bio_dirty_lock, flags);
+	schedule_work(&bch2_bio_dirty_work);
+}
+#endif /* __KERNEL__ */
+
 #ifdef CONFIG_BCACHEFS_DEBUG
 void bch2_corrupt_bio(struct bio *bio)
 {
@@ -874,7 +1005,7 @@ static const char * const bch2_bio_flag_strs[] = {
 	NULL
 };
 
-void bch2_bio_to_text(struct printbuf *out, struct bio *bio)
+__cold void bch2_bio_to_text(struct printbuf *out, struct bio *bio)
 {
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 24);

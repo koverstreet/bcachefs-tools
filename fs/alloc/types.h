@@ -7,6 +7,7 @@
 
 #include "init/dev_types.h"
 
+#include "alloc/buckets_types.h"
 #include "util/clock_types.h"
 #include "util/fifo.h"
 
@@ -56,7 +57,7 @@ struct open_bucket {
 	bool			do_discards_fast:1;
 
 	u8			dev;
-	u8			gen;
+	u8			generation;
 	u32			sectors_free;
 	u64			bucket;
 	struct ec_stripe_new	*ec;
@@ -134,9 +135,8 @@ struct write_point_specifier {
 	unsigned long		v;
 };
 
-struct bch_fs_usage_base;
-
 struct bch_fs_capacity_pcpu {
+	struct bch_fs_usage_base	usage;
 	u64			sectors_available;
 	u64			online_reserved;
 };
@@ -159,14 +159,14 @@ struct bch_fs_capacity {
 	struct bch_fs_capacity_pcpu __percpu	*pcpu;
 
 	struct percpu_rw_semaphore	mark_lock;
-
-	seqcount_t			usage_lock;
-	struct bch_fs_usage_base __percpu *usage;
 };
 
 struct bch_fs_allocator {
 	struct bch_devs_mask	rw_devs[BCH_DATA_NR];
 	unsigned long		rw_devs_change_count;
+
+	/* fs-wide allocator wake generation; see bch2_alloc_wake_all() */
+	atomic_t		wake_all_counter;
 
 	spinlock_t		freelist_lock;
 	struct closure_waitlist	freelist_wait;

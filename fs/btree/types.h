@@ -20,6 +20,7 @@
 #include "util/darray.h"
 #include "util/six.h"
 
+struct bio;
 struct open_bucket;
 struct btree_update;
 struct btree_trans;
@@ -104,15 +105,30 @@ struct btree {
 
 	/*
 	 * Per-field unpack constants, derived from @format at node init.
-	 * Lets __bch2_bkey_unpack_key skip the per-field state machine in
-	 * the common case where the field can be extracted by a single
-	 * aligned load + shift + mask.
+	 * Extract each field with:
+	 *
+	 *   field = (load_8_unaligned(bytes + byte_offset) >> (64 - bits))
+	 *           + field_offset
+	 *
+	 * Load position chosen so the field ends at the top of the loaded
+	 * value (load_offset + 8 == byte after field's MSB byte); junk from
+	 * earlier-in-memory fields lands in the low bits and shifts off.
+	 *
+	 * byte_offset is signed: for a field near the start of @in, the
+	 * load can need to start before @in. The byte(s) before @in are
+	 * always valid memory in the callers we care about (bset payload
+	 * after the bset header, or other bkeys in the same bset).
+	 *
+	 * Only handles formats where every field's MSB sits at a byte
+	 * boundary (field_msb_bit % 8 == 7). bch2_bkey_format_done()
+	 * rounds fields up to byte width when there are spare bits, so
+	 * this is the common case. Formats too tight to byte-align take
+	 * the slow path via byte_aligned_fields = false.
 	 */
+	bool				byte_aligned_fields;
 	struct bkey_unpack_field {
-		u8	byte_offset;	/* byte within packed key */
-		u8	load_size;	/* 1, 2, 4, 8; 0 = no bits in packed; 0xff = fallback */
-		u8	shift;		/* shift right after load */
-		u8	_pad;
+		s8	byte_offset;
+		u8	shift_right;	/* 64 - bits, or 64 if field has no bits in packed */
 	} unpack[BKEY_NR_FIELDS];
 
 	struct btree_node	*data;
@@ -224,6 +240,19 @@ struct btree_root {
 };
 
 struct bch_fs_btree_cache {
+	/*
+	 * Hot path: btree_path_lock_root reads root pointer + level per
+	 * btree_id. We pack the level into the low 3 bits of the pointer so a
+	 * single load yields both atomically (no torn read between b and
+	 * b->c.level, no extra cacheline miss into the btree node to read
+	 * level). See bch2_btree_root_{pack,unpack_b,unpack_level} in cache.h.
+	 *
+	 * Splitting this out of struct btree_root also keeps the read-side
+	 * working set in a few cache lines instead of the full ~88 lines of
+	 * roots_known[].
+	 */
+	unsigned long		roots_b[BTREE_ID_NR];
+
 	struct btree_root	roots_known[BTREE_ID_NR];
 	DARRAY(struct btree_root) roots_extra;
 	struct mutex		root_lock;
@@ -258,11 +287,20 @@ struct bch_fs_btree_cache {
 	atomic_long_t		nr_in_flight;
 	atomic_long_t		nr_in_flight_inner;
 	struct closure_waitlist	nr_in_flight_wait;
+	bool			should_throttle ____cacheline_aligned_in_smp;
 
 	/* shrinker stats */
 	size_t			nr_freed;
 	size_t			nr_requested;
 	u64			not_freed[BCH_BTREE_CACHE_NOT_FREED_REASONS_NR];
+
+	/*
+	 * Times the allocator hit the memory-pressure self reclaim path:
+	 * journal replay watches for this going nonzero to switch off the
+	 * sorted-order fastpath, which holds every journal pin until replay
+	 * finishes - pins must be released for reclaim to clean btree nodes.
+	 */
+	unsigned long		nr_self_reclaim;
 
 	/*
 	 * If we need to allocate memory for a new btree node and that
@@ -300,6 +338,7 @@ struct btree_node_iter {
 
 #define BTREE_ITER_FLAGS()			\
 	x(slots)				\
+	x(prev)					\
 	x(intent)				\
 	x(prefetch)				\
 	x(is_extents)				\
@@ -315,6 +354,7 @@ struct btree_node_iter {
 	x(nofill)				\
 	x(cached_nofill)			\
 	x(key_cache_fill)			\
+	x(committed)				\
 
 #define STR_HASH_FLAGS()			\
 	x(must_create)				\
@@ -323,7 +363,8 @@ struct btree_node_iter {
 #define BTREE_UPDATE_FLAGS()			\
 	x(internal_snapshot_node)		\
 	x(nojournal)				\
-	x(key_cache_reclaim)
+	x(key_cache_reclaim)			\
+	x(overwrite_triggered)
 
 
 /*
@@ -346,11 +387,9 @@ struct btree_node_iter {
 	x(norun)				\
 	x(transactional)			\
 	x(atomic)				\
-	x(check_repair)				\
 	x(gc)					\
 	x(insert)				\
 	x(overwrite)				\
-	x(is_root)				\
 	x(is_discard)				\
 	x(set_needs_reconcile_done)
 
@@ -363,8 +402,8 @@ enum {
 #undef x
 };
 
-/* iter flags must fit in a u16: */
-//BUILD_BUG_ON(BTREE_ITER_FLAG_BIT_key_cache_fill > 15);
+/* iter flags must fit in struct btree_iter.flags: */
+static_assert(BTREE_ITER_FLAG_BIT_committed < 32);
 
 enum btree_iter_update_trigger_flags {
 #define x(n) BTREE_ITER_##n	= 1U << BTREE_ITER_FLAG_BIT_##n,
@@ -392,12 +431,6 @@ struct btree_trigger_op {
 
 /* Btree paths and iterators: */
 
-enum btree_path_uptodate {
-	BTREE_ITER_UPTODATE		= 0,
-	BTREE_ITER_NEED_RELOCK		= 1,
-	BTREE_ITER_NEED_TRAVERSE	= 2,
-};
-
 #if defined(CONFIG_BCACHEFS_LOCK_TIME_STATS) || defined(CONFIG_BCACHEFS_DEBUG)
 #define TRACK_PATH_ALLOCATED
 #endif
@@ -412,10 +445,9 @@ struct btree_path {
 	/* btree_iter_copy starts here: */
 	struct bpos		pos;
 
-	enum btree_id		btree_id:5;
+	enum btree_id		btree_id:7;
 	bool			cached:1;
 	bool			preserve:1;
-	enum btree_path_uptodate uptodate:2;
 	/*
 	 * When true, failing to relock this path will cause the transaction to
 	 * restart:
@@ -468,7 +500,7 @@ struct btree_iter {
 	u8			min_depth;
 
 	/* btree_iter_copy starts here: */
-	u16			flags;
+	u32			flags;
 
 	/* When we're filtering by snapshot, the snapshot ID we're looking for: */
 	unsigned		snapshot;
@@ -629,12 +661,21 @@ struct btree_trans {
 	btree_path_idx_t	nr_paths;
 	btree_path_idx_t	nr_paths_max;
 	btree_path_idx_t	nr_updates;
+	s16			shard_cpu;
 	u8			fn_idx;
 	u8			lock_must_abort;
 	bool			lock_may_not_fail:1;
 	bool			locked:1;
+	bool			migrate_disabled:1;
 	bool			write_locked:1;
 	bool			srcu_held:1;
+	/*
+	 * IO was submitted under the srcu read lock (submit_bio() can block for
+	 * an unbounded time): suppress the next bch2_trans_unlock_long() "held
+	 * too long" warning. Scoped to one locked attempt — cleared on relock /
+	 * bch2_trans_begin().
+	 */
+	bool			srcu_io_submitted:1;
 	bool			btree_cache_cannibalize_locked:1;
 	bool			pf_memalloc_nofs:1;
 	bool			used_mempool:1;
@@ -650,8 +691,12 @@ struct btree_trans {
 #ifdef CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS
 	u32			restart_count_this_trans;
 #endif
+	/*
+	 * Incremented on every successful (non-empty) commit; for detecting
+	 * that cached state derived from btree reads may be stale:
+	 */
+	u32			commit_count;
 
-	u64			last_begin_time_nonrestarted;
 	u64			last_begin_time;
 	unsigned long		last_begin_ip;
 	unsigned long		last_restarted_ip;
@@ -660,11 +705,28 @@ struct btree_trans {
 #endif
 	unsigned long		last_unlock_ip;
 	unsigned long		srcu_lock_time;
+	int			srcu_idx;
+	enum btree_id		locking_root_id;
+
+	u64			locking_hash_val;
+	struct btree_bkey_cached_common *locking;
+	/*
+	 * Snapshot of locking->{btree}.hash_val at lock-attempt time, used by
+	 * bch2_six_check_for_deadlock() to detect that the node identity
+	 * rotated while we were about to sleep on it. 0 for cached entries.
+	 */
+	struct six_lock_waiter	locking_wait;
+
+	/*
+	 * btree node writes issued in this trans's context are queued here
+	 * (singly linked via bi_next) instead of being submitted directly —
+	 * no block layer work happens while we hold btree node locks.
+	 * Submitted when the trans unlocks, and before waiting on btree
+	 * node IO (see bch2_btree_node_wait_on_write()).
+	 */
+	struct bio		*queued_write_bios;
 
 	const char		*fn;
-	struct btree_bkey_cached_common *locking;
-	struct six_lock_waiter	locking_wait;
-	int			srcu_idx;
 
 	/* update path: */
 	struct btree_trans_subbuf journal_entries;
@@ -676,6 +738,7 @@ struct btree_trans {
 	struct journal_res	journal_res;
 	u64			*journal_seq;
 	struct disk_reservation *disk_res;
+	struct closure		*flush;
 
 	struct bch_fs_usage_base fs_usage_delta;
 
@@ -708,6 +771,7 @@ struct btree_trans_buf {
 struct btree_transaction_stats {
 	struct bch2_time_stats	duration;
 	struct bch2_time_stats	lock_hold_times;
+	struct bch2_time_stats	lock_wait_times;
 	struct mutex		lock;
 	unsigned		nr_max_paths;
 	unsigned		max_mem;
@@ -858,7 +922,6 @@ struct bch_fs_btree {
 	struct ratelimit_state			read_errors_soft;
 	struct ratelimit_state			read_errors_hard;
 
-	struct workqueue_struct			*write_submit_wq;
 	struct workqueue_struct			*write_complete_wq;
 
 	struct journal_entry_res		root_journal_res;
@@ -1043,6 +1106,19 @@ static inline enum btree_node_type btree_node_type(struct btree *b)
 
 const char *bch2_btree_node_type_str(enum btree_node_type);
 
+/*
+ * Mask of btree ids that have snapshots; defined here, ahead of the other
+ * btree-id masks below, because the trigger masks build on it: every snapshot
+ * btree needs trans triggers so that bch2_trigger_snapshot_nr_keys() runs for
+ * its keys. (<< 1 maps btree_id space to btree_node_type space, where a leaf's
+ * node type is id + 1.)
+ */
+static const u64 btree_has_snapshots_mask = 0
+#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_snapshots)) << nr)
+BCH_BTREE_IDS()
+#undef x
+;
+
 #define BTREE_NODE_TYPE_HAS_TRANS_TRIGGERS		\
 	(BIT_ULL(BKEY_TYPE_extents)|			\
 	 BIT_ULL(BKEY_TYPE_alloc)|			\
@@ -1050,7 +1126,9 @@ const char *bch2_btree_node_type_str(enum btree_node_type);
 	 BIT_ULL(BKEY_TYPE_stripes)|			\
 	 BIT_ULL(BKEY_TYPE_reflink)|			\
 	 BIT_ULL(BKEY_TYPE_subvolumes)|			\
-	 BIT_ULL(BKEY_TYPE_btree))
+	 BIT_ULL(BKEY_TYPE_snapshots)|			\
+	 BIT_ULL(BKEY_TYPE_btree)|			\
+	 (btree_has_snapshots_mask << 1))
 
 #define BTREE_NODE_TYPE_HAS_ATOMIC_TRIGGERS		\
 	(BIT_ULL(BKEY_TYPE_alloc)|			\
@@ -1096,12 +1174,6 @@ static inline bool btree_node_type_is_extents(enum btree_node_type type)
 {
 	return type != BKEY_TYPE_btree && btree_id_is_extents(type - 1);
 }
-
-static const u64 btree_has_snapshots_mask = 0
-#define x(name, nr, flags, ...)	|((!!((flags) & BTREE_IS_snapshots)) << nr)
-BCH_BTREE_IDS()
-#undef x
-;
 
 static inline bool btree_type_has_snapshots(enum btree_id btree)
 {

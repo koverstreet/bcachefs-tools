@@ -1,7 +1,7 @@
 #ifndef _LINUX_MATH64_H
 #define _LINUX_MATH64_H
 
-#include <linux/types.h>
+#include <linux/kernel.h>
 
 #define do_div(n,base) ({					\
 	u32 __base = (base);					\
@@ -50,6 +50,15 @@ static inline u64 div64_u64_rem(u64 dividend, u64 divisor, u64 *remainder)
 static inline u64 div64_u64(u64 dividend, u64 divisor)
 {
 	return dividend / divisor;
+}
+
+/**
+ * mul_u64_u64_div_u64 - unsigned 64bit multiply then divide, with a 128bit
+ * intermediate
+ */
+static inline u64 mul_u64_u64_div_u64(u64 a, u64 b, u64 c)
+{
+	return (unsigned __int128) a * b / c;
 }
 
 /**

@@ -5,6 +5,8 @@
 
 use std::process::ExitCode;
 
+use crate::wrappers::sysfs::DeviceNameMode;
+
 // ── Command table types (must precede mod declarations for macro access) ──
 
 pub struct CmdDef {
@@ -30,6 +32,19 @@ pub enum CmdKind {
 pub struct GroupDef {
     pub heading:  &'static str,
     pub commands: &'static [&'static CmdDef],
+}
+
+#[derive(clap::Args, Clone, Copy, Debug, Default)]
+pub struct DeviceNameArgs {
+    /// Show mapper names for dm-multipath devices when available
+    #[arg(long = "mapper-names")]
+    pub mapper_names: bool,
+}
+
+impl DeviceNameArgs {
+    pub fn name_mode(self) -> DeviceNameMode {
+        DeviceNameMode::from_mapper_names(self.mapper_names)
+    }
 }
 
 /// Define a typed command (clap-parsed args).
@@ -81,10 +96,13 @@ pub mod format;
 pub mod format_util;
 pub mod fs_usage;
 pub mod fsck;
+#[cfg(feature = "fuse")]
 pub mod fusemount;
 pub mod image;
 pub mod key;
 pub mod kill_btree_node;
+pub mod kvdb;
+pub mod journal_rewind_info;
 pub mod list;
 pub mod list_journal;
 pub mod migrate;
@@ -107,15 +125,28 @@ pub mod wait_devices;
 
 impl CmdDef {
     pub fn dispatch(&self, argv: Vec<String>) -> ExitCode {
+        self.dispatch_with_path(argv, format!("bcachefs {}", self.name))
+    }
+
+    fn dispatch_with_path(&self, mut argv: Vec<String>, command_path: String) -> ExitCode {
         match &self.kind {
-            CmdKind::Typed { run, .. } | CmdKind::Raw { run } => run(argv),
+            CmdKind::Typed { run, .. } => {
+                if !argv.is_empty() {
+                    argv[0] = command_path;
+                }
+                run(argv)
+            }
+            CmdKind::Raw { run } => run(argv),
             CmdKind::Group { children } => {
                 // argv[0] is the group name, argv[1] is the subcommand
                 let subcmd = argv.get(1).map(|s| s.as_str());
                 for child in *children {
                     if subcmd == Some(child.name) ||
                        child.aliases.iter().any(|a| subcmd == Some(*a)) {
-                        return child.dispatch(argv[1..].to_vec());
+                        return child.dispatch_with_path(
+                            argv[1..].to_vec(),
+                            format!("{} {}", command_path, child.name),
+                        );
                     }
                 }
                 println!("bcachefs {} - {}", self.name, self.about);
@@ -148,7 +179,7 @@ impl CmdDef {
     }
 
     fn matches(&self, name: &str) -> bool {
-        self.name == name || self.aliases.iter().any(|a| *a == name)
+        self.name == name || self.aliases.contains(&name)
     }
 }
 
@@ -204,18 +235,23 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
         &set_option::CMD, &counters::CMD, &strip_alloc::CMD,
     ]},
     GroupDef { heading: "Images",                   commands: &[&image::CMD] },
-    GroupDef { heading: "Mount",                    commands: &[&mount::CMD, &fusemount::CMD, &wait_devices::CMD] },
-    GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &recovery_pass::CMD] },
+    GroupDef { heading: "Mount",                    commands: &[
+        &mount::CMD,
+        #[cfg(feature = "fuse")]
+        &fusemount::CMD,
+        &wait_devices::CMD,
+    ]},
+    GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &journal_rewind_info::CMD, &recovery_pass::CMD] },
     GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD] },
     GroupDef { heading: "Devices",                  commands: &[&device::CMD] },
     GroupDef { heading: "Subvolumes and snapshots", commands: &[&subvolume::CMD] },
     GroupDef { heading: "Filesystem data",          commands: &[&reconcile::CMD, &scrub::CMD] },
     GroupDef { heading: "Encryption",               commands: &[&key::CMD_UNLOCK, &key::CMD_SET_PASSPHRASE, &key::CMD_REMOVE_PASSPHRASE] },
     GroupDef { heading: "Migrate",                  commands: &[&migrate::CMD_MIGRATE, &migrate::CMD_MIGRATE_SUPERBLOCK] },
-    GroupDef { heading: "File options",             commands: &[&attr::CMD_SETATTR, &attr::CMD_REFLINK_PROPAGATE] },
+    GroupDef { heading: "File options",             commands: &[&attr::CMD_SETATTR, &attr::CMD_GETATTR, &attr::CMD_REFLINK_PROPAGATE] },
     GroupDef { heading: "Debug", commands: &[
         &dump::CMD_DUMP, &dump::CMD_UNDUMP, &list::CMD, &list_journal::CMD,
-        &kill_btree_node::CMD, &data_read::CMD, &unpoison::CMD,
+        &kvdb::CMD, &kill_btree_node::CMD, &data_read::CMD, &unpoison::CMD,
     ]},
     GroupDef { heading: "Miscellaneous",            commands: &[&completions::CMD, &VERSION_CMD] },
 ];

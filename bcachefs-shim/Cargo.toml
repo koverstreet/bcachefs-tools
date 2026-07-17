@@ -1,0 +1,17 @@
+[package]
+name = "bcachefs-shim"
+version = "0.1.0"
+authors = [ "Kent Overstreet <kent.overstreet@linux.dev>" ]
+edition = "2021"
+rust-version = "1.85.0"
+
+[lib]
+crate-type = ["lib"]
+
+[dependencies]
+bcachefs-shim-macros = { path = "../bcachefs-shim-macros" }
+
+[build-dependencies]
+pkg-config = "0.3"
+bindgen = "0.72.1"
+cc = "1.0"

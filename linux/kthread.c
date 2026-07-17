@@ -7,6 +7,7 @@
 #include <linux/percpu.h>
 #include <linux/rcupdate.h>
 #include <linux/sched.h>
+#include <linux/shrinker.h>
 
 #include "tools-util.h"
 

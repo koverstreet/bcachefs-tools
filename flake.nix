@@ -41,7 +41,11 @@
       nix-github-actions,
     }:
     let
-      systems = nixpkgs.lib.filter (s: nixpkgs.lib.hasSuffix "-linux" s) nixpkgs.lib.systems.flakeExposed;
+      # i686-linux dropped: no real consumers, and cross sqlite tcltest
+      # tries to run on i686 and fails.
+      systems = nixpkgs.lib.filter
+        (s: nixpkgs.lib.hasSuffix "-linux" s && s != "i686-linux")
+        nixpkgs.lib.systems.flakeExposed;
 
       cargoToml = builtins.fromTOML (builtins.readFile ./Cargo.toml);
       rustfmtToml = builtins.fromTOML (builtins.readFile ./rustfmt.toml);
@@ -145,7 +149,6 @@
               bcachefs-tools
               bcachefs-tools-aarch64-linux
               bcachefs-tools-fuse
-              bcachefs-tools-fuse-i686-linux
               bcachefs-module-linux-latest
               bcachefs-module-linux-testing
               ;
@@ -167,7 +170,17 @@
                 }
               );
 
-            nixos-test = pkgs.testers.nixosTest (import ./nixos-test.nix self');
+            # The test derivation hardcodes "kvm" into requiredSystemFeatures
+            # for any Linux test, which GitHub's hosted aarch64 runners don't
+            # provide — so it won't schedule there. Strip it via
+            # overrideTestDerivation (overrideAttrs for the test): qemu.forceAccel
+            # defaults to false, so the driver falls back to TCG emulation when
+            # /dev/kvm is absent (KVM used where available, emulated otherwise).
+            nixos-test =
+              (pkgs.testers.nixosTest (import ./nixos-test.nix self')).overrideTestDerivation
+                (_: prev: {
+                  requiredSystemFeatures = lib.remove "kvm" (prev.requiredSystemFeatures or [ ]);
+                });
           };
 
           devShells.default = pkgs.mkShell {
@@ -181,6 +194,7 @@
             # dependencies (e.g. clippy or rust-analyzer).
             packages = with pkgs; [
               bear
+              rust-bindgen
               cargo-audit
               cargo-outdated
               clang-tools

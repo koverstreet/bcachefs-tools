@@ -126,7 +126,7 @@ int enumerated_ref_init(struct enumerated_ref *ref, unsigned nr,
 #endif
 }
 
-void enumerated_ref_to_text(struct printbuf *out,
+__cold void enumerated_ref_to_text(struct printbuf *out,
 			    struct enumerated_ref *ref,
 			    const char * const names[])
 {

@@ -63,11 +63,23 @@ int __bch2_err_class(int bch_err)
 	return -std_err;
 }
 
+#undef BLK_STS
+
 const char *bch2_blk_status_to_str(blk_status_t status)
 {
+	/*
+	 * blk_status_to_str() was unexported in 7.2 (commit 82aaa55a3162), so
+	 * name the statuses ourselves off the BLK_ERRS() x-macro.
+	 */
 	if (status == BLK_STS_REMOVED)
 		return "device removed";
-	return blk_status_to_str(status);
+
+	switch (status) {
+#define BLK_STS(n) case BLK_STS_##n:	return #n;
+	BLK_ERRS()
+#undef BLK_STS
+	default:			return "(invalid)";
+	}
 }
 
 enum bch_errcode blk_status_to_bch_err(blk_status_t err)
@@ -96,4 +108,12 @@ enum bch_errcode zstd_err_to_bch_err(ZSTD_ErrorCode err)
 #undef ZSTD_error
 		default:		return BCH_ERR_ZSTD_error_unknown;
 	}
+}
+
+int __bch2_err_throw(struct bch_fs *c, int err)
+{
+	BUG_ON(err >= 0);
+	this_cpu_inc(c->counters.now[BCH_COUNTER_error_throw]);
+	trace_error_throw(c, bch2_err_str(err));
+	return err;
 }

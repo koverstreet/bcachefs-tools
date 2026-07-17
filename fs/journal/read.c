@@ -50,7 +50,7 @@ void bch2_journal_pos_from_member_info_resume(struct bch_fs *c)
 	}
 }
 
-static void bch2_journal_ptr_to_text(struct printbuf *out, struct bch_fs *c, struct journal_ptr *p)
+static __cold void bch2_journal_ptr_to_text(struct printbuf *out, struct bch_fs *c, struct journal_ptr *p)
 {
 	CLASS(bch2_dev_tryget_noerror, ca)(c, p->dev);
 	prt_printf(out, "%s %u:%u:%u (sector %llu)",
@@ -58,23 +58,23 @@ static void bch2_journal_ptr_to_text(struct printbuf *out, struct bch_fs *c, str
 		   p->dev, p->bucket, p->bucket_offset, p->sector);
 }
 
-void bch2_journal_ptrs_to_text(struct printbuf *out, struct bch_fs *c, struct journal_replay *j)
+__cold void bch2_journal_ptrs_to_text(struct printbuf *out, struct bch_fs *c, struct journal_replay *j)
 {
 	darray_for_each(j->ptrs, i) {
 		if (i != j->ptrs.data)
-			prt_printf(out, " ");
+			prt_char(out, ' ');
 		bch2_journal_ptr_to_text(out, c, i);
 	}
 }
 
-static void bch2_journal_datetime_to_text(struct printbuf *out, struct jset *j)
+static __cold void bch2_journal_datetime_to_text(struct printbuf *out, struct jset *j)
 {
 	u64 t = jset_datetime(j);
 	if (t)
 		bch2_prt_datetime(out, t);
 }
 
-void bch2_journal_seq_datetime_to_text(struct printbuf *out, struct bch_fs *c, u64 seq)
+__cold void bch2_journal_seq_datetime_to_text(struct printbuf *out, struct bch_fs *c, u64 seq)
 {
 	struct journal_replay **p = genradix_ptr(&c->journal_entries,
 						 journal_entry_radix_idx(c, seq));
@@ -82,7 +82,7 @@ void bch2_journal_seq_datetime_to_text(struct printbuf *out, struct bch_fs *c, u
 		bch2_journal_datetime_to_text(out, &(*p)->j);
 }
 
-static void bch2_journal_replay_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void bch2_journal_replay_to_text(struct printbuf *out, struct bch_fs *c,
 					struct journal_replay *j)
 {
 	prt_printf(out, "seq %llu ", le64_to_cpu(j->j.seq));
@@ -155,6 +155,7 @@ struct journal_list {
 	u64			last_seq;
 	struct mutex		lock;
 	int			ret;
+	bool			full_read;
 };
 
 #define JOURNAL_ENTRY_ADD_OK		0
@@ -172,8 +173,6 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 	struct journal_replay **_i, *i, *dup;
 	u64 last_seq = !JSET_NO_FLUSH(j) ? le64_to_cpu(j->last_seq) : 0;
 	u64 seq = le64_to_cpu(j->seq);
-	CLASS(printbuf, buf)();
-	int ret = JOURNAL_ENTRY_ADD_OK;
 
 	if (last_seq && c->opts.journal_rewind)
 		last_seq = min(last_seq, c->opts.journal_rewind);
@@ -194,6 +193,13 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 	if (!c->journal_entries_base_seq)
 		c->journal_entries_base_seq = max_t(s64, 1, seq - S32_MAX);
 
+	if (seq - c->journal_entries_base_seq > (u64) U32_MAX) {
+		bch_err(c, "journal entry sequence numbers span too large a range: cannot replay, contact developers\n"
+			"base %llu last_seq currently %llu, but have seq %llu",
+			c->journal_entries_base_seq, jlist->last_seq, seq);
+		return bch_err_throw(c, ENOMEM_journal_entry_add);
+	}
+
 	/* Drop entries we don't need anymore */
 	if (last_seq > jlist->last_seq && !c->opts.read_entire_journal) {
 		genradix_for_each_from(&c->journal_entries, iter, _i,
@@ -210,19 +216,11 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 		}
 	}
 
+	jlist->last_seq = max(jlist->last_seq, last_seq);
+
 	journal_replay_maybe_drop_overwrites(c, j);
 
 	size_t bytes = vstruct_bytes(j);
-
-	jlist->last_seq = max(jlist->last_seq, last_seq);
-
-	if (seq <  c->journal_entries_base_seq ||
-	    seq >= c->journal_entries_base_seq + U32_MAX) {
-		bch_err(c, "journal entry sequence numbers span too large a range: cannot replay, contact developers\n"
-			"base %llu last_seq currently %llu, but have seq %llu",
-			c->journal_entries_base_seq, jlist->last_seq, seq);
-		return bch_err_throw(c, ENOMEM_journal_entry_add);
-	}
 
 	_i = genradix_ptr_alloc(&c->journal_entries, journal_entry_radix_idx(c, seq), GFP_KERNEL);
 	if (!_i)
@@ -234,6 +232,11 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 	 */
 	dup = *_i;
 	if (dup) {
+		WARN(seq != le64_to_cpu(dup->j.seq),
+		     "seq %llu != dup %llu base %llu",
+		     seq, le64_to_cpu(dup->j.seq),
+		     c->journal_entries_base_seq);
+
 		bool identical = bytes == vstruct_bytes(&dup->j) &&
 			!memcmp(j, &dup->j, bytes);
 		bool not_identical = !identical &&
@@ -244,31 +247,35 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 		darray_for_each(dup->ptrs, ptr) {
 			if (ptr->dev == ca->dev_idx) {
 				if (ptr->sector == entry_ptr.sector)
-					return ret; /* same physical location, re-read */
+					return 0; /* same physical location, re-read */
 				same_device = true;
 			}
 		}
 
+		CLASS(printbuf, buf)();
+		bch2_journal_replay_to_text(&buf, c, dup);
+		prt_newline(&buf);
+		prt_printf(&buf, "seq %llu ", seq);
+		bch2_journal_datetime_to_text(&buf, j);
+		prt_char(&buf, ' ');
+		bch2_journal_ptr_to_text(&buf, c, &entry_ptr);
+
 		try(darray_push(&dup->ptrs, entry_ptr));
 
-		bch2_journal_replay_to_text(&buf, c, dup);
-
-		fsck_err_on(same_device,
+		ret_fsck_err_on(same_device,
 			    c, journal_entry_dup_same_device,
 			    "duplicate journal entry on same device\n%s",
 			    buf.buf);
 
-		fsck_err_on(not_identical,
+		ret_fsck_err_on(not_identical,
 			    c, journal_entry_replicas_data_mismatch,
 			    "found duplicate but non identical journal entries\n%s",
 			    buf.buf);
 
-		if (entry_ptr.csum_good && !identical)
-			goto replace;
-
-		return ret;
+		if (identical || !entry_ptr.csum_good)
+			return 0;
 	}
-replace:
+
 	i = kvmalloc(offsetof(struct journal_replay, j) + bytes, GFP_KERNEL);
 	if (!i)
 		return bch_err_throw(c, ENOMEM_journal_entry_add);
@@ -289,8 +296,7 @@ replace:
 	}
 
 	*_i = i;
-fsck_err:
-	return ret;
+	return 0;
 }
 
 struct journal_read_buf {
@@ -472,6 +478,235 @@ static int journal_peek_bucket(struct bch_dev *ca,
 	return 0;
 }
 
+/*
+ * Peek a bucket if we haven't already. Returns the bucket's seq (0 if
+ * empty / unreadable / not a journal entry), or -1 on a fatal peek error.
+ */
+static s64 journal_peek_once(struct bch_dev *ca, struct journal_read_buf *buf,
+			     unsigned long *peeked, unsigned bucket)
+{
+	struct journal_device *ja = &ca->journal;
+
+	if (!test_bit(bucket, peeked)) {
+		if (journal_peek_bucket(ca, buf, bucket))
+			return -1;
+		__set_bit(bucket, peeked);
+	}
+	return ja->bucket_seq[bucket];
+}
+
+/*
+ * Bisect-stride descent to find any non-empty bucket: peek bucket[0],
+ * then unpeeked positions at stride = largest power of 2 <= nr-1,
+ * halving each level. Each level peeks {step, 3*step, 5*step, ...} —
+ * the odd multiples of step not covered by prior larger-step levels.
+ * When step reaches 0, every position has been peeked, so an "empty"
+ * return guarantees the journal is genuinely empty.
+ *
+ * Returns the position of a non-empty bucket, or -1 if every bucket
+ * was peeked and none contained a journal entry.
+ */
+static int journal_anchor_bucket(struct bch_dev *ca,
+				 struct journal_read_buf *buf,
+				 unsigned long *peeked)
+{
+	struct journal_device *ja = &ca->journal;
+
+	s64 s = journal_peek_once(ca, buf, peeked, 0);
+	if (s < 0)
+		return -1;
+	if (s)
+		return 0;
+
+	if (ja->nr <= 1)
+		return -1;
+
+	for (unsigned step = rounddown_pow_of_two(ja->nr - 1);
+	     step;
+	     step >>= 1) {
+		for (unsigned pos = step; pos < ja->nr; pos += step * 2) {
+			s = journal_peek_once(ca, buf, peeked, pos);
+			if (s < 0)
+				return -1;
+			if (s)
+				return pos;
+		}
+	}
+	return -1;
+}
+
+/*
+ * Binary search forward (mod ja->nr) from a non-empty anchor for the
+ * write head — the bucket with the maximum seq. In healthy state the
+ * in-use buckets form a contiguous range with monotonically increasing
+ * seqs from tail to head, with the discarded region as a contiguous run
+ * of empties just past the head.
+ *
+ * Returns the head's bucket index, or -1 if a peek error forces fallback.
+ */
+static int journal_bsearch_head(struct bch_dev *ca,
+				struct journal_read_buf *buf,
+				unsigned long *peeked,
+				unsigned anchor)
+{
+	struct journal_device *ja = &ca->journal;
+	unsigned lo = anchor;
+	unsigned hi = anchor + ja->nr - 1;
+
+	while (lo < hi) {
+		unsigned mid = (lo + hi + 1) / 2;	/* bias high */
+		unsigned mid_b = mid % ja->nr;
+		unsigned lo_b  = lo % ja->nr;
+
+		s64 s_mid = journal_peek_once(ca, buf, peeked, mid_b);
+		if (s_mid < 0)
+			return -1;
+
+		u64 s_lo = ja->bucket_seq[lo_b];
+
+		if (!s_mid)
+			/* mid is empty (discarded); head is in [lo, mid) */
+			hi = mid - 1;
+		else if ((u64)s_mid > s_lo)
+			/* same in-use range, head is at or after mid */
+			lo = mid;
+		else
+			/* wrapped past head; head < mid */
+			hi = mid - 1;
+	}
+
+	return lo % ja->nr;
+}
+
+/*
+ * Walk backwards (mod ja->nr) from the write head, pushing each
+ * non-empty bucket onto `order`. Stops at the first empty bucket
+ * (discarded boundary). Returns -1 if the seqs aren't strictly
+ * decreasing going backwards from head — that's the fallback signal
+ * to redo with the full Pass 1 scan.
+ *
+ * Strictly decreasing (not just non-increasing): on a single device
+ * with replicas=1 the seqs descend by 1 between adjacent buckets; on
+ * multi-device with replication, a given device only sees the seqs
+ * that landed on it, so gaps are normal — but a given seq still maps
+ * to a single bucket per device, so two adjacent buckets with the
+ * same seq is impossible and signals corruption.
+ */
+static int journal_walk_inuse(struct bch_dev *ca,
+			      struct journal_read_buf *buf,
+			      unsigned long *peeked, unsigned head,
+			      darray_journal_bucket_entry *order)
+{
+	struct journal_device *ja = &ca->journal;
+	u64 prev_seq = ja->bucket_seq[head];
+
+	if (!prev_seq)
+		return -1;
+
+	journal_bucket_entry e = { .bucket = head, .seq = prev_seq };
+	if (darray_push(order, e))
+		return -1;
+
+	for (unsigned k = 1; k < ja->nr; k++) {
+		unsigned idx = (head + ja->nr - k) % ja->nr;
+
+		s64 s = journal_peek_once(ca, buf, peeked, idx);
+		if (s < 0)
+			return -1;
+		if (!s)
+			break;			/* hit discarded region */
+		if ((u64)s >= prev_seq)
+			return -1;		/* non-decreasing — fallback */
+
+		journal_bucket_entry e2 = { .bucket = idx, .seq = s };
+		if (darray_push(order, e2))
+			return -1;
+		prev_seq = s;
+	}
+	return 0;
+}
+
+/*
+ * Locate the in-use journal bucket range, populating `order` with all
+ * live buckets:
+ *
+ *   - Fast path: binary search forward from an anchor to the head,
+ *     then backwards walk while seqs are monotonic and bucket-contiguous.
+ *
+ *   - Slow fallback: if bsearch / walk / monotonicity / contiguity fails,
+ *     ensure every bucket has been peeked, then rebuild order from every
+ *     non-empty peeked bucket. Anchor descent already covers the whole
+ *     ring when no anchor is found early, so the additional peeks here
+ *     are bounded by ja->nr.
+ *
+ *   - Anchor-not-found: every bucket peeked and empty -> journal is
+ *     empty. `order` stays empty; caller falls through to the slow
+ *     full-bucket-read path (which handles the empty-journal case too).
+ *
+ * Returns 0 on success (including empty-journal), -1 on alloc / IO /
+ * darray_push failure.
+ */
+static int journal_bsearch_collect(struct bch_dev *ca,
+				   struct journal_read_buf *buf,
+				   darray_journal_bucket_entry *order)
+{
+	struct journal_device *ja = &ca->journal;
+	int ret = -1;
+
+	unsigned long *peeked = kvcalloc(BITS_TO_LONGS(ja->nr),
+					 sizeof(unsigned long), GFP_KERNEL);
+	if (!peeked)
+		return -1;
+
+	int anchor = journal_anchor_bucket(ca, buf, peeked);
+	if (anchor < 0) {
+		/* journal is empty — every bucket peeked, none had a jset */
+		ret = 0;
+		goto out;
+	}
+
+	int head = journal_bsearch_head(ca, buf, peeked, anchor);
+	if (head < 0)
+		goto rebuild;
+
+	if (journal_walk_inuse(ca, buf, peeked, head, order))
+		goto rebuild;
+
+	/*
+	 * No post-walk seq-contiguity check: walk_inuse already enforces
+	 * strictly-decreasing seqs, which is the correct invariant for both
+	 * single-device (descend by 1) and multi-device with replication
+	 * (gaps where a seq went to other devices, no two adjacent buckets
+	 * with the same seq on this device).
+	 */
+	ret = 0;
+	goto out;
+
+rebuild:
+	/*
+	 * Bsearch / walk / validation failed. Peek any remaining unpeeked
+	 * buckets so we have a complete view, then rebuild order from every
+	 * non-empty bucket (same as the old Pass 1 loop did).
+	 */
+	order->nr = 0;
+	for (unsigned i = 0; i < ja->nr; i++) {
+		s64 s = journal_peek_once(ca, buf, peeked, i);
+		if (s < 0)
+			goto out;
+		if (!s)
+			continue;
+		journal_bucket_entry e = { .bucket = i, .seq = (u64)s };
+		if (darray_push(order, e))
+			goto out;
+	}
+	ret = 0;
+out:
+	kvfree(peeked);
+	if (ret)
+		order->nr = 0;
+	return ret;
+}
+
 static CLOSURE_CALLBACK(bch2_journal_read_device)
 {
 	closure_type(ja, struct journal_device, read);
@@ -499,25 +734,19 @@ static CLOSURE_CALLBACK(bch2_journal_read_device)
 	 *
 	 * Skip when reading the entire journal is requested (fsck, debugging).
 	 */
-	if (!c->opts.read_entire_journal && !c->opts.fsck && ja->nr > 32) {
+	if (!c->opts.read_entire_journal && ja->nr > 32 && !jlist->full_read) {
 		CLASS(darray_journal_bucket_entry, order)();
 
-		/* Pass 1: read first block of each bucket for seq numbers */
-		for (i = 0; i < ja->nr; i++) {
-			ret = journal_peek_bucket(ca, &buf, i);
-			if (ret)
-				goto err;
-			if (!ja->bucket_seq[i])
-				continue;
-
-			journal_bucket_entry e = {
-				.bucket	= i,
-				.seq	= ja->bucket_seq[i],
-			};
-			ret = darray_push(&order, e);
-			if (ret)
-				goto full_read;
-		}
+		/*
+		 * Fast path: O(log nr + dirty_size) peeks via binary search +
+		 * monotonic backwards walk. journal_bsearch_collect handles
+		 * its own fallback internally (rebuilds order from all peeked
+		 * buckets if bsearch / walk fails). An empty order on return
+		 * means the journal itself is empty -> slow full-bucket-read.
+		 */
+		ret = journal_bsearch_collect(ca, &buf, &order);
+		if (ret)
+			goto err;
 
 		if (!order.nr)
 			goto full_read;
@@ -691,6 +920,75 @@ struct u64_range bch2_journal_entry_missing_range(struct bch_fs *c, u64 start, u
 	return missing;
 }
 
+/*
+ * Returns true if any seq in [start_seq, end_seq] is missing from
+ * c->journal_entries (excluding blacklisted ranges). Used to decide whether
+ * to fall back to a full per-device journal read after the bsearch fast
+ * path; the bsearch on any single device may legitimately have gaps on
+ * multi-device + replication setups, but the union across devices must
+ * cover the live range.
+ */
+static bool journal_has_any_missing(struct bch_fs *c, u64 start_seq, u64 end_seq)
+{
+	struct genradix_iter radix_iter;
+	struct journal_replay *i, **_i;
+	u64 seq = start_seq;
+
+	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+		i = *_i;
+		if (journal_replay_ignore(i))
+			continue;
+		if (bch2_journal_entry_missing_range(c, seq, le64_to_cpu(i->j.seq)).start)
+			return true;
+		seq = le64_to_cpu(i->j.seq) + 1;
+	}
+	return bch2_journal_entry_missing_range(c, seq, end_seq + 1).start != 0;
+}
+
+/*
+ * Re-read every journal bucket on every member device that could have used
+ * the bsearch fast path (ja->nr > 32), in parallel via the existing closure
+ * infrastructure. A fresh stack closure parents the round; we set
+ * full_read on a temp jlist so bch2_journal_read_device skips bsearch and
+ * goes straight to the peek-every-bucket path. journal_entry_add dedupes
+ * by genradix slot so re-adding seqs the initial round already found is a
+ * no-op. last_seq is carried in so filtering matches.
+ */
+static int journal_retry_full_read(struct bch_fs *c, struct journal_list *jlist)
+{
+	struct journal_list retry_jlist = { .last_seq = jlist->last_seq, .full_read = true };
+
+	closure_init_stack(&retry_jlist.cl);
+	mutex_init(&retry_jlist.lock);
+
+	for_each_member_device(c, ca) {
+		struct journal_device *ja = &ca->journal;
+
+		if (ja->nr <= 32)
+			continue;
+
+		if (!(ca->mi.state == BCH_MEMBER_STATE_rw ||
+		      ca->mi.state == BCH_MEMBER_STATE_ro))
+			continue;
+
+		if (!enumerated_ref_tryget(&ca->io_ref[READ],
+					   BCH_DEV_READ_REF_journal_read))
+			continue;
+
+		closure_call(&ca->journal.read,
+			     bch2_journal_read_device,
+			     system_unbound_wq,
+			     &retry_jlist.cl);
+	}
+
+	closure_sync_unbounded(&retry_jlist.cl);
+
+	if (retry_jlist.last_seq > jlist->last_seq)
+		jlist->last_seq = retry_jlist.last_seq;
+
+	return retry_jlist.ret;
+}
+
 noinline_for_stack
 static int bch2_journal_check_for_missing(struct bch_fs *c, u64 start_seq, u64 end_seq)
 {
@@ -773,11 +1071,9 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 	if (need_from >= c->journal_replay_seq_start)
 		return 0; /* nothing extra needed */
 
-	struct journal_list jlist;
+	struct journal_list jlist = { .last_seq = need_from };
 	closure_init_stack(&jlist.cl);
 	mutex_init(&jlist.lock);
-	jlist.last_seq = need_from;
-	jlist.ret = 0;
 
 	for_each_member_device(c, ca) {
 		struct journal_device *ja = &ca->journal;
@@ -792,7 +1088,7 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 			continue;
 
 		struct journal_read_buf buf = { NULL, 0 };
-		int ret = journal_read_buf_realloc(c, &buf, PAGE_SIZE);
+		int ret = journal_read_buf_realloc(c, &buf, bucket_bytes(ca));
 		if (ret) {
 			enumerated_ref_put(&ca->io_ref[READ],
 					   BCH_DEV_READ_REF_journal_read);
@@ -838,10 +1134,11 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 
 int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 {
-	struct journal_list jlist;
+	struct journal_list jlist = { .last_seq = 0 };
 	struct journal_replay *i, **_i;
 	struct genradix_iter radix_iter;
 	bool last_write_torn = false;
+	bool bsearch_used = !c->opts.read_entire_journal;
 	u64 seq;
 	int ret = 0;
 
@@ -849,8 +1146,6 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 
 	closure_init_stack(&jlist.cl);
 	mutex_init(&jlist.lock);
-	jlist.last_seq = 0;
-	jlist.ret = 0;
 
 	for_each_member_device(c, ca) {
 		if (!c->opts.read_entire_journal &&
@@ -989,6 +1284,20 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 				    "found blacklisted journal entry %llu", seq);
 			i->ignore_blacklisted = true;
 		}
+	}
+
+	/*
+	 * If the per-device bsearch fast path was used, it may legitimately
+	 * have gaps in any single device's bucket_seq (multi-device with
+	 * replication: seqs that went to other devices), so the only valid
+	 * place to verify completeness is here, against the union of all
+	 * devices' entries in c->journal_entries. If anything's missing,
+	 * fall back to a full per-device read before erroring.
+	 */
+	if (bsearch_used &&
+	    journal_has_any_missing(c, drop_before, info->replay_end)) {
+		try(journal_retry_full_read(c, &jlist));
+		bsearch_used = false;
 	}
 
 	try(bch2_journal_check_for_missing(c, drop_before, info->replay_end));

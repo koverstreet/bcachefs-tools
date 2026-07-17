@@ -72,7 +72,7 @@ bool bch2_data_update_in_flight(struct bch_fs *c, struct bbpos *pos,
 	return false;
 }
 
-static void ptr_bits_to_text(struct printbuf *out, unsigned ptrs, const char *name)
+static __cold void ptr_bits_to_text(struct printbuf *out, unsigned ptrs, const char *name)
 {
 	if (ptrs) {
 		prt_printf(out, "%s ptrs:\t", name);
@@ -156,25 +156,13 @@ unsigned ptr_mask_remap(struct bch_fs *c,
 	return newmask;
 }
 
-static unsigned bkey_has_device_mask(struct bch_fs *c, struct bkey_s_c k, unsigned dev)
-{
-	unsigned ptr_bit = 1;
-	bkey_for_each_ptr(bch2_bkey_ptrs_c(k), ptr) {
-		if (ptr->dev == dev)
-			return ptr_bit;
-		ptr_bit <<= 1;
-	}
-
-	return 0;
-}
-
 /* Returns mask of pointers in @k1 that conflict with pointers in @k2 */
 static unsigned bkey_ptr_conflicts_mask(struct bch_fs *c, struct bkey_s_c k1, struct bkey_s_c k2)
 {
 	unsigned ptrs_conflict = 0;
 
 	bkey_for_each_ptr(bch2_bkey_ptrs_c(k2), ptr)
-		ptrs_conflict |= bkey_has_device_mask(c, k1, ptr->dev);
+		ptrs_conflict |= bch2_bkey_dev_ptr_bit(c, k1, ptr->dev);
 	return ptrs_conflict;
 }
 
@@ -186,11 +174,11 @@ static unsigned bkey_ptr_noncached_conflicts_mask(struct bch_fs *c, struct bkey_
 
 	bkey_for_each_ptr(bch2_bkey_ptrs_c(k2), ptr)
 		if (!ptr->cached)
-			ptrs_conflict |= bkey_has_device_mask(c, k1, ptr->dev);
+			ptrs_conflict |= bch2_bkey_dev_ptr_bit(c, k1, ptr->dev);
 	return ptrs_conflict;
 }
 
-static void data_update_key_to_text(struct printbuf *out,
+static __cold void data_update_key_to_text(struct printbuf *out,
 				    struct data_update *u,
 				    struct bkey_s_c new,
 				    struct bkey_s_c wrote,
@@ -245,8 +233,6 @@ static int data_update_index_update_key(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 	struct bkey_s_c old = bkey_i_to_s_c(u->k.k);
-
-	bch2_trans_begin(trans);
 
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(iter));
 
@@ -741,14 +727,24 @@ void bch2_data_update_read_done(struct data_update *u)
 	closure_call(&u->op.cl, bch2_write, NULL, NULL);
 }
 
-static inline bool should_trace_update_err(struct data_update *u, int ret)
+/*
+ * Failures that are the expected outcome of a routine control-flow path
+ * aren't worth a data_update_fail event: in-flight collisions and
+ * need_copygc retries resolve themselves, blocked/would_block means the
+ * caller waits for that condition and retries, and no_rw_devs for
+ * reconcile/promote means the work parks on the pending list (recorded by
+ * the reconcile_set_pending event). Shared with the btree node rewrite leg
+ * in move.c, which has no struct data_update.
+ */
+bool bch2_data_update_fail_should_trace(enum bch_data_update_types type, int ret)
 {
 	if (bch2_err_matches(ret, BCH_ERR_data_update_fail_in_flight) ||
 	    bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc) ||
-	    ((u->opts.type == BCH_DATA_UPDATE_reconcile ||
-	      u->opts.type == BCH_DATA_UPDATE_promote) &&
+	    bch2_err_matches(ret, BCH_ERR_data_update_fail_would_block) ||
+	    bch2_err_matches(ret, BCH_ERR_operation_blocked) ||
+	    ((type == BCH_DATA_UPDATE_reconcile ||
+	      type == BCH_DATA_UPDATE_promote) &&
 	     (bch2_err_matches(ret, BCH_ERR_data_update_fail_no_rw_devs) ||
-	      bch2_err_matches(ret, BCH_ERR_insufficient_devices) ||
 	      /*
 	       * The allocator reports a fully-exhausted retry sequence as
 	       * BCH_ERR_freelist_empty/no_buckets_found. Reconcile demotes
@@ -779,7 +775,7 @@ static void data_update_trace(struct data_update *u, int ret)
 				bch2_data_update_to_text(&buf, u);
 				prt_printf(&buf, "\nret:\t%s\n", bch2_err_str(ret));
 		}));
-	else if (should_trace_update_err(u, ret))
+	else if (bch2_data_update_fail_should_trace(u->opts.type, ret))
 		event_add_trace(c, data_update_fail, u->k.k->k.size, buf, ({
 				bch2_data_update_to_text(&buf, u);
 				prt_printf(&buf, "\nret:\t%s\n", bch2_err_str(ret));
@@ -816,7 +812,6 @@ void bch2_data_update_exit(struct data_update *update, int ret)
 		bch2_bkey_nocow_unlock(c, k, update->cas, 0);
 	bkey_put_dev_refs(c, k, update->cas);
 	bch2_disk_reservation_put(c, &update->op.res);
-	bch2_bkey_buf_exit(&update->k);
 }
 
 static noinline_for_stack
@@ -857,7 +852,7 @@ int bch2_update_unwritten_extent(struct btree_trans *trans,
 				update->op.nr_replicas,
 				update->op.nr_replicas,
 				update->op.watermark,
-				0, &cl, &wp);
+				update->op.flags, &cl, &wp);
 		if (bch2_err_matches(ret, BCH_ERR_operation_blocked)) {
 			bch2_trans_unlock(trans);
 			closure_sync(&cl);
@@ -899,7 +894,7 @@ int bch2_update_unwritten_extent(struct btree_trans *trans,
 	return ret;
 }
 
-void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
 				   struct bch_inode_opts *io_opts,
 				   struct data_update_opts *data_opts)
 {
@@ -929,7 +924,7 @@ void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c,
 	prt_newline(out);
 }
 
-void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
+__cold void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
 {
 	bch2_data_update_opts_to_text(out, m->op.c, &m->op.opts, &m->opts);
 	prt_newline(out);
@@ -942,7 +937,7 @@ void bch2_data_update_to_text(struct printbuf *out, struct data_update *m)
 	__bch2_write_op_to_text(out, &m->op);
 }
 
-void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update *m)
+__cold void bch2_data_update_inflight_to_text(struct printbuf *out, struct data_update *m)
 {
 	bch2_bkey_val_to_text(out, m->op.c, bkey_i_to_s_c(m->k.k));
 	prt_newline(out);
@@ -1030,10 +1025,10 @@ static int bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
 
 static unsigned durability_available_on_target(struct bch_fs *c,
 					       enum bch_watermark watermark,
+					       enum bch_write_flags write_flags,
 					       enum bch_data_type data_type,
 					       unsigned target,
 					       struct bch_devs_list *devs_have,
-					       bool nonblocking,
 					       struct printbuf *trace,
 					       bool *need_copygc)
 {
@@ -1045,6 +1040,8 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 		printbuf_atomic_inc(trace);
 	}
 
+	/* bch2_copygc_can_make_progress needs to read accounting for dev_leaving */
+	guard(percpu_read)(&c->capacity.mark_lock);
 	guard(rcu)();
 	struct bch_devs_mask devs = target_rw_devs(c, data_type, target);
 	unsigned durability = 0;
@@ -1058,12 +1055,10 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 		if (!ca)
 			continue;
 
-		u64 free = nonblocking
-			? dev_buckets_free(ca, watermark)
-			: dev_buckets_available(ca, watermark);
+		u64 free = dev_buckets_free(ca, watermark);
 		if (free)
-			durability += ca->mi.durability;
-		else if (!bch2_copygc_dev_wait_amount(ca)) {
+			durability += (write_flags & BCH_WRITE_cached) ? 1 : ca->mi.durability;
+		else if (bch2_copygc_can_make_progress(ca)) {
 			*need_copygc = true;
 			bch2_copygc_wakeup(c);
 		}
@@ -1084,9 +1079,9 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 static unsigned bch2_btree_ptr_durability_on_target(struct bch_fs *c, struct bkey_s_c k,
 					       unsigned target)
 {
-	/* Doesn't handle stripe pointers: */
+	/* Doesn't handle stripe pointers; btree ptrs should not have any. */
 
-	struct bch_devs_mask devs = target_rw_devs(c, BCH_DATA_user, target);
+	struct bch_devs_mask devs = target_rw_devs(c, BCH_DATA_btree, target);
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
@@ -1101,6 +1096,37 @@ static unsigned bch2_btree_ptr_durability_on_target(struct bch_fs *c, struct bke
 	return durability;
 }
 
+static bool bch2_btree_ptr_has_dev_evacuating(struct bch_fs *c, struct bkey_s_c k)
+{
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+
+	guard(rcu)();
+	bkey_for_each_ptr(ptrs, ptr) {
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, ptr->dev);
+		if (ca && ca->mi.state == BCH_MEMBER_STATE_evacuating)
+			return true;
+	}
+
+	return false;
+}
+
+/*
+ * A btree node rewrite allocates a full replacement - there are no partial
+ * (per-pointer) btree node updates. Whether a rewrite is worth doing comes
+ * down to two questions:
+ *
+ * Would the replacement be an improvement? Progress means more replicas on
+ * the requested target, higher total durability, or getting off an
+ * evacuating device. A rewrite that can do none of these just burns IO and
+ * requeues itself forever: btree node allocation spills off target rather
+ * than failing (metadata must be written), so an off-target rewrite
+ * "succeeds", still off target, and the trigger queues it again.
+ *
+ * Would it regress? Because allocation spills, the replacement's durability
+ * is whatever the whole filesystem can provide - if that's less than the
+ * node has now, the rewrite trades existing replicas for placement. Only
+ * evacuation justifies that.
+ */
 static int bch2_can_do_write_btree(struct bch_fs *c,
 				   struct bch_inode_opts *opts,
 				   struct data_update_opts *data_opts, struct bkey_s_c k,
@@ -1109,24 +1135,33 @@ static int bch2_can_do_write_btree(struct bch_fs *c,
 	enum bch_watermark watermark = data_opts->commit_flags & BCH_WATERMARK_MASK;
 	struct bch_devs_list empty = {};
 	bool need_copygc = false;
+	bool evacuating = bch2_btree_ptr_has_dev_evacuating(c, k);
 
+	/* Dropping excess replicas is progress regardless of placement: */
 	if (bch2_bkey_nr_dirty_ptrs(c, k) > opts->data_replicas)
 		return 0;
 
-	if (durability_available_on_target(c, watermark, BCH_DATA_btree, data_opts->target, &empty,
-					   data_opts->write_flags & BCH_WRITE_alloc_nowait,
-					   trace, &need_copygc) >
-	    bch2_btree_ptr_durability_on_target(c, k, data_opts->target))
-		return 0;
+	unsigned durability		= bch2_btree_ptr_durability(c, k).total;
+	unsigned target_durability	= bch2_btree_ptr_durability_on_target(c, k, data_opts->target);
+	unsigned target_available	=
+		durability_available_on_target(c, watermark, data_opts->write_flags,
+					       BCH_DATA_btree, data_opts->target, &empty,
+					       trace, &need_copygc);
+	unsigned fs_available		= data_opts->target
+		? durability_available_on_target(c, watermark, data_opts->write_flags,
+						 BCH_DATA_btree, 0, &empty,
+						 trace, &need_copygc)
+		: target_available;
 
-	if (!(data_opts->write_flags & BCH_WRITE_only_specified_devs)) {
-		unsigned d = bch2_btree_ptr_durability(c, k).total;
-		if (d < opts->data_replicas &&
-		    d < durability_available_on_target(c, watermark, BCH_DATA_btree, 0, &empty,
-						       data_opts->write_flags & BCH_WRITE_alloc_nowait,
-						       trace, &need_copygc))
-			return 0;
-	}
+	bool improves_placement		= target_available > target_durability;
+	bool improves_durability	= durability < opts->data_replicas &&
+					  fs_available > durability;
+	bool degrades			= fs_available < min(durability, opts->data_replicas);
+
+	if (evacuating
+	    ? fs_available > 0
+	    : (improves_placement || improves_durability) && !degrades)
+		return 0;
 
 	return __bch2_err_throw(c, !need_copygc
 				? -BCH_ERR_data_update_fail_no_rw_devs
@@ -1149,13 +1184,8 @@ static int __bch2_can_do_write(struct bch_fs *c,
 		? data_opts->target
 		: 0;
 
-	if ((data_opts->write_flags & BCH_WRITE_alloc_nowait) &&
-	    unlikely(c->allocator.open_buckets_nr_free <= bch2_open_buckets_reserved(watermark)))
-		return bch_err_throw(c, data_update_fail_would_block);
-
 	if (btree &&
-	    data_opts->type == BCH_DATA_UPDATE_reconcile &&
-	    !bch2_bkey_has_ptr_bad_or_evacuating(c, k))
+	    data_opts->type == BCH_DATA_UPDATE_reconcile)
 		return bch2_can_do_write_btree(c, opts, data_opts, k, trace);
 
 	if (trace) {
@@ -1168,8 +1198,8 @@ static int __bch2_can_do_write(struct bch_fs *c,
 	}
 
 	bool need_copygc = false;
-	if (durability_available_on_target(c, watermark, data_type, target, devs_have,
-					   data_opts->write_flags & BCH_WRITE_alloc_nowait,
+	if (durability_available_on_target(c, watermark, data_opts->write_flags,
+					   data_type, target, devs_have,
 					   trace, &need_copygc))
 		return 0;
 
@@ -1333,7 +1363,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 	    k.k->p.snapshot &&
 	    unlikely(ret = bch2_check_key_has_snapshot(trans, iter, k))) {
 		if (ret > 0) /* key was deleted */
-			ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
+			ret = bch2_trans_commit(trans, &m->op.res, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
 				bch_err_throw(c, data_update_fail_no_snapshot);
 		if (bch2_err_matches(ret, BCH_ERR_recovery_will_run)) {
 			/* Can't repair yet, waiting on other recovery passes */
@@ -1377,11 +1407,17 @@ int bch2_data_update_init(struct btree_trans *trans,
 		/*
 		 * op->csum_type is normally initialized from the fs/file's
 		 * current options - but if an extent is encrypted, we require
-		 * that it stays encrypted:
+		 * that it stays encrypted. Only the encryption *class* is
+		 * forced, not the exact type: chacha20_poly1305_80 <-> 128 is
+		 * a MAC width change within the class - same cipher, same
+		 * nonce discipline, only the stored tag width differs - and
+		 * reconcile must be able to make it, or a wide_macs change
+		 * livelocks re-queueing extents it can never convert:
 		 */
 		if (bch2_csum_type_is_encryption(p.crc.csum_type)) {
 			m->op.nonce	= p.crc.nonce + p.crc.offset;
-			m->op.csum_type = p.crc.csum_type;
+			if (!bch2_csum_type_is_encryption(m->op.csum_type))
+				m->op.csum_type = p.crc.csum_type;
 		}
 
 		if (p.crc.compression_type == BCH_COMPRESSION_TYPE_incompressible)
@@ -1485,24 +1521,23 @@ int bch2_data_update_init(struct btree_trans *trans,
 	if (c->opts.nocow_enabled) {
 		if (!bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) {
 			if (!ctxt) {
-				/* We're being called from the promote path:
-				 * there is a btree_trans on the stack that's
-				 * holding locks, but we don't have a pointer to
-				 * it. Ouch - this needs to be fixed.
+				/*
+				 * Promote path: we have @trans, but promotes must
+				 * not block on a nocow lock or they'd pile up - bail
+				 * and let the caller retry.
 				 */
 				ret = bch_err_throw(c, nocow_lock_blocked);
 				goto out;
 			}
 
+			/* @trans == ctxt->trans here (see __bch2_move_extent) */
 			bool locked = false;
-			if (ctxt)
-				move_ctxt_wait_event(ctxt,
-					(locked = bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) ||
-					list_empty(&ctxt->ios));
+			move_ctxt_wait_event(ctxt,
+				(locked = bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) ||
+				list_empty(&ctxt->ios));
 			if (!locked) {
-				if (ctxt)
-					bch2_trans_unlock(ctxt->trans);
-				bch2_bkey_nocow_lock(c, ptrs, m->cas, 0);
+				bch2_trans_unlock(trans);
+				bch2_bkey_nocow_lock(c, trans, ptrs, m->cas, 0);
 			}
 		}
 	}

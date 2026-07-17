@@ -132,7 +132,7 @@ struct bset_tree *bch2_bkey_to_bset(struct btree *b, struct bkey_packed *k)
  * by the time we actually do the insert will all be deleted.
  */
 
-void bch2_btree_node_keys_to_text(struct printbuf *out, struct bch_fs *c, struct btree *b)
+__cold void bch2_btree_node_keys_to_text(struct printbuf *out, struct bch_fs *c, struct btree *b)
 {
 	struct bkey_s_c k;
 	struct bkey unpacked;
@@ -143,7 +143,7 @@ void bch2_btree_node_keys_to_text(struct printbuf *out, struct bch_fs *c, struct
 	}
 }
 
-void bch2_bset_to_text(struct printbuf *out,
+__cold void bch2_bset_to_text(struct printbuf *out,
 		       struct bch_fs *c, struct btree *b,
 		       struct bset *i, unsigned set)
 {
@@ -189,7 +189,7 @@ void bch2_bset_to_text(struct printbuf *out,
 	}
 }
 
-static void bch2_btree_node_bsets_to_text(struct printbuf *out, struct bch_fs *c, struct btree *b)
+static __cold void bch2_btree_node_bsets_to_text(struct printbuf *out, struct bch_fs *c, struct btree *b)
 {
 	for_each_bset(b, t)
 		bch2_bset_to_text(out, c, b, bset(b, t), t - b->set);
@@ -393,7 +393,8 @@ static inline void bch2_verify_insert_pos(struct btree *b,
 					  struct bkey_packed *insert,
 					  unsigned clobber_u64s)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups))
 		__bch2_verify_insert_pos(b, where, insert, clobber_u64s);
 }
 
@@ -422,7 +423,7 @@ struct rw_aux_tree {
 
 static unsigned bset_aux_tree_buf_end(const struct bset_tree *t)
 {
-	BUG_ON(t->aux_data_offset == U16_MAX);
+	EBUG_ON(t->aux_data_offset == U16_MAX);
 
 	switch (bset_aux_tree_type(t)) {
 	case BSET_NO_AUX_TREE:
@@ -618,7 +619,8 @@ start:
 static inline void bch2_bset_verify_rw_aux_tree(struct btree *b,
 						struct bset_tree *t)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups))
 		__bch2_bset_verify_rw_aux_tree(b, t);
 }
 
@@ -663,7 +665,8 @@ static void __bset_aux_tree_verify(struct btree *b)
 
 static inline void bset_aux_tree_verify(struct btree *b)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups))
 		__bset_aux_tree_verify(b);
 }
 
@@ -833,7 +836,7 @@ static noinline void __build_rw_aux_tree(struct btree *b, struct bset_tree *t)
 static noinline void __build_ro_aux_tree(struct btree *b, struct bset_tree *t)
 {
 	struct bkey_packed *k = btree_bkey_first(b, t);
-	struct bkey_i min_key, max_key;
+	struct bkey_i_padded min_key, max_key;
 	unsigned cacheline = 1;
 
 	t->size = min(bkey_to_cacheline(b, t, btree_bkey_last(b, t)),
@@ -864,29 +867,29 @@ retry:
 		EBUG_ON(tree_to_bkey(b, t, j) != k);
 	}
 
-	if (!bkey_pack_pos(bkey_to_packed(&min_key), b->data->min_key, b)) {
-		bkey_init(&min_key.k);
-		min_key.k.p = b->data->min_key;
+	if (!bch2_bkey_pack_pos(bkey_to_packed(&min_key.k), b->data->min_key, b)) {
+		bkey_init(&min_key.k.k);
+		min_key.k.k.p = b->data->min_key;
 	}
 
-	if (!bkey_pack_pos(bkey_to_packed(&max_key), b->data->max_key, b)) {
-		bkey_init(&max_key.k);
-		max_key.k.p = b->data->max_key;
+	if (!bch2_bkey_pack_pos(bkey_to_packed(&max_key.k), b->data->max_key, b)) {
+		bkey_init(&max_key.k.k);
+		max_key.k.k.p = b->data->max_key;
 	}
 
 	/* Then we build the tree */
 	eytzinger1_for_each(j, t->size - 1)
 		make_bfloat(b, t, j,
-			    bkey_to_packed(&min_key),
-			    bkey_to_packed(&max_key));
+			    bkey_to_packed(&min_key.k),
+			    bkey_to_packed(&max_key.k));
 }
 
 static void bset_alloc_tree(struct btree *b, struct bset_tree *t)
 {
-	struct bset_tree *i;
 
-	for (i = b->set; i != t; i++)
-		BUG_ON(bset_has_rw_aux_tree(i));
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG))
+		for (struct bset_tree *i = b->set; i != t; i++)
+			BUG_ON(bset_has_rw_aux_tree(i));
 
 	bch2_bset_set_no_aux_tree(b, t);
 
@@ -1006,7 +1009,8 @@ struct bkey_packed *bch2_bkey_prev_filter(struct btree *b,
 		k = p;
 	}
 
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
 		BUG_ON(ret >= orig_k);
 
 		for (i = ret
@@ -1181,6 +1185,33 @@ void bch2_bset_delete(struct btree *b,
 
 /* Lookup */
 
+/* packed or unpacked */
+static int bkey_cmp_p_or_unp(const struct btree *b,
+			     const struct bkey_packed *l,
+			     const struct bkey_packed *r_packed,
+			     const struct bpos *r)
+{
+	EBUG_ON(r_packed && !bkey_packed(r_packed));
+
+	if (unlikely(!bkey_packed(l)))
+		return bpos_cmp(packed_to_bkey_c(l)->p, *r);
+
+	if (likely(r_packed))
+		return __bch2_bkey_cmp_packed_format_checked(l, r_packed, b);
+
+	return __bch2_bkey_cmp_left_packed_format_checked(b, l, r);
+}
+
+__flatten
+static inline int bkey_iter_cmp_p_or_unp(const struct btree *b,
+				    const struct bkey_packed *l,
+				    const struct bkey_packed *r_packed,
+				    const struct bpos *r)
+{
+	return bkey_cmp_p_or_unp(b, l, r_packed, r)
+		?: -((int) bkey_deleted(l));
+}
+
 __flatten
 static struct bkey_packed *bset_search_write_set(const struct btree *b,
 				struct bset_tree *t,
@@ -1334,7 +1365,8 @@ struct bkey_packed *bch2_bset_search_linear(struct btree *b,
 		       bkey_iter_pos_cmp(b, m, search) < 0)
 			m = bkey_p_next(m);
 
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
 		struct bkey_packed *prev = bch2_bkey_prev_all(b, t, m);
 
 		BUG_ON(prev &&
@@ -1356,7 +1388,7 @@ static inline void __bch2_btree_node_iter_push(struct btree_node_iter *iter,
 		struct btree_node_iter_set *pos =
 			&iter->data[__btree_node_iter_used(iter)];
 
-		BUG_ON(pos >= iter->data + ARRAY_SIZE(iter->data));
+		EBUG_ON(pos >= iter->data + ARRAY_SIZE(iter->data));
 		*pos = (struct btree_node_iter_set) {
 			__btree_node_key_to_offset(b, k),
 			__btree_node_key_to_offset(b, end)
@@ -1443,7 +1475,8 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 			       struct btree_node_iter *iter,
 			       struct bpos *search)
 {
-	struct bkey_packed p, *packed_search = NULL;
+	struct bkey_packed_padded p;
+	struct bkey_packed *packed_search = NULL;
 	struct btree_node_iter_set *pos = iter->data;
 	struct bkey_packed *k[MAX_BSETS];
 	unsigned i;
@@ -1454,9 +1487,9 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 
 	memset(iter, 0, sizeof(*iter));
 
-	switch (bch2_bkey_pack_pos_lossy(&p, *search, b)) {
+	switch (bch2_bkey_pack_pos_lossy(&p.k, search, b)) {
 	case BKEY_PACK_POS_EXACT:
-		packed_search = &p;
+		packed_search = &p.k;
 		break;
 	case BKEY_PACK_POS_SMALLER:
 		packed_search = NULL;
@@ -1467,7 +1500,7 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 	}
 
 	for (i = 0; i < b->nsets; i++) {
-		k[i] = __bch2_bset_search(b, b->set + i, search, &p);
+		k[i] = __bch2_bset_search(b, b->set + i, search, &p.k);
 		prefetch_four_cachelines(k[i]);
 	}
 
@@ -1476,7 +1509,7 @@ void bch2_btree_node_iter_init(struct bch_fs *c, struct btree *b,
 		struct bkey_packed *end = btree_bkey_last(b, t);
 
 		k[i] = bch2_bset_search_linear(b, t, search,
-					       packed_search, &p, k[i]);
+					       packed_search, &p.k, k[i]);
 		if (k[i] != end)
 			*pos++ = (struct btree_node_iter_set) {
 				__btree_node_key_to_offset(b, k[i]),
@@ -1577,7 +1610,8 @@ static inline void __bch2_btree_node_iter_advance(struct btree_node_iter *iter,
 void bch2_btree_node_iter_advance(struct btree_node_iter *iter,
 				  struct btree *b)
 {
-	if (static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_bset_lookups)) {
 		__bch2_btree_node_iter_verify(iter, b);
 		__bch2_btree_node_iter_next_check(iter, b);
 	}
@@ -1617,7 +1651,7 @@ struct bkey_packed *bch2_btree_node_iter_prev_all(struct btree_node_iter *iter,
 	struct btree_node_iter_set *set = btree_node_iter_set_find(iter, end) ?:
 		&iter->data[__btree_node_iter_used(iter)];
 
-	BUG_ON(set >= iter->data + ARRAY_SIZE(iter->data));
+	EBUG_ON(set >= iter->data + ARRAY_SIZE(iter->data));
 
 	memmove(&iter->data[1],
 		&iter->data[0],
@@ -1674,7 +1708,7 @@ void bch2_btree_keys_stats(const struct btree *b, struct bset_stats *stats)
 	}
 }
 
-void bch2_bfloat_to_text(struct printbuf *out, struct btree *b,
+__cold void bch2_bfloat_to_text(struct printbuf *out, struct btree *b,
 			 struct bkey_packed *k)
 {
 	struct bset_tree *t = bch2_bkey_to_bset(b, k);

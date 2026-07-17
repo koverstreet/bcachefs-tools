@@ -1,6 +1,8 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 set -o errexit
+
+trap 'rc=$?; echo >&2 "make-release-tarball.sh: FAILED at line $LINENO: \`$BASH_COMMAND\` (exit $rc)"; exit $rc' ERR
 
 version=$1
 

@@ -126,7 +126,7 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 	}
 
 	ret = bch2_extent_update(trans, inum, iter, new.k, new_buf_u64s, &res.r,
-				 0, i_sectors_delta, true, 0);
+				 0, i_sectors_delta, true, 0, NULL);
 err:
 	if (!ret && sectors_allocated)
 		bch2_increment_clock(c, sectors_allocated, WRITE);
@@ -197,7 +197,7 @@ int bch2_fpunch_at(struct btree_trans *trans, struct btree_iter *iter,
 		/*
 		 * peek_max() doesn't have ideal semantics for extents:
 		 */
-		k = bch2_btree_iter_peek_max(iter, end_pos);
+		k = bch2_btree_iter_peek_max(iter, &end_pos);
 		if (!k.k)
 			break;
 
@@ -212,7 +212,7 @@ int bch2_fpunch_at(struct btree_trans *trans, struct btree_iter *iter,
 		bch2_key_resize(&delete.k, min(end, k.k->p.offset) - iter->pos.offset);
 
 		ret = bch2_extent_update(trans, inum, iter, &delete, delete.k.u64s,
-				&res.r, 0, i_sectors_delta, false, 0);
+				&res.r, 0, i_sectors_delta, false, 0, NULL);
 	}
 
 	return ret ?: ret2;
@@ -232,7 +232,7 @@ int bch2_fpunch(struct bch_fs *c, subvol_inum inum, u64 start, u64 end,
 
 /* truncate: */
 
-void bch2_logged_op_truncate_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_logged_op_truncate_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_logged_op_truncate op = bkey_s_c_to_logged_op_truncate(k);
 
@@ -305,7 +305,7 @@ int bch2_truncate(struct bch_fs *c, subvol_inum inum, u64 new_i_size, u64 *i_sec
 	 * snapshot while they're in progress, then crashing, will result in the
 	 * resume only proceeding in one of the snapshots
 	 */
-	guard(rwsem_read)(&c->snapshots.create_lock);
+	guard(percpu_read)(&c->snapshots.create_lock);
 	CLASS(btree_trans, trans)(c);
 	try(bch2_logged_op_start(trans, &op.k_i));
 	int ret = __bch2_resume_logged_op_truncate(trans, &op.k_i, i_sectors_delta);
@@ -315,7 +315,7 @@ int bch2_truncate(struct bch_fs *c, subvol_inum inum, u64 new_i_size, u64 *i_sec
 
 /* finsert/fcollapse: */
 
-void bch2_logged_op_finsert_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
+__cold void bch2_logged_op_finsert_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_s_c_logged_op_finsert op = bkey_s_c_to_logged_op_finsert(k);
 
@@ -418,7 +418,7 @@ case LOGGED_OP_FINSERT_shift_extents:
 
 		k = insert
 			? bch2_btree_iter_peek_prev_min(&iter, POS(inum.inum, 0))
-			: bch2_btree_iter_peek_max(&iter, POS(inum.inum, U64_MAX));
+			: bch2_btree_iter_peek_max(&iter, &POS(inum.inum, U64_MAX));
 		if ((ret = bkey_err(k)))
 			goto btree_err;
 
@@ -438,15 +438,17 @@ case LOGGED_OP_FINSERT_shift_extents:
 					0);
 			if (ret)
 				goto btree_err;
-		} else if (insert &&
-			   bkey_lt(bkey_start_pos(k.k), src_pos)) {
+		}
+
+		if (bkey_lt(bkey_start_pos(k.k), src_pos)) {
 			bch2_cut_front(c, src_pos, copy);
 
 			/* Splitting compressed extent? */
-			bch2_disk_reservation_add(c, &disk_res,
-					copy->k.size *
-					bch2_bkey_nr_ptrs_allocated(c, bkey_i_to_s_c(copy)),
-					BCH_DISK_RESERVATION_NOFAIL);
+			if (snapshot == k.k->p.snapshot)
+				bch2_disk_reservation_add(c, &disk_res,
+							  copy->k.size *
+							  bch2_bkey_nr_ptrs_allocated(c, bkey_i_to_s_c(copy)),
+							  BCH_DISK_RESERVATION_NOFAIL);
 		}
 
 		bkey_init(&delete.k);
@@ -521,7 +523,7 @@ int bch2_fcollapse_finsert(struct bch_fs *c, subvol_inum inum,
 	 * snapshot while they're in progress, then crashing, will result in the
 	 * resume only proceeding in one of the snapshots
 	 */
-	guard(rwsem_read)(&c->snapshots.create_lock);
+	guard(percpu_read)(&c->snapshots.create_lock);
 	CLASS(btree_trans, trans)(c);
 	try(bch2_logged_op_start(trans, &op.k_i));
 	int ret = __bch2_resume_logged_op_finsert(trans, &op.k_i, i_sectors_delta);

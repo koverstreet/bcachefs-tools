@@ -13,6 +13,7 @@ struct bch_member_cpu {
 	u8			data_allowed;
 	u8			durability;
 	u8			freespace_initialized;
+	u8			initialized;
 	u8			resize_on_mount;
 	u8			rotational;
 	u8			valid;

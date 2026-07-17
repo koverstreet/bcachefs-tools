@@ -8,6 +8,9 @@
 #include "alloc/buckets.h"
 #include "alloc/replicas.h"
 
+#include "btree/bkey_methods.h"
+#include "btree/iter.h"
+
 #include "data/move.h"
 
 #include "fs/check.h"
@@ -57,6 +60,30 @@ DEFINE_CLASS(bch2_device_lookup, struct bch_dev *,
       bch2_device_lookup(c, dev, flags),
       struct bch_fs *c, u64 dev, unsigned flags);
 
+/*
+ * Lookup variant for handlers that block on state_lock (set-state,
+ * offline, resize, remove): device removal drains ca->ref under
+ * state_lock, so holding ca->ref across a state_lock acquisition
+ * deadlocks against it. These handlers hold ref_outer (memory lifetime
+ * only) instead; their callees recheck ca->removing under the lock.
+ */
+static struct bch_dev *bch2_device_lookup_outer(struct bch_fs *c, u64 dev,
+						unsigned flags)
+{
+	struct bch_dev *ca = bch2_device_lookup(c, dev, flags);
+
+	if (!IS_ERR_OR_NULL(ca)) {
+		bch2_dev_get_outer(ca);
+		bch2_dev_put(ca);
+	}
+	return ca;
+}
+
+DEFINE_CLASS(bch2_device_lookup_outer, struct bch_dev *,
+      bch2_dev_put_outer(_T),
+      bch2_device_lookup_outer(c, dev, flags),
+      struct bch_fs *c, u64 dev, unsigned flags);
+
 static long bch2_global_ioctl(unsigned cmd, void __user *arg)
 {
 	long ret;
@@ -97,7 +124,7 @@ int bch2_copy_ioctl_err_msg(struct bch_ioctl_err_msg *dst, struct printbuf *src,
 static long bch2_ioctl_disk_add(struct bch_fs *c, struct bch_ioctl_disk arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (arg.flags || arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_add_bad_flags);
@@ -113,7 +140,7 @@ static long bch2_ioctl_disk_add(struct bch_fs *c, struct bch_ioctl_disk arg)
 static long bch2_ioctl_disk_add_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (arg.flags || arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_add_v2_bad_flags);
@@ -128,7 +155,7 @@ static long bch2_ioctl_disk_add_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 ar
 static long bch2_ioctl_disk_remove(struct bch_fs *c, struct bch_ioctl_disk arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -137,21 +164,22 @@ static long bch2_ioctl_disk_remove(struct bch_fs *c, struct bch_ioctl_disk arg)
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_remove_bad_flags);
 
-	struct bch_dev *ca = bch2_device_lookup(c, arg.dev, arg.flags);
+	struct bch_dev *ca = bch2_device_lookup_outer(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
 	CLASS(printbuf, err)();
+	/* consumes our ref_outer - no using ca after this: */
 	int ret = bch2_dev_remove(c, ca, arg.flags, &err);
 	if (ret)
-		bch_err_dev(ca, "%s", err.buf);
+		bch_err(c, "%s", err.buf);
 	return ret;
 }
 
 static long bch2_ioctl_disk_remove_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -160,11 +188,12 @@ static long bch2_ioctl_disk_remove_v2(struct bch_fs *c, struct bch_ioctl_disk_v2
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_remove_v2_bad_flags);
 
-	struct bch_dev *ca = bch2_device_lookup(c, arg.dev, arg.flags);
+	struct bch_dev *ca = bch2_device_lookup_outer(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
 	CLASS(printbuf, err)();
+	/* consumes our ref_outer - no using ca after this: */
 	int ret = bch2_dev_remove(c, ca, arg.flags, &err);
 	return bch2_copy_ioctl_err_msg(&arg.err, &err, ret);
 }
@@ -172,7 +201,7 @@ static long bch2_ioctl_disk_remove_v2(struct bch_fs *c, struct bch_ioctl_disk_v2
 static long bch2_ioctl_disk_online(struct bch_fs *c, struct bch_ioctl_disk arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (arg.flags || arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_online_bad_flags);
@@ -189,7 +218,7 @@ static long bch2_ioctl_disk_online(struct bch_fs *c, struct bch_ioctl_disk arg)
 static long bch2_ioctl_disk_online_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (arg.flags || arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_online_v2_bad_flags);
@@ -204,7 +233,7 @@ static long bch2_ioctl_disk_online_v2(struct bch_fs *c, struct bch_ioctl_disk_v2
 static long bch2_ioctl_disk_offline(struct bch_fs *c, struct bch_ioctl_disk arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -213,7 +242,7 @@ static long bch2_ioctl_disk_offline(struct bch_fs *c, struct bch_ioctl_disk arg)
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_offline_bad_flags);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
@@ -227,7 +256,7 @@ static long bch2_ioctl_disk_offline(struct bch_fs *c, struct bch_ioctl_disk arg)
 static long bch2_ioctl_disk_offline_v2(struct bch_fs *c, struct bch_ioctl_disk_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -236,7 +265,7 @@ static long bch2_ioctl_disk_offline_v2(struct bch_fs *c, struct bch_ioctl_disk_v
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_offline_v2_bad_flags);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
@@ -249,7 +278,7 @@ static long bch2_ioctl_disk_set_state(struct bch_fs *c,
 			struct bch_ioctl_disk_set_state arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -259,7 +288,7 @@ static long bch2_ioctl_disk_set_state(struct bch_fs *c,
 	    arg.new_state >= BCH_MEMBER_STATE_NR)
 		return bch_err_throw(c, EINVAL_ioctl_disk_set_state_bad_args);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	errptr_try(ca);
 
 	CLASS(printbuf, err)();
@@ -274,7 +303,7 @@ static long bch2_ioctl_disk_set_state_v2(struct bch_fs *c,
 	CLASS(printbuf, err)();
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_FORCE_IF_DATA_LOST|
 			   BCH_FORCE_IF_METADATA_LOST|
@@ -284,7 +313,7 @@ static long bch2_ioctl_disk_set_state_v2(struct bch_fs *c,
 	    arg.new_state >= BCH_MEMBER_STATE_NR)
 		return bch_err_throw(c, EINVAL_ioctl_disk_set_state_v2_bad_args);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	errptr_try(ca);
 
 	int ret = bch2_dev_set_state(c, ca, arg.new_state, arg.flags, &err);
@@ -373,7 +402,7 @@ static long bch2_ioctl_data(struct bch_fs *c,
 		return -EROFS;
 
 	if (!capable(CAP_SYS_ADMIN)) {
-		ret = -EPERM;
+		ret = bch_err_throw(c, EPERM_non_admin);
 		goto put_ref;
 	}
 
@@ -450,14 +479,30 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 	if (!test_bit(BCH_FS_started, &c->flags))
 		return bch_err_throw(c, EINVAL_ioctl_query_accounting_not_started);
 
-	int ret = copy_from_user_errcode(&arg, user_arg, sizeof(arg)) ?:
-		bch2_fs_accounting_read(c, &accounting, arg.accounting_types_mask) ?:
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	/*
+	 * Per-inode and per-snapshot accounting expose per-object usage - other
+	 * users' file sizes (logical and on-disk, keyed by inode number) and the
+	 * existence and size of snapshots - so they're admin-only. The remaining
+	 * types are fs-wide or per-device aggregates and stay unprivileged, so
+	 * 'bcachefs fs usage' still works for normal users. This ioctl is
+	 * reachable by any user via the file ioctl path, not just the root-owned
+	 * control device.
+	 */
+	unsigned privileged_types = BIT(BCH_DISK_ACCOUNTING_inum) |
+				    BIT(BCH_DISK_ACCOUNTING_snapshot);
+	if ((arg.accounting_types_mask & privileged_types) &&
+	    !capable(CAP_SYS_ADMIN))
+		return bch_err_throw(c, EPERM_non_admin);
+
+	int ret = bch2_fs_accounting_read(c, &accounting, arg.accounting_types_mask) ?:
 		(arg.accounting_u64s * sizeof(u64) < accounting.nr ? -ERANGE : 0) ?:
 		copy_to_user_errcode(&user_arg->accounting, accounting.data, accounting.nr);
 	if (ret)
 		return ret;
 
-	arg.capacity		= c->capacity.capacity - percpu_u64_get(&c->capacity.usage->hidden);
+	arg.capacity		= c->capacity.capacity - percpu_u64_get(&c->capacity.pcpu->usage.hidden);
 	arg.used		= bch2_fs_usage_read_short(c).used;
 	arg.online_reserved	= percpu_u64_get(&c->capacity.pcpu->online_reserved);
 	arg.accounting_u64s	= accounting.nr / sizeof(u64);
@@ -546,7 +591,7 @@ static long bch2_ioctl_read_super(struct bch_fs *c,
 	struct bch_sb *sb;
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~(BCH_BY_INDEX|BCH_READ_DEV)) ||
 	    arg.pad)
@@ -575,7 +620,7 @@ static long bch2_ioctl_disk_get_idx(struct bch_fs *c,
 	dev_t dev = huge_decode_dev(arg.dev);
 
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if (!dev)
 		return bch_err_throw(c, EINVAL_ioctl_disk_get_idx_bad_dev);
@@ -592,13 +637,13 @@ static long bch2_ioctl_disk_resize(struct bch_fs *c,
 				   struct bch_ioctl_disk_resize arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~BCH_BY_INDEX) ||
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_disk_resize_bad_flags);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
@@ -613,7 +658,7 @@ static long bch2_ioctl_disk_resize_v2(struct bch_fs *c,
 				      struct bch_ioctl_disk_resize_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~BCH_BY_INDEX) ||
 	    arg.pad)
@@ -632,7 +677,7 @@ static long bch2_ioctl_disk_resize_journal(struct bch_fs *c,
 				   struct bch_ioctl_disk_resize_journal arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~BCH_BY_INDEX) ||
 	    arg.pad)
@@ -641,7 +686,7 @@ static long bch2_ioctl_disk_resize_journal(struct bch_fs *c,
 	if (arg.nbuckets > U32_MAX)
 		return bch_err_throw(c, EINVAL_ioctl_disk_resize_journal_too_big);
 
-	CLASS(bch2_device_lookup, ca)(c, arg.dev, arg.flags);
+	CLASS(bch2_device_lookup_outer, ca)(c, arg.dev, arg.flags);
 	if (IS_ERR(ca))
 		return PTR_ERR(ca);
 
@@ -652,7 +697,7 @@ static long bch2_ioctl_disk_resize_journal_v2(struct bch_fs *c,
 				   struct bch_ioctl_disk_resize_journal_v2 arg)
 {
 	if (!capable(CAP_SYS_ADMIN))
-		return -EPERM;
+		return bch_err_throw(c, EPERM_non_admin);
 
 	if ((arg.flags & ~BCH_BY_INDEX) ||
 	    arg.pad)
@@ -670,19 +715,89 @@ static long bch2_ioctl_disk_resize_journal_v2(struct bch_fs *c,
 	return bch2_copy_ioctl_err_msg(&arg.err, &err, ret);
 }
 
+static const unsigned query_btree_keys_flags_to_iter_flags[] = {
+	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_slots)]		= BTREE_ITER_slots,
+	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_prev)]		= BTREE_ITER_prev,
+	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots)]	= BTREE_ITER_all_snapshots,
+};
+
+static long bch2_ioctl_query_btree_keys(struct bch_fs *c,
+			struct bch_ioctl_query_btree_keys __user *user_arg)
+{
+	struct bch_ioctl_query_btree_keys arg;
+
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	/*
+	 * Exposes all filesystem metadata - dirents, inodes, xattrs - and is
+	 * reachable by any user via the file ioctl path, so admin only:
+	 */
+	if (!capable(CAP_SYS_ADMIN))
+		return bch_err_throw(c, EPERM_non_admin);
+
+	if (arg.flags & ~map_defined(query_btree_keys_flags_to_iter_flags))
+		return bch_err_throw(c, EINVAL_ioctl_query_btree_keys_bad_flags);
+
+	unsigned iter_flags = map_flags(query_btree_keys_flags_to_iter_flags, arg.flags);
+
+	/* Interior nodes aren't extents - only meaningful at level 0: */
+	if (arg.level)
+		iter_flags |= BTREE_ITER_not_extents;
+
+	if (!bch2_btree_iter_params_valid(arg.btree, arg.level,
+					  arg.start, arg.end, iter_flags))
+		return bch_err_throw(c, EINVAL_ioctl_query_btree_keys_bad_params);
+
+	/* bound per-call kernel allocation; the caller loops anyways */
+	u32 buf_size = min_t(u32, arg.buf_size, 1U << 20);
+
+	CLASS(darray_u8, out)();
+
+	int ret;
+	{
+		CLASS(btree_trans, trans)(c);
+		CLASS(btree_iter_ll, iter)(trans, (enum btree_id) arg.btree,
+					   arg.start, 0, arg.level, iter_flags);
+
+		ret = for_each_btree_key_max_continue(trans, iter, arg.end, iter_flags, k, ({
+			/* if the buffer fills before this key, resume at it: */
+			arg.start = iter.pos;
+
+			unsigned bytes = bkey_bytes(k.k);
+			int ret2 = 0;
+
+			if (out.nr + bytes > buf_size) {
+				/* buffer full - or, if empty, can't fit even one key: */
+				ret2 = out.nr ? 1 : -ERANGE;
+			} else if (darray_make_room(&out, bytes)) {
+				ret2 = -ENOMEM;
+			} else {
+				bkey_reassemble((struct bkey_i *) (out.data + out.nr), k);
+				out.nr += bytes;
+			}
+			ret2;
+		}));
+	}
+	if (ret < 0)
+		return ret;
+
+	arg.done = !ret;
+	arg.used = out.nr;
+
+	return copy_to_user_errcode(u64_to_user_ptr(arg.buf), out.data, arg.used) ?:
+		copy_to_user_errcode(user_arg, &arg, sizeof(arg));
+}
+
 #define BCH_IOCTL(_name, _argtype)					\
 do {									\
 	_argtype i;							\
 									\
 	try(copy_from_user_errcode(&i, arg, sizeof(i)));		\
-	ret = bch2_ioctl_##_name(c, i);					\
-	goto out;							\
+	return bch2_ioctl_##_name(c, i);				\
 } while (0)
 
-long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
+static long __bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 {
-	long ret;
-
 	switch (cmd) {
 	case BCH_IOCTL_QUERY_UUID:
 		return bch2_ioctl_query_uuid(c, arg);
@@ -738,10 +853,16 @@ long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 		return bch2_ioctl_query_accounting(c, arg);
 	case BCH_IOCTL_QUERY_COUNTERS:
 		return bch2_ioctl_query_counters(c, arg);
+	case BCH_IOCTL_QUERY_BTREE_KEYS:
+		return bch2_ioctl_query_btree_keys(c, arg);
 	default:
 		return -ENOTTY;
 	}
-out:
+}
+
+long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
+{
+	long ret = __bch2_fs_ioctl(c, cmd, arg);
 	if (ret < 0)
 		ret = bch2_err_class(ret);
 	return ret;

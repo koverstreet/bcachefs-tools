@@ -42,6 +42,7 @@ Architecture: linux-any
 Depends: ${shlibs:Depends}, ${misc:Depends}, python3:any
 Recommends: bcachefs-kernel-dkms (= ${binary:Version}),
             initramfs-tools | linux-initramfs-tool,
+            mokutil,
 Breaks: bcachefs-kernel-dkms (<< ${binary:Version}),
         bcachefs-kernel-dkms (>> ${binary:Version}),
 Replaces: bcachefs-kernel-dkms (<< ${binary:Version}),
@@ -60,6 +61,7 @@ Package: bcachefs-kernel-dkms
 Architecture: linux-any
 Section: kernel
 Depends: ${misc:Depends},
+	 openssl,
 	 initramfs-tools | linux-initramfs-tool,
 	 linux-headers-generic (>= 6.16) |
 	 proxmox-headers-6.17 [amd64] |

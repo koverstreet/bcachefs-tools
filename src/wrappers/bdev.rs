@@ -5,14 +5,37 @@
 //! Pure Rust replacements for get_size(), get_blocksize(), fd_to_dev_model()
 //! from tools-util.c. These work on any fd (block device or regular file).
 
+use std::fs::Metadata;
+use std::os::fd::OwnedFd;
+use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
+use std::path::PathBuf;
 
-use libc::{
-    BLKPBSZGET,
-    BLKSSZGET,
-};
+use libc::BLKPBSZGET;
 
-// linux/fs.h ioctl constants not exposed by libc crate
+// linux/fs.h ioctl constants not exposed by libc crate. Note that some
+// architectures use a 3-bit ioctl direction field.
+#[cfg(any(
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6",
+    target_arch = "sparc",
+    target_arch = "sparc64",
+))]
+const BLKGETSIZE64: libc::Ioctl = 0x40081272u32 as libc::Ioctl;
+#[cfg(not(any(
+    target_arch = "powerpc",
+    target_arch = "powerpc64",
+    target_arch = "mips",
+    target_arch = "mips32r6",
+    target_arch = "mips64",
+    target_arch = "mips64r6",
+    target_arch = "sparc",
+    target_arch = "sparc64",
+)))]
 const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
 
 /// Returns the size of a file or block device in bytes.
@@ -20,14 +43,14 @@ const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
 /// For block devices, uses BLKGETSIZE64 ioctl.
 /// For regular files, returns st_size from fstat.
 pub fn get_size(fd: RawFd) -> u64 {
-    let stat = fstat(fd);
+    let metadata = fd_metadata(fd);
 
-    if is_blk(stat.st_mode) {
+    if metadata.file_type().is_block_device() {
         let mut size: u64 = 0;
         unsafe { libc::ioctl(fd, BLKGETSIZE64, &mut size) };
         size
     } else {
-        stat.st_size as u64
+        metadata.size()
     }
 }
 
@@ -35,43 +58,28 @@ pub fn get_size(fd: RawFd) -> u64 {
 /// with fallback to the filesystem block size hint for regular files, in bytes.
 /// (to be used as a performance hint only)
 pub fn get_blocksize_physical_hint(fd: RawFd) -> u32 {
-    let stat = fstat(fd);
+    let metadata = fd_metadata(fd);
 
-    if is_blk(stat.st_mode) {
+    if metadata.file_type().is_block_device() {
         let mut bs: libc::c_uint = 0;
         unsafe { libc::ioctl(fd, BLKPBSZGET, &mut bs) };
         bs
     } else {
-        stat.st_blksize as u32
-    }
-}
-
-/// Returns logical block size (LBA) of a block device (the smaller of the two),
-/// with fallback to the filesystem block size hint for regular files, in bytes.
-/// (suitable for use as an alignment for direct I/O or similar)
-pub fn get_blocksize_logical(fd: RawFd) -> u32 {
-    let stat = fstat(fd);
-
-    if is_blk(stat.st_mode) {
-        let mut bs: libc::c_uint = 0;
-        unsafe { libc::ioctl(fd, BLKSSZGET, &mut bs) };
-        bs as u32
-    } else {
-        stat.st_blksize as u32
+        metadata.blksize() as u32
     }
 }
 
 /// Returns the device model string for a block device fd, or a
 /// fallback description for regular files / unknown devices.
 pub fn fd_to_dev_model(fd: RawFd) -> String {
-    let stat = fstat(fd);
+    let metadata = fd_metadata(fd);
 
-    if !is_blk(stat.st_mode) {
+    if !metadata.file_type().is_block_device() {
         return "(image file)".to_string();
     }
 
-    let major = libc::major(stat.st_rdev);
-    let minor = libc::minor(stat.st_rdev);
+    let major = rustix::fs::major(metadata.rdev());
+    let minor = rustix::fs::minor(metadata.rdev());
     let sysfs = format!("/sys/dev/block/{}:{}", major, minor);
 
     // Try device/model, then parent's device/model (partition),
@@ -92,14 +100,14 @@ pub fn fd_to_dev_model(fd: RawFd) -> String {
 /// Returns the device serial number for a block device fd, or None
 /// if not available (image files, devices without serial sysfs entry).
 pub fn fd_to_dev_serial(fd: RawFd) -> Option<String> {
-    let stat = fstat(fd);
+    let metadata = fd_metadata(fd);
 
-    if !is_blk(stat.st_mode) {
+    if !metadata.file_type().is_block_device() {
         return None;
     }
 
-    let major = libc::major(stat.st_rdev);
-    let minor = libc::minor(stat.st_rdev);
+    let major = rustix::fs::major(metadata.rdev());
+    let minor = rustix::fs::minor(metadata.rdev());
     let sysfs = format!("/sys/dev/block/{}:{}", major, minor);
 
     // Try device/serial, then parent's device/serial (partition)
@@ -114,6 +122,27 @@ pub fn fd_to_dev_serial(fd: RawFd) -> Option<String> {
     }
 
     None
+}
+
+/// Returns a stable sysfs identity for the whole disk backing this block
+/// device. Partitions are resolved to their parent disk.
+pub fn fd_to_parent_disk_sysfs(fd: RawFd) -> Option<PathBuf> {
+    let metadata = fd_metadata(fd);
+
+    if !metadata.file_type().is_block_device() {
+        return None;
+    }
+
+    let major = rustix::fs::major(metadata.rdev());
+    let minor = rustix::fs::minor(metadata.rdev());
+    let sysfs = PathBuf::from(format!("/sys/dev/block/{}:{}", major, minor));
+    let path = std::fs::canonicalize(sysfs).ok()?;
+
+    if path.join("partition").exists() {
+        path.parent().map(PathBuf::from)
+    } else {
+        Some(path)
+    }
 }
 
 /// Returns true if the block device is non-rotational (SSD).
@@ -140,37 +169,33 @@ pub const BLK_OPEN_CREAT: u32    = 1 << 6;
 /// Open a block device or file for formatting.
 ///
 /// Translates BLK_OPEN_* flags to POSIX open flags.
-/// Returns the raw fd on success, or a negative errno on failure.
-pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<RawFd, i32> {
-    let mut flags = 0i32;
+/// Returns the owned fd on success, or a negative errno on failure.
+pub fn open_device(path: &std::ffi::CStr, mode: u32) -> Result<OwnedFd, i32> {
+    let mut flags = rustix::fs::OFlags::empty();
 
     let rw = mode & (BLK_OPEN_READ | BLK_OPEN_WRITE);
     if rw == (BLK_OPEN_READ | BLK_OPEN_WRITE) {
-        flags = libc::O_RDWR;
+        flags = rustix::fs::OFlags::RDWR;
     } else if mode & BLK_OPEN_READ != 0 {
-        flags = libc::O_RDONLY;
+        flags = rustix::fs::OFlags::RDONLY;
     } else if mode & BLK_OPEN_WRITE != 0 {
-        flags = libc::O_WRONLY;
+        flags = rustix::fs::OFlags::WRONLY;
     }
 
     if mode & BLK_OPEN_BUFFERED == 0 {
-        flags |= libc::O_DIRECT;
+        flags |= rustix::fs::OFlags::DIRECT;
     }
 
     if mode & BLK_OPEN_EXCL != 0 {
-        flags |= libc::O_EXCL;
+        flags |= rustix::fs::OFlags::EXCL;
     }
 
     if mode & BLK_OPEN_CREAT != 0 {
-        flags |= libc::O_CREAT;
+        flags |= rustix::fs::OFlags::CREATE;
     }
 
-    let fd = unsafe { libc::open(path.as_ptr(), flags, 0o600) };
-    if fd < 0 {
-        Err(unsafe { *libc::__errno_location() })
-    } else {
-        Ok(fd)
-    }
+    rustix::fs::open(path, flags, rustix::fs::Mode::from_raw_mode(0o600))
+        .map_err(|e| e.raw_os_error())
 }
 
 /// Call the C blkid_check function to probe for existing filesystems.
@@ -181,15 +206,11 @@ pub fn blkid_check(fd: RawFd, path: &std::ffi::CStr, force: bool) {
     unsafe { blkid_check(fd, path.as_ptr(), force) }
 }
 
-fn fstat(fd: RawFd) -> libc::stat {
-    let mut stat: libc::stat = unsafe { std::mem::zeroed() };
-    let ret = unsafe { libc::fstat(fd, &mut stat) };
-    if ret != 0 {
-        crate::wrappers::super_io::die("stat error");
+fn fd_metadata(fd: RawFd) -> Metadata {
+    match std::fs::metadata(format!("/proc/self/fd/{}", fd)) {
+        Ok(metadata) => metadata,
+        Err(_) => {
+            crate::wrappers::super_io::die("stat error");
+        }
     }
-    stat
-}
-
-fn is_blk(mode: libc::mode_t) -> bool {
-    (mode & libc::S_IFMT) == libc::S_IFBLK
 }

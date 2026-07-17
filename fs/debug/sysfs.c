@@ -36,6 +36,7 @@
 #include "debug/sysfs.h"
 #include "debug/tests.h"
 
+#include "fs/dirent.h"
 #include "fs/inode.h"
 
 #include "init/error.h"
@@ -44,6 +45,7 @@
 
 #include "journal/journal.h"
 #include "journal/reclaim.h"
+#include "journal/write.h"
 
 #include "sb/counters.h"
 #include "sb/errors.h"
@@ -215,13 +217,12 @@ read_attribute(disk_groups);
 read_attribute(has_data);
 read_attribute(alloc_debug);
 read_attribute(usage_base);
+read_attribute(filldir64_specialization);
 
 #define x(t, n, ...)							\
 	static struct attribute sysfs_counter_##t = { .name = #t, .mode = 0644 };
 BCH_PERSISTENT_COUNTERS()
 #undef x
-
-rw_attribute(label);
 
 read_attribute(copy_gc_wait);
 
@@ -239,9 +240,9 @@ read_attribute(moving_ctxts);
 
 read_attribute(recent_counters);
 
-#ifdef CONFIG_BCACHEFS_TESTS
+#if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 write_attribute(perf_test);
-#endif /* CONFIG_BCACHEFS_TESTS */
+#endif
 
 #define x(_name, ...)						\
 	static struct attribute sysfs_time_stat_##_name =		\
@@ -257,7 +258,7 @@ static size_t bch2_btree_cache_size(struct bch_fs *c)
 		btree_cache_list_nr(&bc->live[1])) * c->opts.btree_node_size;
 }
 
-static int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c)
+static __cold int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	prt_str(out, "type");
 	printbuf_tabstop_push(out, 12);
@@ -296,17 +297,17 @@ static int bch2_compression_stats_to_text(struct printbuf *out, struct bch_fs *c
 	return 0;
 }
 
-static void bch2_gc_gens_pos_to_text(struct printbuf *out, struct bch_fs *c)
+static __cold void bch2_gc_gens_pos_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	bch2_bbpos_to_text(out, c->gc_gens.pos);
 	prt_printf(out, "\n");
 }
 
-static void bch2_fs_usage_base_to_text(struct printbuf *out, struct bch_fs *c)
+static __cold void bch2_fs_usage_base_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct bch_fs_usage_base b = {};
 
-	acc_u64s_percpu(&b.hidden, &c->capacity.usage->hidden, sizeof(b) / sizeof(u64));
+	acc_u64s_percpu(&b.hidden, &c->capacity.pcpu->usage.hidden, sizeof(b) / sizeof(u64));
 
 	prt_printf(out, "hidden:\t\t%llu\n",	b.hidden);
 	prt_printf(out, "btree:\t\t%llu\n",	b.btree);
@@ -418,6 +419,9 @@ SHOW(bch2_fs)
 	if (attr == &sysfs_usage_base)
 		bch2_fs_usage_base_to_text(out, c);
 
+	if (attr == &sysfs_filldir64_specialization)
+		bch2_filldir64_specialization_to_text(out);
+
 	return 0;
 }
 
@@ -504,7 +508,7 @@ STORE(bch2_fs)
 		bch2_fs_emergency_read_only(c, &msg.m);
 	}
 
-#ifdef CONFIG_BCACHEFS_TESTS
+#if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 	if (attr == &sysfs_perf_test) {
 		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL), *p = tmp;
 		char *test		= strsep(&p, " \t\n");
@@ -541,7 +545,7 @@ struct attribute *bch2_fs_files[] = {
 	&sysfs_compression_stats,
 	&sysfs_errors,
 
-#ifdef CONFIG_BCACHEFS_TESTS
+#if defined(CONFIG_BCACHEFS_TESTS) && defined(CONFIG_BCACHEFS_RUST)
 	&sysfs_perf_test,
 #endif
 	NULL
@@ -658,6 +662,7 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_disk_groups,
 	&sysfs_alloc_debug,
 	&sysfs_usage_base,
+	&sysfs_filldir64_specialization,
 	NULL
 };
 
@@ -706,6 +711,8 @@ static ssize_t bch2_btree_trans_stats_json_read(struct file *file,
 			if (IS_ENABLED(CONFIG_BCACHEFS_LOCK_TIME_STATS)) {
 				prt_str(out, ",\"lock_hold_times\":");
 				bch2_time_stats_json_to_text(out, &s->lock_hold_times, NULL, 0);
+				prt_str(out, ",\"lock_wait_times\":");
+				bch2_time_stats_json_to_text(out, &s->lock_wait_times, NULL, 0);
 			}
 
 			prt_char(out, '}');
@@ -740,6 +747,7 @@ static ssize_t bch2_btree_trans_stats_json_write(struct file *file,
 		guard(mutex)(&s->lock);
 		bch2_time_stats_reset(&s->duration);
 		bch2_time_stats_reset(&s->lock_hold_times);
+		bch2_time_stats_reset(&s->lock_wait_times);
 		s->nr_max_paths = 0;
 		s->max_mem = 0;
 		kfree(s->max_paths_text);
@@ -966,7 +974,7 @@ static const char * const bch2_rw[] = {
 	NULL
 };
 
-static void dev_io_done_to_text(struct printbuf *out, struct bch_dev *ca)
+static __cold void dev_io_done_to_text(struct printbuf *out, struct bch_dev *ca)
 {
 	prt_printf(out, "{\n");
 	for (int rw = 0; rw < 2; rw++) {
@@ -990,12 +998,6 @@ SHOW(bch2_dev)
 
 	sysfs_print(first_bucket,	ca->mi.first_bucket);
 	sysfs_print(nbuckets,		ca->mi.nbuckets);
-
-	if (attr == &sysfs_label) {
-		if (ca->mi.group)
-			bch2_disk_path_to_text(out, c, ca->mi.group - 1);
-		prt_char(out, '\n');
-	}
 
 	if (attr == &sysfs_has_data) {
 		prt_bitflags(out, __bch2_data_types, bch2_dev_has_data(c, ca));
@@ -1055,14 +1057,6 @@ STORE(bch2_dev)
 	struct bch_dev *ca = container_of(kobj, struct bch_dev, kobj);
 	struct bch_fs *c = ca->fs;
 
-	if (attr == &sysfs_label) {
-		char *tmp __free(kfree) = kstrdup(buf, GFP_KERNEL);
-		if (!tmp)
-			return -ENOMEM;
-
-		try(bch2_dev_group_set(c, ca, strim(tmp)));
-	}
-
 	if (attr == &sysfs_io_errors_reset)
 		bch2_dev_errors_reset(ca);
 
@@ -1078,9 +1072,6 @@ struct attribute *bch2_dev_files[] = {
 	&sysfs_uuid,
 	&sysfs_first_bucket,
 	&sysfs_nbuckets,
-
-	/* settings: */
-	&sysfs_label,
 
 	&sysfs_has_data,
 	&sysfs_io_done,

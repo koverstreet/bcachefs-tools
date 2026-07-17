@@ -38,6 +38,7 @@ enum Distro {
     Unstable,
     Forky,
     Trixie,
+    Resolute,
     Questing,
     Plucky,
 }
@@ -47,12 +48,13 @@ impl Distro {
         Distro::Unstable,
         Distro::Forky,
         Distro::Trixie,
+        Distro::Resolute,
         Distro::Questing,
         Distro::Plucky,
     ];
 
     fn is_ubuntu(self) -> bool {
-        matches!(self, Distro::Plucky | Distro::Questing)
+        matches!(self, Distro::Plucky | Distro::Questing | Distro::Resolute)
     }
 
     fn as_str(self) -> &'static str {
@@ -60,6 +62,7 @@ impl Distro {
             Distro::Unstable => "unstable",
             Distro::Forky => "forky",
             Distro::Trixie => "trixie",
+            Distro::Resolute => "resolute",
             Distro::Questing => "questing",
             Distro::Plucky => "plucky",
         }
@@ -185,11 +188,19 @@ impl JobStatus {
 /// Filesystem-backed state for one commit's builds
 struct BuildState {
     state_dir: PathBuf,
+    /// Web root where ci.html is written. Defaults next to state_dir (the bash
+    /// generator's /home/aptbcachefsorg/public_html), overridable via PUBLIC_HTML.
+    public_html: PathBuf,
 }
 
 impl BuildState {
     fn new(state_dir: PathBuf) -> Self {
-        Self { state_dir }
+        let public_html = std::env::var_os("PUBLIC_HTML")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                state_dir.parent().unwrap_or(Path::new("/")).join("public_html")
+            });
+        Self { state_dir, public_html }
     }
 
     /// Read the desired commit hash (written by post-receive hook)
@@ -206,6 +217,31 @@ impl BuildState {
             }
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e).context("reading desired commit"),
+        }
+    }
+
+    /// Read the desired *release* commit (written by post-receive for v* tags).
+    /// A queued release is built to completion before any snapshot, so a master
+    /// push can't preempt it. Mirrors desired_commit().
+    fn desired_release(&self) -> Result<Option<String>> {
+        let path = self.state_dir.join("desired-release");
+        match fs::read_to_string(&path) {
+            Ok(s) => {
+                let commit = s.trim().to_string();
+                Ok(if commit.is_empty() { None } else { Some(commit) })
+            }
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).context("reading desired-release commit"),
+        }
+    }
+
+    /// Clear the queued release once its build has finished (published or failed).
+    fn clear_desired_release(&self) -> Result<()> {
+        let path = self.state_dir.join("desired-release");
+        match fs::remove_file(&path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e).context("clearing desired-release"),
         }
     }
 
@@ -236,13 +272,44 @@ impl BuildState {
         Ok(())
     }
 
+    fn ensure_status(&self, commit: &str, job_name: &str, status: JobStatus) -> Result<bool> {
+        let dir = self.job_dir(commit, job_name);
+        let path = dir.join("status");
+        if path.exists() {
+            return Ok(false);
+        }
+
+        fs::create_dir_all(&dir)
+            .with_context(|| format!("creating job dir {}", dir.display()))?;
+        fs::write(&path, status.as_str())
+            .with_context(|| format!("writing status to {}", path.display()))?;
+        Ok(true)
+    }
+
+    /// Render the static status page in-process via the shared ci-dashboard
+    /// crate (was scripts/generate-status-html.sh). The build tree is the
+    /// filesystem-as-state contract: builds/<commit>/<job>/ each with a `status`
+    /// file and a `log`. Best-effort — a failed render must not break a build.
     fn regenerate_html(&self) {
-        let script = self.state_dir.join("scripts/generate-status-html.sh");
-        if script.exists() {
-            let _ = Command::new("bash")
-                .arg(&script)
-                .env("STATE_DIR", &self.state_dir)
-                .status();
+        let root = self.state_dir.join("builds");
+        let tmpl = ci_dashboard::Template::parse("{commit}/{job}");
+        let cols: Vec<String> = tmpl.column_names().iter().map(|s| s.to_string()).collect();
+        let jobs = tmpl.discover(&root, &[]);
+        let opts = ci_dashboard::RenderOpts {
+            title: "bcachefs-tools CI".into(),
+            refresh_secs: 30,
+            // httpd maps /ci-builds → builds/, so {commit}/{job}/log resolves.
+            log_url_prefix: Some("/ci-builds".into()),
+            section_by: None,          // first column (commit) becomes the section
+            group_building_by: None,   // no shared toolchain to surface here
+            stuck_mins: 120,           // matches build_timeout; pid recovery is primary
+        };
+        let html = ci_dashboard::render(&jobs, &cols, &[], &opts, std::time::SystemTime::now());
+
+        let out = self.public_html.join("ci.html");
+        let tmp = out.with_extension("html.tmp");
+        if let Err(e) = std::fs::write(&tmp, &html).and_then(|_| std::fs::rename(&tmp, &out)) {
+            warn!("regenerate ci.html ({}): {e}", out.display());
         }
     }
 
@@ -361,12 +428,39 @@ impl Orchestrator {
         }
     }
 
+    /// Choose the commit to build: a queued release is built to completion
+    /// before any snapshot, so a master push can't preempt it (that's how
+    /// v1.38.6 got stranded). Once the release publishes, fall through to the
+    /// latest master commit.
+    fn pick_commit(&self) -> Result<Option<String>> {
+        if let Some(rel) = self.state.desired_release()? {
+            if !self.is_build_finished(&rel) {
+                return Ok(Some(rel));
+            }
+            // Release published (or can't build) — stop pinning it.
+            self.state.clear_desired_release()?;
+        }
+        self.state.desired_commit()
+    }
+
+    /// A build is finished once it can make no further progress: its source
+    /// failed (nothing to publish), or publish reached a terminal state.
+    fn is_build_finished(&self, commit: &str) -> bool {
+        if self.state.read_status(commit, "source") == JobStatus::Failed {
+            return true;
+        }
+        matches!(
+            self.effective_status(commit, "publish"),
+            JobStatus::Done | JobStatus::Failed
+        )
+    }
+
     /// One iteration of the reconcile loop
     fn reconcile(&mut self) -> Result<()> {
         // Reap finished children first
         self.reap_children()?;
 
-        let commit = match self.state.desired_commit()? {
+        let commit = match self.pick_commit()? {
             Some(c) => c,
             None => return Ok(()),
         };
@@ -376,6 +470,9 @@ impl Orchestrator {
             info!("[{}] new desired commit", &commit[..12]);
             self.last_desired = Some(commit.clone());
         }
+
+        let matrix = build_matrix();
+        self.materialize_commit_jobs(&commit, &matrix)?;
 
         // Phase 1: source package
         let source_status = self.effective_status(&commit, "source");
@@ -397,7 +494,6 @@ impl Orchestrator {
         }
 
         // Phase 2: binary builds
-        let matrix = build_matrix();
         let mut still_running = false;
         let mut any_failed = false;
 
@@ -434,6 +530,22 @@ impl Orchestrator {
                 }
                 self.spawn_publish(&commit)?;
             }
+        }
+
+        Ok(())
+    }
+
+    fn materialize_commit_jobs(&self, commit: &str, matrix: &[Job]) -> Result<()> {
+        let mut changed = false;
+
+        changed |= self.state.ensure_status(commit, "source", JobStatus::Pending)?;
+        for job in matrix {
+            changed |= self.state.ensure_status(commit, &job.name(), JobStatus::Pending)?;
+        }
+        changed |= self.state.ensure_status(commit, "publish", JobStatus::Pending)?;
+
+        if changed {
+            self.state.regenerate_html();
         }
 
         Ok(())

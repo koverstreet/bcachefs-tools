@@ -38,6 +38,32 @@ OPTIONS
 -------
 OPTIONS_TABLE
 
+Filesystem label
+----------------
+
+The filesystem label is set at format time with ``--fs_label``/``-L``. It is
+separate from per-device labels used for target selection, such as
+``foreground_target=ssd`` or ``--label=ssd`` on an individual device.
+
+On a mounted filesystem, the filesystem label can be changed through the
+standard Linux ``FS_IOC_SETFSLABEL`` ioctl, and read through
+``FS_IOC_GETFSLABEL``. Tools that issue those ioctls operate on the filesystem
+label, not the per-device target labels.
+
+Encryption key storage
+----------------------
+
+When a filesystem is formatted with ``--encrypted``, bcachefs creates a random
+master key for encrypting filesystem data and metadata. By default that master
+key is stored in the superblock encrypted by a key derived from the passphrase;
+unlocking supplies the passphrase-derived key to the kernel keyring so the
+kernel can decrypt the stored master key.
+
+The ``--no_passphrase`` option does not create a detached or externally supplied
+master key. It stores the master key unencrypted in the superblock, which allows
+the filesystem to use encryption-format metadata without requiring an unlock
+secret. Detached raw master-key storage would require a different unlock and
+superblock contract.
 Device management
 -----------------
 Devices can be added, removed, and resized at will, at runtime. There is no
@@ -50,6 +76,52 @@ We generally avoid per-device options, preferring instead options that can be
 overridden on files or directories, but there are some:
 
  *durability*
+ *data_allowed*
+
+The ``data_allowed`` per-device option restricts which data types may be placed
+on a device. The accepted values are ``journal``, ``btree``, and ``user``; pass
+one or more of them as a comma-separated list. For example, a metadata device
+may use ``data_allowed=journal,btree``, while a bulk data device may use
+``data_allowed=user``.
+
+``show-super`` and usage reports may display additional data types under
+``Has data``, such as ``parity``. Those are internal allocation/accounting data
+types that describe what is currently present on the device. They are not extra
+values accepted by ``data_allowed``.
+
+To add devices after the initial format, point ``bcachefs device add`` at a
+mounted filesystem path or an existing member device, then the new device. Labels
+assigned during add can immediately be used by target options:
+
+.. code-block:: bash
+
+  bcachefs device add --label=ssd /mnt /dev/nvme1n1
+  bcachefs device add --label=hdd /mnt /dev/sdb
+  bcachefs set-fs-option --foreground_target=ssd \
+                         --promote_target=ssd \
+                         --background_target=hdd /mnt
+
+Adding another device with the same label expands that target. For example, a
+second background disk can be added and then selected for replicated user data:
+
+.. code-block:: bash
+
+  bcachefs device add --label=hdd /mnt /dev/sdc
+  bcachefs set-fs-option --data_replicas=2 --background_target=hdd /mnt
+
+Cache-like devices that should accelerate reads or writes without counting as a
+durable replica should be added with ``--durability=0``:
+
+.. code-block:: bash
+
+  bcachefs device add --label=ssd --durability=0 /mnt /dev/nvme1n1
+
+For an already-added member, device options such as durability can be changed
+with ``bcachefs set-fs-option`` by passing the member device path:
+
+.. code-block:: bash
+
+  bcachefs set-fs-option --durability=0 /dev/nvme1n1
 
 Multipath devices
 -----------------
@@ -85,6 +157,11 @@ For example, given disks formatted with these labels:
 Configuration options such as foreground_target may then refer to controller1,
 or controller1.hdd, or controller1.hdd1 - or to /dev/sda directly.
 
+Label entries are also retained when they no longer have member devices, if
+filesystem or per-file options may still refer to them. Such entries can appear
+in the internal disk-groups listing with an empty device set after removing a
+device; this avoids turning existing target references into dangling names.
+
 Data placement, caching
 -----------------------
 
@@ -109,6 +186,12 @@ Together, these options can be used for writeback caching, like so:
   background_target=hdd
   promote_target=ssd
 
+With this configuration, application writes land on the foreground target and
+reconcile later copies them to the background target. The cached foreground copy
+may then be evicted when the allocator needs space; bcachefs does not currently
+provide a cache-fill threshold for delaying background-target movement until the
+foreground target reaches a configured percentage.
+
 Writethrough caching requires telling bcachefs not to trust the cache device,
 which does require a per-device option and thus can't completely be done with
 per-file options. This is done by setting the device's durability to 0.
@@ -123,9 +206,48 @@ be used to pin a specific file or directory to a specific device or target:
   promote_target=
 
 Note that if the target specified is full, the write will spill over to the rest
-of the filesystem.
+of the filesystem. Replication and device durability requirements still limit
+usable space: a device or target may have free buckets that cannot satisfy a
+write if the filesystem cannot place enough durable copies elsewhere.
+
+FIEMAP and block-level writes
+-----------------------------
+
+Tools such as ``filefrag`` use the kernel FIEMAP interface to report the
+physical locations of a file's extents. On bcachefs, those locations are an
+observation, not a stable userspace write ABI: background data movement such as
+copygc, rebalance, evacuation, or normal filesystem updates may relocate extents,
+and userspace has no interface to lock those moves out.
+
+Writing directly to the block device locations reported by FIEMAP, for example
+through a manually constructed device-mapper table, is therefore unsafe while
+the filesystem is mounted. This remains true even for preallocated files and
+files using ``nocow``; any block-level write path must be coordinated by the
+filesystem itself.
 
 Data protection
 ---------------
 
-foo
+Bcachefs supports user, group, and project quotas via the ``usrquota``,
+``grpquota``, and ``prjquota`` options. Snapshot trees are charged through their
+master subvolume's inode ownership and project IDs; snapshot subvolumes do not
+have independent quota enforcement, and quota accounting for a snapshot tree is
+skipped if its master subvolume has been deleted.
+
+Subvolume and snapshot disk usage can be inspected with ``bcachefs subvolume
+list`` and ``bcachefs subvolume list-snapshots``. These commands report usage;
+they do not set btrfs-style qgroup/subvolume limits.
+
+Bcachefs can mount with missing devices when the ``degraded`` mount option is
+specified and the available replicas are sufficient. This is intended for
+recovery and maintenance when some members are temporarily unavailable.
+
+Do not mount different subsets of the same filesystem read-write at the same
+time, or mount one subset read-write and later mount a different subset
+read-write before the full filesystem has been assembled and reconciled. That
+creates split-brain history: each subset can accept writes that the other
+subset never saw, and when the members are later brought back together there may
+be no single correct value for the conflicting files.
+
+When in doubt, mount degraded filesystems read-only until the missing members
+are available, or assemble the complete filesystem before allowing writes.

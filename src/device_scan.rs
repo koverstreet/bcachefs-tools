@@ -30,15 +30,19 @@ use std::{
 };
 
 use anyhow::Result;
-use bch_bindgen::{bcachefs, opt_get, opt_set};
-use bch_bindgen::errcode::BchError;
-use bch_bindgen::fs::Fs;
-use bcachefs::bch_sb_handle;
-use bcachefs::bch_opts;
+use bch_bindgen::fs::FsExt;
+use bcachefs_kernel::{c, opt_get, opt_set};
+use bcachefs_kernel::errcode::BchError;
+use bcachefs_kernel::fs::Fs;
+use bcachefs_kernel::util::darray::DarrayVec;
+use c::bch_sb_handle;
+use c::bch_opts;
 use uuid::Uuid;
 use log::debug;
 
-use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
+use crate::device_multipath::{
+    find_multipath_holder, preferred_multipath_devnode, warn_multipath_component,
+};
 
 pub fn read_super_silent(path: impl AsRef<Path>, mut opts: bch_opts) -> Result<bch_sb_handle, BchError> {
     opt_set!(opts, noexcl, 1);
@@ -94,6 +98,19 @@ fn get_devices_by_uuid_udev(uuid: Uuid) -> anyhow::Result<Vec<PathBuf>> {
         .collect::<Vec<_>>())
 }
 
+fn get_bcachefs_devnodes_udev() -> anyhow::Result<Vec<PathBuf>> {
+    let mut enumerator = udev::Enumerator::new()?;
+    enumerator.match_is_initialized()?;
+    enumerator.match_subsystem("block")?;
+    enumerator.match_property("ID_FS_TYPE", "bcachefs")?;
+
+    Ok(enumerator
+        .scan_devices()?
+        .filter(|dev| !should_skip_multipath_component(dev))
+        .filter_map(|dev| dev.devnode().map(Path::to_path_buf))
+        .collect::<Vec<_>>())
+}
+
 fn get_all_block_devnodes_udev() -> anyhow::Result<Vec<PathBuf>> {
     let mut udev = udev::Enumerator::new()?;
     udev.match_is_initialized()?;
@@ -144,11 +161,51 @@ fn read_sbs_matching_uuid(
     devices: &[PathBuf],
     opts: &bch_opts,
     filter_multipath: bool,
-) -> Vec<(PathBuf, bch_sb_handle)> {
-    devices
+) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+	let sbs = devices
+		.iter()
+		.filter(|dev| {
+			// When not using udev (which already filters), skip multipath components
+			if filter_multipath && find_multipath_holder(dev).is_some() {
+				debug!(
+					"Skipping multipath component device in fallback scan: {}",
+					dev.display()
+				);
+				return false;
+			}
+			true
+		})
+		.filter_map(|dev| {
+			read_super_silent(dev, *opts)
+				.ok()
+				.map(|sb| {
+					let path = preferred_multipath_devnode(dev).unwrap_or_else(|| dev.to_path_buf());
+					(path, sb)
+				})
+		})
+		.filter(|(_, sb)| sb.sb().uuid() == uuid)
+		.collect::<Vec<_>>();
+
+	filter_current_sbs(sbs, opts)
+}
+
+fn sb_label_matches(sb: &c::bch_sb, label: &str) -> bool {
+    let label_len = sb.label.iter()
+        .position(|&b| b == 0)
+        .unwrap_or(sb.label.len());
+
+    &sb.label[..label_len] == label.as_bytes()
+}
+
+fn read_sbs_matching_label(
+    label: &str,
+    devices: &[PathBuf],
+    opts: &bch_opts,
+    filter_multipath: bool,
+) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+    let sbs = devices
         .iter()
         .filter(|dev| {
-            // When not using udev (which already filters), skip multipath components
             if filter_multipath && find_multipath_holder(dev).is_some() {
                 debug!(
                     "Skipping multipath component device in fallback scan: {}",
@@ -163,8 +220,49 @@ fn read_sbs_matching_uuid(
                 .ok()
                 .map(|sb| (PathBuf::from(dev), sb))
         })
-        .filter(|(_, sb)| sb.sb().uuid() == uuid)
-        .collect::<Vec<_>>()
+        .filter(|(_, sb)| sb_label_matches(sb.sb(), label))
+        .collect::<Vec<_>>();
+
+    filter_current_sbs(sbs, opts)
+}
+
+fn sb_handle_path(sb: &bch_sb_handle) -> PathBuf {
+	if sb.sb_name.is_null() {
+		PathBuf::new()
+	} else {
+		unsafe {
+			PathBuf::from(OsString::from_vec(
+				CStr::from_ptr(sb.sb_name).to_bytes().to_vec()))
+		}
+	}
+}
+
+pub fn filter_current_sbs(
+	sbs: Vec<(PathBuf, bch_sb_handle)>,
+	opts: &bch_opts,
+) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+	let handles = sbs.into_iter()
+		.map(|(_, sb)| sb)
+		.collect::<Vec<_>>();
+	let mut handles = DarrayVec::<c::bch_sb_handles, bch_sb_handle>::from_vec(handles);
+	let mut opts = *opts;
+
+	let ret = unsafe {
+		c::bch2_sbs_filter_dead(handles.as_mut(), &mut opts, std::ptr::null_mut())
+	};
+	if ret != 0 {
+		return Err(BchError::from_raw(-ret));
+	}
+
+	let handles = handles.into_vec();
+	let mut filtered = Vec::with_capacity(handles.len());
+	for sb in handles {
+		let path = sb_handle_path(&sb);
+		let path = preferred_multipath_devnode(&path).unwrap_or(path);
+		filtered.push((path, sb));
+	}
+
+	Ok(filtered)
 }
 
 fn get_devices_by_uuid(
@@ -176,7 +274,7 @@ fn get_devices_by_uuid(
         let devs_from_udev = get_devices_by_uuid_udev(uuid)?;
 
         if !devs_from_udev.is_empty() {
-            let sbs = read_sbs_matching_uuid(uuid, &devs_from_udev, opts, false);
+	    let sbs = read_sbs_matching_uuid(uuid, &devs_from_udev, opts, false)?;
 
             // Check if udev found all expected devices. During early boot,
             // udev may not have finished processing all devices yet — if we
@@ -198,7 +296,43 @@ fn get_devices_by_uuid(
     // without udevd running. Remaining TODO: wait for devices to appear
     // (poll or udev events) with a timeout, then attempt degraded mount.
     let all_devs = get_all_block_devnodes()?;
-    Ok(read_sbs_matching_uuid(uuid, &all_devs, opts, true))
+    Ok(read_sbs_matching_uuid(uuid, &all_devs, opts, true)?)
+}
+
+fn get_devices_by_label(
+    label: &str,
+    opts: &bch_opts,
+    use_udev: bool,
+) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
+    let sbs = if use_udev {
+        let devs_from_udev = get_bcachefs_devnodes_udev()?;
+        if devs_from_udev.is_empty() {
+            Vec::new()
+        } else {
+            read_sbs_matching_label(label, &devs_from_udev, opts, false)?
+        }
+    } else {
+        Vec::new()
+    };
+
+    let sbs = if sbs.is_empty() {
+        let all_devs = get_all_block_devnodes()?;
+        read_sbs_matching_label(label, &all_devs, opts, true)?
+    } else {
+        sbs
+    };
+
+    let mut uuids = sbs.iter()
+        .map(|(_, sb)| sb.sb().uuid())
+        .collect::<Vec<_>>();
+    uuids.sort();
+    uuids.dedup();
+
+    match uuids.as_slice() {
+        [] => Ok(Vec::new()),
+        [uuid] => get_devices_by_uuid(*uuid, opts, use_udev),
+        _ => anyhow::bail!("multiple bcachefs filesystems found with label '{}'", label),
+    }
 }
 
 fn devs_str_sbs_from_device(
@@ -237,7 +371,24 @@ pub fn parse_uuid_equals(s: &str) -> Result<Option<Uuid>> {
     Ok(Some(Uuid::parse_str(uuid)?))
 }
 
+fn parse_label_equals(s: &str) -> Option<&str> {
+    let ("LABEL", label) = s.split_once('=')? else {
+        return None;
+    };
+    Some(label)
+}
+
 pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb_handle)>> {
+    let udev = opt_get!(opts, mount_trusts_udev) != 0;
+
+    if let Some(uuid) = parse_uuid_equals(device)? {
+        return get_devices_by_uuid(uuid, opts, udev);
+    }
+
+    if let Some(label) = parse_label_equals(device) {
+        return get_devices_by_label(label, opts, udev);
+    }
+
     if device.contains(':') {
         let mut opts = *opts;
         opt_set!(opts, noexcl, 1);
@@ -263,13 +414,7 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
             .collect::<Result<Vec<_>>>()
     }
 
-    let udev = opt_get!(opts, mount_trusts_udev) != 0;
-
-    if let Some(uuid) = parse_uuid_equals(&device)? {
-        get_devices_by_uuid(uuid, opts, udev)
-    } else {
-        devs_str_sbs_from_device(Path::new(device), opts, udev)
-    }
+    devs_str_sbs_from_device(Path::new(device), opts, udev)
 }
 
 pub fn joined_device_str(sbs: &[(PathBuf, bch_sb_handle)]) -> OsString {
@@ -285,6 +430,33 @@ pub fn scan_devices(device: &String, opts: &bch_opts) -> Result<OsString> {
     Ok(joined_device_str(&sbs))
 }
 
+/// A filesystem opened either online (mounted: talk to the kernel via
+/// ioctl/sysfs) or offline (opened in userspace via libbcachefs):
+pub enum OpenedFs {
+    Online(crate::wrappers::handle::BcachefsHandle),
+    Offline(Fs),
+}
+
+/// The standard "operate on a filesystem that may or may not be mounted"
+/// open, shared by list/set-option/device-add et al: if any of the given
+/// paths resolves to a mounted filesystem (mount point, member block
+/// device, or UUID), returns a handle to it; otherwise opens offline with
+/// the given opts, discovering other members as needed.
+///
+/// "Couldn't tell" (e.g. a sysfs error on a mounted filesystem) is an
+/// error, never silently treated as offline - the offline fallback on a
+/// live filesystem is how you corrupt it.
+pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: bch_opts)
+    -> Result<OpenedFs, BchError>
+{
+    use crate::wrappers::handle::BcachefsHandle;
+
+    Ok(match BcachefsHandle::open_if_mounted_any(devs)? {
+        Some(h) => OpenedFs::Online(h),
+        None    => OpenedFs::Offline(open_scan(devs, offline_opts)?),
+    })
+}
+
 /// Discover all devices in a multi-device filesystem, then open it.
 ///
 /// When `devs` contains a single device that belongs to a multi-device
@@ -293,8 +465,15 @@ pub fn scan_devices(device: &String, opts: &bch_opts) -> Result<OsString> {
 /// explicitly, passes them through as-is.
 pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<Fs, BchError> {
     let devs = if devs.len() == 1 {
-        let dev_str = devs[0].to_string_lossy().into_owned();
-        let scan_opts = bch_bindgen::opts::parse_mount_opts(None, None, true)
+        let mut dev_str = devs[0].to_string_lossy().into_owned();
+
+        // A bare UUID isn't a path - scan for the filesystem's devices
+        // (scan_sbs understands UUID= syntax):
+        if Uuid::parse_str(&dev_str).is_ok() {
+            dev_str = format!("UUID={}", dev_str);
+        }
+
+	let scan_opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true)
             .unwrap_or_default();
         match scan_sbs(&dev_str, &scan_opts) {
             Ok(sbs) if !sbs.is_empty() => sbs.into_iter().map(|(p, _)| p).collect(),
@@ -313,7 +492,7 @@ pub fn bch2_scan_devices(device: *const c_char) -> *mut c_char {
     let device = device.to_string_lossy().into_owned();
 
     // how to initialize to default/empty?
-    let opts = bch_bindgen::opts::parse_mount_opts(None, None, true).unwrap_or_default();
+    let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
 
     let devs = scan_devices(&device, &opts).unwrap_or_else(|e| {
         eprintln!("bcachefs ({}): error reading superblock: {}", device, e);

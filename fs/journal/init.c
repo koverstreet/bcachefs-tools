@@ -183,6 +183,10 @@ int bch2_set_nr_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 				unsigned nr)
 {
 	guard(rwsem_write)(&c->state_lock);
+
+	if (READ_ONCE(ca->removing))
+		return bch_err_throw(c, device_has_been_removed);
+
 	int ret = bch2_set_nr_journal_buckets_loop(c, ca, nr, false);
 	bch_err_fn(c, ret);
 	return ret;
@@ -294,8 +298,7 @@ int bch2_dev_journal_alloc(struct bch_dev *ca, bool new_fs)
 	 */
 	nr = clamp_t(unsigned, nr,
 		     BCH_JOURNAL_BUCKETS_MIN,
-		     min(1 << 13,
-			 (1 << 24) / ca->mi.bucket_size));
+		     system_totalram_bytes() / 4 / bucket_bytes(ca));
 
 	ret = bch2_set_nr_journal_buckets_loop(c, ca, nr, new_fs);
 err:
@@ -320,6 +323,99 @@ int bch2_fs_journal_alloc(struct bch_fs *c)
 	return 0;
 }
 
+/*
+ * Double the size of the journal pin fifo.
+ *
+ * We can't just fifo_grow() — that bit-copies entries into both halves of the
+ * new buffer, which corrupts journal_entry_pin_list's list_heads (the chain's
+ * prev/next still point at old-address list_heads after the copy). Allocate a
+ * fresh buffer, init every entry, then for each live slot list_replace_init
+ * the unflushed/flushed chains to re-anchor them at the new addresses.
+ *
+ * Concurrency: pin_resize_lock held for write excludes all readers; readers
+ * are expected to hold it for read across any access to &j->pin (including
+ * acquiring entry->lock and walking the per-type lists).
+ *
+ * Must NOT be called with j->lock held — alloc + percpu_down_write may sleep.
+ *
+ * Trigger: TODO — wire from journal_entry_open()'s journal_pin_full path
+ * (workqueue, or wake journal_reclaim_thread with a "needs resize" flag).
+ *
+ * Reader-side wrapping: TODO — every site that accesses &j->pin needs
+ * percpu_down_read(&j->pin_resize_lock) / percpu_up_read() around it.
+ * `git grep 'j->pin\b' fs/journal/ fs/btree/` for the list.
+ */
+int bch2_journal_pin_fifo_resize(struct journal *j)
+{
+	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+
+	size_t old_size		= j->pin.size;
+
+	/*
+	 * Resizing the journal pin fifo is particularly expensive, thanks to
+	 * the percpu rwsem - grow in bigger increments
+	 */
+	size_t new_size		= old_size * 4;
+	size_t new_buf_elems	= roundup_pow_of_two(new_size);
+	u64 new_mask		= new_buf_elems - 1;
+
+	struct journal_entry_pin_list *new_data =
+		kvmalloc(new_buf_elems * sizeof(*new_data), GFP_KERNEL);
+
+	event_inc_trace(c, journal_pin_resize, buf,
+			prt_printf(&buf, "new size: %zu", new_size));
+
+	if (!new_data)
+		return bch_err_throw(c, ENOMEM_journal_pin_fifo);
+
+	for (struct journal_entry_pin_list *p = new_data;
+	     p < new_data + new_buf_elems;
+	     p++) {
+		spin_lock_init(&p->lock);
+		journal_pin_list_init(p, 0);
+	}
+
+	percpu_down_write(&j->pin_resize_lock);
+
+	for (u64 seq = j->pin.front; seq != j->pin.back; seq++) {
+		struct journal_entry_pin_list *old_pin = &j->pin.data[seq & j->pin.mask];
+		struct journal_entry_pin_list *new_pin = &new_data[seq & new_mask];
+
+		atomic_set(&new_pin->count,	atomic_read(&old_pin->count));
+		new_pin->unreplayed		= old_pin->unreplayed;
+		new_pin->devs			= old_pin->devs;
+		new_pin->bytes			= old_pin->bytes;
+
+		for (unsigned i = 0; i < JOURNAL_PIN_TYPE_NR; i++)
+			list_replace_init(&old_pin->unflushed[i], &new_pin->unflushed[i]);
+		list_replace_init(&old_pin->flushed,   &new_pin->flushed);
+	}
+
+	struct journal_entry_pin_list *old_data = j->pin.data;
+	j->pin.data	= new_data;
+	j->pin.size	= new_size;
+	j->pin.mask	= new_mask;
+	/* front/back preserved — same absolute indices, new mask */
+
+	percpu_up_write(&j->pin_resize_lock);
+
+	kvfree(old_data);
+	return 0;
+}
+
+/*
+ * Worker for the pin fifo grow trigger — journal_entry_open queues this when
+ * the fifo is approaching pin_full. Off the open path because the open is
+ * sometimes called from NONBLOCK contexts holding btree locks, where we can't
+ * sleep on percpu_down_write / kvmalloc.
+ */
+static void bch2_journal_pin_fifo_resize_work(struct work_struct *work)
+{
+	struct journal *j = container_of(work, struct journal, pin_resize_work);
+
+	bch2_journal_pin_fifo_resize(j);
+}
+
 /* startup/shutdown: */
 
 static bool bch2_journal_writing_to_device(struct journal *j, unsigned dev_idx)
@@ -339,7 +435,7 @@ static bool bch2_journal_writing_to_device(struct journal *j, unsigned dev_idx)
 
 void bch2_dev_journal_stop(struct journal *j, struct bch_dev *ca)
 {
-	wait_event(j->wait, !bch2_journal_writing_to_device(j, ca->dev_idx));
+	closure_wait_event(&j->async_wait, !bch2_journal_writing_to_device(j, ca->dev_idx));
 	cancel_work_sync(&ca->journal.discard);
 }
 
@@ -349,9 +445,11 @@ void bch2_fs_journal_stop(struct journal *j)
 		return;
 
 	bch2_journal_reclaim_stop(j);
-	bch2_journal_flush_all_pins(j);
 
-	wait_event(j->wait, bch2_journal_entry_close(j));
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = current;
+#endif
+	bch2_journal_flush_all_pins(j);
 
 	/*
 	 * Always write a new journal entry, to make sure the clock hands are up
@@ -362,11 +460,29 @@ void bch2_fs_journal_stop(struct journal *j)
 	bch2_journal_shutdown_quiesce(j);
 	cancel_delayed_work_sync(&j->write_work);
 
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = ERR_PTR(-EROFS);
+#endif
+
 	WARN(!bch2_journal_error(j) &&
 	     test_bit(JOURNAL_replay_done, &j->flags) &&
 	     j->last_empty_seq != journal_cur_seq(j),
 	     "journal shutdown error: cur seq %llu but last empty seq %llu",
 	     journal_cur_seq(j), j->last_empty_seq);
+
+	/*
+	 * All pins have been flushed and the journal quiesced, so every dirty
+	 * entry has been reclaimed - dirty_entry_bytes must have drained to 0.
+	 * A nonzero remainder means the accounting (journal.c entry-close +/
+	 * bch2_journal_update_last_seq_ondisk -) has leaked, which silently
+	 * shrinks the in-memory journal-space budget (see mem_limit in
+	 * bch2_journal_space_available()).
+	 */
+	WARN(!bch2_journal_error(j) &&
+	     test_bit(JOURNAL_replay_done, &j->flags) &&
+	     j->dirty_entry_bytes,
+	     "journal shutdown error: %zu dirty entry bytes remaining after flushing all pins",
+	     j->dirty_entry_bytes);
 
 	if (!bch2_journal_error(j))
 		clear_bit(JOURNAL_running, &j->flags);
@@ -408,10 +524,26 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 	nr += nr / 4;
 
 	nr = max(nr, JOURNAL_PIN);
+
 	init_fifo(&j->pin, roundup_pow_of_two(nr), GFP_KERNEL);
 	if (!j->pin.data) {
 		bch_err(c, "error allocating journal fifo (%llu open entries)", nr);
 		return bch_err_throw(c, ENOMEM_journal_pin_fifo);
+	}
+
+	/*
+	 * Initialize the whole buffer, not just the live [front, back) window
+	 * below: fifo_entry() masks without a range check (unlike
+	 * journal_seq_pin()), so a stray pin_set() for an out-of-window seq must
+	 * still land on a valid (empty) list_head rather than kvmalloc garbage.
+	 * The resize path (bch2_journal_pin_fifo_resize) inits the full buffer
+	 * for the same reason.
+	 */
+	for (struct journal_entry_pin_list *pin = j->pin.data;
+	     pin < j->pin.data + j->pin.size;
+	     pin++) {
+		spin_lock_init(&pin->lock);
+		journal_pin_list_init(pin, 0);
 	}
 
 	j->replay_journal_seq	= last_seq;
@@ -458,24 +590,28 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 			j->last_empty_seq = le64_to_cpu(i->j.seq);
 
 		if (!info.clean) {
-			struct bch_devs_list seq_devs = {};
-			darray_for_each(i->ptrs, ptr)
-				seq_devs.data[seq_devs.nr++] = ptr->dev;
+			p = &fifo_entry(&j->pin, seq);
+			p->devs.nr = 0;
 
-			p = journal_seq_pin(j, seq);
-			bch2_devlist_to_replicas(&p->devs.e, BCH_DATA_journal, seq_devs);
+			darray_for_each(i->ptrs, ptr)
+				p->devs.data[p->devs.nr++] = ptr->dev;
 
 			CLASS(printbuf, buf)();
-			bch2_replicas_entry_to_text(&buf, &p->devs.e);
+			struct bch_devs_list seq_devs = {};
+			darray_for_each(i->ptrs, ptr)
+				bch2_dev_list_add_dev(&seq_devs, ptr->dev);
+			union bch_replicas_padded r;
+			bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, seq_devs);
+			bch2_replicas_entry_to_text(&buf, &r.e);
 
 			fsck_err_on(!test_bit(JOURNAL_degraded, &j->flags) &&
-				    !bch2_replicas_marked(c, &p->devs.e),
+				    !bch2_replicas_marked(c, &r.e),
 				    c, journal_entry_replicas_not_marked,
 				    "superblock not marked as containing replicas for journal entry %llu\n%s",
 				    le64_to_cpu(i->j.seq), buf.buf);
 
-			if (bch2_replicas_entry_get(c, &p->devs.e))
-				p->devs.e.nr_devs = 0;
+			if (bch2_replicas_entry_get(c, &r.e))
+				p->devs.nr = 0;
 		}
 
 		had_entries = true;
@@ -608,7 +744,9 @@ void bch2_fs_journal_exit(struct journal *j)
 	free_fifo(&j->in_flight);
 
 	kvfree(j->free_buf);
+	cancel_work_sync(&j->pin_resize_work);
 	free_fifo(&j->pin);
+	percpu_free_rwsem(&j->pin_resize_lock);
 }
 
 void bch2_fs_journal_init_early(struct journal *j)
@@ -618,8 +756,8 @@ void bch2_fs_journal_init_early(struct journal *j)
 	mutex_init(&j->buf_lock);
 	spin_lock_init(&j->lock);
 	spin_lock_init(&j->err_lock);
-	init_waitqueue_head(&j->wait);
 	INIT_DELAYED_WORK(&j->write_work, bch2_journal_write_work);
+	INIT_WORK(&j->pin_resize_work, bch2_journal_pin_fifo_resize_work);
 	init_waitqueue_head(&j->reclaim_wait);
 	init_waitqueue_head(&j->pin_flush_wait);
 	mutex_init(&j->reclaim_lock);
@@ -631,7 +769,7 @@ void bch2_fs_journal_init_early(struct journal *j)
 		 { .cur_entry_offset = JOURNAL_ENTRY_CLOSED_VAL }).v);
 }
 
-int bch2_fs_journal_init(struct journal *j)
+int bch2_fs_journal_init_rw(struct journal *j)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
@@ -658,8 +796,13 @@ int bch2_fs_journal_init(struct journal *j)
 	if (!j->in_flight.data)
 		return bch_err_throw(c, ENOMEM_journal_buf);
 
+	for (struct journal_buf *buf = j->in_flight.data;
+	     buf < j->in_flight.data + j->in_flight.size;
+	     buf++)
+		buf->wait.list.first = JOURNAL_BUF_NOT_IN_FLIGHT;
+
 	j->wq = alloc_workqueue("bcachefs_journal",
-				WQ_HIGHPRI|WQ_FREEZABLE|WQ_UNBOUND|WQ_MEM_RECLAIM, 512);
+				WQ_HIGHPRI|WQ_FREEZABLE|WQ_MEM_RECLAIM|WQ_PERCPU, 512);
 	if (!j->wq)
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 
@@ -667,5 +810,14 @@ int bch2_fs_journal_init(struct journal *j)
 				WQ_HIGHPRI|WQ_FREEZABLE|WQ_UNBOUND|WQ_MEM_RECLAIM, 512);
 	if (!j->discard_wq)
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
+	return 0;
+}
+
+int bch2_fs_journal_init(struct journal *j)
+{
+	try(percpu_init_rwsem(&j->pin_resize_lock));
+#ifdef CONFIG_BCACHEFS_DEBUG
+	j->stop_thread = ERR_PTR(-EROFS);
+#endif
 	return 0;
 }

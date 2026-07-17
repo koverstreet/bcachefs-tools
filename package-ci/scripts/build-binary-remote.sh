@@ -17,30 +17,58 @@ RUST_VERSION="$7"
 
 REMOTE_WORK="/tmp/bcachefs-ci/${COMMIT}/${DISTRO}-${ARCH}"
 
+SSH_OPTS=(
+    -o BatchMode=yes
+    -o ConnectTimeout=30
+    -o ServerAliveInterval=30
+    -o ServerAliveCountMax=4
+)
+
+ssh_remote() {
+    echo "+ ssh $HOST $*"
+    ssh "${SSH_OPTS[@]}" "$HOST" "$@"
+}
+
+scp_to_remote() {
+    local dest="$1"
+    shift
+
+    echo "+ scp $* $HOST:$dest"
+    timeout --foreground 300 scp "${SSH_OPTS[@]}" "$@" "$HOST:$dest"
+}
+
+scp_from_remote_dir() {
+    local src_dir="$1"
+    local dest="$2"
+
+    echo "+ scp -r $HOST:$src_dir/. $dest/"
+    timeout --foreground 300 scp -r "${SSH_OPTS[@]}" "$HOST:$src_dir/." "$dest/"
+}
+
 echo "=== Remote build: $DISTRO $ARCH on $HOST ==="
 
 # Set up remote work directory
-ssh "$HOST" "mkdir -p $REMOTE_WORK/source $REMOTE_WORK/result"
+ssh_remote "mkdir -p $REMOTE_WORK/source $REMOTE_WORK/result"
 
 # Ship source artifacts
-scp "$SOURCE_DIR"/* "$HOST:$REMOTE_WORK/source/"
+scp_to_remote "$REMOTE_WORK/source/" "$SOURCE_DIR"/*
 
 # Ship the build script
 SCRIPT_DIR="$(dirname "$0")"
-scp "$SCRIPT_DIR/build-binary.sh" "$HOST:$REMOTE_WORK/"
+scp_to_remote "$REMOTE_WORK/" "$SCRIPT_DIR/build-binary.sh"
 
 # Run the build
-ssh "$HOST" "bash $REMOTE_WORK/build-binary.sh \
+ssh_remote "bash $REMOTE_WORK/build-binary.sh \
     $DISTRO $ARCH $COMMIT \
     $REMOTE_WORK/source $REMOTE_WORK/result \
     $RUST_VERSION"
 
 # Ship results back
 mkdir -p "$RESULT_DIR"
-scp "$HOST:$REMOTE_WORK/result/"* "$RESULT_DIR/"
+scp_from_remote_dir "$REMOTE_WORK/result" "$RESULT_DIR"
 
 # Clean up remote
-ssh "$HOST" "rm -rf $REMOTE_WORK"
+ssh_remote "rm -rf $REMOTE_WORK"
 
 echo "=== Remote build complete: $DISTRO $ARCH ==="
 ls -la "$RESULT_DIR/"

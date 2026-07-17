@@ -6,7 +6,7 @@
  * We refer to members with bitmasks in various places - but we need to get rid
  * of this limit:
  */
-#define BCH_SB_MEMBERS_MAX		64
+#define BCH_SB_MEMBERS_MAX		256
 
 /*
  * Sentinal value - indicates a device that does not exist
@@ -105,6 +105,7 @@ LE64_BITMASK(BCH_MEMBER_FREESPACE_INITIALIZED,
 LE64_BITMASK(BCH_MEMBER_RESIZE_ON_MOUNT,struct bch_member, flags, 31, 32)
 LE64_BITMASK(BCH_MEMBER_ROTATIONAL,	struct bch_member, flags, 32, 33)
 LE64_BITMASK(BCH_MEMBER_ROTATIONAL_SET,	struct bch_member, flags, 33, 34)
+LE64_BITMASK(BCH_MEMBER_INITIALIZED,	struct bch_member, flags, 34, 38)
 
 #if 0
 LE64_BITMASK(BCH_MEMBER_NR_READ_ERRORS,	struct bch_member, flags[1], 0,  20);
@@ -123,6 +124,21 @@ enum bch_member_state {
 #undef x
 	BCH_MEMBER_STATE_NR
 };
+
+#define BCH_MEMBER_INITIALIZED_STATES()		\
+	x(initialized,		0)		\
+	x(pre_dev_usage,	1)		\
+	x(pre_mark_sb,		2)		\
+	x(pre_freespace_init,	3)		\
+	x(pre_journal_alloc,	4)
+
+enum bch_member_initialized {
+#define x(t, n) BCH_MEMBER_INITIALIZED_##t = n,
+	BCH_MEMBER_INITIALIZED_STATES()
+#undef x
+	BCH_MEMBER_INITIALIZED_NR
+};
+
 
 struct bch_sb_field_members_v1 {
 	struct bch_sb_field	field;

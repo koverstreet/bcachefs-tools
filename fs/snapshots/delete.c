@@ -12,6 +12,7 @@
 #include "init/passes.h"
 
 #include "snapshots/snapshot.h"
+#include "snapshots/subvolume.h"
 
 #include "util/enumerated_ref.h"
 
@@ -63,7 +64,7 @@
  *   safety.
  */
 
-static void bch2_snapshot_delete_nodes_to_text(struct printbuf *out, struct snapshot_delete *d, bool full)
+static __cold void bch2_snapshot_delete_nodes_to_text(struct printbuf *out, struct snapshot_delete *d, bool full)
 {
 	size_t limit = !full ? 10 : SIZE_MAX;
 
@@ -92,7 +93,7 @@ static void bch2_snapshot_delete_nodes_to_text(struct printbuf *out, struct snap
 	prt_newline(out);
 }
 
-void bch2_snapshot_delete_status_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_snapshot_delete_status_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct snapshot_delete *d = &c->snapshots.delete;
 
@@ -134,13 +135,95 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
 		return ret;
 
 	/* already deleted? */
-	if (BCH_SNAPSHOT_WILL_DELETE(&s->v))
+	if (bch2_snapshot_state(&s->v) != SNAPSHOT_STATE_live)
 		return 0;
 
-	SET_BCH_SNAPSHOT_WILL_DELETE(&s->v, true);
-	SET_BCH_SNAPSHOT_SUBVOL(&s->v, false);
-	s->v.subvol = 0;
+	/*
+	 * The backref is retained: it now points at the subvolume's
+	 * tombstone, and deletion requires that testimony - a will_delete
+	 * leaf without a subvolume pointing back is an invalid state
+	 * (check_should_delete_leaf):
+	 */
+	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_will_delete);
 	return 0;
+}
+
+/*
+ * Sanity check before a destructive snapshot-node transition (emptying or
+ * deleting a node): the per-snapshot disk accounting counters must be zero.
+ *
+ * The deletion scan should already have migrated or removed every key stamped
+ * with this snapshot id; this verifies it did. A nonzero count means a key is
+ * still accounted to the node, and one of two things is wrong:
+ *
+ *  - the accounting is stale/incorrect, or
+ *  - the inodes btree is missing an entry: the deletion scan relies on "an
+ *    extent/dirent/xattr in snapshot X implies an inode in snapshot X" to find
+ *    the keys to remove, so a missing inode strands that snapshot's keys.
+ *
+ * Refuse the transition and schedule check_allocations (recompute accounting)
+ * and check_inodes (revalidate the inode<->snapshot mapping) to resolve which,
+ * rather than dropping the keys.
+ *
+ * The key count catches metadata-only stranding (dirents, xattrs, empty
+ * inodes) that the sectors counter can't see. It's only trusted once
+ * check_allocations has rebuilt it (scheduled by the snapshot_nr_keys
+ * upgrade); before that version we fall back to the sectors-only check. Either
+ * way it's an in-memory read per snapshot btree, and the per-btree breakdown
+ * points at where any stranded keys live.
+ */
+static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
+{
+	struct bch_fs *c = trans->c;
+
+	bool trust_keys = c->sb.version_upgrade_complete >=
+		bcachefs_metadata_version_snapshot_nr_keys;
+
+	CLASS(printbuf, buf)();
+	u64 total_keys = 0, total_sectors = 0;
+
+	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
+		if (!btree_type_has_snapshots(btree))
+			continue;
+
+		struct disk_accounting_pos acc;
+		memset(&acc, 0, sizeof(acc));
+		acc.type = BCH_DISK_ACCOUNTING_snapshot;
+		acc.snapshot.id = id;
+		acc.snapshot.btree = btree;
+
+		u64 v[3] = {};
+		bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
+
+		u64 nr_keys	= trust_keys ? v[0] : 0;
+		u64 key_bytes	= trust_keys ? v[1] : 0;
+		u64 sectors	= v[2];
+
+		if (!nr_keys && !sectors)
+			continue;
+
+		total_keys	+= nr_keys;
+		total_sectors	+= sectors;
+
+		prt_str(&buf, "\n  ");
+		bch2_btree_id_to_text(&buf, btree);
+		prt_printf(&buf, ": %llu keys (%llu bytes), %llu sectors",
+			   nr_keys, key_bytes, sectors);
+	}
+
+	if (likely(!total_keys && !total_sectors))
+		return 0;
+
+	CLASS(printbuf, msg)();
+	prt_printf(&msg, "snapshot node %u still has %llu keys / %llu sectors accounted to it - refusing to delete/empty, to prevent data loss; scheduling repair:%s\n",
+		   id, total_keys, total_sectors, buf.buf);
+
+	int ret = bch2_require_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_allocations);
+	ret = bch2_require_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_inodes) ?: ret;
+
+	bch_err(c, "%s", msg.buf);
+
+	return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
 }
 
 static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
@@ -152,9 +235,9 @@ static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
 	if (unlikely(ret))
 		return ret;
 
-	SET_BCH_SNAPSHOT_NO_KEYS(&s->v,		true);
-	SET_BCH_SNAPSHOT_WILL_DELETE(&s->v,	false);
-	s->v.subvol = 0;
+	try(bch2_snapshot_node_check_no_data(trans, id));
+
+	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_no_keys);
 	return 0;
 }
 
@@ -177,7 +260,11 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 	if (ret)
 		return ret;
 
-	BUG_ON(BCH_SNAPSHOT_DELETED(&s->v));
+	try(bch2_snapshot_node_check_no_data(trans, id));
+
+	if (bch2_trans_inconsistent_on(bch2_snapshot_state(&s->v) == SNAPSHOT_STATE_deleted, trans,
+			"deleting snapshot node %u: already in state deleted", id))
+		return bch_err_throw(c, EINVAL_snapshot_delete_already_deleted);
 
 	if (s->v.children[1]) {
 		CLASS(bch_log_msg, msg)(c);
@@ -185,6 +272,23 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 		bch2_snapshot_tree_keys_to_text(&msg.m, trans, id);
 		bch2_snapshot_delete_nodes_to_text(&msg.m, &c->snapshots.delete, true);
 		return bch_err_throw(c, EINVAL_snapshot_delete_has_two_children);
+	}
+
+	if (s->v.subvol) {
+		struct bch_subvolume subvol;
+		try(bch2_subvolume_get(trans, le32_to_cpu(s->v.subvol), true, &subvol));
+
+		if (s->v.children[0] ||
+		    (bch2_subvolume_state(&subvol) != SUBVOLUME_STATE_deleted &&
+		     c->sb.version_upgrade_complete >=
+		     bcachefs_metadata_version_per_dev_fragmentation_lru)) {
+			CLASS(bch_log_msg, msg)(c);
+			prt_printf(&msg.m, "deleting node with bad subvolume pointer:\n");
+			bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&s->k_i));
+			return bch_err_throw(c, EINVAL_snapshot_delete_bad_subvol);
+		}
+
+		try(bch2_btree_delete(trans, BTREE_ID_subvolumes, POS(0, le32_to_cpu(s->v.subvol)), 0));
 	}
 
 	u32 parent_id = le32_to_cpu(s->v.parent);
@@ -257,9 +361,15 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 	}
 
 	if (!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)) {
-		SET_BCH_SNAPSHOT_DELETED(&s->v, true);
 		s->v.parent		= 0;
-		s->v.children[0]	= 0;
+		/*
+		 * Retain the pointer to our live descendant: the node is spliced
+		 * out of the live tree, but a stray key later found in this
+		 * deleted snapshot must still be migrated to where it's visible,
+		 * and bch2_snapshot_live_descendent() walks children[0] to find
+		 * it. (child_id is 0 for a leaf - nothing to retain.)
+		 */
+		s->v.children[0]	= cpu_to_le32(child_id);
 		s->v.children[1]	= 0;
 		s->v.subvol		= 0;
 		s->v.tree		= 0;
@@ -267,24 +377,31 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 		s->v.skip[0]		= 0;
 		s->v.skip[1]		= 0;
 		s->v.skip[2]		= 0;
+		bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_deleted);
 	} else {
 		s->k.type = KEY_TYPE_deleted;
 		set_bkey_val_u64s(&s->k, 0);
 	}
 
 	/*
-	 * Delete accounting: note that designated initializers will not
-	 * reliably cause a struct to be zeroed if it's a union:
+	 * Delete accounting - one key per snapshot btree. Note that designated
+	 * initializers will not reliably cause a struct to be zeroed if it's a
+	 * union:
 	 */
+	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
+		if (!btree_type_has_snapshots(btree))
+			continue;
 
-	struct disk_accounting_pos acc;
-	memset(&acc, 0, sizeof(acc));
-	acc.type = BCH_DISK_ACCOUNTING_snapshot;
-	acc.snapshot.id = id;
+		struct disk_accounting_pos acc;
+		memset(&acc, 0, sizeof(acc));
+		acc.type = BCH_DISK_ACCOUNTING_snapshot;
+		acc.snapshot.id = id;
+		acc.snapshot.btree = btree;
 
-	try(bch2_btree_bit_mod_buffered(trans, BTREE_ID_accounting,
-					disk_accounting_pos_to_bpos(&acc),
-					false));
+		try(bch2_btree_bit_mod_buffered(trans, BTREE_ID_accounting,
+						disk_accounting_pos_to_bpos(&acc),
+						false));
+	}
 
 	return 0;
 }
@@ -342,6 +459,43 @@ static const struct snapshot_interior_delete *snapshot_id_dying(struct snapshot_
 	return ret;
 }
 
+/*
+ * Remove a key from a dying/deleted snapshot node, migrating it to that node's
+ * live descendant first when there is one (live_child != 0): the key is still
+ * visible to the descendant via inheritance, so dropping it outright would lose
+ * data. Only copy it down if the descendant doesn't already have its own key at
+ * that position. With no live descendant (a leaf) the key is just deleted.
+ *
+ * Shared by the deletion pass (delete_dead_snapshots_process_key) and the fsck
+ * repair (bch2_check_key_has_snapshot).
+ */
+int bch2_delete_dead_snapshot_key(struct btree_trans *trans, struct btree_iter *iter,
+				  struct bkey_s_c k, u32 live_child)
+{
+	struct bch_fs *c = trans->c;
+
+	if (live_child) {
+		BUG_ON(!bch2_snapshot_exists(c, live_child));
+
+		struct bpos dst = k.k->p;
+		dst.snapshot = live_child;
+
+		CLASS(btree_iter, dst_iter)(trans, iter->btree_id, dst,
+					    BTREE_ITER_all_snapshots|BTREE_ITER_intent);
+		struct bkey_s_c dst_k = bkey_try(bch2_btree_iter_peek_slot(&dst_iter));
+
+		if (bkey_deleted(dst_k.k)) {
+			struct bkey_i *new = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+
+			new->k.p = dst;
+			try(bch2_trans_update(trans, &dst_iter, new,
+					      BTREE_UPDATE_internal_snapshot_node));
+		}
+	}
+
+	return bch2_btree_delete_at(trans, iter, BTREE_UPDATE_internal_snapshot_node);
+}
+
 static int delete_dead_snapshots_process_key(struct btree_trans *trans,
 					     struct btree_iter *iter,
 					     struct bkey_s_c k)
@@ -359,28 +513,7 @@ static int delete_dead_snapshots_process_key(struct btree_trans *trans,
 	if (!dying)
 		return 0;
 
-	if (dying->live_child) {
-		BUG_ON(!bch2_snapshot_exists(c, dying->live_child));
-
-		struct bpos dst = k.k->p;
-		dst.snapshot = dying->live_child;
-
-		CLASS(btree_iter, dst_iter)(trans, iter->btree_id, dst,
-					    BTREE_ITER_all_snapshots|BTREE_ITER_intent);
-		struct bkey_s_c dst_k = bkey_try(bch2_btree_iter_peek_slot(&dst_iter));
-
-		if (bkey_deleted(dst_k.k)) {
-			struct bkey_i *new = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
-
-			new->k.p = dst;
-			try(bch2_trans_update(trans, &dst_iter, new,
-					      BTREE_UPDATE_internal_snapshot_node));
-		}
-	}
-
-	try(bch2_btree_delete_at(trans, iter,
-				 BTREE_UPDATE_internal_snapshot_node));
-	return 0;
+	return bch2_delete_dead_snapshot_key(trans, iter, k, dying->live_child);
 }
 
 static bool skip_unrelated_snapshot_tree(struct btree_trans *trans, struct btree_iter *iter, u64 *prev_inum)
@@ -524,6 +657,57 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 	return 0;
 }
 
+static int check_should_delete_leaf(struct btree_trans *trans, struct bkey_s_c_snapshot s)
+{
+	struct bch_fs *c = trans->c;
+
+	CLASS(printbuf, buf)();
+	bch2_bkey_val_to_text(&buf, c, s.s_c);
+
+	switch (bch2_snapshot_state(s.v)) {
+	case SNAPSHOT_STATE_live:
+		return 0;
+	case SNAPSHOT_STATE_will_delete:
+		if (!s.v->subvol) {
+			if (bch2_fs_inconsistent_on(c->sb.version_upgrade_complete >=
+						    bcachefs_metadata_version_per_dev_fragmentation_lru,
+						    c, "snapshot leaf in invalid state\n%s", buf.buf))
+				return 0;
+		} else {
+			struct bch_subvolume subvol;
+			try(bch2_subvolume_get(trans, le32_to_cpu(s.v->subvol), true, &subvol));
+
+			if (bch2_fs_inconsistent_on(bch2_subvolume_state(&subvol) != SUBVOLUME_STATE_deleted,
+						    c, "snapshot marked for deletion but subvolume not marked for deletion\n%s",
+						    buf.buf))
+				return 0;
+
+			if (bch2_fs_inconsistent_on(le32_to_cpu(subvol.snapshot) != s.k->p.offset,
+						    c, "snapshot marked for deletion but subvolume does not point back\n%s",
+						    buf.buf))
+				return 0;
+		}
+
+		return 1;
+	case SNAPSHOT_STATE_no_keys:
+		/*
+		 * An emptied interior node whose children have all been
+		 * deleted is normally reaped in the same pass that deletes
+		 * its last child - each node deletion is its own commit, so a
+		 * childless no_keys node is what a crash in between leaves.
+		 * Shouldn't occur otherwise; handle it gracefully - it's
+		 * empty by construction and node_delete re-verifies no-data:
+		 */
+		return ret_fsck_err(trans, snapshot_no_keys_childless,
+				    "childless no_keys snapshot node, deleting:\n%s",
+				    buf.buf);
+	default: {
+		bch2_fs_inconsistent(c, "snapshot leaf in invalid state\n%s", buf.buf);
+		return 0;
+	}
+	}
+}
+
 /*
  * For a given snapshot, if it doesn't have a subvolume that points to it, and
  * it doesn't have child snapshot nodes - it's now redundant and we can mark it
@@ -537,14 +721,32 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 	struct bch_fs *c = trans->c;
 	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 
-	if (BCH_SNAPSHOT_SUBVOL(s.v) ||
-	    BCH_SNAPSHOT_DELETED(s.v))
+	if (bch2_snapshot_state(s.v) == SNAPSHOT_STATE_deleted)
 		return 0;
 
-	struct snapshot_delete *d = &c->snapshots.delete;
-	guard(mutex)(&d->progress_lock);
+	if (!s.v->children[0]) {
+		int ret = check_should_delete_leaf(trans, s);
+		if (ret <= 0)
+			return ret;
+	}
 
+	/*
+	 * The leaf check above is this body's last restart point: everything
+	 * below is in-memory table lookups and list pushes, so a transaction
+	 * restart replays the body having collected nothing. The lists aren't
+	 * transactional - keep restartable work above this line, or
+	 * collection double-adds on replay. (Repairs invalidate collected
+	 * state differently: the deletion path resets the lists wholesale
+	 * and rescans.)
+	 *
+	 */
+	struct snapshot_delete *d = &c->snapshots.delete;
 	u32 live_child = 0, nr_live_children = 0;
+
+	/*
+	 * Collection is the only list writer, so reading needs no lock;
+	 * progress_lock is for sysfs readers and taken only for updates:
+	 */
 	for (unsigned i = 0; i < 2; i++) {
 		u32 id = le32_to_cpu(s.v->children[i]);
 		if (id && !snapshot_list_has_id(&d->delete_leaves, id)) {
@@ -553,38 +755,56 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 			live_child = interior_delete_has_id(&d->delete_interior, id) ?:
 				interior_delete_has_id(&d->no_keys, id) ?:
 				id;
-
-			BUG_ON(live_child && !bch2_snapshot_exists(c, live_child));
 		}
 	}
 
 	if (nr_live_children == 2)
 		return 0;
 
-	if (!BCH_SNAPSHOT_NO_KEYS(s.v))
-		try(snapshot_list_add_nodup(c, &d->deleting_from_trees,
-					    bch2_snapshot_tree(c, s.k->p.offset)));
+	/*
+	 * The resolved live child is about to license key migration and a
+	 * splice: if it isn't in the table, is self-referential, or isn't a
+	 * descendant, the topology is damaged - schedule repair and bail out
+	 * of deletion, which runs again once check_snapshots has fixed it:
+	 */
+	if (live_child &&
+	    (live_child == s.k->p.offset ||
+	     !bch2_snapshot_exists(c, live_child) ||
+	     !bch2_snapshot_is_ancestor(trans, live_child, s.k->p.offset))) {
+		CLASS(bch_log_msg, msg)(c);
 
-	if (!nr_live_children) {
-		try(snapshot_list_add(c, &d->delete_leaves, s.k->p.offset));
-	} else {
-		struct snapshot_interior_delete n = {
-			.id		= s.k->p.offset,
-			.live_child	= live_child,
-		};
+		prt_printf(&msg.m, "snapshot deletion found damaged topology (resolved live child %u):\n",
+			   live_child);
+		bch2_bkey_val_to_text(&msg.m, c, s.s_c);
 
-		BUG_ON(n.id == n.live_child);
-		BUG_ON(!bch2_snapshot_is_ancestor(trans, n.live_child, n.id));
+		int ret = bch2_run_explicit_recovery_pass(c, &msg.m,
+					BCH_RECOVERY_PASS_check_snapshots, 0);
+		return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_bad_topology);
+	}
 
-		/*
-		 * We're not doing any processing for NO_KEYS snapshot nodes,
-		 * but we still track them so that we can find the correct
-		 * live_child when deleting parents, above:
-		 */
-		if (!BCH_SNAPSHOT_NO_KEYS(s.v))
-			try(darray_push(&d->delete_interior, n));
-		else
-			try(darray_push(&d->no_keys, n));
+	scoped_guard(mutex, &d->progress_lock) {
+		if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys)
+			try(snapshot_list_add_nodup(c, &d->deleting_from_trees,
+						    bch2_snapshot_tree(c, s.k->p.offset)));
+
+		if (!nr_live_children) {
+			try(snapshot_list_add(c, &d->delete_leaves, s.k->p.offset));
+		} else {
+			struct snapshot_interior_delete n = {
+				.id		= s.k->p.offset,
+				.live_child	= live_child,
+			};
+
+			/*
+			 * We're not doing any processing for NO_KEYS snapshot
+			 * nodes, but we still track them so that we can find
+			 * the correct live_child when deleting parents, above:
+			 */
+			if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys)
+				try(darray_push(&d->delete_interior, n));
+			else
+				try(darray_push(&d->no_keys, n));
+		}
 	}
 
 	return 0;
@@ -781,10 +1001,7 @@ static int bch2_get_dead_interior_snapshots(struct btree_trans *trans, struct bk
 
 	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 
-	if (BCH_SNAPSHOT_DELETED(s.v))
-		return 0;
-
-	if (BCH_SNAPSHOT_NO_KEYS(s.v)) {
+	if (bch2_snapshot_state(s.v) == SNAPSHOT_STATE_no_keys) {
 		u32 live_child = 0, nr_live_children = 0;
 		for (unsigned i = 0; i < 2; i++) {
 			u32 id = le32_to_cpu(s.v->children[i]);
@@ -850,10 +1067,10 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 	return 0;
 }
 
-static bool interior_snapshot_needs_delete(struct bkey_s_c_snapshot snap)
+static bool interior_snapshot_needs_delete(const struct bch_snapshot *s)
 {
 	/* If there's one child, it's redundant and keys will be moved to the child */
-	return !!snap.v->children[0] + !!snap.v->children[1] == 1;
+	return !!s->children[0] + !!s->children[1] == 1;
 }
 
 int bch2_check_snapshot_needs_deletion(struct btree_trans *trans, struct bkey_s_c k,
@@ -862,16 +1079,18 @@ int bch2_check_snapshot_needs_deletion(struct btree_trans *trans, struct bkey_s_
 	if (k.k->type != KEY_TYPE_snapshot)
 		return 0;
 
-	struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
 	struct bch_fs *c = trans->c;
+	struct bch_snapshot s;
+	bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(k));
+	enum bch_snapshot_state state = bch2_snapshot_state_compat(&s);
 
-	if (BCH_SNAPSHOT_DELETED(s.v))
+	if (state == SNAPSHOT_STATE_deleted)
 		return 0;
 
-	if (BCH_SNAPSHOT_NO_KEYS(s.v))
+	if (state == SNAPSHOT_STATE_no_keys)
 		*nr_empty_interior += 1;
-	else if (BCH_SNAPSHOT_WILL_DELETE(s.v) ||
-		 interior_snapshot_needs_delete(s))
+	else if (state == SNAPSHOT_STATE_will_delete ||
+		 interior_snapshot_needs_delete(&s))
 		set_bit(BCH_FS_need_delete_dead_snapshots, &c->flags);
 
 	return 0;

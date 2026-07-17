@@ -180,7 +180,7 @@ pub fn sb_layout_init(
     sb_end: u64,
     no_sb_at_end: bool,
 ) -> anyhow::Result<()> {
-    *l = unsafe { std::mem::zeroed() };
+    *l = Default::default();
 
     l.magic.b = BCHFS_MAGIC;
     l.layout_type = 0;

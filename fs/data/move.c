@@ -48,7 +48,7 @@ const char * const bch2_data_ops_strs[] = {
 
 struct evacuate_bucket_arg {
 	struct bpos		bucket;
-	int			gen;
+	int			generation;
 	u32			sectors;
 	struct data_update_opts	data_opts;
 };
@@ -57,6 +57,14 @@ static int evacuate_bucket_pred(struct btree_trans *, void *,
 				enum btree_id, struct bkey_s_c,
 				struct bch_inode_opts *,
 				struct data_update_opts *);
+
+static void data_update_free_rcu(struct rcu_head *rcu)
+{
+	struct data_update *u = container_of(rcu, struct data_update, rcu);
+
+	bch2_bkey_buf_exit(&u->k);
+	kfree(u);
+}
 
 static void move_write_done(struct bch_write_op *op)
 {
@@ -75,7 +83,7 @@ static void move_write_done(struct bch_write_op *op)
 		bch2_data_update_ec_alloc_failed(u);
 
 	bch2_data_update_exit(u, op->error);
-	kfree_rcu(u, rcu);
+	call_rcu(&u->rcu, data_update_free_rcu);
 	closure_put(&ctxt->cl);
 }
 
@@ -247,13 +255,7 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 	u->rbio.bio.bi_end_io	= move_read_endio;
 	u->rbio.bio.bi_ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
 
-	if (ctxt->rate)
-		bch2_ratelimit_increment(ctxt->rate, k.k->size);
-
-	if (ctxt->stats) {
-		atomic64_inc(&ctxt->stats->keys_moved);
-		atomic64_add(u->k.k->k.size, &ctxt->stats->sectors_moved);
-	}
+	u32 size = k.k->size;
 
 	if (bucket_in_flight) {
 		u->b = bucket_in_flight;
@@ -275,15 +277,75 @@ static int __bch2_move_extent(struct moving_context *ctxt,
 	 * ctxt when doing wakeup
 	 */
 	closure_get(&ctxt->cl);
-	__bch2_read_extent(trans, &u->rbio,
-			   u->rbio.bio.bi_iter,
-			   bkey_start_pos(k.k),
-			   iter->btree_id, k, 0,
-			   NULL,
-			   data_opts->read_flags|BCH_READ_last_fragment,
-			   data_opts->read_dev);
+	ret = __bch2_read_extent(trans, &u->rbio,
+				 u->rbio.bio.bi_iter,
+				 bkey_start_pos(k.k),
+				 iter->btree_id, k, 0,
+				 NULL,
+				 data_opts->read_flags|BCH_READ_last_fragment,
+				 data_opts->read_dev);
+	if (ret) {
+		/*
+		 * __bch2_read_extent() only returns an error synchronously
+		 * (transaction restart or ENOMEM during promote setup) before it
+		 * has touched the rbio - move_read_endio() never runs, so the
+		 * read-side setup above has to be unwound by hand.
+		 *
+		 * bch2_data_update_exit() reverses bch2_data_update_init() and
+		 * also drops the in-flight bucket count we took above (update->b
+		 * is its only decrement, tree-wide). What it does NOT cover is
+		 * move.c's own read-side state: the closure ref, the read
+		 * accounting, and read_list.
+		 */
+		closure_put(&ctxt->cl);
+
+		scoped_guard(mutex, &ctxt->lock) {
+			atomic_sub(u->k.k->k.size, &ctxt->read_sectors);
+			atomic_dec(&ctxt->read_ios);
+			list_del(&u->read_list);
+		}
+
+		bch2_data_update_exit(u, ret);
+		u = NULL;
+		return ret;
+	}
 	u = NULL;
+
+	if (ctxt->rate)
+		bch2_ratelimit_increment(ctxt->rate, size);
+
+	if (ctxt->stats) {
+		atomic64_inc(&ctxt->stats->keys_moved);
+		atomic64_add(size, &ctxt->stats->sectors_moved);
+	}
 	return 0;
+}
+
+/*
+ * Btree node rewrites don't construct a data_update, so they don't get
+ * data_update_trace()'s success/failure events on exit - record the
+ * outcome here so btree moves trace like extent moves. @k was copied
+ * before the rewrite: the rewrite frees the node the original key's
+ * memory lived in.
+ */
+static void move_btree_node_trace(struct bch_fs *c,
+				  struct bch_inode_opts *opts,
+				  struct data_update_opts *data_opts,
+				  struct bkey_s_c k, int ret)
+{
+	if (!ret)
+		event_add_trace(c, data_update, c->opts.btree_node_size >> 9, buf, ({
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_newline(&buf);
+			bch2_data_update_opts_to_text(&buf, c, opts, data_opts);
+		}));
+	else if (bch2_data_update_fail_should_trace(data_opts->type, ret))
+		event_add_trace(c, data_update_fail, c->opts.btree_node_size >> 9, buf, ({
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_newline(&buf);
+			bch2_data_update_opts_to_text(&buf, c, opts, data_opts);
+			prt_printf(&buf, "\nret:\t%s\n", bch2_err_str(ret));
+		}));
 }
 
 int bch2_move_extent(struct moving_context *ctxt,
@@ -303,8 +365,23 @@ int bch2_move_extent(struct moving_context *ctxt,
 	if (!bkey_is_btree_ptr(k.k))
 		ret = __bch2_move_extent(ctxt, bucket_in_flight, iter, k, opts, data_opts);
 	else if (data_opts->type != BCH_DATA_UPDATE_scrub) {
-		if (data_opts->type != BCH_DATA_UPDATE_copygc)
-			try(bch2_can_do_data_update(trans, opts, data_opts, k, NULL));
+		if (data_opts->type != BCH_DATA_UPDATE_copygc) {
+			ret = bch2_can_do_data_update(trans, opts, data_opts, k, NULL);
+			if (ret) {
+				/*
+				 * The extent leg records pre-check refusals via
+				 * data_update_exit(); no data_update exists here,
+				 * so trace them ourselves:
+				 */
+				if (!bch2_err_matches(ret, BCH_ERR_transaction_restart))
+					move_btree_node_trace(c, opts, data_opts, k, ret);
+				return ret;
+			}
+		}
+
+		struct bkey_buf node_key __cleanup(bch2_bkey_buf_exit);
+		bch2_bkey_buf_init(&node_key);
+		bch2_bkey_buf_reassemble(&node_key, k);
 
 		enum bch_trans_commit_flags commit_flags = data_opts->commit_flags;
 		if ((commit_flags & BCH_WATERMARK_MASK) == BCH_WATERMARK_copygc)
@@ -314,6 +391,12 @@ int bch2_move_extent(struct moving_context *ctxt,
 						  data_opts->target,
 						  data_opts->commit_flags,
 						  data_opts->write_flags);
+
+		/* ENOMEM becomes a restart below and gets retried - not an outcome */
+		if (!bch2_err_matches(ret, BCH_ERR_transaction_restart) &&
+		    !bch2_err_matches(ret, ENOMEM))
+			move_btree_node_trace(c, opts, data_opts,
+					      bkey_i_to_s_c(node_key.k), ret);
 	} else
 		ret = bch2_btree_node_scrub(trans, iter->btree_id, level, k, data_opts->read_dev);
 
@@ -360,7 +443,7 @@ static int bch2_move_extent_pred(struct moving_context *ctxt,
 
 		if (pred == evacuate_bucket_pred) {
 			struct evacuate_bucket_arg *e = arg;
-			prt_printf(&buf, " gen=%u", e->gen);
+			prt_printf(&buf, " gen=%u", e->generation);
 		}
 
 		prt_newline(&buf);
@@ -621,12 +704,18 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 		if (ctxt->stats)
 			ctxt->stats->offset = bp.k->p.offset >> c->sb.extent_bp_shift;
 
-		if (!(data_types & BIT(bp.v->data_type)) ||
-		    (!bp.v->level && bp.v->btree_id == BTREE_ID_stripes)) {
-			bch2_btree_iter_advance(&bp_iter);
-			continue;
-		}
-
+		/*
+		 * Resolve every backpointer we walk, including ones we're not
+		 * moving: resolution is what repairs a dangling backpointer
+		 * (backpointer_to_missing_ptr, autofix), and the per-bucket
+		 * accounting check (bch2_check_bucket_backpointer_mismatch,
+		 * above) can only detect missing backpointers reliably if
+		 * dangling ones have been deleted first - a skipped dangling
+		 * backpointer keeps contributing its data_type/gen/len to the
+		 * sums, hiding the mismatch forever. Copygc then livelocks:
+		 * is_movable keeps approving the bucket, evacuation skips all
+		 * its backpointers and moves nothing, repeat.
+		 */
 		CLASS(btree_iter_uninit, iter)(trans);
 		k = bch2_backpointer_get_key(trans, bp, &iter, 0, &last_flushed);
 		ret = bkey_err(k);
@@ -635,6 +724,13 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 		if (ret)
 			break;
 		if (!k.k) {
+			bch2_btree_iter_advance(&bp_iter);
+			continue;
+		}
+
+		/* Not moving these; resolving them above still verified them: */
+		if (!(data_types & BIT(bp.v->data_type)) ||
+		    (!bp.v->level && bp.v->btree_id == BTREE_ID_stripes)) {
 			bch2_btree_iter_advance(&bp_iter);
 			continue;
 		}
@@ -764,7 +860,7 @@ static int evacuate_ec_orphan_pred(struct btree_trans *trans, void *_arg,
 	struct evacuate_ec_orphan_arg *arg = _arg;
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
+	struct extent_ptr_decoded p = {};
 	unsigned ptr_bit = 1;
 
 	data_opts->read_dev = -1;
@@ -813,11 +909,11 @@ static int evacuate_bucket_pred(struct btree_trans *trans, void *_arg,
 	data_opts->read_dev = -1;
 
 	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
+	struct extent_ptr_decoded p = {};
 	unsigned i = 0;
 	bkey_for_each_ptr_decode(k.k, bch2_bkey_ptrs_c(k), p, entry) {
 		if (p.ptr.dev == arg->bucket.inode &&
-		    (arg->gen < 0 || arg->gen == p.ptr.gen) &&
+		    (arg->generation < 0 || arg->generation == p.ptr.generation) &&
 		    !p.ptr.cached) {
 			data_opts->ptrs_kill |= BIT(i);
 			arg->sectors += p.crc.compressed_size;
@@ -1137,7 +1233,7 @@ int bch2_data_job(struct bch_fs *c,
 	return ret;
 }
 
-void bch2_move_stats_to_text(struct printbuf *out, struct bch_move_stats *stats)
+__cold void bch2_move_stats_to_text(struct printbuf *out, struct bch_move_stats *stats)
 {
 	prt_printf(out, "%s: data type==", stats->name);
 	bch2_prt_data_type(out, stats->data_type);
@@ -1161,7 +1257,7 @@ void bch2_move_stats_to_text(struct printbuf *out, struct bch_move_stats *stats)
 	prt_newline(out);
 }
 
-static void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs *c, struct moving_context *ctxt)
+static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs *c, struct moving_context *ctxt)
 {
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 32);
@@ -1190,7 +1286,7 @@ static void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs *c, str
 	}
 }
 
-void bch2_fs_moving_ctxts_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_fs_moving_ctxts_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct moving_context *ctxt;
 

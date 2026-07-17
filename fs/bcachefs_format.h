@@ -901,12 +901,30 @@ struct bch_sb_field_ext {
 	__le64			errors_silent[8];
 	__le64			btrees_lost_data;
 	__le64			flags0;
+	/*
+	 * Like btrees_lost_data, but never cleared - btrees_lost_data gates
+	 * reconstruction and is cleared when repair completes; this is the
+	 * forensic record of every btree that has ever lost data:
+	 */
+	__le64			btrees_lost_data_ever;
+	/*
+	 * Btrees validated consistent by their check pass and not mutated
+	 * since. Written synchronously on every change (set on clean pass
+	 * completion, cleared from the btree's transactional trigger on
+	 * mutation) so the on-disk value is always current. Lets consistency
+	 * checks that would otherwise destroy data based on an in-memory table
+	 * they can't fully trust (check_key_has_snapshot) instead reschedule
+	 * the check pass. Runtime copy: bch_sb.btrees_clean.
+	 */
+	__le64			btrees_clean;
 };
 
 LE64_BITMASK(BCH_SB_EXT_DEV_READAHEAD,		struct bch_sb_field_ext, flags0, 0, 20);
 LE64_BITMASK(BCH_SB_EXT_EC_STRIPE_BUF_LIMIT,	struct bch_sb_field_ext, flags0, 20, 26);
 LE64_BITMASK(BCH_SB_EXT_SCRUB_MAX_REWIND_SECS,	struct bch_sb_field_ext, flags0, 26, 38);
 LE64_BITMASK(BCH_SB_EXT_DISCARD_BUFFER,		struct bch_sb_field_ext, flags0, 38, 42);
+LE64_BITMASK(BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS,
+						struct bch_sb_field_ext, flags0, 42, 49);
 
 /* Superblock: */
 
@@ -1069,6 +1087,12 @@ LE64_BITMASK(BCH_SB_EXT_DISCARD_BUFFER,		struct bch_sb_field_ext, flags0, 38, 42
 	x(need_discard_by_journal_seq,	BCH_VERSION(1, 38),			\
 	  "need_discard btree reindexed by journal seq for O(1) "		\
 	  "discard eligibility checks",				"2026-03")	\
+	x(per_dev_fragmentation_lru,	BCH_VERSION(1, 39),			\
+	  "Per-device bucket fragmentation LRUs, so copygc can reason "		\
+	  "about fragmentation per device",			"2026-07")	\
+	x(snapshot_nr_keys,		BCH_VERSION(1, 40),			\
+	  "Per-snapshot key-count accounting, so snapshot deletion can tell "	\
+	  "an empty node from one whose keys would be stranded",	"2026-07")
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
@@ -1246,6 +1270,7 @@ LE64_BITMASK(BCH_SB_WRITEBACK_TIMEOUT,	struct bch_sb, flags[6], 24, 40);
 LE64_BITMASK(BCH_SB_EXTENT_BP_SHIFT,	struct bch_sb, flags[6], 40, 48);
 LE64_BITMASK(BCH_SB_SCRUB_JOURNAL,	struct bch_sb, flags[6], 48, 50);
 LE64_BITMASK(BCH_SB_EC_MAX_DATA_BLOCKS,	struct bch_sb, flags[6], 50, 58);
+LE64_BITMASK(BCH_SB_MOVE_WRITES_FUA,	struct bch_sb, flags[6], 58, 59);
 
 #define BCH_SB_EXTENT_BP_SHIFT_DEFAULT	10
 
@@ -1821,7 +1846,7 @@ static inline bool btree_id_recovers_from_scan(enum btree_id btree)
 	return btree == BTREE_ID_alloc || !btree_id_can_reconstruct(btree);
 }
 
-#define BTREE_MAX_DEPTH		4U
+enum { BTREE_MAX_DEPTH = 4 };
 
 /* Btree nodes */
 

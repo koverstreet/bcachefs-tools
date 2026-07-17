@@ -229,9 +229,9 @@ struct bch_extent_ptr {
 				unwritten:1,
 				offset:44, /* 8 petabytes */
 				dev:8,
-				gen:8;
+				generation:8;
 #elif defined (__BIG_ENDIAN_BITFIELD)
-	__u64			gen:8,
+	__u64			generation:8,
 				dev:8,
 				offset:44,
 				unwritten:1,

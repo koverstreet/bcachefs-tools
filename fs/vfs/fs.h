@@ -10,6 +10,24 @@
 
 #include <linux/seqlock.h>
 #include <linux/stat.h>
+#include <linux/version.h>
+
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,19,0)
+static inline unsigned inode_state_read(struct inode *inode)
+{
+	return inode->i_state;
+}
+
+static inline unsigned inode_state_read_once(struct inode *inode)
+{
+	return READ_ONCE(inode->i_state);
+}
+
+static inline void inode_state_set_raw(struct inode *inode, unsigned flags)
+{
+	WRITE_ONCE(inode->i_state, inode->i_state|flags);
+}
+#endif
 
 struct bch_inode_info {
 	struct inode		v;
@@ -17,7 +35,27 @@ struct bch_inode_info {
 	struct rhlist_head	by_inum_hash;
 	subvol_inum		ei_inum;
 
-	struct list_head	ei_vfs_inode_list;
+	/*
+	 * Cached extent allocation state for [start, end), for skipping btree
+	 * lookups when initializing bch_folio state in sequential buffered
+	 * writes.
+	 *
+	 * Staleness contract: extents may change toward allocated without
+	 * notice (worst case we over-reserve); anything that deallocates must
+	 * clear the range, under pagecache_block so no fill (under
+	 * pagecache_add) can straddle the deallocation. Fillers build their
+	 * result in locals and publish it in one go: fillers aren't
+	 * serialized against each other (page_mkwrite fills without i_rwsem),
+	 * and incremental publishing would let two fills interleave into a
+	 * range neither of them scanned.
+	 */
+	u64			ei_reserved_start;
+	u64			ei_reserved_end;
+	u8			ei_reserved_replicas;
+	u8			ei_reserved_state;
+	spinlock_t		ei_reserved_lock;
+
+	unsigned		ei_inodes_idx;
 	unsigned long		ei_flags;
 
 	struct mutex		ei_update_lock;
@@ -156,6 +194,14 @@ struct bch_inode_unpacked;
 struct bch_inode_info *
 __bch2_create(struct mnt_idmap *, struct bch_inode_info *,
 	      struct dentry *, umode_t, dev_t, subvol_inum, unsigned);
+
+#if IS_ENABLED(CONFIG_UNICODE)
+void bch2_dentry_set_casefold_ops(struct dentry *, struct inode *);
+void bch2_dir_casefold_changed(struct dentry *);
+#else
+static inline void bch2_dentry_set_casefold_ops(struct dentry *dentry, struct inode *vinode) {}
+static inline void bch2_dir_casefold_changed(struct dentry *dentry) {}
+#endif
 
 int bch2_inode_or_descendents_is_open(struct btree_trans *trans, struct bpos p);
 

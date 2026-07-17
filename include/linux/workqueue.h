@@ -22,6 +22,10 @@ enum {
 };
 #endif
 
+enum {
+	WORK_PENDING_BIT,
+};
+
 struct work_struct {
 	atomic_long_t data;
 	struct list_head entry;
@@ -50,6 +54,16 @@ struct delayed_work {
 static inline struct delayed_work *to_delayed_work(struct work_struct *work)
 {
 	return container_of(work, struct delayed_work, work);
+}
+
+static inline bool work_pending(struct work_struct *work)
+{
+	return test_bit(WORK_PENDING_BIT, work_data_bits(work));
+}
+
+static inline bool delayed_work_pending(struct delayed_work *dwork)
+{
+	return work_pending(&dwork->work);
 }
 
 enum {
@@ -123,11 +137,6 @@ alloc_workqueue(const char *fmt, unsigned int flags,
 
 extern void destroy_workqueue(struct workqueue_struct *wq);
 
-struct workqueue_attrs *alloc_workqueue_attrs(gfp_t gfp_mask);
-void free_workqueue_attrs(struct workqueue_attrs *attrs);
-int apply_workqueue_attrs(struct workqueue_struct *wq,
-			  const struct workqueue_attrs *attrs);
-
 extern bool queue_work(struct workqueue_struct *wq,
 		       struct work_struct *work);
 extern bool queue_delayed_work(struct workqueue_struct *wq,
@@ -135,10 +144,7 @@ extern bool queue_delayed_work(struct workqueue_struct *wq,
 extern bool mod_delayed_work(struct workqueue_struct *wq,
 			struct delayed_work *dwork, unsigned long delay);
 
-extern void flush_workqueue(struct workqueue_struct *wq);
 extern void drain_workqueue(struct workqueue_struct *wq);
-
-extern int schedule_on_each_cpu(work_func_t func);
 
 extern bool flush_work(struct work_struct *work);
 extern bool cancel_work_sync(struct work_struct *work);
@@ -147,13 +153,7 @@ extern bool flush_delayed_work(struct delayed_work *dwork);
 extern bool cancel_delayed_work(struct delayed_work *dwork);
 extern bool cancel_delayed_work_sync(struct delayed_work *dwork);
 
-extern void workqueue_set_max_active(struct workqueue_struct *wq,
-				     int max_active);
-extern bool current_is_workqueue_rescuer(void);
-extern bool workqueue_congested(int cpu, struct workqueue_struct *wq);
 static inline __printf(1, 2) void set_worker_desc(const char *fmt, ...) {}
-extern void print_worker_info(const char *log_lvl, struct task_struct *task);
-extern void show_workqueue_state(void);
 
 static inline int work_busy(struct work_struct *work) { return 0; }
 
@@ -165,11 +165,6 @@ static inline bool schedule_work_on(int cpu, struct work_struct *work)
 static inline bool schedule_work(struct work_struct *work)
 {
 	return queue_work(system_wq, work);
-}
-
-static inline void flush_scheduled_work(void)
-{
-	flush_workqueue(system_wq);
 }
 
 static inline bool schedule_delayed_work_on(int cpu, struct delayed_work *dwork,

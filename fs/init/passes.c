@@ -88,7 +88,7 @@ static int bch2_sb_recovery_passes_validate(struct bch_sb *sb, struct bch_sb_fie
 	return 0;
 }
 
-static void bch2_sb_recovery_passes_to_text(struct printbuf *out,
+static __cold void bch2_sb_recovery_passes_to_text(struct printbuf *out,
 					    struct bch_fs *c,
 					    struct bch_sb *sb,
 					    struct bch_sb_field *f)
@@ -201,6 +201,20 @@ static bool bch2_recovery_pass_entry_get_locked(struct bch_fs *c, enum bch_recov
 	return found;
 }
 
+/*
+ * Ratelimit if the last runtime was more than 1/runtime_fraction of the time
+ * since the pass last ran. Shared by the sb-persisted ratelimit (expensive
+ * passes) and the in-memory failing-pass ratelimit, which feed it an entry
+ * from different places.
+ */
+static bool recovery_pass_entry_ratelimited(const struct recovery_pass_entry *e,
+					    unsigned runtime_fraction)
+{
+	return !BCH_RECOVERY_PASS_NO_RATELIMIT(e) &&
+		(u64) le32_to_cpu(e->last_runtime) * runtime_fraction >
+		ktime_get_real_seconds() - le64_to_cpu(e->last_run);
+}
+
 static bool bch2_recovery_pass_want_ratelimit_locked(struct bch_fs *c, enum bch_recovery_pass pass,
 						     unsigned runtime_fraction)
 {
@@ -208,13 +222,7 @@ static bool bch2_recovery_pass_want_ratelimit_locked(struct bch_fs *c, enum bch_
 	if (!bch2_recovery_pass_entry_get_locked(c, pass, &e))
 		return false;
 
-	/*
-	 * Ratelimit if the last runtime was more than 1% of the time
-	 * since we last ran
-	 */
-	return !BCH_RECOVERY_PASS_NO_RATELIMIT(&e) &&
-		(u64) le32_to_cpu(e.last_runtime) * runtime_fraction >
-		ktime_get_real_seconds() - le64_to_cpu(e.last_run);
+	return recovery_pass_entry_ratelimited(&e, runtime_fraction);
 }
 
 bool bch2_recovery_pass_want_ratelimit(struct bch_fs *c, enum bch_recovery_pass pass,
@@ -501,8 +509,20 @@ static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
 	s64 start_time = ktime_get_real_seconds();
 	int ret = p->fn(c);
 	if (ret) {
+		s64 end_time = ktime_get_real_seconds();
 		bch_err(c, "%s(): error %s", p->name, bch2_err_str(ret));
 		r->passes_failing |= BIT_ULL(pass);
+		/*
+		 * Ratelimit retries the same way the sb ratelimits expensive
+		 * passes, but in memory - a failing pass doesn't get to write
+		 * the superblock. flags stays 0, so this throttle applies even
+		 * to passes the sb marks NO_RATELIMIT: that flag is about not
+		 * throttling successful reruns, not about hammering failures.
+		 */
+		r->passes_failing_ratelimit[pass] = (struct recovery_pass_entry) {
+			.last_run	= cpu_to_le64(end_time),
+			.last_runtime	= cpu_to_le32(max(0, end_time - start_time)),
+		};
 		return ret;
 	}
 
@@ -517,6 +537,14 @@ static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
 	return 0;
 }
 
+/*
+ * Retry ratelimit for a failing pass, as a multiple of its last runtime (same
+ * units as bch2_recovery_pass_want_ratelimit()'s fraction): a pass that ran for
+ * T before failing won't be retried by automatic recovery for RATELIMIT * T.
+ * Raise it if a class of failing passes retries too aggressively.
+ */
+#define RECOVERY_PASS_FAILING_RATELIMIT	100
+
 int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool failfast)
 {
 	struct bch_fs_recovery *r = &c->recovery;
@@ -528,14 +556,28 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 		orig_passes_to_run &= ~bch2_recovery_passes_match(PASS_ALLOC);
 
 	/*
-	 * A failed recovery pass will be retried after another pass succeeds -
-	 * but not this iteration.
+	 * A failing pass is retried on a cost-model ratelimit: retry cadence
+	 * scales with how long the pass ran, so automatic recovery doesn't
+	 * hammer a pass that keeps failing - but, unlike waiting for some other
+	 * pass to succeed, it isn't stuck forever if nothing else makes
+	 * progress. (A success clears passes_failing wholesale below, so a pass
+	 * that fixes a dependency still triggers an immediate retry.)
 	 *
-	 * This is because some passes depend on repair done by other passes: we
-	 * may want to retry, but we don't want to loop on failing passes.
+	 * An explicit fsck is different: the user asked for these passes, so
+	 * run them even if they failed before, and let them fail loudly again
+	 * rather than silently returning success having done nothing.
 	 */
+	if (!test_bit(BCH_FS_in_fsck, &c->flags)) {
+		u64 failing = r->passes_failing;
+		while (failing) {
+			unsigned pass = __ffs64(failing);
+			failing &= ~BIT_ULL(pass);
 
-	orig_passes_to_run &= ~r->passes_failing;
+			if (recovery_pass_entry_ratelimited(&r->passes_failing_ratelimit[pass],
+							    RECOVERY_PASS_FAILING_RATELIMIT))
+				orig_passes_to_run &= ~BIT_ULL(pass);
+		}
+	}
 
 	r->current_passes = orig_passes_to_run;
 
@@ -677,7 +719,7 @@ static void prt_passes(struct printbuf *out, const char *msg, u64 passes)
 	prt_newline(out);
 }
 
-void bch2_recovery_pass_status_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_recovery_pass_status_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct bch_fs_recovery *r = &c->recovery;
 

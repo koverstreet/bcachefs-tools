@@ -15,9 +15,10 @@ use crossterm::{
 use owo_colors::OwoColorize;
 use serde::{Deserialize, Serialize};
 
+use crate::commands::DeviceNameArgs;
 use crate::util::run_tui;
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::sysfs::{dev_name_from_sysfs, sysfs_path_from_fd};
+use crate::wrappers::sysfs::{DeviceNameMode, dev_display_name_from_sysfs, sysfs_path_from_fd};
 
 const SYSFS_BASE: &str = "/sys/fs/bcachefs";
 
@@ -246,7 +247,10 @@ fn read_time_stats(sysfs_path: &Path) -> Result<Vec<StatEntry>> {
     Ok(entries)
 }
 
-fn read_device_latency_stats(sysfs_path: &Path) -> Result<Vec<StatEntry>> {
+fn read_device_latency_stats(
+    sysfs_path: &Path,
+    name_mode: DeviceNameMode,
+) -> Result<Vec<StatEntry>> {
     let mut entries = Vec::new();
     let Ok(dir) = fs::read_dir(sysfs_path) else { return Ok(entries) };
 
@@ -256,7 +260,7 @@ fn read_device_latency_stats(sysfs_path: &Path) -> Result<Vec<StatEntry>> {
         if !dirname.starts_with("dev-") { continue }
 
         let dev_path = entry.path();
-        let dev_name = dev_name_from_sysfs(&dev_path);
+        let dev_name = dev_display_name_from_sysfs(&dev_path, name_mode);
 
         for (suffix, label) in [("io_latency_stats_read_json", "read"),
                                  ("io_latency_stats_write_json", "write")] {
@@ -293,7 +297,11 @@ fn read_btree_trans_stats(sysfs_path: &Path) -> Result<Vec<StatEntry>> {
 
 // Data collection
 
-fn collect_stats(sysfs_paths: &[PathBuf], show_devices: bool) -> Result<Vec<FsSnapshot>> {
+fn collect_stats(
+    sysfs_paths: &[PathBuf],
+    show_devices: bool,
+    name_mode: DeviceNameMode,
+) -> Result<Vec<FsSnapshot>> {
     let mut snaps = Vec::new();
     for path in sysfs_paths {
         let stats = read_time_stats(path)?;
@@ -315,7 +323,7 @@ fn collect_stats(sysfs_paths: &[PathBuf], show_devices: bool) -> Result<Vec<FsSn
             sections.push(Section {
                 label:   "Per-device IO latency",
                 page:    Page::Devices,
-                entries: read_device_latency_stats(path)?,
+                entries: read_device_latency_stats(path, name_mode)?,
             });
         }
 
@@ -391,6 +399,9 @@ pub struct Cli {
     /// Skip per-device IO latency stats
     #[arg(long)]
     no_device_stats: bool,
+
+    #[command(flatten)]
+    device_names: DeviceNameArgs,
 
     /// One-shot output (no interactive TUI)
     #[arg(long)]
@@ -497,8 +508,6 @@ fn build_frame(snaps: &[FsSnapshot], state: &TuiState, multi: bool) -> (Vec<Stri
 
         let mut first = true;
         for section in snap.sections.iter().filter(|s| s.page == state.page) {
-            if section.entries.is_empty() { continue }
-
             if !first { lines.push(String::new()); }
             first = false;
             lines.push(format!("{}:", section.label));
@@ -604,7 +613,8 @@ fn run_interactive(cli: Cli, sysfs_paths: Vec<PathBuf>) -> Result<()> {
         /* Only collect per-device stats when we're actually on the devices page —
          * skips the 63-device sysfs read cost on the other pages. */
         let want_devices = state.show_devices && state.page == Page::Devices;
-        let mut snaps = collect_stats(&sysfs_paths, want_devices)
+        let name_mode = cli.device_names.name_mode();
+        let mut snaps = collect_stats(&sysfs_paths, want_devices, name_mode)
             .unwrap_or_default();
         for snap in &mut snaps {
             for section in &mut snap.sections {
@@ -650,10 +660,12 @@ fn timestats(cli: Cli) -> Result<()> {
         find_all_sysfs_dirs()?
     };
 
+    let name_mode = cli.device_names.name_mode();
+
     if cli.json {
-        print_json(&collect_stats(&sysfs_paths, !cli.no_device_stats)?)
+        print_json(&collect_stats(&sysfs_paths, !cli.no_device_stats, name_mode)?)
     } else if cli.once || !io::stdout().is_terminal() {
-        display_stats(collect_stats(&sysfs_paths, !cli.no_device_stats)?, &cli)
+        display_stats(collect_stats(&sysfs_paths, !cli.no_device_stats, name_mode)?, &cli)
     } else {
         run_interactive(cli, sysfs_paths)
     }

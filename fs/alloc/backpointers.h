@@ -22,7 +22,7 @@ static inline u64 swab40(u64 x)
 }
 
 int bch2_backpointer_validate(struct bch_fs *, struct bkey_s_c k,
-			      struct bkey_validate_context);
+			      const struct bkey_validate_context *);
 void bch2_backpointer_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 void bch2_backpointer_swab(const struct bch_fs *, struct bkey_s);
 
@@ -197,7 +197,7 @@ static inline void bch2_extent_ptr_to_bp(struct bch_fs *c,
 		.btree_id	= btree_id,
 		.level		= level,
 		.data_type	= bch2_bkey_ptr_data_type(k, p, entry),
-		.bucket_gen	= p.ptr.gen,
+		.bucket_gen	= p.ptr.generation,
 		.bucket_len	= ptr_disk_sectors(level ? btree_sectors(c) : k.k->size, p),
 		.pos		= k.k->p,
 	};

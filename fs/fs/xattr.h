@@ -7,7 +7,7 @@
 extern const struct bch_hash_desc bch2_xattr_hash_desc;
 
 int bch2_xattr_validate(struct bch_fs *, struct bkey_s_c,
-			struct bkey_validate_context);
+			const struct bkey_validate_context *);
 void bch2_xattr_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 
 #define bch2_bkey_ops_xattr ((struct bkey_ops) {	\
@@ -37,6 +37,10 @@ struct dentry;
 struct xattr_handler;
 struct bch_hash_info;
 struct bch_inode_info;
+
+int __bch2_xattr_set(struct btree_trans *, subvol_inum,
+		     const struct bch_hash_info *,
+		     const char *, const void *, size_t, int, int);
 
 /* Exported for cmd_migrate.c in tools: */
 int bch2_xattr_set(struct btree_trans *, subvol_inum,

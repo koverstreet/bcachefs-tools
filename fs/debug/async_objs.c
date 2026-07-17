@@ -19,28 +19,28 @@
 
 #include <linux/debugfs.h>
 
-static void promote_obj_to_text(struct printbuf *out,
+static __cold void promote_obj_to_text(struct printbuf *out,
 				struct bch_fs *c,
 				void *obj)
 {
 	bch2_promote_op_to_text(out, c, obj);
 }
 
-static void rbio_obj_to_text(struct printbuf *out,
+static __cold void rbio_obj_to_text(struct printbuf *out,
 			     struct bch_fs *c,
 			     void *obj)
 {
 	bch2_read_bio_to_text(out, c, obj);
 }
 
-static void write_op_obj_to_text(struct printbuf *out,
+static __cold void write_op_obj_to_text(struct printbuf *out,
 				 struct bch_fs *c,
 				 void *obj)
 {
 	bch2_write_op_to_text(out, obj);
 }
 
-static void btree_read_bio_obj_to_text(struct printbuf *out,
+static __cold void btree_read_bio_obj_to_text(struct printbuf *out,
 				       struct bch_fs *c,
 				       void *obj)
 {
@@ -48,7 +48,7 @@ static void btree_read_bio_obj_to_text(struct printbuf *out,
 	bch2_btree_read_bio_to_text(out, rbio);
 }
 
-static void btree_write_bio_obj_to_text(struct printbuf *out,
+static __cold void btree_write_bio_obj_to_text(struct printbuf *out,
 					struct bch_fs *c,
 					void *obj)
 {
@@ -79,33 +79,31 @@ static ssize_t bch2_async_obj_list_read(struct file *file, char __user *buf,
 {
 	struct dump_iter *i = file->private_data;
 	struct async_obj_list *list = i->list;
-	ssize_t ret = 0;
+	bool done = false;
 
 	i->ubuf = buf;
 	i->size	= size;
 	i->ret	= 0;
 
-	struct genradix_iter iter;
-	void *obj;
-	fast_list_for_each_from(&list->list, iter, obj, i->iter) {
-		ret = bch2_debugfs_flush_buf(i);
-		if (ret)
-			return ret;
+	struct genradix_iter iter = genradix_iter_init(&list->list.items, i->iter);
+	while (!done) {
+		try(bch2_debugfs_flush_buf(i));
 
-		if (!i->size)
-			break;
+		scoped_guard(rcu) {
+			void *obj = fast_list_iter_peek(&iter, &list->list);
+			done = !obj;
+			if (done)
+				break;
 
-		list->obj_to_text(&i->buf, i->c, obj);
-		i->iter = iter.pos;
+			list->obj_to_text(&i->buf, i->c, obj);
+			genradix_iter_advance(&iter, &list->list.items);
+			i->iter = iter.pos;
+		}
 	}
 
-	if (i->buf.allocation_failure)
-		ret = -ENOMEM;
+	try(bch2_debugfs_flush_buf(i));
 
-	if (!ret)
-		ret = bch2_debugfs_flush_buf(i);
-
-	return ret ?: i->ret;
+	return i->buf.allocation_failure ? -ENOMEM : i->ret;
 }
 
 static const struct file_operations async_obj_ops = {

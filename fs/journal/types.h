@@ -51,18 +51,18 @@ struct journal_buf {
 	struct bch_devs_list	devs_written;
 	struct bch_io_failures	failed;
 
-	struct closure_waitlist	wait;
 	u64			last_seq;	/* copy of data->last_seq */
-	long			expires;
-	u64			flush_time;
 
 	unsigned		buf_size;	/* size in bytes of @data */
 	unsigned		sectors;	/* maximum size for current entry */
 	unsigned		disk_sectors;	/* maximum size entry could have been, if
 						   buf_size was bigger */
 	unsigned		u64s_reserved;
-	bool			noflush:1;	/* write has already been kicked off, and was noflush */
-	bool			must_flush:1;	/* something wants a flush */
+
+	/* write has already been or waiting to be kicked off */
+	bool			flush_picked:1;
+	bool			flush:1;
+
 	bool			separate_flush:1;
 	bool			need_flush_to_write_buffer:1;
 	bool			write_started:1;
@@ -70,6 +70,9 @@ struct journal_buf {
 	bool			write_done:1;
 	bool			empty:1;
 	bool			has_overwrites:1;
+
+	/* must not be memset, only manipulated by xchg/cmpxchg */
+	struct closure_waitlist	wait;
 };
 
 /*
@@ -105,12 +108,16 @@ enum journal_pin_type {
 };
 
 struct journal_entry_pin_list {
-	struct list_head		unflushed[JOURNAL_PIN_TYPE_NR];
-	struct list_head		flushed[JOURNAL_PIN_TYPE_NR];
+	spinlock_t			lock;
 	atomic_t			count;
+	struct list_head		unflushed[JOURNAL_PIN_TYPE_NR];
+	struct list_head		flushed;
 	bool				unreplayed;
-	union bch_replicas_padded	devs;
-	size_t				bytes;
+	struct {
+		u8			nr;
+		u8			data[BCH_REPLICAS_MAX];
+	}				devs;
+	unsigned			bytes;
 };
 
 struct journal;
@@ -141,15 +148,34 @@ union journal_res_state {
 		u64		v;
 	};
 
+	/*
+	 * Field order is reversed on big-endian so the on-word bit layout is
+	 * identical on both: cur_entry_offset at bit 0, idx at 22, then the four
+	 * counts at bit 24 + idx*10. That invariant lets journal_state_count() /
+	 * _inc() / _buf_put() index a count with a single shift, not a switch.
+	 */
 	struct {
+#ifdef __LITTLE_ENDIAN_BITFIELD
 		u64		cur_entry_offset:22,
 				idx:2,
 				buf0_count:10,
 				buf1_count:10,
 				buf2_count:10,
 				buf3_count:10;
+#else
+		u64		buf3_count:10,
+				buf2_count:10,
+				buf1_count:10,
+				buf0_count:10,
+				idx:2,
+				cur_entry_offset:22;
+#endif
 	};
 };
+
+#define JOURNAL_STATE_BUF_COUNT_BITS	10	/* matches bufN_count:10 above */
+#define JOURNAL_STATE_BUF_COUNT_MAX	((1U << JOURNAL_STATE_BUF_COUNT_BITS) - 1)
+#define JOURNAL_STATE_BUF0_SHIFT	24	/* cur_entry_offset:22 + idx:2 */
 
 /* bytes: */
 #define JOURNAL_ENTRY_SIZE_MIN		(64U << 10) /* 64k */
@@ -192,6 +218,7 @@ enum journal_space_from {
 	x(running)			\
 	x(may_skip_flush)		\
 	x(need_flush_write)		\
+	x(med_on_space)			\
 	x(low_on_space)			\
 	x(low_on_pin)			\
 	x(low_on_wb)
@@ -226,6 +253,9 @@ struct journal {
 	} __aligned(SMP_CACHE_BYTES);
 
 	unsigned long		flags;
+#ifdef CONFIG_BCACHEFS_DEBUG
+	struct task_struct	*stop_thread;
+#endif
 
 	/* Max size of current journal entry */
 	unsigned		cur_entry_u64s;
@@ -272,6 +302,12 @@ struct journal {
 	 */
 	FIFO_U64_IDX(struct journal_buf) in_flight;
 
+	/*
+	 * When we need a flush but no open journal entry was flushable, wait
+	 * here - transferred to journal_buf.wait on entry open
+	 */
+	struct closure_waitlist	flush_wait;
+
 	void			*free_buf;
 	unsigned		free_buf_size;
 
@@ -279,9 +315,9 @@ struct journal {
 
 	/* if nonzero, we may not open a new journal entry: */
 	unsigned		blocked;
+	unsigned		flushes_outstanding;
 
 	/* Used when waiting because the journal was full */
-	wait_queue_head_t	wait;
 	struct closure_waitlist	async_wait;
 	struct closure_waitlist	reclaim_flush_wait;
 
@@ -296,7 +332,7 @@ struct journal {
 	/* seq, last_seq from the most recent journal entry successfully written */
 	u64			seq_ondisk;
 	u64			flushed_seq_ondisk;
-	u64			flushing_seq;
+	atomic64_t		flushing_seq;
 	u64			last_seq_ondisk;
 	u64			err_seq;
 	u64			last_empty_seq;
@@ -331,6 +367,9 @@ struct journal {
 	 * longer needed, the bucket can be discarded and reused.
 	 */
 	FIFO_U64_IDX(struct journal_entry_pin_list) pin;
+	struct percpu_rw_semaphore pin_resize_lock;
+	struct work_struct	pin_resize_work;
+
 	u64			last_seq;
 
 	size_t			dirty_entry_bytes;

@@ -85,20 +85,6 @@ void rust_strip_alloc_do(struct bch_fs *c)
 	mutex_unlock(&c->sb_lock);
 }
 
-/* online member iteration shim */
-
-struct bch_dev *rust_get_next_online_dev(struct bch_fs *c,
-					 struct bch_dev *ca,
-					 unsigned ref_idx)
-{
-	return bch2_get_next_online_dev(c, ca, ~0U, READ, ref_idx);
-}
-
-void rust_put_online_dev_ref(struct bch_dev *ca, unsigned ref_idx)
-{
-	enumerated_ref_put(&ca->io_ref[READ], ref_idx);
-}
-
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
 {
 	struct rust_journal_entries ret = { NULL, 0 };
@@ -124,38 +110,12 @@ struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)
 	return ret;
 }
 
-/* dump sanitize shims — wraps crypto operations for encrypted fs dumps */
-
-int rust_jset_decrypt(struct bch_fs *c, struct jset *j)
-{
-	return bch2_encrypt(c, JSET_CSUM_TYPE(j), journal_nonce(j),
-			    j->encrypted_start,
-			    vstruct_end(j) - (void *) j->encrypted_start);
-}
-
-int rust_bset_decrypt(struct bch_fs *c, struct bset *i, unsigned offset)
-{
-	return bset_encrypt(c, i, offset);
-}
-
 
 /* Bitmap shim — set_bit is atomic (locked bitops) */
 
 void rust_set_bit(unsigned long nr, unsigned long *addr)
 {
 	set_bit(nr, addr);
-}
-
-/* Device reference shims */
-
-struct bch_dev *rust_dev_tryget_noerror(struct bch_fs *c, unsigned dev)
-{
-	return bch2_dev_tryget_noerror(c, dev);
-}
-
-void rust_dev_put(struct bch_dev *ca)
-{
-	bch2_dev_put(ca);
 }
 
 /*
@@ -276,7 +236,7 @@ int rust_link_data(struct bch_fs *c,
 		bch2_bkey_append_ptr(c, &e->k_i, (struct bch_extent_ptr) {
 					.offset = physical,
 					.dev = 0,
-					.gen = *bucket_gen(ca, b),
+					.generation = *bucket_gen(ca, b),
 				  });
 
 		ret = bch2_disk_reservation_get(c, &res, sectors, 1,

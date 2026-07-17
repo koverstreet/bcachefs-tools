@@ -154,53 +154,32 @@ static int bch2_dev_usrdata_drop(struct bch_fs *c,
 	return 0;
 }
 
-static int dev_metadata_drop_one(struct btree_trans *trans,
-				 struct btree_iter *iter,
-				 struct progress_indicator *progress,
-				 unsigned dev_idx,
-				 unsigned flags, struct printbuf *err)
-{
-	struct btree *b = errptr_try(bch2_btree_iter_peek_node(iter));
-	if (!b)
-		return 1;
-
-	try(bch2_progress_update_iter(trans, progress, iter));
-	try(drop_btree_ptrs(trans, iter, b, dev_idx, flags, err));
-	return 0;
-}
-
 static int bch2_dev_metadata_drop(struct bch_fs *c,
 				  struct progress_indicator *progress,
 				  unsigned dev_idx,
 				  unsigned flags, struct printbuf *err)
 {
-	int ret = 0;
-
 	/* don't handle this yet: */
 	if (flags & BCH_FORCE_IF_METADATA_LOST)
 		return bch_err_throw(c, remove_with_metadata_missing_unimplemented);
 
 	CLASS(btree_trans, trans)(c);
 
-	for (unsigned id = 0; id < btree_id_nr_alive(c) && !ret; id++) {
-		CLASS(btree_node_iter, iter)(trans, id, POS_MIN, 0, 0, BTREE_ITER_prefetch);
-
-		while (!(ret = lockrestart_do(trans,
-					dev_metadata_drop_one(trans, &iter, progress, dev_idx, flags, err))))
-			bch2_btree_iter_next_node(&iter);
-	}
+	for (unsigned btree = 0; btree < btree_id_nr_alive(c); btree++)
+		for (unsigned level = 0; level < BTREE_MAX_DEPTH; level++)
+			try(for_each_btree_node(trans, iter, btree, POS_MIN, level, 0, b, ({
+				bch2_progress_update_iter(trans, progress, &iter) ?:
+				drop_btree_ptrs(trans, &iter, b, dev_idx, flags, err);
+			})));
 
 	bch2_trans_unlock(trans);
 	bch2_btree_interior_updates_flush(c);
-
-	BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart));
-
-	return min(ret, 0);
+	return 0;
 }
 
 static int data_drop_bp(struct btree_trans *trans, unsigned dev_idx,
 			struct bkey_s_c_backpointer bp, struct wb_maybe_flush *last_flushed,
-			unsigned flags, struct printbuf *err)
+			unsigned flags, struct printbuf *err, bool *had_open_stripe)
 {
 	CLASS(btree_iter_uninit, iter)(trans);
 	struct bkey_s_c k = bch2_backpointer_get_key(trans, bp, &iter, BTREE_ITER_intent,
@@ -222,19 +201,21 @@ static int data_drop_bp(struct btree_trans *trans, unsigned dev_idx,
 	if (bkey_is_btree_ptr(k.k))
 		return bch2_dev_btree_drop_key(trans, bp, dev_idx, last_flushed, flags, err);
 	else if (k.k->type == KEY_TYPE_stripe)
-		return bch2_invalidate_stripe_to_dev(trans, &iter, k, dev_idx, flags, err);
+		return bch2_invalidate_stripe_to_dev(trans, &iter, k, dev_idx, flags, err,
+						     had_open_stripe);
 	else
 		return bch2_dev_usrdata_drop_key(trans, &iter, k, dev_idx, flags, err);
 }
 
-static bool dev_has_data(struct bch_fs *c, struct bch_dev *ca)
+static u64 dev_data_buckets(struct bch_dev *ca)
 {
 	struct bch_dev_usage usage = bch2_dev_usage_read(ca);
+	u64 nr = 0;
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
-		if (!data_type_is_empty(i) && !data_type_is_hidden(i) && usage.buckets[i])
-			return true;
+		if (!data_type_is_empty(i) && !data_type_is_hidden(i))
+			nr += usage.buckets[i];
 
-	return false;
+	return nr;
 }
 
 int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
@@ -260,8 +241,25 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 	 * outside the scan's already-walked range. Both create races with the
 	 * scan that can only be handled by retrying.
 	 */
-	unsigned max_iter = 10, i;
-	for (i = 0; i < max_iter; i++) {
+	/*
+	 * Terminate on progress, not a fixed iteration count. An EC evacuation
+	 * off a failing device can take many scan/flush cycles to drain: the
+	 * migration creates that move data off the device are deliberately not
+	 * fenced (see "Fence stripe creates against device removal"), so they
+	 * run concurrently with the scan as open stripes that we skip and flush.
+	 * A fixed cap fires mid-migration. Instead, track the device's data and
+	 * keep going as long as it keeps hitting new lows - that's forward
+	 * progress. Only bail after max_stalled scans in a row with no new low,
+	 * which catches a genuine livelock (or a flush that never drains)
+	 * without aborting a slow-but-working drain.
+	 */
+	const unsigned max_stalled = 10;
+	u64 min_data_buckets = U64_MAX;
+	unsigned nr_stalled = 0;
+
+	while (true) {
+		bool had_open_stripe = false;
+
 		try(bch2_btree_write_buffer_flush_sync(trans));
 
 		try(backpointer_scan_for_each(trans, iter, BTREE_ID_backpointers,
@@ -269,17 +267,35 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 						  &last_flushed, &progress, bp, ({
 			wb_maybe_flush_inc(&last_flushed);
 			CLASS(disk_reservation, res)(c);
-			data_drop_bp(trans, dev_idx, bp, &last_flushed, flags, err) ?:
+			data_drop_bp(trans, dev_idx, bp, &last_flushed, flags, err,
+				     &had_open_stripe) ?:
 			bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
 		})));
 
-		if (!dev_has_data(c, ca))
+		u64 data_buckets = dev_data_buckets(ca);
+		if (!data_buckets)
 			return 0;
-	}
 
-	prt_printf(err, "%s(): did not terminate after %u iterations\n",
-		   __func__, i);
-	return bch_err_throw(c, remove_by_backpointer_did_not_terminate);
+		if (data_buckets < min_data_buckets) {
+			min_data_buckets = data_buckets;
+			nr_stalled = 0;
+		} else if (++nr_stalled >= max_stalled) {
+			prt_printf(err, "%s(): no progress after %u scans, %llu data buckets remain\n",
+				   __func__, nr_stalled, data_buckets);
+			return bch_err_throw(c, remove_by_backpointer_did_not_terminate);
+		}
+
+		/*
+		 * Skipped open stripes are owned by in-flight stripe creates;
+		 * wait for those to close before rescanning so the next scan can
+		 * invalidate them. The flush isn't itself counted as progress: if
+		 * it never drains, the stall counter still terminates us.
+		 */
+		if (had_open_stripe) {
+			bch2_trans_unlock(trans);
+			bch2_fs_ec_flush_outstanding(c);
+		}
+	}
 }
 
 int bch2_dev_data_drop(struct bch_fs *c, unsigned dev_idx,

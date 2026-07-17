@@ -144,8 +144,9 @@ void __bch2_i_sectors_acct(struct bch_fs *c, struct bch_inode_info *inode,
 {
 	if (unlikely((s64) inode->v.i_blocks + sectors < 0)) {
 		CLASS(bch_log_msg, msg)(c);
-		prt_printf(&msg.m, "inode %lu i_blocks underflow: %llu + %lli < 0 (ondisk %lli)",
-			   inode->v.i_ino, (u64) inode->v.i_blocks, sectors,
+		prt_printf(&msg.m, "subvol %llu inode %llu i_blocks underflow: %llu + %lli < 0 (ondisk %lli)",
+			   (u64) inode->ei_inum.subvol, (u64) inode->v.i_ino,
+			   (u64) inode->v.i_blocks, sectors,
 			   inode->ei_inode.bi_sectors);
 
 		msg.m.suppress = !bch2_count_fsck_err(c, vfs_inode_i_blocks_underflow, &msg.m);
@@ -353,7 +354,7 @@ static int __bch2_truncate_folio(struct bch_inode_info *inode,
 			goto unlock;
 	}
 
-	ret = bch2_folio_set(c, inode_inum(inode), &folio, 1);
+	ret = bch2_folio_set(c, inode, &folio, 1);
 	if (ret)
 		goto unlock;
 
@@ -533,6 +534,9 @@ int bchfs_truncate(struct mnt_idmap *idmap,
 	ret = bch2_truncate(c, inode_inum(inode), iattr->ia_size, &i_sectors_delta);
 	bch2_i_sectors_acct(c, inode, NULL, i_sectors_delta);
 
+	scoped_guard(spinlock, &inode->ei_reserved_lock)
+		inode->ei_reserved_start = inode->ei_reserved_end = 0;
+
 	if (unlikely(ret)) {
 		/*
 		 * If we error here, VFS caches are now inconsistent with btree
@@ -545,8 +549,8 @@ int bchfs_truncate(struct mnt_idmap *idmap,
 		     !bch2_journal_error(&c->journal))) {
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m,
-			   "inode %lu truncated to 0 but i_blocks %llu (ondisk %lli)",
-			   inode->v.i_ino, (u64) inode->v.i_blocks,
+			   "inode %llu truncated to 0 but i_blocks %llu (ondisk %lli)",
+			   (u64) inode->v.i_ino, (u64) inode->v.i_blocks,
 			   inode->ei_inode.bi_sectors);
 
 		msg.m.suppress = !bch2_count_fsck_err(c, vfs_inode_i_blocks_not_zero_at_truncate, &msg.m);
@@ -851,6 +855,9 @@ long bch2_fallocate_dispatch(struct file *file, int mode,
 		ret = bchfs_fcollapse_finsert(inode, offset, len, false);
 	else
 		ret = bch_err_throw(c, unsupported_fallocate_mode);
+
+	scoped_guard(spinlock, &inode->ei_reserved_lock)
+		inode->ei_reserved_start = inode->ei_reserved_end = 0;
 err:
 	inode_unlock(&inode->v);
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_fallocate);
@@ -958,6 +965,12 @@ static loff_t bch2_remap_file_range_errcode(struct file *file_src, loff_t pos_sr
 	ret = min((u64) ret << 9, (u64) len);
 
 	bch2_i_sectors_acct(c, dst, &quota_res, i_sectors_delta);
+
+	scoped_guard(spinlock, &dst->ei_reserved_lock)
+		dst->ei_reserved_start = dst->ei_reserved_end = 0;
+
+	scoped_guard(spinlock, &src->ei_reserved_lock)
+		src->ei_reserved_start = src->ei_reserved_end = 0;
 
 	scoped_guard(spinlock, &dst->v.i_lock)
 		if (pos_dst + ret > dst->v.i_size)

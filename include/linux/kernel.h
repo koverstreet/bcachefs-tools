@@ -45,12 +45,14 @@ typedef unsigned gfp_t;
 #define __GFP_ACCOUNT	0
 #define __GFP_RECLAIMABLE 0
 #define __GFP_ZERO	1
+#define __GFP_SKIP_ZERO	0
 #define GFP_KERNEL	2
 
 #define PAGE_ALLOC_COSTLY_ORDER	6
 
 typedef __u64 u64;
 typedef __s64 s64;
+typedef unsigned __int128 u128;
 typedef __u32 u32;
 typedef __s32 s32;
 typedef __u16 u16;

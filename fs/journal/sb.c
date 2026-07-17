@@ -62,7 +62,7 @@ static int bch2_sb_journal_validate(struct bch_sb *sb, struct bch_sb_field *f,
 	return 0;
 }
 
-static void bch2_sb_journal_to_text(struct printbuf *out,
+static __cold void bch2_sb_journal_to_text(struct printbuf *out,
 				    struct bch_fs *c, struct bch_sb *sb,
 				    struct bch_sb_field *f)
 {
@@ -153,7 +153,7 @@ static int bch2_sb_journal_v2_validate(struct bch_sb *sb, struct bch_sb_field *f
 	return 0;
 }
 
-static void bch2_sb_journal_v2_to_text(struct printbuf *out,
+static __cold void bch2_sb_journal_v2_to_text(struct printbuf *out,
 				       struct bch_fs *c, struct bch_sb *sb,
 				       struct bch_sb_field *f)
 {

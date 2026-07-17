@@ -43,7 +43,7 @@
 static struct dentry *bch_debug;
 #endif
 
-void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *c,
+__cold void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *c,
 				    const struct btree *b)
 {
 	struct btree_node *n_ondisk = NULL;
@@ -267,18 +267,18 @@ static ssize_t bch2_read_btree_formats(struct file *file, char __user *buf,
 
 	try(bch2_debugfs_flush_buf(i));
 
-	if (bpos_eq(SPOS_MAX, i->from))
-		return i->ret;
-
 	CLASS(btree_trans, trans)(i->c);
-	return for_each_btree_node(trans, iter, i->id, i->from, 0, b, ({
-		bch2_btree_node_to_text(&i->buf, i->c, b);
-		i->from = !bpos_eq(SPOS_MAX, b->key.k.p)
-			? bpos_successor(b->key.k.p)
-			: b->key.k.p;
+	for (; i->level < BTREE_MAX_DEPTH; i->level++, i->from = POS_MIN)
+		try(for_each_btree_node(trans, iter, i->id, i->from, i->level, 0, b, ({
+			bch2_btree_node_to_text(&i->buf, i->c, b);
+			i->from = !bpos_eq(SPOS_MAX, b->key.k.p)
+				? bpos_successor(b->key.k.p)
+				: b->key.k.p;
 
-		drop_locks_do(trans, bch2_debugfs_flush_buf(i));
-	})) ?: i->ret;
+			drop_locks_do(trans, bch2_debugfs_flush_buf(i));
+		})));
+
+	return i->ret;
 }
 
 static const struct file_operations btree_format_debug_ops = {
@@ -315,7 +315,8 @@ static ssize_t bch2_read_bfloat_failed(struct file *file, char __user *buf,
 				i->prev_node = l->b->key.k.p;
 			}
 
-			bch2_bfloat_to_text(&i->buf, l->b, _k);
+			if (_k)
+				bch2_bfloat_to_text(&i->buf, l->b, _k);
 			bch2_trans_unlock(trans);
 			i->from = bpos_successor(iter.pos);
 			bch2_debugfs_flush_buf(i);
@@ -330,7 +331,7 @@ static const struct file_operations bfloat_failed_debug_ops = {
 	.read		= bch2_read_bfloat_failed,
 };
 
-static void bch2_cached_btree_node_to_text(struct printbuf *out, struct bch_fs *c,
+static __cold void bch2_cached_btree_node_to_text(struct printbuf *out, struct bch_fs *c,
 					   struct btree *b)
 {
 	if (!out->nr_tabstops)
@@ -529,7 +530,7 @@ static ssize_t bch2_journal_pins_read(struct file *file, char __user *buf,
 		if (done)
 			break;
 
-		done = bch2_journal_seq_pins_to_text(&i->buf, &c->journal, &i->iter);
+		done = bch2_journal_seq_pins_to_text(&i->buf, &c->journal, &i->iter, NULL);
 		i->iter++;
 	}
 
@@ -652,6 +653,11 @@ static ssize_t btree_transaction_stats_read(struct file *file, char __user *buf,
 
 			scoped_guard(printbuf_indent, &i->buf)
 				bch2_time_stats_to_text(&i->buf, &s->lock_hold_times);
+
+			prt_printf(&i->buf, "Lock wait times:\n");
+
+			scoped_guard(printbuf_indent, &i->buf)
+				bch2_time_stats_to_text(&i->buf, &s->lock_wait_times);
 		}
 
 		if (s->max_paths_text) {
@@ -679,7 +685,7 @@ static const struct file_operations btree_transaction_stats_op = {
 };
 
 /* walk btree transactions until we find a deadlock and print it */
-static void btree_deadlock_to_text(struct printbuf *out, struct bch_fs *c)
+static __cold void btree_deadlock_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	struct btree_trans *trans;
 	ulong iter = 0;
@@ -698,6 +704,7 @@ restart:
 
 		u32 seq = seqmutex_unlock(&c->btree.trans.lock);
 
+		guard(printbuf_atomic)(out);
 		bool found = bch2_check_for_deadlock(trans, out) != 0;
 
 		closure_put(&trans->ref);

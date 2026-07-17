@@ -3,7 +3,7 @@
 #define _BCACHEFS_DATA_EC_TRIGGER_H
 
 int bch2_stripe_validate(struct bch_fs *, struct bkey_s_c,
-			 struct bkey_validate_context);
+			 const struct bkey_validate_context *);
 void bch2_stripe_to_text(struct printbuf *, struct bch_fs *,
 			 struct bkey_s_c);
 int bch2_trigger_stripe(struct btree_trans *, struct btree_trigger_op);
@@ -13,6 +13,7 @@ int bch2_trigger_stripe(struct btree_trans *, struct btree_trigger_op);
 	.val_to_text	= bch2_stripe_to_text,		\
 	.swab		= bch2_ptr_swab,		\
 	.trigger	= bch2_trigger_stripe,		\
+	.check_repair	= bch2_check_fix_ptrs,		\
 	.min_val_size	= 8,				\
 })
 
@@ -148,7 +149,7 @@ static inline bool __bch2_ptr_matches_stripe(const struct bch_extent_ptr *stripe
 	return  (data_ptr->dev    == stripe_ptr->dev ||
 		 data_ptr->dev    == BCH_SB_MEMBER_INVALID ||
 		 stripe_ptr->dev  == BCH_SB_MEMBER_INVALID) &&
-		data_ptr->gen    == stripe_ptr->gen &&
+		data_ptr->generation    == stripe_ptr->generation &&
 		data_ptr->offset >= stripe_ptr->offset &&
 		data_ptr->offset  < stripe_ptr->offset + sectors;
 }

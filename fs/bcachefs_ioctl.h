@@ -73,6 +73,7 @@
 #define BCH_IOCTL_SUBVOLUME_LIST	_IOWR(0xbc,	31, struct bch_ioctl_subvol_readdir)
 #define BCH_IOCTL_SUBVOLUME_TO_PATH	_IOWR(0xbc,	32, struct bch_ioctl_subvol_to_path)
 #define BCH_IOCTL_SNAPSHOT_TREE		_IOWR(0xbc,	33, struct bch_ioctl_snapshot_tree_query)
+#define BCH_IOCTL_QUERY_BTREE_KEYS	_IOWR(0xbc,	34, struct bch_ioctl_query_btree_keys)
 
 /* ioctl below act on a particular file, not the filesystem as a whole: */
 
@@ -267,7 +268,7 @@ struct bch_ioctl_data_event {
 	struct bch_ioctl_data_progress p;
 	__u64			pad2[15];
 	};
-} __packed __aligned(8);
+} __aligned(8);
 
 struct bch_replicas_usage {
 	__u64			sectors;
@@ -586,7 +587,10 @@ struct bch_ioctl_snapshot_node {
 	__u32			subvol;		/* subvolume ID, 0 for interior */
 	__u32			flags;
 	__u32			pad[2];
-	__u64			sectors;	/* BCH_DISK_ACCOUNTING_snapshot */
+	/* BCH_DISK_ACCOUNTING_snapshot, summed over the snapshot btrees: */
+	__u64			sectors;	/* external (on-disk data) sectors */
+	__u64			nr_keys;
+	__u64			key_bytes;
 };
 
 struct bch_ioctl_snapshot_tree_query {
@@ -636,6 +640,68 @@ struct bch_ioctl_unpoison {
 	__u64				len;
 	__u32				flags;		/* reserved, must be 0 */
 	__u32				pad;
+};
+
+/*
+ * BCH_IOCTL_QUERY_BTREE_KEYS: read keys from a btree, range query
+ *
+ * Stateless: the cursor lives in userspace and each call is self-contained,
+ * so concurrent callers don't interact and an aborted caller leaves nothing
+ * behind. Modeled on BTRFS_IOC_TREE_SEARCH / FS_IOC_GETFSMAP.
+ *
+ * The buffer is filled with bkeys (struct bkey_i: unpacked key header
+ * followed by the value), densely packed; step to the next with bkey_bytes()
+ * (k->u64s * 8). This is the unpacked in-memory format - the same format the
+ * update ioctls and libbcachefs speak, not the packed on-disk one.
+ *
+ * Flags:
+ *
+ * slots: iterate positions instead of keys - a KEY_TYPE_deleted key is
+ * synthesized for every position without one. On extents btrees a single
+ * synthesized key covers each hole. This is how you see holes; mind that a
+ * wide range in slots mode returns a key per position.
+ *
+ * prev: iterate backwards, from @start down to @end.
+ *
+ * all_snapshots: return keys from all snapshots, rather than filtering to
+ * the snapshot in @start. Snapshot-filtered iteration (i.e. without this
+ * flag, on a snapshots btree) has preconditions, -EINVAL otherwise:
+ * @start.snapshot must be nonzero (there's no snapshot to filter against),
+ * @end must not be POS_MAX (whiteout filtering peeks ahead of the end pos),
+ * and with prev the range must be within a single inode. Interior node
+ * levels (@level > 0) always iterate all snapshots.
+ *
+ * @btree	- btree id
+ * @level	- btree level to read keys from (0 = leaves)
+ * @flags	- BCH_IOCTL_QUERY_BTREE_KEYS_*
+ * @done	- out: nonzero once iteration has reached the end of the range
+ * @start	- in/out: cursor; on return, where the next call should
+ *		  resume (only meaningful while @done is unset)
+ * @end		- inclusive bound: upper, or lower with prev
+ * @buf		- pointer to userspace buffer for keys
+ * @buf_size	- size of buffer in bytes
+ * @used	- out: bytes written to buffer
+ *
+ * To iterate: repeat the call, keeping @start from the previous call, until
+ * @done is set. The kernel bounds how much it returns per call, so @used may
+ * be well short of @buf_size while more keys remain.
+ *
+ * Returns -ERANGE if @buf_size is too small to hold even one key.
+ */
+#define BCH_IOCTL_QUERY_BTREE_KEYS_slots		(1U << 0)
+#define BCH_IOCTL_QUERY_BTREE_KEYS_prev			(1U << 1)
+#define BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots	(1U << 2)
+
+struct bch_ioctl_query_btree_keys {
+	__u32			btree;
+	__u32			level;
+	__u32			flags;
+	__u32			done;
+	struct bpos		start;
+	struct bpos		end;
+	__u64			buf;
+	__u32			buf_size;
+	__u32			used;
 };
 
 #endif /* _BCACHEFS_IOCTL_H */

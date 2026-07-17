@@ -2,6 +2,7 @@
 
 #include "bcachefs.h"
 
+#include "alloc/accounting.h"
 #include "alloc/background.h"
 #include "alloc/backpointers.h"
 #include "alloc/buckets.h"
@@ -107,11 +108,11 @@ static struct reconcile_scan reconcile_scan_decode(struct bch_fs *c, u64 v)
 	if (v == RECONCILE_SCAN_COOKIE_fs)
 		return (struct reconcile_scan) { .type = RECONCILE_SCAN_fs};
 
-	bch_err(c, "unknown realance scan cookie %llu", v);
+	bch_err(c, "unknown reconcile scan cookie %llu", v);
 	return (struct reconcile_scan) { .type = RECONCILE_SCAN_fs};
 }
 
-static void reconcile_scan_to_text(struct printbuf *out,
+static __cold void reconcile_scan_to_text(struct printbuf *out,
 				   struct bch_fs *c, struct reconcile_scan s)
 {
 	prt_str(out, bch2_rebalance_scan_strs[s.type]);
@@ -444,6 +445,15 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 	data_opts->target		= r->background_target;
 
 	/*
+	 * Never wait on the allocator mid-write: a blocked data update holds a
+	 * read-time snapshot of the extent while other movers rewrite it, and
+	 * the stale write is then discarded at index update time
+	 * (data_update_useless_write_fail). Better to fail with freelist_empty
+	 * and retry from a fresh read.
+	 */
+	data_opts->write_flags |= BCH_WRITE_alloc_nowait;
+
+	/*
 	 * we can't add/drop replicas from btree nodes incrementally, we always
 	 * need to be able to spill over to the whole fs
 	 */
@@ -461,9 +471,8 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 		struct bkey_durability durability;
 		try(bch2_bkey_durability(trans, k, &durability));
 
-		unsigned ptr_bit = 1;
-
 		if (durability.total <= r->data_replicas) {
+			unsigned ptr_bit = 1;
 			guard(rcu)();
 
 			bkey_for_each_ptr(ptrs, ptr) {
@@ -472,75 +481,121 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 				ptr_bit <<= 1;
 			}
 		} else {
-			if (durability.total != durability.online) {
-				/* Try dropping offline devices first */
-				bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-					if (p.ptr.dev == BCH_SB_MEMBER_INVALID ||
-					    !test_bit(p.ptr.dev, c->devs_online.d)) {
-						int d = bch2_extent_ptr_durability(trans, &p);
-						if (d < 0)
-							return d;
+				/*
+				 * Over-replicated: propose drops on a working copy and
+				 * recompute the whole-key durability after each, so we only
+				 * ever propose drops the apply path (bch2_bkey_drop_extra_*
+				 * durability()) will actually take - otherwise reconcile
+				 * respins on work that can't complete. Drop offline devices
+				 * first, holding total durability; then hold online durability
+				 * at data_replicas. Whole-pointer drops use the cached flag (a
+				 * reversible exclusion); stripe-pointer drops measure a copy.
+				 */
+				struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+				struct bkey_durability cur = durability;
 
-						if (bch2_ptr_bad_or_evacuating(c, &p.ptr) ||
-						    (!p.ptr.cached &&
-						     d && durability.total - d >= r->data_replicas)) {
-							data_opts->ptrs_kill |= ptr_bit;
-							durability.total -= d;
+				for (unsigned phase = 0; phase < 2; phase++) {
+					bool online_floor = phase == 1;
+
+					/* phase 0 (hold total) only matters if some durability is offline */
+					if (!online_floor && cur.total == cur.online)
+						continue;
+
+					/* Drop entire pointers? */
+					unsigned ptr_bit = 1;
+					bkey_for_each_ptr(bch2_bkey_ptrs(bkey_i_to_s(n)), ptr) {
+						bool offline = ptr->dev == BCH_SB_MEMBER_INVALID ||
+							       !test_bit(ptr->dev, c->devs_online.d);
+
+						if (!ptr->cached && (online_floor || offline)) {
+							bool force = bch2_ptr_bad_or_evacuating(c, ptr);
+
+							ptr->cached = true;
+							struct bkey_durability d;
+							try(bch2_bkey_durability(trans, bkey_i_to_s_c(n), &d));
+
+							unsigned have = online_floor ? d.online : d.total;
+							unsigned was  = online_floor ? cur.online : cur.total;
+
+							/*
+							 * Drop only if we still hold data_replicas, and
+							 * either the device is bad/evacuating (move its data
+							 * off) or the pointer actually contributed durability
+							 * (have < was). A durability=0 pointer that isn't
+							 * evacuating is a cache replica - it leaves durability
+							 * unchanged, so we keep it. An evacuating device also
+							 * reads as durability=0, but we drop it once the
+							 * required durability is held by other devices.
+							 */
+							if (have >= r->data_replicas &&
+							    (force || have < was)) {
+								data_opts->ptrs_kill |= ptr_bit;
+								cur = d;
+							} else {
+								ptr->cached = false;
+							}
 						}
+						ptr_bit <<= 1;
 					}
 
-					ptr_bit <<= 1;
-				}
+					/* Stripe ec? Gather candidates first: dropping a stripe
+					 * pointer rewrites the entry list. */
+					unsigned ec_bits[BCH_BKEY_PTRS_MAX], nr_ec = 0;
+					const union bch_extent_entry *ec_entry;
+					struct extent_ptr_decoded ec_p = {};
 
-				/* Stripe ec? */
-				ptr_bit = 1;
-				bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-					if (p.ptr.dev == BCH_SB_MEMBER_INVALID ||
-					    !test_bit(p.ptr.dev, c->devs_online.d)) {
-						if (p.has_ec && durability.total - p.ec.redundancy >= r->data_replicas) {
-							data_opts->ptrs_kill_ec |= ptr_bit;
-							durability.total -= p.ec.redundancy;
-						}
+					ptr_bit = 1;
+					bkey_for_each_ptr_decode(&n->k, bch2_bkey_ptrs_c(bkey_i_to_s_c(n)), ec_p, ec_entry) {
+						bool offline = ec_p.ptr.dev == BCH_SB_MEMBER_INVALID ||
+							       !test_bit(ec_p.ptr.dev, c->devs_online.d);
+
+						if (ec_p.has_ec && !ec_p.ptr.cached &&
+						    (online_floor || offline))
+							ec_bits[nr_ec++] = ptr_bit;
+						ptr_bit <<= 1;
 					}
 
-					ptr_bit <<= 1;
+					for (unsigned i = 0; i < nr_ec; i++) {
+						struct bkey_i *m = errptr_try(bch2_bkey_make_mut_noupdate(trans, bkey_i_to_s_c(n)));
+						bch2_bkey_drop_ec_mask(c, m, ec_bits[i]);
+
+						struct bkey_durability d;
+						try(bch2_bkey_durability(trans, bkey_i_to_s_c(m), &d));
+
+						unsigned have = online_floor ? d.online : d.total;
+						if (have >= r->data_replicas) {
+							data_opts->ptrs_kill_ec |= ec_bits[i];
+							bch2_bkey_drop_ec_mask(c, n, ec_bits[i]);
+							cur = d;
+						}
+					}
 				}
-			}
-
-			/* Don't let online durability go below data_replicas */
-
-			/* Drop entire pointers? */
-			ptr_bit = 1;
-			bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-				int d = bch2_extent_ptr_durability(trans, &p);
-				if (d < 0)
-					return d;
-
-				if (bch2_ptr_bad_or_evacuating(c, &p.ptr) ||
-				    (!p.ptr.cached &&
-				     d && durability.online - d >= r->data_replicas)) {
-					data_opts->ptrs_kill |= ptr_bit;
-					durability.online -= d;
-				}
-
-				ptr_bit <<= 1;
-			}
-
-			/* Stripe ec? */
-			ptr_bit = 1;
-			bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-				if (p.has_ec && durability.online - p.ec.redundancy >= r->data_replicas) {
-					data_opts->ptrs_kill_ec |= ptr_bit;
-					durability.online -= p.ec.redundancy;
-				}
-
-				ptr_bit <<= 1;
 			}
 		}
 	}
 
 	if (r->need_rb & BIT(BCH_RECONCILE_erasure_code)) {
 		if (r->erasure_code) {
+			/*
+			 * Can a stripe form right now? If not (e.g. not enough
+			 * RW devs in target with matching bucket_size), queueing
+			 * the data_update would just keep failing and re-queueing
+			 * forever. If EC is the only thing to do, park the extent
+			 * on the pending list — a device add/remove/state change
+			 * will re-evaluate. Otherwise drop EC from the rb mask and
+			 * fall through to do the other work.
+			 */
+			if (!bch2_can_form_ec_stripe(c, r->background_target, r->data_replicas)) {
+				if (r->need_rb == BIT(BCH_RECONCILE_erasure_code))
+					return bch2_extent_reconcile_pending_mod(trans, iter, level, k, true);
+				/*
+				 * Downstream rb-bit handling doesn't read the EC
+				 * bit, so we don't need to clear it from r->need_rb
+				 * (which is const). Just skip the EC action.
+				 */
+				goto skip_ec;
+			}
+
 			/* XXX: we'll need ratelimiting */
 			if (extent_ec_pending(trans, ptrs))
 				return false;
@@ -560,6 +615,7 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 			}
 		}
 	}
+skip_ec:
 
 	scoped_guard(rcu) {
 		unsigned ptr_bit = 1;
@@ -672,7 +728,9 @@ static int check_reconcile_pending_err(struct btree_trans *trans,
 	    !bch2_err_matches(err, ENOSPC))
 		return err;
 
-	event_add_trace(c, reconcile_set_pending, k.k->size, buf, ({
+	s64 sectors = bkey_is_btree_ptr(k.k) ? btree_sectors(c) : k.k->size;
+
+	event_add_trace(c, reconcile_set_pending, sectors, buf, ({
 		prt_printf(&buf, "%s\n", bch2_err_str(err));
 		bch2_bkey_val_to_text(&buf, c, k);
 		prt_newline(&buf);
@@ -754,7 +812,7 @@ static int do_retry_stripe(struct moving_context *ctxt, u64 idx)
 {
 	struct btree_trans *trans = ctxt->trans;
 
-	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, idx), BTREE_ITER_intent);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, idx), BTREE_ITER_cached|BTREE_ITER_intent);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	return do_reconcile_stripe(ctxt, &iter, k, NULL);
@@ -842,6 +900,7 @@ static int __do_reconcile_extent(struct moving_context *ctxt,
 		return ret;
 	if (ret) {
 		WARN_ONCE(!bch2_err_matches(ret, EROFS) &&
+			  !bch2_err_matches(ret, BCH_ERR_snapshot) &&
 			  ret != -BCH_ERR_data_update_fail_no_snapshot &&
 			  ret != -BCH_ERR_data_update_fail_in_flight,
 			  "unhandled error from move_extent: %s", bch2_err_str(ret));
@@ -1004,7 +1063,7 @@ static int update_reconcile_opts_scan(struct btree_trans *trans,
 {
 	switch (s.type) {
 #define x(n) case RECONCILE_SCAN_##n:						\
-		event_add_trace(trans->c, reconcile_scan_##n, k.k->size,	\
+		event_add_trace(trans->c, reconcile_scan_##n, !level ? k.k->size : btree_sectors(trans->c),	\
 				buf, bch2_bkey_val_to_text(&buf, trans->c, k));	\
 		break;
 		RECONCILE_SCAN_TYPES()
@@ -1305,12 +1364,28 @@ static int do_reconcile_scan(struct moving_context *ctxt,
 	return 0;
 }
 
-static void reconcile_wait(struct bch_fs *c)
+static bool reconcile_hipri_work_pending(struct bch_fs *c)
+{
+	struct disk_accounting_pos pos;
+	disk_accounting_key_init(pos, reconcile_work,
+				 BCH_RECONCILE_ACCOUNTING_high_priority);
+
+	u64 v[2];
+	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&pos), v, ARRAY_SIZE(v));
+	return v[0] || v[1];
+}
+
+static void reconcile_wait(struct bch_fs *c, u32 kick)
 {
 	struct bch_fs_reconcile *r = &c->reconcile;
 	struct io_clock *clock = &c->io_clock[WRITE];
 	u64 now = atomic64_read(&clock->now);
 	u64 min_member_capacity = bch2_min_rw_member_capacity(c);
+
+	if (reconcile_hipri_work_pending(c)) {
+		cond_resched();
+		return;
+	}
 
 	if (min_member_capacity == U64_MAX)
 		min_member_capacity = 128 * 2048;
@@ -1323,7 +1398,15 @@ static void reconcile_wait(struct bch_fs *c)
 		WRITE_ONCE(r->running, false);
 	}
 
-	bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, MAX_SCHEDULE_TIMEOUT);
+	/*
+	 * Recheck the kick after setting TASK_INTERRUPTIBLE: a kick +
+	 * wake_up_process() is either seen here or wakes the sleep - no lost
+	 * wakeups:
+	 */
+	set_current_state(TASK_INTERRUPTIBLE);
+	if (kick == READ_ONCE(r->kick))
+		bch2_kthread_io_clock_wait_once(clock, r->wait_iotime_end, MAX_SCHEDULE_TIMEOUT);
+	__set_current_state(TASK_RUNNING);
 }
 
 struct reconcile_phase {
@@ -1802,7 +1885,7 @@ out:
 	    kick == atomic_read(&r->kick)) {
 		bch2_moving_ctxt_flush_all(ctxt);
 		bch2_trans_unlock_long(trans);
-		reconcile_wait(c);
+		reconcile_wait(c, kick);
 	}
 
 	if (!bch2_err_matches(ret, EROFS))
@@ -1837,7 +1920,7 @@ static int bch2_reconcile_thread(void *arg)
 	return 0;
 }
 
-void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	printbuf_tabstop_push(out, 24);
 	printbuf_tabstop_push(out, 12);
@@ -1922,7 +2005,7 @@ void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c)
 	}
 }
 
-void bch2_reconcile_scan_pending_to_text(struct printbuf *out, struct bch_fs *c)
+__cold void bch2_reconcile_scan_pending_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	/*
 	 * No multithreaded btree access until BCH_FS_may_go_rw and we're no

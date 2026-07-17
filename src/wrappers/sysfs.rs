@@ -1,10 +1,31 @@
 use std::fs;
-use std::io::{self, BufRead};
+use std::io;
 use std::os::fd::BorrowedFd;
-use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
+
+use crate::device_multipath::preferred_multipath_devnode_for_block_name;
+
+/// Selects how mounted device names are rendered in human-facing output.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DeviceNameMode {
+    /// Show the raw kernel block name from sysfs, such as `dm-0` or `sda`.
+    Raw,
+    /// Show the mapper basename for dm-multipath devices when available.
+    Mapper,
+}
+
+impl DeviceNameMode {
+    /// Convert the command-line `--mapper-names` boolean into a display mode.
+    pub fn from_mapper_names(mapper_names: bool) -> Self {
+        if mapper_names {
+            Self::Mapper
+        } else {
+            Self::Raw
+        }
+    }
+}
 
 /// Resolve the block device name for a bcachefs sysfs device directory.
 ///
@@ -23,7 +44,27 @@ pub fn dev_name_from_sysfs(dev_sysfs_path: &Path) -> String {
         .unwrap_or_default()
 }
 
-pub fn sysfs_path_from_fd(fd: BorrowedFd) -> Result<PathBuf> {
+/// Resolve the block device display name for a bcachefs sysfs device directory.
+///
+/// Returns the raw kernel name by default, or the mapper basename for
+/// dm-multipath devices when requested and available. This is intended for
+/// human output, not for opening devices.
+pub fn dev_display_name_from_sysfs(dev_sysfs_path: &Path, mode: DeviceNameMode) -> String {
+    let name = dev_name_from_sysfs(dev_sysfs_path);
+    if mode == DeviceNameMode::Raw {
+        return name;
+    }
+
+    if let Some(path) = preferred_multipath_devnode_for_block_name(&name) {
+        path.file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or(name)
+    } else {
+        name
+    }
+}
+
+pub fn sysfs_path_from_fd(fd: BorrowedFd<'_>) -> Result<PathBuf> {
     use std::os::fd::AsRawFd;
     let raw = fd.as_raw_fd();
     let link = format!("/proc/self/fd/{}", raw);
@@ -39,7 +80,7 @@ pub fn read_sysfs_u64(path: &Path) -> io::Result<u64> {
 }
 
 /// Read a sysfs attribute as a string, relative to a directory fd.
-pub fn read_sysfs_fd_str(dirfd: BorrowedFd, path: &str) -> io::Result<String> {
+pub fn read_sysfs_fd_str(dirfd: BorrowedFd<'_>, path: &str) -> io::Result<String> {
     let flags = rustix::fs::OFlags::RDONLY;
     let fd = rustix::fs::openat(dirfd, path, flags, rustix::fs::Mode::empty())?;
     let mut buf = [0u8; 256];
@@ -58,42 +99,8 @@ pub fn bcachefs_kernel_version() -> u64 {
     read_sysfs_u64(Path::new(KERNEL_VERSION_PATH)).unwrap_or(0)
 }
 
-/// Check if a block device is currently mounted.
-///
-/// Parses /proc/mounts and compares device identity (st_rdev for block
-/// devices, st_dev+st_ino for files) against each mount's device path(s).
-/// bcachefs mounts list multiple devices separated by colons.
-pub fn dev_mounted(path: &str) -> bool {
-    let Ok(d1) = fs::metadata(path) else { return false };
-
-    let Ok(f) = fs::File::open("/proc/mounts") else { return false };
-    for line in io::BufReader::new(f).lines() {
-        let Ok(line) = line else { continue };
-        let Some(dev_field) = line.split_whitespace().next() else { continue };
-
-        for dev in dev_field.split(':') {
-            let Ok(d2) = fs::metadata(dev) else { continue };
-
-            let is_blk_1 = d1.file_type().is_block_device();
-            let is_blk_2 = d2.file_type().is_block_device();
-            if is_blk_1 != is_blk_2 {
-                continue;
-            }
-
-            if is_blk_1 {
-                if d1.rdev() == d2.rdev() {
-                    return true;
-                }
-            } else if d1.dev() == d2.dev() && d1.ino() == d2.ino() {
-                return true;
-            }
-        }
-    }
-    false
-}
-
 /// Write a string value to a sysfs attribute file relative to a directory fd.
-pub fn sysfs_write_str(sysfs_fd: BorrowedFd, path: &str, value: &str) {
+pub fn sysfs_write_str(sysfs_fd: BorrowedFd<'_>, path: &str, value: &str) {
     let flags = rustix::fs::OFlags::WRONLY;
     if let Ok(fd) = rustix::fs::openat(sysfs_fd, path, flags, rustix::fs::Mode::empty()) {
         let _ = rustix::io::write(&fd, value.as_bytes());
@@ -104,16 +111,21 @@ pub fn sysfs_write_str(sysfs_fd: BorrowedFd, path: &str, value: &str) {
 #[derive(Clone)]
 pub struct DevInfo {
     pub idx:        u32,
+    /// Human-facing device name selected by [`DeviceNameMode`].
     pub dev:        String,
     pub label:      Option<String>,
     pub durability: u32,
+    pub online:     bool,
 }
 
 /// Enumerate devices for a mounted filesystem from its sysfs directory.
 ///
-/// Reads `dev-N/` subdirectories under `sysfs_path`, extracting the block
-/// device name (from the `block` symlink) for each.
-pub fn fs_get_devices(sysfs_path: &Path) -> Result<Vec<DevInfo>> {
+/// Reads `dev-N/` subdirectories under `sysfs_path`, extracting the display
+/// device name for each.
+pub fn fs_get_devices(
+    sysfs_path: &Path,
+    name_mode: DeviceNameMode,
+) -> Result<Vec<DevInfo>> {
     let mut devs = Vec::new();
     for entry in fs::read_dir(sysfs_path)
         .with_context(|| format!("reading sysfs dir {}", sysfs_path.display()))?
@@ -127,7 +139,10 @@ pub fn fs_get_devices(sysfs_path: &Path) -> Result<Vec<DevInfo>> {
         };
 
         let dev_path = entry.path();
-        let dev = dev_name_from_sysfs(&dev_path);
+        // metadata() follows the symlink (not symlink_metadata): a hot-removed
+        // device can leave dev-N/block dangling, and that should read as offline.
+        let online = fs::metadata(dev_path.join("block")).is_ok();
+        let dev = dev_display_name_from_sysfs(&dev_path, name_mode);
 
         let label = fs::read_to_string(dev_path.join("label"))
             .ok()
@@ -137,7 +152,7 @@ pub fn fs_get_devices(sysfs_path: &Path) -> Result<Vec<DevInfo>> {
         let durability = read_sysfs_u64(&dev_path.join("durability"))
             .unwrap_or(1) as u32;
 
-        devs.push(DevInfo { idx, dev, label, durability });
+        devs.push(DevInfo { idx, dev, label, durability, online });
     }
     devs.sort_by_key(|d| d.idx);
     Ok(devs)

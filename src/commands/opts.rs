@@ -3,7 +3,7 @@ use std::fmt::Write;
 
 use anyhow::{bail, Result};
 use bch_bindgen::c;
-use bch_bindgen::printbuf::Printbuf;
+use bcachefs_kernel::util::printbuf::Printbuf;
 use clap::{Arg, ArgAction, ArgMatches};
 
 /// Leak a String to get a &'static str. Used for Clap args built from
@@ -14,7 +14,7 @@ fn leak(s: String) -> &'static str {
 
 /// Iterate bch2_opt_table entries matching flag_filter, calling f for each.
 fn for_each_opt(flag_filter: u32, mut f: impl FnMut(&'static str, &c::bch_option)) {
-    for opt in bch_bindgen::opts::opt_table() {
+    for opt in bcachefs_kernel::opts::opt_table() {
         if opt.flags as u32 & flag_filter == 0 { continue }
         if opt.flags as u32 & c::opt_flags::OPT_HIDDEN as u32 != 0 { continue }
         let Some(name) = opt.name() else { continue };
@@ -30,7 +30,7 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
     const HELPCOL: usize = 32;
     let mut out = String::new();
 
-    for opt in bch_bindgen::opts::opt_table() {
+    for opt in bcachefs_kernel::opts::opt_table() {
         if opt.flags as u32 & flags_all != flags_all { continue }
         if opt.flags as u32 & flags_none != 0 { continue }
         let Some(name) = opt.name() else { continue };
@@ -86,7 +86,12 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
 }
 
 /// Build Clap arguments from bch2_opt_table entries matching flag_filter.
-pub fn bch_option_args(flag_filter: u32) -> Vec<Arg> {
+///
+/// `allow_remove` adds "-" as an accepted value for choice-typed (BCH_OPT_STR)
+/// options — the sentinel set-file-option uses to delete a per-file option.
+/// Without it, clap's choice validation rejects "-" before the command sees it.
+/// Commands with no removal semantics (set-option, device add) pass false.
+pub fn bch_option_args(flag_filter: u32, allow_remove: bool) -> Vec<Arg> {
     let mut args = Vec::new();
 
     for_each_opt(flag_filter, |name, opt| {
@@ -124,10 +129,19 @@ pub fn bch_option_args(flag_filter: u32) -> Vec<Arg> {
                 args.push(no_arg);
             }
             c::opt_type::BCH_OPT_STR => {
-                let choices = opt.choices();
+                let mut choices = opt.choices();
                 if !choices.is_empty() {
+                    if allow_remove {
+                        choices.push("-");
+                    }
                     arg = arg.value_parser(choices);
                 }
+            }
+            c::opt_type::BCH_OPT_BITFIELD => {
+                if let Some(h) = opt.hint() {
+                    arg = arg.value_name(h);
+                }
+                arg = arg.allow_hyphen_values(true);
             }
             _ => {
                 if let Some(h) = opt.hint() {
@@ -157,11 +171,10 @@ pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::bch_opt_id, &'static c::
 pub fn bch_opt_lookup(name: &str) -> Option<(c::bch_opt_id, &'static c::bch_option)> {
     let c_name = std::ffi::CString::new(name).ok()?;
     let id = unsafe { c::bch2_opt_lookup(c_name.as_ptr()) };
-    if id < 0 || id as u32 >= c::bch_opt_id::bch2_opts_nr as u32 {
+    if id < 0 || id as u32 >= bch_bindgen::opt_id::nr.0 {
         return None;
     }
-    // Safety: validated in range [0, bch2_opts_nr)
-    let opt_id: c::bch_opt_id = unsafe { std::mem::transmute::<u32, c::bch_opt_id>(id as u32) };
+    let opt_id = bch_bindgen::opts::opt_id(id as usize);
     let opt = unsafe { &*c::bch2_opt_table.as_ptr().add(id as usize) };
     Some((opt_id, opt))
 }

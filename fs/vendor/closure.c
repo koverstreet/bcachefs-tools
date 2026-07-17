@@ -13,22 +13,6 @@
 #include <linux/seq_file.h>
 #include <linux/sched/debug.h>
 
-static void closure_val_checks(struct closure *cl, unsigned new, int d)
-{
-	unsigned count = new & CLOSURE_REMAINING_MASK;
-
-	if (WARN(new & CLOSURE_GUARD_MASK,
-		 "closure %ps has guard bits set: %x (%u), delta %i",
-		 cl->fn,
-		 new, (unsigned) __fls(new & CLOSURE_GUARD_MASK), d))
-		new &= ~CLOSURE_GUARD_MASK;
-
-	WARN(!count && (new & ~(CLOSURE_DESTRUCTOR|CLOSURE_SLEEPING)),
-	     "closure %ps ref hit 0 with incorrect flags set: %x (%u)",
-	     cl->fn,
-	     new, (unsigned) __fls(new));
-}
-
 enum new_closure_state {
 	CLOSURE_normal_put,
 	CLOSURE_requeue,
@@ -42,42 +26,42 @@ void bch2_closure_sub(struct closure *cl, int v)
 	struct task_struct *sleeper;
 
 	/* rcu_read_lock, atomic_read_acquire() are both for cl->sleeper: */
-	guard(rcu)();
+	scoped_guard(rcu) {
+		int old = atomic_read_acquire(&cl->remaining), new;
+		do {
+			new = old - v;
 
-	int old = atomic_read_acquire(&cl->remaining), new;
-	do {
-		new = old - v;
-
-		if (new & CLOSURE_REMAINING_MASK) {
-			s = CLOSURE_normal_put;
-		} else {
-			if ((cl->fn || (new & CLOSURE_SLEEPING)) &&
-			    !(new & CLOSURE_DESTRUCTOR)) {
-				s = CLOSURE_requeue;
-				new += CLOSURE_REMAINING_INITIALIZER;
-			} else
-				s = CLOSURE_done;
-
-			if (new & CLOSURE_SLEEPING) {
-				/* pairs with cmpxchg_release in closure_sync() */
-				smp_rmb();
-				sleeper = cl->sleeper;
+			if (new & CLOSURE_REMAINING_MASK) {
+				s = CLOSURE_normal_put;
 			} else {
-				sleeper = NULL;
+				if ((cl->fn || (new & CLOSURE_SLEEPING)) &&
+				    !(new & CLOSURE_DESTRUCTOR)) {
+					s = CLOSURE_requeue;
+					new += CLOSURE_REMAINING_INITIALIZER;
+				} else
+					s = CLOSURE_done;
+
+				if (new & CLOSURE_SLEEPING) {
+					/* pairs with cmpxchg_release in closure_sync() */
+					smp_rmb();
+					sleeper = cl->sleeper;
+				} else {
+					sleeper = NULL;
+				}
+				new &= ~CLOSURE_SLEEPING;
 			}
-			new &= ~CLOSURE_SLEEPING;
+
+			closure_val_checks(cl, new, -v);
+		} while (!atomic_try_cmpxchg_release(&cl->remaining, &old, new));
+
+		if (s == CLOSURE_normal_put)
+			return;
+
+		if (sleeper) {
+			smp_mb();
+			wake_up_process(sleeper);
+			return;
 		}
-
-		closure_val_checks(cl, new, -v);
-	} while (!atomic_try_cmpxchg_release(&cl->remaining, &old, new));
-
-	if (s == CLOSURE_normal_put)
-		return;
-
-	if (sleeper) {
-		smp_mb();
-		wake_up_process(sleeper);
-		return;
 	}
 
 	/* pairs with cmpxchg_release in continue_at() et al. */

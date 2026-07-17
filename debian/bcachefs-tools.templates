@@ -1,0 +1,40 @@
+Template: bcachefs-tools/enroll-mok
+Type: boolean
+Default: true
+Description: Enroll the bcachefs module-signing key for Secure Boot?
+ Secure Boot is enabled on this system. Prebuilt bcachefs kernel modules are
+ signed by the bcachefs project's signing key. For the kernel to load them,
+ the project's signing CA must be enrolled into this machine's key store
+ (MOK).
+ .
+ If you only build the bcachefs module locally with DKMS, you can safely
+ decline: DKMS manages its own signing key separately.
+ .
+ Enrollment is finished manually at the next reboot, using the password
+ requested below.
+
+Template: bcachefs-tools/mok-password
+Type: password
+Description: MOK enrollment password:
+ Choose a temporary password. The firmware's MOK Manager will ask for it once,
+ at the next reboot, to confirm enrollment. It is not retained afterwards.
+
+Template: bcachefs-tools/mok-password-again
+Type: password
+Description: Re-enter MOK enrollment password:
+ Enter the same password again to confirm there was no typing error.
+
+Template: bcachefs-tools/mok-password-mismatch
+Type: error
+Description: Password mismatch
+ The two passwords you entered do not match. Please try again.
+
+Template: bcachefs-tools/mok-reboot
+Type: note
+Description: Reboot required to finish Secure Boot enrollment
+ Enrollment of the bcachefs module-signing key has been scheduled. At the next
+ reboot, the firmware's MOK Manager will appear: choose "Enroll MOK", confirm,
+ and enter the password you just set.
+ .
+ Until enrollment is completed, prebuilt bcachefs modules will not load while
+ Secure Boot is enabled.

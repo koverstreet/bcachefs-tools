@@ -240,6 +240,7 @@ static inline int bch2_strtoul_h(const char *cp, long *res)
 
 bool bch2_is_zero(const void *, size_t);
 
+u64 bch2_read_flag_list_mask(const char *, const char * const[], u64);
 u64 bch2_read_flag_list(const char *, const char * const[]);
 
 void bch2_prt_u64_base2_nbits(struct printbuf *, u64, unsigned);
@@ -444,8 +445,40 @@ do {									\
 
 u64 bch2_get_random_u64_below(u64);
 
+/*
+ * Rust-facing wrappers: local_clock() is a static inline and cond_resched() is a
+ * macro, so neither binds through bindgen. Wrapping them as bch2_* static
+ * inlines (allowlisted, so the codegen's wrap_static_fns emits callable
+ * wrappers) lets fs/ Rust call them uniformly across the kernel and userspace
+ * builds, with the macro expanded at C-compile time.
+ */
+static inline u64 bch2_local_clock(void)
+{
+	return local_clock();
+}
+
+static inline void bch2_cond_resched(void)
+{
+	cond_resched();
+}
+
+/*
+ * All-ones mask of width @bits, defined for the full range 0..64 — unlike
+ * (1ULL << bits) - 1 (UB at 64) or ~0ULL >> (64 - bits) (UB at 0).
+ * Compiles branchless (cmov).
+ */
+static inline u64 u64_bitmask(unsigned bits)
+{
+	return bits ? ~0ULL >> (64 - bits) : 0;
+}
+
 void memcpy_to_bio(struct bio *, struct bvec_iter, const void *);
 void memcpy_from_bio(void *, struct bio *, struct bvec_iter);
+void bch2_bio_copy_data_iter(struct bio *, struct bvec_iter *,
+			     struct bio *, struct bvec_iter *);
+void bch2_zero_fill_bio_iter(struct bio *, struct bvec_iter);
+void bch2_bio_set_pages_dirty(struct bio *);
+void bch2_bio_check_pages_dirty(struct bio *);
 
 #ifdef CONFIG_BCACHEFS_DEBUG
 void bch2_corrupt_bio(struct bio *);
@@ -461,6 +494,19 @@ static inline void bch2_maybe_corrupt_bio(struct bio *bio, unsigned ratio)
 
 void bch2_bio_to_text(struct printbuf *, struct bio *);
 
+static inline void __memcpy_u64s(void *dst, const void *src,
+				 unsigned u64s)
+{
+	unsafe_memcpy(dst, src, u64s * 8,
+		      "dst is a u64s array sized by the caller, not a single field");
+}
+
+/*
+ * For small, bounded copies (a key, a handful of u64s): the open-coded loop is
+ * tighter codegen than a memcpy() call / its inline expansion. For larger or
+ * variable-size copies (key + value, bulk), use memcpy_u64s() so we get the
+ * fast-string path.
+ */
 static inline void memcpy_u64s_small(void *dst, const void *src,
 				     unsigned u64s)
 {
@@ -469,25 +515,6 @@ static inline void memcpy_u64s_small(void *dst, const void *src,
 
 	while (u64s--)
 		*d++ = *s++;
-}
-
-static inline void __memcpy_u64s(void *dst, const void *src,
-				 unsigned u64s)
-{
-#if defined(CONFIG_X86_64) && !defined(CONFIG_KMSAN)
-	long d0, d1, d2;
-
-	asm volatile("rep ; movsq"
-		     : "=&c" (d0), "=&D" (d1), "=&S" (d2)
-		     : "0" (u64s), "1" (dst), "2" (src)
-		     : "memory");
-#else
-	u64 *d = dst;
-	const u64 *s = src;
-
-	while (u64s--)
-		*d++ = *s++;
-#endif
 }
 
 static inline void memcpy_u64s(void *dst, const void *src,
@@ -499,10 +526,28 @@ static inline void memcpy_u64s(void *dst, const void *src,
 	__memcpy_u64s(dst, src, u64s);
 }
 
-static inline void __memmove_u64s_down(void *dst, const void *src,
-				       unsigned u64s)
+static inline void memset_u64s_small(void *dst, u64 c,
+			       unsigned u64s)
 {
-	__memcpy_u64s(dst, src, u64s);
+	u64 *d = dst;
+
+	while (u64s--)
+		*d++ = c;
+}
+
+/*
+ * Fortify can't see the real object size for u64s-array copies, same as
+ * __memcpy_u64s() - but there's no unsafe_memmove(), so go underneath
+ * fortify by hand:
+ */
+static inline void __memmove_u64s(void *dst, const void *src,
+				  unsigned u64s)
+{
+#ifdef _LINUX_FORTIFY_STRING_H_
+	__underlying_memmove(dst, src, u64s * 8);
+#else
+	memmove(dst, src, u64s * 8);
+#endif
 }
 
 static inline void memmove_u64s_down(void *dst, const void *src,
@@ -510,12 +555,13 @@ static inline void memmove_u64s_down(void *dst, const void *src,
 {
 	EBUG_ON(dst > src);
 
-	__memmove_u64s_down(dst, src, u64s);
+	__memmove_u64s(dst, src, u64s);
 }
 
 static inline void __memmove_u64s_down_small(void *dst, const void *src,
 				       unsigned u64s)
 {
+	/* dst <= src: a forward copy can't clobber unread source */
 	memcpy_u64s_small(dst, src, u64s);
 }
 
@@ -545,50 +591,27 @@ static inline void memmove_u64s_up_small(void *dst, const void *src,
 	__memmove_u64s_up_small(dst, src, u64s);
 }
 
-static inline void __memmove_u64s_up(void *_dst, const void *_src,
-				     unsigned u64s)
-{
-	u64 *dst = (u64 *) _dst + u64s - 1;
-	u64 *src = (u64 *) _src + u64s - 1;
-
-#if defined(CONFIG_X86_64) && !defined(CONFIG_KMSAN)
-	long d0, d1, d2;
-
-	asm volatile("std ;\n"
-		     "rep ; movsq\n"
-		     "cld ;\n"
-		     : "=&c" (d0), "=&D" (d1), "=&S" (d2)
-		     : "0" (u64s), "1" (dst), "2" (src)
-		     : "memory");
-#else
-	while (u64s--)
-		*dst-- = *src--;
-#endif
-}
-
-static inline void memmove_u64s_up(void *dst, const void *src,
+static inline void memmove_u64s_up(void *dst, void *src,
 				   unsigned u64s)
 {
 	EBUG_ON(dst < src);
 
-	__memmove_u64s_up(dst, src, u64s);
+	__memmove_u64s(dst, src, u64s);
 }
 
-static inline void memmove_u64s(void *dst, const void *src,
+static inline void memmove_u64s(void *dst, void *src,
 				unsigned u64s)
 {
-	if (dst < src)
-		__memmove_u64s_down(dst, src, u64s);
-	else
-		__memmove_u64s_up(dst, src, u64s);
+	__memmove_u64s(dst, src, u64s);
 }
 
 /* Set the last few bytes up to a u64 boundary given an offset into a buffer. */
 static inline void memset_u64s_tail(void *s, int c, unsigned bytes)
 {
-	unsigned rem = round_up(bytes, sizeof(u64)) - bytes;
-
-	memset(s + bytes, c, rem);
+	while (bytes & 7) {
+		((char *) s)[bytes] = c;
+		bytes++;
+	}
 }
 
 /* just the memmove, doesn't update @_nr */
@@ -919,5 +942,13 @@ void __bch2_alloc_percpu_init(void *pcv,
 	__bch2_alloc_percpu_init((_pcv),				\
 		(void (*)(void *, void *, unsigned))(_init), (_ctx))
 #endif
+
+static inline u64 system_totalram_bytes(void)
+{
+	struct sysinfo i;
+	si_meminfo(&i);
+
+	return i.totalram * i.mem_unit;
+}
 
 #endif /* _BCACHEFS_UTIL_H */

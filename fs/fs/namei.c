@@ -33,6 +33,7 @@ int bch2_create_trans(struct btree_trans *trans,
 		      subvol_inum dir,
 		      struct bch_inode_unpacked *dir_u,
 		      struct bch_inode_unpacked *new_inode,
+		      struct bch_subvolume *new_subvol,
 		      const struct qstr *name,
 		      uid_t uid, gid_t gid, umode_t mode, dev_t rdev,
 		      struct posix_acl *default_acl,
@@ -45,14 +46,19 @@ int bch2_create_trans(struct btree_trans *trans,
 	CLASS(btree_iter_uninit, inode_iter)(trans);
 	subvol_inum new_inum = dir;
 	u64 now = bch2_current_time(c);
-	u64 cpu = raw_smp_processor_id();
 	u64 dir_target;
-	u32 snapshot;
 	unsigned dir_type = mode_to_type(mode);
 
-	try(bch2_subvolume_get_snapshot(trans, dir.subvol, &snapshot));
+	try(bch2_subvolume_get(trans, dir.subvol, true, new_subvol));
+	if (BCH_SUBVOLUME_RO(new_subvol) ||
+	    bch2_subvolume_state_compat(new_subvol) == SUBVOLUME_STATE_unlinked)
+		return -EROFS;
 
-	try(bch2_inode_peek(trans, &dir_iter, dir_u, dir, BTREE_ITER_intent));
+	u32 dir_snapshot = le32_to_cpu(new_subvol->snapshot);
+	u32 child_snapshot = dir_snapshot;
+
+	try(bch2_inode_peek_snapshot(trans, &dir_iter, dir_u, dir,
+				     dir_snapshot, BTREE_ITER_intent));
 
 	if (!(flags & BCH_CREATE_SNAPSHOT)) {
 		/* Normal create path - allocate a new inode: */
@@ -61,7 +67,12 @@ int bch2_create_trans(struct btree_trans *trans,
 		if (flags & BCH_CREATE_TMPFILE)
 			new_inode->bi_flags |= BCH_INODE_unlinked;
 
-		try(bch2_inode_create(trans, &inode_iter, new_inode, snapshot, cpu,
+		if (acl)
+			new_inode->bi_flags |= BCH_INODE_has_access_acl;
+		if (default_acl)
+			new_inode->bi_flags |= BCH_INODE_has_default_acl;
+
+		try(bch2_inode_create(trans, &inode_iter, new_inode, dir_snapshot,
 				      inode_opt_get(c, dir_u, inodes_32bit)));
 
 		snapshot_src = (subvol_inum) { 0 };
@@ -92,7 +103,7 @@ int bch2_create_trans(struct btree_trans *trans,
 		if (uid &&
 		    !capable(CAP_FOWNER) &&
 		    new_inode->bi_uid != uid)
-			return -EPERM;
+			return bch_err_throw(c, EPERM_non_admin_or_owner);
 
 		flags |= BCH_CREATE_SUBVOL;
 	}
@@ -101,18 +112,19 @@ int bch2_create_trans(struct btree_trans *trans,
 	dir_target	= new_inode->bi_inum;
 
 	if (flags & BCH_CREATE_SUBVOL) {
-		u32 new_subvol, dir_snapshot;
+		u32 new_subvolid;
 
 		try(bch2_subvolume_create(trans, new_inode->bi_inum,
 					  dir.subvol,
 					  snapshot_src.subvol,
-					  &new_subvol, &snapshot,
+					  &new_subvolid, &child_snapshot,
+					  new_subvol,
 					  (flags & BCH_CREATE_SNAPSHOT_RO) != 0));
 
 		new_inode->bi_parent_subvol	= dir.subvol;
-		new_inode->bi_subvol		= new_subvol;
-		new_inum.subvol			= new_subvol;
-		dir_target			= new_subvol;
+		new_inode->bi_subvol		= new_subvolid;
+		new_inum.subvol			= new_subvolid;
+		dir_target			= new_subvolid;
 		dir_type			= DT_SUBVOL;
 
 		try(bch2_subvolume_get_snapshot(trans, dir.subvol, &dir_snapshot));
@@ -131,19 +143,16 @@ int bch2_create_trans(struct btree_trans *trans,
 	}
 
 	if (!(flags & BCH_CREATE_TMPFILE)) {
-		struct bch_hash_info dir_hash;
-		try(bch2_hash_info_init(c, dir_u, &dir_hash));
-
 		dir_u->bi_nlink += is_subdir_for_nlink(new_inode);
 		dir_u->bi_mtime = dir_u->bi_ctime = now;
 
 		u64 dir_offset;
-		try(bch2_dirent_create(trans, dir, &dir_hash,
-					   dir_type,
-					   name,
-					   dir_target,
-					   &dir_offset,
-					   STR_HASH_must_create));
+		try(bch2_dirent_create_snapshot(trans, dir.subvol, dir_snapshot, dir_u,
+						dir_type,
+						name,
+						dir_target,
+						&dir_offset,
+						STR_HASH_must_create));
 		try(bch2_inode_write(trans, &dir_iter, dir_u));
 
 		new_inode->bi_dir		= dir_u->bi_inum;
@@ -162,7 +171,7 @@ int bch2_create_trans(struct btree_trans *trans,
 		new_inode->bi_depth = dir_u->bi_depth + 1;
 
 	inode_iter.flags &= ~BTREE_ITER_all_snapshots;
-	bch2_btree_iter_set_snapshot(&inode_iter, snapshot);
+	bch2_btree_iter_set_snapshot(&inode_iter, child_snapshot);
 
 	try(bch2_btree_iter_traverse(&inode_iter));
 	try(bch2_inode_write(trans, &inode_iter, new_inode));
@@ -196,10 +205,7 @@ int bch2_link_trans(struct btree_trans *trans,
 
 	dir_u->bi_mtime = dir_u->bi_ctime = now;
 
-	struct bch_hash_info dir_hash;
-	try(bch2_hash_info_init(c, dir_u, &dir_hash));
-
-	try(bch2_dirent_create(trans, dir, &dir_hash,
+	try(bch2_dirent_create(trans, dir, dir_u,
 			       mode_to_type(inode_u->bi_mode),
 			       name, inum.inum,
 			       &dir_offset,
@@ -226,17 +232,23 @@ int bch2_unlink_trans(struct btree_trans *trans,
 	CLASS(btree_iter_uninit, inode_iter)(trans);
 	u64 now = bch2_current_time(c);
 
-	try(bch2_inode_peek(trans, &dir_iter, dir_u, dir, BTREE_ITER_intent));
+	u32 snapshot;
+	if (!deleting_subvol)
+		try(bch2_subvol_is_ro_trans(trans, dir.subvol, &snapshot));
+	else
+		try(bch2_subvolume_get_snapshot(trans, dir.subvol, &snapshot));
+
+	try(bch2_inode_peek_snapshot(trans, &dir_iter, dir_u, dir, snapshot, BTREE_ITER_intent));
 
 	struct bch_hash_info dir_hash;
 	try(bch2_hash_info_init(c, dir_u, &dir_hash));
 
 	subvol_inum inum;
-	try(bch2_dirent_lookup_trans(trans, &dirent_iter, dir, &dir_hash,
-				     name, &inum, BTREE_ITER_intent));
+	try(bch2_dirent_lookup_snapshot(trans, &dirent_iter, dir, snapshot, &dir_hash,
+					name, &inum, BTREE_ITER_intent));
 
 	if ((inode.subvol || inode.inum) &&
-	    !subvol_inum_eq(inode, inum)) {
+	    unlikely(!subvol_inum_eq(inode, inum))) {
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "vfs did bad unlink: wanted inum %llu:%llu, got %llu:%llu\n",
 			   inode.subvol, inode.inum,
@@ -433,10 +445,6 @@ int bch2_rename_trans(struct btree_trans *trans,
 		    S_ISDIR(dst_inode_u->bi_mode))
 			return -EXDEV;
 
-		try(bch2_maybe_propagate_has_case_insensitive(trans, src_inum, src_inode_u));
-		if (mode == BCH_RENAME_EXCHANGE)
-			try(bch2_maybe_propagate_has_case_insensitive(trans, dst_inum, dst_inode_u));
-
 		if (is_subdir_for_nlink(src_inode_u)) {
 			src_dir_u->bi_nlink--;
 			dst_dir_u->bi_nlink++;
@@ -480,6 +488,12 @@ int bch2_rename_trans(struct btree_trans *trans,
 	try(bch2_inode_write(trans, &src_inode_iter, src_inode_u));
 	if (dst_inum.inum)
 		try(bch2_inode_write(trans, &dst_inode_iter, dst_inode_u));
+
+	if (!subvol_inum_eq(dst_dir, src_dir)) {
+		try(bch2_maybe_propagate_has_case_insensitive(trans, src_inum, src_inode_u));
+		if (mode == BCH_RENAME_EXCHANGE)
+			try(bch2_maybe_propagate_has_case_insensitive(trans, dst_inum, dst_inode_u));
+	}
 
 	return 0;
 }
@@ -845,10 +859,11 @@ static int bch2_propagate_has_case_insensitive(struct btree_trans *trans, subvol
 int bch2_maybe_propagate_has_case_insensitive(struct btree_trans *trans, subvol_inum inum,
 					      struct bch_inode_unpacked *inode)
 {
-	if (!bch2_inode_casefold(trans->c, inode))
-		return 0;
+	if (bch2_inode_casefold(trans->c, inode))
+		inode->bi_flags |= BCH_INODE_has_case_insensitive;
 
-	inode->bi_flags |= BCH_INODE_has_case_insensitive;
+	if (!(inode->bi_flags & BCH_INODE_has_case_insensitive))
+		return 0;
 
 	return bch2_propagate_has_case_insensitive(trans, parent_inum(inum, inode));
 }

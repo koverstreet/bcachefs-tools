@@ -245,17 +245,28 @@ void bch2_btree_bounce_free(struct bch_fs *c, size_t size, bool used_mempool, vo
 		kvfree(p);
 }
 
-void *bch2_btree_bounce_alloc(struct bch_fs *c, size_t size, bool *used_mempool)
+void *bch2_btree_bounce_alloc_noprof(struct bch_fs *c, size_t size, bool *used_mempool)
 {
 	BUG_ON(size > c->opts.btree_node_size);
 
 	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
 
 	*used_mempool = false;
-	void *p = kvmalloc(size, GFP_NOWAIT|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
+#if defined(__KERNEL__) && LINUX_VERSION_CODE < KERNEL_VERSION(6,18,0)
+	/*
+	 * kvmalloc_node_align() is 6.18+; we only need align == 1 here, and
+	 * with GFP_NOWAIT the vmalloc fallback doesn't happen either way -
+	 * failure falls through to the mempool below.
+	 */
+	void *p = kvmalloc_noprof(size, GFP_NOWAIT|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
+#else
+	void *p = kvmalloc_node_align_noprof(size, 1,
+					     GFP_NOWAIT|__GFP_ACCOUNT|__GFP_RECLAIMABLE,
+					     NUMA_NO_NODE);
+#endif
 	if (!p) {
 		*used_mempool = true;
-		p = mempool_alloc(&c->btree.bounce_pool, GFP_NOFS|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
+		p = mempool_alloc_noprof(&c->btree.bounce_pool, GFP_NOFS|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
 	}
 	return p;
 }
@@ -310,11 +321,18 @@ void bch2_sort_whiteouts(struct bch_fs *c, struct btree *b)
 	struct bkey_packed *new_whiteouts, **ptrs, **ptrs_end, *k;
 	bool used_mempool = false;
 	size_t bytes = b->whiteout_u64s * sizeof(u64);
+	/*
+	 * __bch2_bkey_unpack_key_b reads one byte before the key for its
+	 * header trick; pad the start of the bounce buffer so that read is
+	 * always against valid memory.
+	 */
+	size_t alloc_bytes = bytes + sizeof(u64);
 
 	if (!b->whiteout_u64s)
 		return;
 
-	new_whiteouts = bch2_btree_bounce_alloc(c, bytes, &used_mempool);
+	void *bounce = bch2_btree_bounce_alloc(c, alloc_bytes, &used_mempool);
+	new_whiteouts = bounce + sizeof(u64);
 
 	ptrs = ptrs_end = ((void *) new_whiteouts + bytes);
 
@@ -339,7 +357,7 @@ void bch2_sort_whiteouts(struct bch_fs *c, struct btree *b)
 	memcpy_u64s(unwritten_whiteouts_start(b),
 		    new_whiteouts, b->whiteout_u64s);
 
-	bch2_btree_bounce_free(c, bytes, used_mempool, new_whiteouts);
+	bch2_btree_bounce_free(c, alloc_bytes, used_mempool, bounce);
 }
 
 static bool should_compact_bset(struct btree *b, struct bset_tree *t,
@@ -476,7 +494,8 @@ void bch2_btree_node_sort(struct bch_fs *c, struct btree *b,
 		seq = max(seq, le64_to_cpu(bset(b, t)->journal_seq));
 	start_bset->journal_seq = cpu_to_le64(seq);
 
-	if (sorting_entire_node) {
+	if (sorting_entire_node &&
+	    !mem_alloc_profiling_enabled()) {
 		u64s = le16_to_cpu(out->keys.u64s);
 
 		BUG_ON(bytes != btree_buf_bytes(b));

@@ -44,7 +44,7 @@ static inline void __btree_path_get(struct btree_trans *trans, struct btree_path
 
 	path->ref++;
 	path->intent_ref += intent;
-
+#ifdef CONFIG_BCACHEFS_DEBUG
 	event_trace(trans->c, btree_path_get_ll, buf, ({
 		prt_printf(&buf, "%s: path %3u ref %u btree ", trans->fn,
 			   idx, path->ref);
@@ -52,6 +52,7 @@ static inline void __btree_path_get(struct btree_trans *trans, struct btree_path
 		prt_str(&buf, " pos ");
 		bch2_bpos_to_text(&buf, path->pos);
 	}));
+#endif
 }
 
 static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path *path, bool intent)
@@ -60,7 +61,7 @@ static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path
 	EBUG_ON(!test_bit(path - trans->paths, trans->paths_allocated));
 	EBUG_ON(!path->ref);
 	EBUG_ON(!path->intent_ref && intent);
-
+#ifdef CONFIG_BCACHEFS_DEBUG
 	event_trace(trans->c, btree_path_put_ll, buf, ({
 		prt_printf(&buf, "%s: path %3zu ref %u btree ", trans->fn,
 			   path - trans->paths, path->ref);
@@ -68,17 +69,9 @@ static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path
 		prt_str(&buf, " pos ");
 		bch2_bpos_to_text(&buf, path->pos);
 	}));
-
+#endif
 	path->intent_ref -= intent;
 	return --path->ref == 0;
-}
-
-static inline void btree_path_set_dirty(struct btree_trans *trans,
-					struct btree_path *path,
-					enum btree_path_uptodate u)
-{
-	BUG_ON(path->should_be_locked && trans->locked && !trans->restarted);
-	path->uptodate = max_t(unsigned, path->uptodate, u);
 }
 
 static inline struct btree *btree_path_node(struct btree_path *path,
@@ -248,38 +241,26 @@ bch2_btree_path_make_mut(struct btree_trans *trans,
 
 btree_path_idx_t __must_check
 __bch2_btree_path_set_pos(struct btree_trans *, btree_path_idx_t,
-			  struct bpos, bool, unsigned long);
+			  const struct bpos *, bool, unsigned long);
 
 static inline btree_path_idx_t __must_check
 bch2_btree_path_set_pos(struct btree_trans *trans,
-			btree_path_idx_t path, struct bpos new_pos,
+			btree_path_idx_t path,
+			const struct bpos *new_pos,
 			bool intent, unsigned long ip)
 {
-	return !bpos_eq(new_pos, trans->paths[path].pos)
+	return !bpos_eq(*new_pos, trans->paths[path].pos)
 		? __bch2_btree_path_set_pos(trans, path, new_pos, intent, ip)
 		: path;
 }
 
-int __must_check bch2_btree_path_traverse_one(struct btree_trans *,
-					      btree_path_idx_t,
-					      enum btree_iter_update_trigger_flags,
-					      unsigned long);
+int __must_check bch2_btree_path_traverse_one(struct btree_trans *, btree_path_idx_t,
+					      enum btree_iter_update_trigger_flags);
 
 static inline void bch2_trans_verify_not_unlocked_or_in_restart(struct btree_trans *);
 
-static inline int __must_check bch2_btree_path_traverse(struct btree_trans *trans,
-					  btree_path_idx_t path,
-					  enum btree_iter_update_trigger_flags flags)
-{
-	bch2_trans_verify_not_unlocked_or_in_restart(trans);
-
-	if (trans->paths[path].uptodate < BTREE_ITER_NEED_RELOCK)
-		return 0;
-
-	return bch2_btree_path_traverse_one(trans, path, flags, _RET_IP_);
-}
-
-btree_path_idx_t bch2_path_get(struct btree_trans *, enum btree_id, struct bpos,
+btree_path_idx_t bch2_path_get(struct btree_trans *,
+			       enum btree_id, const struct bpos *,
 			       unsigned, unsigned,
 			       enum btree_iter_update_trigger_flags,
 			       unsigned long);
@@ -304,7 +285,7 @@ static inline struct bkey_s_c bch2_btree_path_peek_slot_exact(struct btree_path 
 	return (struct bkey_s_c) { u, NULL };
 }
 
-void bch2_btree_path_level_init(struct btree_trans *, struct btree_path *, struct btree *);
+void bch2_btree_path_level_init(struct btree_trans *, struct btree_path *, unsigned, struct btree *);
 
 int __bch2_trans_mutex_lock(struct btree_trans *, struct mutex *);
 
@@ -322,14 +303,16 @@ void __bch2_assert_pos_locked(struct btree_trans *, enum btree_id, struct bpos);
 
 static inline void bch2_trans_verify_paths(struct btree_trans *trans)
 {
-	if (static_branch_unlikely(&bch2_debug_check_iterators))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_iterators))
 		__bch2_trans_verify_paths(trans);
 }
 
 static inline void bch2_assert_pos_locked(struct btree_trans *trans, enum btree_id btree,
 					  struct bpos pos)
 {
-	if (static_branch_unlikely(&bch2_debug_check_iterators))
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+	    static_branch_unlikely(&bch2_debug_check_iterators))
 		__bch2_assert_pos_locked(trans, btree, pos);
 }
 
@@ -339,9 +322,16 @@ void bch2_btree_node_iter_fix(struct btree_trans *trans, struct btree_path *,
 			      struct btree *, struct btree_node_iter *,
 			      struct bkey_packed *, unsigned, unsigned);
 
-int bch2_btree_path_relock_intent(struct btree_trans *, struct btree_path *);
-
 void bch2_path_put(struct btree_trans *, btree_path_idx_t, bool);
+
+int __bch2_trans_relock(struct btree_trans *, bool);
+
+static inline int bch2_trans_relock(struct btree_trans *trans)
+{
+	return trans->locked && !trans->restarted
+		? 0
+		: __bch2_trans_relock(trans, true);
+}
 
 int bch2_trans_relock(struct btree_trans *);
 int bch2_trans_relock_notrace(struct btree_trans *);
@@ -485,36 +475,19 @@ void __noreturn bch2_trans_unlocked_or_in_restart_error(struct btree_trans *);
 
 static inline void bch2_trans_verify_not_unlocked_or_in_restart(struct btree_trans *trans)
 {
+#ifdef CONFIG_BCACHEFS_DEBUG
 	if (trans->restarted || !trans->locked)
 		bch2_trans_unlocked_or_in_restart_error(trans);
-}
-
-__always_inline
-static int btree_trans_restart_foreign_task(struct btree_trans *trans, int err, unsigned long ip)
-{
-	BUG_ON(err <= 0);
-	BUG_ON(!bch2_err_matches(-err, BCH_ERR_transaction_restart));
-
-	trans->restarted = err;
-	trans->last_restarted_ip = ip;
-	return -err;
-}
-
-__always_inline
-static int btree_trans_restart_ip(struct btree_trans *trans, int err, unsigned long ip)
-{
-	btree_trans_restart_foreign_task(trans, err, ip);
-#ifdef CONFIG_BCACHEFS_DEBUG
-	darray_exit(&trans->last_restarted_trace);
-	bch2_save_backtrace(&trans->last_restarted_trace, current, 0, GFP_NOWAIT);
 #endif
-	return -err;
 }
+
+int bch2_trans_restart_foreign_task(struct btree_trans *, int, unsigned long);
+int bch2_trans_restart_ip(struct btree_trans *, int, unsigned long);
 
 __always_inline
 static int btree_trans_restart(struct btree_trans *trans, int err)
 {
-	return btree_trans_restart_ip(trans, err, _THIS_IP_);
+	return bch2_trans_restart_ip(trans, err, _THIS_IP_);
 }
 
 static inline int trans_maybe_inject_restart(struct btree_trans *trans, unsigned long ip)
@@ -522,7 +495,7 @@ static inline int trans_maybe_inject_restart(struct btree_trans *trans, unsigned
 #ifdef CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS
 	if (!(ktime_get_ns() & ~(~0ULL << min(63, (10 + trans->restart_count_this_trans))))) {
 		event_inc_trace(trans->c, trans_restart_injected, buf, prt_str(&buf, trans->fn));
-		return btree_trans_restart_ip(trans,
+		return bch2_trans_restart_ip(trans,
 					BCH_ERR_transaction_restart_fault_inject, ip);
 	}
 #endif
@@ -546,23 +519,21 @@ static inline void bch2_btree_path_downgrade(struct btree_trans *trans,
 void bch2_trans_downgrade(struct btree_trans *);
 
 void bch2_trans_revalidate_updates_in_node(struct btree_trans *, struct btree *);
-void bch2_trans_node_add(struct btree_trans *trans, struct btree_path *, struct btree *);
-void bch2_trans_node_drop(struct btree_trans *trans, struct btree *);
+void bch2_trans_node_add(struct btree_trans *trans, struct btree *);
+void bch2_trans_node_verify_not_in_iters(struct btree_trans *trans, struct btree *);
 void bch2_trans_node_reinit_iter(struct btree_trans *, struct btree *);
 
 int __must_check __bch2_btree_iter_traverse(struct btree_iter *iter);
 int __must_check bch2_btree_iter_traverse(struct btree_iter *);
 
 struct btree *bch2_btree_iter_peek_node(struct btree_iter *);
-struct btree *bch2_btree_iter_peek_node_and_restart(struct btree_iter *);
-struct btree *bch2_btree_iter_next_node(struct btree_iter *);
 
-struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *, struct bpos);
+struct bkey_s_c bch2_btree_iter_peek_max(struct btree_iter *, const struct bpos *);
 struct bkey_s_c bch2_btree_iter_next(struct btree_iter *);
 
 static inline struct bkey_s_c bch2_btree_iter_peek(struct btree_iter *iter)
 {
-	return bch2_btree_iter_peek_max(iter, SPOS_MAX);
+	return bch2_btree_iter_peek_max(iter, &SPOS_MAX);
 }
 
 struct bkey_s_c bch2_btree_iter_peek_prev_min(struct btree_iter *, struct bpos);
@@ -607,7 +578,7 @@ static inline void bch2_btree_iter_set_pos(struct btree_iter *iter, struct bpos 
 
 static inline void bch2_btree_iter_set_pos_to_extent_start(struct btree_iter *iter)
 {
-	BUG_ON(!(iter->flags & BTREE_ITER_is_extents));
+	EBUG_ON(!(iter->flags & BTREE_ITER_is_extents));
 	iter->pos = bkey_start_pos(&iter->k);
 }
 
@@ -627,7 +598,9 @@ static inline bool btree_id_cached(enum btree_id btree)
 	return BIT_ULL(btree) &
 		(BIT_ULL(BTREE_ID_alloc)|
 		 BIT_ULL(BTREE_ID_inodes)|
-		 BIT_ULL(BTREE_ID_logged_ops));
+		 BIT_ULL(BTREE_ID_logged_ops)|
+		 BIT_ULL(BTREE_ID_stripes)|
+		 BIT_ULL(BTREE_ID_subvolumes));
 }
 
 static inline enum btree_iter_update_trigger_flags
@@ -680,7 +653,7 @@ static inline void bch2_trans_iter_init_common(struct btree_trans *trans,
 #ifdef CONFIG_BCACHEFS_DEBUG
 	iter->ip_allocated = ip;
 #endif
-	iter->path = bch2_path_get(trans, btree, iter->pos, locks_want, depth, flags, ip);
+	iter->path = bch2_path_get(trans, btree, &iter->pos, locks_want, depth, flags, ip);
 }
 
 void bch2_trans_iter_init_outlined(struct btree_trans *, struct btree_iter *,
@@ -756,6 +729,38 @@ DEFINE_CLASS(btree_iter_copy, struct btree_iter,
 	     bch2_trans_iter_exit(&_T),
 	     bch2_trans_iter_copy_class_init(src),
 	     struct btree_iter *src)
+
+bool bch2_btree_iter_params_valid(enum btree_id, unsigned,
+				  struct bpos, struct bpos,
+				  enum btree_iter_update_trigger_flags);
+
+/*
+ * Low-level iterator init: takes level and flags exactly as given - no
+ * defaulting of not_extents/snapshot_field/all_snapshots (the node iterator
+ * conventions). For callers that need per-level iteration with caller-chosen
+ * snapshot semantics, e.g. the query_btree_keys ioctl; validate untrusted
+ * parameters with bch2_btree_iter_params_valid() first:
+ */
+void __bch2_trans_iter_init_ll(struct btree_trans *, struct btree_iter *,
+			       enum btree_id, struct bpos,
+			       unsigned, unsigned,
+			       enum btree_iter_update_trigger_flags,
+			       unsigned long);
+
+#define bch2_trans_iter_ll_class_init(_trans, _btree, _pos, _locks_want, _depth, _flags)\
+({										\
+	struct btree_iter iter;							\
+	__bch2_trans_iter_init_ll(_trans, &iter, (_btree), (_pos),		\
+				  (_locks_want), (_depth), (_flags), _THIS_IP_);\
+	iter;									\
+})
+
+DEFINE_CLASS(btree_iter_ll, struct btree_iter,
+	     bch2_trans_iter_exit(&_T),
+	     bch2_trans_iter_ll_class_init(trans, btree, pos, locks_want, depth, flags),
+	     struct btree_trans *trans, enum btree_id btree, struct bpos pos,
+	     unsigned locks_want, unsigned depth,
+	     enum btree_iter_update_trigger_flags flags)
 
 void __bch2_trans_node_iter_init(struct btree_trans *, struct btree_iter *,
 				 enum btree_id, struct bpos,
@@ -906,21 +911,23 @@ static inline int __bch2_bkey_get_val_typed(struct btree_trans *trans,
 
 u32 bch2_trans_begin(struct btree_trans *);
 
-#define __for_each_btree_node(_trans, _iter, _btree_id, _start,			\
-			      _locks_want, _depth, _flags, _b, _do)		\
+#define for_each_btree_node(_trans, _iter, _btree_id, _start,			\
+			    _depth, _flags, _b, _do)				\
 ({										\
 	bch2_trans_begin((_trans));						\
 										\
 	CLASS(btree_node_iter, _iter)((_trans), (_btree_id), _start,		\
-				      _locks_want, _depth, _flags);		\
+				      0, _depth, _flags);			\
+	struct btree *_b;							\
 	int _ret3 = 0;								\
 	do {									\
 		u32 _restart_count = bch2_trans_begin((_trans));		\
 										\
-		struct btree *_b = bch2_btree_iter_peek_node(&_iter);		\
+		_b = bch2_btree_iter_peek_node(&(_iter));			\
 		_ret3 = PTR_ERR_OR_ZERO(_b);					\
 		if (_ret3)							\
 			continue; /* may be restart; re-evaluated below */	\
+										\
 		if (!_b)							\
 			break;							\
 										\
@@ -928,19 +935,17 @@ u32 bch2_trans_begin(struct btree_trans *);
 		if (_ret3)							\
 			continue;						\
 										\
-		_ret3 = PTR_ERR_OR_ZERO(bch2_btree_iter_next_node(&_iter));	\
-		if (!_ret3)							\
-			bch2_trans_verify_not_restarted((_trans), _restart_count);\
+		bch2_trans_verify_not_restarted((_trans), _restart_count);	\
+										\
+		if (bpos_eq((_b)->key.k.p, SPOS_MAX))				\
+			break;							\
+										\
+		bch2_btree_iter_set_pos(&(_iter), bpos_successor((_b)->key.k.p));\
 	} while (bch2_err_matches(_ret3, BCH_ERR_transaction_restart) ||	\
 		 !_ret3);							\
 										\
 	_ret3;									\
 })
-
-#define for_each_btree_node(_trans, _iter, _btree_id, _start,		\
-			    _flags, _b, _do)				\
-	__for_each_btree_node(_trans, _iter, _btree_id, _start,	\
-			      0, 0, _flags, _b, _do)
 
 static inline struct bkey_s_c bch2_btree_iter_peek_prev_type(struct btree_iter *iter,
 							     enum btree_iter_update_trigger_flags flags)
@@ -952,21 +957,46 @@ static inline struct bkey_s_c bch2_btree_iter_peek_prev_type(struct btree_iter *
 static inline struct bkey_s_c bch2_btree_iter_peek_type(struct btree_iter *iter,
 							enum btree_iter_update_trigger_flags flags)
 {
-	return  flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
+	return  flags & BTREE_ITER_prev	      ? bch2_btree_iter_peek_prev_type(iter, flags) :
+		flags & BTREE_ITER_slots      ? bch2_btree_iter_peek_slot(iter) :
 						bch2_btree_iter_peek(iter);
 }
 
+/*
+ * Range iteration in either direction: with BTREE_ITER_prev, iteration runs
+ * from the iterator's position down to @end (now the inclusive *lower*
+ * bound) - the mirror image of the forward case. BTREE_ITER_prev, like
+ * BTREE_ITER_slots, is consumed entirely here in the dispatch helpers; the
+ * core iterator never sees it.
+ */
 static inline struct bkey_s_c bch2_btree_iter_peek_max_type(struct btree_iter *iter,
 							    struct bpos end,
 							    enum btree_iter_update_trigger_flags flags)
 {
-	if (!(flags & BTREE_ITER_slots))
-		return bch2_btree_iter_peek_max(iter, end);
+	if (!(flags & (BTREE_ITER_slots|BTREE_ITER_prev)))
+		return bch2_btree_iter_peek_max(iter, &end);
 
-	if (bkey_gt(iter->pos, end))
-		return bkey_s_c_null;
+	if (flags & BTREE_ITER_prev) {
+		if (!(flags & BTREE_ITER_slots))
+			return bch2_btree_iter_peek_prev_min(iter, end);
+
+		if (bkey_lt(iter->pos, end))
+			return bkey_s_c_null;
+	} else {
+		if (bkey_gt(iter->pos, end))
+			return bkey_s_c_null;
+	}
 
 	return bch2_btree_iter_peek_slot(iter);
+}
+
+/* Advance in iteration order: forwards, or backwards with BTREE_ITER_prev: */
+static inline bool bch2_btree_iter_advance_type(struct btree_iter *iter,
+						enum btree_iter_update_trigger_flags flags)
+{
+	return flags & BTREE_ITER_prev
+		? bch2_btree_iter_rewind(iter)
+		: bch2_btree_iter_advance(iter);
 }
 
 int __bch2_btree_trans_too_many_iters(struct btree_trans *);
@@ -1042,7 +1072,7 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 		if (!_ret3)						\
 			bch2_trans_verify_not_restarted(_trans, _restart_count);\
 	} while (bch2_err_matches(_ret3, BCH_ERR_transaction_restart) ||\
-		 (!_ret3 && bch2_btree_iter_advance(&(_iter))));	\
+		 (!_ret3 && bch2_btree_iter_advance_type(&(_iter), (_flags))));\
 									\
 	_ret3;								\
 })
@@ -1064,28 +1094,8 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 
 #define for_each_btree_key_reverse(_trans, _iter, _btree_id,			\
 				   _start, _flags, _k, _do)			\
-({										\
-	int _ret3 = 0;								\
-										\
-	CLASS(btree_iter, iter)((_trans), (_btree_id), (_start), (_flags));	\
-										\
-	do {									\
-		u32 _restart_count = bch2_trans_begin(_trans);			\
-		_ret3 = 0;							\
-										\
-		struct bkey_s_c _k =						\
-			bch2_btree_iter_peek_prev_type(&(_iter), (_flags));	\
-		if (!(_k).k)							\
-			break;							\
-										\
-		_ret3 = bkey_err(_k) ?: (_do);					\
-		if (!_ret3)							\
-			bch2_trans_verify_not_restarted(_trans, _restart_count);\
-	} while (bch2_err_matches(_ret3, BCH_ERR_transaction_restart) ||	\
-		 (!_ret3 && bch2_btree_iter_rewind(&(_iter))));			\
-										\
-	_ret3;									\
-})
+	for_each_btree_key_max(_trans, _iter, _btree_id, _start, POS_MIN,	\
+			       (_flags)|BTREE_ITER_prev, _k, _do)
 
 #define for_each_btree_key_commit(_trans, _iter, _btree_id,		\
 				  _start, _iter_flags, _k,		\
@@ -1130,7 +1140,7 @@ struct bkey_s_c bch2_btree_iter_peek_root(struct btree_trans *, struct btree_ite
 	for (CLASS(btree_iter, _iter)((_trans), (_btree_id), (_start), (_flags));	\
 	     (_k) = bch2_btree_iter_peek_max_type(&(_iter), _end, _flags),		\
 	     !((_ret) = bkey_err(_k)) && (_k).k;					\
-	     bch2_btree_iter_advance(&(_iter)))
+	     bch2_btree_iter_advance_type(&(_iter), (_flags)))
 
 #define for_each_btree_key_norestart(_trans, _iter, _btree_id,				\
 				     _start, _flags, _k, _ret)				\
@@ -1141,18 +1151,15 @@ struct bkey_s_c bch2_btree_iter_peek_root(struct btree_trans *, struct btree_ite
 	for (;										\
 	     (_k) = bch2_btree_iter_peek_max_type(&(_iter), _end, _flags),		\
 	     !((_ret) = bkey_err(_k)) && (_k).k;					\
-	     bch2_btree_iter_advance(&(_iter)))
+	     bch2_btree_iter_advance_type(&(_iter), (_flags)))
 
 #define for_each_btree_key_continue_norestart(_iter, _flags, _k, _ret)			\
 	for_each_btree_key_max_continue_norestart(_iter, SPOS_MAX, _flags, _k, _ret)
 
 #define for_each_btree_key_reverse_norestart(_trans, _iter, _btree_id,			\
 					     _start, _flags, _k, _ret)			\
-	for (CLASS(btree_iter, _iter)((_trans), (_btree_id),				\
-				      (_start), (_flags));				\
-	     (_k) = bch2_btree_iter_peek_prev_type(&(_iter), _flags),			\
-	     !((_ret) = bkey_err(_k)) && (_k).k;					\
-	     bch2_btree_iter_rewind(&(_iter)))
+	for_each_btree_key_max_norestart(_trans, _iter, _btree_id, _start,		\
+					 POS_MIN, (_flags)|BTREE_ITER_prev, _k, _ret)
 
 /*
  * This should not be used in a fastpath, without first trying _do in

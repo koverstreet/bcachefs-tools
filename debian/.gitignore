@@ -1,3 +1,6 @@
-bcachefs-tools*
+/bcachefs-tools/
+/bcachefs-tools.substvars
+/bcachefs-tools.debhelper
+/bcachefs-tools.debhelper.log
 debhelper-build-stamp
 files

@@ -23,6 +23,7 @@ commit + SIGUSR1 → orchestrator wakes up → builds → publishes.
 | **unstable** | local | cross (local) | remote (farm1) |
 | **forky** | local | cross (local) | remote (farm1) |
 | **trixie** | local | cross (local) | remote (farm1) |
+| **resolute** | local | — | remote (farm1) |
 | **questing** | local | — | remote (farm1) |
 | **plucky** | local | — | remote (farm1) |
 
@@ -77,6 +78,17 @@ Phase 3: publish
             ├── pid
             └── log
 ```
+
+## Status page
+
+`$PUBLIC_HTML/ci.html` (https://apt.bcachefs.org/ci.html) is regenerated on
+every status change by `BuildState::regenerate_html()`, which renders the
+`builds/` tree in-process via the shared **ci-dashboard** crate
+(`https://evilpiepirate.org/git/ci-dashboard.git`) — the same renderer the
+module server uses, so there is one status-page implementation, not two. It
+walks `builds/<commit>/<job>/` (template `{commit}/{job}`), reading each job's
+`status` file; failures and stuck builds sort to the top, logs link to
+`/ci-builds/...`. The old `scripts/generate-status-html.sh` is gone.
 
 ## Stale build recovery
 
