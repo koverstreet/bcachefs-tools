@@ -1175,23 +1175,19 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 		return 0;
 
 	/*
-	 * Both repairs below destroy or relocate a key based on the in-memory
-	 * snapshot table. Only trust it if the snapshots and subvolumes btrees
-	 * have both been validated consistent (by check_snapshots /
-	 * check_subvols) and not mutated since - the btrees_clean bits. If they
-	 * haven't, the table may simply be stale and acting on it would destroy
-	 * live data; schedule the passes and defer instead. Unlike
-	 * require_recovery_pass on its own, this doesn't trust a pass that merely
-	 * ran this mount (or was ratelimited) - it must have run since the last
-	 * mutation.
+	 * The incomplete snapshot deletion that stranded this key almost
+	 * certainly stranded sibling keys across the content btrees too - left
+	 * alone they only surface later, when copygc/reconcile trips over them.
+	 * Schedule the content passes so the whole cascade of damage gets
+	 * repaired in this fsck run rather than festering. require_recovery_pass
+	 * only returns the unwind error (deferring this key's own repair) when
+	 * it actually needs to rewind to an earlier pass; scheduling a
+	 * later-or-current pass just marks it to run.
 	 */
-	bool snapshots_clean = bch2_btree_is_clean(c, BTREE_ID_snapshots) &&
-			       bch2_btree_is_clean(c, BTREE_ID_subvolumes);
-
-	if (!snapshots_clean) {
-		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_snapshots) ?: ret;
-		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_subvols) ?: ret;
-	}
+	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_inodes, 0) ?: ret;
+	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_extents, 0) ?: ret;
+	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_dirents, 0) ?: ret;
+	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_xattrs, 0) ?: ret;
 
 	/*
 	 * Snapshot missing entirely: we should have caught this with
@@ -1202,8 +1198,24 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 	    c->sb.btrees_lost_data & BIT_ULL(BTREE_ID_snapshots))
 		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_reconstruct_snapshots) ?: ret;
 
-	if (!snapshots_clean)
-		return ret;
+	/*
+	 * Both repairs below destroy or relocate a key based on the in-memory
+	 * snapshot table. Only trust it if the snapshots and subvolumes btrees
+	 * have both been validated consistent (by check_snapshots /
+	 * check_subvols) and not mutated since - the btrees_clean bits. If they
+	 * haven't, the table may simply be stale and acting on it would destroy
+	 * live data; schedule the passes and defer instead. Unlike
+	 * require_recovery_pass on its own, this doesn't trust a pass that merely
+	 * ran this mount (or was ratelimited) - it must have run since the last
+	 * mutation.
+	 */
+	if (!bch2_btree_is_clean(c, BTREE_ID_snapshots) ||
+	    !bch2_btree_is_clean(c, BTREE_ID_subvolumes)) {
+		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_snapshots) ?: ret;
+		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_subvols) ?: ret;
+	}
+
+	try(ret);
 
 	unsigned repair_flags = FSCK_CAN_IGNORE | (!ret ? FSCK_CAN_FIX : 0);
 
