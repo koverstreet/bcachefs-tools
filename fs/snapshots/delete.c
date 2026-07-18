@@ -275,8 +275,13 @@ static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool del
 	}
 
 	if (s->v.subvol) {
+		/* deletion path: see the deleted tombstone directly, as in
+		 * check_should_delete_leaf() - bch2_subvolume_get() would report
+		 * it as ENOENT_subvolume_deleted */
 		struct bch_subvolume subvol;
-		try(bch2_subvolume_get(trans, le32_to_cpu(s->v.subvol), true, &subvol));
+		try(bch2_bkey_get_val_typed(trans, BTREE_ID_subvolumes,
+					    POS(0, le32_to_cpu(s->v.subvol)),
+					    BTREE_ITER_cached, subvolume, &subvol));
 
 		if (s->v.children[0] ||
 		    (bch2_subvolume_state(&subvol) != SUBVOLUME_STATE_deleted &&
@@ -674,8 +679,15 @@ static int check_should_delete_leaf(struct btree_trans *trans, struct bkey_s_c_s
 						    c, "snapshot leaf in invalid state\n%s", buf.buf))
 				return 0;
 		} else {
+			/*
+			 * Raw lookup, not bch2_subvolume_get(): this is the
+			 * deletion path, the one caller that must see the deleted
+			 * tombstone rather than have it reported as ENOENT.
+			 */
 			struct bch_subvolume subvol;
-			try(bch2_subvolume_get(trans, le32_to_cpu(s.v->subvol), true, &subvol));
+			try(bch2_bkey_get_val_typed(trans, BTREE_ID_subvolumes,
+						    POS(0, le32_to_cpu(s.v->subvol)),
+						    BTREE_ITER_cached, subvolume, &subvol));
 
 			if (bch2_fs_inconsistent_on(bch2_subvolume_state(&subvol) != SUBVOLUME_STATE_deleted,
 						    c, "snapshot marked for deletion but subvolume not marked for deletion\n%s",

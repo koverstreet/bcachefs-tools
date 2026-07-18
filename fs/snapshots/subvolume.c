@@ -328,6 +328,7 @@ static int check_subvol_child(struct btree_trans *trans,
 		return ret;
 
 	if (fsck_err_on(ret ||
+			bch2_subvolume_state_compat(&s) != SUBVOLUME_STATE_live ||
 			le32_to_cpu(s.fs_path_parent) != child_k.k->p.inode,
 			trans, subvol_children_bad,
 			"incorrect entry in subvolume_children btree %llu:%llu",
@@ -335,8 +336,8 @@ static int check_subvol_child(struct btree_trans *trans,
 		try(bch2_btree_delete_at(trans, child_iter, 0));
 
 	/*
-	 * A missing subvolume was the verdict (entry is stray, deleted
-	 * above), not an error - don't fail the pass with it:
+	 * A missing or deleted subvolume was the verdict (entry is stray,
+	 * deleted above), not an error - don't fail the pass with it:
 	 */
 	ret = 0;
 fsck_err:
@@ -492,6 +493,14 @@ bch2_subvolume_get_inlined(struct btree_trans *trans, unsigned subvol,
 {
 	int ret = bch2_bkey_get_val_typed(trans, BTREE_ID_subvolumes, POS(0, subvol),
 					  BTREE_ITER_cached, subvolume, s);
+	/*
+	 * A deleted subvolume is a tombstone (deletion's witness, not yet
+	 * reaped): to everyone but the deletion/reaping path it's gone, so
+	 * report it as such rather than handing back a dead subvolume - and let
+	 * it flow into the inconsistent_if_not_found handling below.
+	 */
+	if (!ret && bch2_subvolume_state_compat(s) == SUBVOLUME_STATE_deleted)
+		ret = bch_err_throw(trans->c, ENOENT_subvolume_deleted);
 	if (bch2_err_matches(ret, ENOENT) && inconsistent_if_not_found)
 		ret = bch2_subvolume_missing(trans->c, subvol) ?: ret;
 	return ret;
