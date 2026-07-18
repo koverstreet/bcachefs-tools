@@ -1549,9 +1549,18 @@ fsck_err:
 
 static int check_subdir_dirents_count(struct btree_trans *trans, struct inode_walker *w)
 {
+	/*
+	 * Nested transaction, like check_i_sectors(): the inner
+	 * bch2_fsck_write_inode() commits discard the fsck_err logs queued in
+	 * check_subdir_count_notnested() and we return a restart - exempt those
+	 * begins from the dropped-updates warning.
+	 */
 	u32 restart_count = trans->restart_count;
-	return check_subdir_count_notnested(trans, w) ?:
-		trans_was_restarted(trans, restart_count);
+	trans->begin_may_drop_updates = true;
+	int ret = check_subdir_count_notnested(trans, w);
+	trans->begin_may_drop_updates = false;
+
+	return ret ?: trans_was_restarted(trans, restart_count);
 }
 
 /* find a subvolume that's a descendent of @snapshot: */

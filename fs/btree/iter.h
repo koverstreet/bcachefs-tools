@@ -1043,6 +1043,7 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 	int _ret2;							\
 									\
 	_restart_count = _orig_restart_count = (_trans)->restart_count;	\
+	(_trans)->begin_may_drop_updates = true;			\
 									\
 	while (bch2_err_matches(_ret2 = (_do), BCH_ERR_transaction_restart))\
 		_restart_count = bch2_trans_begin(_trans);		\
