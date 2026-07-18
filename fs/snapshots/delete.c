@@ -945,9 +945,6 @@ int __bch2_delete_dead_snapshots(struct bch_fs *c)
 
 	lockdep_assert_held(&c->recovery.run_lock);
 
-	if (!test_and_clear_bit(BCH_FS_need_delete_dead_snapshots, &c->flags))
-		return 0;
-
 	d->running = true;
 	d->progress.pos = BBPOS_MIN;
 
@@ -1072,8 +1069,18 @@ int bch2_check_snapshot_needs_deletion(struct btree_trans *trans, struct bkey_s_
 	if (state == SNAPSHOT_STATE_no_keys)
 		*nr_empty_interior += 1;
 	else if (state == SNAPSHOT_STATE_will_delete ||
-		 interior_snapshot_needs_delete(&s))
-		set_bit(BCH_FS_need_delete_dead_snapshots, &c->flags);
+		 interior_snapshot_needs_delete(&s)) {
+		/*
+		 * Schedule the deleter through the recovery-pass machinery,
+		 * like bch2_mark_snapshot - this catches the interior
+		 * single-child case, which mark_snapshot (will_delete only)
+		 * doesn't. Ephemeral + best-effort: ignore the return.
+		 */
+		CLASS(printbuf, buf)();
+		bch2_run_explicit_recovery_pass(c, &buf,
+				BCH_RECOVERY_PASS_delete_dead_snapshots,
+				RUN_RECOVERY_PASS_ephemeral);
+	}
 
 	return 0;
 }

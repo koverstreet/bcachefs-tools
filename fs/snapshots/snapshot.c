@@ -616,15 +616,13 @@ static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 		memcpy(t->is_ancestor, is_ancestor, sizeof(t->is_ancestor));
 
 		if (state == SNAPSHOT_STATE_will_delete) {
-			set_bit(BCH_FS_need_delete_dead_snapshots, &c->flags);
-
 			/*
 			 * Schedule the deleter. bch2_mark_snapshot may run as a
 			 * BTREE_TRIGGER_atomic trigger - btree write locks held,
 			 * committed to the commit - so the schedule must be
 			 * ephemeral (no sb_lock) and best-effort: we ignore the
 			 * return, since an error here would take the filesystem
-			 * emergency read-only. need_delete is the durable signal.
+			 * emergency read-only.
 			 *
 			 * In recovery this injects delete_dead_snapshots into the
 			 * running passes so it runs (in listing order) before the

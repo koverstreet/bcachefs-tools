@@ -625,7 +625,6 @@ struct bch_dev {
 	x(running_recovery_passes)	\
 	x(in_fsck)			\
 	x(initial_gc_unfixed)		\
-	x(need_delete_dead_snapshots)	\
 	x(error)			\
 	x(topology_error)		\
 	x(errors_fixed)			\
