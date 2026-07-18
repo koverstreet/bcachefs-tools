@@ -64,6 +64,26 @@
  *   safety.
  */
 
+/*
+ * Recovery ordering: on a filesystem that may be damaged, delete_dead_snapshots()
+ * must run AFTER the content-check passes - check_inodes, check_extents,
+ * check_dirents, check_xattrs.
+ *
+ * Deleting a dead snapshot migrates its still-live keys down to a live
+ * descendant, and that migration trusts the tree it's handed: it assumes every
+ * key's inode exists at the key's snapshot ID and that the
+ * inode<->dirent<->extent relationships are already consistent. When that
+ * doesn't hold, migrating against the broken structure compounds the damage -
+ * a dirent gets moved to a descendant whose inode is gone, or one half of an
+ * inode<->dirent pair is deleted while the other is left stranded in a snapshot
+ * the worklist won't revisit.
+ *
+ * The content-check passes repair exactly those properties, so running them
+ * first hands us a consistent tree. The fingerprint of getting it wrong is
+ * bidirectional, snapshot-local inode<->dirent breakage: dirents pointing to
+ * missing inodes in one snapshot, inodes with no dirent in another.
+ */
+
 static __cold void bch2_snapshot_delete_nodes_to_text(struct printbuf *out, struct snapshot_delete *d, bool full)
 {
 	size_t limit = !full ? 10 : SIZE_MAX;
