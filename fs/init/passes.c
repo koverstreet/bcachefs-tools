@@ -615,8 +615,19 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 
 	r->current_passes = orig_passes_to_run;
 
+	/*
+	 * Passes scheduled ephemerally mid-run (e.g. delete_dead_snapshots via a
+	 * trigger) land in current_passes but not orig_passes_to_run; accumulate
+	 * everything that's actually been scheduled so a rewind restores those
+	 * too - otherwise the pass that triggered the rewind is dropped from the
+	 * run and never reruns.
+	 */
+	u64 scheduled = orig_passes_to_run;
+
 	enum bch_recovery_pass prev = 0;
 	while (r->current_passes) {
+		scheduled |= r->current_passes;
+
 		unsigned pass = __ffs64(r->current_passes);
 
 		r->current_pass			= pass;
@@ -632,8 +643,8 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 
 		if (r->rewound_to) {
 			r->rewound_from	= max(r->rewound_from, pass);
-			/* Restore r->current_passses up to and including r->rewound_to */
-			r->current_passes |= orig_passes_to_run & (~0ULL << r->rewound_to);
+			/* Restore current_passes up to and including rewound_to */
+			r->current_passes |= scheduled & (~0ULL << r->rewound_to);
 			r->rewound_to = 0;
 		} else if (!ret2) {
 			r->pass_done = max(r->pass_done, pass);
