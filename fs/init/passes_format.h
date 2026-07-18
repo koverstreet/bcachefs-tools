@@ -151,12 +151,14 @@
 	  "One-time migration: set bi_subvol on root inode "					\
 	  "for pre-subvolumes filesystems")							\
 	x(check_inodes,				24, PASS_FSCK,					\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots),						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
 	  "Validate inode fields (mode, flags, i_size, "					\
 	  "bi_subvol), delete orphaned unlinked inodes, "					\
 	  "repair invalid backpointers")							\
 	x(check_extents,			25, PASS_FSCK,					\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
 	  "Validate extent keys: owning inode exists, "						\
 	  "snapshot valid, no overlaps, i_size and "						\
 	  "i_sectors consistent")								\
@@ -166,12 +168,14 @@
 	  "device pointers whose generation no longer "						\
 	  "matches")										\
 	x(check_dirents,			27, PASS_FSCK,					\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
 	  "Validate directory entries: target inode exists "					\
 	  "in correct snapshot, d_type matches inode mode, "					\
 	  "hash values correct")								\
 	x(check_xattrs,				28, PASS_FSCK,					\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
 	  "Validate xattr entries: owning inode exists "					\
 	  "in valid snapshot, hash correct; delete orphans")					\
 	x(check_root,				29, PASS_ONLINE|PASS_FSCK,			\
