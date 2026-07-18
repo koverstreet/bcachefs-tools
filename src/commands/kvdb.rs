@@ -464,6 +464,46 @@ fn cmd_set(
 }
 
 // ---------------------------------------------------------------------------
+// superblock fields — same field engine as keys, anchored on bch_sb::INFO
+// (which carries the BCH_SB_* LE64_BITMASK fields), written back via
+// bch2_write_super so the csum is recomputed and every sb copy updated.
+
+fn sb_field(field: &str) -> Result<FieldTarget> {
+    typeinfo::resolve_with_bits(<c::bch_sb as typeinfo::TypeInfo>::INFO, field)
+        .map_err(|e| anyhow!("{e}"))
+}
+
+/// The in-memory superblock as a byte slice over its full vstruct extent.
+fn sb_bytes(fs: &Fs) -> (*mut u8, usize) {
+    let sb = unsafe { (*fs.raw).disk_sb.sb };
+    (sb as *mut u8, crate::wrappers::super_io::vstruct_bytes_sb(unsafe { &*sb }))
+}
+
+fn cmd_sb_get(fs: &Fs, field: &str) -> Result<String> {
+    let (r, bm) = sb_field(field)?;
+    let (p, len) = sb_bytes(fs);
+    let buf = unsafe { std::slice::from_raw_parts(p, len) };
+    let v = match bm {
+        Some(bm) => typeinfo::read_bits(buf, &r, bm),
+        None => typeinfo::read_scalar(buf, &r),
+    }.map_err(|e| anyhow!("{field}: {e}"))?;
+    Ok(format!("{field} = {v} (0x{v:x})\n"))
+}
+
+fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
+    let target = sb_field(field)?;
+    let (p, len) = sb_bytes(fs);
+    let buf = unsafe { std::slice::from_raw_parts_mut(p, len) };
+    write_field(buf, &target, v).map_err(|e| anyhow!("{field}: {e}"))?;
+
+    let ret = unsafe { c::bch2_write_super(fs.raw) };
+    if ret != 0 {
+        bail!("bch2_write_super failed: {ret}");
+    }
+    Ok(String::new())
+}
+
+// ---------------------------------------------------------------------------
 // command dispatch + REPL
 
 const HELP: &str = "\
@@ -475,6 +515,8 @@ update    <btree> <pos> <field=val>...         modify fields of an existing key
 set       <btree> <pos> <type> [field=val]...  insert a whole new key
           values are integers; fields holding enum codewords (snapshot/
           subvolume state) also accept the value name, e.g. state=will_delete
+sb get    <field>                              read a superblock field/flag
+sb set    <field=val>                          write one, then bch2_write_super
 help                                           this text
 ";
 
@@ -485,6 +527,17 @@ help                                           this text
 enum KvdbFs {
     Offline(Fs),
     Online(BcachefsHandle, Fs),
+}
+
+impl KvdbFs {
+    /// The userspace Fs handle, for reads that don't go through the kernel
+    /// (superblock access; the sb is loaded in both the offline and online
+    /// cases).
+    fn fs(&self) -> &Fs {
+        match self {
+            KvdbFs::Offline(fs) | KvdbFs::Online(_, fs) => fs,
+        }
+    }
 }
 
 fn run_line(kvdb_fs: &KvdbFs, line: &str) -> Result<()> {
@@ -552,6 +605,28 @@ fn run_line(kvdb_fs: &KvdbFs, line: &str) -> Result<()> {
                 .map(|s| parse_assign(s))
                 .collect::<Result<Vec<_>>>()?;
             cmd_set(fs, parse_btree(btree)?, parse_pos(pos)?, type_name, &assigns)?
+        }
+        "sb" => {
+            let (&sub, rest) = args.split_first()
+                .ok_or_else(|| anyhow!("usage: sb get <field> | sb set <field=val>"))?;
+            match sub {
+                "get" => {
+                    let [field] = rest else { bail!("usage: sb get <field>"); };
+                    cmd_sb_get(kvdb_fs.fs(), field)?
+                }
+                "set" => {
+                    let [assign] = rest else { bail!("usage: sb set <field=val>"); };
+                    let KvdbFs::Offline(fs) = kvdb_fs else {
+                        bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
+                    };
+                    let (field, val) = parse_assign(assign)?;
+                    let FieldVal::Int(v) = val else {
+                        bail!("sb set: expected an integer value");
+                    };
+                    cmd_sb_set(fs, field, v)?
+                }
+                _ => bail!("usage: sb get <field> | sb set <field=val>"),
+            }
         }
         "help" | "?" => HELP.to_string(),
         _ => bail!("unknown command '{op}' (try: help)"),
