@@ -350,8 +350,6 @@ u32 bch2_snapshot_tree_next(struct bch_fs *, u32, unsigned *);
 
 int bch2_snapshot_lookup(struct btree_trans *trans, u32 id,
 			 struct bch_snapshot *s);
-int bch2_snapshot_get_subvol(struct btree_trans *, u32,
-			     struct bch_subvolume *);
 
 /* only exported for tests: */
 int bch2_snapshot_node_create(struct btree_trans *, u32,

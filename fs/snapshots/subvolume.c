@@ -533,15 +533,6 @@ int bch2_subvol_is_ro(struct bch_fs *c, u32 subvol)
 	return lockrestart_do(trans, bch2_subvol_is_ro_trans(trans, subvol, &snapshot));
 }
 
-int bch2_snapshot_get_subvol(struct btree_trans *trans, u32 snapshot,
-			     struct bch_subvolume *subvol)
-{
-	struct bch_snapshot snap;
-
-	return  bch2_snapshot_lookup(trans, snapshot, &snap) ?:
-		bch2_subvolume_get(trans, le32_to_cpu(snap.subvol), true, subvol);
-}
-
 int __bch2_subvolume_get_snapshot(struct btree_trans *trans, u32 subvolid,
 				  u32 *snapid, bool warn)
 {
