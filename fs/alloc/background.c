@@ -1747,7 +1747,7 @@ void bch2_fs_allocator_background_init(struct bch_fs *c)
 
 void bch2_fs_capacity_exit(struct bch_fs *c)
 {
-	percpu_free_rwsem(&c->capacity.mark_lock);
+	percpu_free_rwsem(&c->capacity.mark_lock.lock);
 	if (c->capacity.pcpu) {
 		u64 v = percpu_u64_get(&c->capacity.pcpu->online_reserved);
 		WARN(v, "online_reserved not 0 at shutdown: %lli", v);
@@ -1760,7 +1760,7 @@ int bch2_fs_capacity_init(struct bch_fs *c)
 {
 	spin_lock_init(&c->capacity.sectors_available_lock);
 
-	try(percpu_init_rwsem(&c->capacity.mark_lock));
+	try(percpu_init_rwsem(&c->capacity.mark_lock.lock));
 
 	if (!(c->capacity.pcpu = alloc_percpu(struct bch_fs_capacity_pcpu)))
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);

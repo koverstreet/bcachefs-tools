@@ -431,14 +431,17 @@ int bch2_accounting_mem_insert(struct bch_fs *c, struct bkey_s_c_accounting a,
 	    !bch2_replicas_marked_locked(c, &r.e))
 		return bch_err_throw(c, btree_insert_need_mark_replicas);
 
-	percpu_up_read(&c->capacity.mark_lock);
+	/*
+	 * Raw of the inner rwsem: our caller holds mark_lock read via
+	 * percpu_read_noio, so PF_MEMALLOC_NOIO stays set across this temporary
+	 * upgrade to write - the raw up/down only move the lock, not the
+	 * memalloc scope.
+	 */
+	percpu_up_read(&c->capacity.mark_lock.lock);
 	int ret;
-	scoped_guard(percpu_write, &c->capacity.mark_lock) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-
+	scoped_guard(percpu_write_noio, &c->capacity.mark_lock)
 		ret = __bch2_accounting_mem_insert(c, a);
-	}
-	percpu_down_read(&c->capacity.mark_lock);
+	percpu_down_read(&c->capacity.mark_lock.lock);
 	return ret;
 }
 
@@ -478,7 +481,7 @@ void __bch2_accounting_maybe_kill(struct bch_fs *c, struct bpos pos)
 		return;
 
 	guard(mutex_noio)(&c->sb_lock);
-	scoped_guard(percpu_write, &c->capacity.mark_lock) {
+	scoped_guard(percpu_write_noio, &c->capacity.mark_lock) {
 
 		struct bch_accounting_mem *acc = &c->accounting;
 
@@ -509,7 +512,7 @@ void bch2_accounting_mem_gc(struct bch_fs *c)
 {
 	struct bch_accounting_mem *acc = &c->accounting;
 
-	guard(percpu_write)(&c->capacity.mark_lock);
+	guard(percpu_write_noio)(&c->capacity.mark_lock);
 	struct accounting_mem_entry *dst = acc->k.data;
 
 	darray_for_each(acc->k, src) {
@@ -538,7 +541,7 @@ int bch2_fs_replicas_usage_read(struct bch_fs *c, darray_char *usage)
 {
 	struct bch_accounting_mem *acc = &c->accounting;
 
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	darray_for_each(acc->k, i) {
 		union {
 			u8 bytes[struct_size_t(struct bch_replicas_usage, r.devs,
@@ -570,7 +573,7 @@ int bch2_fs_accounting_read(struct bch_fs *c, darray_char *out_buf, unsigned acc
 
 	darray_init(out_buf);
 
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	darray_for_each(acc->k, i) {
 		struct disk_accounting_pos a_p;
 		bpos_to_disk_accounting_pos(&a_p, i->pos);
@@ -633,8 +636,7 @@ int bch2_gc_accounting_start(struct bch_fs *c)
 	struct bch_accounting_mem *acc = &c->accounting;
 	int ret = 0;
 
-	guard(percpu_write)(&c->capacity.mark_lock);
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+	guard(percpu_write_noio)(&c->capacity.mark_lock);
 
 	darray_for_each(acc->k, e) {
 		e->v[1] = __alloc_percpu_gfp(e->nr_counters * sizeof(u64),
@@ -658,8 +660,7 @@ int bch2_gc_accounting_done(struct bch_fs *c)
 	struct bpos pos = POS_MIN;
 	int ret = 0;
 
-	guard(percpu_write)(&c->capacity.mark_lock);
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+	guard(percpu_write_noio)(&c->capacity.mark_lock);
 
 	while (1) {
 		unsigned idx = eytzinger0_find_ge(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
@@ -703,11 +704,18 @@ int bch2_gc_accounting_done(struct bch_fs *c)
 			bch2_trans_unlock_long(trans);
 
 			if (fsck_err(c, accounting_mismatch, "%s", buf.buf)) {
-				percpu_up_write(&c->capacity.mark_lock);
+				/*
+				 * Raw drop/retake of just the lock to run
+				 * commit_do: the guard(percpu_write_noio) at the
+				 * top of the function keeps PF_MEMALLOC_NOIO set
+				 * the whole time, even though the trans was
+				 * unlocked above.
+				 */
+				percpu_up_write(&c->capacity.mark_lock.lock);
 				ret = commit_do(trans, NULL, NULL,
 						BCH_TRANS_COMMIT_skip_accounting_apply,
 						bch2_disk_accounting_mod(trans, &acc_k, src_v, nr, false));
-				percpu_down_write(&c->capacity.mark_lock);
+				percpu_down_write(&c->capacity.mark_lock.lock);
 				if (ret)
 					goto err;
 
@@ -1399,7 +1407,7 @@ void bch2_verify_accounting_clean(struct bch_fs *c)
 
 void bch2_accounting_gc_free(struct bch_fs *c)
 {
-	lockdep_assert_held(&c->capacity.mark_lock);
+	lockdep_assert_held(&c->capacity.mark_lock.lock);
 
 	struct bch_accounting_mem *acc = &c->accounting;
 

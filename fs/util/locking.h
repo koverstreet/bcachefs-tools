@@ -9,6 +9,7 @@
 
 #include <linux/cleanup.h>
 #include <linux/mutex.h>
+#include <linux/percpu-rwsem.h>
 #include <linux/sched/mm.h>
 
 /*
@@ -40,6 +41,31 @@ static inline void mutex_noio_init(struct mutex_noio *m)
 DEFINE_LOCK_GUARD_1(mutex_noio, struct mutex_noio,
 		    _T->flags = memalloc_flags_save(PF_MEMALLOC_NOIO); mutex_lock(&_T->lock->lock),
 		    mutex_unlock(&_T->lock->lock); memalloc_flags_restore(_T->flags),
+		    unsigned int flags)
+
+/*
+ * percpu_rwsem_noio - a percpu_rwsem that establishes a PF_MEMALLOC_NOIO scope
+ * while held, the percpu_rwsem analogue of mutex_noio. Used for rwsems like
+ * capacity.mark_lock that are taken over allocating work. Guards mirror the
+ * kernel's percpu_read/percpu_write, with _noio.
+ *
+ * A few hot paths take the lock raw (percpu_down_read on the inner
+ * percpu_rw_semaphore) rather than via the guard - that's sound only where the
+ * caller is already in a NOIO context (e.g. holding a locked btree_trans);
+ * such sites reach through .lock with a comment saying why.
+ */
+struct percpu_rwsem_noio {
+	struct percpu_rw_semaphore	lock;
+};
+
+DEFINE_LOCK_GUARD_1(percpu_read_noio, struct percpu_rwsem_noio,
+		    _T->flags = memalloc_flags_save(PF_MEMALLOC_NOIO); percpu_down_read(&_T->lock->lock),
+		    percpu_up_read(&_T->lock->lock); memalloc_flags_restore(_T->flags),
+		    unsigned int flags)
+
+DEFINE_LOCK_GUARD_1(percpu_write_noio, struct percpu_rwsem_noio,
+		    _T->flags = memalloc_flags_save(PF_MEMALLOC_NOIO); percpu_down_write(&_T->lock->lock),
+		    percpu_up_write(&_T->lock->lock); memalloc_flags_restore(_T->flags),
 		    unsigned int flags)
 
 /*

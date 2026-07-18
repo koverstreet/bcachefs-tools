@@ -909,7 +909,13 @@ do_bch2_trans_commit_to_journal_replay(struct btree_trans *trans,
 	int ret = 0;
 retry:
 	memset(&trans->fs_usage_delta, 0, sizeof(trans->fs_usage_delta));
-	percpu_down_read(&c->capacity.mark_lock);
+	/*
+	 * Raw lock of the inner rwsem, not the percpu_read_noio guard:
+	 * transaction commit runs with the trans locked, so PF_MEMALLOC_NOIO is
+	 * already held, and this read section is released mid-function on the
+	 * revert paths below, which a guard's scope can't express.
+	 */
+	percpu_down_read(&c->capacity.mark_lock.lock);
 	for (accounting = btree_trans_subbuf_base(trans, &trans->accounting);
 	     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
 	     accounting = bkey_next(accounting)) {
@@ -923,7 +929,7 @@ retry:
 
 	/* Only fatal errors are possible later, so no need to revert this */
 	bch2_trans_account_disk_usage_change(trans);
-	percpu_up_read(&c->capacity.mark_lock);
+	percpu_up_read(&c->capacity.mark_lock.lock);
 
 	trans_for_each_update(trans, i) {
 		ret = bch2_journal_key_insert(c, i->btree_id, i->level, i->k);
@@ -967,13 +973,14 @@ retry:
 	return 0;
 fatal_err:
 	bch2_fs_fatal_error(c, "fatal error in transaction commit: %s", bch2_err_str(ret));
-	percpu_down_read(&c->capacity.mark_lock);
+	/* Raw re-take for the revert below; still the trans-locked commit path (NOIO held). */
+	percpu_down_read(&c->capacity.mark_lock.lock);
 revert_fs_usage:
 	for (struct bkey_i *i = btree_trans_subbuf_base(trans, &trans->accounting);
 	     i != accounting;
 	     i = bkey_next(i))
 		bch2_accounting_trans_commit_revert(trans, bkey_i_to_accounting(i), flags);
-	percpu_up_read(&c->capacity.mark_lock);
+	percpu_up_read(&c->capacity.mark_lock.lock);
 
 	if (bch2_err_matches(ret, BCH_ERR_btree_insert_need_mark_replicas)) {
 		ret = drop_locks_do(trans, bch2_accounting_update_sb(trans));
@@ -1138,7 +1145,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		h = h->next;
 	}
 
-	scoped_guard(percpu_read, &c->capacity.mark_lock) {
+	scoped_guard(percpu_read_noio, &c->capacity.mark_lock) {
 		for (struct bkey_i *accounting = btree_trans_subbuf_base(trans, &trans->accounting);
 		     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
 		     accounting = bkey_next(accounting)) {
