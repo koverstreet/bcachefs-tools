@@ -20,6 +20,8 @@
 #include <linux/kthread.h>
 #include <linux/sched/mm.h>
 
+#define JOURNAL_PIN_DEADLOCK_SKIP_MAX	128
+
 static bool __should_discard_bucket(struct journal *j, struct journal_device *ja)
 {
 	unsigned min_free = max(4, ja->nr / 2);
@@ -576,6 +578,16 @@ static enum journal_pin_type journal_pin_type(struct journal_entry_pin *pin,
 		return JOURNAL_PIN_TYPE_other;
 }
 
+static bool journal_pin_is_skipped(struct journal_entry_pin *pin,
+				   struct journal_entry_pin **skipped,
+				   unsigned nr_skipped)
+{
+	for (unsigned i = 0; i < nr_skipped; i++)
+		if (skipped[i] == pin)
+			return true;
+	return false;
+}
+
 static inline bool bch2_journal_pin_set_locked(struct journal *j,
 			struct journal_entry_pin_list *old_l,
 			struct journal_entry_pin_list *new_l,
@@ -742,6 +754,8 @@ journal_get_next_pin(struct journal *j,
 		     u64 seq_to_flush,
 		     unsigned allowed_below_seq,
 		     unsigned allowed_above_seq,
+		     struct journal_entry_pin **skipped,
+		     unsigned nr_skipped,
 		     u64 *seq, journal_pin_flush_fn *flush_fn)
 {
 	guard(percpu_read)(&j->pin_resize_lock);
@@ -766,9 +780,9 @@ journal_get_next_pin(struct journal *j,
 		for (unsigned i = 0; i < JOURNAL_PIN_TYPE_NR; i++)
 			if (((BIT(i) & allowed_below_seq) && *seq <= seq_to_flush) ||
 			    (BIT(i) & allowed_above_seq)) {
-				ret = list_first_entry_or_null(&pin_list->unflushed[i],
-					struct journal_entry_pin, list);
-				if (ret) {
+				list_for_each_entry(ret, &pin_list->unflushed[i], list) {
+					if (journal_pin_is_skipped(ret, skipped, nr_skipped))
+						continue;
 					BUG_ON(j->flush_in_progress);
 					j->flush_in_progress = ret;
 					j->flush_in_progress_dropped = false;
@@ -792,6 +806,14 @@ static size_t journal_flush_pins(struct journal *j,
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct journal_entry_pin *pin;
 	size_t nr_flushed = 0;
+	/*
+	 * journal_reclaim_would_deadlock means "this pin can't be flushed from
+	 * reclaim right now without blocking behind another transaction". Keep a
+	 * bounded per-pass skip set so one contended old pin doesn't hide other
+	 * flushable pins; skipped pins stay unflushed and are retried next pass.
+	 */
+	struct journal_entry_pin *deadlock_skipped[JOURNAL_PIN_DEADLOCK_SKIP_MAX];
+	unsigned nr_deadlock_skipped = 0;
 	int err;
 
 	lockdep_assert_held(&j->reclaim_lock);
@@ -824,17 +846,14 @@ static size_t journal_flush_pins(struct journal *j,
 		u64 seq;
 		journal_pin_flush_fn flush_fn;
 		pin = journal_get_next_pin(j, seq_to_flush, allowed_below, allowed_above,
+					   deadlock_skipped, nr_deadlock_skipped,
 					   &seq, &flush_fn);
 		if (!pin)
 			break;
 
-		if (min_key_cache && pin->flush == bch2_btree_key_cache_journal_flush)
-			min_key_cache--;
-
-		if (min_any)
-			min_any--;
-
+		bool key_cache_pin = flush_fn == bch2_btree_key_cache_journal_flush;
 		u64 start_time = local_clock();
+		bool retry_deadlocked = false;
 		err = flush_fn(j, pin, seq);
 
 		scoped_guard(percpu_read, &j->pin_resize_lock) {
@@ -842,6 +861,8 @@ static size_t journal_flush_pins(struct journal *j,
 
 			guard(spinlock)(&pin_l->lock);
 			enum journal_pin_type type = journal_pin_type(pin, flush_fn);
+			bool would_deadlock =
+				bch2_err_matches(err, BCH_ERR_journal_reclaim_would_deadlock);
 
 			enum bch_time_stats flush_time =
 				type <= JOURNAL_PIN_TYPE_btree0
@@ -854,14 +875,28 @@ static size_t journal_flush_pins(struct journal *j,
 			/* Pin might have been dropped or rearmed: */
 			if (likely(!err && !j->flush_in_progress_dropped))
 				list_move(&pin->list, &pin_l->flushed);
+			else if (would_deadlock && !j->flush_in_progress_dropped &&
+				 nr_deadlock_skipped < ARRAY_SIZE(deadlock_skipped)) {
+				deadlock_skipped[nr_deadlock_skipped++] = pin;
+				retry_deadlocked = true;
+			}
 			j->flush_in_progress = NULL;
 			j->flush_in_progress_dropped = false;
 		}
 
 		wake_up(&j->pin_flush_wait);
 
-		if (err)
+		if (err) {
+			if (retry_deadlocked)
+				continue;
 			break;
+		}
+
+		if (min_key_cache && key_cache_pin)
+			min_key_cache--;
+
+		if (min_any)
+			min_any--;
 
 		nr_flushed++;
 	}
