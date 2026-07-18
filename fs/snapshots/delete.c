@@ -663,10 +663,16 @@ static int check_should_delete_leaf(struct btree_trans *trans, struct bkey_s_c_s
 		return 0;
 	case SNAPSHOT_STATE_will_delete:
 		if (!s.v->subvol) {
-			if (bch2_fs_inconsistent_on(c->sb.version_upgrade_complete >=
-						    bcachefs_metadata_version_per_dev_fragmentation_lru,
-						    c, "snapshot leaf in invalid state\n%s", buf.buf))
-				return 0;
+			/*
+			 * A will_delete leaf with no subvolume backref is safe to
+			 * delete once check_subvols has confirmed no live subvolume
+			 * points at a non-live snapshot (it halts recovery if one
+			 * does). Require that pass - it can run online - rather than
+			 * scanning the subvolumes btree here, or trusting the
+			 * filesystem version, which can't distinguish a legacy
+			 * will_delete leaf from real corruption.
+			 */
+			try(bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_subvols));
 		} else {
 			/*
 			 * Raw lookup, not bch2_subvolume_get(): this is the
