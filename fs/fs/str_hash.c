@@ -80,6 +80,10 @@ static int bch2_fsck_rename_dirent(struct btree_trans *trans,
 
 	char *renamed_buf = errptr_try(bch2_trans_kmalloc(trans, old_name.len + 20));
 
+	/* dirents already at each fsck_renamed-N name, gathered for diagnosis */
+	CLASS(printbuf, collisions)();
+	bool renamed = false;
+
 	for (unsigned i = 0; i < 1000; i++) {
 		new->k.u64s = BKEY_U64s_MAX;
 
@@ -89,18 +93,45 @@ static int bch2_fsck_rename_dirent(struct btree_trans *trans,
 
 		try(bch2_dirent_init_name(c, new, hash_info, &renamed_name, NULL));
 
-		ret = bch2_hash_set_in_snapshot(trans, bch2_dirent_hash_desc, hash_info,
-						(subvol_inum) { 0, old.k->p.inode },
-						old.k->p.snapshot, &new->k_i,
-						BTREE_UPDATE_internal_snapshot_node|
-						STR_HASH_must_create);
-		if (ret && !bch2_err_matches(ret, EEXIST))
+		CLASS(btree_iter_uninit, iter)(trans);
+		struct bkey_s_c dup =
+			bch2_hash_set_or_get_in_snapshot(trans, &iter, bch2_dirent_hash_desc, hash_info,
+							 (subvol_inum) { 0, old.k->p.inode },
+							 old.k->p.snapshot, &new->k_i,
+							 BTREE_UPDATE_internal_snapshot_node|
+							 STR_HASH_must_create);
+		ret = bkey_err(dup);
+		if (ret)
 			break;
-		if (!ret) {
+
+		if (!dup.k) {
 			if (bpos_lt(new->k.p, old.k->p))
 				*updated_before_k_pos = true;
+			renamed = true;
 			break;
 		}
+
+		/* name taken - record a sample of the dirents that hold them */
+		if (i < 10) {
+			prt_newline(&collisions);
+			bch2_bkey_val_to_text(&collisions, c, dup);
+		}
+	}
+
+	if (!ret && !renamed) {
+		CLASS(printbuf, buf)();
+		prt_str(&buf, "couldn't rename dirent to resolve hash collision: all 1000 \"");
+		prt_bytes(&buf, old_name.name, old_name.len);
+		prt_printf(&buf, ".fsck_renamed-N\" names in dir inum %llu snapshot %u are taken\n",
+			   old.k->p.inode, old.k->p.snapshot);
+		prt_str(&buf, "renaming:\n  ");
+		bch2_bkey_val_to_text(&buf, c, old.s_c);
+		prt_str(&buf, "\ncollided with:");
+		scoped_guard(printbuf_indent, &buf)
+			prt_str(&buf, collisions.buf);
+		bch_err(c, "%s", buf.buf);
+
+		ret = bch_err_throw(c, EEXIST_str_hash_set);
 	}
 
 	ret = ret ?: bch2_fsck_update_backpointers(trans, s, desc, hash_info, &new->k_i);
