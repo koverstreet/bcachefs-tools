@@ -1277,7 +1277,7 @@ retry_all:
 
 		do {
 			ret = bch2_btree_cache_cannibalize_lock(trans, &cl);
-			closure_sync(&cl);
+			trans_closure_sync(trans, &cl);
 		} while (ret);
 	}
 

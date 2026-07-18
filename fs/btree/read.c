@@ -1104,7 +1104,7 @@ static int __bch2_btree_root_read(struct btree_trans *trans, enum btree_id id,
 
 	do {
 		ret = bch2_btree_cache_cannibalize_lock(trans, &cl);
-		closure_sync(&cl);
+		trans_closure_sync(trans, &cl);
 	} while (ret);
 
 	b = bch2_btree_node_mem_alloc(trans, level != 0);
