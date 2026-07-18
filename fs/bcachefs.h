@@ -622,6 +622,7 @@ struct bch_dev {
 	x(write_disable_complete)	\
 	x(clean_shutdown)		\
 	x(in_recovery)			\
+	x(running_recovery_passes)	\
 	x(in_fsck)			\
 	x(initial_gc_unfixed)		\
 	x(need_delete_dead_snapshots)	\

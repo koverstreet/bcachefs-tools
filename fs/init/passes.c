@@ -322,7 +322,7 @@ static bool recovery_pass_needs_rewind(struct bch_fs *c,
 				       enum bch_recovery_pass pass)
 {
 	struct bch_fs_recovery *r = &c->recovery;
-	return  test_bit(BCH_FS_in_recovery, &c->flags) &&
+	return  test_bit(BCH_FS_running_recovery_passes, &c->flags) &&
 		r->current_pass > pass &&
 		!(r->passes_complete & BIT_ULL(pass));
 }
@@ -392,7 +392,7 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 
 	out->suppress = false;
 
-	bool in_recovery = test_bit(BCH_FS_in_recovery, &c->flags);
+	bool running = test_bit(BCH_FS_running_recovery_passes, &c->flags);
 	bool ratelimit = flags & RUN_RECOVERY_PASS_ratelimit;
 
 	if (flags & (RUN_RECOVERY_PASS_nopersistent|RUN_RECOVERY_PASS_ephemeral)) {
@@ -424,7 +424,8 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	 * ran, the scheduled_passes_ephemeral backstop reruns it via the async
 	 * runner instead.
 	 */
-	if (in_recovery && !ratelimit && !recovery_pass_should_defer(pass, r->current_passes) &&
+	if (running && !ratelimit &&
+	    (rewind || !recovery_pass_should_defer(pass, r->current_passes)) &&
 	    !(rewind && (flags & RUN_RECOVERY_PASS_ephemeral))) {
 		prt_printf(out, "running recovery pass %s (%u), currently at %s (%u)%s\n",
 			   bch2_recovery_passes[pass], pass,
@@ -494,7 +495,7 @@ int bch2_require_recovery_pass(struct bch_fs *c,
 			       struct printbuf *out,
 			       enum bch_recovery_pass pass)
 {
-	if (test_bit(BCH_FS_in_recovery, &c->flags) &&
+	if (test_bit(BCH_FS_running_recovery_passes, &c->flags) &&
 	    c->recovery.passes_complete & BIT_ULL(pass))
 		return 0;
 
@@ -505,6 +506,13 @@ int bch2_require_recovery_pass(struct bch_fs *c,
 
 	enum bch_run_recovery_pass_flags flags = 0;
 
+	/*
+	 * If the required pass is in our past, __bch2_run_explicit_recovery_pass
+	 * arms a rewind and returns restart_recovery; otherwise it schedules the
+	 * pass and returns 0, and it'll run later - recovery_pass_will_run.
+	 * (restart_recovery must only come from an actually-armed rewind, or the
+	 * loop sees restart_recovery with rewound_to unset and fails.)
+	 */
 	bool write_sb = false;
 	int ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags, &write_sb) ?:
 		bch_err_throw(c, recovery_pass_will_run);
@@ -565,6 +573,14 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 {
 	struct bch_fs_recovery *r = &c->recovery;
 	int ret = 0;
+
+	/*
+	 * The rewind machinery (recovery_pass_needs_rewind, require, __bch2_run)
+	 * keys on this, not BCH_FS_in_recovery: we can rewind whenever the pass
+	 * loop is running, which includes the async runner - not only during
+	 * mount. BCH_FS_in_recovery is cleared before the async runner starts.
+	 */
+	set_bit(BCH_FS_running_recovery_passes, &c->flags);
 
 	spin_lock_irq(&r->lock);
 
@@ -638,6 +654,8 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 
 	r->current_pass = 0;
 	spin_unlock_irq(&r->lock);
+
+	clear_bit(BCH_FS_running_recovery_passes, &c->flags);
 
 	return ret;
 }
