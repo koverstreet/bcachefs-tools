@@ -142,23 +142,16 @@
 	  "Walk subvolume_children btree and remove entries "					\
 	  "not matching a real subvolume with correct "						\
 	  "fs_path_parent")									\
-	x(delete_dead_snapshots,		21, PASS_ONLINE|PASS_FSCK,			\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots),						\
-	  "Delete snapshot data keys across all "						\
-	  "snapshot-bearing btrees, then remove snapshot "					\
-	  "nodes and mark empty interior nodes")						\
 	x(fs_upgrade_for_subvolumes,		22, 0,					0,	\
 	  "One-time migration: set bi_subvol on root inode "					\
 	  "for pre-subvolumes filesystems")							\
 	x(check_inodes,				24, PASS_FSCK,					\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots)|						\
-	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots),						\
 	  "Validate inode fields (mode, flags, i_size, "					\
 	  "bi_subvol), delete orphaned unlinked inodes, "					\
 	  "repair invalid backpointers")							\
 	x(check_extents,			25, PASS_FSCK,					\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
-	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
 	  "Validate extent keys: owning inode exists, "						\
 	  "snapshot valid, no overlaps, i_size and "						\
 	  "i_sectors consistent")								\
@@ -168,14 +161,12 @@
 	  "device pointers whose generation no longer "						\
 	  "matches")										\
 	x(check_dirents,			27, PASS_FSCK,					\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
-	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
 	  "Validate directory entries: target inode exists "					\
 	  "in correct snapshot, d_type matches inode mode, "					\
 	  "hash values correct")								\
 	x(check_xattrs,				28, PASS_FSCK,					\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
-	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
 	  "Validate xattr entries: owning inode exists "					\
 	  "in valid snapshot, hash correct; delete orphans")					\
 	x(check_root,				29, PASS_ONLINE|PASS_FSCK,			\
@@ -209,6 +200,11 @@
 	  "Validate reconcile work/hipri/pending/scan "						\
 	  "btrees against actual extent data; remove "						\
 	  "stale entries")									\
+	x(delete_dead_snapshots,		21, PASS_ONLINE|PASS_FSCK,			\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots),						\
+	  "Delete snapshot data keys across all "						\
+	  "snapshot-bearing btrees, then remove snapshot "					\
+	  "nodes and mark empty interior nodes")						\
 	x(resume_logged_ops,			23, PASS_ALWAYS,			0,	\
 	  "Resume incomplete logged operations "						\
 	  "(fallocate, stripe creation) from logged_ops "					\
