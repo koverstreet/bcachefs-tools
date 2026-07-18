@@ -1253,10 +1253,10 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 
 		if (__fsck_err_on(live_child,
 				trans, repair_flags, bkey_in_deleted_interior_snapshot,
-				"key in deleted interior snapshot %s, migrate to live descendant?",
+				"key in deleted interior snapshot %s, migrating to live descendant %u",
 				(bch2_btree_id_to_text(&buf, iter->btree_id),
 				 prt_char(&buf, ' '),
-				 bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
+				 bch2_bkey_val_to_text(&buf, c, k), buf.buf), live_child))
 			ret = bch2_delete_dead_snapshot_key(trans, iter, k, live_child) ?:
 			      check_key_has_inode_in_snapshot(trans, iter->btree_id,
 							      k.k->p.inode, live_child) ?:
