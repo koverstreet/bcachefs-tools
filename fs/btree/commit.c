@@ -458,6 +458,19 @@ btree_key_can_insert_cached_slowpath(struct btree_trans *trans,
 				kfree(new_k);
 				return ret;
 			}
+
+			/*
+			 * bch2_trans_unlock_long() may drop transaction SRCU and
+			 * invalidate cached paths; the old ck pointer is only
+			 * protected while the cached path is locked/SRCU is held.
+			 * Refresh it after relock, and handle the race where
+			 * another transaction already grew the cached key.
+			 */
+			ck = (void *) path->l[0].b;
+			if (u64s <= ck->u64s) {
+				kfree(new_k);
+				goto have_space;
+			}
 		}
 
 		memcpy(new_k, ck->k, ck->u64s * sizeof(u64));
@@ -471,6 +484,7 @@ btree_key_can_insert_cached_slowpath(struct btree_trans *trans,
 		ck->k		= new_k;
 	}
 
+have_space:
 	if (watermark < BCH_WATERMARK_reclaim &&
 	    !test_bit(BKEY_CACHED_DIRTY, &ck->flags) &&
 	    bch2_btree_key_cache_must_wait(c) &&
