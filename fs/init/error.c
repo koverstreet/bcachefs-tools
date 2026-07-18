@@ -300,19 +300,11 @@ static enum ask_yn bch2_fsck_ask_yn(struct bch_fs *c, struct btree_trans *trans)
 static struct fsck_err_state *fsck_err_get(struct bch_fs *c,
 					   enum bch_sb_error_id id)
 {
-	struct fsck_err_state *s;
+	darray_for_each(c->errors.msgs, i)
+		if ((*i)->id == id)
+			return *i;
 
-	list_for_each_entry(s, &c->errors.msgs, list)
-		if (s->id == id) {
-			/*
-			 * move it to the head of the list: repeated fsck errors
-			 * are common
-			 */
-			list_move(&s->list, &c->errors.msgs);
-			return s;
-		}
-
-	s = kzalloc(sizeof(*s), GFP_NOIO);
+	struct fsck_err_state *s = kzalloc(sizeof(*s), GFP_NOIO);
 	if (!s) {
 		if (!c->errors.msgs_alloc_err)
 			bch_err(c, "kmalloc err, cannot ratelimit fsck errs");
@@ -320,10 +312,38 @@ static struct fsck_err_state *fsck_err_get(struct bch_fs *c,
 		return NULL;
 	}
 
-	INIT_LIST_HEAD(&s->list);
 	s->id = id;
-	list_add(&s->list, &c->errors.msgs);
+
+	if (darray_push(&c->errors.msgs, s)) {
+		if (!c->errors.msgs_alloc_err)
+			bch_err(c, "kmalloc err, cannot ratelimit fsck errs");
+		c->errors.msgs_alloc_err = true;
+		kfree(s);
+		return NULL;
+	}
+
 	return s;
+}
+
+static int fsck_err_nr_cmp(const void *_l, const void *_r)
+{
+	const struct fsck_err_state *l = *((const struct fsck_err_state **) _l);
+	const struct fsck_err_state *r = *((const struct fsck_err_state **) _r);
+
+	return cmp_int(r->nr, l->nr);
+}
+
+void bch2_fsck_err_counts_to_text(struct printbuf *out, struct bch_fs *c)
+{
+	guard(mutex)(&c->errors.msgs_lock);
+
+	sort_nonatomic(c->errors.msgs.data, c->errors.msgs.nr,
+		       sizeof(c->errors.msgs.data[0]), fsck_err_nr_cmp, NULL);
+
+	darray_for_each(c->errors.msgs, i) {
+		bch2_sb_error_id_to_text(out, (*i)->id);
+		prt_printf(out, ": %llu\n", (*i)->nr);
+	}
 }
 
 /* s/fix?/fixing/ s/recreate?/recreating/ */
@@ -744,18 +764,19 @@ int __bch2_bkey_fsck_err(struct bch_fs *c,
 
 static void __bch2_flush_fsck_errs(struct bch_fs *c, bool print)
 {
-	struct fsck_err_state *s, *n;
-
 	guard(mutex)(&c->errors.msgs_lock);
 
-	list_for_each_entry_safe(s, n, &c->errors.msgs, list) {
+	darray_for_each(c->errors.msgs, i) {
+		struct fsck_err_state *s = *i;
+
 		if (print && s->ratelimited && s->last_msg)
 			bch_err(c, "Saw %llu errors like:\n  %s", s->nr, s->last_msg);
 
-		list_del(&s->list);
 		kfree(s->last_msg);
 		kfree(s);
 	}
+
+	darray_exit(&c->errors.msgs);
 }
 
 void bch2_flush_fsck_errs(struct bch_fs *c)
@@ -801,7 +822,7 @@ void bch2_fs_errors_exit(struct bch_fs *c)
 
 void bch2_fs_errors_init_early(struct bch_fs *c)
 {
-	INIT_LIST_HEAD(&c->errors.msgs);
+	darray_init(&c->errors.msgs);
 	mutex_init(&c->errors.msgs_lock);
 
 	mutex_init(&c->errors.counts_lock);

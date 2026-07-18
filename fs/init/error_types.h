@@ -4,8 +4,10 @@
 
 #include "sb/errors_types.h"
 
+struct fsck_err_state;
+
 struct bch_fs_errors {
-	struct list_head	msgs;
+	DARRAY(struct fsck_err_state *)	msgs;
 	struct mutex		msgs_lock;
 	bool			msgs_alloc_err;
 
