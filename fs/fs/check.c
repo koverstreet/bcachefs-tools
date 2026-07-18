@@ -805,8 +805,32 @@ int bch2_fsck_update_backpointers(struct btree_trans *trans,
 	CLASS(inode_walker, target)();
 
 	if (d->v.d_type == DT_SUBVOL) {
-		bch_err(trans->c, "%s does not support DT_SUBVOL", __func__);
-		return bch_err_throw(trans->c, fsck_repair_unimplemented);
+		/*
+		 * A subvolume dirent's backpointer lives on the child
+		 * subvolume's root inode (bi_dir_offset), same as a regular
+		 * inode - see inode_get_dirent(). Resolve child_subvol -> root
+		 * inode and update it. A dangling subvol dirent (subvol or root
+		 * inode gone) is check_subvols/check_dirents' problem, not ours.
+		 */
+		struct bch_subvolume subvol;
+		int ret = bch2_subvolume_get(trans, le32_to_cpu(d->v.d_child_subvol),
+					     false, &subvol);
+		if (bch2_err_matches(ret, ENOENT))
+			return 0;
+		if (ret)
+			return ret;
+
+		struct bch_inode_unpacked root_inode;
+		ret = bch2_inode_find_by_inum_snapshot(trans, le64_to_cpu(subvol.inode),
+						       le32_to_cpu(subvol.snapshot),
+						       &root_inode, 0);
+		if (bch2_err_matches(ret, ENOENT))
+			return 0;
+		if (ret)
+			return ret;
+
+		root_inode.bi_dir_offset = d->k.p.offset;
+		return __bch2_fsck_write_inode(trans, &root_inode);
 	} else {
 		try(get_visible_inodes(trans, &target, s, le64_to_cpu(d->v.d_inum)));
 
