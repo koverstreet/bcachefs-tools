@@ -1257,7 +1257,7 @@ static int stripe_reallocate_outliers(struct btree_trans *trans,
 static bool copygc_can_run_on_devs(struct bch_fs *c,
 				   struct bch_devs_mask *devs)
 {
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	guard(rcu)();
 	for_each_member_device_rcu(c, ca, devs)
 		if (bch2_copygc_dev_wait_amount(ca) <= 0)

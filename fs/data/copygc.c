@@ -246,7 +246,7 @@ static int copygc_dev_list(struct bch_fs *c, darray_copygc_dev *devs, u64 *wait)
 
 	try(darray_make_room(devs, c->sb.nr_devices));
 
-	scoped_guard(percpu_read, &c->capacity.mark_lock)
+	scoped_guard(percpu_read_noio, &c->capacity.mark_lock)
 		scoped_guard(rcu)
 			for_each_rw_member_rcu(c, ca) {
 				s64 v = bch2_copygc_dev_wait_amount(ca);
@@ -302,7 +302,7 @@ static int copygc_dev_get_bucket(struct moving_context *ctxt,
  */
 static bool copygc_dev_still_needed(struct bch_fs *c, struct copygc_dev *d)
 {
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	guard(rcu)();
 	struct bch_dev *ca = bch2_dev_rcu_noerror(c, d->dev);
 
@@ -636,7 +636,7 @@ __cold void bch2_copygc_wait_to_text(struct printbuf *out, struct bch_fs *c)
 	bch2_printbuf_make_room(out, 4096);
 
 	struct task_struct *t;
-	scoped_guard(percpu_read, &c->capacity.mark_lock)
+	scoped_guard(percpu_read_noio, &c->capacity.mark_lock)
 	scoped_guard(rcu) {
 		guard(printbuf_atomic)(out);
 		prt_printf(out, "Currently calculated wait:\n");

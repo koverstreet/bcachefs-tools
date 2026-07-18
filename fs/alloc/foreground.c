@@ -654,7 +654,7 @@ static noinline __cold void bucket_alloc_to_text(struct printbuf *out,
 	if (req->ca) {
 		prt_printf(out, "dev\t%s (%u)\n",	req->ca->name, req->ca->dev_idx);
 		prt_printf(out, "avail\t%llu\n",	__dev_buckets_free(req->ca, req->usage, req->watermark));
-		scoped_guard(percpu_read, &c->capacity.mark_lock)
+		scoped_guard(percpu_read_noio, &c->capacity.mark_lock)
 			prt_printf(out, "copygc dev wait\t%lli\n", bch2_copygc_dev_wait_amount(req->ca));
 	}
 
@@ -786,7 +786,7 @@ again:
 		    c->recovery.pass_done < BCH_RECOVERY_PASS_check_allocations)
 			goto alloc;
 
-		scoped_guard(percpu_read, &c->capacity.mark_lock)
+		scoped_guard(percpu_read_noio, &c->capacity.mark_lock)
 			copygc_can_make_progress = bch2_copygc_can_make_progress(ca);
 		if (copygc_can_make_progress) {
 			req->copygc_can_make_progress = true;
@@ -2166,7 +2166,7 @@ static bool alloc_wait_advanced(struct bch_fs *c, struct alloc_request *req)
 	if (unlikely(req->trace_alloc_failed))
 		return true;
 
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	guard(rcu)();
 	bool found = false;
 

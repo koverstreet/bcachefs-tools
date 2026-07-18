@@ -90,7 +90,7 @@ __bch2_fs_usage_read_short(struct bch_fs *c)
 struct bch_fs_usage_short
 bch2_fs_usage_read_short(struct bch_fs *c)
 {
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	return __bch2_fs_usage_read_short(c);
 }
 
@@ -250,7 +250,7 @@ void bch2_trans_account_disk_usage_change(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
 
-	lockdep_assert_held(&c->capacity.mark_lock);
+	lockdep_assert_held(&c->capacity.mark_lock.lock);
 
 	u64 disk_res_sectors = trans->disk_res ? trans->disk_res->sectors : 0;
 	static int warned_disk_usage = 0;
