@@ -1268,6 +1268,12 @@ LE64_BITMASK(BCH_SB_EXTENT_BP_SHIFT,	struct bch_sb, flags[6], 40, 48);
 LE64_BITMASK(BCH_SB_SCRUB_JOURNAL,	struct bch_sb, flags[6], 48, 50);
 LE64_BITMASK(BCH_SB_EC_MAX_DATA_BLOCKS,	struct bch_sb, flags[6], 50, 58);
 LE64_BITMASK(BCH_SB_MOVE_WRITES_FUA,	struct bch_sb, flags[6], 58, 59);
+/*
+ * Set by `bcachefs dump --sanitize` when it scrubs dirent names: the names
+ * (and therefore their str_hash positions) are meaningless, so fsck must skip
+ * the dirent hash-consistency check rather than "repair" the artifacts.
+ */
+LE64_BITMASK(BCH_SB_DIRENTS_SANITIZED,	struct bch_sb, flags[6], 59, 60);
 
 #define BCH_SB_EXTENT_BP_SHIFT_DEFAULT	10
 

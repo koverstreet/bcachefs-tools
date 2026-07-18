@@ -407,6 +407,16 @@ static inline int bch2_str_hash_check_key(struct btree_trans *trans,
 			    bool *updated_before_k_pos,
 			    bool *repaired_inode)
 {
+	/*
+	 * `bcachefs dump --sanitize` scrubs dirent names in place without
+	 * updating their hash positions, so every dirent looks misplaced and
+	 * same-length names collide. Don't check or "repair" that on such an
+	 * image - the names are meaningless.
+	 */
+	if (desc->btree_id == BTREE_ID_dirents &&
+	    BCH_SB_DIRENTS_SANITIZED(trans->c->disk_sb.sb))
+		return 0;
+
 	return str_hash_key_needs_check(desc, hash_info, hash_k)
 		? __bch2_str_hash_check_key(trans, s, desc, hash_info, hash_k,
 					    updated_before_k_pos, repaired_inode)
