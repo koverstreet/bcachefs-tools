@@ -5,6 +5,8 @@
 #include <linux/list.h>
 #include <linux/rhashtable.h>
 
+#include "util/locking.h"
+
 #include "alloc/buckets_types.h"
 #include "alloc/replicas_types.h"
 
@@ -272,7 +274,7 @@ struct bch_fs_btree_cache {
 	 * common to delete and allocate btree nodes in quick succession. It
 	 * should never grow past ~2-3 nodes in practice.
 	 */
-	struct mutex		lock;
+	struct mutex_noio	lock;
 	struct list_head	freeable;
 	struct list_head	freed_pcpu;
 	struct list_head	freed_nonpcpu;

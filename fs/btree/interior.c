@@ -1614,7 +1614,7 @@ static void bch2_btree_set_root_inmem(struct bch_fs *c, struct btree *b)
 	 * btree_node_permanent and skips. Roots stay on bc->list,
 	 * counted normally; cache_exit's teardown sweep finds them.
 	 */
-	scoped_guard(mutex, &c->btree.cache.lock)
+	scoped_guard(mutex_noio, &c->btree.cache.lock)
 		set_btree_node_permanent(b);
 
 	scoped_guard(mutex, &c->btree.cache.root_lock) {
@@ -2361,7 +2361,7 @@ static int __btree_increase_depth(struct btree_update *as, struct btree_trans *t
 	 * the flag, not by being off-list), so no list/hash work is
 	 * needed here.
 	 */
-	scoped_guard(mutex, &c->btree.cache.lock)
+	scoped_guard(mutex_noio, &c->btree.cache.lock)
 		clear_btree_node_permanent(b);
 
 	bch2_trans_verify_locks(trans);
