@@ -770,7 +770,7 @@ static bool __bch2_btree_flush_all(struct bch_fs *c, unsigned flag)
 	while (true) {
 		struct btree *waiting = NULL, *b;
 
-		scoped_guard(mutex, &bc->lock)
+		scoped_guard(mutex_noio, &bc->lock)
 			list_for_each_entry(b, &bc->freeable, list)
 				if (test_bit(flag, &b->flags)) {
 					waiting = b;
@@ -829,7 +829,7 @@ void bch2_btree_cancel_all_writes(struct bch_fs *c)
 	if (!bc->table_init_done)
 		return;
 
-	scoped_guard(mutex, &bc->lock) {
+	scoped_guard(mutex_noio, &bc->lock) {
 		for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
 			struct btree *b, *t;
 			list_for_each_entry_safe(b, t, &bc->live[i].dirty, list) {
