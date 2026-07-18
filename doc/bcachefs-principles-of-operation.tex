@@ -638,20 +638,21 @@ there counts as two replicas.
 \paragraph{Tiered storage with replication}
 
 Replication interacts with targets naturally: the filesystem satisfies the
-configured \texttt{data\_replicas} count using durability-weighted copies,
-regardless of which target they are on. For example, with
-\texttt{data\_replicas=2}, \texttt{foreground\_target=ssd}, and
+configured \texttt{data\_replicas} count using durability-weighted copies.
+Foreground writes place all of the required durable copies on the foreground
+target; the reconcile subsystem then moves them to the background target. For
+example, with \texttt{data\_replicas=2}, \texttt{foreground\_target=ssd}, and
 \texttt{background\_target=hdd}:
 
 \begin{itemize}
-\item Data is initially written to the SSD target
-\item The background mover copies it to the HDD target
-\item Since both SSD and HDD copies have \texttt{durability=1} by default,
-  each counts as one replica---the two copies together satisfy the replica
-  requirement
-\item To use the SSDs as a pure write cache (data evictable once on HDD),
-  set \texttt{durability=0} on the SSD devices; the allocator will then
-  write two durable copies on the HDD target
+\item Foreground writes place both durable copies on the SSD target, assuming
+  the SSD devices have enough total durability for \texttt{data\_replicas}
+\item Reconcile then moves those copies to the HDD target---both replicas end
+  up on the HDD target, not split one per tier
+\item The SSD retains a copy only as a cache: set \texttt{promote\_target=ssd}
+  to keep a cached copy there for fast reads (added on read, not counted as a
+  replica, and evicted in LRU order under space pressure), or set
+  \texttt{durability=0} on the SSD devices to use them as a pure write cache
 \end{itemize}
 
 See \hyperref[sec:devices]{Device management} in subsystem details for
