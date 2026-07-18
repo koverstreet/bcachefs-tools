@@ -983,6 +983,12 @@ use_clean:
 		bch2_journal_meta(&c->journal);
 	}
 
+	if (c->errors.msgs.nr) {
+		CLASS(printbuf, buf)();
+		bch2_fsck_err_counts_to_text(&buf, c);
+		bch_info(c, "errors this recovery:\n%s", buf.buf);
+	}
+
 	/* If we fixed errors, verify that fs is actually clean now: */
 	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
 	    errors_fixed &&
