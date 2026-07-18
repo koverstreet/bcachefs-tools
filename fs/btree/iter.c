@@ -4159,11 +4159,19 @@ static void bch2_btree_bkey_cached_common_to_text(struct printbuf *out,
 		   c.n[0], c.n[1], c.n[2], pid);
 }
 
+static char btree_lock_type_char(int lock_type)
+{
+	static const char lock_types[] = { 'r', 'i', 'w' };
+
+	return lock_type >= 0 && lock_type < ARRAY_SIZE(lock_types)
+		? lock_types[lock_type]
+		: '?';
+}
+
 __cold
 void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 {
 	struct btree_bkey_cached_common *b;
-	static char lock_types[] = { 'r', 'i', 'w' };
 	struct task_struct *task = READ_ONCE(trans->locking_wait.task);
 	unsigned l, idx;
 
@@ -4204,10 +4212,12 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 		prt_newline(out);
 
 		for (l = 0; l < BTREE_MAX_DEPTH; l++) {
-			if (btree_node_locked(path, l) &&
+			int lock_type = btree_node_locked_type(path, l);
+
+			if (lock_type != BTREE_NODE_UNLOCKED &&
 			    !IS_ERR_OR_NULL(b = (void *) READ_ONCE(path->l[l].b))) {
 				prt_printf(out, "    %c l=%u ",
-					   lock_types[btree_node_locked_type(path, l)], l);
+					   btree_lock_type_char(lock_type), l);
 				bch2_btree_bkey_cached_common_to_text(out, b);
 				prt_newline(out);
 			}
@@ -4217,7 +4227,8 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 	b = READ_ONCE(trans->locking);
 	if (b) {
 		prt_printf(out, "  blocked on:\n");
-		prt_printf(out, "    %c", lock_types[trans->locking_wait.lock_want]);
+		prt_printf(out, "    %c",
+			   btree_lock_type_char(READ_ONCE(trans->locking_wait.lock_want)));
 		bch2_btree_bkey_cached_common_to_text(out, b);
 		prt_newline(out);
 	}
