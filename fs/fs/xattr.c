@@ -533,7 +533,7 @@ static int __bch2_xattr_bcachefs_set(const struct xattr_handler *handler,
 	struct inode_opt_set s = { .id = inode_opt_id, .defined = value != NULL };
 	u64 v = 0;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 	guard(opt_change_lock)(c);
 	CLASS(opt_change_scope, opt_scope)(c);
 

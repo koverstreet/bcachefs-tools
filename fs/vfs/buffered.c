@@ -705,9 +705,9 @@ do_io:
 int bch2_writepages(struct address_space *mapping, struct writeback_control *wbc)
 {
 	struct bch_fs *c = mapping->host->i_sb->s_fs_info;
-	struct bch_writepage_state *w = kzalloc(sizeof(*w), GFP_NOFS|__GFP_NOFAIL);
+	struct bch_writepage_state *w = kzalloc(sizeof(*w), GFP_NOIO|__GFP_NOFAIL);
 
-	w->tmp = mempool_alloc(&c->vfs.writepage_buf_pool, GFP_NOFS);
+	w->tmp = mempool_alloc(&c->vfs.writepage_buf_pool, GFP_NOIO);
 
 	bch2_inode_opts_get_inode(c, &to_bch_ei(mapping->host)->ei_inode, &w->opts);
 

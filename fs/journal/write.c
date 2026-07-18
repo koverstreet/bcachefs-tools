@@ -174,7 +174,7 @@ static void journal_buf_realloc(struct journal *j, struct journal_buf *buf)
 	if (bch2_btree_write_buffer_resize(c, btree_write_buffer_size))
 		return;
 
-	new_buf = kvmalloc(new_size, GFP_NOFS|__GFP_NOWARN);
+	new_buf = kvmalloc(new_size, GFP_NOIO|__GFP_NOWARN);
 	if (!new_buf)
 		return;
 
@@ -557,7 +557,7 @@ static CLOSURE_CALLBACK(journal_write_submit)
 		 */
 		struct bio *bio = bch2_bio_map_and_chain(ca->disk_sb.bdev,
 				w->data, sectors << 9, ptr->offset,
-				opf, GFP_NOFS, &ja->bio_set);
+				opf, GFP_NOIO, &ja->bio_set);
 		struct journal_bio *jbio =
 			container_of(bio, struct journal_bio, bio);
 
@@ -597,7 +597,7 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 			struct bio *bio = bio_alloc_bioset(ca->disk_sb.bdev, 0,
 					REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|
 					REQ_META|REQ_PREFLUSH,
-					GFP_NOFS, &ja->bio_set);
+					GFP_NOIO, &ja->bio_set);
 			struct journal_bio *jbio = container_of(bio, struct journal_bio, bio);
 
 			jbio->ca		= ca;
@@ -789,7 +789,7 @@ CLOSURE_CALLBACK(bch2_journal_write)
 	BUG_ON(w->write_allocated);
 	BUG_ON(w->write_done);
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	j->write_start_time = local_clock();
 

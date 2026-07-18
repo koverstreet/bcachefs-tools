@@ -476,7 +476,7 @@ void bch2_fs_read_only(struct bch_fs *c)
 		bch2_verify_accounting_clean(c);
 	} else {
 		/* Make sure error counts/counters are persisted */
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 		guard(mutex)(&c->sb_lock);
 		bch2_write_super(c);
 
@@ -603,7 +603,7 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 	set_bit(BCH_FS_was_rw, &c->flags);
 
 	if (test_and_clear_bit(BCH_FS_sb_dirty, &c->flags)) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 		guard(mutex)(&c->sb_lock);
 		bch2_write_super(c);
 	}
@@ -1023,7 +1023,7 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 	if (c->opts.journal_rewind)
 		prt_printf(out, "rewinding journal, fsck required\n");
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&c->sb_lock);
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 
@@ -1204,7 +1204,7 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 
 	try(bch2_fs_capacity_init(c));
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&c->sb_lock);
 		try(bch2_sb_to_fs(c, sb));
 
@@ -1567,7 +1567,7 @@ int bch2_fs_resize_on_mount(struct bch_fs *c)
 				return ret;
 			}
 
-			scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+			scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 				guard(mutex)(&c->sb_lock);
 				struct bch_member *m =
 					bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);

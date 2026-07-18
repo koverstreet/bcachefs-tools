@@ -675,7 +675,7 @@ static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
 
 	u64 start_time = local_clock();
 	guard(mutex)(&bc->lock);
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	/*
 	 * It's _really_ critical that we don't free too many btree nodes - we
@@ -1672,7 +1672,7 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 		drain_workqueue(c->btree.write_complete_wq);
 
 	/* vfree() can allocate memory: */
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&bc->lock);
 
 		for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {

@@ -903,7 +903,7 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 	struct bch_csum csum;
 	int ret;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	if (bch2_read_corrupt_device == rbio->pick.ptr.dev ||
 	    bch2_read_corrupt_device < 0)
@@ -1243,11 +1243,11 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 		rbio = rbio_init_fragment(bio_alloc_bioset(NULL,
 						  DIV_ROUND_UP(sectors, PAGE_SECTORS),
 						  0,
-						  GFP_NOFS,
+						  GFP_NOIO,
 						  &c->bio_read_split),
 				 orig, failed);
 
-		gfp_t gfp = GFP_NOFS;
+		gfp_t gfp = GFP_NOIO;
 
 		/*
 		 * Only skip zeroing if we can detect if the device lied and
@@ -1272,7 +1272,7 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 		 * from the whole bio, in which case we don't want to retry and
 		 * lose the error)
 		 */
-		rbio = rbio_init_fragment(bio_alloc_clone(NULL, &orig->bio, GFP_NOFS,
+		rbio = rbio_init_fragment(bio_alloc_clone(NULL, &orig->bio, GFP_NOIO,
 						 &c->bio_read_split),
 				 orig, failed);
 		rbio->bio.bi_iter = iter;

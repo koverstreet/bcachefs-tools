@@ -1141,7 +1141,7 @@ int bch2_check_allocations(struct bch_fs *c)
 		bch2_gc_reflink_done(c);
 out:
 	scoped_guard(percpu_write, &c->capacity.mark_lock) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 		/* Indicates that gc is no longer in progress: */
 		__gc_pos_set(c, gc_phase(GC_PHASE_not_running));
@@ -1266,7 +1266,7 @@ int bch2_gc_gens(struct bch_fs *c)
 	event_inc_trace(c, gc_gens_end, buf);
 
 	if (!(c->sb.compat & BIT_ULL(BCH_COMPAT_no_stale_ptrs))) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 		guard(mutex)(&c->sb_lock);
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
 		bch2_write_super(c);

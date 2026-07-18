@@ -1113,7 +1113,7 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
 	 * Free this device's slot in the bch_member array - all pointers to
 	 * this device must be gone:
 	 */
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&c->sb_lock);
 		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx);
 
@@ -1219,7 +1219,7 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 	}
 
 	scoped_guard(rwsem_write, &c->state_lock) {
-		scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+		scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 			guard(mutex)(&c->sb_lock);
 			SET_BCH_SB_MULTI_DEVICE(c->disk_sb.sb, true);
 
@@ -1374,7 +1374,7 @@ int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
 		}
 	}
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&c->sb_lock);
 		bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount =
 			cpu_to_le64(ktime_get_real_seconds());
@@ -1480,7 +1480,7 @@ int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets, struct p
 		return ret;
 	}
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&c->sb_lock);
 		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 		m->nbuckets = cpu_to_le64(nbuckets);

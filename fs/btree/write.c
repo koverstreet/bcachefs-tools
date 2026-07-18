@@ -527,7 +527,7 @@ do_write:
 	wbio = container_of(bio_alloc_bioset(NULL,
 				buf_nr_bvecs(data, sectors_to_write << 9),
 				REQ_OP_WRITE|REQ_META|REQ_SYNC|REQ_IDLE,
-				GFP_NOFS,
+				GFP_NOIO,
 				&c->btree.bio),
 			    struct btree_write_bio, wbio.bio);
 	wbio_init(&wbio->wbio.bio);

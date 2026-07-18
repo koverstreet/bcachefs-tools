@@ -256,7 +256,7 @@ static int bch2_ioc_setlabel(struct bch_fs *c,
 	try(mnt_want_write_file(file));
 
 	int ret;
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&c->sb_lock);
 		strscpy(c->disk_sb.sb->label, label, BCH_SB_LABEL_SIZE);
 		ret = bch2_write_super(c);

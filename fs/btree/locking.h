@@ -75,8 +75,8 @@ static inline void trans_set_locked(struct btree_trans *trans, bool try)
 		trans->last_unlock_ip = 0;
 		lock_acquire_exclusive(&trans->dep_map, 0, try, NULL, _THIS_IP_);
 
-		trans->pf_memalloc_nofs = (current->flags & PF_MEMALLOC_NOFS) != 0;
-		current->flags |= PF_MEMALLOC_NOFS;
+		trans->pf_memalloc_noio = (current->flags & PF_MEMALLOC_NOIO) != 0;
+		current->flags |= PF_MEMALLOC_NOIO;
 
 		trans_maybe_disable_migrate(trans);
 	}
@@ -89,8 +89,8 @@ static inline void trans_set_unlocked(struct btree_trans *trans)
 		trans->last_unlock_ip = _RET_IP_;
 		lock_release(&trans->dep_map, _THIS_IP_);
 
-		if (!trans->pf_memalloc_nofs)
-			current->flags &= ~PF_MEMALLOC_NOFS;
+		if (!trans->pf_memalloc_noio)
+			current->flags &= ~PF_MEMALLOC_NOIO;
 	}
 }
 

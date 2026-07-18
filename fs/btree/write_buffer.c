@@ -605,7 +605,7 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 
 	try(bch2_journal_error(&c->journal));
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		if (!wb->flushing.keys.nr) {
 			guard(mutex)(&wb->inc.lock);
 			move_keys_from_inc_to_flushing(wb);
@@ -1199,7 +1199,7 @@ static void bch2_btree_write_buffer_flush_work_fn(struct work_struct *work)
 	struct bch_fs *c = wb->c;
 	enum wb_flush_caller caller = READ_ONCE(wb->flush_work_caller);
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&wb->flushing.lock);
 		CLASS(btree_trans, trans)(c);
 		while (1) {

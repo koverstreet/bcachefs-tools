@@ -249,7 +249,7 @@ void *bch2_btree_bounce_alloc_noprof(struct bch_fs *c, size_t size, bool *used_m
 {
 	BUG_ON(size > c->opts.btree_node_size);
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	*used_mempool = false;
 #if defined(__KERNEL__) && LINUX_VERSION_CODE < KERNEL_VERSION(6,18,0)
@@ -266,7 +266,7 @@ void *bch2_btree_bounce_alloc_noprof(struct bch_fs *c, size_t size, bool *used_m
 #endif
 	if (!p) {
 		*used_mempool = true;
-		p = mempool_alloc_noprof(&c->btree.bounce_pool, GFP_NOFS|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
+		p = mempool_alloc_noprof(&c->btree.bounce_pool, GFP_NOIO|__GFP_ACCOUNT|__GFP_RECLAIMABLE);
 	}
 	return p;
 }
