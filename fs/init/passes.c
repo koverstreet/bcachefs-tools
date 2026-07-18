@@ -533,20 +533,22 @@ static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
 	s64 start_time = ktime_get_real_seconds();
 	int ret = p->fn(c);
 	if (ret) {
-		s64 end_time = ktime_get_real_seconds();
-		bch_err(c, "%s(): error %s", p->name, bch2_err_str(ret));
-		r->passes_failing |= BIT_ULL(pass);
-		/*
-		 * Ratelimit retries the same way the sb ratelimits expensive
-		 * passes, but in memory - a failing pass doesn't get to write
-		 * the superblock. flags stays 0, so this throttle applies even
-		 * to passes the sb marks NO_RATELIMIT: that flag is about not
-		 * throttling successful reruns, not about hammering failures.
-		 */
-		r->passes_failing_ratelimit[pass] = (struct recovery_pass_entry) {
-			.last_run	= cpu_to_le64(end_time),
-			.last_runtime	= cpu_to_le32(max(0, end_time - start_time)),
-		};
+		if (!bch2_err_matches(ret, BCH_ERR_restart_recovery)) {
+			s64 end_time = ktime_get_real_seconds();
+			bch_err(c, "%s(): error %s", p->name, bch2_err_str(ret));
+			r->passes_failing |= BIT_ULL(pass);
+			/*
+			 * Ratelimit retries the same way the sb ratelimits expensive
+			 * passes, but in memory - a failing pass doesn't get to write
+			 * the superblock. flags stays 0, so this throttle applies even
+			 * to passes the sb marks NO_RATELIMIT: that flag is about not
+			 * throttling successful reruns, not about hammering failures.
+			 */
+			r->passes_failing_ratelimit[pass] = (struct recovery_pass_entry) {
+				.last_run	= cpu_to_le64(end_time),
+				.last_runtime	= cpu_to_le32(max(0, end_time - start_time)),
+			};
+		}
 		return ret;
 	}
 
