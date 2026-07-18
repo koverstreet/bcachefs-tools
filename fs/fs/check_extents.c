@@ -93,9 +93,18 @@ fsck_err:
 
 static int check_i_sectors(struct btree_trans *trans, struct inode_walker *w)
 {
+	/*
+	 * Counting i_sectors spans too many extents to fit one transaction, so
+	 * this is a nested transaction: the inner commits (bch2_fsck_write_inode)
+	 * discard the fsck_err logs queued here and we return a restart. Exempt
+	 * those begins from the dropped-updates warning for the duration.
+	 */
 	u32 restart_count = trans->restart_count;
-	return check_i_sectors_notnested(trans, w) ?:
-		trans_was_restarted(trans, restart_count);
+	trans->begin_may_drop_updates = true;
+	int ret = check_i_sectors_notnested(trans, w);
+	trans->begin_may_drop_updates = false;
+
+	return ret ?: trans_was_restarted(trans, restart_count);
 }
 
 struct extent_end {

@@ -3766,7 +3766,8 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 	 */
 	WARN_ON_ONCE(IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
 		     bch2_trans_has_updates(trans) &&
-		     !trans->restarted && !trans->in_traverse_all);
+		     !trans->restarted && !trans->in_traverse_all &&
+		     !trans->begin_may_drop_updates);
 
 	bch2_trans_reset_updates(trans);
 
