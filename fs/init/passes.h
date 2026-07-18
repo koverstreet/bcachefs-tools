@@ -17,6 +17,13 @@ void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *, enum bch_recovery_pass
 enum bch_run_recovery_pass_flags {
 	RUN_RECOVERY_PASS_nopersistent	= BIT(0),
 	RUN_RECOVERY_PASS_ratelimit	= BIT(1),
+	/*
+	 * Schedule ephemerally (like nopersistent) but without taking sb_lock,
+	 * so it's safe from contexts that hold btree locks (e.g. triggers): the
+	 * schedule touches only in-memory recovery state and never writes the
+	 * superblock. The need is re-derivable, so persistence isn't required.
+	 */
+	RUN_RECOVERY_PASS_ephemeral	= BIT(2),
 };
 
 static inline bool go_rw_in_recovery(struct bch_fs *c)

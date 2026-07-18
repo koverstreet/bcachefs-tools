@@ -380,7 +380,8 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 {
 	struct bch_fs_recovery *r = &c->recovery;
 
-	lockdep_assert_held(&c->sb_lock.lock);
+	if (!(flags & RUN_RECOVERY_PASS_ephemeral))
+		lockdep_assert_held(&c->sb_lock.lock);
 
 	bch2_printbuf_make_room(out, 1024);
 	guard(printbuf_atomic)(out);
@@ -394,7 +395,7 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	bool in_recovery = test_bit(BCH_FS_in_recovery, &c->flags);
 	bool ratelimit = flags & RUN_RECOVERY_PASS_ratelimit;
 
-	if (flags & RUN_RECOVERY_PASS_nopersistent) {
+	if (flags & (RUN_RECOVERY_PASS_nopersistent|RUN_RECOVERY_PASS_ephemeral)) {
 		r->scheduled_passes_ephemeral |= BIT_ULL(pass);
 	} else {
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
@@ -414,9 +415,17 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	else
 		r->passes_ratelimiting &= ~BIT_ULL(pass);
 
-	if (in_recovery && !ratelimit && !recovery_pass_should_defer(pass, r->current_passes)) {
-		bool rewind = recovery_pass_needs_rewind(c, pass);
+	bool rewind = recovery_pass_needs_rewind(c, pass);
 
+	/*
+	 * Ephemeral scheduling is best-effort and must never rewind: the caller
+	 * may be a BTREE_TRIGGER_atomic trigger committed to its commit, which
+	 * can't restart recovery (and ignores our return). If the pass already
+	 * ran, the scheduled_passes_ephemeral backstop reruns it via the async
+	 * runner instead.
+	 */
+	if (in_recovery && !ratelimit && !recovery_pass_should_defer(pass, r->current_passes) &&
+	    !(rewind && (flags & RUN_RECOVERY_PASS_ephemeral))) {
 		prt_printf(out, "running recovery pass %s (%u), currently at %s (%u)%s\n",
 			   bch2_recovery_passes[pass], pass,
 			   bch2_recovery_passes[r->current_pass], r->current_pass,
@@ -455,6 +464,18 @@ int bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	if (!(flags & RUN_RECOVERY_PASS_ratelimit) &&
 	    !recovery_pass_needs_set(c, pass, &flags))
 		return 0;
+
+	/*
+	 * An ephemeral schedule only touches in-memory recovery state under
+	 * r->lock and never writes the superblock, so it doesn't need (and must
+	 * not take) sb_lock - callers may hold btree locks:
+	 */
+	if (flags & RUN_RECOVERY_PASS_ephemeral) {
+		bool write_sb = false;
+		int ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags, &write_sb);
+		WARN_ON(write_sb);
+		return ret;
+	}
 
 	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
