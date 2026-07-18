@@ -1153,18 +1153,32 @@ static int check_inode(struct btree_trans *trans,
 			goto do_update;
 		}
 
+		struct bch_snapshot snapshot;
+		int snapshot_ret = bch2_snapshot_lookup(trans, u.bi_snapshot, &snapshot);
+		if (snapshot_ret && !bch2_err_matches(snapshot_ret, ENOENT))
+			return snapshot_ret;
+
+		printbuf_reset(&buf);
+		bch2_inode_unpacked_to_text(&buf, &u);
+		prt_printf(&buf, "\nsnapshot %u: ", u.bi_snapshot);
+		if (!snapshot_ret)
+			bch2_snapshot_to_text(&buf, &snapshot);
+		else
+			prt_str(&buf, "(missing)");
+
 		if (fsck_err_on(ret,
 				trans, inode_bi_subvol_missing,
-				"inode %llu:%u bi_subvol points to missing subvolume %u",
-				u.bi_inum, k.k->p.snapshot, u.bi_subvol) ||
+				"inode bi_subvol points to missing subvolume %u\n%s",
+				u.bi_subvol, buf.buf) ||
 		    fsck_err_on(le64_to_cpu(s.inode) != u.bi_inum ||
 				!bch2_snapshot_is_ancestor(trans, le32_to_cpu(s.snapshot),
 							   k.k->p.snapshot),
 				trans, inode_bi_subvol_wrong,
-				"inode %llu:%u points to subvol %u, but subvol points to %llu:%u",
-				u.bi_inum, k.k->p.snapshot, u.bi_subvol,
+				"inode points to subvol %u, but subvol points to %llu:%u\n%s",
+				u.bi_subvol,
 				le64_to_cpu(s.inode),
-				le32_to_cpu(s.snapshot))) {
+				le32_to_cpu(s.snapshot),
+				buf.buf)) {
 			u.bi_subvol = 0;
 			u.bi_parent_subvol = 0;
 			do_update = true;
