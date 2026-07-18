@@ -82,6 +82,12 @@ pub struct Cli {
     #[arg(short, long, action = clap::ArgAction::Count)]
     verbose: u8,
 
+    /// Open without starting the filesystem (no recovery, no journal): only
+    /// `sb get`/`sb set` work, the btree is inaccessible. For superblock edits
+    /// on an image that can't or shouldn't be started.
+    #[arg(long)]
+    nostart: bool,
+
     #[arg(required(true))]
     devices: Vec<PathBuf>,
 }
@@ -540,11 +546,15 @@ impl KvdbFs {
     }
 }
 
-fn run_line(kvdb_fs: &KvdbFs, line: &str) -> Result<()> {
+fn run_line(kvdb_fs: &KvdbFs, nostart: bool, line: &str) -> Result<()> {
     let args: Vec<&str> = line.split_whitespace().collect();
     let Some((&op, args)) = args.split_first() else {
         return Ok(());
     };
+
+    if nostart && !matches!(op, "sb" | "help" | "?") {
+        bail!("--nostart: the btree isn't started, only sb commands are available");
+    }
 
     let out = match op {
         "get" | "peek" | "peek_prev" => {
@@ -663,6 +673,10 @@ fn kvdb(cli: Cli) -> Result<()> {
     if cli.verbose > 0 {
         opt_set!(fs_opts, verbose, 1);
     }
+    // sb-only mode: open the sb but don't run recovery or touch the btree.
+    if cli.nostart {
+        opt_set!(fs_opts, nostart, 1);
+    }
 
     let kvdb_fs = match crate::device_scan::open_online_or_offline(&cli.devices, fs_opts)? {
         OpenedFs::Offline(fs) => KvdbFs::Offline(fs),
@@ -690,7 +704,7 @@ fn kvdb(cli: Cli) -> Result<()> {
 
     if !cli.commands.is_empty() {
         for line in &cli.commands {
-            run_line(fs, line)?;
+            run_line(fs, cli.nostart, line)?;
         }
         return Ok(());
     }
@@ -706,7 +720,7 @@ fn kvdb(cli: Cli) -> Result<()> {
         let line = line?;
         // In a piped script an error must abort (a test's later commands
         // likely depend on earlier ones); interactively, report and go on.
-        match run_line(fs, &line) {
+        match run_line(fs, cli.nostart, &line) {
             Err(e) if interactive => eprintln!("{e}"),
             other => other?,
         }
