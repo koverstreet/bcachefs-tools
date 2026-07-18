@@ -116,8 +116,19 @@ static int readpage_bio_extend(struct btree_trans *trans,
 			       unsigned sectors_this_extent,
 			       bool get_more)
 {
-	/* Don't hold btree locks while allocating memory: */
-	bch2_trans_unlock_long(trans);
+	/*
+	 * This helper only extends an already allocated read bio.  The caller
+	 * resumes the same extent iterator afterwards, so keep the transaction's
+	 * SRCU read lock: unlock_long() may invalidate cached btree paths that a
+	 * plain relock/iterator continuation still depends on.
+	 *
+	 * For speculative folios past the initial readahead set, avoid blocking
+	 * reclaim while SRCU is held by using nonblocking allocation/attachment.
+	 * If that cannot be done immediately, stop extending this bio; the
+	 * caller will submit what it has and later reads can come through the
+	 * normal path.
+	 */
+	bch2_trans_unlock(trans);
 
 	while (bio_sectors(bio) < sectors_this_extent &&
 	       bio->bi_vcnt < bio->bi_max_vecs) {
@@ -146,20 +157,22 @@ static int readpage_bio_extend(struct btree_trans *trans,
 			if (folio && !xa_is_value(folio))
 				break;
 
+			gfp_t gfp = readahead_gfp_mask(iter->mapping) & ~__GFP_DIRECT_RECLAIM;
+
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,19,0)
-			folio = filemap_alloc_folio(readahead_gfp_mask(iter->mapping), order);
+			folio = filemap_alloc_folio(gfp, order);
 #else
-			folio = filemap_alloc_folio(readahead_gfp_mask(iter->mapping), order, NULL);
+			folio = filemap_alloc_folio(gfp, order, NULL);
 #endif
 			if (!folio)
 				break;
 
-			if (!__bch2_folio_create(folio, GFP_KERNEL)) {
+			if (!__bch2_folio_create(folio, gfp)) {
 				folio_put(folio);
 				break;
 			}
 
-			ret = filemap_add_folio(iter->mapping, folio, folio_offset, GFP_KERNEL);
+			ret = filemap_add_folio(iter->mapping, folio, folio_offset, gfp);
 			if (ret) {
 				__bch2_folio_release(folio);
 				folio_put(folio);
