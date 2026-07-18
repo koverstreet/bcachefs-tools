@@ -1109,8 +1109,7 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 					prt_printf(&msg.m, " dev%u", i);
 			}
 
-			guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-			guard(mutex)(&c->sb_lock);
+			guard(mutex_noio)(&c->sb_lock);
 			for_each_set_bit(i, stats.devs_error_uncorrected.d, BCH_SB_MEMBERS_MAX) {
 				struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, i);
 				if (m)

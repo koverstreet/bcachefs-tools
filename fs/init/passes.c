@@ -129,7 +129,7 @@ static struct recovery_pass_entry *bch2_sb_recovery_pass_entry(struct bch_fs *c,
 {
 	enum bch_recovery_pass_stable stable = bch2_recovery_pass_to_stable(pass);
 
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_sb_field_recovery_passes *r =
 		bch2_sb_field_get(c->disk_sb.sb, recovery_passes);
@@ -151,8 +151,7 @@ static void bch2_sb_recovery_pass_complete(struct bch_fs *c,
 					   enum bch_recovery_pass pass,
 					   s64 start_time)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 	__clear_bit_le64(bch2_recovery_pass_to_stable(pass),
 			 ext->recovery_passes_required);
@@ -175,8 +174,7 @@ static void bch2_sb_recovery_pass_complete(struct bch_fs *c,
 void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *c,
 					 enum bch_recovery_pass pass)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	struct recovery_pass_entry *e = bch2_sb_recovery_pass_entry(c, pass);
 	if (e && !BCH_RECOVERY_PASS_NO_RATELIMIT(e)) {
@@ -188,7 +186,7 @@ void bch2_recovery_pass_set_no_ratelimit(struct bch_fs *c,
 static bool bch2_recovery_pass_entry_get_locked(struct bch_fs *c, enum bch_recovery_pass pass,
 						struct recovery_pass_entry *e)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_sb_field_recovery_passes *r =
 		bch2_sb_field_get(c->disk_sb.sb, recovery_passes);
@@ -228,8 +226,7 @@ static bool bch2_recovery_pass_want_ratelimit_locked(struct bch_fs *c, enum bch_
 bool bch2_recovery_pass_want_ratelimit(struct bch_fs *c, enum bch_recovery_pass pass,
 				       unsigned runtime_fraction)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	return bch2_recovery_pass_want_ratelimit_locked(c, pass, runtime_fraction);
 }
 
@@ -383,7 +380,7 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 {
 	struct bch_fs_recovery *r = &c->recovery;
 
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	bch2_printbuf_make_room(out, 1024);
 	guard(printbuf_atomic)(out);
@@ -459,8 +456,7 @@ int bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	    !recovery_pass_needs_set(c, pass, &flags))
 		return 0;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 	int ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags, &write_sb);
 	if (write_sb)
@@ -481,8 +477,7 @@ int bch2_require_recovery_pass(struct bch_fs *c,
 	    c->recovery.passes_complete & BIT_ULL(pass))
 		return 0;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	if (bch2_recovery_pass_want_ratelimit_locked(c, pass, 100))
 		return 0;

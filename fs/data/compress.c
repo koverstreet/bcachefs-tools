@@ -687,8 +687,7 @@ static int __bch2_check_set_has_compressed_data(struct bch_fs *c, u64 f)
 	if ((c->sb.features & f) == f)
 		return 0;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	if ((c->sb.features & f) == f)
 		return 0;

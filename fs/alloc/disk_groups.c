@@ -138,7 +138,7 @@ int bch2_sb_disk_groups_to_cpu(struct bch_fs *c)
 	struct bch_disk_groups_cpu *cpu_g, *old_g;
 	unsigned i, g, nr_groups;
 
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	groups		= bch2_sb_field_get(c->disk_sb.sb, disk_groups);
 	nr_groups	= disk_groups_nr(groups);
@@ -177,7 +177,7 @@ int bch2_sb_disk_groups_to_cpu(struct bch_fs *c)
 	}
 
 	old_g = rcu_dereference_protected(c->disk_groups,
-				lockdep_is_held(&c->sb_lock));
+				lockdep_is_held(&c->sb_lock.lock));
 	rcu_assign_pointer(c->disk_groups, cpu_g);
 	if (old_g)
 		kfree_rcu(old_g, rcu);
@@ -476,7 +476,7 @@ static int dev_label_resolve(struct bch_fs *c, const char *name)
 
 int __bch2_dev_group_set(struct bch_fs *c, struct bch_dev *ca, const char *name)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	int v = dev_label_resolve(c, name);
 	if (v < 0)
@@ -495,7 +495,7 @@ int bch2_opt_disk_label_parse(struct bch_fs *c, const char *val, u64 *res,
 	if (!c)
 		return -BCH_ERR_option_needs_open_fs;
 
-	scoped_guard(mutex, &c->sb_lock) {
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		int v = dev_label_resolve(c, val);
 		if (v < 0)
 			return v;
@@ -541,7 +541,7 @@ int bch2_opt_target_parse(struct bch_fs *c, const char *val, u64 *res,
 		return 0;
 	}
 
-	scoped_guard(mutex, &c->sb_lock)
+	scoped_guard(mutex_noio, &c->sb_lock)
 		g = bch2_disk_path_find(&c->disk_sb, val);
 
 	if (g >= 0) {

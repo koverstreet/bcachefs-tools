@@ -899,7 +899,7 @@ int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 	if (do_reconcile_scan)
 		try(bch2_set_reconcile_needs_scan(c, s, false));
 
-	scoped_guard(mutex, &c->sb_lock) {
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 		SET_BCH_MEMBER_STATE(m, new_state);
 		bch2_write_super(c);
@@ -1068,7 +1068,7 @@ static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 		goto err;
 	}
 
-	scoped_guard(mutex, &c->sb_lock)
+	scoped_guard(mutex_noio, &c->sb_lock)
 		rcu_assign_pointer(c->devs[ca->dev_idx], NULL);
 
 #ifndef CONFIG_BCACHEFS_DEBUG
@@ -1113,8 +1113,7 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
 	 * Free this device's slot in the bch_member array - all pointers to
 	 * this device must be gone:
 	 */
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx);
 
 		if (fast_device_removal)
@@ -1131,7 +1130,7 @@ int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
 static int bch2_dev_set_initialized(struct bch_fs *c, struct bch_dev *ca,
 				    enum bch_member_initialized state)
 {
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 	SET_BCH_MEMBER_INITIALIZED(m, state);
 	return bch2_write_super(c);
@@ -1220,7 +1219,7 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 
 	scoped_guard(rwsem_write, &c->state_lock) {
 		scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-			guard(mutex)(&c->sb_lock);
+			guard(mutex_noio)(&c->sb_lock);
 			SET_BCH_SB_MULTI_DEVICE(c->disk_sb.sb, true);
 
 			ret = bch2_sb_from_fs(c, ca);
@@ -1374,8 +1373,7 @@ int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
 		}
 	}
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount =
 			cpu_to_le64(ktime_get_real_seconds());
 		bch2_write_super(c);
@@ -1480,8 +1478,7 @@ int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets, struct p
 		return ret;
 	}
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 		m->nbuckets = cpu_to_le64(nbuckets);
 

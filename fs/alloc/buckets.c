@@ -197,8 +197,7 @@ int __bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 				trans, stale_ptr_with_no_stale_ptrs_feature,
 				"stale cached ptr, but have no_stale_ptrs feature\n%s",
 				(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-			guard(mutex)(&c->sb_lock);
+			guard(mutex_noio)(&c->sb_lock);
 			c->disk_sb.sb->compat[0] &= ~cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
 			bch2_write_super(c);
 		}
@@ -870,7 +869,7 @@ static int __bch2_trans_mark_dev_sb(struct btree_trans *trans, struct bch_dev *c
 	struct bch_fs *c = trans->c;
 	struct bch_sb_layout layout;
 
-	scoped_guard(mutex, &c->sb_lock)
+	scoped_guard(mutex_noio, &c->sb_lock)
 		layout = ca->disk_sb.sb->layout;
 
 	u64 bucket = 0;

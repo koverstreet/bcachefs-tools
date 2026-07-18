@@ -477,8 +477,7 @@ void __bch2_accounting_maybe_kill(struct bch_fs *c, struct bpos pos)
 	    !bch2_request_incompat_feature(c, bcachefs_metadata_version_no_sb_user_data_replicas))
 		return;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	scoped_guard(percpu_write, &c->capacity.mark_lock) {
 
 		struct bch_accounting_mem *acc = &c->accounting;

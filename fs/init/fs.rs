@@ -3,6 +3,7 @@ use crate::btree::bkey::AsBkeyI;
 use crate::errcode::{bch_err_throw, bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
+use crate::util::locking::MemallocFlags;
 use core::ops::ControlFlow;
 
 /// RAII guard for a device reference. Calls bch2_dev_put on drop.
@@ -32,13 +33,19 @@ impl Drop for DevRef {
 }
 
 /// RAII guard for bch_fs::sb_lock. Unlocks on drop.
+///
+/// Mirrors the C `mutex_noio` guard: sb_lock is held precisely to guard
+/// allocations that must not recurse into reclaim IO, so the lock brackets a
+/// PF_MEMALLOC_NOIO scope. The explicit Drop below runs before the `_noio`
+/// field is dropped, so the order is unlock-then-restore - matching the C side.
 pub struct SbLockGuard<'a> {
     fs: &'a Fs,
+    _noio: MemallocFlags,
 }
 
 impl Drop for SbLockGuard<'_> {
     fn drop(&mut self) {
-        unsafe { c::mutex_unlock(&mut (*self.fs.raw).sb_lock ); }
+        unsafe { c::mutex_unlock(&mut (*self.fs.raw).sb_lock.lock); }
     }
 }
 
@@ -93,8 +100,9 @@ impl Fs {
 
     /// Acquire the superblock lock, returning a guard that releases it on drop.
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
-        unsafe { c::mutex_lock(&mut (*self.raw).sb_lock); }
-        SbLockGuard { fs: self }
+        let _noio = MemallocFlags::noio();
+        unsafe { c::mutex_lock(&mut (*self.raw).sb_lock.lock); }
+        SbLockGuard { fs: self, _noio }
     }
 
     /// Write superblock to disk. Caller must hold sb_lock.

@@ -72,6 +72,7 @@
 #include "util/enumerated_ref_types.h"
 #include "util/fast_list.h"
 #include "util/fifo.h"
+#include "util/locking.h"
 #include "util/seqmutex.h"
 #include "util/time_stats.h"
 #include "util/thread_with_file_types.h"
@@ -744,7 +745,7 @@ struct bch_fs {
 	struct bch_sb_cpu	sb;
 	struct bch_sb_handle	disk_sb;
 	struct closure		sb_write;
-	struct mutex		sb_lock;
+	struct mutex_noio	sb_lock;
 	unsigned long		incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))];
 	struct unicode_map	*cf_encoding;
 

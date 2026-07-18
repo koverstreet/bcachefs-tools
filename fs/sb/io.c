@@ -214,8 +214,7 @@ int bch2_set_version_incompat(struct bch_fs *c, enum bcachefs_metadata_version v
 {
 	if (((c->sb.features & BIT_ULL(BCH_FEATURE_incompat_version_field)) &&
 	     version <= c->sb.version_incompat_allowed)) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-		guard(mutex)(&c->sb_lock);
+		guard(mutex_noio)(&c->sb_lock);
 
 		if (version > c->sb.version_incompat) {
 			SET_BCH_SB_VERSION_INCOMPAT(c->disk_sb.sb,
@@ -399,7 +398,7 @@ struct bch_sb_field *bch2_sb_field_resize_id(struct bch_sb_handle *sb,
 	if (sb->fs_sb) {
 		struct bch_fs *c = container_of(sb, struct bch_fs, disk_sb);
 
-		lockdep_assert_held(&c->sb_lock);
+		lockdep_assert_held(&c->sb_lock.lock);
 
 		/* XXX: we're not checking that offline device have enough space */
 
@@ -692,7 +691,7 @@ static void bch2_sb_update(struct bch_fs *c)
 {
 	struct bch_sb *src = c->disk_sb.sb;
 
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	c->sb.uuid		= src->uuid;
 	c->sb.user_uuid		= src->user_uuid;
@@ -798,7 +797,7 @@ static int __copy_super(struct bch_sb_handle *dst_handle, struct bch_sb *src)
 
 int bch2_sb_to_fs(struct bch_fs *c, struct bch_sb *src)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	try(bch2_sb_realloc(&c->disk_sb, 0));
 	try(__copy_super(&c->disk_sb, src));
@@ -1208,7 +1207,7 @@ static int __bch2_write_super(struct bch_fs *c)
 	if (c->opts.degraded == BCH_DEGRADED_very)
 		degraded_flags |= BCH_FORCE_IF_LOST;
 
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	closure_init_stack(cl);
 
@@ -1439,8 +1438,7 @@ int bch2_write_super(struct bch_fs *c)
 
 void __bch2_check_set_feature(struct bch_fs *c, unsigned feat)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	if (!(c->sb.features & BIT_ULL(feat))) {
 		c->disk_sb.sb->features[0] |= cpu_to_le64(BIT_ULL(feat));
 
@@ -1453,7 +1451,7 @@ bool bch2_check_version_downgrade(struct bch_fs *c)
 {
 	bool ret = bcachefs_metadata_version_current < c->sb.version;
 
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	/*
 	 * Downgrade, if superblock is at a higher version than currently
@@ -1476,7 +1474,7 @@ bool bch2_check_version_downgrade(struct bch_fs *c)
 
 void bch2_sb_upgrade(struct bch_fs *c, unsigned new_version, bool incompat)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	if (BCH_VERSION_MAJOR(new_version) >
 	    BCH_VERSION_MAJOR(le16_to_cpu(c->disk_sb.sb->version)))
@@ -1493,8 +1491,7 @@ void bch2_sb_upgrade(struct bch_fs *c, unsigned new_version, bool incompat)
 
 void bch2_sb_upgrade_incompat(struct bch_fs *c)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	if (c->sb.version == c->sb.version_incompat_allowed)
 		return;
