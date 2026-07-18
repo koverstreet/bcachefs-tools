@@ -433,8 +433,9 @@
  *   metadata if \texttt{metadata\_target} is not set.
  * \item[\texttt{metadata\_target}] Btree node writes.
  * \item[\texttt{background\_target}] If set, user data is moved to this target
- *   in the background by the reconcile subsystem. The original copy is left in
- *   place but marked as cached.
+ *   in the background by the reconcile subsystem. The durable copies are moved
+ *   off the foreground target; a copy is left on the original target only if it
+ *   is a cache (see \texttt{promote\_target} or \texttt{durability=0}).
  * \item[\texttt{promote\_target}] If set, a cached copy is created on this
  *   target when data is read, if no copy exists there already.
  * \end{description}
