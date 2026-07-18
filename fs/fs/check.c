@@ -1166,11 +1166,23 @@ static int check_inode(struct btree_trans *trans,
 		else
 			prt_str(&buf, "(missing)");
 
-		if (fsck_err_on(ret,
+		/*
+		 * bi_dir/bi_dir_offset zeroed on a subvolume root means the
+		 * subvolume was unlinked: deletion tombstones the subvolume and
+		 * marks its snapshot will_delete together, leaving this root
+		 * inode pending sweep by delete_dead_snapshots(). The subvolume
+		 * reads as missing, but that's the expected not-live state, not
+		 * corruption - leave bi_subvol be; the whole snapshot is going
+		 * away.
+		 */
+		bool subvol_unlinked = ret && !bch2_inode_has_backpointer(&u);
+
+		if (!subvol_unlinked &&
+		    (fsck_err_on(ret,
 				trans, inode_bi_subvol_missing,
 				"inode bi_subvol points to missing subvolume %u\n%s",
 				u.bi_subvol, buf.buf) ||
-		    fsck_err_on(le64_to_cpu(s.inode) != u.bi_inum ||
+		     fsck_err_on(le64_to_cpu(s.inode) != u.bi_inum ||
 				!bch2_snapshot_is_ancestor(trans, le32_to_cpu(s.snapshot),
 							   k.k->p.snapshot),
 				trans, inode_bi_subvol_wrong,
@@ -1178,7 +1190,7 @@ static int check_inode(struct btree_trans *trans,
 				u.bi_subvol,
 				le64_to_cpu(s.inode),
 				le32_to_cpu(s.snapshot),
-				buf.buf)) {
+				buf.buf))) {
 			u.bi_subvol = 0;
 			u.bi_parent_subvol = 0;
 			do_update = true;
