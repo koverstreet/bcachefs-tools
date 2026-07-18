@@ -109,17 +109,6 @@ __cold void bch2_snapshot_delete_status_to_text(struct printbuf *out, struct bch
 		prt_newline(out);
 		bch2_snapshot_delete_nodes_to_text(out, d, false);
 	}
-
-	struct task_struct *t;
-	scoped_guard(rcu) {
-		t = rcu_dereference(d->thread);
-		if (t)
-			get_task_struct(t);
-	}
-	if (t) {
-		bch2_prt_task_backtrace(out, t, 0, GFP_KERNEL);
-		put_task_struct(t);
-	}
 }
 
 /*
@@ -938,17 +927,20 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	return 0;
 }
 
+/*
+ * Serialization is recovery.run_lock, asserted below: the delete_dead_snapshots
+ * pass .fn runs under it (the framework holds run_lock while running passes),
+ * and the sysfs force-trigger takes it explicitly. So no separate lock is
+ * needed, and passes never run this concurrently.
+ */
 int __bch2_delete_dead_snapshots(struct bch_fs *c)
 {
 	struct snapshot_delete *d = &c->snapshots.delete;
 
-	if (!mutex_trylock(&d->lock))
-		return 0;
+	lockdep_assert_held(&c->recovery.run_lock);
 
-	if (!test_and_clear_bit(BCH_FS_need_delete_dead_snapshots, &c->flags)) {
-		mutex_unlock(&d->lock);
+	if (!test_and_clear_bit(BCH_FS_need_delete_dead_snapshots, &c->flags))
 		return 0;
-	}
 
 	d->running = true;
 	d->progress.pos = BBPOS_MIN;
@@ -966,7 +958,6 @@ int __bch2_delete_dead_snapshots(struct bch_fs *c)
 
 	bch2_recovery_pass_set_no_ratelimit(c, BCH_RECOVERY_PASS_check_snapshots);
 
-	mutex_unlock(&d->lock);
 	return ret;
 }
 
@@ -976,33 +967,6 @@ int bch2_delete_dead_snapshots(struct bch_fs *c)
 		return 0;
 
 	return __bch2_delete_dead_snapshots(c);
-}
-
-void bch2_delete_dead_snapshots_work(struct work_struct *work)
-{
-	struct bch_fs *c = container_of(work, struct bch_fs, snapshots.delete.work);
-
-	set_worker_desc("bcachefs-delete-dead-snapshots/%s", c->name);
-
-	rcu_assign_pointer(c->snapshots.delete.thread, current);
-	bch2_delete_dead_snapshots(c);
-	rcu_assign_pointer(c->snapshots.delete.thread, NULL);
-
-	enumerated_ref_put(&c->writes, BCH_WRITE_REF_delete_dead_snapshots);
-}
-
-void bch2_delete_dead_snapshots_async(struct bch_fs *c)
-{
-	if (!c->opts.auto_snapshot_deletion)
-		return;
-
-	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_delete_dead_snapshots))
-		return;
-
-	BUG_ON(!test_bit(BCH_FS_may_go_rw, &c->flags));
-
-	if (!queue_work(system_long_wq, &c->snapshots.delete.work))
-		enumerated_ref_put(&c->writes, BCH_WRITE_REF_delete_dead_snapshots);
 }
 
 static int bch2_get_dead_interior_snapshots(struct btree_trans *trans, struct bkey_s_c k,

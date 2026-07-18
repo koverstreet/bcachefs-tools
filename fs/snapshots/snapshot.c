@@ -617,8 +617,23 @@ static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 
 		if (state == SNAPSHOT_STATE_will_delete) {
 			set_bit(BCH_FS_need_delete_dead_snapshots, &c->flags);
-			if (c->recovery.pass_done > BCH_RECOVERY_PASS_delete_dead_snapshots)
-				bch2_delete_dead_snapshots_async(c);
+
+			/*
+			 * Schedule the deleter. bch2_mark_snapshot may run as a
+			 * BTREE_TRIGGER_atomic trigger - btree write locks held,
+			 * committed to the commit - so the schedule must be
+			 * ephemeral (no sb_lock) and best-effort: we ignore the
+			 * return, since an error here would take the filesystem
+			 * emergency read-only. need_delete is the durable signal.
+			 *
+			 * In recovery this injects delete_dead_snapshots into the
+			 * running passes so it runs (in listing order) before the
+			 * content checks; otherwise it schedules the async runner.
+			 */
+			CLASS(printbuf, buf)();
+			bch2_run_explicit_recovery_pass(c, &buf,
+					BCH_RECOVERY_PASS_delete_dead_snapshots,
+					RUN_RECOVERY_PASS_ephemeral);
 		}
 	} else {
 		memset(t, 0, sizeof(*t));
@@ -916,8 +931,6 @@ void bch2_fs_snapshots_init_early(struct bch_fs *c)
 {
 	mutex_init(&c->snapshots.table_lock);
 
-	INIT_WORK(&c->snapshots.delete.work, bch2_delete_dead_snapshots_work);
-	mutex_init(&c->snapshots.delete.lock);
 	mutex_init(&c->snapshots.delete.progress_lock);
 
 	mutex_init(&c->snapshots.unlinked_lock);

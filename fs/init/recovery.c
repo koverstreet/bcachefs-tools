@@ -1076,7 +1076,11 @@ use_clean:
 	if (test_bit(BCH_FS_need_delete_dead_snapshots, &c->flags) &&
 	    !c->opts.nochanges) {
 		bch2_fs_read_write_early(c);
-		bch2_delete_dead_snapshots_async(c);
+
+		CLASS(printbuf, buf)();
+		bch2_run_explicit_recovery_pass(c, &buf,
+				BCH_RECOVERY_PASS_delete_dead_snapshots,
+				RUN_RECOVERY_PASS_ephemeral);
 	}
 
 	/*

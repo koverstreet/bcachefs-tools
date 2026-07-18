@@ -671,7 +671,6 @@ struct journal_seq_blacklist_table {
 	x(discard_fast)							\
 	x(check_discard_freespace_key)					\
 	x(invalidate)							\
-	x(delete_dead_snapshots)					\
 	x(gc_gens)							\
 	x(presplit_shard_boundaries)					\
 	x(snapshot_delete_pagecache)					\

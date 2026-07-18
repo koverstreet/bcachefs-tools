@@ -408,8 +408,6 @@ int bch2_delete_dead_snapshot_key(struct btree_trans *, struct btree_iter *,
 
 int __bch2_delete_dead_snapshots(struct bch_fs *);
 int bch2_delete_dead_snapshots(struct bch_fs *);
-void bch2_delete_dead_snapshots_work(struct work_struct *);
-void bch2_delete_dead_snapshots_async(struct bch_fs *);
 void bch2_snapshot_delete_status_to_text(struct printbuf *, struct bch_fs *);
 
 int bch2_delete_dead_interior_snapshots(struct bch_fs *);
