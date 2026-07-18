@@ -51,8 +51,7 @@ int bch2_btree_lost_data(struct bch_fs *c,
 {
 	int ret = 0;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 
@@ -153,8 +152,7 @@ void bch2_set_btree_clean(struct bch_fs *c, enum btree_id btree)
 	if (c->sb.btrees_clean & BIT_ULL(btree))
 		return;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	if (!(c->sb.btrees_clean & BIT_ULL(btree))) {
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 		__test_and_set_bit_le64(btree, &ext->btrees_clean);
@@ -168,8 +166,7 @@ void bch2_clear_btree_clean(struct bch_fs *c, enum btree_id btree)
 	if (!(c->sb.btrees_clean & BIT_ULL(btree)))
 		return;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	if (c->sb.btrees_clean & BIT_ULL(btree)) {
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 		__clear_bit_le64(btree, &ext->btrees_clean);
@@ -187,8 +184,7 @@ static void kill_btree(struct bch_fs *c, enum btree_id btree)
 /* for -o reconstruct_alloc: */
 static void bch2_reconstruct_alloc(struct bch_fs *c)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 
 	__set_bit_le64(BCH_RECOVERY_PASS_STABLE_check_allocations, ext->recovery_passes_required);
@@ -246,8 +242,7 @@ void bch2_ignore_journal_rewind_errors(struct bch_fs *c)
 	 * will be stale for buckets whose state changed between the rewind
 	 * point and the original journal head.
 	 */
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	struct bch_sb_field_ext *ext =
 		bch2_sb_field_get(c->disk_sb.sb, ext);
 
@@ -1019,7 +1014,7 @@ use_clean:
 		bch_verbose(c, "quotas done");
 	}
 
-	scoped_guard(mutex, &c->sb_lock) {
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 		bool write_sb = false;
 
@@ -1118,8 +1113,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 	bch_notice(c, "initializing new filesystem");
 	set_bit(BCH_FS_new_fs, &c->flags);
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_extents_above_btree_updates_done));
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_bformat_overflow_done));
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
@@ -1213,8 +1207,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 	bch_info(c, "fs initialized, journal seq %llu rewind_seq %llu",
 		 init_seq - 1, init_seq);
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		SET_BCH_SB_INITIALIZED(c->disk_sb.sb, true);
 		SET_BCH_SB_CLEAN(c->disk_sb.sb, false);
 

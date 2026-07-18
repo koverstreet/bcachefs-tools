@@ -219,7 +219,7 @@ static int bch2_ioc_getlabel(struct bch_fs *c, char __user *user_label)
 
 	BUILD_BUG_ON(BCH_SB_LABEL_SIZE >= FSLABEL_MAX);
 
-	scoped_guard(mutex, &c->sb_lock)
+	scoped_guard(mutex_noio, &c->sb_lock)
 		memcpy(label, c->disk_sb.sb->label, BCH_SB_LABEL_SIZE);
 
 	len = strnlen(label, BCH_SB_LABEL_SIZE);
@@ -256,8 +256,7 @@ static int bch2_ioc_setlabel(struct bch_fs *c,
 	try(mnt_want_write_file(file));
 
 	int ret;
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		strscpy(c->disk_sb.sb->label, label, BCH_SB_LABEL_SIZE);
 		ret = bch2_write_super(c);
 	}

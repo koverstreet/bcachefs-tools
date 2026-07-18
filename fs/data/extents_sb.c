@@ -48,7 +48,7 @@ void bch2_sb_extent_type_u64s_to_cpu(struct bch_fs *c)
 
 int bch2_sb_extent_type_u64s_from_cpu(struct bch_fs *c)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_sb_field_extent_type_u64s *e =
 		bch2_sb_field_get_minsize(&c->disk_sb, extent_type_u64s,

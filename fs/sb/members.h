@@ -256,7 +256,7 @@ static inline struct bch_dev *bch2_dev_locked(struct bch_fs *c, unsigned dev)
 	EBUG_ON(!bch2_dev_exists(c, dev));
 
 	return rcu_dereference_protected(c->devs[dev],
-					 lockdep_is_held(&c->sb_lock) ||
+					 lockdep_is_held(&c->sb_lock.lock) ||
 					 lockdep_is_held(&c->state_lock));
 }
 

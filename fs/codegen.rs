@@ -32,7 +32,10 @@ const HEADERS: &[&str] = &[
 
 // Translated 1:1 from the bindgen builder calls in build.rs.
 const ALLOWLIST_FUNCTION: &[&str] = &[
-    ".*bch2_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches",
+    // rust_* are C shims that exist solely for Rust to call (e.g. util/locking.h
+    // wraps the memalloc_flags_* static inlines, which don't reach Rust). Same
+    // convention as bch_bindgen's allowlist.
+    ".*bch2_.*", "rust_.*", "block_bytes", "match_string", "printbuf.*", "_bch2_err_matches",
     "bpos_.*", "bkey_init", "bkey_.*_init", "bkey_i_to_s", "bkey_i_to_s_c",
     "btree_iter_path", "extent_entry_u64s", "enumerated_ref_put",
     // crypto helpers for the dump sanitize path (static inlines, not

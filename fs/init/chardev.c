@@ -597,8 +597,7 @@ static long bch2_ioctl_read_super(struct bch_fs *c,
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_read_super_bad_flags);
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	if (arg.flags & BCH_READ_DEV) {
 		ca = errptr_try(bch2_device_lookup(c, arg.dev, arg.flags));

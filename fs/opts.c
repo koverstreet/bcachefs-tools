@@ -634,7 +634,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 		 * the cpu copy stale until the next superblock swap:
 		 */
 		if (post) {
-			scoped_guard(mutex, &c->sb_lock)
+			scoped_guard(mutex_noio, &c->sb_lock)
 				bch_err_fn(c, bch2_sb_disk_groups_to_cpu(c));
 		}
 
@@ -714,8 +714,7 @@ void bch2_opt_hook_post_set(struct bch_fs *c, struct bch_dev *ca, u64 inum,
 		break;
 	case Opt_discard:
 		if (!ca) {
-			guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-			guard(mutex)(&c->sb_lock);
+			guard(mutex_noio)(&c->sb_lock);
 			for_each_member_device(c, ca) {
 				struct bch_member *m =
 					bch2_members_v2_get_mut(ca->disk_sb.sb, ca->dev_idx);
@@ -960,8 +959,7 @@ bool __bch2_opt_set_sb(struct bch_sb *sb, int dev_idx,
 bool bch2_opt_set_sb(struct bch_fs *c, struct bch_dev *ca,
 		     const struct bch_option *opt, u64 v)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool changed = __bch2_opt_set_sb(c->disk_sb.sb, ca ? ca->dev_idx : -1, opt, v);
 	if (changed)
 		bch2_write_super(c);

@@ -185,6 +185,7 @@ bcachefs-y		:=			\
 	util/enumerated_ref.o			\
 	util/eytzinger.o			\
 	util/fast_list.o			\
+	util/locking.o				\
 	util/mean_and_variance.o		\
 	util/printbuf.o				\
 	util/rcu_pending.o			\

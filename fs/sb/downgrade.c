@@ -265,8 +265,7 @@ int bch2_sb_set_upgrade_extra(struct bch_fs *c)
 	bool write_sb = false;
 	int ret = 0;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 
 	if (old_version <  bcachefs_metadata_version_bucket_stripe_sectors &&
@@ -290,7 +289,7 @@ static void __bch2_sb_set_upgrade(struct bch_fs *c,
 				  const struct upgrade_downgrade_entry *table,
 				  size_t nr_entries)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 

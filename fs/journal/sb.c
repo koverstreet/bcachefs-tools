@@ -178,7 +178,7 @@ int bch2_journal_buckets_to_sb(struct bch_fs *c, struct bch_dev *ca,
 {
 	unsigned dst = 0, nr_compacted = 1;
 
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	if (!nr) {
 		bch2_sb_field_delete(&ca->disk_sb, BCH_SB_FIELD_journal);
@@ -229,8 +229,7 @@ int bch2_sb_journal_sort(struct bch_fs *c)
 	BUG_ON(!c->sb.clean);
 	BUG_ON(test_bit(BCH_FS_rw, &c->flags));
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 
 	for_each_online_member(c, ca, BCH_DEV_READ_REF_sb_journal_sort) {

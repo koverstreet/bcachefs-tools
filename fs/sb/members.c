@@ -360,8 +360,7 @@ void bch2_member_to_text_short(struct printbuf *out,
 			       struct bch_fs *c,
 			       struct bch_dev *ca)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bch2_member_to_text_short_locked(out, c, ca);
 }
 
@@ -521,10 +520,8 @@ __cold void bch2_dev_io_errors_to_text(struct printbuf *out, struct bch_dev *ca)
 	struct bch_fs *c = ca->fs;
 	struct bch_member m;
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock)
 		m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
-	}
 
 	printbuf_tabstop_push(out, 12);
 
@@ -554,8 +551,7 @@ void bch2_dev_errors_reset(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 	for (unsigned i = 0; i < ARRAY_SIZE(m->errors_at_reset); i++)
@@ -641,7 +637,7 @@ static void __bch2_dev_btree_bitmap_mark(struct bch_dev *ca,
 
 void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *c, struct bkey_s_c k, bool *write_sb)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 
@@ -657,8 +653,7 @@ void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *c, struct bkey_s_c k, bool
 
 void bch2_dev_btree_bitmap_mark(struct bch_fs *c, struct bkey_s_c k)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 	bch2_dev_btree_bitmap_mark_locked(c, k, &write_sb);
 	if (write_sb)
@@ -687,8 +682,7 @@ int bch2_btree_bitmap_gc(struct bch_fs *c)
 	struct progress_indicator progress;
 	bch2_progress_init(&progress, __func__, c, 0, ~0ULL);
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		guard(rcu)();
 		for_each_member_device_rcu(c, ca, NULL)
 			ca->btree_allocated_bitmap_gc = 0;
@@ -713,8 +707,7 @@ int bch2_btree_bitmap_gc(struct bch_fs *c)
 
 	u64 sectors_marked_old = 0, sectors_marked_new = 0;
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 
 		scoped_guard(rcu)
@@ -858,8 +851,7 @@ int bch2_sb_member_alloc(struct bch_fs *c)
 
 void bch2_sb_members_clean_deleted(struct bch_fs *c)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 
 	for (unsigned i = 0; i < c->sb.nr_devices; i++) {
@@ -907,7 +899,7 @@ void bch2_dev_mi_field_upgrades_locked(struct bch_fs *c, struct bch_dev *ca,
 				       const struct bch_dev_identity *identity,
 				       bool *write_sb)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 
@@ -929,8 +921,7 @@ void bch2_dev_mi_field_upgrades(struct bch_dev *ca)
 	struct bch_dev_identity identity;
 	bch2_dev_mi_field_read(ca, &identity);
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 
 	bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
@@ -951,14 +942,12 @@ void bch2_fs_mi_field_upgrades(struct bch_fs *c)
 
 		bch2_dev_mi_field_read(ca, &identity);
 
-		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-		guard(mutex)(&c->sb_lock);
+		guard(mutex_noio)(&c->sb_lock);
 		bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
 	}
 
 	if (write_sb) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-		guard(mutex)(&c->sb_lock);
+		guard(mutex_noio)(&c->sb_lock);
 		bch2_write_super(c);
 	}
 }

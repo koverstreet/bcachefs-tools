@@ -23,7 +23,7 @@
 
 void bch2_journal_pos_from_member_info_set(struct bch_fs *c)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	for_each_member_device(c, ca) {
 		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
@@ -35,8 +35,7 @@ void bch2_journal_pos_from_member_info_set(struct bch_fs *c)
 
 void bch2_journal_pos_from_member_info_resume(struct bch_fs *c)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	for_each_member_device(c, ca) {
 		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
