@@ -439,6 +439,7 @@ btree_key_can_insert_cached_slowpath(struct btree_trans *trans,
 
 	if (u64s > ck->u64s) {
 		unsigned new_u64s	= roundup_pow_of_two(u64s + u64s / 2);
+		const struct bch_val *old_v = &ck->k->v;
 		struct bkey_i *new_k	= kmalloc(new_u64s * sizeof(u64), GFP_NOWAIT);
 		if (unlikely(!new_k)) {
 			bch2_trans_unlock_updates_write(trans);
@@ -467,6 +468,12 @@ btree_key_can_insert_cached_slowpath(struct btree_trans *trans,
 			 * another transaction already grew the cached key.
 			 */
 			ck = (void *) path->l[0].b;
+			if (old_v != &ck->k->v) {
+				trans_for_each_update(trans, i)
+					if (i->old_v == old_v)
+						i->old_v = &ck->k->v;
+				old_v = &ck->k->v;
+			}
 			if (u64s <= ck->u64s) {
 				kfree(new_k);
 				goto have_space;
@@ -477,7 +484,7 @@ btree_key_can_insert_cached_slowpath(struct btree_trans *trans,
 		kfree(ck->k);
 
 		trans_for_each_update(trans, i)
-			if (i->old_v == &ck->k->v)
+			if (i->old_v == old_v)
 				i->old_v = &new_k->v;
 
 		ck->u64s	= new_u64s;
