@@ -446,6 +446,12 @@ static int btree_key_cache_flush_pos(struct btree_trans *trans,
 		if (journal_seq && ck->journal.seq != journal_seq)
 			return 0;
 
+		if (journal_seq && ck->seq != journal_seq) {
+			bch2_journal_pin_update(j, ck->seq, &ck->journal,
+						bch2_btree_key_cache_journal_flush);
+			return 0;
+		}
+
 		trans->journal_res.seq = ck->journal.seq;
 
 		/*
@@ -524,9 +530,8 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 	struct bkey_cached *ck =
 		container_of(pin, struct bkey_cached, journal);
 	struct bkey_cached_key key;
+	bool do_flush = false;
 	int ret = 0;
-
-	guard(srcu)(&c->btree.trans.barrier);
 
 	/*
 	 * Lockless bailout: if the pin has already been updated past @seq, or
@@ -536,41 +541,35 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 	 *
 	 * The intent lock taken below serializes against
 	 * btree_key_cache_flush_pos(), which reads ck->journal.seq while the
-	 * cached path's intent lock is held: a read lock here would let
-	 * pin_update advance the pin out from under that reader, leaving it
-	 * with a captured ck->journal.seq < j->last_seq and BUG'ing in
-	 * bch2_journal_pin_set() once the trans commit fed it back in.
+	 * cached path's intent lock is held. We only snapshot the key while
+	 * holding this callback's external SRCU guard; the actual flush is a
+	 * fresh lookup by key and may block in btree/journal I/O, so it must not
+	 * run under this guard.
 	 */
-	if (READ_ONCE(ck->journal.seq) == seq &&
-	    test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
-		CLASS(btree_trans, trans)(c);
+	{
+		guard(srcu)(&c->btree.trans.barrier);
 
-		ret = lockrestart_do(trans, ({
-			btree_path_idx_t path_idx;
-			int _ret = bch2_btree_node_lock_with_path(trans, &ck->c,
-								  SIX_LOCK_intent, &path_idx);
-			bool do_flush = false;
-
-			if (!_ret) {
-				key = ck->key;
-
-				if (ck->journal.seq != seq ||
-				    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
-					/* raced; nothing to do */
-				} else if (ck->seq != seq) {
-					bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
-								bch2_btree_key_cache_journal_flush);
-				} else {
+		if (READ_ONCE(ck->journal.seq) == seq &&
+		    test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+			if (!six_trylock_intent(&ck->c.lock)) {
+				ret = bch_err_throw(c, journal_reclaim_would_deadlock);
+			} else {
+				if (ck->journal.seq == seq &&
+				    test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+					key = ck->key;
 					do_flush = true;
 				}
-				bch2_btree_node_unlock_with_path(trans, path_idx, 0);
-
-				if (do_flush)
-					_ret = btree_key_cache_flush_pos(trans, key, seq,
-							BCH_TRANS_COMMIT_journal_reclaim, false);
+				six_unlock_intent(&ck->c.lock);
 			}
-			_ret;
-		}));
+		}
+	}
+
+	if (do_flush) {
+		CLASS(btree_trans, trans)(c);
+
+		ret = lockrestart_do(trans,
+			btree_key_cache_flush_pos(trans, key, seq,
+				BCH_TRANS_COMMIT_journal_reclaim, false));
 		bch2_fs_fatal_err_on(ret &&
 				     !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
 				     !bch2_journal_error(j), c,
@@ -609,7 +608,6 @@ int bch2_btree_key_cache_flush_going_ro(struct bch_fs *c)
 	    bch2_journal_error(&c->journal))
 		return 0;
 
-	guard(srcu)(&c->btree.trans.barrier);
 	CLASS(btree_trans, trans)(c);
 	CLASS(bkey_cached_keys, keys)();
 	bool any_done = false, full;
@@ -625,33 +623,37 @@ int bch2_btree_key_cache_flush_going_ro(struct bch_fs *c)
 		full = false;
 		keys.nr = 0;
 
-		scoped_guard(rcu) {
-			struct bucket_table *tbl =
-				rht_dereference_rcu(bc->table.tbl, &bc->table);
+		{
+			guard(srcu)(&c->btree.trans.barrier);
 
-			/*
-			 * If a rehash is in flight some entries live on the new
-			 * table; skip this pass and let the OR-chain re-call us.
-			 */
-			if (unlikely(tbl->nest))
-				return any_done;
+			scoped_guard(rcu) {
+				struct bucket_table *tbl =
+					rht_dereference_rcu(bc->table.tbl, &bc->table);
 
-			for (unsigned i = 0; i < tbl->size; i++) {
-				struct rhash_head *pos;
-				struct bkey_cached *ck;
+				/*
+				 * If a rehash is in flight some entries live on the new
+				 * table; skip this pass and let the OR-chain re-call us.
+				 */
+				if (unlikely(tbl->nest))
+					return any_done;
 
-				rht_for_each_entry_rcu(ck, pos, tbl, i, hash) {
-					if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags))
-						continue;
+				for (unsigned i = 0; i < tbl->size; i++) {
+					struct rhash_head *pos;
+					struct bkey_cached *ck;
 
-					if (darray_push_gfp(&keys, ck->key,
-							    GFP_NOWAIT|__GFP_NOWARN)) {
-						full = true;
-						goto rcu_done;
+					rht_for_each_entry_rcu(ck, pos, tbl, i, hash) {
+						if (!test_bit(BKEY_CACHED_DIRTY, &ck->flags))
+							continue;
+
+						if (darray_push_gfp(&keys, ck->key,
+								    GFP_NOWAIT|__GFP_NOWARN)) {
+							full = true;
+							goto rcu_done;
+						}
 					}
 				}
-			}
 rcu_done:;
+			}
 		}
 
 		if (!keys.nr)
