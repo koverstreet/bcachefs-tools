@@ -693,6 +693,15 @@ static void bch2_async_recovery_passes_work(struct work_struct *work)
 
 void bch2_run_async_recovery_passes(struct bch_fs *c)
 {
+	/*
+	 * A nochanges mount goes fake-rw during recovery for fsck, then back to
+	 * ro before completing (we can't hold fake-rw indefinitely - we'd oom),
+	 * so a background pass would fire when we're no longer rw. Don't schedule
+	 * them at all.
+	 */
+	if (c->opts.nochanges)
+		return;
+
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_async_recovery_passes))
 		return;
 
@@ -753,8 +762,18 @@ int bch2_run_recovery_passes_startup(struct bch_fs *c, enum bch_recovery_pass fr
 		prt_bitflags(&msg.m, bch2_recovery_passes, defer);
 
 		r->scheduled_passes_ephemeral |= defer;
-		bch2_run_async_recovery_passes(c);
 	}
+
+	/*
+	 * Kick the async runner for everything scheduled to run in the
+	 * background: the defer passes above, and passes scheduled ephemerally
+	 * during recovery (e.g. delete_dead_snapshots via a trigger), which land
+	 * in scheduled_passes_ephemeral but not defer. They were scheduled before
+	 * we went rw, so their own kick was a no-op. (Itself a no-op in
+	 * nochanges - see bch2_run_async_recovery_passes.)
+	 */
+	if (r->scheduled_passes_ephemeral)
+		bch2_run_async_recovery_passes(c);
 
 	return 0;
 }
