@@ -269,7 +269,7 @@ int bch2_validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			 "bset version %u older than superblock version_min %u",
 			 version, c->sb.version_min)) {
 		if (bch2_version_compatible(version)) {
-			guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+			guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 			guard(mutex)(&c->sb_lock);
 			c->disk_sb.sb->version_min = cpu_to_le16(version);
 			bch2_write_super(c);
@@ -286,7 +286,7 @@ int bch2_validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			 btree_node_bset_newer_than_sb,
 			 "bset version %u newer than superblock version %u",
 			 version, c->sb.version)) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 		guard(mutex)(&c->sb_lock);
 		c->disk_sb.sb->version = cpu_to_le16(version);
 		bch2_write_super(c);
@@ -594,7 +594,7 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 	/* We might get called multiple times on read retry: */
 	b->written = 0;
 
-	iter = mempool_alloc(&c->btree.fill_iter, GFP_NOFS);
+	iter = mempool_alloc(&c->btree.fill_iter, GFP_NOIO);
 	sort_iter_init(iter, b, (btree_blocks(c) + 1) * 2);
 
 	if (bch2_meta_read_fault("btree"))
@@ -1058,7 +1058,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 	bio = bio_alloc_bioset(NULL,
 			       buf_nr_bvecs(b->data, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_SYNC|REQ_META,
-			       GFP_NOFS,
+			       GFP_NOIO,
 			       &c->btree.bio);
 	rb = container_of(bio, struct btree_read_bio, bio);
 	rb->c			= c;

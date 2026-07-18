@@ -383,7 +383,7 @@ static void bch2_journal_dev_do_discards(struct journal_device *ja)
 			blkdev_issue_discard(ca->disk_sb.bdev,
 					     bucket_to_sector(ca,
 							      ja->buckets[ja->discard_idx]),
-					     ca->mi.bucket_size, GFP_NOFS);
+					     ca->mi.bucket_size, GFP_NOIO);
 
 		scoped_guard(spinlock, &j->lock) {
 			ja->discard_idx = (ja->discard_idx + 1) % ja->nr;
@@ -935,7 +935,7 @@ static int __bch2_journal_reclaim(struct journal *j, bool direct, bool kicked)
 	 * we're holding the reclaim lock:
 	 */
 	lockdep_assert_held(&j->reclaim_lock);
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	do {
 		if (kthread && kthread_should_stop())

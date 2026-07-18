@@ -434,7 +434,7 @@ int bch2_accounting_mem_insert(struct bch_fs *c, struct bkey_s_c_accounting a,
 	percpu_up_read(&c->capacity.mark_lock);
 	int ret;
 	scoped_guard(percpu_write, &c->capacity.mark_lock) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 		ret = __bch2_accounting_mem_insert(c, a);
 	}
@@ -477,7 +477,7 @@ void __bch2_accounting_maybe_kill(struct bch_fs *c, struct bpos pos)
 	    !bch2_request_incompat_feature(c, bcachefs_metadata_version_no_sb_user_data_replicas))
 		return;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 	guard(mutex)(&c->sb_lock);
 	scoped_guard(percpu_write, &c->capacity.mark_lock) {
 
@@ -635,7 +635,7 @@ int bch2_gc_accounting_start(struct bch_fs *c)
 	int ret = 0;
 
 	guard(percpu_write)(&c->capacity.mark_lock);
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	darray_for_each(acc->k, e) {
 		e->v[1] = __alloc_percpu_gfp(e->nr_counters * sizeof(u64),
@@ -660,7 +660,7 @@ int bch2_gc_accounting_done(struct bch_fs *c)
 	int ret = 0;
 
 	guard(percpu_write)(&c->capacity.mark_lock);
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	while (1) {
 		unsigned idx = eytzinger0_find_ge(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),

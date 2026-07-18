@@ -214,7 +214,7 @@ int bch2_set_version_incompat(struct bch_fs *c, enum bcachefs_metadata_version v
 {
 	if (((c->sb.features & BIT_ULL(BCH_FEATURE_incompat_version_field)) &&
 	     version <= c->sb.version_incompat_allowed)) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+		guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 		guard(mutex)(&c->sb_lock);
 
 		if (version > c->sb.version_incompat) {
@@ -361,7 +361,7 @@ int bch2_sb_realloc(struct bch_sb_handle *sb, unsigned u64s)
 	if (dynamic_fault("bcachefs:add:super_realloc"))
 		return -BCH_ERR_ENOMEM_sb_realloc_injected;
 
-	new_sb = kvrealloc(sb->sb, new_buffer_size, GFP_NOFS|__GFP_ZERO);
+	new_sb = kvrealloc(sb->sb, new_buffer_size, GFP_NOIO|__GFP_ZERO);
 	if (!new_sb)
 		return -BCH_ERR_ENOMEM_sb_buf_realloc;
 
@@ -1439,7 +1439,7 @@ int bch2_write_super(struct bch_fs *c)
 
 void __bch2_check_set_feature(struct bch_fs *c, unsigned feat)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 	guard(mutex)(&c->sb_lock);
 	if (!(c->sb.features & BIT_ULL(feat))) {
 		c->disk_sb.sb->features[0] |= cpu_to_le64(BIT_ULL(feat));
@@ -1493,7 +1493,7 @@ void bch2_sb_upgrade(struct bch_fs *c, unsigned new_version, bool incompat)
 
 void bch2_sb_upgrade_incompat(struct bch_fs *c)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 	guard(mutex)(&c->sb_lock);
 
 	if (c->sb.version == c->sb.version_incompat_allowed)

@@ -312,7 +312,7 @@ static struct fsck_err_state *fsck_err_get(struct bch_fs *c,
 			return s;
 		}
 
-	s = kzalloc(sizeof(*s), GFP_NOFS);
+	s = kzalloc(sizeof(*s), GFP_NOIO);
 	if (!s) {
 		if (!c->errors.msgs_alloc_err)
 			bch_err(c, "kmalloc err, cannot ratelimit fsck errs");

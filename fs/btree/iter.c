@@ -3908,7 +3908,7 @@ static inline struct btree_trans *bch2_trans_alloc(struct bch_fs *c)
 		}
 	}
 
-	struct btree_trans *trans = mempool_alloc(&c->btree.trans.pool, GFP_NOFS);
+	struct btree_trans *trans = mempool_alloc(&c->btree.trans.pool, GFP_NOIO);
 	memset(trans, 0, sizeof(*trans));
 
 	seqmutex_lock(&c->btree.trans.lock);

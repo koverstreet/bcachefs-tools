@@ -1210,7 +1210,7 @@ void bch2_submit_wbio_replicas(struct bch_write_bio *wbio, struct bch_fs *c,
 			: bch2_dev_get_ioref(c, ptr->dev, ref_rw, ref_idx);
 
 		if (ptr != last) {
-			n = to_wbio(bio_alloc_clone(NULL, &wbio->bio, GFP_NOFS, &c->replica_set));
+			n = to_wbio(bio_alloc_clone(NULL, &wbio->bio, GFP_NOIO, &c->replica_set));
 
 			n->bio.bi_end_io	= wbio->bio.bi_end_io;
 			n->bio.bi_private	= wbio->bio.bi_private;
@@ -1581,7 +1581,7 @@ static struct bio *bch2_write_bio_alloc(struct bch_fs *c,
 
 	pages = min(pages, BIO_MAX_VECS);
 
-	bio = bio_alloc_bioset(NULL, pages, 0, GFP_NOFS, &c->bio_write);
+	bio = bio_alloc_bioset(NULL, pages, 0, GFP_NOIO, &c->bio_write);
 	wbio			= wbio_init(bio);
 	wbio->put_bio		= true;
 	/* copy WRITE_SYNC flag */
@@ -1608,13 +1608,13 @@ static struct bio *bch2_write_bio_alloc(struct bch_fs *c,
 	bch2_bio_alloc_pages(bio,
 			     c->opts.block_size,
 			     output_available,
-			     GFP_NOFS|__GFP_SKIP_ZERO);
+			     GFP_NOIO|__GFP_SKIP_ZERO);
 
 	unsigned required = min(output_available, c->opts.encoded_extent_max);
 
 	if (unlikely(bio->bi_iter.bi_size < required))
 		__bch2_bio_alloc_pages_pool(c, bio, c->opts.block_size, required,
-					    GFP_NOFS|__GFP_SKIP_ZERO);
+					    GFP_NOIO|__GFP_SKIP_ZERO);
 
 	return bio;
 }
@@ -1968,7 +1968,7 @@ static int bch2_write_extent(struct bch_write_op *op, struct write_point *wp,
 		BUG_ON(total_output != total_input);
 
 		dst = bio_split(src, total_input >> 9,
-				GFP_NOFS, &c->bio_write);
+				GFP_NOIO, &c->bio_write);
 		wbio_init(dst)->put_bio	= true;
 		/* copy WRITE_SYNC flag */
 		dst->bi_opf		= src->bi_opf;
@@ -2374,7 +2374,7 @@ static void __bch2_write(struct bch_write_op *op)
 		(!(op->flags & BCH_WRITE_submitted) &&
 		 !(op->flags & BCH_WRITE_in_worker));
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	if (unlikely(op->opts.nocow &&
 		     c->opts.nocow_enabled) &&

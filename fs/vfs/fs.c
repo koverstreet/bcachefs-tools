@@ -512,7 +512,7 @@ static struct bch_inode_info *bch2_new_inode(struct btree_trans *trans)
 	struct bch_inode_info *inode = __bch2_new_inode(trans->c, GFP_NOWAIT);
 
 	if (unlikely(!inode)) {
-		int ret = drop_locks_do(trans, (inode = __bch2_new_inode(trans->c, GFP_NOFS)) ? 0 : -ENOMEM);
+		int ret = drop_locks_do(trans, (inode = __bch2_new_inode(trans->c, GFP_NOIO)) ? 0 : -ENOMEM);
 		if (ret && inode) {
 			__destroy_inode(&inode->v);
 			fast_list_put_idx(&trans->c->vfs.inodes, inode->ei_inodes_idx);
@@ -660,7 +660,7 @@ __bch2_create(struct mnt_idmap *idmap,
 			return ERR_PTR(ret);
 	}
 
-	inode = __bch2_new_inode(c, GFP_NOFS);
+	inode = __bch2_new_inode(c, GFP_NOIO);
 	if (unlikely(!inode))
 		return ERR_PTR(-ENOMEM);
 

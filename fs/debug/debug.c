@@ -74,7 +74,7 @@ __cold void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *
 	bio = bio_alloc_bioset(ca->disk_sb.bdev,
 			       buf_nr_bvecs(n_ondisk, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_META,
-			       GFP_NOFS,
+			       GFP_NOIO,
 			       &c->btree.bio);
 	bio->bi_iter.bi_sector	= pick.ptr.offset;
 	bch2_bio_map(bio, n_ondisk, btree_buf_bytes(b));

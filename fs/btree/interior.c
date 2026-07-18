@@ -783,7 +783,7 @@ static void btree_update_new_nodes_mark_sb(struct btree_update *as)
 {
 	struct bch_fs *c = as->c;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 	guard(mutex)(&c->sb_lock);
 	bool write_sb = false;
 	darray_for_each(as->new_nodes, i)
@@ -1480,7 +1480,7 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 		}
 	}
 
-	as = mempool_alloc(&c->btree.interior_updates.pool, GFP_NOFS);
+	as = mempool_alloc(&c->btree.interior_updates.pool, GFP_NOIO);
 	memset(as, 0, sizeof(*as));
 	closure_init(&as->cl, NULL);
 	as->c			= c;
@@ -3490,7 +3490,7 @@ void bch2_async_btree_op(struct bch_fs *c, struct btree *b,
 		return;
 
 	struct async_btree_rewrite *a =
-		kzalloc(sizeof(*a), GFP_NOFS|__GFP_NORETRY|__GFP_NOWARN);
+		kzalloc(sizeof(*a), GFP_NOIO|__GFP_NORETRY|__GFP_NOWARN);
 	if (!a)
 		return;
 
