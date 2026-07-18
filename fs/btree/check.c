@@ -188,6 +188,24 @@ static int set_node_max(struct bch_fs *c, struct btree *b, struct bpos new_max)
 	return 0;
 }
 
+/*
+ * Commit the fsck "repaired" log entry queued by mustfix_fsck_err().
+ *
+ * Topology repair runs before we go rw and applies its fixes through journal
+ * keys (not transactional updates), so nothing else here commits - but the log
+ * is a transaction update, and the next bch2_trans_begin() would silently drop
+ * it. Commit it here, at the check, *before* the mutation: a commit can return
+ * a transaction restart (fault injection, journal, ...), and doing it first
+ * means the restart re-runs only the check - which re-queues the log - never
+ * the non-transactional mutation, which must run exactly once.
+ */
+static int commit_topology_repair_log(struct btree_trans *trans)
+{
+	return bch2_trans_has_updates(trans)
+		? bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc)
+		: 0;
+}
+
 static int btree_check_node_boundaries(struct btree_trans *trans, struct btree *b,
 				       struct btree *prev, struct btree *cur)
 {
@@ -234,6 +252,7 @@ static int btree_check_node_boundaries(struct btree_trans *trans, struct btree *
 
 		if (mustfix_fsck_err(trans, btree_node_topology_gap_between_nodes,
 				     "gap between btree nodes%s", buf.buf)) {
+			try(commit_topology_repair_log(trans));
 			if (nodes_found)
 				return bch_err_throw(c, topology_repair_did_fill_from_scan);
 			else
@@ -243,22 +262,30 @@ static int btree_check_node_boundaries(struct btree_trans *trans, struct btree *
 		if (prev && BTREE_NODE_SEQ(cur->data) > BTREE_NODE_SEQ(prev->data)) {	/* cur overwrites prev */
 			if (bpos_ge(prev->data->min_key, cur->data->min_key)) {		/* fully? */
 				if (mustfix_fsck_err(trans, btree_node_topology_overwritten_by_next_node,
-						     "btree node overwritten by next node%s", buf.buf))
+						     "btree node overwritten by next node%s", buf.buf)) {
+					try(commit_topology_repair_log(trans));
 					return bch_err_throw(c, topology_repair_drop_prev_node);
+				}
 			} else {
 				if (mustfix_fsck_err(trans, btree_node_topology_bad_max_key,
-						     "btree node with incorrect max_key%s", buf.buf))
+						     "btree node with incorrect max_key%s", buf.buf)) {
+					try(commit_topology_repair_log(trans));
 					return set_node_max(c, prev, bpos_predecessor(cur->data->min_key));
+				}
 			}
 		} else {
 			if (bpos_ge(expected_start, cur->data->max_key)) {		/* fully? */
 				if (mustfix_fsck_err(trans, btree_node_topology_overwritten_by_prev_node,
-						     "btree node overwritten by prev node%s", buf.buf))
+						     "btree node overwritten by prev node%s", buf.buf)) {
+					try(commit_topology_repair_log(trans));
 					return bch_err_throw(c, topology_repair_drop_this_node);
+				}
 			} else {
 				if (mustfix_fsck_err(trans, btree_node_topology_bad_min_key,
-						     "btree node with incorrect min_key%s", buf.buf))
+						     "btree node with incorrect min_key%s", buf.buf)) {
+					try(commit_topology_repair_log(trans));
 					return set_node_min(c, cur, expected_start);
+				}
 			}
 		}
 	}
@@ -317,6 +344,7 @@ static int btree_repair_node_end(struct btree_trans *trans, struct btree *b, str
 
 	if (mustfix_fsck_err(trans, btree_node_topology_bad_max_key,
 			     "btree node with incorrect max_key%s", buf.buf)) {
+		try(commit_topology_repair_log(trans));
 
 		if (nodes_found)
 			return bch_err_throw(c, topology_repair_did_fill_from_scan);
