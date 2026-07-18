@@ -767,7 +767,7 @@ static int dirent_to_missing_inode(struct btree_trans *trans,
 	 * Scheduling the pass takes sb_lock and may write the superblock;
 	 * we're on the error return path, nothing here needs btree locks:
 	 */
-	bch2_trans_unlock(trans);
+	bch2_trans_unlock_long(trans);
 	return bch2_run_explicit_recovery_pass(c, &msg.m,
 					       BCH_RECOVERY_PASS_check_dirents, 0);
 }

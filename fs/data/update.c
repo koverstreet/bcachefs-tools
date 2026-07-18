@@ -1507,7 +1507,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 				(locked = bch2_bkey_nocow_trylock(c, ptrs, m->cas, 0)) ||
 				list_empty(&ctxt->ios));
 			if (!locked) {
-				bch2_trans_unlock(trans);
+				bch2_trans_unlock_long(trans);
 				bch2_bkey_nocow_lock(c, trans, ptrs, m->cas, 0);
 			}
 		}

@@ -155,7 +155,7 @@ int bch2_dev_remove_stripes(struct bch_fs *c, unsigned dev_idx,
 		if (ret || !had_open)
 			goto out;
 
-		bch2_trans_unlock(trans);
+		bch2_trans_unlock_long(trans);
 		bch2_fs_ec_flush_outstanding(c);
 	}
 

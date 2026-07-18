@@ -292,7 +292,7 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 		 * it never drains, the stall counter still terminates us.
 		 */
 		if (had_open_stripe) {
-			bch2_trans_unlock(trans);
+			bch2_trans_unlock_long(trans);
 			bch2_fs_ec_flush_outstanding(c);
 		}
 	}
