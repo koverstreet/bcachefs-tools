@@ -48,6 +48,16 @@ struct inode_walker {
 	/* cached inodes are valid while trans->commit_count is unchanged: */
 	u32				commit_count;
 
+	/*
+	 * check_key_has_snapshot may migrate a key to a lower snapshot ID -
+	 * a position we've already scanned past - so once we've finished the
+	 * inode we re-scan it to rebuild the per-inode accumulations. repaired_inum
+	 * is the inode that was repaired; restarted_inum bounds this to one
+	 * re-scan per inode so it can't loop.
+	 */
+	u64				repaired_inum;
+	u64				restarted_inum;
+
 	DARRAY(struct inode_walker_entry) inodes;
 	snapshot_id_list		deletes;
 };
