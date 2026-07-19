@@ -1171,6 +1171,7 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 		return 1;
 
 	if (state != SNAPSHOT_ID_deleted &&
+	    state != SNAPSHOT_ID_no_keys &&
 	    state != SNAPSHOT_ID_empty)
 		return 0;
 
@@ -1219,7 +1220,8 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 
 	unsigned repair_flags = FSCK_CAN_IGNORE | (!ret ? FSCK_CAN_FIX : 0);
 
-	if (state == SNAPSHOT_ID_deleted) {
+	if (state == SNAPSHOT_ID_deleted ||
+	    state == SNAPSHOT_ID_no_keys) {
 		/*
 		 * If there's no live descendant (a leaf, or an interior node whose
 		 * subtree is entirely deleted) the key is genuinely orphaned -

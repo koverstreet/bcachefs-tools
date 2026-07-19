@@ -616,12 +616,21 @@ static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 		bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(new));
 		enum bch_snapshot_state state = bch2_snapshot_state_compat(&s);
 
-		t->state	= state == SNAPSHOT_STATE_no_keys ||
-				  state == SNAPSHOT_STATE_deleted
-			? SNAPSHOT_ID_deleted
-			: state == SNAPSHOT_STATE_will_delete
-			? SNAPSHOT_ID_will_delete
-			: SNAPSHOT_ID_live;
+		switch (state) {
+		case SNAPSHOT_STATE_live:
+			t->state = SNAPSHOT_ID_live;
+			break;
+		case SNAPSHOT_STATE_will_delete:
+			t->state = SNAPSHOT_ID_will_delete;
+			break;
+		case SNAPSHOT_STATE_no_keys:
+			t->state = SNAPSHOT_ID_no_keys;
+			break;
+		case SNAPSHOT_STATE_deleted:
+			t->state = SNAPSHOT_ID_deleted;
+			break;
+		}
+
 		t->parent	= le32_to_cpu(s.parent);
 		t->children[0]	= le32_to_cpu(s.children[0]);
 		t->children[1]	= le32_to_cpu(s.children[1]);
