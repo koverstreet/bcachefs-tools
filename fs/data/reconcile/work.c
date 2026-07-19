@@ -528,7 +528,7 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 						 * reads as durability=0, but we drop it once the
 						 * required durability is held by other devices.
 						 */
-						if (have >= r->data_replicas &&
+						if ((force || have >= r->data_replicas) &&
 						    (force || have < was)) {
 							data_opts->ptrs_kill |= ptr_bit;
 							cur = d;
@@ -1087,15 +1087,21 @@ static int do_reconcile_scan_bp(struct btree_trans *trans,
 				struct bkey_s_c_backpointer bp,
 				struct wb_maybe_flush *last_flushed)
 {
+	struct bch_fs *c = trans->c;
+
 	/*
 	 * We're propagating a device state change or device durability change,
 	 * and if an extent is erasure coded it'll be handled at the stripe
-	 * level:
+	 * level -- except during shrink, where no stripe-level evacuation runs
+	 * and EC extents in the shrinking region need to be found and moved
+	 * via the extent-level data_update path:
 	 */
-	if (BACKPOINTER_ERASURE_CODED(bp.v))
-		return 0;
+	if (BACKPOINTER_ERASURE_CODED(bp.v)) {
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, s.dev);
+		if (!ca || !bch2_dev_is_shrinking(ca))
+			return 0;
+	}
 
-	struct bch_fs *c = trans->c;
 	struct bch_fs_reconcile *r = &c->reconcile;
 
 	CLASS(btree_iter_uninit, iter)(trans);
