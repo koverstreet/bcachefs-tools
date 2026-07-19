@@ -389,7 +389,7 @@ int bch2_move_extent(struct moving_context *ctxt,
 
 		ret = bch2_btree_node_rewrite_pos(trans, iter->btree_id, level, k.k->p,
 						  data_opts->target,
-						  data_opts->commit_flags,
+						  commit_flags,
 						  data_opts->write_flags);
 
 		/* ENOMEM becomes a restart below and gets retried - not an outcome */
