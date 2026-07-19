@@ -418,14 +418,28 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	bool rewind = recovery_pass_needs_rewind(c, pass);
 
 	/*
+	 * A pass that already completed this run must never be re-run in the
+	 * same loop - that's the rewind invariant, which recovery_pass_needs_rewind
+	 * enforces by gating on passes_complete. The "run it now because it can't
+	 * be deferred to the background" arm has to honor the same invariant:
+	 * otherwise a pass that reschedules an earlier, already-completed pass
+	 * (check_key_has_snapshot scheduling check_inodes/check_extents while
+	 * running check_xattrs, once the dead-snapshot keys those passes would
+	 * clean are still present) injects it back into current_passes and we
+	 * re-run the whole content-check range out of order, looping.
+	 */
+	bool run_now = rewind ||
+		(!recovery_pass_should_defer(pass, r->current_passes) &&
+		 !(r->passes_complete & BIT_ULL(pass)));
+
+	/*
 	 * Ephemeral scheduling is best-effort and must never rewind: the caller
 	 * may be a BTREE_TRIGGER_atomic trigger committed to its commit, which
 	 * can't restart recovery (and ignores our return). If the pass already
 	 * ran, the scheduled_passes_ephemeral backstop reruns it via the async
 	 * runner instead.
 	 */
-	if (running && !ratelimit &&
-	    (rewind || !recovery_pass_should_defer(pass, r->current_passes)) &&
+	if (running && !ratelimit && run_now &&
 	    !(rewind && (flags & RUN_RECOVERY_PASS_ephemeral))) {
 		prt_printf(out, "running recovery pass %s (%u), currently at %s (%u)%s\n",
 			   bch2_recovery_passes[pass], pass,
