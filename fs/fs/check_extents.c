@@ -460,7 +460,13 @@ int bch2_check_extents(struct bch_fs *c)
 		bch2_progress_update_iter(trans, &progress, &iter) ?:
 		check_extent(trans, &iter, k, &w, &s, &extent_ends, &res.r);
 	})) ?:
-	check_i_sectors_notnested(trans, &w);
+	/*
+	 * Final flush of the last inode's i_sectors, via the nested
+	 * check_i_sectors so the inner fsck_write_inode commits are exempt from
+	 * the trans_begin dropped-updates warning (calling _notnested directly
+	 * would trip it).
+	 */
+	check_i_sectors(trans, &w);
 }
 
 int bch2_check_indirect_extents(struct bch_fs *c)
