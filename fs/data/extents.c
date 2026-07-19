@@ -1073,7 +1073,7 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 		 * evacuating device reads as durability 0 for the minimum.
 		 */
 		ret->acct += desired;
-		unsigned d_min = !p.has_ec && bch2_dev_bad_or_evacuating(c, p.ptr.dev)
+		unsigned d_min = !p.has_ec && bch2_ptr_bad_or_evacuating(c, &p.ptr)
 			? 0 : desired;
 		ret->min_durability = min(ret->min_durability, d_min);
 	}
