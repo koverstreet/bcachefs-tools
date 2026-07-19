@@ -27,13 +27,10 @@ static int remove_backpointer(struct btree_trans *trans,
 
 	u32 snapshot = inode->bi_snapshot;
 
-	if (inode->bi_parent_subvol)
-		try(bch2_subvolume_get_snapshot(trans, inode->bi_parent_subvol, &snapshot));
-
 	struct bch_fs *c = trans->c;
+
 	CLASS(btree_iter_uninit, iter)(trans);
-	struct bkey_s_c_dirent d = bkey_try(dirent_get_by_pos(trans, &iter,
-				     SPOS(inode->bi_dir, inode->bi_dir_offset, snapshot)));
+	struct bkey_s_c_dirent d = bch2_inode_get_dirent(trans, &iter, inode, &snapshot);
 
 	try(dirent_points_to_inode(c, d, inode));
 	try(bch2_fsck_remove_dirent(trans, d.k->p));
@@ -187,6 +184,19 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 
 	struct bch_inode_unpacked inode;
 	bch2_inode_unpack(c, inode_k, &inode);
+
+	/*
+	 * If this inode sits at a redundant interior snapshot node that
+	 * delete_dead_snapshots will collapse into a live descendant, do the whole
+	 * path traversal in the descendant's view: an interrupted collapse migrated
+	 * the naming dirents and parent inodes down there, and that's the state the
+	 * subtree is converging on - otherwise a half-migrated dirent reads as a
+	 * spurious unreachable-inode. Computed once (the walk stays in one
+	 * snapshot); no-op on a healthy fs.
+	 */
+	u32 collapse_terminal = bch2_snapshot_redundant_interior(c, snapshot);
+	if (collapse_terminal)
+		snapshot = collapse_terminal;
 
 	CLASS(btree_iter, inode_iter)(trans, BTREE_ID_inodes, POS_MIN, 0);
 

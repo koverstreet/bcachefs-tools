@@ -326,8 +326,7 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 
 		subvol->v.fs_path_parent = BCACHEFS_ROOT_SUBVOL;
 
-		u64 root_inum;
-		try(subvol_lookup(trans, inode->bi_parent_subvol, &dirent_snapshot, &root_inum));
+		try(bch2_subvolume_get_snapshot(trans, inode->bi_parent_subvol, &dirent_snapshot));
 
 		snprintf(name_buf, sizeof(name_buf), "subvol-%u", inode->bi_subvol);
 	} else {
@@ -701,8 +700,10 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 {
 	struct bch_fs *c = trans->c;
 
+	u32 k_snapshot = bch2_snapshot_redundant_interior(c, k.k->p.snapshot) ?: k.k->p.snapshot;
+
 	struct inode_walker_entry *i = darray_find_p(w->inodes, i,
-		    bch2_snapshot_is_ancestor(trans, k.k->p.snapshot, i->inode.bi_snapshot));
+		    bch2_snapshot_is_ancestor(trans, k_snapshot, i->inode.bi_snapshot));
 
 	if (!i)
 		return NULL;
@@ -710,7 +711,9 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 	CLASS(printbuf, buf)();
 	int ret = 0;
 
-	if (fsck_err_on(k.k->p.snapshot != i->inode.bi_snapshot,
+	u32 inode_snapshot = bch2_snapshot_redundant_interior(c, i->inode.bi_snapshot) ?: i->inode.bi_snapshot;
+
+	if (fsck_err_on(k_snapshot != inode_snapshot,
 			trans, snapshot_key_missing_inode_snapshot,
 			 "have key for inode %llu:%u but have inode in ancestor snapshot %u\n"
 			 "unexpected because we should always update the inode when we update a key in that inode\n"
@@ -808,7 +811,7 @@ int bch2_fsck_update_backpointers(struct btree_trans *trans,
 		/*
 		 * A subvolume dirent's backpointer lives on the child
 		 * subvolume's root inode (bi_dir_offset), same as a regular
-		 * inode - see inode_get_dirent(). Resolve child_subvol -> root
+		 * inode - see bch2_inode_get_dirent(). Resolve child_subvol -> root
 		 * inode and update it. A dangling subvol dirent (subvol or root
 		 * inode gone) is check_subvols/check_dirents' problem, not ours.
 		 */
@@ -843,21 +846,6 @@ int bch2_fsck_update_backpointers(struct btree_trans *trans,
 	}
 }
 
-static struct bkey_s_c_dirent inode_get_dirent(struct btree_trans *trans,
-					       struct btree_iter *iter,
-					       struct bch_inode_unpacked *inode,
-					       u32 *snapshot)
-{
-	if (inode->bi_subvol) {
-		u64 inum;
-		int ret = subvol_lookup(trans, inode->bi_parent_subvol, snapshot, &inum);
-		if (ret)
-			return ((struct bkey_s_c_dirent) { .k = ERR_PTR(ret) });
-	}
-
-	return dirent_get_by_pos(trans, iter, SPOS(inode->bi_dir, inode->bi_dir_offset, *snapshot));
-}
-
 static int check_inode_deleted_list(struct btree_trans *trans, struct bpos p)
 {
 	CLASS(btree_iter, iter)(trans, BTREE_ID_deleted_inodes, p, 0);
@@ -874,7 +862,7 @@ static int check_inode_dirent_inode(struct btree_trans *trans,
 
 	u32 inode_snapshot = inode->bi_snapshot;
 	CLASS(btree_iter_uninit, dirent_iter)(trans);
-	struct bkey_s_c_dirent d = inode_get_dirent(trans, &dirent_iter, inode, &inode_snapshot);
+	struct bkey_s_c_dirent d = bch2_inode_get_dirent(trans, &dirent_iter, inode, &inode_snapshot);
 	int ret = bkey_err(d);
 	if (ret && !bch2_err_matches(ret, ENOENT))
 		return ret;
@@ -1624,11 +1612,10 @@ static int check_dirent_to_subvol(struct btree_trans *trans, struct btree_iter *
 	u32 target_subvol = le32_to_cpu(d.v->d_child_subvol);
 	u32 parent_snapshot;
 	u32 new_parent_subvol = 0;
-	u64 parent_inum;
 	CLASS(printbuf, buf)();
 	int ret = 0;
 
-	ret = subvol_lookup(trans, parent_subvol, &parent_snapshot, &parent_inum);
+	ret = bch2_subvolume_get_snapshot(trans, parent_subvol, &parent_snapshot);
 	if (ret && !bch2_err_matches(ret, ENOENT))
 		return ret;
 

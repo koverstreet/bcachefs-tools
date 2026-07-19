@@ -225,6 +225,8 @@ static inline bool bch2_snapshot_will_delete(struct bch_fs *c, u32 id)
 	return bch2_snapshot_id_state(c, id) == SNAPSHOT_ID_will_delete;
 }
 
+u32 bch2_snapshot_redundant_interior(struct bch_fs *, u32);
+
 static inline int bch2_snapshot_is_internal_node(struct bch_fs *c, u32 id)
 {
 	guard(rcu)();
