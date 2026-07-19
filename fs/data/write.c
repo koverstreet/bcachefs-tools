@@ -1482,8 +1482,7 @@ void bch2_write_point_do_index_updates(struct work_struct *work)
 
 		op->flags |= BCH_WRITE_in_worker;
 
-		bool is_swap = (op->flags & BCH_WRITE_swap) &&
-			       bch2_swap_noreclaim_enabled;
+		bool is_swap = op->flags & BCH_WRITE_swap;
 
 		/*
 		 * Pre-allocate the bkey spill buffer while we can still

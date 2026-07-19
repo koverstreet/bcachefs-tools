@@ -6,8 +6,6 @@
 
 struct swap_info_struct;
 
-extern bool bch2_swap_noreclaim_enabled;
-
 int bch2_swap_activate(struct swap_info_struct *, struct file *, sector_t *);
 void bch2_swap_deactivate(struct file *);
 int bch2_swap_rw(struct kiocb *, struct iov_iter *);

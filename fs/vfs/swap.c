@@ -34,12 +34,10 @@
  */
 
 /*
- * Feature toggles for A/B testing.  Disable via kernel cmdline:
+ * Feature toggle for A/B testing.  Disable via kernel cmdline:
  *   bcachefs.swap_nopin       - disable btree node pinning
- *   bcachefs.swap_noreclaim   - disable PF_MEMALLOC in swap_rw
  */
 static bool bch2_swap_pin_enabled = true;
-bool bch2_swap_noreclaim_enabled = true; /* also checked in data/write.c */
 
 /* __setup() only fires built-in; harmless no-op in module builds. */
 static int __init __maybe_unused swap_nopin_setup(char *s)
@@ -48,13 +46,6 @@ static int __init __maybe_unused swap_nopin_setup(char *s)
 	return 1;
 }
 __setup("bcachefs.swap_nopin", swap_nopin_setup);
-
-static int __init __maybe_unused swap_noreclaim_setup(char *s)
-{
-	bch2_swap_noreclaim_enabled = false;
-	return 1;
-}
-__setup("bcachefs.swap_noreclaim", swap_noreclaim_setup);
 
 /*
  * Swap I/O diagnostics.
@@ -262,9 +253,7 @@ int bch2_swap_rw(struct kiocb *iocb, struct iov_iter *iter)
 	 *
 	 * PF_MEMALLOC bypasses watermarks and skips direct reclaim.
 	 */
-	unsigned int noreclaim_flags = 0;
-	if (bch2_swap_noreclaim_enabled)
-		noreclaim_flags = memalloc_noreclaim_save();
+	unsigned int noreclaim_flags = memalloc_noreclaim_save();
 
 	ssize_t ret;
 	if (rw == READ)
@@ -272,8 +261,7 @@ int bch2_swap_rw(struct kiocb *iocb, struct iov_iter *iter)
 	else
 		ret = bch2_write_iter(iocb, iter);
 
-	if (bch2_swap_noreclaim_enabled)
-		memalloc_noreclaim_restore(noreclaim_flags);
+	memalloc_noreclaim_restore(noreclaim_flags);
 
 	atomic_dec(&bch2_swap_inflight);
 
