@@ -3,6 +3,7 @@
 #include "bcachefs.h"
 
 #include "alloc/buckets.h"
+#include "alloc/foreground.h"
 #include "alloc/replicas.h"
 
 #include "btree/key_cache.h"
@@ -77,18 +78,31 @@ void bch2_journal_set_watermark(struct journal *j)
 		j->space[journal_space_total].total;
 	bool low_on_pin = fifo_free(&j->pin) < j->pin.size / 4;
 	bool low_on_wb = bch2_btree_write_buffer_must_wait(c);
+	/*
+	 * Open buckets are a fixed pool that btree nodes hold until their update's
+	 * journal commit lands; the reclaim path (write-buffer flush -> journal ->
+	 * writeback) both frees them and, to make progress, allocates them. If new
+	 * journal-reserving work (fsck repair) drains the pool, that reclaim path
+	 * can't get the buckets it needs to advance the journal and everything
+	 * wedges. Throttle new work early, keeping headroom above the reclaim
+	 * reserve - the reclaim path itself is exempt (no_journal_res).
+	 */
+	bool low_on_open_buckets =
+		c->allocator.open_buckets_nr_free < bch2_open_buckets_journal_reserved();
 
-	unsigned watermark = low_on_space || low_on_pin || low_on_wb
+	unsigned watermark = low_on_space || low_on_pin || low_on_wb || low_on_open_buckets
 		? BCH_WATERMARK_reclaim
 		: BCH_WATERMARK_stripe;
 
 	if (track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_space], low_on_space) |
 	    track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_pin], low_on_pin) |
+	    track_event_change(&c->times[BCH_TIME_blocked_journal_low_on_open_buckets], low_on_open_buckets) |
 	    track_event_change(&c->times[BCH_TIME_blocked_write_buffer_full], low_on_wb))
 		event_inc_trace(c, journal_full, buf, ({
 			guard(printbuf_atomic)(&buf);
 			prt_printf(&buf, "low_on_space %u\n",	low_on_space);
 			prt_printf(&buf, "low_on_pin %u\n",	low_on_pin);
+			prt_printf(&buf, "low_on_open_buckets %u\n", low_on_open_buckets);
 			prt_printf(&buf, "low_on_wb %u\n",	low_on_wb);
 			if (low_on_wb)
 				bch2_btree_write_buffer_to_text(&buf, c);
@@ -99,6 +113,7 @@ void bch2_journal_set_watermark(struct journal *j)
 	mod_bit(JOURNAL_low_on_space,	&j->flags, low_on_space);
 	mod_bit(JOURNAL_low_on_pin,	&j->flags, low_on_pin);
 	mod_bit(JOURNAL_low_on_wb,	&j->flags, low_on_wb);
+	mod_bit(JOURNAL_low_on_open_buckets, &j->flags, low_on_open_buckets);
 
 	swap(watermark, j->watermark);
 	if (watermark > j->watermark)
@@ -1402,6 +1417,7 @@ __cold void bch2_journal_reclaim_to_text(struct printbuf *out, struct journal *j
 	prt_printf(out, "Blocked time stats:\tcount\tavg\tmax\n");
 	bch2_time_stats_summary_to_text(out, "  low_on_space",		&c->times[BCH_TIME_blocked_journal_low_on_space]);
 	bch2_time_stats_summary_to_text(out, "  low_on_pin",		&c->times[BCH_TIME_blocked_journal_low_on_pin]);
+	bch2_time_stats_summary_to_text(out, "  low_on_open_buckets",	&c->times[BCH_TIME_blocked_journal_low_on_open_buckets]);
 	bch2_time_stats_summary_to_text(out, "  max_in_flight",		&c->times[BCH_TIME_blocked_journal_max_in_flight]);
 	bch2_time_stats_summary_to_text(out, "  max_open",		&c->times[BCH_TIME_blocked_journal_max_open]);
 	bch2_time_stats_summary_to_text(out, "  write_buffer_full",	&c->times[BCH_TIME_blocked_write_buffer_full]);

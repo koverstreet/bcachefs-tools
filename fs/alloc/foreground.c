@@ -41,6 +41,7 @@
 #include "init/error.h"
 
 #include "journal/journal.h"
+#include "journal/reclaim.h"
 
 #include "sb/counters.h"
 
@@ -842,6 +843,19 @@ err:
 
 	if (!ret) {
 		ob->data_type = req->data_type;
+
+		/*
+		 * We just consumed an open bucket. If the pool is getting low, poke
+		 * the journal watermark: it factors in open-bucket usage and will
+		 * throttle new journal-reserving work before the reclaim path starves
+		 * (see bch2_journal_set_watermark()). freelist_lock has been dropped
+		 * by now, so taking j->lock here doesn't nest the two.
+		 */
+		if (unlikely(READ_ONCE(c->allocator.open_buckets_nr_free) <
+			     bch2_open_buckets_journal_reserved())) {
+			guard(spinlock)(&c->journal.lock);
+			bch2_journal_set_watermark(&c->journal);
+		}
 
 		event_inc_trace(c, bucket_alloc, buf,
 			bucket_alloc_to_text(&buf, c, req, ob));

@@ -221,7 +221,8 @@ enum journal_space_from {
 	x(med_on_space)			\
 	x(low_on_space)			\
 	x(low_on_pin)			\
-	x(low_on_wb)
+	x(low_on_wb)			\
+	x(low_on_open_buckets)
 
 enum journal_flags {
 #define x(n)	JOURNAL_##n,
