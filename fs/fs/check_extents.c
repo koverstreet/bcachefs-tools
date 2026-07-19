@@ -340,6 +340,37 @@ static int check_extent_overbig(struct btree_trans *trans, struct btree_iter *it
 	return 0;
 }
 
+/*
+ * After a check_key_has_snapshot repair moved one of an inode's keys to a lower
+ * (live descendant) snapshot ID - an earlier position we'd already scanned past
+ * - the per-inode accumulations (i_sectors tally, extent_ends overlap state) no
+ * longer match the keys on disk, so we re-scan the inode from the start to
+ * rebuild them. Deferred to the inode boundary so each inode is re-scanned at
+ * most once. Overlap repair only ever trims genuinely-overlapping data (a
+ * migration changes key placement, never snapshot ancestry), so the stale state
+ * could never have destroyed anything - but the i_sectors tally would be
+ * repaired wrong, and a new overlap the migration created at the destination
+ * missed.
+ */
+static void extents_rescan_reset(struct inode_walker *inode,
+				 struct extent_ends *extent_ends)
+{
+	extent_ends_reset(extent_ends);
+	inode->have_inodes = false;	/* suppress the boundary check_i_sectors */
+	inode->last_pos = POS_MIN;	/* force get_inodes_all_snapshots + count reset */
+}
+
+static int check_extent_restart_inum(struct btree_trans *trans,
+				     struct btree_iter *iter,
+				     struct inode_walker *inode,
+				     struct extent_ends *extent_ends,
+				     u64 inum)
+{
+	extents_rescan_reset(inode, extent_ends);
+	bch2_btree_iter_set_pos(iter, POS(inum, 0));
+	return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+}
+
 noinline_for_stack
 static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 			struct bkey_s_c k,
@@ -350,17 +381,36 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 {
 	struct bch_fs *c = trans->c;
 	CLASS(printbuf, buf)();
+	u64 inum = k.k->p.inode;
 	int ret = 0;
+
+	/*
+	 * We've moved on from an inode that had a check_key_has_snapshot repair:
+	 * re-scan it now so its finalizing checks see the migrated keys. The
+	 * restarted_inum guard makes this at most one re-scan per inode - a hard
+	 * bound against looping.
+	 */
+	if (inode->repaired_inum &&
+	    inum > inode->repaired_inum &&
+	    inode->repaired_inum != inode->restarted_inum) {
+		inode->restarted_inum = inode->repaired_inum;
+		return check_extent_restart_inum(trans, iter, inode, extent_ends,
+						 inode->repaired_inum);
+	}
 
 	ret = bch2_check_key_has_snapshot(trans, iter, k);
 	if (ret < 0)
 		return ret;
-	/*
-	 * We can't use for_each_btree_key_commit() here because we have work to
-	 * do after the commit that can't handle a transaction restart
-	 */
-	if (ret)
-		return bch2_trans_commit(trans, res, NULL, BCH_TRANS_COMMIT_no_enospc);
+	if (ret) {
+		/*
+		 * Repaired a dead-snapshot key (typically migrated it to a lower
+		 * snapshot ID): note the inode so we re-scan it once we've moved
+		 * past it - see check_extent_restart_inum. The loop's commit_do
+		 * flushes the repair.
+		 */
+		inode->repaired_inum = inum;
+		return 0;
+	}
 
 	if (inode->last_pos.inode != k.k->p.inode && inode->have_inodes)
 		try(check_i_sectors(trans, inode));
@@ -457,13 +507,45 @@ int bch2_check_extents(struct bch_fs *c)
 	struct progress_indicator progress;
 	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_extents), 0);
 
-	int ret = for_each_btree_key(trans, iter, BTREE_ID_extents,
-				POS(BCACHEFS_ROOT_INO, 0),
-				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k, ({
-		bch2_disk_reservation_put(c, &res.r);
-		bch2_progress_update_iter(trans, &progress, &iter) ?:
-		check_extent(trans, &iter, k, &w, &s, &extent_ends, &res.r);
-	}));
+	CLASS(btree_iter, iter)(trans, BTREE_ID_extents, POS(BCACHEFS_ROOT_INO, 0),
+				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots);
+	int ret;
+
+	while (1) {
+		struct bkey_s_c k;
+		/*
+		 * peek, process and commit are one commit_do() so a restart
+		 * anywhere - including check_extent's in-loop re-scan (a set_pos
+		 * plus forced restart) - re-drives the whole thing atomically.
+		 */
+		ret = commit_do(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+			bch2_disk_reservation_put(c, &res.r);
+			bkey_err(k = bch2_btree_iter_peek(&iter)) ?:
+			(!k.k ? 0
+			      : (bch2_progress_update_iter(trans, &progress, &iter) ?:
+				 check_extent(trans, &iter, k, &w, &s, &extent_ends, &res.r)));
+		}));
+		if (ret)
+			break;
+
+		if (!k.k) {
+			/*
+			 * End of the btree: the last inode has no following key to
+			 * trigger check_extent_restart_inum, so if it had a repair
+			 * we haven't re-scanned yet, re-scan it now. restarted_inum
+			 * bounds this to one re-scan, same as the in-loop path.
+			 */
+			if (w.repaired_inum == w.restarted_inum)
+				break;
+			w.restarted_inum = w.repaired_inum;
+			extents_rescan_reset(&w, &extent_ends);
+			bch2_btree_iter_set_pos(&iter, POS(w.repaired_inum, 0));
+			continue;
+		}
+
+		bch2_btree_iter_advance(&iter);
+	}
+
 	if (!ret) {
 		/*
 		 * Final flush of the last inode's i_sectors. The inner
