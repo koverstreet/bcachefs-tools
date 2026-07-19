@@ -451,7 +451,8 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 	 * (data_update_useless_write_fail). Better to fail with freelist_empty
 	 * and retry from a fresh read.
 	 */
-	data_opts->write_flags |= BCH_WRITE_alloc_nowait;
+	if (!bkey_is_btree_ptr(k.k))
+		data_opts->write_flags |= BCH_WRITE_alloc_nowait;
 
 	/*
 	 * we can't add/drop replicas from btree nodes incrementally, we always
