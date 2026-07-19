@@ -453,20 +453,29 @@ int bch2_check_extents(struct bch_fs *c)
 	struct progress_indicator progress;
 	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_extents), 0);
 
-	return for_each_btree_key(trans, iter, BTREE_ID_extents,
+	int ret = for_each_btree_key(trans, iter, BTREE_ID_extents,
 				POS(BCACHEFS_ROOT_INO, 0),
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k, ({
 		bch2_disk_reservation_put(c, &res.r);
 		bch2_progress_update_iter(trans, &progress, &iter) ?:
 		check_extent(trans, &iter, k, &w, &s, &extent_ends, &res.r);
-	})) ?:
-	/*
-	 * Final flush of the last inode's i_sectors, via the nested
-	 * check_i_sectors so the inner fsck_write_inode commits are exempt from
-	 * the trans_begin dropped-updates warning (calling _notnested directly
-	 * would trip it).
-	 */
-	check_i_sectors(trans, &w);
+	}));
+	if (!ret) {
+		/*
+		 * Final flush of the last inode's i_sectors. The inner
+		 * fsck_write_inode() commits must be exempt from the trans_begin
+		 * dropped-updates warning, so set begin_may_drop_updates as
+		 * check_i_sectors() does - but call _notnested directly, NOT the
+		 * nested check_i_sectors(): that returns trans_was_restarted()
+		 * for an in-loop caller to retry on, and at this post-loop flush
+		 * the restart has no handler and faults recovery (it broke every
+		 * transaction-restart-injection test).
+		 */
+		trans->begin_may_drop_updates = true;
+		ret = check_i_sectors_notnested(trans, &w);
+		trans->begin_may_drop_updates = false;
+	}
+	return ret;
 }
 
 int bch2_check_indirect_extents(struct bch_fs *c)
