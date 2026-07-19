@@ -93,6 +93,27 @@ int __bch2_fsck_err(struct bch_fs *, struct btree_trans *,
 			type_is(c, struct btree_trans *) ? (struct btree_trans *) c : NULL,\
 			_flags, BCH_FSCK_ERR_##_err_type, __VA_ARGS__)
 
+/*
+ * Damage that fsck did to a specific path, remembered for the end-of-fsck
+ * summary. Bitmask: a single path may collect more than one. "reattached" is
+ * counted for a one-line summary, not listed; the rest are listed with their
+ * path.
+ */
+#define BCH_FSCK_DAMAGE_TYPES()						\
+	x(reattached,		0,	"reattached in lost+found")	\
+	x(dir_entries_removed,	1,	"had dangling entries removed") \
+	x(data_overwritten,	2,	"had data overwritten (overlapping extents)") \
+	x(keys_deleted,		3,	"had keys removed (snapshot no longer exists)")
+
+enum bch_fsck_damage_type {
+#define x(t, n, s)	FSCK_DAMAGE_##t = BIT(n),
+	BCH_FSCK_DAMAGE_TYPES()
+#undef x
+};
+
+void bch2_fsck_damaged(struct btree_trans *, struct bpos, enum bch_fsck_damage_type);
+void bch2_fsck_damaged_paths_to_text(struct printbuf *, struct bch_fs *);
+
 void bch2_flush_fsck_errs(struct bch_fs *);
 void bch2_free_fsck_errs(struct bch_fs *);
 

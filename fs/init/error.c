@@ -789,6 +789,108 @@ void bch2_free_fsck_errs(struct bch_fs *c)
 	__bch2_flush_fsck_errs(c, false);
 }
 
+/*
+ * Paths damaged during fsck, remembered for the end-of-fsck summary - see
+ * struct fsck_damaged_path. Recorded at the repair sites (reattach, dirent to
+ * missing inode, overlapping extents), deduped by (inum, snapshot) with reasons
+ * OR'd together. Dedup is what makes this restart-safe: a repair that runs
+ * again after a transaction restart just re-ORs the same bit.
+ */
+
+#define FSCK_DAMAGED_PATHS_MAX	4096
+#define FSCK_DAMAGED_PATHS_PRINT 200
+
+void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
+		       enum bch_fsck_damage_type reason)
+{
+	struct bch_fs *c = trans->c;
+	guard(mutex)(&c->errors.msgs_lock);
+
+	/* Damage on one inode arrives in runs - check the last entry first: */
+	if (c->errors.damaged_paths.nr) {
+		struct fsck_damaged_path *last = &darray_last(c->errors.damaged_paths);
+		if (last->inum == pos.inode && last->snapshot == pos.snapshot) {
+			last->reasons |= reason;
+			return;
+		}
+	}
+
+	darray_for_each(c->errors.damaged_paths, i)
+		if (i->inum == pos.inode && i->snapshot == pos.snapshot) {
+			i->reasons |= reason;
+			return;
+		}
+
+	if (c->errors.damaged_paths.nr >= FSCK_DAMAGED_PATHS_MAX ||
+	    darray_push(&c->errors.damaged_paths, ((struct fsck_damaged_path) {
+			.inum		= pos.inode,
+			.snapshot	= pos.snapshot,
+			.reasons	= reason,
+		})))
+		c->errors.damaged_paths_alloc_err = true;
+}
+
+void bch2_fsck_damaged_paths_to_text(struct printbuf *out, struct bch_fs *c)
+{
+	if (!c->errors.damaged_paths.nr)
+		return;
+
+	u32 nr_reattached = 0, nr_listed = 0;
+	darray_for_each(c->errors.damaged_paths, i) {
+		nr_reattached	+= !!(i->reasons & FSCK_DAMAGE_reattached);
+		nr_listed	+= !!(i->reasons & ~FSCK_DAMAGE_reattached);
+	}
+
+	if (nr_reattached)
+		prt_printf(out, "%u inodes reattached in lost+found\n", nr_reattached);
+
+	if (!nr_listed)
+		return;
+
+	prt_printf(out, "%u paths damaged by fsck", nr_listed);
+	if (c->errors.damaged_paths_alloc_err)
+		prt_str(out, " (list incomplete)");
+	prt_str(out, ":\n");
+	bch2_printbuf_indent_add(out, 2);
+
+	CLASS(btree_trans, trans)(c);
+	CLASS(printbuf, path)();
+	u32 nr_printed = 0;
+
+	darray_for_each(c->errors.damaged_paths, i) {
+		if (!(i->reasons & ~FSCK_DAMAGE_reattached))
+			continue;
+
+		if (nr_printed++ >= FSCK_DAMAGED_PATHS_PRINT) {
+			prt_printf(out, "... and %u more\n", nr_listed - FSCK_DAMAGED_PATHS_PRINT);
+			break;
+		}
+
+		/* Resolve into a temp buffer so a restart doesn't duplicate output: */
+		int ret = lockrestart_do(trans, (printbuf_reset(&path),
+			bch2_inum_snapshot_to_path(trans, i->inum, i->snapshot, NULL, &path)));
+		if (!ret)
+			prt_str(out, path.buf);
+		else
+			prt_printf(out, "inum %llu:%u", i->inum, i->snapshot);
+
+		prt_str(out, ": ");
+
+		bool first = true;
+#define x(t, n, s)							\
+		if (i->reasons & FSCK_DAMAGE_##t) {			\
+			prt_str(out, first ? "" : ", ");			\
+			prt_str(out, s);				\
+			first = false;					\
+		}
+		BCH_FSCK_DAMAGE_TYPES()
+#undef x
+		prt_newline(out);
+	}
+
+	bch2_printbuf_indent_sub(out, 2);
+}
+
 int bch2_inum_offset_err_msg_trans_norestart(struct btree_trans *trans, struct printbuf *out,
 					     u32 subvol, struct bpos pos)
 {
@@ -817,12 +919,14 @@ void bch2_inum_offset_err_msg_trans(struct btree_trans *trans, struct printbuf *
 
 void bch2_fs_errors_exit(struct bch_fs *c)
 {
+	darray_exit(&c->errors.damaged_paths);
 	darray_exit(&c->errors.counts);
 }
 
 void bch2_fs_errors_init_early(struct bch_fs *c)
 {
 	darray_init(&c->errors.msgs);
+	darray_init(&c->errors.damaged_paths);
 	mutex_init(&c->errors.msgs_lock);
 
 	mutex_init(&c->errors.counts_lock);
