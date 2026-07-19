@@ -43,6 +43,9 @@ int bch2_rename_trans(struct btree_trans *,
 bool bch2_reinherit_attrs(struct bch_inode_unpacked *,
 			  struct bch_inode_unpacked *);
 
+struct bkey_s_c_dirent bch2_inode_get_dirent(struct btree_trans *, struct btree_iter *,
+					     struct bch_inode_unpacked *, u32 *);
+
 int bch2_inum_to_path(struct btree_trans *, subvol_inum, struct printbuf *);
 
 #define INUM_TO_PATH_FAIL_ON_ERR	(1 << 0)
