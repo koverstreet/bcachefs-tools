@@ -1925,7 +1925,12 @@ again:
 			check_dirent(trans, &iter, k, &hash_info, &dir, &target, &s,
 				     &need_second_pass);
 		})) ?:
-		check_subdir_count_notnested(trans, &dir);
+		/*
+		 * Final flush, via the nested check_subdir_dirents_count so the
+		 * inner fsck_write_inode commits are exempt from the trans_begin
+		 * dropped-updates warning (same as check_extents).
+		 */
+		check_subdir_dirents_count(trans, &dir);
 
 	if (!ret && need_second_pass && !did_second_pass) {
 		bch_info(c, "check_dirents requires second pass");
