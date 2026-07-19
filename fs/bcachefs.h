@@ -376,6 +376,9 @@ BCH_DEBUG_PARAMS_ALL()
 	x(blocked_journal_low_on_pin,					\
 	  "Blocked: journal pins (dirty btree nodes, "			\
 	  "key cache entries) not flushed fast enough")			\
+	x(blocked_journal_low_on_open_buckets,				\
+	  "Blocked: open buckets running low, throttling new "		\
+	  "journal work so reclaim can free them")			\
 	x(blocked_journal_max_in_flight,				\
 	  "Blocked: too many journal writes in flight")			\
 	x(blocked_journal_max_open,					\
