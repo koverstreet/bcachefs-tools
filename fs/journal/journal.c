@@ -934,17 +934,6 @@ out:
 	return ret;
 }
 
-static unsigned max_dev_latency(struct bch_fs *c)
-{
-	u64 nsecs = 0;
-
-	guard(rcu)();
-	for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[BCH_DATA_journal])
-		nsecs = max(nsecs, ca->io_latency[WRITE].stats.max_duration);
-
-	return nsecs_to_jiffies(nsecs);
-}
-
 /*
  * Essentially the entry function to the journaling code. When bcachefs is doing
  * a btree insert, it calls this function to get the current journal write.
@@ -963,7 +952,7 @@ int bch2_journal_res_get_slowpath(struct journal *j, struct journal_res *res,
 		return __journal_res_get(j, res, flags);
 
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	long total_wait = max(max_dev_latency(c) * 2, HZ * 10);
+	long total_wait = max(bch2_dev_latency_max(c, &c->allocator.rw_devs[BCH_DATA_journal], WRITE) * 2, HZ * 10);
 	int ret;
 
 	if (trans_wait_event_timeout(trans, &j->async_wait,
@@ -1211,7 +1200,7 @@ int bch2_journal_flush_seq(struct journal *j, u64 seq, unsigned task_state)
 	 * legitimately take: twice the longest write latency we've seen, or 10s,
 	 * whichever is greater (matches bch2_journal_res_get_slowpath()).
 	 */
-	long total_wait = max(max_dev_latency(c) * 2, HZ * 10);
+	long total_wait = max(bch2_dev_latency_max(c, &c->allocator.rw_devs[BCH_DATA_journal], WRITE) * 2, HZ * 10);
 
 	if (closure_sync_timeout(&cl, total_wait)) {
 		CLASS(printbuf, buf)();
