@@ -788,6 +788,21 @@ unsigned bch2_sb_nr_devices(const struct bch_sb *sb)
 	return nr;
 }
 
+/*
+ * Worst observed IO latency (@rw) across @devs, in jiffies - used to scale
+ * timeouts and "held too long" warnings so slow storage doesn't trip them.
+ */
+unsigned long bch2_dev_latency_max(struct bch_fs *c, struct bch_devs_mask *devs, int rw)
+{
+	u64 nsecs = 0;
+
+	guard(rcu)();
+	for_each_member_device_rcu(c, ca, devs)
+		nsecs = max(nsecs, ca->io_latency[rw].stats.max_duration);
+
+	return nsecs_to_jiffies(nsecs);
+}
+
 static int bch2_sb_member_find_slot(struct bch_fs *c)
 {
 	int best = -1;
