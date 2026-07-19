@@ -211,21 +211,8 @@ static inline bool bch2_snapshot_exists(struct bch_fs *c, u32 id)
 	return bch2_snapshot_id_state(c, id) == SNAPSHOT_ID_live;
 }
 
-/*
- * True if a key in this snapshot is about to be dropped by
- * delete_dead_snapshots - its whole subtree is being deleted (a will_delete
- * leaf, or an interior node the mark was propagated up to). fsck content passes
- * call this right after bch2_check_key_has_snapshot() to skip repairing state
- * that's about to vanish. Deliberately not folded into bch2_check_key_has_snapshot()
- * itself: the deletion and data-move paths call that too and must still see and
- * act on these keys.
- */
-static inline bool bch2_snapshot_will_delete(struct bch_fs *c, u32 id)
-{
-	return bch2_snapshot_id_state(c, id) == SNAPSHOT_ID_will_delete;
-}
-
 u32 bch2_snapshot_redundant_interior(struct bch_fs *, u32);
+bool bch2_snapshot_will_delete(struct bch_fs *, u32, snapshot_id_list *);
 
 static inline int bch2_snapshot_is_internal_node(struct bch_fs *c, u32 id)
 {

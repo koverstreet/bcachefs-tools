@@ -366,7 +366,7 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 	/* Skip repair after updating snapshots_seen: the seen list must stay
 	 * complete even for keys we skip, since will_delete can change during
 	 * fsck and a later visibility check mustn't miss this key's snapshot */
-	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
 		return 0;
 
 	struct inode_walker_entry *extent_i = errptr_try(bch2_walk_inode(trans, inode, k));

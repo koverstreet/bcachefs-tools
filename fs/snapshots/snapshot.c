@@ -265,6 +265,51 @@ u32 bch2_snapshot_redundant_interior(struct bch_fs *c, u32 id)
 	}
 }
 
+/*
+ * True if a key in this snapshot is about to be dropped by
+ * delete_dead_snapshots - its whole subtree is being deleted (a will_delete
+ * leaf, or an interior node the mark was propagated up to). fsck content passes
+ * call this right after bch2_check_key_has_snapshot() to skip repairing state
+ * that's about to vanish. Deliberately not folded into bch2_check_key_has_snapshot()
+ * itself: the deletion and data-move paths call that too and must still see and
+ * act on these keys.
+ */
+bool bch2_snapshot_will_delete(struct bch_fs *c, u32 id, snapshot_id_list *seen)
+{
+	guard(rcu)();
+	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
+	const struct snapshot_t *s = __snapshot_t(t, id);
+	if (!s)
+		return true;
+
+	if (s->state == SNAPSHOT_ID_will_delete)
+		return true;
+
+	while (true) {
+		u32 child = 0;
+
+		for (unsigned i = 0; i < ARRAY_SIZE(s->children); i++) {
+			enum snapshot_id_state state = __bch2_snapshot_id_state(t, s->children[i]);
+			if (state == SNAPSHOT_ID_live || state == SNAPSHOT_ID_no_keys) {
+				if (child) {
+					child = 0;
+					break;
+				}
+				child = s->children[i];
+			}
+		}
+
+		if (!child)
+			return false;
+
+		if (snapshot_list_has_id(seen, child))
+			return true;
+
+		id = child;
+		s = __snapshot_t(t, id);
+	}
+}
+
 static inline u32 get_ancestor_below(struct snapshot_table *t, u32 id, u32 ancestor)
 {
 	const struct snapshot_t *s = __snapshot_t(t, id);

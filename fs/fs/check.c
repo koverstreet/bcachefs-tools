@@ -952,7 +952,7 @@ static int check_inode(struct btree_trans *trans,
 	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	/* after snapshots_seen: keep the seen list complete even for skipped keys */
-	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
 		return 0;
 
 	if (!bkey_is_inode(k.k))
@@ -1740,7 +1740,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		return ret;
 
 	/* after snapshots_seen: keep the seen list complete even for skipped keys */
-	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
 		return 0;
 
 	if (k.k->type == KEY_TYPE_whiteout)
@@ -1958,7 +1958,7 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	/* after snapshots_seen: keep the seen list complete even for skipped keys */
-	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
 		return 0;
 
 	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, inode, k));
