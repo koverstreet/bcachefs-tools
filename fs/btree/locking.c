@@ -1249,6 +1249,19 @@ void bch2_trans_unlock(struct btree_trans *trans)
 		bch2_btree_cache_cannibalize_unlock(trans);
 }
 
+/*
+ * Slow devices legitimately hold the srcu lock across submit_bio() for a long
+ * time (e.g. scanning the inodes btree off a slow disk during snapshot
+ * deletion), so scale the "held too long" warning past the worst observed
+ * device latency rather than spamming the log when the real problem is just
+ * slow storage. The lock is held over btree node reads on any online device,
+ * so that's the latency we key off.
+ */
+static unsigned long srcu_hold_warn_thresh(struct bch_fs *c)
+{
+	return max(bch2_dev_latency_max(c, &c->devs_online, READ) * 2, HZ * 10UL);
+}
+
 void bch2_trans_unlock_long(struct btree_trans *trans)
 {
 	bch2_trans_unlock(trans);
@@ -1265,7 +1278,9 @@ void bch2_trans_unlock_long(struct btree_trans *trans)
 
 		if (unlikely(trans->srcu_held &&
 			     !trans->srcu_io_submitted &&
-			     time_after(jiffies, trans->srcu_lock_time + HZ * 10))) {
+			     time_after(jiffies, trans->srcu_lock_time + HZ * 10) &&
+			     time_after(jiffies, trans->srcu_lock_time +
+					srcu_hold_warn_thresh(c)))) {
 			CLASS(bch_log_msg_ratelimited, msg)(c);
 
 			prt_printf(&msg.m, "btree trans held srcu lock (delaying memory reclaim) for %lu seconds\n",
