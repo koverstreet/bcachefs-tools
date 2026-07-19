@@ -557,6 +557,30 @@ static bool skip_unrelated_snapshot_tree(struct btree_trans *trans, struct btree
 	return ret;
 }
 
+static int delete_dead_snapshot_keys_v1_btree(struct btree_trans *trans, enum btree_id btree)
+{
+	struct bch_fs *c = trans->c;
+	struct snapshot_delete *d = &c->snapshots.delete;
+
+	CLASS(disk_reservation, res)(c);
+	u64 prev_inum = 0;
+
+	try(for_each_btree_key_commit(trans, iter,
+			btree, POS_MIN,
+			BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
+			&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+		bch2_progress_update_iter(trans, &d->progress, &iter);
+
+		if (skip_unrelated_snapshot_tree(trans, &iter, &prev_inum))
+			continue;
+
+		bch2_disk_reservation_put(c, &res.r);
+		delete_dead_snapshots_process_key(trans, &iter, k);
+	})));
+
+	return 0;
+}
+
 static int delete_dead_snapshot_keys_v1(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
@@ -566,26 +590,14 @@ static int delete_dead_snapshot_keys_v1(struct btree_trans *trans)
 	d->progress.silent	= true;
 	d->version		= 1;
 
-	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
-		CLASS(disk_reservation, res)(c);
-		u64 prev_inum = 0;
+	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++)
+		if (btree_type_has_snapshots(btree) && btree != BTREE_ID_inodes)
+			try(delete_dead_snapshot_keys_v1_btree(trans, btree));
 
-		if (!btree_type_has_snapshots(btree))
-			continue;
-
-		try(for_each_btree_key_commit(trans, iter,
-				btree, POS_MIN,
-				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
-				&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-			bch2_progress_update_iter(trans, &d->progress, &iter);
-
-			if (skip_unrelated_snapshot_tree(trans, &iter, &prev_inum))
-				continue;
-
-			bch2_disk_reservation_put(c, &res.r);
-			delete_dead_snapshots_process_key(trans, &iter, k);
-		})));
-	}
+	/*
+	 * fsck assumes that we'll process the inodes btree last:
+	 */
+	try(delete_dead_snapshot_keys_v1_btree(trans, BTREE_ID_inodes));
 
 	return 0;
 }
