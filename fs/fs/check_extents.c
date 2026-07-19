@@ -363,6 +363,12 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 
 	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
+	/* Skip repair after updating snapshots_seen: the seen list must stay
+	 * complete even for keys we skip, since will_delete can change during
+	 * fsck and a later visibility check mustn't miss this key's snapshot */
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
+		return 0;
+
 	struct inode_walker_entry *extent_i = errptr_try(bch2_walk_inode(trans, inode, k));
 
 	try(bch2_check_key_has_inode(trans, iter, inode, extent_i, k));
