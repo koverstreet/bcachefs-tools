@@ -568,6 +568,38 @@ fsck_err:
 
 /* Snapshot btree triggers: */
 
+/*
+ * An interior node whose entire subtree is being deleted is itself dead.
+ * will_delete is only stored on disk for leaves (set at subvol unlink), so
+ * interior dead-subtree nodes are derived here. SNAPSHOT_ID_will_delete only
+ * ever overrides a would-be-live node, so a node in {live, will_delete} always
+ * has live underneath and {deleted, empty} are outside the overlay - which is
+ * what lets us both set and clear the mark by recomputing from the children,
+ * with no stored base state.
+ *
+ * A child counts as dead only if it's will_delete: that's the one state that
+ * means "no live descendant". deleted/no_keys nodes both retain a live
+ * descendant (a spliced-out tombstone forwards to one; a collapsing no_keys
+ * node still has its child), so they must not count - else we'd mark a node
+ * with a live descendant and wrongly silence a collapsing subtree.
+ */
+static bool snapshot_subtree_dead(struct snapshot_table *t, const struct snapshot_t *s)
+{
+	if (!s->children[0])
+		return false;
+
+	for (unsigned i = 0; i < ARRAY_SIZE(s->children); i++)
+		if (s->children[i]) {
+			const struct snapshot_t *c = __snapshot_t(t, s->children[i]);
+			enum snapshot_id_state cs = c ? c->state : SNAPSHOT_ID_empty;
+
+			if (cs != SNAPSHOT_ID_will_delete)
+				return false;
+		}
+
+	return true;
+}
+
 static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 {
 	struct bch_fs *c = trans->c;
@@ -584,10 +616,12 @@ static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 		bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(new));
 		enum bch_snapshot_state state = bch2_snapshot_state_compat(&s);
 
-		t->state	= (state != SNAPSHOT_STATE_no_keys &&
-				   state != SNAPSHOT_STATE_deleted)
-			? SNAPSHOT_ID_live
-			: SNAPSHOT_ID_deleted;
+		t->state	= state == SNAPSHOT_STATE_no_keys ||
+				  state == SNAPSHOT_STATE_deleted
+			? SNAPSHOT_ID_deleted
+			: state == SNAPSHOT_STATE_will_delete
+			? SNAPSHOT_ID_will_delete
+			: SNAPSHOT_ID_live;
 		t->parent	= le32_to_cpu(s.parent);
 		t->children[0]	= le32_to_cpu(s.children[0]);
 		t->children[1]	= le32_to_cpu(s.children[1]);
@@ -614,6 +648,45 @@ static int bch2_mark_snapshot(struct btree_trans *trans, struct bkey_s_c new)
 		 */
 		barrier_data(is_ancestor);
 		memcpy(t->is_ancestor, is_ancestor, sizeof(t->is_ancestor));
+
+		/*
+		 * Derive/refresh the will_delete overlay: mark this node if it's
+		 * an interior node over a fully-dead subtree, then recompute each
+		 * ancestor from its children - propagating the mark up when a
+		 * subtree just went dead, or clearing it when a child revived.
+		 * snapshots_read builds in reverse (parents first), so the
+		 * ancestor chain is already resident (bch2_snapshot_t_mut won't
+		 * reallocate below us); a not-yet-built lower-id sibling reads as
+		 * empty and just defers the mark until it's processed.
+		 */
+		struct snapshot_table *table =
+			rcu_dereference_protected(c->snapshots.table,
+					lockdep_is_held(&c->snapshots.table_lock));
+
+		if (t->state == SNAPSHOT_ID_live && snapshot_subtree_dead(table, t))
+			t->state = SNAPSHOT_ID_will_delete;
+
+		u32 p = t->parent;
+		while (p) {
+			struct snapshot_t *pt = bch2_snapshot_t_mut(c, p);
+			/* _mut may reallocate the table (ancestors are resident so
+			 * it shouldn't, but don't depend on that) - refetch */
+			table = rcu_dereference_protected(c->snapshots.table,
+					lockdep_is_held(&c->snapshots.table_lock));
+			if (!pt ||
+			    (pt->state != SNAPSHOT_ID_live &&
+			     pt->state != SNAPSHOT_ID_will_delete))
+				break;
+
+			enum snapshot_id_state want = snapshot_subtree_dead(table, pt)
+				? SNAPSHOT_ID_will_delete
+				: SNAPSHOT_ID_live;
+			if (pt->state == want)
+				break;
+
+			pt->state = want;
+			p = pt->parent;
+		}
 
 		if (state == SNAPSHOT_STATE_will_delete) {
 			/*
