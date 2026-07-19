@@ -376,6 +376,9 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 		bch_info(c, "reattached at %s", buf.buf);
 	}
 
+	bch2_fsck_damaged(trans, SPOS(inode->bi_inum, 0, inode->bi_snapshot),
+			  FSCK_DAMAGE_reattached);
+
 	/*
 	 * Fix up inodes in child snapshots: if they should also be reattached
 	 * update the backpointer field, if they should not be we need to emit
@@ -1667,8 +1670,10 @@ static int check_dirent_to_subvol(struct btree_trans *trans, struct btree_iter *
 	if (ret) {
 		if (fsck_err(trans, dirent_to_missing_subvol,
 			     "dirent points to missing subvolume\n%s",
-			     (bch2_bkey_val_to_text(&buf, c, d.s_c), buf.buf)))
+			     (bch2_bkey_val_to_text(&buf, c, d.s_c), buf.buf))) {
+			bch2_fsck_damaged(trans, d.k->p, FSCK_DAMAGE_dir_entries_removed);
 			return bch2_fsck_remove_dirent(trans, d.k->p);
+		}
 		return 0;
 	}
 
@@ -1846,8 +1851,10 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 				"dirent points to missing inode:\n%s",
 				(printbuf_reset(&buf),
 				 bch2_bkey_val_to_text(&buf, c, k),
-				 buf.buf)))
+				 buf.buf))) {
+			bch2_fsck_damaged(trans, d.k->p, FSCK_DAMAGE_dir_entries_removed);
 			try(bch2_fsck_remove_dirent(trans, d.k->p));
+		}
 
 		darray_for_each(target->inodes, i)
 			try(bch2_check_dirent_target(trans, iter, d, &i->inode, true));

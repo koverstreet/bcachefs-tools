@@ -989,6 +989,12 @@ use_clean:
 		bch_info(c, "errors this recovery:\n%s", buf.buf);
 	}
 
+	if (c->errors.damaged_paths.nr) {
+		CLASS(printbuf, buf)();
+		bch2_fsck_damaged_paths_to_text(&buf, c);
+		bch_info(c, "%s", buf.buf);
+	}
+
 	/* If we fixed errors, verify that fs is actually clean now: */
 	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
 	    errors_fixed &&
