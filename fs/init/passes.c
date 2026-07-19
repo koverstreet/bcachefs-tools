@@ -435,9 +435,19 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 		r->current_passes |= BIT_ULL(pass);
 
 		if (rewind) {
-			r->rewound_to = r->rewound_to
+			unsigned rewound_to = r->rewound_to
 				? min(r->rewound_to, pass)
 				: pass;
+			/*
+			 * Only log when the rewind target actually changes - the
+			 * same rewind gets re-requested on every call that finds the
+			 * same damage, and we don't want to spam for those.
+			 */
+			if (rewound_to != r->rewound_to)
+				bch_info(c, "recovery: rewinding to %s (%u), currently running %s (%u)",
+					 bch2_recovery_passes[pass], pass,
+					 bch2_recovery_passes[r->current_pass], r->current_pass);
+			r->rewound_to = rewound_to;
 			return bch_err_throw(c, restart_recovery);
 		}
 	} else {
