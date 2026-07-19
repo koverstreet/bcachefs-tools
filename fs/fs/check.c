@@ -1924,13 +1924,21 @@ again:
 			bch2_progress_update_iter(trans, &progress, &iter) ?:
 			check_dirent(trans, &iter, k, &hash_info, &dir, &target, &s,
 				     &need_second_pass);
-		})) ?:
+		}));
+	if (!ret) {
 		/*
-		 * Final flush, via the nested check_subdir_dirents_count so the
-		 * inner fsck_write_inode commits are exempt from the trans_begin
-		 * dropped-updates warning (same as check_extents).
+		 * Final flush of the last directory's subdir count. Exempt the
+		 * inner fsck_write_inode commits from the dropped-updates warning
+		 * as check_subdir_dirents_count() does - but call _notnested
+		 * directly, NOT the nested wrapper: that returns
+		 * trans_was_restarted() for an in-loop caller to retry on, and at
+		 * this post-loop flush the restart has no handler and faults
+		 * recovery (it broke every transaction-restart-injection test).
 		 */
-		check_subdir_dirents_count(trans, &dir);
+		trans->begin_may_drop_updates = true;
+		ret = check_subdir_count_notnested(trans, &dir);
+		trans->begin_may_drop_updates = false;
+	}
 
 	if (!ret && need_second_pass && !did_second_pass) {
 		bch_info(c, "check_dirents requires second pass");
