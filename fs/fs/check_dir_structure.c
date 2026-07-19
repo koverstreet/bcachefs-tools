@@ -205,10 +205,19 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 			return ret;
 
 		if (bch2_err_matches(ret, ENOENT)) {
+			/*
+			 * The naming dirent is gone, so we can't recover the
+			 * filename - but bi_dir still tells us which directory
+			 * the inode was in. Print that path so the user can see
+			 * what was lost. A restart from the path walk just
+			 * propagates to the enclosing for_each_..._commit loop.
+			 */
 			printbuf_reset(&buf);
-			bch2_bkey_val_to_text(&buf, c, inode_k);
-			bch_err(c, "unreachable inode in check_directory_structure: %s\n%s",
-				bch2_err_str(ret), buf.buf);
+			prt_str(&buf, "unreachable inode, naming dirent missing; was in directory ");
+			try(bch2_inum_snapshot_to_path(trans, inode.bi_dir, snapshot, NULL, &buf));
+			prt_newline(&buf);
+			bch2_inode_unpacked_to_text(&buf, &inode);
+			bch_err(c, "%s", buf.buf);
 			return ret;
 		}
 
