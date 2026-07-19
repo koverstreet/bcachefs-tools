@@ -517,13 +517,44 @@ static int btree_key_cache_flush_pos(struct btree_trans *trans,
 	return 0;
 }
 
+static int btree_key_cache_journal_flush_trans(struct btree_trans *trans,
+					       struct bkey_cached *ck,
+					       u64 seq,
+					       unsigned commit_flags)
+{
+	btree_path_idx_t path_idx;
+	struct bkey_cached_key key;
+	int ret = bch2_btree_node_lock_with_path(trans, &ck->c,
+						 SIX_LOCK_intent, &path_idx);
+	bool do_flush = false;
+
+	if (ret)
+		return ret;
+
+	key = ck->key;
+
+	if (ck->journal.seq != seq ||
+	    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+		/* raced; nothing to do */
+	} else if (ck->seq != seq) {
+		bch2_journal_pin_update(&trans->c->journal, ck->seq, &ck->journal,
+					bch2_btree_key_cache_journal_flush);
+	} else {
+		do_flush = true;
+	}
+	bch2_btree_node_unlock_with_path(trans, path_idx, 0);
+
+	return do_flush
+		? btree_key_cache_flush_pos(trans, key, seq, commit_flags, false)
+		: 0;
+}
+
 int bch2_btree_key_cache_journal_flush(struct journal *j,
 				struct journal_entry_pin *pin, u64 seq)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct bkey_cached *ck =
 		container_of(pin, struct bkey_cached, journal);
-	struct bkey_cached_key key;
 	int ret = 0;
 
 	guard(srcu)(&c->btree.trans.barrier);
@@ -545,32 +576,14 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 	    test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
 		CLASS(btree_trans, trans)(c);
 
-		ret = lockrestart_do(trans, ({
-			btree_path_idx_t path_idx;
-			int _ret = bch2_btree_node_lock_with_path(trans, &ck->c,
-								  SIX_LOCK_intent, &path_idx);
-			bool do_flush = false;
-
-			if (!_ret) {
-				key = ck->key;
-
-				if (ck->journal.seq != seq ||
-				    !test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
-					/* raced; nothing to do */
-				} else if (ck->seq != seq) {
-					bch2_journal_pin_update(&c->journal, ck->seq, &ck->journal,
-								bch2_btree_key_cache_journal_flush);
-				} else {
-					do_flush = true;
-				}
-				bch2_btree_node_unlock_with_path(trans, path_idx, 0);
-
-				if (do_flush)
-					_ret = btree_key_cache_flush_pos(trans, key, seq,
-							BCH_TRANS_COMMIT_journal_reclaim, false);
-			}
-			_ret;
-		}));
+		ret = lockrestart_do(trans,
+			btree_key_cache_journal_flush_trans(trans, ck, seq,
+					BCH_TRANS_COMMIT_journal_reclaim));
+		if (bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock))
+			ret = lockrestart_do(trans,
+				btree_key_cache_journal_flush_trans(trans, ck, seq,
+					BCH_TRANS_COMMIT_journal_reclaim|
+					BCH_TRANS_COMMIT_no_journal_res));
 		bch2_fs_fatal_err_on(ret &&
 				     !bch2_err_matches(ret, BCH_ERR_journal_reclaim_would_deadlock) &&
 				     !bch2_journal_error(j), c,
