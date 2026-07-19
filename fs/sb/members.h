@@ -267,18 +267,6 @@ static inline struct bch_dev *bch2_dev_rcu_noerror(struct bch_fs *c, unsigned de
 		: NULL;
 }
 
-static inline bool bch2_dev_bad_or_evacuating_rcu(struct bch_fs *c, unsigned dev)
-{
-	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
-	return !ca || ca->mi.state == BCH_MEMBER_STATE_evacuating;
-}
-
-static inline bool bch2_dev_bad_or_evacuating(struct bch_fs *c, unsigned dev)
-{
-	guard(rcu)();
-	return bch2_dev_bad_or_evacuating_rcu(c, dev);
-}
-
 static inline u64 bch2_dev_resize_target(const struct bch_dev *ca)
 {
 	u64 target = READ_ONCE(ca->mi.target_nbuckets);
@@ -306,7 +294,7 @@ static inline bool bch2_ptr_bad_or_evacuating_rcu(struct bch_fs *c, const struct
 	struct bch_dev *ca = bch2_dev_rcu_noerror(c, ptr->dev);
 	u64 resize_target;
 
-	if (!ca || bch2_dev_bad_or_evacuating_rcu(c, ptr->dev))
+	if (!ca || ca->mi.state == BCH_MEMBER_STATE_evacuating)
 		return true;
 
 	resize_target = bch2_dev_resize_target(ca);
