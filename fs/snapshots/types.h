@@ -31,6 +31,7 @@ struct snapshot_t {
 	enum snapshot_id_state {
 		SNAPSHOT_ID_empty,
 		SNAPSHOT_ID_live,
+		SNAPSHOT_ID_will_delete,
 		SNAPSHOT_ID_deleted,
 	}			state;
 	u32			parent;
