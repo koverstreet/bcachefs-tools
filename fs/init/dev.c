@@ -1648,8 +1648,6 @@ static int __bch2_dev_grow(struct bch_fs *c, struct bch_dev *ca,
 
 	int ret = 0;
 
-	guard(rwsem_write)(&c->state_lock);
-
 	if (READ_ONCE(ca->removing))
 		return bch_err_throw(c, device_has_been_removed);
 
