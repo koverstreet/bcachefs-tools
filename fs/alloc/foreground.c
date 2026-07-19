@@ -51,6 +51,16 @@
 #include <linux/rcupdate.h>
 #include <linux/sched/signal.h>
 
+/*
+ * Move allocation uses congestion to steer background relocation away from
+ * devices that are already slow. Rotational devices can stay throughput-limited
+ * for seconds after a bad write/flush sample, so use a slower decay here than
+ * the read path's target-congestion check.
+ */
+#define MOVE_ALLOC_CONGESTION_DECAY_SHIFT	24
+#define MOVE_ALLOC_STALLED_THRESHOLD		(CONGESTED_MAX >> 3)
+#define MOVE_ALLOC_BUSY_BUCKET_WEIGHT		(CONGESTED_MAX >> 1)
+
 static void bch2_trans_mutex_lock_norelock(struct btree_trans *trans,
 					   struct mutex *lock)
 {
@@ -922,6 +932,156 @@ void bch2_dev_alloc_list(struct bch_fs *c,
 	bubble_sort(ret->data, ret->nr, dev_stripe_cmp);
 }
 
+static bool open_bucket_is_on_writepoint(struct bch_fs *c,
+					 struct write_point *wp,
+					 struct open_bucket *ob)
+{
+	struct open_bucket *wp_ob;
+	unsigned i;
+
+	open_bucket_for_each(c, &wp->ptrs, wp_ob, i)
+		if (wp_ob == ob)
+			return true;
+
+	return false;
+}
+
+static u32 move_alloc_dev_busy(struct bch_fs *c,
+			       struct alloc_request *req,
+			       unsigned dev)
+{
+	struct bch_fs_allocator *a = &c->allocator;
+	unsigned busy = 0;
+
+	for (struct open_bucket *ob = a->open_buckets;
+	     ob < a->open_buckets + ARRAY_SIZE(a->open_buckets);
+	     ob++) {
+		guard(spinlock)(&ob->lock);
+
+		if (!ob->valid ||
+		    ob->dev != dev ||
+		    ob->data_type != BCH_DATA_user ||
+		    open_bucket_is_on_writepoint(c, req->wp, ob))
+			continue;
+
+		busy++;
+	}
+
+	return min_t(u32, busy, 2) * MOVE_ALLOC_BUSY_BUCKET_WEIGHT;
+}
+
+#ifndef CONFIG_BCACHEFS_NO_LATENCY_ACCT
+static u32 move_alloc_dev_congested(struct bch_dev *ca, u64 now)
+{
+	s64 congested = atomic_read(&ca->congested);
+	u64 last = READ_ONCE(ca->congested_last);
+
+	if (time_after64(now, last))
+		congested -= (now - last) >> MOVE_ALLOC_CONGESTION_DECAY_SHIFT;
+
+	return clamp(congested, 0LL, CONGESTED_MAX);
+}
+
+static u32 move_alloc_dev_write_congested(struct bch_dev *ca)
+{
+	struct bch2_time_stats *stats = &ca->io_latency[WRITE].stats;
+	u64 latency = atomic64_read(&ca->cur_latency[WRITE]);
+	s64 typical = mean_and_variance_get_median(stats->duration_stats_weighted);
+	u64 threshold;
+	u64 over;
+	u32 max_pressure = max_t(u32, CONGESTED_MAX >> 3, 1);
+
+	if (stats->duration_stats.n < 32 || typical <= 0)
+		return 0;
+
+	threshold = (u64) typical << 3;
+	if (!threshold || latency <= threshold)
+		return 0;
+
+	over = latency - threshold;
+	if (over >= threshold)
+		return max_pressure;
+
+	return max_t(u32, div64_u64(over * max_pressure, threshold), 1);
+}
+#else
+static u32 move_alloc_dev_congested(struct bch_dev *ca, u64 now)
+{
+	return 0;
+}
+
+static u32 move_alloc_dev_write_congested(struct bch_dev *ca)
+{
+	return 0;
+}
+#endif
+
+static u32 move_alloc_dev_pressure(struct bch_fs *c,
+				   struct alloc_request *req,
+				   unsigned dev, u64 now)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+
+	if (!ca)
+		return U32_MAX;
+
+	return min_t(u32,
+		     move_alloc_dev_congested(ca, now) +
+		     move_alloc_dev_write_congested(ca),
+		     CONGESTED_MAX) +
+		move_alloc_dev_busy(c, req, dev);
+}
+
+static bool move_alloc_dev_stalled(struct bch_fs *c,
+				   struct alloc_request *req,
+				   unsigned dev, u64 now)
+{
+	return (req->flags & BCH_WRITE_move) &&
+		req->data_type == BCH_DATA_user &&
+		move_alloc_dev_pressure(c, req, dev, now) >=
+		MOVE_ALLOC_STALLED_THRESHOLD;
+}
+
+static void move_alloc_avoid_busy_devs(struct bch_fs *c,
+				       struct alloc_request *req)
+{
+	if (!(req->flags & BCH_WRITE_move) ||
+	    req->data_type != BCH_DATA_user ||
+	    req->devs_sorted.nr <= 1)
+		return;
+
+	u32 pressure[BCH_SB_MEMBERS_MAX];
+	u64 now = local_clock();
+
+	for (unsigned i = 0; i < req->devs_sorted.nr; i++)
+		pressure[i] = move_alloc_dev_pressure(c, req,
+						      req->devs_sorted.data[i],
+						      now);
+
+	/*
+	 * Background moves can otherwise pick the same emptiest device that
+	 * foreground writepoints or other movers are already filling, or a
+	 * device that is currently congested from unrelated IO. Include a small
+	 * write-latency term here too: the global congestion counter is
+	 * read-oriented, but moving data should avoid a destination whose
+	 * write/flush path is already far slower than its recent norm.
+	 *
+	 * Keep the free-space weighted allocator order primary while devices are
+	 * not congested. Once a device is visibly falling behind, sink it behind
+	 * less stalled choices; otherwise a much larger, mostly empty disk can keep
+	 * winning move allocations until it is saturated hard enough to leave move
+	 * writes stuck in the block layer.
+	 */
+	for (unsigned j = 1; j < req->devs_sorted.nr; j++)
+		for (unsigned i = j; i &&
+		     pressure[i - 1] >= MOVE_ALLOC_STALLED_THRESHOLD &&
+		     pressure[i - 1] > pressure[i]; i--) {
+			swap(req->devs_sorted.data[i - 1], req->devs_sorted.data[i]);
+			swap(pressure[i - 1], pressure[i]);
+		}
+}
+
 static const u64 stripe_clock_hand_rescale	= 1ULL << 62; /* trigger rescale at */
 static const u64 stripe_clock_hand_max		= 1ULL << 56; /* max after rescale */
 static const u64 stripe_clock_hand_inv		= 1ULL << 52; /* max increment, if a device is empty */
@@ -1022,6 +1182,7 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *trans,
 	BUG_ON(req->nr_effective >= req->nr_replicas);
 
 	bch2_dev_alloc_list(c, stripe, &req->devs_may_alloc, &req->devs_sorted);
+	move_alloc_avoid_busy_devs(c, req);
 
 	if (req->devs_sorted.nr <= 1)
 		req->will_retry_target_devices = false;
@@ -1113,6 +1274,9 @@ static bool want_bucket(struct bch_fs *c,
 		return false;
 
 	if (req->ec != (ob->ec != NULL))
+		return false;
+
+	if (move_alloc_dev_stalled(c, req, ob->dev, local_clock()))
 		return false;
 
 	return true;
