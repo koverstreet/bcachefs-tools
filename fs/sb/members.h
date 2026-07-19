@@ -50,6 +50,8 @@ void bch2_member_to_text_short_locked(struct printbuf *, struct bch_fs *, struct
 void bch2_member_to_text_short(struct printbuf *, struct bch_fs *, struct bch_dev *);
 void bch2_devs_mask_to_text_locked(struct printbuf *, struct bch_fs *, struct bch_devs_mask *);
 
+unsigned long bch2_dev_latency_max(struct bch_fs *, struct bch_devs_mask *, int);
+
 /* Device online state: */
 
 static inline bool bch2_dev_is_online(struct bch_dev *ca)
