@@ -168,6 +168,18 @@ static inline unsigned bch2_open_buckets_reserved(enum bch_watermark watermark)
 	}
 }
 
+/*
+ * Free open buckets we keep in reserve for the reclaim path (write-buffer flush
+ * -> journal -> writeback), which both frees open buckets and needs them to make
+ * progress. When free drops below this, bch2_journal_set_watermark() raises the
+ * journal watermark so new journal-reserving work throttles at reservation time,
+ * before it can drain the pool below the reclaim reserve (BCH_WATERMARK_reclaim).
+ */
+static inline unsigned bch2_open_buckets_journal_reserved(void)
+{
+	return OPEN_BUCKETS_COUNT / 4;
+}
+
 struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *, struct alloc_request *);
 
 /*
