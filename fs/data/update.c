@@ -1101,11 +1101,9 @@ static bool bch2_btree_ptr_has_dev_evacuating(struct bch_fs *c, struct bkey_s_c 
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 
 	guard(rcu)();
-	bkey_for_each_ptr(ptrs, ptr) {
-		struct bch_dev *ca = bch2_dev_rcu_noerror(c, ptr->dev);
-		if (ca && ca->mi.state == BCH_MEMBER_STATE_evacuating)
+	bkey_for_each_ptr(ptrs, ptr)
+		if (bch2_ptr_bad_or_evacuating_rcu(c, ptr))
 			return true;
-	}
 
 	return false;
 }
