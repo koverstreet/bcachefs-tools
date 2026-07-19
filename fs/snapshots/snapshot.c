@@ -219,6 +219,52 @@ bool bch2_snapshot_is_ancestor_early(struct bch_fs *c, u32 id, u32 ancestor)
 	return __bch2_snapshot_is_ancestor_early(rcu_dereference(c->snapshots.table), id, ancestor);
 }
 
+/*
+ * A redundant interior node: a live interior node with exactly one child that
+ * isn't being deleted. delete_dead_snapshots will collapse it into that child,
+ * migrating its keys down; interrupted, that leaves half-migrated keys split
+ * between the node and the child.
+ *
+ * fsck uses this to check such a node's keys/paths in the live child's view -
+ * the state the subtree is provably collapsing into - so a half-migrated key
+ * isn't a false positive. On a healthy fs there are none: taking a snapshot
+ * always makes a 2-child split, so a single-child interior only exists as the
+ * residue of a deletion.
+ *
+ * Walks the collapse chain and returns the live terminal it collapses into, or
+ * 0 if @id isn't a redundant interior.
+ */
+u32 bch2_snapshot_redundant_interior(struct bch_fs *c, u32 id)
+{
+	u32 orig = id;
+	guard(rcu)();
+	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
+	const struct snapshot_t *s = __snapshot_t(t, id);
+	if (!s)
+		return 0;
+
+	while (true) {
+		u32 child = 0;
+
+		for (unsigned i = 0; i < ARRAY_SIZE(s->children); i++) {
+			enum snapshot_id_state state = __bch2_snapshot_id_state(t, s->children[i]);
+			if (state == SNAPSHOT_ID_live || state == SNAPSHOT_ID_no_keys) {
+				if (child) {
+					child = 0;
+					break;
+				}
+				child = s->children[i];
+			}
+		}
+
+		if (!child)
+			return s->state != SNAPSHOT_ID_no_keys && id != orig ? id : 0;
+
+		id = child;
+		s = __snapshot_t(t, id);
+	}
+}
+
 static inline u32 get_ancestor_below(struct snapshot_table *t, u32 id, u32 ancestor)
 {
 	const struct snapshot_t *s = __snapshot_t(t, id);

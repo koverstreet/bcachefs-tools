@@ -498,6 +498,28 @@ int bch2_rename_trans(struct btree_trans *trans,
 	return 0;
 }
 
+struct bkey_s_c_dirent bch2_inode_get_dirent(struct btree_trans *trans,
+					     struct btree_iter *iter,
+					     struct bch_inode_unpacked *inode,
+					     u32 *snapshot)
+{
+	if (inode->bi_parent_subvol) {
+		int ret = bch2_subvolume_get_snapshot(trans, inode->bi_parent_subvol, snapshot);;
+		if (ret)
+			return ((struct bkey_s_c_dirent) { .k = ERR_PTR(ret) });
+	}
+
+	/*
+	 * If we're running after an interrupted snapshot deletion, the dirent
+	 * may have been moved to a child snapshot (when cleaning up redundant
+	 * interior node snapshots) but not the inode - do the lookup in the
+	 * child snapshot we'll be moving to:
+	 */
+	*snapshot = bch2_snapshot_redundant_interior(trans->c, *snapshot) ?: *snapshot;
+
+	return dirent_get_by_pos(trans, iter, SPOS(inode->bi_dir, inode->bi_dir_offset, *snapshot));
+}
+
 /* inum_to_path */
 
 static inline void reverse_bytes(void *b, size_t n)
@@ -606,16 +628,8 @@ static int bch2_inum_to_path_reversed(struct btree_trans *trans,
 			break;
 		}
 
-		if (inode.bi_parent_subvol) {
-			subvol = inode.bi_parent_subvol;
-			ret = bch2_subvolume_get_snapshot(trans, inode.bi_parent_subvol, &snapshot);
-			if (ret)
-				break;
-		}
-
-		CLASS(btree_iter, d_iter)(trans, BTREE_ID_dirents,
-					  SPOS(inode.bi_dir, inode.bi_dir_offset, snapshot), 0);
-		struct bkey_s_c_dirent d = bch2_bkey_get_typed(&d_iter, dirent);
+		CLASS(btree_iter_uninit, d_iter)(trans);
+		struct bkey_s_c_dirent d = bch2_inode_get_dirent(trans, &d_iter, &inode, &snapshot);
 		ret = bkey_err(d.s_c);
 		if (ret)
 			break;
@@ -624,6 +638,15 @@ static int bch2_inum_to_path_reversed(struct btree_trans *trans,
 
 		prt_bytes_reversed(path, dirent_name.name, dirent_name.len);
 		prt_char(path, '/');
+
+		/*
+		 * Track the subvol as we cross boundaries: the loop-detection key
+		 * above is (subvol ?: snapshot, inum), and inode numbers repeat
+		 * across subvolumes (a snapshot shares its source's root inum), so
+		 * without this the key collides and a valid path reads as a loop.
+		 */
+		if (inode.bi_parent_subvol)
+			subvol = inode.bi_parent_subvol;
 
 		inum = inode.bi_dir;
 	}
