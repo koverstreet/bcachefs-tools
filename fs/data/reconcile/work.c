@@ -884,8 +884,10 @@ static int __do_reconcile_extent(struct moving_context *ctxt,
 	if (ret) {
 		WARN_ONCE(!bch2_err_matches(ret, EROFS) &&
 			  !bch2_err_matches(ret, BCH_ERR_snapshot) &&
-			  ret != -BCH_ERR_data_update_fail_no_snapshot &&
-			  ret != -BCH_ERR_data_update_fail_in_flight,
+			  !bch2_err_matches(ret, BCH_ERR_data_update_fail_no_snapshot) &&
+			  !bch2_err_matches(ret, BCH_ERR_data_update_fail_in_flight) &&
+			  !bch2_err_matches(ret, BCH_ERR_freelist_empty) &&
+			  !bch2_err_matches(ret, BCH_ERR_open_buckets_empty),
 			  "unhandled error from move_extent: %s", bch2_err_str(ret));
 		/* skip it and continue */
 	}
