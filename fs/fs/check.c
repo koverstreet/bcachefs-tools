@@ -1890,6 +1890,29 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 				      bch2_bkey_val_to_text(&buf, c, k),
 				      buf.buf))) {
 				darray_for_each(target->inodes, i) {
+					try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,
+							BCH_TRANS_COMMIT_no_enospc));
+
+					/*
+					 * The inode-side state firing this repair is
+					 * unchanged by the copies, so a re-drive after a
+					 * partially-committed batch fires it again: skip
+					 * the copies already committed, or the
+					 * commit_lazy_if_full() restart can't make
+					 * forward progress:
+					 */
+					CLASS(btree_iter, probe)(trans, BTREE_ID_dirents,
+							SPOS(k.k->p.inode, k.k->p.offset,
+							     i->inode.bi_snapshot), 0);
+					struct bkey_s_c old =
+						bkey_try(bch2_btree_iter_peek_slot(&probe));
+
+					if (old.k->p.snapshot == i->inode.bi_snapshot &&
+					    old.k->type == k.k->type &&
+					    bkey_val_bytes(old.k) == bkey_val_bytes(k.k) &&
+					    !memcmp(old.v, k.v, bkey_val_bytes(k.k)))
+						continue;
+
 					struct bkey_i *n =
 						errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
 
@@ -1931,27 +1954,56 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 			try(bch2_fsck_remove_dirent(trans, d.k->p));
 		}
 
-		darray_for_each(target->inodes, i)
-			try(bch2_check_dirent_target(trans, iter, d, &i->inode, true));
+		darray_for_each(target->inodes, i) {
+			/*
+			 * One repair per snapshot version of the target inode:
+			 * bounded only by snapshot count, so commit-and-restart
+			 * before the batch outgrows the trans bump allocator.
+			 * The re-drive converges: get_visible_inodes() rereads
+			 * the versions and committed repairs no longer fire.
+			 */
+			try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,
+						BCH_TRANS_COMMIT_no_enospc));
 
-		darray_for_each(target->deletes, i)
-			if (fsck_err_on(!snapshot_list_has_id(&s->ids, *i),
-					trans, dirent_to_overwritten_inode,
-					"dirent points to inode overwritten in snapshot %u:\n%s",
-					*i,
-					(printbuf_reset(&buf),
-					 bch2_bkey_val_to_text(&buf, c, k),
-					 buf.buf))) {
-				CLASS(btree_iter, delete_iter)(trans,
-						     BTREE_ID_dirents,
-						     SPOS(k.k->p.inode, k.k->p.offset, *i),
-						     BTREE_ITER_intent);
-				try(bch2_btree_iter_traverse(&delete_iter));
+			try(bch2_check_dirent_target(trans, iter, d, &i->inode, true));
+		}
+
+		darray_for_each(target->deletes, i) {
+			if (snapshot_list_has_id(&s->ids, *i))
+				continue;
+
+			try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,
+						BCH_TRANS_COMMIT_no_enospc));
+
+			CLASS(btree_iter, delete_iter)(trans,
+					     BTREE_ID_dirents,
+					     SPOS(k.k->p.inode, k.k->p.offset, *i),
+					     BTREE_ITER_intent);
+			/*
+			 * The deletes list is derived from inode-side state the
+			 * whiteouts don't change: check whether the dirent is
+			 * still visible in this snapshot, both so a re-drive
+			 * after a partially-committed batch skips the committed
+			 * whiteouts (or the commit_lazy_if_full() restart can't
+			 * make forward progress), and so an already-invisible
+			 * dirent isn't reported and "repaired" redundantly:
+			 */
+			struct bkey_s_c visible =
+				bkey_try(bch2_btree_iter_peek_slot(&delete_iter));
+			if (visible.k->type != KEY_TYPE_dirent)
+				continue;
+
+			if (fsck_err(trans, dirent_to_overwritten_inode,
+				     "dirent points to inode overwritten in snapshot %u:\n%s",
+				     *i,
+				     (printbuf_reset(&buf),
+				      bch2_bkey_val_to_text(&buf, c, k),
+				      buf.buf)))
 				try(bch2_hash_delete_at(trans, bch2_dirent_hash_desc,
 							hash_info,
 							&delete_iter,
 							BTREE_UPDATE_internal_snapshot_node));
-			}
+		}
 	}
 
 	/*
