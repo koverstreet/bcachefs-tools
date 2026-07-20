@@ -1724,21 +1724,57 @@ fsck_err:
 	return ret;
 }
 
+/*
+ * Re-scan a directory from the start after a repair moved one of its dirents to
+ * a position we'd already scanned past - a check_key_has_snapshot migration to
+ * a lower snapshot ID, a dirent moved into descendant snapshots, or a hash-table
+ * repair. Any of those leaves the directory's subdir count built from the old
+ * layout, so rebuild it by forcing the inode_walker to reload and re-tally.
+ */
+static void dirents_rescan_reset(struct inode_walker *dir)
+{
+	dir->have_inodes = false;	/* suppress the boundary check_subdir_count */
+	dir->last_pos = POS_MIN;	/* force get_inodes_all_snapshots + count reset */
+}
+
+static int check_dirent_restart_inum(struct btree_trans *trans, struct btree_iter *iter,
+				     struct inode_walker *dir, u64 inum)
+{
+	dirents_rescan_reset(dir);
+	bch2_btree_iter_set_pos(iter, POS(inum, 0));
+	return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+}
+
 static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 			struct bkey_s_c k,
 			struct bch_hash_info *hash_info,
 			struct inode_walker *dir,
 			struct inode_walker *target,
-			struct snapshots_seen *s,
-			bool *need_second_pass)
+			struct snapshots_seen *s)
 {
 	struct bch_fs *c = trans->c;
 	CLASS(printbuf, buf)();
+	u64 inum = k.k->p.inode;
 	int ret = 0;
 
+	/*
+	 * We've moved on from a directory that had a repair; re-scan it now so
+	 * its subdir count is rebuilt from the migrated/moved dirents.
+	 * restarted_inum bounds this to one re-scan per directory.
+	 */
+	if (dir->repaired_inum &&
+	    inum > dir->repaired_inum &&
+	    dir->repaired_inum != dir->restarted_inum) {
+		dir->restarted_inum = dir->repaired_inum;
+		return check_dirent_restart_inum(trans, iter, dir, dir->repaired_inum);
+	}
+
 	ret = bch2_check_key_has_snapshot(trans, iter, k);
-	if (ret)
+	if (ret) {
+		if (ret > 0)
+			dir->repaired_inum = inum;
 		return ret < 0 ? ret : 0;
+	}
 
 	ret = bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p);
 	if (ret)
@@ -1767,14 +1803,19 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 
 	hash_info->cf_encoding = bch2_inode_casefold(c, &i->inode) ? c->cf_encoding : NULL;
 
-	bool invalidated_inodes = false;
+	bool need_second_pass = false, invalidated_inodes = false;
 	ret = bch2_str_hash_check_key(trans, s, &bch2_dirent_hash_desc, hash_info,
-				      k, need_second_pass, &invalidated_inodes);
-	if (invalidated_inodes) {
-		dir->last_pos.inode = 0;
-		dir->inodes.nr = 0;
-		return bch_err_throw(c, transaction_restart_nested);
-	}
+				      k, &need_second_pass, &invalidated_inodes);
+	/*
+	 * A hash-table repair or an inode-cache invalidation moved keys within
+	 * this directory: re-scan it so the subdir count is rebuilt. The cache
+	 * invalidation must reload before we continue, so re-scan immediately;
+	 * the hash repair can wait until we've finished the directory.
+	 */
+	if (invalidated_inodes)
+		return check_dirent_restart_inum(trans, iter, dir, inum);
+	if (need_second_pass)
+		dir->repaired_inum = inum;
 
 	if (ret < 0)
 		return ret;
@@ -1841,7 +1882,13 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 				try(bch2_hash_delete_at(trans, bch2_dirent_hash_desc,
 							hash_info, &del_iter,
 							BTREE_UPDATE_internal_snapshot_node));
-				*need_second_pass = true;
+				/*
+				 * The copies were inserted into descendant
+				 * snapshots (lower IDs, earlier positions):
+				 * re-scan this directory to revisit them for the
+				 * target checks and subdir count.
+				 */
+				dir->repaired_inum = inum;
 				return 0;
 			}
 		}
@@ -1906,19 +1953,46 @@ int bch2_check_dirents(struct bch_fs *c)
 	CLASS(inode_walker, dir)();
 	CLASS(inode_walker, target)();
 	struct progress_indicator progress;
-	bool need_second_pass = false, did_second_pass = false;
-	int ret;
-again:
 	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_dirents), 0);
 
-	ret = for_each_btree_key_commit(trans, iter, BTREE_ID_dirents,
-				POS(BCACHEFS_ROOT_INO, 0),
-				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
-				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-			bch2_progress_update_iter(trans, &progress, &iter) ?:
-			check_dirent(trans, &iter, k, &hash_info, &dir, &target, &s,
-				     &need_second_pass);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_dirents, POS(BCACHEFS_ROOT_INO, 0),
+				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots);
+	int ret;
+
+	while (1) {
+		struct bkey_s_c k;
+		/*
+		 * peek, process and commit are one commit_do() so a restart
+		 * anywhere - including check_dirent's in-loop re-scan (a set_pos
+		 * plus forced restart) - re-drives the whole thing atomically.
+		 */
+		ret = commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+			bkey_err(k = bch2_btree_iter_peek(&iter)) ?:
+			(!k.k ? 0
+			      : (bch2_progress_update_iter(trans, &progress, &iter) ?:
+				 check_dirent(trans, &iter, k, &hash_info, &dir, &target, &s)));
 		}));
+		if (ret)
+			break;
+
+		if (!k.k) {
+			/*
+			 * End of the btree: the last directory has no following
+			 * key to trigger check_dirent_restart_inum, so re-scan it
+			 * here if it had a pending repair. restarted_inum bounds
+			 * this to one re-scan, same as the in-loop path.
+			 */
+			if (dir.repaired_inum == dir.restarted_inum)
+				break;
+			dir.restarted_inum = dir.repaired_inum;
+			dirents_rescan_reset(&dir);
+			bch2_btree_iter_set_pos(&iter, POS(dir.repaired_inum, 0));
+			continue;
+		}
+
+		bch2_btree_iter_advance(&iter);
+	}
+
 	if (!ret) {
 		/*
 		 * Final flush of the last directory's subdir count. Exempt the
@@ -1932,17 +2006,6 @@ again:
 		trans->begin_may_drop_updates = true;
 		ret = check_subdir_count_notnested(trans, &dir);
 		trans->begin_may_drop_updates = false;
-	}
-
-	if (!ret && need_second_pass && !did_second_pass) {
-		bch_info(c, "check_dirents requires second pass");
-		swap(did_second_pass, need_second_pass);
-		goto again;
-	}
-
-	if (!ret && need_second_pass) {
-		bch_err(c, "dirents not repairing");
-		ret = -EINVAL;
 	}
 
 	return ret;
