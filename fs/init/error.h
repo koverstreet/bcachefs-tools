@@ -103,7 +103,8 @@ int __bch2_fsck_err(struct bch_fs *, struct btree_trans *,
 	x(reattached,		0,	"reattached in lost+found")	\
 	x(dir_entries_removed,	1,	"had dangling entries removed") \
 	x(data_overwritten,	2,	"had data overwritten (overlapping extents)") \
-	x(keys_deleted,		3,	"had keys removed (snapshot no longer exists)")
+	x(keys_deleted,		3,	"had keys removed (snapshot no longer exists)") \
+	x(dir_entries_renamed,	4,	"had entries renamed (duplicate hash table keys)")
 
 enum bch_fsck_damage_type {
 #define x(t, n, s)	FSCK_DAMAGE_##t = BIT(n),

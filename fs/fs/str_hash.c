@@ -272,10 +272,13 @@ static int str_hash_dup_entries(struct btree_trans *trans,
 	if (!ret_fsck_err(trans, hash_table_key_duplicate, "%s", buf.buf))
 		return 0;
 
-	if (ret == 2) {
+	bool renamed = ret == 2;
+	if (renamed) {
 		try(bch2_fsck_rename_dirent(trans, s, *desc, hash_info,
 					    bkey_s_c_to_dirent(k),
 					    updated_before_k_pos));
+		bch2_fsck_damaged(trans, SPOS(k.k->p.inode, 0, k.k->p.snapshot),
+				  FSCK_DAMAGE_dir_entries_renamed);
 		/* delete @k */
 		ret = 1;
 	}
@@ -298,6 +301,11 @@ static int str_hash_dup_entries(struct btree_trans *trans,
 				    BTREE_ITER_slots);
 	try(bch2_btree_iter_traverse(&del_iter));
 	try(bch2_hash_delete_at(trans, *desc, hash_info, &del_iter, 0));
+
+	/* renames already recorded above; no damage type for xattrs yet: */
+	if (!renamed && desc->btree_id == BTREE_ID_dirents)
+		bch2_fsck_damaged(trans, SPOS(k.k->p.inode, 0, del_snapshot),
+				  FSCK_DAMAGE_dir_entries_removed);
 
 	return bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 }
