@@ -236,6 +236,10 @@ __cold void bch2_member_to_text(struct printbuf *out,
 		prt_printf(out, "(none)");
 	prt_newline(out);
 
+	if (m->failure_domain[0])
+		prt_printf(out, "Failure domain:\t%.*s\n",
+			   (int) sizeof(m->failure_domain), m->failure_domain);
+
 	prt_printf(out, "UUID:\t");
 	pr_uuid(out, m->uuid.b);
 	prt_newline(out);
@@ -328,6 +332,10 @@ static void bch2_member_to_text_short_sb(struct printbuf *out,
 				BCH_MEMBER_GROUP(m) - 1);
 		prt_newline(out);
 	}
+
+	if (m->failure_domain[0])
+		prt_printf(out, "Failure domain:\t%.*s\n",
+			   (int) sizeof(m->failure_domain), m->failure_domain);
 
 	prt_printf(out, "Device:\t%.*s\n", (int) sizeof(m->device_name), m->device_name);
 	prt_printf(out, "Model:\t%.*s\n", (int) sizeof(m->device_model), m->device_model);
@@ -497,14 +505,52 @@ void bch2_sb_members_from_cpu(struct bch_fs *c)
 	}
 }
 
+struct failure_domain {
+	u8	name[32];
+};
+
 void bch2_sb_members_to_cpu(struct bch_fs *c)
 {
+	BUILD_BUG_ON(sizeof(((struct failure_domain *) NULL)->name) !=
+		     sizeof(((struct bch_member *) NULL)->failure_domain));
+
 	for_each_member_device(c, ca) {
 		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
 		ca->mi = bch2_mi_to_cpu(&m);
 
 		mod_bit(ca->dev_idx, c->devs_rotational.d, ca->mi.rotational);
 	}
+
+	/*
+	 * Intern failure domain strings to small ids: two devices are in the
+	 * same failure domain iff their (non-empty) strings match. The id is the
+	 * 1-based index into the set of distinct strings, 0 = unset. The table is
+	 * transient - the ids stored on ca->mi are what we keep.
+	 */
+	DARRAY(struct failure_domain) domains = {};
+	for_each_member_device(c, ca) {
+		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
+		if (!m.failure_domain[0])
+			continue;
+
+		u16 id = 0;
+		darray_for_each(domains, d)
+			if (!memcmp(d->name, m.failure_domain, sizeof(d->name))) {
+				id = (d - domains.data) + 1;
+				break;
+			}
+
+		if (!id) {
+			struct failure_domain d;
+			memcpy(d.name, m.failure_domain, sizeof(d.name));
+			if (darray_push(&domains, d))
+				continue;	/* -ENOMEM: leave unset, safe */
+			id = domains.nr;
+		}
+
+		ca->mi.failure_domain = id;
+	}
+	darray_exit(&domains);
 
 	struct bch_sb_field_members_v2 *mi2 = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 	if (mi2)

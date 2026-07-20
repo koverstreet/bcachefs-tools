@@ -1260,6 +1260,12 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 				}
 			}
 
+			/*
+			 * The failure domain string carried over with the
+			 * member copy above; re-intern so the new device gets
+			 * its failure_domain id.
+			 */
+			bch2_sb_members_to_cpu(c);
 
 			bool write_sb = false;
 			bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);

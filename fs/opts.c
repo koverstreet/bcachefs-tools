@@ -648,6 +648,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 			(struct reconcile_scan) { .type = RECONCILE_SCAN_stripes }, post, scope));
 		break;
 	case Opt_label:
+	case Opt_failure_domain:
 		/*
 		 * Refresh the cpu label tree before the scan wakes: reconcile
 		 * reads the group devs masks. Errors here (ENOMEM) just leave
@@ -658,8 +659,13 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 				bch_err_fn(c, bch2_sb_disk_groups_to_cpu(c));
 		}
 
-		try(reconcile_scan_bracket(c,
-			(struct reconcile_scan) { .type = RECONCILE_SCAN_pending }, post, scope));
+		/*
+		 * Only the label affects targeting - a failure domain change
+		 * only affects the spreading of future allocations, no rescan:
+		 */
+		if (id == Opt_label)
+			try(reconcile_scan_bracket(c,
+				(struct reconcile_scan) { .type = RECONCILE_SCAN_pending }, post, scope));
 		break;
 	default:
 		break;

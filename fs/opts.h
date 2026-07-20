@@ -567,6 +567,14 @@ enum fsck_err_opts {
 	  OPT_FN(bch2_opt_disk_label),					\
 	  BCH_MEMBER_GROUP,		0,				\
 	  "(label)",	"Device label: position in the label tree")	\
+	x(failure_domain,		u8,				\
+	  OPT_DEVICE|OPT_FORMAT|OPT_RUNTIME,				\
+	  OPT_STR_MEMBER(failure_domain),				\
+	  BCH2_NO_SB_OPT,		0,				\
+	  "(domain)",	"Failure domain: devices sharing a name are in the\n"\
+			"same failure domain; allocation spreads replicas\n"\
+			"across domains (a hard requirement for erasure\n"\
+			"coded stripe blocks)")				\
 	x(bucket_size,			u32,				\
 	  OPT_DEVICE|OPT_HUMAN_READABLE|OPT_SB_FIELD_SECTORS,		\
 	  OPT_UINT(0, S64_MAX),						\
