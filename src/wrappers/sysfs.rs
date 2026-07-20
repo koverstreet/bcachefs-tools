@@ -114,6 +114,8 @@ pub struct DevInfo {
     /// Human-facing device name selected by [`DeviceNameMode`].
     pub dev:        String,
     pub label:      Option<String>,
+    /// Failure domain name - see bch_member.failure_domain.
+    pub failure_domain: Option<String>,
     pub durability: u32,
     pub online:     bool,
 }
@@ -144,15 +146,19 @@ pub fn fs_get_devices(
         let online = fs::metadata(dev_path.join("block")).is_ok();
         let dev = dev_display_name_from_sysfs(&dev_path, name_mode);
 
-        let label = fs::read_to_string(dev_path.join("label"))
-            .ok()
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty());
+        let read_label = |name: &str| {
+            fs::read_to_string(dev_path.join(name))
+                .ok()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty() && s != "none")
+        };
+        let label = read_label("label");
+        let failure_domain = read_label("failure_domain");
 
         let durability = read_sysfs_u64(&dev_path.join("durability"))
             .unwrap_or(1) as u32;
 
-        devs.push(DevInfo { idx, dev, label, durability, online });
+        devs.push(DevInfo { idx, dev, label, failure_domain, durability, online });
     }
     devs.sort_by_key(|d| d.idx);
     Ok(devs)
