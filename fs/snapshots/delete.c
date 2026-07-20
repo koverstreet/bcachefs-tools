@@ -1038,6 +1038,9 @@ static int bch2_get_dead_interior_snapshots(struct btree_trans *trans, struct bk
 
 int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 {
+	if (!c->opts.auto_snapshot_deletion)
+		return 0;
+
 	CLASS(btree_trans, trans)(c);
 	CLASS(interior_delete_list, delete)();
 
