@@ -302,7 +302,7 @@ bool bch2_snapshot_will_delete(struct bch_fs *c, u32 id, snapshot_id_list *seen)
 		if (!child)
 			return false;
 
-		if (snapshot_list_has_id(seen, child))
+		if (seen && snapshot_list_has_id(seen, child))
 			return true;
 
 		id = child;

@@ -653,8 +653,20 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 
 	for_each_btree_key_max_norestart(trans, iter,
 			BTREE_ID_inodes, POS(0, inum), SPOS(0, inum, U32_MAX),
-			BTREE_ITER_all_snapshots, k, ret)
+			BTREE_ITER_all_snapshots, k, ret) {
+		/*
+		 * The content passes skip keys in dying subtrees (same
+		 * predicate, right after their bch2_check_key_has_snapshot()
+		 * calls), so those keys are never accumulated into i_sectors/
+		 * subdir counts - a dying inode version in the walker would
+		 * always look wrong. Skip them here too; a dying snapshot has
+		 * no live descendants, so live keys can never resolve to one:
+		 */
+		if (bch2_snapshot_will_delete(c, k.k->p.snapshot, NULL))
+			continue;
+
 		try(add_inode(c, w, k));
+	}
 
 	if (ret)
 		return ret;
