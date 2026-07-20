@@ -57,6 +57,8 @@ static inline struct target target_decode(unsigned target)
 }
 
 const struct bch_devs_mask *bch2_target_to_mask(struct bch_fs *, unsigned);
+u64 bch2_dev_domain_key(struct bch_fs *, const struct bch_devs_mask *, unsigned);
+unsigned bch2_target_nr_domains(struct bch_fs *, const struct bch_devs_mask *);
 
 static inline struct bch_devs_mask target_rw_devs(struct bch_fs *c,
 						  enum bch_data_type data_type,
