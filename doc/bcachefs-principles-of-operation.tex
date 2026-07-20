@@ -608,6 +608,10 @@ be unique). This gives us ways of referring to multiple devices in target
 options: If we specify ssd in a target option, that will refer to all devices
 with the label ssd or labels that start with ssd. (e.g. ssd.ssd1, ssd.ssd2).
 
+Device labels are used only for targeting. How replicas are spread across
+devices to survive hardware failures is a separate, per-device property; see
+\hyperref[sec:failure-domains]{Failure domains}.
+
 Four target options exist. All may be set at the filesystem level (at format
 time, at mount time, or at runtime via sysfs). All except
 \texttt{metadata\_target} may also be set on a particular file or directory:
@@ -1657,6 +1661,11 @@ the filesystem.
 \subsection{Allocator}
 
 \bchdoc{allocator}
+
+\subsection{Failure domains}
+\label{sec:failure-domains}
+
+\bchdoc{failure-domains}
 
 \subsection{Subvolumes and snapshots}
 \label{sec:snapshots}
