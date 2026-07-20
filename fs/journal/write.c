@@ -114,6 +114,8 @@ static int journal_write_alloc(struct journal *j, struct journal_buf *w,
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct bch_devs_mask devs;
+	struct bch_devs_mask devs_chosen = {};
+	u64 domain_keys[BCH_SB_MEMBERS_MAX];
 	struct dev_alloc_list devs_sorted;
 	unsigned sectors = vstruct_sectors(w->data, c->block_bits);
 	unsigned target = c->opts.metadata_target ?:
@@ -123,7 +125,8 @@ static int journal_write_alloc(struct journal *j, struct journal_buf *w,
 
 retry_target:
 	devs = target_rw_devs(c, BCH_DATA_journal, target);
-	bch2_dev_alloc_list(c, &j->wp.stripe, &devs, &devs_sorted);
+	bch2_dev_alloc_list_devs(c, &j->wp.stripe, &devs,
+				 &devs_chosen, domain_keys, &devs_sorted);
 retry_alloc:
 	__journal_write_alloc(j, w, &devs_sorted, sectors, replicas, replicas_want);
 
