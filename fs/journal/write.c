@@ -27,14 +27,15 @@
 #include <linux/ioprio.h>
 
 static void journal_advance_devs_to_next_bucket(struct journal *j,
-						struct dev_alloc_list *devs,
+						struct bch_devs_mask *devs,
 						unsigned sectors, __le64 seq)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	unsigned i;
 
 	guard(rcu)();
-	darray_for_each(*devs, i) {
-		struct bch_dev *ca = rcu_dereference(c->devs[*i]);
+	for_each_set_bit(i, devs->d, BCH_SB_MEMBERS_MAX) {
+		struct bch_dev *ca = rcu_dereference(c->devs[i]);
 		if (!ca)
 			continue;
 
@@ -58,31 +59,56 @@ static void journal_advance_devs_to_next_bucket(struct journal *j,
 
 static void __journal_write_alloc(struct journal *j,
 				  struct journal_buf *w,
-				  struct dev_alloc_list *devs,
+				  struct bch_devs_mask *devs,
 				  unsigned sectors,
 				  unsigned *replicas,
 				  unsigned replicas_want)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
-	darray_for_each(*devs, i) {
-		struct bch_dev *ca = bch2_dev_get_ioref(c, *i, WRITE,
-					BCH_DEV_WRITE_REF_journal_write);
+	while (*replicas < replicas_want) {
+		/*
+		 * Journal replicas spread across failure domains, like data:
+		 * one pick per sort, since each pick changes the occupancy
+		 * the next should avoid:
+		 */
+		struct bch_devs_mask chosen = {};
+		bkey_for_each_ptr(bch2_bkey_ptrs_c(bkey_i_to_s_c(&w->key)), ptr)
+			__set_bit(ptr->dev, chosen.d);
+
+		struct dev_alloc_list devs_sorted;
+		bch2_dev_alloc_list_devs(c, &j->wp.stripe, devs,
+					 &chosen, j->wp_domain_keys, &devs_sorted);
+
+		struct bch_dev *ca = NULL;
+		darray_for_each(devs_sorted, i) {
+			ca = bch2_dev_get_ioref(c, *i, WRITE,
+						BCH_DEV_WRITE_REF_journal_write);
+			if (!ca)
+				continue;
+
+			struct journal_device *ja = &ca->journal;
+
+			/*
+			 * Check that we can use this device, and aren't
+			 * already using it:
+			 */
+			if (!ja->nr ||
+			    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&w->key), ca->dev_idx) ||
+			    sectors > ja->sectors_free) {
+				enumerated_ref_put(&ca->io_ref[WRITE],
+						   BCH_DEV_WRITE_REF_journal_write);
+				ca = NULL;
+				continue;
+			}
+
+			break;
+		}
+
 		if (!ca)
-			continue;
+			return;
 
 		struct journal_device *ja = &ca->journal;
-
-		/*
-		 * Check that we can use this device, and aren't already using
-		 * it:
-		 */
-		if (!ja->nr ||
-		    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&w->key), ca->dev_idx) ||
-		    sectors > ja->sectors_free) {
-			enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_journal_write);
-			continue;
-		}
 
 		bch2_dev_stripe_increment(ca, &j->wp.stripe);
 
@@ -103,9 +129,6 @@ static void __journal_write_alloc(struct journal *j,
 		ja->bucket_seq[ja->cur_idx] = le64_to_cpu(w->data->seq);
 
 		*replicas += ca->mi.durability;
-
-		if (*replicas >= replicas_want)
-			break;
 	}
 }
 
@@ -114,9 +137,6 @@ static int journal_write_alloc(struct journal *j, struct journal_buf *w,
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct bch_devs_mask devs;
-	struct bch_devs_mask devs_chosen = {};
-	u64 domain_keys[BCH_SB_MEMBERS_MAX];
-	struct dev_alloc_list devs_sorted;
 	unsigned sectors = vstruct_sectors(w->data, c->block_bits);
 	unsigned target = c->opts.metadata_target ?:
 		c->opts.foreground_target;
@@ -125,16 +145,14 @@ static int journal_write_alloc(struct journal *j, struct journal_buf *w,
 
 retry_target:
 	devs = target_rw_devs(c, BCH_DATA_journal, target);
-	bch2_dev_alloc_list_devs(c, &j->wp.stripe, &devs,
-				 &devs_chosen, domain_keys, &devs_sorted);
 retry_alloc:
-	__journal_write_alloc(j, w, &devs_sorted, sectors, replicas, replicas_want);
+	__journal_write_alloc(j, w, &devs, sectors, replicas, replicas_want);
 
 	if (likely(*replicas >= replicas_want))
 		goto done;
 
 	if (!advance_done) {
-		journal_advance_devs_to_next_bucket(j, &devs_sorted, sectors, w->data->seq);
+		journal_advance_devs_to_next_bucket(j, &devs, sectors, w->data->seq);
 		advance_done = true;
 		goto retry_alloc;
 	}

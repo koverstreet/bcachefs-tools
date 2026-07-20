@@ -381,6 +381,11 @@ struct journal {
 	u64			replay_journal_seq_end;
 
 	struct write_point	wp;
+	/*
+	 * Failure domain keys scratch for journal_write_alloc() - like
+	 * wp.stripe, protected by journal writes being allocated in order:
+	 */
+	u64			wp_domain_keys[BCH_SB_MEMBERS_MAX];
 	spinlock_t		err_lock;
 
 	struct mutex		reclaim_lock;
