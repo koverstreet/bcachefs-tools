@@ -53,6 +53,8 @@ struct alloc_request {
 	bool			will_retry_set_devices:1;
 	bool			copygc_can_make_progress:1;
 	bool			trace_alloc_failed:1;
+	/* failure domains are a hard requirement, not a preference (erasure coding): */
+	bool			failure_domains_required:1;
 	enum bch_watermark	watermark;
 	enum bch_write_flags	flags;
 	enum bch_data_type	data_type;
@@ -64,8 +66,16 @@ struct alloc_request {
 	unsigned		nr_effective;	/* sum of @ptrs durability */
 	struct bch_devs_mask	devs_may_alloc;
 
+	/*
+	 * Devices already holding a replica of what we're allocating for -
+	 * devs_have plus buckets allocated so far - for spreading replicas
+	 * across failure domains, see bch2_dev_domain_key():
+	 */
+	struct bch_devs_mask	devs_chosen;
+
 	/* bch2_bucket_alloc_set_trans(): */
 	struct dev_alloc_list	devs_sorted;
+	u64			domain_keys[BCH_SB_MEMBERS_MAX];
 	struct bch_dev_usage	usage;
 
 	/* bch2_bucket_alloc_trans(): */
@@ -140,10 +150,15 @@ static inline int alloc_trace_add(struct alloc_request *req,
 	return err;
 }
 
+void bch2_dev_alloc_list_devs(struct bch_fs *,
+			      struct dev_stripe_state *,
+			      struct bch_devs_mask *,
+			      const struct bch_devs_mask *,
+			      u64 *,
+			      struct dev_alloc_list *);
 void bch2_dev_alloc_list(struct bch_fs *,
 			 struct dev_stripe_state *,
-			 struct bch_devs_mask *,
-			 struct dev_alloc_list *);
+			 struct alloc_request *);
 void bch2_dev_stripe_increment(struct bch_dev *, struct dev_stripe_state *);
 
 static inline struct bch_dev *ob_dev(struct bch_fs *c, struct open_bucket *ob)
@@ -380,12 +395,14 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 	req->will_retry_target_devices	= false;
 	req->will_retry_set_devices	= false;
 	req->copygc_can_make_progress	= false;
+	req->failure_domains_required	= false;
 	req->trace_alloc_failed		= false;
 	req->target_frac			= 0;
 	req->devs_sorted.nr		= 0;
-	/* bch2_alloc_sectors_req() overwrites this; bch2_bucket_alloc_trans()
-	 * callers (e.g. journal resize) don't, so zero it here for them: */
+	/* bch2_alloc_sectors_req() overwrites these; bch2_bucket_alloc_trans()
+	 * callers (e.g. journal resize) don't, so zero them here for them: */
 	memset(&req->devs_may_alloc, 0, sizeof(req->devs_may_alloc));
+	memset(&req->devs_chosen, 0, sizeof(req->devs_chosen));
 	darray_init(&req->trace);
 	return req;
 }
