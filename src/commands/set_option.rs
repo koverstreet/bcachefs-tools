@@ -152,7 +152,7 @@ fn set_option_offline(
                 eprintln!("Error setting {name}: {ret}");
                 continue;
             }
-            unsafe { c::bch2_opt_set_sb(fs.raw, std::ptr::null_mut(), opt, val); }
+            unsafe { c::bch2_opt_set_sb(fs.raw, std::ptr::null_mut(), opt, val, c_value.as_ptr()); }
         }
 
         if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
@@ -178,7 +178,7 @@ fn set_option_offline(
                     eprintln!("Error setting {name}: {ret}");
                     continue;
                 }
-                unsafe { c::bch2_opt_set_sb(fs.raw, ca, opt, val); }
+                unsafe { c::bch2_opt_set_sb(fs.raw, ca, opt, val, c_value.as_ptr()); }
             }
         }
     }

@@ -86,7 +86,8 @@ pub fn opts_default() -> &'static c::bch_opts {
 
 /// Set a superblock option from the opt table.
 pub fn opt_set_sb(sb: &mut c::bch_sb, dev_idx: i32, opt: &c::bch_option, v: u64) {
-    unsafe { c::__bch2_opt_set_sb(sb, dev_idx, opt, v); }
+    // val is only used by BCH_OPT_STR_MEMBER options, not set through this path:
+    unsafe { c::__bch2_opt_set_sb(sb, dev_idx, opt, v, core::ptr::null()); }
 }
 
 /// Set an option value in a bch_opts struct by id.
