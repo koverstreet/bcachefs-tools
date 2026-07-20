@@ -1059,6 +1059,18 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 		try(bch2_check_snapshots_trans(trans));
 
 		/*
+		 * check_snapshots is licensed to change node states (e.g.
+		 * repairing a stale-state legacy tombstone to deleted), so the
+		 * pre-check collection is only good for deciding whether to run
+		 * it - re-collect for the authoritative delete list:
+		 */
+		delete.nr = 0;
+		try(for_each_btree_key(trans, iter, BTREE_ID_snapshots, POS_MIN, 0, k,
+				       bch2_get_dead_interior_snapshots(trans, k, &delete)));
+	}
+
+	if (delete.nr) {
+		/*
 		 * Fixing children of deleted snapshots can't be done completely
 		 * atomically, if we crash between here and when we delete the interior
 		 * nodes some depth fields will be off:
