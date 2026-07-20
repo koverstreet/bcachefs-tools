@@ -294,21 +294,32 @@ pub fn format(
         sb.member_mut(idx as u32).unwrap().set_member_rotational_set(1);
     }
 
-    // Deferred device options - labels: resolve against the sb we just built
+    // Deferred device options: labels resolve to a disk path against the sb we
+    // just built; the failure domain is a plain string stored in the member.
     for (idx, dev) in dev_slice.iter().enumerate() {
         for (opt_id, val) in &dev.opt_strs {
-            let path_idx = unsafe { c::bch2_disk_path_find_or_create(&mut *sb, val.as_ptr()) };
-            if path_idx < 0 {
-                die(&format!(
-                    "error creating disk path: {}",
-                    std::io::Error::from_raw_os_error(-path_idx)
-                ));
-            }
-
-            // Recompute m after sb modification (memory may have been reallocated)
-            let m = sb.member_mut(idx as u32).unwrap();
             match *opt_id {
-                c::bch_opt_id::Opt_label => m.set_member_group(path_idx as u64 + 1),
+                c::bch_opt_id::Opt_label => {
+                    let path_idx = unsafe { c::bch2_disk_path_find_or_create(&mut *sb, val.as_ptr()) };
+                    if path_idx < 0 {
+                        die(&format!(
+                            "error creating disk path: {}",
+                            std::io::Error::from_raw_os_error(-path_idx)
+                        ));
+                    }
+                    // Recompute m after sb modification (may have been reallocated)
+                    sb.member_mut(idx as u32).unwrap().set_member_group(path_idx as u64 + 1);
+                }
+                c::bch_opt_id::Opt_failure_domain => {
+                    let bytes = val.to_bytes();
+                    let m = sb.member_mut(idx as u32).unwrap();
+                    if bytes.len() > m.failure_domain.len() {
+                        die(&format!("failure domain name too long (max {} bytes)",
+                                     m.failure_domain.len()));
+                    }
+                    m.failure_domain.fill(0);
+                    m.failure_domain[..bytes.len()].copy_from_slice(bytes);
+                }
                 _ => die(&format!("can't resolve option {:?} at format time", opt_id)),
             }
         }

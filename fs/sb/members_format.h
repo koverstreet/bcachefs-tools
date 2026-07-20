@@ -76,6 +76,15 @@ struct bch_member {
 	__u8			device_model[64] __nonstring;
 	__le64			flush_errors;
 	__u8			device_serial[64] __nonstring;
+	/*
+	 * Failure domain: devices sharing a (non-empty) string are in the same
+	 * failure domain, and allocation spreads replicas - and, for erasure
+	 * coding, requires stripe blocks - across domains. A flat, intrinsic
+	 * device property with no relationship to the disk_groups label tree.
+	 * Interned to a small id in memory (bch_member_cpu.failure_domain) for
+	 * the allocation path.
+	 */
+	__u8			failure_domain[32] __nonstring;
 };
 
 /*
@@ -105,6 +114,7 @@ LE64_BITMASK(BCH_MEMBER_RESIZE_ON_MOUNT,struct bch_member, flags, 31, 32)
 LE64_BITMASK(BCH_MEMBER_ROTATIONAL,	struct bch_member, flags, 32, 33)
 LE64_BITMASK(BCH_MEMBER_ROTATIONAL_SET,	struct bch_member, flags, 33, 34)
 LE64_BITMASK(BCH_MEMBER_INITIALIZED,	struct bch_member, flags, 34, 38)
+/* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
 
 #if 0
 LE64_BITMASK(BCH_MEMBER_NR_READ_ERRORS,	struct bch_member, flags[1], 0,  20);

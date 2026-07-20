@@ -8,6 +8,7 @@ struct bch_member_cpu {
 	u16			first_bucket;   /* index of first bucket used */
 	u16			bucket_size;	/* sectors */
 	u16			group;
+	u16			failure_domain;
 	u8			state;
 	u8			discard;
 	u8			data_allowed;

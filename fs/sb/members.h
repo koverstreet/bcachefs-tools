@@ -422,6 +422,7 @@ static inline struct bch_member_cpu bch2_mi_to_cpu(struct bch_member *mi)
 		.first_bucket	= le16_to_cpu(mi->first_bucket),
 		.bucket_size	= le16_to_cpu(mi->bucket_size),
 		.group		= BCH_MEMBER_GROUP(mi),
+		/* .failure_domain is interned in bch2_sb_members_to_cpu() */
 		.state		= BCH_MEMBER_STATE(mi),
 		.discard	= BCH_MEMBER_DISCARD(mi),
 		.data_allowed	= BCH_MEMBER_DATA_ALLOWED(mi),
