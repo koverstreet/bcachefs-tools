@@ -1228,7 +1228,8 @@ int bch2_check_bucket_backpointer_mismatch(struct btree_trans *trans,
 			BCH_RECOVERY_PASS_check_extents_to_backpointers,
 			nr < allowed ? RUN_RECOVERY_PASS_ratelimit : 0);
 
-	bch2_print_str(c, KERN_ERR, buf.buf);
+	if (!bch2_ratelimit(c))
+		bch2_print_str(c, KERN_ERR, buf.buf);
 	return 0;
 }
 
