@@ -799,6 +799,34 @@ static int check_snapshot(struct btree_trans *trans,
 	}
 
 	/*
+	 * A valid state that contradicts the legacy flags: current writers
+	 * dual-write both via bch2_snapshot_state_set(), so only a legacy
+	 * flags-only writer leaves them disagreeing - the flags are the fresher
+	 * write. But the flags are single unprotected bits, so corroborate
+	 * structurally before trusting them over a codeword: a node tombstoned
+	 * by a legacy bch2_snapshot_node_delete() carries the tombstone wipe,
+	 * and no live, will_delete or no_keys node ever has tree == 0. A bare
+	 * DELETED bit on a live-shaped node stays with the state field.
+	 *
+	 * Left as-is, the interior-deletion collector reads the stale no_keys
+	 * state, queues the tombstone, and the breadcrumb child pointer
+	 * fail-stops the edge checks - wedging every mount (the 2026-07-20
+	 * field report; snapshot-inject/stale_state_tombstone).
+	 */
+	if (bch2_snapshot_state(&s) != SNAPSHOT_STATE_deleted &&
+	    BCH_SNAPSHOT_DELETED_OBSOLETE(&s) &&
+	    !s.tree &&
+	    ret_fsck_err(trans, snapshot_state_stale_tombstone,
+			 "snapshot spliced out by a legacy kernel (tombstone shape, legacy deleted flag)\n"
+			 "but the state field is stale at %s - correcting to deleted:\n%s",
+			 bch2_snapshot_state_str(bch2_snapshot_state(&s)),
+			 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+		u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+		bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_deleted);
+		s = u->v;
+	}
+
+	/*
 	 * A non-live node with two live children that both point back at it is a
 	 * lie: it's a branching interior that two subtrees still depend on as
 	 * their common ancestor, so it can't be gone. Reviving it is the simplest
