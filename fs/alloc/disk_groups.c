@@ -1,4 +1,62 @@
 // SPDX-License-Identifier: GPL-2.0
+
+/* DOC_LATEX(failure-domains)
+ * A \emph{failure domain} is a set of devices expected to fail together: a
+ * shared controller, host, or rack. Spreading a filesystem's replicas across
+ * failure domains is what lets it survive one failing --- losing a whole
+ * domain then costs at most one replica of any extent.
+ *
+ * Each device may be given a failure domain: a free-form string, set with the
+ * \texttt{failure\_domain} device option at format time, at device add time,
+ * or at runtime. Two devices are in the same failure domain when their strings
+ * are equal; a device with no failure domain set is a domain of its own.
+ *
+ * This is a flat, intrinsic device property with no relationship to the disk
+ * label tree used for \hyperref[sec:io-path-options]{targeting}: a device's
+ * label positions it for target options, its failure domain describes physical
+ * fault isolation, and the two need not agree --- devices labeled by
+ * performance class (\texttt{ssd}, \texttt{hdd}) may sit in racks that cut
+ * across those classes.
+ *
+ * \subsubsection{Spreading replicas}
+ *
+ * When allocating, candidate devices are sorted by how many replicas of the
+ * current write already sit in each device's failure domain, so each replica
+ * goes to the least occupied domain, ties broken by the usual free space round
+ * robin. The journal spreads its replicas the same way.
+ *
+ * For replicated data this is a preference, not a requirement: if every
+ * remaining domain already holds a replica --- too few domains for the
+ * replication level, or the empty ones are full --- replicas double up rather
+ * than failing the allocation. Data sharing a domain with another of its
+ * replicas is still intact; it just isn't protected against that domain's loss.
+ *
+ * \subsubsection{Erasure coding}
+ *
+ * For erasure coding, distinct failure domains are a hard requirement rather
+ * than a preference: a stripe survives losing a domain only if no more than
+ * \texttt{nr\_redundant} of its blocks are in it, and a stripe that loses too
+ * many blocks cannot be reconstructed --- landing poorly is not merely
+ * unprotected, as for replicated data, but unrecoverable. So stripe block
+ * allocation excludes devices sharing an already-placed block's domain, and
+ * stripe width is capped at the number of failure domains with allocatable
+ * devices: if a domain becomes unavailable, new stripes are allocated narrower
+ * rather than doubling up.
+ *
+ * \subsubsection{Checking failure domains}
+ *
+ * \texttt{bcachefs fs failure-domains} shows the failure domains and what
+ * losing each would cost, computed from the replicas accounting: for each
+ * domain, the data that would be lost if it failed --- too few copies or stripe
+ * blocks left to reconstruct --- and the data that would survive degraded.
+ * Nonzero lost data means failure domain separation is being violated. With no
+ * failure domains configured each device is its own domain, so this becomes the
+ * per device view.
+ *
+ * Existing data is not rewritten when failure domains change: the report shows
+ * what a future rewrite pass would need to move.
+ */
+
 #include "bcachefs.h"
 
 #include "alloc/disk_groups.h"
