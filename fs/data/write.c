@@ -1324,6 +1324,14 @@ static void __bch2_write_index(struct bch_write_op *op)
 	struct keylist *keys = &op->insert_keys;
 	int ret = 0;
 
+	/*
+	 * the btree code sets PF_MEMALLOC_NOIO when it has btree locks held,
+	 * but will drop locks and do GFP_KERNEL allocations
+	 *
+	 * But here, our btree updates really are required for memory reclaim:
+	 */
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+
 	if (unlikely(op->io_error)) {
 		ret = bch2_write_drop_io_error_ptrs(op);
 
