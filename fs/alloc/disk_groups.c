@@ -212,6 +212,77 @@ const struct bch_devs_mask *bch2_target_to_mask(struct bch_fs *c, unsigned targe
 	}
 }
 
+/* Interned failure domain id of a device, 0 = unset. Caller holds rcu. */
+static inline u16 dev_failure_domain(struct bch_fs *c, unsigned dev)
+{
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+	return ca ? ca->mi.failure_domain : 0;
+}
+
+/*
+ * Spreading key for a candidate device: the number of already-chosen replicas
+ * in its failure domain. Sorting candidates by this ascending fills empty
+ * domains first, then doubles up - the failure-domain preference for
+ * replicated data. A device with no failure domain (id 0) always keys 0: it
+ * never shares a domain, so it sorts first and is never excluded.
+ *
+ * Called in batches - caller holds the rcu read lock.
+ */
+u64 bch2_dev_domain_key(struct bch_fs *c,
+			const struct bch_devs_mask *chosen, unsigned dev)
+{
+	u16 d = dev_failure_domain(c, dev);
+	if (!d)
+		return 0;
+
+	u64 key = 0;
+	unsigned i;
+	for_each_set_bit(i, chosen->d, BCH_SB_MEMBERS_MAX)
+		key += dev_failure_domain(c, i) == d;
+
+	return key;
+}
+
+/*
+ * Number of distinct failure domains @devs spans: each set domain counted
+ * once, each device with no domain counted as its own. This caps stripe width
+ * when failure domains are a hard requirement - a stripe can't have more
+ * blocks than domains to spread them across.
+ */
+unsigned bch2_target_nr_domains(struct bch_fs *c,
+				const struct bch_devs_mask *devs)
+{
+	unsigned nr = 0;
+
+	guard(rcu)();
+
+	unsigned i;
+	for_each_set_bit(i, devs->d, BCH_SB_MEMBERS_MAX) {
+		u16 d = dev_failure_domain(c, i);
+
+		/* no failure domain - a domain of its own: */
+		if (!d) {
+			nr++;
+			continue;
+		}
+
+		/* count each domain at its first device: */
+		bool first = true;
+		unsigned j;
+		for_each_set_bit(j, devs->d, BCH_SB_MEMBERS_MAX) {
+			if (j >= i)
+				break;
+			if (dev_failure_domain(c, j) == d) {
+				first = false;
+				break;
+			}
+		}
+		nr += first;
+	}
+
+	return nr;
+}
+
 bool bch2_dev_in_target_rcu(struct bch_fs *c, unsigned dev, unsigned target)
 {
 	if (dev == BCH_SB_MEMBER_INVALID)
