@@ -356,6 +356,28 @@ static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
 	return __bch2_trans_commit(trans, flags, true);
 }
 
+/*
+ * For repair loops that batch unbounded work - an update per snapshot
+ * version, typically - into one transaction: once substantial work has
+ * accumulated, commit and signal a restart (transaction_restart_commit)
+ * so the caller's restart loop re-drives, instead of the bump allocator
+ * running into BTREE_TRANS_MEM_MAX.
+ *
+ * The re-drive runs with the partial batch committed: callers must
+ * re-check on-disk state and skip already-committed repairs, so the
+ * re-drive shrinks - otherwise it trips this at the same point again
+ * and the restart loop can't make forward progress.
+ */
+static inline int bch2_trans_commit_lazy_if_full(struct btree_trans *trans,
+						 struct disk_reservation *disk_res,
+						 u64 *journal_seq,
+						 unsigned flags)
+{
+	return likely(trans->mem_top < BTREE_TRANS_MEM_MAX / 2)
+		? 0
+		: bch2_trans_commit_lazy(trans, disk_res, journal_seq, flags);
+}
+
 #define commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
 	lockrestart_do(_trans, _do ?: bch2_trans_commit(_trans, (_disk_res),\
 					(_journal_seq), (_flags)))
