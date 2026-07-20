@@ -636,7 +636,8 @@ static int add_inode(struct bch_fs *c, struct inode_walker *w,
 }
 
 static int get_inodes_all_snapshots(struct btree_trans *trans,
-				    struct inode_walker *w, u64 inum)
+				    struct inode_walker *w,
+				    struct snapshots_seen *s, u64 inum)
 {
 	struct bch_fs *c = trans->c;
 	struct bkey_s_c k;
@@ -653,8 +654,20 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 
 	for_each_btree_key_max_norestart(trans, iter,
 			BTREE_ID_inodes, POS(0, inum), SPOS(0, inum, U32_MAX),
-			BTREE_ITER_all_snapshots, k, ret)
+			BTREE_ITER_all_snapshots, k, ret) {
+		/*
+		 * The content passes skip keys in dying subtrees (same
+		 * predicate, right after their bch2_check_key_has_snapshot()
+		 * calls), so those keys are never accumulated into i_sectors/
+		 * subdir counts - a dying inode version in the walker would
+		 * always look wrong. Skip them here too; a dying snapshot has
+		 * no live descendants, so live keys can never resolve to one:
+		 */
+		if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
+			continue;
+
 		try(add_inode(c, w, k));
+	}
 
 	if (ret)
 		return ret;
@@ -769,10 +782,11 @@ fsck_err:
 
 struct inode_walker_entry *bch2_walk_inode(struct btree_trans *trans,
 					   struct inode_walker *w,
+					   struct snapshots_seen *s,
 					   struct bkey_s_c k)
 {
 	if (w->last_pos.inode != k.k->p.inode) {
-		int ret = get_inodes_all_snapshots(trans, w, k.k->p.inode);
+		int ret = get_inodes_all_snapshots(trans, w, s, k.k->p.inode);
 		if (ret)
 			return ERR_PTR(ret);
 	} else if (w->commit_count != trans->commit_count) {
@@ -782,7 +796,7 @@ struct inode_walker_entry *bch2_walk_inode(struct btree_trans *trans,
 		 * accumulations (i_sectors, subdir counts) are now partial -
 		 * recount instead of complaining:
 		 */
-		int ret = get_inodes_all_snapshots(trans, w, k.k->p.inode);
+		int ret = get_inodes_all_snapshots(trans, w, s, k.k->p.inode);
 		if (ret)
 			return ERR_PTR(ret);
 		w->recalculate_sums = true;
@@ -1806,7 +1820,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 	if (dir->last_pos.inode != k.k->p.inode && dir->have_inodes)
 		try(check_subdir_dirents_count(trans, dir));
 
-	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, dir, k));
+	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, dir, s, k));
 
 	try(bch2_check_key_has_inode(trans, iter, dir, i, k));
 
@@ -2047,7 +2061,7 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
 		return 0;
 
-	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, inode, k));
+	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, inode, s, k));
 
 	try(bch2_check_key_has_inode(trans, iter, inode, i, k));
 

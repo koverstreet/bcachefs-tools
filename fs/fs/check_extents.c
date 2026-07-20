@@ -423,7 +423,7 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
 		return 0;
 
-	struct inode_walker_entry *extent_i = errptr_try(bch2_walk_inode(trans, inode, k));
+	struct inode_walker_entry *extent_i = errptr_try(bch2_walk_inode(trans, inode, s, k));
 
 	try(bch2_check_key_has_inode(trans, iter, inode, extent_i, k));
 

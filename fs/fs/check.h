@@ -79,6 +79,7 @@ DEFINE_CLASS(inode_walker, struct inode_walker,
 
 struct inode_walker_entry *bch2_walk_inode(struct btree_trans *,
 					   struct inode_walker *,
+					   struct snapshots_seen *,
 					   struct bkey_s_c);
 
 void bch2_dirent_inode_mismatch_msg(struct printbuf *, struct bch_fs *,
