@@ -605,6 +605,13 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 
 	try(bch2_journal_error(&c->journal));
 
+	/*
+	 * NOIO, not NOFS: with swap on bcachefs, direct reclaim can issue
+	 * swap writes into this same filesystem — swap writeout is gated
+	 * by __GFP_IO, which NOFS still permits.  A reclaim-issued swap
+	 * write from under the write buffer locks deadlocks against the
+	 * journal write path (see bch2_journal_key_to_wb_slowpath()).
+	 */
 	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		if (!wb->flushing.keys.nr) {
 			guard(mutex)(&wb->inc.lock);
@@ -1089,8 +1096,17 @@ static int bch2_btree_write_buffer_flush_nocheck_rw(struct btree_trans *trans)
 		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
 
 		if (mutex_trylock(&wb->flushing.lock)) {
-			bch2_trans_unlock_long(trans);
-			ret = bch2_btree_write_buffer_flush_locked(trans, i, WB_FLUSH_tryflush);
+			/*
+			 * PF_MEMALLOC prevents entering direct reclaim while
+			 * holding wb->flushing.lock.  Without it, btree node
+			 * allocation inside the flush can enter reclaim →
+			 * reclaim needs journal → journal needs write-buffer
+			 * flush → blocked on our mutex → deadlock.
+			 */
+			scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO|PF_MEMALLOC) {
+				bch2_trans_unlock_long(trans);
+				ret = bch2_btree_write_buffer_flush_locked(trans, i, WB_FLUSH_tryflush);
+			}
 			mutex_unlock(&wb->flushing.lock);
 			if (ret)
 				break;
@@ -1199,7 +1215,13 @@ static void bch2_btree_write_buffer_flush_work_fn(struct work_struct *work)
 	struct bch_fs *c = wb->c;
 	enum wb_flush_caller caller = READ_ONCE(wb->flush_work_caller);
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
+	/*
+	 * PF_MEMALLOC in addition to NOIO: allocations inside the flush must
+	 * not enter direct reclaim at all while wb->flushing.lock is held —
+	 * reclaim can need the journal, which needs write-buffer flush,
+	 * which blocks on our mutex.
+	 */
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO|PF_MEMALLOC) {
 		guard(mutex)(&wb->flushing.lock);
 		CLASS(btree_trans, trans)(c);
 		while (1) {
@@ -1239,7 +1261,9 @@ int bch2_accounting_key_to_wb_slowpath(struct bch_fs *c, enum btree_id btree,
 	struct btree_write_buffered_key new = {};
 	bkey_copy(&new.k, &k->k_i);
 
-	try(darray_push(&wb->accounting, new));
+	/* GFP_NOIO: under the wb lock the journal write path needs — see
+	 * bch2_journal_key_to_wb_slowpath() for the reclaim/swap deadlock. */
+	try(darray_push_gfp(&wb->accounting, new, GFP_NOIO));
 
 	wb_accounting_sort(wb);
 	return 0;
@@ -1255,9 +1279,21 @@ int bch2_journal_key_to_wb_slowpath(struct bch_fs *c,
 	unsigned u64s = wb_key_u64s(k);
 	int ret;
 retry:
-	ret = darray_make_room_gfp(&pb->wb->keys, u64s, GFP_KERNEL);
+	/*
+	 * GFP_NOIO: we hold the write buffer lock the journal write path
+	 * needs.  A GFP_KERNEL allocation here can enter direct reclaim,
+	 * and with swap on bcachefs reclaim can issue a swap write into
+	 * this same filesystem — which then waits (bio mempool, journal)
+	 * on progress that can't happen while we sit on this lock.
+	 * Observed as a three-way deadlock: this thread in mempool_alloc
+	 * inside reclaim-issued swap I/O, bch2_journal_write blocked on
+	 * our lock, journal frozen.  Allocation failure here is handled
+	 * (fall back to the inc buffer, or error out to a caller that
+	 * retries via journal pin).
+	 */
+	ret = darray_make_room_gfp(&pb->wb->keys, u64s, GFP_NOIO);
 	if (!ret && pb->wb == &wb->flushing)
-		ret = darray_resize(&wb->sorted, wb->flushing.keys.size);
+		ret = darray_resize_gfp(&wb->sorted, wb->flushing.keys.size, GFP_NOIO);
 
 	if (unlikely(ret)) {
 		if (pb->wb == &wb->flushing) {
