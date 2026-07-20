@@ -1271,16 +1271,31 @@ static int find_oldest_inode_needs_reattach(struct btree_trans *trans,
 
 static int check_unreachable_inode(struct btree_trans *trans,
 				   struct btree_iter *iter,
-				   struct bkey_s_c k)
+				   struct bkey_s_c k,
+				   struct snapshots_seen *s)
 {
+	struct bch_fs *c = trans->c;
 	CLASS(printbuf, buf)();
 	int ret = 0;
+
+	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
+
+	/*
+	 * Skip inodes in a will_delete snapshot: delete_dead_snapshots(), a
+	 * later pass, sweeps them. This is the interrupted-deletion state - the
+	 * subvolume root has no backpointer, so it looks reattachable, but
+	 * reattaching it would manufacture a dirent to a subvolume that's about
+	 * to go away, wedging the verify pass on a dangling dirent. check_inode()
+	 * leaves the same root alone for the same reason.
+	 */
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
+		return 0;
 
 	if (!bkey_is_inode(k.k))
 		return 0;
 
 	struct bch_inode_unpacked inode;
-	bch2_inode_unpack(trans->c, k, &inode);
+	bch2_inode_unpack(c, k, &inode);
 
 	if (!inode_should_reattach(&inode))
 		return 0;
@@ -1312,12 +1327,13 @@ int bch2_check_unreachable_inodes(struct bch_fs *c)
 	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_inodes), 0);
 
 	CLASS(btree_trans, trans)(c);
+	CLASS(snapshots_seen, s)();
 	return for_each_btree_key_commit(trans, iter, BTREE_ID_inodes,
 				POS_MIN,
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
 		bch2_progress_update_iter(trans, &progress, &iter) ?:
-		check_unreachable_inode(trans, &iter, k);
+		check_unreachable_inode(trans, &iter, k, &s);
 	}));
 }
 
