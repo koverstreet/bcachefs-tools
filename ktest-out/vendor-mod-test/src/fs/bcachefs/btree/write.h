@@ -1,0 +1,45 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _BCACHEFS_BTREE_WRITE_H
+#define _BCACHEFS_BTREE_WRITE_H
+
+#include "data/write_types.h"
+
+struct btree_write_bio {
+	struct work_struct	work;
+	__BKEY_PADDED(key, BKEY_BTREE_PTR_VAL_U64s_MAX);
+	void			*data;
+	unsigned		data_bytes;
+	unsigned		sector_offset;
+	u64			start_time;
+#ifdef CONFIG_BCACHEFS_ASYNC_OBJECT_LISTS
+	unsigned		list_idx;
+#endif
+	struct bch_write_bio	wbio;
+};
+
+bool bch2_btree_post_write_cleanup(struct bch_fs *, struct btree *);
+
+enum btree_write_flags {
+	__BTREE_WRITE_only_if_need = BTREE_WRITE_TYPE_BITS,
+	__BTREE_WRITE_already_started,
+};
+#define BTREE_WRITE_only_if_need	BIT(__BTREE_WRITE_only_if_need)
+#define BTREE_WRITE_already_started	BIT(__BTREE_WRITE_already_started)
+
+void __bch2_btree_node_write(struct btree_trans *, struct btree *, unsigned);
+void bch2_trans_submit_write_bios(struct btree_trans *);
+void bch2_btree_node_write_trans(struct btree_trans *, struct btree *,
+				 enum six_lock_type, unsigned);
+void bch2_btree_init_next(struct btree_trans *, struct btree *);
+
+static inline void btree_node_write_if_need(struct btree_trans *trans, struct btree *b,
+					    enum six_lock_type lock_held)
+{
+	bch2_btree_node_write_trans(trans, b, lock_held, BTREE_WRITE_only_if_need);
+}
+
+void bch2_btree_write_stats_to_text(struct printbuf *, struct bch_fs *);
+bool bch2_btree_flush_all_writes(struct bch_fs *);
+void bch2_btree_cancel_all_writes(struct bch_fs *);
+
+#endif /* _BCACHEFS_BTREE_WRITE_H */

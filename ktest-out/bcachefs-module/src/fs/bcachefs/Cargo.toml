@@ -1,0 +1,32 @@
+[package]
+name = "bcachefs-kernel"
+version = "0.1.0"
+authors = [ "Kent Overstreet <kent.overstreet@linux.dev>" ]
+edition = "2021"
+rust-version = "1.85.0"
+
+[lib]
+crate-type = ["lib"]
+path = "mod.rs"
+
+[features]
+# `std` pulls in the userspace-only helpers (path/OsStr conversions). On by
+# default for the tools build; the in-kernel build uses --no-default-features
+# to get a no_std crate.
+default = ["std"]
+# `zeroize` is a userspace crate; the in-kernel build (no_std, no crates.io)
+# wipes key material with a hand-rolled volatile memset instead (see mod.rs).
+std = ["dep:zeroize"]
+
+[dependencies]
+bcachefs-shim = { path = "../bcachefs-shim" }
+bitfield = { path = "vendor/bitfield" }
+bitflags = { path = "vendor/bitflags" }
+paste    = { path = "vendor/paste" }
+uuid     = "1.2.2"
+zeroize  = { version = "1", optional = true, features = ["std", "zeroize_derive"] }
+
+[build-dependencies]
+# build.rs drives the `bindgen` CLI (see codegen.rs) rather than the bindgen
+# library, so the only build-dep is cc, for the static-inline wrappers.
+cc = "1.0"

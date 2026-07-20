@@ -133,6 +133,11 @@ enum fsck_err_opts {
 };
 
 #define BCH_OPTS()							\
+	x(fs_label,			u64,				\
+	  OPT_FS|OPT_FORMAT|OPT_RUNTIME,				\
+	  OPT_FN(bch2_opt_fs_label),					\
+	  BCH_SB_LABEL,			0,				\
+	  "label",	"Filesystem label")				\
 	x(block_size,			u16,				\
 	  OPT_FS|OPT_FORMAT|						\
 	  OPT_HUMAN_READABLE|OPT_MUST_BE_POW_2|OPT_SB_FIELD_SECTORS,	\

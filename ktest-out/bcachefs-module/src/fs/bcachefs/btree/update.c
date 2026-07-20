@@ -1,0 +1,951 @@
+// SPDX-License-Identifier: GPL-2.0
+
+#include "bcachefs.h"
+
+#include "alloc/buckets.h"
+
+#include "btree/iter.h"
+#include "btree/journal_overlay.h"
+#include "btree/locking.h"
+#include "btree/update.h"
+
+#include "data/extents.h"
+#include "data/keylist.h"
+
+#include "debug/debug.h"
+
+#include "init/error.h"
+
+#include "sb/counters.h"
+
+#include "snapshots/snapshot.h"
+
+#include <linux/string_helpers.h>
+
+static inline int btree_insert_entry_cmp(const struct btree_insert_entry *l,
+					 const struct btree_insert_entry *r)
+{
+	return   cmp_int(l->sort_order,	r->sort_order) ?:
+		 cmp_int(l->cached,	r->cached) ?:
+		 -cmp_int(l->level,	r->level) ?:
+		 bpos_cmp(l->k->k.p,	r->k->k.p);
+}
+
+static struct btree_insert_entry *
+btree_trans_update_by_path(struct btree_trans *, btree_path_idx_t,
+			   struct bkey_i *, unsigned,
+			   enum btree_iter_update_trigger_flags,
+			   unsigned long ip);
+
+static noinline int extent_front_merge(struct btree_trans *trans,
+				       struct btree_iter *iter,
+				       struct bkey_s_c k,
+				       struct bkey_i **insert,
+				       unsigned *k_buf_u64s,
+				       enum btree_iter_update_trigger_flags flags)
+{
+	if (unlikely(trans->journal_replay_not_finished))
+		return 0;
+
+	struct bkey_i *update = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+
+	if (!bch2_bkey_merge(trans->c, bkey_i_to_s(update), bkey_i_to_s_c(*insert)))
+		return 0;
+
+	int ret = bch2_key_has_snapshot_overwrites(trans, iter->btree_id, k.k->p) ?:
+		  bch2_key_has_snapshot_overwrites(trans, iter->btree_id, (*insert)->k.p);
+	if (ret < 0)
+		return ret;
+	if (ret)
+		return 0;
+
+	try(bch2_btree_delete_at(trans, iter, flags));
+
+	*insert = update;
+	*k_buf_u64s = update->k.u64s;
+	return 0;
+}
+
+static noinline int extent_back_merge(struct btree_trans *trans,
+				      struct btree_iter *iter,
+				      struct bkey_i *insert,
+				      struct bkey_s_c k)
+{
+	struct bch_fs *c = trans->c;
+	int ret;
+
+	if (unlikely(trans->journal_replay_not_finished))
+		return 0;
+
+	ret =   bch2_key_has_snapshot_overwrites(trans, iter->btree_id, insert->k.p) ?:
+		bch2_key_has_snapshot_overwrites(trans, iter->btree_id, k.k->p);
+	if (ret < 0)
+		return ret;
+	if (ret)
+		return 0;
+
+	bch2_bkey_merge(c, bkey_i_to_s(insert), k);
+	return 0;
+}
+
+/*
+ * When deleting, check if we need to emit a whiteout (because we're overwriting
+ * something in an ancestor snapshot)
+ */
+static int need_whiteout_for_snapshot(struct btree_trans *trans,
+				      enum btree_id btree_id, struct bpos pos)
+{
+	struct bkey_s_c k;
+	u32 snapshot = pos.snapshot;
+	int ret;
+
+	if (!bch2_snapshot_parent(trans->c, pos.snapshot))
+		return 0;
+
+	pos.snapshot++;
+
+	for_each_btree_key_norestart(trans, iter, btree_id, pos,
+			   BTREE_ITER_all_snapshots|
+			   BTREE_ITER_nopreserve, k, ret) {
+		if (!bkey_eq(k.k->p, pos))
+			break;
+
+		if (bch2_snapshot_is_ancestor(trans, snapshot,
+					      k.k->p.snapshot)) {
+			ret = !bkey_whiteout(k.k);
+			break;
+		}
+	}
+
+	return ret;
+}
+
+int __bch2_insert_snapshot_whiteouts(struct btree_trans *trans,
+				     enum btree_id btree, struct bpos pos,
+				     snapshot_id_list *s)
+{
+	darray_for_each(*s, id) {
+		pos.snapshot = *id;
+
+		CLASS(btree_iter, iter)(trans, btree, pos, BTREE_ITER_not_extents|BTREE_ITER_intent);
+		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+		if (k.k->type == KEY_TYPE_deleted) {
+			struct bkey_i *update =
+				errptr_try(bch2_trans_kmalloc(trans, sizeof(struct bkey_i)));
+
+			bkey_init(&update->k);
+			update->k.p		= pos;
+			update->k.type		= KEY_TYPE_whiteout;
+
+			try(bch2_trans_update(trans, &iter, update,
+					      BTREE_UPDATE_internal_snapshot_node));
+		}
+	}
+
+	return 0;
+}
+
+int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
+				       struct btree_iter *iter,
+				       enum btree_iter_update_trigger_flags flags,
+				       struct bkey_s_c old,
+				       struct bkey_s_c new)
+{
+	struct bch_fs *c = trans->c;
+	enum btree_id btree_id = iter->btree_id;
+	struct bkey_i *update;
+
+	/*
+	 * Split fragments below are fresh kkeys derived from @old, so the
+	 * caller's BTREE_TRIGGER_set_needs_reconcile_done (asserting "I
+	 * already set the reconcile field on the kkey I'm inserting") doesn't
+	 * apply to them — let the trigger compute it.
+	 */
+	flags &= ~BTREE_TRIGGER_set_needs_reconcile_done;
+	struct bpos new_start = bkey_start_pos(new.k);
+	unsigned front_split = bkey_lt(bkey_start_pos(old.k), new_start);
+	unsigned back_split  = bkey_gt(old.k->p, new.k->p);
+	unsigned middle_split = (front_split || back_split) &&
+		old.k->p.snapshot != new.k->p.snapshot;
+	unsigned nr_splits = front_split + back_split + middle_split;
+	int ret = 0, compressed_sectors;
+
+	/*
+	 * If we're going to be splitting a compressed extent, note it
+	 * so that __bch2_trans_commit() can increase our disk
+	 * reservation:
+	 */
+	if (nr_splits > 1 &&
+	    (compressed_sectors = bch2_bkey_sectors_compressed(c, old)))
+		trans->extra_disk_res += compressed_sectors * (nr_splits - 1);
+
+	if (front_split) {
+		update = errptr_try(bch2_bkey_make_mut_noupdate(trans, old));
+
+		bch2_cut_back(new_start, update);
+
+		try(bch2_insert_snapshot_whiteouts(trans, btree_id, old.k->p, update->k.p));
+		try(bch2_btree_insert_nonextent(trans, btree_id, update, update->k.u64s,
+					BTREE_UPDATE_internal_snapshot_node|flags));
+	}
+
+	/* If we're overwriting in a different snapshot - middle split: */
+	if (middle_split) {
+		update = errptr_try(bch2_bkey_make_mut_noupdate(trans, old));
+
+		bch2_cut_front(c, new_start, update);
+		bch2_cut_back(new.k->p, update);
+
+		try(bch2_insert_snapshot_whiteouts(trans, btree_id, old.k->p, update->k.p));
+		try(bch2_btree_insert_nonextent(trans, btree_id, update, update->k.u64s,
+					  BTREE_UPDATE_internal_snapshot_node|flags));
+	}
+
+	if (!back_split) {
+		update = errptr_try(bch2_trans_kmalloc(trans, sizeof(*update)));
+
+		bkey_init(&update->k);
+		update->k.p = old.k->p;
+		update->k.p.snapshot = new.k->p.snapshot;
+
+		if (btree_type_has_snapshots(btree_id)) {
+			ret =   new.k->p.snapshot != old.k->p.snapshot
+				? 1
+				: need_whiteout_for_snapshot(trans, btree_id, update->k.p);
+			if (ret < 0)
+				return ret;
+			if (ret)
+				update->k.type = extent_whiteout_type(trans->c, iter->btree_id, new.k);
+		}
+
+		try(bch2_btree_insert_nonextent(trans, btree_id, update, update->k.u64s,
+					  BTREE_UPDATE_internal_snapshot_node|flags));
+	} else {
+		update = errptr_try(bch2_bkey_make_mut_noupdate(trans, old));
+
+		bch2_cut_front(c, new.k->p, update);
+
+		btree_trans_update_by_path(trans, iter->path, update, update->k.u64s,
+					   BTREE_UPDATE_internal_snapshot_node|
+					   flags, _RET_IP_);
+	}
+
+	return 0;
+}
+
+static int bch2_trans_update_extent(struct btree_trans *trans,
+				    struct btree_iter *orig_iter,
+				    struct bkey_i *insert, unsigned k_buf_u64s,
+				    enum btree_iter_update_trigger_flags flags)
+{
+	enum btree_id btree_id = orig_iter->btree_id;
+
+	CLASS(btree_iter, iter)(trans, btree_id, bkey_start_pos(&insert->k),
+				BTREE_ITER_intent|
+				BTREE_ITER_not_extents|
+				BTREE_ITER_nofilter_whiteouts);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(insert->k.p.inode, U64_MAX)));
+	if (!k.k)
+		goto out;
+
+	if (bkey_eq(k.k->p, bkey_start_pos(&insert->k))) {
+		if (bch2_bkey_maybe_mergable(k.k, &insert->k))
+			try(extent_front_merge(trans, &iter, k, &insert, &k_buf_u64s, flags));
+
+		goto next;
+	}
+
+	while (true) {
+		BUG_ON(bkey_le(k.k->p, bkey_start_pos(&insert->k)));
+
+		/*
+		 * When KEY_TYPE_whiteout is included, bkey_start_pos is not
+		 * monotonically increasing
+		 */
+		if (k.k->type != KEY_TYPE_whiteout && bkey_le(insert->k.p, bkey_start_pos(k.k)))
+			break;
+
+		bool done = k.k->type != KEY_TYPE_whiteout && bkey_lt(insert->k.p, k.k->p);
+
+		if (bkey_extent_whiteout(k.k)) {
+			enum bch_bkey_type whiteout_type = extent_whiteout_type(trans->c, btree_id, &insert->k);
+
+			if (bkey_le(k.k->p, insert->k.p) &&
+			    k.k->type != whiteout_type) {
+				struct bkey_i *update = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+
+				update->k.p.snapshot = iter.snapshot;
+				update->k.type = whiteout_type;
+
+				try(bch2_trans_update(trans, &iter, update, 0));
+			}
+		} else {
+			try(bch2_trans_update_extent_overwrite(trans, &iter, flags, k, bkey_i_to_s_c(insert)));
+		}
+
+		if (done)
+			goto out;
+next:
+		bch2_btree_iter_advance(&iter);
+		k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(insert->k.p.inode, U64_MAX)));
+		if (!k.k)
+			goto out;
+	}
+
+	if (bch2_bkey_maybe_mergable(&insert->k, k.k))
+		try(extent_back_merge(trans, &iter, insert, k));
+out:
+	return !bkey_deleted(&insert->k)
+		? bch2_btree_insert_nonextent(trans, btree_id, insert, k_buf_u64s, flags)
+		: 0;
+}
+
+static noinline __cold
+void __update_by_path_trace(struct btree_trans *trans, unsigned overwrite,
+			    btree_path_idx_t path_idx, struct bkey_i *k)
+{
+	__event_trace(trans->c, update_by_path, buf, ({
+		prt_printf(&buf, "%s overwrite %u\n", trans->fn, overwrite);
+		bch2_btree_path_to_text_short(&buf, trans, path_idx, trans->paths + path_idx);
+		bch2_bkey_val_to_text(&buf, trans->c, bkey_i_to_s_c(k));
+	}));
+}
+
+static struct btree_insert_entry *
+btree_trans_update_by_path(struct btree_trans *trans,
+			   btree_path_idx_t path_idx,
+			   struct bkey_i *k, unsigned k_buf_u64s,
+			   enum btree_iter_update_trigger_flags flags,
+			   unsigned long ip)
+{
+	struct bch_fs *c = trans->c;
+	struct btree_insert_entry *i, n;
+	int cmp;
+
+	struct btree_path *path = trans->paths + path_idx;
+	EBUG_ON(!path->should_be_locked);
+	EBUG_ON(trans->nr_updates >= trans->nr_paths);
+	EBUG_ON(!bpos_eq(k->k.p, path->pos));
+	BUG_ON(k_buf_u64s < k->k.u64s);
+	EBUG_ON(!path->level &&
+		btree_type_has_snapshots(path->btree_id) &&
+		!bkey_deleted(&k->k) &&
+		test_bit(JOURNAL_replay_done, &c->journal.flags) &&
+		!bch2_snapshot_exists(c, k->k.p.snapshot));
+
+	trans->has_interior_updates |= path->level != 0;
+
+	n = (struct btree_insert_entry) {
+		.flags		= flags,
+		.sort_order	= btree_trigger_order(path->btree_id),
+		.bkey_type	= __btree_node_type(path->level, path->btree_id),
+		.btree_id	= path->btree_id,
+		.level		= path->level,
+		.cached		= path->cached,
+		.k_buf_u64s	= k_buf_u64s,
+		.path		= path_idx,
+		.k		= k,
+		.ip_allocated	= ip,
+	};
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	trans_for_each_update(trans, i)
+		BUG_ON(i != trans->updates &&
+		       btree_insert_entry_cmp(i - 1, i) >= 0);
+#endif
+
+	/*
+	 * Pending updates are kept sorted: first, find position of new update,
+	 * then delete/trim any updates the new update overwrites:
+	 */
+	for (i = trans->updates; i < trans->updates + trans->nr_updates; i++) {
+		cmp = btree_insert_entry_cmp(&n, i);
+		if (cmp <= 0)
+			break;
+	}
+
+	bool overwrite = !cmp && i < trans->updates + trans->nr_updates;
+
+	if (overwrite) {
+		/*
+		 * Overwriting an update whose triggers already ran normally
+		 * loses or duplicates their effects - unless the caller has
+		 * handled that, e.g. deleting a key from its own trigger, where
+		 * the new (deleted) key re-runs triggers via the key cache flush.
+		 */
+		EBUG_ON((i->insert_trigger_run || i->overwrite_trigger_run) &&
+			!(flags & BTREE_UPDATE_overwrite_triggered));
+
+		bch2_path_put(trans, i->path, true);
+		i->flags	= n.flags;
+		i->cached	= n.cached;
+		i->k_buf_u64s	= n.k_buf_u64s;
+		i->k		= n.k;
+		i->path		= n.path;
+		i->ip_allocated	= n.ip_allocated;
+	} else {
+		array_insert_item(trans->updates, trans->nr_updates,
+				  i - trans->updates, n);
+
+		i->old_v = bch2_btree_path_peek_slot_exact(path, &i->old_k).v;
+		i->old_btree_u64s = !bkey_deleted(&i->old_k) ? i->old_k.u64s : 0;
+
+		if (unlikely(trans->journal_replay_not_finished)) {
+			const struct bkey_i *j_k =
+				bch2_journal_keys_peek_slot(c, n.btree_id, n.level, k->k.p);
+
+			if (j_k) {
+				i->old_k = j_k->k;
+				i->old_v = &j_k->v;
+			}
+		}
+	}
+
+	__btree_path_get(trans, trans->paths + i->path, true);
+
+	event_trace_fn(c, update_by_path,
+		       __update_by_path_trace(trans, overwrite, path_idx, k));
+
+	return i;
+}
+
+static noinline int flush_new_cached_update(struct btree_trans *trans,
+					    struct btree_insert_entry *i,
+					    enum btree_iter_update_trigger_flags flags,
+					    unsigned long ip)
+{
+	CLASS(btree_iter, iter)(trans, i->btree_id, i->old_k.p, BTREE_ITER_intent);
+
+	try(bch2_btree_iter_traverse(&iter));
+
+	struct btree_path *btree_path = btree_iter_path(trans, &iter);
+
+	btree_path_set_should_be_locked(trans, btree_path);
+#if 0
+	/*
+	 * The old key in the insert entry might actually refer to an existing
+	 * key in the btree that has been deleted from cache and not yet
+	 * flushed. Check for this and skip the flush so we don't run triggers
+	 * against a stale key.
+	 */
+	struct bkey k;
+	bch2_btree_path_peek_slot_exact(btree_path, &k);
+	if (!bkey_deleted(&k))
+		return 0;
+#endif
+	i->key_cache_already_flushed = true;
+	i->flags |= BTREE_TRIGGER_norun;
+
+	struct bkey old_k		= i->old_k;
+	const struct bch_val *old_v	= i->old_v;
+
+	i = btree_trans_update_by_path(trans, iter.path, i->k, i->k_buf_u64s, flags, ip);
+
+	i->old_k		= old_k;
+	i->old_v		= old_v;
+	i->key_cache_flushing	= true;
+	return 0;
+}
+
+static inline bool key_cache_needs_flush(struct btree_path *path)
+{
+	struct bkey_cached *ck = (void *) path->l[0].b;
+	return test_bit(BKEY_CACHED_IMMEDIATE_FLUSH, &ck->flags);
+}
+
+static noinline int bch2_trans_update_get_key_cache(struct btree_trans *trans,
+						    struct btree_iter *iter)
+{
+	struct btree_path *key_cache_path = btree_iter_key_cache_path(trans, iter);
+
+	if (!key_cache_path ||
+	    !key_cache_path->should_be_locked ||
+	    !bpos_eq(key_cache_path->pos, iter->pos)) {
+		if (!iter->key_cache_path)
+			iter->key_cache_path =
+				bch2_path_get(trans, iter->btree_id, &iter->pos, 1, 0,
+					      BTREE_ITER_intent|
+					      BTREE_ITER_cached, _THIS_IP_);
+
+		iter->key_cache_path =
+			bch2_btree_path_set_pos(trans, iter->key_cache_path, &iter->pos,
+						iter->flags & BTREE_ITER_intent,
+						_THIS_IP_);
+
+		try(bch2_btree_path_traverse(trans, iter->key_cache_path, BTREE_ITER_cached));
+
+		struct bkey_cached *ck = (void *) trans->paths[iter->key_cache_path].l[0].b;
+
+		if (test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+			event_inc_trace(trans->c, trans_restart_key_cache_raced, buf, prt_str(&buf, trans->fn));
+			return btree_trans_restart(trans, BCH_ERR_transaction_restart_key_cache_raced);
+		}
+
+		btree_path_set_should_be_locked(trans, trans->paths + iter->key_cache_path);
+	}
+
+	return 0;
+}
+
+int __must_check bch2_trans_update_ip(struct btree_trans *trans, struct btree_iter *iter,
+				      struct bkey_i *k, unsigned k_buf_u64s,
+				      enum btree_iter_update_trigger_flags flags,
+				      unsigned long ip)
+{
+	kmsan_check_memory(k, bkey_bytes(&k->k));
+
+	if (iter->flags & BTREE_ITER_is_extents)
+		return bch2_trans_update_extent(trans, iter, k, k_buf_u64s, flags);
+
+	if (bkey_deleted(&k->k) &&
+	    !(flags & BTREE_UPDATE_key_cache_reclaim) &&
+	    (iter->flags & BTREE_ITER_filter_snapshots)) {
+		int ret = need_whiteout_for_snapshot(trans, iter->btree_id, k->k.p);
+		if (unlikely(ret < 0))
+			return ret;
+
+		if (ret)
+			k->k.type = KEY_TYPE_whiteout;
+	}
+
+	btree_path_idx_t path_idx = iter->update_path ?: iter->path;
+	struct btree_path *path = trans->paths + path_idx;
+
+	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG)) {
+		BUG_ON(!bpos_eq(k->k.p, iter->pos));
+		if (!bpos_eq(k->k.p, path->pos)) {
+			BUG_ON(!(iter->flags & BTREE_ITER_filter_snapshots));
+			BUG_ON(!bkey_eq(k->k.p, path->pos));
+			BUG_ON(!bch2_snapshot_is_ancestor(trans, k->k.p.snapshot, path->pos.snapshot));
+		}
+	}
+
+	/*
+	 * Ensure that updates to cached btrees go to the key cache:
+	 */
+	if (!(flags & BTREE_UPDATE_key_cache_reclaim) &&
+	    !path->cached &&
+	    !path->level &&
+	    btree_id_cached(path->btree_id)) {
+		try(bch2_trans_update_get_key_cache(trans, iter));
+
+		path_idx = iter->key_cache_path;
+	}
+
+	struct btree_insert_entry *i = btree_trans_update_by_path(trans, path_idx, k,
+								  k_buf_u64s, flags, ip);
+
+	/*
+	 * If a key is present in the key cache, it must also exist in the
+	 * btree - this is necessary for cache coherency. When iterating over
+	 * a btree that's cached in the key cache, the btree iter code checks
+	 * the key cache - but the key has to exist in the btree for that to
+	 * work:
+	 */
+	return i->cached && (!i->old_btree_u64s ||
+			     bkey_deleted(&k->k) ||
+			     key_cache_needs_flush(trans->paths + path_idx))
+		? flush_new_cached_update(trans, i, flags, ip)
+		: 0;
+}
+
+/*
+ * Triggers may need to mutate (and possibly grow) the in-flight new key.
+ *
+ * Fast path: if the existing buffer is already big enough, hand back @op.new
+ * unchanged — no trans->updates walk needed.
+ *
+ * Slow path (growth required): find the queued update by (btree, level, pos),
+ * kmalloc a fresh buffer, and rewire i->k / i->k_buf_u64s. We re-find on each
+ * call because nested updates can grow trans->updates and invalidate any
+ * pointer captured earlier.
+ *
+ * Mem-trigger phase forbids growth: the journal layout is already committed
+ * to. Overwrite-only callers (no BTREE_TRIGGER_insert) have no business
+ * mutating @new (it's the deleted-dummy stub).
+ */
+int bch2_trigger_get_mutable_new(struct btree_trans *trans,
+				 struct btree_trigger_op op,
+				 unsigned needed_u64s,
+				 struct bkey_s *out)
+{
+	BUG_ON(!(op.flags & BTREE_TRIGGER_insert));
+
+	if (needed_u64s <= op.new_buf_u64s) {
+		*out = op.new;
+		return 0;
+	}
+
+	BUG_ON(op.flags & BTREE_TRIGGER_atomic);
+
+	struct btree_insert_entry *i = NULL;
+	trans_for_each_update(trans, e)
+		if (e->btree_id == op.btree &&
+		    e->level == op.level &&
+		    bpos_eq(e->k->k.p, op.new.k->p)) {
+			i = e;
+			break;
+		}
+	BUG_ON(!i);
+
+	struct bkey_i *new_buf =
+		errptr_try(bch2_trans_kmalloc(trans, needed_u64s * sizeof(u64)));
+	bkey_copy(new_buf, i->k);
+	i->k		= new_buf;
+	i->k_buf_u64s	= needed_u64s;
+
+	*out = bkey_i_to_s(i->k);
+	return 0;
+}
+
+int bch2_btree_insert_clone_trans(struct btree_trans *trans,
+				  enum btree_id btree,
+				  struct bkey_i *k)
+{
+	struct bkey_i *n = errptr_try(bch2_trans_kmalloc(trans, bkey_bytes(&k->k)));
+
+	bkey_copy(n, k);
+	return bch2_btree_insert_trans(trans, btree, n, 0);
+}
+
+void *__bch2_trans_subbuf_alloc(struct btree_trans *trans,
+				struct btree_trans_subbuf *buf,
+				unsigned u64s, ulong ip)
+{
+	unsigned new_top = buf->u64s + u64s;
+	unsigned new_size = buf->size;
+
+	BUG_ON(roundup_pow_of_two(new_top) > U16_MAX);
+
+	if (new_top > new_size)
+		new_size = roundup_pow_of_two(new_top);
+
+	void *n = bch2_trans_kmalloc_nomemzero_ip(trans, new_size * sizeof(u64), ip);
+	if (IS_ERR(n))
+		return n;
+
+	unsigned offset = (u64 *) n - (u64 *) trans->mem;
+	BUG_ON(offset > U16_MAX);
+
+	if (buf->u64s)
+		memcpy(n,
+		       btree_trans_subbuf_base(trans, buf),
+		       buf->u64s * sizeof(u64));
+	buf->base = (u64 *) n - (u64 *) trans->mem;
+	buf->size = new_size;
+
+	void *p = btree_trans_subbuf_top(trans, buf);
+	buf->u64s = new_top;
+	return p;
+}
+
+int bch2_trans_subbuf_reserve(struct btree_trans *trans,
+			      struct btree_trans_subbuf *buf,
+			      unsigned u64s)
+{
+	if (buf->u64s + u64s > buf->size) {
+		unsigned old_u64s = buf->u64s;
+		void *p = __bch2_trans_subbuf_alloc(trans, buf, u64s, _THIS_IP_);
+		if (IS_ERR(p))
+			return PTR_ERR(p);
+		buf->u64s = old_u64s;
+	}
+	return 0;
+}
+
+int bch2_bkey_get_empty_slot(struct btree_trans *trans, struct btree_iter *iter,
+			     enum btree_id btree, struct bpos start, struct bpos end)
+{
+	bch2_trans_iter_init(trans, iter, btree, end, BTREE_ITER_intent);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_prev(iter));
+
+	if (bpos_lt(iter->pos, start))
+		bch2_btree_iter_set_pos(iter, start);
+	else
+		bch2_btree_iter_advance(iter);
+
+	k = bkey_try(bch2_btree_iter_peek_slot(iter));
+	BUG_ON(k.k->type != KEY_TYPE_deleted);
+
+	if (bkey_gt(k.k->p, end))
+		return bch_err_throw(trans->c, ENOSPC_btree_slot);
+
+	return 0;
+}
+
+void bch2_trans_commit_hook(struct btree_trans *trans,
+			    struct btree_trans_commit_hook *h)
+{
+	h->next = trans->hooks;
+	trans->hooks = h;
+}
+
+int bch2_btree_insert_nonextent(struct btree_trans *trans,
+				enum btree_id btree, struct bkey_i *k,
+				unsigned k_buf_u64s,
+				enum btree_iter_update_trigger_flags flags)
+{
+	CLASS(btree_iter, iter)(trans, btree, k->k.p,
+				BTREE_ITER_cached|
+				BTREE_ITER_not_extents|
+				BTREE_ITER_intent);
+	return  bch2_btree_iter_traverse(&iter) ?:
+		bch2_trans_update_ip(trans, &iter, k, k_buf_u64s, flags, _RET_IP_);
+}
+
+int bch2_btree_insert_trans(struct btree_trans *trans, enum btree_id btree,
+			    struct bkey_i *k, enum btree_iter_update_trigger_flags flags)
+{
+	CLASS(btree_iter, iter)(trans, btree, k->k.p,
+				BTREE_ITER_intent|flags);
+	return  bch2_btree_iter_traverse(&iter) ?:
+		bch2_trans_update_ip(trans, &iter, k, k->k.u64s, flags, _RET_IP_);
+}
+
+/**
+ * bch2_btree_insert - insert keys into the extent btree
+ * @c:			pointer to struct bch_fs
+ * @id:			btree to insert into
+ * @k:			key to insert
+ * @disk_res:		must be non-NULL whenever inserting or potentially
+ *			splitting data extents
+ * @commit_flags:	transaction commit flags
+ * @iter_flags:		btree iter update trigger flags
+ *
+ * Returns:		0 on success, error code on failure
+ */
+int bch2_btree_insert(struct bch_fs *c, enum btree_id id, struct bkey_i *k,
+		      struct disk_reservation *disk_res,
+		      enum bch_trans_commit_flags commit_flags,
+		      enum btree_iter_update_trigger_flags iter_flags)
+{
+	CLASS(btree_trans, trans)(c);
+	return commit_do(trans, disk_res, NULL, commit_flags,
+			 bch2_btree_insert_trans(trans, id, k, iter_flags));
+}
+
+int bch2_btree_delete_at(struct btree_trans *trans, struct btree_iter *iter,
+			 enum btree_iter_update_trigger_flags flags)
+{
+	struct bkey_i *k = errptr_try(bch2_trans_kmalloc(trans, sizeof(*k)));
+
+	bkey_init(&k->k);
+	k->k.p = iter->pos;
+	return bch2_trans_update(trans, iter, k, flags);
+}
+
+int bch2_btree_delete(struct btree_trans *trans,
+		      enum btree_id btree, struct bpos pos,
+		      enum btree_iter_update_trigger_flags flags)
+{
+	CLASS(btree_iter, iter)(trans, btree, pos,
+				BTREE_ITER_cached|
+				BTREE_ITER_intent);
+	return  bch2_btree_iter_traverse(&iter) ?:
+		bch2_btree_delete_at(trans, &iter, flags);
+}
+
+static int delete_range_one(struct btree_trans *trans, struct btree_iter *iter,
+			    struct bpos end, enum btree_iter_update_trigger_flags flags)
+{
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(iter, &end));
+
+	if (!k.k)
+		return 1;
+
+	CLASS(disk_reservation, res)(trans->c);
+
+	/*
+	 * This could probably be more efficient for extents:
+	 *
+	 * For extents, iter.pos won't necessarily be the same as
+	 * bkey_start_pos(k.k) (for non extents they always will be the
+	 * same). It's important that we delete starting from iter.pos
+	 * because the range we want to delete could start in the middle
+	 * of k.
+	 *
+	 * (bch2_btree_iter_peek() does guarantee that iter.pos >=
+	 * bkey_start_pos(k.k)).
+	 */
+	struct bkey_i delete;
+	bkey_init(&delete.k);
+	delete.k.p = iter->pos;
+
+	if (iter->flags & BTREE_ITER_is_extents)
+		bch2_key_resize(&delete.k,
+				bpos_min(end, k.k->p).offset -
+				iter->pos.offset);
+
+	try(bch2_trans_update(trans, iter, &delete, flags));
+	try(bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc));
+	return 0;
+}
+
+int bch2_btree_delete_range_trans(struct btree_trans *trans, enum btree_id btree,
+				  struct bpos start, struct bpos end,
+				  enum btree_iter_update_trigger_flags flags)
+{
+	u32 restart_count = trans->restart_count;
+	int ret = 0;
+
+	CLASS(btree_iter, iter)(trans, btree, start, BTREE_ITER_intent|flags);
+
+	while (true) {
+		ret = delete_range_one(trans, &iter, end, flags);
+		/*
+		 * the bch2_trans_begin() call is in a weird place because we
+		 * need to call it after every transaction commit, to avoid path
+		 * overflow, but don't want to call it if the delete operation
+		 * is a no-op and we have no work to do:
+		 */
+		bch2_trans_begin(trans);
+
+		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+			ret = 0;
+		if (ret)
+			break;
+	}
+
+	return ret < 0 ? ret : trans_was_restarted(trans, restart_count);
+}
+
+/*
+ * bch_btree_delete_range - delete everything within a given range
+ *
+ * Range is a half open interval - [start, end)
+ */
+int bch2_btree_delete_range(struct bch_fs *c, enum btree_id id,
+			    struct bpos start, struct bpos end,
+			    enum btree_iter_update_trigger_flags flags)
+{
+	CLASS(btree_trans, trans)(c);
+	int ret = bch2_btree_delete_range_trans(trans, id, start, end, flags);
+	if (ret == -BCH_ERR_transaction_restart_nested)
+		ret = 0;
+	return ret;
+}
+
+int bch2_btree_bit_mod_iter(struct btree_trans *trans, struct btree_iter *iter, bool set)
+{
+	struct bkey_i *k = errptr_try(bch2_trans_kmalloc(trans, sizeof(*k)));
+
+	bkey_init(&k->k);
+	k->k.type = set ? KEY_TYPE_set : KEY_TYPE_deleted;
+	k->k.p = iter->pos;
+	if (iter->flags & BTREE_ITER_is_extents)
+		bch2_key_resize(&k->k, 1);
+
+	return bch2_trans_update(trans, iter, k, 0);
+}
+
+int bch2_btree_bit_mod(struct btree_trans *trans, enum btree_id btree,
+		       struct bpos pos, bool set)
+{
+	CLASS(btree_iter, iter)(trans, btree, pos, BTREE_ITER_intent);
+
+	return  bch2_btree_iter_traverse(&iter) ?:
+		bch2_btree_bit_mod_iter(trans, &iter, set);
+}
+
+int bch2_btree_bit_mod_buffered(struct btree_trans *trans, enum btree_id btree,
+				struct bpos pos, bool set)
+{
+	struct bkey_i k;
+
+	bkey_init(&k.k);
+	k.k.type = set ? KEY_TYPE_set : KEY_TYPE_deleted;
+	k.k.p = pos;
+
+	return bch2_trans_update_buffered(trans, btree, &k);
+}
+
+static int __bch2_trans_log_str(struct btree_trans *trans, const char *str, unsigned len, ulong ip)
+{
+	unsigned u64s = DIV_ROUND_UP(len, sizeof(u64));
+
+	struct jset_entry *e = errptr_try(bch2_trans_jset_entry_alloc_ip(trans, jset_u64s(u64s), ip));
+
+	struct jset_entry_log *l = container_of(e, struct jset_entry_log, entry);
+	journal_entry_init(e, BCH_JSET_ENTRY_log, 0, 1, u64s);
+	memcpy_and_pad(l->d, u64s * sizeof(u64), str, len, 0);
+	return 0;
+}
+
+int bch2_trans_log_str(struct btree_trans *trans, const char *str)
+{
+	return __bch2_trans_log_str(trans, str, strlen(str), _RET_IP_);
+}
+
+int bch2_trans_log_msg(struct btree_trans *trans, struct printbuf *buf)
+{
+	try(buf->allocation_failure ? -BCH_ERR_ENOMEM_trans_log_msg : 0);
+
+	return __bch2_trans_log_str(trans, buf->buf, buf->pos, _RET_IP_);
+}
+
+int bch2_trans_log_bkey(struct btree_trans *trans, enum btree_id btree,
+			unsigned level, struct bkey_i *k)
+{
+	struct jset_entry *e = errptr_try(bch2_trans_jset_entry_alloc_ip(trans,
+						jset_u64s(k->k.u64s), _RET_IP_));
+
+	journal_entry_init(e, BCH_JSET_ENTRY_log_bkey, btree, level, k->k.u64s);
+	bkey_copy(e->start, k);
+	return 0;
+}
+
+__printf(3, 0)
+static int
+__bch2_fs_log_msg(struct bch_fs *c, unsigned commit_flags, const char *fmt,
+		  va_list args)
+{
+	CLASS(printbuf, buf)();
+	prt_vprintf(&buf, fmt, args);
+
+	unsigned u64s = DIV_ROUND_UP(buf.pos, sizeof(u64));
+
+	try(buf.allocation_failure ? -BCH_ERR_ENOMEM_trans_log_msg : 0);
+
+	if (!test_bit(JOURNAL_running, &c->journal.flags)) {
+		try(darray_make_room(&c->journal.early_journal_entries, jset_u64s(u64s)));
+
+		struct jset_entry_log *l = (void *) &darray_top(c->journal.early_journal_entries);
+		journal_entry_init(&l->entry, BCH_JSET_ENTRY_log, 0, 1, u64s);
+		memcpy_and_pad(l->d, u64s * sizeof(u64), buf.buf, buf.pos, 0);
+		c->journal.early_journal_entries.nr += jset_u64s(u64s);
+	} else {
+		CLASS(btree_trans, trans)(c);
+		try(commit_do(trans, NULL, NULL, commit_flags, bch2_trans_log_msg(trans, &buf)));
+	}
+
+	return 0;
+}
+
+__printf(2, 3)
+int bch2_fs_log_msg(struct bch_fs *c, const char *fmt, ...)
+{
+	va_list args;
+	int ret;
+
+	va_start(args, fmt);
+	ret = __bch2_fs_log_msg(c, 0, fmt, args);
+	va_end(args);
+	return ret;
+}
+
+/*
+ * Use for logging messages during recovery to enable reserved space and avoid
+ * blocking.
+ */
+__printf(2, 3)
+int bch2_journal_log_msg(struct bch_fs *c, const char *fmt, ...)
+{
+	va_list args;
+	int ret;
+
+	va_start(args, fmt);
+	ret = __bch2_fs_log_msg(c, BCH_WATERMARK_reclaim, fmt, args);
+	va_end(args);
+	return ret;
+}

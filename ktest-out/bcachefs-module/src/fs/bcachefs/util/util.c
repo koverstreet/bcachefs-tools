@@ -1,0 +1,1368 @@
+// SPDX-License-Identifier: GPL-2.0
+/*
+ * random utility code, for bcache but in theory not specific to bcache
+ *
+ * Copyright 2010, 2011 Kent Overstreet <kent.overstreet@gmail.com>
+ * Copyright 2012 Google, Inc.
+ */
+
+#include <linux/bio.h>
+#include <linux/blkdev.h>
+#include <linux/console.h>
+#include <linux/ctype.h>
+#include <linux/debugfs.h>
+#include <linux/freezer.h>
+#include <linux/kthread.h>
+#include <linux/log2.h>
+#include <linux/math64.h>
+#include <linux/percpu.h>
+#include <linux/preempt.h>
+#include <linux/random.h>
+#include <linux/seq_buf.h>
+#include <linux/seq_file.h>
+#include <linux/string.h>
+#include <linux/types.h>
+#include <linux/sched/clock.h>
+#include <linux/sched/debug.h>
+#include <linux/sched/signal.h>
+
+#include "eytzinger.h"
+#include "mean_and_variance.h"
+#include "util.h"
+
+static const char si_units[] = "?kMGTPEZY";
+
+/* string_get_size units: */
+static const char *const units_2[] = {
+	"B", "KiB", "MiB", "GiB", "TiB", "PiB", "EiB", "ZiB", "YiB"
+};
+static const char *const units_10[] = {
+	"B", "kB", "MB", "GB", "TB", "PB", "EB", "ZB", "YB"
+};
+
+static int parse_u64(const char *cp, u64 *res)
+{
+	const char *start = cp;
+	u64 v = 0;
+
+	if (!isdigit(*cp))
+		return -EINVAL;
+
+	do {
+		if (v > U64_MAX / 10)
+			return -ERANGE;
+		v *= 10;
+		if (v > U64_MAX - (*cp - '0'))
+			return -ERANGE;
+		v += *cp - '0';
+		cp++;
+	} while (isdigit(*cp));
+
+	*res = v;
+	return cp - start;
+}
+
+static int bch2_pow(u64 n, u64 p, u64 *res)
+{
+	*res = 1;
+
+	while (p--) {
+		if (*res > div64_u64(U64_MAX, n))
+			return -ERANGE;
+		*res *= n;
+	}
+	return 0;
+}
+
+static int parse_unit_suffix(const char *cp, u64 *res)
+{
+	unsigned adv = *cp == ' ';
+	cp += adv;
+
+	for (unsigned u = 1; u < strlen(si_units); u++)
+		if (*cp == si_units[u]) {
+			try(bch2_pow(1024, u, res));
+			return adv + 1;
+		}
+
+	for (unsigned u = 0; u < ARRAY_SIZE(units_2); u++)
+		if (!strncmp(cp, units_2[u], strlen(units_2[u]))) {
+			try(bch2_pow(1024, u, res));
+			return adv + strlen(units_2[u]);
+		}
+
+	for (unsigned u = 0; u < ARRAY_SIZE(units_10); u++)
+		if (!strncmp(cp, units_10[u], strlen(units_10[u]))) {
+			try(bch2_pow(1000, u, res));
+			return adv + strlen(units_10[u]);
+		}
+
+	*res = 1;
+	return 0;
+}
+
+
+#define parse_or_ret(cp, _f)			\
+do {						\
+	int _ret = _f;				\
+	if (_ret < 0)				\
+		return _ret;			\
+	cp += _ret;				\
+} while (0)
+
+static int __bch2_strtou64_h(const char *cp, u64 *res)
+{
+	const char *start = cp;
+	u64 v = 0, b, f_n = 0, f_d = 1;
+	int ret;
+
+	parse_or_ret(cp, parse_u64(cp, &v));
+
+	if (*cp == '.') {
+		cp++;
+		ret = parse_u64(cp, &f_n);
+		if (ret < 0)
+			return ret;
+		cp += ret;
+
+		try(bch2_pow(10, ret, &f_d));
+	}
+
+	parse_or_ret(cp, parse_unit_suffix(cp, &b));
+
+	if (v > div64_u64(U64_MAX, b))
+		return -ERANGE;
+	v *= b;
+
+	if (f_n > div64_u64(U64_MAX, b))
+		return -ERANGE;
+
+	f_n = div64_u64(f_n * b, f_d);
+	if (v + f_n < v)
+		return -ERANGE;
+	v += f_n;
+
+	*res = v;
+	return cp - start;
+}
+
+static int __bch2_strtoh(const char *cp, u64 *res,
+			 u64 t_max, bool t_signed)
+{
+	bool positive = *cp != '-';
+	u64 v = 0;
+
+	if (*cp == '+' || *cp == '-')
+		cp++;
+
+	parse_or_ret(cp, __bch2_strtou64_h(cp, &v));
+
+	if (*cp == '\n')
+		cp++;
+	if (*cp)
+		return -EINVAL;
+
+	if (positive) {
+		if (v > t_max)
+			return -ERANGE;
+	} else {
+		if (v && !t_signed)
+			return -ERANGE;
+
+		if (v > t_max + 1)
+			return -ERANGE;
+		v = -v;
+	}
+
+	*res = v;
+	return 0;
+}
+
+#define STRTO_H(name, type)					\
+int bch2_ ## name ## _h(const char *cp, type *res)		\
+{								\
+	u64 v = 0;						\
+	int ret = __bch2_strtoh(cp, &v, ANYSINT_MAX(type),	\
+			ANYSINT_MAX(type) != ((type) ~0ULL));	\
+	*res = v;						\
+	return ret;						\
+}
+
+STRTO_H(strtoint, int)
+STRTO_H(strtouint, unsigned int)
+STRTO_H(strtoll, long long)
+STRTO_H(strtoull, unsigned long long)
+STRTO_H(strtou64, u64)
+
+u64 bch2_read_flag_list_mask(const char *opt, const char * const list[], u64 choices_allowed_mask)
+{
+	u64 ret = 0;
+
+	char *d __free(kfree) = kstrdup(opt, GFP_KERNEL);
+	if (!d)
+		return -ENOMEM;
+
+	char *p, *s = strim(d);
+
+	bool invert = *s == '-';
+	if (invert)
+		s++;
+
+	while ((p = strsep(&s, ",;"))) {
+		int flag = match_string(list, -1, p);
+		if (flag < 0)
+			return -1;
+		if (!(choices_allowed_mask & BIT_ULL(flag)))
+			return -1;
+
+		ret |= BIT_ULL(flag);
+	}
+
+	if (invert) {
+		u64 choices_mask = 0;
+		for (unsigned i = 0; list[i]; i++)
+			choices_mask |= BIT_ULL(i);
+
+		ret = ~ret & choices_mask & choices_allowed_mask;
+	}
+
+	return ret;
+}
+
+u64 bch2_read_flag_list(const char *opt, const char * const list[])
+{
+	return bch2_read_flag_list_mask(opt, list, U64_MAX);
+}
+
+bool bch2_is_zero(const void *_p, size_t n)
+{
+	const char *p = _p;
+	size_t i;
+
+	for (i = 0; i < n; i++)
+		if (p[i])
+			return false;
+	return true;
+}
+
+void bch2_prt_u64_base2_nbits(struct printbuf *out, u64 v, unsigned nr_bits)
+{
+	while (nr_bits)
+		prt_char(out, '0' + ((v >> --nr_bits) & 1));
+}
+
+void bch2_prt_u64_base2(struct printbuf *out, u64 v)
+{
+	bch2_prt_u64_base2_nbits(out, v, fls64(v) ?: 1);
+}
+
+static bool string_is_spaces(const char *str, const char *end)
+{
+	while (str != end && *str == ' ')
+		str++;
+	return str == end;
+}
+
+static const char *get_lines_under(const char *lines, unsigned limit)
+{
+	const char *prev = lines, *prev_nonblank = NULL, *next;
+
+	while (true) {
+		next = strchrnul(prev, '\n');
+		if (!string_is_spaces(prev, next))
+			prev_nonblank = next;
+		if (!*next)
+			return prev_nonblank;
+		if (prev != lines && next > lines + limit)
+			return prev - 1;
+		prev = next + 1;
+	}
+}
+
+void bch2_print_string_as_lines(const char *prefix, const char *lines)
+{
+	if (!lines) {
+		printk("%s (null)\n", prefix);
+		return;
+	}
+
+	bool locked = console_trylock();
+	const char *next;
+
+	while ((next = get_lines_under(lines, 1024))) { /* printk limit */
+		printk("%s%.*s\n", prefix, (int) (next - lines), lines);
+		if (!*next)
+			break;
+		lines = next + 1;
+	}
+	if (locked)
+		console_unlock();
+}
+
+int bch2_save_backtrace(bch_stacktrace *stack, struct task_struct *task, unsigned skipnr,
+			gfp_t gfp)
+{
+#ifdef CONFIG_STACKTRACE
+	unsigned nr_entries = 0;
+	int ret = 0;
+
+	stack->nr = 0;
+	try(darray_make_room_gfp(stack, 32, gfp));
+
+	skipnr += task == current;
+
+	do {
+		nr_entries = stack_trace_save_tsk(task, stack->data, stack->size, skipnr);
+	} while (nr_entries == stack->size &&
+		 !(ret = darray_make_room_gfp(stack, stack->size * 2, gfp)));
+
+	stack->nr = nr_entries;
+	return ret;
+#else
+	return 0;
+#endif
+}
+
+void bch2_prt_backtrace(struct printbuf *out, bch_stacktrace *stack)
+{
+	darray_for_each(*stack, i) {
+		prt_printf(out, "[<0>] %pB", (void *) *i);
+		prt_newline(out);
+	}
+}
+
+int bch2_prt_task_backtrace(struct printbuf *out, struct task_struct *task, unsigned skipnr, gfp_t gfp)
+{
+	skipnr += task == current;
+
+	CLASS(bch_stacktrace, stack)();
+	int ret = bch2_save_backtrace(&stack, task, skipnr, gfp);
+
+	bch2_prt_backtrace(out, &stack);
+	return ret;
+}
+
+#ifndef __KERNEL__
+#include <time.h>
+void bch2_prt_datetime(struct printbuf *out, time64_t sec)
+{
+	time_t t = sec;
+	char buf[64];
+	ctime_r(&t, buf);
+	strim(buf);
+	prt_str(out, buf);
+}
+#else
+void bch2_prt_datetime(struct printbuf *out, time64_t sec)
+{
+	char buf[64];
+	snprintf(buf, sizeof(buf), "%ptT", &sec);
+	prt_u64(out, sec);
+}
+#endif
+
+void bch2_pr_time_units(struct printbuf *out, u64 ns)
+{
+	const struct time_unit *u = bch2_pick_time_units(ns);
+
+	prt_printf(out, "%llu %s", div64_u64(ns, u->nsecs), u->name);
+}
+
+static void bch2_pr_time_units_aligned(struct printbuf *out, u64 ns)
+{
+	const struct time_unit *u = bch2_pick_time_units(ns);
+
+	prt_printf(out, "%llu \r%s", div64_u64(ns, u->nsecs), u->name);
+}
+
+static inline void pr_name_and_units(struct printbuf *out, const char *name, u64 ns)
+{
+	prt_printf(out, "%s\t", name);
+	bch2_pr_time_units_aligned(out, ns);
+	prt_newline(out);
+}
+
+#define TABSTOP_SIZE 12
+
+__cold void bch2_time_stats_to_text(struct printbuf *out, struct bch2_time_stats *stats)
+{
+	struct quantiles *quantiles = time_stats_to_quantiles(stats);
+	s64 f_mean = 0, d_mean = 0;
+	u64 f_stddev = 0, d_stddev = 0;
+
+	if (stats->buffer) {
+		int cpu;
+
+		spin_lock_irq(&stats->lock);
+		for_each_possible_cpu(cpu)
+			__bch2_time_stats_clear_buffer(stats, per_cpu_ptr(stats->buffer, cpu));
+		spin_unlock_irq(&stats->lock);
+	}
+
+	/*
+	 * avoid divide by zero
+	 */
+	if (stats->freq_stats.n) {
+		f_mean = mean_and_variance_get_mean(stats->freq_stats);
+		f_stddev = mean_and_variance_get_stddev(stats->freq_stats);
+		d_mean = mean_and_variance_get_mean(stats->duration_stats);
+		d_stddev = mean_and_variance_get_stddev(stats->duration_stats);
+	}
+
+	printbuf_tabstop_push(out, out->indent + TABSTOP_SIZE);
+	prt_printf(out, "count:\t%llu\n", stats->duration_stats.n);
+	printbuf_tabstop_pop(out);
+
+	printbuf_tabstops_reset(out);
+
+	printbuf_tabstop_push(out, out->indent + 20);
+	printbuf_tabstop_push(out, TABSTOP_SIZE + 2);
+	printbuf_tabstop_push(out, 0);
+	printbuf_tabstop_push(out, TABSTOP_SIZE + 2);
+
+	prt_printf(out, "\tsince mount\r\trecent\r\n");
+
+	printbuf_tabstops_reset(out);
+	printbuf_tabstop_push(out, out->indent + 20);
+	printbuf_tabstop_push(out, TABSTOP_SIZE);
+	printbuf_tabstop_push(out, 2);
+	printbuf_tabstop_push(out, TABSTOP_SIZE);
+
+	prt_printf(out, "duration of events\n");
+	scoped_guard(printbuf_indent, out) {
+		pr_name_and_units(out, "min:", stats->min_duration);
+		pr_name_and_units(out, "max:", stats->max_duration);
+		pr_name_and_units(out, "total:", stats->total_duration);
+
+		prt_printf(out, "mean:\t");
+		bch2_pr_time_units_aligned(out, d_mean);
+		prt_tab(out);
+		bch2_pr_time_units_aligned(out, mean_and_variance_get_median(stats->duration_stats_weighted));
+		prt_newline(out);
+
+		prt_printf(out, "stddev:\t");
+		bch2_pr_time_units_aligned(out, d_stddev);
+		prt_tab(out);
+		bch2_pr_time_units_aligned(out, mean_and_variance_get_stddev(stats->duration_stats_weighted));
+		prt_newline(out);
+	}
+
+	prt_printf(out, "time between events\n");
+	scoped_guard(printbuf_indent, out) {
+		pr_name_and_units(out, "min:", stats->min_freq);
+		pr_name_and_units(out, "max:", stats->max_freq);
+
+		prt_printf(out, "mean:\t");
+		bch2_pr_time_units_aligned(out, f_mean);
+		prt_tab(out);
+		bch2_pr_time_units_aligned(out, mean_and_variance_get_median(stats->freq_stats_weighted));
+		prt_newline(out);
+
+		prt_printf(out, "stddev:\t");
+		bch2_pr_time_units_aligned(out, f_stddev);
+		prt_tab(out);
+		bch2_pr_time_units_aligned(out, mean_and_variance_get_stddev(stats->freq_stats_weighted));
+		prt_newline(out);
+	}
+
+	printbuf_tabstops_reset(out);
+
+	if (quantiles) {
+		int i = eytzinger0_first(NR_QUANTILES);
+		const struct time_unit *u =
+			bch2_pick_time_units(quantiles->entries[i].m);
+		u64 last_q = 0;
+
+		prt_printf(out, "quantiles (%s):\t", u->name);
+		eytzinger0_for_each(j, NR_QUANTILES) {
+			bool is_last = eytzinger0_next(j, NR_QUANTILES) == -1;
+
+			u64 q = max(quantiles->entries[j].m, last_q);
+			prt_printf(out, "%llu ", div64_u64(q, u->nsecs));
+			if (is_last)
+				prt_newline(out);
+			last_q = q;
+		}
+	}
+}
+
+__cold void bch2_time_stats_json_to_text(struct printbuf *out, struct bch2_time_stats *stats,
+				  const char *epoch_name, unsigned int flags)
+{
+	char buf[1024];
+	struct seq_buf seq;
+
+	seq_buf_init(&seq, buf, sizeof(buf));
+	bch2_time_stats_to_json(&seq, stats, epoch_name, flags);
+	prt_bytes(out, buf, seq_buf_used(&seq));
+}
+
+/* ratelimit: */
+
+/**
+ * bch2_ratelimit_delay() - return how long to delay until the next time to do
+ *		some work
+ * @d:		the struct bch_ratelimit to update
+ * Returns:	the amount of time to delay by, in jiffies
+ */
+u64 bch2_ratelimit_delay(struct bch_ratelimit *d)
+{
+	u64 now = local_clock();
+
+	return time_after64(d->next, now)
+		? nsecs_to_jiffies(d->next - now)
+		: 0;
+}
+
+/**
+ * bch2_ratelimit_increment() - increment @d by the amount of work done
+ * @d:		the struct bch_ratelimit to update
+ * @done:	the amount of work done, in arbitrary units
+ */
+void bch2_ratelimit_increment(struct bch_ratelimit *d, u64 done)
+{
+	u64 now = local_clock();
+
+	d->next += div_u64(done * NSEC_PER_SEC, d->rate);
+
+	if (time_before64(now + NSEC_PER_SEC, d->next))
+		d->next = now + NSEC_PER_SEC;
+
+	if (time_after64(now - NSEC_PER_SEC * 2, d->next))
+		d->next = now - NSEC_PER_SEC * 2;
+}
+
+/* pd controller: */
+
+/*
+ * Updates pd_controller. Attempts to scale inputed values to units per second.
+ * @target: desired value
+ * @actual: current value
+ *
+ * @sign: 1 or -1; 1 if increasing the rate makes actual go up, -1 if increasing
+ * it makes actual go down.
+ */
+void bch2_pd_controller_update(struct bch_pd_controller *pd,
+			      s64 target, s64 actual, int sign)
+{
+	s64 proportional, derivative, change;
+
+	unsigned long seconds_since_update = (jiffies - pd->last_update) / HZ;
+
+	if (seconds_since_update == 0)
+		return;
+
+	pd->last_update = jiffies;
+
+	proportional = actual - target;
+	proportional *= seconds_since_update;
+	proportional = div_s64(proportional, pd->p_term_inverse);
+
+	derivative = actual - pd->last_actual;
+	derivative = div_s64(derivative, seconds_since_update);
+	derivative = ewma_add(pd->smoothed_derivative, derivative,
+			      (pd->d_term / seconds_since_update) ?: 1);
+	derivative = derivative * pd->d_term;
+	derivative = div_s64(derivative, pd->p_term_inverse);
+
+	change = proportional + derivative;
+
+	/* Don't increase rate if not keeping up */
+	if (change > 0 &&
+	    pd->backpressure &&
+	    time_after64(local_clock(),
+			 pd->rate.next + NSEC_PER_MSEC))
+		change = 0;
+
+	change *= (sign * -1);
+
+	pd->rate.rate = clamp_t(s64, (s64) pd->rate.rate + change,
+				1, UINT_MAX);
+
+	pd->last_actual		= actual;
+	pd->last_derivative	= derivative;
+	pd->last_proportional	= proportional;
+	pd->last_change		= change;
+	pd->last_target		= target;
+}
+
+void bch2_pd_controller_init(struct bch_pd_controller *pd)
+{
+	pd->rate.rate		= 1024;
+	pd->last_update		= jiffies;
+	pd->p_term_inverse	= 6000;
+	pd->d_term		= 30;
+	pd->d_smooth		= pd->d_term;
+	pd->backpressure	= 1;
+}
+
+__cold void bch2_pd_controller_debug_to_text(struct printbuf *out, struct bch_pd_controller *pd)
+{
+	if (!out->nr_tabstops)
+		printbuf_tabstop_push(out, 20);
+
+	prt_printf(out, "rate:\t");
+	prt_human_readable_s64(out, pd->rate.rate);
+	prt_newline(out);
+
+	prt_printf(out, "target:\t");
+	prt_human_readable_u64(out, pd->last_target);
+	prt_newline(out);
+
+	prt_printf(out, "actual:\t");
+	prt_human_readable_u64(out, pd->last_actual);
+	prt_newline(out);
+
+	prt_printf(out, "proportional:\t");
+	prt_human_readable_s64(out, pd->last_proportional);
+	prt_newline(out);
+
+	prt_printf(out, "derivative:\t");
+	prt_human_readable_s64(out, pd->last_derivative);
+	prt_newline(out);
+
+	prt_printf(out, "change:\t");
+	prt_human_readable_s64(out, pd->last_change);
+	prt_newline(out);
+
+	prt_printf(out, "next io:\t%llims\n", div64_s64(pd->rate.next - local_clock(), NSEC_PER_MSEC));
+}
+
+/* misc: */
+
+void bch2_bio_map(struct bio *bio, void *base, size_t size)
+{
+	if (is_vmalloc_addr(base))
+		bio_add_vmalloc(bio, base, size);
+	else
+		bio_add_virt_nofail(bio, base, size);
+}
+
+/*
+ * Allocate a bio (possibly a chain of bios via bio_chain()) covering
+ * [base, base+size) on @bdev starting at sector @sector. Each bio in the
+ * chain is capped at BIO_MAX_VECS bvecs; physically contiguous buffers fit
+ * in one bvec and the chain typically has length 1.
+ *
+ * The returned bio is the tail of the chain (the last chunk in sector
+ * order), left unsubmitted for the caller to configure (bi_end_io,
+ * bi_private, any wrapper state) and submit. Earlier chunks are chained
+ * to the bio that immediately follows them and submitted here in sector
+ * order, so the block layer sees requests in forward order; callers
+ * should wrap their submission in blk_start_plug()/blk_finish_plug() to
+ * give the driver a chance to merge.
+ *
+ * When the caller's tail bio completes, the chain's bi_status reflects
+ * any error propagated from the earlier chunks.
+ *
+ * REQ_PREFLUSH, if set in @opf, applies only to the first (sector-lowest)
+ * bio in the chain.
+ */
+struct bio *bch2_bio_map_and_chain(struct block_device *bdev,
+				   void *base, size_t size,
+				   sector_t sector,
+				   blk_opf_t opf, gfp_t gfp,
+				   struct bio_set *bs)
+{
+	struct bio *tail	= NULL;
+	unsigned nr_bvecs	= buf_nr_bvecs(base, size);
+
+	while (size) {
+		size_t chunk_size = size;
+		unsigned chunk_bvecs = nr_bvecs;
+
+		if (chunk_bvecs > BIO_MAX_VECS) {
+			unsigned offset = (unsigned long) base & (PAGE_SIZE - 1);
+
+			chunk_size = (size_t)BIO_MAX_VECS * PAGE_SIZE - offset;
+			chunk_bvecs = BIO_MAX_VECS;
+			BUG_ON(chunk_size > size);
+		}
+
+		struct bio *bio = bio_alloc_bioset(bdev, chunk_bvecs,
+						   opf, gfp, bs);
+		opf &= ~REQ_PREFLUSH; /* only on the first bio */
+
+		bch2_bio_map(bio, base, chunk_size);
+		bio->bi_iter.bi_sector = sector;
+
+		if (tail) {
+			/*
+			 * Chain the previous (earlier-sector) bio to this one
+			 * and submit it now: submission order is sector-forward
+			 * so the elevator can merge with adjacent writes.
+			 */
+			bio_chain(tail, bio);
+			submit_bio(tail);
+		}
+		tail = bio;
+
+		base		+= chunk_size;
+		sector		+= chunk_size >> 9;
+		size		-= chunk_size;
+		nr_bvecs	-= chunk_bvecs;
+	}
+
+	return tail;
+}
+
+int bch2_bio_submit_buf_wait(struct block_device *bdev,
+			     void *buf, size_t count,
+			     sector_t offset,
+			     blk_opf_t opf)
+{
+	struct bio *bio = bch2_bio_map_and_chain(bdev, buf, count, offset, opf,
+						 GFP_KERNEL, &fs_bio_set);
+	int ret = submit_bio_wait(bio);
+	bio_put(bio);
+	return ret;
+}
+
+int bch2_bio_alloc_pages(struct bio *bio, unsigned bs, size_t size, gfp_t gfp_mask)
+{
+	BUG_ON(!is_power_of_2(bs));
+	BUG_ON(size & (bs - 1));
+
+	unsigned max_alloc = max(bs, PAGE_SIZE << PAGE_ALLOC_COSTLY_ORDER);
+
+	while (bio->bi_iter.bi_size < size) {
+		unsigned b = min(size - bio->bi_iter.bi_size, max_alloc);
+
+		BUG_ON(b & (bs - 1));
+
+#ifdef __KERNEL__
+		/*
+		 * we don't know the device dma alignment, so in kernel make
+		 * sure allocations are page aligned
+		 */
+		void *p = (void *) __get_free_pages(gfp_mask, get_order(b));
+#else
+		void *p = kmalloc(b, gfp_mask);
+#endif
+		if (!p)
+			return -ENOMEM;
+
+		bio_add_virt_nofail(bio, p, b);
+	}
+
+	return 0;
+}
+
+u64 bch2_get_random_u64_below(u64 ceil)
+{
+	if (ceil <= U32_MAX)
+		return __get_random_u32_below(ceil);
+
+	/* this is the same (clever) algorithm as in __get_random_u32_below() */
+	u64 rand = get_random_u64();
+	u64 mult = ceil * rand;
+
+	if (unlikely(mult < ceil)) {
+		u64 bound;
+		div64_u64_rem(-ceil, ceil, &bound);
+		while (unlikely(mult < bound)) {
+			rand = get_random_u64();
+			mult = ceil * rand;
+		}
+	}
+
+	return mul_u64_u64_shr(ceil, rand, 64);
+}
+
+void memcpy_to_bio(struct bio *dst, struct bvec_iter dst_iter, const void *src)
+{
+	struct bio_vec bv;
+	struct bvec_iter iter;
+
+	__bio_for_each_segment(bv, dst, iter, dst_iter) {
+		void *dstp = bvec_kmap_local(&bv);
+		memcpy(dstp, src, bv.bv_len);
+		kunmap_local(dstp);
+
+		src += bv.bv_len;
+	}
+}
+
+void memcpy_from_bio(void *dst, struct bio *src, struct bvec_iter src_iter)
+{
+	struct bio_vec bv;
+	struct bvec_iter iter;
+
+	__bio_for_each_segment(bv, src, iter, src_iter) {
+		void *srcp = bvec_kmap_local(&bv);
+		memcpy(dst, srcp, bv.bv_len);
+		kunmap_local(srcp);
+
+		dst += bv.bv_len;
+	}
+}
+
+/*
+ * Copy between two bios at caller-supplied iters, advancing both. Equivalent to
+ * the kernel's old bio_copy_data_iter(), which 7.2 removed in favour of the
+ * whole-bio bio_copy_data().
+ */
+void bch2_bio_copy_data_iter(struct bio *dst, struct bvec_iter *dst_iter,
+			     struct bio *src, struct bvec_iter *src_iter)
+{
+	while (src_iter->bi_size && dst_iter->bi_size) {
+		struct bio_vec src_bv = bio_iter_iovec(src, *src_iter);
+		struct bio_vec dst_bv = bio_iter_iovec(dst, *dst_iter);
+		unsigned int bytes = min(src_bv.bv_len, dst_bv.bv_len);
+		void *src_buf = bvec_kmap_local(&src_bv);
+		void *dst_buf = bvec_kmap_local(&dst_bv);
+
+		memcpy(dst_buf, src_buf, bytes);
+
+		kunmap_local(dst_buf);
+		kunmap_local(src_buf);
+
+		bio_advance_iter(src, src_iter, bytes);
+		bio_advance_iter(dst, dst_iter, bytes);
+	}
+}
+
+/*
+ * Zero-fill a bio starting at a caller-supplied iter. Equivalent to the kernel's
+ * old zero_fill_bio_iter(), which 7.2 removed in favour of the whole-bio
+ * zero_fill_bio().
+ */
+void bch2_zero_fill_bio_iter(struct bio *bio, struct bvec_iter start)
+{
+	struct bio_vec bv;
+	struct bvec_iter iter;
+
+	__bio_for_each_segment(bv, bio, iter, start) {
+		void *p = bvec_kmap_local(&bv);
+
+		memset(p, 0, bv.bv_len);
+		kunmap_local(p);
+	}
+}
+
+#ifdef __KERNEL__
+#include <linux/pagemap.h>	/* folio_lock()/folio_unlock() */
+
+/*
+ * DIO read dirty-page handling. 7.2 unexported bio_set_pages_dirty() and
+ * bio_check_pages_dirty(); reinstate them (the kernel's implementation) as
+ * bcachefs helpers. bio_set_pages_dirty() marks the destination pages dirty on
+ * the (sleepable) submit side; bio_check_pages_dirty() runs at completion, which
+ * can be atomic (bio endio), so the rare "a page was cleaned mid-IO, re-dirty it"
+ * case — which needs folio_lock() — is punted to a workqueue.
+ */
+void bch2_bio_set_pages_dirty(struct bio *bio)
+{
+	struct folio_iter fi;
+
+	bio_for_each_folio_all(fi, bio) {
+		folio_lock(fi.folio);
+		folio_mark_dirty(fi.folio);
+		folio_unlock(fi.folio);
+	}
+}
+
+static void bch2_bio_dirty_fn(struct work_struct *work);
+
+static DECLARE_WORK(bch2_bio_dirty_work, bch2_bio_dirty_fn);
+static DEFINE_SPINLOCK(bch2_bio_dirty_lock);
+static struct bio *bch2_bio_dirty_list;
+
+/* runs in process context */
+static void bch2_bio_dirty_fn(struct work_struct *work)
+{
+	struct bio *bio, *next;
+
+	spin_lock_irq(&bch2_bio_dirty_lock);
+	next = bch2_bio_dirty_list;
+	bch2_bio_dirty_list = NULL;
+	spin_unlock_irq(&bch2_bio_dirty_lock);
+
+	while ((bio = next) != NULL) {
+		next = bio->bi_private;
+
+		bio_release_pages(bio, true);
+		bio_put(bio);
+	}
+}
+
+void bch2_bio_check_pages_dirty(struct bio *bio)
+{
+	struct folio_iter fi;
+	unsigned long flags;
+
+	bio_for_each_folio_all(fi, bio) {
+		if (!folio_test_dirty(fi.folio))
+			goto defer;
+	}
+
+	bio_release_pages(bio, false);
+	bio_put(bio);
+	return;
+defer:
+	spin_lock_irqsave(&bch2_bio_dirty_lock, flags);
+	bio->bi_private = bch2_bio_dirty_list;
+	bch2_bio_dirty_list = bio;
+	spin_unlock_irqrestore(&bch2_bio_dirty_lock, flags);
+	schedule_work(&bch2_bio_dirty_work);
+}
+#endif /* __KERNEL__ */
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+void bch2_corrupt_bio(struct bio *bio)
+{
+	struct bvec_iter iter;
+	struct bio_vec bv;
+	unsigned offset = get_random_u32_below(bio->bi_iter.bi_size / sizeof(u64));
+
+	bio_for_each_segment(bv, bio, iter) {
+		unsigned u64s = bv.bv_len / sizeof(u64);
+
+		if (offset < u64s) {
+			u64 *segment = bvec_kmap_local(&bv);
+			segment[offset] = get_random_u64();
+			kunmap_local(segment);
+			return;
+		}
+		offset -= u64s;
+	}
+}
+#endif
+
+#define REQUEST_OPS()			\
+	x(REQ_OP_READ)			\
+	x(REQ_OP_WRITE)			\
+	x(REQ_OP_FLUSH)			\
+	x(REQ_OP_DISCARD)		\
+	x(REQ_OP_SECURE_ERASE)		\
+	x(REQ_OP_ZONE_APPEND)		\
+	x(REQ_OP_WRITE_ZEROES)		\
+	x(REQ_OP_ZONE_OPEN)		\
+	x(REQ_OP_ZONE_CLOSE)		\
+	x(REQ_OP_ZONE_FINISH)		\
+	x(REQ_OP_ZONE_RESET)		\
+	x(REQ_OP_ZONE_RESET_ALL)	\
+	x(REQ_OP_DRV_IN)		\
+	x(REQ_OP_DRV_OUT)		\
+
+#define REQUEST_FLAGS()			\
+	x(REQ_FAILFAST_DEV)		\
+	x(REQ_FAILFAST_TRANSPORT)	\
+	x(REQ_FAILFAST_DRIVER)		\
+	x(REQ_SYNC)			\
+	x(REQ_META)			\
+	x(REQ_PRIO)			\
+	x(REQ_NOMERGE)			\
+	x(REQ_IDLE)			\
+	x(REQ_INTEGRITY)		\
+	x(REQ_FUA)			\
+	x(REQ_PREFLUSH)			\
+	x(REQ_RAHEAD)			\
+	x(REQ_BACKGROUND)		\
+	x(REQ_NOWAIT)			\
+	x(REQ_POLLED)			\
+	x(REQ_ALLOC_CACHE)		\
+	x(REQ_SWAP)			\
+	x(REQ_DRV)			\
+	x(REQ_FS_PRIVATE)		\
+	x(REQ_ATOMIC)			\
+	x(REQ_P2PDMA)			\
+	x(REQ_NOUNMAP)			\
+
+#define BIO_FLAGS()			\
+	x(BIO_PAGE_PINNED)		\
+	x(BIO_CLONED)			\
+	x(BIO_QUIET)			\
+	x(BIO_CHAIN)			\
+	x(BIO_REFFED)			\
+	x(BIO_BPS_THROTTLED)		\
+	x(BIO_TRACE_COMPLETION)		\
+	x(BIO_CGROUP_ACCT)		\
+	x(BIO_QOS_THROTTLED)		\
+	x(BIO_QOS_MERGED)		\
+	x(BIO_REMAPPED)			\
+	x(BIO_ZONE_WRITE_PLUGGING)	\
+	x(BIO_EMULATES_ZONE_APPEND)	\
+
+static const char * const bch2_request_op_strs[] = {
+#define x(n) [n]	= #n,
+	REQUEST_OPS()
+#undef x
+	NULL
+};
+
+static const char * const bch2_request_flag_strs[] = {
+#define x(n) #n,
+	REQUEST_FLAGS()
+#undef x
+	NULL
+};
+
+static const char * const bch2_bio_flag_strs[] = {
+#define x(n) #n,
+	BIO_FLAGS()
+#undef x
+	NULL
+};
+
+__cold void bch2_bio_to_text(struct printbuf *out, struct bio *bio)
+{
+	if (!out->nr_tabstops)
+		printbuf_tabstop_push(out, 24);
+
+	prt_printf(out, "bi_bdev:\t");
+	if (bio->bi_bdev)
+		prt_bdevname(out, bio->bi_bdev);
+	else
+		prt_str(out, "(null|");
+	prt_newline(out);
+
+	prt_printf(out, "bi_opf:\t%s ", bch2_request_op_strs[bio_op(bio)]);
+	prt_bitflags(out, bch2_request_flag_strs, bio->bi_opf >> REQ_OP_BITS);
+	prt_newline(out);
+
+	prt_str(out, "bi_flags:\t");
+	prt_bitflags(out, bch2_bio_flag_strs, bio->bi_flags);
+	prt_newline(out);
+
+	prt_printf(out, "bi_status:\t%u\n", bio->bi_status);
+
+	prt_printf(out, "bi_iter.bi_sector\t%llu\n",	(u64) bio->bi_iter.bi_sector);
+	prt_printf(out, "bi_iter.bi_size\t%u\n",	bio->bi_iter.bi_size);
+	prt_printf(out, "bi_iter.bi_idx\t%u\n",		bio->bi_iter.bi_idx);
+	prt_printf(out, "bi_iter.bi_bvec_done\t%u\n",	bio->bi_iter.bi_bvec_done);
+
+	prt_printf(out, "bi_remaining:\t%u\n",		atomic_read(&bio->__bi_remaining));
+	prt_printf(out, "bi_end_io:\t%ps\n",		bio->bi_end_io);
+
+	prt_printf(out, "bi_vcnt\t%u\n",		bio->bi_vcnt);
+	prt_printf(out, "bi_max_vecs\t%u\n",		bio->bi_max_vecs);
+}
+
+#if 0
+void eytzinger1_test(void)
+{
+	unsigned inorder, size;
+
+	pr_info("1 based eytzinger test:\n");
+
+	for (size = 2;
+	     size < 65536;
+	     size++) {
+		unsigned extra = eytzinger1_extra(size);
+
+		if (!(size % 4096))
+			pr_info("tree size %u\n", size);
+
+		inorder = 1;
+		eytzinger1_for_each(eytz, size) {
+			BUG_ON(__inorder_to_eytzinger1(inorder, size, extra) != eytz);
+			BUG_ON(__eytzinger1_to_inorder(eytz, size, extra) != inorder);
+			BUG_ON(eytz != eytzinger1_last(size) &&
+			       eytzinger1_prev(eytzinger1_next(eytz, size), size) != eytz);
+
+			inorder++;
+		}
+		BUG_ON(inorder - 1 != size);
+	}
+}
+
+void eytzinger0_test(void)
+{
+
+	unsigned inorder, size;
+
+	pr_info("0 based eytzinger test:\n");
+
+	for (size = 1;
+	     size < 65536;
+	     size++) {
+		unsigned extra = eytzinger0_extra(size);
+
+		if (!(size % 4096))
+			pr_info("tree size %u\n", size);
+
+		inorder = 0;
+		eytzinger0_for_each(eytz, size) {
+			BUG_ON(__inorder_to_eytzinger0(inorder, size, extra) != eytz);
+			BUG_ON(__eytzinger0_to_inorder(eytz, size, extra) != inorder);
+			BUG_ON(eytz != eytzinger0_last(size) &&
+			       eytzinger0_prev(eytzinger0_next(eytz, size), size) != eytz);
+
+			inorder++;
+		}
+		BUG_ON(inorder != size);
+
+		inorder = size - 1;
+		eytzinger0_for_each_prev(eytz, size) {
+			BUG_ON(eytz != eytzinger0_first(size) &&
+			       eytzinger0_next(eytzinger0_prev(eytz, size), size) != eytz);
+
+			inorder--;
+		}
+		BUG_ON(inorder != -1);
+	}
+}
+
+static inline int cmp_u16(const void *_l, const void *_r)
+{
+	const u16 *l = _l, *r = _r;
+
+	return (*l > *r) - (*r > *l);
+}
+
+static void eytzinger0_find_test_le(u16 *test_array, unsigned nr, u16 search)
+{
+	int r, s;
+	bool bad;
+
+	r = eytzinger0_find_le(test_array, nr,
+			       sizeof(test_array[0]),
+			       cmp_u16, &search);
+	if (r >= 0) {
+		if (test_array[r] > search) {
+			bad = true;
+		} else {
+			s = eytzinger0_next(r, nr);
+			bad = s >= 0 && test_array[s] <= search;
+		}
+	} else {
+		s = eytzinger0_last(nr);
+		bad = s >= 0 && test_array[s] <= search;
+	}
+
+	if (bad) {
+		s = -1;
+		eytzinger0_for_each_prev(j, nr) {
+			if (test_array[j] <= search) {
+				s = j;
+				break;
+			}
+		}
+
+		eytzinger0_for_each(j, nr)
+			pr_info("[%3u] = %12u\n", j, test_array[j]);
+		pr_info("find_le(%12u) = %3i should be %3i\n",
+			search, r, s);
+		BUG();
+	}
+}
+
+static void eytzinger0_find_test_gt(u16 *test_array, unsigned nr, u16 search)
+{
+	int r, s;
+	bool bad;
+
+	r = eytzinger0_find_gt(test_array, nr,
+			       sizeof(test_array[0]),
+			       cmp_u16, &search);
+	if (r >= 0) {
+		if (test_array[r] <= search) {
+			bad = true;
+		} else {
+			s = eytzinger0_prev(r, nr);
+			bad = s >= 0 && test_array[s] > search;
+		}
+	} else {
+		s = eytzinger0_first(nr);
+		bad = s >= 0 && test_array[s] > search;
+	}
+
+	if (bad) {
+		s = -1;
+		eytzinger0_for_each(j, nr) {
+			if (test_array[j] > search) {
+				s = j;
+				break;
+			}
+		}
+
+		eytzinger0_for_each(j, nr)
+			pr_info("[%3u] = %12u\n", j, test_array[j]);
+		pr_info("find_gt(%12u) = %3i should be %3i\n",
+			search, r, s);
+		BUG();
+	}
+}
+
+static void eytzinger0_find_test_ge(u16 *test_array, unsigned nr, u16 search)
+{
+	int r, s;
+	bool bad;
+
+	r = eytzinger0_find_ge(test_array, nr,
+			       sizeof(test_array[0]),
+			       cmp_u16, &search);
+	if (r >= 0) {
+		if (test_array[r] < search) {
+			bad = true;
+		} else {
+			s = eytzinger0_prev(r, nr);
+			bad = s >= 0 && test_array[s] >= search;
+		}
+	} else {
+		s = eytzinger0_first(nr);
+		bad = s >= 0 && test_array[s] >= search;
+	}
+
+	if (bad) {
+		s = -1;
+		eytzinger0_for_each(j, nr) {
+			if (test_array[j] >= search) {
+				s = j;
+				break;
+			}
+		}
+
+		eytzinger0_for_each(j, nr)
+			pr_info("[%3u] = %12u\n", j, test_array[j]);
+		pr_info("find_ge(%12u) = %3i should be %3i\n",
+			search, r, s);
+		BUG();
+	}
+}
+
+static void eytzinger0_find_test_eq(u16 *test_array, unsigned nr, u16 search)
+{
+	unsigned r;
+	int s;
+	bool bad;
+
+	r = eytzinger0_find(test_array, nr,
+			    sizeof(test_array[0]),
+			    cmp_u16, &search);
+
+	if (r < nr) {
+		bad = test_array[r] != search;
+	} else {
+		s = eytzinger0_find_le(test_array, nr,
+				       sizeof(test_array[0]),
+				       cmp_u16, &search);
+		bad = s >= 0 && test_array[s] == search;
+	}
+
+	if (bad) {
+		eytzinger0_for_each(j, nr)
+			pr_info("[%3u] = %12u\n", j, test_array[j]);
+		pr_info("find(%12u) = %3i is incorrect\n",
+			search, r);
+		BUG();
+	}
+}
+
+static void eytzinger0_find_test_val(u16 *test_array, unsigned nr, u16 search)
+{
+	eytzinger0_find_test_le(test_array, nr, search);
+	eytzinger0_find_test_gt(test_array, nr, search);
+	eytzinger0_find_test_ge(test_array, nr, search);
+	eytzinger0_find_test_eq(test_array, nr, search);
+}
+
+void eytzinger0_find_test(void)
+{
+	unsigned i, nr, allocated = 1 << 12;
+	u16 *test_array __free(kfree) = kmalloc_array(allocated, sizeof(test_array[0]), GFP_KERNEL);
+
+	for (nr = 1; nr < allocated; nr++) {
+		u16 prev = 0;
+
+		pr_info("testing %u elems\n", nr);
+
+		get_random_bytes(test_array, nr * sizeof(test_array[0]));
+		eytzinger0_sort(test_array, nr, sizeof(test_array[0]), cmp_u16, NULL);
+
+		/* verify array is sorted correctly: */
+		eytzinger0_for_each(j, nr) {
+			BUG_ON(test_array[j] < prev);
+			prev = test_array[j];
+		}
+
+		for (i = 0; i < U16_MAX; i += 1 << 12)
+			eytzinger0_find_test_val(test_array, nr, i);
+
+		for (i = 0; i < nr; i++) {
+			eytzinger0_find_test_val(test_array, nr, test_array[i] - 1);
+			eytzinger0_find_test_val(test_array, nr, test_array[i]);
+			eytzinger0_find_test_val(test_array, nr, test_array[i] + 1);
+		}
+	}
+}
+#endif
+
+/*
+ * Accumulate percpu counters onto one cpu's copy - only valid when access
+ * against any percpu counter is guarded against
+ */
+u64 *bch2_acc_percpu_u64s(u64 __percpu *p, unsigned nr)
+{
+	u64 *ret;
+	int cpu;
+
+	/* access to pcpu vars has to be blocked by other locking */
+	scoped_guard(preempt)
+		ret = this_cpu_ptr(p);
+
+	for_each_possible_cpu(cpu) {
+		u64 *i = per_cpu_ptr(p, cpu);
+
+		if (i != ret) {
+			acc_u64s(ret, i, nr);
+			memset(i, 0, nr * sizeof(u64));
+		}
+	}
+
+	return ret;
+}
+
+int bch2_split_devs(const char *_dev_name, darray_const_str *ret)
+{
+	darray_init(ret);
+
+	char *orig __free(kfree) = kstrdup(_dev_name, GFP_KERNEL);
+	if (!orig)
+		return -ENOMEM;
+
+	char *dev_name = orig, *s;
+
+	while ((s = strsep(&dev_name, ":"))) {
+		char *p = kstrdup(s, GFP_KERNEL);
+		if (!p)
+			goto err;
+
+		if (darray_push(ret, p)) {
+			kfree(p);
+			goto err;
+		}
+	}
+
+	return 0;
+err:
+	darray_exit_free_item(ret, kfree);
+	return -ENOMEM;
+}
+
+#if !defined(__KERNEL__) || LINUX_VERSION_CODE >= KERNEL_VERSION(6,19,0)
+void *mempool_kvmalloc(gfp_t gfp_mask, void *pool_data)
+{
+	size_t size = (size_t)pool_data;
+	return kvmalloc(size, gfp_mask);
+}
+
+void mempool_kvfree(void *element, void *pool_data)
+{
+	kvfree(element);
+}
+#endif
+
+__sched int bch2_bit_wait_io_timeout(struct wait_bit_key *word, int mode)
+{
+	unsigned long now = jiffies;
+
+	if (time_after_eq(now, word->timeout))
+		return -EAGAIN;
+	io_schedule_timeout(word->timeout - now);
+	if (signal_pending_state(mode, current))
+		return -EINTR;
+
+	return 0;
+}

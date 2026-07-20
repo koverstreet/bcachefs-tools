@@ -131,6 +131,9 @@ fn opt_set_sb_all(sb: &mut c::bch_sb, dev_idx: i32, opts: &mut c::bch_opts) {
 
     for (id, opt) in opts::opt_table().iter().enumerate() {
         let opt_id = opts::opt_id(id);
+        if opt.name() == Some("fs_label") {
+            continue;
+        }
 
         let v = if opts::opt_defined_by_id(opts, opt_id) {
             opts::opt_get_by_id(opts, opt_id)
@@ -239,9 +242,22 @@ pub fn format(
     // Internal UUID (different from user_uuid)
     sb.sb_mut().uuid.b = *uuid::Uuid::new_v4().as_bytes();
 
+    // Create ext field before setting options - some options (e.g.
+    // dev_readahead) use set_ext which requires this field to exist
+    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+    sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s);
+
+    opt_set_sb_all(sb.sb_mut(), -1, &mut fs_opts);
+
     // Label
-    if !opts.label.is_null() {
-        let label = unsafe { CStr::from_ptr(opts.label) };
+    let opt_strs = unsafe { &fs_opt_strs.__bindgen_anon_1.__bindgen_anon_1 };
+    let label_ptr = if !opts.label.is_null() {
+        opts.label
+    } else {
+        opt_strs.fs_label
+    };
+    if !label_ptr.is_null() {
+        let label = unsafe { CStr::from_ptr(label_ptr) };
         let label_bytes = label.to_bytes();
         if label_bytes.len() >= sb.sb().label.len() {
             die(&format!(
@@ -251,13 +267,6 @@ pub fn format(
         }
         sb.sb_mut().label[..label_bytes.len()].copy_from_slice(label_bytes);
     }
-
-    // Create ext field before setting options - some options (e.g.
-    // dev_readahead) use set_ext which requires this field to exist
-    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
-    sb.field_get_minsize::<c::bch_sb_field_ext>(ext_u64s);
-
-    opt_set_sb_all(sb.sb_mut(), -1, &mut fs_opts);
 
     // Time
     let now = std::time::SystemTime::now()

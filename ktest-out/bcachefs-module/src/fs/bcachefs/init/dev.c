@@ -1,0 +1,1627 @@
+// SPDX-License-Identifier: GPL-2.0
+
+/* DOC_LATEX(device-management)
+ * bcachefs is a multi-device filesystem: a single filesystem can span any number
+ * of block devices, each contributing storage capacity and IO bandwidth. Devices
+ * need not be the same size or have the same performance characteristics---the
+ * \hyperref[sec:write-points]{allocator} stripes across all available devices,
+ * biasing toward devices with more free space so that all devices fill at the
+ * same rate, and the read path
+ * tracks per-device IO latency to direct reads to the fastest available replica.
+ *
+ * Devices can be added and removed at any time without unmounting.
+ *
+ * \subsubsection{Per-device metadata}
+ *
+ * Each device has a \texttt{bch\_member} entry in the
+ * \hyperref[sec:superblock]{superblock} containing:
+ *
+ * \begin{itemize}
+ * \item \textbf{Identity}: per-device UUID, device name, model string
+ * \item \textbf{Geometry}: bucket count, bucket size, first usable bucket
+ * \item \textbf{State}: rw, ro, evacuating, or spare (see below)
+ * \item \textbf{Configuration}: durability, data-type restrictions
+ *   (\texttt{data\_allowed}), discard (TRIM) support, rotational hint
+ * \item \textbf{Diagnostics}: cumulative error counters (read, write,
+ *   checksum), performance measurements (sequential and random IO rates),
+ *   last mount timestamp
+ * \end{itemize}
+ *
+ * \subsubsection{Device states}
+ *
+ * Each device has a persistent state stored in the superblock:
+ *
+ * \begin{description}
+ * \item[\texttt{rw}] Read-write: fully operational, participates in allocation
+ * \item[\texttt{ro}] Read-only: can be read from but receives no new writes
+ * \item[\texttt{evacuating}] Being emptied of data prior to removal
+ * \item[\texttt{spare}] Reserved, not currently participating in IO
+ * \end{description}
+ *
+ * Device state is changed with \texttt{bcachefs device set-state}. Transitions
+ * that would reduce write redundancy below the configured replication level
+ * require the \texttt{-{}-force} flag.
+ *
+ * Separately from the persistent state, a device can be \emph{online} (kernel
+ * has the device open) or \emph{offline} (device is listed in the superblock but
+ * not currently accessible).
+ *
+ * \subsubsection{Durability}
+ *
+ * The \texttt{durability} setting controls how many replicas a copy on a given
+ * device counts for. The default is 1. Setting \texttt{durability=2} on a
+ * hardware RAID device tells bcachefs that data on that device already has
+ * internal redundancy---it counts as two replicas, so the filesystem does not
+ * need to keep an additional copy elsewhere. Setting \texttt{durability=0} means
+ * copies on the device do not count toward replication requirements at all---the
+ * device can only be used as a cache.
+ *
+ * \subsubsection{Caching}
+ *
+ * When an extent has multiple copies on different devices, some of those copies
+ * may be marked as \emph{cached}. Cached copies are evicted in LRU order by the
+ * allocator when the device needs space. Caching behavior is controlled through
+ * the target options:
+ *
+ * \begin{description}
+ * \item[Writeback caching] Set \texttt{foreground\_target} and
+ *   \texttt{promote\_target} to the cache device, and
+ *   \texttt{background\_target} to the backing device. Writes land on the fast
+ *   device first and migrate to the backing device in the background.
+ * \item[Writearound caching] Set \texttt{foreground\_target} to the backing
+ *   device and \texttt{promote\_target} to the cache device. Writes go directly
+ *   to the backing device; frequently-read data is promoted to the cache.
+ * \end{description}
+ *
+ * The \texttt{durability=0} setting is essential for cache devices: it ensures
+ * bcachefs does not count cached copies toward the replica count, so losing the
+ * cache device never causes data loss.
+ *
+ * \subsubsection{Adding and removing devices}
+ *
+ * \begin{description}
+ * \item[\texttt{bcachefs device add}] Adds a new device to a mounted
+ *   filesystem. The device is formatted with bcachefs metadata and integrated
+ *   immediately---new allocations can land on it right away. A label can be
+ *   assigned at add time with \texttt{-l}. Other per-device options
+ *   (\texttt{-{}-discard}, \texttt{-{}-durability}) can be set at add time.
+ *
+ *   The new device must have a block size and bucket size compatible with the
+ *   existing filesystem. After the device is added, its UUID is published via
+ *   uevent so that \texttt{/dev/disk/by-uuid} symlinks are updated, and the
+ *   reconcile subsystem is notified to scan for any work on the new device.
+ *
+ * \item[\texttt{bcachefs device evacuate}] Migrates all data off a device,
+ *   displaying progress as sectors are moved. Uses the reconcile subsystem
+ *   internally; the device's state transitions to evacuating during the process.
+ *   Requires metadata version $\geq$ \texttt{reconcile} (1.33).
+ * \item[\texttt{bcachefs device remove}] Removes a fully evacuated device from
+ *   the filesystem and erases its metadata. Force flags allow removal even if
+ *   some data (\texttt{-f}) or metadata (\texttt{-F}) would be lost.
+ *
+ *   Two removal code paths exist: the legacy path walks the btree to find and
+ *   relocate all references to the device, while the \texttt{fast\_device\_removal}
+ *   path (default on newer metadata versions) uses
+ *   \hyperref[sec:backpointers]{backpointers} to efficiently locate all data
+ *   on the device without a full btree scan.
+ *
+ * \item[\texttt{bcachefs device online/offline}] Bring a device back online or
+ *   take it offline without removing it. Offline devices retain their superblock
+ *   membership and can be brought back later. Bringing a device online includes
+ *   a splitbrain check against the running filesystem's sequence numbers;
+ *   onlining also triggers a reconcile scan to detect any data that may need
+ *   re-replication.
+ *
+ *   Offlining a device requires that the remaining online devices can still
+ *   satisfy both read and write requirements---the kernel checks that at least
+ *   one device can serve reads and at least one can accept writes for every
+ *   replica group. If offlining would leave the filesystem unable to operate,
+ *   the request is rejected unless forced.
+ * \end{description}
+ *
+ * The typical device removal workflow: \texttt{bcachefs device evacuate /dev/sda}
+ * (wait for completion, watching progress), then \texttt{bcachefs device remove
+ * /dev/sda}.
+ *
+ * \subsubsection{Block layer hot-remove}
+ *
+ * When the block layer reports a device as dead (e.g., a USB drive is
+ * unplugged, or a disk is removed from a hot-swap bay), bcachefs receives
+ * a notification and attempts a graceful response. If the device can be
+ * offlined without leaving the filesystem unable to operate, it is taken
+ * offline automatically. Otherwise, the filesystem transitions to
+ * emergency read-only mode to prevent data corruption from writes that
+ * can no longer reach all required replicas.
+ *
+ * \subsubsection{Data-type restrictions}
+ *
+ * The \texttt{data\_allowed} member field restricts which data types a device
+ * can hold: journal, btree, or user data. This allows dedicating fast devices to
+ * metadata while slower devices hold only user data, or restricting a device to
+ * journal-only for write-ahead log isolation. Restrictions are set at format
+ * time or via \texttt{set-fs-option} and are enforced by the
+ * \hyperref[sec:write-points]{allocator}.
+ *
+ * \subsubsection{Degraded mode}
+ *
+ * When a device is unavailable (failed, offline, or physically disconnected),
+ * the filesystem can continue operating in degraded mode if sufficient
+ * redundancy remains. The number of tolerable failures per replica group is
+ * \texttt{nr\_devs - nr\_required}: with 3-way replication, one device can fail
+ * without data loss.
+ *
+ * The \texttt{degraded} mount option controls behavior when devices are missing:
+ *
+ * \begin{description}
+ * \item[\texttt{degraded=true}] Allow mounting with missing devices (read-only
+ *   access to degraded data)
+ * \item[\texttt{degraded=run}] Allow mounting and normal operation with missing
+ *   devices
+ * \item[\texttt{degraded=very}] Allow mounting even if writes cannot maintain
+ *   the requested replica count (\textbf{dangerous}---creates splitbrain risk)
+ * \end{description}
+ *
+ * While degraded, the filesystem has reduced safety margin---further device loss
+ * may cause data unavailability. The reconcile subsystem will automatically
+ * repair degraded data by re-replicating to available devices.
+ *
+ * \subsubsection{Resize}
+ *
+ * \texttt{bcachefs device resize} grows a device to use additional space
+ * (shrinking is not yet supported). If no size is specified, the device grows to
+ * fill its underlying block device. Resize works online---no unmount required.
+ * The new size is subject to a maximum bucket count
+ * (\texttt{BCH\_MEMBER\_NBUCKETS\_MAX}); resize will fail if the requested size
+ * would exceed this limit. After resize, the reconcile subsystem is notified to
+ * account for the newly available space.
+ *
+ * \texttt{bcachefs device resize-journal} adjusts the per-device journal size
+ * independently of the data area.
+ *
+ * \subsubsection{Device failure and error tracking}
+ *
+ * Each device tracks cumulative error counters (read, write, checksum) in the
+ * superblock members section. These counters persist across mounts and help
+ * identify failing hardware before catastrophic failure. The
+ * \texttt{write\_error\_timeout} option (default 30 seconds) controls how long
+ * sustained write errors must persist before the device is automatically set to
+ * read-only.
+ *
+ * When a device is set to read-only due to errors, reads can still be served
+ * from it. If reads also fail, the device should be taken offline entirely to
+ * prevent \hyperref[sec:journal]{journal} stalls---the journal cannot reclaim
+ * space if it cannot read back btree nodes from a failed device.
+ *
+ * \subsubsection{Consistency and self-healing}
+ *
+ * Device membership is tracked in the superblock and cross-validated against
+ * on-disk data during recovery. The allocator checks freespace and alloc btrees
+ * against each other before using a bucket. Backpointer walks verify that all
+ * data on a device is accounted for. If a device is removed or fails, the
+ * reconcile subsystem detects under-replicated data and re-replicates it to
+ * remaining devices automatically.
+ */
+
+#include "bcachefs.h"
+
+#include "alloc/accounting.h"
+#include "alloc/background.h"
+#include "alloc/backpointers.h"
+#include "alloc/check.h"
+#include "alloc/discard.h"
+#include "alloc/replicas.h"
+
+#include "btree/interior.h"
+
+#include "data/ec/init.h"
+#include "data/migrate.h"
+#include "data/reconcile/work.h"
+
+#include "debug/sysfs.h"
+
+#include "journal/init.h"
+#include "journal/reclaim.h"
+
+#include "init/dev.h"
+#include "init/fs.h"
+
+#include "sb/members.h"
+
+#define x(n)		#n,
+const char * const bch2_dev_read_refs[] = {
+	BCH_DEV_READ_REFS()
+	NULL
+};
+
+const char * const bch2_dev_write_refs[] = {
+	BCH_DEV_WRITE_REFS()
+	NULL
+};
+#undef x
+
+__cold void bch2_devs_list_to_text(struct printbuf *out,
+			    struct bch_fs *c,
+			    struct bch_devs_list *d)
+{
+	bch2_printbuf_make_room(out, 1024);
+	guard(rcu)();
+
+	darray_for_each(*d, i) {
+		if (i != d->data)
+			prt_char(out, ' ');
+
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, *i);
+		if (ca)
+			prt_str(out, ca->name);
+		else
+			prt_printf(out, "(invalid device %u)", *i);
+	}
+}
+
+static int bch2_dev_may_add(struct bch_sb *sb, struct bch_fs *c)
+{
+	struct bch_member m = bch2_sb_member_get(sb, sb->dev_idx);
+
+	if (le16_to_cpu(sb->block_size) != block_sectors(c))
+		return bch_err_throw(c, mismatched_block_size);
+
+	if (le16_to_cpu(m.bucket_size) <
+	    BCH_SB_BTREE_NODE_SIZE(c->disk_sb.sb))
+		return bch_err_throw(c, bucket_size_too_small);
+
+	return 0;
+}
+
+struct bch_fs *bch2_dev_to_fs(dev_t dev)
+{
+	guard(mutex)(&bch2_fs_list_lock);
+	guard(rcu)();
+
+	struct bch_fs *c;
+	list_for_each_entry(c, &bch2_fs_list, list)
+		for_each_member_device_rcu(c, ca, NULL)
+			if (ca->disk_sb.bdev && ca->disk_sb.bdev->bd_dev == dev) {
+				closure_get(&c->cl);
+				return c;
+			}
+	return NULL;
+}
+
+int bch2_dev_in_fs(struct bch_sb_handle *fs,
+		   struct bch_sb_handle *sb,
+		   struct bch_opts *opts)
+{
+	if (fs == sb)
+		return 0;
+
+	if (!uuid_equal(&fs->sb->uuid, &sb->sb->uuid))
+		return -BCH_ERR_device_not_a_member_of_filesystem;
+
+	if (!bch2_member_exists(fs->sb, sb->sb->dev_idx))
+		return -BCH_ERR_device_has_been_removed;
+
+	if (fs->sb->block_size != sb->sb->block_size)
+		return -BCH_ERR_mismatched_block_size;
+
+	if (le16_to_cpu(fs->sb->version) < bcachefs_metadata_version_member_seq ||
+	    le16_to_cpu(sb->sb->version) < bcachefs_metadata_version_member_seq)
+		return 0;
+
+	if (fs->sb->seq == sb->sb->seq &&
+	    fs->sb->write_time != sb->sb->write_time) {
+		CLASS(printbuf, buf)();
+
+		prt_str(&buf, "Split brain detected between ");
+		prt_bdevname(&buf, sb->bdev);
+		prt_str(&buf, " and ");
+		prt_bdevname(&buf, fs->bdev);
+		prt_char(&buf, ':');
+		prt_newline(&buf);
+		prt_printf(&buf, "seq=%llu but write_time different, got", le64_to_cpu(sb->sb->seq));
+		prt_newline(&buf);
+
+		prt_bdevname(&buf, fs->bdev);
+		prt_char(&buf, ' ');
+		bch2_prt_datetime(&buf, le64_to_cpu(fs->sb->write_time));
+		prt_newline(&buf);
+
+		prt_bdevname(&buf, sb->bdev);
+		prt_char(&buf, ' ');
+		bch2_prt_datetime(&buf, le64_to_cpu(sb->sb->write_time));
+		prt_newline(&buf);
+
+		if (!opts->no_splitbrain_check)
+			prt_printf(&buf, "Not using older sb");
+
+		pr_err("%s", buf.buf);
+
+		if (!opts->no_splitbrain_check)
+			return -BCH_ERR_device_splitbrain;
+	}
+
+	struct bch_member m = bch2_sb_member_get(fs->sb, sb->sb->dev_idx);
+	u64 seq_from_fs		= le64_to_cpu(m.seq);
+	u64 seq_from_member	= le64_to_cpu(sb->sb->seq);
+
+	if (seq_from_fs && seq_from_fs < seq_from_member) {
+		CLASS(printbuf, buf)();
+
+		prt_str(&buf, "Split brain detected between ");
+		prt_bdevname(&buf, sb->bdev);
+		prt_str(&buf, " and ");
+		prt_bdevname(&buf, fs->bdev);
+		prt_char(&buf, ':');
+		prt_newline(&buf);
+
+		prt_bdevname(&buf, fs->bdev);
+		prt_str(&buf, " believes seq of ");
+		prt_bdevname(&buf, sb->bdev);
+		prt_printf(&buf, " to be %llu, but ", seq_from_fs);
+		prt_bdevname(&buf, sb->bdev);
+		prt_printf(&buf, " has %llu\n", seq_from_member);
+
+		if (!opts->no_splitbrain_check) {
+			prt_str(&buf, "Not using ");
+			prt_bdevname(&buf, sb->bdev);
+		}
+
+		pr_err("%s", buf.buf);
+
+		if (!opts->no_splitbrain_check)
+			return -BCH_ERR_device_splitbrain;
+	}
+
+	return 0;
+}
+
+/* Device startup/shutdown: */
+
+void bch2_dev_io_ref_stop(struct bch_dev *ca, int rw)
+{
+	if (rw == READ)
+		clear_bit(ca->dev_idx, ca->fs->devs_online.d);
+
+	if (!enumerated_ref_is_zero(&ca->io_ref[rw]))
+		enumerated_ref_stop(&ca->io_ref[rw],
+				    rw == READ
+				    ? bch2_dev_read_refs
+				    : bch2_dev_write_refs);
+}
+
+static void __bch2_dev_read_only(struct bch_fs *c, struct bch_dev *ca)
+{
+	/*
+	 * The allocator thread itself allocates btree nodes, so stop it first:
+	 */
+	bch2_dev_allocator_remove(c, ca);
+	bch2_recalc_capacity(c);
+
+	/*
+	 * bch2_dev_allocator_remove() above blocks until every open_bucket on
+	 * this device has been released. Submitting write bios and taking
+	 * write io_refs both happen while we hold open_bucket refs, so that
+	 * drain also waits for any in-flight submits to complete. Only then
+	 * is it safe to stop write io_refs: stopping them sooner would cause
+	 * bch2_dev_get_ioref() to fail at submit time for in-flight writes,
+	 * surfacing as -EIO to userspace even though the underlying block
+	 * device is still healthy (we're going read-only, not removing).
+	 */
+	bch2_dev_io_ref_stop(ca, WRITE);
+
+	bch2_dev_journal_stop(&c->journal, ca);
+	bch2_do_discards_async(c);
+
+	/*
+	 * may_reuse_stripe() / init_new_stripe_from_old() check
+	 * bch2_dev_bad_or_evacuating at stripe allocation time, but state can
+	 * flip to non-rw between that check and the stripe commit. Stripes
+	 * still on stripe_head_list were cancelled by bch2_ec_stop_dev() via
+	 * bch2_dev_allocator_remove() above; stripes that had moved to
+	 * stripe_new_list (commit in progress) may still commit with a ptr
+	 * to ca. Wait for them to finish so the subsequent data-drop pass
+	 * sees their backpointers.
+	 */
+	bch2_fs_ec_flush_outstanding(c);
+}
+
+static void __bch2_dev_read_write(struct bch_fs *c, struct bch_dev *ca)
+{
+	lockdep_assert_held(&c->state_lock);
+
+	BUG_ON(ca->mi.state != BCH_MEMBER_STATE_rw);
+
+	bch2_dev_allocator_add(c, ca);
+	bch2_recalc_capacity(c);
+
+	if (enumerated_ref_is_zero(&ca->io_ref[WRITE]))
+		enumerated_ref_start(&ca->io_ref[WRITE]);
+
+	bch2_do_discards_async(c);
+}
+
+void bch2_dev_unlink(struct bch_dev *ca)
+{
+	struct kobject *b;
+
+	/*
+	 * This is racy w.r.t. the underlying block device being hot-removed,
+	 * which removes it from sysfs.
+	 *
+	 * It'd be lovely if we had a way to handle this race, but the sysfs
+	 * code doesn't appear to provide a good method and block/holder.c is
+	 * susceptible as well:
+	 */
+	if (ca->kobj.state_in_sysfs &&
+	    ca->disk_sb.bdev &&
+	    (b = bdev_kobj(ca->disk_sb.bdev))->state_in_sysfs) {
+		sysfs_remove_link(b, "bcachefs");
+		sysfs_remove_link(&ca->kobj, "block");
+	}
+}
+
+static void bch2_dev_release(struct kobject *kobj)
+{
+	struct bch_dev *ca = container_of(kobj, struct bch_dev, kobj);
+
+	kfree(ca);
+}
+
+KTYPE(bch2_dev);
+
+void bch2_dev_free(struct bch_dev *ca)
+{
+	/*
+	 * ref_outer holders (io_error_work, ioctl lookups) may block on
+	 * state_lock before noticing the device is going away - so we must
+	 * not drain them while holding it:
+	 */
+	if (ca->fs)
+		lockdep_assert_not_held(&ca->fs->state_lock);
+
+	/*
+	 * io_error_work is never cancelled - it owns a ref_outer per queued
+	 * instance, so this drain waits for it to run and put:
+	 */
+	bch2_dev_put_outer(ca);
+	wait_for_completion(&ca->ref_outer_completion);
+
+	WARN_ON(!enumerated_ref_is_zero(&ca->io_ref[WRITE]));
+	WARN_ON(!enumerated_ref_is_zero(&ca->io_ref[READ]));
+
+	bch2_dev_unlink(ca);
+
+	if (ca->kobj.state_in_sysfs)
+		kobject_del(&ca->kobj);
+
+	bch2_bucket_bitmap_free(&ca->bucket_backpointer_mismatch);
+	bch2_bucket_bitmap_free(&ca->bucket_backpointer_empty);
+
+	bch2_free_super(&ca->disk_sb);
+	bch2_dev_discards_exit(ca);
+	bch2_dev_journal_exit(ca);
+
+	free_percpu(ca->io_done);
+	bch2_dev_buckets_free(ca);
+	kfree(ca->sb_read_scratch);
+
+	bch2_time_stats_quantiles_exit(&ca->io_latency[WRITE]);
+	bch2_time_stats_quantiles_exit(&ca->io_latency[READ]);
+
+	enumerated_ref_exit(&ca->io_ref[WRITE]);
+	enumerated_ref_exit(&ca->io_ref[READ]);
+#ifndef CONFIG_BCACHEFS_DEBUG
+	percpu_ref_exit(&ca->ref);
+#endif
+	kobject_put(&ca->kobj);
+}
+
+void __bch2_dev_offline(struct bch_fs *c, struct bch_dev *ca)
+{
+	lockdep_assert_held(&c->state_lock);
+
+	if (enumerated_ref_is_zero(&ca->io_ref[READ]))
+		return;
+
+	__bch2_dev_read_only(c, ca);
+
+	bch2_dev_io_ref_stop(ca, READ);
+
+	bch2_dev_unlink(ca);
+
+	bch2_free_super(&ca->disk_sb);
+	bch2_dev_journal_exit(ca);
+}
+
+#ifndef CONFIG_BCACHEFS_DEBUG
+static void bch2_dev_ref_complete(struct percpu_ref *ref)
+{
+	struct bch_dev *ca = container_of(ref, struct bch_dev, ref);
+
+	complete(&ca->ref_completion);
+}
+#endif
+
+int bch2_dev_sysfs_online(struct bch_fs *c, struct bch_dev *ca)
+{
+	if (!c->kobj.state_in_sysfs)
+		return 0;
+
+	if (!ca->kobj.state_in_sysfs) {
+		try(kobject_add(&ca->kobj, &c->kobj, "dev-%u", ca->dev_idx));
+		try(bch2_opts_create_sysfs_files(&ca->kobj, OPT_DEVICE));
+	}
+
+	if (ca->disk_sb.bdev) {
+		struct kobject *block = bdev_kobj(ca->disk_sb.bdev);
+
+		try(sysfs_create_link(block, &ca->kobj, "bcachefs"));
+		try(sysfs_create_link(&ca->kobj, block, "block"));
+	}
+
+	return 0;
+}
+
+static struct bch_dev *__bch2_dev_alloc(struct bch_fs *c,
+					struct bch_member *member)
+{
+	struct bch_dev *ca;
+	unsigned i;
+
+	ca = kzalloc(sizeof(*ca), GFP_KERNEL);
+	if (!ca)
+		return NULL;
+
+	kobject_init(&ca->kobj, &bch2_dev_ktype);
+	init_completion(&ca->ref_completion);
+	refcount_set(&ca->ref_outer, 1);
+	init_completion(&ca->ref_outer_completion);
+
+	INIT_WORK(&ca->io_error_work, bch2_io_error_work);
+
+	bch2_time_stats_quantiles_init(&ca->io_latency[READ]);
+	bch2_time_stats_quantiles_init(&ca->io_latency[WRITE]);
+
+	ca->mi = bch2_mi_to_cpu(member);
+	ca->btree_allocated_bitmap_gc = le64_to_cpu(member->btree_allocated_bitmap);
+
+	for (i = 0; i < ARRAY_SIZE(member->errors); i++)
+		atomic64_set(&ca->errors[i], le64_to_cpu(member->errors[i]));
+
+	ca->uuid = member->uuid;
+
+	ca->nr_btree_reserve = DIV_ROUND_UP(BTREE_NODE_RESERVE,
+			     ca->mi.bucket_size / btree_sectors(c));
+
+#ifndef CONFIG_BCACHEFS_DEBUG
+	if (percpu_ref_init(&ca->ref, bch2_dev_ref_complete, 0, GFP_KERNEL))
+		goto err;
+#else
+	atomic_long_set(&ca->ref, 1);
+#endif
+
+	mutex_init(&ca->bucket_backpointer_mismatch.lock);
+	mutex_init(&ca->bucket_backpointer_empty.lock);
+
+	bch2_dev_journal_init_early(ca);
+
+	if (enumerated_ref_init(&ca->io_ref[READ],  BCH_DEV_READ_REF_NR,  NULL) ||
+	    enumerated_ref_init(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_NR, NULL) ||
+	    !(ca->sb_read_scratch = kmalloc(BCH_SB_READ_SCRATCH_BUF_SIZE, GFP_KERNEL)) ||
+	    bch2_dev_buckets_alloc(c, ca) ||
+	    bch2_dev_discards_init(ca) ||
+	    !(ca->io_done	= alloc_percpu(*ca->io_done)))
+		goto err;
+
+	return ca;
+err:
+	bch2_dev_free(ca);
+	return NULL;
+}
+
+static void bch2_dev_attach(struct bch_fs *c, struct bch_dev *ca,
+			    unsigned dev_idx)
+{
+	ca->dev_idx = dev_idx;
+	__set_bit(ca->dev_idx, ca->self.d);
+
+	if (!ca->name[0])
+		scnprintf(ca->name, sizeof(ca->name), "dev-%u", dev_idx);
+
+	ca->fs = c;
+	rcu_assign_pointer(c->devs[ca->dev_idx], ca);
+
+	if (bch2_dev_sysfs_online(c, ca))
+		pr_warn("error creating sysfs objects");
+}
+
+int bch2_dev_alloc(struct bch_fs *c, unsigned dev_idx)
+{
+	struct bch_member member = bch2_sb_member_get(c->disk_sb.sb, dev_idx);
+	struct bch_dev *ca = NULL;
+
+	if (bch2_fs_init_fault("dev_alloc"))
+		return bch_err_throw(c, ENOMEM_dev_alloc);
+
+	ca = __bch2_dev_alloc(c, &member);
+	if (!ca)
+		return bch_err_throw(c, ENOMEM_dev_alloc);
+
+	ca->fs = c;
+
+	bch2_dev_attach(c, ca, dev_idx);
+	return 0;
+}
+
+static int read_file_str(const char *path, darray_char *ret)
+{
+	/*
+	 * TODO: unify this with read_file_str() in bcachefs-tools tools-util.c
+	 *
+	 * Unfortunately, we don't have openat() in kernel
+	 */
+#ifdef __KERNEL__
+	struct file *file = errptr_try(filp_open(path, O_RDONLY, 0));
+
+	loff_t pos = 0;
+	ssize_t r = kernel_read(file, ret->data, ret->size, &pos);
+	fput(file);
+#else
+	int fd = open(path, O_RDONLY);
+	if (fd < 0)
+		return fd;
+
+	ssize_t r = read(fd, ret->data, ret->size);
+	close(fd);
+#endif
+
+	if (r > 0) {
+		ret->nr = r;
+		if (ret->data[r - 1]) {
+			/* null terminate */
+			if (ret->nr >= ret->size)
+				ret->nr = ret->size -1;
+			ret->data[ret->nr] = '\0';
+		}
+	}
+	return r < 0 ? r : 0;
+}
+
+/*
+ * Read a sysfs device file (e.g. "device/model", "device/serial") into @ret,
+ * resolving partitions to their parent disk.
+ *
+ * device/model and device/serial live under the whole disk, not its partitions.
+ * Look the device up by dev_t under /sys/dev/block/<maj>:<min>/ (present for
+ * both disks and partitions); a partition has no device/ link of its own, so
+ * fall back to the parent disk via "..". Mirrors fd_to_dev_model() in the
+ * userspace tools (src/wrappers/bdev.rs).
+ */
+static void read_dev_sysfs_file(dev_t dev, const char *file, darray_char *ret)
+{
+	static const char * const fmts[] = {
+		"/sys/dev/block/%u:%u/%s",
+		"/sys/dev/block/%u:%u/../%s",
+	};
+
+	ret->nr = 0;
+
+	for (unsigned i = 0; i < ARRAY_SIZE(fmts); i++) {
+		CLASS(printbuf, path)();
+		prt_printf(&path, fmts[i], MAJOR(dev), MINOR(dev), file);
+
+		read_file_str(path.buf, ret);
+
+		if (ret->nr && ret->data[ret->nr - 1] == '\n')
+			ret->data[--ret->nr] = '\0';
+
+		if (ret->nr)
+			return;
+	}
+}
+
+static void read_dev_sysfs_attr(dev_t dev, const char *attr, darray_char *ret)
+{
+	CLASS(printbuf, file)();
+	prt_printf(&file, "device/%s", attr);
+	read_dev_sysfs_file(dev, file.buf, ret);
+}
+
+void bch2_dev_read_identity(struct block_device *bdev,
+			    char *name, size_t name_size,
+			    char *model, size_t model_size,
+			    char *serial, size_t serial_size)
+{
+	CLASS(printbuf, bdevname)();
+	prt_bdevname(&bdevname, bdev);
+
+	strscpy(name, bdevname.buf, name_size);
+	if (model_size)
+		model[0] = '\0';
+	if (serial_size)
+		serial[0] = '\0';
+
+	CLASS(darray_char, sysfs_model)();
+	if (model_size && !darray_make_room(&sysfs_model, model_size)) {
+		read_dev_sysfs_attr(bdev->bd_dev, "model", &sysfs_model);
+		if (!sysfs_model.nr)
+			read_dev_sysfs_file(bdev->bd_dev, "loop/backing_file", &sysfs_model);
+		if (sysfs_model.nr)
+			strscpy(model, sysfs_model.data, model_size);
+	}
+
+	CLASS(darray_char, sysfs_serial)();
+	if (serial_size && !darray_make_room(&sysfs_serial, serial_size)) {
+		read_dev_sysfs_attr(bdev->bd_dev, "serial", &sysfs_serial);
+		if (sysfs_serial.nr)
+			strscpy(serial, sysfs_serial.data, serial_size);
+	}
+}
+
+static int __bch2_dev_attach_bdev(struct bch_fs *c, struct bch_dev *ca,
+				  struct bch_sb_handle *sb, struct printbuf *err)
+{
+	if (bch2_dev_is_online(ca)) {
+		prt_printf(err, "Cannot attach %s: already have device %s online in slot %u\n",
+			   sb->sb_name, ca->name, sb->sb->dev_idx);
+		return bch_err_throw(ca->fs, device_already_online);
+	}
+
+	if (get_capacity(sb->bdev->bd_disk) <
+	    ca->mi.bucket_size * ca->mi.nbuckets) {
+		prt_printf(err, "Cannot online %s: device too small (capacity %llu filesystem size %llu nbuckets %llu)\n",
+			   sb->sb_name,
+			   get_capacity(sb->bdev->bd_disk),
+			   ca->mi.bucket_size * ca->mi.nbuckets,
+			   ca->mi.nbuckets);
+		return bch_err_throw(ca->fs, device_size_too_small);
+	}
+
+	BUG_ON(!enumerated_ref_is_zero(&ca->io_ref[READ]));
+	BUG_ON(!enumerated_ref_is_zero(&ca->io_ref[WRITE]));
+
+	try(bch2_dev_journal_init(ca, sb->sb));
+
+	CLASS(printbuf, name)();
+	prt_bdevname(&name, sb->bdev);
+	strscpy(ca->name, name.buf, sizeof(ca->name));
+
+	/* Commit: */
+	ca->disk_sb = *sb;
+	memset(sb, 0, sizeof(*sb));
+
+	/*
+	 * Stash pointer to the filesystem for blk_holder_ops - note that once
+	 * attached to a filesystem, we will always close the block device
+	 * before tearing down the filesystem object.
+	 */
+	ca->disk_sb.holder->c = ca->fs;
+
+	ca->dev = ca->disk_sb.bdev->bd_dev;
+
+	enumerated_ref_start(&ca->io_ref[READ]);
+
+	return 0;
+}
+
+int bch2_dev_attach_bdev(struct bch_fs *c, struct bch_sb_handle *sb, struct printbuf *err)
+{
+	lockdep_assert_held(&c->state_lock);
+
+	if (le64_to_cpu(sb->sb->seq) >
+	    le64_to_cpu(c->disk_sb.sb->seq)) {
+		/*
+		 * rewind, we'll lose some updates but it's not safe to call
+		 * bch2_sb_to_fs() after fs is started
+		 */
+		sb->sb->seq = c->disk_sb.sb->seq;
+	}
+
+	BUG_ON(!bch2_dev_exists(c, sb->sb->dev_idx));
+
+	struct bch_dev *ca = bch2_dev_locked(c, sb->sb->dev_idx);
+
+	try(__bch2_dev_attach_bdev(c, ca, sb, err));
+
+	set_bit(ca->dev_idx, c->devs_online.d);
+
+	bch2_dev_sysfs_online(c, ca);
+
+	bch2_reconcile_wakeup(c);
+	return 0;
+}
+
+/* Device management: */
+
+/*
+ * Note: this function is also used by the error paths - when a particular
+ * device sees an error, we call it to determine whether we can just set the
+ * device RO, or - if this function returns false - we'll set the whole
+ * filesystem RO:
+ *
+ * XXX: maybe we should be more explicit about whether we're changing state
+ * because we got an error or what have you?
+ */
+bool bch2_dev_state_allowed(struct bch_fs *c, struct bch_dev *ca,
+			    enum bch_member_state new_state, int flags,
+			    struct printbuf *err)
+{
+	lockdep_assert_held(&c->state_lock);
+
+	if (ca->mi.state	== BCH_MEMBER_STATE_rw &&
+	    new_state		!= BCH_MEMBER_STATE_rw) {
+		struct bch_devs_mask new_rw_devs = c->allocator.rw_devs[0];
+		__clear_bit(ca->dev_idx, new_rw_devs.d);
+
+		return bch2_can_write_fs_with_devs(c, new_rw_devs, flags, err);
+	}
+
+	return true;
+}
+
+int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
+			 enum bch_member_state new_state, int flags,
+			 struct printbuf *err)
+{
+	int ret = 0;
+
+	bool was_rw = ca->mi.state == BCH_MEMBER_STATE_rw;
+	bool do_reconcile_scan =
+		new_state == BCH_MEMBER_STATE_rw ||
+		new_state == BCH_MEMBER_STATE_evacuating;
+
+	struct reconcile_scan s = new_state == BCH_MEMBER_STATE_rw
+		? (struct reconcile_scan) { .type = RECONCILE_SCAN_pending }
+		: (struct reconcile_scan) { .type = RECONCILE_SCAN_device, .dev = ca->dev_idx };
+
+	if (ca->mi.state == new_state) {
+		if (new_state == BCH_MEMBER_STATE_evacuating)
+			return bch2_set_reconcile_needs_scan(c, s, true);
+		return 0;
+	}
+
+	if (!bch2_dev_state_allowed(c, ca, new_state, flags, err))
+		return bch_err_throw(c, device_state_not_allowed);
+
+	if (new_state != BCH_MEMBER_STATE_rw)
+		__bch2_dev_read_only(c, ca);
+
+	bch_notice_dev(ca, "%s", bch2_member_states[new_state]);
+
+	if (do_reconcile_scan)
+		try(bch2_set_reconcile_needs_scan(c, s, false));
+
+	scoped_guard(mutex, &c->sb_lock) {
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+		SET_BCH_MEMBER_STATE(m, new_state);
+		bch2_write_super(c);
+	}
+
+	if (new_state == BCH_MEMBER_STATE_rw && bch2_dev_is_online(ca))
+		__bch2_dev_read_write(c, ca);
+
+	/*
+	 * Any RW transition (in or out) changes the EC widening target (RW
+	 * members) for this disk_label; queue a stripes scan so can_widen is
+	 * refreshed. Must come after the SB write above so the scan, which
+	 * reads ca->mi.state, sees the new state.
+	 *
+	 * Going-RW grows the target so newly-widenable stripes can be picked
+	 * up; going-from-RW shrinks it, and while get_old_stripe demotes
+	 * lazily on the reuse path, fsck and the canonical can_widen value
+	 * still need the scan to converge.
+	 */
+	if (new_state == BCH_MEMBER_STATE_rw || was_rw)
+		try(bch2_set_reconcile_needs_scan(c,
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_stripes }, false));
+
+	if (do_reconcile_scan)
+		try(bch2_set_reconcile_needs_scan(c, s, true));
+
+	return ret;
+}
+
+int bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
+		       enum bch_member_state new_state, int flags,
+		       struct printbuf *err)
+{
+	guard(rwsem_write)(&c->state_lock);
+
+	if (READ_ONCE(ca->removing))
+		return bch_err_throw(c, device_has_been_removed);
+
+	return __bch2_dev_set_state(c, ca, new_state, flags, err);
+}
+
+/* Device add/removal: */
+
+static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
+			     bool fast_device_removal, int flags,
+			     struct printbuf *err)
+{
+	unsigned data;
+	int ret;
+
+	lockdep_assert_held(&c->state_lock);
+
+	/*
+	 * We consume the caller's ref_outer, regardless of whether we succeed
+	 * or fail - the lookup no longer takes a ca->ref, which we'd deadlock
+	 * against draining below, and holding ref_outer across bch2_dev_free()
+	 * would deadlock against the ref_outer drain:
+	 */
+	bch2_dev_put_outer(ca);
+
+	/*
+	 * Fence stripe creates before we start deleting this device's alloc
+	 * info and stripe pointers: a stripe create that reused an existing
+	 * stripe holds pre-invalidation copies of its pointers, and may not
+	 * commit (or seal, if still accumulating writes) until after our data
+	 * drop walks have passed it by:
+	 */
+	WRITE_ONCE(ca->removing, true);
+
+	ret = __bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_evacuating, flags, err);
+	if (ret)
+		goto err;
+
+	/*
+	 * __bch2_dev_read_only() flushes outstanding stripe creates, but only
+	 * runs if the device wasn't already evacuating: flush explicitly so
+	 * creates that passed the ->removing check before we set it complete
+	 * before the data drop, which needs to see their backpointers:
+	 */
+	bch2_fs_ec_flush_outstanding(c);
+
+	ret = fast_device_removal
+		? bch2_dev_data_drop_by_backpointers(c, ca, flags, err)
+		: (bch2_dev_data_drop(c, ca->dev_idx, flags, err) ?:
+		   bch2_dev_remove_stripes(c, ca->dev_idx, flags, err));
+	if (ret)
+		goto err;
+
+	bch2_btree_interior_updates_flush(c);
+
+	/* Check if device still has data before blowing away alloc info */
+	struct bch_dev_usage usage = bch2_dev_usage_read(ca);
+	for (unsigned i = 0; i < BCH_DATA_NR; i++)
+		if (!data_type_is_empty(i) &&
+		    !data_type_is_hidden(i) &&
+		    usage.buckets[i]) {
+			if (!ret) {
+				prt_printf(err, "Remove failed: still has data\n");
+				ret = -EBUSY;
+			}
+			prt_printf(err, "  %s: %llu buckets\n", bch2_data_type_str(i), usage.buckets[i]);
+		}
+	if (ret)
+		goto err;
+
+	/*
+	 * Flush journal pins that reference the device being removed, and any
+	 * outstanding pins (data_drop's btree updates), before tearing down
+	 * the device. __bch2_dev_offline below kills ca's io_ref and frees
+	 * ca->journal.buckets - any journal write that still needs ca in its
+	 * replicas set will see EROFS.
+	 */
+	bch2_journal_flush_outstanding_pins(&c->journal);
+
+	ret = bch2_journal_flush_device_pins(&c->journal, ca->dev_idx);
+	if (ret) {
+		prt_printf(err, "bch2_journal_flush_device_pins() error: %s\n", bch2_err_str(ret));
+		goto err;
+	}
+
+	ret = bch2_journal_flush(&c->journal);
+	if (ret) {
+		prt_printf(err, "bch2_journal_flush() error: %s\n", bch2_err_str(ret));
+		goto err;
+	}
+
+	/*
+	 * Disallow reads before we remove alloc info, otherwise we'll get
+	 * spurious stale pointer errors:
+	 */
+	__bch2_dev_offline(c, ca);
+
+	ret = bch2_dev_remove_alloc(c, ca);
+	if (ret) {
+		prt_printf(err, "bch2_dev_remove_alloc() error: %s\n", bch2_err_str(ret));
+		goto err;
+	}
+
+	/*
+	 * dev_remove_alloc issued btree deletes that need to be durable before
+	 * we drop the sb member entry:
+	 */
+	ret = bch2_journal_flush(&c->journal);
+	if (ret) {
+		prt_printf(err, "bch2_journal_flush() error: %s\n", bch2_err_str(ret));
+		goto err;
+	}
+
+	ret = bch2_replicas_gc_accounted(c);
+	if (ret) {
+		prt_printf(err, "bch2_replicas_gc2() error: %s\n", bch2_err_str(ret));
+		goto err;
+	}
+	/*
+	 * flushing the journal should be sufficient, but it's the write buffer
+	 * flush that kills superblock replicas entries after they've gone to 0
+	 * so bch2_dev_has_data() returns the correct value:
+	 */
+
+	data = bch2_dev_has_data(c, ca);
+	if (data) {
+		prt_str(err, "Remove failed, still has data (");
+		prt_bitflags(err, __bch2_data_types, data);
+		prt_str(err, ")\n");
+		ret = -EBUSY;
+		goto err;
+	}
+
+	scoped_guard(mutex, &c->sb_lock)
+		rcu_assign_pointer(c->devs[ca->dev_idx], NULL);
+
+#ifndef CONFIG_BCACHEFS_DEBUG
+	percpu_ref_kill(&ca->ref);
+#else
+	ca->dying = true;
+	bch2_dev_put(ca);
+#endif
+	wait_for_completion(&ca->ref_completion);
+	return 0;
+err:
+	/* The device is staying; allow new references to it again: */
+	WRITE_ONCE(ca->removing, false);
+
+	if (test_bit(BCH_FS_rw, &c->flags) &&
+	    ca->mi.state == BCH_MEMBER_STATE_rw &&
+	    !enumerated_ref_is_zero(&ca->io_ref[READ]))
+		__bch2_dev_read_write(c, ca);
+	return ret;
+}
+
+int bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca, int flags,
+		    struct printbuf *err)
+{
+	unsigned dev_idx = ca->dev_idx;
+	bool fast_device_removal = (c->sb.compat & BIT_ULL(BCH_COMPAT_no_stale_ptrs)) &&
+		!bch2_request_incompat_feature(c,
+					bcachefs_metadata_version_fast_device_removal);
+
+	scoped_guard(rwsem_write, &c->state_lock)
+		try(__bch2_dev_remove(c, ca, fast_device_removal, flags, err));
+
+	/*
+	 * The device is now unreachable - not in c->devs, ca->ref drained,
+	 * ca->removing set. Drain ref_outer holders and free outside
+	 * state_lock: they may be blocked on it (io_error_work), and will
+	 * bail via ca->removing once they acquire it.
+	 */
+	bch2_dev_free(ca);
+
+	/*
+	 * Free this device's slot in the bch_member array - all pointers to
+	 * this device must be gone:
+	 */
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+		guard(mutex)(&c->sb_lock);
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx);
+
+		if (fast_device_removal)
+			m->uuid = BCH_SB_MEMBER_DELETED_UUID;
+		else
+			memset(&m->uuid, 0, sizeof(m->uuid));
+
+		bch2_write_super(c);
+	}
+
+	return 0;
+}
+
+static int bch2_dev_set_initialized(struct bch_fs *c, struct bch_dev *ca,
+				    enum bch_member_initialized state)
+{
+	guard(mutex)(&c->sb_lock);
+	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+	SET_BCH_MEMBER_INITIALIZED(m, state);
+	return bch2_write_super(c);
+}
+
+int bch2_dev_add_initialize(struct bch_fs *c, struct bch_dev *ca)
+{
+	switch (ca->mi.initialized) {
+	case BCH_MEMBER_INITIALIZED_pre_dev_usage:
+		try(bch2_dev_usage_init(ca, false));
+		try(bch2_dev_set_initialized(c, ca, BCH_MEMBER_INITIALIZED_pre_mark_sb));
+		fallthrough;
+	case BCH_MEMBER_INITIALIZED_pre_mark_sb:
+		try(bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional));
+		try(bch2_dev_set_initialized(c, ca, BCH_MEMBER_INITIALIZED_pre_freespace_init));
+		fallthrough;
+	case BCH_MEMBER_INITIALIZED_pre_freespace_init:
+		try(bch2_fs_freespace_init(c));
+		try(bch2_dev_set_initialized(c, ca, BCH_MEMBER_INITIALIZED_pre_journal_alloc));
+		fallthrough;
+	case BCH_MEMBER_INITIALIZED_pre_journal_alloc:
+		try(bch2_dev_journal_alloc(ca, false));
+		try(bch2_dev_set_initialized(c, ca, BCH_MEMBER_INITIALIZED_initialized));
+	}
+
+	return 0;
+}
+
+/* Add new device to running filesystem: */
+int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
+{
+	int ret = 0;
+
+	struct bch_opts opts = bch2_opts_empty();
+	struct bch_sb_handle sb __cleanup(bch2_free_super) = {};
+	ret = bch2_read_super(path, &opts, &sb);
+	if (ret) {
+		prt_printf(err, "error reading superblock: %s\n", bch2_err_str(ret));
+		return ret;
+	}
+
+	struct bch_member dev_mi = bch2_sb_member_get(sb.sb, sb.sb->dev_idx);
+
+	CLASS(printbuf, label)();
+	if (BCH_MEMBER_GROUP(&dev_mi)) {
+		bch2_disk_path_to_text_sb(&label, sb.sb, BCH_MEMBER_GROUP(&dev_mi) - 1);
+		if (label.allocation_failure)
+			return -ENOMEM;
+	}
+
+	if (list_empty(&c->list)) {
+		scoped_guard(mutex, &bch2_fs_list_lock) {
+			if (__bch2_uuid_to_fs(c->sb.uuid))
+				ret = bch_err_throw(c, filesystem_uuid_already_open);
+			else
+				list_add(&c->list, &bch2_fs_list);
+		}
+
+		if (ret) {
+			prt_printf(err, "cannot go multidevice: filesystem UUID already open\n");
+			return ret;
+		}
+	}
+
+	try(bch2_dev_may_add(sb.sb, c));
+
+	struct bch_dev *ca = __bch2_dev_alloc(c, &dev_mi);
+	if (!ca)
+		return -ENOMEM;
+
+	ret = __bch2_dev_attach_bdev(c, ca, &sb, err);
+	if (ret)
+		goto err;
+
+	struct bch_dev_identity identity;
+	bch2_dev_mi_field_read(ca, &identity);
+
+	struct reconcile_scan s = { .type = RECONCILE_SCAN_pending };
+	if (test_bit(BCH_FS_started, &c->flags)) {
+		/*
+		 * Technically incorrect, but 'bcachefs image update' is the
+		 * only thing that adds a device to a not-started filesystem:
+		 */
+		try(bch2_set_reconcile_needs_scan(c, s, false));
+	}
+
+	scoped_guard(rwsem_write, &c->state_lock) {
+		scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+			guard(mutex)(&c->sb_lock);
+			SET_BCH_SB_MULTI_DEVICE(c->disk_sb.sb, true);
+
+			ret = bch2_sb_from_fs(c, ca);
+			if (ret) {
+				prt_printf(err, "error setting up new superblock: %s\n", bch2_err_str(ret));
+				goto err;
+			}
+
+			if (dynamic_fault("bcachefs:add:no_slot"))
+				goto err;
+
+			ret = bch2_sb_member_alloc(c);
+			if (ret < 0) {
+				prt_printf(err, "error allocating superblock member slot: %s\n", bch2_err_str(ret));
+				goto err;
+			}
+			unsigned dev_idx = ret;
+			ret = 0;
+
+			/* success: */
+
+			dev_mi.last_mount = cpu_to_le64(ktime_get_real_seconds());
+			SET_BCH_MEMBER_INITIALIZED(&dev_mi, BCH_MEMBER_INITIALIZED_pre_dev_usage);
+
+			*bch2_members_v2_get_mut(c->disk_sb.sb, dev_idx) = dev_mi;
+
+			ca->disk_sb.sb->dev_idx	= dev_idx;
+			bch2_dev_attach(c, ca, dev_idx);
+
+			set_bit(ca->dev_idx, c->devs_online.d);
+
+			if (BCH_MEMBER_GROUP(&dev_mi)) {
+				ret = __bch2_dev_group_set(c, ca, label.buf);
+				prt_printf(err, "error creating new label: %s\n", bch2_err_str(ret));
+				if (ret)
+					goto err_late;
+			}
+
+
+			bool write_sb = false;
+			bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
+
+			/*
+			 * We don't call bch2_sb_update() until after the
+			 * superblock write finishes - but without sync
+			 * c->sb.nr_devices, write_super won't write to the new
+			 * device:
+			 */
+			c->sb.nr_devices = c->disk_sb.sb->nr_devices;
+
+			ret = bch2_write_super(c);
+			if (ret)
+				goto err_late;
+		}
+
+		if (test_bit(BCH_FS_started, &c->flags)) {
+			ret = bch2_dev_add_initialize(c, ca);
+			if (ret) {
+				prt_printf(err, "error marking new superblock: %s\n", bch2_err_str(ret));
+				goto err_late;
+			}
+
+			if (ca->mi.state == BCH_MEMBER_STATE_rw)
+				__bch2_dev_read_write(c, ca);
+		}
+
+		/*
+		 * We just changed the superblock UUID, invalidate cache and send a
+		 * uevent to update /dev/disk/by-uuid
+		 */
+		invalidate_bdev(ca->disk_sb.bdev);
+
+		char uuid_str[37];
+		snprintf(uuid_str, sizeof(uuid_str), "UUID=%pUb", &c->sb.uuid);
+
+		char *envp[] = {
+			"CHANGE=uuid",
+			uuid_str,
+			NULL,
+		};
+		kobject_uevent_env(&ca->disk_sb.bdev->bd_device.kobj, KOBJ_CHANGE, envp);
+	}
+
+	if (test_bit(BCH_FS_started, &c->flags))
+		try(bch2_set_reconcile_needs_scan(c, s, true));
+out:
+	bch_err_fn(c, ret);
+	return ret;
+err:
+	if (ca)
+		bch2_dev_free(ca);
+	goto out;
+err_late:
+	ca = NULL;
+	goto err;
+}
+
+/* Hot add existing device to running filesystem: */
+int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
+{
+	struct bch_opts opts = bch2_opts_empty();
+	struct bch_sb_handle sb __cleanup(bch2_free_super) = {};
+	int ret;
+
+	guard(rwsem_write)(&c->state_lock);
+
+	ret = bch2_read_super(path, &opts, &sb);
+	if (ret) {
+		prt_printf(err, "error reading superblock: %s\n", bch2_err_str(ret));
+		return ret;
+	}
+
+	unsigned dev_idx = sb.sb->dev_idx;
+
+	ret = bch2_dev_in_fs(&c->disk_sb, &sb, &c->opts);
+	if (ret) {
+		prt_printf(err, "device not a member of fs: %s\n", bch2_err_str(ret));
+		return ret;
+	}
+
+	try(bch2_dev_attach_bdev(c, &sb, err));
+
+	struct bch_dev *ca = bch2_dev_locked(c, dev_idx);
+
+	bch2_dev_mi_field_upgrades(ca);
+
+	ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
+	if (ret) {
+		prt_printf(err, "bch2_trans_mark_dev_sb() error: %s\n", bch2_err_str(ret));
+		return ret;
+	}
+
+	if (ca->mi.state == BCH_MEMBER_STATE_rw)
+		__bch2_dev_read_write(c, ca);
+
+	if (!ca->mi.freespace_initialized) {
+		ret = bch2_dev_freespace_init(c, ca, 0, ca->mi.nbuckets);
+		if (ret) {
+			prt_printf(err, "bch2_dev_freespace_init() error: %s\n", bch2_err_str(ret));
+			return ret;
+		}
+	}
+
+	if (!ca->journal.nr) {
+		ret = bch2_dev_journal_alloc(ca, false);
+		if (ret) {
+			prt_printf(err, "bch2_dev_journal_alloc() error: %s\n", bch2_err_str(ret));
+			return ret;
+		}
+	}
+
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+		guard(mutex)(&c->sb_lock);
+		bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount =
+			cpu_to_le64(ktime_get_real_seconds());
+		bch2_write_super(c);
+	}
+
+	/*
+	 * We might have been unable to write because this device was offline:
+	 *
+	 * We'd like to limit reconcile pending scans, having them happen
+	 * because a device is going offline and coming back sucks - but to do
+	 * that right we need to at least note somewhere /which/ targets have
+	 * extents on the pending list:
+	 */
+	try(bch2_set_reconcile_needs_scan(c,
+		(struct reconcile_scan) { .type = RECONCILE_SCAN_pending}, true));
+
+	return 0;
+}
+
+static int bch2_dev_may_offline(struct bch_fs *c, struct bch_dev *ca, int flags, struct printbuf *err)
+{
+	struct bch_devs_mask new_devs = c->devs_online;
+	__clear_bit(ca->dev_idx, new_devs.d);
+
+	struct bch_devs_mask new_rw_devs = c->allocator.rw_devs[0];
+	__clear_bit(ca->dev_idx, new_rw_devs.d);
+
+	if (!bch2_can_read_fs_with_devs(c, &new_devs, flags, err) ||
+	    (!c->opts.read_only &&
+	     !bch2_can_write_fs_with_devs(c, new_rw_devs, flags, err))) {
+		prt_printf(err, "Cannot offline required disk\n");
+		return bch_err_throw(c, device_state_not_allowed);
+	}
+
+	return 0;
+}
+
+int bch2_dev_offline(struct bch_fs *c, struct bch_dev *ca, int flags, struct printbuf *err)
+{
+	guard(rwsem_write)(&c->state_lock);
+
+	if (READ_ONCE(ca->removing))
+		return bch_err_throw(c, device_has_been_removed);
+
+	if (!bch2_dev_is_online(ca)) {
+		prt_printf(err, "Already offline\n");
+		return 0;
+	}
+
+	try(bch2_dev_may_offline(c, ca, flags, err));
+
+	__bch2_dev_offline(c, ca);
+	return 0;
+}
+
+int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets, struct printbuf *err)
+{
+	u64 old_nbuckets;
+	int ret = 0;
+
+	guard(rwsem_write)(&c->state_lock);
+
+	if (READ_ONCE(ca->removing))
+		return bch_err_throw(c, device_has_been_removed);
+
+	old_nbuckets = ca->mi.nbuckets;
+
+	if (nbuckets < ca->mi.nbuckets) {
+		prt_printf(err, "Cannot shrink yet\n");
+		return bch_err_throw(c, EINVAL_dev_resize_shrink);
+	}
+
+	bool wakeup_reconcile_pending = nbuckets > ca->mi.nbuckets;
+	struct reconcile_scan s = { .type = RECONCILE_SCAN_pending };
+	if (wakeup_reconcile_pending)
+		try(bch2_set_reconcile_needs_scan(c, s, false));
+
+	if (nbuckets > BCH_MEMBER_NBUCKETS_MAX) {
+		prt_printf(err, "New device size too big (%llu greater than max %u)\n",
+			   nbuckets, BCH_MEMBER_NBUCKETS_MAX);
+		return bch_err_throw(c, device_size_too_big);
+	}
+
+	if (bch2_dev_is_online(ca) &&
+	    get_capacity(ca->disk_sb.bdev->bd_disk) <
+	    ca->mi.bucket_size * nbuckets) {
+		prt_printf(err, "New size %llu larger than device size %llu\n",
+			   ca->mi.bucket_size * nbuckets,
+			   get_capacity(ca->disk_sb.bdev->bd_disk));
+		return bch_err_throw(c, device_size_too_small);
+	}
+
+	ret = bch2_dev_buckets_resize(c, ca, nbuckets);
+	if (ret) {
+		prt_printf(err, "bch2_dev_buckets_resize() error: %s\n", bch2_err_str(ret));
+		return ret;
+	}
+
+	ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
+	if (ret) {
+		prt_printf(err, "bch2_trans_mark_dev_sb() error: %s\n", bch2_err_str(ret));
+		return ret;
+	}
+
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+		guard(mutex)(&c->sb_lock);
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+		m->nbuckets = cpu_to_le64(nbuckets);
+
+		bch2_write_super(c);
+	}
+
+	if (ca->mi.freespace_initialized) {
+		ret = __bch2_dev_resize_alloc(ca, old_nbuckets, nbuckets);
+		if (ret) {
+			prt_printf(err, "__bch2_dev_resize_alloc() error: %s\n", bch2_err_str(ret));
+			return ret;
+		}
+	}
+
+	bch2_recalc_capacity(c);
+
+	if (wakeup_reconcile_pending)
+		try(bch2_set_reconcile_needs_scan(c, s, true));
+	return 0;
+}
+
+/* Resize on mount */
+
+int __bch2_dev_resize_alloc(struct bch_dev *ca, u64 old_nbuckets, u64 new_nbuckets)
+{
+	struct bch_fs *c = ca->fs;
+	u64 v[3] = { new_nbuckets - old_nbuckets, 0, 0 };
+
+	return bch2_trans_commit_do(ca->fs, NULL, NULL, 0,
+			bch2_disk_accounting_mod2(trans, false, v, dev_data_type,
+						  .dev = ca->dev_idx,
+						  .data_type = BCH_DATA_free)) ?:
+		bch2_dev_freespace_init(c, ca, old_nbuckets, new_nbuckets);
+}
+
+/* return with ref on ca->ref: */
+struct bch_dev *bch2_dev_lookup(struct bch_fs *c, const char *name)
+{
+	if (!strncmp(name, "/dev/", strlen("/dev/")))
+		name += strlen("/dev/");
+
+	for_each_member_device(c, ca)
+		if (!strcmp(name, ca->name)) {
+			bch2_dev_get(ca);
+			return ca;
+		}
+	return ERR_PTR(-BCH_ERR_ENOENT_dev_not_found);
+}
+
+/* blk_holder_ops: */
+
+static struct bch_fs *bdev_get_fs(struct block_device *bdev)
+	__releases(&bdev->bd_holder_lock)
+{
+	struct bch_sb_handle_holder *holder = bdev->bd_holder;
+	struct bch_fs *c = holder->c;
+
+	if (c && !bch2_ro_ref_tryget(c))
+		c = NULL;
+
+	mutex_unlock(&bdev->bd_holder_lock);
+
+	if (c)
+		wait_event(c->ro_ref_wait, test_bit(BCH_FS_started, &c->flags));
+	return c;
+}
+
+DEFINE_CLASS(bdev_get_fs, struct bch_fs *,
+	     bch2_ro_ref_put(_T), bdev_get_fs(bdev),
+	     struct block_device *bdev);
+
+/* returns with ref on ca->ref */
+static struct bch_dev *bdev_to_bch_dev(struct bch_fs *c, struct block_device *bdev)
+{
+	for_each_member_device(c, ca)
+		if (ca->disk_sb.bdev == bdev) {
+			bch2_dev_get(ca);
+			return ca;
+		}
+	return NULL;
+}
+
+static void bch2_fs_bdev_mark_dead(struct block_device *bdev, bool surprise)
+{
+	CLASS(bdev_get_fs, c)(bdev);
+	if (!c)
+		return;
+
+	struct super_block *sb = c->vfs_sb;
+	if (sb) {
+		/*
+		 * Not necessary, c->ro_ref guards against the filesystem being
+		 * unmounted - we only take this to avoid a warning in
+		 * sync_filesystem:
+		 */
+		down_read(&sb->s_umount);
+	}
+
+	guard(rwsem_write)(&c->state_lock);
+
+	struct bch_dev *ca = bdev_to_bch_dev(c, bdev);
+	if (ca) {
+		bool print = true;
+		CLASS(printbuf, buf)();
+		__bch2_log_msg_start(ca->name, &buf);
+		prt_printf(&buf, "offline from block layer\n");
+
+		bool dev = !bch2_dev_may_offline(c, ca, BCH_FORCE_IF_DEGRADED, &buf);
+		if (!dev && sb) {
+			if (!surprise)
+				sync_filesystem(sb);
+			shrink_dcache_sb(sb);
+			evict_inodes(sb);
+		}
+
+		if (!dev) {
+			bch2_journal_flush(&c->journal);
+			print = bch2_fs_emergency_read_only(c, &buf);
+		}
+
+		__bch2_dev_offline(c, ca);
+
+		if (print)
+			bch2_print_str(c, KERN_ERR, buf.buf);
+
+		bch2_dev_put(ca);
+	}
+
+	if (sb)
+		up_read(&sb->s_umount);
+}
+
+static void bch2_fs_bdev_sync(struct block_device *bdev)
+{
+	CLASS(bdev_get_fs, c)(bdev);
+	if (!c)
+		return;
+
+	struct super_block *sb = c->vfs_sb;
+	if (sb) {
+		/*
+		 * Not necessary, c->ro_ref guards against the filesystem being
+		 * unmounted - we only take this to avoid a warning in
+		 * sync_filesystem:
+		 */
+		guard(rwsem_read)(&sb->s_umount);
+		sync_filesystem(sb);
+	}
+}
+
+const struct blk_holder_ops bch2_sb_handle_bdev_ops = {
+	.mark_dead		= bch2_fs_bdev_mark_dead,
+	.sync			= bch2_fs_bdev_sync,
+};
