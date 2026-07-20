@@ -323,7 +323,16 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             }
                         }
                         Some(v) => {
-                            if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
+                            // String-member options (failure_domain) parse to a
+                            // placeholder 0 - the parse is validation only, the
+                            // value is the string itself, applied to the
+                            // bch_member at superblock write time (the
+                            // Opt_failure_domain arm in format_util.rs).
+                            // Routing the placeholder into bch_opts would drop
+                            // the string silently:
+                            if opt.type_ == c::opt_type::BCH_OPT_STR_MEMBER {
+                                push_dev_opt_str!(opt_id, val_str);
+                            } else if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut cur_dev_opts, opt_id, v);
                                 unconsumed_dev_option = true;
                             } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
