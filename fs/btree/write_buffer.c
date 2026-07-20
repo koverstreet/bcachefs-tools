@@ -931,7 +931,7 @@ static int fetch_wb_keys_from_journal(struct bch_fs *c, u64 max_seq)
 	bool blocked;
 	int ret = 0;
 
-	guard(mutex)(&j->buf_lock);
+	guard(mutex_noio)(&j->buf_lock);
 	bch2_journal_keys_to_write_buffer_lock(c, &dst);
 
 	while (!ret && (buf = bch2_next_write_buffer_flush_journal_buf(j, max_seq, &blocked))) {
