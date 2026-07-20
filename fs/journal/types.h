@@ -285,7 +285,7 @@ struct journal {
 	 * reservation: for synchronization between the btree write buffer code
 	 * and the journal write path:
 	 */
-	struct mutex		buf_lock;
+	struct mutex_noio	buf_lock;
 	/*
 	 * Ring of slots indexed by seq & JOURNAL_STATE_BUF_MASK; only used by
 	 * the reservation fastpath. Updated in journal_entry_open() when a new
