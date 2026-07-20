@@ -1051,6 +1051,20 @@ static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 	unsigned i, j, nr_have_parity = 0, nr_have_data = 0;
 
 	req->new_stripe_alloc = true;
+	/*
+	 * For erasure coding, distinct failure domains are a hard requirement,
+	 * not a preference: the allocator excludes devices sharing an
+	 * already-placed block's domain (see bch2_dev_domain_keys_update()).
+	 */
+	req->failure_domains_required = true;
+
+	/*
+	 * Rebuilt below from the current stripe blocks. We may be called twice
+	 * on the same req (full-stripe attempt, then stripe reuse), and the
+	 * released first-attempt buckets must not linger here - a stale bit
+	 * would wrongly exclude that device's whole domain, above.
+	 */
+	memset(&req->devs_chosen, 0, sizeof(req->devs_chosen));
 
 	/* * We bypass the sector allocator which normally does this: */
 	bitmap_and(req->devs_may_alloc.d, req->devs_may_alloc.d,
@@ -1063,8 +1077,11 @@ static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 		 * walk backpointers and update all extents that point to that
 		 * block when updating the stripe
 		 */
-		if (v->ptrs[i].dev != BCH_SB_MEMBER_INVALID)
+		if (v->ptrs[i].dev != BCH_SB_MEMBER_INVALID) {
 			__clear_bit(v->ptrs[i].dev, req->devs_may_alloc.d);
+			/* spread new blocks away from existing blocks' domains: */
+			__set_bit(v->ptrs[i].dev, req->devs_chosen.d);
+		}
 
 		if (i < nr_data)
 			nr_have_data++;
@@ -1769,6 +1786,16 @@ static void ec_stripe_head_devs_update(struct bch_fs *c, struct ec_stripe_head *
 	 */
 	h->insufficient_devs = h->nr_active_devs < h->redundancy + 2;
 
+	/*
+	 * One block per failure domain is a hard requirement (see
+	 * __new_stripe_alloc_buckets): too few domains for redundancy to mean
+	 * anything means no stripes at all. With no failure domains configured
+	 * each device is its own domain, so this only tightens the device-count
+	 * check above when devices share domains.
+	 */
+	unsigned nr_domains = bch2_target_nr_domains(c, &h->devs);
+	h->insufficient_devs |= nr_domains < h->redundancy + 2;
+
 	struct bch_devs_mask devs_leaving;
 	bitmap_andnot(devs_leaving.d, old_devs.d, h->devs.d, BCH_SB_MEMBERS_MAX);
 
@@ -1894,6 +1921,17 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 		unsigned active = min_t(unsigned, h->nr_active_devs, BCH_BKEY_PTRS_MAX);
 		unsigned nr_data = min_t(unsigned, active - h->redundancy,
 					 req->ec_max_data_blocks ?: ~0U);
+
+		/*
+		 * One block per failure domain: the stripe can't be wider than
+		 * the domains available. If a domain becomes unavailable, the
+		 * next stripe is allocated narrower rather than doubling up.
+		 * With no failure domains each device is its own domain, so this
+		 * is the usual device-count cap.
+		 */
+		unsigned nr_domains = bch2_target_nr_domains(c, &h->devs);
+		/* insufficient_devs was checked - at least redundancy + 2 domains: */
+		nr_data = min(nr_data, nr_domains - h->redundancy);
 
 		h->s = ec_new_stripe_alloc(c,
 					   h->devs,
