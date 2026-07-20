@@ -830,6 +830,38 @@ void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
 		c->errors.damaged_paths_alloc_err = true;
 }
 
+/*
+ * A damage entry's snapshot may itself be dead by report time - that's
+ * exactly how keys_deleted entries arise - so a failed resolution retries
+ * through the inode's surviving snapshot versions: the path in a live view
+ * still names the file for the user.
+ */
+static int damaged_path_resolve(struct btree_trans *trans, u64 inum,
+				u32 snapshot, struct printbuf *path)
+{
+	printbuf_reset(path);
+	int ret = bch2_inum_snapshot_to_path(trans, inum, snapshot, NULL, path);
+	if (!ret || bch2_err_matches(ret, BCH_ERR_transaction_restart))
+		return ret;
+
+	struct bkey_s_c k;
+	for_each_btree_key_norestart(trans, iter, BTREE_ID_inodes, POS(0, inum),
+				     BTREE_ITER_all_snapshots, k, ret) {
+		if (k.k->p.offset != inum)
+			break;
+		if (k.k->p.snapshot == snapshot || !bkey_is_inode(k.k))
+			continue;
+
+		printbuf_reset(path);
+		ret = bch2_inum_snapshot_to_path(trans, inum, k.k->p.snapshot,
+						 NULL, path);
+		if (!ret || bch2_err_matches(ret, BCH_ERR_transaction_restart))
+			return ret;
+	}
+
+	return ret ?: bch_err_throw(trans->c, ENOENT_inode);
+}
+
 void bch2_fsck_damaged_paths_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (!c->errors.damaged_paths.nr)
@@ -867,8 +899,8 @@ void bch2_fsck_damaged_paths_to_text(struct printbuf *out, struct bch_fs *c)
 		}
 
 		/* Resolve into a temp buffer so a restart doesn't duplicate output: */
-		int ret = lockrestart_do(trans, (printbuf_reset(&path),
-			bch2_inum_snapshot_to_path(trans, i->inum, i->snapshot, NULL, &path)));
+		int ret = lockrestart_do(trans,
+			damaged_path_resolve(trans, i->inum, i->snapshot, &path));
 		if (!ret)
 			prt_str(out, path.buf);
 		else
