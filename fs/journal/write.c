@@ -274,78 +274,77 @@ static CLOSURE_CALLBACK(journal_write_done)
 	 * Lock ordering: buf_lock, pin_resize_lock, then j->lock - same as the
 	 * flusher and the journal write path.
 	 */
-	mutex_lock(&j->buf_lock);
-
-	/*
-	 * pin_resize_lock held across the journal pin FIFO updates below; it
-	 * keeps the pin_list stable while we rebuild temp replicas entries from
-	 * the compact device list for refcount updates.
-	 */
-	percpu_down_read(&j->pin_resize_lock);
-	struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
-
-	if (unlikely(w->failed.nr)) {
-		union bch_replicas_padded r;
-		journal_pin_devs_to_replicas(&r, pin);
-		bch2_replicas_entry_put(c, &r.e);
-		pin->devs.nr = 0;
-	}
-
-	if (!pin->devs.nr && !w->empty) {
-		union bch_replicas_padded r;
-		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
-		err = bch2_replicas_entry_get(c, &r.e);
-		if (!err)
-			journal_pin_set_devs(pin, &w->devs_written);
-	}
-
-	if (unlikely(w->failed.nr || err)) {
-		CLASS(bch_log_msg, msg)(c);
-
-		/* Separate ratelimit_states for hard and soft errors */
-		msg.m.suppress = !err
-			? bch2_ratelimit(c)
-			: bch2_ratelimit(c);
-
-		prt_printf(&msg.m, "error writing journal entry %llu\n", seq_wrote);
-		bch2_io_failures_to_text(&msg.m, c, &w->failed);
-
-		if (!w->devs_written.nr)
-			err = bch_err_throw(c, journal_write_err);
-
-		if (!err) {
-			prt_printf(&msg.m, "wrote degraded to ");
-			bch2_devs_list_to_text(&msg.m, c, &w->devs_written);
-			prt_newline(&msg.m);
-		} else {
-			prt_printf(&msg.m, "error %s\n", bch2_err_str(err));
-			percpu_up_read(&j->pin_resize_lock);
-			bch2_fs_emergency_read_only(c, &msg.m);
-			percpu_down_read(&j->pin_resize_lock);
-		}
-	}
-
-	closure_debug_destroy(cl);
 
 	CLASS(darray_replicas_entry_refs, replicas_refs)();
+	scoped_guard(mutex_noio, &j->buf_lock) {
+		/*
+		 * pin_resize_lock held across the journal pin FIFO updates below; it
+		 * keeps the pin_list stable while we rebuild temp replicas entries from
+		 * the compact device list for refcount updates.
+		 */
+		percpu_down_read(&j->pin_resize_lock);
+		struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
 
-	spin_lock(&j->lock);
-	BUG_ON(seq_wrote < j->pin.front);
-	if (err && (!j->err_seq || seq_wrote < j->err_seq))
-		j->err_seq = seq_wrote;
+		if (unlikely(w->failed.nr)) {
+			union bch_replicas_padded r;
+			journal_pin_devs_to_replicas(&r, pin);
+			bch2_replicas_entry_put(c, &r.e);
+			pin->devs.nr = 0;
+		}
 
-	j->flushes_outstanding -= w->flush;
+		if (!pin->devs.nr && !w->empty) {
+			union bch_replicas_padded r;
+			bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
+			err = bch2_replicas_entry_get(c, &r.e);
+			if (!err)
+				journal_pin_set_devs(pin, &w->devs_written);
+		}
 
-	if (!j->free_buf || j->free_buf_size < w->buf_size) {
-		swap(j->free_buf,	w->data);
-		swap(j->free_buf_size,	w->buf_size);
+		if (unlikely(w->failed.nr || err)) {
+			CLASS(bch_log_msg, msg)(c);
+
+			/* Separate ratelimit_states for hard and soft errors */
+			msg.m.suppress = !err
+				? bch2_ratelimit(c)
+				: bch2_ratelimit(c);
+
+			prt_printf(&msg.m, "error writing journal entry %llu\n", seq_wrote);
+			bch2_io_failures_to_text(&msg.m, c, &w->failed);
+
+			if (!w->devs_written.nr)
+				err = bch_err_throw(c, journal_write_err);
+
+			if (!err) {
+				prt_printf(&msg.m, "wrote degraded to ");
+				bch2_devs_list_to_text(&msg.m, c, &w->devs_written);
+				prt_newline(&msg.m);
+			} else {
+				prt_printf(&msg.m, "error %s\n", bch2_err_str(err));
+				percpu_up_read(&j->pin_resize_lock);
+				bch2_fs_emergency_read_only(c, &msg.m);
+				percpu_down_read(&j->pin_resize_lock);
+			}
+		}
+
+		closure_debug_destroy(cl);
+
+		spin_lock(&j->lock);
+		BUG_ON(seq_wrote < j->pin.front);
+		if (err && (!j->err_seq || seq_wrote < j->err_seq))
+			j->err_seq = seq_wrote;
+
+		j->flushes_outstanding -= w->flush;
+
+		if (!j->free_buf || j->free_buf_size < w->buf_size) {
+			swap(j->free_buf,	w->data);
+			swap(j->free_buf_size,	w->buf_size);
+		}
+
+		/* kvfree can allocate memory, and can't be called under j->lock */
+		void *buf_to_free __free(kvfree) = w->data;
+		w->data = NULL;
+		w->buf_size = 0;
 	}
-
-	/* kvfree can allocate memory, and can't be called under j->lock */
-	void *buf_to_free __free(kvfree) = w->data;
-	w->data = NULL;
-	w->buf_size = 0;
-	mutex_unlock(&j->buf_lock);
 
 	bool completed = false;
 	bool last_seq_ondisk_updated = false;
@@ -814,7 +813,7 @@ CLOSURE_CALLBACK(bch2_journal_write)
 
 	j->write_start_time = local_clock();
 
-	scoped_guard(mutex, &j->buf_lock) {
+	scoped_guard(mutex_noio, &j->buf_lock) {
 		journal_buf_realloc(j, w);
 
 		ret = bch2_journal_write_prep(j, w);

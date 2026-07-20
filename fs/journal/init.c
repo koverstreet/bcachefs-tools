@@ -735,7 +735,7 @@ void bch2_fs_journal_init_early(struct journal *j)
 {
 	static struct lock_class_key res_key;
 
-	mutex_init(&j->buf_lock);
+	mutex_noio_init(&j->buf_lock);
 	spin_lock_init(&j->lock);
 	spin_lock_init(&j->err_lock);
 	INIT_DELAYED_WORK(&j->write_work, bch2_journal_write_work);
