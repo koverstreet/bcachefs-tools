@@ -67,6 +67,16 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 	if (k.k->type != KEY_TYPE_subvolume)
 		return 0;
 
+	/*
+	 * A tombstoned subvolume is mid-deletion: delete_dead_snapshots (a
+	 * later pass) reaps it. Its unreachability is the expected not-live
+	 * state, not corruption - reattaching it here manufactures a dirent to
+	 * a subvolume that's about to go away, wedging the verify pass. Same
+	 * reasoning as check_unreachable_inode()'s will_delete skip.
+	 */
+	if (bch2_subvolume_state_compat(bkey_s_c_to_subvolume(k).v) != SUBVOLUME_STATE_live)
+		return 0;
+
 	CLASS(btree_iter, parent_iter)(trans, BTREE_ID_subvolumes, POS_MIN, 0);
 
 	subvol_inum start = {
