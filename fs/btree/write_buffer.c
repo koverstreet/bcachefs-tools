@@ -603,16 +603,22 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 	bool accounting_replay_done = test_bit(BCH_FS_accounting_replay_done, &c->flags);
 	int ret = 0;
 
+	/*
+	 * The flush allocates under the write buffer locks (flush shards, key
+	 * array resizes), and with swap on bcachefs those locks are on the
+	 * reclaim path - all of flush runs NOIO so allocations can't recurse
+	 * into the IO this flush is needed to complete:
+	 */
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+
 	try(bch2_journal_error(&c->journal));
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
-		if (!wb->flushing.keys.nr) {
-			guard(mutex)(&wb->inc.lock);
-			move_keys_from_inc_to_flushing(wb);
-		} else if (mutex_trylock(&wb->inc.lock)) {
-			move_keys_from_inc_to_flushing(wb);
-			mutex_unlock(&wb->inc.lock);
-		}
+	if (!wb->flushing.keys.nr) {
+		guard(mutex)(&wb->inc.lock);
+		move_keys_from_inc_to_flushing(wb);
+	} else if (mutex_trylock(&wb->inc.lock)) {
+		move_keys_from_inc_to_flushing(wb);
+		mutex_unlock(&wb->inc.lock);
 	}
 
 	if (!wb->flushing.keys.nr)
@@ -833,6 +839,14 @@ err:
 static void bch2_journal_keys_to_write_buffer_lock(struct bch_fs *c,
 						   struct journal_keys_to_wb *dst)
 {
+	/*
+	 * Intake allocates under the write buffer locks (key array resizes,
+	 * accounting pushes), which sit on the reclaim path when swap is on
+	 * bcachefs: callers must have established a NOIO scope. Both current
+	 * callers hold j->buf_lock, a mutex_noio, across the whole bracket:
+	 */
+	EBUG_ON(!(current->flags & PF_MEMALLOC_NOIO));
+
 	memset(dst, 0, sizeof(*dst));
 
 	for (enum bch_wb_btree idx = 0; idx < BCH_WB_BTREE_NR; idx++) {
@@ -1354,6 +1368,9 @@ int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_
 
 int bch2_btree_write_buffer_resize(struct bch_fs *c, size_t new_size)
 {
+	/* Reallocates the key arrays under the write buffer locks: */
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+
 	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
 		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
 		try(wb_keys_resize(&wb->flushing, new_size));
