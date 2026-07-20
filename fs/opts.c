@@ -295,6 +295,9 @@ const struct bch_option bch2_opt_table[] = {
 				.choices = _choices,			\
 				.choices_allowed_mask = _choices_allowed_mask
 #define OPT_FN(_fn)		.type = BCH_OPT_FN, .fn	= _fn
+#define OPT_STR_MEMBER(_field)	.type = BCH_OPT_STR_MEMBER,		\
+				.member_offset = offsetof(struct bch_member, _field),\
+				.member_size = sizeof(((struct bch_member *) NULL)->_field)
 
 #define x(_name, _bits, _flags, _type, _sb_opt, _default, _hint, _help)	\
 	[Opt_##_name] = {						\
@@ -481,6 +484,20 @@ int bch2_opt_parse(struct bch_fs *c,
 		*res = v;
 		break;
 	}
+	case BCH_OPT_STR_MEMBER:
+		if (!val) {
+			prt_printf(err, "%s: required value", opt->attr.name);
+			return -BCH_ERR_EINVAL_opt_parse_str_required;
+		}
+		if (strlen(val) > opt->member_size) {
+			if (err)
+				prt_printf(err, "%s: too long (max %u bytes)",
+					   opt->attr.name, opt->member_size);
+			return -ENAMETOOLONG;
+		}
+		/* Applied to the member directly in __bch2_opt_set_sb(): */
+		*res = 0;
+		break;
 	case BCH_OPT_FN:
 		ret = opt->fn.parse(c, val, res, err);
 
@@ -535,6 +552,9 @@ __cold void bch2_opt_to_text(struct printbuf *out,
 		break;
 	case BCH_OPT_FN:
 		opt->fn.to_text(out, c, sb, v);
+		break;
+	case BCH_OPT_STR_MEMBER:
+		/* Rendered per-device from the member (see bch2_member_to_text) */
 		break;
 	default:
 		BUG();
@@ -918,7 +938,7 @@ int bch2_opts_from_sb(struct bch_opts *opts, struct bch_sb *sb)
 }
 
 bool __bch2_opt_set_sb(struct bch_sb *sb, int dev_idx,
-		       const struct bch_option *opt, u64 v)
+		       const struct bch_option *opt, u64 v, const char *val)
 {
 	bool changed = false;
 
@@ -953,14 +973,33 @@ bool __bch2_opt_set_sb(struct bch_sb *sb, int dev_idx,
 		opt->set_member(m, v);
 	}
 
+	if (opt->type == BCH_OPT_STR_MEMBER &&
+	    (opt->flags & OPT_DEVICE) && dev_idx >= 0) {
+		if (WARN(!bch2_member_exists(sb, dev_idx),
+			 "tried to set device option %s on nonexistent device %i",
+			 opt->attr.name, dev_idx))
+			return false;
+
+		struct bch_member *m = bch2_members_v2_get_mut(sb, dev_idx);
+		char *field = (char *) m + opt->member_offset;
+		size_t len = val ? strlen(val) : 0;
+
+		/* zero-padded, so equal strings compare equal in the interning: */
+		for (unsigned i = 0; i < opt->member_size; i++) {
+			char want = i < len ? val[i] : 0;
+			changed |= field[i] != want;
+			field[i] = want;
+		}
+	}
+
 	return changed;
 }
 
 bool bch2_opt_set_sb(struct bch_fs *c, struct bch_dev *ca,
-		     const struct bch_option *opt, u64 v)
+		     const struct bch_option *opt, u64 v, const char *val)
 {
 	guard(mutex_noio)(&c->sb_lock);
-	bool changed = __bch2_opt_set_sb(c->disk_sb.sb, ca ? ca->dev_idx : -1, opt, v);
+	bool changed = __bch2_opt_set_sb(c->disk_sb.sb, ca ? ca->dev_idx : -1, opt, v, val);
 	if (changed)
 		bch2_write_super(c);
 	return changed;

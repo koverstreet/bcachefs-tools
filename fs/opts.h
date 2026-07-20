@@ -81,6 +81,8 @@ enum opt_type {
 	BCH_OPT_STR,
 	BCH_OPT_BITFIELD,
 	BCH_OPT_FN,
+	/* A free-form string stored directly in a bch_member char[] field: */
+	BCH_OPT_STR_MEMBER,
 };
 
 struct bch_opt_fn {
@@ -694,6 +696,9 @@ struct bch_option {
 	u64			(*get_ext)(const struct bch_sb_field_ext *);
 	void			(*set_ext)(struct bch_sb_field_ext *, u64);
 
+	/* BCH_OPT_STR_MEMBER: the bch_member char[] field the string lives in */
+	unsigned		member_offset;
+	unsigned		member_size;
 };
 
 extern const struct bch_option bch2_opt_table[];
@@ -704,10 +709,10 @@ void bch2_opt_set_by_id(struct bch_opts *, enum bch_opt_id, u64);
 
 u64 bch2_opt_from_sb(struct bch_sb *, enum bch_opt_id, int);
 int bch2_opts_from_sb(struct bch_opts *, struct bch_sb *);
-bool __bch2_opt_set_sb(struct bch_sb *, int, const struct bch_option *, u64);
+bool __bch2_opt_set_sb(struct bch_sb *, int, const struct bch_option *, u64, const char *);
 
 struct bch_dev;
-bool bch2_opt_set_sb(struct bch_fs *, struct bch_dev *, const struct bch_option *, u64);
+bool bch2_opt_set_sb(struct bch_fs *, struct bch_dev *, const struct bch_option *, u64, const char *);
 
 int bch2_opt_lookup(const char *);
 int bch2_opt_validate(const struct bch_option *, u64, struct printbuf *);

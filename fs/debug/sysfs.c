@@ -777,6 +777,14 @@ static ssize_t sysfs_opt_show(struct bch_fs *c,
 	u64 v;
 
 	if (ca) {
+		if (opt->type == BCH_OPT_STR_MEMBER) {
+			/* The value lives in the member, not a u64 - render it here: */
+			guard(mutex_noio)(&c->sb_lock);
+			struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
+			prt_printf(out, "%.*s\n", (int) opt->member_size,
+				   (char *) &m + opt->member_offset);
+			return 0;
+		}
 		if (!((opt->flags & OPT_DEVICE) && opt->get_member))
 			return bch_err_throw(c, EINVAL_sysfs_opt_not_found);
 		v = bch2_opt_from_sb(c->disk_sb.sb, id, ca->dev_idx);
@@ -814,16 +822,18 @@ static ssize_t sysfs_opt_store(struct bch_fs *c,
 	guard(opt_change_lock)(c);
 	CLASS(opt_change_scope, opt_scope)(c);
 
+	char *val = strim(tmp);
 	u64 v;
-	ret =   bch2_opt_parse(c, opt, strim(tmp), &v, NULL) ?:
+	ret =   bch2_opt_parse(c, opt, val, &v, NULL) ?:
 		bch2_opt_hook_pre_set(c, ca, 0, id, v, true, &opt_scope);
 
 	if (!ret) {
-		bool is_sb = opt->get_sb || opt->get_member || opt->get_ext;
+		bool is_sb = opt->get_sb || opt->get_member || opt->get_ext ||
+			     opt->type == BCH_OPT_STR_MEMBER;
 		bool changed = false;
 
 		if (is_sb) {
-			changed = bch2_opt_set_sb(c, ca, opt, v);
+			changed = bch2_opt_set_sb(c, ca, opt, v, val);
 		} else if (!ca) {
 			changed = bch2_opt_get_by_id(&c->opts, id) != v;
 		} else {
