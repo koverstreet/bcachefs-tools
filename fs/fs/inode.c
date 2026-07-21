@@ -1483,6 +1483,21 @@ static int may_delete_deleted_inode(struct btree_trans *trans, struct bpos pos,
 
 	bch2_inode_unpack(trans->c, k, inode);
 
+	/*
+	 * Subvolume roots are deleted by the subvolume deletion path, never
+	 * the inode reaper (see bch2_inode_is_subvolume_root()). A
+	 * deleted_inodes entry for one is expected, not damage - the trigger
+	 * enrolls any inode transitioning to unlinked - but consuming it here
+	 * would race the snapshot sweep; crash recovery for subvolume deletion
+	 * is check_subvols(), keyed off SUBVOLUME_STATE_unlinked. Just drop
+	 * the entry:
+	 */
+	if (bch2_inode_is_subvolume_root(inode)) {
+		if (from_deleted_inodes)
+			goto delete;
+		return bch_err_throw(c, inode_is_subvolume_root);
+	}
+
 	if (S_ISDIR(inode->bi_mode)) {
 		ret = bch2_empty_dir_snapshot(trans, pos.offset, 0, pos.snapshot);
 		if (fsck_err_on(from_deleted_inodes &&

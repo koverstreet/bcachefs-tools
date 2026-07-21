@@ -311,6 +311,7 @@
 	x(EINVAL,			inode_unpack_error)			\
 	x(EINVAL,			inode_not_unlinked)			\
 	x(EINVAL,			inode_has_child_snapshot)		\
+	x(EINVAL,			inode_is_subvolume_root)		\
 	x(EINVAL,			varint_decode_error)			\
 	x(EINVAL,			erasure_coding_found_btree_node)	\
 	x(EINVAL,			erasure_coding_stripe_update_err)	\
