@@ -1734,7 +1734,14 @@ static int check_dirent_to_subvol(struct btree_trans *trans, struct btree_iter *
 			return bch_err_throw(c, fsck_repair_unimplemented);
 		}
 
-		struct bkey_i_dirent *new_dirent = errptr_try(bch2_bkey_make_mut_typed(trans, iter, &d.s_c, 0, dirent));
+		/*
+		 * The dirent is rewritten at its own position, which may be an
+		 * interior snapshot node - dirents in old snapshots need this
+		 * repair too:
+		 */
+		struct bkey_i_dirent *new_dirent =
+			errptr_try(bch2_bkey_make_mut_typed(trans, iter, &d.s_c,
+						BTREE_UPDATE_internal_snapshot_node, dirent));
 
 		new_dirent->v.d_parent_subvol = cpu_to_le32(new_parent_subvol);
 	}
