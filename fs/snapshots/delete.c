@@ -770,14 +770,12 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 	}
 
 	/*
-	 * The leaf check above is this body's last restart point: everything
-	 * below is in-memory table lookups and list pushes, so a transaction
-	 * restart replays the body having collected nothing. The lists aren't
-	 * transactional - keep restartable work above this line, or
-	 * collection double-adds on replay. (Repairs invalidate collected
-	 * state differently: the deletion path resets the lists wholesale
-	 * and rescans.)
-	 *
+	 * The loop's per-key commit can restart after the pushes below and
+	 * replay this body - the lists aren't transactional, so every push
+	 * must be idempotent: nodup adds and has_id guards, or collection
+	 * double-adds on replay. (Repairs invalidate collected state
+	 * differently: the deletion path resets the lists wholesale and
+	 * rescans.)
 	 */
 	struct snapshot_delete *d = &c->snapshots.delete;
 	u32 live_child = 0, nr_live_children = 0;
@@ -827,7 +825,7 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 						    bch2_snapshot_tree(c, s.k->p.offset)));
 
 		if (!nr_live_children) {
-			try(snapshot_list_add(c, &d->delete_leaves, s.k->p.offset));
+			try(snapshot_list_add_nodup(c, &d->delete_leaves, s.k->p.offset));
 		} else {
 			struct snapshot_interior_delete n = {
 				.id		= s.k->p.offset,
@@ -839,10 +837,13 @@ static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s
 			 * nodes, but we still track them so that we can find
 			 * the correct live_child when deleting parents, above:
 			 */
-			if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys)
-				try(darray_push(&d->delete_interior, n));
-			else
-				try(darray_push(&d->no_keys, n));
+			if (bch2_snapshot_state(s.v) != SNAPSHOT_STATE_no_keys) {
+				if (!interior_delete_has_id(&d->delete_interior, n.id))
+					try(darray_push(&d->delete_interior, n));
+			} else {
+				if (!interior_delete_has_id(&d->no_keys, n.id))
+					try(darray_push(&d->no_keys, n));
+			}
 		}
 	}
 
@@ -926,9 +927,16 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 
 	/*
 	 * For every snapshot node: If we have no live children and it's not
-	 * pointed to by a subvolume, delete it:
+	 * pointed to by a subvolume, delete it.
+	 *
+	 * The per-key commit is for the childless-no_keys fsck_err: its fix
+	 * is out-of-band (the node is only collected here, deleted later),
+	 * but the fsck_err queues its repair log entry on this trans - which
+	 * would otherwise never commit, only be dropped at the next
+	 * trans_begin (the iter.c dropped-updates WARN):
 	 */
-	try(for_each_btree_key(trans, iter, BTREE_ID_snapshots, POS_MIN, 0, k,
+	try(for_each_btree_key_commit(trans, iter, BTREE_ID_snapshots, POS_MIN, 0, k,
+		NULL, NULL, 0,
 		check_should_delete_snapshot(trans, k)));
 
 	struct snapshot_delete *d = &c->snapshots.delete;
