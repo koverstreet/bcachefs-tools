@@ -245,6 +245,7 @@ enum bch_fsck_flags {
 	x(subvol_not_master_and_not_snapshot,			187,	FSCK_AUTOFIX)	\
 	x(subvol_to_missing_root,				188,	FSCK_AUTOFIX)	\
 	x(subvol_root_wrong_bi_subvol,				189,	FSCK_AUTOFIX)	\
+	x(subvol_root_unlinked_flag_missing,			383,	FSCK_AUTOFIX)	\
 	x(bkey_in_missing_snapshot,				190,	0)		\
 	x(bkey_in_deleted_snapshot,				315,	FSCK_AUTOFIX)	\
 	x(inode_pos_inode_nonzero,				191,	0)		\
@@ -394,7 +395,7 @@ enum bch_fsck_flags {
 	x(inode_has_access_acl_flag_wrong,			366,	FSCK_AUTOFIX)	\
 	x(inode_has_default_acl_flag_wrong,			367,	FSCK_AUTOFIX)	\
 	x(dirent_to_inode_in_descendant_snapshot,		368,	FSCK_AUTOFIX)	\
-	x(MAX,							383,	0)
+	x(MAX,							384,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,

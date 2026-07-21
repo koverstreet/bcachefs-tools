@@ -1006,19 +1006,35 @@ static int check_inode(struct btree_trans *trans,
 	}
 
 	if (S_ISDIR(u.bi_mode) && (u.bi_flags & BCH_INODE_unlinked)) {
-		/* Check for this early so that check_unreachable_inode() will reattach it */
-
-		ret = bch2_empty_dir_snapshot(trans, k.k->p.offset, 0, k.k->p.snapshot);
-		if (ret && ret != -BCH_ERR_ENOTEMPTY_dir_not_empty)
+		/*
+		 * An unlinked subvolume root legitimately carries the flag -
+		 * and is legitimately non-empty, since the snapshot sweep is
+		 * what deletes the contents. Only strip it when the subvolume
+		 * isn't being deleted: the subvolume key is what links a
+		 * subvolume root, so a live subvolume means this inode is not
+		 * actually unlinked.
+		 */
+		ret = bch2_inode_is_subvolume_root(&u)
+			? bch2_subvolume_deletion_pending(trans, u.bi_subvol, u.bi_snapshot)
+			: 0;
+		if (ret < 0)
 			return ret;
 
-		fsck_err_on(ret, trans, inode_dir_unlinked_but_not_empty,
-			    "dir unlinked but not empty\n%s",
-			    (printbuf_reset(&buf),
-			     bch2_inode_unpacked_to_text(&buf, &u),
-			     buf.buf));
-		u.bi_flags &= ~BCH_INODE_unlinked;
-		do_update = true;
+		if (!ret) {
+			/* Check for this early so that check_unreachable_inode() will reattach it */
+
+			ret = bch2_empty_dir_snapshot(trans, k.k->p.offset, 0, k.k->p.snapshot);
+			if (ret && ret != -BCH_ERR_ENOTEMPTY_dir_not_empty)
+				return ret;
+
+			fsck_err_on(ret, trans, inode_dir_unlinked_but_not_empty,
+				    "dir unlinked but not empty\n%s",
+				    (printbuf_reset(&buf),
+				     bch2_inode_unpacked_to_text(&buf, &u),
+				     buf.buf));
+			u.bi_flags &= ~BCH_INODE_unlinked;
+			do_update = true;
+		}
 		ret = 0;
 	}
 
@@ -1049,7 +1065,13 @@ static int check_inode(struct btree_trans *trans,
 	}
 	ret = 0;
 
+	/*
+	 * Unlinked subvolume roots are skipped here: their deletion belongs
+	 * to the subvolume path (check_subvols() resumes it after a crash),
+	 * not the inode reaper or the deleted_inodes btree:
+	 */
 	if ((u.bi_flags & BCH_INODE_unlinked) &&
+	    !bch2_inode_is_subvolume_root(&u) &&
 	    !(u.bi_flags & BCH_INODE_has_child_snapshot)) {
 		if (!test_bit(BCH_FS_started, &c->flags)) {
 			/*
@@ -1174,35 +1196,43 @@ static int check_inode(struct btree_trans *trans,
 			prt_str(&buf, "(missing)");
 
 		/*
-		 * bi_dir/bi_dir_offset zeroed on a subvolume root means the
-		 * subvolume was unlinked: deletion tombstones the subvolume and
-		 * marks its snapshot will_delete together, leaving this root
-		 * inode pending sweep by delete_dead_snapshots(). The subvolume
-		 * reads as missing, but that's the expected not-live state, not
-		 * corruption - leave bi_subvol be; the whole snapshot is going
-		 * away.
+		 * A subvolume root whose subvolume is being deleted: the
+		 * subvolume reads as missing here (unlinked subvolumes still
+		 * resolve, but deleted tombstones and swept keys don't) while
+		 * the root inode waits for the snapshot sweep to delete it -
+		 * not corruption, leave bi_subvol be, the whole snapshot is
+		 * going away. Only when the deletion chain corroborates,
+		 * though: subvolume gone but snapshot still live means the
+		 * chain broke, and the repair below must run or
+		 * check_unreachable_inodes() meets an orphan whose bi_subvol
+		 * points nowhere and the reattach fail-stops the pass (field
+		 * report, 2026-07-21).
 		 *
-		 * Only when the deletion chain corroborates, though: an
-		 * orderly deletion tombstones the subvolume (which reports
-		 * ENOENT here) and marks the snapshot will_delete together.
-		 * Subvolume gone but snapshot still live means the chain
-		 * broke - damage, not pending deletion - and the repair
-		 * below must run, or check_unreachable_inodes() meets an
-		 * orphan whose bi_subvol points nowhere and the reattach
-		 * fail-stops the pass (field report, 2026-07-21).
-		 *
-		 * The unlinked flag also corroborates: the delete path is
-		 * gaining "set the unlinked flag on the root inode", but
-		 * every filesystem deleted-on before that has flag-less
-		 * pending roots, so the flag alone can't be required:
+		 * Pending roots carry BCH_INODE_unlinked - no dirent points at
+		 * them, by design, and the sweep rather than the inode reaper
+		 * deletes them (see bch2_inode_is_subvolume_root()).
+		 * Filesystems that deleted subvolumes before the delete path
+		 * set the flag have flag-less pending roots; converge them:
 		 */
-		bool subvol_unlinked = ret &&
-			!bch2_inode_has_backpointer(&u) &&
-			((u.bi_flags & BCH_INODE_unlinked) ||
-			 (!snapshot_ret &&
-			  bch2_snapshot_state_compat(&snapshot) != SNAPSHOT_STATE_live));
+		bool deletion_pending = false;
+		if (ret && !bch2_inode_has_backpointer(&u)) {
+			int ret2 = bch2_subvolume_deletion_pending(trans, u.bi_subvol,
+								   u.bi_snapshot);
+			if (ret2 < 0)
+				return ret2;
+			deletion_pending = ret2;
+		}
 
-		if (!subvol_unlinked &&
+		if (deletion_pending &&
+		    fsck_err_on(!(u.bi_flags & BCH_INODE_unlinked),
+				trans, subvol_root_unlinked_flag_missing,
+				"unlinked subvolume root missing BCH_INODE_unlinked\n%s",
+				buf.buf)) {
+			u.bi_flags |= BCH_INODE_unlinked;
+			do_update = true;
+		}
+
+		if (!deletion_pending &&
 		    (fsck_err_on(ret,
 				trans, inode_bi_subvol_missing,
 				"inode bi_subvol points to missing subvolume %u\n%s",
