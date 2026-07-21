@@ -2140,8 +2140,18 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		unsigned x_type = bkey_s_c_to_xattr(k).v->x_type;
 		struct inode_walker_entry *i2;
 
+		/*
+		 * One repair per visible snapshot version, bounded only by
+		 * snapshot count: commit-and-restart before the batch
+		 * outgrows the trans bump allocator. The re-drive converges -
+		 * the walker revalidates on commit (commit_count), so
+		 * committed flag repairs no longer fire:
+		 */
 		if (x_type == KEY_TYPE_XATTR_INDEX_POSIX_ACL_ACCESS)
-			for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i2)
+			for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i2) {
+				try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,
+							BCH_TRANS_COMMIT_no_enospc));
+
 				if (!i2->whiteout &&
 				    fsck_err_on(!(i2->inode.bi_flags & BCH_INODE_has_access_acl),
 						trans, inode_has_access_acl_flag_wrong,
@@ -2151,9 +2161,13 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 					inode_u.bi_flags |= BCH_INODE_has_access_acl;
 					try(__bch2_fsck_write_inode(trans, &inode_u));
 				}
+			}
 
 		if (x_type == KEY_TYPE_XATTR_INDEX_POSIX_ACL_DEFAULT)
-			for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i2)
+			for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i2) {
+				try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,
+							BCH_TRANS_COMMIT_no_enospc));
+
 				if (!i2->whiteout &&
 				    fsck_err_on(!(i2->inode.bi_flags & BCH_INODE_has_default_acl),
 						trans, inode_has_default_acl_flag_wrong,
@@ -2163,6 +2177,7 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 					inode_u.bi_flags |= BCH_INODE_has_default_acl;
 					try(__bch2_fsck_write_inode(trans, &inode_u));
 				}
+			}
 	}
 
 	bool need_second_pass = false;
