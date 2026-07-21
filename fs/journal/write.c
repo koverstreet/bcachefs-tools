@@ -275,6 +275,15 @@ static CLOSURE_CALLBACK(journal_write_done)
 	 * flusher and the journal write path.
 	 */
 
+	/*
+	 * kvfree can sleep, so it can't run under j->lock (or any lock here):
+	 * function scope defers the cleanup until return, after every lock is
+	 * dropped. Declared inside the scoped_guard below, it would run at the
+	 * block's closing brace - where j->lock, taken inside the block, is
+	 * still held for the completion loop that follows:
+	 */
+	void *buf_to_free __free(kvfree) = NULL;
+
 	CLASS(darray_replicas_entry_refs, replicas_refs)();
 	scoped_guard(mutex_noio, &j->buf_lock) {
 		/*
@@ -340,8 +349,7 @@ static CLOSURE_CALLBACK(journal_write_done)
 			swap(j->free_buf_size,	w->buf_size);
 		}
 
-		/* kvfree can allocate memory, and can't be called under j->lock */
-		void *buf_to_free __free(kvfree) = w->data;
+		buf_to_free = w->data;
 		w->data = NULL;
 		w->buf_size = 0;
 	}
