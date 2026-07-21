@@ -1526,7 +1526,16 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 				u32 snapshot = i->inode.bi_snapshot;
 				i->inode = good_ancestor->inode;
 				i->inode.bi_snapshot = snapshot;
-				try(bch2_fsck_write_inode(trans, &i->inode));
+				/*
+				 * __ (non-committing) version: we're inside the
+				 * caller's commit_do(). The self-committing one
+				 * eats restarts, and when the following lazy
+				 * commit then has nothing to do it returns 0 -
+				 * leaking the advanced restart_count to the
+				 * caller's verify (panic, restart_count N
+				 * should be M):
+				 */
+				try(__bch2_fsck_write_inode(trans, &i->inode));
 				try(bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 			}
 		}
@@ -1554,7 +1563,8 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 			else
 				i->inode.bi_mode |= S_IFREG;
 
-			try(bch2_fsck_write_inode(trans, &i->inode));
+			/* __: see above - don't eat restarts under the caller's commit_do() */
+			try(__bch2_fsck_write_inode(trans, &i->inode));
 			try(bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 		}
 	}
