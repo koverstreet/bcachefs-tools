@@ -1183,8 +1183,26 @@ static int check_inode(struct btree_trans *trans,
 		 * reads as missing, but that's the expected not-live state, not
 		 * corruption - leave bi_subvol be; the whole snapshot is going
 		 * away.
+		 *
+		 * Only when the deletion chain corroborates, though: an
+		 * orderly deletion tombstones the subvolume (which reports
+		 * ENOENT here) and marks the snapshot will_delete together.
+		 * Subvolume gone but snapshot still live means the chain
+		 * broke - damage, not pending deletion - and the repair
+		 * below must run, or check_unreachable_inodes() meets an
+		 * orphan whose bi_subvol points nowhere and the reattach
+		 * fail-stops the pass (field report, 2026-07-21).
+		 *
+		 * The unlinked flag also corroborates: the delete path is
+		 * gaining "set the unlinked flag on the root inode", but
+		 * every filesystem deleted-on before that has flag-less
+		 * pending roots, so the flag alone can't be required:
 		 */
-		bool subvol_unlinked = ret && !bch2_inode_has_backpointer(&u);
+		bool subvol_unlinked = ret &&
+			!bch2_inode_has_backpointer(&u) &&
+			((u.bi_flags & BCH_INODE_unlinked) ||
+			 (!snapshot_ret &&
+			  bch2_snapshot_state_compat(&snapshot) != SNAPSHOT_STATE_live));
 
 		if (!subvol_unlinked &&
 		    (fsck_err_on(ret,
