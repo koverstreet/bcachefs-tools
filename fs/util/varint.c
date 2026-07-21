@@ -26,7 +26,7 @@ int bch2_varint_encode(u8 *out, u64 v)
 
 	if (likely(bytes < 9)) {
 		v <<= bytes;
-		v |= ~(~0 << (bytes - 1));
+		v |= ~(~0U << (bytes - 1));
 		v_le = cpu_to_le64(v);
 		memcpy(out, &v_le, bytes);
 	} else {
@@ -39,17 +39,18 @@ int bch2_varint_encode(u8 *out, u64 v)
 }
 
 /**
- * bch2_varint_decode - encode a variable length integer
+ * bch2_varint_decode - decode a variable length integer
  * @in:		varint to decode
  * @end:	end of buffer to decode from
  * @out:	on success, decoded integer
- * Returns:	size in bytes of the decoded integer - or -1 on failure (would
- * have read past the end of the buffer)
+ * Returns:	size in bytes of the decoded integer - or
+ * -BCH_ERR_varint_decode_error on failure (would have read past the end of
+ * the buffer)
  */
 int bch2_varint_decode(const u8 *in, const u8 *end, u64 *out)
 {
 	unsigned bytes = likely(in < end)
-		? ffz(*in & 255) + 1
+		? ffz(*in) + 1
 		: 1;
 	u64 v;
 
@@ -101,8 +102,9 @@ int bch2_varint_encode_fast(u8 *out, u64 v)
  * @in:		varint to decode
  * @end:	end of buffer to decode from
  * @out:	on success, decoded integer
- * Returns:	size in bytes of the decoded integer - or -1 on failure (would
- * have read past the end of the buffer)
+ * Returns:	size in bytes of the decoded integer - or
+ * -BCH_ERR_varint_decode_error on failure (would have read past the end of
+ * the buffer)
  *
  * This version assumes that it is safe to read at most 8 bytes past the end of
  * @end (we still return an error if the varint extends past @end).
