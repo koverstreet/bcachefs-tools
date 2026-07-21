@@ -314,9 +314,9 @@ enum bch_fsck_flags {
 	x(xattr_invalid_type,					235,	0)		\
 	x(xattr_name_invalid_chars,				236,	0)		\
 	x(xattr_in_missing_inode,				237,	0)		\
-	x(root_subvol_missing,					238,	0)		\
-	x(root_dir_missing,					239,	0)		\
-	x(root_inode_not_dir,					240,	0)		\
+	x(root_subvol_missing,					238,	FSCK_AUTOFIX)	\
+	x(root_dir_missing,					239,	FSCK_AUTOFIX)	\
+	x(root_inode_not_dir,					240,	FSCK_AUTOFIX)	\
 	x(dir_loop,						241,	FSCK_AUTOFIX)	\
 	x(hash_table_key_duplicate,				242,	FSCK_AUTOFIX)	\
 	x(hash_table_key_wrong_offset,				243,	FSCK_AUTOFIX)	\
