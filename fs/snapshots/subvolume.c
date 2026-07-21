@@ -662,7 +662,16 @@ static int __bch2_subvolume_set_deleted(struct btree_trans *trans, u32 subvolid)
 
 static int bch2_subvolume_set_deleted(struct btree_trans *trans, u32 subvolid)
 {
-	int ret = bch2_subvolumes_reparent(trans, subvolid) ?:
+	/*
+	 * The fsck caller (check_subvol's unlinked branch) can arrive with
+	 * repairs - and their fsck_err journal log entries - still queued;
+	 * reparent's lockrestart_do would drop them at trans_begin (the
+	 * iter.c dropped-updates WARN). Flush first: commit_lazy is free
+	 * when nothing is queued, and its restart-on-success re-drives
+	 * check_subvol, whose committed fixes don't refire:
+	 */
+	int ret = bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
+		bch2_subvolumes_reparent(trans, subvolid) ?:
 		commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 			  __bch2_subvolume_set_deleted(trans, subvolid));
 	return ret;
