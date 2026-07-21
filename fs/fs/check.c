@@ -2386,14 +2386,23 @@ static int check_root_trans(struct btree_trans *trans)
 
 	if (mustfix_fsck_err_on(ret,
 				trans, root_dir_missing,
-				"root directory missing") ||
-	    mustfix_fsck_err_on(!S_ISDIR(root_inode.bi_mode),
-				trans, root_inode_not_dir,
-				"root inode not a directory")) {
+				"root directory missing")) {
 		bch2_inode_init(c, &root_inode, 0, 0, S_IFDIR|0755,
 				0, NULL);
 		root_inode.bi_inum = inum;
 		root_inode.bi_snapshot = snapshot;
+
+		ret = __bch2_fsck_write_inode(trans, &root_inode);
+		bch_err_msg(c, ret, "writing root inode");
+	} else if (mustfix_fsck_err_on(!S_ISDIR(root_inode.bi_mode),
+				trans, root_inode_not_dir,
+				"root inode not a directory")) {
+		/*
+		 * The inode exists: fix only the mode. Reinitializing it
+		 * generates a fresh hash_seed - invalidating the hash offset
+		 * of every dirent in the root directory - and wipes bi_subvol:
+		 */
+		root_inode.bi_mode = S_IFDIR|0755;
 
 		ret = __bch2_fsck_write_inode(trans, &root_inode);
 		bch_err_msg(c, ret, "writing root inode");
