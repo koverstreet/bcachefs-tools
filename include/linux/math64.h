@@ -56,10 +56,51 @@ static inline u64 div64_u64(u64 dividend, u64 divisor)
  * mul_u64_u64_div_u64 - unsigned 64bit multiply then divide, with a 128bit
  * intermediate
  */
+#ifdef __SIZEOF_INT128__
 static inline u64 mul_u64_u64_div_u64(u64 a, u64 b, u64 c)
 {
 	return (unsigned __int128) a * b / c;
 }
+#else
+/*
+ * Portable fallback for targets without __int128 (32-bit): full 128-bit
+ * product by parts, then restoring shift-subtract division. Slow but
+ * obviously correct; saturates when the quotient won't fit 64 bits (a
+ * caller bug either way).
+ */
+static inline u64 mul_u64_u64_div_u64(u64 a, u64 b, u64 c)
+{
+	u64 t1  = (a >> 32) * (b & 0xffffffff);
+	u64 t2  = (a & 0xffffffff) * (b >> 32);
+	u64 lo  = (a & 0xffffffff) * (b & 0xffffffff);
+	u64 hi  = (a >> 32) * (b >> 32);
+
+	u64 mid = t1 + t2;
+	if (mid < t1)
+		hi += 1ULL << 32;
+	hi += mid >> 32;
+
+	u64 mid_lo = mid << 32;
+	lo += mid_lo;
+	if (lo < mid_lo)
+		hi++;
+
+	if (hi >= c)
+		return U64_MAX;
+
+	u64 rem = hi, q = 0;
+	for (int i = 63; i >= 0; i--) {
+		int ovf = rem >> 63;
+
+		rem = (rem << 1) | ((lo >> i) & 1);
+		if (ovf || rem >= c) {
+			rem -= c;
+			q |= 1ULL << i;
+		}
+	}
+	return q;
+}
+#endif
 
 /**
  * div64_s64 - signed 64bit divide with 64bit divisor
