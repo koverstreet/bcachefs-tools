@@ -472,8 +472,22 @@ int bch2_rename_trans(struct btree_trans *trans,
 		src_dir_u->bi_nlink += mode == BCH_RENAME_EXCHANGE;
 	}
 
-	if (mode == BCH_RENAME_OVERWRITE)
-		bch2_inode_nlink_dec(trans, dst_inode_u);
+	if (mode == BCH_RENAME_OVERWRITE) {
+		/*
+		 * Overwriting a subvolume root deletes the subvolume, same as
+		 * unlink (the victim was empty or a bare file, per the checks
+		 * above): hand it to the subvolume deletion path, don't treat
+		 * it as an ordinary inode losing its last link - see
+		 * bch2_unlink_trans():
+		 */
+		if (dst_inode_u->bi_subvol) {
+			try(bch2_subvol_has_children(trans, dst_inode_u->bi_subvol));
+			try(bch2_subvolume_unlink(trans, dst_inode_u->bi_subvol));
+			dst_inode_u->bi_flags |= BCH_INODE_unlinked;
+		} else {
+			bch2_inode_nlink_dec(trans, dst_inode_u);
+		}
+	}
 
 	src_dir_u->bi_mtime		= now;
 	src_dir_u->bi_ctime		= now;
