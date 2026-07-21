@@ -2304,12 +2304,44 @@ static int check_root_trans(struct btree_trans *trans)
 	if (ret && !bch2_err_matches(ret, ENOENT))
 		return ret;
 
+	/*
+	 * The missing subvolume key is not the only record of root's active
+	 * snapshot: snapshot nodes carry a subvol backref, so root's active
+	 * snapshot is the leaf claiming BCACHEFS_ROOT_SUBVOL. Only when no
+	 * node does (fresh filesystem, or the snapshots btree is gone too)
+	 * is U32_MAX - the initial snapshot id - correct; on a snapshotted
+	 * filesystem U32_MAX is an interior node, and a subvolume pointing
+	 * at it is subvol_snapshot_not_leaf, which has no repair.
+	 *
+	 * _norestart: we're inside the caller's commit_do(), so restarts must
+	 * propagate out to it:
+	 */
+	u32 root_snapshot = 0;
+	if (ret) {
+		struct bkey_s_c k;
+		int ret2 = 0;
+
+		for_each_btree_key_norestart(trans, iter, BTREE_ID_snapshots,
+					     POS_MIN, 0, k, ret2) {
+			if (k.k->type == KEY_TYPE_snapshot) {
+				struct bkey_s_c_snapshot s = bkey_s_c_to_snapshot(k);
+
+				if (le32_to_cpu(s.v->subvol) == BCACHEFS_ROOT_SUBVOL &&
+				    !s.v->children[0]) {
+					root_snapshot = k.k->p.offset;
+					break;
+				}
+			}
+		}
+		try(ret2);
+	}
+
 	if (mustfix_fsck_err_on(ret, trans, root_subvol_missing,
 				"root subvol missing")) {
 		struct bkey_i_subvolume *root_subvol =
 			errptr_try(bch2_trans_kmalloc(trans, sizeof(*root_subvol)));
 
-		snapshot	= U32_MAX;
+		snapshot	= root_snapshot ?: U32_MAX;
 		inum		= BCACHEFS_ROOT_INO;
 
 		bkey_subvolume_init(&root_subvol->k_i);
