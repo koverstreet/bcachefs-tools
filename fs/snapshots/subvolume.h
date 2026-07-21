@@ -75,6 +75,7 @@ int bch2_subvolume_trigger(struct btree_trans *, struct btree_trigger_op);
 int bch2_subvol_has_children(struct btree_trans *, u32);
 int bch2_subvolume_get(struct btree_trans *, unsigned,
 		       bool, struct bch_subvolume *);
+int bch2_subvolume_deletion_pending(struct btree_trans *, u32, u32);
 int __bch2_subvolume_get_snapshot(struct btree_trans *, u32,
 				  u32 *, bool);
 int bch2_subvolume_get_snapshot(struct btree_trans *, u32, u32 *);
