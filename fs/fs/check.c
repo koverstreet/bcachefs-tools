@@ -1760,6 +1760,16 @@ static int check_dirent_to_subvol(struct btree_trans *trans, struct btree_iter *
 	if (ret && !bch2_err_matches(ret, ENOENT))
 		return ret;
 
+	/*
+	 * A deleted-state subvolume is a tombstone pending the snapshot
+	 * sweep: bch2_subvolume_get() reports those as ENOENT, but this is a
+	 * raw read (the fs_path_parent repair below needs the key). Treat it
+	 * as missing here too - otherwise the dirent outlives the subvolume,
+	 * and fsck stops converging once the sweep removes the key:
+	 */
+	if (!ret && bch2_subvolume_state_compat(s.v) == SUBVOLUME_STATE_deleted)
+		ret = bch_err_throw(c, ENOENT_subvolume_deleted);
+
 	if (ret) {
 		if (fsck_err(trans, dirent_to_missing_subvol,
 			     "dirent points to missing subvolume\n%s",
