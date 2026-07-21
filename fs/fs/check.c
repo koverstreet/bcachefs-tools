@@ -1234,7 +1234,18 @@ static int check_inode(struct btree_trans *trans,
 			do_update = true;
 		}
 
-		if (!deletion_pending &&
+		/*
+		 * A reference to the root subvolume is never the broken side:
+		 * subvol 1's existence is an invariant, and check_root()
+		 * recreates it if lost. Stripping bi_subvol around the
+		 * absence takes a valid backref off the root inode - and
+		 * check_unreachable_inodes() then reattaches the root
+		 * directory into lost+found:
+		 */
+		bool root_subvol_ref = ret && u.bi_subvol == BCACHEFS_ROOT_SUBVOL;
+
+		if (!root_subvol_ref &&
+		    !deletion_pending &&
 		    (fsck_err_on(ret,
 				trans, inode_bi_subvol_missing,
 				"inode bi_subvol points to missing subvolume %u\n%s",
@@ -1710,6 +1721,19 @@ static int check_dirent_to_subvol(struct btree_trans *trans, struct btree_iter *
 	if (ret && !bch2_err_matches(ret, ENOENT))
 		return ret;
 
+	if (ret && parent_subvol == BCACHEFS_ROOT_SUBVOL) {
+		/*
+		 * A reference to the root subvolume is never the broken side:
+		 * subvol 1's existence is an invariant, and check_root()
+		 * recreates it if lost. Rewiring parent_subvol around the
+		 * absence reparents the root directory's subvolume dirents
+		 * onto arbitrary subvolumes; left alone, they're valid the
+		 * moment the root subvolume is back:
+		 */
+		ret = 0;
+		goto check_target;
+	}
+
 	if (ret ||
 	    (!ret && !bch2_snapshot_is_ancestor(trans, parent_snapshot, d.k->p.snapshot))) {
 		ret = find_snapshot_subvol(trans, d.k->p.snapshot, &new_parent_subvol);
@@ -1756,6 +1780,7 @@ static int check_dirent_to_subvol(struct btree_trans *trans, struct btree_iter *
 		new_dirent->v.d_parent_subvol = cpu_to_le32(new_parent_subvol);
 	}
 
+check_target:
 	bch2_trans_iter_init(trans, &subvol_iter, BTREE_ID_subvolumes, POS(0, target_subvol), 0);
 	struct bkey_s_c_subvolume s = bch2_bkey_get_typed(&subvol_iter, subvolume);
 	ret = bkey_err(s.s_c);
