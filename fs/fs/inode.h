@@ -277,6 +277,19 @@ static inline bool bch2_inode_has_backpointer(const struct bch_inode_unpacked *b
 	return bi->bi_dir || bi->bi_dir_offset;
 }
 
+/*
+ * Subvolume root inodes are deleted by the subvolume deletion path -
+ * subvolume state set to unlinked, VFS eviction, then the snapshot sweep
+ * deletes the keys - never by the inode reaper (VFS eviction ->
+ * bch2_inode_rm(), or the deleted_inodes btree): BCH_INODE_unlinked on a
+ * subvolume root only records that no dirent points at it, not that the
+ * inode reaper may delete it.
+ */
+static inline bool bch2_inode_is_subvolume_root(const struct bch_inode_unpacked *bi)
+{
+	return bi->bi_subvol != 0;
+}
+
 /* i_nlink: */
 
 static inline unsigned nlink_bias(umode_t mode)
