@@ -276,6 +276,13 @@ int bch2_unlink_trans(struct btree_trans *trans,
 	if (deleting_subvol || inode_u->bi_subvol) {
 		try(bch2_subvolume_unlink(trans, inode_u->bi_subvol));
 
+		/*
+		 * No dirent will ever point at this inode again - deletion
+		 * belongs to the subvolume path, though: the inode reaper keys
+		 * off bch2_inode_is_subvolume_root() to leave it alone.
+		 */
+		inode_u->bi_flags |= BCH_INODE_unlinked;
+
 		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&dirent_iter));
 
 		/*
