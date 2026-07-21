@@ -299,7 +299,7 @@ enum bch_fsck_flags {
 	x(dirent_name_dot_or_dotdot,				223,	0)		\
 	x(dirent_name_has_slash,				224,	0)		\
 	x(dirent_d_type_wrong,					225,	FSCK_AUTOFIX)	\
-	x(inode_bi_parent_wrong,				226,	0)		\
+	x(inode_bi_parent_wrong,				226,	FSCK_AUTOFIX)	\
 	x(dirent_in_missing_dir_inode,				227,	0)		\
 	x(dirent_in_non_dir_inode,				228,	0)		\
 	x(dirent_to_missing_inode,				229,	FSCK_AUTOFIX)	\
@@ -329,7 +329,7 @@ enum bch_fsck_flags {
 	x(missing_inode_with_contents,				321,	FSCK_AUTOFIX)	\
 	x(dirent_to_missing_parent_subvol,			252,	0)		\
 	x(dirent_not_visible_in_parent_subvol,			253,	0)		\
-	x(subvol_fs_path_parent_wrong,				254,	0)		\
+	x(subvol_fs_path_parent_wrong,				254,	FSCK_AUTOFIX)	\
 	x(subvol_root_fs_path_parent_nonzero,			255,	0)		\
 	x(subvol_children_not_set,				256,	0)		\
 	x(subvol_children_bad,					257,	0)		\
