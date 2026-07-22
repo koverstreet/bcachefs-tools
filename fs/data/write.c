@@ -377,8 +377,13 @@
  * candidates is chosen; devices with a different bucket size are excluded). The
  * minimum is \texttt{redundancy + 2} devices (3 for RAID-5, 4 for RAID-6). With
  * $n$ eligible devices, a stripe has $n - \mathrm{redundancy}$ data blocks and
- * \texttt{redundancy} parity blocks, maximizing storage efficiency. There is no
- * configuration to limit stripe width to a subset of available devices.
+ * \texttt{redundancy} parity blocks, maximizing storage efficiency. Data blocks
+ * per stripe may be capped with the \texttt{ec\_max\_data\_blocks} option; the
+ * cap excludes parity (a cap of 9 with 2 parity blocks gives stripes 11 blocks
+ * wide). When \hyperref[sec:failure-domains]{failure domains} are configured, a
+ * stripe takes at most one block per domain, so width is also bounded by the
+ * number of available domains. Which devices are used within these bounds is
+ * not configurable.
  *
  * Stripe fragmentation is tracked in the LRU btree. When all data blocks in a
  * stripe become empty (sector count zero), the stripe is automatically deleted.
