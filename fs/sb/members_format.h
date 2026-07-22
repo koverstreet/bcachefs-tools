@@ -103,7 +103,9 @@ struct bch_member {
 
 LE16_BITMASK(BCH_MEMBER_BUCKET_SIZE,	struct bch_member, bucket_size,  0, 16)
 LE64_BITMASK(BCH_MEMBER_STATE,		struct bch_member, flags,  0,  4)
-/* 4-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
+LE64_BITMASK(BCH_MEMBER_NEEDS_RECONCILE_SCAN,
+					struct bch_member, flags,  4,  5)
+/* 5-14 unused, was TIER, HAS_(META)DATA, REPLACEMENT */
 LE64_BITMASK(BCH_MEMBER_DISCARD,	struct bch_member, flags, 14, 15)
 LE64_BITMASK(BCH_MEMBER_DATA_ALLOWED,	struct bch_member, flags, 15, 20)
 LE64_BITMASK(BCH_MEMBER_GROUP,		struct bch_member, flags, 20, 28)
