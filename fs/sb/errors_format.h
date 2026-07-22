@@ -228,7 +228,7 @@ enum bch_fsck_flags {
 	x(snapshot_state_bad,					373,	FSCK_AUTOFIX)	\
 	x(snapshot_state_bitflip,				379,	FSCK_AUTOFIX)	\
 	x(snapshot_state_stale_tombstone,			382,	FSCK_AUTOFIX)	\
-	x(snapshot_will_delete_but_subvol_live,			376,	FSCK_AUTOFIX)		\
+	x(snapshot_deleted_but_subvol_live,			376,	FSCK_AUTOFIX)	\
 	x(snapshot_deleted_has_live_children,			381,	FSCK_AUTOFIX)	\
 	x(snapshot_subvol_backref_wrong,			377,	0)		\
 	x(snapshot_no_keys_childless,				378,	FSCK_AUTOFIX)	\
