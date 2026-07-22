@@ -643,15 +643,31 @@ int bch2_snapshot_validate(struct bch_fs *c, struct bkey_s_c k,
 	 * touched:
 	 */
 	if (from->from == BKEY_VALIDATE_commit && !c->opts.no_commit_validate) {
-		if (bkey_val_bytes(k.k) > offsetof(struct bch_snapshot, state))
-			bkey_fsck_err_on(s.v->state &&
-					 !bch2_snapshot_state_valid(bch2_snapshot_state(s.v)),
-					 c, snapshot_state_bad,
-					 "invalid state 0x%x", le32_to_cpu(s.v->state));
+		u32 state = bkey_val_bytes(k.k) > offsetof(struct bch_snapshot, state)
+			? bch2_snapshot_state(s.v)
+			: 0;
 
-		bkey_fsck_err_on(s.v->children[0] && s.v->subvol,
+		bkey_fsck_err_on(state && !bch2_snapshot_state_valid(state),
+				 c, snapshot_state_bad,
+				 "invalid state 0x%x", state);
+
+		/*
+		 * A subvol backref is only legal on a live or will_delete leaf:
+		 * subvolumes only reference leaves, and no_keys/deleted nodes
+		 * were interior when they were emptied - a dead leaf is deleted
+		 * outright; the no_keys parking state exists only because an
+		 * interior node can't be removed from the tree at runtime.
+		 * will_delete retains the backref: it points at the subvolume's
+		 * tombstone, testimony the deletion path requires
+		 * (check_should_delete_leaf()).
+		 */
+		bkey_fsck_err_on(s.v->subvol &&
+				 (s.v->children[0] ||
+				  (state &&
+				   state != SNAPSHOT_STATE_live &&
+				   state != SNAPSHOT_STATE_will_delete)),
 				 c, snapshot_should_not_have_subvol,
-				 "interior node with subvol (subvolumes only reference leaves)");
+				 "snapshot with subvol must be a live or will_delete leaf");
 	}
 fsck_err:
 	return ret;
