@@ -514,37 +514,26 @@ int bch2_subvolume_get(struct btree_trans *trans, unsigned subvol,
 }
 
 /*
- * Is this subvolume in the process of being deleted? True in every
- * window of the deletion sequence: subvolume unlinked (waiting on VFS
- * eviction), tombstoned as deleted + snapshot marked will_delete
- * (bch2_subvolume_get() reports tombstones as ENOENT, so that window
- * arrives here via the snapshot check), and mid-sweep with the
- * subvolume key already gone.
+ * BCH_INODE_unlinked is allowed on a directory only if it's a subvolume
+ * root and the subvolume is unlinked - this answers the second half.
  *
- * @snapshot is the subvolume's snapshot - for a caller holding the root
- * inode, its bi_snapshot - used to classify once the subvolume key is
- * unreadable. Subvolume gone but snapshot still live is NOT pending
- * deletion: the deletion sequence never produces that state, so it's
- * damage the caller should repair.
+ * That's the only window fsck can see a legitimately flagged directory:
+ * once the subvolume is tombstoned its snapshot is will_delete and
+ * check_inode skips those keys - the sweep owns them. A tombstoned or
+ * missing subvolume here is the caller's cue to repair, not exempt.
  *
  * Returns: < 0 error, 0 no, 1 yes
  */
-int bch2_subvolume_deletion_pending(struct btree_trans *trans, u32 subvolid, u32 snapshot)
+int bch2_subvolume_is_unlinked(struct btree_trans *trans, u32 subvolid)
 {
 	struct bch_subvolume s;
 	int ret = bch2_subvolume_get(trans, subvolid, false, &s);
-	if (!ret)
-		return bch2_subvolume_state_compat(&s) != SUBVOLUME_STATE_live;
-	if (!bch2_err_matches(ret, ENOENT))
+	if (bch2_err_matches(ret, ENOENT))
+		return 0;
+	if (ret)
 		return ret;
 
-	struct bch_snapshot snap;
-	ret = bch2_snapshot_lookup(trans, snapshot, &snap);
-	if (!ret)
-		return bch2_snapshot_state_compat(&snap) != SNAPSHOT_STATE_live;
-	if (!bch2_err_matches(ret, ENOENT))
-		return ret;
-	return 0;
+	return bch2_subvolume_state_compat(&s) == SUBVOLUME_STATE_unlinked;
 }
 
 int bch2_subvol_is_ro_trans(struct btree_trans *trans, u32 subvol, u32 *snapid)
