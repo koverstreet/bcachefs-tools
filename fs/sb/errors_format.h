@@ -305,7 +305,7 @@ enum bch_fsck_flags {
 	x(dirent_in_non_dir_inode,				228,	0)		\
 	x(dirent_to_missing_inode,				229,	FSCK_AUTOFIX)	\
 	x(dirent_to_overwritten_inode,				302,	FSCK_AUTOFIX)	\
-	x(dirent_to_missing_subvol,				230,	0)		\
+	x(dirent_to_missing_subvol,				230,	FSCK_AUTOFIX)	\
 	x(dirent_to_itself,					231,	0)		\
 	x(dirent_casefold_mismatch,				318,	FSCK_AUTOFIX)	\
 	x(quota_type_invalid,					232,	0)		\
