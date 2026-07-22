@@ -336,15 +336,32 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 		/* dangling snapshot will be handled later */
 		u32 id = le32_to_cpu(s->subvol);
 
-		struct bch_subvolume subvol;
-		int ret = bch2_subvolume_get(trans, id, false, &subvol);
-		if (bch2_err_matches(ret, ENOENT)) {
-			bch_err(c, "snapshot points to nonexistent subvolume:\n  %s",
-				(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
+		/*
+		 * Raw read: bch2_subvolume_get() reports deleted subvolumes
+		 * as ENOENT, and the message should show what's actually
+		 * there:
+		 */
+		CLASS(btree_iter, subvol_iter)(trans, BTREE_ID_subvolumes, POS(0, id), 0);
+		struct bkey_s_c_subvolume subvol_k = bch2_bkey_get_typed(&subvol_iter, subvolume);
+		int ret = bkey_err(subvol_k);
+		if (ret && !bch2_err_matches(ret, ENOENT))
+			return ret;
+
+		struct bch_subvolume subvol = {};
+		if (!ret)
+			bkey_val_copy_pad(&subvol, subvol_k);
+
+		if (ret || bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_deleted) {
+			printbuf_reset(&buf);
+			prt_str(&buf, "snapshot points to missing or deleted subvolume:\n  ");
+			bch2_bkey_val_to_text(&buf, c, k);
+			if (!ret) {
+				prt_str(&buf, "\n  ");
+				bch2_bkey_val_to_text(&buf, c, subvol_k.s_c);
+			}
+			bch_err(c, "%s", buf.buf);
 			return 0;
 		}
-		if (ret)
-			return ret;
 
 		/*
 		 * A live subvolume that doesn't point back isn't this
@@ -356,9 +373,10 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 		    le32_to_cpu(subvol.snapshot) != k.k->p.offset) {
 			CLASS(bch_log_msg, msg)(c);
 
-			prt_printf(&msg.m, "snapshot points to live subvolume %u, which points to snapshot %u:\n",
-				   id, le32_to_cpu(subvol.snapshot));
+			prt_printf(&msg.m, "snapshot points to live subvolume, which points elsewhere:\n");
 			bch2_bkey_val_to_text(&msg.m, c, k);
+			prt_newline(&msg.m);
+			bch2_bkey_val_to_text(&msg.m, c, subvol_k.s_c);
 			msg.m.suppress = !bch2_count_fsck_err(c, snapshot_subvol_backref_wrong, &msg.m);
 
 			return bch_err_throw(c, fsck_repair_unimplemented);
