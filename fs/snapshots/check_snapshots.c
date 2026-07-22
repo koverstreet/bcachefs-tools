@@ -19,8 +19,9 @@
  * repairing it. Unconstructible combinations are rejected at commit
  * (bch2_snapshot_validate()); real damage is repaired toward the side
  * the witnesses corroborate - child snapshots, the subvolume (deletion
- * tombstones it in the same transaction that condemns its snapshot).
- * Ambiguity fail-stops rather than guessing.
+ * tombstones it in the same transaction that condemns its snapshot),
+ * the per-snapshot accounting (nothing we write deletes a node with
+ * data). Ambiguity fail-stops rather than guessing.
  */
 #include "bcachefs.h"
 
@@ -884,8 +885,8 @@ static int check_snapshot_state(struct btree_trans *trans,
 
 /*
  * A non-live state, checked against its witnesses - child snapshots,
- * the subvolume. Returns 1 when the node is a settled tombstone: no
- * further checking.
+ * the subvolume, the accounting. Returns 1 if the node was deleted or
+ * is a settled tombstone: no further checking.
  */
 static int check_snapshot_deleted(struct btree_trans *trans,
 				  struct btree_iter *iter,
@@ -971,6 +972,47 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 		}
 	}
 
+	/*
+	 * Every deleted node gets held up against the accounting: nothing we
+	 * write deletes a node with data still accounted to it, so data means
+	 * the state field is the lie, whatever the node's shape - undelete,
+	 * falling through so the edge checks validate the now-live node.
+	 *
+	 * No data, but the tree pointer was never wiped: the tombstone wipe
+	 * clears it in the same transaction that marks deleted, so this node
+	 * was never spliced out - complete the deletion. (A surviving parent
+	 * pointer is not evidence of anything: legacy tombstones retain it.)
+	 * No data and no tree: settled tombstone, nothing to do.
+	 */
+	if (bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted) {
+		u64 keys, sectors;
+		bch2_snapshot_accounting_totals(c, k.k->p.offset, &keys, &sectors, NULL);
+
+		if (ret_fsck_err_on(keys || sectors,
+				trans, snapshot_deleted_but_has_data,
+				"deleted snapshot node has %llu keys / %llu sectors accounted - undeleting:\n%s",
+				keys, sectors,
+				(printbuf_reset(&buf),
+				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_live);
+			*s = (*u)->v;
+		} else if (ret_fsck_err_on(!keys && !sectors && s->tree,
+				trans, snapshot_deleted_but_linked,
+				"deleted snapshot node was never spliced out, no data accounted - completing deletion:\n%s",
+				(printbuf_reset(&buf),
+				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			/* pass node_delete's already-deleted guard: */
+			bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_will_delete);
+			*s = (*u)->v;
+
+			try(bch2_snapshot_node_delete(trans, k.k->p.offset,
+						      !!s->children[0]));
+			return 1;
+		}
+	}
+
 	return bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted;
 }
 
@@ -993,6 +1035,7 @@ static int check_snapshot(struct btree_trans *trans,
 	ret = check_snapshot_deleted(trans, iter, k, &s, &u);
 	if (ret)
 		return ret < 0 ? ret : 0;
+
 
 	if (s.parent)
 		try(check_snapshot_edge(trans, &s, k.k->p.offset,

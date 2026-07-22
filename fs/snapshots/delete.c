@@ -181,15 +181,19 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
  * way it's an in-memory read per snapshot btree, and the per-btree breakdown
  * points at where any stranded keys live.
  */
-static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
+/*
+ * Total keys/sectors accounted to snapshot @id across the snapshotted
+ * btrees, with a per-btree breakdown appended to @breakdown if non-NULL.
+ * (nr_keys counters exist only post-upgrade and read as zero before.)
+ */
+void bch2_snapshot_accounting_totals(struct bch_fs *c, u32 id,
+				     u64 *total_keys, u64 *total_sectors,
+				     struct printbuf *breakdown)
 {
-	struct bch_fs *c = trans->c;
-
 	bool trust_keys = c->sb.version_upgrade_complete >=
 		bcachefs_metadata_version_per_dev_fragmentation_lru;
 
-	CLASS(printbuf, buf)();
-	u64 total_keys = 0, total_sectors = 0;
+	*total_keys = *total_sectors = 0;
 
 	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
 		if (!btree_type_has_snapshots(btree))
@@ -211,14 +215,26 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 		if (!nr_keys && !sectors)
 			continue;
 
-		total_keys	+= nr_keys;
-		total_sectors	+= sectors;
+		*total_keys	+= nr_keys;
+		*total_sectors	+= sectors;
 
-		prt_str(&buf, "\n  ");
-		bch2_btree_id_to_text(&buf, btree);
-		prt_printf(&buf, ": %llu keys (%llu bytes), %llu sectors",
-			   nr_keys, key_bytes, sectors);
+		if (breakdown) {
+			prt_str(breakdown, "\n  ");
+			bch2_btree_id_to_text(breakdown, btree);
+			prt_printf(breakdown, ": %llu keys (%llu bytes), %llu sectors",
+				   nr_keys, key_bytes, sectors);
+		}
 	}
+}
+
+static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
+{
+	struct bch_fs *c = trans->c;
+
+	CLASS(printbuf, buf)();
+	u64 total_keys, total_sectors;
+
+	bch2_snapshot_accounting_totals(c, id, &total_keys, &total_sectors, &buf);
 
 	if (likely(!total_keys && !total_sectors))
 		return 0;
@@ -256,7 +272,7 @@ static inline void normalize_snapshot_child_pointers(struct bch_snapshot *s)
 		swap(s->children[0], s->children[1]);
 }
 
-static int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_interior)
+int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_interior)
 {
 	struct bch_fs *c = trans->c;
 
