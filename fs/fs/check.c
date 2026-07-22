@@ -677,6 +677,27 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * Find the inode versions a dirent's target can resolve to.
+ *
+ * Typical operation: creating a file creates the dirent and the inode
+ * together, and then the inode sees many updates with no corresponding
+ * dirent update - so the inode's versions live in snapshots equal to or
+ * newer than the dirent's, and the reverse walk down from the dirent's
+ * snapshot finds them, whiteouts shadowing older versions.
+ *
+ * It's also possible for the dirent to be newer than the inode: the version
+ * resolving the dirent's own view is in an ancestor snapshot. (The inode's
+ * backpointer then dangles in the inode's snapshot.) fsck has to cope: if
+ * there's no key at the dirent's own snapshot - versions in descendants don't
+ * resolve its view, and a whiteout at it means the view is definitively empty -
+ * fetch at most one ancestor version with a snapshot-filtered peek_slot(),
+ * which resolves to whatever the dirent's view actually sees: an inode resolves
+ * the dirent, a whiteout means the inode really is deleted in this view.
+ *
+ * A dirent newer than the inode isn't constructible by userspace - but does
+ * happen during snapshot deletion.
+ */
 static int get_visible_inodes(struct btree_trans *trans,
 			      struct inode_walker *w,
 			      struct snapshots_seen *s,
@@ -689,10 +710,14 @@ static int get_visible_inodes(struct btree_trans *trans,
 	w->inodes.nr = 0;
 	w->deletes.nr = 0;
 
+	bool have_key_at_pos = false;
+
 	for_each_btree_key_reverse_norestart(trans, iter, BTREE_ID_inodes, SPOS(0, inum, s->pos.snapshot),
 			   BTREE_ITER_all_snapshots, k, ret) {
 		if (k.k->p.offset != inum)
 			break;
+
+		have_key_at_pos |= k.k->p.snapshot == s->pos.snapshot;
 
 		if (!bch2_ref_visible(trans, s, s->pos.snapshot, k.k->p.snapshot))
 			continue;
@@ -700,11 +725,17 @@ static int get_visible_inodes(struct btree_trans *trans,
 		if (snapshot_list_has_ancestor(trans, &w->deletes, k.k->p.snapshot))
 			continue;
 
-		ret = bkey_is_inode(k.k)
-			? add_inode(c, w, k)
-			: snapshot_list_add(c, &w->deletes, k.k->p.snapshot);
-		if (ret)
-			break;
+		try(bkey_is_inode(k.k)
+		    ? add_inode(c, w, k)
+		    : snapshot_list_add(c, &w->deletes, k.k->p.snapshot));
+	}
+
+	if (!ret && !have_key_at_pos) {
+		CLASS(btree_iter, ancestor_iter)(trans, BTREE_ID_inodes,
+						 SPOS(0, inum, s->pos.snapshot), 0);
+		k = bkey_try(bch2_btree_iter_peek_slot(&ancestor_iter));
+		if (bkey_is_inode(k.k))
+			try(add_inode(c, w, k));
 	}
 
 	return ret;
