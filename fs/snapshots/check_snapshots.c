@@ -1,4 +1,27 @@
 // SPDX-License-Identifier: GPL-2.0
+/*
+ * Snapshot fsck: the passes over the snapshots and snapshot_trees btrees.
+ *
+ * check_snapshot_trees: every tree key names a live root and master subvol.
+ *
+ * check_snapshots: per-node, in three stages - check_snapshot_state()
+ * recovers the state field itself; check_snapshot_deleted() holds a
+ * non-live state up against its witnesses; then the topology checks
+ * (edges, tree pointer, depth, skiplists, subvol backref).
+ *
+ * reconstruct_snapshots: rebuild missing snapshot nodes from the keys
+ * that reference them.
+ *
+ * __bch2_check_key_has_snapshot: per-key repair for keys whose snapshot
+ * node is missing or dead; also called from runtime paths.
+ *
+ * Repair philosophy: enumerate which writers can produce a state before
+ * repairing it. Unconstructible combinations are rejected at commit
+ * (bch2_snapshot_validate()); real damage is repaired toward the side
+ * the witnesses corroborate - child snapshots, the subvolume (deletion
+ * tombstones it in the same transaction that condemns its snapshot).
+ * Ambiguity fail-stops rather than guessing.
+ */
 #include "bcachefs.h"
 
 #include "alloc/accounting.h"
@@ -96,6 +119,8 @@ static int bch2_snapshot_tree_master_subvol(struct btree_trans *trans,
 	SET_BCH_SUBVOLUME_SNAP(&u->v, false);
 	return 0;
 }
+
+/* check_snapshot_trees: */
 
 static int check_snapshot_tree(struct btree_trans *trans,
 			       struct btree_iter *iter,
@@ -200,6 +225,8 @@ int bch2_check_snapshot_trees(struct bch_fs *c)
  * Look up snapshot tree for @tree_id and find root,
  * make sure @snap_id is a descendent:
  */
+/* check_snapshots: */
+
 static int snapshot_tree_ptr_good(struct btree_trans *trans,
 				  u32 snap_id, u32 tree_id)
 {
@@ -416,6 +443,8 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
  */
 
 enum { EDGE_PARENT, EDGE_CHILD };
+
+/* snapshot edge repair: */
 
 static bool snapshot_node_points_back(const struct bch_snapshot *s, unsigned side, u32 other)
 {
@@ -714,20 +743,19 @@ static int snapshot_referenced(struct btree_trans *trans,
 	return 0;
 }
 
-static int check_snapshot(struct btree_trans *trans,
-			  struct btree_iter *iter,
-			  struct bkey_s_c k)
+/*
+ * Recover the state field itself: stamp it from the legacy flags when
+ * unset, decode a corrupted value back to the nearest codeword, and
+ * correct a state left stale by a legacy flags-only tombstone.
+ */
+static int check_snapshot_state(struct btree_trans *trans,
+				struct btree_iter *iter,
+				struct bkey_s_c k,
+				struct bch_snapshot *s,
+				struct bkey_i_snapshot **u)
 {
 	struct bch_fs *c = trans->c;
 	CLASS(printbuf, buf)();
-	struct bkey_i_snapshot *u = NULL;
-	int ret = 0;
-
-	if (k.k->type != KEY_TYPE_snapshot)
-		return 0;
-
-	struct bch_snapshot s;
-	bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(k));
 
 	/*
 	 * A zero state field means the key predates the state field, or was
@@ -738,16 +766,16 @@ static int check_snapshot(struct btree_trans *trans,
 	 * ran) heals too. Mid-upgrade this is the expected migration and silent;
 	 * post-upgrade an unset state is unexpected, so surface it (autofix).
 	 */
-	if (!bch2_snapshot_state(&s)) {
+	if (!bch2_snapshot_state(s)) {
 		bool upgrading = c->sb.version_upgrade_complete <
 			bcachefs_metadata_version_per_dev_fragmentation_lru;
 		if (upgrading ||
 		    ret_fsck_err(trans, snapshot_state_bad,
 				 "snapshot state unset, recovering from legacy flags:\n%s",
 				 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-			u->v.state = cpu_to_le32(bch2_snapshot_state_from_flags(&s));
-			s = u->v;
+			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			(*u)->v.state = cpu_to_le32(bch2_snapshot_state_from_flags(s));
+			*s = (*u)->v;
 		}
 	}
 
@@ -757,10 +785,10 @@ static int check_snapshot(struct btree_trans *trans,
 	 * is corruption. No repair yet, and state-keyed repairs must not run
 	 * on a state we can't read:
 	 */
-	if (!bch2_snapshot_state_valid(bch2_snapshot_state(&s))) {
+	if (!bch2_snapshot_state_valid(bch2_snapshot_state(s))) {
 		unsigned dist;
 		enum bch_snapshot_state nearest =
-			bch2_snapshot_state_nearest(le32_to_cpu(s.state), &dist);
+			bch2_snapshot_state_nearest(le32_to_cpu(s->state), &dist);
 
 		/*
 		 * Codewords are >= 14 apart, so anything <= 6 bits out is
@@ -772,22 +800,22 @@ static int check_snapshot(struct btree_trans *trans,
 		if (dist <= 2) {
 			if (ret_fsck_err(trans, snapshot_state_bitflip,
 					 "snapshot state 0x%x is a %u-bit flip of %s - correcting:\n%s",
-					 le32_to_cpu(s.state), dist,
+					 le32_to_cpu(s->state), dist,
 					 bch2_snapshot_state_str(nearest),
 					 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-				u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-				bch2_snapshot_state_set(&u->v, nearest);
-				s = u->v;
+				*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+				bch2_snapshot_state_set(&(*u)->v, nearest);
+				*s = (*u)->v;
 			}
 		} else if (dist <= 6) {
 			if (ret_fsck_err(trans, snapshot_state_bad,
 					 "snapshot state 0x%x is %u bits from %s - correcting:\n%s",
-					 le32_to_cpu(s.state), dist,
+					 le32_to_cpu(s->state), dist,
 					 bch2_snapshot_state_str(nearest),
 					 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-				u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-				bch2_snapshot_state_set(&u->v, nearest);
-				s = u->v;
+				*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+				bch2_snapshot_state_set(&(*u)->v, nearest);
+				*s = (*u)->v;
 			}
 		} else {
 			/*
@@ -797,24 +825,24 @@ static int check_snapshot(struct btree_trans *trans,
 			 * unreferenced garbage node we can't place: fail-stop.
 			 */
 			bool ref;
-			int ret2 = snapshot_referenced(trans, &s, k.k->p.offset, &ref);
+			int ret2 = snapshot_referenced(trans, s, k.k->p.offset, &ref);
 			if (ret2)
 				return ret2;
 
 			if (ref) {
 				if (ret_fsck_err(trans, snapshot_state_bad,
 						 "snapshot state 0x%x is garbage, but the node is referenced - marking live:\n%s",
-						 le32_to_cpu(s.state),
+						 le32_to_cpu(s->state),
 						 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-					u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-					bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
-					s = u->v;
+					*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+					bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_live);
+					*s = (*u)->v;
 				}
 			} else {
 				CLASS(bch_log_msg, msg)(c);
 
 				prt_printf(&msg.m, "snapshot has invalid state 0x%x (nearest codeword %s is %u bits away, node unreferenced):\n",
-					   le32_to_cpu(s.state), bch2_snapshot_state_str(nearest), dist);
+					   le32_to_cpu(s->state), bch2_snapshot_state_str(nearest), dist);
 				bch2_bkey_val_to_text(&msg.m, c, k);
 				msg.m.suppress = !bch2_count_fsck_err(c, snapshot_state_bad, &msg.m);
 
@@ -838,18 +866,35 @@ static int check_snapshot(struct btree_trans *trans,
 	 * fail-stops the edge checks - wedging every mount (the 2026-07-20
 	 * field report; snapshot-inject/stale_state_tombstone).
 	 */
-	if (bch2_snapshot_state(&s) != SNAPSHOT_STATE_deleted &&
-	    BCH_SNAPSHOT_DELETED_OBSOLETE(&s) &&
-	    !s.tree &&
+	if (bch2_snapshot_state(s) != SNAPSHOT_STATE_deleted &&
+	    BCH_SNAPSHOT_DELETED_OBSOLETE(s) &&
+	    !s->tree &&
 	    ret_fsck_err(trans, snapshot_state_stale_tombstone,
 			 "snapshot spliced out by a legacy kernel (tombstone shape, legacy deleted flag)\n"
 			 "but the state field is stale at %s - correcting to deleted:\n%s",
-			 bch2_snapshot_state_str(bch2_snapshot_state(&s)),
+			 bch2_snapshot_state_str(bch2_snapshot_state(s)),
 			 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-		u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-		bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_deleted);
-		s = u->v;
+		*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+		bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_deleted);
+		*s = (*u)->v;
 	}
+
+	return 0;
+}
+
+/*
+ * A non-live state, checked against its witnesses - child snapshots,
+ * the subvolume. Returns 1 when the node is a settled tombstone: no
+ * further checking.
+ */
+static int check_snapshot_deleted(struct btree_trans *trans,
+				  struct btree_iter *iter,
+				  struct bkey_s_c k,
+				  struct bch_snapshot *s,
+				  struct bkey_i_snapshot **u)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(printbuf, buf)();
 
 	/*
 	 * A non-live node with two live children that both point back at it is a
@@ -869,15 +914,15 @@ static int check_snapshot(struct btree_trans *trans,
 	 * Do this before the deleted early-out, then fall through so the
 	 * edge/depth/tree checks validate the now-live node.
 	 */
-	if (bch2_snapshot_state(&s) != SNAPSHOT_STATE_live) {
+	if (bch2_snapshot_state(s) != SNAPSHOT_STATE_live) {
 		unsigned nr_live_children = 0;
 
 		for (unsigned i = 0; i < 2; i++) {
-			if (!s.children[i])
+			if (!s->children[i])
 				continue;
 
 			struct bch_snapshot child;
-			int ret2 = bch2_snapshot_lookup(trans, le32_to_cpu(s.children[i]), &child);
+			int ret2 = bch2_snapshot_lookup(trans, le32_to_cpu(s->children[i]), &child);
 			if (ret2 && !bch2_err_matches(ret2, ENOENT))
 				return ret2;
 
@@ -889,11 +934,11 @@ static int check_snapshot(struct btree_trans *trans,
 		if (ret_fsck_err_on(nr_live_children == 2,
 				trans, snapshot_deleted_has_live_children,
 				"snapshot marked %s but has two live children - reviving:\n%s",
-				bch2_snapshot_state_str(bch2_snapshot_state(&s)),
+				bch2_snapshot_state_str(bch2_snapshot_state(s)),
 				(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-			bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
-			s = u->v;
+			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_live);
+			*s = (*u)->v;
 		}
 
 		/*
@@ -905,9 +950,9 @@ static int check_snapshot(struct btree_trans *trans,
 		 * corrupt legacy flag. (A tombstoned subvolume reads as
 		 * ENOENT here: that's normal mid-deletion, not evidence.)
 		 */
-		if (!s.children[0] && s.subvol) {
+		if (!s->children[0] && s->subvol) {
 			struct bch_subvolume subvol;
-			int ret2 = bch2_subvolume_get(trans, le32_to_cpu(s.subvol),
+			int ret2 = bch2_subvolume_get(trans, le32_to_cpu(s->subvol),
 						      false, &subvol);
 			if (ret2 && !bch2_err_matches(ret2, ENOENT))
 				return ret2;
@@ -917,17 +962,37 @@ static int check_snapshot(struct btree_trans *trans,
 			    le32_to_cpu(subvol.snapshot) == k.k->p.offset &&
 			    ret_fsck_err(trans, snapshot_deleted_but_subvol_live,
 					 "snapshot marked %s but its subvolume is live - reviving:\n%s",
-					 bch2_snapshot_state_str(bch2_snapshot_state(&s)),
+					 bch2_snapshot_state_str(bch2_snapshot_state(s)),
 					 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-				u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-				bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
-				s = u->v;
+				*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+				bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_live);
+				*s = (*u)->v;
 			}
 		}
 	}
 
-	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted)
+	return bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted;
+}
+
+static int check_snapshot(struct btree_trans *trans,
+			  struct btree_iter *iter,
+			  struct bkey_s_c k)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(printbuf, buf)();
+	struct bkey_i_snapshot *u = NULL;
+	int ret = 0;
+
+	if (k.k->type != KEY_TYPE_snapshot)
 		return 0;
+
+	struct bch_snapshot s;
+	bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(k));
+	try(check_snapshot_state(trans, iter, k, &s, &u));
+
+	ret = check_snapshot_deleted(trans, iter, k, &s, &u);
+	if (ret)
+		return ret < 0 ? ret : 0;
 
 	if (s.parent)
 		try(check_snapshot_edge(trans, &s, k.k->p.offset,
@@ -1043,6 +1108,8 @@ int bch2_check_snapshots(struct bch_fs *c)
 		bch2_set_btree_clean(c, BTREE_ID_snapshots);
 	return ret;
 }
+
+/* reconstruct_snapshots: */
 
 static int check_snapshot_exists(struct btree_trans *trans, u32 id)
 {
@@ -1210,6 +1277,8 @@ int bch2_reconstruct_snapshots(struct bch_fs *c)
  * of the descendant, copy it down. A genuinely missing inode is left for a
  * full fsck to reconstruct; we don't do that or schedule passes here.
  */
+/* check_key_has_snapshot - per-key repair, also called at runtime: */
+
 static int check_key_has_inode_in_snapshot(struct btree_trans *trans,
 					   enum btree_id btree, u64 inum, u32 snapshot)
 {
