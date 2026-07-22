@@ -391,18 +391,11 @@ int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_int
 	}
 
 	if (!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)) {
-		s->v.parent		= 0;
 		/*
-		 * Retain the pointer to our live descendant: the node is spliced
-		 * out of the live tree, but a stray key later found in this
-		 * deleted snapshot must still be migrated to where it's visible,
-		 * and bch2_snapshot_live_descendent() walks children[0] to find
-		 * it. (child_id is 0 for a leaf - nothing to retain.)
+		 * Retain parent/child pointers; don't destroy information if we
+		 * have to repair:
 		 */
-		s->v.children[0]	= cpu_to_le32(child_id);
-		s->v.children[1]	= 0;
 		s->v.subvol		= 0;
-		s->v.tree		= 0;
 		s->v.depth		= 0;
 		s->v.skip[0]		= 0;
 		s->v.skip[1]		= 0;
