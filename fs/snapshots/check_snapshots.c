@@ -603,6 +603,52 @@ static int check_snapshot_edge(struct btree_trans *trans,
 		return other_ret;
 	bool other_exists = !other_ret;
 
+	/*
+	 * Connectivity: the live tree must be closed over not-deleted nodes.
+	 * A deleted target is history - an interrupted deletion left our edge
+	 * pointing into it - so rewrite our own edge past it: parent edges
+	 * walk up the tombstone's retained parent chain, child edges walk
+	 * down retained children, to the nearest not-deleted node (or
+	 * nothing, if that direction is all dead). The tombstone itself is
+	 * untouched; depth/skiplist fallout is repaired by the checks
+	 * downstream. (A tombstone with two live children was revived by
+	 * check_snapshot_deleted() before we got here, so walking
+	 * children[0] doesn't skip a live sibling.)
+	 */
+	if (other_exists &&
+	    bch2_snapshot_state_compat(&other) == SNAPSHOT_STATE_deleted) {
+		u32 repl = other_id;
+		struct bch_snapshot t = other;
+
+		for (unsigned iters = 0; ; iters++) {
+			if (iters > BTREE_MAX_DEPTH * 64) /* damaged chain, cycle? don't guess */
+				return 0;
+
+			repl = le32_to_cpu(side == EDGE_CHILD ? t.parent : t.children[0]);
+			if (!repl)
+				break;
+
+			int ret2 = bch2_snapshot_lookup(trans, repl, &t);
+			if (bch2_err_matches(ret2, ENOENT)) {
+				repl = 0;
+				break;
+			}
+			if (ret2)
+				return ret2;
+
+			if (bch2_snapshot_state_compat(&t) != SNAPSHOT_STATE_deleted)
+				break;
+		}
+
+		if (ret_fsck_err(trans, snapshot_deleted_but_linked,
+				 "snapshot %u %s pointer %u is a deleted node - %s %u",
+				 id, side == EDGE_CHILD ? "parent" : "child", other_id,
+				 repl ? "re-linking past it to" : "clearing, dead in that direction:",
+				 repl))
+			return snapshot_edge_set_ptr(trans, id, side, other_id, repl);
+		return 0;
+	}
+
 	if (other_exists && snapshot_node_points_back(&other, !side, id))
 		return 0;
 
