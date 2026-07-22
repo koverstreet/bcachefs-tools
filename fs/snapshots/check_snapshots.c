@@ -1078,14 +1078,9 @@ static int check_snapshot_exists(struct btree_trans *trans, u32 id)
 	snapshot->v.tree	= cpu_to_le32(tree_id);
 	snapshot->v.btime.lo	= cpu_to_le64(bch2_current_time(c));
 
-	for_each_btree_key_norestart(trans, iter, BTREE_ID_subvolumes, POS_MIN,
-				     0, k, ret) {
-		if (k.k->type == KEY_TYPE_subvolume &&
-		    le32_to_cpu(bkey_s_c_to_subvolume(k).v->snapshot) == id) {
-			snapshot->v.subvol = cpu_to_le32(k.k->p.offset);
-			break;
-		}
-	}
+	u32 subvol_id = 0;
+	try(subvol_claiming_snapshot(trans, id, &subvol_id));
+	snapshot->v.subvol = cpu_to_le32(subvol_id);
 
 	bch2_snapshot_state_set(&snapshot->v, SNAPSHOT_STATE_live);
 
