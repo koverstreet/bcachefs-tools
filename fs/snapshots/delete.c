@@ -430,6 +430,91 @@ int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_int
 }
 
 /*
+ * Reinsert an undeleted node into the live tree: the inverse of the splice in
+ * bch2_snapshot_node_delete(). The tombstone retained its pointers as history:
+ * if the parent's child slot (or the snapshot_tree root, for a deleted root)
+ * currently holds one of our retained children, that's where the splice took
+ * us out - take the slot back and take the child back. If the slot holds us
+ * already, the deletion never got that far and there's nothing to relink. If
+ * the topology has moved on, or an old wiped tombstone retained nothing, the
+ * node revives unlinked and the tree pointer checks handle it downstream.
+ */
+int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapshot *u)
+{
+	struct bch_fs *c = trans->c;
+	u32 id = u->k.p.offset;
+	u32 parent_id = le32_to_cpu(u->v.parent);
+	u32 child_id = 0;
+
+	bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
+
+	if (parent_id) {
+		struct bkey_i_snapshot *parent =
+			bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
+						POS(0, parent_id), 0, snapshot);
+		int ret = PTR_ERR_OR_ZERO(parent);
+		if (bch2_err_matches(ret, ENOENT))
+			return 0;
+		if (ret)
+			return ret;
+
+		if (bch2_snapshot_state(&parent->v) != SNAPSHOT_STATE_live)
+			return 0;
+
+		for (unsigned i = 0; i < 2; i++) {
+			u32 p_child = le32_to_cpu(parent->v.children[i]);
+
+			if (p_child &&
+			    (p_child == le32_to_cpu(u->v.children[0]) ||
+			     p_child == le32_to_cpu(u->v.children[1]))) {
+				child_id = p_child;
+				parent->v.children[i] = cpu_to_le32(id);
+				normalize_snapshot_child_pointers(&parent->v);
+				break;
+			}
+		}
+		if (!child_id)
+			return 0;
+	} else if (u->v.tree) {
+		struct bkey_i_snapshot_tree *s_t =
+			bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshot_trees,
+						POS(0, le32_to_cpu(u->v.tree)),
+						0, snapshot_tree);
+		int ret = PTR_ERR_OR_ZERO(s_t);
+		if (bch2_err_matches(ret, ENOENT))
+			return 0;
+		if (ret)
+			return ret;
+
+		u32 root_id = le32_to_cpu(s_t->v.root_snapshot);
+		if (root_id != le32_to_cpu(u->v.children[0]) &&
+		    root_id != le32_to_cpu(u->v.children[1]))
+			return 0;
+
+		child_id = root_id;
+		s_t->v.root_snapshot = cpu_to_le32(id);
+	} else {
+		return 0;
+	}
+
+	u->v.depth = cpu_to_le32(bch2_snapshot_depth(c, parent_id));
+	for (unsigned j = 0; j < ARRAY_SIZE(u->v.skip); j++)
+		u->v.skip[j] = cpu_to_le32(bch2_snapshot_skiplist_get(c, parent_id));
+	bubble_sort(u->v.skip, ARRAY_SIZE(u->v.skip), cmp_le32);
+
+	struct bkey_i_snapshot *child =
+		errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
+					POS(0, child_id), 0, snapshot));
+
+	if (le32_to_cpu(child->v.parent) == parent_id) {
+		child->v.parent	= cpu_to_le32(id);
+		child->v.depth	= cpu_to_le32(le32_to_cpu(u->v.depth) + 1);
+	}
+
+	return 0;
+}
+
+/*
  * If we have an unlinked inode in an internal snapshot node, and the inode
  * really has been deleted in all child snapshots, how does this get cleaned up?
  *
