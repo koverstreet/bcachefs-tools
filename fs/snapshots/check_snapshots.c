@@ -997,19 +997,6 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
 			bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_live);
 			*s = (*u)->v;
-		} else if (ret_fsck_err_on(!keys && !sectors && s->tree,
-				trans, snapshot_deleted_but_linked,
-				"deleted snapshot node was never spliced out, no data accounted - completing deletion:\n%s",
-				(printbuf_reset(&buf),
-				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-			/* pass node_delete's already-deleted guard: */
-			bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_will_delete);
-			*s = (*u)->v;
-
-			try(bch2_snapshot_node_delete(trans, k.k->p.offset,
-						      !!s->children[0]));
-			return 1;
 		}
 	}
 
