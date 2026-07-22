@@ -300,38 +300,22 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 		if (ret)
 			return ret;
 
-		if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_live) {
-			/*
-			 * A live subvolume that doesn't point back isn't this
-			 * leaf's owner - the leaf needs its own subvolume
-			 * created, which we can't do yet:
-			 */
-			if (le32_to_cpu(subvol.snapshot) != k.k->p.offset) {
-				CLASS(bch_log_msg, msg)(c);
+		/*
+		 * A live subvolume that doesn't point back isn't this
+		 * leaf's owner - the leaf needs its own subvolume
+		 * created, which we can't do yet. (One that does point
+		 * back was handled by check_snapshot()'s corroboration.)
+		 */
+		if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_live &&
+		    le32_to_cpu(subvol.snapshot) != k.k->p.offset) {
+			CLASS(bch_log_msg, msg)(c);
 
-				prt_printf(&msg.m, "snapshot points to live subvolume %u, which points to snapshot %u:\n",
-					   id, le32_to_cpu(subvol.snapshot));
-				bch2_bkey_val_to_text(&msg.m, c, k);
-				msg.m.suppress = !bch2_count_fsck_err(c, snapshot_subvol_backref_wrong, &msg.m);
+			prt_printf(&msg.m, "snapshot points to live subvolume %u, which points to snapshot %u:\n",
+				   id, le32_to_cpu(subvol.snapshot));
+			bch2_bkey_val_to_text(&msg.m, c, k);
+			msg.m.suppress = !bch2_count_fsck_err(c, snapshot_subvol_backref_wrong, &msg.m);
 
-				return bch_err_throw(c, fsck_repair_unimplemented);
-			}
-
-			/*
-			 * Deletion tombstones the subvolume in the same
-			 * transaction that marks the leaf will_delete, so
-			 * will_delete with a live owner pointing back means
-			 * the node's state is what's wrong:
-			 */
-			if (ret_fsck_err_on(bch2_snapshot_state(s) == SNAPSHOT_STATE_will_delete,
-					trans, snapshot_will_delete_but_subvol_live,
-					"snapshot marked will_delete but its subvolume is live - resurrecting:\n%s",
-					(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-				u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-
-				bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
-				*s = u->v;
-			}
+			return bch_err_throw(c, fsck_repair_unimplemented);
 		}
 	}
 
@@ -869,6 +853,35 @@ static int check_snapshot(struct btree_trans *trans,
 			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
 			bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
 			s = u->v;
+		}
+
+		/*
+		 * Same check via the subvolume: deletion tombstones the
+		 * subvolume in the same transaction that marks its snapshot,
+		 * so a non-live leaf whose subvolume is live and points back
+		 * has a bad state field. This also fixes, in the same pass, a
+		 * bad state stamped by the zero-state migration above from a
+		 * corrupt legacy flag. (A tombstoned subvolume reads as
+		 * ENOENT here: that's normal mid-deletion, not evidence.)
+		 */
+		if (!s.children[0] && s.subvol) {
+			struct bch_subvolume subvol;
+			int ret2 = bch2_subvolume_get(trans, le32_to_cpu(s.subvol),
+						      false, &subvol);
+			if (ret2 && !bch2_err_matches(ret2, ENOENT))
+				return ret2;
+
+			if (!ret2 &&
+			    bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_live &&
+			    le32_to_cpu(subvol.snapshot) == k.k->p.offset &&
+			    ret_fsck_err(trans, snapshot_deleted_but_subvol_live,
+					 "snapshot marked %s but its subvolume is live - reviving:\n%s",
+					 bch2_snapshot_state_str(bch2_snapshot_state(&s)),
+					 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+				u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+				bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
+				s = u->v;
+			}
 		}
 	}
 
