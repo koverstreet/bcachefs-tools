@@ -415,6 +415,7 @@ fn cmd_set(
     pos: c::bpos,
     type_name: &str,
     assigns: &[(&str, FieldVal)],
+    in_snapshot: bool,
 ) -> Result<String> {
     let ti = typeinfo::bkey_type_info_by_name(type_name)
         .ok_or_else(|| anyhow!("unknown key type '{type_name}'"))?;
@@ -433,6 +434,29 @@ fn cmd_set(
         None,
         CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
         |t| {
+            // Deletion has two meanings. Raw (the default): remove this
+            // exact key - a filtered iter would have bch2_trans_update()
+            // convert the deletion into a whiteout whenever the key is
+            // visible in an ancestor snapshot, so deleting a whiteout
+            // silently rewrites it as itself. -s: delete within pos's
+            // snapshot - the filtered iter gets exactly that conversion,
+            // the same semantics as a runtime delete. The peek is just
+            // the traverse bch2_trans_update() requires.
+            let (iter_flags, update_flags) = if in_snapshot {
+                (BtreeIterFlags::INTENT, UpdateTriggerFlags::empty())
+            } else {
+                (RAW_EXACT | BtreeIterFlags::INTENT,
+                 UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+            };
+            let mut iter = BtreeIter::new(
+                t.trans(),
+                btree,
+                pos,
+                iter_flags,
+            );
+            iter.peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
+                .map_err(TransError::from)?;
+
             let mut new = t.bkey_alloc((BKEY_U64S + val_u64s) as u32)
                 .map_err(TransError::from)?;
             new.as_mut_u64s().fill(0);
@@ -459,7 +483,7 @@ fn cmd_set(
                 }
             }
 
-            t.insert_nonextent(btree, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
+            t.update(&mut iter, new, update_flags)
         },
     );
 
@@ -518,9 +542,11 @@ peek      <btree> <pos>                        first key >= pos
 peek_prev <btree> <pos>                        last key <= pos
 list      <btree> [start] [end]                keys in range
 update    <btree> <pos> <field=val>...         modify fields of an existing key
-set       <btree> <pos> <type> [field=val]...  insert a whole new key
+set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
           values are integers; fields holding enum codewords (snapshot/
           subvolume state) also accept the value name, e.g. state=will_delete
+          `set <pos> deleted` removes the exact key; with -s it deletes
+          within pos's snapshot instead (whiteouts, like a runtime delete)
 sb get    <field>                              read a superblock field/flag
 sb set    <field=val>                          write one, then bch2_write_super
 help                                           this text
@@ -604,9 +630,16 @@ fn run_line(kvdb_fs: &KvdbFs, nostart: bool, line: &str) -> Result<()> {
             cmd_update(fs, parse_btree(btree)?, parse_pos(pos)?, &assigns)?
         }
         "set" => {
-            let [btree, pos, type_name, assigns @ ..] = args else {
-                bail!("usage: set <btree> <pos> <type> [field=val]...");
+            let (in_snapshot, args) = match args {
+                ["-s", rest @ ..] => (true, rest),
+                _ => (false, args),
             };
+            let [btree, pos, type_name, assigns @ ..] = args else {
+                bail!("usage: set [-s] <btree> <pos> <type> [field=val]...");
+            };
+            if in_snapshot && *type_name != "deleted" {
+                bail!("-s (delete within pos's snapshot) only applies to deletions");
+            }
             let KvdbFs::Offline(fs) = kvdb_fs else {
                 bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
             };
@@ -614,7 +647,7 @@ fn run_line(kvdb_fs: &KvdbFs, nostart: bool, line: &str) -> Result<()> {
                 .iter()
                 .map(|s| parse_assign(s))
                 .collect::<Result<Vec<_>>>()?;
-            cmd_set(fs, parse_btree(btree)?, parse_pos(pos)?, type_name, &assigns)?
+            cmd_set(fs, parse_btree(btree)?, parse_pos(pos)?, type_name, &assigns, in_snapshot)?
         }
         "sb" => {
             let (&sub, rest) = args.split_first()
