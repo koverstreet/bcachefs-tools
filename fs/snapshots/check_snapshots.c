@@ -273,6 +273,24 @@ static int snapshot_tree_ptr_repair(struct btree_trans *trans,
 	return 0;
 }
 
+/* Find a subvolume claiming snapshot @id, to restore a wiped backref: */
+static int subvol_claiming_snapshot(struct btree_trans *trans, u32 id,
+				    u32 *subvol_id)
+{
+	struct bkey_s_c k;
+	int ret;
+
+	for_each_btree_key_norestart(trans, iter, BTREE_ID_subvolumes, POS_MIN,
+				     0, k, ret)
+		if (k.k->type == KEY_TYPE_subvolume &&
+		    le32_to_cpu(bkey_s_c_to_subvolume(k).v->snapshot) == id) {
+			*subvol_id = k.k->p.offset;
+			break;
+		}
+
+	return ret;
+}
+
 static int check_snapshot_to_subvol(struct btree_trans *trans,
 			  struct btree_iter *iter,
 			  struct bkey_s_c k,
@@ -316,6 +334,29 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 			msg.m.suppress = !bch2_count_fsck_err(c, snapshot_subvol_backref_wrong, &msg.m);
 
 			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+	} else if (should_have_subvol &&
+		   bch2_snapshot_state(s) == SNAPSHOT_STATE_live) {
+		/*
+		 * A live leaf with no backref: a subvolume still pointing at
+		 * it means the backref was wiped - restore it. (A second
+		 * claimant, if damage minted one, still hits check_subvols'
+		 * doesn't-point-back fail-stop.) No claimant is an orphan
+		 * leaf, whose repair (creating a subvolume) is
+		 * unimplemented, as above.
+		 */
+		u32 subvol_id = 0;
+		try(subvol_claiming_snapshot(trans, k.k->p.offset, &subvol_id));
+
+		if (subvol_id &&
+		    ret_fsck_err(trans, snapshot_subvol_backref_wrong,
+				 "snapshot leaf missing subvol backref, subvolume %u points at it - restoring:\n%s",
+				 subvol_id,
+				 (bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			u->v.subvol = cpu_to_le32(subvol_id);
+			SET_BCH_SNAPSHOT_SUBVOL_OBSOLETE(&u->v, true);
+			*s = u->v;
 		}
 	}
 
