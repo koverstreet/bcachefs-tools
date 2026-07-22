@@ -1037,7 +1037,16 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 				(printbuf_reset(&buf),
 				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
 			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-			try(bch2_snapshot_node_undelete(trans, *u));
+
+			/*
+			 * Relinking rewrites pointers on nodes this pass may
+			 * already have verified - require another run:
+			 */
+			bool relinked = false;
+			try(bch2_snapshot_node_undelete(trans, *u, &relinked));
+			if (relinked)
+				try(bch2_require_recovery_pass(c, &buf,
+						BCH_RECOVERY_PASS_check_snapshots));
 			*s = (*u)->v;
 		}
 	}
