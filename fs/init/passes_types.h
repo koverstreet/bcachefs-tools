@@ -18,6 +18,16 @@ struct bch_fs_recovery {
 
 	/* bitmask of recovery passes that we actually ran */
 	u64			passes_complete;
+	/*
+	 * Every pass this run dispatched, successful or not - the rewind
+	 * gate: we never rewind to (or re-queue behind us) a pass that
+	 * already ran this run. Gating on passes_complete alone looped: a
+	 * pass that runs and fails never completes, so under
+	 * errors=continue a later pass re-requesting it rewound forever
+	 * (delete_dead_snapshots <-> check_subvols on an unrepairable
+	 * snapshot/subvol edge).
+	 */
+	u64			passes_attempted;
 	u64			passes_failing;
 	u64			passes_ratelimiting;
 

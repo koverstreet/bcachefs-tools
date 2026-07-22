@@ -324,7 +324,7 @@ static bool recovery_pass_needs_rewind(struct bch_fs *c,
 	struct bch_fs_recovery *r = &c->recovery;
 	return  test_bit(BCH_FS_running_recovery_passes, &c->flags) &&
 		r->current_pass > pass &&
-		!(r->passes_complete & BIT_ULL(pass));
+		!(r->passes_attempted & BIT_ULL(pass));
 }
 
 static bool recovery_pass_needs_set(struct bch_fs *c,
@@ -418,19 +418,22 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	bool rewind = recovery_pass_needs_rewind(c, pass);
 
 	/*
-	 * A pass that already completed this run must never be re-run in the
-	 * same loop - that's the rewind invariant, which recovery_pass_needs_rewind
-	 * enforces by gating on passes_complete. The "run it now because it can't
-	 * be deferred to the background" arm has to honor the same invariant:
-	 * otherwise a pass that reschedules an earlier, already-completed pass
-	 * (check_key_has_snapshot scheduling check_inodes/check_extents while
-	 * running check_xattrs, once the dead-snapshot keys those passes would
-	 * clean are still present) injects it back into current_passes and we
-	 * re-run the whole content-check range out of order, looping.
+	 * A pass that already ran this run - completed OR failed - must never
+	 * be re-run in the same loop: that's the rewind invariant, which
+	 * recovery_pass_needs_rewind enforces by gating on passes_attempted.
+	 * (Gating on passes_complete looped: a failing pass never completes,
+	 * so under errors=continue a later pass re-requesting it rewound
+	 * forever.) The "run it now because it can't be deferred to the
+	 * background" arm has to honor the same invariant: otherwise a pass
+	 * that reschedules an earlier, already-run pass (check_key_has_snapshot
+	 * scheduling check_inodes/check_extents while running check_xattrs,
+	 * once the dead-snapshot keys those passes would clean are still
+	 * present) injects it back into current_passes and we re-run the whole
+	 * content-check range out of order, looping.
 	 */
 	bool run_now = rewind ||
 		(!recovery_pass_should_defer(pass, r->current_passes) &&
-		 !(r->passes_complete & BIT_ULL(pass)));
+		 !(r->passes_attempted & BIT_ULL(pass)));
 
 	/*
 	 * Ephemeral scheduling is best-effort and must never rewind: the caller
@@ -638,6 +641,12 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 	}
 
 	r->current_passes = orig_passes_to_run;
+	/*
+	 * Fresh attempt-epoch per run: a pass attempted in a previous
+	 * (online) run is fair game again; within one run, attempted passes
+	 * are never rewound to or re-queued behind current_pass.
+	 */
+	r->passes_attempted = 0;
 
 	/*
 	 * Passes scheduled ephemerally mid-run (e.g. delete_dead_snapshots via a
@@ -657,6 +666,7 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 		r->current_pass			= pass;
 		r->current_passes		&= ~BIT_ULL(pass);
 		r->scheduled_passes_ephemeral	&= ~BIT_ULL(pass);
+		r->passes_attempted		|= BIT_ULL(pass);
 
 		spin_unlock_irq(&r->lock);
 
