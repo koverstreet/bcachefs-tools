@@ -230,6 +230,8 @@ enum bch_fsck_flags {
 	x(snapshot_state_stale_tombstone,			382,	FSCK_AUTOFIX)	\
 	x(snapshot_deleted_but_subvol_live,			376,	FSCK_AUTOFIX)	\
 	x(snapshot_deleted_has_live_children,			381,	FSCK_AUTOFIX)	\
+	x(snapshot_deleted_but_linked,				384,	FSCK_AUTOFIX)	\
+	x(snapshot_deleted_but_has_data,			385,	FSCK_AUTOFIX)	\
 	x(snapshot_subvol_backref_wrong,			377,	0)		\
 	x(snapshot_no_keys_childless,				378,	FSCK_AUTOFIX)	\
 	x(snapshot_should_not_have_subvol,			182,	0)		\
@@ -395,7 +397,7 @@ enum bch_fsck_flags {
 	x(inode_has_access_acl_flag_wrong,			366,	FSCK_AUTOFIX)	\
 	x(inode_has_default_acl_flag_wrong,			367,	FSCK_AUTOFIX)	\
 	x(dirent_to_inode_in_descendant_snapshot,		368,	FSCK_AUTOFIX)	\
-	x(MAX,							384,	0)
+	x(MAX,							386,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
