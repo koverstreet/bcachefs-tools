@@ -393,6 +393,7 @@ static inline int bch2_get_snapshot_overwrites(struct btree_trans *trans,
 
 int bch2_snapshot_node_set_deleted(struct btree_trans *, u32);
 int bch2_snapshot_node_delete(struct btree_trans *, u32, bool);
+int bch2_snapshot_node_undelete(struct btree_trans *, struct bkey_i_snapshot *);
 void bch2_snapshot_accounting_totals(struct bch_fs *, u32, u64 *, u64 *,
 				     struct printbuf *);
 

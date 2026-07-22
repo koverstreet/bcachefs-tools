@@ -975,14 +975,10 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 	/*
 	 * Every deleted node gets held up against the accounting: nothing we
 	 * write deletes a node with data still accounted to it, so data means
-	 * the state field is the lie, whatever the node's shape - undelete,
-	 * falling through so the edge checks validate the now-live node.
-	 *
-	 * No data, but the tree pointer was never wiped: the tombstone wipe
-	 * clears it in the same transaction that marks deleted, so this node
-	 * was never spliced out - complete the deletion. (A surviving parent
-	 * pointer is not evidence of anything: legacy tombstones retain it.)
-	 * No data and no tree: settled tombstone, nothing to do.
+	 * the state field is the lie, whatever the rest of the node says -
+	 * undelete, splicing the node back into the tree (the tombstone
+	 * retained its pointers), and fall through so the edge checks
+	 * validate the result. No data: settled tombstone, nothing to do.
 	 */
 	if (bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted) {
 		u64 keys, sectors;
@@ -995,7 +991,7 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 				(printbuf_reset(&buf),
 				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
 			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-			bch2_snapshot_state_set(&(*u)->v, SNAPSHOT_STATE_live);
+			try(bch2_snapshot_node_undelete(trans, *u));
 			*s = (*u)->v;
 		}
 	}
