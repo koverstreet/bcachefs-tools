@@ -438,8 +438,13 @@ int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_int
  * already, the deletion never got that far and there's nothing to relink. If
  * the topology has moved on, or an old wiped tombstone retained nothing, the
  * node revives unlinked and the tree pointer checks handle it downstream.
+ *
+ * @relinked is set if we relinked: we've rewritten pointers on nodes
+ * check_snapshots may already have visited and verified, so the caller
+ * must require another run of the pass.
  */
-int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapshot *u)
+int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapshot *u,
+				bool *relinked)
 {
 	struct bch_fs *c = trans->c;
 	u32 id = u->k.p.offset;
@@ -511,6 +516,7 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 		child->v.depth	= cpu_to_le32(le32_to_cpu(u->v.depth) + 1);
 	}
 
+	*relinked = true;
 	return 0;
 }
 
