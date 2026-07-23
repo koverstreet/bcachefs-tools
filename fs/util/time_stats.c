@@ -104,8 +104,15 @@ static inline void time_stats_update_one(struct bch2_time_stats *stats,
 void __bch2_time_stats_clear_buffer(struct bch2_time_stats *stats,
 				    struct time_stat_buffer *b)
 {
+	/*
+	 * The to_seq_buf paths flush other cpus' partially-full buffers:
+	 * only [0, nr) hold real entries, the tail is leftovers from the
+	 * previous fill cycle. (nr is read racily against the owning cpu's
+	 * append; the bound also keeps a bad value from walking off the
+	 * array.)
+	 */
 	for (struct time_stat_buffer_entry *i = b->entries;
-	     i < b->entries + ARRAY_SIZE(b->entries);
+	     i < b->entries + min_t(size_t, b->nr, ARRAY_SIZE(b->entries));
 	     i++)
 		time_stats_update_one(stats, i->start, i->end);
 	b->nr = 0;
@@ -140,7 +147,17 @@ void __bch2_time_stats_update(struct bch2_time_stats *stats, u64 start, u64 end)
 		guard(irqsave)();
 		struct time_stat_buffer *b = this_cpu_ptr(stats->buffer);
 
-		BUG_ON(b->nr >= ARRAY_SIZE(b->entries));
+		/*
+		 * Can't happen via the update paths themselves (per-cpu, irqs
+		 * off, flushed at exactly capacity): a bad nr means the buffer
+		 * was scribbled or freed under us. Seen in the field (7.1.3,
+		 * read completion path) - note it and discard rather than
+		 * taking down the machine for a stats glitch.
+		 */
+		if (WARN_ONCE(b->nr >= ARRAY_SIZE(b->entries),
+			      "bch2_time_stats: pcpu buffer nr %u >= %zu (corrupt), discarding",
+			      b->nr, ARRAY_SIZE(b->entries)))
+			b->nr = 0;
 		b->entries[b->nr++] = (struct time_stat_buffer_entry) {
 			.start = start,
 			.end = end
