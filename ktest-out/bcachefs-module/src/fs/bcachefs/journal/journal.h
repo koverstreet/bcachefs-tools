@@ -1,0 +1,576 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _BCACHEFS_JOURNAL_H
+#define _BCACHEFS_JOURNAL_H
+
+/*
+ * THE JOURNAL:
+ *
+ * The primary purpose of the journal is to log updates (insertions) to the
+ * b-tree, to avoid having to do synchronous updates to the b-tree on disk.
+ *
+ * Without the journal, the b-tree is always internally consistent on
+ * disk - and in fact, in the earliest incarnations bcache didn't have a journal
+ * but did handle unclean shutdowns by doing all index updates synchronously
+ * (with coalescing).
+ *
+ * Updates to interior nodes still happen synchronously and without the journal
+ * (for simplicity) - this may change eventually but updates to interior nodes
+ * are rare enough it's not a huge priority.
+ *
+ * This means the journal is relatively separate from the b-tree; it consists of
+ * just a list of keys and journal replay consists of just redoing those
+ * insertions in same order that they appear in the journal.
+ *
+ * PERSISTENCE:
+ *
+ * For synchronous updates (where we're waiting on the index update to hit
+ * disk), the journal entry will be written out immediately (or as soon as
+ * possible, if the write for the previous journal entry was still in flight).
+ *
+ * Synchronous updates are specified by passing a closure (@flush_cl) to
+ * bch2_btree_insert() or bch_btree_insert_node(), which then pass that parameter
+ * down to the journalling code. That closure will wait on the journal write to
+ * complete (via closure_wait()).
+ *
+ * If the index update wasn't synchronous, the journal entry will be
+ * written out after 10 ms have elapsed, by default (the delay_ms field
+ * in struct journal).
+ *
+ * JOURNAL ENTRIES:
+ *
+ * A journal entry is variable size (struct jset), it's got a fixed length
+ * header and then a variable number of struct jset_entry entries.
+ *
+ * Journal entries are identified by monotonically increasing 64 bit sequence
+ * numbers - jset->seq; other places in the code refer to this sequence number.
+ *
+ * A jset_entry entry contains one or more bkeys (which is what gets inserted
+ * into the b-tree). We need a container to indicate which b-tree the key is
+ * for; also, the roots of the various b-trees are stored in jset_entry entries
+ * (one for each b-tree) - this lets us add new b-tree types without changing
+ * the on disk format.
+ *
+ * We also keep some things in the journal header that are logically part of the
+ * superblock - all the things that are frequently updated. This is for future
+ * bcache on raw flash support; the superblock (which will become another
+ * journal) can't be moved or wear leveled, so it contains just enough
+ * information to find the main journal, and the superblock only has to be
+ * rewritten when we want to move/wear level the main journal.
+ *
+ * JOURNAL LAYOUT ON DISK:
+ *
+ * The journal is written to a ringbuffer of buckets (which is kept in the
+ * superblock); the individual buckets are not necessarily contiguous on disk
+ * which means that journal entries are not allowed to span buckets, but also
+ * that we can resize the journal at runtime if desired (unimplemented).
+ *
+ * The journal buckets exist in the same pool as all the other buckets that are
+ * managed by the allocator and garbage collection - garbage collection marks
+ * the journal buckets as metadata buckets.
+ *
+ * OPEN/DIRTY JOURNAL ENTRIES:
+ *
+ * Open/dirty journal entries are journal entries that contain b-tree updates
+ * that have not yet been written out to the b-tree on disk. We have to track
+ * which journal entries are dirty, and we also have to avoid wrapping around
+ * the journal and overwriting old but still dirty journal entries with new
+ * journal entries.
+ *
+ * On disk, this is represented with the "last_seq" field of struct jset;
+ * last_seq is the first sequence number that journal replay has to replay.
+ *
+ * To avoid overwriting dirty journal entries on disk, we keep a mapping (in
+ * journal_device->seq) of for each journal bucket, the highest sequence number
+ * any journal entry it contains. Then, by comparing that against last_seq we
+ * can determine whether that journal bucket contains dirty journal entries or
+ * not.
+ *
+ * To track which journal entries are dirty, we maintain a fifo of refcounts
+ * (where each entry corresponds to a specific sequence number) - when a ref
+ * goes to 0, that journal entry is no longer dirty.
+ *
+ * Journalling of index updates is done at the same time as the b-tree itself is
+ * being modified (see btree_insert_key()); when we add the key to the journal
+ * the pending b-tree write takes a ref on the journal entry the key was added
+ * to. If a pending b-tree write would need to take refs on multiple dirty
+ * journal entries, it only keeps the ref on the oldest one (since a newer
+ * journal entry will still be replayed if an older entry was dirty).
+ *
+ * JOURNAL FILLING UP:
+ *
+ * There are two ways the journal could fill up; either we could run out of
+ * space to write to, or we could have too many open journal entries and run out
+ * of room in the fifo of refcounts. Since those refcounts are decremented
+ * without any locking we can't safely resize that fifo, so we handle it the
+ * same way.
+ *
+ * If the journal fills up, we start flushing dirty btree nodes until we can
+ * allocate space for a journal write again - preferentially flushing btree
+ * nodes that are pinning the oldest journal entries first.
+ */
+
+#include <linux/hash.h>
+
+#include "journal/types.h"
+
+struct bch_fs;
+
+static inline void journal_wake(struct journal *j)
+{
+	closure_wake_up(&j->async_wait);
+}
+
+static inline bool journal_med_on_space(struct journal *j)
+{
+	return test_bit(JOURNAL_med_on_space, &j->flags);
+}
+
+static inline bool journal_low_on_space(struct journal *j)
+{
+	return test_bit(JOURNAL_low_on_space, &j->flags) ||
+		test_bit(JOURNAL_low_on_pin, &j->flags);
+}
+
+/* Sequence number of oldest dirty journal entry */
+
+static inline u64 journal_cur_seq(struct journal *j)
+{
+	return atomic64_read(&j->seq);
+}
+
+/*
+ * Look up the buffer for @seq via the in_flight FIFO. Caller must hold
+ * j->lock (or otherwise be serialized against seq_ondisk advancing and
+ * FIFO mutation), since the FIFO front moves with seq_ondisk and
+ * buffers are freed on pop.
+ *
+ * For the fast path when holding a reservation, use journal_res_buf()
+ * instead — the reservation pins its ring slot.
+ */
+static inline struct journal_buf *
+journal_seq_to_buf(struct journal *j, u64 seq)
+{
+	lockdep_assert_held(&j->lock);
+	EBUG_ON(seq > journal_cur_seq(j));
+
+	return seq >= j->in_flight.front
+		? &fifo_entry(&j->in_flight, seq)
+		: NULL;
+}
+
+#define JOURNAL_BUF_NOT_IN_FLIGHT	((struct llist_node *) 1)
+#define JOURNAL_BUF_NOFLUSH		((struct llist_node *) 2)
+/*
+ * Stamped on the first entry opened after the journal was clean (the
+ * clean->dirty transition): this entry must be a flush write - its write
+ * completion marks the fs dirty (the superblock write in journal_write_done())
+ * - but flushers must not wait on it, since that mark happens after the early
+ * flush-completion signal. Flushers skip it (like NOFLUSH) and attach to a
+ * later entry, which by construction completes only after this one's sb write.
+ */
+#define JOURNAL_BUF_FLUSH_NO_WAIT	((struct llist_node *) 3)
+
+static inline bool journal_buf_must_flush(struct journal_buf *buf)
+{
+	/*
+	 * "must be written as a flush" - true for entries with real flush
+	 * waiters AND for the FLUSH_NO_WAIT transition entry (which has no
+	 * waiters but must still flush, to mark the fs dirty). The close/cycle
+	 * logic keys on this, so FLUSH_NO_WAIT must count here or its entry
+	 * never gets closed and written.
+	 */
+	return buf->wait.list.first > JOURNAL_BUF_NOFLUSH;
+}
+
+static inline bool journal_buf_must_not_flush(struct journal_buf *buf)
+{
+	return buf->wait.list.first == JOURNAL_BUF_NOFLUSH;
+}
+
+static inline bool journal_buf_try_noflush(struct journal_buf *buf)
+{
+	struct llist_node *old = READ_ONCE(buf->wait.list.first);
+
+	do {
+		if (old == JOURNAL_BUF_NOFLUSH)
+			return true;
+		if (old)
+			return false;
+	} while (!try_cmpxchg(&buf->wait.list.first, &old, JOURNAL_BUF_NOFLUSH));
+
+	return true;
+}
+
+static inline u64 journal_last_unallocated_seq(struct journal *j)
+{
+	struct journal_buf *buf;
+	u64 seq;
+	fifo_for_each_entry_ptr(buf, &j->in_flight, seq)
+		if (!buf->write_allocated)
+			return seq;
+	return 0;
+}
+
+static inline struct journal_buf *journal_cur_buf(struct journal *j)
+{
+	return j->ring[j->reservations.idx].buf;
+}
+
+/*
+ * Fastpath buffer lookup for a held reservation. No lock required: the
+ * reservation holds a count on the ring slot's state index, so the slot
+ * still points at the buf for res->seq until the reservation is released.
+ */
+static inline struct journal_buf *
+journal_res_buf(struct journal *j, struct journal_res *res)
+{
+	return j->ring[res->seq & JOURNAL_STATE_BUF_MASK].buf;
+}
+
+/*
+ * Fastpath access to the staging buffer (jset) for a held reservation.
+ * Equivalent to journal_res_buf(j, res)->data, but goes through the
+ * cached pointer in the ring slot to avoid an extra dereference on the
+ * hot reservation-write path.
+ */
+static inline struct jset *
+journal_res_data(struct journal *j, struct journal_res *res)
+{
+	return j->ring[res->seq & JOURNAL_STATE_BUF_MASK].data;
+}
+
+static inline int journal_state_count(union journal_res_state s, int idx)
+{
+	return (s.v >> (JOURNAL_STATE_BUF0_SHIFT + idx * JOURNAL_STATE_BUF_COUNT_BITS))
+		& JOURNAL_STATE_BUF_COUNT_MAX;
+}
+
+static inline int journal_state_seq_count(struct journal *j,
+					  union journal_res_state s, u64 seq)
+{
+	if (journal_cur_seq(j) - seq < JOURNAL_STATE_BUF_NR)
+		return journal_state_count(s, seq & JOURNAL_STATE_BUF_MASK);
+	else
+		return 0;
+}
+
+/* Returns false (without incrementing) if the count would overflow: */
+static inline bool journal_state_inc(union journal_res_state *s)
+{
+	if (journal_state_count(*s, s->idx) == JOURNAL_STATE_BUF_COUNT_MAX)
+		return false;
+
+	s->v += 1ULL << (JOURNAL_STATE_BUF0_SHIFT + s->idx * JOURNAL_STATE_BUF_COUNT_BITS);
+	return true;
+}
+
+/*
+ * Amount of space that will be taken up by some keys in the journal (i.e.
+ * including the jset header)
+ */
+static inline unsigned jset_u64s(unsigned u64s)
+{
+	return u64s + sizeof(struct jset_entry) / sizeof(u64);
+}
+
+static inline int journal_entry_overhead(struct journal *j)
+{
+	return sizeof(struct jset) / sizeof(u64) + j->entry_u64s_reserved;
+}
+
+static inline struct jset_entry *
+bch2_journal_add_entry_noreservation(struct journal_buf *buf, size_t u64s)
+{
+	struct jset *jset = buf->data;
+	struct jset_entry *entry = vstruct_idx(jset, le32_to_cpu(jset->u64s));
+
+	memset(entry, 0, sizeof(*entry));
+	entry->u64s = cpu_to_le16(u64s);
+
+	le32_add_cpu(&jset->u64s, jset_u64s(u64s));
+
+	return entry;
+}
+
+static inline struct jset_entry *
+journal_res_entry(struct journal *j, struct journal_res *res)
+{
+	return vstruct_idx(journal_res_data(j, res), res->offset);
+}
+
+static inline unsigned journal_entry_init(struct jset_entry *entry, unsigned type,
+					  enum btree_id id, unsigned level,
+					  unsigned u64s)
+{
+	entry->u64s	= cpu_to_le16(u64s);
+	entry->btree_id = id;
+	entry->level	= level;
+	entry->type	= type;
+	entry->pad[0]	= 0;
+	entry->pad[1]	= 0;
+	entry->pad[2]	= 0;
+	return jset_u64s(u64s);
+}
+
+static inline unsigned journal_entry_set(struct jset_entry *entry, unsigned type,
+					  enum btree_id id, unsigned level,
+					  const void *data, unsigned u64s)
+{
+	unsigned ret = journal_entry_init(entry, type, id, level, u64s);
+
+	memcpy_u64s(entry->_data, data, u64s);
+	return ret;
+}
+
+static inline struct jset_entry *
+__bch2_journal_add_entry(struct jset_entry **cur,
+			 unsigned type, enum btree_id id,
+			 unsigned level, unsigned u64s)
+{
+	struct jset_entry *entry = *cur;
+	unsigned actual = journal_entry_init(entry, type, id, level, u64s);
+
+	*cur = (struct jset_entry *) ((u64 *) entry + actual);
+	return entry;
+}
+
+static inline struct jset_entry *
+bch2_journal_add_entry(struct journal *j, struct journal_res *res,
+			 unsigned type, enum btree_id id,
+			 unsigned level, unsigned u64s)
+{
+	struct jset_entry *entry = journal_res_entry(j, res);
+	unsigned actual = journal_entry_init(entry, type, id, level, u64s);
+
+	EBUG_ON(!res->ref);
+	EBUG_ON(actual > res->u64s);
+
+	res->offset	+= actual;
+	res->u64s	-= actual;
+	return entry;
+}
+
+static inline bool journal_entry_empty(struct jset *j)
+{
+	if (j->seq != j->last_seq)
+		return false;
+
+	vstruct_for_each(j, i)
+		if (i->type == BCH_JSET_ENTRY_btree_keys && i->u64s)
+			return false;
+	return true;
+}
+
+static inline int bch2_journal_error(struct journal *j)
+{
+	return j->reservations.cur_entry_offset == JOURNAL_ENTRY_ERROR_VAL
+		? -BCH_ERR_journal_shutdown : 0;
+}
+
+/*
+ * Drop reference on a buffer index and return true if the count has hit zero.
+ */
+static inline union journal_res_state journal_state_buf_put(struct journal *j, unsigned idx)
+{
+	union journal_res_state s;
+
+	s.v = atomic64_sub_return(1ULL << (JOURNAL_STATE_BUF0_SHIFT + idx * JOURNAL_STATE_BUF_COUNT_BITS),
+				  &j->reservations.counter);
+	return s;
+}
+
+enum journal_cycle_flags {
+	JOURNAL_CYCLE_must_close	= BIT(0),
+	JOURNAL_CYCLE_must_open		= BIT(1),
+	JOURNAL_CYCLE_force_close	= BIT(2),
+};
+
+int bch2_journal_cycle_locked(struct journal *, enum journal_cycle_flags flags);
+void bch2_journal_cycle(struct journal *, enum journal_cycle_flags flags);
+
+void __bch2_journal_buf_put_final(struct journal *, u64);
+void bch2_journal_buf_put_final(struct journal *, u64);
+
+static inline void __bch2_journal_buf_put(struct journal *j, u64 seq)
+{
+	unsigned idx = seq & JOURNAL_STATE_BUF_MASK;
+	union journal_res_state s;
+
+	s = journal_state_buf_put(j, idx);
+	if (!journal_state_count(s, idx))
+		__bch2_journal_buf_put_final(j, seq);
+}
+
+static inline void bch2_journal_buf_put(struct journal *j, u64 seq)
+{
+	unsigned idx = seq & JOURNAL_STATE_BUF_MASK;
+	union journal_res_state s;
+
+	s = journal_state_buf_put(j, idx);
+	if (!journal_state_count(s, idx)) {
+		bch2_journal_buf_put_final(j, seq);
+	} else if (unlikely(s.cur_entry_offset == JOURNAL_ENTRY_BLOCKED_VAL))
+		closure_wake_up(&j->async_wait);
+}
+
+/*
+ * This function releases the journal write structure so other threads can
+ * then proceed to add their keys as well.
+ */
+static inline void bch2_journal_res_put(struct journal *j,
+				       struct journal_res *res)
+{
+	if (!res->ref)
+		return;
+
+	lock_release(&j->res_map, _THIS_IP_);
+
+	while (res->u64s)
+		bch2_journal_add_entry(j, res,
+				       BCH_JSET_ENTRY_btree_keys,
+				       0, 0, 0);
+
+	bch2_journal_buf_put(j, res->seq);
+
+	res->ref = 0;
+}
+
+int bch2_journal_res_get_slowpath(struct journal *, struct journal_res *,
+				  unsigned, struct btree_trans *);
+
+/* First bits for BCH_WATERMARK: */
+enum journal_res_flags {
+	__JOURNAL_RES_GET_NONBLOCK	= BCH_WATERMARK_BITS,
+	__JOURNAL_RES_GET_CHECK,
+};
+
+#define JOURNAL_RES_GET_NONBLOCK	(1 << __JOURNAL_RES_GET_NONBLOCK)
+#define JOURNAL_RES_GET_CHECK		(1 << __JOURNAL_RES_GET_CHECK)
+
+static inline int journal_res_get_fast(struct journal *j,
+				       struct journal_res *res,
+				       unsigned flags)
+{
+	union journal_res_state old, new;
+
+	old.v = atomic64_read(&j->reservations.counter);
+	do {
+		new.v = old.v;
+
+		/*
+		 * Check if there is still room in the current journal
+		 * entry, smp_rmb() guarantees that reads from reservations.counter
+		 * occur before accessing cur_entry_u64s:
+		 */
+		smp_rmb();
+		if (new.cur_entry_offset + res->u64s > j->cur_entry_u64s)
+			return 0;
+
+		EBUG_ON(!journal_state_count(new, new.idx));
+
+		if ((flags & BCH_WATERMARK_MASK) < j->watermark)
+			return 0;
+
+		new.cur_entry_offset += res->u64s;
+
+		/*
+		 * If the refcount would overflow, we have to wait:
+		 * XXX - tracepoint this:
+		 */
+		if (!journal_state_inc(&new))
+			return 0;
+
+		if (flags & JOURNAL_RES_GET_CHECK)
+			return 1;
+	} while (!atomic64_try_cmpxchg(&j->reservations.counter,
+				       &old.v, new.v));
+
+	res->ref	= true;
+	res->offset	= old.cur_entry_offset;
+	res->seq	= journal_cur_seq(j);
+	res->seq -= (res->seq - old.idx) & JOURNAL_STATE_BUF_MASK;
+	res->has_overwrites = journal_res_buf(j, res)->has_overwrites;
+	return 1;
+}
+
+static inline int bch2_journal_res_get(struct journal *j, struct journal_res *res,
+				       unsigned u64s, unsigned flags,
+				       struct btree_trans *trans)
+{
+	EBUG_ON(res->ref);
+	EBUG_ON(!test_bit(JOURNAL_running, &j->flags));
+	EBUG_ON(j->stop_thread && j->stop_thread != current && !bch2_journal_error(j));
+
+	res->u64s = u64s;
+
+	if (!journal_res_get_fast(j, res, flags))
+		try(bch2_journal_res_get_slowpath(j, res, flags, trans));
+
+	if (!(flags & JOURNAL_RES_GET_CHECK)) {
+		lock_acquire_shared(&j->res_map, 0,
+				    (flags & JOURNAL_RES_GET_NONBLOCK) != 0,
+				    NULL, _THIS_IP_);
+		EBUG_ON(!res->ref);
+		BUG_ON(!res->seq);
+	}
+	return 0;
+}
+
+void bch2_journal_quiesce(struct journal *);
+void bch2_journal_shutdown_quiesce(struct journal *);
+void bch2_journal_write_work(struct work_struct *);
+
+/* journal_entry_res: */
+
+void bch2_journal_entry_res_resize(struct journal *,
+				   struct journal_entry_res *,
+				   unsigned);
+
+struct closure_waitlist *__bch2_journal_flush_seq_async(struct journal *, u64, struct closure *);
+int bch2_journal_flush_seq_async(struct journal *, u64, struct closure *);
+void bch2_journal_flush_async(struct journal *, struct closure *);
+
+static inline void bch2_journal_res_flush(struct journal *j, struct journal_res *res,
+					  struct closure *cl)
+{
+	__bch2_journal_flush_seq_async(j, res->seq, cl);
+}
+
+int bch2_journal_flush_seq(struct journal *, u64, unsigned);
+int bch2_journal_flush(struct journal *);
+void bch2_journal_advance_rewind_seq(struct journal *, u64);
+int bch2_journal_add_rewind_range(struct bch_fs *, u64, u64);
+bool bch2_journal_noflush_seq(struct journal *, u64, u64);
+
+int __bch2_journal_meta(struct journal *);
+int bch2_journal_meta(struct journal *);
+
+void bch2_journal_halt_locked(struct journal *);
+void bch2_journal_halt(struct journal *);
+
+struct bch_dev;
+
+void bch2_journal_unblock(struct journal *);
+void bch2_journal_block(struct journal *);
+
+struct journal_block { struct journal *j; };
+
+DEFINE_CLASS(journal_block, struct journal_block,
+	     bch2_journal_unblock(_T.j),
+	     ({ bch2_journal_block(j); (struct journal_block) { j }; }),
+	     struct journal *j)
+__DEFINE_CLASS_IS_CONDITIONAL(journal_block, false);
+
+static inline void *class_journal_block_lock_ptr(class_journal_block_t *_T)
+{
+	return _T;
+}
+
+int bch2_journal_pin_fifo_resize(struct journal *);
+
+struct journal_buf *bch2_next_write_buffer_flush_journal_buf(struct journal *, u64, bool *);
+
+void __bch2_journal_debug_to_text(struct printbuf *, struct journal *);
+void bch2_journal_debug_to_text(struct printbuf *, struct journal *);
+
+#endif /* _BCACHEFS_JOURNAL_H */
