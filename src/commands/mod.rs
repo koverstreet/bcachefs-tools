@@ -120,6 +120,7 @@ pub mod super_cmd;
 pub mod timestats;
 pub mod top;
 pub mod unpoison;
+pub mod update;
 pub mod wait_devices;
 
 // ── Dispatch and help ────────────────────────────────────────────────
@@ -243,7 +244,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
         &wait_devices::CMD,
     ]},
     GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &journal_rewind_info::CMD, &recovery_pass::CMD] },
-    GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD] },
+    GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD, &update::CMD] },
     GroupDef { heading: "Devices",                  commands: &[&device::CMD] },
     GroupDef { heading: "Subvolumes and snapshots", commands: &[&subvolume::CMD] },
     GroupDef { heading: "Filesystem data",          commands: &[&reconcile::CMD, &scrub::CMD] },
