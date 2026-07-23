@@ -372,6 +372,18 @@ fn render_key_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
                         .collect::<Result<Vec<_>>>()?
                         .join(" ")
                 }
+                // A vartail's length is however much value remains:
+                FieldKind::VarTail { elem, stride }
+                        if matches!(elem, FieldKind::Int { .. }) => {
+                    (0..(val.len().saturating_sub(r.offset) / stride))
+                        .map(|i| read_int(path, &FieldRef {
+                            offset: r.offset + i * stride,
+                            kind: elem,
+                            len: *stride,
+                        }))
+                        .collect::<Result<Vec<_>>>()?
+                        .join(" ")
+                }
                 _ => bail!("{path}: not a scalar or integer-array field"),
             },
         };
@@ -750,7 +762,15 @@ fn cmd_set(
 ) -> Result<String> {
     let ti = typeinfo::bkey_type_info_by_name(type_name)
         .ok_or_else(|| anyhow!("unknown key type '{type_name}'"))?;
-    let val_u64s = ti.info.size.div_ceil(8);
+
+    // The value needs the struct's fixed size, extended by whatever the
+    // assignments reach - vartail elements (damage errors[n]) lie beyond it:
+    let mut need = ti.info.size;
+    for (path, _) in assigns {
+        let (r, _) = resolve_field(ti.type_ as u8, path)?;
+        need = need.max(r.offset + r.len);
+    }
+    let val_u64s = need.div_ceil(8);
 
     let assigns = assigns
         .iter()
