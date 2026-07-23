@@ -9,6 +9,7 @@
 #include "btree/bkey_buf.h"
 #include "btree/update.h"
 
+#include "data/checksum.h"
 #include "data/compress.h"
 #include "data/copygc.h"
 #include "data/extents.h"
@@ -568,6 +569,93 @@ static int data_update_index_update_key_nowrite(struct btree_trans *trans,
 	return 0;
 }
 
+static bool data_update_crc_eq(struct bch_extent_crc_unpacked l,
+			       struct bch_extent_crc_unpacked r)
+{
+	return l.csum_type		== r.csum_type &&
+		l.compression_type	== r.compression_type &&
+		l.compressed_size	== r.compressed_size &&
+		l.uncompressed_size	== r.uncompressed_size &&
+		l.live_size		== r.live_size &&
+		l.offset		== r.offset &&
+		l.nonce			== r.nonce &&
+		!bch2_crc_cmp(l.csum, r.csum);
+}
+
+static int data_update_index_update_key_rechecksum(struct btree_trans *trans,
+						   struct data_update *u,
+						   struct btree_iter *iter,
+						   struct bkey_s_c k,
+						   struct bch_extent_crc_unpacked old_crc,
+						   struct bch_extent_crc_unpacked new_crc)
+{
+	struct bch_fs *c = trans->c;
+	struct bkey_s_c old = bkey_i_to_s_c(u->k.k);
+
+	if (k.k->type != KEY_TYPE_extent ||
+	    !bch2_extents_match(c, k, old))
+		return 0;
+
+	struct bkey_i_extent *new = bkey_extent_init(
+		errptr_try(bch2_trans_kmalloc(trans, BKEY_EXTENT_U64s_MAX * sizeof(u64))));
+
+	new->k = *k.k;
+	set_bkey_val_bytes(&new->k, sizeof(new->v));
+
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+	const union bch_extent_entry *entry;
+	struct extent_ptr_decoded p;
+
+	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+		if (p.has_ec ||
+		    crc_is_compressed(p.crc) ||
+		    !data_update_crc_eq(p.crc, old_crc))
+			return 0;
+
+		p.crc = new_crc;
+		bch2_extent_ptr_decoded_append(c, &new->k_i, &p);
+	}
+
+	u64 flags = bch2_bkey_extent_flags(k);
+	if (flags)
+		try(bch2_bkey_extent_flags_set(c, &new->k_i, flags));
+
+	struct bch_inode_opts opts;
+	try(bch2_bkey_get_io_opts(trans, NULL, k, &opts));
+	try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(&new->k_i),
+					  BKEY_EXTENT_U64s_MAX,
+					  SET_NEEDS_RECONCILE_foreground,
+					  u->op.opts.change_cookie));
+
+	return bch2_trans_update(trans, iter, &new->k_i,
+				 BTREE_UPDATE_internal_snapshot_node|
+				 BTREE_TRIGGER_set_needs_reconcile_done);
+}
+
+static int data_update_index_update_rechecksum(struct btree_trans *trans,
+					       struct data_update *u,
+					       struct bch_extent_crc_unpacked old_crc,
+					       struct bch_extent_crc_unpacked new_crc)
+{
+	struct bch_fs *c = trans->c;
+	struct bkey_s_c old = bkey_i_to_s_c(u->k.k);
+
+	CLASS(disk_reservation, res)(c);
+
+	return for_each_btree_key_commit(trans, iter, u->btree_id,
+			bkey_start_pos(old.k),
+			BTREE_ITER_slots|BTREE_ITER_intent,
+			k, &res.r, NULL,
+			BCH_TRANS_COMMIT_no_check_rw|
+			BCH_TRANS_COMMIT_no_enospc, ({
+		if (bkey_le(old.k->p, bkey_start_pos(k.k)))
+			break;
+
+		data_update_index_update_key_rechecksum(trans, u, &iter, k,
+							old_crc, new_crc);
+	}));
+}
+
 static int data_update_index_update_nowrite(struct btree_trans *trans,
 					    struct data_update *u)
 {
@@ -665,6 +753,20 @@ void bch2_data_update_read_done(struct data_update *u)
 
 	if (unlikely(rbio->ret)) {
 		u->op.error = rbio->ret;
+		u->op.end_io(&u->op);
+		return;
+	}
+
+	if (u->opts.type == BCH_DATA_UPDATE_rechecksum) {
+		struct bch_extent_crc_unpacked new_crc;
+		int ret = bch2_rechecksum_bio(c, &rbio->bio, rbio->version,
+				crc, NULL, &new_crc, 0, crc.live_size,
+				u->op.csum_type);
+		if (!ret) {
+			CLASS(btree_trans, trans)(c);
+			ret = data_update_index_update_rechecksum(trans, u, crc, new_crc);
+		}
+		u->op.error = ret;
 		u->op.end_io(&u->op);
 		return;
 	}
@@ -1416,7 +1518,8 @@ int bch2_data_update_init(struct btree_trans *trans,
 		ptr_bit <<= 1;
 	}
 
-	if (m->opts.type != BCH_DATA_UPDATE_scrub &&
+	if (m->opts.type != BCH_DATA_UPDATE_rechecksum &&
+	    m->opts.type != BCH_DATA_UPDATE_scrub &&
 	    m->opts.type != BCH_DATA_UPDATE_scrub_no_repair) {
 		/*
 		 * If current extent durability is less than io_opts.data_replicas,
