@@ -389,10 +389,11 @@ fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
 
 /// Online counterpart of iter_flags(): the ioctl maps its flags 1:1 into
 /// btree iter flags, so omitting all_snapshots gets filtered iteration
-/// kernel-side.
+/// kernel-side. (nofilter_whiteouts is rejected by kernels predating the
+/// bit - run a matching kernel for online filtered reads.)
 fn online_snapshots_flag(filtered: bool) -> OnlineIterFlags {
     if filtered {
-        OnlineIterFlags::default()
+        OnlineIterFlags::NOFILTER_WHITEOUTS
     } else {
         OnlineIterFlags::ALL_SNAPSHOTS
     }

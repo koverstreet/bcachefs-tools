@@ -28,6 +28,8 @@ impl OnlineIterFlags {
     pub const SLOTS: Self         = Self(c::BCH_IOCTL_QUERY_BTREE_KEYS_slots);
     pub const PREV: Self          = Self(c::BCH_IOCTL_QUERY_BTREE_KEYS_prev);
     pub const ALL_SNAPSHOTS: Self = Self(c::BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots);
+    pub const NOFILTER_WHITEOUTS: Self =
+        Self(c::BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts);
 }
 
 impl std::ops::BitOr for OnlineIterFlags {
