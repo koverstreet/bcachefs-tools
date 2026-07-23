@@ -902,7 +902,7 @@ static int check_inode_dirent_inode(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 	CLASS(printbuf, buf)();
 
-	u32 inode_snapshot = inode->bi_snapshot;
+	u32 inode_snapshot = bch2_snapshot_redundant_interior(c, inode->bi_snapshot);
 	CLASS(btree_iter_uninit, dirent_iter)(trans);
 	struct bkey_s_c_dirent d = bch2_inode_get_dirent(trans, &dirent_iter, inode, &inode_snapshot);
 	int ret = bkey_err(d);
