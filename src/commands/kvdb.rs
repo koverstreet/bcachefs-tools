@@ -322,6 +322,64 @@ fn render_key(fs: &Fs, k: &BkeySC<'_>, key_only: bool) -> String {
     }
 }
 
+/// The read half of the field engine: selected fields of a key's value as
+/// bare values, one line per path - the same paths update addresses for
+/// writes, so scripts get a stable contract instead of scraping the
+/// human-oriented to_text display. Whole arrays print space-separated.
+/// A field beyond the end of a short (older-format) value reads as zero,
+/// mirroring update's grow-zero-filled write semantics.
+fn render_key_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
+    use std::fmt::Write as _;
+    use typeinfo::{AccessError, FieldKind, FieldRef};
+
+    let val_u64s = k.k.u64s as usize - BKEY_U64S;
+    let val: &[u8] = unsafe {
+        std::slice::from_raw_parts(k.v as *const c::bch_val as *const u8, val_u64s * 8)
+    };
+
+    let read_int = |path: &str, r: &FieldRef| -> Result<String> {
+        let v = match typeinfo::read_scalar(val, r) {
+            Ok(v) => v,
+            Err(AccessError::OutOfBounds { .. }) => 0,
+            Err(e) => bail!("{path}: {e}"),
+        };
+        Ok(match r.kind {
+            FieldKind::Int { signed: true, bytes, .. } =>
+                typeinfo::sign_extend(v, *bytes).to_string(),
+            _ => v.to_string(),
+        })
+    };
+
+    let mut out = String::new();
+    for path in paths {
+        let (r, bm) = resolve_field(k.k.type_, path)?;
+        let line = match bm {
+            Some(bm) => match typeinfo::read_bits(val, &r, bm) {
+                Ok(v) => v.to_string(),
+                Err(AccessError::OutOfBounds { .. }) => "0".to_string(),
+                Err(e) => bail!("{path}: {e}"),
+            },
+            None => match r.kind {
+                FieldKind::Int { .. } => read_int(path, &r)?,
+                FieldKind::Array { elem, n, stride }
+                        if matches!(elem, FieldKind::Int { .. }) => {
+                    (0..*n)
+                        .map(|i| read_int(path, &FieldRef {
+                            offset: r.offset + i * stride,
+                            kind: elem,
+                            len: *stride,
+                        }))
+                        .collect::<Result<Vec<_>>>()?
+                        .join(" ")
+                }
+                _ => bail!("{path}: not a scalar or integer-array field"),
+            },
+        };
+        writeln!(out, "{line}").unwrap();
+    }
+    Ok(out)
+}
+
 /// A resolved assignment target: a field, or a declared bit range within one
 /// (`no_keys`, `flags.subvol`).
 type FieldTarget = (typeinfo::FieldRef, Option<&'static typeinfo::BitmaskField>);
@@ -373,38 +431,71 @@ fn iter_flags(base: BtreeIterFlags, filtered: bool) -> BtreeIterFlags {
     }
 }
 
-fn cmd_get(fs: &Fs, btree: c::btree_id, pos: c::bpos, filtered: bool,
-           key_only: bool) -> Result<String> {
-    let trans = BtreeTrans::new(fs);
-    Ok(lockrestart_do(&trans, |t| {
-        let mut iter = BtreeIter::new(t.trans(), btree, pos, iter_flags(RAW_EXACT, filtered));
-        let out = iter
-            .peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
-            .map(|k| match k {
-                Some(k) => render_key(fs, &k, key_only),
-                None => "(no key)\n".to_string(),
-            });
-        t.result_value(out)
-    })?)
+/// What a read command prints for a matched key: the C to_text line (the
+/// faithful display), the key alone (-k), or selected value fields as bare
+/// values (trailing field paths). A deleted slot is "no key" for a field
+/// read - scripts reading fields need the miss to fail, not to read zeros -
+/// while the display modes do show deleted slots and whiteouts.
+#[derive(Clone, Copy)]
+enum Render<'a> {
+    Full,
+    KeyOnly,
+    Fields(&'a [&'a str]),
 }
 
-fn cmd_peek(fs: &Fs, btree: c::btree_id, pos: c::bpos, prev: bool, filtered: bool,
-            key_only: bool) -> Result<String> {
-    let trans = BtreeTrans::new(fs);
-    Ok(lockrestart_do(&trans, |t| {
-        let mut iter = BtreeIter::new(t.trans(), btree, pos,
-                                      iter_flags(BtreeIterFlags::ALL_SNAPSHOTS, filtered));
-        let out = if prev {
-            iter.peek_prev()
-        } else {
-            iter.peek()
+fn render_read(fs: &Fs, k: &BkeySC<'_>, how: Render<'_>) -> Result<String> {
+    match how {
+        Render::Full => Ok(render_key(fs, k, false)),
+        Render::KeyOnly => Ok(render_key(fs, k, true)),
+        Render::Fields(_) if k.is_deleted() => {
+            let (inode, offset, snapshot) = (k.k.p.inode, k.k.p.offset, k.k.p.snapshot);
+            Err(anyhow!("no key at {inode}:{offset}:{snapshot}"))
         }
-        .map(|k| match k {
-            Some(k) => render_key(fs, &k, key_only),
-            None => "(no key)\n".to_string(),
+        Render::Fields(paths) => render_key_fields(k, paths),
+    }
+}
+
+/// The one-key read commands differ only in how they position the
+/// iterator: get is an exact slot lookup, peek/peek_prev scan for the
+/// nearest key.
+#[derive(Clone, Copy, PartialEq)]
+enum ReadOp {
+    Get,
+    Peek,
+    PeekPrev,
+}
+
+fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: bool,
+            how: Render<'_>) -> Result<String> {
+    let trans = BtreeTrans::new(fs);
+    let mut user_err: Option<anyhow::Error> = None;
+    let out = lockrestart_do(&trans, |t| {
+        let base = match op {
+            ReadOp::Get => RAW_EXACT,
+            _ => BtreeIterFlags::ALL_SNAPSHOTS,
+        };
+        let mut iter = BtreeIter::new(t.trans(), btree, pos, iter_flags(base, filtered));
+        let out = match op {
+            ReadOp::Get => iter.peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS),
+            ReadOp::Peek => iter.peek(),
+            ReadOp::PeekPrev => iter.peek_prev(),
+        }
+        .and_then(|k| match k {
+            Some(k) => render_read(fs, &k, how).map_err(|e| {
+                // Render errors (bad field path, no key for a field read)
+                // are the user's, not the transaction's: stash and abort
+                // the retry loop with a stand-in errcode.
+                user_err = Some(e);
+                BchError::from_errcode(bch_errcode::BCH_ERR_ENOENT_bkey_type_mismatch)
+            }),
+            None => Ok("(no key)\n".to_string()),
         });
         t.result_value(out)
-    })?)
+    });
+    match user_err {
+        Some(e) => Err(e),
+        None => Ok(out?),
+    }
 }
 
 /// Tab completion: command names for the first word, btree names (from the
@@ -496,16 +587,16 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
 /// exact pos; peek/peek_prev: first key at/after (at/before) pos.
 fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
 		  btree: c::btree_id, pos: c::bpos,
-		  flags: OnlineIterFlags, key_only: bool) -> Result<String> {
+		  flags: OnlineIterFlags, how: Render<'_>) -> Result<String> {
     // Small buffer: the kernel fills the whole thing per call, and we only
     // want one key (it grows automatically if the key doesn't fit):
     let mut iter = OnlineBtreeIter::with_buf_size(handle, btree, 0, pos,
 					if flags.0 & OnlineIterFlags::PREV.0 != 0 { POS_MIN } else { SPOS_MAX },
 					flags, 4096);
-    Ok(match iter.next().map_err(|e| anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {e}"))? {
-        Some(k) => render_key(fs, &k, key_only),
-        None => "(no key)\n".to_string(),
-    })
+    match iter.next().map_err(|e| anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {e}"))? {
+        Some(k) => render_read(fs, &k, how),
+        None => Ok("(no key)\n".to_string()),
+    }
 }
 
 /// Online counterpart of iter_flags(): the ioctl maps its flags 1:1 into
@@ -520,21 +611,15 @@ fn online_snapshots_flag(filtered: bool) -> OnlineIterFlags {
     }
 }
 
-fn cmd_get_online(handle: &BcachefsHandle, fs: &Fs,
-		  btree: c::btree_id, pos: c::bpos, filtered: bool,
-		  key_only: bool) -> Result<String> {
-    online_one_key(handle, fs, btree, pos,
-		   OnlineIterFlags::SLOTS | online_snapshots_flag(filtered), key_only)
-}
-
-fn cmd_peek_online(handle: &BcachefsHandle, fs: &Fs,
-		   btree: c::btree_id, pos: c::bpos, prev: bool, filtered: bool,
-		   key_only: bool) -> Result<String> {
-    let mut flags = online_snapshots_flag(filtered);
-    if prev {
-        flags = flags | OnlineIterFlags::PREV;
-    }
-    online_one_key(handle, fs, btree, pos, flags, key_only)
+fn cmd_read_online(handle: &BcachefsHandle, fs: &Fs, op: ReadOp,
+		   btree: c::btree_id, pos: c::bpos, filtered: bool,
+		   how: Render<'_>) -> Result<String> {
+    let flags = online_snapshots_flag(filtered) | match op {
+        ReadOp::Get => OnlineIterFlags::SLOTS,
+        ReadOp::Peek => OnlineIterFlags(0),
+        ReadOp::PeekPrev => OnlineIterFlags::PREV,
+    };
+    online_one_key(handle, fs, btree, pos, flags, how)
 }
 
 fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
@@ -815,11 +900,15 @@ fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
 // command dispatch + REPL
 
 const HELP: &str = "\
-get  [-k] <btree> <pos>                        exact lookup (slot iteration)
-peek [-k] <btree> <pos>                        first key >= pos
-peek_prev <btree> <pos>                        last key <= pos ([-k] too)
+get  [-k] <btree> <pos> [<field>..]            exact lookup (slot iteration)
+peek [-k] <btree> <pos> [<field>..]            first key >= pos
+peek_prev <btree> <pos> [<field>..]            last key <= pos ([-k] too)
 list [-k] <btree> [start] [end]                keys in range
           -k prints keys only, without rendering values
+          trailing field paths print those fields as bare values, one per
+          line, instead of the display rendering - the same paths update
+          takes (depth, btime.lo, skip[1]); a whole array prints its
+          elements space-separated
 update    <btree> <pos> <field=val>...         modify fields of an existing key
 set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
           values are integers; fields holding enum codewords (snapshot/
@@ -871,21 +960,12 @@ impl KvdbFs {
         }
     }
 
-    fn get(&self, btree: c::btree_id, pos: c::bpos, filtered: bool,
-           key_only: bool) -> Result<String> {
+    fn read(&self, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: bool,
+            how: Render<'_>) -> Result<String> {
         match self {
-            KvdbFs::Offline(fs) => cmd_get(fs, btree, pos, filtered, key_only),
+            KvdbFs::Offline(fs) => cmd_read(fs, op, btree, pos, filtered, how),
             KvdbFs::Online(handle, fs) =>
-                cmd_get_online(handle, fs, btree, pos, filtered, key_only),
-        }
-    }
-
-    fn peek(&self, btree: c::btree_id, pos: c::bpos, prev: bool, filtered: bool,
-            key_only: bool) -> Result<String> {
-        match self {
-            KvdbFs::Offline(fs) => cmd_peek(fs, btree, pos, prev, filtered, key_only),
-            KvdbFs::Online(handle, fs) =>
-                cmd_peek_online(handle, fs, btree, pos, prev, filtered, key_only),
+                cmd_read_online(handle, fs, op, btree, pos, filtered, how),
         }
     }
 
@@ -931,13 +1011,13 @@ struct Cmd {
 }
 
 const COMMANDS: &[Cmd] = &[
-    Cmd { name: "get", aliases: &[], usage: "get [-k] <btree> <pos>",
+    Cmd { name: "get", aliases: &[], usage: "get [-k] <btree> <pos> [<field>..]",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
-    Cmd { name: "peek", aliases: &[], usage: "peek [-k] <btree> <pos>",
+    Cmd { name: "peek", aliases: &[], usage: "peek [-k] <btree> <pos> [<field>..]",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
-    Cmd { name: "peek_prev", aliases: &[], usage: "peek_prev [-k] <btree> <pos>",
+    Cmd { name: "peek_prev", aliases: &[], usage: "peek_prev [-k] <btree> <pos> [<field>..]",
           completes_btree: true, subcommands: &[],
           nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
     Cmd { name: "list", aliases: &[], usage: "list [-k] <btree> [start] [end]",
@@ -998,8 +1078,14 @@ fn h_read(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), S
         ["-k", rest @ ..] => (true, rest),
         _ => (false, args),
     };
-    let [btree, pos] = args else {
+    let [btree, pos, fields @ ..] = args else {
         bail!("usage: {}", cmd.usage);
+    };
+    let how = match (key_only, fields) {
+        (false, []) => Render::Full,
+        (true, []) => Render::KeyOnly,
+        (false, fields) => Render::Fields(fields),
+        (true, _) => bail!("-k and field selection are mutually exclusive"),
     };
     let btree = parse_btree(btree)?;
     let ctx = repl.snapshot
@@ -1009,11 +1095,12 @@ fn h_read(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), S
         pos.snapshot = snap;
     }
     let filtered = ctx.is_some();
-    Ok(ControlFlow::Continue(match cmd.name {
-        "get" => repl.fs.get(btree, pos, filtered, key_only)?,
-        "peek" => repl.fs.peek(btree, pos, false, filtered, key_only)?,
-        _ => repl.fs.peek(btree, pos, true, filtered, key_only)?,
-    }))
+    let op = match cmd.name {
+        "get" => ReadOp::Get,
+        "peek" => ReadOp::Peek,
+        _ => ReadOp::PeekPrev,
+    };
+    Ok(ControlFlow::Continue(repl.fs.read(op, btree, pos, filtered, how)?))
 }
 
 fn h_list(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
