@@ -1081,6 +1081,9 @@ fn h_sb(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), Str
 fn h_list_journal(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
     let fs = repl.fs.offline()?;
     let mut f = super::list_journal::JournalFilter::default();
+    // Searching the journal, not auditing it: gaps in the sequence aren't
+    // what we're here for, and on a damaged fs they're endless spam.
+    f.print_missing = false;
     let mut args = args;
     while let Some((&flag, rest)) = args.split_first() {
         match flag {

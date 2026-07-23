@@ -107,6 +107,10 @@ pub(crate) struct JournalFilter {
     pub(crate) log: bool,
     pub(crate) log_only: bool,
     pub(crate) print_offset: bool,
+    /// Report gaps in the journal sequence ("missing N entries at ..."):
+    /// wanted when auditing the journal itself, spam when searching it
+    /// (kvdb's list_journal, on a damaged filesystem, disables this).
+    pub(crate) print_missing: bool,
     pub(crate) filtering: bool,
     pub(crate) btree_filter: u64,
     pub(crate) transaction: TransactionMsgFilter,
@@ -125,6 +129,7 @@ impl Default for JournalFilter {
             log: false,
             log_only: false,
             print_offset: false,
+            print_missing: true,
             filtering: false,
             btree_filter: !0u64,
             transaction: TransactionMsgFilter { sign: 0, patterns: Vec::new() },
@@ -700,6 +705,7 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
         log: cli.log,
         log_only: cli.log_only,
         print_offset: cli.offset,
+        print_missing: true,
         filtering: false,
         btree_filter: !0u64,
         transaction: TransactionMsgFilter {
@@ -851,17 +857,19 @@ pub(crate) fn list_journal_run(
             if missing.start == 0 {
                 break;
             }
-            println!(
-                "missing {} entries at {}-{}{}",
-                missing.end - missing.start,
-                missing.start,
-                missing.end - 1,
-                if missing.end < last_seq_ondisk {
-                    " (not dirty)"
-                } else {
-                    ""
-                },
-            );
+            if f.print_missing {
+                println!(
+                    "missing {} entries at {}-{}{}",
+                    missing.end - missing.start,
+                    missing.start,
+                    missing.end - 1,
+                    if missing.end < last_seq_ondisk {
+                        " (not dirty)"
+                    } else {
+                        ""
+                    },
+                );
+            }
             seq = missing.end;
         }
 
