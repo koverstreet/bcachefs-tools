@@ -719,6 +719,7 @@ static void bch2_sb_update(struct bch_fs *c)
 	c->sb.features		= le64_to_cpu(src->features[0]);
 	c->sb.compat		= le64_to_cpu(src->compat[0]);
 	c->sb.multi_device	= BCH_SB_MULTI_DEVICE(src);
+	c->sb.dirents_sanitized	= BCH_SB_DIRENTS_SANITIZED(src);
 
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(src, ext);
 	if (ext) {
@@ -1737,6 +1738,10 @@ __cold void bch2_sb_to_text(struct printbuf *out,
 	prt_newline(out);
 
 	prt_printf(out, "Clean:\t%llu\n", BCH_SB_CLEAN(sb));
+
+	if (BCH_SB_DIRENTS_SANITIZED(sb))
+		prt_printf(out, "Dirents sanitized:\t1\n");
+
 	prt_printf(out, "Devices:\t%u\n", bch2_sb_nr_devices(sb));
 
 	prt_printf(out, "Sections:\t");

@@ -16,6 +16,7 @@ struct bch_sb_cpu {
 	u8		nr_devices;
 	u8		clean;
 	bool		multi_device; /* true if we've ever had more than one device */
+	bool		dirents_sanitized;
 
 	u8		encryption_type;
 

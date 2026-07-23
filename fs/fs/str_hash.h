@@ -414,7 +414,7 @@ static inline int bch2_str_hash_check_key(struct btree_trans *trans,
 	 * image - the names are meaningless.
 	 */
 	if (desc->btree_id == BTREE_ID_dirents &&
-	    BCH_SB_DIRENTS_SANITIZED(trans->c->disk_sb.sb))
+	    trans->c->sb.dirents_sanitized)
 		return 0;
 
 	return str_hash_key_needs_check(desc, hash_info, hash_k)
