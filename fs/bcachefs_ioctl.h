@@ -691,6 +691,7 @@ struct bch_ioctl_unpoison {
 #define BCH_IOCTL_QUERY_BTREE_KEYS_slots		(1U << 0)
 #define BCH_IOCTL_QUERY_BTREE_KEYS_prev			(1U << 1)
 #define BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots	(1U << 2)
+#define BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts	(1U << 3)
 
 struct bch_ioctl_query_btree_keys {
 	__u32			btree;
