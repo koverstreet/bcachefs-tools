@@ -48,6 +48,27 @@ static const struct rhashtable_params bch_update_params = {
 	.automatic_shrinking	= true,
 };
 
+static inline u16 bch2_move_ioprio(struct data_update_opts *opts)
+{
+	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+}
+
+static const char *bch2_ioprio_class_str(u16 ioprio)
+{
+	switch (IOPRIO_PRIO_CLASS(ioprio)) {
+	case IOPRIO_CLASS_NONE:
+		return "none";
+	case IOPRIO_CLASS_RT:
+		return "realtime";
+	case IOPRIO_CLASS_BE:
+		return "best-effort";
+	case IOPRIO_CLASS_IDLE:
+		return "idle";
+	default:
+		return "unknown";
+	}
+}
+
 bool bch2_data_update_in_flight(struct bch_fs *c, struct bbpos *pos,
 				enum bch_data_update_types type)
 {
@@ -905,6 +926,10 @@ __cold void bch2_data_update_opts_to_text(struct printbuf *out, struct bch_fs *c
 
 	prt_printf(out, "read_dev:\t%i\n", data_opts->read_dev);
 	prt_printf(out, "checksum_paranoia:\t%i\n", data_opts->checksum_paranoia);
+	u16 ioprio = bch2_move_ioprio(data_opts);
+	prt_printf(out, "ioprio:\t%s:%u\n",
+		   bch2_ioprio_class_str(ioprio),
+		   (unsigned) IOPRIO_PRIO_DATA(ioprio));
 
 	prt_str(out, "io path options:\t");
 	bch2_inode_opts_to_text(out, c, *io_opts);
@@ -1006,7 +1031,7 @@ static int bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
 	m->rbio.data_update		= true;
 	m->rbio.bio.bi_iter.bi_size	= buf_bytes;
 	m->rbio.bio.bi_iter.bi_sector	= bkey_start_offset(&m->k.k->k);
-	m->op.wbio.bio.bi_ioprio	= IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+	m->op.wbio.bio.bi_ioprio	= bch2_move_ioprio(&m->opts);
 	return 0;
 }
 
