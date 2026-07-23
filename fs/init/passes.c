@@ -340,6 +340,10 @@ static bool recovery_pass_needs_set(struct bch_fs *c,
 	if (pass == BCH_RECOVERY_PASS_scan_for_btree_nodes)
 		*flags |= RUN_RECOVERY_PASS_nopersistent;
 
+	if ((*flags & RUN_RECOVERY_PASS_skip_if_complete) &&
+	    (r->passes_complete & BIT_ULL(pass)))
+		return false;
+
 	if ((*flags & RUN_RECOVERY_PASS_ratelimit) &&
 	    !bch2_recovery_pass_want_ratelimit_locked(c, pass, 100))
 		*flags &= ~RUN_RECOVERY_PASS_ratelimit;
