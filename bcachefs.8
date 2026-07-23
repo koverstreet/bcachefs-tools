@@ -44,6 +44,8 @@ Show runtime performance information
 .Bl -tag -width 22n -compact
 .It Ic device add
 Add a new device to an existing filesystem
+.It Ic device list
+List member devices and recorded device issues
 .It Ic device remove
 Remove a device from an existing filesystem
 .It Ic device online
@@ -546,6 +548,9 @@ Disk label
 .It Fl f , Fl -force
 Use device even if it appears to already be formatted
 .El
+.It Nm Ic device Ic list Ar device
+List filesystem member devices and recorded device issues, using only superblock
+metadata and device discovery.
 .It Nm Ic device Ic remove Oo Ar options Oc Ar device
 Remove a device from a filesystem
 .Bl -tag -width Ds
