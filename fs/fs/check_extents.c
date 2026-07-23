@@ -474,16 +474,10 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 	try(bch2_trans_commit(trans, res, NULL, BCH_TRANS_COMMIT_no_enospc));
 
 	if (bkey_extent_is_allocation(k.k)) {
-		for (struct inode_walker_entry *i = extent_i ?: &darray_last(inode->inodes);
-		     inode->inodes.data && i >= inode->inodes.data;
-		     --i) {
-			if (i->whiteout ||
-			    i->inode.bi_snapshot > k.k->p.snapshot ||
-			    !bch2_key_visible_in_snapshot(trans, s, i->inode.bi_snapshot, k.k->p.snapshot))
-				continue;
-
-			i->count += k.k->size;
-		}
+		struct inode_walker_entry *i;
+		for_each_visible_inode(trans, s, inode, k.k->p.snapshot, i)
+			if (!i->whiteout)
+				i->count += k.k->size;
 	}
 
 	if (k.k->type != KEY_TYPE_whiteout)

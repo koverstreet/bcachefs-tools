@@ -613,10 +613,6 @@ int bch2_ref_visible2(struct btree_trans *trans,
 	return bch2_key_visible_in_snapshot(trans, src_seen, dst, src);
 }
 
-#define for_each_visible_inode(_trans, _s, _w, _snapshot, _i)				\
-	for (_i = (_w)->inodes.data; _i < (_w)->inodes.data + (_w)->inodes.nr &&	\
-	     (_i)->inode.bi_snapshot <= (_snapshot); _i++)				\
-		if (bch2_key_visible_in_snapshot(_trans, _s, _i->inode.bi_snapshot, _snapshot))
 
 static int add_inode(struct bch_fs *c, struct inode_walker *w,
 		     struct bkey_s_c inode)

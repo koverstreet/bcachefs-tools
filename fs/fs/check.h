@@ -81,6 +81,36 @@ struct inode_walker_entry *bch2_walk_inode(struct btree_trans *,
 					   struct inode_walker *,
 					   struct bkey_s_c);
 
+static inline struct inode_walker_entry *
+bch2_visible_inode_next(struct btree_trans *trans, struct snapshots_seen *s,
+			struct inode_walker *w, u32 snapshot,
+			struct inode_walker_entry *prev)
+{
+	/*
+	 * A version at @snapshot or the first visible ancestor resolves the
+	 * ref - possibly a whiteout - and shadows everything past it:
+	 */
+	if (prev && prev->inode.bi_snapshot >= snapshot)
+		return NULL;
+
+	for (struct inode_walker_entry *i = prev ? prev + 1 : w->inodes.data;
+	     i < w->inodes.data + w->inodes.nr;
+	     i++)
+		if (bch2_ref_visible(trans, s, snapshot, i->inode.bi_snapshot))
+			return i;
+	return NULL;
+}
+
+/*
+ * Iterate the inode versions whose view includes a key at @_snapshot: every
+ * newer version that sees it via the overwrite check, then the one version the
+ * key resolves to.
+ */
+#define for_each_visible_inode(_trans, _s, _w, _snapshot, _i)			\
+	for (_i = bch2_visible_inode_next(_trans, _s, _w, _snapshot, NULL);	\
+	     _i;								\
+	     _i = bch2_visible_inode_next(_trans, _s, _w, _snapshot, _i))
+
 void bch2_dirent_inode_mismatch_msg(struct printbuf *, struct bch_fs *,
 				    struct bkey_s_c_dirent,
 				    struct bch_inode_unpacked *);
