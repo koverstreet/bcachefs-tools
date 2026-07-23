@@ -536,7 +536,7 @@ struct bkey_s_c_dirent bch2_inode_get_dirent(struct btree_trans *trans,
 	 * interior node snapshots) but not the inode - do the lookup in the
 	 * child snapshot we'll be moving to:
 	 */
-	*snapshot = bch2_snapshot_redundant_interior(trans->c, *snapshot) ?: *snapshot;
+	*snapshot = bch2_snapshot_redundant_interior(trans->c, *snapshot);
 
 	return dirent_get_by_pos(trans, iter, SPOS(inode->bi_dir, inode->bi_dir_offset, *snapshot));
 }

@@ -241,7 +241,7 @@ u32 bch2_snapshot_redundant_interior(struct bch_fs *c, u32 id)
 	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
 	const struct snapshot_t *s = __snapshot_t(t, id);
 	if (!s)
-		return 0;
+		return orig;
 
 	while (true) {
 		u32 child = 0;
@@ -258,7 +258,7 @@ u32 bch2_snapshot_redundant_interior(struct bch_fs *c, u32 id)
 		}
 
 		if (!child)
-			return s->state != SNAPSHOT_ID_no_keys && id != orig ? id : 0;
+			return s->state != SNAPSHOT_ID_no_keys ? id : orig;
 
 		id = child;
 		s = __snapshot_t(t, id);
