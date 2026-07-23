@@ -22,9 +22,10 @@
 //! validation — per-key-invalid keys are (correctly) rejected; whether we
 //! want a validation-bypass mode for injecting those is an open question.
 
-use std::io::{stdin, stdout, IsTerminal, Write};
+use std::io::{stdin, stdout, IsTerminal};
 use std::ops::ControlFlow;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
@@ -253,6 +254,20 @@ fn cmd_peek(fs: &Fs, btree: c::btree_id, pos: c::bpos, prev: bool) -> Result<Str
     })?)
 }
 
+/// ^C during a long-running command: the REPL installs a SIGINT handler that
+/// sets this flag (rustyline's raw mode swallows ^C at the prompt itself, so
+/// the handler only ever fires mid-command). Iteration loops poll it and stop,
+/// returning what they've collected; the flag is cleared before each command.
+static INTERRUPTED: AtomicBool = AtomicBool::new(false);
+
+extern "C" fn kvdb_sigint(_: libc::c_int) {
+    INTERRUPTED.store(true, Ordering::Relaxed);
+}
+
+fn take_interrupt() -> bool {
+    INTERRUPTED.swap(false, Ordering::Relaxed)
+}
+
 fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos) -> Result<String> {
     let trans = BtreeTrans::new(fs);
     let mut out = String::new();
@@ -263,6 +278,10 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos) -> Result
         BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH,
     );
     iter.for_each_max(&trans, end, |k| {
+        if take_interrupt() {
+            out.push_str("(interrupted)\n");
+            return ControlFlow::Break(());
+        }
         out.push_str(&format!("{}\n", k.to_text(fs)));
         ControlFlow::Continue(())
     })?;
@@ -306,6 +325,10 @@ fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
     let mut iter = OnlineBtreeIter::new(handle, btree, 0, start, end,
 					OnlineIterFlags::ALL_SNAPSHOTS);
     iter.for_each(|k| {
+        if take_interrupt() {
+            out.push_str("(interrupted)\n");
+            return ControlFlow::Break(());
+        }
         out.push_str(&format!("{}\n", k.to_text(fs)));
         ControlFlow::Continue(())
     }).map_err(|e| anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {e}"))?;
@@ -742,24 +765,46 @@ fn kvdb(cli: Cli) -> Result<()> {
         return Ok(());
     }
 
-    let interactive = stdin().is_terminal();
-    let mut lines = stdin().lines();
-    loop {
-        if interactive {
-            print!("kvdb> ");
-            stdout().flush()?;
+    // In a piped script an error must abort (a test's later commands likely
+    // depend on earlier ones); interactively, report and go on.
+    if !stdin().is_terminal() {
+        for line in stdin().lines() {
+            run_line(fs, cli.nostart, &line?)?;
         }
-        let Some(line) = lines.next() else { break };
-        let line = line?;
-        // In a piped script an error must abort (a test's later commands
-        // likely depend on earlier ones); interactively, report and go on.
-        match run_line(fs, cli.nostart, &line) {
-            Err(e) if interactive => eprintln!("{e}"),
-            other => other?,
+        return Ok(());
+    }
+
+    unsafe {
+        libc::signal(libc::SIGINT, kvdb_sigint as *const () as libc::sighandler_t);
+    }
+
+    let mut rl = rustyline::DefaultEditor::new()?;
+    let history = std::env::var_os("HOME")
+        .map(|home| PathBuf::from(home).join(".cache/bcachefs-kvdb-history"));
+    if let Some(h) = &history {
+        let _ = rl.load_history(h);
+    }
+    loop {
+        match rl.readline("kvdb> ") {
+            Ok(line) => {
+                if !line.trim().is_empty() {
+                    let _ = rl.add_history_entry(&line);
+                }
+                INTERRUPTED.store(false, Ordering::Relaxed);
+                if let Err(e) = run_line(fs, cli.nostart, &line) {
+                    eprintln!("{e}");
+                }
+            }
+            Err(rustyline::error::ReadlineError::Interrupted) => continue,
+            Err(rustyline::error::ReadlineError::Eof) => break,
+            Err(e) => return Err(e.into()),
         }
     }
-    if interactive {
-        println!();      // ^D at the prompt: don't glue it to the shell's
+    if let Some(h) = &history {
+        if let Some(dir) = h.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        let _ = rl.save_history(h);
     }
     Ok(())
 }
