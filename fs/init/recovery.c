@@ -984,15 +984,10 @@ use_clean:
 	}
 
 	if (c->errors.msgs.nr) {
-		CLASS(printbuf, buf)();
-		bch2_fsck_err_counts_to_text(&buf, c);
-		bch_info(c, "errors this recovery:\n%s", buf.buf);
-	}
-
-	if (c->errors.damaged_paths.nr) {
-		CLASS(printbuf, buf)();
-		bch2_fsck_damaged_paths_to_text(&buf, c);
-		bch_info(c, "%s", buf.buf);
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "errors this recovery:\n");
+		bch2_fsck_err_counts_to_text(&msg.m, c);
+		bch2_fsck_damaged_paths_to_text(&msg.m, c);
 	}
 
 	/* If we fixed errors, verify that fs is actually clean now: */

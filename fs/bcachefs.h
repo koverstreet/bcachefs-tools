@@ -1019,8 +1019,11 @@ struct bch_log_msg {
 
 static inline void bch2_log_msg_exit(struct bch_log_msg *msg)
 {
-	if (!msg->m.suppress)
+	if (!msg->m.suppress) {
+		/* elastic tabstops: align any raw \t/\r columns */
+		bch2_printbuf_tabstop_align(&msg->m);
 		bch2_print_str_loglevel(msg->c, msg->loglevel, msg->m.buf);
+	}
 	printbuf_exit(&msg->m);
 }
 
