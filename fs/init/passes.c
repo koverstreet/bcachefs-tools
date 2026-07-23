@@ -29,6 +29,7 @@
 #include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
 
+#include "init/damage.h"
 #include "init/recovery.h"
 #include "init/passes.h"
 #include "init/fs.h"

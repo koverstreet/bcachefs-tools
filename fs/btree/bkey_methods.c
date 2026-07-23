@@ -21,6 +21,7 @@
 #include "fs/quota.h"
 #include "fs/xattr.h"
 
+#include "init/damage.h"
 #include "init/error.h"
 
 #include "sb/io.h"

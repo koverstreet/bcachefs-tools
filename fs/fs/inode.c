@@ -22,6 +22,7 @@
 
 #include "vfs/fs.h"
 
+#include "init/damage.h"
 #include "init/error.h"
 #include "init/passes.h"
 
@@ -1250,7 +1251,8 @@ static int bch2_inode_rm_trans(struct btree_trans *trans, subvol_inum inum, u32 
 		return bch_err_throw(trans->c, ENOENT_inode);
 	}
 
-	return bch2_btree_delete_at(trans, &iter, 0);
+	return bch2_btree_delete_at(trans, &iter, 0) ?:
+		bch2_damage_delete(trans, inum.inum, *snapshot);
 }
 
 int bch2_inode_rm(struct bch_fs *c, subvol_inum inum)
@@ -1434,7 +1436,8 @@ static noinline int __bch2_inode_rm_snapshot(struct btree_trans *trans, u64 inum
 		return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 				 bch2_btree_delete(trans, BTREE_ID_inodes,
 						   SPOS(0, inum, snapshot),
-						   BTREE_UPDATE_internal_snapshot_node));
+						   BTREE_UPDATE_internal_snapshot_node) ?:
+				 bch2_damage_delete(trans, inum, snapshot));
 
 	/*
 	 * Content left behind: whiteout the inode key instead of deleting it,
@@ -1451,7 +1454,8 @@ static noinline int __bch2_inode_rm_snapshot(struct btree_trans *trans, u64 inum
 
 	return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 			 bch2_btree_insert_trans(trans, BTREE_ID_inodes, &whiteout,
-						 BTREE_UPDATE_internal_snapshot_node)) ?: ret;
+						 BTREE_UPDATE_internal_snapshot_node) ?:
+			 bch2_damage_delete(trans, inum, snapshot)) ?: ret;
 }
 
 /*

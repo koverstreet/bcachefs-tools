@@ -9,6 +9,7 @@
 #include "btree/write_buffer.h"
 
 #include "init/error.h"
+#include "init/damage.h"
 #include "init/progress.h"
 #include "init/passes.h"
 
@@ -688,6 +689,18 @@ int bch2_delete_dead_snapshot_key(struct btree_trans *trans, struct btree_iter *
 			new->k.p = dst;
 			try(bch2_trans_update(trans, &dst_iter, new,
 					      BTREE_UPDATE_internal_snapshot_node));
+		} else if (iter->btree_id == BTREE_ID_damage &&
+			   k.k->type == KEY_TYPE_damage &&
+			   dst_k.k->type == KEY_TYPE_damage) {
+			/*
+			 * Damage entries merge instead of dropping: the dying
+			 * key can hold counts recorded after the descendant's
+			 * key was created, so "descendant overwrote it" never
+			 * applies:
+			 */
+			struct bkey_i *new = errptr_try(bch2_damage_keys_merge(trans, dst, dst_k, k));
+			try(bch2_trans_update(trans, &dst_iter, new,
+					      BTREE_UPDATE_internal_snapshot_node));
 		}
 	}
 
@@ -805,11 +818,12 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots);
 
 	/*
-	 * First, delete extents/dirents/xattrs
+	 * First, delete extents/dirents/xattrs and damage keys
 	 *
 	 * If an extent/dirent/xattr is present in a given snapshot ID an inode
-	 * must also be present in that same snapshot ID, so we can use this to
-	 * greatly accelerate scanning:
+	 * must also be present in that same snapshot ID (and a damage key has
+	 * an inode at its exact position - enforced by check_damage), so we
+	 * can use this to greatly accelerate scanning:
 	 */
 
 	while (1) {
@@ -831,6 +845,9 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 			try(delete_dead_snapshot_keys_range(trans, &res.r, BTREE_ID_extents, start, end));
 			try(delete_dead_snapshot_keys_range(trans, &res.r, BTREE_ID_dirents, start, end));
 			try(delete_dead_snapshot_keys_range(trans, &res.r, BTREE_ID_xattrs, start, end));
+			try(delete_dead_snapshot_keys_range(trans, &res.r, BTREE_ID_damage,
+							    POS(0, k.k->p.offset),
+							    SPOS(0, k.k->p.offset, U32_MAX)));
 
 			bch2_btree_iter_set_pos(&iter, POS(0, k.k->p.offset + 1));
 		} else {

@@ -97,11 +97,12 @@ int __bch2_fsck_err(struct bch_fs *, struct btree_trans *,
 /*
  * Record damage to an inode: which errors happened to it, as
  * bch_sb_error_id - the same identifiers the superblock error counters
- * and fsck use. Currently the in-memory list behind the end-of-fsck
- * summary and the fsck_damaged_paths debugfs file; the damage series
- * replaces the backing with the damage btree, same identifiers.
+ * and fsck use. Writes the damage btree (init/damage.c) and feeds the
+ * in-memory list behind the end-of-fsck summary and the
+ * fsck_damaged_paths debugfs file.
  */
 int bch2_damage_record(struct btree_trans *, struct bpos, enum bch_sb_error_id);
+void bch2_fsck_damaged(struct btree_trans *, struct bpos, enum bch_sb_error_id);
 void bch2_fsck_damaged_path_to_text(struct printbuf *, struct btree_trans *,
 				    const struct fsck_damaged_path *);
 void bch2_fsck_damaged_paths_to_text(struct printbuf *, struct bch_fs *);

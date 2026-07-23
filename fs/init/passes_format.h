@@ -178,6 +178,11 @@
 	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
 	  "Validate xattr entries: owning inode exists "					\
 	  "in valid snapshot, hash correct; delete orphans")					\
+	x(check_damage,				49, PASS_FSCK,					\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
+	  "Delete damage keys with no inode at the "						\
+	  "same position - left behind by kernels "						\
+	  "without the damage btree")								\
 	x(check_root,				29, PASS_ONLINE|PASS_FSCK,			\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
 	  "Ensure root subvolume and root directory inode "					\
