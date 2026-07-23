@@ -104,7 +104,7 @@ in memory: listings then show a root inode that does not exist on disk.
 
 Commands:
 
-    get       [-k] <btree> <pos>                   exact lookup, dump fields
+    get       [-k] <btree> <pos>                   exact lookup (slot iteration)
     peek      [-k] <btree> <pos>                   first key >= pos
     peek_prev [-k] <btree> <pos>                   last key <= pos
     list      [-k] <btree> [start] [end]           keys in range
@@ -311,39 +311,15 @@ fn field_val(type_: u8, path: &str, v: &FieldVal) -> Result<u64> {
     }
 }
 
-// ---------------------------------------------------------------------------
-// value access
-
-fn val_bytes<'a>(k: &BkeySC<'a>) -> &'a [u8] {
-    let len = k.k.u64s as usize * 8 - size_of::<c::bkey>();
-    unsafe { std::slice::from_raw_parts(k.v as *const c::bch_val as *const u8, len) }
-}
-
-/// One rendering of the value, not two: with a typeinfo field table the
-/// dump is the authoritative view (field names match update's syntax), so
-/// the header is the key alone; the C to_text - which renders the value
-/// inline - is the fallback for types the field engine can't decompose
-/// (entry-stream values like extents), and the whole line for plain reads.
-fn render_key(fs: &Fs, k: &BkeySC<'_>, fields: bool, key_only: bool) -> String {
+/// The bcachefs to_text methods are the faithful rendering of the on-disk
+/// structs - that is their purpose. The typeinfo field tables are for
+/// addressing fields on the write side (update/set), not for display.
+fn render_key(fs: &Fs, k: &BkeySC<'_>, key_only: bool) -> String {
     if key_only {
-        return format!("{}\n", k.to_text_key());
+        format!("{}\n", k.to_text_key())
+    } else {
+        format!("{}\n", k.to_text(fs))
     }
-    if fields {
-        if let Some(info) = typeinfo::bkey_val_info(k.k.type_ as u32) {
-            if !info.fields.is_empty() {
-                let mut out = format!("{}\n", k.to_text_key());
-                let mut dump = String::new();
-                let _ = typeinfo::struct_to_text(&mut dump, info, val_bytes(k));
-                for l in dump.lines() {
-                    out.push_str("  ");
-                    out.push_str(l);
-                    out.push('\n');
-                }
-                return out;
-            }
-        }
-    }
-    format!("{}\n", k.to_text(fs))
 }
 
 /// A resolved assignment target: a field, or a declared bit range within one
@@ -405,7 +381,7 @@ fn cmd_get(fs: &Fs, btree: c::btree_id, pos: c::bpos, filtered: bool,
         let out = iter
             .peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
             .map(|k| match k {
-                Some(k) => render_key(fs, &k, true, key_only),
+                Some(k) => render_key(fs, &k, key_only),
                 None => "(no key)\n".to_string(),
             });
         t.result_value(out)
@@ -424,7 +400,7 @@ fn cmd_peek(fs: &Fs, btree: c::btree_id, pos: c::bpos, prev: bool, filtered: boo
             iter.peek()
         }
         .map(|k| match k {
-            Some(k) => render_key(fs, &k, true, key_only),
+            Some(k) => render_key(fs, &k, key_only),
             None => "(no key)\n".to_string(),
         });
         t.result_value(out)
@@ -520,14 +496,14 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
 /// exact pos; peek/peek_prev: first key at/after (at/before) pos.
 fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
 		  btree: c::btree_id, pos: c::bpos,
-		  flags: OnlineIterFlags, fields: bool, key_only: bool) -> Result<String> {
+		  flags: OnlineIterFlags, key_only: bool) -> Result<String> {
     // Small buffer: the kernel fills the whole thing per call, and we only
     // want one key (it grows automatically if the key doesn't fit):
     let mut iter = OnlineBtreeIter::with_buf_size(handle, btree, 0, pos,
 					if flags.0 & OnlineIterFlags::PREV.0 != 0 { POS_MIN } else { SPOS_MAX },
 					flags, 4096);
     Ok(match iter.next().map_err(|e| anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {e}"))? {
-        Some(k) => render_key(fs, &k, fields, key_only),
+        Some(k) => render_key(fs, &k, key_only),
         None => "(no key)\n".to_string(),
     })
 }
@@ -548,7 +524,7 @@ fn cmd_get_online(handle: &BcachefsHandle, fs: &Fs,
 		  btree: c::btree_id, pos: c::bpos, filtered: bool,
 		  key_only: bool) -> Result<String> {
     online_one_key(handle, fs, btree, pos,
-		   OnlineIterFlags::SLOTS | online_snapshots_flag(filtered), true, key_only)
+		   OnlineIterFlags::SLOTS | online_snapshots_flag(filtered), key_only)
 }
 
 fn cmd_peek_online(handle: &BcachefsHandle, fs: &Fs,
@@ -558,7 +534,7 @@ fn cmd_peek_online(handle: &BcachefsHandle, fs: &Fs,
     if prev {
         flags = flags | OnlineIterFlags::PREV;
     }
-    online_one_key(handle, fs, btree, pos, flags, true, key_only)
+    online_one_key(handle, fs, btree, pos, flags, key_only)
 }
 
 fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
@@ -807,7 +783,7 @@ fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
 // command dispatch + REPL
 
 const HELP: &str = "\
-get  [-k] <btree> <pos>                        exact lookup, dump fields
+get  [-k] <btree> <pos>                        exact lookup (slot iteration)
 peek [-k] <btree> <pos>                        first key >= pos
 peek_prev <btree> <pos>                        last key <= pos ([-k] too)
 list [-k] <btree> [start] [end]                keys in range
