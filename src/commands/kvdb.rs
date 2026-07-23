@@ -236,10 +236,23 @@ fn write_field(
 /// a snapshot field, so passing it unconditionally is fine.
 const RAW_EXACT: BtreeIterFlags = BtreeIterFlags::SLOTS.union(BtreeIterFlags::ALL_SNAPSHOTS);
 
-fn cmd_get(fs: &Fs, btree: c::btree_id, pos: c::bpos) -> Result<String> {
+/// With a snapshot context active, reads drop ALL_SNAPSHOTS: the iterator
+/// runs snapshot-filtered (iter init adds BTREE_ITER_filter_snapshots for
+/// btrees with snapshot fields) at pos.snapshot, so lookups resolve
+/// visibility the way runtime lookups do. Harmless on btrees without
+/// snapshot fields - iteration is simply positional there.
+fn iter_flags(base: BtreeIterFlags, filtered: bool) -> BtreeIterFlags {
+    if filtered {
+        base.difference(BtreeIterFlags::ALL_SNAPSHOTS)
+    } else {
+        base
+    }
+}
+
+fn cmd_get(fs: &Fs, btree: c::btree_id, pos: c::bpos, filtered: bool) -> Result<String> {
     let trans = BtreeTrans::new(fs);
     Ok(lockrestart_do(&trans, |t| {
-        let mut iter = BtreeIter::new(t.trans(), btree, pos, RAW_EXACT);
+        let mut iter = BtreeIter::new(t.trans(), btree, pos, iter_flags(RAW_EXACT, filtered));
         let out = iter
             .peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
             .map(|k| match k {
@@ -250,10 +263,11 @@ fn cmd_get(fs: &Fs, btree: c::btree_id, pos: c::bpos) -> Result<String> {
     })?)
 }
 
-fn cmd_peek(fs: &Fs, btree: c::btree_id, pos: c::bpos, prev: bool) -> Result<String> {
+fn cmd_peek(fs: &Fs, btree: c::btree_id, pos: c::bpos, prev: bool, filtered: bool) -> Result<String> {
     let trans = BtreeTrans::new(fs);
     Ok(lockrestart_do(&trans, |t| {
-        let mut iter = BtreeIter::new(t.trans(), btree, pos, BtreeIterFlags::ALL_SNAPSHOTS);
+        let mut iter = BtreeIter::new(t.trans(), btree, pos,
+                                      iter_flags(BtreeIterFlags::ALL_SNAPSHOTS, filtered));
         let out = if prev {
             iter.peek_prev()
         } else {
@@ -328,14 +342,15 @@ fn take_interrupt() -> bool {
     INTERRUPTED.swap(false, Ordering::Relaxed)
 }
 
-fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos) -> Result<String> {
+fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
+            filtered: bool) -> Result<String> {
     let trans = BtreeTrans::new(fs);
     let mut out = String::new();
     let mut iter = BtreeIter::new(
         &trans,
         btree,
         start,
-        BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH,
+        iter_flags(BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH, filtered),
     );
     iter.for_each_max(&trans, end, |k| {
         if take_interrupt() {
@@ -364,15 +379,26 @@ fn online_one_key(handle: &BcachefsHandle, fs: &Fs,
     })
 }
 
+/// Online counterpart of iter_flags(): the ioctl maps its flags 1:1 into
+/// btree iter flags, so omitting all_snapshots gets filtered iteration
+/// kernel-side.
+fn online_snapshots_flag(filtered: bool) -> OnlineIterFlags {
+    if filtered {
+        OnlineIterFlags::default()
+    } else {
+        OnlineIterFlags::ALL_SNAPSHOTS
+    }
+}
+
 fn cmd_get_online(handle: &BcachefsHandle, fs: &Fs,
-		  btree: c::btree_id, pos: c::bpos) -> Result<String> {
+		  btree: c::btree_id, pos: c::bpos, filtered: bool) -> Result<String> {
     online_one_key(handle, fs, btree, pos,
-		   OnlineIterFlags::SLOTS | OnlineIterFlags::ALL_SNAPSHOTS, true)
+		   OnlineIterFlags::SLOTS | online_snapshots_flag(filtered), true)
 }
 
 fn cmd_peek_online(handle: &BcachefsHandle, fs: &Fs,
-		   btree: c::btree_id, pos: c::bpos, prev: bool) -> Result<String> {
-    let mut flags = OnlineIterFlags::ALL_SNAPSHOTS;
+		   btree: c::btree_id, pos: c::bpos, prev: bool, filtered: bool) -> Result<String> {
+    let mut flags = online_snapshots_flag(filtered);
     if prev {
         flags = flags | OnlineIterFlags::PREV;
     }
@@ -380,10 +406,11 @@ fn cmd_peek_online(handle: &BcachefsHandle, fs: &Fs,
 }
 
 fn cmd_list_online(handle: &BcachefsHandle, fs: &Fs,
-		   btree: c::btree_id, start: c::bpos, end: c::bpos) -> Result<String> {
+		   btree: c::btree_id, start: c::bpos, end: c::bpos,
+		   filtered: bool) -> Result<String> {
     let mut out = String::new();
     let mut iter = OnlineBtreeIter::new(handle, btree, 0, start, end,
-					OnlineIterFlags::ALL_SNAPSHOTS);
+					online_snapshots_flag(filtered));
     iter.for_each(|k| {
         if take_interrupt() {
             out.push_str("(interrupted)\n");
@@ -633,8 +660,10 @@ set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
 sb get    <field>                              read a superblock field/flag
 sb set    <field=val>                          write one, then bch2_write_super
 snapshot  [<id>|none]                          set/show/clear the session snapshot
-                                               context: a <pos> without :snapshot
-                                               uses it (list start/end included)
+                                               context: reads (get/peek/list) run
+                                               snapshot-filtered in that view, and
+                                               a <pos> without :snapshot uses it;
+                                               writes (update/set) stay exact-key
 help                                           this text
 quit                                           exit (also ^D)
 ";
@@ -696,16 +725,17 @@ fn run_line(
                 bail!("usage: {op} <btree> <pos>");
             };
             let (btree, pos) = (parse_btree(btree)?, parse_pos_ctx(pos, *snapshot)?);
+            let filtered = snapshot.is_some();
             match kvdb_fs {
                 KvdbFs::Offline(fs) => match op {
-                    "get" => cmd_get(fs, btree, pos)?,
-                    "peek" => cmd_peek(fs, btree, pos, false)?,
-                    _ => cmd_peek(fs, btree, pos, true)?,
+                    "get" => cmd_get(fs, btree, pos, filtered)?,
+                    "peek" => cmd_peek(fs, btree, pos, false, filtered)?,
+                    _ => cmd_peek(fs, btree, pos, true, filtered)?,
                 },
                 KvdbFs::Online(handle, fs) => match op {
-                    "get" => cmd_get_online(handle, fs, btree, pos)?,
-                    "peek" => cmd_peek_online(handle, fs, btree, pos, false)?,
-                    _ => cmd_peek_online(handle, fs, btree, pos, true)?,
+                    "get" => cmd_get_online(handle, fs, btree, pos, filtered)?,
+                    "peek" => cmd_peek_online(handle, fs, btree, pos, false, filtered)?,
+                    _ => cmd_peek_online(handle, fs, btree, pos, true, filtered)?,
                 },
             }
         }
@@ -713,12 +743,20 @@ fn run_line(
             let (btree, rest) = args
                 .split_first()
                 .ok_or_else(|| anyhow!("usage: list <btree> [start] [end]"))?;
-            let start = rest.first().map_or(Ok(POS_MIN), |s| parse_pos_ctx(s, *snapshot))?;
+            // A filtered iterator's snapshot comes from pos.snapshot, so the
+            // default start must carry the context (POS_MIN's snapshot 0 is
+            // never a valid view):
+            let default_start = match *snapshot {
+                Some(snap) => c::bpos { inode: 0, offset: 0, snapshot: snap },
+                None => POS_MIN,
+            };
+            let start = rest.first().map_or(Ok(default_start), |s| parse_pos_ctx(s, *snapshot))?;
             let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos_ctx(s, *snapshot))?;
+            let filtered = snapshot.is_some();
             let btree = parse_btree(btree)?;
             match kvdb_fs {
-                KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end)?,
-                KvdbFs::Online(handle, fs) => cmd_list_online(handle, fs, btree, start, end)?,
+                KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end, filtered)?,
+                KvdbFs::Online(handle, fs) => cmd_list_online(handle, fs, btree, start, end, filtered)?,
             }
         }
         "update" => {
