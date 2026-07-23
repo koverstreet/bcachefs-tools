@@ -319,28 +319,31 @@ fn val_bytes<'a>(k: &BkeySC<'a>) -> &'a [u8] {
     unsafe { std::slice::from_raw_parts(k.v as *const c::bch_val as *const u8, len) }
 }
 
+/// One rendering of the value, not two: with a typeinfo field table the
+/// dump is the authoritative view (field names match update's syntax), so
+/// the header is the key alone; the C to_text - which renders the value
+/// inline - is the fallback for types the field engine can't decompose
+/// (entry-stream values like extents), and the whole line for plain reads.
 fn render_key(fs: &Fs, k: &BkeySC<'_>, fields: bool, key_only: bool) -> String {
     if key_only {
         return format!("{}\n", k.to_text_key());
     }
-    let mut out = format!("{}\n", k.to_text(fs));
-    if !fields {
-        return out;
+    if fields {
+        if let Some(info) = typeinfo::bkey_val_info(k.k.type_ as u32) {
+            if !info.fields.is_empty() {
+                let mut out = format!("{}\n", k.to_text_key());
+                let mut dump = String::new();
+                let _ = typeinfo::struct_to_text(&mut dump, info, val_bytes(k));
+                for l in dump.lines() {
+                    out.push_str("  ");
+                    out.push_str(l);
+                    out.push('\n');
+                }
+                return out;
+            }
+        }
     }
-    let Some(info) = typeinfo::bkey_val_info(k.k.type_ as u32) else {
-        return out;
-    };
-    if info.fields.is_empty() {
-        return out;
-    }
-    let mut dump = String::new();
-    let _ = typeinfo::struct_to_text(&mut dump, info, val_bytes(k));
-    for l in dump.lines() {
-        out.push_str("  ");
-        out.push_str(l);
-        out.push('\n');
-    }
-    out
+    format!("{}\n", k.to_text(fs))
 }
 
 /// A resolved assignment target: a field, or a declared bit range within one
