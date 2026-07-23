@@ -768,11 +768,43 @@ fn cmd_sb_get(fs: &Fs, field: &str) -> Result<String> {
 
 fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
     let target = sb_field(field)?;
+
+    let _lock = unsafe { crate::wrappers::sb_lock(fs.raw) };
+
+    // bch2_write_super() silently skips uninitialized superblocks (the gate
+    // that keeps format from writing a half-built sb). An opened-from-disk
+    // sb is complete, but never-started images (fresh format) still have
+    // INITIALIZED unset - fail loudly rather than claim success.
+    {
+        let (r, bm) = sb_field("initialized")?;
+        let (p, len) = sb_bytes(fs);
+        let buf = unsafe { std::slice::from_raw_parts(p, len) };
+        let initialized = match bm {
+            Some(bm) => typeinfo::read_bits(buf, &r, bm),
+            None => typeinfo::read_scalar(buf, &r),
+        }.map_err(|e| anyhow!("initialized: {e}"))?;
+        if initialized == 0 {
+            bail!("superblock not initialized (filesystem has never been started): \
+                   bch2_write_super would silently skip the write; \
+                   start the fs once (mount, or kvdb --rw) first");
+        }
+    }
+
     let (p, len) = sb_bytes(fs);
     let buf = unsafe { std::slice::from_raw_parts_mut(p, len) };
     write_field(buf, &target, v).map_err(|e| anyhow!("{field}: {e}"))?;
 
+    // Every kvdb open short of --rw runs with nochanges (norecovery implies
+    // it, init/fs.c), which turns bch2_write_super() into a silent no-op.
+    // That protection is load-bearing - the open path makes version-upgrade
+    // decisions an inspection-mode open must never persist - so don't weaken
+    // the open; lift nochanges around this one write, which is the user's
+    // explicit request.
+    let saved = unsafe { (*fs.raw).opts.nochanges };
+    unsafe { (*fs.raw).opts.nochanges = 0 };
     let ret = unsafe { c::bch2_write_super(fs.raw) };
+    unsafe { (*fs.raw).opts.nochanges = saved };
+
     if ret != 0 {
         bail!("bch2_write_super failed: {ret}");
     }
