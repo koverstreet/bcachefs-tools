@@ -654,8 +654,16 @@ void bch2_journal_pin_copy(struct journal *j,
 			spin_lock_nested(&dst_l->lock, 1);
 		}
 
+		/*
+		 * Keep-oldest, like bch2_journal_pin_add(): a dst already
+		 * pinning an older seq must not be moved forward, or we
+		 * release an obligation - the callers (interior update pin
+		 * transfers: reparent, will_free_node) copy several pins into
+		 * one and need the min. A pin at an older seq covers src_seq.
+		 */
+		bool keep = dst_seq && dst_seq <= src_seq;
 		bool reclaim = false, race = src_seq != src->seq || dst_seq != dst->seq;
-		if (!race)
+		if (!race && !keep)
 			reclaim = bch2_journal_pin_set_locked(j, dst_l, src_l, dst, src_seq, flush_fn);
 
 		if (dst_l && dst_l != src_l)
@@ -667,7 +675,7 @@ void bch2_journal_pin_copy(struct journal *j,
 			 * If the journal is currently full,  we might want to call flush_fn
 			 * immediately:
 			 */
-			if (src_seq == j->last_seq)
+			if (!keep && src_seq == j->last_seq)
 				journal_wake(j);
 			if (reclaim)
 				bch2_journal_maybe_update_last_seq(j);
