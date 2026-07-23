@@ -333,7 +333,6 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 		 bch2_snapshot_state(s) == SNAPSHOT_STATE_will_delete);
 
 	if (s->subvol) {
-		/* dangling snapshot will be handled later */
 		u32 id = le32_to_cpu(s->subvol);
 
 		/*
@@ -351,35 +350,61 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 		if (!ret)
 			bkey_val_copy_pad(&subvol, subvol_k);
 
-		if (ret || bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_deleted) {
-			printbuf_reset(&buf);
-			prt_str(&buf, "snapshot points to missing or deleted subvolume:\n  ");
-			bch2_bkey_val_to_text(&buf, c, k);
+		bool snap_deleting	= bch2_snapshot_state(s) == SNAPSHOT_STATE_will_delete;
+		bool subvol_deleted	= !ret &&
+			bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_deleted;
+		bool points_back	= !ret &&
+			le32_to_cpu(subvol.snapshot) == k.k->p.offset;
+
+		if (ret || !points_back) {
+			/*
+			 * Missing subvolume or wrong backref: repair needs
+			 * the subvolume side validated first - it belongs to
+			 * the dedicated pass after check_subvols. Report
+			 * only; an error return here would regress mounts of
+			 * filesystems mid-deletion:
+			 */
+			CLASS(bch_log_msg, msg)(c);
+
+			if (ret)
+				prt_printf(&msg.m, "snapshot points to missing subvolume %u:\n", id);
+			else
+				prt_printf(&msg.m, "snapshot's subvolume doesn't point back at it:\n");
+			bch2_bkey_val_to_text(&msg.m, c, k);
 			if (!ret) {
-				prt_str(&buf, "\n  ");
-				bch2_bkey_val_to_text(&buf, c, subvol_k.s_c);
+				prt_newline(&msg.m);
+				bch2_bkey_val_to_text(&msg.m, c, subvol_k.s_c);
 			}
-			bch_err(c, "%s", buf.buf);
+			msg.m.suppress = !bch2_count_fsck_err(c, snapshot_subvol_backref_wrong, &msg.m);
 			return 0;
 		}
 
 		/*
-		 * A live subvolume that doesn't point back isn't this
-		 * leaf's owner - the leaf needs its own subvolume
-		 * created, which we can't do yet. (One that does point
-		 * back was handled by check_snapshot()'s corroboration.)
+		 * The deletion machinery couples exactly one bit on each
+		 * side: a snapshot is will_delete iff its subvolume is
+		 * tombstoned (live vs unlinked is the subvolume's own
+		 * user-visibility business, invisible to the snapshot).
+		 * With the edge intact, a state mismatch repairs in one
+		 * direction only: the subvolume implies the snapshot state
+		 * exactly, while the reverse would have to guess between
+		 * live and unlinked.
 		 */
-		if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_live &&
-		    le32_to_cpu(subvol.snapshot) != k.k->p.offset) {
-			CLASS(bch_log_msg, msg)(c);
-
-			prt_printf(&msg.m, "snapshot points to live subvolume, which points elsewhere:\n");
-			bch2_bkey_val_to_text(&msg.m, c, k);
-			prt_newline(&msg.m);
-			bch2_bkey_val_to_text(&msg.m, c, subvol_k.s_c);
-			msg.m.suppress = !bch2_count_fsck_err(c, snapshot_subvol_backref_wrong, &msg.m);
-
-			return bch_err_throw(c, fsck_repair_unimplemented);
+		if (ret_fsck_err_on(snap_deleting != subvol_deleted,
+				    trans, snapshot_subvol_state_mismatch,
+				    "snapshot %s but its subvolume is %s:\n%s",
+				    snap_deleting ? "will_delete" : "live",
+				    subvol_deleted ? "deleted" : "not deleted",
+				    (printbuf_reset(&buf),
+				     bch2_bkey_val_to_text(&buf, c, k),
+				     prt_newline(&buf),
+				     bch2_bkey_val_to_text(&buf, c, subvol_k.s_c),
+				     buf.buf))) {
+			u = u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			bch2_snapshot_state_set(&u->v,
+						subvol_deleted
+						? SNAPSHOT_STATE_will_delete
+						: SNAPSHOT_STATE_live);
+			*s = u->v;
 		}
 	} else if (should_have_subvol &&
 		   bch2_snapshot_state(s) == SNAPSHOT_STATE_live) {
