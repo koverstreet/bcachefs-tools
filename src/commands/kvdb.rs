@@ -114,6 +114,14 @@ fn parse_pos_ctx(s: &str, snapshot: Option<u32>) -> Result<c::bpos> {
     Ok(pos)
 }
 
+/// An explicit :snapshot in a pos means a raw lookup at exactly that
+/// position - it disables the snapshot context for the command, rather than
+/// the command running filtered (which would resolve visibility and could
+/// return a different version than the one asked for).
+fn pos_has_explicit_snapshot(s: &str) -> bool {
+    s.matches(':').count() >= 2
+}
+
 fn parse_pos(s: &str) -> Result<c::bpos> {
     s.parse()
         .map_err(|_| anyhow!("invalid pos '{s}' (inode:offset[:snapshot], POS_MIN, SPOS_MAX)"))
@@ -754,8 +762,12 @@ fn run_line(
                 bail!("usage: {op} [-k] <btree> <pos>");
             };
             let btree = parse_btree(btree)?;
-            let ctx = snapshot.filter(|_| btree_uses_snapshots(btree));
-            let pos = parse_pos_ctx(pos, ctx)?;
+            let ctx = snapshot
+                .filter(|_| btree_uses_snapshots(btree) && !pos_has_explicit_snapshot(pos));
+            let mut pos = parse_pos(pos)?;
+            if let Some(snap) = ctx {
+                pos.snapshot = snap;
+            }
             let filtered = ctx.is_some();
             match kvdb_fs {
                 KvdbFs::Offline(fs) => match op {
@@ -779,16 +791,18 @@ fn run_line(
                 .split_first()
                 .ok_or_else(|| anyhow!("usage: list [-k] <btree> [start] [end]"))?;
             let btree = parse_btree(btree)?;
-            let ctx = snapshot.filter(|_| btree_uses_snapshots(btree));
-            // A filtered iterator's snapshot comes from pos.snapshot, so the
-            // default start must carry the context (POS_MIN's snapshot 0 is
-            // never a valid view):
-            let default_start = match ctx {
-                Some(snap) => c::bpos { inode: 0, offset: 0, snapshot: snap },
-                None => POS_MIN,
-            };
-            let start = rest.first().map_or(Ok(default_start), |s| parse_pos_ctx(s, ctx))?;
+            let ctx = snapshot.filter(|_| {
+                btree_uses_snapshots(btree)
+                    && !rest.iter().take(2).any(|s| pos_has_explicit_snapshot(s))
+            });
+            let mut start = rest.first().map_or(Ok(POS_MIN), |s| parse_pos(s))?;
             let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos_ctx(s, ctx))?;
+            // A filtered iterator's snapshot comes from the start pos - it's
+            // the view - so it must carry the context whether the start was
+            // given, defaulted, or POS_MIN (snapshot 0 is never a valid view):
+            if let Some(snap) = ctx {
+                start.snapshot = snap;
+            }
             let filtered = ctx.is_some();
             match kvdb_fs {
                 KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end, filtered, key_only)?,
