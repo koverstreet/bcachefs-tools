@@ -437,11 +437,6 @@ struct KvdbHelper {
     btrees: Vec<String>,
 }
 
-const OPS: &[&str] = &[
-    "get", "peek", "peek_prev", "list", "update", "set", "sb", "snapshot", "list_journal",
-    "help", "quit",
-];
-const KEY_OPS: &[&str] = &["get", "peek", "peek_prev", "list", "update", "set"];
 
 impl rustyline::completion::Completer for KvdbHelper {
     type Candidate = String;
@@ -457,9 +452,12 @@ impl rustyline::completion::Completer for KvdbHelper {
         let prior: Vec<&str> = line[..start].split_whitespace().collect();
 
         let candidates: Vec<String> = match prior.as_slice() {
-            [] => OPS.iter().map(|s| s.to_string()).collect(),
-            [op] if KEY_OPS.contains(op) => self.btrees.clone(),
-            ["sb"] => vec!["get".to_string(), "set".to_string()],
+            [] => COMMANDS.iter().map(|c| c.name.to_string()).collect(),
+            [op] => match COMMANDS.iter().find(|c| c.name == *op || c.aliases.contains(op)) {
+                Some(c) if c.completes_btree => self.btrees.clone(),
+                Some(c) => c.subcommands.iter().map(|s| s.to_string()).collect(),
+                None => vec![],
+            },
             _ => vec![],
         };
         Ok((
@@ -893,192 +891,273 @@ impl KvdbFs {
     }
 }
 
-fn run_line(
-    kvdb_fs: &KvdbFs,
+/// Session state threaded to command handlers: the open filesystem, the
+/// open-mode capabilities, and the snapshot context.
+struct Repl<'a> {
+    fs: &'a KvdbFs,
     nostart: bool,
     journal: bool,
     rw: bool,
-    snapshot: &mut Option<u32>,
-    line: &str,
-) -> Result<ControlFlow<()>> {
+    snapshot: Option<u32>,
+}
+
+type CmdHandler = fn(&mut Repl, &Cmd, &[&str]) -> Result<ControlFlow<(), String>>;
+
+/// One entry per command; dispatch, capability gating, usage messages, and
+/// tab completion all read from this table, so they can't drift.
+struct Cmd {
+    name: &'static str,
+    aliases: &'static [&'static str],
+    usage: &'static str,
+    /// second word completes as a btree name
+    completes_btree: bool,
+    /// second-word completions for commands with subcommands
+    subcommands: &'static [&'static str],
+    /// available under --nostart (superblock-only open)
+    nostart_ok: bool,
+    /// write command: requires --rw
+    needs_rw: bool,
+    /// requires --journal
+    needs_journal: bool,
+    handler: CmdHandler,
+}
+
+const COMMANDS: &[Cmd] = &[
+    Cmd { name: "get", aliases: &[], usage: "get [-k] <btree> <pos>",
+          completes_btree: true, subcommands: &[],
+          nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
+    Cmd { name: "peek", aliases: &[], usage: "peek [-k] <btree> <pos>",
+          completes_btree: true, subcommands: &[],
+          nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
+    Cmd { name: "peek_prev", aliases: &[], usage: "peek_prev [-k] <btree> <pos>",
+          completes_btree: true, subcommands: &[],
+          nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_read },
+    Cmd { name: "list", aliases: &[], usage: "list [-k] <btree> [start] [end]",
+          completes_btree: true, subcommands: &[],
+          nostart_ok: false, needs_rw: false, needs_journal: false, handler: h_list },
+    Cmd { name: "update", aliases: &[], usage: "update <btree> <pos> <field=val>...",
+          completes_btree: true, subcommands: &[],
+          nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_update },
+    Cmd { name: "set", aliases: &[], usage: "set [-s] <btree> <pos> <type> [field=val]...",
+          completes_btree: true, subcommands: &[],
+          nostart_ok: false, needs_rw: true, needs_journal: false, handler: h_set },
+    Cmd { name: "sb", aliases: &[], usage: "sb get <field> | sb set <field=val>",
+          completes_btree: false, subcommands: &["get", "set"],
+          nostart_ok: true, needs_rw: false, needs_journal: false, handler: h_sb },
+    Cmd { name: "snapshot", aliases: &[], usage: "snapshot [<id>|none]",
+          completes_btree: false, subcommands: &[],
+          nostart_ok: true, needs_rw: false, needs_journal: false, handler: h_snapshot },
+    Cmd { name: "list_journal", aliases: &[],
+          usage: "list_journal [-k [+-]<btree>:<pos>[-<btree>:<pos>],...]",
+          completes_btree: false, subcommands: &[],
+          nostart_ok: false, needs_rw: false, needs_journal: true, handler: h_list_journal },
+    Cmd { name: "help", aliases: &["?"], usage: "help",
+          completes_btree: false, subcommands: &[],
+          nostart_ok: true, needs_rw: false, needs_journal: false, handler: h_help },
+    Cmd { name: "quit", aliases: &["exit", "q"], usage: "quit",
+          completes_btree: false, subcommands: &[],
+          nostart_ok: true, needs_rw: false, needs_journal: false, handler: h_quit },
+];
+
+fn h_quit(_: &mut Repl, _: &Cmd, _: &[&str]) -> Result<ControlFlow<(), String>> {
+    Ok(ControlFlow::Break(()))
+}
+
+fn h_help(_: &mut Repl, _: &Cmd, _: &[&str]) -> Result<ControlFlow<(), String>> {
+    Ok(ControlFlow::Continue(HELP.to_string()))
+}
+
+fn h_snapshot(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    Ok(ControlFlow::Continue(match args {
+        [] => match repl.snapshot {
+            Some(s) => format!("snapshot context: {s}\n"),
+            None => "no snapshot context\n".to_string(),
+        },
+        ["none"] | ["clear"] => {
+            repl.snapshot = None;
+            String::new()
+        }
+        [s] => {
+            repl.snapshot = Some(u32::try_from(parse_int(s)?)?);
+            String::new()
+        }
+        _ => bail!("usage: {}", cmd.usage),
+    }))
+}
+
+fn h_read(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (key_only, args) = match args {
+        ["-k", rest @ ..] => (true, rest),
+        _ => (false, args),
+    };
+    let [btree, pos] = args else {
+        bail!("usage: {}", cmd.usage);
+    };
+    let btree = parse_btree(btree)?;
+    let ctx = repl.snapshot
+        .filter(|_| btree_uses_snapshots(btree) && !pos_has_explicit_snapshot(pos));
+    let mut pos = parse_pos(pos)?;
+    if let Some(snap) = ctx {
+        pos.snapshot = snap;
+    }
+    let filtered = ctx.is_some();
+    Ok(ControlFlow::Continue(match cmd.name {
+        "get" => repl.fs.get(btree, pos, filtered, key_only)?,
+        "peek" => repl.fs.peek(btree, pos, false, filtered, key_only)?,
+        _ => repl.fs.peek(btree, pos, true, filtered, key_only)?,
+    }))
+}
+
+fn h_list(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (key_only, args) = match args {
+        ["-k", rest @ ..] => (true, rest),
+        _ => (false, args),
+    };
+    let (btree, rest) = args
+        .split_first()
+        .ok_or_else(|| anyhow!("usage: {}", cmd.usage))?;
+    let btree = parse_btree(btree)?;
+    let ctx = repl.snapshot.filter(|_| {
+        btree_uses_snapshots(btree)
+            && !rest.iter().take(2).any(|s| pos_has_explicit_snapshot(s))
+    });
+    let mut start = rest.first().map_or(Ok(POS_MIN), |s| parse_pos(s))?;
+    let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos_ctx(s, ctx))?;
+    // A filtered iterator's snapshot comes from the start pos - it's the
+    // view - so it must carry the context whether the start was given,
+    // defaulted, or POS_MIN (snapshot 0 is never a valid view):
+    if let Some(snap) = ctx {
+        start.snapshot = snap;
+    }
+    let filtered = ctx.is_some();
+    Ok(ControlFlow::Continue(repl.fs.list(btree, start, end, filtered, key_only)?))
+}
+
+fn h_update(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let [btree, pos, assigns @ ..] = args else {
+        bail!("usage: {}", cmd.usage);
+    };
+    if assigns.is_empty() {
+        bail!("usage: {}", cmd.usage);
+    }
+    let fs = repl.fs.offline()?;
+    let assigns = assigns
+        .iter()
+        .map(|s| parse_assign(s))
+        .collect::<Result<Vec<_>>>()?;
+    let btree = parse_btree(btree)?;
+    let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
+    Ok(ControlFlow::Continue(cmd_update(fs, btree, parse_pos_ctx(pos, ctx)?, &assigns)?))
+}
+
+fn h_set(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (in_snapshot, args) = match args {
+        ["-s", rest @ ..] => (true, rest),
+        _ => (false, args),
+    };
+    let [btree, pos, type_name, assigns @ ..] = args else {
+        bail!("usage: {}", cmd.usage);
+    };
+    if in_snapshot && *type_name != "deleted" {
+        bail!("-s (delete within pos's snapshot) only applies to deletions");
+    }
+    let fs = repl.fs.offline()?;
+    let assigns = assigns
+        .iter()
+        .map(|s| parse_assign(s))
+        .collect::<Result<Vec<_>>>()?;
+    let btree = parse_btree(btree)?;
+    let ctx = repl.snapshot.filter(|_| btree_uses_snapshots(btree));
+    Ok(ControlFlow::Continue(
+        cmd_set(fs, btree, parse_pos_ctx(pos, ctx)?, type_name, &assigns, in_snapshot)?,
+    ))
+}
+
+fn h_sb(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let (&sub, rest) = args.split_first()
+        .ok_or_else(|| anyhow!("usage: {}", cmd.usage))?;
+    Ok(ControlFlow::Continue(match sub {
+        "get" => {
+            let [field] = rest else { bail!("usage: sb get <field>"); };
+            cmd_sb_get(repl.fs.fs(), field)?
+        }
+        "set" => {
+            let [assign] = rest else { bail!("usage: sb set <field=val>"); };
+            // Under the default norecovery open, nochanges makes
+            // bch2_write_super() a silent no-op - refuse rather than claim
+            // success. (Not table-gated needs_rw: sb get is fine read-only,
+            // and --nostart is the sb-editing mode and never sets nochanges.)
+            if !repl.rw && !repl.nostart {
+                bail!("read-only (the default is norecovery): \
+                       reopen with --rw, or --nostart for sb-only edits");
+            }
+            let fs = repl.fs.offline()?;
+            let (field, val) = parse_assign(assign)?;
+            let FieldVal::Int(v) = val else {
+                bail!("sb set: expected an integer value");
+            };
+            cmd_sb_set(fs, field, v)?
+        }
+        _ => bail!("usage: {}", cmd.usage),
+    }))
+}
+
+fn h_list_journal(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), String>> {
+    let fs = repl.fs.offline()?;
+    let mut f = super::list_journal::JournalFilter::default();
+    let mut args = args;
+    while let Some((&flag, rest)) = args.split_first() {
+        match flag {
+            "-k" => {
+                let Some((&ranges, rest)) = rest.split_first() else {
+                    bail!("usage: {}", cmd.usage);
+                };
+                let (sign, r) = super::list_journal::parse_sign(ranges);
+                for part in r.split(',') {
+                    let range = bcachefs_kernel::bbpos_range_parse(part)
+                        .map_err(|e| anyhow!("{e}: {part}"))?;
+                    f.key.ranges.push((sign, range));
+                }
+                f.filtering = true;
+                args = rest;
+            }
+            _ => bail!("list_journal: unknown arg '{flag}' (supported: -k <range>)"),
+        }
+    }
+    let interrupt: &dyn Fn() -> bool = &take_interrupt;
+    super::list_journal::list_journal_run(fs.raw, &f, false, 0, u64::MAX, None,
+                                          Some(interrupt))?;
+    Ok(ControlFlow::Continue(String::new()))
+}
+
+fn run_line(repl: &mut Repl, line: &str) -> Result<ControlFlow<()>> {
     let args: Vec<&str> = line.split_whitespace().collect();
     let Some((&op, args)) = args.split_first() else {
         return Ok(ControlFlow::Continue(()));
     };
 
-    if nostart && !matches!(op, "sb" | "help" | "?" | "snapshot" | "quit" | "exit" | "q") {
-        bail!("--nostart: the btree isn't started, only sb commands are available");
-    }
-
-    let out = match op {
-        "quit" | "exit" | "q" => return Ok(ControlFlow::Break(())),
-        "snapshot" => match args {
-            [] => match snapshot {
-                Some(s) => format!("snapshot context: {s}\n"),
-                None => "no snapshot context\n".to_string(),
-            },
-            ["none"] | ["clear"] => {
-                *snapshot = None;
-                String::new()
-            }
-            [s] => {
-                *snapshot = Some(u32::try_from(parse_int(s)?)?);
-                String::new()
-            }
-            _ => bail!("usage: snapshot [<id>|none]"),
-        },
-        "get" | "peek" | "peek_prev" => {
-            let (key_only, args) = match args {
-                ["-k", rest @ ..] => (true, rest),
-                _ => (false, args),
-            };
-            let [btree, pos] = args else {
-                bail!("usage: {op} [-k] <btree> <pos>");
-            };
-            let btree = parse_btree(btree)?;
-            let ctx = snapshot
-                .filter(|_| btree_uses_snapshots(btree) && !pos_has_explicit_snapshot(pos));
-            let mut pos = parse_pos(pos)?;
-            if let Some(snap) = ctx {
-                pos.snapshot = snap;
-            }
-            let filtered = ctx.is_some();
-            match op {
-                "get" => kvdb_fs.get(btree, pos, filtered, key_only)?,
-                "peek" => kvdb_fs.peek(btree, pos, false, filtered, key_only)?,
-                _ => kvdb_fs.peek(btree, pos, true, filtered, key_only)?,
-            }
-        }
-        "list" => {
-            let (key_only, args) = match args {
-                ["-k", rest @ ..] => (true, rest),
-                _ => (false, args),
-            };
-            let (btree, rest) = args
-                .split_first()
-                .ok_or_else(|| anyhow!("usage: list [-k] <btree> [start] [end]"))?;
-            let btree = parse_btree(btree)?;
-            let ctx = snapshot.filter(|_| {
-                btree_uses_snapshots(btree)
-                    && !rest.iter().take(2).any(|s| pos_has_explicit_snapshot(s))
-            });
-            let mut start = rest.first().map_or(Ok(POS_MIN), |s| parse_pos(s))?;
-            let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos_ctx(s, ctx))?;
-            // A filtered iterator's snapshot comes from the start pos - it's
-            // the view - so it must carry the context whether the start was
-            // given, defaulted, or POS_MIN (snapshot 0 is never a valid view):
-            if let Some(snap) = ctx {
-                start.snapshot = snap;
-            }
-            let filtered = ctx.is_some();
-            kvdb_fs.list(btree, start, end, filtered, key_only)?
-        }
-        "update" => {
-            let [btree, pos, assigns @ ..] = args else {
-                bail!("usage: update <btree> <pos> <field=val>...");
-            };
-            if assigns.is_empty() {
-                bail!("usage: update <btree> <pos> <field=val>...");
-            }
-            if !rw {
-                bail!("read-only (the default is norecovery): reopen with --rw to edit");
-            }
-            let fs = kvdb_fs.offline()?;
-            let assigns = assigns
-                .iter()
-                .map(|s| parse_assign(s))
-                .collect::<Result<Vec<_>>>()?;
-            let btree = parse_btree(btree)?;
-            let ctx = snapshot.filter(|_| btree_uses_snapshots(btree));
-            cmd_update(fs, btree, parse_pos_ctx(pos, ctx)?, &assigns)?
-        }
-        "set" => {
-            let (in_snapshot, args) = match args {
-                ["-s", rest @ ..] => (true, rest),
-                _ => (false, args),
-            };
-            let [btree, pos, type_name, assigns @ ..] = args else {
-                bail!("usage: set [-s] <btree> <pos> <type> [field=val]...");
-            };
-            if in_snapshot && *type_name != "deleted" {
-                bail!("-s (delete within pos's snapshot) only applies to deletions");
-            }
-            if !rw {
-                bail!("read-only (the default is norecovery): reopen with --rw to edit");
-            }
-            let fs = kvdb_fs.offline()?;
-            let assigns = assigns
-                .iter()
-                .map(|s| parse_assign(s))
-                .collect::<Result<Vec<_>>>()?;
-            let btree = parse_btree(btree)?;
-            let ctx = snapshot.filter(|_| btree_uses_snapshots(btree));
-            cmd_set(fs, btree, parse_pos_ctx(pos, ctx)?, type_name, &assigns, in_snapshot)?
-        }
-        "sb" => {
-            let (&sub, rest) = args.split_first()
-                .ok_or_else(|| anyhow!("usage: sb get <field> | sb set <field=val>"))?;
-            match sub {
-                "get" => {
-                    let [field] = rest else { bail!("usage: sb get <field>"); };
-                    cmd_sb_get(kvdb_fs.fs(), field)?
-                }
-                "set" => {
-                    let [assign] = rest else { bail!("usage: sb set <field=val>"); };
-                    // Under the default norecovery open, nochanges makes
-                    // bch2_write_super() a silent no-op - refuse rather than
-                    // claim success:
-                    if !rw && !nostart {
-                        bail!("read-only (the default is norecovery): \
-                               reopen with --rw, or --nostart for sb-only edits");
-                    }
-                    let fs = kvdb_fs.offline()?;
-                    let (field, val) = parse_assign(assign)?;
-                    let FieldVal::Int(v) = val else {
-                        bail!("sb set: expected an integer value");
-                    };
-                    cmd_sb_set(fs, field, v)?
-                }
-                _ => bail!("usage: sb get <field> | sb set <field=val>"),
-            }
-        }
-        "list_journal" => {
-            if !journal {
-                bail!("list_journal: reopen with --journal \
-                       (retains the whole journal in memory)");
-            }
-            let fs = kvdb_fs.offline()?;
-            let mut f = super::list_journal::JournalFilter::default();
-            let mut args = args;
-            while let Some((&flag, rest)) = args.split_first() {
-                match flag {
-                    "-k" => {
-                        let Some((&ranges, rest)) = rest.split_first() else {
-                            bail!("usage: list_journal [-k [+-]<btree>:<pos>[-<btree>:<pos>],...]");
-                        };
-                        let (sign, r) = super::list_journal::parse_sign(ranges);
-                        for part in r.split(',') {
-                            let range = bcachefs_kernel::bbpos_range_parse(part)
-                                .map_err(|e| anyhow!("{e}: {part}"))?;
-                            f.key.ranges.push((sign, range));
-                        }
-                        f.filtering = true;
-                        args = rest;
-                    }
-                    _ => bail!("list_journal: unknown arg '{flag}' (supported: -k <range>)"),
-                }
-            }
-            let interrupt: &dyn Fn() -> bool = &take_interrupt;
-            super::list_journal::list_journal_run(fs.raw, &f, false, 0, u64::MAX, None,
-                                                  Some(interrupt))?;
-            String::new()
-        }
-        "help" | "?" => HELP.to_string(),
-        _ => bail!("unknown command '{op}' (try: help)"),
+    let Some(cmd) = COMMANDS.iter()
+        .find(|c| c.name == op || c.aliases.contains(&op)) else {
+        bail!("unknown command '{op}' (try: help)");
     };
 
-    print!("{out}");
-    Ok(ControlFlow::Continue(()))
+    if repl.nostart && !cmd.nostart_ok {
+        bail!("--nostart: the btree isn't started, only sb commands are available");
+    }
+    if cmd.needs_rw && !repl.rw {
+        bail!("read-only (the default is norecovery): reopen with --rw to edit");
+    }
+    if cmd.needs_journal && !repl.journal {
+        bail!("{}: reopen with --journal (retains the whole journal in memory)", cmd.name);
+    }
+
+    match (cmd.handler)(repl, cmd, args)? {
+        ControlFlow::Continue(out) => {
+            print!("{out}");
+            Ok(ControlFlow::Continue(()))
+        }
+        ControlFlow::Break(()) => Ok(ControlFlow::Break(())),
+    }
 }
 
 fn kvdb(cli: Cli) -> Result<()> {
@@ -1148,11 +1227,17 @@ fn kvdb(cli: Cli) -> Result<()> {
         }
     };
     let fs = &kvdb_fs;
-    let mut snapshot_ctx: Option<u32> = None;
+    let mut repl = Repl {
+        fs,
+        nostart: cli.nostart,
+        journal: cli.journal,
+        rw: cli.rw,
+        snapshot: None,
+    };
 
     if !cli.commands.is_empty() {
         for line in &cli.commands {
-            if run_line(fs, cli.nostart, cli.journal, cli.rw, &mut snapshot_ctx, line)?.is_break() {
+            if run_line(&mut repl, line)?.is_break() {
                 break;
             }
         }
@@ -1163,7 +1248,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // depend on earlier ones); interactively, report and go on.
     if !stdin().is_terminal() {
         for line in stdin().lines() {
-            if run_line(fs, cli.nostart, cli.journal, cli.rw, &mut snapshot_ctx, &line?)?.is_break() {
+            if run_line(&mut repl, &line?)?.is_break() {
                 break;
             }
         }
@@ -1188,7 +1273,7 @@ fn kvdb(cli: Cli) -> Result<()> {
         let _ = rl.load_history(h);
     }
     loop {
-        let prompt = match snapshot_ctx {
+        let prompt = match repl.snapshot {
             Some(s) => format!("kvdb[{s}]> "),
             None => "kvdb> ".to_string(),
         };
@@ -1198,7 +1283,7 @@ fn kvdb(cli: Cli) -> Result<()> {
                     let _ = rl.add_history_entry(&line);
                 }
                 INTERRUPTED.store(false, Ordering::Relaxed);
-                match run_line(fs, cli.nostart, cli.journal, cli.rw, &mut snapshot_ctx, &line) {
+                match run_line(&mut repl, &line) {
                     Ok(ControlFlow::Break(())) => break,
                     Ok(ControlFlow::Continue(())) => {}
                     Err(e) => eprintln!("{e}"),
