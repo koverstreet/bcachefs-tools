@@ -236,14 +236,22 @@ fn write_field(
 /// a snapshot field, so passing it unconditionally is fine.
 const RAW_EXACT: BtreeIterFlags = BtreeIterFlags::SLOTS.union(BtreeIterFlags::ALL_SNAPSHOTS);
 
-/// With a snapshot context active, reads drop ALL_SNAPSHOTS: the iterator
-/// runs snapshot-filtered (iter init adds BTREE_ITER_filter_snapshots for
-/// btrees with snapshot fields) at pos.snapshot, so lookups resolve
-/// visibility the way runtime lookups do. Harmless on btrees without
-/// snapshot fields - iteration is simply positional there.
+/// The snapshot context only applies to btrees whose keys are actually
+/// snapshotted - on anything else it would corrupt positions (snapshots
+/// btree keys live at snapshot 0) and filtering is meaningless.
+fn btree_uses_snapshots(btree: c::btree_id) -> bool {
+    bcachefs_kernel::BTREE_HAS_SNAPSHOTS_MASK & (1u64 << btree as u64) != 0
+}
+
+/// With a snapshot context active, reads drop ALL_SNAPSHOTS - the iterator
+/// runs snapshot-filtered (BTREE_ITER_filter_snapshots) at pos.snapshot, so
+/// lookups resolve visibility the way runtime lookups do - and set
+/// NOFILTER_WHITEOUTS: a forensics tool must show the whiteout doing the
+/// shadowing, not silently hide the deletion.
 fn iter_flags(base: BtreeIterFlags, filtered: bool) -> BtreeIterFlags {
     if filtered {
         base.difference(BtreeIterFlags::ALL_SNAPSHOTS)
+            .union(BtreeIterFlags::NOFILTER_WHITEOUTS)
     } else {
         base
     }
@@ -724,8 +732,10 @@ fn run_line(
             let [btree, pos] = args else {
                 bail!("usage: {op} <btree> <pos>");
             };
-            let (btree, pos) = (parse_btree(btree)?, parse_pos_ctx(pos, *snapshot)?);
-            let filtered = snapshot.is_some();
+            let btree = parse_btree(btree)?;
+            let ctx = snapshot.filter(|_| btree_uses_snapshots(btree));
+            let pos = parse_pos_ctx(pos, ctx)?;
+            let filtered = ctx.is_some();
             match kvdb_fs {
                 KvdbFs::Offline(fs) => match op {
                     "get" => cmd_get(fs, btree, pos, filtered)?,
@@ -743,17 +753,18 @@ fn run_line(
             let (btree, rest) = args
                 .split_first()
                 .ok_or_else(|| anyhow!("usage: list <btree> [start] [end]"))?;
+            let btree = parse_btree(btree)?;
+            let ctx = snapshot.filter(|_| btree_uses_snapshots(btree));
             // A filtered iterator's snapshot comes from pos.snapshot, so the
             // default start must carry the context (POS_MIN's snapshot 0 is
             // never a valid view):
-            let default_start = match *snapshot {
+            let default_start = match ctx {
                 Some(snap) => c::bpos { inode: 0, offset: 0, snapshot: snap },
                 None => POS_MIN,
             };
-            let start = rest.first().map_or(Ok(default_start), |s| parse_pos_ctx(s, *snapshot))?;
-            let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos_ctx(s, *snapshot))?;
-            let filtered = snapshot.is_some();
-            let btree = parse_btree(btree)?;
+            let start = rest.first().map_or(Ok(default_start), |s| parse_pos_ctx(s, ctx))?;
+            let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos_ctx(s, ctx))?;
+            let filtered = ctx.is_some();
             match kvdb_fs {
                 KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end, filtered)?,
                 KvdbFs::Online(handle, fs) => cmd_list_online(handle, fs, btree, start, end, filtered)?,
@@ -773,7 +784,9 @@ fn run_line(
                 .iter()
                 .map(|s| parse_assign(s))
                 .collect::<Result<Vec<_>>>()?;
-            cmd_update(fs, parse_btree(btree)?, parse_pos_ctx(pos, *snapshot)?, &assigns)?
+            let btree = parse_btree(btree)?;
+            let ctx = snapshot.filter(|_| btree_uses_snapshots(btree));
+            cmd_update(fs, btree, parse_pos_ctx(pos, ctx)?, &assigns)?
         }
         "set" => {
             let (in_snapshot, args) = match args {
@@ -793,7 +806,9 @@ fn run_line(
                 .iter()
                 .map(|s| parse_assign(s))
                 .collect::<Result<Vec<_>>>()?;
-            cmd_set(fs, parse_btree(btree)?, parse_pos_ctx(pos, *snapshot)?, type_name, &assigns, in_snapshot)?
+            let btree = parse_btree(btree)?;
+            let ctx = snapshot.filter(|_| btree_uses_snapshots(btree));
+            cmd_set(fs, btree, parse_pos_ctx(pos, ctx)?, type_name, &assigns, in_snapshot)?
         }
         "sb" => {
             let (&sub, rest) = args.split_first()

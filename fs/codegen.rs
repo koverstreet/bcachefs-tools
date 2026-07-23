@@ -890,6 +890,19 @@ fn generate_btree_ids_known(entries: &[Vec<String>]) -> String {
     }
     out.push_str("];\n");
 
+    let mut mask: u64 = 0;
+    for e in entries {
+        let nr: u32 = e[1].trim().parse().expect("BCH_BTREE_IDS: numeric id");
+        if e[2].contains("BTREE_IS_snapshots") {
+            mask |= 1 << nr;
+        }
+    }
+    out.push_str(&format!(
+        "\n/// Btrees whose keys are snapshotted; mirrors the C btree_has_snapshots_mask\n\
+         /// (a static const bindgen can't see).\n\
+         pub const BTREE_HAS_SNAPSHOTS_MASK: u64 = {mask:#x};\n"
+    ));
+
     out
 }
 
