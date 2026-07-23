@@ -33,6 +33,7 @@
 
 #include "data/checksum.h"
 #include "data/compress.h"
+#include "data/bitflip_repair.h"
 #include "data/ec/io.h"
 #include "data/io_misc.h"
 #include "data/read.h"
@@ -920,6 +921,36 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 	if (!csum_good && !rbio->bounce && (rbio->flags & BCH_READ_user_mapped)) {
 		rbio->flags |= BCH_READ_must_bounce;
 		return bch_err_throw(c, data_read_retry_csum_err_maybe_userspace);
+	}
+
+	/*
+	 * CRC32C single-bit repair — last resort only.
+	 *
+	 * Only attempt after all normal checksum retries have been
+	 * exhausted (crc_retry_nr >= checksum_err_retry_nr).  This
+	 * ensures replicas, EC reconstruction, and plain re-reads
+	 * are all tried first.  Safe when the bio uses kernel-owned
+	 * pages (bounced or not user-mapped).
+	 */
+	if (!csum_good &&
+	    rbio->pick.crc_retry_nr >= c->opts.checksum_err_retry_nr &&
+	    (rbio->bounce || !(rbio->flags & BCH_READ_user_mapped)) &&
+	    (crc.csum_type == BCH_CSUM_crc32c ||
+	     crc.csum_type == BCH_CSUM_crc32c_nonzero) &&
+	    !crc_is_compressed(crc)) {
+		int repair_ret = bch2_try_bitflip_repair_bio(c, src,
+					&crc, nonce, rbio->pick.crc.csum);
+		if (!repair_ret) {
+			csum_good = true;
+			/*
+			 * Data is now corrected in the bio.  Recompute the
+			 * checksum so that any downstream write-back (e.g.
+			 * data_update / self-heal) persists the fix with a
+			 * matching CRC rather than carrying the stale one.
+			 */
+			csum = bch2_checksum_bio(c, crc.csum_type, nonce, src);
+			rbio->pick.crc.csum = csum;
+		}
 	}
 
 	bch2_account_io_completion(ca, BCH_MEMBER_ERROR_checksum, 0, csum_good);

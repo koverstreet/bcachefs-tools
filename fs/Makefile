@@ -117,6 +117,7 @@ bcachefs-y		:=			\
 	btree/write.o				\
 	btree/write_buffer.o			\
 	data/checksum.o				\
+	data/bitflip_repair.o			\
 	data/compress.o				\
 	data/copygc.o				\
 	data/ec/create.o			\
