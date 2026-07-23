@@ -2,6 +2,7 @@
 #define _BCACHEFS_RECOVERY_PASSES_H
 
 #include <linux/kthread.h>
+#include <linux/sched/signal.h>
 
 extern const char * const bch2_recovery_passes[];
 
@@ -55,7 +56,9 @@ static inline int bch2_recovery_cancelled(struct bch_fs *c)
 	if (test_bit(BCH_FS_going_ro, &c->flags))
 		return bch_err_throw(c, erofs_recovery_cancelled);
 
-	if ((current->flags & PF_KTHREAD) && kthread_should_stop())
+	if ((current->flags & PF_KTHREAD)
+	    ? kthread_should_stop()
+	    : fatal_signal_pending(current))
 		return bch_err_throw(c, recovery_cancelled);
 
 	return 0;
