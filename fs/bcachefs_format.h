@@ -473,7 +473,11 @@ enum bch_bkey_type_flags {
 	  "Whiteout specific to the extents btree, blocking "		\
 	  "visibility of ancestor snapshot extent versions")		\
 	x(logged_op_stripe_update, 37,	BKEY_TYPE_strict_btree_checks,	\
-	  "Logged stripe creation/update operation for crash recovery")
+	  "Logged stripe creation/update operation for crash recovery")	\
+	x(damage,		38,	BKEY_TYPE_strict_btree_checks,	\
+	  "Errors that damaged an inode, recorded in the same "		\
+	  "transaction as the repair that did the damage: a sorted "	\
+	  "list of bch_sb_error_id")
 
 enum bch_bkey_type {
 #define x(name, nr, ...) KEY_TYPE_##name	= nr,
@@ -762,6 +766,11 @@ enum btree_id_flags {
 	  BTREE_IS_write_buffer,						\
 	  BIT_ULL(KEY_TYPE_backpointer),					\
 	  "Stripe backpointers")					\
+	x(damage,		28,						\
+	  BTREE_IS_snapshots,						\
+	  BIT_ULL(KEY_TYPE_whiteout)|						\
+	  BIT_ULL(KEY_TYPE_damage),						\
+	  "Inodes damaged by errors and repairs")				\
 
 enum btree_id {
 #define x(name, nr, ...) BTREE_ID_##name = nr,
@@ -784,6 +793,7 @@ enum btree_id {
 #include "fs/logged_ops_format.h"
 #include "fs/quota_format.h"
 #include "fs/xattr_format.h"
+#include "init/damage_format.h"
 #include "init/passes_format.h"
 #include "journal/seq_blacklist_format.h"
 #include "sb/counters_format.h"

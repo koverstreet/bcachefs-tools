@@ -821,8 +821,14 @@ static void fsck_damaged_path_add_err(struct fsck_damaged_path *i,
 		i->errors[i->nr_errors++] = err;
 }
 
-static void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
-			      enum bch_sb_error_id err)
+/*
+ * The in-memory half of damage recording, feeding the end-of-fsck summary
+ * and the fsck_damaged_paths debugfs file; called from bch2_damage_record()
+ * alongside the durable damage btree write. Goes away once reporting reads
+ * the damage btree.
+ */
+void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
+		       enum bch_sb_error_id err)
 {
 	struct bch_fs *c = trans->c;
 
@@ -858,19 +864,6 @@ static void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
 			.errors		= { err },
 		})))
 		c->errors.damaged_paths_alloc_err = true;
-}
-
-/*
- * In-memory backing: the damage series replaces this with the damage
- * btree (one key per inode, written in the repair's transaction), same
- * identifiers - the macros and their call sites don't change when it
- * lands.
- */
-int bch2_damage_record(struct btree_trans *trans, struct bpos pos,
-		       enum bch_sb_error_id err)
-{
-	bch2_fsck_damaged(trans, pos, err);
-	return 0;
 }
 
 /*

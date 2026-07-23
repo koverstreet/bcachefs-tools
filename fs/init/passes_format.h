@@ -169,6 +169,11 @@
 	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
 	  "Validate xattr entries: owning inode exists "					\
 	  "in valid snapshot, hash correct; delete orphans")					\
+	x(check_damage,				49, PASS_FSCK,					\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
+	  "Delete damage keys with no inode at the "						\
+	  "same position - left behind by kernels "						\
+	  "without the damage btree")								\
 	x(check_root,				29, PASS_ONLINE|PASS_FSCK,			\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes),						\
 	  "Ensure root subvolume and root directory inode "					\
@@ -205,7 +210,8 @@
 	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_extents)|						\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_dirents)|						\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_xattrs),						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_xattrs)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_damage),						\
 	  "Delete snapshot data keys across all "						\
 	  "snapshot-bearing btrees, then remove snapshot "					\
 	  "nodes and mark empty interior nodes")						\
