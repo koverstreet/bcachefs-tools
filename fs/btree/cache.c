@@ -395,8 +395,21 @@ int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struc
 	 * The dirty bit is what makes the cache_state DIRTY, so a FREEABLE
 	 * node with the bit set is an inconsistent state — and consumers that
 	 * need to scrub dirty nodes can rely on walking only live[].dirty.
+	 * Warn with the node dumped — the flags identify which path leaked
+	 * the dirty bit (write_blocked/never_write/noevict/need_write) — then
+	 * clear it and carry on: the state bookkeeping below handles the
+	 * DIRTY exit either way.
 	 */
-	EBUG_ON(!btree_node_state_hashed(new) && btree_node_dirty(b));
+	if (WARN_ONCE(!btree_node_state_hashed(new) && btree_node_dirty(b),
+		      "bcachefs: dirty node in unhashed state transition")) {
+		struct bch_fs *c = container_of(bc, struct bch_fs, btree.cache);
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "dirty node in unhashed state transition %u -> %u\n",
+			   old, new);
+		prt_printf(&msg.m, "btree=%u level=%u cache_state=%u flags=0x%lx hash_val=0x%llx\n",
+			   b->c.btree_id, b->c.level, b->cache_state, b->flags, b->hash_val);
+		clear_btree_node_dirty(b);
+	}
 
 	if (old == new)
 		return 0;
@@ -1646,6 +1659,21 @@ static void btree_cache_exit_drain_node(struct bch_fs *c,
 		btree_cache_exit_locked_dump(c, b, "write held");
 		BUG();
 	}
+
+	/*
+	 * Dirty nodes can survive to exit on a dead journal: the going-RO
+	 * path's bch2_btree_cancel_all_writes() only catches nodes dirty at
+	 * that instant, and the window between going-RO and unmount can
+	 * redirty a node (btree node reads wanting a rewrite, interior
+	 * update teardown). With the journal dead they can never be written;
+	 * cancel here too. Dirty at exit with a live journal is a bug, but
+	 * we're freeing everything regardless — warn, don't die.
+	 */
+	if (btree_node_dirty(b)) {
+		WARN_ON_ONCE(!bch2_journal_error(&c->journal));
+		clear_btree_node_dirty(b);
+	}
+
 	bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_FREED);
 	six_unlock_write(&b->c.lock);
 	six_unlock_intent(&b->c.lock);
