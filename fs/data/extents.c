@@ -1518,13 +1518,31 @@ static bool ptr_has_ec(struct bch_fs *c, struct bkey_s k, struct bch_extent_ptr 
 	return false;
 }
 
+static unsigned cached_ptrs_want(struct bch_fs *c, struct bch_inode_opts *opts)
+{
+	unsigned target = opts->promote_target ?: opts->foreground_target;
+	unsigned replicas = max_t(unsigned, opts->data_replicas, 1);
+	const struct bch_devs_mask *devs;
+
+	if (!target)
+		return 1;
+
+	devs = bch2_target_to_mask(c, target);
+	if (!devs)
+		return 1;
+
+	return max_t(unsigned, min(replicas, dev_mask_nr(devs)), 1);
+}
+
 static bool maybe_drop_cached_ptr(struct bch_fs *c, struct bch_inode_opts *opts,
 				  struct bkey_s k,
-				  struct bch_extent_ptr *ptr, bool have_cached_ptr)
+				  struct bch_extent_ptr *ptr,
+				  unsigned cached_ptrs_seen,
+				  unsigned cached_ptrs_want)
 {
 	if (ptr->cached) {
-		if (have_cached_ptr)
-			return drop_cached_pointer_trace(c, k, ptr, "extent already has another cached pointer");
+		if (cached_ptrs_seen >= cached_ptrs_want)
+			return drop_cached_pointer_trace(c, k, ptr, "extent already has enough cached pointers");
 
 		if (ptr_has_ec(c, k, ptr))
 			return drop_cached_pointer_trace(c, k, ptr, "cached ptr incompatible with erasure coding");
@@ -1551,12 +1569,15 @@ void bch2_extent_ptr_set_cached(struct bch_fs *c,
 	unsigned drop_dev = ptr->dev;
 
 	guard(rcu)();
-	bool have_cached_ptr, dropped;
+	unsigned want = cached_ptrs_want(c, opts);
+	unsigned cached_ptrs_seen;
+	bool dropped;
 	do {
 		struct bkey_ptrs ptrs = bch2_bkey_ptrs(k);
 		union bch_extent_entry *entry;
 		struct extent_ptr_decoded p;
-		have_cached_ptr = dropped = false;
+		cached_ptrs_seen = 0;
+		dropped = false;
 
 		bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
 			/*
@@ -1568,14 +1589,15 @@ void bch2_extent_ptr_set_cached(struct bch_fs *c,
 				return;
 			}
 
-			if (maybe_drop_cached_ptr(c, opts, k, &entry->ptr, have_cached_ptr)) {
+			if (maybe_drop_cached_ptr(c, opts, k, &entry->ptr,
+						  cached_ptrs_seen, want)) {
 				/* @ptr is being invalidated; we'll have to find it again */
 				ptr = NULL;
 				dropped = true;
 				break;
 			}
 
-			have_cached_ptr |= p.ptr.cached;
+			cached_ptrs_seen += p.ptr.cached;
 		}
 	} while (dropped);
 
@@ -1587,7 +1609,7 @@ void bch2_extent_ptr_set_cached(struct bch_fs *c,
 	}
 
 	ptr->cached = true;
-	maybe_drop_cached_ptr(c, opts, k, ptr, have_cached_ptr);
+	maybe_drop_cached_ptr(c, opts, k, ptr, cached_ptrs_seen, want);
 }
 
 static void bch2_bkey_set_ptrs_cached_mask(struct bch_fs *c,
@@ -1668,16 +1690,18 @@ void bch2_bkey_drop_extra_cached_ptrs(struct bch_fs *c,
 
 	do {
 		struct bkey_ptrs ptrs = bch2_bkey_ptrs(k);
-		bool have_cached_ptr = false;
+		unsigned cached_ptrs_seen = 0;
+		unsigned want = cached_ptrs_want(c, opts);
 		dropped = false;
 
 		bkey_for_each_ptr(ptrs, ptr) {
-			if (maybe_drop_cached_ptr(c, opts, k, ptr, have_cached_ptr)) {
+			if (maybe_drop_cached_ptr(c, opts, k, ptr,
+						  cached_ptrs_seen, want)) {
 				dropped = true;
 				break;
 			}
 
-			have_cached_ptr |= ptr->cached;
+			cached_ptrs_seen += ptr->cached;
 		}
 	} while (dropped);
 }
