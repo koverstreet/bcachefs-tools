@@ -356,6 +356,9 @@ unit so systemd doesn't try to mount before all members are visible.
 Ships with a `bcachefs-wait-devices@.service` template unit in the
 Debian package.
 
+`bcachefs wait-devices` now accepts `--timeout` to bound the wait and
+`-v`/`--verbose` to report how many initialized devices have been found.
+
 ### Userspace
 
 `bcachefs fs top` gained live tracepoint drill-down: every counter on the
