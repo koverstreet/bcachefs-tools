@@ -548,7 +548,7 @@ int bch2_btree_key_cache_journal_flush(struct journal *j,
 		ret = lockrestart_do(trans, ({
 			btree_path_idx_t path_idx;
 			int _ret = bch2_btree_node_lock_with_path(trans, &ck->c,
-								  SIX_LOCK_intent, &path_idx);
+								  SIX_LOCK_intent, 0, &path_idx);
 			bool do_flush = false;
 
 			if (!_ret) {

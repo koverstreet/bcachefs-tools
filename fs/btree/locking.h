@@ -415,7 +415,8 @@ static inline void bch2_btree_node_lock_write_nofail(struct btree_trans *trans,
 int __must_check
 bch2_btree_node_lock_with_path(struct btree_trans *,
 			       struct btree_bkey_cached_common *,
-			       enum six_lock_type, btree_path_idx_t *);
+			       enum six_lock_type, u64 hash_val,
+			       btree_path_idx_t *);
 
 /* relock: */
 
