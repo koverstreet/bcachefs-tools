@@ -58,35 +58,126 @@ use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 
 const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
 
+// The canonical kvdb documentation: this constant is the --help long text,
+// and docgen extracts it into the Principles of Operation (doc/generated/
+// kvdb.tex, included from the Debugging tools section). Markup: blank-line
+// paragraphs, `- ` bullets, [term] description items, backticks for code,
+// 4-space-indented lines render verbatim.
+// DOC_STRING(kvdb)
+const KVDB_DOC: &str = "\
+kvdb is an interactive debugger for bcachefs metadata: it reads and writes
+btree keys by field name, using generated runtime type information for the
+on-disk structs. Its two jobs are forensics - inspecting a damaged
+filesystem's state precisely, without disturbing it - and injection:
+constructing exact corruption for fsck/repair tests, or performing
+field-level surgery on a filesystem wedged in the field.
+
+Commands come from the REPL (readline editing, history, tab completion for
+command and btree names), from -c arguments, or from piped stdin. In a
+piped script an error aborts, since later commands likely depend on earlier
+ones; interactively, errors are reported and the session continues. ctrl-C
+interrupts a long-running command and returns to the prompt; ctrl-D or
+`quit` exits.
+
+Opening modes: the default open is read-only with recovery capped
+(norecovery). Inspection is the primary use, and a full-recovery open of a
+damaged filesystem can repair - rewrite - the very state under inspection;
+the default is guaranteed not to write. The journal is still read and
+overlaid on btree reads, so listings show current state, but it is never
+replayed and no repair passes run.
+
+- `--rw`: full recovery - journal replay, repair passes scheduled in the
+  superblock, version upgrades - and writes enabled. Required for
+  update/set/sb set.
+- `--journal`: retain the entire journal in memory for `list_journal`;
+  costs memory proportional to journal size.
+- `--nostart`: superblock only, the btree is never started. For sb get/set
+  on an image that can't or shouldn't be started.
+- On a mounted filesystem, reads go through the kernel query ioctl and
+  writes are refused.
+
+Two traps: an `--rw` open of a not-yet-upgraded filesystem rewrites
+metadata via the version upgrade (for example the snapshot and subvolume
+state fields), destroying not-upgraded evidence. And the default open of a
+formatted-but-never-started image silently runs first-start initialization
+in memory: listings then show a root inode that does not exist on disk.
+
+Commands:
+
+    get       [-k] <btree> <pos>                   exact lookup, dump fields
+    peek      [-k] <btree> <pos>                   first key >= pos
+    peek_prev [-k] <btree> <pos>                   last key <= pos
+    list      [-k] <btree> [start] [end]           keys in range
+    update    <btree> <pos> <field=val>...         modify fields of a key
+    set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
+    sb get    <field>                              read a superblock field
+    sb set    <field=val>                          write one
+    snapshot  [<id>|none]                          session snapshot context
+    list_journal [-k <ranges>]                     journal transactions
+    help, quit
+
+Positions are inode:offset[:snapshot], or POS_MIN/POS_MAX/SPOS_MAX. `-k` on
+the read commands prints keys only - type, position, size - without
+rendering values; useful when mapping out what exists.
+
+Fields are value-struct fields addressed by path (parent, children[1],
+btime.hi). Declared flag bits (LE*_BITMASK) resolve by name, qualified as
+flags.subvol when a name collides, and fields holding enum codewords accept
+value names: state=will_delete. Values are decimal, 0x hex, or negative
+decimal. `set <btree> <pos> deleted` removes the exact key; with -s it
+deletes within pos's snapshot instead (inserting whiteouts, like a runtime
+delete).
+
+The snapshot context. Snapshot visibility is the subtle dimension of every
+bcachefs lookup: a key at snapshot S is visible at S and its descendants
+unless overwritten, and a lookup in a snapshot resolves to the nearest
+visible version. The `snapshot` command gives the session a view, and reads
+then answer 'what does this view see?' instead of 'what is at this exact
+position?'. Precisely:
+
+- No context: reads are raw (all snapshots, positions taken literally); an
+  omitted :snapshot parses as 0.
+- Context set, pos written without :snapshot: the pos picks up the context
+  and the read runs snapshot-filtered at it - ancestor versions resolve,
+  siblings and descendants are invisible - exactly what a runtime lookup in
+  that snapshot sees. Whiteouts are shown, not skipped: in forensics the
+  whiteout doing the shadowing is data.
+- Context set, pos written with an explicit :snapshot: that command is
+  fully raw - unfiltered, exact position, context bypassed. Explicit means
+  exact.
+- The context only applies to btrees whose keys are snapshotted, and never
+  filters writes: update/set target the exact key, the context only fills
+  an omitted :snapshot.
+
+For a filtered `list`, the start position names the view: its snapshot
+field carries the context whether given, defaulted, or POS_MIN.
+
+Journal search: with `--journal` at open, `list_journal -k <ranges>` prints
+only the journal transactions containing updates to the given key ranges -
+the who-touched-this-key question. Ranges are btree:pos or
+btree:pos-btree:pos, comma separated, optionally prefixed + or -, the same
+syntax as the standalone list_journal command. Each transaction prints with
+its name, overwrites, and new keys.
+
+Editing goes through the normal transactional path - journalled, triggers
+run, key validation applies - in an instance opened with commit-time
+validation relaxed and background workers (snapshot deletion, copygc,
+reconcile) disabled, so the tool neither refuses the states fsck is being
+tested against nor consumes its own injections. This tool can corrupt a
+filesystem in precise, surgical ways; that is its purpose.
+
+One editing trap: snapshot IDs allocate descending from U32_MAX and the
+in-memory snapshot table is id-indexed; inserting a snapshot key with an
+unrealistically low id asks the table to span billions of entries and fails
+with ENOMEM_mark_snapshot. Use realistic, near-U32_MAX ids when fabricating
+snapshots. Varint-packed values (inodes) and entry-stream values (extents)
+are editable only up to their fixed header; fixed-layout values are fully
+editable.
+";
+
 /// Btree read/write REPL (debug)
 #[derive(Parser, Debug)]
-#[command(long_about = "\
-Read and write btree keys by field name, using generated runtime type \
-information for the on-disk structs. Without -c, reads commands from stdin \
-(a REPL; pipe a script in for non-interactive use).\n\n\
-Opens read-only with recovery capped (norecovery) by default: inspection \
-must not disturb the state under inspection. --rw runs full recovery and \
-enables editing.\n\n\
-Commands:\n\
-  get       [-k] <btree> <pos>               exact lookup, dump fields\n\
-  peek      [-k] <btree> <pos>               first key >= pos\n\
-  peek_prev <btree> <pos>                    last key <= pos\n\
-  list      [-k] <btree> [start] [end]       keys in range\n\
-  update    <btree> <pos> <field=val>...     modify fields of an existing key\n\
-  set       <btree> <pos> <type> [field=val]...  insert a whole new key\n\
-  snapshot  [<id>|none]                      session snapshot context\n\
-  list_journal [-k <ranges>]                 journal transactions (--journal)\n\n\
-Full documentation, including the snapshot-context visibility semantics: \
-doc/kvdb.md.\n\n\
-pos is inode:offset[:snapshot], or POS_MIN/POS_MAX/SPOS_MAX. Fields are \
-val struct fields: parent, children[1], btime.hi, ... Declared flag bits \
-(LE*_BITMASK) resolve by name too: no_keys=1, or qualified as flags.subvol=0 \
-when the name collides with a field. get decodes them: flags: 10 (subvol|no_keys). \
-Values are decimal, 0x hex, or negative decimal. `set <btree> <pos> deleted` \
-deletes a key.\n\n\
-Updates go through the normal transactional path: journalled, triggers run, \
-key validation applies. This tool can corrupt a filesystem in precise, \
-surgical ways - that is its purpose. Use accordingly.")]
+#[command(long_about = KVDB_DOC)]
 pub struct Cli {
     /// Command to run (repeatable; skips the REPL)
     #[arg(short = 'c', long = "command")]
