@@ -1370,6 +1370,9 @@ int bch2_data_update_init(struct btree_trans *trans,
 	struct extent_ptr_decoded p;
 	unsigned buf_bytes = 0;
 	bool unwritten = false;
+	bool verify_decompress = false;
+	unsigned target_compression_type =
+		bch2_compression_opt_to_type(m->op.compression_opt);
 	unsigned durability_keeping = 0;
 
 	if (m->opts.ptrs_kill)
@@ -1410,6 +1413,12 @@ int bch2_data_update_init(struct btree_trans *trans,
 		if (p.crc.compression_type == BCH_COMPRESSION_TYPE_incompressible)
 			m->op.incompressible = true;
 
+		verify_decompress |= crc_is_compressed(p.crc) &&
+			(p.crc.live_size != p.crc.uncompressed_size ||
+			 p.crc.uncompressed_size > c->opts.encoded_extent_max >> 9 ||
+			 bch2_csum_type_is_encryption(p.crc.csum_type) !=
+			 bch2_csum_type_is_encryption(m->op.csum_type) ||
+			 p.crc.compression_type != target_compression_type);
 		buf_bytes = max_t(unsigned, buf_bytes, p.crc.uncompressed_size << 9);
 		unwritten |= p.ptr.unwritten;
 
@@ -1525,7 +1534,8 @@ int bch2_data_update_init(struct btree_trans *trans,
 	if (ret)
 		goto out_nocow_unlock;
 
-	m->rbio.data_update_verify_decompress = m->opts.type == BCH_DATA_UPDATE_scrub;
+	m->rbio.data_update_verify_decompress =
+		m->opts.type == BCH_DATA_UPDATE_scrub || verify_decompress;
 
 	return 0;
 out_nocow_unlock:

@@ -70,7 +70,7 @@ static bool bch2_poison_extents_on_checksum_error = true;
 module_param_named(poison_extents_on_checksum_error,
 		   bch2_poison_extents_on_checksum_error, bool, 0644);
 MODULE_PARM_DESC(poison_extents_on_checksum_error,
-		 "Extents with checksum errors are marked as poisoned - unsafe without read fua support");
+		 "Extents with checksum or decompression errors are marked as poisoned - unsafe without read fua support");
 
 static void bch2_read_bio_to_text_atomic(struct printbuf *, struct bch_read_bio *);
 
@@ -1406,7 +1406,8 @@ static noinline int read_extent_pick_err(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	if (ret == -BCH_ERR_data_read_csum_err) {
+	if (ret == -BCH_ERR_data_read_csum_err ||
+	    bch2_err_matches(ret, BCH_ERR_decompress)) {
 		/* We can only return errors directly in the retry path */
 		BUG_ON(!(flags & BCH_READ_in_retry));
 
