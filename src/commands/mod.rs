@@ -113,6 +113,7 @@ pub mod reconcile;
 pub mod recover_super;
 pub mod recovery_pass;
 pub mod scrub;
+pub mod set_uuid;
 pub mod set_option;
 pub mod strip_alloc;
 pub mod subvolume;
@@ -233,7 +234,7 @@ static VERSION_CMD: CmdDef = {
 pub const COMMAND_GROUPS: &[GroupDef] = &[
     GroupDef { heading: "Superblock commands", commands: &[
         &format::CMD, &super_cmd::CMD, &recover_super::CMD,
-        &set_option::CMD, &counters::CMD, &strip_alloc::CMD,
+        &set_option::CMD, &set_uuid::CMD, &counters::CMD, &strip_alloc::CMD,
     ]},
     GroupDef { heading: "Images",                   commands: &[&image::CMD] },
     GroupDef { heading: "Mount",                    commands: &[
