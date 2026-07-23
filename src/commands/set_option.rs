@@ -15,6 +15,14 @@ fn opt_flags() -> u32 {
     c::opt_flags::OPT_FS as u32 | c::opt_flags::OPT_DEVICE as u32
 }
 
+fn has_flag(flags: u32, flag: c::opt_flags) -> bool {
+    flags & flag as u32 != 0
+}
+
+fn write_online_fs_option(flags: u32) -> bool {
+    has_flag(flags, c::opt_flags::OPT_FS) && !has_flag(flags, c::opt_flags::OPT_DEVICE)
+}
+
 fn set_option_cmd() -> Command {
     Command::new("set-fs-option")
         .about("Set a filesystem option")
@@ -85,14 +93,11 @@ fn set_option_online(
             continue;
         }
 
-        let is_fs_opt = flags & c::opt_flags::OPT_FS as u32 != 0;
-        let is_device_opt = flags & c::opt_flags::OPT_DEVICE as u32 != 0;
-
-        if is_fs_opt && !is_device_opt {
+        if write_online_fs_option(flags) {
             sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value);
         }
 
-        if is_device_opt {
+        if has_flag(flags, c::opt_flags::OPT_DEVICE) {
             if !dev_idxs.is_empty() {
                 for dev_idx in dev_idxs {
                     sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value);
@@ -144,7 +149,7 @@ fn set_option_offline(
             continue;
         }
 
-        if flags & c::opt_flags::OPT_FS as u32 != 0 {
+        if has_flag(flags, c::opt_flags::OPT_FS) {
             let ret = unsafe {
                 c::bch2_opt_hook_pre_set(fs.raw, std::ptr::null_mut(), 0, opt_id, val, true, std::ptr::null_mut())
             };
@@ -155,7 +160,7 @@ fn set_option_offline(
             unsafe { c::bch2_opt_set_sb(fs.raw, std::ptr::null_mut(), opt, val, c_value.as_ptr()); }
         }
 
-        if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
+        if has_flag(flags, c::opt_flags::OPT_DEVICE) {
             let indices: Vec<u32> = if !dev_idxs.is_empty() {
                 dev_idxs.to_vec()
             } else {
@@ -208,3 +213,18 @@ fn name_to_dev_idx(c: *mut c::bch_fs, name: &str) -> Option<usize> {
 }
 
 pub const CMD: super::CmdDef = raw_cmd!("set-fs-option", "Set filesystem options", cmd_set_option);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn online_sysfs_path_skips_fs_entry_for_device_scoped_options() {
+        let fs = c::opt_flags::OPT_FS as u32;
+        let dev = c::opt_flags::OPT_DEVICE as u32;
+
+        assert!(write_online_fs_option(fs));
+        assert!(!write_online_fs_option(dev));
+        assert!(!write_online_fs_option(fs | dev));
+    }
+}
