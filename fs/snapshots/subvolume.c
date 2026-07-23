@@ -448,7 +448,24 @@ __cold void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
 
 	struct bch_subvolume v;
 	bkey_val_copy_pad(&v, s);
-	prt_printf(out, " %s", bch2_subvolume_state_str(bch2_subvolume_state_compat(&v)));
+
+	u32 state = le32_to_cpu(v.state);
+	if (!state) {
+		/* Not upgraded: no state field, the obsolete flag is the truth */
+		prt_printf(out, " %s (not upgraded, unlinked_obsolete=%llu)",
+			   bch2_subvolume_state_str(bch2_subvolume_state_from_flags(&v)),
+			   BCH_SUBVOLUME_UNLINKED_OBSOLETE(&v));
+	} else if (!bch2_subvolume_state_valid(state)) {
+		prt_printf(out, " state 0x%x invalid (unlinked_obsolete=%llu)",
+			   state, BCH_SUBVOLUME_UNLINKED_OBSOLETE(&v));
+	} else {
+		prt_printf(out, " %s", bch2_subvolume_state_str(state));
+
+		/* dual-written shadow (bch2_subvolume_state_set()); print divergence: */
+		if (BCH_SUBVOLUME_UNLINKED_OBSOLETE(&v) != (state != SUBVOLUME_STATE_live))
+			prt_printf(out, " unlinked_obsolete=%llu",
+				   BCH_SUBVOLUME_UNLINKED_OBSOLETE(&v));
+	}
 }
 
 static int subvolume_children_mod(struct btree_trans *trans, struct bpos pos, bool set)
