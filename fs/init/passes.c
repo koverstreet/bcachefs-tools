@@ -387,6 +387,9 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	if (!(flags & RUN_RECOVERY_PASS_ephemeral))
 		lockdep_assert_held(&c->sb_lock.lock);
 
+	if (c->opts.recovery_passes_exclude & BIT_ULL(pass))
+		return 0;
+
 	bch2_printbuf_make_room(out, 1024);
 	guard(printbuf_atomic)(out);
 	guard(spinlock_irq)(&r->lock);
