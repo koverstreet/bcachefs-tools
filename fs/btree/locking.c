@@ -757,6 +757,20 @@ int bch2_btree_node_lock_write_contended(struct btree_trans *trans, struct btree
  * temporary unlocked path, take the lock, then record the lock on the path
  * so the cycle detector can find us as the holder.
  *
+ * @hash_val is the node's expected identity — btree_ptr_hash_val() of the key
+ * it was found under, or a snapshot of b->hash_val taken while the pointer
+ * was known valid. It arms the node-reuse check in
+ * bch2_six_check_for_deadlock(): if the identity is gone by the time we'd
+ * sleep, the lock attempt aborts with no_btree_node_reused rather than
+ * parking behind an off-path holder (btree_node_reclaim's trylocks) that may
+ * hold the reused node's lock indefinitely.
+ *
+ * Pass 0 only when reclaim genuinely can't take the node — e.g. the write
+ * completion path, which owns the write_in_flight that blocks reclaim — or
+ * for key cache locks, which the check doesn't cover. Beware flags another
+ * thread can clear: a journal pin doesn't pin (the node can be written and
+ * the pin dropped concurrently), and neither does dirty on its own.
+ *
  * Caller releases via bch2_btree_node_unlock_with_path().
  *
  * May return a transaction_restart; wrap in lockrestart_do().
@@ -765,15 +779,14 @@ int __must_check
 bch2_btree_node_lock_with_path(struct btree_trans *trans,
 			       struct btree_bkey_cached_common *b,
 			       enum six_lock_type type,
+			       u64 hash_val,
 			       btree_path_idx_t *path_idx_out)
 {
 	btree_path_idx_t path_idx = bch2_path_get_unlocked_mut(trans,
 				b->btree_id, b->level, btree_node_pos(b), b->cached);
 
 	struct btree_path *path = trans->paths + path_idx;
-	/* No key context here — caller already has the b. Skip the hash_val
-	 * check; we're acquiring on a node the caller already validated. */
-	trans->locking_hash_val = 0;
+	trans->locking_hash_val = hash_val;
 	trans->locking_root_id	= -1;
 	int ret = btree_node_lock(trans, path, b, b->level, type);
 	if (ret) {

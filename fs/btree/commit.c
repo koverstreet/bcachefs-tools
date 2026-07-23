@@ -260,11 +260,24 @@ static int __btree_node_flush(struct journal *j, struct journal_entry_pin *pin,
 	unsigned long old, new;
 	unsigned idx = w - b->writes;
 
+	/*
+	 * The journal pin doesn't pin the node: another thread can write the
+	 * node and drop the pin while we run, and reclaim can then reuse the
+	 * node's memory. Snapshot the identity to arm the reuse check: gone
+	 * already (unhashed nodes can't be dirty), or going while we'd sleep
+	 * on the lock (aborting the attempt), means the pinned write is done
+	 * and there's nothing to flush.
+	 */
+	u64 hash_val = READ_ONCE(b->hash_val);
+	if (!hash_val)
+		return 0;
+
 	CLASS(btree_trans, trans)(c);
-	return lockrestart_do(trans, ({
+	int ret = lockrestart_do(trans, ({
 		btree_path_idx_t path_idx;
-		int ret = bch2_btree_node_lock_with_path(trans, &b->c, SIX_LOCK_read, &path_idx);
-		if (!ret) {
+		int _ret = bch2_btree_node_lock_with_path(trans, &b->c, SIX_LOCK_read,
+							  hash_val, &path_idx);
+		if (!_ret) {
 			old = READ_ONCE(b->flags);
 			do {
 				new = old;
@@ -282,8 +295,10 @@ static int __btree_node_flush(struct journal *j, struct journal_entry_pin *pin,
 			__bch2_btree_node_write(trans, b, BTREE_WRITE_only_if_need);
 			bch2_btree_node_unlock_with_path(trans, path_idx, b->c.level);
 		}
-		ret;
+		_ret;
 	}));
+
+	return bch2_err_matches(ret, BCH_ERR_no_btree_node_reused) ? 0 : ret;
 }
 
 int bch2_btree_node_flush0(struct journal *j, struct journal_entry_pin *pin, u64 seq)

@@ -967,10 +967,29 @@ static void btree_update_nodes_written(struct btree_update *as)
 	darray_for_each(as->old_nodes, i) {
 		bool seq_matches = false;
 
+		/*
+		 * i->b is a stale pointer: this update deleted the node, so
+		 * btree_node_reclaim may have reused its memory — e.g. as
+		 * another update's prealloc node, whose owner holds it
+		 * intent+write while possibly blocked on the allocator. The
+		 * open buckets the allocator is waiting on are released by
+		 * this workqueue (bch2_open_bucket_put below), so sleeping on
+		 * the node here closes the loop and deadlocks. Arm the
+		 * identity check with the old key's hash: if we'd sleep on a
+		 * node that's no longer ours, the lock attempt aborts.
+		 *
+		 * An abort means no wait is owed. Sustained write locks on an
+		 * unhashed node come only from reclaim (which requires
+		 * write_in_flight clear before grabbing) or the write
+		 * completion path (which runs after the bio finished) — either
+		 * way the IO this wait guards against is already done.
+		 */
 		ret = lockrestart_do(trans, ({
 			btree_path_idx_t path_idx;
 			int _ret = bch2_btree_node_lock_with_path(trans, &i->b->c,
-								  SIX_LOCK_read, &path_idx);
+								  SIX_LOCK_read,
+								  btree_ptr_hash_val(&i->key),
+								  &path_idx);
 			if (!_ret) {
 				seq_matches = btree_node_seq_matches(i->b, i->seq);
 				bch2_btree_node_unlock_with_path(trans, path_idx,
@@ -1063,8 +1082,17 @@ static void btree_update_nodes_written(struct btree_update *as)
 		 */
 		lockrestart_do(trans, ({
 			btree_path_idx_t path_idx;
+			/*
+			 * Unarmed take: this block owns clearing b's
+			 * write_blocked (the list_del below), which is what
+			 * makes b unreclaimable - so the reuse race can't
+			 * reach it, and skipping on a spurious abort would
+			 * leak write_blocked and leave b unwritable forever.
+			 * The reparent race is handled by the as->b recheck
+			 * under interior_updates.lock.
+			 */
 			int _ret = bch2_btree_node_lock_with_path(trans, &b->c,
-							SIX_LOCK_intent, &path_idx);
+							SIX_LOCK_intent, 0, &path_idx);
 			if (!_ret) {
 				struct btree_path *path = trans->paths + path_idx;
 
@@ -1132,8 +1160,15 @@ static void btree_update_nodes_written(struct btree_update *as)
 		if (i->b) {
 			lockrestart_do(trans, ({
 				btree_path_idx_t path_idx;
+				/*
+				 * Unarmed take: new nodes are dirty until
+				 * written, hence unreclaimable - the reuse
+				 * race can't reach them, and a spurious skip
+				 * here would leave a node that never gets its
+				 * write kicked.
+				 */
 				int _ret = bch2_btree_node_lock_with_path(trans, &i->b->c,
-							SIX_LOCK_read, &path_idx);
+							SIX_LOCK_read, 0, &path_idx);
 				if (!_ret) {
 					btree_node_write_if_need(trans, i->b, SIX_LOCK_read);
 					bch2_btree_node_unlock_with_path(trans, path_idx,
