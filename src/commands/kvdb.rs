@@ -254,6 +254,51 @@ fn cmd_peek(fs: &Fs, btree: c::btree_id, pos: c::bpos, prev: bool) -> Result<Str
     })?)
 }
 
+/// Tab completion: command names for the first word, btree names (from the
+/// same string table FromStr parses) after a key command, get/set after sb.
+struct KvdbHelper {
+    btrees: Vec<String>,
+}
+
+const OPS: &[&str] = &["get", "peek", "peek_prev", "list", "update", "set", "sb", "help"];
+const KEY_OPS: &[&str] = &["get", "peek", "peek_prev", "list", "update", "set"];
+
+impl rustyline::completion::Completer for KvdbHelper {
+    type Candidate = String;
+
+    fn complete(
+        &self,
+        line: &str,
+        pos: usize,
+        _: &rustyline::Context<'_>,
+    ) -> rustyline::Result<(usize, Vec<String>)> {
+        let start = line[..pos].rfind(char::is_whitespace).map_or(0, |i| i + 1);
+        let word = &line[start..pos];
+        let prior: Vec<&str> = line[..start].split_whitespace().collect();
+
+        let candidates: Vec<String> = match prior.as_slice() {
+            [] => OPS.iter().map(|s| s.to_string()).collect(),
+            [op] if KEY_OPS.contains(op) => self.btrees.clone(),
+            ["sb"] => vec!["get".to_string(), "set".to_string()],
+            _ => vec![],
+        };
+        Ok((
+            start,
+            candidates
+                .into_iter()
+                .filter(|c| c.starts_with(word))
+                .collect(),
+        ))
+    }
+}
+
+impl rustyline::hint::Hinter for KvdbHelper {
+    type Hint = String;
+}
+impl rustyline::highlight::Highlighter for KvdbHelper {}
+impl rustyline::validate::Validator for KvdbHelper {}
+impl rustyline::Helper for KvdbHelper {}
+
 /// ^C during a long-running command: the REPL installs a SIGINT handler that
 /// sets this flag (rustyline's raw mode swallows ^C at the prompt itself, so
 /// the handler only ever fires mid-command). Iteration loops poll it and stop,
@@ -778,7 +823,14 @@ fn kvdb(cli: Cli) -> Result<()> {
         libc::signal(libc::SIGINT, kvdb_sigint as *const () as libc::sighandler_t);
     }
 
-    let mut rl = rustyline::DefaultEditor::new()?;
+    let mut rl: rustyline::Editor<KvdbHelper, rustyline::history::DefaultHistory> =
+        rustyline::Editor::new()?;
+    rl.set_helper(Some(KvdbHelper {
+        btrees: bcachefs_kernel::BTREE_IDS_KNOWN
+            .iter()
+            .map(|id| id.to_string())
+            .collect(),
+    }));
     let history = std::env::var_os("HOME")
         .map(|home| PathBuf::from(home).join(".cache/bcachefs-kvdb-history"));
     if let Some(h) = &history {
