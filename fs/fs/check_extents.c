@@ -64,7 +64,8 @@ static int check_i_sectors_notnested(struct btree_trans *trans, struct inode_wal
 						   i->inode.bi_inum,
 						   i->inode.bi_snapshot, NULL, &buf));
 
-		count2 = bch2_count_inode_sectors(trans, w->last_pos.inode, i->inode.bi_snapshot);
+		count2 = bch2_count_inode_sectors(trans, w->last_pos.inode,
+					bch2_snapshot_redundant_interior(c, i->inode.bi_snapshot));
 
 		if (w->recalculate_sums)
 			i->count = count2;
