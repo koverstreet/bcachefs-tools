@@ -10,17 +10,27 @@
 //!
 //! Ops: get / peek / peek_prev / list (read), update (read-modify-write
 //! fields of an existing key), set (construct and insert a whole key —
-//! `set <btree> <pos> deleted` deletes). One-shot via -c, REPL on stdin
-//! otherwise; the REPL reads commands line by line, so tests can pipe a
-//! script in.
+//! `set <btree> <pos> deleted` deletes), snapshot (session view context),
+//! list_journal (transaction search, --journal opens). One-shot via -c,
+//! REPL on stdin otherwise; the REPL reads commands line by line, so tests
+//! can pipe a script in.
 //!
-//! Scope notes: values are addressed raw (BTREE_ITER_all_snapshots — the
-//! position's snapshot field is taken literally, no visibility filtering;
-//! harmlessly dropped on btrees without a snapshot field). Fixed-layout vals
-//! are fully editable; varint-packed (inode) and entry-stream (extent) vals
-//! only up to their fixed header. Updates run the normal triggers and key
-//! validation — per-key-invalid keys are (correctly) rejected; whether we
-//! want a validation-bypass mode for injecting those is an open question.
+//! The default open is norecovery (read-only, no replay, no repair passes) -
+//! inspection must not disturb the state under inspection; --rw opts into
+//! full recovery for editing sessions.
+//!
+//! Visibility: without a snapshot context, reads are raw
+//! (BTREE_ITER_all_snapshots - positions taken literally). With a context,
+//! reads without an explicit :snapshot run snapshot-filtered at the context
+//! (runtime visibility resolution, whiteouts shown); an explicit :snapshot
+//! makes that command raw again. Writes always target the exact key.
+//! Full semantics: doc/kvdb.md.
+//!
+//! Fixed-layout vals are fully editable; varint-packed (inode) and
+//! entry-stream (extent) vals only up to their fixed header. Updates run the
+//! normal triggers and key validation — per-key-invalid keys are (correctly)
+//! rejected; whether we want a validation-bypass mode for injecting those is
+//! an open question.
 
 use std::io::{stdin, stdout, IsTerminal};
 use std::ops::ControlFlow;
@@ -54,13 +64,20 @@ const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
 Read and write btree keys by field name, using generated runtime type \
 information for the on-disk structs. Without -c, reads commands from stdin \
 (a REPL; pipe a script in for non-interactive use).\n\n\
+Opens read-only with recovery capped (norecovery) by default: inspection \
+must not disturb the state under inspection. --rw runs full recovery and \
+enables editing.\n\n\
 Commands:\n\
-  get       <btree> <pos>                    exact lookup, dump fields\n\
-  peek      <btree> <pos>                    first key >= pos\n\
+  get       [-k] <btree> <pos>               exact lookup, dump fields\n\
+  peek      [-k] <btree> <pos>               first key >= pos\n\
   peek_prev <btree> <pos>                    last key <= pos\n\
-  list      <btree> [start] [end]            keys in range\n\
+  list      [-k] <btree> [start] [end]       keys in range\n\
   update    <btree> <pos> <field=val>...     modify fields of an existing key\n\
-  set       <btree> <pos> <type> [field=val]...  insert a whole new key\n\n\
+  set       <btree> <pos> <type> [field=val]...  insert a whole new key\n\
+  snapshot  [<id>|none]                      session snapshot context\n\
+  list_journal [-k <ranges>]                 journal transactions (--journal)\n\n\
+Full documentation, including the snapshot-context visibility semantics: \
+doc/kvdb.md.\n\n\
 pos is inode:offset[:snapshot], or POS_MIN/POS_MAX/SPOS_MAX. Fields are \
 val struct fields: parent, children[1], btime.hi, ... Declared flag bits \
 (LE*_BITMASK) resolve by name too: no_keys=1, or qualified as flags.subvol=0 \
@@ -89,11 +106,18 @@ pub struct Cli {
     #[arg(long)]
     nostart: bool,
 
-    /// Open read-only without journal replay or repair passes (recovery
-    /// capped at snapshots_read; journal keys still overlay reads). For
-    /// inspecting a filesystem's state before repair touches it.
+    /// Read-only, no journal replay or repair passes (recovery capped at
+    /// snapshots_read; journal keys still overlay reads). This is the
+    /// default; the flag is accepted for compatibility.
     #[arg(long)]
     norecovery: bool,
+
+    /// Open read-write with full recovery: journal replay, scheduled repair
+    /// passes, version upgrades. Required for update/set/sb set. On a
+    /// damaged filesystem this can repair - rewrite - the state you may
+    /// have wanted to inspect.
+    #[arg(long)]
+    rw: bool,
 
     /// Retain the entire journal in memory for the list_journal command
     /// (costs memory proportional to journal size).
@@ -740,6 +764,7 @@ fn run_line(
     kvdb_fs: &KvdbFs,
     nostart: bool,
     journal: bool,
+    rw: bool,
     snapshot: &mut Option<u32>,
     line: &str,
 ) -> Result<ControlFlow<()>> {
@@ -833,6 +858,9 @@ fn run_line(
             if assigns.is_empty() {
                 bail!("usage: update <btree> <pos> <field=val>...");
             }
+            if !rw {
+                bail!("read-only (the default is norecovery): reopen with --rw to edit");
+            }
             let KvdbFs::Offline(fs) = kvdb_fs else {
                 bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
             };
@@ -855,6 +883,9 @@ fn run_line(
             if in_snapshot && *type_name != "deleted" {
                 bail!("-s (delete within pos's snapshot) only applies to deletions");
             }
+            if !rw {
+                bail!("read-only (the default is norecovery): reopen with --rw to edit");
+            }
             let KvdbFs::Offline(fs) = kvdb_fs else {
                 bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
             };
@@ -876,6 +907,13 @@ fn run_line(
                 }
                 "set" => {
                     let [assign] = rest else { bail!("usage: sb set <field=val>"); };
+                    // Under the default norecovery open, nochanges makes
+                    // bch2_write_super() a silent no-op - refuse rather than
+                    // claim success:
+                    if !rw && !nostart {
+                        bail!("read-only (the default is norecovery): \
+                               reopen with --rw, or --nostart for sb-only edits");
+                    }
                     let KvdbFs::Offline(fs) = kvdb_fs else {
                         bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
                     };
@@ -960,7 +998,12 @@ fn kvdb(cli: Cli) -> Result<()> {
     if cli.nostart {
         opt_set!(fs_opts, nostart, 1);
     }
-    if cli.norecovery {
+    if cli.rw && cli.norecovery {
+        bail!("--rw and --norecovery are mutually exclusive");
+    }
+    // Inspection is the primary use, and a full-recovery open can repair -
+    // rewrite - the state under inspection; rw is opt-in.
+    if !cli.rw {
         opt_set!(fs_opts, norecovery, 1);
     }
     if cli.journal {
@@ -995,7 +1038,7 @@ fn kvdb(cli: Cli) -> Result<()> {
 
     if !cli.commands.is_empty() {
         for line in &cli.commands {
-            if run_line(fs, cli.nostart, cli.journal, &mut snapshot_ctx, line)?.is_break() {
+            if run_line(fs, cli.nostart, cli.journal, cli.rw, &mut snapshot_ctx, line)?.is_break() {
                 break;
             }
         }
@@ -1006,7 +1049,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // depend on earlier ones); interactively, report and go on.
     if !stdin().is_terminal() {
         for line in stdin().lines() {
-            if run_line(fs, cli.nostart, cli.journal, &mut snapshot_ctx, &line?)?.is_break() {
+            if run_line(fs, cli.nostart, cli.journal, cli.rw, &mut snapshot_ctx, &line?)?.is_break() {
                 break;
             }
         }
@@ -1041,7 +1084,7 @@ fn kvdb(cli: Cli) -> Result<()> {
                     let _ = rl.add_history_entry(&line);
                 }
                 INTERRUPTED.store(false, Ordering::Relaxed);
-                match run_line(fs, cli.nostart, cli.journal, &mut snapshot_ctx, &line) {
+                match run_line(fs, cli.nostart, cli.journal, cli.rw, &mut snapshot_ctx, &line) {
                     Ok(ControlFlow::Break(())) => break,
                     Ok(ControlFlow::Continue(())) => {}
                     Err(e) => eprintln!("{e}"),
