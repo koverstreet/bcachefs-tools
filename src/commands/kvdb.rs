@@ -852,6 +852,45 @@ impl KvdbFs {
             KvdbFs::Offline(fs) | KvdbFs::Online(_, fs) => fs,
         }
     }
+
+    /// The offline Fs, for operations that need libbcachefs btree/journal
+    /// access (writes, list_journal).
+    fn offline(&self) -> Result<&Fs> {
+        match self {
+            KvdbFs::Offline(fs) => Ok(fs),
+            KvdbFs::Online(..) => bail!(
+                "filesystem is mounted: this command needs offline access \
+                 (online kvdb reads via the kernel, read-only)"
+            ),
+        }
+    }
+
+    fn get(&self, btree: c::btree_id, pos: c::bpos, filtered: bool,
+           key_only: bool) -> Result<String> {
+        match self {
+            KvdbFs::Offline(fs) => cmd_get(fs, btree, pos, filtered, key_only),
+            KvdbFs::Online(handle, fs) =>
+                cmd_get_online(handle, fs, btree, pos, filtered, key_only),
+        }
+    }
+
+    fn peek(&self, btree: c::btree_id, pos: c::bpos, prev: bool, filtered: bool,
+            key_only: bool) -> Result<String> {
+        match self {
+            KvdbFs::Offline(fs) => cmd_peek(fs, btree, pos, prev, filtered, key_only),
+            KvdbFs::Online(handle, fs) =>
+                cmd_peek_online(handle, fs, btree, pos, prev, filtered, key_only),
+        }
+    }
+
+    fn list(&self, btree: c::btree_id, start: c::bpos, end: c::bpos, filtered: bool,
+            key_only: bool) -> Result<String> {
+        match self {
+            KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end, filtered, key_only),
+            KvdbFs::Online(handle, fs) =>
+                cmd_list_online(handle, fs, btree, start, end, filtered, key_only),
+        }
+    }
 }
 
 fn run_line(
@@ -904,17 +943,10 @@ fn run_line(
                 pos.snapshot = snap;
             }
             let filtered = ctx.is_some();
-            match kvdb_fs {
-                KvdbFs::Offline(fs) => match op {
-                    "get" => cmd_get(fs, btree, pos, filtered, key_only)?,
-                    "peek" => cmd_peek(fs, btree, pos, false, filtered, key_only)?,
-                    _ => cmd_peek(fs, btree, pos, true, filtered, key_only)?,
-                },
-                KvdbFs::Online(handle, fs) => match op {
-                    "get" => cmd_get_online(handle, fs, btree, pos, filtered, key_only)?,
-                    "peek" => cmd_peek_online(handle, fs, btree, pos, false, filtered, key_only)?,
-                    _ => cmd_peek_online(handle, fs, btree, pos, true, filtered, key_only)?,
-                },
+            match op {
+                "get" => kvdb_fs.get(btree, pos, filtered, key_only)?,
+                "peek" => kvdb_fs.peek(btree, pos, false, filtered, key_only)?,
+                _ => kvdb_fs.peek(btree, pos, true, filtered, key_only)?,
             }
         }
         "list" => {
@@ -939,11 +971,7 @@ fn run_line(
                 start.snapshot = snap;
             }
             let filtered = ctx.is_some();
-            match kvdb_fs {
-                KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end, filtered, key_only)?,
-                KvdbFs::Online(handle, fs) =>
-                    cmd_list_online(handle, fs, btree, start, end, filtered, key_only)?,
-            }
+            kvdb_fs.list(btree, start, end, filtered, key_only)?
         }
         "update" => {
             let [btree, pos, assigns @ ..] = args else {
@@ -955,9 +983,7 @@ fn run_line(
             if !rw {
                 bail!("read-only (the default is norecovery): reopen with --rw to edit");
             }
-            let KvdbFs::Offline(fs) = kvdb_fs else {
-                bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
-            };
+            let fs = kvdb_fs.offline()?;
             let assigns = assigns
                 .iter()
                 .map(|s| parse_assign(s))
@@ -980,9 +1006,7 @@ fn run_line(
             if !rw {
                 bail!("read-only (the default is norecovery): reopen with --rw to edit");
             }
-            let KvdbFs::Offline(fs) = kvdb_fs else {
-                bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
-            };
+            let fs = kvdb_fs.offline()?;
             let assigns = assigns
                 .iter()
                 .map(|s| parse_assign(s))
@@ -1008,9 +1032,7 @@ fn run_line(
                         bail!("read-only (the default is norecovery): \
                                reopen with --rw, or --nostart for sb-only edits");
                     }
-                    let KvdbFs::Offline(fs) = kvdb_fs else {
-                        bail!("filesystem is mounted: kvdb is read-only on mounted filesystems");
-                    };
+                    let fs = kvdb_fs.offline()?;
                     let (field, val) = parse_assign(assign)?;
                     let FieldVal::Int(v) = val else {
                         bail!("sb set: expected an integer value");
@@ -1025,9 +1047,7 @@ fn run_line(
                 bail!("list_journal: reopen with --journal \
                        (retains the whole journal in memory)");
             }
-            let KvdbFs::Offline(fs) = kvdb_fs else {
-                bail!("list_journal: only supported on offline filesystems");
-            };
+            let fs = kvdb_fs.offline()?;
             let mut f = super::list_journal::JournalFilter::default();
             let mut args = args;
             while let Some((&flag, rest)) = args.split_first() {
