@@ -101,6 +101,19 @@ fn parse_btree(s: &str) -> Result<c::btree_id> {
         .map_err(|_| anyhow!("invalid btree '{s}' (try: snapshots, subvolumes, extents, ...)"))
 }
 
+/// Position parse honoring the session snapshot context: a pos written
+/// without the :snapshot component picks it up from the context. Explicit
+/// :snapshot and the named positions (POS_MIN etc.) are left alone.
+fn parse_pos_ctx(s: &str, snapshot: Option<u32>) -> Result<c::bpos> {
+    let mut pos = parse_pos(s)?;
+    if let Some(snap) = snapshot {
+        if s.matches(':').count() == 1 {
+            pos.snapshot = snap;
+        }
+    }
+    Ok(pos)
+}
+
 fn parse_pos(s: &str) -> Result<c::bpos> {
     s.parse()
         .map_err(|_| anyhow!("invalid pos '{s}' (inode:offset[:snapshot], POS_MIN, SPOS_MAX)"))
@@ -260,7 +273,9 @@ struct KvdbHelper {
     btrees: Vec<String>,
 }
 
-const OPS: &[&str] = &["get", "peek", "peek_prev", "list", "update", "set", "sb", "help"];
+const OPS: &[&str] = &[
+    "get", "peek", "peek_prev", "list", "update", "set", "sb", "snapshot", "help", "quit",
+];
 const KEY_OPS: &[&str] = &["get", "peek", "peek_prev", "list", "update", "set"];
 
 impl rustyline::completion::Completer for KvdbHelper {
@@ -617,7 +632,11 @@ set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
           within pos's snapshot instead (whiteouts, like a runtime delete)
 sb get    <field>                              read a superblock field/flag
 sb set    <field=val>                          write one, then bch2_write_super
+snapshot  [<id>|none]                          set/show/clear the session snapshot
+                                               context: a <pos> without :snapshot
+                                               uses it (list start/end included)
 help                                           this text
+quit                                           exit (also ^D)
 ";
 
 /// A kvdb session: fully offline (read + write via libbcachefs), or against
@@ -640,22 +659,43 @@ impl KvdbFs {
     }
 }
 
-fn run_line(kvdb_fs: &KvdbFs, nostart: bool, line: &str) -> Result<()> {
+fn run_line(
+    kvdb_fs: &KvdbFs,
+    nostart: bool,
+    snapshot: &mut Option<u32>,
+    line: &str,
+) -> Result<ControlFlow<()>> {
     let args: Vec<&str> = line.split_whitespace().collect();
     let Some((&op, args)) = args.split_first() else {
-        return Ok(());
+        return Ok(ControlFlow::Continue(()));
     };
 
-    if nostart && !matches!(op, "sb" | "help" | "?") {
+    if nostart && !matches!(op, "sb" | "help" | "?" | "snapshot" | "quit" | "exit" | "q") {
         bail!("--nostart: the btree isn't started, only sb commands are available");
     }
 
     let out = match op {
+        "quit" | "exit" | "q" => return Ok(ControlFlow::Break(())),
+        "snapshot" => match args {
+            [] => match snapshot {
+                Some(s) => format!("snapshot context: {s}\n"),
+                None => "no snapshot context\n".to_string(),
+            },
+            ["none"] | ["clear"] => {
+                *snapshot = None;
+                String::new()
+            }
+            [s] => {
+                *snapshot = Some(u32::try_from(parse_int(s)?)?);
+                String::new()
+            }
+            _ => bail!("usage: snapshot [<id>|none]"),
+        },
         "get" | "peek" | "peek_prev" => {
             let [btree, pos] = args else {
                 bail!("usage: {op} <btree> <pos>");
             };
-            let (btree, pos) = (parse_btree(btree)?, parse_pos(pos)?);
+            let (btree, pos) = (parse_btree(btree)?, parse_pos_ctx(pos, *snapshot)?);
             match kvdb_fs {
                 KvdbFs::Offline(fs) => match op {
                     "get" => cmd_get(fs, btree, pos)?,
@@ -673,8 +713,8 @@ fn run_line(kvdb_fs: &KvdbFs, nostart: bool, line: &str) -> Result<()> {
             let (btree, rest) = args
                 .split_first()
                 .ok_or_else(|| anyhow!("usage: list <btree> [start] [end]"))?;
-            let start = rest.first().map_or(Ok(POS_MIN), |s| parse_pos(s))?;
-            let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos(s))?;
+            let start = rest.first().map_or(Ok(POS_MIN), |s| parse_pos_ctx(s, *snapshot))?;
+            let end = rest.get(1).map_or(Ok(SPOS_MAX), |s| parse_pos_ctx(s, *snapshot))?;
             let btree = parse_btree(btree)?;
             match kvdb_fs {
                 KvdbFs::Offline(fs) => cmd_list(fs, btree, start, end)?,
@@ -695,7 +735,7 @@ fn run_line(kvdb_fs: &KvdbFs, nostart: bool, line: &str) -> Result<()> {
                 .iter()
                 .map(|s| parse_assign(s))
                 .collect::<Result<Vec<_>>>()?;
-            cmd_update(fs, parse_btree(btree)?, parse_pos(pos)?, &assigns)?
+            cmd_update(fs, parse_btree(btree)?, parse_pos_ctx(pos, *snapshot)?, &assigns)?
         }
         "set" => {
             let (in_snapshot, args) = match args {
@@ -715,7 +755,7 @@ fn run_line(kvdb_fs: &KvdbFs, nostart: bool, line: &str) -> Result<()> {
                 .iter()
                 .map(|s| parse_assign(s))
                 .collect::<Result<Vec<_>>>()?;
-            cmd_set(fs, parse_btree(btree)?, parse_pos(pos)?, type_name, &assigns, in_snapshot)?
+            cmd_set(fs, parse_btree(btree)?, parse_pos_ctx(pos, *snapshot)?, type_name, &assigns, in_snapshot)?
         }
         "sb" => {
             let (&sub, rest) = args.split_first()
@@ -744,7 +784,7 @@ fn run_line(kvdb_fs: &KvdbFs, nostart: bool, line: &str) -> Result<()> {
     };
 
     print!("{out}");
-    Ok(())
+    Ok(ControlFlow::Continue(()))
 }
 
 fn kvdb(cli: Cli) -> Result<()> {
@@ -802,10 +842,13 @@ fn kvdb(cli: Cli) -> Result<()> {
         }
     };
     let fs = &kvdb_fs;
+    let mut snapshot_ctx: Option<u32> = None;
 
     if !cli.commands.is_empty() {
         for line in &cli.commands {
-            run_line(fs, cli.nostart, line)?;
+            if run_line(fs, cli.nostart, &mut snapshot_ctx, line)?.is_break() {
+                break;
+            }
         }
         return Ok(());
     }
@@ -814,7 +857,9 @@ fn kvdb(cli: Cli) -> Result<()> {
     // depend on earlier ones); interactively, report and go on.
     if !stdin().is_terminal() {
         for line in stdin().lines() {
-            run_line(fs, cli.nostart, &line?)?;
+            if run_line(fs, cli.nostart, &mut snapshot_ctx, &line?)?.is_break() {
+                break;
+            }
         }
         return Ok(());
     }
@@ -837,14 +882,20 @@ fn kvdb(cli: Cli) -> Result<()> {
         let _ = rl.load_history(h);
     }
     loop {
-        match rl.readline("kvdb> ") {
+        let prompt = match snapshot_ctx {
+            Some(s) => format!("kvdb[{s}]> "),
+            None => "kvdb> ".to_string(),
+        };
+        match rl.readline(&prompt) {
             Ok(line) => {
                 if !line.trim().is_empty() {
                     let _ = rl.add_history_entry(&line);
                 }
                 INTERRUPTED.store(false, Ordering::Relaxed);
-                if let Err(e) = run_line(fs, cli.nostart, &line) {
-                    eprintln!("{e}");
+                match run_line(fs, cli.nostart, &mut snapshot_ctx, &line) {
+                    Ok(ControlFlow::Break(())) => break,
+                    Ok(ControlFlow::Continue(())) => {}
+                    Err(e) => eprintln!("{e}"),
                 }
             }
             Err(rustyline::error::ReadlineError::Interrupted) => continue,
