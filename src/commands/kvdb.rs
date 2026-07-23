@@ -95,6 +95,11 @@ pub struct Cli {
     #[arg(long)]
     norecovery: bool,
 
+    /// Retain the entire journal in memory for the list_journal command
+    /// (costs memory proportional to journal size).
+    #[arg(long)]
+    journal: bool,
+
     #[arg(required(true))]
     devices: Vec<PathBuf>,
 }
@@ -315,7 +320,8 @@ struct KvdbHelper {
 }
 
 const OPS: &[&str] = &[
-    "get", "peek", "peek_prev", "list", "update", "set", "sb", "snapshot", "help", "quit",
+    "get", "peek", "peek_prev", "list", "update", "set", "sb", "snapshot", "list_journal",
+    "help", "quit",
 ];
 const KEY_OPS: &[&str] = &["get", "peek", "peek_prev", "list", "update", "set"];
 
@@ -698,6 +704,9 @@ set  [-s] <btree> <pos> <type> [field=val]...  insert a whole new key
           within pos's snapshot instead (whiteouts, like a runtime delete)
 sb get    <field>                              read a superblock field/flag
 sb set    <field=val>                          write one, then bch2_write_super
+list_journal [-k [+-]<bbpos>[-<bbpos>],...]    journal transactions, filtered to
+                                               those referencing the given key
+                                               ranges (needs --journal at open)
 snapshot  [<id>|none]                          set/show/clear the session snapshot
                                                context: reads (get/peek/list) run
                                                snapshot-filtered in that view, and
@@ -730,6 +739,7 @@ impl KvdbFs {
 fn run_line(
     kvdb_fs: &KvdbFs,
     nostart: bool,
+    journal: bool,
     snapshot: &mut Option<u32>,
     line: &str,
 ) -> Result<ControlFlow<()>> {
@@ -878,6 +888,39 @@ fn run_line(
                 _ => bail!("usage: sb get <field> | sb set <field=val>"),
             }
         }
+        "list_journal" => {
+            if !journal {
+                bail!("list_journal: reopen with --journal \
+                       (retains the whole journal in memory)");
+            }
+            let KvdbFs::Offline(fs) = kvdb_fs else {
+                bail!("list_journal: only supported on offline filesystems");
+            };
+            let mut f = super::list_journal::JournalFilter::default();
+            let mut args = args;
+            while let Some((&flag, rest)) = args.split_first() {
+                match flag {
+                    "-k" => {
+                        let Some((&ranges, rest)) = rest.split_first() else {
+                            bail!("usage: list_journal [-k [+-]<btree>:<pos>[-<btree>:<pos>],...]");
+                        };
+                        let (sign, r) = super::list_journal::parse_sign(ranges);
+                        for part in r.split(',') {
+                            let range = bcachefs_kernel::bbpos_range_parse(part)
+                                .map_err(|e| anyhow!("{e}: {part}"))?;
+                            f.key.ranges.push((sign, range));
+                        }
+                        f.filtering = true;
+                        args = rest;
+                    }
+                    _ => bail!("list_journal: unknown arg '{flag}' (supported: -k <range>)"),
+                }
+            }
+            let interrupt: &dyn Fn() -> bool = &take_interrupt;
+            super::list_journal::list_journal_run(fs.raw, &f, false, 0, u64::MAX, None,
+                                                  Some(interrupt))?;
+            String::new()
+        }
         "help" | "?" => HELP.to_string(),
         _ => bail!("unknown command '{op}' (try: help)"),
     };
@@ -920,6 +963,10 @@ fn kvdb(cli: Cli) -> Result<()> {
     if cli.norecovery {
         opt_set!(fs_opts, norecovery, 1);
     }
+    if cli.journal {
+        opt_set!(fs_opts, retain_recovery_info, 1);
+        opt_set!(fs_opts, read_entire_journal, 1);
+    }
 
     let kvdb_fs = match crate::device_scan::open_online_or_offline(&cli.devices, fs_opts)? {
         OpenedFs::Offline(fs) => KvdbFs::Offline(fs),
@@ -948,7 +995,7 @@ fn kvdb(cli: Cli) -> Result<()> {
 
     if !cli.commands.is_empty() {
         for line in &cli.commands {
-            if run_line(fs, cli.nostart, &mut snapshot_ctx, line)?.is_break() {
+            if run_line(fs, cli.nostart, cli.journal, &mut snapshot_ctx, line)?.is_break() {
                 break;
             }
         }
@@ -959,7 +1006,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // depend on earlier ones); interactively, report and go on.
     if !stdin().is_terminal() {
         for line in stdin().lines() {
-            if run_line(fs, cli.nostart, &mut snapshot_ctx, &line?)?.is_break() {
+            if run_line(fs, cli.nostart, cli.journal, &mut snapshot_ctx, &line?)?.is_break() {
                 break;
             }
         }
@@ -994,7 +1041,7 @@ fn kvdb(cli: Cli) -> Result<()> {
                     let _ = rl.add_history_entry(&line);
                 }
                 INTERRUPTED.store(false, Ordering::Relaxed);
-                match run_line(fs, cli.nostart, &mut snapshot_ctx, &line) {
+                match run_line(fs, cli.nostart, cli.journal, &mut snapshot_ctx, &line) {
                     Ok(ControlFlow::Break(())) => break,
                     Ok(ControlFlow::Continue(())) => {}
                     Err(e) => eprintln!("{e}"),
