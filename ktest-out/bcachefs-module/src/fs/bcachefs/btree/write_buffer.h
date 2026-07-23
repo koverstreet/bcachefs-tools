@@ -1,0 +1,208 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _BCACHEFS_BTREE_WRITE_BUFFER_H
+#define _BCACHEFS_BTREE_WRITE_BUFFER_H
+
+#include "btree/bkey.h"
+#include "btree/bkey_buf.h"
+#include "alloc/accounting.h"
+
+static inline enum bch_wb_btree bch_wb_btree_idx(enum btree_id btree)
+{
+	switch (btree) {
+#define x(name) case BTREE_ID_##name: return BCH_WB_BTREE_##name;
+	BCH_WRITE_BUFFER_BTREES()
+#undef x
+	default:
+		BUG();
+	}
+}
+
+static inline enum btree_id bch_wb_btree_to_btree_id(enum bch_wb_btree idx)
+{
+	static const u8 tbl[BCH_WB_BTREE_NR] = {
+#define x(name) [BCH_WB_BTREE_##name] = BTREE_ID_##name,
+		BCH_WRITE_BUFFER_BTREES()
+#undef x
+	};
+	return tbl[idx];
+}
+
+static inline bool bch2_btree_write_buffer_must_wait(struct bch_fs *c)
+{
+	size_t nr = 0, sz = 0;
+	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
+		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
+		nr += wb->inc.keys.nr + wb->flushing.keys.nr;
+		sz += wb->inc.keys.size;
+	}
+	return nr > sz * 3 / 4;
+}
+
+struct btree_trans;
+int bch2_btree_write_buffer_flush_sync(struct btree_trans *);
+bool bch2_btree_write_buffer_flush_going_ro(struct bch_fs *);
+int bch2_btree_write_buffer_tryflush(struct btree_trans *);
+
+struct wb_maybe_flush {
+	struct bkey_buf	last_flushed;
+	u64		nr_flushes;
+	u64		nr_done;
+	bool		seen_error;
+};
+
+static inline void wb_maybe_flush_exit(struct wb_maybe_flush *f)
+{
+	bch2_bkey_buf_exit(&f->last_flushed);
+}
+
+static inline void wb_maybe_flush_init(struct wb_maybe_flush *f)
+{
+	memset(f, 0, sizeof(*f));
+	bch2_bkey_buf_init(&f->last_flushed);
+}
+
+static inline int wb_maybe_flush_inc(struct wb_maybe_flush *f)
+{
+	f->nr_done++;
+	return 0;
+}
+
+int bch2_btree_write_buffer_maybe_flush(struct btree_trans *, struct bkey_s_c, struct wb_maybe_flush *);
+
+struct journal_keys_to_wb_btree {
+	struct btree_write_buffer_keys	*wb;	/* NULL: not yet acquired */
+	size_t				room;
+};
+
+struct journal_keys_to_wb {
+	u64				seq;
+	struct journal_keys_to_wb_btree	per_btree[BCH_WB_BTREE_NR];
+};
+
+static inline int wb_key_cmp(const void *_l, const void *_r)
+{
+	const struct btree_write_buffered_key *l = _l;
+	const struct btree_write_buffered_key *r = _r;
+
+	return bpos_cmp(l->k.k.p, r->k.k.p);
+}
+
+int bch2_accounting_key_to_wb_slowpath(struct bch_fs *,
+			      enum btree_id, struct bkey_i_accounting *);
+
+static inline int bch2_accounting_key_to_wb(struct bch_fs *c,
+			     enum btree_id btree, struct bkey_i_accounting *k)
+{
+	struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[bch_wb_btree_idx(btree)];
+	struct btree_write_buffered_key search;
+	search.k.k.p = k->k.p;
+
+	unsigned idx = eytzinger0_find(wb->accounting.data, wb->accounting.nr,
+			sizeof(wb->accounting.data[0]),
+			wb_key_cmp, &search);
+
+	if (idx >= wb->accounting.nr)
+		return bch2_accounting_key_to_wb_slowpath(c, btree, k);
+
+	struct bkey_i_accounting *dst = bkey_i_to_accounting(&wb->accounting.data[idx].k);
+	bch2_accounting_accumulate(dst, accounting_i_to_s_c(k));
+	return 0;
+}
+
+int bch2_journal_key_to_wb_slowpath(struct bch_fs *,
+			     struct journal_keys_to_wb *,
+			     enum bch_wb_btree, struct bkey_i *);
+
+static inline unsigned wb_key_u64s(const struct bkey_i *k)
+{
+	return k->k.u64s + offsetof(struct btree_write_buffered_key, k) / sizeof(u64);
+}
+
+static inline struct btree_write_buffered_key *wb_keys_start(const struct btree_write_buffer_keys *keys)
+{
+	return (struct btree_write_buffered_key *) &darray_first(keys->keys);
+}
+
+static inline struct btree_write_buffered_key *wb_keys_end(const struct btree_write_buffer_keys *keys)
+{
+	return (struct btree_write_buffered_key *) &darray_top(keys->keys);
+}
+
+static inline struct btree_write_buffered_key *wb_keys_idx(const struct btree_write_buffer_keys *keys,
+							   unsigned idx)
+{
+	return (struct btree_write_buffered_key *) &keys->keys.data[idx];
+}
+
+static inline struct btree_write_buffered_key *wb_key_next(const struct btree_write_buffered_key *k)
+{
+	return (struct btree_write_buffered_key *) ((u64 *) k + wb_key_u64s(&k->k));
+}
+
+#define wb_keys_for_each(_keys, _k)							\
+	for (struct btree_write_buffered_key *_k = wb_keys_start(_keys);		\
+	     _k != wb_keys_end(_keys);							\
+	     _k = wb_key_next(_k))
+
+#define wb_keys_for_each_safe(_keys, _k)						\
+	for (struct btree_write_buffered_key *_next, *_k = wb_keys_start(_keys);	\
+	     _k != wb_keys_end(_keys) && (_next = wb_key_next(_k), true);		\
+	     _k = _next)
+
+static inline void bch2_journal_key_to_wb_reserved(struct bch_fs *c,
+			     struct journal_keys_to_wb_btree *pb,
+			     u64 seq,
+			     struct bkey_i *k)
+{
+	unsigned u64s = wb_key_u64s(k);
+	struct btree_write_buffered_key *wb_k = wb_keys_end(pb->wb);
+	wb_k->journal_seq	= seq;
+	bkey_copy(&wb_k->k, k);
+	pb->wb->keys.nr += u64s;
+	pb->room -= u64s;
+}
+
+static inline int __bch2_journal_key_to_wb(struct bch_fs *c,
+			     struct journal_keys_to_wb *dst,
+			     enum bch_wb_btree idx,
+			     struct bkey_i *k)
+{
+	struct journal_keys_to_wb_btree *pb = &dst->per_btree[idx];
+
+	if (unlikely(pb->room < wb_key_u64s(k)))
+		return bch2_journal_key_to_wb_slowpath(c, dst, idx, k);
+
+	bch2_journal_key_to_wb_reserved(c, pb, dst->seq, k);
+	return 0;
+}
+
+static inline int bch2_journal_key_to_wb(struct bch_fs *c,
+			     struct journal_keys_to_wb *dst,
+			     enum btree_id btree, struct bkey_i *k)
+{
+	int ret = bch2_btree_write_buffer_insert_checks(c, btree, k);
+	if (unlikely(ret))
+		return ret;
+
+	EBUG_ON(!dst->seq);
+
+	return bch2_bkey_is_accounting_mem(&k->k)
+		? bch2_accounting_key_to_wb(c, btree, bkey_i_to_accounting(k))
+		: __bch2_journal_key_to_wb(c, dst, bch_wb_btree_idx(btree), k);
+}
+
+void bch2_journal_keys_to_write_buffer_start(struct bch_fs *, struct journal_keys_to_wb *, u64);
+int bch2_journal_keys_to_write_buffer_end(struct bch_fs *, struct journal_keys_to_wb *);
+
+int bch2_btree_write_buffer_resize(struct bch_fs *, size_t);
+
+void bch2_btree_write_buffer_to_text(struct printbuf *, struct bch_fs *);
+
+void bch2_btree_write_buffer_stop(struct bch_fs *);
+int bch2_btree_write_buffer_start(struct bch_fs *);
+
+void bch2_fs_btree_write_buffer_exit(struct bch_fs *);
+void bch2_fs_btree_write_buffer_init_early(struct bch_fs *);
+int bch2_fs_btree_write_buffer_init(struct bch_fs *);
+
+#endif /* _BCACHEFS_BTREE_WRITE_BUFFER_H */

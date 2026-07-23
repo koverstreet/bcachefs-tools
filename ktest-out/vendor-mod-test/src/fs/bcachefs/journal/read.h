@@ -1,0 +1,80 @@
+/* SPDX-License-Identifier: GPL-2.0 */
+#ifndef _BCACHEFS_JOURNAL_READ_H
+#define _BCACHEFS_JOURNAL_READ_H
+
+#include "data/checksum.h"
+
+#include "util/darray.h"
+
+void bch2_journal_pos_from_member_info_set(struct bch_fs *);
+void bch2_journal_pos_from_member_info_resume(struct bch_fs *);
+
+static inline bool journal_replay_ignore(struct journal_replay *i)
+{
+	return !i || i->ignore_blacklisted || i->ignore_not_dirty;
+}
+
+static inline struct jset_entry *__jset_entry_type_next(struct jset *jset,
+					struct jset_entry *entry, unsigned type)
+{
+	while (entry < vstruct_last(jset)) {
+		if (entry->type == type)
+			return entry;
+
+		entry = vstruct_next(entry);
+	}
+
+	return NULL;
+}
+
+#define for_each_jset_entry_type(entry, jset, type)			\
+	for (struct jset_entry *entry = (jset)->start;			\
+	     (entry = __jset_entry_type_next(jset, entry, type));	\
+	     entry = vstruct_next(entry))
+
+#define jset_entry_for_each_key(_e, _k)					\
+	for (struct bkey_i *_k = (_e)->start;				\
+	     _k < vstruct_last(_e);					\
+	     _k = bkey_next(_k))
+
+#define for_each_jset_key(k, entry, jset)				\
+	for_each_jset_entry_type(entry, jset, BCH_JSET_ENTRY_btree_keys)\
+		jset_entry_for_each_key(entry, k)
+
+static inline time64_t jset_datetime(struct jset *j)
+{
+	for_each_jset_entry_type(entry, j, BCH_JSET_ENTRY_datetime) {
+		struct jset_entry_datetime *dt =
+			container_of(entry, struct jset_entry_datetime, entry);
+		return le64_to_cpu(dt->seconds);
+	}
+	return 0;
+}
+
+static inline struct nonce journal_nonce(const struct jset *jset)
+{
+	return (struct nonce) {{
+		[0] = 0,
+		[1] = ((__le32 *) &jset->seq)[0],
+		[2] = ((__le32 *) &jset->seq)[1],
+		[3] = BCH_NONCE_JOURNAL,
+	}};
+}
+
+void bch2_journal_ptrs_to_text(struct printbuf *, struct bch_fs *,
+			       struct journal_replay *);
+
+typedef struct u64_range {
+	u64	start;
+	u64	end;
+} u64_range;
+
+DEFINE_DARRAY(u64_range);
+
+struct u64_range bch2_journal_entry_missing_range(struct bch_fs *, u64, u64);
+
+void bch2_journal_seq_datetime_to_text(struct printbuf *, struct bch_fs *, u64);
+int bch2_journal_reread_for_rewind(struct bch_fs *);
+int bch2_journal_read(struct bch_fs *, struct journal_start_info *);
+
+#endif /* _BCACHEFS_JOURNAL_READ_H */
