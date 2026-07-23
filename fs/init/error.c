@@ -342,7 +342,7 @@ void bch2_fsck_err_counts_to_text(struct printbuf *out, struct bch_fs *c)
 
 	darray_for_each(c->errors.msgs, i) {
 		bch2_sb_error_id_to_text(out, (*i)->id);
-		prt_printf(out, ": %llu\n", (*i)->nr);
+		prt_printf(out, "\t%llu\n", (*i)->nr);
 	}
 }
 
