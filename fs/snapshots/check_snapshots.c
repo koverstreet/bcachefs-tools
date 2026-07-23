@@ -1429,11 +1429,20 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 	 * only returns the unwind error (deferring this key's own repair) when
 	 * it actually needs to rewind to an earlier pass; scheduling a
 	 * later-or-current pass just marks it to run.
+	 *
+	 * skip_if_complete: at most one sweep per instance. These passes don't
+	 * repair every stranded-key state - if they already ran and this key is
+	 * still here, rescheduling can't fix it, but it would re-arm the passes
+	 * in the superblock on every encounter, forcing fsck on every mount.
 	 */
-	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_inodes, 0) ?: ret;
-	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_extents, 0) ?: ret;
-	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_dirents, 0) ?: ret;
-	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_xattrs, 0) ?: ret;
+	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_inodes,
+					      RUN_RECOVERY_PASS_skip_if_complete) ?: ret;
+	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_extents,
+					      RUN_RECOVERY_PASS_skip_if_complete) ?: ret;
+	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_dirents,
+					      RUN_RECOVERY_PASS_skip_if_complete) ?: ret;
+	ret = bch2_run_explicit_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_xattrs,
+					      RUN_RECOVERY_PASS_skip_if_complete) ?: ret;
 
 	/*
 	 * Snapshot missing entirely: we should have caught this with

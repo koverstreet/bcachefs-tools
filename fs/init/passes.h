@@ -24,6 +24,14 @@ enum bch_run_recovery_pass_flags {
 	 * superblock. The need is re-derivable, so persistence isn't required.
 	 */
 	RUN_RECOVERY_PASS_ephemeral	= BIT(2),
+	/*
+	 * Don't schedule if the pass already completed successfully this
+	 * instance: for callers that schedule cleanup passes on encountering
+	 * damage those passes might not fix. If the pass ran and the damage is
+	 * still here, rescheduling can't help - it just re-arms the pass in the
+	 * superblock on every encounter, forcing fsck on every subsequent mount.
+	 */
+	RUN_RECOVERY_PASS_skip_if_complete = BIT(3),
 };
 
 static inline bool go_rw_in_recovery(struct bch_fs *c)
