@@ -53,6 +53,7 @@
 #include <linux/fs.h>
 #include <linux/jiffies.h>
 #include <linux/jump_label.h>
+#include <linux/local_lock.h>	// vendored: local_lock_t, embedded in time_stat_buffer
 #include <linux/mm.h>
 #include <linux/pid_namespace.h>
 #include <linux/poll.h>

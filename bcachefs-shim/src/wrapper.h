@@ -6,6 +6,7 @@
 #include "include/linux/idr.h"
 #include "include/linux/kernel.h"
 #include "include/linux/llist.h"
+#include "include/linux/local_lock.h"
 #include "include/linux/percpu-refcount.h"
 #include "include/linux/percpu-rwsem.h"
 #include "include/linux/ratelimit.h"
