@@ -89,6 +89,12 @@ pub struct Cli {
     #[arg(long)]
     nostart: bool,
 
+    /// Open read-only without journal replay or repair passes (recovery
+    /// capped at snapshots_read; journal keys still overlay reads). For
+    /// inspecting a filesystem's state before repair touches it.
+    #[arg(long)]
+    norecovery: bool,
+
     #[arg(required(true))]
     devices: Vec<PathBuf>,
 }
@@ -910,6 +916,9 @@ fn kvdb(cli: Cli) -> Result<()> {
     // sb-only mode: open the sb but don't run recovery or touch the btree.
     if cli.nostart {
         opt_set!(fs_opts, nostart, 1);
+    }
+    if cli.norecovery {
+        opt_set!(fs_opts, norecovery, 1);
     }
 
     let kvdb_fs = match crate::device_scan::open_online_or_offline(&cli.devices, fs_opts)? {
