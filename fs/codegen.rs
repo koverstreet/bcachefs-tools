@@ -42,6 +42,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // bch2_-prefixed): nonce constructors + bset_encrypt, driven from Rust
     // over the already-wrapped bch2_checksum / bch2_encrypt.
     "journal_nonce", "btree_nonce", "bset_encrypt",
+    // hand-rolled error-entry field accessors (sb/errors_format.h): the
+    // damage command unpacks BCHFS_IOC_GET_DAMAGE entries through them.
+    "BCH_SB_ERROR_ENTRY_V2_.*",
 ];
 const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf", ".*bch2_snapshot_id_state"];
 const BLOCKLIST_TYPE: &[&str] = &["bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];

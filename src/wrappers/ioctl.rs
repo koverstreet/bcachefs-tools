@@ -12,3 +12,8 @@ pub const fn bch_ioc_w<T>(nr: u32) -> libc::Ioctl {
 pub const fn bch_ioc_wr<T>(nr: u32) -> libc::Ioctl {
     ((3u32 << 30) | ((mem::size_of::<T>() as u32) << 16) | (0xbcu32 << 8) | nr) as libc::Ioctl
 }
+
+/// Compute a bcachefs _IO ioctl number — no argument.
+pub const fn bch_ioc_none(nr: u32) -> libc::Ioctl {
+    ((0xbcu32 << 8) | nr) as libc::Ioctl
+}
