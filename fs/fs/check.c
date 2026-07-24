@@ -920,6 +920,27 @@ static int check_inode_dirent_inode(struct btree_trans *trans,
 		*write_inode = true;
 	}
 
+	if (!ret &&
+	    !dirent_points_to_inode_nowarn(c, d, inode) &&
+	    fsck_err_on(inode->bi_flags & BCH_INODE_unlinked,
+			trans, inode_unlinked_but_has_dirent,
+			"inode unlinked but has dirent\n%s",
+			(printbuf_reset(&buf),
+			 bch2_inode_unpacked_to_text(&buf, inode),
+			 prt_newline(&buf),
+			 bch2_bkey_val_to_text(&buf, c, d.s_c),
+			 buf.buf))) {
+		/*
+		 * The dirent was just verified to point at this inode, so the
+		 * unlinked flag is wrong - and the flag clear is the complete
+		 * repair: bi_nlink counts links beyond the first, so this
+		 * yields nlink 1 (check_nlinks recounts hardlinks), and the
+		 * inode trigger removes the deleted_inodes entry.
+		 */
+		inode->bi_flags &= ~BCH_INODE_unlinked;
+		*write_inode = true;
+	}
+
 	ret = 0;
 fsck_err:
 	bch_err_fn(c, ret);
@@ -989,17 +1010,6 @@ static int check_inode(struct btree_trans *trans,
 
 	if (bch2_inode_has_backpointer(&u))
 		try(check_inode_dirent_inode(trans, &u, &do_update));
-
-	if (fsck_err_on(bch2_inode_has_backpointer(&u) &&
-			(u.bi_flags & BCH_INODE_unlinked),
-			trans, inode_unlinked_but_has_dirent,
-			"inode unlinked but has dirent\n%s",
-			(printbuf_reset(&buf),
-			 bch2_inode_unpacked_to_text(&buf, &u),
-			 buf.buf))) {
-		u.bi_flags &= ~BCH_INODE_unlinked;
-		do_update = true;
-	}
 
 	if (S_ISDIR(u.bi_mode) && (u.bi_flags & BCH_INODE_unlinked)) {
 		/*
