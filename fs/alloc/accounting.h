@@ -161,6 +161,18 @@ void bch2_accounting_mem_gc(struct bch_fs *);
 
 int bch2_accounting_btree_read(struct btree_trans *, struct bpos, u64 *, unsigned);
 
+int bch2_accounting_key_underflow_err(struct bch_fs *, struct bpos, const u64 *, unsigned);
+
+static inline void bch2_accounting_key_check_underflow(struct bch_fs *c, struct bpos p,
+						       const u64 *v, unsigned nr)
+{
+	for (unsigned i = 0; i < nr; i++)
+		if (unlikely((s64) v[i] < 0)) {
+			bch2_accounting_key_underflow_err(c, p, v, nr);
+			return;
+		}
+}
+
 static inline bool bch2_accounting_is_mem(struct disk_accounting_pos *acc)
 {
 	return acc->type < BCH_DISK_ACCOUNTING_TYPE_NR &&

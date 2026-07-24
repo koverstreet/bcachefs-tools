@@ -205,6 +205,16 @@ static inline int wb_flush_one(struct btree_trans *trans,
 			bch2_accounting_accumulate_maybe_kill(trans->c,
 					bkey_i_to_accounting(&wb->k),
 					bkey_s_c_to_accounting(k));
+
+		/*
+		 * wb->k now holds the accumulated value about to be written -
+		 * this is where underflow is born (a delta decrementing more
+		 * than was ever incremented, e.g. deleting keys that predate
+		 * the counters); report it at the source:
+		 */
+		bch2_accounting_key_check_underflow(trans->c, wb->k.k.p,
+				bkey_i_to_accounting(&wb->k)->v.d,
+				bch2_accounting_counters(&wb->k.k));
 	}
 	*accounting_accumulated = true;
 

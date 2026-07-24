@@ -284,6 +284,18 @@ int bch2_accounting_validate(struct bch_fs *c, struct bkey_s_c k,
 			 c, accounting_key_nr_counters_wrong,
 			 "accounting key with %u counters, should be %u",
 			 nr_counters, bch2_accounting_type_nr_counters[acc_k.type]);
+
+	/*
+	 * Underflow check on accumulated values - keys in the accounting btree
+	 * proper; journal/commit context keys are deltas, where negative is
+	 * normal. Deliberately not a bkey_fsck_err: the key must not be
+	 * invalidated (dropping it would manufacture "no data", the same false
+	 * evidence as reading zeros) - report and schedule the rebuild:
+	 */
+	if (from->from == BKEY_VALIDATE_btree_node &&
+	    from->btree == BTREE_ID_accounting)
+		bch2_accounting_key_check_underflow(c, k.k->p,
+				bkey_s_c_to_accounting(k).v->d, nr_counters);
 fsck_err:
 	return ret;
 }
@@ -997,32 +1009,44 @@ static struct journal_key *accumulate_and_read_journal_accounting(struct btree_t
 	return ret ? ERR_PTR(ret) : next;
 }
 
-static void accounting_key_check_sanity(struct printbuf *out, struct bch_fs *c,
-					struct disk_accounting_pos *k,
-					u64 *v, unsigned nr_counters)
+/*
+ * Underflow in an accumulated accounting value: report and schedule the
+ * counter rebuild. The values are left untouched - they're the evidence of
+ * the damage, and only check_allocations produces correct ones. Callers:
+ * bch2_accounting_validate() on accounting btree keys (which covers every
+ * read, including mount), and write buffer flush right after accumulating a
+ * delta onto the btree value - where underflow is born, e.g. keys that
+ * predate the counters getting deleted, decrementing values their creation
+ * never incremented.
+ */
+__cold
+int bch2_accounting_key_underflow_err(struct bch_fs *c, struct bpos p,
+				       const u64 *v, unsigned nr)
 {
-	/* Ratelimit... */
-	if (out->pos > 2048)
-		return;
+	struct disk_accounting_pos acc_k;
+	bpos_to_disk_accounting_pos(&acc_k, p);
 
 	/*
-	 * Check for underflow, schedule check_allocations necessary:
-	 *
-	 * XXX - see if we can factor this out to run on a bkey
-	 * so we can check everything lazily, right now we don't
-	 * check the non in-mem counters at all
+	 * No repair path for non-mem counters yet - gc only rebuilds the
+	 * in-memory table. Reporting would reschedule check_allocations on
+	 * every read without it ever being able to fix anything:
 	 */
+	if (!bch2_accounting_is_mem(&acc_k))
+		return 0;
 
-	for (unsigned i = 0; i < nr_counters; i++)
-		if ((s64) v[i] < 0) {
-			prt_printf(out, "Accounting underflow for\n");
-			bch2_accounting_key_to_text(out, c, k);
+	CLASS(printbuf, buf)();
+	int ret = 0;
 
-			for (unsigned i = 0; i < nr_counters; i++)
-				prt_printf(out, " %lli", v[i]);
-			prt_newline(out);
-			out->suppress = false;
-		}
+	prt_printf(&buf, "Accounting underflow for\n");
+	bch2_accounting_key_to_text(&buf, c, &acc_k);
+	for (unsigned i = 0; i < nr; i++)
+		prt_printf(&buf, " %lli", v[i]);
+
+	bch2_run_explicit_recovery_pass(c, &buf,
+			BCH_RECOVERY_PASS_check_allocations, 0);
+	log_fsck_err(c, accounting_key_underflow, "%s", buf.buf);
+fsck_err:
+	return ret;
 }
 
 static int accounting_read_mem_fixups(struct btree_trans *trans)
@@ -1106,17 +1130,12 @@ static int accounting_read_mem_fixups(struct btree_trans *trans)
 	eytzinger0_sort(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
 			accounting_pos_cmp, NULL);
 
-	CLASS(bch_log_msg, underflow_err)(c);
-	underflow_err.m.suppress = true;
-
 	for (unsigned i = 0; i < acc->k.nr; i++) {
 		struct disk_accounting_pos k;
 		bpos_to_disk_accounting_pos(&k, acc->k.data[i].pos);
 
 		u64 v[BCH_ACCOUNTING_MAX_COUNTERS];
 		bch2_accounting_mem_read_counters(acc, i, v, ARRAY_SIZE(v), false);
-
-		accounting_key_check_sanity(&underflow_err.m, c, &k, v, acc->k.data[i].nr_counters);
 
 		guard(preempt)();
 		struct bch_fs_usage_base *usage = &this_cpu_ptr(c->capacity.pcpu)->usage;
@@ -1144,12 +1163,6 @@ static int accounting_read_mem_fixups(struct btree_trans *trans)
 			break;
 		}
 		}
-	}
-
-	if (!underflow_err.m.suppress) {
-		bch2_count_fsck_err(c, accounting_key_underflow, &underflow_err.m);
-		try(bch2_run_explicit_recovery_pass(c, &underflow_err.m,
-						    BCH_RECOVERY_PASS_check_allocations, 0));
 	}
 
 	return 0;
