@@ -196,6 +196,7 @@ static inline unsigned bch2_open_buckets_journal_reserved(void)
 }
 
 struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *, struct alloc_request *);
+void bch2_open_bucket_reclaim_unused_partials(struct bch_fs *, unsigned);
 
 /*
  * freelist_wait wake helpers. Every wake_up site on
