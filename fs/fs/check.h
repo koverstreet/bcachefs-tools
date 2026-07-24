@@ -7,6 +7,8 @@
 /* recoverds snapshot IDs of overwrites at @pos */
 struct snapshots_seen {
 	struct bpos			pos;
+	/* pos.snapshot's collapse terminal, computed by seen_update: */
+	u32				pos_equiv;
 	snapshot_id_list		ids;
 };
 
@@ -35,6 +37,10 @@ int bch2_ref_visible2(struct btree_trans *,
 		      u32, struct snapshots_seen *);
 
 struct inode_walker_entry {
+	/*
+	 * One entry per collapse equivalence class; bi_snapshot is the
+	 * bch2_snapshot_redundant_interior() terminal (see add_inode()).
+	 */
 	struct bch_inode_unpacked inode;
 	bool			whiteout;
 	u64			count;
@@ -86,6 +92,15 @@ bch2_visible_inode_next(struct btree_trans *trans, struct snapshots_seen *s,
 			struct inode_walker *w, u32 snapshot,
 			struct inode_walker_entry *prev)
 {
+	/*
+	 * Walker entries are per collapse equivalence class - compare in the
+	 * same frame, or the shadow-stop below misfires when the resolving
+	 * version's class terminal sits below @snapshot. @snapshot is the key
+	 * seen_update just processed, so its terminal is already computed:
+	 */
+	EBUG_ON(snapshot != s->pos.snapshot);
+	snapshot = s->pos_equiv;
+
 	/*
 	 * A version at @snapshot or the first visible ancestor resolves the
 	 * ref - possibly a whiteout - and shadows everything past it:

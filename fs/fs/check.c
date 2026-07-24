@@ -545,6 +545,7 @@ int bch2_snapshots_seen_update(struct bch_fs *c, struct snapshots_seen *s,
 	s->pos = pos;
 
 	u32 equiv = bch2_snapshot_redundant_interior(c, pos.snapshot);
+	s->pos_equiv = equiv;
 
 	if (snapshot_list_has_id(&s->ids, equiv))
 		return -BCH_ERR_fc_continue;
@@ -623,19 +624,41 @@ int bch2_ref_visible2(struct btree_trans *trans,
 
 
 static int add_inode(struct bch_fs *c, struct inode_walker *w,
-		     struct bkey_s_c inode)
+		     struct bkey_s_c inode, bool reverse)
 {
-	try(darray_push(&w->inodes, ((struct inode_walker_entry) {
-		.whiteout	= !bkey_is_inode(inode.k),
-	})));
+	/*
+	 * One entry per collapse equivalence class, at the class terminal:
+	 * repairs that write an entry back write to the correct destination
+	 * snapshot, pre-doing a bit of delete_dead_snapshots' cleanup.
+	 *
+	 * Of a class's versions keep the one nearest the terminal (lowest
+	 * snapshot id) - the version delete_dead_snapshots' migration keeps.
+	 * Iteration order tells us which that is: walking forwards it's the
+	 * first of a class, so bail on a match; in reverse it's the last, so
+	 * overwrite.
+	 */
+	u32 equiv = bch2_snapshot_redundant_interior(c, inode.k->p.snapshot);
 
-	struct inode_walker_entry *n = &darray_last(w->inodes);
+	struct inode_walker_entry *n = darray_find_p(w->inodes, i,
+					i->inode.bi_snapshot == equiv);
+	if (n && !reverse)
+		return 0;
+
+	if (!n) {
+		try(darray_push(&w->inodes, ((struct inode_walker_entry) {})));
+		n = &darray_last(w->inodes);
+	}
+
+	*n = (struct inode_walker_entry) {
+		.whiteout	= !bkey_is_inode(inode.k),
+	};
+
 	if (!n->whiteout) {
 		bch2_inode_unpack(c, inode, &n->inode);
 	} else {
 		n->inode.bi_inum	= inode.k->p.offset;
-		n->inode.bi_snapshot	= inode.k->p.snapshot;
 	}
+	n->inode.bi_snapshot = equiv;
 	return 0;
 }
 
@@ -669,7 +692,7 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 		if (bch2_snapshot_will_delete(c, k.k->p.snapshot, NULL))
 			continue;
 
-		try(add_inode(c, w, k));
+		try(add_inode(c, w, k, false));
 	}
 
 	if (ret)
@@ -730,7 +753,7 @@ static int get_visible_inodes(struct btree_trans *trans,
 			continue;
 
 		try(bkey_is_inode(k.k)
-		    ? add_inode(c, w, k)
+		    ? add_inode(c, w, k, true)
 		    : snapshot_list_add(c, &w->deletes, k.k->p.snapshot));
 	}
 
@@ -738,8 +761,13 @@ static int get_visible_inodes(struct btree_trans *trans,
 		CLASS(btree_iter, ancestor_iter)(trans, BTREE_ID_inodes,
 						 SPOS(0, inum, s->pos.snapshot), 0);
 		k = bkey_try(bch2_btree_iter_peek_slot(&ancestor_iter));
+		/*
+		 * Not part of the reverse walk: an ancestor whose collapse
+		 * chain terminates at a collected descendant's class must not
+		 * displace it:
+		 */
 		if (bkey_is_inode(k.k))
-			try(add_inode(c, w, k));
+			try(add_inode(c, w, k, false));
 	}
 
 	return ret;
@@ -761,7 +789,8 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 	CLASS(printbuf, buf)();
 	int ret = 0;
 
-	u32 inode_snapshot = bch2_snapshot_redundant_interior(c, i->inode.bi_snapshot);
+	/* walker entries are pre-mapped to the collapse terminal by add_inode() */
+	u32 inode_snapshot = i->inode.bi_snapshot;
 
 	if (fsck_err_on(k_snapshot != inode_snapshot,
 			trans, snapshot_key_missing_inode_snapshot,
@@ -1514,10 +1543,13 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 	else
 		prt_str(&buf, "key in missing inode");
 
+	/* entries are collapse-frame; compare the key in the same frame */
+	u32 k_equiv = bch2_snapshot_redundant_interior(c, k.k->p.snapshot);
+
 	struct inode_walker_entry *good_ancestor = NULL;
 	darray_for_each(inode->inodes, i2)
 		if (!i2->whiteout &&
-		    bch2_snapshot_is_ancestor(trans, k.k->p.snapshot, i2->inode.bi_snapshot) &&
+		    bch2_snapshot_is_ancestor(trans, k_equiv, i2->inode.bi_snapshot) &&
 		    btree_matches_i_mode(iter->btree_id, i2->inode.bi_mode)) {
 			prt_printf(&buf, ", but found good inode in older snapshot");
 			bch2_inode_unpacked_to_text(&buf, &i2->inode);
