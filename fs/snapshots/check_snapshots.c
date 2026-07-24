@@ -1410,33 +1410,46 @@ int bch2_reconstruct_snapshots(struct bch_fs *c)
  * snapshot-deletion scan's premise - "a key in snapshot X implies an inode in
  * snapshot X" - has to hold at the destination too, or the key gets stranded
  * again on the next deletion. If the inode is only inherited from an ancestor
- * of the descendant, copy it down. A genuinely missing inode is left for a
- * full fsck to reconstruct; we don't do that or schedule passes here.
+ * of the descendant, copy it down; if there's no inode visible at all, insert
+ * a whiteout at the destination snapshot - the deletion scan doesn't care
+ * about key type, only that a key at (inum, snapshot) exists to index the
+ * sweep, and a whiteout provides that without fabricating a live inode.
  */
 /* check_key_has_snapshot - per-key repair, also called at runtime: */
 
 static int check_key_has_inode_in_snapshot(struct btree_trans *trans,
 					   enum btree_id btree, u64 inum, u32 snapshot)
 {
-	switch (btree) {
-	case BTREE_ID_extents:
-	case BTREE_ID_dirents:
-	case BTREE_ID_xattrs:
-		break;
-	default:
+	if (btree == BTREE_ID_inodes)
+		return 0;
+
+	CLASS(btree_iter, iter)(trans, BTREE_ID_inodes, SPOS(0, inum, snapshot), 0);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+	if (bkey_deleted(k.k)) {
+		/*
+		 * No key visible in this view (peek_slot synthesizes a deleted
+		 * key at the search pos for an empty slot, and filters real
+		 * whiteouts): insert a whiteout at the exact snapshot to index
+		 * the position.
+		 */
+		struct bkey_i *whiteout =
+			errptr_try(bch2_trans_kmalloc(trans, sizeof(*whiteout)));
+		bkey_init(&whiteout->k);
+		whiteout->k.type = KEY_TYPE_whiteout;
+		whiteout->k.p = SPOS(0, inum, snapshot);
+
+		return bch2_btree_insert_trans(trans, BTREE_ID_inodes, whiteout,
+					       BTREE_UPDATE_internal_snapshot_node);
+	} else if (k.k->p.snapshot != snapshot) {
+		/* Inherited from an ancestor: copy it down. */
+		struct bkey_i *n = errptr_try(bch2_bkey_make_mut_noupdate(trans, k));
+		n->k.p.snapshot = snapshot;
+		return bch2_btree_insert_trans(trans, BTREE_ID_inodes, n,
+					       BTREE_UPDATE_internal_snapshot_node);
+	} else {
 		return 0;
 	}
-
-	struct bch_inode_unpacked inode;
-	int ret = bch2_inode_find_by_inum_snapshot(trans, inum, snapshot, &inode, 0);
-	if (ret)
-		return bch2_err_matches(ret, ENOENT) ? 0 : ret;
-
-	if (inode.bi_snapshot == snapshot)
-		return 0;
-
-	inode.bi_snapshot = snapshot;
-	return __bch2_fsck_write_inode(trans, &inode);
 }
 
 int __bch2_check_key_has_snapshot(struct btree_trans *trans,
@@ -1555,10 +1568,10 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 				(bch2_btree_id_to_text(&buf, iter->btree_id),
 				 prt_char(&buf, ' '),
 				 bch2_bkey_val_to_text(&buf, c, k), buf.buf), live_child))
-			ret = bch2_delete_dead_snapshot_key(trans, iter, k, live_child) ?:
-			      check_key_has_inode_in_snapshot(trans, iter->btree_id,
-							      k.k->p.inode, live_child) ?:
-			      1;
+			ret =   check_key_has_inode_in_snapshot(trans, iter->btree_id,
+								k.k->p.inode, live_child) ?:
+				bch2_delete_dead_snapshot_key(trans, iter, k, live_child) ?:
+				1;
 	} else {
 		if (__fsck_err(trans, repair_flags, bkey_in_missing_snapshot,
 			     "key in missing snapshot %s, delete?",
