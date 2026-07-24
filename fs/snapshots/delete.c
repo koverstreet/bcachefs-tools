@@ -169,6 +169,7 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
  */
 int bch2_snapshot_accounting_totals(struct btree_trans *trans, u32 id,
 				    u64 *total_keys, u64 *total_sectors,
+				    u64 *btrees_with_keys,
 				    struct printbuf *breakdown)
 {
 	struct bch_fs *c = trans->c;
@@ -206,6 +207,8 @@ int bch2_snapshot_accounting_totals(struct btree_trans *trans, u32 id,
 
 		*total_keys	+= nr_keys;
 		*total_sectors	+= sectors;
+		if (btrees_with_keys)
+			*btrees_with_keys |= BIT_ULL(btree);
 
 		if (breakdown) {
 			prt_str(breakdown, "\n  ");
@@ -223,9 +226,10 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 	struct bch_fs *c = trans->c;
 
 	CLASS(printbuf, buf)();
-	u64 total_keys, total_sectors;
+	u64 total_keys, total_sectors, btrees_with_keys = 0;
 
-	try(bch2_snapshot_accounting_totals(trans, id, &total_keys, &total_sectors, &buf));
+	try(bch2_snapshot_accounting_totals(trans, id, &total_keys, &total_sectors,
+					    &btrees_with_keys, &buf));
 
 	if (likely(!total_keys && !total_sectors))
 		return 0;
@@ -234,8 +238,29 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 	prt_printf(&msg, "snapshot node %u still has %llu keys / %llu sectors accounted to it - refusing to delete/empty, to prevent data loss; scheduling repair:%s\n",
 		   id, total_keys, total_sectors, buf.buf);
 
+	/*
+	 * Schedule the passes whose key_has_snapshot repairs can actually
+	 * remove the stranded keys - per btree, from the accounting breakdown.
+	 * check_inodes alone can't repair a stranded dirent; scheduling only
+	 * it left the refusal firing forever:
+	 */
 	int ret = bch2_require_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_allocations);
-	ret = bch2_require_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_inodes) ?: ret;
+
+	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
+		if (!(btrees_with_keys & BIT_ULL(btree)))
+			continue;
+
+		enum bch_recovery_pass pass;
+		switch (btree) {
+		case BTREE_ID_extents:	pass = BCH_RECOVERY_PASS_check_extents; break;
+		case BTREE_ID_inodes:	pass = BCH_RECOVERY_PASS_check_inodes;	break;
+		case BTREE_ID_dirents:	pass = BCH_RECOVERY_PASS_check_dirents;	break;
+		case BTREE_ID_xattrs:	pass = BCH_RECOVERY_PASS_check_xattrs;	break;
+		default:		continue;
+		}
+
+		ret = bch2_require_recovery_pass(c, &msg, pass) ?: ret;
+	}
 
 	bch_err(c, "%s", msg.buf);
 
