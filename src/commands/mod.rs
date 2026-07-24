@@ -89,6 +89,7 @@ macro_rules! raw_cmd {
 pub mod attr;
 pub mod completions;
 pub mod counters;
+pub mod damage;
 pub mod data_read;
 pub mod device;
 pub mod dump;
@@ -242,7 +243,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
         &fusemount::CMD,
         &wait_devices::CMD,
     ]},
-    GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &journal_rewind_info::CMD, &recovery_pass::CMD] },
+    GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &journal_rewind_info::CMD, &recovery_pass::CMD, &damage::CMD] },
     GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD] },
     GroupDef { heading: "Devices",                  commands: &[&device::CMD] },
     GroupDef { heading: "Subvolumes and snapshots", commands: &[&subvolume::CMD] },

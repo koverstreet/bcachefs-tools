@@ -8,7 +8,7 @@ use bch_bindgen::c::{
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human};
+use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::bch_ioc_wr;
 
@@ -256,16 +256,6 @@ impl FlexArrayIoctl for BchIoctlSnapshotTreeQuery {
     fn set_capacity(&mut self, n: u32) { self.nr = n; }
     fn nr(&self) -> u32 { self.nr }
     fn total(&self) -> u32 { self.total }
-}
-
-fn open_dir(path: &Path) -> Result<OwnedFd> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY)
-        .open(path)
-        .with_context(|| format!("Failed to open {}", path.display()))?;
-    Ok(f.into())
 }
 
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
