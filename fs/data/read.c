@@ -1724,6 +1724,17 @@ err:
 
 		if (ret && !data_read_err_should_retry(ret))
 			break;
+
+		/*
+		 * A stale BCH_READ_last_fragment on the retry would falsely
+		 * terminate the read: bvec_iter is stable across attempts but
+		 * the extent isn't - if it shrank (a concurrent write
+		 * splitting it), the retried fragment is no longer the last
+		 * and the rest of the buffer would never be read. must_clone
+		 * stays: splits demand cloning for error attribution.
+		 */
+		if (ret)
+			flags &= ~BCH_READ_last_fragment;
 	}
 
 	if (unlikely(ret)) {
