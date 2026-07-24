@@ -6,6 +6,7 @@
 
 #include "btree/bbpos.h"
 #include "btree/update.h"
+#include "btree/write_buffer.h"
 
 #include "init/error.h"
 #include "init/progress.h"
@@ -166,10 +167,11 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
  * btrees, with a per-btree breakdown appended to @breakdown if non-NULL.
  * (nr_keys counters exist only post-upgrade and read as zero before.)
  */
-void bch2_snapshot_accounting_totals(struct bch_fs *c, u32 id,
-				     u64 *total_keys, u64 *total_sectors,
-				     struct printbuf *breakdown)
+int bch2_snapshot_accounting_totals(struct btree_trans *trans, u32 id,
+				    u64 *total_keys, u64 *total_sectors,
+				    struct printbuf *breakdown)
 {
+	struct bch_fs *c = trans->c;
 	bool trust_keys = c->sb.version_upgrade_complete >=
 		bcachefs_metadata_version_per_dev_fragmentation_lru;
 
@@ -185,8 +187,15 @@ void bch2_snapshot_accounting_totals(struct bch_fs *c, u32 id,
 		acc.snapshot.id = id;
 		acc.snapshot.btree = btree;
 
+		/*
+		 * Snapshot accounting is not in-mem (bch2_accounting_is_mem());
+		 * reading it through bch2_accounting_mem_read() returned silent
+		 * zeros, so every caller's "no data accounted" check has passed
+		 * unconditionally since it was added. Callers are responsible
+		 * for a write buffer flush (once per pass, not per call):
+		 */
 		u64 v[3] = {};
-		bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
+		try(bch2_accounting_btree_read(trans, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v)));
 
 		u64 nr_keys	= trust_keys ? v[0] : 0;
 		u64 key_bytes	= trust_keys ? v[1] : 0;
@@ -205,6 +214,8 @@ void bch2_snapshot_accounting_totals(struct bch_fs *c, u32 id,
 				   nr_keys, key_bytes, sectors);
 		}
 	}
+
+	return 0;
 }
 
 static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
@@ -214,7 +225,7 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 	CLASS(printbuf, buf)();
 	u64 total_keys, total_sectors;
 
-	bch2_snapshot_accounting_totals(c, id, &total_keys, &total_sectors, &buf);
+	try(bch2_snapshot_accounting_totals(trans, id, &total_keys, &total_sectors, &buf));
 
 	if (likely(!total_keys && !total_sectors))
 		return 0;
@@ -1029,6 +1040,15 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	try(!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)
 	    ? delete_dead_snapshot_keys_v2(trans)
 	    : delete_dead_snapshot_keys_v1(trans));
+
+	/*
+	 * The check_no_data licenses below read snapshot accounting from the
+	 * accounting btree; flush the sweep's buffered deltas so they see
+	 * them. Once per invocation: the node loops below generate no key
+	 * accounting, and a stale read only over-counts, which fails
+	 * conservative (refuses the transition, next pass retries):
+	 */
+	try(bch2_btree_write_buffer_flush_sync(trans));
 
 	darray_for_each(d->delete_leaves, i)
 		try(commit_do(trans, NULL, NULL, 0,

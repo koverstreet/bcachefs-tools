@@ -29,6 +29,7 @@
 
 #include "btree/cache.h"
 #include "btree/update.h"
+#include "btree/write_buffer.h"
 
 #include "fs/inode.h"
 
@@ -534,7 +535,7 @@ static u32 snapshot_table_find_edge(struct bch_fs *c, const struct bch_snapshot 
 	return found;
 }
 
-static u64 snapshot_data_sectors(struct bch_fs *c, u32 id)
+static int snapshot_data_sectors(struct btree_trans *trans, u32 id, u64 *sectors)
 {
 	struct disk_accounting_pos acc;
 	memset(&acc, 0, sizeof(acc));
@@ -543,8 +544,9 @@ static u64 snapshot_data_sectors(struct bch_fs *c, u32 id)
 
 	/* btree 0 (extents, the default) is the only one with external_sectors (counter 2) */
 	u64 v[3] = {};
-	bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
-	return v[2];
+	try(bch2_accounting_btree_read(trans, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v)));
+	*sectors = v[2];
+	return 0;
 }
 
 static bool snapshot_parent_child_consistent(const struct bch_snapshot *s, u32 id, unsigned side,
@@ -738,7 +740,8 @@ static int check_snapshot_edge(struct btree_trans *trans,
 		u32 sibling = le32_to_cpu(s->children[0]) == other_id
 			? le32_to_cpu(s->children[1])
 			: le32_to_cpu(s->children[0]);
-		u64 sectors = snapshot_data_sectors(c, other_id);
+		u64 sectors;
+		try(snapshot_data_sectors(trans, other_id, &sectors));
 
 		if (!sectors && sibling &&
 		    ret_fsck_err(trans, snapshot_edge_bad,
@@ -1071,7 +1074,7 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 	 */
 	if (bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted) {
 		u64 keys, sectors;
-		bch2_snapshot_accounting_totals(c, k.k->p.offset, &keys, &sectors, NULL);
+		try(bch2_snapshot_accounting_totals(trans, k.k->p.offset, &keys, &sectors, NULL));
 
 		if (ret_fsck_err_on(keys || sectors,
 				trans, snapshot_deleted_but_has_data,
@@ -1196,6 +1199,15 @@ static int check_snapshot(struct btree_trans *trans,
 
 int bch2_check_snapshots_trans(struct btree_trans *trans)
 {
+	/*
+	 * The accounting-gated repairs below (deleted-but-has-data undelete,
+	 * dangling-child-pointer clear) read snapshot accounting from the
+	 * accounting btree; flush buffered deltas once, up front. check_snapshot
+	 * doesn't delete keys, so the values can't go stale mid-pass in the
+	 * direction that matters:
+	 */
+	try(bch2_btree_write_buffer_flush_sync(trans));
+
 	/*
 	 * We iterate backwards as checking/fixing the depth field requires that
 	 * the parent's depth already be correct:
