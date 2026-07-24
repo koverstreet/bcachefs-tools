@@ -701,6 +701,51 @@ int bch2_inum_snapshot_to_path(struct btree_trans *trans, u64 inum, u32 snapshot
 	return __bch2_inum_to_path(trans, 0, inum, snapshot, 0, 0, path);
 }
 
+/*
+ * Is @inum a descendant of @ancestor? The bi_dir walk from path
+ * resolution, minus the names: look up the inode, ascend bi_dir -
+ * crossing subvolume boundaries - until we hit @ancestor or the root.
+ * > 0 yes, 0 no (including disconnected or looped ancestry), < 0 error.
+ */
+int bch2_inum_is_descendant(struct btree_trans *trans, subvol_inum inum,
+			    subvol_inum ancestor)
+{
+	u32 subvol = inum.subvol, snapshot;
+	u64 cur = inum.inum;
+	CLASS(darray_subvol_inum, inums)();
+
+	try(bch2_subvolume_get_snapshot(trans, subvol, &snapshot));
+
+	while (true) {
+		if (subvol == ancestor.subvol && cur == ancestor.inum)
+			return 1;
+
+		subvol_inum n = (subvol_inum) { subvol, cur };
+		if (darray_find_p(inums, i,
+				  i->subvol == n.subvol && i->inum == n.inum))
+			return 0;
+		try(darray_push(&inums, n));
+
+		struct bch_inode_unpacked inode;
+		int ret = bch2_inode_find_by_inum_snapshot(trans, cur, snapshot,
+							   &inode, 0);
+		if (ret)
+			return bch2_err_matches(ret, ENOENT) ? 0 : ret;
+
+		if ((inode.bi_subvol == BCACHEFS_ROOT_SUBVOL &&
+		     inode.bi_inum == BCACHEFS_ROOT_INO) ||
+		    (!inode.bi_dir && !inode.bi_dir_offset))
+			return 0;
+
+		if (inode.bi_parent_subvol) {
+			subvol = inode.bi_parent_subvol;
+			try(bch2_subvolume_get_snapshot(trans, subvol,
+							&snapshot));
+		}
+		cur = inode.bi_dir;
+	}
+}
+
 /* fsck */
 
 static int bch2_check_dirent_inode_dirent(struct btree_trans *trans,

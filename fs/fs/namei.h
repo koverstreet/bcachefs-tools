@@ -49,6 +49,7 @@ int bch2_inum_to_path(struct btree_trans *, subvol_inum, struct printbuf *);
 
 int bch2_inum_to_path_in_subvol(struct btree_trans *, subvol_inum,
 				u32, unsigned, struct printbuf *);
+int bch2_inum_is_descendant(struct btree_trans *, subvol_inum, subvol_inum);
 int bch2_inum_snapshot_to_path(struct btree_trans *, u64, u32,
 			       snapshot_id_list *, struct printbuf *);
 
