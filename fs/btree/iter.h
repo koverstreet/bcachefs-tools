@@ -1054,6 +1054,22 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 	_ret2 ?: trans_was_restarted(_trans, _orig_restart_count);	\
 })
 
+/*
+ * -BCH_ERR_fc_continue: a per-key _do may return this to say "skip this key,
+ * keep iterating" (e.g. bch2_snapshots_seen_update() skipping keys that are
+ * doomed duplicates of a key in the snapshot a redundant interior collapses
+ * into). The iteration macros absorb it - advance and continue - and squash
+ * it to 0 at loop exit, so callers never see it.
+ *
+ * In the _commit variants, (_do) ?: commit means fc_continue also skips the
+ * per-key commit: it must be returned before any update is queued, which
+ * holds for bch2_snapshots_seen_update() (called at the top of check fns).
+ */
+static inline bool err_is_continue(int err)
+{
+	return !err || err == -BCH_ERR_fc_continue;
+}
+
 #define for_each_btree_key_max_continue(_trans, _iter,			\
 					 _end, _flags, _k, _do)		\
 ({									\
@@ -1073,9 +1089,10 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 		if (!_ret3)						\
 			bch2_trans_verify_not_restarted(_trans, _restart_count);\
 	} while (bch2_err_matches(_ret3, BCH_ERR_transaction_restart) ||\
-		 (!_ret3 && bch2_btree_iter_advance_type(&(_iter), (_flags))));\
+		 (err_is_continue(_ret3) &&				\
+		  bch2_btree_iter_advance_type(&(_iter), (_flags))));	\
 									\
-	_ret3;								\
+	_ret3 == -BCH_ERR_fc_continue ? 0 : _ret3;			\
 })
 
 #define for_each_btree_key_continue(_trans, _iter, _flags, _k, _do)	\

@@ -136,11 +136,16 @@ static int check_nlinks_walk_dirents(struct bch_fs *c, struct nlink_table *links
 				   BTREE_ITER_intent|
 				   BTREE_ITER_prefetch|
 				   BTREE_ITER_all_snapshots, k, ({
-		ret = bch2_snapshots_seen_update(c, &s, iter.btree_id, k.k->p);
-		if (ret)
-			break;
+		/*
+		 * No break on error: break mid-_do leaves the macro's return
+		 * value 0, silently truncating the scan - and fc_continue must
+		 * reach the macro so it skips the key and keeps going (the
+		 * skipped key is a doomed duplicate; counting it would double
+		 * the link count).
+		 */
+		int ret2 = bch2_snapshots_seen_update(c, &s, iter.btree_id, k.k->p);
 
-		if (k.k->type == KEY_TYPE_dirent) {
+		if (!ret2 && k.k->type == KEY_TYPE_dirent) {
 			struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
 
 			if (d.v->d_type != DT_DIR &&
@@ -148,7 +153,7 @@ static int check_nlinks_walk_dirents(struct bch_fs *c, struct nlink_table *links
 				inc_link(trans, &s, links, range_start, range_end,
 					 le64_to_cpu(d.v->d_inum), d.k->p.snapshot);
 		}
-		0;
+		ret2;
 	}));
 
 	bch_err_fn(c, ret);

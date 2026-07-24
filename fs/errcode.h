@@ -596,7 +596,8 @@
 	x(0,				shutdown_with_errors)			\
 	x(BCH_ERR_shutdown_with_errors,	shutdown_with_errors_fixed)		\
 	x(BCH_ERR_shutdown_with_errors,	shutdown_with_errors_unfixed)		\
-	x(BCH_ERR_shutdown_with_errors,	shutdown_with_emergency_ro)
+	x(BCH_ERR_shutdown_with_errors,	shutdown_with_emergency_ro)		\
+	x(0,				fc_continue)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,

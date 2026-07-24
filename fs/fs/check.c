@@ -537,11 +537,19 @@ static int reconstruct_inode(struct btree_trans *trans, enum btree_id btree, u32
 int bch2_snapshots_seen_update(struct bch_fs *c, struct snapshots_seen *s,
 			       enum btree_id btree_id, struct bpos pos)
 {
+	if (bpos_eq(s->pos, pos))
+		return 0;
+
 	if (!bkey_eq(s->pos, pos))
 		s->ids.nr = 0;
 	s->pos = pos;
 
-	return snapshot_list_add_nodup(c, &s->ids, pos.snapshot);
+	u32 equiv = bch2_snapshot_redundant_interior(c, pos.snapshot);
+
+	if (snapshot_list_has_id(&s->ids, equiv))
+		return -BCH_ERR_fc_continue;
+
+	return snapshot_list_add_nodup(c, &s->ids, equiv);
 }
 
 /**
@@ -2178,7 +2186,7 @@ int bch2_check_dirents(struct bch_fs *c)
 			      : (bch2_progress_update_iter(trans, &progress, &iter) ?:
 				 check_dirent(trans, &iter, k, &hash_info, &dir, &target, &s)));
 		}));
-		if (ret)
+		if (!err_is_continue(ret))
 			break;
 
 		if (!k.k) {

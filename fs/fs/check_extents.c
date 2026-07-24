@@ -520,7 +520,7 @@ int bch2_check_extents(struct bch_fs *c)
 			      : (bch2_progress_update_iter(trans, &progress, &iter) ?:
 				 check_extent(trans, &iter, k, &w, &s, &extent_ends, &res.r)));
 		}));
-		if (ret)
+		if (!err_is_continue(ret))
 			break;
 
 		if (!k.k) {
