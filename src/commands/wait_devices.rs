@@ -107,8 +107,14 @@ impl WaitInitialized {
             return Ok(());
         }
         let dev_idx = sb.dev_idx;
-	if u32::from(dev_idx) >= sb.number_of_devices() {
-	    warn!("superblock with invalid dev_idx: {dev_idx} >= {}", sb.number_of_devices());
+        // dev_idx indexes the member array, sb.nr_devices long;
+        // number_of_devices() counts only live members - smaller whenever a
+        // removed device left a tombstoned slot behind:
+        if u32::from(dev_idx) >= sb.nr_devices as u32 {
+            warn!(
+                "superblock with invalid dev_idx: {dev_idx} >= {}",
+                sb.nr_devices
+            );
             return Ok(());
         }
 
