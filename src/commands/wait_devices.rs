@@ -107,8 +107,18 @@ impl WaitInitialized {
             return Ok(());
         }
         let dev_idx = sb.dev_idx;
-	if u32::from(dev_idx) >= sb.number_of_devices() {
-	    warn!("superblock with invalid dev_idx: {dev_idx} >= {}", sb.number_of_devices());
+        // dev_idx indexes the member array, which is sb.nr_devices long.
+        // number_of_devices() counts only *live* members, and that is smaller
+        // whenever a device has been removed: the slot is left behind as a
+        // tombstone and the array never shrinks. Bounding an index by that
+        // count therefore rejects every device whose slot sits past it, so a
+        // filesystem that has ever had a device replaced could never be seen
+        // as fully initialized and we would wait forever.
+        if u32::from(dev_idx) >= sb.nr_devices as u32 {
+            warn!(
+                "superblock with invalid dev_idx: {dev_idx} >= {}",
+                sb.nr_devices
+            );
             return Ok(());
         }
 
