@@ -259,6 +259,19 @@ static inline void bch2_accounting_mem_read_locked(struct bch_fs *c, struct bpos
 {
 	percpu_rwsem_assert_held(&c->capacity.mark_lock.lock);
 
+	/*
+	 * Types not in the mem table read back as zeros - not an error, a
+	 * silently wrong answer: bch2_snapshot_node_check_no_data()'s empty
+	 * check read zeros from the day it was added, licensing no_keys
+	 * transitions that stranded live keys. Non-mem types must be read
+	 * from the accounting btree.
+	 */
+	EBUG_ON(({
+		struct disk_accounting_pos acc_k;
+		bpos_to_disk_accounting_pos(&acc_k, p);
+		!bch2_accounting_is_mem(&acc_k);
+	}));
+
 	struct bch_accounting_mem *acc = &c->accounting;
 	unsigned idx = eytzinger0_find(acc->k.data, acc->k.nr, sizeof(acc->k.data[0]),
 				       accounting_pos_cmp, &p);
