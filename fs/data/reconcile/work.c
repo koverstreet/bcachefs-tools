@@ -1434,6 +1434,12 @@ typedef struct {
 
 DEFINE_DARRAY(reconcile_phys_thr);
 
+static struct write_point_specifier reconcile_phys_writepoint(reconcile_phys_thr *thr)
+{
+	return writepoint_hashed(((unsigned long) thr->reconcile_phase << 32) |
+				 ((unsigned long) thr->dev << 1));
+}
+
 /*
  * Destructor ordering: closure_return() must be the last thing before the
  * function returns, but __cleanup destructors run after closure_return()
@@ -1453,7 +1459,7 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 
 	struct moving_context ctxt;
 	bch2_moving_ctxt_init(&ctxt, c, NULL, &thr->stats,
-			      writepoint_ptr(&c->allocator.reconcile_write_point),
+			      reconcile_phys_writepoint(thr),
 			      true);
 
 	struct btree_trans *trans = ctxt.trans;
@@ -1505,17 +1511,41 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 
 static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 {
+	struct bch_fs_reconcile *r = &c->reconcile;
 	CLASS(darray_reconcile_phys_thr, thrs)();
 	CLASS(closure_stack, cl)();
+	u64 considered = 0, started = 0, writepoints_distinct = 0;
 
-	for_each_member_device(c, ca)
+	for_each_member_device(c, ca) {
 		if (ca->mi.rotational &&
-		    bch2_dev_is_online(ca))
+		    bch2_dev_is_online(ca)) {
+			considered++;
 			try(darray_push(&thrs, ((reconcile_phys_thr) {
 						.c			= c,
 						.dev			= ca->dev_idx,
 						.reconcile_phase	= reconcile_phase,
 						})));
+			started++;
+		}
+	}
+
+	darray_for_each(thrs, i) {
+		struct write_point_specifier wp = reconcile_phys_writepoint(i);
+		bool seen = false;
+
+		for (reconcile_phys_thr *j = thrs.data; j < i; j++)
+			if (reconcile_phys_writepoint(j).v == wp.v) {
+				seen = true;
+				break;
+			}
+
+		if (!seen)
+			writepoints_distinct++;
+	}
+
+	WRITE_ONCE(r->phys_workers_considered, considered);
+	WRITE_ONCE(r->phys_workers_started, started);
+	WRITE_ONCE(r->phys_worker_writepoints_distinct, writepoints_distinct);
 
 	darray_for_each(thrs, i)
 		closure_call(&i->cl, do_reconcile_phys_thread, system_unbound_wq, &cl);
@@ -1925,6 +1955,11 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 			}
 		}
 	}
+
+	prt_printf(out, "phys workers last phase: considered %llu started %llu distinct writepoints %llu\n",
+		   READ_ONCE(r->phys_workers_considered),
+		   READ_ONCE(r->phys_workers_started),
+		   READ_ONCE(r->phys_worker_writepoints_distinct));
 
 	struct task_struct *t;
 	scoped_guard(rcu) {
