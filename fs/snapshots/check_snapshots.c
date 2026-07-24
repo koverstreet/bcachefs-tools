@@ -1074,12 +1074,14 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 	 */
 	if (bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted) {
 		u64 keys, sectors;
-		try(bch2_snapshot_accounting_totals(trans, k.k->p.offset, &keys, &sectors, NULL));
+		CLASS(printbuf, breakdown)();
+		try(bch2_snapshot_accounting_totals(trans, k.k->p.offset, &keys, &sectors,
+						    NULL, &breakdown));
 
 		if (ret_fsck_err_on(keys || sectors,
 				trans, snapshot_deleted_but_has_data,
-				"deleted snapshot node has %llu keys / %llu sectors accounted - undeleting:\n%s",
-				keys, sectors,
+				"deleted snapshot node has data accounted - undeleting:%s\n%s",
+				breakdown.buf,
 				(printbuf_reset(&buf),
 				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
 			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
