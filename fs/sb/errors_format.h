@@ -262,7 +262,7 @@ enum bch_fsck_flags {
 	x(inode_unlinked_but_clean,				197,	0)		\
 	x(inode_unlinked_but_nlink_nonzero,			198,	0)		\
 	x(inode_unlinked_and_not_open,				281,	0)		\
-	x(inode_unlinked_but_has_dirent,			285,	0)		\
+	x(inode_unlinked_but_has_dirent,			285,	FSCK_AUTOFIX)	\
 	x(unlinked_inode_not_on_deleted_list,			244,	FSCK_AUTOFIX)	\
 	x(inode_checksum_type_invalid,				199,	0)		\
 	x(inode_compression_type_invalid,			200,	0)		\
