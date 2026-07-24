@@ -831,7 +831,7 @@ static int bch2_readdir_filter(struct btree_trans *trans, u32 flags,
 
 /*
  * Shared machinery for the recursive modes: each iterates its filter's
- * candidate set (the subvolumes btree) rather than
+ * candidate set (the damage btree, the subvolumes btree) rather than
  * scanning dirents, then qualifies every candidate the same way - is it
  * under this directory, and what is its path relative to it?
  */
@@ -962,6 +962,82 @@ static int readdir_recursive_emit(struct btree_trans *trans,
 }
 
 /*
+ * Recursive damaged doesn't scan dirents: it iterates the damage
+ * btree - cost proportional to recorded damage, not tree size - and
+ * checks each candidate inode for being under this directory. Damage
+ * keys are sorted by inum, so consecutive snapshot versions of one
+ * inode dedup by remembering the last inum emitted.
+ */
+static long bch2_ioc_readdir_recursive_damaged(struct bch_fs *c,
+			struct file *filp,
+			struct bch_ioctl_readdir_flags *arg,
+			struct bch_ioctl_readdir_flags __user *user_arg)
+{
+	struct bpos pos = SPOS(0, arg->pos[0], arg->pos[1]);
+
+	CLASS(btree_trans, trans)(c);
+	CLASS(printbuf, dir_path)();
+	CLASS(printbuf, path)();
+	struct readdir_recursive r = {
+		.dir		= inode_inum(file_bch_inode(filp)),
+		.idmap		= file_mnt_idmap(filp),
+		.dir_path	= &dir_path,
+		.path		= &path,
+		.buf		= (char __user *)(unsigned long)arg->buf,
+		.buf_size	= arg->buf_size,
+	};
+
+	u32 view;
+	try(lockrestart_do(trans, ({
+		printbuf_reset(&dir_path);
+		bch2_subvolume_get_snapshot(trans, r.dir.subvol, &view) ?:
+		bch2_inum_to_path(trans, r.dir, &dir_path);
+	})));
+
+	u64 last_emitted = 0;
+	int ret = for_each_btree_key(trans, iter, BTREE_ID_damage, pos,
+				     BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k, ({
+		int ret2 = 0;
+		u64 inum = k.k->p.offset;
+
+		if (k.k->type == KEY_TYPE_damage &&
+		    inum != last_emitted &&
+		    bch2_snapshot_is_ancestor(trans, view, k.k->p.snapshot)) {
+			ret2 = readdir_recursive_emit(trans, &r,
+					(subvol_inum) { r.dir.subvol, inum },
+					DT_UNKNOWN);
+			if (ret2 == READDIR_BUF_FULL)
+				break;
+			if (ret2 == READDIR_EMITTED)
+				last_emitted = inum;
+			if (ret2 > 0)
+				ret2 = 0;
+		}
+
+		/*
+		 * Once an inum is emitted its other snapshot versions are
+		 * irrelevant, and the resume cursor must reflect that: if the
+		 * buffer filled between two versions of one inode, restarting
+		 * at the next key would emit the inum a second time.
+		 */
+		if (!ret2)
+			pos = inum == last_emitted
+				? SPOS(0, inum + 1, 0)
+				: bpos_successor(k.k->p);
+		ret2;
+	}));
+
+	if (ret)
+		return ret;
+
+	try(put_user(pos.offset, &user_arg->pos[0]));
+	try(put_user((u64) pos.snapshot, &user_arg->pos[1]));
+	try(put_user(r.used, &user_arg->used));
+
+	return 0;
+}
+
+/*
  * Recursive subvolumes_only iterates the subvolumes btree - cost
  * proportional to the number of subvolumes - qualifying each live
  * subvolume's root by ancestry through the shared machinery. One key
@@ -1046,6 +1122,9 @@ static long bch2_ioc_readdir_flags(struct bch_fs *c, struct file *filp,
 
 	if (arg.flags & BCH_READDIR_recursive)
 		switch (arg.flags & ~BCH_READDIR_recursive) {
+		case BCH_READDIR_damaged:
+			return bch2_ioc_readdir_recursive_damaged(c, filp,
+							&arg, user_arg);
 		case BCH_READDIR_subvolumes_only:
 			return bch2_ioc_readdir_recursive_subvols(c, filp,
 							&arg, user_arg);
