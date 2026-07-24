@@ -239,6 +239,15 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 
 	bch_err(c, "%s", msg.buf);
 
+	/*
+	 * At runtime the passes can't rewind - but the requirement was
+	 * persisted to the superblock before cannot_rewind_recovery was
+	 * returned, so they run at next mount and the refusal below is the
+	 * complete runtime response:
+	 */
+	if (bch2_err_matches(ret, BCH_ERR_cannot_rewind_recovery))
+		ret = 0;
+
 	return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
 }
 
@@ -1050,13 +1059,24 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	 */
 	try(bch2_btree_write_buffer_flush_sync(trans));
 
-	darray_for_each(d->delete_leaves, i)
-		try(commit_do(trans, NULL, NULL, 0,
-			bch2_snapshot_node_delete(trans, *i, false)));
+	darray_for_each(d->delete_leaves, i) {
+		int ret = commit_do(trans, NULL, NULL, 0,
+			bch2_snapshot_node_delete(trans, *i, false));
+		/* Refused - repair scheduled; other nodes are unaffected: */
+		if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
+			continue;
+		if (ret)
+			return ret;
+	}
 
-	darray_for_each(d->delete_interior, i)
-		try(commit_do(trans, NULL, NULL, 0,
-			bch2_snapshot_node_set_no_keys(trans, i->id)));
+	darray_for_each(d->delete_interior, i) {
+		int ret = commit_do(trans, NULL, NULL, 0,
+			bch2_snapshot_node_set_no_keys(trans, i->id));
+		if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
+			continue;
+		if (ret)
+			return ret;
+	}
 
 	return 0;
 }
@@ -1179,6 +1199,8 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 		darray_for_each(delete, i) {
 			int ret = commit_do(trans, NULL, NULL, 0,
 				bch2_snapshot_node_delete(trans, i->id, true));
+			if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
+				continue;
 			if (!bch2_err_matches(ret, EROFS))
 				bch_err_msg(c, ret, "deleting snapshot %u", i->id);
 			if (ret)
