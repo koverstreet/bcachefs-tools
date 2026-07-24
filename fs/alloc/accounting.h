@@ -164,7 +164,6 @@ int bch2_accounting_btree_read(struct btree_trans *, struct bpos, u64 *, unsigne
 static inline bool bch2_accounting_is_mem(struct disk_accounting_pos *acc)
 {
 	return acc->type < BCH_DISK_ACCOUNTING_TYPE_NR &&
-		acc->type != BCH_DISK_ACCOUNTING_snapshot &&
 		acc->type != BCH_DISK_ACCOUNTING_inum;
 }
 
