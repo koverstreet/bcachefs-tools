@@ -232,6 +232,8 @@ Device specific options:
 .Bl -tag -width Ds
 .It Fl -discard
 Enable discard/TRIM support
+.It Fl -nodiscard
+Disable discard/TRIM support for subsequent devices
 .It Fl -fs_size Ns = Ns Ar size
 Create the filesystem using
 .Ar size
@@ -541,6 +543,8 @@ Size of filesystem on device
 Set bucket size
 .It Fl -discard
 Enable discards
+.It Fl -nodiscard
+Disable discards
 .It Fl l , Fl -label Ns = Ns Ar label
 Disk label
 .It Fl f , Fl -force
