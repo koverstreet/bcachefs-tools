@@ -742,7 +742,7 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 {
 	struct bch_fs *c = trans->c;
 
-	u32 k_snapshot = bch2_snapshot_redundant_interior(c, k.k->p.snapshot) ?: k.k->p.snapshot;
+	u32 k_snapshot = bch2_snapshot_redundant_interior(c, k.k->p.snapshot);
 
 	struct inode_walker_entry *i = darray_find_p(w->inodes, i,
 		    bch2_snapshot_is_ancestor(trans, k_snapshot, i->inode.bi_snapshot));
@@ -753,7 +753,7 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 	CLASS(printbuf, buf)();
 	int ret = 0;
 
-	u32 inode_snapshot = bch2_snapshot_redundant_interior(c, i->inode.bi_snapshot) ?: i->inode.bi_snapshot;
+	u32 inode_snapshot = bch2_snapshot_redundant_interior(c, i->inode.bi_snapshot);
 
 	if (fsck_err_on(k_snapshot != inode_snapshot,
 			trans, snapshot_key_missing_inode_snapshot,

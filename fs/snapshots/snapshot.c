@@ -232,7 +232,8 @@ bool bch2_snapshot_is_ancestor_early(struct bch_fs *c, u32 id, u32 ancestor)
  * residue of a deletion.
  *
  * Walks the collapse chain and returns the live terminal it collapses into, or
- * 0 if @id isn't a redundant interior.
+ * @id unchanged if it isn't a redundant interior - never 0 for a nonzero @id,
+ * so callers don't need a fallback.
  */
 u32 bch2_snapshot_redundant_interior(struct bch_fs *c, u32 id)
 {
