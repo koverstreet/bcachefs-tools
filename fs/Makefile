@@ -16,6 +16,10 @@ ifneq ($(bcachefs-version),)
 ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' '$(bcachefs-version)' '$(obj)/bcachefs.ko' && echo hit),hit)
 CONFIG_BCACHEFS_FS :=
 endif
+else
+# No version means no lookup key — say so rather than silently compiling:
+# the missing file is the tell that this tree wasn't staged the supported way.
+$(warning bcachefs: no version in $(src)/version.h - not looking for a prebuilt module (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
 endif
 endif
 
@@ -216,7 +220,14 @@ ifndef BCACHEFS_DKMS
 endif
 
 ifdef BCACHEFS_DKMS
+ifneq ($(wildcard $(src)/module-version.c),)
 	bcachefs-y += module-version.o
+else
+# Staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel
+# fs/bcachefs/ tree lacks it. Degrade rather than fail with a bare
+# "no rule to make target" (field report: CRCinAU, 2026-07-23).
+$(warning bcachefs: $(src)/module-version.c missing - module will carry no MODULE_VERSION)
+endif
 endif
 
 # Rust support — optional, gated on CONFIG_RUST. The C side owns the module
