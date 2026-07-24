@@ -1137,6 +1137,7 @@ static int bch2_rename2(struct mnt_idmap *idmap,
 		: dst_dentry->d_inode
 		? BCH_RENAME_OVERWRITE : BCH_RENAME;
 	bool whiteout = !!(flags & RENAME_WHITEOUT);
+	bool reconcile_changed = false;
 	int ret;
 
 	if (flags & ~(RENAME_NOREPLACE|RENAME_EXCHANGE|RENAME_WHITEOUT))
@@ -1181,6 +1182,7 @@ static int bch2_rename2(struct mnt_idmap *idmap,
 	}
 retry:
 	bch2_trans_begin(trans);
+	reconcile_changed = false;
 
 	ret = bch2_rename_trans(trans,
 				inode_inum(src_dir), &src_dir_u,
@@ -1189,7 +1191,8 @@ retry:
 				&dst_inode_u,
 				&src_dentry->d_name,
 				&dst_dentry->d_name,
-				mode);
+				mode,
+				&reconcile_changed);
 	if (unlikely(ret))
 		goto err_tx_restart;
 
@@ -1240,6 +1243,9 @@ err_tx_restart:
 	if (dst_inode)
 		bch2_inode_update_after_write(trans, dst_inode, &dst_inode_u,
 					      ATTR_CTIME);
+
+	if (reconcile_changed)
+		bch2_reconcile_wakeup(c);
 
 err:
 	bch2_fs_quota_transfer(c, src_inode,
