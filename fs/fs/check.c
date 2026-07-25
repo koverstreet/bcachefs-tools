@@ -960,12 +960,14 @@ static int check_inode_dirent_inode(struct btree_trans *trans,
 		return 0;
 	}
 
-	if (fsck_err_on(ret,
-			trans, inode_points_to_missing_dirent,
+	if (inode_fsck_err_on(ret,
+			trans, SPOS(0, inode->bi_inum, inode->bi_snapshot),
+			inode_points_to_missing_dirent,
 			"inode points to missing dirent\n%s",
 			(bch2_inode_unpacked_to_text(&buf, inode), buf.buf)) ||
-	    fsck_err_on(!ret && dirent_points_to_inode_nowarn(c, d, inode),
-			trans, inode_points_to_wrong_dirent,
+	    inode_fsck_err_on(!ret && dirent_points_to_inode_nowarn(c, d, inode),
+			trans, SPOS(0, inode->bi_inum, inode->bi_snapshot),
+			inode_points_to_wrong_dirent,
 			"%s",
 			(printbuf_reset(&buf),
 			 bch2_dirent_inode_mismatch_msg(&buf, c, d, inode),
@@ -1097,7 +1099,8 @@ static int check_inode(struct btree_trans *trans,
 			if (ret && ret != -BCH_ERR_ENOTEMPTY_dir_not_empty)
 				return ret;
 
-			fsck_err_on(ret, trans, inode_dir_unlinked_but_not_empty,
+			inode_fsck_err_on(ret, trans, k.k->p,
+				    inode_dir_unlinked_but_not_empty,
 				    "dir unlinked but not empty\n%s",
 				    (printbuf_reset(&buf),
 				     bch2_inode_unpacked_to_text(&buf, &u),
@@ -1433,7 +1436,7 @@ static int check_unreachable_inode(struct btree_trans *trans,
 
 	try(find_oldest_inode_needs_reattach(trans, &inode));
 
-	if (inode_fsck_err(trans, inode.bi_inum, inode.bi_snapshot,
+	if (inode_fsck_err(trans, SPOS(0, inode.bi_inum, inode.bi_snapshot),
 			   inode_unreachable,
 		     "unreachable inode:\n%s",
 		     (bch2_inode_unpacked_to_text(&buf, &inode),
@@ -1585,7 +1588,8 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 		if (inode_looks_deleted)
 			prt_str(&buf, "inode was deleted, will delete key\n");
 
-		if (ret_fsck_err(trans, key_in_missing_inode, "%s", buf.buf)) {
+		if (ret_inode_fsck_err(trans, k.k->p,
+				       key_in_missing_inode, "%s", buf.buf)) {
 			if (inode_looks_deleted)
 				return bch2_btree_delete_at(trans, iter, BTREE_UPDATE_internal_snapshot_node);
 
@@ -1613,7 +1617,8 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 			}
 		}
 	} else {
-		if (ret_fsck_err(trans, key_in_wrong_inode_type, "%s", buf.buf)) {
+		if (ret_inode_fsck_err(trans, k.k->p,
+				       key_in_wrong_inode_type, "%s", buf.buf)) {
 			int nr_extents = iter->btree_id == BTREE_ID_extents
 				? nr_keys : count_inode_keys(trans, inode_pos, BTREE_ID_extents, NULL);
 			if (nr_extents < 0)
@@ -1663,7 +1668,8 @@ static int maybe_reconstruct_inum_btree(struct btree_trans *trans,
 	if (ret <= 0)
 		return ret;
 
-	if (fsck_err(trans, missing_inode_with_contents,
+	if (inode_fsck_err(trans, SPOS(0, inum, snapshot),
+		     missing_inode_with_contents,
 		     "inode %llu:%u type %s missing, but contents found: reconstruct?",
 		     inum, snapshot,
 		     btree == BTREE_ID_extents ? "reg" : "dir"))
@@ -1860,7 +1866,7 @@ check_target:
 		ret = bch_err_throw(c, ENOENT_subvolume_deleted);
 
 	if (ret) {
-		if (inode_fsck_err(trans, d.k->p.inode, d.k->p.snapshot,
+		if (inode_fsck_err(trans, d.k->p,
 				   dirent_to_missing_subvol,
 			     "dirent points to missing subvolume\n%s",
 			     (bch2_bkey_val_to_text(&buf, c, d.s_c), buf.buf)))
@@ -2047,7 +2053,8 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 			 * exists. The second pass revisits the copies for the
 			 * target checks and directory counts:
 			 */
-			if (fsck_err(trans, dirent_to_inode_in_descendant_snapshot,
+			if (inode_fsck_err(trans, d.k->p,
+				     dirent_to_inode_in_descendant_snapshot,
 				     "dirent with inode(s) only in descendant snapshots:\n%s",
 				     (printbuf_reset(&buf),
 				      bch2_bkey_val_to_text(&buf, c, k),
@@ -2108,7 +2115,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		}
 
 		if (inode_fsck_err_on(!target->inodes.nr,
-				trans, d.k->p.inode, d.k->p.snapshot,
+				trans, d.k->p,
 				dirent_to_missing_inode,
 				"dirent points to missing inode:\n%s",
 				(printbuf_reset(&buf),
@@ -2155,7 +2162,8 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 			if (visible.k->type != KEY_TYPE_dirent)
 				continue;
 
-			if (fsck_err(trans, dirent_to_overwritten_inode,
+			if (inode_fsck_err(trans, visible.k->p,
+				     dirent_to_overwritten_inode,
 				     "dirent points to inode overwritten in snapshot %u:\n%s",
 				     *i,
 				     (printbuf_reset(&buf),

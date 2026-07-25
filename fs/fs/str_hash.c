@@ -269,7 +269,7 @@ static int str_hash_dup_entries(struct btree_trans *trans,
 	prt_newline(&buf);
 	bch2_bkey_val_to_text(&buf, c, dup_k);
 
-	if (!ret_inode_fsck_err(trans, k.k->p.inode, k.k->p.snapshot,
+	if (!ret_inode_fsck_err(trans, k.k->p,
 				hash_table_key_duplicate, "%s", buf.buf))
 		return 0;
 

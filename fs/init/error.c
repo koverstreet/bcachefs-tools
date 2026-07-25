@@ -825,26 +825,34 @@ static void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
 			      enum bch_sb_error_id err)
 {
 	struct bch_fs *c = trans->c;
+
+	/*
+	 * Both key-position conventions land here: extent-style keys carry
+	 * the inum in pos.inode; inode keys live at (0, inum, snapshot), so
+	 * a zero inode field means the inum is in the offset field:
+	 */
+	u64 inum = pos.inode ?: pos.offset;
+
 	guard(mutex)(&c->errors.msgs_lock);
 
 	/* Damage on one inode arrives in runs - check the last entry first: */
 	if (c->errors.damaged_paths.nr) {
 		struct fsck_damaged_path *last = &darray_last(c->errors.damaged_paths);
-		if (last->inum == pos.inode && last->snapshot == pos.snapshot) {
+		if (last->inum == inum && last->snapshot == pos.snapshot) {
 			fsck_damaged_path_add_err(last, err);
 			return;
 		}
 	}
 
 	darray_for_each(c->errors.damaged_paths, i)
-		if (i->inum == pos.inode && i->snapshot == pos.snapshot) {
+		if (i->inum == inum && i->snapshot == pos.snapshot) {
 			fsck_damaged_path_add_err(i, err);
 			return;
 		}
 
 	if (c->errors.damaged_paths.nr >= FSCK_DAMAGED_PATHS_MAX ||
 	    darray_push(&c->errors.damaged_paths, ((struct fsck_damaged_path) {
-			.inum		= pos.inode,
+			.inum		= inum,
 			.snapshot	= pos.snapshot,
 			.nr_errors	= 1,
 			.errors		= { err },
