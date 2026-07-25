@@ -97,8 +97,8 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 
 			try(bch2_inum_to_path(trans, start, &buf));
 
-			if (inode_fsck_err(trans, le64_to_cpu(s.v->inode),
-					   le32_to_cpu(s.v->snapshot),
+			if (inode_fsck_err(trans, SPOS(0, le64_to_cpu(s.v->inode),
+						       le32_to_cpu(s.v->snapshot)),
 					   subvol_loop, "%s", buf.buf))
 				ret = reattach_subvol(trans, s);
 			break;
@@ -108,8 +108,8 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 		k = bkey_try(bch2_btree_iter_peek_slot(&parent_iter));
 
 		if (inode_fsck_err_on(k.k->type != KEY_TYPE_subvolume,
-				trans, le64_to_cpu(s.v->inode),
-				le32_to_cpu(s.v->snapshot),
+				trans, SPOS(0, le64_to_cpu(s.v->inode),
+					    le32_to_cpu(s.v->snapshot)),
 				subvol_unreachable,
 				"unreachable subvolume %s",
 				(printbuf_reset(&buf),
@@ -262,7 +262,7 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 					prt_printf(&buf, "%llu ", *i);
 			}
 
-			if (inode_fsck_err(trans, inode.bi_inum, inode.bi_snapshot,
+			if (inode_fsck_err(trans, SPOS(0, inode.bi_inum, inode.bi_snapshot),
 					   dir_loop, "%s", buf.buf)) {
 				ret = remove_backpointer(trans, &inode);
 				bch_err_msg(c, ret, "removing dirent");

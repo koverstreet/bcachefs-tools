@@ -170,26 +170,25 @@ void bch2_free_fsck_errs(struct bch_fs *);
  * site.
  */
 
-#define __inode_fsck_err(_trans, _inum, _snapshot, _flags, _err_type, ...)\
-	fsck_err_wrap(__bch2_fsck_err(NULL, _trans,			\
-			SPOS(_inum, 0, _snapshot), _flags,		\
+#define __inode_fsck_err(_trans, _pos, _flags, _err_type, ...)		\
+	fsck_err_wrap(__bch2_fsck_err(NULL, _trans, _pos, _flags,	\
 			BCH_FSCK_ERR_##_err_type, __VA_ARGS__))
 
-#define __inode_fsck_err_on(cond, _trans, _inum, _snapshot, _flags, _err_type, ...)\
+#define __inode_fsck_err_on(cond, _trans, _pos, _flags, _err_type, ...)	\
 ({									\
 	might_sleep();							\
 	unlikely(cond)							\
-		? __inode_fsck_err(_trans, _inum, _snapshot, _flags,	\
-				   _err_type, __VA_ARGS__)		\
+		? __inode_fsck_err(_trans, _pos, _flags, _err_type,	\
+				   __VA_ARGS__)				\
 		: false;						\
 })
 
-#define inode_fsck_err(_trans, _inum, _snapshot, _err_type, ...)	\
-	__inode_fsck_err(_trans, _inum, _snapshot,			\
+#define inode_fsck_err(_trans, _pos, _err_type, ...)			\
+	__inode_fsck_err(_trans, _pos,					\
 			 FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
 
-#define inode_fsck_err_on(cond, _trans, _inum, _snapshot, _err_type, ...)\
-	__inode_fsck_err_on(cond, _trans, _inum, _snapshot,		\
+#define inode_fsck_err_on(cond, _trans, _pos, _err_type, ...)		\
+	__inode_fsck_err_on(cond, _trans, _pos,				\
 			    FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
 
 #define ret_fsck_err_wrap(_do)						\
@@ -220,9 +219,8 @@ void bch2_free_fsck_errs(struct bch_fs *);
 #define ret_fsck_err_on(cond, c, _err_type, ...)			\
 	__ret_fsck_err_on(cond, c, FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
 
-#define ret_inode_fsck_err(_trans, _inum, _snapshot, _err_type, ...)	\
-	ret_fsck_err_wrap(__bch2_fsck_err(NULL, _trans,			\
-			SPOS(_inum, 0, _snapshot),			\
+#define ret_inode_fsck_err(_trans, _pos, _err_type, ...)		\
+	ret_fsck_err_wrap(__bch2_fsck_err(NULL, _trans, _pos,		\
 			FSCK_CAN_FIX|FSCK_CAN_IGNORE,			\
 			BCH_FSCK_ERR_##_err_type, __VA_ARGS__))
 

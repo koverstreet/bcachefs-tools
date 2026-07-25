@@ -1536,7 +1536,7 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 		}
 
 		if (__inode_fsck_err_on(!live_child,
-				trans, inum, k.k->p.snapshot,
+				trans, k.k->p,
 				repair_flags, bkey_in_deleted_snapshot,
 				"key in deleted snapshot %s, delete?",
 				(bch2_btree_id_to_text(&buf, iter->btree_id),
@@ -1556,7 +1556,7 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 							      k.k->p.inode, live_child) ?:
 			      1;
 	} else {
-		if (__inode_fsck_err(trans, inum, k.k->p.snapshot,
+		if (__inode_fsck_err(trans, k.k->p,
 			     repair_flags, bkey_in_missing_snapshot,
 			     "key in missing snapshot %s, delete?",
 			     (bch2_btree_id_to_text(&buf, iter->btree_id),

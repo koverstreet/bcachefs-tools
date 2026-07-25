@@ -232,8 +232,7 @@ static int overlapping_extents_found(struct btree_trans *trans,
 
 	prt_printf(&buf, "\noverwriting %s extent", first ? "first" : "second");
 
-	if (ret_inode_fsck_err(trans, pos1.inode,
-			       min(pos1.snapshot, pos2.p.snapshot),
+	if (ret_inode_fsck_err(trans, k1.k->p,
 			       extent_overlapping, "%s", buf.buf)) {
 		struct btree_iter *old_iter = &iter1;
 
