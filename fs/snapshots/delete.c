@@ -493,6 +493,51 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 
 	bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
 
+	/*
+	 * A wiped tombstone (parent and tree both zeroed) retains only a child
+	 * pointer, but that's enough to recover the splice point without
+	 * corroboration: the child names the branch, and ids ascend strictly
+	 * child -> parent (validate enforces it on every key), so our own id
+	 * identifies the unique position on that branch. Walk up from the
+	 * child to the first ancestor whose id exceeds ours - we splice in
+	 * below it, or become the branch's new root if the walk runs out.
+	 * Recover parent/tree from the walk and fall through to the normal
+	 * relink branches, which do the splice and validate the attachment.
+	 *
+	 * Depths below the splice point are left off by one: renumbering is
+	 * deferred - it should share code with the deletion-side fixup
+	 * (bch2_fix_child_of_deleted_snapshot()) - and the depth checks
+	 * repair nodes against their parents in the meantime.
+	 */
+	if (!parent_id && !u->v.tree &&
+	    u->v.children[0] && !u->v.children[1]) {
+		u32 cur_id = le32_to_cpu(u->v.children[0]);
+		struct bch_snapshot cur;
+
+		int ret = bch2_snapshot_lookup(trans, cur_id, &cur);
+		if (bch2_err_matches(ret, ENOENT))
+			return 0;	/* nothing to go on: revive unlinked */
+		if (ret)
+			return ret;
+
+		for (unsigned iters = 0;
+		     le32_to_cpu(cur.parent) && le32_to_cpu(cur.parent) < id;
+		     iters++) {
+			if (iters > BTREE_MAX_DEPTH * 64) /* damaged chain, cycle? don't guess */
+				return 0;
+
+			cur_id = le32_to_cpu(cur.parent);
+			try(bch2_snapshot_lookup(trans, cur_id, &cur));
+		}
+
+		/* Splice above the node the walk landed on: */
+		u->v.children[0] = cpu_to_le32(cur_id);
+		u->v.tree = cur.tree;
+		if (cur.parent) {
+			parent_id = le32_to_cpu(cur.parent);
+			u->v.parent = cpu_to_le32(parent_id);
+		}
+	}
 
 	if (parent_id) {
 		struct bkey_i_snapshot *parent =
