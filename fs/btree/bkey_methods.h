@@ -83,7 +83,14 @@ static inline int bch2_key_trigger(struct btree_trans *trans,
 		? ops->trigger(trans, op)
 		: 0;
 
-	return ret ?: bch2_trigger_snapshot_nr_keys(trans, op);
+	/*
+	 * Gate matches the trans-commit dispatch: only snapshotted btrees get
+	 * per-snapshot key counts. Snapshot-field btrees (reconcile_pending)
+	 * carry a snapshot in their bpos but must not be counted.
+	 */
+	return ret ?: (btree_type_has_snapshots(op.btree)
+		       ? bch2_trigger_snapshot_nr_keys(trans, op)
+		       : 0);
 }
 
 static inline int bch2_key_trigger_old(struct btree_trans *trans,
