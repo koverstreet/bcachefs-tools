@@ -125,7 +125,7 @@ int bch2_need_discard_or_freespace_err(struct btree_trans *trans,
 
 	bch2_bkey_val_to_text(&buf, c, alloc_k);
 
-	int ret = __bch2_fsck_err(NULL, trans, flags, err_id,
+	int ret = __bch2_fsck_err(NULL, trans, POS_MIN, flags, err_id,
 				  "bucket incorrectly %sset in %s btree\n%s",
 				  set ? "" : "un",
 				  bch2_btree_id_str(btree),
