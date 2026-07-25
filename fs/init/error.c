@@ -862,6 +862,33 @@ static int damaged_path_resolve(struct btree_trans *trans, u64 inum,
 	return ret ?: bch_err_throw(trans->c, ENOENT_inode);
 }
 
+void bch2_fsck_damaged_path_to_text(struct printbuf *out, struct btree_trans *trans,
+				    const struct fsck_damaged_path *i)
+{
+	CLASS(printbuf, path)();
+
+	/* Resolve into a temp buffer so a restart doesn't duplicate output: */
+	int ret = lockrestart_do(trans,
+		damaged_path_resolve(trans, i->inum, i->snapshot, &path));
+	if (!ret)
+		prt_str(out, path.buf);
+	else
+		prt_printf(out, "inum %llu:%u", i->inum, i->snapshot);
+
+	prt_str(out, ": ");
+
+	bool first = true;
+#define x(t, n, s)							\
+	if (i->reasons & FSCK_DAMAGE_##t) {				\
+		prt_str(out, first ? "" : ", ");			\
+		prt_str(out, s);					\
+		first = false;						\
+	}
+	BCH_FSCK_DAMAGE_TYPES()
+#undef x
+	prt_newline(out);
+}
+
 void bch2_fsck_damaged_paths_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (!c->errors.damaged_paths.nr)
@@ -886,7 +913,6 @@ void bch2_fsck_damaged_paths_to_text(struct printbuf *out, struct bch_fs *c)
 	bch2_printbuf_indent_add(out, 2);
 
 	CLASS(btree_trans, trans)(c);
-	CLASS(printbuf, path)();
 	u32 nr_printed = 0;
 
 	darray_for_each(c->errors.damaged_paths, i) {
@@ -894,30 +920,12 @@ void bch2_fsck_damaged_paths_to_text(struct printbuf *out, struct bch_fs *c)
 			continue;
 
 		if (nr_printed++ >= FSCK_DAMAGED_PATHS_PRINT) {
-			prt_printf(out, "... and %u more\n", nr_listed - FSCK_DAMAGED_PATHS_PRINT);
+			prt_printf(out, "... and %u more (untruncated list in debugfs: fsck_damaged_paths)\n",
+				   nr_listed - FSCK_DAMAGED_PATHS_PRINT);
 			break;
 		}
 
-		/* Resolve into a temp buffer so a restart doesn't duplicate output: */
-		int ret = lockrestart_do(trans,
-			damaged_path_resolve(trans, i->inum, i->snapshot, &path));
-		if (!ret)
-			prt_str(out, path.buf);
-		else
-			prt_printf(out, "inum %llu:%u", i->inum, i->snapshot);
-
-		prt_str(out, ": ");
-
-		bool first = true;
-#define x(t, n, s)							\
-		if (i->reasons & FSCK_DAMAGE_##t) {			\
-			prt_str(out, first ? "" : ", ");			\
-			prt_str(out, s);				\
-			first = false;					\
-		}
-		BCH_FSCK_DAMAGE_TYPES()
-#undef x
-		prt_newline(out);
+		bch2_fsck_damaged_path_to_text(out, trans, i);
 	}
 
 	bch2_printbuf_indent_sub(out, 2);

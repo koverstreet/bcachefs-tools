@@ -113,6 +113,8 @@ enum bch_fsck_damage_type {
 };
 
 void bch2_fsck_damaged(struct btree_trans *, struct bpos, enum bch_fsck_damage_type);
+void bch2_fsck_damaged_path_to_text(struct printbuf *, struct btree_trans *,
+				    const struct fsck_damaged_path *);
 void bch2_fsck_damaged_paths_to_text(struct printbuf *, struct bch_fs *);
 
 void bch2_flush_fsck_errs(struct bch_fs *);
