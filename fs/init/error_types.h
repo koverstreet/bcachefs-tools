@@ -17,7 +17,9 @@ struct fsck_err_state;
 struct fsck_damaged_path {
 	u64			inum;
 	u32			snapshot;
-	u32			reasons;
+	/* bch_sb_error_id, deduped; 0 terminated (error 0 is fs-level) */
+	u16			nr_errors;
+	u16			errors[7];
 };
 
 struct bch_fs_errors {

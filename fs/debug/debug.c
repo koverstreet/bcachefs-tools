@@ -815,7 +815,7 @@ static const struct file_operations btree_node_scan_ops = {
  * The full fsck damaged-paths list, untruncated: the end-of-fsck summary
  * prints only the first FSCK_DAMAGED_PATHS_PRINT entries, which isn't enough
  * when triaging a badly damaged filesystem. Interim surface until the damage
- * btree lands; unlike the summary, pure-reattached entries are listed too.
+ * btree lands.
  */
 static ssize_t bch2_fsck_damaged_paths_read(struct file *file, char __user *buf,
 					    size_t size, loff_t *ppos)

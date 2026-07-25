@@ -83,36 +83,25 @@ int bch2_fsck_err_opt(struct bch_fs *,
 		      enum bch_fsck_flags,
 		      enum bch_sb_error_id);
 
-__printf(5, 6) __cold
+__printf(6, 7) __cold
 int __bch2_fsck_err(struct bch_fs *, struct btree_trans *,
+		  struct bpos,
 		  enum bch_fsck_flags,
 		  enum bch_sb_error_id,
 		  const char *, ...);
 #define bch2_fsck_err(c, _flags, _err_type, ...)				\
 	__bch2_fsck_err(type_is(c, struct bch_fs *) ? (struct bch_fs *) c : NULL,\
 			type_is(c, struct btree_trans *) ? (struct btree_trans *) c : NULL,\
-			_flags, BCH_FSCK_ERR_##_err_type, __VA_ARGS__)
+			POS_MIN, _flags, BCH_FSCK_ERR_##_err_type, __VA_ARGS__)
 
 /*
- * Damage that fsck did to a specific path, remembered for the end-of-fsck
- * summary. Bitmask: a single path may collect more than one. "reattached" is
- * counted for a one-line summary, not listed; the rest are listed with their
- * path.
+ * Record damage to an inode: which errors happened to it, as
+ * bch_sb_error_id - the same identifiers the superblock error counters
+ * and fsck use. Currently the in-memory list behind the end-of-fsck
+ * summary and the fsck_damaged_paths debugfs file; the damage series
+ * replaces the backing with the damage btree, same identifiers.
  */
-#define BCH_FSCK_DAMAGE_TYPES()						\
-	x(reattached,		0,	"reattached in lost+found")	\
-	x(dir_entries_removed,	1,	"had dangling entries removed") \
-	x(data_overwritten,	2,	"had data overwritten (overlapping extents)") \
-	x(keys_deleted,		3,	"had keys removed (snapshot no longer exists)") \
-	x(dir_entries_renamed,	4,	"had entries renamed (duplicate hash table keys)")
-
-enum bch_fsck_damage_type {
-#define x(t, n, s)	FSCK_DAMAGE_##t = BIT(n),
-	BCH_FSCK_DAMAGE_TYPES()
-#undef x
-};
-
-void bch2_fsck_damaged(struct btree_trans *, struct bpos, enum bch_fsck_damage_type);
+int bch2_damage_record(struct btree_trans *, struct bpos, enum bch_sb_error_id);
 void bch2_fsck_damaged_path_to_text(struct printbuf *, struct btree_trans *,
 				    const struct fsck_damaged_path *);
 void bch2_fsck_damaged_paths_to_text(struct printbuf *, struct bch_fs *);
@@ -171,6 +160,38 @@ void bch2_free_fsck_errs(struct bch_fs *);
 	_ret;								\
 })
 
+/*
+ * The fsck_err() variants for errors that are about a specific inode: the
+ * error is recorded as damage against the inode - unconditionally, before
+ * the fix/ignore outcome is decided (see __bch2_fsck_err()): the error
+ * is the damage, whether or not we decide to fix it. Recording
+ * completeness comes from these being the only way an inode-scoped error
+ * is reported - not from remembering to call a helper at each repair
+ * site.
+ */
+
+#define __inode_fsck_err(_trans, _inum, _snapshot, _flags, _err_type, ...)\
+	fsck_err_wrap(__bch2_fsck_err(NULL, _trans,			\
+			SPOS(_inum, 0, _snapshot), _flags,		\
+			BCH_FSCK_ERR_##_err_type, __VA_ARGS__))
+
+#define __inode_fsck_err_on(cond, _trans, _inum, _snapshot, _flags, _err_type, ...)\
+({									\
+	might_sleep();							\
+	unlikely(cond)							\
+		? __inode_fsck_err(_trans, _inum, _snapshot, _flags,	\
+				   _err_type, __VA_ARGS__)		\
+		: false;						\
+})
+
+#define inode_fsck_err(_trans, _inum, _snapshot, _err_type, ...)	\
+	__inode_fsck_err(_trans, _inum, _snapshot,			\
+			 FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
+
+#define inode_fsck_err_on(cond, _trans, _inum, _snapshot, _err_type, ...)\
+	__inode_fsck_err_on(cond, _trans, _inum, _snapshot,		\
+			    FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
+
 #define ret_fsck_err_wrap(_do)						\
 ({									\
 	int _ret = _do;							\
@@ -198,6 +219,12 @@ void bch2_free_fsck_errs(struct bch_fs *);
 
 #define ret_fsck_err_on(cond, c, _err_type, ...)			\
 	__ret_fsck_err_on(cond, c, FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
+
+#define ret_inode_fsck_err(_trans, _inum, _snapshot, _err_type, ...)	\
+	ret_fsck_err_wrap(__bch2_fsck_err(NULL, _trans,			\
+			SPOS(_inum, 0, _snapshot),			\
+			FSCK_CAN_FIX|FSCK_CAN_IGNORE,			\
+			BCH_FSCK_ERR_##_err_type, __VA_ARGS__))
 
 #define ret_log_fsck_err(c, _err_type, ...)				\
 	__ret_fsck_err(c, FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)

@@ -1535,17 +1535,15 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 			goto fsck_err;
 		}
 
-		if (__fsck_err_on(!live_child,
-				trans, repair_flags, bkey_in_deleted_snapshot,
+		if (__inode_fsck_err_on(!live_child,
+				trans, inum, k.k->p.snapshot,
+				repair_flags, bkey_in_deleted_snapshot,
 				"key in deleted snapshot %s, delete?",
 				(bch2_btree_id_to_text(&buf, iter->btree_id),
 				 prt_char(&buf, ' '),
-				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			bch2_fsck_damaged(trans, SPOS(inum, 0, k.k->p.snapshot),
-					  FSCK_DAMAGE_keys_deleted);
+				 bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
 			ret = bch2_btree_delete_at(trans, iter,
 						   BTREE_UPDATE_internal_snapshot_node) ?: 1;
-		}
 
 		if (__fsck_err_on(live_child,
 				trans, repair_flags, bkey_in_deleted_interior_snapshot,
@@ -1558,16 +1556,14 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 							      k.k->p.inode, live_child) ?:
 			      1;
 	} else {
-		if (__fsck_err(trans, repair_flags, bkey_in_missing_snapshot,
+		if (__inode_fsck_err(trans, inum, k.k->p.snapshot,
+			     repair_flags, bkey_in_missing_snapshot,
 			     "key in missing snapshot %s, delete?",
 			     (bch2_btree_id_to_text(&buf, iter->btree_id),
 			      prt_char(&buf, ' '),
-			      bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			bch2_fsck_damaged(trans, SPOS(inum, 0, k.k->p.snapshot),
-					  FSCK_DAMAGE_keys_deleted);
+			      bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
 			ret = bch2_btree_delete_at(trans, iter,
 						   BTREE_UPDATE_internal_snapshot_node) ?: 1;
-		}
 	}
 fsck_err:
 	return ret;

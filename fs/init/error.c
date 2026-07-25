@@ -487,6 +487,7 @@ int bch2_fsck_err_opt(struct bch_fs *c,
 
 int __bch2_fsck_err(struct bch_fs *c,
 		  struct btree_trans *trans,
+		  struct bpos pos,
 		  enum bch_fsck_flags flags,
 		  enum bch_sb_error_id err,
 		  const char *fmt, ...)
@@ -504,6 +505,15 @@ int __bch2_fsck_err(struct bch_fs *c,
 
 	if (!c)
 		c = trans->c;
+
+	/*
+	 * An inode-scoped error (pos != POS_MIN) records damage against the
+	 * inode before the outcome below is decided: the error is the damage,
+	 * whether or not we fix it - and silent/ratelimited instances still
+	 * record (recording is idempotent).
+	 */
+	if (!bpos_eq(pos, POS_MIN) && !WARN_ON(!trans))
+		try(bch2_damage_record(trans, pos, err));
 
 	/*
 	 * Ugly: if there's a transaction in the current task it has to be
@@ -758,7 +768,7 @@ int __bch2_bkey_fsck_err(struct bch_fs *c,
 	prt_vprintf(&buf, fmt, args);
 	va_end(args);
 
-	int ret = __bch2_fsck_err(c, NULL, fsck_flags, err, "%s, delete?", buf.buf);
+	int ret = __bch2_fsck_err(c, NULL, POS_MIN, fsck_flags, err, "%s, delete?", buf.buf);
 	return ret;
 }
 
@@ -791,17 +801,28 @@ void bch2_free_fsck_errs(struct bch_fs *c)
 
 /*
  * Paths damaged during fsck, remembered for the end-of-fsck summary - see
- * struct fsck_damaged_path. Recorded at the repair sites (reattach, dirent to
- * missing inode, overlapping extents), deduped by (inum, snapshot) with reasons
- * OR'd together. Dedup is what makes this restart-safe: a repair that runs
- * again after a transaction restart just re-ORs the same bit.
+ * struct fsck_damaged_path. Recorded when an inode-scoped error is reported
+ * (__bch2_fsck_err() with a pos), deduped by (inum, snapshot) with error ids
+ * merged. Dedup is what makes this restart-safe: an error re-reported after a
+ * transaction restart just re-merges the same id.
  */
 
 #define FSCK_DAMAGED_PATHS_MAX	4096
 #define FSCK_DAMAGED_PATHS_PRINT 200
 
-void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
-		       enum bch_fsck_damage_type reason)
+static void fsck_damaged_path_add_err(struct fsck_damaged_path *i,
+				      enum bch_sb_error_id err)
+{
+	for (unsigned j = 0; j < i->nr_errors; j++)
+		if (i->errors[j] == err)
+			return;
+
+	if (i->nr_errors < ARRAY_SIZE(i->errors))
+		i->errors[i->nr_errors++] = err;
+}
+
+static void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
+			      enum bch_sb_error_id err)
 {
 	struct bch_fs *c = trans->c;
 	guard(mutex)(&c->errors.msgs_lock);
@@ -810,14 +831,14 @@ void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
 	if (c->errors.damaged_paths.nr) {
 		struct fsck_damaged_path *last = &darray_last(c->errors.damaged_paths);
 		if (last->inum == pos.inode && last->snapshot == pos.snapshot) {
-			last->reasons |= reason;
+			fsck_damaged_path_add_err(last, err);
 			return;
 		}
 	}
 
 	darray_for_each(c->errors.damaged_paths, i)
 		if (i->inum == pos.inode && i->snapshot == pos.snapshot) {
-			i->reasons |= reason;
+			fsck_damaged_path_add_err(i, err);
 			return;
 		}
 
@@ -825,9 +846,23 @@ void bch2_fsck_damaged(struct btree_trans *trans, struct bpos pos,
 	    darray_push(&c->errors.damaged_paths, ((struct fsck_damaged_path) {
 			.inum		= pos.inode,
 			.snapshot	= pos.snapshot,
-			.reasons	= reason,
+			.nr_errors	= 1,
+			.errors		= { err },
 		})))
 		c->errors.damaged_paths_alloc_err = true;
+}
+
+/*
+ * In-memory backing: the damage series replaces this with the damage
+ * btree (one key per inode, written in the repair's transaction), same
+ * identifiers - the macros and their call sites don't change when it
+ * lands.
+ */
+int bch2_damage_record(struct btree_trans *trans, struct bpos pos,
+		       enum bch_sb_error_id err)
+{
+	bch2_fsck_damaged(trans, pos, err);
+	return 0;
 }
 
 /*
@@ -877,15 +912,11 @@ void bch2_fsck_damaged_path_to_text(struct printbuf *out, struct btree_trans *tr
 
 	prt_str(out, ": ");
 
-	bool first = true;
-#define x(t, n, s)							\
-	if (i->reasons & FSCK_DAMAGE_##t) {				\
-		prt_str(out, first ? "" : ", ");			\
-		prt_str(out, s);					\
-		first = false;						\
+	for (unsigned j = 0; j < i->nr_errors; j++) {
+		if (j)
+			prt_str(out, ", ");
+		prt_str(out, bch2_sb_error_strs[i->errors[j]]);
 	}
-	BCH_FSCK_DAMAGE_TYPES()
-#undef x
 	prt_newline(out);
 }
 
@@ -894,19 +925,7 @@ void bch2_fsck_damaged_paths_to_text(struct printbuf *out, struct bch_fs *c)
 	if (!c->errors.damaged_paths.nr)
 		return;
 
-	u32 nr_reattached = 0, nr_listed = 0;
-	darray_for_each(c->errors.damaged_paths, i) {
-		nr_reattached	+= !!(i->reasons & FSCK_DAMAGE_reattached);
-		nr_listed	+= !!(i->reasons & ~FSCK_DAMAGE_reattached);
-	}
-
-	if (nr_reattached)
-		prt_printf(out, "%u inodes reattached in lost+found\n", nr_reattached);
-
-	if (!nr_listed)
-		return;
-
-	prt_printf(out, "%u paths damaged by fsck", nr_listed);
+	prt_printf(out, "%zu paths damaged by fsck", c->errors.damaged_paths.nr);
 	if (c->errors.damaged_paths_alloc_err)
 		prt_str(out, " (list incomplete)");
 	prt_str(out, ":\n");
@@ -916,12 +935,9 @@ void bch2_fsck_damaged_paths_to_text(struct printbuf *out, struct bch_fs *c)
 	u32 nr_printed = 0;
 
 	darray_for_each(c->errors.damaged_paths, i) {
-		if (!(i->reasons & ~FSCK_DAMAGE_reattached))
-			continue;
-
 		if (nr_printed++ >= FSCK_DAMAGED_PATHS_PRINT) {
-			prt_printf(out, "... and %u more (untruncated list in debugfs: fsck_damaged_paths)\n",
-				   nr_listed - FSCK_DAMAGED_PATHS_PRINT);
+			prt_printf(out, "... and %zu more (untruncated list in debugfs: fsck_damaged_paths)\n",
+				   c->errors.damaged_paths.nr - FSCK_DAMAGED_PATHS_PRINT);
 			break;
 		}
 
