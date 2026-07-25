@@ -468,119 +468,109 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 {
 	struct bch_fs *c = trans->c;
 	u32 id = u->k.p.offset;
-	u32 parent_id = le32_to_cpu(u->v.parent);
-	u32 child_id = 0;
+	u32 child_id = le32_to_cpu(u->v.children[0]);
 
-	bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
+	CLASS(bch_log_msg, msg)(c);
 
-	/*
-	 * A wiped tombstone (parent and tree both zeroed) retains only a child
-	 * pointer, but that's enough to recover the splice point without
-	 * corroboration: the child names the branch, and ids ascend strictly
-	 * child -> parent (validate enforces it on every key), so our own id
-	 * identifies the unique position on that branch. Walk up from the
-	 * child to the first ancestor whose id exceeds ours - we splice in
-	 * below it, or become the branch's new root if the walk runs out.
-	 * Recover parent/tree from the walk and fall through to the normal
-	 * relink branches, which do the splice and validate the attachment.
-	 *
-	 * Depths below the splice point are left off by one: renumbering is
-	 * deferred - it should share code with the deletion-side fixup
-	 * (bch2_fix_child_of_deleted_snapshot()) - and the depth checks
-	 * repair nodes against their parents in the meantime.
-	 */
-	if (!parent_id && !u->v.tree &&
-	    u->v.children[0] && !u->v.children[1]) {
-		u32 cur_id = le32_to_cpu(u->v.children[0]);
-		struct bch_snapshot cur;
+	bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&u->k_i));
+	prt_newline(&msg.m);
 
-		int ret = bch2_snapshot_lookup(trans, cur_id, &cur);
-		if (bch2_err_matches(ret, ENOENT))
-			return 0;	/* nothing to go on: revive unlinked */
-		if (ret)
-			return ret;
-
-		for (unsigned iters = 0;
-		     le32_to_cpu(cur.parent) && le32_to_cpu(cur.parent) < id;
-		     iters++) {
-			if (iters > BTREE_MAX_DEPTH * 64) /* damaged chain, cycle? don't guess */
-				return 0;
-
-			cur_id = le32_to_cpu(cur.parent);
-			try(bch2_snapshot_lookup(trans, cur_id, &cur));
-		}
-
-		/* Splice above the node the walk landed on: */
-		u->v.children[0] = cpu_to_le32(cur_id);
-		u->v.tree = cur.tree;
-		if (cur.parent) {
-			parent_id = le32_to_cpu(cur.parent);
-			u->v.parent = cpu_to_le32(parent_id);
-		}
+	if (u->v.children[1]) {
+		bch_err(c, "cannot undelete a node with two children");
+		return bch_err_throw(c, fsck_repair_unimplemented);
 	}
+
+	if (!u->v.children[0]) {
+		bch_err(c, "cannot undelete a node with no children");
+		return bch_err_throw(c, fsck_repair_unimplemented);
+	}
+
+	struct bkey_i_snapshot *child =
+		bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots, POS(0, child_id), 0, snapshot);
+	int ret = PTR_ERR_OR_ZERO(child);
+	if (bch2_err_matches(ret, ENOENT)) {
+		bch_err(c, "cannot undelete: child no longer exists");
+		return bch_err_throw(c, fsck_repair_unimplemented);
+	}
+	if (ret)
+		return ret;
+
+	prt_printf(&msg.m, "attaching to child  ");
+	bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&child->k_i));
+	prt_newline(&msg.m);
+
+	if (bch2_snapshot_state_compat(&child->v) != SNAPSHOT_STATE_live &&
+	    bch2_snapshot_state_compat(&child->v) != SNAPSHOT_STATE_will_delete) {
+		prt_printf(&msg.m, "cannot undelete: child not live");
+		return bch_err_throw(c, fsck_repair_unimplemented);
+	}
+
+	u32 parent_id = le32_to_cpu(child->v.parent);
+	if (parent_id && parent_id <= id) {
+		prt_printf(&msg.m, "cannot undelete: parent of child < node to undelete");
+		return bch_err_throw(c, fsck_repair_unimplemented);
+	}
+
+	child->v.parent = cpu_to_le32(id);
 
 	if (parent_id) {
 		struct bkey_i_snapshot *parent =
 			bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
 						POS(0, parent_id), 0, snapshot);
 		int ret = PTR_ERR_OR_ZERO(parent);
-		if (bch2_err_matches(ret, ENOENT))
-			return 0;
-		if (ret)
+		if (ret && !bch2_err_matches(ret, ENOENT))
 			return ret;
 
-		if (bch2_snapshot_state(&parent->v) != SNAPSHOT_STATE_live)
-			return 0;
+		if (ret) {
+			prt_printf(&msg.m, "cannot undelete: parent no longer exists");
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+
+		prt_printf(&msg.m, "attaching to parent ");
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&parent->k_i));
+		prt_newline(&msg.m);
+
+		if (bch2_snapshot_state_compat(&parent->v) != SNAPSHOT_STATE_live &&
+		    bch2_snapshot_state_compat(&parent->v) != SNAPSHOT_STATE_will_delete) {
+			prt_printf(&msg.m, "cannot undelete: parent not live");
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
 
 		for (unsigned i = 0; i < 2; i++) {
 			u32 p_child = le32_to_cpu(parent->v.children[i]);
 
-			if (p_child &&
-			    (p_child == le32_to_cpu(u->v.children[0]) ||
-			     p_child == le32_to_cpu(u->v.children[1]))) {
-				child_id = p_child;
+			if (p_child == child_id) {
 				parent->v.children[i] = cpu_to_le32(id);
 				normalize_snapshot_child_pointers(&parent->v);
 				break;
 			}
 		}
-		if (!child_id)
-			return 0;
-	} else if (u->v.tree) {
+	} else if (child->v.tree) {
 		struct bkey_i_snapshot_tree *s_t =
 			bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshot_trees,
-						POS(0, le32_to_cpu(u->v.tree)),
+						POS(0, le32_to_cpu(child->v.tree)),
 						0, snapshot_tree);
 		int ret = PTR_ERR_OR_ZERO(s_t);
-		if (bch2_err_matches(ret, ENOENT))
-			return 0;
-		if (ret)
+		if (ret && !bch2_err_matches(ret, ENOENT))
 			return ret;
 
-		u32 root_id = le32_to_cpu(s_t->v.root_snapshot);
-		if (root_id != le32_to_cpu(u->v.children[0]) &&
-		    root_id != le32_to_cpu(u->v.children[1]))
-			return 0;
+		if (!ret && le32_to_cpu(s_t->v.root_snapshot) == child_id) {
+			s_t->v.root_snapshot = cpu_to_le32(id);
 
-		child_id = root_id;
-		s_t->v.root_snapshot = cpu_to_le32(id);
-	} else {
-		return 0;
+			prt_printf(&msg.m, "updated tree ");
+			bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&s_t->k_i));
+			prt_newline(&msg.m);
+		}
 	}
+
+	u->v.parent	= cpu_to_le32(parent_id);
+	u->v.tree	= child->v.tree;
+	bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
 
 	u->v.depth = cpu_to_le32(bch2_snapshot_depth(c, parent_id));
 	for (unsigned j = 0; j < ARRAY_SIZE(u->v.skip); j++)
 		u->v.skip[j] = cpu_to_le32(bch2_snapshot_skiplist_get(c, parent_id));
 	bubble_sort(u->v.skip, ARRAY_SIZE(u->v.skip), cmp_le32);
-
-	struct bkey_i_snapshot *child =
-		errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
-					POS(0, child_id), 0, snapshot));
-
-	if (le32_to_cpu(child->v.parent) == parent_id) {
-		child->v.parent	= cpu_to_le32(id);
-		child->v.depth	= cpu_to_le32(le32_to_cpu(u->v.depth) + 1);
-	}
 
 	return 0;
 }

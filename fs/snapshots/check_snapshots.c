@@ -1088,6 +1088,13 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 
 			try(bch2_snapshot_node_undelete(trans, *u));
 			*s = (*u)->v;
+			/*
+			 * Short circuit the rest of the checks for this node:
+			 * the in-mem snapshot table won't be updated until we
+			 * commit, we'll rely on the checks already having been
+			 * done on the child.
+			 */
+			return 1;
 		}
 	}
 
@@ -1113,7 +1120,6 @@ static int check_snapshot(struct btree_trans *trans,
 	ret = check_snapshot_deleted(trans, iter, k, &s, &u);
 	if (ret)
 		return ret < 0 ? ret : 0;
-
 
 	if (s.parent)
 		try(check_snapshot_edge(trans, &s, k.k->p.offset,
