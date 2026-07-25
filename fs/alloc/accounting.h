@@ -182,10 +182,11 @@ static inline bool bch2_bkey_is_accounting_mem(struct bkey *k)
  * Update in memory counters so they match the btree update we're doing; called
  * from transaction commit path
  */
-static inline int bch2_accounting_mem_mod_locked(struct btree_trans *trans,
-						 struct bkey_s_c_accounting a,
-						 enum bch_accounting_mode mode,
-						 bool write_locked)
+static __always_inline
+int bch2_accounting_mem_add_inlined(struct btree_trans *trans,
+				   struct bkey_s_c_accounting a,
+				   enum bch_accounting_mode mode,
+				   bool write_locked)
 {
 	struct bch_fs *c = trans->c;
 	struct bch_accounting_mem *acc = &c->accounting;
@@ -243,11 +244,8 @@ static inline int bch2_accounting_mem_mod_locked(struct btree_trans *trans,
 	return 0;
 }
 
-static inline int bch2_accounting_mem_add(struct btree_trans *trans, struct bkey_s_c_accounting a, bool gc)
-{
-	guard(percpu_read_noio)(&trans->c->capacity.mark_lock);
-	return bch2_accounting_mem_mod_locked(trans, a, gc ? BCH_ACCOUNTING_gc : BCH_ACCOUNTING_normal, false);
-}
+int bch2_accounting_mem_add(struct btree_trans *, struct bkey_s_c_accounting,
+			    enum bch_accounting_mode, bool);
 
 static inline void bch2_accounting_mem_read_counters(struct bch_accounting_mem *acc,
 						     unsigned idx, u64 *v, unsigned nr, bool gc)
@@ -317,7 +315,7 @@ static inline int bch2_accounting_trans_commit_hook(struct btree_trans *trans,
 	EBUG_ON(bversion_zero(a->k.bversion));
 
 	return likely(!(commit_flags & BCH_TRANS_COMMIT_skip_accounting_apply))
-		? bch2_accounting_mem_mod_locked(trans, accounting_i_to_s_c(a), BCH_ACCOUNTING_normal, false)
+		? bch2_accounting_mem_add_inlined(trans, accounting_i_to_s_c(a), BCH_ACCOUNTING_normal, false)
 		: 0;
 }
 
@@ -329,7 +327,7 @@ static inline void bch2_accounting_trans_commit_revert(struct btree_trans *trans
 		struct bkey_s_accounting a = accounting_i_to_s(a_i);
 
 		bch2_accounting_neg(a);
-		bch2_accounting_mem_mod_locked(trans, a.c, BCH_ACCOUNTING_normal, false);
+		bch2_accounting_mem_add(trans, a.c, BCH_ACCOUNTING_normal, false);
 		bch2_accounting_neg(a);
 	}
 }
