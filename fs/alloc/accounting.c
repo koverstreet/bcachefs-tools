@@ -98,6 +98,12 @@ static inline void accounting_key_init(struct bkey_i *k, struct disk_accounting_
 
 static int bch2_accounting_update_sb_one(struct bch_fs *, struct bpos);
 
+int bch2_accounting_mem_add(struct btree_trans *trans, struct bkey_s_c_accounting a,
+			    enum bch_accounting_mode mode, bool write_locked)
+{
+	return bch2_accounting_mem_add_inlined(trans, a, mode, write_locked);
+}
+
 int bch2_disk_accounting_mod_normal(struct btree_trans *trans,
 			     struct disk_accounting_pos *k,
 			     s64 *d, unsigned nr)
@@ -166,7 +172,11 @@ int bch2_disk_accounting_mod_gc(struct btree_trans *trans,
 	int ret = 0;
 
 	while (true) {
-		ret = bch2_accounting_mem_add(trans, bkey_i_to_s_c_accounting(&k_i.k), true);
+		scoped_guard(percpu_read_noio, &trans->c->capacity.mark_lock)
+			ret = bch2_accounting_mem_add_inlined(trans,
+						bkey_i_to_s_c_accounting(&k_i.k),
+						BCH_ACCOUNTING_gc,
+						false);
 		if (likely(ret != -BCH_ERR_btree_insert_need_mark_replicas))
 			break;
 
@@ -745,7 +755,7 @@ int bch2_gc_accounting_done(struct bch_fs *c)
 					struct { __BKEY_PADDED(k, BCH_ACCOUNTING_MAX_COUNTERS); } k_i;
 
 					accounting_key_init(&k_i.k, &acc_k, src_v, nr);
-					bch2_accounting_mem_mod_locked(trans,
+					bch2_accounting_mem_add(trans,
 								bkey_i_to_s_c_accounting(&k_i.k),
 								BCH_ACCOUNTING_normal, true);
 
