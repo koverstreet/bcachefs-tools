@@ -264,7 +264,7 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 	 * check_inodes alone can't repair a stranded dirent; scheduling only
 	 * it left the refusal firing forever:
 	 */
-	int ret = bch2_require_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_allocations);
+	int ret = bch2_run_explicit_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_allocations, 0);
 
 	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
 		if (!(btrees_with_keys & BIT_ULL(btree)))
@@ -279,7 +279,7 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 		default:		continue;
 		}
 
-		ret = bch2_require_recovery_pass(c, &msg, pass) ?: ret;
+		ret = bch2_run_explicit_recovery_pass(c, &msg, pass, 0) ?: ret;
 	}
 
 	bch_err(c, "%s", msg.buf);
