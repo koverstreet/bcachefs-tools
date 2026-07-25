@@ -97,8 +97,19 @@ static inline struct bpos disk_accounting_pos_to_bpos(struct disk_accounting_pos
 	return p;
 }
 
-int bch2_disk_accounting_mod(struct btree_trans *, struct disk_accounting_pos *,
-			     s64 *, unsigned, bool);
+int bch2_disk_accounting_mod_normal(struct btree_trans *, struct disk_accounting_pos *,
+			     s64 *, unsigned);
+int bch2_disk_accounting_mod_gc(struct btree_trans *, struct disk_accounting_pos *,
+			     s64 *, unsigned);
+
+static inline int bch2_disk_accounting_mod(struct btree_trans *trans,
+			     struct disk_accounting_pos *k,
+			     s64 *d, unsigned nr, bool gc)
+{
+	return likely(!gc)
+		? bch2_disk_accounting_mod_normal(trans, k, d, nr)
+		: bch2_disk_accounting_mod_gc(trans, k, d, nr);
+}
 
 #define disk_accounting_key_init(_k, _type, ...)			\
 do {									\

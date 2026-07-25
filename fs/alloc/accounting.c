@@ -98,9 +98,9 @@ static inline void accounting_key_init(struct bkey_i *k, struct disk_accounting_
 
 static int bch2_accounting_update_sb_one(struct bch_fs *, struct bpos);
 
-int bch2_disk_accounting_mod(struct btree_trans *trans,
+int bch2_disk_accounting_mod_normal(struct btree_trans *trans,
 			     struct disk_accounting_pos *k,
-			     s64 *d, unsigned nr, bool gc)
+			     s64 *d, unsigned nr)
 {
 	BUG_ON(nr > BCH_ACCOUNTING_MAX_COUNTERS);
 
@@ -115,46 +115,67 @@ int bch2_disk_accounting_mod(struct btree_trans *trans,
 	}
 
 	struct bpos pos = disk_accounting_pos_to_bpos(k);
+	struct bkey_i_accounting *a;
 
-	if (likely(!gc)) {
-		struct bkey_i_accounting *a;
+	for (a = btree_trans_subbuf_base(trans, &trans->accounting);
+	     a != btree_trans_subbuf_top(trans, &trans->accounting);
+	     a = (void *) bkey_next(&a->k_i))
+		if (bpos_eq(a->k.p, pos) &&
+		    bch2_accounting_counters(&a->k) == nr) {
+			acc_u64s(a->v.d, d, nr);
 
-		for (a = btree_trans_subbuf_base(trans, &trans->accounting);
-		     a != btree_trans_subbuf_top(trans, &trans->accounting);
-		     a = (void *) bkey_next(&a->k_i))
-			if (bpos_eq(a->k.p, pos) &&
-			    bch2_accounting_counters(&a->k) == nr) {
-				acc_u64s(a->v.d, d, nr);
+			if (bch2_accounting_key_is_zero(accounting_i_to_s_c(a))) {
+				unsigned offset = (u64 *) a -
+					(u64 *) btree_trans_subbuf_base(trans, &trans->accounting);
 
-				if (bch2_accounting_key_is_zero(accounting_i_to_s_c(a))) {
-					unsigned offset = (u64 *) a -
-						(u64 *) btree_trans_subbuf_base(trans, &trans->accounting);
-
-					trans->accounting.u64s -= a->k.u64s;
-					memmove_u64s_down(a,
-							  bkey_next(&a->k_i),
-							  trans->accounting.u64s - offset);
-				}
-				return 0;
+				trans->accounting.u64s -= a->k.u64s;
+				memmove_u64s_down(a,
+						  bkey_next(&a->k_i),
+						  trans->accounting.u64s - offset);
 			}
+			return 0;
+		}
 
-		unsigned u64s = sizeof(*a) / sizeof(u64) + nr;
-		a = errptr_try(bch2_trans_subbuf_alloc(trans, &trans->accounting, u64s));
+	unsigned u64s = sizeof(*a) / sizeof(u64) + nr;
+	a = errptr_try(bch2_trans_subbuf_alloc(trans, &trans->accounting, u64s));
 
-		__accounting_key_init(&a->k_i, pos, d, nr);
-		return 0;
-	} else {
-		struct { __BKEY_PADDED(k, BCH_ACCOUNTING_MAX_COUNTERS); } k_i;
+	__accounting_key_init(&a->k_i, pos, d, nr);
+	return 0;
+}
 
-		__accounting_key_init(&k_i.k, pos, d, nr);
+int bch2_disk_accounting_mod_gc(struct btree_trans *trans,
+			     struct disk_accounting_pos *k,
+			     s64 *d, unsigned nr)
+{
+	BUG_ON(nr > BCH_ACCOUNTING_MAX_COUNTERS);
 
-		int ret = bch2_accounting_mem_add(trans, bkey_i_to_s_c_accounting(&k_i.k), true);
-		if (ret == -BCH_ERR_btree_insert_need_mark_replicas)
-			ret = drop_locks_do(trans,
-				bch2_accounting_update_sb_one(trans->c, disk_accounting_pos_to_bpos(k))) ?:
-				bch2_accounting_mem_add(trans, bkey_i_to_s_c_accounting(&k_i.k), true);
-		return ret;
+	BUG_ON(k->type >= BCH_DISK_ACCOUNTING_TYPE_NR);
+	EBUG_ON(nr != bch2_accounting_type_nr_counters[k->type]);
+
+	/* Normalize: */
+	switch (k->type) {
+	case BCH_DISK_ACCOUNTING_replicas:
+		bubble_sort(k->replicas.devs, k->replicas.nr_devs, u8_cmp);
+		break;
 	}
+
+	struct { __BKEY_PADDED(k, BCH_ACCOUNTING_MAX_COUNTERS); } k_i;
+
+	__accounting_key_init(&k_i.k, disk_accounting_pos_to_bpos(k), d, nr);
+
+	int ret = 0;
+
+	while (true) {
+		ret = bch2_accounting_mem_add(trans, bkey_i_to_s_c_accounting(&k_i.k), true);
+		if (likely(ret != -BCH_ERR_btree_insert_need_mark_replicas))
+			break;
+
+		ret = drop_locks_do(trans, bch2_accounting_update_sb_one(trans->c, k_i.k.k.p));
+		if (ret)
+			break;
+	}
+
+	return ret;
 }
 
 int bch2_mod_dev_cached_sectors(struct btree_trans *trans,
