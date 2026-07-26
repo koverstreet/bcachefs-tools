@@ -501,7 +501,9 @@ static int reconstruct_inode(struct btree_trans *trans, enum btree_id btree, u32
 		CLASS(btree_iter, iter)(trans, BTREE_ID_extents, SPOS(inum, U64_MAX, snapshot), 0);
 		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_prev_min(&iter, POS(inum, 0)));
 
-		i_size = k.k->p.offset << 9;
+		/* may race with repair deleting the extents that triggered us: */
+		if (k.k)
+			i_size = k.k->p.offset << 9;
 		break;
 	}
 	case BTREE_ID_dirents:
