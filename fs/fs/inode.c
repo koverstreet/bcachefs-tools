@@ -1411,22 +1411,46 @@ int bch2_inode_set_casefold(struct btree_trans *trans, subvol_inum inum,
 
 static noinline int __bch2_inode_rm_snapshot(struct btree_trans *trans, u64 inum, u32 snapshot)
 {
-	bch2_btree_delete_range_trans(trans, BTREE_ID_extents,
-				      SPOS(inum, 0, snapshot),
-				      SPOS(inum, U64_MAX, snapshot),
-				      BTREE_UPDATE_internal_snapshot_node);
-	bch2_btree_delete_range_trans(trans, BTREE_ID_dirents,
-				      SPOS(inum, 0, snapshot),
-				      SPOS(inum, U64_MAX, snapshot),
-				      BTREE_UPDATE_internal_snapshot_node);
-	bch2_btree_delete_range_trans(trans, BTREE_ID_xattrs,
-				      SPOS(inum, 0, snapshot),
-				      SPOS(inum, U64_MAX, snapshot),
-				      BTREE_UPDATE_internal_snapshot_node);
-	try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-		      bch2_btree_delete(trans, BTREE_ID_inodes, SPOS(0, inum, snapshot),
-					BTREE_UPDATE_internal_snapshot_node)));
-	return 0;
+	static const enum btree_id content_btrees[] = {
+		BTREE_ID_extents,
+		BTREE_ID_dirents,
+		BTREE_ID_xattrs,
+	};
+	int ret = 0;
+
+	for (unsigned i = 0; i < ARRAY_SIZE(content_btrees); i++) {
+		int ret2 = bch2_btree_delete_range_trans(trans, content_btrees[i],
+					SPOS(inum, 0, snapshot),
+					SPOS(inum, U64_MAX, snapshot),
+					BTREE_UPDATE_internal_snapshot_node);
+		/* handled restarts are an FYI - the range was fully deleted: */
+		if (bch2_err_matches(ret2, BCH_ERR_transaction_restart))
+			ret2 = 0;
+		ret = ret ?: ret2;
+	}
+
+	if (!ret)
+		return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+				 bch2_btree_delete(trans, BTREE_ID_inodes,
+						   SPOS(0, inum, snapshot),
+						   BTREE_UPDATE_internal_snapshot_node));
+
+	/*
+	 * Content left behind: whiteout the inode key instead of deleting it,
+	 * so the ancestor's version doesn't resurface here and the deletion
+	 * scan/fsck can still find this position:
+	 */
+	bch_err_msg(trans->c, ret, "deleting content of inode %llu:%u, leaving whiteout",
+		    inum, snapshot);
+
+	struct bkey_i whiteout;
+	bkey_init(&whiteout.k);
+	whiteout.k.type	= KEY_TYPE_whiteout;
+	whiteout.k.p	= SPOS(0, inum, snapshot);
+
+	return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+			 bch2_btree_insert_trans(trans, BTREE_ID_inodes, &whiteout,
+						 BTREE_UPDATE_internal_snapshot_node)) ?: ret;
 }
 
 /*
