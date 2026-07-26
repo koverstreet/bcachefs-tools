@@ -910,13 +910,36 @@ int bch2_fsck_update_backpointers(struct btree_trans *trans,
 		if (ret)
 			return ret;
 
-		root_inode.bi_dir_offset = d->k.p.offset;
+		if (root_inode.bi_dir == d->k.p.inode &&
+		    root_inode.bi_dir_offset == d->k.p.offset)
+			return 0;
+
+		root_inode.bi_dir		= d->k.p.inode;
+		root_inode.bi_dir_offset	= d->k.p.offset;
 		return __bch2_fsck_write_inode(trans, &root_inode);
 	} else {
 		try(get_visible_inodes(trans, &target, s, le64_to_cpu(d->v.d_inum)));
 
+		/*
+		 * A backpointer is the (bi_dir, bi_dir_offset) pair - compare
+		 * and set both, or an offset match into the wrong directory
+		 * skips a broken backpointer, and an offset-only write
+		 * manufactures one.
+		 *
+		 * Skip before the write: __bch2_fsck_write_inode allocates a
+		 * bkey_inode_buf of trans mem per call, and this loop runs once
+		 * per visible snapshot version in one transaction - an
+		 * already-correct backpointer must cost nothing, both to bound
+		 * trans mem and so a re-run over partially-repaired state
+		 * shrinks instead of repeating the whole batch.
+		 */
 		darray_for_each(target.inodes, i) {
-			i->inode.bi_dir_offset = d->k.p.offset;
+			if (i->inode.bi_dir == d->k.p.inode &&
+			    i->inode.bi_dir_offset == d->k.p.offset)
+				continue;
+
+			i->inode.bi_dir		= d->k.p.inode;
+			i->inode.bi_dir_offset	= d->k.p.offset;
 			try(__bch2_fsck_write_inode(trans, &i->inode));
 		}
 
