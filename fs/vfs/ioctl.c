@@ -732,6 +732,323 @@ static long bch2_ioctl_subvolume_to_path(struct bch_fs *c, struct file *filp,
 	return 0;
 }
 
+static int bch2_readdir_flags_emit(const struct qstr *name, u64 inum,
+				   u8 d_type,
+				   char __user *buf, u32 buf_size, u32 *used)
+{
+	u32 name_offset = offsetof(struct bch_ioctl_readdir_entry, name);
+	u32 name_bytes = name->len + 1;
+	u32 reclen = ALIGN(name_offset + name_bytes, 8);
+
+	if (*used + reclen > buf_size)
+		return 1;
+
+	struct bch_ioctl_readdir_entry ent = {
+		.inum		= inum,
+		.d_type		= d_type,
+		.name_len	= name_bytes,
+	};
+
+	try(copy_to_user_errcode(buf + *used, &ent, name_offset));
+	try(copy_to_user_errcode(buf + *used + name_offset, name->name, name->len));
+
+	u32 written = name_offset + name->len;
+	if (clear_user(buf + *used + written, reclen - written))
+		return -EFAULT;
+
+	*used += reclen;
+	return 0;
+}
+
+#define BCH_READDIR_FLAGS_ALL		(BCH_READDIR_recursive|	\
+					 BCH_READDIR_subvolumes_only)
+
+/*
+ * Does this entry pass the requested filter? > 0 keep, 0 skip, < 0
+ * error. New filters are new cases; the iteration doesn't change.
+ */
+static int bch2_readdir_filter(struct btree_trans *trans, u32 flags,
+			       struct bkey_s_c_dirent d, subvol_inum target)
+{
+	switch (flags & ~BCH_READDIR_recursive) {
+	case 0:
+		return 1;
+	case BCH_READDIR_subvolumes_only:
+		return d.v->d_type == DT_SUBVOL;
+	default:
+		return -EINVAL;
+	}
+}
+
+/*
+ * Shared machinery for the recursive modes: each iterates its filter's
+ * candidate set (the subvolumes btree) rather than
+ * scanning dirents, then qualifies every candidate the same way - is it
+ * under this directory, and what is its path relative to it?
+ */
+struct readdir_recursive {
+	subvol_inum		dir;
+	struct mnt_idmap	*idmap;
+	struct printbuf		*dir_path;
+	struct printbuf		*path;
+	char __user		*buf;
+	u32			buf_size;
+	u32			used;
+};
+
+enum readdir_recursive_res {
+	READDIR_EMITTED,
+	READDIR_BUF_FULL,
+	READDIR_SKIP,
+};
+
+/*
+ * A recursive listing tunnels past the directories a dirent walk would
+ * have to descend through, so enforce the permissions that walk would
+ * have hit: MAY_READ on the candidate's parent (the candidate's name is
+ * that directory's content), MAY_EXEC on every directory above it, up
+ * to but excluding the fd's directory, which open() already checked.
+ * Full VFS permission stack (POSIX ACLs, LSM hooks), same shape as
+ * bch2_check_path_accessible(). Returns 0 if accessible, 1 to skip,
+ * negative on error; racing renames and unreachable parents skip.
+ */
+static int readdir_recursive_path_accessible(struct btree_trans *trans,
+					     struct mnt_idmap *idmap,
+					     subvol_inum n, subvol_inum dir)
+{
+	struct bch_inode_info *inode = bch2_vfs_inode_get_trans(trans, n, __func__);
+	if (IS_ERR(inode))
+		return bch2_err_matches(PTR_ERR(inode), ENOENT) ? 1 : PTR_ERR(inode);
+
+	subvol_inum parent = {
+		.subvol	= inode->ei_inode.bi_parent_subvol ?: n.subvol,
+		.inum	= inode->ei_inode.bi_dir,
+	};
+	iput(&inode->v);
+
+	CLASS(darray_inode, check_inodes)();
+	unsigned depth = 0;
+
+	while (parent.subvol != dir.subvol || parent.inum != dir.inum) {
+		/*
+		 * bch2_inum_is_descendant() just vetted this chain cycle-free;
+		 * the depth cap only guards against a rename racing in between:
+		 */
+		if (!parent.inum || ++depth > 4096)
+			return 1;
+
+		inode = bch2_vfs_inode_get_trans(trans, parent, __func__);
+		if (IS_ERR(inode))
+			return bch2_err_matches(PTR_ERR(inode), ENOENT)
+				? 1 : PTR_ERR(inode);
+
+		int ret = darray_push(&check_inodes, inode);
+		if (ret) {
+			iput(&inode->v);
+			return ret;
+		}
+
+		parent = (subvol_inum) {
+			.subvol	= inode->ei_inode.bi_parent_subvol ?: parent.subvol,
+			.inum	= inode->ei_inode.bi_dir,
+		};
+	}
+
+	/*
+	 * Unlock the transaction before calling inode_permission(), which
+	 * may trigger bch2_get_acl() needing its own transaction:
+	 */
+	bch2_trans_unlock(trans);
+
+	darray_for_each(check_inodes, i) {
+		unsigned mask = i == check_inodes.data ? MAY_READ : MAY_EXEC;
+		if (inode_permission(idmap, &(*i)->v, mask))
+			return 1;
+	}
+
+	return bch2_trans_relock(trans);
+}
+
+/*
+ * Qualify @n and emit it: check it's under the directory, build its path,
+ * relativize against the directory's own path, check the caller may see
+ * it, copy out. Disagreement between the descendant walk and path
+ * resolution (racing rename) just skips the entry - as does the
+ * directory itself, whose relative path would be empty.
+ */
+static int readdir_recursive_emit(struct btree_trans *trans,
+				  struct readdir_recursive *r,
+				  subvol_inum n, u8 d_type)
+{
+	int ret = bch2_inum_is_descendant(trans, n, r->dir);
+	if (ret <= 0)
+		return ret ?: READDIR_SKIP;
+
+	printbuf_reset(r->path);
+	try(bch2_inum_to_path(trans, n, r->path));
+
+	u32 plen = r->dir_path->pos;
+	if (!(r->path->pos > plen &&
+	      !memcmp(r->path->buf, r->dir_path->buf, plen) &&
+	      (plen == 1 || r->path->buf[plen] == '/')))
+		return READDIR_SKIP;
+
+	u32 rel = plen == 1 ? 1 : plen + 1;
+	struct qstr name = {
+		.name	= r->path->buf + rel,
+		.len	= r->path->pos - rel,
+	};
+
+	/* name_len is u16 in the entry format; don't truncate, skip: */
+	if (name.len + 1 > U16_MAX)
+		return READDIR_SKIP;
+
+	ret = readdir_recursive_path_accessible(trans, r->idmap, n, r->dir);
+	if (ret)
+		return ret < 0 ? ret : READDIR_SKIP;
+
+	ret = bch2_readdir_flags_emit(&name, n.inum, d_type,
+				      r->buf, r->buf_size, &r->used);
+	return ret < 0 ? ret : ret ? READDIR_BUF_FULL : READDIR_EMITTED;
+}
+
+/*
+ * Recursive subvolumes_only iterates the subvolumes btree - cost
+ * proportional to the number of subvolumes - qualifying each live
+ * subvolume's root by ancestry through the shared machinery. One key
+ * per subvolume, so no dedup, and the cursor is just the next
+ * subvolume id.
+ */
+static long bch2_ioc_readdir_recursive_subvols(struct bch_fs *c,
+			struct file *filp,
+			struct bch_ioctl_readdir_flags *arg,
+			struct bch_ioctl_readdir_flags __user *user_arg)
+{
+	u64 pos = arg->pos[0];
+
+	CLASS(btree_trans, trans)(c);
+	CLASS(printbuf, dir_path)();
+	CLASS(printbuf, path)();
+	struct readdir_recursive r = {
+		.dir		= inode_inum(file_bch_inode(filp)),
+		.idmap		= file_mnt_idmap(filp),
+		.dir_path	= &dir_path,
+		.path		= &path,
+		.buf		= (char __user *)(unsigned long)arg->buf,
+		.buf_size	= arg->buf_size,
+	};
+
+	try(lockrestart_do(trans, ({
+		printbuf_reset(&dir_path);
+		bch2_inum_to_path(trans, r.dir, &dir_path);
+	})));
+
+	int ret = for_each_btree_key(trans, iter, BTREE_ID_subvolumes,
+				     POS(0, pos), BTREE_ITER_prefetch, k, ({
+		int ret2 = 0;
+
+		if (k.k->type == KEY_TYPE_subvolume) {
+			struct bkey_s_c_subvolume s = bkey_s_c_to_subvolume(k);
+
+			/*
+			 * Live subvolumes only: unlinked and deleted ones have
+			 * no dirent - they're in nobody's namespace, and path
+			 * resolution would fail:
+			 */
+			if (bch2_subvolume_state_compat(s.v) == SUBVOLUME_STATE_live) {
+				ret2 = readdir_recursive_emit(trans, &r,
+						(subvol_inum) { k.k->p.offset,
+								le64_to_cpu(s.v->inode) },
+						DT_SUBVOL);
+				if (ret2 == READDIR_BUF_FULL)
+					break;
+				if (ret2 > 0)
+					ret2 = 0;
+			}
+		}
+		if (!ret2)
+			pos = k.k->p.offset + 1;
+		ret2;
+	}));
+
+	if (ret)
+		return ret;
+
+	try(put_user(pos, &user_arg->pos[0]));
+	try(put_user((u64) 0, &user_arg->pos[1]));
+	try(put_user(r.used, &user_arg->used));
+
+	return 0;
+}
+
+static long bch2_ioc_readdir_flags(struct bch_fs *c, struct file *filp,
+				   struct bch_ioctl_readdir_flags __user *user_arg)
+{
+	struct bch_ioctl_readdir_flags arg;
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	if (arg.pad || arg.used ||
+	    (arg.flags & ~BCH_READDIR_FLAGS_ALL))
+		return -EINVAL;
+
+	struct bch_inode_info *dir_inode = file_bch_inode(filp);
+	if (!S_ISDIR(dir_inode->v.i_mode))
+		return -ENOTDIR;
+
+	if (arg.flags & BCH_READDIR_recursive)
+		switch (arg.flags & ~BCH_READDIR_recursive) {
+		case BCH_READDIR_subvolumes_only:
+			return bch2_ioc_readdir_recursive_subvols(c, filp,
+							&arg, user_arg);
+		default:
+			/* plain recursive: an honest tree walk, not yet */
+			return -EOPNOTSUPP;
+		}
+
+	subvol_inum dir = inode_inum(dir_inode);
+	char __user *buf = (char __user *)(unsigned long)arg.buf;
+	u32 used = 0;
+	u64 pos = arg.pos[0];
+
+	CLASS(btree_trans, trans)(c);
+
+	int ret = for_each_btree_key_in_subvolume_max_in_trans(trans, iter,
+			BTREE_ID_dirents,
+			POS(dir.inum, pos), POS(dir.inum, U64_MAX),
+			dir.subvol, 0, k, ({
+		if (k.k->type != KEY_TYPE_dirent)
+			continue;
+
+		struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
+		subvol_inum target;
+
+		int ret2 = bch2_dirent_read_target(trans, dir, d, &target);
+		if (ret2 > 0)
+			continue;
+
+		ret2 = ret2 ?: bch2_readdir_filter(trans, arg.flags, d, target);
+		if (ret2 > 0) {
+			struct qstr name = bch2_dirent_get_name(d);
+			ret2 = bch2_readdir_flags_emit(&name, target.inum,
+						       d.v->d_type,
+						       buf, arg.buf_size, &used);
+			if (ret2 > 0)
+				break;	/* buffer full - resume at pos */
+		}
+		if (!ret2)
+			pos = k.k->p.offset + 1;
+		ret2;
+	}));
+
+	if (ret)
+		return ret;
+
+	try(put_user(pos, &user_arg->pos[0]));
+	try(put_user(used, &user_arg->used));
+
+	return 0;
+}
+
 static int bch2_ioctl_snapshot_tree_resolve(struct btree_trans *trans,
 					    struct file *filp, u32 arg_tree_id,
 					    u32 *tree_id, struct bch_snapshot_tree *st)
@@ -1087,6 +1404,10 @@ long bch2_fs_file_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 	case BCHFS_IOC_REINHERIT_ATTRS:
 		ret = bch2_ioc_reinherit_attrs(c, file, inode,
 					       (void __user *) arg);
+		break;
+
+	case BCHFS_IOC_READDIR_FLAGS:
+		ret = bch2_ioc_readdir_flags(c, file, (void __user *) arg);
 		break;
 
 	case BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS:
