@@ -280,6 +280,7 @@ enum bch_fsck_flags {
 	x(inode_wrong_nlink,					209,	FSCK_AUTOFIX)	\
 	x(inode_has_child_snapshots_wrong,			287,	FSCK_AUTOFIX)	\
 	x(inode_unreachable,					210,	FSCK_AUTOFIX)	\
+	x(inode_unreachable_dirent_in_descendant,		427,	FSCK_AUTOFIX)	\
 	x(inode_journal_seq_in_future,				299,	FSCK_AUTOFIX)	\
 	x(inode_i_sectors_underflow,				312,	FSCK_AUTOFIX)	\
 	x(inode_has_case_insensitive_not_set,			316,	FSCK_AUTOFIX)	\
@@ -438,7 +439,7 @@ enum bch_fsck_flags {
 	x(data_decompress_err_zstd_unknown,			424,	0)		\
 	x(data_decompress_err_unknown,				425,	0)		\
 	x(snapshot_child_missing_but_accounted,			426,	FSCK_AUTOFIX)	\
-	x(MAX,							427,	0)
+	x(MAX,							428,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
