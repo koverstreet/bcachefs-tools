@@ -337,7 +337,53 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 
 	bch_verbose(c, "got lostfound inum %llu", lostfound.bi_inum);
 
-	lostfound.bi_nlink += S_ISDIR(inode->bi_mode);
+	struct qstr name = QSTR(name_buf);
+
+	/*
+	 * Adopt instead of create: the child fixup loop below commits in
+	 * chunks (bch2_trans_commit_lazy_if_full()), so a re-drive can find
+	 * the reattach dirent already committed - at our snapshot or an
+	 * ancestor, when the committed fixups moved the oldest-needing-
+	 * reattach point down. The name is deterministic, so look it up:
+	 * adopting avoids the STR_HASH_must_create collision and re-bumping
+	 * lost+found's nlink.
+	 */
+	struct bch_hash_info lostfound_hash;
+	try(bch2_hash_info_init(c, &lostfound, &lostfound_hash));
+
+	bool adopted = false;
+	{
+		CLASS(btree_iter_uninit, d_iter)(trans);
+		struct bkey_s_c k = bch2_hash_lookup_in_snapshot(trans, &d_iter,
+				bch2_dirent_hash_desc, &lostfound_hash,
+				(subvol_inum) { inode->bi_parent_subvol, lostfound.bi_inum },
+				&name, 0, dirent_snapshot);
+		ret = bkey_err(k);
+		if (ret && !bch2_err_matches(ret, ENOENT))
+			return ret;
+
+		if (!ret) {
+			struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
+			u64 target = d.v->d_type == DT_SUBVOL
+				? le32_to_cpu(d.v->d_child_subvol)
+				: le64_to_cpu(d.v->d_inum);
+
+			if (target != (inode->bi_subvol ?: inode->bi_inum)) {
+				CLASS(printbuf, buf)();
+				bch2_bkey_val_to_text(&buf, c, k);
+				bch_err(c, "reattaching inode %llu:%u: lost+found entry %s exists but points elsewhere:\n%s",
+					inode->bi_inum, inode->bi_snapshot, name_buf, buf.buf);
+				return bch_err_throw(c, fsck_repair_unimplemented);
+			}
+
+			inode->bi_dir		= lostfound.bi_inum;
+			inode->bi_dir_offset	= d.k->p.offset;
+			adopted = true;
+		}
+	}
+
+	if (!adopted)
+		lostfound.bi_nlink += S_ISDIR(inode->bi_mode);
 
 	/* ensure lost+found inode is also present in inode snapshot */
 	if (!inode->bi_subvol) {
@@ -347,23 +393,23 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 
 	try(__bch2_fsck_write_inode(trans, &lostfound));
 
-	struct qstr name = QSTR(name_buf);
+	if (!adopted) {
+		inode->bi_dir = lostfound.bi_inum;
 
-	inode->bi_dir = lostfound.bi_inum;
-
-	ret = bch2_dirent_create_snapshot(trans,
-				inode->bi_parent_subvol,
-				dirent_snapshot,
-				&lostfound,
-				inode_d_type(inode),
-				&name,
-				inode->bi_subvol ?: inode->bi_inum,
-				&inode->bi_dir_offset,
-				BTREE_UPDATE_internal_snapshot_node|
-				STR_HASH_must_create);
-	if (ret) {
-		bch_err_msg(c, ret, "error creating dirent");
-		return ret;
+		ret = bch2_dirent_create_snapshot(trans,
+					inode->bi_parent_subvol,
+					dirent_snapshot,
+					&lostfound,
+					inode_d_type(inode),
+					&name,
+					inode->bi_subvol ?: inode->bi_inum,
+					&inode->bi_dir_offset,
+					BTREE_UPDATE_internal_snapshot_node|
+					STR_HASH_must_create);
+		if (ret) {
+			bch_err_msg(c, ret, "error creating dirent");
+			return ret;
+		}
 	}
 
 	try(__bch2_fsck_write_inode(trans, inode));
@@ -373,7 +419,10 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 		try(bch2_inum_snapshot_to_path(trans, inode->bi_inum,
 					       inode->bi_snapshot, NULL, &buf));
 
-		bch_info(c, "reattached at %s", buf.buf);
+		if (adopted)
+			bch_verbose(c, "resuming reattach at %s", buf.buf);
+		else
+			bch_info(c, "reattached at %s", buf.buf);
 	}
 
 	/*
@@ -393,6 +442,18 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 			if (k.k->p.offset != inode->bi_inum)
 				break;
 
+			/*
+			 * This loop batches an update per descendant snapshot
+			 * version into one transaction; a fat chain overflows
+			 * the bump allocator. Commit once substantial work has
+			 * accumulated - the restart re-drives us, the adopt
+			 * path above resumes without duplicating the reattach
+			 * dirent, and already-fixed children are skipped
+			 * below:
+			 */
+			try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,
+					BCH_TRANS_COMMIT_no_enospc));
+
 			if (!bkey_is_inode(k.k) ||
 			    !bch2_snapshot_is_ancestor(trans, k.k->p.snapshot, inode->bi_snapshot) ||
 			    snapshot_list_has_ancestor(trans, &whiteouts_done, k.k->p.snapshot))
@@ -400,6 +461,18 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 
 			struct bch_inode_unpacked child_inode;
 			bch2_inode_unpack(c, k, &child_inode);
+
+			/*
+			 * Fixed by a previous partial commit: its backpointer
+			 * already names our reattach dirent. Must be checked
+			 * before inode_should_reattach() - having a
+			 * backpointer, it would fall into the whiteout arm
+			 * and turn the committed fixup into a dangling
+			 * backpointer:
+			 */
+			if (child_inode.bi_dir == inode->bi_dir &&
+			    child_inode.bi_dir_offset == inode->bi_dir_offset)
+				continue;
 
 			if (!inode_should_reattach(&child_inode)) {
 				try(maybe_delete_dirent(trans,
