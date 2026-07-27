@@ -447,7 +447,15 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 		*s = u->v;
 	}
 
-	if (BCH_SNAPSHOT_SUBVOL_OBSOLETE(s) != (s->subvol != 0)) {
+	/*
+	 * Live nodes only: the _OBSOLETE flags are old-format compat bits,
+	 * and bch2_snapshot_state_set() clears SUBVOL_OBSOLETE for every
+	 * non-live state even when the subvol backref is retained
+	 * (will_delete keeps it as tombstone testimony) - old kernels must
+	 * not read a dying snapshot as a live subvolume leaf:
+	 */
+	if (bch2_snapshot_state(s) == SNAPSHOT_STATE_live &&
+	    BCH_SNAPSHOT_SUBVOL_OBSOLETE(s) != (s->subvol != 0)) {
 		printbuf_reset(&buf);
 		prt_printf(&buf, "snapshot node %llu has wrong subvol flag:\n",
 			   k.k->p.offset);
