@@ -82,16 +82,42 @@
 #define BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	_IO(0xbc, 66)
 #define BCHFS_IOC_PREAD_RAW		_IOWR(0xbc, 67, struct bch_ioctl_pread_raw)
 #define BCHFS_IOC_UNPOISON		_IOW(0xbc, 68, struct bch_ioctl_unpoison)
+#define BCHFS_IOC_GET_DAMAGE		_IOWR(0xbc, 70, struct bch_ioctl_get_damage)
 #define BCHFS_IOC_READDIR_FLAGS		_IOWR(0xbc, 69, struct bch_ioctl_readdir_flags)
+
+/*
+ * BCHFS_IOC_GET_DAMAGE: the accumulated damage record for this file - the
+ * union of damage recorded against its inode in the file's snapshot and
+ * all ancestor snapshot versions, since damage done to an ancestor version
+ * is damage to the file seen here.
+ *
+ * @nr_entries	- in: capacity of @entries; out: number present. A result
+ *		  exceeding the capacity reports the true count - retry
+ *		  with more room.
+ * @entries	- sorted by error id; the same records the errors
+ *		  superblock section keeps (bch_sb_field_error_entry_v2):
+ *		  the id, a saturating occurrence count and the times of
+ *		  first and last occurrence, unpacked with
+ *		  BCH_SB_ERROR_ENTRY_V2_ID/NR/FIRST/LAST
+ */
+struct bch_ioctl_get_damage {
+	__u32			nr_entries;
+	__u32			pad;
+	bch_sb_field_error_entry_v2 entries[];
+};
 
 /*
  * BCHFS_IOC_READDIR_FLAGS: readdir with filters, on the directory the
  * ioctl is called on.
  *
  * recursive: entries from the whole subtree, names become paths relative
- * to the fd's directory. The filters pick the iteration: subvolumes_only
- * walks the subvolume tree, an unfiltered recursive listing is an honest
- * tree walk.
+ * to the fd's directory. The filters pick the iteration: damaged
+ * walks the damage btree (cost proportional to recorded damage, not tree
+ * size), subvolumes_only walks the subvolume tree, an unfiltered
+ * recursive listing is an honest tree walk.
+ *
+ * damaged: only entries whose inode has recorded damage, in its
+ * snapshot version or an ancestor.
  *
  * Permissions are those of readdir: the caller learns nothing beyond the
  * directory they opened.
@@ -105,6 +131,7 @@
  * @used	- out: bytes of @buf filled
  */
 #define BCH_READDIR_recursive		(1U << 0)
+#define BCH_READDIR_damaged	(1U << 2)
 #define BCH_READDIR_subvolumes_only	(1U << 1)
 
 struct bch_ioctl_readdir_flags {
@@ -119,7 +146,8 @@ struct bch_ioctl_readdir_flags {
 /*
  * One entry: the NUL-terminated name - a relative path, under recursive -
  * follows the fixed header; entries are padded to 8-byte alignment.
- * Deliberately knows nothing about the filters that selected it.
+ * Deliberately knows nothing about the filters that selected it: damage
+ * details come from BCHFS_IOC_GET_DAMAGE on the file itself.
  */
 struct bch_ioctl_readdir_entry {
 	__u64			inum;

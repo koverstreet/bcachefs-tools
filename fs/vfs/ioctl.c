@@ -6,6 +6,7 @@
 #include "fs/dirent.h"
 #include "fs/inode.h"
 #include "fs/namei.h"
+#include "init/damage.h"
 #include "fs/quota.h"
 
 #include "snapshots/snapshot.h"
@@ -732,6 +733,43 @@ static long bch2_ioctl_subvolume_to_path(struct bch_fs *c, struct file *filp,
 	return 0;
 }
 
+static long bch2_ioc_get_damage(struct bch_fs *c, struct file *filp,
+				struct bch_ioctl_get_damage __user *user_arg)
+{
+	struct bch_ioctl_get_damage arg;
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	if (arg.pad)
+		return -EINVAL;
+
+	subvol_inum inum = inode_inum(file_bch_inode(filp));
+
+	CLASS(btree_trans, trans)(c);
+	bch_sb_errors_cpu errors = {};
+
+	int ret = lockrestart_do(trans, ({
+		errors.nr = 0;
+		u32 snapshot;
+		bch2_subvolume_get_snapshot(trans, inum.subvol, &snapshot) ?:
+		bch2_damage_accumulate(trans, inum.inum, snapshot, &errors);
+	}));
+
+	for (u32 i = 0; !ret && i < min_t(u32, errors.nr, arg.nr_entries); i++) {
+		bch_sb_field_error_entry_v2 e = {};
+		SET_BCH_SB_ERROR_ENTRY_V2_ID(&e,	errors.data[i].id);
+		SET_BCH_SB_ERROR_ENTRY_V2_NR(&e,	errors.data[i].nr);
+		SET_BCH_SB_ERROR_ENTRY_V2_FIRST(&e,	errors.data[i].first_error_time);
+		SET_BCH_SB_ERROR_ENTRY_V2_LAST(&e,	errors.data[i].last_error_time);
+
+		ret = copy_to_user_errcode(&user_arg->entries[i], &e, sizeof(e));
+	}
+	if (!ret)
+		ret = put_user((u32) errors.nr, &user_arg->nr_entries);
+
+	darray_exit(&errors);
+	return ret;
+}
+
 static int bch2_readdir_flags_emit(const struct qstr *name, u64 inum,
 				   u8 d_type,
 				   char __user *buf, u32 buf_size, u32 *used)
@@ -761,6 +799,7 @@ static int bch2_readdir_flags_emit(const struct qstr *name, u64 inum,
 }
 
 #define BCH_READDIR_FLAGS_ALL		(BCH_READDIR_recursive|	\
+					 BCH_READDIR_damaged|\
 					 BCH_READDIR_subvolumes_only)
 
 /*
@@ -768,11 +807,21 @@ static int bch2_readdir_flags_emit(const struct qstr *name, u64 inum,
  * error. New filters are new cases; the iteration doesn't change.
  */
 static int bch2_readdir_filter(struct btree_trans *trans, u32 flags,
+			       subvol_inum dir, u32 view,
 			       struct bkey_s_c_dirent d, subvol_inum target)
 {
 	switch (flags & ~BCH_READDIR_recursive) {
 	case 0:
 		return 1;
+	case BCH_READDIR_damaged: {
+		/* A subvolume dirent's target has its own lineage: */
+		u32 snap = view;
+		if (target.subvol != dir.subvol)
+			try(bch2_subvolume_get_snapshot(trans, target.subvol,
+							&snap));
+
+		return bch2_inode_has_damage(trans, target.inum, snap);
+	}
 	case BCH_READDIR_subvolumes_only:
 		return d.v->d_type == DT_SUBVOL;
 	default:
@@ -1012,7 +1061,11 @@ static long bch2_ioc_readdir_flags(struct bch_fs *c, struct file *filp,
 
 	CLASS(btree_trans, trans)(c);
 
-	int ret = for_each_btree_key_in_subvolume_max_in_trans(trans, iter,
+	u32 view;
+	int ret = lockrestart_do(trans,
+		bch2_subvolume_get_snapshot(trans, dir.subvol, &view));
+
+	ret = ret ?: for_each_btree_key_in_subvolume_max_in_trans(trans, iter,
 			BTREE_ID_dirents,
 			POS(dir.inum, pos), POS(dir.inum, U64_MAX),
 			dir.subvol, 0, k, ({
@@ -1026,7 +1079,8 @@ static long bch2_ioc_readdir_flags(struct bch_fs *c, struct file *filp,
 		if (ret2 > 0)
 			continue;
 
-		ret2 = ret2 ?: bch2_readdir_filter(trans, arg.flags, d, target);
+		ret2 = ret2 ?: bch2_readdir_filter(trans, arg.flags, dir,
+						   view, d, target);
 		if (ret2 > 0) {
 			struct qstr name = bch2_dirent_get_name(d);
 			ret2 = bch2_readdir_flags_emit(&name, target.inum,
@@ -1404,6 +1458,10 @@ long bch2_fs_file_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 	case BCHFS_IOC_REINHERIT_ATTRS:
 		ret = bch2_ioc_reinherit_attrs(c, file, inode,
 					       (void __user *) arg);
+		break;
+
+	case BCHFS_IOC_GET_DAMAGE:
+		ret = bch2_ioc_get_damage(c, file, (void __user *) arg);
 		break;
 
 	case BCHFS_IOC_READDIR_FLAGS:
