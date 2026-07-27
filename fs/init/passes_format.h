@@ -201,7 +201,11 @@
 	  "btrees against actual extent data; remove "						\
 	  "stale entries")									\
 	x(delete_dead_snapshots,		21, PASS_ONLINE|PASS_FSCK,			\
-	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots),						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_extents)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_dirents)|						\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_xattrs),						\
 	  "Delete snapshot data keys across all "						\
 	  "snapshot-bearing btrees, then remove snapshot "					\
 	  "nodes and mark empty interior nodes")						\
