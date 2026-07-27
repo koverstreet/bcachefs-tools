@@ -302,3 +302,61 @@ impl From<c::bch_reconcile_accounting_type> for u32 {
         t.0
     }
 }
+
+// ── ARM32 Kernel EABI Division Helpers ──────────────────────────
+//
+// On 32-bit ARM, raw 64-bit integer division lowers to compiler-rt calls.
+// Since the Linux kernel does not export these symbols to out-of-tree modules,
+// we declare them globally using assembly stubs that call the kernel's real
+// exported math functions. We restrict this to non-std (kernel) ARM32 builds.
+
+#[cfg(all(target_arch = "arm", not(feature = "std")))]
+core::arch::global_asm!(
+    ".global __aeabi_uldivmod",
+    ".type __aeabi_uldivmod, %function",
+    "__aeabi_uldivmod:",
+    "    .fnstart",
+    // Push r8 specifically to push exactly 6 registers (24 bytes) total,
+    // maintaining the AAPCS required 8-byte stack alignment for the C call.
+    "    push {{r4, r5, r6, r7, r8, lr}}",
+    "    .save {{r4, r5, r6, r7, r8, lr}}",
+    "    mov r4, r0",
+    "    mov r5, r1",
+    "    mov r6, r2",
+    "    mov r7, r3",
+    "    bl div64_u64",
+    "    umull r2, r3, r0, r6",
+    "    mla r3, r0, r7, r3",
+    "    mla r3, r1, r6, r3",
+    "    subs r2, r4, r2",
+    "    sbc r3, r5, r3",
+    "    pop {{r4, r5, r6, r7, r8, pc}}",
+    "    .fnend",
+    ".size __aeabi_uldivmod, . - __aeabi_uldivmod"
+);
+
+
+#[cfg(all(target_arch = "arm", not(feature = "std")))]
+core::arch::global_asm!(
+    ".global __aeabi_ldivmod",
+    ".type __aeabi_ldivmod, %function",
+    "__aeabi_ldivmod:",
+    "    .fnstart",
+    // Push r8 specifically to push exactly 6 registers (24 bytes) total,
+    // maintaining the AAPCS required 8-byte stack alignment for the C call.
+    "    push {{r4, r5, r6, r7, r8, lr}}",
+    "    .save {{r4, r5, r6, r7, r8, lr}}",
+    "    mov r4, r0",
+    "    mov r5, r1",
+    "    mov r6, r2",
+    "    mov r7, r3",
+    "    bl div64_s64",
+    "    umull r2, r3, r0, r6",
+    "    mla r3, r0, r7, r3",
+    "    mla r3, r1, r6, r3",
+    "    subs r2, r4, r2",
+    "    sbc r3, r5, r3",
+    "    pop {{r4, r5, r6, r7, r8, pc}}",
+    "    .fnend",
+    ".size __aeabi_ldivmod, . - __aeabi_ldivmod"
+);
