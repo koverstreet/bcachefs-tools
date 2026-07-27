@@ -1428,6 +1428,184 @@ static int find_oldest_inode_needs_reattach(struct btree_trans *trans,
 	return ret;
 }
 
+/*
+ * An unreachable inode version may still be attached in a descendant
+ * snapshot: incomplete snapshot deletion can move a dirent further down the
+ * snapshot tree than the inode that points to it (an interrupted pass
+ * resumes against new topology, so the two stop at different termini),
+ * leaving ancestor views orphaned while the descendant view is intact.
+ *
+ * check_inodes zeroed this version's backpointer, but the attached
+ * descendant version still carries its verified one - find that dirent, so
+ * we can propagate a copy up to this version's snapshot instead of
+ * reattaching in lost+found.
+ *
+ * Requirements checked here: the dirent names this inode from a strict
+ * descendant, the parent directory is visible (and not unlinked) in this
+ * version's view, the dirent's name hashes to its offset under that
+ * directory's hash info (a mismatched seed - e.g. a reconstructed directory
+ * inode - would get the propagated dirent rehashed by the next
+ * check_dirents, dangling every backpointer to it), and the destination
+ * slot is empty - a whiteout there means the entry was deliberately deleted
+ * in this view, and must not be resurrected.
+ *
+ * Returns a copy in transaction memory: the caller uses it across
+ * fsck_err(), which can cycle transaction locks, so a reference into a
+ * btree node buffer would be a use after unlock.
+ */
+static struct bkey_i *find_attached_dirent_in_descendant(struct btree_trans *trans,
+					struct bch_inode_unpacked *inode)
+{
+	struct bch_fs *c = trans->c;
+	struct bch_inode_unpacked child;
+	bool found = false;
+	struct bkey_s_c k;
+	int ret = 0;
+
+	/*
+	 * Dirents pointing to subvolume roots live in the parent subvolume -
+	 * a different snapshot space; those take the reattach path:
+	 */
+	if (inode->bi_subvol)
+		return NULL;
+
+	for_each_btree_key_norestart(trans, iter, BTREE_ID_inodes,
+				     SPOS(0, inode->bi_inum, 0),
+				     BTREE_ITER_all_snapshots, k, ret) {
+		if (k.k->p.offset != inode->bi_inum ||
+		    k.k->p.snapshot >= inode->bi_snapshot)
+			break;
+
+		if (!bkey_is_inode(k.k) ||
+		    !bch2_snapshot_is_ancestor(trans, k.k->p.snapshot, inode->bi_snapshot))
+			continue;
+
+		bch2_inode_unpack(c, k, &child);
+		if (bch2_inode_has_backpointer(&child) && !child.bi_parent_subvol) {
+			found = true;
+			break;
+		}
+	}
+	if (ret)
+		return ERR_PTR(ret);
+	if (!found)
+		return NULL;
+
+	u32 snapshot = child.bi_snapshot;
+	CLASS(btree_iter_uninit, dirent_iter)(trans);
+	struct bkey_s_c_dirent d = bch2_inode_get_dirent(trans, &dirent_iter, &child, &snapshot);
+	ret = bkey_err(d);
+	if (bch2_err_matches(ret, ENOENT))
+		return NULL;
+	if (ret)
+		return ERR_PTR(ret);
+
+	if (dirent_points_to_inode_nowarn(c, d, inode))
+		return NULL;
+
+	/*
+	 * Classify our snapshot's view of that position. (d is visible at
+	 * the descendant, so it lies on the descendant's rootward path and
+	 * is always comparable with our snapshot - no separate ancestry
+	 * check is needed.)
+	 *
+	 * - matching dirent already visible (a propagation done at an older
+	 *   version of this inode earlier in the pass): only the
+	 *   backpointer needs fixing. No further requirements - there's no
+	 *   insert, and falling back to lost+found would create a duplicate
+	 *   link to a reachable file
+	 * - nothing visible and the slot is empty: propagate a copy, which
+	 *   also requires the parent directory to be visible and not
+	 *   unlinked. (No hash check needed: check_dirents verified the
+	 *   dirent at the descendant's view, and hash info is invariant
+	 *   across an inode's snapshot versions - enforced by check_inodes -
+	 *   so it hashes identically under the directory here.)
+	 * - a different inode's dirent visible: the name belongs to someone
+	 *   else in this view, and inserting over it would hide that file
+	 *   from every view below; a whiteout in the slot: the entry was
+	 *   deliberately deleted here. Both fall back to lost+found.
+	 */
+	CLASS(btree_iter, vis_iter)(trans, BTREE_ID_dirents,
+				    SPOS(d.k->p.inode, d.k->p.offset, inode->bi_snapshot), 0);
+	struct bkey_s_c vis = bch2_btree_iter_peek_slot(&vis_iter);
+	ret = bkey_err(vis);
+	if (ret)
+		return ERR_PTR(ret);
+
+	if (vis.k->type == KEY_TYPE_dirent) {
+		if (dirent_points_to_inode_nowarn(c, bkey_s_c_to_dirent(vis), inode))
+			return NULL;
+	} else {
+		struct bch_inode_unpacked dir;
+		ret = bch2_inode_find_by_inum_snapshot(trans, d.k->p.inode,
+						       inode->bi_snapshot, &dir, 0);
+		if (bch2_err_matches(ret, ENOENT))
+			return NULL;
+		if (ret)
+			return ERR_PTR(ret);
+
+		if (dir.bi_flags & BCH_INODE_unlinked)
+			return NULL;
+
+		CLASS(btree_iter, dst_iter)(trans, BTREE_ID_dirents,
+					    SPOS(d.k->p.inode, d.k->p.offset, inode->bi_snapshot),
+					    BTREE_ITER_all_snapshots);
+		struct bkey_s_c dst = bch2_btree_iter_peek_slot(&dst_iter);
+		ret = bkey_err(dst);
+		if (ret)
+			return ERR_PTR(ret);
+		if (!bkey_deleted(dst.k))
+			return NULL;
+	}
+
+	return bch2_bkey_make_mut_noupdate(trans, d.s_c);
+}
+
+static int reattach_via_descendant_dirent(struct btree_trans *trans,
+					  struct bch_inode_unpacked *inode,
+					  struct bkey_i *new)
+{
+	struct bch_fs *c = trans->c;
+
+	new->k.p.snapshot = inode->bi_snapshot;
+
+	/*
+	 * Re-classify under the intent lock: the probe ran before fsck_err(),
+	 * which can cycle transaction locks, and this pass can run online. A
+	 * matching dirent that's become visible only needs the backpointer
+	 * set; anything else now occupying the position must not be
+	 * clobbered.
+	 */
+	CLASS(btree_iter, vis_iter)(trans, BTREE_ID_dirents, new->k.p,
+				    BTREE_ITER_intent);
+	struct bkey_s_c vis = bkey_try(bch2_btree_iter_peek_slot(&vis_iter));
+
+	bool have_dirent = vis.k->type == KEY_TYPE_dirent &&
+		!dirent_points_to_inode_nowarn(c, bkey_s_c_to_dirent(vis), inode);
+
+	if (!have_dirent) {
+		if (vis.k->type == KEY_TYPE_dirent)
+			goto bail;
+
+		CLASS(btree_iter, dst_iter)(trans, BTREE_ID_dirents, new->k.p,
+					    BTREE_ITER_all_snapshots|BTREE_ITER_intent);
+		struct bkey_s_c dst = bkey_try(bch2_btree_iter_peek_slot(&dst_iter));
+		if (!bkey_deleted(dst.k))
+			goto bail;
+
+		try(bch2_trans_update(trans, &dst_iter, new, BTREE_UPDATE_internal_snapshot_node));
+	}
+
+	inode->bi_dir		= new->k.p.inode;
+	inode->bi_dir_offset	= new->k.p.offset;
+	return __bch2_fsck_write_inode(trans, inode);
+bail:
+	bch_err(c, "not propagating dirent for inode %llu:%u: destination %llu:%llu:%u now occupied",
+		inode->bi_inum, inode->bi_snapshot,
+		new->k.p.inode, new->k.p.offset, new->k.p.snapshot);
+	return 0;
+}
+
 static int check_unreachable_inode(struct btree_trans *trans,
 				   struct btree_iter *iter,
 				   struct bkey_s_c k,
@@ -1460,6 +1638,24 @@ static int check_unreachable_inode(struct btree_trans *trans,
 		return 0;
 
 	try(find_oldest_inode_needs_reattach(trans, &inode));
+
+	/*
+	 * Attached in a descendant snapshot? Then this version has a proper
+	 * home; propagate the dirent up to our snapshot rather than
+	 * manufacturing a lost+found entry visible in every view below:
+	 */
+	struct bkey_i *d = errptr_try(find_attached_dirent_in_descendant(trans, &inode));
+
+	if (d) {
+		if (inode_fsck_err(trans, SPOS(0, inode.bi_inum, inode.bi_snapshot),
+				   inode_unreachable_dirent_in_descendant,
+			     "unreachable inode with dirent in descendant snapshot %u, propagating:\n%s",
+			     d->k.p.snapshot,
+			     (bch2_inode_unpacked_to_text(&buf, &inode),
+			      buf.buf)))
+			try(reattach_via_descendant_dirent(trans, &inode, d));
+		return ret;
+	}
 
 	if (inode_fsck_err(trans, SPOS(0, inode.bi_inum, inode.bi_snapshot),
 			   inode_unreachable,
