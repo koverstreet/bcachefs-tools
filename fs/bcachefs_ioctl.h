@@ -82,6 +82,52 @@
 #define BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	_IO(0xbc, 66)
 #define BCHFS_IOC_PREAD_RAW		_IOWR(0xbc, 67, struct bch_ioctl_pread_raw)
 #define BCHFS_IOC_UNPOISON		_IOW(0xbc, 68, struct bch_ioctl_unpoison)
+#define BCHFS_IOC_READDIR_FLAGS		_IOWR(0xbc, 69, struct bch_ioctl_readdir_flags)
+
+/*
+ * BCHFS_IOC_READDIR_FLAGS: readdir with filters, on the directory the
+ * ioctl is called on.
+ *
+ * recursive: entries from the whole subtree, names become paths relative
+ * to the fd's directory. The filters pick the iteration: subvolumes_only
+ * walks the subvolume tree, an unfiltered recursive listing is an honest
+ * tree walk.
+ *
+ * Permissions are those of readdir: the caller learns nothing beyond the
+ * directory they opened.
+ *
+ * @flags	- BCH_READDIR_*
+ * @pos		- opaque resume cursor: zero to start; copied back out
+ *		  past the last entry returned. Iterate until @used == 0.
+ * @buf_size,
+ * @buf		- userspace buffer, filled with struct
+ *		  bch_ioctl_readdir_entry records
+ * @used	- out: bytes of @buf filled
+ */
+#define BCH_READDIR_recursive		(1U << 0)
+#define BCH_READDIR_subvolumes_only	(1U << 1)
+
+struct bch_ioctl_readdir_flags {
+	__u64			pos[2];
+	__u64			buf;
+	__u32			buf_size;
+	__u32			flags;
+	__u32			used;
+	__u32			pad;
+};
+
+/*
+ * One entry: the NUL-terminated name - a relative path, under recursive -
+ * follows the fixed header; entries are padded to 8-byte alignment.
+ * Deliberately knows nothing about the filters that selected it.
+ */
+struct bch_ioctl_readdir_entry {
+	__u64			inum;
+	__u8			d_type;
+	__u8			pad;
+	__u16			name_len;	/* including the NUL */
+	__u8			name[];
+};
 
 struct bch_ioctl_err_msg {
 	__u64			msg_ptr;
