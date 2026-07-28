@@ -389,8 +389,16 @@ static int bch2_no_valid_pointers_repair(struct btree_trans *trans,
 	CLASS(printbuf, buf)();
 	bch2_bkey_val_to_text(&buf, c, *k);
 
+	/*
+	 * Inode-scoped when we can attribute it: an extents btree position
+	 * names an inum, so the error records damage against the file. An
+	 * indirect extent's doesn't - POS_MIN reports without recording:
+	 */
+	struct bpos damage_pos = btree == BTREE_ID_extents ? new->k.p : POS_MIN;
+
 	if (found_good_cached_pointer) {
-		ret_fsck_err(trans, extent_ptrs_all_invalid_but_cached,
+		ret_inode_fsck_err(trans, damage_pos,
+			     extent_ptrs_all_invalid_but_cached,
 			     "extent without valid dirty pointers\n%s", buf.buf);
 
 		struct bch_inode_opts opts;
@@ -399,7 +407,8 @@ static int bch2_no_valid_pointers_repair(struct btree_trans *trans,
 						  BKEY_EXTENT_U64s_MAX,
 						  SET_NEEDS_RECONCILE_opt_change, 0));
 	} else {
-		ret_fsck_err(trans, extent_ptrs_all_invalid,
+		ret_inode_fsck_err(trans, damage_pos,
+			     extent_ptrs_all_invalid,
 			     "extent without valid pointers\n%s", buf.buf);
 		bch2_set_bkey_error(c, new, KEY_TYPE_ERROR_no_valid_pointers_repair);
 	}
