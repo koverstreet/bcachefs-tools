@@ -45,7 +45,7 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
     Ok((event_type, event_ret, p))
 }
 
-fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
+fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
     let mut cmd = bch_ioctl_data {
         op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub as u16,
         ..Default::default()
@@ -63,8 +63,7 @@ fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32) -> Result<std::fs::
         p.add(1).write(data_types);
     }
 
-    let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(ioctl_fd) };
-    let ret = ioctl_w::<BCH_IOCTL_DATA>(fd, &cmd)?;
+    let ret = ioctl_w::<BCH_IOCTL_DATA>(ioctl_fd, &cmd)?;
     Ok(unsafe { std::fs::File::from_raw_fd(ret) })
 }
 
@@ -139,7 +138,7 @@ fn scrub(cli: Cli) -> Result<()> {
     let name_mode = cli.device_names.name_mode();
     let devices = fs_get_devices(&sysfs_path, name_mode)?;
 
-    let ioctl_fd = handle.ioctl_fd_raw();
+    let ioctl_fd = handle.ioctl_fd();
     let dev_idx = handle.dev_idx();
 
     let mut scrub_devs: Vec<ScrubDev> = Vec::new();
