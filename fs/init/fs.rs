@@ -279,6 +279,21 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_write_super(self.raw) })
     }
 
+    /// bch2_write_super(), lifting nochanges around the write: inspection
+    /// opens (norecovery/nostart) imply nochanges, which makes write_super
+    /// a silent no-op - the right default, except when an offline admin
+    /// command is performing the user's explicitly requested write.
+    /// Caller must hold sb_lock.
+    pub fn write_super_force(&self) -> Result<(), BchError> {
+        unsafe {
+            let saved = (*self.raw).opts.nochanges;
+            (*self.raw).opts.nochanges = 0;
+            let ret = c::bch2_write_super(self.raw);
+            (*self.raw).opts.nochanges = saved;
+            ret_to_result(ret)
+        }
+    }
+
     /// Check if a device index exists and has a device pointer.
     pub fn dev_exists(&self, dev: u32) -> bool {
         unsafe {
