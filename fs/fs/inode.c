@@ -1050,9 +1050,10 @@ unsigned bch2_shard_inode_numbers_bits_default(unsigned nr_cpus,
 	 *   =>  2^bits <= fs_size / (400 * btree_node_bytes)
 	 */
 	u64 denom = 400ULL * btree_node_bytes;
-	unsigned size_bits = btree_node_bytes && fs_size >= denom
-		? ilog2(fs_size / denom)
-		: 0;
+	unsigned size_bits = 0;
+
+	if (denom && fs_size >= denom)
+		size_bits = ilog2(div64_u64(fs_size, denom));
 
 	return min(min(cpu_bits, size_bits), 8U);
 }
