@@ -169,6 +169,24 @@ int bch2_damage_delete(struct btree_trans *trans, u64 inum, u32 snapshot)
 }
 
 /*
+ * Runtime data damage - loss or corruption found outside fsck_err()
+ * reporting (device removal dropping the last replica, read errors):
+ * count the sb error and record against the inode. Only extents btree
+ * positions name an inum; an indirect extent's damage is counted but
+ * unattributed - finding its inodes would mean walking reflink
+ * pointers backwards.
+ */
+int bch2_damage_record_data_loss(struct btree_trans *trans, enum btree_id btree,
+				 struct bpos pos, enum bch_sb_error_id err)
+{
+	bch2_sb_error_count(trans->c, err);
+
+	return btree == BTREE_ID_extents
+		? bch2_damage_record(trans, pos, err)
+		: 0;
+}
+
+/*
  * A damage key has an inode at its exact position: records are written at
  * repaired keys' positions, which are inode keys themselves or content
  * keys - and a content key at snapshot X implies an inode at snapshot X.
