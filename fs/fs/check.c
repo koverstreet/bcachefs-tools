@@ -1351,9 +1351,9 @@ static int check_inode(struct btree_trans *trans,
 	}
 
 	if (u.bi_subvol && bch2_snapshot_is_leaf(c, u.bi_snapshot)) {
-		struct bch_subvolume s;
+		struct bch_subvolume subvol;
 
-		ret = bch2_subvolume_get(trans, u.bi_subvol, false, &s);
+		ret = bch2_subvolume_get(trans, u.bi_subvol, false, &subvol);
 		if (ret && !bch2_err_matches(ret, ENOENT))
 			return ret;
 
@@ -1419,14 +1419,14 @@ static int check_inode(struct btree_trans *trans,
 				trans, inode_bi_subvol_missing,
 				"inode bi_subvol points to missing subvolume %u\n%s",
 				u.bi_subvol, buf.buf) ||
-		     fsck_err_on(le64_to_cpu(s.inode) != u.bi_inum ||
-				!bch2_snapshot_is_ancestor(trans, le32_to_cpu(s.snapshot),
+		     fsck_err_on(le64_to_cpu(subvol.inode) != u.bi_inum ||
+				!bch2_snapshot_is_ancestor(trans, le32_to_cpu(subvol.snapshot),
 							   k.k->p.snapshot),
 				trans, inode_bi_subvol_wrong,
 				"inode points to subvol %u, but subvol points to %llu:%u\n%s",
 				u.bi_subvol,
-				le64_to_cpu(s.inode),
-				le32_to_cpu(s.snapshot),
+				le64_to_cpu(subvol.inode),
+				le32_to_cpu(subvol.snapshot),
 				buf.buf))) {
 			u.bi_subvol = 0;
 			u.bi_parent_subvol = 0;
