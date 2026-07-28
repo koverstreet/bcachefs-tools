@@ -499,40 +499,28 @@ impl BcachefsHandle {
     /// Query device usage (v2 with flex array, v1 fallback).
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
         let nr_data_types = data_type::nr.0 as usize;
-        let entry_size = mem::size_of::<bch_ioctl_dev_usage_bch_ioctl_dev_usage_type>();
-        let hdr_size = mem::size_of::<bch_ioctl_dev_usage_v2>();
-        let buf_size = hdr_size + nr_data_types * entry_size;
-        let mut buf = vec![0u8; buf_size];
 
-        // Fill header
-        let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut bch_ioctl_dev_usage_v2) };
+        let mut buf = IoctlBuf::<bch_ioctl_dev_usage_v2>::new::<bch_ioctl_dev_usage_bch_ioctl_dev_usage_type>(nr_data_types);
+        let hdr = buf.hdr_mut();
         hdr.dev = dev_idx as u64;
         hdr.flags = BCH_BY_INDEX;
         hdr.nr_data_types = nr_data_types as u8;
 
         let ret = unsafe {
-            ioctl_ptr::<BCH_IOCTL_DEV_USAGE_V2>(self.ioctl_fd(),
-                                                buf.as_mut_ptr() as *mut bch_ioctl_dev_usage_v2)
+            ioctl_ptr::<BCH_IOCTL_DEV_USAGE_V2>(self.ioctl_fd(), buf.as_mut_ptr())
         };
 
         if ret.is_ok() {
-            // v2 succeeded — parse result
-            let hdr = unsafe { &*(buf.as_ptr() as *const bch_ioctl_dev_usage_v2) };
-            let actual_nr = hdr.nr_data_types as usize;
-            let data_ptr = unsafe { buf.as_ptr().add(hdr_size) }
-                as *const bch_ioctl_dev_usage_bch_ioctl_dev_usage_type;
-
-            let mut data_types = Vec::with_capacity(actual_nr);
-            for i in 0..actual_nr {
-                let d = unsafe { std::ptr::read_unaligned(data_ptr.add(i)) };
-                data_types.push(DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented });
-            }
+            let hdr = buf.hdr();
+            let nr = (hdr.nr_data_types as usize).min(nr_data_types);
 
             return Ok(DevUsage {
                 state: hdr.state,
                 bucket_size: hdr.bucket_size,
                 nr_buckets: hdr.nr_buckets,
-                data_types,
+                data_types: unsafe { hdr.d.as_slice(nr) }.iter()
+                    .map(|d| DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented })
+                    .collect(),
             });
         }
 

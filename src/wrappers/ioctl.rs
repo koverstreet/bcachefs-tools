@@ -56,3 +56,48 @@ pub fn ioctl_rw<I: Ioctl>(fd: impl AsFd, arg: &mut I::Arg) -> io::Result<i32> {
 pub unsafe fn ioctl_ptr<I: Ioctl>(fd: impl AsFd, arg: *mut I::Arg) -> io::Result<i32> {
     ret(libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg))
 }
+
+/// Owned, zeroed allocation for a flexible-array-member ioctl argument:
+/// header `H` followed by trailing entries. The header is read and
+/// written through the real struct, and trailing entries through its
+/// `__IncompleteArrayField` accessors - the one place that knows the
+/// layout is the C definition.
+///
+/// `H` must be a plain-old-data bindgen ioctl struct (zero-initialized
+/// is valid, align <= 8 - asserted at compile time).
+pub struct IoctlBuf<H> {
+    buf:  Vec<u64>,
+    _arg: std::marker::PhantomData<H>,
+}
+
+impl<H> IoctlBuf<H> {
+    /// Room for the header plus `nr` trailing elements of `T`.
+    pub fn new<T>(nr: usize) -> Self {
+        const { assert!(std::mem::align_of::<H>() <= 8) };
+        let bytes = std::mem::size_of::<H>() + nr * std::mem::size_of::<T>();
+        IoctlBuf { buf: vec![0u64; bytes.div_ceil(8)], _arg: std::marker::PhantomData }
+    }
+
+    pub fn hdr(&self) -> &H {
+        unsafe { &*(self.buf.as_ptr() as *const H) }
+    }
+
+    pub fn hdr_mut(&mut self) -> &mut H {
+        unsafe { &mut *(self.buf.as_mut_ptr() as *mut H) }
+    }
+
+    pub fn as_mut_ptr(&mut self) -> *mut H {
+        self.buf.as_mut_ptr() as *mut H
+    }
+
+    /// The trailing region as raw bytes, for arguments whose trailing
+    /// records are variable-size. Panics if `bytes` overruns the
+    /// allocation (a kernel echoing back more than it was given).
+    pub fn trailing_bytes(&self, bytes: usize) -> &[u8] {
+        let off = std::mem::size_of::<H>();
+        assert!(off + bytes <= self.buf.len() * 8);
+        unsafe {
+            std::slice::from_raw_parts((self.buf.as_ptr() as *const u8).add(off), bytes)
+        }
+    }
+}

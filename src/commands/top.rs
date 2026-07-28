@@ -1,7 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
-use std::mem;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -23,7 +22,7 @@ use serde::Deserialize;
 use crate::commands::DeviceNameArgs;
 use crate::util::{fmt_bytes_human, fmt_num_human, run_tui};
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::ioctl::{ioctl_ptr, BCH_IOCTL_QUERY_COUNTERS};
+use crate::wrappers::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_COUNTERS};
 use crate::wrappers::sysfs::{DeviceNameMode, dev_display_name_from_sysfs, sysfs_path_from_fd};
 
 const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
@@ -31,22 +30,15 @@ const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
 // ioctl query
 
 fn read_counters(fd: std::os::fd::BorrowedFd, flags: u16, nr_stable: u16) -> Result<Vec<u64>> {
-    let hdr_size = mem::size_of::<bch_ioctl_query_counters>();
-    let buf_size = hdr_size + (nr_stable as usize) * mem::size_of::<u64>();
-    let mut buf = vec![0u8; buf_size];
+    let mut buf = IoctlBuf::<bch_ioctl_query_counters>::new::<u64>(nr_stable as usize);
+    let hdr = buf.hdr_mut();
+    hdr.nr = nr_stable;
+    hdr.flags = flags;
 
-    unsafe {
-        let hdr = &mut *(buf.as_mut_ptr() as *mut bch_ioctl_query_counters);
-        hdr.nr = nr_stable;
-        hdr.flags = flags;
+    unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_COUNTERS>(fd, buf.as_mut_ptr())? };
 
-        ioctl_ptr::<BCH_IOCTL_QUERY_COUNTERS>(fd,
-            buf.as_mut_ptr() as *mut bch_ioctl_query_counters)?;
-    }
-
-    let actual_nr = unsafe { (*(buf.as_ptr() as *const bch_ioctl_query_counters)).nr } as usize;
-    let data = unsafe { buf.as_ptr().add(hdr_size) as *const u64 };
-    Ok((0..actual_nr).map(|i| unsafe { std::ptr::read_unaligned(data.add(i)) }).collect())
+    let nr = (buf.hdr().nr as usize).min(nr_stable as usize);
+    Ok(unsafe { buf.hdr().d.as_slice(nr) }.to_vec())
 }
 
 // Per-device IO from sysfs (io_done is JSON: {"read": {...}, "write": {...}}, values in bytes)

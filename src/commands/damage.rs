@@ -18,7 +18,7 @@ use bch_bindgen::c;
 use clap::{Parser, Subcommand};
 
 use crate::util::{open_dir, sb_error_name};
-use crate::wrappers::ioctl::{ioctl_none, ioctl_ptr, ioctl_rw,
+use crate::wrappers::ioctl::{ioctl_none, ioctl_ptr, ioctl_rw, IoctlBuf,
     BCHFS_IOC_CLEAR_DAMAGE, BCHFS_IOC_GET_DAMAGE, BCHFS_IOC_READDIR_FLAGS};
 
 /// DT_SUBVOL from dirent_format.h; not in the generated bindings.
@@ -87,28 +87,21 @@ impl DamageEntry {
 }
 
 /// BCHFS_IOC_GET_DAMAGE: nr_entries in is capacity, out is the true
-/// count - retry bigger if we undershot. The argument is the header
-/// immediately followed by its flexible entries array; allocate u64s
-/// for alignment and view them through the real struct.
+/// count - retry bigger if we undershot.
 fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
-    const HDR: usize   = mem::size_of::<c::bch_ioctl_get_damage>() / 8;
-    const ENTRY: usize = mem::size_of::<c::bch_sb_field_error_entry_v2>() / 8;
     let mut cap = 16u32;
     loop {
-        let mut buf = vec![0u64; HDR + ENTRY * cap as usize];
-        let arg = buf.as_mut_ptr().cast::<c::bch_ioctl_get_damage>();
-        unsafe {
-            (*arg).nr_entries = cap;
-            ioctl_ptr::<BCHFS_IOC_GET_DAMAGE>(fd, arg)?;
-        }
+        let mut buf = IoctlBuf::<c::bch_ioctl_get_damage>::new::<c::bch_sb_field_error_entry_v2>(cap as usize);
+        buf.hdr_mut().nr_entries = cap;
+        unsafe { ioctl_ptr::<BCHFS_IOC_GET_DAMAGE>(fd, buf.as_mut_ptr())? };
 
-        let nr = unsafe { (*arg).nr_entries };
+        let nr = buf.hdr().nr_entries;
         if nr > cap {
             cap = nr;
             continue;
         }
 
-        return Ok(unsafe { (*arg).entries.as_slice(nr as usize) }.iter()
+        return Ok(unsafe { buf.hdr().entries.as_slice(nr as usize) }.iter()
             .map(|e| unsafe {
                 DamageEntry {
                     id:    c::BCH_SB_ERROR_ENTRY_V2_ID(e) as u32,
