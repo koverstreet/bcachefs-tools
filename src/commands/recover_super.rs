@@ -291,10 +291,7 @@ fn cmd_recover_super(cli: RecoverSuperCli) -> Result<()> {
     }
 
     if cli.yes || unsafe { bch_bindgen::c::ask_yn() } {
-        crate::wrappers::super_io::bch2_super_write(
-            dev_file.as_raw_fd(),
-            sb_buf.sb_mut(),
-        );
+        crate::wrappers::super_io::bch2_super_write(dev_file.as_raw_fd(), &mut sb_buf);
     }
 
     let _ = std::process::Command::new("udevadm")

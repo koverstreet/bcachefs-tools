@@ -507,11 +507,10 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
         .open(dev_path)
         .map_err(|e| anyhow!("Error opening {}: {}", dev_path, e))?;
 
-    let sb = super_io::__bch2_super_read(dev_file.as_raw_fd(), sb_offset);
-    let sb_ref = unsafe { &mut *sb };
+    let mut sb = super_io::super_read(dev_file.as_raw_fd(), sb_offset)?;
 
     // Validate and add default layout (catches errors early)
-    let sb_size = add_default_sb_layout(sb_ref)?;
+    let sb_size = add_default_sb_layout(sb.sb_mut())?;
 
     // Zero the start of the disk to blow away the old superblock
     let zeroes_len = ((c::BCH_SB_SECTOR as usize) << 9) + std::mem::size_of::<c::bch_sb>();
@@ -522,7 +521,7 @@ fn migrate_superblock(dev_path: &str, sb_offset: u64) -> Result<()> {
             .map_err(|e| anyhow!("Error zeroing start of disk: {}", e))?;
     }
     drop(dev_file);
-    unsafe { libc::free(sb as *mut _) };
+    drop(sb);
 
     // Open the filesystem with nostart + sb offset
     let dev_path_pb = std::path::PathBuf::from(dev_path);
