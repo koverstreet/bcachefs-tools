@@ -214,6 +214,22 @@ static inline bool bch2_snapshot_exists(struct bch_fs *c, u32 id)
 u32 bch2_snapshot_redundant_interior(struct bch_fs *, u32);
 bool bch2_snapshot_will_delete(struct bch_fs *, u32, snapshot_id_list *);
 
+/*
+ * Is @id already a collapse terminal - i.e. in the frame fsck compares in?
+ *
+ * fsck reasons about two coordinate systems: where a key physically is, and
+ * where it lands once the pending collapse finishes. Mixing them silently
+ * gives wrong answers only on filesystems with an interrupted snapshot
+ * deletion, which is exactly where we can least afford them. Callers convert
+ * once, at the top of a check, and the internal predicates EBUG_ON this - so
+ * a raw id reaching a comparison trips in debug builds instead of quietly
+ * producing a plausible number.
+ */
+static inline bool bch2_snapshot_is_equiv(struct bch_fs *c, u32 id)
+{
+	return id == bch2_snapshot_redundant_interior(c, id);
+}
+
 static inline int bch2_snapshot_is_internal_node(struct bch_fs *c, u32 id)
 {
 	guard(rcu)();
