@@ -3,8 +3,9 @@
 //! Rust implementation of bch2_format and bch2_format_for_device_add.
 
 use std::ffi::{CStr, CString};
+use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::os::unix::fs::FileExt;
-use std::os::unix::io::{IntoRawFd, RawFd};
+use std::os::unix::io::RawFd;
 
 use bch_bindgen::c;
 use bcachefs_kernel::{metadata_version, opt_defined, opt_get, opt_set};
@@ -14,9 +15,9 @@ use bcachefs_kernel::sb::io::BCHFS_MAGIC;
 
 /// Device options for formatting — Rust replacement for C struct dev_opts.
 ///
-/// Owns the file descriptor and string data. The fd is closed on drop.
+/// Owns the file descriptor and string data.
 pub struct DevOpts {
-    pub fd: RawFd,
+    file: Option<OwnedFd>,
     pub path: CString,
     /// Deferred device options (labels): their values are resolved against
     /// the superblock being built, after it exists.
@@ -32,7 +33,7 @@ impl DevOpts {
     /// Create a new DevOpts with the given path, no fd yet.
     pub fn new(path: CString) -> Self {
         DevOpts {
-            fd: -1,
+            file: None,
             path,
             opt_strs: Vec::new(),
             sb_offset: 0,
@@ -43,6 +44,16 @@ impl DevOpts {
         }
     }
 
+    /// The device fd, for interfaces that take raw fds.
+    pub fn fd(&self) -> RawFd {
+        self.file.as_ref().map_or(-1, |f| f.as_raw_fd())
+    }
+
+    /// The device fd; panics if the device hasn't been opened.
+    pub fn as_fd(&self) -> BorrowedFd<'_> {
+        self.file.as_ref().expect("device not open").as_fd()
+    }
+
     /// Open the device for formatting, with blkid checks.
     ///
     /// Adds READ|WRITE|EXCL|BUFFERED to the given extra flags
@@ -50,23 +61,15 @@ impl DevOpts {
     pub fn open(&mut self, extra_mode: u32, force: bool) -> Result<(), i32> {
         use crate::wrappers::bdev::*;
         let mode = BLK_OPEN_READ | BLK_OPEN_WRITE | BLK_OPEN_EXCL | BLK_OPEN_BUFFERED | extra_mode;
-        self.fd = open_device(&self.path, mode)?.into_raw_fd();
-        blkid_check(self.fd, &self.path, force);
+        self.file = Some(open_device(&self.path, mode)?);
+        blkid_check(self.fd(), &self.path, force);
         Ok(())
     }
 
     /// Open the device without blkid checks or default flags (for migrate).
     pub fn open_no_blkid(&mut self, mode: u32) -> Result<(), i32> {
-        self.fd = crate::wrappers::bdev::open_device(&self.path, mode)?.into_raw_fd();
+        self.file = Some(crate::wrappers::bdev::open_device(&self.path, mode)?);
         Ok(())
-    }
-}
-
-impl Drop for DevOpts {
-    fn drop(&mut self) {
-        if self.fd >= 0 {
-            unsafe { libc::close(self.fd) };
-        }
     }
 }
 
@@ -118,9 +121,8 @@ fn parse_target(
         }
     }
 
-    let idx = unsafe { c::bch2_disk_path_find(sb, s) };
-    if idx >= 0 {
-        return group_to_target(idx as u32);
+    if let Some(idx) = sb.disk_path_find(target_str) {
+        return group_to_target(idx);
     }
 
     die(&format!("Invalid target {}", target_str.to_string_lossy()));
@@ -158,7 +160,7 @@ pub fn format(
     // Get device size if not specified (needed for block size threshold)
     for dev in dev_slice.iter_mut() {
         if dev.fs_size == 0 {
-            dev.fs_size = crate::wrappers::bdev::get_size(dev.fd);
+            dev.fs_size = crate::wrappers::bdev::get_size(dev.fd());
         }
     }
 
@@ -215,7 +217,7 @@ pub fn format(
     // ManuallyDrop: we return sb.sb to the caller (who frees it),
     // so we must not let bch_sb_handle's Drop call bch2_free_super.
     let mut sb = std::mem::ManuallyDrop::new(c::bch_sb_handle::default());
-    if unsafe { c::bch2_sb_realloc(&mut *sb, 0) } != 0 {
+    if sb.sb_realloc(0).is_err() {
         die("insufficient memory");
     }
 
@@ -284,7 +286,7 @@ pub fn format(
         m.nbuckets = dev.nbuckets.to_le();
         m.first_bucket = 0;
 
-        let fd = dev.fd;
+        let fd = dev.fd();
         let opts = &mut dev.opts;
         if opt_defined!(opts, rotational) == 0 {
             let nonrot = crate::wrappers::bdev::nonrot(fd);
@@ -301,13 +303,9 @@ pub fn format(
         for (opt_id, val) in &dev.opt_strs {
             match *opt_id {
                 c::bch_opt_id::Opt_label => {
-                    let path_idx = unsafe { c::bch2_disk_path_find_or_create(&mut *sb, val.as_ptr()) };
-                    if path_idx < 0 {
-                        die(&format!(
-                            "error creating disk path: {}",
-                            std::io::Error::from_raw_os_error(-path_idx)
-                        ));
-                    }
+                    let path_idx = sb.disk_path_find_or_create(val).unwrap_or_else(|e|
+                        die(&format!("error creating disk path: {}",
+                                     std::io::Error::from_raw_os_error(e))));
                     // Recompute m after sb modification (may have been reallocated)
                     sb.member_mut(idx as u32).unwrap().set_member_group(path_idx as u64 + 1);
                 }
@@ -349,7 +347,7 @@ pub fn format(
         sb.sb_mut().set_sb_encryption_type(1);
     }
 
-    unsafe { c::bch2_sb_members_cpy_v2_v1(&mut *sb) };
+    sb.members_cpy_v2_v1();
 
     // Write superblocks to each device
     for (idx, dev) in dev_slice.iter_mut().enumerate() {
@@ -374,7 +372,7 @@ pub fn format(
             return std::ptr::null_mut();
         }
 
-        let fd = dev.fd;
+        let fd = dev.fd();
 
         if dev.sb_offset == c::BCH_SB_SECTOR as u64 {
             // Zero start of disk
@@ -506,7 +504,7 @@ pub fn pick_block_size(_fs_opts: &c::bch_opts, dev_slice: &[DevOpts]) -> u32 {
     let block_size = if total_size >= 1u64 << 30 {
         let mut bs = 4096u32;
         for dev in dev_slice.iter() {
-            bs = bs.max(crate::wrappers::bdev::get_blocksize_physical_hint(dev.fd));
+            bs = bs.max(crate::wrappers::bdev::get_blocksize_physical_hint(dev.fd()));
         }
         bs
     } else {

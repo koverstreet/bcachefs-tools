@@ -192,7 +192,7 @@ fn warn_same_parent_disk_replicas(cfg: &FormatConfig, devices: &[DevOpts]) {
 
     let mut by_parent: HashMap<String, Vec<String>> = HashMap::new();
     for dev in devices {
-        if let Some(parent) = crate::wrappers::bdev::fd_to_parent_disk_sysfs(dev.fd) {
+        if let Some(parent) = crate::wrappers::bdev::fd_to_parent_disk_sysfs(dev.fd()) {
             by_parent
                 .entry(parent.display().to_string())
                 .or_default()
@@ -604,7 +604,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         // user didn't specify them.
         let total_fs_size: u64 = devices.iter_mut().map(|d| {
             if d.fs_size == 0 {
-                d.fs_size = crate::wrappers::bdev::get_size(d.fd);
+                d.fs_size = crate::wrappers::bdev::get_size(d.fd());
             }
             d.fs_size
         }).sum();

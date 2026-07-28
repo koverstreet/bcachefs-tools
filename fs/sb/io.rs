@@ -90,6 +90,31 @@ impl bch_sb_handle {
         unsafe { c::bch2_sb_field_delete(self, ty) }
     }
 
+    /// Reallocate the superblock buffer for at least `u64s` (0 = minimum).
+    pub fn sb_realloc(&mut self, u64s: u32) -> Result<(), i32> {
+        match unsafe { c::bch2_sb_realloc(self, u64s) } {
+            0 => Ok(()),
+            e => Err(e),
+        }
+    }
+
+    /// Copy members_v2 into the members_v1 mirror, for old-kernel compat.
+    pub fn members_cpy_v2_v1(&mut self) {
+        unsafe { c::bch2_sb_members_cpy_v2_v1(self) };
+    }
+
+    /// Find a disk path (label group) by name.
+    pub fn disk_path_find(&mut self, name: &core::ffi::CStr) -> Option<u32> {
+        let v = unsafe { c::bch2_disk_path_find(self, name.as_ptr()) };
+        (v >= 0).then_some(v as u32)
+    }
+
+    /// Find or create a disk path; Err(errno) on failure.
+    pub fn disk_path_find_or_create(&mut self, name: &core::ffi::CStr) -> Result<u32, i32> {
+        let v = unsafe { c::bch2_disk_path_find_or_create(self, name.as_ptr()) };
+        if v >= 0 { Ok(v as u32) } else { Err(-v) }
+    }
+
     /// The superblock's full vstruct extent as bytes.
     pub fn sb_bytes(&self) -> &[u8] {
         let bytes = core::mem::size_of::<bch_sb>()
