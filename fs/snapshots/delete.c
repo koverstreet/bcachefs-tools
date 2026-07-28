@@ -222,9 +222,29 @@ int bch2_snapshot_accounting_totals(struct btree_trans *trans, u32 id,
 	return 0;
 }
 
-static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
+static inline u32 interior_delete_has_id(interior_delete_list *l, u32 id)
+{
+	struct snapshot_interior_delete *i = darray_find_p(*l, i, i->id == id);
+	return i ? i->live_child : 0;
+}
+
+/*
+ * @op is the operation delete_dead_snapshots was performing - set_no_keys,
+ * leaf delete, or interior delete - which the node key does not tell you, and
+ * which is the first thing you need: whether we were emptying a node whose
+ * keys should already have migrated down, or splicing out an interior.
+ *
+ * The node is printed too, because operation and shape are independent and
+ * their disagreement is the signal: an interior delete refused on a node that
+ * still reads as a leaf means something quite different from a leaf delete
+ * refused on a redundant interior whose migration was interrupted partway.
+ */
+static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
+					    struct bkey_i_snapshot *s,
+					    const char *op)
 {
 	struct bch_fs *c = trans->c;
+	u32 id = s->k.p.offset;
 
 	CLASS(printbuf, buf)();
 	u64 total_keys, total_sectors, btrees_with_keys = 0;
@@ -235,9 +255,26 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id)
 	if (likely(!total_keys && !total_sectors))
 		return 0;
 
+	/*
+	 * Whether an interior has a single live child is what the deletion
+	 * recorded when it built its lists, not something to re-derive from the
+	 * snapshot table: live_child is the migration target the deletion
+	 * actually used, so if the two ever disagreed the list is the one that
+	 * describes what happened.
+	 */
+	struct snapshot_delete *d = &c->snapshots.delete;
+	u32 live_child = interior_delete_has_id(&d->delete_interior, id) ?:
+			 interior_delete_has_id(&d->no_keys, id);
+
+	const char *shape = !s->v.children[0]
+		? "leaf"
+		: (live_child ? "redundant interior" : "interior");
+
 	CLASS(printbuf, msg)();
-	prt_printf(&msg, "snapshot node %u still has %llu keys / %llu sectors accounted to it - refusing to delete/empty, to prevent data loss; scheduling repair:%s\n",
-		   id, total_keys, total_sectors, buf.buf);
+	prt_printf(&msg, "%s snapshot node %u (%s) still has %llu keys / %llu sectors accounted to it - refusing, to prevent data loss; scheduling repair:%s\n  ",
+		   op, id, shape, total_keys, total_sectors, buf.buf);
+	bch2_bkey_val_to_text(&msg, c, bkey_i_to_s_c(&s->k_i));
+	prt_newline(&msg);
 
 	/*
 	 * Schedule the passes whose key_has_snapshot repairs can actually
@@ -286,7 +323,7 @@ static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
 	if (unlikely(ret))
 		return ret;
 
-	try(bch2_snapshot_node_check_no_data(trans, id));
+	try(bch2_snapshot_node_check_no_data(trans, s, "set_no_keys"));
 
 	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_no_keys);
 	return 0;
@@ -311,7 +348,8 @@ int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_int
 	if (ret)
 		return ret;
 
-	try(bch2_snapshot_node_check_no_data(trans, id));
+	try(bch2_snapshot_node_check_no_data(trans, s,
+			delete_interior ? "interior delete" : "leaf delete"));
 
 	if (bch2_trans_inconsistent_on(bch2_snapshot_state(&s->v) == SNAPSHOT_STATE_deleted, trans,
 			"deleting snapshot node %u: already in state deleted", id))
@@ -622,12 +660,6 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
  * requires it to be mutated: iterate over all descendent leaf nodes and copy
  * that key to snapshot leaf nodes, where we can mutate it
  */
-
-static inline u32 interior_delete_has_id(interior_delete_list *l, u32 id)
-{
-	struct snapshot_interior_delete *i = darray_find_p(*l, i, i->id == id);
-	return i ? i->live_child : 0;
-}
 
 static int snapshot_interior_delete_cmp(const void *_l, const void *_r)
 {
