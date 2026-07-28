@@ -291,6 +291,14 @@ impl<'a> BkeySC<'a> {
         unsafe { BkeyValSC::from_raw(self.k, self.v) }
     }
 
+    /// The value as raw bytes: its full u64s extent past the key header.
+    pub fn val_bytes(&self) -> &'a [u8] {
+        let u64s = self.k.u64s as usize - core::mem::size_of::<c::bkey>() / 8;
+        unsafe {
+            core::slice::from_raw_parts(self.v as *const c::bch_val as *const u8, u64s * 8)
+        }
+    }
+
     pub fn pos(&self) -> c::bpos {
         self.k.p
     }
