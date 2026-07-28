@@ -981,7 +981,7 @@ static bool wb_pin_le(struct bch_fs_btree_write_buffer *wb, u64 max_seq)
 	 * after the drop means the following flushing read must observe the set
 	 * that preceded it.
 	 */
-#if BITS_PER_LONG == 32
+#if __SIZEOF_LONG__ == 4
 	/*
 	 * Journal pin seqs are always in the live journal window, so 32 bit
 	 * half loads are sufficient here; torn reads may only make us think
@@ -1410,10 +1410,10 @@ __cold void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs 
 		prt_printf(out, "shards total:\t%llu\n",	wb->nr_shards_total);
 		if (wb->nr_flushes)
 			prt_printf(out, "avg shards/flush:\t%llu\n",
-				   wb->nr_shards_total / wb->nr_flushes);
+				   div64_u64(wb->nr_shards_total, wb->nr_flushes));
 		if (wb->nr_shards_total)
 			prt_printf(out, "avg shard size:\t%llu\n",
-				   wb->nr_keys_flushed / wb->nr_shards_total);
+				   div64_u64(wb->nr_keys_flushed, wb->nr_shards_total));
 
 		prt_printf(out, "flush work:\t%s\n",
 			   work_busy(&wb->flush_work) ? "busy" : "idle");
