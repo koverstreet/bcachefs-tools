@@ -85,6 +85,18 @@ impl bch_sb_handle {
         sb_field_get_minsize(self, min_u64s)
     }
 
+    /// Delete a superblock field by type.
+    pub fn field_delete(&mut self, ty: c::bch_sb_field_type) {
+        unsafe { c::bch2_sb_field_delete(self, ty) }
+    }
+
+    /// The superblock's full vstruct extent as bytes.
+    pub fn sb_bytes(&self) -> &[u8] {
+        let bytes = core::mem::size_of::<bch_sb>()
+            + u32::from_le(self.sb().u64s) as usize * 8;
+        unsafe { core::slice::from_raw_parts(self.sb as *const u8, bytes) }
+    }
+
     /// Get a mutable reference to a single member entry by device index.
     ///
     /// This is the simple accessor for one-shot field mutation. For
@@ -170,6 +182,199 @@ pub fn sb_field_get_minsize<F: SbField>(
     unsafe {
         let ptr = c::bch2_sb_field_get_minsize_id(disk_sb, F::FIELD_TYPE, min_u64s);
         if ptr.is_null() { None } else { Some(&mut *(ptr as *mut F)) }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Raw-buffer superblock views
+//
+// For superblocks in plain byte buffers (device scans, recovery) rather
+// than a C bch_sb_handle. Construction validates every extent once -
+// header within the buffer, vstruct extent within the buffer, each
+// field's extent within the superblock - so typed access afterwards is
+// safe: the C field lookups walk exactly the extents parse() checked.
+// Semantic validity remains bch2_sb_validate()'s job; these views
+// guarantee memory safety only. Raw buffers can't be reallocated, so
+// mutation is in-place only - field resize/delete stay on bch_sb_handle.
+// ---------------------------------------------------------------------------
+
+pub const BCACHE_MAGIC: [u8; 16] = [
+    0xc6, 0x85, 0x73, 0xf6, 0x4e, 0x1a, 0x45, 0xca,
+    0x82, 0x65, 0xf5, 0x7f, 0x48, 0xba, 0x6d, 0x81,
+];
+pub const BCHFS_MAGIC: [u8; 16] = [
+    0xc6, 0x85, 0x73, 0xf6, 0x66, 0xce, 0x90, 0xa9,
+    0xd9, 0x6a, 0x60, 0xcf, 0x80, 0x3d, 0xf7, 0xef,
+];
+
+/// Why a buffer failed to parse as a superblock. Precise by design:
+/// recovery reports these against scan candidates.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SbParseError {
+    BufferTooSmall { need: usize, have: usize },
+    Misaligned,
+    BadMagic,
+    ExtentBeyondBuffer { need: usize, have: usize },
+    FieldBeyondSb { field_offset: usize },
+    FieldBadU64s { field_offset: usize },
+}
+
+impl core::fmt::Display for SbParseError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            SbParseError::BufferTooSmall { need, have } =>
+                write!(f, "buffer too small for superblock header: need {need}, have {have}"),
+            SbParseError::Misaligned =>
+                write!(f, "buffer not sufficiently aligned for a superblock"),
+            SbParseError::BadMagic =>
+                write!(f, "not a bcachefs superblock (bad magic)"),
+            SbParseError::ExtentBeyondBuffer { need, have } =>
+                write!(f, "superblock u64s extends beyond buffer: need {need}, have {have}"),
+            SbParseError::FieldBeyondSb { field_offset } =>
+                write!(f, "superblock field at offset {field_offset} extends beyond superblock"),
+            SbParseError::FieldBadU64s { field_offset } =>
+                write!(f, "superblock field at offset {field_offset} with u64s 0"),
+        }
+    }
+}
+
+/// Validate the extents; returns the vstruct size in bytes.
+fn sb_parse_checks(buf: &[u8]) -> Result<usize, SbParseError> {
+    let hdr = core::mem::size_of::<bch_sb>();
+    if buf.len() < hdr {
+        return Err(SbParseError::BufferTooSmall { need: hdr, have: buf.len() });
+    }
+    if buf.as_ptr() as usize % core::mem::align_of::<bch_sb>() != 0 {
+        return Err(SbParseError::Misaligned);
+    }
+    /* header extent and alignment just validated: */
+    let sb = unsafe { &*(buf.as_ptr() as *const bch_sb) };
+
+    if sb.magic.b != BCACHE_MAGIC && sb.magic.b != BCHFS_MAGIC {
+        return Err(SbParseError::BadMagic);
+    }
+
+    let bytes = hdr + u32::from_le(sb.u64s) as usize * 8;
+    if bytes > buf.len() {
+        return Err(SbParseError::ExtentBeyondBuffer { need: bytes, have: buf.len() });
+    }
+
+    let mut off = hdr;
+    while off < bytes {
+        if bytes - off < core::mem::size_of::<c::bch_sb_field>() {
+            return Err(SbParseError::FieldBeyondSb { field_offset: off });
+        }
+        /* field header extent just validated: */
+        let f = unsafe { &*(buf.as_ptr().add(off) as *const c::bch_sb_field) };
+        let f_u64s = u32::from_le(f.u64s) as u64;
+        if f_u64s == 0 {
+            return Err(SbParseError::FieldBadU64s { field_offset: off });
+        }
+        let next = off as u64 + f_u64s * 8;
+        if next > bytes as u64 {
+            return Err(SbParseError::FieldBeyondSb { field_offset: off });
+        }
+        off = next as usize;
+    }
+
+    Ok(bytes)
+}
+
+/// A validated read-only superblock in a byte buffer.
+pub struct SbRef<'a> {
+    buf:   &'a [u8],
+    bytes: usize,
+}
+
+impl<'a> SbRef<'a> {
+    pub fn parse(buf: &'a [u8]) -> Result<Self, SbParseError> {
+        let bytes = sb_parse_checks(buf)?;
+        Ok(SbRef { buf, bytes })
+    }
+
+    pub fn sb(&self) -> &'a bch_sb {
+        unsafe { &*(self.buf.as_ptr() as *const bch_sb) }
+    }
+
+    /// The superblock's full vstruct extent.
+    pub fn bytes(&self) -> &'a [u8] {
+        &self.buf[..self.bytes]
+    }
+
+    pub fn field<F: SbField>(&self) -> Option<&'a F> {
+        sb_field_get(self.sb())
+    }
+}
+
+/// A validated superblock in a byte buffer, for in-place mutation.
+pub struct SbMut<'a> {
+    buf:   &'a mut [u8],
+    bytes: usize,
+}
+
+impl<'a> SbMut<'a> {
+    pub fn parse(buf: &'a mut [u8]) -> Result<Self, SbParseError> {
+        let bytes = sb_parse_checks(buf)?;
+        Ok(SbMut { buf, bytes })
+    }
+
+    pub fn sb(&self) -> &bch_sb {
+        unsafe { &*(self.buf.as_ptr() as *const bch_sb) }
+    }
+
+    pub fn sb_mut(&mut self) -> &mut bch_sb {
+        unsafe { &mut *(self.buf.as_mut_ptr() as *mut bch_sb) }
+    }
+
+    /// The superblock's full vstruct extent.
+    pub fn bytes(&self) -> &[u8] {
+        &self.buf[..self.bytes]
+    }
+
+    pub fn field<F: SbField>(&self) -> Option<&F> {
+        sb_field_get(self.sb())
+    }
+}
+
+/// An owned superblock: aligned storage, extents validated at
+/// construction. The owned counterpart of SbRef/SbMut, for recovery
+/// flows that carry superblocks around as values.
+#[cfg(feature = "std")]
+pub struct SbBuf {
+    buf:   Vec<u64>,
+    bytes: usize,
+}
+
+#[cfg(feature = "std")]
+impl SbBuf {
+    /// Copy a superblock out of `src` (no alignment requirement) and
+    /// validate it.
+    pub fn from_bytes(src: &[u8]) -> Result<Self, SbParseError> {
+        let mut buf = vec![0u64; src.len().div_ceil(8)];
+        let dst = unsafe {
+            core::slice::from_raw_parts_mut(buf.as_mut_ptr() as *mut u8, src.len())
+        };
+        dst.copy_from_slice(src);
+
+        let bytes = sb_parse_checks(&dst[..])?;
+        Ok(SbBuf { buf, bytes })
+    }
+
+    pub fn sb(&self) -> &bch_sb {
+        unsafe { &*(self.buf.as_ptr() as *const bch_sb) }
+    }
+
+    pub fn sb_mut(&mut self) -> &mut bch_sb {
+        unsafe { &mut *(self.buf.as_mut_ptr() as *mut bch_sb) }
+    }
+
+    /// The superblock's full vstruct extent.
+    pub fn bytes(&self) -> &[u8] {
+        unsafe { core::slice::from_raw_parts(self.buf.as_ptr() as *const u8, self.bytes) }
+    }
+
+    pub fn field<F: SbField>(&self) -> Option<&F> {
+        sb_field_get(self.sb())
     }
 }
 
