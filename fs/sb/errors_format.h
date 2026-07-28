@@ -405,7 +405,8 @@ enum bch_fsck_flags {
 	x(data_read_io_err,					391,	0)		\
 	x(data_read_csum_err_recovered,				392,	0)		\
 	x(data_read_csum_err,					393,	0)		\
-	x(MAX,							394,	0)
+	x(data_lost_device_removed,				394,	0)		\
+	x(MAX,							395,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
