@@ -38,7 +38,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
-use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
+use bcachefs_kernel::btree::bkey::{BkeyS, BkeySC, POS_MIN, SPOS_MAX};
 use bcachefs_kernel::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
     TransError, UpdateTriggerFlags,
@@ -332,10 +332,7 @@ fn render_key_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
     use std::fmt::Write as _;
     use typeinfo::{AccessError, FieldKind, FieldRef};
 
-    let val_u64s = k.k.u64s as usize - BKEY_U64S;
-    let val: &[u8] = unsafe {
-        std::slice::from_raw_parts(k.v as *const c::bch_val as *const u8, val_u64s * 8)
-    };
+    let val = k.val_bytes();
 
     let read_int = |path: &str, r: &FieldRef| -> Result<String> {
         let v = match typeinfo::read_scalar(val, r) {
@@ -713,29 +710,15 @@ fn cmd_update(
                 }
             }
 
-            // BkeySC is a split key: k (unpacked header) and v are separate
-            // pointers, so copy them separately.
-            let cur_val = k.k.u64s as usize - BKEY_U64S;
-            let val_u64s = cur_val.max(need.div_ceil(8));
-            let mut new = t.bkey_alloc((BKEY_U64S + val_u64s) as u32)
+            let val_u64s = (k.k.u64s as usize - BKEY_U64S).max(need.div_ceil(8));
+            let mut new = t.bkey_reassemble_resized(k, val_u64s)
                 .map_err(TransError::from)?;
-            new.as_mut_u64s().fill(0);
-            unsafe {
-                core::ptr::copy_nonoverlapping(k.k, new.k_mut(), 1);
-                core::ptr::copy_nonoverlapping(
-                    k.v as *const c::bch_val as *const u64,
-                    new.as_mut_u64s()[BKEY_U64S..].as_mut_ptr(),
-                    cur_val,
-                );
-            }
-            new.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
 
-            let val = &mut new.as_mut_u64s()[BKEY_U64S..];
-            let val: &mut [u8] = unsafe {
-                std::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, val.len() * 8)
-            };
+            let type_ = new.k().type_;
+            let mut val_view = BkeyS::from(new.k_i_mut());
+            let val = val_view.val_bytes_mut();
             for (path, v) in &resolved {
-                let target = resolve_field(new.k().type_, path).expect("resolved above");
+                let target = resolve_field(type_, path).expect("resolved above");
                 if let Err(e) = write_field(val, &target, *v) {
                     user_err = Some(anyhow!("{path}: {e}"));
                     return Err(no_key_err());
@@ -808,18 +791,11 @@ fn cmd_set(
             iter.peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
                 .map_err(TransError::from)?;
 
-            let mut new = t.bkey_alloc((BKEY_U64S + val_u64s) as u32)
+            let mut new = t.bkey_alloc_init(val_u64s, ti.type_ as u8, pos)
                 .map_err(TransError::from)?;
-            new.as_mut_u64s().fill(0);
-            unsafe { c::bkey_init(new.k_mut()) };
-            new.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
-            new.k_mut().type_ = ti.type_ as u8;
-            new.k_mut().p = pos;
 
-            let val = &mut new.as_mut_u64s()[BKEY_U64S..];
-            let val: &mut [u8] = unsafe {
-                std::slice::from_raw_parts_mut(val.as_mut_ptr() as *mut u8, val.len() * 8)
-            };
+            let mut val_view = BkeyS::from(new.k_i_mut());
+            let val = val_view.val_bytes_mut();
             for (path, v) in &assigns {
                 let target = match typeinfo::resolve_with_bits(ti.info, path) {
                     Ok(t) => t,
@@ -854,16 +830,9 @@ fn sb_field(field: &str) -> Result<FieldTarget> {
         .map_err(|e| anyhow!("{e}"))
 }
 
-/// The in-memory superblock as a byte slice over its full vstruct extent.
-fn sb_bytes(fs: &Fs) -> (*mut u8, usize) {
-    let sb = unsafe { (*fs.raw).disk_sb.sb };
-    (sb as *mut u8, crate::wrappers::super_io::vstruct_bytes_sb(unsafe { &*sb }))
-}
-
 fn cmd_sb_get(fs: &Fs, field: &str) -> Result<String> {
     let (r, bm) = sb_field(field)?;
-    let (p, len) = sb_bytes(fs);
-    let buf = unsafe { std::slice::from_raw_parts(p, len) };
+    let buf = fs.disk_sb().sb_bytes();
     let v = match bm {
         Some(bm) => typeinfo::read_bits(buf, &r, bm),
         None => typeinfo::read_scalar(buf, &r),
@@ -882,8 +851,7 @@ fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
     // INITIALIZED unset - fail loudly rather than claim success.
     {
         let (r, bm) = sb_field("initialized")?;
-        let (p, len) = sb_bytes(fs);
-        let buf = unsafe { std::slice::from_raw_parts(p, len) };
+        let buf = fs.disk_sb().sb_bytes();
         let initialized = match bm {
             Some(bm) => typeinfo::read_bits(buf, &r, bm),
             None => typeinfo::read_scalar(buf, &r),
@@ -895,8 +863,8 @@ fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
         }
     }
 
-    let (p, len) = sb_bytes(fs);
-    let buf = unsafe { std::slice::from_raw_parts_mut(p, len) };
+    /* sb_lock is held above - disk_sb_mut's contract: */
+    let buf = unsafe { fs.disk_sb_mut() }.sb_bytes_mut();
     write_field(buf, &target, v).map_err(|e| anyhow!("{field}: {e}"))?;
 
     // Every kvdb open short of --rw runs with nochanges (norecovery implies
@@ -905,10 +873,13 @@ fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
     // decisions an inspection-mode open must never persist - so don't weaken
     // the open; lift nochanges around this one write, which is the user's
     // explicit request.
-    let saved = unsafe { (*fs.raw).opts.nochanges };
-    unsafe { (*fs.raw).opts.nochanges = 0 };
-    let ret = unsafe { c::bch2_write_super(fs.raw) };
-    unsafe { (*fs.raw).opts.nochanges = saved };
+    let ret = unsafe {
+        let saved = (*fs.raw).opts.nochanges;
+        (*fs.raw).opts.nochanges = 0;
+        let ret = c::bch2_write_super(fs.raw);
+        (*fs.raw).opts.nochanges = saved;
+        ret
+    };
 
     if ret != 0 {
         bail!("bch2_write_super failed: {ret}");
@@ -1206,12 +1177,11 @@ fn h_sb(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), Str
                 bail!("read-only (the default is norecovery): \
                        reopen with --rw, or --nostart for sb-only edits");
             }
-            let fs = repl.fs.offline()?;
             let (field, val) = parse_assign(assign)?;
             let FieldVal::Int(v) = val else {
                 bail!("sb set: expected an integer value");
             };
-            cmd_sb_set(fs, field, v)?
+            cmd_sb_set(repl.fs.offline()?, field, v)?
         }
         _ => bail!("usage: {}", cmd.usage),
     }))

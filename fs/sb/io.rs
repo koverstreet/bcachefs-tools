@@ -97,6 +97,13 @@ impl bch_sb_handle {
         unsafe { core::slice::from_raw_parts(self.sb as *const u8, bytes) }
     }
 
+    /// The superblock's full vstruct extent, mutably.
+    pub fn sb_bytes_mut(&mut self) -> &mut [u8] {
+        let bytes = core::mem::size_of::<bch_sb>()
+            + u32::from_le(self.sb().u64s) as usize * 8;
+        unsafe { core::slice::from_raw_parts_mut(self.sb as *mut u8, bytes) }
+    }
+
     /// Get a mutable reference to a single member entry by device index.
     ///
     /// This is the simple accessor for one-shot field mutation. For

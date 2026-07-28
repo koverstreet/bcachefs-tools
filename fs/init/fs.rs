@@ -77,6 +77,11 @@ impl BorrowedFs {
 }
 
 impl Fs {
+    /// The filesystem's superblock handle.
+    pub fn disk_sb(&self) -> &c::bch_sb_handle {
+        unsafe { &(*self.raw).disk_sb }
+    }
+
     /// Create a non-owning `Fs` view from a raw pointer.
     ///
     /// Returns `ManuallyDrop<Fs>` to prevent `Fs::drop` from calling
