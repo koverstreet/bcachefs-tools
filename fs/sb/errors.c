@@ -303,50 +303,70 @@ void bch2_sb_errors_from_cpu(struct bch_fs *c)
 	bch2_sb_field_delete(&c->disk_sb, BCH_SB_FIELD_errors);
 }
 
+/*
+ * Reading counts in merges both sections, because both present at once
+ * means the filesystem was downgraded: writing v2 always deletes legacy
+ * in the same superblock write, so a legacy section coexisting with v2
+ * was recreated by an old kernel afterwards and holds exactly the counts
+ * accrued since. Sum the counts, take the union of the time ranges (a
+ * legacy timestamp is both first and last: the error happened at least
+ * that recently), and the next writeout folds everything back into v2 -
+ * nothing lost or double counted across downgrade/upgrade cycles.
+ *
+ * Both sections are validated strictly ascending by id, so this is a
+ * plain sorted merge.
+ */
 int bch2_sb_errors_to_cpu(struct bch_fs *c)
 {
 	guard(mutex)(&c->errors.counts_lock);
 
 	bch_sb_errors_cpu *dst = &c->errors.counts;
 
-	struct bch_sb_field_errors_v2 *src = bch2_sb_field_get(c->disk_sb.sb, errors_v2);
-	if (src) {
-		unsigned nr = bch2_sb_field_errors_v2_nr_entries(src);
-		if (!nr)
-			return 0;
+	struct bch_sb_field_errors_v2 *v2 = bch2_sb_field_get(c->disk_sb.sb, errors_v2);
+	struct bch_sb_field_errors *legacy = bch2_sb_field_get(c->disk_sb.sb, errors);
+	unsigned nr_v2	= bch2_sb_field_errors_v2_nr_entries(v2);
+	unsigned nr_l	= bch2_sb_field_errors_nr_entries(legacy);
 
-		try(darray_make_room(dst, nr));
-		dst->nr = nr;
+	try(darray_make_room(dst, nr_v2 + nr_l));
+	dst->nr = 0;
 
-		for (unsigned i = 0; i < nr; i++) {
-			dst->data[i].id			= BCH_SB_ERROR_ENTRY_V2_ID(&src->entries[i]);
-			dst->data[i].nr			= BCH_SB_ERROR_ENTRY_V2_NR(&src->entries[i]);
-			dst->data[i].first_error_time	= BCH_SB_ERROR_ENTRY_V2_FIRST(&src->entries[i]);
-			dst->data[i].last_error_time	= BCH_SB_ERROR_ENTRY_V2_LAST(&src->entries[i]);
+	unsigned i = 0, j = 0;
+	while (i < nr_v2 || j < nr_l) {
+		u64 id_v2 = i < nr_v2 ? BCH_SB_ERROR_ENTRY_V2_ID(&v2->entries[i]) : U64_MAX;
+		u64 id_l  = j < nr_l  ? BCH_SB_ERROR_ENTRY_ID(&legacy->entries[j]) : U64_MAX;
+		struct bch_sb_error_entry_cpu n;
+
+		if (id_v2 < id_l) {
+			n = (struct bch_sb_error_entry_cpu) {
+				.id			= id_v2,
+				.nr			= BCH_SB_ERROR_ENTRY_V2_NR(&v2->entries[i]),
+				.first_error_time	= BCH_SB_ERROR_ENTRY_V2_FIRST(&v2->entries[i]),
+				.last_error_time	= BCH_SB_ERROR_ENTRY_V2_LAST(&v2->entries[i]),
+			};
+			i++;
+		} else if (id_l < id_v2) {
+			u64 t = le64_to_cpu(legacy->entries[j].last_error_time);
+			n = (struct bch_sb_error_entry_cpu) {
+				.id			= id_l,
+				.nr			= BCH_SB_ERROR_ENTRY_NR(&legacy->entries[j]),
+				.first_error_time	= t,
+				.last_error_time	= t,
+			};
+			j++;
+		} else {
+			u64 t = le64_to_cpu(legacy->entries[j].last_error_time);
+			n = (struct bch_sb_error_entry_cpu) {
+				.id			= id_v2,
+				.nr			= BCH_SB_ERROR_ENTRY_V2_NR(&v2->entries[i]) +
+					BCH_SB_ERROR_ENTRY_NR(&legacy->entries[j]),
+				.first_error_time	= min(BCH_SB_ERROR_ENTRY_V2_FIRST(&v2->entries[i]), t),
+				.last_error_time	= max(BCH_SB_ERROR_ENTRY_V2_LAST(&v2->entries[i]), t),
+			};
+			i++;
+			j++;
 		}
 
-		return 0;
-	}
-
-	/*
-	 * Migration from v1: seed the first occurrence from the last - it
-	 * happened at least that recently. The legacy field is dropped the
-	 * next time counts are written out:
-	 */
-	struct bch_sb_field_errors *legacy = bch2_sb_field_get(c->disk_sb.sb, errors);
-	unsigned nr = bch2_sb_field_errors_nr_entries(legacy);
-
-	if (!nr)
-		return 0;
-
-	try(darray_make_room(dst, nr));
-	dst->nr = nr;
-
-	for (unsigned i = 0; i < nr; i++) {
-		dst->data[i].id			= BCH_SB_ERROR_ENTRY_ID(&legacy->entries[i]);
-		dst->data[i].nr			= BCH_SB_ERROR_ENTRY_NR(&legacy->entries[i]);
-		dst->data[i].last_error_time	= le64_to_cpu(legacy->entries[i].last_error_time);
-		dst->data[i].first_error_time	= dst->data[i].last_error_time;
+		dst->data[dst->nr++] = n;
 	}
 
 	return 0;
