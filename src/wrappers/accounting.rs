@@ -2,7 +2,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::metadata_version;
 
 use super::handle::BcachefsHandle;
-use super::ioctl::{ioctl_ptr, BCH_IOCTL_QUERY_ACCOUNTING};
+use super::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING};
 use super::sysfs::bcachefs_kernel_version;
 
 // Re-export types and functions from bcachefs_kernel::accounting for consumers
@@ -21,30 +21,24 @@ impl BcachefsHandle {
     /// Query filesystem accounting data via BCH_IOCTL_QUERY_ACCOUNTING.
     /// Returns None on ENOTTY (old kernel without this ioctl).
     pub fn query_accounting(&self, type_mask: u32) -> Result<AccountingResult, errno::Errno> {
-        let hdr_size = std::mem::size_of::<c::bch_ioctl_query_accounting>();
         let mut accounting_u64s: u32 = 128;
 
         loop {
-            let total_bytes = hdr_size + (accounting_u64s as usize) * 8;
-            let mut buf = vec![0u8; total_bytes];
-
-            // Fill header
-            let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut c::bch_ioctl_query_accounting) };
+            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting>::new::<u64>(accounting_u64s as usize);
+            let hdr = buf.hdr_mut();
             hdr.accounting_u64s = accounting_u64s;
             hdr.accounting_types_mask = type_mask;
 
             let ret = unsafe {
-                ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING>(
-                    &self.ioctl_fd(),
-                    buf.as_mut_ptr() as *mut c::bch_ioctl_query_accounting)
+                ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING>(&self.ioctl_fd(), buf.as_mut_ptr())
             };
 
             match ret {
                 Ok(_) => {
-                    let hdr = unsafe { &*(buf.as_ptr() as *const c::bch_ioctl_query_accounting) };
+                    let hdr = buf.hdr();
+                    /* trailing records are variable-size bkey_i_accounting, parsed from bytes */
                     let entries = parse_accounting_entries(
-                        &buf[hdr_size..hdr_size + (hdr.accounting_u64s as usize) * 8],
-                    );
+                        buf.trailing_bytes(hdr.accounting_u64s as usize * 8));
 
                     return Ok(AccountingResult {
                         capacity: hdr.capacity,

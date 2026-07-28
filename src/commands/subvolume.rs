@@ -10,7 +10,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir};
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl,
+use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
     BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SUBVOLUME_LIST, BCH_IOCTL_SUBVOLUME_TO_PATH};
 
 // ---- CLI definitions ----
@@ -179,43 +179,34 @@ trait FlexArrayIoctl: Sized {
     fn set_capacity(&mut self, n: u32);
     fn nr(&self) -> u32;
     fn total(&self) -> u32;
+    /// The trailing array, through the struct's flexible array member.
+    /// Caller guarantees `nr` entries exist past the header.
+    unsafe fn nodes(&self, nr: usize) -> &[Self::Node];
 }
 
 fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
     fd: &OwnedFd,
     mut arg: H,
 ) -> Result<(H, Vec<H::Node>)> {
-    let hdr_size = mem::size_of::<H>();
-    let node_size = mem::size_of::<H::Node>();
     let mut capacity = 256u32;
 
     loop {
         arg.set_capacity(capacity);
-        let buf_size = hdr_size + node_size * capacity as usize;
-        let mut buf = vec![0u8; buf_size];
+        let mut buf = IoctlBuf::<H>::new::<H::Node>(capacity as usize);
+        unsafe { std::ptr::copy_nonoverlapping(&arg, buf.as_mut_ptr(), 1) };
 
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &arg as *const H as *const u8, buf.as_mut_ptr(), hdr_size);
-        }
-
-        match unsafe { ioctl_ptr::<H::Ioc>(fd, buf.as_mut_ptr() as *mut H) } {
+        match unsafe { ioctl_ptr::<H::Ioc>(fd, buf.as_mut_ptr()) } {
             Ok(_) => {}
             Err(e) if e.raw_os_error() == Some(libc::ERANGE) => {
-                capacity = unsafe { &*(buf.as_ptr() as *const H) }.total();
+                capacity = buf.hdr().total();
                 continue;
             }
             Err(e) => return Err(e.into()),
         }
 
-        let hdr = unsafe { std::ptr::read(buf.as_ptr() as *const H) };
-        let nr = hdr.nr() as usize;
-        let nodes = (0..nr).map(|i| unsafe {
-            std::ptr::read_unaligned(
-                buf.as_ptr().add(hdr_size + i * node_size) as *const H::Node)
-        }).collect();
-
-        return Ok((hdr, nodes));
+        let nr = (buf.hdr().nr() as usize).min(capacity as usize);
+        let nodes = unsafe { buf.hdr().nodes(nr) }.to_vec();
+        return Ok((unsafe { std::ptr::read(buf.hdr()) }, nodes));
     }
 }
 
@@ -225,6 +216,7 @@ impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query {
     fn set_capacity(&mut self, n: u32) { self.nr = n; }
     fn nr(&self) -> u32 { self.nr }
     fn total(&self) -> u32 { self.total }
+    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { self.nodes.as_slice(nr) }
 }
 
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
