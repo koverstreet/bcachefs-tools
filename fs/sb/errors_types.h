@@ -7,6 +7,7 @@
 struct bch_sb_error_entry_cpu {
 	u64			id:16,
 				nr:48;
+	u64			first_error_time;
 	u64			last_error_time;
 };
 
