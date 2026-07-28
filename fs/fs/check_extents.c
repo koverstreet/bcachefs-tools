@@ -300,9 +300,16 @@ static int check_overlapping_extents(struct btree_trans *trans,
 		if (i->offset <= bkey_start_offset(k.k))
 			continue;
 
+		/*
+		 * Overlap is decided in the collapse frame: two extents in one
+		 * equivalence class overlap post-migration even though neither
+		 * is an ancestor of the other now. Both terminals are already
+		 * computed - extent_ends_at() snapshots the whole seen state,
+		 * so i->seen.pos_equiv is i->snapshot's.
+		 */
 		if (!bch2_ref_visible2(trans,
-				  k.k->p.snapshot, seen,
-				  i->snapshot, &i->seen))
+				  seen->pos_equiv, seen,
+				  i->seen.pos_equiv, &i->seen))
 			continue;
 
 		try(overlapping_extents_found(trans, res, iter->btree_id,
