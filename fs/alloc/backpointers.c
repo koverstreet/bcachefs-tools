@@ -18,6 +18,7 @@
 
 #include "sb/io.h"
 
+#include "init/damage.h"
 #include "init/error.h"
 #include "init/progress.h"
 #include "init/passes.h"
@@ -627,12 +628,23 @@ static int check_bp_dup(struct btree_trans *trans,
 			prt_newline(&buf);
 			bch2_bkey_val_to_text(&buf, c, other_extent);
 
-			if (ret_fsck_err(trans, dup_extents_to_reflink, "%s", buf.buf))
+			/*
+			 * Both files are damaged - sharing physical space
+			 * means at least one of them reads the other's bytes.
+			 * The pos-ful report records against the first inode;
+			 * record the second explicitly (KEY_TYPE_extent only
+			 * lives in the extents btree, so both attribute):
+			 */
+			if (ret_inode_fsck_err(trans, extent.k->p,
+					dup_extents_to_reflink, "%s", buf.buf)) {
+				try(bch2_damage_record(trans, other_extent.k->p,
+						BCH_FSCK_ERR_dup_extents_to_reflink));
 				try(extents_to_reflink(trans,
 						       bp->v.btree_id, bp->v.level, extent,
 						       k1_overlap_start, k1_overlap_end,
 						       other_bp.v->btree_id, other_bp.v->level, other_extent,
 						       k2_overlap_start, k2_overlap_end));
+			}
 			return 0;
 		}
 
