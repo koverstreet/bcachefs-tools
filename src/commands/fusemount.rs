@@ -509,7 +509,7 @@ impl Filesystem for BcachefsFs {
 
         let fs = self.fs();
 
-	let parse_time = |time: &Option<TimeOrNow>| match time {
+        let parse_time = |time: &Option<TimeOrNow>| match time {
             None => (0, 0),
             Some(TimeOrNow::Now) => (2, 0),
             Some(TimeOrNow::SpecificTime(t)) => {
