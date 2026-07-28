@@ -641,6 +641,14 @@ bool bch2_key_visible_in_snapshot(struct btree_trans *trans, struct snapshots_se
 {
 	EBUG_ON(id > ancestor);
 
+	/*
+	 * Both sides must already be collapse terminals: the seen list is, so
+	 * a raw id here would be compared against a different frame and the
+	 * overwrite scan below would misjudge. Callers convert once, up top.
+	 */
+	EBUG_ON(!bch2_snapshot_is_equiv(trans->c, id));
+	EBUG_ON(!bch2_snapshot_is_equiv(trans->c, ancestor));
+
 	if (id == ancestor)
 		return true;
 

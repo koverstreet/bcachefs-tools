@@ -438,8 +438,8 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 		for (struct inode_walker_entry *i = extent_i ?: &darray_last(inode->inodes);
 		     inode->inodes.data && i >= inode->inodes.data;
 		     --i) {
-			if (i->inode.bi_snapshot > k.k->p.snapshot ||
-			    !bch2_key_visible_in_snapshot(trans, s, i->inode.bi_snapshot, k.k->p.snapshot))
+			if (i->inode.bi_snapshot > s->pos_equiv ||
+			    !bch2_key_visible_in_snapshot(trans, s, i->inode.bi_snapshot, s->pos_equiv))
 				continue;
 
 			u64 last_block = round_up(i->inode.bi_size, block_bytes(c)) >> 9;
