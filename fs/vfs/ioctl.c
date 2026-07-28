@@ -1228,31 +1228,35 @@ static int bch2_ioctl_snapshot_tree_resolve(struct btree_trans *trans,
 	return bch2_snapshot_tree_lookup(trans, *tree_id, st);
 }
 
-static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
-					   struct bch_ioctl_snapshot_tree_query __user *user_arg)
+/*
+ * Shared by BCH_IOCTL_SNAPSHOT_TREE and _v2: a v1 node is a byte-prefix of a
+ * v2 node, so both are served by writing @node_size bytes of a v2 node per
+ * entry. v1 passes its frozen sizeof; v2 passes what the caller asked for,
+ * clamped to what we have.
+ */
+static long __bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
+				       u32 tree_id_arg, u32 size, u32 node_size,
+				       void __user *user_nodes,
+				       u32 __user *user_master_subvol,
+				       u32 __user *user_root_snapshot,
+				       u32 __user *user_nr,
+				       u32 __user *user_total)
 {
-	struct bch_ioctl_snapshot_tree_query arg;
-	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
-
-	if (arg.pad)
-		return bch_err_throw(c, EINVAL_snapshot_tree_query_pad);
-
 	/* Querying a specific tree by ID requires CAP_SYS_ADMIN */
-	if (arg.tree_id && !capable(CAP_SYS_ADMIN))
+	if (tree_id_arg && !capable(CAP_SYS_ADMIN))
 		return bch_err_throw(c, EPERM_non_admin);
 
-	u32 tree_id = arg.tree_id;
+	u32 tree_id = tree_id_arg;
 	struct bch_snapshot_tree st;
 	{
 		CLASS(btree_trans, trans)(c);
 
 		int ret = lockrestart_do(trans,
-			bch2_ioctl_snapshot_tree_resolve(trans, filp, arg.tree_id, &tree_id, &st));
+			bch2_ioctl_snapshot_tree_resolve(trans, filp, tree_id_arg, &tree_id, &st));
 		if (ret)
 			return ret;
 	}
 
-	u32 size = arg.nr;
 	u32 nr = 0;
 	u32 total = 0;
 
@@ -1299,7 +1303,7 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 			total++;
 
 			if (nr < size) {
-				struct bch_ioctl_snapshot_node node = {
+				struct bch_ioctl_snapshot_node_v2 node = {
 					.id		= k.k->p.offset,
 					.parent		= le32_to_cpu(snap.v->parent),
 					.children	= {
@@ -1313,8 +1317,8 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 					.key_bytes	= key_bytes,
 				};
 
-				_ret = copy_to_user_errcode(&user_arg->nodes[nr], &node,
-							    sizeof(node));
+				_ret = copy_to_user_errcode(user_nodes + (size_t) nr * node_size,
+							    &node, node_size);
 				if (!_ret)
 					nr++;
 			}
@@ -1325,15 +1329,62 @@ static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 	if (ret)
 		return ret;
 
-	try(put_user(le32_to_cpu(st.master_subvol), &user_arg->master_subvol));
-	try(put_user(le32_to_cpu(st.root_snapshot), &user_arg->root_snapshot));
-	try(put_user(nr, &user_arg->nr));
-	try(put_user(total, &user_arg->total));
+	try(put_user(le32_to_cpu(st.master_subvol), user_master_subvol));
+	try(put_user(le32_to_cpu(st.root_snapshot), user_root_snapshot));
+	try(put_user(nr, user_nr));
+	try(put_user(total, user_total));
 
 	if (size && size < total)
 		return -ERANGE;
 
 	return 0;
+}
+
+static long bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
+				     struct bch_ioctl_snapshot_tree_query __user *user_arg)
+{
+	struct bch_ioctl_snapshot_tree_query arg;
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	if (arg.pad)
+		return bch_err_throw(c, EINVAL_snapshot_tree_query_pad);
+
+	return __bch2_ioctl_snapshot_tree(c, filp, arg.tree_id, arg.nr,
+					  sizeof(struct bch_ioctl_snapshot_node),
+					  &user_arg->nodes,
+					  &user_arg->master_subvol,
+					  &user_arg->root_snapshot,
+					  &user_arg->nr,
+					  &user_arg->total);
+}
+
+static long bch2_ioctl_snapshot_tree_v2(struct bch_fs *c, struct file *filp,
+					struct bch_ioctl_snapshot_tree_query_v2 __user *user_arg)
+{
+	struct bch_ioctl_snapshot_tree_query_v2 arg;
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	/*
+	 * A caller that doesn't know its own node size can't be given one
+	 * safely - we'd have to guess its stride:
+	 */
+	if (!arg.node_size)
+		return bch_err_throw(c, EINVAL_snapshot_tree_query_pad);
+
+	u32 node_size = min_t(u32, arg.node_size,
+			      sizeof(struct bch_ioctl_snapshot_node_v2));
+
+	/* Tell the caller what we have, so it knows which fields are set: */
+	try(put_user((u32) sizeof(struct bch_ioctl_snapshot_node_v2),
+		     &user_arg->node_size));
+
+	return __bch2_ioctl_snapshot_tree(c, filp, arg.tree_id, arg.nr,
+					  node_size,
+					  &user_arg->nodes,
+					  &user_arg->master_subvol,
+					  &user_arg->root_snapshot,
+					  &user_arg->nr,
+					  &user_arg->total);
 }
 
 static int bch2_propagate_opts_to_reflink_v(struct btree_trans *trans,
@@ -1654,6 +1705,11 @@ long bch2_fs_file_ioctl(struct file *file, unsigned cmd, unsigned long arg)
 	case BCH_IOCTL_SNAPSHOT_TREE:
 		ret = bch2_ioctl_snapshot_tree(c, file,
 				(struct bch_ioctl_snapshot_tree_query __user *) arg);
+		break;
+
+	case BCH_IOCTL_SNAPSHOT_TREE_v2:
+		ret = bch2_ioctl_snapshot_tree_v2(c, file,
+				(struct bch_ioctl_snapshot_tree_query_v2 __user *) arg);
 		break;
 
 	case BCHFS_IOC_PREAD_RAW:
