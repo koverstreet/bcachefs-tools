@@ -1516,8 +1516,6 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 
 	try(ret);
 
-	/* inodes btree keys the inum in the offset field, everything else in inode */
-	u64 inum = iter->btree_id == BTREE_ID_inodes ? k.k->p.offset : k.k->p.inode;
 	unsigned repair_flags = FSCK_CAN_IGNORE | (!ret ? FSCK_CAN_FIX : 0);
 
 	if (state == SNAPSHOT_ID_deleted) {
