@@ -275,40 +275,13 @@ u32 bch2_snapshot_redundant_interior(struct bch_fs *c, u32 id)
  * itself: the deletion and data-move paths call that too and must still see and
  * act on these keys.
  */
-bool bch2_snapshot_will_delete(struct bch_fs *c, u32 id, snapshot_id_list *seen)
+bool bch2_snapshot_will_delete(struct bch_fs *c, u32 id)
 {
 	guard(rcu)();
 	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
 	const struct snapshot_t *s = __snapshot_t(t, id);
-	if (!s)
-		return true;
 
-	if (s->state == SNAPSHOT_ID_will_delete)
-		return true;
-
-	while (true) {
-		u32 child = 0;
-
-		for (unsigned i = 0; i < ARRAY_SIZE(s->children); i++) {
-			enum snapshot_id_state state = __bch2_snapshot_id_state(t, s->children[i]);
-			if (state == SNAPSHOT_ID_live || state == SNAPSHOT_ID_no_keys) {
-				if (child) {
-					child = 0;
-					break;
-				}
-				child = s->children[i];
-			}
-		}
-
-		if (!child)
-			return false;
-
-		if (seen && snapshot_list_has_id(seen, child))
-			return true;
-
-		id = child;
-		s = __snapshot_t(t, id);
-	}
+	return !s || s->state == SNAPSHOT_ID_will_delete;
 }
 
 static inline u32 get_ancestor_below(struct snapshot_table *t, u32 id, u32 ancestor)

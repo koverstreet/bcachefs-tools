@@ -769,7 +769,7 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 		 * always look wrong. Skip them here too; a dying snapshot has
 		 * no live descendants, so live keys can never resolve to one:
 		 */
-		if (bch2_snapshot_will_delete(c, k.k->p.snapshot, NULL))
+		if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
 			continue;
 
 		try(add_inode(c, w, k, false));
@@ -1159,7 +1159,7 @@ static int check_inode(struct btree_trans *trans,
 	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	/* after snapshots_seen: keep the seen list complete even for skipped keys */
-	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
 		return 0;
 
 	if (!bkey_is_inode(k.k))
@@ -1708,7 +1708,7 @@ static int check_unreachable_inode(struct btree_trans *trans,
 	 * to go away, wedging the verify pass on a dangling dirent. check_inode()
 	 * leaves the same root alone for the same reason.
 	 */
-	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
 		return 0;
 
 	if (!bkey_is_inode(k.k))
@@ -2282,7 +2282,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		return ret;
 
 	/* after snapshots_seen: keep the seen list complete even for skipped keys */
-	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
 		return 0;
 
 	if (k.k->type == KEY_TYPE_whiteout)
@@ -2582,7 +2582,7 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	/* after snapshots_seen: keep the seen list complete even for skipped keys */
-	if (bch2_snapshot_will_delete(c, k.k->p.snapshot, &s->ids))
+	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
 		return 0;
 
 	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, inode, k));

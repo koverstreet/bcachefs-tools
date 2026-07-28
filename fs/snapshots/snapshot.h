@@ -212,7 +212,7 @@ static inline bool bch2_snapshot_exists(struct bch_fs *c, u32 id)
 }
 
 u32 bch2_snapshot_redundant_interior(struct bch_fs *, u32);
-bool bch2_snapshot_will_delete(struct bch_fs *, u32, snapshot_id_list *);
+bool bch2_snapshot_will_delete(struct bch_fs *, u32);
 
 /*
  * Is @id already a collapse terminal - i.e. in the frame fsck compares in?
