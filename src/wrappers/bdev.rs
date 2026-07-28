@@ -36,7 +36,11 @@ const BLKGETSIZE64: libc::Ioctl = 0x40081272u32 as libc::Ioctl;
     target_arch = "sparc",
     target_arch = "sparc64",
 )))]
-const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
+const BLKGETSIZE64: libc::Ioctl = if cfg!(target_pointer_width = "32") {
+    0x80041272u32 as libc::Ioctl
+} else {
+    0x80081272u32 as libc::Ioctl
+};
 
 /// Returns the size of a file or block device in bytes.
 ///
