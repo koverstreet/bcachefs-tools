@@ -145,7 +145,7 @@ void __bch2_i_sectors_acct(struct bch_fs *c, struct bch_inode_info *inode,
 	if (unlikely((s64) inode->v.i_blocks + sectors < 0)) {
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m, "subvol %llu inode %llu i_blocks underflow: %llu + %lli < 0 (ondisk %lli)",
-			   (u64) inode->ei_inum.subvol, (u64) inode->v.i_ino,
+			   (u64) inode->ei_inum.subvol, (u64) inode->ei_inum.inum,
 			   (u64) inode->v.i_blocks, sectors,
 			   inode->ei_inode.bi_sectors);
 
@@ -316,8 +316,8 @@ static int __bch2_truncate_folio(struct bch_inode_info *inode,
 		 * folio
 		 */
 		ret = range_has_data(c, inode->ei_inum.subvol,
-				POS(inode->v.i_ino, (index << PAGE_SECTORS_SHIFT)),
-				POS(inode->v.i_ino, (index << PAGE_SECTORS_SHIFT) + PAGE_SECTORS));
+				POS(inode->ei_inum.inum, (index << PAGE_SECTORS_SHIFT)),
+				POS(inode->ei_inum.inum, (index << PAGE_SECTORS_SHIFT) + PAGE_SECTORS));
 		if (ret <= 0)
 			return ret;
 
@@ -550,7 +550,7 @@ int bchfs_truncate(struct mnt_idmap *idmap,
 		CLASS(bch_log_msg, msg)(c);
 		prt_printf(&msg.m,
 			   "inode %llu truncated to 0 but i_blocks %llu (ondisk %lli)",
-			   (u64) inode->v.i_ino, (u64) inode->v.i_blocks,
+			   (u64) inode->ei_inum.inum, (u64) inode->v.i_blocks,
 			   inode->ei_inode.bi_sectors);
 
 		msg.m.suppress = !bch2_count_fsck_err(c, vfs_inode_i_blocks_not_zero_at_truncate, &msg.m);
@@ -650,7 +650,7 @@ static noinline int __bchfs_fallocate(struct bch_inode_info *inode, int mode,
 			     u64 start_sector, u64 end_sector)
 {
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
-	struct bpos end_pos = POS(inode->v.i_ino, end_sector);
+	struct bpos end_pos = POS(inode->ei_inum.inum, end_sector);
 	struct bch_inode_opts opts;
 	int ret = 0;
 
@@ -658,7 +658,7 @@ static noinline int __bchfs_fallocate(struct bch_inode_info *inode, int mode,
 
 	CLASS(btree_trans, trans)(c);
 	CLASS(btree_iter, iter)(trans, BTREE_ID_extents,
-			POS(inode->v.i_ino, start_sector),
+			POS(inode->ei_inum.inum, start_sector),
 			BTREE_ITER_slots|BTREE_ITER_intent);
 
 	while (!ret) {
@@ -879,8 +879,8 @@ static int quota_reserve_range(struct bch_inode_info *inode,
 	CLASS(btree_trans, trans)(c);
 	int ret = for_each_btree_key_in_subvolume_max(trans, iter,
 				BTREE_ID_extents,
-				POS(inode->v.i_ino, start),
-				POS(inode->v.i_ino, end - 1),
+				POS(inode->ei_inum.inum, start),
+				POS(inode->ei_inum.inum, end - 1),
 				inode->ei_inum.subvol, 0, k, ({
 			if (bkey_extent_is_allocation(k.k)) {
 				u64 s = min(end, k.k->p.offset) -
@@ -1014,8 +1014,8 @@ static loff_t bch2_seek_data(struct file *file, u64 offset)
 
 	try(bch2_trans_run(c,
 		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
-				   POS(inode->v.i_ino, offset >> 9),
-				   POS(inode->v.i_ino, U64_MAX),
+				   POS(inode->ei_inum.inum, offset >> 9),
+				   POS(inode->ei_inum.inum, U64_MAX),
 				   inum.subvol, 0, k, ({
 			if (bkey_extent_is_data(k.k)) {
 				next_data = max(offset, bkey_start_offset(k.k) << 9);
@@ -1048,15 +1048,15 @@ static loff_t bch2_seek_hole(struct file *file, u64 offset)
 
 	CLASS(btree_trans, trans)(c);
 	try(for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
-				   POS(inode->v.i_ino, offset >> 9),
-				   POS(inode->v.i_ino, U64_MAX),
+				   POS(inode->ei_inum.inum, offset >> 9),
+				   POS(inode->ei_inum.inum, U64_MAX),
 				   inum.subvol, BTREE_ITER_slots, k, ({
-		if (k.k->p.inode != inode->v.i_ino ||
+		if (k.k->p.inode != inode->ei_inum.inum ||
 		    !bkey_extent_is_data(k.k)) {
-			loff_t start_offset = k.k->p.inode == inode->v.i_ino
+			loff_t start_offset = k.k->p.inode == inode->ei_inum.inum
 				? max(offset, bkey_start_offset(k.k) << 9)
 				: offset;
-			loff_t end_offset = k.k->p.inode == inode->v.i_ino
+			loff_t end_offset = k.k->p.inode == inode->ei_inum.inum
 				? MAX_LFS_FILESIZE
 				: k.k->p.offset << 9;
 

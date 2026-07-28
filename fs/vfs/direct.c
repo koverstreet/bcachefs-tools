@@ -457,7 +457,7 @@ static __always_inline long bch2_dio_write_loop(struct dio_write *dio)
 		dio->op.write_point	= writepoint_hashed((unsigned long) current);
 		dio->op.nr_replicas	= dio->op.opts.data_replicas;
 		dio->op.subvol		= inode->ei_inum.subvol;
-		dio->op.pos		= POS(inode->v.i_ino, (u64) req->ki_pos >> 9);
+		dio->op.pos		= POS(inode->ei_inum.inum, (u64) req->ki_pos >> 9);
 		dio->op.devs_need_flush	= &inode->ei_devs_need_flush;
 
 		if (sync)
