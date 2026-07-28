@@ -222,11 +222,33 @@ fn regex_escape(s: &str) -> String {
 }
 
 /// Default blocklist dirs for the userspace build: types from the kernel-compat
-/// `include/` shim and from `/usr` are resolved through bcachefs-shim, not
-/// re-emitted. The kernel build passes its own header trees instead.
+/// `include/` shim and from system headers are resolved through bcachefs-shim,
+/// not re-emitted. The kernel build passes its own header trees instead.
+///
+/// Why path regexes and not something structural: bindgen has no notion of
+/// "system header" (nothing keyed off -isystem), only file-path patterns. And
+/// --allowlist-file can't replace these: allowlisting makes every item in a
+/// matching file a *root*, so --wrap-static-fns then wraps every static inline
+/// in the tree - which breaks on functions whose signatures use
+/// structs-defined-within-structs (bindgen's mangled names for those aren't
+/// real C types, so the generated extern.c doesn't compile). Curated
+/// allowlists pick the roots; these patterns prune dependencies back to the
+/// shim.
+///
+/// The patterns keep a leading wildcard so sysroot'd cross builds stay
+/// covered (--sysroot puts system headers at $sysroot/usr/include), but
+/// require the /usr/include (etc.) path component: a bare `.*/usr/.*` also
+/// matched source trees under paths like /usr/src/RPM/BUILD (#801). On
+/// distros where system headers live elsewhere entirely (NixOS: /nix/store)
+/// these are inert and the shim include/ entry does all the pruning - do NOT
+/// "fix" that with a store-path pattern, nix builds put the source tree in
+/// the store too, which is #801 all over again.
 pub fn default_blocklist(src: &str) -> Vec<String> {
     let include_dir = format!("{}/include", parent(src));
-    vec![format!("{}/.*", regex_escape(&include_dir)), ".*/usr/.*".to_string()]
+    vec![format!("{}/.*", regex_escape(&include_dir)),
+         ".*/usr/include/.*".to_string(),
+         ".*/usr/local/include/.*".to_string(),
+         ".*/usr/lib/.*".to_string()]
 }
 
 /// Generate the x-macro-derived *_gen.rs files from the *_format.h headers.
