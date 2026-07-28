@@ -509,24 +509,22 @@ impl Filesystem for BcachefsFs {
 
         let fs = self.fs();
 
-        let (atime_flag, atime_val): (i32, u64) = match &atime {
+	let parse_time = |time: &Option<TimeOrNow>| match time {
             None => (0, 0),
             Some(TimeOrNow::Now) => (2, 0),
             Some(TimeOrNow::SpecificTime(t)) => {
                 let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-                let ts = c::timespec { tv_sec: d.as_secs() as _, tv_nsec: d.subsec_nanos() as _ };
+                let ts = c::timespec {
+                    tv_sec: d.as_secs() as _,
+                    tv_nsec: d.subsec_nanos() as _,
+                    ..unsafe { std::mem::zeroed() }
+                };
                 (1, fs.timespec_to_time(ts) as u64)
             }
         };
-        let (mtime_flag, mtime_val): (i32, u64) = match &mtime {
-            None => (0, 0),
-            Some(TimeOrNow::Now) => (2, 0),
-            Some(TimeOrNow::SpecificTime(t)) => {
-                let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-                let ts = c::timespec { tv_sec: d.as_secs() as _, tv_nsec: d.subsec_nanos() as _ };
-                (1, fs.timespec_to_time(ts) as u64)
-            }
-        };
+
+        let (atime_flag, atime_val) = parse_time(&atime);
+        let (mtime_flag, mtime_val) = parse_time(&mtime);
 
         let bi = match fuse_setattr(
             &fs,
