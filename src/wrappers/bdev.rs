@@ -11,32 +11,11 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 
-use libc::BLKPBSZGET;
-
-// linux/fs.h ioctl constants not exposed by libc crate. Note that some
-// architectures use a 3-bit ioctl direction field.
-#[cfg(any(
-    target_arch = "powerpc",
-    target_arch = "powerpc64",
-    target_arch = "mips",
-    target_arch = "mips32r6",
-    target_arch = "mips64",
-    target_arch = "mips64r6",
-    target_arch = "sparc",
-    target_arch = "sparc64",
-))]
-const BLKGETSIZE64: libc::Ioctl = 0x40081272u32 as libc::Ioctl;
-#[cfg(not(any(
-    target_arch = "powerpc",
-    target_arch = "powerpc64",
-    target_arch = "mips",
-    target_arch = "mips32r6",
-    target_arch = "mips64",
-    target_arch = "mips64r6",
-    target_arch = "sparc",
-    target_arch = "sparc64",
-)))]
-const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
+// The block ioctl numbers encode sizeof() of the argument type and the
+// direction bits differ between architectures, so they can't be constants
+// here: bindgen computes them for the target from linux/fs.h.
+const BLKGETSIZE64: libc::Ioctl = bch_bindgen::c::BLKGETSIZE64 as libc::Ioctl;
+const BLKPBSZGET: libc::Ioctl = bch_bindgen::c::BLKPBSZGET as libc::Ioctl;
 
 /// Returns the size of a file or block device in bytes.
 ///

@@ -128,8 +128,10 @@ pub fn fmt_num_human(n: u64) -> String {
 pub fn file_size(f: &File) -> Result<u64> {
     let meta = f.metadata()?;
     if meta.file_type().is_block_device() {
-        // BLKGETSIZE64 = _IOR(0x12, 114, size_t)
-        const BLKGETSIZE64: ioctl::Opcode = ioctl::opcode::read::<u64>(0x12, 114);
+        // _IOR(0x12, 114, size_t): the size encoded in the number is
+        // sizeof(size_t), not of the u64 we read into - they differ on 32
+        // bit, so take the number bindgen computed for the target.
+        const BLKGETSIZE64: ioctl::Opcode = bch_bindgen::c::BLKGETSIZE64 as ioctl::Opcode;
         Ok(unsafe { ioctl::ioctl(f, Getter::<BLKGETSIZE64, u64>::new()) }?)
     } else {
         Ok(meta.len())
