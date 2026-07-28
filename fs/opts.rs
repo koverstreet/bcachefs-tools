@@ -1,9 +1,7 @@
 use crate::c;
+use crate::fs::Fs;
 use crate::util::printbuf::Printbuf;
 use core::ffi::CStr;
-// Used only by the std-gated mount-option helpers below.
-#[cfg(feature = "std")]
-use crate::fs::Fs;
 #[cfg(feature = "std")]
 use core::ffi::c_char;
 #[cfg(feature = "std")]
@@ -217,4 +215,26 @@ pub fn prt_compression_type(out: &mut Printbuf, t: c::bch_compression_type) {
 /// Print a reconcile accounting type directly into a Printbuf.
 pub fn prt_reconcile_type(out: &mut Printbuf, t: c::bch_reconcile_accounting_type) {
     unsafe { c::bch2_prt_reconcile_accounting_type(out.as_raw(), t) }
+}
+
+/// Look up an option by name. The typed id plus the table entry.
+pub fn opt_lookup(name: &core::ffi::CStr) -> Option<(c::bch_opt_id, &'static c::bch_option)> {
+    let id = unsafe { c::bch2_opt_lookup(name.as_ptr()) };
+    if id < 0 || id as usize >= opt_table().len() {
+        return None;
+    }
+    Some((opt_id(id as usize), &opt_table()[id as usize]))
+}
+
+/// Parse an option value string; a filesystem context enables options
+/// that need one. Err is the negative bch_errcode from the parser.
+pub fn opt_parse(fs: Option<&Fs>, opt: &c::bch_option, val: &core::ffi::CStr,
+                 err: Option<&mut Printbuf>) -> Result<u64, i32> {
+    let mut v = 0u64;
+    let ret = unsafe {
+        c::bch2_opt_parse(fs.map_or(core::ptr::null_mut(), |f| f.raw),
+                          opt, val.as_ptr(), &mut v,
+                          err.map_or(core::ptr::null_mut(), |e| e.as_raw()))
+    };
+    if ret < 0 { Err(ret) } else { Ok(v) }
 }
