@@ -1085,4 +1085,31 @@ static inline bool bch2_btree_is_clean(struct bch_fs *c, enum btree_id btree)
 #define class_bch_log_msg_ratelimited_constructor(_c)		\
 	bch2_log_msg_init(_c, 3, bch2_ratelimit(_c), false)
 
+
+#ifdef CONFIG_ARM
+#include <asm/cmpxchg.h>
+
+#define __bch_cmpxchg(ptr, o, n, fn64, fn32)				\
+({									\
+	__typeof__(*(ptr)) __ret;					\
+	if (sizeof(*(ptr)) == 8)					\
+		__ret = fn64((ptr), (o), (n));				\
+	else								\
+		__ret = (__typeof__(*(ptr)))fn32((ptr),			\
+				(unsigned long)(o),			\
+				(unsigned long)(n),			\
+				sizeof(*(ptr)));			\
+	__ret;								\
+})
+
+#undef cmpxchg
+#define cmpxchg(ptr, o, n) \
+	__bch_cmpxchg(ptr, o, n, cmpxchg64, __cmpxchg)
+
+#undef cmpxchg_local
+#define cmpxchg_local(ptr, o, n) \
+	__bch_cmpxchg(ptr, o, n, cmpxchg64_local, __cmpxchg_local)
+
+#endif /* CONFIG_ARM */
+
 #endif /* _BCACHEFS_H */
