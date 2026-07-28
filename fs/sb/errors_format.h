@@ -400,7 +400,11 @@ enum bch_fsck_flags {
 	x(dirent_to_inode_in_descendant_snapshot,		368,	FSCK_AUTOFIX)	\
 	x(damage_entries_bad,					387,	0)		\
 	x(damage_key_no_inode,					388,	FSCK_AUTOFIX)	\
-	x(MAX,							389,	0)
+	x(data_read_io_err_recovered,				389,	0)		\
+	x(data_read_io_err,					390,	0)		\
+	x(data_read_csum_err_recovered,				391,	0)		\
+	x(data_read_csum_err,					392,	0)		\
+	x(MAX,							393,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
