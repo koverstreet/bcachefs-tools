@@ -331,7 +331,7 @@ fn file_size_fd(fd: BorrowedFd<'_>) -> Result<u64> {
 
     let stat = fstat(fd)?;
     if FileType::from_raw_mode(stat.st_mode) == FileType::BlockDevice {
-        const BLKGETSIZE64: ioctl::Opcode = ioctl::opcode::read::<u64>(0x12, 114);
+        const BLKGETSIZE64: ioctl::Opcode = bch_bindgen::c::BLKGETSIZE64 as ioctl::Opcode;
         Ok(unsafe { rustix::ioctl::ioctl(fd, Getter::<BLKGETSIZE64, u64>::new()) }?)
     } else {
         Ok(stat.st_size as u64)
