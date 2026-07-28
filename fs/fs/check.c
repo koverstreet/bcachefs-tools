@@ -824,9 +824,11 @@ static int get_visible_inodes(struct btree_trans *trans,
 		if (k.k->p.offset != inum)
 			break;
 
+		/* physical: is there a version at the dirent's own snapshot? */
 		have_key_at_pos |= k.k->p.snapshot == s->pos.snapshot;
 
-		if (!bch2_ref_visible(trans, s, s->pos.snapshot, k.k->p.snapshot))
+		if (!bch2_ref_visible(trans, s, s->pos_equiv,
+				      bch2_snapshot_redundant_interior(c, k.k->p.snapshot)))
 			continue;
 
 		if (snapshot_list_has_ancestor(trans, &w->deletes, k.k->p.snapshot))
