@@ -687,7 +687,7 @@ static int rbio_mark_io_failure(struct bch_read_bio *rbio,
 
 	}
 
-	if (ret == BCH_ERR_BLK_STS_INVAL) {
+	if (ret == -BCH_ERR_BLK_STS_INVAL) {
 		prt_printf(&failed->ec_msg, "Failing bio, after block layer completion:\n");
 		guard(printbuf_indent)(&failed->ec_msg);
 		bch2_bio_to_text(&failed->ec_msg, &rbio->bio);
