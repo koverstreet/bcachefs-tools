@@ -42,6 +42,7 @@
 
 #include "debug/async_objs.h"
 
+#include "init/damage.h"
 #include "init/error.h"
 
 #include "sb/counters.h"
@@ -696,6 +697,12 @@ static int rbio_mark_io_failure(struct bch_read_bio *rbio,
 	return ret;
 }
 
+static bool data_read_err_is_csum(int ret)
+{
+	return bch2_err_matches(ret, BCH_ERR_data_read_retry_csum_err) ||
+	       bch2_err_matches(ret, BCH_ERR_data_read_retry_csum_err_maybe_userspace);
+}
+
 static void bch2_rbio_retry(struct work_struct *work)
 {
 	struct bch_read_bio *rbio =
@@ -708,6 +715,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 		.inum	= rbio->read_pos.inode,
 	};
 	struct bpos read_pos = rbio->read_pos;
+	int orig_ret = rbio->ret;
 	CLASS(bch_io_failures, failed)();
 
 	flags &= ~BCH_READ_hard_require_read_device;
@@ -783,6 +791,29 @@ static void bch2_rbio_retry(struct work_struct *work)
 
 			if (rbio->err_report)
 				mutex_unlock(&rbio->err_report->lock);
+		}
+
+		/*
+		 * The persistent record: count what happened - recovered via
+		 * retry vs. hard failure, io error vs. checksum error - and
+		 * record damage against the file. Best effort: a bookkeeping
+		 * failure doesn't fail the read. Only user reads name an inum
+		 * (a data update read may be an indirect extent):
+		 */
+		if (failed.nr || ret) {
+			enum bch_sb_error_id e = !ret
+				? (data_read_err_is_csum(orig_ret)
+				   ? BCH_FSCK_ERR_data_read_csum_err_recovered
+				   : BCH_FSCK_ERR_data_read_io_err_recovered)
+				: (data_read_err_is_csum(ret)
+				   ? BCH_FSCK_ERR_data_read_csum_err
+				   : BCH_FSCK_ERR_data_read_io_err);
+
+			bch2_sb_error_count(c, e);
+
+			if (!rbio->data_update && inum.subvol && !bkey_deleted(&sk.k->k))
+				commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+					  bch2_damage_record(trans, read_pos, e));
 		}
 
 		/* drop trans before calling rbio_done() */
