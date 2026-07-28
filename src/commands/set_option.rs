@@ -135,24 +135,17 @@ fn set_option_offline(
         }
 
         let c_value = CString::new(value.as_str())?;
-        let mut val: u64 = 0;
-        let ret = unsafe {
-            c::bch2_opt_parse(fs.raw, opt, c_value.as_ptr(), &mut val, std::ptr::null_mut())
-        };
-        if ret < 0 {
+        let Ok(val) = bcachefs_kernel::opts::opt_parse(Some(&fs), opt, &c_value, None) else {
             eprintln!("Error parsing {name}={value}");
             continue;
-        }
+        };
 
         if flags & c::opt_flags::OPT_FS as u32 != 0 {
-            let ret = unsafe {
-                c::bch2_opt_hook_pre_set(fs.raw, std::ptr::null_mut(), 0, opt_id, val, true, std::ptr::null_mut())
-            };
-            if ret < 0 {
-                eprintln!("Error setting {name}: {ret}");
+            if let Err(e) = fs.opt_hook_pre_set(None, opt_id, val) {
+                eprintln!("Error setting {name}: {e}");
                 continue;
             }
-            unsafe { c::bch2_opt_set_sb(fs.raw, std::ptr::null_mut(), opt, val, c_value.as_ptr()); }
+            fs.opt_set_sb(None, opt, val, Some(&c_value));
         }
 
         if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
@@ -160,25 +153,21 @@ fn set_option_offline(
                 dev_idxs.to_vec()
             } else {
                 devices.iter().filter_map(|dev| {
-                    name_to_dev_idx(fs.raw, dev).map(|i| i as u32)
+                    name_to_dev_idx(&fs, dev).map(|i| i as u32)
                 }).collect()
             };
 
             for idx in indices {
-                let ca = unsafe { (*fs.raw).devs[idx as usize] };
-                if ca.is_null() {
+                let Some(ca) = fs.dev_get(idx) else {
                     eprintln!("Couldn't look up device {idx}");
                     continue;
-                }
-
-                let ret = unsafe {
-                    c::bch2_opt_hook_pre_set(fs.raw, ca, 0, opt_id, val, true, std::ptr::null_mut())
                 };
-                if ret < 0 {
-                    eprintln!("Error setting {name}: {ret}");
+
+                if let Err(e) = fs.opt_hook_pre_set(Some(&ca), opt_id, val) {
+                    eprintln!("Error setting {name}: {e}");
                     continue;
                 }
-                unsafe { c::bch2_opt_set_sb(fs.raw, ca, opt, val, c_value.as_ptr()); }
+                fs.opt_set_sb(Some(&ca), opt, val, Some(&c_value));
             }
         }
     }
@@ -186,25 +175,10 @@ fn set_option_offline(
     Ok(())
 }
 
-fn name_to_dev_idx(c: *mut c::bch_fs, name: &str) -> Option<usize> {
-    let devs_len = unsafe { (*c).devs.len() };
-    for i in 0..devs_len {
-        let ca = unsafe { (*c).devs[i] };
-        if ca.is_null() { continue; }
-        // bch_dev.name is a [c_char; 32] array, not a pointer
-        let ca_name_bytes = unsafe { &(*ca).name };
-        // Find the null terminator
-        let len = ca_name_bytes.iter().position(|&b| b == 0).unwrap_or(32);
-        // c_char is i8, but from_utf8 wants u8 - use from_raw_parts to reinterpret
-        let ca_name_bytes_u8 = unsafe {
-            std::slice::from_raw_parts(ca_name_bytes[..len].as_ptr() as *const u8, len)
-        };
-        let ca_name = std::str::from_utf8(ca_name_bytes_u8).ok()?;
-        if ca_name == name {
-            return Some(i);
-        }
-    }
-    None
+fn name_to_dev_idx(fs: &Fs, name: &str) -> Option<usize> {
+    (0..fs.nr_devices())
+        .find(|&i| fs.dev_get(i).is_some_and(|ca| ca.name().to_bytes() == name.as_bytes()))
+        .map(|i| i as usize)
 }
 
 pub const CMD: super::CmdDef = raw_cmd!("set-fs-option", "Set filesystem options", cmd_set_option);

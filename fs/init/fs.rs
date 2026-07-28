@@ -17,6 +17,11 @@ impl DevRef {
     pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
         self.0
     }
+
+    /// The device name (sdX etc).
+    pub fn name(&self) -> &core::ffi::CStr {
+        unsafe { core::ffi::CStr::from_ptr((*self.0).name.as_ptr()) }
+    }
 }
 
 impl core::ops::Deref for DevRef {
@@ -228,6 +233,29 @@ impl Fs {
     pub fn dev_get(&self, dev: u32) -> Option<DevRef> {
         let ca = unsafe { c::bch2_dev_tryget_noerror(self.raw, dev) };
         if ca.is_null() { None } else { Some(DevRef(ca)) }
+    }
+
+    /// Run an option's pre-set hook; None dev = filesystem scope.
+    pub fn opt_hook_pre_set(&self, dev: Option<&DevRef>, id: c::bch_opt_id, v: u64)
+        -> Result<(), BchError>
+    {
+        ret_to_result(unsafe {
+            c::bch2_opt_hook_pre_set(self.raw,
+                dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
+                0, id, v, true, core::ptr::null_mut())
+        })
+    }
+
+    /// Set an option in the superblock; None dev = filesystem scope.
+    pub fn opt_set_sb(&self, dev: Option<&DevRef>, opt: &c::bch_option, v: u64,
+                      val_str: Option<&core::ffi::CStr>)
+    {
+        unsafe {
+            c::bch2_opt_set_sb(self.raw,
+                dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
+                opt, v,
+                val_str.map_or(core::ptr::null(), |s| s.as_ptr()));
+        }
     }
 
     /// Start the filesystem (recovery, journal replay, etc).
