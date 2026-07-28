@@ -48,7 +48,14 @@ extern char __start_bch_percpu[], __stop_bch_percpu[];
  * Static section is sized at link time (__stop_bch_percpu - __start_bch_percpu);
  * dynamic arena is BCH_PERCPU_DYNAMIC_SIZE bytes for alloc_percpu().
  */
-#define BCH_PERCPU_DYNAMIC_SIZE	(512 * 1024)
+/*
+ * Address space per chunk, not memory: chunks are NORESERVE anonymous
+ * mappings, so pages materialize only as allocations touch them. Sized
+ * for the largest consumer - gc's accounting table allocates a percpu
+ * counter set per accounting key, and a large filesystem with many
+ * snapshots has hundreds of thousands of those.
+ */
+#define BCH_PERCPU_DYNAMIC_SIZE	(256UL * 1024 * 1024)
 
 extern __thread void *bch_percpu_my_chunk;
 extern __thread int   bch_percpu_my_id;
