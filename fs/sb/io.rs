@@ -336,6 +336,28 @@ impl<'a> SbMut<'a> {
     }
 }
 
+/// Anything holding a superblock that can be viewed as bytes and
+/// mutated in place: SbMut/SbBuf over raw buffers, bch_sb_handle for
+/// C-owned superblocks. Superblock IO takes any of them.
+pub trait SbAccess {
+    fn sb(&self) -> &bch_sb;
+    fn sb_mut(&mut self) -> &mut bch_sb;
+    /// The superblock's full vstruct extent.
+    fn sb_bytes(&self) -> &[u8];
+}
+
+impl SbAccess for bch_sb_handle {
+    fn sb(&self) -> &bch_sb { bch_sb_handle::sb(self) }
+    fn sb_mut(&mut self) -> &mut bch_sb { bch_sb_handle::sb_mut(self) }
+    fn sb_bytes(&self) -> &[u8] { bch_sb_handle::sb_bytes(self) }
+}
+
+impl SbAccess for SbMut<'_> {
+    fn sb(&self) -> &bch_sb { SbMut::sb(self) }
+    fn sb_mut(&mut self) -> &mut bch_sb { SbMut::sb_mut(self) }
+    fn sb_bytes(&self) -> &[u8] { SbMut::bytes(self) }
+}
+
 /// An owned superblock: aligned storage, extents validated at
 /// construction. The owned counterpart of SbRef/SbMut, for recovery
 /// flows that carry superblocks around as values.
@@ -376,6 +398,13 @@ impl SbBuf {
     pub fn field<F: SbField>(&self) -> Option<&F> {
         sb_field_get(self.sb())
     }
+}
+
+#[cfg(feature = "std")]
+impl SbAccess for SbBuf {
+    fn sb(&self) -> &bch_sb { SbBuf::sb(self) }
+    fn sb_mut(&mut self) -> &mut bch_sb { SbBuf::sb_mut(self) }
+    fn sb_bytes(&self) -> &[u8] { SbBuf::bytes(self) }
 }
 
 // LE64_BITMASK accessors — pure Rust replacements for C shims in rust_shims.c.

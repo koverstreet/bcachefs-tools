@@ -9,7 +9,8 @@ use std::os::unix::io::{IntoRawFd, RawFd};
 use bch_bindgen::c;
 use bcachefs_kernel::{metadata_version, opt_defined, opt_get, opt_set};
 
-use crate::wrappers::super_io::{die, BCHFS_MAGIC, SUPERBLOCK_SIZE_DEFAULT};
+use crate::wrappers::super_io::{die, SUPERBLOCK_SIZE_DEFAULT};
+use bcachefs_kernel::sb::io::BCHFS_MAGIC;
 
 /// Device options for formatting — Rust replacement for C struct dev_opts.
 ///
@@ -383,7 +384,7 @@ pub fn format(
                 .unwrap_or_else(|e| die(&format!("zeroing start of disk: {}", e)));
         }
 
-        crate::wrappers::super_io::bch2_super_write(fd, sb.sb);
+        crate::wrappers::super_io::bch2_super_write(fd, &mut *sb);
     }
 
     let paths: Vec<&str> = dev_slice
