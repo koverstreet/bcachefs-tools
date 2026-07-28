@@ -253,6 +253,20 @@ __cold void bch2_fs_errors_to_text(struct printbuf *out, struct bch_fs *c)
 	}
 }
 
+/* @err is a BCH_ERR_BLK_STS_* errcode, as thrown by blk_status_to_bch_err() */
+enum bch_sb_error_id bch2_blk_sts_sb_err(int err)
+{
+	switch (abs(err)) {
+#define x(_blk_sts, _name)						\
+	case BCH_ERR_BLK_STS_##_blk_sts:				\
+		return BCH_FSCK_ERR_blk_sts_##_name;
+	BCH_BLK_STS_SB_ERRS()
+#undef x
+	default:
+		return BCH_FSCK_ERR_blk_sts_unknown;
+	}
+}
+
 void bch2_sb_error_count(struct bch_fs *c, enum bch_sb_error_id err)
 {
 	bch_sb_errors_cpu *e = &c->errors.counts;

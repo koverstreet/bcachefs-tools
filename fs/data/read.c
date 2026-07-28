@@ -811,6 +811,19 @@ static void bch2_rbio_retry(struct work_struct *work)
 
 			bch2_sb_error_count(c, e);
 
+			/*
+			 * Also count what the device said, per failure: the
+			 * outcome counters above say a read failed, these say
+			 * why - media errors, timeouts and rejected requests
+			 * are entirely different problems.
+			 */
+			darray_for_each(failed, f) {
+				if (f->errcode)
+					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->errcode));
+				if (f->ec_errcode)
+					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->ec_errcode));
+			}
+
 			if (!rbio->data_update && inum.subvol && !bkey_deleted(&sk.k->k))
 				commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 					  bch2_damage_record(trans, read_pos, e));
