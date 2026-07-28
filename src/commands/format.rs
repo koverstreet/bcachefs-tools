@@ -451,6 +451,14 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
         bail!("--source, --no_initialize are incompatible");
     }
 
+    if source.is_some() && format_version.is_some() {
+        bail!("--version cannot be used with --source: populating the \
+               filesystem runs the current code's write path, which upgrades \
+               it to the current version as soon as it goes read-write - the \
+               requested version would not survive. Format with --version \
+               alone, then populate using tools of that version.");
+    }
+
     if passphrase_file.is_some() && !encrypted {
         bail!("--passphrase_file requires --encrypted");
     }
