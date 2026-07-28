@@ -15,6 +15,7 @@
 #include "init/error.h"
 #include "sb/errors.h"
 #include "snapshots/snapshot.h"
+#include "snapshots/subvolume.h"
 
 int bch2_damage_validate(struct bch_fs *c, struct bkey_s_c k,
 			 const struct bkey_validate_context *from)
@@ -162,10 +163,35 @@ int bch2_damage_delete(struct btree_trans *trans, u64 inum, u32 snapshot)
 				BTREE_ITER_all_snapshots);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
-	if (k.k->type != KEY_TYPE_damage)
+	/* whiteouts (cleared damage) die with the inode too: */
+	if (k.k->type != KEY_TYPE_damage &&
+	    k.k->type != KEY_TYPE_whiteout)
 		return 0;
 
 	return bch2_btree_delete_at(trans, &iter, BTREE_UPDATE_internal_snapshot_node);
+}
+
+/*
+ * Clear the damage record for @inum in the calling subvolume's view: a
+ * filtered delete, so it's a real delete when no older version needs the
+ * record and a whiteout when one does - snapshots keep their view, and
+ * the whiteout hides inherited damage from this view and its
+ * descendants. Clearing a clean file is a no-op.
+ */
+int bch2_damage_clear(struct btree_trans *trans, subvol_inum inum)
+{
+	u32 snapshot;
+	try(bch2_subvolume_get_snapshot(trans, inum.subvol, &snapshot));
+
+	CLASS(btree_iter, iter)(trans, BTREE_ID_damage,
+				SPOS(0, inum.inum, snapshot),
+				BTREE_ITER_intent);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+	if (k.k->type != KEY_TYPE_damage)
+		return 0;
+
+	return bch2_btree_delete_at(trans, &iter, 0);
 }
 
 /*

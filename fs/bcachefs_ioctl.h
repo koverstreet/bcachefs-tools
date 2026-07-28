@@ -86,6 +86,14 @@
 #define BCHFS_IOC_READDIR_FLAGS		_IOWR(0xbc, 69, struct bch_ioctl_readdir_flags)
 
 /*
+ * BCHFS_IOC_CLEAR_DAMAGE: clear the file's damage record, in the calling
+ * subvolume's view - snapshots keep theirs (on disk the clear is a
+ * whiteout when an older version still needs the record). Requires
+ * ownership or CAP_FOWNER, like chattr.
+ */
+#define BCHFS_IOC_CLEAR_DAMAGE		_IO(0xbc, 71)
+
+/*
  * BCHFS_IOC_GET_DAMAGE: the accumulated damage record for this file - the
  * union of damage recorded against its inode in the file's snapshot and
  * all ancestor snapshot versions, since damage done to an ancestor version
