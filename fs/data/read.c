@@ -816,11 +816,16 @@ static void bch2_rbio_retry(struct work_struct *work)
 			 * outcome counters above say a read failed, these say
 			 * why - media errors, timeouts and rejected requests
 			 * are entirely different problems.
+			 *
+			 * Only for failures that came back from the block
+			 * layer: errcode also holds our own verdicts (device
+			 * offline, stale pointer, decompress error), and those
+			 * aren't block statuses to be counted as unknown ones.
 			 */
 			darray_for_each(failed, f) {
-				if (f->errcode)
+				if (bch2_err_matches(f->errcode, BCH_ERR_blockdev_io_error))
 					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->errcode));
-				if (f->ec_errcode)
+				if (bch2_err_matches(f->ec_errcode, BCH_ERR_blockdev_io_error))
 					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->ec_errcode));
 			}
 
