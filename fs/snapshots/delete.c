@@ -502,8 +502,50 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 	}
 
 	if (!u->v.children[0]) {
-		bch_err(c, "cannot undelete a node with no children");
-		return bch_err_throw(c, fsck_repair_unimplemented);
+		/*
+		 * Childless: no splice to undo - our retained parent pointer is
+		 * intact. Handle the simple case, parent still live: revive in
+		 * place, and if our slot in the parent was cleared, the edge
+		 * repairs complete it from our side. A dead parent would need
+		 * undeleting too - unexpected, so fail rather than guess:
+		 */
+		u32 parent_id = le32_to_cpu(u->v.parent);
+		if (!parent_id) {
+			prt_printf(&msg.m, "cannot undelete a childless root");
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+
+		struct bkey_i_snapshot *parent =
+			bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
+						POS(0, parent_id), 0, snapshot);
+		int ret = PTR_ERR_OR_ZERO(parent);
+		if (bch2_err_matches(ret, ENOENT)) {
+			prt_printf(&msg.m, "cannot undelete: parent no longer exists");
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+		if (ret)
+			return ret;
+
+		if (bch2_snapshot_state_compat(&parent->v) != SNAPSHOT_STATE_live &&
+		    bch2_snapshot_state_compat(&parent->v) != SNAPSHOT_STATE_will_delete) {
+			prt_printf(&msg.m, "cannot undelete: parent not live");
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+
+		if (le32_to_cpu(parent->v.children[0]) != id &&
+		    le32_to_cpu(parent->v.children[1]) != id) {
+			if (parent->v.children[0] && parent->v.children[1]) {
+				prt_printf(&msg.m, "cannot undelete: parent's child slots are full");
+				return bch_err_throw(c, fsck_repair_unimplemented);
+			}
+
+			unsigned i = !parent->v.children[0] ? 0 : 1;
+			parent->v.children[i] = cpu_to_le32(id);
+			normalize_snapshot_child_pointers(&parent->v);
+		}
+
+		bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
+		return 0;
 	}
 
 	struct bkey_i_snapshot *child =
