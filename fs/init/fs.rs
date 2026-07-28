@@ -77,6 +77,20 @@ impl BorrowedFs {
 }
 
 impl Fs {
+    /// The filesystem's options, as resolved at open.
+    pub fn opts(&self) -> &c::bch_opts {
+        unsafe { &(*self.raw).opts }
+    }
+
+    /// log2 of the filesystem block size in 512-byte sectors.
+    pub fn block_bits(&self) -> u32 {
+        unsafe { (*self.raw).block_bits as u32 }
+    }
+
+    pub fn chacha20_key_set(&self) -> bool {
+        unsafe { (*self.raw).chacha20_key_set }
+    }
+
     /// The filesystem's superblock handle.
     pub fn disk_sb(&self) -> &c::bch_sb_handle {
         unsafe { &(*self.raw).disk_sb }

@@ -622,7 +622,7 @@ fn image_update_inner(
     let metadata_dev_size = std::cmp::max(
         input_bytes,
         std::cmp::max(
-            unsafe { (*fs.raw).opts.btree_node_size as u64 * c::BCH_MIN_NR_NBUCKETS as u64 },
+            fs.opts().btree_node_size as u64 * c::BCH_MIN_NR_NBUCKETS as u64,
             64 << 20,
         ),
     );
@@ -631,8 +631,8 @@ fn image_update_inner(
         bail!("ftruncate error: {}", std::io::Error::last_os_error());
     }
 
-    let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
-    let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
+    let block_size = fs.opts().block_size as u32;
+    let btree_node_size = fs.opts().btree_node_size;
     let ret = crate::commands::format_util::format_for_device_add(
         &mut dev_opts, block_size, btree_node_size,
     );
