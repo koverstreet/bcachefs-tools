@@ -2344,7 +2344,15 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		 * dirent and not the inode, and lookups there return ENOENT.
 		 *
 		 * It iterates from the dirent's snapshot downward, so an
-		 * ancestor inode, if there is one, is first in the list:
+		 * ancestor inode, if there is one, is first in the list.
+		 *
+		 * Raw snapshot ids, deliberately, even though walker entries
+		 * are collapse terminals: outside of delete_dead_snapshots a
+		 * dirent and its inode share a snapshot, and the one thing
+		 * that separates them is migration, which moves keys down and
+		 * does the inodes btree last. So when they differ the inode is
+		 * in an ancestor of the dirent - which is exactly what this
+		 * asks. Mapping either side to its terminal buys nothing here.
 		 */
 		bool have_ancestor = target->inodes.nr &&
 			bch2_snapshot_is_ancestor(trans, d.k->p.snapshot,
