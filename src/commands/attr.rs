@@ -10,18 +10,9 @@ use rustix::fs::{XattrFlags, setxattr, removexattr};
 
 use super::opts;
 
-const BCHFS_IOC_REINHERIT_ATTRS: libc::Ioctl = 0x8008bc40u32 as libc::Ioctl;
-const BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS: libc::Ioctl = 0xbc41u32 as libc::Ioctl;
-const BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS: libc::Ioctl = 0xbc42u32 as libc::Ioctl;
-
-/// Call a no-argument ioctl, returning io::Result.
-fn ioctl_none(fd: i32, request: libc::Ioctl) -> std::io::Result<()> {
-    if unsafe { libc::ioctl(fd, request) } < 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
+use crate::wrappers::ioctl::{ioctl_none, Ioctl,
+    BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS, BCHFS_IOC_REINHERIT_ATTRS,
+    BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS};
 
 fn propagate_recurse(dir_path: &Path) {
     let inner = || -> std::io::Result<()> {
@@ -31,7 +22,12 @@ fn propagate_recurse(dir_path: &Path) {
             if ft.is_symlink() { continue }
             let Ok(name) = CString::new(entry.file_name().as_bytes().to_vec()) else { continue };
 
-            let ret = unsafe { libc::ioctl(dir.as_raw_fd(), BCHFS_IOC_REINHERIT_ATTRS, name.as_ptr()) };
+            /* the argument is the name pointer itself, not a pointer to a struct */
+            let ret = unsafe {
+                libc::ioctl(dir.as_raw_fd(),
+                            BCHFS_IOC_REINHERIT_ATTRS::OPCODE as libc::Ioctl,
+                            name.as_ptr())
+            };
             if ret < 0 {
                 eprintln!("{}: {}", entry.path().display(), std::io::Error::last_os_error());
                 continue;
@@ -233,14 +229,13 @@ the flag on such pointers before propagating.")
 
 fn do_reflink_propagate(path: &str, set_may_update: bool) -> Result<()> {
     let file = std::fs::File::open(path)?;
-    let fd = file.as_raw_fd();
 
     if set_may_update {
-        ioctl_none(fd, BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS)
+        ioctl_none::<BCHFS_IOC_SET_REFLINK_P_MAY_UPDATE_OPTS>(&file)
             .context("set may_update_opts")?;
     }
 
-    ioctl_none(fd, BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS).map_err(|e| {
+    ioctl_none::<BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS>(&file).map_err(|e| {
         if e.raw_os_error() == Some(libc::EPERM) {
             anyhow!("reflink_p extents without may_update_options set;\n\
                      rerun as root with --set-may-update")

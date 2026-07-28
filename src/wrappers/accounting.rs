@@ -2,7 +2,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::metadata_version;
 
 use super::handle::BcachefsHandle;
-use super::ioctl::bch_ioc_w;
+use super::ioctl::{ioctl_ptr, BCH_IOCTL_QUERY_ACCOUNTING};
 use super::sysfs::bcachefs_kernel_version;
 
 // Re-export types and functions from bcachefs_kernel::accounting for consumers
@@ -17,21 +17,11 @@ pub struct AccountingResult {
     pub entries: Vec<AccountingEntry>,
 }
 
-/// Header of bch_ioctl_query_accounting (fixed part before flex array).
-#[repr(C)]
-struct QueryAccountingHeader {
-    capacity: u64,
-    used: u64,
-    online_reserved: u64,
-    accounting_u64s: u32,
-    accounting_types_mask: u32,
-}
-
 impl BcachefsHandle {
     /// Query filesystem accounting data via BCH_IOCTL_QUERY_ACCOUNTING.
     /// Returns None on ENOTTY (old kernel without this ioctl).
     pub fn query_accounting(&self, type_mask: u32) -> Result<AccountingResult, errno::Errno> {
-        let hdr_size = std::mem::size_of::<QueryAccountingHeader>();
+        let hdr_size = std::mem::size_of::<c::bch_ioctl_query_accounting>();
         let mut accounting_u64s: u32 = 128;
 
         loop {
@@ -39,39 +29,33 @@ impl BcachefsHandle {
             let mut buf = vec![0u8; total_bytes];
 
             // Fill header
-            let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut QueryAccountingHeader) };
+            let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut c::bch_ioctl_query_accounting) };
             hdr.accounting_u64s = accounting_u64s;
             hdr.accounting_types_mask = type_mask;
 
-            // BCH_IOCTL_QUERY_ACCOUNTING is _IOW(0xbc, 21, struct bch_ioctl_query_accounting)
-            // The struct has a flex array, so the kernel uses the header size for the ioctl nr.
-            // We use bch_ioc_w with the header size.
-            let request = bch_ioc_w::<QueryAccountingHeader>(21);
-            let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request, buf.as_mut_ptr()) };
+            let ret = unsafe {
+                ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING>(
+                    &self.ioctl_fd(),
+                    buf.as_mut_ptr() as *mut c::bch_ioctl_query_accounting)
+            };
 
-            if ret == 0 {
-                let hdr = unsafe { &*(buf.as_ptr() as *const QueryAccountingHeader) };
-                let entries = parse_accounting_entries(
-                    &buf[hdr_size..hdr_size + (hdr.accounting_u64s as usize) * 8],
-                );
+            match ret {
+                Ok(_) => {
+                    let hdr = unsafe { &*(buf.as_ptr() as *const c::bch_ioctl_query_accounting) };
+                    let entries = parse_accounting_entries(
+                        &buf[hdr_size..hdr_size + (hdr.accounting_u64s as usize) * 8],
+                    );
 
-                return Ok(AccountingResult {
-                    capacity: hdr.capacity,
-                    used: hdr.used,
-                    online_reserved: hdr.online_reserved,
-                    entries,
-                });
+                    return Ok(AccountingResult {
+                        capacity: hdr.capacity,
+                        used: hdr.used,
+                        online_reserved: hdr.online_reserved,
+                        entries,
+                    });
+                }
+                Err(e) if e.raw_os_error() == Some(libc::ERANGE) => accounting_u64s *= 2,
+                Err(e) => return Err(errno::Errno(e.raw_os_error().unwrap_or(libc::EIO))),
             }
-
-            let errno = std::io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            if errno == libc::ENOTTY {
-                return Err(errno::Errno(libc::ENOTTY));
-            }
-            if errno == libc::ERANGE {
-                accounting_u64s *= 2;
-                continue;
-            }
-            return Err(errno::Errno(errno));
         }
     }
 }
