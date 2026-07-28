@@ -17,6 +17,8 @@
 #define pr_fmt(fmt) "%s() " fmt "\n", __func__
 #endif
 
+#define CONFIG_BCACHEFS_TRANS_KMALLOC_TRACE
+
 #ifdef CONFIG_BCACHEFS_DEBUG
 #define ENUMERATED_REF_DEBUG
 #endif
