@@ -369,10 +369,16 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("Error opening filesystem: {}", e))?;
 
+    if fs.disk_sb().sb().sb_initialized() == 0 {
+        return Err(anyhow!("superblock not initialized (filesystem was never started): \
+                            bch2_write_super would silently skip the write; mount it once first"));
+    }
+
     {
         let _lock = fs.sb_lock();
         unsafe { fs.member_mut(dev_idx) }.set_member_state(new_state as u64);
-        fs.write_super();
+        fs.write_super_force()
+            .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }
     Ok(())
 }

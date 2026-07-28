@@ -873,17 +873,8 @@ fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
     // decisions an inspection-mode open must never persist - so don't weaken
     // the open; lift nochanges around this one write, which is the user's
     // explicit request.
-    let ret = unsafe {
-        let saved = (*fs.raw).opts.nochanges;
-        (*fs.raw).opts.nochanges = 0;
-        let ret = c::bch2_write_super(fs.raw);
-        (*fs.raw).opts.nochanges = saved;
-        ret
-    };
-
-    if ret != 0 {
-        bail!("bch2_write_super failed: {ret}");
-    }
+    fs.write_super_force()
+        .map_err(|e| anyhow!("bch2_write_super failed: {e}"))?;
     Ok(String::new())
 }
 

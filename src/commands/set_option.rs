@@ -122,6 +122,8 @@ fn set_option_offline(
     dev_idxs: &[u32],
     opts: &[(String, String)],
 ) -> Result<()> {
+    let mut modified = false;
+
     for (name, value) in opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");
@@ -146,6 +148,7 @@ fn set_option_offline(
                 continue;
             }
             fs.opt_set_sb(None, opt, val, Some(&c_value));
+            modified = true;
         }
 
         if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
@@ -168,8 +171,19 @@ fn set_option_offline(
                     continue;
                 }
                 fs.opt_set_sb(Some(&ca), opt, val, Some(&c_value));
+                modified = true;
             }
         }
+    }
+
+    if modified {
+        if fs.disk_sb().sb().sb_initialized() == 0 {
+            bail!("superblock not initialized (filesystem was never started): \
+                   bch2_write_super would silently skip the write; mount it once first");
+        }
+        let _lock = fs.sb_lock();
+        fs.write_super_force()
+            .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
     }
 
     Ok(())
