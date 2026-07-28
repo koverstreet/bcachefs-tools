@@ -406,7 +406,24 @@ enum bch_fsck_flags {
 	x(data_read_csum_err_recovered,				392,	0)		\
 	x(data_read_csum_err,					393,	0)		\
 	x(data_lost_device_removed,				394,	0)		\
-	x(MAX,							395,	0)
+	x(blk_sts_notsupp,					395,	0)		\
+	x(blk_sts_timeout,					396,	0)		\
+	x(blk_sts_nospc,					397,	0)		\
+	x(blk_sts_transport,					398,	0)		\
+	x(blk_sts_target,					399,	0)		\
+	x(blk_sts_resv_conflict,				400,	0)		\
+	x(blk_sts_medium,					401,	0)		\
+	x(blk_sts_protection,					402,	0)		\
+	x(blk_sts_resource,					403,	0)		\
+	x(blk_sts_ioerr,					404,	0)		\
+	x(blk_sts_again,					405,	0)		\
+	x(blk_sts_dev_resource,					406,	0)		\
+	x(blk_sts_offline,					407,	0)		\
+	x(blk_sts_duration_limit,				408,	0)		\
+	x(blk_sts_inval,					409,	0)		\
+	x(blk_sts_removed,					410,	0)		\
+	x(blk_sts_unknown,					411,	0)		\
+	x(MAX,							412,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
