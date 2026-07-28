@@ -8,9 +8,8 @@
 // bch_sb_error_id, printed with the same names fsck and the superblock
 // error counters use.
 
-use std::ffi::CString;
 use std::mem;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::fd::OwnedFd;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
@@ -102,13 +101,11 @@ fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
         }
 
         return Ok(unsafe { buf.hdr().entries.as_slice(nr as usize) }.iter()
-            .map(|e| unsafe {
-                DamageEntry {
-                    id:    c::BCH_SB_ERROR_ENTRY_V2_ID(e) as u32,
-                    nr:    c::BCH_SB_ERROR_ENTRY_V2_NR(e),
-                    first: c::BCH_SB_ERROR_ENTRY_V2_FIRST(e) as i64,
-                    last:  c::BCH_SB_ERROR_ENTRY_V2_LAST(e) as i64,
-                }
+            .map(|e| DamageEntry {
+                id:    e.id() as u32,
+                nr:    e.nr(),
+                first: e.first_error_time() as i64,
+                last:  e.last_error_time() as i64,
             }).collect());
     }
 }
@@ -166,15 +163,10 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> std::io::Resul
 /// we can open and ioctl (a device node's fd would take the ioctl to
 /// the device driver). Recursive mode reports DT_UNKNOWN, so stat then.
 fn entry_errors(dir: &OwnedFd, e: &Entry) -> Option<Vec<DamageEntry>> {
-    let cname = CString::new(e.name.clone()).ok()?;
-
     let mut d_type = e.d_type;
     if d_type == libc::DT_UNKNOWN {
-        let mut st: libc::stat = unsafe { mem::zeroed() };
-        if unsafe { libc::fstatat(dir.as_raw_fd(), cname.as_ptr(), &mut st,
-                                  libc::AT_SYMLINK_NOFOLLOW) } != 0 {
-            return None;
-        }
+        let st = rustix::fs::statat(dir, &*e.name,
+                                    rustix::fs::AtFlags::SYMLINK_NOFOLLOW).ok()?;
         d_type = match st.st_mode & libc::S_IFMT {
             libc::S_IFREG => libc::DT_REG,
             libc::S_IFDIR => libc::DT_DIR,
@@ -185,14 +177,10 @@ fn entry_errors(dir: &OwnedFd, e: &Entry) -> Option<Vec<DamageEntry>> {
         return None;
     }
 
-    let fd = unsafe {
-        libc::openat(dir.as_raw_fd(), cname.as_ptr(),
-                     libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW)
-    };
-    if fd < 0 {
-        return None;
-    }
-    get_damage(&unsafe { OwnedFd::from_raw_fd(fd) }).ok()
+    let fd = rustix::fs::openat(dir, &*e.name,
+        rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+        rustix::fs::Mode::empty()).ok()?;
+    get_damage(&fd).ok()
 }
 
 fn cmd_ls(path: &Path, recursive: bool) -> Result<()> {
@@ -273,19 +261,20 @@ fn cmd_clear(path: &Path, recursive: bool) -> Result<()> {
 
         for e in &entries {
             let name = String::from_utf8_lossy(&e.name).into_owned();
-            let Ok(cname) = CString::new(e.name.clone()) else { continue };
 
-            let fd = unsafe {
-                libc::openat(dir.as_raw_fd(), cname.as_ptr(),
-                             libc::O_RDONLY | libc::O_CLOEXEC | libc::O_NOFOLLOW)
+            let fd = match rustix::fs::openat(&dir, &*e.name,
+                rustix::fs::OFlags::RDONLY | rustix::fs::OFlags::CLOEXEC | rustix::fs::OFlags::NOFOLLOW,
+                rustix::fs::Mode::empty())
+            {
+                Ok(fd) => fd,
+                Err(err) => {
+                    eprintln!("{name}: {err}");
+                    failed += 1;
+                    continue;
+                }
             };
-            if fd < 0 {
-                eprintln!("{name}: {}", std::io::Error::last_os_error());
-                failed += 1;
-                continue;
-            }
 
-            if let Err(err) = clear_fd(&unsafe { OwnedFd::from_raw_fd(fd) }) {
+            if let Err(err) = clear_fd(&fd) {
                 eprintln!("{name}: {err}");
                 failed += 1;
             }
