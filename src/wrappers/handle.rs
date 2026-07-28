@@ -72,10 +72,6 @@ impl BcachefsHandle {
         self.sysfs_fd.as_fd()
     }
 
-    pub(crate) fn ioctl_fd_raw(&self) -> i32 {
-        self.ioctl_fd.as_raw_fd()
-    }
-
     /// Device index when opened via a block device path; -1 when opened via mount point.
     pub(crate) fn dev_idx(&self) -> i32 {
         self.dev_idx

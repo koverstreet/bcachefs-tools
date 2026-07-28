@@ -138,8 +138,7 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
         opts: c_opts.as_ptr() as u64,
     };
 
-    let ioctl_fd = unsafe { BorrowedFd::borrow_raw(fs.ioctl_fd_raw()) };
-    let fsck_fd = ioctl_w::<BCH_IOCTL_FSCK_ONLINE>(ioctl_fd, &fsck)
+    let fsck_fd = ioctl_w::<BCH_IOCTL_FSCK_ONLINE>(fs.ioctl_fd(), &fsck)
         .map_err(|e| anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}",
                              crate::wrappers::bch_err_str(e.raw_os_error().unwrap_or(0))))?;
 
