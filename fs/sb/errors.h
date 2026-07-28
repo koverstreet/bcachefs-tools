@@ -7,9 +7,11 @@
 extern const char * const bch2_sb_error_strs[];
 
 void bch2_sb_error_id_to_text(struct printbuf *, enum bch_sb_error_id);
+void bch2_prt_error_nr(struct printbuf *, u64);
 void bch2_fs_errors_to_text(struct printbuf *, struct bch_fs *);
 
 extern const struct bch_sb_field_ops bch_sb_field_ops_errors;
+extern const struct bch_sb_field_ops bch_sb_field_ops_errors_v2;
 
 void bch2_sb_error_count(struct bch_fs *, enum bch_sb_error_id);
 

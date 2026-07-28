@@ -613,7 +613,10 @@ struct bch_sb_field {
 	  "Tracks which recovery passes have been run "			\
 	  "successfully")						\
 	x(extent_type_u64s,	16,						\
-	  "Per-extent-type size limits")
+	  "Per-extent-type size limits")				\
+	x(errors_v2,		17,						\
+	  "Persistent error log, v2: adds the time of "			\
+	  "first occurrence to each entry")
 
 enum btree_id_flags {
 	BTREE_IS_extents	= BIT(0),
