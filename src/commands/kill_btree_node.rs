@@ -89,16 +89,11 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
 
     let fs = crate::device_scan::open_scan(&cli.devices, fs_opts)?;
 
-    let block_size = unsafe { (*fs.raw).opts.block_size } as usize;
+    let block_size = fs.opts().block_size as usize;
     let dev_idx = cli.dev.unwrap_or(-1);
 
     // O_DIRECT requires aligned buffers; bd_fd is opened with O_DIRECT
-    let mut zeroes: *mut libc::c_void = std::ptr::null_mut();
-    let r = unsafe { libc::posix_memalign(&mut zeroes, block_size, block_size) };
-    if r != 0 {
-        bail!("posix_memalign failed: {}", std::io::Error::from_raw_os_error(r));
-    }
-    unsafe { std::ptr::write_bytes(zeroes as *mut u8, 0, block_size) };
+    let zeroes = crate::util::AlignedBuf::new(block_size);
 
     let trans = BtreeTrans::new(&fs);
 
@@ -141,13 +136,10 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                     dev, kill.btree, kill.level, k.to_text(&fs));
 
                 let fd = unsafe { (*ca.disk_sb.bdev).bd_fd };
-                let offset = (ptr.offset() as libc::off_t) << 9;
-                let ret = unsafe {
-                    libc::pwrite(fd, zeroes, block_size, offset)
-                };
-                if ret as usize != block_size {
-                    eprintln!("pwrite error: expected {} got {} {}",
-                        block_size, ret, std::io::Error::last_os_error());
+                let file = crate::wrappers::super_io::borrowed_file(fd);
+                let offset = (ptr.offset() as u64) << 9;
+                if let Err(e) = std::os::unix::fs::FileExt::write_all_at(&*file, &zeroes, offset) {
+                    eprintln!("pwrite error: {e}");
                 }
             }
 
@@ -155,12 +147,10 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
         }).map_err(|e| anyhow!("error walking btree nodes: {}", e))?;
 
         if !found {
-            unsafe { libc::free(zeroes) };
             bail!("node at specified index not found");
         }
     }
 
-    unsafe { libc::free(zeroes) };
     Ok(())
 }
 
