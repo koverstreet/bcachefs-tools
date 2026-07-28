@@ -93,6 +93,7 @@ const DERIVE_READD: &[&str] = &[
     "bpos", "bbpos",
     "subvol_inum", "bch_opts",
     "bch_ioctl_snapshot_node",
+    "bch_ioctl_snapshot_node_v2",
 ];
 
 // bch_key/bch_encrypted_key hold key material: they get a hand-written Clone

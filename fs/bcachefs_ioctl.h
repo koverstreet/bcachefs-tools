@@ -74,6 +74,7 @@
 #define BCH_IOCTL_SUBVOLUME_TO_PATH	_IOWR(0xbc,	32, struct bch_ioctl_subvol_to_path)
 #define BCH_IOCTL_SNAPSHOT_TREE		_IOWR(0xbc,	33, struct bch_ioctl_snapshot_tree_query)
 #define BCH_IOCTL_QUERY_BTREE_KEYS	_IOWR(0xbc,	34, struct bch_ioctl_query_btree_keys)
+#define BCH_IOCTL_SNAPSHOT_TREE_v2	_IOWR(0xbc,	35, struct bch_ioctl_snapshot_tree_query_v2)
 
 /* ioctl below act on a particular file, not the filesystem as a whole: */
 
@@ -662,7 +663,43 @@ struct bch_ioctl_subvol_to_path {
  *
  * Returns -ERANGE if nr < total (nr and total are still written back)
  */
+/*
+ * FROZEN. The ioctl number encodes sizeof(the header), not of the array
+ * element, so growing this struct is invisible to the ioctl machinery and
+ * silently overruns the buffer of any userspace built against the older
+ * layout. It happened once (nr_keys/key_bytes, reverted); don't do it again -
+ * add fields to bch_ioctl_snapshot_node_v2, which is size-negotiated.
+ */
 struct bch_ioctl_snapshot_node {
+	__u32			id;		/* snapshot ID */
+	__u32			parent;		/* parent snapshot ID, 0 for root */
+	__u32			children[2];
+	__u32			subvol;		/* subvolume ID, 0 for interior */
+	__u32			flags;
+	__u32			pad[2];
+	/* BCH_DISK_ACCOUNTING_snapshot, summed over the snapshot btrees: */
+	__u64			sectors;	/* external (on-disk data) sectors */
+};
+
+struct bch_ioctl_snapshot_tree_query {
+	__u32			tree_id;	/* in: 0 = infer from fd's subvol */
+	__u32			master_subvol;	/* out */
+	__u32			root_snapshot;	/* out */
+	__u32			nr;		/* in: capacity; out: returned */
+	__u32			total;		/* out: total nodes */
+	__u32			pad;
+	struct bch_ioctl_snapshot_node nodes[];
+};
+
+/*
+ * v2: same query, but the header states the array element size, so either
+ * side can grow bch_ioctl_snapshot_node_v2 without breaking the other.
+ * The kernel writes min(node_size, its own sizeof) bytes per entry and
+ * strides by node_size, so a shorter node from either direction truncates
+ * instead of overrunning. New fields go on the end, and both sides read
+ * node_size to know what's present.
+ */
+struct bch_ioctl_snapshot_node_v2 {
 	__u32			id;		/* snapshot ID */
 	__u32			parent;		/* parent snapshot ID, 0 for root */
 	__u32			children[2];
@@ -675,14 +712,14 @@ struct bch_ioctl_snapshot_node {
 	__u64			key_bytes;
 };
 
-struct bch_ioctl_snapshot_tree_query {
+struct bch_ioctl_snapshot_tree_query_v2 {
 	__u32			tree_id;	/* in: 0 = infer from fd's subvol */
 	__u32			master_subvol;	/* out */
 	__u32			root_snapshot;	/* out */
 	__u32			nr;		/* in: capacity; out: returned */
 	__u32			total;		/* out: total nodes */
-	__u32			pad;
-	struct bch_ioctl_snapshot_node nodes[];
+	__u32			node_size;	/* in: caller's sizeof; out: ours */
+	struct bch_ioctl_snapshot_node_v2 nodes[];
 };
 
 /*
