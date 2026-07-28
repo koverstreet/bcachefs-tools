@@ -84,7 +84,7 @@ void bch2_inode_update_after_write(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	BUG_ON(bi->bi_inum != inode->v.i_ino);
+	BUG_ON(bi->bi_inum != inode->ei_inum.inum);
 
 	bch2_assert_pos_locked(trans, BTREE_ID_inodes, POS(0, bi->bi_inum));
 
@@ -1223,9 +1223,9 @@ err_tx_restart:
 		goto err;
 	}
 
-	BUG_ON(src_inode->v.i_ino != src_inode_u.bi_inum);
+	BUG_ON(src_inode->ei_inum.inum != src_inode_u.bi_inum);
 	BUG_ON(dst_inode &&
-	       dst_inode->v.i_ino != dst_inode_u.bi_inum);
+	       dst_inode->ei_inum.inum != dst_inode_u.bi_inum);
 
 	bch2_inode_update_after_write(trans, src_dir, &src_dir_u,
 				      ATTR_MTIME|ATTR_CTIME|ATTR_SIZE);
@@ -1383,7 +1383,7 @@ static int bch2_getattr(struct mnt_idmap *idmap,
 	vfsgid_t vfsgid = i_gid_into_vfsgid(idmap, &inode->v);
 
 	stat->dev	= inode->v.i_sb->s_dev;
-	stat->ino	= inode->v.i_ino;
+	stat->ino	= inode->ei_inum.inum;
 	stat->mode	= inode->v.i_mode;
 	stat->nlink	= inode->v.i_nlink;
 	stat->uid	= vfsuid_into_kuid(vfsuid);
