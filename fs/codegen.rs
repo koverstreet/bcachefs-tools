@@ -406,6 +406,13 @@ pub fn gen_xmacros(src: &str, out: &str) {
         generate_btree_ids_known(&btree_ids),
     )
     .expect("write btree_ids_gen.rs");
+
+    let ioctl_h = std::fs::read_to_string(format!("{src}/bcachefs_ioctl.h"))
+        .expect("reading bcachefs_ioctl.h");
+    let ioctls = parse_ioctls(&ioctl_h);
+    assert!(!ioctls.is_empty(), "failed to parse any _IO*() defines");
+    std::fs::write(format!("{out}/ioctls_gen.rs"), generate_ioctls(&ioctls))
+        .expect("write ioctls_gen.rs");
 }
 
 // ---------------------------------------------------------------------------
@@ -1117,6 +1124,96 @@ fn packed_and_align_fix(bindings: String, ptr_width: &str) -> String {
 
     let mut out = lines.join("\n");
     out.push('\n');
+    out
+}
+
+/// One `#define BCH_IOCTL_* _IO*(0xbc, nr[, type])` from bcachefs_ioctl.h.
+struct IoctlDef {
+    name: String,
+    /// _IOC direction bits: 1 = kernel reads the argument (_IOW),
+    /// 2 = kernel writes it (_IOR), 3 = both (_IOWR), 0 = no argument.
+    dir:  u32,
+    nr:   u32,
+    /// Rust type of the argument; None for _IO().
+    arg:  Option<String>,
+}
+
+fn parse_ioctls(header: &str) -> Vec<IoctlDef> {
+    let mut out = Vec::new();
+    for line in header.lines() {
+        let Some(rest) = line.strip_prefix("#define ") else { continue };
+        let mut it = rest.splitn(2, char::is_whitespace);
+        let (Some(name), Some(body)) = (it.next(), it.next()) else { continue };
+        let Some((mac, args)) = body.trim().split_once('(') else { continue };
+        let dir = match mac.trim() {
+            "_IO"   => 0,
+            "_IOW"  => 1,
+            "_IOR"  => 2,
+            "_IOWR" => 3,
+            _ => continue,
+        };
+        let Some(args) = args.trim_end().strip_suffix(')') else { continue };
+        let args: Vec<&str> = args.splitn(3, ',').map(str::trim).collect();
+        assert_eq!(args[0], "0xbc", "{name}: unexpected ioctl magic {}", args[0]);
+        let nr: u32 = args[1].parse()
+            .unwrap_or_else(|_| panic!("{name}: bad ioctl nr {}", args[1]));
+        let arg = (args.len() > 2).then(|| ioctl_arg_to_rust(name, args[2]));
+        assert_eq!(arg.is_none(), dir == 0, "{name}: _IO() iff no argument");
+        out.push(IoctlDef { name: name.to_string(), dir, nr, arg });
+    }
+    out
+}
+
+fn ioctl_arg_to_rust(name: &str, ty: &str) -> String {
+    if let Some(s) = ty.strip_prefix("struct ") {
+        format!("c::{}", s.trim())
+    } else if ty == "const char __user *" {
+        "*const core::ffi::c_char".to_string()
+    } else {
+        panic!("{name}: unhandled ioctl argument type: {ty}");
+    }
+}
+
+fn generate_ioctls(defs: &[IoctlDef]) -> String {
+    let mut out = String::from("\
+// Auto-generated from bcachefs_ioctl.h — do not edit
+//
+// A zero-sized marker type per ioctl, named exactly as the C macro,
+// binding the opcode to its argument type so a call site can't pair the
+// wrong two: the opcode's size bits are computed from the very type the
+// call layer makes you pass. Opcodes use the generic asm-generic/ioctl.h
+// layout (dir at bit 30, size at 16, magic at 8, nr at 0); architectures
+// with a different _IOC layout (alpha, mips, ppc, sparc) would need
+// opcode() adjusted.
+
+use crate::c;
+
+/// An ioctl definition: the request opcode and its argument type.
+pub trait Ioctl {
+    const OPCODE: u32;
+    /// _IOC direction bits: 1 = kernel reads the argument (_IOW),
+    /// 2 = kernel writes it (_IOR), 3 = both (_IOWR), 0 = no argument.
+    const DIR: u32;
+    type Arg;
+}
+
+const fn opcode(dir: u32, nr: u32, size: usize) -> u32 {
+    (dir << 30) | ((size as u32) << 16) | (0xbc << 8) | nr
+}
+
+");
+    for d in defs {
+        let arg = d.arg.as_deref().unwrap_or("()");
+        out += &format!("\
+pub struct {name};
+impl Ioctl for {name} {{
+    const DIR: u32 = {dir};
+    const OPCODE: u32 = opcode({dir}, {nr}, core::mem::size_of::<{arg}>());
+    type Arg = {arg};
+}}
+
+", name = d.name, dir = d.dir, nr = d.nr, arg = arg);
+    }
     out
 }
 

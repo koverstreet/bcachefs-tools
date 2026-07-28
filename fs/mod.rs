@@ -44,6 +44,13 @@ pub mod sb;
 pub mod snapshot_states {
     include!(concat!(env!("OUT_DIR"), "/snapshot_states_gen.rs"));
 }
+/// Typed ioctl inventory, generated from the _IO*() defines in
+/// bcachefs_ioctl.h: a marker type per ioctl binding its opcode to its
+/// argument type. The tools' src/wrappers/ioctl.rs builds the calls on top.
+pub mod ioctl {
+    #![allow(non_camel_case_types)]
+    include!(concat!(env!("OUT_DIR"), "/ioctls_gen.rs"));
+}
 #[path = "fs/str_hash.rs"]     pub mod str_hash;
 pub mod typeinfo;
 pub mod util;
