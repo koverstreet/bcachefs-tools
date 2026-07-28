@@ -192,6 +192,26 @@ pub fn sb_field_get_minsize<F: SbField>(
     }
 }
 
+// Safe wrappers over the hand-rolled v2 error entry accessors
+// (sb/errors_format.h): they only read through the pointer.
+impl c::bch_sb_field_error_entry_v2 {
+    pub fn id(&self) -> u16 {
+        unsafe { c::BCH_SB_ERROR_ENTRY_V2_ID(self) as u16 }
+    }
+
+    pub fn nr(&self) -> u64 {
+        unsafe { c::BCH_SB_ERROR_ENTRY_V2_NR(self) }
+    }
+
+    pub fn first_error_time(&self) -> u64 {
+        unsafe { c::BCH_SB_ERROR_ENTRY_V2_FIRST(self) }
+    }
+
+    pub fn last_error_time(&self) -> u64 {
+        unsafe { c::BCH_SB_ERROR_ENTRY_V2_LAST(self) }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Raw-buffer superblock views
 //
