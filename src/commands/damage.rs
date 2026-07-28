@@ -18,11 +18,8 @@ use bch_bindgen::c;
 use clap::{Parser, Subcommand};
 
 use crate::util::{open_dir, sb_error_name};
-use crate::wrappers::ioctl::{bch_ioc_none, bch_ioc_wr};
-
-const BCHFS_IOC_GET_DAMAGE_NR: u32 = 70;
-const BCHFS_IOC_READDIR_FLAGS_NR: u32 = 69;
-const BCHFS_IOC_CLEAR_DAMAGE_NR: u32 = 71;
+use crate::wrappers::ioctl::{ioctl_none, ioctl_ptr, ioctl_rw,
+    BCHFS_IOC_CLEAR_DAMAGE, BCHFS_IOC_GET_DAMAGE, BCHFS_IOC_READDIR_FLAGS};
 
 /// DT_SUBVOL from dirent_format.h; not in the generated bindings.
 const DT_SUBVOL: u8 = 16;
@@ -100,15 +97,9 @@ fn get_damage(fd: &OwnedFd) -> std::io::Result<Vec<DamageEntry>> {
     loop {
         let mut buf = vec![0u64; HDR + ENTRY * cap as usize];
         let arg = buf.as_mut_ptr().cast::<c::bch_ioctl_get_damage>();
-        unsafe { (*arg).nr_entries = cap };
-
-        let ret = unsafe {
-            libc::ioctl(fd.as_raw_fd(),
-                        bch_ioc_wr::<c::bch_ioctl_get_damage>(BCHFS_IOC_GET_DAMAGE_NR),
-                        arg)
-        };
-        if ret < 0 {
-            return Err(std::io::Error::last_os_error());
+        unsafe {
+            (*arg).nr_entries = cap;
+            ioctl_ptr::<BCHFS_IOC_GET_DAMAGE>(fd, arg)?;
         }
 
         let nr = unsafe { (*arg).nr_entries };
@@ -149,14 +140,7 @@ fn readdir_flags(fd: &OwnedFd, flags: u32, pos: &mut [u64; 2]) -> std::io::Resul
         pad: 0,
     };
 
-    let ret = unsafe {
-        libc::ioctl(fd.as_raw_fd(),
-                    bch_ioc_wr::<c::bch_ioctl_readdir_flags>(BCHFS_IOC_READDIR_FLAGS_NR),
-                    &mut arg as *mut _)
-    };
-    if ret < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
+    ioctl_rw::<BCHFS_IOC_READDIR_FLAGS>(fd, &mut arg)?;
     *pos = arg.pos;
 
     const D_TYPE: usize   = mem::offset_of!(c::bch_ioctl_readdir_entry, d_type);
@@ -263,13 +247,7 @@ fn cmd_show(path: &Path) -> Result<()> {
 }
 
 fn clear_fd(fd: &OwnedFd) -> std::io::Result<()> {
-    let r = unsafe {
-        libc::ioctl(fd.as_raw_fd(), bch_ioc_none(BCHFS_IOC_CLEAR_DAMAGE_NR))
-    };
-    if r < 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
+    ioctl_none::<BCHFS_IOC_CLEAR_DAMAGE>(fd).map(|_| ())
 }
 
 fn cmd_clear(path: &Path, recursive: bool) -> Result<()> {

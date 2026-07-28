@@ -23,12 +23,9 @@ use serde::Deserialize;
 use crate::commands::DeviceNameArgs;
 use crate::util::{fmt_bytes_human, fmt_num_human, run_tui};
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::ioctl::bch_ioc_w;
+use crate::wrappers::ioctl::{ioctl_ptr, BCH_IOCTL_QUERY_COUNTERS};
 use crate::wrappers::sysfs::{DeviceNameMode, dev_display_name_from_sysfs, sysfs_path_from_fd};
 
-// ioctl constants
-
-const BCH_IOCTL_QUERY_COUNTERS_NR: u32 = 21;
 const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
 
 // ioctl query
@@ -42,12 +39,10 @@ fn read_counters(fd: i32, flags: u16, nr_stable: u16) -> Result<Vec<u64>> {
         let hdr = &mut *(buf.as_mut_ptr() as *mut bch_ioctl_query_counters);
         hdr.nr = nr_stable;
         hdr.flags = flags;
-    }
 
-    let request = bch_ioc_w::<bch_ioctl_query_counters>(BCH_IOCTL_QUERY_COUNTERS_NR);
-    let ret = unsafe { libc::ioctl(fd, request, buf.as_mut_ptr()) };
-    if ret < 0 {
-        return Err(std::io::Error::last_os_error().into());
+        ioctl_ptr::<BCH_IOCTL_QUERY_COUNTERS>(
+            std::os::fd::BorrowedFd::borrow_raw(fd),
+            buf.as_mut_ptr() as *mut bch_ioctl_query_counters)?;
     }
 
     let actual_nr = unsafe { (*(buf.as_ptr() as *const bch_ioctl_query_counters)).nr } as usize;
