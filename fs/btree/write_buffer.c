@@ -1067,6 +1067,16 @@ static int bch2_btree_write_buffer_journal_flush(struct journal *j,
 	return 0;
 }
 
+/*
+ * Drops the transaction's locks - it commits the buffered keys itself. Call
+ * bch2_trans_begin() before touching the btree again.
+ *
+ * Every caller today satisfies that only by happening to follow this with a
+ * for_each_btree_key* or commit_do, which begin on their own. Put a plain read
+ * after it instead and you get "trans should be locked, unlocked by
+ * btree_write_buffer_flush_seq" - at runtime, in a kernel build, and nowhere
+ * that a tools build or a compile would show you.
+ */
 int bch2_btree_write_buffer_flush_sync(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
