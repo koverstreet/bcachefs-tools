@@ -895,33 +895,6 @@ static int delete_dead_snapshots_process_key(struct btree_trans *trans,
 	return bch2_delete_dead_snapshot_key(trans, iter, k, dying->live_child);
 }
 
-static bool skip_unrelated_snapshot_tree(struct btree_trans *trans, struct btree_iter *iter, u64 *prev_inum)
-{
-	struct bch_fs *c = trans->c;
-	struct snapshot_delete *d = &c->snapshots.delete;
-
-	u64 inum = iter->btree_id != BTREE_ID_inodes
-		? iter->pos.inode
-		: iter->pos.offset;
-
-	if (*prev_inum == inum)
-		return false;
-
-	*prev_inum = inum;
-
-	bool ret = !snapshot_list_has_id(&d->deleting_from_trees,
-					 bch2_snapshot_tree(c, iter->pos.snapshot));
-	if (unlikely(ret)) {
-		struct bpos pos = iter->pos;
-		pos.snapshot = 0;
-		if (iter->btree_id != BTREE_ID_inodes)
-			pos.offset = U64_MAX;
-		bch2_btree_iter_set_pos(iter, bpos_nosnap_successor(pos));
-	}
-
-	return ret;
-}
-
 static int delete_dead_snapshot_keys_v1_btree(struct btree_trans *trans, enum btree_id btree)
 {
 	struct bch_fs *c = trans->c;
@@ -934,9 +907,6 @@ static int delete_dead_snapshot_keys_v1_btree(struct btree_trans *trans, enum bt
 			BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
 			&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
 		bch2_progress_update_iter(trans, &d->progress, &iter);
-
-		if (skip_unrelated_snapshot_tree(trans, &iter, &prev_inum))
-			continue;
 
 		bch2_disk_reservation_put(c, &res.r);
 		delete_dead_snapshots_process_key(trans, &iter, k);
@@ -1013,9 +983,6 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 
 		bch2_progress_update_iter(trans, &d->progress, &iter);
 
-		if (skip_unrelated_snapshot_tree(trans, &iter, &prev_inum))
-			continue;
-
 		if (snapshot_id_dying(d, k.k->p.snapshot)) {
 			struct bpos start	= POS(k.k->p.offset, 0);
 			struct bpos end		= POS(k.k->p.offset, U64_MAX);
@@ -1039,9 +1006,6 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 			BTREE_ID_inodes, POS_MIN,
 			BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
 			&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		if (skip_unrelated_snapshot_tree(trans, &iter, &prev_inum))
-			continue;
-
 		bch2_disk_reservation_put(c, &res.r);
 		delete_dead_snapshots_process_key(trans, &iter, k);
 	})));
