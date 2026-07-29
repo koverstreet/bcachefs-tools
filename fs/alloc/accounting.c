@@ -545,11 +545,19 @@ void __bch2_accounting_maybe_kill(struct bch_fs *c, struct bpos pos)
  * bch2_accounting_mem_read() would silently return zeros. Deltas buffer
  * through the btree write buffer: callers that need current values must
  * flush it first, hoisted out of their loops.
+ *
+ * @nr_counters, if non-NULL, returns the number of counters the on-disk key
+ * actually had (0 if there is no key). Counters are read into @v up to @nr and
+ * the rest zeroed, so a key written by an older version - with fewer counters
+ * than the type has now - is indistinguishable from one with trailing zeros
+ * unless the caller looks at the count.
  */
 int bch2_accounting_btree_read(struct btree_trans *trans, struct bpos p,
-			       u64 *v, unsigned nr)
+			       u64 *v, unsigned nr, unsigned *nr_counters)
 {
 	memset(v, 0, sizeof(*v) * nr);
+	if (nr_counters)
+		*nr_counters = 0;
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_accounting, p, 0);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
@@ -558,6 +566,8 @@ int bch2_accounting_btree_read(struct btree_trans *trans, struct bpos p,
 		return 0;
 
 	struct bkey_s_c_accounting a = bkey_s_c_to_accounting(k);
+	if (nr_counters)
+		*nr_counters = bch2_accounting_counters(a.k);
 	memcpy(v, a.v->d,
 	       min_t(unsigned, nr, bch2_accounting_counters(a.k)) * sizeof(u64));
 	return 0;

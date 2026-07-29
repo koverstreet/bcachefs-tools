@@ -1292,8 +1292,7 @@ static long __bch2_ioctl_snapshot_tree(struct bch_fs *c, struct file *filp,
 				continue;
 
 			u64 v[3] = {};
-			_ret = bch2_fs_accounting_read_key2(trans, v, snapshot,
-					.id = k.k->p.offset, .btree = btree);
+			_ret = bch2_snapshot_accounting_read(trans, k.k->p.offset, btree, v);
 			nr_keys		+= v[0];
 			key_bytes	+= v[1];
 			sectors		+= v[2];

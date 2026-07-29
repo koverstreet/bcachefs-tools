@@ -159,7 +159,7 @@ int bch2_accounting_mem_insert(struct bch_fs *, struct bkey_s_c_accounting, enum
 int bch2_accounting_mem_insert_locked(struct bch_fs *, struct bkey_s_c_accounting, enum bch_accounting_mode);
 void bch2_accounting_mem_gc(struct bch_fs *);
 
-int bch2_accounting_btree_read(struct btree_trans *, struct bpos, u64 *, unsigned);
+int bch2_accounting_btree_read(struct btree_trans *, struct bpos, u64 *, unsigned, unsigned *);
 
 static inline bool bch2_accounting_is_mem(struct disk_accounting_pos *acc)
 {

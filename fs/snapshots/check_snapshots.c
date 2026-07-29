@@ -546,14 +546,10 @@ static u32 snapshot_table_find_edge(struct bch_fs *c, const struct bch_snapshot 
 
 static int snapshot_data_sectors(struct btree_trans *trans, u32 id, u64 *sectors)
 {
-	struct disk_accounting_pos acc;
-	memset(&acc, 0, sizeof(acc));
-	acc.type = BCH_DISK_ACCOUNTING_snapshot;
-	acc.snapshot.id = id;
-
-	/* btree 0 (extents, the default) is the only one with external_sectors (counter 2) */
+	/* extents is the only snapshot btree with external_sectors (counter 2) */
 	u64 v[3] = {};
-	try(bch2_accounting_btree_read(trans, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v)));
+	try(bch2_snapshot_accounting_read(trans, id, BTREE_ID_extents, v));
+
 	*sectors = v[2];
 	return 0;
 }
@@ -736,7 +732,7 @@ static int check_snapshot_edge(struct btree_trans *trans,
 		 * splice below used to assume the reverse.
 		 */
 		u64 keys, sectors;
-		try(bch2_snapshot_accounting_totals(c, other_id, &keys, &sectors, NULL, NULL));
+		try(bch2_snapshot_accounting_totals(trans, other_id, &keys, &sectors, NULL, NULL));
 
 		if (keys || sectors) {
 			if (ret_fsck_err(trans, snapshot_deleted_but_has_data,
@@ -1188,7 +1184,7 @@ static int check_snapshot(struct btree_trans *trans,
 	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted) {
 		u64 keys, sectors;
 		CLASS(printbuf, breakdown)();
-		try(bch2_snapshot_accounting_totals(c, k.k->p.offset, &keys, &sectors,
+		try(bch2_snapshot_accounting_totals(trans, k.k->p.offset, &keys, &sectors,
 						    NULL, &breakdown));
 
 		if (ret_fsck_err_on(keys || sectors,

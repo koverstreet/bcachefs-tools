@@ -139,6 +139,62 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
 }
 
 /*
+ * Read one per-snapshot accounting key as [nr_keys, key_bytes,
+ * external_sectors].
+ *
+ * Every reader of per-snapshot accounting goes through this, because two
+ * things have to be undone and both are easy to forget at an individual call
+ * site:
+ *
+ *  - Before the per-(snapshot, btree) rework the key was {id} -> [sectors]:
+ *    one counter, and
+ *    the new key's btree field lands in what was the old key's zero padding,
+ *    so old and new share a bpos and the old key is silently reinterpreted
+ *    rather than ignored. Read as if it were the new layout, an old key's
+ *    sectors come back as nr_keys and external_sectors reads zero. The counter
+ *    count is what tells the layouts apart. The single old key covered the
+ *    whole snapshot, and for sectors that means the extents btree - the old
+ *    sectors must not be attributed to inodes, dirents and xattrs as well.
+ *
+ *  - nr_keys and key_bytes are only meaningful once check_allocations has
+ *    rebuilt them. A key with three counters written before that rebuild was
+ *    seeded from the aliased old key, so the counter count alone does not make
+ *    it trustworthy - which is why the nr_keys trust gate stays at the caller
+ *    that consults those counters.
+ *
+ * Reads from the accounting btree rather than the in-memory counters, so
+ * callers are responsible for a write buffer flush (once per pass, not per
+ * call).
+ */
+int bch2_snapshot_accounting_read(struct btree_trans *trans, u32 id,
+				  enum btree_id btree, u64 v[3])
+{
+	/*
+	 * Designated initializers will not reliably zero a struct that is a
+	 * union, and the btree field is the old layout's padding - it has to be
+	 * zeroed explicitly or an old key is missed:
+	 */
+	struct disk_accounting_pos acc;
+	memset(&acc, 0, sizeof(acc));
+	acc.type = BCH_DISK_ACCOUNTING_snapshot;
+	acc.snapshot.id = id;
+	acc.snapshot.btree = btree;
+
+	unsigned nr_counters = 0;
+	try(bch2_accounting_btree_read(trans, disk_accounting_pos_to_bpos(&acc), v, 3,
+				       &nr_counters));
+
+	if (nr_counters < 3) {
+		u64 sectors = btree == BTREE_ID_extents ? v[0] : 0;
+
+		v[0] = v[1] = 0;
+		v[2] = sectors;
+	}
+
+	return 0;
+}
+
+/*
  * Sanity check before a destructive snapshot-node transition (emptying or
  * deleting a node): the per-snapshot disk accounting counters must be zero.
  *
@@ -158,20 +214,20 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
  * The key count catches metadata-only stranding (dirents, xattrs, empty
  * inodes) that the sectors counter can't see. It's only trusted once
  * check_allocations has rebuilt it (scheduled by the per_dev_fragmentation_lru
- * upgrade); before that version we fall back to the sectors-only check. Either
- * way it's an in-memory read per snapshot btree, and the per-btree breakdown
+ * upgrade); before that version bch2_snapshot_accounting_read() reports it as
+ * zero and we fall back to the sectors-only check. The per-btree breakdown
  * points at where any stranded keys live.
  */
 /*
  * Total keys/sectors accounted to snapshot @id across the snapshotted
  * btrees, with a per-btree breakdown appended to @breakdown if non-NULL.
- * (nr_keys counters exist only post-upgrade and read as zero before.)
  */
-int bch2_snapshot_accounting_totals(struct bch_fs *c, u32 id,
+int bch2_snapshot_accounting_totals(struct btree_trans *trans, u32 id,
 				    u64 *total_keys, u64 *total_sectors,
 				    u64 *btrees_with_keys,
 				    struct printbuf *breakdown)
 {
+	struct bch_fs *c = trans->c;
 	bool trust_keys = c->sb.version_upgrade_complete >=
 		bcachefs_metadata_version_per_dev_fragmentation_lru;
 
@@ -181,20 +237,8 @@ int bch2_snapshot_accounting_totals(struct bch_fs *c, u32 id,
 		if (!btree_type_has_snapshots(btree))
 			continue;
 
-		struct disk_accounting_pos acc;
-		memset(&acc, 0, sizeof(acc));
-		acc.type = BCH_DISK_ACCOUNTING_snapshot;
-		acc.snapshot.id = id;
-		acc.snapshot.btree = btree;
-
-		/*
-		 * In-mem: bch2_accounting_is_mem() covers everything but
-		 * BCH_DISK_ACCOUNTING_inum, so the counters are current as
-		 * deltas are applied. No btree read, no transaction, and no
-		 * write buffer flush to make the values trustworthy.
-		 */
 		u64 v[3] = {};
-		bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
+		try(bch2_snapshot_accounting_read(trans, id, btree, v));
 
 		u64 nr_keys	= trust_keys ? v[0] : 0;
 		u64 key_bytes	= trust_keys ? v[1] : 0;
@@ -274,7 +318,7 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
 	CLASS(printbuf, buf)();
 	u64 total_keys, total_sectors, btrees_with_keys = 0;
 
-	try(bch2_snapshot_accounting_totals(c, id, &total_keys, &total_sectors,
+	try(bch2_snapshot_accounting_totals(trans, id, &total_keys, &total_sectors,
 					    &btrees_with_keys, &buf));
 
 	if (likely(!total_keys && !total_sectors))
@@ -416,13 +460,13 @@ static void bch2_snapshot_stranded_keys_to_text(struct printbuf *out,
 	}
 }
 
-static int snapshot_node_data_to_text(struct printbuf *out, struct bch_fs *c,
+static int snapshot_node_data_to_text(struct printbuf *out, struct btree_trans *trans,
 				      u32 id, u32 live_child)
 {
 	CLASS(printbuf, breakdown)();
 	u64 nr_keys, sectors;
 
-	try(bch2_snapshot_accounting_totals(c, id, &nr_keys, &sectors, NULL, &breakdown));
+	try(bch2_snapshot_accounting_totals(trans, id, &nr_keys, &sectors, NULL, &breakdown));
 
 	prt_printf(out, "\n  %s %u", live_child ? "interior" : "leaf", id);
 	if (live_child)
@@ -438,7 +482,7 @@ static int snapshot_node_data_to_text(struct printbuf *out, struct bch_fs *c,
  * re-drive would append a second copy. Reset for that re-drive.
  */
 static int bch2_snapshot_delete_data_to_text(struct printbuf *out,
-					     struct bch_fs *c,
+					     struct btree_trans *trans,
 					     struct snapshot_delete *d)
 {
 	printbuf_reset(out);
@@ -446,10 +490,10 @@ static int bch2_snapshot_delete_data_to_text(struct printbuf *out,
 	prt_printf(out, "snapshot deletion, data accounted per node:");
 
 	darray_for_each(d->delete_leaves, i)
-		try(snapshot_node_data_to_text(out, c, *i, 0));
+		try(snapshot_node_data_to_text(out, trans, *i, 0));
 
 	darray_for_each(d->delete_interior, i)
-		try(snapshot_node_data_to_text(out, c, i->id, i->live_child));
+		try(snapshot_node_data_to_text(out, trans, i->id, i->live_child));
 
 	return 0;
 }
@@ -460,13 +504,13 @@ static int bch2_snapshot_delete_data_to_text(struct printbuf *out,
  * Pre-per_dev_fragmentation_lru the key counters aren't populated yet, so this
  * sees sectors only - a dirents- or xattrs-only stranding is invisible there.
  */
-static int snapshot_content_empty(struct bch_fs *c, u32 id,
+static int snapshot_content_empty(struct btree_trans *trans, u32 id,
 				  struct printbuf *msg, u64 *bad_btrees)
 {
 	u64 nr_keys, sectors, btrees = 0;
 	CLASS(printbuf, breakdown)();
 
-	try(bch2_snapshot_accounting_totals(c, id, &nr_keys, &sectors,
+	try(bch2_snapshot_accounting_totals(trans, id, &nr_keys, &sectors,
 					    &btrees, &breakdown));
 
 	btrees &= ~BIT_ULL(BTREE_ID_inodes);
@@ -488,16 +532,16 @@ static int snapshot_content_empty(struct bch_fs *c, u32 id,
  * mask. Nothing may remain in them by the time we delete the inode keys - see
  * the caller.
  */
-static int dying_snapshots_content_btrees(struct bch_fs *c,
+static int dying_snapshots_content_btrees(struct btree_trans *trans,
 					  struct snapshot_delete *d,
 					  struct printbuf *msg,
 					  u64 *bad_btrees)
 {
 	darray_for_each(d->delete_leaves, i)
-		try(snapshot_content_empty(c, *i, msg, bad_btrees));
+		try(snapshot_content_empty(trans, *i, msg, bad_btrees));
 
 	darray_for_each(d->delete_interior, i)
-		try(snapshot_content_empty(c, i->id, msg, bad_btrees));
+		try(snapshot_content_empty(trans, i->id, msg, bad_btrees));
 
 	return 0;
 }
@@ -1070,7 +1114,7 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 	 */
 	CLASS(printbuf, msg)();
 	u64 bad_btrees = 0;
-	try(dying_snapshots_content_btrees(c, d, &msg, &bad_btrees));
+	try(dying_snapshots_content_btrees(trans, d, &msg, &bad_btrees));
 
 	if (unlikely(bad_btrees)) {
 		/*
@@ -1098,7 +1142,7 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 
 		printbuf_reset(&msg);
 		bad_btrees = 0;
-		try(dying_snapshots_content_btrees(c, d, &msg, &bad_btrees));
+		try(dying_snapshots_content_btrees(trans, d, &msg, &bad_btrees));
 	}
 
 	if (unlikely(bad_btrees)) {
@@ -1427,7 +1471,7 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	 * is what the migration didn't move.
 	 */
 	CLASS(printbuf, node_data)();
-	try(bch2_snapshot_delete_data_to_text(&node_data, c, d));
+	try(bch2_snapshot_delete_data_to_text(&node_data, trans, d));
 	bch_info(c, "%s", node_data.buf);
 
 	try(!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)
