@@ -188,12 +188,11 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
  * btrees, with a per-btree breakdown appended to @breakdown if non-NULL.
  * (nr_keys counters exist only post-upgrade and read as zero before.)
  */
-int bch2_snapshot_accounting_totals(struct btree_trans *trans, u32 id,
+int bch2_snapshot_accounting_totals(struct bch_fs *c, u32 id,
 				    u64 *total_keys, u64 *total_sectors,
 				    u64 *btrees_with_keys,
 				    struct printbuf *breakdown)
 {
-	struct bch_fs *c = trans->c;
 	bool trust_keys = c->sb.version_upgrade_complete >=
 		bcachefs_metadata_version_per_dev_fragmentation_lru;
 
@@ -210,14 +209,13 @@ int bch2_snapshot_accounting_totals(struct btree_trans *trans, u32 id,
 		acc.snapshot.btree = btree;
 
 		/*
-		 * Snapshot accounting is not in-mem (bch2_accounting_is_mem());
-		 * reading it through bch2_accounting_mem_read() returned silent
-		 * zeros, so every caller's "no data accounted" check has passed
-		 * unconditionally since it was added. Callers are responsible
-		 * for a write buffer flush (once per pass, not per call):
+		 * In-mem: bch2_accounting_is_mem() covers everything but
+		 * BCH_DISK_ACCOUNTING_inum, so the counters are current as
+		 * deltas are applied. No btree read, no transaction, and no
+		 * write buffer flush to make the values trustworthy.
 		 */
 		u64 v[3] = {};
-		try(bch2_accounting_btree_read(trans, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v)));
+		bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
 
 		u64 nr_keys	= trust_keys ? v[0] : 0;
 		u64 key_bytes	= trust_keys ? v[1] : 0;
@@ -291,7 +289,7 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
 	CLASS(printbuf, buf)();
 	u64 total_keys, total_sectors, btrees_with_keys = 0;
 
-	try(bch2_snapshot_accounting_totals(trans, id, &total_keys, &total_sectors,
+	try(bch2_snapshot_accounting_totals(c, id, &total_keys, &total_sectors,
 					    &btrees_with_keys, &buf));
 
 	if (likely(!total_keys && !total_sectors))
@@ -424,13 +422,13 @@ static void bch2_snapshot_stranded_keys_to_text(struct printbuf *out,
 	}
 }
 
-static int snapshot_node_data_to_text(struct printbuf *out, struct btree_trans *trans,
+static int snapshot_node_data_to_text(struct printbuf *out, struct bch_fs *c,
 				      u32 id, u32 live_child)
 {
 	CLASS(printbuf, breakdown)();
 	u64 nr_keys, sectors;
 
-	try(bch2_snapshot_accounting_totals(trans, id, &nr_keys, &sectors, NULL, &breakdown));
+	try(bch2_snapshot_accounting_totals(c, id, &nr_keys, &sectors, NULL, &breakdown));
 
 	prt_printf(out, "\n  %s %u", live_child ? "interior" : "leaf", id);
 	if (live_child)
@@ -446,7 +444,7 @@ static int snapshot_node_data_to_text(struct printbuf *out, struct btree_trans *
  * re-drive would append a second copy. Reset for that re-drive.
  */
 static int bch2_snapshot_delete_data_to_text(struct printbuf *out,
-					     struct btree_trans *trans,
+					     struct bch_fs *c,
 					     struct snapshot_delete *d)
 {
 	printbuf_reset(out);
@@ -454,22 +452,27 @@ static int bch2_snapshot_delete_data_to_text(struct printbuf *out,
 	prt_printf(out, "snapshot deletion, data accounted per node:");
 
 	darray_for_each(d->delete_leaves, i)
-		try(snapshot_node_data_to_text(out, trans, *i, 0));
+		try(snapshot_node_data_to_text(out, c, *i, 0));
 
 	darray_for_each(d->delete_interior, i)
-		try(snapshot_node_data_to_text(out, trans, i->id, i->live_child));
+		try(snapshot_node_data_to_text(out, c, i->id, i->live_child));
 
 	return 0;
 }
 
-/* Inodes excluded: those are what we're about to delete, accounted until we do */
-static int snapshot_content_empty(struct btree_trans *trans, u32 id,
+/*
+ * Inodes excluded: those are what we're about to delete, accounted until we do.
+ *
+ * Pre-per_dev_fragmentation_lru the key counters aren't populated yet, so this
+ * sees sectors only - a dirents- or xattrs-only stranding is invisible there.
+ */
+static int snapshot_content_empty(struct bch_fs *c, u32 id,
 				  struct printbuf *msg, u64 *bad_btrees)
 {
 	u64 nr_keys, sectors, btrees = 0;
 	CLASS(printbuf, breakdown)();
 
-	try(bch2_snapshot_accounting_totals(trans, id, &nr_keys, &sectors,
+	try(bch2_snapshot_accounting_totals(c, id, &nr_keys, &sectors,
 					    &btrees, &breakdown));
 
 	btrees &= ~BIT_ULL(BTREE_ID_inodes);
@@ -490,18 +493,17 @@ static int snapshot_content_empty(struct btree_trans *trans, u32 id,
  * Nothing may remain in the content btrees at a dying snapshot by the time we
  * delete its inode keys - see the caller.
  */
-static int check_dying_snapshots_content_empty(struct btree_trans *trans,
+static int check_dying_snapshots_content_empty(struct bch_fs *c,
 					       struct snapshot_delete *d)
 {
-	struct bch_fs *c = trans->c;
 	CLASS(printbuf, msg)();
 	u64 bad_btrees = 0;
 
 	darray_for_each(d->delete_leaves, i)
-		try(snapshot_content_empty(trans, *i, &msg, &bad_btrees));
+		try(snapshot_content_empty(c, *i, &msg, &bad_btrees));
 
 	darray_for_each(d->delete_interior, i)
-		try(snapshot_content_empty(trans, i->id, &msg, &bad_btrees));
+		try(snapshot_content_empty(c, i->id, &msg, &bad_btrees));
 
 	if (!bad_btrees)
 		return 0;
@@ -1105,11 +1107,8 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 	 * every later one. Check while it's still repairable - the
 	 * check_no_data licenses at the end of deletion only fire once the
 	 * inodes are already gone.
-	 *
-	 * The flush drops locks; lockrestart_do to get them back.
 	 */
-	try(bch2_btree_write_buffer_flush_sync(trans));
-	try(lockrestart_do(trans, check_dying_snapshots_content_empty(trans, d)));
+	try(check_dying_snapshots_content_empty(c, d));
 
 	/* Then the inodes */
 
@@ -1400,31 +1399,17 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	try(commit_do(trans, NULL, NULL, 0, bch2_trans_log_msg(trans, &buf)));
 
 	/*
-	 * What each node holds going in. Read through the same accounting the
-	 * check_no_data licenses read on the way out, after the same write
-	 * buffer flush, so the two are directly comparable: whatever is still
-	 * there at the end is what the migration didn't move.
-	 *
-	 * lockrestart_do because the flush drops the transaction's locks - the
-	 * flush below is followed by commit_do()s, which relock on their own.
+	 * What each node holds going in - the same counters the check_no_data
+	 * licenses read on the way out, so whatever is still there at the end
+	 * is what the migration didn't move.
 	 */
 	CLASS(printbuf, node_data)();
-	try(bch2_btree_write_buffer_flush_sync(trans));
-	try(lockrestart_do(trans, bch2_snapshot_delete_data_to_text(&node_data, trans, d)));
+	try(bch2_snapshot_delete_data_to_text(&node_data, c, d));
 	bch_info(c, "%s", node_data.buf);
 
 	try(!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)
 	    ? delete_dead_snapshot_keys_v2(trans)
 	    : delete_dead_snapshot_keys_v1(trans));
-
-	/*
-	 * The check_no_data licenses below read snapshot accounting from the
-	 * accounting btree; flush the sweep's buffered deltas so they see
-	 * them. Once per invocation: the node loops below generate no key
-	 * accounting, and a stale read only over-counts, which fails
-	 * conservative (refuses the transition, next pass retries):
-	 */
-	try(bch2_btree_write_buffer_flush_sync(trans));
 
 	darray_for_each(d->delete_leaves, i) {
 		int ret = commit_do(trans, NULL, NULL, 0,
