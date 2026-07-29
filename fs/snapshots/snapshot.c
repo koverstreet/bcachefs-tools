@@ -542,7 +542,7 @@ int bch2_snapshot_validate(struct bch_fs *c, struct bkey_s_c k,
 				 id, k.k->p.offset);
 	}
 
-	if (bkey_val_bytes(k.k) > offsetof(struct bch_snapshot, skip)) {
+	if (bkey_has_field(k.k, snapshot, skip)) {
 		bkey_fsck_err_on(le32_to_cpu(s.v->skip[0]) > le32_to_cpu(s.v->skip[1]) ||
 				 le32_to_cpu(s.v->skip[1]) > le32_to_cpu(s.v->skip[2]),
 				 c, snapshot_skiplist_not_normalized,
@@ -557,7 +557,7 @@ int bch2_snapshot_validate(struct bch_fs *c, struct bkey_s_c k,
 		}
 	}
 
-	if (bkey_val_bytes(k.k) > offsetof(struct bch_snapshot, pad))
+	if (bkey_has_field(k.k, snapshot, pad))
 		bkey_fsck_err_on(s.v->pad,
 				 c, snapshot_pad_nonzero,
 				 "reserved pad field nonzero");
@@ -571,7 +571,7 @@ int bch2_snapshot_validate(struct bch_fs *c, struct bkey_s_c k,
 	 * touched:
 	 */
 	if (from->from == BKEY_VALIDATE_commit && !c->opts.no_commit_validate) {
-		u32 state = bkey_val_bytes(k.k) > offsetof(struct bch_snapshot, state)
+		u32 state = bkey_has_field(k.k, snapshot, state)
 			? bch2_snapshot_state(s.v)
 			: 0;
 

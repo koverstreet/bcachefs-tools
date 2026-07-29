@@ -374,7 +374,7 @@ int bch2_subvolume_validate(struct bch_fs *c, struct bkey_s_c k,
 			 c, subvol_inode_bad,
 			 "invalid inode");
 
-	if (bkey_val_bytes(k.k) > offsetof(struct bch_subvolume, pad))
+	if (bkey_has_field(k.k, subvolume, pad))
 		bkey_fsck_err_on(subvol.v->pad,
 				 c, subvol_pad_nonzero,
 				 "reserved pad field nonzero");
@@ -387,7 +387,7 @@ int bch2_subvolume_validate(struct bch_fs *c, struct bkey_s_c k,
 	 * the trigger has seen them:
 	 */
 	if (from->from == BKEY_VALIDATE_commit && !c->opts.no_commit_validate) {
-		if (bkey_val_bytes(k.k) > offsetof(struct bch_subvolume, state))
+		if (bkey_has_field(k.k, subvolume, state))
 			bkey_fsck_err_on(subvol.v->state &&
 					 !bch2_subvolume_state_valid(bch2_subvolume_state(subvol.v)),
 					 c, subvol_state_bad,
@@ -436,7 +436,7 @@ __cold void bch2_subvolume_to_text(struct printbuf *out, struct bch_fs *c,
 		   le64_to_cpu(s.v->inode),
 		   le32_to_cpu(s.v->snapshot));
 
-	if (bkey_val_bytes(s.k) > offsetof(struct bch_subvolume, creation_parent)) {
+	if (bkey_has_field(s.k, subvolume, creation_parent)) {
 		prt_printf(out, " creation_parent %u", le32_to_cpu(s.v->creation_parent));
 		prt_printf(out, " fs_parent %u", le32_to_cpu(s.v->fs_path_parent));
 	}
@@ -628,16 +628,12 @@ static int bch2_subvolume_reparent(struct btree_trans *trans,
 		return 0;
 
 	/*
-	 * Pad rather than testing bkey_val_bytes: a val that stops short of
-	 * creation_parent doesn't have one, which reads as 0, and old_parent is
-	 * a live subvolume id - so a short key is not a child and we skip it.
-	 * Testing the length instead skipped only keys long enough to disagree,
-	 * so every short key fell through and got stamped with new_parent.
+	 * A key with no creation_parent predates the field, so it isn't known
+	 * to be anyone's child - skip it, same as one naming a different
+	 * parent.
 	 */
-	struct bch_subvolume v;
-	bkey_val_copy_pad(&v, bkey_s_c_to_subvolume(k));
-
-	if (le32_to_cpu(v.creation_parent) != old_parent)
+	if (!bkey_has_field(k.k, subvolume, creation_parent) ||
+	    le32_to_cpu(bkey_s_c_to_subvolume(k).v->creation_parent) != old_parent)
 		return 0;
 
 	struct bkey_i_subvolume *s =

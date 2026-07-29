@@ -878,18 +878,17 @@ static inline struct bkey_s_c __bch2_bkey_get_typed(struct btree_iter *iter,
 	bkey_s_c_to_##_type(__bch2_bkey_get_typed(_iter, KEY_TYPE_##_type))
 
 /*
- * Values grow: a key written by an older version stops short of the fields
- * added since. Copy what's there and zero the rest, so a field the key
- * predates reads as 0. We have no defaults, so 0 is what "absent" means -
- * cap'n proto's rule, minus the defaults.
+ * Copy a value out of a key, zeroing whatever the key is too short to hold.
  *
- * Reads pad, writes extend. The typed mut helpers widen u64s to the current
- * struct so that assigning a new field persists it - see
- * __bch2_bkey_make_mut_noupdate(). There is no third case, and in particular
- * nothing should decide whether a key "has" a field by testing
- * bkey_val_bytes() against offsetof(): under this rule every key has every
- * field, and a short one reads zero. Code that asked got the answer
- * backwards - it skipped only the keys long enough to disagree with it.
+ * Values grow: a key written by an older version stops short of the fields
+ * added since, and we have no defaults, so a field the key predates reads as
+ * 0. To ask whether the key was written with a field at all, test
+ * bkey_val_bytes() against offsetof() - that's the only thing that answers it,
+ * and it's what to_text() and validate() use.
+ *
+ * The typed mut helpers pass min_bytes = sizeof(struct bkey_i_<type>) and
+ * widen u64s to match, so a caller may assign a field the on-disk key was too
+ * short for and have it committed - see __bch2_bkey_make_mut_noupdate().
  */
 static inline void __bkey_val_copy_pad(void *dst_v, unsigned dst_size, struct bkey_s_c src_k)
 {
@@ -928,12 +927,11 @@ static inline int __bch2_bkey_get_val_typed(struct btree_trans *trans,
  * bkey_i_<type>, so an error message can print the key instead of the fields
  * whoever wrote the message happened to name.
  *
- * This is a read, so it pads and does not extend (see __bkey_val_copy_pad()):
- * the key is never written back, and bch2_bkey_val_to_text() leads with u64s,
- * so widening would misreport the length of the very key we're being asked to
- * diagnose. Clamping is required in the other direction - an on-disk val
- * longer than the caller's struct would leave u64s claiming val we didn't
- * copy, and to_text() would read past the caller's stack.
+ * u64s keeps the on-disk length: the key is never written back, and
+ * to_text() reports u64s and gates fields on it, so widening would print
+ * fields the key doesn't have. Clamping to val_size is required in the other
+ * direction - an on-disk val longer than the caller's struct would leave u64s
+ * claiming val we didn't copy, and to_text() would read past the stack.
  */
 static inline int __bch2_bkey_get_i_typed(struct btree_trans *trans,
 				enum btree_id btree, struct bpos pos,
