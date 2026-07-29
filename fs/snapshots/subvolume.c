@@ -127,9 +127,9 @@ static int check_subvol(struct btree_trans *trans,
 	}
 
 	/*
-	 * A tombstone: it exists only as deletion's witness, reaped when its
-	 * snapshot node is deleted - none of the live-subvolume invariants
-	 * apply (the sweep may already have erased its root inode):
+	 * A tombstone: it exists only so deletion can check it, and is reaped
+	 * when its snapshot node is deleted - none of the live-subvolume
+	 * invariants apply (the sweep may already have erased its root inode):
 	 */
 	if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_deleted)
 		return 0;
@@ -511,8 +511,8 @@ bch2_subvolume_get_inlined(struct btree_trans *trans, unsigned subvol,
 	int ret = bch2_bkey_get_val_typed(trans, BTREE_ID_subvolumes, POS(0, subvol),
 					  BTREE_ITER_cached, subvolume, s);
 	/*
-	 * A deleted subvolume is a tombstone (deletion's witness, not yet
-	 * reaped): to everyone but the deletion/reaping path it's gone, so
+	 * A deleted subvolume is a tombstone, kept for deletion to check and
+	 * not yet reaped: to everyone but the deletion/reaping path it's gone, so
 	 * report it as such rather than handing back a dead subvolume - and let
 	 * it flow into the inconsistent_if_not_found handling below.
 	 */

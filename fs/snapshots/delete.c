@@ -151,8 +151,8 @@ int bch2_snapshot_node_set_deleted(struct btree_trans *trans, u32 id)
 
 	/*
 	 * The backref is retained: it now points at the subvolume's
-	 * tombstone, and deletion requires that testimony - a will_delete
-	 * leaf without a subvolume pointing back is an invalid state
+	 * tombstone, and deletion checks it - a will_delete leaf without a
+	 * subvolume pointing back is an invalid state
 	 * (check_should_delete_leaf):
 	 */
 	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_will_delete);

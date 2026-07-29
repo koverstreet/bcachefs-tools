@@ -1380,25 +1380,26 @@ static int check_inode(struct btree_trans *trans,
 			return snapshot_ret;
 
 		/*
-		 * A missing subvolume is reconstructed on either provenance -
-		 * the subvolumes btree is known to have lost data - or
-		 * corroboration: this root inode names the subvolume, and the
-		 * live snapshot it lives at names the same subvolume in its
-		 * backref. Two independent witnesses to the edge outweigh the
-		 * missing key. (A will_delete snapshot doesn't corroborate:
-		 * there the missing subvolume is a deletion in flight, and
-		 * reconstructing it live would revert the deletion - the
-		 * sweep owns those keys.) Singly-witnessed damage falls
-		 * through to the conservative arms below, which strip the
-		 * reference.
+		 * A missing subvolume is reconstructed in two cases. If the
+		 * subvolumes btree is known to have lost data, reconstruct. Or
+		 * if this root inode names the subvolume and the live snapshot
+		 * it lives at names the same subvolume in its backref,
+		 * reconstruct: two keys point at the edge and only the
+		 * subvolume key is gone.
+		 *
+		 * If the snapshot is will_delete, don't - there the missing
+		 * subvolume is a deletion in flight, and reconstructing it live
+		 * would revert the deletion; the sweep owns those keys.
+		 * Anything else falls through to the conservative arms below,
+		 * which strip the reference.
 		 */
-		bool corroborated = !snapshot_ret &&
+		bool snapshot_agrees = !snapshot_ret &&
 			bch2_snapshot_state_compat(&snapshot) == SNAPSHOT_STATE_live &&
 			le32_to_cpu(snapshot.subvol) == u.bi_subvol;
 
 		if (ret &&
 		    ((c->sb.btrees_lost_data & BIT_ULL(BTREE_ID_subvolumes)) ||
-		     corroborated)) {
+		     snapshot_agrees)) {
 			ret = 0;
 			try(reconstruct_subvol(trans, k.k->p.snapshot, u.bi_subvol, u.bi_inum));
 			goto do_update;

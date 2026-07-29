@@ -791,7 +791,7 @@ int bch2_snapshot_validate(struct bch_fs *c, struct bkey_s_c k,
 		 * outright; the no_keys parking state exists only because an
 		 * interior node can't be removed from the tree at runtime.
 		 * will_delete retains the backref: it points at the subvolume's
-		 * tombstone, testimony the deletion path requires
+		 * tombstone, which the deletion path checks
 		 * (check_should_delete_leaf()).
 		 */
 		bkey_fsck_err_on(s.v->subvol &&

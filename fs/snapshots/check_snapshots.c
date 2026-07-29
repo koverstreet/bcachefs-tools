@@ -5,9 +5,10 @@
  * check_snapshot_trees: every tree key names a live root and master subvol.
  *
  * check_snapshots: per-node, in three stages - check_snapshot_state()
- * recovers the state field itself; check_snapshot_deleted() holds a
- * non-live state up against its witnesses; then the topology checks
- * (edges, tree pointer, depth, skiplists, subvol backref).
+ * recovers the state field itself; check_snapshot_deleted() checks a
+ * non-live state against the child snapshots, the subvolume and the
+ * accounting; then the topology checks (edges, tree pointer, depth,
+ * skiplists, subvol backref).
  *
  * reconstruct_snapshots: rebuild missing snapshot nodes from the keys
  * that reference them.
@@ -18,10 +19,10 @@
  * Repair philosophy: enumerate which writers can produce a state before
  * repairing it. Unconstructible combinations are rejected at commit
  * (bch2_snapshot_validate()); real damage is repaired toward the side
- * the witnesses corroborate - child snapshots, the subvolume (deletion
- * tombstones it in the same transaction that condemns its snapshot),
- * the per-snapshot accounting (nothing we write deletes a node with
- * data). Ambiguity fail-stops rather than guessing.
+ * the rest of the metadata agrees with - child snapshots, the subvolume
+ * (deletion tombstones it in the same transaction that condemns its
+ * snapshot), the per-snapshot accounting (nothing we write deletes a
+ * node with data). Ambiguity fail-stops rather than guessing.
  */
 #include "bcachefs.h"
 
@@ -450,8 +451,8 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 	/*
 	 * Live nodes only: the _OBSOLETE flags are old-format compat bits,
 	 * and bch2_snapshot_state_set() clears SUBVOL_OBSOLETE for every
-	 * non-live state even when the subvol backref is retained
-	 * (will_delete keeps it as tombstone testimony) - old kernels must
+	 * non-live state even when the subvol backref is retained (a
+	 * will_delete leaf keeps it; deletion checks it) - old kernels must
 	 * not read a dying snapshot as a live subvolume leaf:
 	 */
 	if (bch2_snapshot_state(s) == SNAPSHOT_STATE_live &&
@@ -484,12 +485,12 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 /*
  * Parent <-> child edge checks and repair.
  *
- * An edge is repaired only when doubly attested: the surviving pointer plus
- * corroboration (id ordering, tree, depth - checked before the depth/skip
- * autofixes rewrite them). Ambiguous evidence fail-stops; a wrong join or
- * split moves keys between subvolume visibilities. Never write "I don't
- * know" to disk: a node with a zeroed parent masquerades as a tree root and
- * gets consumed by the tree-pointer repair or the deletion machinery.
+ * An edge is repaired only if the surviving pointer and the two nodes' id
+ * ordering, tree and depth all agree (those are checked before the depth/skip
+ * autofixes rewrite them). If they don't, fail-stop: a wrong join or split
+ * moves keys between subvolume visibilities. Never write "I don't know" to
+ * disk: a node with a zeroed parent masquerades as a tree root and gets
+ * consumed by the tree-pointer repair or the deletion machinery.
  * Repairs commit and restart, so decisions only see settled state. The
  * in-memory snapshot table serves as the reverse index (live nodes only:
  * a tombstone's child pointer is a splice breadcrumb, not a claim - I1).
@@ -571,10 +572,10 @@ static bool snapshot_parent_child_consistent(const struct bch_snapshot *s, u32 i
 }
 
 /*
- * Does @n (in role @side) have a pointer position that's empty, or whose
- * current target doesn't reciprocate? Returns the displaced value in
- * @old_id; empty positions are preferred, so a refuted value keeps its shot
- * at repair via its own scan:
+ * Does @n (in role @side) have a pointer slot that's empty, or whose current
+ * target doesn't reciprocate? Returns the displaced value in @old_id. Empty
+ * slots are checked first, so a stale pointer keeps its own shot at repair
+ * when its node is scanned:
  */
 static int snapshot_edge_ptr_available(struct btree_trans *trans,
 				       const struct bch_snapshot *n, u32 n_id,
@@ -706,8 +707,8 @@ static int check_snapshot_edge(struct btree_trans *trans,
 		return 0;
 
 	/*
-	 * Our claim completes the edge if the target's position toward us is
-	 * empty or refuted - but never un-tombstone a node:
+	 * Our pointer completes the edge if the target's slot toward us is
+	 * empty or holds a stale pointer - but never un-tombstone a node:
 	 */
 	if (other_exists &&
 	    bch2_snapshot_state_compat(&other) != SNAPSHOT_STATE_deleted &&
@@ -719,13 +720,13 @@ static int check_snapshot_edge(struct btree_trans *trans,
 
 		if (avail &&
 		    ret_fsck_err(trans, snapshot_edge_bad,
-				 "snapshot %u %s pointer %u is not reciprocated, but is corroborated by\n"
-				 "tree and depth and the target's position (%u) is unattested - completing the edge",
+				 "snapshot %u %s pointer %u is not reciprocated, but tree and depth\n"
+				 "agree with it and the target's slot (%u) is empty or stale - completing the edge",
 				 id, side == EDGE_CHILD ? "parent" : "child", other_id, old))
 			return snapshot_edge_set_ptr(trans, other_id, !side, old, id);
 	}
 
-	/* Or a corroborated claimant is the true counterpart - re-aim ours: */
+	/* Or another node claims the edge and tree and depth agree - re-aim ours: */
 	u32 repl = snapshot_table_find_edge(c, s, id, !side);
 
 	struct bch_snapshot r;
@@ -737,7 +738,7 @@ static int check_snapshot_edge(struct btree_trans *trans,
 	    snapshot_parent_child_consistent(s, id, side, &r, repl) &&
 	    ret_fsck_err(trans, snapshot_edge_bad,
 			 "snapshot %u %s pointer %u is broken (target %s), but node %u claims the\n"
-			 "edge, corroborated by tree and depth - repairing",
+			 "edge, and tree and depth agree - repairing",
 			 id, side == EDGE_CHILD ? "parent" : "child", other_id,
 			 other_exists ? "does not reciprocate" : "does not exist",
 			 repl))
@@ -956,8 +957,8 @@ static int check_snapshot_state(struct btree_trans *trans,
 	 * A valid state that contradicts the legacy flags: current writers
 	 * dual-write both via bch2_snapshot_state_set(), so only a legacy
 	 * flags-only writer leaves them disagreeing - the flags are the fresher
-	 * write. But the flags are single unprotected bits, so corroborate
-	 * structurally before trusting them over a codeword: a node tombstoned
+	 * write. But the flags are single unprotected bits, so check the
+	 * node's shape before trusting them over a codeword: a node tombstoned
 	 * by a legacy bch2_snapshot_node_delete() carries the tombstone wipe,
 	 * and no live, will_delete or no_keys node ever has tree == 0. A bare
 	 * DELETED bit on a live-shaped node stays with the state field.
@@ -984,9 +985,9 @@ static int check_snapshot_state(struct btree_trans *trans,
 }
 
 /*
- * A non-live state, checked against its witnesses - child snapshots,
- * the subvolume, the accounting. Returns 1 if the node was deleted or
- * is a settled tombstone: no further checking.
+ * A non-live state, checked against the child snapshots, the subvolume
+ * and the accounting. Returns 1 if the node was deleted or is a settled
+ * tombstone: no further checking.
  */
 static int check_snapshot_deleted(struct btree_trans *trans,
 				  struct btree_iter *iter,
