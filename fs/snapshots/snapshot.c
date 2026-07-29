@@ -73,35 +73,171 @@
  * creation is O(1) regardless of filesystem size. Many thousands or millions of
  * snapshots can be created, limited only by disk space.
  *
+ * \subsubsection{Snapshot invariants}
+ *
+ * Four properties hold on a consistent filesystem. They are stated here
+ * because the deletion process below depends on them, and because a violation
+ * of any one is repaired by a different fsck pass.
+ *
+ * \begin{description}
+ * \item[Key implies inode]\ A key in snapshot $X$ implies a key in the inodes
+ *   btree at $X$, for the same inode number. Not merely an inode: a whiteout
+ *   also satisfies it. This is what makes an inode's content locatable from
+ *   the inodes btree alone, which is how deletion finds keys (below), so it is
+ *   the load-bearing one. Enforced by \texttt{bch2\_check\_key\_has\_inode()}
+ *   in every content pass.
+ *
+ * \item[Writes update the inode]\ Writing a key into a snapshot updates that
+ *   inode in the same snapshot, which is what maintains the above.
+ *
+ * \item[Extents align across snapshots]\ Two extents in different snapshots
+ *   either occupy exactly the same range or do not overlap at all. Partial
+ *   overlap is invalid; the write path splits ancestors' extents so that a
+ *   descendant's write lands exactly aligned. Checked by
+ *   \texttt{check\_overlapping\_extents}.
+ *
+ * \item[Subvolumes point at leaves]\ A subvolume's snapshot field always names
+ *   a leaf node, never an interior one, and snapshot deletion never repoints a
+ *   subvolume --- only snapshot creation does.
+ * \end{description}
+ *
  * \subsubsection{Snapshot deletion}
  *
- * Deleting a snapshot (or subvolume) marks it for asynchronous cleanup by a
- * background thread. The cost of deletion is proportional to the volume of data
- * in the deleted snapshot, since the thread must walk every snapshot-aware btree
- * to remove or relocate affected keys.
+ * Deletion is not a single operation. It marks nodes, then reclaims them over
+ * one or more runs of the \texttt{delete\_dead\_snapshots} recovery pass, which
+ * also runs online. Cost is proportional to the data in the deleted snapshot:
+ * the pass has to find and move or drop every key stamped with its id.
  *
- * Deletion is two-phase:
+ * A node passes through states (\texttt{bch\_snapshot\_state}):
+ *
+ * \begin{description}
+ * \item[\texttt{live}]\ Normal.
+ * \item[\texttt{will\_delete}]\ A leaf no longer referenced by a subvolume,
+ *   pending reclaim. The subvolume backref is kept: deletion checks it, and a
+ *   \texttt{will\_delete} leaf with no subvolume pointing back is invalid.
+ * \item[\texttt{no\_keys}]\ An interior node whose keys have all been moved
+ *   down. It stays in the tree because removing an interior node means
+ *   rewriting depth and skiplist fields across arbitrarily many children,
+ *   which cannot be done atomically at runtime. The splice happens at the next
+ *   mount, in the single-threaded recovery context, where
+ *   \texttt{check\_snapshots} can run afterwards.
+ * \item[\texttt{deleted}]\ Spliced out.
+ * \end{description}
+ *
+ * \texttt{delete\_dead\_snapshots} handles dead leaf nodes and redundant
+ * interior nodes:
+ *
+ * \begin{description}
+ * \item[Dead]\ No live descendant: a leaf no subvolume points at, or an
+ *   interior node whose children are all dead. Nothing that survives sees its
+ *   keys, so they're dropped.
+ * \item[Redundant]\ An interior node with exactly one live child. That child
+ *   still sees the node's keys through inheritance, so they move down to it
+ *   instead of being dropped. Where they move is \texttt{live\_child}. With
+ *   two live children there's nowhere to collapse into and the node stays ---
+ *   delete one child first.
+ * \end{description}
+ *
+ * One scan of the snapshots btree sorts every node into those two cases, in
+ * ascending id order. A node's id is always below its parent's (ids are
+ * allocated downward), so children are sorted before parents, and that gives
+ * two things.
+ *
+ * A node whose children are all dead is itself dead, and its children are
+ * already on the delete list when it's examined - so a dead subtree
+ * accumulates bottom-up. It's torn down in that same order, each node
+ * childless by its turn because deleting a child splices the parent's pointer
+ * to zero. \texttt{bch2\_snapshot\_node\_delete()} refuses a node that still
+ * has a child, which is what enforces it.
+ *
+ * And a node collapsing into a child that's itself collapsing gets that
+ * child's destination, already recorded. So \texttt{live\_child} is the
+ * terminal of the whole chain, not the next node down, and keys move there in
+ * one hop.
+ *
+ * A pass collects the dying nodes, then:
  *
  * \begin{enumerate}
- * \item \textbf{Runtime}: The background thread walks snapshot-aware btrees and
- *   removes keys belonging to dead snapshots. For leaf snapshots, keys are
- *   deleted or converted to whiteouts where ancestor visibility must be
- *   preserved. For interior nodes that have lost all but one child, keys are
- *   moved to the surviving child.
+ * \item \textbf{Content keys.} For each inode with a key in the inodes btree
+ *   at a dying snapshot, move or drop that inum's extents, dirents, xattrs and
+ *   damage keys. Note the direction: the scan is driven \emph{from} the inodes
+ *   btree, and descends into the other btrees only for inums it finds there.
+ *   That is the acceleration --- and it is why the key-implies-inode invariant
+ *   is load-bearing. A content key whose snapshot has no inodes-btree key is
+ *   invisible to this scan and is silently left behind.
  *
- * \item \textbf{Next mount}: Interior node removal is deferred to recovery
- *   because it requires updating depth and skiplist fields atomically across
- *   the subtree, which is only safe in the single-threaded recovery context.
+ * \item \textbf{Verify.} Before touching the inodes btree, check per-snapshot
+ *   accounting for the content btrees. Deleting the inode keys destroys the
+ *   index step 1 just navigated by, so anything still accounted at this point
+ *   would become unfindable by this pass and every later one. If anything
+ *   remains, stop without deleting.
+ *
+ * \item \textbf{Inode keys.} Now safe to move or drop.
+ *
+ * \item \textbf{Nodes.} Delete leaves; mark emptied interiors \texttt{no\_keys}.
+ *   Both are gated on per-snapshot accounting reading zero --- a node with data
+ *   still accounted to it is refused rather than emptied, to prevent data loss.
  * \end{enumerate}
  *
- * A snapshot with two children cannot be deleted directly --- you must first
- * delete one of its child snapshots. Multiple snapshot deletions are batched
- * and processed together in a single pass.
+ * If accounting says step 1 didn't evict every key at a dying snapshot id,
+ * then there was a key with no inodes-btree key at its snapshot, and the scan
+ * never reached it. If that happens, the pass doesn't delete: it schedules
+ * \texttt{check\_extents}, \texttt{check\_dirents} or \texttt{check\_xattrs}
+ * for the btree that still accounts data. If that pass finds a key with no
+ * inodes-btree key at its snapshot, \texttt{bch2\_check\_key\_has\_inode()}
+ * inserts one --- an inode or a whiteout. Then the next
+ * \texttt{delete\_dead\_snapshots} run reaches the key through it.
  *
- * Progress can be monitored via
- * \texttt{/sys/fs/bcachefs/<uuid>/snapshot\_delete\_status}. The
- * \texttt{auto\_snapshot\_deletion} mount option controls whether the background
- * deletion thread runs automatically.
+ * Keys move \emph{down}, from a dying node to its live descendant, and the
+ * inodes btree is always processed last. So the only skew an interrupted run
+ * can leave is a content key already moved while its inode has not been: the
+ * reverse cannot occur, and checks may rely on that.
+ *
+ * Collapsing migrates keys down, so an interrupted run leaves them split
+ * between the node and its live child; see equivalence classes, below.
+ *
+ * Progress: \texttt{/sys/fs/bcachefs/<uuid>/snapshot\_delete\_status}. The
+ * \texttt{auto\_snapshot\_deletion} option controls whether it runs
+ * automatically.
+ *
+ * \subsubsection{Equivalence classes}
+ *
+ * If \texttt{delete\_dead\_snapshots} is interrupted partway through
+ * collapsing a redundant interior node, its keys are left split: some moved
+ * down to the live child, some still at the node. fsck runs before
+ * \texttt{delete\_dead\_snapshots}, so it runs on that. It can't wait for the
+ * collapse to finish either: if the pass stops at step 2 or 4, the tree stays
+ * that way across mounts, and what unblocks it is a repair fsck makes.
+ *
+ * If fsck compares raw snapshot ids, a split node looks like two snapshots
+ * that disagree. \texttt{check\_extents} counts the inode version at the node
+ * and the version at the child over keys divided between them, and gets
+ * \texttt{i\_sectors} wrong for both. \texttt{check\_overlapping\_extents}
+ * reads the two halves as extents in different snapshots, and reports invalid
+ * partial overlap.
+ *
+ * So fsck compares in the collapsed frame.
+ * \texttt{bch2\_snapshot\_redundant\_interior()} walks the collapse chain down
+ * and returns its terminal: the node the chain is provably collapsing into.
+ * Every node on the chain returns the same terminal, and those nodes are one
+ * equivalence class. Converting both sides before comparing makes the node and
+ * its child the same snapshot, so a half-migrated key is not a false positive.
+ * \texttt{inode\_walker} keeps one entry per class, at the terminal, so an
+ * inode a repair writes back lands in the destination snapshot;
+ * \texttt{snapshots\_seen} keeps its overwrite list in terminals
+ * (\texttt{pos\_equiv}).
+ *
+ * A comparison belongs in the collapsed frame only if what consumes its answer
+ * does. \texttt{bch2\_check\_key\_has\_inode()} does not:
+ * \texttt{delete\_dead\_snapshot\_keys\_v2()} descends into an inum's content
+ * btrees only where the inodes btree has a key at exactly the dying snapshot
+ * id, whiteouts included. If that check compared terminals, then a key at the
+ * interior node whose inode key exists only at the child would look fine ---
+ * and that is the one case that breaks the scan. Those keys were never
+ * reported, never repaired and never migrated, and the node could never be
+ * emptied. So it compares raw ids, against
+ * \texttt{inode\_walker.inode\_snapshots}, which records every id the inodes
+ * btree has for that inum.
  *
  * \subsubsection{Space accounting}
  *
