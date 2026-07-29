@@ -407,6 +407,15 @@ static __always_inline struct bkey_i *__bch2_bkey_make_mut_noupdate(struct btree
 	if (!IS_ERR(mut)) {
 		bkey_reassemble(mut, k);
 
+		/*
+		 * Writes extend: the typed helpers pass min_bytes =
+		 * sizeof(struct bkey_i_<type>), and widening u64s is what lets
+		 * the caller assign any field of the current struct and have it
+		 * committed. Without it an assignment past the on-disk val
+		 * would land in memory we allocated, and be dropped on the
+		 * floor at commit. The bytes we add are zero, which is what
+		 * those fields already read as - see __bkey_val_copy_pad().
+		 */
 		if (unlikely(bytes > bkey_bytes(k.k))) {
 			memset((void *) mut + bkey_bytes(k.k), 0,
 			       bytes - bkey_bytes(k.k));
