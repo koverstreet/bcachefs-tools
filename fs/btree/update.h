@@ -373,7 +373,10 @@ static inline int bch2_trans_commit_lazy_if_full(struct btree_trans *trans,
 						 u64 *journal_seq,
 						 unsigned flags)
 {
-	return likely(trans->mem_top < BTREE_TRANS_MEM_MAX / 2)
+	/* disk_accounting_mod allocations grow by powers of 2; max / 2 is too
+	 * small of a limit to avoid hiting ENOMEMS
+	 */
+	return likely(trans->mem_top < BTREE_TRANS_MEM_MAX / 4)
 		? 0
 		: bch2_trans_commit_lazy(trans, disk_res, journal_seq, flags);
 }
