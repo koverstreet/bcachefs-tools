@@ -153,7 +153,7 @@ void bch_percpu_thread_init(void)
 		abort();
 	}
 
-	int my_id = bch_percpu_nr_cpus++;
+	int my_id = bch_percpu_nr_cpus;
 	if (my_id >= BCH_PERCPU_MAX_CPUS) {
 		pthread_mutex_unlock(&bch_percpu_lock);
 		fprintf(stderr, "bch_percpu_thread_init: too many threads (max %d)\n",
@@ -171,6 +171,15 @@ void bch_percpu_thread_init(void)
 
 	darray_for_each(dynamic_inits, di)
 		di->init(__bch_percpu_resolve(di->pcv, chunk), di->ctx, my_id);
+
+	/*
+	 * Publish the slot last. Readers don't take bch_percpu_lock: they walk
+	 * [0, bch_percpu_nr_cpus) and per_cpu_ptr() dereferences the chunk
+	 * without a NULL check, so bumping the count before the chunk is
+	 * installed and initialized hands them a NULL - or a chunk whose
+	 * counters haven't been zeroed yet.
+	 */
+	smp_store_release(&bch_percpu_nr_cpus, my_id + 1);
 
 	pthread_mutex_unlock(&bch_percpu_lock);
 }
