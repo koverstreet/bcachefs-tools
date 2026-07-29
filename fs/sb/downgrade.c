@@ -139,7 +139,12 @@
 	  BCH_FSCK_ERR_inode_has_access_acl_flag_wrong,		\
 	  BCH_FSCK_ERR_inode_has_default_acl_flag_wrong,	\
 	  BCH_FSCK_ERR_snapshot_state_bad,			\
-	  BCH_FSCK_ERR_subvol_state_bad)
+	  BCH_FSCK_ERR_subvol_state_bad)			\
+	x(snapshot_nr_keys,					\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_allocations),		\
+	  BCH_FSCK_ERR_accounting_mismatch,			\
+	  BCH_FSCK_ERR_accounting_key_underflow,		\
+	  BCH_FSCK_ERR_accounting_key_nr_counters_wrong)
 
 #define UPGRADE_TABLE_INCOMPAT()				\
 	x(reconcile,						\
@@ -211,7 +216,12 @@
 	  BIT_ULL(BCH_RECOVERY_PASS_check_alloc_to_lru_refs),	\
 	  BCH_FSCK_ERR_lru_entry_bad,				\
 	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry,		\
-	  BCH_FSCK_ERR_accounting_mismatch)
+	  BCH_FSCK_ERR_accounting_mismatch)			\
+	x(snapshot_nr_keys,					\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_allocations),		\
+	  BCH_FSCK_ERR_accounting_mismatch,			\
+	  BCH_FSCK_ERR_accounting_key_underflow,		\
+	  BCH_FSCK_ERR_accounting_key_nr_counters_wrong)
 
 struct upgrade_downgrade_entry {
 	u64		recovery_passes;

@@ -1102,7 +1102,10 @@ LE64_BITMASK(BCH_SB_EXT_BTREE_CACHE_SHRINKER_SEEKS,
 	  "discard eligibility checks",				"2026-03")	\
 	x(per_dev_fragmentation_lru,	BCH_VERSION(1, 39),			\
 	  "Per-device bucket fragmentation LRUs, so copygc can reason "		\
-	  "about fragmentation per device",			"2026-07")
+	  "about fragmentation per device",			"2026-07")	\
+	x(snapshot_nr_keys,		BCH_VERSION(1, 40),			\
+	  "Per-(snapshot, btree) key counts in BCH_DISK_ACCOUNTING_snapshot, "	\
+	  "replacing the single per-snapshot sectors counter",	"2026-07")
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
