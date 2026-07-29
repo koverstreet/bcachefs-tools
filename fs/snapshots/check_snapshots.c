@@ -1083,7 +1083,7 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 	if (bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted) {
 		u64 keys, sectors;
 		CLASS(printbuf, breakdown)();
-		try(bch2_snapshot_accounting_totals(trans, k.k->p.offset, &keys, &sectors,
+		try(bch2_snapshot_accounting_totals(c, k.k->p.offset, &keys, &sectors,
 						    NULL, &breakdown));
 
 		if (ret_fsck_err_on(keys || sectors,
@@ -1207,15 +1207,6 @@ static int check_snapshot(struct btree_trans *trans,
 
 int bch2_check_snapshots_trans(struct btree_trans *trans)
 {
-	/*
-	 * The accounting-gated repairs below (deleted-but-has-data undelete,
-	 * dangling-child-pointer clear) read snapshot accounting from the
-	 * accounting btree; flush buffered deltas once, up front. check_snapshot
-	 * doesn't delete keys, so the values can't go stale mid-pass in the
-	 * direction that matters:
-	 */
-	try(bch2_btree_write_buffer_flush_sync(trans));
-
 	/*
 	 * We iterate backwards as checking/fixing the depth field requires that
 	 * the parent's depth already be correct:
