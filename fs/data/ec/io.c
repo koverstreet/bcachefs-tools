@@ -586,9 +586,9 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	 * and a live stripe key referencing a stale-gen bucket is an
 	 * allocator inconsistency regardless of whether the stripe is pinned
 	 * - hence no is_open gating here, unlike the validate-time check.
-	 * Lock-currency is the liveness witness at this site; the pin is the
-	 * witness post-IO in bch2_stripe_buf_validate(), where the key may
-	 * have been legitimately deleted while the IO was in flight.
+	 * Here the btree lock is what proves the key is live; post-IO, in
+	 * bch2_stripe_buf_validate(), the pin is, because the key may have
+	 * been legitimately deleted while the IO was in flight.
 	 */
 	bool have_stale = false;
 	scoped_guard(rcu) {
