@@ -484,37 +484,22 @@ static int snapshot_content_empty(struct bch_fs *c, u32 id,
 }
 
 /*
- * Nothing may remain in the content btrees at a dying snapshot by the time we
- * delete its inode keys - see the caller.
+ * Which content btrees still have keys accounted to a dying snapshot, as a
+ * mask. Nothing may remain in them by the time we delete the inode keys - see
+ * the caller.
  */
-static int check_dying_snapshots_content_empty(struct bch_fs *c,
-					       struct snapshot_delete *d)
+static int dying_snapshots_content_btrees(struct bch_fs *c,
+					  struct snapshot_delete *d,
+					  struct printbuf *msg,
+					  u64 *bad_btrees)
 {
-	CLASS(printbuf, msg)();
-	u64 bad_btrees = 0;
-
 	darray_for_each(d->delete_leaves, i)
-		try(snapshot_content_empty(c, *i, &msg, &bad_btrees));
+		try(snapshot_content_empty(c, *i, msg, bad_btrees));
 
 	darray_for_each(d->delete_interior, i)
-		try(snapshot_content_empty(c, i->id, &msg, &bad_btrees));
+		try(snapshot_content_empty(c, i->id, msg, bad_btrees));
 
-	if (!bad_btrees)
-		return 0;
-
-	/*
-	 * No check_allocations here, unlike the refusal above: the scan just
-	 * ran, so a key left behind means a key with no inode at its own
-	 * snapshot, not a stale count.
-	 */
-	int ret = schedule_content_passes(c, &msg, bad_btrees);
-
-	bch_err(c, "%s", msg.buf);
-
-	if (bch2_err_matches(ret, BCH_ERR_cannot_rewind_recovery))
-		ret = 0;
-
-	return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
+	return 0;
 }
 
 static void snapshot_delete_refused_debug(struct btree_trans *trans, u32 id)
@@ -1083,7 +1068,58 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 	 * check_no_data licenses at the end of deletion only fire once the
 	 * inodes are already gone.
 	 */
-	try(check_dying_snapshots_content_empty(c, d));
+	CLASS(printbuf, msg)();
+	u64 bad_btrees = 0;
+	try(dying_snapshots_content_btrees(c, d, &msg, &bad_btrees));
+
+	if (unlikely(bad_btrees)) {
+		/*
+		 * Accounting is derived from the keys themselves, so it doesn't
+		 * go through the index above and can see what that scan missed.
+		 * The v1 scan doesn't use the index either - rescan with it, on
+		 * the btrees accounting named and no others.
+		 */
+		prt_str(&msg, "\nfalling back to the v1 scan");
+		bch2_print_str(c, KERN_NOTICE, msg.buf);
+
+		/*
+		 * Retarget the progress indicator: it was initialized for the
+		 * inodes btree, which is not what we're about to walk. Nothing
+		 * after this loop updates progress, so this is the last word,
+		 * and version says the run degraded.
+		 */
+		bch2_progress_init(&d->progress, __func__, c, bad_btrees, 0);
+		d->progress.silent	= true;
+		d->version		= 1;
+
+		for (unsigned btree = 0; btree < BTREE_ID_NR; btree++)
+			if (bad_btrees & BIT_ULL(btree))
+				try(delete_dead_snapshot_keys_v1_btree(trans, btree));
+
+		printbuf_reset(&msg);
+		bad_btrees = 0;
+		try(dying_snapshots_content_btrees(c, d, &msg, &bad_btrees));
+	}
+
+	if (unlikely(bad_btrees)) {
+		/*
+		 * v1 found nothing and the keys are still accounted, so nothing
+		 * is hiding behind a missing inode - the count is what's wrong.
+		 * No content passes: their key_has_snapshot repairs exist to
+		 * uphold the invariant v1 doesn't need. Refuse anyway - the
+		 * inode keys below are the only way left to find anything that
+		 * is in fact stranded.
+		 */
+		int ret = bch2_run_explicit_recovery_pass(c, &msg,
+					BCH_RECOVERY_PASS_check_allocations, 0);
+
+		bch_err(c, "%s", msg.buf);
+
+		if (bch2_err_matches(ret, BCH_ERR_cannot_rewind_recovery))
+			ret = 0;
+
+		return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
+	}
 
 	/* Then the inodes */
 
