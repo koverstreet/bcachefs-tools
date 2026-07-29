@@ -1188,9 +1188,21 @@ static int check_should_delete_leaf(struct btree_trans *trans, struct bkey_s_c_s
 }
 
 /*
- * For a given snapshot, if it doesn't have a subvolume that points to it, and
- * it doesn't have child snapshot nodes - it's now redundant and we can mark it
- * as deleted.
+ * Sort one node: dead (no live descendant - keys are dropped) or redundant
+ * (exactly one live child - keys migrate to live_child). Two live children:
+ * nothing to do.
+ *
+ * The caller scans in ascending id order and a node's id is always below its
+ * parent's, so children are sorted before parents. Both cases need that:
+ *
+ * - A node whose children are all already on delete_leaves is itself dead and
+ *   joins them, so a dead subtree accumulates bottom-up. It's torn down in
+ *   that same order later, each node childless by its turn because deleting a
+ *   child splices this node's pointer to zero.
+ *
+ * - A child that's itself redundant already has its own live_child recorded,
+ *   so the lookup below returns the terminal of the whole collapse chain
+ *   rather than the next node down, and keys move there in one hop.
  */
 static int check_should_delete_snapshot(struct btree_trans *trans, struct bkey_s_c k)
 {
