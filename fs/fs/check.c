@@ -1152,8 +1152,10 @@ static int check_inode(struct btree_trans *trans,
 
 	if (fsck_err_on(S_ISDIR(u.bi_mode) && u.bi_size,
 			trans, inode_dir_has_nonzero_i_size,
-			"directory %llu:%u with nonzero i_size %lli",
-			u.bi_inum, u.bi_snapshot, u.bi_size)) {
+			"directory with nonzero i_size\n%s",
+			(printbuf_reset(&buf),
+			 bch2_inode_unpacked_to_text(&buf, &u),
+			 buf.buf))) {
 		u.bi_size = 0;
 		do_update = true;
 	}
@@ -1202,8 +1204,10 @@ static int check_inode(struct btree_trans *trans,
 
 			fsck_err_on(!ret,
 				    trans, unlinked_inode_not_on_deleted_list,
-				    "inode %llu:%u unlinked, but not on deleted list",
-				    u.bi_inum, k.k->p.snapshot);
+				    "inode unlinked, but not on deleted list\n%s",
+				    (printbuf_reset(&buf),
+				     bch2_inode_unpacked_to_text(&buf, &u),
+				     buf.buf));
 
 			try(bch2_btree_bit_mod_buffered(trans, BTREE_ID_deleted_inodes, k.k->p, 1));
 			ret = 0;
@@ -1214,8 +1218,10 @@ static int check_inode(struct btree_trans *trans,
 
 			if (fsck_err_on(!ret,
 					trans, inode_unlinked_and_not_open,
-				      "inode %llu:%u unlinked and not open",
-				      u.bi_inum, u.bi_snapshot)) {
+				      "inode unlinked and not open\n%s",
+				      (printbuf_reset(&buf),
+				       bch2_inode_unpacked_to_text(&buf, &u),
+				       buf.buf))) {
 				ret = bch2_inode_rm_snapshot(trans, u.bi_inum, iter->pos.snapshot);
 				bch_err_msg(c, ret, "in fsck deleting inode");
 				return ret;
@@ -1228,8 +1234,10 @@ static int check_inode(struct btree_trans *trans,
 			(u.bi_subvol == 0 ||
 			 u.bi_subvol == BCACHEFS_ROOT_SUBVOL),
 			trans, inode_bi_parent_nonzero,
-			"inode %llu:%u has subvol %u but nonzero parent subvol %u",
-			u.bi_inum, k.k->p.snapshot, u.bi_subvol, u.bi_parent_subvol)) {
+			"inode has nonzero bi_parent_subvol but is not a subvolume root\n%s",
+			(printbuf_reset(&buf),
+			 bch2_inode_unpacked_to_text(&buf, &u),
+			 buf.buf))) {
 		u.bi_parent_subvol = 0;
 		do_update = true;
 	}
@@ -1240,8 +1248,11 @@ static int check_inode(struct btree_trans *trans,
 #undef x
 	if (fsck_err_on((bool) (u.bi_flags & BCH_INODE_has_inode_opts) != has_opts,
 			trans, inode_has_inode_opts_flag_wrong,
-			"inode %llu:%u has_inode_opts flag wrong, should be %u",
-			u.bi_inum, u.bi_snapshot, has_opts)) {
+			"inode has_inode_opts flag wrong, should be %u\n%s",
+			has_opts,
+			(printbuf_reset(&buf),
+			 bch2_inode_unpacked_to_text(&buf, &u),
+			 buf.buf))) {
 		u.bi_flags &= ~BCH_INODE_has_inode_opts;
 		if (has_opts)
 			u.bi_flags |= BCH_INODE_has_inode_opts;
@@ -1261,8 +1272,10 @@ static int check_inode(struct btree_trans *trans,
 		if (has < 0)
 			return has;
 		if (fsck_err_on(!has, trans, inode_has_access_acl_flag_wrong,
-				"inode %llu:%u has BCH_INODE_has_access_acl set but no acl xattr",
-				u.bi_inum, u.bi_snapshot)) {
+				"inode has BCH_INODE_has_access_acl set but no acl xattr\n%s",
+				(printbuf_reset(&buf),
+				 bch2_inode_unpacked_to_text(&buf, &u),
+				 buf.buf))) {
 			u.bi_flags &= ~BCH_INODE_has_access_acl;
 			do_update = true;
 		}
@@ -1274,8 +1287,10 @@ static int check_inode(struct btree_trans *trans,
 		if (has < 0)
 			return has;
 		if (fsck_err_on(!has, trans, inode_has_default_acl_flag_wrong,
-				"inode %llu:%u has BCH_INODE_has_default_acl set but no acl xattr",
-				u.bi_inum, u.bi_snapshot)) {
+				"inode has BCH_INODE_has_default_acl set but no acl xattr\n%s",
+				(printbuf_reset(&buf),
+				 bch2_inode_unpacked_to_text(&buf, &u),
+				 buf.buf))) {
 			u.bi_flags &= ~BCH_INODE_has_default_acl;
 			do_update = true;
 		}
@@ -2222,6 +2237,7 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 		       struct inode_walker *inode)
 {
 	struct bch_fs *c = trans->c;
+	CLASS(printbuf, buf)();
 
 	int ret = bch2_check_key_has_snapshot(trans, iter, k);
 	if (ret < 0)
@@ -2275,8 +2291,12 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 				if (!i2->whiteout &&
 				    fsck_err_on(!(i2->inode.bi_flags & BCH_INODE_has_access_acl),
 						trans, inode_has_access_acl_flag_wrong,
-						"inode %llu:%u has an access acl xattr but BCH_INODE_has_access_acl not set",
-						i2->inode.bi_inum, i2->inode.bi_snapshot)) {
+						"inode has an access acl xattr but BCH_INODE_has_access_acl not set\n%s",
+						(printbuf_reset(&buf),
+						 bch2_inode_unpacked_to_text(&buf, &i2->inode),
+						 prt_newline(&buf),
+						 bch2_bkey_val_to_text(&buf, c, k),
+						 buf.buf))) {
 					struct bch_inode_unpacked inode_u = i2->inode;
 					inode_u.bi_flags |= BCH_INODE_has_access_acl;
 					try(__bch2_fsck_write_inode(trans, &inode_u));
@@ -2291,8 +2311,12 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 				if (!i2->whiteout &&
 				    fsck_err_on(!(i2->inode.bi_flags & BCH_INODE_has_default_acl),
 						trans, inode_has_default_acl_flag_wrong,
-						"inode %llu:%u has a default acl xattr but BCH_INODE_has_default_acl not set",
-						i2->inode.bi_inum, i2->inode.bi_snapshot)) {
+						"inode has a default acl xattr but BCH_INODE_has_default_acl not set\n%s",
+						(printbuf_reset(&buf),
+						 bch2_inode_unpacked_to_text(&buf, &i2->inode),
+						 prt_newline(&buf),
+						 bch2_bkey_val_to_text(&buf, c, k),
+						 buf.buf))) {
 					struct bch_inode_unpacked inode_u = i2->inode;
 					inode_u.bi_flags |= BCH_INODE_has_default_acl;
 					try(__bch2_fsck_write_inode(trans, &inode_u));

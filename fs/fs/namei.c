@@ -798,14 +798,18 @@ static int bch2_check_dirent_inode_dirent(struct btree_trans *trans,
 
 	if (!backpointer_exists) {
 		if (fsck_err(trans, inode_wrong_backpointer,
-			     "inode %llu:%u has wrong backpointer:\n"
+			     "inode has wrong backpointer:\n"
 			     "got       %llu:%llu\n"
-			     "should be %llu:%llu",
-			     target->bi_inum, target->bi_snapshot,
+			     "should be %llu:%llu\n%s",
 			     target->bi_dir,
 			     target->bi_dir_offset,
 			     d.k->p.inode,
-			     d.k->p.offset)) {
+			     d.k->p.offset,
+			     (printbuf_reset(&buf),
+			      bch2_inode_unpacked_to_text(&buf, target),
+			      prt_newline(&buf),
+			      bch2_bkey_val_to_text(&buf, c, d.s_c),
+			      buf.buf))) {
 			target->bi_dir		= d.k->p.inode;
 			target->bi_dir_offset	= d.k->p.offset;
 			try(__bch2_fsck_write_inode(trans, target));
