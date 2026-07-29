@@ -627,8 +627,17 @@ static int bch2_subvolume_reparent(struct btree_trans *trans,
 	if (k.k->type != KEY_TYPE_subvolume)
 		return 0;
 
-	if (bkey_val_bytes(k.k) > offsetof(struct bch_subvolume, creation_parent) &&
-	    le32_to_cpu(bkey_s_c_to_subvolume(k).v->creation_parent) != old_parent)
+	/*
+	 * Pad rather than testing bkey_val_bytes: a val that stops short of
+	 * creation_parent doesn't have one, which reads as 0, and old_parent is
+	 * a live subvolume id - so a short key is not a child and we skip it.
+	 * Testing the length instead skipped only keys long enough to disagree,
+	 * so every short key fell through and got stamped with new_parent.
+	 */
+	struct bch_subvolume v;
+	bkey_val_copy_pad(&v, bkey_s_c_to_subvolume(k));
+
+	if (le32_to_cpu(v.creation_parent) != old_parent)
 		return 0;
 
 	struct bkey_i_subvolume *s =
