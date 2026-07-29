@@ -1,12 +1,28 @@
 // kill_btree_node: Debugging tool for corrupting specific btree nodes.
 //
-// Walks the btree at a given level and writes zeroes to the on-disk location
-// of the Nth node, simulating media corruption. Used for testing recovery
-// paths — fsck should detect and repair the damage.
+// Walks the btree at a given level and damages the on-disk location of the Nth
+// node, simulating media corruption. Used for testing recovery paths — fsck
+// should detect and repair the damage.
+//
+// --error picks what the damage looks like, because recovery takes visibly
+// different paths depending on how far a node gets through validation:
+//
+//   zero  the first block is gone, so nothing parses and there is no evidence
+//         the node was ever there beyond the parent's pointer
+//   csum  the node header is intact - the parent's btree_ptr_v2 seq matches,
+//         min_key and the written count are readable - and one bset fails its
+//         checksum. This is the shape field reports arrive in.
+//
+// Everything on disk after the csum field is covered by the checksum, so any
+// byte we change shows up as a checksum error. Injecting a *structural* error
+// (bad min_key, wrong seq, bogus u64s) that reaches the validation code as
+// itself rather than as a checksum failure means recomputing the checksum
+// after the edit - which this doesn't do yet.
 //
 // Safety: Opens the filesystem read-only (no in-memory modifications), then
-// does raw pwrite() to the block device fd. The O_DIRECT alignment constraint
-// comes from the block device being opened with O_DIRECT by the kernel code.
+// does raw pread()/pwrite() to the block device fd. The O_DIRECT alignment
+// constraint comes from the block device being opened with O_DIRECT by the
+// kernel code.
 
 use std::ops::ControlFlow;
 use std::path::PathBuf;
@@ -25,6 +41,15 @@ struct KillNode {
     idx:    u64,
 }
 
+/// What the damage should look like to the read path.
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq)]
+enum ErrorType {
+    /// Zero the first block - nothing parses
+    Zero,
+    /// Flip a byte of key data - header parses, bset checksum fails
+    Csum,
+}
+
 /// Make btree nodes unreadable (debugging tool)
 #[derive(Parser, Debug)]
 #[command(about = "Kill a specific btree node (debugging)")]
@@ -32,6 +57,10 @@ pub struct KillBtreeNodeCli {
     /// Node to kill (btree:level:idx)
     #[arg(short, long = "node")]
     nodes: Vec<String>,
+
+    /// Kind of damage to inject
+    #[arg(short, long, value_enum, default_value_t = ErrorType::Zero)]
+    error: ErrorType,
 
     /// Device index (default: kill all replicas)
     #[arg(short, long)]
@@ -95,6 +124,14 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
     // O_DIRECT requires aligned buffers; bd_fd is opened with O_DIRECT
     let zeroes = crate::util::AlignedBuf::new(block_size);
 
+    // First byte past the btree node header and the first bset's header, i.e.
+    // the start of key data: corrupting it fails the bset checksum without
+    // also making the header itself unparseable.
+    let csum_victim = std::mem::size_of::<c::btree_node>();
+    if cli.error == ErrorType::Csum && csum_victim >= block_size {
+        bail!("block size {block_size} too small to corrupt key data at offset {csum_victim}");
+    }
+
     let trans = BtreeTrans::new(&fs);
 
     for kill in &mut kill_nodes {
@@ -132,14 +169,27 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
                     continue;
                 };
 
-                eprintln!("killing btree node on dev {} {} l={}\n  {}",
-                    dev, kill.btree, kill.level, k.to_text(&fs));
+                eprintln!("damaging btree node ({:?}) on dev {} {} l={}\n  {}",
+                    cli.error, dev, kill.btree, kill.level, k.to_text(&fs));
 
                 let fd = unsafe { (*ca.disk_sb.bdev).bd_fd };
                 let file = crate::wrappers::super_io::borrowed_file(fd);
                 let offset = (ptr.offset() as u64) << 9;
-                if let Err(e) = std::os::unix::fs::FileExt::write_all_at(&*file, &zeroes, offset) {
-                    eprintln!("pwrite error: {e}");
+
+                let res = match cli.error {
+                    ErrorType::Zero =>
+                        std::os::unix::fs::FileExt::write_all_at(&*file, &zeroes, offset),
+                    ErrorType::Csum => {
+                        let mut buf = crate::util::AlignedBuf::new(block_size);
+                        std::os::unix::fs::FileExt::read_exact_at(&*file, &mut buf, offset)
+                            .and_then(|()| {
+                                buf[csum_victim] ^= 0xff;
+                                std::os::unix::fs::FileExt::write_all_at(&*file, &buf, offset)
+                            })
+                    }
+                };
+                if let Err(e) = res {
+                    eprintln!("error damaging node: {e}");
                 }
             }
 
