@@ -1882,6 +1882,49 @@ fsck_err:
 	return ret;
 }
 
+/**
+ * bch2_check_key_has_inode - the inodes btree must have a key at this key's
+ * own snapshot, and (for non-tombstones) it must be an inode of the right type
+ *
+ * Two checks, different reasons, different repairs.
+ *
+ * 1. A key in snapshot X implies a key in the inodes btree at X.
+ *
+ *    This is the index delete_dead_snapshots navigates by, not a tidiness rule.
+ *    delete_dead_snapshot_keys_v2() walks the inodes btree and descends into an
+ *    inum's extents/dirents/xattrs only where it finds a key whose own snapshot
+ *    is dying, so a content key whose snapshot has no inodes-btree key is
+ *    invisible to it: never migrated, stranded at the dying node, and then the
+ *    node won't empty because accounting still counts it.
+ *
+ *    Three consequences, each of which has been got wrong:
+ *
+ *    - Per raw snapshot id, never per collapse equivalence class. Walker
+ *      entries are terminals (add_inode()), so comparing i->inode.bi_snapshot
+ *      makes a key at a redundant interior equal an inode at that interior's
+ *      terminal, and the violation reads as fine. Hence
+ *      inode_walker.inode_snapshots, which keeps raw ids.
+ *    - Tombstones too: the scan descends on any key in the inodes btree,
+ *      whiteouts included. Checked before the tombstone early-return below and
+ *      repaired with a whiteout - no inode to copy down, just the marker that
+ *      makes the scan look.
+ *    - Before snapshots_seen_update()'s fc_continue skip, which drops keys
+ *      whose equivalence class already has a version; those still have to be
+ *      findable. Hence the content passes call bch2_walk_inode() and this
+ *      before seen_update.
+ *
+ *    Repairs all write at the key's own snapshot: inode in an ancestor -> copy
+ *    it down (lookup_inode_for_snapshot()); tombstone -> whiteout; no inode
+ *    anywhere -> reconstruct_inode().
+ *
+ * 2. The resolved inode exists, isn't a whiteout, and its mode matches the
+ *    btree. Plain consistency - but its repair is destructive where those above
+ *    aren't: key_in_missing_inode can delete the key. Skipped for tombstones,
+ *    which legitimately have no inode.
+ *
+ * @i comes from bch2_walk_inode(), NULL when no walker entry resolves @k - the
+ * "no inode anywhere" case.
+ */
 int bch2_check_key_has_inode(struct btree_trans *trans,
 			     struct btree_iter *iter,
 			     struct inode_walker *inode,
