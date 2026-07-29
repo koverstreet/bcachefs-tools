@@ -253,6 +253,34 @@ int bch2_snapshot_accounting_totals(struct btree_trans *trans, u32 id,
  * still reads as a leaf means something quite different from a leaf delete
  * refused on a redundant interior whose migration was interrupted partway.
  */
+/*
+ * Keys stranded in @btrees: schedule the content pass for each, which is what
+ * repairs the cause (a key with no inode at its own snapshot) and so lets the
+ * next deletion find them.
+ */
+static int schedule_content_passes(struct bch_fs *c, struct printbuf *msg, u64 btrees)
+{
+	int ret = 0;
+
+	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
+		if (!(btrees & BIT_ULL(btree)))
+			continue;
+
+		enum bch_recovery_pass pass;
+		switch (btree) {
+		case BTREE_ID_extents:	pass = BCH_RECOVERY_PASS_check_extents; break;
+		case BTREE_ID_inodes:	pass = BCH_RECOVERY_PASS_check_inodes;	break;
+		case BTREE_ID_dirents:	pass = BCH_RECOVERY_PASS_check_dirents;	break;
+		case BTREE_ID_xattrs:	pass = BCH_RECOVERY_PASS_check_xattrs;	break;
+		default:		continue;
+		}
+
+		ret = bch2_run_explicit_recovery_pass(c, msg, pass, 0) ?: ret;
+	}
+
+	return ret;
+}
+
 static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
 					    struct bkey_i_snapshot *s,
 					    const char *op)
@@ -285,25 +313,12 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
 	 * Schedule the passes whose key_has_snapshot repairs can actually
 	 * remove the stranded keys - per btree, from the accounting breakdown.
 	 * check_inodes alone can't repair a stranded dirent; scheduling only
-	 * it left the refusal firing forever:
+	 * it left the refusal firing forever. Plus check_allocations, since
+	 * here the count itself may be what's wrong:
 	 */
 	int ret = bch2_run_explicit_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_allocations, 0);
 
-	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
-		if (!(btrees_with_keys & BIT_ULL(btree)))
-			continue;
-
-		enum bch_recovery_pass pass;
-		switch (btree) {
-		case BTREE_ID_extents:	pass = BCH_RECOVERY_PASS_check_extents; break;
-		case BTREE_ID_inodes:	pass = BCH_RECOVERY_PASS_check_inodes;	break;
-		case BTREE_ID_dirents:	pass = BCH_RECOVERY_PASS_check_dirents;	break;
-		case BTREE_ID_xattrs:	pass = BCH_RECOVERY_PASS_check_xattrs;	break;
-		default:		continue;
-		}
-
-		ret = bch2_run_explicit_recovery_pass(c, &msg, pass, 0) ?: ret;
-	}
+	ret = schedule_content_passes(c, &msg, btrees_with_keys) ?: ret;
 
 	bch_err(c, "%s", msg.buf);
 
@@ -445,6 +460,65 @@ static int bch2_snapshot_delete_data_to_text(struct printbuf *out,
 		try(snapshot_node_data_to_text(out, trans, i->id, i->live_child));
 
 	return 0;
+}
+
+/* Inodes excluded: those are what we're about to delete, accounted until we do */
+static int snapshot_content_empty(struct btree_trans *trans, u32 id,
+				  struct printbuf *msg, u64 *bad_btrees)
+{
+	u64 nr_keys, sectors, btrees = 0;
+	CLASS(printbuf, breakdown)();
+
+	try(bch2_snapshot_accounting_totals(trans, id, &nr_keys, &sectors,
+					    &btrees, &breakdown));
+
+	btrees &= ~BIT_ULL(BTREE_ID_inodes);
+	if (!btrees)
+		return 0;
+
+	if (!*bad_btrees)
+		prt_printf(msg, "content still accounted to dying snapshots - refusing to "
+			   "delete their inode keys, which is how the deletion scan finds "
+			   "these keys at all:");
+
+	*bad_btrees |= btrees;
+	prt_printf(msg, "\n  snapshot %u:%s", id, breakdown.buf);
+	return 0;
+}
+
+/*
+ * Nothing may remain in the content btrees at a dying snapshot by the time we
+ * delete its inode keys - see the caller.
+ */
+static int check_dying_snapshots_content_empty(struct btree_trans *trans,
+					       struct snapshot_delete *d)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(printbuf, msg)();
+	u64 bad_btrees = 0;
+
+	darray_for_each(d->delete_leaves, i)
+		try(snapshot_content_empty(trans, *i, &msg, &bad_btrees));
+
+	darray_for_each(d->delete_interior, i)
+		try(snapshot_content_empty(trans, i->id, &msg, &bad_btrees));
+
+	if (!bad_btrees)
+		return 0;
+
+	/*
+	 * No check_allocations here, unlike the refusal above: the scan just
+	 * ran, so a key left behind means a key with no inode at its own
+	 * snapshot, not a stale count.
+	 */
+	int ret = schedule_content_passes(c, &msg, bad_btrees);
+
+	bch_err(c, "%s", msg.buf);
+
+	if (bch2_err_matches(ret, BCH_ERR_cannot_rewind_recovery))
+		ret = 0;
+
+	return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
 }
 
 static void snapshot_delete_refused_debug(struct btree_trans *trans, u32 id)
@@ -1023,6 +1097,19 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 			bch2_btree_iter_advance(&iter);
 		}
 	}
+
+	/*
+	 * The scan above located keys through the inodes btree, so deleting
+	 * inode keys destroys the index it used: anything left in the other
+	 * btrees at a dying snapshot becomes unfindable, by this pass and by
+	 * every later one. Check while it's still repairable - the
+	 * check_no_data licenses at the end of deletion only fire once the
+	 * inodes are already gone.
+	 *
+	 * The flush drops locks; lockrestart_do to get them back.
+	 */
+	try(bch2_btree_write_buffer_flush_sync(trans));
+	try(lockrestart_do(trans, check_dying_snapshots_content_empty(trans, d)));
 
 	/* Then the inodes */
 
