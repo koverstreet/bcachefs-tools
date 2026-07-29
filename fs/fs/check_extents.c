@@ -420,6 +420,17 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 	if (inode->last_pos.inode != k.k->p.inode && inode->have_inodes)
 		try(check_i_sectors(trans, inode));
 
+	/*
+	 * Before snapshots_seen: its fc_continue skips keys an equivalence
+	 * class already has a version of, and a skipped key still has to be
+	 * findable by delete_dead_snapshots - which locates keys through the
+	 * inodes btree at their own snapshot. Skip it here and it never gets
+	 * one, and then never gets migrated.
+	 */
+	struct inode_walker_entry *extent_i = errptr_try(bch2_walk_inode(trans, inode, k));
+
+	try(bch2_check_key_has_inode(trans, iter, inode, extent_i, k));
+
 	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	/* Skip repair after updating snapshots_seen: the seen list must stay
@@ -427,10 +438,6 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 	 * fsck and a later visibility check mustn't miss this key's snapshot */
 	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
 		return 0;
-
-	struct inode_walker_entry *extent_i = errptr_try(bch2_walk_inode(trans, inode, k));
-
-	try(bch2_check_key_has_inode(trans, iter, inode, extent_i, k));
 
 	if (k.k->type != KEY_TYPE_whiteout)
 		try(check_overlapping_extents(trans, res, s, extent_ends, k, iter,

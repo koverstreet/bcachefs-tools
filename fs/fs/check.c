@@ -757,10 +757,18 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 	w->have_inodes = false;
 	w->recalculate_sums = false;
 	w->inodes.nr = 0;
+	w->inode_snapshots.nr = 0;
 
 	for_each_btree_key_max_norestart(trans, iter,
 			BTREE_ID_inodes, POS(0, inum), SPOS(0, inum, U32_MAX),
 			BTREE_ITER_all_snapshots, k, ret) {
+		/*
+		 * Every key, whiteouts and dying versions included, and at its
+		 * raw id - this mirrors what delete_dead_snapshots' scan finds,
+		 * not what's live:
+		 */
+		try(snapshot_list_add_nodup(c, &w->inode_snapshots, k.k->p.snapshot));
+
 		/*
 		 * The content passes skip keys in dying subtrees (same
 		 * predicate, right after their bch2_check_key_has_snapshot()
@@ -871,15 +879,24 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 	CLASS(printbuf, buf)();
 	int ret = 0;
 
-	/* walker entries are pre-mapped to the collapse terminal by add_inode() */
-	u32 inode_snapshot = i->inode.bi_snapshot;
-
-	if (fsck_err_on(k_snapshot != inode_snapshot,
+	/*
+	 * Compared against the raw ids, not i->inode.bi_snapshot: walker
+	 * entries are collapse terminals, so a key at a redundant interior and
+	 * an inode at that interior's terminal look equal there, and the
+	 * violation reads as fine.
+	 *
+	 * It isn't fine. delete_dead_snapshots walks the inodes btree and
+	 * descends into an inum's other btrees only on finding a key there at
+	 * a dying snapshot - so this invariant is how it finds keys at all, per
+	 * raw id. Let it slide and those keys are never migrated; they strand
+	 * at the dying node and the deletion refuses with data still accounted.
+	 */
+	if (fsck_err_on(!snapshot_list_has_id(&w->inode_snapshots, k.k->p.snapshot),
 			trans, snapshot_key_missing_inode_snapshot,
-			 "have key for inode %llu:%u but have inode in ancestor snapshot %u\n"
+			 "have key for inode %llu:%u but no key in the inodes btree at that snapshot\n"
 			 "unexpected because we should always update the inode when we update a key in that inode\n"
 			 "%s",
-			 w->last_pos.inode, k.k->p.snapshot, i->inode.bi_snapshot,
+			 w->last_pos.inode, k.k->p.snapshot,
 			 (bch2_bkey_val_to_text(&buf, c, k),
 			  buf.buf))) {
 		if (!i->whiteout) {
@@ -1822,6 +1839,49 @@ static int count_inode_keys(struct btree_trans *trans,
 	return ret ?: nr_keys;
 }
 
+/*
+ * For a tombstone: the inodes btree needs *a* key at this snapshot, and a
+ * whiteout is the right one - there's no inode here to copy down, only the
+ * marker that makes the deletion scan look.
+ */
+static int check_inodes_btree_has_key(struct btree_trans *trans,
+				      struct inode_walker *w,
+				      struct bkey_s_c k)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(printbuf, buf)();
+	int ret = 0;
+
+	if (fsck_err_on(!snapshot_list_has_id(&w->inode_snapshots, k.k->p.snapshot),
+			trans, snapshot_key_missing_inode_snapshot,
+			"have key for inode %llu:%u but no key in the inodes btree at that snapshot\n%s",
+			k.k->p.inode, k.k->p.snapshot,
+			(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+		struct bkey_i whiteout;
+
+		bkey_init(&whiteout.k);
+		whiteout.k.type	= KEY_TYPE_whiteout;
+		whiteout.k.p	= SPOS(0, k.k->p.inode, k.k->p.snapshot);
+
+		try(bch2_btree_insert_trans(trans, BTREE_ID_inodes, &whiteout,
+					    BTREE_ITER_cached|
+					    BTREE_UPDATE_internal_snapshot_node));
+
+		/*
+		 * Record it only once it's committed: before that, a restart
+		 * could roll the insert back while the walker went on believing
+		 * in it, and every later key at this snapshot would pass
+		 * silently with no whiteout ever written.
+		 */
+		try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+		try(snapshot_list_add_nodup(c, &w->inode_snapshots, k.k->p.snapshot));
+
+		return bch_err_throw(c, transaction_restart_nested);
+	}
+fsck_err:
+	return ret;
+}
+
 int bch2_check_key_has_inode(struct btree_trans *trans,
 			     struct btree_iter *iter,
 			     struct inode_walker *inode,
@@ -1830,10 +1890,15 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 {
 	errptr_try(i);
 
-	/* whiteouts and hash whiteouts are tombstones - they need no inode: */
+	/*
+	 * Tombstones need no inode - but they do need a key in the inodes
+	 * btree at their own snapshot, or delete_dead_snapshots never descends
+	 * to them and they strand at a dying node. It needn't be an inode: the
+	 * deletion scan descends on any key there, whiteouts included.
+	 */
 	if (bkey_extent_whiteout(k.k) ||
 	    k.k->type == KEY_TYPE_hash_whiteout)
-		return 0;
+		return check_inodes_btree_has_key(trans, inode, k);
 
 	bool have_inode = i && !i->whiteout;
 
@@ -2277,9 +2342,11 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		return ret < 0 ? ret : 0;
 	}
 
-	ret = bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p);
-	if (ret)
-		return ret;
+	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, dir, k));
+
+	try(bch2_check_key_has_inode(trans, iter, dir, i, k));
+
+	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	/* after snapshots_seen: keep the seen list complete even for skipped keys */
 	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
@@ -2290,10 +2357,6 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 
 	if (dir->last_pos.inode != k.k->p.inode && dir->have_inodes)
 		try(check_subdir_dirents_count(trans, dir));
-
-	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, dir, k));
-
-	try(bch2_check_key_has_inode(trans, iter, dir, i, k));
 
 	if (!i || i->whiteout)
 		return 0;
@@ -2587,15 +2650,15 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 	if (ret)
 		return 0;
 
+	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, inode, k));
+
+	try(bch2_check_key_has_inode(trans, iter, inode, i, k));
+
 	try(bch2_snapshots_seen_update(c, s, iter->btree_id, k.k->p));
 
 	/* after snapshots_seen: keep the seen list complete even for skipped keys */
 	if (bch2_snapshot_will_delete(c, k.k->p.snapshot))
 		return 0;
-
-	struct inode_walker_entry *i = errptr_try(bch2_walk_inode(trans, inode, k));
-
-	try(bch2_check_key_has_inode(trans, iter, inode, i, k));
 
 	if (!i || i->whiteout)
 		return 0;

@@ -66,12 +66,20 @@ struct inode_walker {
 
 	DARRAY(struct inode_walker_entry) inodes;
 	snapshot_id_list		deletes;
+
+	/*
+	 * Raw snapshot ids of every key in the inodes btree for this inum,
+	 * whiteouts included: inodes[] is collapsed to one entry per
+	 * equivalence class, so it can't answer "is there a key at exactly X".
+	 */
+	snapshot_id_list		inode_snapshots;
 };
 
 static inline void inode_walker_exit(struct inode_walker *w)
 {
 	darray_exit(&w->inodes);
 	darray_exit(&w->deletes);
+	darray_exit(&w->inode_snapshots);
 }
 
 static inline struct inode_walker inode_walker_init(void)

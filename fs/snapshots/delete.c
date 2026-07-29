@@ -415,7 +415,7 @@ static int snapshot_node_data_to_text(struct printbuf *out, struct btree_trans *
 	CLASS(printbuf, breakdown)();
 	u64 nr_keys, sectors;
 
-	try(bch2_snapshot_accounting_totals(trans, id, &nr_keys, &sectors, &breakdown));
+	try(bch2_snapshot_accounting_totals(trans, id, &nr_keys, &sectors, NULL, &breakdown));
 
 	prt_printf(out, "\n  %s %u", live_child ? "interior" : "leaf", id);
 	if (live_child)
