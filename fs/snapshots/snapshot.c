@@ -744,6 +744,17 @@ int bch2_snapshot_lookup(struct btree_trans *trans, u32 id,
 	return bch2_bkey_get_val_typed(trans, BTREE_ID_snapshots, POS(0, id), 0, snapshot, s);
 }
 
+/*
+ * As bch2_snapshot_lookup(), but keeps the key: the topology checks report on
+ * nodes they didn't start from, and naming one by id alone leaves a field
+ * report with no way to see what was wrong with it.
+ */
+int bch2_snapshot_lookup_key(struct btree_trans *trans, u32 id,
+			     struct bkey_i_snapshot *k)
+{
+	return bch2_bkey_get_i_typed(trans, BTREE_ID_snapshots, POS(0, id), 0, snapshot, k);
+}
+
 /* Key snapshot overwrite checks: */
 
 int __bch2_get_snapshot_overwrites(struct btree_trans *trans,
