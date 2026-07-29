@@ -209,23 +209,31 @@
  * collapse to finish either: if the pass stops at step 2 or 4, the tree stays
  * that way across mounts, and what unblocks it is a repair fsck makes.
  *
- * If fsck compares raw snapshot ids, a split node looks like two snapshots
- * that disagree. \texttt{check\_extents} counts the inode version at the node
- * and the version at the child over keys divided between them, and gets
- * \texttt{i\_sectors} wrong for both. \texttt{check\_overlapping\_extents}
- * reads the two halves as extents in different snapshots, and reports invalid
- * partial overlap.
+ * For the purposes of consistency checks, fsck must act as if collapsing
+ * nodes are already one node: it must ignore keys that are overwritten within
+ * that collapsing node, and references must be checked for validity as if
+ * they were already in a single node.
  *
- * So fsck compares in the collapsed frame.
- * \texttt{bch2\_snapshot\_redundant\_interior()} walks the collapse chain down
- * and returns its terminal: the node the chain is provably collapsing into.
- * Every node on the chain returns the same terminal, and those nodes are one
- * equivalence class. Converting both sides before comparing makes the node and
- * its child the same snapshot, so a half-migrated key is not a false positive.
- * \texttt{inode\_walker} keeps one entry per class, at the terminal, so an
- * inode a repair writes back lands in the destination snapshot;
- * \texttt{snapshots\_seen} keeps its overwrite list in terminals
- * (\texttt{pos\_equiv}).
+ * Compare raw ids instead and the checks go wrong.
+ * \texttt{check\_extents} keeps a separate \texttt{i\_sectors} total for the
+ * inode at the node and the inode at the child; the extents are split between
+ * the two, so neither total matches its inode.
+ * \texttt{check\_overlapping\_extents} requires extents in different snapshots
+ * to be exactly aligned or not overlap at all --- but these are one snapshot's
+ * extents partway through moving, so it reports the overlap as invalid.
+ *
+ * \texttt{bch2\_snapshot\_redundant\_interior()} is what supplies the single
+ * node: it walks the collapse chain down and returns its terminal, the node
+ * the chain is provably collapsing into. Every node on the chain returns the
+ * same terminal, and those nodes are one equivalence class.
+ *
+ * Both halves of the rule are then just that terminal, used in two places.
+ * Overwrites: \texttt{snapshots\_seen} records the terminal
+ * (\texttt{pos\_equiv}), so a key whose class already has a version is
+ * overwritten and gets skipped. References: \texttt{inode\_walker} keeps one
+ * entry per class, at the terminal, so a reference resolves against the class
+ * rather than a single node --- and an inode a repair writes back lands in
+ * the destination snapshot, doing a little of the migration early.
  *
  * A comparison belongs in the collapsed frame only if what consumes its answer
  * does. \texttt{bch2\_check\_key\_has\_inode()} does not:
