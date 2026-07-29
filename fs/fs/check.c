@@ -185,13 +185,13 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 	if (ret)
 		return ret;
 
-	struct bch_subvolume subvol;
-	ret = bch2_subvolume_get(trans, subvolid, false, &subvol);
+	struct bkey_i_subvolume subvol;
+	ret = bch2_subvolume_get_key(trans, subvolid, false, &subvol);
 	bch_err_msg(c, ret, "looking up subvol %u for snapshot %u", subvolid, snapshot);
 	if (ret)
 		return ret;
 
-	if (!subvol.inode) {
+	if (!subvol.v.inode) {
 		struct bkey_i_subvolume *subvol = errptr_try(bch2_bkey_get_mut_typed(trans,
 				BTREE_ID_subvolumes, POS(0, subvolid),
 				0, subvolume));
@@ -201,15 +201,24 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 
 	subvol_inum root_inum = {
 		.subvol = subvolid,
-		.inum = le64_to_cpu(subvol.inode)
+		.inum = le64_to_cpu(subvol.v.inode)
 	};
 
 	struct bch_inode_unpacked root_inode;
 	ret = bch2_inode_find_by_inum_snapshot(trans, root_inum.inum, snapshot, &root_inode, 0);
-	bch_err_msg(c, ret, "looking up root inode %llu for subvol %u",
-		    root_inum.inum, subvolid);
-	if (ret)
+	if (ret) {
+		/*
+		 * The inum came out of the subvolume key, so print the key:
+		 * which snapshot it points at is what says whether the root
+		 * inode is missing or we're looking in the wrong place.
+		 */
+		CLASS(printbuf, buf)();
+
+		bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&subvol.k_i));
+		bch_err_msg(c, ret, "looking up root inode %llu in snapshot %u, from\n  %s",
+			    root_inum.inum, snapshot, buf.buf);
 		return ret;
+	}
 
 	struct bch_hash_info root_hash_info;
 	try(bch2_hash_info_init(c, &root_inode, &root_hash_info));
