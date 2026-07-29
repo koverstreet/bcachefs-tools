@@ -909,6 +909,37 @@ static inline int __bch2_bkey_get_val_typed(struct btree_trans *trans,
 	__bch2_bkey_get_val_typed(_trans, _btree_id, _pos, _flags,	\
 				  KEY_TYPE_##_type, sizeof(*_val), _val)
 
+/*
+ * As bch2_bkey_get_val_typed(), but fetches the whole key into a caller-stack
+ * bkey_i_<type>, so an error message can print the key instead of the fields
+ * whoever wrote the message happened to name.
+ *
+ * The val is padded to the caller's struct, so a short (not yet upgraded) key
+ * reads as zeroes rather than stack garbage. u64s keeps the on-disk length,
+ * clamped to what was copied: to_text() decides what a key carries from its
+ * length, so widening it here would print fields the key doesn't have.
+ */
+static inline int __bch2_bkey_get_i_typed(struct btree_trans *trans,
+				enum btree_id btree, struct bpos pos,
+				enum btree_iter_update_trigger_flags flags,
+				enum bch_bkey_type type,
+				unsigned val_size, struct bkey_i *dst)
+{
+	CLASS(btree_iter, iter)(trans, btree, pos, flags);
+	struct bkey_s_c k = __bch2_bkey_get_typed(&iter, type);
+	int ret = bkey_err(k);
+	if (!ret) {
+		dst->k = *k.k;
+		set_bkey_val_bytes(&dst->k, min_t(unsigned, val_size, bkey_val_bytes(k.k)));
+		__bkey_val_copy_pad(&dst->v, val_size, k);
+	}
+	return ret;
+}
+
+#define bch2_bkey_get_i_typed(_trans, _btree_id, _pos, _flags, _type, _k)\
+	__bch2_bkey_get_i_typed(_trans, _btree_id, _pos, _flags,		\
+				KEY_TYPE_##_type, sizeof((_k)->v), &(_k)->k_i)
+
 u32 bch2_trans_begin(struct btree_trans *);
 
 #define for_each_btree_node(_trans, _iter, _btree_id, _start,			\

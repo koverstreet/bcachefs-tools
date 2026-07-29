@@ -504,23 +504,48 @@ int bch2_subvol_has_children(struct btree_trans *trans, u32 subvol)
 }
 
 static __always_inline int
-bch2_subvolume_get_inlined(struct btree_trans *trans, unsigned subvol,
-			   bool inconsistent_if_not_found,
-			   struct bch_subvolume *s)
+bch2_subvolume_get_key_inlined(struct btree_trans *trans, unsigned subvol,
+			       bool inconsistent_if_not_found,
+			       struct bkey_i_subvolume *k)
 {
-	int ret = bch2_bkey_get_val_typed(trans, BTREE_ID_subvolumes, POS(0, subvol),
-					  BTREE_ITER_cached, subvolume, s);
+	int ret = bch2_bkey_get_i_typed(trans, BTREE_ID_subvolumes, POS(0, subvol),
+					BTREE_ITER_cached, subvolume, k);
 	/*
 	 * A deleted subvolume is a tombstone (deletion's witness, not yet
 	 * reaped): to everyone but the deletion/reaping path it's gone, so
 	 * report it as such rather than handing back a dead subvolume - and let
 	 * it flow into the inconsistent_if_not_found handling below.
 	 */
-	if (!ret && bch2_subvolume_state_compat(s) == SUBVOLUME_STATE_deleted)
+	if (!ret && bch2_subvolume_state_compat(&k->v) == SUBVOLUME_STATE_deleted)
 		ret = bch_err_throw(trans->c, ENOENT_subvolume_deleted);
 	if (bch2_err_matches(ret, ENOENT) && inconsistent_if_not_found)
 		ret = bch2_subvolume_missing(trans->c, subvol) ?: ret;
 	return ret;
+}
+
+static __always_inline int
+bch2_subvolume_get_inlined(struct btree_trans *trans, unsigned subvol,
+			   bool inconsistent_if_not_found,
+			   struct bch_subvolume *s)
+{
+	struct bkey_i_subvolume k;
+	int ret = bch2_subvolume_get_key_inlined(trans, subvol,
+						 inconsistent_if_not_found, &k);
+	if (!ret)
+		*s = k.v;
+	return ret;
+}
+
+/*
+ * Fetch the whole key, not just the value: fsck uses this so its error
+ * messages can print the subvolume, which is how a reader tells a missing
+ * root inode from a subvolume pointing at the wrong snapshot.
+ */
+int bch2_subvolume_get_key(struct btree_trans *trans, unsigned subvol,
+			   bool inconsistent_if_not_found,
+			   struct bkey_i_subvolume *k)
+{
+	return bch2_subvolume_get_key_inlined(trans, subvol, inconsistent_if_not_found, k);
 }
 
 int bch2_subvolume_get(struct btree_trans *trans, unsigned subvol,
