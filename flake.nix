@@ -126,20 +126,52 @@
             packages
             // {
               default = self'.packages.${cargoToml.package.name};
+              # The whole repo is the source, not just ./doc: most of the
+              # document is generated from it. bch-docgen extracts DOC_LATEX
+              # blocks out of fs/**.{c,h,rs} and the option x-macros, and
+              # `bcachefs _doc_gen` emits the CLI reference from the clap
+              # definitions. Both locate the tree by walking up for fs/ and
+              # write into doc/generated/, which is not checked in - so they
+              # have to run here, from the source root, before pdflatex.
               doc = pkgs.stdenv.mkDerivation {
                 pname = "bcachefs-tools-doc";
                 inherit version;
-                src = ./doc;
-                buildInputs = with pkgs; [
+                src = ./.;
+                nativeBuildInputs = [
                   latexDerivation
+                  pkgs.rustc
+                  self'.packages.default
                 ];
                 buildPhase = ''
-                  pdflatex bcachefs-principles-of-operation.tex
-                  pdflatex bcachefs-principles-of-operation.tex
+                  runHook preBuild
+
+                  # bch-docgen is a dependency-free single file, so plain
+                  # rustc builds it - no need to drag in the cargo workspace.
+                  # _doc_gen runs first: it writes cli-reference.tex, and
+                  # bch-docgen checks that every \bchdoc{} in the PoO resolves.
+                  rustc -O doc/docgen/src/main.rs -o bch-docgen
+                  bcachefs _doc_gen
+                  ./bch-docgen
+                  # As an argument, not a format string: printf would read the
+                  # \r and \b in the LaTeX as carriage return and backspace.
+                  printf '%s\n' '\renewcommand{\bchdocversion}{${version}}' \
+                    > doc/generated/build-version.tex
+
+                  # Twice, to resolve the table of contents and cross-references:
+                  for i in 1 2; do
+                    pdflatex -interaction=nonstopmode -halt-on-error \
+                      doc/bcachefs-principles-of-operation.tex
+                  done
+
+                  runHook postBuild
                 '';
+                # share/doc, not doc: stdenv's move-docs hook relocates $out/doc
+                # anyway, so name the real path rather than let it be moved.
                 installPhase = ''
-                  mkdir -p $out/doc
-                  cp bcachefs-principles-of-operation.pdf $out/doc
+                  runHook preInstall
+                  mkdir -p $out/share/doc
+                  cp bcachefs-principles-of-operation.pdf $out/share/doc
+                  runHook postInstall
                 '';
               };
             };
