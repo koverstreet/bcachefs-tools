@@ -424,21 +424,26 @@ static int snapshot_node_data_to_text(struct printbuf *out, struct btree_trans *
 	return 0;
 }
 
-/* Every node we're about to delete, and what it holds: */
-static int bch2_snapshot_delete_data_to_text(struct btree_trans *trans,
+/*
+ * Every node we're about to delete, and what it holds. Renders into @out for
+ * the caller to log: this runs under lockrestart_do, so printing here would
+ * hold btree locks across a printk of one line per node, and a restart
+ * re-drive would append a second copy. Reset for that re-drive.
+ */
+static int bch2_snapshot_delete_data_to_text(struct printbuf *out,
+					     struct btree_trans *trans,
 					     struct snapshot_delete *d)
 {
-	CLASS(printbuf, out)();
+	printbuf_reset(out);
 
-	prt_printf(&out, "snapshot deletion, data accounted per node:");
+	prt_printf(out, "snapshot deletion, data accounted per node:");
 
 	darray_for_each(d->delete_leaves, i)
-		try(snapshot_node_data_to_text(&out, trans, *i, 0));
+		try(snapshot_node_data_to_text(out, trans, *i, 0));
 
 	darray_for_each(d->delete_interior, i)
-		try(snapshot_node_data_to_text(&out, trans, i->id, i->live_child));
+		try(snapshot_node_data_to_text(out, trans, i->id, i->live_child));
 
-	bch_info(trans->c, "%s", out.buf);
 	return 0;
 }
 
@@ -1312,9 +1317,14 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	 * check_no_data licenses read on the way out, after the same write
 	 * buffer flush, so the two are directly comparable: whatever is still
 	 * there at the end is what the migration didn't move.
+	 *
+	 * lockrestart_do because the flush drops the transaction's locks - the
+	 * flush below is followed by commit_do()s, which relock on their own.
 	 */
+	CLASS(printbuf, node_data)();
 	try(bch2_btree_write_buffer_flush_sync(trans));
-	try(bch2_snapshot_delete_data_to_text(trans, d));
+	try(lockrestart_do(trans, bch2_snapshot_delete_data_to_text(&node_data, trans, d)));
+	bch_info(c, "%s", node_data.buf);
 
 	try(!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)
 	    ? delete_dead_snapshot_keys_v2(trans)
