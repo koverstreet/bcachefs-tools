@@ -404,6 +404,44 @@ static void bch2_snapshot_stranded_keys_to_text(struct printbuf *out,
 	}
 }
 
+static int snapshot_node_data_to_text(struct printbuf *out, struct btree_trans *trans,
+				      u32 id, u32 live_child)
+{
+	CLASS(printbuf, breakdown)();
+	u64 nr_keys, sectors;
+
+	try(bch2_snapshot_accounting_totals(trans, id, &nr_keys, &sectors, &breakdown));
+
+	prt_printf(out, "\n  %s %u", live_child ? "interior" : "leaf", id);
+	if (live_child)
+		prt_printf(out, " -> %u", live_child);
+	prt_printf(out, ": %llu keys, %llu sectors%s", nr_keys, sectors, breakdown.buf);
+	return 0;
+}
+
+/*
+ * Every node we're about to delete, and what it holds. Renders into @out for
+ * the caller to log: this runs under lockrestart_do, so printing here would
+ * hold btree locks across a printk of one line per node, and a restart
+ * re-drive would append a second copy. Reset for that re-drive.
+ */
+static int bch2_snapshot_delete_data_to_text(struct printbuf *out,
+					     struct btree_trans *trans,
+					     struct snapshot_delete *d)
+{
+	printbuf_reset(out);
+
+	prt_printf(out, "snapshot deletion, data accounted per node:");
+
+	darray_for_each(d->delete_leaves, i)
+		try(snapshot_node_data_to_text(out, trans, *i, 0));
+
+	darray_for_each(d->delete_interior, i)
+		try(snapshot_node_data_to_text(out, trans, i->id, i->live_child));
+
+	return 0;
+}
+
 static void snapshot_delete_refused_debug(struct btree_trans *trans, u32 id)
 {
 	CLASS(bch_log_msg, msg)(trans->c);
@@ -1285,6 +1323,20 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	CLASS(printbuf, buf)();
 	bch2_snapshot_delete_nodes_to_text(&buf, d, false);
 	try(commit_do(trans, NULL, NULL, 0, bch2_trans_log_msg(trans, &buf)));
+
+	/*
+	 * What each node holds going in. Read through the same accounting the
+	 * check_no_data licenses read on the way out, after the same write
+	 * buffer flush, so the two are directly comparable: whatever is still
+	 * there at the end is what the migration didn't move.
+	 *
+	 * lockrestart_do because the flush drops the transaction's locks - the
+	 * flush below is followed by commit_do()s, which relock on their own.
+	 */
+	CLASS(printbuf, node_data)();
+	try(bch2_btree_write_buffer_flush_sync(trans));
+	try(lockrestart_do(trans, bch2_snapshot_delete_data_to_text(&node_data, trans, d)));
+	bch_info(c, "%s", node_data.buf);
 
 	try(!bch2_request_incompat_feature(c, bcachefs_metadata_version_snapshot_deletion_v2)
 	    ? delete_dead_snapshot_keys_v2(trans)
