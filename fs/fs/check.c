@@ -1753,6 +1753,8 @@ static int check_subdir_count_notnested(struct btree_trans *trans, struct inode_
 			lockrestart_do(trans,
 				       bch2_inum_snapshot_to_path(trans, w->last_pos.inode,
 								  i->inode.bi_snapshot, NULL, &buf));
+			prt_newline(&buf);
+			bch2_inode_unpacked_to_text(&buf, &i->inode);
 
 			if (fsck_err_on(i->inode.bi_nlink != i->count,
 					trans, inode_dir_wrong_nlink,
