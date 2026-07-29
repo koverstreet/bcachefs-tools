@@ -1100,6 +1100,58 @@ across reboots and accumulate over the filesystem's lifetime, providing an
 audit trail of what has been detected and repaired. The counts are visible in
 \texttt{bcachefs show-super} output and via the sysfs \texttt{errors} file.
 
+\subsection{Safety mechanisms}
+\label{sec:safety-mechanisms}
+
+\subsubsection{Subvolumes and snapshots must agree}
+
+A subvolume names the snapshot it is the live view of; that snapshot names the
+subvolume back. Both are required:
+
+\begin{itemize}
+\item Snapshot deletion will not reclaim a snapshot marked \texttt{will\_delete}
+  unless a subvolume still points at it.
+\item \texttt{check\_inodes} will not reconstruct a missing subvolume key unless
+  the root inode's \texttt{bi\_subvol} names it \emph{and} the snapshot that inode
+  lives at names the same subvolume back. If only one of the two says so,
+  \texttt{bi\_subvol} is cleared instead of a subvolume being invented.
+\end{itemize}
+
+Inodes and dirents reference each other the same way: an inode's
+\texttt{bi\_dir} and \texttt{bi\_dir\_offset} locate its dirent, and the dirent
+names the inode. Extents and the alloc btree are checked against each other
+through \hyperref[sec:backpointers]{backpointers}. Snapshot parent and child
+pointers must agree in both directions.
+
+\subsubsection{Every key implies an inode key at its snapshot}
+
+An extent, dirent or xattr in snapshot $X$ requires a key in the inodes btree at
+$X$ for the same inode number --- an inode or a whiteout, either will do.
+
+Snapshot deletion relies on this to find keys: it walks the inodes btree and
+descends into an inode's other btrees only where it finds a key at a dying
+snapshot. A content key whose snapshot has no inodes-btree key is never
+reached, so it is never migrated. The content passes enforce the requirement,
+which is why they run before deletion.
+
+\subsubsection{Accounting}
+
+Accounting counters are maintained by triggers as keys are committed, not by
+walking the btrees, so they are arrived at independently of the keys they
+count. Snapshot deletion checks them twice:
+
+\begin{itemize}
+\item It will not delete a dying snapshot's inode keys unless accounting reads
+  zero for that snapshot's extents, dirents and xattrs --- deleting them
+  destroys the index above, so anything left would become unreachable.
+\item It will not empty or remove a node unless accounting reads zero for it.
+\end{itemize}
+
+Either refusal schedules the content pass for the btree still holding data,
+which repairs the missing inode key so the next run can find it.
+\texttt{check\_allocations} rebuilds accounting from a full mark of the btrees,
+which is how a stale counter is told from keys that really are still there.
+
 \subsection{Fsck}
 
 The \texttt{bcachefs fsck} subcommand (also available as \texttt{fsck.bcachefs})
