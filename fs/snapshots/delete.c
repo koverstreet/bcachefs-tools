@@ -432,25 +432,12 @@ int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_int
 	}
 
 	/*
-	 * Delete accounting - one key per snapshot btree. Note that designated
-	 * initializers will not reliably cause a struct to be zeroed if it's a
-	 * union:
+	 * Nothing here touches this snapshot's accounting. Accounting is
+	 * derived: the triggers on the keys we just deleted are what took the
+	 * counters to zero. A counter still nonzero here is a bug to find, not
+	 * a number to correct - and check_no_data() above has already refused
+	 * the deletion if that's the case.
 	 */
-	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
-		if (!btree_type_has_snapshots(btree))
-			continue;
-
-		struct disk_accounting_pos acc;
-		memset(&acc, 0, sizeof(acc));
-		acc.type = BCH_DISK_ACCOUNTING_snapshot;
-		acc.snapshot.id = id;
-		acc.snapshot.btree = btree;
-
-		try(bch2_btree_bit_mod_buffered(trans, BTREE_ID_accounting,
-						disk_accounting_pos_to_bpos(&acc),
-						false));
-	}
-
 	return 0;
 }
 
