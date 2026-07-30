@@ -450,10 +450,23 @@ $(obj)/rust/extern.c: $(obj)/rust/bcachefs.rs ;
 CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations
 
 # Kernel trees < 6.18 pass -Zno-jump-tables in KBUILD_RUSTFLAGS, written for
-# their era's pinned rustc; ours has it stabilized as -Cjump-tables=n. Rewrite
-# the underlying variable - rust_flags expands it lazily, so this covers every
-# Rust rule below and in the vendored includes.
+# their era's pinned rustc; newer rustc has it stabilized as -Cjump-tables=n.
+# Rewrite the underlying variable - rust_flags expands it lazily, so this covers
+# every Rust rule below and in the vendored includes.
+#
+# Only rewrite when $(RUSTC) actually accepts the stable spelling. rustc from
+# before the stabilization rejects it outright:
+#
+#   $ rustc -Cjump-tables=n --print=sysroot
+#   error: unknown codegen option: `jump-tables`
+#
+# so rewriting unconditionally turns a working build into a hard failure on
+# those toolchains, which is worse than leaving the flag the kernel chose.
+rustc-has-cjump-tables := $(shell $(RUSTC) -Cjump-tables=n --print=sysroot \
+	>/dev/null 2>&1 && echo y || echo n)
+ifeq ($(rustc-has-cjump-tables),y)
 KBUILD_RUSTFLAGS := $(patsubst -Zno-jump-tables,-Cjump-tables=n,$(KBUILD_RUSTFLAGS))
+endif
 
 # mod.rs keys on cfg(kernel) to source the kernel-compat types from the kernel
 # crate (vs bcachefs-shim in userspace); the kernel build doesn't set it on its
