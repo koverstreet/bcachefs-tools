@@ -177,26 +177,51 @@ static int check_subvol(struct btree_trans *trans,
 	}
 
 	/*
-	 * A live subvolume's snapshot must be live, unconditionally - a
-	 * fraudulent deletion state poisons every later pass that touches
-	 * this snapshot's keys, whether or not the backref still agrees:
+	 * A live subvolume's snapshot must be live and must point back at it,
+	 * and the subvolume is authoritative for both: a fraudulent deletion
+	 * state poisons every later pass that touches this snapshot's keys, and
+	 * the subvolume knows its own id.
+	 *
+	 * It has to be repaired from this side because check_snapshots deadlocks
+	 * on it: its state repair (snapshot_subvol_state_mismatch) is gated on
+	 * the backref, and its backref repair is gated on the state already
+	 * being live - so a node that is both non-live and backref-less is
+	 * invisible to each. That is exactly what a torn snapshot deletion
+	 * leaves behind: will_delete set and the backref cleared, but the
+	 * subvolume tombstone never landed. Here there is no ambiguity and
+	 * nothing to search for - we are the claimant.
+	 *
+	 * Backref before state: SUBVOL_OBSOLETE is derived from ->subvol, so
+	 * bch2_snapshot_state_set() needs it already assigned.
 	 */
-	if (bch2_snapshot_state_compat(&snapshot) != SNAPSHOT_STATE_live) {
-		prt_printf(&buf, "subvolume points to a snapshot that isn't live:\n");
-		bch2_bkey_val_to_text(&buf, c, k);
-		prt_str(&buf, "\n");
-		bch2_snapshot_to_text(&buf, &snapshot);
-		bch_err(c, "%s", buf.buf);
-		return bch_err_throw(c, EINVAL_snapshot_subvol_edge_bad);
+	struct bkey_i_snapshot *n = NULL;
+
+	if (fsck_err_on(le32_to_cpu(snapshot.subvol) != k.k->p.offset,
+			trans, snapshot_subvol_backref_wrong,
+			"subvolume points to a snapshot that doesn't point back:\n%s",
+			(printbuf_reset(&buf),
+			 bch2_bkey_val_to_text(&buf, c, k),
+			 prt_newline(&buf),
+			 bch2_snapshot_to_text(&buf, &snapshot),
+			 buf.buf))) {
+		n = errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
+						       POS(0, snapid), 0, snapshot));
+		n->v.subvol = cpu_to_le32(k.k->p.offset);
+		snapshot = n->v;
 	}
 
-	if (le32_to_cpu(snapshot.subvol) != k.k->p.offset) {
-		prt_printf(&buf, "subvolume points to a snapshot that doesn't point back:\n");
-		bch2_bkey_val_to_text(&buf, c, k);
-		prt_str(&buf, "\n");
-		bch2_snapshot_to_text(&buf, &snapshot);
-		bch_err(c, "%s", buf.buf);
-		return bch_err_throw(c, EINVAL_snapshot_subvol_edge_bad);
+	if (fsck_err_on(bch2_snapshot_state_compat(&snapshot) != SNAPSHOT_STATE_live,
+			trans, snapshot_subvol_state_mismatch,
+			"subvolume points to a snapshot that isn't live:\n%s",
+			(printbuf_reset(&buf),
+			 bch2_bkey_val_to_text(&buf, c, k),
+			 prt_newline(&buf),
+			 bch2_snapshot_to_text(&buf, &snapshot),
+			 buf.buf))) {
+		n = n ?: errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
+							    POS(0, snapid), 0, snapshot));
+		bch2_snapshot_state_set(&n->v, SNAPSHOT_STATE_live);
+		snapshot = n->v;
 	}
 
 	if (fsck_err_on(k.k->p.offset == BCACHEFS_ROOT_SUBVOL &&
