@@ -829,23 +829,27 @@ void bch2_bkey_propagate_incompressible(const struct bch_fs *c, struct bkey_i *d
 
 unsigned bch2_bkey_replicas(struct bch_fs *c, struct bkey_s_c k)
 {
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
-	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p = { 0 };
-	unsigned replicas = 0;
+	if (k.k->type == KEY_TYPE_reservation) {
+		return bkey_s_c_to_reservation(k).v->nr_replicas;
+	} else {
+		struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+		const union bch_extent_entry *entry;
+		struct extent_ptr_decoded p = { 0 };
+		unsigned replicas = 0;
 
-	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
-		if (p.ptr.cached)
-			continue;
+		bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+			if (p.ptr.cached)
+				continue;
 
-		if (p.has_ec)
-			replicas += p.ec.redundancy;
+			if (p.has_ec)
+				replicas += p.ec.redundancy;
 
-		replicas++;
+			replicas++;
 
+		}
+
+		return replicas;
 	}
-
-	return replicas;
 }
 
 unsigned bch2_dev_durability(struct bch_fs *c, unsigned dev)
