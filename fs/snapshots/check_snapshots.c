@@ -614,6 +614,24 @@ static int snapshot_edge_ptr_available(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * Put a node the accounting says is alive back into the tree.
+ *
+ * Two children means nothing ever spliced this node out: the structure is
+ * intact and only the state field is wrong, so setting it live is the whole
+ * repair. bch2_snapshot_node_undelete() is for undoing a splice, and rejects
+ * that shape outright.
+ */
+static int snapshot_undelete_owns_data(struct btree_trans *trans, struct bkey_i_snapshot *u)
+{
+	if (u->v.children[1]) {
+		bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
+		return 0;
+	}
+
+	return bch2_snapshot_node_undelete(trans, u);
+}
+
 static int snapshot_edge_repair_commit(struct btree_trans *trans)
 {
 	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
@@ -730,19 +748,7 @@ static int check_snapshot_edge(struct btree_trans *trans,
 				struct bkey_i_snapshot *n =
 					errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
 									   POS(0, other_id), 0, snapshot));
-				/*
-				 * Two children means nothing spliced this node
-				 * out - the tree structure is intact and only
-				 * the state field is wrong, so set it live and
-				 * let the checks downstream (and the node's own
-				 * visit) validate depth/skiplist.
-				 * bch2_snapshot_node_undelete() is for undoing a
-				 * splice and refuses this shape outright.
-				 */
-				if (n->v.children[1])
-					bch2_snapshot_state_set(&n->v, SNAPSHOT_STATE_live);
-				else
-					try(bch2_snapshot_node_undelete(trans, n));
+				try(snapshot_undelete_owns_data(trans, n));
 				return snapshot_edge_repair_commit(trans);
 			}
 			return 0;
@@ -1151,40 +1157,6 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 		}
 	}
 
-	/*
-	 * Every deleted node gets held up against the accounting: nothing we
-	 * write deletes a node with data still accounted to it, so data means
-	 * the state field is the lie, whatever the rest of the node says -
-	 * undelete, splicing the node back into the tree (the tombstone
-	 * retained its pointers), and fall through so the edge checks
-	 * validate the result. No data: settled tombstone, nothing to do.
-	 */
-	if (bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted) {
-		u64 keys, sectors;
-		CLASS(printbuf, breakdown)();
-		try(bch2_snapshot_accounting_totals(c, k.k->p.offset, &keys, &sectors,
-						    NULL, &breakdown));
-
-		if (ret_fsck_err_on(keys || sectors,
-				trans, snapshot_deleted_but_has_data,
-				"deleted snapshot node has data accounted - undeleting:%s\n%s",
-				breakdown.buf,
-				(printbuf_reset(&buf),
-				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			*u = *u ?: errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-
-			try(bch2_snapshot_node_undelete(trans, *u));
-			*s = (*u)->v;
-			/*
-			 * Short circuit the rest of the checks for this node:
-			 * the in-mem snapshot table won't be updated until we
-			 * commit, we'll rely on the checks already having been
-			 * done on the child.
-			 */
-			return 1;
-		}
-	}
-
 	return bch2_snapshot_state(s) == SNAPSHOT_STATE_deleted;
 }
 
@@ -1202,6 +1174,35 @@ static int check_snapshot(struct btree_trans *trans,
 
 	struct bch_snapshot s;
 	bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(k));
+
+	/*
+	 * Data first, before anything else reasons about the state field:
+	 * nothing we write deletes a node with keys still accounted to it, so
+	 * data means the state field is the lie, whatever the rest of the node
+	 * says. Settling it here means every check below - and every edge
+	 * repair a parent runs against this node - sees a state that has
+	 * already been held up against the accounting.
+	 *
+	 * No data: settled tombstone, and the checks below handle it.
+	 */
+	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted) {
+		u64 keys, sectors;
+		CLASS(printbuf, breakdown)();
+		try(bch2_snapshot_accounting_totals(c, k.k->p.offset, &keys, &sectors,
+						    NULL, &breakdown));
+
+		if (ret_fsck_err_on(keys || sectors,
+				trans, snapshot_deleted_but_has_data,
+				"deleted snapshot node has data accounted - undeleting:%s\n%s",
+				breakdown.buf,
+				(printbuf_reset(&buf),
+				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
+			u = errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
+			try(snapshot_undelete_owns_data(trans, u));
+			s = u->v;
+		}
+	}
+
 	try(check_snapshot_state(trans, iter, k, &s, &u));
 
 	ret = check_snapshot_deleted(trans, iter, k, &s, &u);
