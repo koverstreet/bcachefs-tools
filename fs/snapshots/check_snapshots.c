@@ -694,12 +694,60 @@ static int check_snapshot_edge(struct btree_trans *trans,
 	 * down retained children, to the nearest not-deleted node (or
 	 * nothing, if that direction is all dead). The tombstone itself is
 	 * untouched; depth/skiplist fallout is repaired by the checks
-	 * downstream. (A tombstone with two live children was revived by
-	 * check_snapshot_deleted() before we got here, so walking
-	 * children[0] doesn't skip a live sibling.)
+	 * downstream.
+	 *
+	 * Only for a tombstone that owns no data - see below. We cannot lean on
+	 * check_snapshot_deleted() having already adjudicated the target: the
+	 * walk is reverse from POS_MAX and snapshot ids descend from the root,
+	 * so a parent always reaches a deleted child's edge before that child
+	 * is visited at all.
 	 */
 	if (other_exists &&
 	    bch2_snapshot_state_compat(&other.v) == SNAPSHOT_STATE_deleted) {
+		/*
+		 * Data is definitive: nothing we write deletes a node with keys
+		 * still accounted to it, so a deleted node that still owns data
+		 * has a state field that lies, and routing the tree around it
+		 * strands those keys. Undelete it and leave our edge alone - the
+		 * node's own visit validates the result.
+		 *
+		 * The check belongs here and not only in check_snapshot_deleted():
+		 * bch2_check_snapshots_trans() walks in reverse from POS_MAX and
+		 * snapshot ids descend from the root, so a parent always reaches
+		 * a deleted child's edge before that child is ever visited. The
+		 * splice below used to assume the reverse.
+		 */
+		u64 keys, sectors;
+		try(bch2_snapshot_accounting_totals(c, other_id, &keys, &sectors, NULL, NULL));
+
+		if (keys || sectors) {
+			if (ret_fsck_err(trans, snapshot_deleted_but_has_data,
+					 "snapshot %u %s pointer %u is deleted but has %llu keys, %llu sectors accounted - undeleting rather than splicing past it:%s",
+					 id, side == EDGE_CHILD ? "parent" : "child",
+					 other_id, keys, sectors,
+					 (printbuf_reset(&buf),
+					  edge_nodes_to_text(&buf, c, k, &other, NULL)))) {
+				struct bkey_i_snapshot *n =
+					errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
+									   POS(0, other_id), 0, snapshot));
+				/*
+				 * Two children means nothing spliced this node
+				 * out - the tree structure is intact and only
+				 * the state field is wrong, so set it live and
+				 * let the checks downstream (and the node's own
+				 * visit) validate depth/skiplist.
+				 * bch2_snapshot_node_undelete() is for undoing a
+				 * splice and refuses this shape outright.
+				 */
+				if (n->v.children[1])
+					bch2_snapshot_state_set(&n->v, SNAPSHOT_STATE_live);
+				else
+					try(bch2_snapshot_node_undelete(trans, n));
+				return snapshot_edge_repair_commit(trans);
+			}
+			return 0;
+		}
+
 		u32 repl = other_id;
 		struct bkey_i_snapshot t = other;
 
