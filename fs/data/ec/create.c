@@ -850,15 +850,26 @@ unsigned bch2_disk_label_ec_devs(struct bch_fs *c, unsigned disk_label,
 /*
  * Can a stripe with @redundancy parity blocks be formed in @target right now?
  *
- * Minimum stripe size is redundancy + 1 (one data block + parity), and all
- * blocks in a stripe must share a single bucket_size. So we need at least
- * redundancy + 1 RW devices in the target that agree on bucket_size.
+ * This must model what ec_stripe_head_devs_update() computes as
+ * insufficient_devs, because that is what actually refuses to allocate. Both
+ * of its conditions apply:
+ *
+ *  - at least redundancy + 2 devices agreeing on bucket_size. Not + 1: a
+ *    stripe of one data block plus parity is strictly worse than replication,
+ *    so that case is rejected rather than formed.
+ *  - at least redundancy + 2 distinct failure domains. One block per domain is
+ *    a hard requirement for erasure coding, not a preference - the allocator
+ *    excludes devices sharing an already-placed block's domain. With no
+ *    failure domains configured every device is its own domain and this is
+ *    the device count again, so it only bites where devices share one.
  *
  * bch2_disk_label_ec_devs already returns the filtered device mask (RW members
  * with durability > 0, narrowed to the picked best bucket_size).
  *
  * Used by reconcile to avoid queueing EC work that can't make progress —
- * otherwise reconcile spins re-queueing data_update_fail forever.
+ * otherwise reconcile spins re-queueing data_update_fail forever. Modelling
+ * only the device count let configurations through that the allocator then
+ * refused, costing one wasted rewrite of every affected extent.
  */
 bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redundancy)
 {
@@ -873,7 +884,8 @@ bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redunda
 	struct bch_devs_mask devs;
 	bch2_disk_label_ec_devs(c, disk_label, &devs, 0);
 
-	return dev_mask_nr(&devs) >= redundancy + 1;
+	return dev_mask_nr(&devs) >= redundancy + 2 &&
+	       bch2_target_nr_domains(c, &devs) >= redundancy + 2;
 }
 
 /*
