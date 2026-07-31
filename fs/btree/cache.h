@@ -21,6 +21,8 @@ int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *, struct 
 
 void bch2_node_pin(struct bch_fs *, struct btree *);
 void bch2_btree_cache_unpin(struct bch_fs *);
+int bch2_btree_cache_pin_range(struct btree_trans *, enum btree_id,
+			       struct bpos, struct bpos);
 
 void bch2_btree_node_set_dirty(struct bch_fs *, struct btree *);
 void bch2_btree_node_write_done_clean(struct bch_fs *, struct btree *);
