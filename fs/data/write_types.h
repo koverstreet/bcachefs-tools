@@ -128,6 +128,8 @@ struct bch_write_op {
 	 */
 	struct bch_devs_mask	*devs_need_flush;
 
+	void			*prealloc_bkey_buf;
+
 	/* Must be last: */
 	struct bch_write_bio	wbio;
 };

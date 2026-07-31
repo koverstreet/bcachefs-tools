@@ -1092,7 +1092,12 @@ static int bch2_write_index_default(struct bch_write_op *op)
 	CLASS(btree_trans, trans)(c);
 
 	struct bkey_buf sk __cleanup(bch2_bkey_buf_exit);
-	bch2_bkey_buf_init(&sk);
+	if (op->prealloc_bkey_buf) {
+		bch2_bkey_buf_init_prealloc(&sk, op->prealloc_bkey_buf);
+		op->prealloc_bkey_buf = NULL;
+	} else {
+		bch2_bkey_buf_init(&sk);
+	}
 
 	do {
 		bch2_trans_begin(trans);
@@ -1497,11 +1502,27 @@ void bch2_write_point_do_index_updates(struct work_struct *work)
 		 * we're already in the swap writeback path and
 		 * reclaim would try to swap more pages → deadlock.
 		 */
+		/*
+		 * Pre-allocate the bkey spill buffer while we can still
+		 * do normal allocations.  Use GFP_NOWAIT to avoid entering
+		 * direct reclaim — the kworker context can amplify the
+		 * journal_write → reclaim → btree_shrinker → journal
+		 * deadlock.  If this fails, the old __GFP_NOFAIL path
+		 * under PF_MEMALLOC will handle it.
+		 */
+		if (is_swap && !op->prealloc_bkey_buf)
+			op->prealloc_bkey_buf = kmalloc(2048, GFP_NOWAIT);
+
 		unsigned int noreclaim_flags = 0;
 		if (is_swap)
 			noreclaim_flags = memalloc_noreclaim_save();
 
 		__bch2_write_index(op);
+
+		if (unlikely(op->prealloc_bkey_buf)) {
+			kfree(op->prealloc_bkey_buf);
+			op->prealloc_bkey_buf = NULL;
+		}
 
 		if (!(op->flags & BCH_WRITE_submitted))
 			__bch2_write(op);
