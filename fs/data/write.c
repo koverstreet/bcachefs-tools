@@ -730,6 +730,8 @@
 
 #include "debug/async_objs.h"
 
+#include "vfs/swap.h"
+
 #include "fs/inode.h"
 
 #include "init/dev.h"
@@ -1488,12 +1490,26 @@ void bch2_write_point_do_index_updates(struct work_struct *work)
 
 		op->flags |= BCH_WRITE_in_worker;
 
+		bool is_swap = op->flags & BCH_WRITE_swap;
+
+		/*
+		 * Swap write ops must not enter direct reclaim —
+		 * we're already in the swap writeback path and
+		 * reclaim would try to swap more pages → deadlock.
+		 */
+		unsigned int noreclaim_flags = 0;
+		if (is_swap)
+			noreclaim_flags = memalloc_noreclaim_save();
+
 		__bch2_write_index(op);
 
 		if (!(op->flags & BCH_WRITE_submitted))
 			__bch2_write(op);
 		else
 			bch2_write_done(op);
+
+		if (is_swap)
+			memalloc_noreclaim_restore(noreclaim_flags);
 	}
 }
 
@@ -2387,7 +2403,14 @@ static void __bch2_write(struct bch_write_op *op)
 		(!(op->flags & BCH_WRITE_submitted) &&
 		 !(op->flags & BCH_WRITE_in_worker));
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+	/*
+	 * PF_MEMALLOC_NOIO for all writes: allocations must not recurse
+	 * into reclaim-issued IO.  For swap writes (BCH_WRITE_swap): also
+	 * set PF_MEMALLOC to prevent entering direct reclaim entirely —
+	 * swap writes run during reclaim and must not recurse into it.
+	 */
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO |
+		((op->flags & BCH_WRITE_swap) ? PF_MEMALLOC : 0));
 
 	if (unlikely(op->opts.nocow &&
 		     c->opts.nocow_enabled) &&
