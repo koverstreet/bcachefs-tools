@@ -152,6 +152,36 @@ static int check_subvol(struct btree_trans *trans,
 		return ret;
 
 	/*
+	 * Settle the edge before anything else looks at this snapshot. We are
+	 * walking a ref, so the backref is what says whether we own the target,
+	 * and every repair below acts on the snapshot as if we do. A second
+	 * subvolume pointing at the same node is the case that makes this load
+	 * bearing: the backref names the real owner, so establish that first
+	 * rather than letting whichever subvolume iterates last take the node.
+	 */
+	u32 backref = le32_to_cpu(snapshot.subvol);
+
+	if (backref && backref != k.k->p.offset) {
+		struct bch_subvolume other;
+		int ret2 = bch2_subvolume_get(trans, backref, false, &other);
+		if (ret2 && !bch2_err_matches(ret2, ENOENT))
+			return ret2;
+
+		if (!ret2 && le32_to_cpu(other.snapshot) == snapid) {
+			CLASS(bch_log_msg, msg)(c);
+
+			prt_printf(&msg.m, "snapshot %u is claimed by subvolume %u, which it backrefs, and also by %llu:\n",
+				   snapid, backref, k.k->p.offset);
+			bch2_bkey_val_to_text(&msg.m, c, k);
+			prt_newline(&msg.m);
+			bch2_snapshot_to_text(&msg.m, &snapshot);
+			msg.m.suppress = !bch2_count_fsck_err(c, snapshot_subvol_backref_wrong, &msg.m);
+
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
+	}
+
+	/*
 	 * Subvolumes only reference leaves; an interior target means a pointer
 	 * was re-aimed by damage or a snapshot creation half-completed. No
 	 * repair yet - the right re-aim (which descendant?) isn't decidable
@@ -196,7 +226,7 @@ static int check_subvol(struct btree_trans *trans,
 	 */
 	struct bkey_i_snapshot *n = NULL;
 
-	if (fsck_err_on(le32_to_cpu(snapshot.subvol) != k.k->p.offset,
+	if (fsck_err_on(backref != k.k->p.offset,
 			trans, snapshot_subvol_backref_wrong,
 			"subvolume points to a snapshot that doesn't point back:\n%s",
 			(printbuf_reset(&buf),
