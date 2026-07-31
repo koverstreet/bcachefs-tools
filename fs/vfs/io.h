@@ -170,6 +170,7 @@ int bch2_fsync(struct file *, loff_t, loff_t, int);
 
 void bch2_zero_pagecache_posteof(struct bch_inode_info *);
 int bchfs_truncate(struct mnt_idmap *, struct bch_inode_info *, struct iattr *);
+long __bch2_fallocate(struct bch_inode_info *, int, loff_t, loff_t);
 long bch2_fallocate_dispatch(struct file *, int, loff_t, loff_t);
 
 loff_t bch2_remap_file_range(struct file *, loff_t, struct file *,

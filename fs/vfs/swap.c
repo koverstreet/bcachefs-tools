@@ -10,12 +10,14 @@
 #include "data/io_misc.h"
 #include "data/write.h"
 #include "vfs/fs.h"
+#include "vfs/io.h"
 #include "vfs/swap.h"
 #include "vfs/direct.h"
 #include "vfs/buffered.h"
 
 #include <linux/sched/mm.h>
 #include <linux/swap.h>
+#include <linux/falloc.h>
 #include <linux/ktime.h>
 
 /*
@@ -61,6 +63,30 @@ int bch2_swap_activate(struct swap_info_struct *sis,
 
 	if (!S_ISREG(inode->v.i_mode))
 		return -EINVAL;
+
+	/*
+	 * bcachefs is copy-on-write: overwriting a block allocates a new
+	 * one, so a swap write can fail with ENOSPC even though the file
+	 * already exists at full size. That failure arrives during reclaim,
+	 * which is the worst possible time to discover it.
+	 *
+	 * Reserve the whole file up front. This is exactly what fallocate
+	 * does, so use it rather than inventing a second reservation
+	 * mechanism - but not via bch2_fallocate_dispatch(), because swapon()
+	 * already holds i_rwsem here and the dispatch takes inode_lock.
+	 *
+	 * The reservation is persistent, so there is nothing to undo in
+	 * ->swap_deactivate(): the file keeps its allocation like any other
+	 * fallocated file, and swapoff followed by swapon does not have to
+	 * find the space again.
+	 */
+	loff_t size = i_size_read(&inode->v);
+	long ret = __bch2_fallocate(inode, FALLOC_FL_KEEP_SIZE, 0, size);
+	if (ret) {
+		bch_err(c, "swapon: cannot reserve %llu bytes for inode %llu: %s",
+			(u64) size, (u64) inode->v.i_ino, bch2_err_str(ret));
+		return ret;
+	}
 
 	sis->flags |= SWP_FS_OPS;
 	*span = sis->pages;
