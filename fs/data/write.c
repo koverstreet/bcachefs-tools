@@ -1498,11 +1498,6 @@ void bch2_write_point_do_index_updates(struct work_struct *work)
 		bool is_swap = op->flags & BCH_WRITE_swap;
 
 		/*
-		 * Swap write ops must not enter direct reclaim —
-		 * we're already in the swap writeback path and
-		 * reclaim would try to swap more pages → deadlock.
-		 */
-		/*
 		 * Pre-allocate the bkey spill buffer while we can still
 		 * do normal allocations.  Use GFP_NOWAIT to avoid entering
 		 * direct reclaim — the kworker context can amplify the
@@ -1513,9 +1508,16 @@ void bch2_write_point_do_index_updates(struct work_struct *work)
 		if (is_swap && !op->prealloc_bkey_buf)
 			op->prealloc_bkey_buf = kmalloc(2048, GFP_NOWAIT);
 
+		/*
+		 * Swap write ops must not enter direct reclaim —
+		 * we're already in the swap writeback path and
+		 * reclaim would try to swap more pages → deadlock.
+		 */
 		unsigned int noreclaim_flags = 0;
 		if (is_swap)
 			noreclaim_flags = memalloc_noreclaim_save();
+
+		u64 swap_start_ns = is_swap ? ktime_get_ns() : 0;
 
 		__bch2_write_index(op);
 
@@ -1529,8 +1531,27 @@ void bch2_write_point_do_index_updates(struct work_struct *work)
 		else
 			bch2_write_done(op);
 
-		if (is_swap)
+		if (is_swap) {
+			u64 elapsed = ktime_get_ns() - swap_start_ns;
 			memalloc_noreclaim_restore(noreclaim_flags);
+
+			if (unlikely(elapsed > 2ULL * NSEC_PER_SEC)) {
+				pr_err("bcachefs: swap kworker STALL: %llu ms in index_updates",
+				       elapsed / NSEC_PER_MSEC);
+				WARN_ON_ONCE(1);
+			}
+			/*
+			 * Debug builds only, and with headroom over the
+			 * legitimate tail: under total swap exhaustion with
+			 * the OOM killer active, >30 s stalls were measured
+			 * while the fs kept completing ops.  A real reclaim
+			 * deadlock never completes, so 60 s still catches it.
+			 * An unconditional BUG() here would panic production
+			 * on a bad-day stall.
+			 */
+			if (unlikely(elapsed > 60ULL * NSEC_PER_SEC))
+				BUG_ON(IS_ENABLED(CONFIG_BCACHEFS_DEBUG));
+		}
 	}
 }
 
