@@ -357,6 +357,56 @@ void bch2_btree_cache_unpin(struct bch_fs *c)
 	bc->live[1].nr_dirty = 0;
 }
 
+/*
+ * Prefetch and pin one keyspace range of one btree: replaces any previously
+ * pinned range (there is only one), walks [start, end] with prefetch so the
+ * nodes are faulted in with async parallel reads rather than synchronous
+ * misses, and marks them shrinker-exempt.
+ *
+ * Best-effort: pinning stops if it would exceed fsck_memory_usage_percent of
+ * system ram. Lookups beyond the pinned portion still work, they're just
+ * slow paths. Callers must bch2_btree_cache_unpin() when done.
+ */
+int bch2_btree_cache_pin_range(struct btree_trans *trans, enum btree_id btree,
+			       struct bpos start, struct bpos end)
+{
+	struct bch_fs *c = trans->c;
+	struct bch_fs_btree_cache *bc = &c->btree.cache;
+	s64 mem_may_pin = div_u64(system_totalram_bytes() *
+				  c->opts.fsck_memory_usage_percent, 100);
+
+	bch2_btree_cache_unpin(c);
+
+	bc->pinned_nodes_mask[0]	= BIT_ULL(btree);
+	bc->pinned_nodes_mask[1]	= BIT_ULL(btree);
+	bc->pinned_nodes_start		= BBPOS(btree, start);
+	bc->pinned_nodes_end		= BBPOS(btree, end);
+
+	return for_each_btree_node(trans, iter, btree, start, 0,
+				   BTREE_ITER_prefetch, b, ({
+		if (bpos_gt(b->data->min_key, end))
+			break;
+		mem_may_pin -= btree_buf_bytes(b);
+		if (mem_may_pin <= 0) {
+			bc->pinned_nodes_end = BBPOS(btree, b->key.k.p);
+
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "memory budget (%u%% of ram) exhausted pinning btree ",
+				   c->opts.fsck_memory_usage_percent);
+			bch2_btree_id_to_text(&buf, btree);
+			prt_str(&buf, " at ");
+			bch2_bpos_to_text(&buf, b->key.k.p);
+			prt_str(&buf, ", requested range end ");
+			bch2_bpos_to_text(&buf, end);
+			prt_str(&buf, "; continuing, lookups past this point will be uncached");
+			bch_warn_ratelimited(c, "%s", buf.buf);
+			break;
+		}
+		bch2_node_pin(c, b);
+		0;
+	}));
+}
+
 /* Cache state transitions — see DOC at top of file. */
 
 static inline bool btree_node_state_hashed(enum btree_node_cache_state state)
