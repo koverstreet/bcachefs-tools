@@ -326,96 +326,6 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
 	return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
 }
 
-/*
- * Debug for a refused transition: accounting says keys are still stamped with
- * @id, but migration reported nothing left to do. Go find them, and say what
- * shape the miss is - one inum we skipped, or many?
- *
- * Keys sort by inum, so counting inum transitions gives the exact distinct
- * count with no set to maintain. Bounded per btree: the question is the shape
- * of the miss, not an enumeration, and a truncated scan still answers it.
- *
- * Must run on an unwound transaction - for_each_btree_key() begins one, which
- * would reset trans mem out from under the caller of check_no_data().
- */
-#define STRANDED_SCAN_MAX	(4ULL << 20)
-#define STRANDED_SAMPLE_INUMS	8
-
-struct stranded_scan {
-	u32			id;
-	enum btree_id		btree;
-	u64			examined, nr_keys, nr_inums, prev_inum;
-	bool			have_prev, truncated;
-	unsigned		nr_sampled;
-	struct printbuf		*sample;
-};
-
-static int stranded_scan_key(struct btree_trans *trans,
-			     struct stranded_scan *s, struct bkey_s_c k)
-{
-	if (++s->examined > STRANDED_SCAN_MAX) {
-		s->truncated = true;
-		return 1;
-	}
-
-	if (k.k->p.snapshot != s->id)
-		return 0;
-
-	u64 inum = s->btree == BTREE_ID_inodes ? k.k->p.offset : k.k->p.inode;
-
-	s->nr_keys++;
-
-	if (!s->have_prev || inum != s->prev_inum) {
-		s->nr_inums++;
-		s->have_prev	= true;
-		s->prev_inum	= inum;
-
-		if (s->nr_sampled < STRANDED_SAMPLE_INUMS) {
-			s->nr_sampled++;
-			prt_str(s->sample, "\n    ");
-			bch2_bkey_val_to_text(s->sample, trans->c, k);
-		}
-	}
-
-	return 0;
-}
-
-static void bch2_snapshot_stranded_keys_to_text(struct printbuf *out,
-						struct btree_trans *trans, u32 id)
-{
-	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
-		if (!btree_type_has_snapshots(btree))
-			continue;
-
-		CLASS(printbuf, sample)();
-		struct stranded_scan s = {
-			.id	= id,
-			.btree	= btree,
-			.sample	= &sample,
-		};
-
-		int ret = for_each_btree_key(trans, iter, btree, POS_MIN,
-					     BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
-					     stranded_scan_key(trans, &s, k));
-		if (ret < 0) {
-			prt_printf(out, "\n  ");
-			bch2_btree_id_to_text(out, btree);
-			prt_printf(out, ": scan failed: %s", bch2_err_str(ret));
-			continue;
-		}
-
-		if (!s.nr_keys)
-			continue;
-
-		prt_printf(out, "\n  ");
-		bch2_btree_id_to_text(out, btree);
-		prt_printf(out, ": %llu keys in %llu inums%s, first key per inum:",
-			   s.nr_keys, s.nr_inums,
-			   s.truncated ? " (scan truncated)" : "");
-		prt_str(out, sample.buf);
-	}
-}
-
 static int snapshot_node_data_to_text(struct printbuf *out, struct bch_fs *c,
 				      u32 id, u32 live_child)
 {
@@ -500,14 +410,6 @@ static int dying_snapshots_content_btrees(struct bch_fs *c,
 		try(snapshot_content_empty(c, i->id, msg, bad_btrees));
 
 	return 0;
-}
-
-static void snapshot_delete_refused_debug(struct btree_trans *trans, u32 id)
-{
-	CLASS(bch_log_msg, msg)(trans->c);
-
-	prt_printf(&msg.m, "snapshot %u refused with keys still accounted - scanning for them:", id);
-	bch2_snapshot_stranded_keys_to_text(&msg.m, trans, id);
 }
 
 static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
@@ -1438,10 +1340,8 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 		int ret = commit_do(trans, NULL, NULL, 0,
 			bch2_snapshot_node_delete(trans, *i, false));
 		/* Refused - repair scheduled; other nodes are unaffected: */
-		if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data) {
-			snapshot_delete_refused_debug(trans, *i);
+		if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
 			continue;
-		}
 		if (ret)
 			return ret;
 	}
@@ -1449,10 +1349,8 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	darray_for_each(d->delete_interior, i) {
 		int ret = commit_do(trans, NULL, NULL, 0,
 			bch2_snapshot_node_set_no_keys(trans, i->id));
-		if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data) {
-			snapshot_delete_refused_debug(trans, i->id);
+		if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
 			continue;
-		}
 		if (ret)
 			return ret;
 	}
@@ -1578,10 +1476,8 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 		darray_for_each(delete, i) {
 			int ret = commit_do(trans, NULL, NULL, 0,
 				bch2_snapshot_node_delete(trans, i->id, true));
-			if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data) {
-				snapshot_delete_refused_debug(trans, i->id);
+			if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
 				continue;
-			}
 			if (!bch2_err_matches(ret, EROFS))
 				bch_err_msg(c, ret, "deleting snapshot %u", i->id);
 			if (ret)
