@@ -414,16 +414,19 @@ static int dying_snapshots_content_btrees(struct bch_fs *c,
 
 static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
 {
-	struct bkey_i_snapshot *s =
-		bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots, POS(0, id), 0, snapshot);
-	int ret = PTR_ERR_OR_ZERO(s);
+	struct bkey_i_snapshot s;
+	int ret = bch2_snapshot_lookup_key(trans, id, &s);
 	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOENT), trans->c, "missing snapshot %u", id);
 	if (unlikely(ret))
 		return ret;
 
-	try(bch2_snapshot_node_check_no_data(trans, s, "set_no_keys"));
+	/* Read only, and before the get_mut below - see bch2_snapshot_node_check_deletable() */
+	try(bch2_snapshot_node_check_no_data(trans, &s, "set_no_keys"));
 
-	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_no_keys);
+	struct bkey_i_snapshot *mut = errptr_try(bch2_bkey_get_mut_typed(trans,
+				BTREE_ID_snapshots, POS(0, id), 0, snapshot));
+
+	bch2_snapshot_state_set(&mut->v, SNAPSHOT_STATE_no_keys);
 	return 0;
 }
 
@@ -433,9 +436,90 @@ static inline void normalize_snapshot_child_pointers(struct bch_snapshot *s)
 		swap(s->children[0], s->children[1]);
 }
 
+/*
+ * Every reason we decline to delete a snapshot node, decided without touching
+ * anything.
+ *
+ * These have to be answered before the deletion starts, never partway through
+ * it. bch2_bkey_get_mut_typed() queues its update the moment it's called, so a
+ * refusal after the first one leaves the transaction holding a fragment of a
+ * deletion, which the caller then drops on the floor.
+ *
+ * And callers commit work ahead of the deletion that assumes it will happen:
+ * bch2_delete_dead_interior_snapshots() rewrites every child's depth and skip[]
+ * for the tree shape the deletion is going to produce, and commits that, before
+ * it deletes a single node. A node refused after that leaves the tree
+ * describing a deletion that never happened - skip[] entries pointing above
+ * parent, which validation rejects on the next write, taking the filesystem
+ * read only.
+ *
+ * So this is separable from the deletion on purpose: a caller that is about to
+ * commit to a set of nodes asks first, and drops the refused ones.
+ */
+static int bch2_snapshot_node_check_deletable(struct btree_trans *trans, u32 id,
+					      bool delete_interior)
+{
+	struct bch_fs *c = trans->c;
+
+	struct bkey_i_snapshot s;
+	int ret = bch2_snapshot_lookup_key(trans, id, &s);
+	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOENT), c,
+				"missing snapshot %u", id);
+	if (ret)
+		return ret;
+
+	try(bch2_snapshot_node_check_no_data(trans, &s,
+			delete_interior ? "interior delete" : "leaf delete"));
+
+	if (bch2_trans_inconsistent_on(bch2_snapshot_state(&s.v) == SNAPSHOT_STATE_deleted, trans,
+			"deleting snapshot node %u: already in state deleted", id))
+		return bch_err_throw(c, EINVAL_snapshot_delete_already_deleted);
+
+	if (s.v.children[1]) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "deleting node with two children:\n");
+		bch2_snapshot_tree_keys_to_text(&msg.m, trans, id);
+		bch2_snapshot_delete_nodes_to_text(&msg.m, &c->snapshots.delete, true);
+		return bch_err_throw(c, EINVAL_snapshot_delete_has_two_children);
+	}
+
+	if (s.v.subvol) {
+		/* deletion path: see the deleted tombstone directly, as in
+		 * check_should_delete_leaf() - bch2_subvolume_get() would report
+		 * it as ENOENT_subvolume_deleted */
+		struct bch_subvolume subvol;
+		try(bch2_bkey_get_val_typed(trans, BTREE_ID_subvolumes,
+					    POS(0, le32_to_cpu(s.v.subvol)),
+					    BTREE_ITER_cached, subvolume, &subvol));
+
+		if (s.v.children[0] ||
+		    (bch2_subvolume_state(&subvol) != SUBVOLUME_STATE_deleted &&
+		     c->sb.version_upgrade_complete >=
+		     bcachefs_metadata_version_per_dev_fragmentation_lru)) {
+			CLASS(bch_log_msg, msg)(c);
+			prt_printf(&msg.m, "deleting node with bad subvolume pointer:\n");
+			bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&s.k_i));
+			return bch_err_throw(c, EINVAL_snapshot_delete_bad_subvol);
+		}
+	}
+
+	if (s.v.children[0] && !delete_interior) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "deleting interior node %u with child %u at runtime:\n",
+			   id, le32_to_cpu(s.v.children[0]));
+		bch2_snapshot_tree_keys_to_text(&msg.m, trans, id);
+		bch2_snapshot_delete_nodes_to_text(&msg.m, &c->snapshots.delete, true);
+		return bch_err_throw(c, EINVAL_snapshot_delete_interior_at_runtime);
+	}
+
+	return 0;
+}
+
 int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_interior)
 {
 	struct bch_fs *c = trans->c;
+
+	try(bch2_snapshot_node_check_deletable(trans, id, delete_interior));
 
 	struct bkey_i_snapshot *s =
 		bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots, POS(0, id), 0, snapshot);
@@ -446,42 +530,9 @@ int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_int
 	if (ret)
 		return ret;
 
-	try(bch2_snapshot_node_check_no_data(trans, s,
-			delete_interior ? "interior delete" : "leaf delete"));
-
-	if (bch2_trans_inconsistent_on(bch2_snapshot_state(&s->v) == SNAPSHOT_STATE_deleted, trans,
-			"deleting snapshot node %u: already in state deleted", id))
-		return bch_err_throw(c, EINVAL_snapshot_delete_already_deleted);
-
-	if (s->v.children[1]) {
-		CLASS(bch_log_msg, msg)(c);
-		prt_printf(&msg.m, "deleting node with two children:\n");
-		bch2_snapshot_tree_keys_to_text(&msg.m, trans, id);
-		bch2_snapshot_delete_nodes_to_text(&msg.m, &c->snapshots.delete, true);
-		return bch_err_throw(c, EINVAL_snapshot_delete_has_two_children);
-	}
-
-	if (s->v.subvol) {
-		/* deletion path: see the deleted tombstone directly, as in
-		 * check_should_delete_leaf() - bch2_subvolume_get() would report
-		 * it as ENOENT_subvolume_deleted */
-		struct bch_subvolume subvol;
-		try(bch2_bkey_get_val_typed(trans, BTREE_ID_subvolumes,
-					    POS(0, le32_to_cpu(s->v.subvol)),
-					    BTREE_ITER_cached, subvolume, &subvol));
-
-		if (s->v.children[0] ||
-		    (bch2_subvolume_state(&subvol) != SUBVOLUME_STATE_deleted &&
-		     c->sb.version_upgrade_complete >=
-		     bcachefs_metadata_version_per_dev_fragmentation_lru)) {
-			CLASS(bch_log_msg, msg)(c);
-			prt_printf(&msg.m, "deleting node with bad subvolume pointer:\n");
-			bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&s->k_i));
-			return bch_err_throw(c, EINVAL_snapshot_delete_bad_subvol);
-		}
-
-		try(bch2_btree_delete(trans, BTREE_ID_subvolumes, POS(0, le32_to_cpu(s->v.subvol)), 0));
-	}
+	if (s->v.subvol)
+		try(bch2_btree_delete(trans, BTREE_ID_subvolumes,
+				      POS(0, le32_to_cpu(s->v.subvol)), 0));
 
 	u32 parent_id = le32_to_cpu(s->v.parent);
 	u32 child_id = le32_to_cpu(s->v.children[0]);
@@ -513,15 +564,6 @@ int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_int
 	}
 
 	if (child_id) {
-		if (!delete_interior) {
-			CLASS(bch_log_msg, msg)(c);
-			prt_printf(&msg.m, "deleting interior node %llu with child %u at runtime:\n",
-				   s->k.p.offset, child_id);
-			bch2_snapshot_tree_keys_to_text(&msg.m, trans, id);
-			bch2_snapshot_delete_nodes_to_text(&msg.m, &c->snapshots.delete, true);
-			return bch_err_throw(c, EINVAL_snapshot_delete_interior_at_runtime);
-		}
-
 		struct bkey_i_snapshot *child =
 			bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots, POS(0, child_id),
 						0, snapshot);
