@@ -81,18 +81,7 @@ extern "C" fn cleanup_socket() {
 
 static STARTED_FOR_PID: AtomicU32 = AtomicU32::new(0);
 static ATEXIT_REGISTERED: AtomicBool = AtomicBool::new(false);
-static ATFORK_REGISTERED: AtomicBool = AtomicBool::new(false);
 static INIT_LOCK: Mutex<()> = Mutex::new(());
-
-/*
- * pthread_atfork child handler: bind a fresh socket in the new child
- * process. The parent's http thread doesn't survive fork (only the
- * calling thread does), so the child needs its own server bound at
- * /run/.../<child-pid>.sock.
- */
-extern "C" fn child_after_fork() {
-    bch2_start_http_lazy();
-}
 
 /*
  * Bind a unix socket and spawn a thread serving sysfs/debugfs over HTTP.
@@ -106,9 +95,17 @@ extern "C" fn child_after_fork() {
  * Fork handling: process-local Once doesn't work — a child of a process
  * that already started the server would skip startup and have no http
  * thread (the parent's thread doesn't survive fork). We track the pid
- * the server started for, and a pthread_atfork child handler re-runs
- * init in any forked child. Each child binds its own socket at
- * /run/.../<child-pid>.sock.
+ * the server started for, so a forked child that wants a server calls
+ * this again and binds its own at /run/.../<child-pid>.sock.
+ *
+ * That call must be explicit. It used to happen from a pthread_atfork
+ * child handler, which is process-wide: it fired in the child of *any*
+ * fork, including the short-lived one Command::spawn makes to exec
+ * fusermount3. Allocating, binding a socket and creating threads between
+ * fork() and execve() is not allowed, and when pthread_create there
+ * returned EAGAIN the crate-wide panic = "abort" made it fatal, so the
+ * mount failed. It also leaked a socket per exec'ing child, since those
+ * never reach the atexit handler.
  *
  * Cleanup is via an atexit handler that unlinks the current pid's
  * socket on normal exit. Sockets from killed-by-signal / panicked
@@ -135,15 +132,10 @@ pub extern "C" fn bch2_start_http_lazy() {
 
     match tiny_http::Server::http_unix(std::path::Path::new(&path)) {
         Ok(server) => {
-            // atexit / pthread_atfork registrations are inherited across
-            // fork; only register once per process to avoid duplicates.
+            // atexit registrations are inherited across fork; only register
+            // once per process to avoid duplicates.
             if !ATEXIT_REGISTERED.swap(true, Ordering::AcqRel) {
                 unsafe { libc::atexit(cleanup_socket); }
-            }
-            if !ATFORK_REGISTERED.swap(true, Ordering::AcqRel) {
-                unsafe {
-                    libc::pthread_atfork(None, None, Some(child_after_fork));
-                }
             }
             STARTED_FOR_PID.store(my_pid, Ordering::Release);
             std::thread::spawn(move || http_thread(server));
