@@ -15,6 +15,8 @@
 //   requests get read-modify-write treatment in the write handler.
 
 use std::cell::Cell;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -361,6 +363,16 @@ struct BcachefsFs {
     /// Write end of a pipe used to signal the parent process that the
     /// FUSE mount is established. Written in init(), None in foreground mode.
     signal_fd: Option<OwnedFd>,
+    /// Set by destroy() once bch2_fs_exit() has run.
+    ///
+    /// fuser::mount2() is Session::new().and_then(|se| se.run()), and the two
+    /// halves differ: Session::new() mounts before wrapping us in a
+    /// FilesystemHolder, whose Drop calls destroy(). So a mount failure never
+    /// shuts the filesystem down and the caller must, while a failure after
+    /// the session is established already has. mount2 returns one io::Result
+    /// for both, so the caller cannot tell them apart -- it asks this instead
+    /// of guessing, which also keeps it correct if fuser's internals change.
+    destroyed: Arc<AtomicBool>,
 }
 
 // Safety: bch_fs is internally synchronized with its own locking.
@@ -423,6 +435,7 @@ impl Filesystem for BcachefsFs {
     fn destroy(&mut self) {
         eprintln!("bcachefs fuse: destroy");
         unsafe { c::bch2_fs_exit(self.c) };
+        self.destroyed.store(true, Ordering::SeqCst);
     }
 
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
@@ -1054,7 +1067,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
             unsafe { c::bch2_fs_exit(fs_raw) };
             anyhow::bail!("Error starting filesystem: {}", e);
         }
-        let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: None };
+        let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: None, destroyed: Arc::new(AtomicBool::new(false)) };
         fuser::mount2(bcachefs_fs, &cli.mountpoint, &config)?;
         return Ok(());
     }
@@ -1112,7 +1125,12 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     }
     eprintln!("fusemount: filesystem started, calling fuser::mount2");
 
-    let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: Some(write_fd.try_clone()?) };
+    let destroyed = Arc::new(AtomicBool::new(false));
+    let bcachefs_fs = BcachefsFs {
+        c: fs_raw,
+        signal_fd: Some(write_fd.try_clone()?),
+        destroyed: Arc::clone(&destroyed),
+    };
 
     match fuser::mount2(bcachefs_fs, &cli.mountpoint, &config) {
         Ok(()) => {
@@ -1120,6 +1138,15 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         }
         Err(e) => {
             eprintln!("fusemount: fuser::mount2 failed: {}", e);
+            // If the mount itself failed we were never handed to a
+            // FilesystemHolder, so destroy() has not run and nothing has shut
+            // the filesystem down -- leaving the superblock dirty after
+            // recovery and any version upgrade have already been committed.
+            // If the session did start, destroy() has run and calling
+            // bch2_fs_exit() again would be a double free.
+            if !destroyed.load(Ordering::SeqCst) {
+                unsafe { c::bch2_fs_exit(fs_raw) };
+            }
             signal_parent(write_fd, 1);
             std::process::exit(1);
         }
