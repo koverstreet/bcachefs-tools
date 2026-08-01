@@ -1184,8 +1184,18 @@ static int check_snapshot(struct btree_trans *trans,
 	 * already been held up against the accounting.
 	 *
 	 * No data: settled tombstone, and the checks below handle it.
+	 *
+	 * How the state gets put right depends on which lie it is. deleted
+	 * means the node was spliced out of the tree, so reviving it means
+	 * undoing that splice. no_keys is only ever marked - it says "this
+	 * node's keys have migrated down", and the node stays where it is - so
+	 * there is nothing to relink and setting the state live is the whole
+	 * repair.
 	 */
-	if (bch2_snapshot_state(&s) == SNAPSHOT_STATE_deleted) {
+	enum bch_snapshot_state state = bch2_snapshot_state(&s);
+
+	if (state == SNAPSHOT_STATE_deleted ||
+	    state == SNAPSHOT_STATE_no_keys) {
 		u64 keys, sectors;
 		CLASS(printbuf, breakdown)();
 		try(bch2_snapshot_accounting_totals(c, k.k->p.offset, &keys, &sectors,
@@ -1193,12 +1203,18 @@ static int check_snapshot(struct btree_trans *trans,
 
 		if (ret_fsck_err_on(keys || sectors,
 				trans, snapshot_deleted_but_has_data,
-				"deleted snapshot node has data accounted - undeleting:%s\n%s",
+				"%s snapshot node has data accounted - %s:%s\n%s",
+				bch2_snapshot_state_str(state),
+				state == SNAPSHOT_STATE_no_keys ? "clearing state" : "undeleting",
 				breakdown.buf,
 				(printbuf_reset(&buf),
 				 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
 			u = errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, snapshot));
-			try(snapshot_undelete_owns_data(trans, u));
+
+			if (state == SNAPSHOT_STATE_no_keys)
+				bch2_snapshot_state_set(&u->v, SNAPSHOT_STATE_live);
+			else
+				try(snapshot_undelete_owns_data(trans, u));
 			s = u->v;
 		}
 	}
