@@ -1414,6 +1414,23 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 }
 
 /*
+ * A refusal means "repair first, then retry", not failure: the check that
+ * refused has scheduled the passes that fix what it found, and deletion is
+ * rescheduled the next time a dying snapshot is seen (bch2_mark_snapshot,
+ * bch2_check_snapshot_needs_deletion). Nothing has been done, so there is
+ * nothing wrong with the filesystem that going read-only would protect.
+ *
+ * These run as recovery passes, and bch2_run_recovery_passes() returns the
+ * first pass error it sees - which at startup fails the mount. So the refusals
+ * stop here.
+ */
+static bool snapshot_delete_refused(int ret)
+{
+	return ret == -BCH_ERR_EINVAL_snapshot_delete_with_data ||
+	       ret == -BCH_ERR_EINVAL_snapshot_delete_bad_topology;
+}
+
+/*
  * Serialization is recovery.run_lock, asserted below: the delete_dead_snapshots
  * pass .fn runs under it (the framework holds run_lock while running passes),
  * and the sysfs force-trigger takes it explicitly. So no separate lock is
@@ -1429,6 +1446,8 @@ int __bch2_delete_dead_snapshots(struct bch_fs *c)
 	d->progress.pos = BBPOS_MIN;
 
 	int ret = delete_dead_snapshots_locked(c);
+	if (snapshot_delete_refused(ret))
+		ret = 0;
 
 	scoped_guard(mutex, &d->progress_lock) {
 		darray_exit(&d->deleting_from_trees);
@@ -1484,11 +1503,8 @@ static int bch2_get_dead_interior_snapshots(struct btree_trans *trans, struct bk
 	return 0;
 }
 
-int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
+static int delete_dead_interior_snapshots(struct bch_fs *c)
 {
-	if (!c->opts.auto_snapshot_deletion)
-		return 0;
-
 	CLASS(btree_trans, trans)(c);
 	CLASS(interior_delete_list, delete)();
 
@@ -1550,6 +1566,15 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 	}
 
 	return 0;
+}
+
+int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
+{
+	if (!c->opts.auto_snapshot_deletion)
+		return 0;
+
+	int ret = delete_dead_interior_snapshots(c);
+	return snapshot_delete_refused(ret) ? 0 : ret;
 }
 
 static bool interior_snapshot_needs_delete(const struct bch_snapshot *s)
