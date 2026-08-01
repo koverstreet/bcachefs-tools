@@ -1067,8 +1067,18 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
             unsafe { c::bch2_fs_exit(fs_raw) };
             anyhow::bail!("Error starting filesystem: {}", e);
         }
-        let bcachefs_fs = BcachefsFs { c: fs_raw, signal_fd: None, destroyed: Arc::new(AtomicBool::new(false)) };
-        fuser::mount2(bcachefs_fs, &cli.mountpoint, &config)?;
+        let destroyed = Arc::new(AtomicBool::new(false));
+        let bcachefs_fs = BcachefsFs {
+            c: fs_raw,
+            signal_fd: None,
+            destroyed: Arc::clone(&destroyed),
+        };
+        if let Err(e) = fuser::mount2(bcachefs_fs, &cli.mountpoint, &config) {
+            if !destroyed.load(Ordering::SeqCst) {
+                unsafe { c::bch2_fs_exit(fs_raw) };
+            }
+            anyhow::bail!("Error mounting filesystem: {}", e);
+        }
         return Ok(());
     }
 
