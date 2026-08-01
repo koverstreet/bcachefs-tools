@@ -64,9 +64,6 @@
 	x(EIO,				blockdev_io_error)			\
 	BLK_ERRS()								\
 	x(BCH_ERR_blockdev_io_error,	BLK_STS_UNKNOWN)			\
-	x(EIO,				zstd_error)				\
-	ZSTD_ERRS()								\
-	x(BCH_ERR_zstd_error,		ZSTD_error_unknown)			\
 	x(ERANGE,			ERANGE_option_too_small)		\
 	x(ERANGE,			ERANGE_option_too_big)			\
 	x(ERANGE,			projid_too_big)				\
@@ -549,6 +546,9 @@
 	x(BCH_ERR_decompress,		decompress_gzip_size_mismatch)		\
 	x(BCH_ERR_decompress,		decompress_zstd_src_len_bad)		\
 	x(BCH_ERR_decompress,		decompress_zstd_size_mismatch)		\
+	x(BCH_ERR_decompress,		zstd_error)				\
+	ZSTD_ERRS()								\
+	x(BCH_ERR_zstd_error,		ZSTD_error_unknown)			\
 	x(EIO,				data_write)				\
 	x(BCH_ERR_data_write,		data_write_io)				\
 	x(BCH_ERR_data_write,		data_write_csum)			\
