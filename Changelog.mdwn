@@ -1,5 +1,182 @@
 # Changelog
 
+## v1.39.0 - Mon Aug 3 2026
+
+Feature release on top of v1.38.8, with an on-disk format change:
+bcachefs_metadata_version_per_dev_fragmentation_lru
+
+Major changes:
+
+- Per-device fragmentation LRUs
+- Failure domains
+- File level damage tracking
+- bcachefs kvdb
+- Snapshot hardening
+
+### Features
+
+#### Per-device bucket fragmentation LRUs
+
+The fragmentation LRU, used by copygc, is now per device instead of filesystem
+wide. This solves long standing contention issues between reconcile and copygc,
+particularly with tiered setups.
+
+#### Failure domains
+
+Devices can be tagged with a failure domain — a shelf, a chassis, a rack,
+whatever the thing is that fails together — and replicas are spread across
+domains rather than merely across devices. This covers data allocation, journal
+replicas, and erasure-coded stripe blocks, which now require distinct domains.
+Set it with the new `failure_domain` per-device option; `bcachefs fs
+failure-domains` shows the layout.
+
+Note that failure domains are only a hard constraint for erasure coding; normal
+replicated allocations will reuse a failure domain if necessary to meet replicas
+requirements; erasure coding will shorten stripes to the number of failure
+domains available.
+
+#### Damage tracking
+
+What was lost is now recorded persistently, in a new btree, instead of being
+printed once during fsck and thereafter recoverable only from logs. fsck records
+inode-scoped damage keyed by `bch_sb_error_id`, and data lost to device
+force-removal and to read errors is recorded the same way.
+
+`bcachefs damage` shows what's recorded; the list can also be walked from
+userspace through the new readdir/damage ioctls, and is exposed in debugfs. fsck
+summarizes damaged paths at the end of recovery, resolving them through surviving
+snapshot versions and naming the parent directory for inodes whose own dirent is
+gone.
+
+#### bcachefs kvdb
+
+A new REPL for reading and editing btree keys and the superblock directly — the
+tool most of this release's repair work was built and debugged with. It has
+readline, tab completion for commands and btree names, and ^C interrupts the
+running command. Read-only norecovery open is the default, with `--rw` to edit,
+`--nostart` for superblock-only access, and `--journal` for `list_journal`.
+
+Reads and writes go down to individual fields: `get`/`peek` take trailing field
+paths, and vartail fields, named bitmask fields and enum value names for state
+fields all work. There's a session snapshot context, overridable per-command with
+an explicit `:snapshot` in a pos. Underneath it is new runtime type information
+for the C structs (`#[derive(TypeInfo)]`).
+
+#### Snapshot hardening
+
+Snapshot deletion is the most destructive thing the filesystem does, and what
+licenses it is metadata. That used to be a flag bit: one flipped bit, a torn
+deletion or a half-finished repair could make a live snapshot look deletable.
+
+Three things now have to agree before anything is deleted. The state fields are
+enums whose values are at least 14 bits apart rather than bitflags, so no single
+bit flip can turn one valid state into another. Deletion is no longer triggered
+by the snapshot node alone: the snapshots and subvolumes btrees are independent
+records of the same fact and both have to agree. And per-snapshot key counts let
+deletion verify it actually moved everything, refusing and scheduling repair if
+not. Deletion also no longer destroys information, and damage found at runtime
+defers to repair instead of BUG_ON.
+
+There's a lot of new repair code for damaged snapshot trees that would previously
+have been refused, and it's tested by injection: `bcachefs kvdb` writes specific
+corruptions into the btree, and the new `snapshot-inject` suite — 68 cases —
+asserts that fsck detects the error, repairs it, converges, and the data
+survives.
+
+Credit to ZorbaTHut (Ben Wilson), who reported this and worked with us
+extensively, providing metadata dumps and tests; several people jumped in on
+this one.
+
+#### Performance
+
+ACL and per-inode-option lookups are skipped entirely when the inode has none,
+via the new `has_access_acl`, `has_default_acl` and `has_inode_opts` flags.
+Bucket allocation can be targeted. Erasure coding allocates stripe blocks near
+the stripe's centroid and reallocates outliers.
+
+#### Portability
+
+PREEMPT_RT: new `mutex_noio` and `percpu_rwsem_noio`, with `sb_lock`,
+`mark_lock`, the btree cache lock and the journal buf lock converted; `GFP_NOFS`
+replaced with `GFP_NOIO`; data writes set `PF_MEMALLOC_NOIO`; `time_stats` uses
+`local_lock`. 32-bit builds get `__aeabi_uldivmod`/`__aeabi_ldivmod` stubs for
+ARM modules, 64-bit divisions via `div64_u64`, and a `mul_u64_u64_div_u64` fix
+(#795). Also builds on `CONFIG_SCHED_ALT` (BMQ/PDS) kernels, with `WQ_PERCPU`
+compat for kernels older than 6.17 and slab realloc compat for older than 6.18.
+
+#### Tools
+
+Offline `set-fs-option` and `set-state` actually write the superblock now.
+`bcachefs list` works on mounted filesystems, `dump --single-replica` produces
+de-replicated metadata dumps, and `kill_btree_node --error` can inject a csum
+error type.
+
+### Behaviour changes
+
+**Reverted from v1.38.7:** multi-device filesystems no longer show the filesystem
+UUID as the mount source.
+
+A subvolume can now be deleted by rename-overwrite of its root, and `bcachefs
+subvolume snapshot` takes `--rw`. Devices with durability=0 are excluded from
+normal allocation logic, which changes placement on cache and tiering setups.
+
+Commit-time validation of snapshot and subvolume state invariants is now on: a
+buggy writer is caught in the act with a backtrace instead of leaving the mess
+for fsck. It can be turned off with `no_commit_validate`.
+
+New `btree_cache_shrinker_seeks` option (runtime, default 2) controls how readily
+the shrinker reclaims btree nodes relative to other caches; `ratelimit_errors` is
+now runtime-settable too. The unclean-shutdown journal sequence skip was widened
+from 64 to 4096, the passphrase prompt is usable on raw early-boot consoles, and
+`format` rejects `--version` together with `--source`.
+
+### New ioctls
+
+`BCH_IOCTL_QUERY_BTREE_KEYS` queries btree keys directly, with
+slots/prev/all_snapshots/nofilter_whiteouts flags; it's what backs `bcachefs
+kvdb` and `bcachefs list` on a mounted filesystem. `BCHFS_IOC_GET_DAMAGE`,
+`BCHFS_IOC_CLEAR_DAMAGE` and `BCHFS_IOC_READDIR_FLAGS` (with a recursive damaged
+mode) expose the damage btree. Also `BCH_IOCTL_SNAPSHOT_TREE_v2`.
+
+### Bug fixes
+
+Two buffered read bugs could return wrong data. A read that took an internal
+retry could resume with a stale `bi_iter`, and separately a stale
+`BCH_READ_last_fragment` could persist across retries — in both cases the read
+completed successfully with the wrong bytes, silently. Reported by jrt37, with
+an exceptional analysis pinning both.
+
+Extent merging could corrupt compressed data: extents compressed in different
+blobs were merged as though they were compatible. Reported by KatalinSB, who hit
+it as akonadi database corruption under zstd. Relatedly, checksum type changes on
+compressed extents and MAC width changes on encrypted extents were both mishandled
+— reported by Zorba, with ktest reproducers for each.
+
+Inode numbers were truncated to 32 bits in the VFS layer, so filesystems that had
+allocated past 2^32 could return the wrong inode to userspace; readdir dirent
+translation had a matching bug on 32-bit.
+
+fsck: a `-ENOMEM` in `check_dirents` and unbounded transaction memory in the
+`check_dirents`, `check_xattr` and `insert_snapshot_whiteouts` repair loops could
+each stop a repair partway. `bch2_reattach_inode()` is now resumable under
+partial commits, so a large orphan chain doesn't lose progress when a commit
+splits. Also a null deref in `reconstruct_inode()` on an extent-less inum, and
+`bch2_check_key_has_inode()` on inodes with only error keys — reported by
+sickness, after a power outage took out both his replicas.
+
+Elsewhere: deleting compressed snapshot extents could NULL-deref on a missing
+disk reservation (reported by pio2398); a cross-snapshot `str_hash` duplicate
+could BUG_ON; emergency read-only could remove a device that still had journal on
+it; and a 34-device array on an 8GB box could OOM partway through fsck from
+undeduplicated async btree ops (reported by Zorba).
+
+### Documentation
+
+New Principles of Operation sections: safety mechanisms, snapshots and snapshot
+deletion, failure domains, and how `ec_max_data_blocks` and failure domains bound
+stripe width (that last after doot asked on IRC). `bcachefs kvdb` documentation
+is shared between `--help` and the PoO.
+
 ## v1.38.8 - Fri Jul 3 2026
 
 - Fix dpkg builds.
