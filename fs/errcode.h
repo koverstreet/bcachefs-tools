@@ -541,6 +541,7 @@
 	x(EIO,				recompute_checksum)			\
 	x(BCH_ERR_data_read_retry_avoid,decompress)				\
 	x(BCH_ERR_decompress,		decompress_exceeded_max_encoded_extent)	\
+	x(BCH_ERR_decompress,		decompress_lz4_old)			\
 	x(BCH_ERR_decompress,		decompress_lz4)				\
 	x(BCH_ERR_decompress,		decompress_gzip)			\
 	x(BCH_ERR_decompress,		decompress_gzip_size_mismatch)		\

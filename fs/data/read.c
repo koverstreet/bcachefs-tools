@@ -821,6 +821,8 @@ static void bch2_rbio_retry(struct work_struct *work)
 			 * layer: errcode also holds our own verdicts (device
 			 * offline, stale pointer, decompress error), and those
 			 * aren't block statuses to be counted as unknown ones.
+			 * Decompression failures are counted where they happen,
+			 * in bch2_bio_uncompress().
 			 */
 			darray_for_each(failed, f) {
 				if (bch2_err_matches(f->errcode, BCH_ERR_blockdev_io_error))
@@ -829,9 +831,20 @@ static void bch2_rbio_retry(struct work_struct *work)
 					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->ec_errcode));
 			}
 
+			/*
+			 * Damage names the reason where we have one: a file
+			 * whose extents won't decompress is a different repair
+			 * problem from one with bad checksums, and which
+			 * compression type failed is the first thing we'd ask.
+			 */
+			enum bch_sb_error_id damage =
+				bch2_err_matches(ret, BCH_ERR_decompress)
+				? bch2_decompress_sb_err(ret)
+				: e;
+
 			if (!rbio->data_update && inum.subvol && !bkey_deleted(&sk.k->k))
 				commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-					  bch2_damage_record(trans, read_pos, e));
+					  bch2_damage_record(trans, read_pos, damage));
 		}
 
 		/* drop trans before calling rbio_done() */

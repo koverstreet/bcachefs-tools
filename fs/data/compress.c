@@ -36,6 +36,7 @@
 #include "data/extents.h"
 #include "data/write.h"
 
+#include "sb/errors.h"
 #include "sb/io.h"
 
 #include "init/error.h"
@@ -274,7 +275,9 @@ static int buf_uncompress(struct bch_fs *c,
 	case BCH_COMPRESSION_TYPE_lz4: {
 		int ret = LZ4_decompress_safe_partial(src, dst, src_len, dst_len, dst_len);
 		if (ret != dst_len)
-			return bch_err_throw(c, decompress_lz4);
+			return crc.compression_type == BCH_COMPRESSION_TYPE_lz4_old
+				? bch_err_throw(c, decompress_lz4_old)
+				: bch_err_throw(c, decompress_lz4);
 		break;
 	}
 	case BCH_COMPRESSION_TYPE_gzip: {
@@ -332,6 +335,24 @@ static int buf_uncompress(struct bch_fs *c,
 	return 0;
 }
 
+/*
+ * Every failed decompression attempt gets counted, from the read path and
+ * from the write path both - the move path decompresses when it can't
+ * write the extent through as-is, and that's where a filesystem full of
+ * unmovable compressed extents shows itself. Which compression type
+ * failed, and for zstd why, is the first thing such a report has to
+ * answer.
+ *
+ * Not under no_data_io, where decompressing whatever was in the buffer is
+ * expected to fail and says nothing about the filesystem.
+ */
+static int decompress_err(struct bch_fs *c, int ret)
+{
+	if (ret && !c->opts.no_data_io)
+		bch2_sb_error_count(c, bch2_decompress_sb_err(ret));
+	return ret;
+}
+
 int bch2_bio_uncompress_inplace(struct bch_write_op *op,
 				struct bio *bio)
 {
@@ -348,7 +369,7 @@ int bch2_bio_uncompress_inplace(struct bch_write_op *op,
 		bch2_write_op_error(op, false, op->pos.offset,
 				    "extent too big to decompress (%u > %u)",
 				    crc->uncompressed_size << 9, c->opts.encoded_extent_max);
-		return bch_err_throw(c, decompress_exceeded_max_encoded_extent);
+		return decompress_err(c, bch_err_throw(c, decompress_exceeded_max_encoded_extent));
 	}
 
 	struct bbuf dst_buf __cleanup(bbuf_exit) = __bounce_alloc(c, dst_len, WRITE);
@@ -359,7 +380,7 @@ int bch2_bio_uncompress_inplace(struct bch_write_op *op,
 		ret = 0;
 	if (ret) {
 		bch2_write_op_error(op, false, op->pos.offset, "%s", bch2_err_str(ret));
-		return ret;
+		return decompress_err(c, ret);
 	}
 
 	/*
@@ -390,14 +411,14 @@ int bch2_bio_uncompress(struct bch_fs *c, struct bio *src,
 
 	if (crc.uncompressed_size << 9	> c->opts.encoded_extent_max ||
 	    crc.compressed_size << 9	> c->opts.encoded_extent_max)
-		return bch_err_throw(c, decompress_exceeded_max_encoded_extent);
+		return decompress_err(c, bch_err_throw(c, decompress_exceeded_max_encoded_extent));
 
 	struct bbuf dst_buf __cleanup(bbuf_exit) = dst_len == dst_iter.bi_size
 		? __bio_map_or_bounce(c, dst, dst_iter, WRITE)
 		: __bounce_alloc(c, dst_len, WRITE);
 	struct bbuf src_buf __cleanup(bbuf_exit) = bio_map_or_bounce(c, src, READ);
 
-	try(buf_uncompress(c, dst_buf.b, src_buf.b, crc));
+	try(decompress_err(c, buf_uncompress(c, dst_buf.b, src_buf.b, crc)));
 
 	if (dst_buf.type != BB_none &&
 	    dst_buf.type != BB_vmap)

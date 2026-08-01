@@ -49,6 +49,43 @@ void bch2_sb_error_count(struct bch_fs *, enum bch_sb_error_id);
 
 enum bch_sb_error_id bch2_blk_sts_sb_err(int);
 
+/*
+ * Decompression failures we count separately: an extent that won't
+ * decompress is a different animal from one that won't read or won't
+ * checksum - as far as the checksum can tell the data came off the device
+ * intact, and then didn't decode. Counting per compression type answers
+ * the first question such a report raises, which is whether one algorithm
+ * is at fault or all of them are.
+ *
+ * The zstd codes separate that further: corruption_detected and
+ * checksum_wrong say the compressed data is bad, dst_size_too_small and
+ * memory_allocation say we drove zstd wrong or couldn't allocate.
+ *
+ * Curated by hand for the same reason as the block statuses above - sb
+ * error ids are permanent on-disk numbers. zstd defines 27 error codes,
+ * most of which zstd_decompress_dctx() can't return for the single raw
+ * frame we hand it; those count as data_decompress_err_zstd_unknown, and
+ * anything not a decompress errcode at all as data_decompress_err_unknown.
+ * To promote one, add it here and add a numbered entry in
+ * errors_format.h - the build breaks if you forget.
+ */
+#define BCH_DECOMPRESS_SB_ERRS()						\
+	x(decompress_exceeded_max_encoded_extent, exceeded_max_encoded_extent)	\
+	x(decompress_lz4_old,			lz4_old)			\
+	x(decompress_lz4,			lz4)				\
+	x(decompress_gzip,			gzip)				\
+	x(decompress_gzip_size_mismatch,	gzip_size_mismatch)		\
+	x(decompress_zstd_src_len_bad,		zstd_src_len_bad)		\
+	x(decompress_zstd_size_mismatch,	zstd_size_mismatch)		\
+	x(ZSTD_error_corruption_detected,	zstd_corruption_detected)	\
+	x(ZSTD_error_checksum_wrong,		zstd_checksum_wrong)		\
+	x(ZSTD_error_prefix_unknown,		zstd_prefix_unknown)		\
+	x(ZSTD_error_srcSize_wrong,		zstd_src_size_wrong)		\
+	x(ZSTD_error_dstSize_tooSmall,		zstd_dst_size_too_small)	\
+	x(ZSTD_error_memory_allocation,		zstd_memory_allocation)
+
+enum bch_sb_error_id bch2_decompress_sb_err(int);
+
 void bch2_sb_errors_from_cpu(struct bch_fs *);
 int bch2_sb_errors_to_cpu(struct bch_fs *);
 

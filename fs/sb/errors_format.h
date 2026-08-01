@@ -422,7 +422,22 @@ enum bch_fsck_flags {
 	x(blk_sts_inval,					408,	0)		\
 	x(blk_sts_removed,					409,	0)		\
 	x(blk_sts_unknown,					410,	0)		\
-	x(MAX,							411,	0)
+	x(data_decompress_err_exceeded_max_encoded_extent,	411,	0)		\
+	x(data_decompress_err_lz4_old,				412,	0)		\
+	x(data_decompress_err_lz4,				413,	0)		\
+	x(data_decompress_err_gzip,				414,	0)		\
+	x(data_decompress_err_gzip_size_mismatch,		415,	0)		\
+	x(data_decompress_err_zstd_src_len_bad,			416,	0)		\
+	x(data_decompress_err_zstd_size_mismatch,		417,	0)		\
+	x(data_decompress_err_zstd_corruption_detected,		418,	0)		\
+	x(data_decompress_err_zstd_checksum_wrong,		419,	0)		\
+	x(data_decompress_err_zstd_prefix_unknown,		420,	0)		\
+	x(data_decompress_err_zstd_src_size_wrong,		421,	0)		\
+	x(data_decompress_err_zstd_dst_size_too_small,		422,	0)		\
+	x(data_decompress_err_zstd_memory_allocation,		423,	0)		\
+	x(data_decompress_err_zstd_unknown,			424,	0)		\
+	x(data_decompress_err_unknown,				425,	0)		\
+	x(MAX,							426,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
