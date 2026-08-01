@@ -447,7 +447,8 @@ $(obj)/rust/bcachefs.rs: $(obj)/codegen $(obj)/rust/generic-radix-tree.h $(bcach
 # with no prior prototype (bindgen doesn't emit C declarations for them), so
 # silence -Wmissing-prototypes for just this generated object.
 $(obj)/rust/extern.c: $(obj)/rust/bcachefs.rs ;
-CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations
+CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations \
+			-Wno-duplicate-decl-specifier
 
 # Kernel trees < 6.18 pass -Zno-jump-tables in KBUILD_RUSTFLAGS, written for
 # their era's pinned rustc; ours has it stabilized as -Cjump-tables=n. Rewrite
