@@ -1095,6 +1095,13 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     drop(read_fd);
     rustix::process::setsid()?;
 
+    // The daemon needs its own http server: only the calling thread survives
+    // fork(), so the parent's is gone. This is the call that used to happen
+    // from a pthread_atfork child handler -- which also fired in the child of
+    // every other fork, including the one that execs fusermount3, where
+    // binding a socket and spawning threads is not allowed.
+    crate::http::bch2_start_http_lazy();
+
     // Daemon mode must not inherit the caller's stderr or grow a fixed log
     // file under /tmp; foreground mode still leaves debug output visible.
     if let Ok(f) = std::fs::File::create("/dev/null") {
