@@ -85,17 +85,34 @@ fn set_option_online(
             continue;
         }
 
+        // The online path can only write sysfs, and the kernel creates an
+        // option's attribute 0444 unless it is OPT_RUNTIME (fs/opts.c:
+        // `.attr.mode = (_flags) & OPT_RUNTIME ? 0644 : 0444`). So a
+        // non-runtime option has a file that cannot be opened for writing,
+        // and testing OPT_FS|OPT_DEVICE above lets it through to fail.
+        // Many such options *can* be set with the filesystem unmounted, so
+        // say that rather than just refusing.
+        if flags & c::opt_flags::OPT_RUNTIME as u32 == 0 {
+            eprintln!("{name} cannot be set while the filesystem is mounted \
+                       (unmount and set it offline)");
+            continue;
+        }
+
         let is_fs_opt = flags & c::opt_flags::OPT_FS as u32 != 0;
         let is_device_opt = flags & c::opt_flags::OPT_DEVICE as u32 != 0;
 
         if is_fs_opt && !is_device_opt {
-            sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value);
+            if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value) {
+                eprintln!("Error setting {name}: {e}");
+            }
         }
 
         if is_device_opt {
             if !dev_idxs.is_empty() {
                 for dev_idx in dev_idxs {
-                    sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value);
+                    if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value) {
+                        eprintln!("Error setting {name} on device {dev_idx}: {e}");
+                    }
                 }
                 continue;
             }
@@ -108,7 +125,9 @@ fn set_option_online(
                     continue;
                 }
 
-                sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value);
+                if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value) {
+                    eprintln!("Error setting {name} on device {dev_idx}: {e}");
+                }
             }
         }
     }
