@@ -627,6 +627,17 @@ int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id)
 }
 
 /*
+ * Can we relink to this node? Only a deleted node has been spliced out of the
+ * tree. no_keys is an emptied interior - kept in the tree until the next
+ * remount precisely so ancestry still resolves - and carries child pointers
+ * like any other node, so it is a perfectly ordinary neighbour to attach to.
+ */
+static bool snapshot_in_tree(const struct bch_snapshot *s)
+{
+	return bch2_snapshot_state_compat(s) != SNAPSHOT_STATE_deleted;
+}
+
+/*
  * Reinsert an undeleted node into the live tree: the inverse of the splice in
  * bch2_snapshot_node_delete(). The tombstone retained its pointers as history:
  * if the parent's child slot (or the snapshot_tree root, for a deleted root)
@@ -677,9 +688,8 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 		if (ret)
 			return ret;
 
-		if (bch2_snapshot_state_compat(&parent->v) != SNAPSHOT_STATE_live &&
-		    bch2_snapshot_state_compat(&parent->v) != SNAPSHOT_STATE_will_delete) {
-			prt_printf(&msg.m, "cannot undelete: parent not live");
+		if (!snapshot_in_tree(&parent->v)) {
+			prt_printf(&msg.m, "cannot undelete: parent is itself deleted");
 			return bch_err_throw(c, fsck_repair_unimplemented);
 		}
 
@@ -713,9 +723,8 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 	bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&child->k_i));
 	prt_newline(&msg.m);
 
-	if (bch2_snapshot_state_compat(&child->v) != SNAPSHOT_STATE_live &&
-	    bch2_snapshot_state_compat(&child->v) != SNAPSHOT_STATE_will_delete) {
-		prt_printf(&msg.m, "cannot undelete: child not live");
+	if (!snapshot_in_tree(&child->v)) {
+		prt_printf(&msg.m, "cannot undelete: child is itself deleted");
 		return bch_err_throw(c, fsck_repair_unimplemented);
 	}
 
@@ -744,9 +753,8 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&parent->k_i));
 		prt_newline(&msg.m);
 
-		if (bch2_snapshot_state_compat(&parent->v) != SNAPSHOT_STATE_live &&
-		    bch2_snapshot_state_compat(&parent->v) != SNAPSHOT_STATE_will_delete) {
-			prt_printf(&msg.m, "cannot undelete: parent not live");
+		if (!snapshot_in_tree(&parent->v)) {
+			prt_printf(&msg.m, "cannot undelete: parent is itself deleted");
 			return bch_err_throw(c, fsck_repair_unimplemented);
 		}
 
