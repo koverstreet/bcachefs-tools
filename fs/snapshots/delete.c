@@ -264,12 +264,10 @@ static int schedule_content_passes(struct bch_fs *c, struct printbuf *msg, u64 b
 	return ret;
 }
 
-static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
-					    struct bkey_i_snapshot *s,
+static int bch2_snapshot_node_check_no_data(struct btree_trans *trans, u32 id,
 					    const char *op)
 {
 	struct bch_fs *c = trans->c;
-	u32 id = s->k.p.offset;
 
 	CLASS(printbuf, buf)();
 	u64 total_keys, total_sectors, btrees_with_keys = 0;
@@ -279,6 +277,13 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
 
 	if (likely(!total_keys && !total_sectors))
 		return 0;
+
+	/* Only the refusal below needs the node itself: */
+	struct bkey_i_snapshot s;
+	int ret = bch2_snapshot_lookup_key(trans, id, &s);
+	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOENT), c, "missing snapshot %u", id);
+	if (ret)
+		return ret;
 
 	/*
 	 * Whether an interior has a single live child is what the deletion
@@ -291,14 +296,14 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
 	u32 live_child = interior_delete_has_id(&d->delete_interior, id) ?:
 			 interior_delete_has_id(&d->no_keys, id);
 
-	const char *shape = !s->v.children[0]
+	const char *shape = !s.v.children[0]
 		? "leaf"
 		: (live_child ? "redundant interior" : "interior");
 
 	CLASS(printbuf, msg)();
 	prt_printf(&msg, "%s snapshot node %u (%s) still has %llu keys / %llu sectors accounted to it - refusing, to prevent data loss; scheduling repair:%s\n  ",
 		   op, id, shape, total_keys, total_sectors, buf.buf);
-	bch2_bkey_val_to_text(&msg, c, bkey_i_to_s_c(&s->k_i));
+	bch2_bkey_val_to_text(&msg, c, bkey_i_to_s_c(&s.k_i));
 	prt_newline(&msg);
 
 	/*
@@ -308,7 +313,7 @@ static int bch2_snapshot_node_check_no_data(struct btree_trans *trans,
 	 * it left the refusal firing forever. Plus check_allocations, since
 	 * here the count itself may be what's wrong:
 	 */
-	int ret = bch2_run_explicit_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_allocations, 0);
+	ret = bch2_run_explicit_recovery_pass(c, &msg, BCH_RECOVERY_PASS_check_allocations, 0);
 
 	ret = schedule_content_passes(c, &msg, btrees_with_keys) ?: ret;
 
@@ -414,19 +419,17 @@ static int dying_snapshots_content_btrees(struct bch_fs *c,
 
 static int bch2_snapshot_node_set_no_keys(struct btree_trans *trans, u32 id)
 {
-	struct bkey_i_snapshot s;
-	int ret = bch2_snapshot_lookup_key(trans, id, &s);
+	/* Before the get_mut below queues anything - see bch2_snapshot_node_check_deletable() */
+	try(bch2_snapshot_node_check_no_data(trans, id, "set_no_keys"));
+
+	struct bkey_i_snapshot *s =
+		bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots, POS(0, id), 0, snapshot);
+	int ret = PTR_ERR_OR_ZERO(s);
 	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOENT), trans->c, "missing snapshot %u", id);
 	if (unlikely(ret))
 		return ret;
 
-	/* Read only, and before the get_mut below - see bch2_snapshot_node_check_deletable() */
-	try(bch2_snapshot_node_check_no_data(trans, &s, "set_no_keys"));
-
-	struct bkey_i_snapshot *mut = errptr_try(bch2_bkey_get_mut_typed(trans,
-				BTREE_ID_snapshots, POS(0, id), 0, snapshot));
-
-	bch2_snapshot_state_set(&mut->v, SNAPSHOT_STATE_no_keys);
+	bch2_snapshot_state_set(&s->v, SNAPSHOT_STATE_no_keys);
 	return 0;
 }
 
@@ -461,15 +464,15 @@ static int bch2_snapshot_node_check_deletable(struct btree_trans *trans, u32 id,
 {
 	struct bch_fs *c = trans->c;
 
+	try(bch2_snapshot_node_check_no_data(trans, id,
+			delete_interior ? "interior delete" : "leaf delete"));
+
 	struct bkey_i_snapshot s;
 	int ret = bch2_snapshot_lookup_key(trans, id, &s);
 	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOENT), c,
 				"missing snapshot %u", id);
 	if (ret)
 		return ret;
-
-	try(bch2_snapshot_node_check_no_data(trans, &s,
-			delete_interior ? "interior delete" : "leaf delete"));
 
 	if (bch2_trans_inconsistent_on(bch2_snapshot_state(&s.v) == SNAPSHOT_STATE_deleted, trans,
 			"deleting snapshot node %u: already in state deleted", id))
@@ -515,11 +518,14 @@ static int bch2_snapshot_node_check_deletable(struct btree_trans *trans, u32 id,
 	return 0;
 }
 
-int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id, bool delete_interior)
+/*
+ * Callers are responsible for bch2_snapshot_node_check_deletable() first: from
+ * here on we only fail on errors that take the whole thing down, never on a
+ * refusal.
+ */
+int bch2_snapshot_node_delete(struct btree_trans *trans, u32 id)
 {
 	struct bch_fs *c = trans->c;
-
-	try(bch2_snapshot_node_check_deletable(trans, id, delete_interior));
 
 	struct bkey_i_snapshot *s =
 		bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots, POS(0, id), 0, snapshot);
@@ -1378,24 +1384,31 @@ static int delete_dead_snapshots_locked(struct bch_fs *c)
 	    ? delete_dead_snapshot_keys_v2(trans)
 	    : delete_dead_snapshot_keys_v1(trans));
 
-	darray_for_each(d->delete_leaves, i) {
-		int ret = commit_do(trans, NULL, NULL, 0,
-			bch2_snapshot_node_delete(trans, *i, false));
-		/* Refused - repair scheduled; other nodes are unaffected: */
-		if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
-			continue;
-		if (ret)
-			return ret;
-	}
+	/*
+	 * Refusals first, and a refusal stops the whole deletion: nodes go one
+	 * commit at a time, so refusing partway leaves the ones already deleted
+	 * describing a tree shape the rest of the deletion no longer produces.
+	 * The refusal schedules its own repair - deletion runs again after it.
+	 *
+	 * This can't precede the migration above: what the check reads is
+	 * whether the keys that were supposed to move actually did.
+	 */
+	darray_for_each(d->delete_leaves, i)
+		try(lockrestart_do(trans,
+			bch2_snapshot_node_check_no_data(trans, *i, "leaf delete")));
 
-	darray_for_each(d->delete_interior, i) {
-		int ret = commit_do(trans, NULL, NULL, 0,
-			bch2_snapshot_node_set_no_keys(trans, i->id));
-		if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
-			continue;
-		if (ret)
-			return ret;
-	}
+	darray_for_each(d->delete_interior, i)
+		try(lockrestart_do(trans,
+			bch2_snapshot_node_check_no_data(trans, i->id, "set_no_keys")));
+
+	darray_for_each(d->delete_leaves, i)
+		try(commit_do(trans, NULL, NULL, 0,
+			bch2_snapshot_node_check_deletable(trans, *i, false) ?:
+			bch2_snapshot_node_delete(trans, *i)));
+
+	darray_for_each(d->delete_interior, i)
+		try(commit_do(trans, NULL, NULL, 0,
+			bch2_snapshot_node_set_no_keys(trans, i->id)));
 
 	return 0;
 }
@@ -1506,6 +1519,17 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 
 	if (delete.nr) {
 		/*
+		 * Refusals first: the fixup below commits every surviving child's
+		 * new depth and skip[] for the tree shape these deletions produce,
+		 * so a node refused after it leaves the children describing a
+		 * deletion that never happened - skip[] pointing above parent,
+		 * which validation rejects on the next write.
+		 */
+		darray_for_each(delete, i)
+			try(lockrestart_do(trans,
+				bch2_snapshot_node_check_deletable(trans, i->id, true)));
+
+		/*
 		 * Fixing children of deleted snapshots can't be done completely
 		 * atomically, if we crash between here and when we delete the interior
 		 * nodes some depth fields will be off:
@@ -1517,9 +1541,7 @@ int bch2_delete_dead_interior_snapshots(struct bch_fs *c)
 
 		darray_for_each(delete, i) {
 			int ret = commit_do(trans, NULL, NULL, 0,
-				bch2_snapshot_node_delete(trans, i->id, true));
-			if (ret == -BCH_ERR_EINVAL_snapshot_delete_with_data)
-				continue;
+				bch2_snapshot_node_delete(trans, i->id));
 			if (!bch2_err_matches(ret, EROFS))
 				bch_err_msg(c, ret, "deleting snapshot %u", i->id);
 			if (ret)
