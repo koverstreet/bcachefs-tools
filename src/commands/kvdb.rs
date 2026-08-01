@@ -16,8 +16,9 @@
 //! can pipe a script in.
 //!
 //! The default open is norecovery (read-only, no replay, no repair passes) -
-//! inspection must not disturb the state under inspection; --rw opts into
-//! full recovery for editing sessions.
+//! inspection must not disturb the state under inspection. --rw opts into
+//! journal replay and writes, and stops there: repair passes must not run
+//! either, or they rewrite the state an editing session opened rw to build.
 //!
 //! Visibility: without a snapshot context, reads are raw
 //! (BTREE_ITER_all_snapshots - positions taken literally). With a context,
@@ -86,8 +87,11 @@ the default is guaranteed not to write. The journal is still read and
 overlaid on btree reads, so listings show current state, but it is never
 replayed and no repair passes run.
 
-- `--rw`: full recovery - journal replay, repair passes scheduled in the
-  superblock, version upgrades - and writes enabled. Required for
+- `--rw`: journal replay and writes enabled - recovery stops there, at
+  going read-write. Repair passes are not run: they would rewrite the
+  state you opened rw to construct, before your first command. Whatever
+  the superblock requires stays recorded and runs at the next real mount.
+  Version upgrades still happen; see the traps below. Required for
   update/set/sb set.
 - `--journal`: retain the entire journal in memory for `list_journal`;
   costs memory proportional to journal size.
@@ -1277,6 +1281,17 @@ fn kvdb(cli: Cli) -> Result<()> {
     // rewrite - the state under inspection; rw is opt-in.
     if !cli.rw {
         opt_set!(fs_opts, norecovery, 1);
+    } else {
+        // Go read-write, and stop there. Everything through journal_replay is
+        // what makes the filesystem writable and consistent to write to -
+        // bch2_fs_read_write() refuses to go rw with recovery_pass_last below
+        // it. Everything after is repair, and repair is the one thing an
+        // injection must not have: the passes run at open, before the first
+        // command, so they rewrite the state we were about to construct. (A
+        // snapshot deletion that consumed the very node a test had staged is
+        // what prompted this.) Whatever the superblock still requires stays
+        // recorded and runs at the next real mount.
+        opt_set!(fs_opts, recovery_pass_last, c::bch_recovery_pass::BCH_RECOVERY_PASS_journal_replay as u8);
     }
     if cli.journal {
         opt_set!(fs_opts, retain_recovery_info, 1);
