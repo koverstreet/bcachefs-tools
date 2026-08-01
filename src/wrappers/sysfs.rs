@@ -100,11 +100,20 @@ pub fn bcachefs_kernel_version() -> u64 {
 }
 
 /// Write a string value to a sysfs attribute file relative to a directory fd.
-pub fn sysfs_write_str(sysfs_fd: BorrowedFd<'_>, path: &str, value: &str) {
+///
+/// Both failures are returned rather than discarded: a non-runtime option's
+/// attribute is created 0444 (`fs/opts.c`: `.attr.mode = (_flags) & OPT_RUNTIME
+/// ? 0644 : 0444`), so opening it O_WRONLY fails with EACCES, and a caller that
+/// ignored that reported success while changing nothing.
+pub fn sysfs_write_str(
+    sysfs_fd: BorrowedFd<'_>,
+    path: &str,
+    value: &str,
+) -> std::io::Result<()> {
     let flags = rustix::fs::OFlags::WRONLY;
-    if let Ok(fd) = rustix::fs::openat(sysfs_fd, path, flags, rustix::fs::Mode::empty()) {
-        let _ = rustix::io::write(&fd, value.as_bytes());
-    }
+    let fd = rustix::fs::openat(sysfs_fd, path, flags, rustix::fs::Mode::empty())?;
+    rustix::io::write(&fd, value.as_bytes())?;
+    Ok(())
 }
 
 /// Info about a device in a mounted bcachefs filesystem, read from sysfs.
