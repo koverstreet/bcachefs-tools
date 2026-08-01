@@ -73,15 +73,19 @@ fn set_option_online(
         }
     }
 
+    let mut failed = 0;
+
     for (name, value) in opts {
         let Some((_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");
+            failed += 1;
             continue;
         };
         let flags = opt.flags as u32;
 
         if flags & opt_flags() == 0 {
             eprintln!("Can't set option {name}");
+            failed += 1;
             continue;
         }
 
@@ -95,6 +99,7 @@ fn set_option_online(
         if flags & c::opt_flags::OPT_RUNTIME as u32 == 0 {
             eprintln!("{name} cannot be set while the filesystem is mounted \
                        (unmount and set it offline)");
+            failed += 1;
             continue;
         }
 
@@ -104,6 +109,7 @@ fn set_option_online(
         if is_fs_opt && !is_device_opt {
             if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value) {
                 eprintln!("Error setting {name}: {e}");
+                failed += 1;
             }
         }
 
@@ -112,6 +118,7 @@ fn set_option_online(
                 for dev_idx in dev_idxs {
                     if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value) {
                         eprintln!("Error setting {name} on device {dev_idx}: {e}");
+                        failed += 1;
                     }
                 }
                 continue;
@@ -127,9 +134,16 @@ fn set_option_online(
 
                 if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value) {
                     eprintln!("Error setting {name} on device {dev_idx}: {e}");
+                    failed += 1;
                 }
             }
         }
+    }
+
+    // A configuration command that could not do what it was asked must not
+    // report success: scripts have no other way to tell.
+    if failed != 0 {
+        bail!("{failed} of {} option(s) could not be set", opts.len());
     }
 
     Ok(())
@@ -142,28 +156,33 @@ fn set_option_offline(
     opts: &[(String, String)],
 ) -> Result<()> {
     let mut modified = false;
+    let mut failed = 0;
 
     for (name, value) in opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");
+            failed += 1;
             continue;
         };
         let flags = opt.flags as u32;
 
         if flags & opt_flags() == 0 {
             eprintln!("Can't set option {name}");
+            failed += 1;
             continue;
         }
 
         let c_value = CString::new(value.as_str())?;
         let Ok(val) = bcachefs_kernel::opts::opt_parse(Some(&fs), opt, &c_value, None) else {
             eprintln!("Error parsing {name}={value}");
+            failed += 1;
             continue;
         };
 
         if flags & c::opt_flags::OPT_FS as u32 != 0 {
             if let Err(e) = fs.opt_hook_pre_set(None, opt_id, val) {
                 eprintln!("Error setting {name}: {e}");
+                failed += 1;
                 continue;
             }
             fs.opt_set_sb(None, opt, val, Some(&c_value));
@@ -182,11 +201,13 @@ fn set_option_offline(
             for idx in indices {
                 let Some(ca) = fs.dev_get(idx) else {
                     eprintln!("Couldn't look up device {idx}");
+                    failed += 1;
                     continue;
                 };
 
                 if let Err(e) = fs.opt_hook_pre_set(Some(&ca), opt_id, val) {
                     eprintln!("Error setting {name}: {e}");
+                    failed += 1;
                     continue;
                 }
                 fs.opt_set_sb(Some(&ca), opt, val, Some(&c_value));
@@ -203,6 +224,10 @@ fn set_option_offline(
         let _lock = fs.sb_lock();
         fs.write_super_force()
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
+    }
+
+    if failed != 0 {
+        bail!("{failed} of {} option(s) could not be set", opts.len());
     }
 
     Ok(())
