@@ -1576,13 +1576,27 @@ int __bch2_check_key_has_snapshot(struct btree_trans *trans,
 					      RUN_RECOVERY_PASS_skip_if_complete) ?: ret;
 
 	/*
-	 * Snapshot missing entirely: we should have caught this with
-	 * btree_lost_data and kicked off reconstruct_snapshots, so if we end up
-	 * here we have no idea what happened - force reconstruct too.
+	 * A key in a deleted snapshot means that snapshot has data, and
+	 * check_snapshot() holds a deleted node up against the accounting and
+	 * undeletes it when it does - nothing we write deletes a node with keys
+	 * still accounted to it, so the state field is the lie. If we are
+	 * standing here looking at the key, that corroboration hasn't happened:
+	 * either check_snapshots hasn't run, or it ran before whatever put the
+	 * node in this state.
+	 *
+	 * So require it, and let the node be undeleted before anything below
+	 * decides what to do with the key - the alternatives there are deleting
+	 * it or migrating it to a live descendant, and both are irreversible on
+	 * the strength of a state field the accounting disagrees with.
+	 *
+	 * Requiring it rewinds if we are past it, so the key is retried once
+	 * the node is live again. If check_snapshots has already run this
+	 * recovery and the key is still in a deleted snapshot, the corroboration
+	 * saw it and let it stand - require_recovery_pass returns 0 and the
+	 * repair below proceeds.
 	 */
-	if (state == SNAPSHOT_ID_empty &&
-	    c->sb.btrees_lost_data & BIT_ULL(BTREE_ID_snapshots))
-		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_reconstruct_snapshots) ?: ret;
+	if (state == SNAPSHOT_ID_deleted)
+		ret = bch2_require_recovery_pass(c, &buf, BCH_RECOVERY_PASS_check_snapshots) ?: ret;
 
 	/*
 	 * Both repairs below destroy or relocate a key based on the in-memory
