@@ -539,7 +539,6 @@ struct bch_dev {
 	struct bch_sb		*sb_read_scratch;
 	int			sb_write_error;
 	dev_t			dev;
-	atomic_t		flush_seq;
 
 	struct bch_devs_mask	self;
 
