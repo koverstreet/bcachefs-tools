@@ -511,6 +511,19 @@ $(obj)/bitfield.o: $(src)/vendor/bitfield/src/lib.rs FORCE
 $(obj)/bitflags.o: $(src)/vendor/bitflags/src/lib.rs FORCE
 	$(call if_changed_dep,bch_library)
 
+# The kernel builds Rust with -Wrust_2018_idioms, which CONFIG_WERROR turns
+# into -Dwarnings; the vendored uuid predates both of the lifetime lints that
+# implies and trips 11 of them. Those lints are a statement about how we want
+# our own code written - they say nothing about whether someone else's crate is
+# correct - so allow them here rather than patching a vendored tree we would
+# have to re-patch on every refresh.
+#
+# Both are needed: elided_lifetimes_in_paths accounts for 6 and
+# mismatched_lifetime_syntaxes for the other 5, so allowing only the one named
+# in the bug report leaves the build broken. bitfield and bitflags are clean
+# under the same flags, which is why this is scoped to uuid.o.
+RUSTFLAGS_uuid.o += -Aelided_lifetimes_in_paths -Amismatched_lifetime_syntaxes
+
 $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 	$(call if_changed_dep,bch_library)
 
