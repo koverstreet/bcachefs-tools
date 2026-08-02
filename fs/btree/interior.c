@@ -471,14 +471,7 @@ retry:
 		goto err;
 
 	if (wp->sectors_free < btree_sectors(c)) {
-		struct open_bucket *ob;
-		unsigned i;
-
-		open_bucket_for_each(c, &wp->ptrs, ob, i)
-			if (ob->sectors_free < btree_sectors(c))
-				ob->sectors_free = 0;
-
-		bch2_alloc_sectors_done(c, wp);
+		bch2_alloc_sectors_retire_short(c, wp, btree_sectors(c));
 		goto retry;
 	}
 

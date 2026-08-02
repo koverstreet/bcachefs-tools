@@ -291,6 +291,31 @@ static inline void bch2_alloc_sectors_done_inlined(struct bch_fs *c, struct writ
 	bch2_open_buckets_put(c, &ptrs);
 }
 
+/*
+ * Give up on the open buckets in @wp that have less than @sectors free, so the
+ * next allocation gets fresh ones instead of handing the same too-small write
+ * point straight back.
+ *
+ * For writes that can't be split and so need that much contiguous room: a btree
+ * node, or a compressed extent we can't decompress. The tail of each retired
+ * bucket is fragmentation, which copygc reclaims.
+ *
+ * Only ask for something a fresh bucket can hold, or the caller loops.
+ */
+static inline void bch2_alloc_sectors_retire_short(struct bch_fs *c,
+						   struct write_point *wp,
+						   unsigned sectors)
+{
+	struct open_bucket *ob;
+	unsigned i;
+
+	open_bucket_for_each(c, &wp->ptrs, ob, i)
+		if (ob->sectors_free < sectors)
+			ob->sectors_free = 0;
+
+	bch2_alloc_sectors_done_inlined(c, wp);
+}
+
 static inline void bch2_open_bucket_get(struct bch_fs *c,
 					struct write_point *wp,
 					struct open_buckets *ptrs)
