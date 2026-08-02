@@ -877,7 +877,18 @@ bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redunda
 		return false;
 
 	struct target t = target_decode(target);
-	unsigned disk_label = t.type == TARGET_GROUP && t.group <= U8_MAX
+
+	/*
+	 * A group above U8_MAX cannot be a disk label, and __ec_stripe_head_get()
+	 * refuses it outright ("cannot create a stripe when disk_label > U8_MAX").
+	 * Folding it to disk_label 0 here would ask about every device in the
+	 * filesystem and answer yes to a target the allocator will not serve --
+	 * the same shape of mismatch this function is being fixed for.
+	 */
+	if (t.type == TARGET_GROUP && t.group > U8_MAX)
+		return false;
+
+	unsigned disk_label = t.type == TARGET_GROUP
 		? t.group + 1
 		: 0;
 
