@@ -952,7 +952,18 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 	struct bch_csum csum;
 	int ret;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+	/*
+	 * PF_MEMALLOC_NOIO for all reads: allocations here must not recurse
+	 * into IO.  For swap reads (BCH_READ_swap): also set PF_MEMALLOC, so
+	 * that an allocation cannot enter direct reclaim, which would swap
+	 * out pages and issue writes contending for the btree locks this
+	 * read already holds.  The write path does the same for
+	 * BCH_WRITE_swap; this is the read half of it, and it matters
+	 * because this function runs after ->swap_rw() has returned, outside
+	 * the noreclaim section that covers submission.
+	 */
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO |
+		((rbio->flags & BCH_READ_swap) ? PF_MEMALLOC : 0));
 
 	if (bch2_read_corrupt_device == rbio->pick.ptr.dev ||
 	    bch2_read_corrupt_device < 0)

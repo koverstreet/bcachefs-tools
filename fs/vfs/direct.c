@@ -80,6 +80,16 @@ static int __bch2_direct_IO_read(struct kiocb *req, struct iov_iter *iter,
 	struct bch_inode_opts opts;
 	bch2_inode_opts_get_inode(c, &inode->ei_inode, &opts);
 
+	/*
+	 * Mirrors the BCH_WRITE_swap decision in the dio write path: keyed on
+	 * the inode, so it holds for every read of a swapfile however it was
+	 * entered. The read completion runs after ->swap_rw() has returned
+	 * and so is outside its memalloc_noreclaim_save() section; the flag
+	 * is what lets it re-establish PF_MEMALLOC for itself.
+	 */
+	if (IS_SWAPFILE(&inode->v))
+		flags |= BCH_READ_swap;
+
 	/* bios must be 512 byte aligned: */
 	if ((offset|iter->count) & (SECTOR_SIZE - 1))
 		return bch_err_throw(c, EINVAL_unaligned_io);
