@@ -1143,9 +1143,21 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     eprintln!("fusemount: filesystem started, calling fuser::mount2");
 
     let destroyed = Arc::new(AtomicBool::new(false));
+    // Not `?`: the filesystem is started by now, and returning here without
+    // shutting it down leaves the same dirty superblock this commit exists to
+    // prevent -- just reached through fd exhaustion rather than a failed mount.
+    let signal_fd = match write_fd.try_clone() {
+        Ok(fd) => fd,
+        Err(e) => {
+            eprintln!("fusemount: couldn't duplicate the signal fd: {e}");
+            unsafe { c::bch2_fs_exit(fs_raw) };
+            signal_parent(write_fd, 1);
+            std::process::exit(1);
+        }
+    };
     let bcachefs_fs = BcachefsFs {
         c: fs_raw,
-        signal_fd: Some(write_fd.try_clone()?),
+        signal_fd: Some(signal_fd),
         destroyed: Arc::clone(&destroyed),
     };
 
