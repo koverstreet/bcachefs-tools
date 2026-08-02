@@ -2517,7 +2517,7 @@ int bch2_fs_fsck_errcode(struct bch_fs *c, struct printbuf *msg)
 	}
 	if (test_bit(BCH_FS_emergency_ro, &c->flags)) {
 		prt_printf(msg, "%s: fatal error (went emergency read-only)\n", c->name);
-		ret |= 4;
+		ret |= 8;
 	}
 
 	return ret;
@@ -2549,9 +2549,16 @@ static int bch2_fsck_offline_thread_fn(struct thread_with_stdio *stdio)
 	int ret = bch2_fs_start(c);
 
 	CLASS(printbuf, buf)();
-	if (ret)
+	if (ret) {
 		prt_printf(&buf, "%s: error starting filesystem: %s\n", c->name, bch2_err_str(ret));
-	else
+		/*
+		 * What we return is an fsck(8) exit status, not an errcode -
+		 * see bch2_fs_fsck_errcode(). A filesystem we couldn't start
+		 * is an operational error, same as the online path reports
+		 * for recovery passes that fail outright.
+		 */
+		ret = 8;
+	} else
 		ret = bch2_fs_fsck_errcode(c, &buf);
 	if (ret)
 		bch2_stdio_redirect_write(&stdio->stdio, false, buf.buf, buf.pos);
