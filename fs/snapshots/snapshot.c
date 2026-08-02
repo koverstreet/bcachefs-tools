@@ -59,6 +59,30 @@
  * ancestor IDs for O(log $n$) convergence on deeper trees. During early recovery,
  * before this data is validated, queries fall back to a simple parent walk.
  *
+ * \subsubsection{Why snapshot IDs descend}
+ *
+ * New IDs are allocated below every existing one (\texttt{create\_snapids()}),
+ * so a node's ID is always lower than its parent's: going up the tree, IDs
+ * increase. Three things follow:
+ *
+ * \begin{itemize}
+ *	\item \emph{Visibility filtering is a forward scan.} Keys sort by
+ *		\texttt{(inode, offset, snapshot)}, so the ancestors of $S$ sort
+ *		after $S$, nearest first: the first key a forward scan finds in an
+ *		ancestor of $S$ is the one $S$ sees.
+ *
+ *	\item \emph{Btree order is a topological sort.} Iterating snapshot keys
+ *		in order visits every node before its parent --- the order snapshot
+ *		deletion needs - with no sort or graph walk.
+ *
+ *	\item \emph{Tree shape is checkable from a single key.}
+ *		\texttt{bch2\_snapshot\_validate()} checks that children are below
+ *		their parent and skiplist entries at or above it with integer
+ *		comparisons, without the snapshot table --- so it runs at journal
+ *		write time, and a deletion that would leave a bad skiplist is
+ *		refused there, not found by a later fsck.
+ * \end{itemize}
+ *
  * \subsubsection{Snapshot creation}
  *
  * When a snapshot is created, two new snapshot nodes are allocated as children of
