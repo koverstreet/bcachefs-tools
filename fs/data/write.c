@@ -1656,11 +1656,83 @@ static int bch2_write_rechecksum(struct bch_fs *c,
 	return 0;
 }
 
+/*
+ * Decode an encoded extent in @bio in place: decrypt if encrypted, then
+ * decompress, and only put the result back once we have all of it. This is the
+ * inverse of the compress/encrypt the write path does on the way out, which is
+ * why it lives here - the decode is a write-path concern, and compress.c owns
+ * the primitives it's built from.
+ *
+ * @bio and @op->crc are untouched unless this returns 0, so a caller that can't
+ * use the plaintext still has the extent exactly as it arrived.
+ */
+static int bch2_write_op_decode(struct bch_write_op *op, struct bio *bio)
+{
+	struct bch_fs *c = op->c;
+	struct bch_extent_crc_unpacked *crc = &op->crc;
+	size_t dst_len = crc->uncompressed_size << 9;
+
+	/* bio must own its pages: */
+	BUG_ON(!bio->bi_vcnt);
+	BUG_ON(DIV_ROUND_UP(crc->live_size, PAGE_SECTORS) > bio->bi_max_vecs);
+	BUG_ON(bio->bi_iter.bi_size != crc->compressed_size << 9);
+
+	if (crc->uncompressed_size << 9	> c->opts.encoded_extent_max) {
+		bch2_write_op_error(op, false, op->pos.offset,
+				    "extent too big to decompress (%u > %u)",
+				    crc->uncompressed_size << 9, c->opts.encoded_extent_max);
+		return bch2_decompress_err(c, bch_err_throw(c, decompress_exceeded_max_encoded_extent));
+	}
+
+	struct bbuf dst_buf __cleanup(bch2_bbuf_exit) = bch2_bounce_alloc(c, dst_len, WRITE);
+
+	/*
+	 * Encrypted data has to be decrypted before it can be decompressed, and
+	 * @bio has to stay untouched until we know we have something to put
+	 * back: if the data won't decompress, the caller writes the extent
+	 * exactly as it found it. So take a private copy rather than letting
+	 * bch2_bio_map_or_bounce() hand us the bio's own pages, and decrypt that.
+	 */
+	bool encrypted = bch2_csum_type_is_encryption(crc->csum_type);
+	struct bbuf src_buf __cleanup(bch2_bbuf_exit) = encrypted
+		? bch2_bio_bounce(c, bio, bio->bi_iter, READ)
+		: bch2_bio_map_or_bounce(c, bio, READ);
+
+	if (encrypted)
+		try(bch2_encrypt(c, crc->csum_type, extent_nonce(op->version, *crc),
+				 src_buf.b, crc->compressed_size << 9));
+
+	int ret = bch2_buf_uncompress(c, dst_buf.b, src_buf.b, *crc);
+	if (c->opts.no_data_io)
+		ret = 0;
+	if (ret) {
+		bch2_write_op_error(op, false, op->pos.offset, "%s", bch2_err_str(ret));
+		return bch2_decompress_err(c, ret);
+	}
+
+	/*
+	 * XXX: don't have a good way to assert that the bio was allocated with
+	 * enough space, we depend on bch2_move_extent doing the right thing
+	 */
+	bio->bi_iter.bi_size = crc->live_size << 9;
+
+	memcpy_to_bio(bio, bio->bi_iter, dst_buf.b + (crc->offset << 9));
+
+	crc->csum_type		= 0;
+	crc->compression_type	= 0;
+	crc->compressed_size	= crc->live_size;
+	crc->uncompressed_size	= crc->live_size;
+	crc->offset		= 0;
+	crc->csum		= (struct bch_csum) { 0, 0 };
+	return 0;
+}
+
 static noinline int bch2_write_prep_encoded_data(struct bch_write_op *op, struct write_point *wp)
 {
 	struct bch_fs *c = op->c;
 	struct bio *bio = &op->wbio.bio;
 	struct bch_csum csum;
+	int ret;
 
 	BUG_ON(bio_sectors(bio) != op->crc.compressed_size);
 
@@ -1727,14 +1799,30 @@ static noinline int bch2_write_prep_encoded_data(struct bch_write_op *op, struct
 		if (bch2_crc_cmp(op->crc.csum, csum) && !c->opts.no_data_io)
 			goto csum_err;
 
-		if (bch2_csum_type_is_encryption(op->crc.csum_type)) {
-			try(bch2_encrypt_bio(c, op->crc.csum_type, nonce, bio));
+		/*
+		 * Decryption happens inside bch2_write_op_decode(), on
+		 * its own copy - @bio and @op->crc are left exactly as they are
+		 * until the decompressed data is ready to go back. So if the
+		 * data won't decompress there is nothing to undo, and writing
+		 * the extent as we found it is still on the table:
+		 */
+		ret = bch2_write_op_decode(op, bio);
+		if (ret) {
+			if (!bch2_err_matches(ret, BCH_ERR_decompress))
+				return ret;
 
-			op->crc.csum_type = 0;
-			op->crc.csum = (struct bch_csum) { 0, 0 };
+			/*
+			 * Nothing will ever decompress this. Preserve what we
+			 * have rather than failing the write: the extent goes
+			 * out byte-for-byte as it came in, still encrypted,
+			 * still compressed, @op->crc still describing it.
+			 *
+			 * The caller has to have a write point with room for
+			 * it - a compressed extent can't be split - which is
+			 * what the fresh-bucket retry in __bch2_write() is for.
+			 */
+			return 1;
 		}
-
-		try(bch2_bio_uncompress_inplace(op, bio));
 	}
 
 	/*
