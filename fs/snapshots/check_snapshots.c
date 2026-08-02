@@ -690,6 +690,62 @@ static int snapshot_edge_repair_commit(struct btree_trans *trans)
 	return bch_err_throw(trans->c, transaction_restart_nested);
 }
 
+/*
+ * Put back a child node that isn't there at all.
+ *
+ * Same argument as undeleting a tombstone that still owns data, one step
+ * further along: nothing we write removes a snapshot node with keys still
+ * accounted to it, so a node that's missing while its keys are not is a node
+ * that was destroyed, not deleted. Its keys are still on disk and still
+ * reachable from every view that inherits from it - only the node naming that
+ * view is gone. Recreate it, and they stay reachable.
+ *
+ * A leaf, because that's the shape we can justify: @parent_id names it as a
+ * child, so parent, tree, depth and skiplists all follow from a node we can
+ * see, and nothing attests to any children of its own. If it did have
+ * descendants, their own parent pointers bring them back on a later pass
+ * through the same edge check.
+ *
+ * The subvolume, if one claims this id, comes back with it: a subvolume whose
+ * snapshot went missing is exactly what a resurrected leaf should carry, and
+ * zeroing it would strand the subvolume instead.
+ */
+static int snapshot_resurrect_child(struct btree_trans *trans, u32 parent_id, u32 id)
+{
+	struct bch_fs *c = trans->c;
+
+	struct bkey_i_snapshot parent;
+	bool parent_exists;
+	try(snapshot_lookup_key_absent_ok(trans, parent_id, &parent, &parent_exists));
+	if (!parent_exists)
+		return bch_err_throw(c, EINVAL_snapshot_edge_to_missing_node);
+
+	struct bkey_i_snapshot *n = bch2_trans_kmalloc(trans, sizeof(*n));
+	try(PTR_ERR_OR_ZERO(n));
+
+	bkey_snapshot_init(&n->k_i);
+	n->k.p		= POS(0, id);
+	n->v.parent	= cpu_to_le32(parent_id);
+	n->v.tree	= parent.v.tree;
+	n->v.depth	= cpu_to_le32(bch2_snapshot_depth(c, parent_id));
+	n->v.btime.lo	= cpu_to_le64(bch2_current_time(c));
+
+	for (unsigned i = 0; i < ARRAY_SIZE(n->v.skip); i++)
+		n->v.skip[i] = cpu_to_le32(bch2_snapshot_skiplist_get(c, parent_id));
+	bubble_sort(n->v.skip, ARRAY_SIZE(n->v.skip), cmp_le32);
+
+	u32 subvol_id = 0;
+	try(subvol_claiming_snapshot(trans, id, &subvol_id));
+	n->v.subvol = cpu_to_le32(subvol_id);
+
+	bch2_snapshot_state_set(&n->v, SNAPSHOT_STATE_live);
+
+	try(bch2_snapshot_table_make_room(c, id));
+	try(bch2_btree_insert_trans(trans, BTREE_ID_snapshots, &n->k_i, 0));
+
+	return snapshot_edge_repair_commit(trans);
+}
+
 /* Rewrite @node_id's reference to @old_id (0 clears a child slot): */
 static int snapshot_edge_set_ptr(struct btree_trans *trans, u32 node_id,
 				 unsigned side, u32 old_id, u32 new_id)
@@ -882,13 +938,32 @@ static int check_snapshot_edge(struct btree_trans *trans,
 					     other_exists ? &other : NULL, &r))))
 		return snapshot_edge_set_ptr(trans, id, side, other_id, repl);
 
-	/* A dangling child pointer with nothing accounted to it may be cleared: */
+	/*
+	 * A child pointer naming a node that isn't there. The accounting says
+	 * which way to go: keys accounted to it mean the node was destroyed
+	 * rather than deleted, and putting it back is what keeps them
+	 * reachable. Nothing accounted means there's nothing to lose, and
+	 * clearing is the smaller repair - which also means a garbage child id
+	 * gets cleared instead of conjuring a snapshot out of one stomped
+	 * field.
+	 */
 	if (side == EDGE_PARENT && !other_exists) {
 		u32 sibling = le32_to_cpu(s->children[0]) == other_id
 			? le32_to_cpu(s->children[1])
 			: le32_to_cpu(s->children[0]);
 
-		if (!snapshot_has_accounting(c, other_id) && sibling &&
+		if (snapshot_has_accounting(c, other_id)) {
+			if (ret_fsck_err(trans, snapshot_child_missing_but_accounted,
+					 "snapshot %u child pointer %u does not exist, but keys are\n"
+					 "accounted to %u - recreating it as a leaf so they stay reachable%s",
+					 id, other_id, other_id,
+					 (printbuf_reset(&buf),
+					  edge_nodes_to_text(&buf, c, k, NULL, NULL))))
+				return snapshot_resurrect_child(trans, id, other_id);
+			return 0;
+		}
+
+		if (sibling &&
 		    ret_fsck_err(trans, snapshot_edge_bad,
 				 "snapshot %u child pointer %u does not exist: nothing claims %u as\n"
 				 "parent and nothing is accounted to it - clearing%s",

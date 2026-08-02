@@ -437,7 +437,8 @@ enum bch_fsck_flags {
 	x(data_decompress_err_zstd_memory_allocation,		423,	0)		\
 	x(data_decompress_err_zstd_unknown,			424,	0)		\
 	x(data_decompress_err_unknown,				425,	0)		\
-	x(MAX,							426,	0)
+	x(snapshot_child_missing_but_accounted,			426,	FSCK_AUTOFIX)	\
+	x(MAX,							427,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
