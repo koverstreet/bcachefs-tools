@@ -126,6 +126,7 @@
 	  BCH_FSCK_ERR_need_discard_key_wrong,			\
 	  BCH_FSCK_ERR_need_discard_freespace_key_to_invalid_dev_bucket)\
 	x(per_dev_fragmentation_lru,				\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_allocations)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_lrus)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_alloc_to_lru_refs)|	\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|		\
@@ -133,6 +134,7 @@
 	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_subvols)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),	\
+	  BCH_FSCK_ERR_accounting_mismatch,			\
 	  BCH_FSCK_ERR_lru_entry_bad,				\
 	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry,		\
 	  BCH_FSCK_ERR_inode_has_inode_opts_flag_wrong,		\
