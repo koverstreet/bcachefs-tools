@@ -1175,6 +1175,8 @@ static int check_snapshot(struct btree_trans *trans,
 	struct bch_snapshot s;
 	bkey_val_copy_pad(&s, bkey_s_c_to_snapshot(k));
 
+	try(check_snapshot_state(trans, iter, k, &s, &u));
+
 	/*
 	 * Data first, before anything else reasons about the state field:
 	 * nothing we write deletes a node with keys still accounted to it, so
@@ -1218,8 +1220,6 @@ static int check_snapshot(struct btree_trans *trans,
 			s = u->v;
 		}
 	}
-
-	try(check_snapshot_state(trans, iter, k, &s, &u));
 
 	ret = check_snapshot_deleted(trans, iter, k, &s, &u);
 	if (ret)
