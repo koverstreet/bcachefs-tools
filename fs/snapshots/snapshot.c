@@ -59,6 +59,46 @@
  * ancestor IDs for O(log $n$) convergence on deeper trees. During early recovery,
  * before this data is validated, queries fall back to a simple parent walk.
  *
+ * \subsubsection{Why snapshot IDs descend}
+ *
+ * IDs are allocated downward from \texttt{U32\_MAX}: \texttt{create\_snapids()}
+ * seeks the lowest existing snapshot key and walks into the empty space below it,
+ * so a new node always lands below everything already present. A node's parent
+ * existed when the node was created, which makes \texttt{child\_id < parent\_id} a
+ * construction guarantee rather than a convention --- climbing the tree, IDs
+ * increase monotonically, and the parent is the lowest-ID ancestor.
+ *
+ * One constraint at allocation time encodes a global property of the tree,
+ * ancestry, into a local one, integer ordering. Three things that would otherwise
+ * be searches fall out of it:
+ *
+ * \begin{itemize}
+ *	\item \emph{Visibility filtering is forward-only.} Keys sort by
+ *		\texttt{(inode, offset, snapshot)}, so the ancestors of $S$ sort
+ *		\emph{after} $S$, nearest first --- the first one a forward scan
+ *		meets is the visible key. The snapshot-dimension search direction
+ *		agrees with the direction range iteration already travels. Had IDs
+ *		ascended, resolving visibility would mean a backward walk at every
+ *		position inside a scan that is going forward.
+ *
+ *	\item \emph{Btree order is a topological sort.} Ascending key order visits
+ *		every node before its parent, so passes that must handle children
+ *		first --- snapshot deletion above all --- get that ordering from
+ *		the iterator, with no sort and no graph walk.
+ *
+ *	\item \emph{Ancestry is checkable from a single key.}
+ *		\texttt{bch2\_snapshot\_validate()} enforces ``my child's ID is
+ *		below mine'' and ``every skiplist entry is at least as far up as my
+ *		parent'' with integer comparisons, reading no other key and
+ *		consulting no snapshot table. Both are claims about the shape of
+ *		the whole tree, and both are therefore decidable at journal write
+ *		time --- where there is no room to walk the tree, and where the
+ *		snapshot table may not be loaded at all. A half-finished deletion
+ *		that leaves a skiplist entry below its node's new parent is
+ *		rejected as the write is made, instead of being discovered by a
+ *		later fsck on a filesystem that has already accepted it.
+ * \end{itemize}
+ *
  * \subsubsection{Snapshot creation}
  *
  * When a snapshot is created, two new snapshot nodes are allocated as children of
