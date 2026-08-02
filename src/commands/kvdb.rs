@@ -1274,6 +1274,12 @@ fn kvdb(cli: Cli) -> Result<()> {
     if cli.nostart {
         opt_set!(fs_opts, nostart, 1);
     }
+    // Whatever repair the superblock has scheduled is not what we came for:
+    // check_allocations is pass 5, so recovery_pass_last below is a ceiling it
+    // sits under, not a filter that excludes it - a filesystem carrying an
+    // upgrade's scheduled passes rebuilds accounting before the first command
+    // runs. It stays scheduled, and runs at the next real mount.
+    opt_set!(fs_opts, recovery_passes_skip_scheduled, 1);
     if cli.rw && cli.norecovery {
         bail!("--rw and --norecovery are mutually exclusive");
     }
