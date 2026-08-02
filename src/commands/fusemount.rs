@@ -130,8 +130,40 @@ fn dtype_to_filetype(dtype: u32) -> FileType {
     }
 }
 
+/// Bytes the daemonising child sends its parent over the sync pipe.
+///
+/// The parent cannot see the child's stderr -- daemon mode sends it to
+/// /dev/null, deliberately, since 8d2ea5aef1 -- so anything it is to report has
+/// to come through here. Reporting every failure as a FUSE problem sends people
+/// looking in the wrong place.
+const CHILD_OK: u8            = 0;
+const CHILD_ERR_FS_START: u8  = 1;
+const CHILD_ERR_MOUNT: u8     = 2;
+/// Between the two: the filesystem is up but we never reached fuser::mount2.
+const CHILD_ERR_SETUP: u8     = 3;
+
+/// Bounded well under a pipe buffer so the child never blocks writing it, even
+/// if the parent is slow to read.
+const CHILD_MSG_MAX: usize = 512;
+
 fn signal_parent(fd: OwnedFd, byte: u8) {
     let _ = File::from(fd).write_all(&[byte]);
+}
+
+/// Report a failure stage and why, in one write.
+fn signal_parent_err(fd: OwnedFd, byte: u8, reason: &str) {
+    let mut buf = Vec::with_capacity(1 + CHILD_MSG_MAX);
+    buf.push(byte);
+    // Truncate on a character boundary, keeping whole characters: the parent
+    // decodes this as UTF-8.
+    let end = reason
+        .char_indices()
+        .map(|(i, ch)| i + ch.len_utf8())
+        .take_while(|&e| e <= CHILD_MSG_MAX)
+        .last()
+        .unwrap_or(0);
+    buf.extend_from_slice(reason[..end].as_bytes());
+    let _ = File::from(fd).write_all(&buf);
 }
 
 /// Convert a raw C return value (negative bcachefs error code) to a fuser Errno.
@@ -426,7 +458,7 @@ impl Filesystem for BcachefsFs {
         // Signal parent that mount is established
         if let Some(fd) = self.signal_fd.take() {
             eprintln!("bcachefs fuse: signaling parent");
-            signal_parent(fd, 0);
+            signal_parent(fd, CHILD_OK);
         }
         eprintln!("bcachefs fuse: init returning Ok");
         Ok(())
@@ -1101,16 +1133,46 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     if pid > 0 {
         // Parent: wait for child to signal mount readiness
         drop(write_fd);
-        let mut buf = [0u8; 1];
-        let n = File::from(read_fd).read(&mut buf)?;
+        let mut pipe = File::from(read_fd);
 
-        if n == 1 && buf[0] == 0 {
+        // Read the status byte on its own. On success the child carries on as
+        // the daemon, holding its end of the pipe open, so there is no EOF to
+        // wait for and reading to end here would hang the mount.
+        let mut status = [0u8; 1];
+        let got = pipe.read(&mut status)?;
+
+        if got == 1 && status[0] == CHILD_OK {
             std::process::exit(0);
         } else {
+            // A failing child writes stage and reason in a single write and
+            // then exits, so the rest is already queued and EOF follows.
+            let mut buf = Vec::with_capacity(1 + CHILD_MSG_MAX);
+            if got == 1 {
+                buf.push(status[0]);
+            }
+            let _ = pipe.take(CHILD_MSG_MAX as u64).read_to_end(&mut buf);
             let pid = rustix::process::Pid::from_raw(pid)
                 .ok_or_else(|| anyhow::anyhow!("invalid child pid {}", pid))?;
             let _ = rustix::process::waitpid(Some(pid), rustix::process::WaitOptions::empty());
-            anyhow::bail!("FUSE mount failed in child process");
+
+            let reason = String::from_utf8_lossy(buf.get(1..).unwrap_or_default());
+            let reason = reason.trim();
+            match buf.first().copied() {
+                Some(CHILD_ERR_FS_START) if !reason.is_empty() =>
+                    anyhow::bail!("error starting filesystem: {reason}"),
+                Some(CHILD_ERR_FS_START) =>
+                    anyhow::bail!("error starting filesystem"),
+                Some(CHILD_ERR_MOUNT) if !reason.is_empty() =>
+                    anyhow::bail!("FUSE mount failed: {reason}"),
+                Some(CHILD_ERR_MOUNT) =>
+                    anyhow::bail!("FUSE mount failed"),
+                Some(CHILD_ERR_SETUP) if !reason.is_empty() =>
+                    anyhow::bail!("filesystem started but the mount was never attempted: {reason}"),
+                Some(CHILD_ERR_SETUP) =>
+                    anyhow::bail!("filesystem started but the mount was never attempted"),
+                _ =>
+                    anyhow::bail!("child exited without reporting a reason"),
+            }
         }
     }
 
@@ -1137,7 +1199,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     if let Err(e) = start_fs(fs_raw) {
         eprintln!("fusemount: bch2_fs_start failed: {}", e);
         unsafe { c::bch2_fs_exit(fs_raw) };
-        signal_parent(write_fd, 1);
+        signal_parent_err(write_fd, CHILD_ERR_FS_START, &format!("{e:#}"));
         std::process::exit(1);
     }
     eprintln!("fusemount: filesystem started, calling fuser::mount2");
@@ -1151,7 +1213,8 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         Err(e) => {
             eprintln!("fusemount: couldn't duplicate the signal fd: {e}");
             unsafe { c::bch2_fs_exit(fs_raw) };
-            signal_parent(write_fd, 1);
+            signal_parent_err(write_fd, CHILD_ERR_SETUP,
+                              &format!("couldn't duplicate the signal fd: {e}"));
             std::process::exit(1);
         }
     };
@@ -1176,7 +1239,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
             if !destroyed.load(Ordering::SeqCst) {
                 unsafe { c::bch2_fs_exit(fs_raw) };
             }
-            signal_parent(write_fd, 1);
+            signal_parent_err(write_fd, CHILD_ERR_MOUNT, &format!("{e}"));
             std::process::exit(1);
         }
     }
