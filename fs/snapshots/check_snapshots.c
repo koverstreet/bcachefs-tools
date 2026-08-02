@@ -594,6 +594,36 @@ static bool snapshot_parent_child_consistent(const struct bch_snapshot *s, u32 i
 }
 
 /*
+ * Look up a snapshot node that fsck has no right to assume exists.
+ *
+ * A missing node is a fact about the filesystem here, not an error, so it
+ * comes back in @found - and the key comes back whole, because the topology
+ * checks report on nodes they didn't start from, and naming one by id alone
+ * leaves a field report with no way to see what was wrong with it.
+ *
+ * bch2_snapshot_lookup{,_key}() throw ENOENT_bkey_type_mismatch instead, which
+ * is right for callers entitled to assume the node is there and wrong for
+ * every caller in this file: each one has to launder the errcode back into a
+ * boolean, and check_snapshot_edge() then returned the value it had just
+ * decided was benign as the pass's error - taking recovery emergency
+ * read-only over a filesystem whose only problem was a dangling child
+ * pointer. Absence reported as a value can't be returned by mistake.
+ */
+static int snapshot_lookup_key_absent_ok(struct btree_trans *trans, u32 id,
+					 struct bkey_i_snapshot *k, bool *found)
+{
+	int ret = bch2_snapshot_lookup_key(trans, id, k);
+
+	if (bch2_err_matches(ret, ENOENT)) {
+		*found = false;
+		return 0;
+	}
+
+	*found = !ret;
+	return ret;
+}
+
+/*
  * Does @n (in role @side) have a pointer slot that's empty, or whose current
  * target doesn't reciprocate? Returns the displaced value in @old_id. Empty
  * slots are checked first, so a stale pointer keeps its own shot at repair
@@ -622,12 +652,11 @@ static int snapshot_edge_ptr_available(struct btree_trans *trans,
 		}
 
 	for (unsigned i = 0; i < nr; i++) {
-		struct bch_snapshot t;
-		int ret = bch2_snapshot_lookup(trans, ptrs[i], &t);
-		if (ret && !bch2_err_matches(ret, ENOENT))
-			return ret;
+		struct bkey_i_snapshot t;
+		bool exists;
+		try(snapshot_lookup_key_absent_ok(trans, ptrs[i], &t, &exists));
 
-		if (ret || !snapshot_node_points_back(&t, !side, n_id)) {
+		if (!exists || !snapshot_node_points_back(&t.v, !side, n_id)) {
 			*old_id = ptrs[i];
 			return 1;
 		}
@@ -721,10 +750,8 @@ static int check_snapshot_edge(struct btree_trans *trans,
 	CLASS(printbuf, buf)();
 
 	struct bkey_i_snapshot other;
-	int other_ret = bch2_snapshot_lookup_key(trans, other_id, &other);
-	if (other_ret && !bch2_err_matches(other_ret, ENOENT))
-		return other_ret;
-	bool other_exists = !other_ret;
+	bool other_exists;
+	try(snapshot_lookup_key_absent_ok(trans, other_id, &other, &other_exists));
 
 	/*
 	 * Connectivity: the live tree must be closed over not-deleted nodes.
@@ -787,13 +814,12 @@ static int check_snapshot_edge(struct btree_trans *trans,
 			if (!repl)
 				break;
 
-			int ret2 = bch2_snapshot_lookup_key(trans, repl, &t);
-			if (bch2_err_matches(ret2, ENOENT)) {
+			bool repl_exists;
+			try(snapshot_lookup_key_absent_ok(trans, repl, &t, &repl_exists));
+			if (!repl_exists) {
 				repl = 0;
 				break;
 			}
-			if (ret2)
-				return ret2;
 
 			if (bch2_snapshot_state_compat(&t.v) != SNAPSHOT_STATE_deleted)
 				break;
@@ -839,11 +865,11 @@ static int check_snapshot_edge(struct btree_trans *trans,
 	u32 repl = snapshot_table_find_edge(c, s, id, !side);
 
 	struct bkey_i_snapshot r;
-	int repl_ret = repl ? bch2_snapshot_lookup_key(trans, repl, &r) : -ENOENT;
-	if (repl_ret && !bch2_err_matches(repl_ret, ENOENT))
-		return repl_ret;
+	bool repl_exists = false;
+	if (repl)
+		try(snapshot_lookup_key_absent_ok(trans, repl, &r, &repl_exists));
 
-	if (!repl_ret &&
+	if (repl_exists &&
 	    snapshot_parent_child_consistent(s, id, side, &r.v, repl) &&
 	    ret_fsck_err(trans, snapshot_edge_bad,
 			 "snapshot %u %s pointer %u is broken (target %s), but node %u claims the\n"
@@ -897,7 +923,7 @@ static int check_snapshot_edge(struct btree_trans *trans,
 	}
 
 	if (!other_exists)
-		return other_ret;
+		return bch_err_throw(c, EINVAL_snapshot_edge_to_missing_node);
 
 	return side == EDGE_CHILD
 		? bch_err_throw(c, EINVAL_snapshot_parent_missing_child_ptr)
@@ -925,11 +951,10 @@ static int snapshot_referenced(struct btree_trans *trans,
 	}
 
 	if (s->parent) {
-		struct bch_snapshot p;
-		int ret = bch2_snapshot_lookup(trans, le32_to_cpu(s->parent), &p);
-		if (ret && !bch2_err_matches(ret, ENOENT))
-			return ret;
-		if (!ret && snapshot_node_points_back(&p, EDGE_PARENT, id))
+		struct bkey_i_snapshot p;
+		bool exists;
+		try(snapshot_lookup_key_absent_ok(trans, le32_to_cpu(s->parent), &p, &exists));
+		if (exists && snapshot_node_points_back(&p.v, EDGE_PARENT, id))
 			return 0;
 	}
 
@@ -937,11 +962,10 @@ static int snapshot_referenced(struct btree_trans *trans,
 		if (!s->children[i])
 			continue;
 
-		struct bch_snapshot ch;
-		int ret = bch2_snapshot_lookup(trans, le32_to_cpu(s->children[i]), &ch);
-		if (ret && !bch2_err_matches(ret, ENOENT))
-			return ret;
-		if (!ret && snapshot_node_points_back(&ch, EDGE_CHILD, id))
+		struct bkey_i_snapshot ch;
+		bool exists;
+		try(snapshot_lookup_key_absent_ok(trans, le32_to_cpu(s->children[i]), &ch, &exists));
+		if (exists && snapshot_node_points_back(&ch.v, EDGE_CHILD, id))
 			return 0;
 	}
 
@@ -1127,14 +1151,14 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 			if (!s->children[i])
 				continue;
 
-			struct bch_snapshot child;
-			int ret2 = bch2_snapshot_lookup(trans, le32_to_cpu(s->children[i]), &child);
-			if (ret2 && !bch2_err_matches(ret2, ENOENT))
-				return ret2;
+			struct bkey_i_snapshot child;
+			bool exists;
+			try(snapshot_lookup_key_absent_ok(trans, le32_to_cpu(s->children[i]),
+							  &child, &exists));
 
-			nr_live_children += !ret2 &&
-				bch2_snapshot_state_compat(&child) == SNAPSHOT_STATE_live &&
-				snapshot_node_points_back(&child, EDGE_CHILD, k.k->p.offset);
+			nr_live_children += exists &&
+				bch2_snapshot_state_compat(&child.v) == SNAPSHOT_STATE_live &&
+				snapshot_node_points_back(&child.v, EDGE_CHILD, k.k->p.offset);
 		}
 
 		if (ret_fsck_err_on(nr_live_children == 2,
@@ -1254,10 +1278,11 @@ static int check_snapshot(struct btree_trans *trans,
 			try(check_snapshot_edge(trans, k, &s,
 						EDGE_PARENT, le32_to_cpu(s.children[i])));
 
-	struct bch_snapshot parent = {};
+	struct bkey_i_snapshot parent;
 	u32 parent_id = le32_to_cpu(s.parent);
+	bool parent_exists = false;
 	if (parent_id)
-		try(bch2_snapshot_lookup(trans, parent_id, &parent));
+		try(snapshot_lookup_key_absent_ok(trans, parent_id, &parent, &parent_exists));
 
 	ret = snapshot_tree_ptr_good(trans, k.k->p.offset, le32_to_cpu(s.tree));
 	if (ret < 0)
@@ -1270,7 +1295,17 @@ static int check_snapshot(struct btree_trans *trans,
 		try(snapshot_tree_ptr_repair(trans, iter, k, &s));
 	ret = 0;
 
-	u32 real_depth = parent_id ? le32_to_cpu(parent.depth) + 1 : 0;
+	/*
+	 * Depth is derived from the parent, so with the parent missing there's
+	 * nothing to derive it from - and "no parent" would give 0, flattening
+	 * an interior node to a root. check_snapshot_edge() has already
+	 * reported the dangling pointer; leave depth alone until that's
+	 * resolved and the node is visited again.
+	 */
+	u32 real_depth = parent_exists ? le32_to_cpu(parent.v.depth) + 1 : 0;
+
+	if (parent_id && !parent_exists)
+		goto skiplists;
 
 	if (ret_fsck_err_on(le32_to_cpu(s.depth) != real_depth,
 			trans, snapshot_bad_depth,
@@ -1281,6 +1316,7 @@ static int check_snapshot(struct btree_trans *trans,
 		u->v.depth = cpu_to_le32(real_depth);
 		s = u->v;
 	}
+skiplists:
 
 	for (unsigned i = 0; i < 3; i++) {
 		u32 skip = le32_to_cpu(s.skip[i]);

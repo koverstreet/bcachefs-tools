@@ -409,6 +409,7 @@
 	x(EINVAL,			EINVAL_snapshot_delete_bad_topology)		\
 	x(EINVAL,			EINVAL_snapshot_parent_missing_child_ptr)	\
 	x(EINVAL,			EINVAL_snapshot_child_bad_parent)		\
+	x(EINVAL,			EINVAL_snapshot_edge_to_missing_node)		\
 	x(EINVAL,			EINVAL_snapshot_bad_subvol_flag)		\
 	x(EINVAL,			EINVAL_opt_parse_uint_required)		\
 	x(EINVAL,			EINVAL_opt_parse_str_required)		\
