@@ -952,7 +952,14 @@ int bch2_journal_res_get_slowpath(struct journal *j, struct journal_res *res,
 		return __journal_res_get(j, res, flags);
 
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
-	long total_wait = max(bch2_dev_latency_max(c, &c->allocator.rw_devs[BCH_DATA_journal], WRITE) * 2, HZ * 10);
+	/*
+	 * Over every online device, not just the journal's: a flushing commit
+	 * preflushes every rw member (journal_write_preflush()), so a member
+	 * that carries no journal at all still paces the wait. Sizing this from
+	 * the journal devices alone reports "stuck" routinely on an array whose
+	 * slowest member is not a journal member.
+	 */
+	long total_wait = max(bch2_dev_latency_max(c, &c->devs_online, WRITE) * 2, HZ * 10);
 	int ret;
 
 	if (trans_wait_event_timeout(trans, &j->async_wait,
@@ -1199,8 +1206,12 @@ int bch2_journal_flush_seq(struct journal *j, u64 seq, unsigned task_state)
 	 * Don't report stuck until we've waited longer than an IO could
 	 * legitimately take: twice the longest write latency we've seen, or 10s,
 	 * whichever is greater (matches bch2_journal_res_get_slowpath()).
+	 *
+	 * Over every online device: a flushing commit waits on a preflush to
+	 * every rw member, so the slowest member bounds this even when it holds
+	 * no journal.
 	 */
-	long total_wait = max(bch2_dev_latency_max(c, &c->allocator.rw_devs[BCH_DATA_journal], WRITE) * 2, HZ * 10);
+	long total_wait = max(bch2_dev_latency_max(c, &c->devs_online, WRITE) * 2, HZ * 10);
 
 	if (closure_sync_timeout(&cl, total_wait)) {
 		CLASS(printbuf, buf)();
