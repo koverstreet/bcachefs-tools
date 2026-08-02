@@ -603,12 +603,38 @@ static inline int bch2_extent_ptr_durability(struct btree_trans *trans, struct e
 	return __bch2_extent_ptr_durability(trans, p, false);
 }
 
+/*
+ * Everything one walk of a key's pointer list can say about its replication.
+ *
+ * Gathered together because the walk is the expensive part - and for the exact
+ * version, a stripe read per erasure coded pointer - while callers routinely
+ * want several of these at once. bch2_sum_sector_overwrites() asks four
+ * separate single-value helpers for them, on the same two keys, three of the
+ * calls inside a loop.
+ *
+ * The durability counts are weighted by each device's mi.durability and skip
+ * BCH_SB_MEMBER_INVALID placeholders - those are added by
+ * bch2_bkey_set_needs_reconcile() on a degraded write, to stand for a replica
+ * that isn't there. The raw counts below are unweighted.
+ *
+ * u8 except the sector count: BCH_MEMBER_DURABILITY is a two bit field and
+ * BCH_REPLICAS_MAX is 4, so none of these can come near 255.
+ *
+ * Not handled here: KEY_TYPE_reservation, which several of the older
+ * single-value helpers report as v->nr_replicas. Callers that need that still
+ * special-case it themselves.
+ */
 struct bkey_durability {
-	unsigned	online, total;
-	unsigned	acct, min_durability;
+	u8		online, total;
+	u8		acct, min_durability;
+
+	u8		nr_ptrs;		/* real device pointers */
+	u8		nr_overwritable;	/* uncompressed - an overwrite reclaims these */
+	unsigned	sectors_compressed;
 };
 
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);
+void bch2_bkey_durability_safe(struct bch_fs *, struct bkey_s_c, struct bkey_durability *);
 struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_c);
 
 bool bch2_bkey_can_read(const struct bch_fs *, struct bkey_s_c);

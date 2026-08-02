@@ -1038,11 +1038,16 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 	struct extent_ptr_decoded p;
 	struct durability_dedup seen = {};
 
-	*ret = (struct bkey_durability) { .min_durability = INT_MAX };
+	*ret = (struct bkey_durability) { .min_durability = U8_MAX };
 
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
 		if (p.ptr.cached)
 			continue;
+
+		ret->nr_ptrs		+= p.ptr.dev != BCH_SB_MEMBER_INVALID;
+		ret->nr_overwritable	+= !crc_is_compressed(p.crc);
+		if (crc_is_compressed(p.crc))
+			ret->sectors_compressed += p.crc.compressed_size;
 
 		unsigned desired = 0;
 
@@ -1118,26 +1123,38 @@ bool bch2_bkey_can_read(const struct bch_fs *c, struct bkey_s_c k)
 	return false;
 }
 
-/* desired durability, no btree lookups for stripes: */
-static unsigned bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k)
+/*
+ * As bch2_bkey_durability(), but without the btree lookups: an erasure coded
+ * pointer's durability is taken as redundancy + 1 rather than read from the
+ * stripe, so this needs no transaction and can't fail. Online vs total isn't
+ * distinguishable without those lookups, so only @total is filled in.
+ */
+void bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k,
+			       struct bkey_durability *ret)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
-	unsigned durability = 0;
+
+	*ret = (struct bkey_durability) { .min_durability = U8_MAX };
 
 	guard(rcu)();
-	bkey_for_each_ptr_decode(k.k, ptrs, p, entry)
-		if (p.ptr.cached) {
-			/* nothing */
-		} else if (p.has_ec) {
-			durability += p.ec.redundancy + 1;
-		} else {
-			struct bch_dev *ca = bch2_dev_rcu_noerror(c, p.ptr.dev);
-			durability += ca ? ca->mi.durability : 1;
-		}
+	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+		if (p.ptr.cached)
+			continue;
 
-	return durability;
+		ret->nr_ptrs		+= p.ptr.dev != BCH_SB_MEMBER_INVALID;
+		ret->nr_overwritable	+= !crc_is_compressed(p.crc);
+		if (crc_is_compressed(p.crc))
+			ret->sectors_compressed += p.crc.compressed_size;
+
+		if (p.has_ec) {
+			ret->total += p.ec.redundancy + 1;
+		} else if (p.ptr.dev != BCH_SB_MEMBER_INVALID) {
+			struct bch_dev *ca = bch2_dev_rcu_noerror(c, p.ptr.dev);
+			ret->total += ca ? ca->mi.durability : 1;
+		}
+	}
 }
 
 void bch2_bkey_extent_entry_drop_s(const struct bch_fs *c, struct bkey_s k, union bch_extent_entry *entry)
@@ -1827,7 +1844,9 @@ __cold void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 		return;
 	}
 
-	prt_printf(out, "durability: %u ", bch2_bkey_durability_safe(c, k));
+	struct bkey_durability durability;
+	bch2_bkey_durability_safe(c, k, &durability);
+	prt_printf(out, "durability: %u ", durability.total);
 
 	guard(printbuf_atomic)(out);
 	guard(rcu)();
