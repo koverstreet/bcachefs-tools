@@ -1052,6 +1052,8 @@ static bool bkey_reservation_durability(struct bkey_s_c k, struct bkey_durabilit
 		.online			= nr_replicas,
 		.total			= nr_replicas,
 		.nr_overwritable	= nr_replicas,
+		.nr_replicas		= nr_replicas,
+		.replicas		= nr_replicas,
 		.min_durability		= U8_MAX,
 	};
 	return true;
@@ -1075,6 +1077,8 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 			continue;
 
 		ret->nr_ptrs		+= p.ptr.dev != BCH_SB_MEMBER_INVALID;
+		ret->nr_replicas	+= p.ptr.dev != BCH_SB_MEMBER_INVALID;
+		ret->replicas		+= 1 + (p.has_ec ? p.ec.redundancy : 0);
 		ret->nr_overwritable	+= !crc_is_compressed(p.crc);
 		if (crc_is_compressed(p.crc))
 			ret->sectors_compressed += p.crc.compressed_size;
@@ -1164,7 +1168,8 @@ void bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k,
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
-	struct extent_ptr_decoded p;
+	/* p.ec is only filled in when p.has_ec; zero it so gcc can see that */
+	struct extent_ptr_decoded p = { 0 };
 
 	if (bkey_reservation_durability(k, ret))
 		return;
@@ -1177,6 +1182,8 @@ void bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k,
 			continue;
 
 		ret->nr_ptrs		+= p.ptr.dev != BCH_SB_MEMBER_INVALID;
+		ret->nr_replicas	+= p.ptr.dev != BCH_SB_MEMBER_INVALID;
+		ret->replicas		+= 1 + (p.has_ec ? p.ec.redundancy : 0);
 		ret->nr_overwritable	+= !crc_is_compressed(p.crc);
 		if (crc_is_compressed(p.crc))
 			ret->sectors_compressed += p.crc.compressed_size;

@@ -631,6 +631,31 @@ struct bkey_durability {
 	u8		nr_ptrs;		/* real device pointers */
 	u8		nr_overwritable;	/* uncompressed - an overwrite reclaims these */
 	unsigned	sectors_compressed;
+
+	/*
+	 * Copies this key occupies, for disk space accounting.
+	 *
+	 * Deliberately not weighted by mi.durability, unlike the counts above:
+	 * durability is OPT_RUNTIME, and accounting is persistent, so a
+	 * durability change would retroactively invalidate space already
+	 * accounted for. This has to be a function of what is physically on
+	 * disk.
+	 *
+	 * Differs from nr_ptrs only for a reservation, which occupies the space
+	 * it reserved while having no pointers at all.
+	 */
+	u8		nr_replicas;
+
+	/*
+	 * Copies for the purpose of "does this write increase replication" -
+	 * erasure coding counts, because a stripe genuinely provides it.
+	 *
+	 * Distinct from nr_replicas on purpose: parity is accounted separately
+	 * as BCH_DATA_parity at the stripe, so counting redundancy in a
+	 * per-extent space figure would charge the same parity to every extent
+	 * sharing the stripe. Space and replication are different questions.
+	 */
+	u8		replicas;
 };
 
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);

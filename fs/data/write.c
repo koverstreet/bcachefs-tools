@@ -867,8 +867,8 @@ int bch2_sum_sector_overwrites(struct btree_trans *trans,
 			       s64 *disk_sectors_delta)
 {
 	struct bch_fs *c = trans->c;
-	unsigned new_replicas = bch2_bkey_replicas(c, bkey_i_to_s_c(new));
-	bool new_compressed = bch2_bkey_sectors_compressed(c, bkey_i_to_s_c(new));
+	struct bkey_durability new_d;
+	bch2_bkey_durability_safe(c, bkey_i_to_s_c(new), &new_d);
 
 	*usage_increasing	= false;
 	*i_sectors_delta	= 0;
@@ -883,19 +883,35 @@ int bch2_sum_sector_overwrites(struct btree_trans *trans,
 			max(bkey_start_offset(&new->k),
 			    bkey_start_offset(old.k));
 
+		struct bkey_durability old_d;
+		bch2_bkey_durability_safe(c, old, &old_d);
+
 		*i_sectors_delta += sectors *
 			(bkey_extent_is_allocation(&new->k) -
 			 bkey_extent_is_allocation(old.k));
 
-		*disk_sectors_delta += sectors * bch2_bkey_nr_ptrs_allocated(c, bkey_i_to_s_c(new));
+		/*
+		 * What the new key will occupy, less what overwriting the old
+		 * one gives back. Only the old key's uncompressed replicas
+		 * count against us: a compressed extent holds fewer sectors
+		 * than it covers, so crediting its full extent would hand back
+		 * space that was never taken.
+		 *
+		 * nr_replicas, not total: this is space accounting, and it must
+		 * not depend on mi.durability. Durability is OPT_RUNTIME while
+		 * accounting is persistent, so weighting by it would let a
+		 * device setting change retroactively invalidate space already
+		 * accounted for.
+		 */
+		*disk_sectors_delta += sectors * new_d.nr_replicas;
 		*disk_sectors_delta -= new->k.p.snapshot == old.k->p.snapshot
-			? sectors * bch2_bkey_nr_ptrs_fully_allocated(c, old)
+			? sectors * old_d.nr_overwritable
 			: 0;
 
 		if (!*usage_increasing &&
 		    (new->k.p.snapshot != old.k->p.snapshot ||
-		     new_replicas > bch2_bkey_replicas(c, old) ||
-		     (!new_compressed && bch2_bkey_sectors_compressed(c, old))))
+		     new_d.replicas > old_d.replicas ||
+		     (!new_d.sectors_compressed && old_d.sectors_compressed)))
 			*usage_increasing = true;
 
 		if (bkey_ge(old.k->p, new->k.p))
