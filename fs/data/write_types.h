@@ -87,8 +87,18 @@ struct bch_write_op {
 	s16			error; /* dio write path expects it to hold -ERESTARTSYS... */
 	u8			io_error;
 
+	/*
+	 * What we want the data to be. Seeded from @opts at init
+	 * (bch2_write_op_init()), but allowed to diverge from it: the data
+	 * update path forces an encrypted extent to stay encrypted even if the
+	 * file's options no longer ask for encryption, so this is the resolved
+	 * intent for *this* write, not the filesystem's policy.
+	 *
+	 * Read these, not @opts, when deciding what to produce.
+	 */
 	unsigned		compression_opt:8;
 	unsigned		csum_type:4;
+
 	unsigned		nr_replicas:4;
 	unsigned		watermark:3;
 	unsigned		incompressible:1;
@@ -97,13 +107,29 @@ struct bch_write_op {
 	struct bch_devs_list	devs_have;
 	u16			target;
 	u16			nonce;
+
+	/*
+	 * The fs/file's configured options - policy, not intent. @csum_type and
+	 * @compression_opt above are what we actually resolved to; where the two
+	 * disagree, they do so deliberately.
+	 */
 	struct bch_inode_opts	opts;
 
 	u32			subvol;
 	struct bpos		pos;
 	struct bversion		version;
 
-	/* For BCH_WRITE_data_encoded: */
+	/*
+	 * For BCH_WRITE_data_encoded: what the data we're holding currently
+	 * *is* - as opposed to @csum_type/@compression_opt above, which are
+	 * what we want it to become. It tracks the buffer: decrypting in place
+	 * zeroes crc.csum_type because the buffer really is unencrypted and
+	 * unchecksummed now, and decompressing clears crc.compression_type for
+	 * the same reason.
+	 *
+	 * So the three layers are: @opts is policy, @csum_type is intent, @crc
+	 * is fact. Anything that changes the buffer must update @crc with it.
+	 */
 	struct bch_extent_crc_unpacked crc;
 
 	struct write_point_specifier write_point;
