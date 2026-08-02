@@ -85,6 +85,7 @@ enum bch_sb_error_id bch2_blk_sts_sb_err(int);
 	x(ZSTD_error_memory_allocation,		zstd_memory_allocation)
 
 enum bch_sb_error_id bch2_decompress_sb_err(int);
+enum bch_key_type_errors bch2_decompress_key_type_error(int);
 
 void bch2_sb_errors_from_cpu(struct bch_fs *);
 int bch2_sb_errors_to_cpu(struct bch_fs *);

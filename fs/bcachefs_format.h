@@ -504,11 +504,38 @@ struct bch_error {
 	u8			pad[7];
 };
 
-#define KEY_TYPE_ERRORS()			\
-	x(unknown,			0)	\
-	x(device_removed,		1)	\
-	x(double_allocation,		2)	\
-	x(no_valid_pointers_repair,	3)
+/*
+ * Why an extent became a KEY_TYPE_error key, recorded in the tombstone so a
+ * later reader can tell what killed the data without the damage btree, which
+ * fsck can prune.
+ *
+ * The decompress_ reasons are the data_decompress_err_ list in
+ * sb/errors_format.h, name for name: the superblock counts how often a
+ * decompression failed each way, and the key says which of those killed this
+ * extent. bch2_decompress_key_type_error() maps between them off the same
+ * table that produces the sb error ids, so the two can't drift - adding a
+ * decompress error id without a reason here breaks the build.
+ */
+#define KEY_TYPE_ERRORS()					\
+	x(unknown,					0)	\
+	x(device_removed,				1)	\
+	x(double_allocation,				2)	\
+	x(no_valid_pointers_repair,			3)	\
+	x(decompress_exceeded_max_encoded_extent,	4)	\
+	x(decompress_lz4_old,				5)	\
+	x(decompress_lz4,				6)	\
+	x(decompress_gzip,				7)	\
+	x(decompress_gzip_size_mismatch,		8)	\
+	x(decompress_zstd_src_len_bad,			9)	\
+	x(decompress_zstd_size_mismatch,		10)	\
+	x(decompress_zstd_corruption_detected,		11)	\
+	x(decompress_zstd_checksum_wrong,		12)	\
+	x(decompress_zstd_prefix_unknown,		13)	\
+	x(decompress_zstd_src_size_wrong,		14)	\
+	x(decompress_zstd_dst_size_too_small,		15)	\
+	x(decompress_zstd_memory_allocation,		16)	\
+	x(decompress_zstd_unknown,			17)	\
+	x(decompress_unknown,				18)
 
 enum bch_key_type_errors {
 #define x(n, t)	KEY_TYPE_ERROR_##n = t,
