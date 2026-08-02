@@ -412,6 +412,16 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 						     ext->recovery_passes_required);
 	}
 
+	/*
+	 * Recorded above, but not run: repair found mid-mount is still repair,
+	 * and a tool that opened this filesystem to inspect it doesn't want a
+	 * pass starting underneath it - accounting underflow scheduling
+	 * check_allocations is the one that bites. The requirement stays in the
+	 * superblock, so the next mount that isn't skipping does the work.
+	 */
+	if (c->opts.recovery_passes_skip_scheduled)
+		return 0;
+
 	if (pass < BCH_RECOVERY_PASS_set_may_go_rw &&
 	    test_bit(BCH_FS_may_go_rw, &c->flags)) {
 		prt_printf(out, "need recovery pass %s (%u), but already rw\n",
@@ -760,12 +770,22 @@ int bch2_run_recovery_passes_startup(struct bch_fs *c, enum bch_recovery_pass fr
 
 	r->scheduled_passes_ephemeral = c->opts.recovery_passes;
 
+	/*
+	 * Scheduled passes are repair the superblock is asking for - an upgrade
+	 * wanting accounting rebuilt, damage found on a previous mount. Skipping
+	 * them doesn't clear them: they stay in the superblock and run at the
+	 * next mount that doesn't skip. For tools that open a filesystem to look
+	 * at it rather than fix it, where check_allocations rebuilding the world
+	 * before the first command is the opposite of what was asked for.
+	 */
 	u64 passes =
 		bch2_recovery_passes_match(PASS_ALWAYS) |
 		(!c->sb.clean ? bch2_recovery_passes_match(PASS_UNCLEAN) : 0) |
 		(c->opts.fsck ? bch2_recovery_passes_match(PASS_FSCK) : 0) |
 		c->opts.recovery_passes |
-		c->sb.recovery_passes_required;
+		(!c->opts.recovery_passes_skip_scheduled
+		 ? c->sb.recovery_passes_required
+		 : 0);
 
 	if (c->opts.recovery_pass_last)
 		passes &= BIT_ULL(c->opts.recovery_pass_last + 1) - 1;

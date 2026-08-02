@@ -444,6 +444,13 @@ enum fsck_err_opts {
 	  OPT_STR_NOLIMIT(bch2_recovery_passes),			\
 	  BCH2_NO_SB_OPT,		0,				\
 	  NULL,		"Exit recovery after specified pass")		\
+	x(recovery_passes_skip_scheduled, u8,				\
+	  OPT_FS|OPT_MOUNT,						\
+	  OPT_BOOL(),							\
+	  BCH2_NO_SB_OPT,		false,				\
+	  NULL,		"Don't run repair passes, whether the superblock had "\
+			"them scheduled or something schedules them mid-mount; "\
+			"they stay scheduled for the next mount")	\
 	x(retain_recovery_info,		u8,				\
 	  0,								\
 	  OPT_BOOL(),							\
