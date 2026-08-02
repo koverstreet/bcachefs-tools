@@ -85,7 +85,12 @@ int bch2_swap_activate(struct swap_info_struct *sis,
 	if (ret) {
 		bch_err(c, "swapon: cannot reserve %llu bytes for inode %llu: %s",
 			(u64) size, (u64) inode->v.i_ino, bch2_err_str(ret));
-		return ret;
+		/*
+		 * Log the private errcode, return a classified one: this is the
+		 * value swapon() reports to userspace, and bch2_fallocate_dispatch()
+		 * classifies for the same reason.
+		 */
+		return bch2_err_class(ret);
 	}
 
 	sis->flags |= SWP_FS_OPS;
