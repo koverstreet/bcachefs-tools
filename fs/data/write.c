@@ -867,8 +867,7 @@ int bch2_sum_sector_overwrites(struct btree_trans *trans,
 			       s64 *disk_sectors_delta)
 {
 	struct bch_fs *c = trans->c;
-	struct bkey_durability new_d;
-	bch2_bkey_durability_safe(c, bkey_i_to_s_c(new), &new_d);
+	struct bkey_durability new_d = bch2_bkey_durability_safe(c, bkey_i_to_s_c(new));
 
 	*usage_increasing	= false;
 	*i_sectors_delta	= 0;
@@ -883,8 +882,7 @@ int bch2_sum_sector_overwrites(struct btree_trans *trans,
 			max(bkey_start_offset(&new->k),
 			    bkey_start_offset(old.k));
 
-		struct bkey_durability old_d;
-		bch2_bkey_durability_safe(c, old, &old_d);
+		struct bkey_durability old_d = bch2_bkey_durability_safe(c, old);
 
 		*i_sectors_delta += sectors *
 			(bkey_extent_is_allocation(&new->k) -
@@ -1322,7 +1320,7 @@ static noinline int bch2_write_drop_io_error_ptrs(struct bch_write_op *op)
 			bch2_bkey_drop_ptrs_noerror(bkey_i_to_s(src), p, entry,
 				bch2_dev_io_failures(&op->wbio.failed, p.ptr.dev));
 
-			if (!bch2_bkey_nr_dirty_ptrs(c, bkey_i_to_s_c(src)))
+			if (!bch2_bkey_durability_safe(c, bkey_i_to_s_c(src)).nr_ptrs)
 				return bch_err_throw(c, data_write_io);
 		}
 

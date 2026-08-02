@@ -692,7 +692,7 @@ static noinline int __bchfs_fallocate(struct bch_inode_info *inode, int mode,
 
 		/* already reserved */
 		if (bkey_extent_is_reservation(c, k) &&
-		    bch2_bkey_nr_ptrs_fully_allocated(c, k) >= opts.data_replicas) {
+		    bch2_bkey_durability_safe(c, k).nr_overwritable >= opts.data_replicas) {
 			bch2_btree_iter_advance(&iter);
 			continue;
 		}

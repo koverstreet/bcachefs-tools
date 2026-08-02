@@ -1125,7 +1125,7 @@ static int bch2_can_do_write_btree(struct bch_fs *c,
 	bool evacuating = bch2_btree_ptr_has_dev_evacuating(c, k);
 
 	/* Dropping excess replicas is progress regardless of placement: */
-	if (bch2_bkey_nr_dirty_ptrs(c, k) > opts->data_replicas)
+	if (bch2_bkey_durability_safe(c, k).nr_ptrs > opts->data_replicas)
 		return 0;
 
 	unsigned durability		= bch2_btree_ptr_durability(c, k).total;

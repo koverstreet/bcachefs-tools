@@ -189,7 +189,7 @@ int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
 	 * reservation:
 	 */
 	if (nr_splits > 1 &&
-	    (compressed_sectors = bch2_bkey_sectors_compressed(c, old)))
+	    (compressed_sectors = bch2_bkey_durability_safe(c, old).sectors_compressed))
 		trans->extra_disk_res += compressed_sectors * (nr_splits - 1);
 
 	if (front_split) {

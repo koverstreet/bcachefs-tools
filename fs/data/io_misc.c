@@ -54,7 +54,7 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 
 	sectors = min_t(u64, sectors, k.k->p.offset - iter->pos.offset);
 	new_replicas = max(0, (int) opts.data_replicas -
-			   (int) bch2_bkey_nr_ptrs_fully_allocated(c, k));
+			   (int) bch2_bkey_durability_safe(c, k).nr_overwritable);
 
 	/*
 	 * Get a disk reservation before (in the nocow case) calling
@@ -444,7 +444,7 @@ case LOGGED_OP_FINSERT_shift_extents:
 		if (snapshot != k.k->p.snapshot) {
 			ret = bch2_disk_reservation_add(c, &disk_res,
 					copy->k.size *
-					bch2_bkey_nr_ptrs_allocated(c, bkey_i_to_s_c(copy)),
+					bch2_bkey_durability_safe(c, bkey_i_to_s_c(copy)).total,
 					0);
 			if (ret)
 				goto btree_err;
@@ -457,7 +457,7 @@ case LOGGED_OP_FINSERT_shift_extents:
 			if (snapshot == k.k->p.snapshot)
 				bch2_disk_reservation_add(c, &disk_res,
 							  copy->k.size *
-							  bch2_bkey_nr_ptrs_allocated(c, bkey_i_to_s_c(copy)),
+							  bch2_bkey_durability_safe(c, bkey_i_to_s_c(copy)).total,
 							  BCH_DISK_RESERVATION_NOFAIL);
 		}
 

@@ -249,7 +249,7 @@ static int overlapping_extents_found(struct btree_trans *trans,
 								BTREE_UPDATE_internal_snapshot_node));
 			n->k.type = KEY_TYPE_whiteout;
 		} else {
-			trans->extra_disk_res += bch2_bkey_sectors_compressed(c, k2);
+			trans->extra_disk_res += bch2_bkey_durability_safe(c, k2).sectors_compressed;
 
 			try(bch2_trans_update_extent_overwrite(trans, old_iter,
 						BTREE_UPDATE_internal_snapshot_node,

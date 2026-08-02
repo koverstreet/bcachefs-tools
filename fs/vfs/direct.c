@@ -263,8 +263,8 @@ retry:
 			break;
 
 		if (k.k->p.snapshot != snapshot ||
-		    nr_replicas > bch2_bkey_replicas(c, k) ||
-		    (!compressed && bch2_bkey_sectors_compressed(c, k)))
+		    nr_replicas > bch2_bkey_durability_safe(c, k).total ||
+		    (!compressed && bch2_bkey_durability_safe(c, k).sectors_compressed))
 			return false;
 	}
 err:

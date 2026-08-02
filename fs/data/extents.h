@@ -580,14 +580,9 @@ static inline struct bch_devs_list bch2_bkey_devs(const struct bch_fs *c, struct
 	return ret;
 }
 
-unsigned bch2_bkey_nr_dirty_ptrs(const struct bch_fs *, struct bkey_s_c);
-unsigned bch2_bkey_nr_ptrs_allocated(const struct bch_fs *, struct bkey_s_c);
-unsigned bch2_bkey_nr_ptrs_fully_allocated(const struct bch_fs *, struct bkey_s_c);
 bool bch2_bkey_is_incompressible(const struct bch_fs *, struct bkey_s_c);
 void bch2_bkey_propagate_incompressible(const struct bch_fs *, struct bkey_i *, struct bkey_s_c);
-unsigned bch2_bkey_sectors_compressed(const struct bch_fs *, struct bkey_s_c);
 
-unsigned bch2_bkey_replicas(struct bch_fs *, struct bkey_s_c);
 
 unsigned bch2_dev_durability(struct bch_fs *, unsigned);
 
@@ -659,7 +654,7 @@ struct bkey_durability {
 };
 
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);
-void bch2_bkey_durability_safe(struct bch_fs *, struct bkey_s_c, struct bkey_durability *);
+struct bkey_durability bch2_bkey_durability_safe(struct bch_fs *, struct bkey_s_c);
 struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_c);
 
 bool bch2_bkey_can_read(const struct bch_fs *, struct bkey_s_c);

@@ -785,7 +785,7 @@ static void btree_update_new_nodes_mark_sb(struct btree_update *as)
 		bch2_write_super(c);
 }
 
-static void bkey_strip_reconcile(const struct bch_fs *c, struct bkey_s k)
+static void bkey_strip_reconcile(struct bch_fs *c, struct bkey_s k)
 {
 	if (bkey_deleted(k.k))
 		return;
@@ -807,7 +807,7 @@ static void bkey_strip_reconcile(const struct bch_fs *c, struct bkey_s k)
 
 	bch2_bkey_drop_ptrs_noerror(k, p, entry, p.ptr.dev == BCH_SB_MEMBER_INVALID);
 
-	BUG_ON(!bch2_bkey_nr_dirty_ptrs(c, k.s_c));
+	BUG_ON(!bch2_bkey_durability_safe(c, k.s_c).nr_ptrs);
 }
 
 static bool bkey_has_reconcile(const struct bch_fs *c, struct bkey_s_c k)
