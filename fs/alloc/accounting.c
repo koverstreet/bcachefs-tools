@@ -539,30 +539,6 @@ void __bch2_accounting_maybe_kill(struct bch_fs *c, struct bpos pos)
 	bch2_write_super(c);
 }
 
-/*
- * Read accounting counters from the accounting btree - for types excluded
- * from the mem table (bch2_accounting_is_mem()), where
- * bch2_accounting_mem_read() would silently return zeros. Deltas buffer
- * through the btree write buffer: callers that need current values must
- * flush it first, hoisted out of their loops.
- */
-int bch2_accounting_btree_read(struct btree_trans *trans, struct bpos p,
-			       u64 *v, unsigned nr)
-{
-	memset(v, 0, sizeof(*v) * nr);
-
-	CLASS(btree_iter, iter)(trans, BTREE_ID_accounting, p, 0);
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
-
-	if (k.k->type != KEY_TYPE_accounting)
-		return 0;
-
-	struct bkey_s_c_accounting a = bkey_s_c_to_accounting(k);
-	memcpy(v, a.v->d,
-	       min_t(unsigned, nr, bch2_accounting_counters(a.k)) * sizeof(u64));
-	return 0;
-}
-
 void bch2_accounting_mem_gc(struct bch_fs *c)
 {
 	struct bch_accounting_mem *acc = &c->accounting;

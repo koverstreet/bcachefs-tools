@@ -544,18 +544,40 @@ static u32 snapshot_table_find_edge(struct bch_fs *c, const struct bch_snapshot 
 	return found;
 }
 
-static int snapshot_data_sectors(struct btree_trans *trans, u32 id, u64 *sectors)
+/*
+ * Does snapshot @id own anything at all?
+ *
+ * Any nonzero counter in any snapshotted btree says yes - keys, their bytes,
+ * or sectors. Only the existence of evidence matters here, not what it means,
+ * so there's nothing to version gate: a filesystem from before the per-btree
+ * key counts still accounts sectors, and on one that has them a snapshot
+ * holding only dirents or xattrs shows up in nr_keys where sectors alone would
+ * read as empty.
+ *
+ * In-memory read: current as of the last applied delta, so unlike a btree read
+ * it needs no write buffer flush to be trustworthy.
+ */
+static bool snapshot_has_accounting(struct bch_fs *c, u32 id)
 {
-	struct disk_accounting_pos acc;
-	memset(&acc, 0, sizeof(acc));
-	acc.type = BCH_DISK_ACCOUNTING_snapshot;
-	acc.snapshot.id = id;
+	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
+		if (!btree_type_has_snapshots(btree))
+			continue;
 
-	/* btree 0 (extents, the default) is the only one with external_sectors (counter 2) */
-	u64 v[3] = {};
-	try(bch2_accounting_btree_read(trans, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v)));
-	*sectors = v[2];
-	return 0;
+		struct disk_accounting_pos acc;
+		memset(&acc, 0, sizeof(acc));
+		acc.type = BCH_DISK_ACCOUNTING_snapshot;
+		acc.snapshot.id = id;
+		acc.snapshot.btree = btree;
+
+		u64 v[3] = {};
+		bch2_accounting_mem_read(c, disk_accounting_pos_to_bpos(&acc), v, ARRAY_SIZE(v));
+
+		for (unsigned i = 0; i < ARRAY_SIZE(v); i++)
+			if (v[i])
+				return true;
+	}
+
+	return false;
 }
 
 static bool snapshot_parent_child_consistent(const struct bch_snapshot *s, u32 id, unsigned side,
@@ -834,18 +856,16 @@ static int check_snapshot_edge(struct btree_trans *trans,
 					     other_exists ? &other : NULL, &r))))
 		return snapshot_edge_set_ptr(trans, id, side, other_id, repl);
 
-	/* A dangling child pointer with no data accounted to it may be cleared: */
+	/* A dangling child pointer with nothing accounted to it may be cleared: */
 	if (side == EDGE_PARENT && !other_exists) {
 		u32 sibling = le32_to_cpu(s->children[0]) == other_id
 			? le32_to_cpu(s->children[1])
 			: le32_to_cpu(s->children[0]);
-		u64 sectors;
-		try(snapshot_data_sectors(trans, other_id, &sectors));
 
-		if (!sectors && sibling &&
+		if (!snapshot_has_accounting(c, other_id) && sibling &&
 		    ret_fsck_err(trans, snapshot_edge_bad,
 				 "snapshot %u child pointer %u does not exist: nothing claims %u as\n"
-				 "parent and no data is accounted to it - clearing%s",
+				 "parent and nothing is accounted to it - clearing%s",
 				 id, other_id, id,
 				 (printbuf_reset(&buf),
 				  edge_nodes_to_text(&buf, c, k, NULL, NULL))))
