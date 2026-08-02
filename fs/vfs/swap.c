@@ -36,14 +36,23 @@
 /*
  * Swap I/O diagnostics.
  *
- * Track in-flight swap ops and detect when they stall.  Under memory
- * pressure the write path can block indefinitely on allocation —
- * we want to crash early with a useful stack trace rather than
- * silently hang.
+ * Track swap ops and detect when they stall.  Under memory pressure the
+ * write path can block indefinitely on allocation — we want to crash
+ * early with a useful stack trace rather than silently hang.
+ *
+ * These count what ->swap_rw() can see, which is submission, not
+ * completion: an op that returns -EIOCBQUEUED finishes later in a
+ * worker or an endio, and nothing here is called again for it.  So they
+ * are named for submission and counted separately, rather than folding
+ * queued ops into "completed" and reporting a completion count that is
+ * really a submission count.  Covering async completions would mean
+ * wrapping iocb->ki_complete; until that exists, `queued` is the number
+ * of ops whose outcome these counters do not know.
  */
-static atomic_t bch2_swap_inflight = ATOMIC_INIT(0);
-static atomic64_t bch2_swap_completed = ATOMIC64_INIT(0);
-static atomic64_t bch2_swap_errors = ATOMIC64_INIT(0);
+static atomic_t bch2_swap_in_submit = ATOMIC_INIT(0);
+static atomic64_t bch2_swap_completed = ATOMIC64_INIT(0);	/* synchronously */
+static atomic64_t bch2_swap_queued = ATOMIC64_INIT(0);		/* outcome unseen */
+static atomic64_t bch2_swap_errors = ATOMIC64_INIT(0);		/* at submission */
 
 /*
  * Warn after 2 s, BUG (debug builds) after 60 s.  The BUG threshold must
@@ -120,7 +129,7 @@ int bch2_swap_rw(struct kiocb *iocb, struct iov_iter *iter)
 	u64 start_ns = ktime_get_ns();
 	int rw = iov_iter_rw(iter);
 
-	atomic_inc(&bch2_swap_inflight);
+	atomic_inc(&bch2_swap_in_submit);
 
 	iocb->ki_flags |= IOCB_DIRECT;
 
@@ -147,18 +156,21 @@ int bch2_swap_rw(struct kiocb *iocb, struct iov_iter *iter)
 
 	memalloc_noreclaim_restore(noreclaim_flags);
 
-	atomic_dec(&bch2_swap_inflight);
+	atomic_dec(&bch2_swap_in_submit);
 
 	u64 elapsed_ns = ktime_get_ns() - start_ns;
 
-	if (ret < 0 && ret != -EIOCBQUEUED) {
+	if (ret == -EIOCBQUEUED) {
+		atomic64_inc(&bch2_swap_queued);
+	} else if (ret < 0) {
 		atomic64_inc(&bch2_swap_errors);
 		bch_err_ratelimited(c, "swap_rw %s error %li at pos %lld "
-				    "(inflight=%d completed=%lld errors=%lld)",
+				    "(in_submit=%d completed=%lld queued=%lld errors=%lld)",
 				    rw == READ ? "read" : "write",
 				    ret, iocb->ki_pos,
-				    atomic_read(&bch2_swap_inflight),
+				    atomic_read(&bch2_swap_in_submit),
 				    atomic64_read(&bch2_swap_completed),
+				    atomic64_read(&bch2_swap_queued),
 				    atomic64_read(&bch2_swap_errors));
 	} else {
 		atomic64_inc(&bch2_swap_completed);
@@ -170,14 +182,21 @@ int bch2_swap_rw(struct kiocb *iocb, struct iov_iter *iter)
 	 * or deadlock).  WARN at SWAP_IO_WARN_NS; in debug builds, BUG at
 	 * SWAP_IO_BUG_NS to get a full crash dump with symbolized stacks
 	 * instead of a silent hang.
+	 *
+	 * elapsed_ns is time spent in submission.  For a synchronous op that
+	 * is the whole operation; for one that returned -EIOCBQUEUED it is
+	 * only the part before the handoff, so a stall in the async tail is
+	 * not caught here.  That is the tripwire on the index-update worker's
+	 * job, and it is why that one exists separately.
 	 */
 	if (unlikely(elapsed_ns > SWAP_IO_WARN_NS)) {
-		bch_err(c, "swap_rw %s STALL: %llu ms at pos %lld "
-			"(inflight=%d completed=%lld errors=%lld)",
+		bch_err(c, "swap_rw %s STALL: %llu ms in submit at pos %lld "
+			"(in_submit=%d completed=%lld queued=%lld errors=%lld)",
 			rw == READ ? "read" : "write",
 			elapsed_ns / NSEC_PER_MSEC, iocb->ki_pos,
-			atomic_read(&bch2_swap_inflight),
+			atomic_read(&bch2_swap_in_submit),
 			atomic64_read(&bch2_swap_completed),
+			atomic64_read(&bch2_swap_queued),
 			atomic64_read(&bch2_swap_errors));
 		WARN_ON_ONCE(1);
 	}
