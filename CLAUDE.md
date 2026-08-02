@@ -63,9 +63,12 @@ software development. When approaching a new problem:
    rather than planning and implementing entire features in one pass.
 
 Research and analysis notes are a first-class output, not just
-scaffolding for implementation. They should be dated and checked into the
-repository under `.claude/` so that future developers (human and AI) can
-see what's been analyzed and what was decided.
+scaffolding for implementation. They go in `.claude/`, dated, so that
+later work can see what's been analyzed and what was decided.
+
+`.claude/` is deliberately untracked — these are working notes, not
+documentation for general consumption. Anything that belongs in the
+repository proper goes in `doc/`, written for that audience.
 
 ### Calibrate to the risk
 
