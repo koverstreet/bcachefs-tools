@@ -1030,6 +1030,33 @@ int __bch2_extent_ptr_durability(struct btree_trans *trans, struct extent_ptr_de
 	return ret ?: (int) (desired ? desired_total : d.total);
 }
 
+/*
+ * A reservation is space promised but not yet written: it has no pointers, so
+ * the walk below would report nothing at all. What it does have is a replica
+ * count, and that is the answer to every question this struct is asked about
+ * how much space the key accounts for - so report it as the durability.
+ *
+ * online == total because nothing about a reservation depends on which devices
+ * are up; it is a claim against the filesystem's free space, not data sitting
+ * somewhere. nr_ptrs stays 0, which is the truth and what the pointer walk
+ * would have said.
+ */
+static bool bkey_reservation_durability(struct bkey_s_c k, struct bkey_durability *ret)
+{
+	if (k.k->type != KEY_TYPE_reservation)
+		return false;
+
+	u8 nr_replicas = bkey_s_c_to_reservation(k).v->nr_replicas;
+
+	*ret = (struct bkey_durability) {
+		.online			= nr_replicas,
+		.total			= nr_replicas,
+		.nr_overwritable	= nr_replicas,
+		.min_durability		= U8_MAX,
+	};
+	return true;
+}
+
 int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bkey_durability *ret)
 {
 	struct bch_fs *c = trans->c;
@@ -1037,6 +1064,9 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
 	struct durability_dedup seen = {};
+
+	if (bkey_reservation_durability(k, ret))
+		return 0;
 
 	*ret = (struct bkey_durability) { .min_durability = U8_MAX };
 
@@ -1135,6 +1165,9 @@ void bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k,
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
+
+	if (bkey_reservation_durability(k, ret))
+		return;
 
 	*ret = (struct bkey_durability) { .min_durability = U8_MAX };
 
