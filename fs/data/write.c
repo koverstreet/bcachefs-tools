@@ -1817,10 +1817,16 @@ static noinline int bch2_write_prep_encoded_data(struct bch_write_op *op, struct
 			 * out byte-for-byte as it came in, still encrypted,
 			 * still compressed, @op->crc still describing it.
 			 *
-			 * The caller has to have a write point with room for
-			 * it - a compressed extent can't be split - which is
-			 * what the fresh-bucket retry in __bch2_write() is for.
+			 * A compressed extent can't be split, so this needs a
+			 * write point with room for the whole thing. If we
+			 * haven't got one, say so and let __bch2_write() retire
+			 * the short buckets and come back with fresh ones. That
+			 * only ever happens here, so healthy compressed data
+			 * never pays the fragmentation for it.
 			 */
+			if (op->crc.compressed_size > wp->sectors_free)
+				return bch_err_throw(c, data_write_need_fresh_buckets);
+
 			return 1;
 		}
 	}
@@ -2462,6 +2468,7 @@ static void __bch2_write(struct bch_write_op *op)
 	struct bch_fs *c = op->c;
 	struct write_point *wp = NULL;
 	struct bio *bio = NULL;
+	bool retried_for_encoded = false;
 	int ret;
 
 	/*
@@ -2542,6 +2549,25 @@ again:
 
 		bch2_open_bucket_get(c, wp, &op->open_buckets);
 		ret = bch2_write_extent(op, wp, &bio);
+
+		/*
+		 * The extent wouldn't decompress, so it has to go out as it came
+		 * in - and it can't be split, so it needs a write point with room
+		 * for the whole compressed extent. Retire the buckets that came up
+		 * short and allocate fresh, the way __bch2_btree_node_alloc() does
+		 * for a btree node.
+		 *
+		 * Once only: nothing constrains encoded_extent_max against bucket
+		 * size, so fresh buckets aren't guaranteed to be big enough either
+		 * and retrying on that would never end. Giving up means the write
+		 * fails, which is what happened before any of this.
+		 */
+		if (unlikely(bch2_err_matches(ret, BCH_ERR_data_write_need_fresh_buckets)) &&
+		    !retried_for_encoded) {
+			retried_for_encoded = true;
+			bch2_alloc_sectors_retire_short(c, wp, op->crc.compressed_size);
+			goto again;
+		}
 
 		bch2_alloc_sectors_done_inlined(c, wp);
 err:
