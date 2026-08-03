@@ -55,7 +55,7 @@ enum bch_fsck_flags {
 	x(btree_node_replicas_sectors_written_mismatch,		 39,	0)		\
 	x(btree_node_replicas_data_mismatch,			 40,	0)		\
 	x(bset_unknown_csum,					 41,	0)		\
-	x(bset_bad_csum,					 42,	0)		\
+	x(bset_bad_csum,					 42,	FSCK_AUTOFIX)	\
 	x(bset_past_end_of_btree_node,				 43,	0)		\
 	x(bset_wrong_sector_offset,				 44,	0)		\
 	x(bset_empty,						 45,	0)		\
