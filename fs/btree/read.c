@@ -1,5 +1,42 @@
 // SPDX-License-Identifier: GPL-2.0
 
+/* DOC(btree-node-read)
+ *
+ * Reading a btree node is not repairing it.
+ *
+ * A read has three possible outcomes:
+ *
+ *   clean     — every bset parsed and validated.
+ *   degraded  — damage was found and worked around in memory: a bset with a
+ *               bad checksum kept, a bkey that fails validation dropped, the
+ *               tail of a bset truncated. The node is usable, but what's on
+ *               disk isn't, so it's flagged need_rewrite and
+ *               need_rewrite_error - the repair only means anything once the
+ *               node has been written back.
+ *   unusable  — nothing parses, or there's no replica left to try. The caller
+ *               gets btree_node_validate_err and must treat the node as gone.
+ *
+ * Which of the last two a given error produces is a property of the damage
+ * alone: whether it's FSCK_CAN_FIX, and whether another replica is worth
+ * reading. It deliberately does not consult fix_errors. fix_errors governs
+ * whether a repair is *persisted*, not whether a node can be read, and the
+ * write is gated where it belongs - bch2_async_btree_op() only queues a
+ * rewrite once the filesystem can take a write ref, so a read-only mount reads
+ * degraded nodes happily and writes nothing.
+ *
+ * That separation is load-bearing rather than stylistic. When this path did
+ * ask fix_errors for permission to parse, a node with a single bad bset
+ * checksum - header intact, fully parseable - was reported unreadable to every
+ * caller on any run that wasn't fixing errors, which includes an ordinary
+ * mount. bch2_check_topology() then did the right thing with a false premise:
+ * dropped the child it couldn't read, noticed the gap that left, and asked
+ * btree node scan to fill it. The scan handed back the same node, because the
+ * scan's own read succeeds (see the scan_for_btree_nodes arm in __btree_err()).
+ * Nothing in that cycle changed state, so recovery read one node forever, in a
+ * process that couldn't be killed because teardown waits on the thread that's
+ * spinning.
+ */
+
 #include "bcachefs.h"
 
 #include "alloc/buckets.h"
