@@ -591,11 +591,37 @@ fn main() {
         .generate()
         .expect("BindGen Generation Failiure: [libbcachefs_wrapper]");
 
-    std::fs::write(
-        out_dir.join("non_fs.rs"),
-        packed_and_align_fix(bindings.to_string()),
-    )
-    .expect("Writing to output file failed for: `non_fs.rs`");
+    let bindings = packed_and_align_fix(bindings.to_string());
+
+    /*
+     * The BLK* ioctl numbers come from clang_macro_fallback: bindgen's own
+     * evaluator can't fold the _IOC() arithmetic, so it hands those macros to
+     * clang in a separate translation unit. Every failure in that path is
+     * silent - it emits nothing and reports success - and the build then dies
+     * in another crate with an unresolved name, pointing nowhere near here.
+     *
+     * Stop at the point where we still know something. The count is the
+     * diagnostic: ~55 means the fallback ran and dropped this one macro
+     * specifically, 1 means it never ran at all.
+     */
+    if !bindings.contains("BLKGETSIZE64") {
+        panic!(
+            "\n\
+             bindgen did not emit BLKGETSIZE64 (from linux/fs.h, via clang_macro_fallback).\n\
+             \n\
+             clang:               {}\n\
+             target:              {}\n\
+             BLK* consts emitted: {} - expect ~55; 1 means the macro fallback never ran\n\
+             \n\
+             Please report the above.\n",
+            bindgen::clang_version().full,
+            std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string()),
+            bindings.matches("pub const BLK").count(),
+        );
+    }
+
+    std::fs::write(out_dir.join("non_fs.rs"), bindings)
+        .expect("Writing to output file failed for: `non_fs.rs`");
 
     // Compile the static-inline wrappers bindgen just generated and link them
     // in, matching the clang args bindgen parsed the headers with.
