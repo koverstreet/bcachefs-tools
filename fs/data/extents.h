@@ -654,7 +654,7 @@ struct bkey_durability {
 };
 
 int bch2_bkey_durability(struct btree_trans *, struct bkey_s_c, struct bkey_durability *);
-struct bkey_durability bch2_bkey_durability_safe(struct bch_fs *, struct bkey_s_c);
+struct bkey_durability bch2_bkey_durability_safe(const struct bch_fs *, struct bkey_s_c);
 struct bkey_durability bch2_btree_ptr_durability(struct bch_fs *, struct bkey_s_c);
 
 bool bch2_bkey_can_read(const struct bch_fs *, struct bkey_s_c);

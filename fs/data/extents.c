@@ -1085,7 +1085,7 @@ bool bch2_bkey_can_read(const struct bch_fs *c, struct bkey_s_c k)
  * stripe, so this needs no transaction and can't fail. Online vs total isn't
  * distinguishable without those lookups, so only @total is filled in.
  */
-struct bkey_durability bch2_bkey_durability_safe(struct bch_fs *c, struct bkey_s_c k)
+struct bkey_durability bch2_bkey_durability_safe(const struct bch_fs *c, struct bkey_s_c k)
 {
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;

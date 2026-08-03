@@ -59,7 +59,7 @@ static inline bool bch2_dev_is_online(struct bch_dev *ca)
 	return !enumerated_ref_is_zero(&ca->io_ref[READ]);
 }
 
-static inline struct bch_dev *bch2_dev_rcu_noerror(struct bch_fs *, unsigned);
+static inline struct bch_dev *bch2_dev_rcu_noerror(const struct bch_fs *, unsigned);
 
 static inline bool bch2_dev_idx_is_online(struct bch_fs *c, unsigned dev)
 {
@@ -262,7 +262,7 @@ static inline struct bch_dev *bch2_dev_locked(struct bch_fs *c, unsigned dev)
 					 lockdep_is_held(&c->state_lock));
 }
 
-static inline struct bch_dev *bch2_dev_rcu_noerror(struct bch_fs *c, unsigned dev)
+static inline struct bch_dev *bch2_dev_rcu_noerror(const struct bch_fs *c, unsigned dev)
 {
 	return c && dev < c->sb.nr_devices
 		? rcu_dereference(c->devs[dev])
