@@ -333,7 +333,7 @@ enum bch_fsck_flags {
 	x(inode_bi_parent_nonzero,				251,	0)		\
 	x(missing_inode_with_contents,				321,	FSCK_AUTOFIX)	\
 	x(dirent_to_missing_parent_subvol,			252,	0)		\
-	x(dirent_not_visible_in_parent_subvol,			253,	0)		\
+	x(dirent_not_visible_in_parent_subvol,			253,	FSCK_AUTOFIX)	\
 	x(subvol_fs_path_parent_wrong,				254,	FSCK_AUTOFIX)	\
 	x(subvol_root_fs_path_parent_nonzero,			255,	0)		\
 	x(subvol_children_not_set,				256,	0)		\
