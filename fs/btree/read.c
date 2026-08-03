@@ -1,5 +1,26 @@
 // SPDX-License-Identifier: GPL-2.0
 
+/* DOC(btree-node-read)
+ *
+ * A btree node read has three outcomes:
+ *
+ *   clean     - every bset parsed and validated.
+ *   degraded  - damage was worked around in memory: a bset with a bad checksum
+ *               kept, an invalid bkey dropped, the tail of a bset truncated.
+ *               The node is usable, but the copy on disk isn't fixed until the
+ *               node is rewritten: it's flagged need_rewrite and
+ *               need_rewrite_error.
+ *   unusable  - nothing parses, or there's no replica left to try: the caller
+ *               gets btree_node_validate_err.
+ *
+ * Degraded vs. unusable depends only on the damage - FSCK_CAN_FIX, and whether
+ * another replica is worth reading - never on fix_errors. fix_errors decides
+ * whether a repair gets written, and bch2_async_btree_op() gates that on a
+ * write ref, so a read-only mount reads degraded nodes and writes nothing.
+ * Making the read itself depend on fix_errors makes a parseable node unreadable
+ * on an ordinary mount, and topology repair then livelocks on it.
+ */
+
 #include "bcachefs.h"
 
 #include "alloc/buckets.h"
