@@ -113,6 +113,7 @@ static int find_snapshot_tree_subvol(struct btree_trans *trans,
 static struct qstr lostfound_str = QSTR("lost+found");
 
 static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
+			    u32 lookup_snapshot,
 			    subvol_inum root_inum,
 			    struct bch_inode_unpacked *root_inode,
 			    struct bch_inode_unpacked *lostfound)
@@ -137,6 +138,21 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	prt_printf(&msg.m, "creating ");
 	try(bch2_inum_to_path(trans, root_inum, &msg.m));
 	prt_printf(&msg.m, "/lost+found in subvol %llu snapshot %u", root_inum.subvol, snapshot);
+
+	/*
+	 * Putting lost+found in the tree's root snapshot only gives every branch
+	 * the same lost+found if they all inherit from it. If the caller's
+	 * snapshot doesn't, it will never see what we create here and will ask
+	 * us to create it again - so stop, and say which snapshots disagree.
+	 */
+	if (!bch2_snapshot_is_ancestor(trans, lookup_snapshot, snapshot)) {
+		msg.loglevel = LOGLEVEL_err;
+		prt_printf(&msg.m, "\nbut snapshot %u, which needs it, does not inherit from snapshot %u"
+			   "\n(snapshot tree %u, root snapshot %u)",
+			   lookup_snapshot, snapshot,
+			   snapshot_tree, le32_to_cpu(st.root_snapshot));
+		return bch_err_throw(c, snapshot_lostfound_unreachable);
+	}
 
 	u64 now = bch2_current_time(c);
 
@@ -232,7 +248,7 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 		 * We always create lost_found in its own transaction; this will
 		 * return a transaction restart:
 		 */
-		ret = create_lostfound(trans, snapshot_tree, root_inum, &root_inode, lostfound);
+		ret = create_lostfound(trans, snapshot_tree, snapshot, root_inum, &root_inode, lostfound);
 		bch_err_msg(c, ret, "creating lost+found");
 		return ret;
 	}

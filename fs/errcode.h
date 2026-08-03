@@ -589,6 +589,7 @@
 	x(0,				snapshot)			\
 	x(BCH_ERR_snapshot,		invalid_snapshot_node)			\
 	x(BCH_ERR_snapshot,		snapshot_multiple_descendents)		\
+	x(BCH_ERR_snapshot,		snapshot_lostfound_unreachable)		\
 	x(0,				option_needs_open_fs)			\
 	x(0,				remove_disk_accounting_entry)		\
 	x(0,				nocow_trylock_fail)			\
