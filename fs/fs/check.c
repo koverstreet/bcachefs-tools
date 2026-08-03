@@ -112,47 +112,17 @@ static int find_snapshot_tree_subvol(struct btree_trans *trans,
 
 static struct qstr lostfound_str = QSTR("lost+found");
 
-static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
-			    u32 lookup_snapshot,
+static int create_lostfound(struct btree_trans *trans, u32 snapshot,
 			    subvol_inum root_inum,
 			    struct bch_inode_unpacked *root_inode,
 			    struct bch_inode_unpacked *lostfound)
 {
 	struct bch_fs *c = trans->c;
-	/*
-	 * We always create lost+found in the root snapshot; we don't want
-	 * different branches of the snapshot tree to have different lost+found
-	 */
-	struct bch_snapshot_tree st;
-	try(bch2_snapshot_tree_lookup(trans, snapshot_tree, &st));
-
-	u32 snapshot;
-	if (bch2_snapshot_live_descendent(c, le32_to_cpu(st.root_snapshot), &snapshot) ||
-	    !snapshot) {
-		bch_err(c, "snapshot tree %u has no live snapshot, cannot create lost+found",
-			snapshot_tree);
-		return bch_err_throw(c, ENOENT_snapshot);
-	}
 
 	CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_notice);
 	prt_printf(&msg.m, "creating ");
 	try(bch2_inum_to_path(trans, root_inum, &msg.m));
 	prt_printf(&msg.m, "/lost+found in subvol %llu snapshot %u", root_inum.subvol, snapshot);
-
-	/*
-	 * Putting lost+found in the tree's root snapshot only gives every branch
-	 * the same lost+found if they all inherit from it. If the caller's
-	 * snapshot doesn't, it will never see what we create here and will ask
-	 * us to create it again - so stop, and say which snapshots disagree.
-	 */
-	if (!bch2_snapshot_is_ancestor(trans, lookup_snapshot, snapshot)) {
-		msg.loglevel = LOGLEVEL_err;
-		prt_printf(&msg.m, "\nbut snapshot %u, which needs it, does not inherit from snapshot %u"
-			   "\n(snapshot tree %u, root snapshot %u)",
-			   lookup_snapshot, snapshot,
-			   snapshot_tree, le32_to_cpu(st.root_snapshot));
-		return bch_err_throw(c, snapshot_lostfound_unreachable);
-	}
 
 	u64 now = bch2_current_time(c);
 
@@ -170,17 +140,149 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	bch2_btree_iter_set_snapshot(&lostfound_iter, snapshot);
 	try(bch2_btree_iter_traverse(&lostfound_iter));
 
-	try(bch2_dirent_create_snapshot(trans,
+	int ret = bch2_dirent_create_snapshot(trans,
 				root_inum.subvol, snapshot, root_inode,
 				mode_to_type(lostfound->bi_mode),
 				&lostfound_str,
 				lostfound->bi_inum,
 				&lostfound->bi_dir_offset,
 				BTREE_UPDATE_internal_snapshot_node|
-				STR_HASH_must_create));
+				STR_HASH_must_create);
+	if (ret) {
+		if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+			msg.loglevel = LOGLEVEL_err;
+			prt_printf(&msg.m, "\nerror creating dirent: %s", bch2_err_str(ret));
+		}
+		return ret;
+	}
 
-	try(bch2_inode_write_flags(trans, &lostfound_iter, lostfound,
-				   BTREE_UPDATE_internal_snapshot_node));
+	return bch2_inode_write_flags(trans, &lostfound_iter, lostfound,
+				      BTREE_UPDATE_internal_snapshot_node);
+}
+
+/*
+ * The snapshot tree has a lost+found, but @snapshot hasn't: it was deleted
+ * there. Give @snapshot a dirent for the same inode - one lost+found per tree
+ * is the invariant, not one dirent.
+ *
+ * A fresh dirent, deliberately, rather than removing the whiteout in place:
+ * dirents are a hash table, so let the table pick the slot. It goes back into
+ * the slot that was freed in the normal case, and probes past whatever took it
+ * otherwise. One inode with different dirent positions in different snapshots
+ * is what a directory renamed after a snapshot already looks like.
+ */
+static int restore_lostfound(struct btree_trans *trans, u32 snapshot,
+			     u32 root_snapshot,
+			     subvol_inum root_inum,
+			     struct bch_inode_unpacked *root_inode,
+			     u64 inum, unsigned d_type,
+			     struct bch_inode_unpacked *lostfound)
+{
+	struct bch_fs *c = trans->c;
+
+	if (d_type != DT_DIR) {
+		bch_err(c, "lost+found in snapshot %u is not a directory (type %u), cannot restore it in snapshot %u",
+			root_snapshot, d_type, snapshot);
+		return bch_err_throw(c, ENOENT_not_directory);
+	}
+
+	/*
+	 * The inode is normally still visible here - only the dirent was
+	 * shadowed - but if the directory was deleted rather than unlinked it's
+	 * shadowed too, and we have to go get it from the root snapshot.
+	 */
+	int ret = bch2_inode_find_by_inum_snapshot(trans, inum, snapshot, lostfound, 0);
+	if (bch2_err_matches(ret, ENOENT))
+		ret = bch2_inode_find_by_inum_snapshot(trans, inum, root_snapshot, lostfound, 0);
+	if (ret) {
+		bch_err_msg(c, ret, "looking up lost+found inode %llu in snapshot %u or %u",
+			    inum, snapshot, root_snapshot);
+		return ret;
+	}
+
+	CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_notice);
+	prt_printf(&msg.m, "restoring ");
+	try(bch2_inum_to_path(trans, root_inum, &msg.m));
+	prt_printf(&msg.m, "/lost+found in subvol %llu snapshot %u: inode %llu, deleted here, still in snapshot %u",
+		   root_inum.subvol, snapshot, inum, root_snapshot);
+
+	lostfound->bi_dir = root_inode->bi_inum;
+	lostfound->bi_snapshot = snapshot;
+
+	ret = bch2_dirent_create_snapshot(trans,
+				root_inum.subvol, snapshot, root_inode,
+				d_type,
+				&lostfound_str,
+				inum,
+				&lostfound->bi_dir_offset,
+				BTREE_UPDATE_internal_snapshot_node|
+				STR_HASH_must_create);
+	if (ret) {
+		if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+			msg.loglevel = LOGLEVEL_err;
+			prt_printf(&msg.m, "\nerror creating dirent: %s", bch2_err_str(ret));
+		}
+		return ret;
+	}
+
+	return __bch2_fsck_write_inode(trans, lostfound);
+}
+
+/*
+ * @snapshot needs a lost+found and hasn't got one. There's one per snapshot
+ * tree, in the tree's root snapshot so that every branch inherits the same one,
+ * so either the tree hasn't got one at all or it has and it was deleted here.
+ */
+static int create_or_restore_lostfound(struct btree_trans *trans, u32 snapshot_tree,
+				       u32 snapshot,
+				       subvol_inum root_inum,
+				       struct bch_inode_unpacked *root_inode,
+				       struct bch_hash_info root_hash_info,
+				       struct bch_inode_unpacked *lostfound)
+{
+	struct bch_fs *c = trans->c;
+
+	struct bch_snapshot_tree st;
+	try(bch2_snapshot_tree_lookup(trans, snapshot_tree, &st));
+
+	u32 root_snapshot;
+	if (bch2_snapshot_live_descendent(c, le32_to_cpu(st.root_snapshot), &root_snapshot) ||
+	    !root_snapshot) {
+		bch_err(c, "snapshot tree %u has no live snapshot, cannot create lost+found",
+			snapshot_tree);
+		return bch_err_throw(c, ENOENT_snapshot);
+	}
+
+	/*
+	 * Keeping lost+found in the root snapshot only gives every branch the
+	 * same one if they all inherit from it. If this snapshot doesn't, we
+	 * can neither find what's there nor create something it will see.
+	 */
+	if (!bch2_snapshot_is_ancestor(trans, snapshot, root_snapshot)) {
+		bch_err(c, "lost+found for snapshot %u belongs in snapshot %u, which it does not inherit from"
+			" (snapshot tree %u, root snapshot %u)",
+			snapshot, root_snapshot, snapshot_tree, le32_to_cpu(st.root_snapshot));
+		return bch_err_throw(c, snapshot_lostfound_unreachable);
+	}
+
+	/*
+	 * root_hash_info came from the root inode as @snapshot sees it, and
+	 * we're about to hash with it in another snapshot: fine, because all
+	 * versions of an inode must have the same hash seed and type, and
+	 * bch2_check_dirents has already run and repaired any that didn't
+	 * (check_inode_hash_info_matches_root()).
+	 */
+	u64 inum = 0;
+	unsigned d_type = 0;
+	int ret = lookup_dirent_in_snapshot(trans, root_hash_info, root_inum,
+					    &lostfound_str, &inum, &d_type, root_snapshot);
+	if (!ret)
+		ret = restore_lostfound(trans, snapshot, root_snapshot, root_inum,
+					root_inode, inum, d_type, lostfound);
+	else if (bch2_err_matches(ret, ENOENT))
+		ret = create_lostfound(trans, root_snapshot, root_inum, root_inode, lostfound);
+	if (ret)
+		return ret;
 
 	return bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 }
@@ -248,8 +350,9 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 		 * We always create lost_found in its own transaction; this will
 		 * return a transaction restart:
 		 */
-		ret = create_lostfound(trans, snapshot_tree, snapshot, root_inum, &root_inode, lostfound);
-		bch_err_msg(c, ret, "creating lost+found");
+		ret = create_or_restore_lostfound(trans, snapshot_tree, snapshot, root_inum,
+						  &root_inode, root_hash_info, lostfound);
+		bch_err_msg(c, ret, "getting lost+found for snapshot %u", snapshot);
 		return ret;
 	}
 
