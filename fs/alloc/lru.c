@@ -118,12 +118,11 @@ static struct bbpos lru_pos_to_bp(struct bkey_s_c lru_k)
 	}
 }
 
-int bch2_dev_remove_lrus(struct bch_fs *c, struct bch_dev *ca)
+static int bch2_dev_remove_lrus_scan(struct bch_fs *c, struct bch_dev *ca)
 {
 	CLASS(btree_trans, trans)(c);
-	int ret = bch2_btree_write_buffer_flush_sync(trans) ?:
-		for_each_btree_key(trans, iter,
-				 BTREE_ID_lru, POS_MIN, BTREE_ITER_prefetch, k, ({
+	return for_each_btree_key(trans, iter,
+				  BTREE_ID_lru, POS_MIN, BTREE_ITER_prefetch, k, ({
 		struct bbpos bp = lru_pos_to_bp(k);
 
 		bp.btree == BTREE_ID_alloc && bp.pos.inode == ca->dev_idx
@@ -131,6 +130,42 @@ int bch2_dev_remove_lrus(struct bch_fs *c, struct bch_dev *ca)
 		   bch2_trans_commit(trans, NULL, NULL, 0))
 		: 0;
 	}));
+}
+
+static int bch2_dev_remove_lru_range(struct bch_fs *c, u16 lru_id)
+{
+	return bch2_btree_delete_range(c, BTREE_ID_lru,
+				       lru_start(lru_id),
+				       lru_start(lru_id + 1), 0);
+}
+
+int bch2_dev_remove_lrus(struct bch_fs *c, struct bch_dev *ca)
+{
+	int ret;
+
+	{
+		CLASS(btree_trans, trans)(c);
+		ret = bch2_btree_write_buffer_flush_sync(trans);
+	}
+	if (ret)
+		goto err;
+
+	if (ca->dev_idx < BCH_LRU_READ_MAX) {
+		ret = bch2_dev_remove_lru_range(c, ca->dev_idx) ?:
+		      bch2_dev_remove_lru_range(c, bucket_fragmentation_lru(ca->dev_idx));
+	} else {
+		ret = bch2_dev_remove_lrus_scan(c, ca);
+	}
+	if (ret)
+		goto err;
+
+	/*
+	 * Old fs-wide fragmentation LRU entries are not grouped by device; only
+	 * pre-upgrade filesystems need the slower full scan to clean them out.
+	 */
+	if (c->sb.version_upgrade_complete < bcachefs_metadata_version_per_dev_fragmentation_lru)
+		ret = bch2_dev_remove_lrus_scan(c, ca);
+err:
 	bch_err_fn(c, ret);
 	return ret;
 }
