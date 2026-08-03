@@ -131,8 +131,6 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot,
 	lostfound->bi_dir = root_inode->bi_inum;
 	lostfound->bi_snapshot = snapshot;
 
-	root_inode->bi_nlink++;
-
 	CLASS(btree_iter_uninit, lostfound_iter)(trans);
 	try(bch2_inode_create(trans, &lostfound_iter, lostfound, snapshot,
 			      inode_opt_get(c, root_inode, inodes_32bit)));
@@ -229,6 +227,22 @@ static int restore_lostfound(struct btree_trans *trans, u32 snapshot,
 }
 
 /*
+ * lost+found is a subdirectory of the root inode in @snapshot, so the root
+ * inode gains a link there. Take it on the version @snapshot sees and write it
+ * back at @snapshot: writing it where that version lives would hand the link to
+ * sibling branches that haven't got a lost+found.
+ */
+static int lostfound_dir_link(struct btree_trans *trans, u64 dir_inum, u32 snapshot)
+{
+	struct bch_inode_unpacked dir;
+	try(bch2_inode_find_by_inum_snapshot(trans, dir_inum, snapshot, &dir, 0));
+
+	dir.bi_nlink++;
+	dir.bi_snapshot = snapshot;
+	return __bch2_fsck_write_inode(trans, &dir);
+}
+
+/*
  * @snapshot needs a lost+found and hasn't got one. There's one per snapshot
  * tree, in the tree's root snapshot so that every branch inherits the same one,
  * so either the tree hasn't got one at all or it has and it was deleted here.
@@ -274,15 +288,21 @@ static int create_or_restore_lostfound(struct btree_trans *trans, u32 snapshot_t
 	 */
 	u64 inum = 0;
 	unsigned d_type = 0;
+	u32 dirent_snapshot = 0;
 	int ret = lookup_dirent_in_snapshot(trans, root_hash_info, root_inum,
 					    &lostfound_str, &inum, &d_type, root_snapshot);
-	if (!ret)
+	if (!ret) {
+		dirent_snapshot = snapshot;
 		ret = restore_lostfound(trans, snapshot, root_snapshot, root_inum,
 					root_inode, inum, d_type, lostfound);
-	else if (bch2_err_matches(ret, ENOENT))
+	} else if (bch2_err_matches(ret, ENOENT)) {
+		dirent_snapshot = root_snapshot;
 		ret = create_lostfound(trans, root_snapshot, root_inum, root_inode, lostfound);
+	}
 	if (ret)
 		return ret;
+
+	try(lostfound_dir_link(trans, root_inum.inum, dirent_snapshot));
 
 	return bch2_trans_commit_lazy(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 }
