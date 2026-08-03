@@ -155,7 +155,7 @@ static int create_lostfound(struct btree_trans *trans, u32 snapshot_tree,
 	try(bch2_btree_iter_traverse(&lostfound_iter));
 
 	try(bch2_dirent_create_snapshot(trans,
-				0, snapshot, root_inode,
+				root_inum.subvol, snapshot, root_inode,
 				mode_to_type(lostfound->bi_mode),
 				&lostfound_str,
 				lostfound->bi_inum,
