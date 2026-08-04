@@ -275,13 +275,8 @@ static bool bch2_fs_ec_flush_outstanding_done(struct bch_fs *c, u64 wait_seq)
 		 * wait_seq, skipped) or get cancelled via their io_refs,
 		 * which we shouldn't block on from under state_lock.
 		 */
-		if (s->seq && s->seq <= wait_seq) {
-			CLASS(bch_log_msg_ratelimited, msg)(c);
-			prt_printf(&msg.m, "ec flush outstanding: waiting on stripe %llu -> %llu (seq %llu, wait_seq %llu)\n",
-				   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset,
-				   s->seq, wait_seq);
+		if (s->seq && s->seq <= wait_seq)
 			return false;
-		}
 	return true;
 }
 

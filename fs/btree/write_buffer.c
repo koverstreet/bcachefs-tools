@@ -1022,34 +1022,9 @@ static int btree_write_buffer_flush_seq(struct btree_trans *trans, u64 max_seq,
 	do {
 		fetch_from_journal_err = fetch_wb_keys_from_journal(c, max_seq);
 
-		/*
-		 * DIAGNOSTIC (temporary): stall detector for the online-shrink
-		 * hang. Sync flushers wait here for the per-btree flush workers to
-		 * drain pins <= max_seq; if that takes more than a couple of
-		 * seconds, report which per-btree instances still hold pins so we
-		 * can see which flush worker is stuck.
-		 */
-		u64 wait_start = local_clock();
-
-		while (!(ret = bch2_journal_error(&c->journal)) &&
-		       any_wb_pin_le(c, max_seq, did_work, caller)) {
-			if (time_after64(local_clock(), wait_start + 2ULL * NSEC_PER_SEC)) {
-				wait_start = local_clock();
-				CLASS(printbuf, buf)();
-				prt_printf(&buf, "%s: btree write buffer flush stalled (max_seq %llu):",
-					   trans->fn, max_seq);
-				for (enum bch_wb_btree i = 0; i < BCH_WB_BTREE_NR; i++) {
-					struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
-					prt_printf(&buf, " %s(inc %llu flush %llu)",
-						   bch_wb_btree_names[i],
-						   wb->inc.pin.seq, wb->flushing.pin.seq);
-				}
-				bch_warn(c, "%s", buf.buf);
-			}
-			trans_wait_event_timeout(trans, &c->btree.write_buffer_flush_wait,
-					 !any_wb_pin_le(c, max_seq, did_work, caller) ||
-					 (ret = bch2_journal_error(&c->journal)), HZ);
-		}
+		trans_wait_event(trans, &c->btree.write_buffer_flush_wait,
+				 !any_wb_pin_le(c, max_seq, did_work, caller) ||
+				 (ret = bch2_journal_error(&c->journal)));
 	} while (!ret && fetch_from_journal_err);
 
 	return ret;

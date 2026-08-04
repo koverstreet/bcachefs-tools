@@ -443,11 +443,6 @@ static int bch2_trigger_stripe_ptr(struct btree_trans *trans,
 		if (ret || !bch2_ptr_matches_stripe(&s->v, p))
 			return mark_stripe_ptr_no_match(trans, k, p.ec.idx);
 
-		CLASS(bch_log_msg, msg)(c);
-		prt_printf(&msg.m, "trigger_stripe_ptr: %s idx %llu block %u sectors %lld (dev %u)",
-			   (flags & BTREE_TRIGGER_overwrite) ? "overwrite" : "insert",
-			   (u64) p.ec.idx, p.ec.block, sectors, p.ptr.dev);
-
 		stripe_blockcount_set(&s->v, p.ec.block,
 			stripe_blockcount_get(&s->v, p.ec.block) +
 			sectors);
@@ -457,11 +452,6 @@ static int bch2_trigger_stripe_ptr(struct btree_trans *trans,
 		acc.type = BCH_DISK_ACCOUNTING_replicas;
 		bch2_bkey_to_replicas(c, &acc.replicas, bkey_i_to_s_c(&s->k_i));
 		acc.replicas.data_type = data_type;
-
-		prt_str(&msg.m, " replicas");
-		bch2_replicas_entry_to_text(&msg.m, &acc.replicas);
-		prt_newline(&msg.m);
-
 		return bch2_disk_accounting_mod(trans, &acc, &sectors, 1, false);
 	}
 

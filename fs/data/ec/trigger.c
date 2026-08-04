@@ -364,14 +364,10 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 		 * trips the commit-time assert. The flushed btree-side delete
 		 * re-runs this trigger to do the lru/reconcile/accounting cleanup.
 		 */
-		if (unlikely(new_lru_pos == STRIPE_LRU_POS_EMPTY)) {
-			if (!bch2_stripe_is_open(c, idx))
-				return bch2_btree_delete(trans, BTREE_ID_stripes, op.new.k->p,
-							 BTREE_UPDATE_overwrite_triggered);
-
-			CLASS(bch_log_msg_ratelimited, msg)(c);
-			prt_printf(&msg.m, "stripe %llu: became EMPTY but is OPEN - deferred to LRU delete work\n", idx);
-		}
+		if (unlikely(new_lru_pos == STRIPE_LRU_POS_EMPTY) &&
+		    !bch2_stripe_is_open(c, idx))
+			return bch2_btree_delete(trans, BTREE_ID_stripes, op.new.k->p,
+						 BTREE_UPDATE_overwrite_triggered);
 
 		try(bch2_lru_change(trans,
 				    BCH_LRU_STRIPE_FRAGMENTATION, idx,

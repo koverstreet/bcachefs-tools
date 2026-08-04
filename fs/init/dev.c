@@ -1837,12 +1837,6 @@ static int move_journal_past_cutoff(struct bch_fs *c, struct bch_dev *ca,
 struct shrink_tail_head {
 	struct bpos	bucket;
 	struct bpos	first_bp;
-	/*
-	 * Value of the first backpointer in the head bucket: kept so debug
-	 * output can identify what's blocking the shrink without another
-	 * btree lookup.
-	 */
-	struct bch_backpointer first_bp_v;
 	unsigned	nr_backpointers;
 };
 
@@ -1872,32 +1866,6 @@ static bool shrink_tail_head_progressed(const struct shrink_tail_head *old,
 }
 
 /*
- * Print what's blocking the shrink: the first bucket in the shrink tail that
- * still has data, along with the first backpointer within it (which identifies
- * the data reconcile hasn't been able to evacuate).
- */
-static void shrink_tail_head_to_text(struct printbuf *out, struct bch_fs *c,
-				     u64 new_nbuckets,
-				     const struct shrink_tail_head *head)
-{
-	if (shrink_tail_head_empty(head)) {
-		prt_str(out, "(empty)");
-		return;
-	}
-
-	prt_printf(out, "bucket %llu:%llu (%llu past cutoff), nr_backpointers %u, first backpointer ",
-		   head->bucket.inode, head->bucket.offset,
-		   head->bucket.offset - new_nbuckets,
-		   head->nr_backpointers);
-
-	struct bkey_i_backpointer bp_k;
-	bkey_backpointer_init(&bp_k.k_i);
-	bp_k.k.p = head->first_bp;
-	bp_k.v = head->first_bp_v;
-	bch2_backpointer_to_text(out, c, bkey_i_to_s_c(&bp_k.k_i));
-}
-
-/*
  * Make sure everything is caught here: this snapshots backpointer-visible tail
  * data. Journal buckets and superblock copies in the shrink tail are handled by
  * move_journal_past_cutoff() and drop_sbs_after_cutoff().
@@ -1908,21 +1876,13 @@ static int tail_head_snapshot(struct bch_fs *c, struct bch_dev *ca,
 	struct bpos bp_start = bucket_pos_to_bp_start(ca, POS(ca->dev_idx, new_nbuckets));
 	struct bpos bp_end = bucket_pos_to_bp_start(ca, POS(ca->dev_idx, ca->mi.nbuckets));
 
-	bch_verbose_ratelimited(c, "shrink: tail snapshot dev %u buckets %llu..%llu (bp %llu:%llu..%llu:%llu)",
-				ca->dev_idx, new_nbuckets, ca->mi.nbuckets,
-				bp_start.inode, bp_start.offset, bp_end.inode, bp_end.offset);
-
 	CLASS(btree_trans, trans)(c);
 	CLASS(backpointer_scan_iter, iter)(BTREE_ID_backpointers, bp_start, NULL);
 
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
-	u64 t0 = local_clock();
 	struct bkey_s_c_backpointer bp = bch2_bp_scan_iter_peek(trans, &iter, bp_end, &last_flushed);
-	bch_verbose_ratelimited(c, "shrink: tail snapshot first peek took %llu us%s",
-				(local_clock() - t0) / 1000,
-				bp.k ? "" : " (empty)");
 
 	try(bkey_err(bp));
 
@@ -1936,15 +1896,11 @@ static int tail_head_snapshot(struct bch_fs *c, struct bch_dev *ca,
 
 	head->bucket = bp_pos_to_bucket(ca, bp.k->p);
 	head->first_bp = bp.k->p;
-	head->first_bp_v = *bp.v;
 
 	do {
 		head->nr_backpointers++;
 		bch2_bp_scan_iter_advance(&iter);
-		u64 t1 = local_clock();
 		bp = bch2_bp_scan_iter_peek(trans, &iter, bp_end, &last_flushed);
-		bch_verbose_ratelimited(c, "shrink: tail snapshot peek %u took %llu us",
-					head->nr_backpointers, (local_clock() - t1) / 1000);
 		try(bkey_err(bp));
 	} while (bp.k && bpos_eq(bp_pos_to_bucket(ca, bp.k->p), head->bucket));
 
@@ -2265,8 +2221,6 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 		u32 kick;
 		bool did_scan = pass == 0 || scan_device;
 
-		bch_verbose_ratelimited(c, "shrink: pass %u (scan_device %d)", pass, scan_device);
-
 		try(bch2_dev_resize_restart_check(ca, seq));
 
 		try(tail_head_snapshot(c, ca, new_nbuckets, &head));
@@ -2285,20 +2239,14 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 
 		try(bch2_dev_shrink_queue_reconcile(c, ca, did_scan, &kick, err));
 
-		bch_verbose_ratelimited(c, "shrink: pass %u: waiting on kick %u", pass, kick);
-
 		try(bch2_dev_shrink_wait_reconcile(ca, new_nbuckets, seq, kick,
 						     &head, &kick_complete, err));
-
-		bch_verbose_ratelimited(c, "shrink: pass %u: kick complete %d, flushing ec", pass, kick_complete);
 
 		bch2_fs_ec_flush_outstanding(c);
 
 		/* Free buckets may have been changed during reconcile; refresh the count */
-		bch_verbose_ratelimited(c, "shrink: pass %u: counting tail free", pass);
 		try(bch2_dev_count_tail_free(c, ca, new_nbuckets));
 
-		bch_verbose_ratelimited(c, "shrink: pass %u: snapshotting head", pass);
 		try(tail_head_snapshot(c, ca, new_nbuckets, &head));
 		if (shrink_tail_head_empty(&head))
 			break;
@@ -2314,18 +2262,11 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 			 * do one.  If we have and it also made no progress, this
 			 * tail is genuinely impossible to evacuate.
 			 */
-			CLASS(printbuf, buf)();
-			prt_printf(&buf, "shrink stalled, tail head: ");
-			shrink_tail_head_to_text(&buf, c, new_nbuckets, &head);
-			bch_verbose(c, "%s", buf.buf);
-
 			if (!did_scan) {
 				scan_device = true;
 			} else if (++stalled_kicks >= stalled_kicks_limit) {
 				prt_printf(err,
-					   "Shrink failed: evacuating all data from the shrink tail not possible: ");
-				shrink_tail_head_to_text(err, c, new_nbuckets, &head);
-				prt_newline(err);
+					   "Shrink failed: evacuating all data from the shrink tail not possible\n");
 				try(bch2_dev_shrink_clear_target(c, ca, new_nbuckets, seq, err));
 				return -ENOSPC;
 			}
