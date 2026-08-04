@@ -227,10 +227,9 @@
  * remaining devices automatically.
  */
 
-#include "alloc/buckets.h"
-#include "asm-generic/bug.h"
 #include "bcachefs.h"
 
+#include "alloc/buckets.h"
 #include "alloc/accounting.h"
 #include "alloc/background.h"
 #include "alloc/backpointers.h"
@@ -238,6 +237,8 @@
 #include "alloc/discard.h"
 #include "alloc/replicas.h"
 #include "alloc/foreground.h"
+
+#include "asm/byteorder.h"
 
 #include "bcachefs_format.h"
 #include "btree/bkey_methods.h"
@@ -263,7 +264,6 @@
 #include "init/fs.h"
 
 #include "linux/bitmap.h"
-#include "linux/byteorder/generic.h"
 #include "linux/kthread.h"
 #include "linux/sched.h"
 #include "linux/sched/signal.h"

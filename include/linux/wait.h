@@ -113,6 +113,8 @@ do {									\
 	__ret;								\
 })
 
+#define wait_event_killable_timeout(wq, condition, timeout)	({wait_event_timeout(wq, condition, timeout); 0; })
+
 void wake_up_bit(void *, int);
 void __wait_on_bit(void *, int, unsigned);
 void __wait_on_bit_lock(void *, int, unsigned);
