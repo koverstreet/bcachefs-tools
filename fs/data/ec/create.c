@@ -115,7 +115,17 @@ static int ec_stripe_delete(struct btree_trans *trans, u64 idx, bool is_open)
 
 	if (!is_open && bch2_stripe_is_open(c, idx)) {
 		CLASS(bch_log_msg_ratelimited, msg)(c);
-		prt_printf(&msg.m, "ec stripe delete work: stripe %llu still OPEN, skipping delete\n", idx);
+		prt_printf(&msg.m, "ec stripe delete work: stripe %llu still OPEN, skipping delete", idx);
+		if (k.k->type == KEY_TYPE_stripe) {
+			const struct bch_stripe *st = bkey_s_c_to_stripe(k).v;
+			unsigned nr_data = st->nr_blocks - st->nr_redundant;
+			prt_str(&msg.m, " (blockcounts");
+			for (unsigned bi = 0; bi < nr_data; bi++)
+				prt_printf(&msg.m, " %u", stripe_blockcount_get(st, bi));
+			prt_printf(&msg.m, ", lru_pos %llu, needs_reconcile %u)",
+				   stripe_lru_pos(st), st->needs_reconcile);
+		}
+		prt_newline(&msg.m);
 		return 0;
 	}
 
@@ -599,8 +609,9 @@ void bch2_ec_stripe_new_free(struct bch_fs *c, struct ec_stripe_new *s)
 	bool had_old_stripe = s->old_stripe_handle.idx != 0;
 
 	CLASS(bch_log_msg_ratelimited, msg)(c);
-	prt_printf(&msg.m, "ec stripe new free: releasing old stripe handle idx %llu (new idx %llu)\n",
-		   s->old_stripe_handle.idx, s->new_stripe_handle.idx);
+	prt_printf(&msg.m, "ec stripe new free: releasing old stripe handle idx %llu (new idx %llu, create ret %s)\n",
+		   s->old_stripe_handle.idx, s->new_stripe_handle.idx,
+		   bch2_err_str(s->err));
 
 	bch2_stripe_new_buckets_del(c, s);
 	bch2_stripe_handle_put(c, &s->new_stripe_handle);
@@ -673,7 +684,20 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 		/* XXX: we might end up blocking here on reading the old stripe,
 		 * do we need to make this async? */
 
-		try(bch2_stripe_buf_validate_msg(c, &s->old_stripe, true));
+		if (s->ctxt) {
+			CLASS(bch_log_msg, msg)(c);
+			prt_printf(&msg.m, "ec stripe create %llu -> %llu: validating old stripe\n",
+				   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset);
+		}
+
+		int ret = bch2_stripe_buf_validate_msg(c, &s->old_stripe, true);
+		if (s->ctxt) {
+			CLASS(bch_log_msg, msg)(c);
+			prt_printf(&msg.m, "ec stripe create %llu -> %llu: validate done -> %s\n",
+				   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset,
+				   bch2_err_str(ret));
+		}
+		try(ret);
 
 		for (unsigned i = 0; i < s->old_blocks_nr; i++)
 			swap(s->new_stripe.data[i],
@@ -687,6 +711,12 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 	bch2_ec_generate_ec(&s->new_stripe);
 	bch2_ec_generate_checksums(&s->new_stripe);
 
+	if (s->ctxt) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "ec stripe create %llu -> %llu: writing new blocks\n",
+			   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset);
+	}
+
 	/* write out data blocks that moved */
 	for (unsigned i = 0; i < s->old_blocks_nr; i++)
 		if (test_bit(i, s->blocks_moving))
@@ -696,6 +726,13 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 	for_each_parity_block(i, nr_data, v->nr_redundant)
 		bch2_ec_block_io(c, &s->new_stripe, REQ_OP_WRITE, i);
 	closure_sync(&s->new_stripe.io);
+
+	if (s->ctxt) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "ec stripe create %llu -> %llu: writes done, nr_failed %u\n",
+			   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset,
+			   ec_nr_failed(&s->new_stripe, STRIPE_BUF_PRE_RECOV));
+	}
 
 	if (ec_nr_failed(&s->new_stripe, STRIPE_BUF_PRE_RECOV)) {
 		bch_err(c, "error creating stripe: error writing redundancy buckets");
@@ -713,10 +750,23 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 	try(bch2_trans_commit_do(c, &s->res, NULL,
 				 BCH_TRANS_COMMIT_no_check_rw|
 				 BCH_TRANS_COMMIT_no_enospc,
-		ec_stripe_key_update(trans, &s->new_stripe.key) ?:
-		__bch2_logged_op_start(trans, &op.k_i)));
+		 ec_stripe_key_update(trans, &s->new_stripe.key) ?:
+		 __bch2_logged_op_start(trans, &op.k_i)));
+
+	if (s->ctxt) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "ec stripe create %llu -> %llu: stripe key committed\n",
+			   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset);
+	}
 
 	int ret = stripe_update_extents(c, s);
+
+	if (s->ctxt) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "ec stripe create %llu -> %llu: stripe_update_extents -> %s\n",
+			   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset,
+			   bch2_err_str(ret));
+	}
 
 	{
 		CLASS(btree_trans, trans)(c);
@@ -842,6 +892,16 @@ static void ec_stripe_create_work_fn(struct work_struct *work)
 {
 	struct ec_stripe_new *s = container_of(work, struct ec_stripe_new, work);
 	struct bch_fs *c = s->c;
+
+	if (s->have_old_stripe && s->ctxt) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "ec stripe create work: enter old %llu new %llu seq %llu (old_blocks_nr %u, blocks_moving %u)\n",
+			   s->old_stripe.key.k.p.offset,
+			   s->new_stripe.key.k.p.offset,
+			   s->seq,
+			   s->old_blocks_nr,
+			   bitmap_weight(s->blocks_moving, BCH_BKEY_PTRS_MAX));
+	}
 
 	ec_stripe_create(s);
 
@@ -2219,6 +2279,9 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 			mutex_unlock(&dev_stripe->lock);
 
 		if (bch2_err_matches(ret2, BCH_ERR_operation_blocked)) {
+			CLASS(bch_log_msg_ratelimited, msg)(c);
+			prt_printf(&msg.m, "stripe %llu repair: waiting on allocator (ret %s)\n",
+				   s.k->p.offset, bch2_err_str(ret2));
 			bch2_wait_on_allocator(trans, req, ret2, &cl);
 			ret2 = bch_err_throw(c, transaction_restart_nested);
 		}
@@ -2240,6 +2303,12 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		kfree(new_s);
 		return ret;
 	}
+
+	CLASS(bch_log_msg, msg2)(c);
+	prt_printf(&msg2.m, "stripe %llu repair: buckets allocated, new stripe idx %llu, blocks_moving %u\n",
+		   s.k->p.offset,
+		   new_s->new_stripe.key.k.p.offset,
+		   bitmap_weight(new_s->blocks_moving, BCH_BKEY_PTRS_MAX));
 
 	bch2_trans_unlock_long(trans);
 
