@@ -2244,6 +2244,8 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 		u32 kick;
 		bool did_scan = pass == 0 || scan_device;
 
+		bch_verbose_ratelimited(c, "shrink: pass %u (scan_device %d)", pass, scan_device);
+
 		try(bch2_dev_resize_restart_check(ca, seq));
 
 		try(tail_head_snapshot(c, ca, new_nbuckets, &head));
