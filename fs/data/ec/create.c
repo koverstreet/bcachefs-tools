@@ -804,6 +804,13 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 		ret = bch2_logged_op_finish(trans, &op.k_i) ?: ret;
 	}
 
+	if (s->ctxt) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "ec stripe create %llu -> %llu: logged op finished -> %s\n",
+			   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset,
+			   bch2_err_str(ret));
+	}
+
 	return ret;
 }
 
@@ -935,6 +942,14 @@ static void ec_stripe_create_work_fn(struct work_struct *work)
 	}
 
 	ec_stripe_create(s);
+
+	if (s->have_old_stripe && s->ctxt) {
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "ec stripe create work: exit old %llu new %llu (create ret %s)\n",
+			   s->old_stripe.key.k.p.offset,
+			   s->new_stripe.key.k.p.offset,
+			   bch2_err_str(s->err));
+	}
 
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_stripe_create);
 }

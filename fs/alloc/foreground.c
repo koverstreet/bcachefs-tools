@@ -1274,6 +1274,26 @@ static bool should_drop_bucket(struct open_bucket *ob, struct bch_fs *c,
 				struct open_bucket *ob2 = a->open_buckets + ob->ec->blocks[i];
 				drop |= dev_and_region_matches(ob2, ca, tail_cutoff);
 			}
+
+			/*
+			 * A create that widened/reused an existing stripe holds the
+			 * old stripe's handle; the old stripe may reference the region
+			 * being shrunk even if the new key doesn't (e.g. only its
+			 * parity block is in the tail). Drop the bucket so the create
+			 * drains and releases the old stripe, unblocking the shrink's
+			 * stripe repair.
+			 */
+			if (!drop && ob->ec->have_old_stripe) {
+				struct bch_stripe *ov = &ob->ec->old_stripe.key.v;
+
+				guard(rcu)();
+				for (unsigned i = 0; i < ov->nr_blocks; i++) {
+					struct bch_dev *oca = bch2_dev_rcu_noerror(c, ov->ptrs[i].dev);
+					if (oca && oca->dev_idx == ca->dev_idx &&
+					    ov->ptrs[i].offset >= tail_cutoff * oca->mi.bucket_size)
+						drop = true;
+				}
+			}
 		}
 
 		return drop;

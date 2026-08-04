@@ -195,6 +195,27 @@ static bool should_cancel_stripe(struct bch_fs *c, struct ec_stripe_new *s, stru
 			return true;
 	}
 
+	/*
+	 * A create that widened/reused an existing stripe also holds the old
+	 * stripe's handle open. The old stripe may itself reference the region
+	 * being shrunk even when the new key does not (e.g. only its parity
+	 * block is in the tail): leaving such a head alive keeps the old stripe
+	 * open for the whole create, so the shrink's stripe repair can never
+	 * take its handle (tryget fails forever) and the old stripe's tail
+	 * backpointer blocks the shrink. Cancel it too.
+	 */
+	if (s->have_old_stripe) {
+		struct bch_stripe *ov = &s->old_stripe.key.v;
+
+		guard(rcu)();
+		for (unsigned i = 0; i < ov->nr_blocks; i++) {
+			struct bch_dev *oca = bch2_dev_rcu_noerror(c, ov->ptrs[i].dev);
+			if (oca && oca->dev_idx == ca->dev_idx &&
+			    ov->ptrs[i].offset >= tail_cutoff * oca->mi.bucket_size)
+				return true;
+		}
+	}
+
 	return false;
 }
 
@@ -254,8 +275,13 @@ static bool bch2_fs_ec_flush_outstanding_done(struct bch_fs *c, u64 wait_seq)
 		 * wait_seq, skipped) or get cancelled via their io_refs,
 		 * which we shouldn't block on from under state_lock.
 		 */
-		if (s->seq && s->seq <= wait_seq)
+		if (s->seq && s->seq <= wait_seq) {
+			CLASS(bch_log_msg_ratelimited, msg)(c);
+			prt_printf(&msg.m, "ec flush outstanding: waiting on stripe %llu -> %llu (seq %llu, wait_seq %llu)\n",
+				   s->old_stripe.key.k.p.offset, s->new_stripe.key.k.p.offset,
+				   s->seq, wait_seq);
 			return false;
+		}
 	return true;
 }
 

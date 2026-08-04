@@ -1,0 +1,3 @@
+Kernel version: 6.17.0
+Running test shrink.ktest on pc at /etc/nixos/home/data/Code/bcachefs/ktest
+building kernel... 
