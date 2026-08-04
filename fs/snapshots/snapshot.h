@@ -226,6 +226,14 @@ static inline int bch2_snapshot_is_leaf(struct bch_fs *c, u32 id)
 	return !ret;
 }
 
+/*
+ * No NULL check, unlike the helpers above: @parent must be an ancestor of a node
+ * the caller already found in the table. The table is indexed by U32_MAX - id
+ * and IDs descend, so a table covering a node covers all its ancestors.
+ *
+ * Returning 0 for a missing entry would write a wrong depth during repair; an
+ * oops at least stops.
+ */
 static inline u32 bch2_snapshot_depth(struct bch_fs *c, u32 parent)
 {
 	guard(rcu)();

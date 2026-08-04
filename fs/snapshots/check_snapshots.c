@@ -260,6 +260,7 @@ static int snapshot_tree_ptr_good(struct btree_trans *trans,
 	return bch2_snapshot_is_ancestor_early(trans->c, snap_id, le32_to_cpu(s_t.root_snapshot));
 }
 
+/* No NULL check, for the same reason as bch2_snapshot_depth(): */
 u32 bch2_snapshot_skiplist_get(struct bch_fs *c, u32 id)
 {
 	if (!id)
