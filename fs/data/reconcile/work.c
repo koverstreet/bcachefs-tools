@@ -772,6 +772,10 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 
 	int ret = bch2_stripe_repair(ctxt, iter, s);
 
+	CLASS(bch_log_msg_ratelimited, msg)(c);
+	prt_printf(&msg.m, "reconcile: stripe %llu needs_reconcile=%d repair -> %s\n",
+		   k.k->p.offset, s.v->needs_reconcile, bch2_err_str(ret));
+
 	event_add_trace(c, reconcile_stripe, le16_to_cpu(s.v->sectors) * s.v->nr_blocks, buf, ({
 		bch2_bkey_val_to_text(&buf, c, s.s_c);
 		prt_newline(&buf);

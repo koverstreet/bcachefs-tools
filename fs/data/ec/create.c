@@ -113,8 +113,11 @@ static int ec_stripe_delete(struct btree_trans *trans, u64 idx, bool is_open)
 	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, idx), BTREE_ITER_intent);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
-	if (!is_open && bch2_stripe_is_open(c, idx))
+	if (!is_open && bch2_stripe_is_open(c, idx)) {
+		CLASS(bch_log_msg_ratelimited, msg)(c);
+		prt_printf(&msg.m, "ec stripe delete work: stripe %llu still OPEN, skipping delete\n", idx);
 		return 0;
+	}
 
 	/*
 	 * We expect write buffer races here
@@ -132,6 +135,9 @@ static int ec_stripe_delete(struct btree_trans *trans, u64 idx, bool is_open)
 	event_inc_trace(c, stripe_delete, buf,
 			bch2_bkey_val_to_text(&buf, c, k));
 
+	CLASS(bch_log_msg_ratelimited, msg)(c);
+	prt_printf(&msg.m, "ec stripe delete work: deleting empty stripe %llu\n", idx);
+
 	return bch2_btree_delete_at(trans, &iter, 0);
 }
 
@@ -143,6 +149,8 @@ void bch2_ec_stripe_delete_work(struct work_struct *work)
 {
 	struct bch_fs *c =
 		container_of(work, struct bch_fs, ec.stripe_delete_work);
+
+	bch_verbose_ratelimited(c, "ec stripe delete work: running");
 
 	bch2_trans_run(c,
 		bch2_btree_write_buffer_tryflush(trans) ?:
@@ -543,6 +551,10 @@ static void zero_out_rest_of_ec_bucket(struct bch_fs *c,
 
 void bch2_ec_stripe_new_free(struct bch_fs *c, struct ec_stripe_new *s)
 {
+	CLASS(bch_log_msg_ratelimited, msg)(c);
+	prt_printf(&msg.m, "ec stripe new free: releasing old stripe handle idx %llu (new idx %llu)\n",
+		   s->old_stripe_handle.idx, s->new_stripe_handle.idx);
+
 	bch2_stripe_new_buckets_del(c, s);
 	bch2_stripe_handle_put(c, &s->new_stripe_handle);
 	bch2_stripe_handle_put(c, &s->old_stripe_handle);
@@ -2015,8 +2027,19 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	for_each_data_block(i, nr_data)
 		nr_live_data_blocks += stripe_blockcount_get(old_s, i) != 0;
 
-	if (!nr_live_data_blocks)
+	if (!nr_live_data_blocks) {
+		CLASS(bch_log_msg_ratelimited, msg)(c);
+		prt_printf(&msg.m, "stripe %llu repair: ALL DATA BLOCKS EMPTY (blockcounts",
+			   s.k->p.offset);
+		for_each_data_block(i, nr_data)
+			prt_printf(&msg.m, " %u", stripe_blockcount_get(old_s, i));
+		prt_printf(&msg.m, "), lru_pos %llu, open %d, needs_reconcile %d - not repairing, stale tail ptrs stay\n",
+			   stripe_lru_pos(old_s),
+			   bch2_stripe_is_open(c, s.k->p.offset),
+			   old_s->needs_reconcile);
+		bch2_bkey_val_to_text(&msg.m, c, s.s_c);
 		return 0;
+	}
 
 	struct bch_devs_mask devs;
 	bch2_disk_label_ec_devs(c, old_s->disk_label, &devs, le16_to_cpu(old_s->sectors));
@@ -2061,12 +2084,19 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		return -ENOMEM;
 
 	if (!bch2_stripe_handle_tryget(c, &new_s->old_stripe_handle, s.k->p.offset)) {
+		CLASS(bch_log_msg_ratelimited, msg)(c);
+		prt_printf(&msg.m, "stripe %llu repair: stripe is OPEN, tryget failed - skipping this pass\n",
+			   s.k->p.offset);
 		/* trace this */
 		kfree(new_s);
 		return 0;
 	}
 
 	bkey_reassemble(&new_s->old_stripe.key.k_i, s.s_c);
+
+	CLASS(bch_log_msg_ratelimited, msg)(c);
+	prt_printf(&msg.m, "stripe %llu repair: opened old stripe, rebuilding %u live data blocks\n",
+		   s.k->p.offset, nr_live_data_blocks);
 
 	init_new_stripe_from_old(c, new_s, true);
 
