@@ -552,8 +552,16 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	if (k.k->type == KEY_TYPE_stripe) {
 		*ret = r;
 
-		return (r.need_rb & BIT(BCH_RECONCILE_data_replicas)) &&
-			!bkey_s_c_to_stripe(k).v->needs_reconcile;
+		/*
+		 * A stripe still needs repair work whenever any of its blocks
+		 * reference a bad/evacuating region - even if needs_reconcile is
+		 * already set. The flag alone is not enough: a repair pass can lose
+		 * the stripe's work item (e.g. a stale needs_reconcile read racing
+		 * the scan's flag update), and unless the scan re-queues it the
+		 * stripe stays flagged-but-never-repaired forever - which stalls a
+		 * device shrink on its backpointer.
+		 */
+		return r.need_rb & BIT(BCH_RECONCILE_data_replicas);
 	}
 
 	if (unwritten || incompressible)
@@ -835,6 +843,20 @@ static int set_needs_reconcile_stripe(struct btree_trans *trans,
 	}
 
 	s.v->needs_reconcile = new_needs_reconcile;
+
+	/*
+	 * Re-create the hipri work item whenever the stripe is flagged, even if
+	 * the flag was already set (delta == 0): a repair pass can lose a
+	 * stripe's work item (e.g. a stale needs_reconcile read racing the scan
+	 * that set the flag), and bch2_bkey_needs_reconcile() now reports such
+	 * stripes on every device scan - without this re-queue the stripe would
+	 * stay flagged-but-never-repaired, stalling a shrink on its tail
+	 * backpointer forever. Idempotent with the trigger's delta-based bit
+	 * update.
+	 */
+	if (new_needs_reconcile)
+		try(reconcile_work_mod(trans, k.s_c, RECONCILE_WORK_hipri,
+				       data_to_rb_work_pos(BTREE_ID_stripes, k.k->p), true));
 	return 0;
 }
 

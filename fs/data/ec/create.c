@@ -503,21 +503,31 @@ static int stripe_update_bucket(struct btree_trans *trans,
 	 */
 	if (old_stripe != new_stripe &&
 	    !stats.nr_matched) {
-		struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
-						BTREE_ID_stripes, POS(0, old_stripe->k.p.offset),
-						BTREE_ITER_cached, stripe);
-		if (IS_ERR(s) && !bch2_err_matches(PTR_ERR(s), ENOENT))
-			return PTR_ERR(s);
+		/*
+		 * The get and commit can return transaction restarts (e.g.
+		 * journal_overwrites_changed racing the journal flush); retry them
+		 * in-transaction here rather than letting a restart escape the
+		 * iteration - bch2_trans_put() panics on a pending restart.
+		 */
+		lockrestart_do(trans, ({
+			struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
+							BTREE_ID_stripes, POS(0, old_stripe->k.p.offset),
+							BTREE_ITER_cached, stripe);
+			int ret = PTR_ERR_OR_ZERO(s);
 
-		if (!IS_ERR(s)) {
-			CLASS(bch_log_msg_ratelimited, msg2)(c);
-			prt_printf(&msg2.m, "stripe %llu: zeroing stale blockcount for orphaned block %u (no extents reference it)\n",
-				   old_stripe->k.p.offset, old_blocknr);
+			if (ret) {
+				if (bch2_err_matches(ret, ENOENT))
+					ret = 0;	/* stripe already deleted */
+			} else {
+				CLASS(bch_log_msg_ratelimited, msg2)(c);
+				prt_printf(&msg2.m, "stripe %llu: zeroing stale blockcount for orphaned block %u (no extents reference it)\n",
+					   old_stripe->k.p.offset, old_blocknr);
 
-			stripe_blockcount_set(&s->v, old_blocknr, 0);
-		}
-
-		try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+				stripe_blockcount_set(&s->v, old_blocknr, 0);
+				ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+			}
+			ret;
+		}));
 	}
 
 	return 0;

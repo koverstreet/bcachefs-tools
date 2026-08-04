@@ -1,0 +1,1121 @@
+Kernel version: 6.17.0
+Running test shrink.ktest on pc at /etc/nixos/home/data/Code/bcachefs/ktest
+building kernel... done
+P+q6E616D65\[18t[!p]104\[0m[?7h[1G[0J]3008;start=9a7a83366e98480fbee5a5df8be9deef;user=root;hostname=pc-kvm;machineid=86c7bdc1908149469f921679b89551d7;bootid=11e95b60e2a74f1f9f4b6c01366f6a54;pid=1;pidfdid=2;comm=systemd;type=boot\Kernel version: 6.17.0-ktest-g8cff344e6db4-dirty
+hook init_build_bcachefs_tools
+init_build_bcachefs_tools: tools cache hit (79fef4fa6674e21986fc8fe06c1bcf9894030631060db8e420740f98695adeed)
+hook init_noop
+
+Running tests online_minimal_ec_shrink
+
+========= TEST   online_minimal_ec_shrink
+WATCHDOG 60
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): Using encoding defined by superblock: utf8-12.1.0
+starting version per_dev_fragmentation_lru (1.39)
+  features: new_siphash,new_extent_overwrite,btree_ptr_v2,extents_above_btree_updates,btree_updates_journalled,new_varint,journal_no_flush,alloc_v2,extents_across_btree_nodes,incompat_version_field
+  with devices: vdb,vdc,vdd
+  Doing compatible version upgrade from per_dev_fragmentation_lru (1.39) to snapshot_nr_keys (1.40)
+  Rust support enabled
+  *** DEBUG BUILD ***
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): initializing new filesystem
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): marking superblocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): initializing freespace
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): done initializing freespace
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): going read-write
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): presplit_shard_boundaries: 15 splits in btree inodes
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): presplit_shard_boundaries: 15 splits in btree extents
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): presplit_shard_boundaries: 15 splits in btree dirents
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): presplit_shard_boundaries: 15 splits in btree xattrs
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): fs initialized, journal seq 7 rewind_seq 8
+mount.bcachefs (656) used greatest stack depth: 8264 bytes left
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 2: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 2: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 2: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 1 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 2 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 1 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 2 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 3 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 1 still OPEN, skipping delete (blockcounts 1024 512, lru_pos 0, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 2 still OPEN, skipping delete (blockcounts 1024 512, lru_pos 0, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 1 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 2 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 2, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 3 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 1, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 3 still OPEN, skipping delete (blockcounts 1024 512, lru_pos 0, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 4 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 3 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 3 still OPEN, skipping delete (blockcounts 1024 1024, lru_pos 0, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 4 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 4 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 4 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 4, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 3, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 5 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 5 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 6 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 6, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 5, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 7, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 8, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 10, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 9, create ret (No error))
+bch2_ec_stripe_delete_work: 161 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bch2_trigger_stripe: 194 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 194: became EMPTY but is OPEN - deferred to LRU delete work
+stripe_update_bucket: 375 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 193 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 195: became EMPTY but is OPEN - deferred to LRU delete work
+ec_stripe_delete: 171 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 194 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 195 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 194 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 195 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 194 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bch2_ec_stripe_new_free: 183 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 194, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 195 still OPEN, skipping delete (blockcounts 1024 0, lru_pos 281474976710654, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 195 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 196: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 195, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 197: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 196 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 197 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 196 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 196 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 197 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 196, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 197 block 1 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 197, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 198: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 199: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 198 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 200: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 199 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 201: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 198 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 199 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 201 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 200 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 0 (sectors 1024/0/0/0/0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 200, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 201, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 199, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 198, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 202: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 203: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 203, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 0 (new idx 202, create ret (No error))
+700+0 records in
+700+0 records out
+734003200 bytes (734 MB, 700 MiB) copied, 8.53543 s, 86.0 MB/s
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): initializing freespace
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): done initializing freespace
+Doing online resize of /dev/vdb
+resizing /dev/vdb to 724 buckets
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 648 repair: buckets allocated, new stripe idx 701, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 648 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:648:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdb 0:724:0 gen 1#1024
+         vdc 1:744:0 gen 1#1024
+         vdd 2:734:0 gen 0#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 648 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 648 new 701 seq 701 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 631 repair: buckets allocated, new stripe idx 702, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 631 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 631 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 631 new 702 seq 702 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 631 -> 702: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 650 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 650 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 650 repair: buckets allocated, new stripe idx 703, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 650 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:650:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdd 2:727:0 gen 0#1024
+         vdc 1:746:0 gen 1#1024
+         vdb 0:725:0 gen 1#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 650 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 648 -> 701: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 631 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 631 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 651 repair: buckets allocated, new stripe idx 706, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 651 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:651:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdb 0:727:0 gen 1#1024
+         vdc 1:747:0 gen 1#1024
+         vdd 2:737:0 gen 0#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 651 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 653 repair: buckets allocated, new stripe idx 707, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 653 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:653:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdd 2:729:0 gen 0#1024
+         vdc 1:749:0 gen 1#1024
+         vdb 0:728:0 gen 1#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 653 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 648 -> 701: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 631 -> 702: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 631 -> 702: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 650 new 703 seq 703 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 703: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 631 -> 702: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 631 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:631:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdd 2:726:0 gen 0#1024
+         vdb 0:726:0 gen 0#1024
+         vdc 1:726:0 gen 0#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 631 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 653 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 654 repair: buckets allocated, new stripe idx 708, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 654 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:654:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdb 0:729:0 gen 1#1024
+         vdc 1:750:0 gen 1#1024
+         vdd 2:740:0 gen 0#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 654 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 703: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 651 new 706 seq 706 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 651 -> 706: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 651 -> 706: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 653 new 707 seq 707 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 707: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 707: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 654 new 708 seq 708 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 708: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 708: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 651 -> 706: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 703: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 708: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 708: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 703: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 707: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 651 -> 706: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 707: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 648 -> 701: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 648 -> 701: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): reconcile: stripe 653 needs_reconcile=1 repair -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 631 -> 702: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 708: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 703: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 651 -> 706: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 707: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 648 -> 701: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 637 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 640 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 643 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 648: zeroing stale blockcount for orphaned block 0 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 646 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 656 repair: buckets allocated, new stripe idx 712, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 656 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:656:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdd 2:732:0 gen 0#1024
+         vdc 1:752:0 gen 1#1024
+         vdb 0:731:0 gen 1#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 656 new 712 seq 713 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 712: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 712: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 712: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 712: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 712: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 659 repair: buckets allocated, new stripe idx 717, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 658 repair: buckets allocated, new stripe idx 718, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 658 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:658:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdd 2:754:0 gen 0#1024
+         vdb 0:754:0 gen 0#1024
+         vdc 1:754:0 gen 0#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 659 new 717 seq 717 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 717: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 658 new 718 seq 718 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 658 -> 718: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 658 -> 718: validate done -> (No error)
+bch2_ec_stripe_delete_work: 518 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 661 repair: buckets allocated, new stripe idx 719, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 661 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:661:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdd 2:756:0 gen 0#1024
+         vdb 0:756:0 gen 0#1024
+         vdc 1:756:0 gen 1#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 660 repair: buckets allocated, new stripe idx 720, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 663 repair: buckets allocated, new stripe idx 721, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 662 repair: buckets allocated, new stripe idx 722, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 661 new 719 seq 719 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 661 -> 719: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 660 new 720 seq 720 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 720: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 663 new 721 seq 721 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 721: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 662 new 722 seq 722 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 722: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 664 repair: buckets allocated, new stripe idx 723, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 666 repair: buckets allocated, new stripe idx 724, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 658 -> 718: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 664 new 723 seq 723 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 664 -> 723: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 666 new 724 seq 724 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 724: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 661 -> 719: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 665 repair: buckets allocated, new stripe idx 725, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 667 repair: buckets allocated, new stripe idx 726, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 668 repair: buckets allocated, new stripe idx 727, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 665 new 725 seq 725 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 725: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 667 new 726 seq 726 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 667 -> 726: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 668 new 727 seq 727 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 727: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 724: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 722: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 721: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 720: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 669 repair: buckets allocated, new stripe idx 728, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 670 repair: buckets allocated, new stripe idx 729, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 671 repair: buckets allocated, new stripe idx 730, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 664 -> 723: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 658 -> 718: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 661 -> 719: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 669 new 728 seq 728 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 728: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 670 new 729 seq 729 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 729: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 671 new 730 seq 730 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 730: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 722: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 720: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 721: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 720: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 722: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 661 -> 719: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 721: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 727: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 667 -> 726: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 664 -> 723: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 724: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 729: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 725: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 728: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 729: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 725: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 728: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 727: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 664 -> 723: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 672 repair: buckets allocated, new stripe idx 731, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 724: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 667 -> 726: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 672 new 731 seq 731 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 731: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 728: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 729: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 727: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 731: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 658 -> 718: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 725: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 667 -> 726: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 720: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 661 -> 719: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 730: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 730: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 721: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 664 -> 723: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 717: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 717: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 731: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 648 -> 701: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 717: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 730: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 731: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 724: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 728: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 729: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 727: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 701
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 659 repair: opened old stripe, rebuilding 2 live data blocks
+  u64s 13 type stripe 0:659:0 len 0 ver 0  : algo 0 sectors 1024 blocks 2:1 csum crc32c gran 512 label=(none) needs_reconcile can_widen=1  
+         vdd 2:735:0 gen 0#1024
+         vdc 1:755:0 gen 1#1024
+         vdb 0:734:0 gen 1#0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 725: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 708: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 701
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 667 -> 726: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 703: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 701
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 701
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 707: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 717: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 730: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 731: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 722: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 631: zeroing stale blockcount for orphaned block 1 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 631 -> 702: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 702
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 673 repair: buckets allocated, new stripe idx 732, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 703
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 673 new 732 seq 732 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 732: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 732: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 637 repair: buckets allocated, new stripe idx 734, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 640 repair: buckets allocated, new stripe idx 735, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 637 new 734 seq 733 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 637 -> 734: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 674 repair: buckets allocated, new stripe idx 736, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 640 new 735 seq 734 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 640 -> 735: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 674 new 736 seq 735 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 736: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 640 -> 735: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 640 -> 735: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 736: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 736: writing new blocks
+stripe_update_bucket: 1021 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 651 block 0 -> done 1 no_match 0 bp_to_deleted 0 cached 0 matched 1 (sectors 512/0/0/0/512)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 640 -> 735: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 736: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 637 -> 734: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 637 -> 734: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 675 repair: buckets allocated, new stripe idx 737, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 675 new 737 seq 736 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 737: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 737: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 737: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 637 -> 734: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 737: writes done, nr_failed 0
+bch2_trigger_stripe: 530 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 735: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 640 -> 735: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 736: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 736: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 654 repair: buckets allocated, new stripe idx 738, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 734: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 654 new 738 seq 737 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 738: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 732: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 637 -> 734: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 738: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 738: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 738: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 732: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 737: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 737: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 676 repair: buckets allocated, new stripe idx 739, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 676 new 739 seq 738 (old_blocks_nr 2, blocks_moving 1)
+ec_stripe_delete: 497 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 710 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 739: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 738: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 738: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 732: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 739: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 739: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 739: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 732: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 711 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 739: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 739: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 712 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 677 repair: buckets allocated, new stripe idx 740, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 677 new 740 seq 739 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 740: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 678 repair: buckets allocated, new stripe idx 741, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 678 new 741 seq 740 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 713 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 714 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 715 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 717 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 718 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 719 still OPEN, skipping delete (blockcounts 0 0, lru_pos 1, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: stripe 721 still OPEN, skipping delete (blockcounts 512 0, lru_pos 281474976710653, needs_reconcile 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 680 repair: buckets allocated, new stripe idx 742, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 683 repair: buckets allocated, new stripe idx 743, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 686 repair: buckets allocated, new stripe idx 744, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 689 repair: buckets allocated, new stripe idx 745, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 740: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 740: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 680 new 742 seq 741 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 742: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 681 repair: buckets allocated, new stripe idx 746, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 742: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 742: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 740: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 683 new 743 seq 742 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 742: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 664 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 686 new 744 seq 743 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 744: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 744: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 741: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 744: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 741: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 689 new 745 seq 744 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 745: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 741: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 745: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 745: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 681 new 746 seq 745 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 746: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 741: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 744: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 743: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 746: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 745: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 743: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 743: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 743: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 746: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 740: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 740: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 742: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 746: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 742: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 741: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 741: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 744: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 679 repair: buckets allocated, new stripe idx 747, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 679 new 747 seq 746 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 747: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 658 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 743: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 670 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 655 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 671 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 667 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 643 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 659 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe_update_bucket: old stripe 652 block 0 -> done 2 no_match 0 bp_to_deleted 0 cached 0 matched 2 (sectors 1024/0/0/0/1024)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 747: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 746: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 692 repair: buckets allocated, new stripe idx 748, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 692 new 748 seq 747 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 664 -> 723: stripe_update_extents -> (No error)
+bch2_ec_stripe_new_free: 505 callbacks suppressed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 664 (new idx 723, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 745: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 651 -> 706: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 651 (new idx 706, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 747: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 717: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 659 (new idx 717, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 729: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 655 (new idx 715, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 670 (new idx 729, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 643 (new idx 710, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 667 -> 726: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 667 (new idx 726, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 658 -> 718: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 748: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 661 -> 719: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 661 (new idx 719, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 709) while updating extent
+  u64s 9 type extent 4035225266123964416:1309184:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:b9edbf73  compress none
+    stripe_ptr: idx 709 block 0
+    ptr:    vdd 2:736:0 gen 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 652 (new idx 714, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 748: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe new free: releasing old stripe handle idx 658 (new idx 718, create ret (No error))
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 747: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 748: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 748: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 705) while updating extent
+  u64s 9 type extent 4035225266123964416:1303040:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:49f8ed50  compress none
+    stripe_ptr: idx 705 block 0
+    ptr:    vdd 2:733:0 gen 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 747: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 748: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 728: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 721: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 720: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 695 repair: buckets allocated, new stripe idx 760, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 684 repair: buckets allocated, new stripe idx 761, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 727: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 695 new 760 seq 750 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 760: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 760: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 760: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 722: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 684 new 761 seq 751 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 761: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 761: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 687 repair: buckets allocated, new stripe idx 762, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 724: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 687 new 762 seq 752 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 762: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 709) while updating extent
+  u64s 9 type extent 4035225266123964416:1309696:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:36acec5e  compress none
+    stripe_ptr: idx 709 block 0
+    ptr:    vdd 2:736:512 gen 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 705) while updating extent
+  u64s 9 type extent 4035225266123964416:1303552:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:a7352939  compress none
+    stripe_ptr: idx 705 block 0
+    ptr:    vdd 2:733:512 gen 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 760: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 640: zeroing stale blockcount for orphaned block 0 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 640 -> 735: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 637: zeroing stale blockcount for orphaned block 0 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 637 -> 734: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 698 repair: buckets allocated, new stripe idx 763, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 760: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 731: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 761: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 762: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 698 new 763 seq 753 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 763: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 763: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 763: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 762: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 761: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 763: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 762: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 637
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 761: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 763: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 762: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 640
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 722
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: deleting empty stripe 727
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 708) while updating extent
+  u64s 9 type extent 4035225266123964416:1338880:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:e0be6da6  compress none
+    stripe_ptr: idx 708 block 1
+    ptr:    vdc 1:750:0 gen 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 690 repair: buckets allocated, new stripe idx 764, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 690 new 764 seq 754 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 764: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 764: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 764: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 682 repair: buckets allocated, new stripe idx 765, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 764: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 764: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 682 new 765 seq 756 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 765: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 765: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 765: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 765: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 765: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 730: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 685 repair: buckets allocated, new stripe idx 766, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 685 new 766 seq 760 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 766: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 766: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 766: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe delete work: running
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 766: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 766: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 708) while updating extent
+  u64s 9 type extent 4035225266123964416:1339392:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:be25974f  compress none
+    stripe_ptr: idx 708 block 1
+    ptr:    vdc 1:750:512 gen 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 725: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 693 repair: buckets allocated, new stripe idx 767, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 654: zeroing stale blockcount for orphaned block 1 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 654 -> 738: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 693 new 767 seq 762 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 767: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 740: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 767: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 767: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 767: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 741: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 712: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 732: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 737: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 767: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 739: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 744: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 736: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 743: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 646: zeroing stale blockcount for orphaned block 1 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 746: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 742: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 688 repair: buckets allocated, new stripe idx 769, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 677 repair: buckets allocated, new stripe idx 770, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 688 new 769 seq 768 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 769: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 677 new 770 seq 769 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 770: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 696 repair: buckets allocated, new stripe idx 768, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 696 new 768 seq 770 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 768: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 770: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 768: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 768: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 678 repair: buckets allocated, new stripe idx 771, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 678 new 771 seq 771 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 771: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 770: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 771: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 768: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 771: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 699 repair: buckets allocated, new stripe idx 772, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 699 new 772 seq 772 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 772: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 771: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 769: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 706) while updating extent
+  u64s 9 type extent 4035225266123964416:1332736:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:c3310dc1  compress none
+    stripe_ptr: idx 706 block 1
+    ptr:    vdc 1:747:0 gen 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 768: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 771: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 680 repair: buckets allocated, new stripe idx 773, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 770: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 680 new 773 seq 773 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 691 repair: buckets allocated, new stripe idx 774, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 691 new 774 seq 774 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 774: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 774: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 774: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 772: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 769: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 773: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 701) while updating extent
+  u64s 9 type extent 4035225266123964416:1326592:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4defce85  compress none
+    stripe_ptr: idx 701 block 1
+    ptr:    vdc 1:744:0 gen 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 772: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 773: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 769: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 773: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 774: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 773: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 770: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 772: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 769: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 694 repair: buckets allocated, new stripe idx 775, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 694 new 775 seq 775 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 775: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 774: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 773: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 723) while updating extent
+  u64s 9 type extent 4035225266123964416:1358336:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:8bdaa09b  compress none
+    stripe_ptr: idx 723 block 0
+    ptr:    vdd 2:760:0 gen 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 681 repair: buckets allocated, new stripe idx 776, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 697 repair: buckets allocated, new stripe idx 777, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 681 new 776 seq 776 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 772: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 776: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 697 new 777 seq 777 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 777: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 775: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 776: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 776: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 775: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): dropping stale stripe pointer (idx 710) while updating extent
+  u64s 9 type extent 4035225266123964416:1315328:U32_MAX len 512 ver 0  : durability: 2 
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:e4720b14  compress none
+    stripe_ptr: idx 710 block 0
+    ptr:    vdd 2:739:0 gen 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 775: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 776: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 683 repair: buckets allocated, new stripe idx 778, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 683 new 778 seq 778 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 777: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 778: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 776: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 700 repair: buckets allocated, new stripe idx 779, blocks_moving 1
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 700 new 779 seq 779 (old_blocks_nr 2, blocks_moving 1)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 779: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 777: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 778: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 775: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 779: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 778: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 777: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 779: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 651: zeroing stale blockcount for orphaned block 1 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 777: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 778: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 779: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 778: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 779: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 648: zeroing stale blockcount for orphaned block 1 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 664: zeroing stale blockcount for orphaned block 0 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 643: zeroing stale blockcount for orphaned block 0 (no extents reference it)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 747: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 745: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 748: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 764: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 761: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 762: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 765: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 767: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 766: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 763: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 760: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 687 repair: buckets allocated, new stripe idx 780, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 687 new 780 seq 780 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 780: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 681 -> 776: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 780: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 684 repair: buckets allocated, new stripe idx 781, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 684 new 781 seq 781 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 781: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 686 repair: buckets allocated, new stripe idx 782, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 686 new 782 seq 782 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 782: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 780: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 781: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 782: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 781: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 780: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 689 repair: buckets allocated, new stripe idx 783, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 689 new 783 seq 783 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 690 repair: buckets allocated, new stripe idx 784, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 690 new 784 seq 784 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 780: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 784: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 782: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 783: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 781: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 783: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 784: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 781: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 670 repair: buckets allocated, new stripe idx 785, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 670 new 785 seq 785 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 785: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 783: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 782: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 782: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 783: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 783: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 784: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 785: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 784: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 785: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 784: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 678 -> 771: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 785: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 768: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 677 -> 770: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 785: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 779: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 692 repair: buckets allocated, new stripe idx 786, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 683 -> 778: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 692 new 786 seq 786 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 786: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 786: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 693 repair: buckets allocated, new stripe idx 787, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 693 new 787 seq 787 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 787: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 786: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 673 repair: buckets allocated, new stripe idx 788, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 673 new 788 seq 788 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 788: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 787: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 787: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 787: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 786: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 787: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 788: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 777: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 774: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 788: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 786: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 695 repair: buckets allocated, new stripe idx 789, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 695 new 789 seq 789 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 789: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 769: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 676 repair: buckets allocated, new stripe idx 790, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 676 new 790 seq 790 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 698 repair: buckets allocated, new stripe idx 791, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 789: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 679 repair: buckets allocated, new stripe idx 792, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 788: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 790: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 789: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 698 new 791 seq 791 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 791: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 679 new 792 seq 792 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 792: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 788: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 789: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 682 repair: buckets allocated, new stripe idx 793, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 682 new 793 seq 793 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 793: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 789: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 790: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 791: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 792: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 790: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 792: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 791: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 790: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 791: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 792: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 793: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 685 repair: buckets allocated, new stripe idx 794, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 685 new 794 seq 794 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 794: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 793: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 790: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 775: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 792: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 772: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 791: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 793: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 794: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 794: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 794: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 793: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 680 -> 773: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 794: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 673 -> 788: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 690 -> 784: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 684 -> 781: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 693 -> 787: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 679 -> 792: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 676 -> 790: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 682 -> 793: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 670 -> 785: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 687 -> 780: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 689 -> 783: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 698 -> 791: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 695 -> 789: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 692 -> 786: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 686 -> 782: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 688 repair: buckets allocated, new stripe idx 795, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 688 new 795 seq 795 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 795: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 685 -> 794: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 691 repair: buckets allocated, new stripe idx 796, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 795: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 694 repair: buckets allocated, new stripe idx 797, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 795: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 697 repair: buckets allocated, new stripe idx 798, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 700 repair: buckets allocated, new stripe idx 799, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 691 new 796 seq 796 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 796: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 795: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 694 new 797 seq 797 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 797: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 697 new 798 seq 798 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 798: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 700 new 799 seq 799 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 799: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 799: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 795: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 798: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 798: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 799: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 796: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 799: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 796: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 797: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 797: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 796: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 797: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 799: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 796: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 700 -> 799: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 688 -> 795: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 798: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 798: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 691 -> 796: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 797: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 694 -> 797: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 697 -> 798: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 650 repair: buckets allocated, new stripe idx 799, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 650 new 799 seq 800 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 646 repair: buckets allocated, new stripe idx 800, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 646 new 800 seq 801 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 646 -> 800: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 657 repair: buckets allocated, new stripe idx 801, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 657 new 801 seq 802 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 657 -> 801: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 649 repair: buckets allocated, new stripe idx 802, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 649 new 802 seq 803 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 649 -> 802: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 646 -> 800: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 657 -> 801: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 653 repair: buckets allocated, new stripe idx 803, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 653 new 803 seq 804 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 803: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 656 repair: buckets allocated, new stripe idx 805, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 656 new 805 seq 805 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 805: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 663 repair: buckets allocated, new stripe idx 804, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 657 -> 801: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 663 new 804 seq 806 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 804: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 799: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 660 repair: buckets allocated, new stripe idx 806, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 646 -> 800: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 666 repair: buckets allocated, new stripe idx 807, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 660 new 806 seq 807 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 806: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 805: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 803: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 649 -> 802: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 659 repair: buckets allocated, new stripe idx 808, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 799: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 805: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 662 repair: buckets allocated, new stripe idx 809, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 804: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 665 repair: buckets allocated, new stripe idx 810, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 649 -> 802: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 804: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 803: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 666 new 807 seq 808 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 807: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 669 repair: buckets allocated, new stripe idx 811, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 799: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 659 new 808 seq 809 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 808: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 657 -> 801: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 805: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 662 new 809 seq 810 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 809: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 665 new 810 seq 811 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 810: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 807: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 657 -> 801: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 669 new 811 seq 812 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 811: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 805: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 657 -> 801: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 806: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 806: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 649 -> 802: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 804: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 649 -> 802: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 799: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 668 new 812 seq 813 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 803: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 646 -> 800: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 804: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 807: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 799: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 806: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 649 -> 802: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 807: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 803: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 646 -> 800: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 806: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 807: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 809: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 812: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 808: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 660 -> 806: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 672 repair: buckets allocated, new stripe idx 813, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 668 repair: buckets allocated, new stripe idx 812, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 811: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 808: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 810: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 811: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 812: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 672 new 813 seq 814 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 810: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 812: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 675 repair: buckets allocated, new stripe idx 814, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 675 new 814 seq 815 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 814: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 696 repair: buckets allocated, new stripe idx 815, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 696 new 815 seq 816 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 815: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 699 repair: buckets allocated, new stripe idx 816, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 699 new 816 seq 817 (old_blocks_nr 1, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 816: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 812: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 808: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 811: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 810: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 812: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 811: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 810: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 808: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 816: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 814: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 814: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 816: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 809: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 815: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 815: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 814: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 816: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 816: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 814: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 815: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 809: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 809: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 813: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 813: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 813: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 813: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 646 -> 800: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 666 -> 807: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 815: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 663 -> 804: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 813: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 656 -> 805: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 653 -> 803: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 671 repair: buckets allocated, new stripe idx 817, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): stripe 674 repair: buckets allocated, new stripe idx 818, blocks_moving 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 671 new 817 seq 818 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 817: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create work: enter old 674 new 818 seq 819 (old_blocks_nr 2, blocks_moving 0)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 818: validating old stripe
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 696 -> 815: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 672 -> 813: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 675 -> 814: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 669 -> 811: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 699 -> 816: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 665 -> 810: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 668 -> 812: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 650 -> 799: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 659 -> 808: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 662 -> 809: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 818: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 817: validate done -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 817: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 818: writing new blocks
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 817: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 818: writes done, nr_failed 0
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 817: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 818: stripe key committed
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 674 -> 818: stripe_update_extents -> (No error)
+bcachefs (fc5ae08a-9b04-4349-bd28-f4223570befa): ec stripe create 671 -> 817: stripe_update_extents -> (No error)
