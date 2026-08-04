@@ -1827,6 +1827,12 @@ static int move_journal_past_cutoff(struct bch_fs *c, struct bch_dev *ca,
 struct shrink_tail_head {
 	struct bpos	bucket;
 	struct bpos	first_bp;
+	/*
+	 * Value of the first backpointer in the head bucket: kept so debug
+	 * output can identify what's blocking the shrink without another
+	 * btree lookup.
+	 */
+	struct bch_backpointer first_bp_v;
 	unsigned	nr_backpointers;
 };
 
@@ -1855,7 +1861,31 @@ static bool shrink_tail_head_progressed(const struct shrink_tail_head *old,
 	return new->nr_backpointers < old->nr_backpointers;
 }
 
+/*
+ * Print what's blocking the shrink: the first bucket in the shrink tail that
+ * still has data, along with the first backpointer within it (which identifies
+ * the data reconcile hasn't been able to evacuate).
+ */
+static void shrink_tail_head_to_text(struct printbuf *out, struct bch_fs *c,
+				     u64 new_nbuckets,
+				     const struct shrink_tail_head *head)
+{
+	if (shrink_tail_head_empty(head)) {
+		prt_str(out, "(empty)");
+		return;
+	}
 
+	prt_printf(out, "bucket %llu:%llu (%llu past cutoff), nr_backpointers %u, first backpointer ",
+		   head->bucket.inode, head->bucket.offset,
+		   head->bucket.offset - new_nbuckets,
+		   head->nr_backpointers);
+
+	struct bkey_i_backpointer bp_k;
+	bkey_backpointer_init(&bp_k.k_i);
+	bp_k.k.p = head->first_bp;
+	bp_k.v = head->first_bp_v;
+	bch2_backpointer_to_text(out, c, bkey_i_to_s_c(&bp_k.k_i));
+}
 
 /*
  * Make sure everything is caught here: this snapshots backpointer-visible tail
@@ -1888,6 +1918,7 @@ static int tail_head_snapshot(struct bch_fs *c, struct bch_dev *ca,
 
 	head->bucket = bp_pos_to_bucket(ca, bp.k->p);
 	head->first_bp = bp.k->p;
+	head->first_bp_v = *bp.v;
 
 	do {
 		head->nr_backpointers++;
@@ -2254,11 +2285,18 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 			 * do one.  If we have and it also made no progress, this
 			 * tail is genuinely impossible to evacuate.
 			 */
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "shrink stalled, tail head: ");
+			shrink_tail_head_to_text(&buf, c, new_nbuckets, &head);
+			bch_verbose(c, "%s", buf.buf);
+
 			if (!did_scan) {
 				scan_device = true;
 			} else if (++stalled_kicks >= stalled_kicks_limit) {
 				prt_printf(err,
-					   "Shrink failed: evacuating all data from the shrink tail not possible\n");
+					   "Shrink failed: evacuating all data from the shrink tail not possible: ");
+				shrink_tail_head_to_text(err, c, new_nbuckets, &head);
+				prt_newline(err);
 				try(bch2_dev_shrink_clear_target(c, ca, new_nbuckets, seq, err));
 				return -ENOSPC;
 			}
