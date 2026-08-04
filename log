@@ -1,0 +1,1507 @@
+./build-test-kernel run -k ../bcachefs-test tests/fs/bcachefs/shrink.ktest online_minimal_ec_shrink
+Kernel version: 6.17.0
+Running test shrink.ktest on pc at /etc/nixos/home/data/Code/bcachefs/ktest
+building kernel... done
+Kernel version: 6.17.0-ktest-g8cff344e6db4-dirty
+hook init_build_bcachefs_tools
+init_build_bcachefs_tools: tools cache hit (79fef4fa6674e21986fc8fe06c1bcf9894030631060db8e420740f98695adeed)
+hook init_noop
+
+Running tests online_minimal_ec_shrink
+
+========= TEST   online_minimal_ec_shrink
+WATCHDOG 60
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): Using encoding defined by superblock: utf8-12.1.0
+starting version per_dev_fragmentation_lru (1.39)
+  features: new_siphash,new_extent_overwrite,btree_ptr_v2,extents_above_btree_updates,btree_updates_journalled,new_varint,journal_no_flush,alloc_v2,extents_across_btree_nodes,incompat_version_field
+  with devices: vdb,vdc,vdd
+  Doing compatible version upgrade from per_dev_fragmentation_lru (1.39) to snapshot_nr_keys (1.40)
+  Rust support enabled
+  *** DEBUG BUILD ***
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): initializing new filesystem
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): marking superblocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): initializing freespace
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): done initializing freespace
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): going read-write
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): presplit_shard_boundaries: 15 splits in btree inodes
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): presplit_shard_boundaries: 15 splits in btree extents
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): presplit_shard_boundaries: 15 splits in btree dirents
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): presplit_shard_boundaries: 15 splits in btree xattrs
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): fs initialized, journal seq 7 rewind_seq 8
+mount.bcachefs (657) used greatest stack depth: 8032 bytes left
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 1)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 2 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 2)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 3 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 3)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 4)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 5)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 6 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 6)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 7)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 8 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 8)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 9 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 9)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 10 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 0 (new idx 10)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 11 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 12 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 13 still OPEN, skipping delete
+700+0 records in
+700+0 records out
+734003200 bytes (734 MB, 700 MiB) copied, 2.36986 s, 310 MB/s
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): initializing freespace
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): done initializing freespace
+Doing online resize of /dev/vdb
+resizing /dev/vdb to 724 buckets
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 645 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 645 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 648 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 648 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 641 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 645 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 645 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 646 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 651 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 648 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 650 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 654 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 653 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 702
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 705
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 705
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 707
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 709
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 712
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 703) while updating extent
+  u64s 9 type extent 7493989779944505344:1305088:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:adad4f13  compress none
+    stripe_ptr: idx 703 block 0
+    ptr:    vdd 2:728:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 701) while updating extent
+  u64s 9 type extent 7493989779944505344:1296896:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:b798254b  compress none
+    stripe_ptr: idx 701 block 1
+    ptr:    vdd 2:724:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 703) while updating extent
+  u64s 9 type extent 7493989779944505344:1305600:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:1b94dcc3  compress none
+    stripe_ptr: idx 703 block 0
+    ptr:    vdd 2:728:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 701) while updating extent
+  u64s 9 type extent 7493989779944505344:1297408:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:55148648  compress none
+    stripe_ptr: idx 701 block 1
+    ptr:    vdd 2:724:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 714
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 716
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 718
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 721
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 710) while updating extent
+  u64s 9 type extent 7493989779944505344:1328640:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:2aef9191  compress none
+    stripe_ptr: idx 710 block 1
+    ptr:    vdc 1:739:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 713) while updating extent
+  u64s 9 type extent 7493989779944505344:1334784:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4e09a63e  compress none
+    stripe_ptr: idx 713 block 1
+    ptr:    vdc 1:742:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 704) while updating extent
+  u64s 9 type extent 7493989779944505344:1311232:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4c727f6  compress none
+    stripe_ptr: idx 704 block 0
+    ptr:    vdd 2:731:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 712) while updating extent
+  u64s 9 type extent 7493989779944505344:1338880:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:62d8d071  compress none
+    stripe_ptr: idx 712 block 0
+    ptr:    vdd 2:735:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 709) while updating extent
+  u64s 9 type extent 7493989779944505344:1332736:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:c47723ad  compress none
+    stripe_ptr: idx 709 block 0
+    ptr:    vdd 2:732:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 709) while updating extent
+  u64s 9 type extent 7493989779944505344:1332736:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:c47723ad  compress none
+    stripe_ptr: idx 709 block 0
+    ptr:    vdd 2:732:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_trigger_stripe: 1809 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1796: became EMPTY but is OPEN - deferred to LRU delete work
+bch2_ec_stripe_delete_work: 951 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1763: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1810: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1773: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1766: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1793: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1788: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1803: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1791: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 1776: became EMPTY but is OPEN - deferred to LRU delete work
+ec_stripe_delete: 15091 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 634 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 638 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 641 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 644 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 646 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 647 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 649 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 650 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 652 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 653 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bch2_ec_stripe_new_free: 1769 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 673 (new idx 1788)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 679 (new idx 1793)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 645 (new idx 1766)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 676 (new idx 1791)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 682 (new idx 1796)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 634 (new idx 1763)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 694 (new idx 1808)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 669 (new idx 1807)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 700 (new idx 1810)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 655 (new idx 1773)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+ec_stripe_delete: 1679 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2369
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2373
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2374
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2375
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2377
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2379
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2380
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2381
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2390
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 2391
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_stripe_repair: 1724 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: opened old stripe, rebuilding 1 live data blocks
+bch2_stripe_repair: 741 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+do_reconcile_stripe: 2475 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 646 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 649 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 652 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 655 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 658 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 658 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 661 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 661 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 664 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 664 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 667 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 667 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 670 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: opened old stripe, rebuilding 1 live data blocks
+stripe_update_extent: 4497 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2357) while updating extent
+  u64s 9 type extent 7493989779944505344:1305088:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:adad4f13  compress none
+    stripe_ptr: idx 2357 block 0
+    ptr:    vdd 2:728:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2412) while updating extent
+  u64s 9 type extent 7493989779944505344:1426944:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:3cce000a  compress none
+    stripe_ptr: idx 2412 block 0
+    ptr:    vdc 1:786:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2356) while updating extent
+  u64s 9 type extent 7493989779944505344:1296896:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:b798254b  compress none
+    stripe_ptr: idx 2356 block 0
+    ptr:    vdd 2:724:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2400) while updating extent
+  u64s 9 type extent 7493989779944505344:1402368:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:28e8e68f  compress none
+    stripe_ptr: idx 2400 block 0
+    ptr:    vdc 1:775:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2403) while updating extent
+  u64s 9 type extent 7493989779944505344:1408512:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:cd9a9c91  compress none
+    stripe_ptr: idx 2403 block 0
+    ptr:    vdc 1:778:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2409) while updating extent
+  u64s 9 type extent 7493989779944505344:1420800:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:3db288d7  compress none
+    stripe_ptr: idx 2409 block 0
+    ptr:    vdc 1:785:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2361) while updating extent
+  u64s 9 type extent 7493989779944505344:1322496:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:8d08257a  compress none
+    stripe_ptr: idx 2361 block 0
+    ptr:    vdc 1:736:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2385) while updating extent
+  u64s 9 type extent 7493989779944505344:1371648:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:a12a6952  compress none
+    stripe_ptr: idx 2385 block 0
+    ptr:    vdc 1:760:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 658 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2367) while updating extent
+  u64s 9 type extent 7493989779944505344:1334784:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4e09a63e  compress none
+    stripe_ptr: idx 2367 block 0
+    ptr:    vdc 1:742:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 2379) while updating extent
+  u64s 9 type extent 7493989779944505344:1359360:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:9393c918  compress none
+    stripe_ptr: idx 2379 block 0
+    ptr:    vdc 1:754:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_trigger_stripe: 1115 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2812: became EMPTY but is OPEN - deferred to LRU delete work
+bch2_ec_stripe_delete_work: 317 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2816: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2815: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2817: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2819: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2820: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2818: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2821: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2829: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 2823: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+ec_stripe_delete: 15518 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 634 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 638 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 641 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 644 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 646 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 647 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 649 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 650 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 652 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 653 still OPEN, skipping delete
+bch2_ec_stripe_new_free: 1080 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 654 (new idx 2842)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 664 (new idx 2852)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 652 (new idx 2840)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 648 (new idx 2836)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 662 (new idx 2850)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 649 (new idx 2837)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 641 (new idx 2831)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 650 (new idx 2838)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 668 (new idx 2856)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 665 (new idx 2853)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+ec_stripe_delete: 833 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3212
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3240
+stripe_update_extent: 2192 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3169) while updating extent
+  u64s 9 type extent 7493989779944505344:1387520:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:483ae9ea  compress none
+    stripe_ptr: idx 3169 block 1
+    ptr:    vdc 1:768:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3149) while updating extent
+  u64s 9 type extent 7493989779944505344:1362944:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:5c11b6d2  compress none
+    stripe_ptr: idx 3149 block 1
+    ptr:    vdc 1:756:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3221
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3184) while updating extent
+  u64s 9 type extent 7493989779944505344:1428480:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:14f33e4  compress none
+    stripe_ptr: idx 3184 block 0
+    ptr:    vdd 2:788:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3209
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3180) while updating extent
+  u64s 9 type extent 7493989779944505344:1419264:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:6e55ab54  compress none
+    stripe_ptr: idx 3180 block 0
+    ptr:    vdd 2:774:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3241
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3170) while updating extent
+  u64s 9 type extent 7493989779944505344:1421312:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:9ec55b3e  compress none
+    stripe_ptr: idx 3170 block 0
+    ptr:    vdc 1:785:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3237
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3166) while updating extent
+  u64s 9 type extent 7493989779944505344:1409024:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:fad2bc83  compress none
+    stripe_ptr: idx 3166 block 0
+    ptr:    vdc 1:778:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3174) while updating extent
+  u64s 9 type extent 7493989779944505344:1405440:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:f27df577  compress none
+    stripe_ptr: idx 3174 block 1
+    ptr:    vdc 1:777:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3231
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3181) while updating extent
+  u64s 9 type extent 7493989779944505344:1422336:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:784caa0e  compress none
+    stripe_ptr: idx 3181 block 0
+    ptr:    vdd 2:784:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3153) while updating extent
+  u64s 9 type extent 7493989779944505344:1373184:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:1eb3d4e5  compress none
+    stripe_ptr: idx 3153 block 0
+    ptr:    vdd 2:761:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3238
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3214
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3176) while updating extent
+  u64s 9 type extent 7493989779944505344:1413120:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:35e392b2  compress none
+    stripe_ptr: idx 3176 block 0
+    ptr:    vdd 2:771:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3218
+bch2_stripe_repair: 831 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: opened old stripe, rebuilding 1 live data blocks
+bch2_stripe_repair: 358 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+do_reconcile_stripe: 1199 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 645 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 645 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 646 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 648 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 641 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 644 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 648 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 647 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 651 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 658 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 650 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 661 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_trigger_stripe: 761 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3558: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3556: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3560: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3559: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3561: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3562: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3564: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3563: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3566: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3565: became EMPTY but is OPEN - deferred to LRU delete work
+ec_stripe_delete: 13669 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 670 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 673 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 676 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 679 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 682 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 685 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 688 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 691 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 694 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 697 still OPEN, skipping delete
+bch2_ec_stripe_new_free: 719 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 649 (new idx 3550)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 658 (new idx 3554)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 653 (new idx 3547)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 659 (new idx 3569)
+bch2_ec_stripe_delete_work: 281 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 656 (new idx 3568)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 647 (new idx 3545)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 650 (new idx 3546)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 652 (new idx 3551)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 634 (new idx 3540)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 691 (new idx 3576)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+stripe_update_extent: 1646 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3850) while updating extent
+  u64s 9 type extent 7493989779944505344:1322496:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:8d08257a  compress none
+    stripe_ptr: idx 3850 block 0
+    ptr:    vdc 1:736:0 gen 1
+bch2_stripe_repair: 240 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 667 repair: stripe is OPEN, tryget failed - skipping this pass
+do_reconcile_stripe: 901 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 667 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 697 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3849) while updating extent
+  u64s 9 type extent 7493989779944505344:1320448:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:72838d0b  compress none
+    stripe_ptr: idx 3849 block 0
+    ptr:    vdd 2:726:0 gen 0
+bch2_stripe_repair: 652 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3846) while updating extent
+  u64s 9 type extent 7493989779944505344:1305088:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:adad4f13  compress none
+    stripe_ptr: idx 3846 block 0
+    ptr:    vdd 2:728:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 659 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 659 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 669 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3800) while updating extent
+  u64s 9 type extent 7493989779944505344:1347072:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:cd60003f  compress none
+    stripe_ptr: idx 3800 block 0
+    ptr:    vdc 1:748:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 669 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 695 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 695 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 694 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 694 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 670 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 670 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 662 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 662 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 672 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 672 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 673 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 673 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 665 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3845) while updating extent
+  u64s 9 type extent 7493989779944505344:1296896:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:b798254b  compress none
+    stripe_ptr: idx 3845 block 0
+    ptr:    vdd 2:724:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 675 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 676 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 668 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 678 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 679 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 671 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 681 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 684 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 687 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 690 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3789) while updating extent
+  u64s 9 type extent 7493989779944505344:1326592:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:2c6a1480  compress none
+    stripe_ptr: idx 3789 block 0
+    ptr:    vdd 2:729:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3791) while updating extent
+  u64s 9 type extent 7493989779944505344:1328640:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:2aef9191  compress none
+    stripe_ptr: idx 3791 block 0
+    ptr:    vdc 1:739:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3794) while updating extent
+  u64s 9 type extent 7493989779944505344:1334784:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4e09a63e  compress none
+    stripe_ptr: idx 3794 block 0
+    ptr:    vdc 1:742:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3850) while updating extent
+  u64s 9 type extent 7493989779944505344:1323008:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:74b173e6  compress none
+    stripe_ptr: idx 3850 block 0
+    ptr:    vdc 1:736:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 3849) while updating extent
+  u64s 9 type extent 7493989779944505344:1320960:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:cbf31df1  compress none
+    stripe_ptr: idx 3849 block 0
+    ptr:    vdd 2:726:512 gen 0
+ec_stripe_delete: 633 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3854
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3851
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3853
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3855
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3860
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3852
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3859
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3865
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3872
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 3876
+bch2_trigger_stripe: 415 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3973: became EMPTY but is OPEN - deferred to LRU delete work
+bch2_ec_stripe_delete_work: 93 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3970: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3975: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3968: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3971: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3978: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3979: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3987: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3981: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 3982: became EMPTY but is OPEN - deferred to LRU delete work
+ec_stripe_delete: 4885 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 634 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 638 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 641 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 644 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 646 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 647 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 649 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 650 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 652 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 653 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bch2_ec_stripe_new_free: 411 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 692 (new idx 3991)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 665 (new idx 3982)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 655 (new idx 3995)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 691 (new idx 4007)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 638 (new idx 3972)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 671 (new idx 3984)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 676 (new idx 4002)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 680 (new idx 3987)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 645 (new idx 3969)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 698 (new idx 3993)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+stripe_update_extent: 1131 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4230) while updating extent
+  u64s 9 type extent 7493989779944505344:1360384:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:85ab5201  compress none
+    stripe_ptr: idx 4230 block 0
+    ptr:    vdd 2:755:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4236) while updating extent
+  u64s 9 type extent 7493989779944505344:1372672:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:1c1fa99a  compress none
+    stripe_ptr: idx 4236 block 0
+    ptr:    vdd 2:761:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4235) while updating extent
+  u64s 9 type extent 7493989779944505344:1371648:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:a12a6952  compress none
+    stripe_ptr: idx 4235 block 0
+    ptr:    vdc 1:760:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4222) while updating extent
+  u64s 9 type extent 7493989779944505344:1345024:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:c8b9917c  compress none
+    stripe_ptr: idx 4222 block 0
+    ptr:    vdd 2:738:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4250) while updating extent
+  u64s 9 type extent 7493989779944505344:1402368:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:28e8e68f  compress none
+    stripe_ptr: idx 4250 block 0
+    ptr:    vdc 1:775:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4229) while updating extent
+  u64s 9 type extent 7493989779944505344:1359360:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:9393c918  compress none
+    stripe_ptr: idx 4229 block 0
+    ptr:    vdc 1:754:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4252) while updating extent
+  u64s 9 type extent 7493989779944505344:1406464:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:9eba8740  compress none
+    stripe_ptr: idx 4252 block 0
+    ptr:    vdd 2:768:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4264) while updating extent
+  u64s 9 type extent 7493989779944505344:1431040:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:79f8be6d  compress none
+    stripe_ptr: idx 4264 block 0
+    ptr:    vdd 2:777:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4242) while updating extent
+  u64s 9 type extent 7493989779944505344:1384960:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:2de9eb36  compress none
+    stripe_ptr: idx 4242 block 0
+    ptr:    vdd 2:767:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4257) while updating extent
+  u64s 9 type extent 7493989779944505344:1415680:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:8a306d6e  compress none
+    stripe_ptr: idx 4257 block 0
+    ptr:    vdd 2:782:0 gen 0
+bch2_stripe_repair: 219 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 658 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 650 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 661 repair: stripe is OPEN, tryget failed - skipping this pass
+do_reconcile_stripe: 744 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 699 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 676 needs_reconcile=1 repair -> (No error)
+bch2_stripe_repair: 488 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 700 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 679 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 700 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 692 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 695 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 698 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 682 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 685 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 688 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 645 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 648 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: opened old stripe, rebuilding 1 live data blocks
+ec_stripe_delete: 545 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4393
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4396
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4397
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4398
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4399
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4402
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4403
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4405
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4406
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 4407
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_trigger_stripe: 672 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4676: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4621: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4648: became EMPTY but is OPEN - deferred to LRU delete work
+bch2_ec_stripe_delete_work: 203 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4651: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4625: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4622: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4632: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4622: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4640: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 4622: became EMPTY but is OPEN - deferred to LRU delete work
+ec_stripe_delete: 10117 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4622 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4623 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4624 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4625 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4626 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4627 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4628 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4629 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4630 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 4631 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bch2_ec_stripe_new_free: 656 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 673 (new idx 4653)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 691 (new idx 4671)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 682 (new idx 4662)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 648 (new idx 4628)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 644 (new idx 4624)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 692 (new idx 4672)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 665 (new idx 4645)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 663 (new idx 4643)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 661 (new idx 4641)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 689 (new idx 4669)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+stripe_update_extent: 1887 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4941) while updating extent
+  u64s 9 type extent 7493989779944505344:1377792:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:db526e3f  compress none
+    stripe_ptr: idx 4941 block 0
+    ptr:    vdc 1:763:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4941) while updating extent
+  u64s 9 type extent 7493989779944505344:1378304:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:3326a0d5  compress none
+    stripe_ptr: idx 4941 block 0
+    ptr:    vdc 1:763:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4938) while updating extent
+  u64s 9 type extent 7493989779944505344:1371648:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:a12a6952  compress none
+    stripe_ptr: idx 4938 block 0
+    ptr:    vdc 1:760:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4939) while updating extent
+  u64s 9 type extent 7493989779944505344:1354240:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:1dc3f916  compress none
+    stripe_ptr: idx 4939 block 0
+    ptr:    vdd 2:752:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4945) while updating extent
+  u64s 9 type extent 7493989779944505344:1366528:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:58fdf623  compress none
+    stripe_ptr: idx 4945 block 0
+    ptr:    vdd 2:758:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4948) while updating extent
+  u64s 9 type extent 7493989779944505344:1388032:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:12af6df2  compress none
+    stripe_ptr: idx 4948 block 0
+    ptr:    vdd 2:759:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4938) while updating extent
+  u64s 9 type extent 7493989779944505344:1372160:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:3e510b2a  compress none
+    stripe_ptr: idx 4938 block 0
+    ptr:    vdc 1:760:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4939) while updating extent
+  u64s 9 type extent 7493989779944505344:1354752:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:f2949065  compress none
+    stripe_ptr: idx 4939 block 0
+    ptr:    vdd 2:752:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4945) while updating extent
+  u64s 9 type extent 7493989779944505344:1367040:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:6f2e3bfe  compress none
+    stripe_ptr: idx 4945 block 0
+    ptr:    vdd 2:758:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 4948) while updating extent
+  u64s 9 type extent 7493989779944505344:1388544:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:bc8ded99  compress none
+    stripe_ptr: idx 4948 block 0
+    ptr:    vdd 2:759:512 gen 0
+bch2_stripe_repair: 647 callbacks suppressed
+bch2_stripe_repair: 234 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: opened old stripe, rebuilding 1 live data blocks
+do_reconcile_stripe: 865 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 646 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 649 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 641 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 652 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 644 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 655 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 658 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 658 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 661 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 653 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 667 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 659 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 673 repair: stripe is OPEN, tryget failed - skipping this pass
+ec_stripe_delete: 657 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5034
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5035
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5036
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5037
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5038
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5042
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5044
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5046
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5047
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5048
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_ec_stripe_delete_work: 358 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_trigger_stripe: 905 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5487: became EMPTY but is OPEN - deferred to LRU delete work
+ec_stripe_delete: 17748 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 634 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5488: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5490: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5489: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5491: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 638 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5493: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 641 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5492: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 644 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 646 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5494: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5495: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5496: became EMPTY but is OPEN - deferred to LRU delete work
+bch2_ec_stripe_new_free: 869 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 646 (new idx 5488)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 634 (new idx 5487)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 649 (new idx 5491)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 645 (new idx 5489)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 638 (new idx 5490)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 652 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 655 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 658 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 644 (new idx 5495)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 661 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 655 (new idx 5496)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 652 (new idx 5493)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 664 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 641 (new idx 5492)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 648 (new idx 5494)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+stripe_update_extent: 1495 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5502) while updating extent
+  u64s 9 type extent 7493989779944505344:1365504:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:233e23ae  compress none
+    stripe_ptr: idx 5502 block 0
+    ptr:    vdc 1:757:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5492) while updating extent
+  u64s 9 type extent 7493989779944505344:1311232:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4c727f6  compress none
+    stripe_ptr: idx 5492 block 0
+    ptr:    vdd 2:731:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5528) while updating extent
+  u64s 9 type extent 7493989779944505344:1384960:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:2de9eb36  compress none
+    stripe_ptr: idx 5528 block 0
+    ptr:    vdd 2:767:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5512) while updating extent
+  u64s 9 type extent 7493989779944505344:1345024:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:c8b9917c  compress none
+    stripe_ptr: idx 5512 block 0
+    ptr:    vdd 2:738:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5516) while updating extent
+  u64s 9 type extent 7493989779944505344:1351168:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:8beda85f  compress none
+    stripe_ptr: idx 5516 block 0
+    ptr:    vdd 2:741:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5527) while updating extent
+  u64s 9 type extent 7493989779944505344:1378816:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:77f1273c  compress none
+    stripe_ptr: idx 5527 block 0
+    ptr:    vdd 2:764:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5526) while updating extent
+  u64s 9 type extent 7493989779944505344:1372672:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:1c1fa99a  compress none
+    stripe_ptr: idx 5526 block 0
+    ptr:    vdd 2:761:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5493) while updating extent
+  u64s 9 type extent 7493989779944505344:1334784:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4e09a63e  compress none
+    stripe_ptr: idx 5493 block 0
+    ptr:    vdc 1:742:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5508) while updating extent
+  u64s 9 type extent 7493989779944505344:1390080:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:70d5ccae  compress none
+    stripe_ptr: idx 5508 block 0
+    ptr:    vdc 1:769:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5513) while updating extent
+  u64s 9 type extent 7493989779944505344:1341952:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:a8410c39  compress none
+    stripe_ptr: idx 5513 block 0
+    ptr:    vdd 2:746:0 gen 0
+bch2_stripe_repair: 575 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: opened old stripe, rebuilding 1 live data blocks
+bch2_stripe_repair: 206 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+do_reconcile_stripe: 791 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 645 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 645 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 646 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 641 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 646 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: opened old stripe, rebuilding 1 live data blocks
+ec_stripe_delete: 557 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5605
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5606
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5607
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5609
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5608
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 649 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 648 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 648 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 652 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 658 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 650 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 661 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5614
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5622
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5632
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5629
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 5630
+bch2_ec_stripe_delete_work: 29 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+ec_stripe_delete: 2477 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5667 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5686 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5690 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5692 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5708 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5709 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5712 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5718 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5719 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 5720 still OPEN, skipping delete
+bch2_trigger_stripe: 235 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5753: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5747: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5746: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5733: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5743: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5736: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5735: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5751: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5728: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 5725: became EMPTY but is OPEN - deferred to LRU delete work
+bch2_ec_stripe_new_free: 292 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 673 (new idx 5813)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 652 (new idx 5792)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 700 (new idx 5841)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 695 (new idx 5837)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 676 (new idx 5816)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 674 (new idx 5823)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 662 (new idx 5811)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 634 (new idx 5784)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 677 (new idx 5826)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 638 (new idx 5788)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+stripe_update_extent: 1272 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5982) while updating extent
+  u64s 9 type extent 7493989779944505344:1357312:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:2b2175fa  compress none
+    stripe_ptr: idx 5982 block 0
+    ptr:    vdd 2:744:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6011) while updating extent
+  u64s 9 type extent 7493989779944505344:1414656:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:d4c389c1  compress none
+    stripe_ptr: idx 6011 block 0
+    ptr:    vdc 1:781:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5986) while updating extent
+  u64s 9 type extent 7493989779944505344:1341952:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:a8410c39  compress none
+    stripe_ptr: idx 5986 block 0
+    ptr:    vdd 2:746:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6010) while updating extent
+  u64s 9 type extent 7493989779944505344:1397248:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:48b10891  compress none
+    stripe_ptr: idx 6010 block 0
+    ptr:    vdd 2:773:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6001) while updating extent
+  u64s 9 type extent 7493989779944505344:1394176:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:3faaf94d  compress none
+    stripe_ptr: idx 6001 block 0
+    ptr:    vdd 2:762:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5964) while updating extent
+  u64s 9 type extent 7493989779944505344:1296896:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:b798254b  compress none
+    stripe_ptr: idx 5964 block 0
+    ptr:    vdd 2:724:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5996) while updating extent
+  u64s 9 type extent 7493989779944505344:1383936:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:cbe0931c  compress none
+    stripe_ptr: idx 5996 block 0
+    ptr:    vdc 1:766:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5990) while updating extent
+  u64s 9 type extent 7493989779944505344:1371648:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:a12a6952  compress none
+    stripe_ptr: idx 5990 block 0
+    ptr:    vdc 1:760:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 5971) while updating extent
+  u64s 9 type extent 7493989779944505344:1311232:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4c727f6  compress none
+    stripe_ptr: idx 5971 block 0
+    ptr:    vdd 2:731:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6003) while updating extent
+  u64s 9 type extent 7493989779944505344:1378816:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:77f1273c  compress none
+    stripe_ptr: idx 6003 block 0
+    ptr:    vdd 2:764:0 gen 0
+bch2_stripe_repair: 240 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 650 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 661 repair: stripe is OPEN, tryget failed - skipping this pass
+bch2_stripe_repair: 583 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 663 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 653 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 664 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 666 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 656 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 667 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 659 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 669 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 670 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 662 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 672 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 673 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 675 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 678 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 681 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 684 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 687 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 690 repair: opened old stripe, rebuilding 2 live data blocks
+do_reconcile_stripe: 877 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+ec_stripe_delete: 600 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6200
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 641 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 644 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 645 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 646 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 647 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6200
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 648 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6201
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6202
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6203
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6204
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 649 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6205
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 650 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6206
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6207
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6215
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_ec_stripe_delete_work: 293 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bch2_trigger_stripe: 701 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6389: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6387: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6379: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6382: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6391: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6380: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6399: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6400: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6397: became EMPTY but is OPEN - deferred to LRU delete work
+ec_stripe_delete: 13939 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 634 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 6383: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 638 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 641 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 644 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 646 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 647 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 649 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 650 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 652 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 653 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bch2_ec_stripe_new_free: 646 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 687 (new idx 6419)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 672 (new idx 6404)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 699 (new idx 6431)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 681 (new idx 6413)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 693 (new idx 6425)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 690 (new idx 6422)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 696 (new idx 6429)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 675 (new idx 6407)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 689 (new idx 6477)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 695 (new idx 6479)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+stripe_update_extent: 1666 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6565) while updating extent
+  u64s 9 type extent 7493989779944505344:1344000:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:9931e024  compress none
+    stripe_ptr: idx 6565 block 1
+    ptr:    vdc 1:747:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6574) while updating extent
+  u64s 9 type extent 7493989779944505344:1362432:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:71355fca  compress none
+    stripe_ptr: idx 6574 block 1
+    ptr:    vdc 1:756:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6556) while updating extent
+  u64s 9 type extent 7493989779944505344:1325568:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:bb0b2241  compress none
+    stripe_ptr: idx 6556 block 1
+    ptr:    vdc 1:738:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6565) while updating extent
+  u64s 9 type extent 7493989779944505344:1344512:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:ed8b9dd2  compress none
+    stripe_ptr: idx 6565 block 1
+    ptr:    vdc 1:747:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6591) while updating extent
+  u64s 9 type extent 7493989779944505344:1396224:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:e4f94027  compress none
+    stripe_ptr: idx 6591 block 0
+    ptr:    vdc 1:772:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6602) while updating extent
+  u64s 9 type extent 7493989779944505344:1426944:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:3cce000a  compress none
+    stripe_ptr: idx 6602 block 0
+    ptr:    vdc 1:786:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6611) while updating extent
+  u64s 9 type extent 7493989779944505344:1427968:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:5397de0a  compress none
+    stripe_ptr: idx 6611 block 0
+    ptr:    vdd 2:788:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6588) while updating extent
+  u64s 9 type extent 7493989779944505344:1390080:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:70d5ccae  compress none
+    stripe_ptr: idx 6588 block 0
+    ptr:    vdc 1:769:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6604) while updating extent
+  u64s 9 type extent 7493989779944505344:1433088:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:756cf63b  compress none
+    stripe_ptr: idx 6604 block 0
+    ptr:    vdc 1:790:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 6603) while updating extent
+  u64s 9 type extent 7493989779944505344:1420800:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:3db288d7  compress none
+    stripe_ptr: idx 6603 block 0
+    ptr:    vdc 1:785:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+ec_stripe_delete: 578 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6773
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6775
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6778
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6779
+bch2_stripe_repair: 603 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6780
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: opened old stripe, rebuilding 1 live data blocks
+bch2_stripe_repair: 308 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+do_reconcile_stripe: 877 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 646 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6784
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 649 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6785
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 641 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6785
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 644 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6786
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 6787
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 652 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 647 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 645 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 650 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 645 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 650 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 658 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_ec_stripe_delete_work: 329 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bch2_trigger_stripe: 749 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7082: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7086: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7087: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7085: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7083: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bch2_ec_stripe_new_free: 623 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 685 (new idx 7072)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 683 (new idx 7070)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 692 (new idx 7079)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 688 (new idx 7075)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 646 (new idx 7033)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 686 (new idx 7073)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 694 (new idx 7081)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 652 (new idx 7039)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 678 (new idx 7065)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe new free: releasing old stripe handle idx 663 (new idx 7050)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+ec_stripe_delete: 17662 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7041 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7056 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7062 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7066 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7069 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7071 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7083 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7084 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 679 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7132: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7122: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7125: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7128: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7145: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: stripe 7132 still OPEN, skipping delete
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+stripe_update_extent: 1249 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7086) while updating extent
+  u64s 9 type extent 7493989779944505344:1431552:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:eed11635  compress none
+    stripe_ptr: idx 7086 block 0
+    ptr:    vdd 2:777:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7060) while updating extent
+  u64s 9 type extent 7493989779944505344:1378304:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:3326a0d5  compress none
+    stripe_ptr: idx 7060 block 0
+    ptr:    vdc 1:763:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7046) while updating extent
+  u64s 9 type extent 7493989779944505344:1348608:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:bc97cfa6  compress none
+    stripe_ptr: idx 7046 block 0
+    ptr:    vdd 2:749:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7074) while updating extent
+  u64s 9 type extent 7493989779944505344:1406976:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:171009c8  compress none
+    stripe_ptr: idx 7074 block 0
+    ptr:    vdd 2:768:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7047) while updating extent
+  u64s 9 type extent 7493989779944505344:1351680:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:937faea2  compress none
+    stripe_ptr: idx 7047 block 0
+    ptr:    vdd 2:741:512 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7078) while updating extent
+  u64s 9 type extent 7493989779944505344:1415168:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:87bd96c7  compress none
+    stripe_ptr: idx 7078 block 0
+    ptr:    vdc 1:781:512 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7077) while updating extent
+  u64s 9 type extent 7493989779944505344:1412608:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:97ef1a1a  compress none
+    stripe_ptr: idx 7077 block 0
+    ptr:    vdd 2:771:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7073) while updating extent
+  u64s 9 type extent 7493989779944505344:1403392:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:4903d62c  compress none
+    stripe_ptr: idx 7073 block 0
+    ptr:    vdd 2:776:0 gen 0
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7066) while updating extent
+  u64s 9 type extent 7493989779944505344:1390080:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:70d5ccae  compress none
+    stripe_ptr: idx 7066 block 0
+    ptr:    vdc 1:769:0 gen 1
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): dropping stale stripe pointer (idx 7035) while updating extent
+  u64s 9 type extent 7493989779944505344:1326592:U32_MAX len 512 ver 0  : durability: 2
+    crc64: c_size 512 size 512 offset 0 nonce 0 csum crc32c 0:2c6a1480  compress none
+    stripe_ptr: idx 7035 block 0
+    ptr:    vdd 2:729:0 gen 0
+ec_stripe_delete: 428 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7205
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7207
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7210
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7215
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7218
+do_reconcile_stripe: 670 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 699 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7227
+bch2_stripe_repair: 475 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 700 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7228
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 700 needs_reconcile=1 repair -> (No error)
+bch2_stripe_repair: 186 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 692 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 692 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 695 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7232
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 695 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 698 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 698 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7234
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: deleting empty stripe 7238
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 634 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 638 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 641 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 644 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 645 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): reconcile: stripe 645 needs_reconcile=1 repair -> (No error)
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 647 repair: opened old stripe, rebuilding 1 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 648 repair: opened old stripe, rebuilding 2 live data blocks
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 634 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 646 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 638 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 649 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 641 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 652 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 644 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 655 repair: stripe is OPEN, tryget failed - skipping this pass
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bch2_trigger_stripe: 821 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7883: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7885: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7886: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7887: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7888: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7889: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7890: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7892: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7891: became EMPTY but is OPEN - deferred to LRU delete work
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): stripe 7893: became EMPTY but is OPEN - deferred to LRU delete work
+bch2_ec_stripe_delete_work: 170 callbacks suppressed
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): ec stripe delete work: running
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shrink stalled, tail head: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+bcachefs (vdb): Shrink failed: evacuating all data from the shrink tail not possible: bucket 0:724 (0 past cutoff), nr_backpointers 1, first backpointer bucket=0:724:1023 btree=stripes level=0 data_type=user suboffset=65535 len=0 gen=0 pos=0:634:0 phys
+
+ioctl error: Resize worker failed; see kernel log for details
+error=ENOSPC
+Error: shrinking device (requires kernel shrink support)
+
+Caused by:
+    No space left on device
+Error 1 at /host//etc/nixos/home/data/Code/bcachefs/ktest/tests/fs/bcachefs/shrink.ktest 541 from: bcachefs device resize "${devs[0]}" 362M, exiting
+Error 1 at /host/etc/nixos/home/data/Code/bcachefs/ktest/tests/prelude.sh 382 from: ( set -e; run_test $i ), exiting
+
+========= FAILED online_minimal_ec_shrink in 52s
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shutting down
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): going read-only
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): finished waiting for writes to stop
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): flushing journal and stopping allocators, journal seq 176
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): flushing journal and stopping allocators complete, journal seq 176
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): clean shutdown complete, journal seq 177
+bcachefs (f2b2301b-04f8-462e-9c7e-37d039a9eee8): shutdown complete
+
+Passed:
+Failed: online_minimal_ec_shrink
+Error 1 at /host/etc/nixos/home/data/Code/bcachefs/ktest/tests/prelude.sh 473 from: return ${#tests_failed[@]}, exiting
+Error 1 at /host//etc/nixos/home/data/Code/bcachefs/ktest/tests/fs/bcachefs/shrink.ktest 1061 from: return ${#tests_failed[@]}, exiting
+SUCCESSFUL ITERATIONS 0
+FAILED ITERATIONS 1
+TOTAL ITERATIONS 1
+NOTICE: Automounting of tracing to debugfs is deprecated and will be removed in 2030
+Kernel version: 6.17.0-ktest-g8cff344e6db4-dirty
+TEST FAILED
+sysrq: Power Off
+Error 1 at /etc/nixos/home/data/Code/bcachefs/ktest/lib/libktest.sh 639 from: kill $virtiofsd_pid 2> /dev/null, exiting
+Error 1 at ./build-test-kernel 188 from: kill $virtiofsd_pid 2> /dev/null, exiting
+Error 1 at ./build-test-kernel 392 from: kill $virtiofsd_pid 2> /dev/null, exiting

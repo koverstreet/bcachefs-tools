@@ -453,6 +453,12 @@ static int stripe_update_bucket(struct btree_trans *trans,
 			   stats.nr_done, stats.sectors_done);
 	}));
 
+	CLASS(bch_log_msg_ratelimited, msg)(c);
+	prt_printf(&msg.m, "stripe_update_bucket: old stripe %llu block %u -> done %u no_match %u bp_to_deleted %u cached %u (sectors %u/%u/%u/%u)\n",
+		   old_stripe->k.p.offset, old_blocknr,
+		   stats.nr_done, stats.nr_no_match, stats.nr_bp_to_deleted, stats.nr_cached,
+		   stats.sectors_done, stats.sectors_no_match, stats.sectors_bp_to_deleted, stats.sectors_cached);
+
 	return 0;
 }
 
@@ -2139,6 +2145,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	CLASS(bch_log_msg_ratelimited, msg)(c);
 	prt_printf(&msg.m, "stripe %llu repair: opened old stripe, rebuilding %u live data blocks\n",
 		   s.k->p.offset, nr_live_data_blocks);
+	bch2_bkey_val_to_text(&msg.m, c, s.s_c);
 
 	init_new_stripe_from_old(c, new_s, true);
 
