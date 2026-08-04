@@ -226,6 +226,19 @@ static inline int bch2_snapshot_is_leaf(struct bch_fs *c, u32 id)
 	return !ret;
 }
 
+/*
+ * Unguarded snapshot_t() deref, unlike its neighbours above.
+ *
+ * Caller obligation: @parent must be an ancestor of a node the caller has
+ * already handled. That suffices because the table is indexed U32_MAX - id and
+ * IDs descend, so coverage is upward closed in id - if the table covers a node
+ * it covers every ancestor of that node.
+ *
+ * Don't "fix" this with a NULL check: substituting depth 0 for a state the
+ * ordering says can't occur would write a wrong depth into a filesystem we're
+ * in the middle of repairing, instead of an oops that would at least stop.
+ * bch2_snapshot_skiplist_get() in check_snapshots.c relies on the same rule.
+ */
 static inline u32 bch2_snapshot_depth(struct bch_fs *c, u32 parent)
 {
 	guard(rcu)();
