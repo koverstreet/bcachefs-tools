@@ -33,6 +33,24 @@ int bch2_check_snapshot_needs_deletion(struct btree_trans *, struct bkey_s_c, u3
 	.min_val_size	= 24,					\
 })
 
+/*
+ * Caller obligation: @s must have a migrated state field. Zero is illegal as a
+ * state (see BCH_SNAPSHOT_STATES()), so a legacy key that predates the field
+ * reads back as 0 here - which is equal to no valid state, and wrong in both
+ * directions without saying so:
+ *
+ *	state(s) == SNAPSHOT_STATE_deleted	false for a deleted legacy node
+ *	state(s) != SNAPSHOT_STATE_live		true  for a live    legacy node
+ *
+ * so a guard silently fails to fire, or fires when it shouldn't.
+ *
+ * Rule of thumb: this one answers "what is in the field", _compat() below
+ * answers "what does this node's state mean". Anything deciding behaviour from
+ * the state wants _compat() unless the key is known migrated. Validation and
+ * the migration itself legitimately want the field - see
+ * bch2_snapshot_validate(), which treats a zero state as legal precisely
+ * because a pre-upgrade key has not been rewritten yet.
+ */
 static inline enum bch_snapshot_state bch2_snapshot_state(const struct bch_snapshot *s)
 {
 	return le32_to_cpu(s->state);
@@ -49,6 +67,13 @@ static inline enum bch_snapshot_state bch2_snapshot_state_from_flags(const struc
 	return SNAPSHOT_STATE_live;
 }
 
+/*
+ * Exact, not a heuristic, and safe on any key: zero is illegal as a state, so a
+ * zero field means precisely "legacy, predates the field" and the old flag bits
+ * are then authoritative. Prefer this wherever the caller can't show the key has
+ * already been migrated - including at runtime, on a filesystem that may never
+ * have been fscked.
+ */
 static inline enum bch_snapshot_state bch2_snapshot_state_compat(const struct bch_snapshot *s)
 {
 	return s->state
