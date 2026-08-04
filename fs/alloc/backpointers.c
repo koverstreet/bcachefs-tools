@@ -1379,10 +1379,24 @@ struct bkey_s_c_backpointer bch2_bp_scan_iter_peek(struct btree_trans *trans,
 
 		u32 restart_count = trans->restart_count;
 
+		/* DIAGNOSTIC (temporary): shrink hang - report a scan that
+		 * doesn't make progress (restart storm) vs. one that's just
+		 * blocked in a lock wait (which the six-lock stall detector
+		 * reports with a stack dump). */
+		u64 fill_start = local_clock();
+		unsigned fill_restarts = 0;
+
 		int ret = for_each_btree_key_max(trans, bp_iter, iter->btree,
 					   iter->pos, end, BTREE_ITER_prefetch, k, ({
 			if (k.k->type != KEY_TYPE_backpointer)
 				continue;
+
+			if (time_after64(local_clock(), fill_start + 5ULL * NSEC_PER_SEC) &&
+			    (++fill_restarts % 10) == 1)
+				bch_warn(trans->c,
+					 "bp_scan_iter_peek: %s slow, pos %llu:%llu..%llu:%llu bps %zu (lock waits/restarts while scanning)",
+					 trans->fn, iter->pos.inode, iter->pos.offset,
+					 end.inode, end.offset, iter->bps.nr);
 
 			/* XXX: this is a really big allocation, we should drop
 			 * srcu lock */

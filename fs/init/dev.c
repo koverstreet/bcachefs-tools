@@ -923,8 +923,6 @@ int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 			 enum bch_member_state new_state, int flags,
 			 struct printbuf *err)
 {
-	int ret = 0;
-
 	bool was_rw = ca->mi.state == BCH_MEMBER_STATE_rw;
 	bool do_reconcile_scan =
 		new_state == BCH_MEMBER_STATE_rw ||
@@ -1898,13 +1896,21 @@ static int tail_head_snapshot(struct bch_fs *c, struct bch_dev *ca,
 	struct bpos bp_start = bucket_pos_to_bp_start(ca, POS(ca->dev_idx, new_nbuckets));
 	struct bpos bp_end = bucket_pos_to_bp_start(ca, POS(ca->dev_idx, ca->mi.nbuckets));
 
+	bch_verbose_ratelimited(c, "shrink: tail snapshot dev %u buckets %llu..%llu (bp %llu:%llu..%llu:%llu)",
+				ca->dev_idx, new_nbuckets, ca->mi.nbuckets,
+				bp_start.inode, bp_start.offset, bp_end.inode, bp_end.offset);
+
 	CLASS(btree_trans, trans)(c);
 	CLASS(backpointer_scan_iter, iter)(BTREE_ID_backpointers, bp_start, NULL);
 
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
+	u64 t0 = local_clock();
 	struct bkey_s_c_backpointer bp = bch2_bp_scan_iter_peek(trans, &iter, bp_end, &last_flushed);
+	bch_verbose_ratelimited(c, "shrink: tail snapshot first peek took %llu us%s",
+				(local_clock() - t0) / 1000,
+				bp.k ? "" : " (empty)");
 
 	try(bkey_err(bp));
 
@@ -1923,7 +1929,10 @@ static int tail_head_snapshot(struct bch_fs *c, struct bch_dev *ca,
 	do {
 		head->nr_backpointers++;
 		bch2_bp_scan_iter_advance(&iter);
+		u64 t1 = local_clock();
 		bp = bch2_bp_scan_iter_peek(trans, &iter, bp_end, &last_flushed);
+		bch_verbose_ratelimited(c, "shrink: tail snapshot peek %u took %llu us",
+					head->nr_backpointers, (local_clock() - t1) / 1000);
 		try(bkey_err(bp));
 	} while (bp.k && bpos_eq(bp_pos_to_bucket(ca, bp.k->p), head->bucket));
 

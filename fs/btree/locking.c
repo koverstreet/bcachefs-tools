@@ -100,6 +100,8 @@
 
 #include "bcachefs.h"
 
+#include <linux/sched/debug.h>
+
 #include "btree/bbpos.h"
 #include "btree/cache.h"
 #include "btree/locking.h"
@@ -658,6 +660,57 @@ int bch2_six_check_for_deadlock(struct six_lock *lock, struct six_lock_waiter *w
 	struct btree *b = locking_node(lock);
 	if (b && node_reuse_race(trans, b))
 		return bch_err_throw(trans->c, no_btree_node_reused);
+
+	/*
+	 * DIAGNOSTIC (temporary): stall detector for the online-shrink hang.
+	 * trans->locking_wait.trans_start_time is only refreshed at
+	 * bch2_trans_begin(), so while we're parked here it records when this
+	 * lock wait started; if we've been blocked for several seconds, print
+	 * who we are, which node we're waiting on, and who holds it.
+	 */
+	if (time_after64(local_clock(),
+			 trans->locking_wait.trans_start_time + 5ULL * NSEC_PER_SEC)) {
+		static unsigned long next_warn;
+
+		if (time_after(jiffies, next_warn)) {
+			next_warn = jiffies + 10 * HZ;
+			CLASS(printbuf, buf)();
+			prt_printf(&buf, "%s (%s) blocked %llu us on %s lock of %s",
+				   trans->fn, current->comm,
+				   (local_clock() - trans->locking_wait.trans_start_time) / 1000,
+				   w->lock_want == SIX_LOCK_read ? "read" :
+				   w->lock_want == SIX_LOCK_intent ? "intent" : "write",
+				   b ? bch2_btree_id_str(b->c.btree_id) : "(key cache)");
+			if (b)
+				prt_printf(&buf, " node %llu:%llu level %u",
+					   b->key.k.p.inode, b->key.k.p.offset, b->c.level);
+			prt_printf(&buf, "\n  lock state %u, owner %s (%d)\n",
+				   atomic_read(&lock->state),
+				   lock->owner ? lock->owner->comm : "(none)",
+				   lock->owner ? lock->owner->pid : 0);
+			struct six_lock_wait_fifo *wf;
+			rcu_read_lock();
+			wf = rcu_dereference(lock->wait_fifo);
+			if (wf) {
+				prt_str(&buf, "  waiters:");
+				darray_for_each(*wf, i) {
+					struct six_lock_waiter *w2 = smp_load_acquire(&i->w);
+					struct btree_trans *t2 = container_of_or_null(w2, struct btree_trans, locking_wait);
+					prt_printf(&buf, " %s(%s)",
+						   t2 ? t2->fn : "?",
+						   w2 ? w2->task->comm : "?");
+				}
+			}
+			rcu_read_unlock();
+			prt_newline(&buf);
+			bch_warn(trans->c, "%s", buf.buf);
+			dump_stack();
+#ifdef __KERNEL__
+			if (lock->owner && lock->owner != current)
+				sched_show_task(lock->owner);
+#endif
+		}
+	}
 
 #if defined(__KERNEL__) && !defined(CONFIG_SCHED_ALT)
 	/*
