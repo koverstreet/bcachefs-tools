@@ -305,11 +305,20 @@ static int stripe_update_extent(struct btree_trans *trans,
 
 		if (old_stripe == new_stripe ||
 		    p.ec.idx != old_stripe->k.p.offset) {
-			CLASS(printbuf, buf)();
-			ret_log_fsck_err(trans, stripe_update_stale_stripe_ptr,
-				"dropping stale stripe pointer (idx %llu) while updating extent\n%s",
-				(u64) p.ec.idx,
-				(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
+			/*
+			 * The extent references a stripe that no longer owns this block
+			 * (e.g. a previous create reused the block but failed to migrate
+			 * the extent). The migration below drops the stale stripe pointer
+			 * and re-points the extent at the new stripe, which is the correct
+			 * recovery - so log it as an fsck error for check_allocations to
+			 * verify, but don't abort the create over it.
+			 */
+			CLASS(bch_log_msg_ratelimited, msg)(c);
+			prt_printf(&msg.m, "dropping stale stripe pointer (idx %llu) while updating extent\n",
+				   (u64) p.ec.idx);
+			bch2_bkey_val_to_text(&msg.m, c, k);
+
+			bch2_count_fsck_err(c, stripe_update_stale_stripe_ptr, &msg.m);
 		}
 	}
 
@@ -551,6 +560,8 @@ static void zero_out_rest_of_ec_bucket(struct bch_fs *c,
 
 void bch2_ec_stripe_new_free(struct bch_fs *c, struct ec_stripe_new *s)
 {
+	bool had_old_stripe = s->old_stripe_handle.idx != 0;
+
 	CLASS(bch_log_msg_ratelimited, msg)(c);
 	prt_printf(&msg.m, "ec stripe new free: releasing old stripe handle idx %llu (new idx %llu)\n",
 		   s->old_stripe_handle.idx, s->new_stripe_handle.idx);
@@ -558,6 +569,17 @@ void bch2_ec_stripe_new_free(struct bch_fs *c, struct ec_stripe_new *s)
 	bch2_stripe_new_buckets_del(c, s);
 	bch2_stripe_handle_put(c, &s->new_stripe_handle);
 	bch2_stripe_handle_put(c, &s->old_stripe_handle);
+
+	/*
+	 * If this create had an old stripe, it may have become empty while we
+	 * held it open: the trigger defers the delete to the LRU work, which
+	 * skips open stripes, and nothing re-queues it once we release the
+	 * handle. Re-trigger it now that the stripe is closed so the deferred
+	 * delete actually runs.
+	 */
+	if (had_old_stripe)
+		bch2_do_stripe_deletes(c);
+
 	kfree(s);
 }
 
@@ -719,6 +741,12 @@ static void ec_stripe_create(struct ec_stripe_new *s)
 	}
 	if (ret && !s->err)
 		s->err = ret;
+
+	if (ret) {
+		CLASS(bch_log_msg_ratelimited, msg)(c);
+		prt_printf(&msg.m, "stripe create failed: %s\n", bch2_err_str(ret));
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&s->new_stripe.key.k_i));
+	}
 
 	if (ret)
 		event_inc_trace(c, stripe_create_fail, buf, ({
@@ -2038,6 +2066,20 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 			   bch2_stripe_is_open(c, s.k->p.offset),
 			   old_s->needs_reconcile);
 		bch2_bkey_val_to_text(&msg.m, c, s.s_c);
+
+		/*
+		 * Nothing to repair - the stripe is empty, so it should just be
+		 * deleted (the trigger/LRU handles that). Clear needs_reconcile so
+		 * reconcile stops re-queueing this work and re-opening the stripe
+		 * every pass, which otherwise races the empty-stripe delete.
+		 */
+		if (old_s->needs_reconcile) {
+			struct bkey_i_stripe *n =
+				bch2_bkey_make_mut_typed(trans, iter, &s.s_c, 0, stripe);
+			if (!IS_ERR(n))
+				n->v.needs_reconcile = 0;
+		}
+
 		return 0;
 	}
 
