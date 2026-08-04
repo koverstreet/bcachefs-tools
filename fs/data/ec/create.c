@@ -214,11 +214,13 @@ struct stripe_update_bucket_stats {
 	u32			nr_bp_to_deleted;
 	u32			nr_no_match;
 	u32			nr_cached;
+	u32			nr_matched;
 	u32			nr_done;
 
 	u32			sectors_bp_to_deleted;
 	u32			sectors_no_match;
 	u32			sectors_cached;
+	u32			sectors_matched;
 	u32			sectors_done;
 };
 
@@ -313,8 +315,19 @@ static int stripe_update_extent(struct btree_trans *trans,
 		if (p.ec.idx == new_stripe->k.p.offset)
 			return 0;
 
-		if (old_stripe == new_stripe ||
-		    p.ec.idx != old_stripe->k.p.offset) {
+		if (p.ec.idx == old_stripe->k.p.offset) {
+			/*
+			 * Extent is (or was, before this migration) part of the old
+			 * stripe block: the trigger will decrement its blockcount.
+			 * Anything else referencing this bucket - a stale stripe
+			 * pointer or no stripe pointer at all - does not decrement
+			 * the old blockcount, so a block whose count never gets
+			 * decremented is orphaned and must be zeroed below.
+			 */
+			stats->nr_matched++;
+			stats->sectors_matched += bp.v->bucket_len;
+		} else if (old_stripe == new_stripe ||
+			   p.ec.idx != old_stripe->k.p.offset) {
 			/*
 			 * The extent references a stripe that no longer owns this block
 			 * (e.g. a previous create reused the block but failed to migrate
@@ -459,29 +472,37 @@ static int stripe_update_bucket(struct btree_trans *trans,
 			   stats.nr_no_match, stats.sectors_no_match);
 		prt_printf(&buf, "cached:\t%u %u\n",
 			   stats.nr_cached, stats.sectors_cached);
+		prt_printf(&buf, "matched:\t%u %u\n",
+			   stats.nr_matched, stats.sectors_matched);
 		prt_printf(&buf, "done:\t%u %u\n",
 			   stats.nr_done, stats.sectors_done);
 	}));
 
 	CLASS(bch_log_msg_ratelimited, msg)(c);
-	prt_printf(&msg.m, "stripe_update_bucket: old stripe %llu block %u -> done %u no_match %u bp_to_deleted %u cached %u (sectors %u/%u/%u/%u)\n",
+	prt_printf(&msg.m, "stripe_update_bucket: old stripe %llu block %u -> done %u no_match %u bp_to_deleted %u cached %u matched %u (sectors %u/%u/%u/%u/%u)\n",
 		   old_stripe->k.p.offset, old_blocknr,
-		   stats.nr_done, stats.nr_no_match, stats.nr_bp_to_deleted, stats.nr_cached,
-		   stats.sectors_done, stats.sectors_no_match, stats.sectors_bp_to_deleted, stats.sectors_cached);
+		   stats.nr_done, stats.nr_no_match, stats.nr_bp_to_deleted, stats.nr_cached, stats.nr_matched,
+		   stats.sectors_done, stats.sectors_no_match, stats.sectors_bp_to_deleted, stats.sectors_cached, stats.sectors_matched);
 
 	/*
 	 * A block that is marked live (blockcount > 0 in the old stripe's key)
-	 * but whose bucket has no extent backpointers at all is orphaned: the
-	 * extents that referenced it were already moved out (e.g. by the shrink's
-	 * extent-level reconcile) without the stripe blockcount being updated.
-	 * Without this, the repair keeps treating the block as live, migrates
-	 * nothing, and the old stripe never empties - so it's never deleted and
-	 * its stale block pointers keep the shrink tail busy forever. Zero the
-	 * stale count so the old stripe can empty and be deleted.
+	 * but that no extent in its bucket references is orphaned: the extents
+	 * that referenced it were already moved or re-pointed at another stripe
+	 * (e.g. by a previous repair whose blockcount decrement was lost, or by
+	 * the shrink's extent-level reconcile) without the stripe blockcount
+	 * being updated. Without this, the repair keeps treating the block as
+	 * live, migrates nothing that decrements it, and the old stripe never
+	 * empties - so it's never deleted and its stale block pointers keep the
+	 * shrink tail busy forever. Zero the stale count so the old stripe can
+	 * empty and be deleted.
+	 *
+	 * Safe because an extent referencing the old stripe block always has a
+	 * backpointer in this bucket (the scan covers the whole bucket): no
+	 * match means no extent is left that would lose its reconstruction
+	 * source when the count is zeroed.
 	 */
 	if (old_stripe != new_stripe &&
-	    !stats.nr_done && !stats.nr_no_match &&
-	    !stats.nr_bp_to_deleted && !stats.nr_cached) {
+	    !stats.nr_matched) {
 		struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
 						BTREE_ID_stripes, POS(0, old_stripe->k.p.offset),
 						BTREE_ITER_cached, stripe);
@@ -490,7 +511,7 @@ static int stripe_update_bucket(struct btree_trans *trans,
 
 		if (!IS_ERR(s)) {
 			CLASS(bch_log_msg_ratelimited, msg2)(c);
-			prt_printf(&msg2.m, "stripe %llu: zeroing stale blockcount for orphaned block %u (no backpointers in bucket)\n",
+			prt_printf(&msg2.m, "stripe %llu: zeroing stale blockcount for orphaned block %u (no extents reference it)\n",
 				   old_stripe->k.p.offset, old_blocknr);
 
 			stripe_blockcount_set(&s->v, old_blocknr, 0);
