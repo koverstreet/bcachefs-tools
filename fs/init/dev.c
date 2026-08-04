@@ -1269,6 +1269,17 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 		 * only thing that adds a device to a not-started filesystem:
 		 */
 		try(bch2_set_reconcile_needs_scan(c, s, false));
+
+		/*
+		 * Adding a device grows the EC widening target (RW members of
+		 * the disk_label) for existing stripes: queue a stripes scan so
+		 * their can_widen is refreshed. The RW-transition path
+		 * (__bch2_dev_set_state) already does this; device add was
+		 * missing it, so can_widen stayed 0 on every pre-existing stripe
+		 * and fsck flagged stripe_can_widen_wrong.
+		 */
+		try(bch2_set_reconcile_needs_scan(c,
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_stripes }, false));
 	}
 
 	scoped_guard(rwsem_write, &c->state_lock) {

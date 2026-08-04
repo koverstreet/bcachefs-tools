@@ -529,6 +529,36 @@ static int stripe_update_bucket(struct btree_trans *trans,
 			}
 			ret;
 		}));
+
+		/*
+		 * Now set the new stripe's blockcount for this block to the
+		 * definitive migrated sector count. The extent migration's trigger
+		 * incremented it per extent (a key-cache RMW, unreliable under
+		 * concurrency) on top of the count we committed at stripe creation,
+		 * so the stored value must be overwritten with what we actually
+		 * migrated - mirroring the old stripe zeroing above. Without this
+		 * the trigger's double-add (or a lost delta) leaves the new stripe
+		 * with a wrong blockcount that fsck flags.
+		 */
+		lockrestart_do(trans, ({
+			struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
+							BTREE_ID_stripes, POS(0, new_stripe->k.p.offset),
+							BTREE_ITER_cached, stripe);
+			int ret = PTR_ERR_OR_ZERO(s);
+
+			if (ret) {
+				if (bch2_err_matches(ret, ENOENT))
+					ret = 0;	/* stripe already deleted - nothing to fix */
+			} else {
+				CLASS(bch_log_msg_ratelimited, msg3)(c);
+				prt_printf(&msg3.m, "stripe %llu: setting blockcount for block %u to %u (migrated %u sectors)\n",
+					   new_stripe->k.p.offset, new_blocknr, stats.sectors_done, stats.sectors_done);
+
+				stripe_blockcount_set(&s->v, new_blocknr, stats.sectors_done);
+				ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+			}
+			ret;
+		}));
 	}
 
 	return 0;
@@ -1730,6 +1760,25 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, 
 			__set_bit(s->old_blocks_nr, s->blocks_allocated);
 
 			new_v->ptrs[s->old_blocks_nr] = old_v->ptrs[i];
+
+			/*
+			 * Carry the old block's sector count into the new stripe
+			 * key. Without this the new stripe is committed with
+			 * blockcounts of zero and looks EMPTY to the delete
+			 * machinery (lru_pos == STRIPE_LRU_POS_EMPTY), so the
+			 * stripe delete work can reap it while the extent
+			 * migration is still in flight - extents get re-pointed
+			 * at a stripe that no longer exists. Relying on the
+			 * migration trigger's per-extent increments alone is also
+			 * insufficient: they're key-cache RMW deltas that aren't
+			 * durable until a flush, so surviving stripes end up with
+			 * zero on-disk blockcounts. Committing the count here
+			 * makes the new stripe non-empty from birth and durable;
+			 * stripe_update_bucket() corrects the migration trigger's
+			 * double-add afterwards.
+			 */
+			stripe_blockcount_set(new_v, s->old_blocks_nr,
+					      stripe_blockcount_get(old_v, i));
 
 			s->old_block_map[s->old_blocks_nr++] = i;
 			BUG_ON(s->old_blocks_nr + !repair > new_nr_data);
