@@ -2234,6 +2234,8 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 		try(bch2_dev_shrink_wait_reconcile(ca, new_nbuckets, seq, kick,
 						     &head, &kick_complete, err));
 
+		bch2_fs_ec_flush_outstanding(c);
+
 		/* Free buckets may have been changed during reconcile; refresh the count */
 		try(bch2_dev_count_tail_free(c, ca, new_nbuckets));
 
