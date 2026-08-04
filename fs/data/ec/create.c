@@ -485,24 +485,25 @@ static int stripe_update_bucket(struct btree_trans *trans,
 		   stats.sectors_done, stats.sectors_no_match, stats.sectors_bp_to_deleted, stats.sectors_cached, stats.sectors_matched);
 
 	/*
-	 * A block that is marked live (blockcount > 0 in the old stripe's key)
-	 * but that no extent in its bucket references is orphaned: the extents
-	 * that referenced it were already moved or re-pointed at another stripe
-	 * (e.g. by a previous repair whose blockcount decrement was lost, or by
-	 * the shrink's extent-level reconcile) without the stripe blockcount
-	 * being updated. Without this, the repair keeps treating the block as
-	 * live, migrates nothing that decrements it, and the old stripe never
-	 * empties - so it's never deleted and its stale block pointers keep the
-	 * shrink tail busy forever. Zero the stale count so the old stripe can
-	 * empty and be deleted.
+	 * The old stripe's blockcount for this block is obsolete once the
+	 * migration has run: matching extents were re-pointed at the new stripe
+	 * (its trigger accounting is unreliable under concurrency - concurrent
+	 * extent rewrites on the same cached stripe key can lose a decrement,
+	 * leaving a phantom count that nothing will ever drain), and
+	 * non-matching extents never referenced this block at all. Either way
+	 * no extent references (old_stripe, old_blocknr) any more, so the count
+	 * must be zero - set it definitively instead of trusting the per-extent
+	 * deltas. Without this, the repair keeps treating the block as live,
+	 * the old stripe never empties, and it's never deleted - so its stale
+	 * block pointers (possibly in the shrink tail) keep the shrink stuck
+	 * forever.
 	 *
 	 * Safe because an extent referencing the old stripe block always has a
-	 * backpointer in this bucket (the scan covers the whole bucket): no
-	 * match means no extent is left that would lose its reconstruction
-	 * source when the count is zeroed.
+	 * backpointer in this bucket (the scan covers the whole bucket): after
+	 * the migration no such extent remains, so zeroing cannot orphan live
+	 * data.
 	 */
-	if (old_stripe != new_stripe &&
-	    !stats.nr_matched) {
+	if (old_stripe != new_stripe) {
 		/*
 		 * The get and commit can return transaction restarts (e.g.
 		 * journal_overwrites_changed racing the journal flush); retry them
@@ -520,8 +521,8 @@ static int stripe_update_bucket(struct btree_trans *trans,
 					ret = 0;	/* stripe already deleted */
 			} else {
 				CLASS(bch_log_msg_ratelimited, msg2)(c);
-				prt_printf(&msg2.m, "stripe %llu: zeroing stale blockcount for orphaned block %u (no extents reference it)\n",
-					   old_stripe->k.p.offset, old_blocknr);
+				prt_printf(&msg2.m, "stripe %llu: zeroing blockcount for block %u (migrated to new stripe, %u matched)\n",
+					   old_stripe->k.p.offset, old_blocknr, stats.nr_matched);
 
 				stripe_blockcount_set(&s->v, old_blocknr, 0);
 				ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
