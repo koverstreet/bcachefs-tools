@@ -262,6 +262,7 @@
 
 #include "init/dev.h"
 #include "init/fs.h"
+#include "init/passes.h"
 
 #include "linux/bitmap.h"
 #include "linux/kthread.h"
@@ -2330,6 +2331,51 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 			}
 		}
 	}
+
+	/*
+	 * AI yapping below. TLDR: EC accounting is currently slightly off, so just
+	 *  schedule an accounting pass for the next mount.
+	 *
+	 * The EC evacuation this shrink drives (stripe repair: extents
+	 * re-pointed from a stripe with a block in the shrink tail to the rebuilt
+	 * stripe on the surviving devices) does not maintain the replicas
+	 * accounting: bch2_trigger_stripe_ptr() fires for the overwrite of the
+	 * old extent, but the re-pointed extent is committed without a stripe_ptr
+	 * the insert trigger can see, so the new stripe's replicas entry is never
+	 * incremented and the old stripe's entry is left overcounted. logs shows
+	 * zero insert events for the rebuilt stripes while the
+	 * old-stripe overwrites fire, and fsck flags replicas user {0,1,2}/{1,2,3}
+	 * by exactly the repaired sectors.
+	 *
+	 * The drift is confined to the replicas counters: extents, stripe
+	 * blockcounts, backpointers and alloc keys all stay consistent, so the
+	 * fs stays safe - only usage reporting and the degraded-mount
+	 * availability check are wrong until the accounting is recomputed.
+	 * check_allocations recomputes it, and accounting_mismatch is
+	 * FSCK_AUTOFIX (with the default errors=fix_safe), so it self-heals
+	 * without fsck.
+	 *
+	 * We schedule it here rather than running it inline: check_allocations
+	 * is a full GC pass that can only run safely on a quiescent fs (mount or
+	 * offline fsck) - running it on a live, writable fs races concurrent
+	 * accounting mods, and this tree has no runtime GC thread to serialize
+	 * with. Marking it required in the superblock makes the next mount
+	 * recompute and fix the accounting before anything reads it.
+	 *
+	 * Proper fix (TODO): find why the re-pointed extent's insert loses its
+	 * stripe_ptr. The old-key overwrite triggers but no insert for the new
+	 * stripes ever does; the data ptr re-point is otherwise correct
+	 * (blockcounts drain, the final on-disk state is erasure coded), so the
+	 * stripe_ptr must be dropped or rewritten in stripe_update_extent()'s key
+	 * construction or the extent update/merge path. Once the insert trigger
+	 * sees the new stripe_ptr, the accounting follows the migration online
+	 * and this scheduling can go away.
+	 */
+	CLASS(bch_log_msg, msg)(c);
+	int ret = bch2_run_explicit_recovery_pass(c, &msg.m, BCH_RECOVERY_PASS_check_allocations, 0);
+	if (bch2_err_matches(ret, BCH_ERR_recovery_will_run))
+		ret = 0;	/* pass will run on next mount */
+	try(ret);
 
 	return bch2_dev_shrink_finalize(c, ca, old_nbuckets, new_nbuckets, seq, err);
 }
