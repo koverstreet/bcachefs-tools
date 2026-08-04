@@ -4,6 +4,19 @@
  * resolve to bcachefs-kernel's bindings rather than being redefined here.
  */
 
+/*
+ * First, before anything else can touch it: clang's stddef.h is guarded with
+ * the __need_* protocol, so a header that pulls in a partial stddef (for NULL,
+ * or ptrdiff_t) leaves __STDDEF_H defined without defining size_t. A later
+ * plain include is then a no-op and size_t never appears.
+ *
+ * That matters here because the ioctl numbers below encode sizeof() of their
+ * argument type, and bindgen evaluates them by compiling a probe against this
+ * header. If size_t is missing the probe fails, and bindgen drops or
+ * miscomputes the constant without saying anything.
+ */
+#include <stddef.h>
+
 #include "bcachefs.h"
 
 #include "tools-util.h"
@@ -19,8 +32,6 @@
  * they vary by arch and word size and must not be hardcoded. bindgen computes
  * them for the target (via clang_macro_fallback), but only if the argument
  * types resolve - the uapi header uses bare size_t and leaves defining it to
- * whoever includes it. Without stddef.h first, bindgen's probe fails to
- * compile and it drops the constant silently.
+ * whoever includes it. See the stddef.h note at the top.
  */
-#include <stddef.h>
 #include <linux/fs.h>
