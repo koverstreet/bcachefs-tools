@@ -758,8 +758,15 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 	if (ret > 0)
 		ret = 0;
 
+	bool is_kthread = current->flags & PF_KTHREAD;
+
+	/*
+	 * the backpointer audit can be very slow; if we're told to stop,
+	 * drop out early
+	 */
 	while (ca &&
-	       check_mismatch_done < sector_to_bucket(ca, sector_end))
+	       check_mismatch_done < sector_to_bucket(ca, sector_end) &&
+	       !(is_kthread && kthread_should_stop()))
 		bch2_check_bucket_backpointer_mismatch(trans, ca, check_mismatch_done++,
 						       copygc, &last_flushed);
 
