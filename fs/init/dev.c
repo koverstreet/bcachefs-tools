@@ -2264,14 +2264,20 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 
 		try(bch2_dev_shrink_queue_reconcile(c, ca, did_scan, &kick, err));
 
+		bch_verbose_ratelimited(c, "shrink: pass %u: waiting on kick %u", pass, kick);
+
 		try(bch2_dev_shrink_wait_reconcile(ca, new_nbuckets, seq, kick,
 						     &head, &kick_complete, err));
+
+		bch_verbose_ratelimited(c, "shrink: pass %u: kick complete %d, flushing ec", pass, kick_complete);
 
 		bch2_fs_ec_flush_outstanding(c);
 
 		/* Free buckets may have been changed during reconcile; refresh the count */
+		bch_verbose_ratelimited(c, "shrink: pass %u: counting tail free", pass);
 		try(bch2_dev_count_tail_free(c, ca, new_nbuckets));
 
+		bch_verbose_ratelimited(c, "shrink: pass %u: snapshotting head", pass);
 		try(tail_head_snapshot(c, ca, new_nbuckets, &head));
 		if (shrink_tail_head_empty(&head))
 			break;

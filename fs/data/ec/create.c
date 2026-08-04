@@ -1596,6 +1596,23 @@ static bool may_reuse_stripe(struct bch_fs *c,
 	    old->nr_redundant		!= new->new_stripe.key.v.nr_redundant)
 		return false;
 
+	/*
+	 * A stripe with any block in a bad/evacuating region (shrinking device
+	 * tail, or a device being removed) is being evacuated: leave it to the
+	 * shrink/repair path, which needs exclusive access. Reusing it here
+	 * would hold its handle open for the whole create - blocking the
+	 * repair's tryget and racing its blockcount migration (lost updates) -
+	 * and the evacuation stall that results. Check every block: a stripe
+	 * whose only tail reference is a parity block is still in the way.
+	 *
+	 * Note the data-block loop below would otherwise allow reuse when a
+	 * live data block is bad/evacuating (it would be moved as part of the
+	 * reuse) - that path races the repair too, so reject it as well.
+	 */
+	for (unsigned i = 0; i < old->nr_blocks; i++)
+		if (bch2_ptr_bad_or_evacuating(c, &old->ptrs[i]))
+			return false;
+
 	struct bch_devs_mask devs_may_alloc = new->devs;
 	unsigned nr_data = old->nr_blocks - old->nr_redundant;
 	unsigned live_data = 0;
