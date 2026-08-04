@@ -459,6 +459,36 @@ static int stripe_update_bucket(struct btree_trans *trans,
 		   stats.nr_done, stats.nr_no_match, stats.nr_bp_to_deleted, stats.nr_cached,
 		   stats.sectors_done, stats.sectors_no_match, stats.sectors_bp_to_deleted, stats.sectors_cached);
 
+	/*
+	 * A block that is marked live (blockcount > 0 in the old stripe's key)
+	 * but whose bucket has no extent backpointers at all is orphaned: the
+	 * extents that referenced it were already moved out (e.g. by the shrink's
+	 * extent-level reconcile) without the stripe blockcount being updated.
+	 * Without this, the repair keeps treating the block as live, migrates
+	 * nothing, and the old stripe never empties - so it's never deleted and
+	 * its stale block pointers keep the shrink tail busy forever. Zero the
+	 * stale count so the old stripe can empty and be deleted.
+	 */
+	if (old_stripe != new_stripe &&
+	    !stats.nr_done && !stats.nr_no_match &&
+	    !stats.nr_bp_to_deleted && !stats.nr_cached) {
+		struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
+						BTREE_ID_stripes, POS(0, old_stripe->k.p.offset),
+						BTREE_ITER_cached, stripe);
+		if (IS_ERR(s) && !bch2_err_matches(PTR_ERR(s), ENOENT))
+			return PTR_ERR(s);
+
+		if (!IS_ERR(s)) {
+			CLASS(bch_log_msg_ratelimited, msg2)(c);
+			prt_printf(&msg2.m, "stripe %llu: zeroing stale blockcount for orphaned block %u (no backpointers in bucket)\n",
+				   old_stripe->k.p.offset, old_blocknr);
+
+			stripe_blockcount_set(&s->v, old_blocknr, 0);
+		}
+
+		try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+	}
+
 	return 0;
 }
 
