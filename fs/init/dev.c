@@ -2333,7 +2333,7 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 	}
 
 	/*
-	 * AI yapping below. TLDR: EC accounting is currently slightly off, so just
+	 * AI output below for detailed reference. TLDR: EC accounting is currently slightly off, so just
 	 *  schedule an accounting pass for the next mount.
 	 *
 	 * The EC evacuation this shrink drives (stripe repair: extents
