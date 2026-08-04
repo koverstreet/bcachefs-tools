@@ -244,6 +244,12 @@ static int snapshot_tree_ptr_good(struct btree_trans *trans,
 	return bch2_snapshot_is_ancestor_early(trans->c, snap_id, le32_to_cpu(s_t.root_snapshot));
 }
 
+/*
+ * Unguarded snapshot_t() deref, under the same caller obligation as
+ * bch2_snapshot_depth(): @id must be an ancestor of a node the caller has
+ * already handled. See the comment on that function in snapshot.h before
+ * adding a check here.
+ */
 u32 bch2_snapshot_skiplist_get(struct bch_fs *c, u32 id)
 {
 	if (!id)
