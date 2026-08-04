@@ -591,6 +591,8 @@ fn main() {
         .generate()
         .expect("BindGen Generation Failiure: [libbcachefs_wrapper]");
 
+    check_blkgetsize64(&bindings.to_string());
+
     std::fs::write(
         out_dir.join("non_fs.rs"),
         packed_and_align_fix(bindings.to_string()),
@@ -832,6 +834,67 @@ fn main() {
 // TODO: find a way to conditionally include arch-specific modifications when compiling for that
 // target arch. Regular conditional compilation won't work here since build scripts are always
 // compiled for the host arch, not the target arch, so that won't work when cross-compiling.
+/// Check that bindgen actually computed BLKGETSIZE64, and computed it right.
+///
+/// The value encodes sizeof(size_t), and bindgen works it out by compiling a
+/// probe against libbcachefs_wrapper.h - a probe whose compile errors it never
+/// looks at (FallbackTranslationUnit::reparse only checks CXErrorCode, and
+/// nothing calls clang_getNumDiagnostics). So if size_t doesn't resolve in that
+/// probe, the constant is either dropped silently - and the build fails much
+/// later at the use site, saying only "cannot find value BLKGETSIZE64" - or
+/// computed wrongly and shipped, which is worse: seen in the field with the
+/// size field 1 instead of 8, sending a bogus ioctl at runtime.
+///
+/// Neither belongs downstream of here, so fail now, with the value.
+fn check_blkgetsize64(bindings: &str) {
+    let ptr_width = std::env::var("CARGO_CFG_TARGET_POINTER_WIDTH")
+        .expect("CARGO_CFG_TARGET_POINTER_WIDTH not set");
+    let sizeof_size_t: u32 = match ptr_width.as_str() {
+        "64" => 8,
+        "32" => 4,
+        other => panic!("unhandled target pointer width: {other}"),
+    };
+
+    /* _IOR(0x12, 114, size_t): dir<<30 | size<<16 | type<<8 | nr */
+    let expect = (2u32 << 30) | (sizeof_size_t << 16) | (0x12 << 8) | 114;
+
+    let got = bindings
+        .lines()
+        .map(str::trim)
+        .find(|l| l.starts_with("pub const BLKGETSIZE64"))
+        .and_then(|l| l.split('=').nth(1))
+        .and_then(|v| v.trim().trim_end_matches(';').parse::<u32>().ok());
+
+    match got {
+        Some(v) if v == expect => {}
+        Some(v) => panic!(
+            "\n\
+             bindgen computed BLKGETSIZE64 = {v:#x}, but it should be {expect:#x}.\n\
+             \n\
+             The encoded size is {}, should be {sizeof_size_t} - sizeof(size_t) on a \
+             {ptr_width}-bit target.\n\
+             That means size_t did not resolve when bindgen evaluated the macro.\n\
+             \n\
+             clang: {}\n\
+             \n\
+             Please report the above.\n",
+            (v >> 16) & 0x3fff,
+            bindgen::clang_version().full,
+        ),
+        None => panic!(
+            "\n\
+             bindgen did not emit BLKGETSIZE64 (from linux/fs.h, via clang_macro_fallback).\n\
+             \n\
+             clang:               {}\n\
+             BLK* consts emitted: {} - expect ~55; 1 means the macro fallback never ran\n\
+             \n\
+             Please report the above.\n",
+            bindgen::clang_version().full,
+            bindings.matches("pub const BLK").count(),
+        ),
+    }
+}
+
 fn packed_and_align_fix(bindings: std::string::String) -> std::string::String {
     let bindings = bindings
         .replace(
