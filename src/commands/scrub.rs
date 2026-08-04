@@ -257,6 +257,16 @@ fn scrub(cli: Cli) -> Result<()> {
             writeln!(io::stdout())?;
             eprintln!("Interrupted");
             exit_code |= 1;
+
+            // Parallelize kthread_stop() so we don't block on each thread serially
+            let stops: Vec<_> = scrub_devs
+                .iter_mut()
+                .filter_map(|dev| dev.progress_fd.take())
+                .map(|fd| thread::spawn(move || drop(fd)))
+                .collect();
+            for t in stops {
+                let _ = t.join();
+            }
             break;
         }
 
