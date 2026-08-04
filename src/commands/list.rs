@@ -6,6 +6,7 @@ use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
 use bcachefs_kernel::btree::iter::BtreeNodeIter;
 use bcachefs_kernel::btree::iter::BtreeTrans;
+use bcachefs_kernel::data::extents::bkey_ptrs_sc;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
 use bcachefs_kernel::{btree_id, c};
@@ -17,6 +18,12 @@ use crate::logging;
 use crate::device_scan::OpenedFs;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
+
+fn extent_replicas(fs: &Fs, k: BkeySC<'_>) -> u32 {
+    bkey_ptrs_sc(&k.v())
+        .filter(|ptr| ptr.dev() != c::BCH_SB_MEMBER_INVALID as u64 && fs.dev_exists(ptr.dev() as u32))
+        .count() as u32
+}
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
@@ -41,9 +48,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         }
 
         if let Some(min_replicas) = opt.replicas_min {
-            let replicas = unsafe {
-                c::bch2_bkey_nr_ptrs_fully_allocated(fs.raw, c::bkey_s_c { k: k.k, v: k.v })
-            };
+            let replicas = extent_replicas(fs, k);
             if replicas < min_replicas {
                 return ControlFlow::Continue(());
             }
@@ -158,9 +163,7 @@ fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Resu
         }
 
         if let Some(min_replicas) = opt.replicas_min {
-            let replicas = unsafe {
-                c::bch2_bkey_nr_ptrs_fully_allocated(fs.raw, c::bkey_s_c { k: k.k, v: k.v })
-            };
+            let replicas = extent_replicas(fs, k);
             if replicas < min_replicas {
                 continue;
             }
