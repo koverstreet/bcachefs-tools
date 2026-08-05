@@ -658,11 +658,16 @@ bool bch2_vfs_dirty_folio(struct address_space *mapping, struct folio *folio)
 	struct bch2_folio_reservation res;
 
 	/*
-	 * Why are we getting called on folios above i_size?
+	 * Folios above i_size are expected here rather than a curiosity:
+	 * truncate_setsize() drops i_size before truncate_pagecache() runs, so
+	 * there's a window where the mapping still holds folios past the new
+	 * end, and a folio pinned by gup stays attached to the address_space
+	 * until the pin drops. bch2_set_folio_dirty() has the longer version.
 	 *
-	 * mm is a crazy place, of course
+	 * A folio entirely past i_size has nothing to reserve or account for, so
+	 * drop it; one straddling i_size is clamped by the min() below and only
+	 * the part still within the file gets dirtied.
 	 */
-
 	u64 file_size = i_size_read(&inode->v);
 	if (folio_pos(folio) >= file_size)
 		return false;
