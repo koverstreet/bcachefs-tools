@@ -516,6 +516,10 @@ err:
 	if (bch2_err_matches(ret, ENOENT))
 		ret = 0;
 
+	/* we're being stopped - normal, not something to report: */
+	if (bch2_err_matches(ret, BCH_ERR_kthread_cancelled))
+		ret = 0;
+
 	if (ret < 0 && !bch2_err_matches(ret, EROFS))
 		bch_err_msg(c, ret, "from bch2_move_data()");
 

@@ -37,6 +37,7 @@
 #include <linux/bug.h>
 #include <linux/bio.h>
 #include <linux/kobject.h>
+#include <linux/kthread.h>
 #include <linux/list.h>
 #include <linux/math64.h>
 #include <linux/mutex.h>
@@ -865,6 +866,22 @@ struct bch_fs {
 int __bch2_err_throw(struct bch_fs *, int);
 
 #define bch_err_throw(_c, _err) __bch2_err_throw(_c, -BCH_ERR_##_err)
+
+/*
+ * Have we been told to stop? For long-running kthread work, so the check can be
+ * try()d where it belongs instead of open coded:
+ *
+ *	try(bch2_kthread_cancelled(c));
+ *
+ * Returns 0 outside a kthread, so paths shared with user context are unaffected.
+ */
+static inline int bch2_kthread_cancelled(struct bch_fs *c)
+{
+	if ((current->flags & PF_KTHREAD) && kthread_should_stop())
+		return bch_err_throw(c, kthread_cancelled);
+
+	return 0;
+}
 
 /* Read-only refs: */
 

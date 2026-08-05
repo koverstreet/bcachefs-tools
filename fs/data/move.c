@@ -474,8 +474,7 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 	do {
 		delay = ctxt->rate ? bch2_ratelimit_delay(ctxt->rate) : 0;
 
-		if (is_kthread && kthread_should_stop())
-			return 1;
+		try(bch2_kthread_cancelled(c));
 
 		if (delay)
 			move_ctxt_wait_event_timeout(ctxt,
@@ -578,9 +577,6 @@ next_nondata:
 			break;
 	}
 
-	/* ratelimit told us to stop (kthread_should_stop), not an error */
-	if (ret > 0)
-		ret = 0;
 	return ret;
 }
 
@@ -754,19 +750,15 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 		bch2_btree_iter_advance(&bp_iter);
 	}
 
-	/* ratelimit told us to stop (kthread_should_stop), not an error */
-	if (ret > 0)
-		ret = 0;
-
-	bool is_kthread = current->flags & PF_KTHREAD;
-
 	/*
-	 * the backpointer audit can be very slow; if we're told to stop,
-	 * drop out early
+	 * Audit the buckets the walk didn't reach - but only if it actually
+	 * finished. If we were cancelled or hit an error we didn't skip those
+	 * buckets because they had nothing to walk, we just stopped; auditing
+	 * them is then both wrong and slow, and this loop is slow enough to be
+	 * the thing a user waits on after hitting ctrl-C.
 	 */
-	while (ca &&
-	       check_mismatch_done < sector_to_bucket(ca, sector_end) &&
-	       !(is_kthread && kthread_should_stop()))
+	while (!ret && ca &&
+	       check_mismatch_done < sector_to_bucket(ca, sector_end))
 		bch2_check_bucket_backpointer_mismatch(trans, ca, check_mismatch_done++,
 						       copygc, &last_flushed);
 
