@@ -263,7 +263,11 @@ build/%.o: %.c
 	$(Q)$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 
 BCACHEFS_DEPS=libbcachefs.a
-RUST_SRCS:=$(shell find src fs bch_bindgen/src -type f ! -path 'fs/vendor/kernel-rust/*' -iname '*.rs')
+# Whole crate dirs, not just their src/: a build script is a source file too,
+# and bch_bindgen's generates every binding and x-macro table we have. Leaving
+# it out meant editing it changed nothing until something else happened to make
+# cargo run - a stale binary that looks like a rebuilt one.
+RUST_SRCS:=$(shell find src fs bch_bindgen bcachefs-shim -type f ! -path 'fs/vendor/kernel-rust/*' -iname '*.rs') build.rs
 
 bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 	$(Q)$(CARGO_BUILD)
