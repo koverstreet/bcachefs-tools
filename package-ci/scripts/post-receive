@@ -24,10 +24,21 @@ queue_build() {
     fi
 }
 
+# publish_doc COMMIT
+#   Rebuilds the Principles of Operation and installs it for bcachefs.org.
+#   Detached: this is a full nix build of the tools plus LaTeX, and a push
+#   must not block on it. A failed build leaves the published PDF alone and
+#   says so in /var/log/publish-poo.log.
+publish_doc() {
+    setsid /usr/local/bin/publish-poo "$1" </dev/null >/dev/null 2>&1 &
+    echo "doc: queued PoO build for ${1:0:12}"
+}
+
 while read oldrev newrev refname; do
     case "$refname" in
         refs/heads/master)
             queue_build "$newrev"
+            publish_doc "$newrev"
             ;;
         refs/tags/v*)
             # Release tags may be pushed without (or after) a branch
