@@ -458,13 +458,9 @@ fn main() {
         .bitfield_enum("btree_iter_update_trigger_flags")
         .bitfield_enum("bch_trans_commit_flags")
         .bitfield_enum("bch_write_flags")
-        // Block device ioctl numbers, computed for the target instead of
-        // hardcoded: the direction bits and the encoded sizeof() both vary by
-        // arch and word size. These expand to expressions rather than
-        // literals, so they need clang_macro_fallback (and the stddef.h
-        // include in libbcachefs_wrapper.h).
-        .clang_macro_fallback()
-        .allowlist_var("BLK.*")
+        // Block device ioctl numbers - see the note in c_src/rust_shims.h for
+        // why these are C constants and not macros for bindgen to evaluate.
+        .allowlist_var("BCH_BLK.*")
         .allowlist_function("raid_init")
         .allowlist_function("linux_shrinkers_init")
         .allowlist_function("sysfs_.*")
