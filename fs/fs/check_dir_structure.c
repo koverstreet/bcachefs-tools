@@ -32,6 +32,20 @@ static int remove_backpointer(struct btree_trans *trans,
 	CLASS(btree_iter_uninit, iter)(trans);
 	struct bkey_s_c_dirent d = bch2_inode_get_dirent(trans, &iter, inode, &snapshot);
 
+	/*
+	 * bch2_inode_get_dirent() returns an ERR_PTR in the bkey, and for a
+	 * subvolume root it resolves the dirent through bi_parent_subvol - so a
+	 * missing parent subvolume lands here as an error, not as a not-found
+	 * dirent. That is exactly the state reattach_subvol() is called for,
+	 * and dereferencing it oopsed in dirent_points_to_inode().
+	 *
+	 * Nothing to remove is success: the caller's next move is to reattach,
+	 * and it can't if we hand it an error.
+	 */
+	int ret = bkey_err(d);
+	if (ret)
+		return bch2_err_matches(ret, ENOENT) ? 0 : ret;
+
 	try(dirent_points_to_inode(c, d, inode));
 	try(bch2_fsck_remove_dirent(trans, d.k->p));
 	return 0;
