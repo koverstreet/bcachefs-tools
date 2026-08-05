@@ -123,6 +123,21 @@ with ``bcachefs set-fs-option`` by passing the member device path:
 
   bcachefs set-fs-option --durability=0 /dev/nvme1n1
 
+Durability is stored as a small on-disk member field, not as a fractional or
+fixed-point value. The field has four encodings: unset means the default
+``durability=1``, and the explicit values are ``0``, ``1``, and ``2``. To model
+devices that should count as "half" a normal durable copy, scale the relevant
+replica counts and device durability values by the same factor. For example,
+leave less trusted devices at ``durability=1``, set fully trusted devices to
+``durability=2``, and change ``data_replicas=1`` to ``data_replicas=2``. If the
+filesystem also uses ``metadata_replicas=2``, scale that to
+``metadata_replicas=4`` as well so the metadata policy keeps requiring the same
+number of fully trusted copies.
+
+This is not an arbitrary fixed-point interface, so large scale factors such as
+``4096`` are not accepted. Use ``durability=0`` only for cache-like devices whose
+copies must not count toward the replica requirement at all.
+
 Multipath devices
 -----------------
 When using device-mapper multipath, use the multipath device (e.g.
