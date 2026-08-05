@@ -16,11 +16,25 @@ queue_build() {
     local commit=$1
     local file=${2:-desired}
 
-    echo "$commit" > "$STATE_DIR/$file"
+    # Check the write. This used to be unconditional and printed "queued" even
+    # when the redirect had failed. v1.39.0's release build was never queued -
+    # the state dir wasn't writable by the pushing user, so creating
+    # desired-release got EACCES - and the push reported success anyway. It went
+    # out as a snapshot version, sorting below the 1.38.8 already in the suite,
+    # and nobody found out for a day.
+    if ! echo "$commit" > "$STATE_DIR/$file" 2>/dev/null; then
+        echo "CI: FAILED to queue ${commit:0:12}: cannot write $STATE_DIR/$file" >&2
+        echo "CI: this build will NOT happen" >&2
+        return 1
+    fi
     echo "CI: queued build for ${commit:0:12} ($file)"
 
-    if [ -f "$PID_FILE" ]; then
-        kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null || true
+    # Waking the orchestrator is best-effort, and has in fact never worked: the
+    # hook runs as the pushing user, which can't signal the orchestrator's uid.
+    # That costs latency rather than correctness, since the reconcile loop
+    # polls - but don't print that we did it when we didn't.
+    if [ -f "$PID_FILE" ] && kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "CI: woke orchestrator"
     fi
 }
 
