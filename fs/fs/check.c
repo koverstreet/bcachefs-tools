@@ -654,7 +654,7 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 	return ret;
 }
 
-static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 subvolid, u64 inum)
+int bch2_reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 subvolid, u64 inum)
 {
 	struct bch_fs *c = trans->c;
 
@@ -664,25 +664,42 @@ static int reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 sub
 	}
 
 	/*
-	 * If inum isn't set, that means we're being called from check_dirents,
-	 * not check_inodes - the root of this subvolume doesn't exist or we
-	 * would have found it there:
+	 * Without an inum from the caller, find the root inode rather than
+	 * minting one: the inode carrying bi_subvol == subvolid is the root,
+	 * and when it's the subvolume key that went missing that inode is
+	 * still there. Creating a second one would leave two claimants for the
+	 * same subvolume and the real contents orphaned behind the new empty
+	 * root.
+	 *
+	 * It can't be deferred to a later pass either - bch2_subvolume_validate()
+	 * rejects a subvolume key with inode == 0 (subvol_inode_bad), so the
+	 * key can't be written at all until we know it.
 	 */
 	if (!inum) {
-		CLASS(btree_iter_uninit, inode_iter)(trans);
-		struct bch_inode_unpacked new_inode;
+		struct bkey_s_c k;
+		int ret = 0;
 
-		bch2_inode_init_early(c, &new_inode);
-		bch2_inode_init_late(c, &new_inode, bch2_current_time(c), 0, 0, S_IFDIR|0755, 0, NULL);
+		for_each_btree_key_norestart(trans, iter, BTREE_ID_inodes, POS_MIN,
+					     BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k, ret) {
+			if (!bkey_is_inode(k.k))
+				continue;
 
-		new_inode.bi_subvol = subvolid;
+			struct bch_inode_unpacked candidate;
+			bch2_inode_unpack(c, k, &candidate);
 
-		try(bch2_inode_create(trans, &inode_iter, &new_inode, snapshotid, false));
-		bch2_btree_iter_set_snapshot(&inode_iter, snapshotid);
-		try(bch2_btree_iter_traverse(&inode_iter));
-		try(bch2_inode_write(trans, &inode_iter, &new_inode));
+			if (candidate.bi_subvol == subvolid) {
+				inum = candidate.bi_inum;
+				break;
+			}
+		}
+		if (ret)
+			return ret;
 
-		inum = new_inode.bi_inum;
+		if (!inum) {
+			bch_err(c, "no root inode found for subvol %u, can't reconstruct",
+				subvolid);
+			return bch_err_throw(c, fsck_repair_unimplemented);
+		}
 	}
 
 	bch_info(c, "reconstructing subvol %u with root inode %llu", subvolid, inum);
@@ -1435,7 +1452,20 @@ static int check_inode(struct btree_trans *trans,
 		}
 	}
 
-	if (u.bi_subvol && bch2_snapshot_is_leaf(c, u.bi_snapshot)) {
+	/*
+	 * Not gated on the snapshot being a leaf: taking a snapshot rewrites
+	 * the root inode of the new subvolume, not of the old, so a live
+	 * subvolume's root inode key stays at a node that has since become
+	 * interior. Leaf-ness therefore skipped this block for every subvolume
+	 * that had ever been snapshotted - so a lost subvolume key was never
+	 * reconstructed and bi_subvol was never validated for exactly the
+	 * subvolumes with the most history behind them.
+	 *
+	 * Live versus stale is decided below instead, by inode_bi_subvol_wrong:
+	 * the subvolume's snapshot has to have this key's snapshot as an
+	 * ancestor, which is the actual question leaf-ness was standing in for.
+	 */
+	if (u.bi_subvol) {
 		struct bch_subvolume s;
 
 		ret = bch2_subvolume_get(trans, u.bi_subvol, false, &s);
@@ -1469,7 +1499,7 @@ static int check_inode(struct btree_trans *trans,
 		    ((c->sb.btrees_lost_data & BIT_ULL(BTREE_ID_subvolumes)) ||
 		     snapshot_agrees)) {
 			ret = 0;
-			try(reconstruct_subvol(trans, k.k->p.snapshot, u.bi_subvol, u.bi_inum));
+			try(bch2_reconstruct_subvol(trans, k.k->p.snapshot, u.bi_subvol, u.bi_inum));
 			goto do_update;
 		}
 
@@ -2259,7 +2289,7 @@ static int check_dirent_to_subvol(struct btree_trans *trans, struct btree_iter *
 		 * Couldn't find a subvol for dirent's snapshot - but we lost
 		 * subvols, so we need to reconstruct:
 		 */
-		try(reconstruct_subvol(trans, d.k->p.snapshot, parent_subvol, 0));
+		try(bch2_reconstruct_subvol(trans, d.k->p.snapshot, parent_subvol, 0));
 
 		parent_snapshot = d.k->p.snapshot;
 	}

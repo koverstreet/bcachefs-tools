@@ -32,6 +32,7 @@
 #include "btree/update.h"
 #include "btree/write_buffer.h"
 
+#include "fs/check.h"
 #include "fs/inode.h"
 
 #include "snapshots/snapshot.h"
@@ -373,13 +374,38 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
 		bool points_back	= !ret &&
 			le32_to_cpu(subvol.snapshot) == k.k->p.offset;
 
+		/*
+		 * A missing subvolume can be rebuilt from right here, and only
+		 * from here: this snapshot names it, and a snapshot carrying a
+		 * subvol backref is a leaf - which is what
+		 * bch2_reconstruct_subvol() needs and what its other callers
+		 * can't promise, since an inode's or dirent's snapshot may be
+		 * interior. Left to them, a subvolume whose key was lost after
+		 * it had been snapshotted was never reconstructed at all.
+		 *
+		 * Not while the snapshot is deleting, though: there the missing
+		 * subvolume is a tombstoned deletion in flight, and rebuilding
+		 * it would revert it.
+		 */
+		if (ret && !snap_deleting) {
+			/* id is the subvolume being rebuilt; the snapshot is k */
+			int recon_ret = bch2_reconstruct_subvol(trans,
+						k.k->p.offset, id, 0);
+			if (recon_ret &&
+			    !bch2_err_matches(recon_ret, BCH_ERR_fsck_repair_unimplemented))
+				return recon_ret;
+			if (!recon_ret)
+				return 0;
+			/* couldn't find a root inode for it - fall through and report */
+		}
+
 		if (ret || !points_back) {
 			/*
-			 * Missing subvolume or wrong backref: repair needs
-			 * the subvolume side validated first - it belongs to
-			 * the dedicated pass after check_subvols. Report
-			 * only; an error return here would regress mounts of
-			 * filesystems mid-deletion:
+			 * Wrong backref, or a missing subvolume we couldn't
+			 * rebuild: repair needs the subvolume side validated
+			 * first - it belongs to the dedicated pass after
+			 * check_subvols. Report only; an error return here
+			 * would regress mounts of filesystems mid-deletion:
 			 */
 			CLASS(bch_log_msg, msg)(c);
 
