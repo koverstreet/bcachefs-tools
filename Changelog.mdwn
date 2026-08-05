@@ -83,7 +83,7 @@ corruptions into the btree, and the new `snapshot-inject` suite — 68 cases —
 asserts that fsck detects the error, repairs it, converges, and the data
 survives.
 
-Credit to ZorbaTHut (Ben Wilson), who reported this and worked with us
+Credit to ZorbaTHut (Ben Rog-Wilhelm), who reported this and worked with us
 extensively, providing metadata dumps and tests; several people jumped in on
 this one.
 
