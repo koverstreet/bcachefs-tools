@@ -24,11 +24,6 @@ static inline subvol_inum parent_inum(subvol_inum inum, struct bch_inode_unpacke
 	};
 }
 
-static inline int is_subdir_for_nlink(struct bch_inode_unpacked *inode)
-{
-	return S_ISDIR(inode->bi_mode) && !inode->bi_subvol;
-}
-
 int bch2_create_trans(struct btree_trans *trans,
 		      subvol_inum dir,
 		      struct bch_inode_unpacked *dir_u,

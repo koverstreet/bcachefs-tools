@@ -530,8 +530,13 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 		}
 	}
 
+	/*
+	 * is_subdir_for_nlink(), not S_ISDIR(): a subvolume root is named by a
+	 * DT_SUBVOL dirent, which doesn't count towards its parent's link
+	 * count. Bumping it here for one leaves check_nlinks() to disagree.
+	 */
 	if (!adopted)
-		lostfound.bi_nlink += S_ISDIR(inode->bi_mode);
+		lostfound.bi_nlink += is_subdir_for_nlink(inode);
 
 	/*
 	 * Ensure lost+found has an inode version in the snapshot we're about to
