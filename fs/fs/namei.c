@@ -771,6 +771,23 @@ int bch2_inum_is_descendant(struct btree_trans *trans, subvol_inum inum,
 
 /* fsck */
 
+/*
+ * Is this dirent the name of @target, given that @target is a subvolume root?
+ *
+ * A subvolume root's name is not ambiguous: it is the DT_SUBVOL dirent that
+ * names its subvolume, and inode_d_type() says so from the other side.
+ * dirent_points_to_inode_nowarn() is not enough to pick it out - for a
+ * subvolume root it also accepts a DT_DIR dirent naming bi_inum, which is
+ * exactly what a reattach into lost+found manufactures.
+ */
+static bool dirent_is_subvol_root_name(struct bch_fs *c,
+				       struct bkey_s_c_dirent d,
+				       struct bch_inode_unpacked *target)
+{
+	return d.v->d_type == DT_SUBVOL &&
+		!dirent_points_to_inode_nowarn(c, d, target);
+}
+
 static int bch2_check_dirent_inode_dirent(struct btree_trans *trans,
 					  struct bkey_s_c_dirent d,
 					  struct bch_inode_unpacked *target,
@@ -845,19 +862,61 @@ static int bch2_check_dirent_inode_dirent(struct btree_trans *trans,
 
 		if (S_ISDIR(target->bi_mode) || target->bi_subvol) {
 			/*
-			 * XXX: verify connectivity of the other dirent
-			 * up to the root before removing this one
+			 * Which of the two is wrong?
+			 *
+			 * For a subvolume root we can say: its name is the
+			 * DT_SUBVOL dirent naming its subvolume, so if exactly
+			 * one of the two qualifies, the other one goes -
+			 * whichever of them we happen to be holding. A reattach
+			 * that didn't recognise a subvolume root manufactures a
+			 * DT_DIR dirent naming bi_inum in lost+found and points
+			 * the inode's backpointer at it, so the impostor is
+			 * routinely the one the backpointer names; dropping the
+			 * dirent in hand would take the real name instead
+			 * (field report 2026-08-04).
+			 *
+			 * If neither or both qualify we're guessing again, so
+			 * fall back to dropping the dirent in hand.
+			 *
+			 * XXX: for a plain directory we still can't tell, and
+			 * verifying connectivity of the other dirent up to the
+			 * root before removing this one is still to do.
 			 *
 			 * Additionally, bch2_lookup would need to cope with the
 			 * dirent it found being removed - or should we remove
 			 * the other one, even though the inode points to it?
 			 */
+			struct bpos remove		= d.k->p;
+			bool repoint_backpointer	= false;
+
+			if (target->bi_subvol &&
+			    dirent_is_subvol_root_name(c, d, target) &&
+			    !dirent_is_subvol_root_name(c, bp_dirent, target)) {
+				remove			= bp_dirent.k->p;
+				repoint_backpointer	= true;
+
+				prt_printf(&buf, "\nremoving %llu:%llu: a subvolume root's name is its DT_SUBVOL dirent",
+					   remove.inode, remove.offset);
+			}
+
 			if (in_fsck) {
 				if (fsck_err(trans, inode_dir_multiple_links,
 					     "%s %llu:%u with multiple links\n%s",
 					     S_ISDIR(target->bi_mode) ? "directory" : "subvolume",
-					     target->bi_inum, target->bi_snapshot, buf.buf))
-					ret = bch2_fsck_remove_dirent(trans, d.k->p);
+					     target->bi_inum, target->bi_snapshot, buf.buf)) {
+					ret = bch2_fsck_remove_dirent(trans, remove);
+
+					/*
+					 * We just removed the dirent the inode
+					 * named - point it at the survivor, or
+					 * we've left a dangling backpointer.
+					 */
+					if (!ret && repoint_backpointer) {
+						target->bi_dir		= d.k->p.inode;
+						target->bi_dir_offset	= d.k->p.offset;
+						ret = __bch2_fsck_write_inode(trans, target);
+					}
+				}
 			} else {
 				bch2_fs_inconsistent(c,
 						"%s %llu:%u with multiple links\n%s",
