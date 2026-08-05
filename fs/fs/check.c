@@ -533,11 +533,18 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 	if (!adopted)
 		lostfound.bi_nlink += S_ISDIR(inode->bi_mode);
 
-	/* ensure lost+found inode is also present in inode snapshot */
-	if (!inode->bi_subvol) {
-		BUG_ON(!bch2_snapshot_is_ancestor(trans, inode->bi_snapshot, lostfound.bi_snapshot));
-		lostfound.bi_snapshot = inode->bi_snapshot;
-	}
+	/*
+	 * Ensure lost+found has an inode version in the snapshot we're about to
+	 * create the dirent in, or we leave a key in a snapshot whose inode only
+	 * exists in an ancestor - snapshot_key_missing_inode_snapshot, which the
+	 * next check_dirents has to clean up after us.
+	 *
+	 * dirent_snapshot is the inode's own snapshot for an ordinary inode, and
+	 * the parent subvolume's for a subvolume root (above); lookup_lostfound()
+	 * resolved lost+found from it, so it is at worst an ancestor of it.
+	 */
+	BUG_ON(!bch2_snapshot_is_ancestor(trans, dirent_snapshot, lostfound.bi_snapshot));
+	lostfound.bi_snapshot = dirent_snapshot;
 
 	try(__bch2_fsck_write_inode(trans, &lostfound));
 
