@@ -2288,6 +2288,15 @@ static int check_dirent_to_subvol(struct btree_trans *trans, struct btree_iter *
 						BTREE_UPDATE_internal_snapshot_node, dirent));
 
 		new_dirent->v.d_parent_subvol = cpu_to_le32(new_parent_subvol);
+
+		/*
+		 * The fs_path_parent check below repairs the subvolume to agree
+		 * with the dirent, so it has to agree with the dirent we just
+		 * wrote and not the one we replaced - otherwise a single pass
+		 * writes two different answers, and each subsequent fsck moves
+		 * one to match the other's stale value.
+		 */
+		parent_subvol = new_parent_subvol;
 	}
 
 check_target:
@@ -2319,7 +2328,7 @@ check_target:
 	if (le32_to_cpu(s.v->fs_path_parent) != parent_subvol) {
 		printbuf_reset(&buf);
 
-		prt_printf(&buf, "subvol with wrong fs_path_parent, should be be %u\n",
+		prt_printf(&buf, "subvol with wrong fs_path_parent, should be %u\n",
 			   parent_subvol);
 
 		try(bch2_inum_to_path(trans, (subvol_inum) { s.k->p.offset,
