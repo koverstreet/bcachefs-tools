@@ -1260,9 +1260,13 @@ int bch2_can_do_data_update(struct btree_trans *trans,
 			.ec_replicas	= opts->data_replicas + data_opts->extra_replicas,
 			.watermark	= BCH_WATERMARK_normal,
 		};
+		darray_init(&req.trace);
 
 		struct ec_stripe_head *h =
 			bch2_ec_stripe_head_get(trans, &req, 0);
+
+		darray_exit(&req.trace);
+
 		if (IS_ERR_OR_NULL(h))
 			return bch_err_throw(c, ec_alloc_failed);
 		bch2_ec_stripe_head_put(c, h);
