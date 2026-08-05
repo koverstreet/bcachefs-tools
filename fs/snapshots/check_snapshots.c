@@ -169,12 +169,27 @@ static int check_snapshot_tree(struct btree_trans *trans,
 	if (ret && !bch2_err_matches(ret, ENOENT))
 		return ret;
 
-	if (fsck_err_on(ret,
+	/*
+	 * A missing subvolume is what we're checking for, not a failure to
+	 * check - so keep it as a fact and clear ret. Left in ret it leaks out
+	 * of the pass whenever the repair below is declined: the fsck_err_on()
+	 * chain short-circuits (the later arms test !ret), nothing overwrites
+	 * ret, and "fsck_err: return ret" hands back the lookup's errcode -
+	 * ENOENT_bkey_type_mismatch, because the subvolume slot holds a deleted
+	 * key. That failed the whole pass with an errcode about key types.
+	 *
+	 * It only shows when the repair is declined; applying it overwrites ret
+	 * below.
+	 */
+	bool subvol_missing = ret != 0;
+	ret = 0;
+
+	if (fsck_err_on(subvol_missing,
 			trans, snapshot_tree_to_missing_subvol,
 			"snapshot tree points to missing subvolume:\n%s",
 			(printbuf_reset(&buf),
 			 bch2_bkey_val_to_text(&buf, c, st.s_c), buf.buf)) ||
-	    fsck_err_on(!ret &&
+	    fsck_err_on(!subvol_missing &&
 			!bch2_snapshot_is_ancestor(trans,
 						le32_to_cpu(subvol.snapshot),
 						root_id),
@@ -182,7 +197,7 @@ static int check_snapshot_tree(struct btree_trans *trans,
 			"snapshot tree points to subvolume that does not point to snapshot in this tree:\n%s",
 			(printbuf_reset(&buf),
 			 bch2_bkey_val_to_text(&buf, c, st.s_c), buf.buf)) ||
-	    fsck_err_on(!ret && BCH_SUBVOLUME_SNAP(&subvol),
+	    fsck_err_on(!subvol_missing && BCH_SUBVOLUME_SNAP(&subvol),
 			trans, snapshot_tree_to_snapshot_subvol,
 			"snapshot tree points to snapshot subvolume:\n%s",
 			(printbuf_reset(&buf),
