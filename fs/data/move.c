@@ -476,6 +476,9 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 
 		try(bch2_kthread_cancelled(c));
 
+		if (unlikely(test_bit(BCH_FS_going_ro, &c->flags)))
+			return bch_err_throw(c, erofs_no_writes);
+
 		if (delay)
 			move_ctxt_wait_event_timeout(ctxt,
 					freezing(current) ||
