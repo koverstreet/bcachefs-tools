@@ -3,6 +3,7 @@
 #define _BCACHEFS_FS_H
 
 #include "fs/inode.h"
+#include "snapshots/types.h"
 #include "fs/str_hash.h"
 #include "fs/quota_types.h"
 
@@ -244,7 +245,7 @@ int bch2_setattr_nonsize(struct mnt_idmap *,
 			 struct iattr *);
 int __bch2_unlink(struct inode *, struct dentry *, bool);
 
-void bch2_evict_subvolume_inodes(struct bch_fs *, snapshot_id_list *);
+int bch2_evict_subvolume_inodes(struct bch_fs *, snapshot_id_list *, snapshot_id_list *);
 
 int bch2_fiemap(struct inode *, struct fiemap_extent_info *, u64, u64);
 
@@ -268,8 +269,12 @@ static inline void bch2_dirty_inode(struct bch_fs *c, struct bch_inode_info *ino
 
 static inline int bch2_inode_or_descendents_is_open(struct btree_trans *trans, struct bpos p) { return 0; }
 
-static inline void bch2_evict_subvolume_inodes(struct bch_fs *c,
-					       snapshot_id_list *s) {}
+static inline int bch2_evict_subvolume_inodes(struct bch_fs *c,
+					      snapshot_id_list *pending,
+					      snapshot_id_list *busy)
+{
+	return 0;
+}
 
 static inline void bch2_fs_vfs_exit(struct bch_fs *c) {}
 static inline int bch2_fs_vfs_init(struct bch_fs *c) { return 0; }
