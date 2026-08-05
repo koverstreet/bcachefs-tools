@@ -5,13 +5,33 @@
 
 STATE_DIR="${STATE_DIR:-/home/aptbcachefsorg/package-ci}"
 PUBLIC_HTML="${PUBLIC_HTML:-/home/aptbcachefsorg/public_html}"
+GIT_REPO="${GIT_REPO:-/var/www/git/bcachefs-tools.git}"
 
 DESIRED_FILE="$STATE_DIR/desired"
 [ -f "$DESIRED_FILE" ] || exit 0
 DESIRED="$(cat "$DESIRED_FILE")"
 
+# A queued release. The page knew only about "desired", so a release that was
+# never queued - or queued and not yet built - looked identical to nothing
+# happening. That is how v1.39.0 sat misversioned in the release suite for a
+# day with every job on this page green.
+DESIRED_RELEASE="$(cat "$STATE_DIR/desired-release" 2>/dev/null)"
+
+# sha -> tag, in one git call rather than a describe per commit: this runs on
+# every status change and there are hundreds of build dirs. show-ref -d prints
+# the annotated tag object and then the peeled commit as "<ref>^{}", so both
+# the tag object and the commit resolve to the name.
+declare -A TAGS
+while read -r sha ref; do
+    ref="${ref%^\{\}}"
+    TAGS["$sha"]="${ref#refs/tags/}"
+done < <(git --git-dir="$GIT_REPO" show-ref --tags -d 2>/dev/null)
+
 OUTPUT="$PUBLIC_HTML/ci.html"
 TMP="$OUTPUT.tmp$$"
+# Don't strand the temp file when generate fails: there has been a
+# ci.html.tmp662915 sitting in the web root since June.
+trap 'rm -f "$TMP"' EXIT
 
 generate() {
     cat << 'EOF'
@@ -31,6 +51,7 @@ generate() {
   .failed   { color: #f55; }
   .building { color: #fa0; }
   .pending  { color: #888; }
+  .release  { color: #6af; }
   .summary  { margin-top: 1em; color: #888; }
 </style>
 </head>
@@ -43,6 +64,13 @@ EOF
         short="${commit:0:12}"
         marker=""
         [ "$commit" = "$DESIRED" ] && marker=" &larr; desired"
+        [ -n "$DESIRED_RELEASE" ] && [ "$commit" = "$DESIRED_RELEASE" ] &&
+            marker="$marker <span class='release'>&larr; release queued</span>"
+
+        # Name the tag if there is one. Without this a release is
+        # indistinguishable from any other commit on this page.
+        tag="${TAGS[$commit]}"
+        [ -n "$tag" ] && short="<span class='release'>$tag</span> $short"
 
         echo "<p style='color:#aaa;font-size:0.9em'>commit $short$marker</p>"
         echo "<table>"
