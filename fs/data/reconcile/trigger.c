@@ -500,19 +500,6 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 
 		bool evacuating = bch2_ptr_bad_or_evacuating(c, &p.ptr) && !p.has_ec;
 
-		/*
-		 * EC pointers in a shrink tail: no stripe-level evacuation
-		 * runs for shrink, so flag them for extent-level movement
-		 * here, same as non-EC pointers on evacuating devices.
-		 */
-		if (!evacuating && p.has_ec && p.ptr.dev != BCH_SB_MEMBER_INVALID) {
-			guard(rcu)();
-			struct bch_dev *ca = bch2_dev_rcu_noerror(c, p.ptr.dev);
-			if (ca && bch2_ptr_bad_or_evacuating_rcu(c, &p.ptr) &&
-			    bch2_dev_is_shrinking(ca))
-				evacuating = true;
-		}
-
 		if (!poisoned &&
 		    !btree &&
 		    !p.ptr.cached) {
