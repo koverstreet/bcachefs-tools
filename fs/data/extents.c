@@ -1535,7 +1535,7 @@ static bool maybe_drop_cached_ptr(struct bch_fs *c, struct bch_inode_opts *opts,
 		if (!ca || ca->mi.state == BCH_MEMBER_STATE_evacuating)
 			return drop_cached_pointer_trace(c, k, ptr, "device bad or evacuating");
 		if (bch2_dev_is_shrinking(ca) &&
-		    bch2_dev_resize_target(ca) <= sector_to_bucket(ca, ptr->offset))
+		    bch2_dev_resize_target(ca) <= PTR_BUCKET_NR(ca, ptr))
 			return drop_cached_pointer_trace(c, k, ptr, "past shrink cutoff");
 
 		unsigned target = opts->promote_target ?: opts->foreground_target;

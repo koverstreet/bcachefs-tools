@@ -342,7 +342,7 @@ static inline bool stripe_dev_and_region_matches(struct bch_fs *c, struct bch_de
 	for (unsigned i = 0; i < v->nr_blocks; i++) {
 		struct bch_dev *oca = bch2_dev_rcu_noerror(c, v->ptrs[i].dev);
 		if (oca && oca->dev_idx == ca->dev_idx &&
-		    v->ptrs[i].offset >= tail_cutoff * oca->mi.bucket_size)
+		    PTR_BUCKET_NR(oca, &v->ptrs[i]) >= tail_cutoff)
 			return true;
 	}
 	return false;
