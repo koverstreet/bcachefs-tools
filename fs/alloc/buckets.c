@@ -769,7 +769,14 @@ static int __bch2_trans_mark_metadata_bucket(struct btree_trans *trans,
 	    a->v.dirty_sectors	!= sectors) {
 		a->v.data_type		= type;
 		a->v.dirty_sectors	= sectors;
-		ret = bch2_trans_update(trans, &iter, &a->k_i, 0);
+		if (type == BCH_DATA_free) {
+			/* Metadata buckets bypass discard.c; clear its bookkeeping too. */
+			SET_BCH_ALLOC_V4_NEED_DISCARD(&a->v, false);
+			a->v.journal_seq_nonempty = 0;
+			a->v.journal_seq_empty = 0;
+		}
+		ret = bch2_trans_update(trans, &iter, &a->k_i,
+					 type == BCH_DATA_free ? BTREE_TRIGGER_is_discard : 0);
 	}
 
 	return ret;
