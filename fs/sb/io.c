@@ -1002,8 +1002,32 @@ static int read_super_and_backups(struct bch_sb_handle *sb,
 			opt_set(*opts, nochanges, true);
 	}
 
-	if (IS_ERR(sb->s_bdev_file))
-		return PTR_ERR(sb->s_bdev_file);
+	if (IS_ERR(sb->s_bdev_file)) {
+		int ret = PTR_ERR(sb->s_bdev_file);
+
+		/*
+		 * Detail only - bch2_read_super() has already printed the path
+		 * and the errno, and repeating them here just gets the same
+		 * words twice. The errno alone is not actionable: what the
+		 * user needs is what we asked the block layer for, since that
+		 * - not the device - is usually what's wrong.
+		 */
+		prt_printf(err, "  requested %s%s\n",
+			   sb->mode & BLK_OPEN_WRITE ? "read-write" : "read-only",
+			   sb->mode & BLK_OPEN_EXCL ? ", exclusive" : "");
+
+		switch (ret) {
+		case -EACCES:
+			prt_str(err, "  insufficient privilege (try root), or a write protected device\n"
+				     "  (check blockdev --getro)\n");
+			break;
+		case -EBUSY:
+			prt_str(err, "  device is in use: already mounted, or held by another process\n");
+			break;
+		}
+
+		return ret;
+	}
 
 	sb->bdev = file_bdev(sb->s_bdev_file);
 
