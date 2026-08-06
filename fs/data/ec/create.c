@@ -295,8 +295,7 @@ static int stripe_update_extent(struct btree_trans *trans,
 		if (p.ec.idx == new_stripe->k.p.offset)
 			return 0;
 
-		if (old_stripe == new_stripe ||
-		    p.ec.idx != old_stripe->k.p.offset) {
+		if (p.ec.idx != old_stripe->k.p.offset) {
 			/*
 			 * The extent references a stripe that no longer owns this block
 			 * (e.g. a previous create reused the block but failed to migrate
@@ -309,6 +308,7 @@ static int stripe_update_extent(struct btree_trans *trans,
 			prt_printf(&msg.m, "dropping stale stripe pointer (idx %llu) while updating extent\n",
 				   (u64) p.ec.idx);
 			bch2_bkey_val_to_text(&msg.m, c, k);
+			prt_newline(&msg.m);
 
 			bch2_count_fsck_err(c, stripe_update_stale_stripe_ptr, &msg.m);
 		}
