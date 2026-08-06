@@ -163,6 +163,8 @@ int bch2_inode_find_by_inum(struct bch_fs *, subvol_inum,
 
 int bch2_inode_find_oldest_snapshot(struct btree_trans *trans, u64 inum, u32 snapshot,
 				    struct bch_inode_unpacked *root);
+int bch2_inode_find_any_snapshot(struct btree_trans *trans, u64 inum,
+				 struct bch_inode_unpacked *inode);
 
 int bch2_inode_write_flags(struct btree_trans *, struct btree_iter *,
 		     struct bch_inode_unpacked *, enum btree_iter_update_trigger_flags);

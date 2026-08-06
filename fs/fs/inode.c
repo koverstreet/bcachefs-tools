@@ -563,6 +563,37 @@ int bch2_inode_find_oldest_snapshot(struct btree_trans *trans, u64 inum, u32 sna
 	return ret ?: bch_err_throw(trans->c, ENOENT_inode);
 }
 
+/*
+ * Any surviving version of @inum, in any snapshot - ancestor, descendant or
+ * sibling.
+ *
+ * Only for recovering the fields that are snapshot-invariant by construction,
+ * i.e. hash info: every version of an inode must agree on bi_hash_seed and the
+ * str_hash type, which is what bch2_repair_inode_hash_info() enforces. Anything
+ * that needs the authoritative version wants
+ * bch2_inode_find_oldest_snapshot() instead - a descendant's other fields are
+ * not a valid stand-in for an ancestor's.
+ */
+int bch2_inode_find_any_snapshot(struct btree_trans *trans, u64 inum,
+				 struct bch_inode_unpacked *inode)
+{
+	struct bkey_s_c k;
+	int ret;
+
+	for_each_btree_key_norestart(trans, iter, BTREE_ID_inodes,
+				     POS(0, inum),
+				     BTREE_ITER_all_snapshots, k, ret) {
+		if (k.k->p.offset != inum)
+			break;
+		if (!bkey_is_inode(k.k))
+			continue;
+		bch2_inode_unpack(trans->c, k, inode);
+		return 0;
+	}
+
+	return ret ?: bch_err_throw(trans->c, ENOENT_inode);
+}
+
 int bch2_inode_write_flags(struct btree_trans *trans,
 		     struct btree_iter *iter,
 		     struct bch_inode_unpacked *inode,

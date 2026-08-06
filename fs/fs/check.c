@@ -771,13 +771,28 @@ static int reconstruct_inode(struct btree_trans *trans, enum btree_id btree, u32
 	new_inode.bi_inum = inum;
 	new_inode.bi_snapshot = snapshot;
 
-	struct bch_inode_unpacked ancestor;
-	int ret = bch2_inode_find_oldest_snapshot(trans, inum, snapshot, &ancestor);
+	/*
+	 * Recover the hash info if any version of this inode survives anywhere.
+	 *
+	 * bi_hash_seed and the str_hash type are the same in every snapshot
+	 * version of an inode - bch2_repair_inode_hash_info() exists to enforce
+	 * that - so a descendant will do when no ancestor is left. Btree node
+	 * loss takes out one snapshot's inode key while leaving another's, and
+	 * an ancestor-only search calls that unrecoverable and falls back to the
+	 * random seed bch2_inode_init_early() left in new_inode. That puts every
+	 * dirent already under this directory at the wrong hash offset: lookups
+	 * miss, so creates insert duplicates instead of overwriting, and the
+	 * directory quietly becomes untraversable.
+	 */
+	struct bch_inode_unpacked hash_src;
+	int ret = bch2_inode_find_oldest_snapshot(trans, inum, snapshot, &hash_src);
+	if (bch2_err_matches(ret, ENOENT))
+		ret = bch2_inode_find_any_snapshot(trans, inum, &hash_src);
 	if (ret && !bch2_err_matches(ret, ENOENT))
 		return ret;
 	if (!ret) {
-		new_inode.bi_hash_seed = ancestor.bi_hash_seed;
-		SET_INODE_STR_HASH(&new_inode, INODE_STR_HASH(&ancestor));
+		new_inode.bi_hash_seed = hash_src.bi_hash_seed;
+		SET_INODE_STR_HASH(&new_inode, INODE_STR_HASH(&hash_src));
 	}
 
 	return __bch2_fsck_write_inode(trans, &new_inode);
