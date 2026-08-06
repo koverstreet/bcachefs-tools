@@ -61,6 +61,13 @@
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,17,0)
 #define WQ_PERCPU	0
 #endif
+
+/* system_dfl_wq was added with the default unbound workqueue split. */
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
+#define bch2_system_dfl_wq	system_dfl_wq
+#else
+#define bch2_system_dfl_wq	system_unbound_wq
+#endif
 #endif
 
 #include "bcachefs_format.h"
