@@ -154,7 +154,7 @@ bch2_next_fiemap_pagecache_extent(struct btree_trans *trans, struct bch_inode_in
 	 */
 	bch2_bkey_buf_realloc(&cur->kbuf, sizeof(*delextent) / sizeof(u64));
 	delextent = bkey_extent_init(cur->kbuf.k);
-	delextent->k.p = POS(inode->ei_inum.inum, dend >> 9);
+	delextent->k.p = POS(inode_inum(inode).inum, dend >> 9);
 	delextent->k.size = (dend - dstart) >> 9;
 	bch2_bkey_append_ptr(trans->c, &delextent->k_i, ptr);
 
@@ -169,11 +169,11 @@ static int bch2_next_fiemap_extent(struct btree_trans *trans,
 				   struct bch_fiemap_extent *cur)
 {
 	u32 snapshot;
-	try(bch2_subvolume_get_snapshot(trans, inode->ei_inum.subvol, &snapshot));
+	try(bch2_subvolume_get_snapshot(trans, inode_inum(inode).subvol, &snapshot));
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_extents,
-				SPOS(inode->ei_inum.inum, start, snapshot), 0);
-	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(inode->ei_inum.inum, end)));
+				SPOS(inode_inum(inode).inum, start, snapshot), 0);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &POS(inode_inum(inode).inum, end)));
 
 	u64 pagecache_end = k.k ? max(start, bkey_start_offset(k.k)) : end;
 
@@ -200,7 +200,7 @@ static int bch2_next_fiemap_extent(struct btree_trans *trans,
 		    pagecache_start)) {
 		bch2_bkey_buf_reassemble(&cur->kbuf, k);
 		bch2_cut_front(trans->c, iter.pos, cur->kbuf.k);
-		bch2_cut_back(POS(inode->ei_inum.inum, end), cur->kbuf.k);
+		bch2_cut_back(POS(inode_inum(inode).inum, end), cur->kbuf.k);
 		cur->flags = 0;
 	} else if (k.k) {
 		bch2_cut_back(bkey_start_pos(k.k), cur->kbuf.k);

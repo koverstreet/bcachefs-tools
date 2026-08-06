@@ -372,7 +372,7 @@ static int __bch2_set_acl(struct btree_trans *trans,
 			  struct posix_acl *acl, int type)
 {
 	u32 snapshot;
-	try(bch2_subvol_is_ro_trans(trans, inode->ei_inum.subvol, &snapshot));
+	try(bch2_subvol_is_ro_trans(trans, inode_inum(inode).subvol, &snapshot));
 
 	CLASS(btree_iter_uninit, inode_iter)(trans);
 	struct bch_inode_unpacked inode_u;

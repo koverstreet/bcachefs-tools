@@ -325,7 +325,7 @@ ssize_t bch2_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 	int ret = for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_xattrs,
 				   POS(inum, offset),
 				   POS(inum, U64_MAX),
-				   inode->ei_inum.subvol, 0, k, ({
+				   inode_inum(inode).subvol, 0, k, ({
 			if (k.k->type != KEY_TYPE_xattr)
 				continue;
 
