@@ -348,6 +348,18 @@ void bch2_prt_newline(struct printbuf *buf)
 	buf->cur_tabstop	= 0;
 }
 
+/*
+ * Terminate @out with a newline if it doesn't already have one, for callers
+ * that embed a printbuf in a larger message: a to_text/validate helper appends
+ * its reason without a trailing newline - correct, since the caller frames it -
+ * and unterminated it runs into whatever gets printed next.
+ */
+void bch2_printbuf_ensure_trailing_newline(struct printbuf *out)
+{
+	if (out->pos && out->buf[out->pos - 1] != '\n')
+		bch2_prt_newline(out);
+}
+
 void bch2_printbuf_strip_trailing_newline(struct printbuf *out)
 {
 	for (int p = out->pos - 1; p >= 0; --p) {
