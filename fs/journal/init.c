@@ -12,6 +12,7 @@
 #include "alloc/replicas.h"
 #include "btree/update.h"
 #include "init/error.h"
+#include "init/dev.h"
 
 /* allocate journal on a device: */
 
@@ -175,6 +176,65 @@ static int bch2_set_nr_journal_buckets_loop(struct bch_fs *c, struct bch_dev *ca
 }
 
 /*
+ * Remove journal buckets from a live device while keeping the device online.
+ *
+ * Journal writes must be drained to the other journal members before deleting
+ * this member's buckets.  Temporarily taking the device out of the allocator
+ * and journal write set gives us the same ordering as a read-only transition;
+ * the device is returned to rw after the superblock and allocation metadata
+ * have been updated.
+ */
+static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
+					       unsigned nr)
+{
+	struct journal_device *ja = &ca->journal;
+	bool was_rw = test_bit(BCH_FS_started, &c->flags) &&
+		ca->mi.state == BCH_MEMBER_STATE_rw;
+	int ret = 0;
+
+	if (!nr) {
+		bool other = false;
+
+		scoped_guard(rcu) {
+			for_each_member_device_rcu(c, other_ca,
+						    &c->allocator.rw_devs[BCH_DATA_journal])
+				if (other_ca != ca && other_ca->journal.nr) {
+					other = true;
+					break;
+		}
+		}
+
+		if (!other)
+			return bch_err_throw(c, insufficient_journal_devices);
+	}
+
+	if (was_rw) {
+		__bch2_dev_read_only(c, ca);
+		ret = bch2_journal_flush_device_pins(&c->journal, ca->dev_idx) ?:
+			bch2_journal_flush(&c->journal);
+		if (ret)
+			goto out;
+	}
+
+	while (ja->nr > nr) {
+		u64 bucket;
+
+		scoped_guard(spinlock, &c->journal.lock)
+			bucket = ja->buckets[ja->nr - 1];
+
+		ret = bch2_dev_journal_bucket_delete(ca, bucket);
+		if (ret)
+			break;
+	}
+
+	out:
+	if (was_rw)
+		__bch2_dev_read_write(c, ca);
+
+	return ret;
+}
+
+/*
  * Allocate more journal space at runtime - not currently making use if it, but
  * the code works:
  */
@@ -186,7 +246,9 @@ int bch2_set_nr_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 	if (READ_ONCE(ca->removing))
 		return bch_err_throw(c, device_has_been_removed);
 
-	int ret = bch2_set_nr_journal_buckets_loop(c, ca, nr, false);
+	int ret = nr < ca->journal.nr
+		? bch2_shrink_journal_buckets(c, ca, nr)
+		: bch2_set_nr_journal_buckets_loop(c, ca, nr, false);
 	bch_err_fn(c, ret);
 	return ret;
 }
