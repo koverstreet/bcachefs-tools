@@ -1455,8 +1455,14 @@ static int __bch2_write_super(struct bch_fs *c)
 		prt_printf(&msg.m, "Would not be able to mount with written devices\n");
 		bch2_can_read_fs_with_devs(c, &sb_written, degraded_flags, &msg.m);
 		bch2_fs_emergency_read_only(c, &msg.m);
+		return bch_err_throw(c, erofs_sb_err);
 	}
 
+	/*
+	 * Not fatal: we wrote to fewer devices than we wanted, but enough that
+	 * the filesystem still mounts. The superblock is on disk, so the caller
+	 * got what it asked for - the message above is a warning, not a failure.
+	 */
 	return 0;
 }
 
