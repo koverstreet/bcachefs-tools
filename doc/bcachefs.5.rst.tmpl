@@ -81,7 +81,10 @@ new size. This includes journal buckets and superblock copies, so a journal
 that was allocated on a device being shrunk is moved to the remaining journal
 devices as part of the operation. ``device resize-journal`` only grows the
 journal; it is not a substitute for device shrink and cannot be used to discard
-journal space from a member.
+journal space from a member. Shrinking a device only relocates journal buckets
+that fall in the truncated tail; it does not make an otherwise unchanged
+device journal-free. Per-device journal removal requires separate kernel
+support.
 
 Shrinking is irreversible for the discarded tail. Check ``bcachefs fs usage``
 and keep a current backup before starting. The command waits for evacuation to
