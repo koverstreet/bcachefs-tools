@@ -195,15 +195,6 @@ static bool should_cancel_stripe(struct bch_fs *c, struct ec_stripe_new *s, stru
 			return true;
 	}
 
-	/*
-	 * A create that widened/reused an existing stripe also holds the old
-	 * stripe's handle open. The old stripe may itself reference the region
-	 * being shrunk even when the new key does not (e.g. only its parity
-	 * block is in the tail): leaving such a head alive keeps the old stripe
-	 * open for the whole create, so the shrink's stripe repair can never
-	 * take its handle (tryget fails forever) and the old stripe's tail
-	 * backpointer blocks the shrink. Cancel it too.
-	 */
 	if (s->have_old_stripe &&
 	    stripe_dev_and_region_matches(c, ca, &s->old_stripe.key.v, tail_cutoff))
 		return true;

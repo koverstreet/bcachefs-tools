@@ -1273,11 +1273,7 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 
 		/*
 		 * Adding a device grows the EC widening target (RW members of
-		 * the disk_label) for existing stripes: queue a stripes scan so
-		 * their can_widen is refreshed. The RW-transition path
-		 * (__bch2_dev_set_state) already does this; device add was
-		 * missing it, so can_widen stayed 0 on every pre-existing stripe
-		 * and fsck flagged stripe_can_widen_wrong.
+		 * the disk_label) for existing stripes.
 		 */
 		try(bch2_set_reconcile_needs_scan(c,
 			(struct reconcile_scan) { .type = RECONCILE_SCAN_stripes }, false));
@@ -2216,25 +2212,14 @@ static int __bch2_dev_shrink(struct bch_fs *c, struct bch_dev *ca,
 	try(bch2_dev_count_tail_free(c, ca, new_nbuckets));
 
 	/*
-	 * EC accounting is slightly off after this shrink's evacuation: the
-	 * stripe repair re-points extents from a stripe with a block in the
+	 * AI output below for detailed reference. TLDR: EC accounting is currently slightly off, so just
+	 * schedule an accounting pass for the next mount.
+	 *
+	 * The stripe repair re-points extents from a stripe with a block in the
 	 * shrink tail to the rebuilt stripe on the surviving devices, and the
 	 * re-pointed extent is committed without a stripe_ptr the insert trigger
 	 * can see - so the new stripe's replicas entry is never incremented and
 	 * the old stripe's entry is left overcounted.
-	 *
-	 * The drift is confined to the replicas counters: extents, stripe
-	 * blockcounts, backpointers and alloc keys all stay consistent, so the
-	 * fs stays safe - only usage reporting and the degraded-mount
-	 * availability check are wrong until the accounting is recomputed.
-	 * check_allocations recomputes it (accounting_mismatch is FSCK_AUTOFIX),
-	 * so mark it required for the next mount.
-	 *
-	 * Scheduled before the evacuation loop rather than after it: repairs
-	 * re-point extents throughout the loop, so a shrink aborted mid-way
-	 * (superseding resize, kthread stop, evacuation failure) leaves the same
-	 * drift behind as a successful one - and the loop's error exits would
-	 * otherwise skip this.
 	 *
 	 * Proper fix (TODO): find why the re-pointed extent's insert loses its
 	 * stripe_ptr. The old-key overwrite triggers but no insert for the new

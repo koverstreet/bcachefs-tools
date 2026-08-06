@@ -297,12 +297,9 @@ static int stripe_update_extent(struct btree_trans *trans,
 
 		if (p.ec.idx != old_stripe->k.p.offset) {
 			/*
-			 * The extent references a stripe that no longer owns this block
-			 * (e.g. a previous create reused the block but failed to migrate
-			 * the extent). The migration below drops the stale stripe pointer
-			 * and re-points the extent at the new stripe, which is the correct
-			 * recovery - so log it as an fsck error for check_allocations to
-			 * verify, but don't abort the create over it.
+			 * The extent references a stripe that no longer owns this block.
+			 * Let the migration below handle it, and just log it as an fsck
+			 * error for check_allocations to verify.
 			 */
 			CLASS(bch_log_msg_ratelimited, msg)(c);
 			prt_printf(&msg.m, "dropping stale stripe pointer (idx %llu) while updating extent\n",
@@ -446,31 +443,18 @@ static int stripe_update_bucket(struct btree_trans *trans,
 	}));
 
 	/*
-	 * The old stripe's blockcount for this block is obsolete once the
-	 * migration has run: matching extents were re-pointed at the new stripe
-	 * (its trigger accounting is unreliable under concurrency - concurrent
-	 * extent rewrites on the same cached stripe key can lose a decrement,
-	 * leaving a phantom count that nothing will ever drain), and
-	 * non-matching extents never referenced this block at all. Either way
-	 * no extent references (old_stripe, old_blocknr) any more, so the count
-	 * must be zero - set it definitively instead of trusting the per-extent
-	 * deltas. Without this, the repair keeps treating the block as live,
-	 * the old stripe never empties, and it's never deleted - so its stale
-	 * block pointers (possibly in the shrink tail) keep the shrink stuck
-	 * forever.
+	 * count deltas are unreliable under concurrency, leading to phantom counts
+	 * that are never drained. No extent references (old_stripe, old_blocknr)
+	 * any more, so just zero the count.
 	 *
-	 * Safe because an extent referencing the old stripe block always has a
-	 * backpointer in this bucket (the scan covers the whole bucket): after
-	 * the migration no such extent remains, so zeroing cannot orphan live
-	 * data.
+	 * Safe because the scan covers the whole bucket, and an extent referencing
+	 * the old stripe block always has a backpointer in this bucket, and will
+	 * thus be removed.
+	 *
+	 * TODO: a cleaner / possibly more robust solution would be solving the
+	 *       concurrency unrealiability directly
 	 */
 	if (old_stripe != new_stripe) {
-		/*
-		 * The get and commit can return transaction restarts (e.g.
-		 * journal_overwrites_changed racing the journal flush); retry them
-		 * in-transaction here rather than letting a restart escape the
-		 * iteration - bch2_trans_put() panics on a pending restart.
-		 */
 		lockrestart_do(trans, ({
 			struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
 							BTREE_ID_stripes, POS(0, old_stripe->k.p.offset),
@@ -488,14 +472,8 @@ static int stripe_update_bucket(struct btree_trans *trans,
 		}));
 
 		/*
-		 * Now set the new stripe's blockcount for this block to the
-		 * definitive migrated sector count. The extent migration's trigger
-		 * incremented it per extent (a key-cache RMW, unreliable under
-		 * concurrency) on top of the count we committed at stripe creation,
-		 * so the stored value must be overwritten with what we actually
-		 * migrated - mirroring the old stripe zeroing above. Without this
-		 * the trigger's double-add (or a lost delta) leaves the new stripe
-		 * with a wrong blockcount that fsck flags.
+		 * The block count also has the same concurrency / key-cached RMW unreliability,
+		 * so set it manually here as well.
 		 */
 		lockrestart_do(trans, ({
 			struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
@@ -1504,19 +1482,6 @@ static bool may_reuse_stripe(struct bch_fs *c,
 	    old->nr_redundant		!= new->new_stripe.key.v.nr_redundant)
 		return false;
 
-	/*
-	 * A stripe with any block in a bad/evacuating region (shrinking device
-	 * tail, or a device being removed) is being evacuated: leave it to the
-	 * shrink/repair path, which needs exclusive access. Reusing it here
-	 * would hold its handle open for the whole create - blocking the
-	 * repair's tryget and racing its blockcount migration (lost updates) -
-	 * and the evacuation stall that results. Check every block: a stripe
-	 * whose only tail reference is a parity block is still in the way.
-	 *
-	 * Note the data-block loop below would otherwise allow reuse when a
-	 * live data block is bad/evacuating (it would be moved as part of the
-	 * reuse) - that path races the repair too, so reject it as well.
-	 */
 	for (unsigned i = 0; i < old->nr_blocks; i++)
 		if (bch2_ptr_bad_or_evacuating(c, &old->ptrs[i]))
 			return false;
@@ -1640,20 +1605,9 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, 
 			new_v->ptrs[s->old_blocks_nr] = old_v->ptrs[i];
 
 			/*
-			 * Carry the old block's sector count into the new stripe
-			 * key. Without this the new stripe is committed with
-			 * blockcounts of zero and looks EMPTY to the delete
-			 * machinery (lru_pos == STRIPE_LRU_POS_EMPTY), so the
-			 * stripe delete work can reap it while the extent
-			 * migration is still in flight - extents get re-pointed
-			 * at a stripe that no longer exists. Relying on the
-			 * migration trigger's per-extent increments alone is also
-			 * insufficient: they're key-cache RMW deltas that aren't
-			 * durable until a flush, so surviving stripes end up with
-			 * zero on-disk blockcounts. Committing the count here
-			 * makes the new stripe non-empty from birth and durable;
-			 * stripe_update_bucket() corrects the migration trigger's
-			 * double-add afterwards.
+			 * Per-extent key-cache RMW deltas aren't reliable under
+			 * concurrency, so just set the new stripe's blockcount to
+			 * the old stripe's value directly.
 			 */
 			stripe_blockcount_set(new_v, s->old_blocks_nr,
 					      stripe_blockcount_get(old_v, i));
@@ -2145,10 +2099,8 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	if (!nr_live_data_blocks) {
 		/*
 		 * Nothing to repair - the stripe is empty, so it should just be
-		 * deleted (the trigger/LRU handles that). Clear needs_reconcile so
-		 * reconcile stops re-queueing this work and re-opening the stripe
-		 * every pass, which otherwise races the empty-stripe delete.
-		 */
+		 * deleted. Clear needs_reconcile so reconcile stops re-queueing this work.
+ 		 */
 		if (old_s->needs_reconcile) {
 			struct bkey_i_stripe *n =
 				bch2_bkey_make_mut_typed(trans, iter, &s.s_c, 0, stripe);
