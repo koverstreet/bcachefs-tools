@@ -10,6 +10,8 @@ int bch2_dev_in_fs(struct bch_sb_handle *,
 		   struct bch_opts *);
 
 void bch2_dev_io_ref_stop(struct bch_dev *, int);
+void __bch2_dev_read_only(struct bch_fs *, struct bch_dev *);
+void __bch2_dev_read_write(struct bch_fs *, struct bch_dev *);
 void bch2_dev_unlink(struct bch_dev *);
 void bch2_dev_free(struct bch_dev *);
 void __bch2_dev_offline(struct bch_fs *, struct bch_dev *);
