@@ -312,7 +312,7 @@ impl Fs {
 
     /// Set an option in the superblock; None dev = filesystem scope.
     pub fn opt_set_sb(&self, dev: Option<&DevRef>, opt: &c::bch_option, v: u64,
-                      val_str: Option<&core::ffi::CStr>)
+                      val_str: Option<&core::ffi::CStr>) -> bool
     {
         unsafe {
             c::bch2_opt_set_sb(self.raw,
