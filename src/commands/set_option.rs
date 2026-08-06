@@ -73,15 +73,20 @@ fn set_option_online(
         }
     }
 
+    let mut failed = std::collections::BTreeSet::new();
+
     for (name, value) in opts {
+
         let Some((_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");
+            failed.insert(name.as_str());
             continue;
         };
         let flags = opt.flags as u32;
 
         if flags & opt_flags() == 0 {
             eprintln!("Can't set option {name}");
+            failed.insert(name.as_str());
             continue;
         }
 
@@ -95,6 +100,7 @@ fn set_option_online(
         if flags & c::opt_flags::OPT_RUNTIME as u32 == 0 {
             eprintln!("{name} cannot be set while the filesystem is mounted \
                        (unmount and set it offline)");
+            failed.insert(name.as_str());
             continue;
         }
 
@@ -104,6 +110,7 @@ fn set_option_online(
         if is_fs_opt && !is_device_opt {
             if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("options/{name}"), value) {
                 eprintln!("Error setting {name}: {e}");
+                failed.insert(name.as_str());
             }
         }
 
@@ -112,6 +119,7 @@ fn set_option_online(
                 for dev_idx in dev_idxs {
                     if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value) {
                         eprintln!("Error setting {name} on device {dev_idx}: {e}");
+                        failed.insert(name.as_str());
                     }
                 }
                 continue;
@@ -122,14 +130,24 @@ fn set_option_online(
                 let dev_idx = fs2.dev_idx();
                 if dev_idx < 0 {
                     eprintln!("Couldn't determine device index for {dev}; use --dev-idx");
+                    failed.insert(name.as_str());
                     continue;
                 }
 
                 if let Err(e) = sysfs::sysfs_write_str(fs.sysfs_fd(), &format!("dev-{dev_idx}/{name}"), value) {
                     eprintln!("Error setting {name} on device {dev_idx}: {e}");
+                    failed.insert(name.as_str());
                 }
             }
         }
+    }
+
+    // A configuration command that could not do what it was asked must not
+    // report success: scripts have no other way to tell.
+    if !failed.is_empty() {
+        bail!("{} of {} option(s) could not be set: {}",
+              failed.len(), opts.len(),
+              failed.into_iter().collect::<Vec<_>>().join(", "));
     }
 
     Ok(())
@@ -142,28 +160,34 @@ fn set_option_offline(
     opts: &[(String, String)],
 ) -> Result<()> {
     let mut modified = false;
+    let mut failed = std::collections::BTreeSet::new();
 
     for (name, value) in opts {
+
         let Some((opt_id, opt)) = bch_opt_lookup(name) else {
             eprintln!("Unknown option: {name}");
+            failed.insert(name.as_str());
             continue;
         };
         let flags = opt.flags as u32;
 
         if flags & opt_flags() == 0 {
             eprintln!("Can't set option {name}");
+            failed.insert(name.as_str());
             continue;
         }
 
         let c_value = CString::new(value.as_str())?;
         let Ok(val) = bcachefs_kernel::opts::opt_parse(Some(&fs), opt, &c_value, None) else {
             eprintln!("Error parsing {name}={value}");
+            failed.insert(name.as_str());
             continue;
         };
 
         if flags & c::opt_flags::OPT_FS as u32 != 0 {
             if let Err(e) = fs.opt_hook_pre_set(None, opt_id, val) {
                 eprintln!("Error setting {name}: {e}");
+                failed.insert(name.as_str());
                 continue;
             }
             fs.opt_set_sb(None, opt, val, Some(&c_value));
@@ -174,19 +198,37 @@ fn set_option_offline(
             let indices: Vec<u32> = if !dev_idxs.is_empty() {
                 dev_idxs.to_vec()
             } else {
-                devices.iter().filter_map(|dev| {
-                    name_to_dev_idx(&fs, dev).map(|i| i as u32)
-                }).collect()
+                // Don't silently drop a device we couldn't resolve: with every
+                // name unresolved this list is empty, the loop below never
+                // runs, and the command reports success having done nothing.
+                let mut idxs = Vec::with_capacity(devices.len());
+                for dev in devices {
+                    match name_to_dev_idx(&fs, dev) {
+                        Some(i) => idxs.push(i as u32),
+                        None => {
+                            eprintln!("Couldn't find device {dev} in this filesystem");
+                            failed.insert(name.as_str());
+                        }
+                    }
+                }
+                idxs
             };
+
+            if indices.is_empty() {
+                eprintln!("No devices to set {name} on");
+                failed.insert(name.as_str());
+            }
 
             for idx in indices {
                 let Some(ca) = fs.dev_get(idx) else {
                     eprintln!("Couldn't look up device {idx}");
+                    failed.insert(name.as_str());
                     continue;
                 };
 
                 if let Err(e) = fs.opt_hook_pre_set(Some(&ca), opt_id, val) {
                     eprintln!("Error setting {name}: {e}");
+                    failed.insert(name.as_str());
                     continue;
                 }
                 fs.opt_set_sb(Some(&ca), opt, val, Some(&c_value));
@@ -203,6 +245,12 @@ fn set_option_offline(
         let _lock = fs.sb_lock();
         fs.write_super_force()
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
+    }
+
+    if !failed.is_empty() {
+        bail!("{} of {} option(s) could not be set: {}",
+              failed.len(), opts.len(),
+              failed.into_iter().collect::<Vec<_>>().join(", "));
     }
 
     Ok(())
