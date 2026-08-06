@@ -412,6 +412,75 @@ static void bch2_inode_hash_remove(struct bch_fs *c, struct bch_inode_info *inod
 	}
 }
 
+/*
+ * Marks an inode number as held for as long as the guard is in scope, without
+ * an inode to hang it on.
+ *
+ * O_TMPFILE commits an inode that is already unlinked, so from
+ * bch2_trans_commit() onwards a scanning fsck pass can see the key - while
+ * __bch2_create() is still several steps away from having a hashed VFS inode.
+ * bch2_inode_or_descendents_is_open() would answer "not open" for a file the
+ * caller is about to be handed a descriptor for, and check_inode() deletes
+ * exactly that.
+ *
+ * The entry is freed through RCU: rhltable_remove() unlinks it but leaves it
+ * traversable, so a reader already inside bch2_inode_or_descendents_is_open()
+ * may still be walking it.
+ */
+struct guard_inum_entry {
+	struct bch_inum_hash_entry	e;
+	struct rcu_head			rcu;
+};
+
+struct inum_hash_guard {
+	struct bch_fs		*c;
+	struct guard_inum_entry	*e;
+};
+
+static void inum_hash_guard_exit(struct inum_hash_guard *g)
+{
+	if (g->e) {
+		int ret = rhltable_remove(&g->c->vfs.inodes_by_inum_table,
+					  &g->e->e.hash, bch2_vfs_inodes_by_inum_params);
+		BUG_ON(ret);
+		kfree_rcu(g->e, rcu);
+		g->e = NULL;
+	}
+}
+
+static struct inum_hash_guard inum_hash_guard_init(struct bch_fs *c)
+{
+	return (struct inum_hash_guard) { .c = c };
+}
+
+DEFINE_CLASS(inum_hash_guard, struct inum_hash_guard,
+	     inum_hash_guard_exit(&_T),
+	     inum_hash_guard_init(c), struct bch_fs *c)
+
+/*
+ * Re-arms: the caller's arm point is inside a transaction retry loop, and a
+ * restart can allocate a different inode number.
+ */
+static int inum_hash_guard_set(struct inum_hash_guard *g, subvol_inum inum)
+{
+	inum_hash_guard_exit(g);
+
+	struct guard_inum_entry *e = kmalloc(sizeof(*e), GFP_NOFS);
+	if (!e)
+		return -ENOMEM;
+
+	e->e.inum = inum;
+	int ret = rhltable_insert(&g->c->vfs.inodes_by_inum_table,
+				  &e->e.hash, bch2_vfs_inodes_by_inum_params);
+	if (ret) {
+		kfree(e);
+		return ret;
+	}
+
+	g->e = e;
+	return 0;
+}
+
 static struct bch_inode_info *bch2_inode_hash_insert(struct bch_fs *c,
 						     struct btree_trans *trans,
 						     struct bch_inode_info *inode)
@@ -677,6 +746,7 @@ __bch2_create(struct mnt_idmap *idmap,
 	 * ours until after, ei->update_lock must also be taken first:
 	 */
 	CLASS(btree_trans, trans)(c);
+	CLASS(inum_hash_guard, guard)(c);
 retry:
 	bch2_trans_begin(trans);
 
@@ -696,7 +766,15 @@ retry:
 	inum.subvol = inode_u.bi_subvol ?: inode_inum(dir).subvol;
 	inum.inum = inode_u.bi_inum;
 
-	ret =   bch2_inode_init_security(trans, dir, inode,
+	/*
+	 * Before the commit publishes the key. Only a tmpfile needs it: every
+	 * other create commits with a dirent and nlink 1, which check_inode()
+	 * doesn't touch.
+	 */
+	ret =   ((flags & BCH_CREATE_TMPFILE)
+		 ? inum_hash_guard_set(&guard, inum)
+		 : 0) ?:
+		bch2_inode_init_security(trans, dir, inode,
 					 !(flags & BCH_CREATE_TMPFILE)
 					 ? &dentry->d_name : NULL,
 					 inum, &inode_u) ?:
