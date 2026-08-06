@@ -204,17 +204,9 @@ static bool should_cancel_stripe(struct bch_fs *c, struct ec_stripe_new *s, stru
 	 * take its handle (tryget fails forever) and the old stripe's tail
 	 * backpointer blocks the shrink. Cancel it too.
 	 */
-	if (s->have_old_stripe) {
-		struct bch_stripe *ov = &s->old_stripe.key.v;
-
-		guard(rcu)();
-		for (unsigned i = 0; i < ov->nr_blocks; i++) {
-			struct bch_dev *oca = bch2_dev_rcu_noerror(c, ov->ptrs[i].dev);
-			if (oca && oca->dev_idx == ca->dev_idx &&
-			    ov->ptrs[i].offset >= tail_cutoff * oca->mi.bucket_size)
-				return true;
-		}
-	}
+	if (s->have_old_stripe &&
+	    stripe_dev_and_region_matches(c, ca, &s->old_stripe.key.v, tail_cutoff))
+		return true;
 
 	return false;
 }

@@ -1283,17 +1283,9 @@ static bool should_drop_bucket(struct open_bucket *ob, struct bch_fs *c,
 			 * drains and releases the old stripe, unblocking the shrink's
 			 * stripe repair.
 			 */
-			if (!drop && ob->ec->have_old_stripe) {
-				struct bch_stripe *ov = &ob->ec->old_stripe.key.v;
-
-				guard(rcu)();
-				for (unsigned i = 0; i < ov->nr_blocks; i++) {
-					struct bch_dev *oca = bch2_dev_rcu_noerror(c, ov->ptrs[i].dev);
-					if (oca && oca->dev_idx == ca->dev_idx &&
-					    ov->ptrs[i].offset >= tail_cutoff * oca->mi.bucket_size)
-						drop = true;
-				}
-			}
+			if (!drop && ob->ec->have_old_stripe)
+				drop = stripe_dev_and_region_matches(c, ca,
+						&ob->ec->old_stripe.key.v, tail_cutoff);
 		}
 
 		return drop;

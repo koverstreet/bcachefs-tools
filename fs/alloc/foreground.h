@@ -334,6 +334,20 @@ static inline bool dev_and_region_matches(struct open_bucket *ob, struct bch_dev
 	return ob->dev == ca->dev_idx && ob->bucket >= tail_cutoff;
 }
 
+/* Whether any block of @v references @ca's region at/after @tail_cutoff */
+static inline bool stripe_dev_and_region_matches(struct bch_fs *c, struct bch_dev *ca,
+						 struct bch_stripe *v, u64 tail_cutoff)
+{
+	guard(rcu)();
+	for (unsigned i = 0; i < v->nr_blocks; i++) {
+		struct bch_dev *oca = bch2_dev_rcu_noerror(c, v->ptrs[i].dev);
+		if (oca && oca->dev_idx == ca->dev_idx &&
+		    v->ptrs[i].offset >= tail_cutoff * oca->mi.bucket_size)
+			return true;
+	}
+	return false;
+}
+
 int bch2_alloc_sectors_req(struct btree_trans *, struct alloc_request *,
 			   struct write_point_specifier,
 			   struct write_point **);
