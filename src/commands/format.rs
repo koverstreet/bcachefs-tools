@@ -61,6 +61,11 @@ pub(crate) fn version_parse(s: &str) -> Result<u32> {
     Ok((major << 10) | minor)
 }
 
+/// Render a metadata version as "major.minor" — the inverse of version_parse().
+pub(crate) fn version_to_string(v: u32) -> String {
+    format!("{}.{}", v >> 10, v & ((1 << 10) - 1))
+}
+
 fn format_usage() {
     let fs_opts = opts_usage_str(
         c::opt_flags::OPT_FORMAT as u32 | c::opt_flags::OPT_FS as u32,
@@ -525,7 +530,16 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         }
 
         if version != current_version {
-            println!("version mismatch, not initializing");
+            // Not an error: we format at whatever the running kernel supports,
+            // and leave it to create the btree roots at first mount. Say so,
+            // with the numbers - the old message named neither version and
+            // read like a failure, and the filesystem it leaves behind can't
+            // be opened by offline tools until it has been mounted once.
+            println!("formatting at version {} to match the running kernel \
+                      (these tools support {}); the filesystem will be \
+                      initialized when it is first mounted",
+                     version_to_string(version),
+                     version_to_string(current_version));
             cfg.initialize = false;
         }
     }
