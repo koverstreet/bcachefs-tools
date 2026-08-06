@@ -15,32 +15,50 @@ fn opt_flags() -> u32 {
     c::opt_flags::OPT_FS as u32 | c::opt_flags::OPT_DEVICE as u32
 }
 
+fn schedule_reconcile_after_offline_io_opt_change(fs: &bcachefs_kernel::fs::Fs) -> Result<()> {
+    let ext_u64s = (std::mem::size_of::<c::bch_sb_field_ext>() / std::mem::size_of::<u64>()) as u32;
+    let ext: &mut c::bch_sb_field_ext =
+        unsafe { bcachefs_kernel::sb::io::sb_field_get_minsize(&mut (*fs.raw).disk_sb, ext_u64s) }
+            .ok_or_else(|| anyhow::anyhow!("Error getting sb_field_ext"))?;
+    let pass = 1u64 << c::bch_recovery_pass::BCH_RECOVERY_PASS_set_fs_needs_reconcile as u64;
+    let stable_pass = unsafe { c::bch2_recovery_passes_to_stable(pass) };
+    ext.recovery_passes_required[0] |= stable_pass.to_le();
+    Ok(())
+}
+
 fn set_option_cmd() -> Command {
     Command::new("set-fs-option")
         .about("Set a filesystem option")
-        .long_about("\
+        .long_about(
+            "\
 Set a filesystem or device option on a running filesystem. Changes \
 are persisted to the superblock. Use -d to target a specific device \
 for device-scoped options. See <<sec:options>> for the full list of \
-available options.")
+available options.",
+        )
         .args(bch_option_args(opt_flags(), false))
-        .arg(Arg::new("dev-idx")
-            .short('d')
-            .long("dev-idx")
-            .action(ArgAction::Append)
-            .value_parser(clap::value_parser!(u32))
-            .help("Device index for device-specific options"))
-        .arg(Arg::new("devices")
-            .required(true)
-            .action(ArgAction::Append)
-            .help("Device path(s)"))
+        .arg(
+            Arg::new("dev-idx")
+                .short('d')
+                .long("dev-idx")
+                .action(ArgAction::Append)
+                .value_parser(clap::value_parser!(u32))
+                .help("Device index for device-specific options"),
+        )
+        .arg(
+            Arg::new("devices")
+                .required(true)
+                .action(ArgAction::Append)
+                .help("Device path(s)"),
+        )
 }
 
 fn cmd_set_option(argv: Vec<String>) -> Result<()> {
     let matches = set_option_cmd().get_matches_from(argv);
 
     let devices: Vec<&String> = matches.get_many::<String>("devices").unwrap().collect();
-    let dev_idxs: Vec<u32> = matches.get_many::<u32>("dev-idx")
+    let dev_idxs: Vec<u32> = matches
+        .get_many::<u32>("dev-idx")
         .map(|v| v.copied().collect())
         .unwrap_or_default();
 
@@ -55,7 +73,7 @@ fn cmd_set_option(argv: Vec<String>) -> Result<()> {
     opt_set!(fs_opts, nostart, 1);
 
     match crate::device_scan::open_online_or_offline(&devs, fs_opts)? {
-        OpenedFs::Online(fs)  => set_option_online(fs, &devices, &dev_idxs, &opts),
+        OpenedFs::Online(fs) => set_option_online(fs, &devices, &dev_idxs, &opts),
         OpenedFs::Offline(fs) => set_option_offline(fs, &devices, &dev_idxs, &opts),
     }
 }
@@ -123,6 +141,7 @@ fn set_option_offline(
     opts: &[(String, String)],
 ) -> Result<()> {
     let mut modified = false;
+    let mut needs_reconcile = false;
 
     for (name, value) in opts {
         let Some((opt_id, opt)) = bch_opt_lookup(name) else {
@@ -147,17 +166,20 @@ fn set_option_offline(
                 eprintln!("Error setting {name}: {e}");
                 continue;
             }
-            fs.opt_set_sb(None, opt, val, Some(&c_value));
-            modified = true;
+            if fs.opt_set_sb(None, opt, val, Some(&c_value)) {
+                modified = true;
+                needs_reconcile |= unsafe { c::bch2_opt_is_inode_opt(opt_id) };
+            }
         }
 
         if flags & c::opt_flags::OPT_DEVICE as u32 != 0 {
             let indices: Vec<u32> = if !dev_idxs.is_empty() {
                 dev_idxs.to_vec()
             } else {
-                devices.iter().filter_map(|dev| {
-                    name_to_dev_idx(&fs, dev).map(|i| i as u32)
-                }).collect()
+                devices
+                    .iter()
+                    .filter_map(|dev| name_to_dev_idx(&fs, dev).map(|i| i as u32))
+                    .collect()
             };
 
             for idx in indices {
@@ -170,18 +192,22 @@ fn set_option_offline(
                     eprintln!("Error setting {name}: {e}");
                     continue;
                 }
-                fs.opt_set_sb(Some(&ca), opt, val, Some(&c_value));
-                modified = true;
+                modified |= fs.opt_set_sb(Some(&ca), opt, val, Some(&c_value));
             }
         }
     }
 
     if modified {
         if fs.disk_sb().sb().sb_initialized() == 0 {
-            bail!("superblock not initialized (filesystem was never started): \
-                   bch2_write_super would silently skip the write; mount it once first");
+            bail!(
+                "superblock not initialized (filesystem was never started): \
+                   bch2_write_super would silently skip the write; mount it once first"
+            );
         }
         let _lock = fs.sb_lock();
+        if needs_reconcile {
+            schedule_reconcile_after_offline_io_opt_change(&fs)?;
+        }
         fs.write_super_force()
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
     }
@@ -191,7 +217,10 @@ fn set_option_offline(
 
 fn name_to_dev_idx(fs: &Fs, name: &str) -> Option<usize> {
     (0..fs.nr_devices())
-        .find(|&i| fs.dev_get(i).is_some_and(|ca| ca.name().to_bytes() == name.as_bytes()))
+        .find(|&i| {
+            fs.dev_get(i)
+                .is_some_and(|ca| ca.name().to_bytes() == name.as_bytes())
+        })
         .map(|i| i as usize)
 }
 
