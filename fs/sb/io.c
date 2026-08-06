@@ -1110,6 +1110,13 @@ int bch2_read_super(const char *path, struct bch_opts *opts,
 	if (ret)
 		bch2_free_super(sb);
 
+	/*
+	 * We embed @err mid-format below, so a reason that came back
+	 * unterminated runs straight into whatever is printed next:
+	 * "Not a bcachefs superblock layouterror starting filesystem".
+	 */
+	bch2_printbuf_ensure_trailing_newline(&err);
+
 	if (ret && err.pos)
 		bch2_print_opts(opts, KERN_ERR "bcachefs (%s): error reading superblock: %s\n%s",
 				path, bch2_err_str(ret), err.buf);
