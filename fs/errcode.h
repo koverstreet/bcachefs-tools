@@ -629,7 +629,7 @@ static inline bool _bch2_err_matches(int err, int class)
 
 int __bch2_err_class(int);
 
-static inline long bch2_err_class(long err)
+static inline loff_t bch2_err_class(loff_t err)
 {
 	return err < 0 ? __bch2_err_class(err) : err;
 }

@@ -96,7 +96,7 @@ static size_t		dynamic_used;
  * Map from grain index to allocation size in grains, so free_percpu()
  * doesn't need a size argument.
  */
-static u16		size_at_grain[BCH_PERCPU_DYNAMIC_SIZE / BCH_PERCPU_GRAIN];
+static uint32_t		size_at_grain[BCH_PERCPU_DYNAMIC_SIZE / BCH_PERCPU_GRAIN];
 
 static pthread_mutex_t	bch_percpu_lock = PTHREAD_MUTEX_INITIALIZER;
 
