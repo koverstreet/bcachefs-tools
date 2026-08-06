@@ -123,6 +123,12 @@ with ``bcachefs set-fs-option`` by passing the member device path:
 
   bcachefs set-fs-option --durability=0 /dev/nvme1n1
 
+Durability is a two bit on-disk field, not a fraction: the only values are
+``0``, ``1`` and ``2``, and leaving it unset means ``1``. To treat a device as
+worth half a normal copy, scale everything by the same factor instead - leave
+it at ``1``, set the trusted devices to ``2``, and double the replica counts to
+match.
+
 Multipath devices
 -----------------
 When using device-mapper multipath, use the multipath device (e.g.
