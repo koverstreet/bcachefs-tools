@@ -567,6 +567,10 @@ bool bch2_copygc_can_make_progress(struct bch_dev *ca)
  * Caller must hold mark_lock (read), for the dev_leaving accounting read -
  * and must take it outside any rcu read section, mark_lock can block.
  *
+ * Free buckets in the shrink tail aren't allocatable
+ * and don't count, and while a shrink is in progress the device counts as
+ * target-sized.
+ *
  * The allowance at the limit - when the device is full - is the space we
  * reserved in bch2_recalc_capacity; we can't have more than that amount of
  * disk space stranded due to fragmentation and store everything we have
@@ -596,9 +600,18 @@ s64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
 	bch2_accounting_mem_read_locked(c, disk_accounting_pos_to_bpos(&pos), &leaving, 1);
 	leaving = max(0LL, leaving);
 
+	/*
+	 * Free buckets in the shrink tail aren't allocatable
+	 */
+	u64 free_buckets = usage.buckets[BCH_DATA_free];
+	u64 nbuckets = bch2_dev_resize_target(ca);
+	u64 tail_free = atomic64_read(&ca->shrinking_tail_free);
+	if (unlikely(tail_free))
+		free_buckets -= min(free_buckets, tail_free);
+
 	/* Don't start until less than 20% of the device is free: */
-	s64 free = usage.buckets[BCH_DATA_free] * ca->mi.bucket_size + leaving;
-	s64 wait = free * 5 - ca->mi.nbuckets * ca->mi.bucket_size;
+	s64 free = free_buckets * ca->mi.bucket_size + leaving;
+	s64 wait = free * 5 - nbuckets * ca->mi.bucket_size;
 	if (wait > 0)
 		return wait;
 
