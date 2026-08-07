@@ -454,6 +454,16 @@ static void calculate_discard_sectors_to_release(struct btree_trans *trans)
 		s->r.flush_journal = true;
 }
 
+static bool bch2_discard_blocked_by_resize(struct bch_fs *c, struct bpos bucket)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, bucket.inode);
+
+	return ca &&
+		bch2_dev_is_shrinking(ca) &&
+		bucket.offset >= bch2_dev_resize_target(ca);
+}
+
 static void bch2_do_discards(struct bch_fs *c)
 {
 	struct bch_fs_discards *d = &c->discards;
@@ -472,6 +482,10 @@ static void bch2_do_discards(struct bch_fs *c)
 		/*
 		 * Iterate need_discard btree (sorted by journal_seq).
 		 * Stop when we hit a seq beyond rewind_seq_ondisk.
+		 *
+		 * Drop need_discard iterator before we update alloc and
+		 * commit to avoid deadlock against alloc/freespace updates
+		 * when removing the corresponding index entry
 		 */
 		ret = for_each_btree_key(trans, iter,
 				BTREE_ID_need_discard, POS_MIN, 0, k, ({
@@ -482,6 +496,15 @@ static void bch2_do_discards(struct bch_fs *c)
 			if (journal_seq >= min(c->journal.rewind_seq_ondisk,
 					       c->journal.flushed_seq_ondisk + 1))
 				break;
+
+			/*
+			 * Leave buckets in the shrink tail queued, as the
+			 * alloc update can deadlock with reconcile.
+			 */
+			if (bch2_discard_blocked_by_resize(c, bucket)) {
+				s->pos = iter.pos;
+				continue;
+			}
 
 			if (!bpos_eq(s->pos, iter.pos))
 				s->seen += bucket_size;

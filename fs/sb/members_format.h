@@ -85,6 +85,7 @@ struct bch_member {
 	 * the allocation path.
 	 */
 	__u8			failure_domain[32] __nonstring;
+	__le64			target_nbuckets; /* 0 => idle, nbuckets => idle, < nbuckets => shrink target, > nbuckets => grow target */
 };
 
 /*

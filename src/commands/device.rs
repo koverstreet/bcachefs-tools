@@ -389,26 +389,48 @@ pub struct ResizeCli {
     /// Device path
     device: String,
 
-    /// New size (human-readable, e.g. 1G); defaults to device size
+    /// New size (human-readable, e.g. 1G) or "cancel" (resizes to the currently persisted size); defaults to device size
     size: Option<String>,
+
+    /// Experimental: allow shrinking the device. This may lead to data loss. This argument will be
+    /// removed once stabilized.
+    #[arg(long, default_value = "false")]
+    shrink: bool,
 }
 
+enum SizeOrCancel {
+    Size(u64),
+    Cancel,
+}
 fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
+    use SizeOrCancel::*;
 
     let size_bytes = match cli.size {
-        Some(ref s) => parse_human_size(s)?,
-        None => device_size(&cli.device)?,
+        Some(ref s) => match s.as_str() {
+            "cancel" | "Cancel" => Cancel,
+            other => Size(parse_human_size(other)?),
+        },
+        None => Size(device_size(&cli.device)?),
     };
-    let size_sectors = size_bytes >> 9;
+    let size_sectors = match size_bytes {
+        Size(bytes) => Size(bytes >> 9),
+        Cancel => Cancel,
+    };
 
     match open_dev(&cli.device) {
         Ok((handle, dev_idx)) => {
             println!("Doing online resize of {}", cli.device);
 
-            let usage = handle.dev_usage(dev_idx)
-                .context("querying device usage")?;
-            let nbuckets = size_sectors / usage.bucket_size as u64;
+            let usage = handle.dev_usage(dev_idx).context("querying device usage")?;
+            let nbuckets = match size_sectors {
+                Size(sectors) => sectors / usage.bucket_size as u64,
+                Cancel => usage.nr_buckets,
+            };
             let shrinking = nbuckets < usage.nr_buckets;
+            if shrinking && !cli.shrink {
+                bail!("You are attempting to shrink the device. This is experimental and may lead to data loss. If you wish to proceed anyway, re-run the command with '--shrink'.");
+            }
+
 
             println!("resizing {} to {} buckets", cli.device, nbuckets);
             handle.disk_resize(dev_idx, nbuckets)
@@ -422,55 +444,44 @@ fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
         }
         Err(_) if Path::new(&cli.device).exists() => {
             println!("Doing offline resize of {}", cli.device);
-            resize_offline(&cli.device, size_sectors)?;
-        }
+            resize_offline(&cli.device, size_sectors, cli.shrink)?;
+        },
         Err(e) => return Err(e),
     }
 
     Ok(())
 }
 
-/// Find the single online device in a filesystem.
-/// Offline operations (resize, resize-journal) require exactly one device.
-fn find_single_online_dev(fs: &Fs) -> Result<bcachefs_kernel::fs::DevRef> {
-    use std::ops::ControlFlow;
-
-    let mut count = 0u32;
-    let mut found_idx = 0u32;
-    let _ = fs.for_each_online_member(|ca| {
-        found_idx = ca.dev_idx as u32;
-        count += 1;
-        ControlFlow::Continue(())
-    });
-
-    if count == 0 {
-        bail!("no online device found");
-    }
-    if count > 1 {
-        bail!("multiple devices online, offline resize requires exactly one");
-    }
-
-    fs.dev_get(found_idx)
-        .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))
-}
-
-fn resize_offline(device: &str, size_sectors: u64) -> Result<()> {
+fn resize_offline(device: &str, size_sectors: SizeOrCancel, shrinking_allowed: bool) -> Result<()> {
     use bcachefs_kernel::util::printbuf::Printbuf;
+    use SizeOrCancel::*;
+
+    // Find this device's index from its superblock, then open the whole
+    // filesystem: shrinking a device evacuates data from the to-be-shrunk
+    // region to other members, which must be online. Target the resize at
+    // the specific device rather than "the single online device".
+    let sb_handle = crate::device_scan::read_super_silent(Path::new(device), Default::default())
+        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
+    let dev_idx = sb_handle.sb().dev_idx as u32;
+    drop(sb_handle);
 
     let opts: c::bch_opts = Default::default();
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 
-    let ca = find_single_online_dev(&fs)?;
+    let ca = fs.dev_get(dev_idx)
+        .ok_or_else(|| anyhow!("could not get reference to device {}", dev_idx))?;
 
-    let nbuckets = size_sectors / ca.mi.bucket_size as u64;
-
-    if nbuckets < ca.mi.nbuckets {
-        bail!("shrinking not supported (requested {} buckets, have {})",
-            nbuckets, ca.mi.nbuckets);
+    let nbuckets = match size_sectors {
+        Size(sectors) => sectors / ca.mi.bucket_size as u64,
+        Cancel => ca.mi.nbuckets,
+    };
+    let shrinking = nbuckets < ca.mi.nbuckets;
+    if shrinking && !shrinking_allowed {
+        bail!("You are attempting to shrink the device. This is experimental and may lead to data loss. If you wish to proceed anyway, re-run the command with '--shrink'.");
     }
 
-    println!("resizing to {} buckets", nbuckets);
+    println!("resizing {} to {} buckets", device, nbuckets);
 
     let mut err = Printbuf::new();
     let ret = unsafe {
@@ -518,15 +529,21 @@ fn cmd_device_resize_journal(cli: ResizeJournalCli) -> Result<()> {
 }
 
 fn resize_journal_offline(device: &str, size_sectors: u64) -> Result<()> {
+    let sb_handle = crate::device_scan::read_super_silent(Path::new(device), Default::default())
+        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
+    let dev_idx = sb_handle.sb().dev_idx as u32;
+    drop(sb_handle);
+
     let opts: c::bch_opts = Default::default();
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
 
-    let ca = find_single_online_dev(&fs)?;
+    let ca = fs.dev_get(dev_idx)
+        .ok_or_else(|| anyhow!("could not get reference to device {}", dev_idx))?;
 
     let nbuckets = size_sectors / ca.mi.bucket_size as u64;
 
-    println!("resizing journal to {} buckets", nbuckets);
+    println!("resizing journal on {} to {} buckets", device, nbuckets);
     let ret = unsafe {
         c::bch2_set_nr_journal_buckets(fs.raw, ca.as_mut_ptr(), nbuckets as u32)
     };

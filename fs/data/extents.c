@@ -1038,7 +1038,7 @@ int bch2_bkey_durability(struct btree_trans *trans, struct bkey_s_c k, struct bk
 		 * evacuating device reads as durability 0 for the minimum.
 		 */
 		ret->acct += desired;
-		unsigned d_min = !p.has_ec && bch2_dev_bad_or_evacuating(c, p.ptr.dev)
+		unsigned d_min = !p.has_ec && bch2_ptr_bad_or_evacuating(c, &p.ptr)
 			? 0 : desired;
 		ret->min_durability = min(ret->min_durability, d_min);
 	}
@@ -1369,12 +1369,12 @@ bool bch2_bkey_in_target(struct bch_fs *c, struct bkey_s_c k, unsigned target)
 	return true;
 }
 
-bool bch2_bkey_has_dev_bad_or_evacuating(struct bch_fs *c, struct bkey_s_c k)
+bool bch2_bkey_has_ptr_bad_or_evacuating(struct bch_fs *c, struct bkey_s_c k)
 {
 	guard(rcu)();
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	bkey_for_each_ptr(ptrs, ptr)
-		if (bch2_dev_bad_or_evacuating_rcu(c, ptr->dev))
+		if (bch2_ptr_bad_or_evacuating_rcu(c, ptr))
 			return true;
 	return false;
 }
@@ -1519,6 +1519,9 @@ static bool maybe_drop_cached_ptr(struct bch_fs *c, struct bch_inode_opts *opts,
 			return drop_cached_pointer_trace(c, k, ptr, "pointer is stale");
 		if (!ca || ca->mi.state == BCH_MEMBER_STATE_evacuating)
 			return drop_cached_pointer_trace(c, k, ptr, "device bad or evacuating");
+		if (bch2_dev_is_shrinking(ca) &&
+		    bch2_dev_resize_target(ca) <= PTR_BUCKET_NR(ca, ptr))
+			return drop_cached_pointer_trace(c, k, ptr, "past shrink cutoff");
 
 		unsigned target = opts->promote_target ?: opts->foreground_target;
 		if (target && !bch2_dev_in_target_rcu(c, ptr->dev, target))

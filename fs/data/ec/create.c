@@ -295,13 +295,19 @@ static int stripe_update_extent(struct btree_trans *trans,
 		if (p.ec.idx == new_stripe->k.p.offset)
 			return 0;
 
-		if (old_stripe == new_stripe ||
-		    p.ec.idx != old_stripe->k.p.offset) {
-			CLASS(printbuf, buf)();
-			ret_log_fsck_err(trans, stripe_update_stale_stripe_ptr,
-				"dropping stale stripe pointer (idx %llu) while updating extent\n%s",
-				(u64) p.ec.idx,
-				(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
+		if (p.ec.idx != old_stripe->k.p.offset) {
+			/*
+			 * The extent references a stripe that no longer owns this block.
+			 * Let the migration below handle it, and just log it as an fsck
+			 * error for check_allocations to verify.
+			 */
+			CLASS(bch_log_msg_ratelimited, msg)(c);
+			prt_printf(&msg.m, "dropping stale stripe pointer (idx %llu) while updating extent\n",
+				   (u64) p.ec.idx);
+			bch2_bkey_val_to_text(&msg.m, c, k);
+			prt_newline(&msg.m);
+
+			bch2_count_fsck_err(c, stripe_update_stale_stripe_ptr, &msg.m);
 		}
 	}
 
@@ -436,6 +442,56 @@ static int stripe_update_bucket(struct btree_trans *trans,
 			   stats.nr_done, stats.sectors_done);
 	}));
 
+	/*
+	 * count deltas are unreliable under concurrency, leading to phantom counts
+	 * that are never drained. No extent references (old_stripe, old_blocknr)
+	 * any more, so just zero the count.
+	 *
+	 * Safe because the scan covers the whole bucket, and an extent referencing
+	 * the old stripe block always has a backpointer in this bucket, and will
+	 * thus be removed.
+	 *
+	 * TODO: a cleaner / possibly more robust solution would be solving the
+	 *       concurrency unrealiability directly
+	 */
+	if (old_stripe != new_stripe) {
+		lockrestart_do(trans, ({
+			struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
+							BTREE_ID_stripes, POS(0, old_stripe->k.p.offset),
+							BTREE_ITER_cached, stripe);
+			int ret = PTR_ERR_OR_ZERO(s);
+
+			if (ret) {
+				if (bch2_err_matches(ret, ENOENT))
+					ret = 0;	/* stripe already deleted */
+			} else {
+				stripe_blockcount_set(&s->v, old_blocknr, 0);
+				ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+			}
+			ret;
+		}));
+
+		/*
+		 * The block count also has the same concurrency / key-cached RMW unreliability,
+		 * so set it manually here as well.
+		 */
+		lockrestart_do(trans, ({
+			struct bkey_i_stripe *s = bch2_bkey_get_mut_typed(trans,
+							BTREE_ID_stripes, POS(0, new_stripe->k.p.offset),
+							BTREE_ITER_cached, stripe);
+			int ret = PTR_ERR_OR_ZERO(s);
+
+			if (ret) {
+				if (bch2_err_matches(ret, ENOENT))
+					ret = 0;	/* stripe already deleted - nothing to fix */
+			} else {
+				stripe_blockcount_set(&s->v, new_blocknr, stats.sectors_done);
+				ret = bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+			}
+			ret;
+		}));
+	}
+
 	return 0;
 }
 
@@ -543,9 +599,22 @@ static void zero_out_rest_of_ec_bucket(struct bch_fs *c,
 
 void bch2_ec_stripe_new_free(struct bch_fs *c, struct ec_stripe_new *s)
 {
+	bool had_old_stripe = s->old_stripe_handle.idx != 0;
+
 	bch2_stripe_new_buckets_del(c, s);
 	bch2_stripe_handle_put(c, &s->new_stripe_handle);
 	bch2_stripe_handle_put(c, &s->old_stripe_handle);
+
+	/*
+	 * If this create had an old stripe, it may have become empty while we
+	 * held it open: the trigger defers the delete to the LRU work, which
+	 * skips open stripes, and nothing re-queues it once we release the
+	 * handle. Re-trigger it now that the stripe is closed so the deferred
+	 * delete actually runs.
+	 */
+	if (had_old_stripe)
+		bch2_do_stripe_deletes(c);
+
 	kfree(s);
 }
 
@@ -1453,13 +1522,17 @@ static bool may_reuse_stripe(struct bch_fs *c,
 	    old->nr_redundant		!= new->new_stripe.key.v.nr_redundant)
 		return false;
 
+	for (unsigned i = 0; i < old->nr_blocks; i++)
+		if (bch2_ptr_bad_or_evacuating(c, &old->ptrs[i]))
+			return false;
+
 	struct bch_devs_mask devs_may_alloc = new->devs;
 	unsigned nr_data = old->nr_blocks - old->nr_redundant;
 	unsigned live_data = 0;
 
 	for_each_data_block(i, nr_data)
 		if (stripe_blockcount_get(old, i)) {
-			if (!bch2_dev_bad_or_evacuating(c, old->ptrs[i].dev))
+			if (!bch2_ptr_bad_or_evacuating(c, &old->ptrs[i]))
 				__clear_bit(old->ptrs[i].dev, devs_may_alloc.d);
 			live_data++;
 		}
@@ -1563,13 +1636,21 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, 
 
 	for_each_data_block(i, old_nr_data) {
 		if (stripe_blockcount_get(old_v, i)) {
-			if (!bch2_dev_bad_or_evacuating(c, old_v->ptrs[i].dev))
+			if (!bch2_ptr_bad_or_evacuating(c, &old_v->ptrs[i]))
 				__set_bit(s->old_blocks_nr, s->blocks_gotten);
 			else
 				__set_bit(s->old_blocks_nr, s->blocks_moving);
 			__set_bit(s->old_blocks_nr, s->blocks_allocated);
 
 			new_v->ptrs[s->old_blocks_nr] = old_v->ptrs[i];
+
+			/*
+			 * Per-extent key-cache RMW deltas aren't reliable under
+			 * concurrency, so just set the new stripe's blockcount to
+			 * the old stripe's value directly.
+			 */
+			stripe_blockcount_set(new_v, s->old_blocks_nr,
+					      stripe_blockcount_get(old_v, i));
 
 			s->old_block_map[s->old_blocks_nr++] = i;
 			BUG_ON(s->old_blocks_nr + !repair > new_nr_data);
@@ -2044,7 +2125,7 @@ err:
 static bool stripe_degraded(struct bch_fs *c, const struct bch_stripe *s)
 {
 	for (unsigned i = 0; i < s->nr_blocks; i++)
-		if (bch2_dev_bad_or_evacuating(c, s->ptrs[i].dev))
+		if (bch2_ptr_bad_or_evacuating(c, &s->ptrs[i]))
 			return true;
 	return false;
 }
@@ -2076,8 +2157,21 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	for_each_data_block(i, nr_data)
 		nr_live_data_blocks += stripe_blockcount_get(old_s, i) != 0;
 
-	if (!nr_live_data_blocks)
+	if (!nr_live_data_blocks) {
+		/*
+		 * Nothing to repair - the stripe is empty, so it should just be
+		 * deleted. Clear needs_reconcile so reconcile stops re-queueing this work.
+ 		 */
+		if (old_s->needs_reconcile) {
+			struct bkey_i_stripe *n =
+				errptr_try(bch2_bkey_make_mut_typed(trans, iter, &s.s_c, 0, stripe));
+			n->v.needs_reconcile = 0;
+
+			try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
+		}
+
 		return 0;
+	}
 
 	struct bch_devs_mask devs;
 	bch2_disk_label_ec_devs(c, old_s->disk_label, &devs, le16_to_cpu(old_s->sectors));
