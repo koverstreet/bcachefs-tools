@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
 use anyhow::{bail, Result};
-use bcachefs_kernel::{btree_id, c};
+use bcachefs_kernel::{btree_id, c, pos};
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
@@ -20,23 +20,24 @@ use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
+    let (btree, start, end) = opt.list_range();
 
     let mut flags = BtreeIterFlags::PREFETCH;
 
-    if opt.start.snapshot == 0 {
+    if start.snapshot == 0 {
         flags |= BtreeIterFlags::ALL_SNAPSHOTS;
     }
 
     let mut iter = BtreeIter::new_level(
         &trans,
-        opt.btree,
-        opt.start,
+        btree,
+        start,
         opt.level,
         flags,
     );
 
     iter.for_each(&trans, |k| {
-        if k.k.p > opt.end {
+        if k.k.p > end {
             return ControlFlow::Break(());
         }
 
@@ -55,18 +56,20 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
+    let (btree, start, end) = opt.list_range();
+
     for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
         let mut iter = BtreeNodeIter::new(
             &trans,
-            opt.btree,
-            opt.start,
+            btree,
+            start,
             0,
             level,
             BtreeIterFlags::PREFETCH,
         );
 
         iter.for_each(&trans, |b| {
-            if b.key.k.p > opt.end {
+            if b.key.k.p > end {
                 return ControlFlow::Break(());
             }
 
@@ -80,18 +83,20 @@ fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
+    let (btree, start, end) = opt.list_range();
+
     for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
         let mut iter = BtreeNodeIter::new(
             &trans,
-            opt.btree,
-            opt.start,
+            btree,
+            start,
             0,
             level,
             BtreeIterFlags::PREFETCH,
         );
 
         iter.for_each(&trans, |b| {
-            if b.key.k.p > opt.end {
+            if b.key.k.p > end {
                 return ControlFlow::Break(());
             }
 
@@ -105,18 +110,20 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
+    let (btree, start, end) = opt.list_range();
+
     for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
         let mut iter = BtreeNodeIter::new(
             &trans,
-            opt.btree,
-            opt.start,
+            btree,
+            start,
             0,
             level,
             BtreeIterFlags::PREFETCH,
         );
 
         iter.for_each(&trans, |b| {
-            if b.key.k.p > opt.end {
+            if b.key.k.p > end {
                 return ControlFlow::Break(());
             }
 
@@ -135,16 +142,16 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 /// tables, member names, disk groups) comes from the superblock. Output
 /// is identical to the offline path by construction.
 fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
+    let (btree, start, end) = opt.list_range();
     let mut flags = OnlineIterFlags::default();
-    if opt.start.snapshot == 0 {
+    if start.snapshot == 0 {
         flags = flags | OnlineIterFlags::ALL_SNAPSHOTS;
     }
 
-    let mut iter = OnlineBtreeIter::new(handle, opt.btree, opt.level,
-					opt.start, opt.end, flags);
+    let mut iter = OnlineBtreeIter::new(handle, btree, opt.level, start, end, flags);
 
     while let Some(k) = iter.next().map_err(|e| anyhow::anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {}", e))? {
-        if k.k.p > opt.end {
+        if k.k.p > end {
             break;
         }
 
@@ -191,7 +198,10 @@ nodes-ondisk shows the raw on-disk representation.\n\n\
 Use -b to select a btree (default: extents), -s/-e for start/end \
 position, -l for btree depth, -k to filter by key type. With -c, \
 runs fsck before listing. Output is used for debugging filesystem \
-state, verifying btree contents, and inspecting on-disk layout.")]
+state, verifying btree contents, and inspecting on-disk layout.\n\n\
+Use --inode with the extents btree to inspect the extent keys for one \
+file inode, including the pointer/device text printed by the bcachefs \
+metadata formatter.")]
 pub struct Cli {
     #[arg(short, long, default_value = "keys")]
     mode: Mode,
@@ -216,6 +226,10 @@ pub struct Cli {
     #[arg(short, long, default_value = "SPOS_MAX")]
     end: c::bpos,
 
+    /// Limit extents listing to one inode number
+    #[arg(long)]
+    inode: Option<u64>,
+
     /// Check (fsck) the filesystem first
     #[arg(short, long)]
     fsck: bool,
@@ -231,6 +245,16 @@ pub struct Cli {
 
     #[arg(required(true))]
     devices: Vec<std::path::PathBuf>,
+}
+
+impl Cli {
+    fn list_range(&self) -> (c::btree_id, c::bpos, c::bpos) {
+        if let Some(inode) = self.inode {
+            (btree_id::extents, pos(inode, 0), pos(inode, u64::MAX))
+        } else {
+            (self.btree, self.start, self.end)
+        }
+    }
 }
 
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
@@ -291,7 +315,6 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
 }
 
 fn list(opt: Cli) -> Result<()> {
-
     // TODO: centralize this on the top level CLI
     logging::setup(opt.verbose, opt.colorize);
 
