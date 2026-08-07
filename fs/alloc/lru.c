@@ -134,9 +134,15 @@ static int bch2_dev_remove_lrus_scan(struct bch_fs *c, struct bch_dev *ca)
 
 static int bch2_dev_remove_lru_range(struct bch_fs *c, u16 lru_id)
 {
+	/*
+	 * lru_end(), not lru_start(lru_id + 1): bch2_btree_delete_range()'s
+	 * bound is inclusive - bch2_btree_iter_peek_max() returns keys <= end -
+	 * so the exclusive-bound spelling reaches one key into the next LRU.
+	 * (lru_id + 1, time 0, dev_bucket 0) is a real position.
+	 */
 	return bch2_btree_delete_range(c, BTREE_ID_lru,
 				       lru_start(lru_id),
-				       lru_start(lru_id + 1), 0);
+				       lru_end(lru_id), 0);
 }
 
 int bch2_dev_remove_lrus(struct bch_fs *c, struct bch_dev *ca)
