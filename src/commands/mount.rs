@@ -2,16 +2,16 @@ use std::{
     ffi::{CString, OsString},
     io::{stdout, IsTerminal},
     os::unix::ffi::OsStringExt,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     ptr, str,
 };
 
-use anyhow::{ensure, Result};
+use crate::device_scan;
+use anyhow::{bail, ensure, Context, Result};
 use bcachefs_kernel::c::bch_sb_handle;
 use bcachefs_kernel::path_to_cstr;
 use clap::Parser;
 use log::{debug, error, info};
-use crate::device_scan;
 
 use crate::{
     key::{KeyHandle, Keyring, Passphrase, UnlockPolicy},
@@ -21,7 +21,7 @@ use crate::{
 fn mount_inner(
     src: OsString,
     target: &std::path::Path,
-    fstype: &str,
+    fstype: Option<&str>,
     mut mountflags: libc::c_ulong,
     data: Option<String>,
 ) -> anyhow::Result<()> {
@@ -29,13 +29,17 @@ fn mount_inner(
     let c_src = CString::new(src.clone().into_vec())?;
     let c_target = path_to_cstr(target);
     let data = data.map(CString::new).transpose()?;
-    let fstype = CString::new(fstype)?;
+    let fstype = fstype.map(CString::new).transpose()?;
 
     // convert to pointers for ffi
     let c_src = c_src.as_ptr();
     let c_target = c_target.as_ptr();
-    let data_ptr = data.as_ref().map_or(ptr::null(), |data| data.as_ptr().cast());
-    let fstype = fstype.as_ptr();
+    let data_ptr = data
+        .as_ref()
+        .map_or(ptr::null(), |data| data.as_ptr().cast());
+    let fstype = fstype
+        .as_ref()
+        .map_or(ptr::null(), |fstype| fstype.as_ptr());
 
     let mut ret;
     loop {
@@ -65,7 +69,11 @@ fn mount_inner(
         let e = crate::ErrnoError(err);
 
         if err.0 == libc::EBUSY {
-            eprintln!("mount: {}: {:?} already mounted or mount point busy", target.to_string_lossy(), src);
+            eprintln!(
+                "mount: {}: {:?} already mounted or mount point busy",
+                target.to_string_lossy(),
+                src
+            );
         } else {
             eprintln!("mount: {:?}: {}", src, e);
         }
@@ -92,11 +100,14 @@ pub(crate) struct ParsedMountOptions {
     /// fuser equivalent are omitted here but still apply via `flags`.
     #[cfg(feature = "fuse")]
     pub fuse_options: Vec<fuser::MountOption>,
+    /// Optional subvolume or snapshot path to bind-mount as the mount root.
+    pub subvol:      Option<PathBuf>,
 }
 
 /// Parse a comma-separated mount option string, splitting kernel mount flags
-/// (and their fuser equivalents) from filesystem-specific options.
-pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOptions {
+/// (and their fuser equivalents) from filesystem-specific options, plus an
+/// optional helper-handled subvolume path selection.
+pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> Result<ParsedMountOptions> {
     debug!("parsing mount options: {}", options.as_ref());
 
     let mut parsed = ParsedMountOptions::default();
@@ -133,35 +144,123 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOp
             // Userspace-only fstab options - not passed to the kernel:
             "auto" | "noauto" | "nofail" | "_netdev"
             | "user" | "nouser" | "users" | "group" | "owner" => {}
-            o if o.starts_with("x-") || o.starts_with("comment=") => {}
+            o if o.starts_with("x-") || o.starts_with("X-") || o.starts_with("comment=") => {}
+            o if o.starts_with("subvol=") => {
+                ensure!(parsed.subvol.is_none(), "subvol= specified more than once");
+                parsed.subvol = parse_subvol_path(&o["subvol=".len()..])?;
+            }
             o => fs_opts.push(o),
         }
     }
 
     parsed.fs_opts = (!fs_opts.is_empty()).then(|| fs_opts.join(","));
-    parsed
+    Ok(parsed)
 }
 
-#[cfg(test)]
-mod tests {
-    use super::parse_mountflag_options;
+struct TempMount {
+    path: PathBuf,
+    mounted: bool,
+}
 
-    #[test]
-    fn parse_mountflag_options_splits_kernel_and_fs_options() {
-        let p = parse_mountflag_options("ro,noexec,metadata_replicas=2,norecovery");
+impl TempMount {
+    fn new() -> Result<Self> {
+        let base = Path::new("/run/mount");
+        let base = if base.is_dir() {
+            base
+        } else {
+            Path::new("/tmp")
+        };
+        let pid = std::process::id();
 
-        assert_eq!(p.fs_opts.as_deref(), Some("metadata_replicas=2,norecovery"));
-        assert_ne!(p.flags & libc::MS_RDONLY, 0);
-        assert_ne!(p.flags & libc::MS_NOEXEC, 0);
+        for i in 0..1000 {
+            let path = base.join(format!("bcachefs-subvol.{pid}.{i}"));
+            match std::fs::create_dir(&path) {
+                Ok(()) => {
+                    return Ok(Self {
+                        path,
+                        mounted: false,
+                    })
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
+            }
+        }
+
+        bail!(
+            "could not create temporary mountpoint under {}",
+            base.display()
+        )
     }
 
-    #[test]
-    fn parse_mountflag_options_drops_userspace_fstab_options() {
-        let p = parse_mountflag_options("nofail,_netdev,x-systemd.device-timeout=5");
+    fn umount(&mut self) -> Result<()> {
+        if self.mounted {
+            let c_path = path_to_cstr(&self.path);
+            let ret = unsafe { libc::umount2(c_path.as_ptr(), libc::MNT_DETACH) };
+            if ret != 0 {
+                return Err(crate::ErrnoError(errno::errno()).into());
+            }
+            self.mounted = false;
+        }
 
-        assert_eq!(p.fs_opts, None);
-        assert_eq!(p.flags, 0);
+        std::fs::remove_dir(&self.path)
+            .with_context(|| format!("removing {}", self.path.display()))?;
+        Ok(())
     }
+}
+
+impl Drop for TempMount {
+    fn drop(&mut self) {
+        let _ = self.umount();
+    }
+}
+
+fn parse_subvol_path(path: &str) -> Result<Option<PathBuf>> {
+    let path = path.trim_start_matches('/');
+    if path.is_empty() {
+        return Ok(None);
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => bail!("subvol= path must not contain '..'"),
+            Component::RootDir | Component::Prefix(_) => {
+                bail!("subvol= path must be relative to the filesystem root")
+            }
+        }
+    }
+
+    Ok((!normalized.as_os_str().is_empty()).then_some(normalized))
+}
+
+fn mount_subvolume(
+    src: OsString,
+    target: &Path,
+    mountflags: libc::c_ulong,
+    data: Option<String>,
+    subvol: &Path,
+) -> Result<()> {
+    let mut tmp = TempMount::new()?;
+
+    mount_inner(src, &tmp.path, Some("bcachefs"), mountflags, data)?;
+    tmp.mounted = true;
+
+    let subvol_path = tmp.path.join(subvol);
+    std::fs::metadata(&subvol_path)
+        .with_context(|| format!("opening subvolume path {}", subvol.display()))?;
+
+    mount_inner(
+        subvol_path.as_os_str().to_os_string(),
+        target,
+        None,
+        libc::MS_BIND,
+        None,
+    )?;
+
+    tmp.umount()?;
+    Ok(())
 }
 
 /// If a user explicitly specifies `unlock_policy` or `passphrase_file` then use
@@ -196,7 +295,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         debug!("ignoring -s/--sloppy; bcachefs already ignores unrecognized options");
     }
 
-    let parsed = parse_mountflag_options(&cli.options);
+    let parsed = parse_mountflag_options(&cli.options)?;
     let opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)
         .unwrap_or_default();
 
@@ -229,7 +328,17 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             &cli.options
         );
 
-        mount_inner(devices, mountpoint, "bcachefs", parsed.flags, parsed.fs_opts)
+        if let Some(subvol) = parsed.subvol.as_deref() {
+            mount_subvolume(
+                devices,
+                mountpoint,
+                parsed.flags,
+                parsed.fs_opts.clone(),
+                subvol,
+            )
+        } else {
+            mount_inner(devices, mountpoint, Some("bcachefs"), parsed.flags, parsed.fs_opts)
+        }
     } else {
         info!(
             "would mount with params: device: {:?}, options: {}",
@@ -237,6 +346,50 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         );
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_mountflag_options_splits_kernel_and_fs_options() {
+        let p = parse_mountflag_options("ro,noexec,metadata_replicas=2,norecovery").unwrap();
+
+        assert_eq!(p.fs_opts.as_deref(), Some("metadata_replicas=2,norecovery"));
+        assert_ne!(p.flags & libc::MS_RDONLY, 0);
+        assert_ne!(p.flags & libc::MS_NOEXEC, 0);
+    }
+
+    #[test]
+    fn parse_mountflag_options_drops_userspace_fstab_options() {
+        let p = parse_mountflag_options("nofail,_netdev,x-systemd.device-timeout=5").unwrap();
+
+        assert_eq!(p.fs_opts, None);
+        assert_eq!(p.flags, 0);
+    }
+
+    #[test]
+    fn parse_subvol_mount_option() {
+        let p = parse_mountflag_options("rw,noatime,subvol=/@root,X-mount.mkdir").unwrap();
+
+        assert_eq!(p.fs_opts, None);
+        assert_eq!(p.flags & libc::MS_NOATIME, libc::MS_NOATIME);
+        assert_eq!(p.subvol, Some(PathBuf::from("@root")));
+    }
+
+    #[test]
+    fn rejects_escaping_subvol_path() {
+        assert!(parse_mountflag_options("subvol=../root").is_err());
+    }
+
+    #[test]
+    fn keeps_filesystem_options() {
+        let p = parse_mountflag_options("compression=lz4,subvol=home").unwrap();
+
+        assert_eq!(p.fs_opts.as_deref(), Some("compression=lz4"));
+        assert_eq!(p.subvol, Some(PathBuf::from("home")));
     }
 }
 
@@ -252,8 +405,9 @@ Use OLD_BLKID_UUID=<uuid> in fstab entries when systemd consumes \
 UUID=<uuid> before the bcachefs mount helper can scan all members.\n\n\
 If the filesystem is encrypted, the passphrase will be looked up in \
 the kernel keyring first; if not found, the user is prompted \
-interactively (or reads from stdin if not a terminal). Use -k or --passphrase-file \
-to specify alternative unlock methods.")]
+interactively (or reads from stdin if not a terminal). Use -k or \
+--passphrase-file to specify alternative unlock methods.\n\n\
+Use -o subvol=PATH to mount a subvolume or snapshot path as the mount root.")]
 pub struct Cli {
     /// Path to passphrase file
     ///
@@ -365,8 +519,8 @@ fn mount(cli: Cli) -> std::process::ExitCode {
     logging::setup(cli.verbose, cli.colorize);
 
     match cmd_mount_inner(&cli) {
-        Ok(_)   => std::process::ExitCode::SUCCESS,
-        Err(e)   => {
+        Ok(_) => std::process::ExitCode::SUCCESS,
+        Err(e) => {
             error!("Mount failed for {}: {e}", cli.dev);
             if !module.loaded {
                 error!("bcachefs module not loaded?");
@@ -380,12 +534,19 @@ fn mount(cli: Cli) -> std::process::ExitCode {
 }
 
 pub static CMD: super::CmdDef = {
-    fn __cmd() -> clap::Command { <Cli as clap::CommandFactory>::command() }
+    fn __cmd() -> clap::Command {
+        <Cli as clap::CommandFactory>::command()
+    }
     fn __run(argv: Vec<String>) -> std::process::ExitCode {
         mount(Cli::parse_from(argv))
     }
     super::CmdDef {
-        name: "mount", about: "Mount a filesystem", aliases: &[],
-        kind: super::CmdKind::Typed { cmd: __cmd, run: __run },
+        name: "mount",
+        about: "Mount a filesystem",
+        aliases: &[],
+        kind: super::CmdKind::Typed {
+            cmd: __cmd,
+            run: __run,
+        },
     }
 };
