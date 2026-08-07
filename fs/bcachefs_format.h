@@ -1314,6 +1314,8 @@ LE64_BITMASK(BCH_SB_MOVE_WRITES_FUA,	struct bch_sb, flags[6], 58, 59);
  * the dirent hash-consistency check rather than "repair" the artifacts.
  */
 LE64_BITMASK(BCH_SB_DIRENTS_SANITIZED,	struct bch_sb, flags[6], 59, 60);
+LE64_BITMASK(BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT,
+				struct bch_sb, flags[6], 60, 61);
 
 #define BCH_SB_EXTENT_BP_SHIFT_DEFAULT	10
 
