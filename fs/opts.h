@@ -81,6 +81,8 @@ enum opt_type {
 	BCH_OPT_STR,
 	BCH_OPT_BITFIELD,
 	BCH_OPT_FN,
+	/* A free-form string stored directly in a bch_member char[] field: */
+	BCH_OPT_STR_MEMBER,
 };
 
 struct bch_opt_fn {
@@ -384,7 +386,7 @@ enum fsck_err_opts {
 	  BCH2_NO_SB_OPT,		FSCK_FIX_exit,			\
 	  NULL,		"Fix errors during fsck without asking")	\
 	x(ratelimit_errors,		u8,				\
-	  OPT_FS|OPT_MOUNT,						\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		RATELIMIT_ERRORS_DEFAULT,	\
 	  NULL,		"Ratelimit error messages during fsck")		\
@@ -442,6 +444,13 @@ enum fsck_err_opts {
 	  OPT_STR_NOLIMIT(bch2_recovery_passes),			\
 	  BCH2_NO_SB_OPT,		0,				\
 	  NULL,		"Exit recovery after specified pass")		\
+	x(recovery_passes_skip_scheduled, u8,				\
+	  OPT_FS|OPT_MOUNT,						\
+	  OPT_BOOL(),							\
+	  BCH2_NO_SB_OPT,		false,				\
+	  NULL,		"Don't run repair passes, whether the superblock had "\
+			"them scheduled or something schedules them mid-mount; "\
+			"they stay scheduled for the next mount")	\
 	x(retain_recovery_info,		u8,				\
 	  0,								\
 	  OPT_BOOL(),							\
@@ -565,6 +574,14 @@ enum fsck_err_opts {
 	  OPT_FN(bch2_opt_disk_label),					\
 	  BCH_MEMBER_GROUP,		0,				\
 	  "(label)",	"Device label: position in the label tree")	\
+	x(failure_domain,		u8,				\
+	  OPT_DEVICE|OPT_FORMAT|OPT_RUNTIME,				\
+	  OPT_STR_MEMBER(failure_domain),				\
+	  BCH2_NO_SB_OPT,		0,				\
+	  "(domain)",	"Failure domain: devices sharing a name are in the\n"\
+			"same failure domain; allocation spreads replicas\n"\
+			"across domains (a hard requirement for erasure\n"\
+			"coded stripe blocks)")				\
 	x(bucket_size,			u32,				\
 	  OPT_DEVICE|OPT_HUMAN_READABLE|OPT_SB_FIELD_SECTORS,		\
 	  OPT_UINT(0, S64_MAX),						\
@@ -694,6 +711,9 @@ struct bch_option {
 	u64			(*get_ext)(const struct bch_sb_field_ext *);
 	void			(*set_ext)(struct bch_sb_field_ext *, u64);
 
+	/* BCH_OPT_STR_MEMBER: the bch_member char[] field the string lives in */
+	unsigned		member_offset;
+	unsigned		member_size;
 };
 
 extern const struct bch_option bch2_opt_table[];
@@ -704,10 +724,10 @@ void bch2_opt_set_by_id(struct bch_opts *, enum bch_opt_id, u64);
 
 u64 bch2_opt_from_sb(struct bch_sb *, enum bch_opt_id, int);
 int bch2_opts_from_sb(struct bch_opts *, struct bch_sb *);
-bool __bch2_opt_set_sb(struct bch_sb *, int, const struct bch_option *, u64);
+bool __bch2_opt_set_sb(struct bch_sb *, int, const struct bch_option *, u64, const char *);
 
 struct bch_dev;
-bool bch2_opt_set_sb(struct bch_fs *, struct bch_dev *, const struct bch_option *, u64);
+bool bch2_opt_set_sb(struct bch_fs *, struct bch_dev *, const struct bch_option *, u64, const char *);
 
 int bch2_opt_lookup(const char *);
 int bch2_opt_validate(const struct bch_option *, u64, struct printbuf *);

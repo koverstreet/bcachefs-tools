@@ -145,6 +145,11 @@ Requires:       gcc
 Requires:       make
 Requires:       perl
 Requires:       python3
+# fetch-module.sh: openssl verifies the module signature, xz decompresses the
+# published module. Without either it silently gives up on the prebuilt and
+# does a full local build.
+Requires:       openssl
+Requires:       xz
 
 Obsoletes:      fuse-bcachefs < %{version}-%{release}
 

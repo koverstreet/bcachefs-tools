@@ -877,6 +877,19 @@ static inline struct bkey_s_c __bch2_bkey_get_typed(struct btree_iter *iter,
 #define bch2_bkey_get_typed(_iter, _type)						\
 	bkey_s_c_to_##_type(__bch2_bkey_get_typed(_iter, KEY_TYPE_##_type))
 
+/*
+ * Copy a value out of a key, zeroing whatever the key is too short to hold.
+ *
+ * Values grow: a key written by an older version stops short of the fields
+ * added since, and we have no defaults, so a field the key predates reads as
+ * 0. To ask whether the key was written with a field at all, test
+ * bkey_val_bytes() against offsetof() - that's the only thing that answers it,
+ * and it's what to_text() and validate() use.
+ *
+ * The typed mut helpers pass min_bytes = sizeof(struct bkey_i_<type>) and
+ * widen u64s to match, so a caller may assign a field the on-disk key was too
+ * short for and have it committed - see __bch2_bkey_make_mut_noupdate().
+ */
 static inline void __bkey_val_copy_pad(void *dst_v, unsigned dst_size, struct bkey_s_c src_k)
 {
 	unsigned b = min_t(unsigned, dst_size, bkey_val_bytes(src_k.k));
@@ -908,6 +921,38 @@ static inline int __bch2_bkey_get_val_typed(struct btree_trans *trans,
 #define bch2_bkey_get_val_typed(_trans, _btree_id, _pos, _flags, _type, _val)\
 	__bch2_bkey_get_val_typed(_trans, _btree_id, _pos, _flags,	\
 				  KEY_TYPE_##_type, sizeof(*_val), _val)
+
+/*
+ * As bch2_bkey_get_val_typed(), but fetches the whole key into a caller-stack
+ * bkey_i_<type>, so an error message can print the key instead of the fields
+ * whoever wrote the message happened to name.
+ *
+ * u64s keeps the on-disk length: the key is never written back, and
+ * to_text() reports u64s and gates fields on it, so widening would print
+ * fields the key doesn't have. Clamping to val_size is required in the other
+ * direction - an on-disk val longer than the caller's struct would leave u64s
+ * claiming val we didn't copy, and to_text() would read past the stack.
+ */
+static inline int __bch2_bkey_get_i_typed(struct btree_trans *trans,
+				enum btree_id btree, struct bpos pos,
+				enum btree_iter_update_trigger_flags flags,
+				enum bch_bkey_type type,
+				unsigned val_size, struct bkey_i *dst)
+{
+	CLASS(btree_iter, iter)(trans, btree, pos, flags);
+	struct bkey_s_c k = __bch2_bkey_get_typed(&iter, type);
+	int ret = bkey_err(k);
+	if (!ret) {
+		dst->k = *k.k;
+		set_bkey_val_bytes(&dst->k, min_t(unsigned, val_size, bkey_val_bytes(k.k)));
+		__bkey_val_copy_pad(&dst->v, val_size, k);
+	}
+	return ret;
+}
+
+#define bch2_bkey_get_i_typed(_trans, _btree_id, _pos, _flags, _type, _k)\
+	__bch2_bkey_get_i_typed(_trans, _btree_id, _pos, _flags,		\
+				KEY_TYPE_##_type, sizeof((_k)->v), &(_k)->k_i)
 
 u32 bch2_trans_begin(struct btree_trans *);
 
@@ -1043,6 +1088,7 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 	int _ret2;							\
 									\
 	_restart_count = _orig_restart_count = (_trans)->restart_count;	\
+	(_trans)->begin_may_drop_updates = true;			\
 									\
 	while (bch2_err_matches(_ret2 = (_do), BCH_ERR_transaction_restart))\
 		_restart_count = bch2_trans_begin(_trans);		\

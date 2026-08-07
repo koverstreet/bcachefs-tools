@@ -73,6 +73,7 @@ fall_back()
 [ -n "$dest" ]      || fall_back "no destination path"
 command -v modinfo >/dev/null 2>&1 || fall_back "no modinfo to verify the module"
 command -v openssl >/dev/null 2>&1 || fall_back "no openssl to verify the module signature"
+command -v xz >/dev/null 2>&1 || fall_back "no xz to decompress the module"
 
 # The signing CA (public root) is bundled next to this script; an env override
 # helps testing. Resolve it up front so we fail fast before downloading.
@@ -208,9 +209,19 @@ work=$(mktemp -d) || fall_back "could not create a working directory"
 trap 'rm -rf "$work"' EXIT
 ko=$work/bcachefs.ko
 
-echo "bcachefs: trying prebuilt module $url" >&2
-download "$url" "$ko" ||
+# The farm publishes xz-compressed (~6x: 6.6M of module is 1.1M on the wire),
+# and only that - no uncompressed fallback. Nothing published before this is
+# reachable anyway: the abbrev fix renames every snapshot, so the store gets
+# republished wholesale.
+#
+# Compression is applied after signing, so it must be undone before anything
+# reads the trailer - both verify_signature and the vermagic check below parse
+# it. Decompress here and everything downstream sees a plain signed .ko.
+echo "bcachefs: trying prebuilt module $url.xz" >&2
+download "$url.xz" "$ko.xz" ||
 	fall_back "not available for $distro/$arch/$pkgver bcachefs $ref"
+xz -d -c -- "$ko.xz" >"$ko" ||
+	fall_back "could not decompress $url.xz"
 
 # Authenticity gate: refuse anything not signed by the bcachefs key, so a bad
 # mirror or MITM can't get a module installed. (ABI gate — vermagic — follows.)

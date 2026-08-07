@@ -74,6 +74,7 @@
 #define BCH_IOCTL_SUBVOLUME_TO_PATH	_IOWR(0xbc,	32, struct bch_ioctl_subvol_to_path)
 #define BCH_IOCTL_SNAPSHOT_TREE		_IOWR(0xbc,	33, struct bch_ioctl_snapshot_tree_query)
 #define BCH_IOCTL_QUERY_BTREE_KEYS	_IOWR(0xbc,	34, struct bch_ioctl_query_btree_keys)
+#define BCH_IOCTL_SNAPSHOT_TREE_v2	_IOWR(0xbc,	35, struct bch_ioctl_snapshot_tree_query_v2)
 
 /* ioctl below act on a particular file, not the filesystem as a whole: */
 
@@ -82,6 +83,88 @@
 #define BCHFS_IOC_PROPAGATE_REFLINK_P_OPTS	_IO(0xbc, 66)
 #define BCHFS_IOC_PREAD_RAW		_IOWR(0xbc, 67, struct bch_ioctl_pread_raw)
 #define BCHFS_IOC_UNPOISON		_IOW(0xbc, 68, struct bch_ioctl_unpoison)
+#define BCHFS_IOC_GET_DAMAGE		_IOWR(0xbc, 70, struct bch_ioctl_get_damage)
+#define BCHFS_IOC_READDIR_FLAGS		_IOWR(0xbc, 69, struct bch_ioctl_readdir_flags)
+
+/*
+ * BCHFS_IOC_CLEAR_DAMAGE: clear the file's damage record, in the calling
+ * subvolume's view - snapshots keep theirs (on disk the clear is a
+ * whiteout when an older version still needs the record). Requires
+ * ownership or CAP_FOWNER, like chattr.
+ */
+#define BCHFS_IOC_CLEAR_DAMAGE		_IO(0xbc, 71)
+
+/*
+ * BCHFS_IOC_GET_DAMAGE: the accumulated damage record for this file - the
+ * union of damage recorded against its inode in the file's snapshot and
+ * all ancestor snapshot versions, since damage done to an ancestor version
+ * is damage to the file seen here.
+ *
+ * @nr_entries	- in: capacity of @entries; out: number present. A result
+ *		  exceeding the capacity reports the true count - retry
+ *		  with more room.
+ * @entries	- sorted by error id; the same records the errors
+ *		  superblock section keeps (bch_sb_field_error_entry_v2):
+ *		  the id, a saturating occurrence count and the times of
+ *		  first and last occurrence, unpacked with
+ *		  BCH_SB_ERROR_ENTRY_V2_ID/NR/FIRST/LAST
+ */
+struct bch_ioctl_get_damage {
+	__u32			nr_entries;
+	__u32			pad;
+	bch_sb_field_error_entry_v2 entries[];
+};
+
+/*
+ * BCHFS_IOC_READDIR_FLAGS: readdir with filters, on the directory the
+ * ioctl is called on.
+ *
+ * recursive: entries from the whole subtree, names become paths relative
+ * to the fd's directory. The filters pick the iteration: damaged
+ * walks the damage btree (cost proportional to recorded damage, not tree
+ * size), subvolumes_only walks the subvolume tree, an unfiltered
+ * recursive listing is an honest tree walk.
+ *
+ * damaged: only entries whose inode has recorded damage, in its
+ * snapshot version or an ancestor.
+ *
+ * Permissions are those of readdir: the caller learns nothing beyond the
+ * directory they opened.
+ *
+ * @flags	- BCH_READDIR_*
+ * @pos		- opaque resume cursor: zero to start; copied back out
+ *		  past the last entry returned. Iterate until @used == 0.
+ * @buf_size,
+ * @buf		- userspace buffer, filled with struct
+ *		  bch_ioctl_readdir_entry records
+ * @used	- out: bytes of @buf filled
+ */
+#define BCH_READDIR_recursive		(1U << 0)
+#define BCH_READDIR_damaged	(1U << 2)
+#define BCH_READDIR_subvolumes_only	(1U << 1)
+
+struct bch_ioctl_readdir_flags {
+	__u64			pos[2];
+	__u64			buf;
+	__u32			buf_size;
+	__u32			flags;
+	__u32			used;
+	__u32			pad;
+};
+
+/*
+ * One entry: the NUL-terminated name - a relative path, under recursive -
+ * follows the fixed header; entries are padded to 8-byte alignment.
+ * Deliberately knows nothing about the filters that selected it: damage
+ * details come from BCHFS_IOC_GET_DAMAGE on the file itself.
+ */
+struct bch_ioctl_readdir_entry {
+	__u64			inum;
+	__u8			d_type;
+	__u8			pad;
+	__u16			name_len;	/* including the NUL */
+	__u8			name[];
+};
 
 struct bch_ioctl_err_msg {
 	__u64			msg_ptr;
@@ -580,7 +663,43 @@ struct bch_ioctl_subvol_to_path {
  *
  * Returns -ERANGE if nr < total (nr and total are still written back)
  */
+/*
+ * FROZEN. The ioctl number encodes sizeof(the header), not of the array
+ * element, so growing this struct is invisible to the ioctl machinery and
+ * silently overruns the buffer of any userspace built against the older
+ * layout. It happened once (nr_keys/key_bytes, reverted); don't do it again -
+ * add fields to bch_ioctl_snapshot_node_v2, which is size-negotiated.
+ */
 struct bch_ioctl_snapshot_node {
+	__u32			id;		/* snapshot ID */
+	__u32			parent;		/* parent snapshot ID, 0 for root */
+	__u32			children[2];
+	__u32			subvol;		/* subvolume ID, 0 for interior */
+	__u32			flags;
+	__u32			pad[2];
+	/* BCH_DISK_ACCOUNTING_snapshot, summed over the snapshot btrees: */
+	__u64			sectors;	/* external (on-disk data) sectors */
+};
+
+struct bch_ioctl_snapshot_tree_query {
+	__u32			tree_id;	/* in: 0 = infer from fd's subvol */
+	__u32			master_subvol;	/* out */
+	__u32			root_snapshot;	/* out */
+	__u32			nr;		/* in: capacity; out: returned */
+	__u32			total;		/* out: total nodes */
+	__u32			pad;
+	struct bch_ioctl_snapshot_node nodes[];
+};
+
+/*
+ * v2: same query, but the header states the array element size, so either
+ * side can grow bch_ioctl_snapshot_node_v2 without breaking the other.
+ * The kernel writes min(node_size, its own sizeof) bytes per entry and
+ * strides by node_size, so a shorter node from either direction truncates
+ * instead of overrunning. New fields go on the end, and both sides read
+ * node_size to know what's present.
+ */
+struct bch_ioctl_snapshot_node_v2 {
 	__u32			id;		/* snapshot ID */
 	__u32			parent;		/* parent snapshot ID, 0 for root */
 	__u32			children[2];
@@ -593,14 +712,14 @@ struct bch_ioctl_snapshot_node {
 	__u64			key_bytes;
 };
 
-struct bch_ioctl_snapshot_tree_query {
+struct bch_ioctl_snapshot_tree_query_v2 {
 	__u32			tree_id;	/* in: 0 = infer from fd's subvol */
 	__u32			master_subvol;	/* out */
 	__u32			root_snapshot;	/* out */
 	__u32			nr;		/* in: capacity; out: returned */
 	__u32			total;		/* out: total nodes */
-	__u32			pad;
-	struct bch_ioctl_snapshot_node nodes[];
+	__u32			node_size;	/* in: caller's sizeof; out: ours */
+	struct bch_ioctl_snapshot_node_v2 nodes[];
 };
 
 /*
@@ -691,6 +810,7 @@ struct bch_ioctl_unpoison {
 #define BCH_IOCTL_QUERY_BTREE_KEYS_slots		(1U << 0)
 #define BCH_IOCTL_QUERY_BTREE_KEYS_prev			(1U << 1)
 #define BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots	(1U << 2)
+#define BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts	(1U << 3)
 
 struct bch_ioctl_query_btree_keys {
 	__u32			btree;

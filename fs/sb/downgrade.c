@@ -126,6 +126,7 @@
 	  BCH_FSCK_ERR_need_discard_key_wrong,			\
 	  BCH_FSCK_ERR_need_discard_freespace_key_to_invalid_dev_bucket)\
 	x(per_dev_fragmentation_lru,				\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_allocations)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_lrus)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_alloc_to_lru_refs)|	\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|		\
@@ -133,6 +134,7 @@
 	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_subvols)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),	\
+	  BCH_FSCK_ERR_accounting_mismatch,			\
 	  BCH_FSCK_ERR_lru_entry_bad,				\
 	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry,		\
 	  BCH_FSCK_ERR_inode_has_inode_opts_flag_wrong,		\
@@ -206,10 +208,12 @@
 	  BCH_FSCK_ERR_need_discard_key_wrong,			\
 	  BCH_FSCK_ERR_need_discard_freespace_key_to_invalid_dev_bucket)\
 	x(per_dev_fragmentation_lru,				\
+	  BIT_ULL(BCH_RECOVERY_PASS_check_allocations)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_lrus)|		\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_alloc_to_lru_refs),	\
 	  BCH_FSCK_ERR_lru_entry_bad,				\
-	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry)		\
+	  BCH_FSCK_ERR_alloc_key_to_missing_lru_entry,		\
+	  BCH_FSCK_ERR_accounting_mismatch)			\
 	x(snapshot_nr_keys,					\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_allocations),		\
 	  BCH_FSCK_ERR_accounting_mismatch)
@@ -266,8 +270,7 @@ int bch2_sb_set_upgrade_extra(struct bch_fs *c)
 	bool write_sb = false;
 	int ret = 0;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 
 	if (old_version <  bcachefs_metadata_version_bucket_stripe_sectors &&
@@ -291,7 +294,7 @@ static void __bch2_sb_set_upgrade(struct bch_fs *c,
 				  const struct upgrade_downgrade_entry *table,
 				  size_t nr_entries)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 

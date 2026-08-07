@@ -263,8 +263,8 @@ retry:
 			break;
 
 		if (k.k->p.snapshot != snapshot ||
-		    nr_replicas > bch2_bkey_replicas(c, k) ||
-		    (!compressed && bch2_bkey_sectors_compressed(c, k)))
+		    nr_replicas > bch2_bkey_durability_safe(c, k).total ||
+		    (!compressed && bch2_bkey_durability_safe(c, k).sectors_compressed))
 			return false;
 	}
 err:
@@ -456,8 +456,8 @@ static __always_inline long bch2_dio_write_loop(struct dio_write *dio)
 		dio->op.target		= dio->op.opts.foreground_target;
 		dio->op.write_point	= writepoint_hashed((unsigned long) current);
 		dio->op.nr_replicas	= dio->op.opts.data_replicas;
-		dio->op.subvol		= inode->ei_inum.subvol;
-		dio->op.pos		= POS(inode->v.i_ino, (u64) req->ki_pos >> 9);
+		dio->op.subvol		= inode_inum(inode).subvol;
+		dio->op.pos		= POS(inode_inum(inode).inum, (u64) req->ki_pos >> 9);
 		dio->op.devs_need_flush	= &inode->ei_devs_need_flush;
 
 		if (sync)

@@ -42,6 +42,7 @@
 
 #include "debug/async_objs.h"
 
+#include "init/damage.h"
 #include "init/error.h"
 
 #include "sb/counters.h"
@@ -687,13 +688,19 @@ static int rbio_mark_io_failure(struct bch_read_bio *rbio,
 
 	}
 
-	if (ret == BCH_ERR_BLK_STS_INVAL) {
+	if (ret == -BCH_ERR_BLK_STS_INVAL) {
 		prt_printf(&failed->ec_msg, "Failing bio, after block layer completion:\n");
 		guard(printbuf_indent)(&failed->ec_msg);
 		bch2_bio_to_text(&failed->ec_msg, &rbio->bio);
 	}
 
 	return ret;
+}
+
+static bool data_read_err_is_csum(int ret)
+{
+	return bch2_err_matches(ret, BCH_ERR_data_read_retry_csum_err) ||
+	       bch2_err_matches(ret, BCH_ERR_data_read_retry_csum_err_maybe_userspace);
 }
 
 static void bch2_rbio_retry(struct work_struct *work)
@@ -708,6 +715,7 @@ static void bch2_rbio_retry(struct work_struct *work)
 		.inum	= rbio->read_pos.inode,
 	};
 	struct bpos read_pos = rbio->read_pos;
+	int orig_ret = rbio->ret;
 	CLASS(bch_io_failures, failed)();
 
 	flags &= ~BCH_READ_hard_require_read_device;
@@ -783,6 +791,60 @@ static void bch2_rbio_retry(struct work_struct *work)
 
 			if (rbio->err_report)
 				mutex_unlock(&rbio->err_report->lock);
+		}
+
+		/*
+		 * The persistent record: count what happened - recovered via
+		 * retry vs. hard failure, io error vs. checksum error - and
+		 * record damage against the file. Best effort: a bookkeeping
+		 * failure doesn't fail the read. Only user reads name an inum
+		 * (a data update read may be an indirect extent):
+		 */
+		if (failed.nr || ret) {
+			enum bch_sb_error_id e = !ret
+				? (data_read_err_is_csum(orig_ret)
+				   ? BCH_FSCK_ERR_data_read_csum_err_recovered
+				   : BCH_FSCK_ERR_data_read_io_err_recovered)
+				: (data_read_err_is_csum(ret)
+				   ? BCH_FSCK_ERR_data_read_csum_err
+				   : BCH_FSCK_ERR_data_read_io_err);
+
+			bch2_sb_error_count(c, e);
+
+			/*
+			 * Also count what the device said, per failure: the
+			 * outcome counters above say a read failed, these say
+			 * why - media errors, timeouts and rejected requests
+			 * are entirely different problems.
+			 *
+			 * Only for failures that came back from the block
+			 * layer: errcode also holds our own verdicts (device
+			 * offline, stale pointer, decompress error), and those
+			 * aren't block statuses to be counted as unknown ones.
+			 * Decompression failures are counted where they happen,
+			 * in bch2_bio_uncompress().
+			 */
+			darray_for_each(failed, f) {
+				if (bch2_err_matches(f->errcode, BCH_ERR_blockdev_io_error))
+					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->errcode));
+				if (bch2_err_matches(f->ec_errcode, BCH_ERR_blockdev_io_error))
+					bch2_sb_error_count(c, bch2_blk_sts_sb_err(f->ec_errcode));
+			}
+
+			/*
+			 * Damage names the reason where we have one: a file
+			 * whose extents won't decompress is a different repair
+			 * problem from one with bad checksums, and which
+			 * compression type failed is the first thing we'd ask.
+			 */
+			enum bch_sb_error_id damage =
+				bch2_err_matches(ret, BCH_ERR_decompress)
+				? bch2_decompress_sb_err(ret)
+				: e;
+
+			if (!rbio->data_update && inum.subvol && !bkey_deleted(&sk.k->k))
+				commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+					  bch2_damage_record(trans, read_pos, damage));
 		}
 
 		/* drop trans before calling rbio_done() */
@@ -903,7 +965,7 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 	struct bch_csum csum;
 	int ret;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	if (bch2_read_corrupt_device == rbio->pick.ptr.dev ||
 	    bch2_read_corrupt_device < 0)
@@ -1243,11 +1305,11 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 		rbio = rbio_init_fragment(bio_alloc_bioset(NULL,
 						  DIV_ROUND_UP(sectors, PAGE_SECTORS),
 						  0,
-						  GFP_NOFS,
+						  GFP_NOIO,
 						  &c->bio_read_split),
 				 orig, failed);
 
-		gfp_t gfp = GFP_NOFS;
+		gfp_t gfp = GFP_NOIO;
 
 		/*
 		 * Only skip zeroing if we can detect if the device lied and
@@ -1272,7 +1334,7 @@ static inline struct bch_read_bio *read_extent_rbio_alloc(struct btree_trans *tr
 		 * from the whole bio, in which case we don't want to retry and
 		 * lose the error)
 		 */
-		rbio = rbio_init_fragment(bio_alloc_clone(NULL, &orig->bio, GFP_NOFS,
+		rbio = rbio_init_fragment(bio_alloc_clone(NULL, &orig->bio, GFP_NOIO,
 						 &c->bio_read_split),
 				 orig, failed);
 		rbio->bio.bi_iter = iter;
@@ -1724,6 +1786,17 @@ err:
 
 		if (ret && !data_read_err_should_retry(ret))
 			break;
+
+		/*
+		 * A stale BCH_READ_last_fragment on the retry would falsely
+		 * terminate the read: bvec_iter is stable across attempts but
+		 * the extent isn't - if it shrank (a concurrent write
+		 * splitting it), the retried fragment is no longer the last
+		 * and the rest of the buffer would never be read. must_clone
+		 * stays: splits demand cloning for error attribution.
+		 */
+		if (ret)
+			flags &= ~BCH_READ_last_fragment;
 	}
 
 	if (unlikely(ret)) {

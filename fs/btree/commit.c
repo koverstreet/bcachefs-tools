@@ -260,11 +260,24 @@ static int __btree_node_flush(struct journal *j, struct journal_entry_pin *pin,
 	unsigned long old, new;
 	unsigned idx = w - b->writes;
 
+	/*
+	 * The journal pin doesn't pin the node: another thread can write the
+	 * node and drop the pin while we run, and reclaim can then reuse the
+	 * node's memory. Snapshot the identity to arm the reuse check: gone
+	 * already (unhashed nodes can't be dirty), or going while we'd sleep
+	 * on the lock (aborting the attempt), means the pinned write is done
+	 * and there's nothing to flush.
+	 */
+	u64 hash_val = READ_ONCE(b->hash_val);
+	if (!hash_val)
+		return 0;
+
 	CLASS(btree_trans, trans)(c);
-	return lockrestart_do(trans, ({
+	int ret = lockrestart_do(trans, ({
 		btree_path_idx_t path_idx;
-		int ret = bch2_btree_node_lock_with_path(trans, &b->c, SIX_LOCK_read, &path_idx);
-		if (!ret) {
+		int _ret = bch2_btree_node_lock_with_path(trans, &b->c, SIX_LOCK_read,
+							  hash_val, &path_idx);
+		if (!_ret) {
 			old = READ_ONCE(b->flags);
 			do {
 				new = old;
@@ -282,8 +295,10 @@ static int __btree_node_flush(struct journal *j, struct journal_entry_pin *pin,
 			__bch2_btree_node_write(trans, b, BTREE_WRITE_only_if_need);
 			bch2_btree_node_unlock_with_path(trans, path_idx, b->c.level);
 		}
-		ret;
+		_ret;
 	}));
+
+	return bch2_err_matches(ret, BCH_ERR_no_btree_node_reused) ? 0 : ret;
 }
 
 int bch2_btree_node_flush0(struct journal *j, struct journal_entry_pin *pin, u64 seq)
@@ -909,13 +924,19 @@ do_bch2_trans_commit_to_journal_replay(struct btree_trans *trans,
 	int ret = 0;
 retry:
 	memset(&trans->fs_usage_delta, 0, sizeof(trans->fs_usage_delta));
-	percpu_down_read(&c->capacity.mark_lock);
+	/*
+	 * Raw lock of the inner rwsem, not the percpu_read_noio guard:
+	 * transaction commit runs with the trans locked, so PF_MEMALLOC_NOIO is
+	 * already held, and this read section is released mid-function on the
+	 * revert paths below, which a guard's scope can't express.
+	 */
+	percpu_down_read(&c->capacity.mark_lock.lock);
 	for (accounting = btree_trans_subbuf_base(trans, &trans->accounting);
 	     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
 	     accounting = bkey_next(accounting)) {
 		ret = likely(!(flags & BCH_TRANS_COMMIT_skip_accounting_apply))
-			? bch2_accounting_mem_mod_locked(trans, bkey_i_to_s_c_accounting(accounting),
-							 BCH_ACCOUNTING_normal, false)
+			? bch2_accounting_mem_add(trans, bkey_i_to_s_c_accounting(accounting),
+						  BCH_ACCOUNTING_normal, false)
 			: 0;
 		if (ret)
 			goto revert_fs_usage;
@@ -923,7 +944,7 @@ retry:
 
 	/* Only fatal errors are possible later, so no need to revert this */
 	bch2_trans_account_disk_usage_change(trans);
-	percpu_up_read(&c->capacity.mark_lock);
+	percpu_up_read(&c->capacity.mark_lock.lock);
 
 	trans_for_each_update(trans, i) {
 		ret = bch2_journal_key_insert(c, i->btree_id, i->level, i->k);
@@ -962,18 +983,22 @@ retry:
 			goto fatal_err;
 	}
 
-	event_inc_trace(c, transaction_commit, buf, prt_str(&buf, trans->fn));
+	event_inc_trace(c, transaction_commit, buf, ({
+		prt_printf(&buf, "%s\nseq %llu\n", trans->fn, trans->journal_res.seq);
+		bch2_trans_updates_to_text(&buf, trans);
+	}));
 
 	return 0;
 fatal_err:
 	bch2_fs_fatal_error(c, "fatal error in transaction commit: %s", bch2_err_str(ret));
-	percpu_down_read(&c->capacity.mark_lock);
+	/* Raw re-take for the revert below; still the trans-locked commit path (NOIO held). */
+	percpu_down_read(&c->capacity.mark_lock.lock);
 revert_fs_usage:
 	for (struct bkey_i *i = btree_trans_subbuf_base(trans, &trans->accounting);
 	     i != accounting;
 	     i = bkey_next(i))
 		bch2_accounting_trans_commit_revert(trans, bkey_i_to_accounting(i), flags);
-	percpu_up_read(&c->capacity.mark_lock);
+	percpu_up_read(&c->capacity.mark_lock.lock);
 
 	if (bch2_err_matches(ret, BCH_ERR_btree_insert_need_mark_replicas)) {
 		ret = drop_locks_do(trans, bch2_accounting_update_sb(trans));
@@ -1046,7 +1071,10 @@ static int trans_commit_merge(struct btree_trans *trans,
 noinline __cold
 static void transaction_commit_trace(struct btree_trans *trans)
 {
-	__event_trace(trans->c, transaction_commit, buf, prt_str(&buf, trans->fn));
+	__event_trace(trans->c, transaction_commit, buf, ({
+		prt_printf(&buf, "%s\nseq %llu\n", trans->fn, trans->journal_res.seq);
+		bch2_trans_updates_to_text(&buf, trans);
+	}));
 }
 
 static inline bool update_is_noop(struct btree_insert_entry *i, enum bch_trans_commit_flags flags)
@@ -1138,7 +1166,7 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		h = h->next;
 	}
 
-	scoped_guard(percpu_read, &c->capacity.mark_lock) {
+	scoped_guard(percpu_read_noio, &c->capacity.mark_lock) {
 		for (struct bkey_i *accounting = btree_trans_subbuf_base(trans, &trans->accounting);
 		     accounting != btree_trans_subbuf_top(trans, &trans->accounting);
 		     accounting = bkey_next(accounting)) {
@@ -1193,6 +1221,8 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 		btree_insert_entry_checks(trans, i);
 	}
 #endif
+
+	event_inc_trace_fn(c, transaction_commit, transaction_commit_trace(trans));
 
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_journal_res))) {
 		struct journal *j = &c->journal;
@@ -1464,14 +1494,18 @@ retry:
 		goto err;
 
 	trans->commit_count++;
-	event_inc_trace_fn(c, transaction_commit, transaction_commit_trace(trans));
 out:
 	if (likely(!(flags & BCH_TRANS_COMMIT_no_check_rw)))
 		enumerated_ref_put(&c->writes, BCH_WRITE_REF_trans);
 
 	if (!ret)
 		bch2_trans_downgrade(trans);
-	if (lazy)
+	/*
+	 * Lazy commits signal success via transaction_restart_commit; a real
+	 * error must not be masked into a restart, or the caller's restart
+	 * loop retries a failing commit forever:
+	 */
+	if (lazy && !ret)
 		ret = bch_err_throw(trans->c, transaction_restart_commit);
 out_reset:
 	bch2_trans_reset_updates(trans);

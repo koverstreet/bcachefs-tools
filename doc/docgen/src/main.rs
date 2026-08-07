@@ -155,10 +155,39 @@ fn walk_c_files(dir: &Path, f: &mut dyn FnMut(&Path)) {
         let path = entry.path();
         if path.is_dir() {
             walk_c_files(&path, f);
-        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("h" | "c")) {
+        } else if matches!(path.extension().and_then(|e| e.to_str()), Some("h" | "c" | "rs")) {
             f(&path);
         }
     }
+}
+
+/// Parse a Rust string literal starting at the first `"` in @text: returns
+/// the unescaped contents and the byte length consumed through the closing
+/// quote. Handles \n, \t, \", \\, and \<newline> line continuations (which,
+/// like rustc, skip all following whitespace).
+fn parse_rust_string_literal(text: &str) -> Option<(String, usize)> {
+    let start = text.find('"')?;
+    let mut out = String::new();
+    let mut chars = text[start + 1..].char_indices().peekable();
+    while let Some((i, ch)) = chars.next() {
+        match ch {
+            '"' => return Some((out, start + 1 + i + ch.len_utf8())),
+            '\\' => match chars.next()?.1 {
+                'n' => out.push('\n'),
+                't' => out.push('\t'),
+                '\\' => out.push('\\'),
+                '"' => out.push('"'),
+                '\n' => {
+                    while chars.peek().is_some_and(|&(_, c)| c.is_whitespace()) {
+                        chars.next();
+                    }
+                }
+                other => out.push(other),
+            },
+            _ => out.push(ch),
+        }
+    }
+    None
 }
 
 fn extract_doc_blocks_from(path: &Path, source: &str, blocks: &mut Vec<DocBlock>) {
@@ -166,6 +195,26 @@ fn extract_doc_blocks_from(path: &Path, source: &str, blocks: &mut Vec<DocBlock>
     let mut i = 0;
     while i < lines.len() {
         let trimmed = lines[i].trim();
+        // DOC_STRING(key) — the following Rust string literal (typically a
+        // helptext constant, so one text serves --help and the PoO),
+        // converted like a DOC() block.
+        if let Some(rest) = trimmed.strip_prefix("// DOC_STRING(") {
+            if let Some(key) = rest.strip_suffix(')') {
+                let remaining = lines[i + 1..].join("\n");
+                if let Some((content, consumed)) = parse_rust_string_literal(&remaining) {
+                    blocks.push(DocBlock {
+                        raw_latex: false,
+                        key: key.trim().to_string(),
+                        content: content.trim().to_string(),
+                        file: path.to_path_buf(),
+                        line: i + 2,
+                    });
+                    i += remaining[..consumed].matches('\n').count() + 1;
+                }
+            }
+            i += 1;
+            continue;
+        }
         // DOC_LATEX(key) — raw LaTeX, passed through verbatim
         // DOC(key)       — simple markup, converted to LaTeX
         let (rest, raw_latex) = if let Some(rest) = trimmed.strip_prefix("/* DOC_LATEX(") {
@@ -326,8 +375,30 @@ fn markup_to_latex(content: &str) -> String {
     #[derive(PartialEq)]
     enum ListState { None, Itemize, Description }
     let mut list_state = ListState::None;
+    let mut in_verbatim = false;
 
     for line in content.lines() {
+        // Lines indented four or more spaces form a verbatim block -
+        // command tables, examples - emitted raw:
+        if line.starts_with("    ") {
+            if !in_verbatim {
+                match list_state {
+                    ListState::Itemize => out.push_str("\\end{itemize}\n"),
+                    ListState::Description => out.push_str("\\end{description}\n"),
+                    ListState::None => {}
+                }
+                list_state = ListState::None;
+                out.push_str("\\begin{verbatim}\n");
+                in_verbatim = true;
+            }
+            out.push_str(line);
+            out.push('\n');
+            continue;
+        }
+        if in_verbatim {
+            out.push_str("\\end{verbatim}\n");
+            in_verbatim = false;
+        }
         if line.is_empty() {
             match list_state {
                 ListState::Itemize => {
@@ -383,8 +454,8 @@ fn markup_to_latex(content: &str) -> String {
                 out.push_str(&convert_inline(line));
                 out.push('\n');
             }
-        } else if line.starts_with("  ") && list_state == ListState::Description {
-            // Continuation of previous description item
+        } else if line.starts_with("  ") && list_state != ListState::None {
+            // Continuation of the previous item
             out.push_str(&convert_inline(line.trim_start()));
             out.push('\n');
         } else {
@@ -399,6 +470,9 @@ fn markup_to_latex(content: &str) -> String {
             out.push_str(&convert_inline(line));
             out.push('\n');
         }
+    }
+    if in_verbatim {
+        out.push_str("\\end{verbatim}\n");
     }
     match list_state {
         ListState::Itemize => out.push_str("\\end{itemize}\n"),
@@ -984,9 +1058,10 @@ fn main() {
     let mut available_keys = HashSet::new();
     let mut errors = 0;
 
-    // --- DOC() blocks from C sources ---
+    // --- DOC() blocks from C and Rust sources ---
     let mut doc_blocks = extract_doc_blocks(&root.join("fs"));
     doc_blocks.append(&mut extract_doc_blocks(&root.join("c_src")));
+    doc_blocks.append(&mut extract_doc_blocks(&root.join("src")));
 
     for block in &doc_blocks {
         let latex = if block.raw_latex {

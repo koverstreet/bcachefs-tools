@@ -5,6 +5,8 @@
 #include <linux/list.h>
 #include <linux/rhashtable.h>
 
+#include "util/locking.h"
+
 #include "alloc/buckets_types.h"
 #include "alloc/replicas_types.h"
 
@@ -272,7 +274,7 @@ struct bch_fs_btree_cache {
 	 * common to delete and allocate btree nodes in quick succession. It
 	 * should never grow past ~2-3 nodes in practice.
 	 */
-	struct mutex		lock;
+	struct mutex_noio	lock;
 	struct list_head	freeable;
 	struct list_head	freed_pcpu;
 	struct list_head	freed_nonpcpu;
@@ -677,7 +679,7 @@ struct btree_trans {
 	 */
 	bool			srcu_io_submitted:1;
 	bool			btree_cache_cannibalize_locked:1;
-	bool			pf_memalloc_nofs:1;
+	bool			pf_memalloc_noio:1;
 	bool			used_mempool:1;
 	bool			in_traverse_all:1;
 	bool			paths_sorted:1;
@@ -685,6 +687,16 @@ struct btree_trans {
 	bool			journal_transaction_names:1;
 	bool			journal_replay_not_finished:1;
 	bool			notrace_relock_fail:1;
+	/*
+	 * Exempt bch2_trans_begin() from the dropped-updates warning. Set
+	 * around a nested transaction - one that grabs trans->restart_count,
+	 * does work whose inner commits discard the outer's queued updates, and
+	 * returns trans_was_restarted() (e.g. fsck counting i_sectors, which
+	 * spans too many extents to be a single transaction). The begin can't
+	 * see the restart that's about to be returned, so the caller vouches
+	 * for it here.
+	 */
+	bool			begin_may_drop_updates:1;
 	bool			has_interior_updates:1;
 	enum bch_errcode	restarted:16;
 	u32			restart_count;

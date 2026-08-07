@@ -127,6 +127,106 @@ const struct bch_sb_field_ops bch_sb_field_ops_errors = {
 	.to_text	= bch2_sb_errors_to_text,
 };
 
+/* v2: adds the time of first occurrence */
+
+static inline unsigned bch2_sb_field_errors_v2_nr_entries(struct bch_sb_field_errors_v2 *e)
+{
+	return bch2_sb_field_nr_entries(e);
+}
+
+static inline unsigned bch2_sb_field_errors_v2_u64s(unsigned nr)
+{
+	return (sizeof(struct bch_sb_field_errors_v2) +
+		sizeof(struct bch_sb_field_error_entry_v2) * nr) / sizeof(u64);
+}
+
+/* A saturated count is a floor, not an exact value: */
+void bch2_prt_error_nr(struct printbuf *out, u64 nr)
+{
+	prt_u64(out, nr);
+	if (nr >= BCH_SB_ERROR_ENTRY_V2_NR_MAX)
+		prt_char(out, '+');
+}
+
+static int bch2_sb_errors_v2_validate(struct bch_sb *sb, struct bch_sb_field *f,
+				      enum bch_validate_flags flags, struct printbuf *err)
+{
+	struct bch_sb_field_errors_v2 *e = field_to_type(f, errors_v2);
+	unsigned i, nr = bch2_sb_field_errors_v2_nr_entries(e);
+
+	for (i = 0; i < nr; i++) {
+		if (!BCH_SB_ERROR_ENTRY_V2_NR(&e->entries[i])) {
+			prt_printf(err, "entry with count 0 (id ");
+			bch2_sb_error_id_to_text(err, BCH_SB_ERROR_ENTRY_V2_ID(&e->entries[i]));
+			prt_printf(err, ")");
+			return -BCH_ERR_invalid_sb_errors;
+		}
+
+		if (BCH_SB_ERROR_ENTRY_V2_FIRST(&e->entries[i]) >
+		    BCH_SB_ERROR_ENTRY_V2_LAST(&e->entries[i])) {
+			prt_printf(err, "entry with first occurrence after last (id ");
+			bch2_sb_error_id_to_text(err, BCH_SB_ERROR_ENTRY_V2_ID(&e->entries[i]));
+			prt_printf(err, ")");
+			return -BCH_ERR_invalid_sb_errors;
+		}
+
+		if (i + 1 < nr &&
+		    BCH_SB_ERROR_ENTRY_V2_ID(&e->entries[i]) >=
+		    BCH_SB_ERROR_ENTRY_V2_ID(&e->entries[i + 1])) {
+			prt_printf(err, "entries out of order");
+			return -BCH_ERR_invalid_sb_errors;
+		}
+	}
+
+	return 0;
+}
+
+static int error_entry_v2_cmp(const void *_l, const void *_r)
+{
+	const struct bch_sb_field_error_entry_v2 *l = _l;
+	const struct bch_sb_field_error_entry_v2 *r = _r;
+
+	return -cmp_int(BCH_SB_ERROR_ENTRY_V2_LAST(l),
+			BCH_SB_ERROR_ENTRY_V2_LAST(r));
+}
+
+DEFINE_DARRAY(bch_sb_field_error_entry_v2);
+
+static __cold void bch2_sb_errors_v2_to_text(struct printbuf *out,
+					     struct bch_fs *c,
+					     struct bch_sb *sb,
+					     struct bch_sb_field *f)
+{
+	struct bch_sb_field_errors_v2 *e = field_to_type(f, errors_v2);
+	unsigned nr = bch2_sb_field_errors_v2_nr_entries(e);
+
+	if (out->nr_tabstops <= 1)
+		printbuf_tabstop_push(out, 16);
+
+	CLASS(darray_bch_sb_field_error_entry_v2, sorted)();
+
+	for (struct bch_sb_field_error_entry_v2 *i = e->entries; i < e->entries + nr; i++)
+		darray_push(&sorted, *i);
+
+	darray_sort(sorted, error_entry_v2_cmp);
+
+	darray_for_each(sorted, i) {
+		bch2_sb_error_id_to_text(out, BCH_SB_ERROR_ENTRY_V2_ID(i));
+		prt_tab(out);
+		bch2_prt_error_nr(out, BCH_SB_ERROR_ENTRY_V2_NR(i));
+		prt_tab(out);
+		bch2_prt_datetime(out, BCH_SB_ERROR_ENTRY_V2_FIRST(i));
+		prt_tab(out);
+		bch2_prt_datetime(out, BCH_SB_ERROR_ENTRY_V2_LAST(i));
+		prt_newline(out);
+	}
+}
+
+const struct bch_sb_field_ops bch_sb_field_ops_errors_v2 = {
+	.validate	= bch2_sb_errors_v2_validate,
+	.to_text	= bch2_sb_errors_v2_to_text,
+};
+
 __cold void bch2_fs_errors_to_text(struct printbuf *out, struct bch_fs *c)
 {
 	if (out->nr_tabstops < 1)
@@ -134,6 +234,8 @@ __cold void bch2_fs_errors_to_text(struct printbuf *out, struct bch_fs *c)
 	if (out->nr_tabstops < 2)
 		printbuf_tabstop_push(out, 8);
 	if (out->nr_tabstops < 3)
+		printbuf_tabstop_push(out, 16);
+	if (out->nr_tabstops < 4)
 		printbuf_tabstop_push(out, 16);
 
 	guard(mutex)(&c->errors.counts_lock);
@@ -144,8 +246,61 @@ __cold void bch2_fs_errors_to_text(struct printbuf *out, struct bch_fs *c)
 		prt_tab(out);
 		prt_u64(out, i->nr);
 		prt_tab(out);
+		bch2_prt_datetime(out, i->first_error_time);
+		prt_tab(out);
 		bch2_prt_datetime(out, i->last_error_time);
 		prt_newline(out);
+	}
+}
+
+/* @err is a BCH_ERR_BLK_STS_* errcode, as thrown by blk_status_to_bch_err() */
+enum bch_sb_error_id bch2_blk_sts_sb_err(int err)
+{
+	switch (abs(err)) {
+#define x(_blk_sts, _name)						\
+	case BCH_ERR_BLK_STS_##_blk_sts:				\
+		return BCH_FSCK_ERR_blk_sts_##_name;
+	BCH_BLK_STS_SB_ERRS()
+#undef x
+	default:
+		return BCH_FSCK_ERR_blk_sts_unknown;
+	}
+}
+
+/* @err is a BCH_ERR_decompress errcode, as thrown by buf_uncompress() */
+enum bch_sb_error_id bch2_decompress_sb_err(int err)
+{
+	switch (abs(err)) {
+#define x(_errcode, _name)						\
+	case BCH_ERR_##_errcode:					\
+		return BCH_FSCK_ERR_data_decompress_err_##_name;
+	BCH_DECOMPRESS_SB_ERRS()
+#undef x
+	default:
+		return bch2_err_matches(err, BCH_ERR_zstd_error)
+			? BCH_FSCK_ERR_data_decompress_err_zstd_unknown
+			: BCH_FSCK_ERR_data_decompress_err_unknown;
+	}
+}
+
+/*
+ * Same errcode, same table, same names as bch2_decompress_sb_err() above - the
+ * reason we stamp into a KEY_TYPE_error key when this is what we finally gave
+ * up on. The sb counter says how often decompression failed this way; the key
+ * says which extent it cost us.
+ */
+enum bch_key_type_errors bch2_decompress_key_type_error(int err)
+{
+	switch (abs(err)) {
+#define x(_errcode, _name)						\
+	case BCH_ERR_##_errcode:					\
+		return KEY_TYPE_ERROR_decompress_##_name;
+	BCH_DECOMPRESS_SB_ERRS()
+#undef x
+	default:
+		return bch2_err_matches(err, BCH_ERR_zstd_error)
+			? KEY_TYPE_ERROR_decompress_zstd_unknown
+			: KEY_TYPE_ERROR_decompress_unknown;
 	}
 }
 
@@ -155,8 +310,9 @@ void bch2_sb_error_count(struct bch_fs *c, enum bch_sb_error_id err)
 	struct bch_sb_error_entry_cpu n = {
 		.id = err,
 		.nr = 1,
-		.last_error_time = ktime_get_real_seconds()
+		.first_error_time = ktime_get_real_seconds(),
 	};
+	n.last_error_time = n.first_error_time;
 	unsigned i;
 
 	guard(mutex)(&c->errors.counts_lock);
@@ -182,40 +338,86 @@ void bch2_sb_errors_from_cpu(struct bch_fs *c)
 	guard(mutex)(&c->errors.counts_lock);
 
 	bch_sb_errors_cpu *src = &c->errors.counts;
-	struct bch_sb_field_errors *dst =
-		bch2_sb_field_resize(&c->disk_sb, errors,
-				     bch2_sb_field_errors_u64s(src->nr));
+	struct bch_sb_field_errors_v2 *dst =
+		bch2_sb_field_resize(&c->disk_sb, errors_v2,
+				     bch2_sb_field_errors_v2_u64s(src->nr));
 	if (!dst)
 		return;
 
 	for (unsigned i = 0; i < src->nr; i++) {
-		SET_BCH_SB_ERROR_ENTRY_ID(&dst->entries[i], src->data[i].id);
-		SET_BCH_SB_ERROR_ENTRY_NR(&dst->entries[i], src->data[i].nr);
-		dst->entries[i].last_error_time = cpu_to_le64(src->data[i].last_error_time);
+		SET_BCH_SB_ERROR_ENTRY_V2_ID(&dst->entries[i],		src->data[i].id);
+		SET_BCH_SB_ERROR_ENTRY_V2_NR(&dst->entries[i],		src->data[i].nr);
+		SET_BCH_SB_ERROR_ENTRY_V2_FIRST(&dst->entries[i],	src->data[i].first_error_time);
+		SET_BCH_SB_ERROR_ENTRY_V2_LAST(&dst->entries[i],	src->data[i].last_error_time);
 	}
+
+	bch2_sb_field_delete(&c->disk_sb, BCH_SB_FIELD_errors);
 }
 
+/*
+ * Reading counts in merges both sections, because both present at once
+ * means the filesystem was downgraded: writing v2 always deletes legacy
+ * in the same superblock write, so a legacy section coexisting with v2
+ * was recreated by an old kernel afterwards and holds exactly the counts
+ * accrued since. Sum the counts, take the union of the time ranges (a
+ * legacy timestamp is both first and last: the error happened at least
+ * that recently), and the next writeout folds everything back into v2 -
+ * nothing lost or double counted across downgrade/upgrade cycles.
+ *
+ * Both sections are validated strictly ascending by id, so this is a
+ * plain sorted merge.
+ */
 int bch2_sb_errors_to_cpu(struct bch_fs *c)
 {
 	guard(mutex)(&c->errors.counts_lock);
 
-	struct bch_sb_field_errors *src = bch2_sb_field_get(c->disk_sb.sb, errors);
 	bch_sb_errors_cpu *dst = &c->errors.counts;
-	unsigned nr = bch2_sb_field_errors_nr_entries(src);
 
-	if (!nr)
-		return 0;
+	struct bch_sb_field_errors_v2 *v2 = bch2_sb_field_get(c->disk_sb.sb, errors_v2);
+	struct bch_sb_field_errors *legacy = bch2_sb_field_get(c->disk_sb.sb, errors);
+	unsigned nr_v2	= bch2_sb_field_errors_v2_nr_entries(v2);
+	unsigned nr_l	= bch2_sb_field_errors_nr_entries(legacy);
 
-	int ret = darray_make_room(dst, nr);
-	if (ret)
-		return ret;
+	try(darray_make_room(dst, nr_v2 + nr_l));
+	dst->nr = 0;
 
-	dst->nr = nr;
+	unsigned i = 0, j = 0;
+	while (i < nr_v2 || j < nr_l) {
+		u64 id_v2 = i < nr_v2 ? BCH_SB_ERROR_ENTRY_V2_ID(&v2->entries[i]) : U64_MAX;
+		u64 id_l  = j < nr_l  ? BCH_SB_ERROR_ENTRY_ID(&legacy->entries[j]) : U64_MAX;
+		struct bch_sb_error_entry_cpu n;
 
-	for (unsigned i = 0; i < nr; i++) {
-		dst->data[i].id = BCH_SB_ERROR_ENTRY_ID(&src->entries[i]);
-		dst->data[i].nr = BCH_SB_ERROR_ENTRY_NR(&src->entries[i]);
-		dst->data[i].last_error_time = le64_to_cpu(src->entries[i].last_error_time);
+		if (id_v2 < id_l) {
+			n = (struct bch_sb_error_entry_cpu) {
+				.id			= id_v2,
+				.nr			= BCH_SB_ERROR_ENTRY_V2_NR(&v2->entries[i]),
+				.first_error_time	= BCH_SB_ERROR_ENTRY_V2_FIRST(&v2->entries[i]),
+				.last_error_time	= BCH_SB_ERROR_ENTRY_V2_LAST(&v2->entries[i]),
+			};
+			i++;
+		} else if (id_l < id_v2) {
+			u64 t = le64_to_cpu(legacy->entries[j].last_error_time);
+			n = (struct bch_sb_error_entry_cpu) {
+				.id			= id_l,
+				.nr			= BCH_SB_ERROR_ENTRY_NR(&legacy->entries[j]),
+				.first_error_time	= t,
+				.last_error_time	= t,
+			};
+			j++;
+		} else {
+			u64 t = le64_to_cpu(legacy->entries[j].last_error_time);
+			n = (struct bch_sb_error_entry_cpu) {
+				.id			= id_v2,
+				.nr			= BCH_SB_ERROR_ENTRY_V2_NR(&v2->entries[i]) +
+					BCH_SB_ERROR_ENTRY_NR(&legacy->entries[j]),
+				.first_error_time	= min(BCH_SB_ERROR_ENTRY_V2_FIRST(&v2->entries[i]), t),
+				.last_error_time	= max(BCH_SB_ERROR_ENTRY_V2_LAST(&v2->entries[i]), t),
+			};
+			i++;
+			j++;
+		}
+
+		dst->data[dst->nr++] = n;
 	}
 
 	return 0;

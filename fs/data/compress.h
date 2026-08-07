@@ -33,8 +33,31 @@ static inline enum bch_compression_type bch2_compression_opt_to_type(unsigned v)
 	return __bch2_compression_opt_to_type[((union bch_compression_opt){ .value = v }).type];
 }
 
-struct bch_write_op;
-int bch2_bio_uncompress_inplace(struct bch_write_op *, struct bio *);
+/*
+ * Bounce buffer for the encode/decode paths: either a direct mapping of a
+ * bio's pages (BB_none/BB_vmap - no copy) or a private allocation the caller
+ * can scribble on without touching the bio. Exported because the write path
+ * assembles its own decode sequence out of these.
+ */
+struct bbuf {
+	struct bch_fs	*c;
+	void		*b;
+	enum bbuf_type {
+		BB_none,
+		BB_vmap,
+		BB_kmalloc,
+		BB_mempool,
+	}		type;
+	int		rw;
+};
+
+void bch2_bbuf_exit(struct bbuf *);
+struct bbuf bch2_bounce_alloc(struct bch_fs *, unsigned, int);
+struct bbuf bch2_bio_bounce(struct bch_fs *, struct bio *, struct bvec_iter, int);
+struct bbuf bch2_bio_map_or_bounce(struct bch_fs *, struct bio *, int);
+int bch2_buf_uncompress(struct bch_fs *, void *, void *, struct bch_extent_crc_unpacked);
+int bch2_decompress_err(struct bch_fs *, int);
+
 int bch2_bio_uncompress(struct bch_fs *, struct bio *, struct bio *,
 		       struct bvec_iter, struct bch_extent_crc_unpacked);
 

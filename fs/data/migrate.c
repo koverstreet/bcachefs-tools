@@ -26,6 +26,7 @@
 
 #include "sb/io.h"
 
+#include "init/damage.h"
 #include "init/progress.h"
 
 static struct bkey_i *drop_dev_ptrs(struct btree_trans *trans, struct bkey_s_c k, unsigned dev_idx,
@@ -98,6 +99,10 @@ static int bch2_dev_usrdata_drop_key(struct btree_trans *trans,
 	struct bkey_i *n = errptr_try(drop_dev_ptrs(trans, k, dev_idx, flags, err));
 	if (!n)
 		return 0;
+
+	if (n->k.type == KEY_TYPE_error)
+		try(bch2_damage_record_data_loss(trans, iter->btree_id, k.k->p,
+						 BCH_FSCK_ERR_data_lost_device_removed));
 
 	/*
 	 * Since we're not inserting through an extent iterator

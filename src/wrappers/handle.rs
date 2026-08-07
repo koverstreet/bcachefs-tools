@@ -1,5 +1,4 @@
 use std::ffi::CStr;
-use std::io;
 use std::mem;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, OwnedFd};
 use std::path::Path;
@@ -12,17 +11,20 @@ use bch_bindgen::c::{
     bch_ioctl_disk_resize, bch_ioctl_disk_resize_v2,
     bch_ioctl_disk_resize_journal, bch_ioctl_disk_resize_journal_v2,
     bch_ioctl_subvolume, bch_ioctl_subvolume_v2,
-    bch_ioctl_query_btree_keys,
+    bch_ioctl_query_btree_keys, bch_ioctl_query_uuid, bch_ioctl_read_super,
     BCH_BY_INDEX, BCH_SUBVOL_SNAPSHOT_CREATE,
 };
 use bch_bindgen::accounting::data_type;
-use crate::wrappers::ioctl::{bch_ioc_w, bch_ioc_wr};
+use crate::wrappers::ioctl::*;
 use crate::wrappers::sysfs;
 use bch_bindgen::c::bch_sb;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::path_to_cstr;
 use errno::Errno;
-use rustix::ioctl::{self, Setter};
+
+fn io_errno(e: std::io::Error) -> Errno {
+    Errno(e.raw_os_error().unwrap_or(libc::EIO))
+}
 
 /// Try a v2 ioctl (with error message buffer), falling back to v1 on ENOTTY.
 macro_rules! v2_v1_ioctl {
@@ -32,62 +34,22 @@ macro_rules! v2_v1_ioctl {
         arg.err.msg_ptr = err_buf.as_mut_ptr() as u64;
         arg.err.msg_len = err_buf.len() as u32;
 
-        match unsafe { ioctl::ioctl($fd, Setter::<$V2, _>::new(arg)) } {
-            Ok(()) => Ok(()),
-            Err(e) if e == rustix::io::Errno::NOTTY => {
-                unsafe { ioctl::ioctl($fd, Setter::<$V1, _>::new($v1_arg)) }
-                    .map_err(|e| Errno(e.raw_os_error()))
-            }
+        match ioctl_w::<$V2>($fd, &arg) {
+            Ok(_) => Ok(()),
+            Err(e) if e.raw_os_error() == Some(libc::ENOTTY) =>
+                ioctl_w::<$V1>($fd, &$v1_arg).map(|_| ()).map_err(io_errno),
             Err(e) => {
                 print_errmsg(&err_buf);
-                Err(Errno(e.raw_os_error()))
+                Err(io_errno(e))
             }
         }
     }};
 }
 
-// Subvolume ioctl opcodes
-const SUBVOL_CREATE_OPCODE:     ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_subvolume>(0xbc, 16);
-const SUBVOL_CREATE_V2_OPCODE:  ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_subvolume_v2>(0xbc, 29);
-const SUBVOL_DESTROY_OPCODE:    ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_subvolume>(0xbc, 17);
-const SUBVOL_DESTROY_V2_OPCODE: ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_subvolume_v2>(0xbc, 30);
-
-// Disk ioctl opcodes (_IOW(0xbc, N, struct))
-const DISK_ADD_OPCODE:               ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk>(0xbc, 4);
-const DISK_ADD_V2_OPCODE:            ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_v2>(0xbc, 23);
-const DISK_REMOVE_OPCODE:            ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk>(0xbc, 5);
-const DISK_REMOVE_V2_OPCODE:         ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_v2>(0xbc, 24);
-const DISK_ONLINE_OPCODE:            ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk>(0xbc, 6);
-const DISK_ONLINE_V2_OPCODE:         ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_v2>(0xbc, 25);
-const DISK_OFFLINE_OPCODE:           ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk>(0xbc, 7);
-const DISK_OFFLINE_V2_OPCODE:        ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_v2>(0xbc, 26);
-const DISK_SET_STATE_OPCODE:         ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_set_state>(0xbc, 8);
-const DISK_SET_STATE_V2_OPCODE:      ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_set_state_v2>(0xbc, 22);
-const DISK_RESIZE_OPCODE:            ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_resize>(0xbc, 14);
-const DISK_RESIZE_V2_OPCODE:         ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_resize_v2>(0xbc, 27);
-const DISK_RESIZE_JOURNAL_OPCODE:    ioctl::Opcode = ioctl::opcode::write::<bch_ioctl_disk_resize_journal>(0xbc, 15);
-const DISK_RESIZE_JOURNAL_V2_OPCODE: ioctl::Opcode =
-    ioctl::opcode::write::<bch_ioctl_disk_resize_journal_v2>(0xbc, 28);
-
 const SYSFS_BASE: &str = "/sys/fs/bcachefs/";
 
-/// BCH_IOCTL_QUERY_UUID: _IOR(0xbc, 1, struct bch_ioctl_query_uuid)
-/// Returns the user-visible filesystem UUID.
-#[repr(C)]
-#[derive(Default)]
-struct BchIoctlQueryUuid {
-    uuid: [u8; 16],
-}
-
-/// Compute _IOR(type, nr, size)
-const fn ioc_r(type_: u32, nr: u32, size: u32) -> libc::Ioctl {
-    ((2u32 << 30) | (size << 16) | (type_ << 8) | nr) as libc::Ioctl
-}
-
-const BCH_IOCTL_QUERY_UUID: libc::Ioctl =
-    ioc_r(0xbc, 1, mem::size_of::<BchIoctlQueryUuid>() as u32);
-
-/// FS_IOC_GETFSSYSFSPATH: _IOR(0x15, 1, struct fs_sysfs_path)
+/// FS_IOC_GETFSSYSFSPATH: _IOR(0x15, 1, struct fs_sysfs_path) — generic
+/// VFS ioctl (linux/fs.h), not in our generated inventory.
 #[repr(C)]
 struct FsSysfsPath {
     len: u8,
@@ -95,7 +57,7 @@ struct FsSysfsPath {
 }
 
 const FS_IOC_GETFSSYSFSPATH: libc::Ioctl =
-    ioc_r(0x15, 1, mem::size_of::<FsSysfsPath>() as u32);
+    ((2u32 << 30) | ((mem::size_of::<FsSysfsPath>() as u32) << 16) | (0x15 << 8) | 1) as libc::Ioctl;
 
 /// A handle to a bcachefs filesystem, with RAII close.
 pub(crate) struct BcachefsHandle {
@@ -108,10 +70,6 @@ pub(crate) struct BcachefsHandle {
 impl BcachefsHandle {
     pub(crate) fn sysfs_fd(&self) -> BorrowedFd<'_> {
         self.sysfs_fd.as_fd()
-    }
-
-    pub(crate) fn ioctl_fd_raw(&self) -> i32 {
-        self.ioctl_fd.as_raw_fd()
     }
 
     /// Device index when opened via a block device path; -1 when opened via mount point.
@@ -194,12 +152,9 @@ impl BcachefsHandle {
         }
 
         // Try BCH_IOCTL_QUERY_UUID — if it succeeds, it's a mounted fs path
-        let mut query_uuid = BchIoctlQueryUuid::default();
-        let ret = unsafe {
-            libc::ioctl(path_fd.as_raw_fd(), BCH_IOCTL_QUERY_UUID, &mut query_uuid)
-        };
-        if ret == 0 {
-            return Self::open_mounted_path(path_fd, query_uuid.uuid).map(Some);
+        let mut query_uuid = bch_ioctl_query_uuid::default();
+        if ioctl_rw::<BCH_IOCTL_QUERY_UUID>(&path_fd, &mut query_uuid).is_ok() {
+            return Self::open_mounted_path(path_fd, query_uuid.uuid.b).map(Some);
         }
 
         // Drop path_fd — we'll re-open via sysfs/ctl
@@ -360,18 +315,22 @@ impl BcachefsHandle {
         Ok(handle)
     }
 
-    fn ioctl_fd(&self) -> BorrowedFd<'_> {
+    pub(crate) fn ioctl_fd(&self) -> BorrowedFd<'_> {
         self.ioctl_fd.as_fd()
     }
 
-    fn subvol_ioctl<const V2: ioctl::Opcode, const V1: ioctl::Opcode>(
+    fn subvol_ioctl<V2, V1>(
         &self,
         flags: u32,
         dirfd: u32,
         mode: u16,
         dst_ptr: u64,
         src_ptr: u64,
-    ) -> Result<(), Errno> {
+    ) -> Result<(), Errno>
+    where
+        V2: Ioctl<Arg = bch_ioctl_subvolume_v2>,
+        V1: Ioctl<Arg = bch_ioctl_subvolume>,
+    {
         v2_v1_ioctl!(
             self.ioctl_fd(), V2, V1,
             bch_ioctl_subvolume_v2 { flags, dirfd, mode, dst_ptr, src_ptr, ..Default::default() },
@@ -383,7 +342,7 @@ impl BcachefsHandle {
     /// at the given path
     pub fn create_subvolume<P: AsRef<Path>>(&self, dst: P) -> Result<(), Errno> {
         let dst = path_to_cstr(dst);
-        self.subvol_ioctl::<SUBVOL_CREATE_V2_OPCODE, SUBVOL_CREATE_OPCODE>(
+        self.subvol_ioctl::<BCH_IOCTL_SUBVOLUME_CREATE_v2, BCH_IOCTL_SUBVOLUME_CREATE>(
             0,
             libc::AT_FDCWD as u32,
             0o777,
@@ -396,7 +355,7 @@ impl BcachefsHandle {
     /// for this bcachefs filesystem
     pub fn delete_subvolume<P: AsRef<Path>>(&self, dst: P) -> Result<(), Errno> {
         let dst = path_to_cstr(dst);
-        self.subvol_ioctl::<SUBVOL_DESTROY_V2_OPCODE, SUBVOL_DESTROY_OPCODE>(
+        self.subvol_ioctl::<BCH_IOCTL_SUBVOLUME_DESTROY_v2, BCH_IOCTL_SUBVOLUME_DESTROY>(
             0,
             libc::AT_FDCWD as u32,
             0o777,
@@ -415,7 +374,7 @@ impl BcachefsHandle {
     ) -> Result<(), Errno> {
         let src = src.map(|src| path_to_cstr(src));
         let dst = path_to_cstr(dst);
-        self.subvol_ioctl::<SUBVOL_CREATE_V2_OPCODE, SUBVOL_CREATE_OPCODE>(
+        self.subvol_ioctl::<BCH_IOCTL_SUBVOLUME_CREATE_v2, BCH_IOCTL_SUBVOLUME_CREATE>(
             BCH_SUBVOL_SNAPSHOT_CREATE | extra_flags,
             libc::AT_FDCWD as u32,
             0o777,
@@ -424,9 +383,11 @@ impl BcachefsHandle {
         )
     }
 
-    fn disk_ioctl<const V2: ioctl::Opcode, const V1: ioctl::Opcode>(
-        &self, flags: u32, dev: u64,
-    ) -> Result<(), Errno> {
+    fn disk_ioctl<V2, V1>(&self, flags: u32, dev: u64) -> Result<(), Errno>
+    where
+        V2: Ioctl<Arg = bch_ioctl_disk_v2>,
+        V1: Ioctl<Arg = bch_ioctl_disk>,
+    {
         v2_v1_ioctl!(
             self.ioctl_fd(), V2, V1,
             bch_ioctl_disk_v2 { flags, dev, ..Default::default() },
@@ -436,28 +397,28 @@ impl BcachefsHandle {
 
     /// Add a new device to this filesystem.
     pub(crate) fn disk_add(&self, dev_path: &CStr) -> Result<(), Errno> {
-        self.disk_ioctl::<DISK_ADD_V2_OPCODE, DISK_ADD_OPCODE>(
+        self.disk_ioctl::<BCH_IOCTL_DISK_ADD_v2, BCH_IOCTL_DISK_ADD>(
             0, dev_path.as_ptr() as u64,
         )
     }
 
     /// Remove a device (by index) from this filesystem.
     pub(crate) fn disk_remove(&self, dev_idx: u32, flags: u32) -> Result<(), Errno> {
-        self.disk_ioctl::<DISK_REMOVE_V2_OPCODE, DISK_REMOVE_OPCODE>(
+        self.disk_ioctl::<BCH_IOCTL_DISK_REMOVE_v2, BCH_IOCTL_DISK_REMOVE>(
             flags | BCH_BY_INDEX, dev_idx as u64,
         )
     }
 
     /// Re-add an offline device to this filesystem.
     pub(crate) fn disk_online(&self, dev_path: &CStr) -> Result<(), Errno> {
-        self.disk_ioctl::<DISK_ONLINE_V2_OPCODE, DISK_ONLINE_OPCODE>(
+        self.disk_ioctl::<BCH_IOCTL_DISK_ONLINE_v2, BCH_IOCTL_DISK_ONLINE>(
             0, dev_path.as_ptr() as u64,
         )
     }
 
     /// Take a device offline without removing it.
     pub(crate) fn disk_offline(&self, dev_idx: u32, flags: u32) -> Result<(), Errno> {
-        self.disk_ioctl::<DISK_OFFLINE_V2_OPCODE, DISK_OFFLINE_OPCODE>(
+        self.disk_ioctl::<BCH_IOCTL_DISK_OFFLINE_v2, BCH_IOCTL_DISK_OFFLINE>(
             flags | BCH_BY_INDEX, dev_idx as u64,
         )
     }
@@ -465,7 +426,7 @@ impl BcachefsHandle {
     /// Change device state (rw, ro, evacuating, spare).
     pub(crate) fn disk_set_state(&self, dev_idx: u32, new_state: u32, flags: u32) -> Result<(), Errno> {
         v2_v1_ioctl!(
-            self.ioctl_fd(), DISK_SET_STATE_V2_OPCODE, DISK_SET_STATE_OPCODE,
+            self.ioctl_fd(), BCH_IOCTL_DISK_SET_STATE_v2, BCH_IOCTL_DISK_SET_STATE,
             bch_ioctl_disk_set_state_v2 { flags: flags | BCH_BY_INDEX, new_state: new_state as u8, dev: dev_idx as u64, ..Default::default() },
             bch_ioctl_disk_set_state    { flags: flags | BCH_BY_INDEX, new_state: new_state as u8, dev: dev_idx as u64, ..Default::default() }
         )
@@ -474,7 +435,7 @@ impl BcachefsHandle {
     /// Resize filesystem on a device.
     pub(crate) fn disk_resize(&self, dev_idx: u32, nbuckets: u64) -> Result<(), Errno> {
         v2_v1_ioctl!(
-            self.ioctl_fd(), DISK_RESIZE_V2_OPCODE, DISK_RESIZE_OPCODE,
+            self.ioctl_fd(), BCH_IOCTL_DISK_RESIZE_v2, BCH_IOCTL_DISK_RESIZE,
             bch_ioctl_disk_resize_v2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
             bch_ioctl_disk_resize    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
         )
@@ -483,7 +444,7 @@ impl BcachefsHandle {
     /// Resize journal on a device.
     pub(crate) fn disk_resize_journal(&self, dev_idx: u32, nbuckets: u64) -> Result<(), Errno> {
         v2_v1_ioctl!(
-            self.ioctl_fd(), DISK_RESIZE_JOURNAL_V2_OPCODE, DISK_RESIZE_JOURNAL_OPCODE,
+            self.ioctl_fd(), BCH_IOCTL_DISK_RESIZE_JOURNAL_v2, BCH_IOCTL_DISK_RESIZE_JOURNAL,
             bch_ioctl_disk_resize_journal_v2 { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() },
             bch_ioctl_disk_resize_journal    { flags: BCH_BY_INDEX, dev: dev_idx as u64, nbuckets, ..Default::default() }
         )
@@ -500,36 +461,18 @@ impl BcachefsHandle {
         loop {
             let mut buf = vec![0u8; size];
 
-            #[repr(C)]
-            struct BchIoctlReadSuper {
-                flags: u32,
-                pad:   u32,
-                dev:   u64,
-                size:  u64,
-                sb:    u64,
-            }
-
-            let arg = BchIoctlReadSuper {
-                flags: 0,
-                pad:   0,
-                dev:   0,
-                size:  size as u64,
-                sb:    buf.as_mut_ptr() as u64,
+            let arg = bch_ioctl_read_super {
+                size: size as u64,
+                sb:   buf.as_mut_ptr() as u64,
+                ..Default::default()
             };
 
-            let request = bch_ioc_w::<BchIoctlReadSuper>(12);
-            let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request, &arg) };
-
-            if ret == 0 {
-                return Ok(buf);
+            match ioctl_w::<BCH_IOCTL_READ_SUPER>(self.ioctl_fd(), &arg) {
+                Ok(_) => return Ok(buf),
+                Err(e) if e.raw_os_error() == Some(libc::ERANGE) && size < 1 << 20 =>
+                    size *= 4,
+                Err(e) => return Err(io_errno(e)),
             }
-
-            let err = io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO);
-            if err == libc::ERANGE && size < 1 << 20 {
-                size *= 4;
-                continue;
-            }
-            return Err(Errno(err));
         }
     }
 
@@ -539,13 +482,8 @@ impl BcachefsHandle {
     /// `arg.done` is set. Returns ERANGE if `arg.buf_size` can't hold even
     /// a single key.
     pub(crate) fn query_btree_keys(&self, arg: &mut bch_ioctl_query_btree_keys) -> Result<(), Errno> {
-        let request = bch_ioc_wr::<bch_ioctl_query_btree_keys>(34);
-        let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request, arg as *mut _) };
-        if ret == 0 {
-            Ok(())
-        } else {
-            Err(Errno(io::Error::last_os_error().raw_os_error().unwrap_or(libc::EIO)))
-        }
+        ioctl_rw::<BCH_IOCTL_QUERY_BTREE_KEYS>(self.ioctl_fd(), arg)
+            .map(|_| ()).map_err(io_errno)
     }
 
     /// Read the on-disk metadata version from the filesystem superblock.
@@ -561,44 +499,34 @@ impl BcachefsHandle {
     /// Query device usage (v2 with flex array, v1 fallback).
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
         let nr_data_types = data_type::nr.0 as usize;
-        let entry_size = mem::size_of::<bch_ioctl_dev_usage_bch_ioctl_dev_usage_type>();
-        let hdr_size = mem::size_of::<bch_ioctl_dev_usage_v2>();
-        let buf_size = hdr_size + nr_data_types * entry_size;
-        let mut buf = vec![0u8; buf_size];
 
-        // Fill header
-        let hdr = unsafe { &mut *(buf.as_mut_ptr() as *mut bch_ioctl_dev_usage_v2) };
+        let mut buf = IoctlBuf::<bch_ioctl_dev_usage_v2>::new::<bch_ioctl_dev_usage_bch_ioctl_dev_usage_type>(nr_data_types);
+        let hdr = buf.hdr_mut();
         hdr.dev = dev_idx as u64;
         hdr.flags = BCH_BY_INDEX;
         hdr.nr_data_types = nr_data_types as u8;
 
-        let request = bch_ioc_wr::<bch_ioctl_dev_usage_v2>(18);
-        let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request, buf.as_mut_ptr()) };
+        let ret = unsafe {
+            ioctl_ptr::<BCH_IOCTL_DEV_USAGE_V2>(self.ioctl_fd(), buf.as_mut_ptr())
+        };
 
-        if ret == 0 {
-            // v2 succeeded — parse result
-            let hdr = unsafe { &*(buf.as_ptr() as *const bch_ioctl_dev_usage_v2) };
-            let actual_nr = hdr.nr_data_types as usize;
-            let data_ptr = unsafe { buf.as_ptr().add(hdr_size) }
-                as *const bch_ioctl_dev_usage_bch_ioctl_dev_usage_type;
-
-            let mut data_types = Vec::with_capacity(actual_nr);
-            for i in 0..actual_nr {
-                let d = unsafe { std::ptr::read_unaligned(data_ptr.add(i)) };
-                data_types.push(DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented });
-            }
+        if ret.is_ok() {
+            let hdr = buf.hdr();
+            let nr = (hdr.nr_data_types as usize).min(nr_data_types);
 
             return Ok(DevUsage {
                 state: hdr.state,
                 bucket_size: hdr.bucket_size,
                 nr_buckets: hdr.nr_buckets,
-                data_types,
+                data_types: unsafe { hdr.d.as_slice(nr) }.iter()
+                    .map(|d| DevUsageType { buckets: d.buckets, sectors: d.sectors, fragmented: d.fragmented })
+                    .collect(),
             });
         }
 
-        let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        if errno != libc::ENOTTY {
-            return Err(Errno(errno));
+        let err = ret.unwrap_err();
+        if err.raw_os_error() != Some(libc::ENOTTY) {
+            return Err(io_errno(err));
         }
 
         // v1 fallback
@@ -607,11 +535,7 @@ impl BcachefsHandle {
             flags: BCH_BY_INDEX,
             ..Default::default()
         };
-        let request_v1 = bch_ioc_wr::<bch_ioctl_dev_usage>(11);
-        let ret = unsafe { libc::ioctl(self.ioctl_fd_raw(), request_v1, &mut u_v1 as *mut _) };
-        if ret < 0 {
-            return Err(Errno(io::Error::last_os_error().raw_os_error().unwrap_or(0)));
-        }
+        ioctl_rw::<BCH_IOCTL_DEV_USAGE>(self.ioctl_fd(), &mut u_v1).map_err(io_errno)?;
 
         let mut data_types = Vec::new();
         for d in &u_v1.d {

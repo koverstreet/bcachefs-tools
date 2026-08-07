@@ -24,6 +24,7 @@
 #ifndef _BCACHEFS_TIME_STATS_H
 #define _BCACHEFS_TIME_STATS_H
 
+#include <linux/local_lock.h>
 #include <linux/sched/clock.h>
 #include <linux/spinlock_types.h>
 #include <linux/string.h>
@@ -60,6 +61,14 @@ struct quantiles {
 };
 
 struct time_stat_buffer {
+	/*
+	 * Protects nr/entries on the owning cpu: irq/preempt disable on
+	 * !PREEMPT_RT, a real per-cpu lock on RT - which is what makes
+	 * taking stats->lock (sleeping on RT) from the buffer-full flush
+	 * legal there. Cross-cpu readers (to_seq_buf, reset) don't take
+	 * it; they race the owner by design, bounded by nr.
+	 */
+	local_lock_t	lock;
 	unsigned	nr;
 	struct time_stat_buffer_entry {
 		u64	start;

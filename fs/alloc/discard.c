@@ -12,6 +12,7 @@
 #include "btree/update.h"
 #include "btree/write_buffer.h"
 
+#include "init/damage.h"
 #include "init/fs.h"
 
 #include "journal/journal.h"
@@ -710,8 +711,11 @@ static int invalidate_one_bp(struct btree_trans *trans,
 
 	bch2_bkey_drop_device_noerror(c, bkey_i_to_s(n), ca->dev_idx);
 
-	if (!bch2_bkey_can_read(c, bkey_i_to_s_c(n)))
+	if (!bch2_bkey_can_read(c, bkey_i_to_s_c(n))) {
 		bch2_set_bkey_error(c, n, KEY_TYPE_ERROR_device_removed);
+		try(bch2_damage_record_data_loss(trans, bp.v->btree_id, n->k.p,
+						 BCH_FSCK_ERR_data_lost_device_removed));
+	}
 
 	return 0;
 }

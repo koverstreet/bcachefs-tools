@@ -16,18 +16,47 @@ queue_build() {
     local commit=$1
     local file=${2:-desired}
 
-    echo "$commit" > "$STATE_DIR/$file"
+    # Check the write. This used to be unconditional and printed "queued" even
+    # when the redirect had failed. v1.39.0's release build was never queued -
+    # the state dir wasn't writable by the pushing user, so creating
+    # desired-release got EACCES - and the push reported success anyway. It went
+    # out as a snapshot version, sorting below the 1.38.8 already in the suite,
+    # and nobody found out for a day.
+    if ! echo "$commit" > "$STATE_DIR/$file" 2>/dev/null; then
+        echo "CI: FAILED to queue ${commit:0:12}: cannot write $STATE_DIR/$file" >&2
+        echo "CI: this build will NOT happen" >&2
+        return 1
+    fi
     echo "CI: queued build for ${commit:0:12} ($file)"
 
-    if [ -f "$PID_FILE" ]; then
-        kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null || true
+    # Waking the orchestrator is best-effort and doesn't currently work at all:
+    # the hook runs as the pushing user, which can't signal the orchestrator's
+    # uid. Verified 2026-08-04 - kent got EPERM signalling the running
+    # aptbcachefsorg process. Presumably it has been that way since the uids
+    # were split, but that's inference; what's measured is today.
+    #
+    # It costs latency rather than correctness, since the reconcile loop polls
+    # anyway - but don't print that we did it when we didn't.
+    if [ -f "$PID_FILE" ] && kill -USR1 "$(cat "$PID_FILE")" 2>/dev/null; then
+        echo "CI: woke orchestrator"
     fi
+}
+
+# publish_doc COMMIT
+#   Rebuilds the Principles of Operation and installs it for bcachefs.org.
+#   Detached: this is a full nix build of the tools plus LaTeX, and a push
+#   must not block on it. A failed build leaves the published PDF alone and
+#   says so in /var/log/publish-poo.log.
+publish_doc() {
+    setsid /usr/local/bin/publish-poo "$1" </dev/null >/dev/null 2>&1 &
+    echo "doc: queued PoO build for ${1:0:12}"
 }
 
 while read oldrev newrev refname; do
     case "$refname" in
         refs/heads/master)
             queue_build "$newrev"
+            publish_doc "$newrev"
             ;;
         refs/tags/v*)
             # Release tags may be pushed without (or after) a branch

@@ -3,6 +3,7 @@ use crate::btree::bkey::AsBkeyI;
 use crate::errcode::{bch_err_throw, bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
+use crate::util::locking::MemallocFlags;
 use core::ops::ControlFlow;
 
 /// RAII guard for a device reference. Calls bch2_dev_put on drop.
@@ -15,6 +16,11 @@ impl DevRef {
     /// that take `*mut bch_dev`.
     pub fn as_mut_ptr(&self) -> *mut c::bch_dev {
         self.0
+    }
+
+    /// The device name (sdX etc).
+    pub fn name(&self) -> &core::ffi::CStr {
+        unsafe { core::ffi::CStr::from_ptr((*self.0).name.as_ptr()) }
     }
 }
 
@@ -32,13 +38,19 @@ impl Drop for DevRef {
 }
 
 /// RAII guard for bch_fs::sb_lock. Unlocks on drop.
+///
+/// Mirrors the C `mutex_noio` guard: sb_lock is held precisely to guard
+/// allocations that must not recurse into reclaim IO, so the lock brackets a
+/// PF_MEMALLOC_NOIO scope. The explicit Drop below runs before the `_noio`
+/// field is dropped, so the order is unlock-then-restore - matching the C side.
 pub struct SbLockGuard<'a> {
     fs: &'a Fs,
+    _noio: MemallocFlags,
 }
 
 impl Drop for SbLockGuard<'_> {
     fn drop(&mut self) {
-        unsafe { c::mutex_unlock(&mut (*self.fs.raw).sb_lock ); }
+        unsafe { c::mutex_unlock(&mut (*self.fs.raw).sb_lock.lock); }
     }
 }
 
@@ -70,6 +82,25 @@ impl BorrowedFs {
 }
 
 impl Fs {
+    /// The filesystem's options, as resolved at open.
+    pub fn opts(&self) -> &c::bch_opts {
+        unsafe { &(*self.raw).opts }
+    }
+
+    /// log2 of the filesystem block size in 512-byte sectors.
+    pub fn block_bits(&self) -> u32 {
+        unsafe { (*self.raw).block_bits as u32 }
+    }
+
+    pub fn chacha20_key_set(&self) -> bool {
+        unsafe { (*self.raw).chacha20_key_set }
+    }
+
+    /// The filesystem's superblock handle.
+    pub fn disk_sb(&self) -> &c::bch_sb_handle {
+        unsafe { &(*self.raw).disk_sb }
+    }
+
     /// Create a non-owning `Fs` view from a raw pointer.
     ///
     /// Returns `ManuallyDrop<Fs>` to prevent `Fs::drop` from calling
@@ -93,8 +124,9 @@ impl Fs {
 
     /// Acquire the superblock lock, returning a guard that releases it on drop.
     pub fn sb_lock(&self) -> SbLockGuard<'_> {
-        unsafe { c::mutex_lock(&mut (*self.raw).sb_lock); }
-        SbLockGuard { fs: self }
+        let _noio = MemallocFlags::noio();
+        unsafe { c::mutex_lock(&mut (*self.raw).sb_lock.lock); }
+        SbLockGuard { fs: self, _noio }
     }
 
     /// Write superblock to disk. Caller must hold sb_lock.
@@ -203,6 +235,29 @@ impl Fs {
         if ca.is_null() { None } else { Some(DevRef(ca)) }
     }
 
+    /// Run an option's pre-set hook; None dev = filesystem scope.
+    pub fn opt_hook_pre_set(&self, dev: Option<&DevRef>, id: c::bch_opt_id, v: u64)
+        -> Result<(), BchError>
+    {
+        ret_to_result(unsafe {
+            c::bch2_opt_hook_pre_set(self.raw,
+                dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
+                0, id, v, true, core::ptr::null_mut())
+        })
+    }
+
+    /// Set an option in the superblock; None dev = filesystem scope.
+    pub fn opt_set_sb(&self, dev: Option<&DevRef>, opt: &c::bch_option, v: u64,
+                      val_str: Option<&core::ffi::CStr>)
+    {
+        unsafe {
+            c::bch2_opt_set_sb(self.raw,
+                dev.map_or(core::ptr::null_mut(), |d| d.as_mut_ptr()),
+                opt, v,
+                val_str.map_or(core::ptr::null(), |s| s.as_ptr()));
+        }
+    }
+
     /// Start the filesystem (recovery, journal replay, etc).
     pub fn start(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_fs_start(self.raw) })
@@ -222,6 +277,21 @@ impl Fs {
     /// Returns Ok(()) on success or the error code on failure.
     pub fn write_super_ret(&self) -> Result<(), BchError> {
         ret_to_result(unsafe { c::bch2_write_super(self.raw) })
+    }
+
+    /// bch2_write_super(), lifting nochanges around the write: inspection
+    /// opens (norecovery/nostart) imply nochanges, which makes write_super
+    /// a silent no-op - the right default, except when an offline admin
+    /// command is performing the user's explicitly requested write.
+    /// Caller must hold sb_lock.
+    pub fn write_super_force(&self) -> Result<(), BchError> {
+        unsafe {
+            let saved = (*self.raw).opts.nochanges;
+            (*self.raw).opts.nochanges = 0;
+            let ret = c::bch2_write_super(self.raw);
+            (*self.raw).opts.nochanges = saved;
+            ret_to_result(ret)
+        }
     }
 
     /// Check if a device index exists and has a device pointer.

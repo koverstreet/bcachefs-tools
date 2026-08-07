@@ -757,6 +757,20 @@ int bch2_btree_node_lock_write_contended(struct btree_trans *trans, struct btree
  * temporary unlocked path, take the lock, then record the lock on the path
  * so the cycle detector can find us as the holder.
  *
+ * @hash_val is the node's expected identity — btree_ptr_hash_val() of the key
+ * it was found under, or a snapshot of b->hash_val taken while the pointer
+ * was known valid. It arms the node-reuse check in
+ * bch2_six_check_for_deadlock(): if the identity is gone by the time we'd
+ * sleep, the lock attempt aborts with no_btree_node_reused rather than
+ * parking behind an off-path holder (btree_node_reclaim's trylocks) that may
+ * hold the reused node's lock indefinitely.
+ *
+ * Pass 0 only when reclaim genuinely can't take the node — e.g. the write
+ * completion path, which owns the write_in_flight that blocks reclaim — or
+ * for key cache locks, which the check doesn't cover. Beware flags another
+ * thread can clear: a journal pin doesn't pin (the node can be written and
+ * the pin dropped concurrently), and neither does dirty on its own.
+ *
  * Caller releases via bch2_btree_node_unlock_with_path().
  *
  * May return a transaction_restart; wrap in lockrestart_do().
@@ -765,15 +779,14 @@ int __must_check
 bch2_btree_node_lock_with_path(struct btree_trans *trans,
 			       struct btree_bkey_cached_common *b,
 			       enum six_lock_type type,
+			       u64 hash_val,
 			       btree_path_idx_t *path_idx_out)
 {
 	btree_path_idx_t path_idx = bch2_path_get_unlocked_mut(trans,
 				b->btree_id, b->level, btree_node_pos(b), b->cached);
 
 	struct btree_path *path = trans->paths + path_idx;
-	/* No key context here — caller already has the b. Skip the hash_val
-	 * check; we're acquiring on a node the caller already validated. */
-	trans->locking_hash_val = 0;
+	trans->locking_hash_val = hash_val;
 	trans->locking_root_id	= -1;
 	int ret = btree_node_lock(trans, path, b, b->level, type);
 	if (ret) {
@@ -1249,6 +1262,19 @@ void bch2_trans_unlock(struct btree_trans *trans)
 		bch2_btree_cache_cannibalize_unlock(trans);
 }
 
+/*
+ * Slow devices legitimately hold the srcu lock across submit_bio() for a long
+ * time (e.g. scanning the inodes btree off a slow disk during snapshot
+ * deletion), so scale the "held too long" warning past the worst observed
+ * device latency rather than spamming the log when the real problem is just
+ * slow storage. The lock is held over btree node reads on any online device,
+ * so that's the latency we key off.
+ */
+static unsigned long srcu_hold_warn_thresh(struct bch_fs *c)
+{
+	return max(bch2_dev_latency_max(c, &c->devs_online, READ) * 2, HZ * 10UL);
+}
+
 void bch2_trans_unlock_long(struct btree_trans *trans)
 {
 	bch2_trans_unlock(trans);
@@ -1265,7 +1291,9 @@ void bch2_trans_unlock_long(struct btree_trans *trans)
 
 		if (unlikely(trans->srcu_held &&
 			     !trans->srcu_io_submitted &&
-			     time_after(jiffies, trans->srcu_lock_time + HZ * 10))) {
+			     time_after(jiffies, trans->srcu_lock_time + HZ * 10) &&
+			     time_after(jiffies, trans->srcu_lock_time +
+					srcu_hold_warn_thresh(c)))) {
 			CLASS(bch_log_msg_ratelimited, msg)(c);
 
 			prt_printf(&msg.m, "btree trans held srcu lock (delaying memory reclaim) for %lu seconds\n",

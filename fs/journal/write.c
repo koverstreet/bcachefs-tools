@@ -36,14 +36,15 @@ static unsigned journal_alloc_target(struct bch_fs *c)
 }
 
 static void journal_advance_devs_to_next_bucket(struct journal *j,
-						struct dev_alloc_list *devs,
+						struct bch_devs_mask *devs,
 						unsigned sectors, __le64 seq)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
+	unsigned i;
 
 	guard(rcu)();
-	darray_for_each(*devs, i) {
-		struct bch_dev *ca = rcu_dereference(c->devs[*i]);
+	for_each_set_bit(i, devs->d, BCH_SB_MEMBERS_MAX) {
+		struct bch_dev *ca = rcu_dereference(c->devs[i]);
 		if (!ca)
 			continue;
 
@@ -67,31 +68,56 @@ static void journal_advance_devs_to_next_bucket(struct journal *j,
 
 static void __journal_write_alloc(struct journal *j,
 				  struct journal_buf *w,
-				  struct dev_alloc_list *devs,
+				  struct bch_devs_mask *devs,
 				  unsigned sectors,
 				  unsigned *replicas,
 				  unsigned replicas_want)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
-	darray_for_each(*devs, i) {
-		struct bch_dev *ca = bch2_dev_get_ioref(c, *i, WRITE,
-					BCH_DEV_WRITE_REF_journal_write);
+	while (*replicas < replicas_want) {
+		/*
+		 * Journal replicas spread across failure domains, like data:
+		 * one pick per sort, since each pick changes the occupancy
+		 * the next should avoid:
+		 */
+		struct bch_devs_mask chosen = {};
+		bkey_for_each_ptr(bch2_bkey_ptrs_c(bkey_i_to_s_c(&w->key)), ptr)
+			__set_bit(ptr->dev, chosen.d);
+
+		struct dev_alloc_list devs_sorted;
+		bch2_dev_alloc_list_devs(c, &j->wp.stripe, devs,
+					 &chosen, j->wp_domain_keys, &devs_sorted);
+
+		struct bch_dev *ca = NULL;
+		darray_for_each(devs_sorted, i) {
+			ca = bch2_dev_get_ioref(c, *i, WRITE,
+						BCH_DEV_WRITE_REF_journal_write);
+			if (!ca)
+				continue;
+
+			struct journal_device *ja = &ca->journal;
+
+			/*
+			 * Check that we can use this device, and aren't
+			 * already using it:
+			 */
+			if (!ja->nr ||
+			    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&w->key), ca->dev_idx) ||
+			    sectors > ja->sectors_free) {
+				enumerated_ref_put(&ca->io_ref[WRITE],
+						   BCH_DEV_WRITE_REF_journal_write);
+				ca = NULL;
+				continue;
+			}
+
+			break;
+		}
+
 		if (!ca)
-			continue;
+			return;
 
 		struct journal_device *ja = &ca->journal;
-
-		/*
-		 * Check that we can use this device, and aren't already using
-		 * it:
-		 */
-		if (!ja->nr ||
-		    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&w->key), ca->dev_idx) ||
-		    sectors > ja->sectors_free) {
-			enumerated_ref_put(&ca->io_ref[WRITE], BCH_DEV_WRITE_REF_journal_write);
-			continue;
-		}
 
 		bch2_dev_stripe_increment(ca, &j->wp.stripe);
 
@@ -112,9 +138,6 @@ static void __journal_write_alloc(struct journal *j,
 		ja->bucket_seq[ja->cur_idx] = le64_to_cpu(w->data->seq);
 
 		*replicas += ca->mi.durability;
-
-		if (*replicas >= replicas_want)
-			break;
 	}
 }
 
@@ -123,7 +146,6 @@ static int journal_write_alloc(struct journal *j, struct journal_buf *w,
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 	struct bch_devs_mask devs;
-	struct dev_alloc_list devs_sorted;
 	unsigned sectors = vstruct_sectors(w->data, c->block_bits);
 	unsigned target = journal_alloc_target(c);
 	unsigned replicas_want = READ_ONCE(c->opts.metadata_replicas);
@@ -131,15 +153,14 @@ static int journal_write_alloc(struct journal *j, struct journal_buf *w,
 
 retry_target:
 	devs = target_rw_devs(c, BCH_DATA_journal, target);
-	bch2_dev_alloc_list(c, &j->wp.stripe, &devs, &devs_sorted);
 retry_alloc:
-	__journal_write_alloc(j, w, &devs_sorted, sectors, replicas, replicas_want);
+	__journal_write_alloc(j, w, &devs, sectors, replicas, replicas_want);
 
 	if (likely(*replicas >= replicas_want))
 		goto done;
 
 	if (!advance_done) {
-		journal_advance_devs_to_next_bucket(j, &devs_sorted, sectors, w->data->seq);
+		journal_advance_devs_to_next_bucket(j, &devs, sectors, w->data->seq);
 		advance_done = true;
 		goto retry_alloc;
 	}
@@ -182,7 +203,7 @@ static void journal_buf_realloc(struct journal *j, struct journal_buf *buf)
 	if (bch2_btree_write_buffer_resize(c, btree_write_buffer_size))
 		return;
 
-	new_buf = kvmalloc(new_size, GFP_NOFS|__GFP_NOWARN);
+	new_buf = kvmalloc(new_size, GFP_NOIO|__GFP_NOWARN);
 	if (!new_buf)
 		return;
 
@@ -261,78 +282,85 @@ static CLOSURE_CALLBACK(journal_write_done)
 	 * Lock ordering: buf_lock, pin_resize_lock, then j->lock - same as the
 	 * flusher and the journal write path.
 	 */
-	mutex_lock(&j->buf_lock);
 
 	/*
-	 * pin_resize_lock held across the journal pin FIFO updates below; it
-	 * keeps the pin_list stable while we rebuild temp replicas entries from
-	 * the compact device list for refcount updates.
+	 * kvfree can sleep, so it can't run under j->lock (or any lock here):
+	 * function scope defers the cleanup until return, after every lock is
+	 * dropped. Declared inside the scoped_guard below, it would run at the
+	 * block's closing brace - where j->lock, taken inside the block, is
+	 * still held for the completion loop that follows:
 	 */
-	percpu_down_read(&j->pin_resize_lock);
-	struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
-
-	if (unlikely(w->failed.nr)) {
-		union bch_replicas_padded r;
-		journal_pin_devs_to_replicas(&r, pin);
-		bch2_replicas_entry_put(c, &r.e);
-		pin->devs.nr = 0;
-	}
-
-	if (!pin->devs.nr && !w->empty) {
-		union bch_replicas_padded r;
-		bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
-		err = bch2_replicas_entry_get(c, &r.e);
-		if (!err)
-			journal_pin_set_devs(pin, &w->devs_written);
-	}
-
-	if (unlikely(w->failed.nr || err)) {
-		CLASS(bch_log_msg, msg)(c);
-
-		/* Separate ratelimit_states for hard and soft errors */
-		msg.m.suppress = !err
-			? bch2_ratelimit(c)
-			: bch2_ratelimit(c);
-
-		prt_printf(&msg.m, "error writing journal entry %llu\n", seq_wrote);
-		bch2_io_failures_to_text(&msg.m, c, &w->failed);
-
-		if (!w->devs_written.nr)
-			err = bch_err_throw(c, journal_write_err);
-
-		if (!err) {
-			prt_printf(&msg.m, "wrote degraded to ");
-			bch2_devs_list_to_text(&msg.m, c, &w->devs_written);
-			prt_newline(&msg.m);
-		} else {
-			prt_printf(&msg.m, "error %s\n", bch2_err_str(err));
-			percpu_up_read(&j->pin_resize_lock);
-			bch2_fs_emergency_read_only(c, &msg.m);
-			percpu_down_read(&j->pin_resize_lock);
-		}
-	}
-
-	closure_debug_destroy(cl);
+	void *buf_to_free __free(kvfree) = NULL;
 
 	CLASS(darray_replicas_entry_refs, replicas_refs)();
+	scoped_guard(mutex_noio, &j->buf_lock) {
+		/*
+		 * pin_resize_lock held across the journal pin FIFO updates below; it
+		 * keeps the pin_list stable while we rebuild temp replicas entries from
+		 * the compact device list for refcount updates.
+		 */
+		percpu_down_read(&j->pin_resize_lock);
+		struct journal_entry_pin_list *pin = journal_seq_pin(j, seq_wrote);
 
-	spin_lock(&j->lock);
-	BUG_ON(seq_wrote < j->pin.front);
-	if (err && (!j->err_seq || seq_wrote < j->err_seq))
-		j->err_seq = seq_wrote;
+		if (unlikely(w->failed.nr)) {
+			union bch_replicas_padded r;
+			journal_pin_devs_to_replicas(&r, pin);
+			bch2_replicas_entry_put(c, &r.e);
+			pin->devs.nr = 0;
+		}
 
-	j->flushes_outstanding -= w->flush;
+		if (!pin->devs.nr && !w->empty) {
+			union bch_replicas_padded r;
+			bch2_devlist_to_replicas(&r.e, BCH_DATA_journal, w->devs_written);
+			err = bch2_replicas_entry_get(c, &r.e);
+			if (!err)
+				journal_pin_set_devs(pin, &w->devs_written);
+		}
 
-	if (!j->free_buf || j->free_buf_size < w->buf_size) {
-		swap(j->free_buf,	w->data);
-		swap(j->free_buf_size,	w->buf_size);
+		if (unlikely(w->failed.nr || err)) {
+			CLASS(bch_log_msg, msg)(c);
+
+			/* Separate ratelimit_states for hard and soft errors */
+			msg.m.suppress = !err
+				? bch2_ratelimit(c)
+				: bch2_ratelimit(c);
+
+			prt_printf(&msg.m, "error writing journal entry %llu\n", seq_wrote);
+			bch2_io_failures_to_text(&msg.m, c, &w->failed);
+
+			if (!w->devs_written.nr)
+				err = bch_err_throw(c, journal_write_err);
+
+			if (!err) {
+				prt_printf(&msg.m, "wrote degraded to ");
+				bch2_devs_list_to_text(&msg.m, c, &w->devs_written);
+				prt_newline(&msg.m);
+			} else {
+				prt_printf(&msg.m, "error %s\n", bch2_err_str(err));
+				percpu_up_read(&j->pin_resize_lock);
+				bch2_fs_emergency_read_only(c, &msg.m);
+				percpu_down_read(&j->pin_resize_lock);
+			}
+		}
+
+		closure_debug_destroy(cl);
+
+		spin_lock(&j->lock);
+		BUG_ON(seq_wrote < j->pin.front);
+		if (err && (!j->err_seq || seq_wrote < j->err_seq))
+			j->err_seq = seq_wrote;
+
+		j->flushes_outstanding -= w->flush;
+
+		if (!j->free_buf || j->free_buf_size < w->buf_size) {
+			swap(j->free_buf,	w->data);
+			swap(j->free_buf_size,	w->buf_size);
+		}
+
+		buf_to_free = w->data;
+		w->data = NULL;
+		w->buf_size = 0;
 	}
-
-	/* kvfree can allocate memory, and can't be called under j->lock */
-	void *buf_to_free __free(kvfree) = w->data;
-	w->data = NULL;
-	w->buf_size = 0;
-	mutex_unlock(&j->buf_lock);
 
 	bool completed = false;
 	bool last_seq_ondisk_updated = false;
@@ -565,7 +593,7 @@ static CLOSURE_CALLBACK(journal_write_submit)
 		 */
 		struct bio *bio = bch2_bio_map_and_chain(ca->disk_sb.bdev,
 				w->data, sectors << 9, ptr->offset,
-				opf, GFP_NOFS, &ja->bio_set);
+				opf, GFP_NOIO, &ja->bio_set);
 		struct journal_bio *jbio =
 			container_of(bio, struct journal_bio, bio);
 
@@ -605,7 +633,7 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 			struct bio *bio = bio_alloc_bioset(ca->disk_sb.bdev, 0,
 					REQ_OP_WRITE|REQ_SYNC|REQ_IDLE|
 					REQ_META|REQ_PREFLUSH,
-					GFP_NOFS, &ja->bio_set);
+					GFP_NOIO, &ja->bio_set);
 			struct journal_bio *jbio = container_of(bio, struct journal_bio, bio);
 
 			jbio->ca		= ca;
@@ -797,11 +825,11 @@ CLOSURE_CALLBACK(bch2_journal_write)
 	BUG_ON(w->write_allocated);
 	BUG_ON(w->write_done);
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 
 	j->write_start_time = local_clock();
 
-	scoped_guard(mutex, &j->buf_lock) {
+	scoped_guard(mutex_noio, &j->buf_lock) {
 		journal_buf_realloc(j, w);
 
 		ret = bch2_journal_write_prep(j, w);

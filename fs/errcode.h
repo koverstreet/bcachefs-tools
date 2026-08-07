@@ -64,9 +64,6 @@
 	x(EIO,				blockdev_io_error)			\
 	BLK_ERRS()								\
 	x(BCH_ERR_blockdev_io_error,	BLK_STS_UNKNOWN)			\
-	x(EIO,				zstd_error)				\
-	ZSTD_ERRS()								\
-	x(BCH_ERR_zstd_error,		ZSTD_error_unknown)			\
 	x(ERANGE,			ERANGE_option_too_small)		\
 	x(ERANGE,			ERANGE_option_too_big)			\
 	x(ERANGE,			projid_too_big)				\
@@ -186,6 +183,7 @@
 	x(ENOENT,			ENOENT_not_directory)			\
 	x(ENOENT,			ENOENT_directory_dead)			\
 	x(ENOENT,			ENOENT_subvolume)			\
+	x(ENOENT,			ENOENT_subvolume_deleted)		\
 	x(ENOENT,			ENOENT_snapshot)			\
 	x(ENOENT,			ENOENT_snapshot_tree)			\
 	x(ENOENT,			ENOENT_dirent_doesnt_match_inode)	\
@@ -311,6 +309,7 @@
 	x(EINVAL,			inode_unpack_error)			\
 	x(EINVAL,			inode_not_unlinked)			\
 	x(EINVAL,			inode_has_child_snapshot)		\
+	x(EINVAL,			inode_is_subvolume_root)		\
 	x(EINVAL,			varint_decode_error)			\
 	x(EINVAL,			erasure_coding_found_btree_node)	\
 	x(EINVAL,			erasure_coding_stripe_update_err)	\
@@ -411,8 +410,8 @@
 	x(EINVAL,			EINVAL_snapshot_delete_bad_topology)		\
 	x(EINVAL,			EINVAL_snapshot_parent_missing_child_ptr)	\
 	x(EINVAL,			EINVAL_snapshot_child_bad_parent)		\
+	x(EINVAL,			EINVAL_snapshot_edge_to_missing_node)		\
 	x(EINVAL,			EINVAL_snapshot_bad_subvol_flag)		\
-	x(EINVAL,			EINVAL_snapshot_subvol_edge_bad)		\
 	x(EINVAL,			EINVAL_opt_parse_uint_required)		\
 	x(EINVAL,			EINVAL_opt_parse_str_required)		\
 	x(EINVAL,			EINVAL_test_zero_nr_or_threads)		\
@@ -544,16 +543,21 @@
 	x(EIO,				recompute_checksum)			\
 	x(BCH_ERR_data_read_retry_avoid,decompress)				\
 	x(BCH_ERR_decompress,		decompress_exceeded_max_encoded_extent)	\
+	x(BCH_ERR_decompress,		decompress_lz4_old)			\
 	x(BCH_ERR_decompress,		decompress_lz4)				\
 	x(BCH_ERR_decompress,		decompress_gzip)			\
 	x(BCH_ERR_decompress,		decompress_gzip_size_mismatch)		\
 	x(BCH_ERR_decompress,		decompress_zstd_src_len_bad)		\
 	x(BCH_ERR_decompress,		decompress_zstd_size_mismatch)		\
+	x(BCH_ERR_decompress,		zstd_error)				\
+	ZSTD_ERRS()								\
+	x(BCH_ERR_zstd_error,		ZSTD_error_unknown)			\
 	x(EIO,				data_write)				\
 	x(BCH_ERR_data_write,		data_write_io)				\
 	x(BCH_ERR_data_write,		data_write_csum)			\
 	x(BCH_ERR_data_write,		data_write_invalid_ptr)			\
 	x(BCH_ERR_data_write,		data_write_misaligned)			\
+	x(BCH_ERR_data_write,		data_write_need_fresh_buckets)		\
 	x(EIO,				data_read)				\
 	x(BCH_ERR_data_read,		no_device_to_read_from)			\
 	x(BCH_ERR_data_read,		no_devices_valid)			\
@@ -586,12 +590,15 @@
 	x(0,				snapshot)			\
 	x(BCH_ERR_snapshot,		invalid_snapshot_node)			\
 	x(BCH_ERR_snapshot,		snapshot_multiple_descendents)		\
+	x(BCH_ERR_snapshot,		snapshot_lostfound_unreachable)		\
 	x(0,				option_needs_open_fs)			\
 	x(0,				remove_disk_accounting_entry)		\
 	x(0,				nocow_trylock_fail)			\
 	x(BCH_ERR_nocow_trylock_fail,	nocow_trylock_contended)		\
 	x(BCH_ERR_nocow_trylock_fail,	nocow_trylock_bucket_full)		\
-	x(EINTR,			recovery_cancelled)			\
+	x(EINTR,			cancelled)				\
+	x(BCH_ERR_cancelled,		recovery_cancelled)			\
+	x(BCH_ERR_cancelled,		kthread_cancelled)			\
 	x(0,				shutdown_with_errors)			\
 	x(BCH_ERR_shutdown_with_errors,	shutdown_with_errors_fixed)		\
 	x(BCH_ERR_shutdown_with_errors,	shutdown_with_errors_unfixed)		\

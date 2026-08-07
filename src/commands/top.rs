@@ -1,7 +1,6 @@
 use std::collections::{HashMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, IsTerminal, Read, Write};
-use std::mem;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::process;
@@ -23,36 +22,23 @@ use serde::Deserialize;
 use crate::commands::DeviceNameArgs;
 use crate::util::{fmt_bytes_human, fmt_num_human, run_tui};
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::ioctl::bch_ioc_w;
+use crate::wrappers::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_COUNTERS};
 use crate::wrappers::sysfs::{DeviceNameMode, dev_display_name_from_sysfs, sysfs_path_from_fd};
 
-// ioctl constants
-
-const BCH_IOCTL_QUERY_COUNTERS_NR: u32 = 21;
 const BCH_IOCTL_QUERY_COUNTERS_MOUNT: u16 = 1 << 0;
 
 // ioctl query
 
-fn read_counters(fd: i32, flags: u16, nr_stable: u16) -> Result<Vec<u64>> {
-    let hdr_size = mem::size_of::<bch_ioctl_query_counters>();
-    let buf_size = hdr_size + (nr_stable as usize) * mem::size_of::<u64>();
-    let mut buf = vec![0u8; buf_size];
+fn read_counters(fd: std::os::fd::BorrowedFd, flags: u16, nr_stable: u16) -> Result<Vec<u64>> {
+    let mut buf = IoctlBuf::<bch_ioctl_query_counters>::new::<u64>(nr_stable as usize);
+    let hdr = buf.hdr_mut();
+    hdr.nr = nr_stable;
+    hdr.flags = flags;
 
-    unsafe {
-        let hdr = &mut *(buf.as_mut_ptr() as *mut bch_ioctl_query_counters);
-        hdr.nr = nr_stable;
-        hdr.flags = flags;
-    }
+    unsafe { ioctl_ptr::<BCH_IOCTL_QUERY_COUNTERS>(fd, buf.as_mut_ptr())? };
 
-    let request = bch_ioc_w::<bch_ioctl_query_counters>(BCH_IOCTL_QUERY_COUNTERS_NR);
-    let ret = unsafe { libc::ioctl(fd, request, buf.as_mut_ptr()) };
-    if ret < 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
-
-    let actual_nr = unsafe { (*(buf.as_ptr() as *const bch_ioctl_query_counters)).nr } as usize;
-    let data = unsafe { buf.as_ptr().add(hdr_size) as *const u64 };
-    Ok((0..actual_nr).map(|i| unsafe { std::ptr::read_unaligned(data.add(i)) }).collect())
+    let nr = (buf.hdr().nr as usize).min(nr_stable as usize);
+    Ok(unsafe { buf.hdr().d.as_slice(nr) }.to_vec())
 }
 
 // Per-device IO from sysfs (io_done is JSON: {"read": {...}, "write": {...}}, values in bytes)
@@ -325,7 +311,7 @@ impl Page {
 }
 
 struct TopState {
-    ioctl_fd:       i32,
+    handle:         BcachefsHandle,
     nr_stable:      u16,
     mount_vals:     Vec<u64>,
     start_vals:     Vec<u64>,
@@ -345,11 +331,11 @@ struct TopState {
 
 impl TopState {
     fn new(
-        handle: &BcachefsHandle,
+        handle: BcachefsHandle,
         human_readable: bool,
         name_mode: DeviceNameMode,
     ) -> Result<Self> {
-        let ioctl_fd = handle.ioctl_fd_raw();
+        let ioctl_fd = handle.ioctl_fd();
         let nr_stable = COUNTERS.iter().map(|c| c.stable_id).max().unwrap_or(0) + 1;
 
         let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
@@ -362,7 +348,7 @@ impl TopState {
             .unwrap_or_default();
 
         Ok(TopState {
-            ioctl_fd, nr_stable,
+            handle, nr_stable,
             mount_vals, start_vals, prev_vals,
             prev_dev_io: HashMap::new(),
             human_readable,
@@ -585,7 +571,7 @@ fn run_non_interactive(
     delay: u32,
     name_mode: DeviceNameMode,
 ) -> Result<()> {
-    let ioctl_fd   = handle.ioctl_fd_raw();
+    let ioctl_fd   = handle.ioctl_fd();
     let nr_stable  = COUNTERS.iter().map(|c| c.stable_id).max().unwrap_or(0) + 1;
     let mount_vals = read_counters(ioctl_fd, BCH_IOCTL_QUERY_COUNTERS_MOUNT, nr_stable)?;
     let sysfs_path = sysfs_path_from_fd(handle.sysfs_fd())?;
@@ -618,7 +604,7 @@ fn run_interactive(
     delay: u32,
     name_mode: DeviceNameMode,
 ) -> Result<()> {
-    let mut state = TopState::new(&handle, human_readable, name_mode)?;
+    let mut state = TopState::new(handle, human_readable, name_mode)?;
     state.interval_secs = delay.max(1);
 
     /* Sample once up front; prev == curr so the first frame shows zero rates.
@@ -626,7 +612,7 @@ fn run_interactive(
      * advance the rate baseline) on the interval timeout, never on a keypress -
      * otherwise scrolling would resample with ~no elapsed time and zero the
      * rate column. */
-    let mut curr = read_counters(state.ioctl_fd, 0, state.nr_stable)?;
+    let mut curr = read_counters(state.handle.ioctl_fd(), 0, state.nr_stable)?;
     state.prev_vals = curr.clone();
     let mut dev_io = read_device_io(&state.sysfs_path, state.name_mode);
     state.prev_dev_io = dev_io.iter()
@@ -730,7 +716,7 @@ fn run_interactive(
             state.prev_dev_io = dev_io.into_iter()
                 .map(|d| (d.label, (d.read_bytes, d.write_bytes)))
                 .collect();
-            curr = read_counters(state.ioctl_fd, 0, state.nr_stable)?;
+            curr = read_counters(state.handle.ioctl_fd(), 0, state.nr_stable)?;
             dev_io = read_device_io(&state.sysfs_path, state.name_mode);
         }
     })

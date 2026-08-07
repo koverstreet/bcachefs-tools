@@ -125,6 +125,18 @@ int __bch2_insert_snapshot_whiteouts(struct btree_trans *trans,
 				     snapshot_id_list *s)
 {
 	darray_for_each(*s, id) {
+		/*
+		 * In fsck, a repair can fan whiteouts across an unbounded
+		 * number of snapshots: commit and restart before the batch
+		 * hits the trans mem cap. The re-drive converges - committed
+		 * whiteouts fail the KEY_TYPE_deleted check below and are
+		 * skipped. Runtime callers (extent splits) are excluded so
+		 * their whiteouts stay atomic with the extent update:
+		 */
+		if (test_bit(BCH_FS_in_fsck, &trans->c->flags))
+			try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,
+						BCH_TRANS_COMMIT_no_enospc));
+
 		pos.snapshot = *id;
 
 		CLASS(btree_iter, iter)(trans, btree, pos, BTREE_ITER_not_extents|BTREE_ITER_intent);
@@ -177,7 +189,7 @@ int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
 	 * reservation:
 	 */
 	if (nr_splits > 1 &&
-	    (compressed_sectors = bch2_bkey_sectors_compressed(c, old)))
+	    (compressed_sectors = bch2_bkey_durability_safe(c, old).sectors_compressed))
 		trans->extra_disk_res += compressed_sectors * (nr_splits - 1);
 
 	if (front_split) {

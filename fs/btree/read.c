@@ -117,6 +117,18 @@ static void btree_err_msg(struct printbuf *out, struct bch_fs *c, struct bch_dev
 	prt_newline(out);
 }
 
+/*
+ * Damage we were able to work around while parsing: the in-memory node is
+ * usable, but what's on disk isn't, so the repair only means something once
+ * it's been written back.
+ */
+static int btree_err_degraded(struct bch_fs *c, struct btree *b)
+{
+	set_btree_node_need_rewrite(b);
+	set_btree_node_need_rewrite_error(b);
+	return bch_err_throw(c, fsck_fix);
+}
+
 __printf(11, 12)
 static int __btree_err(enum bch_fsck_flags flags,
 		       struct bch_fs *c,
@@ -151,10 +163,21 @@ static int __btree_err(enum bch_fsck_flags flags,
 					bkey_i_to_s_c(&b->key),
 					failed, &pick, 0, 0) == 1;
 
-		return !have_retry &&
-			(flags & FSCK_CAN_FIX) &&
-			bch2_fsck_err_opt(c, FSCK_CAN_FIX, err_type) == -BCH_ERR_fsck_fix
-			? bch_err_throw(c, fsck_fix)
+		/*
+		 * Reading is not repairing, so fix_errors has no say here: it
+		 * decides whether a repair is persisted, not whether a node can
+		 * be read. Consulting it meant a node that parses fine was
+		 * reported unreadable whenever the run wasn't fixing errors -
+		 * which is every ordinary mount, since fix_errors defaults to
+		 * exit and bset_bad_csum isn't autofix. Topology repair then
+		 * dropped a node that was sitting right there, leaving a gap
+		 * that btree node scan filled with the same node, forever.
+		 *
+		 * The write is gated where it belongs: bch2_async_btree_op()
+		 * only queues a rewrite once the fs can take a write ref.
+		 */
+		return !have_retry && (flags & FSCK_CAN_FIX)
+			? btree_err_degraded(c, b)
 			: bch_err_throw(c, btree_node_validate_err);
 	} else {
 		CLASS(bch_log_msg, msg)(c);
@@ -269,8 +292,7 @@ int bch2_validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			 "bset version %u older than superblock version_min %u",
 			 version, c->sb.version_min)) {
 		if (bch2_version_compatible(version)) {
-			guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-			guard(mutex)(&c->sb_lock);
+			guard(mutex_noio)(&c->sb_lock);
 			c->disk_sb.sb->version_min = cpu_to_le16(version);
 			bch2_write_super(c);
 		} else {
@@ -286,8 +308,7 @@ int bch2_validate_bset(struct bch_fs *c, struct bch_dev *ca,
 			 btree_node_bset_newer_than_sb,
 			 "bset version %u newer than superblock version %u",
 			 version, c->sb.version)) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-		guard(mutex)(&c->sb_lock);
+		guard(mutex_noio)(&c->sb_lock);
 		c->disk_sb.sb->version = cpu_to_le16(version);
 		bch2_write_super(c);
 	}
@@ -594,7 +615,7 @@ int bch2_btree_node_read_done(struct bch_fs *c, struct bch_dev *ca,
 	/* We might get called multiple times on read retry: */
 	b->written = 0;
 
-	iter = mempool_alloc(&c->btree.fill_iter, GFP_NOFS);
+	iter = mempool_alloc(&c->btree.fill_iter, GFP_NOIO);
 	sort_iter_init(iter, b, (btree_blocks(c) + 1) * 2);
 
 	if (bch2_meta_read_fault("btree"))
@@ -1058,7 +1079,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 	bio = bio_alloc_bioset(NULL,
 			       buf_nr_bvecs(b->data, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_SYNC|REQ_META,
-			       GFP_NOFS,
+			       GFP_NOIO,
 			       &c->btree.bio);
 	rb = container_of(bio, struct btree_read_bio, bio);
 	rb->c			= c;

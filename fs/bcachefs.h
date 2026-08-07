@@ -39,6 +39,7 @@ struct task_struct;
 #include <linux/bug.h>
 #include <linux/bio.h>
 #include <linux/kobject.h>
+#include <linux/kthread.h>
 #include <linux/list.h>
 #include <linux/math64.h>
 #include <linux/mutex.h>
@@ -74,6 +75,7 @@ struct task_struct;
 #include "util/enumerated_ref_types.h"
 #include "util/fast_list.h"
 #include "util/fifo.h"
+#include "util/locking.h"
 #include "util/seqmutex.h"
 #include "util/time_stats.h"
 #include "util/thread_with_file_types.h"
@@ -377,6 +379,9 @@ BCH_DEBUG_PARAMS_ALL()
 	x(blocked_journal_low_on_pin,					\
 	  "Blocked: journal pins (dirty btree nodes, "			\
 	  "key cache entries) not flushed fast enough")			\
+	x(blocked_journal_low_on_open_buckets,				\
+	  "Blocked: open buckets running low, throttling new "		\
+	  "journal work so reclaim can free them")			\
 	x(blocked_journal_max_in_flight,				\
 	  "Blocked: too many journal writes in flight")			\
 	x(blocked_journal_max_open,					\
@@ -537,7 +542,6 @@ struct bch_dev {
 	struct bch_sb		*sb_read_scratch;
 	int			sb_write_error;
 	dev_t			dev;
-	atomic_t		flush_seq;
 
 	struct bch_devs_mask	self;
 
@@ -630,9 +634,9 @@ struct bch_dev {
 	x(write_disable_complete)	\
 	x(clean_shutdown)		\
 	x(in_recovery)			\
+	x(running_recovery_passes)	\
 	x(in_fsck)			\
 	x(initial_gc_unfixed)		\
-	x(need_delete_dead_snapshots)	\
 	x(error)			\
 	x(topology_error)		\
 	x(errors_fixed)			\
@@ -679,7 +683,6 @@ struct journal_seq_blacklist_table {
 	x(discard_fast)							\
 	x(check_discard_freespace_key)					\
 	x(invalidate)							\
-	x(delete_dead_snapshots)					\
 	x(gc_gens)							\
 	x(presplit_shard_boundaries)					\
 	x(snapshot_delete_pagecache)					\
@@ -753,7 +756,7 @@ struct bch_fs {
 	struct bch_sb_cpu	sb;
 	struct bch_sb_handle	disk_sb;
 	struct closure		sb_write;
-	struct mutex		sb_lock;
+	struct mutex_noio	sb_lock;
 	unsigned long		incompat_versions_requested[BITS_TO_LONGS(BCH_VERSION_MINOR(bcachefs_metadata_version_current))];
 	struct unicode_map	*cf_encoding;
 
@@ -872,6 +875,22 @@ struct bch_fs {
 int __bch2_err_throw(struct bch_fs *, int);
 
 #define bch_err_throw(_c, _err) __bch2_err_throw(_c, -BCH_ERR_##_err)
+
+/*
+ * Have we been told to stop? For long-running kthread work, so the check can be
+ * try()d where it belongs instead of open coded:
+ *
+ *	try(bch2_kthread_cancelled(c));
+ *
+ * Returns 0 outside a kthread, so paths shared with user context are unaffected.
+ */
+static inline int bch2_kthread_cancelled(struct bch_fs *c)
+{
+	if ((current->flags & PF_KTHREAD) && kthread_should_stop())
+		return bch_err_throw(c, kthread_cancelled);
+
+	return 0;
+}
 
 /* Read-only refs: */
 
@@ -1025,8 +1044,11 @@ struct bch_log_msg {
 
 static inline void bch2_log_msg_exit(struct bch_log_msg *msg)
 {
-	if (!msg->m.suppress)
+	if (!msg->m.suppress) {
+		/* elastic tabstops: align any raw \t/\r columns */
+		bch2_printbuf_tabstop_align(&msg->m);
 		bch2_print_str_loglevel(msg->c, msg->loglevel, msg->m.buf);
+	}
 	printbuf_exit(&msg->m);
 }
 

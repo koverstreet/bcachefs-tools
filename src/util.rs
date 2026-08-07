@@ -1,10 +1,12 @@
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
 use std::fs::File;
 use std::io;
+use std::os::fd::OwnedFd;
 use std::os::raw::c_char;
 use std::os::unix::fs::FileTypeExt;
+use std::path::Path;
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use bch_bindgen::c;
 use crossterm::{cursor, execute, terminal};
 use rustix::ioctl::{self, Getter};
@@ -43,6 +45,29 @@ impl std::ops::DerefMut for AlignedBuf {
 impl Drop for AlignedBuf {
     fn drop(&mut self) {
         unsafe { std::alloc::dealloc(self.ptr, self.layout) }
+    }
+}
+
+/// Open a directory fd for directory-scoped ioctls and *at() calls.
+pub fn open_dir(path: &Path) -> Result<OwnedFd> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let f = std::fs::OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_DIRECTORY)
+        .open(path)
+        .with_context(|| format!("Failed to open {}", path.display()))?;
+    Ok(f.into())
+}
+
+/// The name of a bch_sb_error_id - the same table fsck and the
+/// superblock error counters use.
+pub fn sb_error_name(id: u32) -> String {
+    if id < c::bch_sb_error_id::BCH_FSCK_ERR_MAX as u32 {
+        unsafe { CStr::from_ptr(*c::bch2_sb_error_strs.as_ptr().add(id as usize)) }
+            .to_string_lossy()
+            .into_owned()
+    } else {
+        format!("(unknown error {id})")
     }
 }
 
@@ -103,8 +128,10 @@ pub fn fmt_num_human(n: u64) -> String {
 pub fn file_size(f: &File) -> Result<u64> {
     let meta = f.metadata()?;
     if meta.file_type().is_block_device() {
-        // BLKGETSIZE64 = _IOR(0x12, 114, size_t)
-        const BLKGETSIZE64: ioctl::Opcode = ioctl::opcode::read::<u64>(0x12, 114);
+        // _IOR(0x12, 114, size_t): the size encoded in the number is
+        // sizeof(size_t), not of the u64 we read into - they differ on 32
+        // bit, so take the number bindgen computed for the target.
+        const BLKGETSIZE64: ioctl::Opcode = bch_bindgen::c::BCH_BLKGETSIZE64 as ioctl::Opcode;
         Ok(unsafe { ioctl::ioctl(f, Getter::<BLKGETSIZE64, u64>::new()) }?)
     } else {
         Ok(meta.len())

@@ -16,7 +16,7 @@ use clap::Parser;
 use crate::commands::DeviceNameArgs;
 use crate::util::{fmt_bytes_human, fmt_sectors_human};
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::ioctl::bch_ioc_w;
+use crate::wrappers::ioctl::{ioctl_w, BCH_IOCTL_DATA};
 use crate::wrappers::sysfs::{fs_get_devices, sysfs_path_from_fd};
 
 static INTERRUPTED: AtomicBool = AtomicBool::new(false);
@@ -24,8 +24,6 @@ static INTERRUPTED: AtomicBool = AtomicBool::new(false);
 extern "C" fn sigint_handler(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
 }
-
-const BCH_IOCTL_DATA_NR: u32 = 10;
 
 /// bch_ioctl_data_event is blocklisted from bindgen (packed+aligned conflict),
 /// so we read raw bytes and extract fields manually.
@@ -47,7 +45,7 @@ fn read_data_event(fd: &mut std::fs::File) -> io::Result<(u8, u8, bch_ioctl_data
     Ok((event_type, event_ret, p))
 }
 
-fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
+fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32) -> Result<std::fs::File> {
     let mut cmd = bch_ioctl_data {
         op: bch_bindgen::c::bch_data_ops::BCH_DATA_OP_scrub as u16,
         ..Default::default()
@@ -65,11 +63,7 @@ fn start_scrub(ioctl_fd: i32, dev_idx: u32, data_types: u32) -> Result<std::fs::
         p.add(1).write(data_types);
     }
 
-    let request = bch_ioc_w::<bch_ioctl_data>(BCH_IOCTL_DATA_NR);
-    let ret = unsafe { libc::ioctl(ioctl_fd, request, &mut cmd as *mut bch_ioctl_data) };
-    if ret < 0 {
-        return Err(std::io::Error::last_os_error().into());
-    }
+    let ret = ioctl_w::<BCH_IOCTL_DATA>(ioctl_fd, &cmd)?;
     Ok(unsafe { std::fs::File::from_raw_fd(ret) })
 }
 
@@ -144,7 +138,7 @@ fn scrub(cli: Cli) -> Result<()> {
     let name_mode = cli.device_names.name_mode();
     let devices = fs_get_devices(&sysfs_path, name_mode)?;
 
-    let ioctl_fd = handle.ioctl_fd_raw();
+    let ioctl_fd = handle.ioctl_fd();
     let dev_idx = handle.dev_idx();
 
     let mut scrub_devs: Vec<ScrubDev> = Vec::new();
@@ -263,6 +257,16 @@ fn scrub(cli: Cli) -> Result<()> {
             writeln!(io::stdout())?;
             eprintln!("Interrupted");
             exit_code |= 1;
+
+            // Parallelize kthread_stop() so we don't block on each thread serially
+            let stops: Vec<_> = scrub_devs
+                .iter_mut()
+                .filter_map(|dev| dev.progress_fd.take())
+                .map(|fd| thread::spawn(move || drop(fd)))
+                .collect();
+            for t in stops {
+                let _ = t.join();
+            }
             break;
         }
 

@@ -279,8 +279,24 @@ impl<'a> BkeySC<'a> {
         }
     }
 
+    /// Key only - type, pos, size - without rendering the value.
+    #[cfg(feature = "std")]
+    pub fn to_text_key(&self) -> BkeySCKeyToText<'a> {
+        BkeySCKeyToText {
+            k: BkeySC { k: self.k, v: self.v, iter: PhantomData },
+        }
+    }
+
     pub fn v(&self) -> BkeyValSC<'a> {
         unsafe { BkeyValSC::from_raw(self.k, self.v) }
+    }
+
+    /// The value as raw bytes: its full u64s extent past the key header.
+    pub fn val_bytes(&self) -> &'a [u8] {
+        let u64s = self.k.u64s as usize - core::mem::size_of::<c::bkey>() / 8;
+        unsafe {
+            core::slice::from_raw_parts(self.v as *const c::bch_val as *const u8, u64s * 8)
+        }
     }
 
     pub fn pos(&self) -> c::bpos {
@@ -393,6 +409,18 @@ impl fmt::Display for BkeySCToText<'_, '_> {
                 c::bch2_bkey_val_to_text(buf, self.fs.raw, self.k.to_raw())
             })
         }
+    }
+}
+
+#[cfg(feature = "std")]
+pub struct BkeySCKeyToText<'a> {
+    k: BkeySC<'a>,
+}
+
+#[cfg(feature = "std")]
+impl fmt::Display for BkeySCKeyToText<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        unsafe { printbuf_to_formatter(f, |buf| c::bch2_bkey_to_text(buf, self.k.k)) }
     }
 }
 

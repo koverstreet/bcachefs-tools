@@ -221,7 +221,8 @@ enum journal_space_from {
 	x(med_on_space)			\
 	x(low_on_space)			\
 	x(low_on_pin)			\
-	x(low_on_wb)
+	x(low_on_wb)			\
+	x(low_on_open_buckets)
 
 enum journal_flags {
 #define x(n)	JOURNAL_##n,
@@ -284,7 +285,7 @@ struct journal {
 	 * reservation: for synchronization between the btree write buffer code
 	 * and the journal write path:
 	 */
-	struct mutex		buf_lock;
+	struct mutex_noio	buf_lock;
 	/*
 	 * Ring of slots indexed by seq & JOURNAL_STATE_BUF_MASK; only used by
 	 * the reservation fastpath. Updated in journal_entry_open() when a new
@@ -380,6 +381,11 @@ struct journal {
 	u64			replay_journal_seq_end;
 
 	struct write_point	wp;
+	/*
+	 * Failure domain keys scratch for journal_write_alloc() - like
+	 * wp.stripe, protected by journal writes being allocated in order:
+	 */
+	u64			wp_domain_keys[BCH_SB_MEMBERS_MAX];
 	spinlock_t		err_lock;
 
 	struct mutex		reclaim_lock;

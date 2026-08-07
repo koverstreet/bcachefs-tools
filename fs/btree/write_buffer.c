@@ -603,16 +603,22 @@ static int bch2_btree_write_buffer_flush_locked(struct btree_trans *trans,
 	bool accounting_replay_done = test_bit(BCH_FS_accounting_replay_done, &c->flags);
 	int ret = 0;
 
+	/*
+	 * The flush allocates under the write buffer locks (flush shards, key
+	 * array resizes), and with swap on bcachefs those locks are on the
+	 * reclaim path - all of flush runs NOIO so allocations can't recurse
+	 * into the IO this flush is needed to complete:
+	 */
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+
 	try(bch2_journal_error(&c->journal));
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		if (!wb->flushing.keys.nr) {
-			guard(mutex)(&wb->inc.lock);
-			move_keys_from_inc_to_flushing(wb);
-		} else if (mutex_trylock(&wb->inc.lock)) {
-			move_keys_from_inc_to_flushing(wb);
-			mutex_unlock(&wb->inc.lock);
-		}
+	if (!wb->flushing.keys.nr) {
+		guard(mutex)(&wb->inc.lock);
+		move_keys_from_inc_to_flushing(wb);
+	} else if (mutex_trylock(&wb->inc.lock)) {
+		move_keys_from_inc_to_flushing(wb);
+		mutex_unlock(&wb->inc.lock);
 	}
 
 	if (!wb->flushing.keys.nr)
@@ -833,6 +839,14 @@ err:
 static void bch2_journal_keys_to_write_buffer_lock(struct bch_fs *c,
 						   struct journal_keys_to_wb *dst)
 {
+	/*
+	 * Intake allocates under the write buffer locks (key array resizes,
+	 * accounting pushes), which sit on the reclaim path when swap is on
+	 * bcachefs: callers must have established a NOIO scope. Both current
+	 * callers hold j->buf_lock, a mutex_noio, across the whole bracket:
+	 */
+	EBUG_ON(!(current->flags & PF_MEMALLOC_NOIO));
+
 	memset(dst, 0, sizeof(*dst));
 
 	for (enum bch_wb_btree idx = 0; idx < BCH_WB_BTREE_NR; idx++) {
@@ -931,7 +945,7 @@ static int fetch_wb_keys_from_journal(struct bch_fs *c, u64 max_seq)
 	bool blocked;
 	int ret = 0;
 
-	guard(mutex)(&j->buf_lock);
+	guard(mutex_noio)(&j->buf_lock);
 	bch2_journal_keys_to_write_buffer_lock(c, &dst);
 
 	while (!ret && (buf = bch2_next_write_buffer_flush_journal_buf(j, max_seq, &blocked))) {
@@ -1053,6 +1067,16 @@ static int bch2_btree_write_buffer_journal_flush(struct journal *j,
 	return 0;
 }
 
+/*
+ * Drops the transaction's locks - it commits the buffered keys itself. Call
+ * bch2_trans_begin() before touching the btree again.
+ *
+ * Every caller today satisfies that only by happening to follow this with a
+ * for_each_btree_key* or commit_do, which begin on their own. Put a plain read
+ * after it instead and you get "trans should be locked, unlocked by
+ * btree_write_buffer_flush_seq" - at runtime, in a kernel build, and nowhere
+ * that a tools build or a compile would show you.
+ */
 int bch2_btree_write_buffer_flush_sync(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
@@ -1199,7 +1223,7 @@ static void bch2_btree_write_buffer_flush_work_fn(struct work_struct *work)
 	struct bch_fs *c = wb->c;
 	enum wb_flush_caller caller = READ_ONCE(wb->flush_work_caller);
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
+	scoped_guard(memalloc_flags, PF_MEMALLOC_NOIO) {
 		guard(mutex)(&wb->flushing.lock);
 		CLASS(btree_trans, trans)(c);
 		while (1) {
@@ -1354,6 +1378,9 @@ int bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_
 
 int bch2_btree_write_buffer_resize(struct bch_fs *c, size_t new_size)
 {
+	/* Reallocates the key arrays under the write buffer locks: */
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
+
 	for (unsigned i = 0; i < BCH_WB_BTREE_NR; i++) {
 		struct bch_fs_btree_write_buffer *wb = &c->btree.write_buffer[i];
 		try(wb_keys_resize(&wb->flushing, new_size));
@@ -1393,10 +1420,10 @@ __cold void bch2_btree_write_buffer_to_text(struct printbuf *out, struct bch_fs 
 		prt_printf(out, "shards total:\t%llu\n",	wb->nr_shards_total);
 		if (wb->nr_flushes)
 			prt_printf(out, "avg shards/flush:\t%llu\n",
-				   wb->nr_shards_total / wb->nr_flushes);
+				   div64_u64(wb->nr_shards_total, wb->nr_flushes));
 		if (wb->nr_shards_total)
 			prt_printf(out, "avg shard size:\t%llu\n",
-				   wb->nr_keys_flushed / wb->nr_shards_total);
+				   div64_u64(wb->nr_keys_flushed, wb->nr_shards_total));
 
 		prt_printf(out, "flush work:\t%s\n",
 			   work_busy(&wb->flush_work) ? "busy" : "idle");

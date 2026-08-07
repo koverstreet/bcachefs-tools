@@ -90,7 +90,7 @@ __bch2_fs_usage_read_short(struct bch_fs *c)
 struct bch_fs_usage_short
 bch2_fs_usage_read_short(struct bch_fs *c)
 {
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	return __bch2_fs_usage_read_short(c);
 }
 
@@ -197,8 +197,7 @@ int __bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 				trans, stale_ptr_with_no_stale_ptrs_feature,
 				"stale cached ptr, but have no_stale_ptrs feature\n%s",
 				(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-			guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-			guard(mutex)(&c->sb_lock);
+			guard(mutex_noio)(&c->sb_lock);
 			c->disk_sb.sb->compat[0] &= ~cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
 			bch2_write_super(c);
 		}
@@ -251,7 +250,7 @@ void bch2_trans_account_disk_usage_change(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
 
-	lockdep_assert_held(&c->capacity.mark_lock);
+	lockdep_assert_held(&c->capacity.mark_lock.lock);
 
 	u64 disk_res_sectors = trans->disk_res ? trans->disk_res->sectors : 0;
 	static int warned_disk_usage = 0;
@@ -315,6 +314,22 @@ static int __mark_pointer(struct btree_trans *trans, struct bch_dev *ca,
 	return 0;
 }
 
+static noinline int
+trigger_pointer_dev_missing(struct btree_trans *trans,
+			    struct bkey_s_c k, unsigned dev,
+			    bool insert)
+{
+	struct bch_fs *c = trans->c;
+	int ret = insert
+		? bch_err_throw(c, trigger_pointer)
+		: 0;
+
+	CLASS(bch_log_msg_ratelimited, msg)(c);
+	prt_printf(&msg.m, "Error while %s key:\n", insert ? "inserting" : "deleting");
+	ret = bch2_dev_missing_bkey_msg(c, k, dev, &msg.m);
+	return ret;
+}
+
 static int bch2_trigger_pointer(struct btree_trans *trans,
 			enum btree_id btree_id, unsigned level,
 			struct bkey_s_c k, struct extent_ptr_decoded p,
@@ -343,19 +358,8 @@ static int bch2_trigger_pointer(struct btree_trans *trans,
 	}
 
 	CLASS(bch2_dev_tryget_noerror, ca)(c, p.ptr.dev);
-	if (unlikely(!ca)) {
-		int ret = insert
-			? bch_err_throw(c, trigger_pointer)
-			: 0;
-
-		if (p.ptr.dev != BCH_SB_MEMBER_INVALID) {
-			CLASS(bch_log_msg_ratelimited, msg)(c);
-			prt_printf(&msg.m, "Error while %s key:\n", insert ? "inserting" : "deleting");
-			ret = bch2_dev_missing_bkey_msg(c, k, p.ptr.dev, &msg.m);
-		}
-
-		return ret;
-	}
+	if (unlikely(!ca))
+		return trigger_pointer_dev_missing(trans, k, p.ptr.dev, insert);
 
 	struct bpos bucket = PTR_BUCKET_POS(ca, &p.ptr);
 	if (!bucket_valid(ca, bucket.offset)) {
@@ -373,13 +377,7 @@ static int bch2_trigger_pointer(struct btree_trans *trans,
 	}
 
 	if (flags & BTREE_TRIGGER_gc) {
-		CLASS(printbuf, buf)();
 		struct bucket *g = gc_bucket(ca, bucket.offset);
-		if (bch2_fs_inconsistent_on(!g, c, "reference to invalid bucket on device %u\n  %s",
-					    p.ptr.dev,
-					    (bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
-			return bch_err_throw(c, trigger_pointer);
-
 		struct bch_alloc_v4 old, new;
 
 		scoped_guard(bucket_lock, g) {
@@ -951,7 +949,7 @@ static int __bch2_trans_mark_dev_sb(struct btree_trans *trans, struct bch_dev *c
 	struct bch_fs *c = trans->c;
 	struct bch_sb_layout layout;
 
-	scoped_guard(mutex, &c->sb_lock)
+	scoped_guard(mutex_noio, &c->sb_lock)
 		layout = ca->disk_sb.sb->layout;
 
 	u64 bucket = 0;

@@ -116,6 +116,18 @@ static inline void set_bkey_val_bytes(struct bkey *k, unsigned bytes)
 
 #define bkey_val_end(_k)	((void *) (((u64 *) (_k).v) + bkey_val_u64s((_k).k)))
 
+/*
+ * Was this key written with @field?
+ *
+ * Values grow: a key written by an older version stops short of the fields
+ * added since, and the length is the only record of which ones it had. Reading
+ * such a field off a raw bkey reads the next key in the bset, and reading it
+ * off a padded copy reads 0 - which is indistinguishable from a stored 0.
+ */
+#define bkey_has_field(_k, _type, _field)				\
+	(bkey_val_bytes(_k) >= offsetof(struct bch_##_type, _field) +	\
+			       sizeof(((struct bch_##_type *) NULL)->_field))
+
 #define bkey_deleted(_k)	((_k)->type == KEY_TYPE_deleted)
 
 #define bkey_whiteout(_k)				\

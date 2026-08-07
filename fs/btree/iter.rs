@@ -279,6 +279,46 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(dst)
     }
 
+    /// bkey_reassemble() into a buffer with `val_u64s` of value space:
+    /// the copied value is zero-extended (or truncated) to the new size.
+    pub fn bkey_reassemble_resized(&self, k: BkeySC<'_>, val_u64s: usize)
+        -> Result<TransBkey<'a, 't>, BchError>
+    {
+        const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
+
+        let mut dst = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
+        dst.as_mut_u64s().fill(0);
+
+        let copy_val = (k.k.u64s as usize - BKEY_U64S).min(val_u64s);
+        unsafe {
+            core::ptr::copy_nonoverlapping(k.k, &mut dst.k_i_mut().k, 1);
+            core::ptr::copy_nonoverlapping(
+                k.v as *const c::bch_val as *const u64,
+                &mut dst.as_mut_u64s()[BKEY_U64S] as *mut u64,
+                copy_val,
+            );
+        }
+        dst.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
+
+        Ok(dst)
+    }
+
+    /// A fresh key: bkey_init()ed header with `type_` at `pos`, and
+    /// `val_u64s` of zeroed value space.
+    pub fn bkey_alloc_init(&self, val_u64s: usize, type_: u8, pos: c::bpos)
+        -> Result<TransBkey<'a, 't>, BchError>
+    {
+        const BKEY_U64S: usize = size_of::<c::bkey>() / size_of::<u64>();
+
+        let mut k = self.bkey_alloc((BKEY_U64S + val_u64s) as u32)?;
+        k.as_mut_u64s().fill(0);
+        unsafe { c::bkey_init(k.k_mut()) };
+        k.k_mut().u64s = (BKEY_U64S + val_u64s) as u8;
+        k.k_mut().type_ = type_;
+        k.k_mut().p = pos;
+        Ok(k)
+    }
+
     pub fn bkey_make_mut_noupdate(&self, k: BkeySC<'_>) -> Result<TransBkey<'a, 't>, BchError> {
         let raw = c::bkey_s_c {
             k: k.k,
@@ -507,6 +547,7 @@ bitflags! {
         const SNAPSHOT_FIELD = c::btree_iter_update_trigger_flags::BTREE_ITER_snapshot_field.0;
         const ALL_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_all_snapshots.0;
         const FILTER_SNAPSHOTS = c::btree_iter_update_trigger_flags::BTREE_ITER_filter_snapshots.0;
+        const NOFILTER_WHITEOUTS = c::btree_iter_update_trigger_flags::BTREE_ITER_nofilter_whiteouts.0;
         const NOPRESERVE = c::btree_iter_update_trigger_flags::BTREE_ITER_nopreserve.0;
         const CACHED_NOFILL = c::btree_iter_update_trigger_flags::BTREE_ITER_cached_nofill.0;
         const KEY_CACHE_FILL = c::btree_iter_update_trigger_flags::BTREE_ITER_key_cache_fill.0;

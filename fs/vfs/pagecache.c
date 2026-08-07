@@ -228,10 +228,10 @@ int bch2_folio_set(struct bch_fs *c,
 
 	int ret = bch2_trans_run(c,
 		for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
-				   POS(inode->ei_inum.inum, offset),
-				   POS(inode->ei_inum.inum, U64_MAX),
-				   inode->ei_inum.subvol, BTREE_ITER_slots, k, ({
-			unsigned nr_ptrs = bch2_bkey_nr_ptrs_fully_allocated(c, k);
+				   POS(inode_inum(inode).inum, offset),
+				   POS(inode_inum(inode).inum, U64_MAX),
+				   inode_inum(inode).subvol, BTREE_ITER_slots, k, ({
+			unsigned nr_ptrs = bch2_bkey_durability_safe(c, k).nr_overwritable;
 			unsigned state = bkey_to_sector_state(c, k);
 
 			while (folio_idx < nr_folios) {
@@ -287,7 +287,7 @@ void bch2_bio_page_state_set(const struct bch_fs *c, struct bio *bio, struct bke
 	struct bvec_iter iter;
 	struct folio_vec fv;
 	unsigned nr_ptrs = k.k->type == KEY_TYPE_reflink_v
-		? 0 : bch2_bkey_nr_ptrs_fully_allocated(c, k);
+		? 0 : bch2_bkey_durability_safe(c, k).nr_overwritable;
 	unsigned state = bkey_to_sector_state(c, k);
 
 	bio_for_each_folio(fv, bio, iter)

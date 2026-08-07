@@ -170,13 +170,7 @@ pub fn bch_opt_lookup_negated(name: &str) -> Option<(c::bch_opt_id, &'static c::
 /// Look up a bcachefs option by name. Returns the typed option id and reference.
 pub fn bch_opt_lookup(name: &str) -> Option<(c::bch_opt_id, &'static c::bch_option)> {
     let c_name = std::ffi::CString::new(name).ok()?;
-    let id = unsafe { c::bch2_opt_lookup(c_name.as_ptr()) };
-    if id < 0 || id as u32 >= bch_bindgen::opt_id::nr.0 {
-        return None;
-    }
-    let opt_id = bch_bindgen::opts::opt_id(id as usize);
-    let opt = unsafe { &*c::bch2_opt_table.as_ptr().add(id as usize) };
-    Some((opt_id, opt))
+    bcachefs_kernel::opts::opt_lookup(&c_name)
 }
 
 /// Option names matching the filter.
@@ -213,29 +207,16 @@ pub(crate) fn parse_opt_val(
     val_str: &str,
 ) -> Result<Option<u64>> {
     let c_val = CString::new(val_str)?;
-    let mut v: u64 = 0;
     let mut err = Printbuf::new();
-    let ret = unsafe {
-        c::bch2_opt_parse(
-            std::ptr::null_mut(),
-            opt,
-            c_val.as_ptr(),
-            &mut v,
-            err.as_raw(),
-        )
-    };
-
-    if ret == -(c::bch_errcode::BCH_ERR_option_needs_open_fs as i32) {
-        return Ok(None);
-    }
-
-    if ret != 0 {
-        let msg = err.as_str();
-        if msg.is_empty() {
-            bail!("invalid option: {}", val_str);
+    match bcachefs_kernel::opts::opt_parse(None, opt, &c_val, Some(&mut err)) {
+        Ok(v) => Ok(Some(v)),
+        Err(e) if e == -(c::bch_errcode::BCH_ERR_option_needs_open_fs as i32) => Ok(None),
+        Err(_) => {
+            let msg = err.as_str();
+            if msg.is_empty() {
+                bail!("invalid option: {}", val_str);
+            }
+            bail!("invalid option: {}", msg);
         }
-        bail!("invalid option: {}", msg);
     }
-
-    Ok(Some(v))
 }

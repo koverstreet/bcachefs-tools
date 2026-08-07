@@ -288,7 +288,7 @@ static inline void btree_node_buf_swap_account(struct bch_fs *c, void *old, void
 		(int) is_vmalloc_addr(old);
 
 	if (vmalloc_delta) {
-		guard(mutex)(&c->btree.cache.lock);
+		guard(mutex_noio)(&c->btree.cache.lock);
 		c->btree.cache.nr_vmalloc += vmalloc_delta;
 	}
 }

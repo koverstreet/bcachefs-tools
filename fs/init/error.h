@@ -63,7 +63,6 @@ int bch2_fs_topology_error(struct bch_fs *, const char *, ...);
  */
 
 struct fsck_err_state {
-	struct list_head	list;
 	enum bch_sb_error_id	id;
 	u64			nr;
 	bool			ratelimited;
@@ -78,19 +77,35 @@ bool __bch2_count_fsck_err(struct bch_fs *, enum bch_sb_error_id, struct printbu
 #define bch2_count_fsck_err(_c, _err, ...)				\
 	__bch2_count_fsck_err(_c, BCH_FSCK_ERR_##_err, __VA_ARGS__)
 
+void bch2_fsck_err_counts_to_text(struct printbuf *, struct bch_fs *);
+
 int bch2_fsck_err_opt(struct bch_fs *,
 		      enum bch_fsck_flags,
 		      enum bch_sb_error_id);
 
-__printf(5, 6) __cold
+__printf(6, 7) __cold
 int __bch2_fsck_err(struct bch_fs *, struct btree_trans *,
+		  struct bpos,
 		  enum bch_fsck_flags,
 		  enum bch_sb_error_id,
 		  const char *, ...);
 #define bch2_fsck_err(c, _flags, _err_type, ...)				\
 	__bch2_fsck_err(type_is(c, struct bch_fs *) ? (struct bch_fs *) c : NULL,\
 			type_is(c, struct btree_trans *) ? (struct btree_trans *) c : NULL,\
-			_flags, BCH_FSCK_ERR_##_err_type, __VA_ARGS__)
+			POS_MIN, _flags, BCH_FSCK_ERR_##_err_type, __VA_ARGS__)
+
+/*
+ * Record damage to an inode: which errors happened to it, as
+ * bch_sb_error_id - the same identifiers the superblock error counters
+ * and fsck use. Writes the damage btree (init/damage.c) and feeds the
+ * in-memory list behind the end-of-fsck summary and the
+ * fsck_damaged_paths debugfs file.
+ */
+int bch2_damage_record(struct btree_trans *, struct bpos, enum bch_sb_error_id);
+void bch2_fsck_damaged(struct btree_trans *, struct bpos, enum bch_sb_error_id);
+void bch2_fsck_damaged_path_to_text(struct printbuf *, struct btree_trans *,
+				    const struct fsck_damaged_path *);
+void bch2_fsck_damaged_paths_to_text(struct printbuf *, struct bch_fs *);
 
 void bch2_flush_fsck_errs(struct bch_fs *);
 void bch2_free_fsck_errs(struct bch_fs *);
@@ -146,6 +161,37 @@ void bch2_free_fsck_errs(struct bch_fs *);
 	_ret;								\
 })
 
+/*
+ * The fsck_err() variants for errors that are about a specific inode: the
+ * error is recorded as damage against the inode - unconditionally, before
+ * the fix/ignore outcome is decided (see __bch2_fsck_err()): the error
+ * is the damage, whether or not we decide to fix it. Recording
+ * completeness comes from these being the only way an inode-scoped error
+ * is reported - not from remembering to call a helper at each repair
+ * site.
+ */
+
+#define __inode_fsck_err(_trans, _pos, _flags, _err_type, ...)		\
+	fsck_err_wrap(__bch2_fsck_err(NULL, _trans, _pos, _flags,	\
+			BCH_FSCK_ERR_##_err_type, __VA_ARGS__))
+
+#define __inode_fsck_err_on(cond, _trans, _pos, _flags, _err_type, ...)	\
+({									\
+	might_sleep();							\
+	unlikely(cond)							\
+		? __inode_fsck_err(_trans, _pos, _flags, _err_type,	\
+				   __VA_ARGS__)				\
+		: false;						\
+})
+
+#define inode_fsck_err(_trans, _pos, _err_type, ...)			\
+	__inode_fsck_err(_trans, _pos,					\
+			 FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
+
+#define inode_fsck_err_on(cond, _trans, _pos, _err_type, ...)		\
+	__inode_fsck_err_on(cond, _trans, _pos,				\
+			    FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
+
 #define ret_fsck_err_wrap(_do)						\
 ({									\
 	int _ret = _do;							\
@@ -173,6 +219,11 @@ void bch2_free_fsck_errs(struct bch_fs *);
 
 #define ret_fsck_err_on(cond, c, _err_type, ...)			\
 	__ret_fsck_err_on(cond, c, FSCK_CAN_FIX|FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)
+
+#define ret_inode_fsck_err(_trans, _pos, _err_type, ...)		\
+	ret_fsck_err_wrap(__bch2_fsck_err(NULL, _trans, _pos,		\
+			FSCK_CAN_FIX|FSCK_CAN_IGNORE,			\
+			BCH_FSCK_ERR_##_err_type, __VA_ARGS__))
 
 #define ret_log_fsck_err(c, _err_type, ...)				\
 	__ret_fsck_err(c, FSCK_CAN_IGNORE, _err_type, __VA_ARGS__)

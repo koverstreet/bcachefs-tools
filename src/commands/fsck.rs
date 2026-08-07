@@ -20,10 +20,7 @@ use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::wrappers::sysfs;
 use crate::device_scan;
 
-// _IOW(0xbc, 19, struct bch_ioctl_fsck_offline) — sizeof = 24
-const BCH_IOCTL_FSCK_OFFLINE: libc::Ioctl = 0x4018bc13u32 as libc::Ioctl;
-// _IOW(0xbc, 20, struct bch_ioctl_fsck_online) — sizeof = 16
-const BCH_IOCTL_FSCK_ONLINE: libc::Ioctl = 0x4010bc14u32 as libc::Ioctl;
+use crate::wrappers::ioctl::{ioctl_ptr, ioctl_w, IoctlBuf, BCH_IOCTL_FSCK_OFFLINE, BCH_IOCTL_FSCK_ONLINE};
 
 /// Filesystem check and repair
 #[derive(Parser, Debug)]
@@ -141,13 +138,9 @@ fn fsck_online(fs: &BcachefsHandle, opt_str: &str) -> Result<i32> {
         opts: c_opts.as_ptr() as u64,
     };
 
-    let fsck_fd = unsafe {
-        libc::ioctl(fs.ioctl_fd_raw(), BCH_IOCTL_FSCK_ONLINE, &fsck)
-    };
-    if fsck_fd < 0 {
-        let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
-        return Err(anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}", crate::wrappers::bch_err_str(errno)));
-    }
+    let fsck_fd = ioctl_w::<BCH_IOCTL_FSCK_ONLINE>(fs.ioctl_fd(), &fsck)
+        .map_err(|e| anyhow!("BCH_IOCTL_FSCK_ONLINE error: {}",
+                             crate::wrappers::bch_err_str(e.raw_os_error().unwrap_or(0))))?;
 
     let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
     Ok(splice_fd_to_stdinout(fd))
@@ -359,44 +352,33 @@ fn cmd_fsck(cli: FsckCli) -> Result<()> {
             }
         }
 
-        // Allocate fsck struct with flexible array
-        let base_size = std::mem::size_of::<c::bch_ioctl_fsck_offline>();
-        let total_size = base_size + dev_ptrs.len() * std::mem::size_of::<u64>();
-        let layout = std::alloc::Layout::from_size_align(total_size, 8).unwrap();
-        let fsck_ptr = unsafe { std::alloc::alloc_zeroed(layout) } as *mut c::bch_ioctl_fsck_offline;
-
+        let mut buf = IoctlBuf::<c::bch_ioctl_fsck_offline>::new::<u64>(dev_ptrs.len());
         let c_opts = CString::new(opts_str.as_str())?;
-        unsafe {
-            (*fsck_ptr).opts = c_opts.as_ptr() as u64;
-            (*fsck_ptr).nr_devs = dev_ptrs.len() as u64;
-            let devs_array = (*fsck_ptr).devs.as_mut_ptr();
-            for (i, ptr) in dev_ptrs.iter().enumerate() {
-                *devs_array.add(i) = *ptr;
-            }
-        }
+        let hdr = buf.hdr_mut();
+        hdr.opts = c_opts.as_ptr() as u64;
+        hdr.nr_devs = dev_ptrs.len() as u64;
+        unsafe { hdr.devs.as_mut_slice(dev_ptrs.len()).copy_from_slice(&dev_ptrs) };
 
         let fsck_fd = match std::fs::OpenOptions::new()
             .read(true).write(true)
             .open("/dev/bcachefs-ctl")
         {
             Ok(ctl_file) => unsafe {
-                libc::ioctl(ctl_file.as_raw_fd(), BCH_IOCTL_FSCK_OFFLINE, fsck_ptr)
+                ioctl_ptr::<BCH_IOCTL_FSCK_OFFLINE>(&ctl_file, buf.as_mut_ptr())
             },
-            Err(_) => -1,
+            Err(e) => Err(e),
         };
-
-        unsafe { std::alloc::dealloc(fsck_ptr as *mut u8, layout); }
 
         for l in &loopdevs { loopdev_free(l); }
 
-        if fsck_fd < 0 && kernel.is_none() {
-            return run_userspace_fsck(devices, fs_opts);
-        }
-
-        if fsck_fd < 0 {
-            let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
-            return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}", crate::wrappers::bch_err_str(errno)));
-        }
+        let fsck_fd = match fsck_fd {
+            Ok(fd) => fd,
+            Err(_) if kernel.is_none() =>
+                return run_userspace_fsck(devices, fs_opts),
+            Err(e) =>
+                return Err(anyhow!("BCH_IOCTL_FSCK_OFFLINE error: {}",
+                                   crate::wrappers::bch_err_str(e.raw_os_error().unwrap_or(0)))),
+        };
 
         let fd = unsafe { BorrowedFd::borrow_raw(fsck_fd) };
         let ret = splice_fd_to_stdinout(fd);

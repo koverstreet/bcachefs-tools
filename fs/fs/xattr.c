@@ -325,7 +325,7 @@ ssize_t bch2_xattr_list(struct dentry *dentry, char *buffer, size_t buffer_size)
 	int ret = for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_xattrs,
 				   POS(inum, offset),
 				   POS(inum, U64_MAX),
-				   inode->ei_inum.subvol, 0, k, ({
+				   inode_inum(inode).subvol, 0, k, ({
 			if (k.k->type != KEY_TYPE_xattr)
 				continue;
 
@@ -533,7 +533,7 @@ static int __bch2_xattr_bcachefs_set(const struct xattr_handler *handler,
 	struct inode_opt_set s = { .id = inode_opt_id, .defined = value != NULL };
 	u64 v = 0;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(memalloc_flags)(PF_MEMALLOC_NOIO);
 	guard(opt_change_lock)(c);
 	CLASS(opt_change_scope, opt_scope)(c);
 

@@ -597,8 +597,7 @@ static long bch2_ioctl_read_super(struct bch_fs *c,
 	    arg.pad)
 		return bch_err_throw(c, EINVAL_ioctl_read_super_bad_flags);
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	if (arg.flags & BCH_READ_DEV) {
 		ca = errptr_try(bch2_device_lookup(c, arg.dev, arg.flags));
@@ -719,6 +718,7 @@ static const unsigned query_btree_keys_flags_to_iter_flags[] = {
 	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_slots)]		= BTREE_ITER_slots,
 	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_prev)]		= BTREE_ITER_prev,
 	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_all_snapshots)]	= BTREE_ITER_all_snapshots,
+	[ilog2(BCH_IOCTL_QUERY_BTREE_KEYS_nofilter_whiteouts)]	= BTREE_ITER_nofilter_whiteouts,
 };
 
 static long bch2_ioctl_query_btree_keys(struct bch_fs *c,

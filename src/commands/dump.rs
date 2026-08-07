@@ -325,8 +325,8 @@ fn sanitize_journal_keys(
 /// zero inline data, optionally scramble filenames, clear checksums.
 fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
-    let jset_magic = jset_magic(unsafe { &*(*fs_raw).disk_sb.sb });
-    let block_bits = unsafe { (*fs_raw).block_bits } as usize;
+    let jset_magic = jset_magic(fs.disk_sb().sb());
+    let block_bits = fs.block_bits() as usize;
 
     let mut pos = 0;
     while pos + JSET_HDR <= buf.len() {
@@ -344,7 +344,7 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
         let mut modified = false;
 
         if csum_type_is_encryption(csum_type) {
-            if !unsafe { (*fs_raw).chacha20_key_set } {
+            if !fs.chacha20_key_set() {
                 eprintln!("found encrypted journal entry on non-encrypted filesystem");
                 return;
             }
@@ -399,8 +399,8 @@ fn sanitize_journal(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) 
 /// encryption, zero inline data, optionally scramble filenames.
 fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
     let fs = unsafe { Fs::borrow_raw(fs_raw) };
-    let bset_magic = bset_magic(unsafe { &*(*fs_raw).disk_sb.sb });
-    let block_bits = unsafe { (*fs_raw).block_bits } as usize;
+    let bset_magic = bset_magic(fs.disk_sb().sb());
+    let block_bits = fs.block_bits() as usize;
 
     // The node's packed-key format lives in the btree_node header at the start
     // of the buffer; packed keys are unpacked against it.
@@ -453,7 +453,7 @@ fn sanitize_btree(fs_raw: *mut c::bch_fs, buf: &mut [u8], opts: SanitizeOpts) {
         let mut modified = false;
 
         if csum_type_is_encryption(csum_type) {
-            if !unsafe { (*fs_raw).chacha20_key_set } {
+            if !fs.chacha20_key_set() {
                 eprintln!("found encrypted btree node on non-encrypted filesystem");
                 return;
             }
@@ -702,8 +702,8 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     let mut devs: Vec<DumpDev> = (0..nr_devices).map(|_| DumpDev::new()).collect();
 
     let entire_journal = !cli.nojournal;
-    let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size as u64 };
-    let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
+    let btree_node_size = fs.opts().btree_node_size as u64;
+    let block_size = fs.opts().block_size as u32;
 
     let mut nr_online = 0u32;
     let mut bucket_err: Option<String> = None;

@@ -89,29 +89,54 @@ fn entry_is_non_transaction(entry: &c::jset_entry) -> bool {
 
 // ---- filter types ----
 
-struct TransactionMsgFilter {
-    sign: i32,
-    patterns: Vec<String>,
+pub(crate) struct TransactionMsgFilter {
+    pub(crate) sign: i32,
+    pub(crate) patterns: Vec<String>,
 }
 
-struct TransactionKeyFilter {
-    ranges: Vec<(i32, BbposRange)>,  // (sign, range)
+pub(crate) struct TransactionKeyFilter {
+    pub(crate) ranges: Vec<(i32, BbposRange)>,  // (sign, range)
 }
 
-struct JournalFilter {
-    blacklisted: bool,
-    flush_only: bool,
-    datetime_only: bool,
-    headers_only: bool,
-    all_headers: bool,
-    log: bool,
-    log_only: bool,
-    print_offset: bool,
-    filtering: bool,
-    btree_filter: u64,
-    transaction: TransactionMsgFilter,
-    key: TransactionKeyFilter,
-    bkey_val: bool,
+pub(crate) struct JournalFilter {
+    pub(crate) blacklisted: bool,
+    pub(crate) flush_only: bool,
+    pub(crate) datetime_only: bool,
+    pub(crate) headers_only: bool,
+    pub(crate) all_headers: bool,
+    pub(crate) log: bool,
+    pub(crate) log_only: bool,
+    pub(crate) print_offset: bool,
+    /// Report gaps in the journal sequence ("missing N entries at ..."):
+    /// wanted when auditing the journal itself, spam when searching it
+    /// (kvdb's list_journal, on a damaged filesystem, disables this).
+    pub(crate) print_missing: bool,
+    pub(crate) filtering: bool,
+    pub(crate) btree_filter: u64,
+    pub(crate) transaction: TransactionMsgFilter,
+    pub(crate) key: TransactionKeyFilter,
+    pub(crate) bkey_val: bool,
+}
+
+impl Default for JournalFilter {
+    fn default() -> Self {
+        JournalFilter {
+            blacklisted: false,
+            flush_only: false,
+            datetime_only: false,
+            headers_only: false,
+            all_headers: false,
+            log: false,
+            log_only: false,
+            print_offset: false,
+            print_missing: true,
+            filtering: false,
+            btree_filter: !0u64,
+            transaction: TransactionMsgFilter { sign: 0, patterns: Vec::new() },
+            key: TransactionKeyFilter { ranges: Vec::new() },
+            bkey_val: true,
+        }
+    }
 }
 
 // ---- filter logic ----
@@ -521,7 +546,7 @@ fn parse_seq_range(arg: &str) -> Result<(u64, u64)> {
 
 // ---- sign parsing ----
 
-fn parse_sign(s: &str) -> (i32, &str) {
+pub(crate) fn parse_sign(s: &str) -> (i32, &str) {
     if let Some(rest) = s.strip_prefix('+') {
         (1, rest)
     } else if let Some(rest) = s.strip_prefix('-') {
@@ -680,6 +705,7 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
         log: cli.log,
         log_only: cli.log_only,
         print_offset: cli.offset,
+        print_missing: true,
         filtering: false,
         btree_filter: !0u64,
         transaction: TransactionMsgFilter {
@@ -738,6 +764,20 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
 
     let c_fs = fs.raw;
 
+    list_journal_run(c_fs, &f, contiguous_only, seq_start, seq_end, cli.nr_entries, None)
+}
+
+/// The listing core, shared with kvdb's list_journal command. @interrupted
+/// is polled per journal entry so a ^C can stop a long dump.
+pub(crate) fn list_journal_run(
+    c_fs: *mut c::bch_fs,
+    f: &JournalFilter,
+    contiguous_only: bool,
+    seq_start: u64,
+    seq_end: u64,
+    nr_entries: Option<u32>,
+    interrupted: Option<&dyn Fn() -> bool>,
+) -> Result<()> {
     let je = JournalEntries::collect(c_fs);
     let entries = je.as_slice();
 
@@ -769,7 +809,7 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
         }
     }
 
-    if let Some(nr) = cli.nr_entries {
+    if let Some(nr) = nr_entries {
         // journal.seq isn't set in read_journal_only mode, so compute
         // the max seq from the entries we actually collected
         let max_seq = entries.iter()
@@ -785,6 +825,11 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
     let last_seq_ondisk = unsafe { (*c_fs).journal.last_seq_ondisk };
 
     for &ep in entries {
+        if interrupted.is_some_and(|i| i()) {
+            println!("(interrupted)");
+            break;
+        }
+
         let p = unsafe { &*ep };
         let p_seq = u64::from_le(p.j.seq);
 
@@ -812,17 +857,19 @@ fn cmd_list_journal(cli: Cli) -> Result<()> {
             if missing.start == 0 {
                 break;
             }
-            println!(
-                "missing {} entries at {}-{}{}",
-                missing.end - missing.start,
-                missing.start,
-                missing.end - 1,
-                if missing.end < last_seq_ondisk {
-                    " (not dirty)"
-                } else {
-                    ""
-                },
-            );
+            if f.print_missing {
+                println!(
+                    "missing {} entries at {}-{}{}",
+                    missing.end - missing.start,
+                    missing.start,
+                    missing.end - 1,
+                    if missing.end < last_seq_ondisk {
+                        " (not dirty)"
+                    } else {
+                        ""
+                    },
+                );
+            }
             seq = missing.end;
         }
 

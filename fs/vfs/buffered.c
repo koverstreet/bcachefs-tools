@@ -253,33 +253,21 @@ static void bchfs_read(struct btree_trans *trans,
 
 		ret = bch2_read_extent(trans, rbio, iter.pos,
 				       data_btree, k, offset_into_extent, flags);
-		if (ret)
-			goto err;
-		/*
-		 * Careful there's a landmine here if bch2_read_extent() ever
-		 * starts returning transaction restarts here.
-		 *
-		 * We've changed rbio->bi_iter.bi_size to be "bytes we can read
-		 * from this extent" with the swap call, and we restore it
-		 * below. That restore needs to come before checking for
-		 * errors.
-		 *
-		 * But unlike bch2_read(), we use the rbio bvec iter, not one
-		 * on the stack, so we can't do the restore right after the
-		 * bch2_read_extent() call: we don't own that iterator anymore
-		 * if BCH_READ_last_fragment is set, since we may have submitted
-		 * that rbio instead of cloning it.
-		 */
 
-		if (flags & BCH_READ_last_fragment)
+		/* On successful BCH_READ_last_fragment submit we no longer own rbio: */
+		if (!ret && (flags & BCH_READ_last_fragment))
 			break;
 
 		swap(rbio->bio.bi_iter.bi_size, bytes);
-		bio_advance(&rbio->bio, bytes);
 err:
-		if (ret &&
-		    !bch2_err_matches(ret, BCH_ERR_transaction_restart))
+		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+			flags &= ~BCH_READ_last_fragment;
+			continue;
+		}
+		if (ret)
 			break;
+
+		bio_advance(&rbio->bio, bytes);
 	}
 
 	if (ret) {
@@ -529,8 +517,8 @@ static void bch2_writepage_io_alloc(struct bch_fs *c,
 	op->nr_replicas		= nr_replicas;
 	op->res.nr_replicas	= nr_replicas;
 	op->write_point		= writepoint_hashed(inode->ei_last_dirtied);
-	op->subvol		= inode->ei_inum.subvol;
-	op->pos			= POS(inode->v.i_ino, sector);
+	op->subvol		= inode_inum(inode).subvol;
+	op->pos			= POS(inode_inum(inode).inum, sector);
 	op->end_io		= bch2_writepage_io_done;
 	op->devs_need_flush	= &inode->ei_devs_need_flush;
 	op->wbio.bio.bi_iter.bi_sector = sector;
@@ -705,9 +693,9 @@ do_io:
 int bch2_writepages(struct address_space *mapping, struct writeback_control *wbc)
 {
 	struct bch_fs *c = mapping->host->i_sb->s_fs_info;
-	struct bch_writepage_state *w = kzalloc(sizeof(*w), GFP_NOFS|__GFP_NOFAIL);
+	struct bch_writepage_state *w = kzalloc(sizeof(*w), GFP_NOIO|__GFP_NOFAIL);
 
-	w->tmp = mempool_alloc(&c->vfs.writepage_buf_pool, GFP_NOFS);
+	w->tmp = mempool_alloc(&c->vfs.writepage_buf_pool, GFP_NOIO);
 
 	bch2_inode_opts_get_inode(c, &to_bch_ei(mapping->host)->ei_inode, &w->opts);
 

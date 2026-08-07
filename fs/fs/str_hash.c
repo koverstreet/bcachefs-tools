@@ -80,6 +80,10 @@ static int bch2_fsck_rename_dirent(struct btree_trans *trans,
 
 	char *renamed_buf = errptr_try(bch2_trans_kmalloc(trans, old_name.len + 20));
 
+	/* dirents already at each fsck_renamed-N name, gathered for diagnosis */
+	CLASS(printbuf, collisions)();
+	bool renamed = false;
+
 	for (unsigned i = 0; i < 1000; i++) {
 		new->k.u64s = BKEY_U64s_MAX;
 
@@ -89,18 +93,45 @@ static int bch2_fsck_rename_dirent(struct btree_trans *trans,
 
 		try(bch2_dirent_init_name(c, new, hash_info, &renamed_name, NULL));
 
-		ret = bch2_hash_set_in_snapshot(trans, bch2_dirent_hash_desc, hash_info,
-						(subvol_inum) { 0, old.k->p.inode },
-						old.k->p.snapshot, &new->k_i,
-						BTREE_UPDATE_internal_snapshot_node|
-						STR_HASH_must_create);
-		if (ret && !bch2_err_matches(ret, EEXIST))
+		CLASS(btree_iter_uninit, iter)(trans);
+		struct bkey_s_c dup =
+			bch2_hash_set_or_get_in_snapshot(trans, &iter, bch2_dirent_hash_desc, hash_info,
+							 (subvol_inum) { 0, old.k->p.inode },
+							 old.k->p.snapshot, &new->k_i,
+							 BTREE_UPDATE_internal_snapshot_node|
+							 STR_HASH_must_create);
+		ret = bkey_err(dup);
+		if (ret)
 			break;
-		if (!ret) {
+
+		if (!dup.k) {
 			if (bpos_lt(new->k.p, old.k->p))
 				*updated_before_k_pos = true;
+			renamed = true;
 			break;
 		}
+
+		/* name taken - record a sample of the dirents that hold them */
+		if (i < 10) {
+			prt_newline(&collisions);
+			bch2_bkey_val_to_text(&collisions, c, dup);
+		}
+	}
+
+	if (!ret && !renamed) {
+		CLASS(printbuf, buf)();
+		prt_str(&buf, "couldn't rename dirent to resolve hash collision: all 1000 \"");
+		prt_bytes(&buf, old_name.name, old_name.len);
+		prt_printf(&buf, ".fsck_renamed-N\" names in dir inum %llu snapshot %u are taken\n",
+			   old.k->p.inode, old.k->p.snapshot);
+		prt_str(&buf, "renaming:\n  ");
+		bch2_bkey_val_to_text(&buf, c, old.s_c);
+		prt_str(&buf, "\ncollided with:");
+		scoped_guard(printbuf_indent, &buf)
+			prt_str(&buf, collisions.buf);
+		bch_err(c, "%s", buf.buf);
+
+		ret = bch_err_throw(c, EEXIST_str_hash_set);
 	}
 
 	ret = ret ?: bch2_fsck_update_backpointers(trans, s, desc, hash_info, &new->k_i);
@@ -238,10 +269,12 @@ static int str_hash_dup_entries(struct btree_trans *trans,
 	prt_newline(&buf);
 	bch2_bkey_val_to_text(&buf, c, dup_k);
 
-	if (!ret_fsck_err(trans, hash_table_key_duplicate, "%s", buf.buf))
+	if (!ret_inode_fsck_err(trans, k.k->p,
+				hash_table_key_duplicate, "%s", buf.buf))
 		return 0;
 
-	if (ret == 2) {
+	bool renamed = ret == 2;
+	if (renamed) {
 		try(bch2_fsck_rename_dirent(trans, s, *desc, hash_info,
 					    bkey_s_c_to_dirent(k),
 					    updated_before_k_pos));
@@ -249,17 +282,21 @@ static int str_hash_dup_entries(struct btree_trans *trans,
 		ret = 1;
 	}
 
+	/*
+	 * @k is the key being checked; @dup_k was found via lookup from @k's
+	 * snapshot, so if they're in different snapshots @k is the descendant.
+	 * Deleting the loser at @k's (pre-swap) snapshot is correct for both
+	 * outcomes: if @dup_k loses, this whiteouts the ancestor's entry from
+	 * the descendant's view without touching the ancestor's own; if @k
+	 * loses, it's a deletion of @k at its own snapshot.
+	 */
+	u32 del_snapshot = k.k->p.snapshot;
+
 	if (ret)
 		swap(k, dup_k); /* @dup_k wins, delete @k */
 
-	/*
-	 * delete @dup_k, in @k's snapshot: if they're in different snapshots,
-	 * @dup is older
-	 */
-	BUG_ON(dup_k.k->p.snapshot < k.k->p.snapshot);
-
 	CLASS(btree_iter, del_iter)(trans, desc->btree_id,
-				    SPOS(dup_k.k->p.inode, dup_k.k->p.offset, k.k->p.snapshot),
+				    SPOS(dup_k.k->p.inode, dup_k.k->p.offset, del_snapshot),
 				    BTREE_ITER_slots);
 	try(bch2_btree_iter_traverse(&del_iter));
 	try(bch2_hash_delete_at(trans, *desc, hash_info, &del_iter, 0));

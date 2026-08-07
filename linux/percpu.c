@@ -31,7 +31,7 @@
  *
  * The dynamic allocator is bump + freelist. Allocations return zeroed
  * memory across all live chunks; new threads get zeroed chunks via
- * calloc, which preserves the contract on subsequent allocations.
+ * anonymous mmap, which preserves the contract on subsequent allocations.
  *
  * Caller contract for alloc_percpu(): zero-init must be a valid initial
  * state. Things that need real per-instance setup (semaphores etc.)
@@ -42,6 +42,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mman.h>
 
 #include <linux/percpu.h>
 
@@ -128,18 +129,31 @@ void bch_percpu_thread_init(void)
 
 	pthread_mutex_lock(&bch_percpu_lock);
 
-	if (!bch_percpu_static_size)
+	if (!bch_percpu_static_size) {
 		bch_percpu_static_size = __stop_bch_percpu - __start_bch_percpu;
 
+		/*
+		 * The resolve macro distinguishes static-section addresses
+		 * from dynamic offsets with a single threshold check:
+		 */
+		if ((uintptr_t) __start_bch_percpu <
+		    bch_percpu_static_size + BCH_PERCPU_DYNAMIC_SIZE) {
+			fprintf(stderr, "bch_percpu: static section below dynamic offset range\n");
+			abort();
+		}
+	}
+
+	/* Address space, not memory - pages fault in as they're touched: */
 	size_t chunk_size = bch_percpu_static_size + BCH_PERCPU_DYNAMIC_SIZE;
-	void *chunk = calloc(1, chunk_size);
-	if (!chunk) {
+	void *chunk = mmap(NULL, chunk_size, PROT_READ|PROT_WRITE,
+			   MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0);
+	if (chunk == MAP_FAILED) {
 		pthread_mutex_unlock(&bch_percpu_lock);
-		fprintf(stderr, "bch_percpu_thread_init: out of memory\n");
+		fprintf(stderr, "bch_percpu_thread_init: chunk mmap failed\n");
 		abort();
 	}
 
-	int my_id = bch_percpu_nr_cpus++;
+	int my_id = bch_percpu_nr_cpus;
 	if (my_id >= BCH_PERCPU_MAX_CPUS) {
 		pthread_mutex_unlock(&bch_percpu_lock);
 		fprintf(stderr, "bch_percpu_thread_init: too many threads (max %d)\n",
@@ -157,6 +171,15 @@ void bch_percpu_thread_init(void)
 
 	darray_for_each(dynamic_inits, di)
 		di->init(__bch_percpu_resolve(di->pcv, chunk), di->ctx, my_id);
+
+	/*
+	 * Publish the slot last. Readers don't take bch_percpu_lock: they walk
+	 * [0, bch_percpu_nr_cpus) and per_cpu_ptr() dereferences the chunk
+	 * without a NULL check, so bumping the count before the chunk is
+	 * installed and initialized hands them a NULL - or a chunk whose
+	 * counters haven't been zeroed yet.
+	 */
+	smp_store_release(&bch_percpu_nr_cpus, my_id + 1);
 
 	pthread_mutex_unlock(&bch_percpu_lock);
 }
@@ -228,7 +251,7 @@ void *__alloc_percpu_gfp(size_t size, size_t align, gfp_t gfp)
 	size_at_grain[off / BCH_PERCPU_GRAIN] = size / BCH_PERCPU_GRAIN;
 
 	/* Zero across all live chunks (covers reuse from free list; new
-	 * threads get calloc'd chunks so the slot is already zero in chunks
+	 * threads get zero-filled mmap'd chunks so the slot is already zero in chunks
 	 * created later). */
 	size_t chunk_off = bch_percpu_static_size + off;
 	for (int cpu = 0; cpu < bch_percpu_nr_cpus; cpu++)
@@ -295,7 +318,7 @@ static void bch_percpu_module_exit(void)
 			if (callbacks[i].exit_one)
 				callbacks[i].exit_one(__bch_percpu_resolve(callbacks[i].pcv, chunk));
 
-		free(chunk);
+		munmap(chunk, bch_percpu_static_size + BCH_PERCPU_DYNAMIC_SIZE);
 		bch_percpu_chunks[cpu] = NULL;
 	}
 	darray_exit(&free_runs);

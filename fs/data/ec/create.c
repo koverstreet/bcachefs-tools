@@ -919,15 +919,26 @@ unsigned bch2_disk_label_ec_devs(struct bch_fs *c, unsigned disk_label,
 /*
  * Can a stripe with @redundancy parity blocks be formed in @target right now?
  *
- * Minimum stripe size is redundancy + 1 (one data block + parity), and all
- * blocks in a stripe must share a single bucket_size. So we need at least
- * redundancy + 1 RW devices in the target that agree on bucket_size.
+ * This must model what ec_stripe_head_devs_update() computes as
+ * insufficient_devs, because that is what actually refuses to allocate. Both
+ * of its conditions apply:
+ *
+ *  - at least redundancy + 2 devices agreeing on bucket_size. Not + 1: a
+ *    stripe of one data block plus parity is strictly worse than replication,
+ *    so that case is rejected rather than formed.
+ *  - at least redundancy + 2 distinct failure domains. One block per domain is
+ *    a hard requirement for erasure coding, not a preference - the allocator
+ *    excludes devices sharing an already-placed block's domain. With no
+ *    failure domains configured every device is its own domain and this is
+ *    the device count again, so it only bites where devices share one.
  *
  * bch2_disk_label_ec_devs already returns the filtered device mask (RW members
  * with durability > 0, narrowed to the picked best bucket_size).
  *
  * Used by reconcile to avoid queueing EC work that can't make progress —
- * otherwise reconcile spins re-queueing data_update_fail forever.
+ * otherwise reconcile spins re-queueing data_update_fail forever. Modelling
+ * only the device count let configurations through that the allocator then
+ * refused, costing one wasted rewrite of every affected extent.
  */
 bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redundancy)
 {
@@ -935,14 +946,26 @@ bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redunda
 		return false;
 
 	struct target t = target_decode(target);
-	unsigned disk_label = t.type == TARGET_GROUP && t.group <= U8_MAX
+
+	/*
+	 * A group above U8_MAX cannot be a disk label, and __ec_stripe_head_get()
+	 * refuses it outright ("cannot create a stripe when disk_label > U8_MAX").
+	 * Folding it to disk_label 0 here would ask about every device in the
+	 * filesystem and answer yes to a target the allocator will not serve --
+	 * the same shape of mismatch this function is being fixed for.
+	 */
+	if (t.type == TARGET_GROUP && t.group > U8_MAX)
+		return false;
+
+	unsigned disk_label = t.type == TARGET_GROUP
 		? t.group + 1
 		: 0;
 
 	struct bch_devs_mask devs;
 	bch2_disk_label_ec_devs(c, disk_label, &devs, 0);
 
-	return dev_mask_nr(&devs) >= redundancy + 1;
+	return dev_mask_nr(&devs) >= redundancy + 2 &&
+	       bch2_target_nr_domains(c, &devs) >= redundancy + 2;
 }
 
 /*
@@ -1120,6 +1143,20 @@ static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 	unsigned i, j, nr_have_parity = 0, nr_have_data = 0;
 
 	req->new_stripe_alloc = true;
+	/*
+	 * For erasure coding, distinct failure domains are a hard requirement,
+	 * not a preference: the allocator excludes devices sharing an
+	 * already-placed block's domain (see bch2_dev_domain_keys_update()).
+	 */
+	req->failure_domains_required = true;
+
+	/*
+	 * Rebuilt below from the current stripe blocks. We may be called twice
+	 * on the same req (full-stripe attempt, then stripe reuse), and the
+	 * released first-attempt buckets must not linger here - a stale bit
+	 * would wrongly exclude that device's whole domain, above.
+	 */
+	memset(&req->devs_chosen, 0, sizeof(req->devs_chosen));
 
 	/* * We bypass the sector allocator which normally does this: */
 	bitmap_and(req->devs_may_alloc.d, req->devs_may_alloc.d,
@@ -1132,8 +1169,11 @@ static int __new_stripe_alloc_buckets(struct btree_trans *trans,
 		 * walk backpointers and update all extents that point to that
 		 * block when updating the stripe
 		 */
-		if (v->ptrs[i].dev != BCH_SB_MEMBER_INVALID)
+		if (v->ptrs[i].dev != BCH_SB_MEMBER_INVALID) {
 			__clear_bit(v->ptrs[i].dev, req->devs_may_alloc.d);
+			/* spread new blocks away from existing blocks' domains: */
+			__set_bit(v->ptrs[i].dev, req->devs_chosen.d);
+		}
 
 		if (i < nr_data)
 			nr_have_data++;
@@ -1326,7 +1366,7 @@ static int stripe_reallocate_outliers(struct btree_trans *trans,
 static bool copygc_can_run_on_devs(struct bch_fs *c,
 				   struct bch_devs_mask *devs)
 {
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	guard(rcu)();
 	for_each_member_device_rcu(c, ca, devs)
 		if (bch2_copygc_dev_wait_amount(ca) <= 0)
@@ -1850,6 +1890,16 @@ static void ec_stripe_head_devs_update(struct bch_fs *c, struct ec_stripe_head *
 	 */
 	h->insufficient_devs = h->nr_active_devs < h->redundancy + 2;
 
+	/*
+	 * One block per failure domain is a hard requirement (see
+	 * __new_stripe_alloc_buckets): too few domains for redundancy to mean
+	 * anything means no stripes at all. With no failure domains configured
+	 * each device is its own domain, so this only tightens the device-count
+	 * check above when devices share domains.
+	 */
+	unsigned nr_domains = bch2_target_nr_domains(c, &h->devs);
+	h->insufficient_devs |= nr_domains < h->redundancy + 2;
+
 	struct bch_devs_mask devs_leaving;
 	bitmap_andnot(devs_leaving.d, old_devs.d, h->devs.d, BCH_SB_MEMBERS_MAX);
 
@@ -1975,6 +2025,17 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 		unsigned active = min_t(unsigned, h->nr_active_devs, BCH_BKEY_PTRS_MAX);
 		unsigned nr_data = min_t(unsigned, active - h->redundancy,
 					 req->ec_max_data_blocks ?: ~0U);
+
+		/*
+		 * One block per failure domain: the stripe can't be wider than
+		 * the domains available. If a domain becomes unavailable, the
+		 * next stripe is allocated narrower rather than doubling up.
+		 * With no failure domains each device is its own domain, so this
+		 * is the usual device-count cap.
+		 */
+		unsigned nr_domains = bch2_target_nr_domains(c, &h->devs);
+		/* insufficient_devs was checked - at least redundancy + 2 domains: */
+		nr_data = min(nr_data, nr_domains - h->redundancy);
 
 		h->s = ec_new_stripe_alloc(c,
 					   h->devs,

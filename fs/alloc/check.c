@@ -125,7 +125,7 @@ int bch2_need_discard_or_freespace_err(struct btree_trans *trans,
 
 	bch2_bkey_val_to_text(&buf, c, alloc_k);
 
-	int ret = __bch2_fsck_err(NULL, trans, flags, err_id,
+	int ret = __bch2_fsck_err(NULL, trans, POS_MIN, flags, err_id,
 				  "bucket incorrectly %sset in %s btree\n%s",
 				  set ? "" : "un",
 				  bch2_btree_id_str(btree),
@@ -838,9 +838,7 @@ int bch2_dev_freespace_init(struct bch_fs *c, struct bch_dev *ca,
 		try(lockrestart_do(trans, dev_freespace_init_iter(trans, ca, &iter, end)));
 	}
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		guard(mutex)(&c->sb_lock);
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 		SET_BCH_MEMBER_FREESPACE_INITIALIZED(m, true);
 	}
@@ -872,8 +870,7 @@ int bch2_fs_freespace_init(struct bch_fs *c)
 	}
 
 	if (doing_init) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-		guard(mutex)(&c->sb_lock);
+		guard(mutex_noio)(&c->sb_lock);
 		bch2_write_super(c);
 		bch_verbose(c, "done initializing freespace");
 	}

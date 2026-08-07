@@ -12,10 +12,57 @@
 #define rcu_dereference_protected(p, c)	rcu_dereference(p)
 #define rcu_access_pointer(p)		READ_ONCE(p)
 
-#define kfree_rcu(ptr, rcu_head)	kfree(ptr) /* XXX */
-#define kfree_rcu_mightsleep(ptr)	kfree(ptr) /* XXX */
-#define kvfree_rcu(ptr, rcu_head)	kfree(ptr) /* XXX */
-#define kvfree_rcu_mightsleep(ptr)	kfree(ptr) /* XXX */
+/*
+ * These defer the free to the end of a grace period, as the kernel versions
+ * do. They previously expanded to a plain kfree(), which is a use-after-free
+ * anywhere a reader is concurrent - and shared fs/ code is written against
+ * the kernel's semantics: bch2_snapshot_table_make() frees the snapshot table
+ * this way while every rcu_dereference(c->snapshots.table) reader is live, and
+ * bch2_btree_bkey_cached_common_lock_held()'s neighbours in btree/interior.c
+ * carry a comment saying a concurrent lookup will memcmp freed memory
+ * otherwise.
+ *
+ * The rcu_head embedded in the object can't be used directly: call_rcu() hands
+ * the callback &obj->rcu, and free() needs the base of the allocation, which
+ * isn't recoverable from that without knowing the field's offset. So carry the
+ * pointer in a wrapper.
+ *
+ * If the wrapper can't be allocated, block for a grace period rather than free
+ * under readers - slow, but the alternative is the bug this replaced.
+ */
+struct rcu_free_wrapper {
+	struct rcu_head	rcu;
+	void		*p;
+};
+
+static inline void rcu_free_wrapper_cb(struct rcu_head *head)
+{
+	struct rcu_free_wrapper *w =
+		container_of(head, struct rcu_free_wrapper, rcu);
+
+	free(w->p);
+	free(w);
+}
+
+static inline void rcu_free_ptr(void *p)
+{
+	if (!p)
+		return;
+
+	struct rcu_free_wrapper *w = malloc(sizeof(*w));
+	if (w) {
+		w->p = p;
+		call_rcu(&w->rcu, rcu_free_wrapper_cb);
+	} else {
+		synchronize_rcu();
+		free(p);
+	}
+}
+
+#define kfree_rcu(ptr, rcu_head)	rcu_free_ptr(ptr)
+#define kfree_rcu_mightsleep(ptr)	rcu_free_ptr(ptr)
+#define kvfree_rcu(ptr, rcu_head)	rcu_free_ptr(ptr)
+#define kvfree_rcu_mightsleep(ptr)	rcu_free_ptr(ptr)
 
 #define RCU_INIT_POINTER(p, v)		WRITE_ONCE(p, v)
 

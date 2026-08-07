@@ -260,6 +260,10 @@ __cold void bch2_member_to_text(struct printbuf *out,
 		prt_printf(out, "(none)");
 	prt_newline(out);
 
+	if (m->failure_domain[0])
+		prt_printf(out, "Failure domain:\t%.*s\n",
+			   (int) sizeof(m->failure_domain), m->failure_domain);
+
 	prt_printf(out, "UUID:\t");
 	pr_uuid(out, m->uuid.b);
 	prt_newline(out);
@@ -369,6 +373,10 @@ static void bch2_member_to_text_short_sb(struct printbuf *out,
 		prt_newline(out);
 	}
 
+	if (m->failure_domain[0])
+		prt_printf(out, "Failure domain:\t%.*s\n",
+			   (int) sizeof(m->failure_domain), m->failure_domain);
+
 	prt_printf(out, "Device:\t%.*s\n", (int) sizeof(m->device_name), m->device_name);
 	prt_printf(out, "Model:\t%.*s\n", (int) sizeof(m->device_model), m->device_model);
 	prt_printf(out, "Serial:\t%.*s\n", (int) sizeof(m->device_serial), m->device_serial);
@@ -400,8 +408,7 @@ void bch2_member_to_text_short(struct printbuf *out,
 			       struct bch_fs *c,
 			       struct bch_dev *ca)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bch2_member_to_text_short_locked(out, c, ca);
 }
 
@@ -538,14 +545,52 @@ void bch2_sb_members_from_cpu(struct bch_fs *c)
 	}
 }
 
+struct failure_domain {
+	u8	name[32];
+};
+
 void bch2_sb_members_to_cpu(struct bch_fs *c)
 {
+	BUILD_BUG_ON(sizeof(((struct failure_domain *) NULL)->name) !=
+		     sizeof(((struct bch_member *) NULL)->failure_domain));
+
 	for_each_member_device(c, ca) {
 		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
 		ca->mi = bch2_mi_to_cpu(&m);
 
 		mod_bit(ca->dev_idx, c->devs_rotational.d, ca->mi.rotational);
 	}
+
+	/*
+	 * Intern failure domain strings to small ids: two devices are in the
+	 * same failure domain iff their (non-empty) strings match. The id is the
+	 * 1-based index into the set of distinct strings, 0 = unset. The table is
+	 * transient - the ids stored on ca->mi are what we keep.
+	 */
+	DARRAY(struct failure_domain) domains = {};
+	for_each_member_device(c, ca) {
+		struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
+		if (!m.failure_domain[0])
+			continue;
+
+		u16 id = 0;
+		darray_for_each(domains, d)
+			if (!memcmp(d->name, m.failure_domain, sizeof(d->name))) {
+				id = (d - domains.data) + 1;
+				break;
+			}
+
+		if (!id) {
+			struct failure_domain d;
+			memcpy(d.name, m.failure_domain, sizeof(d.name));
+			if (darray_push(&domains, d))
+				continue;	/* -ENOMEM: leave unset, safe */
+			id = domains.nr;
+		}
+
+		ca->mi.failure_domain = id;
+	}
+	darray_exit(&domains);
 
 	struct bch_sb_field_members_v2 *mi2 = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 	if (mi2)
@@ -561,10 +606,8 @@ __cold void bch2_dev_io_errors_to_text(struct printbuf *out, struct bch_dev *ca)
 	struct bch_fs *c = ca->fs;
 	struct bch_member m;
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock)
 		m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
-	}
 
 	printbuf_tabstop_push(out, 12);
 
@@ -594,8 +637,7 @@ void bch2_dev_errors_reset(struct bch_dev *ca)
 {
 	struct bch_fs *c = ca->fs;
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 	for (unsigned i = 0; i < ARRAY_SIZE(m->errors_at_reset); i++)
@@ -681,7 +723,7 @@ static void __bch2_dev_btree_bitmap_mark(struct bch_dev *ca,
 
 void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *c, struct bkey_s_c k, bool *write_sb)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 
@@ -697,8 +739,7 @@ void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *c, struct bkey_s_c k, bool
 
 void bch2_dev_btree_bitmap_mark(struct bch_fs *c, struct bkey_s_c k)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 	bch2_dev_btree_bitmap_mark_locked(c, k, &write_sb);
 	if (write_sb)
@@ -727,8 +768,7 @@ int bch2_btree_bitmap_gc(struct bch_fs *c)
 	struct progress_indicator progress;
 	bch2_progress_init(&progress, __func__, c, 0, ~0ULL);
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		guard(rcu)();
 		for_each_member_device_rcu(c, ca, NULL)
 			ca->btree_allocated_bitmap_gc = 0;
@@ -753,8 +793,7 @@ int bch2_btree_bitmap_gc(struct bch_fs *c)
 
 	u64 sectors_marked_old = 0, sectors_marked_new = 0;
 
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		guard(mutex)(&c->sb_lock);
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 
 		scoped_guard(rcu)
@@ -835,6 +874,21 @@ unsigned bch2_sb_nr_devices(const struct bch_sb *sb)
 	return nr;
 }
 
+/*
+ * Worst observed IO latency (@rw) across @devs, in jiffies - used to scale
+ * timeouts and "held too long" warnings so slow storage doesn't trip them.
+ */
+unsigned long bch2_dev_latency_max(struct bch_fs *c, struct bch_devs_mask *devs, int rw)
+{
+	u64 nsecs = 0;
+
+	guard(rcu)();
+	for_each_member_device_rcu(c, ca, devs)
+		nsecs = max(nsecs, ca->io_latency[rw].stats.max_duration);
+
+	return nsecs_to_jiffies(nsecs);
+}
+
 static int bch2_sb_member_find_slot(struct bch_fs *c)
 {
 	int best = -1;
@@ -898,8 +952,7 @@ int bch2_sb_member_alloc(struct bch_fs *c)
 
 void bch2_sb_members_clean_deleted(struct bch_fs *c)
 {
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 
 	for (unsigned i = 0; i < c->sb.nr_devices; i++) {
@@ -947,7 +1000,7 @@ void bch2_dev_mi_field_upgrades_locked(struct bch_fs *c, struct bch_dev *ca,
 				       const struct bch_dev_identity *identity,
 				       bool *write_sb)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 
@@ -969,8 +1022,7 @@ void bch2_dev_mi_field_upgrades(struct bch_dev *ca)
 	struct bch_dev_identity identity;
 	bch2_dev_mi_field_read(ca, &identity);
 
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-	guard(mutex)(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	bool write_sb = false;
 
 	bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
@@ -991,14 +1043,12 @@ void bch2_fs_mi_field_upgrades(struct bch_fs *c)
 
 		bch2_dev_mi_field_read(ca, &identity);
 
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-		guard(mutex)(&c->sb_lock);
+		guard(mutex_noio)(&c->sb_lock);
 		bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
 	}
 
 	if (write_sb) {
-		guard(memalloc_flags)(PF_MEMALLOC_NOFS);
-		guard(mutex)(&c->sb_lock);
+		guard(mutex_noio)(&c->sb_lock);
 		bch2_write_super(c);
 	}
 }

@@ -55,7 +55,7 @@ enum bch_fsck_flags {
 	x(btree_node_replicas_sectors_written_mismatch,		 39,	0)		\
 	x(btree_node_replicas_data_mismatch,			 40,	0)		\
 	x(bset_unknown_csum,					 41,	0)		\
-	x(bset_bad_csum,					 42,	0)		\
+	x(bset_bad_csum,					 42,	FSCK_AUTOFIX)	\
 	x(bset_past_end_of_btree_node,				 43,	0)		\
 	x(bset_wrong_sector_offset,				 44,	0)		\
 	x(bset_empty,						 45,	0)		\
@@ -227,9 +227,13 @@ enum bch_fsck_flags {
 	x(snapshot_edge_bad,					371,	0)		\
 	x(snapshot_state_bad,					373,	FSCK_AUTOFIX)	\
 	x(snapshot_state_bitflip,				379,	FSCK_AUTOFIX)	\
-	x(snapshot_will_delete_but_subvol_live,			376,	FSCK_AUTOFIX)		\
+	x(snapshot_state_stale_tombstone,			382,	FSCK_AUTOFIX)	\
+	x(snapshot_subvol_state_mismatch,			386,	FSCK_AUTOFIX)	\
+	x(snapshot_deleted_but_subvol_live,			376,	FSCK_AUTOFIX)	\
 	x(snapshot_deleted_has_live_children,			381,	FSCK_AUTOFIX)	\
-	x(snapshot_subvol_backref_wrong,			377,	0)		\
+	x(snapshot_deleted_but_linked,				384,	FSCK_AUTOFIX)	\
+	x(snapshot_deleted_but_has_data,			385,	FSCK_AUTOFIX)	\
+	x(snapshot_subvol_backref_wrong,			377,	FSCK_AUTOFIX)	\
 	x(snapshot_no_keys_childless,				378,	FSCK_AUTOFIX)	\
 	x(snapshot_should_not_have_subvol,			182,	0)		\
 	x(snapshot_subvol_flag_wrong,				369,	FSCK_AUTOFIX)	\
@@ -244,6 +248,7 @@ enum bch_fsck_flags {
 	x(subvol_not_master_and_not_snapshot,			187,	FSCK_AUTOFIX)	\
 	x(subvol_to_missing_root,				188,	FSCK_AUTOFIX)	\
 	x(subvol_root_wrong_bi_subvol,				189,	FSCK_AUTOFIX)	\
+	x(subvol_root_unlinked_flag_missing,			383,	FSCK_AUTOFIX)	\
 	x(bkey_in_missing_snapshot,				190,	0)		\
 	x(bkey_in_deleted_snapshot,				315,	FSCK_AUTOFIX)	\
 	x(inode_pos_inode_nonzero,				191,	0)		\
@@ -257,7 +262,7 @@ enum bch_fsck_flags {
 	x(inode_unlinked_but_clean,				197,	0)		\
 	x(inode_unlinked_but_nlink_nonzero,			198,	0)		\
 	x(inode_unlinked_and_not_open,				281,	0)		\
-	x(inode_unlinked_but_has_dirent,			285,	0)		\
+	x(inode_unlinked_but_has_dirent,			285,	FSCK_AUTOFIX)	\
 	x(unlinked_inode_not_on_deleted_list,			244,	FSCK_AUTOFIX)	\
 	x(inode_checksum_type_invalid,				199,	0)		\
 	x(inode_compression_type_invalid,			200,	0)		\
@@ -275,6 +280,7 @@ enum bch_fsck_flags {
 	x(inode_wrong_nlink,					209,	FSCK_AUTOFIX)	\
 	x(inode_has_child_snapshots_wrong,			287,	FSCK_AUTOFIX)	\
 	x(inode_unreachable,					210,	FSCK_AUTOFIX)	\
+	x(inode_unreachable_dirent_in_descendant,		427,	FSCK_AUTOFIX)	\
 	x(inode_journal_seq_in_future,				299,	FSCK_AUTOFIX)	\
 	x(inode_i_sectors_underflow,				312,	FSCK_AUTOFIX)	\
 	x(inode_has_case_insensitive_not_set,			316,	FSCK_AUTOFIX)	\
@@ -287,7 +293,7 @@ enum bch_fsck_flags {
 	x(deleted_inode_is_dir,					213,	FSCK_AUTOFIX)	\
 	x(deleted_inode_not_unlinked,				214,	FSCK_AUTOFIX)	\
 	x(deleted_inode_has_child_snapshots,			288,	FSCK_AUTOFIX)	\
-	x(extent_overlapping,					215,	0)		\
+	x(extent_overlapping,					215,	FSCK_AUTOFIX)	\
 	x(key_in_missing_inode,					216,	FSCK_AUTOFIX)	\
 	x(key_in_wrong_inode_type,				217,	0)		\
 	x(extent_past_end_of_inode,				218,	FSCK_AUTOFIX)	\
@@ -298,12 +304,12 @@ enum bch_fsck_flags {
 	x(dirent_name_dot_or_dotdot,				223,	0)		\
 	x(dirent_name_has_slash,				224,	0)		\
 	x(dirent_d_type_wrong,					225,	FSCK_AUTOFIX)	\
-	x(inode_bi_parent_wrong,				226,	0)		\
+	x(inode_bi_parent_wrong,				226,	FSCK_AUTOFIX)	\
 	x(dirent_in_missing_dir_inode,				227,	0)		\
 	x(dirent_in_non_dir_inode,				228,	0)		\
 	x(dirent_to_missing_inode,				229,	FSCK_AUTOFIX)	\
 	x(dirent_to_overwritten_inode,				302,	FSCK_AUTOFIX)	\
-	x(dirent_to_missing_subvol,				230,	0)		\
+	x(dirent_to_missing_subvol,				230,	FSCK_AUTOFIX)	\
 	x(dirent_to_itself,					231,	0)		\
 	x(dirent_casefold_mismatch,				318,	FSCK_AUTOFIX)	\
 	x(quota_type_invalid,					232,	0)		\
@@ -312,23 +318,23 @@ enum bch_fsck_flags {
 	x(xattr_invalid_type,					235,	0)		\
 	x(xattr_name_invalid_chars,				236,	0)		\
 	x(xattr_in_missing_inode,				237,	0)		\
-	x(root_subvol_missing,					238,	0)		\
-	x(root_dir_missing,					239,	0)		\
-	x(root_inode_not_dir,					240,	0)		\
+	x(root_subvol_missing,					238,	FSCK_AUTOFIX)	\
+	x(root_dir_missing,					239,	FSCK_AUTOFIX)	\
+	x(root_inode_not_dir,					240,	FSCK_AUTOFIX)	\
 	x(dir_loop,						241,	FSCK_AUTOFIX)	\
 	x(hash_table_key_duplicate,				242,	FSCK_AUTOFIX)	\
 	x(hash_table_key_wrong_offset,				243,	FSCK_AUTOFIX)	\
 	x(reflink_p_front_pad_bad,				245,	0)		\
 	x(journal_entry_dup_same_device,			246,	0)		\
-	x(inode_bi_subvol_missing,				247,	0)		\
-	x(inode_bi_subvol_wrong,				248,	0)		\
+	x(inode_bi_subvol_missing,				247,	FSCK_AUTOFIX)	\
+	x(inode_bi_subvol_wrong,				248,	FSCK_AUTOFIX)	\
 	x(inode_points_to_missing_dirent,			249,	FSCK_AUTOFIX)	\
 	x(inode_points_to_wrong_dirent,				250,	FSCK_AUTOFIX)	\
 	x(inode_bi_parent_nonzero,				251,	0)		\
 	x(missing_inode_with_contents,				321,	FSCK_AUTOFIX)	\
 	x(dirent_to_missing_parent_subvol,			252,	0)		\
-	x(dirent_not_visible_in_parent_subvol,			253,	0)		\
-	x(subvol_fs_path_parent_wrong,				254,	0)		\
+	x(dirent_not_visible_in_parent_subvol,			253,	FSCK_AUTOFIX)	\
+	x(subvol_fs_path_parent_wrong,				254,	FSCK_AUTOFIX)	\
 	x(subvol_root_fs_path_parent_nonzero,			255,	0)		\
 	x(subvol_children_not_set,				256,	0)		\
 	x(subvol_children_bad,					257,	0)		\
@@ -393,7 +399,47 @@ enum bch_fsck_flags {
 	x(inode_has_access_acl_flag_wrong,			366,	FSCK_AUTOFIX)	\
 	x(inode_has_default_acl_flag_wrong,			367,	FSCK_AUTOFIX)	\
 	x(dirent_to_inode_in_descendant_snapshot,		368,	FSCK_AUTOFIX)	\
-	x(MAX,							382,	0)
+	x(damage_entries_bad,					387,	0)		\
+	x(damage_key_no_inode,					388,	FSCK_AUTOFIX)	\
+	x(data_read_io_err_recovered,				389,	0)		\
+	x(data_read_io_err,					390,	0)		\
+	x(data_read_csum_err_recovered,				391,	0)		\
+	x(data_read_csum_err,					392,	0)		\
+	x(data_lost_device_removed,				393,	0)		\
+	x(blk_sts_notsupp,					394,	0)		\
+	x(blk_sts_timeout,					395,	0)		\
+	x(blk_sts_nospc,					396,	0)		\
+	x(blk_sts_transport,					397,	0)		\
+	x(blk_sts_target,					398,	0)		\
+	x(blk_sts_resv_conflict,				399,	0)		\
+	x(blk_sts_medium,					400,	0)		\
+	x(blk_sts_protection,					401,	0)		\
+	x(blk_sts_resource,					402,	0)		\
+	x(blk_sts_ioerr,					403,	0)		\
+	x(blk_sts_again,					404,	0)		\
+	x(blk_sts_dev_resource,					405,	0)		\
+	x(blk_sts_offline,					406,	0)		\
+	x(blk_sts_duration_limit,				407,	0)		\
+	x(blk_sts_inval,					408,	0)		\
+	x(blk_sts_removed,					409,	0)		\
+	x(blk_sts_unknown,					410,	0)		\
+	x(data_decompress_err_exceeded_max_encoded_extent,	411,	0)		\
+	x(data_decompress_err_lz4_old,				412,	0)		\
+	x(data_decompress_err_lz4,				413,	0)		\
+	x(data_decompress_err_gzip,				414,	0)		\
+	x(data_decompress_err_gzip_size_mismatch,		415,	0)		\
+	x(data_decompress_err_zstd_src_len_bad,			416,	0)		\
+	x(data_decompress_err_zstd_size_mismatch,		417,	0)		\
+	x(data_decompress_err_zstd_corruption_detected,		418,	0)		\
+	x(data_decompress_err_zstd_checksum_wrong,		419,	0)		\
+	x(data_decompress_err_zstd_prefix_unknown,		420,	0)		\
+	x(data_decompress_err_zstd_src_size_wrong,		421,	0)		\
+	x(data_decompress_err_zstd_dst_size_too_small,		422,	0)		\
+	x(data_decompress_err_zstd_memory_allocation,		423,	0)		\
+	x(data_decompress_err_zstd_unknown,			424,	0)		\
+	x(data_decompress_err_unknown,				425,	0)		\
+	x(snapshot_child_missing_but_accounted,			426,	FSCK_AUTOFIX)	\
+	x(MAX,							428,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
@@ -413,5 +459,82 @@ struct bch_sb_field_errors {
 
 LE64_BITMASK(BCH_SB_ERROR_ENTRY_ID,	struct bch_sb_field_error_entry, v,  0, 16);
 LE64_BITMASK(BCH_SB_ERROR_ENTRY_NR,	struct bch_sb_field_error_entry, v, 16, 64);
+
+/*
+ * v2 entries add the time of first occurrence: id (16 bits), a
+ * saturating occurrence count (32), and two 40-bit second-resolution
+ * timestamps - good until the year ~36,800 - packed exactly into 128
+ * bits. No 64-bit boundary partition fits {16, 32, 40, 40}, so
+ * last_error_time spans the two words and the accessors are hand
+ * rolled; the setters saturate, since a wrapped count or timestamp
+ * would be worse than a pinned one.
+ *
+ * v[0]: id 0..16, nr 16..48, last_error_time 48..64 (low 16 bits)
+ * v[1]: last_error_time 0..24 (high 24 bits), first_error_time 24..64
+ */
+typedef struct bch_sb_field_error_entry_v2 {
+	__le64		v[2];
+} bch_sb_field_error_entry_v2;
+
+struct bch_sb_field_errors_v2 {
+	struct bch_sb_field	field;
+	bch_sb_field_error_entry_v2 entries[];
+};
+
+#define BCH_SB_ERROR_ENTRY_V2_NR_MAX	((1ULL << 32) - 1)
+#define BCH_SB_ERROR_ENTRY_V2_TIME_MAX	((1ULL << 40) - 1)
+
+static inline __u64 BCH_SB_ERROR_ENTRY_V2_ID(const struct bch_sb_field_error_entry_v2 *e)
+{
+	return __le64_to_cpu(e->v[0]) & 0xffff;
+}
+
+static inline void SET_BCH_SB_ERROR_ENTRY_V2_ID(struct bch_sb_field_error_entry_v2 *e, __u64 id)
+{
+	e->v[0] = __cpu_to_le64((__le64_to_cpu(e->v[0]) & ~0xffffULL) |
+				(id & 0xffff));
+}
+
+static inline __u64 BCH_SB_ERROR_ENTRY_V2_NR(const struct bch_sb_field_error_entry_v2 *e)
+{
+	return (__le64_to_cpu(e->v[0]) >> 16) & 0xffffffffULL;
+}
+
+static inline void SET_BCH_SB_ERROR_ENTRY_V2_NR(struct bch_sb_field_error_entry_v2 *e, __u64 nr)
+{
+	if (nr > BCH_SB_ERROR_ENTRY_V2_NR_MAX)
+		nr = BCH_SB_ERROR_ENTRY_V2_NR_MAX;
+	e->v[0] = __cpu_to_le64((__le64_to_cpu(e->v[0]) & ~(0xffffffffULL << 16)) |
+				(nr << 16));
+}
+
+static inline __u64 BCH_SB_ERROR_ENTRY_V2_LAST(const struct bch_sb_field_error_entry_v2 *e)
+{
+	return (__le64_to_cpu(e->v[0]) >> 48) |
+	       ((__le64_to_cpu(e->v[1]) & 0xffffffULL) << 16);
+}
+
+static inline void SET_BCH_SB_ERROR_ENTRY_V2_LAST(struct bch_sb_field_error_entry_v2 *e, __u64 t)
+{
+	if (t > BCH_SB_ERROR_ENTRY_V2_TIME_MAX)
+		t = BCH_SB_ERROR_ENTRY_V2_TIME_MAX;
+	e->v[0] = __cpu_to_le64((__le64_to_cpu(e->v[0]) & ~(0xffffULL << 48)) |
+				((t & 0xffff) << 48));
+	e->v[1] = __cpu_to_le64((__le64_to_cpu(e->v[1]) & ~0xffffffULL) |
+				(t >> 16));
+}
+
+static inline __u64 BCH_SB_ERROR_ENTRY_V2_FIRST(const struct bch_sb_field_error_entry_v2 *e)
+{
+	return __le64_to_cpu(e->v[1]) >> 24;
+}
+
+static inline void SET_BCH_SB_ERROR_ENTRY_V2_FIRST(struct bch_sb_field_error_entry_v2 *e, __u64 t)
+{
+	if (t > BCH_SB_ERROR_ENTRY_V2_TIME_MAX)
+		t = BCH_SB_ERROR_ENTRY_V2_TIME_MAX;
+	e->v[1] = __cpu_to_le64((__le64_to_cpu(e->v[1]) & 0xffffffULL) |
+				(t << 24));
+}
 
 #endif /* _BCACHEFS_SB_ERRORS_FORMAT_H */

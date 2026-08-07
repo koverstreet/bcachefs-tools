@@ -1,4 +1,62 @@
 // SPDX-License-Identifier: GPL-2.0
+
+/* DOC_LATEX(failure-domains)
+ * A \emph{failure domain} is a set of devices expected to fail together: a
+ * shared controller, host, or rack. Spreading a filesystem's replicas across
+ * failure domains is what lets it survive one failing --- losing a whole
+ * domain then costs at most one replica of any extent.
+ *
+ * Each device may be given a failure domain: a free-form string, set with the
+ * \texttt{failure\_domain} device option at format time, at device add time,
+ * or at runtime. Two devices are in the same failure domain when their strings
+ * are equal; a device with no failure domain set is a domain of its own.
+ *
+ * This is a flat, intrinsic device property with no relationship to the disk
+ * label tree used for \hyperref[sec:io-path-options]{targeting}: a device's
+ * label positions it for target options, its failure domain describes physical
+ * fault isolation, and the two need not agree --- devices labeled by
+ * performance class (\texttt{ssd}, \texttt{hdd}) may sit in racks that cut
+ * across those classes.
+ *
+ * \subsubsection{Spreading replicas}
+ *
+ * When allocating, candidate devices are sorted by how many replicas of the
+ * current write already sit in each device's failure domain, so each replica
+ * goes to the least occupied domain, ties broken by the usual free space round
+ * robin. The journal spreads its replicas the same way.
+ *
+ * For replicated data this is a preference, not a requirement: if every
+ * remaining domain already holds a replica --- too few domains for the
+ * replication level, or the empty ones are full --- replicas double up rather
+ * than failing the allocation. Data sharing a domain with another of its
+ * replicas is still intact; it just isn't protected against that domain's loss.
+ *
+ * \subsubsection{Erasure coding}
+ *
+ * For erasure coding, distinct failure domains are a hard requirement rather
+ * than a preference: a stripe survives losing a domain only if no more than
+ * \texttt{nr\_redundant} of its blocks are in it, and a stripe that loses too
+ * many blocks cannot be reconstructed --- landing poorly is not merely
+ * unprotected, as for replicated data, but unrecoverable. So stripe block
+ * allocation excludes devices sharing an already-placed block's domain, and
+ * stripe width is capped at the number of failure domains with allocatable
+ * devices: if a domain becomes unavailable, new stripes are allocated narrower
+ * rather than doubling up.
+ *
+ * \subsubsection{Checking failure domains}
+ *
+ * \texttt{bcachefs fs failure-domains} shows the failure domains and what
+ * losing each would cost, computed from the replicas accounting: for each
+ * domain, the data that would be lost if it failed --- too few copies or stripe
+ * blocks left to reconstruct --- and the data that would survive degraded.
+ * Nonzero lost data means failure domain separation is being violated. With no
+ * failure domains configured each device is its own domain, so this becomes the
+ * per device view.
+ *
+ * Existing data is not rewritten when failure domains change: the report shows
+ * what a future rewrite pass would need to move.
+ */
+
 #include "bcachefs.h"
 
 #include "alloc/disk_groups.h"
@@ -138,7 +196,7 @@ int bch2_sb_disk_groups_to_cpu(struct bch_fs *c)
 	struct bch_disk_groups_cpu *cpu_g, *old_g;
 	unsigned i, g, nr_groups;
 
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	groups		= bch2_sb_field_get(c->disk_sb.sb, disk_groups);
 	nr_groups	= disk_groups_nr(groups);
@@ -177,7 +235,7 @@ int bch2_sb_disk_groups_to_cpu(struct bch_fs *c)
 	}
 
 	old_g = rcu_dereference_protected(c->disk_groups,
-				lockdep_is_held(&c->sb_lock));
+				lockdep_is_held(&c->sb_lock.lock));
 	rcu_assign_pointer(c->disk_groups, cpu_g);
 	if (old_g)
 		kfree_rcu(old_g, rcu);
@@ -210,6 +268,77 @@ const struct bch_devs_mask *bch2_target_to_mask(struct bch_fs *c, unsigned targe
 	default:
 		BUG();
 	}
+}
+
+/* Interned failure domain id of a device, 0 = unset. Caller holds rcu. */
+static inline u16 dev_failure_domain(struct bch_fs *c, unsigned dev)
+{
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+	return ca ? ca->mi.failure_domain : 0;
+}
+
+/*
+ * Spreading key for a candidate device: the number of already-chosen replicas
+ * in its failure domain. Sorting candidates by this ascending fills empty
+ * domains first, then doubles up - the failure-domain preference for
+ * replicated data. A device with no failure domain (id 0) always keys 0: it
+ * never shares a domain, so it sorts first and is never excluded.
+ *
+ * Called in batches - caller holds the rcu read lock.
+ */
+u64 bch2_dev_domain_key(struct bch_fs *c,
+			const struct bch_devs_mask *chosen, unsigned dev)
+{
+	u16 d = dev_failure_domain(c, dev);
+	if (!d)
+		return 0;
+
+	u64 key = 0;
+	unsigned i;
+	for_each_set_bit(i, chosen->d, BCH_SB_MEMBERS_MAX)
+		key += dev_failure_domain(c, i) == d;
+
+	return key;
+}
+
+/*
+ * Number of distinct failure domains @devs spans: each set domain counted
+ * once, each device with no domain counted as its own. This caps stripe width
+ * when failure domains are a hard requirement - a stripe can't have more
+ * blocks than domains to spread them across.
+ */
+unsigned bch2_target_nr_domains(struct bch_fs *c,
+				const struct bch_devs_mask *devs)
+{
+	unsigned nr = 0;
+
+	guard(rcu)();
+
+	unsigned i;
+	for_each_set_bit(i, devs->d, BCH_SB_MEMBERS_MAX) {
+		u16 d = dev_failure_domain(c, i);
+
+		/* no failure domain - a domain of its own: */
+		if (!d) {
+			nr++;
+			continue;
+		}
+
+		/* count each domain at its first device: */
+		bool first = true;
+		unsigned j;
+		for_each_set_bit(j, devs->d, BCH_SB_MEMBERS_MAX) {
+			if (j >= i)
+				break;
+			if (dev_failure_domain(c, j) == d) {
+				first = false;
+				break;
+			}
+		}
+		nr += first;
+	}
+
+	return nr;
 }
 
 bool bch2_dev_in_target_rcu(struct bch_fs *c, unsigned dev, unsigned target)
@@ -476,7 +605,7 @@ static int dev_label_resolve(struct bch_fs *c, const char *name)
 
 int __bch2_dev_group_set(struct bch_fs *c, struct bch_dev *ca, const char *name)
 {
-	lockdep_assert_held(&c->sb_lock);
+	lockdep_assert_held(&c->sb_lock.lock);
 
 	int v = dev_label_resolve(c, name);
 	if (v < 0)
@@ -495,7 +624,7 @@ int bch2_opt_disk_label_parse(struct bch_fs *c, const char *val, u64 *res,
 	if (!c)
 		return -BCH_ERR_option_needs_open_fs;
 
-	scoped_guard(mutex, &c->sb_lock) {
+	scoped_guard(mutex_noio, &c->sb_lock) {
 		int v = dev_label_resolve(c, val);
 		if (v < 0)
 			return v;
@@ -541,7 +670,7 @@ int bch2_opt_target_parse(struct bch_fs *c, const char *val, u64 *res,
 		return 0;
 	}
 
-	scoped_guard(mutex, &c->sb_lock)
+	scoped_guard(mutex_noio, &c->sb_lock)
 		g = bch2_disk_path_find(&c->disk_sb, val);
 
 	if (g >= 0) {

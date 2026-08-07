@@ -13,8 +13,19 @@ include!("codegen.rs");
 fn watch_dir(dir: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
+        // file_type() reads the dirent directly - unlike Path::is_dir() it does
+        // NOT follow symlinks. Following them descends ktest-out/kernel into a
+        // full kernel tree and ktest-out/vm into /tmp; over virtiofs in the test
+        // VM that stat-storm makes the build crawl. We walk "..", so this is
+        // reachable whenever a build has been run in-tree.
+        let Ok(file_type) = entry.file_type() else { continue };
         let path = entry.path();
-        if path.is_dir() {
+        if file_type.is_dir() {
+            // Build output and VCS dirs hold no wrapper-included C/H, only huge
+            // file counts - don't recurse into them.
+            if matches!(entry.file_name().to_str(), Some("target" | "ktest-out" | ".git")) {
+                continue;
+            }
             watch_dir(&path.to_string_lossy());
         } else if path.extension().is_some_and(|e| e == "h" || e == "c") {
             println!("cargo:rerun-if-changed={}", path.display());

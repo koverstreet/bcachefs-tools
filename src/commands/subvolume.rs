@@ -1,16 +1,19 @@
-use std::{collections::HashMap, env, ffi::CStr, mem, os::fd::{AsRawFd, OwnedFd}, path::{Path, PathBuf}};
+use std::{collections::HashMap, env, ffi::CStr, mem, os::fd::OwnedFd, path::{Path, PathBuf}};
 use chrono::{Local, TimeZone};
 
 use anyhow::{Context, Result};
 use bch_bindgen::c::{
-    BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node, bch_ioctl_subvol_dirent,
-    bch_ioctl_subvol_readdir,
+    BCH_SUBVOL_SNAPSHOT_RO, bch_ioctl_snapshot_node, bch_ioctl_snapshot_node_v2,
+    bch_ioctl_snapshot_tree_query, bch_ioctl_snapshot_tree_query_v2,
+    bch_ioctl_subvol_dirent, bch_ioctl_subvol_readdir, bch_ioctl_subvol_to_path,
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human};
+use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir};
 use crate::wrappers::handle::BcachefsHandle;
-use crate::wrappers::ioctl::bch_ioc_wr;
+use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
+    BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SNAPSHOT_TREE_v2,
+    BCH_IOCTL_SUBVOLUME_LIST, BCH_IOCTL_SUBVOLUME_TO_PATH};
 
 // ---- CLI definitions ----
 
@@ -157,7 +160,7 @@ struct SubvolEntry {
     path: String,
 }
 
-type SnapshotNode = bch_ioctl_snapshot_node;
+type SnapshotNode = bch_ioctl_snapshot_node_v2;
 
 struct SnapshotTreeResult {
     master_subvol:  u32,
@@ -167,105 +170,64 @@ struct SnapshotTreeResult {
 
 // ---- Ioctl layer ----
 
-const BCH_IOCTL_SUBVOLUME_LIST: u32 = 31;
-const BCH_IOCTL_SUBVOLUME_TO_PATH: u32 = 32;
-const BCH_IOCTL_SNAPSHOT_TREE_USAGE: u32 = 33;
-
 const BCH_SUBVOLUME_RO:       u32 = 1 << 0;
 const BCH_SUBVOLUME_UNLINKED: u32 = 1 << 2;
 
-fn bcachefs_ioctl<T>(fd: &OwnedFd, nr: u32, arg: &mut T) -> std::io::Result<()> {
-    let ret = unsafe { libc::ioctl(fd.as_raw_fd(), bch_ioc_wr::<T>(nr), arg as *mut T) };
-    if ret < 0 {
-        Err(std::io::Error::last_os_error())
-    } else {
-        Ok(())
-    }
-}
-
-trait FlexArrayIoctl: Copy {
+/// A header-plus-flexible-array ioctl with capacity/total retry protocol:
+/// nr in is capacity, ERANGE reports the required total.
+trait FlexArrayIoctl: Sized {
     type Node: Copy;
-    const NR: u32;
+    type Ioc: Ioctl<Arg = Self>;
     fn set_capacity(&mut self, n: u32);
     fn nr(&self) -> u32;
     fn total(&self) -> u32;
+    /// The trailing array, through the struct's flexible array member.
+    /// Caller guarantees `nr` entries exist past the header.
+    unsafe fn nodes(&self, nr: usize) -> &[Self::Node];
 }
 
 fn bcachefs_flex_ioctl<H: FlexArrayIoctl>(
     fd: &OwnedFd,
     mut arg: H,
 ) -> Result<(H, Vec<H::Node>)> {
-    let hdr_size = mem::size_of::<H>();
-    let node_size = mem::size_of::<H::Node>();
-    let request = bch_ioc_wr::<H>(H::NR);
     let mut capacity = 256u32;
 
     loop {
         arg.set_capacity(capacity);
-        let buf_size = hdr_size + node_size * capacity as usize;
-        let mut buf = vec![0u8; buf_size];
+        let mut buf = IoctlBuf::<H>::new::<H::Node>(capacity as usize);
+        unsafe { std::ptr::copy_nonoverlapping(&arg, buf.as_mut_ptr(), 1) };
 
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &arg as *const H as *const u8, buf.as_mut_ptr(), hdr_size);
-        }
-
-        let ret = unsafe { libc::ioctl(fd.as_raw_fd(), request, buf.as_mut_ptr()) };
-        if ret < 0 {
-            let err = std::io::Error::last_os_error();
-            if err.raw_os_error() == Some(libc::ERANGE) {
-                let hdr = unsafe { &*(buf.as_ptr() as *const H) };
-                capacity = hdr.total();
+        match unsafe { ioctl_ptr::<H::Ioc>(fd, buf.as_mut_ptr()) } {
+            Ok(_) => {}
+            Err(e) if e.raw_os_error() == Some(libc::ERANGE) => {
+                capacity = buf.hdr().total();
                 continue;
             }
-            return Err(err.into());
+            Err(e) => return Err(e.into()),
         }
 
-        let hdr = unsafe { *(buf.as_ptr() as *const H) };
-        let nr = hdr.nr() as usize;
-        let nodes = (0..nr).map(|i| unsafe {
-            std::ptr::read_unaligned(
-                buf.as_ptr().add(hdr_size + i * node_size) as *const H::Node)
-        }).collect();
-
-        return Ok((hdr, nodes));
+        let nr = (buf.hdr().nr() as usize).min(capacity as usize);
+        let nodes = unsafe { buf.hdr().nodes(nr) }.to_vec();
+        return Ok((unsafe { std::ptr::read(buf.hdr()) }, nodes));
     }
 }
 
-#[repr(C)]
-struct BchIoctlSubvolToPath {
-    subvolid:   u32,
-    buf_size:   u32,
-    buf:        u64,
-}
-
-#[repr(C)]
-#[derive(Copy, Clone, Default)]
-struct BchIoctlSnapshotTreeQuery {
-    tree_id:        u32,
-    master_subvol:  u32,
-    root_snapshot:  u32,
-    nr:             u32,
-    total:          u32,
-    pad:            u32,
-}
-
-impl FlexArrayIoctl for BchIoctlSnapshotTreeQuery {
+impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query {
     type Node = bch_ioctl_snapshot_node;
-    const NR: u32 = BCH_IOCTL_SNAPSHOT_TREE_USAGE;
+    type Ioc = BCH_IOCTL_SNAPSHOT_TREE;
     fn set_capacity(&mut self, n: u32) { self.nr = n; }
     fn nr(&self) -> u32 { self.nr }
     fn total(&self) -> u32 { self.total }
+    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { self.nodes.as_slice(nr) }
 }
 
-fn open_dir(path: &Path) -> Result<OwnedFd> {
-    use std::os::unix::fs::OpenOptionsExt;
-    let f = std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_DIRECTORY)
-        .open(path)
-        .with_context(|| format!("Failed to open {}", path.display()))?;
-    Ok(f.into())
+impl FlexArrayIoctl for bch_ioctl_snapshot_tree_query_v2 {
+    type Node = bch_ioctl_snapshot_node_v2;
+    type Ioc = BCH_IOCTL_SNAPSHOT_TREE_v2;
+    fn set_capacity(&mut self, n: u32) { self.nr = n; }
+    fn nr(&self) -> u32 { self.nr }
+    fn total(&self) -> u32 { self.total }
+    unsafe fn nodes(&self, nr: usize) -> &[Self::Node] { self.nodes.as_slice(nr) }
 }
 
 fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
@@ -279,7 +241,7 @@ fn subvol_readdir(fd: &OwnedFd, pos: &mut u32) -> Result<Vec<SubvolEntry>> {
         pad: 0,
     };
 
-    bcachefs_ioctl(fd, BCH_IOCTL_SUBVOLUME_LIST, &mut arg)
+    ioctl_rw::<BCH_IOCTL_SUBVOLUME_LIST>(fd, &mut arg)
         .context("BCH_IOCTL_SUBVOLUME_LIST")?;
     *pos = arg.pos;
 
@@ -325,13 +287,13 @@ fn list_children(fd: &OwnedFd) -> Result<Vec<SubvolEntry>> {
 
 fn subvol_to_path(fd: &OwnedFd, subvolid: u32) -> Result<String> {
     let mut buf = vec![0u8; 4096];
-    let mut arg = BchIoctlSubvolToPath {
+    let mut arg = bch_ioctl_subvol_to_path {
         subvolid,
         buf_size: buf.len() as u32,
         buf: buf.as_mut_ptr() as u64,
     };
 
-    bcachefs_ioctl(fd, BCH_IOCTL_SUBVOLUME_TO_PATH, &mut arg)
+    ioctl_rw::<BCH_IOCTL_SUBVOLUME_TO_PATH>(fd, &mut arg)
         .context("BCH_IOCTL_SUBVOLUME_TO_PATH")?;
 
     let path = CStr::from_bytes_until_nul(&buf)
@@ -346,16 +308,40 @@ fn resolve_subvol_path(fd: &OwnedFd, subvolid: u32) -> Option<String> {
 }
 
 fn query_snapshot_tree(fd: &OwnedFd, tree_id: u32) -> Result<SnapshotTreeResult> {
-    let (hdr, nodes) = bcachefs_flex_ioctl(fd, BchIoctlSnapshotTreeQuery {
+    match bcachefs_flex_ioctl(fd, bch_ioctl_snapshot_tree_query_v2 {
         tree_id,
+        node_size: mem::size_of::<bch_ioctl_snapshot_node_v2>() as u32,
         ..Default::default()
-    })?;
+    }) {
+        Ok((hdr, nodes)) => Ok(SnapshotTreeResult {
+            master_subvol: hdr.master_subvol,
+            root_snapshot: hdr.root_snapshot,
+            nodes,
+        }),
+        /* Kernel predates v2: fall back, without the key counters */
+        Err(e) if e.downcast_ref::<std::io::Error>()
+            .and_then(|e| e.raw_os_error()) == Some(libc::ENOTTY) => {
+            let (hdr, v1) = bcachefs_flex_ioctl(fd, bch_ioctl_snapshot_tree_query {
+                tree_id,
+                ..Default::default()
+            })?;
 
-    Ok(SnapshotTreeResult {
-        master_subvol: hdr.master_subvol,
-        root_snapshot: hdr.root_snapshot,
-        nodes,
-    })
+            Ok(SnapshotTreeResult {
+                master_subvol: hdr.master_subvol,
+                root_snapshot: hdr.root_snapshot,
+                nodes: v1.iter().map(|n| bch_ioctl_snapshot_node_v2 {
+                    id:       n.id,
+                    parent:   n.parent,
+                    children: n.children,
+                    subvol:   n.subvol,
+                    flags:    n.flags,
+                    sectors:  n.sectors,
+                    ..Default::default()
+                }).collect(),
+            })
+        }
+        Err(e) => Err(e),
+    }
 }
 
 fn compute_subvol_sizes(tree: &SnapshotTreeResult) -> HashMap<u32, u64> {

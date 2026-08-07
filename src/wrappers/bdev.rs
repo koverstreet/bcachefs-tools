@@ -11,32 +11,12 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt};
 use std::os::unix::io::RawFd;
 use std::path::PathBuf;
 
-use libc::BLKPBSZGET;
-
-// linux/fs.h ioctl constants not exposed by libc crate. Note that some
-// architectures use a 3-bit ioctl direction field.
-#[cfg(any(
-    target_arch = "powerpc",
-    target_arch = "powerpc64",
-    target_arch = "mips",
-    target_arch = "mips32r6",
-    target_arch = "mips64",
-    target_arch = "mips64r6",
-    target_arch = "sparc",
-    target_arch = "sparc64",
-))]
-const BLKGETSIZE64: libc::Ioctl = 0x40081272u32 as libc::Ioctl;
-#[cfg(not(any(
-    target_arch = "powerpc",
-    target_arch = "powerpc64",
-    target_arch = "mips",
-    target_arch = "mips32r6",
-    target_arch = "mips64",
-    target_arch = "mips64r6",
-    target_arch = "sparc",
-    target_arch = "sparc64",
-)))]
-const BLKGETSIZE64: libc::Ioctl = 0x80081272u32 as libc::Ioctl;
+// The block ioctl numbers encode sizeof() of the argument type and the
+// direction bits differ between architectures, so they can't be written down
+// here: the C compiler evaluates them from linux/fs.h for the target and
+// exports them as constants. See c_src/rust_shims.h.
+const BLKGETSIZE64: libc::Ioctl = bch_bindgen::c::BCH_BLKGETSIZE64 as libc::Ioctl;
+const BLKPBSZGET: libc::Ioctl = bch_bindgen::c::BCH_BLKPBSZGET as libc::Ioctl;
 
 /// Returns the size of a file or block device in bytes.
 ///
@@ -149,11 +129,10 @@ pub fn fd_to_parent_disk_sysfs(fd: RawFd) -> Option<PathBuf> {
 ///
 /// For regular files (image files) the ioctl fails and we default to false.
 pub fn nonrot(fd: RawFd) -> bool {
-    // BLKROTATIONAL = _IO(0x12, 126). Kernel returns !bdev_nonrot(bdev) via
-    // put_ushort — bdev_nonrot internally uses bdev_get_queue(bdev), which
-    // resolves to the parent disk's queue for partitions and handles LVM,
-    // md, loop devices, etc. uniformly.
-    const BLKROTATIONAL: libc::Ioctl = 0x127E as libc::Ioctl;
+    // Kernel returns !bdev_nonrot(bdev) via put_ushort — bdev_nonrot internally
+    // uses bdev_get_queue(bdev), which resolves to the parent disk's queue for
+    // partitions and handles LVM, md, loop devices, etc. uniformly.
+    const BLKROTATIONAL: libc::Ioctl = bch_bindgen::c::BCH_BLKROTATIONAL as libc::Ioctl;
     let mut rotational: u16 = 0;
     let ret = unsafe { libc::ioctl(fd, BLKROTATIONAL, &mut rotational) };
     ret == 0 && rotational == 0

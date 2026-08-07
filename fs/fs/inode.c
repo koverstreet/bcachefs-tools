@@ -22,6 +22,7 @@
 
 #include "vfs/fs.h"
 
+#include "init/damage.h"
 #include "init/error.h"
 #include "init/passes.h"
 
@@ -1050,9 +1051,10 @@ unsigned bch2_shard_inode_numbers_bits_default(unsigned nr_cpus,
 	 *   =>  2^bits <= fs_size / (400 * btree_node_bytes)
 	 */
 	u64 denom = 400ULL * btree_node_bytes;
-	unsigned size_bits = btree_node_bytes && fs_size >= denom
-		? ilog2(fs_size / denom)
-		: 0;
+	unsigned size_bits = 0;
+
+	if (denom && fs_size >= denom)
+		size_bits = ilog2(div64_u64(fs_size, denom));
 
 	return min(min(cpu_bits, size_bits), 8U);
 }
@@ -1249,7 +1251,8 @@ static int bch2_inode_rm_trans(struct btree_trans *trans, subvol_inum inum, u32 
 		return bch_err_throw(trans->c, ENOENT_inode);
 	}
 
-	return bch2_btree_delete_at(trans, &iter, 0);
+	return bch2_btree_delete_at(trans, &iter, 0) ?:
+		bch2_damage_delete(trans, inum.inum, *snapshot);
 }
 
 int bch2_inode_rm(struct bch_fs *c, subvol_inum inum)
@@ -1411,22 +1414,48 @@ int bch2_inode_set_casefold(struct btree_trans *trans, subvol_inum inum,
 
 static noinline int __bch2_inode_rm_snapshot(struct btree_trans *trans, u64 inum, u32 snapshot)
 {
-	bch2_btree_delete_range_trans(trans, BTREE_ID_extents,
-				      SPOS(inum, 0, snapshot),
-				      SPOS(inum, U64_MAX, snapshot),
-				      BTREE_UPDATE_internal_snapshot_node);
-	bch2_btree_delete_range_trans(trans, BTREE_ID_dirents,
-				      SPOS(inum, 0, snapshot),
-				      SPOS(inum, U64_MAX, snapshot),
-				      BTREE_UPDATE_internal_snapshot_node);
-	bch2_btree_delete_range_trans(trans, BTREE_ID_xattrs,
-				      SPOS(inum, 0, snapshot),
-				      SPOS(inum, U64_MAX, snapshot),
-				      BTREE_UPDATE_internal_snapshot_node);
-	try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-		      bch2_btree_delete(trans, BTREE_ID_inodes, SPOS(0, inum, snapshot),
-					BTREE_UPDATE_internal_snapshot_node)));
-	return 0;
+	static const enum btree_id content_btrees[] = {
+		BTREE_ID_extents,
+		BTREE_ID_dirents,
+		BTREE_ID_xattrs,
+	};
+	int ret = 0;
+
+	for (unsigned i = 0; i < ARRAY_SIZE(content_btrees); i++) {
+		int ret2 = bch2_btree_delete_range_trans(trans, content_btrees[i],
+					SPOS(inum, 0, snapshot),
+					SPOS(inum, U64_MAX, snapshot),
+					BTREE_UPDATE_internal_snapshot_node);
+		/* handled restarts are an FYI - the range was fully deleted: */
+		if (bch2_err_matches(ret2, BCH_ERR_transaction_restart))
+			ret2 = 0;
+		ret = ret ?: ret2;
+	}
+
+	if (!ret)
+		return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+				 bch2_btree_delete(trans, BTREE_ID_inodes,
+						   SPOS(0, inum, snapshot),
+						   BTREE_UPDATE_internal_snapshot_node) ?:
+				 bch2_damage_delete(trans, inum, snapshot));
+
+	/*
+	 * Content left behind: whiteout the inode key instead of deleting it,
+	 * so the ancestor's version doesn't resurface here and the deletion
+	 * scan/fsck can still find this position:
+	 */
+	bch_err_msg(trans->c, ret, "deleting content of inode %llu:%u, leaving whiteout",
+		    inum, snapshot);
+
+	struct bkey_i whiteout;
+	bkey_init(&whiteout.k);
+	whiteout.k.type	= KEY_TYPE_whiteout;
+	whiteout.k.p	= SPOS(0, inum, snapshot);
+
+	return commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+			 bch2_btree_insert_trans(trans, BTREE_ID_inodes, &whiteout,
+						 BTREE_UPDATE_internal_snapshot_node) ?:
+			 bch2_damage_delete(trans, inum, snapshot)) ?: ret;
 }
 
 /*
@@ -1482,6 +1511,21 @@ static int may_delete_deleted_inode(struct btree_trans *trans, struct bpos pos,
 		return ret;
 
 	bch2_inode_unpack(trans->c, k, inode);
+
+	/*
+	 * Subvolume roots are deleted by the subvolume deletion path, never
+	 * the inode reaper (see bch2_inode_is_subvolume_root()). A
+	 * deleted_inodes entry for one is expected, not damage - the trigger
+	 * enrolls any inode transitioning to unlinked - but consuming it here
+	 * would race the snapshot sweep; crash recovery for subvolume deletion
+	 * is check_subvols(), keyed off SUBVOLUME_STATE_unlinked. Just drop
+	 * the entry:
+	 */
+	if (bch2_inode_is_subvolume_root(inode)) {
+		if (from_deleted_inodes)
+			goto delete;
+		return bch_err_throw(c, inode_is_subvolume_root);
+	}
 
 	if (S_ISDIR(inode->bi_mode)) {
 		ret = bch2_empty_dir_snapshot(trans, pos.offset, 0, pos.snapshot);

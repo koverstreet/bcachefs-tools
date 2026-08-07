@@ -16,6 +16,10 @@ ifneq ($(bcachefs-version),)
 ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' '$(bcachefs-version)' '$(obj)/bcachefs.ko' && echo hit),hit)
 CONFIG_BCACHEFS_FS :=
 endif
+else
+# No version means no lookup key — say so rather than silently compiling:
+# the missing file is the tell that this tree wasn't staged the supported way.
+$(warning bcachefs: no version in $(src)/version.h - not looking for a prebuilt module (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
 endif
 endif
 
@@ -156,6 +160,7 @@ bcachefs-y		:=			\
 	fs/xattr.o				\
 	init/chardev.o				\
 	init/dev.o				\
+	init/damage.o				\
 	init/error.o				\
 	init/fs.o				\
 	init/progress.o				\
@@ -185,6 +190,7 @@ bcachefs-y		:=			\
 	util/enumerated_ref.o			\
 	util/eytzinger.o			\
 	util/fast_list.o			\
+	util/locking.o				\
 	util/mean_and_variance.o		\
 	util/printbuf.o				\
 	util/rcu_pending.o			\
@@ -215,7 +221,14 @@ ifndef BCACHEFS_DKMS
 endif
 
 ifdef BCACHEFS_DKMS
+ifneq ($(wildcard $(src)/module-version.c),)
 	bcachefs-y += module-version.o
+else
+# Staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel
+# fs/bcachefs/ tree lacks it. Degrade rather than fail with a bare
+# "no rule to make target" (field report: CRCinAU, 2026-07-23).
+$(warning bcachefs: $(src)/module-version.c missing - module will carry no MODULE_VERSION)
+endif
 endif
 
 # Rust support — optional, gated on CONFIG_RUST. The C side owns the module
@@ -437,10 +450,23 @@ $(obj)/rust/extern.c: $(obj)/rust/bcachefs.rs ;
 CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations
 
 # Kernel trees < 6.18 pass -Zno-jump-tables in KBUILD_RUSTFLAGS, written for
-# their era's pinned rustc; ours has it stabilized as -Cjump-tables=n. Rewrite
-# the underlying variable - rust_flags expands it lazily, so this covers every
-# Rust rule below and in the vendored includes.
+# their era's pinned rustc; newer rustc has it stabilized as -Cjump-tables=n.
+# Rewrite the underlying variable - rust_flags expands it lazily, so this covers
+# every Rust rule below and in the vendored includes.
+#
+# Only rewrite when $(RUSTC) actually accepts the stable spelling. rustc from
+# before the stabilization rejects it outright:
+#
+#   $ rustc -Cjump-tables=n --print=sysroot
+#   error: unknown codegen option: `jump-tables`
+#
+# so rewriting unconditionally turns a working build into a hard failure on
+# those toolchains, which is worse than leaving the flag the kernel chose.
+rustc-has-cjump-tables := $(shell $(RUSTC) -Cjump-tables=n --print=sysroot \
+	>/dev/null 2>&1 && echo y || echo n)
+ifeq ($(rustc-has-cjump-tables),y)
 KBUILD_RUSTFLAGS := $(patsubst -Zno-jump-tables,-Cjump-tables=n,$(KBUILD_RUSTFLAGS))
+endif
 
 # mod.rs keys on cfg(kernel) to source the kernel-compat types from the kernel
 # crate (vs bcachefs-shim in userspace); the kernel build doesn't set it on its
@@ -484,6 +510,19 @@ $(obj)/bitfield.o: $(src)/vendor/bitfield/src/lib.rs FORCE
 
 $(obj)/bitflags.o: $(src)/vendor/bitflags/src/lib.rs FORCE
 	$(call if_changed_dep,bch_library)
+
+# The kernel builds Rust with -Wrust_2018_idioms, which CONFIG_WERROR turns
+# into -Dwarnings; the vendored uuid predates both of the lifetime lints that
+# implies and trips 11 of them. Those lints are a statement about how we want
+# our own code written - they say nothing about whether someone else's crate is
+# correct - so allow them here rather than patching a vendored tree we would
+# have to re-patch on every refresh.
+#
+# Both are needed: elided_lifetimes_in_paths accounts for 6 and
+# mismatched_lifetime_syntaxes for the other 5, so allowing only the one named
+# in the bug report leaves the build broken. bitfield and bitflags are clean
+# under the same flags, which is why this is scoped to uuid.o.
+RUSTFLAGS_uuid.o += -Aelided_lifetimes_in_paths -Amismatched_lifetime_syntaxes
 
 $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 	$(call if_changed_dep,bch_library)

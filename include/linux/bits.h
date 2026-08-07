@@ -54,7 +54,6 @@
 #define GENMASK_U16(h, l)	GENMASK_TYPE(u16, h, l)
 #define GENMASK_U32(h, l)	GENMASK_TYPE(u32, h, l)
 #define GENMASK_U64(h, l)	GENMASK_TYPE(u64, h, l)
-#define GENMASK_U128(h, l)	GENMASK_TYPE(u128, h, l)
 
 #else /* defined(__ASSEMBLY__) */
 

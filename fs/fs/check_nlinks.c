@@ -162,6 +162,7 @@ static int check_nlinks_update_inode(struct btree_trans *trans, struct btree_ite
 {
 	struct bch_inode_unpacked u;
 	struct nlink *link = &links->d[*idx];
+	CLASS(printbuf, buf)();
 	int ret = 0;
 
 	if (k.k->p.offset >= range_end)
@@ -188,9 +189,9 @@ static int check_nlinks_update_inode(struct btree_trans *trans, struct btree_ite
 			((u.bi_flags & BCH_INODE_unlinked) &&
 			 u.bi_nlink),
 			trans, inode_wrong_nlink,
-			"inode %llu type %s has wrong i_nlink (%u, should be %u)",
-			u.bi_inum, bch2_d_types[mode_to_type(u.bi_mode)],
-			bch2_inode_nlink_get(&u), link->count)) {
+			"inode has wrong i_nlink (%u, should be %u)\n%s",
+			bch2_inode_nlink_get(&u), link->count,
+			(bch2_inode_unpacked_to_text(&buf, &u), buf.buf))) {
 		bch2_inode_nlink_set(&u, link->count);
 		ret = __bch2_fsck_write_inode(trans, &u);
 	}

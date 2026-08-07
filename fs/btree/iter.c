@@ -1830,6 +1830,13 @@ void bch2_trans_updates_to_text(struct printbuf *buf, struct btree_trans *trans)
 		bch2_journal_entry_to_text(buf, trans->c, e);
 		prt_newline(buf);
 	}
+
+	for (struct bkey_i *k = btree_trans_subbuf_base(trans, &trans->accounting);
+	     k != btree_trans_subbuf_top(trans, &trans->accounting);
+	     k = bkey_next(k)) {
+		bch2_bkey_val_to_text(buf, trans->c, bkey_i_to_s_c(k));
+		prt_newline(buf);
+	}
 }
 
 noinline __cold
@@ -3757,6 +3764,18 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 	unsigned i;
 	u64 now;
 
+	/*
+	 * Discarding queued updates is correct after a transaction restart
+	 * (the restart loop re-queues them) and on error unwind — but a new
+	 * iteration starting with updates queued and no restart in flight
+	 * means the previous iteration forgot to commit them, and they're
+	 * about to be lost silently:
+	 */
+	WARN_ON_ONCE(IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
+		     bch2_trans_has_updates(trans) &&
+		     !trans->restarted && !trans->in_traverse_all &&
+		     !trans->begin_may_drop_updates);
+
 	bch2_trans_reset_updates(trans);
 
 	trans->restart_count++;
@@ -3897,7 +3916,7 @@ static inline struct btree_trans *bch2_trans_alloc(struct bch_fs *c)
 		}
 	}
 
-	struct btree_trans *trans = mempool_alloc(&c->btree.trans.pool, GFP_NOFS);
+	struct btree_trans *trans = mempool_alloc(&c->btree.trans.pool, GFP_NOIO);
 	memset(trans, 0, sizeof(*trans));
 
 	seqmutex_lock(&c->btree.trans.lock);
@@ -4147,11 +4166,19 @@ static void bch2_btree_bkey_cached_common_to_text(struct printbuf *out,
 		   c.n[0], c.n[1], c.n[2], pid);
 }
 
+static char btree_lock_type_char(int lock_type)
+{
+	static const char lock_types[] = { 'r', 'i', 'w' };
+
+	return lock_type >= 0 && lock_type < ARRAY_SIZE(lock_types)
+		? lock_types[lock_type]
+		: '?';
+}
+
 __cold
 void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 {
 	struct btree_bkey_cached_common *b;
-	static char lock_types[] = { 'r', 'i', 'w' };
 	struct task_struct *task = READ_ONCE(trans->locking_wait.task);
 	unsigned l, idx;
 
@@ -4192,10 +4219,12 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 		prt_newline(out);
 
 		for (l = 0; l < BTREE_MAX_DEPTH; l++) {
-			if (btree_node_locked(path, l) &&
+			int lock_type = btree_node_locked_type(path, l);
+
+			if (lock_type != BTREE_NODE_UNLOCKED &&
 			    !IS_ERR_OR_NULL(b = (void *) READ_ONCE(path->l[l].b))) {
 				prt_printf(out, "    %c l=%u ",
-					   lock_types[btree_node_locked_type(path, l)], l);
+					   btree_lock_type_char(lock_type), l);
 				bch2_btree_bkey_cached_common_to_text(out, b);
 				prt_newline(out);
 			}
@@ -4205,7 +4234,8 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 	b = READ_ONCE(trans->locking);
 	if (b) {
 		prt_printf(out, "  blocked on:\n");
-		prt_printf(out, "    %c", lock_types[trans->locking_wait.lock_want]);
+		prt_printf(out, "    %c",
+			   btree_lock_type_char(READ_ONCE(trans->locking_wait.lock_want)));
 		bch2_btree_bkey_cached_common_to_text(out, b);
 		prt_newline(out);
 	}

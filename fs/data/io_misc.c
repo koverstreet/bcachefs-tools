@@ -54,7 +54,7 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 
 	sectors = min_t(u64, sectors, k.k->p.offset - iter->pos.offset);
 	new_replicas = max(0, (int) opts.data_replicas -
-			   (int) bch2_bkey_nr_ptrs_fully_allocated(c, k));
+			   (int) bch2_bkey_durability_safe(c, k).nr_overwritable);
 
 	/*
 	 * Get a disk reservation before (in the nocow case) calling
@@ -149,6 +149,16 @@ int bch2_fpunch_snapshot(struct btree_trans *trans, struct bpos start, struct bp
 	struct bch_fs *c = trans->c;
 	CLASS(disk_reservation, res)(c);
 	unsigned max_sectors	= KEY_SIZE_MAX & (~0 << c->block_bits);
+
+	/*
+	 * We run our own commit loop, and its leading trans_begin() would
+	 * discard the caller's queued updates — commit them instead: fsck
+	 * callers reach us right after an fsck_err() that queued the journal
+	 * log entry recording the repair, and once we've punched the extents
+	 * the repair won't re-trigger to re-queue it
+	 */
+	if (bch2_trans_has_updates(trans))
+		try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 
 	return for_each_btree_key_max_commit(trans, iter, BTREE_ID_extents,
 			start, end, 0, k,
@@ -434,7 +444,7 @@ case LOGGED_OP_FINSERT_shift_extents:
 		if (snapshot != k.k->p.snapshot) {
 			ret = bch2_disk_reservation_add(c, &disk_res,
 					copy->k.size *
-					bch2_bkey_nr_ptrs_allocated(c, bkey_i_to_s_c(copy)),
+					bch2_bkey_durability_safe(c, bkey_i_to_s_c(copy)).total,
 					0);
 			if (ret)
 				goto btree_err;
@@ -447,7 +457,7 @@ case LOGGED_OP_FINSERT_shift_extents:
 			if (snapshot == k.k->p.snapshot)
 				bch2_disk_reservation_add(c, &disk_res,
 							  copy->k.size *
-							  bch2_bkey_nr_ptrs_allocated(c, bkey_i_to_s_c(copy)),
+							  bch2_bkey_durability_safe(c, bkey_i_to_s_c(copy)).total,
 							  BCH_DISK_RESERVATION_NOFAIL);
 		}
 

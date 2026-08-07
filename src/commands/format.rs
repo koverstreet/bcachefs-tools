@@ -192,7 +192,7 @@ fn warn_same_parent_disk_replicas(cfg: &FormatConfig, devices: &[DevOpts]) {
 
     let mut by_parent: HashMap<String, Vec<String>> = HashMap::new();
     for dev in devices {
-        if let Some(parent) = crate::wrappers::bdev::fd_to_parent_disk_sysfs(dev.fd) {
+        if let Some(parent) = crate::wrappers::bdev::fd_to_parent_disk_sysfs(dev.fd()) {
             by_parent
                 .entry(parent.display().to_string())
                 .or_default()
@@ -323,7 +323,16 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                             }
                         }
                         Some(v) => {
-                            if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
+                            // String-member options (failure_domain) parse to a
+                            // placeholder 0 - the parse is validation only, the
+                            // value is the string itself, applied to the
+                            // bch_member at superblock write time (the
+                            // Opt_failure_domain arm in format_util.rs).
+                            // Routing the placeholder into bch_opts would drop
+                            // the string silently:
+                            if opt.type_ == c::opt_type::BCH_OPT_STR_MEMBER {
+                                push_dev_opt_str!(opt_id, val_str);
+                            } else if opt.flags as u32 & c::opt_flags::OPT_DEVICE as u32 != 0 {
                                 bcachefs_kernel::opts::opt_set_by_id(&mut cur_dev_opts, opt_id, v);
                                 unconsumed_dev_option = true;
                             } else if opt.flags as u32 & c::opt_flags::OPT_FS as u32 != 0 {
@@ -440,6 +449,14 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
 
     if source.is_some() && !initialize {
         bail!("--source, --no_initialize are incompatible");
+    }
+
+    if source.is_some() && format_version.is_some() {
+        bail!("--version cannot be used with --source: populating the \
+               filesystem runs the current code's write path, which upgrades \
+               it to the current version as soon as it goes read-write - the \
+               requested version would not survive. Format with --version \
+               alone, then populate using tools of that version.");
     }
 
     if passphrase_file.is_some() && !encrypted {
@@ -587,7 +604,7 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         // user didn't specify them.
         let total_fs_size: u64 = devices.iter_mut().map(|d| {
             if d.fs_size == 0 {
-                d.fs_size = crate::wrappers::bdev::get_size(d.fd);
+                d.fs_size = crate::wrappers::bdev::get_size(d.fd());
             }
             d.fs_size
         }).sum();

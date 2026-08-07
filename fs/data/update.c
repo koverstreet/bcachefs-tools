@@ -1041,7 +1041,7 @@ static unsigned durability_available_on_target(struct bch_fs *c,
 	}
 
 	/* bch2_copygc_can_make_progress needs to read accounting for dev_leaving */
-	guard(percpu_read)(&c->capacity.mark_lock);
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	guard(rcu)();
 	struct bch_devs_mask devs = target_rw_devs(c, data_type, target);
 	unsigned durability = 0;
@@ -1136,7 +1136,7 @@ static int bch2_can_do_write_btree(struct bch_fs *c,
 	bool evacuating = bch2_btree_ptr_has_dev_evacuating(c, k);
 
 	/* Dropping excess replicas is progress regardless of placement: */
-	if (bch2_bkey_nr_dirty_ptrs(c, k) > opts->data_replicas)
+	if (bch2_bkey_durability_safe(c, k).nr_ptrs > opts->data_replicas)
 		return 0;
 
 	unsigned durability		= bch2_btree_ptr_durability(c, k).total;

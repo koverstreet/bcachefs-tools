@@ -77,6 +77,17 @@ void bch2_dirent_inode_mismatch_msg(struct printbuf *, struct bch_fs *,
 
 int bch2_reattach_inode(struct btree_trans *, struct bch_inode_unpacked *);
 
+/*
+ * Recreate a missing subvolume key: (snapshot, subvol, root inum). Pass 0 for
+ * the inum to have it found from the inode carrying bi_subvol.
+ *
+ * The snapshot must be a leaf - the key it writes sets that snapshot's subvol
+ * backref, and bch2_snapshot_validate() rejects a subvol on a node with
+ * children. check_snapshots() is the natural caller for that reason: the
+ * snapshot it's holding claims the subvolume, so it's a leaf by construction.
+ */
+int bch2_reconstruct_subvol(struct btree_trans *, u32, u32, u64);
+
 int bch2_fsck_update_backpointers(struct btree_trans *,
 				  struct snapshots_seen *,
 				  const struct bch_hash_desc,

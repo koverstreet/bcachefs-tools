@@ -608,6 +608,10 @@ be unique). This gives us ways of referring to multiple devices in target
 options: If we specify ssd in a target option, that will refer to all devices
 with the label ssd or labels that start with ssd. (e.g. ssd.ssd1, ssd.ssd2).
 
+Device labels are used only for targeting. How replicas are spread across
+devices to survive hardware failures is a separate, per-device property; see
+\hyperref[sec:failure-domains]{Failure domains}.
+
 Four target options exist. All may be set at the filesystem level (at format
 time, at mount time, or at runtime via sysfs). All except
 \texttt{metadata\_target} may also be set on a particular file or directory:
@@ -638,20 +642,21 @@ there counts as two replicas.
 \paragraph{Tiered storage with replication}
 
 Replication interacts with targets naturally: the filesystem satisfies the
-configured \texttt{data\_replicas} count using durability-weighted copies,
-regardless of which target they are on. For example, with
-\texttt{data\_replicas=2}, \texttt{foreground\_target=ssd}, and
+configured \texttt{data\_replicas} count using durability-weighted copies.
+Foreground writes place all of the required durable copies on the foreground
+target; the reconcile subsystem then moves them to the background target. For
+example, with \texttt{data\_replicas=2}, \texttt{foreground\_target=ssd}, and
 \texttt{background\_target=hdd}:
 
 \begin{itemize}
-\item Data is initially written to the SSD target
-\item The background mover copies it to the HDD target
-\item Since both SSD and HDD copies have \texttt{durability=1} by default,
-  each counts as one replica---the two copies together satisfy the replica
-  requirement
-\item To use the SSDs as a pure write cache (data evictable once on HDD),
-  set \texttt{durability=0} on the SSD devices; the allocator will then
-  write two durable copies on the HDD target
+\item Foreground writes place both durable copies on the SSD target, assuming
+  the SSD devices have enough total durability for \texttt{data\_replicas}
+\item Reconcile then moves those copies to the HDD target---both replicas end
+  up on the HDD target, not split one per tier
+\item The SSD retains a copy only as a cache: set \texttt{promote\_target=ssd}
+  to keep a cached copy there for fast reads (added on read, not counted as a
+  replica, and evicted in LRU order under space pressure), or set
+  \texttt{durability=0} on the SSD devices to use them as a pure write cache
 \end{itemize}
 
 See \hyperref[sec:devices]{Device management} in subsystem details for
@@ -1094,6 +1099,58 @@ persistent count in the superblock's errors section. These counts survive
 across reboots and accumulate over the filesystem's lifetime, providing an
 audit trail of what has been detected and repaired. The counts are visible in
 \texttt{bcachefs show-super} output and via the sysfs \texttt{errors} file.
+
+\subsection{Safety mechanisms}
+\label{sec:safety-mechanisms}
+
+\subsubsection{Subvolumes and snapshots must agree}
+
+A subvolume names the snapshot it is the live view of; that snapshot names the
+subvolume back. Both are required:
+
+\begin{itemize}
+\item Snapshot deletion will not reclaim a snapshot marked \texttt{will\_delete}
+  unless a subvolume still points at it.
+\item \texttt{check\_inodes} will not reconstruct a missing subvolume key unless
+  the root inode's \texttt{bi\_subvol} names it \emph{and} the snapshot that inode
+  lives at names the same subvolume back. If only one of the two says so,
+  \texttt{bi\_subvol} is cleared instead of a subvolume being invented.
+\end{itemize}
+
+Inodes and dirents reference each other the same way: an inode's
+\texttt{bi\_dir} and \texttt{bi\_dir\_offset} locate its dirent, and the dirent
+names the inode. Extents and the alloc btree are checked against each other
+through \hyperref[sec:backpointers]{backpointers}. Snapshot parent and child
+pointers must agree in both directions.
+
+\subsubsection{Every key implies an inode key at its snapshot}
+
+An extent, dirent or xattr in snapshot $X$ requires a key in the inodes btree at
+$X$ for the same inode number --- an inode or a whiteout, either will do.
+
+Snapshot deletion relies on this to find keys: it walks the inodes btree and
+descends into an inode's other btrees only where it finds a key at a dying
+snapshot. A content key whose snapshot has no inodes-btree key is never
+reached, so it is never migrated. The content passes enforce the requirement,
+which is why they run before deletion.
+
+\subsubsection{Accounting}
+
+Accounting counters are maintained by triggers as keys are committed, not by
+walking the btrees, so they are arrived at independently of the keys they
+count. Snapshot deletion checks them twice:
+
+\begin{itemize}
+\item It will not delete a dying snapshot's inode keys unless accounting reads
+  zero for that snapshot's extents, dirents and xattrs --- deleting them
+  destroys the index above, so anything left would become unreachable.
+\item It will not empty or remove a node unless accounting reads zero for it.
+\end{itemize}
+
+Either refusal schedules the content pass for the btree still holding data,
+which repairs the missing inode key so the next run can find it.
+\texttt{check\_allocations} rebuilds accounting from a full mark of the btrees,
+which is how a stale counter is told from keys that really are still there.
 
 \subsection{Fsck}
 
@@ -1640,6 +1697,11 @@ not recover from and need attention from the developers, this makes it possible
 to send the developers only the required metadata. Encrypted filesystems must
 first be unlocked with \texttt{bcachefs remove-passphrase}.
 
+\subsection{kvdb: the btree REPL}
+\label{sec:kvdb}
+
+\bchdoc{kvdb}
+
 \section{Subsystem details}
 
 \subsection{Data paths}
@@ -1656,6 +1718,11 @@ the filesystem.
 \subsection{Allocator}
 
 \bchdoc{allocator}
+
+\subsection{Failure domains}
+\label{sec:failure-domains}
+
+\bchdoc{failure-domains}
 
 \subsection{Subvolumes and snapshots}
 \label{sec:snapshots}

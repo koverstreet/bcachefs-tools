@@ -433,8 +433,9 @@
  *   metadata if \texttt{metadata\_target} is not set.
  * \item[\texttt{metadata\_target}] Btree node writes.
  * \item[\texttt{background\_target}] If set, user data is moved to this target
- *   in the background by the reconcile subsystem. The original copy is left in
- *   place but marked as cached.
+ *   in the background by the reconcile subsystem. The durable copies are moved
+ *   off the foreground target; a copy is left on the original target only if it
+ *   is a cache (see \texttt{promote\_target} or \texttt{durability=0}).
  * \item[\texttt{promote\_target}] If set, a cached copy is created on this
  *   target when data is read, if no copy exists there already.
  * \end{description}
@@ -800,13 +801,13 @@ static inline __cold void __bch2_alloc_v4_to_text(struct printbuf *out, struct b
 	bch2_prt_data_type(out, a->data_type);
 	prt_newline(out);
 	prt_printf(out, "journal_seq_nonempty %llu\n",	a->journal_seq_nonempty);
-	if (bkey_val_bytes(k.k) > offsetof(struct bch_alloc_v4, journal_seq_empty))
+	if (bkey_has_field(k.k, alloc_v4, journal_seq_empty))
 		prt_printf(out, "journal_seq_empty    %llu\n",	a->journal_seq_empty);
 
 	prt_printf(out, "need_discard         %llu\n",	BCH_ALLOC_V4_NEED_DISCARD(a));
 	prt_printf(out, "need_inc_gen         %llu\n",	BCH_ALLOC_V4_NEED_INC_GEN(a));
 	prt_printf(out, "dirty_sectors        %u\n",	a->dirty_sectors);
-	if (bkey_val_bytes(k.k) > offsetof(struct bch_alloc_v4, stripe_sectors))
+	if (bkey_has_field(k.k, alloc_v4, stripe_sectors))
 		prt_printf(out, "stripe_sectors       %u\n",	a->stripe_sectors);
 	prt_printf(out, "cached_sectors       %u\n",	a->cached_sectors);
 	prt_printf(out, "stripe_refcount      %u\n",	a->stripe_refcount);
@@ -1795,7 +1796,7 @@ void bch2_fs_allocator_background_init(struct bch_fs *c)
 
 void bch2_fs_capacity_exit(struct bch_fs *c)
 {
-	percpu_free_rwsem(&c->capacity.mark_lock);
+	percpu_free_rwsem(&c->capacity.mark_lock.lock);
 	if (c->capacity.pcpu) {
 		u64 v = percpu_u64_get(&c->capacity.pcpu->online_reserved);
 		WARN(v, "online_reserved not 0 at shutdown: %lli", v);
@@ -1808,7 +1809,7 @@ int bch2_fs_capacity_init(struct bch_fs *c)
 {
 	spin_lock_init(&c->capacity.sectors_available_lock);
 
-	try(percpu_init_rwsem(&c->capacity.mark_lock));
+	try(percpu_init_rwsem(&c->capacity.mark_lock.lock));
 
 	if (!(c->capacity.pcpu = alloc_percpu(struct bch_fs_capacity_pcpu)))
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);

@@ -10,26 +10,13 @@
 // (e.g. restored from backup) or if you accept the data as-is.
 
 use std::fs::OpenOptions;
-use std::os::unix::io::AsRawFd;
 
+use bch_bindgen::c;
 use clap::Parser;
 
+use crate::wrappers::ioctl::{ioctl_w, BCHFS_IOC_UNPOISON};
+
 const SECTOR_SIZE: u64 = 512;
-
-/// ioctl number: _IOW(0xbc, 68, struct bch_ioctl_unpoison)
-const fn bchfs_ioc_unpoison() -> libc::Ioctl {
-    let size = std::mem::size_of::<BchIoctlUnpoison>() as u32;
-    ((1u32 << 30) | (size << 16) | (0xbcu32 << 8) | 68) as libc::Ioctl
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct BchIoctlUnpoison {
-    offset:     u64,
-    len:        u64,
-    flags:      u32,
-    pad:        u32,
-}
 
 #[derive(Parser, Debug)]
 #[command(name = "unpoison")]
@@ -91,19 +78,14 @@ fn cmd_unpoison(cli: Cli) -> anyhow::Result<()> {
         .write(true)
         .open(&cli.file)?;
 
-    let arg = BchIoctlUnpoison {
+    let arg = c::bch_ioctl_unpoison {
         offset: cli.offset,
         len,
         flags:  0,
         pad:    0,
     };
 
-    let ret = unsafe {
-        libc::ioctl(file.as_raw_fd(), bchfs_ioc_unpoison(), &arg as *const _)
-    };
-
-    if ret < 0 {
-        let errno = std::io::Error::last_os_error();
+    if let Err(errno) = ioctl_w::<BCHFS_IOC_UNPOISON>(&file, &arg) {
         anyhow::bail!("ioctl failed: {}", errno);
     }
 

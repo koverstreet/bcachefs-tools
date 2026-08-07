@@ -55,7 +55,7 @@ void strip_fs_alloc(struct bch_fs *c)
 	swap(u64s, clean->field.u64s);
 	bch2_sb_field_resize(&c->disk_sb, clean, u64s);
 
-	scoped_guard(percpu_write, &c->capacity.mark_lock) {
+	scoped_guard(percpu_write_noio, &c->capacity.mark_lock) {
 		kfree(c->replicas.entries);
 		c->replicas.entries = NULL;
 		c->replicas.nr = 0;
@@ -79,10 +79,9 @@ void strip_fs_alloc(struct bch_fs *c)
 
 void rust_strip_alloc_do(struct bch_fs *c)
 {
-	mutex_lock(&c->sb_lock);
+	guard(mutex_noio)(&c->sb_lock);
 	strip_fs_alloc(c);
 	bch2_write_super(c);
-	mutex_unlock(&c->sb_lock);
 }
 
 struct rust_journal_entries rust_collect_journal_entries(struct bch_fs *c)

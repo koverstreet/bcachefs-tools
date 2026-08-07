@@ -7,6 +7,35 @@
  * functions or functions whose types don't work well with bindgen.
  */
 
+#include <stddef.h>
+#include <linux/fs.h>
+
+/*
+ * Block device ioctl numbers, for Rust.
+ *
+ * These encode the direction bits and sizeof() of the argument type, both of
+ * which vary by architecture and word size, so they can't be written down -
+ * they have to come from the kernel headers for the target.
+ *
+ * Taking them as bindgen macros meant going through clang_macro_fallback, which
+ * compiles a throwaway probe per macro and never checks whether the probe
+ * compiled: reparse() looks at CXErrorCode, which says whether the reparse ran
+ * rather than whether the code was valid, and nothing reads the diagnostics.
+ * Both ways that can go wrong turned up in the field in the same week - one
+ * build dropped BLKGETSIZE64 and failed at the use site, another kept it with
+ * the size field 1 instead of 8 and shipped a binary that sent the kernel an
+ * ioctl it answered with ENOTTY, partway through a device resize.
+ *
+ * So don't ask bindgen to evaluate these. Evaluate them the way everything else
+ * here gets evaluated - by the C compiler, against the real headers - and hand
+ * Rust a plain integer. Note that nothing below restates what _IO() and _IOR()
+ * mean, which is the other trap: an open-coded 0x127E for BLKROTATIONAL is
+ * correct on exactly the architectures whose _IOC layout you had in mind.
+ */
+static const unsigned long BCH_BLKGETSIZE64	= BLKGETSIZE64;
+static const unsigned long BCH_BLKPBSZGET	= BLKPBSZGET;
+static const unsigned long BCH_BLKROTATIONAL	= BLKROTATIONAL;
+
 struct bch_fs;
 struct bch_sb;
 struct bch_csum;
@@ -100,5 +129,13 @@ int rust_link_data(struct bch_fs *c,
 struct bpos;
 void rust_accounting_mem_read(struct bch_fs *c, struct bpos p,
 			      __u64 *v, unsigned nr);
+
+/*
+ * Unit test for the eytzinger sort/search primitive and the darray 1-based
+ * wrapper (snapshot_id_dying's lookup path). Runs under `cargo test` via a
+ * Rust #[test] wrapper. Returns the number of failed assertions (0 == pass);
+ * failure details are printed to stderr.
+ */
+int rust_eytzinger_test(void);
 
 #endif /* _RUST_SHIMS_H */

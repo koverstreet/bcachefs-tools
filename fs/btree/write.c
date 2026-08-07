@@ -102,7 +102,7 @@ static int btree_node_write_update_key(struct btree_trans *trans,
 	bch2_bkey_drop_ptrs_noerror(bkey_i_to_s(n), p, entry,
 		bch2_dev_io_failures(&wbio->wbio.failed, p.ptr.dev));
 
-	if (!bch2_bkey_nr_dirty_ptrs(c, bkey_i_to_s_c(n)))
+	if (!bch2_bkey_durability_safe(c, bkey_i_to_s_c(n)).nr_ptrs)
 		return bch_err_throw(c, btree_node_write_all_failed);
 
 	if (wbio->wbio.failed.nr) {
@@ -179,7 +179,8 @@ static void btree_node_write_work(struct work_struct *work)
 
 	lockrestart_do(trans, ({
 		btree_path_idx_t path_idx;
-		int ret = bch2_btree_node_lock_with_path(trans, &b->c, SIX_LOCK_read, &path_idx);
+		/* identity pinned: write_in_flight (cleared below) blocks reclaim */
+		int ret = bch2_btree_node_lock_with_path(trans, &b->c, SIX_LOCK_read, 0, &path_idx);
 		if (!ret) {
 			__btree_node_write_done(trans, b);
 			bch2_btree_node_unlock_with_path(trans, path_idx, b->c.level);
@@ -527,7 +528,7 @@ do_write:
 	wbio = container_of(bio_alloc_bioset(NULL,
 				buf_nr_bvecs(data, sectors_to_write << 9),
 				REQ_OP_WRITE|REQ_META|REQ_SYNC|REQ_IDLE,
-				GFP_NOFS,
+				GFP_NOIO,
 				&c->btree.bio),
 			    struct btree_write_bio, wbio.bio);
 	wbio_init(&wbio->wbio.bio);
@@ -770,7 +771,7 @@ static bool __bch2_btree_flush_all(struct bch_fs *c, unsigned flag)
 	while (true) {
 		struct btree *waiting = NULL, *b;
 
-		scoped_guard(mutex, &bc->lock)
+		scoped_guard(mutex_noio, &bc->lock)
 			list_for_each_entry(b, &bc->freeable, list)
 				if (test_bit(flag, &b->flags)) {
 					waiting = b;
@@ -829,7 +830,7 @@ void bch2_btree_cancel_all_writes(struct bch_fs *c)
 	if (!bc->table_init_done)
 		return;
 
-	scoped_guard(mutex, &bc->lock) {
+	scoped_guard(mutex_noio, &bc->lock) {
 		for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
 			struct btree *b, *t;
 			list_for_each_entry_safe(b, t, &bc->live[i].dirty, list) {

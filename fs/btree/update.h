@@ -356,6 +356,31 @@ static inline int bch2_trans_commit_lazy(struct btree_trans *trans,
 	return __bch2_trans_commit(trans, flags, true);
 }
 
+/*
+ * For repair loops that batch unbounded work - an update per snapshot
+ * version, typically - into one transaction: once substantial work has
+ * accumulated, commit and signal a restart (transaction_restart_commit)
+ * so the caller's restart loop re-drives, instead of the bump allocator
+ * running into BTREE_TRANS_MEM_MAX.
+ *
+ * The re-drive runs with the partial batch committed: callers must
+ * re-check on-disk state and skip already-committed repairs, so the
+ * re-drive shrinks - otherwise it trips this at the same point again
+ * and the restart loop can't make forward progress.
+ */
+static inline int bch2_trans_commit_lazy_if_full(struct btree_trans *trans,
+						 struct disk_reservation *disk_res,
+						 u64 *journal_seq,
+						 unsigned flags)
+{
+	/* disk_accounting_mod allocations grow by powers of 2; max / 2 is too
+	 * small of a limit to avoid hiting ENOMEMS
+	 */
+	return likely(trans->mem_top < BTREE_TRANS_MEM_MAX / 4)
+		? 0
+		: bch2_trans_commit_lazy(trans, disk_res, journal_seq, flags);
+}
+
 #define commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
 	lockrestart_do(_trans, _do ?: bch2_trans_commit(_trans, (_disk_res),\
 					(_journal_seq), (_flags)))
@@ -382,6 +407,15 @@ static __always_inline struct bkey_i *__bch2_bkey_make_mut_noupdate(struct btree
 	if (!IS_ERR(mut)) {
 		bkey_reassemble(mut, k);
 
+		/*
+		 * Writes extend: the typed helpers pass min_bytes =
+		 * sizeof(struct bkey_i_<type>), and widening u64s is what lets
+		 * the caller assign any field of the current struct and have it
+		 * committed. Without it an assignment past the on-disk val
+		 * would land in memory we allocated, and be dropped on the
+		 * floor at commit. The bytes we add are zero, which is what
+		 * those fields already read as - see __bkey_val_copy_pad().
+		 */
 		if (unlikely(bytes > bkey_bytes(k.k))) {
 			memset((void *) mut + bkey_bytes(k.k), 0,
 			       bytes - bkey_bytes(k.k));

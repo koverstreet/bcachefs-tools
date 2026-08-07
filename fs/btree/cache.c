@@ -313,7 +313,7 @@ void bch2_node_pin(struct bch_fs *c, struct btree *b)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
-	guard(mutex)(&bc->lock);
+	guard(mutex_noio)(&bc->lock);
 	if (!btree_node_is_root(c, b) && !btree_node_pinned(b)) {
 		set_btree_node_pinned(b);
 
@@ -339,7 +339,7 @@ void bch2_btree_cache_unpin(struct bch_fs *c)
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 	struct btree *b, *n;
 
-	guard(mutex)(&bc->lock);
+	guard(mutex_noio)(&bc->lock);
 	bc->pinned_nodes_mask[0] = 0;
 	bc->pinned_nodes_mask[1] = 0;
 
@@ -378,7 +378,7 @@ int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struc
 	bool pinned = btree_node_pinned(b);
 	int ret = 0;
 
-	lockdep_assert_held(&bc->lock);
+	lockdep_assert_held(&bc->lock.lock);
 	/*
 	 * Write lock required for transitions that touch the data buffer or
 	 * hash table; CLEAN↔DIRTY swap only moves the node between live[]
@@ -395,8 +395,21 @@ int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *bc, struc
 	 * The dirty bit is what makes the cache_state DIRTY, so a FREEABLE
 	 * node with the bit set is an inconsistent state — and consumers that
 	 * need to scrub dirty nodes can rely on walking only live[].dirty.
+	 * Warn with the node dumped — the flags identify which path leaked
+	 * the dirty bit (write_blocked/never_write/noevict/need_write) — then
+	 * clear it and carry on: the state bookkeeping below handles the
+	 * DIRTY exit either way.
 	 */
-	EBUG_ON(!btree_node_state_hashed(new) && btree_node_dirty(b));
+	if (WARN_ONCE(!btree_node_state_hashed(new) && btree_node_dirty(b),
+		      "bcachefs: dirty node in unhashed state transition")) {
+		struct bch_fs *c = container_of(bc, struct bch_fs, btree.cache);
+		CLASS(bch_log_msg, msg)(c);
+		prt_printf(&msg.m, "dirty node in unhashed state transition %u -> %u\n",
+			   old, new);
+		prt_printf(&msg.m, "btree=%u level=%u cache_state=%u flags=0x%lx hash_val=0x%llx\n",
+			   b->c.btree_id, b->c.level, b->cache_state, b->flags, b->hash_val);
+		clear_btree_node_dirty(b);
+	}
 
 	if (old == new)
 		return 0;
@@ -510,7 +523,7 @@ void bch2_btree_node_set_dirty(struct bch_fs *c, struct btree *b)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
-	guard(mutex)(&bc->lock);
+	guard(mutex_noio)(&bc->lock);
 	if (test_and_set_bit(BTREE_NODE_dirty, &b->flags))
 		return;
 	if (btree_node_state_hashed(b->cache_state))
@@ -532,7 +545,7 @@ void bch2_btree_node_write_done_clean(struct bch_fs *c, struct btree *b)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
-	guard(mutex)(&bc->lock);
+	guard(mutex_noio)(&bc->lock);
 	if (btree_node_state_hashed(b->cache_state))
 		bch2_btree_node_transition_state_locked(bc, b, btree_node_live_state(b));
 }
@@ -540,7 +553,7 @@ void bch2_btree_node_write_done_clean(struct bch_fs *c, struct btree *b)
 int bch2_btree_node_transition_state(struct bch_fs_btree_cache *bc, struct btree *b,
 					      enum btree_node_cache_state target)
 {
-	guard(mutex)(&bc->lock);
+	guard(mutex_noio)(&bc->lock);
 	return bch2_btree_node_transition_state_locked(bc, b, target);
 }
 
@@ -586,7 +599,7 @@ static int __btree_node_reclaim_checks(struct bch_fs *c, struct btree *b,
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
-	lockdep_assert_held(&bc->lock);
+	lockdep_assert_held(&bc->lock.lock);
 
 	if (btree_node_permanent(b))
 		return btree_node_noreclaim(c, flags, BCH_BTREE_CACHE_NOT_FREED_permanent);
@@ -625,7 +638,7 @@ static int btree_node_reclaim(struct bch_fs *c, struct btree *b,
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 	int ret = 0;
 
-	lockdep_assert_held(&bc->lock);
+	lockdep_assert_held(&bc->lock.lock);
 
 	while (true) {
 		try(__btree_node_reclaim_checks(c, b, flags));
@@ -674,8 +687,7 @@ static unsigned long bch2_btree_cache_scan(struct shrinker *shrink,
 		return SHRINK_STOP;
 
 	u64 start_time = local_clock();
-	guard(mutex)(&bc->lock);
-	guard(memalloc_flags)(PF_MEMALLOC_NOFS);
+	guard(mutex_noio)(&bc->lock);
 
 	/*
 	 * It's _really_ critical that we don't free too many btree nodes - we
@@ -840,7 +852,7 @@ static struct btree *bch2_btree_node_grab(struct bch_fs *c, struct list_head *he
 					  enum btree_node_reclaim_flags flags)
 {
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
-	guard(mutex)(&bc->lock);
+	guard(mutex_noio)(&bc->lock);
 	struct btree *b;
 	list_for_each_entry(b, head, list)
 		if (pcpu_read_locks == (b->c.lock.readers != NULL) &&
@@ -1532,7 +1544,7 @@ out:
 void bch2_fs_btree_cache_init_early(struct bch_fs_btree_cache *bc)
 {
 	mutex_init(&bc->root_lock);
-	mutex_init(&bc->lock);
+	mutex_noio_init(&bc->lock);
 	for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
 		bc->live[i].idx = i;
 		INIT_LIST_HEAD(&bc->live[i].clean);
@@ -1647,6 +1659,21 @@ static void btree_cache_exit_drain_node(struct bch_fs *c,
 		btree_cache_exit_locked_dump(c, b, "write held");
 		BUG();
 	}
+
+	/*
+	 * Dirty nodes can survive to exit on a dead journal: the going-RO
+	 * path's bch2_btree_cancel_all_writes() only catches nodes dirty at
+	 * that instant, and the window between going-RO and unmount can
+	 * redirty a node (btree node reads wanting a rewrite, interior
+	 * update teardown). With the journal dead they can never be written;
+	 * cancel here too. Dirty at exit with a live journal is a bug, but
+	 * we're freeing everything regardless — warn, don't die.
+	 */
+	if (btree_node_dirty(b)) {
+		WARN_ON_ONCE(!bch2_journal_error(&c->journal));
+		clear_btree_node_dirty(b);
+	}
+
 	bch2_btree_node_transition_state_locked(bc, b, BTREE_NODE_CACHE_FREED);
 	six_unlock_write(&b->c.lock);
 	six_unlock_intent(&b->c.lock);
@@ -1672,9 +1699,7 @@ void bch2_fs_btree_cache_exit(struct bch_fs *c)
 		drain_workqueue(c->btree.write_complete_wq);
 
 	/* vfree() can allocate memory: */
-	scoped_guard(memalloc_flags, PF_MEMALLOC_NOFS) {
-		guard(mutex)(&bc->lock);
-
+	scoped_guard(mutex_noio, &bc->lock) {
 		for (unsigned i = 0; i < ARRAY_SIZE(bc->live); i++) {
 			struct list_head *heads[] = {
 				&bc->live[i].dirty,

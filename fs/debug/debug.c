@@ -74,7 +74,7 @@ __cold void bch2_btree_node_ondisk_to_text(struct printbuf *out, struct bch_fs *
 	bio = bio_alloc_bioset(ca->disk_sb.bdev,
 			       buf_nr_bvecs(n_ondisk, btree_buf_bytes(b)),
 			       REQ_OP_READ|REQ_META,
-			       GFP_NOFS,
+			       GFP_NOIO,
 			       &c->btree.bio);
 	bio->bi_iter.bi_sector	= pick.ptr.offset;
 	bch2_bio_map(bio, n_ondisk, btree_buf_bytes(b));
@@ -811,6 +811,60 @@ static const struct file_operations btree_node_scan_ops = {
 	.read		= bch2_btree_node_scan_read,
 };
 
+/*
+ * The full fsck damaged-paths list, untruncated: the end-of-fsck summary
+ * prints only the first FSCK_DAMAGED_PATHS_PRINT entries, which isn't enough
+ * when triaging a badly damaged filesystem. Interim surface until the damage
+ * btree lands.
+ */
+static ssize_t bch2_fsck_damaged_paths_read(struct file *file, char __user *buf,
+					    size_t size, loff_t *ppos)
+{
+	struct dump_iter *i = file->private_data;
+	struct bch_fs *c = i->c;
+
+	i->ubuf = buf;
+	i->size	= size;
+	i->ret	= 0;
+
+	if (!test_bit(BCH_FS_may_go_rw, &c->flags))
+		return 0;
+
+	CLASS(btree_trans, trans)(c);
+
+	while (1) {
+		try(bch2_debugfs_flush_buf(i));
+
+		/*
+		 * Snapshot the entry under the lock, resolve outside it: path
+		 * resolution takes btree locks, and fsck error paths take
+		 * msgs_lock under those.
+		 */
+		struct fsck_damaged_path entry;
+		bool done;
+
+		scoped_guard(mutex, &c->errors.msgs_lock) {
+			done = i->iter >= c->errors.damaged_paths.nr;
+			if (!done)
+				entry = c->errors.damaged_paths.data[i->iter];
+		}
+		if (done)
+			break;
+
+		bch2_fsck_damaged_path_to_text(&i->buf, trans, &entry);
+		i->iter++;
+	}
+
+	return bch2_debugfs_flush_buf(i) ?: i->ret;
+}
+
+static const struct file_operations fsck_damaged_paths_ops = {
+	.owner		= THIS_MODULE,
+	.open		= bch2_dump_open,
+	.release	= bch2_dump_release,
+	.read		= bch2_fsck_damaged_paths_read,
+};
+
 void bch2_fs_debug_exit(struct bch_fs *c)
 {
 	if (!IS_ERR_OR_NULL(c->fs_debug_dir))
@@ -869,6 +923,9 @@ void bch2_fs_debug_init(struct bch_fs *c)
 
 	debugfs_create_file("btree_node_scan", 0400, c->fs_debug_dir,
 			    c->btree_debug, &btree_node_scan_ops);
+
+	debugfs_create_file("fsck_damaged_paths", 0400, c->fs_debug_dir,
+			    c->btree_debug, &fsck_damaged_paths_ops);
 
 	debugfs_create_file("write_points", 0400, c->fs_debug_dir,
 			    c->btree_debug, &write_points_ops);

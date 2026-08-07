@@ -27,13 +27,24 @@ static int remove_backpointer(struct btree_trans *trans,
 
 	u32 snapshot = inode->bi_snapshot;
 
-	if (inode->bi_parent_subvol)
-		try(bch2_subvolume_get_snapshot(trans, inode->bi_parent_subvol, &snapshot));
-
 	struct bch_fs *c = trans->c;
+
 	CLASS(btree_iter_uninit, iter)(trans);
-	struct bkey_s_c_dirent d = bkey_try(dirent_get_by_pos(trans, &iter,
-				     SPOS(inode->bi_dir, inode->bi_dir_offset, snapshot)));
+	struct bkey_s_c_dirent d = bch2_inode_get_dirent(trans, &iter, inode, &snapshot);
+
+	/*
+	 * bch2_inode_get_dirent() returns an ERR_PTR in the bkey, and for a
+	 * subvolume root it resolves the dirent through bi_parent_subvol - so a
+	 * missing parent subvolume lands here as an error, not as a not-found
+	 * dirent. That is exactly the state reattach_subvol() is called for,
+	 * and dereferencing it oopsed in dirent_points_to_inode().
+	 *
+	 * Nothing to remove is success: the caller's next move is to reattach,
+	 * and it can't if we hand it an error.
+	 */
+	int ret = bkey_err(d);
+	if (ret)
+		return bch2_err_matches(ret, ENOENT) ? 0 : ret;
 
 	try(dirent_points_to_inode(c, d, inode));
 	try(bch2_fsck_remove_dirent(trans, d.k->p));
@@ -97,7 +108,9 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 
 			try(bch2_inum_to_path(trans, start, &buf));
 
-			if (fsck_err(trans, subvol_loop, "%s", buf.buf))
+			if (inode_fsck_err(trans, SPOS(0, le64_to_cpu(s.v->inode),
+						       le32_to_cpu(s.v->snapshot)),
+					   subvol_loop, "%s", buf.buf))
 				ret = reattach_subvol(trans, s);
 			break;
 		}
@@ -105,8 +118,10 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 		bch2_btree_iter_set_pos(&parent_iter, POS(0, parent));
 		k = bkey_try(bch2_btree_iter_peek_slot(&parent_iter));
 
-		if (fsck_err_on(k.k->type != KEY_TYPE_subvolume,
-				trans, subvol_unreachable,
+		if (inode_fsck_err_on(k.k->type != KEY_TYPE_subvolume,
+				trans, SPOS(0, le64_to_cpu(s.v->inode),
+					    le32_to_cpu(s.v->snapshot)),
+				subvol_unreachable,
 				"unreachable subvolume %s",
 				(printbuf_reset(&buf),
 				 bch2_bkey_val_to_text(&buf, c, s.s_c),
@@ -188,6 +203,19 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 	struct bch_inode_unpacked inode;
 	bch2_inode_unpack(c, inode_k, &inode);
 
+	/*
+	 * If this inode sits at a redundant interior snapshot node that
+	 * delete_dead_snapshots will collapse into a live descendant, do the whole
+	 * path traversal in the descendant's view: an interrupted collapse migrated
+	 * the naming dirents and parent inodes down there, and that's the state the
+	 * subtree is converging on - otherwise a half-migrated dirent reads as a
+	 * spurious unreachable-inode. Computed once (the walk stays in one
+	 * snapshot); no-op on a healthy fs.
+	 */
+	u32 collapse_terminal = bch2_snapshot_redundant_interior(c, snapshot);
+	if (collapse_terminal)
+		snapshot = collapse_terminal;
+
 	CLASS(btree_iter, inode_iter)(trans, BTREE_ID_inodes, POS_MIN, 0);
 
 	/*
@@ -205,10 +233,19 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 			return ret;
 
 		if (bch2_err_matches(ret, ENOENT)) {
+			/*
+			 * The naming dirent is gone, so we can't recover the
+			 * filename - but bi_dir still tells us which directory
+			 * the inode was in. Print that path so the user can see
+			 * what was lost. A restart from the path walk just
+			 * propagates to the enclosing for_each_..._commit loop.
+			 */
 			printbuf_reset(&buf);
-			bch2_bkey_val_to_text(&buf, c, inode_k);
-			bch_err(c, "unreachable inode in check_directory_structure: %s\n%s",
-				bch2_err_str(ret), buf.buf);
+			prt_str(&buf, "unreachable inode, naming dirent missing; was in directory ");
+			try(bch2_inum_snapshot_to_path(trans, inode.bi_dir, snapshot, NULL, &buf));
+			prt_newline(&buf);
+			bch2_inode_unpacked_to_text(&buf, &inode);
+			bch_err(c, "%s", buf.buf);
 			return ret;
 		}
 
@@ -249,7 +286,8 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 					prt_printf(&buf, "%llu ", *i);
 			}
 
-			if (fsck_err(trans, dir_loop, "%s", buf.buf)) {
+			if (inode_fsck_err(trans, SPOS(0, inode.bi_inum, inode.bi_snapshot),
+					   dir_loop, "%s", buf.buf)) {
 				ret = remove_backpointer(trans, &inode);
 				bch_err_msg(c, ret, "removing dirent");
 				if (ret)

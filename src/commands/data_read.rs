@@ -6,36 +6,13 @@
 
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::io::AsRawFd;
 
+use bch_bindgen::c;
 use clap::Parser;
 
+use crate::wrappers::ioctl::{ioctl_rw, BCHFS_IOC_PREAD_RAW};
+
 const SECTOR_SIZE: u64 = 512;
-
-/// ioctl number: _IOWR(0xbc, 67, struct bch_ioctl_pread_raw)
-const fn bchfs_ioc_pread_raw() -> libc::Ioctl {
-    let size = std::mem::size_of::<BchIoctlPreadRaw>() as u32;
-    ((3u32 << 30) | (size << 16) | (0xbcu32 << 8) | 67) as libc::Ioctl
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct BchIoctlErrMsg {
-    msg_ptr:    u64,
-    msg_len:    u32,
-    pad:        u32,
-}
-
-#[repr(C)]
-#[derive(Default)]
-struct BchIoctlPreadRaw {
-    offset:     u64,
-    len:        u64,
-    buf:        u64,
-    flags:      u32,
-    errors:     u32,
-    err:        BchIoctlErrMsg,
-}
 
 #[derive(Parser, Debug)]
 #[command(name = "data-read")]
@@ -100,22 +77,20 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
 
     let mut err_msg_buf = vec![0u8; 4096];
 
-    let mut arg = BchIoctlPreadRaw {
+    let mut arg = c::bch_ioctl_pread_raw {
         offset: cli.offset,
         len:    cli.len,
         buf:    buf as u64,
         flags:  if cli.no_poison_check { 1 << 0 } else { 0 },
         errors: 0,
-        err: BchIoctlErrMsg {
+        err: c::bch_ioctl_err_msg {
             msg_ptr: err_msg_buf.as_mut_ptr() as u64,
             msg_len: err_msg_buf.len() as u32,
             pad:     0,
         },
     };
 
-    let ret = unsafe {
-        libc::ioctl(file.as_raw_fd(), bchfs_ioc_pread_raw(), &mut arg as *mut _)
-    };
+    let ret = ioctl_rw::<BCHFS_IOC_PREAD_RAW>(&file, &mut arg);
 
     // Show error info
     if arg.errors != 0 {
@@ -134,8 +109,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
         eprintln!("kernel: {}", msg);
     }
 
-    if ret < 0 {
-        let errno = std::io::Error::last_os_error();
+    if let Err(errno) = &ret {
         eprintln!("ioctl returned error: {}", errno);
         // Still dump whatever data we got — that's the point
     }
@@ -173,7 +147,7 @@ fn cmd_data_read_inner(cli: &Cli) -> anyhow::Result<()> {
 
     unsafe { std::alloc::dealloc(buf, layout); }
 
-    if ret < 0 {
+    if ret.is_err() {
         std::process::exit(1);
     }
 

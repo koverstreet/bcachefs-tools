@@ -5,7 +5,7 @@ default-members = [".", "fs"]
 
 [package]
 name = "bcachefs-tools"
-version = "1.38.8"
+version = "1.39.0"
 authors = ["Yuxuan Shui <yshuiv7@gmail.com>", "Kayla Firestack <dev@kaylafire.me>", "Kent Overstreet <kent.overstreet@linux.dev>" ]
 edition = "2021"
 rust-version = "1.85.0"
@@ -43,6 +43,8 @@ tiny_http = "0.12.0"
 rustc-demangle = "0.1"
 chrono = { version = "0.4.43", default-features = false, features = ["clock"] }
 fuser = { version = "0.17", optional = true }
+# rustyline 18 requires home 0.5.12, which requires rustc 1.88 (> our 1.85 MSRV)
+rustyline = "17.0.2"
 
 [dependencies.env_logger]
 version = "0.10"

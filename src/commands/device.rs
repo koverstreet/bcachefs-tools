@@ -101,8 +101,8 @@ fn cmd_device_add_offline(
     force: bool,
     matches: &clap::ArgMatches,
 ) -> Result<()> {
-    let block_size = unsafe { (*fs.raw).opts.block_size as u32 };
-    let btree_node_size = unsafe { (*fs.raw).opts.btree_node_size };
+    let block_size = fs.opts().block_size as u32;
+    let btree_node_size = fs.opts().btree_node_size;
 
     device_add_format(dev_path, force, matches,
         block_size, btree_node_size)?;
@@ -355,29 +355,30 @@ fn cmd_device_set_state(cli: SetStateCli) -> Result<()> {
 }
 
 fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
-    use crate::wrappers::bch_err_str;
 
-    let c_path = CString::new(device)?;
     let mut opts: c::bch_opts = Default::default();
     opt_set!(opts, nostart, 1);
     opt_set!(opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
 
     // Read superblock to get dev_idx
-    let mut sb_handle: c::bch_sb_handle = Default::default();
-    let ret = unsafe { c::bch2_read_super(c_path.as_ptr(), &mut opts, &mut sb_handle) };
-    if ret != 0 {
-        return Err(anyhow!("error opening {}: {}", device, bch_err_str(ret)));
-    }
+    let sb_handle = bch_bindgen::sb::io::read_super_opts(Path::new(device), opts)
+        .map_err(|e| anyhow!("error opening {}: {}", device, e))?;
     let dev_idx = sb_handle.sb().dev_idx as u32;
     drop(sb_handle);
 
     let fs = crate::device_scan::open_scan(&[PathBuf::from(device)], opts)
         .map_err(|e| anyhow!("Error opening filesystem: {}", e))?;
 
+    if fs.disk_sb().sb().sb_initialized() == 0 {
+        return Err(anyhow!("superblock not initialized (filesystem was never started): \
+                            bch2_write_super would silently skip the write; mount it once first"));
+    }
+
     {
         let _lock = fs.sb_lock();
         unsafe { fs.member_mut(dev_idx) }.set_member_state(new_state as u64);
-        fs.write_super();
+        fs.write_super_force()
+            .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }
     Ok(())
 }
