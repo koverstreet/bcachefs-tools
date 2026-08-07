@@ -1118,10 +1118,18 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 #ifdef CONFIG_BCACHEFS_RUST
 	prt_str(out, "Rust support enabled\n");
 #else
-	prt_str(out,
-		"built without Rust support; this will be required in the near "
-		"future - ensure a compatible Rust toolchain (rustc + bindgen + "
-		"rust-src) is available at module build time\n");
+	/*
+	 * Not CONFIG_RUST: bcachefs vendors its own Rust stack, so a kernel
+	 * built without CONFIG_RUST is fine. What matters is what the module
+	 * build couldn't find, which fs/Makefile records here - telling someone
+	 * to go ask their distribution for CONFIG_RUST when the actual problem
+	 * is a missing bindgen wastes everyone's time.
+	 */
+	prt_str(out, "built without Rust support; this will be required in the near future\n");
+#ifdef BCACHEFS_NO_RUST_REASON
+	prt_printf(out, "  reason: %s\n", BCACHEFS_NO_RUST_REASON);
+#endif
+	prt_str(out, "  rebuild the module with rustc, bindgen and rust-src available to enable it\n");
 #endif
 #endif
 

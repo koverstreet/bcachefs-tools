@@ -23,14 +23,22 @@ canonical_version()
 }
 
 # Fall back to the C-only module, reporting exactly what's missing. The reason
-# goes to stderr; only the y/n verdict goes to stdout (the Makefile captures it
-# via $(shell ...), so stderr is free for diagnostics).
+# IS the verdict: stdout is "y", or else the reason we couldn't. The Makefile
+# bakes that into the module, so the mount-time "built without Rust support"
+# message can say why - months later, on a machine whose build log is long gone.
+# The stderr copy still lands in the DKMS build log for whoever is watching the
+# build itself.
+#
+# Stripped of the characters that would otherwise terminate the C string literal
+# it ends up inside: the reason travels through make and the shell into a -D. An
+# unusual path should mangle the message, never break the build.
 skip()
 {
-	if [ -n "$1" ]; then
-		echo "bcachefs: building without Rust — $1" >&2
+	reason=$(printf '%s' "$1" | tr -d '"\\$`')
+	if [ -n "$reason" ]; then
+		echo "bcachefs: building without Rust — $reason" >&2
 	fi
-	echo n
+	printf '%s\n' "${reason:-reason not recorded}"
 	exit 0
 }
 
