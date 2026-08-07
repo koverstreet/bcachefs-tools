@@ -444,7 +444,7 @@ fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
         }
         Err(_) if Path::new(&cli.device).exists() => {
             println!("Doing offline resize of {}", cli.device);
-            resize_offline(&cli.device, size_sectors)?;
+            resize_offline(&cli.device, size_sectors, cli.shrink)?;
         },
         Err(e) => return Err(e),
     }
@@ -476,7 +476,7 @@ fn find_single_online_dev(fs: &Fs) -> Result<bcachefs_kernel::fs::DevRef> {
         .ok_or_else(|| anyhow!("could not get reference to device {}", found_idx))
 }
 
-fn resize_offline(device: &str, size_sectors: SizeOrCancel) -> Result<()> {
+fn resize_offline(device: &str, size_sectors: SizeOrCancel, shrinking_allowed: bool) -> Result<()> {
     use bcachefs_kernel::util::printbuf::Printbuf;
     use SizeOrCancel::*;
 
@@ -491,10 +491,9 @@ fn resize_offline(device: &str, size_sectors: SizeOrCancel) -> Result<()> {
         Size(sectors) => sectors / ca.mi.bucket_size as u64,
         Cancel => ca.mi.nbuckets,
     };
-
-    if nbuckets < ca.mi.nbuckets {
-        bail!("shrinking not supported (requested {} buckets, have {})",
-            nbuckets, ca.mi.nbuckets);
+    let shrinking = nbuckets < ca.mi.nbuckets;
+    if shrinking && !shrinking_allowed {
+        bail!("You are attempting to shrink the device. This is experimental and may lead to data loss. If you wish to proceed anyway, re-run the command with '--shrink'.");
     }
 
     println!("resizing to {} buckets", nbuckets);
