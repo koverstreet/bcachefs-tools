@@ -468,7 +468,7 @@ static int __journal_entry_open_one(struct journal *j)
 	if (unlikely(bch2_journal_seq_is_blacklisted(c, journal_cur_seq(j) + 1, false))) {
 		CLASS(bch_log_msg_atomic, msg)(c);
 		prt_printf(&msg.m, "attempting to open blacklisted journal seq %llu",
-			   journal_cur_seq(j));
+			   journal_cur_seq(j) + 1);
 		bch2_fs_emergency_read_only_locked(c, &msg.m);
 		return bch_err_throw(c, journal_shutdown);
 	}
