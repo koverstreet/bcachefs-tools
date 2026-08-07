@@ -687,7 +687,8 @@ int bch2_trigger_extent(struct btree_trans *trans, struct btree_trigger_op op)
 	unsigned old_ptrs_bytes = (void *) old_ptrs.end - (void *) old_ptrs.start;
 
 	/* optimization for in-place updates to reconcile_phys to avoid delete-insert churn */
-	if (op.level == 0) {
+	if (op.level == 0 &&
+	    op.new.k->u64s == op.old.k->u64s) {
 		bool handled;
 
 		try(bch2_trigger_extent_reconcile_phys_update(trans, op.btree, op.level, op.old, op.new, &handled));
