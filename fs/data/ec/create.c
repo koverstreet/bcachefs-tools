@@ -2164,9 +2164,10 @@ int bch2_stripe_repair(struct moving_context *ctxt,
  		 */
 		if (old_s->needs_reconcile) {
 			struct bkey_i_stripe *n =
-				bch2_bkey_make_mut_typed(trans, iter, &s.s_c, 0, stripe);
-			if (!IS_ERR(n))
-				n->v.needs_reconcile = 0;
+				errptr_try(bch2_bkey_make_mut_typed(trans, iter, &s.s_c, 0, stripe));
+			n->v.needs_reconcile = 0;
+
+			try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 		}
 
 		return 0;
