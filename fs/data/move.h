@@ -52,6 +52,11 @@ struct moving_context {
 	atomic_t		read_ios;
 	atomic_t		write_ios;
 
+	/* Moved data indexed without FUA; must be ordered by a journal flush. */
+	u64			noflush_sectors;
+	u64			noflush_sectors_limit;
+	u64			noflush_seq;
+
 	wait_queue_head_t	wait;
 };
 
@@ -100,7 +105,8 @@ void bch2_moving_ctxt_init(struct moving_context *, struct bch_fs *,
 			   struct write_point_specifier, bool);
 struct data_update *bch2_moving_ctxt_next_pending_write(struct moving_context *);
 void bch2_moving_ctxt_do_pending_writes(struct moving_context *);
-void bch2_moving_ctxt_flush_all(struct moving_context *);
+int bch2_moving_ctxt_flush_all(struct moving_context *);
+void bch2_moving_ctxt_account_noflush_commit(struct moving_context *, u32, u64);
 void bch2_move_ctxt_wait_for_io(struct moving_context *);
 int bch2_move_ratelimit(struct moving_context *);
 
