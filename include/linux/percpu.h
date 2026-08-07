@@ -46,20 +46,21 @@ extern char __start_bch_percpu[], __stop_bch_percpu[];
  * Per-thread chunk layout: [static_section][dynamic_arena].
  *
  * Static section is sized at link time (__stop_bch_percpu - __start_bch_percpu);
- * dynamic arena is BCH_PERCPU_DYNAMIC_SIZE bytes for alloc_percpu().
- */
-/*
+ * the dynamic arena is bch_percpu_dynamic_size bytes for alloc_percpu().
+ *
  * Address space per chunk, not memory: chunks are NORESERVE anonymous
- * mappings, so pages materialize only as allocations touch them. Sized
- * for the largest consumer - gc's accounting table allocates a percpu
- * counter set per accounting key, and a large filesystem with many
- * snapshots has hundreds of thousands of those.
+ * mappings, so pages materialize only as allocations touch them. Sized for the
+ * largest consumer - gc's accounting table allocates a percpu counter set per
+ * accounting key, and a large filesystem with many snapshots has hundreds of
+ * thousands of those.
+ *
+ * Fixed at first thread init and never changed afterwards: chunk pointers are
+ * read without bch_percpu_lock, so a chunk can't be moved or resized out from
+ * under a reader. It is not a compile-time constant because a 32-bit process
+ * can't afford the same reservation as a 64-bit one, and because nothing needs
+ * it to be - see size_at_grain in percpu.c, which used to.
  */
-#if UINTPTR_MAX > 0xFFFFFFFFUL
-#define BCH_PERCPU_DYNAMIC_SIZE	(256UL * 1024 * 1024)
-#else
-#define BCH_PERCPU_DYNAMIC_SIZE	(8UL * 1024 * 1024)
-#endif
+extern size_t bch_percpu_dynamic_size;
 
 extern __thread void *bch_percpu_my_chunk;
 extern __thread int   bch_percpu_my_id;
@@ -71,13 +72,6 @@ void bch_percpu_thread_init(void);
 void bch_percpu_register(void (*init_one)(void *), void (*exit_one)(void *),
 			 void *pcv);
 
-
-static inline bool is_static_percpu(const void *p)
-{
-	uintptr_t v = (uintptr_t)p;
-	return v >= (uintptr_t)__start_bch_percpu &&
-	       v <  (uintptr_t)__stop_bch_percpu;
-}
 
 
 /*

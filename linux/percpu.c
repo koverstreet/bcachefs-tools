@@ -6,21 +6,22 @@
  *
  *   [ static section ][ dynamic arena ]
  *   |                |
- *   0                static_size       static_size + BCH_PERCPU_DYNAMIC_SIZE
+ *   0                static_size       static_size + bch_percpu_dynamic_size
  *
  * Static section is sized at link time by the linker auto-generated
  * symbols __start_bch_percpu / __stop_bch_percpu. DEFINE_PER_CPU vars
  * land there; their address-within-section is their offset within the
  * chunk (the resolve macro subtracts __start_bch_percpu).
  *
- * Dynamic arena is fixed at BCH_PERCPU_DYNAMIC_SIZE bytes per chunk.
- * alloc_percpu() returns offsets into [static_size, static_size +
- * BCH_PERCPU_DYNAMIC_SIZE), cast as a void *. The resolve macro adds
- * the offset directly.
+ * Dynamic arena is bch_percpu_dynamic_size bytes per chunk, fixed at first
+ * thread init.
  *
- * Distinguishing static-section addresses from dynamic offsets at
- * runtime: section addresses are real VAs (typically megabytes); dynamic
- * offsets are < static_size + dynamic_size. A single < check decides.
+ * Static and dynamic percpu pointers are one representation: an address
+ * relative to __start_bch_percpu. The linker gives static variables theirs;
+ * alloc_percpu() returns __start_bch_percpu + chunk_off for the same effect.
+ * So the resolve macro subtracts that base and adds the chunk, with nothing to
+ * discriminate between the two - which is also how the kernel does it, see
+ * __addr_to_pcpu_ptr() in mm/percpu.c.
  *
  * Per-thread setup runs through bch_percpu_thread_init() (called from
  * kthread_start_fn(), linux_shrinkers_init(), rust_fuse_rcu_register(),
@@ -57,6 +58,7 @@ __thread int   bch_percpu_my_id = -1;
 void   *bch_percpu_chunks[BCH_PERCPU_MAX_CPUS];
 int     bch_percpu_nr_cpus;
 size_t  bch_percpu_static_size;
+size_t  bch_percpu_dynamic_size;
 
 #define BCH_PERCPU_GRAIN	8
 
@@ -92,11 +94,37 @@ struct bch_percpu_dynamic_init {
 
 static DARRAY(struct bch_percpu_dynamic_init) dynamic_inits;
 static size_t		dynamic_used;
+
 /*
- * Map from grain index to allocation size in grains, so free_percpu()
- * doesn't need a size argument.
+ * Map from grain index to allocation size in grains, so free_percpu() doesn't
+ * need a size argument.
+ *
+ * Grown to cover dynamic_used rather than sized to the whole arena: the bump
+ * allocator only moves forward, and free_percpu() only ever looks up a grain
+ * that was allocated, so nothing above the high water mark is ever read. Sized
+ * to the arena instead this would be a 64MB BSS array to describe a few
+ * thousand live allocations.
  */
-static u16		size_at_grain[BCH_PERCPU_DYNAMIC_SIZE / BCH_PERCPU_GRAIN];
+static u32		*size_at_grain;
+static size_t		nr_size_at_grain;
+
+/* Caller must hold bch_percpu_lock. */
+static bool size_at_grain_resize(size_t nr)
+{
+	if (nr <= nr_size_at_grain)
+		return true;
+
+	size_t new_nr = max(nr, nr_size_at_grain * 2);
+	u32 *new = realloc(size_at_grain, new_nr * sizeof(*size_at_grain));
+	if (!new)
+		return false;
+
+	memset(new + nr_size_at_grain, 0,
+	       (new_nr - nr_size_at_grain) * sizeof(*new));
+	size_at_grain	 = new;
+	nr_size_at_grain = new_nr;
+	return true;
+}
 
 static pthread_mutex_t	bch_percpu_lock = PTHREAD_MUTEX_INITIALIZER;
 
@@ -131,10 +159,20 @@ void bch_percpu_thread_init(void)
 
 	if (!bch_percpu_static_size) {
 		bch_percpu_static_size = __stop_bch_percpu - __start_bch_percpu;
+
+		/*
+		 * The arena is address space, not memory, so on 64 bit we can
+		 * be generous - but a 32 bit process has ~3G of it to share
+		 * between every thread's chunk and everything else, so it gets
+		 * a much smaller reservation.
+		 */
+		bch_percpu_dynamic_size = sizeof(void *) > 4
+			? 256UL << 20
+			:   8UL << 20;
 	}
 
 	/* Address space, not memory - pages fault in as they're touched: */
-	size_t chunk_size = bch_percpu_static_size + BCH_PERCPU_DYNAMIC_SIZE;
+	size_t chunk_size = bch_percpu_static_size + bch_percpu_dynamic_size;
 	void *chunk = mmap(NULL, chunk_size, PROT_READ|PROT_WRITE,
 			   MAP_PRIVATE|MAP_ANONYMOUS|MAP_NORESERVE, -1, 0);
 	if (chunk == MAP_FAILED) {
@@ -212,8 +250,15 @@ static size_t bch_percpu_dynamic_alloc(size_t size)
 			return off;
 		}
 
-	if (dynamic_used + size > BCH_PERCPU_DYNAMIC_SIZE)
+	if (dynamic_used + size > bch_percpu_dynamic_size)
 		return SIZE_MAX;
+
+	/* Before committing, so a failed grow leaves nothing half done. Reuse
+	 * from the free list needs no grow - those grains are covered. */
+	if (!size_at_grain_resize((dynamic_used + size) / BCH_PERCPU_GRAIN)) {
+		fprintf(stderr, "alloc_percpu: out of memory growing the size table\n");
+		return SIZE_MAX;
+	}
 
 	off = dynamic_used;
 	dynamic_used += size;
@@ -222,6 +267,14 @@ static size_t bch_percpu_dynamic_alloc(size_t size)
 
 void *__alloc_percpu_gfp(size_t size, size_t align, gfp_t gfp)
 {
+	/*
+	 * Zero has no grain to record a size in: the free list would match the
+	 * first run without consuming anything and hand the same offset out
+	 * again, and the bump path would write one past the end of
+	 * size_at_grain. No caller wants a zero sized percpu variable anyway.
+	 */
+	BUG_ON(!size);
+
 	/* Round to grain; align is honored implicitly because all offsets
 	 * are grain-aligned and BCH_PERCPU_GRAIN is 8 (covers any alignof
 	 * request bcachefs makes). */
@@ -233,8 +286,8 @@ void *__alloc_percpu_gfp(size_t size, size_t align, gfp_t gfp)
 	if (off == SIZE_MAX) {
 		pthread_mutex_unlock(&bch_percpu_lock);
 		fprintf(stderr, "alloc_percpu: dynamic arena exhausted "
-			"(used %zu, requested %zu, max %lu)\n",
-			dynamic_used, size, BCH_PERCPU_DYNAMIC_SIZE);
+			"(used %zu, requested %zu, max %zu)\n",
+			dynamic_used, size, bch_percpu_dynamic_size);
 		return NULL;
 	}
 
@@ -260,23 +313,34 @@ void *__alloc_percpu(size_t size, size_t align)
 
 void free_percpu(void *p)
 {
-	/* Ignore NULL pointers and static DEFINE_PER_CPU section variables */
-	if (!p || is_static_percpu(p))
+	if (!p)
 		return;
 
-	/* Calculate total offset within chunk using unsigned pointer subtraction */
-	size_t chunk_off = (uintptr_t)p - (uintptr_t)__start_bch_percpu;
-	if (chunk_off < bch_percpu_static_size)
-		return;
-
-	/* Calculate offset within the dynamic arena */
-	size_t off = chunk_off - bch_percpu_static_size;
-	if (off >= BCH_PERCPU_DYNAMIC_SIZE)
-		return;
+	/*
+	 * Everything else is a caller bug: a DEFINE_PER_CPU variable, a
+	 * pointer from somewhere other than alloc_percpu(), or a double free.
+	 * Returning quietly turns any of those into an arena slot that is
+	 * never reused and never reported - so say so instead.
+	 *
+	 * is_static_percpu() is the same test as chunk_off <
+	 * bch_percpu_static_size, since static_size is exactly
+	 * __stop_bch_percpu - __start_bch_percpu; one bounds check covers
+	 * both ends.
+	 */
+	size_t off = ((uintptr_t)p - (uintptr_t)__start_bch_percpu) -
+		bch_percpu_static_size;
+	BUG_ON(off >= bch_percpu_dynamic_size);
 
 	pthread_mutex_lock(&bch_percpu_lock);
 
+	/*
+	 * size_at_grain only covers what's been allocated, so a pointer we
+	 * never handed out indexes past the end - where the old whole-arena
+	 * array would quietly have read a zero.
+	 */
 	size_t grain = off / BCH_PERCPU_GRAIN;
+	BUG_ON(grain >= nr_size_at_grain);
+
 	size_t size  = size_at_grain[grain] * (size_t)BCH_PERCPU_GRAIN;
 	size_at_grain[grain] = 0;
 
@@ -316,10 +380,13 @@ static void bch_percpu_module_exit(void)
 			if (callbacks[i].exit_one)
 				callbacks[i].exit_one(__bch_percpu_resolve(callbacks[i].pcv, chunk));
 
-		munmap(chunk, bch_percpu_static_size + BCH_PERCPU_DYNAMIC_SIZE);
+		munmap(chunk, bch_percpu_static_size + bch_percpu_dynamic_size);
 		bch_percpu_chunks[cpu] = NULL;
 	}
 	darray_exit(&free_runs);
 	darray_exit(&dynamic_inits);
+	free(size_at_grain);
+	size_at_grain	 = NULL;
+	nr_size_at_grain = 0;
 	pthread_mutex_unlock(&bch_percpu_lock);
 }
