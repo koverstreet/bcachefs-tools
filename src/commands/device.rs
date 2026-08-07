@@ -391,6 +391,11 @@ pub struct ResizeCli {
 
     /// New size (human-readable, e.g. 1G) or "cancel" (resizes to the currently persisted size); defaults to device size
     size: Option<String>,
+
+    /// Experimental: allow shrinking the device. This may lead to data loss. This argument will be
+    /// removed once stabilized.
+    #[arg(long, default_value = "false")]
+    shrink: bool,
 }
 
 enum SizeOrCancel {
@@ -422,6 +427,10 @@ fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
                 Cancel => usage.nr_buckets,
             };
             let shrinking = nbuckets < usage.nr_buckets;
+            if shrinking && !cli.shrink {
+                bail!("You are attempting to shrink the device. This is experimental and may lead to data loss. If you wish to proceed anyway, re-run the command with '--shrink'.");
+            }
+
 
             println!("resizing {} to {} buckets", cli.device, nbuckets);
             handle.disk_resize(dev_idx, nbuckets)
