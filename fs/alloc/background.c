@@ -1300,12 +1300,16 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 			 * Legitimate paths to free:
 			 *   - from need_discard via the discard path (with
 			 *     BTREE_TRIGGER_is_discard)
+			 *   - from journal when a device journal is explicitly
+			 *     removed (also marked as discard)
 			 *   - from need_gc_gens via bch2_gc_gens() bumping
 			 *     oldest_gen (bucket was empty the whole time;
 			 *     no discard needed)
 			 */
 			WARN_ON(!in_fsck &&
 				old_a->data_type != BCH_DATA_need_discard &&
+				!(old_a->data_type == BCH_DATA_journal &&
+				  (op.flags & BTREE_TRIGGER_is_discard)) &&
 				old_a->data_type != BCH_DATA_need_gc_gens);
 		}
 

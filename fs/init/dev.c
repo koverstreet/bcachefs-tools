@@ -388,7 +388,7 @@ void bch2_dev_io_ref_stop(struct bch_dev *ca, int rw)
 				    : bch2_dev_write_refs);
 }
 
-static void __bch2_dev_read_only(struct bch_fs *c, struct bch_dev *ca)
+void __bch2_dev_read_only(struct bch_fs *c, struct bch_dev *ca)
 {
 	/*
 	 * Push journal reclaim so the remaining devices have free journal space
@@ -433,7 +433,7 @@ static void __bch2_dev_read_only(struct bch_fs *c, struct bch_dev *ca)
 	bch2_fs_ec_flush_outstanding(c);
 }
 
-static void __bch2_dev_read_write(struct bch_fs *c, struct bch_dev *ca)
+void __bch2_dev_read_write(struct bch_fs *c, struct bch_dev *ca)
 {
 	lockdep_assert_held(&c->state_lock);
 
