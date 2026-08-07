@@ -32,6 +32,7 @@
 
 #include "util/enumerated_ref.h"
 
+#include <linux/ioprio.h>
 #include <linux/moduleparam.h>
 #include <linux/sched/mm.h>
 
@@ -946,6 +947,7 @@ static void btree_node_read_work(struct work_struct *work)
 		rb->ca			= ca;
 		rb->start_time		= local_clock();
 		bio_reset(bio, NULL, REQ_OP_READ|REQ_SYNC|REQ_META);
+		bio->bi_ioprio		= get_current_ioprio();
 		bio->bi_iter.bi_sector	= rb->pick.ptr.offset;
 		bio->bi_iter.bi_size	= btree_buf_bytes(b);
 
@@ -1088,6 +1090,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 	rb->start_time		= local_clock();
 	rb->pick		= pick;
 	INIT_WORK(&rb->work, btree_node_read_work);
+	bio->bi_ioprio		= get_current_ioprio();
 	bio->bi_iter.bi_sector	= pick.ptr.offset;
 	bio->bi_end_io		= btree_node_read_endio;
 	bch2_bio_map(bio, b->data, btree_buf_bytes(b));
@@ -1328,6 +1331,7 @@ int bch2_btree_node_scrub(struct btree_trans *trans,
 
 	bio_init(&scrub->bio, ca->disk_sb.bdev, scrub->inline_vecs, vecs, REQ_OP_READ);
 	bch2_bio_map(&scrub->bio, scrub->buf, c->opts.btree_node_size);
+	scrub->bio.bi_ioprio		= get_current_ioprio();
 	scrub->bio.bi_iter.bi_sector	= pick.ptr.offset;
 	scrub->bio.bi_end_io		= btree_node_scrub_endio;
 	submit_bio(&scrub->bio);
