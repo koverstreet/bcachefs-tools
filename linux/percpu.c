@@ -243,7 +243,7 @@ void *__alloc_percpu_gfp(size_t size, size_t align, gfp_t gfp)
 	if (off == SIZE_MAX) {
 		pthread_mutex_unlock(&bch_percpu_lock);
 		fprintf(stderr, "alloc_percpu: dynamic arena exhausted "
-			"(used %zu, requested %zu, max %d)\n",
+			"(used %zu, requested %zu, max %lu)\n",
 			dynamic_used, size, BCH_PERCPU_DYNAMIC_SIZE);
 		return NULL;
 	}
