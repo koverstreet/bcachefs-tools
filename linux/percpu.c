@@ -131,16 +131,6 @@ void bch_percpu_thread_init(void)
 
 	if (!bch_percpu_static_size) {
 		bch_percpu_static_size = __stop_bch_percpu - __start_bch_percpu;
-
-		/*
-		 * The resolve macro distinguishes static-section addresses
-		 * from dynamic offsets with a single threshold check:
-		 */
-		if ((uintptr_t) __start_bch_percpu <
-		    bch_percpu_static_size + BCH_PERCPU_DYNAMIC_SIZE) {
-			fprintf(stderr, "bch_percpu: static section below dynamic offset range\n");
-			abort();
-		}
 	}
 
 	/* Address space, not memory - pages fault in as they're touched: */
@@ -260,7 +250,7 @@ void *__alloc_percpu_gfp(size_t size, size_t align, gfp_t gfp)
 
 	pthread_mutex_unlock(&bch_percpu_lock);
 
-	return (void *)(uintptr_t)chunk_off;
+	return __start_bch_percpu + chunk_off;
 }
 
 void *__alloc_percpu(size_t size, size_t align)
@@ -270,11 +260,19 @@ void *__alloc_percpu(size_t size, size_t align)
 
 void free_percpu(void *p)
 {
-	if (!p)
+	/* Ignore NULL pointers and static DEFINE_PER_CPU section variables */
+	if (!p || is_static_percpu(p))
 		return;
 
-	uintptr_t chunk_off = (uintptr_t)p;
+	/* Calculate total offset within chunk using unsigned pointer subtraction */
+	size_t chunk_off = (uintptr_t)p - (uintptr_t)__start_bch_percpu;
+	if (chunk_off < bch_percpu_static_size)
+		return;
+
+	/* Calculate offset within the dynamic arena */
 	size_t off = chunk_off - bch_percpu_static_size;
+	if (off >= BCH_PERCPU_DYNAMIC_SIZE)
+		return;
 
 	pthread_mutex_lock(&bch_percpu_lock);
 
