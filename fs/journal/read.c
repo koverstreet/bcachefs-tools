@@ -716,6 +716,7 @@ static CLOSURE_CALLBACK(bch2_journal_read_device)
 	struct journal_read_buf buf = { NULL, 0 };
 	unsigned i;
 	int ret = 0;
+	u64 start_time = ktime_get_ns();
 
 	if (!ja->nr)
 		goto out;
@@ -854,9 +855,11 @@ done:
 		ja->dirty_idx = (ja->cur_idx + 1) % ja->nr;
 out:
 	if (!ret)
-		bch_verbose_dev(ca, "journal read done");
+		bch_info_dev(ca, "journal read done on device %s, elapsed %llu ns",
+			     ca->name, ktime_get_ns() - start_time);
 	else
-		bch_err_dev(ca, "journal read error %s", bch2_err_str(ret));
+		bch_err_dev(ca, "journal read error %s after %llu ns",
+			    bch2_err_str(ret), ktime_get_ns() - start_time);
 
 	kvfree(buf.data);
 	enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_journal_read);
@@ -976,7 +979,7 @@ static int journal_retry_full_read(struct bch_fs *c, struct journal_list *jlist)
 
 		closure_call(&ca->journal.read,
 			     bch2_journal_read_device,
-			     system_unbound_wq,
+			     bch2_system_dfl_wq,
 			     &retry_jlist.cl);
 	}
 
@@ -1158,7 +1161,7 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 					  BCH_DEV_READ_REF_journal_read))
 			closure_call(&ca->journal.read,
 				     bch2_journal_read_device,
-				     system_unbound_wq,
+				     bch2_system_dfl_wq,
 				     &jlist.cl);
 		else
 			set_bit(JOURNAL_degraded, &c->journal.flags);
