@@ -479,8 +479,8 @@ int bch2_fs_journal_start(struct journal *j, struct journal_start_info info)
 	bool had_entries = false;
 	int ret = 0;
 
-	/* Don't reuse sequence numbers that are blacklisted: */
-	info.cur_seq = max(info.cur_seq, bch2_journal_last_blacklisted_seq(c));
+	/* Don't reuse sequence numbers that are blacklisted */
+	info.cur_seq = max(info.cur_seq, bch2_journal_last_blacklisted_seq(c) + 1);
 
 	if (info.cur_seq >= JOURNAL_SEQ_MAX) {
 		bch_err(c, "cannot start: journal seq overflow");
