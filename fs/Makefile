@@ -50,6 +50,16 @@ ifdef BCACHEFS_TESTS
 	bcachefs-config-cppflags += -DCONFIG_BCACHEFS_TESTS=1
 endif
 
+# Make bcachefs's own warnings fatal without CONFIG_WERROR for the whole
+# tree: make BCACHEFS_WERROR=1. subdir-ccflags-y scopes it to this directory
+# and below, so nothing else the invocation happens to compile is affected;
+# per-file CFLAGS_* -Wno-* waivers (e.g. rust/extern.o's) still apply on top.
+# For CI that wants exactly this subtree warning-clean, whatever kernel it is
+# built into.
+ifeq ($(BCACHEFS_WERROR),1)
+subdir-ccflags-y += -Werror
+endif
+
 # Verify the hand-copied struct getdents_callback64 in fs/dirent.c against
 # the target kernel's real layout (fs/scripts/getdents-layout.sh, pahole on
 # $(objtree)/vmlinux - present in external builds since kbuild needs it for
