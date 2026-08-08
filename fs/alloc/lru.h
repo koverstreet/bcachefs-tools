@@ -39,6 +39,35 @@ static inline u16 bucket_fragmentation_lru(unsigned dev)
 	return BCH_LRU_BUCKET_FRAGMENTATION_START + dev;
 }
 
+/*
+ * Inverse of the per-device id encodings - bucket_fragmentation_lru() above,
+ * and the read lrus, which use the device index as the id directly.
+ *
+ * This is the device a *well-formed* entry in this lru refers to. The device
+ * an entry actually refers to comes from its own dev_bucket, via
+ * lru_pos_to_bp(); the two agree exactly when the entry is in the lru it
+ * belongs in, which is what check_lrus() is there to verify.
+ *
+ * False for the lrus that aren't per-device: the stripe lru, the obsolete
+ * fs-wide fragmentation lru (whose entries span every device), and ids
+ * nothing uses.
+ */
+static inline bool lru_id_to_dev(u16 lru_id, unsigned *dev)
+{
+	if (lru_id < BCH_LRU_READ_MAX) {
+		*dev = lru_id;
+		return true;
+	}
+
+	if (lru_id >= BCH_LRU_BUCKET_FRAGMENTATION_START &&
+	    lru_id <  BCH_LRU_BUCKET_FRAGMENTATION_END) {
+		*dev = lru_id - BCH_LRU_BUCKET_FRAGMENTATION_START;
+		return true;
+	}
+
+	return false;
+}
+
 static inline enum bch_lru_type lru_type(struct bkey_s_c l)
 {
 	u16 lru_id = l.k->p.inode >> 48;

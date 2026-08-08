@@ -273,31 +273,30 @@ static int bch2_check_lru_key(struct btree_trans *trans,
 }
 
 /*
- * Pin the backing keyspace for one lru: read and bucket fragmentation lrus
- * are per-device, so their backing keys are one device's contiguous slice of
- * the alloc btree. Entries in obsolete/bogus lru ids get no pin - their
- * lookups miss or are scattered, and they're stragglers headed for deletion.
+ * Pin the backing keyspace for one lru: a per-device lru's backing keys are
+ * that device's contiguous slice of the alloc btree, the stripe lru's are the
+ * whole stripes btree. Everything else - the obsolete fs-wide fragmentation
+ * lru, and ids nothing uses - gets no pin: those entries are scattered or
+ * bogus, and either way they're stragglers headed for deletion.
+ *
+ * See lru_id_to_dev() on why this range can be derived from the id at all,
+ * and why a misplaced entry falls outside it.
  */
 static int check_lru_id_pin(struct btree_trans *trans, u16 lru_id)
 {
 	unsigned dev;
 
-	if (lru_id < BCH_LRU_READ_MAX)
-		dev = lru_id;
-	else if (lru_id >= BCH_LRU_BUCKET_FRAGMENTATION_START &&
-		 lru_id <  BCH_LRU_BUCKET_FRAGMENTATION_END)
-		dev = lru_id - BCH_LRU_BUCKET_FRAGMENTATION_START;
-	else if (lru_id == BCH_LRU_STRIPE_FRAGMENTATION)
+	if (lru_id_to_dev(lru_id, &dev))
+		return bch2_btree_cache_pin_range(trans, BTREE_ID_alloc,
+						  POS(dev, 0),
+						  SPOS(dev, U64_MAX, U32_MAX));
+
+	if (lru_id == BCH_LRU_STRIPE_FRAGMENTATION)
 		return bch2_btree_cache_pin_range(trans, BTREE_ID_stripes,
 						  POS_MIN, SPOS_MAX);
-	else {
-		bch2_btree_cache_unpin(trans->c);
-		return 0;
-	}
 
-	return bch2_btree_cache_pin_range(trans, BTREE_ID_alloc,
-					  POS(dev, 0),
-					  SPOS(dev, U64_MAX, U32_MAX));
+	bch2_btree_cache_unpin(trans->c);
+	return 0;
 }
 
 static int lru_peek_id(struct btree_trans *trans, struct bpos pos, int *lru_id)
