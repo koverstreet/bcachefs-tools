@@ -488,10 +488,18 @@ $(obj)/rust/bcachefs.rs: $(obj)/codegen $(obj)/rust/generic-radix-tree.h $(bcach
 
 # extern.c falls out of the same codegen run. Its wrappers are global functions
 # with no prior prototype (bindgen doesn't emit C declarations for them), so
-# silence -Wmissing-prototypes for just this generated object.
+# silence -Wmissing-prototypes: that one is inherent to what bindgen emits and
+# would warn on every build forever.
+#
+# -Wno-error for whatever else it emits. This is generated code - a bindgen bump
+# can invent a new warning at any time, and with CONFIG_WERROR=y (the defconfig
+# default) that breaks the build for whoever upgrades first. Naming them one at
+# a time does not scale: -Wno-duplicate-decl-specifier only got added here after
+# a user reported the build broken (#819). Warnings stay visible, they just
+# stop being fatal for code we did not write.
 $(obj)/rust/extern.c: $(obj)/rust/bcachefs.rs ;
 CFLAGS_rust/extern.o += -Wno-missing-prototypes -Wno-missing-declarations \
-			-Wno-duplicate-decl-specifier
+			-Wno-error
 
 # Kernel trees < 6.18 pass -Zno-jump-tables in KBUILD_RUSTFLAGS, written for
 # their era's pinned rustc; newer rustc has it stabilized as -Cjump-tables=n.
@@ -527,12 +535,16 @@ rustflags-y += --cfg kernel
 # $(KBUILD_PROCMACROLDFLAGS)) are all global, so reachable here.
 # Proc-macro crate name is derived from the target: lib<name>.so.
 quiet_cmd_bch_procmacro = RUSTC P  $@
-      cmd_bch_procmacro = $(RUSTC) $(rust_common_flags) \
+      cmd_bch_procmacro = $(RUSTC) $(rust_common_flags) $(bch-procmacro-lints) \
 	-Clinker-flavor=gcc -Clinker=$(HOSTCC) \
 	-Clink-args='$(call escsq,$(KBUILD_PROCMACROLDFLAGS))' \
 	--emit=dep-info=$(depfile) --emit=link=$@ --extern proc_macro \
 	--crate-type proc-macro --crate-name $(patsubst lib%.so,%,$(notdir $@)) \
 	@$(objtree)/include/generated/rustc_cfg $<
+
+# paste is vendored, so it gets the same treatment as the leaf rlibs above.
+# typeinfo-macros is ours and stays subject to the kernel's lints.
+$(obj)/libpaste.so: private bch-procmacro-lints := --cap-lints=allow
 
 $(obj)/libpaste.so: $(src)/vendor/paste/src/lib.rs FORCE
 	$(call if_changed_dep,bch_procmacro)
@@ -541,9 +553,18 @@ $(obj)/libtypeinfo_macros.so: $(src)/typeinfo-macros/src/lib.rs FORCE
 	$(call if_changed_dep,bch_procmacro)
 
 # Generic leaf-rlib build (crate name derived from the object stem), shared by
-# the vendored macro_rules crates bitfield and bitflags.
+# the vendored crates bitfield, bitflags and uuid.
+#
+# --cap-lints=allow: every crate built by this rule is vendored, and the
+# kernel's lints are a statement about how we want our own code written - they
+# say nothing about whether someone else's crate is correct. This is what cargo
+# does for dependencies, and what Makefile.rust.vendor already does on the
+# CONFIG_RUST=n path. Doing it per-lint instead means a rustc bump breaks
+# defconfig builds for whoever upgrades first: uuid needed two lints allowed
+# (#830) and the only reason bitfield and bitflags needed none is that today's
+# rustc happens not to complain about them.
 quiet_cmd_bch_library = RUSTC L  $@
-      cmd_bch_library = $(RUSTC) $(rust_flags) \
+      cmd_bch_library = $(RUSTC) $(rust_flags) --cap-lints=allow \
 	--emit=dep-info=$(depfile) --emit=obj=$@ \
 	--emit=metadata=$(dir $@)lib$(patsubst %.o,%,$(notdir $@)).rmeta \
 	--crate-type rlib $(bch-rust-L) --sysroot=/dev/null \
@@ -554,19 +575,6 @@ $(obj)/bitfield.o: $(src)/vendor/bitfield/src/lib.rs FORCE
 
 $(obj)/bitflags.o: $(src)/vendor/bitflags/src/lib.rs FORCE
 	$(call if_changed_dep,bch_library)
-
-# The kernel builds Rust with -Wrust_2018_idioms, which CONFIG_WERROR turns
-# into -Dwarnings; the vendored uuid predates both of the lifetime lints that
-# implies and trips 11 of them. Those lints are a statement about how we want
-# our own code written - they say nothing about whether someone else's crate is
-# correct - so allow them here rather than patching a vendored tree we would
-# have to re-patch on every refresh.
-#
-# Both are needed: elided_lifetimes_in_paths accounts for 6 and
-# mismatched_lifetime_syntaxes for the other 5, so allowing only the one named
-# in the bug report leaves the build broken. bitfield and bitflags are clean
-# under the same flags, which is why this is scoped to uuid.o.
-RUSTFLAGS_uuid.o += -Aelided_lifetimes_in_paths -Amismatched_lifetime_syntaxes
 
 $(obj)/uuid.o: $(src)/vendor/uuid/src/lib.rs FORCE
 	$(call if_changed_dep,bch_library)
