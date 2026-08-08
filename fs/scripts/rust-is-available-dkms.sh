@@ -31,7 +31,8 @@ canonical_version()
 #
 # Stripped of the characters that would otherwise terminate the C string literal
 # it ends up inside: the reason travels through make and the shell into a -D. An
-# unusual path should mangle the message, never break the build.
+# unusual path should mangle the message, never break the build. The apostrophe
+# comes out in the Makefile, which also covers the reasons it composes itself.
 skip()
 {
 	reason=$(printf '%s' "$1" | tr -d '"\\$`')

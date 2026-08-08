@@ -596,8 +596,10 @@ endif
 else
 # Carry the reason into the module. Whoever hits this at mount time is on a
 # different machine, months later, with no build log - the string is the only
-# thing that will tell them what to install.
-subdir-ccflags-y += -DBCACHEFS_NO_RUST_REASON='"$(bcachefs-rust-why)"'
+# thing that will tell them what to install. Apostrophes come out: the reason is
+# single-quoted on the command line, and the script strips " \ $ ` for the same
+# reason.
+subdir-ccflags-y += -DBCACHEFS_NO_RUST_REASON='"$(subst ',,$(bcachefs-rust-why))"'
 $(warning bcachefs: building without Rust support - $(bcachefs-rust-why); set BCACHEFS_RUST=1 to force)
 endif # bcachefs-rust-y
 
