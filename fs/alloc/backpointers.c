@@ -746,14 +746,9 @@ static int check_btree_root_to_backpointers(struct btree_trans *trans,
 	return check_extent_to_backpointers(trans, s, btree_id, b->c.level + 1, k);
 }
 
-static u64 mem_may_pin_bytes(struct bch_fs *c)
-{
-	return div_u64(system_totalram_bytes() * c->opts.fsck_memory_usage_percent, 100);
-}
-
 static size_t btree_nodes_fit_in_ram(struct bch_fs *c)
 {
-	return div_u64(mem_may_pin_bytes(c), c->opts.btree_node_size);
+	return div_u64(bch2_btree_cache_pin_budget(c), c->opts.btree_node_size);
 }
 
 static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
@@ -762,7 +757,7 @@ static int bch2_get_btree_in_memory_pos(struct btree_trans *trans,
 					struct bbpos start, struct bbpos *end)
 {
 	struct bch_fs *c = trans->c;
-	s64 mem_may_pin = mem_may_pin_bytes(c);
+	s64 mem_may_pin = bch2_btree_cache_pin_budget(c);
 
 	bch2_btree_cache_unpin(c);
 
@@ -1076,7 +1071,7 @@ static int bch2_pin_backpointer_nodes_with_missing(struct btree_trans *trans,
 	*end = SPOS_MAX;
 
 	{
-		s64 mem_may_pin = mem_may_pin_bytes(c);
+		s64 mem_may_pin = bch2_btree_cache_pin_budget(c);
 
 		CLASS(btree_node_iter, iter)(trans, BTREE_ID_backpointers, start, 0, 1, BTREE_ITER_prefetch);
 		try(for_each_btree_key_continue(trans, iter, 0, k, ({
@@ -1098,7 +1093,7 @@ static int bch2_pin_backpointer_nodes_with_missing(struct btree_trans *trans,
 
 	{
 		struct bpos pinned = SPOS_MAX;
-		s64 mem_may_pin = mem_may_pin_bytes(c);
+		s64 mem_may_pin = bch2_btree_cache_pin_budget(c);
 
 		CLASS(btree_node_iter, iter)(trans, BTREE_ID_backpointers, start, 0, 1, BTREE_ITER_prefetch);
 		try(for_each_btree_key_continue(trans, iter, 0, k, ({

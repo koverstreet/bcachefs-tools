@@ -363,17 +363,16 @@ void bch2_btree_cache_unpin(struct bch_fs *c)
  * nodes are faulted in with async parallel reads rather than synchronous
  * misses, and marks them shrinker-exempt.
  *
- * Best-effort: pinning stops if it would exceed fsck_memory_usage_percent of
- * system ram. Lookups beyond the pinned portion still work, they're just
- * slow paths. Callers must bch2_btree_cache_unpin() when done.
+ * Best-effort: pinning stops at bch2_btree_cache_pin_budget(). Lookups beyond
+ * the pinned portion still work, they're just slow paths. Callers must
+ * bch2_btree_cache_unpin() when done.
  */
 int bch2_btree_cache_pin_range(struct btree_trans *trans, enum btree_id btree,
 			       struct bpos start, struct bpos end)
 {
 	struct bch_fs *c = trans->c;
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
-	s64 mem_may_pin = div_u64(system_totalram_bytes() *
-				  c->opts.fsck_memory_usage_percent, 100);
+	s64 mem_may_pin = bch2_btree_cache_pin_budget(c);
 
 	bch2_btree_cache_unpin(c);
 

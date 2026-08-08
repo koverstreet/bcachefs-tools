@@ -19,6 +19,17 @@ int bch2_btree_node_transition_state(struct bch_fs_btree_cache *, struct btree *
 int bch2_btree_node_transition_state_locked(struct bch_fs_btree_cache *, struct btree *,
 					    enum btree_node_cache_state);
 
+/*
+ * The memory the fsck passes may spend on pinned btree nodes. They prefetch
+ * and pin a keyspace range so that the random-order lookups they're about to
+ * make against it become cache hits, and stop once they've spent this much -
+ * pinning is always best effort, the passes are correct either way.
+ */
+static inline u64 bch2_btree_cache_pin_budget(struct bch_fs *c)
+{
+	return div_u64(system_totalram_bytes() * c->opts.fsck_memory_usage_percent, 100);
+}
+
 void bch2_node_pin(struct bch_fs *, struct btree *);
 void bch2_btree_cache_unpin(struct bch_fs *);
 int bch2_btree_cache_pin_range(struct btree_trans *, enum btree_id,
