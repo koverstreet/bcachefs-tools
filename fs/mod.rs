@@ -8,7 +8,13 @@
 //! the kernel-compat types they reference (bio, locks, `__le*`/`__u*`) are
 //! resolved from `bcachefs-shim` in userspace or the `kernel` crate in-kernel.
 
-#![cfg_attr(not(feature = "std"), no_std)]
+// no_std is not declared here: both kernel builds pass -Zcrate-attr=no_std on
+// the command line - kbuild's Rust rule does it for CONFIG_RUST=y, and
+// Makefile.rust.vendor's mod.o rule does it for CONFIG_RUST=n. Declaring it
+// here as well was an unused_attributes error on the first of those, fatal
+// under CONFIG_WERROR, and no cfg separates the two paths (both set --cfg
+// kernel). The userspace build is std and wants none of it.
+//
 // This crate is edition 2021, where unsafe ops inside unsafe fns don't need an
 // inner unsafe block; the in-kernel build compiles us with -D
 // unsafe-op-in-unsafe-fn (the kernel's policy), so opt back out crate-wide
@@ -18,6 +24,11 @@
 // enums + the codegen BkeyVal* enums) have undocumented variants. The kernel's
 // own bindings crate allows it for the same reason.
 #![allow(missing_docs)]
+// The kernel passes its whole rust_allowed_features list as a crate attribute,
+// and we take it as given - matching what the kernel permits is the point. Not
+// using every feature in it is not a defect in this crate, but under
+// -D warnings (CONFIG_WERROR) unused_features makes it a build failure.
+#![allow(unused_features)]
 // Generated extern blocks reference kernel types bindgen flags as not FFI-safe
 // (e.g. its_array); harmless, and allowed on the kernel's own bindings crate.
 #![allow(improper_ctypes)]

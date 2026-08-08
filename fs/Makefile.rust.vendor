@@ -240,9 +240,17 @@ $(VRD)/helpers.o: $(VENDOR)/helpers/helpers.c $(wildcard $(VENDOR)/helpers/*.c) 
 # Unlike the CONFIG_RUST=y path (kbuild's Rust rule + the kernel's rmeta), here
 # we build it ourselves so the externs resolve to $(VRD). It still gets --cfg
 # kernel + the bcachefs codegen output (OUT_DIR) + the small vendored crates.
+#
+# no_std comes from the command line, matching what the kernel's own Rust rule
+# does (scripts/Makefile.build). Both paths supplying it the same way is the
+# point: mod.rs used to carry a cfg_attr for this, which was then a duplicate
+# on the kbuild path - an unused_attributes error, fatal under CONFIG_WERROR.
+# Neither path can be told apart by a cfg, since both set --cfg kernel, so the
+# attribute belongs to whoever invokes rustc.
 quiet_cmd_bch_vr_mod = VRUSTC M $@
       cmd_bch_vr_mod = RUSTC_BOOTSTRAP=1 OUT_DIR=$(abspath $(obj)/rust) $(RUSTC) \
 	$(bch-vr-tflags) --edition=2021 --cfg kernel \
+	-Zcrate-attr=no_std \
 	-Zcrate-attr='feature($(rust_allowed_features))' \
 	--crate-type rlib --crate-name bcachefs_mod \
 	--extern core=$(VRD)/libcore.rmeta --extern kernel=$(VRD)/libkernel.rmeta \
