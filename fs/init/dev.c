@@ -1360,8 +1360,17 @@ int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
 		return ret;
 	}
 
-	if (ca->mi.state == BCH_MEMBER_STATE_rw)
+	if (ca->mi.state == BCH_MEMBER_STATE_rw) {
 		__bch2_dev_read_write(c, ca);
+
+		/*
+		 * Re-replicate journal written while this device was gone.
+		 * After __bch2_dev_read_write(), or the journal write the flush
+		 * ends with is degraded too; queued because the flush is
+		 * unbounded and we hold state_lock.
+		 */
+		queue_work(c->journal.wq, &c->journal.flush_degraded_work);
+	}
 
 	if (!ca->mi.freespace_initialized) {
 		ret = bch2_dev_freespace_init(c, ca, 0, ca->mi.nbuckets);

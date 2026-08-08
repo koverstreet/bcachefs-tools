@@ -371,6 +371,9 @@ struct journal {
 	struct percpu_rw_semaphore pin_resize_lock;
 	struct work_struct	pin_resize_work;
 
+	/* Flushes under-replicated pins when a device comes back: */
+	struct work_struct	flush_degraded_work;
+
 	u64			last_seq;
 
 	size_t			dirty_entry_bytes;

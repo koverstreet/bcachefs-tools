@@ -398,6 +398,20 @@ static void bch2_journal_pin_fifo_resize_work(struct work_struct *work)
 	bch2_journal_pin_fifo_resize(j);
 }
 
+/*
+ * Queued by bch2_dev_online(): journal written while a device was offline is
+ * under-replicated, and those replicas entries go on refusing to take the
+ * devices that stayed online offline until the pins are flushed.
+ *
+ * Errors are journal errors, reported at the source - nothing to do here.
+ */
+static void bch2_journal_flush_degraded_work(struct work_struct *work)
+{
+	struct journal *j = container_of(work, struct journal, flush_degraded_work);
+
+	bch2_journal_flush_device_pins(j, -1);
+}
+
 /* startup/shutdown: */
 
 static bool bch2_journal_writing_to_device(struct journal *j, unsigned dev_idx)
@@ -727,6 +741,7 @@ void bch2_fs_journal_exit(struct journal *j)
 
 	kvfree(j->free_buf);
 	cancel_work_sync(&j->pin_resize_work);
+	cancel_work_sync(&j->flush_degraded_work);
 	free_fifo(&j->pin);
 	percpu_free_rwsem(&j->pin_resize_lock);
 }
@@ -740,6 +755,7 @@ void bch2_fs_journal_init_early(struct journal *j)
 	spin_lock_init(&j->err_lock);
 	INIT_DELAYED_WORK(&j->write_work, bch2_journal_write_work);
 	INIT_WORK(&j->pin_resize_work, bch2_journal_pin_fifo_resize_work);
+	INIT_WORK(&j->flush_degraded_work, bch2_journal_flush_degraded_work);
 	init_waitqueue_head(&j->reclaim_wait);
 	init_waitqueue_head(&j->pin_flush_wait);
 	mutex_init(&j->reclaim_lock);

@@ -466,6 +466,18 @@ int bch2_replicas_entry_get(struct bch_fs *c, struct bch_replicas_entry_v1 *r)
 		: bch2_mark_replicas_slowpath(c, r, 1);
 }
 
+/*
+ * Mount-time reconciliation, not a runtime GC - at runtime the last
+ * bch2_replicas_entry_put_many() kills the entry and writes the superblock.
+ *
+ * We read the superblock's replicas set before knowing what the journal holds;
+ * journal_read() then refs every entry it finds. What's left at zero is
+ * journal the superblock claims and the disk doesn't have - written while
+ * other devices were offline, since reclaimed - and it would go on refusing
+ * operations (bch2_can_read_replicas_with_devs()) forever.
+ *
+ * Journal-only: nothing else is refcounted, see bch2_replicas_gc_accounted().
+ */
 int bch2_replicas_gc_reffed(struct bch_fs *c)
 {
 	bool write_sb = false;
