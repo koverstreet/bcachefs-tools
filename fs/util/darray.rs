@@ -1,5 +1,6 @@
+// Only DarrayVec uses these, and it is std-only.
+#[cfg(feature = "std")]
 use core::marker::PhantomData;
-
 #[cfg(feature = "std")]
 use std::mem::ManuallyDrop;
 

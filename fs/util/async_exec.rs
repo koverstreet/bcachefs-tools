@@ -71,7 +71,10 @@ impl<F: Future<Output = ()> + Send + 'static> Task<F> {
     /// Re-run this task on its workqueue (the waker calls this).
     fn wake(self: Arc<Self>) {
         let queue = self.queue;
-        queue.enqueue(self);
+        // Err means the work item is already enqueued, i.e. a poll is already
+        // pending - which is exactly what we wanted. Dropping it is correct;
+        // propagating it would turn "already scheduled" into a failure.
+        let _ = queue.enqueue(self);
     }
 }
 
@@ -145,7 +148,9 @@ pub fn spawn<F: Future<Output = ()> + Send + 'static>(
         }),
         GFP_KERNEL,
     )?;
-    queue.enqueue(task);
+    // Err means already enqueued, and this Task was constructed a line ago -
+    // its work_struct cannot be on a queue yet, so there is no Err to see.
+    let _ = queue.enqueue(task);
     Ok(())
 }
 
