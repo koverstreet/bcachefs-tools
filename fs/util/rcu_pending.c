@@ -180,7 +180,7 @@ static void merge_expired_lists(struct rcu_pending_pcpu *p)
 static inline void kfree_bulk(size_t nr, void ** p)
 {
 	while (nr--)
-		kfree(*p);
+		kfree(*p++);
 }
 #endif
 
