@@ -1,5 +1,40 @@
 # Changelog
 
+## v1.39.1 - Sun Aug 9 2026
+
+Bugfix release on top of v1.39.0. No on-disk format changes.
+
+### Features
+
+- check_lrus() should now be faster, pinning the btree that we'll be doing
+  random access to
+
+- The journal is re-replicated when a device comes back.
+
+### Bugfixes
+
+- bindgen was botching ioctl macro parsing for some users (clang version
+  dependent?), leading to tools failing with ioctl errors; the ioctls numbers
+
+- Multiple Rust/DKMS fixes: the Rust availability check reads the version out of
+  the kernel's own `libcore.rmeta` instead of `CONFIG_RUSTC_VERSION`, which only
+  records whichever rustc was present when the kernel was configured. That
+  mismatch failed builds that would have linked fine. Ubuntu HWE header meta
+  packages are accepted. are now exposed as constants from C shims.
+
+- Various fixes for 32bit machines
+
+- `subvolume snapshot`: snapshots are writable by default, and `--rw` now says
+  so rather than implying otherwise.
+
+- An oops in reconcile after an erasure coding allocation failure, reported by
+  KruslLee, and crashes on 32-bit.
+
+- fsck: several more small subvolume/snapshots repair fixes
+
+- Long SRCU holds across btree node reads no longer warn; on a loaded system
+  doing long btree scans this filled the log.
+
 ## v1.39.0 - Mon Aug 3 2026
 
 Feature release on top of v1.38.8, with an on-disk format change:
