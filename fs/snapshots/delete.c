@@ -17,7 +17,27 @@
 
 #include "util/enumerated_ref.h"
 
+#include <linux/moduleparam.h>
 #include <linux/random.h>
+
+/*
+ * Stop the key sweep after the extents/dirents/xattrs/damage pass and before
+ * the inodes are deleted, so a test can construct the state an interrupted
+ * deletion actually leaves: content gone for the dying snapshots, the inodes
+ * that indexed it still there, nodes still live.
+ *
+ * That boundary and not another one: the inodes btree is the index the sweep
+ * scans through, so it is the last point at which anything the sweep missed
+ * is still findable.
+ */
+static bool __maybe_unused bch2_snapshot_delete_bail_before_inodes;
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+module_param_named(snapshot_delete_bail_before_inodes,
+		   bch2_snapshot_delete_bail_before_inodes, bool, 0644);
+MODULE_PARM_DESC(snapshot_delete_bail_before_inodes,
+		 "Cancel snapshot deletion before the inode keys are deleted");
+#endif
 
 /*
  * Snapshot trees:
@@ -1125,6 +1145,11 @@ static int delete_dead_snapshot_keys_v2(struct btree_trans *trans)
 			ret = 0;
 
 		return ret ?: bch_err_throw(c, EINVAL_snapshot_delete_with_data);
+	}
+
+	if (unlikely(bch2_snapshot_delete_bail_before_inodes)) {
+		bch_notice(c, "%s: cancelling before inode deletion (module param)", __func__);
+		return bch_err_throw(c, snapshot_delete_cancelled);
 	}
 
 	/* Then the inodes */

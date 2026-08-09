@@ -600,6 +600,7 @@
 	x(EINTR,			cancelled)				\
 	x(BCH_ERR_cancelled,		recovery_cancelled)			\
 	x(BCH_ERR_cancelled,		kthread_cancelled)			\
+	x(BCH_ERR_cancelled,		snapshot_delete_cancelled)		\
 	x(0,				shutdown_with_errors)			\
 	x(BCH_ERR_shutdown_with_errors,	shutdown_with_errors_fixed)		\
 	x(BCH_ERR_shutdown_with_errors,	shutdown_with_errors_unfixed)		\
