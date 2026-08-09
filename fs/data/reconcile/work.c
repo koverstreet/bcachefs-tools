@@ -664,7 +664,11 @@ int bch2_extent_reconcile_pending_mod(struct btree_trans *trans, struct btree_it
 {
 	struct bch_fs *c = trans->c;
 
-	if ((rb_work_id(bch2_bkey_reconcile_opts(c, k)) == RECONCILE_WORK_pending) == set)
+	const struct bch_extent_reconcile *r = bch2_bkey_reconcile_opts(c, k);
+	if (!r || !r->need_rb) /* no work to do? */
+		return 0;
+
+	if ((rb_work_id(r) == RECONCILE_WORK_pending) == set)
 		return 0;
 
 	try(bch2_trans_relock(trans));
