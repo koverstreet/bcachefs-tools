@@ -2,6 +2,7 @@ mod commands;
 mod copy_fs;
 mod device_multipath;
 mod device_scan;
+mod fs_context;
 mod key;
 mod dump_stack;
 mod logging;

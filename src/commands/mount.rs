@@ -1,12 +1,12 @@
 use std::{
-    ffi::{CString, OsString},
+    ffi::{CStr, CString, OsString},
     io::{stdout, IsTerminal},
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
     ptr, str,
 };
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use bcachefs_kernel::c::bch_sb_handle;
 use bcachefs_kernel::path_to_cstr;
 use clap::Parser;
@@ -14,11 +14,143 @@ use log::{debug, error, info};
 use crate::device_scan;
 
 use crate::{
+    fs_context::{self, FsContext, Level, Message},
     key::{KeyHandle, Keyring, Passphrase, UnlockPolicy},
     logging,
 };
 
+/// What came of an attempt on the fs_context path.
+enum Mounted {
+    /// Mounted.
+    Yes,
+    /// The kernel has no fsopen(2); the caller should use mount(2).
+    NoNewApi,
+    /// The device is write-protected and a read-write mount wasn't explicitly
+    /// asked for. mount(8) retries these read-only rather than failing.
+    WriteProtected,
+}
+
+/// Show warnings and notices; return the error-level messages so the caller can
+/// fold them into its error, where they'll be reported exactly once.
+fn report_log(msgs: Vec<Message>) -> Vec<String> {
+    let mut errors = Vec::new();
+
+    for m in msgs {
+        match m.level {
+            Level::Error   => errors.push(m.text),
+            Level::Warning => eprintln!("mount: warning: {}", m.text),
+            Level::Notice  => info!("{}", m.text),
+        }
+    }
+
+    errors
+}
+
+/// Mount via the fs_context API, so that whatever bcachefs has to say about a
+/// failure reaches the user instead of being flattened to an errno.
+fn mount_fs_context(
+    src: &str,
+    target: &CStr,
+    fstype: &str,
+    mountflags: libc::c_ulong,
+    data: Option<&str>,
+) -> anyhow::Result<Mounted> {
+    let Some(fc) = FsContext::open(fstype).with_context(|| format!("fsopen({fstype})"))? else {
+        debug!("no fs_context mount API, falling back to mount(2)");
+        return Ok(Mounted::NoNewApi);
+    };
+
+    // The kernel's account of a failure is the entire reason for being here, so
+    // it becomes the error rather than being printed alongside one.
+    let fail = |fc: &FsContext, what: String, err: std::io::Error| -> anyhow::Error {
+        match report_log(fc.drain_log()) {
+            e if e.is_empty() => anyhow::anyhow!("{what}: {err}"),
+            errors            => anyhow::anyhow!("{what}: {}", errors.join("; ")),
+        }
+    };
+
+    fc.set("source", Some(src))
+        .map_err(|e| fail(&fc, format!("source {src}"), e))?;
+
+    for name in fs_context::sb_flag_params(mountflags) {
+        fc.set(name, None)
+            .map_err(|e| fail(&fc, format!("option {name}"), e))?;
+    }
+
+    // One at a time, so a rejected option is named in the error.
+    for opt in data.unwrap_or("").split(',').filter(|o| !o.is_empty()) {
+        let (key, value) = match opt.split_once('=') {
+            Some((k, v)) => (k, Some(v)),
+            None         => (opt, None),
+        };
+
+        fc.set(key, value)
+            .map_err(|e| fail(&fc, format!("option {opt}"), e))?;
+    }
+
+    info!("creating superblock");
+    if let Err(e) = fc.create() {
+        // Write-protected device: retry read-only, as mount(8) does. Say nothing
+        // yet - the retry produces the real outcome, and this context's log dies
+        // with it.
+        if matches!(e.raw_os_error(), Some(libc::EACCES | libc::EROFS))
+            && mountflags & libc::MS_RDONLY == 0
+        {
+            return Ok(Mounted::WriteProtected);
+        }
+
+        return Err(fail(&fc, "mount".to_string(), e));
+    }
+
+    // A mount can succeed and still have things to say - degraded, recovery
+    // notes - so drain the log here too.
+    report_log(fc.drain_log());
+
+    let mnt = fc
+        .fsmount(fs_context::mount_attrs(mountflags))
+        .map_err(|e| fail(&fc, "fsmount".to_string(), e))?;
+
+    fs_context::move_mount(&mnt, target)
+        .with_context(|| format!("attaching to {}", target.to_string_lossy()))?;
+
+    Ok(Mounted::Yes)
+}
+
 fn mount_inner(
+    src: OsString,
+    target: &std::path::Path,
+    fstype: &str,
+    mountflags: libc::c_ulong,
+    data: Option<String>,
+) -> anyhow::Result<()> {
+    // Reconfiguring an existing mount is fspick(2) + FSCONFIG_CMD_RECONFIGURE,
+    // which fs_context doesn't implement; leave remount on mount(2).
+    //
+    // A device path that isn't UTF-8 also goes the old way rather than being
+    // lossily mangled into one: mount(2) takes arbitrary bytes.
+    if mountflags & libc::MS_REMOUNT == 0 {
+        if let Some(src_str) = src.to_str() {
+            let c_target = path_to_cstr(target);
+            let mut flags = mountflags;
+
+            loop {
+                info!("mounting filesystem");
+                match mount_fs_context(src_str, &c_target, fstype, flags, data.as_deref())? {
+                    Mounted::Yes      => return Ok(()),
+                    Mounted::NoNewApi => break,
+                    Mounted::WriteProtected => {
+                        println!("mount: device write-protected, mounting read-only");
+                        flags |= libc::MS_RDONLY;
+                    }
+                }
+            }
+        }
+    }
+
+    mount_legacy(src, target, fstype, mountflags, data)
+}
+
+fn mount_legacy(
     src: OsString,
     target: &std::path::Path,
     fstype: &str,
@@ -117,7 +249,7 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOp
     for opt in options.as_ref().split(',') {
         match opt {
             "dirsync"     => flag!(libc::MS_DIRSYNC, fuser::MountOption::DirSync),
-            "lazytime"    => flag!(1 << 25), // MS_LAZYTIME
+            "lazytime"    => flag!(fs_context::MS_LAZYTIME),
             "mand"        => flag!(libc::MS_MANDLOCK),
             "noatime"     => flag!(libc::MS_NOATIME, fuser::MountOption::NoAtime),
             "nodev"       => flag!(libc::MS_NODEV, fuser::MountOption::NoDev),
