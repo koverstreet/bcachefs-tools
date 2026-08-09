@@ -90,6 +90,8 @@ void rust_set_bit(unsigned long nr, unsigned long *addr);
  * the flag later to go fully async.
  * Returns 0 on successful submit, or -errno from disk reservation.
  */
+
+struct bch_write_op;
 int rust_write_submit(struct bch_fs *c,
 		      struct bch_write_op *op,
 		      struct bio_vec *bvecs, unsigned nr_bvecs,
