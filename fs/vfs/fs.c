@@ -2839,8 +2839,15 @@ out:
 err:
 	darray_exit(&devs_to_fs);
 	darray_exit_free_item(&devs, kfree);
+	/*
+	 * Last chance to name the error: bch2_err_class() below flattens it to
+	 * a POSIX errno. errorfc() rather than pr_err() because logfc() falls
+	 * back to printk when there's no fs_context log, so a mount(2) caller
+	 * still gets this in dmesg, and an fsconfig(2) one gets it on the
+	 * terminal.
+	 */
 	if (ret)
-		pr_err("error: %s", bch2_err_str(ret));
+		errorfc(fc, "%s", bch2_err_str(ret));
 	/*
 	 * On an inconsistency error in recovery we might see an -EROFS derived
 	 * errorcode (from the journal), but we don't want to return that to
@@ -2902,8 +2909,15 @@ static int bch2_fs_parse_param(struct fs_context *fc,
 					   &opts->parse_later, param->key,
 					   param->string,
 					   &err);
+	/*
+	 * @err only describes a bad value; the refusals bch2_parse_one_mount_opt()
+	 * returns directly (not a mount option, quota without
+	 * CONFIG_BCACHEFS_QUOTA) leave it empty, which is why this used to print
+	 * a bare "Error parsing option ".
+	 */
 	if (ret)
-		pr_err("Error parsing option %s", err.buf);
+		errorfc(fc, "option %s: %s", param->key,
+			err.pos ? err.buf : bch2_err_str(ret));
 
 	return bch2_err_class(ret);
 }
@@ -2931,7 +2945,10 @@ static int bch2_fs_reconfigure(struct fs_context *fc)
 		} else {
 			ret = bch2_fs_read_write(c);
 			if (ret) {
-				bch_err(c, "error going rw: %i", ret);
+				/* bch_err() says which filesystem, errorfc() reaches
+				 * the caller; the throw below discards the errcode. */
+				bch_err(c, "error going read-write: %s", bch2_err_str(ret));
+				errorfc(fc, "error going read-write: %s", bch2_err_str(ret));
 				return bch_err_throw(c, EINVAL_reconfigure_read_write);
 			}
 
