@@ -2933,6 +2933,23 @@ static int bch2_fs_reconfigure(struct fs_context *fc)
 
 	bch2_reconcile_wakeup(c);
 
+	/*
+	 * If we went read-only without being asked to, we hit an error and went
+	 * emergency read-only, and there's no coming back from that in this
+	 * mount.
+	 *
+	 * Test what was asked for - fc->sb_flags - and not c->opts.read_only:
+	 * emergency ro stops the filesystem without rewriting the mount option,
+	 * so c->opts.read_only still says read-write and the comparison below
+	 * finds nothing to do, reporting success while leaving the filesystem
+	 * read-only.
+	 */
+	if (!(fc->sb_flags & SB_RDONLY) &&
+	    test_bit(BCH_FS_emergency_ro, &c->flags)) {
+		errorfc(fc, "cannot go read-write: filesystem is in emergency read-only");
+		return bch_err_throw(c, emergency_ro);
+	}
+
 	if (opts->opts.read_only != c->opts.read_only) {
 		guard(rwsem_write)(&c->state_lock);
 
