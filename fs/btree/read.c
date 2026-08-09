@@ -1099,6 +1099,16 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 			     bio_sectors(bio));
 		bio_set_dev(bio, ca->disk_sb.bdev);
 
+		/*
+		 * Callers drop btree locks before reading a node but not srcu
+		 * (bch2_trans_unlock(), not unlock_long()), so the read happens
+		 * under the srcu read lock and submit_bio() can block for an
+		 * unbounded time on a congested device. Flag it so
+		 * bch2_trans_unlock_long() doesn't report legitimate IO as a
+		 * stuck codepath; cleared on the next relock/trans_begin().
+		 */
+		trans->srcu_io_submitted = true;
+
 		if (sync) {
 			submit_bio_wait(bio);
 			bch2_latency_acct(ca, rb->start_time, READ);
