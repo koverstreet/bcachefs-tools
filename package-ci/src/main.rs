@@ -190,6 +190,10 @@ impl JobStatus {
     }
 }
 
+/// How many builds the status page shows. The build tree keeps everything;
+/// the page is for what's happening now. See `recent_builds()`.
+const BUILDS_ON_PAGE: usize = 25;
+
 /// One build: what to check out, and what we are building it *as*.
 ///
 /// `id` is the key for everything — the directory under `builds/`, every status
@@ -349,15 +353,52 @@ impl BuildState {
         Ok(true)
     }
 
+    /// Keep only the jobs belonging to the `n` most recently active builds.
+    ///
+    /// `discover()` walks every build ever run — 387 of them on 2026-08-09 —
+    /// and `render()` orders sections most-urgent-first, with recency only a
+    /// tiebreaker *within* equal urgency. So any section containing a failed
+    /// job outranks every clean section permanently, and months of old failures
+    /// sit on top forever: while v1.39.1 was building, the newest build the
+    /// page showed was 149 hours old.
+    ///
+    /// That ordering is right for a page whose sections are concurrent work
+    /// items, and wrong for one whose sections are builds over time. Rather
+    /// than fight it, stop feeding it history: the build tree is the archive,
+    /// the status page is for what's happening now.
+    fn recent_builds(jobs: Vec<ci_dashboard::Job>, n: usize) -> Vec<ci_dashboard::Job> {
+        // Section column is the first one — "{commit}/{job}", so the build id.
+        let build_of = |j: &ci_dashboard::Job| -> String {
+            j.columns.first().map(|(_, v)| v.clone()).unwrap_or_default()
+        };
+
+        let mut newest: std::collections::HashMap<String, std::time::SystemTime> =
+            std::collections::HashMap::new();
+        for j in &jobs {
+            if let Some(t) = j.since {
+                newest.entry(build_of(j))
+                    .and_modify(|e| if t > *e { *e = t })
+                    .or_insert(t);
+            }
+        }
+
+        let mut ids: Vec<(String, std::time::SystemTime)> = newest.into_iter().collect();
+        ids.sort_by(|a, b| b.1.cmp(&a.1));
+        let keep: std::collections::HashSet<String> =
+            ids.into_iter().take(n).map(|(id, _)| id).collect();
+
+        jobs.into_iter().filter(|j| keep.contains(&build_of(j))).collect()
+    }
+
     /// Render the static status page in-process via the shared ci-dashboard
     /// crate (was scripts/generate-status-html.sh). The build tree is the
-    /// filesystem-as-state contract: builds/<commit>/<job>/ each with a `status`
+    /// filesystem-as-state contract: builds/<id>/<job>/ each with a `status`
     /// file and a `log`. Best-effort — a failed render must not break a build.
     fn regenerate_html(&self) {
         let root = self.state_dir.join("builds");
         let tmpl = ci_dashboard::Template::parse("{commit}/{job}");
         let cols: Vec<String> = tmpl.column_names().iter().map(|s| s.to_string()).collect();
-        let jobs = tmpl.discover(&root, &[]);
+        let jobs = Self::recent_builds(tmpl.discover(&root, &[]), BUILDS_ON_PAGE);
         let opts = ci_dashboard::RenderOpts {
             title: "bcachefs-tools CI".into(),
             refresh_secs: 30,
@@ -1000,6 +1041,55 @@ mod tests {
     #[test]
     fn short_respects_character_boundaries() {
         assert_eq!(short("ααααααααααααα"), "αααααααααααα");
+    }
+
+    fn job(build: &str, name: &str, secs_ago: u64) -> ci_dashboard::Job {
+        ci_dashboard::Job {
+            columns:  vec![("commit".into(), build.into()), ("job".into(), name.into())],
+            rel_dir:  PathBuf::from(build).join(name),
+            status:   "done".into(),
+            since:    Some(std::time::SystemTime::UNIX_EPOCH
+                           + Duration::from_secs(1_000_000 - secs_ago)),
+            extra:    vec![],
+            has_log:  false,
+            log_tail: None,
+        }
+    }
+
+    /// The page showed a 149-hour-old build as the newest, because render()
+    /// floats any section with a failure above every clean one and we fed it
+    /// 387 builds of history. Keep the newest N; drop the rest.
+    #[test]
+    fn recent_builds_keeps_the_newest_and_drops_the_rest() {
+        let mut jobs = Vec::new();
+        for i in 0..30u64 {
+            // build 0 is newest, build 29 oldest
+            jobs.push(job(&format!("build{i:02}"), "source", i * 3600));
+            jobs.push(job(&format!("build{i:02}"), "publish", i * 3600));
+        }
+
+        let kept = BuildState::recent_builds(jobs, 5);
+        let ids: std::collections::HashSet<String> = kept
+            .iter()
+            .map(|j| j.columns[0].1.clone())
+            .collect();
+
+        assert_eq!(ids.len(), 5, "kept {} builds, want 5", ids.len());
+        for i in 0..5 {
+            assert!(ids.contains(&format!("build{i:02}")), "dropped a recent build");
+        }
+        assert!(!ids.contains("build05"), "kept one too many");
+        assert!(!ids.contains("build29"), "kept the oldest build");
+        // every job of a kept build survives, not just the one that was newest
+        assert_eq!(kept.len(), 10, "kept {} jobs, want 2 per build", kept.len());
+    }
+
+    /// Asking for more than exist must not panic or drop anything.
+    #[test]
+    fn recent_builds_handles_fewer_builds_than_the_limit() {
+        let jobs = vec![job("only", "source", 0)];
+        assert_eq!(BuildState::recent_builds(jobs, 25).len(), 1);
+        assert_eq!(BuildState::recent_builds(vec![], 25).len(), 0);
     }
 
     #[test]
