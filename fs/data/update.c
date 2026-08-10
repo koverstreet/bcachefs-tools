@@ -1244,14 +1244,22 @@ int bch2_can_do_data_update(struct btree_trans *trans,
 	 * reads when EC will inevitably fail (not enough devices, etc.)
 	 */
 	if (data_opts->write_flags & BCH_WRITE_must_ec) {
-		struct alloc_request req = {
-			.target		= data_opts->target,
-			.ec_replicas	= opts->data_replicas + data_opts->extra_replicas,
-			.watermark	= BCH_WATERMARK_normal,
-		};
+		struct alloc_request *req __free(alloc_request_put) =
+			errptr_try(alloc_request_get(trans, data_opts->target, false, NULL,
+						     0,
+						     opts->data_replicas + data_opts->extra_replicas,
+						     BCH_WATERMARK_normal, 0, NULL));
+		/*
+		 * alloc_request_get() allocates without zeroing, so anything it
+		 * doesn't assign is the caller's to set. bch2_ec_stripe_head_get()
+		 * reads ec_max_data_blocks to size the stripe; the write path sets
+		 * it from c->opts (data/write.c), this probe has always run
+		 * uncapped.
+		 */
+		req->ec_max_data_blocks	= 0;
 
 		struct ec_stripe_head *h =
-			bch2_ec_stripe_head_get(trans, &req, 0);
+			bch2_ec_stripe_head_get(trans, req, 0);
 		if (IS_ERR_OR_NULL(h))
 			return bch_err_throw(c, ec_alloc_failed);
 		bch2_ec_stripe_head_put(c, h);
