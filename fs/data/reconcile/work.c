@@ -1659,9 +1659,13 @@ static int do_reconcile_phase_iter(struct reconcile_pass *p, u32 kick,
 		if (bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc)) {
 			bch2_trans_unlock_long(trans);
 			bch2_copygc_wakeup(c);
-			wait_event(c->copygc.running_wq,
+			wait_event_timeout(c->copygc.running_wq,
 				   c->copygc.run_count != *p->copygc_run_count ||
-				   kthread_should_stop());
+				   kthread_should_stop() ||
+				   test_bit(BCH_FS_going_ro, &c->flags) ||
+				   !bch2_reconcile_enabled(c) ||
+				   kick != r->kick,
+				   HZ);
 			*p->copygc_run_count = c->copygc.run_count;
 			ret = 0;
 			continue;
