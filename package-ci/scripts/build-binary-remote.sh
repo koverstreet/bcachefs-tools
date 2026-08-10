@@ -17,6 +17,18 @@ RUST_VERSION="$7"
 
 REMOTE_WORK="/tmp/bcachefs-ci/${COMMIT}/${DISTRO}-${ARCH}"
 
+# We rm -rf this over ssh, so prove it's the path we think it is first. set -u
+# rejects *missing* arguments; an empty one would collapse the path a level and
+# still look plausible. Ask the question directly rather than by glob - a
+# pattern like /tmp/bcachefs-ci/*/*-* accepts the empty case, because `*`
+# matches the empty string.
+for v in COMMIT DISTRO ARCH; do
+    if [ -z "${!v}" ]; then
+        echo "refusing to build: $v is empty (remote work dir would be '$REMOTE_WORK')" >&2
+        exit 1
+    fi
+done
+
 SSH_OPTS=(
     -o BatchMode=yes
     -o ConnectTimeout=30
@@ -47,8 +59,22 @@ scp_from_remote_dir() {
 
 echo "=== Remote build: $DISTRO $ARCH on $HOST ==="
 
-# Set up remote work directory
-ssh_remote "mkdir -p $REMOTE_WORK/source $REMOTE_WORK/result"
+# Set up the remote work directory, from scratch.
+#
+# The rm is load-bearing, not hygiene. The scripts now ship from the nix store,
+# where they are mode r-xr-xr-x, and scp preserves that mode on the copy. A
+# second attempt into a surviving directory therefore dies with
+#
+#   scp: dest open ".../build-binary.sh": Permission denied
+#
+# because it cannot overwrite the read-only copy the first attempt left behind.
+# That breaks every retry of a remote build - after an orchestrator restart, a
+# build timeout, or any transient error - and it only became reachable when
+# deployment moved to a nix closure; a git checkout left these writable.
+#
+# Starting clean is right regardless: a build that inherits artifacts from a
+# previous attempt is a build whose output nobody can account for.
+ssh_remote "rm -rf $REMOTE_WORK && mkdir -p $REMOTE_WORK/source $REMOTE_WORK/result"
 
 # Ship source artifacts
 scp_to_remote "$REMOTE_WORK/source/" "$SOURCE_DIR"/*
