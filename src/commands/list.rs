@@ -1,7 +1,6 @@
 use std::ops::ControlFlow;
 
 use anyhow::{bail, Result};
-use bcachefs_kernel::{btree_id, c, pos};
 use bcachefs_kernel::btree::bkey::BkeySC;
 use bcachefs_kernel::btree::iter::BtreeIter;
 use bcachefs_kernel::btree::iter::BtreeIterFlags;
@@ -9,18 +8,19 @@ use bcachefs_kernel::btree::iter::BtreeNodeIter;
 use bcachefs_kernel::btree::iter::BtreeTrans;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
+use bcachefs_kernel::{btree_id, c, pos};
 use bch_bindgen::c::bch_degraded_actions;
 use clap::Parser;
 use std::io::{stdout, IsTerminal};
 
-use crate::logging;
 use crate::device_scan::OpenedFs;
+use crate::logging;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    let (btree, start, end) = opt.list_range();
+    let (btree, start, end) = opt.list_range()?;
 
     let mut flags = BtreeIterFlags::PREFETCH;
 
@@ -28,13 +28,7 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
         flags |= BtreeIterFlags::ALL_SNAPSHOTS;
     }
 
-    let mut iter = BtreeIter::new_level(
-        &trans,
-        btree,
-        start,
-        opt.level,
-        flags,
-    );
+    let mut iter = BtreeIter::new_level(&trans, btree, start, opt.level, flags);
 
     iter.for_each(&trans, |k| {
         if k.k.p > end {
@@ -56,17 +50,10 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    let (btree, start, end) = opt.list_range();
+    let (btree, start, end) = opt.list_range()?;
 
     for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
-        let mut iter = BtreeNodeIter::new(
-            &trans,
-            btree,
-            start,
-            0,
-            level,
-            BtreeIterFlags::PREFETCH,
-        );
+        let mut iter = BtreeNodeIter::new(&trans, btree, start, 0, level, BtreeIterFlags::PREFETCH);
 
         iter.for_each(&trans, |b| {
             if b.key.k.p > end {
@@ -83,17 +70,10 @@ fn list_btree_formats(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    let (btree, start, end) = opt.list_range();
+    let (btree, start, end) = opt.list_range()?;
 
     for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
-        let mut iter = BtreeNodeIter::new(
-            &trans,
-            btree,
-            start,
-            0,
-            level,
-            BtreeIterFlags::PREFETCH,
-        );
+        let mut iter = BtreeNodeIter::new(&trans, btree, start, 0, level, BtreeIterFlags::PREFETCH);
 
         iter.for_each(&trans, |b| {
             if b.key.k.p > end {
@@ -110,17 +90,10 @@ fn list_btree_nodes(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
 fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = BtreeTrans::new(fs);
-    let (btree, start, end) = opt.list_range();
+    let (btree, start, end) = opt.list_range()?;
 
     for level in opt.level..(c::BTREE_MAX_DEPTH as u32) {
-        let mut iter = BtreeNodeIter::new(
-            &trans,
-            btree,
-            start,
-            0,
-            level,
-            BtreeIterFlags::PREFETCH,
-        );
+        let mut iter = BtreeNodeIter::new(&trans, btree, start, 0, level, BtreeIterFlags::PREFETCH);
 
         iter.for_each(&trans, |b| {
             if b.key.k.p > end {
@@ -142,7 +115,7 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 /// tables, member names, disk groups) comes from the superblock. Output
 /// is identical to the offline path by construction.
 fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
-    let (btree, start, end) = opt.list_range();
+    let (btree, start, end) = opt.list_range()?;
     let mut flags = OnlineIterFlags::default();
     if start.snapshot == 0 {
         flags = flags | OnlineIterFlags::ALL_SNAPSHOTS;
@@ -150,7 +123,10 @@ fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Resu
 
     let mut iter = OnlineBtreeIter::new(handle, btree, opt.level, start, end, flags);
 
-    while let Some(k) = iter.next().map_err(|e| anyhow::anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {}", e))? {
+    while let Some(k) = iter
+        .next()
+        .map_err(|e| anyhow::anyhow!("BCH_IOCTL_QUERY_BTREE_KEYS: {}", e))?
+    {
         if k.k.p > end {
             break;
         }
@@ -172,7 +148,9 @@ fn list_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()
         bail!("only 'keys' mode is supported on a mounted filesystem");
     }
     if opt.fsck {
-        bail!("--fsck requires the filesystem to be unmounted; use 'bcachefs fsck' for online fsck");
+        bail!(
+            "--fsck requires the filesystem to be unmounted; use 'bcachefs fsck' for online fsck"
+        );
     }
 
     list_keys_online(handle, fs, opt)
@@ -230,6 +208,14 @@ pub struct Cli {
     #[arg(long)]
     inode: Option<u64>,
 
+    /// First bpos offset to list with --inode
+    #[arg(long, requires = "inode", default_value_t = 0)]
+    inode_start_offset: u64,
+
+    /// Last bpos offset to list with --inode
+    #[arg(long, requires = "inode", default_value_t = u64::MAX)]
+    inode_end_offset: u64,
+
     /// Check (fsck) the filesystem first
     #[arg(short, long)]
     fsck: bool,
@@ -248,23 +234,40 @@ pub struct Cli {
 }
 
 impl Cli {
-    fn list_range(&self) -> (c::btree_id, c::bpos, c::bpos) {
+    fn list_range(&self) -> Result<(c::btree_id, c::bpos, c::bpos)> {
         if let Some(inode) = self.inode {
-            (btree_id::extents, pos(inode, 0), pos(inode, u64::MAX))
+            if self.inode_start_offset > self.inode_end_offset {
+                bail!(
+                    "--inode-start-offset ({}) must be <= --inode-end-offset ({})",
+                    self.inode_start_offset,
+                    self.inode_end_offset
+                );
+            }
+
+            Ok((
+                btree_id::extents,
+                pos(inode, self.inode_start_offset),
+                pos(inode, self.inode_end_offset),
+            ))
         } else {
-            (self.btree, self.start, self.end)
+            Ok((self.btree, self.start, self.end))
         }
     }
 }
 
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
+    let _ = opt.list_range()?;
     let mut fs_opts = c::bch_opts::default();
 
     opt_set!(fs_opts, noexcl, 1);
     opt_set!(fs_opts, nochanges, 1);
     opt_set!(fs_opts, read_only, 1);
     opt_set!(fs_opts, norecovery, 1);
-    opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
+    opt_set!(
+        fs_opts,
+        degraded,
+        bch_degraded_actions::BCH_DEGRADED_very as u8
+    );
     opt_set!(
         fs_opts,
         errors,
@@ -272,11 +275,7 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
     );
 
     if opt.fsck {
-        opt_set!(
-            fs_opts,
-            fix_errors,
-            c::fsck_err_opts::FSCK_FIX_yes as u8
-        );
+        opt_set!(fs_opts, fix_errors, c::fsck_err_opts::FSCK_FIX_yes as u8);
         opt_set!(fs_opts, norecovery, 0);
     }
 
@@ -295,13 +294,18 @@ fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
             // mount point or UUID, which aren't openable as devices.
             log::info!("filesystem is mounted, listing via the kernel");
 
-            let devs = handle.member_devices()
+            let devs = handle
+                .member_devices()
                 .map_err(|e| anyhow::anyhow!("getting member devices from sysfs: {}", e))?;
 
             opt_set!(fs_opts, nostart, 1);
-            let fs = crate::device_scan::open_scan(&devs, fs_opts)
-                .map_err(|e| anyhow::anyhow!(
-                    "opening {:?} (noexcl/nostart, for formatting keys): {}", devs, e))?;
+            let fs = crate::device_scan::open_scan(&devs, fs_opts).map_err(|e| {
+                anyhow::anyhow!(
+                    "opening {:?} (noexcl/nostart, for formatting keys): {}",
+                    devs,
+                    e
+                )
+            })?;
 
             list_online(&handle, &fs, opt)
         }
@@ -322,3 +326,50 @@ fn list(opt: Cli) -> Result<()> {
 }
 
 pub const CMD: super::CmdDef = typed_cmd!("list", "List filesystem metadata", Cli, list);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn base_cli() -> Cli {
+        Cli {
+            mode: Mode::Keys,
+            btree: btree_id::extents,
+            bkey_type: None,
+            level: 0,
+            start: pos(0, 0),
+            end: pos(u64::MAX, u64::MAX),
+            inode: None,
+            inode_start_offset: 0,
+            inode_end_offset: u64::MAX,
+            fsck: false,
+            colorize: false,
+            verbose: 0,
+            devices: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn inode_range_uses_inode_relative_offsets() {
+        let mut cli = base_cli();
+        cli.inode = Some(123);
+        cli.inode_start_offset = 10;
+        cli.inode_end_offset = 20;
+
+        let (btree, start, end) = cli.list_range().unwrap();
+
+        assert_eq!(btree, btree_id::extents);
+        assert_eq!(start, pos(123, 10));
+        assert_eq!(end, pos(123, 20));
+    }
+
+    #[test]
+    fn inode_range_rejects_reversed_offsets() {
+        let mut cli = base_cli();
+        cli.inode = Some(123);
+        cli.inode_start_offset = 20;
+        cli.inode_end_offset = 10;
+
+        assert!(cli.list_range().is_err());
+    }
+}
