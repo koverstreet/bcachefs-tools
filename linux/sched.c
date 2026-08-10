@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <string.h>
 #include <sys/mman.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 #include <linux/futex.h>
 
 /* hack for mips: */
@@ -109,6 +111,7 @@ static void sched_init(void)
 	memset(p, 0, sizeof(*p));
 
 	p->state	= TASK_RUNNING;
+	p->pid		= syscall(SYS_gettid);
 	atomic_set(&p->usage, 1);
 	init_completion(&p->exited);
 
