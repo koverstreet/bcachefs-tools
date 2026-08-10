@@ -612,6 +612,146 @@ struct bp_walk {
 	u64	sector_end;
 };
 
+/*
+ * Copygc can always retry the bucket from the outer loop. Bound identical
+ * transaction restarts in one physical walk before yielding back there.
+ */
+#define COPYGC_PHYS_STALLED_RESTARTS_MAX	256
+
+struct copygc_phys_restart_guard {
+	struct bpos	bp_pos;
+	u64		check_mismatch_done;
+	u64		sectors_seen;
+	unsigned	stalled_restarts;
+};
+
+struct move_data_phys_walk {
+	struct moving_context	*ctxt;
+	struct move_bucket	*bucket_in_flight;
+	struct btree_iter	*bp_iter;
+	struct bch_dev		*ca;
+	struct wb_maybe_flush	*last_flushed;
+	struct bpos		bp_end;
+	unsigned		data_types;
+	bool			copygc;
+	move_pred_fn		pred;
+	void			*arg;
+	u64			check_mismatch_done;
+};
+
+static u64 copygc_phys_sectors_seen(struct move_data_phys_walk *walk)
+{
+	return walk->ctxt->stats
+		? atomic64_read(&walk->ctxt->stats->sectors_seen)
+		: 0;
+}
+
+static bool copygc_phys_should_yield(struct move_data_phys_walk *walk,
+				     struct copygc_phys_restart_guard *guard)
+{
+	u64 sectors_seen = copygc_phys_sectors_seen(walk);
+
+	if (!bkey_eq(guard->bp_pos, walk->bp_iter->pos) ||
+	    guard->check_mismatch_done != walk->check_mismatch_done ||
+	    guard->sectors_seen != sectors_seen) {
+		guard->bp_pos = walk->bp_iter->pos;
+		guard->check_mismatch_done = walk->check_mismatch_done;
+		guard->sectors_seen = sectors_seen;
+		guard->stalled_restarts = 0;
+		return false;
+	}
+
+	return ++guard->stalled_restarts >= COPYGC_PHYS_STALLED_RESTARTS_MAX;
+}
+
+static int bch2_move_data_phys_step(struct move_data_phys_walk *walk, bool *done)
+{
+	struct moving_context *ctxt = walk->ctxt;
+	struct btree_trans *trans = ctxt->trans;
+	struct bch_fs *c = trans->c;
+	struct bkey_s_c k;
+	int ret;
+
+	*done = false;
+
+	k = bch2_btree_iter_peek(walk->bp_iter);
+	ret = bkey_err(k);
+	if (ret)
+		return ret;
+
+	if (!k.k || bkey_gt(k.k->p, walk->bp_end)) {
+		*done = true;
+		return 0;
+	}
+
+	if (walk->ca &&
+	    walk->check_mismatch_done < bp_pos_to_bucket(walk->ca, k.k->p).offset) {
+		while (walk->check_mismatch_done < bp_pos_to_bucket(walk->ca, k.k->p).offset)
+			bch2_check_bucket_backpointer_mismatch(trans, walk->ca, walk->check_mismatch_done++,
+							       walk->copygc, walk->last_flushed);
+		return 0;
+	}
+
+	if (k.k->type != KEY_TYPE_backpointer) {
+		bch2_btree_iter_advance(walk->bp_iter);
+		return 0;
+	}
+
+	struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(k);
+
+	if (ctxt->stats)
+		ctxt->stats->offset = bp.k->p.offset >> c->sb.extent_bp_shift;
+
+	/*
+	 * Resolve every backpointer we walk, including ones we're not
+	 * moving: resolution is what repairs a dangling backpointer
+	 * (backpointer_to_missing_ptr, autofix), and the per-bucket
+	 * accounting check (bch2_check_bucket_backpointer_mismatch,
+	 * above) can only detect missing backpointers reliably if
+	 * dangling ones have been deleted first - a skipped dangling
+	 * backpointer keeps contributing its data_type/gen/len to the
+	 * sums, hiding the mismatch forever. Copygc then livelocks:
+	 * is_movable keeps approving the bucket, evacuation skips all
+	 * its backpointers and moves nothing, repeat.
+	 */
+	CLASS(btree_iter_uninit, iter)(trans);
+	k = bch2_backpointer_get_key(trans, bp, &iter, 0, walk->last_flushed);
+	ret = bkey_err(k);
+	if (ret)
+		return ret;
+	if (!k.k) {
+		bch2_btree_iter_advance(walk->bp_iter);
+		return 0;
+	}
+
+	/* Not moving these; resolving them above still verified them: */
+	if (!(walk->data_types & BIT(bp.v->data_type)) ||
+	    (!bp.v->level && bp.v->btree_id == BTREE_ID_stripes)) {
+		bch2_btree_iter_advance(walk->bp_iter);
+		return 0;
+	}
+
+	u32 bucket_len = bp.v->bucket_len;
+
+	ret = bch2_move_extent_pred(ctxt, walk->bucket_in_flight, NULL,
+				    walk->pred, walk->arg,
+				    &iter, bp.v->level, k);
+	if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+		return ret;
+	if (ctxt->stats)
+		atomic64_add(bucket_len, &ctxt->stats->sectors_seen);
+	if (bch2_err_matches(ret, BCH_ERR_data_update_fail))
+		ret = 0; /* failure for this extent, keep going */
+	if (bch2_err_matches(ret, EAGAIN) ||
+	    bch2_err_matches(ret, EROFS) ||
+	    bch2_err_matches(ret, EIO) ||
+	    bch2_err_matches(ret, BCH_ERR_device_offline))
+		return ret;
+	WARN_ONCE(ret, "unhandled error from move_extent: %s", bch2_err_str(ret));
+	bch2_btree_iter_advance(walk->bp_iter);
+	return 0;
+}
+
 static int __bch2_move_data_phys(struct moving_context *ctxt,
 			struct move_bucket *bucket_in_flight,
 			const struct bp_walk *w,
@@ -621,7 +761,6 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 {
 	struct btree_trans *trans = ctxt->trans;
 	struct bch_fs *c = trans->c;
-	struct bkey_s_c k;
 	int ret = 0;
 
 	enum btree_id bp_btree;
@@ -659,12 +798,32 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
+	bool walk_complete = true;
+
 	/*
 	 * We're not run in a context that handles transaction restarts:
 	 */
 	bch2_trans_begin(trans);
 
 	CLASS(btree_iter, bp_iter)(trans, bp_btree, bp_start, 0);
+	struct move_data_phys_walk walk = {
+		.ctxt			= ctxt,
+		.bucket_in_flight	= bucket_in_flight,
+		.bp_iter		= &bp_iter,
+		.ca			= ca,
+		.last_flushed		= &last_flushed,
+		.bp_end			= bp_end,
+		.data_types		= data_types,
+		.copygc			= copygc,
+		.pred			= pred,
+		.arg			= arg,
+		.check_mismatch_done	= check_mismatch_done,
+	};
+	struct copygc_phys_restart_guard copygc_restart = {
+		.bp_pos			= bp_iter.pos,
+		.check_mismatch_done	= walk.check_mismatch_done,
+		.sectors_seen		= copygc_phys_sectors_seen(&walk),
+	};
 
 	ret = bch2_btree_write_buffer_tryflush(trans);
 	if (!bch2_err_matches(ret, EROFS))
@@ -675,82 +834,20 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 	while (!(ret = bch2_move_ratelimit(ctxt))) {
 		bch2_trans_begin(trans);
 
-		k = bch2_btree_iter_peek(&bp_iter);
-		ret = bkey_err(k);
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-			continue;
-		if (ret)
-			break;
-
-		if (!k.k || bkey_gt(k.k->p, bp_end))
-			break;
-
-		if (ca &&
-		    check_mismatch_done < bp_pos_to_bucket(ca, k.k->p).offset) {
-			while (check_mismatch_done < bp_pos_to_bucket(ca, k.k->p).offset)
-				bch2_check_bucket_backpointer_mismatch(trans, ca, check_mismatch_done++,
-								       copygc, &last_flushed);
+		bool done;
+		ret = bch2_move_data_phys_step(&walk, &done);
+		if (!bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+			if (ret || done)
+				break;
 			continue;
 		}
 
-		if (k.k->type != KEY_TYPE_backpointer) {
-			bch2_btree_iter_advance(&bp_iter);
-			continue;
-		}
-
-		struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(k);
-
-		if (ctxt->stats)
-			ctxt->stats->offset = bp.k->p.offset >> c->sb.extent_bp_shift;
-
-		/*
-		 * Resolve every backpointer we walk, including ones we're not
-		 * moving: resolution is what repairs a dangling backpointer
-		 * (backpointer_to_missing_ptr, autofix), and the per-bucket
-		 * accounting check (bch2_check_bucket_backpointer_mismatch,
-		 * above) can only detect missing backpointers reliably if
-		 * dangling ones have been deleted first - a skipped dangling
-		 * backpointer keeps contributing its data_type/gen/len to the
-		 * sums, hiding the mismatch forever. Copygc then livelocks:
-		 * is_movable keeps approving the bucket, evacuation skips all
-		 * its backpointers and moves nothing, repeat.
-		 */
-		CLASS(btree_iter_uninit, iter)(trans);
-		k = bch2_backpointer_get_key(trans, bp, &iter, 0, &last_flushed);
-		ret = bkey_err(k);
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-			continue;
-		if (ret)
+		if (copygc &&
+		    copygc_phys_should_yield(&walk, &copygc_restart)) {
+			walk_complete = false;
+			ret = 0;
 			break;
-		if (!k.k) {
-			bch2_btree_iter_advance(&bp_iter);
-			continue;
 		}
-
-		/* Not moving these; resolving them above still verified them: */
-		if (!(data_types & BIT(bp.v->data_type)) ||
-		    (!bp.v->level && bp.v->btree_id == BTREE_ID_stripes)) {
-			bch2_btree_iter_advance(&bp_iter);
-			continue;
-		}
-
-		u32 bucket_len = bp.v->bucket_len;
-
-		ret = bch2_move_extent_pred(ctxt, bucket_in_flight, NULL, pred, arg, &iter, bp.v->level, k);
-
-		if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
-			continue;
-		if (ctxt->stats)
-			atomic64_add(bucket_len, &ctxt->stats->sectors_seen);
-		if (bch2_err_matches(ret, BCH_ERR_data_update_fail))
-			ret = 0; /* failure for this extent, keep going */
-		if (bch2_err_matches(ret, EAGAIN) ||
-		    bch2_err_matches(ret, EROFS) ||
-		    bch2_err_matches(ret, EIO) ||
-		    bch2_err_matches(ret, BCH_ERR_device_offline))
-			break;
-		WARN_ONCE(ret, "unhandled error from move_extent: %s", bch2_err_str(ret));
-		bch2_btree_iter_advance(&bp_iter);
 	}
 
 	/*
@@ -760,9 +857,9 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 	 * them is then both wrong and slow, and this loop is slow enough to be
 	 * the thing a user waits on after hitting ctrl-C.
 	 */
-	while (!ret && ca &&
-	       check_mismatch_done < sector_to_bucket(ca, sector_end))
-		bch2_check_bucket_backpointer_mismatch(trans, ca, check_mismatch_done++,
+	while (!ret && walk_complete && ca &&
+	       walk.check_mismatch_done < sector_to_bucket(ca, sector_end))
+		bch2_check_bucket_backpointer_mismatch(trans, ca, walk.check_mismatch_done++,
 						       copygc, &last_flushed);
 
 	bch_err_fn(c, ret);
