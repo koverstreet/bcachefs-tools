@@ -1516,6 +1516,16 @@ __cold void __bch2_journal_debug_to_text(struct printbuf *out, struct journal *j
 		break;
 	}
 
+	/*
+	 * Every journal write completion takes buf_lock as its first act, so a
+	 * long holder shows up here as unwritten entries parked in
+	 * journal_write_done() and, once the 4-slot ring is full,
+	 * journal_max_open.
+	 */
+	prt_printf(out, "buf_lock:\t");
+	bch2_mutex_noio_to_text(out, &j->buf_lock);
+	prt_newline(out);
+
 	prt_printf(out, "unwritten entries:\n");
 	bch2_journal_bufs_to_text(out, j);
 

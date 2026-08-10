@@ -8,8 +8,10 @@
  */
 
 #include <linux/cleanup.h>
+#include <linux/jiffies.h>
 #include <linux/mutex.h>
 #include <linux/percpu-rwsem.h>
+#include <linux/sched.h>
 #include <linux/sched/mm.h>
 
 /*
@@ -28,20 +30,60 @@
  * raw lock/unlock pair would have nowhere to stash them; scoped use also
  * guarantees the LIFO nesting that memalloc_flags_save/restore require. Use
  * guard(mutex_noio)(&m) or scoped_guard(mutex_noio, &m).
+ *
+ * Owner tracking: a mutex_noio is by construction taken across allocating work,
+ * which makes these the locks that go long precisely when the machine is short
+ * on memory - and the ones a stall report can't name a holder for. Recording
+ * the acquire site, the holder and when it was taken costs three stores, and
+ * turns "everything is waiting, on what?" into a line the log already carries.
+ * See bch2_mutex_noio_to_text().
+ *
+ * held_from doubles as the held flag, since an acquire site is never address 0,
+ * and is published last and cleared first so a reader that tests it before
+ * reading the rest mostly sees a coherent set. A pid can't serve that purpose:
+ * 0 is a value it legitimately takes.
+ *
+ * Best effort, and diagnostics only: read without the lock, so a dump racing an
+ * unlock can name a holder that has just left. Nothing decides on these fields.
  */
 struct mutex_noio {
 	struct mutex	lock;
+	unsigned long	held_from;
+	unsigned long	held_at;
+	pid_t		held_by;
 };
 
 static inline void mutex_noio_init(struct mutex_noio *m)
 {
 	mutex_init(&m->lock);
+	m->held_from	= 0;
+	m->held_at	= 0;
+	m->held_by	= 0;
+}
+
+static inline void __mutex_noio_set_owner(struct mutex_noio *m, unsigned long ip)
+{
+	WRITE_ONCE(m->held_at,		jiffies);
+	WRITE_ONCE(m->held_by,		current->pid);
+	smp_store_release(&m->held_from, ip);
+}
+
+static inline void __mutex_noio_clear_owner(struct mutex_noio *m)
+{
+	WRITE_ONCE(m->held_from, 0);
 }
 
 DEFINE_LOCK_GUARD_1(mutex_noio, struct mutex_noio,
-		    _T->flags = memalloc_flags_save(PF_MEMALLOC_NOIO); mutex_lock(&_T->lock->lock),
-		    mutex_unlock(&_T->lock->lock); memalloc_flags_restore(_T->flags),
+		    _T->flags = memalloc_flags_save(PF_MEMALLOC_NOIO);
+		    mutex_lock(&_T->lock->lock);
+		    __mutex_noio_set_owner(_T->lock, _THIS_IP_),
+		    __mutex_noio_clear_owner(_T->lock);
+		    mutex_unlock(&_T->lock->lock);
+		    memalloc_flags_restore(_T->flags),
 		    unsigned int flags)
+
+struct printbuf;
+void bch2_mutex_noio_to_text(struct printbuf *, struct mutex_noio *);
 
 /*
  * percpu_rwsem_noio - a percpu_rwsem that establishes a PF_MEMALLOC_NOIO scope
