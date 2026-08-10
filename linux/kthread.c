@@ -1,6 +1,8 @@
 #include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/syscall.h>
+#include <unistd.h>
 
 #include <linux/bitops.h>
 #include <linux/kthread.h>
@@ -24,6 +26,7 @@ static void *kthread_start_fn(void *data)
 	bch_percpu_thread_init();
 
 	current = data;
+	current->pid = syscall(SYS_gettid);	/* only knowable from in here */
 	schedule();
 	current->thread_fn(current->thread_data);
 
