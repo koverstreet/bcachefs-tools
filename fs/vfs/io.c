@@ -56,17 +56,22 @@ static void nocow_flush_endio(struct bio *_bio)
 	bio_put(&bio->bio);
 }
 
-void bch2_inode_flush_nocow_writes_async(struct bch_fs *c,
-					 struct bch_inode_info *inode,
-					 struct closure *cl)
+static void bch2_inode_flush_nocow_writes_async(struct bch_fs *c,
+						struct bch_inode_info *inode,
+						struct closure *cl)
 {
-	unsigned dev = find_first_bit(inode->ei_devs_need_flush.d, BCH_SB_MEMBERS_MAX);
-	if (dev == BCH_SB_MEMBERS_MAX)
-		return;
+	/*
+	 * Fetch-and-clear must be atomic: bch2_write_endio() sets bits here
+	 * from bio completion, with no serialization against us. A plain
+	 * copy + memset can erase a bit set in between - fsync would then
+	 * complete without flushing a device that had a completed write.
+	 * Bits set after the exchange belong to the next flush.
+	 */
+	struct bch_devs_mask devs = {};
+	for (unsigned i = 0; i < ARRAY_SIZE(devs.d); i++)
+		devs.d[i] = xchg(&inode->ei_devs_need_flush.d[i], 0);
 
-	struct bch_devs_mask devs = inode->ei_devs_need_flush;
-	memset(&inode->ei_devs_need_flush, 0, sizeof(inode->ei_devs_need_flush));
-
+	unsigned dev;
 	for_each_set_bit(dev, devs.d, BCH_SB_MEMBERS_MAX) {
 		struct bch_dev *ca;
 

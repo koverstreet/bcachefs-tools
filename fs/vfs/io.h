@@ -159,9 +159,6 @@ static inline bool bch2_fdm_dropped_locks(struct bch_fs *c)
 	return fdm_dropped_locks(&c->fdm_table);
 }
 
-void bch2_inode_flush_nocow_writes_async(struct bch_fs *,
-			struct bch_inode_info *, struct closure *);
-
 int __must_check bch2_write_inode_size(struct bch_fs *,
 				       struct bch_inode_info *,
 				       loff_t, unsigned);
