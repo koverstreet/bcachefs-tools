@@ -65,6 +65,46 @@ if [ ! -d "$SRC_DIR" ]; then
     exit 1
 fi
 
+# Last line of defence before users: a snapshot version must never enter the
+# release suite.
+#
+# build-source.sh only emits '~' on its snapshot branch - a tagged build uses
+# the tag verbatim - so '~' in a release publish means the source package was
+# built before this commit was known to be a release, and the version is wrong
+# no matter how correct the artifacts are. Worse, '~' sorts *below* nothing in
+# Debian, so 1.39.0~2026... is lower than 1.39.0: the release publishes, looks
+# successful, and is never offered to anyone already on the previous version.
+#
+# That is exactly what happened on 2026-08-09. The tag ref landed 9 seconds
+# after the version was stamped; the build was correct as a snapshot and got
+# reclassified 42 minutes later at publish time. Nobody found out for a day.
+#
+# Refuse loudly instead. The fix is to rebuild the source package now that the
+# tag exists - the binaries are all derived from it, so there is nothing here
+# worth salvaging.
+if [ "$SUITE" = "release" ]; then
+    SRC_VERSION=$(find "$SRC_DIR" -maxdepth 1 -name '*.dsc' -print -quit)
+    SRC_VERSION=$(sed -n 's/^Version: //p' "$SRC_VERSION" 2>/dev/null)
+    case "$SRC_VERSION" in
+        *'~'*)
+            echo "ERROR: refusing to publish a snapshot version to the release suite" >&2
+            echo "  version: $SRC_VERSION" >&2
+            echo "  commit:  $COMMIT" >&2
+            echo "" >&2
+            echo "  '~' sorts below nothing in Debian, so this would publish" >&2
+            echo "  successfully and never be offered as an upgrade." >&2
+            echo "  The source package predates the tag: rebuild it." >&2
+            exit 1
+            ;;
+        "")
+            echo "ERROR: could not read a version from any .dsc in $SRC_DIR" >&2
+            echo "  refusing to publish to the release suite without checking it" >&2
+            exit 1
+            ;;
+    esac
+    echo "--- release version check: $SRC_VERSION ---"
+fi
+
 sign_debs() {
     local dir="$1"
     find "$dir" -maxdepth 1 \( -name "*.deb" -o -name "*.ddeb" \) | while read -r deb; do
