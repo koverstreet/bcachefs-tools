@@ -59,8 +59,13 @@
             };
           };
 
-          # No tests in-tree; the orchestrator is exercised by running it.
-          doCheck = false;
+          # There are tests now, and they guard things that are cheap to get
+          # wrong and expensive to discover in production - `short()` panicking
+          # on a tag-shaped build id, for one. Run them here: cargo can't be
+          # invoked directly in this tree, because the repo-root .cargo/config
+          # vendors crates for the main tools build and cargo picks up ancestor
+          # config. So the nix build is the only place they'd ever run.
+          doCheck = true;
 
           meta.mainProgram = "bcachefs-package-ci";
         };

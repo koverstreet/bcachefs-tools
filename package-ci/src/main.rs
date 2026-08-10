@@ -6,10 +6,15 @@
 ///
 /// State is filesystem-based under $STATE_DIR:
 ///   desired              — target commit hash (written by post-receive hook)
-///   builds/$commit/
+///   desired-release      — commit a v* tag was just pushed at (same hook)
+///   builds/$id/
 ///     source/status      — source package build state
 ///     source/log         — build log
 ///     $distro-$arch/     — per-job state + log + artifacts
+///
+/// `$id` is a build id, not necessarily a commit: a snapshot build is keyed by
+/// its commit, a release build by its tag. They are separate builds because
+/// they produce different artifacts — see `Build`.
 ///
 /// The reconcile pattern: no queue. We know what we want (latest commit
 /// with packages for every distro×arch) and what we have (filesystem state).
@@ -185,7 +190,65 @@ impl JobStatus {
     }
 }
 
-/// Filesystem-backed state for one commit's builds
+/// One build: what to check out, and what we are building it *as*.
+///
+/// `id` is the key for everything — the directory under `builds/`, every status
+/// lookup, the log paths, the remote scratch dir, the label on ci.html.
+/// `commit` is only what gets checked out.
+///
+/// A tag and the commit it points at are **separate builds**, deliberately.
+/// They produce genuinely different artifacts: different version strings, bound
+/// for different suites. The version is baked into the source package that all
+/// twelve binary builds descend from, so nothing can relabel them afterwards.
+///
+/// Modelling them as one build carrying a mutable "is this a release?" flag is
+/// what shipped v1.39.1 into the release suite with a snapshot version. The
+/// flag was derived twice from ambient git state, 42 minutes apart — at build
+/// start (deciding the version) and at publish start (deciding the suite) — and
+/// the tag ref landed 9 seconds after the first one looked. Both derivations
+/// were individually correct. They simply disagreed, and by then the version
+/// was already baked into artifacts nothing could relabel.
+///
+/// Two builds, each with its identity fixed at creation, removes the question
+/// instead of policing the answer. It also means a tagged commit reaches both
+/// channels: a commit publishes to exactly one suite, so tagging used to starve
+/// the snapshot channel of that commit entirely.
+#[derive(Clone, Debug)]
+struct Build {
+    id:     String,
+    commit: String,
+    /// Set for a release build; the version comes from it verbatim.
+    tag:    Option<String>,
+}
+
+impl Build {
+    fn snapshot(commit: String) -> Self {
+        Self { id: commit.clone(), commit, tag: None }
+    }
+
+    fn release(tag: String, commit: String) -> Self {
+        Self { id: tag.clone(), commit, tag: Some(tag) }
+    }
+
+    fn is_release(&self) -> bool {
+        self.tag.is_some()
+    }
+
+    /// Short label for logs. Deliberately not `&id[..12]`: a tag id is usually
+    /// shorter than that, and slicing a str past its end panics.
+    fn short(&self) -> &str {
+        short(&self.id)
+    }
+}
+
+fn short(id: &str) -> &str {
+    match id.char_indices().nth(12) {
+        Some((i, _)) => &id[..i],
+        None => id,
+    }
+}
+
+/// Filesystem-backed state, keyed by build id (see `Build`)
 struct BuildState {
     state_dir: PathBuf,
     /// Web root where ci.html is written. Defaults next to state_dir (the bash
@@ -432,15 +495,49 @@ impl Orchestrator {
     /// before any snapshot, so a master push can't preempt it (that's how
     /// v1.38.6 got stranded). Once the release publishes, fall through to the
     /// latest master commit.
-    fn pick_commit(&self) -> Result<Option<String>> {
-        if let Some(rel) = self.state.desired_release()? {
-            if !self.is_build_finished(&rel) {
-                return Ok(Some(rel));
+    fn pick_build(&self) -> Result<Option<Build>> {
+        if let Some(commit) = self.state.desired_release()? {
+            // Resolve the tag once, here, and carry it. Unlike deriving
+            // release-ness from a commit — which depends on *when* you ask —
+            // this lookup cannot race: post-receive only writes desired-release
+            // in response to a tag push, and refs are updated before the hook
+            // runs, so the tag is already in the repo by definition.
+            match self.tag_for(&commit) {
+                Some(tag) => {
+                    let build = Build::release(tag, commit);
+                    if !self.is_build_finished(&build.id) {
+                        return Ok(Some(build));
+                    }
+                    // Released (or unbuildable) — stop pinning it.
+                    self.state.clear_desired_release()?;
+                }
+                None => {
+                    // Don't quietly build it as a snapshot: that is precisely
+                    // the failure this design exists to prevent. Leave it
+                    // queued and visible.
+                    error!("[{}] queued as a release but no tag points at it; \
+                            not building it as a snapshot. Check the tag reached {}",
+                           short(&commit), self.config.git_repo.display());
+                }
             }
-            // Release published (or can't build) — stop pinning it.
-            self.state.clear_desired_release()?;
         }
-        self.state.desired_commit()
+        Ok(self.state.desired_commit()?.map(Build::snapshot))
+    }
+
+    /// The tag naming this commit, if any. Only used when we already know a tag
+    /// push queued it — never to *decide* whether something is a release.
+    fn tag_for(&self, commit: &str) -> Option<String> {
+        let out = Command::new("git")
+            .args(["describe", "--exact-match", "--tags", commit])
+            .env("GIT_DIR", &self.config.git_repo)
+            .stderr(Stdio::null())
+            .output()
+            .ok()?;
+        if !out.status.success() {
+            return None;
+        }
+        let tag = String::from_utf8(out.stdout).ok()?.trim().to_string();
+        if tag.is_empty() { None } else { Some(tag) }
     }
 
     /// A build is finished once it can make no further progress: its source
@@ -460,19 +557,24 @@ impl Orchestrator {
         // Reap finished children first
         self.reap_children()?;
 
-        let commit = match self.pick_commit()? {
-            Some(c) => c,
+        let build = match self.pick_build()? {
+            Some(b) => b,
             None => return Ok(()),
         };
+        let commit = build.id.clone();
 
-        // Log when desired commit changes
+        // Log when the desired build changes
         if self.last_desired.as_deref() != Some(&commit) {
-            info!("[{}] new desired commit", &commit[..12]);
+            if build.is_release() {
+                info!("[{}] new release build for {}", build.short(), short(&build.commit));
+            } else {
+                info!("[{}] new desired commit", build.short());
+            }
             self.last_desired = Some(commit.clone());
         }
 
         let matrix = build_matrix();
-        self.materialize_commit_jobs(&commit, &matrix)?;
+        self.materialize_jobs(&commit, &matrix)?;
 
         // Phase 1: source package
         let source_status = self.effective_status(&commit, "source");
@@ -487,8 +589,8 @@ impl Orchestrator {
                 return Ok(());
             }
             JobStatus::Pending => {
-                info!("[{}] starting source package build", &commit[..12]);
-                self.spawn_source_build(&commit)?;
+                info!("[{}] starting source package build", build.short());
+                self.spawn_source_build(&build)?;
                 return Ok(());
             }
         }
@@ -511,7 +613,7 @@ impl Orchestrator {
                 JobStatus::Pending => {
                     still_running = true;
                     if self.have_build_slot(job) {
-                        info!("[{}] starting binary build: {}", &commit[..12], name);
+                        info!("[{}] starting binary build: {}", build.short(), name);
                         self.spawn_binary_build(&commit, job)?;
                     }
                 }
@@ -524,18 +626,18 @@ impl Orchestrator {
             let pub_status = self.effective_status(&commit, "publish");
             if pub_status == JobStatus::Pending {
                 if any_failed {
-                    info!("[{}] some builds failed, publishing successful ones", &commit[..12]);
+                    info!("[{}] some builds failed, publishing successful ones", build.short());
                 } else {
-                    info!("[{}] all builds complete, publishing", &commit[..12]);
+                    info!("[{}] all builds complete, publishing", build.short());
                 }
-                self.spawn_publish(&commit)?;
+                self.spawn_publish(&build)?;
             }
         }
 
         Ok(())
     }
 
-    fn materialize_commit_jobs(&self, commit: &str, matrix: &[Job]) -> Result<()> {
+    fn materialize_jobs(&self, commit: &str, matrix: &[Job]) -> Result<()> {
         let mut changed = false;
 
         changed |= self.state.ensure_status(commit, "source", JobStatus::Pending)?;
@@ -562,7 +664,7 @@ impl Orchestrator {
                 // Stale "building" from a crashed orchestrator run.
                 // Reset to failed so it can be retried on next push.
                 warn!("[{}] {} marked building but process dead, marking failed",
-                      &commit[..12], job_name);
+                      short(commit), job_name);
                 let _ = self.state.write_status(commit, job_name, JobStatus::Failed);
                 return JobStatus::Failed;
             }
@@ -578,7 +680,7 @@ impl Orchestrator {
             if self.running[i].started_at.elapsed() > self.config.build_timeout {
                 let job = self.running.remove(i);
                 error!("[{}] {} timed out after {:?}, killing",
-                       &job.commit[..12], job.job_name,
+                       short(&job.commit), job.job_name,
                        job.started_at.elapsed());
                 let mut child = job.child;
                 let _ = child.kill();
@@ -598,9 +700,9 @@ impl Orchestrator {
                     };
                     if status == JobStatus::Failed {
                         let tail = Self::log_tail(&self.state.job_dir(&job.commit, &job.job_name));
-                        warn!("[{}] {} failed: {}", &job.commit[..12], job.job_name, tail);
+                        warn!("[{}] {} failed: {}", short(&job.commit), job.job_name, tail);
                     } else {
-                        info!("[{}] {} finished: {:?}", &job.commit[..12], job.job_name, status);
+                        info!("[{}] {} finished: {:?}", short(&job.commit), job.job_name, status);
                     }
                     self.state.write_status(&job.commit, &job.job_name, status)?;
                     let _ = fs::remove_file(self.state.pid_path(&job.commit, &job.job_name));
@@ -649,26 +751,34 @@ impl Orchestrator {
         }
     }
 
-    fn spawn_source_build(&mut self, commit: &str) -> Result<()> {
-        self.state.write_status(commit, "source", JobStatus::Building)?;
-        let log_file = fs::File::create(self.state.log_path(commit, "source"))
+    fn spawn_source_build(&mut self, build: &Build) -> Result<()> {
+        let id = &build.id;
+        self.state.write_status(id, "source", JobStatus::Building)?;
+        let log_file = fs::File::create(self.state.log_path(id, "source"))
             .context("creating source build log")?;
 
+        // The tag is an *input*, passed explicitly. build-source.sh no longer
+        // asks git whether this is a release — that question, asked at build
+        // time, is what produced a snapshot version for v1.39.1. An empty
+        // argument means snapshot, and it means it definitively.
+        let tag = build.tag.clone().unwrap_or_default();
+
         let child = Command::new(&self.config.scripts_dir.join("build-source.sh"))
-            .arg(commit)
+            .arg(&build.commit)
             .arg(&self.config.git_repo)
-            .arg(self.state.result_dir(commit, "source"))
+            .arg(self.state.result_dir(id, "source"))
             .arg(&self.config.rust_version)
+            .arg(&tag)
             .stdout(Stdio::from(log_file.try_clone()?))
             .stderr(Stdio::from(log_file))
             .spawn()
             .context("spawning source build")?;
 
-        self.write_pid(commit, "source", &child)?;
+        self.write_pid(id, "source", &child)?;
         self.running.push(RunningJob {
             child,
             job_name: "source".into(),
-            commit: commit.into(),
+            commit: id.clone(),
             remote: false,
             started_at: Instant::now(),
         });
@@ -724,26 +834,21 @@ impl Orchestrator {
         Ok(())
     }
 
-    fn spawn_publish(&mut self, commit: &str) -> Result<()> {
-        self.state.write_status(commit, "publish", JobStatus::Building)?;
-        let log_file = fs::File::create(self.state.log_path(commit, "publish"))
+    fn spawn_publish(&mut self, build: &Build) -> Result<()> {
+        let id = &build.id;
+        self.state.write_status(id, "publish", JobStatus::Building)?;
+        let log_file = fs::File::create(self.state.log_path(id, "publish"))
             .context("creating publish log")?;
 
-        // Check if this commit has a release tag — publish to "release" suite if so
-        let is_release = Command::new("git")
-            .args(["describe", "--exact-match", "--tags", commit])
-            .env("GIT_DIR", &self.config.git_repo)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
-
-        let suite = if is_release { "release" } else { "snapshot" };
-        info!("[{}] publishing to {} suite", &commit[..12], suite);
+        // The suite comes from the build's own identity, fixed when it was
+        // created. There is deliberately no `git describe` here: asking git a
+        // second time, 40-odd minutes after the version was stamped, is exactly
+        // how v1.39.1's snapshot-versioned artifacts reached the release suite.
+        let suite = if build.is_release() { "release" } else { "snapshot" };
+        info!("[{}] publishing to {} suite", build.short(), suite);
 
         let child = Command::new(&self.config.scripts_dir.join("publish.sh"))
-            .arg(commit)
+            .arg(id)
             .arg(suite)
             .env("STATE_DIR", &self.config.state_dir)
             .stdout(Stdio::from(log_file.try_clone()?))
@@ -751,11 +856,11 @@ impl Orchestrator {
             .spawn()
             .context("spawning publish")?;
 
-        self.write_pid(commit, "publish", &child)?;
+        self.write_pid(id, "publish", &child)?;
         self.running.push(RunningJob {
             child,
             job_name: "publish".into(),
-            commit: commit.into(),
+            commit: id.clone(),
             remote: false,
             started_at: Instant::now(),
         });
@@ -871,4 +976,43 @@ fn main() -> Result<()> {
     remove_pid_file(&state_dir);
     info!("bcachefs-ci stopped");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The obvious implementation here is `&id[..12]`, and it panics on any id
+    /// shorter than 12 bytes — which every release build has, because its id is
+    /// a tag. Ten call sites used to slice like that; they were only safe while
+    /// every id was a 40-char sha.
+    #[test]
+    fn short_does_not_panic_on_a_tag_id() {
+        assert_eq!(short("v1.39.1"), "v1.39.1");
+        assert_eq!(short("9dc9769fe3d4909cc86eb346514c60eb5d471411"), "9dc9769fe3d4");
+        assert_eq!(short(""), "");
+        assert_eq!(short("123456789012"), "123456789012");
+        assert_eq!(short("1234567890123"), "123456789012");
+    }
+
+    /// Slicing by byte index would also panic mid-character on a multi-byte id.
+    /// Tags are user-supplied strings, so this is reachable, not theoretical.
+    #[test]
+    fn short_respects_character_boundaries() {
+        assert_eq!(short("ααααααααααααα"), "αααααααααααα");
+    }
+
+    #[test]
+    fn a_release_and_its_commit_are_different_builds() {
+        let commit = "9dc9769fe3d4909cc86eb346514c60eb5d471411".to_string();
+        let snap = Build::snapshot(commit.clone());
+        let rel  = Build::release("v1.39.1".into(), commit.clone());
+
+        // Same tree, different builds — so different state dirs, and neither
+        // can be reclassified into the other.
+        assert_ne!(snap.id, rel.id);
+        assert_eq!(snap.commit, rel.commit);
+        assert!(!snap.is_release());
+        assert!(rel.is_release());
+    }
 }

@@ -4,7 +4,20 @@
 # Runs inside a podman container (debian:trixie-slim).
 # Produces: .dsc + .orig.tar.xz + .debian.tar.xz + .changes in $RESULT_DIR
 #
-# Usage: build-source.sh COMMIT GIT_REPO RESULT_DIR RUST_VERSION
+# Usage: build-source.sh COMMIT GIT_REPO RESULT_DIR RUST_VERSION [TAG]
+#
+# TAG is what we are building this commit *as*, and it is an input, not
+# something to be discovered here. Non-empty means a release: the version is
+# the tag verbatim. Empty means a snapshot, definitively.
+#
+# This script used to ask `git describe --exact-match` itself. That question has
+# a different answer depending on when you ask it: on 2026-08-09 the clone at
+# 16:07:46 said "no tag" and the publish step at 16:50:46 said "v1.39.1", nine
+# seconds of push latency apart. The snapshot version was already baked into the
+# source package by then, and all twelve binary builds descend from it, so the
+# release went out as 1:1.39.0~20260809230746 - which sorts *below* 1:1.39.0 and
+# was therefore never offered to anyone. The orchestrator knows the answer
+# authoritatively; it passes it in.
 
 set -euo pipefail
 
@@ -12,6 +25,7 @@ COMMIT="$1"
 GIT_REPO="$2"
 RESULT_DIR="$3"
 RUST_VERSION="$4"
+TAG="${5:-}"
 
 CACHE_DIR="${CACHE_DIR:-/home/aptbcachefsorg/package-ci/cache}"
 CONTAINER="ci-source-$$"
@@ -34,11 +48,11 @@ git clone --tags "$GIT_REPO" "$WORK_DIR/bcachefs-tools"
 cd "$WORK_DIR/bcachefs-tools"
 git checkout "$COMMIT"
 
-# Determine version from git describe / .version, not debian/changelog
-if git describe --tags --exact-match "$COMMIT" 2>/dev/null; then
-    # Tagged release: use the tag directly (strip leading 'v')
-    RAW_VERSION=$(git describe --tags --exact-match "$COMMIT" | sed 's/^v//')
-    NEW_VERSION="$RAW_VERSION"
+# Version comes from what we were told to build this as, never from asking git
+# whether a tag happens to be visible right now. See the header.
+if [ -n "$TAG" ]; then
+    # Release: the tag verbatim, minus the leading 'v'.
+    NEW_VERSION="${TAG#v}"
 else
     # Snapshot: base version from git describe or .version + snapshot suffix
     RAW_VERSION=$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//' || cat .version 2>/dev/null | sed 's/^v//' || echo "0.0.0")
