@@ -1,20 +1,15 @@
 #!/bin/bash
 # One-time setup for the package CI build system on evilpiepirate.org
 #
-# Run as root. Sets up:
-# - Required packages
+# Run as root, once, on a fresh host. Sets up only what a deploy cannot:
+# - Required Debian packages
 # - aptbcachefsorg user configuration for rootless podman
-# - CI directory structure
-# - Post-receive hook
-# - Systemd service
+# - CI directory structure and its persistent state
 #
-# After running this:
-# 1. Build the orchestrator: cd package-ci && cargo build --release
-# 2. Copy binary: cp target/release/bcachefs-package-ci /home/aptbcachefsorg/package-ci/
-# 3. Copy scripts: cp scripts/*.sh /home/aptbcachefsorg/package-ci/scripts/
-# 4. Generate GPG key: sudo -u aptbcachefsorg gpg --full-generate-key
-# 5. Start: systemctl start bcachefs-package-ci
-# 6. Test: git push to trigger a build
+# The binary, the scripts, the post-receive hook and the systemd unit are NOT
+# installed here - they come from the nix closure, together, and activation
+# restarts the daemon. See ../doc/deploy.md. Installing any of them from two
+# places is how they ended up at four different vintages.
 
 set -euo pipefail
 
@@ -50,29 +45,18 @@ CI_DIR="/home/aptbcachefsorg/package-ci"
 mkdir -p "$CI_DIR/scripts" "$CI_DIR/cache/rustup" "$CI_DIR/cache/cargo" "$CI_DIR/cache/apt"
 chown -R aptbcachefsorg:aptbcachefsorg "$CI_DIR"
 
-echo "=== Installing post-receive hook ==="
-HOOK="/var/www/git/bcachefs-tools.git/hooks/post-receive"
-if [ -f "$HOOK" ]; then
-    echo "WARNING: post-receive hook already exists at $HOOK"
-    echo "Please review and install manually"
-else
-    cp "$(dirname "$0")/post-receive" "$HOOK"
-    chmod +x "$HOOK"
-    echo "Installed post-receive hook"
-fi
-
-echo "=== Installing systemd service ==="
-cp "$(dirname "$0")/../bcachefs-package-ci.service" /etc/systemd/system/
-systemctl daemon-reload
-systemctl enable bcachefs-package-ci
+echo "=== Enabling lingering for rootless podman ==="
+# Without this, /run/user/<uid> only exists while a login session does - and
+# the unit points XDG_RUNTIME_DIR at it.
+loginctl enable-linger aptbcachefsorg
 
 echo ""
 echo "=== Setup complete ==="
 echo ""
+echo "The unit, hook, scripts and binary come from the deploy, not from here."
+echo ""
 echo "Next steps:"
-echo "  1. Build:  cd package-ci && cargo build --release"
-echo "  2. Deploy: cp target/release/bcachefs-package-ci /home/aptbcachefsorg/package-ci/"
-echo "  3. Deploy: cp scripts/*.sh /home/aptbcachefsorg/package-ci/scripts/"
-echo "  4. GPG:    sudo -u aptbcachefsorg gpg --full-generate-key"
-echo "  5. Start:  systemctl start bcachefs-package-ci"
-echo "  6. Test:   echo \$(git rev-parse HEAD) > /home/aptbcachefsorg/package-ci/desired"
+echo "  1. GPG:    sudo -u aptbcachefsorg gpg --full-generate-key"
+echo "  2. Config: write $CI_DIR/config (GPG_SIGNING_SUBKEY_FINGERPRINT, APTLY_ROOT)"
+echo "  3. Deploy: cd package-ci && nix run github:serokell/deploy-rs -- .#angband.package-ci"
+echo "  4. Test:   echo \$(git rev-parse HEAD) > $CI_DIR/desired"
