@@ -598,6 +598,21 @@ impl Orchestrator {
         // Reap finished children first
         self.reap_children()?;
 
+        // Re-render every poll, not only when a status changes.
+        //
+        // The page bakes each job's age in at render time and asks the browser
+        // to refresh every 30s, so a client dutifully re-fetches a static file
+        // and re-displays ages frozen at whenever something last changed - "2m"
+        // for hours on an idle weekend. Rendering on a timer makes the page's
+        // freshness a property of this daemon being alive, rather than of
+        // something happening to change, and it also picks up state edited out
+        // of band (a job status reset by hand, say) instead of showing a stale
+        // failure until the next unrelated event.
+        //
+        // Cheap now that the page is bounded to BUILDS_ON_PAGE builds; it was
+        // not when this walked all 387.
+        self.state.regenerate_html();
+
         let build = match self.pick_build()? {
             Some(b) => b,
             None => return Ok(()),
