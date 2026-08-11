@@ -1291,9 +1291,19 @@ int bch2_journal_key_to_wb_slowpath(struct bch_fs *c,
 	unsigned u64s = wb_key_u64s(k);
 	int ret;
 retry:
-	ret = darray_make_room_gfp(&pb->wb->keys, u64s, GFP_KERNEL);
+	/*
+	 * Growing flushing has somewhere to go if it fails - drop
+	 * flushing.lock and retry against inc, below - so don't wait on
+	 * reclaim for it. Taking the failure immediately is what releases
+	 * that lock, and both the journal write path and the flush path nest
+	 * the write buffer locks under j->buf_lock. Growing inc has no
+	 * fallback; that one has to be allowed to wait.
+	 */
+	gfp_t gfp = pb->wb == &wb->flushing ? WB_RESIZE_GFP : GFP_KERNEL;
+
+	ret = darray_make_room_gfp(&pb->wb->keys, u64s, gfp);
 	if (!ret && pb->wb == &wb->flushing)
-		ret = darray_resize(&wb->sorted, wb->flushing.keys.size);
+		ret = darray_resize_gfp(&wb->sorted, wb->flushing.keys.size, gfp);
 
 	if (unlikely(ret)) {
 		if (pb->wb == &wb->flushing) {
