@@ -25,6 +25,14 @@ INSTALL=install
 LN=ln
 .DEFAULT_GOAL=all
 
+# Under -j, recipes write to the same stderr and shred each other's messages
+# mid-line: "install: install: cannot create regular file 'x'cannot create
+# regular file 'x': File exists". The errno ends up on someone else's line or
+# nowhere, which is how a package CI failure in install_dkms became
+# undiagnosable - the log said "cannot create directory" with no reason at all.
+# Errors have to survive a parallel build to be worth anything.
+MAKEFLAGS += --output-sync=line
+
 
 
 ifeq ("$(origin V)", "command line")
