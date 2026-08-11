@@ -107,6 +107,7 @@ static void discard_endio(struct bio *_bio)
 		BUG_ON(!d->refs[bucket.inode]);
 		BUG_ON(!d->ref);
 
+		d->ready++;
 		--d->refs[bucket.inode];
 		if (!--d->ref)
 			closure_wake_up(&d->wait);
@@ -228,6 +229,7 @@ static u64 next_to_complete(struct bch_fs_discards *d, size_t *iter)
 		if (i->complete && !i->marking_free) {
 			*iter = i - d->in_flight.data;
 			i->marking_free = true;
+			--d->ready;
 			return i->dev_bucket;
 		}
 
@@ -507,7 +509,7 @@ static void bch2_do_discards(struct bch_fs *c)
 			 * so we retry the bucket after draining.
 			 */
 			if (ret2 == -BCH_ERR_max_discards_in_flight ||
-			    (!ret2 && READ_ONCE(d->in_flight.nr) > READ_ONCE(d->ref))) {
+			    READ_ONCE(d->ready)) {
 				if (!ret2)
 					bch2_btree_iter_advance(&iter);
 				ret2 = bch2_discards_complete(trans, s, false, false) ?:

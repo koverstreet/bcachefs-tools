@@ -236,8 +236,9 @@ struct bch_fs_discards {
 	struct work_struct		work;
 	struct bio_set			bioset;
 
-	DARRAY(discard_in_flight)	in_flight;
 	spinlock_t			lock;
+	DARRAY(discard_in_flight)	in_flight;
+	u32				ready;
 	u32				ref;
 	u8				refs[BCH_SB_MEMBERS_MAX];
 	struct closure_waitlist		wait;
