@@ -1533,6 +1533,14 @@ static int delete_dead_interior_snapshots(struct bch_fs *c)
 					BCH_RECOVERY_PASS_check_snapshots, 0));
 		}
 
+		/*
+		 * This is also what makes the non-atomic depth rewrite below
+		 * safe to retry: check_snapshots re-derives every depth from
+		 * the parent chain. If we crashed partway through that rewrite,
+		 * the surviving children carry decremented depths while their
+		 * parent pointers are still untouched - so this restores them,
+		 * and the decrement lands exactly once per run.
+		 */
 		try(bch2_check_snapshots_trans(trans));
 
 		/*
@@ -1561,7 +1569,13 @@ static int delete_dead_interior_snapshots(struct bch_fs *c)
 		/*
 		 * Fixing children of deleted snapshots can't be done completely
 		 * atomically, if we crash between here and when we delete the interior
-		 * nodes some depth fields will be off:
+		 * nodes some depth fields will be off - the check_snapshots above is
+		 * what puts them back on the next run.
+		 *
+		 * So for the whole span between this loop and the delete loop
+		 * below, a child carries its new depth and its old parent
+		 * pointer: depth != parent's depth + 1 is a state this pass
+		 * passes through, not an invariant.
 		 */
 		try(for_each_btree_key_commit(trans, iter, BTREE_ID_snapshots, POS_MIN,
 					      BTREE_ITER_intent, k,
