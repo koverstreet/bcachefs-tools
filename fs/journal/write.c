@@ -195,7 +195,13 @@ static void journal_buf_realloc(struct journal *j, struct journal_buf *buf)
 	if (bch2_btree_write_buffer_resize(c, btree_write_buffer_size))
 		return;
 
-	new_buf = kvmalloc(new_size, GFP_NOIO|__GFP_NOWARN);
+	/*
+	 * Speculative growth, and every failure path here just declines to
+	 * grow - but we're under j->buf_lock, which journal_write_done() needs
+	 * as its first act, so sitting in reclaim for a bigger buffer stalls
+	 * journal write completions. Take the failure immediately instead.
+	 */
+	new_buf = kvmalloc(new_size, GFP_NOIO|__GFP_NORETRY|__GFP_NOWARN);
 	if (!new_buf)
 		return;
 

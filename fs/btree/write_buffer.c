@@ -282,12 +282,22 @@ btree_write_buffered_insert(struct btree_trans *trans,
 				  BTREE_UPDATE_internal_snapshot_node);
 }
 
+/*
+ * Growth heuristics only - every caller discards the result, and the buffer
+ * works (more slowly) at its current size. Both call sites run under the
+ * write buffer locks, which the journal write path and the flush path both
+ * nest under j->buf_lock, so a caller that sits in direct reclaim here stalls
+ * journal write completions. __GFP_NORETRY buys the failure immediately
+ * instead of waiting for reclaim that a speculative resize doesn't merit.
+ */
+#define WB_RESIZE_GFP	(GFP_KERNEL|__GFP_NORETRY|__GFP_NOWARN)
+
 static int __wb_keys_resize(struct btree_write_buffer_keys *wb, size_t new_size)
 {
 	if (wb->keys.size >= new_size)
 		return 0;
 
-	return darray_resize(&wb->keys, new_size);
+	return darray_resize_gfp(&wb->keys, new_size, WB_RESIZE_GFP);
 }
 
 static int wb_keys_resize(struct btree_write_buffer_keys *wb, size_t new_size)
@@ -298,7 +308,7 @@ static int wb_keys_resize(struct btree_write_buffer_keys *wb, size_t new_size)
 	if (!mutex_trylock(&wb->lock))
 		return -EINTR;
 
-	int ret = darray_resize(&wb->keys, new_size);
+	int ret = darray_resize_gfp(&wb->keys, new_size, WB_RESIZE_GFP);
 	mutex_unlock(&wb->lock);
 	return ret;
 }
@@ -314,9 +324,11 @@ static void move_keys_from_inc_to_flushing(struct bch_fs_btree_write_buffer *wb)
 	bch2_journal_pin_add(j, wb_keys_start(&wb->inc)->journal_seq, &wb->flushing.pin,
 			     bch2_btree_write_buffer_journal_flush);
 
-	/* Best-effort resizes; may fail under memory pressure */
-	darray_resize(&wb->flushing.keys, min_t(size_t, 1U << 20, wb->flushing.keys.nr + wb->inc.keys.nr));
-	darray_resize(&wb->sorted, wb->flushing.keys.size);
+	/* Best-effort resizes; may fail under memory pressure - see WB_RESIZE_GFP */
+	darray_resize_gfp(&wb->flushing.keys,
+			  min_t(size_t, 1U << 20, wb->flushing.keys.nr + wb->inc.keys.nr),
+			  WB_RESIZE_GFP);
+	darray_resize_gfp(&wb->sorted, wb->flushing.keys.size, WB_RESIZE_GFP);
 
 	/*
 	 * Each sorted entry references one key, and each key is at least
