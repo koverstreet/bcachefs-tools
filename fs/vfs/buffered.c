@@ -141,8 +141,21 @@ static int readpage_bio_extend(struct btree_trans *trans,
 
 			/* ensure proper alignment */
 			order = min(order, __ffs(folio_offset|BIT(31)));
-			order = min_t(unsigned, order, mapping_max_folio_order(iter->mapping));
-			
+
+			/*
+			 * mapping_max_folio_order() is 0 on !THP no matter what
+			 * we asked for at inode init: without THP the MM has no
+			 * split_folio(), only a stub that warns and returns
+			 * -EINVAL, so a large folio we put in the page cache
+			 * here can never be split again.
+			 *
+			 * This can't fight the mapping_min_folio_order() check
+			 * above: a min order above 0 means bs > ps, and
+			 * bch2_fs_alloc() already refuses to mount such a
+			 * filesystem on !THP.
+			 */
+			order = min(order, mapping_max_folio_order(iter->mapping));
+
 			folio = xa_load(&iter->mapping->i_pages, folio_offset);
 			if (folio && !xa_is_value(folio))
 				break;
