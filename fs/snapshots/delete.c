@@ -472,9 +472,16 @@ static inline void normalize_snapshot_child_pointers(struct bch_snapshot *s)
  * bch2_delete_dead_interior_snapshots() rewrites every child's depth and skip[]
  * for the tree shape the deletion is going to produce, and commits that, before
  * it deletes a single node. A node refused after that leaves the tree
- * describing a deletion that never happened - skip[] entries pointing above
- * parent, which validation rejects on the next write, taking the filesystem
- * read only.
+ * describing a deletion that never happened: depths one too small, skiplists
+ * stepping over a node that's still there.
+ *
+ * That's a lie about the tree, not corruption of it. Ancestry answers stay
+ * correct - a skip over a live ancestor still names a real ancestor, and
+ * get_ancestor_below() only follows a skip that doesn't overshoot what it's
+ * looking for - and check_snapshots() re-derives depth from the parent chain.
+ * The cost until then is that snapshot_parent_child_consistent() reads every
+ * affected edge as uncorroborated, so real edge damage on those nodes goes
+ * unrepaired for that pass.
  *
  * So this is separable from the deletion on purpose: a caller that is about to
  * commit to a set of nodes asks first, and drops the refused ones.
