@@ -1177,13 +1177,14 @@ int bch2_btree_write_buffer_maybe_flush(struct btree_trans *trans,
 
 	/*
 	 * last_flushed caches "we flushed the write buffer while looking at this
-	 * key, so a re-read is current" - but a repair issued after that flush
+	 * key, so a re-read is current" - but a repair we then issue
 	 * (bch2_btree_bit_mod_buffered etc.) commits a new write buffer entry and
-	 * silently invalidates the cache. Detect that via the commit seq: if
-	 * anything committed since we flushed, the cache is stale, re-flush.
+	 * makes that stale. So the cache is also keyed on our own commit count:
+	 * ours, not the journal's, because another thread committing says nothing
+	 * about whether our read is current.
 	 */
 	if (!bkey_and_val_eq(referring_k, bkey_i_to_s_c(f->last_flushed.k)) ||
-	    f->flushed_seq != journal_cur_seq(&c->journal)) {
+	    f->flushed_commit_count != trans->commit_count) {
 		event_inc_trace(c, write_buffer_maybe_flush, buf, ({
 			prt_printf(&buf, "%s\n", trans->fn);
 			bch2_bkey_val_to_text(&buf, c, referring_k);
@@ -1199,13 +1200,13 @@ int bch2_btree_write_buffer_maybe_flush(struct btree_trans *trans,
 			bch2_btree_interior_updates_flush(c);
 		}
 
-		u64 flush_seq = journal_cur_seq(&c->journal);
 		bool did_work = false;
-		try(btree_write_buffer_flush_seq(trans, flush_seq, &did_work,
-						 WB_FLUSH_maybe));
+		try(btree_write_buffer_flush_seq(trans, journal_cur_seq(&c->journal),
+						 &did_work, WB_FLUSH_maybe));
 
 		bch2_bkey_buf_copy(&f->last_flushed, tmp.k);
-		f->flushed_seq = flush_seq;
+		/* after the flush: it commits, and those commits are not a repair */
+		f->flushed_commit_count = trans->commit_count;
 		f->nr_flushes++;
 
 		/* can we avoid the unconditional restart? */
