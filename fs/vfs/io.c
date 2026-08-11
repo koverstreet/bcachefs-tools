@@ -66,10 +66,16 @@ static void bch2_inode_flush_nocow_writes_async(struct bch_fs *c,
 	 * copy + memset can erase a bit set in between - fsync would then
 	 * complete without flushing a device that had a completed write.
 	 * Bits set after the exchange belong to the next flush.
+	 *
+	 * The plain read first keeps the common nothing-to-flush case off the
+	 * atomic path: a bit that shows up after it is no different from one
+	 * that shows up after the exchange, and is picked up by the next flush
+	 * either way.
 	 */
 	struct bch_devs_mask devs = {};
 	for (unsigned i = 0; i < ARRAY_SIZE(devs.d); i++)
-		devs.d[i] = xchg(&inode->ei_devs_need_flush.d[i], 0);
+		if (READ_ONCE(inode->ei_devs_need_flush.d[i]))
+			devs.d[i] = xchg(&inode->ei_devs_need_flush.d[i], 0);
 
 	unsigned dev;
 	for_each_set_bit(dev, devs.d, BCH_SB_MEMBERS_MAX) {
