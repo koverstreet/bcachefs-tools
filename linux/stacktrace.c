@@ -143,3 +143,39 @@ unsigned int stack_trace_save_tsk(struct task_struct *task,
 
 	return r.nr_captured;
 }
+
+/*
+ * Unwinding *this* thread needs none of the machinery above: no signal, no
+ * mutex, no shared slot. It is called from the transaction restart trace,
+ * which runs with btree locks held, so it has to stay allocation- and
+ * lock-free - which a local unwind already is.
+ */
+unsigned int stack_trace_save(unsigned long *store, unsigned int size,
+			      unsigned int skipnr)
+{
+	unw_context_t uc;
+	unw_cursor_t cursor;
+	unw_word_t ip;
+	unsigned int n = 0;
+
+	if (unw_getcontext(&uc) != 0)
+		return 0;
+	if (unw_init_local(&cursor, &uc) != 0)
+		return 0;
+
+	/* our own frame, plus whatever the caller asked to drop */
+	unsigned int skip = skipnr + 1;
+	while (skip-- && unw_step(&cursor) > 0)
+		;
+
+	/* capture-then-step: see bt_signal_handler() */
+	while (n < size) {
+		if (unw_get_reg(&cursor, UNW_REG_IP, &ip) < 0)
+			break;
+		store[n++] = (unsigned long)ip;
+		if (unw_step(&cursor) <= 0)
+			break;
+	}
+
+	return n;
+}

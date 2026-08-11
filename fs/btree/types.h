@@ -623,11 +623,23 @@ struct trans_kmalloc_trace {
 };
 typedef DARRAY(struct trans_kmalloc_trace) darray_trans_kmalloc_trace;
 
-/* One (restart reason, throw site), and how many times we've seen it: */
+/*
+ * How much of the stack to keep per entry. The throw site alone says which
+ * check gave up, not which loop is failing to make progress on it - and those
+ * are different questions: bch2_btree_write_buffer_maybe_flush() is reached
+ * from a dozen callers, so "256 restarts from maybe_flush" names the symptom
+ * and none of the cause. Enough frames to get out of the helper and into the
+ * loop that owns the iteration.
+ */
+#define BTREE_TRANS_RESTART_TRACE_DEPTH	8
+
+/* One (restart reason, throw site), how often, and how we got there: */
 struct trans_restart {
 	enum bch_errcode	err;
 	u32			nr;
 	unsigned long		ip;
+	u32			bt_nr;
+	unsigned long		bt[BTREE_TRANS_RESTART_TRACE_DEPTH];
 };
 
 /*

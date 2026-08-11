@@ -1755,14 +1755,25 @@ static void trans_restart_trace_add(struct btree_trans *trans, int err, unsigned
 			return;
 		}
 
-	if (darray_room(trans->restart_trace))
-		darray_push(&trans->restart_trace, ((struct trans_restart) {
-			.err	= err,
-			.nr	= 1,
-			.ip	= ip,
-		}));
-	else
+	if (!darray_room(trans->restart_trace)) {
 		trans->restart_trace_dropped++;
+		return;
+	}
+
+	darray_push(&trans->restart_trace, ((struct trans_restart) {
+		.err	= err,
+		.nr	= 1,
+		.ip	= ip,
+	}));
+
+	/*
+	 * Only when the entry is new, never on the repeats: a storm is one entry
+	 * seen a quarter of a million times, so this costs one unwind rather than
+	 * a quarter of a million. Unwinding @current neither allocates nor takes
+	 * locks, which is what lets it happen here at all.
+	 */
+	struct trans_restart *e = &darray_last(trans->restart_trace);
+	e->bt_nr = stack_trace_save(e->bt, ARRAY_SIZE(e->bt), 2);
 }
 
 void bch2_trans_restart_trace_to_text(struct printbuf *out, struct btree_trans *trans)
@@ -1773,9 +1784,15 @@ void bch2_trans_restart_trace_to_text(struct printbuf *out, struct btree_trans *
 	prt_printf(out, "%u restarts this loop:\n", trans->restart_trace_nr);
 	guard(printbuf_indent)(out);
 
-	darray_for_each(trans->restart_trace, i)
+	darray_for_each(trans->restart_trace, i) {
 		prt_printf(out, "%u\t%s\t%pS\n",
 			   i->nr, bch2_err_str(i->err), (void *) i->ip);
+
+		/* who was driving the loop that kept coming back here: */
+		guard(printbuf_indent)(out);
+		for (unsigned j = 0; j < i->bt_nr; j++)
+			prt_printf(out, "%pS\n", (void *) i->bt[j]);
+	}
 
 	if (trans->restart_trace_dropped)
 		prt_printf(out, "%u from other sites, trace full\n",
