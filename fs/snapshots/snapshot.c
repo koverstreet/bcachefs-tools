@@ -888,7 +888,7 @@ static u32 bch2_snapshot_right_child(struct snapshot_table *t, u32 id)
 
 u32 __bch2_snapshot_tree_next(struct bch_fs *c, struct snapshot_table *t, u32 id, unsigned *depth)
 {
-	int _depth;
+	unsigned _depth = 0;
 	if (!depth)
 		depth = &_depth;
 
