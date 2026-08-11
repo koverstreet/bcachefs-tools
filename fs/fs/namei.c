@@ -1091,7 +1091,7 @@ int bch2_check_inode_has_case_insensitive(struct btree_trans *trans,
 
 	if (repairing_parents)
 		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-			bch_err_throw(trans->c, transaction_restart_nested);
+			btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 
 fsck_err:
 	return ret;

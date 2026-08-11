@@ -1249,7 +1249,7 @@ static int bch2_btree_path_traverse_all(struct btree_trans *trans)
 	int ret = 0;
 
 	if (trans->in_traverse_all)
-		return bch_err_throw(trans->c, transaction_restart_in_traverse_all);
+		return btree_trans_restart(trans, BCH_ERR_transaction_restart_in_traverse_all);
 
 	/*
 	 * XXX: when restart reason is transaction_restart_lock_waitlist_alloc,

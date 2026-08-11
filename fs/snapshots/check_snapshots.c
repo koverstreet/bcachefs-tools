@@ -728,7 +728,7 @@ static int snapshot_edge_repair_commit(struct btree_trans *trans)
 {
 	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 	trans->c->snapshots.need_table_rebuild = true;
-	return bch_err_throw(trans->c, transaction_restart_nested);
+	return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 }
 
 /*

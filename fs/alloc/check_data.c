@@ -494,7 +494,7 @@ int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 
 			return bch2_btree_node_update_key(trans, &node_iter, b, new,
 							  BCH_TRANS_COMMIT_no_enospc, false) ?:
-				bch_err_throw(c, transaction_restart_commit);
+				btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 		}
 	}
 

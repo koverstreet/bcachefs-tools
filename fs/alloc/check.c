@@ -355,7 +355,7 @@ static int delete_freespace_key(struct btree_trans *trans,
 	if (!async_repair) {
 		try(bch2_btree_bit_mod_iter(trans, iter, false));
 		try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
-		return bch_err_throw(c, transaction_restart_commit);
+		return btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 	} else {
 		/*
 		 * We can't repair here when called from the allocator path: the

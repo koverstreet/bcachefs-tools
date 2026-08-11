@@ -48,7 +48,7 @@ static int bch2_set_nr_journal_buckets_iter(struct bch_dev *ca, unsigned nr,
 
 			if (bch2_err_matches(ret2, BCH_ERR_operation_blocked)) {
 				bch2_wait_on_allocator(trans, req, ret2, cl);
-				ret2 = bch_err_throw(c, transaction_restart_nested);
+				ret2 = btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 			}
 
 			ret2;

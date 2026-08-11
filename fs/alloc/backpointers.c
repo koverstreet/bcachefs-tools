@@ -902,7 +902,7 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 			if (nr_deletes > 256)
 				return  bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
 					bch2_btree_write_buffer_flush_sync(trans) ?:
-					bch_err_throw(c, transaction_restart_write_buffer_flush);
+					btree_trans_restart(trans, BCH_ERR_transaction_restart_write_buffer_flush);
 
 			need_commit = true;
 			continue;
@@ -929,7 +929,7 @@ static int check_bucket_backpointer_mismatch(struct btree_trans *trans, struct b
 		if (!bpos_eq(*checked_bad, alloc_k.k->p)) {
 			*checked_bad = alloc_k.k->p;
 			return check_bucket_backpointers_to_extents(trans, ca, alloc_k.k->p, last_flushed) ?:
-				bch_err_throw(c, transaction_restart_nested);
+				btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 		}
 
 		try(bch2_backpointers_maybe_flush(trans, alloc_k, last_flushed));

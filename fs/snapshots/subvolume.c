@@ -203,7 +203,7 @@ static int check_subvol(struct btree_trans *trans,
 	if (bch2_subvolume_state_compat(&subvol) == SUBVOLUME_STATE_unlinked) {
 		ret = bch2_subvolume_set_deleted(trans, iter->pos.offset);
 		bch_err_msg(c, ret, "deleting subvolume %llu", iter->pos.offset);
-		return ret ?: bch_err_throw(c, transaction_restart_nested);
+		return ret ?: btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 	}
 
 	/*

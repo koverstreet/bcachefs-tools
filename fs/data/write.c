@@ -2545,7 +2545,7 @@ again:
 				bch2_wait_on_allocator(trans, req, ret2, &op->cl);
 				__bch2_write_index(op);
 				op->wbio.failed.nr = 0;
-				ret2 = bch_err_throw(c, transaction_restart_nested);
+				ret2 = btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 			}
 			ret2;
 		}));

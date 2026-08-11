@@ -275,7 +275,7 @@ static int overlapping_extents_found(struct btree_trans *trans,
 			 * We overwrote the second extent - restart
 			 * check_extent() from the top:
 			 */
-			return bch_err_throw(c, transaction_restart_nested);
+			return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 		}
 	}
 

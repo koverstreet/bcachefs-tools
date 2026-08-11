@@ -1542,7 +1542,7 @@ out:
 	 * loop retries a failing commit forever:
 	 */
 	if (lazy && !ret)
-		ret = bch_err_throw(trans->c, transaction_restart_commit);
+		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 out_reset:
 	bch2_trans_reset_updates(trans);
 

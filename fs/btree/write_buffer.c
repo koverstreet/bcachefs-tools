@@ -1211,7 +1211,7 @@ int bch2_btree_write_buffer_maybe_flush(struct btree_trans *trans,
 
 		/* can we avoid the unconditional restart? */
 		event_inc_trace(c, trans_restart_write_buffer_flush, buf, prt_str(&buf, trans->fn));
-		return bch_err_throw(c, transaction_restart_write_buffer_flush);
+		return btree_trans_restart(trans, BCH_ERR_transaction_restart_write_buffer_flush);
 	}
 
 	f->seen_error = true;

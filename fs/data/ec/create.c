@@ -1502,7 +1502,7 @@ static int get_old_stripe(struct btree_trans *trans,
 		return !bch2_stripe_is_open(c, idx)
 			? bch2_btree_delete_at(trans, &iter, 0) ?:
 			  bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-			  bch_err_throw(c, transaction_restart_commit)
+			  btree_trans_restart(trans, BCH_ERR_transaction_restart_commit)
 			: 0;
 	}
 
@@ -1529,7 +1529,7 @@ static int get_old_stripe(struct btree_trans *trans,
 			errptr_try(bch2_bkey_make_mut_typed(trans, &iter, &k, 0, stripe));
 		upd->v.can_widen = correct_can_widen;
 		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-		       bch_err_throw(c, transaction_restart_commit);
+		       btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 	}
 
 	bool ret = may_reuse_stripe(c, new, old.v) &&
@@ -2172,7 +2172,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 
 		if (bch2_err_matches(ret2, BCH_ERR_operation_blocked)) {
 			bch2_wait_on_allocator(trans, req, ret2, &cl);
-			ret2 = bch_err_throw(c, transaction_restart_nested);
+			ret2 = btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 		}
 		ret2;
 	}));

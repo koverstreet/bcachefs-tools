@@ -403,7 +403,7 @@ int bch2_move_extent(struct moving_context *ctxt,
 	if (bch2_err_matches(ret, ENOMEM)) {
 		/* memory allocation failure, wait for some IO to finish */
 		bch2_move_ctxt_wait_for_io(ctxt);
-		ret = bch_err_throw(c, transaction_restart_nested);
+		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 	}
 
 	if (!bch2_err_matches(ret, BCH_ERR_transaction_restart) && ctxt->stats &&

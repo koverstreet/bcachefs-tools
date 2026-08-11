@@ -3687,7 +3687,7 @@ static int __bch2_btree_node_update_key(struct btree_trans *trans,
 
 		if (!btree_node_will_make_reachable(b)) {
 			mutex_unlock(&c->btree.interior_updates.commit_lock);
-			return bch_err_throw(c, transaction_restart_nested);
+			return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 		}
 
 		struct btree_update *as = (void *) (READ_ONCE(b->will_make_reachable) & ~1UL);

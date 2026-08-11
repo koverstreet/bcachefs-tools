@@ -772,7 +772,7 @@ static int bch2_gc_mark_key(struct btree_trans *trans, enum btree_id btree_id,
 	if (bch2_trans_has_updates(trans)) {
 		CLASS(disk_reservation, res)(c);
 		return bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-			bch_err_throw(c, transaction_restart_commit);
+			btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 	}
 
 	struct btree_trigger_op op = {

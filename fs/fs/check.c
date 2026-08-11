@@ -1023,7 +1023,7 @@ lookup_inode_for_snapshot(struct btree_trans *trans, struct inode_walker *w, str
 		if (ret)
 			return ERR_PTR(ret);
 
-		return ERR_PTR(bch_err_throw(c, transaction_restart_nested));
+		return ERR_PTR(btree_trans_restart(trans, BCH_ERR_transaction_restart_nested));
 	}
 
 	return i;
@@ -2083,7 +2083,7 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 				try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 
 				inode->last_pos.inode--;
-				return bch_err_throw(c, transaction_restart_commit);
+				return btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 			} else {
 				u32 snapshot = i->inode.bi_snapshot;
 				i->inode = good_ancestor->inode;
@@ -2160,7 +2160,7 @@ static int maybe_reconstruct_inum_btree(struct btree_trans *trans,
 		     btree == BTREE_ID_extents ? "reg" : "dir"))
 		return  reconstruct_inode(trans, btree, snapshot, inum) ?:
 			bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
-			bch_err_throw(trans->c, transaction_restart_commit);
+			btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 fsck_err:
 	return ret;
 }
@@ -2462,7 +2462,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 	if (invalidated_inodes) {
 		dir->last_pos.inode = 0;
 		dir->inodes.nr = 0;
-		return bch_err_throw(c, transaction_restart_nested);
+		return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 	}
 
 	if (ret < 0)
@@ -2790,7 +2790,7 @@ static int check_xattr(struct btree_trans *trans, struct btree_iter *iter,
 				      k, &need_second_pass, &invalidated_inodes);
 	if (invalidated_inodes) {
 		inode->last_pos.inode--;
-		return bch_err_throw(c, transaction_restart_nested);
+		return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
 	}
 
 	ret = min(ret, 0);
