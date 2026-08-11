@@ -142,28 +142,26 @@ static inline u32 bch2_snapshot_parent_early(struct bch_fs *c, u32 id)
 	return __bch2_snapshot_parent_early(c, id);
 }
 
-static inline u32 __bch2_snapshot_parent(struct bch_fs *c, struct snapshot_table *t, u32 id)
+/*
+ * No depth consistency check here: depth == parent's depth + 1 is not an
+ * invariant this can rely on. delete_dead_interior_snapshots() writes every
+ * surviving child's new depth in one loop and only splices the deleted nodes
+ * out in the next, so for that whole span - and on disk, if we crash in it - a
+ * child carries its new depth and its old parent pointer. fsck owns the check
+ * instead: snapshot_bad_depth in check_snapshot(), which has a transaction, is
+ * FSCK_AUTOFIX, and re-derives depth from the parent rather than just
+ * complaining about it.
+ */
+static inline u32 __bch2_snapshot_parent(struct snapshot_table *t, u32 id)
 {
 	const struct snapshot_t *s = __snapshot_t(t, id);
-	if (!s)
-		return 0;
-
-	u32 parent = s->parent;
-	if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG) &&
-	    c->recovery.pass_done > BCH_RECOVERY_PASS_delete_dead_interior_snapshots &&
-	    parent &&
-	    s->depth != __snapshot_t(t, parent)->depth + 1)
-		panic("id %u depth=%u parent %u depth=%u\n",
-		      id, __snapshot_t(t, id)->depth,
-		      parent, __snapshot_t(t, parent)->depth);
-
-	return parent;
+	return s ? s->parent : 0;
 }
 
 static inline u32 bch2_snapshot_parent(struct bch_fs *c, u32 id)
 {
 	guard(rcu)();
-	return __bch2_snapshot_parent(c, rcu_dereference(c->snapshots.table), id);
+	return __bch2_snapshot_parent(rcu_dereference(c->snapshots.table), id);
 }
 
 static inline u32 bch2_snapshot_nth_parent(struct bch_fs *c, u32 id, u32 n)
@@ -172,7 +170,7 @@ static inline u32 bch2_snapshot_nth_parent(struct bch_fs *c, u32 id, u32 n)
 	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
 
 	while (n--)
-		id = __bch2_snapshot_parent(c, t, id);
+		id = __bch2_snapshot_parent(t, id);
 	return id;
 }
 
@@ -184,7 +182,7 @@ static inline u32 bch2_snapshot_root(struct bch_fs *c, u32 id)
 	struct snapshot_table *t = rcu_dereference(c->snapshots.table);
 
 	u32 parent;
-	while ((parent = __bch2_snapshot_parent(c, t, id)))
+	while ((parent = __bch2_snapshot_parent(t, id)))
 		id = parent;
 	return id;
 }
