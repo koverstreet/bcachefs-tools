@@ -849,8 +849,26 @@ static int __do_reconcile_extent(struct moving_context *ctxt,
 	try(bch2_update_reconcile_opts(trans, snapshot_io_opts, opts, iter, level, k,
 				       SET_NEEDS_RECONCILE_other));
 
+	/*
+	 * The reconcile opts have to be committed here, not carried into the
+	 * data update: bch2_move_extent() below unlocks to start the IO, and
+	 * past that the transaction is no longer idempotent - there is no
+	 * commit left to make.
+	 *
+	 * But not bch2_trans_commit_lazy(), which signals success as
+	 * transaction_restart_commit. do_reconcile_extent_phys() drives us from
+	 * a scan of the backpointers btree, and a write buffer btree scan
+	 * cannot see the keys its own commit just buffered - so the restart
+	 * re-reads the same position, finds the same work, and never
+	 * terminates.
+	 *
+	 * A commit invalidates the pointers peek() handed out, so normally we
+	 * couldn't keep using @k past this point - but every caller passes a
+	 * bch2_bkey_buf_reassemble()d copy rather than a pointer into a btree
+	 * node, so there's nothing here for the commit to invalidate.
+	 */
 	CLASS(disk_reservation, res)(c);
-	try(bch2_trans_commit_lazy(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc));
+	try(bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc));
 
 	int ret = reconcile_set_data_opts(trans, iter, level, k, opts, data_opts);
 	if (ret <= 0)
