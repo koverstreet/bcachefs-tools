@@ -1183,8 +1183,29 @@ int bch2_btree_write_buffer_maybe_flush(struct btree_trans *trans,
 	 * ours, not the journal's, because another thread committing says nothing
 	 * about whether our read is current.
 	 */
-	if (!bkey_and_val_eq(referring_k, bkey_i_to_s_c(f->last_flushed.k)) ||
-	    f->flushed_commit_count != trans->commit_count) {
+	bool key_differs   = !bkey_and_val_eq(referring_k, bkey_i_to_s_c(f->last_flushed.k));
+	bool commits_moved = f->flushed_commit_count != trans->commit_count;
+
+	if (key_differs || commits_moved) {
+		/*
+		 * XXX DEBUG, do not merge: the cache is missing and we don't
+		 * know which half of the predicate is doing it. Print both.
+		 */
+		if (f->nr_flushes) {
+			CLASS(printbuf, dbg)();
+			prt_printf(&dbg, "%s: key_differs=%u commits_moved=%u (%u->%u) nr_flushes=%llu nr_done=%llu seen_error=%u",
+				   trans->fn, key_differs, commits_moved,
+				   f->flushed_commit_count, trans->commit_count,
+				   f->nr_flushes, f->nr_done, f->seen_error);
+			if (key_differs) {
+				prt_str(&dbg, "\n  now:  ");
+				bch2_bkey_val_to_text(&dbg, c, referring_k);
+				prt_str(&dbg, "\n  last: ");
+				bch2_bkey_val_to_text(&dbg, c, bkey_i_to_s_c(f->last_flushed.k));
+			}
+			trace_printk("%s\n", dbg.buf);
+		}
+
 		event_inc_trace(c, write_buffer_maybe_flush, buf, ({
 			prt_printf(&buf, "%s\n", trans->fn);
 			bch2_bkey_val_to_text(&buf, c, referring_k);

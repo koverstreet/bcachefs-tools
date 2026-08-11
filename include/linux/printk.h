@@ -206,6 +206,9 @@ void printk(const char *fmt, ...);
 	no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #endif
 
+/* XXX DEBUG: ftrace-only in-kernel; a no-op for the userspace build. */
+#define trace_printk(fmt, ...)	no_printk(fmt, ##__VA_ARGS__)
+
 void dump_stack(void);
 
 #endif /* __TOOLS_LINUX_PRINTK_H */
