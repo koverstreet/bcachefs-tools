@@ -885,16 +885,6 @@ int bch2_trans_commit_error(struct btree_trans *trans, unsigned flags,
 {
 	ret = __bch2_trans_commit_error(trans, flags, i, ret, trace_ip);
 
-	/*
-	 * We might have done another transaction commit in the error path -
-	 * i.e. btree write buffer flush - which will have made use of
-	 * trans->journal_res, but with BCH_TRANS_COMMIT_no_journal_res that is
-	 * how the journal sequence number to pin is passed in - so we must
-	 * restart:
-	 */
-	if (!ret && (flags & BCH_TRANS_COMMIT_no_journal_res))
-		ret = btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
-
 	BUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart) != !!trans->restarted);
 
 	bch2_fs_inconsistent_on(bch2_err_matches(ret, ENOSPC) &&
@@ -1341,6 +1331,9 @@ bch2_trans_commit_write_locked(struct btree_trans *trans,
 
 		if (trans->flush)
 			bch2_journal_res_flush(&c->journal, &trans->journal_res, trans->flush);
+	} else {
+		/* No reservation, so the caller named the seq to pin: */
+		trans->journal_res.seq = trans->journal_seq_to_pin;
 	}
 
 	trans_for_each_update(trans, i) {

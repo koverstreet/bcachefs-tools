@@ -168,7 +168,7 @@ static noinline int wb_flush_one_slowpath(struct btree_trans *trans,
 
 	bch2_btree_node_unlock_write(trans, path, path->l[0].b);
 
-	trans->journal_res.seq = wb->journal_seq;
+	trans->journal_seq_to_pin = wb->journal_seq;
 
 	return bch2_trans_update(trans, iter, &wb->k,
 				 BTREE_UPDATE_internal_snapshot_node) ?:
@@ -275,7 +275,7 @@ btree_write_buffered_insert(struct btree_trans *trans,
 	CLASS(btree_iter, iter)(trans, btree, bkey_start_pos(&wb->k.k),
 				BTREE_ITER_cached|BTREE_ITER_intent);
 
-	trans->journal_res.seq = wb->journal_seq;
+	trans->journal_seq_to_pin = wb->journal_seq;
 
 	return  bch2_btree_iter_traverse(&iter) ?:
 		bch2_trans_update(trans, &iter, &wb->k,

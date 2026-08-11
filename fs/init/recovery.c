@@ -316,7 +316,7 @@ static int bch2_journal_replay_accounting_key(struct btree_trans *trans,
 	}
 
 	if (!k->allocated)
-		trans->journal_res.seq = c->journal_entries_base_seq + k->journal_seq_offset;
+		trans->journal_seq_to_pin = c->journal_entries_base_seq + k->journal_seq_offset;
 
 	return bch2_trans_update(trans, &iter, new, BTREE_TRIGGER_norun);
 }
@@ -334,7 +334,7 @@ static int bch2_journal_replay_key(struct btree_trans *trans,
 		return 0;
 
 	if (!k->allocated)
-		trans->journal_res.seq = c->journal_entries_base_seq + k->journal_seq_offset;
+		trans->journal_seq_to_pin = c->journal_entries_base_seq + k->journal_seq_offset;
 
 	/*
 	 * BTREE_UPDATE_key_cache_reclaim disables key cache lookup/update to

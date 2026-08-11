@@ -748,6 +748,12 @@ struct btree_trans {
 	struct journal_entry_pin *journal_pin;
 
 	struct journal_res	journal_res;
+	/*
+	 * Input for BCH_TRANS_COMMIT_no_journal_res: with no reservation to
+	 * derive a seq from, the caller names the journal entry the btree node
+	 * write has to pin.
+	 */
+	u64			journal_seq_to_pin;
 	u64			*journal_seq;
 	struct disk_reservation *disk_res;
 	struct closure		*flush;

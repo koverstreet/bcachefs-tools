@@ -446,7 +446,7 @@ static int btree_key_cache_flush_pos(struct btree_trans *trans,
 		if (journal_seq && ck->journal.seq != journal_seq)
 			return 0;
 
-		trans->journal_res.seq = ck->journal.seq;
+		trans->journal_seq_to_pin = ck->journal.seq;
 
 		/*
 		 * If we're at the end of the journal, we really want to free up space
