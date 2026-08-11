@@ -623,6 +623,27 @@ struct trans_kmalloc_trace {
 };
 typedef DARRAY(struct trans_kmalloc_trace) darray_trans_kmalloc_trace;
 
+/* One (restart reason, throw site), and how many times we've seen it: */
+struct trans_restart {
+	enum bch_errcode	err;
+	u32			nr;
+	unsigned long		ip;
+};
+
+/*
+ * A restart loop that isn't making progress is repeating itself, so a handful
+ * of distinct reasons is enough to name the cause; more than this and the
+ * overflow count is the more interesting number anyway.
+ */
+#define BTREE_TRANS_RESTART_TRACE_NR	8
+
+/*
+ * Restarts in one loop before we say something. Contention on a loaded
+ * filesystem can legitimately run into the hundreds; a loop that isn't
+ * terminating runs into the millions.
+ */
+#define BTREE_TRANS_RESTART_WARN_NR	256
+
 struct btree_trans_subbuf {
 	u16			base;
 	u16			u64s;
@@ -703,6 +724,25 @@ struct btree_trans {
 #ifdef CONFIG_BCACHEFS_INJECT_TRANSACTION_RESTARTS
 	u32			restart_count_this_trans;
 #endif
+	/*
+	 * Why this transaction has been restarting, for the whole of one
+	 * restart loop: reset by the first bch2_trans_begin() that isn't
+	 * itself recovering from a restart.
+	 *
+	 * Repeats are counted rather than pushed. A restart storm is one
+	 * reason over and over - the count is the interesting part, and
+	 * counting is what keeps this bounded. It has to be bounded: restarts
+	 * are thrown with locks held and from atomic context, so recording one
+	 * must never allocate, and a storm is millions of them.
+	 *
+	 * Entries are keyed on (reason, throw site) - the same errcode from two
+	 * places is two different problems.
+	 */
+	DARRAY_PREALLOCATED(struct trans_restart, BTREE_TRANS_RESTART_TRACE_NR)
+				restart_trace;
+	/* restarts this loop, including ones too varied to fit in the trace: */
+	u32			restart_trace_nr;
+	u32			restart_trace_dropped;
 	/*
 	 * Incremented on every successful (non-empty) commit; for detecting
 	 * that cached state derived from btree reads may be stale:

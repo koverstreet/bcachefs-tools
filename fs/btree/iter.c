@@ -1740,6 +1740,48 @@ void bch2_path_put(struct btree_trans *trans, btree_path_idx_t path_idx, bool in
 	__bch2_path_free(trans, path_idx);
 }
 
+/*
+ * Never allocates: the darray_room() check keeps darray_push() on the
+ * preallocated storage. Restarts are thrown with btree locks held and from
+ * atomic context, so this has to be free of anything that can sleep or fail.
+ */
+static void trans_restart_trace_add(struct btree_trans *trans, int err, unsigned long ip)
+{
+	trans->restart_trace_nr++;
+
+	darray_for_each(trans->restart_trace, i)
+		if (i->err == err && i->ip == ip) {
+			i->nr++;
+			return;
+		}
+
+	if (darray_room(trans->restart_trace))
+		darray_push(&trans->restart_trace, ((struct trans_restart) {
+			.err	= err,
+			.nr	= 1,
+			.ip	= ip,
+		}));
+	else
+		trans->restart_trace_dropped++;
+}
+
+void bch2_trans_restart_trace_to_text(struct printbuf *out, struct btree_trans *trans)
+{
+	if (!trans->restart_trace_nr)
+		return;
+
+	prt_printf(out, "%u restarts this loop:\n", trans->restart_trace_nr);
+	guard(printbuf_indent)(out);
+
+	darray_for_each(trans->restart_trace, i)
+		prt_printf(out, "%u\t%s\t%pS\n",
+			   i->nr, bch2_err_str(i->err), (void *) i->ip);
+
+	if (trans->restart_trace_dropped)
+		prt_printf(out, "%u from other sites, trace full\n",
+			   trans->restart_trace_dropped);
+}
+
 int bch2_trans_restart_foreign_task(struct btree_trans *trans, int err, unsigned long ip)
 {
 	BUG_ON(err <= 0);
@@ -1753,6 +1795,7 @@ int bch2_trans_restart_foreign_task(struct btree_trans *trans, int err, unsigned
 int bch2_trans_restart_ip(struct btree_trans *trans, int err, unsigned long ip)
 {
 	bch2_trans_restart_foreign_task(trans, err, ip);
+	trans_restart_trace_add(trans, err, ip);
 #ifdef CONFIG_BCACHEFS_DEBUG
 	darray_exit(&trans->last_restarted_trace);
 	bch2_save_backtrace(&trans->last_restarted_trace, current, 0, GFP_NOWAIT);
@@ -3778,6 +3821,32 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 
 	bch2_trans_reset_updates(trans);
 
+	/*
+	 * A begin that isn't recovering from a restart is a fresh start on new
+	 * work, so the accumulated reasons belong to the loop that just ended:
+	 */
+	if (!trans->restarted) {
+		trans->restart_trace.nr		= 0;
+		trans->restart_trace_nr		= 0;
+		trans->restart_trace_dropped	= 0;
+	} else if (unlikely(trans->restart_trace_nr == BTREE_TRANS_RESTART_WARN_NR)) {
+		/*
+		 * == not >=: the counter goes up by exactly one per restart, so
+		 * the printbuf below is built once per loop, not on every
+		 * iteration of a loop that may run for millions.
+		 *
+		 * Here rather than at the throw site because we're not holding
+		 * btree locks and can allocate a printbuf.
+		 *
+		 * Once is enough: this says a storm is happening and names one
+		 * cause, and debugfs btree_transactions carries the live trace
+		 * for every transaction if you want the rest.
+		 */
+		CLASS(printbuf, buf)();
+		bch2_trans_restart_trace_to_text(&buf, trans);
+		WARN_ONCE(1, "%s", buf.buf);
+	}
+
 	trans->restart_count++;
 	trans->mem_top			= 0;
 
@@ -3989,6 +4058,9 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	/* Reserve path 0 for our sentinal value */
 	trans->paths_allocated[0] = 1;
 
+	/* points .data at .preallocated; trans was memset to 0 above */
+	darray_init(&trans->restart_trace);
+
 	static struct lock_class_key lockdep_key;
 	lockdep_init_map(&trans->dep_map, "bcachefs_btree", &lockdep_key, 0);
 
@@ -4194,6 +4266,8 @@ void bch2_btree_trans_to_text(struct printbuf *out, struct btree_trans *trans)
 
 	if (trans->journal_replay_not_finished)
 		prt_printf(out, "has journal_keys ref\n");
+
+	bch2_trans_restart_trace_to_text(out, trans);
 
 	/* trans->paths is rcu protected vs. freeing */
 	guard(rcu)();
