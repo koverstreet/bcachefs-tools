@@ -271,6 +271,14 @@ static inline void bch2_bp_scan_iter_advance(struct bp_scan_iter *iter)
 			break;									\
 												\
 		_ret3 = bkey_err(_bp) ?: (_do);							\
+		/* XXX DEBUG, not for merge: is the loop stuck on one bp?		 */	\
+		/* _bp.k is an ERR_PTR when peek failed - don't deref it.		 */	\
+		trace_printk("bp %llu:%llu ret %s nr %zu flushes %llu/%llu\n",			\
+			     IS_ERR(_bp.k) ? 0 : _bp.k->p.inode,				\
+			     IS_ERR(_bp.k) ? 0 : _bp.k->p.offset,				\
+			     _ret3 ? bch2_err_str(_ret3) : "0",					\
+			     _bp_iter.bps.nr, _bp_iter.nr_flushes,				\
+			     (_last_flushed)->nr_flushes);					\
 		if (bch2_err_matches(_ret3, BCH_ERR_transaction_restart))			\
 			continue;								\
 		if (_ret3)									\
