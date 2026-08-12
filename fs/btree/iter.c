@@ -3698,8 +3698,7 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 	EBUG_ON(trans->mem_top);
 	EBUG_ON(new_bytes > BTREE_TRANS_MEM_MAX);
 
-	bool lock_dropped = false;
-	new_mem = allocate_dropping_locks_norelock(trans, lock_dropped,
+	new_mem = allocate_dropping_locks_norelock(trans,
 					kmalloc(new_bytes, _gfp|__GFP_NOWARN));
 	if (!new_mem) {
 		new_mem = mempool_alloc(&c->btree.trans.malloc_pool, GFP_KERNEL);
@@ -3712,11 +3711,9 @@ void *__bch2_trans_kmalloc(struct btree_trans *trans, size_t size, unsigned long
 	trans->mem = new_mem;
 	trans->mem_bytes = new_bytes;
 
-	if (unlikely(lock_dropped)) {
-		ret = bch2_trans_relock(trans);
-		if (ret)
-			return ERR_PTR(ret);
-	}
+	ret = bch2_trans_relock(trans);
+	if (ret)
+		return ERR_PTR(ret);
 
 	p = trans->mem;
 	trans->mem_top += size;
@@ -3800,10 +3797,8 @@ u32 bch2_trans_begin(struct btree_trans *trans)
 		EBUG_ON(!trans->mem);
 		EBUG_ON(!trans->mem_bytes);
 
-		bool lock_dropped = false;
-		void *new_mem = allocate_dropping_locks_norelock(trans, lock_dropped,
+		void *new_mem = allocate_dropping_locks_norelock(trans,
 					krealloc(trans->mem, new_bytes, _gfp));
-		(void)lock_dropped;
 
 		if (!new_mem) {
 			new_mem = mempool_alloc(&trans->c->btree.trans.malloc_pool, GFP_KERNEL);

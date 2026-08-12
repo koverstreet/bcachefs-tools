@@ -1243,14 +1243,12 @@ struct bkey_s_c bch2_btree_iter_peek_root(struct btree_trans *, struct btree_ite
 	_p;								\
 })
 
-#define allocate_dropping_locks_norelock(_trans, _lock_dropped, _do)	\
+#define allocate_dropping_locks_norelock(_trans, _do)			\
 ({									\
 	gfp_t _gfp = GFP_NOWAIT;					\
 	typeof(_do) _p = _do;						\
-	_lock_dropped = false;						\
 	if (unlikely(!_p)) {						\
 		bch2_trans_unlock(_trans);				\
-		_lock_dropped = true;					\
 		_gfp = GFP_KERNEL;					\
 		_p = _do;						\
 	}								\
