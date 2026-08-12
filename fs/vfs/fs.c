@@ -825,6 +825,25 @@ err_before_quota:
 
 /* methods */
 
+static void bch2_vfs_check_dirents_work(struct work_struct *work)
+{
+	struct bch_fs *c = container_of(work, struct bch_fs, vfs.check_dirents_work);
+	CLASS(bch_log_msg, msg)(c);
+
+	bch_err_fn(c, bch2_run_explicit_recovery_pass(c, &msg.m,
+							 BCH_RECOVERY_PASS_check_dirents, 0));
+	enumerated_ref_put(&c->writes, BCH_WRITE_REF_vfs_check_dirents);
+}
+
+static void bch2_vfs_schedule_check_dirents(struct bch_fs *c)
+{
+	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_vfs_check_dirents))
+		return;
+
+	if (!queue_work(c->write_ref_wq, &c->vfs.check_dirents_work))
+		enumerated_ref_put(&c->writes, BCH_WRITE_REF_vfs_check_dirents);
+}
+
 static int dirent_to_missing_inode(struct btree_trans *trans,
 				   struct bkey_s_c_dirent d,
 				   subvol_inum dir,
@@ -837,8 +856,6 @@ static int dirent_to_missing_inode(struct btree_trans *trans,
 
 	prt_printf(&msg.m, "dirent to missing inode: (%s)\n", bch2_err_str(ret));
 	bch2_bkey_val_to_text(&msg.m, c, d.s_c);
-	prt_str(&msg.m, "\n in: ");
-	try(bch2_inum_to_path(trans, dir, &msg.m));
 	prt_printf(&msg.m, "\ndir subvol %llu inum subvol %llu snapshot %u\n",
 		   dir.subvol, inum.subvol, snapshot);
 
@@ -846,12 +863,14 @@ static int dirent_to_missing_inode(struct btree_trans *trans,
 	 * Not a reason to take the whole filesystem read only: log it,
 	 * schedule check_dirents, and the lookup returns ENOENT.
 	 *
-	 * Scheduling the pass takes sb_lock and may write the superblock;
-	 * we're on the error return path, nothing here needs btree locks:
+	 * This lookup runs under the VFS parent's i_rwsem. Do not make that
+	 * caller wait for recovery-pass registration to take sb_lock and write
+	 * the superblock. The queued worker holds a write ref, so it can finish
+	 * recording the offline repair without extending d_alloc_parallel().
 	 */
 	bch2_trans_unlock(trans);
-	return bch2_run_explicit_recovery_pass(c, &msg.m,
-					       BCH_RECOVERY_PASS_check_dirents, 0);
+	bch2_vfs_schedule_check_dirents(c);
+	return 0;
 }
 
 static struct bch_inode_info *bch2_lookup_trans(struct btree_trans *trans,
@@ -3023,6 +3042,7 @@ void bch2_fs_vfs_exit(struct bch_fs *c)
 int bch2_fs_vfs_init(struct bch_fs *c)
 {
 	fdm_init(&c->fdm_table);
+	INIT_WORK(&c->vfs.check_dirents_work, bch2_vfs_check_dirents_work);
 	try(fast_list_init(&c->vfs.inodes));
 
 	try(rhashtable_init(&c->vfs.inodes_table, &bch2_vfs_inodes_params));
