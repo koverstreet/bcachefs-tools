@@ -43,6 +43,34 @@ static void bch2_readpages_end_io(struct bio *bio)
 	bio_put(bio);
 }
 
+/*
+ * Give up the part of a readahead bio we haven't issued reads for yet.
+ *
+ * readpage_bio_extend() grows the bio past what was asked for so that reads
+ * cover whole extents - partial reads of a checksummed or compressed extent
+ * are expensive. It drops btree locks to allocate those folios, so under write
+ * load we can lose the relock over and over, re-peeking an extent that moved
+ * each time. Once everything the caller asked for has been issued, what's left
+ * is speculative: not worth holding the transaction open to fight for.
+ *
+ * The dropped folios are unlocked without uptodate, so a later read faults
+ * them in, and removed from the bio so bch2_readpages_end_io() doesn't end
+ * them a second time. Folios ahead of the iterator have been read and are left
+ * for it to finish.
+ */
+static void readpage_bio_drop_unissued(struct bch_read_bio *rbio)
+{
+	struct bio *bio = &rbio->bio;
+	struct bvec_iter iter;
+	struct folio_vec fv;
+
+	bio_for_each_folio(fv, bio, iter)
+		folio_end_read(fv.fv_folio, false);
+
+	bio->bi_vcnt		= bio->bi_iter.bi_idx;
+	bio->bi_iter.bi_size	= 0;
+}
+
 struct readpages_iter {
 	struct address_space	*mapping;
 	unsigned		idx;
@@ -203,6 +231,13 @@ static void bchfs_read(struct btree_trans *trans,
 
 	rbio->subvol = inum.subvol;
 
+	/*
+	 * What was actually asked for, before readpage_bio_extend() grows the
+	 * bio for extent alignment. Anything past this is readahead we're free
+	 * to abandon - see readpage_bio_drop_unissued().
+	 */
+	sector_t orig_end = bio_end_sector(&rbio->bio);
+
 	struct bkey_buf sk __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&sk);
 
@@ -275,6 +310,28 @@ static void bchfs_read(struct btree_trans *trans,
 		swap(rbio->bio.bi_iter.bi_size, bytes);
 err:
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+			/*
+			 * We've issued reads for everything that was asked for;
+			 * the rest is readahead, and retrying only costs us
+			 * another traversal for a target that keeps moving.
+			 */
+			if (readpages_iter &&
+			    rbio->bio.bi_iter.bi_sector >= orig_end) {
+				readpage_bio_drop_unissued(rbio);
+				bio_endio(&rbio->bio);
+
+				/*
+				 * Every other exit from this loop clears the
+				 * restart by looping back through
+				 * bch2_trans_begin(); we're leaving early, and
+				 * bch2_readahead() reuses this transaction and
+				 * ends with bch2_trans_put(), which refuses one
+				 * that's still in a restart.
+				 */
+				bch2_trans_begin(trans);
+				return;
+			}
+
 			flags &= ~BCH_READ_last_fragment;
 			continue;
 		}
