@@ -30,17 +30,69 @@ static inline bool bio_full(struct bio *bio, unsigned len)
 	return false;
 }
 
-/* readpage(s): */
+/*
+ * readpage(s):
+ *
+ * A readahead bio covers the folios the readahead control asked for, plus
+ * whatever readpage_bio_extend() adds to reach an extent boundary - partial
+ * reads of a checksummed or compressed extent are expensive. Only that
+ * extension is speculative, and only it may be abandoned.
+ *
+ * Abandoning it is worth doing because readpage_bio_extend() drops btree locks
+ * to allocate folios: under write load we lose the relock repeatedly to an
+ * extent that keeps moving, and holding the transaction open to chase it costs
+ * more than the readahead is worth.
+ *
+ * The complication is that reads are sector granular and the page cache is
+ * folio granular, so where we stop issuing is generally not a folio boundary.
+ * Every folio has to be unlocked exactly once, by whoever owns it: us for the
+ * folios we abandon, the read completion for the folios we issued. The folio
+ * we stop inside belongs to the completion - IO is landing in it - but it
+ * isn't uptodate, and folio_end_read() can't express that. bch_folio.
+ * partially_uptodate does.
+ */
 
 static void bch2_readpages_end_io(struct bio *bio)
 {
 	struct bch_read_bio *rbio = to_rbio(bio);
 	struct folio_iter fi;
 
+	/* a stale partially_uptodate would spin do_read_cache_folio() forever: */
+	struct folio *last = page_folio(bio->bi_io_vec[bio->bi_vcnt - 1].bv_page);
+	struct folio *partial = bch2_folio(last)->partially_uptodate ? last : NULL;
+
 	bio_for_each_folio_all(fi, bio)
-		folio_end_read(fi.folio, !rbio->ret);
+		folio_end_read(fi.folio, !rbio->ret && fi.folio != partial);
 
 	bio_put(bio);
+}
+
+static void readpage_bio_drop_unissued(struct bch_read_bio *rbio)
+{
+	struct bio *bio = &rbio->bio;
+	struct bvec_iter iter;
+	struct folio_vec fv;
+	unsigned keep = bio->bi_iter.bi_idx;
+	bool partial = bio->bi_iter.bi_bvec_done != 0;
+
+	if (partial) {
+		struct folio *folio = page_folio(bio->bi_io_vec[keep].bv_page);
+
+		bch2_folio(folio)->partially_uptodate = bio->bi_iter.bi_bvec_done >> 9;
+		keep++;
+	}
+
+	bio_for_each_folio(fv, bio, iter) {
+		if (partial) {
+			partial = false;
+			continue;
+		}
+
+		folio_end_read(fv.fv_folio, false);
+	}
+
+	bio->bi_vcnt		= keep;
+	bio->bi_iter.bi_size	= 0;
 }
 
 struct readpages_iter {
@@ -203,6 +255,11 @@ static void bchfs_read(struct btree_trans *trans,
 
 	rbio->subvol = inum.subvol;
 
+	/* the readahead window; past this is the speculative extension: */
+	sector_t orig_end = readpages_iter && readpages_iter->folios.nr
+		? folio_end_sector(readpages_iter->folios.data[readpages_iter->folios.nr - 1])
+		: bio_end_sector(&rbio->bio);
+
 	struct bkey_buf sk __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&sk);
 
@@ -275,6 +332,17 @@ static void bchfs_read(struct btree_trans *trans,
 		swap(rbio->bio.bi_iter.bi_size, bytes);
 err:
 		if (bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+			/* everything asked for is issued; the rest isn't worth a retry */
+			if (readpages_iter &&
+			    rbio->bio.bi_iter.bi_sector >= orig_end) {
+				readpage_bio_drop_unissued(rbio);
+				bio_endio(&rbio->bio);
+
+				/* bch2_trans_put() won't take a restarted trans */
+				bch2_trans_begin(trans);
+				return;
+			}
+
 			flags &= ~BCH_READ_last_fragment;
 			continue;
 		}
@@ -373,7 +441,8 @@ int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
 	BUG_ON(folio_test_uptodate(folio));
 	BUG_ON(folio_test_dirty(folio));
 
-	if (!bch2_folio_create(folio, GFP_KERNEL))
+	struct bch_folio *s = bch2_folio_create(folio, GFP_KERNEL);
+	if (!s)
 		return -ENOMEM;
 
 	bch2_inode_opts_get_inode(c, &inode->ei_inode, &opts);
@@ -398,6 +467,7 @@ int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
 	if (ret < 0)
 		return ret;
 
+	s->partially_uptodate = 0;
 	folio_mark_uptodate(folio);
 	return 0;
 }

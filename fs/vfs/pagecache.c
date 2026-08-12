@@ -179,7 +179,7 @@ static void __bch2_folio_set(struct folio *folio,
 	}
 
 	if (i == sectors)
-		s->uptodate = true;
+		s->state_uptodate = true;
 }
 
 /*
@@ -199,7 +199,7 @@ int bch2_folio_set(struct bch_fs *c,
 		if (!s)
 			return -ENOMEM;
 
-		if (!s->uptodate &&
+		if (!s->state_uptodate &&
 		    folio_pos(f)	>= inode->ei_reserved_start &&
 		    folio_end_pos(f)	<= inode->ei_reserved_end) {
 			guard(spinlock)(&inode->ei_reserved_lock);
@@ -213,7 +213,7 @@ int bch2_folio_set(struct bch_fs *c,
 			}
 		}
 
-		need_set |= !s->uptodate;
+		need_set |= !s->state_uptodate;
 	}
 
 	if (!need_set)
@@ -246,7 +246,7 @@ int bch2_folio_set(struct bch_fs *c,
 				BUG_ON(k.k->p.offset < folio_start);
 				BUG_ON(bkey_start_offset(k.k) > folio_end);
 
-				if (!bch2_folio(folio)->uptodate)
+				if (!bch2_folio(folio)->state_uptodate)
 					__bch2_folio_set(folio, folio_offset, folio_len, nr_ptrs, state);
 
 				if (k.k->p.offset < folio_end)
@@ -416,7 +416,7 @@ int bch2_get_folio_disk_reservation(struct bch_fs *c,
 	int ret;
 
 	BUG_ON(!s);
-	EBUG_ON(!s->uptodate);
+	EBUG_ON(!s->state_uptodate);
 
 	for (i = 0; i < sectors; i++)
 		disk_res_sectors += sectors_to_reserve(&s->s[i], nr_replicas);
@@ -460,7 +460,7 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 	int ret;
 
 	BUG_ON(!s);
-	BUG_ON(!s->uptodate);
+	BUG_ON(!s->state_uptodate);
 
 	for (i = round_down(offset, block_bytes(c)) >> 9;
 	     i < round_up(offset + len, block_bytes(c)) >> 9;
@@ -520,7 +520,7 @@ static int bch2_folio_reservation_get_nofail(struct bch_fs *c,
 	int ret;
 
 	BUG_ON(!s);
-	BUG_ON(!s->uptodate);
+	BUG_ON(!s->state_uptodate);
 
 	for (i = round_down(offset, block_bytes(c)) >> 9;
 	     i < round_up(offset + len, block_bytes(c)) >> 9;
@@ -620,7 +620,7 @@ bool bch2_set_folio_dirty(struct bch_fs *c,
 	 */
 
 	BUG_ON(!s);
-	BUG_ON(!s->uptodate);
+	BUG_ON(!s->state_uptodate);
 	EBUG_ON(round_up(offset + len, block_bytes(c)) >> 9 > UINT_MAX);
 
 	scoped_guard(spinlock, &s->lock)

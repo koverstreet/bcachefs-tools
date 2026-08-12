@@ -71,11 +71,15 @@ struct bch_folio_sector {
 struct bch_folio {
 	spinlock_t		lock;
 	atomic_t		write_count;
+	/* is s[] up to date with the btree? says nothing about the data */
+	bool			state_uptodate;
 	/*
-	 * Is the sector state up to date with the btree?
-	 * (Not the data itself)
+	 * The data: sectors [0, partially_uptodate) are read but the folio
+	 * isn't uptodate. One offset suffices because reads start at the front
+	 * of the folio; 0 means nothing partial, so only
+	 * readpage_bio_drop_unissued() maintains this.
 	 */
-	bool			uptodate;
+	u16			partially_uptodate;
 	struct bch_folio_sector	s[];
 };
 
