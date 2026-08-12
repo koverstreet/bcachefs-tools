@@ -1072,28 +1072,7 @@ static ssize_t bch2_buffered_write(struct kiocb *iocb, struct iov_iter *iter)
 		bch2_zero_pagecache_posteof(inode);
 
 	do {
-		unsigned offset = pos & (PAGE_SIZE - 1);
 		unsigned bytes = iov_iter_count(iter);
-again:
-		/*
-		 * Bring in the user page that we will copy from _first_.
-		 * Otherwise there's a nasty deadlock on copying from the
-		 * same page as we're writing to, without it being marked
-		 * up-to-date.
-		 *
-		 * Not only is this an optimisation, but it is also required
-		 * to check that the address is actually valid, when atomic
-		 * usercopies are used, below.
-		 */
-		if (unlikely(fault_in_iov_iter_readable(iter, bytes))) {
-			bytes = min_t(unsigned long, iov_iter_count(iter),
-				      PAGE_SIZE - offset);
-
-			if (unlikely(fault_in_iov_iter_readable(iter, bytes))) {
-				ret = -EFAULT;
-				break;
-			}
-		}
 
 		if (unlikely(fatal_signal_pending(current))) {
 			ret = -EINTR;
@@ -1108,16 +1087,12 @@ again:
 
 		if (unlikely(ret == 0)) {
 			/*
-			 * If we were unable to copy any data at all, we must
-			 * fall back to a single segment length write.
-			 *
-			 * If we didn't fallback here, we could livelock
-			 * because not all segments in the iov can be copied at
-			 * once without a pagefault.
+			 * bch2_write_iter() faulted in the user iterator before
+			 * taking snapshots.create_lock; do not fault in user
+			 * memory here, while holding it.
 			 */
-			bytes = min_t(unsigned long, PAGE_SIZE - offset,
-				      iov_iter_single_seg_count(iter));
-			goto again;
+			ret = -EFAULT;
+			break;
 		}
 		pos += ret;
 		written += ret;
@@ -1137,6 +1112,7 @@ ssize_t bch2_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	struct file *file = iocb->ki_filp;
 	struct bch_inode_info *inode = file_bch_inode(file);
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
+	size_t orig_count = 0, shortened = 0;
 	ssize_t ret;
 
 	if (iocb->ki_flags & IOCB_DIRECT) {
@@ -1150,6 +1126,9 @@ ssize_t bch2_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	 * state. O_DIRECT doesn't need this — btree commits are already atomic
 	 * w.r.t. snapshot — so we take the lock only on this side of the branch.
 	 *
+	 * User pages must be faulted in before taking the lock; fault handling
+	 * may take mmap_lock, and page_mkwrite takes the locks in the other order.
+	 *
 	 * NB: this assumes buffered writes are synchronous — submit and dirty
 	 * happen in the same task. If async buffered IO is ever added (e.g.
 	 * io_uring buffered writes via worker threads), the up_read here will
@@ -1159,11 +1138,31 @@ ssize_t bch2_write_iter(struct kiocb *iocb, struct iov_iter *from)
 	 * or rethink the model.
 	 */
 	inode_lock(&inode->v);
-	percpu_down_read(&c->snapshots.create_lock);
 
 	ret = generic_write_checks(iocb, from);
 	if (ret <= 0)
-		goto unlock;
+		goto unlock_inode;
+
+	/*
+	 * Bring in the user pages that we will copy from _first_. Otherwise
+	 * there's a nasty deadlock on copying from the same page as we're
+	 * writing to, without it being marked up-to-date.
+	 *
+	 * This must be done before snapshots.create_lock: page faults may take
+	 * mmap_lock, while bch2_page_mkwrite() takes the locks in the opposite
+	 * order.
+	 */
+	orig_count = iov_iter_count(from);
+	shortened = fault_in_iov_iter_readable(from, orig_count);
+	if (unlikely(shortened == orig_count)) {
+		ret = -EFAULT;
+		goto unlock_inode;
+	}
+
+	if (shortened)
+		iov_iter_truncate(from, orig_count - shortened);
+
+	percpu_down_read(&c->snapshots.create_lock);
 
 	ret = file_remove_privs(file);
 	if (ret)
@@ -1178,6 +1177,9 @@ ssize_t bch2_write_iter(struct kiocb *iocb, struct iov_iter *from)
 		iocb->ki_pos += ret;
 unlock:
 	percpu_up_read(&c->snapshots.create_lock);
+	if (shortened)
+		iov_iter_reexpand(from, iov_iter_count(from) + shortened);
+unlock_inode:
 	inode_unlock(&inode->v);
 
 	if (ret > 0)
