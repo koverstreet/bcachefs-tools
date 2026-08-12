@@ -1243,6 +1243,19 @@ struct bkey_s_c bch2_btree_iter_peek_root(struct btree_trans *, struct btree_ite
 	_p;								\
 })
 
+#define allocate_dropping_locks_errcode_norelock(_trans, _do)		\
+({									\
+	gfp_t _gfp = GFP_NOWAIT;					\
+	int _ret = _do;							\
+									\
+	if (bch2_err_matches(_ret, ENOMEM)) {				\
+		bch2_trans_unlock(_trans);				\
+		_gfp = GFP_KERNEL;					\
+		_ret = _do;						\
+	}								\
+	_ret;								\
+})
+
 #define allocate_dropping_locks_norelock(_trans, _do)			\
 ({									\
 	gfp_t _gfp = GFP_NOWAIT;					\

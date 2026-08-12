@@ -162,15 +162,42 @@ static bool extent_partial_reads_expensive(const struct bch_fs *c, struct bkey_s
 	return false;
 }
 
+static inline struct folio *__readpage_alloc_folio(gfp_t gfp, unsigned order)
+{
+#if LINUX_VERSION_CODE < KERNEL_VERSION(6,19,0)
+	return filemap_alloc_folio(gfp, order);
+#else
+	return filemap_alloc_folio(gfp, order, NULL);
+#endif
+}
+
+/*
+ * Not allocate_dropping_locks(): that tries GFP_NOWAIT first, and GFP_NOWAIT
+ * is not the mapping's mask minus blocking - it's missing __GFP_MOVABLE, and
+ * page cache folios have to be movable or they pin pageblocks against
+ * compaction. Drop only the ability to block.
+ */
+static struct folio *readpage_alloc_folio(struct btree_trans *trans,
+					  struct address_space *mapping,
+					  unsigned order)
+{
+	gfp_t gfp = readahead_gfp_mask(mapping);
+
+	struct folio *folio = __readpage_alloc_folio(gfp & ~__GFP_DIRECT_RECLAIM, order);
+	if (!folio) {
+		bch2_trans_unlock(trans);
+		folio = __readpage_alloc_folio(gfp, order);
+	}
+
+	return folio;
+}
+
 static int readpage_bio_extend(struct btree_trans *trans,
 			       struct readpages_iter *iter,
 			       struct bio *bio,
 			       unsigned sectors_this_extent,
 			       bool get_more)
 {
-	/* Don't hold btree locks while allocating memory: */
-	bch2_trans_unlock(trans);
-
 	while (bio_sectors(bio) < sectors_this_extent &&
 	       bio->bi_vcnt < bio->bi_max_vecs) {
 		struct folio *folio = readpage_iter_peek(iter);
@@ -212,20 +239,18 @@ static int readpage_bio_extend(struct btree_trans *trans,
 			if (folio && !xa_is_value(folio))
 				break;
 
-#if LINUX_VERSION_CODE < KERNEL_VERSION(6,19,0)
-			folio = filemap_alloc_folio(readahead_gfp_mask(iter->mapping), order);
-#else
-			folio = filemap_alloc_folio(readahead_gfp_mask(iter->mapping), order, NULL);
-#endif
+			folio = readpage_alloc_folio(trans, iter->mapping, order);
 			if (!folio)
 				break;
 
-			if (!__bch2_folio_create(folio, GFP_KERNEL)) {
+			if (!allocate_dropping_locks_norelock(trans,
+						__bch2_folio_create(folio, _gfp))) {
 				folio_put(folio);
 				break;
 			}
 
-			ret = filemap_add_folio(iter->mapping, folio, folio_offset, GFP_KERNEL);
+			ret = allocate_dropping_locks_errcode_norelock(trans,
+					filemap_add_folio(iter->mapping, folio, folio_offset, _gfp));
 			if (ret) {
 				__bch2_folio_release(folio);
 				folio_put(folio);
