@@ -255,6 +255,9 @@ static void bchfs_read(struct btree_trans *trans,
 
 	rbio->subvol = inum.subvol;
 
+	struct folio *first = page_folio(rbio->bio.bi_io_vec[0].bv_page);
+	u64 read_from = folio_sector(first) + bch2_folio(first)->partially_uptodate;
+
 	/* the readahead window; past this is the speculative extension: */
 	sector_t orig_end = readpages_iter && readpages_iter->folios.nr
 		? folio_end_sector(readpages_iter->folios.data[readpages_iter->folios.nr - 1])
@@ -289,6 +292,16 @@ static void bchfs_read(struct btree_trans *trans,
 		ret = bkey_err(k);
 		if (ret)
 			goto err;
+
+		/*
+		 * Extents entirely within the prefix a previous read already
+		 * filled in: skip them, which leaves us extent aligned.
+		 */
+		if (k.k->p.offset <= read_from) {
+			bio_advance(&rbio->bio,
+				    (k.k->p.offset - iter.pos.offset) << 9);
+			continue;
+		}
 
 		offset_into_extent = iter.pos.offset -
 			bkey_start_offset(k.k);
