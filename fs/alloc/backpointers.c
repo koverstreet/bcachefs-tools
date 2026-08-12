@@ -1363,22 +1363,25 @@ struct bkey_s_c_backpointer bch2_bp_scan_iter_peek(struct btree_trans *trans,
 						   struct wb_maybe_flush *last_flushed)
 {
 	if (iter->nr_flushes != last_flushed->nr_flushes) {
-		if (iter->bps.nr) {
-			struct bkey_i_backpointer *prev = &darray_last(iter->bps);
-
-			CLASS(btree_iter, bp_iter)(trans, iter->btree, prev->k.p, 0);
-			struct bkey_s_c k;
-			int ret = bkey_err(k = bch2_btree_iter_peek_slot(&bp_iter));
-			if (bkey_err(k))
-				return (struct bkey_s_c_backpointer) { .k = ERR_PTR(ret) };
-
-			if (k.k->type == KEY_TYPE_backpointer)
-				bkey_reassemble(&prev->k_i, k);
-			else
-				--iter->bps.nr;
-		}
-
 		iter->nr_flushes = last_flushed->nr_flushes;
+		iter->bps_current = iter->head_current = false;
+	}
+
+	while (iter->bps.nr && !iter->head_current) {
+		struct bkey_i_backpointer *head = &darray_last(iter->bps);
+
+		CLASS(btree_iter, bp_iter)(trans, iter->btree, head->k.p, 0);
+		struct bkey_s_c k;
+		int ret = bkey_err(k = bch2_btree_iter_peek_slot(&bp_iter));
+		if (ret)
+			return (struct bkey_s_c_backpointer) { .k = ERR_PTR(ret) };
+
+		if (k.k->type == KEY_TYPE_backpointer) {
+			bkey_reassemble(&head->k_i, k);
+			iter->head_current = true;
+		} else {
+			--iter->bps.nr;
+		}
 	}
 
 	if (!iter->bps.nr) {
@@ -1417,6 +1420,8 @@ struct bkey_s_c_backpointer bch2_bp_scan_iter_peek(struct btree_trans *trans,
 		darray_sort(iter->bps, bkey_i_backpointer_cmp);
 		bch2_trans_begin(trans);
 		trans->restart_count = restart_count;
+
+		iter->bps_current = iter->head_current = true;
 	}
 
 	return backpointer_i_to_s_c(&darray_last(iter->bps));

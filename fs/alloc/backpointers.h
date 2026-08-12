@@ -236,7 +236,19 @@ struct bp_scan_iter {
 	/* BTREE_ID_backpointers, BTREE_ID_stripe_backpointers */
 	enum btree_id			btree;
 	struct bpos			pos;
+	/*
+	 * bps[] is filled from the btree in one gulp, then walked in target
+	 * order - so a write buffer flush partway through the walk may have
+	 * deleted entries we read before it. Track whether the entry we're
+	 * about to hand out has been re-read since the last flush; if it
+	 * hasn't, bch2_bp_scan_iter_peek() re-reads it (and drops it if it's
+	 * gone) rather than handing out a key we already know may be stale.
+	 *
+	 * @nr_flushes exists only to notice that a flush happened.
+	 */
 	u64				nr_flushes;
+	bool				bps_current;
+	bool				head_current;
 	struct progress_indicator	*progress;
 	darray_bkey_i_backpointer	bps;
 };
@@ -253,6 +265,7 @@ static inline void bch2_bp_scan_iter_advance(struct bp_scan_iter *iter)
 {
 	BUG_ON(!iter->bps.nr);
 	--iter->bps.nr;
+	iter->head_current = iter->bps_current;
 }
 
 #define backpointer_scan_for_each(_trans, _bp_iter, _btree, _start, _end,			\
