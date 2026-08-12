@@ -192,6 +192,7 @@ static struct folio *readpage_alloc_folio(struct btree_trans *trans,
 	return folio;
 }
 
+noinline
 static int readpage_bio_extend(struct btree_trans *trans,
 			       struct readpages_iter *iter,
 			       struct bio *bio,
@@ -343,7 +344,9 @@ static void bchfs_read(struct btree_trans *trans,
 
 		sectors = min_t(unsigned, sectors, k.k->size - offset_into_extent);
 
-		if (readpages_iter) {
+		if (readpages_iter &&
+		    bio_sectors(&rbio->bio) < sectors &&
+		    rbio->bio.bi_vcnt < rbio->bio.bi_max_vecs) {
 			ret = readpage_bio_extend(trans, readpages_iter, &rbio->bio, sectors,
 						  extent_partial_reads_expensive(c, k));
 			if (ret)
