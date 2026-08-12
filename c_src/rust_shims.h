@@ -105,6 +105,8 @@ int rust_write_submit(struct bch_fs *c,
  * Submit a read without waiting — Rust handles completion via endio.
  * Caller must heap-allocate rbio and bvecs (they must outlive the IO).
  */
+
+struct bch_read_bio;
 void rust_read_submit(struct bch_fs *c,
 		      struct bch_read_bio *rbio,
 		      struct bio_vec *bvecs, unsigned nr_bvecs,
