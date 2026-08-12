@@ -38,6 +38,7 @@ struct bch_fs_vfs {
 	 * deliberately non-unique.
 	 */
 	struct rhltable		inodes_by_inum_table;
+	struct work_struct	check_dirents_work;
 
 	struct bio_set		writepage_bioset;
 	struct bio_set		dio_write_bioset;
