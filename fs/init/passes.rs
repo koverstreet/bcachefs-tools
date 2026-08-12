@@ -127,6 +127,12 @@ pub struct bch_fs_recovery {
     /* the async runner: run_async() */
     #[pin]
     pub(crate) work: ReffedWork<async_runner, crate::field!(super.writes)>,
+
+    /* a lookup found a dirent to a missing inode: check_dirents is scheduled
+     * from here, not under the parent's i_rwsem - holding a write ref, so it
+     * can't race shutdown */
+    #[pin]
+    pub(crate) check_dirents_work: ReffedWork<check_dirents_work, crate::field!(super.writes)>,
 }
 
 /// @pass, a function or closure of `&Fs` returning `Result<(), E>` with E
@@ -990,6 +996,17 @@ pub(crate) fn async_runner(recovery: &c::bch_fs_recovery) {
     let ratelimiting = lock(fs).passes_ratelimiting;
     let passes = (required | recovery.runner.scheduled_passes_ephemeral.get()) & !ratelimiting & passes_match(PassFlags::ONLINE);
     let _ = run_passes(fs, passes, false);
+}
+
+/// The deferred check_dirents scheduling of a lookup that found a dirent to a
+/// missing inode: recovery.check_dirents_work's. Registering the pass takes sb_lock
+/// and may write the superblock, which the lookup, holding the parent's
+/// i_rwsem with others waiting on its in-lookup dentry, mustn't.
+pub(crate) fn check_dirents_work(recovery: &c::bch_fs_recovery) {
+    let fs = recovery.container();
+    let mut msg = LogMsg::new(fs);
+    let ret = run_explicit(fs, &mut msg, RecoveryPass::check_dirents, c::RunRecoveryPassFlags::empty());
+    crate::bch_err_fn!(fs, ret).ok();
 }
 
 /// Kick the async runner, if the filesystem is writable: for passes that can

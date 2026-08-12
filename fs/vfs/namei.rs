@@ -26,6 +26,7 @@ use crate::quota::QuotaAcctMode;
 use crate::quota;
 use crate::snapshots::subvolume;
 use crate::str_hash;
+use crate::os::workqueue::Queue;
 use crate::os::kernel::{current_fsgid, current_fsuid};
 use crate::util::log::LogMsg;
 use crate::os::file::OpeningTmpfile;
@@ -489,14 +490,20 @@ fn dirent_to_missing_inode(t: &TransAttempt<'_, '_>, d: Dirent<'_>, dir: c::subv
     -> Result<(), BchError>
 {
     let fs = t.fs();
+
+    // The path isn't looked up: the transaction is being unwound here
     let mut msg = LogMsg::new(fs);
+    write!(msg, "dirent to missing inode: ({err})\n{}\n", d.k().to_text(fs));
+    write!(msg, "dir subvol {} inum subvol {} snapshot {snapshot}\n", dir.subvol, inum.subvol);
 
-    write!(msg, "dirent to missing inode: ({err})\n{}\n in: ", d.k().to_text(fs));
-    namei::inum_to_path(t, dir, &mut msg)?;
-    write!(msg, "\ndir subvol {} inum subvol {} snapshot {snapshot}\n", dir.subvol, inum.subvol);
-
-    // Scheduling the pass takes sb_lock, and may write the superblock
+    // Queued, not run: registering the pass takes sb_lock and may write the
+    // superblock, and the lookup returns ENOENT with the parent's i_rwsem
+    // held. Repeats collapse onto the one queued. Not queueable - writes are
+    // stopped, a read-only mount - it's registered here, as it always was: the
+    // request is the superblock's to keep for the next recovery
     t.unlock();
-    passes::run_explicit(fs, &mut msg, RecoveryPass::check_dirents,
-                         c::RunRecoveryPassFlags::empty())
+    if fs.recovery.check_dirents_work.queue(Queue::system_long()) {
+        return Ok(());
+    }
+    passes::run_explicit(fs, &mut msg, RecoveryPass::check_dirents, c::RunRecoveryPassFlags::empty())
 }
