@@ -14,7 +14,7 @@
  *
  * Performance near full: copygc needs free space to relocate data into, so a
  * portion of free space is reserved exclusively for it (`copygc_reserve`, 8%
- * by default, configurable 5-21%). Normal writes cannot dip into this reserve.
+ * by default, configurable 5-20%). Normal writes cannot dip into this reserve.
  * As the filesystem fills beyond the reserve threshold, write latency
  * increases because new writes must wait for copygc to free space first. This
  * is the primary reason to avoid running a bcachefs filesystem above ~90%

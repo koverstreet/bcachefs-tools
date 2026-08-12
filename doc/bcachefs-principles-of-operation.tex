@@ -331,7 +331,7 @@ are partially empty (because the data they contained was overwritten) - copy GC
 evacuates buckets that are mostly empty by writing the data they contain to new
 buckets. This also means that we need to reserve space on the device for the
 copy GC reserve when formatting - 8\% by default (configurable from 5\% to
-21\%). A fragmentation LRU btree tracks bucket fill levels so that copygc can
+20\%). A fragmentation LRU btree tracks bucket fill levels so that copygc can
 find the most fragmented buckets directly instead of scanning the entire alloc
 btree.
 
