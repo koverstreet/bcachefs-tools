@@ -115,13 +115,21 @@ static void raid_rec(int nr, int *ir, int nd, int np, size_t size, void **v)
 void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
 {
 	/*
+	 * Init may have failed or never run - nothing to drain, and
+	 * closure_sync() on a closure that was never initialised or
+	 * completed would sleep forever.
+	 */
+	if (!buf->c)
+		return;
+
+	/*
 	 * Drain in-flight stripe IO before freeing the buffers it reads/writes
 	 * into: the bios are mapped directly at buf->data[] and hold refs on
 	 * buf->io, so freeing first is a use-after-free.
 	 */
 	closure_sync(&buf->io);
 
-	if (buf->c) {
+	{
 		struct bch_fs *c = buf->c;
 		buf->c = NULL;
 		scoped_guard(spinlock, &c->ec.stripe_buf_lock) {
@@ -171,6 +179,15 @@ int bch2_ec_stripe_buf_init(struct bch_fs *c,
 		c->ec.stripe_buf_bytes += buf_bytes;
 	}
 
+	/*
+	 * Initialise before anything can fail from here on: the failure
+	 * paths and the callers' cleanup both run bch2_ec_stripe_buf_exit(),
+	 * which closure_sync()s this. (Not before the blocked check above:
+	 * that path returns and may retry, and reinitialising would
+	 * re-register the closure with the debug list.)
+	 */
+	closure_init(&buf->io, NULL);
+
 	buf->c		= c;
 	buf->offset	= offset;
 	buf->size	= end - offset;
@@ -179,12 +196,9 @@ int bch2_ec_stripe_buf_init(struct bch_fs *c,
 		buf->data[i] = kvmalloc(buf->size << 9, GFP_KERNEL);
 		if (!buf->data[i]) {
 			bch2_ec_stripe_buf_exit(buf);
-			buf->c = NULL;
 			return bch_err_throw(c, ENOMEM_stripe_buf);
 		}
 	}
-
-	closure_init(&buf->io, NULL);
 
 	return 0;
 }
