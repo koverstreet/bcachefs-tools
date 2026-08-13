@@ -454,9 +454,20 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
+	struct bch_extent_reconcile rb = *r;
 
-	unsigned csum_type = bch2_data_checksum_type_rb(c, *r);
-	unsigned compression_type = bch2_compression_opt_to_type(r->background_compression);
+	/*
+	 * Extents written by newer versions may carry checksum/compression
+	 * types we don't know about - fall back to the (already fixed up)
+	 * inode options for the rewrite, instead of tripping over them:
+	 */
+	if (rb.data_checksum >= BCH_CSUM_OPT_NR)
+		rb.data_checksum = opts->data_checksum;
+	if (!bch2_compression_opt_valid(rb.background_compression))
+		rb.background_compression = opts->background_compression;
+
+	unsigned csum_type = bch2_data_checksum_type_rb(c, rb);
+	unsigned compression_type = bch2_compression_opt_to_type(rb.background_compression);
 
 	if (r->need_rb & BIT(BCH_RECONCILE_data_replicas)) {
 		struct bkey_durability durability;
