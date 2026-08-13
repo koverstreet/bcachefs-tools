@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, ffi::CStr, mem, os::fd::OwnedFd, path::{Path, PathBuf}};
+use std::{collections::HashMap, ffi::CStr, mem, os::fd::OwnedFd, path::{Path, PathBuf}};
 use chrono::{Local, TimeZone};
 
 use anyhow::{Context, Result};
@@ -789,21 +789,32 @@ fn subvolume(cli: Cli) -> Result<()> {
     }
 }
 
+/// Open a handle on the filesystem @path is in, or will be in.
+///
+/// The handle only selects which filesystem to send the ioctl to: the
+/// subvolume ioctls carry their own dirfd and path and resolve it themselves.
+/// So any file in the right filesystem will do - and for a path that doesn't
+/// exist yet, that's the nearest ancestor that does. Walking too far - past a
+/// mountpoint, onto a different bcachefs - is caught by the kernel, which
+/// checks the resolved path against the filesystem the ioctl came in on and
+/// returns EXDEV.
+///
+/// A relative path's last ancestor is "", which never exists: that's the cwd.
+fn fs_for_path(path: &Path) -> Result<BcachefsHandle> {
+    let dir = path
+        .ancestors()
+        .find(|p| p.exists())
+        .unwrap_or(Path::new("."));
+
+    BcachefsHandle::open(dir)
+        .with_context(|| format!("Failed to open the filesystem at {}", dir.display()))
+}
+
 fn cmd_create(targets: Vec<PathBuf>) -> Result<()> {
     for target in targets {
-        let target = if target.is_absolute() {
-            target
-        } else {
-            env::current_dir()
-                .map(|p| p.join(target))
-                .context("unable to get current directory")?
-        };
-
-        if let Some(dirname) = target.parent() {
-            let fs = BcachefsHandle::open(dirname).context("Failed to open the filesystem")?;
-            fs.create_subvolume(target)
-                .context("Failed to create the subvolume")?;
-        }
+        fs_for_path(&target)?
+            .create_subvolume(target)
+            .context("Failed to create the subvolume")?;
     }
     Ok(())
 }
@@ -814,28 +825,21 @@ fn cmd_delete(targets: Vec<PathBuf>) -> Result<()> {
             .canonicalize()
             .context("subvolume path does not exist or can not be canonicalized")?;
 
-        if let Some(dirname) = target.parent() {
-            let fs = BcachefsHandle::open(dirname).context("Failed to open the filesystem")?;
-            fs.delete_subvolume(target)
-                .context("Failed to delete the subvolume")?;
-        }
+        fs_for_path(&target)?
+            .delete_subvolume(target)
+            .context("Failed to delete the subvolume")?;
     }
     Ok(())
 }
 
 fn cmd_snapshot(read_only: bool, source: Option<PathBuf>, dest: PathBuf) -> Result<()> {
-    if let Some(dirname) = dest.parent() {
-        let dot = PathBuf::from(".");
-        let dir = if dirname.as_os_str().is_empty() { &dot } else { dirname };
-        let fs = BcachefsHandle::open(dir).context("Failed to open the filesystem")?;
-
-        fs.snapshot_subvolume(
+    fs_for_path(&dest)?
+        .snapshot_subvolume(
             if read_only { BCH_SUBVOL_SNAPSHOT_RO } else { 0x0 },
             source,
             dest,
         )
         .context("Failed to snapshot the subvolume")?;
-    }
     Ok(())
 }
 
