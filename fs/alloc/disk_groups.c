@@ -219,8 +219,9 @@ static __cold void bch2_sb_disk_groups_to_text(struct printbuf *out,
 		if (BCH_GROUP_DELETED(g))
 			prt_printf(out, "[deleted]");
 		else
-			prt_printf(out, "[parent %llu name %s]",
-			       BCH_GROUP_PARENT(g), g->label);
+			prt_printf(out, "[parent %llu name %.*s]",
+			       BCH_GROUP_PARENT(g),
+			       (int) sizeof(g->label), g->label);
 	}
 }
 
