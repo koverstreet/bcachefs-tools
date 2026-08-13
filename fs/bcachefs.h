@@ -587,6 +587,9 @@ struct bch_dev {
 	 */
 	atomic_t		alloc_wake_counter;
 
+	/* Buckets copygc has queued for evacuation on this device: */
+	atomic_t		copygc_in_flight;
+
 	unsigned		nr_open_buckets;
 	unsigned		nr_partial_buckets;
 	unsigned		nr_btree_reserve;

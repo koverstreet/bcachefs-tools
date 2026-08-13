@@ -58,6 +58,7 @@
 #include <linux/wait.h>
 
 struct buckets_in_flight {
+	struct bch_fs		*c;
 	struct rhashtable	*table;
 	struct move_bucket	*first;
 	struct move_bucket	*last;
@@ -66,6 +67,14 @@ struct buckets_in_flight {
 
 	DARRAY(struct move_bucket *) to_evacuate;
 };
+
+static void copygc_in_flight_add(struct bch_fs *c, struct bpos bucket, int d)
+{
+	guard(rcu)();
+	struct bch_dev *ca = bch2_dev_rcu_noerror(c, bucket.inode);
+	if (ca)
+		atomic_add(d, &ca->copygc_in_flight);
+}
 
 static const struct rhashtable_params bch_move_bucket_params = {
 	.head_offset		= offsetof(struct move_bucket, hash),
@@ -141,6 +150,7 @@ static void move_bucket_free(struct buckets_in_flight *list,
 	int ret = rhashtable_remove_fast(list->table, &b->hash,
 					 bch_move_bucket_params);
 	BUG_ON(ret);
+	copygc_in_flight_add(list->c, b->k.bucket, -1);
 	kfree(b);
 }
 
@@ -213,6 +223,7 @@ static int try_add_copygc_bucket(struct btree_trans *trans,
 					    bch_move_bucket_params);
 	BUG_ON(ret);
 
+	copygc_in_flight_add(trans->c, bucket, 1);
 	return 1;
 }
 
@@ -565,10 +576,15 @@ err:
  * to decide whether to kick copygc and wait for it, or bail: it must be the
  * same criterion copygc uses to build its device list, so the allocator never
  * waits on a copygc run that isn't coming - and never bails when one is.
+ *
+ * Plus buckets copygc already has queued here: the wait amount is a threshold
+ * copygc drives to zero, so on a device it is actively working the comparison
+ * flips constantly and says nothing about whether space is coming.
  */
 bool bch2_copygc_can_make_progress(struct bch_dev *ca)
 {
-	return bch2_copygc_dev_wait_amount(ca) <= 0;
+	return atomic_read(&ca->copygc_in_flight) ||
+		bch2_copygc_dev_wait_amount(ca) <= 0;
 }
 
 /*
@@ -676,7 +692,7 @@ static int bch2_copygc_thread(void *arg)
 	struct moving_context ctxt;
 	struct bch_move_stats move_stats;
 	struct io_clock *clock = &c->io_clock[WRITE];
-	struct buckets_in_flight buckets = {};
+	struct buckets_in_flight buckets = { .c = c };
 	CLASS(darray_copygc_dev, devs)();
 	u64 last, wait;
 	u32 kick = c->copygc.kick_count;
