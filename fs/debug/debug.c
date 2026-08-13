@@ -232,9 +232,10 @@ static ssize_t bch2_read_btree(struct file *file, char __user *buf,
 	if (!test_bit(BCH_FS_may_go_rw, &i->c->flags))
 		return 0;
 
+	try(bch2_debugfs_flush_buf(i));
+
 	CLASS(btree_trans, trans)(i->c);
-	return bch2_debugfs_flush_buf(i) ?:
-		for_each_btree_key(trans, iter, i->id, i->from,
+	return for_each_btree_key(trans, iter, i->id, i->from,
 				   BTREE_ITER_prefetch|
 				   BTREE_ITER_all_snapshots, k, ({
 			bch2_bkey_val_to_text(&i->buf, i->c, k);
@@ -300,9 +301,10 @@ static ssize_t bch2_read_bfloat_failed(struct file *file, char __user *buf,
 	if (!test_bit(BCH_FS_may_go_rw, &i->c->flags))
 		return 0;
 
+	try(bch2_debugfs_flush_buf(i));
+
 	CLASS(btree_trans, trans)(i->c);
-	return bch2_debugfs_flush_buf(i) ?:
-		for_each_btree_key(trans, iter, i->id, i->from,
+	return for_each_btree_key(trans, iter, i->id, i->from,
 				   BTREE_ITER_prefetch|
 				   BTREE_ITER_all_snapshots, k, ({
 			struct btree_path_level *l =
@@ -833,6 +835,15 @@ static ssize_t bch2_fsck_damaged_paths_read(struct file *file, char __user *buf,
 	CLASS(btree_trans, trans)(c);
 
 	while (1) {
+		/*
+		 * copy_to_user() faults, and the fault path takes mmap_lock ->
+		 * snapshots.create_lock (page_mkwrite), while the buffered
+		 * write path takes create_lock -> btree. Holding btree locks
+		 * here closes that cycle.
+		 *
+		 * bch2_fsck_damaged_path_to_text() relocks via lockrestart_do().
+		 */
+		bch2_trans_unlock(trans);
 		try(bch2_debugfs_flush_buf(i));
 
 		/*
@@ -855,6 +866,7 @@ static ssize_t bch2_fsck_damaged_paths_read(struct file *file, char __user *buf,
 		i->iter++;
 	}
 
+	bch2_trans_unlock(trans);
 	return bch2_debugfs_flush_buf(i) ?: i->ret;
 }
 
