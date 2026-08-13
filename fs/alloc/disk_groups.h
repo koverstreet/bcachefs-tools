@@ -56,7 +56,7 @@ static inline struct target target_decode(unsigned target)
 	return (struct target) { .type = TARGET_NULL };
 }
 
-const struct bch_devs_mask *bch2_target_to_mask(struct bch_fs *, unsigned);
+bool bch2_target_to_mask(struct bch_fs *, unsigned, struct bch_devs_mask *);
 u64 bch2_dev_domain_key(struct bch_fs *, const struct bch_devs_mask *, unsigned);
 unsigned bch2_target_nr_domains(struct bch_fs *, const struct bch_devs_mask *);
 
@@ -65,10 +65,10 @@ static inline struct bch_devs_mask target_rw_devs(struct bch_fs *c,
 						  u16 target)
 {
 	struct bch_devs_mask devs = c->allocator.rw_devs[data_type];
-	const struct bch_devs_mask *t = bch2_target_to_mask(c, target);
+	struct bch_devs_mask t;
 
-	if (t)
-		bitmap_and(devs.d, devs.d, t->d, BCH_SB_MEMBERS_MAX);
+	if (bch2_target_to_mask(c, target, &t))
+		bitmap_and(devs.d, devs.d, t.d, BCH_SB_MEMBERS_MAX);
 	return devs;
 }
 

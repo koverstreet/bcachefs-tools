@@ -910,14 +910,16 @@ void bch2_disk_label_ec_rw_member_devs(struct bch_fs *c, unsigned disk_label,
 				       struct bch_devs_mask *devs,
 				       unsigned blocksize)
 {
+	struct bch_devs_mask t;
+
 	guard(rcu)();
 
-	const struct bch_devs_mask *t = disk_label
-		? bch2_target_to_mask(c, group_to_target(disk_label - 1))
-		: NULL;
+	if (disk_label &&
+	    !bch2_target_to_mask(c, group_to_target(disk_label - 1), &t))
+		disk_label = 0;
 
 	memset(devs, 0, sizeof(*devs));
-	for_each_member_device_rcu(c, ca, t)
+	for_each_member_device_rcu(c, ca, disk_label ? &t : NULL)
 		if (ca->mi.state == BCH_MEMBER_STATE_rw &&
 		    (ca->mi.data_allowed & BIT(BCH_DATA_user)) &&
 		    ca->mi.durability &&

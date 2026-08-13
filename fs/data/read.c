@@ -93,9 +93,12 @@ static bool bch2_target_congested(struct bch_fs *c, u16 target)
 	unsigned d, nr = 0, total = 0;
 	u64 now = local_clock();
 
+	struct bch_devs_mask target_devs;
+
 	guard(rcu)();
-	devs = bch2_target_to_mask(c, target) ?:
-		&c->allocator.rw_devs[BCH_DATA_user];
+	if (!bch2_target_to_mask(c, target, &target_devs))
+		target_devs = c->allocator.rw_devs[BCH_DATA_user];
+	devs = &target_devs;
 
 	for_each_set_bit(d, devs->d, BCH_SB_MEMBERS_MAX) {
 		struct bch_dev *ca = rcu_dereference(c->devs[d]);

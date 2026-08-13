@@ -243,31 +243,50 @@ int bch2_sb_disk_groups_to_cpu(struct bch_fs *c)
 	return 0;
 }
 
-const struct bch_devs_mask *bch2_target_to_mask(struct bch_fs *c, unsigned target)
+/*
+ * Fills devs with the mask for target, under RCU, and returns true - or
+ * returns false if target is invalid or specifies nothing. The mask is
+ * copied out because the underlying objects are RCU managed and are
+ * freed (kfree_rcu) when devices or labels change, so callers must not
+ * retain interior pointers past the RCU read side section.
+ */
+bool bch2_target_to_mask(struct bch_fs *c, unsigned target, struct bch_devs_mask *devs)
 {
 	struct target t = target_decode(target);
+	bool ret = true;
 
 	guard(rcu)();
 
 	switch (t.type) {
 	case TARGET_NULL:
-		return NULL;
+		ret = false;
+		break;
 	case TARGET_DEV: {
 		struct bch_dev *ca = t.dev < c->sb.nr_devices
 			? rcu_dereference(c->devs[t.dev])
 			: NULL;
-		return ca ? &ca->self : NULL;
+		if (!ca) {
+			ret = false;
+			break;
+		}
+		*devs = ca->self;
+		break;
 	}
 	case TARGET_GROUP: {
 		struct bch_disk_groups_cpu *g = rcu_dereference(c->disk_groups);
 
-		return g && t.group < g->nr && !g->entries[t.group].deleted
-			? &g->entries[t.group].devs
-			: NULL;
+		if (!g || t.group >= g->nr || g->entries[t.group].deleted) {
+			ret = false;
+			break;
+		}
+		*devs = g->entries[t.group].devs;
+		break;
 	}
 	default:
 		BUG();
 	}
+
+	return ret;
 }
 
 /* Interned failure domain id of a device, 0 = unset. Caller holds rcu. */
