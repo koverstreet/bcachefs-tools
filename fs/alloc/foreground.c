@@ -741,6 +741,9 @@ static bool req_dev_sizes_mismatched(struct bch_fs *c, struct alloc_request *req
  * already has) instead of waiting on freelist_wait. Bails iff the request
  * has at least one replica's worth to commit AND any of:
  *
+ *  - the device has left rw_devs: bch2_dev_allocator_remove() is waiting for
+ *    our open buckets. (Not ca->mi.state, which isn't updated until after.)
+ *
  *  - copygc_can_make_progress is false: the per-device check (set above by
  *    the caller from bch2_copygc_can_make_progress(ca)) says copygc can't
  *    free buckets here. No reason to wait — copygc isn't going to help.
@@ -767,7 +770,8 @@ static bool req_alloc_should_bail(struct bch_fs *c, struct alloc_request *req)
 	if (!have_replicas)
 		return false;
 
-	return !req->copygc_can_make_progress ||
+	return !test_bit(req->ca->dev_idx, c->allocator.rw_devs[req->data_type].d) ||
+	       !req->copygc_can_make_progress ||
 	       (req->watermark == BCH_WATERMARK_copygc &&
 		req->data_type != BCH_DATA_btree) ||
 	       req_dev_sizes_mismatched(c, req);
