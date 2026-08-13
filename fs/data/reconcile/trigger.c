@@ -1085,6 +1085,29 @@ int bch2_bkey_get_io_opts(struct btree_trans *trans,
 		 * read see a combination that's valid under the current rules.
 		 */
 		bch2_io_opts_fixups(opts);
+
+		/*
+		 * We shouldn't be able to get here: a checksum or compression
+		 * type we don't know is an incompat feature, so a filesystem
+		 * using one shouldn't have mounted at all. This is for when
+		 * that goes wrong - a versioning mistake on our side - and the
+		 * cost of being wrong isn't an error, it's a crash:
+		 * bch2_io_opts_fixups() above doesn't range check, and the
+		 * conversions in bch2_bkey_needs_reconcile() BUG() on an
+		 * unknown csum opt and index out of bounds on an unknown
+		 * compression opt.
+		 *
+		 * Fall back to the filesystem option for new writes, the way
+		 * bch2_inode_opts_get_inode() does for inode opts.
+		 */
+		if (unlikely(opts->data_checksum >= BCH_CSUM_OPT_NR)) {
+			opts->data_checksum = c->opts.data_checksum;
+			opts->data_checksum_from_inode = false;
+		}
+		if (unlikely(!bch2_compression_opt_valid(opts->background_compression))) {
+			opts->background_compression = c->opts.background_compression;
+			opts->background_compression_from_inode = false;
+		}
 	}
 
 	return 0;

@@ -454,9 +454,26 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p;
+	struct bch_extent_reconcile rb = *r;
 
-	unsigned csum_type = bch2_data_checksum_type_rb(c, *r);
-	unsigned compression_type = bch2_compression_opt_to_type(r->background_compression);
+	/*
+	 * Same as bch2_bkey_get_io_opts(), but for the extent's own reconcile
+	 * entry rather than the opts overlaid from it: an unknown checksum or
+	 * compression type is an incompat feature and shouldn't have mounted,
+	 * so this is only reachable if our versioning was wrong - and getting
+	 * it wrong would otherwise BUG() in bch2_data_checksum_type_rb() or
+	 * read off the end of __bch2_compression_opt_to_type[].
+	 *
+	 * The opts have been through that same fallback already, so they're
+	 * safe to take:
+	 */
+	if (rb.data_checksum >= BCH_CSUM_OPT_NR)
+		rb.data_checksum = opts->data_checksum;
+	if (!bch2_compression_opt_valid(rb.background_compression))
+		rb.background_compression = opts->background_compression;
+
+	unsigned csum_type = bch2_data_checksum_type_rb(c, rb);
+	unsigned compression_type = bch2_compression_opt_to_type(rb.background_compression);
 
 	if (r->need_rb & BIT(BCH_RECONCILE_data_replicas)) {
 		struct bkey_durability durability;
