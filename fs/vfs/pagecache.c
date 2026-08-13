@@ -723,6 +723,7 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 	struct address_space *mapping = file->f_mapping;
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
 	struct bch2_folio_reservation res;
+	bool got_create_lock = false;
 	vm_fault_t ret;
 
 	loff_t file_offset = round_down(vmf->pgoff << PAGE_SHIFT, block_bytes(c));
@@ -732,8 +733,12 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 	BUG_ON(offset + len > folio_size(folio));
 
 	bch2_folio_reservation_init(c, inode, &res);
+	if (!percpu_down_read_trylock(&c->snapshots.create_lock)) {
+		ret = VM_FAULT_RETRY;
+		goto out;
+	}
+	got_create_lock = true;
 
-	percpu_down_read(&c->snapshots.create_lock);
 	sb_start_pagefault(inode->v.i_sb);
 	file_update_time(file);
 
@@ -774,8 +779,10 @@ vm_fault_t bch2_page_mkwrite(struct vm_fault *vmf)
 
 	ret = VM_FAULT_LOCKED;
 out:
-	sb_end_pagefault(inode->v.i_sb);
-	percpu_up_read(&c->snapshots.create_lock);
+	if (got_create_lock) {
+		sb_end_pagefault(inode->v.i_sb);
+		percpu_up_read(&c->snapshots.create_lock);
+	}
 
 	return ret;
 }

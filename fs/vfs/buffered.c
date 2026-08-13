@@ -1075,6 +1075,12 @@ static ssize_t bch2_buffered_write(struct kiocb *iocb, struct iov_iter *iter)
 		unsigned offset = pos & (PAGE_SIZE - 1);
 		unsigned bytes = iov_iter_count(iter);
 again:
+
+		if (unlikely(fatal_signal_pending(current))) {
+			ret = -EINTR;
+			break;
+		}
+
 		/*
 		 * Bring in the user page that we will copy from _first_.
 		 * Otherwise there's a nasty deadlock on copying from the
@@ -1093,11 +1099,6 @@ again:
 				ret = -EFAULT;
 				break;
 			}
-		}
-
-		if (unlikely(fatal_signal_pending(current))) {
-			ret = -EINTR;
-			break;
 		}
 
 		ret = __bch2_buffered_write(c, inode, mapping, iter, pos, bytes);
