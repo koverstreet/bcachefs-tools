@@ -638,20 +638,63 @@ static bool snapshot_in_tree(const struct bch_snapshot *s)
 }
 
 /*
+ * Where to splice back in from below.
+ *
+ * children[0] records where our splice took us out - but that node may have
+ * been spliced out since, and each tombstone down there retains the child it
+ * had when it died. So the node to reattach to is the nearest descendant still
+ * in the tree, and the tombstones in between are our own splice being undone
+ * one step at a time.
+ *
+ * Returns 0 when the chain runs out - nothing below us is in the tree, and the
+ * caller relinks through the parent instead, as for a node that never had a
+ * child.
+ *
+ * Child ids are always below their parent's (bch2_snapshot_validate,
+ * snapshot_child_bad), so the walk strictly descends and can't loop; a chain
+ * that doesn't descend is corruption, and stops it.
+ */
+static int snapshot_relink_target(struct btree_trans *trans, u32 child_id, u32 *ret_id)
+{
+	while (child_id) {
+		struct bkey_i_snapshot child;
+		int ret = bch2_snapshot_lookup_key(trans, child_id, &child);
+		if (bch2_err_matches(ret, ENOENT))
+			break;
+		if (ret)
+			return ret;
+
+		if (snapshot_in_tree(&child.v)) {
+			*ret_id = child_id;
+			return 0;
+		}
+
+		u32 next = le32_to_cpu(child.v.children[0]);
+		if (next >= child_id)
+			break;
+		child_id = next;
+	}
+
+	*ret_id = 0;
+	return 0;
+}
+
+/*
  * Reinsert an undeleted node into the live tree: the inverse of the splice in
  * bch2_snapshot_node_delete(). The tombstone retained its pointers as history:
  * if the parent's child slot (or the snapshot_tree root, for a deleted root)
- * currently holds one of our retained children, that's where the splice took
- * us out - take the slot back and take the child back. If the slot holds us
- * already, the deletion never got that far and there's nothing to relink. If
- * the topology has moved on, or an old wiped tombstone retained nothing, the
- * node revives unlinked and the tree pointer checks handle it downstream.
+ * currently holds the node snapshot_relink_target() found below us, that's
+ * where the splice took us out - take the slot back and take the child back.
+ * If the slot holds us already, the deletion never got that far and there's
+ * nothing to relink. If the topology has moved on, or an old wiped tombstone
+ * retained nothing, the node revives unlinked and the tree pointer checks
+ * handle it downstream.
  */
 int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapshot *u)
 {
 	struct bch_fs *c = trans->c;
 	u32 id = u->k.p.offset;
-	u32 child_id = le32_to_cpu(u->v.children[0]);
+	u32 child_id;
 
 	CLASS(bch_log_msg, msg)(c);
 
@@ -663,13 +706,18 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 		return bch_err_throw(c, fsck_repair_unimplemented);
 	}
 
-	if (!u->v.children[0]) {
+	try(snapshot_relink_target(trans, le32_to_cpu(u->v.children[0]), &child_id));
+
+	if (!child_id) {
 		/*
-		 * Childless: no splice to undo - our retained parent pointer is
-		 * intact. Handle the simple case, parent still live: revive in
-		 * place, and if our slot in the parent was cleared, the edge
-		 * repairs complete it from our side. A dead parent would need
-		 * undeleting too - unexpected, so fail rather than guess.
+		 * Nothing below us to splice in above: either we never had a
+		 * child, or the whole chain under us is out of the tree too.
+		 * Either way our retained parent pointer is what's left, so
+		 * relink through it. Handle the simple case, parent still live:
+		 * revive in place, and if our slot in the parent was cleared,
+		 * the edge repairs complete it from our side. A dead parent
+		 * would need undeleting too - unexpected, so fail rather than
+		 * guess.
 		 *
 		 * A childless root has no parent to relink through and no
 		 * children to take back: it is the entire tree, so setting it
@@ -727,11 +775,6 @@ int bch2_snapshot_node_undelete(struct btree_trans *trans, struct bkey_i_snapsho
 	prt_printf(&msg.m, "attaching to child  ");
 	bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&child->k_i));
 	prt_newline(&msg.m);
-
-	if (!snapshot_in_tree(&child->v)) {
-		prt_printf(&msg.m, "cannot undelete: child is itself deleted");
-		return bch_err_throw(c, fsck_repair_unimplemented);
-	}
 
 	u32 parent_id = le32_to_cpu(child->v.parent);
 	if (parent_id && parent_id <= id) {
