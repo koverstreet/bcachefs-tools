@@ -142,36 +142,38 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb, struct bch_sb_field *
 	}
 
 	/*
-	 * bch2_sb_disk_groups_to_cpu() walks parent chains without a bound,
-	 * so a parent cycle would make it loop forever: reject cycles
-	 * reachable from live entries. The walk passes through deleted
-	 * entries - chains through deleted groups work - and an out of
-	 * range parent ends the chain, since deleted entries are not
-	 * validated.
+	 * bch2_sb_disk_groups_to_cpu() walks parent chains starting from
+	 * each alive member's group, without a bound, so a parent cycle
+	 * would make it loop forever: reject cycles reachable from alive
+	 * members. The walk passes through deleted entries - chains through
+	 * deleted groups work - and an out of range parent ends the chain,
+	 * since deleted entries are not validated. Cycles in groups no
+	 * member references are unreachable and are tolerated.
 	 */
 	u8 *walked __free(kfree) = kcalloc(nr_groups, sizeof(*walked), GFP_KERNEL);
 	if (!walked)
 		return -BCH_ERR_ENOMEM_disk_groups_validate;
 
-	for (unsigned i = 0; i < nr_groups; i++) {
+	for (unsigned i = 0; i < sb->nr_devices; i++) {
+		struct bch_member m = bch2_sb_member_get(sb, i);
 		u64 v;
 
-		if (BCH_GROUP_DELETED(&groups->entries[i]) || walked[i])
+		if (!bch2_member_alive(&m))
 			continue;
 
-		v = i + 1;
+		v = BCH_MEMBER_GROUP(&m);
 		while (v && v <= nr_groups && !walked[v - 1]) {
 			walked[v - 1] = 1;	/* on the current path */
 			v = BCH_GROUP_PARENT(&groups->entries[v - 1]);
 		}
 
 		if (v && v <= nr_groups && walked[v - 1] == 1) {
-			prt_printf(err, "label %u parent chain contains a cycle", i);
+			prt_printf(err, "disk %u label parent chain contains a cycle", i);
 			return -BCH_ERR_invalid_sb_disk_groups;
 		}
 
 		/* mark the chain done: it has been shown to terminate */
-		v = i + 1;
+		v = BCH_MEMBER_GROUP(&m);
 		while (v && v <= nr_groups && walked[v - 1] == 1) {
 			walked[v - 1] = 2;
 			v = BCH_GROUP_PARENT(&groups->entries[v - 1]);
