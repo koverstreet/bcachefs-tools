@@ -1085,6 +1085,24 @@ int bch2_bkey_get_io_opts(struct btree_trans *trans,
 		 * read see a combination that's valid under the current rules.
 		 */
 		bch2_io_opts_fixups(opts);
+
+		/*
+		 * Extents written by newer versions may carry checksum/
+		 * compression types we don't know about - fall back to the
+		 * filesystem option for new writes, like
+		 * bch2_inode_opts_get_inode() does for inode opts. Fixups
+		 * above don't validate enum ranges, and the unchecked
+		 * conversions in bch2_bkey_needs_reconcile() would BUG() or
+		 * index out of bounds on these.
+		 */
+		if (unlikely(opts->data_checksum >= BCH_CSUM_OPT_NR)) {
+			opts->data_checksum = c->opts.data_checksum;
+			opts->data_checksum_from_inode = false;
+		}
+		if (unlikely(!bch2_compression_opt_valid(opts->background_compression))) {
+			opts->background_compression = c->opts.background_compression;
+			opts->background_compression_from_inode = false;
+		}
 	}
 
 	return 0;
