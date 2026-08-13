@@ -124,10 +124,10 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb, struct bch_sb_field *
 	}
 
 	/*
-	 * Parents are walked in bch2_sb_disk_groups_to_cpu() (bounded, so a
-	 * cycle is tolerated) and bch2_disk_path_to_text_sb(): an out of range
-	 * parent reads out of bounds, so reject those. Parents pointing at
-	 * deleted groups are tolerated - chains through deleted groups work.
+	 * Parents are walked in bch2_sb_disk_groups_to_cpu() and
+	 * bch2_disk_path_to_text_sb(): an out of range parent reads out of
+	 * bounds, so reject those. Parents pointing at deleted groups are
+	 * tolerated - chains through deleted groups work.
 	 */
 	for (unsigned i = 0; i < nr_groups; i++) {
 		if (BCH_GROUP_DELETED(&groups->entries[i]))
@@ -138,6 +138,43 @@ static int bch2_sb_disk_groups_validate(struct bch_sb *sb, struct bch_sb_field *
 			prt_printf(err, "label %u has invalid parent %llu (have %u)",
 				   i, parent - 1, nr_groups);
 			return -BCH_ERR_invalid_sb_disk_groups;
+		}
+	}
+
+	/*
+	 * bch2_sb_disk_groups_to_cpu() walks parent chains without a bound,
+	 * so a parent cycle would make it loop forever: reject cycles
+	 * reachable from live entries. The walk passes through deleted
+	 * entries - chains through deleted groups work - and an out of
+	 * range parent ends the chain, since deleted entries are not
+	 * validated.
+	 */
+	u8 *walked __free(kfree) = kcalloc(nr_groups, sizeof(*walked), GFP_KERNEL);
+	if (!walked)
+		return -BCH_ERR_ENOMEM_disk_groups_validate;
+
+	for (unsigned i = 0; i < nr_groups; i++) {
+		u64 v;
+
+		if (BCH_GROUP_DELETED(&groups->entries[i]) || walked[i])
+			continue;
+
+		v = i + 1;
+		while (v && v <= nr_groups && !walked[v - 1]) {
+			walked[v - 1] = 1;	/* on the current path */
+			v = BCH_GROUP_PARENT(&groups->entries[v - 1]);
+		}
+
+		if (v && v <= nr_groups && walked[v - 1] == 1) {
+			prt_printf(err, "label %u parent chain contains a cycle", i);
+			return -BCH_ERR_invalid_sb_disk_groups;
+		}
+
+		/* mark the chain done: it has been shown to terminate */
+		v = i + 1;
+		while (v && v <= nr_groups && walked[v - 1] == 1) {
+			walked[v - 1] = 2;
+			v = BCH_GROUP_PARENT(&groups->entries[v - 1]);
 		}
 	}
 
@@ -227,7 +264,17 @@ int bch2_sb_disk_groups_to_cpu(struct bch_fs *c)
 			continue;
 
 		g = BCH_MEMBER_GROUP(&m);
-		while (g) {
+		unsigned depth = 0;
+		while (g && depth++ <= nr_groups) {
+			/*
+			 * Defensive: never trust the on-disk graph to walk
+			 * itself - the validator rejects out-of-range parents
+			 * and cycles, but this walk must terminate and stay
+			 * in bounds even on a superblock that bypassed
+			 * validation.
+			 */
+			if (g > nr_groups)
+				break;
 			dst = &cpu_g->entries[g - 1];
 			__set_bit(i, dst->devs.d);
 			g = dst->parent;
