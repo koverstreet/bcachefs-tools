@@ -61,6 +61,7 @@ struct nocow_flush_unit {
 	struct list_head	list;		/* on ei_flush_done while out of order */
 	u64			seq;
 	atomic_t		pending;	/* bios outstanding, plus the submission-loop ref */
+	int			err;		/* first error of any bio / skipped device */
 };
 
 /*
@@ -93,6 +94,9 @@ static void nocow_flush_endio(struct bio *_bio)
 {
 	struct nocow_flush *bio = container_of(_bio, struct nocow_flush, bio);
 	struct nocow_flush_unit *unit = bio->unit;
+
+	if (bio->bio.bi_status && !unit->err)
+		WRITE_ONCE(unit->err, blk_status_to_errno(bio->bio.bi_status));
 
 	if (atomic_dec_and_test(&unit->pending)) {
 		unsigned long flags;
@@ -144,6 +148,7 @@ static int bch2_inode_flush_nocow_writes(struct bch_fs *c,
 		return -ENOMEM;
 
 	INIT_LIST_HEAD(&unit->list);
+	unit->err	= 0;
 	atomic_set(&unit->pending, 1);	/* the submission loop's ref */
 
 	struct bch_devs_mask devs = {};
@@ -167,8 +172,16 @@ static int bch2_inode_flush_nocow_writes(struct bch_fs *c,
 				ca = NULL;
 		}
 
-		if (!ca)
+		if (!ca) {
+			/*
+			 * The device is going away: the bit was cleared but
+			 * the flush can't be issued. Fail the fsync rather
+			 * than silently dropping the durability obligation.
+			 */
+			if (!unit->err)
+				unit->err = -EIO;
 			continue;
+		}
 
 		struct nocow_flush *bio = container_of(bio_alloc_bioset(ca->disk_sb.bdev, 0,
 									REQ_OP_WRITE|REQ_PREFLUSH,
@@ -193,8 +206,9 @@ static int bch2_inode_flush_nocow_writes(struct bch_fs *c,
 	closure_wait_event(&inode->ei_flush_wait,
 			   READ_ONCE(inode->ei_flush_seq_completed) >= snapshot);
 
+	int err = READ_ONCE(unit->err);
 	kfree(unit);
-	return 0;
+	return err;
 }
 
 /* i_size updates: */
