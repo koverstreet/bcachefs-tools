@@ -2579,6 +2579,16 @@ static struct bkey_s_c __bch2_btree_iter_peek(struct btree_iter *iter, struct bp
 		    btree_trans_peek_key_cache(iter, &k))
 			break;
 
+		/*
+		 * btree_trans_peek_key_cache() does bch2_path_get() and
+		 * bch2_btree_path_set_pos() on the key cache path, either of
+		 * which reallocates trans->paths. l is path->l + path->level -
+		 * a pointer into the path - so it dangles with it, and it's
+		 * read below to pick the next search_key.
+		 */
+		path = btree_iter_path(trans, iter);
+		l = path_l(path);
+
 		if (unlikely(iter->flags & BTREE_ITER_with_journal))
 			btree_trans_peek_journal(trans, iter, *search_key, &k);
 
@@ -2918,6 +2928,11 @@ static struct bkey_s_c __bch2_btree_iter_peek_prev(struct btree_iter *iter, stru
 		if (unlikely(iter->flags & BTREE_ITER_with_key_cache) &&
 		    btree_trans_peek_key_cache(iter, &k))
 			break;
+
+		/* See __bch2_btree_iter_peek(): peek_key_cache() reallocates
+		 * trans->paths, and l points into the path. */
+		path = btree_iter_path(trans, iter);
+		l = path_l(path);
 
 		if (unlikely(iter->flags & BTREE_ITER_with_journal))
 			btree_trans_peek_prev_journal(trans, iter, search_key, &k);
