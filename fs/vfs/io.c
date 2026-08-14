@@ -46,36 +46,121 @@
 
 #include <trace/events/writeback.h>
 
+/*
+ * One flush of ei_devs_need_flush: a sequence number and the device flush
+ * bios issued under it.
+ *
+ * It lives on the stack of the fsync that issued it. That fsync waits for
+ * ei_flush_seq_completed to reach its seq before returning, and the only
+ * other user - the endio of its last bio, via nocow_flush_seq_complete() -
+ * is done with it by the time ei_flush_seq_completed moves past it.
+ */
+struct nocow_flush_unit {
+	struct list_head	list;		/* on ei_flush_done while out of order */
+	u64			seq;
+	atomic_t		pending;	/* bios outstanding, plus the submission-loop ref */
+};
+
+/*
+ * Advance ei_flush_seq_completed through the contiguous completed
+ * prefix, consuming units staged on ei_flush_done (kept sorted by
+ * seq). unit is the just-completed unit, not on any list.
+ */
+static void nocow_flush_seq_complete(struct bch_inode_info *inode,
+				     struct nocow_flush_unit *unit)
+{
+	lockdep_assert_held(&inode->ei_flush_lock);
+
+	while (unit && unit->seq == inode->ei_flush_seq_completed + 1) {
+		/* last access to unit: its fsync may return as of this store */
+		smp_store_release(&inode->ei_flush_seq_completed, unit->seq);
+		unit = list_first_entry_or_null(&inode->ei_flush_done,
+						struct nocow_flush_unit, list);
+		if (unit)
+			list_del(&unit->list);
+	}
+	if (unit) {
+		struct nocow_flush_unit *pos;
+		list_for_each_entry(pos, &inode->ei_flush_done, list)
+			if (pos->seq > unit->seq)
+				break;
+		list_add_tail(&unit->list, &pos->list);
+	}
+	closure_wake_up(&inode->ei_flush_wait);
+}
+
 static void nocow_flush_endio(struct bio *_bio)
 {
 	struct nocow_flush *bio = container_of(_bio, struct nocow_flush, bio);
+	struct nocow_flush_unit *unit = bio->unit;
 
-	closure_put(bio->cl);
+	if (atomic_dec_and_test(&unit->pending)) {
+		unsigned long flags;
+
+		/*
+		 * The waiters may return and drop the inode as soon as
+		 * ei_flush_seq_completed moves; it's freed by RCU, and with
+		 * the lock held we're in a read-side section until the unlock.
+		 */
+		spin_lock_irqsave(&bio->inode->ei_flush_lock, flags);
+		nocow_flush_seq_complete(bio->inode, unit);
+		spin_unlock_irqrestore(&bio->inode->ei_flush_lock, flags);
+	}
+
 	enumerated_ref_put(&bio->ca->io_ref[WRITE],
 			   BCH_DEV_WRITE_REF_nocow_flush);
 	bio_put(&bio->bio);
 }
 
-static void bch2_inode_flush_nocow_writes_async(struct bch_fs *c,
-						struct bch_inode_info *inode,
-						struct closure *cl)
+/*
+ * Flush the devices with pending nocow writes on this inode, and wait
+ * for any flushes that were already in flight when we entered.
+ *
+ * Protocol: a flush that extracts a non-empty mask reserves a sequence
+ * number in the same ei_flush_lock section as the extraction, and the
+ * snapshot we wait for is taken in that section too. A bit our
+ * extraction missed was taken by a concurrent extractor whose section
+ * preceded ours, so the stealer's seq <= our snapshot and our wait for
+ * completed >= snapshot covers its flush. If the reservation were
+ * outside the section, the stealer's seq could be assigned after our
+ * snapshot and a crash after our fsync returns could lose the write we
+ * owed.
+ *
+ * Concurrent fsyncs are deliberately not excluded - each waits only
+ * for the prefix of flushes issued before its entry (plus its own). A
+ * mutex here would serialize every fsync on the inode, and several
+ * threads fsyncing one file is the normal database pattern, not a
+ * corner case.
+ *
+ * Fetch-and-clear must be atomic: bch2_write_endio() sets bits from bio
+ * completion with no serialization against us; a bit set between a
+ * copy and a memset would be erased with the device never flushed.
+ * Bits set after the exchange belong to the next flush. The plain read
+ * first keeps the common nothing-to-flush case off the atomic path: a
+ * bit that shows up after it is no different from one that shows up
+ * after the exchange. An empty extraction reserves no seq, but still
+ * owes the wait for flushes already in flight.
+ */
+static int bch2_inode_flush_nocow_writes(struct bch_fs *c,
+					 struct bch_inode_info *inode)
 {
-	/*
-	 * Fetch-and-clear must be atomic: bch2_write_endio() sets bits here
-	 * from bio completion, with no serialization against us. A plain
-	 * copy + memset can erase a bit set in between - fsync would then
-	 * complete without flushing a device that had a completed write.
-	 * Bits set after the exchange belong to the next flush.
-	 *
-	 * The plain read first keeps the common nothing-to-flush case off the
-	 * atomic path: a bit that shows up after it is no different from one
-	 * that shows up after the exchange, and is picked up by the next flush
-	 * either way.
-	 */
+	struct nocow_flush_unit unit = {
+		.list		= LIST_HEAD_INIT(unit.list),
+		.pending	= ATOMIC_INIT(1),	/* the submission loop's ref */
+	};
 	struct bch_devs_mask devs = {};
+	u64 snapshot;
+
+	spin_lock_irq(&inode->ei_flush_lock);
 	for (unsigned i = 0; i < ARRAY_SIZE(devs.d); i++)
 		if (READ_ONCE(inode->ei_devs_need_flush.d[i]))
 			devs.d[i] = xchg(&inode->ei_devs_need_flush.d[i], 0);
+
+	bool empty = bitmap_empty(devs.d, BCH_SB_MEMBERS_MAX);
+	if (!empty)
+		unit.seq = ++inode->ei_flush_seq_issued;
+	snapshot = inode->ei_flush_seq_issued;
+	spin_unlock_irq(&inode->ei_flush_lock);
 
 	unsigned dev;
 	for_each_set_bit(dev, devs.d, BCH_SB_MEMBERS_MAX) {
@@ -96,18 +181,23 @@ static void bch2_inode_flush_nocow_writes_async(struct bch_fs *c,
 									GFP_KERNEL,
 									&c->vfs.nocow_flush_bioset),
 						       struct nocow_flush, bio);
-		bio->cl			= cl;
+		bio->unit		= &unit;
+		bio->inode		= inode;
 		bio->ca			= ca;
 		bio->bio.bi_end_io	= nocow_flush_endio;
-		closure_bio_submit(&bio->bio, cl);
+		atomic_inc(&unit.pending);
+		submit_bio(&bio->bio);
 	}
-}
 
-static int bch2_inode_flush_nocow_writes(struct bch_fs *c,
-					 struct bch_inode_info *inode)
-{
-	CLASS(closure_stack, cl)();
-	bch2_inode_flush_nocow_writes_async(c, inode, &cl);
+	/* submission done; drop the submission loop's ref */
+	if (!empty && atomic_dec_and_test(&unit.pending)) {
+		spin_lock_irq(&inode->ei_flush_lock);
+		nocow_flush_seq_complete(inode, &unit);
+		spin_unlock_irq(&inode->ei_flush_lock);
+	}
+
+	closure_wait_event(&inode->ei_flush_wait,
+			   smp_load_acquire(&inode->ei_flush_seq_completed) >= snapshot);
 	return 0;
 }
 
