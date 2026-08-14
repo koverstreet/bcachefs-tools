@@ -680,12 +680,33 @@ static int bch2_inode_init_security(struct btree_trans *trans,
 				    struct bch_inode_info *inode,
 				    const struct qstr *name,
 				    subvol_inum inum,
-				    struct bch_inode_unpacked *inode_u)
+				    struct bch_inode_unpacked *inode_u,
+				    unsigned flags)
 {
 	struct bch2_initxattrs_ctx ctx = {
 		.trans	= trans,
 		.inum	= inum,
 	};
+
+	/*
+	 * A snapshot create doesn't create an inode: bch2_create_trans() looks
+	 * up the source subvolume's root and reuses it at the new snapshot ID,
+	 * so the source's security xattr is already visible there through
+	 * snapshot ancestry. Handing that inode to the LSM would have it
+	 * compute a fresh label and write it with XATTR_CREATE, which finds the
+	 * inherited key and fails the whole snapshot with EEXIST_str_hash_set.
+	 *
+	 * A snapshot inherits the source's label, which is also the semantics
+	 * we want - the new root is the same inode, not a new object to be
+	 * labelled from the calling task. bch2_create_trans() skips the ACLs
+	 * for a snapshot for the same reason; ACLs are xattrs too.
+	 *
+	 * The in-core label still gets set: the new subvolume root is
+	 * instantiated after commit, and the LSM's d_instantiate hook reads it
+	 * back off the inherited xattr.
+	 */
+	if (flags & BCH_CREATE_SNAPSHOT)
+		return 0;
 
 	/*
 	 * The LSM computes the new label from the task, the dir, and the new
@@ -777,7 +798,7 @@ retry:
 		bch2_inode_init_security(trans, dir, inode,
 					 !(flags & BCH_CREATE_TMPFILE)
 					 ? &dentry->d_name : NULL,
-					 inum, &inode_u) ?:
+					 inum, &inode_u, flags) ?:
 		bch2_trans_commit(trans, NULL, NULL, 0);
 	if (unlikely(ret)) {
 		bch2_quota_acct(c, bch_qid(&inode_u), Q_INO, -1,
