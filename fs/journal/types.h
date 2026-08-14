@@ -221,8 +221,7 @@ enum journal_space_from {
 	x(med_on_space)			\
 	x(low_on_space)			\
 	x(low_on_pin)			\
-	x(low_on_wb)			\
-	x(low_on_open_buckets)
+	x(low_on_wb)
 
 enum journal_flags {
 #define x(n)	JOURNAL_##n,
@@ -252,6 +251,13 @@ struct journal {
 	enum bch_watermark	watermark;
 
 	} __aligned(SMP_CACHE_BYTES);
+
+	/*
+	 * We have to ratelimit at the journal for the allocator because the
+	 * btree write buffer allocates btree nodes after the journal -
+	 * otherwise we'd get HOL blocking and priority inversion:
+	 */
+	u8			watermark_open_buckets;
 
 	unsigned long		flags;
 #ifdef CONFIG_BCACHEFS_DEBUG

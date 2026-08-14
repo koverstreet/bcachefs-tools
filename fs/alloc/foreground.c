@@ -184,6 +184,15 @@ void __bch2_open_bucket_put(struct bch_fs *c, struct open_bucket *ob)
 		ca->nr_open_buckets--;
 	}
 
+	/*
+	 * We just gave an open bucket back, which may be what lifts the
+	 * throttle - and the journal can't notice that on its own schedule,
+	 * because the throttle holds up the work that would do the noticing.
+	 * freelist_lock is dropped by here, so j->lock doesn't nest under it.
+	 */
+	bch2_journal_set_alloc_watermark(&c->journal, &c->journal.watermark_open_buckets,
+					 bch2_open_buckets_starved_watermark(c));
+
 	closure_wake_up(&c->allocator.open_buckets_wait);
 }
 
@@ -845,17 +854,14 @@ err:
 		ob->data_type = req->data_type;
 
 		/*
-		 * We just consumed an open bucket. If the pool is getting low, poke
-		 * the journal watermark: it factors in open-bucket usage and will
-		 * throttle new journal-reserving work before the reclaim path starves
-		 * (see bch2_journal_set_watermark()). freelist_lock has been dropped
-		 * by now, so taking j->lock here doesn't nest the two.
+		 * We just consumed an open bucket: the journal throttles new
+		 * journal-reserving work at whatever level the pool can no longer
+		 * serve, so the reclaim path - which needs open buckets to free
+		 * open buckets - doesn't starve. freelist_lock has been dropped by
+		 * now, so taking j->lock here doesn't nest the two.
 		 */
-		if (unlikely(READ_ONCE(c->allocator.open_buckets_nr_free) <
-			     bch2_open_buckets_journal_reserved())) {
-			guard(spinlock)(&c->journal.lock);
-			bch2_journal_set_watermark(&c->journal);
-		}
+		bch2_journal_set_alloc_watermark(&c->journal, &c->journal.watermark_open_buckets,
+						 bch2_open_buckets_starved_watermark(c));
 
 		event_inc_trace(c, bucket_alloc, buf,
 			bucket_alloc_to_text(&buf, c, req, ob));

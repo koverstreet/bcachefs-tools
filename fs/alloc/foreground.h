@@ -184,15 +184,22 @@ static inline unsigned bch2_open_buckets_reserved(enum bch_watermark watermark)
 }
 
 /*
- * Free open buckets we keep in reserve for the reclaim path (write-buffer flush
- * -> journal -> writeback), which both frees open buckets and needs them to make
- * progress. When free drops below this, bch2_journal_set_watermark() raises the
- * journal watermark so new journal-reserving work throttles at reservation time,
- * before it can drain the pool below the reclaim reserve (BCH_WATERMARK_reclaim).
+ * Lowest watermark the open bucket pool can still serve; 0 = not starved.
+ *
+ * Linear walk: the reserve only shrinks as priority rises, so there is one
+ * crossover. Stops one short of BCH_WATERMARK_NR to leave interior updates a
+ * way through. The reserves tie at some rungs (stripe/normal,
+ * btree/btree_copygc), so those are never returned.
  */
-static inline unsigned bch2_open_buckets_journal_reserved(void)
+static inline unsigned bch2_open_buckets_starved_watermark(struct bch_fs *c)
 {
-	return OPEN_BUCKETS_COUNT / 4;
+	unsigned nr_free = READ_ONCE(c->allocator.open_buckets_nr_free), w = 0;
+
+	while (w < BCH_WATERMARK_NR - 1 &&
+	       nr_free < bch2_open_buckets_reserved(w))
+		w++;
+
+	return w;
 }
 
 struct open_bucket *bch2_bucket_alloc_trans(struct btree_trans *, struct alloc_request *);

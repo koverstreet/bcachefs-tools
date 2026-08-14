@@ -20,6 +20,24 @@ unsigned bch2_journal_dev_buckets_available(struct journal *,
 					    struct journal_device *,
 					    enum journal_space_from);
 void bch2_journal_set_watermark(struct journal *);
+
+void __bch2_journal_set_alloc_watermark(struct journal *, u8 *, unsigned);
+
+/*
+ * Report allocator scarcity to the journal: @watermark is the level at and
+ * below which the allocator is refusing, and @p is the field it feeds
+ * (j->watermark_open_buckets, ...) - see bch2_journal_set_watermark().
+ *
+ * Called from allocator fast paths on every bucket taken and given back, so
+ * the unchanged case has to be a compare and nothing else.
+ */
+static inline void bch2_journal_set_alloc_watermark(struct journal *j, u8 *p,
+						    unsigned watermark)
+{
+	if (unlikely(READ_ONCE(*p) != watermark))
+		__bch2_journal_set_alloc_watermark(j, p, watermark);
+}
+
 void bch2_journal_space_available(struct journal *);
 
 static inline void journal_pin_list_init(struct journal_entry_pin_list *p, int count)
