@@ -469,16 +469,24 @@ static noinline int bch2_trans_update_get_key_cache(struct btree_trans *trans,
 	if (!key_cache_path ||
 	    !key_cache_path->should_be_locked ||
 	    !bpos_eq(key_cache_path->pos, iter->pos)) {
-		if (!iter->key_cache_path)
+		/*
+		 * Both of these can reallocate trans->paths, so reset
+		 * key_cache_path every time iter->key_cache_path is set: the
+		 * index survives, the pointer doesn't.
+		 */
+		if (!iter->key_cache_path) {
 			iter->key_cache_path =
 				bch2_path_get(trans, iter->btree_id, &iter->pos, 1, 0,
 					      BTREE_ITER_intent|
 					      BTREE_ITER_cached, _THIS_IP_);
+			key_cache_path = trans->paths + iter->key_cache_path;
+		}
 
 		iter->key_cache_path =
 			bch2_btree_path_set_pos(trans, iter->key_cache_path, &iter->pos,
 						iter->flags & BTREE_ITER_intent,
 						_THIS_IP_);
+		key_cache_path = trans->paths + iter->key_cache_path;
 
 		try(bch2_btree_path_traverse(trans, iter->key_cache_path, BTREE_ITER_cached));
 
