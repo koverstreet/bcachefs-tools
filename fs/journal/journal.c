@@ -230,25 +230,24 @@ journal_error_check_stuck(struct journal *j, int error, unsigned flags)
 {
 	struct bch_fs *c = container_of(j, struct bch_fs, journal);
 
-	if (!(error == -BCH_ERR_journal_full ||
-	      error == -BCH_ERR_journal_pin_full) ||
-	    fifo_used(&j->in_flight) ||
-	    (flags & BCH_WATERMARK_MASK) != BCH_WATERMARK_reclaim)
-		return false;
+	bool ret = !j->can_discard &&
+		!fifo_used(&j->in_flight) &&
+		j->cur_entry_error &&
+		(flags & BCH_WATERMARK_MASK) >= BCH_WATERMARK_reclaim;
 
-	if (j->can_discard)
-		return false;
+	if (ret) {
+		CLASS(bch_log_msg, msg)(c);
+		msg.m.suppress = true; /* only print once, when we go ERO */
 
-	CLASS(bch_log_msg, msg)(c);
-	msg.m.suppress = true; /* only print once, when we go ERO */
+		prt_printf(&msg.m, "Journal stuck! Have a pre-reservation but journal full (error %s)",
+			   bch2_err_str(error));
 
-	prt_printf(&msg.m, "Journal stuck! Have a pre-reservation but journal full (error %s)",
-		   bch2_err_str(error));
+		bch2_journal_debug_to_text(&msg.m, j);
 
-	bch2_journal_debug_to_text(&msg.m, j);
+		bch2_fs_emergency_read_only(c, &msg.m);
+	}
 
-	bch2_fs_emergency_read_only(c, &msg.m);
-	return true;
+	return ret;
 }
 
 /*
