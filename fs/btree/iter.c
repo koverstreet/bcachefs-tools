@@ -1547,12 +1547,12 @@ __flatten
 btree_path_idx_t __bch2_btree_path_make_mut(struct btree_trans *trans,
 			btree_path_idx_t path, bool intent, unsigned long ip)
 {
-	struct btree_path *old = trans->paths + path;
+	btree_path_idx_t old = path;
 	__btree_path_put(trans, trans->paths + path, intent);
 	path = btree_path_clone(trans, path, intent, ip);
 
 	event_trace_fn(trans->c, btree_path_clone,
-		       __btree_path_clone_trace(trans, old - trans->paths, path));
+		       __btree_path_clone_trace(trans, old, path));
 
 	trans->paths[path].preserve = false;
 	return path;
