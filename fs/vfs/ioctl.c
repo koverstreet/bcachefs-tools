@@ -399,14 +399,18 @@ static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 		snapshot_src.subvol = inode_inum(to_bch_ei(dir)).subvol;
 
 	/*
-	 * Atomicity: take create_lock as a writer to block new page-cache
-	 * dirtiers (write_iter, page_mkwrite), then flush existing dirty
-	 * pages. Writeback's folio_clear_dirty_for_io path WPs every PTE
-	 * pointing at a dirty folio (via folio_mkclean), so when sync
-	 * returns no writable PTE remains — any subsequent mmap store
-	 * traps to page_mkwrite, which then blocks on the writer.
+	 * Atomicity: write-lock create_lock to block new syscall-level
+	 * dirtiers (write_iter), then pagefault_lock to block mmap dirtiers
+	 * (page_mkwrite), then flush existing dirty pages. Two locks because
+	 * the two dirtier classes sit on opposite sides of mmap_lock — see
+	 * the comment above bch_fs_snapshots. Writeback's
+	 * folio_clear_dirty_for_io path WPs every PTE pointing at a dirty
+	 * folio (via folio_mkclean), so when sync returns no writable PTE
+	 * remains — any subsequent mmap store traps to page_mkwrite, which
+	 * then blocks on pagefault_lock.
 	 */
 	percpu_down_write(&c->snapshots.create_lock);
+	percpu_down_write(&c->snapshots.pagefault_lock);
 	if (arg.flags & BCH_SUBVOL_SNAPSHOT_CREATE) {
 		scoped_guard(rwsem_read, &c->vfs_sb->s_umount)
 			sync_inodes_sb(c->vfs_sb);
@@ -414,6 +418,7 @@ static long __bch2_ioctl_subvolume_create(struct bch_fs *c, struct file *filp,
 	inode = __bch2_create(file_mnt_idmap(filp), to_bch_ei(dir),
 			      dst_dentry, arg.mode|S_IFDIR,
 			      0, snapshot_src, create_flags);
+	percpu_up_write(&c->snapshots.pagefault_lock);
 	percpu_up_write(&c->snapshots.create_lock);
 	error = PTR_ERR_OR_ZERO(inode);
 	if (error)
