@@ -422,9 +422,18 @@ static noinline int flush_new_cached_update(struct btree_trans *trans,
 					    enum btree_iter_update_trigger_flags flags,
 					    unsigned long ip)
 {
+	unsigned i_idx = i - trans->updates;
+
 	CLASS(btree_iter, iter)(trans, i->btree_id, i->old_k.p, BTREE_ITER_intent);
 
 	try(bch2_btree_iter_traverse(&iter));
+
+	/*
+	 * Taking the iterator and traversing it both take paths, and if that
+	 * grows the paths table trans->updates moves with it - they're a single
+	 * allocation, see btree_paths_realloc():
+	 */
+	i = trans->updates + i_idx;
 
 	struct btree_path *btree_path = btree_iter_path(trans, &iter);
 
