@@ -3709,19 +3709,22 @@ int bch2_btree_node_update_key(struct btree_trans *trans, struct btree_iter *ite
 {
 	BUG_ON(btree_node_fake(b));
 
-	struct btree_path *path = btree_iter_path(trans, iter);
-
 	/*
 	 * Awkward - we can't rely on caller specifying BTREE_ITER_intent, and
 	 * the commit will downgrade locks
+	 *
+	 * Don't cache the path in a local across the update: it commits, which
+	 * reallocates trans->paths, and the decrement would then land in the
+	 * freed array while the live path keeps the ref forever.
 	 */
 
-	try(bch2_btree_path_upgrade(trans, path, b->c.level + 1));
+	try(bch2_btree_path_upgrade(trans, btree_iter_path(trans, iter),
+				    b->c.level + 1));
 
-	path->intent_ref++;
+	btree_iter_path(trans, iter)->intent_ref++;
 	int ret = __bch2_btree_node_update_key(trans, iter, b, new_key,
 					       commit_flags, skip_triggers);
-	--path->intent_ref;
+	--btree_iter_path(trans, iter)->intent_ref;
 	return ret;
 }
 
