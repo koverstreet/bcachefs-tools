@@ -883,7 +883,7 @@ void bch2_trans_node_verify_not_in_iters(struct btree_trans *trans, struct btree
 			bch2_btree_pos_to_text(&buf, trans->c, b);
 			prt_newline(&buf);
 			bch2_btree_path_to_text(&buf, trans, i, path);
-			panic("%s\n", buf.buf);
+			WARN_ONCE(1, "%s\n", buf.buf);
 		}
 }
 
