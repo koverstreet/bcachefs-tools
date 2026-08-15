@@ -1489,6 +1489,16 @@ out_uptodate:
 	event_trace_fn(trans->c, btree_path_traverse_end,
 		       __btree_path_traverse_end_trace(trans, path_idx));
 out:
+	/*
+	 * Re-derive: the cached-path arm goes straight to out, jumping over
+	 * the re-derivation above, and bch2_btree_path_traverse_cached()
+	 * reaches bch2_path_get() through btree_key_cache_fill() - so by here
+	 * the local can point into the array btree_paths_realloc() retired.
+	 * Fix the local rather than one call's argument, so anything added
+	 * below is working from a live path too.
+	 */
+	path = &trans->paths[path_idx];
+
 	EBUG_ON(bch2_err_matches(ret, BCH_ERR_transaction_restart) != !!trans->restarted);
 	bch2_btree_path_verify(trans, path);
 	return ret;
