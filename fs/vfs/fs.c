@@ -967,6 +967,8 @@ static void bch2_dentry_apply_casefold_flags(struct dentry *dentry,
 {
 	unsigned d_flags = READ_ONCE(dentry->d_flags);
 
+	lockdep_assert_held(&dentry->d_lock);
+
 	if (flags)
 		d_flags |= flags;
 	else
@@ -976,25 +978,16 @@ static void bch2_dentry_apply_casefold_flags(struct dentry *dentry,
 }
 
 /*
- * Set a directory dentry's casefold d_ops from its inode before the dentry is
- * published. Not yet reachable by RCU lookups, so a plain assignment is safe.
+ * Set a directory dentry's casefold d_ops from its inode. The dentry can
+ * already be visible to other threads: bch2_lookup() gets it published in
+ * the in-lookup hash by d_alloc_parallel(), and d_wait_lookup() sets
+ * DCACHE_LOOKUP_WAITERS in d_flags under d_lock. Update d_flags under
+ * d_lock too, or the read-modify-write can erase the waiters bit and the
+ * completing lookup then never wakes the waiter. Lockless readers may
+ * sample either the old or new flags, so keep the flag update to a single
+ * transition.
  */
 void bch2_dentry_set_casefold_ops(struct dentry *dentry, struct inode *vinode)
-{
-	if (!S_ISDIR(vinode->i_mode))
-		return;
-
-	dentry->d_op = &bch2_dentry_ops_casefolded;
-	bch2_dentry_apply_casefold_flags(dentry, bch2_dentry_casefold_flags(vinode));
-}
-
-/*
- * d_obtain_alias() attaches the dentry before returning it. Disconnected
- * aliases are not reachable by parent lookup yet, but existing aliases can be.
- * Hold d_lock to serialize against other writers. Lockless readers may sample
- * either the old or new flags, so keep the flag update to a single transition.
- */
-static void bch2_dentry_set_casefold_ops_locked(struct dentry *dentry, struct inode *vinode)
 {
 	unsigned flags;
 
@@ -2120,7 +2113,7 @@ static struct dentry *bch2_fh_alias(struct super_block *sb, struct inode *vinode
 	struct dentry *dentry = d_obtain_alias(vinode);
 	if (!IS_ERR(dentry)) {
 #if IS_ENABLED(CONFIG_UNICODE)
-		bch2_dentry_set_casefold_ops_locked(dentry, vinode);
+		bch2_dentry_set_casefold_ops(dentry, vinode);
 #endif
 	}
 	return dentry;
