@@ -71,7 +71,14 @@ static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path
 	}));
 #endif
 	path->intent_ref -= intent;
-	return --path->ref == 0;
+	if (--path->ref)
+		return false;
+
+	WARN_ONCE(path->intent_ref,
+		  "path %zu released with intent_ref %u - lock will never be dropped\n",
+		  path - trans->paths, path->intent_ref);
+
+	return true;
 }
 
 static inline struct btree *btree_path_node(struct btree_path *path,
