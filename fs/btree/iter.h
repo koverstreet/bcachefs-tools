@@ -31,8 +31,41 @@ static inline int __bkey_err(const struct bkey *k)
 	_k;						\
 })
 
+/*
+ * btree_paths_realloc() poisons the node pointers in the array it retires, so
+ * a path that outlived a realloc reads this rather than a plausible-looking
+ * stale node.
+ *
+ * Check it where a path pointer arrives FROM A CALLER. Anything reached by
+ * walking trans->paths is live by construction - bch2_btree_path_verify() and
+ * friends can never see this - so the entry points are the only places a stale
+ * path can be caught.
+ */
+#define BTREE_PATH_POISON	ERR_PTR(-BCH_ERR_no_btree_node_stale_paths)
+
+static inline bool btree_path_poisoned(const struct btree *b)
+{
+	return b == BTREE_PATH_POISON;
+}
+
+static inline void btree_path_check_live(struct btree_trans *trans,
+					 struct btree_path *path)
+{
+#ifdef CONFIG_BCACHEFS_DEBUG
+	/*
+	 * Safe to read: the retired array is RCU-freed, so it's still mapped -
+	 * that readability is exactly what makes this bug class silent.
+	 */
+	WARN_ONCE(btree_path_poisoned(path->l[0].b),
+		  "%s: btree path %lx outlived trans->paths (%lx)\n",
+		  trans->fn, (unsigned long) path, (unsigned long) trans->paths);
+#endif
+}
+
 static inline void __btree_path_get(struct btree_trans *trans, struct btree_path *path, bool intent)
 {
+	btree_path_check_live(trans, path);
+
 	unsigned idx = path - trans->paths;
 
 	EBUG_ON(idx >= trans->nr_paths);
@@ -57,6 +90,8 @@ static inline void __btree_path_get(struct btree_trans *trans, struct btree_path
 
 static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path *path, bool intent)
 {
+	btree_path_check_live(trans, path);
+
 	EBUG_ON(path - trans->paths >= trans->nr_paths);
 	EBUG_ON(!test_bit(path - trans->paths, trans->paths_allocated));
 	EBUG_ON(!path->ref);
@@ -84,7 +119,23 @@ static inline bool __btree_path_put(struct btree_trans *trans, struct btree_path
 static inline struct btree *btree_path_node(struct btree_path *path,
 					    unsigned level)
 {
-	return level < BTREE_MAX_DEPTH ? path->l[level].b : NULL;
+	if (level >= BTREE_MAX_DEPTH)
+		return NULL;
+
+	struct btree *b = path->l[level].b;
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	/*
+	 * Spot check, deliberately not exhaustive: most level accesses go
+	 * direct to path->l[] rather than through here. Sites that dereference
+	 * b fault on the poison unaided; this catches some of the ones that
+	 * only compare it, which otherwise read as "not the node I wanted" and
+	 * take a plausible wrong branch.
+	 */
+	WARN_ONCE(btree_path_poisoned(b),
+		  "using a btree path that outlived trans->paths\n");
+#endif
+	return b;
 }
 
 static inline bool btree_node_lock_seq_matches(const struct btree_path *path,
@@ -517,6 +568,8 @@ void __bch2_btree_path_downgrade(struct btree_trans *, struct btree_path *, unsi
 static inline void bch2_btree_path_downgrade(struct btree_trans *trans,
 					     struct btree_path *path)
 {
+	btree_path_check_live(trans, path);
+
 	unsigned new_locks_want = path->level + !!path->intent_ref;
 
 	if (path->locks_want > new_locks_want)

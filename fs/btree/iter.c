@@ -2039,6 +2039,35 @@ static noinline btree_path_idx_t btree_paths_realloc(struct btree_trans *trans,
 
 	unsigned long *old = trans->paths_allocated;
 
+	/*
+	 * Anything still holding a pointer into the old arrays is now stale,
+	 * and the RCU grace period means it stays readable for a while yet -
+	 * so a stale access reads a correct-looking copy and silently diverges
+	 * instead of faulting. That's the whole reason this bug class has been
+	 * so quiet: neither KASAN nor valgrind sees anything, because nothing
+	 * is freed at the point of the bad access.
+	 *
+	 * Poison the node pointers so a stale path is instead obviously wrong
+	 * the moment it's used. IS_ERR() paths already exist all over the
+	 * iterator code, so this lands as no_btree_node rather than as a wild
+	 * pointer, and the specific errcode names what happened.
+	 *
+	 * #ifdef and not IS_ENABLED: the tools build passes
+	 * -DCONFIG_BCACHEFS_DEBUG=y, and IS_ENABLED() only recognizes 1, so
+	 * IS_ENABLED(CONFIG_BCACHEFS_DEBUG) is silently 0 in userspace.
+	 *
+	 * Note the first realloc retires trans->_paths, which is embedded in
+	 * the trans and never freed - so that poison has to be cleared when a
+	 * trans is initialized, or it shows up in the next transaction's live
+	 * paths. See bch2_trans_get().
+	 */
+#ifdef CONFIG_BCACHEFS_DEBUG
+	for (unsigned i = 0; i < trans->nr_paths; i++)
+		for (unsigned l = 0; l < BTREE_MAX_DEPTH; l++)
+			trans->paths[i].l[l].b =
+				ERR_PTR(-BCH_ERR_no_btree_node_stale_paths);
+#endif
+
 	rcu_assign_pointer(trans->paths_allocated,	paths_allocated);
 	rcu_assign_pointer(trans->paths,		paths);
 	rcu_assign_pointer(trans->sorted,		sorted);
@@ -4003,6 +4032,21 @@ struct btree_trans *__bch2_trans_get(struct bch_fs *c, unsigned fn_idx)
 	trans->sorted		= trans->_sorted;
 	trans->paths		= trans->_paths;
 	trans->updates		= trans->_updates;
+
+#ifdef CONFIG_BCACHEFS_DEBUG
+	/*
+	 * If this trans previously grew out of _paths, btree_paths_realloc()
+	 * poisoned it on the way out - and _paths is embedded in the trans, so
+	 * it isn't freed and the poison outlives the transaction that retired
+	 * it. A trans off the percpu cache would then start with poison sitting
+	 * in paths that are live for this transaction. Clear it here rather
+	 * than skip poisoning _paths: growing out of _paths is the common
+	 * realloc, so it's where stale pointers most want catching.
+	 */
+	for (unsigned i = 0; i < ARRAY_SIZE(trans->_paths); i++)
+		for (unsigned l = 0; l < BTREE_MAX_DEPTH; l++)
+			trans->_paths[i].l[l].b = NULL;
+#endif
 
 	*trans_paths_nr(trans->paths) = BTREE_ITER_INITIAL;
 
