@@ -837,9 +837,8 @@ static ssize_t bch2_fsck_damaged_paths_read(struct file *file, char __user *buf,
 	while (1) {
 		/*
 		 * copy_to_user() faults, and the fault path takes mmap_lock ->
-		 * snapshots.create_lock (page_mkwrite), while the buffered
-		 * write path takes create_lock -> btree. Holding btree locks
-		 * here closes that cycle.
+		 * snapshots.pagefault_lock -> btree (page_mkwrite dirtying).
+		 * Holding btree locks here closes that cycle.
 		 *
 		 * bch2_fsck_damaged_path_to_text() relocks via lockrestart_do().
 		 */
