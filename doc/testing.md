@@ -7,6 +7,45 @@
 - **Local CI data**: `~/ci-data`
 - **Test files**: `~/ktest/tests/fs/bcachefs/*.ktest`
 
+### Querying results
+
+`ci-status -u <user>` goes to the dashboard over HTTPS — no local config or
+results mirror needed:
+
+```bash
+ci-status branches -u kmo
+ci-status log -u kmo testing			# commits, pass/fail counts
+ci-status show -u kmo -b testing <commit>	# per-test status
+```
+
+`ci-status logs` needs a local results mirror; in `-u` mode it refuses. Fetch
+the log directly instead:
+
+```bash
+SHA=$(git rev-parse <commit>)			# full 40 chars, not a prefix
+TEST='fs.bcachefs.single_device%40upstream_stable-default.large_buckets'
+curl -s https://evilpiepirate.org/~testdashboard/c/$SHA/$TEST/full_log.br |
+	brotli -d
+```
+
+Test names come from `ci-status show`, with `@` percent-encoded as `%40`.
+`log.br` is the tail, `full_log.br` the whole run.
+
+### Reading a failure log
+
+ktest runs several subtests per VM boot, listed in the header line:
+
+    # host=... test=fs/bcachefs/single_device.ktest ...
+    subtests=btree_node_csum_error,drop_alloc,no_checksum,lz4_buffered,large_buckets,crc32c
+
+The subtests that passed are controls for the one that failed — they often
+share a helper and differ in a single parameter, which isolates the variable
+for free. Check them before working on the failure itself.
+
+`full_log.br` holds the run twice: the ci-daemon executor log for the batch,
+then the supervisor's copy. `# --- supervisor full_log ---` marks the split,
+about halfway in.
+
 ## ktest
 
 Tests live in `~/ktest/tests/fs/bcachefs/` (e.g. `subvol.ktest`).
