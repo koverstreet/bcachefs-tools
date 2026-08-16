@@ -861,7 +861,40 @@ bool bch2_dev_state_allowed(struct bch_fs *c, struct bch_dev *ca,
 		struct bch_devs_mask new_rw_devs = c->allocator.rw_devs[0];
 		__clear_bit(ca->dev_idx, new_rw_devs.d);
 
-		return bch2_can_write_fs_with_devs(c, new_rw_devs, flags, err);
+		if (bch2_can_write_fs_with_devs(c, new_rw_devs, flags, err))
+			return true;
+
+		/*
+		 * bch2_can_write_fs_with_devs() has already explained which
+		 * replication constraint failed; add which device/transition
+		 * triggered it, which other devices are why redundancy is
+		 * short, and what the admin can do about it - so the ioctl
+		 * error message that comes back out of this rejection is
+		 * actually actionable instead of a bare EINVAL.
+		 */
+		if (err) {
+			prt_printf(err, "%s: can't leave rw for %s\n",
+				   ca->name, bch2_member_states[new_state]);
+
+			unsigned nr_listed = 0, nr_evacuating = 0;
+			for_each_member_device_rcu(c, ca2, NULL)
+				if (ca2->mi.state != BCH_MEMBER_STATE_rw) {
+					prt_str(err, nr_listed++
+						? ", "
+						: "Other non-writable devices: ");
+					prt_printf(err, "%s (%s)",
+						   ca2->name, bch2_member_states[ca2->mi.state]);
+					nr_evacuating += ca2->mi.state == BCH_MEMBER_STATE_evacuating;
+				}
+			if (nr_listed)
+				prt_newline(err);
+
+			prt_str(err, nr_evacuating
+				? "Wait for the running evacuation to finish before retrying, or add/restore enough writable redundancy\n"
+				: "Add or restore enough writable redundancy before retrying\n");
+		}
+
+		return false;
 	}
 
 	return true;
