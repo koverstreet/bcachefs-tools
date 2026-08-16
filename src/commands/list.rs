@@ -17,6 +17,15 @@ use crate::device_scan::OpenedFs;
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::online_iter::{OnlineBtreeIter, OnlineIterFlags};
 
+fn extent_replicas(fs: &Fs, k: BkeySC<'_>) -> u32 {
+    k.ptrs(fs)
+        .filter(|ptr| {
+            let dev = ptr.dev() as u32;
+            dev != c::BCH_SB_MEMBER_INVALID as u32 && fs.dev_exists(dev)
+        })
+        .count() as u32
+}
+
 fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let trans = bcachefs_kernel::btree_trans!(fs);
 
@@ -41,6 +50,13 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
         if let Some(ty) = opt.bkey_type {
             if k.k.type_ != ty.0 as u8 {
+                return Ok(ControlFlow::Continue(()));
+            }
+        }
+
+        if let Some(min_replicas) = opt.replicas_min {
+            let replicas = extent_replicas(fs, k);
+            if replicas < min_replicas {
                 return Ok(ControlFlow::Continue(()));
             }
         }
@@ -153,6 +169,13 @@ fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Resu
             }
         }
 
+        if let Some(min_replicas) = opt.replicas_min {
+            let replicas = extent_replicas(fs, k);
+            if replicas < min_replicas {
+                continue;
+            }
+        }
+
         println!("{}", k.to_text(fs));
     }
 
@@ -170,7 +193,7 @@ fn list_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()
     list_keys_online(handle, fs, opt)
 }
 
-#[derive(Clone, clap::ValueEnum, Debug)]
+#[derive(Clone, clap::ValueEnum, Debug, PartialEq, Eq)]
 enum Mode {
     Keys,
     Formats,
@@ -190,7 +213,9 @@ nodes-ondisk shows the raw on-disk representation.\n\n\
 Use -b to select a btree (default: extents), -s/-e for start/end \
 position, -l for btree depth, -k to filter by key type. With -c, \
 runs fsck before listing. Output is used for debugging filesystem \
-state, verifying btree contents, and inspecting on-disk layout.")]
+state, verifying btree contents, and inspecting on-disk layout.\n\n\
+Use --replicas-min with the extents btree to find file extents whose \
+stored data has at least the requested number of fully allocated replicas.")]
 pub struct Cli {
     #[arg(short, long, default_value = "keys")]
     mode: Mode,
@@ -215,6 +240,10 @@ pub struct Cli {
     #[arg(short, long, default_value = "SPOS_MAX")]
     end: c::bpos,
 
+    /// Only list extents with at least this many fully allocated replicas
+    #[arg(long, value_parser = clap::value_parser!(u32).range(1..))]
+    replicas_min: Option<u32>,
+
     /// Check (fsck) the filesystem first
     #[arg(short, long)]
     fsck: bool,
@@ -233,6 +262,18 @@ pub struct Cli {
 }
 
 fn cmd_list_inner(opt: &Cli) -> anyhow::Result<()> {
+    if opt.replicas_min.is_some() {
+        if opt.btree != btree_id::extents {
+            bail!("--replicas-min can only be used with the extents btree");
+        }
+        if opt.mode != Mode::Keys {
+            bail!("--replicas-min can only be used with --mode keys");
+        }
+        if opt.level != 0 {
+            bail!("--replicas-min can only be used at leaf level");
+        }
+    }
+
     let mut fs_opts = c::bch_opts::default();
 
     opt_set!(fs_opts, noexcl, 1);
