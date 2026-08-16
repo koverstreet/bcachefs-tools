@@ -1,4 +1,5 @@
-use std::{collections::HashMap, ffi::CStr, mem, os::fd::OwnedFd, path::{Path, PathBuf}};
+use std::{collections::{HashMap, HashSet}, ffi::CStr, mem, os::fd::OwnedFd,
+    path::{Path, PathBuf}, process::ExitCode};
 use chrono::{Local, TimeZone};
 
 use anyhow::{Context, Result};
@@ -401,7 +402,60 @@ fn snapshot_parent_str(fd: &OwnedFd, parent: u32) -> String {
 
 // ---- Display: subvolume list ----
 
-fn collect_entries(dir: &Path, prefix: &str, recursive: bool) -> Result<Vec<(String, SubvolEntry)>> {
+/// Tracks subtrees skipped during a recursive listing.
+///
+/// A recursive listing crosses into subvolumes the caller may not be able to
+/// open - another user's home under an unprivileged listing is the normal
+/// case, not a corrupt filesystem. Descending has to be attempted to find
+/// out, so the failure is reported and the walk continues: aborting would
+/// throw away a listing that is almost entirely valid, and skipping silently
+/// would let a truncated listing pass for a complete one.
+///
+/// Results still reach stdout; the skip set only decides the exit status, so
+/// a caller can tell a partial listing from a whole one.
+///
+/// A directory is reported once however many traversals reach it: listing
+/// snapshots walks the tree to discover subvolumes and then opens each one
+/// again, so an unreadable directory is otherwise hit twice.
+#[derive(Default)]
+struct Skipped(HashSet<PathBuf>);
+
+impl Skipped {
+    fn any(&self) -> bool { !self.0.is_empty() }
+
+    /// Run a descent into @dir, reporting a failure rather than propagating.
+    ///
+    /// The error chain already names the path - open_dir() attaches it - so
+    /// the warning doesn't repeat it.
+    fn descend<T>(&mut self, dir: &Path, r: Result<T>) -> Option<T> {
+        match r {
+            Ok(v) => Some(v),
+            Err(e) => {
+                if self.0.insert(dir.to_path_buf()) {
+                    eprintln!("warning: {:#}", e);
+                }
+                None
+            }
+        }
+    }
+
+    /// Descend into a subvolume reached from a listing of @dir's parent.
+    ///
+    /// Only what was discovered by walking may be skipped; the path the user
+    /// named has to be openable, so failing on it is an error like any other
+    /// bad argument.
+    fn descend_discovered<T>(&mut self, discovered: bool, dir: &Path, r: Result<T>)
+                             -> Result<Option<T>> {
+        if discovered {
+            Ok(self.descend(dir, r))
+        } else {
+            r.map(Some)
+        }
+    }
+}
+
+fn collect_entries(dir: &Path, prefix: &str, recursive: bool,
+                   skipped: &mut Skipped) -> Result<Vec<(String, SubvolEntry)>> {
     let fd = open_dir(dir)?;
     let children = list_children(&fd)?;
     let mut out = Vec::new();
@@ -417,7 +471,8 @@ fn collect_entries(dir: &Path, prefix: &str, recursive: bool) -> Result<Vec<(Str
         out.push((full_path.clone(), e));
 
         if recursive {
-            if let Ok(sub) = collect_entries(&child_dir, &full_path, true) {
+            let sub = collect_entries(&child_dir, &full_path, true, skipped);
+            if let Some(sub) = skipped.descend(&child_dir, sub) {
                 out.extend(sub);
             }
         }
@@ -427,10 +482,11 @@ fn collect_entries(dir: &Path, prefix: &str, recursive: bool) -> Result<Vec<(Str
 }
 
 fn print_flat(dir: &Path, recursive: bool, show_snapshots: bool,
-              readonly: bool, sort: Option<SortBy>) -> Result<()> {
+              readonly: bool, sort: Option<SortBy>,
+              skipped: &mut Skipped) -> Result<()> {
     let fd = open_dir(dir)?;
     let sizes = subvol_sizes(&fd);
-    let mut entries = collect_entries(dir, "", recursive)?;
+    let mut entries = collect_entries(dir, "", recursive, skipped)?;
 
     entries.retain(|(_, e)| {
         if !show_snapshots && e.snapshot_parent != 0 { return false; }
@@ -488,7 +544,8 @@ fn print_flat(dir: &Path, recursive: bool, show_snapshots: bool,
 }
 
 fn print_tree_recursive(dir: &Path, prefix: &str, show_snapshots: bool,
-                        sizes: &Option<HashMap<u32, u64>>) -> Result<()> {
+                        sizes: &Option<HashMap<u32, u64>>,
+                        skipped: &mut Skipped) -> Result<()> {
     let fd = open_dir(dir)?;
     let entries = list_children(&fd)?;
 
@@ -523,14 +580,17 @@ fn print_tree_recursive(dir: &Path, prefix: &str, show_snapshots: bool,
         println!("{}{}{}{}", prefix, connector, e.path, suffix);
 
         let next_prefix = format!("{}{}", prefix, child_indent);
-        print_tree_recursive(&dir.join(&e.path), &next_prefix, show_snapshots, sizes)?;
+        let child_dir = dir.join(&e.path);
+        let sub = print_tree_recursive(&child_dir, &next_prefix, show_snapshots, sizes, skipped);
+        skipped.descend(&child_dir, sub);
     }
 
     Ok(())
 }
 
 fn collect_subvol_json(dir: &Path, recursive: bool, show_snapshots: bool, readonly: bool,
-                       sizes: &Option<HashMap<u32, u64>>) -> Result<Vec<serde_json::Value>> {
+                       sizes: &Option<HashMap<u32, u64>>,
+                       skipped: &mut Skipped) -> Result<Vec<serde_json::Value>> {
     let fd = open_dir(dir)?;
     let entries = list_children(&fd)?;
     let mut result = Vec::new();
@@ -561,9 +621,13 @@ fn collect_subvol_json(dir: &Path, recursive: bool, show_snapshots: bool, readon
             obj["sectors"] = serde_json::json!(sectors);
         }
         if recursive {
-            let children = collect_subvol_json(&dir.join(&e.path), true, show_snapshots, readonly, sizes)?;
-            if !children.is_empty() {
-                obj["children"] = serde_json::json!(children);
+            let child_dir = dir.join(&e.path);
+            let children = collect_subvol_json(&child_dir, true, show_snapshots, readonly,
+                sizes, skipped);
+            if let Some(children) = skipped.descend(&child_dir, children) {
+                if !children.is_empty() {
+                    obj["children"] = serde_json::json!(children);
+                }
             }
         }
         result.push(obj);
@@ -572,10 +636,11 @@ fn collect_subvol_json(dir: &Path, recursive: bool, show_snapshots: bool, readon
     Ok(result)
 }
 
-fn print_json(dir: &Path, recursive: bool, show_snapshots: bool, readonly: bool) -> Result<()> {
+fn print_json(dir: &Path, recursive: bool, show_snapshots: bool, readonly: bool,
+              skipped: &mut Skipped) -> Result<()> {
     let fd = open_dir(dir)?;
     let sizes = subvol_sizes(&fd);
-    let tree = collect_subvol_json(dir, recursive, show_snapshots, readonly, &sizes)?;
+    let tree = collect_subvol_json(dir, recursive, show_snapshots, readonly, &sizes, skipped)?;
     println!("{}", serde_json::to_string_pretty(&tree)?);
     Ok(())
 }
@@ -758,11 +823,17 @@ fn print_snapshot_json(dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn collect_snapshot_targets(dir: &Path, recursive: bool) -> Result<Vec<(String, PathBuf)>> {
+/// Collect the subvolumes to report snapshots for.
+///
+/// A subvolume is discovered from its parent's ioctl, so it lands here even
+/// when it can't itself be opened - the caller opens each target again and
+/// reports the failure then.
+fn collect_snapshot_targets(dir: &Path, recursive: bool,
+                            skipped: &mut Skipped) -> Result<Vec<(String, PathBuf)>> {
     let mut targets = vec![(dir.display().to_string(), dir.to_path_buf())];
 
     if recursive {
-        for (path, entry) in collect_entries(dir, "", true)? {
+        for (path, entry) in collect_entries(dir, "", true, skipped)? {
             if entry.snapshot_parent == 0 {
                 targets.push((path.clone(), dir.join(path)));
             }
@@ -774,19 +845,24 @@ fn collect_snapshot_targets(dir: &Path, recursive: bool) -> Result<Vec<(String, 
 
 // ---- Command handlers ----
 
-fn subvolume(cli: Cli) -> Result<()> {
+/// A listing that skipped a subtree exits nonzero: the results printed are
+/// real, but incomplete, and only the exit status says so.
+fn subvolume(cli: Cli) -> Result<ExitCode> {
+    let mut skipped = Skipped::default();
 
     match cli.subcommands {
-        Subcommands::Create { targets }                                         => cmd_create(targets),
-        Subcommands::Delete { targets }                                         => cmd_delete(targets),
+        Subcommands::Create { targets }                                         => cmd_create(targets)?,
+        Subcommands::Delete { targets }                                         => cmd_delete(targets)?,
         /* rw is the default, so it only has to not contradict --read-only -
          * which clap enforces, so there's nothing left for it to say here: */
-        Subcommands::Snapshot { read_only, source, dest, rw: _ }                => cmd_snapshot(read_only, source, dest),
+        Subcommands::Snapshot { read_only, source, dest, rw: _ }                => cmd_snapshot(read_only, source, dest)?,
         Subcommands::List { json, tree, recursive, snapshots, readonly, sort, target }
-                                                                                => cmd_list(json, tree, recursive, snapshots, readonly, sort, target),
+                                                                                => cmd_list(json, tree, recursive, snapshots, readonly, sort, target, &mut skipped)?,
         Subcommands::ListSnapshots { flat, json, readonly, sort, recursive, target }
-                                                                                => cmd_list_snapshots(flat, json, readonly, sort, recursive, target),
+                                                                                => cmd_list_snapshots(flat, json, readonly, sort, recursive, target, &mut skipped)?,
     }
+
+    Ok(if skipped.any() { ExitCode::FAILURE } else { ExitCode::SUCCESS })
 }
 
 /// Open a handle on the filesystem @path is in, or will be in.
@@ -844,62 +920,75 @@ fn cmd_snapshot(read_only: bool, source: Option<PathBuf>, dest: PathBuf) -> Resu
 }
 
 fn cmd_list(json: bool, tree: bool, recursive: bool, snapshots: bool,
-            readonly: bool, sort: Option<SortBy>, target: PathBuf) -> Result<()> {
+            readonly: bool, sort: Option<SortBy>, target: PathBuf,
+            skipped: &mut Skipped) -> Result<()> {
     let recursive = recursive || tree;
     /* Listed paths are relative to the subvolume root, so that's where the
      * walk has to start - see subvol_root(). */
     let target = subvol_root(&target)?;
     if json {
-        print_json(&target, recursive, snapshots, readonly)?;
+        print_json(&target, recursive, snapshots, readonly, skipped)?;
     } else if tree {
         let fd = open_dir(&target)?;
         let sizes = subvol_sizes(&fd);
         println!("{}", target.display());
-        print_tree_recursive(&target, "", snapshots, &sizes)?;
+        print_tree_recursive(&target, "", snapshots, &sizes, skipped)?;
     } else {
-        print_flat(&target, recursive, snapshots, readonly, sort)?;
+        print_flat(&target, recursive, snapshots, readonly, sort, skipped)?;
     }
     Ok(())
 }
 
 fn cmd_list_snapshots(flat: bool, json: bool, readonly: bool,
-                      sort: Option<SortBy>, recursive: bool, target: PathBuf) -> Result<()> {
+                      sort: Option<SortBy>, recursive: bool, target: PathBuf,
+                      skipped: &mut Skipped) -> Result<()> {
     /* The snapshot tree reported is the subvolume's, and a recursive walk
      * starts from its root either way - so name it by that root rather than
      * by whichever directory in it the caller happened to be standing in. */
     let target = subvol_root(&target)?;
-    let targets = collect_snapshot_targets(&target, recursive)?;
+    let targets = collect_snapshot_targets(&target, recursive, skipped)?;
 
+    /* targets[0] is the subvolume root the argument resolved to; the rest
+     * were found by walking it. Only the latter may be skipped - failing to
+     * open the root the caller asked about is an error, not a partial
+     * result. */
     if json && recursive {
         let mut result = Vec::new();
-        for (path, dir) in &targets {
-            result.push(serde_json::json!({
-                "path": path,
-                "snapshots": snapshot_json_value(dir)?,
-            }));
+        for (i, (path, dir)) in targets.iter().enumerate() {
+            let snapshots = snapshot_json_value(dir);
+            if let Some(snapshots) = skipped.descend_discovered(i != 0, dir, snapshots)? {
+                result.push(serde_json::json!({
+                    "path": path,
+                    "snapshots": snapshots,
+                }));
+            }
         }
         println!("{}", serde_json::to_string_pretty(&result)?);
     } else if json {
         print_snapshot_json(&target)?;
-    } else if flat {
-        for (i, (path, dir)) in targets.iter().enumerate() {
-            if recursive {
-                if i != 0 {
-                    println!();
-                }
-                println!("{}:", path);
-            }
-            print_snapshot_flat(dir, readonly, sort.clone())?;
-        }
     } else {
+        let mut printed = 0;
         for (i, (path, dir)) in targets.iter().enumerate() {
+            /* Open before the header, so a skipped subvolume doesn't leave a
+             * heading with nothing under it. */
+            if skipped.descend_discovered(i != 0, dir, open_dir(dir))?.is_none() {
+                continue;
+            }
+
             if recursive {
-                if i != 0 {
+                if printed != 0 {
                     println!();
                 }
                 println!("{}:", path);
             }
-            print_snapshot_tree(dir)?;
+            printed += 1;
+
+            let r = if flat {
+                print_snapshot_flat(dir, readonly, sort.clone())
+            } else {
+                print_snapshot_tree(dir)
+            };
+            skipped.descend_discovered(i != 0, dir, r)?;
         }
     }
     Ok(())
