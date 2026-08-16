@@ -145,3 +145,79 @@ pub unsafe fn sb_to_text_with_names(
     // sbs (Vec<(PathBuf, bch_sb_handle)>) is dropped here — freed by
     // Rust's allocator, not kvfree. This is the whole point.
 }
+
+/// Print a concise one-line-per-member summary: device index, path (or
+/// "(not found)" if no matching device was scanned), state, error
+/// counters, and a short issue tag ("ok" if none apply).
+///
+/// Reuses the same UUID-based device-path discovery as
+/// sb_to_text_with_names(), so it works purely from the superblock of a
+/// single surviving device — no online filesystem required.
+///
+/// # Safety
+/// `sb` must point to a valid `bch_sb`.
+pub unsafe fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb) {
+    let uuid = uuid::Uuid::from_bytes(sb.user_uuid.b);
+    let device_str = format!("UUID={}", uuid);
+
+    let opts = bcachefs_kernel::opts::parse_mount_opts(None, None, true).unwrap_or_default();
+    let sbs = device_scan::scan_sbs(&device_str, &opts).unwrap_or_default();
+
+    out.aligned(|sub| {
+        write!(sub, "Device\tPath\tState\tRead err\tWrite err\tChecksum err\tIssues\r\n").unwrap();
+
+        let mut print_member = |idx: u32, m: c::bch_member| {
+            if !member_alive(&m) {
+                return;
+            }
+
+            let dev = find_dev(&sbs, idx);
+            let missing = dev.is_none();
+            let path = dev
+                .map(|(path, _)| path.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "(not found)".to_string());
+
+            let state = m.member_state() as u8;
+            let state_str = sb::members::member_state_str(state);
+            let err_read = u64::from_le(m.errors[0]);
+            let err_write = u64::from_le(m.errors[1]);
+            let err_checksum = u64::from_le(m.errors[2]);
+
+            let mut issues = Vec::new();
+            if missing {
+                issues.push("missing".to_string());
+            }
+            if state != c::bch_member_state::BCH_MEMBER_STATE_rw as u8 {
+                issues.push(format!("state={state_str}"));
+            }
+            if err_read != 0 {
+                issues.push(format!("read_errors={err_read}"));
+            }
+            if err_write != 0 {
+                issues.push(format!("write_errors={err_write}"));
+            }
+            if err_checksum != 0 {
+                issues.push(format!("checksum_errors={err_checksum}"));
+            }
+            let issues = if issues.is_empty() { "ok".to_string() } else { issues.join(",") };
+
+            write!(
+                sub, "{idx}\t{path}\t{state_str}\t{err_read}\t{err_write}\t{err_checksum}\t{issues}\r\n"
+            ).unwrap();
+        };
+
+        if let Some(members) = sb::members::members_v2(sb) {
+            for idx in 0..members.nr_devices() {
+                if let Some(m) = members.get(idx) {
+                    print_member(idx, m);
+                }
+            }
+        } else if let Some(members) = sb::members::members_v1(sb) {
+            for idx in 0..members.nr_devices() {
+                if let Some(m) = members.get(idx) {
+                    print_member(idx, m);
+                }
+            }
+        }
+    });
+}
