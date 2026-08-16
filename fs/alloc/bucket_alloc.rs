@@ -509,6 +509,11 @@ impl TransAttempt<'_, '_> {
                 } else if fs.alloc_should_bail(ca, req) {
                     Errcode::bucket_alloc_no_progress
                 } else if !waiting {
+                    // only an allocation that waits is pressure
+                    // any device's of the request: the last may not be the one
+                    if req.bits.copygc_can_make_progress() {
+                        fs.copygc_wakeup_for_pressure();
+                    }
                     req.block_on(fs, &fs.allocator.freelist_wait, Blocked::Freelist);
                     waiting = true;
                     continue;

@@ -125,7 +125,7 @@ pub(crate) fn move_extent(moving: &Moving<'_>, t: &TransAttempt<'_, '_>, bucket_
         Err(e) if e.matches(Errcode::data_update_done) => return Ok(()),
         Err(e) => return Err(e),
     };
-    u.rbio.bio.lend().bio_mut().set_ioprio(move_ioprio(data_opts));
+    u.rbio.bio.lend().bio_mut().set_ioprio(move_ioprio(t.fs(), data_opts));
     u.set_found(found);
     u.io_seq = moving.update_issue(u.turn().get());
 

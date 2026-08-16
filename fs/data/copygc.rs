@@ -87,7 +87,7 @@ use crate::util::{HumanReadable, Printbuf};
 use crate::{bch_err_msg, fs_fatal_error};
 use core::pin::Pin;
 use core::ptr::NonNull;
-use core::sync::atomic::{AtomicI32, Ordering::{Acquire, Relaxed}};
+use core::sync::atomic::{AtomicBool, AtomicI32, Ordering::{Acquire, Relaxed}};
 use cstruct_macros::{MaybeZeroable, Init, Late, TypeInfo};
 use pin_init::{pin_data, pin_init, pinned_drop, PinInit};
 use crate::util::futex::EventCount;
@@ -110,6 +110,14 @@ pub struct bch_fs_copygc {
     pub wait: Volatile<i64>,
     pub running: Volatile<bool>,
     pub run_count: Volatile<u32>,
+    /// An allocation or a move needing space asked for copygc: its next run is
+    /// for pressure, and runs at best-effort IO priority - it's what the
+    /// allocation waits on - where the rest of copygc stays idle. Moves a run
+    /// starts after the ask are best-effort too, not only the next run's
+    pub pressure_pending: AtomicBool,
+    pub current_run_pressure: Volatile<bool>,
+    pub last_run_pressure: Volatile<bool>,
+    pub pressure_run_count: Volatile<u32>,
     /// Woken as a run ends: data/copygc.rs
     pub run_done: EventCount,
 
@@ -801,9 +809,19 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
         kick = me.kicks();
         fs.copygc.wait.set(0);
 
+        // kept for a pass with devices: a kick on a list sampled before it
+        // would otherwise use it up
+        let pressure = !devs.is_empty() && fs.copygc.pressure_pending.swap(false, Relaxed);
+        if pressure {
+            fs.copygc.pressure_run_count.set(fs.copygc.pressure_run_count.get().wrapping_add(1));
+        }
+        fs.copygc.current_run_pressure.set(pressure);
+
         fs.copygc.running.set(true);
         let (r, did_work) = cg.copygc_pass(&mut devs);
         fs.copygc.running.set(false);
+        fs.copygc.last_run_pressure.set(pressure);
+        fs.copygc.current_run_pressure.set(false);
         fs.copygc.run_count.set(fs.copygc.run_count.get().wrapping_add(1));
         fs.copygc.run_done.wake();
         ret = r;
@@ -824,6 +842,19 @@ fn thread(fs: &Fs, me: &KthreadSelf<'_>) -> Result<(), BchError> {
 impl Fs {
     pub fn copygc_wakeup(&self) {
         self.copygc.thread.kick();
+    }
+
+    /// copygc_wakeup() for an allocation or move that's out of space: the run
+    /// is a pressure run.
+    /// Whether a move of copygc's should be best-effort: the run is for
+    /// pressure, or a pressure ask has come since it started.
+    pub fn copygc_pressure(&self) -> bool {
+        self.copygc.current_run_pressure.get() || self.copygc.pressure_pending.load(Relaxed)
+    }
+
+    pub fn copygc_wakeup_for_pressure(&self) {
+        self.copygc.pressure_pending.store(true, Relaxed);
+        self.copygc_wakeup();
     }
 
     /// And its workqueue, for the btree updates of its moves.
@@ -870,6 +901,10 @@ impl Fs {
 
         out.tabstop_push(32);
         write!(out, "running:\t{}\n", u32::from(cg.running.get()));
+        write!(out, "pressure pending:\t{}\n", u32::from(cg.pressure_pending.load(Relaxed)));
+        write!(out, "current run pressure:\t{}\n", u32::from(cg.current_run_pressure.get()));
+        write!(out, "last run pressure:\t{}\n", u32::from(cg.last_run_pressure.get()));
+        write!(out, "pressure run count:\t{}\n", cg.pressure_run_count.get());
         write!(out, "run count:\t{}\n", cg.run_count.get());
         write!(out, "copygc_wait:\t{}\n", cg.wait.get() as u64);
         write!(out, "copygc_wait_at:\t{}\n", cg.wait_at.get() as u64);

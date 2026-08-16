@@ -786,7 +786,7 @@ impl<'f> Reconciler<'f, '_> {
             match ret {
                 Err(e) if e.matches(err::data_update_fail_need_copygc) => {
                     trans.unlock_long();
-                    fs.copygc_wakeup();
+                    fs.copygc_wakeup_for_pressure();
                     p.copygc_runs = fs.copygc_wait_run(p.copygc_runs);
                     continue;
                 }

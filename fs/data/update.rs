@@ -257,7 +257,7 @@ impl Fs {
         // an unset read_dev is -1
         prt!(out, "read_dev:\t{}\n", data_opts.read_dev as i32);
         prt!(out, "checksum_paranoia:\t{}\n", u8::from(data_opts.bits.checksum_paranoia()));
-        let ioprio = move_ioprio(data_opts);
+        let ioprio = move_ioprio(self, data_opts);
         prt!(out, "ioprio:\t{}:{}\n", ioprio_class_str(ioprio), ioprio & 0x1fff);
 
         prt!(out, "io path options:\t");
@@ -310,8 +310,15 @@ pub(crate) const IOPRIO_IDLE: u16 = 3 << 13;
 pub(crate) const IOPRIO_BE_LOWEST: u16 = (2 << 13) | 7;
 
 /// The IO priority of @opts's moves: bch2_move_ioprio().
-pub(crate) fn move_ioprio(opts: &c::data_update_opts) -> u16 {
-    if opts.ioprio != 0 { opts.ioprio } else { IOPRIO_IDLE }
+pub(crate) fn move_ioprio(fs: &Fs, opts: &c::data_update_opts) -> u16 {
+    if opts.ioprio != 0 {
+        opts.ioprio
+    } else if opts.type_ == c::DataUpdateType::copygc && fs.copygc_pressure() {
+        // asked per move, not per bucket: pressure comes at any point of a pass
+        IOPRIO_BE_LOWEST
+    } else {
+        IOPRIO_IDLE
+    }
 }
 
 /// The name of @ioprio's class, as the kernel's ioprio names them.
@@ -450,7 +457,12 @@ impl c::data_update {
 
         let iter = c::bvec_iter { bi_sector: self.key().k.start_offset(), bi_size: buf_bytes, ..Default::default() };
         unsafe { self.rbio.bio.lend().bio_mut().set_iter(iter) };
-        self.op.wbio.bio_mut().set_ioprio(move_ioprio(&self.opts));
+        // pressure that's on as the move starts stays with it, to its write
+        let ioprio = move_ioprio(fs, &self.opts);
+        if ioprio != IOPRIO_IDLE {
+            self.opts.ioprio = ioprio;
+        }
+        self.op.wbio.bio_mut().set_ioprio(ioprio);
         Ok(())
     }
 
@@ -881,6 +893,9 @@ impl c::data_update {
 
         self.op.crc = crc;
         self.op.wbio.bio_mut().raw_mut().bi_iter.bi_size = crc.compressed_size << 9;
+        // as the write's issued, not as the move was set up: pressure may have
+        // come while its read was out
+        self.op.wbio.bio_mut().set_ioprio(move_ioprio(fs, &self.opts));
         true
     }
 
