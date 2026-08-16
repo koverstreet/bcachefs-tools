@@ -5,6 +5,8 @@ use std::io::Read;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
@@ -53,6 +55,10 @@ struct Candidate {
     dev: u64,
     ino: u64,
     size: u64,
+    mtime_sec: i64,
+    mtime_nsec: i64,
+    ctime_sec: i64,
+    ctime_nsec: i64,
 }
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -68,11 +74,82 @@ struct HashKey {
     hash: u64,
 }
 
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct InodeKey {
+    dev: u64,
+    ino: u64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct FileVersion {
+    dev: u64,
+    ino: u64,
+    size: u64,
+    mtime_sec: i64,
+    mtime_nsec: i64,
+    ctime_sec: i64,
+    ctime_nsec: i64,
+}
+
+impl FileVersion {
+    fn inode_key(&self) -> InodeKey {
+        InodeKey {
+            dev: self.dev,
+            ino: self.ino,
+        }
+    }
+}
+
+impl From<&Candidate> for FileVersion {
+    fn from(candidate: &Candidate) -> Self {
+        Self {
+            dev: candidate.dev,
+            ino: candidate.ino,
+            size: candidate.size,
+            mtime_sec: candidate.mtime_sec,
+            mtime_nsec: candidate.mtime_nsec,
+            ctime_sec: candidate.ctime_sec,
+            ctime_nsec: candidate.ctime_nsec,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+struct DedupePairKey {
+    a: FileVersion,
+    b: FileVersion,
+}
+
+impl DedupePairKey {
+    fn new(a: &Candidate, b: &Candidate) -> Self {
+        let a = FileVersion::from(a);
+        let b = FileVersion::from(b);
+
+        if (a.dev, a.ino) <= (b.dev, b.ino) {
+            Self { a, b }
+        } else {
+            Self { a: b, b: a }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct CachedHash {
+    size: u64,
+    mtime_sec: i64,
+    mtime_nsec: i64,
+    ctime_sec: i64,
+    ctime_nsec: i64,
+    hash: u64,
+}
+
 #[derive(Default)]
 struct Stats {
     scanned: u64,
     candidates: u64,
     hashed: u64,
+    hash_cache_hits: u64,
+    dedupe_cache_hits: u64,
     duplicate_files: u64,
     bytes_shared: u64,
     bytes_would_share: u64,
@@ -107,6 +184,14 @@ struct DedupeCli {
     #[arg(short, long)]
     verbose: bool,
 
+    /// Number of scan passes to run; 0 means forever
+    #[arg(long, default_value_t = 1)]
+    passes: u64,
+
+    /// Seconds to wait between scan passes
+    #[arg(long, default_value_t = 300)]
+    interval_seconds: u64,
+
     /// Files or directories to scan
     #[arg(required = true)]
     paths: Vec<PathBuf>,
@@ -139,6 +224,10 @@ fn add_candidate(
         dev: meta.dev(),
         ino: meta.ino(),
         size: meta.len(),
+        mtime_sec: meta.mtime(),
+        mtime_nsec: meta.mtime_nsec(),
+        ctime_sec: meta.ctime(),
+        ctime_nsec: meta.ctime_nsec(),
     });
 }
 
@@ -228,10 +317,13 @@ fn open_candidate_write(candidate: &Candidate) -> Result<Option<File>> {
     }
 }
 
-fn hash_file(candidate: &Candidate) -> Result<Option<u64>> {
+fn hash_file(candidate: &Candidate) -> Result<Option<(u64, CachedHash)>> {
     let Some(mut file) = open_candidate_read(candidate)? else {
         return Ok(None);
     };
+    let meta = file
+        .metadata()
+        .with_context(|| format!("stat {}", candidate.path.display()))?;
     let mut hasher = DefaultHasher::new();
     let mut buf = [0u8; 128 * 1024];
 
@@ -245,7 +337,26 @@ fn hash_file(candidate: &Candidate) -> Result<Option<u64>> {
         hasher.write(&buf[..n]);
     }
 
-    Ok(Some(hasher.finish()))
+    let hash = hasher.finish();
+    Ok(Some((
+        hash,
+        CachedHash {
+            size: meta.len(),
+            mtime_sec: meta.mtime(),
+            mtime_nsec: meta.mtime_nsec(),
+            ctime_sec: meta.ctime(),
+            ctime_nsec: meta.ctime_nsec(),
+            hash,
+        },
+    )))
+}
+
+fn cached_hash_matches(cached: &CachedHash, candidate: &Candidate) -> bool {
+    candidate.size == cached.size
+        && candidate.mtime_sec == cached.mtime_sec
+        && candidate.mtime_nsec == cached.mtime_nsec
+        && candidate.ctime_sec == cached.ctime_sec
+        && candidate.ctime_nsec == cached.ctime_nsec
 }
 
 fn dedupe_one(src: &File, dst: &File, len: u64) -> Result<FileDedupeRangeInfo> {
@@ -275,7 +386,12 @@ fn dedupe_one(src: &File, dst: &File, len: u64) -> Result<FileDedupeRangeInfo> {
     Ok(arg.info)
 }
 
-fn dedupe_group(files: &[Candidate], cli: &DedupeCli, stats: &mut Stats) {
+fn dedupe_group(
+    files: &[Candidate],
+    cli: &DedupeCli,
+    stats: &mut Stats,
+    dedupe_cache: &mut HashSet<DedupePairKey>,
+) {
     if files.len() < 2 {
         return;
     }
@@ -309,6 +425,12 @@ fn dedupe_group(files: &[Candidate], cli: &DedupeCli, stats: &mut Stats) {
                 continue;
             }
 
+            let pair_key = DedupePairKey::new(src, dst);
+            if !cli.dry_run && dedupe_cache.contains(&pair_key) {
+                stats.dedupe_cache_hits += 1;
+                continue;
+            }
+
             if cli.verbose {
                 println!("{} -> {}", src.path.display(), dst.path.display());
             }
@@ -336,6 +458,7 @@ fn dedupe_group(files: &[Candidate], cli: &DedupeCli, stats: &mut Stats) {
                 Ok(info) if info.status == FILE_DEDUPE_RANGE_SAME => {
                     stats.duplicate_files += 1;
                     stats.bytes_shared += info.bytes_deduped;
+                    dedupe_cache.insert(pair_key);
                 }
                 Ok(info) if info.status == FILE_DEDUPE_RANGE_DIFFERS => {
                     stats.differed += 1;
@@ -369,9 +492,25 @@ fn dedupe_group(files: &[Candidate], cli: &DedupeCli, stats: &mut Stats) {
     }
 }
 
-fn run_pass(cli: &DedupeCli) -> Result<()> {
+fn run_pass(
+    cli: &DedupeCli,
+    hash_cache: &mut HashMap<InodeKey, CachedHash>,
+    dedupe_cache: &mut HashSet<DedupePairKey>,
+) -> Result<()> {
     let mut stats = Stats::default();
     let files = collect_candidates(&cli.paths, cli.min_size, &mut stats)?;
+    let current_inodes: HashSet<InodeKey> = files
+        .iter()
+        .map(|file| InodeKey {
+            dev: file.dev,
+            ino: file.ino,
+        })
+        .collect();
+
+    hash_cache.retain(|inode, _| current_inodes.contains(inode));
+    dedupe_cache.retain(|pair| {
+        current_inodes.contains(&pair.a.inode_key()) && current_inodes.contains(&pair.b.inode_key())
+    });
 
     let mut by_size: HashMap<SizeKey, Vec<Candidate>> = HashMap::new();
     for file in files {
@@ -387,9 +526,30 @@ fn run_pass(cli: &DedupeCli) -> Result<()> {
     let mut by_hash: HashMap<HashKey, Vec<Candidate>> = HashMap::new();
     for group in by_size.into_values().filter(|g| g.len() > 1) {
         for file in group {
-            match hash_file(&file) {
-                Ok(Some(hash)) => {
-                    stats.hashed += 1;
+            let inode_key = InodeKey {
+                dev: file.dev,
+                ino: file.ino,
+            };
+
+            let cached_hash = match hash_cache.get(&inode_key) {
+                Some(cached) if cached_hash_matches(cached, &file) => {
+                    stats.hash_cache_hits += 1;
+                    Some(cached.hash)
+                }
+                _ => None,
+            };
+
+            match cached_hash
+                .map(|hash| Ok(Some((hash, None))))
+                .unwrap_or_else(|| {
+                    hash_file(&file).map(|result| result.map(|(hash, cached)| (hash, Some(cached))))
+                }) {
+                Ok(Some((hash, new_cache))) => {
+                    if let Some(cached) = new_cache {
+                        stats.hashed += 1;
+                        hash_cache.insert(inode_key, cached);
+                    }
+
                     by_hash
                         .entry(HashKey {
                             dev: file.dev,
@@ -411,12 +571,18 @@ fn run_pass(cli: &DedupeCli) -> Result<()> {
     }
 
     for group in by_hash.into_values().filter(|g| g.len() > 1) {
-        dedupe_group(&group, &cli, &mut stats);
+        dedupe_group(&group, &cli, &mut stats, dedupe_cache);
     }
 
     println!("scanned files: {}", stats.scanned);
     println!("candidate files: {}", stats.candidates);
     println!("hashed files: {}", stats.hashed);
+    if stats.hash_cache_hits != 0 {
+        println!("hash cache hits: {}", stats.hash_cache_hits);
+    }
+    if stats.dedupe_cache_hits != 0 {
+        println!("dedupe cache hits: {}", stats.dedupe_cache_hits);
+    }
     println!("deduped files: {}", stats.duplicate_files);
     if cli.dry_run {
         println!("would share: {}", fmt_bytes_human(stats.bytes_would_share));
@@ -438,7 +604,37 @@ fn run_pass(cli: &DedupeCli) -> Result<()> {
 }
 
 fn run(cli: DedupeCli) -> Result<()> {
-    run_pass(&cli)
+    if cli.passes == 0 && cli.interval_seconds == 0 {
+        bail!("--passes 0 requires a nonzero --interval-seconds");
+    }
+
+    let mut pass = 0;
+    let mut hash_cache = HashMap::new();
+    let mut dedupe_cache = HashSet::new();
+
+    loop {
+        pass += 1;
+
+        if cli.passes != 1 {
+            if cli.passes == 0 {
+                println!("dedupe pass: {pass}");
+            } else {
+                println!("dedupe pass: {pass}/{}", cli.passes);
+            }
+        }
+
+        run_pass(&cli, &mut hash_cache, &mut dedupe_cache)?;
+
+        if cli.passes != 0 && pass >= cli.passes {
+            break;
+        }
+
+        if cli.interval_seconds != 0 {
+            thread::sleep(Duration::from_secs(cli.interval_seconds));
+        }
+    }
+
+    Ok(())
 }
 
 pub const CMD: super::CmdDef = typed_cmd!(
@@ -460,5 +656,58 @@ mod tests {
         assert_eq!(std::mem::size_of::<FileDedupeRangeOne>(), 56);
         assert_eq!(std::mem::offset_of!(FileDedupeRangeOne, info), 24);
         assert_eq!(std::mem::align_of::<FileDedupeRangeOne>(), 8);
+    }
+
+    #[test]
+    fn cached_hash_requires_unchanged_metadata() {
+        let cached = CachedHash {
+            size: 4096,
+            mtime_sec: 1,
+            mtime_nsec: 2,
+            ctime_sec: 3,
+            ctime_nsec: 4,
+            hash: 5,
+        };
+        let mut candidate = Candidate {
+            path: PathBuf::from("file"),
+            dev: 10,
+            ino: 11,
+            size: 4096,
+            mtime_sec: 1,
+            mtime_nsec: 2,
+            ctime_sec: 3,
+            ctime_nsec: 4,
+        };
+
+        assert!(cached_hash_matches(&cached, &candidate));
+
+        candidate.ctime_nsec = 5;
+        assert!(!cached_hash_matches(&cached, &candidate));
+    }
+
+    #[test]
+    fn dedupe_pair_key_is_order_independent() {
+        let a = Candidate {
+            path: PathBuf::from("a"),
+            dev: 10,
+            ino: 11,
+            size: 4096,
+            mtime_sec: 1,
+            mtime_nsec: 2,
+            ctime_sec: 3,
+            ctime_nsec: 4,
+        };
+        let b = Candidate {
+            path: PathBuf::from("b"),
+            dev: 10,
+            ino: 12,
+            size: 4096,
+            mtime_sec: 5,
+            mtime_nsec: 6,
+            ctime_sec: 7,
+            ctime_nsec: 8,
+        };
+
+        assert_eq!(DedupePairKey::new(&a, &b), DedupePairKey::new(&b, &a));
     }
 }
