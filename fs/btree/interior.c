@@ -3635,6 +3635,33 @@ static int __bch2_btree_node_update_key(struct btree_trans *trans,
 						  BKEY_BTREE_PTR_U64s_MAX,
 						  skip_triggers ? BTREE_TRIGGER_norun : 0));
 		} else {
+			/*
+			 * has_interior_updates has exactly one setter,
+			 * btree_trans_update_by_path():
+			 *
+			 *	trans->has_interior_updates |= path->level != 0;
+			 *
+			 * so it is automatic for anything expressed as a
+			 * bch2_trans_update() - which is how the non-root case
+			 * above gets it, from the parent update at level + 1.
+			 * Updating the root is just as much an interior update,
+			 * but it goes out as journal entries and never touches
+			 * that path, so it has to say so itself.
+			 *
+			 * It matters because we hold b across the commit below
+			 * and write new_key into b->key afterwards. Without the
+			 * flag, a leaf that fills up during the commit is split
+			 * and the commit retried in place rather than restarted
+			 * (bch2_trans_commit_error()). The trigger below
+			 * inserts into the same btree b lives in, so it is our
+			 * own commit that can then grow the root - freeing b
+			 * with this key change still in flight, and stranding
+			 * the old key in the interior update's old_nodes[],
+			 * where trigger_old will later delete a backpointer
+			 * this commit already deleted.
+			 */
+			trans->has_interior_updates = true;
+
 			if (!skip_triggers)
 				try(bch2_key_trigger(trans, (struct btree_trigger_op) {
 					.btree		= b->c.btree_id,
