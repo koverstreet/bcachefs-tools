@@ -464,10 +464,10 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 	bool is_kthread = current->flags & PF_KTHREAD;
 	u64 delay;
 
-	if (ctxt->wait_on_copygc && c->copygc.running) {
+	if (ctxt->wait_on_copygc && READ_ONCE(c->copygc.running)) {
 		bch2_moving_ctxt_flush_all(ctxt);
 		wait_event_freezable(c->copygc.running_wq,
-				    !c->copygc.running ||
+				    !READ_ONCE(c->copygc.running) ||
 				    (is_kthread && kthread_should_stop()));
 	}
 
