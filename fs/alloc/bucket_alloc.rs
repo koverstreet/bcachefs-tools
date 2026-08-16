@@ -496,7 +496,7 @@ impl TransAttempt<'_, '_> {
                 copygc_can_make_progress = can_make_progress(ca, &fs.mark_lock().read());
                 if copygc_can_make_progress {
                     req.bits.set_copygc_can_make_progress(true);
-                    fs.copygc_wakeup();
+                    fs.copygc_wakeup_for_pressure();
                 }
 
                 fs.times.get(c::TimeStat::blocked_allocate as usize).track_event_change(true);

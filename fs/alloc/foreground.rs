@@ -1012,7 +1012,7 @@ impl Fs {
                 if ca.free_buckets_at(&req.usage, req.watermark) > 1 || !can_make_progress(ca, &mark) {
                     return true;
                 }
-                self.copygc_wakeup();
+                self.copygc_wakeup_for_pressure();
             }
         }
         assert!(found, "waiting on the allocator with no device that failed in the trace");
