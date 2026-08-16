@@ -666,13 +666,14 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
     /// The first of its cached pointers that shouldn't be, and why.
     fn cached_ptr_to_drop(&self, fs: &Fs, opts: &c::bch_inode_opts) -> Option<(EntryPos, &'static str)> {
         let rcu = read_lock();
-        let mut have_cached = false;
+        let want = cached_ptrs_want(fs, opts, &rcu);
+        let mut seen = 0;
 
         for d in self.ptrs_decoded(fs) {
-            if let Some(why) = cached_ptr_drop_reason(fs, opts, &d, have_cached, &rcu) {
+            if let Some(why) = cached_ptr_drop_reason(fs, opts, &d, seen, want, &rcu) {
                 return Some((d.pos, why));
             }
-            have_cached |= d.ptr.cached() != 0;
+            seen += (d.ptr.cached() != 0) as u32;
         }
         None
     }
@@ -699,9 +700,10 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         // C's pointer to it, forgotten once a drop moves the entries
         let mut ptr_known = true;
 
-        let have_cached = loop {
+        let (seen, want) = loop {
             let rcu = read_lock();
-            let mut have_cached = false;
+            let want = cached_ptrs_want(fs, opts, &rcu);
+            let mut seen = 0;
             let mut to_drop = None;
 
             for d in self.ptrs_decoded(fs) {
@@ -709,11 +711,11 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
                     to_drop = Some((d.pos, "ptr->cached && ec currently incompatible", true));
                     break;
                 }
-                if let Some(why) = cached_ptr_drop_reason(fs, opts, &d, have_cached, &rcu) {
+                if let Some(why) = cached_ptr_drop_reason(fs, opts, &d, seen, want, &rcu) {
                     to_drop = Some((d.pos, why, false));
                     break;
                 }
-                have_cached |= d.ptr.cached() != 0;
+                seen += (d.ptr.cached() != 0) as u32;
             }
             drop(rcu);
 
@@ -725,7 +727,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
                     }
                     ptr_known = false;
                 }
-                None => break have_cached,
+                None => break (seen, want),
             }
         };
 
@@ -737,7 +739,7 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
         let why = {
             let rcu = read_lock();
             let d = self.ptrs_decoded(fs).find(|d| d.pos == at).expect("the pointer just found");
-            cached_ptr_drop_reason(fs, opts, &d, have_cached, &rcu)
+            cached_ptr_drop_reason(fs, opts, &d, seen, want, &rcu)
         };
         if let Some(why) = why {
             self.drop_cached_ptr(fs, at, why);
@@ -771,17 +773,32 @@ pub trait BkeyVPtrs: BkeyV<V: PtrsEntries> {
 
 impl<K: BkeyV<V: PtrsEntries>> BkeyVPtrs for K {}
 
-/// Why @d shouldn't be cached, if it's a cached pointer - @have_cached if one
-/// before it is: maybe_drop_cached_ptr()'s tests. A bucket its device doesn't
-/// have is stale, as C's -1 is.
-fn cached_ptr_drop_reason(fs: &Fs, opts: &c::bch_inode_opts, d: &DecodedPtr<'_>, have_cached: bool,
+/// How many cached pointers an extent keeps: as many as its data_replicas,
+/// and the devices in its promote target - else foreground target - allow, at
+/// least one: cached_ptrs_want().
+fn cached_ptrs_want(fs: &Fs, opts: &c::bch_inode_opts, rcu: &ReadGuard) -> u32 {
+    let target = if opts.promote_target != 0 { opts.promote_target } else { opts.foreground_target };
+    if target == 0 {
+        return 1;
+    }
+    let Some(devs) = fs.target_to_mask(Target::decode(target.into()), rcu) else {
+        return 1;
+    };
+
+    u32::from(opts.data_replicas).max(1).min(devs.d.weight()).max(1)
+}
+
+/// Why @d shouldn't be cached, if it's a cached pointer - @seen cached
+/// pointers before it, of @want to keep: maybe_drop_cached_ptr()'s tests. A
+/// bucket its device doesn't have is stale, as C's -1 is.
+fn cached_ptr_drop_reason(fs: &Fs, opts: &c::bch_inode_opts, d: &DecodedPtr<'_>, seen: u32, want: u32,
                           rcu: &ReadGuard) -> Option<&'static str> {
     let ptr = d.ptr;
     if ptr.cached() == 0 {
         return None;
     }
-    if have_cached {
-        return Some("extent already has another cached pointer");
+    if seen >= want {
+        return Some("extent already has enough cached pointers");
     }
     if d.p.has_ec {
         return Some("cached ptr incompatible with erasure coding");
