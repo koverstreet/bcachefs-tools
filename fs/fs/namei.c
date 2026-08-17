@@ -10,6 +10,8 @@
 #include "fs/namei.h"
 #include "fs/xattr.h"
 
+#include "data/reconcile/work.h"
+
 #include "init/fs.h"
 
 #include "snapshots/subvolume.h"
@@ -336,6 +338,29 @@ bool bch2_reinherit_attrs(struct bch_inode_unpacked *dst_u,
 	return ret;
 }
 
+static int bch2_reinherit_attrs_reconcile(struct btree_trans *trans,
+					  struct bch_inode_unpacked *dst_u,
+					  struct bch_inode_unpacked *src_u,
+					  bool *reconcile_changed)
+{
+	struct bch_fs *c = trans->c;
+	struct bch_extent_reconcile old_r = bch2_inode_reconcile_opts_get(c, dst_u);
+
+	if (!bch2_reinherit_attrs(dst_u, src_u))
+		return 0;
+
+	struct bch_extent_reconcile new_r = bch2_inode_reconcile_opts_get(c, dst_u);
+	if (memcmp(&old_r, &new_r, sizeof(new_r))) {
+		try(bch2_set_reconcile_needs_scan_trans(trans,
+				(struct reconcile_scan) {
+					.type = RECONCILE_SCAN_inum,
+					.inum = dst_u->bi_inum }));
+		*reconcile_changed = true;
+	}
+
+	return 1;
+}
+
 static int subvol_update_parent(struct btree_trans *trans, u32 subvol, u32 new_parent)
 {
 	struct bkey_i_subvolume *s =
@@ -354,7 +379,8 @@ int bch2_rename_trans(struct btree_trans *trans,
 		      struct bch_inode_unpacked *dst_inode_u,
 		      const struct qstr *src_name,
 		      const struct qstr *dst_name,
-		      enum bch_rename_mode mode)
+		      enum bch_rename_mode mode,
+		      bool *reconcile_changed)
 {
 	struct bch_fs *c = trans->c;
 	CLASS(btree_iter_uninit, src_dir_iter)(trans);
@@ -438,14 +464,25 @@ int bch2_rename_trans(struct btree_trans *trans,
 	}
 
 	if (!subvol_inum_eq(dst_dir, src_dir)) {
-		if (bch2_reinherit_attrs(src_inode_u, dst_dir_u) &&
-		    S_ISDIR(src_inode_u->bi_mode))
+		int src_attrs_changed = bch2_reinherit_attrs_reconcile(trans, src_inode_u,
+								       dst_dir_u, reconcile_changed);
+		int ret = src_attrs_changed < 0 ? src_attrs_changed : 0;
+		if (ret)
+			return ret;
+
+		if (src_attrs_changed && S_ISDIR(src_inode_u->bi_mode))
 			return -EXDEV;
 
-		if (mode == BCH_RENAME_EXCHANGE &&
-		    bch2_reinherit_attrs(dst_inode_u, src_dir_u) &&
-		    S_ISDIR(dst_inode_u->bi_mode))
-			return -EXDEV;
+		if (mode == BCH_RENAME_EXCHANGE) {
+			int dst_attrs_changed = bch2_reinherit_attrs_reconcile(trans, dst_inode_u,
+									       src_dir_u, reconcile_changed);
+			ret = dst_attrs_changed < 0 ? dst_attrs_changed : 0;
+			if (ret)
+				return ret;
+
+			if (dst_attrs_changed && S_ISDIR(dst_inode_u->bi_mode))
+				return -EXDEV;
+		}
 
 		if (is_subdir_for_nlink(src_inode_u)) {
 			src_dir_u->bi_nlink--;
