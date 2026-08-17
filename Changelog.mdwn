@@ -1,5 +1,87 @@
 # Changelog
 
+## v1.39.2 - Mon Aug 17 2026
+
+Bugfix release on top of v1.39.1. No on-disk format changes.
+
+### Features
+
+- Mount finally uses the kernel's new mount API properly, which means mount
+  errors are now actually useful: when a mount fails the filesystem says what
+  went wrong, reported through the fs_context log, instead of handing back a
+  bare errno for you to guess at. `remount,rw` on a filesystem in emergency
+  read-only now returns an error too, rather than appearing to succeed.
+
+### Bugfixes
+
+- Fix contention between the journal and btree write buffer caused by allocating
+  memory under shared locks.
+
+- Several btree iterator path lifetime fixes where a stale path pointer could be
+  used after the paths array had been resized, with new poisoning to catch such
+  bugs in the future.
+
+- `bch2_btree_node_update_key()` sets `has_interior_updates` when it updates a
+  btree root. Without it a leaf that filled up during the commit was split and
+  the commit retried in place rather than restarted, which could free the node
+  whose key was being rewritten. The consequence was reconcile backpointers
+  going out of sync — not data corruption — which takes the filesystem
+  emergency read-only with `btree_ptr_to_bad_reconcile_bp`. Seen on tiered
+  setups.
+
+- Removing a device could hang indefinitely. The btree write buffer's
+  flushed-state cache was keyed on the journal's write position rather than on
+  this transaction's own commits, so the guard was false on any busy
+  filesystem: the cache never hit, the flush re-ran and restarted every time,
+  and the backstop that would have broken the loop could never arm. Seen as
+  `bch2_dev_data_drop_by_backpointers()` spinning on
+  `transaction_restart_write_buffer_flush` with no way out.
+
+- Reconcile could spin without making progress. Committing the reconcile-opts
+  update lazily signalled success as a restart, and a write buffer btree scan
+  can't see the keys its own commit just buffered — so it re-read the same
+  position, found the same work and committed the same keys forever. One
+  filesystem was observed making 22076 byte-identical commits from a single
+  thread in three seconds, moving no data.
+
+- Fixed a deadlock between mmap and the debugfs interfaces: they copied to
+  userspace while holding btree locks, and the fault path takes
+  `mmap_lock -> snapshots.create_lock`, while buffered writes take
+  `create_lock -> btree`.
+
+- A completed `fsync()` could fail to flush a device, for nocow writes only,
+  losing a write that a subsequent crash would then drop — silently, since
+  nocow extents carry no checksum. The fetch-and-clear in
+  `bch2_inode_flush_nocow_writes_async()` was a plain struct copy followed by
+  `memset()`, with nothing serializing the bio completion's `set_bit()` against
+  it, so a bit that arrived between the two was erased without ever being acted
+  on. A later fsync then finds the journal sequence already durable and the
+  mask empty, and returns without flushing.
+
+  It takes more than one device to hit. The erased bit only costs anything if
+  it names a device that wasn't already in the copied set — with a single
+  device that set either already contains it, in which case the flush covers
+  the write regardless, or the write landed after the flush and was never part
+  of that fsync's guarantee. So it needs one device already marked and a write
+  completing to a different, unmarked one inside the window between the copy
+  and the memset.
+
+- Readahead is more flexible about producing extent aligned reads, avoiding
+  short livelocks; partially read folios are now tracked in `bch_folio`.
+
+- Discard workers no longer spin against each other.
+
+- The journal's open bucket throttle is taken from a watermark rather than a
+  single bit, and `journal_error_check_stuck()` is fixed.
+
+- Debug ioctls no longer hold btree locks across `copy_to_user()`.
+
+- Fixed a lost update in nocow flush accounting (`ei_devs_need_flush`).
+
+- Reconcile options are committed rather than lazily committed.
+
+- `gc_reserve_percent` documentation corrected: it maxes at 20, not 21.
+
 ## v1.39.1 - Sun Aug 9 2026
 
 Bugfix release on top of v1.39.0. No on-disk format changes.
