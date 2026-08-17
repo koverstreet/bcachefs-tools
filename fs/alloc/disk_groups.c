@@ -552,7 +552,11 @@ __cold void bch2_disk_path_to_text(struct printbuf *out, struct bch_fs *c, unsig
 {
 	guard(printbuf_atomic)(out);
 	guard(rcu)();
-	__bch2_disk_path_to_text(out, rcu_dereference(c->disk_groups), v);
+
+	/* May be called with a NULL fs: */
+	struct bch_disk_groups_cpu *g = c ? rcu_dereference(c->disk_groups) : NULL;
+
+	__bch2_disk_path_to_text(out, g, v);
 }
 
 void bch2_disk_path_to_text_sb(struct printbuf *out, struct bch_sb *sb, unsigned v)
