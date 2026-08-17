@@ -636,7 +636,10 @@ struct bch_ioctl_subvol_readdir {
 
 /*
  * BCH_IOCTL_SUBVOLUME_TO_PATH: resolve a subvolume ID to its filesystem path,
- * relative to the directory fd used for the ioctl.
+ * relative to the filesystem root.
+ *
+ * The directory fd only selects the filesystem: the path returned does not
+ * depend on which directory the fd names, and is not relative to it.
  *
  * @subvolid	- subvolume ID to resolve
  * @buf_size	- size of userspace buffer in bytes

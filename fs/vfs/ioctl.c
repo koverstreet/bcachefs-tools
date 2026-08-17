@@ -614,7 +614,11 @@ static int bch2_subvol_readdir_emit(struct btree_trans *trans,
 		return ret;
 	}
 
-	/* Strip leading '/' — paths are relative to the readdir directory */
+	/*
+	 * Strip leading '/' — bch2_inum_to_path_in_subvol() stopped at @parent,
+	 * so paths are relative to the parent subvolume's root, not to whatever
+	 * directory the caller's fd names.
+	 */
 	char *p = path.buf;
 	u32 len = path.pos;
 	while (len && *p == '/') { p++; len--; }
