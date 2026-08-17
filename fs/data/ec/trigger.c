@@ -48,6 +48,22 @@ int bch2_stripe_validate(struct bch_fs *c, struct bkey_s_c k,
 	const struct bch_stripe *s = bkey_s_c_to_stripe(k).v;
 	int ret = 0;
 
+	/* Checked before stripe_val_u64s(), which reads the value: */
+	bkey_fsck_err_on(k.k->u64s <= BKEY_U64s ||
+			 bkey_val_u64s(k.k) * sizeof(u64) < sizeof(struct bch_stripe),
+			 c, stripe_val_size_bad,
+			 "value truncated (%u u64s)", k.k->u64s);
+
+	bkey_fsck_err_on(s->csum_type >= BCH_CSUM_NR,
+			 c, stripe_csum_type_bad,
+			 "invalid csum type (%u >= %u)",
+			 s->csum_type, BCH_CSUM_NR);
+
+	bkey_fsck_err_on(s->csum_granularity_bits >= 31,
+			 c, stripe_csum_granularity_bad,
+			 "invalid csum granularity (%u >= 31)",
+			 s->csum_granularity_bits);
+
 	bkey_fsck_err_on(bkey_eq(k.k->p, POS_MIN) ||
 			 bpos_gt(k.k->p, POS(0, U32_MAX)),
 			 c, stripe_pos_bad,
@@ -57,11 +73,6 @@ int bch2_stripe_validate(struct bch_fs *c, struct bkey_s_c k,
 			 c, stripe_val_size_bad,
 			 "incorrect value size (%zu < %u)",
 			 bkey_val_u64s(k.k), stripe_val_u64s(s));
-
-	bkey_fsck_err_on(s->csum_granularity_bits >= 64,
-			 c, stripe_csum_granularity_bad,
-			 "invalid csum granularity (%u >= 64)",
-			 s->csum_granularity_bits);
 
 	bkey_fsck_err_on(!s->sectors,
 			 c, stripe_sectors_zero,

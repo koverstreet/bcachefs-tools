@@ -204,6 +204,7 @@ enum bch_fsck_flags {
 	x(stripe_pos_bad,					167,	0)		\
 	x(stripe_val_size_bad,					168,	0)		\
 	x(stripe_csum_granularity_bad,				290,	0)		\
+	x(stripe_csum_type_bad,					361,	0)		\
 	x(stripe_sectors_zero,					340,	0)		\
 	x(stripe_sector_count_wrong,				169,	0)		\
 	x(stripe_parity_block_sector_count_wrong,		360,	0)		\
