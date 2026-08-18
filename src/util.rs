@@ -59,6 +59,67 @@ pub fn open_dir(path: &Path) -> Result<OwnedFd> {
     Ok(f.into())
 }
 
+/* Not in the libc crate yet; from linux/stat.h */
+const STATX_SUBVOL: libc::c_uint = 0x8000;
+
+/// Which filesystem and subvolume @path is in, or None if it isn't on a
+/// filesystem that reports subvolumes.
+///
+/// The device is part of the answer because subvolume IDs are only unique
+/// within a filesystem - every bcachefs numbers its root subvolume 1 - and
+/// bcachefs reports the superblock's device for every subvolume in it, so the
+/// pair changes if and only if we cross into a different filesystem or a
+/// different subvolume.
+fn path_subvol(path: &Path) -> Option<(u64, u64)> {
+    use std::os::unix::ffi::OsStrExt;
+
+    let c_path = CString::new(path.as_os_str().as_bytes()).ok()?;
+    let mut stx: libc::statx = unsafe { std::mem::zeroed() };
+
+    if unsafe {
+        libc::statx(libc::AT_FDCWD, c_path.as_ptr(), 0, STATX_SUBVOL, &mut stx)
+    } != 0 {
+        return None;
+    }
+
+    if stx.stx_mask & STATX_SUBVOL == 0 {
+        return None;
+    }
+
+    Some((libc::makedev(stx.stx_dev_major, stx.stx_dev_minor),
+          stx.stx_subvol))
+}
+
+/// Walk up from @path to the root of the subvolume it's in.
+///
+/// BCH_IOCTL_SUBVOLUME_LIST returns paths relative to the parent subvolume's
+/// root, so a recursive listing has to be anchored there: joined onto any
+/// other directory those paths name nothing, and the descent silently stops
+/// at the first level. statx() reports the subvolume a directory is in, and
+/// that changes at exactly one place - a subvolume root - so the root is the
+/// last directory whose subvolume matches @path's.
+///
+/// The walk ends at a mountpoint or at '/' on its own: statx() doesn't set
+/// STATX_SUBVOL outside bcachefs, and Path::parent() gives None for '/'.
+pub fn subvol_root(path: &Path) -> Result<std::path::PathBuf> {
+    let path = path.canonicalize()
+        .with_context(|| format!("Failed to resolve {}", path.display()))?;
+
+    let subvol = path_subvol(&path)
+        .ok_or_else(|| anyhow!("{} is not on a bcachefs filesystem",
+                               path.display()))?;
+
+    let mut root = path;
+    while let Some(parent) = root.parent() {
+        if path_subvol(parent) != Some(subvol) {
+            break;
+        }
+        root = parent.to_path_buf();
+    }
+
+    Ok(root)
+}
+
 /// The name of a bch_sb_error_id - the same table fsck and the
 /// superblock error counters use.
 pub fn sb_error_name(id: u32) -> String {

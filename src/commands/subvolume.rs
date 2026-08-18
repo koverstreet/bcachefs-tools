@@ -9,7 +9,7 @@ use bch_bindgen::c::{
 };
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir};
+use crate::util::{fmt_sectors_human, fmt_bytes_human, fmt_num_human, open_dir, subvol_root};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::ioctl::{ioctl_ptr, ioctl_rw, Ioctl, IoctlBuf,
     BCH_IOCTL_SNAPSHOT_TREE, BCH_IOCTL_SNAPSHOT_TREE_v2,
@@ -846,6 +846,9 @@ fn cmd_snapshot(read_only: bool, source: Option<PathBuf>, dest: PathBuf) -> Resu
 fn cmd_list(json: bool, tree: bool, recursive: bool, snapshots: bool,
             readonly: bool, sort: Option<SortBy>, target: PathBuf) -> Result<()> {
     let recursive = recursive || tree;
+    /* Listed paths are relative to the subvolume root, so that's where the
+     * walk has to start - see subvol_root(). */
+    let target = subvol_root(&target)?;
     if json {
         print_json(&target, recursive, snapshots, readonly)?;
     } else if tree {
@@ -861,6 +864,10 @@ fn cmd_list(json: bool, tree: bool, recursive: bool, snapshots: bool,
 
 fn cmd_list_snapshots(flat: bool, json: bool, readonly: bool,
                       sort: Option<SortBy>, recursive: bool, target: PathBuf) -> Result<()> {
+    /* The snapshot tree reported is the subvolume's, and a recursive walk
+     * starts from its root either way - so name it by that root rather than
+     * by whichever directory in it the caller happened to be standing in. */
+    let target = subvol_root(&target)?;
     let targets = collect_snapshot_targets(&target, recursive)?;
 
     if json && recursive {
