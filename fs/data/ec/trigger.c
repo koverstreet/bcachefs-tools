@@ -314,6 +314,9 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 	const struct bch_stripe *new_s = op.new.k->type == KEY_TYPE_stripe
 		? bkey_s_c_to_stripe(op.new.s_c).v : NULL;
 
+	try(stripe_csum_type_check(c, old_s));
+	try(stripe_csum_type_check(c, new_s));
+
 	BUG_ON(new_s && old_s &&
 	       (new_s->sectors		!= old_s->sectors ||
 		new_s->nr_blocks	!= old_s->nr_blocks ||

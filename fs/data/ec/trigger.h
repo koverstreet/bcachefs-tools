@@ -23,12 +23,40 @@ static inline unsigned stripe_csums_per_device(const struct bch_stripe *s)
 			    1 << s->csum_granularity_bits);
 }
 
+/*
+ * Checksum types are not validated - a stripe written by a newer version may
+ * use one we don't know - so this is the only place the table is indexed, and
+ * an unknown type takes the widest checksum we have, as bch2_csum_to_text()
+ * does. The offsets that result are still bounded by the caller against
+ * bkey_val_bytes().
+ */
+static inline unsigned stripe_csum_bytes(const struct bch_stripe *s)
+{
+	return s->csum_type < BCH_CSUM_NR ? bch_crc_bytes[s->csum_type] : 16;
+}
+
+/*
+ * The checksums precede the block sector counts in the value and their size
+ * comes from csum_type, so with a type we don't know we can't locate the
+ * blockcounts at all - see struct bch_stripe. Validation lets such a key
+ * through on purpose, so that a versioning mistake costs nothing worse than an
+ * error and the stripe stays on disk and readable; what we can't do is update
+ * it, because every offset we'd compute is guesswork.
+ *
+ * @s may be NULL, for a trigger with no old or no new key.
+ */
+static inline int stripe_csum_type_check(struct bch_fs *c,
+					 const struct bch_stripe *s)
+{
+	return s && s->csum_type >= BCH_CSUM_NR
+		? bch_err_throw(c, stripe_unknown_csum_type)
+		: 0;
+}
+
 static inline unsigned stripe_csum_offset(const struct bch_stripe *s,
 					  unsigned dev, unsigned csum_idx)
 {
-	EBUG_ON(s->csum_type >= BCH_CSUM_NR);
-
-	unsigned csum_bytes = bch_crc_bytes[s->csum_type];
+	unsigned csum_bytes = stripe_csum_bytes(s);
 
 	return sizeof(struct bch_stripe) +
 		sizeof(struct bch_extent_ptr) * s->nr_blocks +
@@ -76,7 +104,7 @@ static inline struct bch_csum stripe_csum_get(struct bch_stripe *s,
 {
 	struct bch_csum csum = { 0 };
 
-	memcpy(&csum, stripe_csum(s, block, csum_idx), bch_crc_bytes[s->csum_type]);
+	memcpy(&csum, stripe_csum(s, block, csum_idx), stripe_csum_bytes(s));
 	return csum;
 }
 
@@ -84,7 +112,7 @@ static inline void stripe_csum_set(struct bch_stripe *s,
 				   unsigned block, unsigned csum_idx,
 				   struct bch_csum csum)
 {
-	memcpy(stripe_csum(s, block, csum_idx), &csum, bch_crc_bytes[s->csum_type]);
+	memcpy(stripe_csum(s, block, csum_idx), &csum, stripe_csum_bytes(s));
 }
 
 /*

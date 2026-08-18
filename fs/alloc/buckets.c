@@ -441,6 +441,8 @@ static int bch2_trigger_stripe_ptr(struct btree_trans *trans,
 		if (ret || !bch2_ptr_matches_stripe(&s->v, p))
 			return mark_stripe_ptr_no_match(trans, k, p.ec.idx);
 
+		try(stripe_csum_type_check(c, &s->v));
+
 		stripe_blockcount_set(&s->v, p.ec.block,
 			stripe_blockcount_get(&s->v, p.ec.block) +
 			sectors);
