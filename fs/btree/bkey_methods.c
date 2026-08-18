@@ -345,6 +345,27 @@ __cold void bch2_val_to_text(struct printbuf *out, struct bch_fs *c,
 {
 	const struct bkey_ops *ops = bch2_bkey_type_ops(k.k->type);
 
+	/*
+	 * Printing a key that failed to validate is the entire point of being
+	 * able to print it, so val_to_text() methods run on unvalidated values
+	 * and can't be given a length they may not trust.
+	 *
+	 * bkey_val_u64s() is (u64s - BKEY_U64s): a __u8 against a size_t, so a
+	 * truncated header doesn't yield a small length, it yields a huge one.
+	 * bch2_bkey_val_to_text()'s "does it have a value?" test is then
+	 * satisfied by precisely the corruption it ought to be catching.
+	 */
+	if (k.k->u64s < BKEY_U64s) {
+		prt_printf(out, "(truncated key header: %u u64s)", k.k->u64s);
+		return;
+	}
+
+	if (bkey_val_bytes(k.k) < ops->min_val_size) {
+		prt_printf(out, "(value too small: %zu < %u)",
+			   bkey_val_bytes(k.k), ops->min_val_size);
+		return;
+	}
+
 	if (likely(ops->val_to_text))
 		ops->val_to_text(out, c, k);
 }
