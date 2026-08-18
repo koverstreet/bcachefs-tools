@@ -1800,7 +1800,7 @@ const char * const bch2_extent_entry_types[] = {
 __cold void bch2_bkey_ptrs_to_text(struct printbuf *out, struct bch_fs *c,
 			    struct bkey_s_c k)
 {
-	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c_safe(k);
 	const union bch_extent_entry *entry;
 
 	if (!c) {
@@ -2077,7 +2077,7 @@ fsck_err:
 
 void bch2_ptr_swab(const struct bch_fs *c, struct bkey_s k)
 {
-	struct bkey_ptrs ptrs = bch2_bkey_ptrs(k);
+	struct bkey_ptrs ptrs = bch2_bkey_ptrs_safe(k);
 	union bch_extent_entry *entry;
 	u64 *d;
 

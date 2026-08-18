@@ -262,6 +262,33 @@ static inline struct bkey_ptrs_c bch2_bkey_ptrs_c(struct bkey_s_c k)
 	}
 }
 
+/*
+ * For the callers that run before the key has been validated - to_text(), and
+ * swab() via bch2_bkey_compat(), which bch2_validate_bset_keys() calls ahead
+ * of bset_key_validate().
+ *
+ * Only stripes need anything extra: every other type here already ends at the
+ * key, while a stripe's ends at ptrs[nr_blocks], and nr_blocks is a __u8 off
+ * disk that bch2_stripe_validate()'s value size check hasn't bounded yet. u64s
+ * is checked before the swab, so bkey_val_end() can be trusted here.
+ */
+static inline struct bkey_ptrs_c bch2_bkey_ptrs_c_safe(struct bkey_s_c k)
+{
+	struct bkey_ptrs_c p = bch2_bkey_ptrs_c(k);
+
+	if (k.k->type == KEY_TYPE_stripe)
+		p.end = min(p.end, (const union bch_extent_entry *) bkey_val_end(k));
+
+	return p;
+}
+
+static inline struct bkey_ptrs bch2_bkey_ptrs_safe(struct bkey_s k)
+{
+	struct bkey_ptrs_c p = bch2_bkey_ptrs_c_safe(k.s_c);
+
+	return (struct bkey_ptrs) { (void *) p.start, (void *) p.end };
+}
+
 static inline struct bkey_ptrs bch2_bkey_ptrs(struct bkey_s k)
 {
 	struct bkey_ptrs_c p = bch2_bkey_ptrs_c(k.s_c);
