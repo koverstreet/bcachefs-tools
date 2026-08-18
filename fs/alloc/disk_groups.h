@@ -65,6 +65,8 @@ static inline struct bch_devs_mask target_rw_devs(struct bch_fs *c,
 						  u16 target)
 {
 	struct bch_devs_mask devs = c->allocator.rw_devs[data_type];
+
+	guard(rcu)();
 	const struct bch_devs_mask *t = bch2_target_to_mask(c, target);
 
 	if (t)

@@ -2122,10 +2122,14 @@ static void dev_alloc_debug_header(struct printbuf *out, struct bch_dev *ca)
 
 static inline bool dev_may_alloc(struct bch_fs *c, struct bch_dev *ca, struct alloc_request *req)
 {
-	if ((req->flags & BCH_WRITE_only_specified_devs) &&
-	    req->target &&
-	    !test_bit(ca->dev_idx, bch2_target_to_mask(c, req->target)->d))
-		return false;
+	if ((req->flags & BCH_WRITE_only_specified_devs) && req->target) {
+		guard(rcu)();
+		const struct bch_devs_mask *t = bch2_target_to_mask(c, req->target);
+
+		/* A target that doesn't resolve rules the device out: */
+		if (!t || !test_bit(ca->dev_idx, t->d))
+			return false;
+	}
 
 	return ca->mi.state == BCH_MEMBER_STATE_rw &&
 		bch2_dev_is_online(ca) &&

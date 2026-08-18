@@ -243,11 +243,16 @@ int bch2_sb_disk_groups_to_cpu(struct bch_fs *c)
 	return 0;
 }
 
+/*
+ * The mask returned lives in an RCU managed object - a bch_dev, or the cpu
+ * disk groups, which are kfree_rcu()d when labels change - so the caller has
+ * to hold rcu, and the pointer is only good for the caller's read side
+ * section. Taking the guard here instead would hand out a pointer that's
+ * already free to go.
+ */
 const struct bch_devs_mask *bch2_target_to_mask(struct bch_fs *c, unsigned target)
 {
 	struct target t = target_decode(target);
-
-	guard(rcu)();
 
 	switch (t.type) {
 	case TARGET_NULL:
