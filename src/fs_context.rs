@@ -68,6 +68,22 @@ const FSCONFIG_SET_FLAG:   libc::c_uint = 0;
 const FSCONFIG_SET_STRING: libc::c_uint = 1;
 const FSCONFIG_CMD_CREATE: libc::c_uint = 6;
 
+/// The most a single fsconfig(2) parameter value can carry.
+///
+/// The kernel copies it with `strndup_user(_value, 256)` (fs/fsopen.c), and
+/// strndup_user() returns -EINVAL when the string doesn't fit rather than
+/// truncating it - so 255 bytes of value, and no way to send more.
+///
+/// mount(2) has no equivalent limit: it takes the source through
+/// copy_mount_string(), which allows PATH_MAX. So the new API cannot express
+/// every mount the old one could, and a caller with a long value has to fall
+/// back rather than adapt.
+///
+/// The refusal also arrives with an empty fs_context log, because it happens in
+/// the syscall wrapper before the VFS sees the parameter - worth knowing, since
+/// everything else here reports failures through that log.
+pub const PARAM_VALUE_MAX: usize = 255;
+
 pub const MOUNT_ATTR_RDONLY:      libc::c_uint = 0x0000_0001;
 pub const MOUNT_ATTR_NOSUID:      libc::c_uint = 0x0000_0002;
 pub const MOUNT_ATTR_NODEV:       libc::c_uint = 0x0000_0004;

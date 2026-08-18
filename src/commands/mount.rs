@@ -23,8 +23,10 @@ use crate::{
 enum Mounted {
     /// Mounted.
     Yes,
-    /// The kernel has no fsopen(2); the caller should use mount(2).
-    NoNewApi,
+    /// The fs_context path can't carry this mount; the caller should use
+    /// mount(2). Either the kernel has no fsopen(2), or the mount says
+    /// something fsconfig(2) has no room for.
+    UseLegacy,
     /// The device is write-protected and a read-write mount wasn't explicitly
     /// asked for. mount(8) retries these read-only rather than failing.
     WriteProtected,
@@ -55,9 +57,28 @@ fn mount_fs_context(
     mountflags: libc::c_ulong,
     data: Option<&str>,
 ) -> anyhow::Result<Mounted> {
+    // Our source is the whole colon-separated device list, and fsconfig(2) has
+    // nowhere to put a long one: it copies a string value with
+    // strndup_user(_value, 256), which returns -EINVAL rather than truncating.
+    // That's ~25 devices. mount(2) took the source via copy_mount_string(),
+    // which allows PATH_MAX, so large arrays go back to it rather than failing -
+    // there is no way to say this in the new API at all.
+    //
+    // Worth knowing when reading a report: that -EINVAL arrives with an empty
+    // fs_context log, because it happens in the syscall wrapper before the VFS
+    // ever sees the parameter.
+    if src.len() > fs_context::PARAM_VALUE_MAX {
+        debug!(
+            "source is {} bytes, over fsconfig()'s {}; using mount(2)",
+            src.len(),
+            fs_context::PARAM_VALUE_MAX
+        );
+        return Ok(Mounted::UseLegacy);
+    }
+
     let Some(fc) = FsContext::open(fstype).with_context(|| format!("fsopen({fstype})"))? else {
         debug!("no fs_context mount API, falling back to mount(2)");
-        return Ok(Mounted::NoNewApi);
+        return Ok(Mounted::UseLegacy);
     };
 
     // The kernel's account of a failure is the entire reason for being here, so
@@ -137,7 +158,7 @@ fn mount_inner(
                 info!("mounting filesystem");
                 match mount_fs_context(src_str, &c_target, fstype, flags, data.as_deref())? {
                     Mounted::Yes      => return Ok(()),
-                    Mounted::NoNewApi => break,
+                    Mounted::UseLegacy => break,
                     Mounted::WriteProtected => {
                         println!("mount: device write-protected, mounting read-only");
                         flags |= libc::MS_RDONLY;
