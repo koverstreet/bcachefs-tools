@@ -125,7 +125,14 @@ static inline enum bch_csum_type bch2_csum_opt_to_type(enum bch_csum_opt type,
 	case BCH_CSUM_OPT_xxhash:
 		return BCH_CSUM_xxhash;
 	default:
-		BUG();
+		/*
+		 * A checksum type we don't know is an incompat feature, so a
+		 * filesystem using one shouldn't have mounted - if we're here
+		 * our versioning was wrong somewhere. Say so, and pick
+		 * something that works rather than going down:
+		 */
+		WARN_ONCE(1, "unknown checksum opt %u", type);
+		return data ? BCH_CSUM_crc32c : BCH_CSUM_crc32c_nonzero;
 	}
 }
 

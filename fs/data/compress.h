@@ -30,7 +30,16 @@ static inline bool bch2_compression_opt_valid(unsigned v)
 
 static inline enum bch_compression_type bch2_compression_opt_to_type(unsigned v)
 {
-	return __bch2_compression_opt_to_type[((union bch_compression_opt){ .value = v }).type];
+	union bch_compression_opt opt = { .value = v };
+
+	if (unlikely(opt.type >= ARRAY_SIZE(__bch2_compression_opt_to_type))) {
+		/* As in bch2_csum_opt_to_type() - shouldn't happen, and
+		 * shouldn't read off the end of the table if it does: */
+		WARN_ONCE(1, "unknown compression opt %u", v);
+		return BCH_COMPRESSION_TYPE_none;
+	}
+
+	return __bch2_compression_opt_to_type[opt.type];
 }
 
 /*
