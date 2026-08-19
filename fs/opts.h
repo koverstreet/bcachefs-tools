@@ -311,6 +311,13 @@ enum fsck_err_opts {
 	  OPT_STR(bch2_degraded_actions),				\
 	  BCH_SB_DEGRADED_ACTION,	BCH_DEGRADED_ask,		\
 	  NULL,		"Allow mounting in degraded mode")		\
+	x(missing_dev_timeout,		u32,				\
+	  OPT_FS|OPT_MOUNT|OPT_FORMAT|OPT_RUNTIME,			\
+	  OPT_UINT(0, 3600),						\
+	  BCH_SB_EXT_MISSING_DEV_TIMEOUT, 0,				\
+	  NULL,		"Seconds to wait at mount for member devices that "\
+			"haven't appeared yet, before applying the degraded "\
+			"action; 0 means use the built-in default")	\
 	x(mount_trusts_udev,		u8,				\
 	  OPT_MOUNT,							\
 	  OPT_BOOL(),							\
