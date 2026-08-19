@@ -2697,19 +2697,21 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	struct inode *vinode;
 	struct bch2_opts_parse *opts_parse = fc->fs_private;
 	struct bch_opts opts = opts_parse->opts;
-	darray_const_str devs = {};
 	darray_fs devs_to_fs = {};
 	int ret;
 
 	opt_set(opts, read_only, (fc->sb_flags & SB_RDONLY) != 0);
 	opt_set(opts, nostart, true);
 
-	if (!fc->source || strlen(fc->source) == 0)
-		return -EINVAL;
+	/*
+	 * Accumulated by bch2_fs_parse_param() from however many "source"
+	 * parameters we were given, and owned by opts_parse - so it outlives
+	 * this function and is freed by bch2_fs_context_free().
+	 */
+	if (!opts_parse->devs.nr)
+		return invalf(fc, "no device to mount");
 
-	try(bch2_split_devs(fc->source, &devs));
-
-	darray_for_each(devs, i) {
+	darray_for_each(opts_parse->devs, i) {
 		ret = darray_push(&devs_to_fs, bch2_path_to_fs(*i));
 		if (ret)
 			goto err;
@@ -2723,7 +2725,7 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	if (!IS_ERR(sb))
 		goto got_sb;
 
-	c = bch2_fs_open(&devs, &opts);
+	c = bch2_fs_open(&opts_parse->devs, &opts);
 	ret = PTR_ERR_OR_ZERO(c);
 	if (ret)
 		goto err;
@@ -2852,7 +2854,6 @@ out:
 	fc->root = dget(sb->s_root);
 err:
 	darray_exit(&devs_to_fs);
-	darray_exit_free_item(&devs, kfree);
 	/*
 	 * Last chance to name the error: bch2_err_class() below flattens it to
 	 * a POSIX errno. errorfc() rather than pr_err() because logfc() falls
@@ -2897,22 +2898,70 @@ static void bch2_fs_context_free(struct fs_context *fc)
 
 	if (opts) {
 		printbuf_exit(&opts->parse_later);
+		darray_exit_free_item(&opts->devs, kfree);
 		kfree(opts);
 	}
+}
+
+/*
+ * Keep fc->source in step with the devices we've been given: taking the
+ * "source" parameter ourselves means vfs_parse_fs_param_source() never runs,
+ * and fc->source is what /proc/mounts and mountinfo display. It has to end up
+ * looking like what a single colon-separated source would have produced. No
+ * length limit applies here - fsconfig(2)'s 256-byte cap is on what it will
+ * copy in from userspace, not on what we assemble.
+ */
+static int bch2_fc_source_append(struct fs_context *fc, const char *s)
+{
+	char *new = fc->source
+		? kasprintf(GFP_KERNEL, "%s:%s", fc->source, s)
+		: kstrdup(s, GFP_KERNEL);
+	if (!new)
+		return -ENOMEM;
+
+	kfree(fc->source);
+	fc->source = new;
+	return 0;
 }
 
 static int bch2_fs_parse_param(struct fs_context *fc,
 			       struct fs_parameter *param)
 {
-	/*
-	 * the "source" param, i.e., the name of the device(s) to mount,
-	 * is handled by the VFS layer.
-	 */
-	if (!strcmp(param->key, "source"))
-		return -ENOPARAM;
-
 	struct bch2_opts_parse *opts = fc->fs_private;
 	struct bch_fs *c = NULL;
+
+	/*
+	 * The devices to mount. We take this rather than leaving it to the VFS
+	 * because fsconfig(2) copies a parameter value with
+	 * strndup_user(_value, 256): a long device list can't be passed as one
+	 * string, so userspace hands them over a few at a time - and
+	 * vfs_parse_fs_param_source() refuses the second one ("Multiple
+	 * sources").
+	 *
+	 * Legacy mount(2) lands here too, via vfs_parse_fs_string(fc, "source",
+	 * name), as a single colon-separated value. Splitting each parameter
+	 * and appending covers both without a second path.
+	 */
+	if (!strcmp(param->key, "source")) {
+		if (param->type != fs_value_is_string)
+			return invalf(fc, "Non-string source");
+
+		/*
+		 * -EINVAL is an empty device name and nothing else; -ENOMEM is
+		 * the only other failure. Naming it here rather than in
+		 * bch2_split_devs() is the point of taking this parameter at
+		 * all - the value that was wrong is in front of us, and it
+		 * reaches the user through the fs_context log.
+		 */
+		int ret = bch2_split_devs(param->string, &opts->devs);
+		if (ret)
+			return ret == -EINVAL
+				? invalf(fc, "empty device name in source \"%s\"",
+					 param->string)
+				: ret;
+
+		return bch2_fc_source_append(fc, param->string);
+	}
 
 	/* for reconfigure, we already have a struct bch_fs */
 	if (fc->root)

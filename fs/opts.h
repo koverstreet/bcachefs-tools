@@ -8,6 +8,7 @@
 #include <linux/string.h>
 #include <linux/sysfs.h>
 #include "bcachefs_format.h"
+#include "util/darray.h"
 
 struct bch_fs;
 
@@ -663,6 +664,13 @@ struct bch2_opts_parse {
 
 	/* to save opts that can't be parsed before the FS is opened: */
 	struct printbuf parse_later;
+
+	/*
+	 * The devices to mount, accumulated across however many "source"
+	 * parameters we were handed - see bch2_fs_parse_param(). Owned here
+	 * and freed by bch2_fs_context_free(), not by whoever consumes it.
+	 */
+	darray_const_str devs;
 };
 
 extern const struct bch_opts bch2_opts_default;
