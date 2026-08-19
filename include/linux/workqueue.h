@@ -120,6 +120,8 @@ extern struct workqueue_struct *system_long_wq;
 extern struct workqueue_struct *system_unbound_wq;
 extern struct workqueue_struct *system_freezable_wq;
 
+#define bch2_system_dfl_wq	system_unbound_wq
+
 extern struct workqueue_struct *
 alloc_workqueue(const char *fmt, unsigned int flags,
 		int max_active, ...) __printf(1, 4);
