@@ -165,6 +165,83 @@ fn ask_via_systemd(q: &str, uuid: &str) -> Result<Answer> {
     Ok(Answer::parse(&String::from_utf8_lossy(&out.stdout)))
 }
 
+/// What resolve_mount_opts() worked out, and whether there's a second question
+/// worth asking if the mount is refused anyway.
+pub struct MountOpts {
+    pub fs_opts: Option<String>,
+    /// Set only when we asked and the user picked `y`. That answer can still
+    /// be refused - see escalate().
+    retry: Option<Retry>,
+}
+
+struct Retry {
+    fs_opts: Option<String>,
+    uuid: String,
+}
+
+impl MountOpts {
+    fn plain(fs_opts: Option<String>) -> MountOpts {
+        MountOpts { fs_opts, retry: None }
+    }
+
+    /// The mount was refused; @err is everything the kernel had to say about
+    /// it. If it was refused because data has no remaining copy, and the user
+    /// had allowed only the still-readable case, ask the harder question and
+    /// hand back the options to retry with.
+    ///
+    /// Retrying is cheap: bch2_fs_may_start() is the first thing
+    /// __bch2_fs_start() does, before recovery, so a refusal there costs the
+    /// superblock reads and nothing else - in particular it has not read and
+    /// sorted the journal, which after an unclean shutdown is the expensive
+    /// part. This would not be worth doing if it had.
+    ///
+    /// We match on the errcode's symbol name, which bch2_fs_get_tree() puts in
+    /// the fs_context log verbatim (`errorfc(fc, "%s", bch2_err_str(ret))`).
+    /// That only reaches us on the fsconfig(2) path; mount(2) flattens it to
+    /// EINVAL, which is also what a typo'd option gives, so there we cannot
+    /// tell and don't try. Getting off that path for multi-device mounts is
+    /// what taking the "source" parameter is for.
+    pub fn escalate(&self, err: &str) -> Result<Option<Option<String>>> {
+        let Some(retry) = &self.retry else { return Ok(None) };
+
+        if !err.contains("insufficient_devices_to_start") {
+            return Ok(None);
+        }
+
+        let q = "Some data has no remaining copy and will be unreadable. \
+                 Mount anyway?";
+
+        let yes = match StdinType::detect() {
+            StdinType::Terminal => ask_on_terminal_yn(q)?,
+            StdinType::DevNull  => ask_via_systemd(q, &retry.uuid)? != Answer::No,
+            StdinType::Other    => {
+                warn!("{q}");
+                warn!("no terminal to ask on; not retrying (mount -o degraded=very to force)");
+                false
+            }
+        };
+
+        if !yes {
+            return Ok(None);
+        }
+
+        warn!("retrying with degraded=very");
+        Ok(Some(Some(append_opt(retry.fs_opts.clone(), Answer::Force.opt()))))
+    }
+}
+
+fn ask_on_terminal_yn(q: &str) -> Result<bool> {
+    use std::io::{stdin, stdout, Write};
+
+    print!("{q} [y/N] ");
+    stdout().flush()?;
+
+    let mut answer = String::new();
+    stdin().read_line(&mut answer)?;
+
+    Ok(Answer::parse(&answer) != Answer::No)
+}
+
 /// Resolve degraded=ask into an explicit option, appended to the fs options
 /// the kernel is about to be given.
 ///
@@ -174,21 +251,23 @@ pub fn resolve_mount_opts(
     sbs: &[(PathBuf, bch_sb_handle)],
     cli_opts: &bch_opts,
     fs_opts: Option<String>,
-) -> Result<Option<String>> {
+) -> Result<MountOpts> {
     let Some((_, first)) = sbs.first() else {
-        return Ok(fs_opts);
+        return Ok(MountOpts::plain(fs_opts));
     };
 
     let expected = first.sb().number_of_devices() as usize;
     if sbs.len() >= expected {
-        return Ok(fs_opts);
+        return Ok(MountOpts::plain(fs_opts));
     }
 
     let missing = expected - sbs.len();
 
     if degraded_action(sbs, cli_opts) != c::bch_degraded_actions::BCH_DEGRADED_ask as u8 {
-        // yes/very/no: the kernel acts on these itself.
-        return Ok(fs_opts);
+        // yes/very/no: the kernel acts on these itself. An explicit
+        // -o degraded= is the user's decision and we don't second-guess it,
+        // so there's nothing to escalate either.
+        return Ok(MountOpts::plain(fs_opts));
     }
 
     let q = question(missing, expected);
@@ -215,7 +294,11 @@ pub fn resolve_mount_opts(
     // so it is not chatter.
     warn!("mounting with {}", answer.opt());
 
-    Ok(Some(append_opt(fs_opts, answer.opt())))
+    Ok(MountOpts {
+        fs_opts: Some(append_opt(fs_opts.clone(), answer.opt())),
+        // Only `y` is escalatable: `f` already forces, and `n` was a refusal.
+        retry: (answer == Answer::IfReadable).then_some(Retry { fs_opts, uuid }),
+    })
 }
 
 /// Append one option to a mount option string, which may be absent or empty -
@@ -261,6 +344,26 @@ mod tests {
         for s in ["", "\n", "n", "N", "no", "q", "yolo", "degraded"] {
             assert_eq!(Answer::parse(s), Answer::No, "{s:?}");
         }
+    }
+
+    /// escalate() must decide *not* to ask before it touches a terminal, so
+    /// these two cases never prompt - which is what makes them testable, and
+    /// is also the property that matters: a mount failing for some unrelated
+    /// reason must not start interrogating the user about degraded mounts.
+    #[test]
+    fn escalate_does_not_ask_when_we_never_asked() {
+        let o = MountOpts::plain(Some("ro".into()));
+        assert!(o.escalate("insufficient_devices_to_start").unwrap().is_none());
+    }
+
+    #[test]
+    fn escalate_does_not_ask_for_an_unrelated_failure() {
+        let o = MountOpts {
+            fs_opts: Some("degraded=yes".into()),
+            retry: Some(Retry { fs_opts: None, uuid: "x".into() }),
+        };
+        assert!(o.escalate("option foo: EINVAL_opt_parse_str_required").unwrap().is_none());
+        assert!(o.escalate("").unwrap().is_none());
     }
 
     #[test]

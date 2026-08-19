@@ -389,7 +389,29 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             &cli.options
         );
 
-        mount_inner(devices, mountpoint, "bcachefs", parsed.flags, fs_opts)
+        match mount_inner(
+            devices.clone(),
+            mountpoint,
+            "bcachefs",
+            parsed.flags,
+            fs_opts.fs_opts.clone(),
+        ) {
+            Ok(()) => Ok(()),
+            Err(e) => {
+                // Refused. If we're the ones who asked the degraded question,
+                // and the user allowed only the case where everything is
+                // still readable, there is a second question worth putting to
+                // them rather than leaving them to reboot into the same
+                // refusal. escalate() gives back None whenever there is
+                // nothing to ask - a different failure, we never asked, or
+                // they declined - and then the original error stands.
+                match fs_opts.escalate(&format!("{e:#}"))? {
+                    Some(retry) =>
+                        mount_inner(devices, mountpoint, "bcachefs", parsed.flags, retry),
+                    None => Err(e),
+                }
+            }
+        }
     } else {
         info!(
             "would mount with params: device: {:?}, options: {}",
