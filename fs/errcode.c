@@ -6,17 +6,32 @@
 #include <linux/errname.h>
 
 static const char * const bch2_errcode_strs[] = {
-#define x(class, err) [BCH_ERR_##err - BCH_ERR_START] = #err,
+#define x(class, err, nr) [BCH_ERR_##err - BCH_ERR_START] = #err,
 	BCH_ERRCODES()
 #undef x
 	NULL
 };
 
 static const unsigned bch2_errcode_parents[] = {
-#define x(class, err) [BCH_ERR_##err - BCH_ERR_START] = class,
+#define x(class, err, nr) [BCH_ERR_##err - BCH_ERR_START] = class,
 	BCH_ERRCODES()
 #undef x
 };
+
+/*
+ * The identifiers in BCH_ERRCODES() are explicit and fixed, so nothing keeps
+ * the table dense or in order any more - but two things here still assume it.
+ * The arrays above are sized by their largest designated index, while
+ * BCH_ERR_MAX is whatever the textually last entry is plus one, and
+ * bch2_err_str() bounds-checks against BCH_ERR_MAX before indexing. Add an
+ * errcode numbered above the last one in the table and those diverge, and the
+ * lookup reads off the end.
+ *
+ * The +1 is the trailing NULL, which lands one past the largest index.
+ */
+static_assert(ARRAY_SIZE(bch2_errcode_strs) == (BCH_ERR_MAX - BCH_ERR_START) + 1,
+	      "an errcode is numbered above the last entry in BCH_ERRCODES() - "
+	      "give BCH_ERR_MAX an explicit value, or renumber");
 
 __attribute__((const))
 const char *bch2_err_str(int err)
@@ -75,7 +90,7 @@ const char *bch2_blk_status_to_str(blk_status_t status)
 		return "device removed";
 
 	switch (status) {
-#define BLK_STS(n) case BLK_STS_##n:	return #n;
+#define BLK_STS(n, nr) case BLK_STS_##n:	return #n;
 	BLK_ERRS()
 #undef BLK_STS
 	default:			return "(invalid)";
@@ -89,7 +104,7 @@ enum bch_errcode blk_status_to_bch_err(blk_status_t err)
 
 	switch (err) {
 #undef BLK_STS
-#define BLK_STS(n) case BLK_STS_##n:	return BCH_ERR_BLK_STS_##n;
+#define BLK_STS(n, nr) case BLK_STS_##n:	return BCH_ERR_BLK_STS_##n;
 		BLK_ERRS()
 #undef BLK_STS
 		default:		return BCH_ERR_BLK_STS_UNKNOWN;
@@ -103,7 +118,7 @@ enum bch_errcode zstd_err_to_bch_err(ZSTD_ErrorCode err)
 
 	switch (err) {
 #undef ZSTD_error
-#define ZSTD_error(n) case ZSTD_error_##n:	return BCH_ERR_ZSTD_error_##n;
+#define ZSTD_error(n, nr) case ZSTD_error_##n:	return BCH_ERR_ZSTD_error_##n;
 		ZSTD_ERRS()
 #undef ZSTD_error
 		default:		return BCH_ERR_ZSTD_error_unknown;
