@@ -366,13 +366,6 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         handle_unlock(cli, first_sb)?;
     }
 
-    // The scan waited for the members it could; if some never turned up, the
-    // filesystem's degraded action decides what happens next, and `ask` is
-    // ours to answer before the kernel sees it.
-    let fs_opts = crate::degraded::resolve_mount_opts(&sbs, &opts, parsed.fs_opts)?;
-
-    drop(sbs);
-
     if let Some(mountpoint) = cli.mountpoint.as_deref() {
         if cli.fake {
             info!(
@@ -381,6 +374,18 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             );
             return Ok(());
         }
+
+        // The scan waited for the members it could; if some never turned up,
+        // the filesystem's degraded action decides what happens next, and
+        // `ask` is ours to answer before the kernel sees it.
+        //
+        // After the -f check, and inside this branch, on purpose: asking
+        // someone whether to mount without a device is only worth their time
+        // if we are going to mount. -f exists to not do the thing, and an
+        // invocation with no mountpoint isn't mounting either.
+        let fs_opts = crate::degraded::resolve_mount_opts(&sbs, &opts, parsed.fs_opts)?;
+
+        drop(sbs);
 
         info!(
             "mounting with params: device: {:?}, target: {}, options: {}",
