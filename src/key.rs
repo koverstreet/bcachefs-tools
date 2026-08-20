@@ -1,5 +1,4 @@
 use std::{
-    borrow::Cow,
     ffi::{CStr, CString},
     fs,
     io::{self, stdin, IsTerminal},
@@ -180,10 +179,7 @@ impl Passphrase {
 
     fn ask_from_systemd_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
         let uuid = sb.sb().uuid();
-        let mut label = String::from_utf8_lossy(sb.sb().label());
-        if label.is_empty() {
-            label = Cow::Owned(uuid.hyphenated().to_string());
-        }
+        let label = crate::prompt::fs_name(sb);
         for i in 0..3 {
             let mut command = Command::new("systemd-ask-password");
             command
@@ -364,14 +360,14 @@ fn is_dev_null(fd: BorrowedFd<'_>) -> io::Result<bool> {
     Ok(major == 1 && minor == 3)
 }
 
-pub(crate) enum StdinType {
+enum StdinType {
     Terminal,
     DevNull,
     Other,
 }
 
 impl StdinType {
-    pub(crate) fn detect() -> StdinType {
+    fn detect() -> StdinType {
         let stdin = stdin();
         if stdin.is_terminal() {
             StdinType::Terminal

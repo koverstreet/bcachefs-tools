@@ -40,7 +40,7 @@
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use crate::prompt::{Ask, Prompt};
+use crate::prompt::{fs_name, Ask, Prompt};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -196,22 +196,6 @@ impl Answer {
     /// no remaining copy.
     fn escalatable(self) -> bool {
         matches!(self, Answer::IfReadable | Answer::ReadOnly)
-    }
-}
-
-/// What to call the filesystem when asking about it: its label, or its UUID if
-/// it hasn't got one.
-///
-/// The same choice the passphrase prompt already makes (key.rs), for the same
-/// reason - at boot there may be several of these, and a question that doesn't
-/// say which filesystem it is about isn't answerable.
-fn fs_name(sb: &bch_sb_handle) -> String {
-    let label = String::from_utf8_lossy(sb.sb().label());
-
-    if label.is_empty() {
-        sb.sb().uuid().hyphenated().to_string()
-    } else {
-        label.into_owned()
     }
 }
 

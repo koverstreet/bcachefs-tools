@@ -45,10 +45,30 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::Result;
+use bcachefs_kernel::c::bch_sb_handle;
 use log::debug;
 
 /// systemd creates this when its password-agent machinery is running.
 const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
+
+/// What to call a filesystem when asking someone about it: its label, or its
+/// UUID if it hasn't got one.
+///
+/// Lives here because the reason is about prompting rather than about
+/// filesystems: at boot there may be several of these coming up at once, and a
+/// question that doesn't say which one it is about isn't answerable. Both the
+/// passphrase prompt and the degraded prompt need to name the thing the same
+/// way, so a user seeing two questions can tell whether they are about the
+/// same disk.
+pub fn fs_name(sb: &bch_sb_handle) -> String {
+    let label = String::from_utf8_lossy(sb.sb().label());
+
+    if label.is_empty() {
+        sb.sb().uuid().hyphenated().to_string()
+    } else {
+        label.into_owned()
+    }
+}
 
 /// One question, in both the forms its destinations need.
 pub struct Ask<'a> {
