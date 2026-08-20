@@ -148,9 +148,25 @@ impl Answer {
     }
 }
 
-fn question(missing: usize, expected: usize) -> String {
+/// What to call the filesystem when asking about it: its label, or its UUID if
+/// it hasn't got one.
+///
+/// The same choice the passphrase prompt already makes (key.rs), for the same
+/// reason - at boot there may be several of these, and a question that doesn't
+/// say which filesystem it is about isn't answerable.
+fn fs_name(sb: &bch_sb_handle) -> String {
+    let label = String::from_utf8_lossy(sb.sb().label());
+
+    if label.is_empty() {
+        sb.sb().uuid().hyphenated().to_string()
+    } else {
+        label.into_owned()
+    }
+}
+
+fn question(name: &str, missing: usize, expected: usize) -> String {
     format!(
-        "Only {} of {expected} devices are present. \
+        "Filesystem {name}: only {} of {expected} devices are present. \
          Mount without the missing {}?",
         expected - missing,
         if missing == 1 { "device" } else { "devices" },
@@ -364,7 +380,7 @@ pub fn resolve_mount_opts(
         return Ok(MountOpts::plain(fs_opts));
     }
 
-    let q = question(missing, expected);
+    let q = question(&fs_name(first), missing, expected);
     let uuid = first.sb().uuid().hyphenated().to_string();
 
     // Which devices, not just how many. systemd-ask-password takes a single
@@ -483,9 +499,12 @@ mod tests {
 
     #[test]
     fn question_counts_what_is_present_not_what_is_missing() {
-        assert!(question(1, 3).contains("2 of 3"));
-        assert!(question(1, 3).contains("device?"));
-        assert!(question(2, 3).contains("1 of 3"));
-        assert!(question(2, 3).contains("devices?"));
+        assert!(question("tank", 1, 3).contains("2 of 3"));
+        assert!(question("tank", 1, 3).contains("device?"));
+        assert!(question("tank", 2, 3).contains("1 of 3"));
+        assert!(question("tank", 2, 3).contains("devices?"));
+        // Whose filesystem it is, not just how many disks: at boot there can
+        // be several, and the systemd prompt is one line with no other context.
+        assert!(question("tank", 1, 3).contains("tank"));
     }
 }
