@@ -1,31 +1,15 @@
-// device_scan: Discover bcachefs devices for mount.
-//
-// Multi-device bcachefs filesystems require all member devices to be
-// identified before mounting. This module handles device discovery via
-// two strategies:
-//
-// 1. **udev**: Query udev's database for devices tagged as bcachefs with
-//    a matching UUID. Fast, but depends on udev having processed the device
-//    — during early boot, devices may not be tagged yet.
-//
-// 2. **Block scan fallback**: Enumerate all block devices and read each
-//    superblock directly. Slow but reliable. Used when udev returns fewer
-//    devices than the superblock's nr_devices field indicates.
-//
-// The block scan falls back to /proc/partitions when udev is unavailable,
-// so multi-device mount works without udevd running (#344).
-//
-// 3. **Waiting**: neither of the above helps with a device that hasn't
-//    appeared yet, which is what mounting by UUID at boot looks like. So
-//    when the search comes up short we wait for udev to tell us a block
-//    device arrived and look again, bounded by missing_dev_timeout. Only
-//    when we're searching for a filesystem - a caller who names paths has
-//    already decided what exists. Related issues: #308, #393.
-//
-// The C FFI export bch2_scan_devices is called from cmd_fusemount.c.
-// bch2_scan_device_sbs was removed — its only caller (bch2_sb_to_text_with_names)
-// was rewritten in Rust (see wrappers/sb_display.rs) to fix an allocator
-// mismatch where Vec-allocated memory was freed with kvfree.
+//! Finding a filesystem's member devices, all of which a mount needs.
+//!
+//! Three ways, in cost order. udev's database is fast but only knows devices
+//! it has already tagged, which at boot may be none of them. A block scan
+//! reads every superblock on the machine, which is slow but needs nothing
+//! running - /proc/partitions when udev is unavailable (#344).
+//!
+//! Neither helps with a device that has not appeared yet, which is what
+//! mounting by UUID at boot looks like, so a short search waits for one to
+//! arrive and looks again, bounded by missing_dev_timeout (#308, #393). Only
+//! when searching for a filesystem: a caller who names paths has already
+//! decided what exists.
 
 use std::{
     collections::HashSet,
@@ -325,15 +309,9 @@ pub fn expected_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> usize {
         .unwrap_or(0)
 }
 
-/// Which members we have, by dev_idx.
-///
-/// By dev_idx and not by path, because a scan produces paths but a filesystem
-/// is made of devices, and the same device turns up under more than one name -
-/// multipath, or udev and the block scan both contributing. Every question
-/// worth asking of a scan ("are they all here?", "how many are missing?",
-/// "which ones?") is a question about devices, and counting paths gets all
-/// three wrong in the same direction: it calls the set complete with a member
-/// still missing.
+/// By dev_idx, because a scan produces paths and the same device turns up
+/// under more than one - multipath, or udev and the block scan both
+/// contributing. Counting paths calls the set complete with a member missing.
 pub fn present_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> HashSet<u8> {
     sbs.iter().map(|(_, sb)| sb.sb().dev_idx).collect()
 }
@@ -444,10 +422,6 @@ where
                     bail!("error on udev socket fd");
                 }
 
-                // Drain the events, but rescan rather than trusting the
-                // devnodes they name: an arriving block device only tells us
-                // to look again, and scan() already knows how - including the
-                // block-device fallback for members udev hasn't tagged yet.
                 // Nothing drained means the poll timed out.
                 if socket.iter().count() != 0 {
                     sbs = scan()?;
@@ -634,12 +608,8 @@ pub fn open_online_or_offline(devs: &[PathBuf], offline_opts: bch_opts)
     })
 }
 
-/// Discover all devices in a multi-device filesystem, then open it.
-///
-/// When `devs` contains a single device that belongs to a multi-device
-/// filesystem, scans for the other members by UUID before opening —
-/// same discovery that mount performs. When multiple devices are given
-/// explicitly, passes them through as-is.
+/// One device names a filesystem, so find its members the way mount does.
+/// Several were named deliberately, and pass through as-is.
 pub fn open_scan(devs: &[PathBuf], fs_opts: bch_opts) -> Result<Fs, BchError> {
     let devs = if devs.len() == 1 {
         let mut dev_str = devs[0].to_string_lossy().into_owned();

@@ -1,43 +1,22 @@
 //! Putting a question to whoever is at the machine, during a mount.
 //!
-//! # Whether anyone can be asked is decided first
+//! Not "is stdin a terminal": at boot stdin *is* one - it's /dev/console - but
+//! plymouth owns the screen and a question written there is never seen.
+//! systemd's password agents are for exactly this (plymouth, the console
+//! agent, wall, and the credential store for unattended machines), and
+//! --no-tty is what reaches them when we do have a tty.
 //!
-//! [`Prompt::detect`] returns `None` when there is nobody to ask, and it is
-//! called once, before any question exists. A caller without a `Prompt` takes
-//! its safe path immediately rather than composing a question, asking it, and
-//! discovering at the end that nothing was listening.
+//! [`Prompt::detect`] gives `None` when nobody can be reached, and callers
+//! resolve that before composing a question: a mount can ask twice - degraded,
+//! then escalation - and deciding per question lets the second one silently
+//! have no audience after the first was answered.
 //!
-//! That ordering matters for more than tidiness. A mount can need to ask more
-//! than once - the degraded question, then the escalation if the kernel
-//! refuses anyway - and resolving reachability per question means the second
-//! one can silently have no audience after the first was answered. Deciding
-//! once makes "there is a person here" a property of the mount.
+//! [`Ask::detail`] reaches a terminal and nothing else; the agent protocol's
+//! `Message=` is one line.
 //!
-//! # Where the question goes
-//!
-//! Not "is stdin a terminal". At boot stdin *is* a terminal - it is
-//! /dev/console - and writing a question there while plymouth owns the screen
-//! puts it somewhere nobody will look. systemd's password agents exist exactly
-//! to answer that: plymouth, the console agent, wall, and the credential store
-//! for an unattended machine. So if the agent framework is running, it is the
-//! way to reach a person, and `--no-tty` makes systemd-ask-password use it
-//! even though we have a tty.
-//!
-//! # What the agent path can't carry
-//!
-//! The ask-password protocol is a key=value file (`/run/systemd/ask-password/
-//! ask.*`) whose `Message=` is a single line, so [`Ask::detail`] - the list of
-//! which devices are missing - only reaches a terminal. Verified by reading a
-//! live ask file; the same file carries `Echo=1`, which is what keeps the
-//! agents from masking a y/n answer as asterisks.
-//!
-//! # Not used by the passphrase prompt
-//!
-//! key.rs deliberately keeps its own path. It needs termios echo-off (with the
-//! ICRNL/ICANON repair for an initramfs console no shell has configured),
-//! zeroizing buffers, NUL-split multi-answer, and keyring/credential caching.
-//! None of that is wanted by a policy question, and one type serving both would
-//! be worse at each.
+//! key.rs keeps its own path: a passphrase needs termios echo-off with the
+//! ICRNL/ICANON repair for an unconfigured initramfs console, zeroizing, and
+//! keyring caching. A policy question needs none of it.
 
 use std::io::{stdin, IsTerminal};
 use std::path::Path;
@@ -51,15 +30,11 @@ use log::debug;
 /// systemd creates this when its password-agent machinery is running.
 const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
 
-/// What to call a filesystem when asking someone about it: its label, or its
-/// UUID if it hasn't got one.
+/// What to call a filesystem when asking about it: its label, or its UUID.
 ///
-/// Lives here because the reason is about prompting rather than about
-/// filesystems: at boot there may be several of these coming up at once, and a
-/// question that doesn't say which one it is about isn't answerable. Both the
-/// passphrase prompt and the degraded prompt need to name the thing the same
-/// way, so a user seeing two questions can tell whether they are about the
-/// same disk.
+/// Here rather than with the superblock code because the reason is about
+/// prompting: several filesystems come up at once at boot, and someone facing
+/// two questions needs to see whether they're about the same disk.
 pub fn fs_name(sb: &bch_sb_handle) -> String {
     let label = String::from_utf8_lossy(sb.sb().label());
 
@@ -137,10 +112,8 @@ fn have_ask_password() -> bool {
         .unwrap_or(false)
 }
 
-/// --echo=yes because this is not a password. The default is `masked`, an
-/// asterisk per character, and it also puts a lock-and-key emoji on the
-/// prompt; someone deciding what to do about their data should be able to see
-/// what they typed. --no-tty so the agents get it even though we have a tty.
+/// --echo=yes because this isn't a password: the default is `masked`, an
+/// asterisk per character plus a lock-and-key emoji.
 fn ask_via_agent(ask: &Ask<'_>) -> Result<Option<String>> {
     let out = Command::new("systemd-ask-password")
         .arg("--no-tty")

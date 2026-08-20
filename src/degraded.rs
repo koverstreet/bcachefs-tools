@@ -1,42 +1,9 @@
 //! Answering degraded=ask.
 //!
-//! `degraded` is a superblock option with four values - ask/yes/very/no - and
-//! the kernel implements three of them. `bch2_fs_may_start()` switches on
-//! very and yes, and everything else, `ask` included, falls to the default
-//! arm and refuses. That's correct for a kernel: it has no console and no
-//! user to put a question to.
-//!
-//! So `ask` is ours. We turn it into one of the three the kernel implements
-//! and pass that down explicitly, and the kernel never sees an `ask` it would
-//! have to treat as a refusal. Since `ask` is also the *default*, a
-//! multi-device filesystem that loses a member is refused outright until
-//! something does this.
-//!
-//! The user picks between both force levels, not just on/off: `yes` is
-//! BCH_FORCE_IF_DEGRADED and stops short of mounting when data has no
-//! remaining copy, `very` adds BCH_FORCE_IF_LOST and goes anyway. Offering
-//! only `yes` - which is what this did first - means someone whose data really
-//! is gone answers the question, gets refused regardless, and is never told
-//! which answer would have worked.
-//!
-//! We can't tell them which case they're in. That needs to know how much data
-//! is on the missing devices, which is btree accounting, inside the filesystem
-//! we're deciding whether to open; and the superblock stopped carrying
-//! user-data replicas entries at
-//! bcachefs_metadata_version_no_sb_user_data_replicas, because that section
-//! didn't scale with large numbers of drives. Nor can we mount first and look:
-//! after an unclean shutdown that means reading and sorting the journal, which
-//! is far too much work to spend on a question. So: state both options
-//! plainly, and let them choose.
-//!
-//! Where the answer comes from:
-//!   - an explicit -o degraded=... on the command line wins; the user already
-//!     answered, don't ask twice
-//!   - otherwise whoever crate::prompt can reach - see there for how that's
-//!     decided, and why it is settled before a question is composed
-//!   - nobody to ask: refuse, and say what we would have asked. Mounting
-//!     degraded is a decision about data; making it silently by default is not
-//!     ours to make.
+//! bch2_fs_may_start() acts on yes and very and refuses everything else,
+//! `ask` included - correct for a kernel, which has no user to ask. So `ask`
+//! is ours to resolve first, and since it is the default, a filesystem that
+//! loses a member is refused outright until something here answers.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
@@ -177,8 +144,6 @@ impl Answer {
         }
     }
 
-    /// Mount flags the answer implies.
-    ///
     /// MS_RDONLY rather than the read_only filesystem option, so the mount is
     /// read-only to the VFS too and /proc/mounts says so. A user who asked for
     /// read-only should not have to take our word for it.
@@ -189,11 +154,10 @@ impl Answer {
         }
     }
 
-    /// Whether a refusal is worth escalating to degraded=very. `f` already
-    /// forces and `n` was a refusal; read-only can still be refused, because
-    /// bch2_fs_may_start() checks whether the filesystem is *readable* with
-    /// what's present, and BCH_FORCE_IF_DEGRADED alone doesn't cover data with
-    /// no remaining copy.
+    /// Whether a refusal is worth escalating to degraded=very. Read-only can
+    /// still be refused: bch2_fs_may_start() checks whether the filesystem is
+    /// *readable* with what's present, and BCH_FORCE_IF_DEGRADED alone doesn't
+    /// cover data with no remaining copy.
     fn escalatable(self) -> bool {
         matches!(self, Answer::IfReadable | Answer::ReadOnly)
     }
@@ -210,15 +174,10 @@ fn question(name: &str, missing: usize, expected: usize) -> String {
 
 /// The members we don't have, as the superblock describes them.
 ///
-/// bch2_fs_may_start() prints exactly this when it refuses - it walks the
-/// offline members and runs bch2_member_to_text_short() over each. But `ask`
-/// has already been resolved to yes/very/no by the time the kernel sees it, so
-/// the person answering the question is the one person who never gets told
-/// which device it is about. Same formatter, run against the superblock, at
-/// the point where the decision is actually made.
-///
-/// Filtered the way bch2_fs_may_start() filters: a member being evacuated that
-/// has no data left on it is being removed on purpose, not missing.
+/// bch2_fs_may_start() prints exactly this when it refuses, but `ask` has been
+/// resolved to yes/very/no by the time the kernel sees it - so the person
+/// answering the question is the one person who never gets told which device it
+/// is about. Same formatter, run where the decision is actually made.
 fn missing_devices_to_text(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<String> {
     let (_, first) = sbs.first()?;
     let have = device_scan::present_devices(sbs);
@@ -317,22 +276,17 @@ impl MountOpts {
         MountOpts { fs_opts, flags: 0, retry: None }
     }
 
-    /// The mount was refused; @err is everything the kernel had to say about
-    /// it. If it was refused because data has no remaining copy, and the user
-    /// had allowed only the still-readable case, ask the harder question and
-    /// hand back the options to retry with.
-    ///
     /// Retrying is cheap: bch2_fs_may_start() is the first thing
     /// __bch2_fs_start() does, before recovery, so a refusal there costs the
     /// superblock reads and nothing else - in particular it has not read and
     /// sorted the journal, which after an unclean shutdown is the expensive
     /// part. This would not be worth doing if it had.
     ///
-    /// @err is the code bch2_fs_get_tree() returned, which only reaches us on
-    /// the fsconfig(2) path: mount(2) can only carry an errno, and the errno
-    /// under insufficient_devices_to_start is EINVAL, which is also what a
-    /// typo'd option gives. So there we can't tell and don't try - which is
-    /// half of why multi-device mounts take the fs_context path at all.
+    /// @err is what bch2_fs_get_tree() returned, which only reaches us on the
+    /// fsconfig(2) path: mount(2) can carry only an errno, and the errno under
+    /// insufficient_devices_to_start is EINVAL - the same one a typo'd option
+    /// gives. So there we can't tell and don't try, which is half of why
+    /// multi-device mounts take the fs_context path at all.
     pub fn escalate(&self, err: &BchError) -> Result<Option<String>> {
         let Some(retry) = &self.retry else { return Ok(None) };
 
@@ -354,10 +308,7 @@ impl MountOpts {
 }
 
 /// Resolve degraded=ask into an explicit option, appended to the fs options
-/// the kernel is about to be given.
-///
-/// Returns the options unchanged whenever there's nothing to decide: all
-/// devices present, or a policy the kernel can already act on.
+/// the kernel is about to be given. Unchanged when there is nothing to decide.
 pub fn resolve_mount_opts(
     sbs: &[(PathBuf, bch_sb_handle)],
     cli_opts: &bch_opts,
@@ -381,25 +332,20 @@ pub fn resolve_mount_opts(
     let missing = expected - present;
 
     if degraded_action(sbs, cli_opts) != c::bch_degraded_actions::BCH_DEGRADED_ask as u8 {
-        // yes/very/no: the kernel acts on these itself. An explicit
-        // -o degraded= is the user's decision and we don't second-guess it,
-        // so there's nothing to escalate either.
+        // The kernel acts on yes/very/no itself, and an explicit -o degraded=
+        // is the user's decision - so there's nothing to escalate either.
         return Ok(MountOpts::plain(fs_opts));
     }
 
     let q = question(&fs_name(first), missing, expected);
     let uuid = first.sb().uuid().hyphenated().to_string();
 
-    // Which devices, not just how many. The agent protocol's Message= is a
-    // single line so it can't carry this, but a terminal and the log can - and
-    // whoever is being asked needs to know whether it's the disk they just
+    // Whoever is being asked needs to know whether it's the disk they just
     // unplugged or something they didn't know about.
     let devs = missing_devices_to_text(sbs);
 
-    // Settle whether anyone can be asked before composing a question at them.
-    // Mounting degraded is a decision about data; making it silently by default
-    // is not ours to make, so with nobody there we say what we would have asked
-    // and refuse.
+    // Mounting degraded is a decision about data, so with nobody there to make
+    // it we say what we would have asked, and refuse.
     let Some(p) = Prompt::detect() else {
         warn!("{q}");
         for line in devs.as_deref().unwrap_or("").lines() {
@@ -466,10 +412,9 @@ mod tests {
         }
     }
 
-    /// The safety property: this is a decision about the user's data, so
-    /// anything we don't positively recognise as consent is a refusal --
-    /// including an empty answer, which is what a bare Enter and a timed-out
-    /// systemd prompt both produce. True of both questions.
+    /// Anything not positively recognised as consent is a refusal - including
+    /// an empty answer, which is what a bare Enter and a timed-out systemd
+    /// prompt both produce.
     #[test]
     fn answer_defaults_to_refusing() {
         for s in ["", "\n", "n", "N", "no", "q", "yolo", "degraded"] {
@@ -478,11 +423,9 @@ mod tests {
         }
     }
 
-    /// The escalation question has no read-only rung - by the time it is asked,
-    /// the choice is whether to mount data that has no remaining copy, and
-    /// there is nothing cautious to offer. So `r`, which is the *most* careful
-    /// answer to the question immediately before it, must not read as consent
-    /// here. One parser shared between the two questions is what made it.
+    /// `r` is the most careful answer to the question immediately before this
+    /// one, and must not read as consent here. A shared parser is what would
+    /// make it one.
     #[test]
     fn the_cautious_answer_is_not_consent_to_force() {
         for s in ["r", "R", "ro", "readonly"] {
@@ -493,10 +436,9 @@ mod tests {
         }
     }
 
-    /// escalate() must decide *not* to ask before it touches a terminal, so
-    /// these two cases never prompt - which is what makes them testable, and
-    /// is also the property that matters: a mount failing for some unrelated
-    /// reason must not start interrogating the user about degraded mounts.
+    /// A mount failing for some unrelated reason must not start interrogating
+    /// the user about degraded mounts. escalate() decides not to ask before it
+    /// touches a terminal, which is also what makes these two testable.
     #[test]
     fn escalate_does_not_ask_when_we_never_asked() {
         let o = MountOpts::plain(Some("ro".into()));
