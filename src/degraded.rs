@@ -39,11 +39,15 @@
 //!   - nothing to ask with: refuse, and say why. Mounting degraded is a
 //!     decision about data; making it silently by default is not ours to make.
 
+use std::collections::HashSet;
+use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use anyhow::Result;
+use bcachefs_kernel::c::bch_member_state::BCH_MEMBER_STATE_evacuating;
+use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::{c, opt_defined, opt_get};
 use c::bch_opts;
 use c::bch_sb_handle;
@@ -124,12 +128,69 @@ fn question(missing: usize, expected: usize) -> String {
     )
 }
 
-fn ask_on_terminal(q: &str) -> Result<Answer> {
+/// The members we don't have, as the superblock describes them.
+///
+/// bch2_fs_may_start() prints exactly this when it refuses - it walks the
+/// offline members and runs bch2_member_to_text_short() over each. But `ask`
+/// has already been resolved to yes/very/no by the time the kernel sees it, so
+/// the person answering the question is the one person who never gets told
+/// which device it is about. Same formatter, run against the superblock, at
+/// the point where the decision is actually made.
+///
+/// Filtered the way bch2_fs_may_start() filters: a member being evacuated that
+/// has no data left on it is being removed on purpose, not missing.
+fn missing_devices_to_text(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<String> {
+    let (_, first) = sbs.first()?;
+    let have: HashSet<u8> = sbs.iter().map(|(_, sb)| sb.sb().dev_idx).collect();
+
+    let sb = first.sb();
+    let members = bcachefs_kernel::sb::members::members_v2(sb)?;
+
+    // Null is a legitimate value here - a filesystem with no disk groups has
+    // no such field, and bch2_member_to_text_short_sb() handles it.
+    let gi = bcachefs_kernel::sb::io::sb_field_get::<c::bch_sb_field_disk_groups>(sb)
+        .map_or(std::ptr::null_mut(), |f| f as *const _ as *mut _);
+    let sb_ptr = first.sb;
+
+    let mut out = Printbuf::new();
+
+    for idx in 0..members.nr_devices() {
+        if have.contains(&(idx as u8)) {
+            continue;
+        }
+
+        let Some(mut m) = members.get(idx) else { continue };
+
+        // A deleted member is a hole in the array, not a device.
+        if m.uuid.b == [0u8; 16] {
+            continue;
+        }
+
+        if m.member_state() == BCH_MEMBER_STATE_evacuating as u64
+            && unsafe { c::bch2_sb_dev_has_data(sb_ptr, idx) } == 0
+        {
+            continue;
+        }
+
+        writeln!(out, "Device {idx}:").unwrap();
+        let mut indented = out.indent(2);
+        // SAFETY: sb_ptr is the live superblock behind `first`, which outlives
+        // this call; `gi` came from it and may be null; idx < nr_devices.
+        unsafe { c::bch2_member_to_text_short_sb(indented.as_raw(), &mut m, gi, sb_ptr, idx) };
+    }
+
+    (!out.as_str().is_empty()).then(|| out.as_str().to_owned())
+}
+
+fn ask_on_terminal(q: &str, missing: Option<&str>) -> Result<Answer> {
     use std::io::{stdin, stdout, Write};
 
     // A terminal has room to spell the choices out; systemd-ask-password takes
     // a single line, so the elaboration lives here rather than in question().
     println!("{q}");
+    if let Some(missing) = missing {
+        print!("{missing}");
+    }
     println!("  y  mount degraded, but not if any data has no remaining copy");
     println!("  f  force: mount even if some data will be unreadable");
     println!("  n  don't mount");
@@ -273,11 +334,22 @@ pub fn resolve_mount_opts(
     let q = question(missing, expected);
     let uuid = first.sb().uuid().hyphenated().to_string();
 
+    // Which devices, not just how many. systemd-ask-password takes a single
+    // line so it can't carry this, but the terminal and the log can - and
+    // whoever is being asked needs to know whether it's the disk they just
+    // unplugged or something they didn't know about.
+    let devs = missing_devices_to_text(sbs);
+
     let answer = match StdinType::detect() {
-        StdinType::Terminal => ask_on_terminal(&q)?,
+        StdinType::Terminal => ask_on_terminal(&q, devs.as_deref())?,
         StdinType::DevNull => ask_via_systemd(&q, &uuid)?,
         StdinType::Other => {
             warn!("{q}");
+            if let Some(devs) = &devs {
+                for line in devs.lines() {
+                    warn!("{line}");
+                }
+            }
             warn!(
                 "no terminal to ask on; refusing (mount -o degraded=yes, \
                  or degraded=very if data may have no remaining copy)"

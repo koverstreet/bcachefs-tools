@@ -317,11 +317,17 @@ __cold void bch2_member_to_text(struct printbuf *out,
 		prt_printf(out, "Flush errors:\t%llu\n", le64_to_cpu(m->flush_errors));
 }
 
-static void bch2_member_to_text_short_sb(struct printbuf *out,
-					 struct bch_member *m,
-					 struct bch_sb_field_disk_groups *gi,
-					 struct bch_sb *sb,
-					 unsigned idx)
+/*
+ * Superblock only - no bch_fs, no bch_dev. That is what lets mount.bcachefs
+ * name a device it is about to mount without: the degraded prompt asks about
+ * members that aren't there, so a superblock record is all it has to identify
+ * them with.
+ */
+void bch2_member_to_text_short_sb(struct printbuf *out,
+				  struct bch_member *m,
+				  struct bch_sb_field_disk_groups *gi,
+				  struct bch_sb *sb,
+				  unsigned idx)
 {
 	if (!out->nr_tabstops)
 		printbuf_tabstop_push(out, 16 + out->indent);
