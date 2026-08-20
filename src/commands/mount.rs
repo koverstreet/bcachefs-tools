@@ -366,6 +366,11 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         handle_unlock(cli, first_sb)?;
     }
 
+    // The scan waited for the members it could; if some never turned up, the
+    // filesystem's degraded action decides what happens next, and `ask` is
+    // ours to answer before the kernel sees it.
+    let fs_opts = crate::degraded::resolve_mount_opts(&sbs, &opts, parsed.fs_opts)?;
+
     drop(sbs);
 
     if let Some(mountpoint) = cli.mountpoint.as_deref() {
@@ -384,7 +389,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             &cli.options
         );
 
-        mount_inner(devices, mountpoint, "bcachefs", parsed.flags, parsed.fs_opts)
+        mount_inner(devices, mountpoint, "bcachefs", parsed.flags, fs_opts)
     } else {
         info!(
             "would mount with params: device: {:?}, options: {}",

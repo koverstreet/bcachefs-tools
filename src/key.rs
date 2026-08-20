@@ -364,14 +364,14 @@ fn is_dev_null(fd: BorrowedFd<'_>) -> io::Result<bool> {
     Ok(major == 1 && minor == 3)
 }
 
-enum StdinType {
+pub(crate) enum StdinType {
     Terminal,
     DevNull,
     Other,
 }
 
 impl StdinType {
-    fn detect() -> StdinType {
+    pub(crate) fn detect() -> StdinType {
         let stdin = stdin();
         if stdin.is_terminal() {
             StdinType::Terminal
