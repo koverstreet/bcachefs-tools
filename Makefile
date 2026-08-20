@@ -308,7 +308,9 @@ dkms/dkms.conf: dkms/dkms.conf.in version.h
 .PHONY: initramfs/hook
 initramfs/hook: initramfs/hook.in
 	@echo "    [SED]    $@"
-	$(Q)sed "s|@ROOT_SBINDIR@|$(ROOT_SBINDIR)|g" initramfs/hook.in > initramfs/hook
+	$(Q)sed -e "s|@ROOT_SBINDIR@|$(ROOT_SBINDIR)|g" \
+		-e "s|@UDEVRULESDIR@|$(PKGCONFIG_UDEVRULESDIR)|g" \
+		initramfs/hook.in > initramfs/hook
 
 # The hot-add rule runs the binary by absolute path: udev looks in
 # /usr/lib/udev for anything else, so this can't be left to $$PATH.

@@ -22,5 +22,21 @@ manual_add_modules 'bcachefs'
 add_loaded_modules 'chacha20[-_]*'
 add_loaded_modules 'poly1305[-_]*'
 
-copy_exec @ROOT_SBINDIR@/bcachefs /sbin/bcachefs
+# bcachefs keeps its installed path, because the udev rules copied below run
+# it by absolute path and that path is whatever ROOT_SBINDIR was. mount(8)
+# looks for its helper in /sbin, so that one is placed rather than preserved.
+copy_exec @ROOT_SBINDIR@/bcachefs
 copy_exec @ROOT_SBINDIR@/mount.bcachefs /sbin/mount.bcachefs
+
+# The udev rules matter here as much as anywhere they're installed. A
+# multi-device root comes up in the initramfs, which is precisely where a
+# member is most likely to still be enumerating - so without these there is no
+# hot-add for a device that arrives late, and no per-member by-uuid symlink
+# either, on the one filesystem that can't simply be mounted again later.
+#
+# Guarded: a missing rules file must not take the whole initramfs build down
+# with it. Someone who installed only the binary should get an initramfs
+# without hot-add, not no initramfs.
+if [ -e @UDEVRULESDIR@/64-bcachefs.rules ]; then
+	copy_file rules @UDEVRULESDIR@/64-bcachefs.rules /lib/udev/rules.d/64-bcachefs.rules
+fi
