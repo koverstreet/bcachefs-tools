@@ -603,7 +603,24 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 		/* XXX: we might end up blocking here on reading the old stripe,
 		 * do we need to make this async? */
 
-		try(bch2_stripe_buf_validate_msg(c, &s->old_stripe, true));
+		/*
+		 * Only the blocks we carry forward have to be good.
+		 * init_new_stripe_from_old() already picked those - the ones
+		 * holding live data - and everything else in the old stripe is
+		 * discarded here, parity included: we regenerate it below.
+		 *
+		 * The rest is still read, and still matters, because
+		 * reconstructing a block we do want consumes every other
+		 * block. But a stripe whose damage is confined to the blocks
+		 * it's dropping must not fail, or the rewrite that would drop
+		 * them can never run - which is how a stripe that lost a block
+		 * to device removal gets stuck in reconcile forever.
+		 */
+		u32 required = 0;
+		for (unsigned i = 0; i < s->old_blocks_nr; i++)
+			required |= BIT(s->old_block_map[i]);
+
+		try(bch2_stripe_buf_validate_msg(c, &s->old_stripe, true, required));
 
 		for (unsigned i = 0; i < s->old_blocks_nr; i++)
 			swap(s->new_stripe.data[i],
