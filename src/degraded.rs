@@ -104,19 +104,71 @@ enum Answer {
     Force,
 }
 
-impl Answer {
-    fn parse(s: &str) -> Answer {
-        match s.trim() {
-            "y" | "Y" | "yes" | "Yes" => Answer::IfReadable,
-            "r" | "R" | "ro" | "readonly" => Answer::ReadOnly,
-            // "very" because that's the option name we print at them when we
-            // refuse ("or degraded=very if data may have no remaining copy"):
-            // someone who read that and typed it back meant it.
-            "f" | "F" | "force" | "Force" | "very" | "Very" => Answer::Force,
-            _ => Answer::No,
+/// Which question is being put, and so which answers it will take.
+///
+/// The two questions this module asks have different vocabularies, and the
+/// difference is not cosmetic. `r` is the *cautious* answer to the first one -
+/// look at the data, change nothing - and the second one has no read-only
+/// rung, because by then we are asking whether to mount with data that has no
+/// remaining copy at all. Parsing the second question's reply with the first
+/// question's vocabulary turns the most careful answer into the most
+/// destructive one, so the vocabulary travels with the question rather than
+/// sitting in one shared parser that both callers reach for.
+#[derive(Clone, Copy)]
+enum Question {
+    /// Some devices are missing. Mount without them?
+    Degraded,
+    /// The kernel refused even that: some data has no remaining copy. Mount
+    /// anyway? Yes or no - there is no cautious version of this one.
+    Force,
+}
+
+impl Question {
+    fn parse(self, s: &str) -> Answer {
+        match self {
+            Question::Degraded => match s.trim() {
+                "y" | "Y" | "yes" | "Yes" => Answer::IfReadable,
+                "r" | "R" | "ro" | "readonly" => Answer::ReadOnly,
+                // "very" because that's the option name we print at them when
+                // we refuse ("or degraded=very if data may have no remaining
+                // copy"): someone who read that and typed it back meant it.
+                "f" | "F" | "force" | "Force" | "very" | "Very" => Answer::Force,
+                _ => Answer::No,
+            },
+            Question::Force => match s.trim() {
+                "y" | "Y" | "yes" | "Yes"
+                | "f" | "F" | "force" | "Force" | "very" | "Very" => Answer::Force,
+                _ => Answer::No,
+            },
         }
     }
 
+    /// One line per answer. A terminal has room to spell them out.
+    fn choices(self) -> &'static [&'static str] {
+        match self {
+            Question::Degraded => &[
+                "  y  mount degraded, but not if any data has no remaining copy",
+                "  r  the same, read-only: nothing gets written or re-replicated",
+                "  f  force: mount even if some data will be unreadable",
+                "  n  don't mount",
+            ],
+            Question::Force => &[
+                "  y  mount, and accept that some reads will fail",
+                "  n  don't mount",
+            ],
+        }
+    }
+
+    /// The bracketed summary, for a prompt that only gets one line.
+    fn brief(self) -> &'static str {
+        match self {
+            Question::Degraded => "[y=if readable / r=read-only / f=force / N]",
+            Question::Force    => "[y/N]",
+        }
+    }
+}
+
+impl Answer {
     /// The degraded= value the kernel acts on. Read-only is not one of these -
     /// it is a mount flag, see flags().
     fn opt(self) -> &'static str {
@@ -232,39 +284,69 @@ fn missing_devices_to_text(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<String> {
     (!out.as_str().is_empty()).then(|| out.as_str().to_owned())
 }
 
-fn ask_on_terminal(q: &str, missing: Option<&str>) -> Result<Answer> {
+/// Put a question to whoever is at the machine.
+///
+/// @prompt is the question, @extra anything only a multi-line prompt can carry
+/// (the missing device list), @uuid what identifies this filesystem to the
+/// systemd agent.
+///
+/// Anything not positively recognised as consent is a refusal - see
+/// Question::parse. That covers a bare Enter, a timed-out boot prompt, and a
+/// stdin there is no way to ask on.
+fn ask(q: Question, prompt: &str, extra: Option<&str>, uuid: &str) -> Result<Answer> {
+    match StdinType::detect() {
+        StdinType::Terminal => ask_on_terminal(q, prompt, extra),
+        StdinType::DevNull  => ask_via_systemd(q, prompt, uuid),
+        StdinType::Other    => {
+            warn!("{prompt}");
+            for line in extra.unwrap_or("").lines() {
+                warn!("{line}");
+            }
+            warn!("no terminal to ask on; refusing (mount -o degraded=yes, \
+                   or degraded=very if data may have no remaining copy)");
+            Ok(Answer::No)
+        }
+    }
+}
+
+fn ask_on_terminal(q: Question, prompt: &str, extra: Option<&str>) -> Result<Answer> {
     use std::io::{stdin, stdout, Write};
 
-    // A terminal has room to spell the choices out; systemd-ask-password takes
-    // a single line, so the elaboration lives here rather than in question().
-    println!("{q}");
-    if let Some(missing) = missing {
-        print!("{missing}");
+    println!("{prompt}");
+    if let Some(extra) = extra {
+        print!("{extra}");
     }
-    println!("  y  mount degraded, but not if any data has no remaining copy");
-    println!("  r  the same, read-only: nothing gets written or re-replicated");
-    println!("  f  force: mount even if some data will be unreadable");
-    println!("  n  don't mount");
-    print!("[y/r/f/N] ");
+    for choice in q.choices() {
+        println!("{choice}");
+    }
+    print!("{} ", q.brief());
     stdout().flush()?;
 
     let mut answer = String::new();
     stdin().read_line(&mut answer)?;
 
-    Ok(Answer::parse(&answer))
+    Ok(q.parse(&answer))
 }
 
-/// Ask through systemd, the way the passphrase prompt does. --timeout is a
-/// real number here rather than the passphrase path's 0: a boot that stops to
-/// ask a question nobody is there to answer has to end up somewhere, and for
-/// this question the safe somewhere is "don't".
-fn ask_via_systemd(q: &str, uuid: &str) -> Result<Answer> {
+/// Ask through systemd, the way the passphrase prompt does - which is also how
+/// a question at boot reaches a plymouth splash rather than a console nobody is
+/// looking at.
+///
+/// --echo=yes because this is not a password. The default is to hide what's
+/// typed, and someone answering a question about their data while their
+/// keystrokes go nowhere visible has no way to tell whether they were heard.
+///
+/// --timeout is a real number here rather than the passphrase path's 0: a boot
+/// that stops to ask a question nobody is there to answer has to end up
+/// somewhere, and for this question the safe somewhere is "don't".
+fn ask_via_systemd(q: Question, prompt: &str, uuid: &str) -> Result<Answer> {
     let out = Command::new("systemd-ask-password")
         .arg("--icon=drive-harddisk")
         .arg(format!("--id=bcachefs:UUID={uuid}"))
         .arg(format!("--timeout={}", PROMPT_TIMEOUT.as_secs()))
+        .arg("--echo=yes")
         .arg("-n")
-        .arg(format!("{q} [y=if readable / r=read-only / f=force / N]"))
+        .arg(format!("{prompt} {}", q.brief()))
         .stdin(Stdio::inherit())
         .stderr(Stdio::inherit())
         .output()?;
@@ -274,7 +356,7 @@ fn ask_via_systemd(q: &str, uuid: &str) -> Result<Answer> {
         return Ok(Answer::No);
     }
 
-    Ok(Answer::parse(&String::from_utf8_lossy(&out.stdout)))
+    Ok(q.parse(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// What resolve_mount_opts() worked out, and whether there's a second question
@@ -322,38 +404,16 @@ impl MountOpts {
             return Ok(None);
         }
 
-        let q = "Some data has no remaining copy and will be unreadable. \
-                 Mount anyway?";
+        let prompt = "Some data has no remaining copy and will be unreadable. \
+                      Mount anyway?";
 
-        let yes = match StdinType::detect() {
-            StdinType::Terminal => ask_on_terminal_yn(q)?,
-            StdinType::DevNull  => ask_via_systemd(q, &retry.uuid)? != Answer::No,
-            StdinType::Other    => {
-                warn!("{q}");
-                warn!("no terminal to ask on; not retrying (mount -o degraded=very to force)");
-                false
-            }
-        };
-
-        if !yes {
+        if ask(Question::Force, prompt, None, &retry.uuid)? != Answer::Force {
             return Ok(None);
         }
 
         warn!("retrying with degraded=very");
         Ok(Some(append_opt(retry.fs_opts.clone(), Answer::Force.opt())))
     }
-}
-
-fn ask_on_terminal_yn(q: &str) -> Result<bool> {
-    use std::io::{stdin, stdout, Write};
-
-    print!("{q} [y/N] ");
-    stdout().flush()?;
-
-    let mut answer = String::new();
-    stdin().read_line(&mut answer)?;
-
-    Ok(Answer::parse(&answer) != Answer::No)
 }
 
 /// Resolve degraded=ask into an explicit option, appended to the fs options
@@ -399,23 +459,7 @@ pub fn resolve_mount_opts(
     // unplugged or something they didn't know about.
     let devs = missing_devices_to_text(sbs);
 
-    let answer = match StdinType::detect() {
-        StdinType::Terminal => ask_on_terminal(&q, devs.as_deref())?,
-        StdinType::DevNull => ask_via_systemd(&q, &uuid)?,
-        StdinType::Other => {
-            warn!("{q}");
-            if let Some(devs) = &devs {
-                for line in devs.lines() {
-                    warn!("{line}");
-                }
-            }
-            warn!(
-                "no terminal to ask on; refusing (mount -o degraded=yes, \
-                 or degraded=very if data may have no remaining copy)"
-            );
-            Answer::No
-        }
-    };
+    let answer = ask(Question::Degraded, &q, devs.as_deref(), &uuid)?;
 
     // warn, not info: the default verbosity is Warn, and everything here is a
     // decision about the user's data that we made for them. Without this the
@@ -461,21 +505,40 @@ mod tests {
     #[test]
     fn answer_parses_both_force_levels() {
         for s in ["y", "Y", "yes", "Yes", " y \n"] {
-            assert_eq!(Answer::parse(s), Answer::IfReadable, "{s:?}");
+            assert_eq!(Question::Degraded.parse(s), Answer::IfReadable, "{s:?}");
         }
         for s in ["f", "F", "force", "Force", " f \n", "very"] {
-            assert_eq!(Answer::parse(s), Answer::Force, "{s:?}");
+            assert_eq!(Question::Degraded.parse(s), Answer::Force, "{s:?}");
+        }
+        for s in ["r", "R", "ro", "readonly"] {
+            assert_eq!(Question::Degraded.parse(s), Answer::ReadOnly, "{s:?}");
         }
     }
 
     /// The safety property: this is a decision about the user's data, so
     /// anything we don't positively recognise as consent is a refusal --
     /// including an empty answer, which is what a bare Enter and a timed-out
-    /// systemd prompt both produce.
+    /// systemd prompt both produce. True of both questions.
     #[test]
     fn answer_defaults_to_refusing() {
         for s in ["", "\n", "n", "N", "no", "q", "yolo", "degraded"] {
-            assert_eq!(Answer::parse(s), Answer::No, "{s:?}");
+            assert_eq!(Question::Degraded.parse(s), Answer::No, "{s:?}");
+            assert_eq!(Question::Force.parse(s), Answer::No, "{s:?}");
+        }
+    }
+
+    /// The escalation question has no read-only rung - by the time it is asked,
+    /// the choice is whether to mount data that has no remaining copy, and
+    /// there is nothing cautious to offer. So `r`, which is the *most* careful
+    /// answer to the question immediately before it, must not read as consent
+    /// here. One parser shared between the two questions is what made it.
+    #[test]
+    fn the_cautious_answer_is_not_consent_to_force() {
+        for s in ["r", "R", "ro", "readonly"] {
+            assert_eq!(Question::Force.parse(s), Answer::No, "{s:?}");
+        }
+        for s in ["y", "yes", "f", "force", "very"] {
+            assert_eq!(Question::Force.parse(s), Answer::Force, "{s:?}");
         }
     }
 
