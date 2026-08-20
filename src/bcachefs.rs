@@ -7,6 +7,7 @@ mod fs_context;
 mod key;
 mod dump_stack;
 mod logging;
+mod prompt;
 mod qcow2;
 mod util;
 mod wrappers;

@@ -29,19 +29,18 @@
 //! is far too much work to spend on a question. So: state both options
 //! plainly, and let them choose.
 //!
-//! Where the answer comes from, in order:
+//! Where the answer comes from:
 //!   - an explicit -o degraded=... on the command line wins; the user already
 //!     answered, don't ask twice
-//!   - a terminal: ask on it
-//!   - no terminal (systemd's /dev/null stdin at boot): systemd-ask-password,
-//!     which is also how the passphrase prompt reaches a user during boot, and
-//!     which can be pre-answered by a credential on an unattended machine
-//!   - nothing to ask with: refuse, and say why. Mounting degraded is a
-//!     decision about data; making it silently by default is not ours to make.
+//!   - otherwise whoever crate::prompt can reach - see there for how that's
+//!     decided, and why it is settled before a question is composed
+//!   - nobody to ask: refuse, and say what we would have asked. Mounting
+//!     degraded is a decision about data; making it silently by default is not
+//!     ours to make.
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use crate::prompt::{Ask, Prompt};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -51,10 +50,9 @@ use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::{c, opt_defined, opt_get};
 use c::bch_opts;
 use c::bch_sb_handle;
-use log::{debug, warn};
+use log::warn;
 
 use crate::device_scan;
-use crate::key::StdinType;
 
 /// How long the boot-time prompt waits before giving up and refusing. Distinct
 /// from missing_dev_timeout, which bounds waiting for hardware; this bounds
@@ -286,77 +284,26 @@ fn missing_devices_to_text(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<String> {
 
 /// Put a question to whoever is at the machine.
 ///
-/// @prompt is the question, @extra anything only a multi-line prompt can carry
-/// (the missing device list), @uuid what identifies this filesystem to the
-/// systemd agent.
+/// @extra is anything only a multi-line destination can carry (the missing
+/// device list); the agent protocol's Message= is one line, so it reaches a
+/// terminal and nothing else.
 ///
 /// Anything not positively recognised as consent is a refusal - see
-/// Question::parse. That covers a bare Enter, a timed-out boot prompt, and a
-/// stdin there is no way to ask on.
-fn ask(q: Question, prompt: &str, extra: Option<&str>, uuid: &str) -> Result<Answer> {
-    match StdinType::detect() {
-        StdinType::Terminal => ask_on_terminal(q, prompt, extra),
-        StdinType::DevNull  => ask_via_systemd(q, prompt, uuid),
-        StdinType::Other    => {
-            warn!("{prompt}");
-            for line in extra.unwrap_or("").lines() {
-                warn!("{line}");
-            }
-            warn!("no terminal to ask on; refusing (mount -o degraded=yes, \
-                   or degraded=very if data may have no remaining copy)");
-            Ok(Answer::No)
-        }
-    }
-}
+/// Question::parse - which covers a bare Enter and a timed-out boot prompt.
+/// "Nobody to ask" does not reach here: resolve_mount_opts() settles that
+/// before there is a question, so holding a Prompt means someone can see it.
+fn ask(p: &Prompt, q: Question, prompt: &str, extra: Option<&str>, uuid: &str)
+       -> Result<Answer> {
+    let reply = p.ask(&Ask {
+        prompt,
+        detail:  extra,
+        choices: q.choices(),
+        brief:   q.brief(),
+        id:      &format!("bcachefs:UUID={uuid}"),
+        timeout: PROMPT_TIMEOUT,
+    })?;
 
-fn ask_on_terminal(q: Question, prompt: &str, extra: Option<&str>) -> Result<Answer> {
-    use std::io::{stdin, stdout, Write};
-
-    println!("{prompt}");
-    if let Some(extra) = extra {
-        print!("{extra}");
-    }
-    for choice in q.choices() {
-        println!("{choice}");
-    }
-    print!("{} ", q.brief());
-    stdout().flush()?;
-
-    let mut answer = String::new();
-    stdin().read_line(&mut answer)?;
-
-    Ok(q.parse(&answer))
-}
-
-/// Ask through systemd, the way the passphrase prompt does - which is also how
-/// a question at boot reaches a plymouth splash rather than a console nobody is
-/// looking at.
-///
-/// --echo=yes because this is not a password. The default is to hide what's
-/// typed, and someone answering a question about their data while their
-/// keystrokes go nowhere visible has no way to tell whether they were heard.
-///
-/// --timeout is a real number here rather than the passphrase path's 0: a boot
-/// that stops to ask a question nobody is there to answer has to end up
-/// somewhere, and for this question the safe somewhere is "don't".
-fn ask_via_systemd(q: Question, prompt: &str, uuid: &str) -> Result<Answer> {
-    let out = Command::new("systemd-ask-password")
-        .arg("--icon=drive-harddisk")
-        .arg(format!("--id=bcachefs:UUID={uuid}"))
-        .arg(format!("--timeout={}", PROMPT_TIMEOUT.as_secs()))
-        .arg("--echo=yes")
-        .arg("-n")
-        .arg(format!("{prompt} {}", q.brief()))
-        .stdin(Stdio::inherit())
-        .stderr(Stdio::inherit())
-        .output()?;
-
-    if !out.status.success() {
-        debug!("systemd-ask-password declined or timed out");
-        return Ok(Answer::No);
-    }
-
-    Ok(q.parse(&String::from_utf8_lossy(&out.stdout)))
+    Ok(reply.map_or(Answer::No, |reply| q.parse(&reply)))
 }
 
 /// What resolve_mount_opts() worked out, and whether there's a second question
@@ -371,9 +318,14 @@ pub struct MountOpts {
     retry: Option<Retry>,
 }
 
+/// Carries the Prompt rather than re-deriving one: this is the second question
+/// of the mount, and if the first one reached a person the second must go to
+/// the same place. Holding it here also means retry can only be armed when
+/// there was somewhere to ask in the first place.
 struct Retry {
     fs_opts: Option<String>,
     uuid: String,
+    prompt: Prompt,
 }
 
 impl MountOpts {
@@ -407,7 +359,8 @@ impl MountOpts {
         let prompt = "Some data has no remaining copy and will be unreadable. \
                       Mount anyway?";
 
-        if ask(Question::Force, prompt, None, &retry.uuid)? != Answer::Force {
+        if ask(&retry.prompt, Question::Force, prompt, None, &retry.uuid)?
+            != Answer::Force {
             return Ok(None);
         }
 
@@ -453,13 +406,27 @@ pub fn resolve_mount_opts(
     let q = question(&fs_name(first), missing, expected);
     let uuid = first.sb().uuid().hyphenated().to_string();
 
-    // Which devices, not just how many. systemd-ask-password takes a single
-    // line so it can't carry this, but the terminal and the log can - and
+    // Which devices, not just how many. The agent protocol's Message= is a
+    // single line so it can't carry this, but a terminal and the log can - and
     // whoever is being asked needs to know whether it's the disk they just
     // unplugged or something they didn't know about.
     let devs = missing_devices_to_text(sbs);
 
-    let answer = ask(Question::Degraded, &q, devs.as_deref(), &uuid)?;
+    // Settle whether anyone can be asked before composing a question at them.
+    // Mounting degraded is a decision about data; making it silently by default
+    // is not ours to make, so with nobody there we say what we would have asked
+    // and refuse.
+    let Some(p) = Prompt::detect() else {
+        warn!("{q}");
+        for line in devs.as_deref().unwrap_or("").lines() {
+            warn!("{line}");
+        }
+        warn!("no way to ask anyone; refusing (mount -o degraded=yes, \
+               or degraded=very if data may have no remaining copy)");
+        return Ok(MountOpts::plain(fs_opts));
+    };
+
+    let answer = ask(&p, Question::Degraded, &q, devs.as_deref(), &uuid)?;
 
     // warn, not info: the default verbosity is Warn, and everything here is a
     // decision about the user's data that we made for them. Without this the
@@ -474,7 +441,7 @@ pub fn resolve_mount_opts(
     Ok(MountOpts {
         fs_opts: Some(append_opt(fs_opts.clone(), answer.opt())),
         flags: answer.flags(),
-        retry: answer.escalatable().then_some(Retry { fs_opts, uuid }),
+        retry: answer.escalatable().then_some(Retry { fs_opts, uuid, prompt: p }),
     })
 }
 
@@ -559,7 +526,8 @@ mod tests {
         let o = MountOpts {
             fs_opts: Some("degraded=yes".into()),
             flags: 0,
-            retry: Some(Retry { fs_opts: None, uuid: "x".into() }),
+            retry: Some(Retry { fs_opts: None, uuid: "x".into(),
+                                prompt: Prompt::Terminal }),
         };
 
         for e in [
