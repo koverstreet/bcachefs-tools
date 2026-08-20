@@ -289,16 +289,12 @@ pub fn get_devices_by_uuid(
             // Check if udev found all expected devices. During early boot,
             // udev may not have finished processing all devices yet — if we
             // got fewer than expected, fall back to scanning all block devices.
-            let expected = sbs.first()
-                .map(|(_, sb)| sb.sb().number_of_devices() as usize)
-                .unwrap_or(0);
-
-            if sbs.len() >= expected {
+            if have_every_device(&sbs) {
                 return Ok(sbs);
             }
 
             debug!("udev found {}/{} devices for UUID {}, falling back to block scan",
-                sbs.len(), expected, uuid);
+                present_devices(&sbs).len(), expected_devices(&sbs), uuid);
         }
     }
 
@@ -323,34 +319,38 @@ const NO_UDEV_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 
 /// Members the filesystem should have, according to what we found. Zero when
 /// we found nothing at all - not "no devices", but "don't know yet".
-fn expected_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> usize {
+pub fn expected_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> usize {
     sbs.first()
         .map(|(_, sb)| sb.sb().number_of_devices() as usize)
         .unwrap_or(0)
 }
 
-/// Are all the members here?
+/// Which members we have, by dev_idx.
 ///
-/// Counted in distinct dev_idx rather than in paths: the same device can be
-/// found under more than one name - multipath, or udev and the block scan both
-/// contributing - and counting paths would call the set complete with a member
+/// By dev_idx and not by path, because a scan produces paths but a filesystem
+/// is made of devices, and the same device turns up under more than one name -
+/// multipath, or udev and the block scan both contributing. Every question
+/// worth asking of a scan ("are they all here?", "how many are missing?",
+/// "which ones?") is a question about devices, and counting paths gets all
+/// three wrong in the same direction: it calls the set complete with a member
 /// still missing.
+pub fn present_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> HashSet<u8> {
+    sbs.iter().map(|(_, sb)| sb.sb().dev_idx).collect()
+}
+
+/// Are all the members here?
 fn have_every_device(sbs: &[(PathBuf, bch_sb_handle)]) -> bool {
     let expected = expected_devices(sbs);
 
-    expected != 0
-        && sbs.iter()
-              .map(|(_, sb)| sb.sb().dev_idx)
-              .collect::<HashSet<u8>>()
-              .len() >= expected
+    expected != 0 && present_devices(sbs).len() >= expected
 }
 
 /// How long to keep waiting.
 ///
 /// -o missing_dev_timeout wins: the option is OPT_MOUNT, so someone who passes
 /// it means this mount, not this filesystem. Otherwise the filesystem's own
-/// value, if we've found enough of one to read it. Zero on disk means "unset"
-/// - every filesystem written before the option existed reads back zero - so
+/// value, if we've found enough of one to read it. Zero on disk means "unset",
+/// since every filesystem written before the option existed reads back zero, so
 /// it falls through to the same built-in as having found nothing at all.
 fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> Duration {
     if opt_defined!(cli_opts, missing_dev_timeout) != 0 {

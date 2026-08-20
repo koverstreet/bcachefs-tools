@@ -514,14 +514,12 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         // says rw and the user has only our word for it.
         let flags = parsed.flags | fs_opts.flags;
 
-        // What we're about to mount with, for the rescan afterwards. By
-        // dev_idx, not path: the same device can be found under more than one
-        // name. Empty when nothing is missing, which is the common case and
-        // skips the rescan entirely.
+        // What we're about to mount with, for the rescan afterwards. `short` is
+        // false when nothing is missing, which is the common case and skips the
+        // rescan entirely.
         let uuid = sbs[0].1.sb().uuid();
-        let mounted: HashSet<u8> = sbs.iter().map(|(_, sb)| sb.sb().dev_idx).collect();
-        let expected = sbs[0].1.sb().number_of_devices() as usize;
-        let short = mounted.len() < expected;
+        let mounted = device_scan::present_devices(&sbs);
+        let short = mounted.len() < device_scan::expected_devices(&sbs);
 
         drop(sbs);
 

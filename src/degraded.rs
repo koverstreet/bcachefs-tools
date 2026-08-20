@@ -39,7 +39,6 @@
 //!   - nothing to ask with: refuse, and say why. Mounting degraded is a
 //!     decision about data; making it silently by default is not ours to make.
 
-use std::collections::HashSet;
 use std::fmt::Write as _;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
@@ -54,6 +53,7 @@ use c::bch_opts;
 use c::bch_sb_handle;
 use log::{debug, warn};
 
+use crate::device_scan;
 use crate::key::StdinType;
 
 /// How long the boot-time prompt waits before giving up and refusing. Distinct
@@ -187,7 +187,7 @@ fn question(name: &str, missing: usize, expected: usize) -> String {
 /// has no data left on it is being removed on purpose, not missing.
 fn missing_devices_to_text(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<String> {
     let (_, first) = sbs.first()?;
-    let have: HashSet<u8> = sbs.iter().map(|(_, sb)| sb.sb().dev_idx).collect();
+    let have = device_scan::present_devices(sbs);
 
     let sb = first.sb();
     let members = bcachefs_kernel::sb::members::members_v2(sb)?;
@@ -366,12 +366,18 @@ pub fn resolve_mount_opts(
         return Ok(MountOpts::plain(fs_opts));
     };
 
-    let expected = first.sb().number_of_devices() as usize;
-    if sbs.len() >= expected {
+    // By device, not by path: see device_scan::present_devices(). A member
+    // found twice - multipath, or udev and the block scan both contributing -
+    // would otherwise make up the count for one that is missing, and the
+    // question below would never be asked at all.
+    let expected = device_scan::expected_devices(sbs);
+    let present = device_scan::present_devices(sbs).len();
+
+    if present >= expected {
         return Ok(MountOpts::plain(fs_opts));
     }
 
-    let missing = expected - sbs.len();
+    let missing = expected - present;
 
     if degraded_action(sbs, cli_opts) != c::bch_degraded_actions::BCH_DEGRADED_ask as u8 {
         // yes/very/no: the kernel acts on these itself. An explicit
