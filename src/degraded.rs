@@ -6,10 +6,28 @@
 //! arm and refuses. That's correct for a kernel: it has no console and no
 //! user to put a question to.
 //!
-//! So `ask` is ours. We turn it into a yes or a no here and pass that down
-//! explicitly, and the kernel never sees an `ask` it would have to treat as a
-//! refusal. Since `ask` is also the *default*, a multi-device filesystem that
-//! loses a member is refused outright until something does this.
+//! So `ask` is ours. We turn it into one of the three the kernel implements
+//! and pass that down explicitly, and the kernel never sees an `ask` it would
+//! have to treat as a refusal. Since `ask` is also the *default*, a
+//! multi-device filesystem that loses a member is refused outright until
+//! something does this.
+//!
+//! The user picks between both force levels, not just on/off: `yes` is
+//! BCH_FORCE_IF_DEGRADED and stops short of mounting when data has no
+//! remaining copy, `very` adds BCH_FORCE_IF_LOST and goes anyway. Offering
+//! only `yes` - which is what this did first - means someone whose data really
+//! is gone answers the question, gets refused regardless, and is never told
+//! which answer would have worked.
+//!
+//! We can't tell them which case they're in. That needs to know how much data
+//! is on the missing devices, which is btree accounting, inside the filesystem
+//! we're deciding whether to open; and the superblock stopped carrying
+//! user-data replicas entries at
+//! bcachefs_metadata_version_no_sb_user_data_replicas, because that section
+//! didn't scale with large numbers of drives. Nor can we mount first and look:
+//! after an unclean shutdown that means reading and sorting the journal, which
+//! is far too much work to spend on a question. So: state both options
+//! plainly, and let them choose.
 //!
 //! Where the answer comes from, in order:
 //!   - an explicit -o degraded=... on the command line wins; the user already
@@ -57,49 +75,94 @@ fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> u8 
         .unwrap_or(c::bch_degraded_actions::BCH_DEGRADED_ask as u8)
 }
 
+/// The two force levels are a real choice, so the user gets to make it.
+///
+/// `yes` is BCH_FORCE_IF_DEGRADED: mount, but not if that means data with no
+/// remaining copy. `very` adds BCH_FORCE_IF_LOST: mount anyway, and accept
+/// that some reads will fail. We can't tell the user which case they're in;
+/// the module header has the reasons.
+///
+/// Answering `y` when data *is* lost is not silently wrong: the kernel still
+/// refuses, and it is bch2_fs_may_start()'s job to say that `very` was the
+/// answer that would have worked.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Answer {
+    No,
+    /// degraded=yes - only if everything is still readable.
+    IfReadable,
+    /// degraded=very - even if it isn't.
+    Force,
+}
+
+impl Answer {
+    fn parse(s: &str) -> Answer {
+        match s.trim() {
+            "y" | "Y" | "yes" | "Yes" => Answer::IfReadable,
+            // "very" because that's the option name we print at them when we
+            // refuse ("or degraded=very if data may have no remaining copy"):
+            // someone who read that and typed it back meant it.
+            "f" | "F" | "force" | "Force" | "very" | "Very" => Answer::Force,
+            _ => Answer::No,
+        }
+    }
+
+    fn opt(self) -> &'static str {
+        match self {
+            Answer::No => "degraded=no",
+            Answer::IfReadable => "degraded=yes",
+            Answer::Force => "degraded=very",
+        }
+    }
+}
+
 fn question(missing: usize, expected: usize) -> String {
     format!(
         "Only {} of {expected} devices are present. \
-         Mount degraded, without the missing {}?",
+         Mount without the missing {}?",
         expected - missing,
         if missing == 1 { "device" } else { "devices" },
     )
 }
 
-fn ask_on_terminal(q: &str) -> Result<bool> {
+fn ask_on_terminal(q: &str) -> Result<Answer> {
     use std::io::{stdin, stdout, Write};
 
-    print!("{q} [y/N] ");
+    // A terminal has room to spell the choices out; systemd-ask-password takes
+    // a single line, so the elaboration lives here rather than in question().
+    println!("{q}");
+    println!("  y  mount degraded, but not if any data has no remaining copy");
+    println!("  f  force: mount even if some data will be unreadable");
+    println!("  n  don't mount");
+    print!("[y/f/N] ");
     stdout().flush()?;
 
     let mut answer = String::new();
     stdin().read_line(&mut answer)?;
 
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "Yes"))
+    Ok(Answer::parse(&answer))
 }
 
 /// Ask through systemd, the way the passphrase prompt does. --timeout is a
 /// real number here rather than the passphrase path's 0: a boot that stops to
 /// ask a question nobody is there to answer has to end up somewhere, and for
 /// this question the safe somewhere is "don't".
-fn ask_via_systemd(q: &str, uuid: &str) -> Result<bool> {
+fn ask_via_systemd(q: &str, uuid: &str) -> Result<Answer> {
     let out = Command::new("systemd-ask-password")
         .arg("--icon=drive-harddisk")
         .arg(format!("--id=bcachefs:UUID={uuid}"))
         .arg(format!("--timeout={}", PROMPT_TIMEOUT.as_secs()))
         .arg("-n")
-        .arg(format!("{q} [y/N]"))
+        .arg(format!("{q} [y=if readable / f=force / N]"))
         .stdin(Stdio::inherit())
         .stderr(Stdio::inherit())
         .output()?;
 
     if !out.status.success() {
         debug!("systemd-ask-password declined or timed out");
-        return Ok(false);
+        return Ok(Answer::No);
     }
 
-    let answer = String::from_utf8_lossy(&out.stdout);
-    Ok(matches!(answer.trim(), "y" | "Y" | "yes" | "Yes"))
+    Ok(Answer::parse(&String::from_utf8_lossy(&out.stdout)))
 }
 
 /// Resolve degraded=ask into an explicit option, appended to the fs options
@@ -131,13 +194,16 @@ pub fn resolve_mount_opts(
     let q = question(missing, expected);
     let uuid = first.sb().uuid().hyphenated().to_string();
 
-    let yes = match StdinType::detect() {
+    let answer = match StdinType::detect() {
         StdinType::Terminal => ask_on_terminal(&q)?,
         StdinType::DevNull => ask_via_systemd(&q, &uuid)?,
         StdinType::Other => {
             warn!("{q}");
-            warn!("no terminal to ask on; refusing (mount -o degraded=yes to override)");
-            false
+            warn!(
+                "no terminal to ask on; refusing (mount -o degraded=yes, \
+                 or degraded=very if data may have no remaining copy)"
+            );
+            Answer::No
         }
     };
 
@@ -147,9 +213,9 @@ pub fn resolve_mount_opts(
     // does not mention that a question was asked and answered on their behalf,
     // or that -o degraded=yes exists. This runs only when a device is missing,
     // so it is not chatter.
-    warn!("mounting with degraded={}", if yes { "yes" } else { "no" });
+    warn!("mounting with {}", answer.opt());
 
-    Ok(Some(append_opt(fs_opts, if yes { "degraded=yes" } else { "degraded=no" })))
+    Ok(Some(append_opt(fs_opts, answer.opt())))
 }
 
 /// Append one option to a mount option string, which may be absent or empty -
@@ -174,6 +240,34 @@ mod tests {
             append_opt(Some("ro,noatime".into()), "degraded=no"),
             "ro,noatime,degraded=no"
         );
+    }
+
+    #[test]
+    fn answer_parses_both_force_levels() {
+        for s in ["y", "Y", "yes", "Yes", " y \n"] {
+            assert_eq!(Answer::parse(s), Answer::IfReadable, "{s:?}");
+        }
+        for s in ["f", "F", "force", "Force", " f \n", "very"] {
+            assert_eq!(Answer::parse(s), Answer::Force, "{s:?}");
+        }
+    }
+
+    /// The safety property: this is a decision about the user's data, so
+    /// anything we don't positively recognise as consent is a refusal --
+    /// including an empty answer, which is what a bare Enter and a timed-out
+    /// systemd prompt both produce.
+    #[test]
+    fn answer_defaults_to_refusing() {
+        for s in ["", "\n", "n", "N", "no", "q", "yolo", "degraded"] {
+            assert_eq!(Answer::parse(s), Answer::No, "{s:?}");
+        }
+    }
+
+    #[test]
+    fn answer_maps_to_the_option_the_kernel_acts_on() {
+        assert_eq!(Answer::No.opt(), "degraded=no");
+        assert_eq!(Answer::IfReadable.opt(), "degraded=yes");
+        assert_eq!(Answer::Force.opt(), "degraded=very");
     }
 
     #[test]
