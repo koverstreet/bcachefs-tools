@@ -207,8 +207,12 @@ fn missing_devices_to_text(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<String> {
 
         let Some(mut m) = members.get(idx) else { continue };
 
-        // A deleted member is a hole in the array, not a device.
-        if m.uuid.b == [0u8; 16] {
+        // An empty or deleted slot is a hole in the array, not a device. Both
+        // spellings matter: a member that was removed keeps its slot with a
+        // tombstone UUID rather than being zeroed, and naming a disk the user
+        // took out on purpose as one they are now missing is the worst place
+        // in this file to get it wrong.
+        if !crate::wrappers::sb_display::member_alive(&m) {
             continue;
         }
 

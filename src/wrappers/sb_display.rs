@@ -26,7 +26,9 @@ const BCH_SB_MEMBER_DELETED_UUID: [u8; 16] = [
 ];
 
 /// Check if a member slot is alive (has a real device, not empty or deleted).
-fn member_alive(m: &c::bch_member) -> bool {
+///
+/// The Rust spelling of bch2_member_alive() (fs/sb/members.h).
+pub(crate) fn member_alive(m: &c::bch_member) -> bool {
     let zero = [0u8; 16];
     m.uuid.b != zero && m.uuid.b != BCH_SB_MEMBER_DELETED_UUID
 }
