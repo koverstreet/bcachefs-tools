@@ -534,7 +534,7 @@ static int check_snapshot_to_subvol(struct btree_trans *trans,
  * consumed by the tree-pointer repair or the deletion machinery.
  * Repairs commit and restart, so decisions only see settled state. The
  * in-memory snapshot table serves as the reverse index (live nodes only:
- * a tombstone's child pointer is a splice breadcrumb, not a claim - I1).
+ * a tombstone's child pointer is a splice breadcrumb, not a claim).
  */
 
 enum { EDGE_PARENT, EDGE_CHILD };
@@ -1254,7 +1254,7 @@ static int check_snapshot_deleted(struct btree_trans *trans,
 	 * single-child by construction.
 	 *
 	 * Children must reciprocate. A deleted node's child pointer can be a
-	 * splice breadcrumb (I1): a child reparented to the grandparent that no
+	 * splice breadcrumb: a child reparented to the grandparent that no
 	 * longer names us as parent doesn't depend on us and isn't counted.
 	 *
 	 * Do this before the deleted early-out, then fall through so the
