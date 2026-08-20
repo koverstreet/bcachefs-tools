@@ -57,25 +57,6 @@ fn mount_fs_context(
     mountflags: libc::c_ulong,
     data: Option<&str>,
 ) -> anyhow::Result<Mounted> {
-    // Our source is the whole colon-separated device list, and fsconfig(2) has
-    // nowhere to put a long one: it copies a string value with
-    // strndup_user(_value, 256), which returns -EINVAL rather than truncating.
-    // That's ~25 devices. mount(2) took the source via copy_mount_string(),
-    // which allows PATH_MAX, so large arrays go back to it rather than failing -
-    // there is no way to say this in the new API at all.
-    //
-    // Worth knowing when reading a report: that -EINVAL arrives with an empty
-    // fs_context log, because it happens in the syscall wrapper before the VFS
-    // ever sees the parameter.
-    if src.len() > fs_context::PARAM_VALUE_MAX {
-        debug!(
-            "source is {} bytes, over fsconfig()'s {}; using mount(2)",
-            src.len(),
-            fs_context::PARAM_VALUE_MAX
-        );
-        return Ok(Mounted::UseLegacy);
-    }
-
     let Some(fc) = FsContext::open(fstype).with_context(|| format!("fsopen({fstype})"))? else {
         debug!("no fs_context mount API, falling back to mount(2)");
         return Ok(Mounted::UseLegacy);
@@ -90,8 +71,29 @@ fn mount_fs_context(
         }
     };
 
-    fc.set("source", Some(src))
-        .map_err(|e| fail(&fc, format!("source {src}"), e))?;
+    // One device per parameter. fsconfig(2) copies a value with
+    // strndup_user(_value, 256), which returns -EINVAL rather than truncating,
+    // so the whole colon-separated list doesn't fit past ~25 devices - and that
+    // -EINVAL arrives with an empty fs_context log, since it happens in the
+    // syscall wrapper before the VFS sees the parameter. bch2_fs_parse_param()
+    // splits each "source" value on ':' and appends, so there is no ceiling on
+    // the list, and a device the kernel refuses is named on its own.
+    for dev in src.split(':') {
+        // A path that doesn't fit can't be said in this API at all, and
+        // PATH_MAX is 4096. That alone still needs mount(2), whose
+        // copy_mount_string() allows the full length.
+        if dev.len() > fs_context::PARAM_VALUE_MAX {
+            debug!(
+                "device path is {} bytes, over fsconfig()'s {}; using mount(2)",
+                dev.len(),
+                fs_context::PARAM_VALUE_MAX
+            );
+            return Ok(Mounted::UseLegacy);
+        }
+
+        fc.set("source", Some(dev))
+            .map_err(|e| fail(&fc, format!("source {dev}"), e))?;
+    }
 
     for name in fs_context::sb_flag_params(mountflags) {
         fc.set(name, None)
