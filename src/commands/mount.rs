@@ -453,6 +453,11 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         // invocation with no mountpoint isn't mounting either.
         let fs_opts = crate::degraded::resolve_mount_opts(&sbs, &opts, parsed.fs_opts)?;
 
+        // Answering `r` at the degraded prompt means read-only, and it has to
+        // be read-only to the VFS - not just to bcachefs - or /proc/mounts
+        // says rw and the user has only our word for it.
+        let flags = parsed.flags | fs_opts.flags;
+
         // What we're about to mount with, for the rescan afterwards. By
         // dev_idx, not path: the same device can be found under more than one
         // name. Empty when nothing is missing, which is the common case and
@@ -475,7 +480,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             devices.clone(),
             mountpoint,
             "bcachefs",
-            parsed.flags,
+            flags,
             fs_opts.fs_opts.clone(),
         ) {
             Ok(()) => Ok(()),
@@ -489,7 +494,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
                 // they declined - and then the original error stands.
                 match fs_opts.escalate(&format!("{e:#}"))? {
                     Some(retry) =>
-                        mount_inner(devices, mountpoint, "bcachefs", parsed.flags, retry),
+                        mount_inner(devices, mountpoint, "bcachefs", flags, retry),
                     None => Err(e),
                 }
             }

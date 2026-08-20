@@ -94,6 +94,11 @@ enum Answer {
     No,
     /// degraded=yes - only if everything is still readable.
     IfReadable,
+    /// The same, read-only. Mounting read-write after losing a device starts
+    /// re-replicating onto the survivors, which can fill them and is not easy
+    /// to back out of; someone who wants to look at their data before they
+    /// have replaced the drive should be able to say so.
+    ReadOnly,
     /// degraded=very - even if it isn't.
     Force,
 }
@@ -102,6 +107,7 @@ impl Answer {
     fn parse(s: &str) -> Answer {
         match s.trim() {
             "y" | "Y" | "yes" | "Yes" => Answer::IfReadable,
+            "r" | "R" | "ro" | "readonly" => Answer::ReadOnly,
             // "very" because that's the option name we print at them when we
             // refuse ("or degraded=very if data may have no remaining copy"):
             // someone who read that and typed it back meant it.
@@ -110,12 +116,35 @@ impl Answer {
         }
     }
 
+    /// The degraded= value the kernel acts on. Read-only is not one of these -
+    /// it is a mount flag, see flags().
     fn opt(self) -> &'static str {
         match self {
             Answer::No => "degraded=no",
-            Answer::IfReadable => "degraded=yes",
+            Answer::IfReadable | Answer::ReadOnly => "degraded=yes",
             Answer::Force => "degraded=very",
         }
+    }
+
+    /// Mount flags the answer implies.
+    ///
+    /// MS_RDONLY rather than the read_only filesystem option, so the mount is
+    /// read-only to the VFS too and /proc/mounts says so. A user who asked for
+    /// read-only should not have to take our word for it.
+    fn flags(self) -> libc::c_ulong {
+        match self {
+            Answer::ReadOnly => libc::MS_RDONLY,
+            _ => 0,
+        }
+    }
+
+    /// Whether a refusal is worth escalating to degraded=very. `f` already
+    /// forces and `n` was a refusal; read-only can still be refused, because
+    /// bch2_fs_may_start() checks whether the filesystem is *readable* with
+    /// what's present, and BCH_FORCE_IF_DEGRADED alone doesn't cover data with
+    /// no remaining copy.
+    fn escalatable(self) -> bool {
+        matches!(self, Answer::IfReadable | Answer::ReadOnly)
     }
 }
 
@@ -192,9 +221,10 @@ fn ask_on_terminal(q: &str, missing: Option<&str>) -> Result<Answer> {
         print!("{missing}");
     }
     println!("  y  mount degraded, but not if any data has no remaining copy");
+    println!("  r  the same, read-only: nothing gets written or re-replicated");
     println!("  f  force: mount even if some data will be unreadable");
     println!("  n  don't mount");
-    print!("[y/f/N] ");
+    print!("[y/r/f/N] ");
     stdout().flush()?;
 
     let mut answer = String::new();
@@ -213,7 +243,7 @@ fn ask_via_systemd(q: &str, uuid: &str) -> Result<Answer> {
         .arg(format!("--id=bcachefs:UUID={uuid}"))
         .arg(format!("--timeout={}", PROMPT_TIMEOUT.as_secs()))
         .arg("-n")
-        .arg(format!("{q} [y=if readable / f=force / N]"))
+        .arg(format!("{q} [y=if readable / r=read-only / f=force / N]"))
         .stdin(Stdio::inherit())
         .stderr(Stdio::inherit())
         .output()?;
@@ -230,8 +260,11 @@ fn ask_via_systemd(q: &str, uuid: &str) -> Result<Answer> {
 /// worth asking if the mount is refused anyway.
 pub struct MountOpts {
     pub fs_opts: Option<String>,
-    /// Set only when we asked and the user picked `y`. That answer can still
-    /// be refused - see escalate().
+    /// Mount flags the answer implies, to be OR'd into the caller's - MS_RDONLY
+    /// when the user asked for read-only. Zero unless we asked and they did.
+    pub flags: libc::c_ulong,
+    /// Set only when the answer can still be refused - `y` or `r`; see
+    /// escalate().
     retry: Option<Retry>,
 }
 
@@ -242,7 +275,7 @@ struct Retry {
 
 impl MountOpts {
     fn plain(fs_opts: Option<String>) -> MountOpts {
-        MountOpts { fs_opts, retry: None }
+        MountOpts { fs_opts, flags: 0, retry: None }
     }
 
     /// The mount was refused; @err is everything the kernel had to say about
@@ -364,12 +397,14 @@ pub fn resolve_mount_opts(
     // does not mention that a question was asked and answered on their behalf,
     // or that -o degraded=yes exists. This runs only when a device is missing,
     // so it is not chatter.
-    warn!("mounting with {}", answer.opt());
+    warn!("mounting {}with {}",
+          if answer == Answer::ReadOnly { "read-only " } else { "" },
+          answer.opt());
 
     Ok(MountOpts {
         fs_opts: Some(append_opt(fs_opts.clone(), answer.opt())),
-        // Only `y` is escalatable: `f` already forces, and `n` was a refusal.
-        retry: (answer == Answer::IfReadable).then_some(Retry { fs_opts, uuid }),
+        flags: answer.flags(),
+        retry: answer.escalatable().then_some(Retry { fs_opts, uuid }),
     })
 }
 
@@ -432,6 +467,7 @@ mod tests {
     fn escalate_does_not_ask_for_an_unrelated_failure() {
         let o = MountOpts {
             fs_opts: Some("degraded=yes".into()),
+            flags: 0,
             retry: Some(Retry { fs_opts: None, uuid: "x".into() }),
         };
         assert!(o.escalate("option foo: EINVAL_opt_parse_str_required").unwrap().is_none());
