@@ -2855,11 +2855,9 @@ out:
 err:
 	darray_exit(&devs_to_fs);
 	/*
-	 * Last chance to name the error: bch2_err_class() below flattens it to
-	 * a POSIX errno. errorfc() rather than pr_err() because logfc() falls
-	 * back to printk when there's no fs_context log, so a mount(2) caller
-	 * still gets this in dmesg, and an fsconfig(2) one gets it on the
-	 * terminal.
+	 * errorfc() rather than pr_err() because logfc() falls back to printk
+	 * when there's no fs_context log, so a mount(2) caller still gets this
+	 * in dmesg, and an fsconfig(2) one gets it on the terminal.
 	 */
 	if (ret)
 		errorfc(fc, "%s", bch2_err_str(ret));
@@ -2871,7 +2869,22 @@ err:
 	 */
 	if (bch2_err_matches(ret, EROFS) && ret != -EROFS)
 		ret = -EIO;
-	return bch2_err_class(ret);
+	/*
+	 * Deliberately not bch2_err_class(): mount.bcachefs has to tell our
+	 * errors apart to know what to do about them - whether to put the
+	 * degraded question to the user, whether a refusal is worth escalating.
+	 * Flattening device_splitbrain and insufficient_devices_to_start both to
+	 * EINVAL leaves it nothing to go on but the log text, and prose is not an
+	 * interface.
+	 *
+	 * Safe as a syscall return: an errcode is BCH_ERR_START (2048) plus a
+	 * number pinned in the errcode x-macro, and the largest is far below
+	 * MAX_ERRNO, so IS_ERR_VALUE() still reads it as an error. A caller that
+	 * doesn't know bcachefs gets an unrecognised errno instead of a
+	 * plausible wrong one - which is also why the EROFS remap above stays:
+	 * that is a case where a caller does act on the errno.
+	 */
+	return ret;
 
 err_stop_fs:
 	bch2_fs_exit(c);
