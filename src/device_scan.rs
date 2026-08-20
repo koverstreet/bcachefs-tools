@@ -275,7 +275,7 @@ pub fn filter_current_sbs(
 	Ok(filtered)
 }
 
-fn get_devices_by_uuid(
+pub fn get_devices_by_uuid(
     uuid: Uuid,
     opts: &bch_opts,
     use_udev: bool

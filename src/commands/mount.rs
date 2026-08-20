@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     ffi::{CStr, CString, OsString},
     io::{stdout, IsTerminal},
     os::unix::ffi::OsStringExt,
@@ -7,11 +8,13 @@ use std::{
 };
 
 use anyhow::{ensure, Context, Result};
-use bcachefs_kernel::c::bch_sb_handle;
-use bcachefs_kernel::path_to_cstr;
+use bcachefs_kernel::c::{bch_opts, bch_sb_handle};
+use bcachefs_kernel::{opt_get, path_to_cstr};
 use clap::Parser;
-use log::{debug, error, info};
+use log::{debug, error, info, warn};
+use uuid::Uuid;
 use crate::device_scan;
+use crate::wrappers::handle::BcachefsHandle;
 
 use crate::{
     fs_context::{self, FsContext, Level, Message},
@@ -137,6 +140,71 @@ fn mount_fs_context(
         .with_context(|| format!("attaching to {}", target.to_string_lossy()))?;
 
     Ok(Mounted::Yes)
+}
+
+/// Bring in members that turned up while we were deciding to mount.
+///
+/// There is a window nothing else covers. scan_waiting_for_devices() drops its
+/// udev monitor when it returns, and the udev rule won't act until
+/// /sys/fs/bcachefs/<uuid> exists, which is bch2_fs_online() partway through
+/// the mount. Everything between is nobody's: too late for one, too early for
+/// the other.
+///
+/// That window contains the degraded prompt, so it can be a minute long - and
+/// it is exactly when a slow disk is most likely to finish coming up, since we
+/// have just spent missing_dev_timeout waiting for it and given up.
+///
+/// So look once more, now that the mount is done. This tests state rather than
+/// waiting for an event, which is what lets it overlap the udev rule instead of
+/// abutting it: by the time this runs the rule is already live, both may try,
+/// and __bch2_dev_attach_bdev() turns the loser away with device_already_online
+/// rather than doing anything to it.
+///
+/// Best effort. The filesystem is mounted; failing to pick up a straggler is
+/// worth saying out loud but is not a reason to fail the mount.
+fn online_late_devices(uuid: Uuid, mounted: &HashSet<u8>, opts: &bch_opts) {
+    let use_udev = opt_get!(opts, mount_trusts_udev) != 0;
+
+    let found = match device_scan::get_devices_by_uuid(uuid, opts, use_udev) {
+        Ok(found) => found,
+        Err(e) => {
+            debug!("rescanning for late devices: {e:#}");
+            return;
+        }
+    };
+
+    let late: Vec<&PathBuf> = found
+        .iter()
+        .filter(|(_, sb)| !mounted.contains(&sb.sb().dev_idx))
+        .map(|(path, _)| path)
+        .collect();
+
+    if late.is_empty() {
+        return;
+    }
+
+    let handle = match BcachefsHandle::open(uuid.hyphenated().to_string()) {
+        Ok(handle) => handle,
+        Err(e) => {
+            warn!("{} device(s) turned up after mounting, but opening the \
+                   filesystem to bring them online failed: {e}", late.len());
+            return;
+        }
+    };
+
+    for dev in late {
+        match handle.disk_online(&path_to_cstr(dev)) {
+            Ok(())  => warn!("{} turned up after we mounted; brought it online",
+                             dev.display()),
+            // Includes the benign case where the udev rule got there first;
+            // the ioctl reports device_already_online as a plain EINVAL, so we
+            // cannot tell that apart from a real refusal here. The kernel log
+            // has the reason either way.
+            Err(e) => warn!("{} turned up after we mounted, but bringing it \
+                             online failed ({e}); it may already be online",
+                            dev.display()),
+        }
+    }
 }
 
 fn mount_inner(
@@ -385,6 +453,15 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         // invocation with no mountpoint isn't mounting either.
         let fs_opts = crate::degraded::resolve_mount_opts(&sbs, &opts, parsed.fs_opts)?;
 
+        // What we're about to mount with, for the rescan afterwards. By
+        // dev_idx, not path: the same device can be found under more than one
+        // name. Empty when nothing is missing, which is the common case and
+        // skips the rescan entirely.
+        let uuid = sbs[0].1.sb().uuid();
+        let mounted: HashSet<u8> = sbs.iter().map(|(_, sb)| sb.sb().dev_idx).collect();
+        let expected = sbs[0].1.sb().number_of_devices() as usize;
+        let short = mounted.len() < expected;
+
         drop(sbs);
 
         info!(
@@ -394,7 +471,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             &cli.options
         );
 
-        match mount_inner(
+        let mounted_ret = match mount_inner(
             devices.clone(),
             mountpoint,
             "bcachefs",
@@ -416,7 +493,15 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
                     None => Err(e),
                 }
             }
+        };
+
+        // Mounted, but we left members behind: one of them may have shown up
+        // while we were asking about it.
+        if mounted_ret.is_ok() && short {
+            online_late_devices(uuid, &mounted, &opts);
         }
+
+        mounted_ret
     } else {
         info!(
             "would mount with params: device: {:?}, options: {}",
