@@ -7,8 +7,9 @@ use std::{
     ptr, str,
 };
 
-use anyhow::{ensure, Context, Result};
+use anyhow::{ensure, Result};
 use bcachefs_kernel::c::{bch_opts, bch_sb_handle};
+use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::{opt_get, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info, warn};
@@ -51,6 +52,48 @@ fn report_log(msgs: Vec<Message>) -> Vec<String> {
     errors
 }
 
+/// A mount that didn't happen, and both halves of what the kernel said about it.
+///
+/// The code is the half we can act on. bch2_fs_get_tree() hands back bcachefs's
+/// own error codes rather than flattening them to an errno, so
+/// insufficient_devices_to_start and device_splitbrain arrive as distinct
+/// values instead of two EINVALs that can only be told apart by reading their
+/// prose - which is what [`crate::degraded::MountOpts::escalate`] used to have
+/// to do.
+///
+/// The text is the half for the user: whatever the filesystem logged against
+/// the context, which is the whole reason for mounting through fs_context.
+/// Keeping both means neither has to serve as the other.
+#[derive(Debug)]
+struct MountError {
+    code: BchError,
+    text: String,
+}
+
+impl MountError {
+    /// @what is what we were attempting, @err what the kernel returned, and
+    /// @log what it had to say first - which supersedes @err in the text, since
+    /// strerror() on a bcachefs errcode is "Unknown error 2300".
+    fn new(what: &str, err: std::io::Error, log: Vec<Message>) -> Self {
+        let code = BchError::from(err);
+
+        let text = match report_log(log) {
+            e if e.is_empty() => format!("{what}: {code}"),
+            errors            => format!("{what}: {}", errors.join("; ")),
+        };
+
+        MountError { code, text }
+    }
+}
+
+impl std::fmt::Display for MountError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.text)
+    }
+}
+
+impl std::error::Error for MountError {}
+
 /// Mount via the fs_context API, so that whatever bcachefs has to say about a
 /// failure reaches the user instead of being flattened to an errno.
 fn mount_fs_context(
@@ -59,19 +102,20 @@ fn mount_fs_context(
     fstype: &str,
     mountflags: libc::c_ulong,
     data: Option<&str>,
-) -> anyhow::Result<Mounted> {
-    let Some(fc) = FsContext::open(fstype).with_context(|| format!("fsopen({fstype})"))? else {
-        debug!("no fs_context mount API, falling back to mount(2)");
-        return Ok(Mounted::UseLegacy);
+) -> Result<Mounted, MountError> {
+    let fc = match FsContext::open(fstype) {
+        Ok(Some(fc)) => fc,
+        Ok(None) => {
+            debug!("no fs_context mount API, falling back to mount(2)");
+            return Ok(Mounted::UseLegacy);
+        }
+        Err(e) => return Err(MountError::new(&format!("fsopen({fstype})"), e, Vec::new())),
     };
 
     // The kernel's account of a failure is the entire reason for being here, so
     // it becomes the error rather than being printed alongside one.
-    let fail = |fc: &FsContext, what: String, err: std::io::Error| -> anyhow::Error {
-        match report_log(fc.drain_log()) {
-            e if e.is_empty() => anyhow::anyhow!("{what}: {err}"),
-            errors            => anyhow::anyhow!("{what}: {}", errors.join("; ")),
-        }
+    let fail = |fc: &FsContext, what: String, err: std::io::Error| -> MountError {
+        MountError::new(&what, err, fc.drain_log())
     };
 
     // One device per parameter. fsconfig(2) copies a value with
@@ -136,8 +180,9 @@ fn mount_fs_context(
         .fsmount(fs_context::mount_attrs(mountflags))
         .map_err(|e| fail(&fc, "fsmount".to_string(), e))?;
 
-    fs_context::move_mount(&mnt, target)
-        .with_context(|| format!("attaching to {}", target.to_string_lossy()))?;
+    fs_context::move_mount(&mnt, target).map_err(|e| {
+        MountError::new(&format!("attaching to {}", target.to_string_lossy()), e, Vec::new())
+    })?;
 
     Ok(Mounted::Yes)
 }
@@ -213,7 +258,7 @@ fn mount_inner(
     fstype: &str,
     mountflags: libc::c_ulong,
     data: Option<String>,
-) -> anyhow::Result<()> {
+) -> Result<(), MountError> {
     // Reconfiguring an existing mount is fspick(2) + FSCONFIG_CMD_RECONFIGURE,
     // which fs_context doesn't implement; leave remount on mount(2).
     //
@@ -247,12 +292,19 @@ fn mount_legacy(
     fstype: &str,
     mut mountflags: libc::c_ulong,
     data: Option<String>,
-) -> anyhow::Result<()> {
+) -> Result<(), MountError> {
+    // An interior NUL can't be expressed in a C string at all. Nothing has been
+    // attempted at this point, so the errno is ours rather than the kernel's.
+    let bad_arg = |what: &str| MountError {
+        code: BchError::from_raw(libc::EINVAL),
+        text: format!("{what} contains a NUL byte"),
+    };
+
     // bind the CStrings to keep them alive
-    let c_src = CString::new(src.clone().into_vec())?;
+    let c_src = CString::new(src.clone().into_vec()).map_err(|_| bad_arg("device path"))?;
     let c_target = path_to_cstr(target);
-    let data = data.map(CString::new).transpose()?;
-    let fstype = CString::new(fstype)?;
+    let data = data.map(CString::new).transpose().map_err(|_| bad_arg("mount options"))?;
+    let fstype = CString::new(fstype).map_err(|_| bad_arg("filesystem type"))?;
 
     // convert to pointers for ffi
     let c_src = c_src.as_ptr();
@@ -285,15 +337,19 @@ fn mount_legacy(
 
     if ret != 0 {
         let err = errno::errno();
-        let e = crate::ErrnoError(err);
 
-        if err.0 == libc::EBUSY {
-            eprintln!("mount: {}: {:?} already mounted or mount point busy", target.to_string_lossy(), src);
-        } else {
-            eprintln!("mount: {:?}: {}", src, e);
-        }
-
-        Err(e.into())
+        // mount(2) has nowhere to put an explanation, so an errno is all there
+        // is to report - which is the reason mount_fs_context() exists. EBUSY
+        // is worth translating: what it means here isn't obvious from the word.
+        Err(MountError {
+            code: BchError::from_raw(err.0),
+            text: if err.0 == libc::EBUSY {
+                format!("{}: {src:?} already mounted or mount point busy",
+                        target.to_string_lossy())
+            } else {
+                format!("{src:?}: {}", crate::ErrnoError(err))
+            },
+        })
     } else {
         Ok(())
     }
@@ -492,9 +548,9 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
                 // refusal. escalate() gives back None whenever there is
                 // nothing to ask - a different failure, we never asked, or
                 // they declined - and then the original error stands.
-                match fs_opts.escalate(&format!("{e:#}"))? {
+                match fs_opts.escalate(&e.code)? {
                     Some(retry) =>
-                        mount_inner(devices, mountpoint, "bcachefs", flags, retry),
+                        mount_inner(devices, mountpoint, "bcachefs", flags, Some(retry)),
                     None => Err(e),
                 }
             }
@@ -506,7 +562,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             online_late_devices(uuid, &mounted, &opts);
         }
 
-        mounted_ret
+        Ok(mounted_ret?)
     } else {
         info!(
             "would mount with params: device: {:?}, options: {}",

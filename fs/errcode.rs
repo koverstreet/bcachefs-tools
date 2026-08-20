@@ -93,6 +93,26 @@ impl fmt::Debug for BchError {
 
 impl core::error::Error for BchError {}
 
+/// A failed syscall, typed.
+///
+/// bcachefs's own error codes reach userspace intact: an errcode is
+/// BCH_ERR_START plus a number pinned in the x-macro, which lands well below
+/// MAX_ERRNO, so the syscall return path hands it back as an ordinary errno
+/// and libstd stores it verbatim. That is what makes an io::Error off a
+/// bcachefs syscall worth converting rather than printing - see
+/// bch2_fs_get_tree(), which deliberately does not bch2_err_class().
+///
+/// An io::Error with no errno behind it did not come from a syscall; EIO is
+/// the honest stand-in, and nothing matches it by accident.
+#[cfg(feature = "std")]
+impl From<std::io::Error> for BchError {
+    fn from(e: std::io::Error) -> BchError {
+        const EIO: i32 = 5;
+
+        BchError::from_raw(e.raw_os_error().unwrap_or(EIO))
+    }
+}
+
 pub fn bch_err_throw(code: bch_errcode) -> BchError {
     BchError::from_errcode(code)
 }

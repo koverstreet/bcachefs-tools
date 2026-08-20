@@ -47,6 +47,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use bcachefs_kernel::c::bch_member_state::BCH_MEMBER_STATE_evacuating;
+use bcachefs_kernel::errcode::{self, BchError};
 use bcachefs_kernel::util::printbuf::Printbuf;
 use bcachefs_kernel::{c, opt_defined, opt_get};
 use c::bch_opts;
@@ -305,16 +306,15 @@ impl MountOpts {
     /// sorted the journal, which after an unclean shutdown is the expensive
     /// part. This would not be worth doing if it had.
     ///
-    /// We match on the errcode's symbol name, which bch2_fs_get_tree() puts in
-    /// the fs_context log verbatim (`errorfc(fc, "%s", bch2_err_str(ret))`).
-    /// That only reaches us on the fsconfig(2) path; mount(2) flattens it to
-    /// EINVAL, which is also what a typo'd option gives, so there we cannot
-    /// tell and don't try. Getting off that path for multi-device mounts is
-    /// what taking the "source" parameter is for.
-    pub fn escalate(&self, err: &str) -> Result<Option<Option<String>>> {
+    /// @err is the code bch2_fs_get_tree() returned, which only reaches us on
+    /// the fsconfig(2) path: mount(2) can only carry an errno, and the errno
+    /// under insufficient_devices_to_start is EINVAL, which is also what a
+    /// typo'd option gives. So there we can't tell and don't try - which is
+    /// half of why multi-device mounts take the fs_context path at all.
+    pub fn escalate(&self, err: &BchError) -> Result<Option<String>> {
         let Some(retry) = &self.retry else { return Ok(None) };
 
-        if !err.contains("insufficient_devices_to_start") {
+        if !err.matches(errcode::insufficient_devices_to_start) {
             return Ok(None);
         }
 
@@ -336,7 +336,7 @@ impl MountOpts {
         }
 
         warn!("retrying with degraded=very");
-        Ok(Some(Some(append_opt(retry.fs_opts.clone(), Answer::Force.opt()))))
+        Ok(Some(append_opt(retry.fs_opts.clone(), Answer::Force.opt())))
     }
 }
 
@@ -476,7 +476,9 @@ mod tests {
     #[test]
     fn escalate_does_not_ask_when_we_never_asked() {
         let o = MountOpts::plain(Some("ro".into()));
-        assert!(o.escalate("insufficient_devices_to_start").unwrap().is_none());
+        let e = BchError::from_errcode(errcode::insufficient_devices_to_start);
+
+        assert!(o.escalate(&e).unwrap().is_none());
     }
 
     #[test]
@@ -486,8 +488,23 @@ mod tests {
             flags: 0,
             retry: Some(Retry { fs_opts: None, uuid: "x".into() }),
         };
-        assert!(o.escalate("option foo: EINVAL_opt_parse_str_required").unwrap().is_none());
-        assert!(o.escalate("").unwrap().is_none());
+
+        for e in [
+            BchError::from_errcode(errcode::EINVAL_opt_parse_str_required),
+            // A flattened errno, which is what the mount(2) fallback gives us:
+            // the same EINVAL a typo'd option produces, so it must not be read
+            // as an answer to the degraded question.
+            BchError::from_raw(libc::EINVAL),
+            BchError::from_raw(0),
+            // A code from a kernel module newer than this binary - the normal
+            // state of affairs for a filesystem that ships DKMS-only. The
+            // errcode parent-chain walk BUG_ON()s rather than bounds-checking,
+            // so what's being asserted here is as much "doesn't abort" as
+            // "doesn't match".
+            BchError::from_raw(c::bch_errcode::BCH_ERR_MAX as i32 + 1),
+        ] {
+            assert!(o.escalate(&e).unwrap().is_none(), "{e:?}");
+        }
     }
 
     #[test]
