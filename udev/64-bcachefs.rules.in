@@ -1,0 +1,52 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+#
+# Copyright (C) 2024 Oracle.  All rights reserved.
+# Author: Darrick J. Wong <djwong@kernel.org>
+
+SUBSYSTEM!="block", GOTO="bcachefs_end"
+ACTION=="remove", GOTO="bcachefs_end"
+ENV{ID_FS_TYPE}!="bcachefs", GOTO="bcachefs_end"
+ENV{SYSTEMD_READY}=="0", GOTO="bcachefs_end"
+
+# Don't let udisks automount bcachefs filesystems without even asking a user.
+# This doesn't eliminate filesystems as an attack surface; it only prevents
+# evil maid attacks when all sessions are locked.
+#
+# According to http://storaged.org/doc/udisks2-api/latest/udisks.8.html,
+# supplying UDISKS_AUTO=0 here changes the HintAuto property of the block
+# device abstraction to mean "do not automatically start" (e.g. mount).
+ENV{UDISKS_AUTO}="0"
+
+# Skip multipath component devices. Only the dm-mpath map should be enumerated.
+# Multipath sets DM_MULTIPATH_DEVICE_PATH=1 on underlying component devices.
+ENV{DM_MULTIPATH_DEVICE_PATH}=="1", GOTO="bcachefs_end"
+
+# udev has already assigned a by-uuid link using the FS global
+# UUID. We should also have a link for the per-member UUID.
+ENV{ID_FS_UUID_SUB_ENC}=="?*", SYMLINK+="disk/by-uuid/$env{ID_FS_UUID_SUB_ENC}"
+
+# A member of a filesystem that is already mounted: hand it over. This is the
+# device that turned up too late to be waited for - the mount gave up on it,
+# went degraded, and here it is.
+#
+# TEST answers "is this a member of something already online?" for free, with
+# no process spawned: a mounted filesystem is exactly /sys/fs/bcachefs/<uuid>,
+# and bch2_fs_online() names that directory with sb.user_uuid, the same UUID
+# blkid reports as ID_FS_UUID. A device belonging to a filesystem nobody has
+# mounted - the overwhelmingly common case - stops here.
+#
+# The kernel decides the rest. __bch2_dev_attach_bdev() turns away a member it
+# already has with device_already_online rather than doing anything to it, so
+# this is safe to fire on every add, and safe to race with mount.bcachefs's own
+# post-mount rescan - which covers the window before the filesystem existed
+# here to be tested for.
+#
+# RUN rather than a service unit because this has to work without systemd, in
+# an initramfs. That is affordable because bch2_fs_recovery() runs outside
+# c->state_lock (see __bch2_fs_start()), so we contend briefly rather than
+# holding a udev worker for the length of recovery, and bch2_dev_freespace_init()
+# is gated on !freespace_initialized, which a returning member never is.
+ENV{ID_FS_UUID}=="?*", TEST=="/sys/fs/bcachefs/$env{ID_FS_UUID}", \
+	RUN+="@sbindir@/bcachefs device online $devnode"
+
+LABEL="bcachefs_end"

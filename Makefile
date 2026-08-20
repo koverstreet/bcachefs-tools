@@ -216,8 +216,10 @@ optional_build+=$(systemd_services)
 optional_install+=install_systemd
 endif	# PKGCONFIG_SERVICEDIR
 
+built_scripts+=udev/64-bcachefs.rules
+
 .PHONY: all
-all: bcachefs initramfs/hook dkms/dkms.conf $(optional_build)
+all: bcachefs initramfs/hook dkms/dkms.conf udev/64-bcachefs.rules $(optional_build)
 
 .PHONY: debug
 debug: write-build-vars bcachefs
@@ -307,6 +309,13 @@ dkms/dkms.conf: dkms/dkms.conf.in version.h
 initramfs/hook: initramfs/hook.in
 	@echo "    [SED]    $@"
 	$(Q)sed "s|@ROOT_SBINDIR@|$(ROOT_SBINDIR)|g" initramfs/hook.in > initramfs/hook
+
+# The hot-add rule runs the binary by absolute path: udev looks in
+# /usr/lib/udev for anything else, so this can't be left to $$PATH.
+.PHONY: udev/64-bcachefs.rules
+udev/64-bcachefs.rules: udev/64-bcachefs.rules.in
+	@echo "    [SED]    $@"
+	$(Q)sed "s|@sbindir@|$(ROOT_SBINDIR)|g" udev/64-bcachefs.rules.in > udev/64-bcachefs.rules
 
 .PHONY: install
 BASH_COMPLETION_DIR?=$(shell $(PKG_CONFIG) --variable=completionsdir bash-completion 2>/dev/null || echo $(PREFIX)/share/bash-completion/completions)
