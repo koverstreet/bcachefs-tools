@@ -298,7 +298,14 @@ static int bch2_ec_do_recov(struct bch_fs *c, struct ec_stripe_buf *buf, u32 req
 	if (ec_nr_failed(buf, STRIPE_BUF_PRE_RECOV) > buf->key.v.nr_redundant)
 		return bch_err_throw(c, stripe_reconstruct_insufficient_blocks);
 
-	for (unsigned i = 0; i < nr_data; i++)
+	/*
+	 * The full erasure list, parity included - raid_rec() dispatches on it.
+	 * A lost P or Q we don't report doesn't just pick a worse method, it
+	 * drops the count: two erasures reported as one takes the single
+	 * erasure XOR path, which reconstructs through the parity block we
+	 * already know is bad.
+	 */
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
 		if (buf->err[STRIPE_BUF_PRE_RECOV][i])
 			failed[nr_failed++] = i;
 
