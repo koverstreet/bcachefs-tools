@@ -7,10 +7,26 @@
 //!
 //! Model: a task is a future plus an embedded `work_struct`. The workqueue runs
 //! the task (`WorkItem::run`), which polls the future once; the future's waker
-//! re-`enqueue`s the task to be polled again. The `work_struct`'s pending bit
-//! means a task is never run — and so never polled — concurrently with itself,
-//! which gives the "polled by one thread at a time" guarantee for free (so,
-//! unlike a per-wake-`spawn` design, no hand-rolled state machine).
+//! re-`enqueue`s the task to be polled again. So there is no hand-rolled state
+//! machine, unlike a per-wake-`spawn` design — but that rests on two *distinct*
+//! workqueue properties, and it matters to keep them apart:
+//!
+//! - The pending bit dedups enqueues of a task that is queued and not yet
+//!   running: the second `enqueue` fails, which is exactly what [`Task::wake`]
+//!   wants. It does **not** serialize runs — it is cleared before the work
+//!   function is called, so a wake arriving mid-poll re-queues successfully,
+//!   which is correct and necessary.
+//! - **Non-reentrancy** is what serializes runs: a workqueue never executes one
+//!   work item on two workers at once. That is a documented guarantee of the
+//!   kernel API (`process_one_work()` defers on collision, `__queue_work()`
+//!   routes a re-queue back to the pool where the item is running); userspace
+//!   reproduces it in `find_runnable_work()`, linux/workqueue.c.
+//!
+//! Together: a task is polled by at most one thread at a time, and a wake during
+//! a poll yields exactly one further poll after it. Only the second property
+//! makes the `UnsafeCell` access in [`Task::poll`] and the `unsafe impl Sync`
+//! below sound — attributing it to the pending bit, as this comment used to,
+//! names a mechanism that does not provide it.
 //!
 //! On top of that core sit [`WaitGroup`] (an async fork-join barrier — the last
 //! task to finish wakes the waiter) and [`block_on`] (drive a future to
@@ -48,9 +64,10 @@ struct Task<F: Future<Output = ()> + Send + 'static> {
     future: UnsafeCell<F>,
 }
 
-// SAFETY: the work_struct's pending bit means `run` (the only place the future
-// is touched) executes on one thread at a time, so the future is never polled
-// concurrently; the task is `Sync` whenever the future is `Send`.
+// SAFETY: workqueue non-reentrancy (see the module header) means `run` - the
+// only place the future is touched - executes on one thread at a time, so the
+// future is never polled concurrently; the task is `Sync` whenever the future
+// is `Send`.
 unsafe impl<F: Future<Output = ()> + Send + 'static> Sync for Task<F> {}
 
 impl<F: Future<Output = ()> + Send + 'static> Task<F> {
@@ -59,8 +76,9 @@ impl<F: Future<Output = ()> + Send + 'static> Task<F> {
         let waker = waker_for(self.clone());
         let mut cx = Context::from_waker(&waker);
 
-        // SAFETY: the work_struct serializes runs, so access is exclusive here,
-        // and the future never moves (it lives behind `Arc`).
+        // SAFETY: workqueue non-reentrancy serializes runs of this work item, so
+        // access is exclusive here, and the future never moves (it lives behind
+        // `Arc`).
         let future = unsafe { Pin::new_unchecked(&mut *self.future.get()) };
 
         // Ready: nothing re-enqueues us, the Arc refs drain, the task frees.
