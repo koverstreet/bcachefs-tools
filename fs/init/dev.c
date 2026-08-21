@@ -948,7 +948,8 @@ static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 			     struct printbuf *err)
 {
 	unsigned data;
-	int ret;
+	bool was_rw = ca->mi.state == BCH_MEMBER_STATE_rw;
+	int ret, ret2;
 
 	lockdep_assert_held(&c->state_lock);
 
@@ -1082,6 +1083,16 @@ static int __bch2_dev_remove(struct bch_fs *c, struct bch_dev *ca,
 err:
 	/* The device is staying; allow new references to it again: */
 	WRITE_ONCE(ca->removing, false);
+
+	if (test_bit(BCH_FS_rw, &c->flags) &&
+	    was_rw &&
+	    ca->mi.state == BCH_MEMBER_STATE_evacuating &&
+	    !enumerated_ref_is_zero(&ca->io_ref[READ])) {
+		prt_str(err, "Remove failed, restoring device state to rw\n");
+		ret2 = __bch2_dev_set_state(c, ca, BCH_MEMBER_STATE_rw, flags, err);
+		if (ret2)
+			prt_printf(err, "Error restoring device state: %s\n", bch2_err_str(ret2));
+	}
 
 	if (test_bit(BCH_FS_rw, &c->flags) &&
 	    ca->mi.state == BCH_MEMBER_STATE_rw &&
