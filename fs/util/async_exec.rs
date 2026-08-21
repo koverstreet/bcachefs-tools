@@ -34,6 +34,11 @@
 //! `block_on`'s parker — a completion in the kernel, a condvar in userspace — is
 //! the one genuinely platform-specific piece; localizing it here is what lets
 //! callers like the perf test stay cfg-free.
+//!
+//! Tests for both workqueue properties above live in src/workqueue_test.rs, in
+//! the tools crate — not here, because a `cargo test -p bcachefs-kernel` binary
+//! does not link libbcachefs.a and so has no `queue_work()`. If you change
+//! anything about how a task is enqueued or polled, that is the file to run.
 
 use core::cell::UnsafeCell;
 use core::future::Future;
