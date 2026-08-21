@@ -235,10 +235,15 @@ fn extract_doc_blocks_from(path: &Path, source: &str, blocks: &mut Vec<DocBlock>
                 if line == "*/" || line.ends_with("*/") {
                     break;
                 }
-                let stripped = if let Some(rest) = line.strip_prefix("* ") {
-                    rest
-                } else if line == "*" {
-                    ""
+                /*
+                 * Strip the comment's leading '*', then at most one space -
+                 * not "* " as a unit. A continuation line indented with a tab
+                 * (kernel style for nested list items) has no space after the
+                 * '*', so matching the pair left the asterisk in the output
+                 * and pdflatex died on the literal '*' before an \item.
+                 */
+                let stripped = if let Some(rest) = line.strip_prefix('*') {
+                    rest.strip_prefix(' ').unwrap_or(rest)
                 } else {
                     line
                 };
