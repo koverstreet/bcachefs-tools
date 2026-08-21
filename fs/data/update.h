@@ -39,6 +39,7 @@ struct data_update_opts {
 	enum bch_read_flags		read_flags;
 	enum bch_write_flags		write_flags;
 	enum bch_trans_commit_flags	commit_flags;
+	u16				ioprio;
 };
 
 struct data_update {
