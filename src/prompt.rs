@@ -10,7 +10,9 @@
 //! are boot-time units, so on a running system the directory is there and
 //! nothing is listening, and a question posted to it times out having shown
 //! the user nothing. Measured - all three agents inactive, `--no-tty` returns
-//! "Timer expired".
+//! "Timer expired". Whether an agent is listening has no direct test, so
+//! [`Prompt::detect`] wants positive evidence of one before handing over a
+//! question: plymouth answering a ping, or stdin being /dev/null.
 //!
 //! [`Prompt::detect`] gives `None` when nobody can be reached, and callers
 //! resolve that before composing a question: a mount can ask twice - degraded,
@@ -25,6 +27,7 @@
 //! keyring caching. A policy question needs none of it.
 
 use std::io::{stdin, IsTerminal};
+use std::os::fd::AsFd;
 use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Duration;
@@ -80,10 +83,16 @@ pub enum Prompt {
     Terminal,
 }
 
+/// Plymouth answering a ping is an agent itself; stdin on /dev/null is what a
+/// unit started by init gets, which puts us in the boot where the agents live.
+/// A pipe or a file is a script redirecting us, with nobody behind it.
+fn agent_plausibly_listening(tty: bool) -> bool {
+    (tty || stdin_is_dev_null()) && ask_password_installed()
+}
+
 impl Prompt {
-    /// `None` when there is nobody to ask: no agent framework and no terminal.
-    /// Callers must have a safe answer for that and should take it without
-    /// composing a question.
+    /// `None` when nobody can be reached; callers take their safe answer
+    /// without composing a question.
     pub fn detect() -> Option<Prompt> {
         let tty = stdin().is_terminal();
 
@@ -92,7 +101,7 @@ impl Prompt {
             return Some(Prompt::Terminal);
         }
 
-        if Path::new(ASK_PASSWORD_DIR).is_dir() && have_ask_password() {
+        if agent_plausibly_listening(tty) {
             debug!("asking via systemd's password agents");
             return Some(Prompt::Agent);
         }
@@ -132,13 +141,28 @@ fn plymouth_active() -> bool {
         .unwrap_or(false)
 }
 
-fn have_ask_password() -> bool {
-    std::env::var_os("PATH")
-        .map(|path| {
-            std::env::split_paths(&path)
-                .any(|dir| dir.join("systemd-ask-password").is_file())
-        })
-        .unwrap_or(false)
+/// Installed, note - not listening. detect() supplies the evidence for that.
+fn ask_password_installed() -> bool {
+    Path::new(ASK_PASSWORD_DIR).is_dir()
+        && std::env::var_os("PATH")
+            .map(|path| {
+                std::env::split_paths(&path)
+                    .any(|dir| dir.join("systemd-ask-password").is_file())
+            })
+            .unwrap_or(false)
+}
+
+/// Stdin being /dev/null is the signature of a process started by init: a
+/// terminal means a person, a pipe or a file means a script, /dev/null means
+/// neither, so the question has to go wherever init's own prompts go.
+pub fn stdin_is_dev_null() -> bool {
+    let Ok(stat) = rustix::fs::fstat(stdin().as_fd()) else {
+        return false;
+    };
+
+    rustix::fs::FileType::from_raw_mode(stat.st_mode) == rustix::fs::FileType::CharacterDevice
+        && rustix::fs::major(stat.st_rdev) == 1
+        && rustix::fs::minor(stat.st_rdev) == 3
 }
 
 /// --echo=yes because this isn't a password: the default is `masked`, an

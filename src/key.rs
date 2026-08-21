@@ -1,9 +1,8 @@
 use std::{
     ffi::{CStr, CString},
     fs,
-    io::{self, stdin, IsTerminal},
+    io::{stdin, IsTerminal},
     mem,
-    os::fd::{AsFd, BorrowedFd},
     path::Path,
     process::{Command, Stdio},
     ptr, thread,
@@ -349,17 +348,9 @@ pub struct PassphraseCorrect {
     pub cleartext_sb_key: bch_encrypted_key,
 }
 
-fn is_dev_null(fd: BorrowedFd<'_>) -> io::Result<bool> {
-    let stat = rustix::fs::fstat(fd)?;
-    let file_type = rustix::fs::FileType::from_raw_mode(stat.st_mode);
-    if file_type != rustix::fs::FileType::CharacterDevice {
-        return Ok(false);
-    }
-    let major = rustix::fs::major(stat.st_rdev);
-    let minor = rustix::fs::minor(stat.st_rdev);
-    Ok(major == 1 && minor == 3)
-}
-
+/// A passphrase is the one question a pipe can answer, which is why this
+/// doesn't go through crate::prompt: Other reads the passphrase off stdin
+/// rather than meaning nobody is there.
 enum StdinType {
     Terminal,
     DevNull,
@@ -368,10 +359,9 @@ enum StdinType {
 
 impl StdinType {
     fn detect() -> StdinType {
-        let stdin = stdin();
-        if stdin.is_terminal() {
+        if stdin().is_terminal() {
             StdinType::Terminal
-        } else if is_dev_null(stdin.as_fd()).unwrap_or(false) {
+        } else if crate::prompt::stdin_is_dev_null() {
             StdinType::DevNull
         } else {
             StdinType::Other
