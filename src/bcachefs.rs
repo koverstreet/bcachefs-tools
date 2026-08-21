@@ -9,6 +9,7 @@ mod dump_stack;
 mod logging;
 mod prompt;
 mod qcow2;
+mod splitbrain;
 mod util;
 mod wrappers;
 pub mod http;

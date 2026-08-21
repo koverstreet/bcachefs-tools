@@ -235,11 +235,29 @@ pub fn filter_current_sbs(
 	sbs: Vec<(PathBuf, bch_sb_handle)>,
 	opts: &bch_opts,
 ) -> Result<Vec<(PathBuf, bch_sb_handle)>, BchError> {
+	let mut opts = *opts;
+
+	// Ahead of bch2_sbs_filter_dead(), which frees the superblock of every
+	// device it drops - and drops one that diverged the same way it drops one
+	// that was properly removed, leaving nothing to tell them apart afterwards.
+	// The short device count then reads as "a disk is missing", so mount asks
+	// whether to go degraded, and yes silently picks one of two histories.
+	if opt_get!(opts, no_splitbrain_check) == 0 {
+		let divergent = crate::splitbrain::find(&sbs, &opts);
+		if !divergent.is_empty() {
+			// One warning, not one per line: the report is a single
+			// account with blank lines in it for readability, and a
+			// warn! per line stamps file:line on every one of them -
+			// including the blanks.
+			warn!("{}", crate::splitbrain::report(&sbs, &divergent).trim_end());
+			return Err(BchError::from_errcode(c::bch_errcode::BCH_ERR_device_splitbrain));
+		}
+	}
+
 	let handles = sbs.into_iter()
 		.map(|(_, sb)| sb)
 		.collect::<Vec<_>>();
 	let mut handles = DarrayVec::<c::bch_sb_handles, bch_sb_handle>::from_vec(handles);
-	let mut opts = *opts;
 
 	let ret = unsafe {
 		c::bch2_sbs_filter_dead(handles.as_mut(), &mut opts, std::ptr::null_mut())
