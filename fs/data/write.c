@@ -1273,6 +1273,25 @@ void bch2_submit_wbio_replicas(struct bch_write_bio *wbio, struct bch_fs *c,
 	}
 }
 
+static bool bch2_move_write_should_fua(struct bch_write_op *op,
+				       const struct bkey_i *k)
+{
+	struct bch_fs *c = op->c;
+
+	if (!(op->flags & BCH_WRITE_move))
+		return false;
+
+	if (c->opts.move_writes_fua)
+		return true;
+
+	bkey_for_each_ptr(bch2_bkey_ptrs_c(bkey_i_to_s_c(k)), ptr)
+		if (ptr->dev != BCH_SB_MEMBER_INVALID &&
+		    bch2_dev_rotational(c, ptr->dev))
+			return true;
+
+	return false;
+}
+
 static void __bch2_write(struct bch_write_op *);
 
 static CLOSURE_CALLBACK(__bch2_write_done)
@@ -2606,19 +2625,20 @@ err:
 		if (op->flags & BCH_WRITE_move)
 			bio->bi_opf |= REQ_SYNC|REQ_IDLE;
 
-		/*
-		 * Internal moves can be issued FUA, making the journal's cache
-		 * flush a no-op for them. Off by default: the per-write FUA
-		 * regresses background-move throughput, and the journal flushes
-		 * every device on commit regardless, so durability is unchanged.
-		 */
-		if ((op->flags & BCH_WRITE_move) && c->opts.move_writes_fua)
-			bio->bi_opf |= REQ_FUA;
-
 		closure_get(bio->bi_private);
 
 		key_to_write = (void *) (op->insert_keys.keys_p +
 					 key_to_write_offset);
+
+		/*
+		 * Rotational move writes are the usual source of dirty cache
+		 * behind journal preflush stalls: complete them durably here so
+		 * later journal commits do not have to drain them from every rw
+		 * member.  Keep non-rotational move writes on the old default
+		 * unless move_writes_fua was explicitly enabled.
+		 */
+		if (bch2_move_write_should_fua(op, key_to_write))
+			bio->bi_opf |= REQ_FUA;
 
 		bch2_submit_wbio_replicas(to_wbio(bio), c, BCH_DATA_user,
 					  key_to_write, false, NULL);
