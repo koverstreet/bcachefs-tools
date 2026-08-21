@@ -1,10 +1,16 @@
 //! Putting a question to whoever is at the machine, during a mount.
 //!
-//! Not "is stdin a terminal": at boot stdin *is* one - it's /dev/console - but
-//! plymouth owns the screen and a question written there is never seen.
-//! systemd's password agents are for exactly this (plymouth, the console
-//! agent, wall, and the credential store for unattended machines), and
-//! --no-tty is what reaches them when we do have a tty.
+//! A terminal is the best place to ask, except when something is drawing over
+//! it: at boot stdin *is* a terminal - it's /dev/console - but plymouth owns
+//! the screen and a question written there is never seen. systemd's password
+//! agents include one that draws on the splash, and --no-tty is what reaches
+//! them when we do have a tty.
+//!
+//! Preferring the agents whenever the ask directory exists does not work: they
+//! are boot-time units, so on a running system the directory is there and
+//! nothing is listening, and a question posted to it times out having shown
+//! the user nothing. Measured - all three agents inactive, `--no-tty` returns
+//! "Timer expired".
 //!
 //! [`Prompt::detect`] gives `None` when nobody can be reached, and callers
 //! resolve that before composing a question: a mount can ask twice - degraded,
@@ -79,13 +85,22 @@ impl Prompt {
     /// Callers must have a safe answer for that and should take it without
     /// composing a question.
     pub fn detect() -> Option<Prompt> {
+        let tty = stdin().is_terminal();
+
+        if tty && !plymouth_active() {
+            debug!("asking on the terminal");
+            return Some(Prompt::Terminal);
+        }
+
         if Path::new(ASK_PASSWORD_DIR).is_dir() && have_ask_password() {
             debug!("asking via systemd's password agents");
             return Some(Prompt::Agent);
         }
 
-        if stdin().is_terminal() {
-            debug!("asking on the terminal");
+        // Under the splash with no agent to draw on it: printing here is poor,
+        // but better than refusing without asking.
+        if tty {
+            debug!("asking on the terminal (plymouth is up but has no agent)");
             return Some(Prompt::Terminal);
         }
 
@@ -101,6 +116,20 @@ impl Prompt {
             Prompt::Terminal => ask_on_terminal(ask).map(Some),
         }
     }
+}
+
+/// Is plymouth drawing over the console? `plymouth --ping` is the canonical
+/// test and exits non-zero when it isn't running; not installed means not
+/// covering us, so a spawn failure is the same answer.
+fn plymouth_active() -> bool {
+    Command::new("plymouth")
+        .arg("--ping")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false)
 }
 
 fn have_ask_password() -> bool {
