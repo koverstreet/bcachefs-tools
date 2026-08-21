@@ -666,3 +666,60 @@ pub fn bch2_scan_devices(device: *const c_char) -> *mut c_char {
 
     CString::new(devs.into_vec()).unwrap().into_raw()
 }
+
+/// A udev monitor, and the question "have the missing members turned up?"
+///
+/// The degraded prompt uses this so it can stop asking when the answer arrives
+/// as hardware rather than as a keystroke. Someone who is asked whether to
+/// mount without a disk, and responds by plugging the disk in, has answered.
+pub struct DeviceWatch {
+	socket:	udev::MonitorSocket,
+	uuid:	Uuid,
+	opts:	bch_opts,
+	use_udev: bool,
+}
+
+impl DeviceWatch {
+	/// `None` when there is nothing to watch for or no way to watch: a
+	/// filesystem we cannot name by UUID, or no udev to tell us about
+	/// arrivals. Polling for a disk on a timer while a question is on screen
+	/// is not worth the code.
+	pub fn new(sbs: &[(PathBuf, bch_sb_handle)], opts: &bch_opts, use_udev: bool) -> Option<Self> {
+		if !use_udev {
+			return None;
+		}
+
+		let uuid = sbs.first()?.1.sb().uuid();
+		let socket = udev::MonitorBuilder::new().ok()?
+			.match_subsystem("block").ok()?
+			.listen().ok()?;
+
+		Some(DeviceWatch { socket, uuid, opts: *opts, use_udev })
+	}
+
+	/// Drain what woke us and look again. True once every member is present.
+	///
+	/// Rescans rather than trusting the devnode in the event, for the same
+	/// reason scan_waiting_for_devices() does: an arriving block device only
+	/// means look again, and the scan knows how - including the fallback for
+	/// members udev has not tagged yet.
+	pub fn every_member_present(&mut self) -> bool {
+		if self.socket.iter().count() == 0 {
+			return false;
+		}
+
+		get_devices_by_uuid(self.uuid, &self.opts, self.use_udev)
+			.map(|sbs| have_every_device(&sbs))
+			.unwrap_or(false)
+	}
+}
+
+impl crate::prompt::Watch for DeviceWatch {
+	fn raw_fd(&self) -> std::os::fd::RawFd {
+		self.socket.as_raw_fd()
+	}
+
+	fn moot(&mut self) -> bool {
+		self.every_member_present()
+	}
+}

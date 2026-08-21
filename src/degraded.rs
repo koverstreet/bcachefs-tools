@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use crate::prompt::{fs_name, Choice, Prompt, Question, PROMPT_TIMEOUT};
+use crate::prompt::{fs_name, Choice, Prompt, Question, Watch, PROMPT_TIMEOUT};
 
 use anyhow::Result;
 use bcachefs_kernel::c::bch_member_state::BCH_MEMBER_STATE_evacuating;
@@ -194,11 +194,8 @@ fn counts_as_missing(m: &c::bch_member, sb: *mut c::bch_sb, idx: u32) -> bool {
 
 /// @extra reaches a terminal and nothing else: the agent protocol's Message=
 /// is one line.
-///
-/// None is the question having stopped applying, which nothing here can
-/// produce yet - no caller passes a watch.
 fn ask(p: &Prompt, choices: &[Choice<Answer>], prompt: &str, extra: Option<&str>,
-       uuid: &str) -> Result<Option<Answer>> {
+       uuid: &str, watch: Option<&mut dyn Watch>) -> Result<Option<Answer>> {
     p.put(&Question {
         prompt,
         detail:  extra,
@@ -206,7 +203,7 @@ fn ask(p: &Prompt, choices: &[Choice<Answer>], prompt: &str, extra: Option<&str>
         silence: Answer::No,
         uuid,
         timeout: Some(PROMPT_TIMEOUT),
-    }, None)
+    }, watch)
 }
 
 pub struct MountOpts {
@@ -251,8 +248,8 @@ impl MountOpts {
         let prompt = "Some data has no remaining copy and will be unreadable. \
                       Mount anyway?";
 
-        if ask(&retry.prompt, FORCE_CHOICES, prompt, None, &retry.uuid)?
-            .unwrap_or(Answer::No) != Answer::Force {
+        if ask(&retry.prompt, FORCE_CHOICES, prompt, None, &retry.uuid, None)?.unwrap_or(Answer::No)
+            != Answer::Force {
             return Ok(None);
         }
 
@@ -319,8 +316,18 @@ pub fn resolve_mount_opts(
         return Ok(MountOpts::plain(fs_opts));
     };
 
-    let answer = ask(&p, DEGRADED_CHOICES, &q, devs.as_deref(), &uuid)?
-        .unwrap_or(Answer::No);
+    // If the missing device turns up while the question is on screen, that is
+    // the answer: stop asking and carry on with the boot.
+    let use_udev = opt_get!(cli_opts, mount_trusts_udev) != 0;
+    let mut dw = device_scan::DeviceWatch::new(sbs, cli_opts, use_udev);
+    let watch = dw.as_mut().map(|d| d as &mut dyn Watch);
+
+    let Some(answer) = ask(&p, DEGRADED_CHOICES, &q, devs.as_deref(), &uuid,
+                           watch)?
+    else {
+        warn!("device turned up while asking; mounting normally");
+        return Ok(MountOpts::plain(fs_opts));
+    };
 
     // warn, not info: the default verbosity is Warn, and this is a decision
     // about the user's data that we made for them. Otherwise all they see is
