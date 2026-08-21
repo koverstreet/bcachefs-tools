@@ -681,6 +681,15 @@ independently while B was offline. This catches divergence even in cases where
 simple timestamp comparison would not (e.g.\ clock skew, or writes that happen
 to produce the same sequence but different content).
 
+A single sequence number tells you only which device is further along, not
+whether one device's history is contained in the other's. The vector settles
+it: if the filesystem expected a higher sequence for a device than the device
+reports, the device merely missed writes and normal recovery brings it up to
+date; if the device reports a higher sequence than the filesystem recorded, it
+applied writes the filesystem never saw, and the two histories are concurrent
+rather than ordered. Only the second is splitbrain---a stale device and a
+divergent one are indistinguishable to a scalar counter.
+
 The two common causes of splitbrain are:
 
 \begin{itemize}
