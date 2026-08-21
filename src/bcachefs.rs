@@ -14,6 +14,8 @@ mod wrappers;
 pub mod http;
 #[cfg(test)]
 mod eytzinger_test;
+#[cfg(test)]
+mod workqueue_test;
 
 use std::process::ExitCode;
 use bch_bindgen::c;
