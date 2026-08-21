@@ -368,38 +368,48 @@ fn missing_dev_timeout(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) ->
     }
 }
 
-/// Wait for a filesystem's member devices to turn up, or for time to run out.
+/// udevd's own test for whether it is running - libudev checks this same
+/// socket in udev_queue_get_udev_is_active().
+fn udevd_running() -> bool {
+    Path::new("/run/udev/control").exists()
+}
+
+/// The two netlink groups are not interchangeable: `new()` subscribes to the
+/// one udevd writes after processing an event, `new_kernel()` to the one the
+/// kernel writes (kobject_uevent). In an initramfs - the case this whole wait
+/// exists for - a `new()` monitor is a socket nobody writes to.
 ///
-/// Driven by udev events, not by rescanning: a rescan reads the superblock of
-/// every block device on the machine, and doing that a few times a second for
-/// the length of a boot would keep every spun-down disk awake to learn nothing.
-/// udev already tells us when a device arrives, so listen for that. Without
-/// udev there is nothing to listen to and a slow rescan is all we have.
+/// Prefer udevd's when it is running: its events arrive after device-mapper
+/// and md names are set up, where a kernel event for those can land before
+/// there is anything to find. Callers rescan rather than trust the devnode in
+/// the event, so either source carries all they need.
+fn block_device_monitor() -> Option<udev::MonitorSocket> {
+    let builder = if udevd_running() {
+        udev::MonitorBuilder::new()
+    } else {
+        udev::MonitorBuilder::new_kernel()
+    };
+
+    builder.ok()?.match_subsystem("block").ok()?.listen().ok()
+}
+
+/// Event-driven rather than polled: a rescan reads the superblock of every
+/// block device on the machine, so polling one would keep every spun-down disk
+/// awake for the length of a boot to learn nothing.
 ///
-/// The monitor is built before the first scan on purpose. A device that shows
-/// up in the gap between the two would otherwise be in neither - too late for
-/// the scan, too early for a socket that didn't exist yet - and we'd wait out
-/// the full timeout with it sitting right there.
+/// The monitor is built before the first scan on purpose. A device arriving in
+/// the gap would otherwise be in neither - too late for the scan, too early
+/// for a socket that did not exist yet - and we would wait out the whole
+/// timeout with it sitting there.
 ///
-/// Returns whatever it has when it stops, short set and all: what to do about a
-/// filesystem still missing members is a policy question (the degraded action),
-/// and this is not the place that answers it.
-///
-/// The announcements are warn, not info: default verbosity is Warn, and a boot
-/// that stops here for 30s with nothing on the console is indistinguishable
-/// from one that has hung.
-fn scan_waiting_for_devices<F>(cli_opts: &bch_opts, use_udev: bool, scan: F)
+/// Returns a short set rather than failing: what to do about missing members
+/// is the degraded action's question, not this one's.
+fn scan_waiting_for_devices<F>(cli_opts: &bch_opts, scan: F)
     -> Result<Vec<(PathBuf, bch_sb_handle)>>
 where
     F: Fn() -> Result<Vec<(PathBuf, bch_sb_handle)>>,
 {
-    let socket = if use_udev {
-        Some(udev::MonitorBuilder::new()?
-             .match_subsystem("block")?
-             .listen()?)
-    } else {
-        None
-    };
+    let socket = block_device_monitor();
 
     let start = Instant::now();
     let mut sbs = scan()?;
@@ -421,7 +431,7 @@ where
             match expected_devices(&sbs) {
                 0 => warn!("no devices found yet, waiting up to {}s", timeout.as_secs()),
                 n => warn!("found {} of {n} devices, waiting up to {}s for the rest",
-                           sbs.len(), timeout.as_secs()),
+                           present_devices(&sbs).len(), timeout.as_secs()),
             }
         }
 
@@ -499,7 +509,8 @@ fn get_devices_by_label(
 fn devs_str_sbs_from_device(
     device: &Path,
     opts: &bch_opts,
-    use_udev: bool
+    use_udev: bool,
+    wait: bool,
 ) -> anyhow::Result<Vec<(PathBuf, bch_sb_handle)>> {
     if let Ok(metadata) = fs::metadata(device) {
         if metadata.is_dir() {
@@ -522,12 +533,12 @@ fn devs_str_sbs_from_device(
     let uuid = dev_sb.sb().uuid();
     drop(dev_sb);
 
-    // Wait here too. This is the path a multi-device root actually takes:
-    // mount(8) resolves an fstab UUID= to a devnode itself and execs us with
-    // a single path, so it never reaches the UUID= branch. Unlike that branch
-    // we have already read a superblock, so we know how many members to expect
-    // from the first iteration rather than falling back to the built-in.
-    scan_waiting_for_devices(opts, use_udev, || get_devices_by_uuid(uuid, opts, use_udev))
+    // This is the path a multi-device root actually takes: mount(8) resolves
+    // an fstab UUID= to a devnode itself and execs us with a single path, so
+    // it never reaches the UUID= branch. Unlike that branch we have already
+    // read a superblock, so we know how many members to expect from the first
+    // iteration rather than falling back to the built-in timeout.
+    search(opts, wait, || get_devices_by_uuid(uuid, opts, use_udev))
 }
 
 pub fn parse_uuid_equals(s: &str) -> Result<Option<Uuid>> {
@@ -544,18 +555,43 @@ fn parse_label_equals(s: &str) -> Option<&str> {
     Some(label)
 }
 
+/// Find a filesystem's members, without waiting for any that are absent.
 pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb_handle)>> {
+    scan_sbs_maybe_waiting(device, opts, false)
+}
+
+/// The same, but wait for members that have not enumerated yet.
+///
+/// Only mount wants this. Every other command that resolves a filesystem is
+/// being run by someone at a prompt who already knows what is plugged in -
+/// `bcachefs device remove` on a dead disk should not sit for
+/// missing_dev_timeout before doing the thing it was asked to do.
+pub fn scan_sbs_for_mount(device: &String, opts: &bch_opts)
+    -> Result<Vec<(PathBuf, bch_sb_handle)>>
+{
+    scan_sbs_maybe_waiting(device, opts, true)
+}
+
+/// Waiting is for the search paths only: naming paths, with or without colons,
+/// is a statement about what exists.
+fn search<F>(opts: &bch_opts, wait: bool, f: F) -> Result<Vec<(PathBuf, bch_sb_handle)>>
+where
+    F: Fn() -> Result<Vec<(PathBuf, bch_sb_handle)>>,
+{
+    if wait { scan_waiting_for_devices(opts, f) } else { f() }
+}
+
+fn scan_sbs_maybe_waiting(device: &String, opts: &bch_opts, wait: bool)
+    -> Result<Vec<(PathBuf, bch_sb_handle)>>
+{
     let udev = opt_get!(opts, mount_trusts_udev) != 0;
 
-    // Searching for a filesystem, rather than being handed its devices: the
-    // members may not have enumerated yet, so these wait. A caller who names
-    // paths has already decided what exists.
     if let Some(uuid) = parse_uuid_equals(device)? {
-        return scan_waiting_for_devices(opts, udev, || get_devices_by_uuid(uuid, opts, udev));
+        return search(opts, wait, || get_devices_by_uuid(uuid, opts, udev));
     }
 
     if let Some(label) = parse_label_equals(device) {
-        return scan_waiting_for_devices(opts, udev, || get_devices_by_label(label, opts, udev));
+        return search(opts, wait, || get_devices_by_label(label, opts, udev));
     }
 
     if device.contains(':') {
@@ -583,7 +619,7 @@ pub fn scan_sbs(device: &String, opts: &bch_opts) -> Result<Vec<(PathBuf, bch_sb
             .collect::<Result<Vec<_>>>()
     }
 
-    devs_str_sbs_from_device(Path::new(device), opts, udev)
+    devs_str_sbs_from_device(Path::new(device), opts, udev, wait)
 }
 
 pub fn joined_device_str(sbs: &[(PathBuf, bch_sb_handle)]) -> OsString {
@@ -685,14 +721,8 @@ impl DeviceWatch {
 	/// arrivals. Polling for a disk on a timer while a question is on screen
 	/// is not worth the code.
 	pub fn new(sbs: &[(PathBuf, bch_sb_handle)], opts: &bch_opts, use_udev: bool) -> Option<Self> {
-		if !use_udev {
-			return None;
-		}
-
 		let uuid = sbs.first()?.1.sb().uuid();
-		let socket = udev::MonitorBuilder::new().ok()?
-			.match_subsystem("block").ok()?
-			.listen().ok()?;
+		let socket = block_device_monitor()?;
 
 		Some(DeviceWatch { socket, uuid, opts: *opts, use_udev })
 	}

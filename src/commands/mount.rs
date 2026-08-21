@@ -507,7 +507,7 @@ fn is_splitbrain(err: &anyhow::Error) -> bool {
 fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
     -> Result<Vec<(std::path::PathBuf, bch_sb_handle)>>
 {
-    let err = match device_scan::scan_sbs(dev, opts) {
+    let err = match device_scan::scan_sbs_for_mount(dev, opts) {
         Ok(sbs) => return Ok(sbs),
         Err(e) => e,
     };
@@ -519,6 +519,8 @@ fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
     // The report is already out - the scan logged it on the way to failing.
     // Re-scanning with the check off gives us the surviving side, which is
     // both what to name in the question and what to mount if they say yes.
+    // Not the waiting scan: the one above already waited, and everything it
+    // is about to find is what that wait turned up.
     opt_set!(opts, no_splitbrain_check, 1);
     let sbs = device_scan::scan_sbs(dev, opts)?;
 
