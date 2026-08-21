@@ -20,6 +20,7 @@ use rustix::termios;
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
+use crate::prompt::Prompt;
 use crate::ErrnoError;
 
 /// Check if a superblock has an encrypted passphrase set.
@@ -166,6 +167,16 @@ impl Passphrase {
 
     pub fn ask_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
         match StdinType::detect() {
+            // A terminal plymouth is drawing over shows nothing, and this
+            // prompt has no timeout - it waits there for a person who cannot
+            // see it. Which way a question should go when that happens is
+            // Prompt::detect()'s decision, and asking it is not the same as
+            // copying it: it answers Agent for a covered terminal only where
+            // there is an agent framework to reach plymouth by, and Terminal
+            // where there isn't - an initramfs that isn't systemd, which
+            // leaves the invisible terminal as the only thing we have.
+            StdinType::Terminal if matches!(Prompt::detect(), Some(Prompt::Agent)) =>
+                Self::ask_from_systemd_and_check(sb),
             StdinType::Terminal => Self::ask_in_terminal()?
                 .check(sb)
                 .ok_or_else(|| anyhow!("incorrect passphrase")),
@@ -182,6 +193,11 @@ impl Passphrase {
         for i in 0..3 {
             let mut command = Command::new("systemd-ask-password");
             command
+                // Reached either with no tty, where this is a no-op (measured:
+                // identical timeout behaviour with and without), or with one
+                // plymouth is covering, where it is what stops us prompting
+                // onto the invisible terminal we just declined to use.
+                .arg("--no-tty")
                 .arg("--icon=drive-harddisk")
                 .arg(format!("--id=cryptsetup:UUID={}", uuid.as_hyphenated()))
                 .arg("--keyname=cryptsetup")
