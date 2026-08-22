@@ -118,7 +118,7 @@ static void stdio_buf_init(struct stdio_buf *buf)
 
 /* thread_with_stdio */
 
-static void thread_with_stdio_done(struct thread_with_stdio *thr)
+void bch2_thread_with_stdio_done(struct thread_with_stdio *thr)
 {
 	thr->thr.done = true;
 	thr->stdio.done = true;
@@ -171,7 +171,7 @@ static int thread_with_stdio_release(struct inode *inode, struct file *file)
 	struct thread_with_stdio *thr =
 		container_of(file->private_data, struct thread_with_stdio, thr);
 
-	thread_with_stdio_done(thr);
+	bch2_thread_with_stdio_done(thr);
 	bch2_thread_with_file_exit(&thr->thr);
 	darray_exit(&thr->stdio.input.buf);
 	darray_exit(&thr->stdio.output.buf);
@@ -312,7 +312,7 @@ static int thread_with_stdio_fn(void *arg)
 
 	thr->thr.ret = thr->ops->fn(thr);
 
-	thread_with_stdio_done(thr);
+	bch2_thread_with_stdio_done(thr);
 	return 0;
 }
 
@@ -337,6 +337,43 @@ int bch2_run_thread_with_stdio(struct thread_with_stdio *thr,
 	return __bch2_run_thread_with_stdio(thr);
 }
 
+/*
+ * A stdio_redirect with no thread behind it: the caller's own thread does the
+ * work and prints as it goes. That's what mounting looks like - the filesystem
+ * comes up in the thread making fsconfig(2) calls, and userspace reads the fd
+ * from a thread of its own.
+ *
+ * thr->thr.task stays NULL, which the rest of this file already copes with:
+ * bch2_thread_with_file_exit() skips a NULL task, so .release needs no special
+ * case, and .poll reports EPOLLHUP off thr->thr.done. The worker sets that with
+ * bch2_thread_with_stdio_done() when it's finished, exactly as the kthread does.
+ *
+ * What the kthread was doing that nothing else was: .release calls
+ * kthread_stop(), which blocks until the thread is gone, so the darray_exit()
+ * after it can't free a buffer a writer is still in. With no thread to stop,
+ * a close(2) would do exactly that. So the caller gets a reference to the file
+ * in @filep and has to hold it for as long as anything can still print here -
+ * .release doesn't run until both that and the fd are dropped.
+ */
+int bch2_stdio_redirect_get_fd(struct thread_with_stdio *thr,
+			       const struct thread_with_stdio_ops *ops,
+			       struct file **filep)
+{
+	struct file *file;
+	char name[TASK_COMM_LEN];
+
+	get_task_comm(name, current);
+	bch2_thread_with_stdio_init(thr, ops);
+
+	int fd = thread_with_file_prepare_fd(&thr->thr, &thread_with_stdio_fops,
+					     name, &file);
+	if (fd < 0)
+		return fd;
+
+	*filep = get_file(file);
+	fd_install(fd, file);
+	return fd;
+}
 
 int bch2_run_thread_with_stdout(struct thread_with_stdio *thr,
 				const struct thread_with_stdio_ops *ops)

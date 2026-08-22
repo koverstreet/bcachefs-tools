@@ -65,9 +65,13 @@ struct thread_with_stdio {
 
 void bch2_thread_with_stdio_init(struct thread_with_stdio *,
 				 const struct thread_with_stdio_ops *);
+void bch2_thread_with_stdio_done(struct thread_with_stdio *);
 int __bch2_run_thread_with_stdio(struct thread_with_stdio *);
 int bch2_run_thread_with_stdio(struct thread_with_stdio *,
 			       const struct thread_with_stdio_ops *);
+int bch2_stdio_redirect_get_fd(struct thread_with_stdio *,
+			       const struct thread_with_stdio_ops *,
+			       struct file **);
 int bch2_run_thread_with_stdout(struct thread_with_stdio *,
 				const struct thread_with_stdio_ops *);
 int bch2_stdio_redirect_read(struct stdio_redirect *, char *, size_t);
