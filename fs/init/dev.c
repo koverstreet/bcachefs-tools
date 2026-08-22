@@ -1351,6 +1351,30 @@ int bch2_dev_online(struct bch_fs *c, const char *path, struct printbuf *err)
 
 	bch2_dev_mi_field_upgrades(ca);
 
+	/*
+	 * A member can arrive here with its add never finished: the filesystem
+	 * was initialized or the device added while it was absent, so nothing
+	 * ever ran bch2_dev_usage_init() for it and its usage counters are
+	 * zero rather than nbuckets. Resume from wherever it stopped.
+	 *
+	 * This has to come before marking the superblock. Marking subtracts the
+	 * sb buckets from the device's free count, so against a zeroed count it
+	 * wraps: free becomes -4, the allocator sorts on it, and a device
+	 * advertising 2^64 free buckets wins every allocation and then blocks
+	 * in bucket_alloc_blocked forever - taking the journal with it.
+	 */
+	ret = bch2_dev_add_initialize(c, ca);
+	if (ret) {
+		prt_printf(err, "bch2_dev_add_initialize() error: %s\n", bch2_err_str(ret));
+		return ret;
+	}
+
+	/*
+	 * Then reconcile: we didn't know where this device's superblocks were
+	 * until we saw it, so make the allocations match what the sb says.
+	 * Idempotent - __bch2_trans_mark_metadata_bucket() assigns rather than
+	 * accumulates - so this is a no-op when the resume above just did it.
+	 */
 	ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
 	if (ret) {
 		prt_printf(err, "bch2_trans_mark_dev_sb() error: %s\n", bch2_err_str(ret));
