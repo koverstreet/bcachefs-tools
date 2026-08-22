@@ -441,8 +441,9 @@ int bch2_journal_replay(struct bch_fs *c)
 	 * Replay accounting keys first: we can't allow the write buffer to
 	 * flush accounting keys until we're done
 	 */
-	bch2_progress_init_count(&c->recovery.progress, "journal replay: accounting", "keys",
-				 accounting_total);
+	bch2_progress_init_count(&c->recovery.progress,
+				 "journal replay: accounting",
+				 BCH_PROGRESS_UNITS_keys, accounting_total);
 
 	darray_for_each(*keys, k) {
 		struct bkey_i *bk = journal_key_k(trans->c, k);
@@ -475,8 +476,9 @@ int bch2_journal_replay(struct bch_fs *c)
 	 * efficient - better locality of btree access -  but some might fail if
 	 * that would cause a journal deadlock.
 	 */
-	bch2_progress_init_count(&c->recovery.progress, "journal replay: sorted pass", "keys",
-				 keys->nr);
+	bch2_progress_init_count(&c->recovery.progress,
+				 "journal replay: sorted pass",
+				 BCH_PROGRESS_UNITS_keys, keys->nr);
 
 	darray_for_each(*keys, k) {
 		cond_resched();
@@ -522,8 +524,9 @@ int bch2_journal_replay(struct bch_fs *c)
 		       sizeof(keys_sorted.data[0]),
 		       journal_sort_seq_cmp, NULL);
 
-	bch2_progress_init_count(&c->recovery.progress, "journal replay: journal-order pass", "keys",
-				 keys_sorted.nr);
+	bch2_progress_init_count(&c->recovery.progress,
+				 "journal replay: journal-order pass",
+				 BCH_PROGRESS_UNITS_keys, keys_sorted.nr);
 
 	darray_for_each(keys_sorted, kp) {
 		cond_resched();

@@ -2,6 +2,7 @@
 #ifndef _BCACHEFS_PROGRESS_H
 #define _BCACHEFS_PROGRESS_H
 
+#include "bcachefs_ioctl.h"
 #include "btree/bbpos_types.h"
 
 /*
@@ -17,7 +18,7 @@
 
 struct progress_indicator {
 	const char		*msg;
-	const char		*units;
+	enum bch_progress_units	units;
 	struct bbpos		pos;
 	unsigned long		next_print;
 	u64			seen;
@@ -39,7 +40,7 @@ void bch2_progress_init(struct progress_indicator *s,
  */
 void bch2_progress_init_count(struct progress_indicator *s,
 			      const char *msg,
-			      const char *units,
+			      enum bch_progress_units units,
 			      u64 total);
 
 int bch2_progress_update_iter(struct btree_trans *,

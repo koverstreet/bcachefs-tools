@@ -863,8 +863,8 @@ __cold void bch2_recovery_pass_status_to_text(struct printbuf *out, struct bch_f
 		prt_printf(out, "Currently running:\t%s (%u)\n",
 			   bch2_recovery_passes[r->current_pass], r->current_pass);
 
-		/* units is set by every init, so it's how we know one has run */
-		if (r->progress.units) {
+		/* Nothing to show for a pass with no estimate of its own size */
+		if (r->progress.total) {
 			prt_str(out, "Progress:\t");
 			bch2_progress_to_text(out, &r->progress);
 			prt_newline(out);

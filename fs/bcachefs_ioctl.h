@@ -726,6 +726,20 @@ struct bch_ioctl_snapshot_tree_query_v2 {
 };
 
 /*
+ * What a progress indicator is counting: this is uapi because
+ * BCH_IOCTL_RECOVERY_STATUS reports it, and a string wouldn't survive the trip.
+ */
+#define BCH_PROGRESS_UNITS()		\
+	x(nodes,		0)	\
+	x(keys,			1)
+
+enum bch_progress_units {
+#define x(n, v)	BCH_PROGRESS_UNITS_##n = v,
+	BCH_PROGRESS_UNITS()
+#undef x
+};
+
+/*
  * BCHFS_IOC_PREAD_RAW: O_DIRECT read with extended error reporting.
  *
  * Like pread(), but with flags to control error handling and detailed

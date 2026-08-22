@@ -8,6 +8,13 @@
 #include "init/passes.h"
 #include "init/progress.h"
 
+static const char * const bch2_progress_units[] = {
+#define x(n, v)	#n,
+	BCH_PROGRESS_UNITS()
+#undef x
+	NULL
+};
+
 void bch2_progress_init(struct progress_indicator *s,
 			const char *msg,
 			struct bch_fs *c,
@@ -17,7 +24,7 @@ void bch2_progress_init(struct progress_indicator *s,
 	memset(s, 0, sizeof(*s));
 
 	s->msg = msg ? strip_bch2(msg) : NULL;
-	s->units = "nodes";
+	s->units = BCH_PROGRESS_UNITS_nodes;
 	s->next_print = jiffies + HZ * 10;
 
 	/* This is only an estimation: nodes can have different replica counts */
@@ -61,7 +68,7 @@ void bch2_progress_init(struct progress_indicator *s,
 
 void bch2_progress_init_count(struct progress_indicator *s,
 			      const char *msg,
-			      const char *units,
+			      enum bch_progress_units units,
 			      u64 total)
 {
 	memset(s, 0, sizeof(*s));
@@ -128,7 +135,7 @@ __cold void bch2_progress_to_text(struct printbuf *out, struct progress_indicato
 		? div64_u64(s->seen * 100, s->total)
 		: 0;
 	prt_printf(out, "%d%%, done %llu/%llu %s",
-		   percent, s->seen, s->total, s->units);
+		   percent, s->seen, s->total, bch2_progress_units[s->units]);
 
 	/* No node means no position: a counter-based indicator, or nothing seen yet */
 	if (!s->last_node)
