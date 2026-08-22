@@ -19,12 +19,18 @@ void bch2_thread_with_file_exit(struct thread_with_file *thr)
 	}
 }
 
-int bch2_run_thread_with_file(struct thread_with_file *thr,
-			      const struct file_operations *fops,
-			      int (*fn)(void *))
+/*
+ * Reserve a descriptor and build the file for it, but don't install it: the
+ * caller has to finish whatever the .release method would trip over before
+ * userspace can reach the fd. bch2_run_thread_with_file() has to take its task
+ * reference first, or a close(2) racing the install puts a reference it never
+ * took.
+ */
+static int thread_with_file_prepare_fd(struct thread_with_file *thr,
+				       const struct file_operations *fops,
+				       const char *name,
+				       struct file **filep)
 {
-	struct file *file = NULL;
-	int ret, fd = -1;
 	unsigned fd_flags = O_CLOEXEC;
 
 	if (fops->read && fops->write)
@@ -34,34 +40,44 @@ int bch2_run_thread_with_file(struct thread_with_file *thr,
 	else if (fops->write)
 		fd_flags |= O_WRONLY;
 
+	int fd = get_unused_fd_flags(fd_flags);
+	if (fd < 0)
+		return fd;
+
+	*filep = anon_inode_getfile(name, fops, thr, fd_flags);
+	if (IS_ERR(*filep)) {
+		put_unused_fd(fd);
+		return PTR_ERR(*filep);
+	}
+
+	return fd;
+}
+
+int bch2_run_thread_with_file(struct thread_with_file *thr,
+			      const struct file_operations *fops,
+			      int (*fn)(void *))
+{
+	struct file *file;
+
 	char name[TASK_COMM_LEN];
 	get_task_comm(name, current);
 
 	thr->ret = 0;
 	thr->task = kthread_create(fn, thr, "%s", name);
-	ret = PTR_ERR_OR_ZERO(thr->task);
+	int ret = PTR_ERR_OR_ZERO(thr->task);
 	if (ret)
 		return ret;
 
-	ret = get_unused_fd_flags(fd_flags);
-	if (ret < 0)
-		goto err;
-	fd = ret;
-
-	file = anon_inode_getfile(name, fops, thr, fd_flags);
-	ret = PTR_ERR_OR_ZERO(file);
-	if (ret)
-		goto err;
+	int fd = thread_with_file_prepare_fd(thr, fops, name, &file);
+	if (fd < 0) {
+		kthread_stop(thr->task);
+		return fd;
+	}
 
 	get_task_struct(thr->task);
 	wake_up_process(thr->task);
 	fd_install(fd, file);
 	return fd;
-err:
-	if (fd >= 0)
-		put_unused_fd(fd);
-	kthread_stop(thr->task);
-	return ret;
 }
 
 /* stdio_redirect */
@@ -320,6 +336,7 @@ int bch2_run_thread_with_stdio(struct thread_with_stdio *thr,
 
 	return __bch2_run_thread_with_stdio(thr);
 }
+
 
 int bch2_run_thread_with_stdout(struct thread_with_stdio *thr,
 				const struct thread_with_stdio_ops *ops)
