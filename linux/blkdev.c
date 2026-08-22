@@ -33,7 +33,21 @@ struct fops {
 static void sync_check(struct bio *bio, int ret)
 {
 	if (ret != bio->bi_iter.bi_size) {
-		fprintf(stderr, "IO error: %s\n", ret < 0 ? strerror(errno) : "short IO");
+		/*
+		 * A short read is the ordinary result of probing: the device
+		 * scan reads a superblock off every block device on the
+		 * machine, and the ones that aren't ours are frequently too
+		 * small for the read. Saying so is the caller's business -
+		 * read_super_silent() is called silent because it is meant to
+		 * be, and it cannot be if the layer under it talks.
+		 *
+		 * A negative ret is a real failure and still gets said, once,
+		 * with its errno. Either way bi_status carries the verdict to
+		 * whoever asked, which is how the block layer we stand in for
+		 * does it.
+		 */
+		if (ret < 0)
+			fprintf(stderr, "IO error: %s\n", strerror(errno));
 		bio->bi_status = BLK_STS_IOERR;
 	}
 
