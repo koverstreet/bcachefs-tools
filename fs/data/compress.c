@@ -377,8 +377,42 @@ int bch2_bio_uncompress(struct bch_fs *c, struct bio *src,
 	return 0;
 }
 
+/* rescale: zstd max compression level is 22, our max level is 15 */
+static ZSTD_parameters zstd_params(struct bch_fs *c,
+				   union bch_compression_opt compression)
+{
+	unsigned level = min((compression.level * 3) / 2, zstd_max_clevel());
+
+	return zstd_get_params(level, c->opts.encoded_extent_max);
+}
+
+/*
+ * What this particular compression needs, which is generally much less than
+ * the mempool element holds: the pool is sized for the worst case any caller
+ * could ask for - highest level, and for lz4 the high-compression variant.
+ */
+static size_t compress_workspace_size(struct bch_fs *c,
+				      union bch_compression_opt compression)
+{
+	switch (__bch2_compression_opt_to_type[compression.type]) {
+	case BCH_COMPRESSION_TYPE_lz4:
+		return compression.level < LZ4HC_MIN_CLEVEL
+			? LZ4_MEM_COMPRESS
+			: LZ4HC_MEM_COMPRESS;
+	case BCH_COMPRESSION_TYPE_gzip:
+		return zlib_deflate_workspacesize(MAX_WBITS, DEF_MEM_LEVEL);
+	case BCH_COMPRESSION_TYPE_zstd: {
+		ZSTD_parameters params = zstd_params(c, compression);
+
+		return zstd_cctx_workspace_bound(&params.cParams);
+	}
+	default:
+		BUG();
+	}
+}
+
 static int attempt_compress(struct bch_fs *c,
-			    void *workspace,
+			    void *workspace, size_t workspace_size,
 			    void *dst, size_t dst_len,
 			    void *src, size_t src_len,
 			    union bch_compression_opt compression)
@@ -446,13 +480,8 @@ static int attempt_compress(struct bch_fs *c,
 		return strm.total_out;
 	}
 	case BCH_COMPRESSION_TYPE_zstd: {
-		/*
-		 * rescale:
-		 * zstd max compression level is 22, our max level is 15
-		 */
-		unsigned level = min((compression.level * 3) / 2, zstd_max_clevel());
-		ZSTD_parameters params = zstd_get_params(level, c->opts.encoded_extent_max);
-		ZSTD_CCtx *ctx = zstd_init_cctx(workspace, c->compress.zstd_workspace_size);
+		ZSTD_parameters params = zstd_params(c, compression);
+		ZSTD_CCtx *ctx = zstd_init_cctx(workspace, workspace_size);
 
 		/*
 		 * ZSTD requires that when we decompress we pass in the exact
@@ -513,7 +542,27 @@ static unsigned bch2_compress(struct bch_fs *c,
 		}
 	}
 
-	void *workspace = mempool_alloc(workspace_pool, GFP_NOIO);
+	/*
+	 * Try for what this compression actually needs before falling back to
+	 * the pool. The pool element is sized for the worst case, so taking one
+	 * for an ordinary write costs far more memory than the write needs -
+	 * compression=zstd:3 was being handed a level-22 workspace. The pool is
+	 * the reserve that guarantees forward progress when memory is tight,
+	 * which is the only reason it has to exist at all.
+	 *
+	 * GFP_NOWAIT because we're in the write path: if this can't be had
+	 * cheaply, the reserve is right there. Note the pool element is larger
+	 * than workspace_size, so passing the smaller size down is safe - the
+	 * compressor simply doesn't use the rest.
+	 */
+	size_t workspace_size = compress_workspace_size(c, compression);
+	bool workspace_pooled = false;
+	void *workspace = kvmalloc(workspace_size, GFP_NOWAIT|__GFP_NOWARN);
+
+	if (!workspace) {
+		workspace = mempool_alloc(workspace_pool, GFP_NOIO);
+		workspace_pooled = true;
+	}
 
 	/*
 	 * XXX: this algorithm sucks when the compression code doesn't tell us
@@ -525,7 +574,7 @@ static unsigned bch2_compress(struct bch_fs *c,
 			break;
 		}
 
-		ret = attempt_compress(c, workspace,
+		ret = attempt_compress(c, workspace, workspace_size,
 				       dst, *dst_len,
 				       src, *src_len,
 				       compression);
@@ -553,7 +602,10 @@ static unsigned bch2_compress(struct bch_fs *c,
 		*src_len = round_down(*src_len, block_bytes(c));
 	}
 
-	mempool_free(workspace, workspace_pool);
+	if (workspace_pooled)
+		mempool_free(workspace, workspace_pool);
+	else
+		kvfree(workspace);
 
 	if (ret)
 		return BCH_COMPRESSION_TYPE_incompressible;
