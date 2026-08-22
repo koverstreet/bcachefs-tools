@@ -115,6 +115,9 @@ LE64_BITMASK(BCH_MEMBER_ROTATIONAL,	struct bch_member, flags, 32, 33)
 LE64_BITMASK(BCH_MEMBER_ROTATIONAL_SET,	struct bch_member, flags, 33, 34)
 LE64_BITMASK(BCH_MEMBER_INITIALIZED,	struct bch_member, flags, 34, 38)
 /* 38-46 free, was FAILURE_DOMAIN (now a string, member.failure_domain) */
+LE64_BITMASK(BCH_MEMBER_NEEDS_RECONCILE_SCAN,
+					struct bch_member, flags, 46, 47)
+/* 47-63 unused: never previously assigned */
 
 #if 0
 LE64_BITMASK(BCH_MEMBER_NR_READ_ERRORS,	struct bch_member, flags[1], 0,  20);

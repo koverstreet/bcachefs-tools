@@ -612,7 +612,8 @@ static int __bch2_fs_read_write(struct bch_fs *c, bool early)
 		  bch2_btree_write_buffer_start(c) ?:
 		  bch2_copygc_start(c) ?:
 		  (!c->opts.read_only
-		   ? bch2_reconcile_start(c)
+		   ? bch2_reconcile_start(c) ?:
+		     bch2_dev_start_member_reconcile_scans(c)
 		   : 0);
 	if (ret) {
 		bch2_fs_read_only(c);
