@@ -13,6 +13,13 @@ struct bch_fs_recovery {
 	 */
 	struct progress_indicator progress;
 
+	/*
+	 * When @current_pass started, monotonic, for recovery_status to print
+	 * how long it's been going. A poller can time passes by watching
+	 * @current_pass change; whoever cats the sysfs file once can't.
+	 */
+	u64			pass_start_time;
+
 	/* counterpart to c->sb.recovery_passes_required */
 	u64			scheduled_passes_ephemeral;
 

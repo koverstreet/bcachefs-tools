@@ -683,6 +683,7 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 		unsigned pass = __ffs64(r->current_passes);
 
 		r->current_pass			= pass;
+		r->pass_start_time		= ktime_get_ns();
 		r->current_passes		&= ~BIT_ULL(pass);
 		r->scheduled_passes_ephemeral	&= ~BIT_ULL(pass);
 		r->passes_attempted		|= BIT_ULL(pass);
@@ -862,6 +863,10 @@ __cold void bch2_recovery_pass_status_to_text(struct printbuf *out, struct bch_f
 	if (r->current_pass) {
 		prt_printf(out, "Currently running:\t%s (%u)\n",
 			   bch2_recovery_passes[r->current_pass], r->current_pass);
+
+		prt_str(out, "Elapsed:\t");
+		bch2_pr_time_units(out, ktime_get_ns() - r->pass_start_time);
+		prt_newline(out);
 
 		/* Nothing to show for a pass with no estimate of its own size */
 		if (r->progress.total) {
