@@ -420,7 +420,6 @@ int bch2_journal_replay(struct bch_fs *c)
 	u64 end_seq	= c->journal_replay_seq_start;
 	bool immediate_flush = false;
 	size_t accounting_total = 0;
-	struct progress_indicator progress;
 	int ret = 0;
 
 	BUG_ON(!atomic_read(&keys->ref));
@@ -442,7 +441,7 @@ int bch2_journal_replay(struct bch_fs *c)
 	 * Replay accounting keys first: we can't allow the write buffer to
 	 * flush accounting keys until we're done
 	 */
-	bch2_progress_init_count(&progress, "journal replay: accounting", "keys",
+	bch2_progress_init_count(&c->recovery.progress, "journal replay: accounting", "keys",
 				 accounting_total);
 
 	darray_for_each(*keys, k) {
@@ -466,7 +465,7 @@ int bch2_journal_replay(struct bch_fs *c)
 			return ret;
 
 		k->overwritten = true;
-		bch2_progress_update_count(c, &progress);
+		bch2_progress_update_count(c, &c->recovery.progress);
 	}
 
 	set_bit(BCH_FS_accounting_replay_done, &c->flags);
@@ -476,12 +475,12 @@ int bch2_journal_replay(struct bch_fs *c)
 	 * efficient - better locality of btree access -  but some might fail if
 	 * that would cause a journal deadlock.
 	 */
-	bch2_progress_init_count(&progress, "journal replay: sorted pass", "keys",
+	bch2_progress_init_count(&c->recovery.progress, "journal replay: sorted pass", "keys",
 				 keys->nr);
 
 	darray_for_each(*keys, k) {
 		cond_resched();
-		bch2_progress_update_count(c, &progress);
+		bch2_progress_update_count(c, &c->recovery.progress);
 
 		/*
 		 * k->allocated means the key wasn't read in from the journal,
@@ -523,12 +522,12 @@ int bch2_journal_replay(struct bch_fs *c)
 		       sizeof(keys_sorted.data[0]),
 		       journal_sort_seq_cmp, NULL);
 
-	bch2_progress_init_count(&progress, "journal replay: journal-order pass", "keys",
+	bch2_progress_init_count(&c->recovery.progress, "journal replay: journal-order pass", "keys",
 				 keys_sorted.nr);
 
 	darray_for_each(keys_sorted, kp) {
 		cond_resched();
-		bch2_progress_update_count(c, &progress);
+		bch2_progress_update_count(c, &c->recovery.progress);
 
 		struct journal_key *k = *kp;
 

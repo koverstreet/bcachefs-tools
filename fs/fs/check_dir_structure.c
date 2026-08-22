@@ -137,13 +137,12 @@ int bch2_check_subvolume_structure(struct bch_fs *c)
 {
 	CLASS(btree_trans, trans)(c);
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_subvolumes), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_subvolumes), 0);
 
 	return for_each_btree_key_commit(trans, iter,
 				BTREE_ID_subvolumes, POS_MIN, BTREE_ITER_prefetch, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-			bch2_progress_update_iter(trans, &progress, &iter) ?:
+			bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 			check_subvol_path(trans, &iter, k);
 	}));
 }

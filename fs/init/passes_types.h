@@ -2,9 +2,17 @@
 #ifndef _BCACHEFS_RECOVERY_PASSES_TYPES_H
 #define _BCACHEFS_RECOVERY_PASSES_TYPES_H
 
+#include "init/progress.h"
 #include "passes_format.h"
 
 struct bch_fs_recovery {
+	/*
+	 * The running pass's progress, for recovery_status to read. One
+	 * indicator rather than a stack because no pass has two live at once -
+	 * which is what check_reconcile_work_data_btrees() exists to keep true.
+	 */
+	struct progress_indicator progress;
+
 	/* counterpart to c->sb.recovery_passes_required */
 	u64			scheduled_passes_ephemeral;
 

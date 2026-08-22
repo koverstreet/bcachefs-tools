@@ -731,8 +731,7 @@ static int btree_bitmap_gc_btree_level(struct btree_trans *trans,
 
 int bch2_btree_bitmap_gc(struct bch_fs *c)
 {
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, 0, ~0ULL);
+	bch2_progress_init(&c->recovery.progress, __func__, c, 0, ~0ULL);
 
 	scoped_guard(mutex_noio, &c->sb_lock) {
 		guard(rcu)();
@@ -745,7 +744,7 @@ int bch2_btree_bitmap_gc(struct bch_fs *c)
 
 		for (unsigned btree = 0; btree < btree_id_nr_alive(c); btree++) {
 			for (unsigned level = 1; level < BTREE_MAX_DEPTH; level++)
-				try(btree_bitmap_gc_btree_level(trans, &progress, btree, level));
+				try(btree_bitmap_gc_btree_level(trans, &c->recovery.progress, btree, level));
 
 			CLASS(btree_node_iter, iter)(trans, btree, POS_MIN, 0,
 						     bch2_btree_id_root(c, btree)->b->c.level, 0);

@@ -232,8 +232,7 @@ static int check_reconcile_work_phys(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_backpointers), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_backpointers), 0);
 	struct bpos cur_pos = POS_MIN;
 
 	CLASS(btree_iter, bp)(trans, BTREE_ID_backpointers, POS_MIN, BTREE_ITER_prefetch);
@@ -244,7 +243,7 @@ static int check_reconcile_work_phys(struct btree_trans *trans)
 	wb_maybe_flush_init(&last_flushed);
 
 	while (true) {
-		try(bch2_progress_update_iter(trans, &progress, &bp));
+		try(bch2_progress_update_iter(trans, &c->recovery.progress, &bp));
 
 		try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 			      check_reconcile_work_phys_one(trans, &bp, &r_w, &r_h,
@@ -348,8 +347,7 @@ static int check_reconcile_work_btrees(struct btree_trans *trans)
 	struct bch_fs *c = trans->c;
 
 	CLASS(disk_reservation, res)(c);
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, 0, ~0ULL);
+	bch2_progress_init(&c->recovery.progress, __func__, c, 0, ~0ULL);
 
 	for (enum btree_id btree = 0; btree < btree_id_nr_alive(c); btree++) {
 		if (!bch2_btree_id_root(c, btree)->b)
@@ -370,7 +368,7 @@ static int check_reconcile_work_btrees(struct btree_trans *trans)
 
 			try(for_each_btree_key_continue(trans, iter, 0, k, ({
 				bch2_disk_reservation_put(c, &res.r);
-				bch2_progress_update_iter(trans, &progress, &iter) ?:
+				bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 				check_reconcile_work_btree_key(trans, &iter, level, k) ?:
 				bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
 			})));
@@ -393,13 +391,12 @@ static int check_reconcile_btree_bp(struct btree_trans *trans, struct bkey_s_c k
 noinline_for_stack
 static int check_reconcile_btree_bps(struct btree_trans *trans)
 {
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, trans->c, BIT_ULL(BTREE_ID_reconcile_scan), 0);
+	bch2_progress_init(&trans->c->recovery.progress, __func__, trans->c, BIT_ULL(BTREE_ID_reconcile_scan), 0);
 
 	return for_each_btree_key_max(trans, iter, BTREE_ID_reconcile_scan,
 				      POS(1, 0), POS(1, U64_MAX),
 				      BTREE_ITER_prefetch, k, ({
-		bch2_progress_update_iter(trans, &progress, &iter) ?:
+		bch2_progress_update_iter(trans, &trans->c->recovery.progress, &iter) ?:
 		check_reconcile_btree_bp(trans, k);
 	}));
 }
@@ -461,8 +458,7 @@ noinline_for_stack
 static int check_stripe_can_widen(struct btree_trans *trans)
 {
 	struct bch_fs *c = trans->c;
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_stripes), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_stripes), 0);
 
 	CLASS(widen_cache, cache)();
 	try(bch2_widen_cache_init(&cache));
@@ -476,7 +472,7 @@ static int check_stripe_can_widen(struct btree_trans *trans)
 	return for_each_btree_key_commit(trans, iter, BTREE_ID_stripes,
 			POS_MIN, BTREE_ITER_prefetch, k,
 			NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		bch2_progress_update_iter(trans, &progress, &iter) ?:
+		bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 		check_stripe_can_widen_one(trans, &iter, k, &cache, scan_pending);
 	}));
 }
@@ -497,8 +493,7 @@ static int check_reconcile_work_data_btrees(struct btree_trans *trans)
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c,
+	bch2_progress_init(&c->recovery.progress, __func__, c,
 			   BIT_ULL(BTREE_ID_extents)|
 			   BIT_ULL(BTREE_ID_reflink),
 			   0);
@@ -511,7 +506,7 @@ static int check_reconcile_work_data_btrees(struct btree_trans *trans)
 	for (unsigned i = 0; i < ARRAY_SIZE(data_btrees); i++)
 		try(check_reconcile_work_data_btree(trans, data_btrees[i],
 						    &rb_w, &rb_h, &rb_p,
-						    &snapshot_io_opts, &progress, &last_flushed));
+						    &snapshot_io_opts, &c->recovery.progress, &last_flushed));
 
 	return 0;
 }

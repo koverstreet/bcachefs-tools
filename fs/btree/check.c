@@ -833,8 +833,7 @@ static int bch2_gc_btrees(struct bch_fs *c)
 	CLASS(printbuf, buf)();
 	int ret = 0;
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, "check_allocations", c, ~0ULL, ~0ULL);
+	bch2_progress_init(&c->recovery.progress, "check_allocations", c, ~0ULL, ~0ULL);
 
 	enum btree_id ids[BTREE_ID_NR];
 	for (unsigned i = 0; i < BTREE_ID_NR; i++)
@@ -861,7 +860,7 @@ static int bch2_gc_btrees(struct bch_fs *c)
 		if (test_bit(BCH_FS_in_fsck, &c->flags))
 			target_depth = 0;
 
-		ret = bch2_gc_btree(trans, &progress, btree, target_depth, true);
+		ret = bch2_gc_btree(trans, &c->recovery.progress, btree, target_depth, true);
 	}
 
 	bch_err_fn(c, ret);
@@ -1354,8 +1353,7 @@ static int merge_btree_node_one(struct btree_trans *trans,
 
 int bch2_merge_btree_nodes(struct bch_fs *c)
 {
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, ~0ULL, ~0ULL);
+	bch2_progress_init(&c->recovery.progress, __func__, c, ~0ULL, ~0ULL);
 
 	CLASS(btree_trans, trans)(c);
 
@@ -1365,7 +1363,7 @@ int bch2_merge_btree_nodes(struct bch_fs *c)
 		for (unsigned level = 0; level < BTREE_MAX_DEPTH; level++) {
 			CLASS(btree_node_iter, iter)(trans, i, POS_MIN, 0, level, BTREE_ITER_prefetch);
 			while (true) {
-				int ret = lockrestart_do(trans, merge_btree_node_one(trans, &progress,
+				int ret = lockrestart_do(trans, merge_btree_node_one(trans, &c->recovery.progress,
 										     &iter, &merge_count));
 				if (ret < 0)
 					return ret;

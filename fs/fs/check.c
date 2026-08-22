@@ -1594,14 +1594,13 @@ int bch2_check_inodes(struct bch_fs *c)
 	CLASS(btree_trans, trans)(c);
 	CLASS(snapshots_seen, s)();
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_inodes), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_inodes), 0);
 
 	return for_each_btree_key_commit(trans, iter, BTREE_ID_inodes,
 				POS_MIN,
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		bch2_progress_update_iter(trans, &progress, &iter) ?:
+		bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 		check_inode(trans, &iter, k, &snapshot_root, &s);
 	}));
 }
@@ -1945,8 +1944,7 @@ fsck_err:
  */
 int bch2_check_unreachable_inodes(struct bch_fs *c)
 {
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_inodes), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_inodes), 0);
 
 	struct subvol_root_seen seen = {};
 
@@ -1955,7 +1953,7 @@ int bch2_check_unreachable_inodes(struct bch_fs *c)
 				POS_MIN,
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		bch2_progress_update_iter(trans, &progress, &iter) ?:
+		bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 		check_unreachable_inode(trans, &iter, k, &seen);
 	}));
 }
@@ -2647,17 +2645,16 @@ int bch2_check_dirents(struct bch_fs *c)
 	CLASS(snapshots_seen, s)();
 	CLASS(inode_walker, dir)();
 	CLASS(inode_walker, target)();
-	struct progress_indicator progress;
 	bool need_second_pass = false, did_second_pass = false;
 	int ret;
 again:
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_dirents), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_dirents), 0);
 
 	ret = for_each_btree_key_commit(trans, iter, BTREE_ID_dirents,
 				POS(BCACHEFS_ROOT_INO, 0),
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-			bch2_progress_update_iter(trans, &progress, &iter) ?:
+			bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 			check_dirent(trans, &iter, k, &hash_info, &dir, &target, &s,
 				     &need_second_pass);
 		}));
@@ -2808,8 +2805,7 @@ int bch2_check_xattrs(struct bch_fs *c)
 	CLASS(snapshots_seen, s)();
 	CLASS(inode_walker, inode)();
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_xattrs), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_xattrs), 0);
 
 	int ret = for_each_btree_key_commit(trans, iter, BTREE_ID_xattrs,
 			POS(BCACHEFS_ROOT_INO, 0),
@@ -2817,7 +2813,7 @@ int bch2_check_xattrs(struct bch_fs *c)
 			k,
 			NULL, NULL,
 			BCH_TRANS_COMMIT_no_enospc, ({
-		bch2_progress_update_iter(trans, &progress, &iter) ?:
+		bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 		check_xattr(trans, &iter, k, &hash_info, &s, &inode);
 	}));
 	return ret;

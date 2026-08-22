@@ -606,8 +606,7 @@ static int check_btree_alloc_iter(struct btree_trans *trans,
 
 static int check_btree_alloc(struct btree_trans *trans)
 {
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, trans->c, BIT_ULL(BTREE_ID_alloc), 0);
+	bch2_progress_init(&trans->c->recovery.progress, __func__, trans->c, BIT_ULL(BTREE_ID_alloc), 0);
 
 	CLASS(btree_iter, iter)(trans, BTREE_ID_alloc, POS_MIN, BTREE_ITER_prefetch);
 	CLASS(btree_iter, discard_iter)(trans, BTREE_ID_need_discard, POS_MIN, BTREE_ITER_prefetch);
@@ -625,7 +624,7 @@ static int check_btree_alloc(struct btree_trans *trans)
 						       &discard_iter,
 						       &freespace_iter,
 						       &bucket_gens_iter,
-						       &progress,
+						       &trans->c->recovery.progress,
 						       &last_flushed))))
 		;
 
@@ -763,14 +762,13 @@ int bch2_check_alloc_to_lru_refs(struct bch_fs *c)
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_alloc), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_alloc), 0);
 
 	CLASS(btree_trans, trans)(c);
 	return for_each_btree_key_commit(trans, iter, BTREE_ID_alloc,
 				POS_MIN, BTREE_ITER_prefetch, k,
 				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-			bch2_progress_update_iter(trans, &progress, &iter) ?:
+			bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 			wb_maybe_flush_inc(&last_flushed) ?:
 			bch2_check_alloc_to_lru_ref(trans, &iter, &last_flushed);
 	}))?: bch2_check_stripe_refs(trans);

@@ -313,8 +313,7 @@ int bch2_check_lrus(struct bch_fs *c)
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_lru), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_lru), 0);
 
 	CLASS(btree_trans, trans)(c);
 	struct bpos pos = POS_MIN;
@@ -340,7 +339,7 @@ int bch2_check_lrus(struct bch_fs *c)
 					lru_start(lru_id), lru_end(lru_id),
 					BTREE_ITER_prefetch, k,
 					NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-			bch2_progress_update_iter(trans, &progress, &iter) ?:
+			bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 			wb_maybe_flush_inc(&last_flushed) ?:
 			bch2_check_lru_key(trans, &iter, k, &last_flushed);
 		}));

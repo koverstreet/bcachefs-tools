@@ -424,8 +424,7 @@ static int bch2_check_backpointer_has_valid_bucket(struct btree_trans *trans, st
 /* verify that every backpointer has a corresponding alloc key */
 int bch2_check_btree_backpointers(struct bch_fs *c)
 {
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, BIT_ULL(BTREE_ID_backpointers), 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, BIT_ULL(BTREE_ID_backpointers), 0);
 
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
@@ -434,7 +433,7 @@ int bch2_check_btree_backpointers(struct bch_fs *c)
 	return for_each_btree_key_commit(trans, iter,
 			BTREE_ID_backpointers, POS_MIN, 0, k,
 			NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
-		bch2_progress_update_iter(trans, &progress, &iter) ?:
+		bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 		bch2_check_backpointer_has_valid_bucket(trans, k, &last_flushed);
 	}));
 }
@@ -806,8 +805,7 @@ static int bch2_check_extents_to_backpointers_pass(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, "extents_to_backpointers", trans->c,
+	bch2_progress_init(&trans->c->recovery.progress, "extents_to_backpointers", trans->c,
 		btree_has_data_ptrs_mask,
 		~0ULL);
 	CLASS(disk_reservation, res)(c); /* extents btree updates always require a disk res passed in */
@@ -825,7 +823,7 @@ static int bch2_check_extents_to_backpointers_pass(struct btree_trans *trans,
 			CLASS(btree_node_iter, iter)(trans, btree_id, POS_MIN, 0, level, BTREE_ITER_prefetch);
 
 			try(for_each_btree_key_continue(trans, iter, 0, k, ({
-				bch2_progress_update_iter(trans, &progress, &iter) ?:
+				bch2_progress_update_iter(trans, &trans->c->recovery.progress, &iter) ?:
 				wb_maybe_flush_inc(&s->last_flushed) ?:
 				check_extent_to_backpointers(trans, s, btree_id, level, k) ?:
 				bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
@@ -1293,19 +1291,18 @@ static int bch2_check_backpointers_to_extents_pass(struct btree_trans *trans,
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, "backpointers_to_extents", trans->c,
+	bch2_progress_init(&trans->c->recovery.progress, "backpointers_to_extents", trans->c,
 			   BIT_ULL(BTREE_ID_backpointers)|
 			   BIT_ULL(BTREE_ID_stripe_backpointers), 0);
 
 	try(backpointer_scan_for_each(trans, iter, BTREE_ID_backpointers,
 				      POS_MIN, POS_MAX,
-			&last_flushed, &progress, bp,
+			&last_flushed, &trans->c->recovery.progress, bp,
 		check_one_backpointer(trans, start, end, bp, &last_flushed)));
 
 	try(backpointer_scan_for_each(trans, iter, BTREE_ID_stripe_backpointers,
 				      POS_MIN, POS_MAX,
-			&last_flushed, &progress, bp,
+			&last_flushed, &trans->c->recovery.progress, bp,
 		check_one_backpointer(trans, start, end, bp, &last_flushed)));
 
 	return 0;

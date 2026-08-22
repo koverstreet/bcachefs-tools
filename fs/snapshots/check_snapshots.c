@@ -1643,8 +1643,7 @@ int bch2_reconstruct_snapshots(struct bch_fs *c)
 	struct snapshot_tree_reconstruct r __cleanup(snapshot_tree_reconstruct_exit) = {};
 	int ret = 0;
 
-	struct progress_indicator progress;
-	bch2_progress_init(&progress, __func__, c, btree_has_snapshots_mask, 0);
+	bch2_progress_init(&c->recovery.progress, __func__, c, btree_has_snapshots_mask, 0);
 
 	for (unsigned btree = 0; btree < BTREE_ID_NR; btree++) {
 		if (btree_type_has_snapshots(btree)) {
@@ -1652,7 +1651,7 @@ int bch2_reconstruct_snapshots(struct bch_fs *c)
 
 			try(for_each_btree_key(trans, iter, btree, POS_MIN,
 					BTREE_ITER_all_snapshots|BTREE_ITER_prefetch, k, ({
-				bch2_progress_update_iter(trans, &progress, &iter) ?:
+				bch2_progress_update_iter(trans, &c->recovery.progress, &iter) ?:
 				get_snapshot_trees(c, &r, k.k->p);
 			})));
 
