@@ -194,8 +194,11 @@ fn counts_as_missing(m: &c::bch_member, sb: *mut c::bch_sb, idx: u32) -> bool {
 
 /// @extra reaches a terminal and nothing else: the agent protocol's Message=
 /// is one line.
+///
+/// None is the question having stopped applying, which nothing here can
+/// produce yet - no caller passes a watch.
 fn ask(p: &Prompt, choices: &[Choice<Answer>], prompt: &str, extra: Option<&str>,
-       uuid: &str) -> Result<Answer> {
+       uuid: &str) -> Result<Option<Answer>> {
     p.put(&Question {
         prompt,
         detail:  extra,
@@ -203,7 +206,7 @@ fn ask(p: &Prompt, choices: &[Choice<Answer>], prompt: &str, extra: Option<&str>
         silence: Answer::No,
         uuid,
         timeout: Some(PROMPT_TIMEOUT),
-    })
+    }, None)
 }
 
 pub struct MountOpts {
@@ -249,7 +252,7 @@ impl MountOpts {
                       Mount anyway?";
 
         if ask(&retry.prompt, FORCE_CHOICES, prompt, None, &retry.uuid)?
-            != Answer::Force {
+            .unwrap_or(Answer::No) != Answer::Force {
             return Ok(None);
         }
 
@@ -316,7 +319,8 @@ pub fn resolve_mount_opts(
         return Ok(MountOpts::plain(fs_opts));
     };
 
-    let answer = ask(&p, DEGRADED_CHOICES, &q, devs.as_deref(), &uuid)?;
+    let answer = ask(&p, DEGRADED_CHOICES, &q, devs.as_deref(), &uuid)?
+        .unwrap_or(Answer::No);
 
     // warn, not info: the default verbosity is Warn, and this is a decision
     // about the user's data that we made for them. Otherwise all they see is

@@ -15,13 +15,14 @@
 //! ICRNL/ICANON repair for an unconfigured initramfs console, zeroizing, and
 //! keyring caching.
 
-use std::io::{stdin, IsTerminal};
-use std::os::fd::AsFd;
+use std::io::{stdin, IsTerminal, Read};
+use std::os::fd::{AsFd, BorrowedFd, RawFd};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
+use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use bcachefs_kernel::c::bch_sb_handle;
 use log::debug;
 
@@ -66,12 +67,8 @@ pub struct Question<'a, A> {
     /// capitalised in the summary.
     pub silence: A,
     pub uuid: &'a str,
-    /// How long to wait for a person, or `None` to wait indefinitely.
-    ///
-    /// Waiting forever is a legitimate thing to want: someone whose root is
-    /// encrypted, or degraded, may prefer a boot that stops and waits over one
-    /// that gives up and fails while they are fetching the disk. It is what
-    /// `--timeout=0` means to systemd-ask-password, and this is that.
+    /// `None` waits indefinitely - what `--timeout=0` means to
+    /// systemd-ask-password.
     pub timeout: Option<Duration>,
 }
 
@@ -119,6 +116,24 @@ struct Ask<'a> {
     timeout: Option<Duration>,
 }
 
+/// Something that can answer a question by happening.
+///
+/// Someone asked whether to mount without a disk, who responds by plugging the
+/// disk in, has answered.
+pub trait Watch {
+    fn raw_fd(&self) -> RawFd;
+    /// Readiness alone is not an answer: any block device arriving wakes the
+    /// poll, so this decides whether *this* one settled anything.
+    fn moot(&mut self) -> bool;
+}
+
+enum Answer {
+    Said(String),
+    /// Timed out, declined, or nobody was there.
+    Silence,
+    Moot,
+}
+
 /// Copy so one detection serves a later question too - see degraded.rs's Retry.
 #[derive(Clone, Copy)]
 pub enum Prompt {
@@ -162,9 +177,15 @@ impl Prompt {
 
     /// Put the question and interpret the reply.
     ///
-    /// Always one of the question's own answers, silence included, so a caller
-    /// never has to decide what an unrecognised reply meant.
-    pub fn put<A: Copy + PartialEq>(&self, q: &Question<'_, A>) -> Result<A> {
+    /// `None` means the question stopped applying while it was up - see
+    /// [`Watch`]. Anything else resolves to one of the question's own answers,
+    /// including silence, so a caller never has to decide what an unrecognised
+    /// reply meant.
+    pub fn put<A: Copy + PartialEq>(
+        &self,
+        q: &Question<'_, A>,
+        watch: Option<&mut dyn Watch>,
+    ) -> Result<Option<A>> {
         let ask = Ask {
             prompt:  q.prompt,
             detail:  q.detail,
@@ -174,12 +195,14 @@ impl Prompt {
             timeout: q.timeout,
         };
 
-        let reply = match self {
-            Prompt::Agent    => ask_via_agent(&ask)?,
-            Prompt::Terminal => Some(ask_on_terminal(&ask)?),
-        };
-
-        Ok(reply.map_or(q.silence, |reply| q.parse(&reply)))
+        Ok(match match self {
+            Prompt::Agent    => ask_via_agent(&ask, watch),
+            Prompt::Terminal => ask_on_terminal(&ask, watch),
+        }? {
+            Answer::Said(reply) => Some(q.parse(&reply)),
+            Answer::Silence     => Some(q.silence),
+            Answer::Moot        => None,
+        })
     }
 }
 
@@ -221,10 +244,70 @@ pub fn stdin_is_dev_null() -> bool {
         && rustix::fs::minor(stat.st_rdev) == 3
 }
 
+/// Block until @fd is readable, the deadline passes, or @watch says the
+/// question no longer applies.
+///
+/// A watch firing is not by itself an answer: any block device arriving wakes
+/// the poll, so ask the caller whether *this* one settled anything and go back
+/// to waiting if it did not.
+fn wait_for_answer(
+    fd: BorrowedFd<'_>,
+    timeout: Option<Duration>,
+    mut watch: Option<&mut dyn Watch>,
+) -> Result<Answer> {
+    let start = Instant::now();
+
+    loop {
+        let deadline = timeout.map(|t| t.checked_sub(start.elapsed()).unwrap_or_default());
+
+        // SAFETY: the watch outlives this call, so its descriptor does too.
+        let watched = watch.as_ref()
+            .map(|w| unsafe { BorrowedFd::borrow_raw(w.raw_fd()) });
+
+        let mut fds = match watched.as_ref() {
+            Some(w) => vec![PollFd::new(&fd, PollFlags::IN), PollFd::new(w, PollFlags::IN)],
+            None => vec![PollFd::new(&fd, PollFlags::IN)],
+        };
+
+        let spec = deadline.map(|d| Timespec {
+            tv_sec:  d.as_secs() as _,
+            tv_nsec: d.subsec_nanos() as _,
+        });
+
+        if poll(&mut fds, spec.as_ref())? == 0 {
+            debug!("nobody answered within the timeout");
+            return Ok(Answer::Silence);
+        }
+
+        // Read the readiness out before touching @watch again: the poll set
+        // borrows its fd.
+        let answered = fds[0].revents().intersects(PollFlags::IN | PollFlags::HUP);
+        let stirred  = fds.len() > 1 && fds[1].revents().contains(PollFlags::IN);
+        drop(fds);
+
+        if answered {
+            return Ok(Answer::Said(String::new()));
+        }
+
+        if stirred {
+            if let Some(w) = watch.as_mut() {
+                if w.moot() {
+                    debug!("the question stopped applying while it was up");
+                    return Ok(Answer::Moot);
+                }
+            }
+        }
+    }
+}
+
 /// --echo=yes because this isn't a password: the default is `masked`, an
 /// asterisk per character plus a lock-and-key emoji.
-fn ask_via_agent(ask: &Ask<'_>) -> Result<Option<String>> {
-    let out = Command::new("systemd-ask-password")
+///
+/// Spawned rather than run to completion so it can be killed: with a watch,
+/// the question can stop applying while the agent is still displaying it, and
+/// leaving it on someone's screen after the fact is worse than not asking.
+fn ask_via_agent(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer> {
+    let mut child = Command::new("systemd-ask-password")
         .arg("--no-tty")
         .arg("--echo=yes")
         .arg("--icon=drive-harddisk")
@@ -234,18 +317,35 @@ fn ask_via_agent(ask: &Ask<'_>) -> Result<Option<String>> {
         .arg("-n")
         .arg(format!("{} {}", ask.prompt, ask.brief))
         .stdin(Stdio::inherit())
+        .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
-        .output()?;
+        .spawn()?;
 
-    if !out.status.success() {
-        debug!("systemd-ask-password declined or timed out");
-        return Ok(None);
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+
+    // systemd-ask-password enforces its own --timeout, so let it: passing None
+    // here means we wait on the child rather than racing it.
+    let waited = wait_for_answer(stdout.as_fd(), None, watch);
+
+    match waited? {
+        Answer::Moot => {
+            let _ = child.kill();
+            let _ = child.wait();
+            Ok(Answer::Moot)
+        }
+        _ => {
+            let mut buf = String::new();
+            stdout.read_to_string(&mut buf)?;
+            if !child.wait()?.success() {
+                debug!("systemd-ask-password declined or timed out");
+                return Ok(Answer::Silence);
+            }
+            Ok(Answer::Said(buf))
+        }
     }
-
-    Ok(Some(String::from_utf8_lossy(&out.stdout).into_owned()))
 }
 
-fn ask_on_terminal(ask: &Ask<'_>) -> Result<String> {
+fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer> {
     use std::io::{stdout, Write};
 
     println!("{}", ask.prompt);
@@ -258,8 +358,17 @@ fn ask_on_terminal(ask: &Ask<'_>) -> Result<String> {
     print!("{} ", ask.brief);
     stdout().flush()?;
 
-    let mut answer = String::new();
-    stdin().read_line(&mut answer)?;
-
-    Ok(answer)
+    match wait_for_answer(stdin().as_fd(), ask.timeout, watch)? {
+        Answer::Said(_) => {
+            let mut answer = String::new();
+            stdin().read_line(&mut answer)?;
+            Ok(Answer::Said(answer))
+        }
+        // Leave the half-written prompt behind a newline rather than letting
+        // whatever comes next start mid-line.
+        other => {
+            println!();
+            Ok(other)
+        }
+    }
 }
