@@ -10,7 +10,7 @@ use std::{
 use anyhow::{ensure, Result};
 use bcachefs_kernel::c::{bch_opts, bch_sb_handle};
 use bcachefs_kernel::errcode::BchError;
-use bcachefs_kernel::{opt_get, path_to_cstr};
+use bcachefs_kernel::{c, opt_get, opt_set, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info, warn};
 use uuid::Uuid;
@@ -423,7 +423,25 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOp
 
 #[cfg(test)]
 mod tests {
-    use super::parse_mountflag_options;
+    use super::{is_splitbrain, parse_mountflag_options};
+    use bcachefs_kernel::c;
+    use bcachefs_kernel::errcode::BchError;
+
+    /// The prompt only happens if this recognises the error, and a failure to
+    /// recognise it is silent - mount just refuses, exactly as it would with
+    /// no split brain at all. So pin the two shapes it has to survive:
+    /// straight through `?`, and behind a context someone adds later.
+    #[test]
+    fn splitbrain_is_recognised_through_anyhow() {
+        let sb = || BchError::from_errcode(c::bch_errcode::BCH_ERR_device_splitbrain);
+
+        assert!(is_splitbrain(&anyhow::Error::from(sb())));
+        assert!(is_splitbrain(&anyhow::Error::from(sb()).context("scanning for devices")));
+
+        let other = BchError::from_errcode(c::bch_errcode::BCH_ERR_device_has_been_removed);
+        assert!(!is_splitbrain(&anyhow::Error::from(other)));
+        assert!(!is_splitbrain(&anyhow::anyhow!("not a bcachefs error at all")));
+    }
 
     #[test]
     fn parse_mountflag_options_splits_kernel_and_fs_options() {
@@ -467,6 +485,55 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
     KeyHandle::new(&passphrase_correct, Keyring::User)
 }
 
+/// anyhow's downcast_ref searches the context chain, so this survives someone
+/// wrapping the scan path in a `.context()`. Worth a test rather than an
+/// assumption: failing to recognise it is silent - the mount just refuses,
+/// exactly as it does when there is no split brain.
+fn is_splitbrain(err: &anyhow::Error) -> bool {
+    err.downcast_ref::<BchError>()
+        .is_some_and(|e| e.matches(c::bch_errcode::BCH_ERR_device_splitbrain))
+}
+
+/// Scan for the filesystem's devices, and if its history has forked, ask.
+///
+/// The check runs deep in the scan - it has to, before bch2_sbs_filter_dead()
+/// frees the divergent superblocks - but the *decision* cannot, because the
+/// scan re-runs on every device arrival while waiting for members: a question
+/// there would be asked repeatedly and the answer could not persist. So the
+/// scan reports and refuses, and the question is put here, once.
+///
+/// Consenting leaves the diverged devices out of the mount, which is the
+/// missing-device case, so it answers the degraded question too.
+fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
+    -> Result<Vec<(std::path::PathBuf, bch_sb_handle)>>
+{
+    let err = match device_scan::scan_sbs(dev, opts) {
+        Ok(sbs) => return Ok(sbs),
+        Err(e) => e,
+    };
+
+    if !is_splitbrain(&err) {
+        return Err(err);
+    }
+
+    // The report is already out - the scan logged it on the way to failing.
+    // Re-scanning with the check off gives us the surviving side, which is
+    // both what to name in the question and what to mount if they say yes.
+    opt_set!(opts, no_splitbrain_check, 1);
+    let sbs = device_scan::scan_sbs(dev, opts)?;
+
+    let Some((_, sb)) = sbs.first() else {
+        return Err(err);
+    };
+
+    if !crate::splitbrain::ask(sb)? {
+        return Err(err);
+    }
+
+    opt_set!(opts, degraded, c::bch_degraded_actions::BCH_DEGRADED_yes as u8);
+    Ok(sbs)
+}
+
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     if cli.no_mtab {
         debug!("ignoring -n/--no-mtab; mount.bcachefs does not update /etc/mtab");
@@ -476,10 +543,10 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     }
 
     let parsed = parse_mountflag_options(&cli.options);
-    let opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)
+    let mut opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)
         .unwrap_or_default();
 
-    let sbs = device_scan::scan_sbs(&cli.dev, &opts)?;
+    let sbs = scan_or_ask_splitbrain(&cli.dev, &mut opts)?;
 
     ensure!(!sbs.is_empty(), "No device(s) to mount specified");
 

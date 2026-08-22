@@ -19,6 +19,10 @@
 
 use std::path::{Path, PathBuf};
 
+use anyhow::Result;
+use log::warn;
+
+use crate::prompt::{fs_name, Choice, Prompt, Question, PROMPT_TIMEOUT};
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::sb::members;
@@ -126,10 +130,11 @@ pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
     let mut out = String::new();
     let n = divergent.len();
     let plural = if n == 1 { "device has" } else { "devices have" };
+    let other = other_side(sbs, divergent);
 
     let _ = writeln!(
         out,
-        "Split brain: {n} {plural} writes this filesystem never saw."
+        "Split brain: {n} {plural} writes {other} never saw."
     );
 
     for d in divergent {
@@ -146,7 +151,7 @@ pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
         if d.expected_seq != 0 {
             let _ = writeln!(
                 out,
-                "      the rest of the filesystem last recorded it at seq {}",
+                "      {other} believed it to be at seq {}",
                 d.expected_seq
             );
         }
@@ -157,7 +162,7 @@ pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
         let _ = writeln!(out);
         let _ = writeln!(
             out,
-            "  The rest of the filesystem was last written {}, seq {}.",
+            "  {other} last written {}, seq {}.",
             datetime(write_time(best)),
             seq(best)
         );
@@ -167,15 +172,112 @@ pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
     let _ = writeln!(
         out,
         "Both sides hold real data and nothing can merge them, so continuing \
-         with one discards the other's writes. Refusing rather than choosing \
-         for you."
+         with one leaves the other's writes behind."
     );
+
+    // Both routes out, named, whether or not anyone is here to be asked - this
+    // is also what someone reads in the journal after a boot refused.
+    let _ = writeln!(out);
+    for d in divergent {
+        let _ = writeln!(
+            out,
+            "  To continue with {}'s history instead, mount naming only its devices.",
+            name(&d.path)
+        );
+    }
     let _ = writeln!(
         out,
-        "Mount the side you want by naming only its devices, then \
-         `bcachefs device remove` and re-add the others to reintegrate them - \
-         which rewrites them, discarding what they hold."
+        "  To rejoin a diverged device once mounted: `bcachefs device remove` it \
+         and add it back, which rewrites it and discards what it holds."
     );
 
     out
+}
+
+/// Terminal only, and not a limitation to fix later: a destructive choice may
+/// only be offered where its evidence fits, and the evidence here - which
+/// device, written when, how far each side got - does not fit the agent
+/// protocol's one-line `Message=`. Offering the choice without it is worse
+/// than refusing, because they will take the default.
+///
+/// Yes erases nothing: the diverged devices are left out of this mount and
+/// untouched on disk, so the other history is still there to mount afterwards.
+/// That is what makes it askable at all. Rewriting a device so it rejoins
+/// needs a mounted filesystem, and is left to the user via [`report`].
+pub fn ask(sb: &bch_sb_handle) -> Result<bool> {
+    let Some(p) = Prompt::detect() else {
+        warn!("no way to ask which history to continue with; refusing");
+        return Ok(false);
+    };
+
+    if matches!(p, Prompt::Agent) {
+        warn!("cannot show two histories through a one-line prompt; refusing");
+        return Ok(false);
+    }
+
+    let name = fs_name(sb);
+    let uuid = sb.sb().uuid().hyphenated().to_string();
+
+    // Moot cannot happen: a device arriving does not un-diverge anything, so
+    // no watch is passed.
+    Ok(p.put(&Question {
+        prompt:  &format!("Continue with {name}'s surviving history?"),
+        detail:  None,
+        choices: CHOICES,
+        silence: false,
+        uuid:    &uuid,
+        timeout: Some(PROMPT_TIMEOUT),
+    }, None)?.unwrap_or(false))
+}
+
+/// Only an explicit `c` continues, and note what is *not* here: `y`.
+///
+/// This is not a yes/no. Someone answering a prompt they did not read out of
+/// habit should not thereby choose which of two histories to keep - so `y`
+/// matches nothing and falls to silence, which refuses.
+const CHOICES: &[Choice<bool>] = &[
+    Choice { key: 'c', aliases: &["continue"], short: "continue",
+             blurb: "continue, leaving the diverged device(s) out of this mount",
+             answer: true },
+    Choice { key: 'n', aliases: &["no"], short: "",
+             blurb: "don't mount", answer: false },
+];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(reply: &str) -> bool {
+        Question {
+            prompt: "", detail: None, choices: CHOICES,
+            silence: false, uuid: "", timeout: None,
+        }.parse(reply)
+    }
+
+    #[test]
+    fn only_an_explicit_c_continues() {
+        for yes in ["c", "C", "continue", "Continue", " c ", "c\n"] {
+            assert!(parse(yes), "{yes:?} should continue");
+        }
+        // "" is a bare Enter, and "y" is the habit this question must not honour.
+        for no in ["", " ", "n", "N", "no", "y", "Y", "yes", "f", "very", "cc", "x"] {
+            assert!(!parse(no), "{no:?} must not continue");
+        }
+    }
+}
+
+/// What to call the side that is not diverging.
+///
+/// "The rest of the filesystem" reads fine when nine devices agree and one does
+/// not. With two devices there is no rest - there are two halves, and which one
+/// counts as "the filesystem" is the arbitrary newest-wins pick that
+/// [`authoritative`] exists to warn about. Naming the device instead of
+/// implying a verdict keeps the prose as neutral as the code.
+fn other_side(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> String {
+    let surviving = sbs.len() - divergent.len();
+
+    match (surviving, authoritative(sbs)) {
+        (1, Some(i)) => name(&sbs[i].0),
+        _ => "the rest of the filesystem".to_string(),
+    }
 }
