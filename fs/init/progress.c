@@ -17,6 +17,7 @@ void bch2_progress_init(struct progress_indicator *s,
 	memset(s, 0, sizeof(*s));
 
 	s->msg = msg ? strip_bch2(msg) : NULL;
+	s->units = "nodes";
 	s->next_print = jiffies + HZ * 10;
 
 	/* This is only an estimation: nodes can have different replica counts */
@@ -42,7 +43,7 @@ void bch2_progress_init(struct progress_indicator *s,
 
 		/* Better to estimate as 0 than the total node count */
 		if (inner_btree_id_mask & BIT_ULL(i))
-			s->nodes_total += v.inner_nodes;
+			s->total += v.inner_nodes;
 
 		if (!(leaf_btree_id_mask & BIT_ULL(i)))
 			continue;
@@ -52,10 +53,23 @@ void bch2_progress_init(struct progress_indicator *s,
 		 * with un-upgraded accounting info (missing some counters).
 		 */
 		if (v.total_nodes != 0)
-			s->nodes_total += v.total_nodes - v.inner_nodes;
+			s->total += v.total_nodes - v.inner_nodes;
 		else
-			s->nodes_total += div_u64(v.disk_sectors, expected_node_disk_sectors);
+			s->total += div_u64(v.disk_sectors, expected_node_disk_sectors);
 	}
+}
+
+void bch2_progress_init_count(struct progress_indicator *s,
+			      const char *msg,
+			      const char *units,
+			      u64 total)
+{
+	memset(s, 0, sizeof(*s));
+
+	s->msg		= msg ? strip_bch2(msg) : NULL;
+	s->units	= units;
+	s->total	= total;
+	s->next_print	= jiffies + HZ * 10;
 }
 
 static inline bool progress_update_p(struct progress_indicator *s)
@@ -65,6 +79,17 @@ static inline bool progress_update_p(struct progress_indicator *s)
 	if (ret)
 		s->next_print = jiffies + HZ * 10;
 	return ret;
+}
+
+static void progress_maybe_print(struct bch_fs *c, struct progress_indicator *s)
+{
+	if (s->silent || !s->msg || !progress_update_p(s))
+		return;
+
+	CLASS(printbuf, buf)();
+	prt_printf(&buf, "%s ", s->msg);
+	bch2_progress_to_text(&buf, s);
+	bch_info(c, "%s", buf.buf);
 }
 
 int bch2_progress_update_iter(struct btree_trans *trans,
@@ -82,26 +107,33 @@ int bch2_progress_update_iter(struct btree_trans *trans,
 
 	struct bbpos pos = BBPOS(b->c.btree_id, b->key.k.p);
 
-	s->nodes_seen  += b != s->last_node && bbpos_cmp(pos, s->pos) > 0;
+	s->seen  += b != s->last_node && bbpos_cmp(pos, s->pos) > 0;
 	s->last_node	= b;
 	s->pos		= pos;
 
-	if (!s->silent && s->msg && progress_update_p(s)) {
-		CLASS(printbuf, buf)();
-		prt_printf(&buf, "%s ", s->msg);
-		bch2_progress_to_text(&buf, s);
-		bch_info(c, "%s", buf.buf);
-	}
+	progress_maybe_print(c, s);
 
 	return 0;
 }
 
+void bch2_progress_update_count(struct bch_fs *c, struct progress_indicator *s)
+{
+	s->seen++;
+	progress_maybe_print(c, s);
+}
+
 __cold void bch2_progress_to_text(struct printbuf *out, struct progress_indicator *s)
 {
-	unsigned percent = s->nodes_total
-		? div64_u64(s->nodes_seen * 100, s->nodes_total)
+	unsigned percent = s->total
+		? div64_u64(s->seen * 100, s->total)
 		: 0;
-	prt_printf(out, "%d%%, done %llu/%llu nodes, at ",
-		   percent, s->nodes_seen, s->nodes_total);
+	prt_printf(out, "%d%%, done %llu/%llu %s",
+		   percent, s->seen, s->total, s->units);
+
+	/* No node means no position: a counter-based indicator, or nothing seen yet */
+	if (!s->last_node)
+		return;
+
+	prt_str(out, ", at ");
 	bch2_bbpos_to_text(out, s->pos);
 }

@@ -17,10 +17,11 @@
 
 struct progress_indicator {
 	const char		*msg;
+	const char		*units;
 	struct bbpos		pos;
 	unsigned long		next_print;
-	u64			nodes_seen;
-	u64			nodes_total;
+	u64			seen;
+	u64			total;
 	struct btree		*last_node;
 	bool			silent;
 };
@@ -31,9 +32,21 @@ void bch2_progress_init(struct progress_indicator *s,
 			      u64 leaf_btree_id_mask,
 			      u64 inner_btree_id_mask);
 
+/*
+ * For work that isn't a btree walk: no node to count and no position to report,
+ * so the caller supplies the total and counts its own units. Journal replay
+ * goes through a sorted array of keys.
+ */
+void bch2_progress_init_count(struct progress_indicator *s,
+			      const char *msg,
+			      const char *units,
+			      u64 total);
+
 int bch2_progress_update_iter(struct btree_trans *,
 			      struct progress_indicator *,
 			      struct btree_iter *);
+
+void bch2_progress_update_count(struct bch_fs *, struct progress_indicator *);
 
 void bch2_progress_to_text(struct printbuf *, struct progress_indicator *);
 
