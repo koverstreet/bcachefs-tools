@@ -913,24 +913,37 @@ requires every device to be present, this is a race: the mount can fail
 reporting missing devices even though they are all attached, simply because
 some had not been probed yet when the mount was attempted.
 
-bcachefs-tools ships a templated systemd service to close this race,
-\texttt{bcachefs-wait-devices@.service}, which runs \texttt{bcachefs
-wait-devices UUID=<uuid>}. It uses udev to watch the block subsystem and does
-not complete until every device belonging to the filesystem has been
-initialized. Make the mount depend on it by adding to the fstab entry's mount
-options
+Nothing needs to be configured for this. \texttt{mount.bcachefs} closes the
+race itself: when it finds fewer members than the superblock says exist, it
+waits for the rest to appear rather than failing, for up to
+\texttt{missing\_dev\_timeout} (30 seconds by default). The option can also be
+formatted into the filesystem, in which case it applies with no \texttt{-o} at
+all.
+
+What happens when the wait expires is governed by \texttt{degraded}. With
+\texttt{degraded=ask}, the default, the mount says which devices are absent and
+asks whether to continue without them---on the console, or through
+\texttt{systemd-ask-password} during a boot with no console. If there is
+nowhere to ask, it refuses, because mounting a filesystem short of a device is
+a decision about data and taking it by default is how redundancy is lost
+quietly. \texttt{degraded=yes} and \texttt{degraded=no} answer in advance.
+
+\paragraph{The obsolete wait service.} Earlier versions shipped
+\texttt{bcachefs-wait-devices@.service} for this, and documented adding
 \begin{quote} \begin{verbatim}
 x-systemd.requires=bcachefs-wait-devices@<uuid>.service
 \end{verbatim} \end{quote}
-where \texttt{<uuid>} is the filesystem UUID---the \texttt{@} instance is passed
-through to \texttt{wait-devices} as the UUID to wait for. systemd then holds the
-mount until all of the filesystem's devices have appeared.
+to the fstab entry. Do not add this to new entries. Besides being redundant,
+it was harmful: the service had no timeout of its own, so a device that was
+never coming back blocked it until systemd's \texttt{DefaultTimeoutStartSec}
+killed the unit and failed the mount job---ninety seconds and then an
+emergency shell, for exactly the case the prompt above exists to handle. The
+dependency pre-empted the code that could have recovered the boot.
 
-Because the service waits for \emph{every} member device, it should not be
-combined with \texttt{-o degraded} when a device is permanently missing: the
-service would never complete and the mount would time out. Use the wait service
-for the normal, all-devices-present case, and \texttt{degraded} without the
-requirement when intentionally mounting a filesystem that is missing a device.
+Existing entries are safe to leave alone and safe to remove. The command is
+now a no-op that succeeds immediately, so the unit is satisfied at once and the
+mount proceeds to do its own waiting; the unit and the command are both kept
+solely so that fstab entries written against the old advice keep booting.
 
 \subsection{Monitoring}
 

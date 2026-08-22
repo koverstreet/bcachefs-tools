@@ -1,178 +1,106 @@
-use std::{
-    collections::HashSet,
-    ffi::OsStr,
-    os::fd::{AsRawFd, BorrowedFd},
-    path::{Path, PathBuf},
-};
+//! `bcachefs wait-devices` - retained, and deliberately does nothing.
+//!
+//! It existed for `bcachefs-wait-devices@.service`, which fstab entries could
+//! depend on via `x-systemd.requires=` so that a multi-device mount was not
+//! attempted before udev had probed every member. mount.bcachefs now waits for
+//! its own members (see [`crate::device_scan`] and the `missing_dev_timeout`
+//! option), so the race it closed is closed a second time, one layer down.
+//!
+//! Which would make it merely redundant. It is worse than that: the wait had
+//! no deadline of its own - `poll()` with a NULL timeout - so a member that
+//! was never coming back blocked until systemd's DefaultTimeoutStartSec killed
+//! the unit and failed the mount job. Ninety seconds, then an emergency shell,
+//! for precisely the case the degraded prompt exists to handle. A dependency
+//! meant to protect the boot pre-empted the code that could have saved it.
+//!
+//! So the command stays and succeeds immediately. It is the *command* that has
+//! to be the no-op rather than the unit: the unit ships as a template, and
+//! anyone who copied it into /etc/systemd/system/ to edit owns their copy
+//! forever - that copy still calls this. Removing the command instead would
+//! turn their satisfied dependency into a failed one, which is the boot
+//! failure we are trying to stop happening.
 
-use anyhow::bail;
-use bcachefs_kernel::c;
-use c::bch_sb_handle;
+use anyhow::Result;
 use clap::Parser;
-use log::{debug, warn};
-use rustix::event::{poll, PollFd, PollFlags};
-use uuid::Uuid;
+use log::warn;
 
 use crate::device_scan;
 
-/// Waits until every device in a filesystem is initialized.
+/// Does nothing; kept so that units and fstab entries depending on it succeed.
 #[derive(Parser, Debug)]
 #[command(
     about,
-    long_about = "Waits until every device in a filesystem is initialized. \
-udev is used to scan for devices and be notified of device changes. A zero \
-exit status means that every device was initialized at some point. A non-zero \
-exit status means that an error was encountered."
+    long_about = "Does nothing, and exits zero. mount.bcachefs waits for its \
+own member devices now, so this no longer has anything to do - and waiting \
+here was actively harmful, because it had no timeout and would fail the mount \
+job for a device that was never coming back. Kept so that existing fstab \
+entries using x-systemd.requires=bcachefs-wait-devices@<uuid>.service keep \
+booting."
 )]
 pub struct Cli {
     /// A device string in the UUID=\<UUID\> format.
     device: String,
 }
 
-fn cmd_wait_devices(cli: Cli) -> anyhow::Result<()> {
-    let Some(uuid) = device_scan::parse_uuid_equals(&cli.device)? else {
-        bail!("invalid device string: {}", cli.device);
-    };
-
-    let mut wait_initialized = WaitInitialized::new(uuid);
-
-    let socket = udev::MonitorBuilder::new()?
-        .match_subsystem("block")?
-        .listen()?;
-
-    let mut enumerator = udev::Enumerator::new()?;
-    enumerator.match_is_initialized()?;
-    enumerator.match_subsystem("block")?;
-    enumerator.match_property("ID_FS_TYPE", "bcachefs")?;
-
-    for device in enumerator.scan_devices()? {
-        let Some(devnode) = device.devnode() else {
-            continue;
-        };
-        wait_initialized.add(devnode, &device)?;
+fn cmd_wait_devices(cli: Cli) -> Result<()> {
+    // Zero even on a bad argument: this must never be why a boot stops, and
+    // the mount that follows reports the real problem with the real context.
+    match device_scan::parse_uuid_equals(&cli.device) {
+        Ok(Some(_)) => {}
+        Ok(None) | Err(_) => warn!(
+            "wait-devices: not a UUID=<uuid> device string: {}",
+            cli.device
+        ),
     }
 
-    while !wait_initialized.every_device_is_initialized()? {
-        let socket_fd = unsafe { BorrowedFd::borrow_raw(socket.as_raw_fd()) };
-
-        let mut fds = [PollFd::new(&socket_fd, PollFlags::IN)];
-        poll(&mut fds, None)?;
-        if fds.iter().any(|fd| fd.revents().contains(PollFlags::ERR)) {
-            bail!("error on udev socket fd");
-        }
-
-        wait_initialized.process_events(&socket)?;
-    }
-
+    warn!("wait-devices does nothing now; mount waits for its own devices");
     Ok(())
 }
 
-struct WaitInitialized {
-    uuid: Uuid,
-    sbs:  Vec<(PathBuf, bch_sb_handle)>,
-}
-
-impl WaitInitialized {
-    fn new(uuid: Uuid) -> Self {
-        WaitInitialized {
-            uuid,
-	    sbs: Vec::new(),
-        }
-    }
-
-    fn add(&mut self, devnode: &Path, device: &udev::Device) -> anyhow::Result<()> {
-        if !device.is_initialized()
-            || device
-                .property_value("ID_FS_TYPE")
-                .is_none_or(|fs_type| fs_type != "bcachefs")
-            || device
-                .property_value("ID_FS_UUID")
-                .and_then(OsStr::to_str)
-                .and_then(|s| Uuid::parse_str(s).ok())
-                .is_some_and(|device_uuid| device_uuid != self.uuid)
-        {
-            return Ok(());
-        }
-        if device_scan::should_skip_multipath_component(device) {
-            return Ok(());
-        }
-	let opts = c::bch_opts::default();
-        let sb_handle = match device_scan::read_super_silent(devnode, opts) {
-            Ok(handle) => handle,
-            Err(err) if err.raw() == libc::ENOENT => return Ok(()),
-            Err(err) => return Err(err.into()),
-        };
-        let sb = sb_handle.sb();
-        if sb.uuid() != self.uuid {
-            return Ok(());
-        }
-        let dev_idx = sb.dev_idx;
-        // dev_idx indexes the member array, sb.nr_devices long;
-        // number_of_devices() counts only live members - smaller whenever a
-        // removed device left a tombstoned slot behind:
-        if u32::from(dev_idx) >= sb.nr_devices as u32 {
-            warn!(
-                "superblock with invalid dev_idx: {dev_idx} >= {}",
-                sb.nr_devices
-            );
-            return Ok(());
-        }
-
-        debug!(
-            "adding device at {} with index {dev_idx}",
-            devnode.display()
-        );
-	self.sbs.push((devnode.to_path_buf(), sb_handle));
-        Ok(())
-    }
-
-    fn remove(&mut self, devnode: &Path) {
-	if let Some(i) = self.sbs.iter().position(|(dev, _)| dev == devnode) {
-	    let dev_idx = self.sbs[i].1.sb().dev_idx;
-	    self.sbs.remove(i);
-            debug!(
-                "removing device at {} with index {dev_idx}",
-                devnode.display()
-            );
-        }
-    }
-
-    fn process_events(&mut self, socket: &udev::MonitorSocket) -> anyhow::Result<()> {
-        for event in socket.iter() {
-            debug!("udev event: {event:?}");
-            let Some(devnode) = event.devnode() else {
-                continue;
-            };
-            let add = match event.event_type() {
-                udev::EventType::Add | udev::EventType::Change => true,
-                udev::EventType::Remove => false,
-                _ => continue,
-            };
-            self.remove(devnode);
-            if add {
-                self.add(devnode, &event.device())?;
-            }
-        }
-        Ok(())
-    }
-
-    fn every_device_is_initialized(&mut self) -> anyhow::Result<bool> {
-	let opts = c::bch_opts::default();
-	self.sbs = device_scan::filter_current_sbs(std::mem::take(&mut self.sbs), &opts)?;
-
-	let Some((_, best)) = self.sbs.first() else {
-	    return Ok(false);
-        };
-
-	let number_of_devices = best.sb().number_of_devices() as usize;
-	let unique_dev_indices: HashSet<u8> = self.sbs
-	    .iter()
-	    .map(|(_, sb)| sb.sb().dev_idx)
-	    .collect();
-
-	Ok(unique_dev_indices.len() == number_of_devices)
-    }
-}
-
 pub const CMD: super::CmdDef =
-    typed_cmd!("wait-devices", "Wait until every device in a filesystem is initialized", Cli, cmd_wait_devices);
+    typed_cmd!("wait-devices", "Does nothing; kept so dependent units still succeed", Cli, cmd_wait_devices);
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    use clap::Parser;
+
+    use super::*;
+
+    /// The point of the change is the *absence* of a wait, so test for that
+    /// rather than for the return value: reintroducing the poll would make
+    /// this hang, and a hang is not a test failure, it is a stuck CI job. Run
+    /// it on a thread and give it a deadline.
+    ///
+    /// Verified against the break: on the previous implementation this command
+    /// blocks indefinitely on a UUID no device carries - `timeout 10 bcachefs
+    /// wait-devices UUID=deadbeef-...` exits 124 having printed nothing. No
+    /// root and no VM needed to see it, which is why this is a cargo test and
+    /// not a ktest one.
+    fn returns_promptly(arg: &str) {
+        let (tx, rx) = mpsc::channel();
+        let owned = arg.to_owned();
+
+        thread::spawn(move || {
+            let cli = Cli::parse_from(["wait-devices", &owned]);
+            let _ = tx.send(cmd_wait_devices(cli));
+        });
+
+        match rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(r) => assert!(r.is_ok(), "{arg:?} should exit zero, got {r:?}"),
+            Err(_) => panic!("{arg:?}: wait-devices blocked; a unit depending on it would fail the boot"),
+        }
+    }
+
+    #[test]
+    fn does_not_wait_for_a_uuid_no_device_carries() {
+        returns_promptly("UUID=deadbeef-0000-0000-0000-000000000000");
+    }
+
+    /// A garbled fstab instance name still must not stop the boot.
+    #[test]
+    fn a_malformed_device_string_still_exits_zero() {
+        returns_promptly("not-a-uuid-at-all");
+    }
+}
