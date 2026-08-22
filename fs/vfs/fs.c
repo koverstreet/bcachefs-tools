@@ -28,6 +28,8 @@
 
 #include "snapshots/snapshot.h"
 
+#include "util/thread_with_file.h"
+
 #include "vfs/fs.h"
 #include "vfs/ioctl.h"
 #include "vfs/buffered.h"
@@ -2743,7 +2745,24 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	bch2_opts_apply(&c->opts, opts);
 	set_mount_opts(c, &opts);
 
+	/*
+	 * Scoped to recovery, because c->stdio must not outlive the reference
+	 * bch2_fs_context_free() drops on the file it points into.
+	 *
+	 * stdio_user_only describes that redirect, so it dies with it: an online
+	 * fsck later installs its own c->stdio and expects its log traffic to
+	 * reach it, and nothing else ever clears this.
+	 */
+	if (opts_parse->status) {
+		c->stdio = &opts_parse->status->stdio;
+		c->stdio_user_only = true;
+	}
+
 	ret = bch2_fs_start(c);
+
+	c->stdio = NULL;
+	c->stdio_user_only = false;
+
 	if (ret)
 		goto err_stop_fs;
 
@@ -2905,6 +2924,20 @@ static void bch2_kill_sb(struct super_block *sb)
 	bch2_fs_exit(c);
 }
 
+/*
+ * The status channel outlives this fs_context: userspace still holds the fd.
+ * Freeing it is .release's job, which is why there's no .fn here - nothing runs
+ * on this channel but the mounting thread itself.
+ */
+static void bch2_status_fd_exit(struct thread_with_stdio *thr)
+{
+	kfree(thr);
+}
+
+static const struct thread_with_stdio_ops bch2_status_fd_ops = {
+	.exit	= bch2_status_fd_exit,
+};
+
 static void bch2_fs_context_free(struct fs_context *fc)
 {
 	struct bch2_opts_parse *opts = fc->fs_private;
@@ -2912,6 +2945,16 @@ static void bch2_fs_context_free(struct fs_context *fc)
 	if (opts) {
 		printbuf_exit(&opts->parse_later);
 		darray_exit_free_item(&opts->devs, kfree);
+		/*
+		 * The mount is over however it went: mark the channel done so a
+		 * reader gets EOF rather than waiting for a filesystem that
+		 * isn't coming, then drop our reference - userspace holds the
+		 * other, and .release frees the channel when both are gone.
+		 */
+		if (opts->status) {
+			bch2_thread_with_stdio_done(opts->status);
+			fput(opts->status_file);
+		}
 		kfree(opts);
 	}
 }
@@ -2974,6 +3017,32 @@ static int bch2_fs_parse_param(struct fs_context *fc,
 				: ret;
 
 		return bch2_fc_source_append(fc, param->string);
+	}
+
+	/*
+	 * Not a mount option: mount.bcachefs's channel to the filesystem coming
+	 * up. The fd number goes back as this fsconfig(2) call's return value,
+	 * which reaches userspace untouched - vfs_parse_fs_param() returns
+	 * anything that isn't -ENOPARAM verbatim, and so does
+	 * vfs_fsconfig_locked().
+	 */
+	if (!strcmp(param->key, "status_fd")) {
+		if (opts->status)
+			return invalf(fc, "status_fd requested twice");
+
+		struct thread_with_stdio *status = kzalloc(sizeof(*status), GFP_KERNEL);
+		if (!status)
+			return -ENOMEM;
+
+		int fd = bch2_stdio_redirect_get_fd(status, &bch2_status_fd_ops,
+						    &opts->status_file);
+		if (fd < 0) {
+			kfree(status);
+			return fd;
+		}
+
+		opts->status = status;
+		return fd;
 	}
 
 	/* for reconfigure, we already have a struct bch_fs */
