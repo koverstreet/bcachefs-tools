@@ -32,7 +32,7 @@ use bcachefs_kernel::util::darray::DarrayVec;
 use c::bch_sb_handle;
 use c::bch_opts;
 use uuid::Uuid;
-use log::{debug, warn};
+use log::{debug, info, warn};
 
 use crate::device_multipath::{
     find_multipath_holder, preferred_multipath_devnode, warn_multipath_component,
@@ -462,8 +462,15 @@ where
         }
     }
 
+    // info!, not warn!: nothing is wrong by the time we get here, and warning
+    // about the good outcome is how a log teaches people to skip warnings.
+    //
+    // The default filter is Warn, so this is only visible to someone who asked
+    // with -v - which is the right trade, because the warning above does not
+    // need closing. If the devices never turned up, degraded.rs says so at
+    // length; if they did, the mount simply works.
     if announced.is_some() {
-        warn!("all {} devices found after {:.1}s",
+        info!("all {} devices found after {:.1}s",
               expected_devices(&sbs), start.elapsed().as_secs_f32());
     }
 
