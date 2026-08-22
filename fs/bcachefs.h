@@ -723,6 +723,14 @@ struct bch_fs {
 	 * bch2_print_str_user() sends.
 	 */
 	bool			stdio_user_only;
+	/*
+	 * Someone is polling BCH_IOCTL_RECOVERY_STATUS on that redirect, so
+	 * they're drawing progress themselves and progress indicators keep off
+	 * the console entirely. Set by the first such ioctl, cleared when the
+	 * channel detaches - a mount that asks for a status fd but never polls
+	 * still gets its progress in dmesg.
+	 */
+	bool			stdio_progress_reader;
 	unsigned		loglevel;
 	unsigned		prev_loglevel;
 	/*

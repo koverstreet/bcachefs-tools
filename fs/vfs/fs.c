@@ -2750,6 +2750,9 @@ static long bch2_status_fd_ioctl(struct thread_with_stdio *thr,
 
 		struct bch_fs_recovery *r = &c->recovery;
 
+		/* Whoever's asking is drawing it: keep it off the console. */
+		WRITE_ONCE(c->stdio_progress_reader, true);
+
 		scoped_guard(spinlock_irq, &r->lock) {
 			status.passes_scheduled_ephemeral.v[0] = r->scheduled_passes_ephemeral;
 			status.passes_complete.v[0]	= r->passes_complete;
@@ -2849,10 +2852,16 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	ret = bch2_fs_start(c);
 
 	if (status) {
+		/*
+		 * Clearing status->c first is what makes the reader flag safe to
+		 * clear after it: the ioctl only sets it having seen a non-NULL
+		 * status->c under this lock, so no further ioctl can set it.
+		 */
 		scoped_guard(mutex, &status->lock)
 			status->c = NULL;
 		c->stdio = NULL;
 		c->stdio_user_only = false;
+		WRITE_ONCE(c->stdio_progress_reader, false);
 	}
 
 	if (ret)

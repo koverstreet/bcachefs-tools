@@ -90,6 +90,17 @@ static inline bool progress_update_p(struct progress_indicator *s)
 
 static void progress_maybe_print(struct bch_fs *c, struct progress_indicator *s)
 {
+	/*
+	 * Progress decides this for itself instead of leaving it to the stdio
+	 * redirect: bch_info() sends log traffic to dmesg whenever the redirect
+	 * is user-only, which is exactly the case where a mount is reading
+	 * progress out of BCH_IOCTL_RECOVERY_STATUS and drawing it. Checked
+	 * ahead of progress_update_p(), which would otherwise eat the interval
+	 * we want to print on as soon as the reader goes away.
+	 */
+	if (READ_ONCE(c->stdio_progress_reader))
+		return;
+
 	if (s->silent || !s->msg || !progress_update_p(s))
 		return;
 
