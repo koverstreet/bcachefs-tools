@@ -246,8 +246,14 @@ int bch2_buf_uncompress(struct bch_fs *c,
 			  struct bch_extent_crc_unpacked crc)
 {
 	enum bch_compression_opts opt = bch2_compression_type_to_opt(crc.compression_type);
-	mempool_t *workspace_pool = &c->compress.workspace[opt];
-	if (unlikely(!mempool_initialized(workspace_pool))) {
+
+	/*
+	 * The compression pool is what tells us the type is marked in the
+	 * superblock: both pools are set up together, and lz4 needs no
+	 * decompression workspace at all, so its decompress pool is never
+	 * initialized and can't stand in for the check.
+	 */
+	if (unlikely(!mempool_initialized(&c->compress.workspace[opt]))) {
 		if (ret_fsck_err(c, compression_type_not_marked_in_sb,
 			     "compression type %s set but not marked in superblock",
 			     __bch2_compression_types[crc.compression_type]))
@@ -255,6 +261,8 @@ int bch2_buf_uncompress(struct bch_fs *c,
 		else
 			return bch_err_throw(c, compression_workspace_not_initialized);
 	}
+
+	mempool_t *workspace_pool = &c->compress.decompress_workspace[opt];
 
 	size_t src_len = crc.compressed_size << 9;
 	size_t dst_len = crc.uncompressed_size << 9;
@@ -681,8 +689,10 @@ void bch2_fs_compress_exit(struct bch_fs *c)
 {
 	unsigned i;
 
-	for (i = 0; i < ARRAY_SIZE(c->compress.workspace); i++)
+	for (i = 0; i < ARRAY_SIZE(c->compress.workspace); i++) {
+		mempool_exit(&c->compress.decompress_workspace[i]);
 		mempool_exit(&c->compress.workspace[i]);
+	}
 	mempool_exit(&c->compress.bounce[WRITE]);
 	mempool_exit(&c->compress.bounce[READ]);
 }
@@ -698,15 +708,17 @@ static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 		unsigned			feature;
 		enum bch_compression_opts	type;
 		size_t				compress_workspace;
+		size_t				decompress_workspace;
 	} compression_types[] = {
 		{ BCH_FEATURE_lz4, BCH_COMPRESSION_OPT_lz4,
-			max_t(size_t, LZ4_MEM_COMPRESS, LZ4HC_MEM_COMPRESS) },
+			max_t(size_t, LZ4_MEM_COMPRESS, LZ4HC_MEM_COMPRESS),
+			0 },
 		{ BCH_FEATURE_gzip, BCH_COMPRESSION_OPT_gzip,
-			max(zlib_deflate_workspacesize(MAX_WBITS, DEF_MEM_LEVEL),
-			    zlib_inflate_workspacesize()) },
+			zlib_deflate_workspacesize(MAX_WBITS, DEF_MEM_LEVEL),
+			zlib_inflate_workspacesize() },
 		{ BCH_FEATURE_zstd, BCH_COMPRESSION_OPT_zstd,
-			max(c->compress.zstd_workspace_size,
-			    zstd_dctx_workspace_bound()) },
+			c->compress.zstd_workspace_size,
+			zstd_dctx_workspace_bound() },
 	}, *i;
 	bool have_compressed = false;
 
@@ -740,6 +752,13 @@ static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 		if (mempool_init_kvmalloc_pool(
 				&c->compress.workspace[i->type],
 				1, i->compress_workspace))
+			return bch_err_throw(c, ENOMEM_compression_workspace_init);
+
+		/* lz4 decompresses straight into the destination */
+		if (i->decompress_workspace &&
+		    mempool_init_kvmalloc_pool(
+				&c->compress.decompress_workspace[i->type],
+				1, i->decompress_workspace))
 			return bch_err_throw(c, ENOMEM_compression_workspace_init);
 	}
 
