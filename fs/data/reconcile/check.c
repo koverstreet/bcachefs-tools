@@ -481,10 +481,10 @@ static int check_stripe_can_widen(struct btree_trans *trans)
 	}));
 }
 
-int bch2_check_reconcile_work(struct bch_fs *c)
+static int check_reconcile_work_data_btrees(struct btree_trans *trans)
 {
-	CLASS(btree_trans, trans)(c);
-	CLASS(btree_iter_uninit, extent_iter)(trans);
+	struct bch_fs *c = trans->c;
+
 	CLASS(btree_iter, rb_w)(trans, BTREE_ID_reconcile_work, POS_MIN,
 				BTREE_ITER_prefetch|BTREE_ITER_all_snapshots);
 	CLASS(btree_iter, rb_h)(trans, BTREE_ID_reconcile_hipri, POS_MIN,
@@ -513,10 +513,16 @@ int bch2_check_reconcile_work(struct bch_fs *c)
 						    &rb_w, &rb_h, &rb_p,
 						    &snapshot_io_opts, &progress, &last_flushed));
 
-	try(check_reconcile_work_phys(trans));
-	try(check_reconcile_work_btrees(trans));
-	try(check_reconcile_btree_bps(trans));
-	try(check_stripe_can_widen(trans));
-
 	return 0;
+}
+
+int bch2_check_reconcile_work(struct bch_fs *c)
+{
+	CLASS(btree_trans, trans)(c);
+
+	return check_reconcile_work_data_btrees(trans) ?:
+	       check_reconcile_work_phys(trans) ?:
+	       check_reconcile_work_btrees(trans) ?:
+	       check_reconcile_btree_bps(trans) ?:
+	       check_stripe_can_widen(trans);
 }
