@@ -27,6 +27,7 @@
 #include "init/error.h"
 #include "init/fs.h"
 #include "init/passes.h"
+#include "init/progress.h"
 #include "init/recovery.h"
 
 #include "journal/init.h"
@@ -408,23 +409,6 @@ static int journal_sort_seq_cmp(const void *_l, const void *_r)
 		: cmp_int(l->allocated, r->allocated);
 }
 
-static void journal_replay_progress(struct bch_fs *c, const char *phase,
-				    size_t done, size_t total,
-				    unsigned long *next_print)
-{
-	if (time_before(jiffies, *next_print))
-		return;
-
-	*next_print = jiffies + HZ * 10;
-
-	unsigned percent = total
-		? div64_u64((u64) done * 100, total)
-		: 0;
-
-	bch_info(c, "journal replay: %s %u%%, done %zu/%zu keys",
-		 phase, percent, done, total);
-}
-
 DEFINE_DARRAY_NAMED(darray_journal_keys, struct journal_key *)
 
 int bch2_journal_replay(struct bch_fs *c)
@@ -435,9 +419,8 @@ int bch2_journal_replay(struct bch_fs *c)
 	u64 start_seq	= c->journal_replay_seq_start;
 	u64 end_seq	= c->journal_replay_seq_start;
 	bool immediate_flush = false;
-	unsigned long next_progress = jiffies + HZ * 10;
-	size_t accounting_total = 0, accounting_done = 0;
-	size_t sorted_done = 0, remaining_done = 0;
+	size_t accounting_total = 0;
+	struct progress_indicator progress;
 	int ret = 0;
 
 	BUG_ON(!atomic_read(&keys->ref));
@@ -459,6 +442,9 @@ int bch2_journal_replay(struct bch_fs *c)
 	 * Replay accounting keys first: we can't allow the write buffer to
 	 * flush accounting keys until we're done
 	 */
+	bch2_progress_init_count(&progress, "journal replay: accounting", "keys",
+				 accounting_total);
+
 	darray_for_each(*keys, k) {
 		struct bkey_i *bk = journal_key_k(trans->c, k);
 
@@ -480,10 +466,7 @@ int bch2_journal_replay(struct bch_fs *c)
 			return ret;
 
 		k->overwritten = true;
-		accounting_done++;
-		journal_replay_progress(c, "accounting",
-					accounting_done, accounting_total,
-					&next_progress);
+		bch2_progress_update_count(c, &progress);
 	}
 
 	set_bit(BCH_FS_accounting_replay_done, &c->flags);
@@ -493,12 +476,12 @@ int bch2_journal_replay(struct bch_fs *c)
 	 * efficient - better locality of btree access -  but some might fail if
 	 * that would cause a journal deadlock.
 	 */
+	bch2_progress_init_count(&progress, "journal replay: sorted pass", "keys",
+				 keys->nr);
+
 	darray_for_each(*keys, k) {
 		cond_resched();
-		sorted_done++;
-		journal_replay_progress(c, "sorted pass",
-					sorted_done, keys->nr,
-					&next_progress);
+		bch2_progress_update_count(c, &progress);
 
 		/*
 		 * k->allocated means the key wasn't read in from the journal,
@@ -540,11 +523,12 @@ int bch2_journal_replay(struct bch_fs *c)
 		       sizeof(keys_sorted.data[0]),
 		       journal_sort_seq_cmp, NULL);
 
+	bch2_progress_init_count(&progress, "journal replay: journal-order pass", "keys",
+				 keys_sorted.nr);
+
 	darray_for_each(keys_sorted, kp) {
 		cond_resched();
-		journal_replay_progress(c, "journal-order pass",
-					remaining_done, keys_sorted.nr,
-					&next_progress);
+		bch2_progress_update_count(c, &progress);
 
 		struct journal_key *k = *kp;
 
@@ -569,7 +553,6 @@ int bch2_journal_replay(struct bch_fs *c)
 		}
 
 		BUG_ON(k->btree_id != BTREE_ID_accounting && !k->overwritten);
-		remaining_done++;
 	}
 
 	bch2_trans_unlock_long(trans);
