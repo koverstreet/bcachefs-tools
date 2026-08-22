@@ -152,11 +152,15 @@
 void bch2_print_str_loglevel(struct bch_fs *, int, const char *);
 void bch2_print_str(struct bch_fs *, const char *, const char *);
 
+/* For a person rather than a log - see bch_fs.stdio_user_only. */
+void bch2_print_str_user(struct bch_fs *, const char *);
+
 __printf(2, 3)
 void bch2_print_opts(struct bch_opts *, const char *, ...);
 
 __printf(2, 3)
 void __bch2_print(struct bch_fs *c, const char *fmt, ...);
+
 
 #define maybe_dev_to_fs(_c)	_Generic((_c),				\
 	struct bch_dev *:	((struct bch_dev *) (_c))->fs,		\
@@ -712,6 +716,13 @@ struct bch_fs {
 
 	struct stdio_redirect	*stdio;
 	struct task_struct	*stdio_filter;
+	/*
+	 * Online fsck redirects everything it prints; mounting doesn't - a boot
+	 * splash wants the questions and the hard errors, not a running
+	 * commentary of IO errors. Set this and the redirect carries only what
+	 * bch2_print_str_user() sends.
+	 */
+	bool			stdio_user_only;
 	unsigned		loglevel;
 	unsigned		prev_loglevel;
 	/*
@@ -962,13 +973,18 @@ static inline void bch2_set_ra_pages(struct bch_fs *c, unsigned ra_pages)
 #endif
 }
 
-static inline struct stdio_redirect *bch2_fs_stdio_redirect(struct bch_fs *c)
+static inline struct stdio_redirect *bch2_fs_stdio_redirect_user(struct bch_fs *c)
 {
 	struct stdio_redirect *stdio = c->stdio;
 
 	if (c->stdio_filter && c->stdio_filter != current)
 		stdio = NULL;
 	return stdio;
+}
+
+static inline struct stdio_redirect *bch2_fs_stdio_redirect_log(struct bch_fs *c)
+{
+	return c->stdio_user_only ? NULL : bch2_fs_stdio_redirect_user(c);
 }
 
 #define BKEY_PADDED_ONSTACK(key, pad)				\

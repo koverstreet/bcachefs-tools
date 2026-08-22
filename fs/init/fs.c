@@ -158,7 +158,7 @@ void bch2_print_str_loglevel(struct bch_fs *c, int loglevel, const char *str)
 #endif
 
 #ifdef __KERNEL__
-	struct stdio_redirect *stdio = bch2_fs_stdio_redirect(c);
+	struct stdio_redirect *stdio = bch2_fs_stdio_redirect_log(c);
 
 	if (unlikely(stdio)) {
 		bch2_stdio_redirect_write(stdio, true, str, len);
@@ -175,6 +175,26 @@ void bch2_print_str(struct bch_fs *c, const char *prefix, const char *str)
 		return;
 
 	bch2_print_str_loglevel(c, kern_soh_to_loglevel(prefix), str);
+}
+
+void bch2_print_str_user(struct bch_fs *c, const char *str)
+{
+	if (!str)
+		return;
+
+#ifdef __KERNEL__
+	struct stdio_redirect *stdio = bch2_fs_stdio_redirect_user(c);
+
+	if (unlikely(stdio)) {
+		bch2_stdio_redirect_write(stdio, true, str, strlen(str));
+		return;
+	}
+#endif
+	/*
+	 * Can't double-write: bch2_print_str() reaches a redirect only through
+	 * bch2_fs_stdio_redirect_log(), which is NULL in every case that got here.
+	 */
+	bch2_print_str(c, KERN_ERR, str);
 }
 
 __printf(2, 0)
@@ -218,7 +238,7 @@ void __bch2_print(struct bch_fs *c, const char *fmt, ...)
 		fmt += 2;
 #endif
 
-	struct stdio_redirect *stdio = bch2_fs_stdio_redirect(c);
+	struct stdio_redirect *stdio = bch2_fs_stdio_redirect_log(c);
 
 	va_list args;
 	va_start(args, fmt);

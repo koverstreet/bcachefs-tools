@@ -339,21 +339,14 @@ int bch2_run_thread_with_stdio(struct thread_with_stdio *thr,
 
 /*
  * A stdio_redirect with no thread behind it: the caller's own thread does the
- * work and prints as it goes. That's what mounting looks like - the filesystem
- * comes up in the thread making fsconfig(2) calls, and userspace reads the fd
- * from a thread of its own.
+ * work and prints as it goes, which is what mounting looks like. The worker
+ * calls bch2_thread_with_stdio_done() when it's finished, as the kthread does.
  *
- * thr->thr.task stays NULL, which the rest of this file already copes with:
- * bch2_thread_with_file_exit() skips a NULL task, so .release needs no special
- * case, and .poll reports EPOLLHUP off thr->thr.done. The worker sets that with
- * bch2_thread_with_stdio_done() when it's finished, exactly as the kthread does.
- *
- * What the kthread was doing that nothing else was: .release calls
+ * @filep is why this can't just skip the kthread. .release calls
  * kthread_stop(), which blocks until the thread is gone, so the darray_exit()
- * after it can't free a buffer a writer is still in. With no thread to stop,
- * a close(2) would do exactly that. So the caller gets a reference to the file
- * in @filep and has to hold it for as long as anything can still print here -
- * .release doesn't run until both that and the fd are dropped.
+ * after it can't free a buffer a writer is still in; with no thread to stop, a
+ * close(2) would do exactly that. The caller holds the returned reference for
+ * as long as anything can still print here.
  */
 int bch2_stdio_redirect_get_fd(struct thread_with_stdio *thr,
 			       const struct thread_with_stdio_ops *ops,
