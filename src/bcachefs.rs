@@ -10,6 +10,7 @@ mod logging;
 mod prompt;
 mod qcow2;
 mod splitbrain;
+mod thread_with_file;
 mod util;
 mod wrappers;
 pub mod http;

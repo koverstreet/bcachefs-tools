@@ -12,13 +12,13 @@ use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::metadata_version;
 use bcachefs_kernel::opt_set;
 use clap::Parser;
-use rustix::event::{poll, PollFd, PollFlags};
 
 use crate::wrappers::handle::BcachefsHandle;
 use bcachefs_kernel::util::printbuf::Printbuf;
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::wrappers::sysfs;
 use crate::device_scan;
+use crate::thread_with_file;
 
 use crate::wrappers::ioctl::{ioctl_ptr, ioctl_w, IoctlBuf, BCH_IOCTL_FSCK_OFFLINE, BCH_IOCTL_FSCK_ONLINE};
 
@@ -67,64 +67,9 @@ pub struct FsckCli {
     devices: Vec<String>,
 }
 
-fn setnonblocking(fd: BorrowedFd<'_>) {
-    let flags = rustix::fs::fcntl_getfl(fd).unwrap();
-    rustix::fs::fcntl_setfl(fd, flags | rustix::fs::OFlags::NONBLOCK).unwrap();
-}
-
-/// Transfer data from rfd to wfd.  Returns Ok(true) on EOF, Ok(false)
-/// when data was transferred (or EAGAIN), Err on real errors.
-fn do_splice(rfd: BorrowedFd<'_>, wfd: BorrowedFd<'_>) -> io::Result<bool> {
-    let mut buf = [0u8; 4096];
-    let n = match rustix::io::read(rfd, &mut buf) {
-        Ok(0) => return Ok(true),
-        Ok(n) => n,
-        Err(rustix::io::Errno::AGAIN) => return Ok(false),
-        Err(e) => return Err(e.into()),
-    };
-
-    let mut off = 0;
-    while off < n {
-        match rustix::io::write(wfd, &buf[off..n]) {
-            Ok(w) => off += w,
-            Err(rustix::io::Errno::AGAIN) => {
-                poll(&mut [PollFd::new(&wfd, PollFlags::OUT)], None)?;
-            }
-            Err(e) => return Err(e.into()),
-        }
-    }
-    Ok(false)
-}
-
 fn splice_fd_to_stdinout(fd: BorrowedFd<'_>) -> i32 {
-    let stdin = io::stdin();
-    let stdout = io::stdout();
-
-    setnonblocking(stdin.as_fd());
-    setnonblocking(fd);
-
-    let mut stdin_closed = false;
-
-    loop {
-        let mut pollfds = vec![PollFd::new(&fd, PollFlags::IN)];
-        if !stdin_closed {
-            pollfds.push(PollFd::new(&stdin, PollFlags::IN));
-        }
-        let _ = poll(&mut pollfds, None);
-
-        match do_splice(fd, stdout.as_fd()) {
-            Ok(true) => break,
-            Err(_) => return -1,
-            _ => {}
-        }
-
-        if !stdin_closed {
-            match do_splice(stdin.as_fd(), fd) {
-                Ok(true) => stdin_closed = true,
-                Err(_) => return -1,
-                _ => {}
-            }
-        }
+    if thread_with_file::relay(fd, io::stdout().as_fd()).is_err() {
+        return -1;
     }
 
     // The return code from fsck is returned via close() on this fd
