@@ -307,7 +307,8 @@ int bch2_dev_in_fs(struct bch_sb_handle *fs,
 	    le16_to_cpu(sb->sb->version) < bcachefs_metadata_version_member_seq)
 		return 0;
 
-	if (fs->sb->seq == sb->sb->seq &&
+	if (!opts->no_splitbrain_check &&
+	    fs->sb->seq == sb->sb->seq &&
 	    fs->sb->write_time != sb->sb->write_time) {
 		CLASS(printbuf, buf)();
 
@@ -330,20 +331,19 @@ int bch2_dev_in_fs(struct bch_sb_handle *fs,
 		bch2_prt_datetime(&buf, le64_to_cpu(sb->sb->write_time));
 		prt_newline(&buf);
 
-		if (!opts->no_splitbrain_check)
-			prt_printf(&buf, "Not using older sb");
+		prt_printf(&buf, "Not using older sb");
 
 		pr_err("%s", buf.buf);
 
-		if (!opts->no_splitbrain_check)
-			return -BCH_ERR_device_splitbrain;
+		return -BCH_ERR_device_splitbrain;
 	}
 
 	struct bch_member m = bch2_sb_member_get(fs->sb, sb->sb->dev_idx);
 	u64 seq_from_fs		= le64_to_cpu(m.seq);
 	u64 seq_from_member	= le64_to_cpu(sb->sb->seq);
 
-	if (seq_from_fs && seq_from_fs < seq_from_member) {
+	if (!opts->no_splitbrain_check &&
+	    seq_from_fs && seq_from_fs < seq_from_member) {
 		CLASS(printbuf, buf)();
 
 		prt_str(&buf, "Split brain detected between ");
@@ -360,15 +360,12 @@ int bch2_dev_in_fs(struct bch_sb_handle *fs,
 		prt_bdevname(&buf, sb->bdev);
 		prt_printf(&buf, " has %llu\n", seq_from_member);
 
-		if (!opts->no_splitbrain_check) {
-			prt_str(&buf, "Not using ");
-			prt_bdevname(&buf, sb->bdev);
-		}
+		prt_str(&buf, "Not using ");
+		prt_bdevname(&buf, sb->bdev);
 
 		pr_err("%s", buf.buf);
 
-		if (!opts->no_splitbrain_check)
-			return -BCH_ERR_device_splitbrain;
+		return -BCH_ERR_device_splitbrain;
 	}
 
 	return 0;
