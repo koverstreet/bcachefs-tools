@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use crate::prompt::{fs_name, Choice, Prompt, Question, Watch, PROMPT_TIMEOUT};
+use crate::prompt::{fs_name, Choice, Prompt, Question, Watch, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 
 use anyhow::Result;
 use bcachefs_kernel::c::bch_member_state::BCH_MEMBER_STATE_evacuating;
@@ -309,7 +309,9 @@ pub fn resolve_mount_opts(
             msg.push_str(devs.trim_end());
         }
 
-        msg.push_str("\nno way to ask anyone; refusing (mount -o degraded=yes, \
+        msg.push('\n');
+        msg.push_str(NO_ONE_TO_ASK);
+        msg.push_str("; refusing (mount -o degraded=yes, \
                       or degraded=very if data may have no remaining copy)");
 
         warn!("{msg}");

@@ -22,7 +22,7 @@ use std::path::{Path, PathBuf};
 use anyhow::Result;
 use log::warn;
 
-use crate::prompt::{fs_name, Choice, Prompt, Question, PROMPT_TIMEOUT};
+use crate::prompt::{fs_name, Choice, Prompt, Question, NO_ONE_TO_ASK, PROMPT_TIMEOUT};
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::sb::members;
@@ -206,7 +206,7 @@ pub fn report(sbs: &[(PathBuf, bch_sb_handle)], divergent: &[Divergent]) -> Stri
 /// needs a mounted filesystem, and is left to the user via [`report`].
 pub fn ask(sb: &bch_sb_handle) -> Result<bool> {
     let Some(p) = Prompt::detect() else {
-        warn!("no way to ask which history to continue with; refusing");
+        warn!("{NO_ONE_TO_ASK}: cannot ask which history to continue with; refusing");
         return Ok(false);
     };
 

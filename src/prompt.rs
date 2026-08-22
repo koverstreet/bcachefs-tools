@@ -148,9 +148,20 @@ fn agent_plausibly_listening(tty: bool) -> bool {
     (tty || stdin_is_dev_null()) && ask_password_installed()
 }
 
+/// Why [`Prompt::detect`] came back `None`, for the caller to put in front of
+/// its own refusal.
+///
+/// There is one such reason because there is one such return: reaching it
+/// means stdin is not a terminal - the last branch tests that - and that no
+/// agent was plausibly listening either. Somebody reading this in a boot log
+/// needs the concrete condition, not "nobody was there": the fix is a console
+/// or an installed systemd-ask-password, and which one is what they have to
+/// work out.
+pub const NO_ONE_TO_ASK: &str = "no terminal to ask on, and no systemd password agent";
+
 impl Prompt {
     /// `None` when nobody can be reached; callers take their safe answer
-    /// without composing a question.
+    /// without composing a question, and say [`NO_ONE_TO_ASK`] when they do.
     pub fn detect() -> Option<Prompt> {
         let tty = stdin().is_terminal();
 
@@ -171,7 +182,7 @@ impl Prompt {
             return Some(Prompt::Terminal);
         }
 
-        debug!("no password agent and no terminal: nobody to ask");
+        debug!("{NO_ONE_TO_ASK}");
         None
     }
 
