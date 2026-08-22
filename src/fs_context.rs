@@ -58,7 +58,7 @@
 use std::{
     ffi::{CStr, CString},
     io,
-    os::fd::{AsRawFd, FromRawFd, OwnedFd},
+    os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd},
 };
 
 const FSOPEN_CLOEXEC:  libc::c_uint = 0x0000_0001;
@@ -201,6 +201,42 @@ impl FsContext {
         };
 
         self.fsconfig(cmd, c_key.as_ptr(), value_ptr)
+    }
+
+    /// Ask bcachefs for a status channel, and get the file descriptor back.
+    ///
+    /// Not a mount option: bcachefs's `parse_param` creates the descriptor and
+    /// returns its number as this fsconfig(2) call's return value, which
+    /// `vfs_parse_fs_param()` passes back untouched. Must come before
+    /// [`create`](Self::create).
+    ///
+    /// `None` on any kernel that doesn't know the parameter - mounting without
+    /// a channel is how it has always worked, so absence isn't a failure.
+    pub fn status_fd(&self) -> Option<OwnedFd> {
+        let key = CString::new("status_fd").unwrap();
+
+        let ret = unsafe {
+            libc::syscall(
+                libc::SYS_fsconfig,
+                self.fd.as_raw_fd(),
+                FSCONFIG_SET_FLAG,
+                key.as_ptr(),
+                std::ptr::null::<libc::c_char>(),
+                0,
+            )
+        };
+
+        if ret > 0 {
+            return Some(unsafe { OwnedFd::from_raw_fd(ret as RawFd) });
+        }
+
+        // Zero would mean the parameter was accepted without producing a
+        // descriptor, which nothing does - don't invent an fd 0 out of it.
+        // Negative is an older module rejecting the name, which also leaves an
+        // "Unknown parameter" in the context log; drain it so it isn't reported
+        // later as though the mount had complained.
+        let _ = self.drain_log();
+        None
     }
 
     /// fsconfig(FSCONFIG_CMD_CREATE): actually create the superblock. This is

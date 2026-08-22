@@ -2,6 +2,7 @@ use std::{
     collections::HashSet,
     ffi::{CStr, CString, OsString},
     io::{stdout, IsTerminal},
+    os::fd::{AsFd, AsRawFd, OwnedFd},
     os::unix::ffi::OsStringExt,
     path::{Path, PathBuf},
     ptr, str,
@@ -15,6 +16,7 @@ use clap::Parser;
 use log::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::device_scan;
+use crate::thread_with_file;
 use crate::wrappers::handle::BcachefsHandle;
 
 use crate::{
@@ -22,6 +24,20 @@ use crate::{
     key::{KeyHandle, Keyring, Passphrase, UnlockPolicy},
     logging,
 };
+
+/// Carry the mount's side of the conversation while it's coming up: the
+/// filesystem to stderr, stdin back to the filesystem.
+///
+/// Detached. This thread is inside fsconfig(2) until the mount is done, so
+/// there's no point in the sequence where joining would be right - and the
+/// kernel marks the channel done on every path out, which ends the relay.
+fn spawn_status_relay(fd: OwnedFd) {
+    std::thread::spawn(move || {
+        if let Err(e) = thread_with_file::relay(fd.as_fd(), std::io::stderr().as_fd()) {
+            debug!("status channel: {e}");
+        }
+    });
+}
 
 /// What came of an attempt on the fs_context path.
 enum Mounted {
@@ -156,6 +172,19 @@ fn mount_fs_context(
 
         fc.set(key, value)
             .map_err(|e| fail(&fc, format!("option {opt}"), e))?;
+    }
+
+    // Before creating the superblock: that's the call that blocks for the whole
+    // of recovery, which is what there is to report on.
+    //
+    // Both outcomes are logged: a working channel with nothing to say looks
+    // exactly like a kernel that never offered one.
+    match fc.status_fd() {
+        Some(fd) => {
+            info!("status channel on fd {}", fd.as_raw_fd());
+            spawn_status_relay(fd);
+        }
+        None => info!("no status channel from this kernel; mounting without one"),
     }
 
     info!("creating superblock");
