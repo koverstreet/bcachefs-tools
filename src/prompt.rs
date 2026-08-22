@@ -1,30 +1,19 @@
 //! Putting a question to whoever is at the machine, during a mount.
 //!
-//! A terminal is the best place to ask, except when something is drawing over
-//! it: at boot stdin *is* a terminal - it's /dev/console - but plymouth owns
-//! the screen and a question written there is never seen. systemd's password
-//! agents include one that draws on the splash, and --no-tty is what reaches
-//! them when we do have a tty.
+//! Two facts about the boot shape the whole module. At boot stdin *is* a
+//! terminal - /dev/console - but plymouth owns the screen, so a question
+//! written there is never seen; systemd's password agents include one that
+//! draws on the splash. And the agents are boot-time units, so on a running
+//! system /run/systemd/ask-password exists with nothing listening, and a
+//! question posted to it times out having shown the user nothing (measured:
+//! all three agents inactive, `--no-tty` returns "Timer expired").
 //!
-//! Preferring the agents whenever the ask directory exists does not work: they
-//! are boot-time units, so on a running system the directory is there and
-//! nothing is listening, and a question posted to it times out having shown
-//! the user nothing. Measured - all three agents inactive, `--no-tty` returns
-//! "Timer expired". Whether an agent is listening has no direct test, so
-//! [`Prompt::detect`] wants positive evidence of one before handing over a
-//! question: plymouth answering a ping, or stdin being /dev/null.
+//! Hence [`agent_plausibly_listening`]: there is no direct test, so we want
+//! evidence before handing a question over.
 //!
-//! [`Prompt::detect`] gives `None` when nobody can be reached, and callers
-//! resolve that before composing a question: a mount can ask twice - degraded,
-//! then escalation - and deciding per question lets the second one silently
-//! have no audience after the first was answered.
-//!
-//! [`Ask::detail`] reaches a terminal and nothing else; the agent protocol's
-//! `Message=` is one line.
-//!
-//! key.rs keeps its own path: a passphrase needs termios echo-off with the
+//! key.rs keeps its own path - a passphrase needs termios echo-off with the
 //! ICRNL/ICANON repair for an unconfigured initramfs console, zeroizing, and
-//! keyring caching. A policy question needs none of it.
+//! keyring caching.
 
 use std::io::{stdin, IsTerminal};
 use std::os::fd::AsFd;
@@ -36,14 +25,12 @@ use anyhow::Result;
 use bcachefs_kernel::c::bch_sb_handle;
 use log::debug;
 
-/// systemd creates this when its password-agent machinery is running.
 const ASK_PASSWORD_DIR: &str = "/run/systemd/ask-password";
 
-/// What to call a filesystem when asking about it: its label, or its UUID.
-///
-/// Here rather than with the superblock code because the reason is about
-/// prompting: several filesystems come up at once at boot, and someone facing
-/// two questions needs to see whether they're about the same disk.
+pub const PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Its label, or its UUID - several filesystems come up at once at boot, and
+/// someone facing two questions needs to see whether they are the same disk.
 pub fn fs_name(sb: &bch_sb_handle) -> String {
     let label = String::from_utf8_lossy(sb.sb().label());
 
@@ -54,32 +41,83 @@ pub fn fs_name(sb: &bch_sb_handle) -> String {
     }
 }
 
-/// One question, in both the forms its destinations need.
-pub struct Ask<'a> {
-    /// The question. One line: the agent protocol's `Message=` is one line.
+/// The only place an answer is written down: both rendered forms and the parse
+/// derive from this, so a question cannot offer a letter it will not accept.
+pub struct Choice<A> {
+    /// Matched case-insensitively, as are the aliases.
+    pub key: char,
+    pub aliases: &'static [&'static str],
+    /// For the bracketed summary; "" shows the bare key.
+    pub short: &'static str,
+    /// For a terminal, which has room for a sentence.
+    pub blurb: &'static str,
+    pub answer: A,
+}
+
+/// Answers live per question rather than in one shared parser, so that two
+/// questions cannot cross-parse each other's vocabulary.
+pub struct Question<'a, A> {
+    /// One line: the agent protocol's `Message=` is one line.
     pub prompt: &'a str,
-    /// Detail that only a multi-line destination can show. Dropped on the
-    /// agent path - see the module header.
+    /// Reaches a terminal only, for the same reason.
     pub detail: Option<&'a str>,
-    /// One line per answer, spelled out. A terminal has room for these.
-    pub choices: &'a [&'a str],
-    /// The bracketed summary, for a destination that only gets one line.
-    pub brief: &'a str,
-    /// What identifies this filesystem to the agent, for `--id`.
-    pub id: &'a str,
+    pub choices: &'a [Choice<A>],
+    /// Also what a bare Enter and a timed-out boot prompt mean. Shown
+    /// capitalised in the summary.
+    pub silence: A,
+    pub uuid: &'a str,
     /// How long to wait for a person before giving up.
     pub timeout: Duration,
 }
 
-/// Somewhere a question can actually reach someone.
-///
-/// Copy so a caller can keep it for a later question - see degraded.rs's
-/// Retry. Resolving once and carrying it is the point.
+impl<A: Copy + PartialEq> Question<'_, A> {
+    pub fn lines(&self) -> Vec<String> {
+        self.choices.iter()
+            .map(|c| format!("  {}  {}", c.key, c.blurb))
+            .collect()
+    }
+
+    /// The answer silence resolves to is the one shown capitalised.
+    pub fn brief(&self) -> String {
+        let parts = self.choices.iter().map(|c| {
+            if c.answer == self.silence {
+                c.key.to_uppercase().to_string()
+            } else if c.short.is_empty() {
+                c.key.to_string()
+            } else {
+                format!("{}={}", c.key, c.short)
+            }
+        });
+
+        format!("[{}]", parts.collect::<Vec<_>>().join(" / "))
+    }
+
+    pub fn parse(&self, reply: &str) -> A {
+        let reply = reply.trim();
+
+        self.choices.iter()
+            .find(|c| {
+                reply.eq_ignore_ascii_case(&c.key.to_string())
+                    || c.aliases.iter().any(|a| reply.eq_ignore_ascii_case(a))
+            })
+            .map_or(self.silence, |c| c.answer)
+    }
+}
+
+/// The rendered question, in both the forms its destinations need.
+struct Ask<'a> {
+    prompt: &'a str,
+    detail: Option<&'a str>,
+    choices: Vec<String>,
+    brief: String,
+    id: String,
+    timeout: Duration,
+}
+
+/// Copy so one detection serves a later question too - see degraded.rs's Retry.
 #[derive(Clone, Copy)]
 pub enum Prompt {
-    /// systemd's password agents.
     Agent,
-    /// A terminal we can write to and read from directly.
     Terminal,
 }
 
@@ -117,13 +155,26 @@ impl Prompt {
         None
     }
 
-    /// Put the question. `None` means nobody answered - declined, or timed
-    /// out. Callers treat that as their safe answer, not as an error.
-    pub fn ask(&self, ask: &Ask<'_>) -> Result<Option<String>> {
-        match self {
-            Prompt::Agent    => ask_via_agent(ask),
-            Prompt::Terminal => ask_on_terminal(ask).map(Some),
-        }
+    /// Put the question and interpret the reply.
+    ///
+    /// Always one of the question's own answers, silence included, so a caller
+    /// never has to decide what an unrecognised reply meant.
+    pub fn put<A: Copy + PartialEq>(&self, q: &Question<'_, A>) -> Result<A> {
+        let ask = Ask {
+            prompt:  q.prompt,
+            detail:  q.detail,
+            choices: q.lines(),
+            brief:   q.brief(),
+            id:      format!("bcachefs:UUID={}", q.uuid),
+            timeout: q.timeout,
+        };
+
+        let reply = match self {
+            Prompt::Agent    => ask_via_agent(&ask)?,
+            Prompt::Terminal => Some(ask_on_terminal(&ask)?),
+        };
+
+        Ok(reply.map_or(q.silence, |reply| q.parse(&reply)))
     }
 }
 
@@ -195,7 +246,7 @@ fn ask_on_terminal(ask: &Ask<'_>) -> Result<String> {
     if let Some(detail) = ask.detail {
         print!("{detail}");
     }
-    for choice in ask.choices {
+    for choice in &ask.choices {
         println!("{choice}");
     }
     print!("{} ", ask.brief);

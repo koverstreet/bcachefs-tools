@@ -7,8 +7,7 @@
 
 use std::fmt::Write as _;
 use std::path::PathBuf;
-use crate::prompt::{fs_name, Ask, Prompt};
-use std::time::Duration;
+use crate::prompt::{fs_name, Choice, Prompt, Question, PROMPT_TIMEOUT};
 
 use anyhow::Result;
 use bcachefs_kernel::c::bch_member_state::BCH_MEMBER_STATE_evacuating;
@@ -20,11 +19,6 @@ use c::bch_sb_handle;
 use log::warn;
 
 use crate::device_scan;
-
-/// How long the boot-time prompt waits before giving up and refusing. Distinct
-/// from missing_dev_timeout, which bounds waiting for hardware; this bounds
-/// waiting for a person.
-const PROMPT_TIMEOUT: Duration = Duration::from_secs(60);
 
 fn sb_opts(sb: &bch_sb_handle) -> Option<bch_opts> {
     let mut opts: bch_opts = Default::default();
@@ -45,93 +39,53 @@ fn degraded_action(sbs: &[(PathBuf, bch_sb_handle)], cli_opts: &bch_opts) -> u8 
         .unwrap_or(c::bch_degraded_actions::BCH_DEGRADED_ask as u8)
 }
 
-/// The two force levels are a real choice, so the user gets to make it.
-///
-/// `yes` is BCH_FORCE_IF_DEGRADED: mount, but not if that means data with no
-/// remaining copy. `very` adds BCH_FORCE_IF_LOST: mount anyway, and accept
-/// that some reads will fail. We can't tell the user which case they're in;
-/// the module header has the reasons.
-///
-/// Answering `y` when data *is* lost is not silently wrong: the kernel still
-/// refuses, and it is bch2_fs_may_start()'s job to say that `very` was the
-/// answer that would have worked.
+/// Answering IfReadable when data *is* lost is not silently wrong: the kernel
+/// refuses anyway, and bch2_fs_may_start() says that `very` was the answer
+/// that would have worked.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Answer {
     No,
-    /// degraded=yes - only if everything is still readable.
+    /// BCH_FORCE_IF_DEGRADED.
     IfReadable,
-    /// The same, read-only. Mounting read-write after losing a device starts
-    /// re-replicating onto the survivors, which can fill them and is not easy
-    /// to back out of; someone who wants to look at their data before they
-    /// have replaced the drive should be able to say so.
+    /// The same, read-only: mounting read-write re-replicates onto the
+    /// survivors, which can fill them and is not easy to back out of.
     ReadOnly,
-    /// degraded=very - even if it isn't.
+    /// BCH_FORCE_IF_LOST too.
     Force,
 }
 
-/// Which question is being put, and so which answers it will take.
+/// Some devices are missing. Mount without them?
 ///
-/// The two questions this module asks have different vocabularies, and the
-/// difference is not cosmetic. `r` is the *cautious* answer to the first one -
-/// look at the data, change nothing - and the second one has no read-only
-/// rung, because by then we are asking whether to mount with data that has no
-/// remaining copy at all. Parsing the second question's reply with the first
-/// question's vocabulary turns the most careful answer into the most
-/// destructive one, so the vocabulary travels with the question rather than
-/// sitting in one shared parser that both callers reach for.
-#[derive(Clone, Copy)]
-enum Question {
-    /// Some devices are missing. Mount without them?
-    Degraded,
-    /// The kernel refused even that: some data has no remaining copy. Mount
-    /// anyway? Yes or no - there is no cautious version of this one.
-    Force,
-}
+/// `r` is the *cautious* answer here and means nothing on the escalation
+/// question below, which has no read-only rung - so the two stay separate
+/// lists rather than one shared parser. Merging them would turn the most
+/// careful answer into the most destructive one.
+const DEGRADED_CHOICES: &[Choice<Answer>] = &[
+    Choice { key: 'y', aliases: &["yes"], short: "if readable",
+             blurb: "mount degraded, but not if any data has no remaining copy",
+             answer: Answer::IfReadable },
+    Choice { key: 'r', aliases: &["ro", "readonly"], short: "read-only",
+             blurb: "the same, read-only: nothing gets written or re-replicated",
+             answer: Answer::ReadOnly },
+    // "very" because that's the option name we print at them when we refuse
+    // ("or degraded=very if data may have no remaining copy"): someone who
+    // read that and typed it back meant it.
+    Choice { key: 'f', aliases: &["force", "very"], short: "force",
+             blurb: "force: mount even if some data will be unreadable",
+             answer: Answer::Force },
+    Choice { key: 'n', aliases: &["no"], short: "",
+             blurb: "don't mount", answer: Answer::No },
+];
 
-impl Question {
-    fn parse(self, s: &str) -> Answer {
-        match self {
-            Question::Degraded => match s.trim() {
-                "y" | "Y" | "yes" | "Yes" => Answer::IfReadable,
-                "r" | "R" | "ro" | "readonly" => Answer::ReadOnly,
-                // "very" because that's the option name we print at them when
-                // we refuse ("or degraded=very if data may have no remaining
-                // copy"): someone who read that and typed it back meant it.
-                "f" | "F" | "force" | "Force" | "very" | "Very" => Answer::Force,
-                _ => Answer::No,
-            },
-            Question::Force => match s.trim() {
-                "y" | "Y" | "yes" | "Yes"
-                | "f" | "F" | "force" | "Force" | "very" | "Very" => Answer::Force,
-                _ => Answer::No,
-            },
-        }
-    }
-
-    /// One line per answer. A terminal has room to spell them out.
-    fn choices(self) -> &'static [&'static str] {
-        match self {
-            Question::Degraded => &[
-                "  y  mount degraded, but not if any data has no remaining copy",
-                "  r  the same, read-only: nothing gets written or re-replicated",
-                "  f  force: mount even if some data will be unreadable",
-                "  n  don't mount",
-            ],
-            Question::Force => &[
-                "  y  mount, and accept that some reads will fail",
-                "  n  don't mount",
-            ],
-        }
-    }
-
-    /// The bracketed summary, for a prompt that only gets one line.
-    fn brief(self) -> &'static str {
-        match self {
-            Question::Degraded => "[y=if readable / r=read-only / f=force / N]",
-            Question::Force    => "[y/N]",
-        }
-    }
-}
+/// The kernel refused even that: some data has no remaining copy. Mount
+/// anyway? Yes or no - there is no cautious version of this one.
+const FORCE_CHOICES: &[Choice<Answer>] = &[
+    Choice { key: 'y', aliases: &["yes", "f", "force", "very"], short: "",
+             blurb: "mount, and accept that some reads will fail",
+             answer: Answer::Force },
+    Choice { key: 'n', aliases: &["no"], short: "",
+             blurb: "don't mount", answer: Answer::No },
+];
 
 impl Answer {
     /// The degraded= value the kernel acts on. Read-only is not one of these -
@@ -238,46 +192,30 @@ fn counts_as_missing(m: &c::bch_member, sb: *mut c::bch_sb, idx: u32) -> bool {
     has_data != 0
 }
 
-/// Put a question to whoever is at the machine.
-///
-/// @extra is anything only a multi-line destination can carry (the missing
-/// device list); the agent protocol's Message= is one line, so it reaches a
-/// terminal and nothing else.
-///
-/// Anything not positively recognised as consent is a refusal - see
-/// Question::parse - which covers a bare Enter and a timed-out boot prompt.
-/// "Nobody to ask" does not reach here: resolve_mount_opts() settles that
-/// before there is a question, so holding a Prompt means someone can see it.
-fn ask(p: &Prompt, q: Question, prompt: &str, extra: Option<&str>, uuid: &str)
-       -> Result<Answer> {
-    let reply = p.ask(&Ask {
+/// @extra reaches a terminal and nothing else: the agent protocol's Message=
+/// is one line.
+fn ask(p: &Prompt, choices: &[Choice<Answer>], prompt: &str, extra: Option<&str>,
+       uuid: &str) -> Result<Answer> {
+    p.put(&Question {
         prompt,
         detail:  extra,
-        choices: q.choices(),
-        brief:   q.brief(),
-        id:      &format!("bcachefs:UUID={uuid}"),
+        choices,
+        silence: Answer::No,
+        uuid,
         timeout: PROMPT_TIMEOUT,
-    })?;
-
-    Ok(reply.map_or(Answer::No, |reply| q.parse(&reply)))
+    })
 }
 
-/// What resolve_mount_opts() worked out, and whether there's a second question
-/// worth asking if the mount is refused anyway.
 pub struct MountOpts {
     pub fs_opts: Option<String>,
-    /// Mount flags the answer implies, to be OR'd into the caller's - MS_RDONLY
-    /// when the user asked for read-only. Zero unless we asked and they did.
+    /// To be OR'd into the caller's flags.
     pub flags: libc::c_ulong,
-    /// Set only when the answer can still be refused - `y` or `r`; see
-    /// escalate().
     retry: Option<Retry>,
 }
 
-/// Carries the Prompt rather than re-deriving one: this is the second question
-/// of the mount, and if the first one reached a person the second must go to
-/// the same place. Holding it here also means retry can only be armed when
-/// there was somewhere to ask in the first place.
+/// Carries the Prompt rather than re-deriving one: the second question of a
+/// mount must reach whoever answered the first. Holding it here is also what
+/// keeps retry from being armed when there was nobody to ask.
 struct Retry {
     fs_opts: Option<String>,
     uuid: String,
@@ -310,7 +248,7 @@ impl MountOpts {
         let prompt = "Some data has no remaining copy and will be unreadable. \
                       Mount anyway?";
 
-        if ask(&retry.prompt, Question::Force, prompt, None, &retry.uuid)?
+        if ask(&retry.prompt, FORCE_CHOICES, prompt, None, &retry.uuid)?
             != Answer::Force {
             return Ok(None);
         }
@@ -378,14 +316,12 @@ pub fn resolve_mount_opts(
         return Ok(MountOpts::plain(fs_opts));
     };
 
-    let answer = ask(&p, Question::Degraded, &q, devs.as_deref(), &uuid)?;
+    let answer = ask(&p, DEGRADED_CHOICES, &q, devs.as_deref(), &uuid)?;
 
-    // warn, not info: the default verbosity is Warn, and everything here is a
-    // decision about the user's data that we made for them. Without this the
-    // only thing they see is the kernel's insufficient_devices_to_start, which
-    // does not mention that a question was asked and answered on their behalf,
-    // or that -o degraded=yes exists. This runs only when a device is missing,
-    // so it is not chatter.
+    // warn, not info: the default verbosity is Warn, and this is a decision
+    // about the user's data that we made for them. Otherwise all they see is
+    // the kernel's insufficient_devices_to_start, which mentions neither that
+    // a question was answered on their behalf nor that -o degraded=yes exists.
     warn!("mounting {}with {}",
           if answer == Answer::ReadOnly { "read-only " } else { "" },
           answer.opt());
@@ -410,6 +346,13 @@ fn append_opt(fs_opts: Option<String>, opt: &str) -> String {
 mod tests {
     use super::*;
 
+    fn parse(choices: &[Choice<Answer>], reply: &str) -> Answer {
+        Question {
+            prompt: "", detail: None, choices,
+            silence: Answer::No, uuid: "", timeout: PROMPT_TIMEOUT,
+        }.parse(reply)
+    }
+
     #[test]
     fn append_opt_handles_absent_and_empty() {
         assert_eq!(append_opt(None, "degraded=yes"), "degraded=yes");
@@ -421,16 +364,39 @@ mod tests {
         );
     }
 
+    fn q(choices: &[Choice<Answer>]) -> Question<'_, Answer> {
+        Question {
+            prompt: "", detail: None, choices,
+            silence: Answer::No, uuid: "", timeout: PROMPT_TIMEOUT,
+        }
+    }
+
+    /// Deriving both rendered forms from the answer list is what stops them
+    /// drifting apart, but it also means a change to the derivation silently
+    /// rewords every prompt. The capitalised answer is how a reader knows what
+    /// Enter will do.
+    #[test]
+    fn the_summary_names_the_answers_and_marks_the_default() {
+        assert_eq!(q(DEGRADED_CHOICES).brief(),
+                   "[y=if readable / r=read-only / f=force / N]");
+        assert_eq!(q(FORCE_CHOICES).brief(), "[y / N]");
+
+        assert_eq!(q(FORCE_CHOICES).lines(), [
+            "  y  mount, and accept that some reads will fail",
+            "  n  don't mount",
+        ]);
+    }
+
     #[test]
     fn answer_parses_both_force_levels() {
         for s in ["y", "Y", "yes", "Yes", " y \n"] {
-            assert_eq!(Question::Degraded.parse(s), Answer::IfReadable, "{s:?}");
+            assert_eq!(parse(DEGRADED_CHOICES, s), Answer::IfReadable, "{s:?}");
         }
         for s in ["f", "F", "force", "Force", " f \n", "very"] {
-            assert_eq!(Question::Degraded.parse(s), Answer::Force, "{s:?}");
+            assert_eq!(parse(DEGRADED_CHOICES, s), Answer::Force, "{s:?}");
         }
         for s in ["r", "R", "ro", "readonly"] {
-            assert_eq!(Question::Degraded.parse(s), Answer::ReadOnly, "{s:?}");
+            assert_eq!(parse(DEGRADED_CHOICES, s), Answer::ReadOnly, "{s:?}");
         }
     }
 
@@ -440,8 +406,8 @@ mod tests {
     #[test]
     fn answer_defaults_to_refusing() {
         for s in ["", "\n", "n", "N", "no", "q", "yolo", "degraded"] {
-            assert_eq!(Question::Degraded.parse(s), Answer::No, "{s:?}");
-            assert_eq!(Question::Force.parse(s), Answer::No, "{s:?}");
+            assert_eq!(parse(DEGRADED_CHOICES, s), Answer::No, "{s:?}");
+            assert_eq!(parse(FORCE_CHOICES, s), Answer::No, "{s:?}");
         }
     }
 
@@ -451,10 +417,10 @@ mod tests {
     #[test]
     fn the_cautious_answer_is_not_consent_to_force() {
         for s in ["r", "R", "ro", "readonly"] {
-            assert_eq!(Question::Force.parse(s), Answer::No, "{s:?}");
+            assert_eq!(parse(FORCE_CHOICES, s), Answer::No, "{s:?}");
         }
         for s in ["y", "yes", "f", "force", "very"] {
-            assert_eq!(Question::Force.parse(s), Answer::Force, "{s:?}");
+            assert_eq!(parse(FORCE_CHOICES, s), Answer::Force, "{s:?}");
         }
     }
 
