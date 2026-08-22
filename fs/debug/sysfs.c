@@ -775,10 +775,17 @@ static ssize_t sysfs_opt_show(struct bch_fs *c,
 	const struct bch_option *opt = bch2_opt_table + id;
 	u64 v;
 
+	/*
+	 * c->disk_sb.sb is reallocated and freed under sb_lock, so hold it
+	 * across the reads below - previously only the STR_MEMBER branch
+	 * did, and the other paths read a superblock that a concurrent
+	 * device add/remove could free.
+	 */
+	guard(mutex_noio)(&c->sb_lock);
+
 	if (ca) {
 		if (opt->type == BCH_OPT_STR_MEMBER) {
 			/* The value lives in the member, not a u64 - render it here: */
-			guard(mutex_noio)(&c->sb_lock);
 			struct bch_member m = bch2_sb_member_get(c->disk_sb.sb, ca->dev_idx);
 			prt_printf(out, "%.*s\n", (int) opt->member_size,
 				   (char *) &m + opt->member_offset);
