@@ -202,7 +202,7 @@ fn ask(p: &Prompt, choices: &[Choice<Answer>], prompt: &str, extra: Option<&str>
         choices,
         silence: Answer::No,
         uuid,
-        timeout: PROMPT_TIMEOUT,
+        timeout: Some(PROMPT_TIMEOUT),
     })
 }
 
@@ -349,7 +349,7 @@ mod tests {
     fn parse(choices: &[Choice<Answer>], reply: &str) -> Answer {
         Question {
             prompt: "", detail: None, choices,
-            silence: Answer::No, uuid: "", timeout: PROMPT_TIMEOUT,
+            silence: Answer::No, uuid: "", timeout: None,
         }.parse(reply)
     }
 
@@ -367,7 +367,7 @@ mod tests {
     fn q(choices: &[Choice<Answer>]) -> Question<'_, Answer> {
         Question {
             prompt: "", detail: None, choices,
-            silence: Answer::No, uuid: "", timeout: PROMPT_TIMEOUT,
+            silence: Answer::No, uuid: "", timeout: None,
         }
     }
 

@@ -66,8 +66,13 @@ pub struct Question<'a, A> {
     /// capitalised in the summary.
     pub silence: A,
     pub uuid: &'a str,
-    /// How long to wait for a person before giving up.
-    pub timeout: Duration,
+    /// How long to wait for a person, or `None` to wait indefinitely.
+    ///
+    /// Waiting forever is a legitimate thing to want: someone whose root is
+    /// encrypted, or degraded, may prefer a boot that stops and waits over one
+    /// that gives up and fails while they are fetching the disk. It is what
+    /// `--timeout=0` means to systemd-ask-password, and this is that.
+    pub timeout: Option<Duration>,
 }
 
 impl<A: Copy + PartialEq> Question<'_, A> {
@@ -111,7 +116,7 @@ struct Ask<'a> {
     choices: Vec<String>,
     brief: String,
     id: String,
-    timeout: Duration,
+    timeout: Option<Duration>,
 }
 
 /// Copy so one detection serves a later question too - see degraded.rs's Retry.
@@ -224,7 +229,8 @@ fn ask_via_agent(ask: &Ask<'_>) -> Result<Option<String>> {
         .arg("--echo=yes")
         .arg("--icon=drive-harddisk")
         .arg(format!("--id={}", ask.id))
-        .arg(format!("--timeout={}", ask.timeout.as_secs()))
+        // 0 is systemd-ask-password's own spelling of "wait indefinitely".
+        .arg(format!("--timeout={}", ask.timeout.map_or(0, |t| t.as_secs())))
         .arg("-n")
         .arg(format!("{} {}", ask.prompt, ask.brief))
         .stdin(Stdio::inherit())
