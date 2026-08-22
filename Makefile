@@ -370,7 +370,7 @@ uninstall:
 	$(RM) $(addprefix $(DESTDIR)$(PKGCONFIG_SERVICEDIR)/,$(systemd_services))
 
 .PHONY: install_systemd
-install_systemd: $(systemd_services) $(systemd_libexecfiles)
+install_systemd: $(systemd_services)
 	$(INSTALL) -m0644 -D $(systemd_services) -t $(DESTDIR)$(PKGCONFIG_SERVICEDIR)
 
 .PHONY: install_dkms
