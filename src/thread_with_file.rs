@@ -14,7 +14,9 @@
 //!
 //! Both fds are put in non-blocking mode so that neither direction can stall the
 //! other: a question written while nobody is draining must not stop us reading
-//! the answer, and vice versa.
+//! the answer, and vice versa. stdin's original flags are restored on the way
+//! out, because it does not belong to us - the mount path has its own prompts to
+//! put on it afterwards.
 
 use std::{
     io,
@@ -26,10 +28,10 @@ use rustix::{
     fs::{fcntl_getfl, fcntl_setfl, OFlags},
 };
 
-fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<()> {
+fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<OFlags> {
     let flags = fcntl_getfl(fd)?;
     fcntl_setfl(fd, flags | OFlags::NONBLOCK)?;
-    Ok(())
+    Ok(flags)
 }
 
 /// Move what's readable on `rfd` to `wfd`.
@@ -68,8 +70,15 @@ fn splice(rfd: BorrowedFd<'_>, wfd: BorrowedFd<'_>) -> io::Result<bool> {
 /// it.
 pub fn relay(fd: BorrowedFd<'_>, out: BorrowedFd<'_>) -> io::Result<()> {
     let stdin = io::stdin();
+    let stdin_flags = set_nonblocking(stdin.as_fd())?;
 
-    set_nonblocking(stdin.as_fd())?;
+    let ret = relay_locked(fd, out, stdin.as_fd());
+
+    let _ = fcntl_setfl(stdin.as_fd(), stdin_flags);
+    ret
+}
+
+fn relay_locked(fd: BorrowedFd<'_>, out: BorrowedFd<'_>, stdin: BorrowedFd<'_>) -> io::Result<()> {
     set_nonblocking(fd)?;
 
     let mut stdin_closed = false;
@@ -87,7 +96,7 @@ pub fn relay(fd: BorrowedFd<'_>, out: BorrowedFd<'_>) -> io::Result<()> {
 
         // Our own end running dry is not the end of the conversation: the
         // filesystem may have a great deal left to say.
-        if !stdin_closed && splice(stdin.as_fd(), fd)? {
+        if !stdin_closed && splice(stdin, fd)? {
             stdin_closed = true;
         }
     }
