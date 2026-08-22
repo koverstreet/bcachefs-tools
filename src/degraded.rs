@@ -347,12 +347,21 @@ pub fn resolve_mount_opts(
     // Mounting degraded is a decision about data, so with nobody there to make
     // it we say what we would have asked, and refuse.
     let Some(p) = Prompt::detect() else {
-        warn!("{q}");
-        for line in devs.as_deref().unwrap_or("").lines() {
-            warn!("{line}");
+        // One warning: this is one event - the question we would have asked,
+        // who it was about, and what we did instead. Emitting it a line at a
+        // time stamps file:line on each, and the device list is indented text
+        // that only reads as a block.
+        let mut msg = q.clone();
+
+        if let Some(devs) = &devs {
+            msg.push('\n');
+            msg.push_str(devs.trim_end());
         }
-        warn!("no way to ask anyone; refusing (mount -o degraded=yes, \
-               or degraded=very if data may have no remaining copy)");
+
+        msg.push_str("\nno way to ask anyone; refusing (mount -o degraded=yes, \
+                      or degraded=very if data may have no remaining copy)");
+
+        warn!("{msg}");
         return Ok(MountOpts::plain(fs_opts));
     };
 
