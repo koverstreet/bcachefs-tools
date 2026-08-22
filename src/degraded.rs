@@ -200,18 +200,7 @@ fn missing_devices_to_text(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<String> {
 
         let Some(mut m) = members.get(idx) else { continue };
 
-        // An empty or deleted slot is a hole in the array, not a device. Both
-        // spellings matter: a member that was removed keeps its slot with a
-        // tombstone UUID rather than being zeroed, and naming a disk the user
-        // took out on purpose as one they are now missing is the worst place
-        // in this file to get it wrong.
-        if !crate::wrappers::sb_display::member_alive(&m) {
-            continue;
-        }
-
-        if m.member_state() == BCH_MEMBER_STATE_evacuating as u64
-            && unsafe { c::bch2_sb_dev_has_data(sb_ptr, idx) } == 0
-        {
+        if !counts_as_missing(&m, sb_ptr, idx) {
             continue;
         }
 
@@ -223,6 +212,30 @@ fn missing_devices_to_text(sbs: &[(PathBuf, bch_sb_handle)]) -> Option<String> {
     }
 
     (!out.as_str().is_empty()).then(|| out.as_str().to_owned())
+}
+
+/// Whether an absent member is one the user is missing, rather than one they
+/// took out on purpose. Naming the second as the first is the worst thing in
+/// this file to get wrong.
+///
+/// Both spellings of "not a device" matter: an unused slot is zeroed, and a
+/// member that was removed keeps its slot with a tombstone UUID. The
+/// evacuating test is bch2_fs_may_start()'s own - a device being emptied with
+/// nothing left on it is mid-removal.
+fn counts_as_missing(m: &c::bch_member, sb: *mut c::bch_sb, idx: u32) -> bool {
+    if !crate::wrappers::sb_display::member_alive(m) {
+        return false;
+    }
+
+    if m.member_state() != BCH_MEMBER_STATE_evacuating as u64 {
+        return true;
+    }
+
+    // SAFETY: @sb is the live superblock the caller read @m out of, and
+    // idx < nr_devices because that is what indexed @m.
+    let has_data = unsafe { c::bch2_sb_dev_has_data(sb, idx) };
+
+    has_data != 0
 }
 
 /// Put a question to whoever is at the machine.
