@@ -12,7 +12,7 @@
 //! decided what exists.
 
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     ffi::{CStr, CString, c_char, OsString, OsStr},
     fs,
     os::fd::{AsRawFd, BorrowedFd},
@@ -23,6 +23,7 @@ use std::{
 };
 
 use anyhow::{bail, Result};
+use crate::wrappers::sysfs::DevInfo;
 use rustix::event::{poll, PollFd, PollFlags, Timespec};
 use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::{c, opt_defined, opt_get, opt_set};
@@ -332,6 +333,53 @@ pub fn expected_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> usize {
 /// contributing. Counting paths calls the set complete with a member missing.
 pub fn present_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> HashSet<u8> {
     sbs.iter().map(|(_, sb)| sb.sb().dev_idx).collect()
+}
+
+/// The member devices as `bcachefs fs usage` wants to see them, built from the
+/// superblocks we scanned instead of from sysfs.
+///
+/// Same DevInfo, so fs usage's durability and degraded accounting can be reused
+/// on a filesystem that isn't mounted yet: there is no /sys/fs/bcachefs/<uuid>
+/// to read until it is, and by then nobody needs the answer.
+///
+/// @online means "the scan found it", which is the question being asked here -
+/// a member the superblock names and we didn't turn up is missing, whichever
+/// way it went missing.
+///
+/// Durability is one-biased on disk, zero meaning one, as bch2_mi_to_cpu()
+/// reads it. Taking the raw field would report every default device as
+/// contributing no durability at all.
+pub fn devices_from_superblocks(sbs: &[(PathBuf, bch_sb_handle)]) -> Vec<DevInfo> {
+    let Some((_, first)) = sbs.first() else { return Vec::new() };
+    let Some(members) = bcachefs_kernel::sb::members::members_v2(first.sb()) else {
+        return Vec::new();
+    };
+
+    let have = present_devices(sbs);
+    let paths: HashMap<u8, &PathBuf> =
+        sbs.iter().map(|(p, sb)| (sb.sb().dev_idx, p)).collect();
+
+    (0..members.nr_devices())
+        .filter_map(|idx| {
+            let m = members.get(idx)?;
+            if !crate::wrappers::sb_display::member_alive(&m) {
+                return None;
+            }
+
+            let raw = m.durability();
+
+            Some(DevInfo {
+                idx,
+                dev: paths.get(&(idx as u8))
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| format!("dev-{idx}")),
+                label:          None,
+                failure_domain: None,
+                durability:     if raw != 0 { raw as u32 - 1 } else { 1 },
+                online:         have.contains(&(idx as u8)),
+            })
+        })
+        .collect()
 }
 
 /// Are all the members here?

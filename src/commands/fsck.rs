@@ -68,7 +68,7 @@ pub struct FsckCli {
 }
 
 fn splice_fd_to_stdinout(fd: BorrowedFd<'_>) -> i32 {
-    if thread_with_file::relay(fd, io::stdout().as_fd()).is_err() {
+    if thread_with_file::relay(fd, io::stdout().as_fd(), None).is_err() {
         return -1;
     }
 

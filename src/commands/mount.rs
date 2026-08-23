@@ -16,8 +16,10 @@ use clap::Parser;
 use log::{debug, error, info, warn};
 use uuid::Uuid;
 use crate::device_scan;
-use crate::thread_with_file;
+use crate::recovery_display::RecoveryDisplay;
+use crate::thread_with_file::{self, StatusDisplay};
 use crate::wrappers::handle::BcachefsHandle;
+use crate::wrappers::sysfs::DevInfo;
 
 use crate::{
     fs_context::{self, FsContext, Level, Message},
@@ -26,14 +28,32 @@ use crate::{
 };
 
 /// Carry the mount's side of the conversation while it's coming up: the
-/// filesystem to stderr, stdin back to the filesystem.
+/// filesystem to stderr, stdin back to the filesystem, and recovery progress
+/// drawn below both.
 ///
 /// Detached. This thread is inside fsconfig(2) until the mount is done, so
 /// there's no point in the sequence where joining would be right - and the
 /// kernel marks the channel done on every path out, which ends the relay.
-fn spawn_status_relay(fd: OwnedFd) {
+///
+/// Whether we draw decides whether we poll at all: the kernel stops logging
+/// progress to dmesg as soon as anything reads BCH_IOCTL_RECOVERY_STATUS, on
+/// the grounds that whoever read it is showing it. Polling from somewhere with
+/// nowhere to draw would take progress out of both places at once - so the
+/// display decides, in RecoveryDisplay::new(), and returning None here means
+/// leaving it to dmesg.
+fn spawn_status_relay(fd: OwnedFd, source: String, devs: Vec<DevInfo>) {
     std::thread::spawn(move || {
-        if let Err(e) = thread_with_file::relay(fd.as_fd(), std::io::stderr().as_fd()) {
+        let err = std::io::stderr();
+
+        let mut display = RecoveryDisplay::new(fd.as_fd(), source, devs);
+
+        let ret = thread_with_file::relay(
+            fd.as_fd(),
+            err.as_fd(),
+            display.as_mut().map(|d| d as &mut dyn StatusDisplay),
+        );
+
+        if let Err(e) = ret {
             debug!("status channel: {e}");
         }
     });
@@ -118,6 +138,7 @@ fn mount_fs_context(
     fstype: &str,
     mountflags: libc::c_ulong,
     data: Option<&str>,
+    devs: &[DevInfo],
 ) -> Result<Mounted, MountError> {
     let fc = match FsContext::open(fstype) {
         Ok(Some(fc)) => fc,
@@ -182,7 +203,7 @@ fn mount_fs_context(
     match fc.status_fd() {
         Some(fd) => {
             info!("status channel on fd {}", fd.as_raw_fd());
-            spawn_status_relay(fd);
+            spawn_status_relay(fd, src.to_string(), devs.to_vec());
         }
         None => info!("no status channel from this kernel; mounting without one"),
     }
@@ -287,6 +308,7 @@ fn mount_inner(
     fstype: &str,
     mountflags: libc::c_ulong,
     data: Option<String>,
+    devs: Vec<DevInfo>,
 ) -> Result<(), MountError> {
     // Reconfiguring an existing mount is fspick(2) + FSCONFIG_CMD_RECONFIGURE,
     // which fs_context doesn't implement; leave remount on mount(2).
@@ -300,7 +322,7 @@ fn mount_inner(
 
             loop {
                 info!("mounting filesystem");
-                match mount_fs_context(src_str, &c_target, fstype, flags, data.as_deref())? {
+                match mount_fs_context(src_str, &c_target, fstype, flags, data.as_deref(), &devs)? {
                     Mounted::Yes      => return Ok(()),
                     Mounted::UseLegacy => break,
                     Mounted::WriteProtected => {
@@ -619,6 +641,11 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         let mounted = device_scan::present_devices(&sbs);
         let short = mounted.len() < device_scan::expected_devices(&sbs);
 
+        // For the mount-time progress display, which needs to say how much
+        // redundancy is left - and can only ask the superblocks, because the
+        // filesystem isn't up yet. Taken before the scan is dropped.
+        let devinfo = device_scan::devices_from_superblocks(&sbs);
+
         drop(sbs);
 
         info!(
@@ -634,6 +661,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             "bcachefs",
             flags,
             fs_opts.fs_opts.clone(),
+            devinfo.clone(),
         ) {
             Ok(()) => Ok(()),
             Err(e) => {
@@ -646,7 +674,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
                 // they declined - and then the original error stands.
                 match fs_opts.escalate(&e.code)? {
                     Some(retry) =>
-                        mount_inner(devices, mountpoint, "bcachefs", flags, Some(retry)),
+                        mount_inner(devices, mountpoint, "bcachefs", flags, Some(retry), devinfo),
                     None => Err(e),
                 }
             }

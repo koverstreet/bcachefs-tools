@@ -9,6 +9,7 @@ mod dump_stack;
 mod logging;
 mod prompt;
 mod qcow2;
+mod recovery_display;
 mod splitbrain;
 mod thread_with_file;
 mod util;

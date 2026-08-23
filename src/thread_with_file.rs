@@ -17,16 +17,40 @@
 //! the answer, and vice versa. stdin's original flags are restored on the way
 //! out, because it does not belong to us - the mount path has its own prompts to
 //! put on it afterwards.
+//!
+//! A caller may also keep a live display below the conversation - mount draws
+//! recovery progress there. The relay drives it rather than the other way round
+//! because the relay is what knows when the filesystem is about to print, and
+//! two writers taking turns with one cursor is the whole problem.
 
 use std::{
     io,
     os::fd::{AsFd, BorrowedFd},
+    time::Duration,
 };
 
 use rustix::{
-    event::{poll, PollFd, PollFlags},
+    event::{poll, PollFd, PollFlags, Timespec},
     fs::{fcntl_getfl, fcntl_setfl, OFlags},
 };
+
+/// A block of text kept below the conversation and refreshed as it runs.
+///
+/// The relay owns the cursor: it takes the block down before anything the
+/// filesystem says is written, so the message lands on a clean line and ends up
+/// above the block rather than through it, and puts the block back afterwards.
+/// `draw` is also called every `interval` so a live display keeps moving while
+/// there is nothing being said.
+pub trait StatusDisplay {
+    /// How long to wait for either end to speak before redrawing anyway.
+    fn interval(&self) -> Duration;
+
+    /// Take the block down, leaving the cursor where it started.
+    fn erase(&mut self) -> io::Result<()>;
+
+    /// Put it back, with current contents.
+    fn draw(&mut self) -> io::Result<()>;
+}
 
 fn set_nonblocking(fd: BorrowedFd<'_>) -> io::Result<OFlags> {
     let flags = fcntl_getfl(fd)?;
@@ -68,17 +92,26 @@ fn splice(rfd: BorrowedFd<'_>, wfd: BorrowedFd<'_>) -> io::Result<bool> {
 /// Returns when the kernel marks the channel done, which it does on every path
 /// out of the operation - so this ends on its own without the caller arranging
 /// it.
-pub fn relay(fd: BorrowedFd<'_>, out: BorrowedFd<'_>) -> io::Result<()> {
+pub fn relay(
+    fd: BorrowedFd<'_>,
+    out: BorrowedFd<'_>,
+    display: Option<&mut dyn StatusDisplay>,
+) -> io::Result<()> {
     let stdin = io::stdin();
     let stdin_flags = set_nonblocking(stdin.as_fd())?;
 
-    let ret = relay_locked(fd, out, stdin.as_fd());
+    let ret = relay_locked(fd, out, stdin.as_fd(), display);
 
     let _ = fcntl_setfl(stdin.as_fd(), stdin_flags);
     ret
 }
 
-fn relay_locked(fd: BorrowedFd<'_>, out: BorrowedFd<'_>, stdin: BorrowedFd<'_>) -> io::Result<()> {
+fn relay_locked(
+    fd: BorrowedFd<'_>,
+    out: BorrowedFd<'_>,
+    stdin: BorrowedFd<'_>,
+    mut display: Option<&mut dyn StatusDisplay>,
+) -> io::Result<()> {
     set_nonblocking(fd)?;
 
     let mut stdin_closed = false;
@@ -88,16 +121,33 @@ fn relay_locked(fd: BorrowedFd<'_>, out: BorrowedFd<'_>, stdin: BorrowedFd<'_>) 
         if !stdin_closed {
             pollfds.push(PollFd::new(&stdin, PollFlags::IN));
         }
-        let _ = poll(&mut pollfds, None);
 
-        if splice(fd, out)? {
-            return Ok(());
+        let timeout = display.as_deref().map(|d| {
+            let i = d.interval();
+            Timespec { tv_sec: i.as_secs() as _, tv_nsec: i.subsec_nanos() as _ }
+        });
+        let _ = poll(&mut pollfds, timeout.as_ref());
+
+        if let Some(d) = display.as_deref_mut() {
+            d.erase()?;
         }
+
+        let eof = splice(fd, out)?;
 
         // Our own end running dry is not the end of the conversation: the
         // filesystem may have a great deal left to say.
         if !stdin_closed && splice(stdin, fd)? {
             stdin_closed = true;
+        }
+
+        // Leave the terminal as we found it - the caller has its own result to
+        // print, and it doesn't belong under a stale progress block.
+        if eof {
+            return Ok(());
+        }
+
+        if let Some(d) = display.as_deref_mut() {
+            d.draw()?;
         }
     }
 }

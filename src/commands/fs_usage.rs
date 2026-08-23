@@ -326,6 +326,28 @@ pub fn replicas_durability(
     Durability { durability, degraded }
 }
 
+/// How many more devices this replicas entry can lose before its data becomes
+/// unreadable.
+///
+/// One unit of durability has to survive for the data to be readable at all, so
+/// it's what's left over after that: zero means the next device to go takes
+/// this data with it, and negative means some of it has already gone. The
+/// erasure-coded case needs no special handling - replicas_durability() has
+/// already collapsed nr_devs/nr_required into an equivalent durability.
+///
+/// A filesystem's answer is the minimum over its entries, which is why this is
+/// per-entry: the worst-off data decides, not the average.
+pub fn replicas_spare_redundancy(
+    nr_devs: u8,
+    nr_required: u8,
+    dev_list: &[u8],
+    devs: &[DevInfo],
+) -> i32 {
+    let d = replicas_durability(nr_devs, nr_required, dev_list, devs);
+
+    d.durability as i32 - d.degraded as i32 - 1
+}
+
 /// Durability x degraded matrix: matrix[durability][degraded] = sectors
 type DurabilityMatrix = Vec<Vec<u64>>;
 
