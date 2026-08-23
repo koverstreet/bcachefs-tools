@@ -320,6 +320,13 @@ const DEFAULT_MISSING_DEV_TIMEOUT: Duration = Duration::from_secs(30);
 /// every block device on the machine.
 const NO_UDEV_RESCAN_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How long to wait for a member before mentioning that we are waiting.
+///
+/// Long enough that somebody is starting to wonder. Most of the time every
+/// device is already there and the wait is over before this, which is what
+/// keeps a normal mount silent.
+const QUIET_WAIT: Duration = Duration::from_secs(2);
+
 /// Members the filesystem should have, according to what we found. Zero when
 /// we found nothing at all - not "no devices", but "don't know yet".
 pub fn expected_devices(sbs: &[(PathBuf, bch_sb_handle)]) -> usize {
@@ -469,12 +476,17 @@ where
             return Ok(sbs);
         };
 
-        // Not per event - a boot that pauses here should say why, but the
-        // console is not the place for a progress bar. Keyed on the timeout
-        // rather than a bare flag because the timeout changes: until the first
-        // member turns up we are working off the built-in, and the number we
-        // said out loud would otherwise be one nobody is waiting for.
-        if announced != Some(timeout) {
+        // Only once the pause is long enough to need explaining. This exists so
+        // a boot that stalls on a slow disk does not look wedged; a mount that
+        // pauses for a moment is not something anyone needs told about, and
+        // saying so anyway is how a log teaches people to skip its warnings.
+        //
+        // Not per event either - the console is not the place for a progress
+        // bar. Keyed on the timeout rather than a bare flag because the timeout
+        // changes: until the first member turns up we are working off the
+        // built-in, and the number we said out loud would otherwise be one
+        // nobody is waiting for.
+        if start.elapsed() >= QUIET_WAIT && announced != Some(timeout) {
             announced = Some(timeout);
             match expected_devices(&sbs) {
                 0 => warn!("no devices found yet, waiting up to {}s", timeout.as_secs()),
@@ -487,6 +499,14 @@ where
             Some(socket) => {
                 let fd = unsafe { BorrowedFd::borrow_raw(socket.as_raw_fd()) };
                 let mut fds = [PollFd::new(&fd, PollFlags::IN)];
+
+                // Bounded until we have spoken, or a wait long enough to need
+                // explaining would sit here silently for all of it: nothing
+                // wakes this poll when the device simply isn't coming.
+                let remaining = match announced {
+                    Some(_) => remaining,
+                    None    => remaining.min(QUIET_WAIT),
+                };
 
                 let deadline = Timespec {
                     tv_sec:  remaining.as_secs() as _,
