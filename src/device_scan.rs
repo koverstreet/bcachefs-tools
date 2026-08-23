@@ -771,12 +771,10 @@ pub struct DeviceWatch {
 }
 
 impl DeviceWatch {
-	/// `None` when there is nothing to watch for or no way to watch: a
-	/// filesystem we cannot name by UUID, or no udev to tell us about
+	/// `None` when there is no way to watch: no udev to tell us about
 	/// arrivals. Polling for a disk on a timer while a question is on screen
 	/// is not worth the code.
-	pub fn new(sbs: &[(PathBuf, bch_sb_handle)], opts: &bch_opts, use_udev: bool) -> Option<Self> {
-		let uuid = sbs.first()?.1.sb().uuid();
+	pub fn new(uuid: Uuid, opts: &bch_opts, use_udev: bool) -> Option<Self> {
 		let socket = block_device_monitor()?;
 
 		Some(DeviceWatch { socket, uuid, opts: *opts, use_udev })

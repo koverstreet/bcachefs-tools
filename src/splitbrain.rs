@@ -222,9 +222,11 @@ pub fn ask(sb: &bch_sb_handle) -> Result<bool> {
     // no watch is passed.
     Ok(p.put(&Question {
         prompt:  &format!("Continue with {name}'s surviving history?"),
-        detail:  None,
         choices: CHOICES,
         silence: false,
+        // Not an alarm: what this question risks is in the report the scan
+        // already printed above it, not in the one line here.
+        alarm:   false,
         uuid:    &uuid,
         timeout: Some(PROMPT_TIMEOUT),
     }, None)?.unwrap_or(false))
@@ -249,8 +251,8 @@ mod tests {
 
     fn parse(reply: &str) -> bool {
         Question {
-            prompt: "", detail: None, choices: CHOICES,
-            silence: false, uuid: "", timeout: None,
+            prompt: "", choices: CHOICES,
+            silence: false, alarm: false, uuid: "", timeout: None,
         }.parse(reply)
     }
 

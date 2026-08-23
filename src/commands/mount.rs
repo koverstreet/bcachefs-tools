@@ -15,6 +15,7 @@ use bcachefs_kernel::{c, opt_get, opt_set, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info, warn};
 use uuid::Uuid;
+use crate::degraded;
 use crate::device_scan;
 use crate::recovery_display::RecoveryDisplay;
 use crate::thread_with_file::{self, StatusDisplay};
@@ -92,10 +93,10 @@ fn report_log(msgs: Vec<Message>) -> Vec<String> {
 ///
 /// The code is the half we can act on. bch2_fs_get_tree() hands back bcachefs's
 /// own error codes rather than flattening them to an errno, so
-/// insufficient_devices_to_start and device_splitbrain arrive as distinct
-/// values instead of two EINVALs that can only be told apart by reading their
-/// prose - which is what [`crate::degraded::MountOpts::escalate`] used to have
-/// to do.
+/// device_splitbrain and the two missing-device refusals arrive as distinct
+/// values instead of three EINVALs that could only be told apart by reading
+/// their prose. [`crate::degraded::Ask::put`] decides what to ask on that code
+/// alone.
 ///
 /// The text is the half for the user: whatever the filesystem logged against
 /// the context, which is the whole reason for mounting through fs_context.
@@ -587,6 +588,101 @@ fn scan_or_ask_splitbrain(dev: &String, opts: &mut bch_opts)
     Ok(sbs)
 }
 
+/// What one mount attempt needs, taken from a scan.
+///
+/// It holds no `bch_sb_handle`: those are open block devices, and the kernel
+/// opens the members itself. So the scan is consumed here and everything an
+/// attempt - or the question that follows a refused one - could want is copied
+/// out first.
+struct Attempt {
+    devices: OsString,
+    devinfo: Vec<DevInfo>,
+    uuid:    Uuid,
+    /// Members we found. Short of the full set means someone may yet turn up.
+    present: HashSet<u8>,
+    short:   bool,
+    /// The degraded question, if it is ours to put. Taken once it is answered:
+    /// there is only one question here, and it is asked at most once.
+    ask:     Option<degraded::Ask>,
+}
+
+impl Attempt {
+    fn new(sbs: Vec<(PathBuf, bch_sb_handle)>, opts: &bch_opts) -> Attempt {
+        let present = device_scan::present_devices(&sbs);
+
+        Attempt {
+            devices: device_scan::joined_device_str(&sbs),
+            devinfo: device_scan::devices_from_superblocks(&sbs),
+            uuid:    sbs[0].1.sb().uuid(),
+            short:   present.len() < device_scan::expected_devices(&sbs),
+            present,
+            ask:     degraded::Ask::new(&sbs, opts),
+        }
+    }
+}
+
+/// Mount, and put the degraded question if the kernel refuses for want of a
+/// device.
+///
+/// A loop rather than a call and a retry, because one of the answers is "the
+/// disk just turned up" - and then there is a new device list to mount with,
+/// not just a new option. Each pass either mounts, refuses for good, or comes
+/// back with one of those two things changed.
+fn mount_asking_about_degraded(
+    cli: &Cli,
+    mountpoint: &Path,
+    sbs: Vec<(PathBuf, bch_sb_handle)>,
+    opts: &mut bch_opts,
+    parsed: &ParsedMountOptions,
+) -> Result<()> {
+    let mut a = Attempt::new(sbs, opts);
+    let mut flags = parsed.flags;
+    let mut fs_opts = parsed.fs_opts.clone();
+
+    loop {
+        info!(
+            "mounting with params: device: {:?}, target: {}, options: {}",
+            a.devices, mountpoint.to_string_lossy(), &cli.options
+        );
+
+        let err = match mount_inner(a.devices.clone(), mountpoint, "bcachefs",
+                                    flags, fs_opts.clone(), a.devinfo.clone()) {
+            Ok(()) => {
+                // Mounted, but we left members behind: one of them may have
+                // shown up while we were asking about it.
+                if a.short {
+                    online_late_devices(a.uuid, &a.present, opts);
+                }
+                return Ok(());
+            }
+            Err(e) => e,
+        };
+
+        let Some(ask) = &a.ask else { return Err(err.into()) };
+
+        match ask.put(&err.code)? {
+            degraded::Outcome::Mount { fs_opt, read_only } => {
+                fs_opts = Some(degraded::append_opt(fs_opts, fs_opt));
+                // Read-only is a mount flag, not a degraded= value, and it has
+                // to be read-only to the VFS - or /proc/mounts says rw and the
+                // user has only our word for it.
+                if read_only {
+                    flags |= libc::MS_RDONLY;
+                }
+                a.ask = None;
+            }
+            // Everything is here now, so this scan does not wait.
+            degraded::Outcome::Rescan => {
+                let sbs = scan_or_ask_splitbrain(&cli.dev, opts)?;
+                ensure!(!sbs.is_empty(), "{} vanished while we were asking about it",
+                        cli.dev);
+                a = Attempt::new(sbs, opts);
+            }
+            degraded::Outcome::No => return Err(err.into()),
+        }
+    }
+}
+
 fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     if cli.no_mtab {
         debug!("ignoring -n/--no-mtab; mount.bcachefs does not update /etc/mtab");
@@ -619,74 +715,11 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
             return Ok(());
         }
 
-        // The scan waited for the members it could; if some never turned up,
-        // the filesystem's degraded action decides what happens next, and
-        // `ask` is ours to answer before the kernel sees it.
-        //
         // After the -f check, and inside this branch, on purpose: asking
         // someone whether to mount without a device is only worth their time
         // if we are going to mount. -f exists to not do the thing, and an
         // invocation with no mountpoint isn't mounting either.
-        let fs_opts = crate::degraded::resolve_mount_opts(&sbs, &opts, parsed.fs_opts)?;
-
-        // Answering `r` at the degraded prompt means read-only, and it has to
-        // be read-only to the VFS - not just to bcachefs - or /proc/mounts
-        // says rw and the user has only our word for it.
-        let flags = parsed.flags | fs_opts.flags;
-
-        // What we're about to mount with, for the rescan afterwards. `short` is
-        // false when nothing is missing, which is the common case and skips the
-        // rescan entirely.
-        let uuid = sbs[0].1.sb().uuid();
-        let mounted = device_scan::present_devices(&sbs);
-        let short = mounted.len() < device_scan::expected_devices(&sbs);
-
-        // For the mount-time progress display, which needs to say how much
-        // redundancy is left - and can only ask the superblocks, because the
-        // filesystem isn't up yet. Taken before the scan is dropped.
-        let devinfo = device_scan::devices_from_superblocks(&sbs);
-
-        drop(sbs);
-
-        info!(
-            "mounting with params: device: {:?}, target: {}, options: {}",
-            devices,
-            mountpoint.to_string_lossy(),
-            &cli.options
-        );
-
-        let mounted_ret = match mount_inner(
-            devices.clone(),
-            mountpoint,
-            "bcachefs",
-            flags,
-            fs_opts.fs_opts.clone(),
-            devinfo.clone(),
-        ) {
-            Ok(()) => Ok(()),
-            Err(e) => {
-                // Refused. If we're the ones who asked the degraded question,
-                // and the user allowed only the case where everything is
-                // still readable, there is a second question worth putting to
-                // them rather than leaving them to reboot into the same
-                // refusal. escalate() gives back None whenever there is
-                // nothing to ask - a different failure, we never asked, or
-                // they declined - and then the original error stands.
-                match fs_opts.escalate(&e.code)? {
-                    Some(retry) =>
-                        mount_inner(devices, mountpoint, "bcachefs", flags, Some(retry), devinfo),
-                    None => Err(e),
-                }
-            }
-        };
-
-        // Mounted, but we left members behind: one of them may have shown up
-        // while we were asking about it.
-        if mounted_ret.is_ok() && short {
-            online_late_devices(uuid, &mounted, &opts);
-        }
-
-        Ok(mounted_ret?)
+        mount_asking_about_degraded(cli, mountpoint, sbs, &mut opts, &parsed)
     } else {
         info!(
             "would mount with params: device: {:?}, options: {}",

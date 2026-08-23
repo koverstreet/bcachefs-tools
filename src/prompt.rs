@@ -58,14 +58,19 @@ pub struct Choice<A> {
 /// Answers live per question rather than in one shared parser, so that two
 /// questions cannot cross-parse each other's vocabulary.
 pub struct Question<'a, A> {
-    /// One line: the agent protocol's `Message=` is one line.
+    /// One line: the agent protocol's `Message=` is one line, and at boot
+    /// behind a splash that line is the whole of what anyone sees. So it says
+    /// everything the answer turns on - there is no second place to put it.
     pub prompt: &'a str,
-    /// Reaches a terminal only, for the same reason.
-    pub detail: Option<&'a str>,
     pub choices: &'a [Choice<A>],
     /// Also what a bare Enter and a timed-out boot prompt mean. Shown
     /// capitalised in the summary.
     pub silence: A,
+    /// This question is about losing data, and the prompt says so. Drawn in
+    /// red where there is a terminal to draw it on; everywhere else the words
+    /// have to carry it alone, which is why they are in `prompt` and not in a
+    /// decoration of their own.
+    pub alarm: bool,
     pub uuid: &'a str,
     /// `None` waits indefinitely - what `--timeout=0` means to
     /// systemd-ask-password.
@@ -109,9 +114,9 @@ impl<A: Copy + PartialEq> Question<'_, A> {
 /// The rendered question, in both the forms its destinations need.
 struct Ask<'a> {
     prompt: &'a str,
-    detail: Option<&'a str>,
     choices: Vec<String>,
     brief: String,
+    alarm: bool,
     id: String,
     timeout: Option<Duration>,
 }
@@ -199,9 +204,9 @@ impl Prompt {
     ) -> Result<Option<A>> {
         let ask = Ask {
             prompt:  q.prompt,
-            detail:  q.detail,
             choices: q.lines(),
             brief:   q.brief(),
+            alarm:   q.alarm,
             id:      format!("bcachefs:UUID={}", q.uuid),
             timeout: q.timeout,
         };
@@ -358,10 +363,14 @@ fn ask_via_agent(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer>
 
 fn ask_on_terminal(ask: &Ask<'_>, watch: Option<&mut dyn Watch>) -> Result<Answer> {
     use std::io::{stdout, Write};
+    use owo_colors::OwoColorize;
 
-    println!("{}", ask.prompt);
-    if let Some(detail) = ask.detail {
-        print!("{detail}");
+    // stdout, not stdin: the question is read where it is drawn, and the two
+    // can be different files.
+    if ask.alarm && stdout().is_terminal() {
+        println!("{}", ask.prompt.red().bold());
+    } else {
+        println!("{}", ask.prompt);
     }
     for choice in &ask.choices {
         println!("{choice}");
