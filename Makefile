@@ -214,6 +214,18 @@ built_scripts+=bcachefs-wait-devices@.service
 
 optional_build+=$(systemd_services)
 optional_install+=install_systemd
+
+# The generator raises the mount timeout for bcachefs entries in fstab -
+# see src/commands/generator.rs for why that can't be done from the mount
+# helper. Older systemd doesn't advertise the variable; skip rather than
+# guess a path, since a generator in the wrong directory is never run and
+# nothing says so.
+PKGCONFIG_GENERATORDIR:=$(shell $(PKG_CONFIG) --variable=systemdsystemgeneratordir systemd)
+ifeq (,$(PKGCONFIG_GENERATORDIR))
+  $(warning skipping systemd generator)
+else
+optional_install+=install_systemd_generator
+endif	# PKGCONFIG_GENERATORDIR
 endif	# PKGCONFIG_SERVICEDIR
 
 built_scripts+=udev/64-bcachefs.rules
@@ -372,6 +384,15 @@ uninstall:
 .PHONY: install_systemd
 install_systemd: $(systemd_services)
 	$(INSTALL) -m0644 -D $(systemd_services) -t $(DESTDIR)$(PKGCONFIG_SERVICEDIR)
+
+# A symlink, dispatched on argv[0] like mount.bcachefs - see the "generator"
+# arm in src/bcachefs.rs, which has to come before the "mount" one because this
+# name contains it.
+.PHONY: install_systemd_generator
+install_systemd_generator:
+	$(INSTALL) -d $(DESTDIR)$(PKGCONFIG_GENERATORDIR)
+	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs \
+		$(DESTDIR)$(PKGCONFIG_GENERATORDIR)/bcachefs-mount-generator
 
 .PHONY: install_dkms
 install_dkms: dkms/dkms.conf dkms/module-version.c

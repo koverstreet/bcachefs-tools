@@ -97,6 +97,7 @@ pub mod format;
 pub mod format_util;
 pub mod fs_failure_domains;
 pub mod fs_usage;
+pub mod generator;
 pub mod fsck;
 #[cfg(feature = "fuse")]
 pub mod fusemount;
@@ -242,6 +243,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
         #[cfg(feature = "fuse")]
         &fusemount::CMD,
         &wait_devices::CMD,
+        &generator::CMD,
     ]},
     GroupDef { heading: "Repair",                   commands: &[&fsck::CMD, &journal_rewind_info::CMD, &recovery_pass::CMD, &damage::CMD] },
     GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD] },
