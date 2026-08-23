@@ -319,6 +319,20 @@ static bool recovery_pass_should_defer(enum bch_recovery_pass pass,
 	return passes == (passes & bch2_recovery_passes_match(PASS_ONLINE));
 }
 
+/*
+ * Whether this run may execute @pass, as opposed to only scheduling it: the
+ * mount path runs before BCH_FS_started and may run anything, the async runner
+ * and the online-fsck ioctl run after it against a live filesystem. Both bound
+ * their starting set, but a pass required mid-run goes straight into
+ * current_passes - which is how an offline pass reaches a live filesystem.
+ */
+static bool recovery_pass_may_run_now(struct bch_fs *c,
+				      enum bch_recovery_pass pass)
+{
+	return !test_bit(BCH_FS_started, &c->flags) ||
+		(recovery_passes[pass].when & PASS_ONLINE);
+}
+
 static bool recovery_pass_needs_rewind(struct bch_fs *c,
 				       enum bch_recovery_pass pass)
 {
@@ -449,10 +463,16 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	 * once the dead-snapshot keys those passes would clean are still
 	 * present) injects it back into current_passes and we re-run the whole
 	 * content-check range out of order, looping.
+	 *
+	 * A pass this run may not execute falls through to the schedule branch
+	 * rather than erroring: the requirement still reaches the superblock, so
+	 * the next mount does the work. Erroring would turn a repair request
+	 * made from the IO path into a hard error.
 	 */
-	bool run_now = rewind ||
-		(!recovery_pass_should_defer(pass, r->current_passes) &&
-		 !(r->passes_attempted & BIT_ULL(pass)));
+	bool run_now = recovery_pass_may_run_now(c, pass) &&
+		(rewind ||
+		 (!recovery_pass_should_defer(pass, r->current_passes) &&
+		  !(r->passes_attempted & BIT_ULL(pass))));
 
 	/*
 	 * Ephemeral scheduling is best-effort and must never rewind: the caller
