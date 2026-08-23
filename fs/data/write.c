@@ -1419,13 +1419,14 @@ static inline void __wp_update_state(struct write_point *wp, enum write_point_st
 {
 	if (state != wp->state) {
 		u64 now = ktime_get_ns();
-#ifndef CONFIG_SCHED_ALT
+#if !defined(CONFIG_SCHED_ALT) && !defined(CONFIG_SCHED_MUQSS)
 		u64 runtime = current->se.sum_exec_runtime +
 			(now - current->se.exec_start);
 #else
 		/*
-		 * BMQ/PDS (CONFIG_SCHED_ALT) replace CFS and drop task_struct.se;
-		 * this is only write-point runtime accounting, so skip it there.
+		 * BMQ/PDS (CONFIG_SCHED_ALT) and MuQSS replace CFS and drop
+		 * task_struct.se; this is only write-point runtime accounting,
+		 * so skip it there.
 		 */
 		u64 runtime = 0;
 #endif
