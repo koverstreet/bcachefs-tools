@@ -342,18 +342,20 @@ static bool recovery_pass_needs_rewind(struct bch_fs *c,
 		!(r->passes_attempted & BIT_ULL(pass));
 }
 
+/*
+ * Never record scan_for_btree_nodes in the superblock: check_topology runs it
+ * if required, so the requirement is always re-derivable.
+ */
+static bool recovery_pass_is_persistent(enum bch_recovery_pass pass)
+{
+	return pass != BCH_RECOVERY_PASS_scan_for_btree_nodes;
+}
+
 static bool recovery_pass_needs_set(struct bch_fs *c,
 				    enum bch_recovery_pass pass,
 				    enum bch_run_recovery_pass_flags *flags)
 {
 	struct bch_fs_recovery *r = &c->recovery;
-
-	/*
-	 * Never run scan_for_btree_nodes persistently: check_topology will run
-	 * it if required
-	 */
-	if (pass == BCH_RECOVERY_PASS_scan_for_btree_nodes)
-		*flags |= RUN_RECOVERY_PASS_nopersistent;
 
 	if ((*flags & RUN_RECOVERY_PASS_skip_if_complete) &&
 	    (r->passes_complete & BIT_ULL(pass)))
@@ -364,16 +366,23 @@ static bool recovery_pass_needs_set(struct bch_fs *c,
 		*flags &= ~RUN_RECOVERY_PASS_ratelimit;
 
 	/*
-	 * If RUN_RECOVERY_PASS_nopersistent is set, we don't want to do
-	 * anything if the pass has already run: these mean we need a prior pass
-	 * to run before we continue to repair, we don't expect that pass to fix
-	 * the damage we encountered.
+	 * For a non-persistent pass we don't want to do anything if the pass has
+	 * already run: it means we need a prior pass to run before we continue
+	 * to repair, and we don't expect that pass to fix the damage we
+	 * encountered.
 	 *
 	 * Otherwise, we run run_explicit_recovery_pass when we find damage, so
-	 * it should run again even if it's already run:
+	 * it should run again even if it's already run.
+	 *
+	 * XXX: the "!in_recovery ||" here has no counterpart in
+	 * __bch2_run_explicit_recovery_pass(), which routes to the ephemeral set
+	 * on !recovery_pass_is_persistent() alone. So an online request checks
+	 * the superblock set while recording into the ephemeral one. Harmless
+	 * today only because scan_for_btree_nodes can never reach the superblock
+	 * set - so this arm always says "not already requested".
 	 */
 	bool in_recovery = test_bit(BCH_FS_in_recovery, &c->flags);
-	bool persistent = !in_recovery || !(*flags & RUN_RECOVERY_PASS_nopersistent);
+	bool persistent = !in_recovery || recovery_pass_is_persistent(pass);
 	u64 already_running = persistent
 		? c->sb.recovery_passes_required
 		: r->current_passes;
@@ -424,7 +433,8 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 	bool running = test_bit(BCH_FS_running_recovery_passes, &c->flags);
 	bool ratelimit = flags & RUN_RECOVERY_PASS_ratelimit;
 
-	if (flags & (RUN_RECOVERY_PASS_nopersistent|RUN_RECOVERY_PASS_ephemeral)) {
+	if ((flags & RUN_RECOVERY_PASS_ephemeral) ||
+	    !recovery_pass_is_persistent(pass)) {
 		r->scheduled_passes_ephemeral |= BIT_ULL(pass);
 	} else {
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
