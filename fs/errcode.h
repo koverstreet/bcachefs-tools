@@ -604,7 +604,11 @@
 	x(0,				shutdown_with_errors, 583)		\
 	x(BCH_ERR_shutdown_with_errors,	shutdown_with_errors_fixed, 584)	\
 	x(BCH_ERR_shutdown_with_errors,	shutdown_with_errors_unfixed, 585)	\
-	x(BCH_ERR_shutdown_with_errors,	shutdown_with_emergency_ro, 586)
+	x(BCH_ERR_shutdown_with_errors,	shutdown_with_emergency_ro, 586)	\
+	x(BCH_ERR_insufficient_devices_to_start,				\
+					insufficient_devices_data_intact, 587)	\
+	x(BCH_ERR_insufficient_devices_to_start,				\
+					insufficient_devices_data_lost, 588)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,

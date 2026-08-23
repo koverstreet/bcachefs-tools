@@ -1463,7 +1463,24 @@ static int bch2_fs_may_start(struct bch_fs *c, struct printbuf *err)
 				bch2_member_to_text_short(err, c, ca);
 				missing = true;
 			}
-		return missing ? bch_err_throw(c, insufficient_devices_to_start) : 0;
+
+		if (!missing)
+			return 0;
+
+		/*
+		 * Which refusal this is decides what there is to consent to, so
+		 * it goes in the error code and not just the message:
+		 * mount.bcachefs puts the question to whoever is at the
+		 * machine, and prose is not an interface.
+		 *
+		 * degraded=yes is enough while every replica set still has a
+		 * readable copy; past that only degraded=very will start, and
+		 * reads of what is gone will fail.
+		 */
+		return bch2_can_read_fs_with_devs(c, &c->devs_online,
+						  BCH_FORCE_IF_DEGRADED, err)
+			? bch_err_throw(c, insufficient_devices_data_intact)
+			: bch_err_throw(c, insufficient_devices_data_lost);
 	}
 	}
 
