@@ -146,11 +146,36 @@ static inline void sb_write_exit(struct sb_write *w)
 DEFINE_CLASS(sb_write, struct sb_write,
 	     sb_write_exit(&_T), sb_write_init(c), struct bch_fs *c)
 
-/* The only place @dirty is written: */
+/*
+ * Two ways to dirty: sb_dirty() when the caller has already decided a field
+ * changed, sb_record() when a test-and-set decides for it - and then reports
+ * whether the fact was new, which is a different question from whether the
+ * superblock needs writing.
+ */
+static inline void sb_dirty(struct sb_write *w)
+{
+	w->dirty = true;
+}
+
 static inline bool sb_record(struct sb_write *w, bool was_new)
 {
-	w->dirty |= was_new;
+	if (was_new)
+		sb_dirty(w);
 	return was_new;
+}
+
+/*
+ * Write now and report, for the callers that propagate the error. Clears
+ * @dirty, so the guard's scope exit becomes a no-op and stays a backstop for
+ * anything dirtied afterwards - it can't double-write.
+ */
+static inline int sb_write_flush(struct sb_write *w)
+{
+	if (!w->dirty)
+		return 0;
+
+	w->dirty = false;
+	return bch2_write_super(w->c);
 }
 
 static inline bool sb_set_err_silent(struct sb_write *w, unsigned err)

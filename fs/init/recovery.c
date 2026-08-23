@@ -1015,17 +1015,17 @@ use_clean:
 
 	scoped_guard(mutex_noio, &c->sb_lock) {
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
-		bool write_sb = false;
+		CLASS(sb_write, w)(c);
 
 		if (BCH_SB_VERSION_UPGRADE_COMPLETE(c->disk_sb.sb) != le16_to_cpu(c->disk_sb.sb->version)) {
 			SET_BCH_SB_VERSION_UPGRADE_COMPLETE(c->disk_sb.sb, le16_to_cpu(c->disk_sb.sb->version));
-			write_sb = true;
+			sb_dirty(&w);
 		}
 
 		if (!test_bit(BCH_FS_error, &c->flags) &&
 		    !(c->disk_sb.sb->compat[0] & cpu_to_le64(1ULL << BCH_COMPAT_alloc_info))) {
 			c->disk_sb.sb->compat[0] |= cpu_to_le64(1ULL << BCH_COMPAT_alloc_info);
-			write_sb = true;
+			sb_dirty(&w);
 		}
 
 		if (c->opts.fsck &&
@@ -1033,14 +1033,14 @@ use_clean:
 		    c->recovery.pass_done == BCH_RECOVERY_PASS_NR - 1 &&
 		    ext->btrees_lost_data) {
 			ext->btrees_lost_data = 0;
-			write_sb = true;
+			sb_dirty(&w);
 		}
 
 		if (c->opts.fsck &&
 		    !test_bit(BCH_FS_error, &c->flags) &&
 		    !test_bit(BCH_FS_errors_not_fixed, &c->flags)) {
 			SET_BCH_SB_HAS_ERRORS(c->disk_sb.sb, 0);
-			write_sb = true;
+			sb_dirty(&w);
 		}
 
 		/*
@@ -1055,21 +1055,18 @@ use_clean:
 		    !test_bit(BCH_FS_error, &c->flags) &&
 		    !test_bit(BCH_FS_errors_not_fixed, &c->flags)) {
 			SET_BCH_SB_HAS_TOPOLOGY_ERRORS(c->disk_sb.sb, 0);
-			write_sb = true;
+			sb_dirty(&w);
 		}
 
 		if (bch2_blacklist_entries_gc(c))
-			write_sb = true;
+			sb_dirty(&w);
 
 		if (!(c->sb.compat & BIT_ULL(BCH_COMPAT_no_stale_ptrs)) &&
 		    (c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_check_extents)) &&
 		    (c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_check_indirect_extents))) {
 			c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
-			write_sb = true;
+			sb_dirty(&w);
 		}
-
-		if (write_sb)
-			bch2_write_super(c);
 	}
 
 	/*

@@ -1264,8 +1264,8 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 			 */
 			bch2_sb_members_to_cpu(c);
 
-			bool write_sb = false;
-			bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
+			CLASS(sb_write, w)(c);
+			bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &w);
 
 			/*
 			 * We don't call bch2_sb_update() until after the
@@ -1275,7 +1275,10 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 			 */
 			c->sb.nr_devices = c->disk_sb.sb->nr_devices;
 
-			ret = bch2_write_super(c);
+			/* We just added a device: the write isn't optional, and
+			 * we need its error. */
+			sb_dirty(&w);
+			ret = sb_write_flush(&w);
 			if (ret)
 				goto err_late;
 		}

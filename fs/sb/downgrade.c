@@ -264,10 +264,10 @@ int bch2_sb_set_upgrade_extra(struct bch_fs *c)
 {
 	unsigned old_version = c->sb.version_upgrade_complete ?: c->sb.version;
 	unsigned new_version = c->sb.version;
-	bool write_sb = false;
 	int ret = 0;
 
 	guard(mutex_noio)(&c->sb_lock);
+	CLASS(sb_write, w)(c);
 	struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
 
 	if (old_version <  bcachefs_metadata_version_bucket_stripe_sectors &&
@@ -276,11 +276,8 @@ int bch2_sb_set_upgrade_extra(struct bch_fs *c)
 		__set_bit_le64(BCH_RECOVERY_PASS_STABLE_check_allocations, ext->recovery_passes_required);
 		__set_bit_le64(BCH_FSCK_ERR_alloc_key_dirty_sectors_wrong, ext->errors_silent);
 		__set_bit_le64(BCH_FSCK_ERR_alloc_key_stripe_sectors_wrong, ext->errors_silent);
-		write_sb = true;
+		sb_dirty(&w);
 	}
-
-	if (write_sb)
-		bch2_write_super(c);
 
 	return ret < 0 ? ret : 0;
 }

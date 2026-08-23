@@ -338,7 +338,8 @@ static int bch2_mark_replicas_slowpath(struct bch_fs *c,
 	verify_replicas_entry(new_entry);
 
 	guard(mutex_noio)(&c->sb_lock);
-	bool write_sb = false;
+	/* Declared out here so the write lands after mark_lock is dropped: */
+	CLASS(sb_write, w)(c);
 
 	scoped_guard(percpu_write_noio, &c->capacity.mark_lock) {
 		if (!replicas_entry_search(&c->replicas, new_entry)) {
@@ -351,15 +352,11 @@ static int bch2_mark_replicas_slowpath(struct bch_fs *c,
 			try(bch2_cpu_replicas_to_sb_replicas(c, &new_r));
 
 			swap(c->replicas, new_r);
-			write_sb = true;
+			sb_dirty(&w);
 		}
 
 		atomic_add(ref, &replicas_entry_search(&c->replicas, new_entry)->ref);
 	}
-
-	/* After dropping mark_lock */
-	if (write_sb)
-		bch2_write_super(c);
 
 	return 0;
 }

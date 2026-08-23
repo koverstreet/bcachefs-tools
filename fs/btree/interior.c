@@ -777,12 +777,9 @@ static void btree_update_new_nodes_mark_sb(struct btree_update *as)
 	struct bch_fs *c = as->c;
 
 	guard(mutex_noio)(&c->sb_lock);
-	bool write_sb = false;
+	CLASS(sb_write, w)(c);
 	darray_for_each(as->new_nodes, i)
-		bch2_dev_btree_bitmap_mark_locked(c, bkey_i_to_s_c(&i->key), &write_sb);
-
-	if (write_sb)
-		bch2_write_super(c);
+		bch2_dev_btree_bitmap_mark_locked(c, bkey_i_to_s_c(&i->key), &w);
 }
 
 static void bkey_strip_reconcile(struct bch_fs *c, struct bkey_s k)

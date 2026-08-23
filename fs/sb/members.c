@@ -644,7 +644,7 @@ bool bch2_dev_btree_bitmap_marked_nogc(struct bch_fs *c, struct bkey_s_c k)
 
 static void __bch2_dev_btree_bitmap_mark(struct bch_dev *ca,
 					 struct bch_sb_field_members_v2 *mi,
-					 u64 start, unsigned sectors, bool *write_sb)
+					 u64 start, unsigned sectors, struct sb_write *w)
 {
 	struct bch_member *m = __bch2_members_v2_get_mut(mi, ca->dev_idx);
 
@@ -665,7 +665,7 @@ static void __bch2_dev_btree_bitmap_mark(struct bch_dev *ca,
 
 		m->btree_allocated_bitmap = cpu_to_le64(new_bitmap);
 		m->btree_bitmap_shift += resize;
-		*write_sb = true;
+		sb_dirty(w);
 
 		ca->btree_allocated_bitmap_gc = new_gc_bitmap;
 	}
@@ -680,17 +680,15 @@ static void __bch2_dev_btree_bitmap_mark(struct bch_dev *ca,
 
 		if (!(m->btree_allocated_bitmap & b)) {
 			m->btree_allocated_bitmap |= b;
-			*write_sb = true;
+			sb_dirty(w);
 		}
 
 		ca->btree_allocated_bitmap_gc |= BIT_ULL(bit);
 	}
 }
 
-void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *c, struct bkey_s_c k, bool *write_sb)
+void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *c, struct bkey_s_c k, struct sb_write *w)
 {
-	lockdep_assert_held(&c->sb_lock.lock);
-
 	struct bch_sb_field_members_v2 *mi = bch2_sb_field_get(c->disk_sb.sb, members_v2);
 
 	guard(rcu)();
@@ -699,17 +697,15 @@ void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *c, struct bkey_s_c k, bool
 		if (!ca)
 			continue;
 
-		__bch2_dev_btree_bitmap_mark(ca, mi, ptr->offset, btree_sectors(c), write_sb);
+		__bch2_dev_btree_bitmap_mark(ca, mi, ptr->offset, btree_sectors(c), w);
 	}
 }
 
 void bch2_dev_btree_bitmap_mark(struct bch_fs *c, struct bkey_s_c k)
 {
 	guard(mutex_noio)(&c->sb_lock);
-	bool write_sb = false;
-	bch2_dev_btree_bitmap_mark_locked(c, k, &write_sb);
-	if (write_sb)
-		bch2_write_super(c);
+	CLASS(sb_write, w)(c);
+	bch2_dev_btree_bitmap_mark_locked(c, k, &w);
 }
 
 static int btree_bitmap_gc_btree_level(struct btree_trans *trans,
@@ -918,23 +914,20 @@ int bch2_sb_member_alloc(struct bch_fs *c)
 void bch2_sb_members_clean_deleted(struct bch_fs *c)
 {
 	guard(mutex_noio)(&c->sb_lock);
-	bool write_sb = false;
+	CLASS(sb_write, w)(c);
 
 	for (unsigned i = 0; i < c->sb.nr_devices; i++) {
 		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, i);
 
 		if (uuid_equal(&m->uuid, &BCH_SB_MEMBER_DELETED_UUID)) {
 			memset(&m->uuid, 0, sizeof(m->uuid));
-			write_sb = true;
+			sb_dirty(&w);
 		}
 	}
-
-	if (write_sb)
-		bch2_write_super(c);
 }
 
 static void dev_mi_update_str(void *dst, size_t dst_size, const char *src,
-			      bool *write_sb)
+			      struct sb_write *w)
 {
 	u8 padded[sizeof(((struct bch_member *)NULL)->device_model)] = {};
 
@@ -948,7 +941,7 @@ static void dev_mi_update_str(void *dst, size_t dst_size, const char *src,
 
 	if (memcmp(dst, padded, dst_size)) {
 		memcpy(dst, padded, dst_size);
-		*write_sb = true;
+		sb_dirty(w);
 	}
 }
 
@@ -963,20 +956,18 @@ void bch2_dev_mi_field_read(struct bch_dev *ca, struct bch_dev_identity *identit
 
 void bch2_dev_mi_field_upgrades_locked(struct bch_fs *c, struct bch_dev *ca,
 				       const struct bch_dev_identity *identity,
-				       bool *write_sb)
+				       struct sb_write *w)
 {
-	lockdep_assert_held(&c->sb_lock.lock);
-
 	struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 
-	dev_mi_update_str(m->device_name, sizeof(m->device_name), identity->name, write_sb);
-	dev_mi_update_str(m->device_model, sizeof(m->device_model), identity->model, write_sb);
-	dev_mi_update_str(m->device_serial, sizeof(m->device_serial), identity->serial, write_sb);
+	dev_mi_update_str(m->device_name, sizeof(m->device_name), identity->name, w);
+	dev_mi_update_str(m->device_model, sizeof(m->device_model), identity->model, w);
+	dev_mi_update_str(m->device_serial, sizeof(m->device_serial), identity->serial, w);
 
 	if (!BCH_MEMBER_ROTATIONAL_SET(m)) {
 		SET_BCH_MEMBER_ROTATIONAL(m, identity->rotational);
 		SET_BCH_MEMBER_ROTATIONAL_SET(m, true);
-		*write_sb = true;
+		sb_dirty(w);
 	}
 }
 
@@ -988,12 +979,9 @@ void bch2_dev_mi_field_upgrades(struct bch_dev *ca)
 	bch2_dev_mi_field_read(ca, &identity);
 
 	guard(mutex_noio)(&c->sb_lock);
-	bool write_sb = false;
+	CLASS(sb_write, w)(c);
 
-	bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
-
-	if (write_sb)
-		bch2_write_super(c);
+	bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &w);
 }
 
 /*
@@ -1001,19 +989,19 @@ void bch2_dev_mi_field_upgrades(struct bch_dev *ca)
  */
 void bch2_fs_mi_field_upgrades(struct bch_fs *c)
 {
-	bool write_sb = false;
-
 	for_each_online_member(c, ca, BCH_DEV_READ_REF_fs_mi_field_upgrades) {
 		struct bch_dev_identity identity;
 
+		/*
+		 * Reads sysfs, so it can't happen under sb_lock - which is why
+		 * this writes per dirty device instead of once at the end. Only
+		 * the first mount after these fields were added dirties more
+		 * than one.
+		 */
 		bch2_dev_mi_field_read(ca, &identity);
 
 		guard(mutex_noio)(&c->sb_lock);
-		bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &write_sb);
-	}
-
-	if (write_sb) {
-		guard(mutex_noio)(&c->sb_lock);
-		bch2_write_super(c);
+		CLASS(sb_write, w)(c);
+		bch2_dev_mi_field_upgrades_locked(c, ca, &identity, &w);
 	}
 }

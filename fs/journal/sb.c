@@ -230,7 +230,7 @@ int bch2_sb_journal_sort(struct bch_fs *c)
 	BUG_ON(test_bit(BCH_FS_rw, &c->flags));
 
 	guard(mutex_noio)(&c->sb_lock);
-	bool write_sb = false;
+	CLASS(sb_write, w)(c);
 
 	for_each_online_member(c, ca, BCH_DEV_READ_REF_sb_journal_sort) {
 		struct bch_sb_field_journal_v2 *j = bch2_sb_field_get(ca->disk_sb.sb, journal_v2);
@@ -243,11 +243,9 @@ int bch2_sb_journal_sort(struct bch_fs *c)
 
 			sort(ja->buckets, ja->nr, sizeof(ja->buckets[0]), u64_cmp, NULL);
 			bch2_journal_buckets_to_sb(c, ca, ja->buckets, ja->nr);
-			write_sb = true;
+			sb_dirty(&w);
 		}
 	}
 
-	return write_sb
-		? bch2_write_super(c)
-		: 0;
+	return sb_write_flush(&w);
 }

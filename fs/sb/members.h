@@ -496,7 +496,8 @@ static inline bool bch2_dev_btree_bitmap_marked_sectors_any(struct bch_dev *ca, 
 bool bch2_dev_btree_bitmap_marked(struct bch_fs *, struct bkey_s_c);
 bool bch2_dev_btree_bitmap_marked_nogc(struct bch_fs *, struct bkey_s_c);
 
-void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *, struct bkey_s_c, bool *);
+struct sb_write;
+void bch2_dev_btree_bitmap_mark_locked(struct bch_fs *, struct bkey_s_c, struct sb_write *);
 void bch2_dev_btree_bitmap_mark(struct bch_fs *, struct bkey_s_c);
 
 int bch2_btree_bitmap_gc(struct bch_fs *);
@@ -517,7 +518,7 @@ struct bch_dev_identity {
 
 void bch2_dev_mi_field_read(struct bch_dev *, struct bch_dev_identity *);
 void bch2_dev_mi_field_upgrades_locked(struct bch_fs *, struct bch_dev *,
-				       const struct bch_dev_identity *, bool *);
+				       const struct bch_dev_identity *, struct sb_write *);
 void bch2_dev_mi_field_upgrades(struct bch_dev *);
 void bch2_fs_mi_field_upgrades(struct bch_fs *);
 
