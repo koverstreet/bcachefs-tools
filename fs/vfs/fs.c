@@ -2692,6 +2692,87 @@ static void set_mount_opts(struct bch_fs *c, struct bch_opts *opts)
 			set_bit(id, c->mount_opts.d);
 }
 
+/*
+ * The status channel outlives this fs_context: userspace still holds the fd.
+ * Freeing it is .release's job, which is why there's no .fn here - nothing runs
+ * on this channel but the mounting thread itself.
+ */
+struct bch_status_fd {
+	struct thread_with_stdio thr;
+
+	/*
+	 * The filesystem coming up on this channel. The mounting thread sets it
+	 * around bch2_fs_start() and clears it after, because that is the only
+	 * window where we know @c is alive - the fd outlives the mount either
+	 * way.
+	 *
+	 * A mutex, not a spinlock, because the ioctl below hands @c to
+	 * bch2_fs_ioctl(), which sleeps: the lock has to be held across that
+	 * call, or the mounting thread could return from bch2_fs_start() and
+	 * tear @c down underneath it. The only waiter is that thread, once, at
+	 * the end of the mount.
+	 */
+	struct mutex		lock;
+	struct bch_fs		*c;
+};
+
+static void bch2_status_fd_exit(struct thread_with_stdio *thr)
+{
+	kfree(container_of(thr, struct bch_status_fd, thr));
+}
+
+static long bch2_status_fd_ioctl(struct thread_with_stdio *thr,
+				 unsigned int cmd, unsigned long arg)
+{
+	struct bch_status_fd *s = container_of(thr, struct bch_status_fd, thr);
+	struct bch_ioctl_recovery_status status = {};
+
+	scoped_guard(mutex, &s->lock) {
+		struct bch_fs *c = s->c;
+
+		if (!c)
+			return -ENODEV;
+
+		/*
+		 * Everything else this filesystem answers, it answers here: the
+		 * chardev's ioctl exists to turn a minor back into a bch_fs, and
+		 * we already have one. This is the only handle on a filesystem
+		 * that hasn't finished mounting, so it's the only way to ask it
+		 * anything - bcachefs<N>-ctl exists by now, but nothing knows the
+		 * minor.
+		 *
+		 * Safe to pass everything through: __bch2_fs_ioctl() answers the
+		 * read-only queries and then refuses anything else until
+		 * BCH_FS_started, which isn't set until recovery is done.
+		 */
+		if (cmd != BCH_IOCTL_RECOVERY_STATUS)
+			return bch2_fs_ioctl(c, cmd, (void __user *) arg);
+
+		struct bch_fs_recovery *r = &c->recovery;
+
+		scoped_guard(spinlock_irq, &r->lock) {
+			status.passes_scheduled_ephemeral.v[0] = r->scheduled_passes_ephemeral;
+			status.passes_complete.v[0]	= r->passes_complete;
+			status.passes_remaining.v[0]	= r->current_passes;
+			status.pass			= r->current_pass;
+		}
+
+		status.passes_scheduled_sb.v[0] = c->sb.recovery_passes_required;
+		status.units	= r->progress.units;
+		status.seen	= r->progress.seen;
+		status.total	= r->progress.total;
+	}
+
+	return copy_to_user((void __user *) arg, &status, sizeof(status))
+		? -EFAULT
+		: 0;
+}
+
+static const struct thread_with_stdio_ops bch2_status_fd_ops = {
+	.exit		= bch2_status_fd_exit,
+	.unlocked_ioctl	= bch2_status_fd_ioctl,
+};
+
 static int bch2_fs_get_tree(struct fs_context *fc)
 {
 	struct bch_fs *c;
@@ -2746,22 +2827,33 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	set_mount_opts(c, &opts);
 
 	/*
-	 * Scoped to recovery, because c->stdio must not outlive the reference
-	 * bch2_fs_context_free() drops on the file it points into.
+	 * Both directions of the status channel are scoped to recovery: c->stdio
+	 * must not outlive the reference bch2_fs_context_free() drops on the file
+	 * it points into, and status->c must not outlive @c, which the error path
+	 * below is free to tear down.
 	 *
 	 * stdio_user_only describes that redirect, so it dies with it: an online
 	 * fsck later installs its own c->stdio and expects its log traffic to
 	 * reach it, and nothing else ever clears this.
 	 */
-	if (opts_parse->status) {
-		c->stdio = &opts_parse->status->stdio;
+	struct bch_status_fd *status = opts_parse->status;
+
+	if (status) {
+		c->stdio = &status->thr.stdio;
 		c->stdio_user_only = true;
+
+		scoped_guard(mutex, &status->lock)
+			status->c = c;
 	}
 
 	ret = bch2_fs_start(c);
 
-	c->stdio = NULL;
-	c->stdio_user_only = false;
+	if (status) {
+		scoped_guard(mutex, &status->lock)
+			status->c = NULL;
+		c->stdio = NULL;
+		c->stdio_user_only = false;
+	}
 
 	if (ret)
 		goto err_stop_fs;
@@ -2924,20 +3016,6 @@ static void bch2_kill_sb(struct super_block *sb)
 	bch2_fs_exit(c);
 }
 
-/*
- * The status channel outlives this fs_context: userspace still holds the fd.
- * Freeing it is .release's job, which is why there's no .fn here - nothing runs
- * on this channel but the mounting thread itself.
- */
-static void bch2_status_fd_exit(struct thread_with_stdio *thr)
-{
-	kfree(thr);
-}
-
-static const struct thread_with_stdio_ops bch2_status_fd_ops = {
-	.exit	= bch2_status_fd_exit,
-};
-
 static void bch2_fs_context_free(struct fs_context *fc)
 {
 	struct bch2_opts_parse *opts = fc->fs_private;
@@ -2952,7 +3030,7 @@ static void bch2_fs_context_free(struct fs_context *fc)
 		 * other, and .release frees the channel when both are gone.
 		 */
 		if (opts->status) {
-			bch2_thread_with_stdio_done(opts->status);
+			bch2_thread_with_stdio_done(&opts->status->thr);
 			fput(opts->status_file);
 		}
 		kfree(opts);
@@ -3030,11 +3108,13 @@ static int bch2_fs_parse_param(struct fs_context *fc,
 		if (opts->status)
 			return invalf(fc, "status_fd requested twice");
 
-		struct thread_with_stdio *status = kzalloc(sizeof(*status), GFP_KERNEL);
+		struct bch_status_fd *status = kzalloc(sizeof(*status), GFP_KERNEL);
 		if (!status)
 			return -ENOMEM;
 
-		int fd = bch2_stdio_redirect_get_fd(status, &bch2_status_fd_ops,
+		mutex_init(&status->lock);
+
+		int fd = bch2_stdio_redirect_get_fd(&status->thr, &bch2_status_fd_ops,
 						    &opts->status_file);
 		if (fd < 0) {
 			kfree(status);

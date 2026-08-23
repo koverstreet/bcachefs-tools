@@ -75,6 +75,7 @@
 #define BCH_IOCTL_SNAPSHOT_TREE		_IOWR(0xbc,	33, struct bch_ioctl_snapshot_tree_query)
 #define BCH_IOCTL_QUERY_BTREE_KEYS	_IOWR(0xbc,	34, struct bch_ioctl_query_btree_keys)
 #define BCH_IOCTL_SNAPSHOT_TREE_v2	_IOWR(0xbc,	35, struct bch_ioctl_snapshot_tree_query_v2)
+#define BCH_IOCTL_RECOVERY_STATUS	_IOR(0xbc,	36, struct bch_ioctl_recovery_status)
 
 /* ioctl below act on a particular file, not the filesystem as a whole: */
 
@@ -737,6 +738,55 @@ enum bch_progress_units {
 #define x(n, v)	BCH_PROGRESS_UNITS_##n = v,
 	BCH_PROGRESS_UNITS()
 #undef x
+};
+
+/*
+ * A set of enum bch_recovery_pass ids - the in-memory pass ids, not the stable
+ * ids the superblock stores. Bit n of v[0] is pass n, bit n of v[1] is pass
+ * 64 + n.
+ *
+ * 128 bits because 64 is not far off: there are 50 passes today. The kernel's
+ * own masks are still u64s, so v[1] reads as zero until those widen - which is
+ * the point of having the room here now, so that widening isn't an ABI break.
+ */
+struct bch_recovery_pass_mask {
+	__u64			v[2];
+};
+
+/*
+ * BCH_IOCTL_RECOVERY_STATUS: what recovery is doing, so a caller can draw a
+ * progress display instead of scraping log lines.
+ *
+ * Only implemented on the status fd (the "status_fd" fsconfig parameter), which
+ * is the only handle anyone has on a filesystem that hasn't finished mounting.
+ * There's no wakeup for this: poll() on the status fd means "text to read", not
+ * "progress moved", so callers poll on a timer.
+ *
+ * All the @passes_* masks but @passes_scheduled_sb are read under the lock
+ * recovery updates them with, so those are mutually consistent with each other
+ * and with @pass. @passes_remaining excludes @pass, so the passes this run will
+ * have touched is
+ *
+ *	passes_complete | passes_remaining | {pass}
+ *
+ * and that denominator grows if a pass reschedules an earlier one: a bar drawn
+ * from it can go backwards, which is the truth.
+ *
+ * @seen and @total ride along outside that lock, so a caller can see one pass's
+ * count next to the next pass's id. It's a progress bar. @total is zero when
+ * the running pass has no estimate of its own size - draw an indeterminate
+ * spinner rather than an empty bar.
+ */
+struct bch_ioctl_recovery_status {
+	struct bch_recovery_pass_mask	passes_scheduled_sb;
+	struct bch_recovery_pass_mask	passes_scheduled_ephemeral;
+	struct bch_recovery_pass_mask	passes_complete;
+	struct bch_recovery_pass_mask	passes_remaining;
+
+	__u32			pass;		/* enum bch_recovery_pass, 0 = idle */
+	__u32			units;		/* enum bch_progress_units */
+	__u64			seen;
+	__u64			total;
 };
 
 /*

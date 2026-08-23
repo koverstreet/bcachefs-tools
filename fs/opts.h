@@ -686,7 +686,7 @@ struct bch2_opts_parse {
 	 * the filesystem might still print there, and drop it in
 	 * bch2_fs_context_free().
 	 */
-	struct thread_with_stdio *status;
+	struct bch_status_fd	*status;
 	struct file		*status_file;
 };
 
