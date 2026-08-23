@@ -477,9 +477,10 @@ int bch2_replicas_entry_get(struct bch_fs *c, struct bch_replicas_entry_v1 *r)
  */
 int bch2_replicas_gc_reffed(struct bch_fs *c)
 {
-	bool write_sb = false;
-
 	guard(mutex_noio)(&c->sb_lock);
+	/* Declared out here so the write lands after mark_lock is dropped: */
+	CLASS(sb_write, w)(c);
+
 	scoped_guard(percpu_write_noio, &c->capacity.mark_lock) {
 		unsigned dst = 0;
 		for (unsigned i = 0; i < c->replicas.nr; i++) {
@@ -498,11 +499,10 @@ int bch2_replicas_gc_reffed(struct bch_fs *c)
 			bch2_cpu_replicas_sort(&c->replicas);
 
 			try(bch2_cpu_replicas_to_sb_replicas(c, &c->replicas));
+			sb_dirty(&w);
 		}
 	}
 
-	if (write_sb)
-		bch2_write_super(c);
 	return 0;
 }
 
