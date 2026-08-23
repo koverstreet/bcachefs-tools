@@ -10,6 +10,9 @@
 # See Cargo.toml.orig for the original contents.
 
 [package]
+# Not upstream's: bitfield 0.14.0 sets no edition, which cargo warns about on
+# every build. 2015 is what it was already defaulting to, written down.
+edition = "2015"
 name = "bitfield"
 version = "0.14.0"
 authors = ["Loïc Damien <loic.damien@dzamlo.ch>"]
