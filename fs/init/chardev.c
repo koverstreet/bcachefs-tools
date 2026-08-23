@@ -433,6 +433,32 @@ put_ref:
 	return ret;
 }
 
+/*
+ * The usage ioctls report in-memory accounting, which bch2_accounting_read()
+ * populates during the accounting_read recovery pass - long before the
+ * filesystem finishes starting. What they need is that pass, not BCH_FS_started.
+ *
+ * Every one of these reads takes mark_lock for itself, so asking early was
+ * never unsafe, only meaningless: the table is empty and you get zeroes back.
+ * This is the difference between "no data" and "no data yet".
+ *
+ * passes_complete is only ever set, never cleared - not even by a rewind - so
+ * reading it without the recovery lock can only be stale towards "not ready",
+ * which is the direction that costs a caller one more poll rather than a wrong
+ * answer.
+ *
+ * A filesystem that was just formatted has no accounting to read: the table
+ * starts empty and the triggers maintain it from there. bch2_fs_start() takes
+ * either bch2_fs_recovery() or bch2_fs_initialize(), and only the first runs
+ * passes at all - so on that path passes_complete stays zero for the life of
+ * the mount, and asking it whether accounting is ready gets "no" forever.
+ */
+static bool accounting_read_done(struct bch_fs *c)
+{
+	return test_bit(BCH_FS_new_fs, &c->flags) ||
+		(c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_accounting_read));
+}
+
 static noinline_for_stack long bch2_ioctl_fs_usage(struct bch_fs *c,
 				struct bch_ioctl_fs_usage __user *user_arg)
 {
@@ -440,8 +466,8 @@ static noinline_for_stack long bch2_ioctl_fs_usage(struct bch_fs *c,
 	CLASS(darray_char, replicas)();
 	u32 replica_entries_bytes;
 
-	if (!test_bit(BCH_FS_started, &c->flags))
-		return bch_err_throw(c, EINVAL_ioctl_fs_usage_not_started);
+	if (!accounting_read_done(c))
+		return bch_err_throw(c, EINVAL_ioctl_fs_usage_accounting_not_read);
 
 	if (get_user(replica_entries_bytes, &user_arg->replica_entries_bytes))
 		return -EFAULT;
@@ -476,8 +502,8 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 	struct bch_ioctl_query_accounting arg;
 	CLASS(darray_char, accounting)();
 
-	if (!test_bit(BCH_FS_started, &c->flags))
-		return bch_err_throw(c, EINVAL_ioctl_query_accounting_not_started);
+	if (!accounting_read_done(c))
+		return bch_err_throw(c, EINVAL_ioctl_query_accounting_not_read);
 
 	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
 
@@ -514,8 +540,8 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 static noinline_for_stack long bch2_ioctl_dev_usage(struct bch_fs *c,
 				 struct bch_ioctl_dev_usage __user *user_arg)
 {
-	if (!test_bit(BCH_FS_started, &c->flags))
-		return bch_err_throw(c, EINVAL_ioctl_dev_usage_not_started);
+	if (!accounting_read_done(c))
+		return bch_err_throw(c, EINVAL_ioctl_dev_usage_accounting_not_read);
 
 	struct bch_ioctl_dev_usage arg;
 	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
@@ -547,8 +573,8 @@ static noinline_for_stack long bch2_ioctl_dev_usage(struct bch_fs *c,
 static long bch2_ioctl_dev_usage_v2(struct bch_fs *c,
 				 struct bch_ioctl_dev_usage_v2 __user *user_arg)
 {
-	if (!test_bit(BCH_FS_started, &c->flags))
-		return bch_err_throw(c, EINVAL_ioctl_dev_usage_v2_not_started);
+	if (!accounting_read_done(c))
+		return bch_err_throw(c, EINVAL_ioctl_dev_usage_v2_accounting_not_read);
 
 	struct bch_ioctl_dev_usage_v2 arg;
 	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));

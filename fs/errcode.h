@@ -373,11 +373,11 @@
 	x(EINVAL,			EINVAL_ioctl_disk_set_state_v2_bad_args, 327) \
 	x(EINVAL,			EINVAL_ioctl_data_read_short_buf, 328)	\
 	x(EINVAL,			EINVAL_ioctl_data_bad_op, 329)		\
-	x(EINVAL,			EINVAL_ioctl_fs_usage_not_started, 330)	\
-	x(EINVAL,			EINVAL_ioctl_query_accounting_not_started, 331)	\
-	x(EINVAL,			EINVAL_ioctl_dev_usage_not_started, 332)	\
+	x(EINVAL,			EINVAL_ioctl_fs_usage_accounting_not_read, 330)	\
+	x(EINVAL,			EINVAL_ioctl_query_accounting_not_read, 331)	\
+	x(EINVAL,			EINVAL_ioctl_dev_usage_accounting_not_read, 332)	\
 	x(EINVAL,			EINVAL_ioctl_dev_usage_bad_flags, 333)		\
-	x(EINVAL,			EINVAL_ioctl_dev_usage_v2_not_started, 334)	\
+	x(EINVAL,			EINVAL_ioctl_dev_usage_v2_accounting_not_read, 334)	\
 	x(EINVAL,			EINVAL_ioctl_dev_usage_v2_bad_flags, 335)	\
 	x(EINVAL,			EINVAL_ioctl_query_btree_keys_bad_flags, 336)	\
 	x(EINVAL,			EINVAL_ioctl_query_btree_keys_bad_params, 337)	\
