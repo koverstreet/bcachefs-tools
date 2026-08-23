@@ -343,9 +343,21 @@ void bch2_member_to_text_short_sb(struct printbuf *out,
 		prt_printf(out, "Failure domain:\t%.*s\n",
 			   (int) sizeof(m->failure_domain), m->failure_domain);
 
-	prt_printf(out, "Device:\t%.*s\n", (int) sizeof(m->device_name), m->device_name);
-	prt_printf(out, "Model:\t%.*s\n", (int) sizeof(m->device_model), m->device_model);
-	prt_printf(out, "Serial:\t%.*s\n", (int) sizeof(m->device_serial), m->device_serial);
+	/*
+	 * Omitted when empty, unlike the full member printer: this one runs in
+	 * messages, where it exists to tell someone which disk we mean, and a
+	 * label with nothing after it does not. Whether a field is recorded at
+	 * all is a question for show-super.
+	 */
+	if (m->device_name[0])
+		prt_printf(out, "Device:\t%.*s\n",
+			   (int) sizeof(m->device_name), m->device_name);
+	if (m->device_model[0])
+		prt_printf(out, "Model:\t%.*s\n",
+			   (int) sizeof(m->device_model), m->device_model);
+	if (m->device_serial[0])
+		prt_printf(out, "Serial:\t%.*s\n",
+			   (int) sizeof(m->device_serial), m->device_serial);
 
 	prt_printf(out, "State:\t%s\n",
 		   BCH_MEMBER_STATE(m) < BCH_MEMBER_STATE_NR
