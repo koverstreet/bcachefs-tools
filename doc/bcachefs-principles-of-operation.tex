@@ -149,6 +149,7 @@ past them. Blacklist entries are garbage collected once no btree node on disk
 references them.
 
 \subsubsection{Recovery passes}
+\label{sec:recovery-passes}
 
 Beyond journal replay, bcachefs has approximately 48 recovery passes with an
 explicit dependency graph. Not all passes run on every mount - which passes run
@@ -415,6 +416,7 @@ being written is not modified in flight), but reads generally do not have to be
 bounced.
 
 \subsubsection{Encryption}
+\label{sec:encryption}
 
 bcachefs supports authenticated (AEAD) encryption using ChaCha20/Poly1305.
 Unlike typical block layer or filesystem encryption (usually AES-XTS), which
@@ -881,69 +883,256 @@ make the SSDs a pure write cache instead, add \texttt{-{}-durability=0} to the
 SSD devices so their copies do not count toward replication.
 
 \subsection{Mounting}
+\label{sec:mounting}
 
-To mount a multi device filesystem, there are two options. You can specify all
-component devices, separated by colons, e.g.
+A filesystem on a single device mounts in one step. A filesystem spread across
+several devices has to find all of them first. The devices a filesystem is made
+of are its \emph{members}, and members can be slow to appear, absent, or---
+rarely---disagree with each other about what the filesystem contains. So
+mounting is a short process rather than a single step, and now and then it has
+to ask you something.
+
+The steps, and most are only visible when something is wrong:
+
+\begin{itemize}
+\item The devices the filesystem is made of are discovered---whether you named
+  them or named the filesystem.
+
+\item Any that have not shown up yet are waited for, up to
+  \texttt{missing\_dev\_timeout}. At boot this is the common case and nothing
+  is actually wrong.
+
+\item If some never show up, \texttt{degraded} governs what happens. By
+  default you are asked whether to continue without them, and told which
+  devices and which filesystem the question is about.
+
+\item Devices that show up after the mount are hot added automatically. You do
+  not have to mount again, and nothing needs configuring for this.
+
+\item Any metadata upgrades or repairs the filesystem needs then run
+  automatically, with progress reported as they go.
+\end{itemize}
+
+That progress is plumbed through to wherever it can be seen---a terminal,
+plymouth during a graphical boot, or the system console---and the systemd
+integration is arranged so that a long repair is not killed partway through.
+
+On a healthy filesystem none of this is apparent: you name it and it mounts.
+The rest of this section is each of those steps in turn.
+
+\subsubsection{Naming the filesystem}
+
+You can list every component device, separated by colons:
 \begin{quote} \begin{verbatim}
 mount -t bcachefs /dev/sda:/dev/sdb:/dev/sdc /mnt
 \end{verbatim} \end{quote}
-Or, use the mount.bcachefs tool to mount by filesystem UUID or label:
+or name the filesystem and let \texttt{mount.bcachefs} find the devices:
 \begin{quote} \begin{verbatim}
 mount -t bcachefs UUID=<uuid> /mnt
 mount -t bcachefs LABEL=<label> /mnt
 \end{verbatim} \end{quote}
 
-No special handling is needed for recovering from unclean shutdown. Journal
-replay happens automatically, and diagnostic messages in the dmesg log will
-indicate whether recovery was from clean or unclean shutdown.
+Naming the filesystem is preferred, and is what an fstab entry should use:
+device nodes are not stable across boots, and the scan below finds members that
+an explicit list would miss.
 
-The \texttt{-o degraded} option will allow a filesystem to be mounted without
-all the devices, but will fail if data would be missing. The
-\texttt{-o degraded=very} option can be used to attempt mounting when data
-would be missing.
+There is no device count at which you need to do anything differently; a
+filesystem with many members is named the same way as any other.
 
-The \texttt{-o verbose} option enables additional log output during the mount
-process.
+If the mount fails immediately with \texttt{unknown filesystem type
+'bcachefs'}, the kernel module is not loaded. \texttt{mount.bcachefs} tries
+\texttt{modprobe bcachefs} itself and says so if that fails, which usually
+means the module is not installed for the running kernel.
 
-\subsubsection{Mounting at boot}
+\subsubsection{Finding the devices}
 
-At boot the system may attempt to mount a multi device filesystem before udev
-has finished probing all of its component devices. Since mounting normally
-requires every device to be present, this is a race: the mount can fail
-reporting missing devices even though they are all attached, simply because
-some had not been probed yet when the mount was attempted.
+Every member's superblock records how many devices the filesystem has, so
+\emph{missing} has a precise meaning: the tool found fewer members than the
+superblock says exist. That is a different condition from a device having been
+removed from the filesystem, which is recorded and not reported as missing.
 
-Nothing needs to be configured for this. \texttt{mount.bcachefs} closes the
-race itself: when it finds fewer members than the superblock says exist, it
-waits for the rest to appear rather than failing, for up to
-\texttt{missing\_dev\_timeout} (30 seconds by default). The option can also be
-formatted into the filesystem, in which case it applies with no \texttt{-o} at
-all.
+Devices do not all become available at the same moment. Some controllers take a
+while to probe their disks, so at boot a filesystem can be asked for before
+every one of its devices has turned up, with nothing actually wrong. So when
+members are missing, the mount waits for them rather than failing, for up to
+\texttt{missing\_dev\_timeout} (30 seconds by default). Like other options this
+can be formatted into the filesystem, in which case it applies with no
+\texttt{-o} at all. Nothing needs to be configured for this to work.
 
-What happens when the wait expires is governed by \texttt{degraded}. With
-\texttt{degraded=ask}, the default, the mount says which devices are absent and
-asks whether to continue without them---on the console, or through
-\texttt{systemd-ask-password} during a boot with no console. If there is
-nowhere to ask, it refuses, because mounting a filesystem short of a device is
-a decision about data and taking it by default is how redundancy is lost
-quietly. \texttt{degraded=yes} and \texttt{degraded=no} answer in advance.
+Waiting costs nothing while it happens---in particular it will not spin up
+disks that are idle or asleep---and it does not depend on udev, so a filesystem
+mounted from an initramfs waits the same way a booted system does.
 
-\paragraph{The obsolete wait service.} Earlier versions shipped
-\texttt{bcachefs-wait-devices@.service} for this, and documented adding
+\subsubsection{Unlocking}
+
+If the superblock says the filesystem is encrypted, the passphrase is requested
+once the devices have been found and before any attempt to mount. It is asked
+for in the same way as the other questions below.
+
+The passphrase can also be supplied ahead of time---see the
+\hyperref[sec:encryption]{Encryption} section for \texttt{bcachefs unlock} and
+keyring handling---in which case the mount takes it from there and asks
+nothing.
+
+\subsubsection{Mounting without every device}
+
+When the wait expires and members are still absent, what happens is governed by
+\texttt{degraded}:
+
+\begin{description}
+\item[\texttt{degraded=ask}] The default. Report which devices are absent and
+  ask.
+\item[\texttt{degraded=no}] Refuse.
+\item[\texttt{degraded=yes}] Mount without them, provided no data would be
+  missing.
+\item[\texttt{degraded=very}] Mount even though data would be missing.
+\end{description}
+
+The default is to ask, because mounting short of a device is a decision about
+data and taking it silently is how redundancy gets lost quietly.
+
+Which of \texttt{yes} and \texttt{very} the mount then needs is not something
+you are asked to work out. The filesystem knows whether what is on the absent
+devices has another copy, so it says so, and the question left for you is only
+whether to mount:
+
 \begin{quote} \begin{verbatim}
-x-systemd.requires=bcachefs-wait-devices@<uuid>.service
+Filesystem home is missing 1 of its 2 devices. All your data is
+still readable, with less redundancy than it should have. Mount?
+  y  mount
+  r  mount read-only: nothing gets written or re-replicated
+  n  don't mount
 \end{verbatim} \end{quote}
-to the fstab entry. Do not add this to new entries. Besides being redundant,
-it was harmful: the service had no timeout of its own, so a device that was
-never coming back blocked it until systemd's \texttt{DefaultTimeoutStartSec}
-killed the unit and failed the mount job---ninety seconds and then an
-emergency shell, for exactly the case the prompt above exists to handle. The
-dependency pre-empted the code that could have recovered the boot.
 
-Existing entries are safe to leave alone and safe to remove. The command is
-now a no-op that succeeds immediately, so the unit is satisfied at once and the
-mount proceeds to do its own waiting; the unit and the command are both kept
-solely so that fstab entries written against the old advice keep booting.
+When the missing devices held the only copy of something, the same three
+answers are offered, and the first line says so instead---in red, on a terminal:
+
+\begin{quote} \begin{verbatim}
+Filesystem home is missing 1 of its 2 devices. Some of your data
+has no other copy, and reads of it will fail. Mount anyway?
+\end{verbatim} \end{quote}
+
+The devices themselves are listed above the question, each with its label,
+size, state and the disk group it belongs to, so a disk you removed on purpose
+is not mistaken for one that has failed.
+
+\texttt{r} is worth considering in the second case. The reason to mount a
+filesystem that is missing data is normally to copy off what survived, and that
+does not need it writable---while mounting it read-write will start
+re-replicating onto the devices that are left, which can fill them and is not
+easy to back out of.
+
+The question withdraws itself if it stops being one: a missing device that turns
+up while you are deciding cancels the prompt, and the mount carries on normally.
+It is also not asked when no mount was going to follow---\texttt{-f}/\texttt{--fake},
+or an invocation with no mountpoint.
+
+\paragraph{After a degraded mount.} Anything written while a device was absent
+has fewer copies than you asked for. When the device returns it is brought back
+into the filesystem automatically, and reconcile restores the missing copies in
+the background, exactly as it does after any other change to the replica count
+(\S\ref{sec:options}). \texttt{bcachefs fs usage} breaks usage down by
+replication level, so you can see that it has caught up rather than assume it.
+
+Answering \texttt{r} sidesteps this: nothing is written, so nothing falls
+behind.
+
+If the device is not coming back, remove it from the filesystem---see
+\S\ref{sec:devices}---rather than leaving it missing indefinitely.
+
+\subsubsection{Divergent histories: split brain}
+\label{sec:split-brain}
+
+Mounting degraded has a consequence worth understanding before you do it a
+second time.
+
+Take a filesystem on two devices, with everything replicated on both. One day
+the second device is missing, you mount degraded on the first alone, and work
+carries on. Later it is the first device that is missing, so you mount degraded
+on the second, and work carries on again. Each device now holds writes the
+other never saw, and neither one is simply ``the'' filesystem any more.
+
+This is what distributed systems call \emph{split brain}, and it is the term the
+error uses. bcachefs detects it when the devices are found, rather than picking
+a side for you: the report names the devices and says how many writes each side
+has that the other never saw, and then asks which history to continue with.
+
+Which to choose is a question about your data rather than about the filesystem
+--- pick the side whose work you would rather not lose; the counts in the report
+are there to let you judge that.
+
+Continuing with one history does not merge the other. Whatever was written to
+the devices you did not choose is not reachable from the filesystem you get,
+and reintegrating those devices is a separate operation you perform
+deliberately afterwards.
+
+\subsubsection{Where the questions are asked}
+
+All of the above---the passphrase, missing devices, divergent histories---go
+through one mechanism, which tries to find somebody to ask. It prefers a
+terminal that nothing else is drawing on; during a boot with no console it uses
+\texttt{systemd-ask-password}, which reaches a plymouth splash or a waiting
+administrator.
+
+Some things that look like a terminal are not a person. A pipe on stdin is a
+script, and the mount treats it as one rather than reading a passphrase or an
+answer from it.
+
+If there is nowhere to ask at all, the mount refuses, once, with a single
+message saying why. This is deliberate: the alternative is guessing at a
+question about data.
+
+\subsubsection{Upgrades, repairs, and watching them}
+
+No special handling is needed to recover from an unclean shutdown---journal
+replay happens automatically. Beyond that, two kinds of work can run at mount
+time, and both are automatic.
+
+A filesystem created by an older version is brought up to the current metadata
+version. An upgrade may require recovery passes to run, to build or check
+whatever the new version added; \texttt{version\_upgrade} controls how eagerly
+this happens, and is described with the other options in \S\ref{sec:options}.
+
+Repairs run when the superblock records that a pass is required---because
+damage was found earlier, or because something changed that a check has not
+been run against since (see \S\ref{sec:recovery-passes}).
+
+Either can take a while on a large filesystem, which is why you can watch.
+While the filesystem comes up,
+\texttt{mount.bcachefs} displays which recovery pass is running, how far
+through it is, how long it has been going, and the member devices with how much
+redundancy remains.
+
+The display draws wherever the mount can be seen: a terminal if there is one,
+the plymouth splash during a graphical boot, or the system console. If there is
+nowhere to draw, progress goes to the kernel log instead, so it is always
+available somewhere.
+
+\texttt{-o verbose} adds detail to all of this, and is the first thing to turn
+on when a mount does something you did not expect.
+
+\paragraph{Long recoveries at boot.} A recovery that takes longer than
+systemd's \texttt{DefaultTimeoutStartSec}---90 seconds by default---would
+otherwise have its mount job killed partway through, which is exactly the wrong
+outcome for a filesystem that was going to finish. A generator ships with
+bcachefs to extend the timeout for bcachefs mounts, so a slow recovery is
+allowed to complete. Nothing needs configuring.
+
+\subsubsection{Devices that arrive late}
+
+A device that appears after the mount has already happened is brought online
+without another mount. A udev rule runs \texttt{bcachefs device online} for
+members of a mounted filesystem as they are probed. A device that turned up
+while you were answering a question about it is picked up the same way.
+
+An interrupted \texttt{device add} is likewise completed when the device comes
+back.
+
+\paragraph{The obsolete wait service.} Earlier versions had you add
+\texttt{x-systemd.requires=bcachefs-wait-devices@<uuid>.service} to the fstab
+entry; the mount now waits by itself, so this is unnecessary. The unit is kept
+as a no-op so existing entries keep booting, and can be removed from them at
+your convenience.
 
 \subsection{Monitoring}
 
