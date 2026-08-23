@@ -288,12 +288,19 @@ fn fs_usage_v1_to_text(
 
 // ──────────────────────────── Replicas summary ──────────────────────────────
 
-struct Durability {
-    durability: u32,
-    degraded: u32,
+pub struct Durability {
+    pub durability: u32,
+    pub degraded: u32,
 }
 
-fn replicas_durability(
+/// How much durability a replicas entry has, and how much of it is gone.
+///
+/// A device is gone if it isn't in @devs or is in it and offline. Both matter:
+/// fs_get_devices() keeps listing a hot-removed device, whose dev-N/block
+/// symlink is left dangling, so absence is not the only way to be missing. Its
+/// durability still counts towards the total either way - what was lost was
+/// lost from something.
+pub fn replicas_durability(
     nr_devs: u8,
     nr_required: u8,
     dev_list: &[u8],
@@ -306,7 +313,7 @@ fn replicas_durability(
         let dev = devs.iter().find(|d| d.idx == dev_idx as u32);
         let dev_durability = dev.map_or(1, |d| d.durability);
 
-        if dev.is_none() {
+        if !dev.is_some_and(|d| d.online) {
             degraded += dev_durability;
         }
         durability += dev_durability;
