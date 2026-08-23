@@ -8,6 +8,31 @@
 #include "init/passes.h"
 #include "init/progress.h"
 
+#include <linux/delay.h>
+#include <linux/module.h>
+
+/*
+ * TEMPORARY, for testing the mount-time status display: a filesystem that
+ * recovers slowly enough to watch has to be enormous, so stretch a small one
+ * instead. Zero, and inert, unless set.
+ *
+ * This sleeps with btree locks held. That is survivable only because
+ * bch2_trans_begin() takes them back off us on the next iteration - past 10ms
+ * of srcu it calls bch2_trans_unlock_long() (btree/iter.c:3986), and past
+ * BTREE_TRANS_MAX_LOCK_HOLD_TIME_NS it calls bch2_trans_unlock() and reschedules
+ * (iter.c:4015). Nothing here is a model for real code.
+ */
+static unsigned progress_delay_ms;
+module_param_named(recovery_progress_delay_ms, progress_delay_ms, uint, 0644);
+MODULE_PARM_DESC(recovery_progress_delay_ms,
+		 "testing only: sleep this long in every recovery progress update");
+
+static void progress_maybe_delay(void)
+{
+	if (unlikely(progress_delay_ms))
+		msleep(progress_delay_ms);
+}
+
 static const char * const bch2_progress_units[] = {
 #define x(n, v)	#n,
 	BCH_PROGRESS_UNITS()
@@ -118,6 +143,8 @@ int bch2_progress_update_iter(struct btree_trans *trans,
 
 	try(bch2_recovery_cancelled(c));
 
+	progress_maybe_delay();
+
 	struct btree *b = path_l(btree_iter_path(trans, iter))->b;
 
 	if (IS_ERR_OR_NULL(b))
@@ -136,6 +163,7 @@ int bch2_progress_update_iter(struct btree_trans *trans,
 
 void bch2_progress_update_count(struct bch_fs *c, struct progress_indicator *s)
 {
+	progress_maybe_delay();
 	s->seen++;
 	progress_maybe_print(c, s);
 }
