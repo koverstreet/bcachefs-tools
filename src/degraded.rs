@@ -30,7 +30,7 @@ use bcachefs_kernel::errcode::{self, BchError};
 use bcachefs_kernel::{c, opt_defined, opt_get};
 use c::bch_opts;
 use c::bch_sb_handle;
-use log::warn;
+use log::{info, warn};
 use uuid::Uuid;
 
 use crate::device_scan;
@@ -241,11 +241,13 @@ impl Ask {
 
         let read_only = answer == Answer::ReadOnly;
 
-        // warn, not info: the default verbosity is Warn, and this is a decision
-        // about the user's data. Otherwise all they see of it is the kernel's
-        // refusal, which mentions neither that a question was answered nor what
-        // it was answered with.
-        warn!("mounting {}with {}",
+        // info, not warn: this only ever runs having just been answered, so by
+        // default it would tell the user what they typed a moment ago. The
+        // record of the decision is the kernel's "with options:" line, which
+        // says degraded=yes,read_only and is written by the thing that acted on
+        // it. Kept at all for -v, and for the mount(2) fallback, where there is
+        // no status channel to carry that line.
+        info!("mounting {}with {}",
               if read_only { "read-only " } else { "" }, s.opt());
 
         Ok(Outcome::Mount { fs_opt: s.opt(), read_only })
