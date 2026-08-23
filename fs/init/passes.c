@@ -395,12 +395,18 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 				      struct printbuf *out,
 				      enum bch_recovery_pass pass,
 				      enum bch_run_recovery_pass_flags flags,
-				      bool *write_sb)
+				      struct sb_write *w)
 {
 	struct bch_fs_recovery *r = &c->recovery;
 
-	if (!(flags & RUN_RECOVERY_PASS_ephemeral))
-		lockdep_assert_held(&c->sb_lock.lock);
+	/*
+	 * @w is permission to persist, and can only be constructed under
+	 * sb_lock - holding one is the proof that writing the superblock is
+	 * allowed here. An ephemeral caller may be a btree transaction commit,
+	 * which can take neither, so it passes NULL and only in-memory
+	 * scheduling is reachable below.
+	 */
+	EBUG_ON(!w != !!(flags & RUN_RECOVERY_PASS_ephemeral));
 
 	if (c->opts.norecovery ||
 	    (c->opts.recovery_passes_exclude & BIT_ULL(pass)))
@@ -422,8 +428,8 @@ int __bch2_run_explicit_recovery_pass(struct bch_fs *c,
 		r->scheduled_passes_ephemeral |= BIT_ULL(pass);
 	} else {
 		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
-		*write_sb |= !__test_and_set_bit_le64(bch2_recovery_pass_to_stable(pass),
-						     ext->recovery_passes_required);
+		sb_record(w, !__test_and_set_bit_le64(bch2_recovery_pass_to_stable(pass),
+						      ext->recovery_passes_required));
 	}
 
 	/*
@@ -534,22 +540,15 @@ int bch2_run_explicit_recovery_pass(struct bch_fs *c,
 
 	/*
 	 * An ephemeral schedule only touches in-memory recovery state under
-	 * r->lock and never writes the superblock, so it doesn't need (and must
-	 * not take) sb_lock - callers may hold btree locks:
+	 * r->lock. Its callers may hold btree locks, so sb_lock is unavailable
+	 * to them - and with no sb_lock there's no permission to persist:
 	 */
-	if (flags & RUN_RECOVERY_PASS_ephemeral) {
-		bool write_sb = false;
-		int ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags, &write_sb);
-		WARN_ON(write_sb);
-		return ret;
-	}
+	if (flags & RUN_RECOVERY_PASS_ephemeral)
+		return __bch2_run_explicit_recovery_pass(c, out, pass, flags, NULL);
 
 	guard(mutex_noio)(&c->sb_lock);
-	bool write_sb = false;
-	int ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags, &write_sb);
-	if (write_sb)
-		bch2_write_super(c);
-	return ret;
+	CLASS(sb_write, w)(c);
+	return __bch2_run_explicit_recovery_pass(c, out, pass, flags, &w);
 }
 
 /*
@@ -579,12 +578,9 @@ int bch2_require_recovery_pass(struct bch_fs *c,
 	 * (restart_recovery must only come from an actually-armed rewind, or the
 	 * loop sees restart_recovery with rewound_to unset and fails.)
 	 */
-	bool write_sb = false;
-	int ret = __bch2_run_explicit_recovery_pass(c, out, pass, flags, &write_sb) ?:
+	CLASS(sb_write, w)(c);
+	return __bch2_run_explicit_recovery_pass(c, out, pass, flags, &w) ?:
 		bch_err_throw(c, recovery_pass_will_run);
-	if (write_sb)
-		bch2_write_super(c);
-	return ret;
 }
 
 static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)

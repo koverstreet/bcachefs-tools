@@ -116,4 +116,62 @@ void bch2_sb_field_to_text(struct printbuf *, struct bch_fs *, struct bch_sb *,
 void bch2_sb_layout_to_text(struct printbuf *, struct bch_sb_layout *);
 void bch2_sb_to_text(struct printbuf *, struct bch_fs *, struct bch_sb *, bool, unsigned);
 
+/*
+ * Permission to modify a superblock field, and the thing that writes it back.
+ * Hold sb_lock - guard(mutex_noio)(&c->sb_lock) - and declare one of these
+ * under it. Declaration order is load-bearing: declared after the lock guard,
+ * this destructs first, so the write happens while sb_lock is still held.
+ *
+ * The setters return whether the fact was NEW, which is the caller's business
+ * (an fsck message unsuppresses on novelty). The write-back accumulates
+ * separately, so forgetting to use that return can't lose a superblock write.
+ */
+struct sb_write {
+	struct bch_fs	*c;
+	bool		dirty;
+};
+
+static inline struct sb_write sb_write_init(struct bch_fs *c)
+{
+	lockdep_assert_held(&c->sb_lock.lock);
+	return (struct sb_write) { .c = c };
+}
+
+static inline void sb_write_exit(struct sb_write *w)
+{
+	if (w->dirty)
+		bch2_write_super(w->c);
+}
+
+DEFINE_CLASS(sb_write, struct sb_write,
+	     sb_write_exit(&_T), sb_write_init(c), struct bch_fs *c)
+
+/* The only place @dirty is written: */
+static inline bool sb_record(struct sb_write *w, bool was_new)
+{
+	w->dirty |= was_new;
+	return was_new;
+}
+
+static inline bool sb_set_err_silent(struct sb_write *w, unsigned err)
+{
+	struct bch_sb_field_ext *ext = bch2_sb_field_get(w->c->disk_sb.sb, ext);
+
+	return sb_record(w, !__test_and_set_bit_le64(err, ext->errors_silent));
+}
+
+static inline bool sb_set_btrees_lost_data(struct sb_write *w, unsigned btree)
+{
+	struct bch_sb_field_ext *ext = bch2_sb_field_get(w->c->disk_sb.sb, ext);
+
+	return sb_record(w, !__test_and_set_bit_le64(btree, &ext->btrees_lost_data));
+}
+
+static inline bool sb_set_btrees_lost_data_ever(struct sb_write *w, unsigned btree)
+{
+	struct bch_sb_field_ext *ext = bch2_sb_field_get(w->c->disk_sb.sb, ext);
+
+	return sb_record(w, !__test_and_set_bit_le64(btree, &ext->btrees_lost_data_ever));
+}
+
 #endif /* _BCACHEFS_SB_IO_H */
