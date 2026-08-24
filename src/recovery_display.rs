@@ -56,7 +56,6 @@ enum Sink {
     Console { file: File, cols: usize },
 }
 
-const PLYMOUTH_MAX: usize = crate::plymouth::MAX;
 
 /// /run/systemd/show-status is PID 1 saying it is displaying status; it removes
 /// the file when the admin asked for quiet. Honouring it is how `quiet` keeps
@@ -223,17 +222,10 @@ impl<'a> RecoveryDisplay<'a> {
             }
             Sink::Plymouth => {
                 // No erase: a display-message replaces the one before it, so
-                // the empty block at the end clears the splash by itself.
-                let mut msg = String::new();
-                for l in lines {
-                    if msg.len() + l.len() + 1 > PLYMOUTH_MAX {
-                        break;
-                    }
-                    if !msg.is_empty() {
-                        msg.push('\n');
-                    }
-                    msg.push_str(l);
-                }
+                // the empty block at the end clears the splash by itself -
+                // which is why nothing here drops a line for not fitting.
+                // Empty has to keep meaning "clear", so send() truncates.
+                let msg = lines.join("\n");
 
                 // The splash may have exited; not the mount's problem.
                 let _ = crate::plymouth::send(&msg);
