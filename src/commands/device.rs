@@ -2,7 +2,7 @@ use std::ffi::CString;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
 use bch_bindgen::fs::FsExt;
@@ -21,7 +21,7 @@ use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::device_scan::OpenedFs;
-use crate::util::{fmt_sectors_human, parse_human_size};
+use crate::util::{fmt_bytes_human, fmt_sectors_human, parse_human_size};
 use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
@@ -582,6 +582,20 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     // Trigger reconcile wakeup so it starts processing the evacuation
     let _ = std::fs::write(sysfs_path.join("internal/trigger_reconcile_wakeup"), "1");
 
+    // Remaining alone does not show movement at the top of the range.
+    // fmt_bytes_human carries three significant figures, so at 40T the number
+    // only changes once 102G has moved and at 300T once a whole terabyte has -
+    // minutes or hours of looking at a frozen screen, while at 5G it ticks
+    // every 10M. The rate is what answers "is this doing anything" at every
+    // scale, and the loop already samples once a second, so the delta is free.
+    //
+    // Smoothed, because a one-second sample of a background reconcile is
+    // bursty enough to be unreadable. Only decreases count: usage can rise
+    // when reconcile writes before it frees, and a negative rate reads as a
+    // fault rather than as bookkeeping.
+    let mut last: Option<(Instant, u64)> = None;
+    let mut rate = 0.0_f64;
+
     loop {
         let usage = handle.dev_usage(dev_idx)
             .context("querying device usage")?;
@@ -591,7 +605,20 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
             .map(|(_, dt)| dt.sectors)
             .sum();
 
-        print!("\x1b[2K\r{}", fmt_sectors_human(data_sectors));
+        let now = Instant::now();
+        if let Some((then, was)) = last {
+            let secs = now.duration_since(then).as_secs_f64();
+            if secs > 0.0 && was > data_sectors {
+                let moved = ((was - data_sectors) << 9) as f64 / secs;
+                rate = if rate == 0.0 { moved } else { rate * 0.7 + moved * 0.3 };
+            }
+        }
+        last = Some((now, data_sectors));
+
+        print!("\x1b[2K\r{} left", fmt_sectors_human(data_sectors));
+        if rate > 0.0 {
+            print!(", {}/s", fmt_bytes_human(rate as u64));
+        }
         io::stdout().flush().ok();
 
         if data_sectors == 0 {
