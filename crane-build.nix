@@ -57,6 +57,7 @@ let
       # rust toolchain (rustc/cargo/rustfmt-nightly).
       BINDGEN = "${pkgs.buildPackages.rust-bindgen}/bin/bindgen";
       PKG_CONFIG_SYSTEMD_SYSTEMDSYSTEMUNITDIR = "${placeholder "out"}/lib/systemd/system";
+      PKG_CONFIG_SYSTEMD_SYSTEMDSYSTEMGENERATORDIR = "${placeholder "out"}/lib/systemd/system-generators";
       PKG_CONFIG_UDEV_UDEVDIR = "${placeholder "out"}/lib/udev";
     };
 
