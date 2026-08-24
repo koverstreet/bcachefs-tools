@@ -36,7 +36,18 @@ fn truncate(s: &str, max: usize) -> &str {
     &s[..end]
 }
 
-/// Trailing 'a' leaves the splash's own spinner alone.
+/// One request and nothing else: command, 0x02, a length byte counting the
+/// NUL, the text, the NUL. That is the whole of what plymouth's own client
+/// puts on the wire for a display-message.
+///
+/// Nothing may be appended. Bytes after the NUL are parsed as a further
+/// request, and the tempting one - PROGRESS_UNPAUSE, "a" - is a trap:
+/// ply_progress_unpause() does `start_time += now - pause_time`, and
+/// pause_time is zero unless PROGRESS_PAUSE was sent, so each one shifts
+/// plymouth's clock forward by the entire current time. At one message per
+/// frame that destroys the splash's own progress estimate, which is a
+/// division by that elapsed time. display-message does not touch progress,
+/// so there was never anything to unpause.
 ///
 /// The limit is enforced here rather than asked of callers. It used to be a
 /// line in the doc comment, and the one caller kept it by dropping any line
@@ -50,7 +61,6 @@ pub fn send(text: &str) -> io::Result<()> {
     let mut msg = vec![b'M', 0x02, (text.len() + 1) as u8];
     msg.extend_from_slice(text.as_bytes());
     msg.push(0);
-    msg.extend_from_slice(b"a\0");
 
     connect()?.write_all(&msg)
 }
