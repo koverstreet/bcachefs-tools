@@ -12,6 +12,7 @@ mod prompt;
 mod unlock_socket;
 mod qcow2;
 mod recovery_display;
+mod splines;
 mod splitbrain;
 mod thread_with_file;
 mod util;

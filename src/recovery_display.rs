@@ -347,6 +347,8 @@ fn render_block(f: &Fields, cols: usize) -> Vec<String> {
         lines.push(l);
     }
 
+    lines.push(format!("  {}...", crate::splines::reticulate(f.elapsed)));
+
     for l in &mut lines {
         truncate(l, cols);
     }
