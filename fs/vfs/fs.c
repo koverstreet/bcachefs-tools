@@ -3074,6 +3074,24 @@ static int bch2_fs_parse_param(struct fs_context *fc,
 	struct bch_fs *c = NULL;
 
 	/*
+	 * struct fs_parameter keeps its value in a union and @type says which
+	 * member is live, but nothing between fsconfig(2) and here checks that
+	 * the two agree - filesystems that go through fs_parse() have it done
+	 * against their parameter spec, and we parse by hand. So settle it once,
+	 * for every parameter below: a value we can read as a string, or a flag
+	 * with no value at all. The rest put a struct filename or a struct file
+	 * in that same member, and reading one of those as a string means
+	 * strlen() over an object that has no reason to contain a NUL.
+	 */
+	switch (param->type) {
+	case fs_value_is_string:
+	case fs_value_is_flag:
+		break;
+	default:
+		return invalf(fc, "%s: expected a string value", param->key);
+	}
+
+	/*
 	 * The devices to mount. We take this rather than leaving it to the VFS
 	 * because fsconfig(2) copies a parameter value with
 	 * strndup_user(_value, 256): a long device list can't be passed as one
@@ -3086,9 +3104,6 @@ static int bch2_fs_parse_param(struct fs_context *fc,
 	 * and appending covers both without a second path.
 	 */
 	if (!strcmp(param->key, "source")) {
-		if (param->type != fs_value_is_string)
-			return invalf(fc, "Non-string source");
-
 		/*
 		 * -EINVAL is an empty device name and nothing else; -ENOMEM is
 		 * the only other failure. Naming it here rather than in
