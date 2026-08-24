@@ -168,8 +168,15 @@ pub fn run_bindgen(out: &str, clang_args: &[String], blocklist_dirs: &[String], 
     a.push("--".into());
     a.extend(clang_args.iter().cloned());
 
+    // The one build dependency cargo can't fetch for us, so a missing bindgen is
+    // what someone building from source actually hits - and the bare ENOENT reads
+    // like one of the headers we just pointed it at rather than the binary itself.
     let bindgen = std::env::var_os("BINDGEN").unwrap_or_else(|| "bindgen".into());
-    let result = Command::new(bindgen).args(&a).output().expect("run bindgen");
+    let result = Command::new(&bindgen).args(&a).output().unwrap_or_else(|e| {
+        panic!("could not run {bindgen:?}: {e}\n\
+                bindgen generates the Rust bindings to bcachefs's C code: install it \
+                with `cargo install bindgen-cli`, or set $BINDGEN to its path")
+    });
     if !result.status.success() {
         eprintln!("{}", String::from_utf8_lossy(&result.stderr));
         std::process::exit(1);
