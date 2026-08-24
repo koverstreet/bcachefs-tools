@@ -25,6 +25,7 @@ use crate::wrappers::sysfs::DevInfo;
 use crate::{
     fs_context::{self, FsContext, Level, Message},
     key::{KeyHandle, Passphrase, UnlockPolicy, Unlocked},
+    unlock_socket::UnlockSocket,
     logging,
 };
 
@@ -561,7 +562,12 @@ fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<Unlocked> {
         return Ok(Unlocked::InKeyring);
     }
 
-    Ok(Unlocked::Key(Passphrase::ask_and_check(sb)?))
+    // A second way to answer, up for as long as the prompt is: whoever is
+    // booting the machine may not be at it. Mounting is the only thing that
+    // wants one - `unlock` and `set-passphrase` are already somebody at a shell.
+    let mut socket = UnlockSocket::open(sb);
+
+    Ok(Unlocked::Key(Passphrase::ask_and_check(sb, socket.as_mut())?))
 }
 
 /// anyhow's downcast_ref searches the context chain, so this survives someone

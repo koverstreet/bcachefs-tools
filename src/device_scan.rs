@@ -822,7 +822,12 @@ impl crate::prompt::Watch for DeviceWatch {
 		self.socket.as_raw_fd()
 	}
 
-	fn moot(&mut self) -> bool {
-		self.every_member_present()
+	/// A device arriving never *answers* "mount without it?" - it withdraws the
+	/// question.
+	fn stirred(&mut self) -> crate::prompt::Stirred {
+		match self.every_member_present() {
+			true  => crate::prompt::Stirred::Moot,
+			false => crate::prompt::Stirred::Nothing,
+		}
 	}
 }

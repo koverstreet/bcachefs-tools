@@ -4,6 +4,7 @@ use std::{
     fs,
     io::{stdin, IsTerminal},
     mem,
+    os::fd::AsFd,
     path::Path,
     process::{Command, Stdio},
     ptr, thread,
@@ -18,6 +19,9 @@ use bcachefs_kernel::c::{
 use bch_bindgen::keyutils::{self, keyctl_search};
 use log::info;
 use rustix::termios;
+
+use crate::prompt::{Waited, Watch};
+use crate::unlock_socket::UnlockSocket;
 use uuid::Uuid;
 use zeroize::{ZeroizeOnDrop, Zeroizing};
 
@@ -212,8 +216,23 @@ impl Passphrase {
         &self.0
     }
 
-    pub fn ask_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
-        match StdinType::detect() {
+    /// From a line somebody typed or sent. The line ending is theirs, not part
+    /// of the passphrase - and it is CR, LF or both, because an initramfs
+    /// console that nothing has configured sends CR for enter.
+    pub fn from_line(line: &str) -> Result<Self> {
+        Ok(Self(CString::new(line.trim_end_matches(['\n', '\r']))?))
+    }
+
+    /// Ask, and take the passphrase from whoever supplies one first.
+    ///
+    /// @socket is a second way to answer for callers that want one - mounting
+    /// does, because whoever is booting the machine may not be at it. It has
+    /// already checked what it was given, so a passphrase it holds is right.
+    pub fn ask_and_check(
+        sb: &bch_sb_handle,
+        mut socket: Option<&mut UnlockSocket<'_>>,
+    ) -> Result<PassphraseCorrect> {
+        let typed = match StdinType::detect() {
             // A terminal plymouth is drawing over shows nothing, and this
             // prompt has no timeout - it waits there for a person who cannot
             // see it. Which way a question should go when that happens is
@@ -223,15 +242,21 @@ impl Passphrase {
             // where there isn't - an initramfs that isn't systemd, which
             // leaves the invisible terminal as the only thing we have.
             StdinType::Terminal if matches!(Prompt::detect(), Some(Prompt::Agent)) =>
-                Self::ask_from_systemd_and_check(sb),
-            StdinType::Terminal => Self::ask_in_terminal()?
-                .check(sb)
-                .ok_or_else(|| anyhow!("incorrect passphrase")),
-            StdinType::DevNull => Self::ask_from_systemd_and_check(sb),
-            StdinType::Other => Self::read_from_stdin()?
-                .check(sb)
-                .ok_or_else(|| anyhow!("incorrect passphrase")),
-        }
+                Some(Self::ask_from_systemd_and_check(sb)?),
+            StdinType::Terminal => Self::read_from_terminal(
+                    "Enter passphrase: ",
+                    socket.as_deref_mut().map(|s| s as &mut dyn Watch),
+                )?
+                .and_then(|p| p.check(sb)),
+            StdinType::DevNull => Some(Self::ask_from_systemd_and_check(sb)?),
+            StdinType::Other => Self::read_from_stdin()?.check(sb),
+        };
+
+        // Nothing typed was right - but the socket answers by ending the
+        // prompt, so a passphrase waiting there is why we are here.
+        typed
+            .or_else(|| socket.and_then(UnlockSocket::take))
+            .ok_or_else(|| anyhow!("incorrect passphrase"))
     }
 
     fn ask_from_systemd_and_check(sb: &bch_sb_handle) -> Result<PassphraseCorrect> {
@@ -278,6 +303,12 @@ impl Passphrase {
 
     /// Prompt for a passphrase with echo disabled.
     fn ask_in_terminal_with_prompt(prompt: &str) -> Result<Self> {
+        Ok(Self::read_from_terminal(prompt, None)?
+            .expect("no watch was given, so nothing else could have answered"))
+    }
+
+    /// `None` when @watch answered before anything was typed.
+    fn read_from_terminal(prompt: &str, watch: Option<&mut dyn Watch>) -> Result<Option<Self>> {
         let old = termios::tcgetattr(stdin())?;
         let mut new = old.clone();
         new.local_modes.remove(termios::LocalModes::ECHO);
@@ -294,13 +325,27 @@ impl Passphrase {
 
         eprint!("{}", prompt);
 
+        // ICANON above is what makes this safe to poll: stdin only becomes
+        // readable once a whole line has been typed, so the read below has one
+        // waiting and does not block either.
+        let waited = crate::prompt::wait(stdin().as_fd(), None, watch);
+
         let mut line = Zeroizing::new(String::new());
-        let res = stdin().read_line(&mut line);
+        let res = match waited {
+            Ok(Waited::Readable) => stdin().read_line(&mut line).map(|_| ()),
+            _ => Ok(()),
+        };
+
         termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &old)?;
         eprintln!();
         res?;
 
-        Ok(Self(CString::new(line.trim_end_matches(['\n', '\r']))?))
+        match waited? {
+            Waited::Readable => Ok(Some(Self::from_line(&line)?)),
+            // Moot and Timeout can't arrive: no timeout is passed, and nothing
+            // withdraws a passphrase prompt.
+            _ => Ok(None),
+        }
     }
 
     // blocks indefinitely if no input is available on stdin

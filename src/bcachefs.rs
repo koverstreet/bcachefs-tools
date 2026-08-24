@@ -8,6 +8,7 @@ mod key;
 mod dump_stack;
 mod logging;
 mod prompt;
+mod unlock_socket;
 mod qcow2;
 mod recovery_display;
 mod splitbrain;

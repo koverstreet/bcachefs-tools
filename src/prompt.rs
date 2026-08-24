@@ -121,15 +121,41 @@ struct Ask<'a> {
     timeout: Option<Duration>,
 }
 
-/// Something that can answer a question by happening.
+/// What a [`Watch`] waking the poll turned out to mean.
+pub enum Stirred {
+    /// Not the thing we were watching for - any block device arriving wakes a
+    /// device watch, and most of them are somebody else's.
+    Nothing,
+    /// The question no longer applies.
+    Moot,
+    /// Somebody answered it by this route rather than by typing, and the watch
+    /// is holding what they said.
+    Answered,
+}
+
+/// Something that can settle a question by happening.
 ///
 /// Someone asked whether to mount without a disk, who responds by plugging the
-/// disk in, has answered.
+/// disk in, has answered - and so has someone who supplies the passphrase over
+/// a socket while the terminal prompt is up. The first makes the question moot,
+/// the second answers it; [`Stirred`] is the difference.
 pub trait Watch {
     fn raw_fd(&self) -> RawFd;
-    /// Readiness alone is not an answer: any block device arriving wakes the
-    /// poll, so this decides whether *this* one settled anything.
-    fn moot(&mut self) -> bool;
+    /// Readiness alone is not an answer, so this decides whether *this* wakeup
+    /// settled anything.
+    fn stirred(&mut self) -> Stirred;
+}
+
+/// What ended a [`wait`].
+pub enum Waited {
+    /// The descriptor we were polling has something for us.
+    Readable,
+    /// A watch answered; it is holding the answer.
+    Answered,
+    /// A watch says the question stopped applying.
+    Moot,
+    /// The deadline passed with none of the above.
+    Timeout,
 }
 
 enum Answer {
@@ -260,17 +286,20 @@ pub fn stdin_is_dev_null() -> bool {
         && rustix::fs::minor(stat.st_rdev) == 3
 }
 
-/// Block until @fd is readable, the deadline passes, or @watch says the
-/// question no longer applies.
+/// Block until @fd is readable, the deadline passes, or @watch settles the
+/// question.
 ///
-/// A watch firing is not by itself an answer: any block device arriving wakes
-/// the poll, so ask the caller whether *this* one settled anything and go back
-/// to waiting if it did not.
-fn wait_for_answer(
+/// A watch firing is not by itself an answer: any block device arriving wakes a
+/// device watch, and a wrong passphrase wakes an unlock socket, so ask the watch
+/// whether *this* wakeup settled anything and go back to waiting if it did not.
+///
+/// Callers that poll a terminal want it already in ICANON: then readable means a
+/// whole line has been typed, and the read that follows will not block either.
+pub fn wait(
     fd: BorrowedFd<'_>,
     timeout: Option<Duration>,
     mut watch: Option<&mut dyn Watch>,
-) -> Result<Answer> {
+) -> Result<Waited> {
     let start = Instant::now();
 
     loop {
@@ -292,7 +321,7 @@ fn wait_for_answer(
 
         if poll(&mut fds, spec.as_ref())? == 0 {
             debug!("nobody answered within the timeout");
-            return Ok(Answer::Silence);
+            return Ok(Waited::Timeout);
         }
 
         // Read the readiness out before touching @watch again: the poll set
@@ -302,18 +331,35 @@ fn wait_for_answer(
         drop(fds);
 
         if answered {
-            return Ok(Answer::Said(String::new()));
+            return Ok(Waited::Readable);
         }
 
         if stirred {
-            if let Some(w) = watch.as_mut() {
-                if w.moot() {
+            match watch.as_mut().map(|w| w.stirred()) {
+                Some(Stirred::Moot) => {
                     debug!("the question stopped applying while it was up");
-                    return Ok(Answer::Moot);
+                    return Ok(Waited::Moot);
                 }
+                Some(Stirred::Answered) => return Ok(Waited::Answered),
+                Some(Stirred::Nothing) | None => (),
             }
         }
     }
+}
+
+/// [`wait`], in the terms a posted question is answered in.
+fn wait_for_answer(
+    fd: BorrowedFd<'_>,
+    timeout: Option<Duration>,
+    watch: Option<&mut dyn Watch>,
+) -> Result<Answer> {
+    Ok(match wait(fd, timeout, watch)? {
+        Waited::Readable => Answer::Said(String::new()),
+        Waited::Timeout  => Answer::Silence,
+        // Nothing that answers a multiple-choice question this way exists yet;
+        // the socket answers the passphrase prompt, which has its own path.
+        Waited::Moot | Waited::Answered => Answer::Moot,
+    })
 }
 
 /// --echo=yes because this isn't a password: the default is `masked`, an

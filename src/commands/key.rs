@@ -66,7 +66,7 @@ fn cmd_unlock(cli: UnlockCli) -> Result<()> {
         Some(ref file) => Passphrase::read_from_file(file)?
             .check(&sb)
             .ok_or_else(|| anyhow!("incorrect passphrase"))?,
-        None => Passphrase::ask_and_check(&sb)?,
+        None => Passphrase::ask_and_check(&sb, None)?,
     };
     KeyHandle::new(&passphrase_correct, cli.keyring)?;
 
@@ -106,7 +106,7 @@ fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
 
     if sb_is_encrypted(sb_handle) {
         let PassphraseCorrect { cleartext_sb_key, .. } =
-            Passphrase::ask_and_check(sb_handle)?;
+            Passphrase::ask_and_check(sb_handle, None)?;
         Ok((fs, cleartext_sb_key.into_key()))
     } else {
         let raw_key = sb_handle.sb().crypt().unwrap().key().key.clone();
