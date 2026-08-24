@@ -43,7 +43,7 @@ impl FsExt for Fs {
             let mut devs: c::darray_const_str = std::mem::zeroed();
             devs.data = devs_array[..].as_mut_ptr();
             devs.nr = devs_array.len();
-            c::bch2_fs_open(&mut devs, &mut opts)
+            c::bch2_fs_open(&mut devs, &mut opts, std::ptr::null())
         };
 
         errptr_to_result(ret).map(|fs| Fs { raw: fs })

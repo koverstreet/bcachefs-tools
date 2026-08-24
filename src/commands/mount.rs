@@ -24,7 +24,7 @@ use crate::wrappers::sysfs::DevInfo;
 
 use crate::{
     fs_context::{self, FsContext, Level, Message},
-    key::{KeyHandle, Keyring, Passphrase, UnlockPolicy},
+    key::{KeyHandle, Passphrase, UnlockPolicy, Unlocked},
     logging,
 };
 
@@ -140,6 +140,7 @@ fn mount_fs_context(
     mountflags: libc::c_ulong,
     data: Option<&str>,
     devs: &[DevInfo],
+    user_key: Option<&str>,
 ) -> Result<Mounted, MountError> {
     let fc = match FsContext::open(fstype) {
         Ok(Some(fc)) => fc,
@@ -194,6 +195,15 @@ fn mount_fs_context(
 
         fc.set(key, value)
             .map_err(|e| fail(&fc, format!("option {opt}"), e))?;
+    }
+
+    // Not an option, and deliberately not in the option string: the key itself,
+    // handed to the kernel so it does not have to go looking in a keyring.
+    // fsconfig(2) takes it from our address space, so it never reaches anyone's
+    // ps output the way an -o would.
+    if let Some(key) = user_key {
+        fc.set("user_key", Some(key))
+            .map_err(|e| fail(&fc, "user_key".to_string(), e))?;
     }
 
     // Before creating the superblock: that's the call that blocks for the whole
@@ -310,12 +320,17 @@ fn mount_inner(
     mountflags: libc::c_ulong,
     data: Option<String>,
     devs: Vec<DevInfo>,
+    unlocked: Option<&Unlocked>,
 ) -> Result<(), MountError> {
     // Reconfiguring an existing mount is fspick(2) + FSCONFIG_CMD_RECONFIGURE,
     // which fs_context doesn't implement; leave remount on mount(2).
     //
     // A device path that isn't UTF-8 also goes the old way rather than being
     // lossily mangled into one: mount(2) takes arbitrary bytes.
+    // Only the fs_context path can carry the key; mount(2) has nowhere to put
+    // a parameter, so that one still goes through a keyring.
+    let user_key = unlocked.and_then(|u| u.hex());
+
     if mountflags & libc::MS_REMOUNT == 0 {
         if let Some(src_str) = src.to_str() {
             let c_target = path_to_cstr(target);
@@ -323,7 +338,8 @@ fn mount_inner(
 
             loop {
                 info!("mounting filesystem");
-                match mount_fs_context(src_str, &c_target, fstype, flags, data.as_deref(), &devs)? {
+                match mount_fs_context(src_str, &c_target, fstype, flags, data.as_deref(),
+                                       &devs, user_key.as_ref().map(|s| s.as_str()))? {
                     Mounted::Yes      => return Ok(()),
                     Mounted::UseLegacy => break,
                     Mounted::WriteProtected => {
@@ -332,6 +348,17 @@ fn mount_inner(
                     }
                 }
             }
+        }
+    }
+
+    // mount(2) from here: no parameters, so a key we are holding has to go
+    // into a keyring after all, for bch2_request_key() to find. Failing to
+    // place it is not fatal here - the mount below will say ENOKEY, which is
+    // the better error to report.
+    if let Some(unlocked) = unlocked {
+        if let Err(e) = unlocked.to_keyring() {
+            warn!("mount(2) has no way to carry the key, and putting it in a \
+                   keyring failed: {e}");
         }
     }
 
@@ -516,25 +543,25 @@ mod tests {
 /// If a user explicitly specifies `unlock_policy` or `passphrase_file` then use
 /// that without falling back to other mechanisms. If these options are not
 /// used, then search for the key or ask for it.
-fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<KeyHandle> {
+fn handle_unlock(cli: &Cli, sb: &bch_sb_handle) -> Result<Unlocked> {
     if let Some(policy) = cli.unlock_policy.as_ref() {
         return policy.apply(sb);
     }
 
     if let Some(path) = cli.passphrase_file.as_deref() {
-        let passphrase_correct = Passphrase::read_from_file(path)?
+        return Ok(Unlocked::Key(Passphrase::read_from_file(path)?
             .check(sb)
-            .ok_or_else(|| anyhow::anyhow!("incorrect passphrase"))?;
-        return KeyHandle::new(&passphrase_correct, Keyring::User);
+            .ok_or_else(|| anyhow::anyhow!("incorrect passphrase"))?));
     }
 
+    // Somebody unlocked it already - `bcachefs unlock`, or an agent. The bytes
+    // are theirs and we never see them; the kernel asks the keyring itself.
     let uuid = sb.sb().uuid();
-    if let Ok(handle) = KeyHandle::new_from_search(&uuid) {
-        return Ok(handle);
+    if KeyHandle::new_from_search(&uuid).is_ok() {
+        return Ok(Unlocked::InKeyring);
     }
 
-    let passphrase_correct = Passphrase::ask_and_check(sb)?;
-    KeyHandle::new(&passphrase_correct, Keyring::User)
+    Ok(Unlocked::Key(Passphrase::ask_and_check(sb)?))
 }
 
 /// anyhow's downcast_ref searches the context chain, so this survives someone
@@ -634,6 +661,7 @@ fn mount_asking_about_degraded(
     sbs: Vec<(PathBuf, bch_sb_handle)>,
     opts: &mut bch_opts,
     parsed: &ParsedMountOptions,
+    unlocked: Option<&Unlocked>,
 ) -> Result<()> {
     let mut a = Attempt::new(sbs, opts);
     let mut flags = parsed.flags;
@@ -646,7 +674,8 @@ fn mount_asking_about_degraded(
         );
 
         let err = match mount_inner(a.devices.clone(), mountpoint, "bcachefs",
-                                    flags, fs_opts.clone(), a.devinfo.clone()) {
+                                    flags, fs_opts.clone(), a.devinfo.clone(),
+                                    unlocked) {
             Ok(()) => {
                 // Mounted, but we left members behind: one of them may have
                 // shown up while we were asking about it.
@@ -702,9 +731,11 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
     let devices = device_scan::joined_device_str(&sbs);
 
     let first_sb = &sbs[0].1;
-    if unsafe { bch_bindgen::c::bch2_sb_is_encrypted(first_sb.sb) } {
-        handle_unlock(cli, first_sb)?;
-    }
+    let unlocked = if unsafe { bch_bindgen::c::bch2_sb_is_encrypted(first_sb.sb) } {
+        Some(handle_unlock(cli, first_sb)?)
+    } else {
+        None
+    };
 
     if let Some(mountpoint) = cli.mountpoint.as_deref() {
         if cli.fake {
@@ -719,7 +750,8 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         // someone whether to mount without a device is only worth their time
         // if we are going to mount. -f exists to not do the thing, and an
         // invocation with no mountpoint isn't mounting either.
-        mount_asking_about_degraded(cli, mountpoint, sbs, &mut opts, &parsed)
+        mount_asking_about_degraded(cli, mountpoint, sbs, &mut opts, &parsed,
+                                    unlocked.as_ref())
     } else {
         info!(
             "would mount with params: device: {:?}, options: {}",

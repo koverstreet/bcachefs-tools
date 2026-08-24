@@ -841,6 +841,16 @@ struct bch_fs {
 				nocow_locks;
 	struct rhltable		update_table;
 
+	/*
+	 * The passphrase-derived key that unwraps the one below, when whoever
+	 * opened the filesystem handed it to us rather than leaving it in a
+	 * keyring for bch2_request_key() to go and find. Set before
+	 * bch2_fs_encryption_init() and zeroed as soon as it has been used -
+	 * the filesystem has no reason to keep it after that.
+	 */
+	struct bch_key		user_key;
+	bool			user_key_set;
+
 	struct bch_key		chacha20_key;
 	bool			chacha20_key_set;
 

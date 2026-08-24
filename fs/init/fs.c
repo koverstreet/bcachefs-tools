@@ -1410,11 +1410,17 @@ static int bch2_fs_init(struct bch_fs *c, struct bch_sb *sb,
 
 static struct bch_fs *bch2_fs_alloc(struct bch_sb *sb, struct bch_opts *opts,
 				    bch_sb_handles *sbs,
+				    const struct bch_key *user_key,
 				    struct printbuf *out)
 {
 	struct bch_fs *c = kvzalloc(sizeof(struct bch_fs), GFP_KERNEL);
 	if (!c)
 		return ERR_PTR(-BCH_ERR_ENOMEM_fs_alloc);
+
+	if (user_key) {
+		c->user_key = *user_key;
+		c->user_key_set = true;
+	}
 
 	int ret = bch2_fs_init(c, sb, opts, sbs, out);
 	if (ret) {
@@ -1683,6 +1689,7 @@ int bch2_sbs_filter_dead(bch_sb_handles *sbs, struct bch_opts *opts, struct prin
 
 static struct bch_fs *__bch2_fs_open(darray_const_str *devices,
 				     struct bch_opts *opts,
+				     const struct bch_key *user_key,
 				     struct printbuf *out)
 {
 	bch_sb_handles sbs = {};
@@ -1715,7 +1722,7 @@ static struct bch_fs *__bch2_fs_open(darray_const_str *devices,
 	if (ret)
 		goto err;
 
-	c = bch2_fs_alloc(sbs.data->sb, opts, &sbs, out);
+	c = bch2_fs_alloc(sbs.data->sb, opts, &sbs, user_key, out);
 	ret = PTR_ERR_OR_ZERO(c);
 	if (ret)
 		goto err;
@@ -1748,12 +1755,13 @@ err:
 }
 
 struct bch_fs *bch2_fs_open(darray_const_str *devices,
-			    struct bch_opts *opts)
+			    struct bch_opts *opts,
+			    const struct bch_key *user_key)
 {
 	CLASS(printbuf, msg)();
 	printbuf_indent_add_nextline(&msg, 2);
 
-	struct bch_fs *c = __bch2_fs_open(devices, opts, &msg);
+	struct bch_fs *c = __bch2_fs_open(devices, opts, user_key, &msg);
 	int ret = PTR_ERR_OR_ZERO(c);
 
 	if (ret) {

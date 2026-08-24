@@ -688,6 +688,15 @@ struct bch2_opts_parse {
 	 */
 	struct bch_status_fd	*status;
 	struct file		*status_file;
+
+	/*
+	 * The passphrase-derived key, when the caller handed it to us with
+	 * "user_key" rather than leaving it in a keyring - see
+	 * bch2_fs_parse_param(). Zeroed by bch2_fs_context_free() however the
+	 * mount went.
+	 */
+	struct bch_key		user_key;
+	bool			user_key_set;
 };
 
 extern const struct bch_opts bch2_opts_default;

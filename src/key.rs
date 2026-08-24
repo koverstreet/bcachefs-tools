@@ -1,5 +1,6 @@
 use std::{
     ffi::{CStr, CString},
+    fmt::Write as _,
     fs,
     io::{stdin, IsTerminal},
     mem,
@@ -65,28 +66,74 @@ pub enum UnlockPolicy {
     Stdin,
 }
 
+/// An unlocked filesystem, and whether we are holding the key that unlocked it.
+///
+/// The difference decides how the kernel gets it. A key we derived ourselves
+/// can be handed over directly, which is what the mount helper does; one that
+/// was already in a keyring we have never seen the bytes of, so all we can do
+/// is leave it there for bch2_request_key() to find.
+pub enum Unlocked {
+    Key(PassphraseCorrect),
+    InKeyring,
+}
+
+impl Unlocked {
+    /// The key as the kernel's `user_key` mount parameter wants it, if we have
+    /// it to give.
+    ///
+    /// The same bytes add_key() would have put in a keyring: both ends treat a
+    /// struct bch_key as an opaque block, so there is no byte order here to get
+    /// wrong.
+    pub fn hex(&self) -> Option<Zeroizing<String>> {
+        let Self::Key(k) = self else { return None };
+
+        // SAFETY: bch_key is four __le64s - no padding, no pointers, and the
+        // borrow lives no longer than @k.
+        let bytes: &[u8] = unsafe {
+            std::slice::from_raw_parts(
+                ptr::addr_of!(k.passphrase_key).cast(),
+                mem::size_of_val(&k.passphrase_key),
+            )
+        };
+
+        let mut s = String::with_capacity(bytes.len() * 2);
+        for b in bytes {
+            let _ = write!(s, "{b:02x}");
+        }
+        Some(Zeroizing::new(s))
+    }
+
+    /// Put it where bch2_request_key() will look, for the mount(2) path - that
+    /// has nowhere to carry a parameter, so the keyring is the only channel.
+    pub fn to_keyring(&self) -> Result<()> {
+        match self {
+            Self::Key(k)    => KeyHandle::new(k, Keyring::User).map(|_| ()),
+            Self::InKeyring => Ok(()),
+        }
+    }
+}
+
 impl UnlockPolicy {
-    pub fn apply(&self, sb: &bch_sb_handle) -> Result<KeyHandle> {
+    pub fn apply(&self, sb: &bch_sb_handle) -> Result<Unlocked> {
         let uuid = sb.sb().uuid();
 
         info!("Using filesystem unlock policy '{self}' on {uuid}");
 
         match self {
-            Self::Fail => KeyHandle::new_from_search(&uuid),
-            Self::Wait => Ok(KeyHandle::wait_for_unlock(&uuid)?),
+            // Somebody else's key, in a keyring: we never see the bytes.
+            Self::Fail => KeyHandle::new_from_search(&uuid).map(|_| Unlocked::InKeyring),
+            Self::Wait => KeyHandle::wait_for_unlock(&uuid).map(|_| Unlocked::InKeyring),
             Self::Ask => {
                 let passphrase = Passphrase::ask_in_terminal()?;
-                let passphrase_correct = passphrase
+                Ok(Unlocked::Key(passphrase
                     .check(sb)
-                    .ok_or_else(|| anyhow!("incorrect passphrase"))?;
-                KeyHandle::new(&passphrase_correct, Keyring::User)
+                    .ok_or_else(|| anyhow!("incorrect passphrase"))?))
             }
             Self::Stdin => {
                 let passphrase = Passphrase::read_from_stdin()?;
-                let passphrase_correct = passphrase
+                Ok(Unlocked::Key(passphrase
                     .check(sb)
-                    .ok_or_else(|| anyhow!("incorrect passphrase"))?;
-                KeyHandle::new(&passphrase_correct, Keyring::User)
+                    .ok_or_else(|| anyhow!("incorrect passphrase"))?))
             }
         }
     }

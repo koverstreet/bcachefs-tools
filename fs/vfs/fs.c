@@ -2811,7 +2811,8 @@ static int bch2_fs_get_tree(struct fs_context *fc)
 	if (!IS_ERR(sb))
 		goto got_sb;
 
-	c = bch2_fs_open(&opts_parse->devs, &opts);
+	c = bch2_fs_open(&opts_parse->devs, &opts,
+			 opts_parse->user_key_set ? &opts_parse->user_key : NULL);
 	ret = PTR_ERR_OR_ZERO(c);
 	if (ret)
 		goto err;
@@ -3042,6 +3043,8 @@ static void bch2_fs_context_free(struct fs_context *fc)
 			bch2_thread_with_stdio_done(&opts->status->thr);
 			fput(opts->status_file);
 		}
+
+		memzero_explicit(&opts->user_key, sizeof(opts->user_key));
 		kfree(opts);
 	}
 }
@@ -3147,6 +3150,35 @@ static int bch2_fs_parse_param(struct fs_context *fc,
 
 		opts->status = status;
 		return fd;
+	}
+
+	/*
+	 * The passphrase-derived key that unwraps the superblock's, for callers
+	 * that already have it. A parameter and not a mount option because
+	 * fsconfig(2) copies it out of our address space: it never reaches
+	 * anyone's ps output the way an -o would.
+	 */
+	if (!strcmp(param->key, "user_key")) {
+		if (!param->string)
+			return invalf(fc, "user_key: no key given");
+
+		size_t len = strlen(param->string);
+		int ret = len == sizeof(opts->user_key) * 2
+			? hex2bin((u8 *) &opts->user_key, param->string,
+				  sizeof(opts->user_key))
+			: -EINVAL;
+
+		/* the VFS frees this with kfree(), not kfree_sensitive() */
+		memzero_explicit(param->string, len);
+
+		if (ret) {
+			memzero_explicit(&opts->user_key, sizeof(opts->user_key));
+			return invalf(fc, "user_key: expected %zu hex digits",
+				      sizeof(opts->user_key) * 2);
+		}
+
+		opts->user_key_set = true;
+		return 0;
 	}
 
 	/* for reconfigure, we already have a struct bch_fs */

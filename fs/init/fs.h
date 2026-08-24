@@ -58,6 +58,7 @@ int bch2_fs_start(struct bch_fs *);
 int bch2_fs_stop(struct bch_fs *);
 
 int bch2_fs_exit(struct bch_fs *);
-struct bch_fs *bch2_fs_open(darray_const_str *, struct bch_opts *);
+struct bch_fs *bch2_fs_open(darray_const_str *, struct bch_opts *,
+			    const struct bch_key *);
 
 #endif /* _BCACHEFS_SUPER_H */
