@@ -56,28 +56,7 @@ enum Sink {
     Console { file: File, cols: usize },
 }
 
-fn plymouth_connect() -> io::Result<std::os::unix::net::UnixStream> {
-    use std::os::linux::net::SocketAddrExt;
-    use std::os::unix::net::{SocketAddr, UnixStream};
-
-    UnixStream::connect_addr(&SocketAddr::from_abstract_name("/org/freedesktop/plymouthd")?)
-}
-
-/// Command byte, flag byte, length byte including the NUL, then the text
-/// (ply-boot-protocol.h). Trailing 'a' leaves the splash's own spinner alone.
-///
-/// The length being one byte is where PLYMOUTH_MAX comes from, and plymouth
-/// asserts it rather than checking - so truncate before asking.
-fn plymouth_send(text: &str) -> io::Result<()> {
-    let mut msg = vec![b'M', 0x02, (text.len() + 1) as u8];
-    msg.extend_from_slice(text.as_bytes());
-    msg.push(0);
-    msg.extend_from_slice(b"a\0");
-
-    plymouth_connect()?.write_all(&msg)
-}
-
-const PLYMOUTH_MAX: usize = 254;
+const PLYMOUTH_MAX: usize = crate::plymouth::MAX;
 
 /// /run/systemd/show-status is PID 1 saying it is displaying status; it removes
 /// the file when the admin asked for quiet. Honouring it is how `quiet` keeps
@@ -118,7 +97,7 @@ impl<'a> RecoveryDisplay<'a> {
         // blanks the splash for as long as it takes us to draw the first block.
         let sink = if io::stderr().is_terminal() {
             Sink::Terminal { out: io::stderr(), rows: 0 }
-        } else if plymouth_connect().is_ok() {
+        } else if crate::plymouth::connect().is_ok() {
             Sink::Plymouth
         } else {
             Sink::Console { file: open_console()?, cols: 0 }
@@ -257,7 +236,7 @@ impl<'a> RecoveryDisplay<'a> {
                 }
 
                 // The splash may have exited; not the mount's problem.
-                let _ = plymouth_send(&msg);
+                let _ = crate::plymouth::send(&msg);
                 Ok(())
             }
             Sink::Console { file, cols } => {

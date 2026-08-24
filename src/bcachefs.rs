@@ -7,6 +7,7 @@ mod fs_context;
 mod key;
 mod dump_stack;
 mod logging;
+mod plymouth;
 mod prompt;
 mod unlock_socket;
 mod qcow2;

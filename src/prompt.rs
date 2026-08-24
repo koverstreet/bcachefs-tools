@@ -196,7 +196,7 @@ impl Prompt {
     pub fn detect() -> Option<Prompt> {
         let tty = stdin().is_terminal();
 
-        if tty && !plymouth_active() {
+        if tty && !crate::plymouth::active() {
             debug!("asking on the terminal");
             return Some(Prompt::Terminal);
         }
@@ -246,20 +246,6 @@ impl Prompt {
             Answer::Moot        => None,
         })
     }
-}
-
-/// Is plymouth drawing over the console? `plymouth --ping` is the canonical
-/// test and exits non-zero when it isn't running; not installed means not
-/// covering us, so a spawn failure is the same answer.
-fn plymouth_active() -> bool {
-    Command::new("plymouth")
-        .arg("--ping")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status()
-        .map(|s| s.success())
-        .unwrap_or(false)
 }
 
 /// Installed, note - not listening. detect() supplies the evidence for that.
