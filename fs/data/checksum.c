@@ -506,13 +506,20 @@ int bch2_request_key(struct bch_sb *sb, struct bch_key *key)
 		char *passphrase = read_passphrase("Enter passphrase: ");
 		struct bch_encrypted_key sb_key;
 
-		bch2_passphrase_check(sb, passphrase,
-				      key, &sb_key);
-		ret = 0;
+		/*
+		 * Whether it was the right passphrase used to be thrown away
+		 * here - ret was set to 0 either way, so a wrong one handed
+		 * back a garbage key and success, and the caller found out as
+		 * a checksum error somewhere further on.
+		 */
+		ret = bch2_passphrase_check(sb, passphrase, key, &sb_key)
+			? 0
+			: -ENOKEY;
+
+		memzero_explicit(passphrase, strlen(passphrase));
+		free(passphrase);
 	}
 #endif
-
-	/* stash with memfd, pass memfd fd to mount */
 
 	return ret;
 }
