@@ -1,5 +1,173 @@
 # Changelog
 
+## v1.39.3 - Sat Aug 29 2026
+
+The mount and boot release.
+
+A multi device filesystem that comes up with a device missing, or that needs a
+long recovery, shouldn't require the user to know anything: no dropping to a
+shell, no kernel command line parameters, no reading the manual to find out
+what `degraded` means.
+
+### Features
+
+#### degraded=ask
+
+When members are missing, mount now waits for them - `missing_dev_timeout` is
+the new option controlling how long - and only then asks, instead of failing on
+a device that was two seconds from being probed.
+
+The prompt says which filesystem it is about and which devices are missing, and
+offers read-only alongside mounting degraded. Where a mount needs more force
+than `degraded=yes` you are asked which level to allow rather than told no, and
+a mount that fails is retried once at `degraded=very` rather than leaving you at
+a reboot. If the missing device turns up while you are reading the question, the
+question is withdrawn and the mount continues.
+
+#### Devices that arrive late
+
+A member that shows up after the filesystem has already mounted is now handed to
+it, and a device add that was interrupted partway finishes itself when the
+device comes back online.
+
+#### Split brain
+
+When two devices have diverged, mount says what diverged and asks which history
+to continue with, instead of refusing with a message about degraded mounting
+that did not describe the situation.
+
+#### Watching a recovery
+
+A long recovery now shows what it is doing, on the boot splash as well as the
+console: which pass is running, how far along it is, and how long it has been
+going. Journal replay reports progress too, and `bcachefs device evacuate` shows
+the rate as well as how much is left.
+
+#### A long recovery is no longer killed at ninety seconds
+
+A `.mount` unit gets `DefaultTimeoutStartSec` and then SIGTERM. Ninety seconds
+doesn't make a slow recovery slow, it makes it impossible: every boot does the
+same ninety seconds of work and is killed at the same point, forever, and the
+symptom looks like a broken filesystem rather than a timeout.
+
+A mount helper cannot raise this from the inside - a mount unit is never given a
+`NOTIFY_SOCKET`, so `sd_notify()` returns 0 and does nothing - so we now ship a
+generator, which runs before units are loaded and leaves a drop-in.
+
+#### Encryption
+
+The passphrase can be answered over a socket, so an encrypted root can be
+unlocked from somewhere other than the console. It is handed to the kernel
+directly rather than through a keyring, and a wrong passphrase is now reported
+as a wrong passphrase instead of being mistaken for success.
+
+#### Superblock writes on filesystems with many devices
+
+A new replicas entry costs a superblock write, and on a large multi device
+filesystem that happens constantly: the journal wanders, every device set it
+lands on is a new entry, and every one of those writes is a barrier against the
+slowest disk in the fleet.
+
+Those writes may now skip rotational devices that hold little metadata - that
+is, when leaving one out can't affect the process of determining which drives we
+need in order to mount safely. An all-SSD filesystem still writes to every
+member.
+
+Superblock writes are also timed now, and show up in time stats.
+
+#### Additional errors marked autofix
+
+Six more errors repair themselves instead of asking - which for two of them
+meant a filesystem that wouldn't mount:
+
+- `journal_entries_missing`: a gap after an unclean shutdown isn't recoverable,
+  and refusing left the filesystem unmountable with advice to run fsck that
+  couldn't help, since mount time fsck won't authorize a non-autofix error
+  either. GH #1203.
+
+- `subvol_children_not_set`: an index derived from the subvolumes btree, set
+  from the same key it indexes.
+
+- `sb_clean_missing`, `sb_clean_journal_seq_mismatch`: the clean superblock is
+  an optimization that lets recovery skip journal replay; both repairs discard
+  it and fall back to the journal, which is authoritative.
+
+- `stripe_sector_count_wrong`, `stripe_parity_block_sector_count_wrong`: gc has
+  just recounted every stripe block, and the repair writes back what it found.
+
+#### Other
+
+- Filesystems with many members mount again: the device list is passed to
+  `fsconfig(2)` one device at a time, falling back to `mount(2)` when the list
+  is too long for it.
+
+- `bcachefs fs usage` reports a device that is listed but offline as degraded,
+  rather than as present.
+
+- `bcachefs subvolume list` no longer aborts or silently truncates a recursive
+  listing.
+
+- `bcachefs fs usage` shows how much of a device's stripe data sits in empty,
+  reusable blocks, per device and filesystem wide. The `fragmented` counter
+  charges a whole bucket for an emptied stripe member, so it can't distinguish
+  stranded space from space that is free for reuse - the difference between
+  copygc having work to do and copygc chasing its tail. Reads as absent until
+  `check_allocations` has recomputed accounting.
+
+### Bugfixes
+
+- A `ZERO_RANGE` or hole punch could be silently dropped, leaving the old
+  contents in place, seen as generic/363. `ei_reserved_*` is a cache of what the extents btree said over a range, and it
+  is cleared by truncate, fallocate and remap but not by writes - and buffered
+  writeback and O_DIRECT both allocate without going through
+  `bch2_folio_set()`, so a range the cache still calls a hole can quietly
+  acquire an extent underneath it. Nothing re-reads a folio that has data but no
+  state, so the stale `SECTOR_unallocated` stands, `__bch2_writepage()` skips
+  the block, and partial-block zeroing done in the page cache never reaches
+  disk.
+
+- Erasure coding could reconstruct the wrong data when a parity block was among
+  the erasures. The "can we recover at all?" check counted erasures across the
+  whole stripe, but the list handed to `raid_rec()` was built over the data
+  blocks only, so a lost P or Q never made it. Since `raid_rec()` dispatches on
+  the number of erasures, two erasures reported as one took the single-erasure
+  XOR path and reconstructed the lost block by XORing in the parity block
+  already known to be bad, failing its checksum afterwards. Stripe reuse also no
+  longer fails on blocks it is in the middle of discarding.
+
+- A filesystem could go emergency read-only during tiering.
+  `__bch2_btree_node_update_key()` gets `trans->has_interior_updates` for free
+  when it updates a non-root node, because that goes through
+  `bch2_trans_update()` on the parent - and that flag is what makes a full leaf
+  restart the transaction instead of splitting and retrying the commit in place.
+  Updating the root goes out as journal entries instead, so nothing set it; on
+  `reconcile_scan` the retry then commits into a btree whose node the split has
+  already freed.
+
+- Userspace ran one worker per workqueue, so a work item that blocks stopped
+  every other item on that queue - merely slow in most places, but a deadlock
+  for an executor whose tasks are work items. Queues now grow up to
+  `max_active` workers, which makes userspace journal replay a lot faster, most
+  of all on multi device filesystems, where the per-device IO had been
+  serializing behind a single worker.
+
+- Reusing a stripe held two buffers of the same size - the new one and the old
+  one it carries blocks forward from - from `head_get` all the way to create.
+  The old buffer is only needed to get the carried blocks out of, which can
+  happen as soon as the read lands, so a reuse cost twice what it needed to
+  against `ec_stripe_buf_limit`. That halves what a reuse costs against the
+  limit, which makes the reported stripe buffer memory deadlock harder to hit -
+  but does not resolve it: the limit can still be exhausted. GH #1182.
+
+- Every write was taking a compression workspace sized for the worst case any
+  caller could ask for: LZ4 below `LZ4HC_MIN_CLEVEL` needs 16,416 bytes and was
+  taking 262,192. Compression and decompression workspaces are now separate and
+  sized for what the caller is doing.
+
+- Hardening for corrupt or truncated keys reaching `to_text()` and validation
+  before the filesystem is fully set up, so a damaged filesystem reports rather
+  than crashing.
+
 ## v1.39.2 - Mon Aug 17 2026
 
 Bugfix release on top of v1.39.1. No on-disk format changes.
