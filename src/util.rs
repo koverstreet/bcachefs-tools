@@ -165,6 +165,16 @@ pub fn fmt_bytes_human(bytes: u64) -> String {
     format!("{}B", bytes)
 }
 
+/// Two units, because a third is precision an estimate doesn't have.
+pub fn fmt_duration_human(secs: u64) -> String {
+    match secs {
+        0..60       => format!("{secs}s"),
+        60..3600    => format!("{}m{}s", secs / 60,    secs % 60),
+        3600..86400 => format!("{}h{}m", secs / 3600,  secs % 3600 / 60),
+        _           => format!("{}d{}h", secs / 86400, secs % 86400 / 3600),
+    }
+}
+
 pub fn fmt_num_human(n: u64) -> String {
     const UNITS: &[&str] = &["", "K", "M", "G", "T"];
     let mut val = n as f64;

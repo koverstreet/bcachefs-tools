@@ -21,7 +21,7 @@ use clap::{Arg, ArgAction, Command, Parser, ValueEnum};
 use crate::commands::opts::{bch_opt_lookup, bch_option_args, bch_options_from_matches, parse_opt_val};
 use crate::device_multipath::{find_multipath_holder, warn_multipath_component};
 use crate::device_scan::OpenedFs;
-use crate::util::{fmt_bytes_human, fmt_sectors_human, parse_human_size};
+use crate::util::{fmt_bytes_human, fmt_duration_human, fmt_sectors_human, parse_human_size};
 use crate::wrappers::accounting::{data_type_is_empty, data_type_is_hidden};
 use crate::wrappers::handle::BcachefsHandle;
 use crate::wrappers::sysfs::{self, bcachefs_kernel_version};
@@ -617,7 +617,18 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
 
         print!("\x1b[2K\r{} left", fmt_sectors_human(data_sectors));
         if rate > 0.0 {
-            print!(", {}/s", fmt_bytes_human(rate as u64));
+            // kwz on IRC: the rate says it is moving, it does not say when it
+            // will be done, and that is the thing you actually want to know
+            // before deciding whether to wait or go to bed.
+            //
+            // Prefixed "about", because it is remaining divided by a smoothed
+            // rate and nothing more: reconcile competes with the filesystem's
+            // own writes, so the figure moves around and a bare number would
+            // claim more than we know. It still answers the question at every
+            // scale, which "3.42T left" does not.
+            print!(", {}/s, about {} left",
+                   fmt_bytes_human(rate as u64),
+                   fmt_duration_human(((data_sectors << 9) as f64 / rate) as u64));
         }
         io::stdout().flush().ok();
 
