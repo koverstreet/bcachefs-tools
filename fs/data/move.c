@@ -816,7 +816,8 @@ static int evacuate_pred(struct btree_trans *trans, void *_arg,
 	struct bch_fs *c = trans->c;
 	struct evacuate_arg *arg = _arg;
 
-	data_opts->read_dev = -1;
+	data_opts->read_dev	= -1;
+	data_opts->target	= io_opts->background_target;
 
 	unsigned ptr_bit = 1;
 	bkey_for_each_ptr(bch2_bkey_ptrs_c(k), ptr) {
@@ -869,7 +870,8 @@ static int evacuate_ec_orphan_pred(struct btree_trans *trans, void *_arg,
 	struct extent_ptr_decoded p = {};
 	unsigned ptr_bit = 1;
 
-	data_opts->read_dev = -1;
+	data_opts->read_dev	= -1;
+	data_opts->target	= io_opts->background_target;
 
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
 		if (p.ptr.dev == BCH_SB_MEMBER_INVALID &&
@@ -912,7 +914,8 @@ static int evacuate_bucket_pred(struct btree_trans *trans, void *_arg,
 	struct evacuate_bucket_arg *arg = _arg;
 
 	*data_opts = arg->data_opts;
-	data_opts->read_dev = -1;
+	data_opts->read_dev	= -1;
+	data_opts->target	= io_opts->background_target;
 
 	const union bch_extent_entry *entry;
 	struct extent_ptr_decoded p = {};
