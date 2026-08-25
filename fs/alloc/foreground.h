@@ -415,29 +415,32 @@ static inline struct alloc_request *alloc_request_get(struct btree_trans *trans,
 	if (ec_replicas < 2)
 		erasure_code = false;
 
-	req->ca				= NULL;
+	/*
+	 * Zero first, then assign. This was a field-by-field init over
+	 * nomemzero memory, which is only correct while the list keeps pace
+	 * with the struct - and it hadn't. btree_bitmap indexes
+	 * ca->alloc_cursor[3] in bch2_bucket_alloc_early() and was assigned
+	 * nowhere but the retry at the bottom of bch2_bucket_alloc_trans(),
+	 * so the first attempt indexed that array with whatever the
+	 * transaction pool had left there. ec_max_data_blocks sizes stripes
+	 * in bch2_ec_stripe_head_get() and is set by two of the callers that
+	 * reach it, by hand, at their own call sites.
+	 *
+	 * The cost is one memset of a struct the allocator already builds
+	 * per-request; the alternative is that every field added here has to
+	 * be noticed by whoever adds it.
+	 */
+	memset(req, 0, sizeof(*req));
+
 	req->cl				= cl;
 	req->wake_all_counter_snapshot	= atomic_read(&trans->c->allocator.wake_all_counter);
 	req->nr_replicas		= nr_replicas;
-	req->nr_effective		= 0;
 	req->ec_replicas		= ec_replicas;
 	req->ec				= erasure_code;
 	req->target			= target;
 	req->watermark			= watermark;
 	req->flags			= flags;
 	req->devs_have			= devs_have;
-	req->will_retry_all_devices	= false;
-	req->will_retry_target_devices	= false;
-	req->will_retry_set_devices	= false;
-	req->copygc_can_make_progress	= false;
-	req->failure_domains_required	= false;
-	req->trace_alloc_failed		= false;
-	req->target_frac			= 0;
-	req->devs_sorted.nr		= 0;
-	/* bch2_alloc_sectors_req() overwrites these; bch2_bucket_alloc_trans()
-	 * callers (e.g. journal resize) don't, so zero them here for them: */
-	memset(&req->devs_may_alloc, 0, sizeof(req->devs_may_alloc));
-	memset(&req->devs_chosen, 0, sizeof(req->devs_chosen));
 	darray_init(&req->trace);
 	return req;
 }
