@@ -513,8 +513,8 @@ int bch2_request_key(struct bch_sb *sb, struct bch_key *key)
 		 * a checksum error somewhere further on.
 		 */
 		ret = bch2_passphrase_check(sb, passphrase, key, &sb_key)
-			? 0
-			: -ENOKEY;
+			? -ENOKEY
+			: 0;
 
 		memzero_explicit(passphrase, strlen(passphrase));
 		free(passphrase);
