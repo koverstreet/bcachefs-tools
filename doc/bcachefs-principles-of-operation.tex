@@ -1461,6 +1461,29 @@ were recycled. The rewind window is bounded by the journal size: only sequences
 between \texttt{last\_seq} (oldest entry still on disk) and the current
 sequence are available, so a larger journal provides a deeper rewind history.
 
+Bucket recycling is itself delayed, deliberately. An emptied bucket is not
+discarded as soon as it becomes free:
+\texttt{journal\_rewind\_discard\_buffer\_percent} (default 4, maximum 10)
+holds back that percentage of each device's capacity as buckets that are empty
+but not yet discarded, so their contents stay readable for a rewind. Only the
+amount pending above that reserve is released to the discard worker. This is
+why a healthy filesystem settles at a steady nonzero \texttt{need\_discard}
+rather than draining to zero---that figure is the reserve, not a backlog.
+
+Note that this bound and \texttt{scrub\_journal\_max\_rewind\_secs} above are
+different things, despite both limiting ``how far back''. The latter is policy:
+how far the automatic scrub will choose to roll back. This one is availability:
+how far any rewind, automatic or manual, is able to roll back at all, because
+the data has to still be on the disk.
+
+The reserve is best-effort and yields to allocation. It is clamped by how much
+free space the device has above its allocation reserves, so a device under
+space pressure shrinks its buffer toward zero and discards everything pending.
+Rewind depth is therefore not a guarantee: on a filesystem that has been run
+near full, there may be little or no recoverable history regardless of journal
+size. The reserve is computed per-device, so one device starving for free
+buckets does not shrink the buffer on the others.
+
 \subsection{Disaster recovery}
 
 bcachefs is designed to recover from catastrophic metadata damage---not just
