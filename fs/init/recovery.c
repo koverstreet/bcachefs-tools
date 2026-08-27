@@ -828,7 +828,13 @@ static int __bch2_fs_recovery(struct bch_fs *c)
 		if (c->opts.read_journal_only)
 			return 0;
 
-		if (mustfix_fsck_err_on(c->sb.clean && !journal_start.clean,
+		/*
+		 * bch2_journal_read() leaves clean false if it found no flush
+		 * entry at all - an empty journal, not a dirty one:
+		 */
+		if (mustfix_fsck_err_on(c->sb.clean &&
+					journal_start.replay_end &&
+					!journal_start.clean,
 					c, clean_but_journal_not_empty,
 					"filesystem marked clean but journal not empty")) {
 			c->sb.compat &= ~(1ULL << BCH_COMPAT_alloc_info);
