@@ -1288,24 +1288,42 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	CLASS(darray_u64, flushes)();
 	int ret = 0;
 
-	u64 last_entry_time = 0;
 	*rewind_seq = 0;
 
 	struct journal_replay **_i;
 	struct genradix_iter radix_iter;
+
+	/*
+	 * The window is measured back from the newest flush entry, so we need
+	 * that before we can decide what falls inside it - genradix_for_each()
+	 * runs oldest-first, and the scrub loop below requires @flushes in
+	 * ascending seq order, so take two passes rather than reversing.
+	 */
+	u64 newest_time = 0;
 	genradix_for_each(&c->journal_entries, radix_iter, _i) {
 		struct journal_replay *i = *_i;
 
-		if (!journal_replay_ignore(i) &&
-		    !JSET_NO_FLUSH(&i->j)) {
-			u64 t = jset_datetime(&i->j);
-			if (!last_entry_time)
-				last_entry_time = t;
-			else if (time_before64(t + c->opts.scrub_journal_max_rewind_secs, last_entry_time))
-				break;
+		if (!journal_replay_ignore(i) && !JSET_NO_FLUSH(&i->j))
+			newest_time = max(newest_time, (u64) jset_datetime(&i->j));
+	}
 
-			try(darray_push(&flushes, le64_to_cpu(i->j.seq)));
-		}
+	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+		struct journal_replay *i = *_i;
+
+		if (journal_replay_ignore(i) || JSET_NO_FLUSH(&i->j))
+			continue;
+
+		/*
+		 * Entries with no datetime entry (t == 0) are always included:
+		 * we can't tell how old they are, and excluding them would
+		 * silently shrink the scrub window.
+		 */
+		u64 t = jset_datetime(&i->j);
+		if (t && newest_time &&
+		    time_before64(t + c->opts.scrub_journal_max_rewind_secs, newest_time))
+			continue;
+
+		try(darray_push(&flushes, le64_to_cpu(i->j.seq)));
 	}
 
 	if (!flushes.nr) {
