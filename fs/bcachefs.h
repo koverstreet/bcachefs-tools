@@ -375,6 +375,10 @@ BCH_DEBUG_PARAMS_ALL()
 	  "Flush key cache journal pins")				\
 	x(journal_pin_flush_other,					\
 	  "Flush other journal pins")					\
+	x(sb_write,							\
+	  "Write the superblock to every member device; "		\
+	  "held under sb_lock, so this is what other "			\
+	  "superblock writers wait behind")				\
 	x(blocked_journal_low_on_space,					\
 	  "Blocked: journal reclaim not keeping up "			\
 	  "with reclaiming space")					\

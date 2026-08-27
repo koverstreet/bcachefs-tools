@@ -1468,9 +1468,13 @@ static int __bch2_write_super(struct bch_fs *c)
 
 int bch2_write_super(struct bch_fs *c)
 {
+	u64 start_time = local_clock();
+
 	int ret = __bch2_write_super(c);
 	/* Make new options visible after they're persistent: */
 	bch2_sb_update(c);
+
+	bch2_time_stats_update(&c->times[BCH_TIME_sb_write], start_time);
 	return ret;
 }
 
