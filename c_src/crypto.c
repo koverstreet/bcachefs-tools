@@ -106,10 +106,13 @@ bool bch2_passphrase_check(struct bch_sb *sb, const char *passphrase,
 
 	bch2_chacha20(passphrase_key, __bch2_sb_key_nonce(sb), sb_key, sizeof(*sb_key));
 
-	if (bch2_key_is_encrypted(sb_key))
-		return true;
-
-	return false;
+	/*
+	 * sb_key has just been decrypted in place: the right passphrase leaves
+	 * the magic intact, so it is no longer "encrypted". Testing
+	 * bch2_key_is_encrypted() here without negating it - as this did - is
+	 * the check inverted.
+	 */
+	return !bch2_key_is_encrypted(sb_key);
 }
 
 bool bch2_add_key(struct bch_sb *sb,
@@ -130,10 +133,9 @@ bool bch2_add_key(struct bch_sb *sb,
 	else
 		die("unknown keyring %s", keyring_str);
 
-	if (bch2_passphrase_check(sb, passphrase,
-			      &passphrase_key,
-			      &sb_key))
-					return true;
+	/* returns true on failure - the key is only added below */
+	if (!bch2_passphrase_check(sb, passphrase, &passphrase_key, &sb_key))
+		return true;
 
 	char uuid[40];
 	uuid_unparse_lower(sb->user_uuid.b, uuid);
