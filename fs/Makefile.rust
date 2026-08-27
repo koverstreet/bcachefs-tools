@@ -99,12 +99,22 @@ bcachefs-codegen-skip-cflags := \
 	-fdiagnostics-show-context -fdiagnostics-show-context=% \
 	--param=% --param asan-% -fno-isolate-erroneous-paths-dereference \
 	$(CC_FLAGS_LTO)
+
+# For cross builds, compute a target to pass to bindgen. We cannot use kernel's
+# per-arch BINDGEN_TARGET table as it isn't reachable from here (or from an
+# out-of-tree build). Instead of duplicating it, under LLVM=1, --target is
+# already in $(KBUILD_CPPFLAGS) and thus there's nothing to add.
+# For GCC, query the target from the cross compiler. The GCC target triple is
+# sometimes different from LLVM, but it is good enough for bindgen/libclang
+# for all supported arches.
+bcachefs-codegen-target := $(if $(CONFIG_CC_IS_CLANG),,--target=$(shell $(CC) -dumpmachine))
+
 bcachefs-codegen-cflags := \
 	$(LINUXINCLUDE) $(KBUILD_CPPFLAGS) \
 	$(filter-out -funsigned-char $(bcachefs-codegen-skip-cflags),$(KBUILD_CFLAGS)) \
 	$(bcachefs-config-cppflags) \
 	-I$(src) -I$(obj)/rust -include $(srctree)/include/linux/compiler_types.h \
-	-w -D__BINDGEN__ -DRUST_BINDGEN
+	-w -D__BINDGEN__ -DRUST_BINDGEN $(bcachefs-codegen-target)
 
 # Types from outside fs/ are blocklisted, and come from kernel::bindings (as
 # userspace gets them from bcachefs-shim).
@@ -123,6 +133,9 @@ $(obj)/codegen: $(src)/codegen_main.rs $(src)/codegen.rs FORCE
 # The clang flags go after --, as separate words, exactly as the C compile gets
 # them: quoting them as one argument breaks flags with embedded quotes (arm64's
 # -DARM64_ASM_ARCH='"armv8.5-a"').
+#
+# We do not pass codegen tool's own --target, since non-empty clang driver args
+# always override it.
 quiet_cmd_bch_codegen = CODEGEN $(obj)/rust
       cmd_bch_codegen = $(obj)/codegen --out $(obj)/rust \
 	--blocklist '$(bcachefs-codegen-blocklist)' \

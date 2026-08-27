@@ -116,12 +116,15 @@ endif
 # kernel's own rules for them are in vendor/kernel-rust/Makefile.
 
 # bindgen, as the kernel's rule does it: the carried bindgen_parameters, and
-# the kernel's C flags less the ones libclang can't parse. No --target, as for
-# our codegen: the host's. -I rust/bindings: the helper headers' relative
-# includes ("../../drivers/base/base.h") resolve from there.
+# the kernel's C flags less the ones libclang can't parse.
+# $(bcachefs-codegen-target) is defined in fs/bcachefs/Makefile.rust
+# (our parent file), same as for our codegen.
+# -I rust/bindings: the helper headers' relative includes ("../../drivers/base/base.h")
+# resolve from there.
 bch-vr-bindgen-cflags := $(LINUXINCLUDE) -I$(srctree)/rust/bindings $(KBUILD_CPPFLAGS) \
 	$(filter-out $(bcachefs-codegen-skip-cflags),$(KBUILD_CFLAGS)) \
-	-fno-builtin -D__BINDGEN__ -DMODULE -DKBUILD_MODNAME='"bcachefs"' -w
+	-fno-builtin -D__BINDGEN__ -DMODULE -DKBUILD_MODNAME='"bcachefs"' -w \
+	$(bcachefs-codegen-target)
 quiet_cmd_bch_vr_bindgen = BINDGEN $@
       cmd_bch_vr_bindgen = $(BINDGEN) $< $(rs-bindgen-flags) --rust-target 1.85 \
 	--use-core --with-derive-default --ctypes-prefix ffi --no-layout-tests \
