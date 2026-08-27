@@ -97,6 +97,7 @@ int bch2_sb_validate(struct bch_sb *, struct bch_opts *, u64,
 int bch2_read_super(const char *, struct bch_opts *, struct bch_sb_handle *);
 int bch2_read_super_silent(const char *, struct bch_opts *, struct bch_sb_handle *);
 int bch2_write_super(struct bch_fs *);
+int bch2_write_super_replicas(struct bch_fs *);
 void __bch2_check_set_feature(struct bch_fs *, unsigned);
 
 static inline void bch2_check_set_feature(struct bch_fs *c, unsigned feat)

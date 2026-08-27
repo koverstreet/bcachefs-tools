@@ -2,6 +2,7 @@
 
 #include "bcachefs.h"
 
+#include "alloc/buckets.h"
 #include "alloc/disk_groups.h"
 #include "alloc/replicas.h"
 
@@ -1415,9 +1416,20 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 			i->ca->disk_sb.seq = le64_to_cpu(i->ca->disk_sb.sb->seq);
 
 	unsigned nr_wrote =	dev_mask_nr(&sb_written);
-	unsigned nr_members =	bch2_sb_nr_devices(c->disk_sb.sb);
+	unsigned nr_members =	devs
+		? online_devices.nr
+		: bch2_sb_nr_devices(c->disk_sb.sb);
+
+	/*
+	 * A restricted write is not trying to be readable on its own - by
+	 * construction it skips devices that hold data. Asking
+	 * bch2_can_read_fs_with_devs() about it would say no every time and
+	 * take us read only. What matters is that the write landed somewhere:
+	 * the previous superblock is still on every device, so the failure
+	 * here is a missed update, not a lost one.
+	 */
 	bool fatal = !nr_wrote ||
-		!bch2_can_read_fs_with_devs(c, &sb_written, degraded_flags, NULL);
+		(!devs && !bch2_can_read_fs_with_devs(c, &sb_written, degraded_flags, NULL));
 
 	if (!have_errors && !fatal)
 		return 0;
@@ -1457,7 +1469,11 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 		prt_newline(&msg.m);
 	}
 
-	prt_printf(&msg.m, "Offline devices:\n");
+	/*
+	 * For a restricted write the leftovers are the devices we deliberately
+	 * skipped, not devices that went away - don't call them offline.
+	 */
+	prt_printf(&msg.m, devs ? "Not written:\n" : "Offline devices:\n");
 	scoped_guard(printbuf_indent, &msg.m)
 		bch2_devs_mask_to_text_locked(&msg.m, c, &sb_unwritten);
 
@@ -1478,16 +1494,135 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 	return 0;
 }
 
-int bch2_write_super(struct bch_fs *c)
+static int bch2_write_super_devs(struct bch_fs *c, const struct bch_devs_mask *devs)
 {
 	u64 start_time = local_clock();
 
-	int ret = __bch2_write_super(c, NULL);
+	int ret = __bch2_write_super(c, devs);
 	/* Make new options visible after they're persistent: */
 	bch2_sb_update(c);
 
 	bch2_time_stats_update(&c->times[BCH_TIME_sb_write], start_time);
 	return ret;
+}
+
+int bch2_write_super(struct bch_fs *c)
+{
+	return bch2_write_super_devs(c, NULL);
+}
+
+/*
+ * How much of the filesystem's metadata we're willing to leave on devices a
+ * replicas superblock write skips. Tunable: lower is more conservative.
+ */
+/*
+ * How much of the filesystem's metadata we're willing to leave on devices a
+ * replicas superblock write skips. Tunable: lower is more conservative.
+ */
+#define BCH_SB_SKIP_META_PCT		10
+
+/*
+ * Btree only.
+ *
+ * Not journal: that's buckets allocated to the journal, not the live entries
+ * in them, so it's both the wrong quantity and a constantly moving one.
+ *
+ * Not sb either: every device has one and they're all the same size, so it
+ * only dilutes the ranking - and on a filesystem with little btree it would
+ * dominate, leaving every device tied. Without it that case totals zero, and
+ * we write to everyone, which is the right answer.
+ */
+static u64 dev_meta_sectors(struct bch_dev *ca)
+{
+	struct bch_dev_usage_full u = bch2_dev_usage_full_read(ca);
+
+	return u.d[BCH_DATA_btree].sectors;
+}
+
+typedef struct {
+	u8	dev_idx;
+	u64	sectors;
+} dev_meta;
+DEFINE_DARRAY(dev_meta);
+
+static int dev_meta_cmp(const void *_l, const void *_r)
+{
+	const dev_meta *l = _l, *r = _r;
+
+	/* Least metadata first: */
+	return cmp_int(l->sectors, r->sectors);
+}
+
+/*
+ * Superblock write for a new replicas entry - the one that happens constantly
+ * on a big multi device filesystem, because the journal wanders and every
+ * device set it lands on is a new entry, and every entry costs a barrier
+ * against the slowest disk in the fleet.
+ *
+ * Such a write may skip the devices that hold little metadata, because an
+ * entry that doesn't reach them isn't lost: the previous superblock is still
+ * on every device, the next fleet wide write catches them up, and a mount
+ * that has only them rebuilds the replicas section from accounting - see
+ * accounting_read_mem_fixups(), which does that on every mount already.
+ *
+ * Start from every online device and drop rotating disks while the metadata
+ * left behind stays under BCH_SB_SKIP_META_PCT. Dropping rather than picking
+ * keeps the default on the safe side, and only a rotating disk is ever
+ * dropped - an all-SSD filesystem keeps its whole fleet however the metadata
+ * is spread.
+ *
+ * Cheapest first, because the number of devices dropped is the whole point:
+ * with a budget of 10%, one disk holding 10% and ten holding 1% each gets us
+ * one device unsorted and ten sorted. Sorted also lets us stop at the first
+ * disk that doesn't fit - everything after it holds at least as much.
+ *
+ * This is the *only* caller allowed to write to a subset, which is why it's
+ * named for the caller rather than for the mechanism: every other superblock
+ * section stays fleet wide, so nothing else can go stale behind us.
+ */
+int bch2_write_super_replicas(struct bch_fs *c)
+{
+	CLASS(darray_dev_meta, m)();
+	struct bch_devs_mask devs;
+	u64 total = 0, skipped = 0;
+	unsigned nr_skipped = 0;
+
+	memset(&devs, 0, sizeof(devs));
+
+	for_each_online_member(c, ca, BCH_DEV_READ_REF_write_super) {
+		u64 sectors = dev_meta_sectors(ca);
+
+		if (darray_push(&m, ((dev_meta) { ca->dev_idx, sectors }))) {
+			enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_write_super);
+			return bch2_write_super(c);
+		}
+
+		__set_bit(ca->dev_idx, devs.d);
+		total += sectors;
+	}
+
+	if (!total)
+		return bch2_write_super(c);
+
+	darray_sort(m, dev_meta_cmp);
+
+	u64 budget = total / 100 * BCH_SB_SKIP_META_PCT;
+
+	darray_for_each(m, i) {
+		if (!test_bit(i->dev_idx, c->devs_rotational.d))
+			continue;
+
+		if (skipped + i->sectors > budget)
+			break;
+
+		skipped += i->sectors;
+		__clear_bit(i->dev_idx, devs.d);
+		nr_skipped++;
+	}
+
+	return nr_skipped
+		? bch2_write_super_devs(c, &devs)
+		: bch2_write_super(c);
 }
 
 void __bch2_check_set_feature(struct bch_fs *c, unsigned feat)
