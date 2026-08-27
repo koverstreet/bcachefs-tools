@@ -1225,7 +1225,14 @@ static void write_sb_dev_put(write_sb_dev d)
 
 DEFINE_DARRAY_FREE_ITEM(write_sb_dev, write_sb_dev_put);
 
-static int __bch2_write_super(struct bch_fs *c)
+/*
+ * @devs: restrict the write to these devices, or NULL for every online member.
+ *
+ * Everything downstream iterates online_devices - the readback pass, the write
+ * loop, the error report - so filtering here is the only place the restriction
+ * has to be applied.
+ */
+static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs)
 {
 	struct closure *cl = &c->sb_write;
 	unsigned degraded_flags = BCH_FORCE_IF_DEGRADED;
@@ -1256,6 +1263,9 @@ static int __bch2_write_super(struct bch_fs *c)
 	 * yet RW:
 	 */
 	for_each_online_member(c, ca, BCH_DEV_READ_REF_write_super) {
+		if (devs && !test_bit(ca->dev_idx, devs->d))
+			continue;
+
 		int ret = darray_push(&online_devices, ((write_sb_dev) { ca }));
 		if (bch2_fs_fatal_err_on(ret, c, "%s: error allocating online devices", __func__))
 			return ret;
@@ -1470,7 +1480,7 @@ int bch2_write_super(struct bch_fs *c)
 {
 	u64 start_time = local_clock();
 
-	int ret = __bch2_write_super(c);
+	int ret = __bch2_write_super(c, NULL);
 	/* Make new options visible after they're persistent: */
 	bch2_sb_update(c);
 
