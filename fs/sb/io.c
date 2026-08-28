@@ -1267,8 +1267,10 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 			continue;
 
 		int ret = darray_push(&online_devices, ((write_sb_dev) { ca }));
-		if (bch2_fs_fatal_err_on(ret, c, "%s: error allocating online devices", __func__))
+		if (bch2_fs_fatal_err_on(ret, c, "%s: error allocating online devices", __func__)) {
+			enumerated_ref_put(&ca->io_ref[READ], BCH_DEV_READ_REF_write_super);
 			return ret;
+		}
 		enumerated_ref_get(&ca->io_ref[READ], BCH_DEV_READ_REF_write_super);
 	}
 
