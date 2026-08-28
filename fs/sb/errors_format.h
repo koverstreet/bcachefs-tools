@@ -14,9 +14,9 @@ enum bch_fsck_flags {
 	x(clean_but_journal_not_empty,				  0,	0)		\
 	x(dirty_but_no_journal_entries,				  1,	0)		\
 	x(dirty_but_no_journal_entries_post_drop_nonflushes,	  2,	0)		\
-	x(sb_clean_journal_seq_mismatch,			  3,	0)		\
+	x(sb_clean_journal_seq_mismatch,			  3,	FSCK_AUTOFIX)	\
 	x(sb_clean_btree_root_mismatch,				  4,	0)		\
-	x(sb_clean_missing,					  5,	0)		\
+	x(sb_clean_missing,					  5,	FSCK_AUTOFIX)	\
 	x(jset_unsupported_version,				  6,	0)		\
 	x(jset_unknown_csum,					  7,	0)		\
 	x(jset_last_seq_newer_than_seq,				  8,	0)		\
@@ -205,8 +205,8 @@ enum bch_fsck_flags {
 	x(stripe_val_size_bad,					168,	0)		\
 	x(stripe_csum_granularity_bad,				290,	0)		\
 	x(stripe_sectors_zero,					340,	0)		\
-	x(stripe_sector_count_wrong,				169,	0)		\
-	x(stripe_parity_block_sector_count_wrong,		360,	0)		\
+	x(stripe_sector_count_wrong,				169,	FSCK_AUTOFIX)	\
+	x(stripe_parity_block_sector_count_wrong,		360,	FSCK_AUTOFIX)	\
 	x(stripe_to_missing_bucket_ref,				346,	FSCK_AUTOFIX)	\
 	x(bucket_stripe_ref_to_missing_stripe,			347,	FSCK_AUTOFIX)	\
 	x(bucket_stripe_ref_to_incorrect_stripe,		348,	FSCK_AUTOFIX)	\
