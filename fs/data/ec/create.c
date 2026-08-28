@@ -599,34 +599,16 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 			zero_out_rest_of_ec_bucket(c, s, i, ob);
 	}
 
-	if (s->have_old_stripe) {
-		/* XXX: we might end up blocking here on reading the old stripe,
-		 * do we need to make this async? */
-
+	if (s->old_stripe_read) {
 		/*
-		 * Only the blocks we carry forward have to be good.
-		 * init_new_stripe_from_old() already picked those - the ones
-		 * holding live data - and everything else in the old stripe is
-		 * discarded here, parity included: we regenerate it below.
-		 *
-		 * The rest is still read, and still matters, because
-		 * reconstructing a block we do want consumes every other
-		 * block. But a stripe whose damage is confined to the blocks
-		 * it's dropping must not fail, or the rewrite that would drop
-		 * them can never run - which is how a stripe that lost a block
-		 * to device removal gets stuck in reconcile forever.
+		 * ec_old_stripe_fold() folded the carried-forward blocks in
+		 * when the read landed; this is only the barrier against it not
+		 * having run yet, which it normally has - the read was issued
+		 * before the stripe started filling.
 		 */
-		u32 required = 0;
-		for (unsigned i = 0; i < s->old_blocks_nr; i++)
-			required |= BIT(s->old_block_map[i]);
-
-		try(bch2_stripe_buf_validate_msg(c, &s->old_stripe, true, required));
-
-		for (unsigned i = 0; i < s->old_blocks_nr; i++)
-			swap(s->new_stripe.data[i],
-			     s->old_stripe.data[s->old_block_map[i]]);
-
-		bch2_ec_stripe_buf_exit(&s->old_stripe);
+		closure_sync(&s->cl);
+		closure_return(&s->cl);
+		try(s->old_stripe_err);
 	}
 
 	BUG_ON(!s->allocated);
@@ -737,9 +719,9 @@ static void ec_stripe_create(struct ec_stripe_new *s)
 			prt_printf(&buf, "Reused %u/%u data blocks\n", s->old_blocks_nr,
 				   ov->nr_blocks - ov->nr_redundant);
 			prt_printf(&buf, "\nOld: ");
-			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&s->new_stripe.key.k_i));
-			prt_printf(&buf, "\nNew: ");
 			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&s->old_stripe.key.k_i));
+			prt_printf(&buf, "\nNew: ");
+			bch2_bkey_val_to_text(&buf, c, bkey_i_to_s_c(&s->new_stripe.key.k_i));
 		}));
 	else
 		event_inc_trace(c, stripe_create, buf, ({
@@ -765,7 +747,7 @@ static void ec_stripe_create(struct ec_stripe_new *s)
 		list_del(&s->list);
 	wake_up(&c->ec.stripe_new_wait);
 
-	bch2_ec_stripe_buf_exit(&s->old_stripe);
+	__bch2_ec_stripe_buf_exit(&s->old_stripe);
 	bch2_ec_stripe_buf_exit(&s->new_stripe);
 
 	if (s->ctxt) {
@@ -1034,7 +1016,6 @@ static struct ec_stripe_new *ec_new_stripe_alloc(struct bch_fs *c,
 
 	mutex_init(&s->lock);
 	INIT_WORK(&s->work, ec_stripe_create_work_fn);
-	closure_init(&s->old_stripe.io, NULL);
 	closure_init(&s->new_stripe.io, NULL);
 	atomic_set(&s->ref[STRIPE_REF_stripe], 1);
 	atomic_set(&s->ref[STRIPE_REF_io], 1);
@@ -1598,6 +1579,64 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, 
 	s->have_old_stripe = true;
 }
 
+/*
+ * Fold the blocks we're carrying forward into the new stripe as soon as the old
+ * stripe's read lands, instead of at create. The old buffer is the same size as
+ * the new one, so holding both for as long as the stripe is being filled makes
+ * a reuse cost twice what it needs to.
+ *
+ * Runs as old_stripe.io's own continuation, so the read is complete.
+ * The carried blocks are already set in blocks_allocated, so the sector
+ * allocator will never hand one to a writer and the data we swap in can't be
+ * overwritten while the rest of the stripe fills.
+ */
+static CLOSURE_CALLBACK(ec_old_stripe_fold)
+{
+	closure_type(s, struct ec_stripe_new, old_stripe.io);
+
+	/*
+	 * Only the blocks we carry forward have to be good - everything else in
+	 * the old stripe is discarded here, parity included, and regenerated at
+	 * create.
+	 */
+	u32 required = 0;
+	for (unsigned i = 0; i < s->old_blocks_nr; i++)
+		required |= BIT(s->old_block_map[i]);
+
+	s->old_stripe_err = bch2_stripe_buf_validate_msg(s->c, &s->old_stripe,
+							 true, required);
+	if (!s->old_stripe_err)
+		for (unsigned i = 0; i < s->old_blocks_nr; i++)
+			swap(s->new_stripe.data[i],
+			     s->old_stripe.data[s->old_block_map[i]]);
+
+	closure_return(cl);
+}
+
+static void ec_old_stripe_read(struct bch_fs *c, struct ec_stripe_new *s)
+{
+	/*
+	 * Set here, not by the callers: this is what create waits on, and a
+	 * caller that issued the read without setting it would have create
+	 * generate parity while the fold was still in flight.
+	 *
+	 * Both closures come into being here too, the only place there's
+	 * anything for them to run: s->cl is what create waits on, and
+	 * old_stripe.io's ref on it is released by the fold's closure_return().
+	 */
+	s->old_stripe_read = true;
+	closure_init(&s->cl, NULL);
+	closure_init(&s->old_stripe.io, &s->cl);
+
+	bch2_stripe_buf_read(c, &s->old_stripe);
+
+	/*
+	 * Not stripe_create_wq: create waits on the fold, so running them on
+	 * the same workqueue would make it depend on itself.
+	 */
+	continue_at(&s->old_stripe.io, ec_old_stripe_fold, system_unbound_wq);
+}
+
 static int stripe_reuse(struct btree_trans *trans, struct ec_stripe_new *s)
 {
 	struct bch_fs *c = trans->c;
@@ -2065,14 +2104,13 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 		s->mem_allocated = true;
 	}
 
-	if (!s->old_mem_allocated && s->have_old_stripe) {
+	if (!s->old_stripe_read && s->have_old_stripe) {
 		ret = bch2_ec_stripe_buf_init(c, &s->old_stripe, 0,
 					      le16_to_cpu(s->old_stripe.key.v.sectors),
 					      NULL);
 		if (ret)
 			goto err;
-		s->old_mem_allocated = true;
-		bch2_stripe_buf_read(c, &s->old_stripe);
+		ec_old_stripe_read(c, s);
 	}
 
 	BUG_ON(!s->new_stripe.data[0]);
@@ -2195,7 +2233,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	if (ret) {
 		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
 		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
-		bch2_ec_stripe_buf_exit(&new_s->old_stripe);
+		__bch2_ec_stripe_buf_exit(&new_s->old_stripe);
 		return ret;
 	}
 
@@ -2236,7 +2274,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		bch2_stripe_handle_put(c, &new_s->new_stripe_handle);
 		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
 		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
-		bch2_ec_stripe_buf_exit(&new_s->old_stripe);
+		__bch2_ec_stripe_buf_exit(&new_s->old_stripe);
 		kfree(new_s);
 		return ret;
 	}
@@ -2251,7 +2289,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 				  le16_to_cpu(new_s->new_stripe.key.v.sectors),
 				  ec_stripe_new_nr_parity(new_s),
 				  BCH_DISK_RESERVATION_NOFAIL);
-	bch2_stripe_buf_read(c, &new_s->old_stripe);
+	ec_old_stripe_read(c, new_s);
 
 	new_s->ctxt = ctxt;
 	unsigned stripe_sectors = le16_to_cpu(new_s->new_stripe.key.v.sectors) *

@@ -112,15 +112,14 @@ static void raid_rec(int nr, int *ir, int nd, int np, size_t size, void **v)
 
 #endif
 
-void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
+/*
+ * Free the buffers and give back the memory, without touching buf->io: for
+ * callers running as buf->io's own continuation, where the IO is already done
+ * (that's why they're running) and destroying the closure underneath
+ * themselves would not go well.
+ */
+void __bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
 {
-	/*
-	 * Drain in-flight stripe IO before freeing the buffers it reads/writes
-	 * into: the bios are mapped directly at buf->data[] and hold refs on
-	 * buf->io, so freeing first is a use-after-free.
-	 */
-	closure_sync(&buf->io);
-
 	if (buf->c) {
 		struct bch_fs *c = buf->c;
 		buf->c = NULL;
@@ -137,6 +136,18 @@ void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
 			buf->data[i] = NULL;
 		}
 	}
+}
+
+void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
+{
+	/*
+	 * Drain in-flight stripe IO before freeing the buffers it reads/writes
+	 * into: the bios are mapped directly at buf->data[] and hold refs on
+	 * buf->io, so freeing first is a use-after-free.
+	 */
+	closure_sync(&buf->io);
+
+	__bch2_ec_stripe_buf_exit(buf);
 
 	closure_debug_destroy(&buf->io);
 }

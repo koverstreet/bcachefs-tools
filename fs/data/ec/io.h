@@ -70,6 +70,7 @@ static inline u32 ec_failed_mask(struct ec_stripe_buf *buf,
  */
 #define EC_BLOCKS_ALL	(~0U)
 
+void __bch2_ec_stripe_buf_exit(struct ec_stripe_buf *);
 void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *);
 int bch2_ec_stripe_buf_init(struct bch_fs *, struct ec_stripe_buf *, unsigned, unsigned,
 			    struct closure *);

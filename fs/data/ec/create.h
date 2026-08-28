@@ -66,6 +66,7 @@ struct ec_stripe_new {
 	struct mutex		lock;
 	struct list_head	list;
 	struct work_struct	work;
+	struct closure		cl;
 
 	atomic_t		ref[STRIPE_REF_NR];
 
@@ -75,6 +76,13 @@ struct ec_stripe_new {
 
 	int			err;
 
+	/*
+	 * Set by ec_old_stripe_fold() from the read's completion, read by
+	 * create: its own field so neither side needs a lock to say what
+	 * happened.
+	 */
+	int			old_stripe_err;
+
 	struct bch_devs_mask	devs;
 	enum bch_watermark	watermark;
 	enum ec_stripe_new_state state;
@@ -83,7 +91,7 @@ struct ec_stripe_new {
 
 	bool			allocated:1;
 	bool			mem_allocated:1;
-	bool			old_mem_allocated:1;
+	bool			old_stripe_read:1;
 
 	unsigned long		blocks_gotten[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)];
 	unsigned long		blocks_allocated[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)];
