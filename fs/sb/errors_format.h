@@ -22,7 +22,7 @@ enum bch_fsck_flags {
 	x(jset_last_seq_newer_than_seq,				  8,	0)		\
 	x(jset_past_bucket_end,					  9,	0)		\
 	x(jset_seq_blacklisted,					 10,	0)		\
-	x(journal_entries_missing,				 11,	0)		\
+	x(journal_entries_missing,				 11,	FSCK_AUTOFIX)	\
 	x(journal_entry_replicas_not_marked,			 12,	FSCK_AUTOFIX)	\
 	x(journal_entry_past_jset_end,				 13,	0)		\
 	x(journal_entry_replicas_data_mismatch,			 14,	0)		\
