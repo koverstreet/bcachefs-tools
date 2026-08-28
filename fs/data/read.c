@@ -1006,8 +1006,16 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 
 			try(bch2_rbio_decrypt(c, rbio, crc, nonce));
 
+			/*
+			 * On a checksum error we still try to decompress - a
+			 * bitflip often decompresses fine, and we return what
+			 * we have. But the checksum error is the one that
+			 * describes what happened, so don't report a
+			 * decompression failure over it: fall through to the
+			 * !csum_good check below.
+			 */
 			ret = bch2_bio_uncompress(c, src, dst, dst_iter, crc);
-			if (ret && !c->opts.no_data_io)
+			if (ret && !c->opts.no_data_io && csum_good)
 				return ret;
 		} else {
 			/* don't need to decrypt the entire bio: */
@@ -1040,7 +1048,7 @@ static int __bch2_read_endio_work(struct bch_read_bio *rbio)
 			 * away the result:
 			 */
 			ret = bch2_bio_uncompress(c, src, dst, (struct bvec_iter) {}, crc);
-			if (ret && !c->opts.no_data_io)
+			if (ret && !c->opts.no_data_io && csum_good)
 				return ret;
 
 			/* We decrypted to decompress; re-encrypt: */
