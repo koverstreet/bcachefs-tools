@@ -2816,7 +2816,10 @@ __cold void __bch2_write_op_to_text(struct printbuf *out, struct bch_write_op *o
 	bch2_inode_opts_to_text(out, op->c, op->opts);
 	prt_newline(out);
 
-	prt_printf(out, "open_buckets:\t%u\n", op->open_buckets.nr);
+	prt_printf(out, "open_buckets:\t%u", op->open_buckets.nr);
+	for (unsigned i = 0; i < op->open_buckets.nr; i++)
+		prt_printf(out, " %u", op->open_buckets.v[i]);
+	prt_newline(out);
 
 	prt_printf(out, "ref:\t%u\n", closure_nr_remaining(&op->cl));
 	prt_printf(out, "ret\t%s\n", bch2_err_str(op->error));
