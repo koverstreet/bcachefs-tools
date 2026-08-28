@@ -336,7 +336,7 @@ enum bch_fsck_flags {
 	x(dirent_not_visible_in_parent_subvol,			253,	FSCK_AUTOFIX)	\
 	x(subvol_fs_path_parent_wrong,				254,	FSCK_AUTOFIX)	\
 	x(subvol_root_fs_path_parent_nonzero,			255,	0)		\
-	x(subvol_children_not_set,				256,	0)		\
+	x(subvol_children_not_set,				256,	FSCK_AUTOFIX)	\
 	x(subvol_children_bad,					257,	0)		\
 	x(subvol_loop,						258,	FSCK_AUTOFIX)	\
 	x(subvol_unreachable,					259,	FSCK_AUTOFIX)	\
