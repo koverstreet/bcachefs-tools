@@ -130,6 +130,7 @@ void bch2_sb_to_text(struct printbuf *, struct bch_fs *, struct bch_sb *, bool, 
 struct sb_write {
 	struct bch_fs	*c;
 	bool		dirty;
+	bool		replicas;
 };
 
 static inline struct sb_write sb_write_init(struct bch_fs *c)
@@ -138,14 +139,44 @@ static inline struct sb_write sb_write_init(struct bch_fs *c)
 	return (struct sb_write) { .c = c };
 }
 
+/*
+ * For a write whose only reason to exist is a replicas entry coming or going -
+ * see bch2_write_super_replicas(), which may leave the slow disks behind.
+ */
+static inline struct sb_write sb_write_replicas_init(struct bch_fs *c)
+{
+	struct sb_write w = sb_write_init(c);
+
+	w.replicas = true;
+	return w;
+}
+
+/*
+ * Write now and report, for the callers that propagate the error. Clears
+ * @dirty, so the guard's scope exit becomes a no-op and stays a backstop for
+ * anything dirtied afterwards - it can't double-write.
+ */
+static inline int sb_write_flush(struct sb_write *w)
+{
+	if (!w->dirty)
+		return 0;
+
+	w->dirty = false;
+	return w->replicas
+		? bch2_write_super_replicas(w->c)
+		: bch2_write_super(w->c);
+}
+
 static inline void sb_write_exit(struct sb_write *w)
 {
-	if (w->dirty)
-		bch2_write_super(w->c);
+	sb_write_flush(w);
 }
 
 DEFINE_CLASS(sb_write, struct sb_write,
 	     sb_write_exit(&_T), sb_write_init(c), struct bch_fs *c)
+
+DEFINE_CLASS(sb_write_replicas, struct sb_write,
+	     sb_write_exit(&_T), sb_write_replicas_init(c), struct bch_fs *c)
 
 /*
  * Two ways to dirty: sb_dirty() when the caller has already decided a field
@@ -163,20 +194,6 @@ static inline bool sb_record(struct sb_write *w, bool was_new)
 	if (was_new)
 		sb_dirty(w);
 	return was_new;
-}
-
-/*
- * Write now and report, for the callers that propagate the error. Clears
- * @dirty, so the guard's scope exit becomes a no-op and stays a backstop for
- * anything dirtied afterwards - it can't double-write.
- */
-static inline int sb_write_flush(struct sb_write *w)
-{
-	if (!w->dirty)
-		return 0;
-
-	w->dirty = false;
-	return bch2_write_super(w->c);
 }
 
 static inline bool sb_set_err_silent(struct sb_write *w, unsigned err)
