@@ -21,6 +21,35 @@ enum ec_stripe_ref {
 	STRIPE_REF_NR
 };
 
+/*
+ * open:	the sector allocator can still hand blocks out of this stripe;
+ *		it's the stripe head's h->s.
+ * filling:	every block has been handed to a writer, but the writers haven't
+ *		finished - buckets are still checked out, and the stripe can
+ *		only be completed by the writers that already hold them.
+ * in_flight:	every bucket has come back, the data is all in, and creation is
+ *		queued on ec.stripe_create_wq. This is the only state guaranteed
+ *		to make progress on its own.
+ *
+ * The filling/in_flight split is what makes it possible to wait on stripe
+ * buffer memory safely: a stripe that is filling may never complete (its
+ * writers can go away), so blocking on one can deadlock, while an in_flight
+ * stripe always drains.
+ */
+#define EC_STRIPE_NEW_STATES()			\
+	x(open)					\
+	x(filling)				\
+	x(in_flight)
+
+enum ec_stripe_new_state {
+#define x(n)	EC_STRIPE_NEW_##n,
+	EC_STRIPE_NEW_STATES()
+#undef x
+	EC_STRIPE_NEW_STATE_NR
+};
+
+extern const char * const bch2_ec_stripe_new_states[];
+
 struct ec_stripe_new_bucket {
 	struct hlist_node	hash;
 	u64			dev_bucket;
@@ -40,19 +69,21 @@ struct ec_stripe_new {
 
 	atomic_t		ref[STRIPE_REF_NR];
 
+	/* seq is only assigned once the refs are gone, so it can't give an age */
+	u64			start_time;
 	u64			seq;
 
 	int			err;
 
 	struct bch_devs_mask	devs;
 	enum bch_watermark	watermark;
+	enum ec_stripe_new_state state;
 
 	bool			have_old_stripe:1;
 
 	bool			allocated:1;
 	bool			mem_allocated:1;
 	bool			old_mem_allocated:1;
-	bool			pending:1;
 
 	unsigned long		blocks_gotten[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)];
 	unsigned long		blocks_allocated[BITS_TO_LONGS(BCH_BKEY_PTRS_MAX)];
@@ -184,10 +215,15 @@ static inline void ec_stripe_new_put(struct bch_fs *c, struct ec_stripe_new *s,
 			break;
 		case STRIPE_REF_io:
 			/*
-			 * seq is the commit-ready marker: assigned when all
-			 * accumulating writes have finished (refs drained).
-			 * bch2_fs_ec_flush_outstanding() waits on this.
+			 * Every bucket is back: the data is all in, and creation
+			 * is about to be queued. This is the filling -> in_flight
+			 * transition, and the point after which the stripe
+			 * completes without needing anything from a writer.
+			 *
+			 * seq is the commit-ready marker, assigned here;
+			 * bch2_fs_ec_flush_outstanding() waits on it.
 			 */
+			s->state = EC_STRIPE_NEW_in_flight;
 			s->seq = atomic64_inc_return(&c->ec.stripe_new_seq);
 			wake_up(&c->ec.stripe_new_wait);
 			bch2_ec_stripe_create_start(c, s);

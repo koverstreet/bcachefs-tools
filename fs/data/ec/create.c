@@ -1041,6 +1041,8 @@ static struct ec_stripe_new *ec_new_stripe_alloc(struct bch_fs *c,
 	s->c		= c;
 	s->devs		= devs;
 	s->watermark	= watermark;
+	s->start_time	= local_clock();
+	s->state	= EC_STRIPE_NEW_open;
 
 	ec_stripe_key_init(c, &s->new_stripe.key.k_i,
 			   algorithm,
@@ -1725,23 +1727,52 @@ static int stripe_alloc_or_reuse(struct btree_trans *trans,
 	return 0;
 }
 
+const char * const bch2_ec_stripe_new_states[] = {
+#define x(n)	#n,
+	EC_STRIPE_NEW_STATES()
+#undef x
+	NULL
+};
+
 static __cold void bch2_new_stripe_to_text(struct printbuf *out, struct bch_fs *c,
 				    struct ec_stripe_new *s)
 {
-	prt_printf(out, "\tidx %llu blocks %u+%u allocated %u ref %u %u %s obs",
+	prt_printf(out, "\tidx %llu blocks %u+%u allocated %u ref %u %u %s %s obs",
 		   s->new_stripe.key.k.p.offset,
 		   ec_stripe_new_nr_data(s), ec_stripe_new_nr_parity(s),
 		   bitmap_weight(s->blocks_allocated, ec_stripe_new_nr_data(s)),
 		   atomic_read(&s->ref[STRIPE_REF_io]),
 		   atomic_read(&s->ref[STRIPE_REF_stripe]),
-		   bch2_watermarks[s->watermark]);
+		   bch2_watermarks[s->watermark],
+		   bch2_ec_stripe_new_states[s->state]);
 
+	/*
+	 * Blocks are listed when handed out, not when full, so per block: is
+	 * its bucket still checked out, and how much room is left? Released
+	 * bucket indices get recycled, so only report one that still points
+	 * back at us.
+	 */
 	struct bch_stripe *v = &s->new_stripe.key.v;
 	unsigned i;
-	for_each_set_bit(i, s->blocks_gotten, v->nr_blocks)
+	for_each_set_bit(i, s->blocks_gotten, v->nr_blocks) {
 		prt_printf(out, " %u", s->blocks[i]);
+
+		struct open_bucket *ob = c->allocator.open_buckets + s->blocks[i];
+		if (s->blocks[i] && ob->ec == s) {
+			struct bch_dev *ca = ob_dev(c, ob);
+
+			prt_printf(out, "(pin %u %u/%u)",
+				   atomic_read(&ob->pin),
+				   ca->mi.bucket_size - ob->sectors_free,
+				   ca->mi.bucket_size);
+		}
+	}
 	prt_newline(out);
 	bch2_bkey_val_to_text(out, c, bkey_i_to_s_c(&s->new_stripe.key.k_i));
+	prt_newline(out);
+
+	prt_printf(out, "age:\t");
+	bch2_pr_time_units(out, local_clock() - s->start_time);
 	prt_newline(out);
 
 	prt_printf(out, "new_stripe.cl:\t%u\n", closure_nr_remaining(&s->new_stripe.io));
@@ -1798,7 +1829,7 @@ static void ec_stripe_new_set_pending(struct bch_fs *c, struct ec_stripe_head *h
 	BUG_ON(!s->allocated && !s->err);
 
 	h->s		= NULL;
-	s->pending	= true;
+	s->state	= EC_STRIPE_NEW_filling;
 
 	scoped_guard(mutex, &c->ec.stripe_new_lock)
 		list_add(&s->list, &c->ec.stripe_new_list);
@@ -2214,7 +2245,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 
 	bch2_stripe_new_buckets_add(c, new_s);
 	new_s->allocated = true;
-	new_s->pending = true;
+	new_s->state = EC_STRIPE_NEW_filling;
 
 	bch2_disk_reservation_get(c, &new_s->res,
 				  le16_to_cpu(new_s->new_stripe.key.v.sectors),
