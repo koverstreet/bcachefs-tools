@@ -340,6 +340,21 @@ static bool stripe_read_maybe_spurious(struct ec_stripe_buf *buf, unsigned i,
 		!is_open;
 }
 
+/*
+ * A device going offline is reported once, by the device. Every stripe that
+ * touches it reporting it again is noise: there's nothing to say unless a block
+ * failed for some other reason, or we couldn't cope.
+ */
+static bool stripe_errs_only_dev_offline(struct ec_stripe_buf *buf)
+{
+	for (unsigned e = 0; e < ARRAY_SIZE(buf->err); e++)
+		for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
+			if (buf->err[e][i] &&
+			    buf->err[e][i] != -BCH_ERR_stripe_read_device_offline)
+				return false;
+	return true;
+}
+
 static __cold void __stripe_buf_errs_to_text(struct printbuf *out, struct bch_fs *c,
 				      struct ec_stripe_buf *buf,
 				      enum bch_stripe_buf_err e, bool is_open,
@@ -439,6 +454,9 @@ int bch2_stripe_buf_validate_msg(struct bch_fs *c, struct ec_stripe_buf *buf,
 
 	if (ret == -BCH_ERR_stripe_reconstruct_stale_race)
 		return ret;
+
+	if (!ret && stripe_errs_only_dev_offline(buf))
+		return 0;
 
 	/*
 	 * Damage confined to blocks the caller isn't using is not an error: a
@@ -684,6 +702,9 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 	if (!ret)
 		memcpy_to_bio(&rbio->bio, rbio->bio.bi_iter,
 			      buf->data[rbio->pick.ec.block] + ((offset - buf->offset) << 9));
+
+	if (!ret && stripe_errs_only_dev_offline(buf))
+		return 0;
 
 	stripe_buf_errs_to_text(msg, c, buf, false, EC_BLOCKS_ALL);
 
