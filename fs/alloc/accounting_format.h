@@ -114,7 +114,8 @@ static inline bool data_type_is_hidden(enum bch_data_type type)
 	x(inum,			8,	3)	\
 	x(reconcile_work,	9,	2)	\
 	x(dev_leaving,		10,	1)	\
-	x(stripe_frag,		11,	2)
+	x(stripe_frag,		11,	2)	\
+	x(dev_stripe_frag,	12,	2)
 
 enum disk_accounting_type {
 #define x(f, nr, ...)	BCH_DISK_ACCOUNTING_##f	= nr,
@@ -261,6 +262,21 @@ typedef struct {
 typedef struct {
 	__u8			nr_empty;
 } bch_acct_stripe_frag;
+
+/*
+ * The same per device:
+ * [
+ *   data sectors this device holds in stripes
+ *   sectors of that which are in empty blocks
+ * ]
+ *
+ * nr_empty is a property of the whole stripe, so a key carrying both it and dev
+ * would move every block of a stripe between keys whenever any one emptied -
+ * hence two keys, not one.
+ */
+typedef struct {
+	__u8			dev;
+} bch_acct_dev_stripe_frag;
 
 struct disk_accounting_pos {
 	union {

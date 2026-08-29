@@ -222,6 +222,64 @@ static int stripe_frag_acct(struct btree_trans *trans, const struct bch_stripe *
 	return bch2_disk_accounting_mod2(trans, gc, v, stripe_frag, blocks_empty);
 }
 
+/*
+ * Accumulated old-vs-new rather than swept twice: keyed on the device alone, an
+ * unchanged block nets to zero and the common case is one mod, not one per
+ * block.
+ */
+struct dev_frag_delta {
+	u8	dev;
+	s64	data;
+	s64	empty;
+};
+
+static void dev_frag_delta_add(struct dev_frag_delta *d, unsigned *nr,
+			       const struct bch_stripe *s, s64 sign)
+{
+	if (!s)
+		return;
+
+	unsigned nr_data = s->nr_blocks - s->nr_redundant;
+	s64 sectors = le16_to_cpu(s->sectors);
+
+	for (unsigned i = 0; i < nr_data; i++) {
+		u8 dev = s->ptrs[i].dev;
+		s64 empty = !stripe_blockcount_get(s, i) ? sectors : 0;
+
+		unsigned j = 0;
+		while (j < *nr && d[j].dev != dev)
+			j++;
+		if (j == *nr) {
+			d[j] = (struct dev_frag_delta) { .dev = dev };
+			(*nr)++;
+		}
+
+		d[j].data	+= sign * sectors;
+		d[j].empty	+= sign * empty;
+	}
+}
+
+static int dev_stripe_frag_acct(struct btree_trans *trans,
+				const struct bch_stripe *old_s,
+				const struct bch_stripe *new_s, bool gc)
+{
+	struct dev_frag_delta d[BCH_BKEY_PTRS_MAX * 2];
+	unsigned nr = 0;
+
+	dev_frag_delta_add(d, &nr, old_s, -1);
+	dev_frag_delta_add(d, &nr, new_s,  1);
+
+	for (unsigned i = 0; i < nr; i++) {
+		if (!d[i].data && !d[i].empty)
+			continue;
+
+		u64 v[2] = { d[i].data, d[i].empty };
+		try(bch2_disk_accounting_mod2(trans, gc, v, dev_stripe_frag, d[i].dev));
+	}
+
+	return 0;
+}
+
 static int mark_stripe_bp(struct btree_trans *trans, struct bkey_s_c k,
 			  const struct bch_extent_ptr *ptr, bool insert)
 {
@@ -424,6 +482,7 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 		 */
 		try(stripe_frag_acct(trans, old_s, op.flags & BTREE_TRIGGER_gc, -1));
 		try(stripe_frag_acct(trans, new_s, op.flags & BTREE_TRIGGER_gc,  1));
+		try(dev_stripe_frag_acct(trans, old_s, new_s, op.flags & BTREE_TRIGGER_gc));
 
 		/*
 		 * If the pointers aren't changing, we don't need to do anything:
