@@ -1356,10 +1356,21 @@ static void __bch2_write_index(struct bch_write_op *op)
 
 		CLASS(bch_log_msg, msg)(c);
 
-		/* Separate ratelimit_states for hard and soft errors */
-		msg.m.suppress = !ret
-			? bch2_ratelimit(c)
-			: bch2_ratelimit(c);
+		/*
+		 * Writing degraded because a device was removed is not news:
+		 * the removal was reported when it happened, and reconcile
+		 * restores the replicas. Decided before bch2_ratelimit(),
+		 * which spends this call site's burst budget - the noise must
+		 * not crowd out a real error arriving in the same window.
+		 */
+		if (!ret && bch2_io_failures_all_dev_removed(&op->wbio.failed)) {
+			msg.m.suppress = true;
+		} else {
+			/* Separate ratelimit_states for hard and soft errors */
+			msg.m.suppress = !ret
+				? bch2_ratelimit(c)
+				: bch2_ratelimit(c);
+		}
 
 		struct bkey_i *k = bch2_keylist_front(&op->insert_keys);
 		bch2_log_write_error_start(&msg.m, false, op, bkey_start_offset(&k->k));

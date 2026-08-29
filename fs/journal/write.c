@@ -318,16 +318,30 @@ static CLOSURE_CALLBACK(journal_write_done)
 		if (unlikely(w->failed.nr || err)) {
 			CLASS(bch_log_msg, msg)(c);
 
-			/* Separate ratelimit_states for hard and soft errors */
-			msg.m.suppress = !err
-				? bch2_ratelimit(c)
-				: bch2_ratelimit(c);
-
 			prt_printf(&msg.m, "error writing journal entry %llu\n", seq_wrote);
 			bch2_io_failures_to_text(&msg.m, c, &w->failed);
 
 			if (!w->devs_written.nr)
 				err = bch_err_throw(c, journal_write_err);
+
+			/*
+			 * Writing degraded because a device was removed is not
+			 * news: the removal was reported when it happened, and
+			 * reconcile restores the replicas.
+			 *
+			 * After the write_err throw above, not before: with every
+			 * device removed and nothing written this entry has failed,
+			 * and that must still be said - we're going emergency
+			 * read-only on it.
+			 */
+			if (!err && bch2_io_failures_all_dev_removed(&w->failed)) {
+				msg.m.suppress = true;
+			} else {
+				/* Separate ratelimit_states for hard and soft errors */
+				msg.m.suppress = !err
+					? bch2_ratelimit(c)
+					: bch2_ratelimit(c);
+			}
 
 			if (!err) {
 				prt_printf(&msg.m, "wrote degraded to ");

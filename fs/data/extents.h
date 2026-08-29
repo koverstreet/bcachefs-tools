@@ -420,6 +420,7 @@ DEFINE_CLASS(bch_io_failures, struct bch_io_failures,
 
 void bch2_io_failures_to_text(struct printbuf *, struct bch_fs *,
 			      struct bch_io_failures *);
+bool bch2_io_failures_all_dev_removed(struct bch_io_failures *);
 struct bch_dev_io_failures *bch2_dev_io_failures(struct bch_io_failures *, unsigned);
 struct bch_dev_io_failures *bch2_dev_io_failures_mut(struct bch_io_failures *, unsigned);
 void bch2_mark_io_failure(struct bch_io_failures *, struct extent_ptr_decoded *, int);

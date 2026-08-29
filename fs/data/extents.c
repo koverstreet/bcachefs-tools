@@ -90,6 +90,25 @@ __cold void bch2_io_failures_to_text(struct printbuf *out,
 	}
 }
 
+/*
+ * A device that's been removed said so once, when it was removed. Every write
+ * that had a pointer to it saying so again is noise - so when the operation
+ * itself succeeded, there's nothing here the log doesn't already have.
+ *
+ * Only for the soft path: the caller must have checked that it didn't fail.
+ * An entry with no error at all ("no error - confused") is not covered, and
+ * still reports - that one means our bookkeeping is wrong.
+ */
+bool bch2_io_failures_all_dev_removed(struct bch_io_failures *failed)
+{
+	darray_for_each(*failed, f)
+		if (f->csum_nr ||
+		    f->ec_errcode ||
+		    !bch2_err_matches(f->errcode, BCH_ERR_BLK_STS_REMOVED))
+			return false;
+	return true;
+}
+
 struct bch_dev_io_failures *bch2_dev_io_failures(struct bch_io_failures *f,
 						 unsigned dev)
 {
