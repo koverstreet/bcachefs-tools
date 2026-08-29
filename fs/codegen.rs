@@ -70,6 +70,7 @@ const NEWTYPE_ENUM: &[&str] = &[
     "bch_kdf_types",
     "bch_opt_id",
     "bch_reconcile_accounting_type",
+    "bch_sb_compat",
     "bch_sb_field_type",
     "disk_accounting_type",
 ];
@@ -349,6 +350,9 @@ pub fn gen_xmacros(src: &str, out: &str) {
     let btree_ids = parse_xmacro(&format_h, "BCH_BTREE_IDS");
     assert!(!btree_ids.is_empty(), "failed to parse BCH_BTREE_IDS()");
 
+    let sb_compats = parse_xmacro(&format_h, "BCH_SB_COMPAT");
+    assert!(!sb_compats.is_empty(), "failed to parse BCH_SB_COMPAT()");
+
     let opts_h = std::fs::read_to_string(format!("{src}/opts.h"))
         .expect("reading opts.h");
     let opts = parse_xmacro(&opts_h, "BCH_OPTS");
@@ -405,6 +409,13 @@ pub fn gen_xmacros(src: &str, out: &str) {
                 &jset_entry_types,
                 "nr",
                 "BCH_JSET_ENTRY_NR",
+            ),
+            generate_newtype_enum_aliases(
+                "bch_sb_compat",
+                "BCH_COMPAT",
+                &sb_compats,
+                "nr",
+                "BCH_COMPAT_NR",
             ),
             generate_newtype_enum_aliases(
                 "bch_sb_field_type",
