@@ -496,6 +496,20 @@ impl BcachefsHandle {
         Ok(sb.version)
     }
 
+    /// Test a bit of the superblock's compat feature set.
+    ///
+    /// A compat bit means "this optional thing has been computed". A clear bit
+    /// therefore means the data is absent or stale, not that it is zero, so
+    /// callers should not present it as a count.
+    pub(crate) fn sb_has_compat(&self, bit: u32) -> Result<bool, Errno> {
+        let buf = self.read_super()?;
+        if buf.len() < mem::size_of::<bch_sb>() {
+            return Err(Errno(libc::EIO));
+        }
+        let sb = unsafe { &*(buf.as_ptr() as *const bch_sb) };
+        Ok(u64::from_le(sb.compat[0]) & (1u64 << bit) != 0)
+    }
+
     /// Query device usage (v2 with flex array, v1 fallback).
     pub(crate) fn dev_usage(&self, dev_idx: u32) -> Result<DevUsage, Errno> {
         let nr_data_types = data_type::nr.0 as usize;
