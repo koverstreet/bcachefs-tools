@@ -1067,6 +1067,16 @@ use_clean:
 			c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
 			sb_dirty(&w);
 		}
+
+		/*
+		 * check_allocations recomputes accounting, so it is what makes
+		 * the stripe fragmentation counters true.
+		 */
+		if (!(c->sb.compat & BIT_ULL(BCH_COMPAT_stripe_frag_accounting)) &&
+		    (c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_check_allocations))) {
+			c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_stripe_frag_accounting));
+			sb_dirty(&w);
+		}
 	}
 
 	/*
@@ -1107,6 +1117,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_extents_above_btree_updates_done));
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_bformat_overflow_done));
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
+		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_stripe_frag_accounting));
 
 		bch2_check_version_downgrade(c);
 
