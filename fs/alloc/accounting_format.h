@@ -113,7 +113,8 @@ static inline bool data_type_is_hidden(enum bch_data_type type)
 	x(rebalance_work,	7,	1)	\
 	x(inum,			8,	3)	\
 	x(reconcile_work,	9,	2)	\
-	x(dev_leaving,		10,	1)
+	x(dev_leaving,		10,	1)	\
+	x(stripe_frag,		11,	2)
 
 enum disk_accounting_type {
 #define x(f, nr, ...)	BCH_DISK_ACCOUNTING_##f	= nr,
@@ -239,6 +240,27 @@ typedef struct {
 typedef struct {
 	__u32			dev;
 } __packed bch_acct_dev_leaving;
+
+/*
+ * Empty (reusable) blocks in stripes, keyed by how many the stripe has:
+ * [
+ *   data sectors in such stripes, parity excluded so the two counters share a
+ *     denominator
+ *   sectors in the empty blocks
+ * ]
+ *
+ * Sectors rather than stripe counts - stripes need not be the same size.
+ *
+ * This is the part of dev_data_type's `fragmented` that is reusable rather than
+ * lost: that counter charges a whole bucket for an emptied stripe member, so
+ * without this there is no telling a free slot from a stranded partial block.
+ *
+ * No upgrade/downgrade entry: informational, so it reads as zero or stale until
+ * check_allocations recomputes it.
+ */
+typedef struct {
+	__u8			nr_empty;
+} bch_acct_stripe_frag;
 
 struct disk_accounting_pos {
 	union {

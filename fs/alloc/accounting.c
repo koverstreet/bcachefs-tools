@@ -272,6 +272,9 @@ int bch2_accounting_validate(struct bch_fs *c, struct bkey_s_c k,
 	case BCH_DISK_ACCOUNTING_reconcile_work:
 		end = field_end(acc_k, reconcile_work);
 		break;
+	case BCH_DISK_ACCOUNTING_stripe_frag:
+		end = field_end(acc_k, stripe_frag);
+		break;
 	}
 
 	bkey_fsck_err_on(!is_zero(end, (void *) (&acc_k + 1)),
@@ -326,6 +329,9 @@ __cold void bch2_accounting_key_to_text(struct printbuf *out,
 		break;
 	case BCH_DISK_ACCOUNTING_reconcile_work:
 		bch2_prt_reconcile_accounting_type(out, k->reconcile_work.type);
+		break;
+	case BCH_DISK_ACCOUNTING_stripe_frag:
+		prt_printf(out, "nr_empty=%u", k->stripe_frag.nr_empty);
 		break;
 	case BCH_DISK_ACCOUNTING_dev_leaving: {
 		guard(rcu)();

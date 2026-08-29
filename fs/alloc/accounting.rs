@@ -104,11 +104,12 @@ pub enum DiskAccountingKind {
     Inum { inum: u64 },
     ReconcileWork { work_type: bch_reconcile_accounting_type },
     DevLeaving { dev: u32 },
+    StripeFrag { nr_empty: u8 },
     Unknown(u8),
 }
 
 // Compile-time check: update DiskAccountingKind when new disk_accounting_type values are added.
-const _: () = assert!(disk_accounting_type::nr.0 == 11);
+const _: () = assert!(disk_accounting_type::nr.0 == 12);
 
 impl DiskAccountingKind {
     /// Encode into a DiskAccountingPos (reverse of decode).
@@ -163,6 +164,10 @@ impl DiskAccountingKind {
             Self::DevLeaving { dev } => {
                 raw[0] = disk_accounting_type::dev_leaving.0 as u8;
                 raw[1..5].copy_from_slice(&dev.to_ne_bytes());
+            }
+            Self::StripeFrag { nr_empty } => {
+                raw[0] = disk_accounting_type::stripe_frag.0 as u8;
+                raw[1] = nr_empty;
             }
             Self::Unknown(t) => {
                 raw[0] = t;
@@ -247,6 +252,7 @@ fn bpos_to_accounting_kind(p: &c::bpos) -> DiskAccountingKind {
     const INUM:                 u32 = disk_accounting_type::inum.0;
     const RECONCILE_WORK:       u32 = disk_accounting_type::reconcile_work.0;
     const DEV_LEAVING:          u32 = disk_accounting_type::dev_leaving.0;
+    const STRIPE_FRAG:          u32 = disk_accounting_type::stripe_frag.0;
 
     match raw[0] as u32 {
         NR_INODES => DiskAccountingKind::NrInodes,
@@ -295,6 +301,7 @@ fn bpos_to_accounting_kind(p: &c::bpos) -> DiskAccountingKind {
             let dev = u32::from_ne_bytes([raw[1], raw[2], raw[3], raw[4]]);
             DiskAccountingKind::DevLeaving { dev }
         }
+        STRIPE_FRAG => DiskAccountingKind::StripeFrag { nr_empty: raw[1] },
         _ => DiskAccountingKind::Unknown(raw[0]),
     }
 }

@@ -199,6 +199,29 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * @sign is +1 for the new key, -1 for the old: the key changes when the number
+ * of empty blocks does, so this is two mods rather than one delta.
+ */
+static int stripe_frag_acct(struct btree_trans *trans, const struct bch_stripe *s,
+			    bool gc, s64 sign)
+{
+	if (!s)
+		return 0;
+
+	unsigned nr_data = s->nr_blocks - s->nr_redundant, blocks_empty = 0;
+	for (unsigned i = 0; i < nr_data; i++)
+		blocks_empty += !stripe_blockcount_get(s, i);
+
+	u64 sectors = le16_to_cpu(s->sectors);
+	u64 v[2] = {
+		sign * (s64) (nr_data * sectors),
+		sign * (s64) (blocks_empty * sectors),
+	};
+
+	return bch2_disk_accounting_mod2(trans, gc, v, stripe_frag, blocks_empty);
+}
+
 static int mark_stripe_bp(struct btree_trans *trans, struct bkey_s_c k,
 			  const struct bch_extent_ptr *ptr, bool insert)
 {
@@ -394,6 +417,13 @@ int bch2_trigger_stripe(struct btree_trans *trans, struct btree_trigger_op op)
 			try(bch2_disk_accounting_mod2(trans, op.flags & BTREE_TRIGGER_gc, v,
 						      reconcile_work, BCH_RECONCILE_ACCOUNTING_stripes));
 		}
+
+		/*
+		 * Must stay above the pointers-unchanged check: blockcounts
+		 * change without ptrs changing, and that is what this counts.
+		 */
+		try(stripe_frag_acct(trans, old_s, op.flags & BTREE_TRIGGER_gc, -1));
+		try(stripe_frag_acct(trans, new_s, op.flags & BTREE_TRIGGER_gc,  1));
 
 		/*
 		 * If the pointers aren't changing, we don't need to do anything:
