@@ -2234,6 +2234,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
 		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
 		__bch2_ec_stripe_buf_exit(&new_s->old_stripe);
+		kfree(new_s);
 		return ret;
 	}
 
