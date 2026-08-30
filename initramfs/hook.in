@@ -40,3 +40,12 @@ copy_exec @ROOT_SBINDIR@/mount.bcachefs /sbin/mount.bcachefs
 if [ -e @UDEVRULESDIR@/64-bcachefs.rules ]; then
 	copy_file rules @UDEVRULESDIR@/64-bcachefs.rules /lib/udev/rules.d/64-bcachefs.rules
 fi
+
+# A bcachefs root is mounted here, by the initramfs's own systemd - so the
+# generator that raises the mount timeout has to be here too, or the root
+# mount gets DefaultTimeoutStartSec and recovery is killed at 90 seconds.
+# A symlink, not a copy: the binary it dispatches through is already above.
+if [ -n "@GENERATORDIR@" ]; then
+	mkdir -p "$DESTDIR@GENERATORDIR@"
+	ln -sf @ROOT_SBINDIR@/bcachefs "$DESTDIR@GENERATORDIR@/bcachefs-mount-generator"
+fi

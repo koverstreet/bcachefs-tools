@@ -322,6 +322,7 @@ initramfs/hook: initramfs/hook.in
 	@echo "    [SED]    $@"
 	$(Q)sed -e "s|@ROOT_SBINDIR@|$(ROOT_SBINDIR)|g" \
 		-e "s|@UDEVRULESDIR@|$(PKGCONFIG_UDEVRULESDIR)|g" \
+		-e "s|@GENERATORDIR@|$(PKGCONFIG_GENERATORDIR)|g" \
 		initramfs/hook.in > initramfs/hook
 
 # The hot-add rule runs the binary by absolute path: udev looks in
