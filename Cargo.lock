@@ -131,7 +131,7 @@ dependencies = [
 
 [[package]]
 name = "bcachefs-tools"
-version = "1.39.2"
+version = "1.39.4"
 dependencies = [
  "anyhow",
  "bcachefs-kernel",

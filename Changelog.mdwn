@@ -1,5 +1,33 @@
 # Changelog
 
+## v1.39.4 - Sun Aug 30 2026
+
+An early release: `Cargo.toml` wasn't bumped at the 1.39.3 tag, so 1.39.3 calls
+itself 1.39.2 - and that version is the key the prebuilt module fetch uses, so
+the 1.39.3 DKMS package installed the 1.39.2 module. New tools against an old
+module mounts a multi device filesystem with `Multiple sources`.
+
+Also builds against 7.3.
+
+### Bugfixes
+
+- The mount timeout generator is installed into the initramfs now, not just the
+  real root - a bcachefs root is mounted by the initramfs's own systemd, so it
+  still had ninety seconds.
+
+- Damage to a content btree schedules that btree's checks. Only the alloc family
+  and snapshots had cases, so everything else got the shape of the tree back and
+  nothing rechecked the keys under it.
+
+- `bch2_journal_flush_seq()` called slow filesystems stuck: a flushing commit
+  serializes a preflush to every member with the journal write, so one device's
+  latency is a floor on the total, not the total. 5x, not 2x.
+
+- Fixed an `ec_stripe_new` leak on a failed stripe allocation.
+
+- `alloc_key_bucket_nonempty_to_empty_not_open` said "bucket going empty" for a
+  bucket going nonempty, and now prints the transaction, old key and backtrace.
+
 ## v1.39.3 - Sat Aug 29 2026
 
 The mount and boot release.
