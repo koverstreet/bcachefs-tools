@@ -1085,9 +1085,15 @@ static int bch2_mknod(struct mnt_idmap *idmap,
 	return 0;
 }
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 static int bch2_create(struct mnt_idmap *idmap,
 		       struct inode *vdir, struct dentry *dentry,
 		       umode_t mode, bool excl)
+#else
+static int bch2_create(struct mnt_idmap *idmap,
+		       struct inode *vdir, struct dentry *dentry,
+		       umode_t mode)
+#endif
 {
 	return bch2_mknod(idmap, vdir, dentry, mode|S_IFREG, 0);
 }
