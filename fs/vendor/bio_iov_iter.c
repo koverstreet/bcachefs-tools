@@ -3,6 +3,7 @@
 
 #include <linux/blkdev.h>
 #include <linux/uio.h>
+#include <linux/version.h>
 
 #include "vendor/bio_iov_iter.h"
 
@@ -166,7 +167,11 @@ static void bch2_bio_iov_bvec_set(struct bio *bio, const struct iov_iter *iter)
 
 	bio->bi_vcnt = iter->nr_segs;
 	bio->bi_io_vec = (struct bio_vec *)iter->bvec;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 	bio->bi_iter.bi_bvec_done = iter->iov_offset;
+#else
+	bio->bi_iter.bi_offset = iter->iov_offset;
+#endif
 	bio->bi_iter.bi_size = iov_iter_count(iter);
 	bio_set_flag(bio, BIO_CLONED);
 }

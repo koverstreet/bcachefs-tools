@@ -20,6 +20,7 @@
 #include <linux/backing-dev.h>
 #include <linux/pagemap.h>
 #include <linux/writeback.h>
+#include <linux/version.h>
 
 static inline bool bio_full(struct bio *bio, unsigned len)
 {
@@ -73,12 +74,20 @@ static void readpage_bio_drop_unissued(struct bch_read_bio *rbio)
 	struct bvec_iter iter;
 	struct folio_vec fv;
 	unsigned keep = bio->bi_iter.bi_idx;
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 	bool partial = bio->bi_iter.bi_bvec_done != 0;
+#else
+	bool partial = bio->bi_iter.bi_offset != 0;
+#endif
 
 	if (partial) {
 		struct folio *folio = page_folio(bio->bi_io_vec[keep].bv_page);
 
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 		bch2_folio(folio)->partially_uptodate = bio->bi_iter.bi_bvec_done >> 9;
+#else
+		bch2_folio(folio)->partially_uptodate = bio->bi_iter.bi_offset >> 9;
+#endif
 		keep++;
 	}
 

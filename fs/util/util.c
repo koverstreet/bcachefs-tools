@@ -25,6 +25,7 @@
 #include <linux/sched/clock.h>
 #include <linux/sched/debug.h>
 #include <linux/sched/signal.h>
+#include <linux/version.h>
 
 #include "eytzinger.h"
 #include "mean_and_variance.h"
@@ -1030,7 +1031,11 @@ __cold void bch2_bio_to_text(struct printbuf *out, struct bio *bio)
 	prt_printf(out, "bi_iter.bi_sector\t%llu\n",	(u64) bio->bi_iter.bi_sector);
 	prt_printf(out, "bi_iter.bi_size\t%u\n",	bio->bi_iter.bi_size);
 	prt_printf(out, "bi_iter.bi_idx\t%u\n",		bio->bi_iter.bi_idx);
+#if LINUX_VERSION_CODE < KERNEL_VERSION(7, 3, 0)
 	prt_printf(out, "bi_iter.bi_bvec_done\t%u\n",	bio->bi_iter.bi_bvec_done);
+#else
+	prt_printf(out, "bi_iter.bi_offset\t%u\n",	bio->bi_iter.bi_offset);
+#endif
 
 	prt_printf(out, "bi_remaining:\t%u\n",		atomic_read(&bio->__bi_remaining));
 	prt_printf(out, "bi_end_io:\t%ps\n",		bio->bi_end_io);
