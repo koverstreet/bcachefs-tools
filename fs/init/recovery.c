@@ -124,6 +124,66 @@ int bch2_btree_lost_data(struct bch_fs *c,
 		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_topology, 0, &w) ?: ret;
 		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_scan_for_btree_nodes, 0, &w) ?: ret;
 		break;
+	case BTREE_ID_snapshot_trees:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_snapshot_trees, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_snapshots, 0, &w) ?: ret;
+		break;
+	/*
+	 * Content btrees: recovering the tree's shape is not enough, the keys
+	 * that survived have to be re-checked against whatever else references
+	 * them. Damage to any one of these leaves dangling references in the
+	 * others, and those only surface later as runtime errors - which is how
+	 * a dirents btree flagged lost in one boot produces a dirent to missing
+	 * inode weeks afterwards.
+	 */
+	case BTREE_ID_extents:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_extents, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_inodes, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_extents_to_backpointers, 0, &w) ?: ret;
+		break;
+	case BTREE_ID_inodes:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_inodes, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_extents, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_dirents, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_xattrs, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_nlinks, 0, &w) ?: ret;
+		break;
+	case BTREE_ID_dirents:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_dirents, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_inodes, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_nlinks, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_directory_structure, 0, &w) ?: ret;
+		break;
+	case BTREE_ID_xattrs:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_xattrs, 0, &w) ?: ret;
+		break;
+	case BTREE_ID_reflink:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_indirect_extents, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_extents, 0, &w) ?: ret;
+		break;
+	case BTREE_ID_subvolumes:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_subvols, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_subvol_children, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_subvolume_structure, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_root, 0, &w) ?: ret;
+		break;
+	case BTREE_ID_subvolume_children:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_subvol_children, 0, &w) ?: ret;
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_subvols, 0, &w) ?: ret;
+		break;
+	case BTREE_ID_deleted_inodes:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_inodes, 0, &w) ?: ret;
+		break;
+	/*
+	 * Stripes and the stripe backpointer indexes: check_allocations above
+	 * re-derives bucket state from the stripes, so what's left is the
+	 * extent<->backpointer direction.
+	 */
+	case BTREE_ID_stripes:
+	case BTREE_ID_bucket_to_stripe:
+	case BTREE_ID_stripe_backpointers:
+		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_extents_to_backpointers, 0, &w) ?: ret;
+		break;
 	default:
 		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_check_topology, 0, &w) ?: ret;
 		ret = __bch2_run_explicit_recovery_pass(c, msg, BCH_RECOVERY_PASS_scan_for_btree_nodes, 0, &w) ?: ret;
