@@ -1270,8 +1270,13 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 			    !bch2_bucket_is_open_safe(c, op.new.k->p.inode, op.new.k->p.offset) &&
 			    !bch2_bucket_nouse(ca, op.new.k->p.offset)) {
 				CLASS(printbuf, buf)();
-				prt_printf(&buf, "bucket going nonempty but not open\n");
+				prt_printf(&buf, "bucket going nonempty but not open in %s\n", trans->fn);
+				prt_str(&buf, "old: ");
+				bch2_bkey_val_to_text(&buf, c, op.old);
+				prt_str(&buf, "\nnew: ");
 				bch2_bkey_val_to_text(&buf, c, op.new.s_c);
+				prt_newline(&buf);
+				bch2_prt_task_backtrace(&buf, current, 1, GFP_KERNEL);
 
 				log_fsck_err_on(true, trans,
 					alloc_key_bucket_nonempty_to_empty_not_open,
