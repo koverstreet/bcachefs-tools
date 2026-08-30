@@ -1203,15 +1203,20 @@ int bch2_journal_flush_seq(struct journal *j, u64 seq, unsigned task_state)
 	int ret = bch2_journal_flush_seq_async(j, seq, &cl);
 
 	/*
-	 * Don't report stuck until we've waited longer than an IO could
-	 * legitimately take: twice the longest write latency we've seen, or 10s,
-	 * whichever is greater (matches bch2_journal_res_get_slowpath()).
+	 * Don't report stuck until we've waited longer than a flush could
+	 * legitimately take: five times the longest write latency we've seen,
+	 * or 10s, whichever is greater.
 	 *
-	 * Over every online device: a flushing commit waits on a preflush to
-	 * every rw member, so the slowest member bounds this even when it holds
-	 * no journal.
+	 * Deliberately a larger multiplier than bch2_journal_res_get_slowpath()'s
+	 * 2x, because this waits on more than one IO: a flushing commit issues a
+	 * preflush to every rw member, then the journal write, then waits for
+	 * that to complete. Those serialize, so one device's worst-case latency
+	 * is a floor on the total, not the total.
+	 *
+	 * Over every online device, for the same reason: the slowest member
+	 * bounds this even when it holds no journal.
 	 */
-	long total_wait = max(bch2_dev_latency_max(c, &c->devs_online, WRITE) * 2, HZ * 10);
+	long total_wait = max(bch2_dev_latency_max(c, &c->devs_online, WRITE) * 5, HZ * 10);
 
 	if (closure_sync_timeout(&cl, total_wait)) {
 		CLASS(printbuf, buf)();
