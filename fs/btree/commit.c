@@ -1008,6 +1008,28 @@ static int bch2_trans_commit_extra_disk_res(struct btree_trans *trans,
 				? BCH_DISK_RESERVATION_NOFAIL : 0);
 }
 
+#ifdef CONFIG_BCACHEFS_DEBUG
+/*
+ * extents and reflink reference data: bch2_bkey_set_needs_reconcile() may pad a
+ * key with invalid-device pointers to restore its accounted durability, and
+ * charges extra_disk_res for them - so a leaf update needs somewhere to put it.
+ */
+static void trans_verify_disk_res(struct btree_trans *trans)
+{
+	if (trans->disk_res)
+		return;
+
+	trans_for_each_update(trans, i)
+		WARN_ONCE(!i->level &&
+			  (i->btree_id == BTREE_ID_extents ||
+			   i->btree_id == BTREE_ID_reflink),
+			  "%s(): update to %s without a disk reservation",
+			  trans->fn, bch2_btree_id_str(i->btree_id));
+}
+#else
+static inline void trans_verify_disk_res(struct btree_trans *trans) {}
+#endif
+
 noinline __cold
 static void trans_commit_compact_tail(struct btree_trans *trans,
 				      struct btree_insert_entry *dst,
@@ -1497,6 +1519,8 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 	if (!bch2_trans_has_updates(trans) ||
 	    commit_became_noop(trans, dropped_noops))
 		goto out_reset;
+
+	trans_verify_disk_res(trans);
 
 	if (unlikely(trans->extra_disk_res)) {
 		ret = bch2_trans_commit_extra_disk_res(trans, flags);
