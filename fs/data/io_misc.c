@@ -319,7 +319,7 @@ int bch2_truncate(struct bch_fs *c, subvol_inum inum, u64 new_i_size, u64 *i_sec
 	CLASS(btree_trans, trans)(c);
 	try(bch2_logged_op_start(trans, &op.k_i));
 	int ret = __bch2_resume_logged_op_truncate(trans, &op.k_i, i_sectors_delta);
-	ret = bch2_logged_op_finish(trans, &op.k_i) ?: ret;
+	ret = bch2_logged_op_finish(trans, &op.k_i, ret) ?: ret;
 	return ret;
 }
 
@@ -537,6 +537,6 @@ int bch2_fcollapse_finsert(struct bch_fs *c, subvol_inum inum,
 	CLASS(btree_trans, trans)(c);
 	try(bch2_logged_op_start(trans, &op.k_i));
 	int ret = __bch2_resume_logged_op_finsert(trans, &op.k_i, i_sectors_delta);
-	ret = bch2_logged_op_finish(trans, &op.k_i) ?: ret;
+	ret = bch2_logged_op_finish(trans, &op.k_i, ret) ?: ret;
 	return ret;
 }

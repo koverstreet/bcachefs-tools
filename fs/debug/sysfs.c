@@ -38,6 +38,7 @@
 
 #include "fs/dirent.h"
 #include "fs/inode.h"
+#include "fs/logged_ops.h"
 
 #include "init/error.h"
 #include "init/fs.h"
@@ -169,6 +170,7 @@ write_attribute(trigger_reconcile_wakeup);
 write_attribute(trigger_reconcile_pending_wakeup);
 write_attribute(trigger_delete_dead_snapshots);
 write_attribute(trigger_emergency_read_only);
+rw_attribute(logged_op_fail_next);
 read_attribute(gc_gens_pos);
 
 read_attribute(uuid);
@@ -324,6 +326,9 @@ SHOW(bch2_fs)
 
 	if (attr == &sysfs_flags)
 		prt_bitflags(out, bch2_fs_flag_strs, c->flags);
+
+	if (attr == &sysfs_logged_op_fail_next)
+		bch2_logged_op_fail_next_to_text(out, c);
 
 	sysfs_hprint(btree_cache_size,		bch2_btree_cache_size(c));
 
@@ -497,6 +502,13 @@ STORE(bch2_fs)
 	if (attr == &sysfs_trigger_gc)
 		bch2_gc_gens(c);
 
+	if (attr == &sysfs_logged_op_fail_next) {
+		unsigned type;
+
+		try(bch2_logged_op_fail_next_parse(buf, &type));
+		WRITE_ONCE(c->logged_op_fail_next, type);
+	}
+
 	if (attr == &sysfs_trigger_delete_dead_snapshots) {
 		/* debug force: bypass auto_snapshot_deletion; serialize via run_lock */
 		scoped_guard(mutex, &c->recovery.run_lock)
@@ -650,6 +662,7 @@ struct attribute *bch2_fs_internal_files[] = {
 	&sysfs_trigger_reconcile_wakeup,
 	&sysfs_trigger_reconcile_pending_wakeup,
 	&sysfs_trigger_delete_dead_snapshots,
+	&sysfs_logged_op_fail_next,
 	&sysfs_trigger_emergency_read_only,
 
 	&sysfs_gc_gens_pos,

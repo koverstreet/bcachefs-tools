@@ -370,7 +370,7 @@ int bch2_inode_opt_propagate(struct btree_trans *trans, subvol_inum inum)
 
 	try(bch2_logged_op_start(trans, &op.k_i));
 	int ret = bch2_resume_logged_op_inode_opt_propagate(trans, &op.k_i);
-	return bch2_logged_op_finish(trans, &op.k_i) ?: ret;
+	return bch2_logged_op_finish(trans, &op.k_i, ret) ?: ret;
 }
 
 /*

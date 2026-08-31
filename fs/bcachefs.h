@@ -886,6 +886,13 @@ struct bch_fs {
 	struct bch_memquota_type quotas[QTYP_NR];
 
 	/* DEBUG JUNK */
+
+	/*
+	 * Test knob: KEY_TYPE_logged_op_* whose next cursor update should fail,
+	 * or 0. Armed via sysfs, one shot, disarms itself as it fires.
+	 */
+	unsigned		logged_op_fail_next;
+
 #ifdef CONFIG_DEBUG_FS
 	struct dentry		*fs_debug_dir;
 	struct dentry		*btree_debug_dir;

@@ -649,7 +649,7 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 
 	{
 		CLASS(btree_trans, trans)(c);
-		ret = bch2_logged_op_finish(trans, &op.k_i) ?: ret;
+		ret = bch2_logged_op_finish(trans, &op.k_i, ret) ?: ret;
 	}
 
 	return ret;

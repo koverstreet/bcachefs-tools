@@ -28,6 +28,46 @@ static const struct bch_logged_op_fn logged_op_fns[] = {
 #undef x
 };
 
+const char * const bch2_logged_ops[] = {
+#define x(n)	#n,
+	BCH_LOGGED_OPS()
+#undef x
+	NULL
+};
+
+/* Empty (or a bare newline) disarms; anything unrecognised is rejected. */
+int bch2_logged_op_fail_next_parse(const char *buf, unsigned *type)
+{
+	size_t len = strcspn(buf, " \t\n");
+
+	if (!len) {
+		*type = 0;
+		return 0;
+	}
+
+	for (unsigned i = 0; i < ARRAY_SIZE(logged_op_fns); i++)
+		if (!strncmp(buf, bch2_logged_ops[i], len) &&
+		    !bch2_logged_ops[i][len]) {
+			*type = logged_op_fns[i].type;
+			return 0;
+		}
+
+	return -EINVAL;
+}
+
+void bch2_logged_op_fail_next_to_text(struct printbuf *out, struct bch_fs *c)
+{
+	unsigned type = READ_ONCE(c->logged_op_fail_next);
+
+	for (unsigned i = 0; i < ARRAY_SIZE(logged_op_fns); i++)
+		if (logged_op_fns[i].type == type) {
+			prt_printf(out, "%s\n", bch2_logged_ops[i]);
+			return;
+		}
+
+	prt_printf(out, "(none)\n");
+}
+
 static const struct bch_logged_op_fn *logged_op_fn(enum bch_bkey_type type)
 {
 	for (unsigned i = 0; i < ARRAY_SIZE(logged_op_fns); i++)
@@ -57,7 +97,12 @@ static int resume_logged_op(struct btree_trans *trans, struct btree_iter *iter,
 	if (fn)
 		fn->resume(trans, sk.k);
 
-	ret = bch2_logged_op_finish(trans, sk.k);
+	/*
+	 * 0, not the resume's return - which this deliberately discards.
+	 * Recovery finishes the op either way, so that an op that can't
+	 * complete doesn't wedge every subsequent mount.
+	 */
+	ret = bch2_logged_op_finish(trans, sk.k, 0);
 fsck_err:
 	return ret ?: trans_was_restarted(trans, restart_count);
 }
@@ -100,9 +145,19 @@ int bch2_logged_op_start(struct btree_trans *trans, struct bkey_i *k)
  *
  * TODO: post Rust conversion, encode the write ref requirement in the
  * type system so the compiler enforces it.
+ *
+ * The key goes even when @op_ret is an error: it protects against the process
+ * dying, not against the operation failing. The injected failure is the
+ * exception - it simulates the process dying, so the op has to survive.
+ *
+ * From @op_ret and not the knob: the knob is one-shot and global, so by now it
+ * may have been re-armed or claimed by another op.
  */
-int bch2_logged_op_finish(struct btree_trans *trans, struct bkey_i *k)
+int bch2_logged_op_finish(struct btree_trans *trans, struct bkey_i *k, int op_ret)
 {
+	if (bch2_err_matches(op_ret, BCH_ERR_injected_logged_op_fail))
+		return op_ret;
+
 	int ret = commit_do(trans, NULL, NULL,
 			    BCH_TRANS_COMMIT_no_check_rw|
 			    BCH_TRANS_COMMIT_no_enospc,
