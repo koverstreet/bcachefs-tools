@@ -331,6 +331,8 @@ bcachefs-rust-probe := $(shell					\
 		{ echo 'kernel tree has no scripts/generate_rust_target.rs'; exit 0; }; \
 	[ -r '$(objtree)/include/generated/rustc_cfg' ] ||		\
 		{ echo 'kernel tree has no include/generated/rustc_cfg'; exit 0; }; \
+	[ -r "$$($(RUSTC) --print sysroot)/lib/rustlib/src/rust/library/core/src/lib.rs" ] || \
+		{ echo 'rust-src not found'; exit 0; }; \
 	echo y)
 bcachefs-rust-y := $(if $(filter y,$(bcachefs-rust-probe)),y,n)
 bcachefs-rust-why := $(if $(filter y,$(bcachefs-rust-probe)),,$(bcachefs-rust-probe))
