@@ -477,7 +477,10 @@ enum bch_bkey_type_flags {
 	x(damage,		38,	BKEY_TYPE_strict_btree_checks,	\
 	  "Errors that damaged an inode, recorded in the same "		\
 	  "transaction as the repair that did the damage: a sorted "	\
-	  "list of bch_sb_error_id")
+	  "list of bch_sb_error_id")					\
+	x(logged_op_inode_opt_propagate, 39, BKEY_TYPE_strict_btree_checks, \
+	  "Logged propagation of inode io options to ancestor "		\
+	  "snapshot versions")
 
 enum bch_bkey_type {
 #define x(name, nr, ...) KEY_TYPE_##name	= nr,
@@ -749,6 +752,7 @@ enum btree_id_flags {
 	  BIT_ULL(KEY_TYPE_logged_op_truncate)|					\
 	  BIT_ULL(KEY_TYPE_logged_op_finsert)|					\
 	  BIT_ULL(KEY_TYPE_logged_op_stripe_update)|				\
+	  BIT_ULL(KEY_TYPE_logged_op_inode_opt_propagate)|			\
 	  BIT_ULL(KEY_TYPE_inode_alloc_cursor),					\
 	  "In-progress logged operations for crash recovery")			\
 	x(reconcile_work,	18,						\

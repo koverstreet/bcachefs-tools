@@ -32,6 +32,26 @@ struct bch_logged_op_finsert {
 	__le64			pos;
 };
 
+/*
+ * Push one inode version's io options up to its ancestor snapshot versions, so
+ * that data written before this branch existed sees them - see
+ * bch2_inode_opt_propagate().
+ *
+ * The two snapshot ids have to be separate fields: "is this version off the
+ * path we are propagating along" is asked relative to the origin, so folding
+ * them together makes the origin itself look like a sibling one level up.
+ *
+ * No value or option id: the inode key at (@inum, @origin_snapshot) is the
+ * source of truth, so a resumed op recomputes rather than replaying a value
+ * that may have changed since.
+ */
+struct bch_logged_op_inode_opt_propagate {
+	struct bch_val		v;
+	__le64			inum;
+	__le32			origin_snapshot;
+	__le32			cursor_snapshot;
+};
+
 struct bch_logged_op_stripe_update {
 	struct bch_val		v;
 	__le64			old_idx;

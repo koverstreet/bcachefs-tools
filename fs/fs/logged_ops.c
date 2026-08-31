@@ -9,6 +9,7 @@
 #include "data/io_misc.h"
 
 #include "fs/logged_ops.h"
+#include "fs/inode.h"
 
 #include "init/error.h"
 #include "init/fs.h"

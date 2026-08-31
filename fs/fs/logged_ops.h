@@ -7,7 +7,8 @@
 #define BCH_LOGGED_OPS()			\
 	x(truncate)				\
 	x(finsert)				\
-	x(stripe_update)
+	x(stripe_update)				\
+	x(inode_opt_propagate)
 
 static inline int bch2_logged_op_update(struct btree_trans *trans, struct bkey_i *op)
 {
