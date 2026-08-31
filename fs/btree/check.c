@@ -1249,6 +1249,15 @@ int bch2_gc_gens(struct bch_fs *c)
 			ca->oldest_gen[b] = gens->b[b];
 	}
 
+	/*
+	 * Dropping a stale pointer is not an allocation, but the reconcile
+	 * trigger may pad the key with invalid-device pointers to restore its
+	 * accounted durability, and charges extra_disk_res for those - so the
+	 * commit needs a reservation to put the charge in. Released per key so
+	 * it can't accumulate across the walk.
+	 */
+	CLASS(disk_reservation, res)(c);
+
 	for (unsigned i = 0; i < BTREE_ID_NR; i++)
 		if (btree_type_has_data_ptrs(i)) {
 			c->gc_gens.pos = BBPOS(i, POS_MIN);
@@ -1258,9 +1267,11 @@ int bch2_gc_gens(struct bch_fs *c)
 						POS_MIN,
 						BTREE_ITER_prefetch|BTREE_ITER_all_snapshots,
 						k,
-						NULL, NULL,
-						BCH_TRANS_COMMIT_no_enospc,
-					gc_btree_gens_key(trans, &iter, k)));
+						&res.r, NULL,
+						BCH_TRANS_COMMIT_no_enospc, ({
+					bch2_disk_reservation_put(c, &res.r);
+					gc_btree_gens_key(trans, &iter, k);
+				})));
 			if (ret)
 				goto err;
 		}
