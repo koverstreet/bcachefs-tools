@@ -224,12 +224,14 @@ static SPLINES: &[&[&str]] = &[
     // Banach-Tarski: five pieces, no measure, two balls where there was one.
     // For a filesystem the joke writes itself.
     // Kent's, and played completely straight - it is a procedure being
-    // reported, not a joke being told. The ellipses are load bearing: they
-    // make it real progress output. The earlier version ended "please do not
-    // ask how", which was a wink, and the wink is what killed it. Here the
-    // machine does not think anything has gone wrong.
-    &["Applying Axiom of Choice to free space according to Banach Tarski...",
-      "Computing five partitions...",
+    // reported, not a joke being told. The trailing ellipsis is load bearing:
+    // it makes this real progress output. Do not write it here - render_line
+    // appends one to every line, so a typed one shows up as six dots and costs
+    // three columns this entry does not have. The earlier version ended
+    // "please do not ask how", which was a wink, and the wink is what killed
+    // it. Here the machine does not think anything has gone wrong.
+    &["Applying Axiom of Choice to free space according to Banach Tarski",
+      "Computing five partitions",
       "Free space doubled"],
 
     // Not the $2.56 cheque - everybody has heard that one, so it does no
