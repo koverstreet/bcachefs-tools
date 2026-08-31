@@ -379,7 +379,7 @@ int bch2_move_extent(struct moving_context *ctxt,
 
 	if (!bkey_is_btree_ptr(k.k))
 		ret = __bch2_move_extent(ctxt, bucket_in_flight, iter, k, opts, data_opts);
-	else if (data_opts->type != BCH_DATA_UPDATE_scrub) {
+	else if (!data_update_is_scrub(data_opts->type)) {
 		if (data_opts->type != BCH_DATA_UPDATE_copygc) {
 			ret = bch2_can_do_data_update(trans, opts, data_opts, k, NULL);
 			if (ret) {
@@ -412,8 +412,17 @@ int bch2_move_extent(struct moving_context *ctxt,
 		    !bch2_err_matches(ret, ENOMEM))
 			move_btree_node_trace(c, opts, data_opts,
 					      bkey_i_to_s_c(node_key.k), ret);
-	} else
+	} else if (data_opts->type == BCH_DATA_UPDATE_scrub) {
 		ret = bch2_btree_node_scrub(trans, iter->btree_id, level, k, data_opts->read_dev);
+	} else {
+		/*
+		 * scrub_no_repair: bch2_btree_node_scrub() repairs, and the
+		 * journal scrub checks nodes itself with a report callback -
+		 * scrub_journal_node() - so nothing should send one here:
+		 */
+		WARN_ON_ONCE(1);
+		ret = bch_err_throw(c, invalid);
+	}
 
 	if (bch2_err_matches(ret, ENOMEM)) {
 		/* memory allocation failure, wait for some IO to finish */

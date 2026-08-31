@@ -1481,8 +1481,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 		ptr_bit <<= 1;
 	}
 
-	if (m->opts.type != BCH_DATA_UPDATE_scrub &&
-	    m->opts.type != BCH_DATA_UPDATE_scrub_no_repair) {
+	if (!data_update_is_scrub(m->opts.type)) {
 		/*
 		 * A move that only relocates data keeps its old pointers if it
 		 * comes up short, so that isn't a degraded write; one restoring
