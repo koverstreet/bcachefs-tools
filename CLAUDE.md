@@ -70,6 +70,16 @@ later work can see what's been analyzed and what was decided.
 documentation for general consumption. Anything that belongs in the
 repository proper goes in `doc/`, written for that audience.
 
+Untracked means `make-release-tarball.sh`'s `git clean -xfd` deletes it,
+which it did, taking every note with it. So `.claude/` is a symlink out
+of the tree, to
+
+    ~/.claude/projects/-home-kent-ktest-tests-fs-bcachefs-bcachefs-tools/notes
+
+The symlink is untracked too and gets removed by the same clean — but
+only the symlink. Recreate it with `ln -sfn` after a release; the notes
+themselves are never in the worktree.
+
 ### Calibrate to the risk
 
 - **Kernel code** (`fs/`): Go slow. Research thoroughly. Always discuss
