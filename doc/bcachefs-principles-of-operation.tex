@@ -743,6 +743,10 @@ of another subvolume. Snapshots are writeable by default and may be snapshotted
 again, creating a tree of snapshots; they can also be created as read-only with
 the \texttt{--read-only} (or \texttt{-r}) flag.
 
+Because snapshots are writable, a subvolume and its snapshots can set different
+per-file io path options on data they still share; \S\ref{sec:file-options-snapshots}
+covers what happens then.
+
 Snapshots are very cheap to create: they're not based on cloning of COW btrees
 as with btrfs, but instead are based on versioning of individual keys in the
 btrees. Many thousands or millions of snapshots can be created, with the only
@@ -1703,6 +1707,33 @@ $ getfattr -d -m '^bcachefs_effective\.' filename
 Options may be set via the extended attribute interface, but it is preferable to
 use the \texttt{bcachefs set-file-option} command as it will correctly
 propagate options recursively.
+
+\subsubsection{Options and snapshots}
+\label{sec:file-options-snapshots}
+
+An extent takes its io path options from the inode version at the nearest
+ancestor of the snapshot it was written at, so data written before a snapshot
+reads the options preserved with that snapshot rather than the ones on the inode
+just changed. Setting an option therefore also updates those ancestor versions,
+so that the older data follows the change.
+
+Writable snapshots of a subvolume share that older data but have their own
+inodes, so they can ask for different things while only one ancestor version
+holds the answer. Then:
+
+\begin{itemize}
+\item \texttt{data\_replicas} takes the largest value asked for.
+\item Otherwise, if one of them is the master subvolume -- the one subvolume in
+      a snapshot tree that is not itself a snapshot -- its value wins.
+\item Otherwise the shared data keeps the option it has, which in practice means
+      whichever branch set it first, while nothing yet disagreed. Letting the
+      most recent change win would rewrite all of the shared data every time
+      either branch changed its mind.
+\end{itemize}
+
+Data written after a branch diverges always uses that branch's own options; only
+the older, shared data is subject to the above. The ancestor versions are an
+invariant that \texttt{fsck} checks and repairs.
 
 \subsection{Inode number sharding}
 
