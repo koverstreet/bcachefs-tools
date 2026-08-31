@@ -346,31 +346,34 @@ int bch2_resume_logged_op_inode_opt_propagate(struct btree_trans *trans,
 }
 
 /*
- * Not atomic with the option change: a crash in between leaves the option set
- * and the climb never started. Accepted - the op only guarantees that a climb
- * which has begun finishes.
+ * Goes in the caller's transaction, so the op commits with the change that
+ * needs it: a crash can't leave the option set with no climb recorded.
+ *
+ * @op is left deleted if there's nothing above @snapshot; the caller runs
+ * _finish() only if it was armed, and must keep it alive until the commit.
  */
-int bch2_inode_opt_propagate(struct btree_trans *trans, subvol_inum inum)
+int bch2_inode_opt_propagate_start(struct btree_trans *trans, u64 inum, u32 snapshot,
+				   struct bkey_i_logged_op_inode_opt_propagate *op)
 {
-	u32 snapshot;
-	try(lockrestart_do(trans,
-		bch2_subvolume_get_snapshot(trans, inum.subvol, &snapshot)));
+	bkey_init(&op->k);
 
-	/* No ancestors: nothing to climb, and don't pay for a logged op */
 	if (!bch2_snapshot_parent(trans->c, snapshot))
 		return 0;
 
-	/* Stack, not trans_kmalloc: start() commits, and a restart frees it */
-	struct bkey_i_logged_op_inode_opt_propagate op;
+	bkey_logged_op_inode_opt_propagate_init(&op->k_i);
+	op->v.inum		= cpu_to_le64(inum);
+	op->v.origin_snapshot	= cpu_to_le32(snapshot);
+	op->v.cursor_snapshot	= cpu_to_le32(snapshot);
 
-	bkey_logged_op_inode_opt_propagate_init(&op.k_i);
-	op.v.inum		= cpu_to_le64(inum.inum);
-	op.v.origin_snapshot	= cpu_to_le32(snapshot);
-	op.v.cursor_snapshot	= cpu_to_le32(snapshot);
+	return __bch2_logged_op_start(trans, &op->k_i);
+}
 
-	try(bch2_logged_op_start(trans, &op.k_i));
-	int ret = bch2_resume_logged_op_inode_opt_propagate(trans, &op.k_i);
-	return bch2_logged_op_finish(trans, &op.k_i, ret) ?: ret;
+/* After that transaction has committed: climb, then drop the op */
+int bch2_inode_opt_propagate_finish(struct btree_trans *trans,
+				    struct bkey_i_logged_op_inode_opt_propagate *op)
+{
+	int ret = bch2_resume_logged_op_inode_opt_propagate(trans, &op->k_i);
+	return bch2_logged_op_finish(trans, &op->k_i, ret) ?: ret;
 }
 
 /*

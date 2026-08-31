@@ -142,11 +142,16 @@ static int bch2_write_inode_trans(struct btree_trans *trans,
 				  struct bch_inode_info *inode,
 				  inode_set_fn set,
 				  void *p, unsigned fields,
-				  bool *reconcile_changed)
+				  bool *reconcile_changed,
+				  struct bkey_i_logged_op_inode_opt_propagate *propagate)
 {
 	struct bch_fs *c = trans->c;
 	CLASS(btree_iter_uninit, iter)(trans);
 	struct bch_inode_unpacked inode_u;
+
+	/* First thing: a restart discards the update, so it can't stay armed */
+	bkey_init(&propagate->k);
+
 	try(bch2_inode_peek(trans, &iter, &inode_u, inode_inum(inode), BTREE_ITER_intent));
 
 	struct bch_extent_reconcile old_r = bch2_inode_reconcile_opts_get(c, &inode_u);
@@ -158,11 +163,21 @@ static int bch2_write_inode_trans(struct btree_trans *trans,
 
 	struct bch_extent_reconcile new_r = bch2_inode_reconcile_opts_get(c, &inode_u);
 	*reconcile_changed = memcmp(&old_r, &new_r, sizeof(new_r));
-	if (*reconcile_changed)
+	if (*reconcile_changed) {
 		try(bch2_set_reconcile_needs_scan_trans(trans,
 				(struct reconcile_scan) {
 					.type = RECONCILE_SCAN_inum,
 					.inum = inode_u.bi_inum }));
+		/*
+		 * Data written before this subvolume branched off is keyed at
+		 * an ancestor snapshot, and takes its options from the inode
+		 * version there: the new options have to be pushed up to reach
+		 * it. iter.snapshot, not inode_u.bi_snapshot - peek() can find
+		 * the key at an ancestor, but we write here.
+		 */
+		try(bch2_inode_opt_propagate_start(trans, inode_u.bi_inum,
+						   iter.snapshot, propagate));
+	}
 
 	try(bch2_inode_write(trans, &iter, &inode_u));
 	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
@@ -182,8 +197,11 @@ int __must_check bch2_write_inode(struct bch_fs *c,
 {
 	CLASS(btree_trans, trans)(c);
 	bool reconcile_changed = false;
-	int ret = lockrestart_do(trans, bch2_write_inode_trans(trans, inode, set, p,
-							       fields, &reconcile_changed));
+	/* On the stack: it has to outlive the commit that inserts it */
+	struct bkey_i_logged_op_inode_opt_propagate propagate;
+
+	int ret = lockrestart_do(trans, bch2_write_inode_trans(trans, inode, set, p, fields,
+							       &reconcile_changed, &propagate));
 
 	bch2_fs_fatal_err_on(bch2_err_matches(ret, ENOENT), c,
 			     "%s: inode %llu:%llu not found when updating",
@@ -191,15 +209,11 @@ int __must_check bch2_write_inode(struct bch_fs *c,
 			     inode_inum(inode).subvol,
 			     inode_inum(inode).inum);
 
-	if (!ret && reconcile_changed) {
-		/*
-		 * Data written before this subvolume branched off is keyed at
-		 * an ancestor snapshot, and takes its options from the inode
-		 * version there: the new options have to be pushed up to reach
-		 * it.
-		 */
-		ret = bch2_inode_opt_propagate(trans, inode_inum(inode));
-		bch2_reconcile_wakeup(c);
+	if (!ret) {
+		if (propagate.k.type == KEY_TYPE_logged_op_inode_opt_propagate)
+			ret = bch2_inode_opt_propagate_finish(trans, &propagate);
+		if (reconcile_changed)
+			bch2_reconcile_wakeup(c);
 	}
 
 	return ret < 0 ? ret : 0;
