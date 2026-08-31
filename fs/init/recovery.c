@@ -1137,6 +1137,17 @@ use_clean:
 			c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_stripe_frag_accounting));
 			sb_dirty(&w);
 		}
+
+		/*
+		 * check_inodes runs bch2_check_inode_opts_propagated(), so
+		 * after it every inode's options have reached its ancestor
+		 * snapshots - and a later violation is a bug, not legacy state.
+		 */
+		if (!(c->sb.compat & BIT_ULL(BCH_COMPAT_inode_opts_propagated)) &&
+		    (c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_check_inodes))) {
+			c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_inode_opts_propagated));
+			sb_dirty(&w);
+		}
 	}
 
 	/*
@@ -1178,6 +1189,7 @@ int bch2_fs_initialize(struct bch_fs *c)
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_bformat_overflow_done));
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
 		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_stripe_frag_accounting));
+		c->disk_sb.sb->compat[0] |= cpu_to_le64(BIT_ULL(BCH_COMPAT_inode_opts_propagated));
 
 		bch2_check_version_downgrade(c);
 

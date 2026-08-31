@@ -271,12 +271,21 @@ static int inode_opt_propagate_one(struct btree_trans *trans, u64 inum,
 		return 0;
 
 	if (fsck_repaired) {
+		/*
+		 * Repair quietly until the compat bit says a full check has
+		 * run: before that the filesystem predates propagation, so
+		 * finding work is the upgrade, not a bug.
+		 */
+		unsigned flags = FSCK_CAN_FIX|FSCK_CAN_IGNORE;
+		if (!(c->sb.compat & BIT_ULL(BCH_COMPAT_inode_opts_propagated)))
+			flags |= FSCK_ERR_SILENT;
+
 		prt_printf(&buf, "inode options not propagated to ancestor snapshot\n");
 		prt_printf(&buf, "inum %llu set at snapshot %u, ancestor %u should be:\n",
 			   inum, origin_snapshot, ancestor);
 		bch2_inode_unpacked_to_text(&buf, &ancestor_inode);
 
-		if (!fsck_err(trans, inode_opts_not_propagated, "%s", buf.buf))
+		if (!__fsck_err(trans, flags, inode_opts_not_propagated, "%s", buf.buf))
 			return 0;
 
 		*fsck_repaired = true;

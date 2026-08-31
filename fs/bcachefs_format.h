@@ -1408,7 +1408,8 @@ enum bch_sb_feature {
 	x(extents_above_btree_updates_done,	2)	\
 	x(bformat_overflow_done,		3)	\
 	x(no_stale_ptrs,			4)	\
-	x(stripe_frag_accounting,		5)
+	x(stripe_frag_accounting,		5)	\
+	x(inode_opts_propagated,		6)
 
 enum bch_sb_compat {
 #define x(f, n) BCH_COMPAT_##f,
