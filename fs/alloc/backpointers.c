@@ -1206,7 +1206,15 @@ static int check_bucket_backpointer_pos_mismatch(struct btree_trans *trans,
 						 bool *had_mismatch,
 						 struct wb_maybe_flush *last_flushed)
 {
-	CLASS(btree_iter, alloc_iter)(trans, BTREE_ID_alloc, bucket, BTREE_ITER_cached);
+	/*
+	 * Not BTREE_ITER_cached: scrub calls this once per bucket for a whole
+	 * device (bch2_move_data_phys() fills in the gaps between backpointers),
+	 * and a cached iterator would leave a key cache entry behind for every
+	 * one of them. Uncached still sees a dirty cached key - alloc is a cached
+	 * btree, so bch2_btree_iter_flags() gives us BTREE_ITER_with_key_cache,
+	 * which consults an existing entry without creating one.
+	 */
+	CLASS(btree_iter, alloc_iter)(trans, BTREE_ID_alloc, bucket, 0);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&alloc_iter));
 
 	struct bpos checked_bad = POS_MAX;
