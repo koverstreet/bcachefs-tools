@@ -1062,6 +1062,14 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 			bch2_inode_opts_get(c, &io_opts, bkey_is_btree_ptr(k.k));
 
 			bkey_for_each_ptr(ptrs, ptr) {
+				/*
+				 * A device that isn't there tells us nothing
+				 * about whether it honoured flush/FUA - don't
+				 * let it read as a checksum error and rewind.
+				 */
+				if (!bch2_dev_idx_is_online(c, ptr->dev))
+					continue;
+
 				struct data_update_opts data_opts = {
 					.type		= BCH_DATA_UPDATE_scrub_no_repair,
 					.read_flags	= BCH_READ_hard_require_read_device,
