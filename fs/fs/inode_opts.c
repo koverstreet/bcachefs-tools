@@ -18,6 +18,8 @@
 #include "fs/inode_opts.h"
 #include "fs/logged_ops.h"
 
+#include "init/error.h"
+
 #include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
 
@@ -221,23 +223,22 @@ static bool inode_opts_merge_into_ancestor(struct bch_inode_unpacked *src,
 }
 
 /*
- * Extents are keyed at the snapshot they were written at, and their io options
- * come from the inode version at the nearest ancestor of that snapshot
- * (bch2_bkey_get_io_opts()) - so options set in a branch don't reach data
- * written before the branch existed, which is why background_compression looks
- * like it does nothing on a snapshotted file until the snapshot is deleted.
+ * Queue what @ancestor should take from the version at @origin_snapshot.
  *
- * Queue whatever @ancestor should take from the version at @origin_snapshot. @done
- * means the whole op is moot, not that this level had nothing to do: the
- * source inode can be unlinked while the op is outstanding. A deleted snapshot
- * needs no check - bch2_snapshot_parent() returns 0 for an id with no table
- * entry.
+ * @done means the whole op is moot - the source inode was unlinked - not that
+ * this level had nothing to do.
+ *
+ * @fsck_repaired non-NULL reports before writing, and says whether we did; the
+ * check is then the same code as the rule.
  */
 static int inode_opt_propagate_one(struct btree_trans *trans, u64 inum,
-				   u32 origin_snapshot, u32 ancestor, bool *done)
+				   u32 origin_snapshot, u32 ancestor, bool *done,
+				   bool *fsck_repaired)
 {
 	struct bch_fs *c = trans->c;
 	struct bch_inode_unpacked src;
+	CLASS(printbuf, buf)();
+	int ret = 0;
 
 	CLASS(btree_iter, src_iter)(trans, BTREE_ID_inodes, SPOS(0, inum, origin_snapshot),
 				    BTREE_ITER_all_snapshots);
@@ -269,13 +270,23 @@ static int inode_opt_propagate_one(struct btree_trans *trans, u64 inum,
 	if (!inode_opts_merge_into_ancestor(&src, &ancestor_inode, claimed, src_is_master))
 		return 0;
 
-	/*
-	 * internal_snapshot_node: modifying the ancestor in place is the whole
-	 * point - the normal update path would copy it down into a leaf, which
-	 * is what we're trying to avoid.
-	 */
-	return bch2_inode_write_flags(trans, &iter, &ancestor_inode,
-				      BTREE_UPDATE_internal_snapshot_node);
+	if (fsck_repaired) {
+		prt_printf(&buf, "inode options not propagated to ancestor snapshot\n");
+		prt_printf(&buf, "inum %llu set at snapshot %u, ancestor %u should be:\n",
+			   inum, origin_snapshot, ancestor);
+		bch2_inode_unpacked_to_text(&buf, &ancestor_inode);
+
+		if (!fsck_err(trans, inode_opts_not_propagated, "%s", buf.buf))
+			return 0;
+
+		*fsck_repaired = true;
+	}
+
+	/* in place: the normal update path would COW it down into a leaf */
+	ret = bch2_inode_write_flags(trans, &iter, &ancestor_inode,
+				     BTREE_UPDATE_internal_snapshot_node);
+fsck_err:
+	return ret;
 }
 
 void bch2_logged_op_inode_opt_propagate_to_text(struct printbuf *out, struct bch_fs *c,
@@ -312,7 +323,7 @@ int bch2_resume_logged_op_inode_opt_propagate(struct btree_trans *trans,
 		bool done = false;
 		try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
 			      inode_opt_propagate_one(trans, inum, origin_snapshot,
-						      ancestor, &done) ?:
+						      ancestor, &done, NULL) ?:
 			      bch2_logged_op_update(trans, &op->k_i)));
 		if (done)
 			break;
@@ -360,4 +371,43 @@ int bch2_inode_opt_propagate(struct btree_trans *trans, subvol_inum inum)
 	try(bch2_logged_op_start(trans, &op.k_i));
 	int ret = bch2_resume_logged_op_inode_opt_propagate(trans, &op.k_i);
 	return bch2_logged_op_finish(trans, &op.k_i) ?: ret;
+}
+
+/*
+ * An invariant, not a one-off migration: deleting one of two disagreeing
+ * branches leaves the survivor's value uncontested but never propagated, and
+ * nothing re-runs the climb on snapshot deletion.
+ *
+ * No logged op - fsck reruns from the start anyway, and bch2_trans_begin() in
+ * its climb would invalidate check_inodes()'s iterator.
+ */
+int bch2_check_inode_opts_propagated(struct btree_trans *trans,
+				     struct bch_inode_unpacked *inode)
+{
+	struct bch_fs *c = trans->c;
+	bool repaired = false;
+
+	if (!(inode->bi_flags & BCH_INODE_has_inode_opts))
+		return 0;
+
+	u32 ancestor = inode->bi_snapshot;
+	while ((ancestor = bch2_snapshot_parent(c, ancestor))) {
+		bool done = false;
+
+		try(inode_opt_propagate_one(trans, inode->bi_inum, inode->bi_snapshot,
+					    ancestor, &done, &repaired));
+		if (done)
+			break;
+	}
+
+	/*
+	 * We've written keys outside the one check_inodes() handed us, at
+	 * snapshots it isn't iterating; commit them and restart so it resumes
+	 * from a consistent position.
+	 */
+	if (repaired)
+		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
+			btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+
+	return 0;
 }

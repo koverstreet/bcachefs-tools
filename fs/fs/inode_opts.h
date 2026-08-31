@@ -55,6 +55,7 @@ void bch2_inode_opts_get_inode(struct bch_fs *, struct bch_inode_unpacked *,
 bool bch2_reinherit_attrs(struct bch_inode_unpacked *, struct bch_inode_unpacked *);
 
 int bch2_inode_opt_propagate(struct btree_trans *, subvol_inum);
+int bch2_check_inode_opts_propagated(struct btree_trans *, struct bch_inode_unpacked *);
 int bch2_resume_logged_op_inode_opt_propagate(struct btree_trans *, struct bkey_i *);
 void bch2_logged_op_inode_opt_propagate_to_text(struct printbuf *, struct bch_fs *,
 						struct bkey_s_c);
