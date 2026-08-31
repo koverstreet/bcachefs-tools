@@ -15,8 +15,11 @@
 #include "data/extents.h"
 #include "data/extent_update.h"
 
+#include "data/reconcile/work.h"
 #include "fs/dirent.h"
 #include "fs/inode.h"
+#include "fs/inode_opts.h"
+#include "fs/logged_ops.h"
 #include "fs/namei.h"
 #include "fs/str_hash.h"
 
@@ -35,10 +38,6 @@
 #include <linux/unaligned.h>
 
 #define x(name, ...)	#name,
-const char * const bch2_inode_opts[] = {
-	BCH_INODE_OPTS()
-	NULL,
-};
 
 static const char * const bch2_inode_flag_strs[] = {
 	BCH_INODE_FLAGS()
@@ -1361,57 +1360,6 @@ void bch2_inode_nlink_dec(struct btree_trans *trans, struct bch_inode_unpacked *
 		bi->bi_flags |= BCH_INODE_unlinked;
 }
 
-struct bch_opts bch2_inode_opts_to_opts(struct bch_inode_unpacked *inode)
-{
-	struct bch_opts ret = { 0 };
-#define x(_name, _bits)							\
-	if (inode->bi_##_name)						\
-		opt_set(ret, _name, inode->bi_##_name - 1);
-	BCH_INODE_OPTS()
-#undef x
-	return ret;
-}
-
-void bch2_inode_opts_get_inode(struct bch_fs *c,
-			       struct bch_inode_unpacked *inode,
-			       struct bch_inode_opts *ret)
-{
-#define x(_name, _bits)							\
-	if ((inode)->bi_##_name) {					\
-		ret->_name = inode->bi_##_name - 1;			\
-		ret->_name##_from_inode = true;				\
-	} else {							\
-		ret->_name = c->opts._name;				\
-		ret->_name##_from_inode = false;			\
-	}
-	BCH_INODE_OPTS()
-#undef x
-
-	/*
-	 * Forward compatibility: inodes written by newer versions may carry
-	 * checksum/compression types we don't know about — fall back to the
-	 * filesystem option for new writes. Reads are unaffected, extents
-	 * carry their own types. (This is why these aren't validated at
-	 * btree read time: that would reject valid inodes from newer
-	 * versions.)
-	 */
-	if (unlikely(ret->data_checksum >= BCH_CSUM_OPT_NR)) {
-		ret->data_checksum = c->opts.data_checksum;
-		ret->data_checksum_from_inode = false;
-	}
-	if (unlikely(!bch2_compression_opt_valid(ret->compression))) {
-		ret->compression = c->opts.compression;
-		ret->compression_from_inode = false;
-	}
-	if (unlikely(!bch2_compression_opt_valid(ret->background_compression))) {
-		ret->background_compression = c->opts.background_compression;
-		ret->background_compression_from_inode = false;
-	}
-
-	ret->change_cookie = c->opt_change_cookie;
-
-	bch2_io_opts_fixups(ret);
-}
 
 int bch2_inode_set_casefold(struct btree_trans *trans, subvol_inum inum,
 			    struct bch_inode_unpacked *bi, unsigned v)

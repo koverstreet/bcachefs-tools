@@ -9,7 +9,6 @@
 #include <linux/hash.h>
 #include <linux/sched.h>
 
-extern const char * const bch2_inode_opts[];
 
 int bch2_inode_validate(struct bch_fs *, struct bkey_s_c,
 			const struct bkey_validate_context *);
@@ -102,6 +101,8 @@ struct bch_inode_unpacked {
 #undef  x
 };
 BITMASK(INODE_STR_HASH,	struct bch_inode_unpacked, bi_flags, 20, 24);
+
+#include "fs/inode_opts.h"
 
 struct bkey_inode_buf {
 	struct bkey_i_inode_v3	inode;
@@ -196,37 +197,6 @@ unsigned bch2_shard_inode_numbers_bits_default(unsigned nr_cpus, u64 fs_size, u6
 
 int bch2_inode_rm(struct bch_fs *, subvol_inum);
 
-#define inode_opt_get(_c, _inode, _name)			\
-	((_inode)->bi_##_name ? (_inode)->bi_##_name - 1 : (_c)->opts._name)
-
-static inline void bch2_inode_opt_set(struct bch_inode_unpacked *inode,
-				      enum inode_opt_id id, u64 v)
-{
-	switch (id) {
-#define x(_name, ...)							\
-	case Inode_opt_##_name:						\
-		inode->bi_##_name = v;					\
-		break;
-	BCH_INODE_OPTS()
-#undef x
-	default:
-		BUG();
-	}
-}
-
-static inline u64 bch2_inode_opt_get(struct bch_inode_unpacked *inode,
-				     enum inode_opt_id id)
-{
-	switch (id) {
-#define x(_name, ...)							\
-	case Inode_opt_##_name:						\
-		return inode->bi_##_name;
-	BCH_INODE_OPTS()
-#undef x
-	default:
-		BUG();
-	}
-}
 
 static inline u8 mode_to_type(umode_t mode)
 {
@@ -320,11 +290,9 @@ static inline void bch2_inode_nlink_set(struct bch_inode_unpacked *bi,
 
 int bch2_inode_nlink_inc(struct bch_inode_unpacked *);
 void bch2_inode_nlink_dec(struct btree_trans *, struct bch_inode_unpacked *);
-
-struct bch_opts bch2_inode_opts_to_opts(struct bch_inode_unpacked *);
-void bch2_inode_opts_get_inode(struct bch_fs *, struct bch_inode_unpacked *, struct bch_inode_opts *);
 int bch2_inode_set_casefold(struct btree_trans *, subvol_inum,
 			    struct bch_inode_unpacked *, unsigned);
+
 
 #include "data/reconcile/trigger.h"
 

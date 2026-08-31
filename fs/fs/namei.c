@@ -7,6 +7,7 @@
 #include "fs/acl.h"
 #include "fs/dirent.h"
 #include "fs/inode.h"
+#include "fs/inode_opts.h"
 #include "fs/namei.h"
 #include "fs/xattr.h"
 
@@ -308,33 +309,6 @@ int bch2_unlink_trans(struct btree_trans *trans,
 	return 0;
 }
 
-bool bch2_reinherit_attrs(struct bch_inode_unpacked *dst_u,
-			  struct bch_inode_unpacked *src_u)
-{
-	u64 src, dst;
-	unsigned id;
-	bool ret = false;
-
-	for (id = 0; id < Inode_opt_nr; id++) {
-		if (!S_ISDIR(dst_u->bi_mode) && id == Inode_opt_casefold)
-			continue;
-
-		/* Skip attributes that were explicitly set on this inode */
-		if (dst_u->bi_fields_set & (1 << id))
-			continue;
-
-		src = bch2_inode_opt_get(src_u, id);
-		dst = bch2_inode_opt_get(dst_u, id);
-
-		if (src == dst)
-			continue;
-
-		bch2_inode_opt_set(dst_u, id, src);
-		ret = true;
-	}
-
-	return ret;
-}
 
 static int subvol_update_parent(struct btree_trans *trans, u32 subvol, u32 new_parent)
 {

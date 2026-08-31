@@ -163,6 +163,7 @@ bcachefs-y		:=			\
 	fs/check_nlinks.o			\
 	fs/dirent.o				\
 	fs/inode.o				\
+	fs/inode_opts.o				\
 	fs/logged_ops.o				\
 	fs/namei.o				\
 	fs/quota.o				\
