@@ -570,6 +570,39 @@ static SPLINES: &[&[&str]] = &[
     // 1e11 years. Framed as a deferral because that is exactly what it is -
     // the work is queued behind a condition that has not been met yet.
     &["Deferring evaporation until the CMB cools"],
+
+    // Kent's. Niven's Pak breeders become Protectors by eating tree-of-life
+    // root, and the virus in the root only survives where there is thallium
+    // oxide in the soil. Earth has too little, so the crop the stranded colony
+    // planted came up fine and did nothing, their Protectors died out, and the
+    // breeders left behind are us.
+    //
+    // Which is the most ordinary failure in software wearing an extraordinary
+    // costume: it built, it reported success, and it was inert, because one
+    // input nobody thought to check was not there. Seeding the thallium fixes
+    // that, and the line declines to say for whom, or whether anyone asked.
+    //
+    // Arguable in the right way - thallium is not absent from Earth, only
+    // scarce, so "adequately thallious" is a threshold the novel sets by fiat.
+    &["Seeding thallium for Protectors"],
+
+    // Kent's, and it is a bug report. MIT students chanted "The Ringworld is
+    // unstable!" at Niven at the 1971 Worldcon: the ring is rigid, so it is not
+    // in orbit, and its equilibrium is the one a ball has on top of a sphere.
+    // He took the report and shipped the fix in the sequel - attitude jets
+    // along the rim wall - then built that book's plot on the natives having
+    // stripped the jets out to power their own starships.
+    //
+    // So the lookup pays three times: the defect, the author accepting it, and
+    // the fix being cannibalized by the people it was holding up. None of that
+    // is in the line and none of it should be. "Ringworld" is the door.
+    //
+    // The only entry that opens as a warning. It is allowed because the third
+    // word disposes of it - nothing about a ringworld can be mistaken for
+    // something about your data - and because render_line appends "..." to
+    // every line, which lands this one on deadpan rather than alarm.
+    &["Caution: Ringworld may be unstable"],
+
     &["Do filesystems dream of electric sheep?"],
     &["Restoring Phorusrhacidae from backup"],
     &["Constructing Turing-complete feedback loop"],
