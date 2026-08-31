@@ -122,25 +122,19 @@ void bch2_inode_opts_get_inode(struct bch_fs *c,
 }
 
 /*
- * Is there an inode version below @ancestor, off the path from @ours to
- * @ancestor, that has its own value for @id?
+ * Per option, the strongest value held by an inode version below @ancestor and
+ * off the path from @origin_snapshot; 0 if none.
  *
- * Such a branch doesn't read @ancestor for this option, so propagating into
- * @ancestor wouldn't change what it sees - but it does mean two branches have
- * expressed different intentions for the same shared data, and picking one
- * here would be deciding that silently.
- *
- * A snapshot that has never had this inode modified has no inode key at all,
- * so it isn't seen here. That is deliberate: it reads @ancestor, and having it
- * follow the change is the entire point of propagating.
+ * A snapshot with no inode key isn't seen, deliberately: it reads @ancestor,
+ * so it should follow the change.
  */
 static int inode_opts_claimed_off_path(struct btree_trans *trans, u64 inum,
-				       u32 ancestor, u32 origin_snapshot, unsigned *claimed)
+				       u32 ancestor, u32 origin_snapshot, u64 *claimed)
 {
 	struct bkey_s_c k;
 	int ret = 0;
 
-	*claimed = 0;
+	memset(claimed, 0, sizeof(claimed[0]) * Inode_opt_nr);
 
 	for_each_btree_key_max_norestart(trans, iter, BTREE_ID_inodes,
 					 SPOS(0, inum, 0), SPOS(0, inum, U32_MAX),
@@ -157,11 +151,73 @@ static int inode_opts_claimed_off_path(struct btree_trans *trans, u64 inum,
 		bch2_inode_unpack(trans->c, k, &inode);
 
 		for (enum inode_opt_id id = 0; id < Inode_opt_nr; id++)
-			if (bch2_inode_opt_get(&inode, id))
-				*claimed |= BIT(id);
+			claimed[id] = max(claimed[id], bch2_inode_opt_get(&inode, id));
 	}
 
 	return ret;
+}
+
+/*
+ * Is @snapshot the master subvolume - the one in a tree that isn't itself a
+ * snapshot? check_snapshot_tree() maintains that.
+ *
+ * A tree need not have one: set_deleted() clears master_subvol and only fsck
+ * elects a replacement. Not damage, just no tiebreak - hence ENOENT is false,
+ * not an error.
+ */
+static int snapshot_is_master_subvol(struct btree_trans *trans, u32 snapshot, bool *ret)
+{
+	*ret = false;
+
+	struct bch_snapshot_tree st;
+	int r = bch2_snapshot_tree_lookup(trans, bch2_snapshot_tree(trans->c, snapshot), &st);
+	if (bch2_err_matches(r, ENOENT))
+		return 0;
+	try(r);
+
+	if (!st.master_subvol)
+		return 0;
+
+	struct bch_subvolume subvol;
+	r = bch2_subvolume_get(trans, le32_to_cpu(st.master_subvol), false, &subvol);
+	if (bch2_err_matches(r, ENOENT))
+		return 0;
+	try(r);
+
+	*ret = le32_to_cpu(subvol.snapshot) == snapshot;
+	return 0;
+}
+
+/*
+ * Which branch wins: see the Principles of Operation.
+ *
+ * data_replicas maxes over @src and claims, not @dst - that would ratchet.
+ * @dst agreeing skips the write, not the climb.
+ */
+static bool inode_opts_merge_into_ancestor(struct bch_inode_unpacked *src,
+					   struct bch_inode_unpacked *dst,
+					   u64 *claimed, bool src_is_master)
+{
+	bool changed = false;
+
+	for (enum inode_opt_id id = 0; id < Inode_opt_nr; id++) {
+		u64 v = bch2_inode_opt_get(src, id);
+		if (!v)
+			continue;
+
+		if (id == Inode_opt_data_replicas)
+			v = max(v, claimed[id]);
+		else if (claimed[id] && !src_is_master)
+			continue;
+
+		if (bch2_inode_opt_get(dst, id) == v)
+			continue;
+
+		bch2_inode_opt_set(dst, id, v);
+		changed = true;
+	}
+
+	return changed;
 }
 
 /*
@@ -204,37 +260,22 @@ static int inode_opt_propagate_one(struct btree_trans *trans, u64 inum,
 	struct bch_inode_unpacked ancestor_inode;
 	bch2_inode_unpack(c, k, &ancestor_inode);
 
-	unsigned claimed;
-	try(inode_opts_claimed_off_path(trans, inum, ancestor, origin_snapshot, &claimed));
+	u64 claimed[Inode_opt_nr];
+	try(inode_opts_claimed_off_path(trans, inum, ancestor, origin_snapshot, claimed));
 
-	bool changed = false;
-	for (enum inode_opt_id id = 0; id < Inode_opt_nr; id++) {
-		u64 v = bch2_inode_opt_get(&src, id);
+	bool src_is_master;
+	try(snapshot_is_master_subvol(trans, origin_snapshot, &src_is_master));
 
-		/*
-		 * An ancestor that already agrees is a reason to skip the
-		 * write, not to stop climbing: the level above may still need
-		 * this, and the value here may have been set here rather than
-		 * propagated from below.
-		 */
-		if (!v ||
-		    (claimed & BIT(id)) ||
-		    bch2_inode_opt_get(&ancestor_inode, id) == v)
-			continue;
-
-		bch2_inode_opt_set(&ancestor_inode, id, v);
-		changed = true;
-	}
+	if (!inode_opts_merge_into_ancestor(&src, &ancestor_inode, claimed, src_is_master))
+		return 0;
 
 	/*
 	 * internal_snapshot_node: modifying the ancestor in place is the whole
 	 * point - the normal update path would copy it down into a leaf, which
 	 * is what we're trying to avoid.
 	 */
-	return changed
-		? bch2_inode_write_flags(trans, &iter, &ancestor_inode,
-					 BTREE_UPDATE_internal_snapshot_node)
-		: 0;
+	return bch2_inode_write_flags(trans, &iter, &ancestor_inode,
+				      BTREE_UPDATE_internal_snapshot_node);
 }
 
 void bch2_logged_op_inode_opt_propagate_to_text(struct printbuf *out, struct bch_fs *c,
