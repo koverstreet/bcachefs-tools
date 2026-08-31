@@ -25,6 +25,13 @@ enum bch_data_update_types {
 #undef x
 };
 
+/* Both scrub types read to check, and must never rewrite what they're checking */
+static inline bool data_update_is_scrub(enum bch_data_update_types type)
+{
+	return type == BCH_DATA_UPDATE_scrub ||
+	       type == BCH_DATA_UPDATE_scrub_no_repair;
+}
+
 /*
  * @target: where the new copy goes. Movers rewriting existing data want the
  * extent's background_target here: unset doesn't mean "no preference", it means
