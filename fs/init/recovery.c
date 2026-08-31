@@ -498,6 +498,13 @@ int bch2_journal_replay(struct bch_fs *c)
 
 	CLASS(btree_trans, trans)(c);
 
+	/*
+	 * Replay runs with BTREE_TRIGGER_norun, so nothing here will charge
+	 * extra_disk_res - but an extents update is required to have somewhere
+	 * to put a charge, and that's cheaper to satisfy than to reason about.
+	 */
+	CLASS(disk_reservation, res)(c);
+
 	darray_for_each(*keys, k) {
 		struct bkey_i *bk = journal_key_k(c, k);
 
@@ -570,7 +577,7 @@ int bch2_journal_replay(struct bch_fs *c)
 		 */
 		ret = c->journal.watermark ||
 		      READ_ONCE(c->btree.cache.nr_self_reclaim) ? -1 :
-			commit_do(trans, NULL, NULL,
+			commit_do(trans, &res.r, NULL,
 				  BCH_TRANS_COMMIT_journal_replay|
 				  BCH_TRANS_COMMIT_no_enospc|
 				  BCH_TRANS_COMMIT_no_skip_noops|
@@ -606,7 +613,7 @@ int bch2_journal_replay(struct bch_fs *c)
 		else
 			bch2_journal_replay_pins_put(j, j->replay_journal_seq_end);
 
-		ret = commit_do(trans, NULL, NULL,
+		ret = commit_do(trans, &res.r, NULL,
 				BCH_TRANS_COMMIT_no_enospc|
 				BCH_TRANS_COMMIT_no_skip_noops|
 				BCH_TRANS_COMMIT_skip_accounting_apply|
