@@ -185,14 +185,22 @@ int __must_check bch2_write_inode(struct bch_fs *c,
 	int ret = lockrestart_do(trans, bch2_write_inode_trans(trans, inode, set, p,
 							       fields, &reconcile_changed));
 
-	if (!ret && reconcile_changed)
-		bch2_reconcile_wakeup(c);
-
 	bch2_fs_fatal_err_on(bch2_err_matches(ret, ENOENT), c,
 			     "%s: inode %llu:%llu not found when updating",
 			     bch2_err_str(ret),
 			     inode_inum(inode).subvol,
 			     inode_inum(inode).inum);
+
+	if (!ret && reconcile_changed) {
+		/*
+		 * Data written before this subvolume branched off is keyed at
+		 * an ancestor snapshot, and takes its options from the inode
+		 * version there: the new options have to be pushed up to reach
+		 * it.
+		 */
+		ret = bch2_inode_opt_propagate(trans, inode_inum(inode));
+		bch2_reconcile_wakeup(c);
+	}
 
 	return ret < 0 ? ret : 0;
 }
