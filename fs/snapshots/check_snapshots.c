@@ -706,6 +706,8 @@ static int snapshot_edge_ptr_available(struct btree_trans *trans,
 	return 0;
 }
 
+static int snapshot_undelete_ancestors(struct btree_trans *, u32);
+
 /*
  * Put a node the accounting says is alive back into the tree.
  *
@@ -713,6 +715,8 @@ static int snapshot_edge_ptr_available(struct btree_trans *trans,
  * intact and only the state field is wrong, so setting it live is the whole
  * repair. bch2_snapshot_node_undelete() is for undoing a splice, and rejects
  * that shape outright.
+ *
+ * Otherwise it relinks through the parent, which has to be live first.
  */
 static int snapshot_undelete_owns_data(struct btree_trans *trans, struct bkey_i_snapshot *u)
 {
@@ -721,14 +725,67 @@ static int snapshot_undelete_owns_data(struct btree_trans *trans, struct bkey_i_
 		return 0;
 	}
 
+	try(snapshot_undelete_ancestors(trans, le32_to_cpu(u->v.parent)));
+
 	return bch2_snapshot_node_undelete(trans, u);
 }
 
 static int snapshot_edge_repair_commit(struct btree_trans *trans)
 {
+	/* the restart below would discard the repair, so land it first */
 	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 	trans->c->snapshots.need_table_rebuild = true;
 	return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+}
+
+/* Highest dead node above @id: the one whose own parent is still in the tree. */
+static int snapshot_topmost_dead_ancestor(struct btree_trans *trans, u32 id, u32 *ret)
+{
+	*ret = 0;
+
+	while (id) {
+		struct bkey_i_snapshot s;
+		bool exists;
+		try(snapshot_lookup_key_absent_ok(trans, id, &s, &exists));
+
+		/* a missing parent is undelete's to report, against the node naming it */
+		if (!exists ||
+		    bch2_snapshot_state_compat(&s.v) != SNAPSHOT_STATE_deleted)
+			break;
+
+		*ret = id;
+
+		u32 parent = le32_to_cpu(s.v.parent);
+		if (parent <= id)
+			break;
+		id = parent;
+	}
+
+	return 0;
+}
+
+/*
+ * Undelete relinks through the parent, so refusing a fully condemned chain
+ * turns a repairable filesystem into emergency read-only.
+ *
+ * One node per commit: the chain is unbounded.
+ *
+ * Nothing corroborates these ancestors - they are scaffolding, and stay only
+ * because the node below them ends up live. depth and the skiplists are left
+ * stale for snapshot_bad_depth/snapshot_bad_skiplist.
+ */
+static int snapshot_undelete_ancestors(struct btree_trans *trans, u32 id)
+{
+	u32 topmost;
+	try(snapshot_topmost_dead_ancestor(trans, id, &topmost));
+	if (!topmost)
+		return 0;
+
+	struct bkey_i_snapshot *u =
+		errptr_try(bch2_bkey_get_mut_typed(trans, BTREE_ID_snapshots,
+						   POS(0, topmost), 0, snapshot));
+	try(snapshot_undelete_owns_data(trans, u));
+	return snapshot_edge_repair_commit(trans);
 }
 
 /*
