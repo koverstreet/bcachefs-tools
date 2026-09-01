@@ -322,7 +322,8 @@ struct bkey_i *bch2_damage_keys_merge(struct btree_trans *trans, struct bpos pos
  */
 int bch2_inode_has_damage(struct btree_trans *trans, u64 inum, u32 snapshot)
 {
-	CLASS(btree_iter, iter)(trans, BTREE_ID_damage, SPOS(0, inum, snapshot), 0);
+	CLASS(btree_iter, iter)(trans, BTREE_ID_damage,
+				SPOS(0, inum, snapshot), BTREE_ITER_nopreserve);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 	return k.k->type == KEY_TYPE_damage;
@@ -343,7 +344,8 @@ int bch2_damage_accumulate(struct btree_trans *trans, u64 inum, u32 snapshot,
 	struct bch_fs *c = trans->c;
 
 	do {
-		CLASS(btree_iter, iter)(trans, BTREE_ID_damage, SPOS(0, inum, snapshot), 0);
+		CLASS(btree_iter, iter)(trans, BTREE_ID_damage,
+				SPOS(0, inum, snapshot), BTREE_ITER_nopreserve);
 		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
 		if (k.k->type != KEY_TYPE_damage)
