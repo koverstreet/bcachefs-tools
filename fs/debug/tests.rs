@@ -76,10 +76,17 @@ fn delete_test_keys(fs: &Fs) -> TestRet {
 }
 
 fn insert_cookie(fs: &Fs, btree: c::btree_id, k: &mut BkeyCookie) -> TestRet {
+    /*
+     * A cookie has no pointers, so nothing can charge trans->extra_disk_res
+     * for it - but an extents leaf update is required to have somewhere to
+     * put a charge regardless of the key it's inserting.
+     */
+    let res = DiskReservation::new(fs);
+
     fs.btree_insert(
         btree,
         k,
-        None,
+        Some(&res),
         CommitOpts::new(),
         BtreeIterFlags::empty(),
     )
@@ -337,7 +344,9 @@ fn test_extent_overwrite_all(fs: &Fs, _nr: u64) -> TestRet {
 
 fn insert_test_overlapping_extent(fs: &Fs, inum: u64, start: u64, len: u32, snapid: u32) -> TestRet {
     let trans = BtreeTrans::new(fs);
-    commit_do(&trans, None, NO_ENOSPC, |t| {
+    let res = DiskReservation::new(fs);
+
+    commit_do(&trans, Some(&res), NO_ENOSPC, |t| {
         let mut k = trans_cookie_alloc(&t)?;
         k.k_mut().p.inode = inum;
         k.k_mut().p.offset = start + len as u64;
