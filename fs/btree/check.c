@@ -1255,26 +1255,33 @@ int bch2_gc_gens(struct bch_fs *c)
 	 * accounted durability, and charges extra_disk_res for those - so the
 	 * commit needs a reservation to put the charge in. Released per key so
 	 * it can't accumulate across the walk.
+	 *
+	 * Scoped to just this walk: nothing below uses it, and @err is reachable
+	 * from above it - a goto into the scope of a __cleanup__ variable, past
+	 * its initializer, is a clang error and would run the destructor on an
+	 * uninitialized res.
 	 */
-	CLASS(disk_reservation, res)(c);
+	{
+		CLASS(disk_reservation, res)(c);
 
-	for (unsigned i = 0; i < BTREE_ID_NR; i++)
-		if (btree_type_has_data_ptrs(i)) {
-			c->gc_gens.pos = BBPOS(i, POS_MIN);
+		for (unsigned i = 0; i < BTREE_ID_NR; i++)
+			if (btree_type_has_data_ptrs(i)) {
+				c->gc_gens.pos = BBPOS(i, POS_MIN);
 
-			ret = bch2_trans_run(c,
-				for_each_btree_key_commit(trans, iter, i,
-						POS_MIN,
-						BTREE_ITER_prefetch|BTREE_ITER_all_snapshots,
-						k,
-						&res.r, NULL,
-						BCH_TRANS_COMMIT_no_enospc, ({
-					bch2_disk_reservation_put(c, &res.r);
-					gc_btree_gens_key(trans, &iter, k);
-				})));
-			if (ret)
-				goto err;
-		}
+				ret = bch2_trans_run(c,
+					for_each_btree_key_commit(trans, iter, i,
+							POS_MIN,
+							BTREE_ITER_prefetch|BTREE_ITER_all_snapshots,
+							k,
+							&res.r, NULL,
+							BCH_TRANS_COMMIT_no_enospc, ({
+						bch2_disk_reservation_put(c, &res.r);
+						gc_btree_gens_key(trans, &iter, k);
+					})));
+				if (ret)
+					goto err;
+			}
+	}
 
 	struct bch_dev *ca = NULL;
 	ret = bch2_trans_run(c,
