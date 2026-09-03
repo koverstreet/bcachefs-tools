@@ -689,6 +689,7 @@ struct journal_seq_blacklist_table {
 	x(btree_write_buffer)						\
 	x(btree_node_scrub)						\
 	x(async_recovery_passes)					\
+	x(vfs_check_dirents)						\
 	x(ioctl_data)
 
 enum bch_write_ref {
