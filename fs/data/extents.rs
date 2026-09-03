@@ -165,6 +165,42 @@ pub fn bkey_ptrs(k: &c::bkey_i) -> ExtentPtrIter<'_> {
     bkey_ptrs_sc(&BkeyValSC::from_bkey_i(k))
 }
 
+/// Read-only access to an entry's `ptr` union field.
+///
+/// The caller must have checked that this entry is a ptr, i.e.
+/// `extent_entry_type(entry) == BCH_EXTENT_ENTRY_ptr`.
+pub fn entry_ptr(entry: &c::bch_extent_entry) -> &c::bch_extent_ptr {
+    unsafe { extent_union_field_ref(&entry.ptr) }
+}
+
+/// Read-only access to an entry's `crc32` union field.
+///
+/// The caller must have checked that this entry is a crc32.
+pub fn entry_crc32(entry: &c::bch_extent_entry) -> &c::bch_extent_crc32 {
+    unsafe { extent_union_field_ref(&entry.crc32) }
+}
+
+/// Read-only access to an entry's `crc64` union field.
+///
+/// The caller must have checked that this entry is a crc64.
+pub fn entry_crc64(entry: &c::bch_extent_entry) -> &c::bch_extent_crc64 {
+    unsafe { extent_union_field_ref(&entry.crc64) }
+}
+
+/// Read-only access to an entry's `crc128` union field.
+///
+/// The caller must have checked that this entry is a crc128.
+pub fn entry_crc128(entry: &c::bch_extent_entry) -> &c::bch_extent_crc128 {
+    unsafe { extent_union_field_ref(&entry.crc128) }
+}
+
+/// Read-only access to an entry's `stripe_ptr` union field.
+///
+/// The caller must have checked that this entry is a stripe_ptr.
+pub fn entry_stripe_ptr(entry: &c::bch_extent_entry) -> &c::bch_extent_stripe_ptr {
+    unsafe { extent_union_field_ref(&entry.stripe_ptr) }
+}
+
 pub struct ExtentEntryIterMut<'a> {
     fs:       &'a Fs,
     cur:      *mut c::bch_extent_entry,
