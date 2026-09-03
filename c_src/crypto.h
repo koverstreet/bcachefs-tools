@@ -10,7 +10,7 @@ struct bch_encrypted_key;
 
 char *read_passphrase(const char *);
 
-struct bch_key derive_passphrase(struct bch_sb_field_crypt *, const char *);
+int derive_passphrase(struct bch_sb_field_crypt *, const char *, struct bch_key *);
 bool bch2_sb_is_encrypted(struct bch_sb *);
 bool bch2_passphrase_check(struct bch_sb *, const char *,
 			   struct bch_key *, struct bch_encrypted_key *);

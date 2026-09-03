@@ -141,7 +141,7 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
     let new_passphrase = Passphrase::ask_for_new_passphrase()
         .context("reading new passphrase")?;
 
-    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), raw_key);
+    let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), raw_key)?;
 
     unsafe {
         set_crypt_key(&fs, encrypted_key);

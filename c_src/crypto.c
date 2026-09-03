@@ -55,30 +55,54 @@ char *read_passphrase(const char *prompt)
 	return buf;
 }
 
-struct bch_key derive_passphrase(struct bch_sb_field_crypt *crypt,
-				 const char *passphrase)
+int derive_passphrase(struct bch_sb_field_crypt *crypt,
+		      const char *passphrase,
+		      struct bch_key *out)
 {
 	const unsigned char salt[] = "bcache";
-	struct bch_key key;
 	int ret;
 
 	switch (BCH_CRYPT_KDF_TYPE(crypt)) {
-	case BCH_KDF_SCRYPT:
+	case BCH_KDF_SCRYPT: {
+		/*
+		 * Stored as log2, so r and p of 1 are legal and only N can be
+		 * out of range: scrypt requires N >= 2. All-zero parameters
+		 * mean nothing ever initialized them - the key in this
+		 * superblock was never wrapped with a passphrase.
+		 */
+		u64 n_log = BCH_KDF_SCRYPT_N(crypt);
+		u64 r = 1ULL << BCH_KDF_SCRYPT_R(crypt);
+		u64 p = 1ULL << BCH_KDF_SCRYPT_P(crypt);
+
+		if (!n_log) {
+			fprintf(stderr,
+				"cannot derive a key from a passphrase: this superblock has no scrypt\n"
+				"parameters (N=1, r=%llu, p=%llu; N must be at least 2). Its master key\n"
+				"is stored unencrypted, and whatever is setting a passphrase did not\n"
+				"initialize the KDF parameters first.\n",
+				r, p);
+			return -BCH_ERR_EINVAL_crypt_no_kdf_params;
+		}
+
+		errno = 0;
 		ret = crypto_pwhash_scryptsalsa208sha256_ll(
 			(void *) passphrase, strlen(passphrase),
 			salt, sizeof(salt),
-			1ULL << BCH_KDF_SCRYPT_N(crypt),
-			1ULL << BCH_KDF_SCRYPT_R(crypt),
-			1ULL << BCH_KDF_SCRYPT_P(crypt),
-			(void *) &key, sizeof(key));
-		if (ret)
-			die("scrypt error: %i", ret);
+			1ULL << n_log, r, p,
+			(void *) out, sizeof(*out));
+		if (ret) {
+			fprintf(stderr,
+				"scrypt returned %i (%m) deriving a key with N=%llu, r=%llu, p=%llu\n",
+				ret, 1ULL << n_log, r, p);
+			return -BCH_ERR_crypt_kdf_failed;
+		}
 		break;
+	}
 	default:
 		die("unknown kdf type %llu", BCH_CRYPT_KDF_TYPE(crypt));
 	}
 
-	return key;
+	return 0;
 }
 
 bool bch2_sb_is_encrypted(struct bch_sb *sb)
@@ -102,7 +126,9 @@ bool bch2_passphrase_check(struct bch_sb *sb, const char *passphrase,
 	if (!bch2_key_is_encrypted(sb_key))
 		die("filesystem does not have encryption key");
 
-	*passphrase_key = derive_passphrase(crypt, passphrase);
+	int ret = derive_passphrase(crypt, passphrase, passphrase_key);
+	if (ret)
+		die("error deriving key from passphrase: %s", bch2_err_str(ret));
 
 	bch2_chacha20(passphrase_key, __bch2_sb_key_nonce(sb), sb_key, sizeof(*sb_key));
 
@@ -193,7 +219,10 @@ void bch_crypt_update_passphrase(
 		SET_BCH_KDF_SCRYPT_P(crypt, ilog2(16));
 	}
 
-	struct bch_key passphrase_key = derive_passphrase(crypt, new_passphrase);
+	struct bch_key passphrase_key;
+	int ret = derive_passphrase(crypt, new_passphrase, &passphrase_key);
+	if (ret)
+		die("error deriving key from passphrase: %s", bch2_err_str(ret));
 
 	bch2_chacha20(&passphrase_key, __bch2_sb_key_nonce(sb), &new_key, sizeof(new_key));
 

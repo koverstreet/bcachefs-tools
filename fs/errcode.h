@@ -609,7 +609,9 @@
 					insufficient_devices_data_intact, 587)	\
 	x(BCH_ERR_insufficient_devices_to_start,				\
 					insufficient_devices_data_lost, 588)	\
-	x(EIO,				injected_logged_op_fail, 589)
+	x(EIO,				injected_logged_op_fail, 589)		\
+	x(EINVAL,			EINVAL_crypt_no_kdf_params, 590)	\
+	x(EIO,				crypt_kdf_failed, 591)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,

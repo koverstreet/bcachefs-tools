@@ -387,10 +387,19 @@ impl Passphrase {
         Ok(Self(CString::new(passphrase.trim_end_matches('\n'))?))
     }
 
-    fn derive(&self, crypt: &bch_sb_field_crypt) -> bch_key {
+    /// Errors if the superblock's KDF parameters are unusable - notably when
+    /// the key was never wrapped with a passphrase, so nothing ever set them.
+    fn derive(&self, crypt: &bch_sb_field_crypt) -> Result<bch_key> {
         let crypt_ptr = (crypt as *const bch_sb_field_crypt).cast_mut();
+        let mut key = bch_key::default();
 
-        unsafe { bch_bindgen::c::derive_passphrase(crypt_ptr, self.get().as_ptr()) }
+        let ret = unsafe {
+            bch_bindgen::c::derive_passphrase(crypt_ptr, self.get().as_ptr(), &mut key)
+        };
+        ensure!(ret == 0, "deriving key from passphrase: {}",
+                crate::wrappers::bch_err_str(ret));
+
+        Ok(key)
     }
 
     /// Re-encrypt a filesystem key with this passphrase.
@@ -399,11 +408,11 @@ impl Passphrase {
         &self,
         sb: &bch_sb_handle,
         key: bch_key,
-    ) -> bch_encrypted_key {
+    ) -> Result<bch_encrypted_key> {
         let crypt = sb.sb().crypt().expect("called on encrypted fs");
         let mut new_key = bch_encrypted_key::new_unencrypted(key);
-        
-        let mut passphrase_key: bch_key = self.derive(crypt);
+
+        let mut passphrase_key: bch_key = self.derive(crypt)?;
 
         unsafe {
             bch2_chacha20(
@@ -414,7 +423,7 @@ impl Passphrase {
             )
         };
 
-        new_key
+        Ok(new_key)
     }
 
     pub fn check(&self, sb: &bch_sb_handle) -> Option<PassphraseCorrect> {
@@ -427,7 +436,13 @@ impl Passphrase {
             "sb_key should be encrypted when calling Passphrase::check",
         );
 
-        let mut passphrase_key: bch_key = self.derive(crypt);
+        // The key is encrypted (asserted above), so a passphrase was set on
+        // it, so the KDF parameters exist. Failing here means a corrupt
+        // superblock, not a wrong passphrase - returning None would report it
+        // as the latter.
+        let mut passphrase_key: bch_key = self
+            .derive(crypt)
+            .expect("sb key is encrypted, so its KDF parameters must be usable");
 
         let mut cleartext_sb_key = crypt.key().clone();
         unsafe {
