@@ -82,6 +82,23 @@ struct bch_inode_info {
 	 */
 	struct bch_devs_mask	ei_devs_need_flush;
 
+	/*
+	 * Flush sequencing for bch2_inode_flush_nocow_writes(): one sequence
+	 * number per flush unit, reserved under ei_flush_lock in the same
+	 * section as the mask extraction; ei_flush_seq_completed advances
+	 * only in seq order, staging out-of-order completions on
+	 * ei_flush_done. An fsync snapshots the issued count at entry and
+	 * waits until the contiguous completed count reaches the snapshot -
+	 * concurrent fsyncs are not excluded, but none may return while
+	 * flushes issued before its entry (possibly holding bits it needed)
+	 * are still in flight. See fs/vfs/io.c for the full protocol.
+	 */
+	spinlock_t		ei_flush_lock;
+	struct list_head	ei_flush_done;
+	u64			ei_flush_seq_issued;
+	u64			ei_flush_seq_completed;
+	struct closure_waitlist	ei_flush_wait;
+
 	/* copy of inode in btree: */
 	struct bch_inode_unpacked ei_inode;
 
