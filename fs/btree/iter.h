@@ -953,7 +953,13 @@ static inline struct bkey_s_c __bch2_bkey_get_typed(struct btree_iter *iter,
 static inline void __bkey_val_copy_pad(void *dst_v, unsigned dst_size, struct bkey_s_c src_k)
 {
 	unsigned b = min_t(unsigned, dst_size, bkey_val_bytes(src_k.k));
-	memcpy(dst_v, src_k.v, b);
+	/*
+	 * __bch2_bkey_get_i_typed() passes &bkey_i->v, and struct bch_val is
+	 * zero length: the bytes belong to the caller's bkey_i_<type>, which
+	 * fortify cannot see through a struct bkey_i pointer. b is clamped to
+	 * dst_size above, so the write stays within what the caller declared.
+	 */
+	unsafe_memcpy(dst_v, src_k.v, b, "bkey value, sized by the caller");
 	if (unlikely(b < dst_size))
 		memset(dst_v + b, 0, dst_size - b);
 }
