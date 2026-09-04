@@ -1909,9 +1909,11 @@ static int bch2_reconcile_thread(void *arg)
 			      writepoint_ptr(&c->allocator.reconcile_write_point),
 			      true);
 
-	while (!kthread_should_stop() && !do_reconcile(&ctxt))
+	int ret = 0;
+	while (!kthread_should_stop() && !(ret = do_reconcile(&ctxt)))
 		;
 
+	WRITE_ONCE(r->thread_exit_ret, ret);
 	return 0;
 }
 
@@ -1990,14 +1992,19 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 
 	prt_newline(out);
 
-	if (t) {
+	int exit_ret = READ_ONCE(c->reconcile.thread_exit_ret);
+	if (exit_ret) {
+		prt_printf(out, "Reconcile thread exited: %s\n", bch2_err_str(exit_ret));
+	} else if (t) {
 		prt_str(out, "Reconcile thread backtrace:\n");
 		guard(printbuf_indent)(out);
 		bch2_prt_task_backtrace(out, t, 0, GFP_KERNEL);
-		put_task_struct(t);
 	} else {
 		prt_str(out, "Reconcile thread not running\n");
 	}
+
+	if (t)
+		put_task_struct(t);
 }
 
 __cold void bch2_reconcile_scan_pending_to_text(struct printbuf *out, struct bch_fs *c)
@@ -2049,6 +2056,7 @@ int bch2_reconcile_start(struct bch_fs *c)
 	if (ret)
 		return ret;
 
+	WRITE_ONCE(c->reconcile.thread_exit_ret, 0);
 	get_task_struct(p);
 	rcu_assign_pointer(c->reconcile.thread, p);
 	wake_up_process(p);

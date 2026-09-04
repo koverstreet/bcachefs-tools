@@ -11,6 +11,12 @@
 
 struct bch_fs_reconcile {
 	struct task_struct __rcu	*thread;
+	/*
+	 * @thread being set means we started one and haven't stopped it, not
+	 * that it's running: it also exits on its own if do_reconcile() fails.
+	 * Nonzero iff it did.
+	 */
+	int				thread_exit_ret;
 	u32				kick;
 
 	bool				running;
