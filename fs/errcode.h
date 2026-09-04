@@ -611,7 +611,8 @@
 					insufficient_devices_data_lost, 588)	\
 	x(EIO,				injected_logged_op_fail, 589)		\
 	x(EINVAL,			EINVAL_crypt_no_kdf_params, 590)	\
-	x(EIO,				crypt_kdf_failed, 591)
+	x(EIO,				crypt_kdf_failed, 591)			\
+	x(0,				reconcile_scan_stop, 592)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,
