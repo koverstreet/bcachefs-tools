@@ -331,17 +331,24 @@ impl Passphrase {
         let waited = crate::prompt::wait(stdin().as_fd(), None, watch);
 
         let mut line = Zeroizing::new(String::new());
-        let res = match waited {
-            Ok(Waited::Readable) => stdin().read_line(&mut line).map(|_| ()),
-            _ => Ok(()),
+        let read = match waited {
+            Ok(Waited::Readable) => stdin().read_line(&mut line),
+            _ => Ok(0),
         };
 
         termios::tcsetattr(stdin(), termios::OptionalActions::Flush, &old)?;
         eprintln!();
-        res?;
+        let read = read?;
 
         match waited? {
-            Waited::Readable => Ok(Some(Self::from_line(&line)?)),
+            Waited::Readable => {
+                // End of file, not an empty passphrase: stdin closed, or input
+                // that arrived before the prompt and was discarded by the flush
+                // above. Calling that a wrong passphrase sends whoever hits it
+                // looking for the wrong thing entirely.
+                ensure!(read > 0, "no passphrase read: end of file on stdin");
+                Ok(Some(Self::from_line(&line)?))
+            }
             // Moot and Timeout can't arrive: no timeout is passed, and nothing
             // withdraws a passphrase prompt.
             _ => Ok(None),
@@ -369,9 +376,14 @@ impl Passphrase {
         info!("Trying to read passphrase from stdin...");
 
         let mut line = Zeroizing::new(String::new());
-        stdin().read_line(&mut line)?;
+        // Zero bytes is end of file, not an empty passphrase: whoever piped us
+        // nothing would otherwise be told their passphrase was wrong.
+        ensure!(
+            stdin().read_line(&mut line)? > 0,
+            "no passphrase read: end of file on stdin"
+        );
 
-        Ok(Self(CString::new(line.trim_end_matches('\n'))?))
+        Self::from_line(&line)
     }
 
     pub fn read_from_file(passphrase_file: impl AsRef<Path>) -> Result<Self> {
@@ -384,7 +396,7 @@ impl Passphrase {
 
         let passphrase = Zeroizing::new(fs::read_to_string(passphrase_file)?);
 
-        Ok(Self(CString::new(passphrase.trim_end_matches('\n'))?))
+        Self::from_line(&passphrase)
     }
 
     /// Errors if the superblock's KDF parameters are unusable - notably when
