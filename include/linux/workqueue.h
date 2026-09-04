@@ -120,6 +120,9 @@ extern struct workqueue_struct *system_long_wq;
 extern struct workqueue_struct *system_unbound_wq;
 extern struct workqueue_struct *system_freezable_wq;
 
+/* 6.17 renamed the unbound queue; bcachefs uses the new name: */
+#define system_dfl_wq	system_unbound_wq
+
 extern struct workqueue_struct *
 alloc_workqueue(const char *fmt, unsigned int flags,
 		int max_active, ...) __printf(1, 4);

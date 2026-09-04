@@ -55,11 +55,16 @@
 #include <linux/zstd.h>
 #include <linux/unicode.h>
 
-/* WQ_PERCPU is 6.17+; before that, per-cpu was the unflagged default: */
+/*
+ * WQ_PERCPU and system_dfl_wq are 6.17+ (128ea9f6ccfb): before that, per-cpu
+ * was the unflagged default and the unbound queue was system_unbound_wq. We
+ * support back to 6.16, so both need an alias there.
+ */
 #ifdef __KERNEL__
 #include <linux/version.h>
 #if LINUX_VERSION_CODE < KERNEL_VERSION(6,17,0)
 #define WQ_PERCPU	0
+#define system_dfl_wq	system_unbound_wq
 #endif
 #endif
 

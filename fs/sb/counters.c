@@ -118,7 +118,7 @@ static void bch2_sb_counters_work(struct work_struct *work)
 	for (unsigned i = 0; i < BCH_COUNTER_NR; i++)
 		c->recent[0][i] = percpu_u64_get(&c->now[i]);
 
-	queue_delayed_work(system_unbound_wq, &c->work, HZ / 2);
+	queue_delayed_work(system_dfl_wq, &c->work, HZ / 2);
 }
 
 __cold void bch2_sb_recent_counters_to_text(struct printbuf *out, struct bch_fs_counters *c)
@@ -165,7 +165,7 @@ int bch2_fs_counters_init(struct bch_fs *c)
 
 int bch2_fs_counters_init_late(struct bch_fs *c)
 {
-	queue_delayed_work(system_unbound_wq, &c->counters.work, HZ / 2);
+	queue_delayed_work(system_dfl_wq, &c->counters.work, HZ / 2);
 	return 0;
 }
 

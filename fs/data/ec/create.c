@@ -1634,7 +1634,7 @@ static void ec_old_stripe_read(struct bch_fs *c, struct ec_stripe_new *s)
 	 * Not stripe_create_wq: create waits on the fold, so running them on
 	 * the same workqueue would make it depend on itself.
 	 */
-	continue_at(&s->old_stripe.io, ec_old_stripe_fold, system_unbound_wq);
+	continue_at(&s->old_stripe.io, ec_old_stripe_fold, system_dfl_wq);
 }
 
 static int stripe_reuse(struct btree_trans *trans, struct ec_stripe_new *s)

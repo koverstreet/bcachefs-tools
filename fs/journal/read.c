@@ -976,7 +976,7 @@ static int journal_retry_full_read(struct bch_fs *c, struct journal_list *jlist)
 
 		closure_call(&ca->journal.read,
 			     bch2_journal_read_device,
-			     system_unbound_wq,
+			     system_dfl_wq,
 			     &retry_jlist.cl);
 	}
 
@@ -1158,7 +1158,7 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 					  BCH_DEV_READ_REF_journal_read))
 			closure_call(&ca->journal.read,
 				     bch2_journal_read_device,
-				     system_unbound_wq,
+				     system_dfl_wq,
 				     &jlist.cl);
 		else
 			set_bit(JOURNAL_degraded, &c->journal.flags);
