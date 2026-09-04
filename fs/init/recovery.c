@@ -1168,7 +1168,8 @@ int bch2_fs_recovery(struct bch_fs *c)
 
 	if (ret) {
 		CLASS(bch_log_msg, msg)(c);
-		prt_printf(&msg.m, "error in recovery: %s\n", bch2_err_str(ret));
+		prt_printf(&msg.m, "unexpected error in %s(): %s\n",
+			   __func__, bch2_err_str(ret));
 		bch2_fs_emergency_read_only(c, &msg.m);
 	}
 	return ret;
