@@ -268,8 +268,12 @@ fn reserve_extents(file: &fs::File, block_size: u32, size: u64) -> Result<Vec<CR
 }
 
 /// Find space within the reserved extents for the superblock.
-fn find_superblock_space(extents: &[CRange], sb_size: u32, bucket_size: u32) -> Result<(u64, u64)> {
-    let bucket_bytes = (bucket_size as u64) << 9;
+///
+/// @bucket_bytes is the bucket_size option, which is in bytes - only the
+/// superblock member field it maps to is in sectors (OPT_SB_FIELD_SECTORS).
+/// @sb_size is in sectors.
+fn find_superblock_space(extents: &[CRange], sb_size: u32, bucket_bytes: u32) -> Result<(u64, u64)> {
+    let bucket_bytes = bucket_bytes as u64;
     let sb_bytes = (sb_size as u64) << 9;
 
     for r in extents {
