@@ -357,10 +357,10 @@ static struct open_bucket *try_alloc_bucket_pos(struct btree_trans *trans,
 	u8 gen;
 	u64 journal_seq_empty;
 	int ret = bch2_check_freespace_key_async(trans, &iter, &gen, &journal_seq_empty);
-	if (ret < 0)
-		return ERR_PTR(ret);
-	if (ret)
+	if (ret == -BCH_ERR_bucket_not_allocatable)
 		return NULL;
+	if (ret)
+		return ERR_PTR(ret);
 
 	if (!may_alloc_bucket_journal_seq(c, req, journal_seq_empty))
 		return NULL;

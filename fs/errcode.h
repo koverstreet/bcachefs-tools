@@ -623,7 +623,8 @@
 	x(0,				fc_continue, 600)			\
 	x(0,				fc_break, 601)			\
 	x(0,				cached_ptr_stale, 602)			\
-	x(BCH_ERR_no_btree_node,	no_btree_node_shallow, 603)
+	x(BCH_ERR_no_btree_node,	no_btree_node_shallow, 603)		\
+	x(0,				bucket_not_allocatable, 604)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,
