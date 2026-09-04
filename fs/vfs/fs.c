@@ -3269,8 +3269,12 @@ static int bch2_fs_reconfigure(struct fs_context *fc)
 
 			sb->s_flags |= SB_RDONLY;
 		} else {
+			/* __bch2_fs_read_write() gates reconcile on this: */
+			c->opts.read_only = false;
+
 			ret = bch2_fs_read_write(c);
 			if (ret) {
+				c->opts.read_only = true;
 				/* bch_err() says which filesystem, errorfc() reaches
 				 * the caller; the throw below discards the errcode. */
 				bch_err(c, "error going read-write: %s", bch2_err_str(ret));
