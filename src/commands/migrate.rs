@@ -220,15 +220,25 @@ fn reserve_new_fs_space(
     }
     let bcachefs_inum = meta.ino();
 
+    // With --force this may be a reservation from a run that already got as far
+    // as format(): those blocks hold bcachefs metadata, and releasing them to
+    // the old filesystem's allocator would corrupt both filesystems. Roll back
+    // to what we opened, not to empty.
+    let orig_len = meta.len();
+
     // A tenth of the device is a fudge factor for the new filesystem's
     // metadata: computing what we really need means accounting for inodes,
     // extents (which depends on fragmentation) and alloc info.
     let extents = reserve_extents(&file, block_size, dev_size / 10);
     if extents.is_err() {
-        if let Err(e) = file.set_len(0) {
-            eprintln!("Error releasing {}: {} - its space is still in use", file_path, e);
-        } else if !force {
-            let _ = fs::remove_file(file_path);
+        let cleanup = if orig_len == 0 {
+            fs::remove_file(file_path)
+        } else {
+            file.set_len(orig_len)
+        };
+
+        if let Err(e) = cleanup {
+            eprintln!("Error releasing space in {}: {} - it is still in use", file_path, e);
         }
     }
 
