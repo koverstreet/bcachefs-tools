@@ -621,7 +621,8 @@
 	x(0,				readdir_buf_full, 598)			\
 	x(0,				readdir_skip, 599)			\
 	x(0,				fc_continue, 600)			\
-	x(0,				fc_break, 601)
+	x(0,				fc_break, 601)			\
+	x(0,				cached_ptr_stale, 602)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,

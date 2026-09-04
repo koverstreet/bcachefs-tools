@@ -201,7 +201,7 @@ int __bch2_bucket_ref_update(struct btree_trans *trans, struct bch_dev *ca,
 			c->disk_sb.sb->compat[0] &= ~cpu_to_le64(BIT_ULL(BCH_COMPAT_no_stale_ptrs));
 			bch2_write_super(c);
 		}
-		return 1;
+		return -BCH_ERR_cached_ptr_stale;
 	}
 
 	if (unlikely(b_gen != ptr->generation)) {
@@ -515,10 +515,9 @@ static int __trigger_extent(struct btree_trans *trans,
 	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
 		s64 disk_sectors = 0;
 		int ret = bch2_trigger_pointer(trans, btree_id, level, k, p, entry, &disk_sectors, flags);
-		if (ret < 0)
+		bool stale = bch2_err_matches(ret, BCH_ERR_cached_ptr_stale);
+		if (ret && !stale)
 			return ret;
-
-		bool stale = ret > 0;
 
 		if (p.ptr.cached && stale)
 			continue;
