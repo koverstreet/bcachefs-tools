@@ -3,6 +3,13 @@
 // bcachefs migrate — convert an existing filesystem to bcachefs in place.
 //
 // Reimplements c_src/cmd_migrate.c in Rust.
+//
+// The reservation file is what makes this safe: everything bcachefs writes
+// lands in blocks the old filesystem has allocated to /bcachefs, so the old
+// filesystem stays consistent and mountable throughout. That also fixes where
+// cleanup is allowed — before format() the reservation is disposable, after it
+// the file is what keeps the old filesystem's allocator away from blocks
+// bcachefs is using, and removing it would corrupt both filesystems.
 
 use std::ffi::{CString, c_char, c_ulong};
 use std::fs;
@@ -20,6 +27,7 @@ use crate::commands::format::take_opt_value;
 use crate::commands::opts::{bch_opt_lookup_negated, parse_opt_val};
 use crate::key::Passphrase;
 use crate::commands::format_util::{format_opts_default, DevOpts};
+use crate::util::fmt_bytes_human;
 use crate::wrappers::super_io;
 
 // ---- C shim declarations ----
@@ -184,8 +192,8 @@ unsafe fn mark_unreserved_space(fs: *mut c::bch_fs, extents: &[CRange]) {
 
 /// Reserve space for bcachefs metadata file, return extents and inode number.
 ///
-/// Tries to reserve as much space as possible on the host filesystem, starting
-/// from dev_size and halving on ENOSPC until we get at least 1/10th of the device.
+/// Nothing has been written to the block device yet, so on failure we put the
+/// host filesystem back the way we found it rather than sitting on the space.
 fn reserve_new_fs_space(
     file_path: &str,
     block_size: u32,  // in sectors
@@ -212,27 +220,39 @@ fn reserve_new_fs_space(
     }
     let bcachefs_inum = meta.ino();
 
-    let min_size = dev_size / 10;
-    let mut size = dev_size;
-
-    loop {
-        match rustix::fs::fallocate(
-            &file,
-            rustix::fs::FallocateFlags::empty(),
-            0,
-            size,
-        ) {
-            Ok(()) => break,
-            Err(e) => {
-                if e != rustix::io::Errno::NOSPC || size <= min_size {
-                    bail!("Error reserving space ({} bytes) for bcachefs metadata: {}", size, e);
-                }
-                size /= 2;
-                size = size.max(min_size);
-            }
+    // A tenth of the device is a fudge factor for the new filesystem's
+    // metadata: computing what we really need means accounting for inodes,
+    // extents (which depends on fragmentation) and alloc info.
+    let extents = reserve_extents(&file, block_size, dev_size / 10);
+    if extents.is_err() {
+        if let Err(e) = file.set_len(0) {
+            eprintln!("Error releasing {}: {} - its space is still in use", file_path, e);
+        } else if !force {
+            let _ = fs::remove_file(file_path);
         }
     }
-    rustix::fs::fsync(&file).map_err(|e| anyhow!("fsync: {}", e))?;
+
+    Ok((extents?, bcachefs_inum))
+}
+
+/// fallocate() the reservation and return the physical extents backing it.
+fn reserve_extents(file: &fs::File, block_size: u32, size: u64) -> Result<Vec<CRange>> {
+    let vfs = rustix::fs::fstatvfs(file).map_err(|e| anyhow!("fstatvfs: {}", e))?;
+    let free = vfs.f_bavail.saturating_mul(vfs.f_frsize);
+
+    // fallocate() has no rollback: when it runs out of space partway through it
+    // keeps everything it allocated, and on XFS flags it as explicit
+    // preallocation so nothing reclaims it in the background. Our caller
+    // truncates on error.
+    rustix::fs::fallocate(file, rustix::fs::FallocateFlags::empty(), 0, size)
+        .map_err(|e| if e == rustix::io::Errno::NOSPC {
+            anyhow!("Not enough free space to migrate: bcachefs metadata needs {}, {} available",
+                    fmt_bytes_human(size), fmt_bytes_human(free))
+        } else {
+            anyhow!("Error reserving space ({} bytes) for bcachefs metadata: {}", size, e)
+        })?;
+
+    rustix::fs::fsync(file).map_err(|e| anyhow!("fsync: {}", e))?;
 
     let extents = fiemap_iter(file.as_fd())?;
 
@@ -244,7 +264,7 @@ fn reserve_new_fs_space(
         }
     }
 
-    Ok((extents, bcachefs_inum))
+    Ok(extents)
 }
 
 /// Find space within the reserved extents for the superblock.
