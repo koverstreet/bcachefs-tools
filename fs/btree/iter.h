@@ -1043,6 +1043,12 @@ u32 bch2_trans_begin(struct btree_trans *);
 			break;							\
 										\
 		_ret3 = (_do);							\
+		if (_ret3 == -BCH_ERR_fc_continue)				\
+			_ret3 = 0;						\
+		if (_ret3 == -BCH_ERR_fc_break) {				\
+			_ret3 = 0;						\
+			break;							\
+		}								\
 		if (_ret3)							\
 			continue;						\
 										\
@@ -1181,6 +1187,12 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 			break;						\
 									\
 		_ret3 = bkey_err(_k) ?: (_do);				\
+		if (_ret3 == -BCH_ERR_fc_continue)			\
+			_ret3 = 0;					\
+		if (_ret3 == -BCH_ERR_fc_break) {			\
+			_ret3 = 0;					\
+			break;						\
+		}							\
 		if (!_ret3)						\
 			bch2_trans_verify_not_restarted(_trans, _restart_count);\
 	} while (bch2_err_matches(_ret3, BCH_ERR_transaction_restart) ||\

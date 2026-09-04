@@ -388,15 +388,16 @@ static int bch2_copygc_get_stripe_buckets(struct moving_context *ctxt,
 			if (ret2 < 0)
 				break;
 
-			ret2 = copygc_batch_full(buckets_in_flight);
-			if (ret2)
+			if (copygc_batch_full(buckets_in_flight)) {
+				ret2 = -BCH_ERR_fc_break;
 				break;
+			}
 		}
 err:
 		ret2;
 	}));
 
-	return ret < 0 ? ret : 0;
+	return ret;
 }
 
 static bool should_do_ec_copygc(struct btree_trans *trans, darray_copygc_dev *devs)

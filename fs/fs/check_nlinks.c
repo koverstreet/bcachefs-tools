@@ -166,7 +166,7 @@ static int check_nlinks_update_inode(struct btree_trans *trans, struct btree_ite
 	int ret = 0;
 
 	if (k.k->p.offset >= range_end)
-		return 1;
+		return -BCH_ERR_fc_break;
 
 	if (!bkey_is_inode(k.k))
 		return 0;

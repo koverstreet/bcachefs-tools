@@ -619,7 +619,9 @@
 	x(0,				write_encoded_as_is, 596)		\
 	x(0,				path_not_accessible, 597)		\
 	x(0,				readdir_buf_full, 598)			\
-	x(0,				readdir_skip, 599)
+	x(0,				readdir_skip, 599)			\
+	x(0,				fc_continue, 600)			\
+	x(0,				fc_break, 601)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,
