@@ -2043,6 +2043,10 @@ void bch2_reconcile_stop(struct bch_fs *c)
 
 int bch2_reconcile_start(struct bch_fs *c)
 {
+	/* A thread that exited on its own is still ours to reap: */
+	if (c->reconcile.thread && READ_ONCE(c->reconcile.thread_exit_ret))
+		bch2_reconcile_stop(c);
+
 	if (c->reconcile.thread)
 		return 0;
 
