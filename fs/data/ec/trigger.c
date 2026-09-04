@@ -129,6 +129,44 @@ __cold void bch2_stripe_to_text(struct printbuf *out, struct bch_fs *c,
 
 /* Triggers: */
 
+/*
+ * The alloc key and bucket_to_stripe disagree: we're adding a stripe reference
+ * to a bucket whose refcount is already saturated, or dropping one from a
+ * bucket that has none.
+ *
+ * Saturate rather than wrap, because alloc_data_type() derives data_type from
+ * the refcount - so wrapping changes what the bucket *is*, in both directions:
+ *
+ *   0 - 1 makes an empty bucket BCH_DATA_stripe, which bch2_trigger_alloc()
+ *   sees as a bucket going nonempty outside an open bucket, and takes the
+ *   filesystem read-only.
+ *
+ *   U32_MAX + 1 is quieter and worse. A stripe block holding no live extents
+ *   has no sectors of its own - the refcount is the whole reservation - so
+ *   zero reads as empty, and nothing stops the bucket being discarded and
+ *   handed out again while the stripe still points at it.
+ *
+ * check_alloc_info recounts stripe_refcount from bucket_to_stripe
+ * (alloc_key_stripe_refcount_wrong, FSCK_AUTOFIX), so leave the true value to
+ * it rather than guessing here.
+ */
+static noinline void stripe_refcount_saturated(struct btree_trans *trans,
+					       struct bpos bucket, u64 stripe,
+					       bool overflow)
+{
+	struct bch_fs *c = trans->c;
+	CLASS(bch_log_msg, msg)(c);
+
+	prt_printf(&msg.m, "stripe_refcount %s at bucket %llu:%llu %s stripe %llu\n",
+		   overflow ? "overflow" : "underflow",
+		   bucket.inode, bucket.offset,
+		   overflow ? "adding ref to" : "dropping ref to",
+		   stripe);
+
+	bch2_run_explicit_recovery_pass(c, &msg.m,
+				BCH_RECOVERY_PASS_check_alloc_info, 0);
+}
+
 static int __mark_stripe_bucket(struct btree_trans *trans,
 				struct bch_dev *ca,
 				struct bkey_s_c_stripe s,
@@ -156,10 +194,17 @@ static int __mark_stripe_bucket(struct btree_trans *trans,
 		try(bch2_btree_bit_mod(trans, BTREE_ID_bucket_to_stripe,
 				       POS(bucket_to_u64(bucket), s.k->p.offset), !deleting));
 
-	if (!deleting)
-		a->stripe_refcount++;
-	else
-		--a->stripe_refcount;
+	if (!deleting) {
+		if (unlikely(a->stripe_refcount == U32_MAX))
+			stripe_refcount_saturated(trans, bucket, s.k->p.offset, true);
+		else
+			a->stripe_refcount++;
+	} else {
+		if (unlikely(!a->stripe_refcount))
+			stripe_refcount_saturated(trans, bucket, s.k->p.offset, false);
+		else
+			--a->stripe_refcount;
+	}
 
 	if (data_type == BCH_DATA_parity &&
 	    !a->stripe_refcount != !a->dirty_sectors) {
