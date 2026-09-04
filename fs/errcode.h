@@ -612,7 +612,10 @@
 	x(EIO,				injected_logged_op_fail, 589)		\
 	x(EINVAL,			EINVAL_crypt_no_kdf_params, 590)	\
 	x(EIO,				crypt_kdf_failed, 591)			\
-	x(0,				reconcile_scan_stop, 592)
+	x(0,				reconcile_scan_stop, 592)		\
+	x(0,				str_hash_key_repaired, 593)		\
+	x(0,				delete_range_done, 594)			\
+	x(0,				extent_iters_max, 595)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,

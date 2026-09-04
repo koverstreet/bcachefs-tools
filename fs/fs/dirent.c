@@ -849,7 +849,8 @@ int bch2_readdir(struct bch_fs *c, subvol_inum inum,
 							   hash_info, k,
 							   &need_second_pass, &repaired_inode) ?:
 				bch2_dirent_read_target(trans, inum, dirent, &target);
-			if (ret2 > 0)
+			if (ret2 > 0 ||
+			    bch2_err_matches(ret2, BCH_ERR_str_hash_key_repaired))
 				continue;
 
 			ret2 ?: bch2_dir_emit(trans, &sk, ctx, dirent, target);

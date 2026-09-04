@@ -54,7 +54,7 @@ static int count_iters_for_insert(struct btree_trans *trans,
 
 	if (*nr_iters >= EXTENT_ITERS_MAX) {
 		*end = bpos_min(*end, k.k->p);
-		ret = 1;
+		ret = -BCH_ERR_extent_iters_max;
 	}
 
 	switch (k.k->type) {
@@ -64,7 +64,7 @@ static int count_iters_for_insert(struct btree_trans *trans,
 
 		if (*nr_iters >= EXTENT_ITERS_MAX) {
 			*end = bpos_min(*end, k.k->p);
-			ret = 1;
+			ret = -BCH_ERR_extent_iters_max;
 		}
 
 		break;
@@ -92,7 +92,7 @@ static int count_iters_for_insert(struct btree_trans *trans,
 						    r_k.k->p.offset - idx);
 
 				*end = bpos_min(*end, pos);
-				return 1;
+				return bch_err_throw(c, extent_iters_max);
 			}
 		}
 
@@ -166,7 +166,7 @@ int bch2_extent_trim_atomic(struct btree_trans *trans,
 				break;
 		}
 	}
-	if (ret < 0)
+	if (ret && !bch2_err_matches(ret, BCH_ERR_extent_iters_max))
 		return ret;
 
 	/* tracepoint */

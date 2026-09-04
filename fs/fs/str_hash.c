@@ -416,8 +416,7 @@ static int str_hash_check_dirent(struct btree_trans *trans,
 					     bkey_i_to_s_c(&new_d->k_i), bkey_s_c_null,
 					     updated_before_k_pos));
 
-		/* skip this key, it moved */
-		return 1;
+		return bch_err_throw(trans->c, str_hash_key_repaired);
 	}
 
 	return 0;

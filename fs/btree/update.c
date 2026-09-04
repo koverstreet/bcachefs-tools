@@ -776,7 +776,7 @@ static int delete_range_one(struct btree_trans *trans, struct btree_iter *iter,
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(iter, &end));
 
 	if (!k.k)
-		return 1;
+		return -BCH_ERR_delete_range_done;
 
 	CLASS(disk_reservation, res)(trans->c);
 
@@ -831,7 +831,10 @@ int bch2_btree_delete_range_trans(struct btree_trans *trans, enum btree_id btree
 			break;
 	}
 
-	return ret < 0 ? ret : trans_was_restarted(trans, restart_count);
+	if (bch2_err_matches(ret, BCH_ERR_delete_range_done))
+		ret = 0;
+
+	return ret ?: trans_was_restarted(trans, restart_count);
 }
 
 /*
