@@ -953,7 +953,7 @@ static inline int btree_path_lock_root(struct btree_trans *trans,
 			path->level = depth_want;
 			for (i = path->level; i < BTREE_MAX_DEPTH; i++)
 				path->l[i].b = NULL;
-			return 1;
+			return -BCH_ERR_no_btree_node_shallow;
 		}
 
 		enum six_lock_type lock_type = __btree_lock_want(path, path->level);
@@ -1456,7 +1456,7 @@ int bch2_btree_path_traverse_one(struct btree_trans *trans,
 			? btree_path_down(trans, path, flags)
 			: btree_path_lock_root(trans, path, depth_want);
 		if (unlikely(ret)) {
-			if (ret == 1) {
+			if (ret == -BCH_ERR_no_btree_node_shallow) {
 				/*
 				 * No nodes at this level - got to the end of
 				 * the btree:
