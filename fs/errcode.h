@@ -616,7 +616,10 @@
 	x(0,				str_hash_key_repaired, 593)		\
 	x(0,				delete_range_done, 594)			\
 	x(0,				extent_iters_max, 595)			\
-	x(0,				write_encoded_as_is, 596)
+	x(0,				write_encoded_as_is, 596)		\
+	x(0,				path_not_accessible, 597)		\
+	x(0,				readdir_buf_full, 598)			\
+	x(0,				readdir_skip, 599)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,
