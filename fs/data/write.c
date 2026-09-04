@@ -1811,7 +1811,7 @@ static noinline int bch2_write_prep_encoded_data(struct bch_write_op *op, struct
 			}
 		}
 
-		return 1;
+		return bch_err_throw(c, write_encoded_as_is);
 	}
 
 	/*
@@ -1853,7 +1853,7 @@ static noinline int bch2_write_prep_encoded_data(struct bch_write_op *op, struct
 			if (op->crc.compressed_size > wp->sectors_free)
 				return bch_err_throw(c, data_write_need_fresh_buckets);
 
-			return 1;
+			return bch_err_throw(c, write_encoded_as_is);
 		}
 	}
 
@@ -1922,10 +1922,7 @@ static int bch2_write_extent(struct bch_write_op *op, struct write_point *wp,
 
 	if (unlikely(op->flags & BCH_WRITE_data_encoded)) {
 		ret = bch2_write_prep_encoded_data(op, wp);
-		if (ret < 0)
-			goto err;
-		if (ret) {
-			BUG_ON(ret != 1);
+		if (bch2_err_matches(ret, BCH_ERR_write_encoded_as_is)) {
 			if (ec_buf) {
 				dst = bch2_write_bio_alloc(c, wp, src,
 							   &page_alloc_failed,
@@ -1936,6 +1933,8 @@ static int bch2_write_extent(struct bch_write_op *op, struct write_point *wp,
 			init_append_extent(op, wp, op->version, op->crc);
 			goto do_write;
 		}
+		if (ret)
+			goto err;
 	}
 
 	if (ec_buf ||
