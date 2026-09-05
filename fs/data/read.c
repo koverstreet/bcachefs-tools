@@ -698,9 +698,18 @@ static int rbio_mark_io_failure(struct bch_read_bio *rbio,
 	return ret;
 }
 
+/*
+ * data_read_csum_err is the terminal error - thrown by
+ * bch2_bkey_pick_read_device() once every replica has been tried and the
+ * failures were checksum errors. It is a sibling of the data_read_retry_*
+ * codes, not a descendant, so it has to be matched on its own: a read that
+ * recovered reports the retry code and one that didn't reports this, and
+ * missing it labels every unrecoverable checksum error an IO error.
+ */
 static bool data_read_err_is_csum(int ret)
 {
-	return bch2_err_matches(ret, BCH_ERR_data_read_retry_csum_err) ||
+	return bch2_err_matches(ret, BCH_ERR_data_read_csum_err) ||
+	       bch2_err_matches(ret, BCH_ERR_data_read_retry_csum_err) ||
 	       bch2_err_matches(ret, BCH_ERR_data_read_retry_csum_err_maybe_userspace);
 }
 
