@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+
+build() {
+    add_module bcachefs
+    add_binary bcachefs
+    add_binary systemd-ask-password
+    add_binary /usr/lib/systemd/system-generators/bcachefs-mount-generator
+    add_udev_rule /usr/lib/udev/rules.d/64-bcachefs.rules
+}
+
+help() {
+    cat <<HELPEOF
+This hook adds bcachefs to the image.
+For encrypted root also add sd-encrypt.
+HELPEOF
+}
+
+# vim: set ft=sh ts=4 sw=4 et:
