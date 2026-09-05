@@ -8,6 +8,7 @@
 #include "fs/check.h"
 #include "fs/namei.h"
 
+#include "init/damage.h"
 #include "init/progress.h"
 
 static int snapshots_seen_add_inorder(struct bch_fs *c, struct snapshots_seen *s, u32 id)
@@ -441,6 +442,13 @@ fsck_err:
  */
 int bch2_check_extents(struct bch_fs *c)
 {
+	/*
+	 * Before the walk, because the walk can't do it: to it an inode that
+	 * lost every extent it had looks sparse, not damaged. Only the ranges
+	 * of the nodes we lost can say which inodes those were.
+	 */
+	bch2_damage_record_lost_extents(c);
+
 	CLASS(disk_reservation, res)(c);
 	CLASS(btree_trans, trans)(c);
 	CLASS(snapshots_seen, s)();

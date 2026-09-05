@@ -221,6 +221,107 @@ int bch2_damage_record_data_loss(struct btree_trans *trans, enum btree_id btree,
 }
 
 /*
+ * Goes next to bch2_btree_lost_data() at the sites that lose a node: @k is the
+ * pointer the parent had, so the range is known even when nothing of the node
+ * could be read.
+ *
+ * Stash rather than attribute, because attributing means walking the inodes
+ * btree and none of these sites can: they're mid-traverse holding the node's
+ * locks, or already have the dangling pointer's deletion queued.
+ * bch2_damage_record_lost_extents() does the walk from check_extents, which
+ * bch2_btree_lost_data() schedules.
+ *
+ * A v1 btree_ptr has no min_key and we'd be guessing at the range; damage on
+ * the wrong file is worse than none.
+ *
+ * Extents only, and a lost reflink node is therefore silent: its range names
+ * indirect extents, not inodes, and the files that lose data are the ones
+ * pointing into it. Backpointers don't answer that - they run bucket to
+ * extent - so it would take a scan of the extents btree for reflink pointers
+ * in the range, which is an fsck pass, not something a loss site can do.
+ */
+void bch2_damage_note_lost_extents(struct bch_fs *c, enum btree_id btree, struct bkey_s_c k)
+{
+	if (btree != BTREE_ID_extents ||
+	    k.k->type != KEY_TYPE_btree_ptr_v2)
+		return;
+
+	struct bpos start = bkey_s_c_to_btree_ptr_v2(k).v->min_key;
+
+	guard(mutex)(&c->lost_extents_ranges_lock);
+
+	if (darray_push(&c->lost_extents_ranges,
+			((lost_extents_range) { .start = start, .end = k.k->p })))
+		bch_err(c, "couldn't record lost extents %llu:%llu-%llu:%llu",
+			start.inode, start.offset, k.k->p.inode, k.k->p.offset);
+}
+
+/*
+ * Attribution has to come from the range: an inode that lost every extent it
+ * had is indistinguishable from a sparse file. bi_sectors is what says it had
+ * data, and it lives in the inodes btree, which didn't lose the node.
+ *
+ * Inexact only at the two ends - an inode straddling one may have kept
+ * everything it cares about; everything strictly inside lost all of it.
+ */
+void bch2_damage_record_lost_extents(struct bch_fs *c)
+{
+	CLASS(darray_lost_extents_range, ranges)();
+
+	scoped_guard(mutex, &c->lost_extents_ranges_lock)
+		swap(ranges, c->lost_extents_ranges);
+
+	if (!ranges.nr)
+		return;
+
+	CLASS(btree_trans, trans)(c);
+	unsigned failed = 0;
+
+	darray_for_each(ranges, r) {
+		int ret = for_each_btree_key_max_commit(trans, iter, BTREE_ID_inodes,
+				SPOS(0, r->start.inode, 0),
+				SPOS(0, r->end.inode, U32_MAX),
+				BTREE_ITER_all_snapshots|BTREE_ITER_prefetch, k,
+				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+			if (!bkey_is_inode(k.k))
+				continue;
+
+			struct bch_inode_unpacked inode;
+			bch2_inode_unpack(c, k, &inode);
+
+			if (!inode.bi_sectors)
+				continue;
+
+			/*
+			 * Not bch2_damage_record_data_loss(): that narrows on
+			 * the btree a position came from, and we already
+			 * resolved this one to an inode key.
+			 */
+			bch2_sb_error_count(c, BCH_FSCK_ERR_data_lost_btree_node_read_error);
+			bch2_damage_record(trans, k.k->p,
+					   BCH_FSCK_ERR_data_lost_btree_node_read_error);
+		}));
+
+		/* one range we can't attribute mustn't take the others down */
+		if (ret) {
+			failed++;
+			bch_err_ratelimited(c, "error attributing lost extents %llu:%llu-%llu:%llu: %s",
+					    r->start.inode, r->start.offset,
+					    r->end.inode, r->end.offset,
+					    bch2_err_str(ret));
+		}
+	}
+
+	/*
+	 * The ratelimit above hides how much was lost, and these fail together
+	 * when they fail at all - one cause, every range. Say the count.
+	 */
+	if (failed)
+		bch_err(c, "couldn't attribute %u of %zu lost extents ranges",
+			failed, ranges.nr);
+}
+
+/*
  * A damage key has an inode at its exact position: records are written at
  * repaired keys' positions, which are inode keys themselves or content
  * keys - and a content key at snapshot X implies an inode at snapshot X.
@@ -392,4 +493,15 @@ int bch2_damage_accumulate(struct btree_trans *trans, u64 inum, u32 snapshot,
 	} while (snapshot);
 
 	return 0;
+}
+
+void bch2_fs_damage_exit(struct bch_fs *c)
+{
+	darray_exit(&c->lost_extents_ranges);
+}
+
+void bch2_fs_damage_init_early(struct bch_fs *c)
+{
+	darray_init(&c->lost_extents_ranges);
+	mutex_init(&c->lost_extents_ranges_lock);
 }

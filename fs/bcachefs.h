@@ -106,6 +106,7 @@
 
 #include "fs/quota_types.h"
 
+#include "init/damage_types.h"
 #include "init/error_types.h"
 #include "init/passes_types.h"
 #include "init/dev_types.h"
@@ -872,6 +873,10 @@ struct bch_fs {
 	/* Journal scrub: extents needing repair after recovery */
 	darray_scrub_journal_repair		scrub_journal_repairs;
 	struct mutex				scrub_journal_repairs_lock;
+
+	/* Extents btree ranges from lost btree nodes, awaiting attribution */
+	darray_lost_extents_range		lost_extents_ranges;
+	struct mutex				lost_extents_ranges_lock;
 
 	struct bch_fs_compress	compress;
 	struct bch_fs_reconcile	reconcile;

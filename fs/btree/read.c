@@ -20,6 +20,7 @@
 
 #include "debug/async_objs.h"
 
+#include "init/damage.h"
 #include "init/error.h"
 #include "init/fs.h"
 #include "init/recovery.h"
@@ -975,6 +976,7 @@ static void btree_node_read_work(struct work_struct *work)
 
 		set_btree_node_read_error(b);
 		bch2_btree_lost_data(c, &buf, b->c.btree_id);
+		bch2_damage_note_lost_extents(c, b->c.btree_id, bkey_i_to_s_c(&b->key));
 		prt_printf(&buf, "error %s\n", bch2_err_str(ret));
 	} else if (failed.nr) {
 		/* Separate ratelimit states for soft vs. hard errors */
@@ -1063,6 +1065,7 @@ void bch2_btree_node_read(struct btree_trans *trans, struct btree *b,
 		bch2_btree_pos_to_text(&msg.m, c, b);
 		prt_newline(&msg.m);
 		bch2_btree_lost_data(c, &msg.m, b->c.btree_id);
+		bch2_damage_note_lost_extents(c, b->c.btree_id, bkey_i_to_s_c(&b->key));
 
 		if (c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_check_topology))
 			bch2_fs_emergency_read_only(c, &msg.m);
