@@ -174,7 +174,10 @@ found:
 	prt_str(&buf, " ");
 	bch2_bkey_val_to_text(&buf, c, extent2);
 
-	if (fsck_err(trans, dup_backpointer_to_bad_csum_extent, "%s", buf.buf))
+	/* only an extents position names an inum; elsewhere report without recording */
+	struct bpos damage_pos = btree == BTREE_ID_extents ? extent.k->p : POS_MIN;
+
+	if (inode_fsck_err(trans, damage_pos, dup_backpointer_to_bad_csum_extent, "%s", buf.buf))
 		ret = bch2_bkey_drop_device_and_update(trans, btree, level, extent, dev,
 						       KEY_TYPE_ERROR_double_allocation) ?: 1;
 fsck_err:
