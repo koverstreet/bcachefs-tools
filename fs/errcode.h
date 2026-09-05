@@ -631,7 +631,8 @@
 	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_disk_label_too_big, 608)	\
 	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_stripe_alloc, 609)	\
 	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_no_usable_block, 610)	\
-	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_no_ec_bucket, 611)
+	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_no_ec_bucket, 611) \
+	x(EOPNOTSUPP,			tmpdir_opt_is_dir_only, 612)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,

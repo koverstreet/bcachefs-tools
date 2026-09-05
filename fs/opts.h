@@ -244,6 +244,11 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		false,				\
 	  NULL,		"Disable casefolding filesystem wide")		\
+	x(tmpdir,			u8,				\
+	  OPT_FS|OPT_INODE|OPT_FORMAT,					\
+	  OPT_BOOL(),							\
+	  BCH_SB_TMPDIR,		false,				\
+	  NULL,		"Directory is wiped on mount")		\
 	x(inodes_32bit,			u8,				\
 	  OPT_FS|OPT_INODE|OPT_FORMAT|OPT_MOUNT|OPT_RUNTIME,		\
 	  OPT_BOOL(),							\
