@@ -195,21 +195,29 @@ int bch2_damage_clear(struct btree_trans *trans, subvol_inum inum)
 }
 
 /*
+ * Damage is keyed by inode and only an extents position names one, so a btree
+ * we can't attribute records nothing: getting to an indirect extent's inodes
+ * would mean walking reflink pointers backwards.
+ */
+int bch2_damage_record_key(struct btree_trans *trans, enum btree_id btree,
+			   struct bpos pos, enum bch_sb_error_id err)
+{
+	return btree == BTREE_ID_extents
+		? bch2_damage_record(trans, pos, err)
+		: 0;
+}
+
+/*
  * Runtime data damage - loss or corruption found outside fsck_err()
  * reporting (device removal dropping the last replica, read errors):
- * count the sb error and record against the inode. Only extents btree
- * positions name an inum; an indirect extent's damage is counted but
- * unattributed - finding its inodes would mean walking reflink
- * pointers backwards.
+ * count the sb error and record against the inode.
  */
 int bch2_damage_record_data_loss(struct btree_trans *trans, enum btree_id btree,
 				 struct bpos pos, enum bch_sb_error_id err)
 {
 	bch2_sb_error_count(trans->c, err);
 
-	return btree == BTREE_ID_extents
-		? bch2_damage_record(trans, pos, err)
-		: 0;
+	return bch2_damage_record_key(trans, btree, pos, err);
 }
 
 /*

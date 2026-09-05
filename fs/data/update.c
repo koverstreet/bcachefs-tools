@@ -15,6 +15,7 @@
 #include "data/keylist.h"
 #include "data/move.h"
 #include "data/nocow_locking.h"
+#include "data/read.h"
 #include "data/reconcile/trigger.h"
 #include "data/ec/create.h"
 #include "data/reconcile/work.h"
@@ -23,6 +24,7 @@
 
 #include "fs/inode.h"
 
+#include "init/damage.h"
 #include "init/dev.h"
 #include "init/error.h"
 #include "init/fs.h"
@@ -649,6 +651,20 @@ void bch2_data_update_read_done(struct data_update *u)
 	struct bch_extent_crc_unpacked crc = rbio->pick.crc;
 
 	u->read_done = true;
+
+	/*
+	 * Must come before the bitrot fixup below: that clears rbio->ret, and
+	 * then nothing downstream can tell a failed read from a clean one.
+	 * read.c has only read_pos, which for an indirect extent is a reflink
+	 * position - u->btree_id is what makes the narrowing exact.
+	 */
+	if (unlikely(rbio->ret)) {
+		CLASS(btree_trans, trans)(c);
+		int ret = commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+			bch2_damage_record_key(trans, u->btree_id, u->k.k->k.p,
+					       bch2_data_read_sb_err(rbio->ret)));
+		bch_err_fn_ratelimited(c, ret);
+	}
 
 	/*
 	 * If the extent has been bitrotted, we're going to have to give it a

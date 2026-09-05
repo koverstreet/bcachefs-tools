@@ -713,6 +713,21 @@ static bool data_read_err_is_csum(int ret)
 	       bch2_err_matches(ret, BCH_ERR_data_read_retry_csum_err_maybe_userspace);
 }
 
+/*
+ * The sb error id naming a failed read, for damage records: a file whose
+ * extents won't decompress is a different repair problem from one with bad
+ * checksums, and which compression type failed is the first thing we'd ask.
+ * @ret must be a failure - a recovered read is a different event.
+ */
+enum bch_sb_error_id bch2_data_read_sb_err(int ret)
+{
+	return bch2_err_matches(ret, BCH_ERR_decompress)
+		? bch2_decompress_sb_err(ret)
+		: data_read_err_is_csum(ret)
+		? BCH_FSCK_ERR_data_read_csum_err
+		: BCH_FSCK_ERR_data_read_io_err;
+}
+
 static void bch2_rbio_retry(struct work_struct *work)
 {
 	struct bch_read_bio *rbio =
@@ -842,14 +857,11 @@ static void bch2_rbio_retry(struct work_struct *work)
 			}
 
 			/*
-			 * Damage names the reason where we have one: a file
-			 * whose extents won't decompress is a different repair
-			 * problem from one with bad checksums, and which
-			 * compression type failed is the first thing we'd ask.
+			 * A read that recovered has nothing to name beyond the
+			 * outcome; one that failed names why it failed.
 			 */
-			enum bch_sb_error_id damage =
-				bch2_err_matches(ret, BCH_ERR_decompress)
-				? bch2_decompress_sb_err(ret)
+			enum bch_sb_error_id damage = ret
+				? bch2_data_read_sb_err(ret)
 				: e;
 
 			if (!rbio->data_update && inum.subvol && !bkey_deleted(&sk.k->k))

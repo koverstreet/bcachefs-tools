@@ -131,6 +131,8 @@ static inline int bch2_read_indirect_extent(struct btree_trans *trans,
 void bch2_read_err_msg_trans(struct btree_trans *, struct printbuf *,
 			     struct bch_read_bio *, struct bpos);
 
+enum bch_sb_error_id bch2_data_read_sb_err(int);
+
 int __bch2_read_extent(struct btree_trans *, struct bch_read_bio *,
 		       struct bvec_iter, struct bpos, enum btree_id,
 		       struct bkey_s_c, unsigned,
