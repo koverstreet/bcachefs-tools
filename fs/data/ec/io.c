@@ -459,6 +459,30 @@ int bch2_stripe_buf_validate_msg(struct bch_fs *c, struct ec_stripe_buf *buf,
 		return 0;
 
 	/*
+	 * Count the device fault and the outcome separately: a checksum error
+	 * means a live device handed back data that didn't match, which is how
+	 * a failing drive is found, and whether reconstruct then saved us is a
+	 * different question. Per block, as the read path counts per failure.
+	 *
+	 * Device offline and IO errors stay uncounted here for the reason given
+	 * at the stale-read case above - they're environmental, and a missing
+	 * device is already visible as one.
+	 */
+	struct bch_stripe *v = &buf->key.v;
+
+	for (unsigned i = 0; i < v->nr_blocks; i++)
+		if (buf->err[STRIPE_BUF_PRE_RECOV][i] == -BCH_ERR_stripe_read_csum_err)
+			bch2_sb_error_count(c, BCH_FSCK_ERR_stripe_read_csum_err);
+
+	/*
+	 * @ret is bch2_ec_do_recov()'s verdict, and it fails two ways: too many
+	 * blocks gone to run at all, or running and producing blocks that still
+	 * don't check out. Both cost the caller its data.
+	 */
+	if (ret)
+		bch2_sb_error_count(c, BCH_FSCK_ERR_stripe_reconstruct_failed);
+
+	/*
 	 * Damage confined to blocks the caller isn't using is not an error: a
 	 * stripe reuse discards them. It's still worth saying - it's a device
 	 * producing bad blocks - but at notice level, and it's the same stripe

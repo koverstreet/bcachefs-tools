@@ -440,7 +440,9 @@ enum bch_fsck_flags {
 	x(data_decompress_err_unknown,				425,	0)		\
 	x(snapshot_child_missing_but_accounted,			426,	FSCK_AUTOFIX)	\
 	x(inode_opts_not_propagated,				428,	FSCK_AUTOFIX)	\
-	x(MAX,							429,	0)
+	x(stripe_read_csum_err,					429,	0)		\
+	x(stripe_reconstruct_failed,				430,	0)		\
+	x(MAX,							431,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
