@@ -78,8 +78,22 @@ int bch2_bkey_drop_device_and_update(struct btree_trans *trans, enum btree_id bt
 		return bch2_btree_lost_data(c, &buf, btree);
 	}
 
-	if (!bch2_bkey_can_read(c, bkey_i_to_s_c(n)))
+	/*
+	 * The drop cost the key its last readable replica - the caller decided
+	 * to drop, only we can see what it cost. Counting as well as recording,
+	 * because nothing upstream counts this one: recording alone would name
+	 * files in the damage btree against an error the superblock counters
+	 * have never heard of.
+	 *
+	 * Every caller passes double_allocation; a new cause wants its own sb
+	 * error id, since that's what the user reads back out of the damage
+	 * btree.
+	 */
+	if (!bch2_bkey_can_read(c, bkey_i_to_s_c(n))) {
 		bch2_set_bkey_error(c, n, error);
+		try(bch2_damage_record_data_loss(trans, btree, n->k.p,
+						 BCH_FSCK_ERR_data_lost_double_allocation));
+	}
 
 	CLASS(btree_node_iter, iter)(trans, btree, n->k.p, 0, level, BTREE_ITER_intent);
 	return bch2_btree_iter_traverse(&iter) ?:
