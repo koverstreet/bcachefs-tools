@@ -1391,6 +1391,207 @@ int bch2_inode_set_casefold(struct btree_trans *trans, subvol_inum inum,
 	return bch2_maybe_propagate_has_case_insensitive(trans, inum, bi);
 }
 
+int bch2_inode_set_tmpdir(struct btree_trans *trans, subvol_inum inum,
+			    struct bch_inode_unpacked *bi, unsigned v)
+{
+	struct bch_fs *c = trans->c;
+
+	if (!S_ISDIR(bi->bi_mode))
+		return bch_err_throw(c, tmpdir_opt_is_dir_only);
+
+	bi->bi_tmpdir = v + 1;
+	bi->bi_fields_set |= BIT(Inode_opt_tmpdir);
+
+	return 0;
+}
+
+/*
+ * Collect every directory in a tmpdir subtree, breadth-first.
+ */
+static int bch2_collect_dirs_in_tmpdir(struct btree_trans *trans, u32 subvol, u32 snapshot,
+			       u64 root_inum, darray_u64 *dirs)
+{
+	unsigned i;
+	int ret;
+
+	dirs->nr = 0;
+	try(darray_push(dirs, root_inum));
+
+	for (i = 0; i < dirs->nr; i++) {
+		subvol_inum dir = { subvol, dirs->data[i] };
+		struct bkey_s_c k;
+
+		for_each_btree_key_max_norestart(trans, iter, BTREE_ID_dirents,
+				SPOS(dir.inum, 0, snapshot),
+				POS(dir.inum, U64_MAX),
+				BTREE_ITER_prefetch, k, ret) {
+			struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
+
+			if (d.v->d_type == DT_DIR) {
+				ret = darray_push(dirs, le64_to_cpu(d.v->d_inum));
+				if (ret)
+					break;
+			}
+		}
+		if (ret)
+			return ret;
+	}
+
+	return 0;
+}
+
+/*
+ * Unlink every entry in one directory. Its subdirectories have already been
+ * emptied by the reverse BFS walk in bch2_unlink_tmpdir_in_subvol(),
+ * so unlinking them is safe.
+ */
+static int bch2_unlink_tmpdir_contents(struct btree_trans *trans, subvol_inum dir,
+				u32 snapshot)
+{
+	int ret;
+	struct bkey_s_c k;
+	struct bch_inode_unpacked dir_inode;
+	struct bch_hash_info dir_hash;
+	CLASS(btree_iter_uninit, dir_iter)(trans);
+
+	try(bch2_inode_peek(trans, &dir_iter, &dir_inode, dir, BTREE_ITER_intent));
+	try(bch2_hash_info_init(trans->c, &dir_inode, &dir_hash));
+
+	for_each_btree_key_max_norestart(trans, iter, BTREE_ID_dirents,
+			SPOS(dir.inum, 0, snapshot),
+			POS(dir.inum, U64_MAX),
+			BTREE_ITER_prefetch|BTREE_ITER_intent, k, ret) {
+		struct bkey_s_c_dirent d = bkey_s_c_to_dirent(k);
+		struct bch_inode_unpacked child_inode;
+		subvol_inum child_inum;
+
+		/* subvolume roots are not ours to unlink */
+		if (d.v->d_type == DT_SUBVOL)
+			continue;
+
+		child_inum = (subvol_inum) { dir.subvol, le64_to_cpu(d.v->d_inum) };
+
+		CLASS(btree_iter_uninit, inode_iter)(trans);
+
+		try(bch2_inode_peek(trans, &inode_iter, &child_inode, child_inum, BTREE_ITER_intent));
+
+		try(__bch2_unlink_trans(trans, &dir_iter, &dir_inode, &dir_hash,
+					&iter, child_inum, &inode_iter, &child_inode,
+					false));
+
+		/*
+		 * Commit and restart if the transaction has grown too large
+		 */
+		try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,
+						   BCH_TRANS_COMMIT_no_enospc));
+	}
+
+	return ret;
+}
+
+/*
+ * Unlink the tmpdir at tmpdir_inum in this subvolume. The tmpdir option is
+ * stored per snapshot version, and the ones that have it set are unlinked here.
+ */
+static int bch2_unlink_tmpdir_in_subvol(struct btree_trans *trans, u32 subvol,
+					u32 snapshot, u64 tmpdir_inum)
+{
+	CLASS(darray_u64, dirs)();
+	struct bch_inode_unpacked tmpdir_root_inode;
+	int ret;
+
+	/* drop the iterator before the commits below invalidate it */
+	ret = commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+		CLASS(btree_iter_uninit, inode_iter)(trans);
+		bch2_inode_peek_nowarn(trans, &inode_iter, &tmpdir_root_inode,
+				       (subvol_inum) { subvol, tmpdir_inum },
+				       BTREE_ITER_intent);
+	}));
+
+	if (bch2_err_matches(ret, ENOENT))
+		return 0;		/* not visible in this subvolume */
+	if (ret)
+		return ret;
+
+	if (!S_ISDIR(tmpdir_root_inode.bi_mode) ||
+	    !bch2_inode_opt_get(&tmpdir_root_inode, Inode_opt_tmpdir))
+		return 0;		/* overridden to a non-tmpdir */
+
+	try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+		      bch2_collect_dirs_in_tmpdir(trans, subvol, snapshot,
+						  tmpdir_inum, &dirs)));
+
+	/*
+	 * Reverse the BFS order: a directory is emptied before the parent that
+	 * links it is unlinked, as __bch2_unlink_trans() requires.
+	 */
+	darray_for_each_reverse(dirs, inum)
+		try(commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+			      bch2_unlink_tmpdir_contents(trans,
+					(subvol_inum) { subvol, *inum }, snapshot)));
+
+	return 0;
+}
+
+int bch2_unlink_tmpdirs(struct bch_fs *c)
+{
+	CLASS(btree_trans, trans)(c);
+	CLASS(darray_u64, tmpdirs)();
+	CLASS(darray_u32, subvols)();
+	u64 last_tmpdir = 0;
+
+	try(bch2_btree_write_buffer_flush_sync(trans));
+
+	/*
+	 * Collect every tmpdir.
+	 */
+	try(for_each_btree_key(trans, iter, BTREE_ID_inodes, POS_MIN,
+				 BTREE_ITER_prefetch|BTREE_ITER_all_snapshots, k, ({
+		struct bch_inode_unpacked inode;
+		int ret2 = 0;
+
+		if (S_ISDIR(bkey_inode_mode(k)) && k.k->p.offset != last_tmpdir) {
+			bch2_inode_unpack(c, k, &inode);
+
+			if (bch2_inode_opt_get(&inode, Inode_opt_tmpdir)) {
+				last_tmpdir = k.k->p.offset;
+				ret2 = darray_push(&tmpdirs, last_tmpdir);
+			}
+		}
+		ret2;
+	})));
+
+	/*
+	 * A read-only snapshot keeps its copy of the tmpdir; only live, writable
+	 * subvolumes get wiped.
+	 */
+	try(for_each_btree_key(trans, iter, BTREE_ID_subvolumes, POS_MIN,
+				 BTREE_ITER_prefetch, k, ({
+		int ret2 = 0;
+
+		if (k.k->type == KEY_TYPE_subvolume) {
+			struct bkey_s_c_subvolume s = bkey_s_c_to_subvolume(k);
+
+			if (!BCH_SUBVOLUME_RO(s.v) &&
+			    bch2_subvolume_state_compat(s.v) == SUBVOLUME_STATE_live)
+				ret2 = darray_push(&subvols, k.k->p.offset);
+		}
+		ret2;
+	})));
+
+	darray_for_each(subvols, subvol) {
+		u32 snapshot;
+
+		try(bch2_subvolume_get_snapshot(trans, *subvol, &snapshot));
+
+		darray_for_each(tmpdirs, inum)
+			try(bch2_unlink_tmpdir_in_subvol(trans, *subvol,
+							 snapshot, *inum));
+	}
+
+	return 0;
+}
+
 static noinline int __bch2_inode_rm_snapshot(struct btree_trans *trans, u64 inum, u32 snapshot)
 {
 	static const enum btree_id content_btrees[] = {
@@ -1561,7 +1762,12 @@ static int may_delete_deleted_inode(struct btree_trans *trans, struct bpos pos,
 	}
 
 	if (from_deleted_inodes) {
+		/*
+		 * Don't warn about deleted inodes from tmpdirs; those
+		 * are supposed to get deleted every mount.
+		 */
 		if (test_bit(BCH_FS_clean_recovery, &c->flags) &&
+		    !bch2_inode_opt_get(inode, Inode_opt_tmpdir) &&
 		    !fsck_err(trans, deleted_inode_but_clean,
 			      "filesystem marked as clean but have deleted inode %llu:%u",
 			      pos.offset, pos.snapshot))

@@ -441,13 +441,25 @@ int bch2_rename_trans(struct btree_trans *trans,
 	}
 
 	if (!subvol_inum_eq(dst_dir, src_dir)) {
-		if (bch2_reinherit_attrs(src_inode_u, dst_dir_u) &&
-		    S_ISDIR(src_inode_u->bi_mode))
+		u64 tmpdir_before = bch2_inode_opt_get(src_inode_u, Inode_opt_tmpdir);
+		bool reinherited = bch2_reinherit_attrs(src_inode_u, dst_dir_u);
+		u64 tmpdir_after = bch2_inode_opt_get(src_inode_u, Inode_opt_tmpdir);
+
+		if (reinherited && S_ISDIR(src_inode_u->bi_mode))
 			return -EXDEV;
 
 		if (mode == BCH_RENAME_EXCHANGE &&
 		    bch2_reinherit_attrs(dst_inode_u, src_dir_u) &&
 		    S_ISDIR(dst_inode_u->bi_mode))
+			return -EXDEV;
+
+		/*
+		 * Don't allow renaming from a tmpdir to a non-tmpdir because
+		 * users will expect the file outside the tmpdir to be durable.
+		 * tmpdirs don't make files durable so that guarantee outside the
+		 * tmpdir won't be there.
+		 */
+		if (tmpdir_before && !tmpdir_after)
 			return -EXDEV;
 
 		/* Reinherited options have to reach existing data too */

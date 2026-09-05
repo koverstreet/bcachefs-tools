@@ -641,7 +641,8 @@
 	x(ENOMEM,			ENOMEM_scrub_journal_node, 618)		\
 	x(EROFS,			erofs_sb_write_before_start, 619)	\
 	x(EINVAL,			EINVAL_will_not_start, 620)		\
-	x(EROFS,			erofs_sb_never_started, 621)
+	x(EROFS,			erofs_sb_never_started, 621)	\
+	x(EOPNOTSUPP,		tmpdir_opt_is_dir_only, 622)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,
