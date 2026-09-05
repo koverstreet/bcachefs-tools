@@ -812,6 +812,55 @@ static bool stripe_retry_must_wait(struct moving_context *ctxt,
 	return u && u->io_seq <= stripe_io_seq;
 }
 
+static bool reconcile_target_has_rotational(struct bch_fs *c, unsigned target)
+{
+	struct bch_devs_mask devs = target_rw_devs(c, BCH_DATA_user, target);
+
+	guard(rcu)();
+	for_each_member_device_rcu(c, ca, &devs)
+		if (bch2_dev_rotational(c, ca->dev_idx))
+			return true;
+
+	return false;
+}
+
+static void reconcile_set_move_limits(struct moving_context *ctxt,
+				      struct bch_inode_opts *opts,
+				      struct data_update_opts *data_opts,
+				      struct bbpos work)
+{
+	struct bch_fs *c = ctxt->trans->c;
+	unsigned target = data_opts->target ?:
+		opts->background_target ?:
+		opts->foreground_target;
+
+	if (!reconcile_target_has_rotational(c, target))
+		return;
+
+	bch2_moving_ctxt_set_rotational_limits(ctxt,
+		work.btree == BTREE_ID_reconcile_hipri ||
+		work.btree == BTREE_ID_reconcile_hipri_phys
+		? MOVE_ROTATIONAL_LIMIT_hipri
+		: MOVE_ROTATIONAL_LIMIT_background,
+		MOVE_LIMITS_RECONCILE_TARGET, target);
+}
+
+static void reconcile_scan_set_move_limits(struct moving_context *ctxt)
+{
+	struct bch_fs *c = ctxt->trans->c;
+	struct bch_inode_opts opts;
+
+	bch2_inode_opts_get(c, &opts, false);
+
+	unsigned target = opts.background_target ?: opts.foreground_target;
+
+	if (reconcile_target_has_rotational(c, target))
+		bch2_moving_ctxt_set_rotational_limits(ctxt,
+			MOVE_ROTATIONAL_LIMIT_background,
+			MOVE_LIMITS_RECONCILE_TARGET,
+			target);
+}
+
 static int do_retry_stripe(struct moving_context *ctxt, u64 idx)
 {
 	struct btree_trans *trans = ctxt->trans;
@@ -850,6 +899,8 @@ static int __do_reconcile_extent(struct moving_context *ctxt,
 				 struct bkey_s_c k,
 				 darray_stripe_retry *stripe_retry)
 {
+	bch2_moving_ctxt_reset_limits(ctxt);
+
 	if (k.k->type == KEY_TYPE_stripe)
 		return do_reconcile_stripe(ctxt, iter, k, stripe_retry);
 
@@ -890,6 +941,8 @@ static int __do_reconcile_extent(struct moving_context *ctxt,
 	int ret = reconcile_set_data_opts(trans, iter, level, k, opts, data_opts);
 	if (ret <= 0)
 		return ret;
+
+	reconcile_set_move_limits(ctxt, opts, data_opts, work);
 
 	if (work.btree == BTREE_ID_reconcile_pending) {
 		int ret = bch2_can_do_data_update(trans, opts, data_opts, k, NULL);
@@ -1340,6 +1393,8 @@ static int do_reconcile_scan(struct moving_context *ctxt,
 
 	bch2_move_stats_init(&r->scan_stats, "reconcile_scan");
 	ctxt->stats = &r->scan_stats;
+	bch2_moving_ctxt_reset_limits(ctxt);
+	reconcile_scan_set_move_limits(ctxt);
 
 	struct reconcile_scan s = reconcile_scan_decode(c, cookie_pos.offset);
 	if (s.type == RECONCILE_SCAN_fs) {
