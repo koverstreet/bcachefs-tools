@@ -79,9 +79,11 @@ struct ec_stripe_new {
 	/*
 	 * Set by ec_old_stripe_fold() from the read's completion, read by
 	 * create: its own field so neither side needs a lock to say what
-	 * happened.
+	 * happened. @old_stripe_lost_blocks is the blocks that were carried forward
+	 * and are unreadable, i.e. the data the failure actually cost us.
 	 */
 	int			old_stripe_err;
+	u32			old_stripe_lost_blocks;
 
 	struct bch_devs_mask	devs;
 	enum bch_watermark	watermark;
