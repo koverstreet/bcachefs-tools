@@ -1596,12 +1596,26 @@ static long bch2_ioc_unpoison(struct bch_fs *c, struct file *file,
 
 	CLASS(btree_trans, trans)(c);
 
+	/*
+	 * Clearing the poison flag is not an allocation, but the reconcile
+	 * trigger may pad the key with invalid-device pointers to restore its
+	 * accounted durability, and charges extra_disk_res for those - so the
+	 * commit needs a reservation to put the charge in. Released per key so
+	 * it can't accumulate across the range.
+	 *
+	 * no_enospc because this is a recovery path: a full filesystem must not
+	 * be the reason the owner can't get at data that is still there.
+	 */
+	CLASS(disk_reservation, res)(c);
+
 	return for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_extents,
 			start, end, inum.subvol, BTREE_ITER_intent, k, ({
+		bch2_disk_reservation_put(c, &res.r);
+
 		(k.k->type == KEY_TYPE_reflink_p
 			? bch2_unpoison_reflink(trans, bkey_s_c_to_reflink_p(k))
 			: bch2_unpoison_extent(trans, &iter, k)) ?:
-		bch2_trans_commit(trans, NULL, NULL, 0);
+		bch2_trans_commit(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc);
 	}));
 }
 
