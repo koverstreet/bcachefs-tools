@@ -1135,10 +1135,32 @@ fn packed_and_align_fix(bindings: String, ptr_width: &str) -> String {
     const ALIGN8_32BIT: &[&str] =
         &["btree_node__bindgen_ty_1", "btree_node_entry__bindgen_ty_1",
           "bch_ioctl_query_accounting"];
-
     let mut lines: Vec<String> = bindings.lines().map(str::to_owned).collect();
 
     for i in 0..lines.len() {
+        /*
+         * bindgen >= 0.73 wraps padding in `__BindgenOpaqueArrayN<[u8; N]>`,
+         * declared `#[repr(C, align(N))]`. Padding is emitted to reproduce the
+         * C layout, so forcing alignment on it changes the layout it exists to
+         * preserve - bch_fs_allocator gains 128 bytes, bch_fs_btree 64, and
+         * bch_fs both. Unwrap to the bare array, which is what 0.72 emitted.
+         *
+         * Only padding: the same wrapper holds union storage and opaque blobs,
+         * where the alignment is the C type's and has to stay.
+         *
+         * Textual, and safe to be: bindgen emits a size *and* an alignment
+         * assertion per type, both computed from C, so a layout this gets wrong
+         * fails to compile and names the type.
+         */
+        if let Some((field, ty)) = lines[i].split_once(": __BindgenOpaqueArray") {
+            if field.trim_start().starts_with("pub __bindgen_padding_") {
+                if let Some(inner) = ty.split_once('<').and_then(|(_, r)| r.rsplit_once('>')) {
+                    lines[i] = format!("{field}: {}{}", inner.0, inner.1);
+                    continue;
+                }
+            }
+        }
+
         let Some(rest) = lines[i].strip_prefix("pub struct ") else { continue };
         let Some(name) = rest.split([' ', '{', '<']).next() else { continue };
 
