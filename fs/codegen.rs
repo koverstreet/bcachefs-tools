@@ -231,8 +231,8 @@ fn regex_escape(s: &str) -> String {
 }
 
 /// Default blocklist dirs for the userspace build: types from the kernel-compat
-/// `include/` shim and from system headers are resolved through bcachefs-shim,
-/// not re-emitted. The kernel build passes its own header trees instead.
+/// `include/` shim are resolved through bcachefs-shim, not re-emitted. The
+/// kernel build passes its own header trees instead.
 ///
 /// Why path regexes and not something structural: bindgen has no notion of
 /// "system header" (nothing keyed off -isystem), only file-path patterns. And
@@ -241,23 +241,27 @@ fn regex_escape(s: &str) -> String {
 /// in the tree - which breaks on functions whose signatures use
 /// structs-defined-within-structs (bindgen's mangled names for those aren't
 /// real C types, so the generated extern.c doesn't compile). Curated
-/// allowlists pick the roots; these patterns prune dependencies back to the
+/// allowlists pick the roots; this pattern prunes dependencies back to the
 /// shim.
 ///
-/// The patterns keep a leading wildcard so sysroot'd cross builds stay
-/// covered (--sysroot puts system headers at $sysroot/usr/include), but
-/// require the /usr/include (etc.) path component: a bare `.*/usr/.*` also
-/// matched source trees under paths like /usr/src/RPM/BUILD (#801). On
-/// distros where system headers live elsewhere entirely (NixOS: /nix/store)
-/// these are inert and the shim include/ entry does all the pruning - do NOT
-/// "fix" that with a store-path pattern, nix builds put the source tree in
-/// the store too, which is #801 all over again.
+/// System headers are deliberately *not* blocklisted. They used to be
+/// (`.*/usr/include/.*` and friends), which meant the bindings differed by
+/// distro: on NixOS the patterns never matched anything, so `__u32`/`__le64`
+/// were emitted normally, while everywhere else they were pruned - and bindgen
+/// can't see across a blocklist that a pruned type is Copy, so it dropped
+/// Copy/Clone/Debug from every struct holding one and demoted their containing
+/// unions to the `__BindgenUnionField` fallback. Harmless until bindgen 0.73
+/// gave that fallback's storage a `#[repr(align)]`, which a `#[repr(packed)]`
+/// parent rejects outright (E0588 on bch_dirent, bch_ioctl_data).
+///
+/// Emitting them costs nothing: the allowlists bound what gets generated, so
+/// only the system types our own structs actually reference come through, and
+/// the primitives are type aliases, which are transparent - `__u32` here and
+/// `__u32` from the shim are the same type. Verified by generating on Arch and
+/// NixOS: identical type surfaces.
 pub fn default_blocklist(src: &str) -> Vec<String> {
     let include_dir = format!("{}/include", parent(src));
-    vec![format!("{}/.*", regex_escape(&include_dir)),
-         ".*/usr/include/.*".to_string(),
-         ".*/usr/local/include/.*".to_string(),
-         ".*/usr/lib/.*".to_string()]
+    vec![format!("{}/.*", regex_escape(&include_dir))]
 }
 
 /// Generate the x-macro-derived *_gen.rs files from the *_format.h headers.
