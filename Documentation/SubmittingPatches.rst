@@ -8,9 +8,10 @@ Submission checklist
 
 Patches must be tested before being submitted, either with the xfstests suite
 [0]_, or the full bcachefs test suite in ktest [1]_, depending on what's being
-touched. Note that ktest wraps xfstests and will be an easier method to running
-it for most users; it includes single-command wrappers for all the mainstream
-in-kernel local filesystems.
+touched. The bcachefs ktests live in the separate ktest repository, under
+``tests/fs/bcachefs/``. Note that ktest wraps xfstests and will be an easier
+method to running it for most users; it includes single-command wrappers for
+all the mainstream in-kernel local filesystems.
 
 Patches will undergo more testing after being merged (including
 lockdep/kasan/preempt/etc. variants), these are not generally required to be
