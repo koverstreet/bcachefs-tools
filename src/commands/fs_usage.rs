@@ -914,7 +914,7 @@ fn build_device_usage(d: DevContext, include_data_types: bool) -> DeviceUsage {
     };
 
     let hidden = usage.hidden_sectors();
-    let capacity = usage.capacity_sectors() - hidden;
+    let capacity = usage.capacity_sectors();
     let used = usage.used_sectors() - hidden;
     let used_percent = if usage.nr_buckets > 0 {
         usage.used_buckets() * 100 / usage.nr_buckets
@@ -1164,7 +1164,7 @@ fn devices_to_text(out: &mut Printbuf, devices: &[DeviceUsage], detailed: bool) 
             }
 
             write!(sub, "{}\t", d.state).unwrap();
-            sub.units_sectors(d.capacity);
+            sub.units_sectors(d.capacity.saturating_sub(d.hidden));
             write!(sub, "\r").unwrap();
             sub.units_sectors(d.used);
             write!(sub, "\r{:>2}%\r", d.used_percent).unwrap();
@@ -1264,3 +1264,51 @@ fn dev_leaving_sectors(entries: &[AccountingEntry], dev_idx: u32) -> u64 {
         .unwrap_or(0)
 }
 pub const CMD: super::CmdDef = typed_cmd!("usage", "Show filesystem disk usage", Cli, fs_usage);
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fixture_device() -> DeviceUsage {
+        DeviceUsage {
+            label: Some("fixture".to_string()),
+            device_index: 1,
+            device: "sdx".to_string(),
+            state: "rw".to_string(),
+            capacity: 100,
+            used: 40,
+            hidden: 7,
+            used_percent: 40,
+            leaving: 0,
+            stripe_empty: 0,
+            bucket_size: 1,
+            buckets: 100,
+            data_types: Some(vec![DeviceDataTypeUsage {
+                data_type: "user".to_string(),
+                is_stripe: false,
+                sectors: 40,
+                buckets: 40,
+                fragmented: 0,
+            }]),
+        }
+    }
+
+    #[test]
+    fn device_capacity_preserves_total_and_summary_hides_reserved_space() {
+        let device = fixture_device();
+
+        let json = serde_json::to_value(&device).unwrap();
+        assert_eq!(json["capacity_bytes"], 100 * SECTOR_BYTES);
+        assert_eq!(json["hidden_bytes"], 7 * SECTOR_BYTES);
+
+        let mut summary = Printbuf::new();
+        devices_to_text(&mut summary, &[device], false);
+        assert!(summary.as_str().contains("47616"));
+        assert!(!summary.as_str().contains("51200"));
+
+        let mut detailed = Printbuf::new();
+        dev_usage_full_to_text(&mut detailed, &fixture_device());
+        assert!(detailed.as_str().contains("51200"));
+        assert!(!detailed.as_str().contains("47616"));
+    }
+}
