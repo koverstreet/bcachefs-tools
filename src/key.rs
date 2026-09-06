@@ -109,9 +109,18 @@ impl Unlocked {
 
     /// Put it where bch2_request_key() will look, for the mount(2) path - that
     /// has nowhere to carry a parameter, so the keyring is the only channel.
+    ///
+    /// The kernel searches the invoking task's keyring tree, and a fresh
+    /// session need not link the user keyring: add it to the session keyring
+    /// the mount syscall will run under, and to the user keyring as before, for
+    /// anything after us that expects it there.
     pub fn to_keyring(&self) -> Result<()> {
         match self {
-            Self::Key(k)    => KeyHandle::new(k, Keyring::User).map(|_| ()),
+            Self::Key(k)    => {
+                let user    = KeyHandle::new(k, Keyring::User);
+                let session = KeyHandle::new(k, Keyring::Session);
+                user.or(session).map(|_| ())
+            }
             Self::InKeyring => Ok(()),
         }
     }
