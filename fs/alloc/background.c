@@ -151,9 +151,30 @@
  *   node updates during splits and merges that must never fail.
  * \end{description}
  *
- * This layered approach ensures that critical internal operations (journal
- * reclaim, btree splits) can always make progress, even when the filesystem is
- * full from the user's perspective.
+ * Concretely, two reserves implement this ladder, both keyed on the watermark
+ * so that a higher-priority request always sees at least as much space as a
+ * lower-priority one. The free-bucket reserve withholds part of each device's
+ * buckets from a request: writes at \texttt{normal} must leave a fraction of
+ * the device free (currently 1/64, and \texttt{stripe} twice that) plus a small
+ * btree allowance sized to hold the fixed btree-node reserve; the copygc and
+ * btree watermarks keep only decreasing multiples of that allowance; and the
+ * lowest watermarks reserve nothing, so btree interior updates and journal
+ * reclaim may take a device's last free bucket. The second reserve governs the
+ * bounded pool of in-flight bucket descriptors (open buckets). It is a floor on
+ * how many of that pool must remain \emph{free} rather than a cap on holdings:
+ * an allocation blocks unless free descriptors exceed the watermark's floor, so
+ * the higher the priority the lower the floor, down to zero for btree interior
+ * updates.
+ *
+ * These reserves break an allocation deadlock: copygc, btree splits and
+ * journal reclaim must each allocate a destination before they can free
+ * space, so if foreground writes could drain free space to zero none of them
+ * could make progress. Foreground writes therefore wait once free space falls
+ * to the reserve, letting the higher watermarks continue. This per-request
+ * gating is distinct from the copygc capacity reserve
+ * (\texttt{gc\_reserve\_percent}, default 8\%), which sets aside
+ * whole-filesystem space for the same purpose and is what lowers reported
+ * capacity.
  *
  * \subsubsection{Accounting}
  *
