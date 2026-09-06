@@ -83,9 +83,9 @@ struct DevContext {
     info: DevInfo,
     usage: Option<DevUsage>,
     leaving: u64,
-    /// Sectors this device holds in stripe data blocks that are empty. Zero
-    /// when the accounting hasn't been computed - see stripe_frag_accounting.
-    stripe_empty: u64,
+    /// Sectors this device holds in empty stripe data blocks; None when the
+    /// accounting hasn't been computed.
+    stripe_empty: Option<u64>,
 }
 
 fn fs_usage_to_text(
@@ -535,11 +535,11 @@ fn devs_usage_to_text(
         Err(_) => Vec::new(),
     };
 
-    // Clear compat bit means not computed: ask for nothing, print nothing.
-    let dev_stripe_frag_map = match handle.sb_has_compat(c::bch_sb_compat::stripe_frag_accounting.0) {
-        Ok(true) => handle.query_accounting(disk_accounting_type::dev_stripe_frag.bit())
-            .map(|r| r.entries).unwrap_or_default(),
-        _ => Vec::new(),
+    // The kernel withholds these until the accounting has been computed, so an
+    // absent entry means unknown, not zero.
+    let dev_stripe_frag_map = match handle.query_accounting(disk_accounting_type::dev_stripe_frag.bit()) {
+        Ok(result) => result.entries,
+        Err(_) => Vec::new(),
     };
 
     let mut dev_ctxs: Vec<DevContext> = Vec::new();
@@ -640,8 +640,9 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
         {
             let sub = &mut *sub.indent(2);
 
-            // Only meaningful on the stripe row, so only shown when nonzero.
-            let show_empty = d.stripe_empty > 0;
+            // Zero included: no reusable space is a different answer from
+            // don't know, and it's the one to read next to `fragmented`.
+            let show_empty = d.stripe_empty.is_some();
 
             write!(sub, "\tdata\rbuckets\rfragmented").unwrap();
             if show_empty {
@@ -666,10 +667,10 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
                     sub.units_sectors(dt.fragmented);
                 }
 
-                if show_empty {
+                if let Some(empty) = d.stripe_empty {
                     write!(sub, "\r").unwrap();
                     if dt_type == data_type::stripe {
-                        sub.units_sectors(d.stripe_empty);
+                        sub.units_sectors(empty);
                     }
                 }
                 write!(sub, "\r\n").unwrap();
@@ -690,13 +691,12 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DevContext) {
 /// Sectors of this device's stripe data that sit in empty blocks - counter 1
 /// of dev_stripe_frag. Counter 0 is the device's total stripe data, which
 /// dev_usage already reports as the `stripe` row.
-fn dev_stripe_empty_sectors(entries: &[AccountingEntry], dev_idx: u32) -> u64 {
+fn dev_stripe_empty_sectors(entries: &[AccountingEntry], dev_idx: u32) -> Option<u64> {
     entries.iter()
         .find_map(|e| match e.pos.decode() {
             DiskAccountingKind::DevStripeFrag { dev } if dev as u32 == dev_idx => Some(e.counter(1)),
             _ => None,
         })
-        .unwrap_or(0)
 }
 
 fn dev_leaving_sectors(entries: &[AccountingEntry], dev_idx: u32) -> u64 {
