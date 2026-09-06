@@ -47,7 +47,13 @@ static void bch2_direct_IO_read_endio(struct bio *bio)
 	struct bch_read_bio *rbio = to_rbio(bio);
 	struct dio_read *dio = bio->bi_private;
 
-	if (rbio->ret)
+	/*
+	 * no_poison_check asks for what is physically there. The read still
+	 * failed, and said so - err_report carries which errors - but the bytes
+	 * it got are in the caller's buffer, and replacing the count with the
+	 * error is what throws them away.
+	 */
+	if (rbio->ret && !(dio->flags & BCH_READ_no_poison_check))
 		dio->ret = bch2_err_class(rbio->ret);
 
 	closure_put(&dio->cl);
@@ -121,6 +127,7 @@ static int __bch2_direct_IO_read(struct kiocb *req, struct iov_iter *iter,
 
 	dio->req	= req;
 	dio->ret	= ret;
+	dio->flags	= flags;
 	/*
 	 * This is one of the sketchier things I've encountered: we have to skip
 	 * the dirtying of requests that are internal from the kernel (i.e. from

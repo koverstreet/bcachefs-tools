@@ -11,6 +11,13 @@ struct dio_read {
 	struct kiocb			*req;
 	long				ret;
 	bool				should_dirty;
+	/*
+	 * The read's flags. rbio->flags is only set on the rbio the read path
+	 * picks for an extent - a split, whenever the read bounces - so the
+	 * dio's own rbio doesn't carry them, and the endio has nowhere else to
+	 * look.
+	 */
+	enum bch_read_flags		flags;
 	struct bch_read_bio		rbio;
 };
 
