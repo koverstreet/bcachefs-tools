@@ -862,16 +862,6 @@ struct DevContext {
     stripe_empty: Option<u64>,
 }
 
-fn dev_leaving_sectors(entries: &[AccountingEntry], dev_idx: u32) -> u64 {
-    entries
-        .iter()
-        .find_map(|e| match e.pos.decode() {
-            DiskAccountingKind::DevLeaving { dev } if dev == dev_idx => Some(e.counter(0)),
-            _ => None,
-        })
-        .unwrap_or(0)
-}
-
 fn collect_dev_contexts(handle: &BcachefsHandle, devs: &[DevInfo]) -> Result<Vec<DevContext>> {
     // Query dev_leaving accounting if available
     let dev_leaving_map = match handle.query_accounting(disk_accounting_type::dev_leaving.bit()) {
