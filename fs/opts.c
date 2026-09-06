@@ -977,6 +977,11 @@ bool __bch2_opt_set_sb(struct bch_sb *sb, int dev_idx,
 		struct bch_member *m = bch2_members_v2_get_mut(sb, dev_idx);
 		changed = v != opt->get_member(m);
 		opt->set_member(m, v);
+
+		if (opt == &bch2_opt_table[Opt_rotational]) {
+			changed |= !BCH_MEMBER_ROTATIONAL_SET(m);
+			SET_BCH_MEMBER_ROTATIONAL_SET(m, true);
+		}
 	}
 
 	if (opt->type == BCH_OPT_STR_MEMBER &&
