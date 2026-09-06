@@ -282,6 +282,8 @@ struct DeviceUsage {
 #[derive(Serialize)]
 struct DeviceDataTypeUsage {
     data_type: String,
+    #[serde(skip)]
+    is_stripe: bool,
     #[serde(rename = "bytes", serialize_with = "ser_bytes")]
     sectors: u64,
     buckets: u64,
@@ -845,16 +847,6 @@ struct DevContext {
     stripe_empty: u64,
 }
 
-fn dev_leaving_sectors(entries: &[AccountingEntry], dev_idx: u32) -> u64 {
-    entries
-        .iter()
-        .find_map(|e| match e.pos.decode() {
-            DiskAccountingKind::DevLeaving { dev } if dev == dev_idx => Some(e.counter(0)),
-            _ => None,
-        })
-        .unwrap_or(0)
-}
-
 fn collect_dev_contexts(handle: &BcachefsHandle, devs: &[DevInfo]) -> Result<Vec<DevContext>> {
     // Query dev_leaving accounting if available
     let dev_leaving_map = match handle.query_accounting(disk_accounting_type::dev_leaving.bit()) {
@@ -940,6 +932,7 @@ fn build_device_usage(d: DevContext, include_data_types: bool) -> DeviceUsage {
                 };
                 DeviceDataTypeUsage {
                     data_type: data_type_name(dt_type),
+                    is_stripe: dt_type == data_type::stripe,
                     sectors,
                     buckets: dt.buckets,
                     fragmented: dt.fragmented,
@@ -1231,7 +1224,7 @@ fn dev_usage_full_to_text(out: &mut Printbuf, d: &DeviceUsage) {
 
                 if show_empty {
                     write!(sub, "\r").unwrap();
-                    if dt_type == data_type::stripe {
+                    if dt.is_stripe {
                         sub.units_sectors(d.stripe_empty);
                     }
                 }
