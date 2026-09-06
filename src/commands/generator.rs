@@ -10,9 +10,17 @@
 //! when a unit is loaded, after every generator has exited, and we read the same
 //! fstab rather than its output.
 //!
-//! Only fstab entries. Generators can't enumerate units, so a hand-written
-//! .mount or a mount(8) from a shell isn't covered - both have somebody at a
-//! terminal. An entry with its own x-systemd.mount-timeout= is left alone.
+//! fstab entries, plus the initrd's root. Generators can't enumerate units, so
+//! a hand-written .mount or a mount(8) from a shell isn't covered - both have
+//! somebody at a terminal. An entry with its own x-systemd.mount-timeout= is
+//! left alone.
+//!
+//! The root needs its own path because in an initrd there is no fstab line for
+//! it: systemd-fstab-generator synthesizes sysroot.mount from root=, rootfstype=
+//! and rootflags= on the kernel cmdline, and mkinitcpio ships an *empty*
+//! /etc/fstab - so the fstab walk reads a file, finds nothing, and returns
+//! happily. That left the one mount where a long recovery actually blocks the
+//! boot on the 90-second default, which is the case this generator exists for.
 
 use std::fs;
 use std::io::Write;
@@ -141,6 +149,62 @@ fn has_own_timeout(opts: &str) -> bool {
     opts.split(',').any(|o| o.starts_with("x-systemd.mount-timeout="))
 }
 
+/// The mount point systemd-fstab-generator gives the cmdline root in an initrd.
+const SYSROOT: &str = "/sysroot";
+
+/// Last occurrence of `key=` on the kernel cmdline, which is the one the kernel
+/// and systemd both take.
+fn cmdline_param<'a>(cmdline: &'a str, key: &str) -> Option<&'a str> {
+    cmdline
+        .split_whitespace()
+        .filter_map(|w| w.split_once('='))
+        .filter(|(k, _)| *k == key)
+        .map(|(_, v)| v)
+        .last()
+}
+
+/// systemd's own test, from in_initrd() in src/basic/initrd-util.c. Every
+/// initramfs builder writes this file - mkinitcpio unconditionally, dracut too.
+fn in_initrd() -> bool {
+    Path::new("/etc/initrd-release").exists()
+}
+
+/// The initrd's root, as an Entry, when it's ours.
+///
+/// Deciding this may not touch the device: generators share one 90-second
+/// budget and overrunning kills the whole batch, so blkid-ing the root is out.
+/// That leaves what the cmdline says, and one inference:
+///
+///   rootfstype=bcachefs   ours, say so.
+///   rootfstype=<other>    explicitly not ours - leave it alone.
+///   rootfstype unset      assume ours. We are only *in* an initrd because
+///                         somebody added the bcachefs hook to build us in,
+///                         and that hook exists to boot a bcachefs root.
+///
+/// The last arm is the one with a cost: get it wrong and a non-bcachefs root
+/// that genuinely can't mount hangs at boot instead of failing at 90s. It needs
+/// an image built with our hook *and* a root that isn't bcachefs *and* no
+/// rootfstype= - and dropping it would give up every user who doesn't set
+/// rootfstype=, which is most of them, in exactly the case that motivated this.
+fn cmdline_root(cmdline: &str) -> Option<Entry> {
+    if !in_initrd() {
+        return None;
+    }
+
+    match cmdline_param(cmdline, "rootfstype") {
+        Some("bcachefs") | None => {}
+        Some(other) => {
+            debug!("generator: rootfstype={other}, leaving the root alone");
+            return None;
+        }
+    }
+
+    Some(Entry {
+        target: SYSROOT.to_string(),
+        opts:   cmdline_param(cmdline, "rootflags").unwrap_or("defaults").to_string(),
+    })
+}
+
 /// The name systemd will give this mount's unit.
 ///
 /// systemd-fstab-generator resolves the mount point before escaping it -
@@ -214,15 +278,20 @@ fn cmd_generator(argv: Vec<String>) -> Result<()> {
         return Ok(());
     };
 
-    let text = match fs::read_to_string("/etc/fstab") {
-        Ok(t) => t,
+    let mut entries = match fs::read_to_string("/etc/fstab") {
+        Ok(t) => parse_fstab(&t),
         Err(e) => {
             debug!("generator: no fstab to read: {e}");
-            return Ok(());
+            Vec::new()
         }
     };
 
-    for e in parse_fstab(&text) {
+    match fs::read_to_string("/proc/cmdline") {
+        Ok(c)  => entries.extend(cmdline_root(&c)),
+        Err(e) => debug!("generator: no kernel cmdline to read: {e}"),
+    }
+
+    for e in entries {
         if has_own_timeout(&e.opts) {
             debug!("generator: {} sets its own timeout, leaving it", e.target);
             continue;
