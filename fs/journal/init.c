@@ -8,10 +8,12 @@
 #include "journal/sb.h"
 #include "journal/seq_blacklist.h"
 
+#include "alloc/background.h"
 #include "alloc/foreground.h"
 #include "alloc/replicas.h"
 #include "btree/update.h"
 #include "init/error.h"
+#include "init/dev.h"
 
 /* allocate journal on a device: */
 
@@ -175,6 +177,132 @@ static int bch2_set_nr_journal_buckets_loop(struct bch_fs *c, struct bch_dev *ca
 }
 
 /*
+ * Remove all journal buckets from a live device while keeping it online.
+ */
+static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
+					       unsigned nr)
+{
+	struct journal_device *ja = &ca->journal;
+	bool started = test_bit(BCH_FS_started, &c->flags);
+	bool allocator_removed = false;
+	int ret = 0;
+	u64 *old_buckets = NULL, *old_bucket_seq = NULL;
+	unsigned old_nr, nr_freed = 0;
+
+	if (nr)
+		return -EINVAL;
+
+	if (started) {
+		bool other = false;
+
+		scoped_guard(rcu) {
+			for_each_member_device_rcu(c, other_ca,
+						   &c->allocator.rw_devs[BCH_DATA_journal])
+				if (other_ca != ca && other_ca->journal.nr) {
+					other = true;
+					break;
+				}
+		}
+
+		if (!other)
+			return bch_err_throw(c, insufficient_journal_devices);
+	}
+
+	ret = bch2_journal_flush_device_pins(&c->journal, ca->dev_idx) ?:
+		bch2_journal_flush(&c->journal);
+	if (ret)
+		return ret;
+
+	/*
+	 * Keep the normal journal transaction path, but make sure it can
+	 * reserve journal space only on the remaining members. The device
+	 * stays online and is added back below after its journal is gone.
+	 */
+	bch2_dev_allocator_remove(c, ca);
+	allocator_removed = true;
+	bch2_dev_journal_stop(&c->journal, ca);
+
+	old_nr = ja->nr;
+	old_buckets = ja->buckets;
+	old_bucket_seq = ja->bucket_seq;
+
+	/* Account the old buckets as free, one transaction at a time. */
+	for (unsigned i = 0; i < old_nr && !ret; i++) {
+		CLASS(btree_trans, trans)(c);
+		ret = bch2_trans_mark_metadata_bucket(trans, ca,
+						old_buckets[i], BCH_DATA_free, 0,
+						BTREE_TRIGGER_transactional);
+		if (!ret)
+			nr_freed++;
+	}
+
+	/* Restore any buckets already freed if a later transaction failed. */
+	if (ret) {
+		while (nr_freed) {
+			CLASS(btree_trans, trans)(c);
+			int ret2 = bch2_trans_mark_metadata_bucket(trans, ca,
+						old_buckets[--nr_freed], BCH_DATA_journal,
+						ca->mi.bucket_size, BTREE_TRIGGER_transactional);
+			if (ret2)
+				bch_err_fn(c, ret2);
+		}
+	}
+
+	if (!ret) {
+		scoped_guard(journal_block, &c->journal) {
+			scoped_guard(spinlock, &c->journal.lock) {
+				if (ja->nr != old_nr)
+					ret = -EAGAIN;
+			}
+
+			guard(mutex_noio)(&c->sb_lock);
+
+			struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb,
+								ca->dev_idx);
+			u8 old_data_allowed = ca->mi.data_allowed;
+			u8 data_allowed = old_data_allowed & ~BIT(BCH_DATA_journal);
+			SET_BCH_MEMBER_DATA_ALLOWED(m, data_allowed);
+
+			if (!ret)
+				ret = bch2_journal_buckets_to_sb(c, ca, NULL, 0) ?:
+					bch2_write_super(c);
+			if (!ret) {
+				ca->mi.data_allowed = data_allowed;
+				scoped_guard(spinlock, &c->journal.lock) {
+					ja->buckets = NULL;
+					ja->bucket_seq = NULL;
+					ja->nr = 0;
+					ja->discard_idx = 0;
+					ja->dirty_idx_ondisk = 0;
+					ja->dirty_idx = 0;
+					ja->cur_idx = 0;
+					ja->sectors_free = 0;
+					bch2_journal_space_available(&c->journal);
+				}
+			} else {
+				SET_BCH_MEMBER_DATA_ALLOWED(m, old_data_allowed);
+			}
+		}
+	}
+
+	if (allocator_removed) {
+		bch2_dev_allocator_add(c, ca);
+		bch2_recalc_capacity(c);
+	}
+
+	if (ret) {
+		/* Keep the old journal arrays on any failed superblock update. */
+		bch_err_fn(c, ret);
+		return ret;
+	}
+
+	kfree(old_buckets);
+	kfree(old_bucket_seq);
+
+	return ret;
+}
+
+/*
  * Allocate more journal space at runtime - not currently making use if it, but
  * the code works:
  */
@@ -186,7 +314,9 @@ int bch2_set_nr_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 	if (READ_ONCE(ca->removing))
 		return bch_err_throw(c, device_has_been_removed);
 
-	int ret = bch2_set_nr_journal_buckets_loop(c, ca, nr, false);
+	int ret = nr < ca->journal.nr
+		? bch2_shrink_journal_buckets(c, ca, nr)
+		: bch2_set_nr_journal_buckets_loop(c, ca, nr, false);
 	bch_err_fn(c, ret);
 	return ret;
 }
@@ -248,7 +378,18 @@ int bch2_dev_journal_bucket_delete(struct bch_dev *ca, u64 b)
 	}
 
 	kfree(new_buckets);
-	return 0;
+
+	{
+		CLASS(btree_trans, trans)(c);
+		ret = lockrestart_do(trans,
+			commit_do(trans, NULL, NULL, 0,
+				bch2_trans_mark_metadata_bucket(trans, ca, b,
+							BCH_DATA_free, 0,
+							BTREE_TRIGGER_transactional)));
+	}
+	bch_err_fn(c, ret);
+
+	return ret;
 }
 
 int bch2_dev_journal_alloc(struct bch_dev *ca, bool new_fs)
