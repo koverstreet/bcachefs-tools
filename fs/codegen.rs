@@ -260,8 +260,24 @@ fn regex_escape(s: &str) -> String {
 /// `__u32` from the shim are the same type. Verified by generating on Arch and
 /// NixOS: identical type surfaces.
 pub fn default_blocklist(src: &str) -> Vec<String> {
-    let include_dir = format!("{}/include", parent(src));
-    vec![format!("{}/.*", regex_escape(&include_dir))]
+    vec![blocklist_dir(&format!("{}/include", parent(src)))]
+}
+
+/// A `--blocklist-file` regex for everything under `dir` — except its `uapi/`
+/// subtree, which must stay visible for the reason above.
+///
+/// The kernel build can't simply drop its blocklist the way userspace did: the
+/// trees it names hold the kernel's own structs — `inode`, `super_block`, `bio`
+/// — and `kernel::bindings` already binds those, so a second copy would be a
+/// different type and nothing would link. But the only part of them bcachefs
+/// reaches is `uapi/`, and there it's scalar typedefs, which are transparent.
+/// So the tree stays blocklisted and the uapi half is carved out.
+///
+/// bindgen matches these with the `regex` crate, which has no lookahead, so
+/// "under `dir` but not under `dir/uapi/`" is spelled as an alternation over the
+/// prefixes of `uapi/` that can't be completed.
+fn blocklist_dir(dir: &str) -> String {
+    format!(r"{}/(?:[^u]|u(?:[^a]|a(?:[^p]|p(?:[^i]|i[^/])))).*", regex_escape(dir))
 }
 
 /// Generate the x-macro-derived *_gen.rs files from the *_format.h headers.
