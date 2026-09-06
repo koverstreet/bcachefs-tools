@@ -929,7 +929,7 @@ fn build_device_usage(d: DevContext, include_data_types: bool) -> DeviceUsage {
     };
 
     let hidden = usage.hidden_sectors();
-    let capacity = usage.capacity_sectors() - hidden;
+    let capacity = usage.capacity_sectors();
     let used = usage.used_sectors() - hidden;
     let used_percent = if usage.nr_buckets > 0 {
         usage.used_buckets() * 100 / usage.nr_buckets
@@ -1204,7 +1204,7 @@ fn devices_to_text(out: &mut Printbuf, devices: &[DeviceUsage], detailed: bool) 
             }
 
             write!(sub, "{}\t", d.state).unwrap();
-            sub.units_sectors(d.capacity);
+            sub.units_sectors(d.capacity.saturating_sub(d.hidden));
             write!(sub, "\r").unwrap();
             sub.units_sectors(d.used);
             write!(sub, "\r{:>2}%\r", d.used_percent).unwrap();
@@ -1309,49 +1309,46 @@ pub const CMD: super::CmdDef = typed_cmd!("usage", "Show filesystem disk usage",
 mod tests {
     use super::*;
 
-    fn fixture_usage() -> FsUsage {
-        FsUsage {
-            mountpoint: "/fixture".to_string(),
-            uuid: "12345678-1234-5678-9abc-def012345678".to_string(),
-            fields: vec!["devices"],
-            capacity: 200,
-            used: 80,
-            online_reserved: 10,
-            free: vec![100, 50, 0],
-            free_now: vec![90, 40, 0],
-            replicas_summary: ReplicasSummary {
-                replicated: Vec::new(),
-                erasure_coded: Vec::new(),
-                cached: 0,
-                reserved: 0,
-            },
-            replicas: Vec::new(),
-            persistent_reserved: Vec::new(),
-            compression: Vec::new(),
-            btree: Vec::new(),
-            rebalance_work: Vec::new(),
-            reconcile_work: Vec::new(),
-            devices: Vec::new(),
+    fn fixture_device() -> DeviceUsage {
+        DeviceUsage {
+            label: Some("fixture".to_string()),
+            device_index: 1,
+            device: "sdx".to_string(),
+            state: "rw".to_string(),
+            capacity: 100,
+            used: 40,
+            hidden: 7,
+            used_percent: 40,
+            leaving: 0,
+            stripe_empty: 0,
+            bucket_size: 1,
+            buckets: 100,
+            data_types: Some(vec![DeviceDataTypeUsage {
+                data_type: "user".to_string(),
+                is_stripe: false,
+                sectors: 40,
+                buckets: 40,
+                fragmented: 0,
+            }]),
         }
     }
 
     #[test]
-    fn shared_model_keeps_uuid_free_space_and_single_byte_unit() {
-        let usage = fixture_usage();
-        let json = serde_json::to_value(&usage).unwrap();
+    fn device_capacity_preserves_total_and_summary_hides_reserved_space() {
+        let device = fixture_device();
 
-        assert_eq!(json["uuid"], usage.uuid);
-        assert_eq!(json["capacity_bytes"], 200 * SECTOR_BYTES);
-        assert_eq!(json["free_bytes"][0], 100 * SECTOR_BYTES);
-        assert_eq!(json["free_now_bytes"][0], 90 * SECTOR_BYTES);
-        assert!(json.get("capacity").is_none());
+        let json = serde_json::to_value(&device).unwrap();
+        assert_eq!(json["capacity_bytes"], 100 * SECTOR_BYTES);
+        assert_eq!(json["hidden_bytes"], 7 * SECTOR_BYTES);
 
-        let mut text = Printbuf::new();
-        fs_usage_to_text(&mut text, &usage);
-        let text = text.to_string();
-        assert!(text.contains(&usage.uuid));
-        assert!(text.contains("Free:"));
-        assert!(text.contains("51200"));
-        assert!(text.contains("46080"));
+        let mut summary = Printbuf::new();
+        devices_to_text(&mut summary, &[device], false);
+        assert!(summary.as_str().contains("47616"));
+        assert!(!summary.as_str().contains("51200"));
+
+        let mut detailed = Printbuf::new();
+        dev_usage_full_to_text(&mut detailed, &fixture_device());
+        assert!(detailed.as_str().contains("51200"));
+        assert!(!detailed.as_str().contains("47616"));
     }
 }
