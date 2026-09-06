@@ -57,7 +57,7 @@ use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{is_restart, BtreeIter, CommitFlags, TransAttempt, TransBkey, UpdateTriggerFlags};
 use crate::c;
 use crate::data::durability::BkeyVDurability;
-use crate::data::ptrs::{brand, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs, PtrsMut};
+use crate::data::ptrs::{brand, crc_is_compressed, BkeyVPtrs, Branded, ExtentEntryMut, PtrMask, Ptrs, PtrsMut};
 use crate::data::reconcile::needs_reconcile::rb_bit;
 use crate::data::reconcile::trigger::{rb_work_id, BkeyVReconcile};
 use crate::errcode::BchError;
@@ -134,6 +134,25 @@ pub fn plan(t: &TransAttempt<'_, '_>, k: BkeySC<'_>, opts: &c::bch_inode_opts) -
     }
     let csum_type = fs.data_checksum_type_rb(&rb);
     let compression_type = c::bch_compression_opt::to_type(rb.background_compression(), fs);
+
+    // Only the checksum to change, on a whole, plain extent all of one crc: the
+    // read's data is kept and just its checksums replaced, no write. Cached,
+    // stripe, compressed, partial, encryption-class and mixed-crc cases take the
+    // rewrite below.
+    let rechecksum = only(o::data_checksum) && k.k.key_type() == BkeyType::extent && {
+        let first = kp.ptrs_decoded(fs).next().map(|d| d.p);
+        first.is_some_and(|first| kp.ptrs_decoded(fs).map(|d| d.p).all(|p| {
+            !(p.ptr.cached() != 0 || p.has_ec || p.crc.csum_type == c::CsumType::none ||
+              p.crc.csum_type == csum_type || crc_is_compressed(&p.crc) || p.crc.offset != 0 ||
+              p.crc.live_size != p.crc.uncompressed_size || p.crc.compressed_size != p.crc.uncompressed_size ||
+              p.crc.csum_type.get().is_encryption() != csum_type.is_encryption()) &&
+            p.crc == first.crc
+        }))
+    };
+    if rechecksum {
+        d.type_ = c::DataUpdateType::rechecksum;
+        return Ok(Plan::Move(d));
+    }
 
     // Before the parking below, which doesn't need them: they're only read
     let (kill, kill_ec) = brand(kp, |kb| -> Result<_, BchError> {
