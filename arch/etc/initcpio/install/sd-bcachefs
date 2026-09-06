@@ -3,15 +3,27 @@
 build() {
     add_module bcachefs
     add_binary bcachefs
+    # The mount helper. mount(8) execs /usr/bin/mount.<fstype> if it exists,
+    # and systemd's .mount units go through mount(8) - so without this a
+    # multi-device source ("dev1:dev2") never reaches us, and nothing ever
+    # calls systemd-ask-password, because the passphrase prompt lives here.
+    add_binary mount.bcachefs
     add_binary systemd-ask-password
+    # Raises the mount timeout so a long recovery isn't killed at 90s. Only
+    # covers /etc/fstab entries; an initrd root comes from root= on the
+    # cmdline via systemd-fstab-generator, so this does nothing for sysroot
+    # yet - see the note in src/commands/generator.rs.
     add_binary /usr/lib/systemd/system-generators/bcachefs-mount-generator
     add_udev_rule /usr/lib/udev/rules.d/64-bcachefs.rules
 }
 
 help() {
     cat <<HELPEOF
-This hook adds bcachefs to the image.
-For encrypted root also add sd-encrypt.
+This hook adds bcachefs to a systemd-based image. For a busybox-based one
+use the 'bcachefs' hook instead.
+
+Native bcachefs encryption is unlocked by mount.bcachefs, which prompts via
+systemd-ask-password. For bcachefs on top of LUKS, add sd-encrypt as well.
 HELPEOF
 }
 
