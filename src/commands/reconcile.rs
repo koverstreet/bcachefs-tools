@@ -171,26 +171,33 @@ fn cmd_reconcile_status(cli: StatusCli) -> Result<()> {
     Ok(())
 }
 
-fn cmd_reconcile_wait(cli: WaitCli) -> Result<()> {
+pub(crate) fn wait_for_all_except_pending(filesystem: &str) -> Result<()> {
+    reconcile_wait(filesystem, &ReconcileType::all_except_pending())
+}
 
-    let types = if cli.types.is_empty() {
-        ReconcileType::all_except_pending()
-    } else {
-        cli.types
-    };
-
-    let handle = BcachefsHandle::open(&cli.filesystem)
-        .map_err(|e| anyhow!("opening filesystem '{}': {}", cli.filesystem, e))?;
+fn reconcile_wait(filesystem: &str, types: &[ReconcileType]) -> Result<()> {
+    let handle = BcachefsHandle::open(filesystem)
+        .map_err(|e| anyhow!("opening filesystem '{}': {}", filesystem, e))?;
     let sysfs_path = sysfs::sysfs_path_from_fd(handle.sysfs_fd())?;
 
     // Trigger reconcile wakeup so it starts processing
     let _ = std::fs::write(sysfs_path.join("internal/trigger_reconcile_wakeup"), "1");
 
     if std::io::stdout().is_terminal() && std::io::stdin().is_terminal() {
-        reconcile_wait_tui(&handle, &sysfs_path, &types)
+        reconcile_wait_tui(&handle, &sysfs_path, types)
     } else {
-        reconcile_wait_headless(&handle, &sysfs_path, &types)
+        reconcile_wait_headless(&handle, &sysfs_path, types)
     }
+}
+
+fn cmd_reconcile_wait(cli: WaitCli) -> Result<()> {
+    let types = if cli.types.is_empty() {
+        ReconcileType::all_except_pending()
+    } else {
+        cli.types
+    };
+
+    reconcile_wait(&cli.filesystem, &types)
 }
 
 /// Interactive TUI mode: alternate screen, keyboard input, live updates.

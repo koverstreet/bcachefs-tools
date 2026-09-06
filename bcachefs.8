@@ -39,6 +39,8 @@ Check an existing filesystem for errors.
 Show disk usage
 .It Ic fs top
 Show runtime performance information
+.It Ic update
+Upgrade a mounted filesystem to the current incompatible feature set
 .El
 .Ss Commands for managing devices within a running filesystem
 .Bl -tag -width 22n -compact
@@ -258,6 +260,15 @@ List of sections to print
 .It Fl l , Fl -layout
 Print superblock layout
 .El
+.It Nm Ic update Oo Ar mountpoint Oc
+Upgrade a mounted filesystem to the current incompatible feature set.
+This sets
+.Cm version_upgrade=incompatible ,
+waits for reconcile work to finish, and then sets
+.Cm version_upgrade=none .
+If
+.Ar mountpoint
+is omitted, the current directory is used.
 .It Nm Ic set-fs-option Oo Ar options Oc Ar device
 .Bl -tag -width Ds
 .It Fl -errors Ns = Ns ( Cm continue | ro | panic )
