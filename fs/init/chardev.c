@@ -522,6 +522,18 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 	    !capable(CAP_SYS_ADMIN))
 		return bch_err_throw(c, EPERM_non_admin);
 
+	/*
+	 * The stripe fragmentation counters have no upgrade entry: on a
+	 * filesystem predating them, and until check_allocations has recomputed
+	 * accounting, zero is indistinguishable from never-computed. The compat
+	 * bit is what says they mean something, so without it don't return them
+	 * at all - an absent entry is a reading userspace can act on, a zero
+	 * would be a lie.
+	 */
+	if (!(c->sb.compat & BIT_ULL(BCH_COMPAT_stripe_frag_accounting)))
+		arg.accounting_types_mask &= ~(BIT(BCH_DISK_ACCOUNTING_stripe_frag) |
+					       BIT(BCH_DISK_ACCOUNTING_dev_stripe_frag));
+
 	int ret = bch2_fs_accounting_read(c, &accounting, arg.accounting_types_mask) ?:
 		(arg.accounting_u64s * sizeof(u64) < accounting.nr ? -ERANGE : 0) ?:
 		copy_to_user_errcode(&user_arg->accounting, accounting.data, accounting.nr);
