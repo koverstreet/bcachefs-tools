@@ -71,17 +71,30 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 	acc.replicas.data_type = BCH_DATA_user;
 	try(bch2_disk_accounting_mod(trans, &acc, &sectors, 1, false));
 
-	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(&s->k_i));
-
 	unsigned nr_good = 0;
+	u32 lost_blocks = 0, newly_lost = 0;
 
 	scoped_guard(rcu)
-		bkey_for_each_ptr(ptrs, ptr) {
-			if (ptr->dev == dev_idx)
-				ptr->dev = BCH_SB_MEMBER_INVALID;
+		for (unsigned i = 0; i < s->v.nr_blocks; i++) {
+			struct bch_extent_ptr *ptr = s->v.ptrs + i;
 
+			if (ptr->dev == dev_idx) {
+				ptr->dev = BCH_SB_MEMBER_INVALID;
+				newly_lost |= BIT(i);
+			}
+
+			/*
+			 * Two different questions, and they disagree on evacuating
+			 * devices: @nr_good is the redundancy we'd be left with, so
+			 * a device on its way out doesn't count - that's what the
+			 * policy checks below want. @lost_blocks is what's actually
+			 * unreadable now, and an evacuating device still has its
+			 * data.
+			 */
 			struct bch_dev *ca = bch2_dev_rcu_noerror(c, ptr->dev);
 			nr_good += ca && ca->mi.state != BCH_MEMBER_STATE_evacuating;
+			if (!ca)
+				lost_blocks |= BIT(i);
 		}
 
 	if (nr_good < s->v.nr_blocks && !(flags & BCH_FORCE_IF_DATA_DEGRADED)) {
@@ -98,6 +111,39 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 		bch2_bkey_val_to_text(err, c, k);
 		prt_newline(err);
 		return bch_err_throw(c, remove_would_lose_data);
+	}
+
+	/*
+	 * More blocks gone than the stripe can rebuild from: the extents in
+	 * them have no other copy, and the stripe key doesn't name an inode, so
+	 * once this commits the only thing tying them to their files is the
+	 * damage btree. Name them while we still can.
+	 *
+	 * Recorded in this transaction, so the records land with the
+	 * invalidation that caused them or not at all. The extents'
+	 * backpointers are already in BTREE_ID_stripe_backpointers by now: a
+	 * stripe's own backpointer sits at the end of its block's range, so the
+	 * scan re-keys a block's extents before it reaches the stripe key.
+	 */
+	if (hweight32(lost_blocks) > s->v.nr_redundant) {
+		/*
+		 * Everything, if this removal is what killed the stripe -
+		 * every block already invalidated stops being reconstructible
+		 * at this commit. If it was already dead, those were recorded
+		 * when it died and only our own blocks are news.
+		 */
+		u32 record = hweight32(lost_blocks & ~newly_lost) > s->v.nr_redundant
+			? newly_lost
+			: lost_blocks;
+
+		struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
+		wb_maybe_flush_init(&last_flushed);
+
+		for (u32 b = record; b; b &= b - 1)
+			try(bch2_ec_record_lost_block(trans,
+					bkey_i_to_s_c_stripe(&s->k_i), __ffs(b),
+					BCH_FSCK_ERR_data_lost_device_removed,
+					&last_flushed));
 	}
 
 	sectors = -sectors;

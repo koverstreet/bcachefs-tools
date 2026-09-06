@@ -386,12 +386,12 @@ struct bp_range {
  * removed, which is what BTREE_ID_stripe_backpointers holds.
  */
 static struct bp_range stripe_block_bps(struct bch_fs *c,
-					struct bkey_i_stripe *stripe,
+					struct bkey_s_c_stripe stripe,
 					unsigned blocknr)
 {
-	const struct bch_extent_ptr *ptr = &stripe->v.ptrs[blocknr];
+	const struct bch_extent_ptr *ptr = &stripe.v->ptrs[blocknr];
 
-	CLASS(bch2_dev_bkey_tryget, ca)(c, bkey_i_to_s_c(&stripe->k_i), ptr->dev);
+	CLASS(bch2_dev_bkey_tryget, ca)(c, stripe.s_c, ptr->dev);
 	if (ca) {
 		struct bpos bucket = PTR_BUCKET_POS(ca, ptr);
 
@@ -402,7 +402,7 @@ static struct bp_range stripe_block_bps(struct bch_fs *c,
 		};
 	}
 
-	u64 dev = bp_dev_for_ec_removed_dev(stripe->k.p.offset, blocknr);
+	u64 dev = bp_dev_for_ec_removed_dev(stripe.k->p.offset, blocknr);
 
 	return (struct bp_range) {
 		.btree	= BTREE_ID_stripe_backpointers,
@@ -422,7 +422,8 @@ static int stripe_update_bucket(struct btree_trans *trans,
 	struct bch_extent_ptr old_block = old_stripe->v.ptrs[old_blocknr];
 	struct bch_extent_ptr new_block = new_stripe->v.ptrs[new_blocknr];
 
-	struct bp_range bps = stripe_block_bps(c, old_stripe, old_blocknr);
+	struct bp_range bps = stripe_block_bps(c,
+				bkey_i_to_s_c_stripe(&old_stripe->k_i), old_blocknr);
 
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
@@ -584,8 +585,15 @@ static bool stripe_has_removing_dev(struct bch_fs *c, struct bch_stripe *v)
 	return false;
 }
 
+/*
+ * @count: whether to count the sb error here as well as recording it. The reuse
+ * path doesn't - bch2_ec_read_done() already counted the block that failed to
+ * reconstruct, and a damage record must name an error the counters have heard
+ * of, not raise the count a second time per extent.
+ */
 static int ec_record_lost_bp(struct btree_trans *trans,
 			     struct bkey_s_c_backpointer bp,
+			     enum bch_sb_error_id err, bool count,
 			     struct wb_maybe_flush *last_flushed)
 {
 	/* skip the resolve below for backpointers we couldn't attribute anyway */
@@ -602,13 +610,44 @@ static int ec_record_lost_bp(struct btree_trans *trans,
 	if (!k.k)
 		return 0;
 
-	return bch2_damage_record_key(trans, bp.v->btree_id, k.k->p,
-				      BCH_FSCK_ERR_stripe_reconstruct_failed);
+	return count
+		? bch2_damage_record_data_loss(trans, bp.v->btree_id, k.k->p, err)
+		: bch2_damage_record_key(trans, bp.v->btree_id, k.k->p, err);
+}
+
+/*
+ * Record damage against every extent in @blocknr of @stripe.
+ *
+ * Updates go into @trans and are NOT committed: the caller's commit decides
+ * whether the records land atomically with whatever destroyed the block. A
+ * block is a bucket, so this can be a lot of updates - a caller that can't
+ * carry them all in one transaction wants its own committing loop instead
+ * (see ec_record_lost_blocks()).
+ */
+int bch2_ec_record_lost_block(struct btree_trans *trans,
+			      struct bkey_s_c_stripe stripe, unsigned blocknr,
+			      enum bch_sb_error_id err,
+			      struct wb_maybe_flush *last_flushed)
+{
+	struct bp_range bps = stripe_block_bps(trans->c, stripe, blocknr);
+
+	return for_each_btree_key_max(trans, bp_iter, bps.btree,
+				      bps.start, bps.end, 0, bp_k, ({
+		if (bp_k.k->type != KEY_TYPE_backpointer)
+			continue;
+
+		ec_record_lost_bp(trans, bkey_s_c_to_backpointer(bp_k),
+				  err, true, last_flushed);
+	}));
 }
 
 /*
  * The reuse is abandoned, so the old stripe stays as it is and nothing else
  * discovers the loss until someone reads one of those files.
+ *
+ * Commits per backpointer rather than sharing one transaction: there's nothing
+ * here to be atomic with - the stripe was left untouched - and a whole block's
+ * worth of extents in one transaction would overrun it.
  */
 static void ec_record_lost_blocks(struct bch_fs *c, struct ec_stripe_new *s)
 {
@@ -619,7 +658,9 @@ static void ec_record_lost_blocks(struct bch_fs *c, struct ec_stripe_new *s)
 
 	for (u32 lost = s->old_stripe_lost_blocks; lost; lost &= lost - 1) {
 		unsigned block = __ffs(lost);
-		struct bp_range bps = stripe_block_bps(c, &s->old_stripe.key, block);
+		struct bp_range bps = stripe_block_bps(c,
+					bkey_i_to_s_c_stripe(&s->old_stripe.key.k_i),
+					block);
 
 		int ret = for_each_btree_key_max_commit(trans, bp_iter, bps.btree,
 					bps.start, bps.end, 0, bp_k,
@@ -629,7 +670,8 @@ static void ec_record_lost_blocks(struct bch_fs *c, struct ec_stripe_new *s)
 				continue;
 
 			ec_record_lost_bp(trans, bkey_s_c_to_backpointer(bp_k),
-					  &last_flushed);
+					  BCH_FSCK_ERR_stripe_reconstruct_failed,
+					  false, &last_flushed);
 		}));
 
 		/* a block we can't attribute doesn't stop the others */
