@@ -1,5 +1,145 @@
 # Changelog
 
+## v1.39.5 - Mon Sep 7 2026
+
+Mostly about knowing what you lost: damage from a repair is recorded against
+the files that lost data, and the recovery tools stopped inventing data they
+never read.
+
+### Features
+
+#### Damage tracking
+
+When a repair costs data, what was lost is now recorded against the file that
+lost it, in the same transaction as the repair that did the damage.
+
+`bcachefs damage <file>` reports what a file lost. `bcachefs damage ls [-R]`
+lists the damaged files in a directory, so "what did that fsck actually cost
+me" is a question with an answer. `bcachefs damage clear` drops the record once
+you've dealt with it - it needs ownership of the file, like `chattr`, and
+snapshots keep their own view of what was damaged.
+
+The cases covered: fsck dropping a pointer that was the last replica, fsck
+dropping a replica that failed its checksum, extent ranges under a btree node
+that couldn't be read, a stripe reuse that couldn't read the old blocks, and
+forced device removal killing a stripe. Data update reads record against the
+file too, so a move that reads bad data leaves a record and not just a log
+line.
+
+Stripe read checksum errors and reconstruct failures are counted separately -
+"it came back wrong" and "it couldn't be reconstructed" are different problems.
+
+#### Options on snapshotted files
+
+Setting an io option on a file that had been snapshotted did nothing to the
+data written before the snapshot. Reported by nephyrin: setting
+`background_compression` on a snapshotted file had no effect at all, and
+deleting the snapshot made it start working.
+
+The reason is that an extent takes its io options from the inode version at the
+nearest ancestor of the snapshot it was written at - so an option set in a
+branch never reached data written before that branch existed. The snapshot had
+preserved an inode version with the old options, and reconcile was reading
+those.
+
+Setting an option now pushes it up to the ancestor versions that the older data
+reads from. It runs as a logged op - one inode at one ancestor per commit - so
+a deep snapshot chain doesn't blow up a transaction, and a climb that has begun
+finishes across a crash. Conflicts between branches are resolved rather than
+left, and fsck checks that options reached their ancestors.
+
+### Bugfixes
+
+- Arch: there's an `sd-bcachefs` mkinitcpio hook now, for booting a bcachefs
+  root from the systemd initramfs rather than the busybox one. It pulls in the
+  module, the binary, `systemd-ask-password`, the mount generator and the udev
+  rule; add `sd-encrypt` alongside it for an encrypted root. Contributed by
+  Ondřej Kraus.
+
+- `bcachefs data-read` padded its output with zeros it never read. `--len` is
+  what to ask for, not what was read: the ioctl's byte count was discarded and
+  the buffer is allocated zeroed, so a read that stopped early was padded out
+  and reported as a full-length write. Reported by ChH, who asked for more than
+  his file's length to get "the whole file plus some" out of a damaged video and
+  got something that wouldn't open. For a tool whose job is saying what is
+  actually on disk, invented zeros are the worst failure available - they are
+  indistinguishable from recovered zeros.
+
+- `bcachefs data-read --no-poison-check` returned EIO instead of the bytes it
+  had. `BCHFS_IOC_PREAD_RAW` carries a count and an errors bitmask, because a
+  recovery read wants both, but the DIO completion replaced the count with the
+  errno and discarded data that was already in the caller's buffer. Also ChH, on
+  a stripe with one csum-bad block and another on an offline device.
+
+- An unrecoverable checksum error is no longer reported as an IO error.
+
+- Erasure coding couldn't converge on a full filesystem (#880). Stripe
+  allocation only fell back to reusing an existing stripe after a full-stripe
+  allocation had already failed at `BCH_WATERMARK_stripe`, while copygc was
+  evacuating into new stripes - so free space fell, fragmentation rose, and
+  neither term of copygc's wait calculation could come back. Copygc now
+  publishes which devices it is trying to free space on, and stripe allocation
+  packs into an existing stripe rather than allocating out of space copygc
+  wants.
+
+- `bcachefs migrate` ate the source filesystem's free space.
+  `reserve_new_fs_space()` started at the whole device size and halved on
+  ENOSPC - but that's the block device, not the free space, so the first
+  `fallocate()` couldn't succeed on any non-empty filesystem and the retry path
+  ran on every migrate. `fallocate()` has no rollback: xfs and ext4 both leave a
+  partial allocation attached to the file, xfs flagged `PREALLOC` so the
+  eofblocks scanner won't reclaim it either. Each halving added to the file
+  instead of replacing it, and the loop left it holding what had been the disk's
+  free space.
+
+- `bcachefs migrate` rolls its reservation back to what it opened rather than to
+  empty, and `find_superblock_space()` had `bucket_size` in the wrong units.
+
+- `gc_gens` and the unpoison ioctl updated extents and reflink without a disk
+  reservation. There's a warning on that path now. Scoping `gc_gens`' reservation
+  to the walk that uses it also unbreaks the clang build: the old placement
+  jumped a `__cleanup__` variable past its initializer, which clang rejects
+  outright and gcc accepts.
+
+- Snapshot repair undeletes a condemned parent chain, instead of recording
+  damage that could leave the filesystem unmountable.
+
+- Recovery goes read-write when a pass has been scheduled, and says which
+  function took the filesystem read-only.
+
+- The reconcile thread is restarted if it exited on its own, says why it exited,
+  and an interrupted scan no longer kills it.
+
+- End of file on stdin is no longer reported as an incorrect passphrase, and
+  `derive_passphrase()` says what actually failed.
+
+- Journal scrub no longer registers journal overlay iterators, skips pointers to
+  devices that aren't present, and the backpointers sweep no longer fills the
+  key cache.
+
+- `bcachefs fs usage` distinguishes a stripe fragmentation counter that was
+  never computed from one that is genuinely zero.
+
+### Build
+
+- Builds against bindgen 0.73, which broke both the userspace and the DKMS
+  builds outright on distros that had it - reported by freswa on Arch. 0.73
+  wraps padding and union storage in a `#[repr(align)]` newtype, which a
+  `#[repr(packed)]` parent rejects, and it changes the layout of the padding it
+  was emitted to preserve. Both traced back to blocklisted system headers:
+  bindgen can't see across a blocklist that a pruned type is `Copy`, so every
+  union holding a `__le64` had been quietly degrading to a fallback that 0.73
+  made fatal.
+
+- `system_unbound_wq` is deprecated as of 6.17 and 7.2 warns on every enqueue;
+  we use `system_dfl_wq`, with a compat define for older kernels.
+
+### On-disk format
+
+No metadata version change. Two additions: key type 39
+(`logged_op_inode_opt_propagate`) in the logged ops btree, and the compat bit
+`inode_opts_propagated`.
+
 ## v1.39.4 - Sun Aug 30 2026
 
 An early release: `Cargo.toml` wasn't bumped at the 1.39.3 tag, so 1.39.3 calls
