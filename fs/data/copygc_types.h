@@ -2,6 +2,8 @@
 #ifndef _BCACHEFS_COPYGC_TYPES_H
 #define _BCACHEFS_COPYGC_TYPES_H
 
+#include "init/dev_types.h"
+
 struct bch_fs_copygc {
 	struct task_struct __rcu *thread;
 	struct write_point	write_point;
@@ -11,6 +13,15 @@ struct bch_fs_copygc {
 	u32			run_count;
 	u32			kick_count;
 	wait_queue_head_t	running_wq;
+
+	/*
+	 * Devices over their fragmentation allowance, i.e. that copygc is trying
+	 * to free space on. Set by copygc_dev_list() each pass, read unlocked by
+	 * allocators that only need it to be roughly right.
+	 *
+	 * Not cleared when copygc is disabled: the devices are still full.
+	 */
+	struct bch_devs_mask	wants_space;
 
 	/* Dedicated workqueue for btree updates: */
 	struct workqueue_struct	*wq;

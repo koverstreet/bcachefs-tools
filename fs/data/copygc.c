@@ -241,6 +241,8 @@ static int copygc_dev_cmp(const void *_l, const void *_r)
  */
 static int copygc_dev_list(struct bch_fs *c, darray_copygc_dev *devs, u64 *wait)
 {
+	struct bch_devs_mask wants_space = {};
+
 	devs->nr = 0;
 	*wait = U64_MAX;
 
@@ -251,6 +253,10 @@ static int copygc_dev_list(struct bch_fs *c, darray_copygc_dev *devs, u64 *wait)
 			for_each_rw_member_rcu(c, ca) {
 				s64 v = bch2_copygc_dev_wait_amount(ca);
 
+				/* Over allowance, whether or not we have room to queue it: */
+				if (v <= 0)
+					__set_bit(ca->dev_idx, wants_space.d);
+
 				/* No allocating under rcu - skip if a device raced in: */
 				if (v <= 0 && devs->nr < devs->size)
 					darray_push(devs, ((struct copygc_dev) {
@@ -260,6 +266,8 @@ static int copygc_dev_list(struct bch_fs *c, darray_copygc_dev *devs, u64 *wait)
 				else if (v > 0)
 					*wait = min(*wait, (u64) v);
 			}
+
+	c->copygc.wants_space = wants_space;
 
 	sort(devs->data, devs->nr, sizeof(devs->data[0]), copygc_dev_cmp, NULL);
 
