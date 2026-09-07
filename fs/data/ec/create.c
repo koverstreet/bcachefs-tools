@@ -1837,19 +1837,46 @@ static int stripe_idx_alloc(struct btree_trans *trans, struct ec_stripe_new *s)
 	return ret;
 }
 
+/*
+ * A new stripe needs nr_blocks buckets on distinct devices out of s->devs. If
+ * we don't have that many that copygc isn't already reclaiming, a new stripe
+ * can only come out of space copygc is trying to free: pack into an existing
+ * stripe instead.
+ *
+ * Where every device is a member of every stripe (nr_blocks == nr_devices) one
+ * device over its allowance is enough.
+ */
+static bool ec_should_reuse_stripe(struct bch_fs *c, struct ec_stripe_new *s)
+{
+	struct bch_devs_mask avail = s->devs;
+
+	bitmap_andnot(avail.d, avail.d, c->copygc.wants_space.d, BCH_SB_MEMBERS_MAX);
+
+	return dev_mask_nr(&avail) < s->new_stripe.key.v.nr_blocks;
+}
+
 static int __stripe_alloc_or_reuse(struct btree_trans *trans,
 				   struct alloc_request *req,
 				   struct ec_dev_stripe_state *dev_stripe,
 				   struct ec_stripe_new *s,
 				   bool *waiting)
 {
+	int ret;
+
+	/* stripe_alloc_blocked here just means we allocate as we would have: */
+	if (!s->have_old_stripe && ec_should_reuse_stripe(trans->c, s)) {
+		ret = stripe_reuse(trans, s);
+		if (ret && !bch2_err_matches(ret, -BCH_ERR_stripe_alloc_blocked))
+			return ret;
+	}
+
 	/* First, try to allocate a full stripe: */
 	enum bch_watermark saved_watermark = BCH_WATERMARK_stripe;
 	unsigned saved_flags = req->flags | BCH_WRITE_alloc_nowait;
 	swap(req->watermark,	saved_watermark);
 	swap(req->flags,	saved_flags);
 
-	int ret = new_stripe_alloc_buckets(trans, req, dev_stripe, s, false);
+	ret = new_stripe_alloc_buckets(trans, req, dev_stripe, s, false);
 
 	swap(req->watermark,	saved_watermark);
 	swap(req->flags,	saved_flags);
