@@ -943,6 +943,7 @@ static int __do_reconcile_extent(struct moving_context *ctxt,
 		return ret;
 	if (ret) {
 		WARN_ONCE(!bch2_err_matches(ret, EROFS) &&
+			  !bch2_err_matches(ret, ENOMEM) &&
 			  !bch2_err_matches(ret, BCH_ERR_snapshot) &&
 			  !bch2_err_matches(ret, BCH_ERR_data_update_fail_no_snapshot) &&
 			  !bch2_err_matches(ret, BCH_ERR_data_update_fail_in_flight) &&
