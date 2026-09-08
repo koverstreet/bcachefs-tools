@@ -257,6 +257,10 @@ Dump superblock information to stdout.
 List of sections to print
 .It Fl l , Fl -layout
 Print superblock layout
+.It Fl s , Fl -summary
+Print a concise one-line-per-member summary (path, state, error counts)
+instead of the full dump; works from a single surviving device's
+superblock even when the filesystem cannot be mounted
 .El
 .It Nm Ic set-fs-option Oo Ar options Oc Ar device
 .Bl -tag -width Ds

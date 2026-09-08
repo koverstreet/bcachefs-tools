@@ -40,11 +40,36 @@ pub struct ShowSuperCli {
     #[arg(short, long)]
     layout: bool,
 
+    /// Print a concise one-line-per-member summary (path, state, errors)
+    /// instead of the full superblock dump
+    #[arg(short = 's', long = "summary", conflicts_with_all = ["fields", "field_only", "layout"])]
+    summary: bool,
+
     /// Device path
     device: String,
 }
 
 fn cmd_show_super(cli: ShowSuperCli) -> Result<()> {
+
+    if cli.summary {
+        let mut fs_opts = c::bch_opts::default();
+        opt_set!(fs_opts, noexcl, 1);
+        opt_set!(fs_opts, nochanges, 1);
+        opt_set!(fs_opts, no_version_check, 1);
+        opt_set!(fs_opts, nostart, 1);
+
+        let fs = bcachefs_kernel::fs::Fs::open(&[std::path::PathBuf::from(&cli.device)], fs_opts)?;
+
+        let _ = fs.for_each_online_member(|ca| {
+            let sb = unsafe { &*ca.disk_sb.sb };
+            let mut buf = Printbuf::new();
+            unsafe { crate::wrappers::sb_display::sb_members_summary_to_text(&mut buf, sb) };
+            print!("{}", buf);
+            ControlFlow::Continue(())
+        });
+
+        return Ok(());
+    }
 
     let ext_bit = sb_field_type::ext.bit();
     let mut fields = ext_bit;
