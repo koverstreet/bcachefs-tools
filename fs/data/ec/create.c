@@ -1858,6 +1858,17 @@ static bool ec_should_reuse_stripe(struct bch_fs *c, struct ec_stripe_new *s)
 	return dev_mask_nr(&avail) < s->new_stripe.key.v.nr_blocks;
 }
 
+/*
+ * Reuse is an optimization: if we can't reuse a stripe we allocate a new one
+ * instead. Only abort stripe creation for errors that mean allocating can't
+ * work either - anything else, fall through and allocate.
+ */
+static bool stripe_reuse_err_fatal(int ret)
+{
+	return bch2_err_matches(ret, BCH_ERR_transaction_restart) ||
+	       bch2_err_matches(ret, EROFS);
+}
+
 static int __stripe_alloc_or_reuse(struct btree_trans *trans,
 				   struct alloc_request *req,
 				   struct ec_dev_stripe_state *dev_stripe,
@@ -1866,10 +1877,9 @@ static int __stripe_alloc_or_reuse(struct btree_trans *trans,
 {
 	int ret;
 
-	/* stripe_alloc_blocked here just means we allocate as we would have: */
 	if (!s->have_old_stripe && ec_should_reuse_stripe(trans->c, s)) {
 		ret = stripe_reuse(trans, s);
-		if (ret && !bch2_err_matches(ret, -BCH_ERR_stripe_alloc_blocked))
+		if (stripe_reuse_err_fatal(ret))
 			return ret;
 	}
 
@@ -1895,7 +1905,7 @@ static int __stripe_alloc_or_reuse(struct btree_trans *trans,
 		 * an old stripe:
 		 */
 		ret = stripe_reuse(trans, s);
-		if (ret && !bch2_err_matches(ret, -BCH_ERR_stripe_alloc_blocked))
+		if (stripe_reuse_err_fatal(ret))
 			return ret;
 	}
 
