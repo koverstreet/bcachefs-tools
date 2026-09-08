@@ -614,7 +614,8 @@ static int data_update_index_update_nowrite(struct btree_trans *trans,
  * from the pending list instead of the main scan.
  */
 static int __data_update_ec_alloc_failed(struct btree_trans *trans,
-					 struct data_update *u)
+					 struct data_update *u,
+					 bool *parked)
 {
 	struct bch_fs *c = trans->c;
 	struct bkey_s_c old = bkey_i_to_s_c(u->k.k);
@@ -631,17 +632,38 @@ static int __data_update_ec_alloc_failed(struct btree_trans *trans,
 		if (!bch2_extents_match(c, k, old))
 			continue;
 
-		bch2_extent_reconcile_pending_mod(trans, &iter, 0, k, true);
+		event_add_trace(c, reconcile_set_pending, k.k->size, buf, ({
+			prt_printf(&buf, "%s\n", bch2_err_str(u->op.error));
+			bch2_bkey_val_to_text(&buf, c, k);
+			prt_newline(&buf);
+			bch2_data_update_opts_to_text(&buf, c, &u->op.opts, &u->opts);
+		}));
+
+		int ret2 = bch2_extent_reconcile_pending_mod(trans, &iter, 0, k, true);
+		if (!ret2)
+			*parked = true;
+		ret2;
 	}));
 }
 
 void bch2_data_update_ec_alloc_failed(struct data_update *u)
 {
 	struct bch_fs *c = u->op.c;
+	bool parked = false;
+
 	CLASS(btree_trans, trans)(c);
-	int ret = __data_update_ec_alloc_failed(trans, u);
+	int ret = __data_update_ec_alloc_failed(trans, u, &parked);
 	if (ret)
 		bch_err_fn(c, ret);
+
+	/*
+	 * Nothing matched: the extent we were reconciling was rewritten or
+	 * deleted while our write was in flight, so there was nothing to park.
+	 * Distinct error code so bch2_data_update_exit() still traces it -
+	 * ec_alloc_failed itself is suppressed there because it parks.
+	 */
+	if (!parked && !ret)
+		u->op.error = bch_err_throw(c, ec_alloc_failed_pending_race);
 }
 
 void bch2_data_update_read_done(struct data_update *u)
@@ -751,6 +773,11 @@ void bch2_data_update_read_done(struct data_update *u)
  * reconcile/promote means the work parks on the pending list (recorded by
  * the reconcile_set_pending event). Shared with the btree node rewrite leg
  * in move.c, which has no struct data_update.
+ *
+ * ec_alloc_failed parks too, via bch2_data_update_ec_alloc_failed(). When it
+ * can't - the extent moved under us - that path swaps in
+ * ec_alloc_failed_pending_race, which is a sibling rather than a child so it
+ * still traces here.
  */
 bool bch2_data_update_fail_should_trace(enum bch_data_update_types type, int ret)
 {
@@ -758,6 +785,7 @@ bool bch2_data_update_fail_should_trace(enum bch_data_update_types type, int ret
 	    bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc) ||
 	    bch2_err_matches(ret, BCH_ERR_data_update_fail_would_block) ||
 	    bch2_err_matches(ret, BCH_ERR_operation_blocked) ||
+	    bch2_err_matches(ret, BCH_ERR_ec_alloc_failed) ||
 	    ((type == BCH_DATA_UPDATE_reconcile ||
 	      type == BCH_DATA_UPDATE_promote) &&
 	     bch2_err_matches(ret, BCH_ERR_data_update_fail_no_rw_devs)))
