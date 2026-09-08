@@ -994,11 +994,18 @@ unsigned bch2_disk_label_ec_devs(struct bch_fs *c, unsigned disk_label,
  * otherwise reconcile spins re-queueing data_update_fail forever. Modelling
  * only the device count let configurations through that the allocator then
  * refused, costing one wasted rewrite of every affected extent.
+ *
+ * @trace, if given, is filled in with why we said no: callers park work on this
+ * answer, and a park the user can't explain is a park they can't act on.
  */
-bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redundancy)
+bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redundancy,
+			     struct printbuf *trace)
 {
-	if (!redundancy)
+	if (!redundancy) {
+		if (trace)
+			prt_str(trace, "redundancy 0");
 		return false;
+	}
 
 	struct target t = target_decode(target);
 
@@ -1009,8 +1016,11 @@ bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redunda
 	 * filesystem and answer yes to a target the allocator will not serve --
 	 * the same shape of mismatch this function is being fixed for.
 	 */
-	if (t.type == TARGET_GROUP && t.group > U8_MAX)
+	if (t.type == TARGET_GROUP && t.group > U8_MAX) {
+		if (trace)
+			prt_printf(trace, "target group %u > U8_MAX", t.group);
 		return false;
+	}
 
 	unsigned disk_label = t.type == TARGET_GROUP
 		? t.group + 1
@@ -1019,8 +1029,21 @@ bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redunda
 	struct bch_devs_mask devs;
 	bch2_disk_label_ec_devs(c, disk_label, &devs, 0);
 
-	return dev_mask_nr(&devs) >= redundancy + 2 &&
-	       bch2_target_nr_domains(c, &devs) >= redundancy + 2;
+	unsigned nr_devs	= dev_mask_nr(&devs);
+	unsigned nr_domains	= bch2_target_nr_domains(c, &devs);
+	unsigned need		= redundancy + 2;
+
+	if (nr_devs < need || nr_domains < need) {
+		if (trace)
+			prt_printf(trace,
+				   "disk_label %u: %u devs, %u domains, need %u of each\n"
+				   "(bch2_disk_label_ec_devs() drops durability 0, and every\n"
+				   "device whose bucket size isn't the most common one)",
+				   disk_label, nr_devs, nr_domains, need);
+		return false;
+	}
+
+	return true;
 }
 
 /*

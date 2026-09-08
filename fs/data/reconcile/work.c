@@ -420,6 +420,12 @@ static int extent_ec_pending(struct btree_trans *trans, struct bkey_ptrs_c ptrs)
 int bch2_extent_reconcile_pending_mod(struct btree_trans *, struct btree_iter *,
 				      unsigned, struct bkey_s_c, bool);
 
+/* What reconcile_set_pending counts: a btree ptr stands for its whole node. */
+static s64 reconcile_pending_sectors(struct bch_fs *c, struct bkey_s_c k)
+{
+	return bkey_is_btree_ptr(k.k) ? btree_sectors(c) : k.k->size;
+}
+
 static int reconcile_set_data_opts(struct btree_trans *trans,
 				   struct btree_iter *iter,
 				   unsigned level,
@@ -592,9 +598,19 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 			 * will re-evaluate. Otherwise drop EC from the rb mask and
 			 * fall through to do the other work.
 			 */
-			if (!bch2_can_form_ec_stripe(c, r->background_target, r->data_replicas)) {
-				if (r->need_rb == BIT(BCH_RECONCILE_erasure_code))
+			if (!bch2_can_form_ec_stripe(c, r->background_target,
+						     r->data_replicas, NULL)) {
+				if (r->need_rb == BIT(BCH_RECONCILE_erasure_code)) {
+					event_add_trace(c, reconcile_set_pending,
+							reconcile_pending_sectors(c, k), buf, ({
+						prt_str(&buf, "can't form ec stripe\n");
+						bch2_bkey_val_to_text(&buf, c, k);
+						prt_newline(&buf);
+						bch2_can_form_ec_stripe(c, r->background_target,
+									r->data_replicas, &buf);
+					}));
 					return bch2_extent_reconcile_pending_mod(trans, iter, level, k, true);
+				}
 				/*
 				 * Downstream rb-bit handling doesn't read the EC
 				 * bit, so we don't need to clear it from r->need_rb
@@ -656,6 +672,12 @@ skip_ec:
 			 * want to drop replicas and we can't without reducing
 			 * online durability
 			 */
+			event_add_trace(c, reconcile_set_pending,
+					reconcile_pending_sectors(c, k), buf, ({
+				prt_printf(&buf, "can't match data_replicas=%u\n",
+					   r->data_replicas);
+				bch2_bkey_val_to_text(&buf, c, k);
+			}));
 			return bch2_extent_reconcile_pending_mod(trans, iter, level, k, true);
 		} else {
 			CLASS(bch_log_msg_ratelimited, msg)(c);
@@ -732,9 +754,8 @@ static int check_reconcile_pending_err(struct btree_trans *trans,
 	     !bch2_err_matches(err, ENOSPC))
 		 return err;
 
-	s64 sectors = bkey_is_btree_ptr(k.k) ? btree_sectors(c) : k.k->size;
-
-	event_add_trace(c, reconcile_set_pending, sectors, buf, ({
+	event_add_trace(c, reconcile_set_pending,
+			reconcile_pending_sectors(c, k), buf, ({
 		prt_printf(&buf, "%s\n", bch2_err_str(err));
 		bch2_bkey_val_to_text(&buf, c, k);
 		prt_newline(&buf);
