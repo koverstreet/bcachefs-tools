@@ -149,6 +149,8 @@ endif
 endif
 CARGO_BUILD=$(CARGO) build $(CARGO_BUILD_ARGS)
 
+CARGO_TEST=$(CARGO) test $(CARGO_BUILD_ARGS)
+
 CARGO_CLEAN=$(CARGO) clean $(CARGO_CLEAN_ARGS)
 
 include Makefile.compiler
@@ -286,6 +288,17 @@ RUST_SRCS:=$(shell find src fs bch_bindgen bcachefs-shim -type f ! -path 'fs/ven
 
 bcachefs: $(BCACHEFS_DEPS) $(RUST_SRCS)
 	$(Q)$(CARGO_BUILD)
+
+# The tests that exercise the bindgen-generated bindings. Same two steps the
+# nix flake check runs (crane-build.nix, checkPhaseCargoCommand) - having them
+# here means a packager hitting a bindings problem can run them without nix.
+#
+# Note this is the whole cargo test suite, not a bindgen-specific subset: the
+# bindings have no tests of their own, they're exercised by the tests in src/
+# that consume them.
+.PHONY: bindgen-test
+bindgen-test: $(BCACHEFS_DEPS)
+	$(Q)$(CARGO_TEST) -- --nocapture
 
 libbcachefs.a: $(OBJS)
 	@echo "    [AR]     $@"
