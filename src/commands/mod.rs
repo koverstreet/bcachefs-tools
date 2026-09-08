@@ -91,6 +91,7 @@ pub mod completions;
 pub mod counters;
 pub mod damage;
 pub mod data_read;
+pub mod dedupe;
 pub mod device;
 pub mod dump;
 pub mod format;
@@ -249,7 +250,7 @@ pub const COMMAND_GROUPS: &[GroupDef] = &[
     GroupDef { heading: "Running filesystem",       commands: &[&FS_CMD] },
     GroupDef { heading: "Devices",                  commands: &[&device::CMD] },
     GroupDef { heading: "Subvolumes and snapshots", commands: &[&subvolume::CMD] },
-    GroupDef { heading: "Filesystem data",          commands: &[&reconcile::CMD, &scrub::CMD] },
+    GroupDef { heading: "Filesystem data",          commands: &[&reconcile::CMD, &scrub::CMD, &dedupe::CMD] },
     GroupDef { heading: "Encryption",               commands: &[&key::CMD_UNLOCK, &key::CMD_SET_PASSPHRASE, &key::CMD_REMOVE_PASSPHRASE] },
     GroupDef { heading: "Migrate",                  commands: &[&migrate::CMD_MIGRATE, &migrate::CMD_MIGRATE_SUPERBLOCK] },
     GroupDef { heading: "File options",             commands: &[&attr::CMD_SETATTR, &attr::CMD_GETATTR, &attr::CMD_REFLINK_PROPAGATE] },
