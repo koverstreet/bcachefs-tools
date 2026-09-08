@@ -1786,7 +1786,17 @@ __cold void bch2_extent_ptr_to_text(struct printbuf *out, struct bch_fs *c, cons
 			   ca->name, ptr->dev, b, offset, ptr->generation);
 		if (ca->mi.durability != 1)
 			prt_printf(out, " d=%u", ca->mi.durability);
-		int stale = dev_ptr_stale_rcu(ca, ptr);
+
+		/*
+		 * Except for a new fs, bucket generations are not valid until
+		 * alloc_read completes. Treating a nostart fs's zero-filled table
+		 * as live state manufactures stale=N output.
+		 */
+		int stale = 0;
+
+		if (test_bit(BCH_FS_new_fs, &c->flags) ||
+		    c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_alloc_read))
+			stale = dev_ptr_stale_rcu(ca, ptr);
 		if (stale)
 			prt_printf(out, " stale=%i", stale);
 	}

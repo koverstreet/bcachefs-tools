@@ -131,9 +131,9 @@ fn list_nodes_ondisk(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 /// List keys from a mounted filesystem: the keys come from the kernel via
 /// BCH_IOCTL_QUERY_BTREE_KEYS, and are formatted with a userspace bch_fs
 /// opened noexcl|nostart alongside the mount - never started, so the
-/// journal is never read; everything key formatting needs (extent entry
-/// tables, member names, disk groups) comes from the superblock. Output
-/// is identical to the offline path by construction.
+/// journal is never read. Static formatting state such as member names and
+/// disk groups comes from the superblock; annotations needing live allocator
+/// state are omitted.
 fn list_keys_online(handle: &BcachefsHandle, fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
     let mut flags = OnlineIterFlags::default();
     if opt.start.snapshot == 0 {
