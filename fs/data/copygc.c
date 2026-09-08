@@ -252,7 +252,7 @@ static int copygc_dev_cmp(const void *_l, const void *_r)
  */
 static int copygc_dev_list(struct bch_fs *c, darray_copygc_dev *devs, u64 *wait)
 {
-	struct bch_devs_mask wants_space = {};
+	struct bch_devs_mask wants_space = {}, low_on_space = {};
 
 	devs->nr = 0;
 	*wait = U64_MAX;
@@ -262,11 +262,15 @@ static int copygc_dev_list(struct bch_fs *c, darray_copygc_dev *devs, u64 *wait)
 	scoped_guard(percpu_read_noio, &c->capacity.mark_lock)
 		scoped_guard(rcu)
 			for_each_rw_member_rcu(c, ca) {
-				s64 v = bch2_copygc_dev_wait_amount(ca);
+				bool dev_low_on_space;
+				s64 v = bch2_copygc_dev_wait_amount(ca, &dev_low_on_space);
 
 				/* Over allowance, whether or not we have room to queue it: */
 				if (v <= 0)
 					__set_bit(ca->dev_idx, wants_space.d);
+
+				if (dev_low_on_space)
+					__set_bit(ca->dev_idx, low_on_space.d);
 
 				/* No allocating under rcu - skip if a device raced in: */
 				if (v <= 0 && devs->nr < devs->size)
@@ -278,7 +282,8 @@ static int copygc_dev_list(struct bch_fs *c, darray_copygc_dev *devs, u64 *wait)
 					*wait = min(*wait, (u64) v);
 			}
 
-	c->copygc.wants_space = wants_space;
+	c->copygc.wants_space	= wants_space;
+	c->copygc.low_on_space	= low_on_space;
 
 	sort(devs->data, devs->nr, sizeof(devs->data[0]), copygc_dev_cmp, NULL);
 
@@ -584,14 +589,28 @@ err:
 bool bch2_copygc_can_make_progress(struct bch_dev *ca)
 {
 	return atomic_read(&ca->copygc_in_flight) ||
-		bch2_copygc_dev_wait_amount(ca) <= 0;
+		bch2_copygc_dev_wait_amount(ca, NULL) <= 0;
 }
+
+/*
+ * Free space thresholds, as a percentage of capacity. The wait below is
+ * free * 5 - capacity: that scale is also the io clock sleep amount, so it
+ * stays as written rather than being derived from the percentage.
+ */
+#define COPYGC_FREE_THRESHOLD_PCT	20
+#define EC_REUSE_FREE_THRESHOLD_PCT	(COPYGC_FREE_THRESHOLD_PCT * 2)
+
+static_assert(COPYGC_FREE_THRESHOLD_PCT * 5 == 100);
 
 /*
  * Returns how much io (in sectors, by the write io clock) until this device
  * will need copygc: <= 0 means it needs it now, and the magnitude is how far
  * past its fragmented-space allowance it is - the sort key for picking which
  * device needs copygc the most.
+ *
+ * @low_on_space, if given, is set when free space is under the looser stripe
+ * reuse threshold - reported from here because a positive return value could
+ * be either of the two paths below, and does not say which.
  *
  * Caller must hold mark_lock (read), for the dev_leaving accounting read -
  * and must take it outside any rcu read section, mark_lock can block.
@@ -605,7 +624,7 @@ bool bch2_copygc_can_make_progress(struct bch_dev *ca)
  * space as the device fills up - so we increase the allowance by half the
  * current free space.
  */
-s64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
+s64 bch2_copygc_dev_wait_amount(struct bch_dev *ca, bool *low_on_space)
 {
 	struct bch_fs *c = ca->fs;
 	struct bch_dev_usage_full usage_full = bch2_dev_usage_full_read(ca);
@@ -625,9 +644,14 @@ s64 bch2_copygc_dev_wait_amount(struct bch_dev *ca)
 	bch2_accounting_mem_read_locked(c, disk_accounting_pos_to_bpos(&pos), &leaving, 1);
 	leaving = max(0LL, leaving);
 
-	/* Don't start until less than 20% of the device is free: */
 	s64 free = usage.buckets[BCH_DATA_free] * ca->mi.bucket_size + leaving;
-	s64 wait = free * 5 - ca->mi.nbuckets * ca->mi.bucket_size;
+	s64 capacity = ca->mi.nbuckets * ca->mi.bucket_size;
+
+	if (low_on_space)
+		*low_on_space = free * 100 <= capacity * EC_REUSE_FREE_THRESHOLD_PCT;
+
+	/* Don't start until less than COPYGC_FREE_THRESHOLD_PCT is free: */
+	s64 wait = free * 5 - capacity;
 	if (wait > 0)
 		return wait;
 
@@ -671,7 +695,7 @@ __cold void bch2_copygc_wait_to_text(struct printbuf *out, struct bch_fs *c)
 		prt_printf(out, "Currently calculated wait:\n");
 		for_each_rw_member_rcu(c, ca) {
 			prt_printf(out, "  %s:\t", ca->name);
-			prt_human_readable_s64(out, bch2_copygc_dev_wait_amount(ca));
+			prt_human_readable_s64(out, bch2_copygc_dev_wait_amount(ca, NULL));
 			prt_newline(out);
 		}
 

@@ -665,7 +665,7 @@ static noinline __cold void bucket_alloc_to_text(struct printbuf *out,
 		prt_printf(out, "dev\t%s (%u)\n",	req->ca->name, req->ca->dev_idx);
 		prt_printf(out, "avail\t%llu\n",	__dev_buckets_free(req->ca, req->usage, req->watermark));
 		scoped_guard(percpu_read_noio, &c->capacity.mark_lock)
-			prt_printf(out, "copygc dev wait\t%lli\n", bch2_copygc_dev_wait_amount(req->ca));
+			prt_printf(out, "copygc dev wait\t%lli\n", bch2_copygc_dev_wait_amount(req->ca, NULL));
 	}
 
 	prt_printf(out, "watermark\t%s\n",	bch2_watermarks[req->watermark]);

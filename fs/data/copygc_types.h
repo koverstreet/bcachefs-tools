@@ -23,6 +23,13 @@ struct bch_fs_copygc {
 	 */
 	struct bch_devs_mask	wants_space;
 
+	/*
+	 * Devices getting full, on a looser threshold than wants_space above -
+	 * a superset of it, same lifetime and locking. Read by EC stripe reuse;
+	 * see EC_REUSE_FREE_THRESHOLD_PCT.
+	 */
+	struct bch_devs_mask	low_on_space;
+
 	/* Dedicated workqueue for btree updates: */
 	struct workqueue_struct	*wq;
 };

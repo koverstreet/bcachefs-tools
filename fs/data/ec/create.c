@@ -1425,7 +1425,7 @@ static bool copygc_can_run_on_devs(struct bch_fs *c,
 	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	guard(rcu)();
 	for_each_member_device_rcu(c, ca, devs)
-		if (bch2_copygc_dev_wait_amount(ca) <= 0)
+		if (bch2_copygc_dev_wait_amount(ca, NULL) <= 0)
 			return true;
 	return false;
 }
@@ -1839,18 +1839,21 @@ static int stripe_idx_alloc(struct btree_trans *trans, struct ec_stripe_new *s)
 
 /*
  * A new stripe needs nr_blocks buckets on distinct devices out of s->devs. If
- * we don't have that many that copygc isn't already reclaiming, a new stripe
- * can only come out of space copygc is trying to free: pack into an existing
- * stripe instead.
+ * we don't have that many with room to spare, a new stripe can only come out of
+ * space that is about to be scarce: pack into an existing stripe instead.
  *
  * Where every device is a member of every stripe (nr_blocks == nr_devices) one
- * device over its allowance is enough.
+ * device short of room is enough.
+ *
+ * low_on_space, not wants_space: the latter is exactly copygc's own trigger, so
+ * gating on it would mean we only start packing once copygc already has work -
+ * work made of the half-empty stripes we would not have cut.
  */
 static bool ec_should_reuse_stripe(struct bch_fs *c, struct ec_stripe_new *s)
 {
 	struct bch_devs_mask avail = s->devs;
 
-	bitmap_andnot(avail.d, avail.d, c->copygc.wants_space.d, BCH_SB_MEMBERS_MAX);
+	bitmap_andnot(avail.d, avail.d, c->copygc.low_on_space.d, BCH_SB_MEMBERS_MAX);
 
 	return dev_mask_nr(&avail) < s->new_stripe.key.v.nr_blocks;
 }

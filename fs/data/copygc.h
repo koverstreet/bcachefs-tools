@@ -2,7 +2,7 @@
 #ifndef _BCACHEFS_COPYGC_H
 #define _BCACHEFS_COPYGC_H
 
-s64 bch2_copygc_dev_wait_amount(struct bch_dev *);
+s64 bch2_copygc_dev_wait_amount(struct bch_dev *, bool *);
 void bch2_copygc_wait_to_text(struct printbuf *, struct bch_fs *);
 
 bool bch2_copygc_can_make_progress(struct bch_dev *);
