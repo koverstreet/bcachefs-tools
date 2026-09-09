@@ -1152,9 +1152,14 @@ fn readd_derives(src: String) -> String {
 fn packed_and_align_fix(bindings: String, ptr_width: &str) -> String {
     const PACKED_TO_ALIGN8: &[&str] =
         &["btree_node", "bch_extent_crc128", "jset", "btree_node_entry", "bch_sb"];
+    // bindgen emulates a union as a struct of PhantomData fields over a
+    // `[u64; N]`, so its alignment is the array's: 8 on x86_64, but 4 on i386,
+    // where the ABI aligns u64 to 4. Types whose C alignment is 8 there anyway
+    // - because they say __aligned(8) - therefore fail bindgen's own alignment
+    // assertion, and can only be fixed on the Rust side.
     const ALIGN8_32BIT: &[&str] =
         &["btree_node__bindgen_ty_1", "btree_node_entry__bindgen_ty_1",
-          "bch_ioctl_query_accounting"];
+          "bch_ioctl_query_accounting", "bch_extent_crc"];
     let mut lines: Vec<String> = bindings.lines().map(str::to_owned).collect();
 
     for i in 0..lines.len() {
