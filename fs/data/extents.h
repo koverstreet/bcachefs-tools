@@ -121,7 +121,7 @@ union bch_extent_crc {
 	struct bch_extent_crc32		crc32;
 	struct bch_extent_crc64		crc64;
 	struct bch_extent_crc128	crc128;
-};
+} __aligned(8);
 
 #define __entry_to_crc(_entry)						\
 	__builtin_choose_expr(						\
