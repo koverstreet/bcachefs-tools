@@ -49,7 +49,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
 const BLOCKLIST_FUNCTION: &[&str] = &["bch2_prt_vprintf", ".*bch2_snapshot_id_state"];
 const BLOCKLIST_TYPE: &[&str] = &["bch_ioctl_data_event", "bch_replicas_padded__bindgen_ty_.*"];
 const BLOCKLIST_ITEM: &[&str] = &["bch2_bkey_ops"];
-const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "Fix753_.*", "bch.*", "__bch2.*", "__BTREE_ITER.*", "BTREE_ITER.*"];
+const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "bch.*", "__bch2.*", "__BTREE_ITER.*", "BTREE_ITER.*"];
 const ALLOWLIST_TYPE: &[&str] = &["bch_.*", "bkey_i_.*", "bkey_s_c_.*", "bkey_s_.*", "btree_flags", "disk_accounting_type", "fsck_err_opts", "nonce", "sb_names",
     // genradix: kernel::bindings doesn't bind it, so we emit it ourselves from a
     // build-time copy of the kernel header (see run_bindgen + fs/Makefile).
@@ -1091,14 +1091,9 @@ fn snake_to_pascal(s: &str) -> String {
     out
 }
 
-/// Replaces the two bindgen-library callbacks (Fix753 item-name strip +
-/// blocklisted_type_implements_trait) plus packed_and_align_fix, as pure
-/// post-processing on the generated text.
+/// Replaces the blocklisted_type_implements_trait bindgen-library callback plus
+/// packed_and_align_fix, as pure post-processing on the generated text.
 fn post_process(src: String, ptr_width: &str) -> String {
-    // Fix753: the headers wrap bindgen-issue-753 items as `Fix753_X`; the
-    // library callback strips the prefix. Do it textually.
-    let src = src.replace("Fix753_", "");
-
     // The blocklisted_type_implements_trait callback's *entire* effect is keeping
     // derives on bpos/bbpos (every other primitive-bearing struct is generated
     // but never derive-used). Re-add exactly those, with the same sets the

@@ -364,14 +364,6 @@ fn generate_bkey_types(entries: &[Vec<String>]) -> String {
     out
 }
 
-#[derive(Debug)]
-pub struct Fix753 {}
-impl bindgen::callbacks::ParseCallbacks for Fix753 {
-    fn item_name(&self, item: bindgen::callbacks::ItemInfo<'_>) -> Option<String> {
-        Some(item.name.trim_start_matches("Fix753_").to_owned())
-    }
-}
-
 fn watch_dir(dir: &str) {
     let Ok(entries) = std::fs::read_dir(dir) else { return };
     for entry in entries.flatten() {
@@ -531,7 +523,6 @@ fn main() {
         .blocklist_type("bch_option")
         .blocklist_type("bch_opts.*")
         .allowlist_var("KEY_SPEC_.*")
-        .allowlist_var("Fix753_.*")
         .blocklist_item("bch2_bkey_ops")
         .allowlist_type("bch_.*")
         .allowlist_type("bkey_i_.*")
@@ -583,7 +574,6 @@ fn main() {
         // inlines, not static inlines in headers.
         .wrap_static_fns(true)
         .wrap_static_fns_path(out_dir.join("extern.c"))
-        .parse_callbacks(Box::new(Fix753 {}))
         .generate()
         .expect("BindGen Generation Failiure: [libbcachefs_wrapper]");
 
