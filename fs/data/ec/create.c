@@ -720,20 +720,13 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 			zero_out_rest_of_ec_bucket(c, s, i, ob);
 	}
 
-	if (s->old_stripe_read) {
-		/*
-		 * ec_old_stripe_fold() folded the carried-forward blocks in
-		 * when the read landed; this is only the barrier against it not
-		 * having run yet, which it normally has - the read was issued
-		 * before the stripe started filling.
-		 */
-		closure_sync(&s->cl);
-		closure_return(&s->cl);
-
-		if (s->old_stripe_err) {
-			ec_record_lost_blocks(c, s);
-			return s->old_stripe_err;
-		}
+	/*
+	 * The fold has already been waited for, by ec_stripe_create() before
+	 * it called us - so old_stripe_err is stable here.
+	 */
+	if (s->old_stripe_read && s->old_stripe_err) {
+		ec_record_lost_blocks(c, s);
+		return s->old_stripe_err;
 	}
 
 	BUG_ON(!s->allocated);
@@ -822,6 +815,21 @@ static void ec_stripe_create(struct ec_stripe_new *s)
 	struct bch_fs *c = s->c;
 	struct bch_stripe *v = &s->new_stripe.key.v;
 	unsigned nr_data = v->nr_blocks - v->nr_redundant;
+
+	/*
+	 * Barrier against ec_old_stripe_fold(): it swaps buffers into
+	 * s->new_stripe and sets s->old_stripe_err, and the teardown below
+	 * frees both stripe bufs and drops the last ref to s.
+	 *
+	 * It has to have completed on every path out of here, and three used
+	 * to skip it: stripe_get_iorefs() failing, so __ec_stripe_create()
+	 * never runs at all, and __ec_stripe_create()'s own early returns on
+	 * s->err and on stripe_has_removing_dev().
+	 */
+	if (s->old_stripe_read) {
+		closure_sync(&s->cl);
+		closure_return(&s->cl);
+	}
 
 	struct bch_dev *cas[BCH_BKEY_PTRS_MAX];
 	int ret = stripe_get_iorefs(c, v, cas);
