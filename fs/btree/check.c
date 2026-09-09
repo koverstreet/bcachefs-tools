@@ -146,8 +146,9 @@ static int set_node_min(struct bch_fs *c, struct btree *b, struct bpos new_min)
 	return 0;
 }
 
-static int set_node_max(struct bch_fs *c, struct btree *b, struct bpos new_max)
+static int set_node_max(struct btree_trans *trans, struct btree *b, struct bpos new_max)
 {
+	struct bch_fs *c = trans->c;
 	struct bkey_i_btree_ptr_v2 *new;
 
 	if (c->opts.verbose) {
@@ -181,10 +182,42 @@ static int set_node_max(struct bch_fs *c, struct btree *b, struct bpos new_max)
 
 	struct bch_fs_btree_cache *bc = &c->btree.cache;
 
+	/*
+	 * max_key is b->key.k.p, which is the cache's hash key - so unlike
+	 * set_node_min() this has to leave the hash table and come back.
+	 * Unhashing asserts SIX_LOCK_write, callers hold read, and six won't
+	 * upgrade; roots additionally can't be unhashed while flagged.
+	 */
+	bool permanent = btree_node_permanent(b);
+	if (permanent) {
+		scoped_guard(mutex_noio, &bc->lock)
+			clear_btree_node_permanent(b);
+	}
+
+	six_unlock_read(&b->c.lock);
+
+	trans->locking_hash_val = 0;
+	trans->locking_root_id	= -1;
+	btree_node_lock_nopath(trans, &b->c, SIX_LOCK_intent, true, _THIS_IP_, false);
+	btree_node_lock_nopath(trans, &b->c, SIX_LOCK_write, true, _THIS_IP_, false);
+
 	/* unhash, rehash */
 	BUG_ON(bch2_btree_node_transition_state(bc, b, BTREE_NODE_CACHE_FREEABLE));
 	bkey_copy(&b->key, &new->k_i);
 	BUG_ON(bch2_btree_node_transition_state(bc, b, btree_node_live_state(b)));
+
+	six_unlock_write(&b->c.lock);
+	six_unlock_intent(&b->c.lock);
+	btree_node_lock_nopath(trans, &b->c, SIX_LOCK_read, true, _THIS_IP_, false);
+
+	/*
+	 * Still the root - but it was on bc->freeable with roots_b[] pointing at
+	 * it, which only single-threaded recovery makes safe.
+	 */
+	if (permanent) {
+		scoped_guard(mutex_noio, &bc->lock)
+			set_btree_node_permanent(b);
+	}
 	return 0;
 }
 
@@ -270,7 +303,7 @@ static int btree_check_node_boundaries(struct btree_trans *trans, struct btree *
 				if (mustfix_fsck_err(trans, btree_node_topology_bad_max_key,
 						     "btree node with incorrect max_key%s", buf.buf)) {
 					try(commit_topology_repair_log(trans));
-					return set_node_max(c, prev, bpos_predecessor(cur->data->min_key));
+					return set_node_max(trans, prev, bpos_predecessor(cur->data->min_key));
 				}
 			}
 		} else {
@@ -314,7 +347,7 @@ static int btree_check_root_boundaries(struct btree_trans *trans, struct btree *
 	if (mustfix_fsck_err_on(!bpos_eq(b->data->max_key, SPOS_MAX),
 				trans, btree_node_topology_bad_root_max_key,
 			     "btree root with incorrect min_key%s", buf.buf))
-		try(set_node_max(c, b, SPOS_MAX));
+		try(set_node_max(trans, b, SPOS_MAX));
 fsck_err:
 	return ret;
 }
@@ -349,7 +382,7 @@ static int btree_repair_node_end(struct btree_trans *trans, struct btree *b, str
 		if (nodes_found)
 			return bch_err_throw(c, topology_repair_did_fill_from_scan);
 		else
-			return set_node_max(c, child, b->key.k.p);
+			return set_node_max(trans, child, b->key.k.p);
 	}
 fsck_err:
 	return ret;
