@@ -1,11 +1,10 @@
 //! Typed ioctl calls over the generated inventory.
 //!
-//! `bcachefs_kernel::ioctl` (re-exported here) carries one marker type per
+//! `bch_bindgen::ioctl` (re-exported here) carries one marker type per
 //! `_IO*()` define in bcachefs_ioctl.h, binding the opcode to its argument
-//! type — the opcode's size bits are computed from the very type these
-//! call shapes make you pass, so a call site can't pair the wrong two.
-//! This module adds the calls themselves: direction-checked argument
-//! passing and one errno-to-io::Error conversion for the whole tree.
+//! type so a call site can't pair the wrong two. This module adds the calls
+//! themselves: the three argument shapes, and one errno-to-io::Error
+//! conversion for the whole tree.
 //!
 //! Positive return values pass through — several bcachefs ioctls return
 //! fds (BCH_IOCTL_DATA, BCH_IOCTL_FSCK_*) or counts.
@@ -13,7 +12,7 @@
 use std::io;
 use std::os::fd::{AsFd, AsRawFd};
 
-pub use bcachefs_kernel::ioctl::*;
+pub use bch_bindgen::ioctl::*;
 
 fn ret(r: libc::c_int) -> io::Result<i32> {
     if r < 0 {
@@ -30,7 +29,6 @@ pub fn ioctl_none<I: Ioctl<Arg = ()>>(fd: impl AsFd) -> io::Result<i32> {
 
 /// _IOW: the kernel only reads the argument.
 pub fn ioctl_w<I: Ioctl>(fd: impl AsFd, arg: &I::Arg) -> io::Result<i32> {
-    const { assert!(I::DIR == 1, "not an _IOW ioctl") };
     ret(unsafe {
         libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg as *const I::Arg)
     })
@@ -38,7 +36,6 @@ pub fn ioctl_w<I: Ioctl>(fd: impl AsFd, arg: &I::Arg) -> io::Result<i32> {
 
 /// _IOR/_IOWR: the kernel writes (or updates) the argument.
 pub fn ioctl_rw<I: Ioctl>(fd: impl AsFd, arg: &mut I::Arg) -> io::Result<i32> {
-    const { assert!(I::DIR & 2 != 0, "not an _IOR/_IOWR ioctl") };
     ret(unsafe {
         libc::ioctl(fd.as_fd().as_raw_fd(), I::OPCODE as libc::Ioctl, arg as *mut I::Arg)
     })

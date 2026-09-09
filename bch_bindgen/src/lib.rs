@@ -43,6 +43,16 @@ pub mod c {
 
 pub mod data;
 pub mod fs;
+/// Typed ioctl inventory, generated from the _IO*() defines in
+/// bcachefs_ioctl.h: a marker type per ioctl binding its opcode to its
+/// argument type. It lives here rather than in bcachefs-kernel because the
+/// opcodes themselves come from rust_shims.h, which only this crate's bindgen
+/// parses - and because nothing in the kernel build calls an ioctl. The tools'
+/// src/wrappers/ioctl.rs builds the calls on top.
+pub mod ioctl {
+    #![allow(non_camel_case_types)]
+    include!(concat!(env!("OUT_DIR"), "/ioctls_gen.rs"));
+}
 pub mod keyutils;
 pub mod opts;
 pub mod sb;
