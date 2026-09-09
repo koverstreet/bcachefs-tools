@@ -1175,8 +1175,6 @@ static int bucket_alloc_from_stripe(struct btree_trans *trans,
 	int ret = 0;
 
 	struct ec_stripe_head *h = errptr_try(bch2_ec_stripe_head_get(trans, req, 0));
-	if (!h)
-		return 0;
 
 	bch2_dev_alloc_list(c, &req->wp->stripe, req);
 
@@ -1697,6 +1695,21 @@ retry:
 
 		ret = min(ret, 0); /* We return 1 earlier to terminate allocating */
 
+		/*
+		 * Has to come before the retry branches below: they're gated on
+		 * ret, and the first clears req->target - a targeted write would
+		 * spill outside its target instead of replicating within it.
+		 */
+		if (bch2_err_matches(ret, BCH_ERR_ec_alloc_failed)) {
+			if (req->flags & BCH_WRITE_must_ec)
+				goto err;
+
+			req->ec				= false;
+			req->will_retry_target_devices	= true;
+			req->will_retry_all_devices	= req->target && !(req->flags & BCH_WRITE_only_specified_devs);
+			continue;
+		}
+
 		if (ret &&
 		    !bch2_err_matches(ret, BCH_ERR_freelist_empty) &&
 		    !bch2_err_matches(ret, BCH_ERR_insufficient_devices))
@@ -1722,7 +1735,7 @@ retry:
 
 		if (req->nr_effective < req->nr_replicas && req->ec) {
 			if ((req->flags & BCH_WRITE_must_ec)) {
-				ret = bch_err_throw(c, ec_alloc_failed);
+				ret = bch_err_throw(c, ec_alloc_failed_no_usable_block);
 				goto err;
 			}
 
@@ -1759,7 +1772,7 @@ retry:
 	if (req->ec &&
 	    (req->flags & BCH_WRITE_must_ec) &&
 	    !ec_open_bucket(c, &req->ptrs)) {
-		ret = bch_err_throw(c, ec_alloc_failed);
+		ret = bch_err_throw(c, ec_alloc_failed_no_ec_bucket);
 		goto err;
 	}
 

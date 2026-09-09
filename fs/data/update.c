@@ -1303,17 +1303,15 @@ int bch2_can_do_data_update(struct btree_trans *trans,
 		req->ec_max_data_blocks	= 0;
 
 		/*
-		 * Only NULL - insufficient_devs - means EC genuinely can't
-		 * happen. An ERR_PTR is a real error and has to propagate:
-		 * bch2_ec_stripe_head_get() takes two mutexes with
-		 * bch2_trans_mutex_lock(), so it can return a transaction
-		 * restart, and flattening that to ec_alloc_failed parks the
-		 * extent on the pending list instead of retrying.
+		 * Errors propagate as they come: the ec_alloc_failed subtypes
+		 * say why EC can't happen and park the extent, and a
+		 * transaction restart - bch2_ec_stripe_head_get() takes two
+		 * mutexes with bch2_trans_mutex_lock() - has to stay a restart,
+		 * because flattening it would park an extent that just needed
+		 * retrying.
 		 */
 		struct ec_stripe_head *h =
 			errptr_try(bch2_ec_stripe_head_get(trans, req, 0));
-		if (!h)
-			return bch_err_throw(c, ec_alloc_failed);
 		bch2_ec_stripe_head_put(c, h);
 	}
 

@@ -2166,7 +2166,7 @@ __bch2_ec_stripe_head_get(struct btree_trans *trans,
 	struct ec_stripe_head *h;
 
 	if (!redundancy)
-		return NULL;
+		return ERR_PTR(bch_err_throw(c, ec_alloc_failed_no_redundancy));
 
 	int ret = bch2_trans_mutex_lock(trans, &c->ec.stripe_head_lock);
 	if (ret)
@@ -2206,13 +2206,14 @@ found:
 
 	if (h->insufficient_devs) {
 		mutex_unlock(&h->lock);
-		h = NULL;
+		h = ERR_PTR(bch_err_throw(c, ec_alloc_failed_insufficient_devs));
 	}
 err:
 	mutex_unlock(&c->ec.stripe_head_lock);
 	return h;
 }
 
+/* Never returns NULL: failures are ec_alloc_failed subtypes naming the reason. */
 struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 					       struct alloc_request *req,
 					       unsigned algo)
@@ -2224,17 +2225,15 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 	int ret;
 
 	if (t.type == TARGET_GROUP) {
-		if (t.group > U8_MAX) {
-			bch_err(c, "cannot create a stripe when disk_label > U8_MAX");
-			return NULL;
-		}
+		if (t.group > U8_MAX)
+			return ERR_PTR(bch_err_throw(c, ec_alloc_failed_disk_label_too_big));
 		disk_label = t.group + 1; /* 0 == no label */
 	}
 
 	struct ec_stripe_head *h =
 		__bch2_ec_stripe_head_get(trans, disk_label, algo,
 					  redundancy, req->watermark);
-	if (IS_ERR_OR_NULL(h))
+	if (IS_ERR(h))
 		return h;
 
 	if (!h->s) {
@@ -2329,9 +2328,9 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 err:
 	bch2_ec_stripe_head_put(c, h);
 
-	/* we want the allocator to fall back to replication */
+	/* Not fatal to the write - the allocator falls back to replication: */
 	if (bch2_err_matches(ret, BCH_ERR_stripe_insufficient_devices))
-		return NULL;
+		ret = bch_err_throw(c, ec_alloc_failed_stripe_alloc);
 	return ERR_PTR(ret);
 }
 

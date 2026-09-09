@@ -625,7 +625,13 @@
 	x(0,				cached_ptr_stale, 602)			\
 	x(BCH_ERR_no_btree_node,	no_btree_node_shallow, 603)		\
 	x(0,				bucket_not_allocatable, 604)		\
-	x(ENOSPC,			ec_alloc_failed_pending_race, 605)
+	x(ENOSPC,			ec_alloc_failed_pending_race, 605)	\
+	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_no_redundancy, 606)	\
+	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_insufficient_devs, 607)	\
+	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_disk_label_too_big, 608)	\
+	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_stripe_alloc, 609)	\
+	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_no_usable_block, 610)	\
+	x(BCH_ERR_ec_alloc_failed,	ec_alloc_failed_no_ec_bucket, 611)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,
