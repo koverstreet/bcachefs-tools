@@ -2062,16 +2062,30 @@ __cold void bch2_new_stripes_to_text(struct printbuf *out, struct bch_fs *c)
  * struct ec_stripe_new
  */
 
-static void ec_stripe_new_set_pending(struct bch_fs *c, struct ec_stripe_head *h)
+/* The head is done staging @s; it belongs to the create path now. */
+static void ec_stripe_head_detach(struct ec_stripe_head *h, struct ec_stripe_new *s)
 {
-	struct ec_stripe_new *s = h->s;
-
 	lockdep_assert_held(&h->lock);
+	BUG_ON(h->s != s);
 
+	h->s = NULL;
+}
+
+/* Every data block claimed - nothing more can go into it. */
+static bool ec_stripe_new_full(struct ec_stripe_new *s)
+{
+	unsigned nr_data = ec_stripe_new_nr_data(s);
+
+	return s->allocated &&
+		bitmap_weight(s->blocks_allocated, nr_data) == nr_data;
+}
+
+/* Caller has detached @s from its head. */
+static void ec_stripe_new_set_pending(struct bch_fs *c, struct ec_stripe_new *s)
+{
 	BUG_ON(!s->allocated && !s->err);
 
-	h->s		= NULL;
-	s->state	= EC_STRIPE_NEW_filling;
+	s->state = EC_STRIPE_NEW_filling;
 
 	scoped_guard(mutex, &c->ec.stripe_new_lock)
 		list_add(&s->list, &c->ec.stripe_new_list);
@@ -2080,10 +2094,12 @@ static void ec_stripe_new_set_pending(struct bch_fs *c, struct ec_stripe_head *h
 	ec_stripe_new_put(c, s, STRIPE_REF_io);
 }
 
-void bch2_ec_stripe_new_cancel(struct bch_fs *c, struct ec_stripe_head *h, int err)
+void bch2_ec_stripe_new_cancel(struct bch_fs *c, struct ec_stripe_head *h,
+			       struct ec_stripe_new *s, int err)
 {
-	h->s->err = err;
-	ec_stripe_new_set_pending(c, h);
+	s->err = err;
+	ec_stripe_head_detach(h, s);
+	ec_stripe_new_set_pending(c, s);
 }
 
 static void ec_stripe_head_devs_update(struct bch_fs *c, struct ec_stripe_head *h)
@@ -2099,7 +2115,7 @@ static void ec_stripe_head_devs_update(struct bch_fs *c, struct ec_stripe_head *
 	bitmap_andnot(devs_leaving.d, old_devs.d, h->devs.d, BCH_SB_MEMBERS_MAX);
 
 	if (h->s && !h->s->allocated && dev_mask_nr(&devs_leaving))
-		bch2_ec_stripe_new_cancel(c, h, -EINTR);
+		bch2_ec_stripe_new_cancel(c, h, h->s, -EINTR);
 }
 
 static struct ec_stripe_head *
@@ -2125,11 +2141,12 @@ ec_new_stripe_head_alloc(struct bch_fs *c, unsigned disk_label,
 
 void bch2_ec_stripe_head_put(struct bch_fs *c, struct ec_stripe_head *h)
 {
-	if (h->s &&
-	    h->s->allocated &&
-	    bitmap_weight(h->s->blocks_allocated,
-			  ec_stripe_new_nr_data(h->s)) == ec_stripe_new_nr_data(h->s))
-		ec_stripe_new_set_pending(c, h);
+	if (h->s && ec_stripe_new_full(h->s)) {
+		struct ec_stripe_new *s = h->s;
+
+		ec_stripe_head_detach(h, s);
+		ec_stripe_new_set_pending(c, s);
+	}
 
 	mutex_unlock(&h->lock);
 }

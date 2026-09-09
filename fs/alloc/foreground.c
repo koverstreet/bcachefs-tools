@@ -1168,37 +1168,49 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *trans,
  * it's to a device we don't want:
  */
 
-static int bucket_alloc_from_stripe(struct btree_trans *trans,
-				    struct alloc_request *req)
+/*
+ * Claim a block of @s: the first one on a device we may allocate from that
+ * nobody else has taken. 0 without claiming anything means this stripe has
+ * nothing for us - its free blocks are all on devices we're excluded from.
+ */
+static int stripe_alloc_bucket(struct bch_fs *c, struct alloc_request *req,
+			       struct ec_stripe_new *s)
 {
-	struct bch_fs *c = trans->c;
-	int ret = 0;
-
-	struct ec_stripe_head *h = errptr_try(bch2_ec_stripe_head_get(trans, req, 0));
-
-	bch2_dev_alloc_list(c, &req->wp->stripe, req);
-
 	darray_for_each(req->devs_sorted, i)
-		for (unsigned ec_idx = 0; ec_idx < ec_stripe_new_nr_data(h->s); ec_idx++) {
-			if (!h->s->blocks[ec_idx])
+		for (unsigned ec_idx = 0; ec_idx < ec_stripe_new_nr_data(s); ec_idx++) {
+			if (!s->blocks[ec_idx])
 				continue;
 
-			struct open_bucket *ob = c->allocator.open_buckets + h->s->blocks[ec_idx];
-			if (ob->dev == *i && !test_and_set_bit(ec_idx, h->s->blocks_allocated)) {
+			struct open_bucket *ob = c->allocator.open_buckets + s->blocks[ec_idx];
+			if (ob->dev == *i && !test_and_set_bit(ec_idx, s->blocks_allocated)) {
 				ob->ec_idx	= ec_idx;
-				ob->ec		= h->s;
-				ec_stripe_new_get(h->s, STRIPE_REF_io);
+				ob->ec		= s;
+				ec_stripe_new_get(s, STRIPE_REF_io);
 
-				ret = add_new_bucket(c, req, ob);
+				int ret = add_new_bucket(c, req, ob);
 
 				event_inc_trace(c, bucket_alloc_from_stripe, buf, ({
 					bch2_open_bucket_to_text(&buf, c, ob);
 				}));
 
-				goto out;
+				return ret;
 			}
 		}
-out:
+
+	return 0;
+}
+
+static int bucket_alloc_from_stripe(struct btree_trans *trans,
+				    struct alloc_request *req)
+{
+	struct bch_fs *c = trans->c;
+
+	struct ec_stripe_head *h = errptr_try(bch2_ec_stripe_head_get(trans, req, 0));
+
+	bch2_dev_alloc_list(c, &req->wp->stripe, req);
+
+	int ret = stripe_alloc_bucket(c, req, h->s);
+
 	bch2_ec_stripe_head_put(c, h);
 	return ret;
 }

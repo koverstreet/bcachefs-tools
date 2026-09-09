@@ -252,7 +252,7 @@ static void __bch2_ec_stop(struct bch_fs *c, struct bch_dev *ca)
 	list_for_each_entry(h, &c->ec.stripe_head_list, list) {
 		guard(mutex)(&h->lock);
 		if (h->s && should_cancel_stripe(c, h->s, ca))
-			bch2_ec_stripe_new_cancel(c, h, -BCH_ERR_erofs_no_writes);
+			bch2_ec_stripe_new_cancel(c, h, h->s, -BCH_ERR_erofs_no_writes);
 	}
 }
 
