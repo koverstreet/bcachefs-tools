@@ -2062,6 +2062,35 @@ __cold void bch2_new_stripes_to_text(struct printbuf *out, struct bch_fs *c)
  * struct ec_stripe_new
  */
 
+/*
+ * A stripe as wide as @h's devices allow: one block per failure domain is a
+ * hard requirement, so the width is capped by domains as well as devices. If a
+ * domain goes away the next stripe is narrower rather than doubling up.
+ */
+static struct ec_stripe_new *
+ec_stripe_new_alloc_for_head(struct bch_fs *c, struct ec_stripe_head *h,
+			     unsigned max_data_blocks)
+{
+	unsigned active = min_t(unsigned, h->nr_active_devs, BCH_BKEY_PTRS_MAX);
+	unsigned nr_data = min_t(unsigned, active - h->redundancy,
+				 max_data_blocks ?: ~0U);
+
+	/* insufficient_devs was checked - at least redundancy + 2 domains: */
+	unsigned nr_domains = bch2_target_nr_domains(c, &h->devs);
+	nr_data = min(nr_data, nr_domains - h->redundancy);
+
+	struct ec_stripe_new *s =
+		ec_new_stripe_alloc(c, h->devs, h->watermark, h->disk_label,
+				    h->algo, nr_data, h->redundancy, h->blocksize);
+	if (!s) {
+		bch_err(c, "failed to allocate new stripe");
+		return ERR_PTR(bch_err_throw(c, ENOMEM_ec_new_stripe_alloc));
+	}
+
+	h->nr_created++;
+	return s;
+}
+
 /* The head is done staging @s; it belongs to the create path now. */
 static void ec_stripe_head_detach(struct ec_stripe_head *h, struct ec_stripe_new *s)
 {
@@ -2233,36 +2262,14 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 		return h;
 
 	if (!h->s) {
-		unsigned active = min_t(unsigned, h->nr_active_devs, BCH_BKEY_PTRS_MAX);
-		unsigned nr_data = min_t(unsigned, active - h->redundancy,
-					 req->ec_max_data_blocks ?: ~0U);
-
-		/*
-		 * One block per failure domain: the stripe can't be wider than
-		 * the domains available. If a domain becomes unavailable, the
-		 * next stripe is allocated narrower rather than doubling up.
-		 * With no failure domains each device is its own domain, so this
-		 * is the usual device-count cap.
-		 */
-		unsigned nr_domains = bch2_target_nr_domains(c, &h->devs);
-		/* insufficient_devs was checked - at least redundancy + 2 domains: */
-		nr_data = min(nr_data, nr_domains - h->redundancy);
-
-		h->s = ec_new_stripe_alloc(c,
-					   h->devs,
-					   h->watermark,
-					   h->disk_label,
-					   h->algo,
-					   nr_data,
-					   h->redundancy,
-					   h->blocksize);
-		if (!h->s) {
-			ret = bch_err_throw(c, ENOMEM_ec_new_stripe_alloc);
-			bch_err(c, "failed to allocate new stripe");
+		struct ec_stripe_new *new =
+			ec_stripe_new_alloc_for_head(c, h, req->ec_max_data_blocks);
+		if (IS_ERR(new)) {
+			ret = PTR_ERR(new);
 			goto err;
 		}
 
-		h->nr_created++;
+		h->s = new;
 	}
 
 	struct ec_stripe_new *s = h->s;
