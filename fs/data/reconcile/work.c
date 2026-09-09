@@ -749,6 +749,14 @@ static int check_reconcile_pending_err(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
+	 /*
+	  * Ahead of the ENOSPC test below, which these would otherwise match:
+	  * they're ENOSPC-class because they're EC allocation failures, but
+	  * they say "not right now", and nothing retries the pending list.
+	  */
+	 if (bch2_err_matches(err, BCH_ERR_ec_alloc_failed_transient))
+		 return err;
+
 	 if (!bch2_err_matches(err, BCH_ERR_data_update_fail_no_rw_devs) &&
 	     !bch2_err_matches(err, BCH_ERR_insufficient_devices) &&
 	     !bch2_err_matches(err, ENOSPC))

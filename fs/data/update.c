@@ -781,7 +781,7 @@ void bch2_data_update_read_done(struct data_update *u)
  * ec_alloc_failed parks too, via bch2_data_update_ec_alloc_failed(). When it
  * can't - the extent moved under us - that path swaps in
  * ec_alloc_failed_pending_race, which is a sibling rather than a child so it
- * still traces here.
+ * still traces here. So do the transient subtypes, which don't park either.
  */
 bool bch2_data_update_fail_should_trace(enum bch_data_update_types type, int ret)
 {
@@ -789,7 +789,8 @@ bool bch2_data_update_fail_should_trace(enum bch_data_update_types type, int ret
 	    bch2_err_matches(ret, BCH_ERR_data_update_fail_need_copygc) ||
 	    bch2_err_matches(ret, BCH_ERR_data_update_fail_would_block) ||
 	    bch2_err_matches(ret, BCH_ERR_operation_blocked) ||
-	    bch2_err_matches(ret, BCH_ERR_ec_alloc_failed) ||
+	    (bch2_err_matches(ret, BCH_ERR_ec_alloc_failed) &&
+	     !bch2_err_matches(ret, BCH_ERR_ec_alloc_failed_transient)) ||
 	    ((type == BCH_DATA_UPDATE_reconcile ||
 	      type == BCH_DATA_UPDATE_promote) &&
 	     bch2_err_matches(ret, BCH_ERR_data_update_fail_no_rw_devs)))
