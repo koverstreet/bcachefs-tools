@@ -685,14 +685,34 @@ recover:
 		six_unlock_read(&b->c.lock);
 
 		if (bch2_err_matches(ret, BCH_ERR_topology_repair_drop_this_node)) {
-			bch2_btree_node_transition_state(&c->btree.cache, b,
-								  BTREE_NODE_CACHE_FREEABLE);
-
+			/*
+			 * Undo bch2_btree_set_root_inmem() before dropping the
+			 * node: the cache state machine BUG_ONs on reclaiming a
+			 * node that still says it's a root.
+			 */
 			scoped_guard(mutex, &c->btree.cache.root_lock) {
 				r->b = NULL;
 				if (likely(i < BTREE_ID_NR))
 					WRITE_ONCE(c->btree.cache.roots_b[i], 0);
 			}
+
+			scoped_guard(mutex_noio, &c->btree.cache.lock)
+				clear_btree_node_permanent(b);
+
+			/*
+			 * Unhashing asserts SIX_LOCK_write even here, where
+			 * recovery is the only thing running:
+			 */
+			trans->locking_hash_val = 0;
+			trans->locking_root_id	= -1;
+			btree_node_lock_nopath(trans, &b->c, SIX_LOCK_intent, true, _THIS_IP_, false);
+			btree_node_lock_nopath(trans, &b->c, SIX_LOCK_write, true, _THIS_IP_, false);
+
+			bch2_btree_node_transition_state(&c->btree.cache, b,
+								  BTREE_NODE_CACHE_FREEABLE);
+
+			six_unlock_write(&b->c.lock);
+			six_unlock_intent(&b->c.lock);
 
 			if (!reconstructed_root) {
 				r->error = -EIO;
