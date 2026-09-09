@@ -980,31 +980,39 @@ unsigned bch2_disk_label_ec_devs(struct bch_fs *c, unsigned disk_label,
 }
 
 /*
+ * redundancy + 2, not + 1: a stripe of one data block plus parity is worse than
+ * replication. Domains count separately because the allocator won't put two
+ * blocks in one domain, so sharing domains can starve a stripe that has devices
+ * enough.
+ *
+ * @devs comes from bch2_disk_label_ec_devs(). @out, if given, gets the reason -
+ * callers park work on this answer.
+ */
+static bool ec_devs_sufficient(struct bch_fs *c, struct bch_devs_mask *devs,
+			       unsigned disk_label, unsigned redundancy,
+			       struct printbuf *out)
+{
+	unsigned nr_devs	= dev_mask_nr(devs);
+	unsigned nr_domains	= bch2_target_nr_domains(c, devs);
+	unsigned need		= redundancy + 2;
+
+	if (nr_devs >= need && nr_domains >= need)
+		return true;
+
+	if (out)
+		prt_printf(out,
+			   "disk_label %u: %u devs, %u domains, need %u of each\n"
+			   "(bch2_disk_label_ec_devs() drops durability 0, and every\n"
+			   "device whose bucket size isn't the most common one)",
+			   disk_label, nr_devs, nr_domains, need);
+	return false;
+}
+
+/*
  * Can a stripe with @redundancy parity blocks be formed in @target right now?
  *
- * This must model what ec_stripe_head_devs_update() computes as
- * insufficient_devs, because that is what actually refuses to allocate. Both
- * of its conditions apply:
- *
- *  - at least redundancy + 2 devices agreeing on bucket_size. Not + 1: a
- *    stripe of one data block plus parity is strictly worse than replication,
- *    so that case is rejected rather than formed.
- *  - at least redundancy + 2 distinct failure domains. One block per domain is
- *    a hard requirement for erasure coding, not a preference - the allocator
- *    excludes devices sharing an already-placed block's domain. With no
- *    failure domains configured every device is its own domain and this is
- *    the device count again, so it only bites where devices share one.
- *
- * bch2_disk_label_ec_devs already returns the filtered device mask (RW members
- * with durability > 0, narrowed to the picked best bucket_size).
- *
- * Used by reconcile to avoid queueing EC work that can't make progress —
- * otherwise reconcile spins re-queueing data_update_fail forever. Modelling
- * only the device count let configurations through that the allocator then
- * refused, costing one wasted rewrite of every affected extent.
- *
- * @trace, if given, is filled in with why we said no: callers park work on this
- * answer, and a park the user can't explain is a park they can't act on.
+ * Used by reconcile to avoid queueing EC work that can't make progress -
+ * otherwise it spins re-queueing data_update_fail forever.
  */
 bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redundancy,
 			     struct printbuf *trace)
@@ -1018,11 +1026,10 @@ bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redunda
 	struct target t = target_decode(target);
 
 	/*
-	 * A group above U8_MAX cannot be a disk label, and __ec_stripe_head_get()
-	 * refuses it outright ("cannot create a stripe when disk_label > U8_MAX").
-	 * Folding it to disk_label 0 here would ask about every device in the
-	 * filesystem and answer yes to a target the allocator will not serve --
-	 * the same shape of mismatch this function is being fixed for.
+	 * A group above U8_MAX cannot be a disk label, and
+	 * bch2_ec_stripe_head_get() refuses it outright. Folding it to
+	 * disk_label 0 here would ask about every device in the filesystem and
+	 * answer yes to a target the allocator will not serve.
 	 */
 	if (t.type == TARGET_GROUP && t.group > U8_MAX) {
 		if (trace)
@@ -1037,21 +1044,7 @@ bool bch2_can_form_ec_stripe(struct bch_fs *c, unsigned target, unsigned redunda
 	struct bch_devs_mask devs;
 	bch2_disk_label_ec_devs(c, disk_label, &devs, 0);
 
-	unsigned nr_devs	= dev_mask_nr(&devs);
-	unsigned nr_domains	= bch2_target_nr_domains(c, &devs);
-	unsigned need		= redundancy + 2;
-
-	if (nr_devs < need || nr_domains < need) {
-		if (trace)
-			prt_printf(trace,
-				   "disk_label %u: %u devs, %u domains, need %u of each\n"
-				   "(bch2_disk_label_ec_devs() drops durability 0, and every\n"
-				   "device whose bucket size isn't the most common one)",
-				   disk_label, nr_devs, nr_domains, need);
-		return false;
-	}
-
-	return true;
+	return ec_devs_sufficient(c, &devs, disk_label, redundancy, trace);
 }
 
 /*
@@ -2099,22 +2092,8 @@ static void ec_stripe_head_devs_update(struct bch_fs *c, struct ec_stripe_head *
 
 	h->blocksize		= bch2_disk_label_ec_devs(c, h->disk_label, &h->devs, 0);
 	h->nr_active_devs	= dev_mask_nr(&h->devs);
-
-	/*
-	 * If we only have redundancy + 1 devices, we're better off with just
-	 * replication:
-	 */
-	h->insufficient_devs = h->nr_active_devs < h->redundancy + 2;
-
-	/*
-	 * One block per failure domain is a hard requirement (see
-	 * __new_stripe_alloc_buckets): too few domains for redundancy to mean
-	 * anything means no stripes at all. With no failure domains configured
-	 * each device is its own domain, so this only tightens the device-count
-	 * check above when devices share domains.
-	 */
-	unsigned nr_domains = bch2_target_nr_domains(c, &h->devs);
-	h->insufficient_devs |= nr_domains < h->redundancy + 2;
+	h->insufficient_devs	= !ec_devs_sufficient(c, &h->devs, h->disk_label,
+						      h->redundancy, NULL);
 
 	struct bch_devs_mask devs_leaving;
 	bitmap_andnot(devs_leaving.d, old_devs.d, h->devs.d, BCH_SB_MEMBERS_MAX);
