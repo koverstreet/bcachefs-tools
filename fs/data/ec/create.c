@@ -2222,16 +2222,51 @@ err:
 	return h;
 }
 
-/* Never returns NULL: failures are ec_alloc_failed subtypes naming the reason. */
+/*
+ * Claim a block of @s: the first one on a device we may allocate from that
+ * nobody else has taken. NULL means this stripe has nothing for us - its free
+ * blocks are all on devices we're excluded from.
+ */
+static struct open_bucket *ec_stripe_claim_bucket(struct bch_fs *c,
+						  struct alloc_request *req,
+						  struct ec_stripe_new *s)
+{
+	darray_for_each(req->devs_sorted, i)
+		for (unsigned ec_idx = 0; ec_idx < ec_stripe_new_nr_data(s); ec_idx++) {
+			if (!s->blocks[ec_idx])
+				continue;
+
+			struct open_bucket *ob = c->allocator.open_buckets + s->blocks[ec_idx];
+			if (ob->dev == *i && !test_and_set_bit(ec_idx, s->blocks_allocated)) {
+				ob->ec_idx	= ec_idx;
+				ob->ec		= s;
+				ec_stripe_new_get(s, STRIPE_REF_io);
+				return ob;
+			}
+		}
+
+	return NULL;
+}
+
+/*
+ * Never returns NULL: failures are ec_alloc_failed subtypes naming the reason.
+ *
+ * @ob is the block claimed for this write, NULL if the stripe had none free on
+ * a device we're allowed to use. Pass NULL to just ask whether EC is possible.
+ */
 struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 					       struct alloc_request *req,
-					       unsigned algo)
+					       unsigned algo,
+					       struct open_bucket **ob)
 {
 	struct bch_fs *c = trans->c;
 	unsigned redundancy = req->ec_replicas - 1;
 	unsigned disk_label = 0;
 	struct target t = target_decode(req->target);
 	int ret;
+
+	if (ob)
+		*ob = NULL;
 
 	if (t.type == TARGET_GROUP) {
 		if (t.group > U8_MAX)
@@ -2307,6 +2342,15 @@ struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *trans,
 		if (ret)
 			goto err;
 		ec_old_stripe_read(c, s);
+	}
+
+	/*
+	 * Has to come after the stripe's own allocation: that runs the bucket
+	 * allocator against the stripe's device mask, clobbering devs_sorted.
+	 */
+	if (ob) {
+		bch2_dev_alloc_list(c, &req->wp->stripe, req);
+		*ob = ec_stripe_claim_bucket(c, req, s);
 	}
 
 	BUG_ON(!s->new_stripe.data[0]);

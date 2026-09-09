@@ -197,7 +197,7 @@ void bch2_ec_stripe_head_put(struct bch_fs *, struct ec_stripe_head *);
 
 struct alloc_request;
 struct ec_stripe_head *bch2_ec_stripe_head_get(struct btree_trans *,
-			struct alloc_request *, unsigned);
+			struct alloc_request *, unsigned, struct open_bucket **);
 
 void bch2_do_stripe_deletes(struct bch_fs *);
 void bch2_ec_stripe_create_start(struct bch_fs *, struct ec_stripe_new *);

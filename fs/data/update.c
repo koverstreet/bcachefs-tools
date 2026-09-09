@@ -1316,7 +1316,7 @@ int bch2_can_do_data_update(struct btree_trans *trans,
 		 * retrying.
 		 */
 		struct ec_stripe_head *h =
-			errptr_try(bch2_ec_stripe_head_get(trans, req, 0));
+			errptr_try(bch2_ec_stripe_head_get(trans, req, 0, NULL));
 		bch2_ec_stripe_head_put(c, h);
 	}
 
