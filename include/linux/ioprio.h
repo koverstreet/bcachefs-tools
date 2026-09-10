@@ -43,4 +43,16 @@ enum {
  */
 #define IOPRIO_NORM	(4)
 
+static inline int get_current_ioprio(void)
+{
+	return IOPRIO_PRIO_VALUE(IOPRIO_CLASS_NONE, 0);
+}
+
+struct task_struct;
+
+static inline int set_task_ioprio(struct task_struct *task, int ioprio)
+{
+	return 0;
+}
+
 #endif
