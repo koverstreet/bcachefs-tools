@@ -10,6 +10,7 @@ struct bch_member_cpu {
 	u16			group;
 	u16			failure_domain;
 	u8			state;
+	u8			needs_reconcile_scan;
 	u8			discard;
 	u8			data_allowed;
 	u8			durability;

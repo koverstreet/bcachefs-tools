@@ -171,6 +171,7 @@ pub fn members_v1(sb: &c::bch_sb) -> Option<MembersV1<'_>> {
 bitmask_accessors! {
     bch_member, flags,
         BCH_MEMBER_STATE          => (member_state, set_member_state),
+        BCH_MEMBER_NEEDS_RECONCILE_SCAN => (member_needs_reconcile_scan, set_member_needs_reconcile_scan),
         BCH_MEMBER_GROUP          => (member_group, set_member_group),
         BCH_MEMBER_DATA_ALLOWED   => (member_data_allowed, set_member_data_allowed),
         BCH_MEMBER_RESIZE_ON_MOUNT => (member_resize_on_mount, set_member_resize_on_mount),
