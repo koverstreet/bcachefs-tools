@@ -838,23 +838,25 @@ static noinline long bchfs_fallocate(struct bch_inode_info *inode, int mode,
 	return ret ?: ret2;
 }
 
-long bch2_fallocate_dispatch(struct file *file, int mode,
-			     loff_t offset, loff_t len)
+/*
+ * Body of bch2_fallocate_dispatch() with i_rwsem left to the caller.
+ *
+ * ->swap_activate() needs to fallocate but cannot use the dispatch:
+ * swapon() already holds i_rwsem across it (mm/swapfile.c takes it before
+ * setup_swap_extents(), which is what calls ->swap_activate), so going in
+ * through the dispatch would deadlock on inode_lock.
+ */
+long __bch2_fallocate(struct bch_inode_info *inode, int mode,
+		      loff_t offset, loff_t len)
 {
-	struct bch_inode_info *inode = file_bch_inode(file);
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
 	long ret;
 
 	if (!enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_fallocate))
 		return -EROFS;
 
-	inode_lock(&inode->v);
 	inode_dio_wait(&inode->v);
 	guard(bch2_pagecache_block)(inode);
-
-	ret = file_modified(file);
-	if (ret)
-		goto err;
 
 	if (!(mode & ~(FALLOC_FL_KEEP_SIZE|FALLOC_FL_ZERO_RANGE)))
 		ret = bchfs_fallocate(inode, mode, offset, len);
@@ -869,9 +871,25 @@ long bch2_fallocate_dispatch(struct file *file, int mode,
 
 	scoped_guard(spinlock, &inode->ei_reserved_lock)
 		inode->ei_reserved_start = inode->ei_reserved_end = 0;
-err:
-	inode_unlock(&inode->v);
+
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_fallocate);
+
+	return ret;
+}
+
+long bch2_fallocate_dispatch(struct file *file, int mode,
+			     loff_t offset, loff_t len)
+{
+	struct bch_inode_info *inode = file_bch_inode(file);
+	long ret;
+
+	inode_lock(&inode->v);
+
+	ret = file_modified(file);
+	if (!ret)
+		ret = __bch2_fallocate(inode, mode, offset, len);
+
+	inode_unlock(&inode->v);
 
 	return bch2_err_class(ret);
 }
