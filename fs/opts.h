@@ -224,6 +224,16 @@ enum fsck_err_opts {
 	  OPT_FN(bch2_opt_target),					\
 	  BCH_SB_PROMOTE_TARGET,	0,				\
 	  "(target)",	"Device or label to promote data to on read")	\
+	x(promote_skip_congested,	u8,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
+	  OPT_BOOL(),							\
+	  BCH2_NO_SB_OPT,		true,				\
+	  NULL,		"Skip promoting to a target whose devices are congested")\
+	x(promote_congestion_mult,	u8,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
+	  OPT_UINT(1, 64),						\
+	  BCH2_NO_SB_OPT,		4,				\
+	  NULL,		"A device counts as congested when reads exceed this multiple of its fast read latency")\
 	x(erasure_code,			u16,				\
 	  OPT_FS|OPT_INODE|OPT_FORMAT|OPT_MOUNT_OLD|OPT_RUNTIME,	\
 	  OPT_BOOL(),							\
