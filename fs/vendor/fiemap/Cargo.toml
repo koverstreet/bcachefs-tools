@@ -1,0 +1,15 @@
+[package]
+name = "fiemap"
+version = "0.2.0"
+authors = ["lilydjwg <lilydjwg@gmail.com>"]
+description = "call ioctl FIEMAP on files with ease"
+license = "BSD-2-Clause"
+documentation = "https://docs.rs/fiemap"
+repository = "https://github.com/lilydjwg/fiemap-rs"
+edition = "2024"
+
+# Vendored from crates.io fiemap 0.2.0. The only change from upstream is where
+# FS_IOC_FIEMAP comes from - see the comment at its definition in src/lib.rs.
+[dependencies]
+bitflags = "2"
+bch_bindgen = { path = "../../../bch_bindgen" }

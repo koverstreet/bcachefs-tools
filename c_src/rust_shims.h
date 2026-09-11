@@ -64,6 +64,15 @@ static const unsigned long BCH_FS_IOC_GETFSSYSFSPATH = FS_IOC_GETFSSYSFSPATH;
 static const size_t BCH_SIZEOF_FS_SYSFS_PATH = sizeof(struct fs_sysfs_path);
 
 /*
+ * Same story for FIEMAP, one layer out: the fiemap crate had it as a literal
+ * 0xC020660B, so migrate and copy_fs couldn't read an extent map on any
+ * architecture that isn't asm-generic. We vendor that crate now (fs/vendor/
+ * fiemap) for this one line.
+ */
+#include <linux/fiemap.h>
+static const unsigned long BCH_FS_IOC_FIEMAP = FS_IOC_FIEMAP;
+
+/*
  * bcachefs's own ioctl numbers, for the same reason: the generated Rust
  * inventory used to compute these with a hand-written opcode(), which baked in
  * asm-generic's layout - dir at bit 30, 14 size bits - and so was wrong on

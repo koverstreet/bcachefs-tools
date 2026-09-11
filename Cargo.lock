@@ -179,7 +179,6 @@ dependencies = [
  "bitfield 0.14.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "bitflags 1.3.2",
  "cc",
- "fiemap",
  "libc",
  "paste 1.0.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "pkg-config",
@@ -497,9 +496,8 @@ dependencies = [
 [[package]]
 name = "fiemap"
 version = "0.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d478c866a54b882388a2a3eb441e7ab6feb6348b174284fd95f23fa47cb46441"
 dependencies = [
+ "bch_bindgen",
  "bitflags 2.13.0",
 ]
 
