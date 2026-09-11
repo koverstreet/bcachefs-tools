@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.39.6 - Fri Sep 11 2026
+
+An early release for an erasure coding regression in 1.39.5: stripe reuse moved
+in front of allocation, and any error from reuse - including "nothing to reuse
+right now" - aborted stripe creation. `ec_alloc_failed` is ENOSPC class, so the
+extent was parked on the reconcile pending list, which nothing retries, and
+pending climbed without bound while converting to EC. Reported by ChH.
+
+Also fixes the i386 and ppc64le builds.
+
+### Bugfixes
+
+- Fix the i386 build: bindgen's union emulation is 4 byte aligned on i686 where
+  the C type is 8, so bindgen's own layout assertion couldn't hold (#905)
+
+- Fix ppc64le, where most ioctls had returned ENOTTY since 1.36 - the opcodes
+  were computed in Rust from asm-generic's layout instead of asked of the C
+  compiler (#904, reported by logan2611)
+
+- Fix a panic creating a stripe with a read-only member, where the carry-forward
+  fold could still be in flight at teardown (reported, diagnosed and fixed by
+  i7920c0)
+
+- Fix a BUG_ON in topology repair, which dropped the root without un-rooting it
+  first (#903)
+
+- Transaction restarts in the `must_ec` probe were collapsed to
+  `ec_alloc_failed` and parked as permanent
+
+- copygc counts buckets queued for evacuation: on a device it was already
+  working the old fragmentation test was noise, and writers blocked in the
+  allocator spun on `transaction_restart_nested`
+
+- Stripe reuse engages before copygc has to run, not after - 12 devices at 10+2
+  settle at 83% full instead of 87%, for 8% more device writes
+
+- Erasure coding reports why it didn't happen instead of a bare
+  `ec_alloc_failed`, and the extent parks that weren't traced now emit
+  `reconcile_set_pending`
+
+No metadata version change.
+
 ## v1.39.5 - Mon Sep 7 2026
 
 Mostly about knowing what you lost: damage from a repair is recorded against
