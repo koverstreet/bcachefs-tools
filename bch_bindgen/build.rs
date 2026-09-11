@@ -529,10 +529,25 @@ fn main() {
         .bitfield_enum("btree_iter_update_trigger_flags")
         .bitfield_enum("bch_trans_commit_flags")
         .bitfield_enum("bch_write_flags")
-        // Block device and bcachefs ioctl numbers - see the note in
-        // c_src/rust_shims.h for why these are C constants and not macros for
-        // bindgen to evaluate.
+        // What c_src/rust_shims.h exports to Rust - see the note there for why
+        // these are C constants rather than macros for bindgen to evaluate.
+        //
+        // These have to be narrow, not a blanket BCH_.*: this crate's bindings
+        // and the fs bindings are both glob-imported into one module, and the
+        // headers here also reach bcachefs's own BCH_SB_*, BCH_BY_INDEX,
+        // BCH_FORCE_IF_* and friends. Allowing BCH_.* binds those a second time
+        // and every use site becomes an ambiguous_glob_imports error, which is
+        // deny-by-default. Measured: 5 symbols becomes 360, and the build fails
+        // with 102 errors.
+        //
+        // The cost is that bindgen drops anything not matched here and says
+        // nothing, so a new shim constant surfaces as "cannot find value in
+        // module c" at its use site rather than pointing at this line. If that
+        // keeps happening, give the shim exports a reserved prefix rather than
+        // widening these.
         .allowlist_var("BCH_BLK.*")
+        .allowlist_var("BCH_FS_IOC_.*")
+        .allowlist_var("BCH_SIZEOF_.*")
         .allowlist_var("bch_ioctl_op_.*")
         .allowlist_function("raid_init")
         .allowlist_function("linux_shrinkers_init")

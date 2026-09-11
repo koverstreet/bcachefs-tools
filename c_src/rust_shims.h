@@ -37,6 +37,33 @@ static const unsigned long BCH_BLKPBSZGET	= BLKPBSZGET;
 static const unsigned long BCH_BLKROTATIONAL	= BLKROTATIONAL;
 
 /*
+ * FS_IOC_GETFSSYSFSPATH is a generic VFS ioctl, so it's in neither the block
+ * list above nor the bcachefs inventory below - and it was open-coded in Rust
+ * as (2 << 30) | (size << 16) | (0x15 << 8) | 1, which is the same asm-generic
+ * restatement #904 was about, still wrong on ppc64le, three files from the fix.
+ * Reported by logan2611.
+ *
+ * It arrived in 6.11, so building against older headers means supplying it -
+ * but the fallback asks _IOR() rather than writing the bits down. We supply the
+ * struct; the target supplies the encoding.
+ *
+ * The opcode encodes sizeof(struct fs_sysfs_path), and Rust carries its own
+ * definition because linux/fs.h's types don't survive the bindgen blocklist. So
+ * export the size too: the two have to agree, and disagreeing would otherwise
+ * surface as an ENOTTY at runtime rather than an error at build time.
+ */
+#ifndef FS_IOC_GETFSSYSFSPATH
+struct fs_sysfs_path {
+	__u8			len;
+	__u8			name[128];
+};
+#define FS_IOC_GETFSSYSFSPATH	_IOR(0x15, 1, struct fs_sysfs_path)
+#endif
+
+static const unsigned long BCH_FS_IOC_GETFSSYSFSPATH = FS_IOC_GETFSSYSFSPATH;
+static const size_t BCH_SIZEOF_FS_SYSFS_PATH = sizeof(struct fs_sysfs_path);
+
+/*
  * bcachefs's own ioctl numbers, for the same reason: the generated Rust
  * inventory used to compute these with a hand-written opcode(), which baked in
  * asm-generic's layout - dir at bit 30, 14 size bits - and so was wrong on
