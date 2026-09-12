@@ -14,6 +14,7 @@ struct moving_context;
 	x(other)		\
 	x(copygc)		\
 	x(reconcile)		\
+	x(rechecksum)		\
 	x(promote)		\
 	x(self_heal)		\
 	x(scrub)		\
