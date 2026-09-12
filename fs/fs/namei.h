@@ -44,6 +44,13 @@ int bch2_unlink_trans(struct btree_trans *,
 		      subvol_inum, struct bch_inode_unpacked *,
 		      const struct qstr *, bool);
 
+int __bch2_unlink_trans(struct btree_trans *,
+			struct btree_iter *, struct bch_inode_unpacked *,
+			const struct bch_hash_info *,
+			struct btree_iter *,
+			subvol_inum, struct btree_iter *, struct bch_inode_unpacked *,
+			bool);
+
 int bch2_rename_trans(struct btree_trans *,
 		      subvol_inum, struct bch_inode_unpacked *,
 		      subvol_inum, struct bch_inode_unpacked *,
