@@ -1450,6 +1450,14 @@ int __bch2_trans_commit(struct btree_trans *trans, enum bch_trans_commit_flags f
 			goto out_reset;
 	}
 
+	/*
+	 * Extents updates release open buckets, which is what the journal
+	 * throttles on - they have to be elevated before we take a journal
+	 * reservation, not just in the btree node alloc path.
+	 */
+	if (trans_commit_has_extents(trans))
+		flags = btree_update_set_watermark_hipri(flags);
+
 	ret = bch2_trans_commit_run_triggers(trans);
 	if (ret)
 		goto out_reset;
