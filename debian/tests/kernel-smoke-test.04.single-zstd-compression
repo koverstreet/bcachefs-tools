@@ -1,0 +1,131 @@
+#!/bin/sh
+
+set +e
+set -x
+
+echo "kernel smoke test, zstd compression: compressible + incompressible data, remount verify"
+
+STORAGE_SIZE_MB=512
+STORAGE="$(mktemp)"
+dd if=/dev/zero of="$STORAGE" bs=1M count=$STORAGE_SIZE_MB > /dev/null 2>&1
+LODEVICE="$(losetup --find --show $STORAGE)"
+
+cleanup() {
+	losetup -d "$LODEVICE"
+}
+trap cleanup EXIT
+
+bcachefs format --compression=zstd "$LODEVICE"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs format with compression=zstd failed, exit code=$ret"
+	exit 1
+fi
+
+MOUNTPOINT="$(mktemp -d)"
+mount -t bcachefs "$LODEVICE" "$MOUNTPOINT"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs mount failed, exit code=$ret"
+	exit 1
+fi
+
+# Test 1: highly compressible data (repeating zeros)
+dd if=/dev/zero of="$MOUNTPOINT/compressible" bs=1K count=64 2>/dev/null
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: writing compressible data"
+	exit 1
+fi
+
+md5_compressible=$(md5sum "$MOUNTPOINT/compressible" | awk '{print $1}')
+
+# Test 2: incompressible data (random)
+dd if=/dev/urandom of="$MOUNTPOINT/incompressible" bs=1K count=64 2>/dev/null
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: writing incompressible data"
+	exit 1
+fi
+
+md5_incompressible=$(md5sum "$MOUNTPOINT/incompressible" | awk '{print $1}')
+
+# Test 3: mixed content (partially compressible file)
+dd if=/dev/zero of="$MOUNTPOINT/mixed" bs=4K count=16 2>/dev/null
+dd if=/dev/urandom of="$MOUNTPOINT/mixed" bs=4K count=16 oflag=append conv=notrunc 2>/dev/null
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: writing mixed data"
+	exit 1
+fi
+
+md5_mixed=$(md5sum "$MOUNTPOINT/mixed" | awk '{print $1}')
+
+# Test 4: large compressible file (exercises multiple extents)
+dd if=/dev/zero of="$MOUNTPOINT/large-compressible" bs=1M count=128 2>/dev/null
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: writing large compressible data"
+	exit 1
+fi
+
+md5_large=$(md5sum "$MOUNTPOINT/large-compressible" | awk '{print $1}')
+
+# Test 5: large incompressible file
+dd if=/dev/urandom of="$MOUNTPOINT/large-incompressible" bs=1M count=128 2>/dev/null
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: writing large incompressible data"
+	exit 1
+fi
+
+md5_large_incomp=$(md5sum "$MOUNTPOINT/large-incompressible" | awk '{print $1}')
+
+# Verify all data before unmount
+check_md5() {
+	file="$1"
+	expected="$2"
+	actual=$(md5sum "$file" | awk '{print $1}')
+	if [ "$actual" != "$expected" ]; then
+		echo "FAILED: $file checksum mismatch: expected $expected got $actual"
+		return 1
+	fi
+	return 0
+}
+
+check_md5 "$MOUNTPOINT/compressible" "$md5_compressible" || exit 1
+check_md5 "$MOUNTPOINT/incompressible" "$md5_incompressible" || exit 1
+check_md5 "$MOUNTPOINT/mixed" "$md5_mixed" || exit 1
+check_md5 "$MOUNTPOINT/large-compressible" "$md5_large" || exit 1
+check_md5 "$MOUNTPOINT/large-incompressible" "$md5_large_incomp" || exit 1
+
+umount "$MOUNTPOINT"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs umount failed, exit code=$ret"
+	exit 1
+fi
+
+# Remount and verify all data persists correctly
+mount -t bcachefs "$LODEVICE" "$MOUNTPOINT"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs remount failed, exit code=$ret"
+	exit 1
+fi
+
+check_md5 "$MOUNTPOINT/compressible" "$md5_compressible" || exit 1
+check_md5 "$MOUNTPOINT/incompressible" "$md5_incompressible" || exit 1
+check_md5 "$MOUNTPOINT/mixed" "$md5_mixed" || exit 1
+check_md5 "$MOUNTPOINT/large-compressible" "$md5_large" || exit 1
+check_md5 "$MOUNTPOINT/large-incompressible" "$md5_large_incomp" || exit 1
+
+umount "$MOUNTPOINT"
+ret=$?
+if [ $ret -ne 0 ]; then
+	echo "FAILED: bcachefs umount after remount failed, exit code=$ret"
+	exit 1
+fi
+
+echo "PASSED"
+exit 0
