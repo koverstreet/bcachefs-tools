@@ -599,7 +599,7 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 			 * fall through to do the other work.
 			 */
 			if (!bch2_can_form_ec_stripe(c, r->background_target,
-						     r->data_replicas, NULL)) {
+						     r->data_replicas - 1, NULL)) {
 				if (r->need_rb == BIT(BCH_RECONCILE_erasure_code)) {
 					event_add_trace(c, reconcile_set_pending,
 							reconcile_pending_sectors(c, k), buf, ({
@@ -607,7 +607,7 @@ static int reconcile_set_data_opts(struct btree_trans *trans,
 						bch2_bkey_val_to_text(&buf, c, k);
 						prt_newline(&buf);
 						bch2_can_form_ec_stripe(c, r->background_target,
-									r->data_replicas, &buf);
+									r->data_replicas - 1, &buf);
 					}));
 					return bch2_extent_reconcile_pending_mod(trans, iter, level, k, true);
 				}
