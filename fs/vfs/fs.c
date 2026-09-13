@@ -35,6 +35,7 @@
 #include "vfs/buffered.h"
 #include "vfs/direct.h"
 #include "vfs/pagecache.h"
+#include "vfs/swap.h"
 
 #include <linux/aio.h>
 #include <linux/backing-dev.h>
@@ -2053,6 +2054,9 @@ static const struct address_space_operations bch_address_space_operations = {
 	.migrate_folio	= filemap_migrate_folio,
 #endif
 	.error_remove_folio = generic_error_remove_folio,
+	.swap_activate	= bch2_swap_activate,
+	.swap_deactivate = bch2_swap_deactivate,
+	.swap_rw	= bch2_swap_rw,
 };
 
 struct bcachefs_fid {
