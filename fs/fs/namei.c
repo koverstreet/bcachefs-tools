@@ -216,6 +216,72 @@ int bch2_link_trans(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * The core of an unlink: the caller has intent iterators on the parent
+ * directory (with its hash info) and on the child inode, and a dirent iterator
+ * positioned at the entry to remove. Writes both inodes.
+ */
+int __bch2_unlink_trans(struct btree_trans *trans,
+			struct btree_iter *dir_iter, struct bch_inode_unpacked *dir_u,
+			const struct bch_hash_info *dir_hash,
+			struct btree_iter *dirent_iter,
+			subvol_inum inode, struct btree_iter *inode_iter,
+			struct bch_inode_unpacked *inode_u,
+			bool deleting_subvol)
+{
+	struct bch_fs *c = trans->c;
+	u64 now = bch2_current_time(c);
+
+	if (!deleting_subvol && S_ISDIR(inode_u->bi_mode))
+		try(bch2_empty_dir_trans(trans, inode));
+
+	if (deleting_subvol && !inode_u->bi_subvol)
+		return bch_err_throw(c, ENOENT_not_subvol);
+
+	/* Recursive subvolume destroy not allowed (yet?) */
+	if (inode_u->bi_subvol)
+		try(bch2_subvol_has_children(trans, inode_u->bi_subvol));
+
+	if (deleting_subvol || inode_u->bi_subvol) {
+		try(bch2_subvolume_unlink(trans, inode_u->bi_subvol));
+
+		/*
+		 * No dirent will ever point at this inode again - deletion
+		 * belongs to the subvolume path, though: the inode reaper keys
+		 * off bch2_inode_is_subvolume_root() to leave it alone.
+		 */
+		inode_u->bi_flags |= BCH_INODE_unlinked;
+
+		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(dirent_iter));
+
+		/*
+		 * If we're deleting a subvolume, we need to really delete the
+		 * dirent, not just emit a whiteout in the current snapshot:
+		 */
+		bch2_btree_iter_set_snapshot(dirent_iter, k.k->p.snapshot);
+		try(bch2_btree_iter_traverse(dirent_iter));
+	} else {
+		bch2_inode_nlink_dec(trans, inode_u);
+	}
+
+	if (inode_u->bi_dir		== dirent_iter->pos.inode &&
+	    inode_u->bi_dir_offset	== dirent_iter->pos.offset) {
+		inode_u->bi_dir		= 0;
+		inode_u->bi_dir_offset	= 0;
+	}
+
+	dir_u->bi_mtime = dir_u->bi_ctime = inode_u->bi_ctime = now;
+	dir_u->bi_nlink -= is_subdir_for_nlink(inode_u);
+
+	try(bch2_hash_delete_at(trans, bch2_dirent_hash_desc,
+				dir_hash, dirent_iter,
+				BTREE_UPDATE_internal_snapshot_node));
+	try(bch2_inode_write(trans, dir_iter, dir_u));
+	try(bch2_inode_write(trans, inode_iter, inode_u));
+
+	return 0;
+}
+
 int bch2_unlink_trans(struct btree_trans *trans,
 		      subvol_inum dir, struct bch_inode_unpacked *dir_u,
 		      subvol_inum inode, struct bch_inode_unpacked *inode_u,
@@ -226,7 +292,6 @@ int bch2_unlink_trans(struct btree_trans *trans,
 	CLASS(btree_iter_uninit, dir_iter)(trans);
 	CLASS(btree_iter_uninit, dirent_iter)(trans);
 	CLASS(btree_iter_uninit, inode_iter)(trans);
-	u64 now = bch2_current_time(c);
 
 	u32 snapshot;
 	if (!deleting_subvol)
@@ -259,54 +324,9 @@ int bch2_unlink_trans(struct btree_trans *trans,
 
 	try(bch2_inode_peek(trans, &inode_iter, inode_u, inum, BTREE_ITER_intent));
 
-	if (!deleting_subvol && S_ISDIR(inode_u->bi_mode))
-		try(bch2_empty_dir_trans(trans, inum));
-
-	if (deleting_subvol && !inode_u->bi_subvol)
-		return bch_err_throw(c, ENOENT_not_subvol);
-
-	/* Recursive subvolume destroy not allowed (yet?) */
-	if (inode_u->bi_subvol)
-		try(bch2_subvol_has_children(trans, inode_u->bi_subvol));
-
-	if (deleting_subvol || inode_u->bi_subvol) {
-		try(bch2_subvolume_unlink(trans, inode_u->bi_subvol));
-
-		/*
-		 * No dirent will ever point at this inode again - deletion
-		 * belongs to the subvolume path, though: the inode reaper keys
-		 * off bch2_inode_is_subvolume_root() to leave it alone.
-		 */
-		inode_u->bi_flags |= BCH_INODE_unlinked;
-
-		struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&dirent_iter));
-
-		/*
-		 * If we're deleting a subvolume, we need to really delete the
-		 * dirent, not just emit a whiteout in the current snapshot:
-		 */
-		bch2_btree_iter_set_snapshot(&dirent_iter, k.k->p.snapshot);
-		try(bch2_btree_iter_traverse(&dirent_iter));
-	} else {
-		bch2_inode_nlink_dec(trans, inode_u);
-	}
-
-	if (inode_u->bi_dir		== dirent_iter.pos.inode &&
-	    inode_u->bi_dir_offset	== dirent_iter.pos.offset) {
-		inode_u->bi_dir		= 0;
-		inode_u->bi_dir_offset	= 0;
-	}
-
-	dir_u->bi_mtime = dir_u->bi_ctime = inode_u->bi_ctime = now;
-	dir_u->bi_nlink -= is_subdir_for_nlink(inode_u);
-
-	try(bch2_hash_delete_at(trans, bch2_dirent_hash_desc,
-				&dir_hash, &dirent_iter,
-				BTREE_UPDATE_internal_snapshot_node));
-	try(bch2_inode_write(trans, &dir_iter, dir_u));
-	try(bch2_inode_write(trans, &inode_iter, inode_u));
-
-	return 0;
+	return __bch2_unlink_trans(trans, &dir_iter, dir_u, &dir_hash,
+				   &dirent_iter, inum, &inode_iter, inode_u,
+				   deleting_subvol);
 }
 
 
