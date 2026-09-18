@@ -76,6 +76,7 @@
 #define BCH_IOCTL_QUERY_BTREE_KEYS	_IOWR(0xbc,	34, struct bch_ioctl_query_btree_keys)
 #define BCH_IOCTL_SNAPSHOT_TREE_v2	_IOWR(0xbc,	35, struct bch_ioctl_snapshot_tree_query_v2)
 #define BCH_IOCTL_RECOVERY_STATUS	_IOR(0xbc,	36, struct bch_ioctl_recovery_status)
+#define BCH_IOCTL_QUERY_ACCOUNTING_v2	_IOW(0xbc,	37, struct bch_ioctl_query_accounting_v2)
 
 /* ioctl below act on a particular file, not the filesystem as a whole: */
 
@@ -573,6 +574,41 @@ struct bch_ioctl_query_accounting {
 	__u64			capacity;
 	__u64			used;
 	__u64			online_reserved;
+
+	__u32			accounting_u64s; /* input parameter */
+	__u32			accounting_types_mask; /* input parameter */
+
+	struct bkey_i_accounting accounting[];
+};
+
+/*
+ * BCH_IOCTL_QUERY_ACCOUNTING_v2: as v1, plus free space by replica count
+ *
+ * Free space is a vector, not a scalar: raw sectors free says nothing about
+ * whether n copies can go on n distinct devices, so a filesystem can report
+ * room and then refuse the write. @free[n - 1] is what we would grant at n
+ * replicas - the cumulative figure, so free[0] is the whole of the free space
+ * and the numbers are non-increasing.
+ *
+ * @free_now is the same vector counting only space the allocator can hand out
+ * without waiting: @free includes fragmentation copygc hasn't compacted yet, so
+ * a write against the difference blocks on copygc rather than failing. The gap
+ * is the allocator's backlog, and it's what distinguishes a filesystem that is
+ * slow right now from one that is full.
+ *
+ * Both are sized 8 rather than BCH_REPLICAS_MAX deliberately: sizeof(this
+ * struct) is encoded in the ioctl number, so sizing it by a constant that could
+ * grow would silently change the command and -ENOTTY every existing binary.
+ * Entries from BCH_REPLICAS_MAX up are zero.
+ */
+#define BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR	8
+
+struct bch_ioctl_query_accounting_v2 {
+	__u64			capacity;
+	__u64			used;
+	__u64			online_reserved;
+	__u64			free[BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR];
+	__u64			free_now[BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR];
 
 	__u32			accounting_u64s; /* input parameter */
 	__u32			accounting_types_mask; /* input parameter */

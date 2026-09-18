@@ -496,16 +496,18 @@ static noinline_for_stack long bch2_ioctl_fs_usage(struct bch_fs *c,
 	return copy_to_user_errcode(user_arg, &arg, sizeof(arg));
 }
 
-static long bch2_ioctl_query_accounting(struct bch_fs *c,
-			struct bch_ioctl_query_accounting __user *user_arg)
+/*
+ * Both versions: @arg's input fields in, the rest out. v1's output is a prefix
+ * of v2's.
+ */
+static long __bch2_ioctl_query_accounting(struct bch_fs *c,
+					  struct bch_ioctl_query_accounting_v2 *arg,
+					  void __user *accounting_dst)
 {
-	struct bch_ioctl_query_accounting arg;
 	CLASS(darray_char, accounting)();
 
 	if (!accounting_read_done(c))
 		return bch_err_throw(c, EINVAL_ioctl_query_accounting_not_read);
-
-	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
 
 	/*
 	 * Per-inode and per-snapshot accounting expose per-object usage - other
@@ -518,7 +520,7 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 	 */
 	unsigned privileged_types = BIT(BCH_DISK_ACCOUNTING_inum) |
 				    BIT(BCH_DISK_ACCOUNTING_snapshot);
-	if ((arg.accounting_types_mask & privileged_types) &&
+	if ((arg->accounting_types_mask & privileged_types) &&
 	    !capable(CAP_SYS_ADMIN))
 		return bch_err_throw(c, EPERM_non_admin);
 
@@ -531,19 +533,59 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 	 * would be a lie.
 	 */
 	if (!(c->sb.compat & BIT_ULL(BCH_COMPAT_stripe_frag_accounting)))
-		arg.accounting_types_mask &= ~(BIT(BCH_DISK_ACCOUNTING_stripe_frag) |
-					       BIT(BCH_DISK_ACCOUNTING_dev_stripe_frag));
+		arg->accounting_types_mask &= ~(BIT(BCH_DISK_ACCOUNTING_stripe_frag) |
+						BIT(BCH_DISK_ACCOUNTING_dev_stripe_frag));
 
-	int ret = bch2_fs_accounting_read(c, &accounting, arg.accounting_types_mask) ?:
-		(arg.accounting_u64s * sizeof(u64) < accounting.nr ? -ERANGE : 0) ?:
-		copy_to_user_errcode(&user_arg->accounting, accounting.data, accounting.nr);
-	if (ret)
-		return ret;
+	try(bch2_fs_accounting_read(c, &accounting, arg->accounting_types_mask) ?:
+	    (arg->accounting_u64s * sizeof(u64) < accounting.nr ? -ERANGE : 0) ?:
+	    copy_to_user_errcode(accounting_dst, accounting.data, accounting.nr));
 
-	arg.capacity		= c->capacity.capacity - percpu_u64_get(&c->capacity.pcpu->usage.hidden);
-	arg.used		= bch2_fs_usage_read_short(c).used;
-	arg.online_reserved	= bch2_online_reserved(c);
-	arg.accounting_u64s	= accounting.nr / sizeof(u64);
+	arg->capacity		= c->capacity.capacity - percpu_u64_get(&c->capacity.pcpu->usage.hidden);
+	arg->used		= bch2_fs_usage_read_short(c).used;
+	arg->online_reserved	= bch2_online_reserved(c);
+	arg->accounting_u64s	= accounting.nr / sizeof(u64);
+
+	u64 free[BCH_REPLICAS_MAX], free_now[BCH_REPLICAS_MAX];
+	bch2_fs_sectors_placeable(c, free, free_now);
+
+	BUILD_BUG_ON(BCH_REPLICAS_MAX > BCH_IOCTL_QUERY_ACCOUNTING_FREE_NR);
+	memset(arg->free, 0, sizeof(arg->free));
+	memset(arg->free_now, 0, sizeof(arg->free_now));
+	memcpy(arg->free, free, sizeof(free));
+	memcpy(arg->free_now, free_now, sizeof(free_now));
+
+	return 0;
+}
+
+static long bch2_ioctl_query_accounting(struct bch_fs *c,
+			struct bch_ioctl_query_accounting __user *user_arg)
+{
+	struct bch_ioctl_query_accounting arg;
+
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+
+	struct bch_ioctl_query_accounting_v2 v2 = {
+		.accounting_u64s	= arg.accounting_u64s,
+		.accounting_types_mask	= arg.accounting_types_mask,
+	};
+
+	try(__bch2_ioctl_query_accounting(c, &v2, &user_arg->accounting));
+
+	arg.capacity		= v2.capacity;
+	arg.used		= v2.used;
+	arg.online_reserved	= v2.online_reserved;
+	arg.accounting_u64s	= v2.accounting_u64s;
+
+	return copy_to_user_errcode(user_arg, &arg, sizeof(arg));
+}
+
+static long bch2_ioctl_query_accounting_v2(struct bch_fs *c,
+			struct bch_ioctl_query_accounting_v2 __user *user_arg)
+{
+	struct bch_ioctl_query_accounting_v2 arg;
+
+	try(copy_from_user_errcode(&arg, user_arg, sizeof(arg)));
+	try(__bch2_ioctl_query_accounting(c, &arg, &user_arg->accounting));
 
 	return copy_to_user_errcode(user_arg, &arg, sizeof(arg));
 }
@@ -889,6 +931,8 @@ static long __bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 		BCH_IOCTL(fsck_online, struct bch_ioctl_fsck_online);
 	case BCH_IOCTL_QUERY_ACCOUNTING:
 		return bch2_ioctl_query_accounting(c, arg);
+	case BCH_IOCTL_QUERY_ACCOUNTING_v2:
+		return bch2_ioctl_query_accounting_v2(c, arg);
 	case BCH_IOCTL_QUERY_COUNTERS:
 		return bch2_ioctl_query_counters(c, arg);
 	case BCH_IOCTL_QUERY_BTREE_KEYS:
