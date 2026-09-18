@@ -429,6 +429,12 @@ static inline int __bch2_disk_reservation_add(struct bch_fs *c,
 {
 	bch2_disk_reservation_set_nr_replicas(c, res, nr_replicas);
 
+	/*
+	 * Not a hard BUG_ON: bi_data_replicas isn't validated, so a damaged
+	 * inode can reach here with a zero count.
+	 */
+	EBUG_ON(sectors && !res->nr_replicas);
+
 #ifdef __KERNEL__
 	u64 old, new;
 
