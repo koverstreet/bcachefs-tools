@@ -293,6 +293,11 @@ static inline bool dev_has_capacity(struct bch_dev *ca)
 	return bch2_dev_is_rw(ca) && ca->mi.durability;
 }
 
+static inline u64 dev_capacity_sectors(struct bch_dev *ca)
+{
+	return bucket_to_sector(ca, ca->mi.nbuckets - ca->mi.first_bucket);
+}
+
 static inline u64 __dev_buckets_free(struct bch_dev *ca,
 				     struct bch_dev_usage usage,
 				     enum bch_watermark watermark)
@@ -309,15 +314,21 @@ static inline u64 dev_buckets_free(struct bch_dev *ca,
 	return __dev_buckets_free(ca, bch2_dev_usage_read(ca), watermark);
 }
 
+/* Buckets that are free, or become free without moving anything */
+static inline u64 __dev_buckets_reclaimable(struct bch_dev_usage usage)
+{
+	return usage.buckets[BCH_DATA_free] +
+	       usage.buckets[BCH_DATA_cached] +
+	       usage.buckets[BCH_DATA_need_gc_gens] +
+	       usage.buckets[BCH_DATA_need_discard];
+}
+
 static inline u64 __dev_buckets_available(struct bch_dev *ca,
 					  struct bch_dev_usage usage,
 					  enum bch_watermark watermark)
 {
 	return max_t(s64, 0,
-		       usage.buckets[BCH_DATA_free]
-		     + usage.buckets[BCH_DATA_cached]
-		     + usage.buckets[BCH_DATA_need_gc_gens]
-		     + usage.buckets[BCH_DATA_need_discard]
+		       __dev_buckets_reclaimable(usage)
 		     - ca->nr_open_buckets
 		     - bch2_dev_buckets_reserved(ca, watermark));
 }

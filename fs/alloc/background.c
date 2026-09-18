@@ -1582,6 +1582,32 @@ unsigned long bch2_fs_ra_pages(struct bch_fs *c)
 	return ra_pages ?: VM_READAHEAD_PAGES;
 }
 
+/*
+ * c->capacity.reserved is the sum of these, and the per-device free space walk
+ * subtracts each, so reservations and capacity run out together. gc_reserve is
+ * shared out by capacity, not bucket count: bucket sizes can differ.
+ */
+static u64 dev_reserved_sectors(struct bch_dev *ca, u64 gc_reserve, u64 capacity)
+{
+	u64 dev_sectors = dev_capacity_sectors(ca);
+
+	/*
+	 * Enough to refill every reserve from scratch, twice over: copygc
+	 * spends its whole reserve in one go, then runs again against what
+	 * that freed.
+	 */
+	u64 alloc_reserve = ca->nr_btree_reserve * 2 +
+			    (ca->mi.nbuckets >> 6) +	/* copygc */
+			    3;				/* btree, copygc, rebalance write points */
+	alloc_reserve *= (u64) ca->mi.bucket_size * 2;
+
+	u64 gc_share = capacity
+		? mul_u64_u64_div_u64(gc_reserve, dev_sectors, capacity)
+		: 0;
+
+	return min(max(alloc_reserve, gc_share), dev_sectors);
+}
+
 void bch2_recalc_capacity(struct bch_fs *c)
 {
 	u64 capacity = 0, reserved_sectors = 0, gc_reserve;
@@ -1590,59 +1616,31 @@ void bch2_recalc_capacity(struct bch_fs *c)
 	lockdep_assert_held(&c->state_lock);
 
 	guard(rcu)();
+
+	/* the total first: gc_reserve_bytes has to be shared out against it */
+	for_each_member_device_rcu(c, ca, NULL)
+		if (dev_has_capacity(ca))
+			capacity += dev_capacity_sectors(ca);
+
+	gc_reserve = c->opts.gc_reserve_bytes
+		? c->opts.gc_reserve_bytes >> 9
+		: div64_u64(capacity * c->opts.gc_reserve_percent, 100);
+	gc_reserve = min(gc_reserve, capacity);
+
 	for_each_member_device_rcu(c, ca, NULL) {
-		if (!bch2_dev_is_rw(ca))
+		if (!dev_has_capacity(ca)) {
+			ca->reserved_sectors = 0;
 			continue;
+		}
 
-		if (!ca->mi.durability)
-			continue;
-
-		u64 dev_reserve = 0;
-
-		/*
-		 * We need to reserve buckets (from the number
-		 * of currently available buckets) against
-		 * foreground writes so that mainly copygc can
-		 * make forward progress.
-		 *
-		 * We need enough to refill the various reserves
-		 * from scratch - copygc will use its entire
-		 * reserve all at once, then run against when
-		 * its reserve is refilled (from the formerly
-		 * available buckets).
-		 *
-		 * This reserve is just used when considering if
-		 * allocations for foreground writes must wait -
-		 * not -ENOSPC calculations.
-		 */
-
-		dev_reserve += ca->nr_btree_reserve * 2;
-		dev_reserve += ca->mi.nbuckets >> 6; /* copygc reserve */
-
-		dev_reserve += 1;	/* btree write point */
-		dev_reserve += 1;	/* copygc write point */
-		dev_reserve += 1;	/* rebalance write point */
-
-		dev_reserve *= ca->mi.bucket_size;
-
-		capacity += bucket_to_sector(ca, ca->mi.nbuckets -
-					     ca->mi.first_bucket);
-
-		reserved_sectors += dev_reserve * 2;
+		ca->reserved_sectors = dev_reserved_sectors(ca, gc_reserve, capacity);
+		reserved_sectors += ca->reserved_sectors;
 
 		bucket_size_max = max_t(unsigned, bucket_size_max,
 					ca->mi.bucket_size);
 	}
 
 	bch2_set_ra_pages(c, bch2_fs_ra_pages(c));
-
-	gc_reserve = c->opts.gc_reserve_bytes
-		? c->opts.gc_reserve_bytes >> 9
-		: div64_u64(capacity * c->opts.gc_reserve_percent, 100);
-
-	reserved_sectors = max(gc_reserve, reserved_sectors);
-
-	reserved_sectors = min(reserved_sectors, capacity);
 
 	c->capacity.reserved = reserved_sectors;
 	c->capacity.capacity = capacity - reserved_sectors;
