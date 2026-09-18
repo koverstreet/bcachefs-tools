@@ -762,7 +762,14 @@ struct btree_trans {
 
 	unsigned		journal_u64s;
 	u32			extra_journal_u64s;
+
+	/*
+	 * Space a trigger needs on top of @disk_res, charged at commit.
+	 * Charge sites may disagree on the count, so keep the max: erring
+	 * high only over-reserves.
+	 */
 	u64			extra_disk_res;
+	u8			extra_disk_res_replicas;
 
 	__BKEY_PADDED(btree_path_down, BKEY_BTREE_PTR_VAL_U64s_MAX);
 

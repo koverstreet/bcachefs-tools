@@ -863,8 +863,10 @@ int bch2_bkey_set_needs_reconcile(struct btree_trans *trans,
 
 			BUG_ON(k.k->u64s + need_update_invalid_devs > buf_u64s);
 
-			trans->extra_disk_res += (u64) need_update_invalid_devs *
-				(bkey_is_btree_ptr(k.k) ? btree_sectors(c) : k.k->size);
+			bch2_trans_extra_disk_res_add(trans,
+				(u64) need_update_invalid_devs *
+				(bkey_is_btree_ptr(k.k) ? btree_sectors(c) : k.k->size),
+				need_update_invalid_devs);
 
 			while (need_update_invalid_devs--) {
 				union bch_extent_entry *end = bkey_val_end(k);

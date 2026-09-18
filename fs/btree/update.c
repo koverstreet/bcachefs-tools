@@ -188,9 +188,14 @@ int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
 	 * so that __bch2_trans_commit() can increase our disk
 	 * reservation:
 	 */
-	if (nr_splits > 1 &&
-	    (compressed_sectors = bch2_bkey_durability_safe(c, old).sectors_compressed))
-		trans->extra_disk_res += compressed_sectors * (nr_splits - 1);
+	if (nr_splits > 1) {
+		struct bkey_durability old_d = bch2_bkey_durability_safe(c, old);
+
+		if ((compressed_sectors = old_d.sectors_compressed))
+			bch2_trans_extra_disk_res_add(trans,
+					compressed_sectors * (nr_splits - 1),
+					old_d.nr_replicas);
+	}
 
 	if (front_split) {
 		update = errptr_try(bch2_bkey_make_mut_noupdate(trans, old));
