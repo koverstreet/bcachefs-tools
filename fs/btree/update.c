@@ -212,6 +212,24 @@ int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
 		try(bch2_insert_snapshot_whiteouts(trans, btree_id, old.k->p, update->k.p));
 		try(bch2_btree_insert_nonextent(trans, btree_id, update, update->k.u64s,
 					  BTREE_UPDATE_internal_snapshot_node|flags));
+
+		/*
+		 * A deletion is not inserted below.  When it leaves a back split,
+		 * preserve the deletion at the new end so the middle fragment in
+		 * the ancestor is not visible in the snapshot being updated.
+		 */
+		if (back_split && bkey_deleted(new.k)) {
+			update = errptr_try(bch2_trans_kmalloc(trans, sizeof(*update)));
+
+			bkey_init(&update->k);
+			update->k.p = new.k->p;
+			update->k.type = extent_whiteout_type(c, btree_id, new.k);
+
+			try(bch2_btree_insert_nonextent(trans, btree_id, update,
+							update->k.u64s,
+							BTREE_UPDATE_internal_snapshot_node |
+							flags));
+		}
 	}
 
 	if (!back_split) {
