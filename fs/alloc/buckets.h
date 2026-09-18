@@ -480,6 +480,22 @@ static inline void bch2_disk_reservation_set_nr_replicas(struct bch_fs *c,
 }
 
 /*
+ * May we write fewer copies than were asked for, rather than returning -ENOSPC?
+ * See enum bch_write_degraded_actions for why the default is what it is.
+ */
+static inline bool bch2_write_degraded_ok(struct bch_fs *c)
+{
+	switch (c->opts.write_degraded) {
+	case BCH_WRITE_DEGRADED_yes:
+		return true;
+	case BCH_WRITE_DEGRADED_no:
+		return false;
+	default:
+		return !test_bit(BCH_FS_all_devs_rw, &c->flags);
+	}
+}
+
+/*
  * In physical sectors, for the three callers whose number isn't sectors *
  * nr_replicas: overwrites, which credit back the old key's copies. A smell -
  * that arithmetic probably belongs elsewhere, and when it goes, so does this.

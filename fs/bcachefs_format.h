@@ -1319,6 +1319,8 @@ LE64_BITMASK(BCH_SB_MOVE_WRITES_FUA,	struct bch_sb, flags[6], 58, 59);
  * the dirent hash-consistency check rather than "repair" the artifacts.
  */
 LE64_BITMASK(BCH_SB_DIRENTS_SANITIZED,	struct bch_sb, flags[6], 59, 60);
+LE64_BITMASK(BCH_SB_WRITE_DEGRADED_ACTION,
+					struct bch_sb, flags[6], 60, 62);
 
 #define BCH_SB_EXTENT_BP_SHIFT_DEFAULT	10
 
@@ -1468,6 +1470,29 @@ enum bch_degraded_actions {
 	BCH_DEGRADED_ACTIONS()
 #undef x
 	BCH_DEGRADED_ACTIONS_NR
+};
+
+/*
+ * What to do when a write can't be placed at the replica count it asked for:
+ * refuse it (-ENOSPC), or reserve at the count we can place at.
+ *
+ * @degraded is the default because the two reasons we can't place differ in
+ * kind. A device that is gone will come back, or be replaced, and refusing
+ * writes until then is worse than writing fewer copies; a filesystem whose
+ * devices are all present and simply can't hold another copy is the shape the
+ * user built, and the honest answer there is -ENOSPC rather than quietly
+ * dropping below the replica count they asked for.
+ */
+#define BCH_WRITE_DEGRADED_ACTIONS()	\
+	x(degraded,		0)	\
+	x(yes,			1)	\
+	x(no,			2)
+
+enum bch_write_degraded_actions {
+#define x(t, n) BCH_WRITE_DEGRADED_##t = n,
+	BCH_WRITE_DEGRADED_ACTIONS()
+#undef x
+	BCH_WRITE_DEGRADED_ACTIONS_NR
 };
 
 #define BCH_STR_HASH_TYPES()		\

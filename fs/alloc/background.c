@@ -1627,7 +1627,12 @@ void bch2_recalc_capacity(struct bch_fs *c)
 		: div64_u64(capacity * c->opts.gc_reserve_percent, 100);
 	gc_reserve = min(gc_reserve, capacity);
 
+	bool all_devs_rw = true;
+
 	for_each_member_device_rcu(c, ca, NULL) {
+		if (!bch2_dev_is_rw(ca))
+			all_devs_rw = false;
+
 		if (!dev_has_capacity(ca)) {
 			ca->reserved_sectors = 0;
 			continue;
@@ -1639,6 +1644,12 @@ void bch2_recalc_capacity(struct bch_fs *c)
 		bucket_size_max = max_t(unsigned, bucket_size_max,
 					ca->mi.bucket_size);
 	}
+
+	/*
+	 * Cached: every reservation that comes up short asks, and only this
+	 * changes it.
+	 */
+	mod_bit(BCH_FS_all_devs_rw, &c->flags, all_devs_rw);
 
 	bch2_set_ra_pages(c, bch2_fs_ra_pages(c));
 
