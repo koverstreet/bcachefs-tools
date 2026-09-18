@@ -99,6 +99,14 @@ struct bch_write_op {
 	unsigned		compression_opt:8;
 	unsigned		csum_type:4;
 
+	/*
+	 * Replicas this write will place - not @res.nr_replicas, which is what
+	 * we reserved space at. An overwrite reserves the delta, and
+	 * bch2_sum_sector_overwrites() credits back only the old key's
+	 * uncompressed replicas: a compressed replica holds fewer sectors than
+	 * it covers. Overwriting a 2 replica extent that has one replica
+	 * compressed thus reserves for 1 and writes 2.
+	 */
 	unsigned		nr_replicas:4;
 	unsigned		watermark:3;
 	unsigned		incompressible:1;
@@ -137,6 +145,7 @@ struct bch_write_op {
 	struct write_point	*wp;
 	struct list_head	wp_list;
 
+	/* Reserved at @res.nr_replicas, which is not @nr_replicas - see above */
 	struct disk_reservation	res;
 
 	struct open_buckets	open_buckets;

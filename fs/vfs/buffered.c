@@ -649,7 +649,6 @@ static void bch2_writepage_io_alloc(struct bch_fs *c,
 	bch2_write_op_init(op, c, w->opts);
 	op->target		= w->opts.foreground_target;
 	op->nr_replicas		= nr_replicas;
-	op->res.nr_replicas	= nr_replicas;
 	op->write_point		= writepoint_hashed(inode->ei_last_dirtied);
 	op->subvol		= inode_inum(inode).subvol;
 	op->pos			= POS(inode_inum(inode).inum, sector);
@@ -796,7 +795,7 @@ do_io:
 		sector = folio_sector(folio) + offset;
 
 		if (w->io &&
-		    (w->io->op.res.nr_replicas != nr_replicas_this_write ||
+		    (w->io->op.nr_replicas != nr_replicas_this_write ||
 		     bch_io_full(w->io, sectors << 9) ||
 		     bio_end_sector(&w->io->op.wbio.bio) != sector))
 			bch2_writepage_do_io(w);
