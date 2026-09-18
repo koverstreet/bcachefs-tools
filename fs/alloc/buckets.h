@@ -293,6 +293,11 @@ static inline bool dev_has_capacity(struct bch_dev *ca)
 	return bch2_dev_is_rw(ca) && ca->mi.durability;
 }
 
+static inline u64 dev_capacity_sectors(struct bch_dev *ca)
+{
+	return bucket_to_sector(ca, ca->mi.nbuckets - ca->mi.first_bucket);
+}
+
 static inline u64 __dev_buckets_free(struct bch_dev *ca,
 				     struct bch_dev_usage usage,
 				     enum bch_watermark watermark)

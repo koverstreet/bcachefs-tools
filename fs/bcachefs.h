@@ -594,6 +594,9 @@ struct bch_dev {
 	unsigned		nr_partial_buckets;
 	unsigned		nr_btree_reserve;
 
+	/* this device's share of c->capacity.reserved, which is their sum */
+	u64			reserved_sectors;
+
 	struct work_struct	invalidate_work;
 
 	struct work_struct	discard_fast_work;

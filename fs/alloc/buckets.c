@@ -987,8 +987,8 @@ bool bch2_is_superblock_bucket(struct bch_dev *ca, u64 b)
  * @now is free buckets only - nothing reserves against it, it says whether
  * writes are about to stall.
  *
- * Both are net of the BCH_WATERMARK_normal reserve: space the allocator
- * will refuse isn't ours to promise.
+ * Both are net of ca->reserved_sectors: space the allocator will refuse isn't
+ * ours to promise.
  */
 struct dev_placeable {
 	u64	now;
@@ -1008,14 +1008,20 @@ static struct dev_placeable dev_sectors_placeable(struct bch_dev *ca)
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
 		u.buckets[i] = f.d[i].buckets;
 
-	ret.now		= __dev_buckets_free(ca, u, BCH_WATERMARK_normal) *
+	u64 reserved = READ_ONCE(ca->reserved_sectors);
+
+	/* reclaim holds nothing back - ca->reserved_sectors is our reserve */
+	ret.now		= __dev_buckets_free(ca, u, BCH_WATERMARK_reclaim) *
 			  ca->mi.bucket_size;
-	ret.eventual	= __dev_buckets_available(ca, u, BCH_WATERMARK_normal) *
+	ret.eventual	= __dev_buckets_available(ca, u, BCH_WATERMARK_reclaim) *
 			  ca->mi.bucket_size;
 
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
 		if (data_type_movable(i))
 			ret.eventual += f.d[i].fragmented;
+
+	ret.now		-= min(ret.now, reserved);
+	ret.eventual	-= min(ret.eventual, reserved);
 
 	return ret;
 }
