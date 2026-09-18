@@ -245,6 +245,9 @@ int bch2_fsync(struct file *file, loff_t start, loff_t end, int datasync)
 	u64 flushed_seq = 0;
 	int ret, err;
 
+	if (bch2_inode_opt_get(&inode->ei_inode, Inode_opt_tmpdir))
+		return 0;
+
 	ret = file_write_and_wait_range(file, start, end);
 	if (ret)
 		goto out;

@@ -1134,7 +1134,10 @@ LE64_BITMASK(BCH_SB_EXT_MISSING_DEV_TIMEOUT,	struct bch_sb_field_ext, flags0, 49
 	  "discard eligibility checks",				"2026-03")	\
 	x(per_dev_fragmentation_lru,	BCH_VERSION(1, 39),			\
 	  "Per-device bucket fragmentation LRUs, so copygc can reason "		\
-	  "about fragmentation per device",			"2026-07")
+	  "about fragmentation per device",			"2026-07") \
+	x(tmpdir,			BCH_VERSION(1, 40),		\
+	  "Directories that get wiped on mounts "				\
+	  "and whose contents aren't made durable",		"2026-09")
 
 enum bcachefs_metadata_version {
 	bcachefs_metadata_version_min = 9,
@@ -1313,6 +1316,7 @@ LE64_BITMASK(BCH_SB_EXTENT_BP_SHIFT,	struct bch_sb, flags[6], 40, 48);
 LE64_BITMASK(BCH_SB_SCRUB_JOURNAL,	struct bch_sb, flags[6], 48, 50);
 LE64_BITMASK(BCH_SB_EC_MAX_DATA_BLOCKS,	struct bch_sb, flags[6], 50, 58);
 LE64_BITMASK(BCH_SB_MOVE_WRITES_FUA,	struct bch_sb, flags[6], 58, 59);
+LE64_BITMASK(BCH_SB_TMPDIR,			struct bch_sb, flags[6], 59, 60);
 /*
  * Set by `bcachefs dump --sanitize` when it scrubs dirent names: the names
  * (and therefore their str_hash positions) are meaningless, so fsck must skip
@@ -1378,7 +1382,8 @@ static inline void SET_BCH_SB_BACKGROUND_COMPRESSION_TYPE(struct bch_sb *sb, __u
 	x(casefolding,			20)	\
 	x(no_alloc_info,		21)	\
 	x(small_image,			22)	\
-	x(no_default_sb,		23)
+	x(no_default_sb,		23) \
+	x(tmpdir,				24)
 
 #define BCH_SB_FEATURES_ALWAYS				\
 	(BIT_ULL(BCH_FEATURE_new_extent_overwrite)|	\

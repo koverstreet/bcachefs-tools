@@ -173,6 +173,8 @@
 	  "Validate directory entries: target inode exists "					\
 	  "in correct snapshot, d_type matches inode mode, "					\
 	  "hash values correct")								\
+	x(unlink_tmpdirs,			50, PASS_ALWAYS,		0,	\
+	  "Unlink everything in tmpdirs")						\
 	x(check_xattrs,				28, PASS_FSCK,					\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_inodes)|						\
 	  BIT_ULL(BCH_RECOVERY_PASS_delete_dead_snapshots),					\
