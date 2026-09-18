@@ -394,6 +394,14 @@ int __bch2_disk_reservation_add(struct bch_fs *, struct disk_reservation *,
 static inline int bch2_disk_reservation_add(struct bch_fs *c, struct disk_reservation *res,
 					    u64 sectors, enum bch_reservation_flags flags)
 {
+	/*
+	 * @sectors is physical and already includes the replica count, so we
+	 * can't recover it here - the caller has to have recorded what it
+	 * reserved at. Not a hard BUG_ON: bi_data_replicas isn't validated, so
+	 * a damaged inode can reach here with a zero count.
+	 */
+	EBUG_ON(sectors && !res->nr_replicas);
+
 #ifdef __KERNEL__
 	u64 old, new;
 
@@ -431,6 +439,16 @@ static inline int bch2_disk_reservation_get(struct bch_fs *c,
 					    u64 sectors, unsigned nr_replicas,
 					    int flags)
 {
+	/*
+	 * We overwrite @res, so anything already reserved would be leaked -
+	 * still counted in online_reserved with nothing left to put it.
+	 *
+	 * This reads @res before initializing it, so @res has to be zeroed
+	 * (every caller today gets that from kzalloc/memset/CLASS) - don't
+	 * pass a bare uninitialized local.
+	 */
+	EBUG_ON(res->sectors);
+
 	*res = bch2_disk_reservation_init(c, nr_replicas);
 
 	return bch2_disk_reservation_add(c, res, sectors * nr_replicas, flags);

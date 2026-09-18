@@ -1002,6 +1002,9 @@ noinline __cold
 static int bch2_trans_commit_extra_disk_res(struct btree_trans *trans,
 					    enum bch_trans_commit_flags flags)
 {
+	/* Every site that charges extra_disk_res records what it charged at */
+	EBUG_ON(!trans->extra_disk_res_replicas);
+
 	/*
 	 * A reservation lives in one replicas slot, so charging the trigger's
 	 * space to the caller's reservation means taking the max of the two
