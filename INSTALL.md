@@ -10,6 +10,7 @@ Build dependencies:
  * liblz4
  * libsodium
  * liburcu
+ * libunwind
  * libuuid
  * libzstd
  * pkg-config
@@ -35,19 +36,22 @@ cargo install bindgen-cli
 
 Set `$BINDGEN` if it lives somewhere `$PATH` will not find.
 
-Debian (Bullseye or later) and Ubuntu (20.04 or later): you can install these with
+Debian Trixie or later: install the userspace build dependencies with the
+following command. On Ubuntu and other Debian derivatives, use releases or
+backports with equivalent dependencies. Bookworm's stock liburcu 0.13.2 lacks
+the RCU polling API used by the bundled headers, so its packages alone are not
+sufficient to build current master.
 
 ``` shell
 apt install -y pkg-config libaio-dev libblkid-dev libkeyutils-dev \
-    liblz4-dev libsodium-dev liburcu-dev libzstd-dev \
+    liblz4-dev libsodium-dev libunwind-dev liburcu-dev libzstd-dev \
     uuid-dev zlib1g-dev valgrind libudev-dev udev git build-essential \
-    python3 python3-docutils libclang-dev debhelper dh-python
+    python3 python3-docutils libclang-dev debhelper dh-python systemd-dev
 ```
 
-Starting from Debian Trixie and Ubuntu 23.10, you will additionally need:
-```shell
-apt install -y systemd-dev
-```
+The kernel module and DKMS build also require headers and a Rust toolchain
+compatible with the bundled kernel sources. Installing the userspace dependencies
+does not by itself establish that the distribution kernel is supported.
 
 Fedora: install build dependencies either with `dnf builddep bcachefs-tools` or with:
 ```shell
