@@ -49,6 +49,11 @@ const char * const bch2_degraded_actions[] = {
 	NULL
 };
 
+const char * const bch2_write_degraded_actions[] = {
+	BCH_WRITE_DEGRADED_ACTIONS()
+	NULL
+};
+
 const char * const bch2_fsck_fix_opts[] = {
 	BCH_FIX_ERRORS_OPTS()
 	NULL

@@ -656,6 +656,7 @@ struct bch_dev {
 	x(no_invalid_checks)		\
 	x(discard_mount_opt_set)	\
 	x(sb_dirty)			\
+	x(all_devs_rw)			\
 
 enum bch_fs_flags {
 #define x(n)		BCH_FS_##n,
