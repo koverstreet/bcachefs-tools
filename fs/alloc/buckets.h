@@ -334,10 +334,10 @@ struct bch_fs_usage_short
 bch2_fs_usage_read_short(struct bch_fs *);
 
 /*
- * What we'd grant at each replica count: @out[n - 1] is placeable at n or
- * more.
+ * What we'd grant at each replica count: @out[n - 1] is placeable at n or more,
+ * @out_now (optional) the same without waiting for copygc.
  */
-void bch2_fs_sectors_placeable(struct bch_fs *, u64 *);
+void bch2_fs_sectors_placeable(struct bch_fs *, u64 *, u64 *);
 
 int __bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
 			     struct bkey_s_c, const struct bch_extent_ptr *,

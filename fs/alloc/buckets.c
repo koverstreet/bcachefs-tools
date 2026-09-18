@@ -965,17 +965,26 @@ bool bch2_is_superblock_bucket(struct bch_dev *ca, u64 b)
 #define SECTORS_CACHE	1024
 
 /*
- * Includes the slack in partially used buckets of movable types: reserving
- * against it is what makes a reservation mean the write won't run out of space
- * (POSIX, for fallocate), at the price of maybe waiting on copygc.
+ * @eventual includes the slack in partially used buckets of movable types:
+ * reserving against it is what makes a reservation mean the write won't run out
+ * of space (POSIX, for fallocate), at the price of maybe waiting on copygc.
+ * @now is free buckets only - nothing reserves against it, it says whether
+ * writes are about to stall.
  *
- * Net of the BCH_WATERMARK_normal reserve: space the allocator
+ * Both are net of the BCH_WATERMARK_normal reserve: space the allocator
  * will refuse isn't ours to promise.
  */
-static u64 dev_sectors_placeable(struct bch_dev *ca)
+struct dev_placeable {
+	u64	now;
+	u64	eventual;
+};
+
+static struct dev_placeable dev_sectors_placeable(struct bch_dev *ca)
 {
+	struct dev_placeable ret = {};
+
 	if (!dev_has_capacity(ca))
-		return 0;
+		return ret;
 
 	struct bch_dev_usage_full f = bch2_dev_usage_full_read(ca);
 	struct bch_dev_usage u;
@@ -983,12 +992,14 @@ static u64 dev_sectors_placeable(struct bch_dev *ca)
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
 		u.buckets[i] = f.d[i].buckets;
 
-	u64 ret = __dev_buckets_available(ca, u, BCH_WATERMARK_normal) *
-		  ca->mi.bucket_size;
+	ret.now		= __dev_buckets_free(ca, u, BCH_WATERMARK_normal) *
+			  ca->mi.bucket_size;
+	ret.eventual	= __dev_buckets_available(ca, u, BCH_WATERMARK_normal) *
+			  ca->mi.bucket_size;
 
 	for (unsigned i = 0; i < BCH_DATA_NR; i++)
 		if (data_type_movable(i))
-			ret += f.d[i].fragmented;
+			ret.eventual += f.d[i].fragmented;
 
 	return ret;
 }
@@ -1067,30 +1078,40 @@ static void dev_free_dist_partition(const struct dev_free_dist *d,
 		out[n] = avail_factor(out[n]);
 }
 
-static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out)
+static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now)
 {
-	struct dev_free_dist d = {};
+	struct dev_free_dist eventual = {}, now = {};
 
 	scoped_guard(rcu)
-		for_each_member_device_rcu(c, ca, NULL)
-			dev_free_dist_add(&d, dev_sectors_placeable(ca));
+		for_each_member_device_rcu(c, ca, NULL) {
+			struct dev_placeable f = dev_sectors_placeable(ca);
+
+			dev_free_dist_add(&eventual, f.eventual);
+			dev_free_dist_add(&now, f.now);
+		}
 
 	/* reserved but not yet written, so not in the bucket counts */
 	struct bch_fs_capacity_pcpu b = {};
 	acc_u64s_percpu((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
 			sizeof(b) / sizeof(u64));
 
-	dev_free_dist_partition(&d, reserve_factor(b.usage.reserved +
-						   b.online_reserved), out);
+	u64 outstanding = reserve_factor(b.usage.reserved + b.online_reserved);
+
+	dev_free_dist_partition(&eventual, outstanding, out);
+	if (out_now)
+		dev_free_dist_partition(&now, outstanding, out_now);
 }
 
-void bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out)
+void bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now)
 {
 	guard(percpu_read_noio)(&c->capacity.mark_lock);
-	__bch2_fs_sectors_placeable(c, out);
+	__bch2_fs_sectors_placeable(c, out, out_now);
 
-	for (int i = BCH_REPLICAS_MAX - 2; i >= 0; --i)
+	for (int i = BCH_REPLICAS_MAX - 2; i >= 0; --i) {
 		out[i] += out[i + 1];
+		if (out_now)
+			out_now[i] += out_now[i + 1];
+	}
 }
 
 static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
