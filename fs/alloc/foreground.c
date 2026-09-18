@@ -44,6 +44,7 @@
 #include "journal/reclaim.h"
 
 #include "sb/counters.h"
+#include "sb/errors.h"
 
 #include "util/clock.h"
 
@@ -1759,8 +1760,21 @@ retry:
 
 		if ((bch2_err_matches(ret, BCH_ERR_insufficient_devices) ||
 		     bch2_err_matches(ret, BCH_ERR_bucket_alloc_no_progress)) &&
-		    req->nr_effective)
+		    req->nr_effective) {
+			/*
+			 * Fewer copies than asked for, returning success:
+			 * record it, nothing else does. insufficient_devices
+			 * is what a reservation should have refused;
+			 * no_progress is space copygc hasn't compacted yet.
+			 */
+			if (req->nr_effective < req->nr_replicas)
+				bch2_sb_error_count(c,
+					bch2_err_matches(ret, BCH_ERR_insufficient_devices)
+					? BCH_FSCK_ERR_write_degraded_insufficient_devices
+					: BCH_FSCK_ERR_write_degraded_no_progress);
+
 			ret = 0;
+		}
 
 		/*
 		 * We don't block until we know we have no retries left, so if
