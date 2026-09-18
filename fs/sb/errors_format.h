@@ -444,7 +444,9 @@ enum bch_fsck_flags {
 	x(stripe_reconstruct_failed,				430,	0)		\
 	x(data_lost_btree_node_read_error,			431,	0)		\
 	x(data_lost_double_allocation,				432,	0)		\
-	x(MAX,							433,	0)
+	x(write_degraded_insufficient_devices,			433,	0)		\
+	x(write_degraded_no_progress,				434,	0)		\
+	x(MAX,							435,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,
