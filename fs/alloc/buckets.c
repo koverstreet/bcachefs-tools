@@ -381,6 +381,23 @@ static int bch2_trigger_pointer(struct btree_trans *trans,
 		struct bch_alloc_v4 old, new;
 
 		scoped_guard(bucket_lock, g) {
+			/*
+			 * After reconstruct_alloc the alloc btree is empty so
+			 * gc_buckets start with gen_valid=0 / generation=0.
+			 * Adopt the generation from the pointer we're marking
+			 * so that __mark_pointer → bch2_bucket_ref_update
+			 * doesn't see a gen mismatch and go emergency RO.
+			 *
+			 * Same logic as bch2_check_fix_ptr() in check_data.c,
+			 * but earlier in the recovery sequence.
+			 */
+			if (!g->gen_valid) {
+				g->gen_valid	= 1;
+				g->generation	= p.ptr.generation;
+			} else if (gen_after(p.ptr.generation, g->generation)) {
+				g->generation	= p.ptr.generation;
+			}
+
 			old = new = bucket_m_to_alloc(*g);
 			try(__mark_pointer(trans, ca, k, &p, *sectors, bp.v.data_type, &new, insert));
 			alloc_to_bucket(g, new);
