@@ -86,6 +86,9 @@ struct bch_fs_usage_short {
 
 /*
  * A reservation for space on disk:
+ *
+ * @sectors is physical - total disk space, not the size of the data. Only add
+ * to a reservation at its own @nr_replicas.
  */
 struct disk_reservation {
 	u64			sectors;
