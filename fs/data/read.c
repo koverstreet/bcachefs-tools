@@ -94,6 +94,9 @@ static bool bch2_target_congested(struct bch_fs *c, u16 target)
 	unsigned d, nr = 0, total = 0;
 	u64 now = local_clock();
 
+	if (!c->opts.promote_skip_congested)
+		return false;
+
 	guard(rcu)();
 	devs = bch2_target_to_mask(c, target) ?:
 		&c->allocator.rw_devs[BCH_DATA_user];
