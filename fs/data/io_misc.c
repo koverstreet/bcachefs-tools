@@ -441,10 +441,12 @@ case LOGGED_OP_FINSERT_shift_extents:
 		if ((ret = PTR_ERR_OR_ZERO(copy)))
 			goto btree_err;
 
+		disk_res.nr_replicas =
+			bch2_bkey_durability_safe(c, bkey_i_to_s_c(copy)).total;
+
 		if (snapshot != k.k->p.snapshot) {
 			ret = bch2_disk_reservation_add(c, &disk_res,
-					copy->k.size *
-					bch2_bkey_durability_safe(c, bkey_i_to_s_c(copy)).total,
+					copy->k.size * disk_res.nr_replicas,
 					0);
 			if (ret)
 				goto btree_err;
@@ -456,8 +458,7 @@ case LOGGED_OP_FINSERT_shift_extents:
 			/* Splitting compressed extent? */
 			if (snapshot == k.k->p.snapshot)
 				bch2_disk_reservation_add(c, &disk_res,
-							  copy->k.size *
-							  bch2_bkey_durability_safe(c, bkey_i_to_s_c(copy)).total,
+							  copy->k.size * disk_res.nr_replicas,
 							  BCH_DISK_RESERVATION_NOFAIL);
 		}
 

@@ -649,6 +649,8 @@ static void bch2_writepage_io_alloc(struct bch_fs *c,
 	bch2_write_op_init(op, c, w->opts);
 	op->target		= w->opts.foreground_target;
 	op->nr_replicas		= nr_replicas;
+	/* The sectors folded in below were reserved at the inode's setting: */
+	op->res.nr_replicas	= w->opts.data_replicas;
 	op->write_point		= writepoint_hashed(inode->ei_last_dirtied);
 	op->subvol		= inode_inum(inode).subvol;
 	op->pos			= POS(inode_inum(inode).inum, sector);

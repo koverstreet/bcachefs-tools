@@ -411,7 +411,7 @@ int bch2_get_folio_disk_reservation(struct bch_fs *c,
 {
 	struct bch_folio *s = bch2_folio(folio);
 	unsigned nr_replicas = inode_nr_replicas(c, inode);
-	struct disk_reservation disk_res = { 0 };
+	struct disk_reservation disk_res = bch2_disk_reservation_init(c, nr_replicas);
 	unsigned i, sectors = folio_sectors(folio), disk_res_sectors = 0;
 	int ret;
 
@@ -424,8 +424,12 @@ int bch2_get_folio_disk_reservation(struct bch_fs *c,
 	if (!disk_res_sectors)
 		return 0;
 
-	ret = bch2_disk_reservation_get(c, &disk_res,
-					disk_res_sectors, 1,
+	/*
+	 * sectors_to_reserve() already multiplied by the replica count, per
+	 * sector - so add the total directly rather than letting
+	 * bch2_disk_reservation_get() multiply it again.
+	 */
+	ret = bch2_disk_reservation_add(c, &disk_res, disk_res_sectors,
 					!check_enospc
 					? BCH_DISK_RESERVATION_NOFAIL
 					: 0);
@@ -470,6 +474,8 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 	}
 
 	CLASS(disk_reservation, disk_res)(c);
+	disk_res.r.nr_replicas = res->disk.nr_replicas;
+
 	if (disk_sectors) {
 		ret = bch2_disk_reservation_add(c, &disk_res.r, disk_sectors,
 				partial ? BCH_DISK_RESERVATION_PARTIAL : 0);
@@ -516,7 +522,8 @@ static int bch2_folio_reservation_get_nofail(struct bch_fs *c,
 {
 	struct bch_folio *s = bch2_folio(folio);
 	unsigned i, disk_sectors = 0, quota_sectors = 0;
-	struct disk_reservation disk_res = {};
+	struct disk_reservation disk_res =
+		bch2_disk_reservation_init(c, res->disk.nr_replicas);
 	int ret;
 
 	BUG_ON(!s);
