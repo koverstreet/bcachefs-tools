@@ -419,7 +419,7 @@ static int data_update_index_update_key(struct btree_trans *trans,
 				       &new_nr_replicas));
 
 	if (disk_sectors_delta > (s64) u->op.res.sectors)
-		try(bch2_disk_reservation_add(c, &u->op.res,
+		try(__bch2_disk_reservation_add(c, &u->op.res,
 					disk_sectors_delta - u->op.res.sectors,
 					new_nr_replicas,
 					!should_check_enospc
@@ -1422,7 +1422,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 
 	if (m->opts.extra_replicas) {
 		/* First charge on this reservation - it's zeroed by write_op_init() */
-		ret = bch2_disk_reservation_get(c, &m->op.res, k.k->size,
+		ret = bch2_disk_reservation_add(c, &m->op.res, k.k->size,
 						m->opts.extra_replicas, 0);
 		if (ret)
 			goto out;

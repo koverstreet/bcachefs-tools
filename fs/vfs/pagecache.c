@@ -435,7 +435,7 @@ int bch2_get_folio_disk_reservation(struct bch_fs *c,
 		return 0;
 
 	CLASS(disk_reservation, disk_res)(c);
-	try(bch2_disk_reservation_get(c, &disk_res.r, sectors, nr_replicas,
+	try(bch2_disk_reservation_add(c, &disk_res.r, sectors, nr_replicas,
 				      !check_enospc ? BCH_DISK_RESERVATION_NOFAIL : 0));
 
 	/*
@@ -479,7 +479,7 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 	CLASS(disk_reservation, disk_res)(c);
 
 	if (folio_sectors_short(s, first, last, res->disk.nr_replicas)) {
-		try(bch2_disk_reservation_get(c, &disk_res.r, last - first,
+		try(bch2_disk_reservation_add(c, &disk_res.r, last - first,
 					      res->disk.nr_replicas,
 					      partial ? BCH_DISK_RESERVATION_PARTIAL : 0));
 
@@ -531,7 +531,7 @@ static int bch2_folio_reservation_get_nofail(struct bch_fs *c,
 	CLASS(disk_reservation, disk_res)(c);
 
 	if (folio_sectors_short(s, first, last, res->disk.nr_replicas))
-		try(bch2_disk_reservation_get(c, &disk_res.r, last - first,
+		try(bch2_disk_reservation_add(c, &disk_res.r, last - first,
 					      res->disk.nr_replicas,
 					      BCH_DISK_RESERVATION_NOFAIL));
 

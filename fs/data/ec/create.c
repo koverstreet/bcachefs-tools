@@ -1959,7 +1959,7 @@ static int stripe_alloc_or_reuse(struct btree_trans *trans,
 	try(__stripe_alloc_or_reuse(trans, req, dev_stripe, s, waiting));
 
 	if (!s->res.sectors)
-		bch2_disk_reservation_get(c, &s->res,
+		bch2_disk_reservation_add(c, &s->res,
 					  le16_to_cpu(s->new_stripe.key.v.sectors),
 					  ec_stripe_new_nr_parity(s),
 					  BCH_DISK_RESERVATION_NOFAIL);
@@ -2498,7 +2498,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	new_s->allocated = true;
 	new_s->state = EC_STRIPE_NEW_filling;
 
-	bch2_disk_reservation_get(c, &new_s->res,
+	bch2_disk_reservation_add(c, &new_s->res,
 				  le16_to_cpu(new_s->new_stripe.key.v.sectors),
 				  ec_stripe_new_nr_parity(new_s),
 				  BCH_DISK_RESERVATION_NOFAIL);

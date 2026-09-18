@@ -1547,7 +1547,7 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 	if (ret)
 		goto err;
 
-	ret = bch2_disk_reservation_get(c, &as->disk_res,
+	ret = bch2_disk_reservation_add(c, &as->disk_res,
 			(nr_nodes[0] + nr_nodes[1]) * btree_sectors(c),
 			READ_ONCE(c->opts.metadata_replicas),
 			disk_res_flags);

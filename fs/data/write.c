@@ -1071,7 +1071,7 @@ int bch2_extent_update(struct btree_trans *trans,
 
 	if (disk_res &&
 	    disk_sectors_delta > (s64) disk_res->sectors)
-		try(bch2_disk_reservation_add(c, disk_res,
+		try(__bch2_disk_reservation_add(c, disk_res,
 					disk_sectors_delta - disk_res->sectors,
 					new_nr_replicas,
 					!check_enospc || !usage_increasing

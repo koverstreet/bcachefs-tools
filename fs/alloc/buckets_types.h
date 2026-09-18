@@ -88,6 +88,10 @@ struct bch_fs_usage_short {
  * A reservation for space on disk. @sectors is physical - total disk space, not
  * the size of the data - and is charged to the online_reserved[] slot named by
  * @nr_replicas.
+ *
+ * A zeroed reservation is an untaken one: @nr_replicas is nonzero exactly when
+ * sectors have been charged. Only bch2_disk_reservation_add() sets it, taking it
+ * as an argument.
  */
 struct disk_reservation {
 	u64			sectors;

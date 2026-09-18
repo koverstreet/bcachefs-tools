@@ -60,7 +60,7 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 	 * Get a disk reservation before (in the nocow case) calling
 	 * into the allocator:
 	 */
-	ret = bch2_disk_reservation_get(c, &res.r, sectors, new_replicas,
+	ret = bch2_disk_reservation_add(c, &res.r, sectors, new_replicas,
 				       BCH_DISK_RESERVATION_PARTIAL);
 	if (unlikely(!res.r.sectors && new_replicas)) {
 		ret = bch_err_throw(c, ENOSPC_disk_reservation);
@@ -410,8 +410,7 @@ case LOGGED_OP_FINSERT_start:
 	fallthrough;
 case LOGGED_OP_FINSERT_shift_extents:
 	while (1) {
-		struct disk_reservation disk_res =
-			bch2_disk_reservation_init(c, 0);
+		struct disk_reservation disk_res = {};
 		struct bkey_i delete, *copy;
 		struct bkey_s_c k;
 		struct bpos src_pos = POS(inum.inum, src_offset);
@@ -444,10 +443,14 @@ case LOGGED_OP_FINSERT_shift_extents:
 		unsigned nr_replicas =
 			bch2_bkey_durability_safe(c, bkey_i_to_s_c(copy)).total;
 
+		/*
+		 * Only one of these fires: either the key lives in an ancestor
+		 * snapshot and we're adding a reference to it here, or it's
+		 * already ours and only a split adds anything.
+		 */
 		if (snapshot != k.k->p.snapshot) {
 			ret = bch2_disk_reservation_add(c, &disk_res,
-					copy->k.size * nr_replicas,
-					nr_replicas, 0);
+					copy->k.size, nr_replicas, 0);
 			if (ret)
 				goto btree_err;
 		}
@@ -458,8 +461,7 @@ case LOGGED_OP_FINSERT_shift_extents:
 			/* Splitting compressed extent? */
 			if (snapshot == k.k->p.snapshot)
 				bch2_disk_reservation_add(c, &disk_res,
-							  copy->k.size * nr_replicas,
-							  nr_replicas,
+							  copy->k.size, nr_replicas,
 							  BCH_DISK_RESERVATION_NOFAIL);
 		}
 

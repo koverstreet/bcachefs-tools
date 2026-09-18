@@ -398,23 +398,18 @@ enum bch_reservation_flags {
 	BCH_DISK_RESERVATION_PARTIAL	= 1 << 1,
 };
 
-int __bch2_disk_reservation_add(struct bch_fs *, struct disk_reservation *,
-				u64, enum bch_reservation_flags);
+int bch2_disk_reservation_add_slowpath(struct bch_fs *, struct disk_reservation *,
+				       u64, enum bch_reservation_flags);
 
 /*
- * Add @sectors - physical - to a reservation, at a count that may be higher
- * than it was taken at: a move inserts the pointers the extent already had plus
- * the ones just written.
- *
- * The count only ever goes up. Erring high reserves more than we need; erring
- * low reserves space we could not place. Today that's just a max(), because
- * there's one online_reserved counter - but once a reservation lives in a
- * per-replica-count slot, raising the count has to carry what's already charged
- * across with it, and this is the one place that has to learn how.
+ * In physical sectors, for the three callers whose number isn't sectors *
+ * nr_replicas: overwrites, which credit back the old key's copies. A smell -
+ * that arithmetic probably belongs elsewhere, and when it goes, so does this.
  */
-static inline int bch2_disk_reservation_add(struct bch_fs *c, struct disk_reservation *res,
-					    u64 sectors, unsigned nr_replicas,
-					    enum bch_reservation_flags flags)
+static inline int __bch2_disk_reservation_add(struct bch_fs *c,
+					      struct disk_reservation *res,
+					      u64 sectors, unsigned nr_replicas,
+					      int flags)
 {
 	res->nr_replicas = max(res->nr_replicas, nr_replicas);
 
@@ -424,7 +419,7 @@ static inline int bch2_disk_reservation_add(struct bch_fs *c, struct disk_reserv
 	old = this_cpu_read(c->capacity.pcpu->sectors_available);
 	do {
 		if (sectors > old)
-			return __bch2_disk_reservation_add(c, res, sectors, flags);
+			return bch2_disk_reservation_add_slowpath(c, res, sectors, flags);
 
 		new = old - sectors;
 	} while (!this_cpu_try_cmpxchg(c->capacity.pcpu->sectors_available, &old, new));
@@ -433,32 +428,17 @@ static inline int bch2_disk_reservation_add(struct bch_fs *c, struct disk_reserv
 	res->sectors			+= sectors;
 	return 0;
 #else
-	return __bch2_disk_reservation_add(c, res, sectors, flags);
+	return bch2_disk_reservation_add_slowpath(c, res, sectors, flags);
 #endif
 }
 
-static inline struct disk_reservation
-bch2_disk_reservation_init(struct bch_fs *c, unsigned nr_replicas)
-{
-	return (struct disk_reservation) {
-		.sectors	= 0,
-#if 0
-		/* not used yet: */
-		.generation		= c->capacity_gen,
-#endif
-		.nr_replicas	= nr_replicas,
-	};
-}
-
-static inline int bch2_disk_reservation_get(struct bch_fs *c,
+static inline int bch2_disk_reservation_add(struct bch_fs *c,
 					    struct disk_reservation *res,
 					    u64 sectors, unsigned nr_replicas,
 					    int flags)
 {
-	*res = bch2_disk_reservation_init(c, nr_replicas);
-
-	return bch2_disk_reservation_add(c, res, sectors * nr_replicas,
-					nr_replicas, flags);
+	return __bch2_disk_reservation_add(c, res, sectors * nr_replicas,
+					   nr_replicas, flags);
 }
 
 struct disk_reservation_destructable {

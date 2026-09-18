@@ -154,7 +154,7 @@ int rust_write_submit(struct bch_fs *c,
 	op->new_i_size	= new_i_size;
 	op->flags	|= BCH_WRITE_sync|BCH_WRITE_only_specified_devs;
 
-	int ret = bch2_disk_reservation_get(c, &op->res, len >> 9,
+	int ret = bch2_disk_reservation_add(c, &op->res, len >> 9,
 					    replicas, 0);
 	if (ret)
 		return ret;
@@ -219,7 +219,7 @@ int rust_link_data(struct bch_fs *c,
 		struct bkey_i_extent *e;
 		BKEY_PADDED_ONSTACK(k, BKEY_EXTENT_VAL_U64s_MAX) k;
 		u64 b = sector_to_bucket(ca, physical);
-		struct disk_reservation res;
+		struct disk_reservation res = {};
 		unsigned sectors;
 		int ret;
 
@@ -238,7 +238,7 @@ int rust_link_data(struct bch_fs *c,
 					.generation = *bucket_gen(ca, b),
 				  });
 
-		ret = bch2_disk_reservation_get(c, &res, sectors, 1,
+		ret = bch2_disk_reservation_add(c, &res, sectors, 1,
 						BCH_DISK_RESERVATION_NOFAIL);
 		if (ret)
 			return ret;

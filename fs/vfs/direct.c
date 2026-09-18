@@ -478,7 +478,7 @@ static __always_inline long bch2_dio_write_loop(struct dio_write *dio)
 		if (unlikely(ret))
 			goto err;
 
-		ret = bch2_disk_reservation_get(c, &dio->op.res, bio_sectors(bio),
+		ret = bch2_disk_reservation_add(c, &dio->op.res, bio_sectors(bio),
 						dio->op.opts.data_replicas, 0);
 		if (unlikely(ret) &&
 		    !bch2_dio_write_check_allocated(dio))

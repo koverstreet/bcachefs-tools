@@ -165,7 +165,7 @@ static int bch2_set_nr_journal_buckets_loop(struct bch_fs *c, struct bch_dev *ca
 		 */
 		CLASS(disk_reservation, res)(c);
 		if (!new_fs)
-			try(bch2_disk_reservation_get(c, &res.r,
+			try(bch2_disk_reservation_add(c, &res.r,
 						bucket_to_sector(ca, nr - ja->nr), 1, 0));
 
 		ret = bch2_set_nr_journal_buckets_iter(ca, nr, new_fs, watermark, &cl);

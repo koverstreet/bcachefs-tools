@@ -989,7 +989,7 @@ static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 	}
 }
 
-int __bch2_disk_reservation_add(struct bch_fs *c, struct disk_reservation *res,
+int bch2_disk_reservation_add_slowpath(struct bch_fs *c, struct disk_reservation *res,
 				u64 sectors, enum bch_reservation_flags flags)
 {
 	guard(preempt)();

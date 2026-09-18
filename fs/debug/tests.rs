@@ -387,6 +387,7 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
         dup.k_mut().p.offset = round_up(src_end + 1024, 64) + size as u64;
 
         if size as u64 > res.sectors() {
+            // durability 1: single_device.ktest formats one device
             res.add(size as u64 - res.sectors(), 1, c::bch_reservation_flags(0))?;
         }
 
