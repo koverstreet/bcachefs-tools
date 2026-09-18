@@ -1058,7 +1058,11 @@ fn parse_fuse_mount_options(
     ];
     let parsed = options
         .map(super::mount::parse_mountflag_options)
+        .transpose()?
         .unwrap_or_default();
+    if parsed.subvol.is_some() {
+        anyhow::bail!("subvol= is not supported with fusemount");
+    }
     let mut bch_opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)?;
 
     opt_set!(bch_opts, nostart, 1);
