@@ -158,6 +158,33 @@ fn fs_usage_v1_to_text(
         write!(sub, "Online reserved:\t").unwrap();
         sub.units_sectors(result.online_reserved);
         write!(sub, "\r\n").unwrap();
+
+        // The vector is non-increasing, so stop after the first zero: that row
+        // is the ceiling, and the ones above it say nothing new. Empty on a
+        // kernel without the v2 ioctl, where absent is honest and zero wouldn't
+        // be.
+        for (i, free) in result.free.iter().enumerate() {
+            if i > 0 && *free == 0 && result.free[i - 1] == 0 {
+                continue;
+            }
+
+            if i == 0 {
+                write!(sub, "Free:\t").unwrap();
+            } else {
+                write!(sub, "  at {} replicas:\t", i + 1).unwrap();
+            }
+
+            sub.units_sectors(*free);
+            write!(sub, "\r").unwrap();
+            sub.units_sectors(result.free_now[i]);
+            write!(sub, "\r").unwrap();
+
+            if i == 0 {
+                write!(sub, "writable now").unwrap();
+            }
+
+            write!(sub, "\n").unwrap();
+        }
     });
 
     // Replicas summary

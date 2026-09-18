@@ -2,7 +2,7 @@ use bch_bindgen::c;
 use bcachefs_kernel::metadata_version;
 
 use super::handle::BcachefsHandle;
-use super::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING};
+use super::ioctl::{ioctl_ptr, IoctlBuf, BCH_IOCTL_QUERY_ACCOUNTING, BCH_IOCTL_QUERY_ACCOUNTING_v2};
 use super::sysfs::bcachefs_kernel_version;
 
 // Re-export types and functions from bcachefs_kernel::accounting for consumers
@@ -14,13 +14,68 @@ pub struct AccountingResult {
     pub capacity: u64,
     pub used: u64,
     pub online_reserved: u64,
+    /// Free space by replica count: free[n - 1] is what could be granted at n
+    /// replicas, cumulative and non-increasing. Empty on a kernel too old for
+    /// the v2 ioctl - free space is a vector we simply can't see there, which
+    /// is different from it being zero, so callers print nothing rather than
+    /// guess.
+    pub free: Vec<u64>,
+    /// The same vector counting only what's writable without waiting on
+    /// copygc. Where it's short of `free`, that difference is the allocator's
+    /// backlog, not space we don't have.
+    pub free_now: Vec<u64>,
     pub entries: Vec<AccountingEntry>,
 }
 
 impl BcachefsHandle {
-    /// Query filesystem accounting data via BCH_IOCTL_QUERY_ACCOUNTING.
-    /// Returns None on ENOTTY (old kernel without this ioctl).
+    /// Query filesystem accounting data.
+    ///
+    /// Tries the v2 ioctl, which also reports free space by replica count, and
+    /// falls back to v1 on a kernel that doesn't have it. ENOTTY is the only
+    /// error that means "too old" - anything else is a real failure and is
+    /// returned, rather than silently downgraded.
     pub fn query_accounting(&self, type_mask: u32) -> Result<AccountingResult, errno::Errno> {
+        match self.query_accounting_v2(type_mask) {
+            Err(e) if e.0 == libc::ENOTTY => self.query_accounting_v1(type_mask),
+            r => r,
+        }
+    }
+
+    fn query_accounting_v2(&self, type_mask: u32) -> Result<AccountingResult, errno::Errno> {
+        let mut accounting_u64s: u32 = 128;
+
+        loop {
+            let mut buf = IoctlBuf::<c::bch_ioctl_query_accounting_v2>::new::<u64>(accounting_u64s as usize);
+            let hdr = buf.hdr_mut();
+            hdr.accounting_u64s = accounting_u64s;
+            hdr.accounting_types_mask = type_mask;
+
+            let ret = unsafe {
+                ioctl_ptr::<BCH_IOCTL_QUERY_ACCOUNTING_v2>(&self.ioctl_fd(), buf.as_mut_ptr())
+            };
+
+            match ret {
+                Ok(_) => {
+                    let hdr = buf.hdr();
+                    let entries = parse_accounting_entries(
+                        buf.trailing_bytes(hdr.accounting_u64s as usize * 8));
+
+                    return Ok(AccountingResult {
+                        capacity: hdr.capacity,
+                        used: hdr.used,
+                        online_reserved: hdr.online_reserved,
+                        free: hdr.free.to_vec(),
+                        free_now: hdr.free_now.to_vec(),
+                        entries,
+                    });
+                }
+                Err(e) if e.raw_os_error() == Some(libc::ERANGE) => accounting_u64s *= 2,
+                Err(e) => return Err(errno::Errno(e.raw_os_error().unwrap_or(libc::EIO))),
+            }
+        }
+    }
+
+    fn query_accounting_v1(&self, type_mask: u32) -> Result<AccountingResult, errno::Errno> {
         let mut accounting_u64s: u32 = 128;
 
         loop {
@@ -44,6 +99,8 @@ impl BcachefsHandle {
                         capacity: hdr.capacity,
                         used: hdr.used,
                         online_reserved: hdr.online_reserved,
+                        free: Vec::new(),
+                        free_now: Vec::new(),
                         entries,
                     });
                 }
