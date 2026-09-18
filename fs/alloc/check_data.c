@@ -498,9 +498,12 @@ int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 		try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(new),
 						  BKEY_EXTENT_U64s_MAX,
 						  SET_NEEDS_RECONCILE_opt_change, 0));
-		if (bkey_is_btree_ptr(&new->k))
-			trans->extra_disk_res = (u64) bch2_bkey_durability_safe(c, bkey_i_to_s_c(new)).total *
-				btree_sectors(c);
+		if (bkey_is_btree_ptr(&new->k)) {
+			u8 total = bch2_bkey_durability_safe(c, bkey_i_to_s_c(new)).total;
+
+			bch2_trans_extra_disk_res_add(trans,
+					(u64) total * btree_sectors(c), total);
+		}
 
 		if (!level) {
 			try(bch2_trans_update(trans, iter, new,

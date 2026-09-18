@@ -291,6 +291,20 @@ static inline bool bch2_trans_has_updates(struct btree_trans *trans)
 		trans->accounting.u64s;
 }
 
+/*
+ * Charge space a trigger needs on top of trans->disk_res. The sectors and the
+ * replica count they're charged at have to move together - charging without
+ * recording the count leaves the reservation unable to say what slot it's in -
+ * so always go through here rather than touching the fields.
+ */
+static inline void bch2_trans_extra_disk_res_add(struct btree_trans *trans,
+						 u64 sectors, unsigned nr_replicas)
+{
+	trans->extra_disk_res		+= sectors;
+	trans->extra_disk_res_replicas	= max_t(u8, trans->extra_disk_res_replicas,
+						nr_replicas);
+}
+
 static inline void bch2_trans_reset_updates(struct btree_trans *trans)
 {
 	trans_for_each_update(trans, i)
@@ -303,6 +317,7 @@ static inline void bch2_trans_reset_updates(struct btree_trans *trans)
 	trans->accounting.size		= 0;
 	trans->hooks			= NULL;
 	trans->extra_disk_res		= 0;
+	trans->extra_disk_res_replicas	= 0;
 	trans->extra_journal_u64s	= 0;
 	trans->has_interior_updates	= 0;
 }

@@ -1002,6 +1002,15 @@ noinline __cold
 static int bch2_trans_commit_extra_disk_res(struct btree_trans *trans,
 					    enum bch_trans_commit_flags flags)
 {
+	/*
+	 * A reservation lives in one replicas slot, so charging the trigger's
+	 * space to the caller's reservation means taking the max of the two
+	 * counts: erring high reserves more than we need, erring low would
+	 * reserve space we couldn't place.
+	 */
+	trans->disk_res->nr_replicas = max_t(unsigned, trans->disk_res->nr_replicas,
+					     trans->extra_disk_res_replicas);
+
 	return bch2_disk_reservation_add(trans->c, trans->disk_res,
 				trans->extra_disk_res,
 				(flags & BCH_TRANS_COMMIT_no_enospc)
