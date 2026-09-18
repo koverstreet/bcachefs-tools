@@ -563,7 +563,15 @@ int __bch2_fsck_err(struct bch_fs *c,
 	bool inconsistent = false, exiting = false;
 	struct fsck_err_state *s =
 		count_fsck_err_locked(c, err, buf.buf, &repeat, &print, &suppress);
-	if (repeat) {
+	/*
+	 * Replay the verdict we reached the first time - but only if we reached
+	 * one. s->ret is written at the bottom of this function, which every
+	 * goto err_unlock jumps over: a first occurrence that bailed out of
+	 * do_fsck_ask_yn() leaves the state allocated with s->ret == 0. Zero is
+	 * "not decided yet", not a verdict, so fall through and decide now -
+	 * otherwise we'd return it and trip the BUG_ON(!ret) below.
+	 */
+	if (repeat && s->ret) {
 		ret = s->ret;
 		goto err_unlock;
 	}
