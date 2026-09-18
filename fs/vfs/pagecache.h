@@ -73,6 +73,8 @@ struct bch_folio {
 	atomic_t		write_count;
 	/* is s[] up to date with the btree? says nothing about the data */
 	bool			state_uptodate;
+	/* the count s[].replicas_reserved is charged at, and released at */
+	u8			replicas_reserved_at;
 	/*
 	 * The data: sectors [0, partially_uptodate) are read but the folio
 	 * isn't uptodate. One offset suffices because reads start at the front

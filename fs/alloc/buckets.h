@@ -402,6 +402,22 @@ int bch2_disk_reservation_add_slowpath(struct bch_fs *, struct disk_reservation 
 				       u64, enum bch_reservation_flags);
 
 /*
+ * Raise the count a reservation is held at. It only ever goes up: erring high
+ * reserves more than we need, erring low reserves space we could not place.
+ *
+ * Today that's just a max(), because there's one online_reserved counter - but
+ * once a reservation lives in a per-replica-count slot, raising the count has
+ * to carry what's already charged across with it, and this is the one place
+ * that has to learn how.
+ */
+static inline void bch2_disk_reservation_set_nr_replicas(struct bch_fs *c,
+							 struct disk_reservation *res,
+							 unsigned nr_replicas)
+{
+	res->nr_replicas = max(res->nr_replicas, nr_replicas);
+}
+
+/*
  * In physical sectors, for the three callers whose number isn't sectors *
  * nr_replicas: overwrites, which credit back the old key's copies. A smell -
  * that arithmetic probably belongs elsewhere, and when it goes, so does this.
@@ -411,7 +427,7 @@ static inline int __bch2_disk_reservation_add(struct bch_fs *c,
 					      u64 sectors, unsigned nr_replicas,
 					      int flags)
 {
-	res->nr_replicas = max(res->nr_replicas, nr_replicas);
+	bch2_disk_reservation_set_nr_replicas(c, res, nr_replicas);
 
 #ifdef __KERNEL__
 	u64 old, new;

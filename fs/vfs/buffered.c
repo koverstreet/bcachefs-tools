@@ -634,7 +634,8 @@ static void bch2_writepage_io_alloc(struct bch_fs *c,
 				    struct bch_writepage_state *w,
 				    struct bch_inode_info *inode,
 				    u64 sector,
-				    unsigned nr_replicas)
+				    unsigned nr_replicas,
+				    unsigned res_nr_replicas)
 {
 	struct bch_write_op *op;
 
@@ -649,8 +650,7 @@ static void bch2_writepage_io_alloc(struct bch_fs *c,
 	bch2_write_op_init(op, c, w->opts);
 	op->target		= w->opts.foreground_target;
 	op->nr_replicas		= nr_replicas;
-	/* The sectors folded in below were reserved at the inode's setting: */
-	op->res.nr_replicas	= w->opts.data_replicas;
+	op->res.nr_replicas	= res_nr_replicas;
 	op->write_point		= writepoint_hashed(inode->ei_last_dirtied);
 	op->subvol		= inode_inum(inode).subvol;
 	op->pos			= POS(inode_inum(inode).inum, sector);
@@ -741,8 +741,11 @@ do_io:
 	BUG_ON(ret);
 
 	/* Before unlocking the page, get copy of reservations: */
+	unsigned res_nr_replicas;
+
 	scoped_guard(spinlock, &s->lock) {
 		memcpy(w->tmp, s->s, sizeof(struct bch_folio_sector) * f_sectors);
+		res_nr_replicas = s->replicas_reserved_at;
 
 		for (i = 0; i < f_sectors; i++) {
 			if (s->s[i].state < SECTOR_dirty)
@@ -796,15 +799,21 @@ do_io:
 
 		sector = folio_sector(folio) + offset;
 
+		/*
+		 * One io's reservation is charged at one count, so a folio in
+		 * another slot starts a new io, as a differing width does.
+		 */
 		if (w->io &&
 		    (w->io->op.nr_replicas != nr_replicas_this_write ||
+		     w->io->op.res.nr_replicas != res_nr_replicas ||
 		     bch_io_full(w->io, sectors << 9) ||
 		     bio_end_sector(&w->io->op.wbio.bio) != sector))
 			bch2_writepage_do_io(w);
 
 		if (!w->io)
 			bch2_writepage_io_alloc(c, wbc, w, inode, sector,
-						nr_replicas_this_write);
+						nr_replicas_this_write,
+						res_nr_replicas);
 
 		atomic_inc(&s->write_count);
 
