@@ -542,13 +542,26 @@ static inline int __bch2_disk_reservation_add(struct bch_fs *c,
 #endif
 }
 
+/*
+ * On ENOSPC, fall back to fewer replicas if write_degraded allows it:
+ * @res->nr_replicas is then the count the caller has to write at.
+ */
 static inline int bch2_disk_reservation_add(struct bch_fs *c,
 					    struct disk_reservation *res,
 					    u64 sectors, unsigned nr_replicas,
 					    int flags)
 {
-	return __bch2_disk_reservation_add(c, res, sectors * nr_replicas,
-					   nr_replicas, flags);
+	while (1) {
+		int ret = __bch2_disk_reservation_add(c, res, sectors * nr_replicas,
+						      nr_replicas, flags);
+		if (!bch2_err_matches(ret, ENOSPC) ||
+		    nr_replicas <= 1 ||
+		    !bch2_write_degraded_ok(c))
+			return ret;
+
+		/* the failed attempt set the count; retry one lower */
+		disk_res_move_slot(c, res, --nr_replicas);
+	}
 }
 
 struct disk_reservation_destructable {

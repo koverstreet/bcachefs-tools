@@ -498,6 +498,10 @@ static void folio_res_merge(struct bch_fs *c, struct disk_reservation *res,
 	add->sectors = 0;
 }
 
+/*
+ * If the reservation fell back, @res drops to the count we got: the folio is
+ * charged at @res's count, and the rest of this write shouldn't ask again.
+ */
 static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 			struct bch_inode_info *inode,
 			struct folio *folio,
@@ -535,6 +539,9 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 
 			last = round_up(offset + reserved, block_bytes(c)) >> 9;
 		}
+
+		if (unlikely(disk_res.r.nr_replicas < res->disk.nr_replicas))
+			disk_res_move_slot(c, &res->disk, disk_res.r.nr_replicas);
 	}
 
 	for (unsigned i = first; i < last; i++)
