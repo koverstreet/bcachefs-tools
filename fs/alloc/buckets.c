@@ -964,6 +964,135 @@ bool bch2_is_superblock_bucket(struct bch_dev *ca, u64 b)
 
 #define SECTORS_CACHE	1024
 
+/*
+ * Includes the slack in partially used buckets of movable types: reserving
+ * against it is what makes a reservation mean the write won't run out of space
+ * (POSIX, for fallocate), at the price of maybe waiting on copygc.
+ *
+ * Net of the BCH_WATERMARK_normal reserve: space the allocator
+ * will refuse isn't ours to promise.
+ */
+static u64 dev_sectors_placeable(struct bch_dev *ca)
+{
+	if (!dev_has_capacity(ca))
+		return 0;
+
+	struct bch_dev_usage_full f = bch2_dev_usage_full_read(ca);
+	struct bch_dev_usage u;
+
+	for (unsigned i = 0; i < BCH_DATA_NR; i++)
+		u.buckets[i] = f.d[i].buckets;
+
+	u64 ret = __dev_buckets_available(ca, u, BCH_WATERMARK_normal) *
+		  ca->mi.bucket_size;
+
+	for (unsigned i = 0; i < BCH_DATA_NR; i++)
+		if (data_type_movable(i))
+			ret += f.d[i].fragmented;
+
+	return ret;
+}
+
+/*
+ * The free space distribution, as much as placeable() needs: the total and the
+ * BCH_REPLICAS_MAX - 1 largest devices.
+ */
+struct dev_free_dist {
+	u64	total;
+	u64	largest[BCH_REPLICAS_MAX - 1];
+};
+
+static void dev_free_dist_add(struct dev_free_dist *d, u64 f)
+{
+	d->total += f;
+
+	for (unsigned i = 0; i < ARRAY_SIZE(d->largest); i++)
+		if (f > d->largest[i])
+			swap(f, d->largest[i]);
+}
+
+/*
+ * Physical sectors placeable at n replicas. A device holds at most one copy, so
+ * of P sectors at n replicas the k largest devices hold at most kP/n, and the
+ * rest have to hold what's left:
+ *
+ *	P(n - k)/n <= sum of all but the k largest	for k in 0..n-1
+ *
+ * [2T, 400G, 200G, 200G] at n=3: k=1 leaves 800G for two thirds, k=2 leaves
+ * 400G for one third, so 1200G.
+ */
+static u64 dev_free_dist_placeable(const struct dev_free_dist *d, unsigned n)
+{
+	u64 ret = d->total, sum = d->total;
+
+	BUILD_BUG_ON(ARRAY_SIZE(d->largest) < BCH_REPLICAS_MAX - 1);
+
+	for (unsigned k = 1; k < n; k++) {
+		sum -= min(sum, d->largest[k - 1]);
+		ret = min(ret, mul_u64_u64_div_u64(sum, n, n - k));
+	}
+
+	return ret;
+}
+
+/*
+ * Free space partitioned by the highest replica count it supports: out[n-1] is
+ * placeable at n and not n+1, so no two slots describe the same sectors.
+ * @outstanding - granted, not yet written - comes off the top: which slots it
+ * came from isn't recoverable, and the top errs toward refusing.
+ */
+static void dev_free_dist_partition(const struct dev_free_dist *d,
+				    u64 outstanding, u64 *out)
+{
+	u64 above = 0;
+
+	for (unsigned n = BCH_REPLICAS_MAX; n >= 1; --n) {
+		u64 placeable = dev_free_dist_placeable(d, n);
+
+		/* non-increasing in n, or this underflows */
+		EBUG_ON(placeable < above);
+
+		out[n - 1]	= placeable - above;
+		above		= placeable;
+	}
+
+	for (unsigned n = BCH_REPLICAS_MAX; n >= 1 && outstanding; --n) {
+		u64 take = min(out[n - 1], outstanding);
+
+		out[n - 1]	-= take;
+		outstanding	-= take;
+	}
+
+	for (unsigned n = 0; n < BCH_REPLICAS_MAX; n++)
+		out[n] = avail_factor(out[n]);
+}
+
+static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out)
+{
+	struct dev_free_dist d = {};
+
+	scoped_guard(rcu)
+		for_each_member_device_rcu(c, ca, NULL)
+			dev_free_dist_add(&d, dev_sectors_placeable(ca));
+
+	/* reserved but not yet written, so not in the bucket counts */
+	struct bch_fs_capacity_pcpu b = {};
+	acc_u64s_percpu((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
+			sizeof(b) / sizeof(u64));
+
+	dev_free_dist_partition(&d, reserve_factor(b.usage.reserved +
+						   b.online_reserved), out);
+}
+
+void bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out)
+{
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
+	__bch2_fs_sectors_placeable(c, out);
+
+	for (int i = BCH_REPLICAS_MAX - 2; i >= 0; --i)
+		out[i] += out[i + 1];
+}
+
 static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 			struct disk_reservation *res,
 			u64 sectors, enum bch_reservation_flags flags)

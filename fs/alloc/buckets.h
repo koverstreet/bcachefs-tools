@@ -284,6 +284,15 @@ static inline bool bch2_dev_is_rw(struct bch_dev *ca)
 	return test_bit(ca->dev_idx, ca->fs->allocator.rw_devs[BCH_DATA_free].d);
 }
 
+/*
+ * Everything that divides c->capacity.capacity up per device has to agree with
+ * bch2_recalc_capacity() about which devices are in the sum.
+ */
+static inline bool dev_has_capacity(struct bch_dev *ca)
+{
+	return bch2_dev_is_rw(ca) && ca->mi.durability;
+}
+
 static inline u64 __dev_buckets_free(struct bch_dev *ca,
 				     struct bch_dev_usage usage,
 				     enum bch_watermark watermark)
@@ -323,6 +332,12 @@ static inline u64 dev_buckets_available(struct bch_dev *ca,
 
 struct bch_fs_usage_short
 bch2_fs_usage_read_short(struct bch_fs *);
+
+/*
+ * What we'd grant at each replica count: @out[n - 1] is placeable at n or
+ * more.
+ */
+void bch2_fs_sectors_placeable(struct bch_fs *, u64 *);
 
 int __bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
 			     struct bkey_s_c, const struct bch_extent_ptr *,
