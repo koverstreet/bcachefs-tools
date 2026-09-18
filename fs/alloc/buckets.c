@@ -79,7 +79,11 @@ __bch2_fs_usage_read_short(struct bch_fs *c)
 	ret.capacity	= c->capacity.capacity - b.usage.hidden;
 
 	u64 data	= b.usage.data + b.usage.btree;
-	u64 reserved	= b.usage.reserved + b.online_reserved;
+	u64 reserved	= b.usage.reserved;
+
+	/* Outstanding reservations are tracked per replica count; total here */
+	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
+		reserved += b.online_reserved[i];
 
 	ret.used	= min(ret.capacity, data + reserve_factor(reserved));
 	ret.free	= ret.capacity - ret.used;
@@ -266,21 +270,33 @@ void bch2_trans_account_disk_usage_change(struct btree_trans *trans)
 	 */
 	s64 should_not_have_added = added - (s64) disk_res_sectors;
 	if (unlikely(should_not_have_added > 0)) {
-		u64 old, new;
+		/*
+		 * We can't tell which slot these came out of, so take them
+		 * off all of them: too much self-heals at the next recalc,
+		 * too little would overcommit.
+		 */
+		for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++) {
+			u64 old, new;
 
-		old = atomic64_read(&c->capacity.sectors_available);
-		do {
-			new = max_t(s64, 0, old - should_not_have_added);
-		} while (!atomic64_try_cmpxchg(&c->capacity.sectors_available,
-					       &old, new));
+			old = atomic64_read(&c->capacity.sectors_available[i]);
+			do {
+				new = max_t(s64, 0, old - should_not_have_added);
+			} while (!atomic64_try_cmpxchg(&c->capacity.sectors_available[i],
+						       &old, new));
+		}
 
 		added -= should_not_have_added;
 		warn = true;
 	}
 
 	if (added > 0) {
+		/* a lost count clamps to slot 0: these were charged elsewhere */
+		WARN_ON(!trans->disk_res->nr_replicas);
+
+		unsigned slot = disk_res_slot(trans->disk_res->nr_replicas);
+
 		trans->disk_res->sectors -= added;
-		this_cpu_sub(c->capacity.pcpu->online_reserved, added);
+		this_cpu_sub(c->capacity.pcpu->online_reserved[slot], added);
 	}
 
 	scoped_guard(preempt) {
@@ -1049,11 +1065,12 @@ static u64 dev_free_dist_placeable(const struct dev_free_dist *d, unsigned n)
 /*
  * Free space partitioned by the highest replica count it supports: out[n-1] is
  * placeable at n and not n+1, so no two slots describe the same sectors.
- * @outstanding - granted, not yet written - comes off the top: which slots it
- * came from isn't recoverable, and the top errs toward refusing.
+ * Outstanding reservations come off the way the slowpath drew them, from their
+ * slot upwards; @unattributed has no count, so it comes off the top.
  */
 static void dev_free_dist_partition(const struct dev_free_dist *d,
-				    u64 outstanding, u64 *out)
+				    const u64 *reserved, u64 unattributed,
+				    u64 *out)
 {
 	u64 above = 0;
 
@@ -1067,11 +1084,29 @@ static void dev_free_dist_partition(const struct dev_free_dist *d,
 		above		= placeable;
 	}
 
-	for (unsigned n = BCH_REPLICAS_MAX; n >= 1 && outstanding; --n) {
-		u64 take = min(out[n - 1], outstanding);
+	/*
+	 * Most constrained first: the top slot's reservations can only
+	 * have come from the top slot. What doesn't fit was
+	 * overcommitted, and is dropped.
+	 */
+	for (int k = BCH_REPLICAS_MAX - 1; k >= 0; --k) {
+		u64 todo = reserve_factor(reserved[k]);
+
+		for (unsigned i = k; i < BCH_REPLICAS_MAX && todo; i++) {
+			u64 take = min(out[i], todo);
+
+			out[i]	-= take;
+			todo	-= take;
+		}
+	}
+
+	unattributed = reserve_factor(unattributed);
+
+	for (unsigned n = BCH_REPLICAS_MAX; n >= 1 && unattributed; --n) {
+		u64 take = min(out[n - 1], unattributed);
 
 		out[n - 1]	-= take;
-		outstanding	-= take;
+		unattributed	-= take;
 	}
 
 	for (unsigned n = 0; n < BCH_REPLICAS_MAX; n++)
@@ -1095,11 +1130,9 @@ static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now
 	acc_u64s_percpu((u64 *) &b, (u64 __percpu *) c->capacity.pcpu,
 			sizeof(b) / sizeof(u64));
 
-	u64 outstanding = reserve_factor(b.usage.reserved + b.online_reserved);
-
-	dev_free_dist_partition(&eventual, outstanding, out);
+	dev_free_dist_partition(&eventual, b.online_reserved, b.usage.reserved, out);
 	if (out_now)
-		dev_free_dist_partition(&now, outstanding, out_now);
+		dev_free_dist_partition(&now, b.online_reserved, b.usage.reserved, out_now);
 }
 
 void bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now)
@@ -1120,23 +1153,50 @@ static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 {
 	guard(spinlock)(&c->capacity.sectors_available_lock);
 
-	percpu_u64_set(&c->capacity.pcpu->sectors_available, 0);
-	u64 sectors_available = avail_factor(__bch2_fs_usage_read_short(c).free);
+	unsigned slot = disk_res_slot(res->nr_replicas);
+	u64 avail[BCH_REPLICAS_MAX], have = 0;
 
-	if (sectors_available && (flags & BCH_DISK_RESERVATION_PARTIAL))
-		sectors = min(sectors, sectors_available);
+	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
+		percpu_u64_set(&c->capacity.pcpu->sectors_available[i], 0);
 
-	if (sectors <= sectors_available ||
-	    (flags & BCH_DISK_RESERVATION_NOFAIL)) {
-		atomic64_set(&c->capacity.sectors_available,
-			     max_t(s64, 0, sectors_available - sectors));
-		this_cpu_add(c->capacity.pcpu->online_reserved, sectors);
-		res->sectors			+= sectors;
-		return 0;
-	} else {
-		atomic64_set(&c->capacity.sectors_available, sectors_available);
-		return bch_err_throw(c, ENOSPC_disk_reservation);
+	/*
+	 * Every slot, not just ours: consuming at one replica count shrinks the
+	 * others too (and not linearly - filling one small device can drop what
+	 * fits at 3 replicas by more than was written), so the only way they
+	 * stay honest is to recompute the lot whenever any of them runs dry.
+	 */
+	__bch2_fs_sectors_placeable(c, avail, NULL);
+
+	/* anything placeable at more replicas than we need will do */
+	for (unsigned i = slot; i < BCH_REPLICAS_MAX; i++)
+		have += avail[i];
+
+	if (have && (flags & BCH_DISK_RESERVATION_PARTIAL))
+		sectors = min(sectors, have);
+
+	bool ok = sectors <= have || (flags & BCH_DISK_RESERVATION_NOFAIL);
+
+	if (ok) {
+		u64 todo = sectors;
+
+		/* least capable space first - see dev_free_dist_partition() */
+		for (unsigned i = slot; i < BCH_REPLICAS_MAX && todo; i++) {
+			u64 take = min(todo, avail[i]);
+
+			avail[i]	-= take;
+			todo		-= take;
+		}
 	}
+
+	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
+		atomic64_set(&c->capacity.sectors_available[i], avail[i]);
+
+	if (!ok)
+		return bch_err_throw(c, ENOSPC_disk_reservation);
+
+	this_cpu_add(c->capacity.pcpu->online_reserved[slot], sectors);
+	res->sectors			+= sectors;
+	return 0;
 }
 
 int bch2_disk_reservation_add_slowpath(struct bch_fs *c, struct disk_reservation *res,
@@ -1144,24 +1204,37 @@ int bch2_disk_reservation_add_slowpath(struct bch_fs *c, struct disk_reservation
 {
 	guard(preempt)();
 	struct bch_fs_capacity_pcpu *pcpu = this_cpu_ptr(c->capacity.pcpu);
+	unsigned slot = disk_res_slot(res->nr_replicas);
+	u64 want = sectors + SECTORS_CACHE;
 
-	if (unlikely(sectors > pcpu->sectors_available)) {
-		u64 get, old = atomic64_read(&c->capacity.sectors_available);
+	/*
+	 * Refill from our slot upwards, least capable first, leaving
+	 * scarce high-replica space to writes with no alternative. It
+	 * all lands in our slot's cache: a per-pool cache would never hit
+	 * for 1x writes, since slot 1 is empty wherever every device can
+	 * hold a copy.
+	 */
+	for (unsigned i = slot;
+	     i < BCH_REPLICAS_MAX && pcpu->sectors_available[slot] < want;
+	     i++) {
+		u64 need = want - pcpu->sectors_available[slot], get;
+		u64 old = atomic64_read(&c->capacity.sectors_available[i]);
 
 		do {
-			get = min((u64) sectors + SECTORS_CACHE, old);
-
-			if (unlikely(get < sectors))
-				return disk_reservation_recalc_sectors_available(c,
-								res, sectors, flags);
-		} while (!atomic64_try_cmpxchg(&c->capacity.sectors_available,
+			get = min(need, old);
+		} while (get &&
+			 !atomic64_try_cmpxchg(&c->capacity.sectors_available[i],
 					       &old, old - get));
 
-		pcpu->sectors_available		+= get;
+		pcpu->sectors_available[slot] += get;
 	}
 
-	pcpu->sectors_available		-= sectors;
-	pcpu->online_reserved		+= sectors;
+	/* the recalc zeroes the caches, so what we drew above isn't lost */
+	if (unlikely(pcpu->sectors_available[slot] < sectors))
+		return disk_reservation_recalc_sectors_available(c, res, sectors, flags);
+
+	pcpu->sectors_available[slot]	-= sectors;
+	pcpu->online_reserved[slot]	+= sectors;
 	res->sectors			+= sectors;
 	return 0;
 }

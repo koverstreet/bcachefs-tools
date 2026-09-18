@@ -136,10 +136,11 @@ struct write_point_specifier {
 	unsigned long		v;
 };
 
+/* Indexed by disk_res_slot(); physical sectors, not data size */
 struct bch_fs_capacity_pcpu {
 	struct bch_fs_usage_base	usage;
-	u64			sectors_available;
-	u64			online_reserved;
+	u64			sectors_available[BCH_REPLICAS_MAX];
+	u64			online_reserved[BCH_REPLICAS_MAX];
 };
 
 struct bch_fs_capacity {
@@ -154,7 +155,7 @@ struct bch_fs_capacity {
 	u32			capacity_gen;
 	unsigned		bucket_size_max;
 
-	atomic64_t		sectors_available;
+	atomic64_t		sectors_available[BCH_REPLICAS_MAX];
 	spinlock_t		sectors_available_lock;
 
 	struct bch_fs_capacity_pcpu __percpu	*pcpu;

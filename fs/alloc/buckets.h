@@ -333,6 +333,16 @@ static inline u64 dev_buckets_available(struct bch_dev *ca,
 struct bch_fs_usage_short
 bch2_fs_usage_read_short(struct bch_fs *);
 
+/* raw sectors: they land somewhere whatever count they were taken at */
+static inline u64 bch2_online_reserved(struct bch_fs *c)
+{
+	u64 ret = 0;
+
+	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
+		ret += percpu_u64_get(&c->capacity.pcpu->online_reserved[i]);
+	return ret;
+}
+
 /*
  * What we'd grant at each replica count: @out[n - 1] is placeable at n or more,
  * @out_now (optional) the same without waiting for copygc.
@@ -399,11 +409,27 @@ static inline const char *bch2_data_type_str(enum bch_data_type type)
 
 /* Disk reservations: */
 
+/*
+ * Counts above BCH_REPLICAS_MAX are real - durability is per device - and share
+ * the last slot, which is the conservative direction. 0 is a bug; the clamp
+ * only keeps it in bounds.
+ */
+static inline unsigned disk_res_slot(unsigned nr_replicas)
+{
+	EBUG_ON(!nr_replicas);
+
+	return clamp_t(unsigned, nr_replicas, 1, BCH_REPLICAS_MAX) - 1;
+}
+
 static inline void bch2_disk_reservation_put(struct bch_fs *c,
 					     struct disk_reservation *res)
 {
 	if (res->sectors) {
-		this_cpu_sub(c->capacity.pcpu->online_reserved, res->sectors);
+		/* a lost count clamps to slot 0: these were charged elsewhere */
+		WARN_ON(!res->nr_replicas);
+
+		this_cpu_sub(c->capacity.pcpu->online_reserved[disk_res_slot(res->nr_replicas)],
+			     res->sectors);
 		res->sectors = 0;
 	}
 }
@@ -420,16 +446,31 @@ int bch2_disk_reservation_add_slowpath(struct bch_fs *, struct disk_reservation 
  * Raise the count a reservation is held at. It only ever goes up: erring high
  * reserves more than we need, erring low reserves space we could not place.
  *
- * Today that's just a max(), because there's one online_reserved counter - but
- * once a reservation lives in a per-replica-count slot, raising the count has
- * to carry what's already charged across with it, and this is the one place
- * that has to learn how.
+ * A reservation lives entirely in disk_res_slot(res->nr_replicas), so raising
+ * the count carries what is already charged across. The counters are summed
+ * across cpus, so that pair of this_cpu ops only has to not split a slot.
  */
 static inline void bch2_disk_reservation_set_nr_replicas(struct bch_fs *c,
 							 struct disk_reservation *res,
 							 unsigned nr_replicas)
 {
-	res->nr_replicas = max(res->nr_replicas, nr_replicas);
+	if (nr_replicas <= res->nr_replicas)
+		return;
+
+	if (res->sectors) {
+		unsigned old = disk_res_slot(res->nr_replicas);
+		unsigned new = disk_res_slot(nr_replicas);
+
+		scoped_guard(preempt)
+			if (old != new) {
+				this_cpu_sub(c->capacity.pcpu->online_reserved[old],
+					     res->sectors);
+				this_cpu_add(c->capacity.pcpu->online_reserved[new],
+					     res->sectors);
+			}
+	}
+
+	res->nr_replicas = nr_replicas;
 }
 
 /*
@@ -450,18 +491,23 @@ static inline int __bch2_disk_reservation_add(struct bch_fs *c,
 	 */
 	EBUG_ON(sectors && !res->nr_replicas);
 
+	/* nothing to reserve: e.g. fallocate over a range that has enough copies */
+	if (!sectors)
+		return 0;
+
 #ifdef __KERNEL__
+	unsigned slot = disk_res_slot(res->nr_replicas);
 	u64 old, new;
 
-	old = this_cpu_read(c->capacity.pcpu->sectors_available);
+	old = this_cpu_read(c->capacity.pcpu->sectors_available[slot]);
 	do {
 		if (sectors > old)
 			return bch2_disk_reservation_add_slowpath(c, res, sectors, flags);
 
 		new = old - sectors;
-	} while (!this_cpu_try_cmpxchg(c->capacity.pcpu->sectors_available, &old, new));
+	} while (!this_cpu_try_cmpxchg(c->capacity.pcpu->sectors_available[slot], &old, new));
 
-	this_cpu_add(c->capacity.pcpu->online_reserved, sectors);
+	this_cpu_add(c->capacity.pcpu->online_reserved[slot], sectors);
 	res->sectors			+= sectors;
 	return 0;
 #else

@@ -1755,8 +1755,12 @@ void bch2_fs_capacity_exit(struct bch_fs *c)
 {
 	percpu_free_rwsem(&c->capacity.mark_lock.lock);
 	if (c->capacity.pcpu) {
-		u64 v = percpu_u64_get(&c->capacity.pcpu->online_reserved);
-		WARN(v, "online_reserved not 0 at shutdown: %lli", v);
+		for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++) {
+			u64 v = percpu_u64_get(&c->capacity.pcpu->online_reserved[i]);
+
+			WARN(v, "online_reserved not 0 at shutdown: %llu at %u replicas",
+			     v, i + 1);
+		}
 	}
 
 	free_percpu(c->capacity.pcpu);

@@ -2082,7 +2082,11 @@ __cold void bch2_fs_alloc_debug_to_text(struct printbuf *out, struct bch_fs *c)
 	prt_printf(out, "data\t%llu\n",			percpu_u64_get(&c->capacity.pcpu->usage.data));
 	prt_printf(out, "cached\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.cached));
 	prt_printf(out, "reserved\t%llu\n",		percpu_u64_get(&c->capacity.pcpu->usage.reserved));
-	prt_printf(out, "online_reserved\t%llu\n",	percpu_u64_get(&c->capacity.pcpu->online_reserved));
+	/* Per replica count: an ENOSPC at 3x with raw space free needs this */
+	prt_printf(out, "online_reserved\n");
+	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
+		prt_printf(out, "  %ux\t%llu\n", i + 1,
+			   percpu_u64_get(&c->capacity.pcpu->online_reserved[i]));
 
 	prt_newline(out);
 	prt_printf(out, "freelist_wait\t%s\n",			a->freelist_wait.list.first ? "waiting" : "empty");

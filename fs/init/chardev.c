@@ -481,7 +481,7 @@ static noinline_for_stack long bch2_ioctl_fs_usage(struct bch_fs *c,
 	struct bch_fs_usage_short u = bch2_fs_usage_read_short(c);
 	arg.capacity		= u.capacity;
 	arg.used		= u.used;
-	arg.online_reserved	= percpu_u64_get(&c->capacity.pcpu->online_reserved);
+	arg.online_reserved	= bch2_online_reserved(c);
 	arg.replica_entries_bytes = replicas.nr;
 
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++) {
@@ -542,7 +542,7 @@ static long bch2_ioctl_query_accounting(struct bch_fs *c,
 
 	arg.capacity		= c->capacity.capacity - percpu_u64_get(&c->capacity.pcpu->usage.hidden);
 	arg.used		= bch2_fs_usage_read_short(c).used;
-	arg.online_reserved	= percpu_u64_get(&c->capacity.pcpu->online_reserved);
+	arg.online_reserved	= bch2_online_reserved(c);
 	arg.accounting_u64s	= accounting.nr / sizeof(u64);
 
 	return copy_to_user_errcode(user_arg, &arg, sizeof(arg));
