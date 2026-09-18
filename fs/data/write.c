@@ -864,7 +864,8 @@ int bch2_sum_sector_overwrites(struct btree_trans *trans,
 			       struct bkey_i *new,
 			       bool *usage_increasing,
 			       s64 *i_sectors_delta,
-			       s64 *disk_sectors_delta)
+			       s64 *disk_sectors_delta,
+			       unsigned *new_nr_replicas)
 {
 	struct bch_fs *c = trans->c;
 	struct bkey_durability new_d = bch2_bkey_durability_safe(c, bkey_i_to_s_c(new));
@@ -872,6 +873,11 @@ int bch2_sum_sector_overwrites(struct btree_trans *trans,
 	*usage_increasing	= false;
 	*i_sectors_delta	= 0;
 	*disk_sectors_delta	= 0;
+	/*
+	 * @disk_sectors_delta is weighted by this below, so a caller topping up
+	 * a reservation to cover it needs to know the count it's charging at:
+	 */
+	*new_nr_replicas	= new_d.nr_replicas;
 
 	CLASS(btree_iter_copy, iter)(extent_iter);
 	struct bkey_s_c old;
@@ -1056,17 +1062,22 @@ int bch2_extent_update(struct btree_trans *trans,
 		flush = NULL;
 	}
 
+	unsigned new_nr_replicas = 0;
 	try(bch2_sum_sector_overwrites(trans, iter, k,
 				       &usage_increasing,
 				       &i_sectors_delta,
-				       &disk_sectors_delta));
+				       &disk_sectors_delta,
+				       &new_nr_replicas));
 
 	if (disk_res &&
-	    disk_sectors_delta > (s64) disk_res->sectors)
+	    disk_sectors_delta > (s64) disk_res->sectors) {
+		disk_res->nr_replicas = max(disk_res->nr_replicas, new_nr_replicas);
+
 		try(bch2_disk_reservation_add(c, disk_res,
 					disk_sectors_delta - disk_res->sectors,
 					!check_enospc || !usage_increasing
 					? BCH_DISK_RESERVATION_NOFAIL : 0));
+	}
 
 	struct bch_inode_opts opts;
 	try(bch2_extent_update_i_size_sectors(trans, iter,

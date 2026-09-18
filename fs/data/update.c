@@ -411,16 +411,21 @@ static int data_update_index_update_key(struct btree_trans *trans,
 
 	bool should_check_enospc = false;
 	s64 i_sectors_delta = 0, disk_sectors_delta = 0;
+	unsigned new_nr_replicas = 0;
 	try(bch2_sum_sector_overwrites(trans, iter, insert,
 				       &should_check_enospc,
 				       &i_sectors_delta,
-				       &disk_sectors_delta));
+				       &disk_sectors_delta,
+				       &new_nr_replicas));
 
-	if (disk_sectors_delta > (s64) u->op.res.sectors)
+	if (disk_sectors_delta > (s64) u->op.res.sectors) {
+		u->op.res.nr_replicas = max(u->op.res.nr_replicas, new_nr_replicas);
+
 		try(bch2_disk_reservation_add(c, &u->op.res,
 					disk_sectors_delta - u->op.res.sectors,
 					!should_check_enospc
 					? BCH_DISK_RESERVATION_NOFAIL : 0));
+	}
 
 	try(bch2_trans_log_str(trans, bch2_data_update_type_strs[u->opts.type]));
 	try(bch2_trans_log_bkey(trans, u->btree_id, 0, u->k.k));
@@ -1418,7 +1423,9 @@ int bch2_data_update_init(struct btree_trans *trans,
 	}
 
 	if (m->opts.extra_replicas) {
-		ret = bch2_disk_reservation_add(c, &m->op.res, k.k->size * m->opts.extra_replicas, 0);
+		/* First charge on this reservation - it's zeroed by write_op_init() */
+		ret = bch2_disk_reservation_get(c, &m->op.res, k.k->size,
+						m->opts.extra_replicas, 0);
 		if (ret)
 			goto out;
 	}
