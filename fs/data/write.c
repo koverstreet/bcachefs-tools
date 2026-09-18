@@ -1070,14 +1070,12 @@ int bch2_extent_update(struct btree_trans *trans,
 				       &new_nr_replicas));
 
 	if (disk_res &&
-	    disk_sectors_delta > (s64) disk_res->sectors) {
-		disk_res->nr_replicas = max(disk_res->nr_replicas, new_nr_replicas);
-
+	    disk_sectors_delta > (s64) disk_res->sectors)
 		try(bch2_disk_reservation_add(c, disk_res,
 					disk_sectors_delta - disk_res->sectors,
+					new_nr_replicas,
 					!check_enospc || !usage_increasing
 					? BCH_DISK_RESERVATION_NOFAIL : 0));
-	}
 
 	struct bch_inode_opts opts;
 	try(bch2_extent_update_i_size_sectors(trans, iter,

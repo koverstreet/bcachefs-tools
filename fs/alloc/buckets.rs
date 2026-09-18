@@ -52,9 +52,17 @@ impl<'f> DiskReservation<'f> {
         Ok(ret)
     }
 
-    pub fn add(&self, sectors: u64, flags: c::bch_reservation_flags) -> Result<(), BchError> {
+    /// Add `sectors` - physical - at `nr_replicas`, which may be higher than
+    /// the count this reservation was taken at.
+    pub fn add(
+        &self,
+        sectors:     u64,
+        nr_replicas: u32,
+        flags:       c::bch_reservation_flags,
+    ) -> Result<(), BchError> {
         ret_to_result(unsafe {
-            c::bch2_disk_reservation_add(self.fs.raw, self.raw.get(), sectors, flags)
+            c::bch2_disk_reservation_add(self.fs.raw, self.raw.get(),
+                                         sectors, nr_replicas, flags)
         })
     }
 

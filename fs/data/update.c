@@ -418,14 +418,12 @@ static int data_update_index_update_key(struct btree_trans *trans,
 				       &disk_sectors_delta,
 				       &new_nr_replicas));
 
-	if (disk_sectors_delta > (s64) u->op.res.sectors) {
-		u->op.res.nr_replicas = max(u->op.res.nr_replicas, new_nr_replicas);
-
+	if (disk_sectors_delta > (s64) u->op.res.sectors)
 		try(bch2_disk_reservation_add(c, &u->op.res,
 					disk_sectors_delta - u->op.res.sectors,
+					new_nr_replicas,
 					!should_check_enospc
 					? BCH_DISK_RESERVATION_NOFAIL : 0));
-	}
 
 	try(bch2_trans_log_str(trans, bch2_data_update_type_strs[u->opts.type]));
 	try(bch2_trans_log_bkey(trans, u->btree_id, 0, u->k.k));

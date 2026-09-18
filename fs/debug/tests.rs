@@ -387,7 +387,7 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
         dup.k_mut().p.offset = round_up(src_end + 1024, 64) + size as u64;
 
         if size as u64 > res.sectors() {
-            res.add(size as u64 - res.sectors(), c::bch_reservation_flags(0))?;
+            res.add(size as u64 - res.sectors(), 1, c::bch_reservation_flags(0))?;
         }
 
         t.insert_nonextent(c::btree_id::extents, dup, INTERNAL_SNAPSHOT_NODE)
