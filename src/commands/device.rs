@@ -389,56 +389,55 @@ pub struct ResizeCli {
     /// Device path
     device: String,
 
-    /// New size (human-readable, e.g. 1G) or "cancel" (resizes to the currently persisted size); defaults to device size
+    /// New size (human-readable, e.g. 1G); defaults to device size. 0 or "cancel" cancels any in-progress resize
     size: Option<String>,
 
     /// Experimental: allow shrinking the device. This may lead to data loss. This argument will be
-    /// removed once stabilized.
+    /// removed once shrinking is stabilized.
     #[arg(long, default_value = "false")]
     shrink: bool,
 }
 
-enum SizeOrCancel {
-    Size(u64),
-    Cancel,
-}
 fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
-    use SizeOrCancel::*;
-
     let size_bytes = match cli.size {
         Some(ref s) => match s.as_str() {
-            "cancel" | "Cancel" => Cancel,
-            other => Size(parse_human_size(other)?),
+            "cancel" | "Cancel" => 0,
+            other => parse_human_size(other)?,
         },
-        None => Size(device_size(&cli.device)?),
+        None => device_size(&cli.device)?,
     };
-    let size_sectors = match size_bytes {
-        Size(bytes) => Size(bytes >> 9),
-        Cancel => Cancel,
-    };
+    let size_sectors = size_bytes  >> 9;
 
     match open_dev(&cli.device) {
         Ok((handle, dev_idx)) => {
             println!("Doing online resize of {}", cli.device);
 
             let usage = handle.dev_usage(dev_idx).context("querying device usage")?;
-            let nbuckets = match size_sectors {
-                Size(sectors) => sectors / usage.bucket_size as u64,
-                Cancel => usage.nr_buckets,
-            };
-            let shrinking = nbuckets < usage.nr_buckets;
+            let nbuckets = size_sectors / usage.bucket_size as u64;
+
+            let cancelling = nbuckets == 0;
+
+            let shrinking = !cancelling && nbuckets < usage.nr_buckets;
             if shrinking && !cli.shrink {
                 bail!("You are attempting to shrink the device. This is experimental and may lead to data loss. If you wish to proceed anyway, re-run the command with '--shrink'.");
             }
 
+            if cancelling {
+                println!("Cancelling any in-progress resize of {}", cli.device);
+            } else if shrinking {
+                println!("shrinking {} to {} buckets", cli.device, nbuckets);
+            } else {
+                println!("growing {} to {} buckets", cli.device, nbuckets);
+            }
 
-            println!("resizing {} to {} buckets", cli.device, nbuckets);
             handle.disk_resize(dev_idx, nbuckets)
                 .with_context(|| {
-                    if shrinking {
+                    if cancelling {
+                        "cancelling resize (requires kernel shrink support)" // pre-shrink a resize to 0 is rejected
+                    } else if shrinking {
                         "shrinking device (requires kernel shrink support)"
                     } else {
-                        "resizing device"
+                        "growing device"
                     }
                 })?;
         }
@@ -452,9 +451,8 @@ fn cmd_device_resize(cli: ResizeCli) -> Result<()> {
     Ok(())
 }
 
-fn resize_offline(device: &str, size_sectors: SizeOrCancel, shrinking_allowed: bool) -> Result<()> {
+fn resize_offline(device: &str, size_sectors: u64, shrinking_allowed: bool) -> Result<()> {
     use bcachefs_kernel::util::printbuf::Printbuf;
-    use SizeOrCancel::*;
 
     // Find this device's index from its superblock, then open the whole
     // filesystem: shrinking a device evacuates data from the to-be-shrunk
@@ -472,16 +470,22 @@ fn resize_offline(device: &str, size_sectors: SizeOrCancel, shrinking_allowed: b
     let ca = fs.dev_get(dev_idx)
         .ok_or_else(|| anyhow!("could not get reference to device {}", dev_idx))?;
 
-    let nbuckets = match size_sectors {
-        Size(sectors) => sectors / ca.mi.bucket_size as u64,
-        Cancel => ca.mi.nbuckets,
-    };
-    let shrinking = nbuckets < ca.mi.nbuckets;
+    let nbuckets = size_sectors / ca.mi.bucket_size as u64;
+
+    let cancelling = nbuckets == 0;
+
+    let shrinking = !cancelling && nbuckets < nbuckets;
     if shrinking && !shrinking_allowed {
         bail!("You are attempting to shrink the device. This is experimental and may lead to data loss. If you wish to proceed anyway, re-run the command with '--shrink'.");
     }
 
-    println!("resizing {} to {} buckets", device, nbuckets);
+    if cancelling {
+        println!("Cancelling any in-progress resize of {}", device);
+    } else if shrinking {
+        println!("shrinking {} to {} buckets", device, nbuckets);
+    } else {
+        println!("growing {} to {} buckets", device, nbuckets);
+    }
 
     let mut err = Printbuf::new();
     let ret = unsafe {

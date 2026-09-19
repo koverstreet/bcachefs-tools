@@ -1605,6 +1605,9 @@ static int bch2_dev_resize_validate_target(struct bch_fs *c, struct bch_dev *ca,
 {
 	lockdep_assert_held(&c->state_lock);
 
+	if (target_nbuckets == 0) /* cancel resize */
+		return 0;
+
 	/* validate target_nbuckets */
 	u64 old_nbuckets = ca->mi.nbuckets;
 
@@ -2355,6 +2358,7 @@ static int bch2_dev_resize_kick(struct bch_dev *ca)
 	return bch2_dev_resize_wait(ca, seq);
 }
 
+/* `target_nbuckets` == 0 => cancel resize, < nbuckets => shrink, > nbuckets => grow */
 int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 target_nbuckets, struct printbuf *err)
 {
 	scoped_guard(rwsem_write, &c->state_lock) {
