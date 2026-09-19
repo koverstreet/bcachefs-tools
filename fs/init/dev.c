@@ -1605,27 +1605,12 @@ static int bch2_dev_resize_validate_target(struct bch_fs *c, struct bch_dev *ca,
 {
 	lockdep_assert_held(&c->state_lock);
 
-	if (target_nbuckets == 0) /* cancel resize */
-		return 0;
+	try(bch2_resize_validate_target_invariants(c, target_nbuckets,
+			ca->mi.nbuckets, ca->mi.first_bucket, ca->mi.resize_on_mount,
+			err));
 
-	/* validate target_nbuckets */
-	u64 old_nbuckets = ca->mi.nbuckets;
-
-	if (target_nbuckets > BCH_MEMBER_NBUCKETS_MAX) {
-		prt_printf(err, "New device size too big (%llu greater than max %u)\n",
-			   target_nbuckets, BCH_MEMBER_NBUCKETS_MAX);
-		return bch_err_throw(c, device_size_too_big);
-	}
-
-	if (target_nbuckets < old_nbuckets &&
-	    target_nbuckets < ca->mi.first_bucket + BCH_MIN_NR_NBUCKETS) {
-		prt_printf(err, "New device size too small (%llu smaller than min %llu)\n",
-			   target_nbuckets,
-			   (u64) ca->mi.first_bucket + BCH_MIN_NR_NBUCKETS);
-		return bch_err_throw(c, device_size_too_small);
-	}
-
-	if (target_nbuckets > old_nbuckets &&
+	/* runtime / non-sb state dependent checks */
+	if (target_nbuckets > ca->mi.nbuckets &&
 	    bch2_dev_is_online(ca) &&
 	    get_capacity(ca->disk_sb.bdev->bd_disk) <
 	    ca->mi.bucket_size * target_nbuckets) {
@@ -2362,10 +2347,10 @@ static int bch2_dev_resize_kick(struct bch_dev *ca)
 int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 target_nbuckets, struct printbuf *err)
 {
 	scoped_guard(rwsem_write, &c->state_lock) {
-		try(bch2_dev_resize_validate_target(c, ca, target_nbuckets, err));
-
-		// normalize
+		// normalize: a target equal to the current size is a cancel
 		target_nbuckets = target_nbuckets == ca->mi.nbuckets ? 0 : target_nbuckets;
+
+		try(bch2_dev_resize_validate_target(c, ca, target_nbuckets, err));
 
 		try(bch2_dev_resize_thread_start(ca));
 		try(bch2_dev_resize_set_target(c, ca, target_nbuckets));
@@ -2386,6 +2371,14 @@ int bch2_dev_resize_resume(struct bch_fs *c, struct bch_dev *ca,
 		return 0;
 
 	scoped_guard(rwsem_write, &c->state_lock) {
+		u64 target = bch2_dev_resize_target(ca);
+
+		if (bch2_dev_resize_validate_target(c, ca, target, err)) {
+			bch_err_dev(ca, "cannot resume resize: %s", err->buf);
+			err->pos = 0;
+			return bch2_dev_resize_set_target(c, ca, 0);
+		}
+
 		try(bch2_dev_resize_thread_start(ca));
 	}
 

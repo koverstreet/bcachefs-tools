@@ -403,10 +403,11 @@ fn finish_image(fs: &Fs, keep_alloc: bool, verbosity: u32) -> Result<(), anyhow:
     // Set nbuckets
     unsafe { fs.member_mut(0) }.nbuckets = nbuckets.to_le();
 
-    // Set resize_on_mount for all online members
+    // Set resize_on_mount for all online members;
     let _ = fs.for_each_online_member(|ca| {
         let m = unsafe { fs.member_mut(ca.dev_idx as u32) };
         m.set_member_resize_on_mount(1);
+        m.target_nbuckets = 0u64.to_le(); // mutually exclusive
         std::ops::ControlFlow::Continue(())
     });
 

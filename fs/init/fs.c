@@ -1596,6 +1596,8 @@ int bch2_fs_resize_on_mount(struct bch_fs *c)
 						bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 					m->nbuckets = cpu_to_le64(new_nbuckets);
 					SET_BCH_MEMBER_RESIZE_ON_MOUNT(m, false);
+					/* mutually exclusive with resize_on_mount */
+					m->target_nbuckets = 0;
 
 					c->disk_sb.sb->features[0] &= ~cpu_to_le64(BIT_ULL(BCH_FEATURE_small_image));
 					bch2_write_super(c);

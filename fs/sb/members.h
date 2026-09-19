@@ -39,6 +39,9 @@ static inline struct bch_member bch2_members_v1_get(struct bch_sb_field_members_
 
 int bch2_sb_members_v2_init(struct bch_fs *c);
 int bch2_sb_members_cpy_v2_v1(struct bch_sb_handle *disk_sb);
+int bch2_check_resize_targets(struct bch_fs *);
+int bch2_resize_validate_target_invariants(struct bch_fs *, u64, u64, unsigned, bool,
+					   struct printbuf *);
 struct bch_member *bch2_members_v2_get_mut(struct bch_sb *sb, int i);
 struct bch_member bch2_sb_member_get(struct bch_sb *sb, int i);
 

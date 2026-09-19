@@ -70,6 +70,10 @@
 	  "Replay pending journal keys into btrees, "						\
 	  "accounting keys first; sorted-order bulk insert "					\
 	  "with per-key fallback for journal deadlocks")					\
+	x(check_resize_targets,			50, PASS_ALWAYS|PASS_SILENT,		0,	\
+	  "Clear member target_nbuckets that violate resize "				\
+	  "invariants: equal to nbuckets (redundant idle encoding), out "				\
+	  "of bounds, or set on a device marked resize_on_mount")				\
 	x(merge_btree_nodes,			45, PASS_ONLINE,			0,	\
 	  "Merge adjacent underfull btree nodes to reclaim "					\
 	  "wasted space")									\

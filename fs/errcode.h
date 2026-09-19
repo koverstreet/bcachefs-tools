@@ -353,6 +353,8 @@
 	x(EINVAL,			EINVAL_fsck_online_bad_passes)		\
 	x(EINVAL,			EINVAL_fsck_online_bad_flags)		\
 	x(EINVAL,			EINVAL_journal_replay_key_bad_btree_depth)\
+	x(EINVAL,			EINVAL_dev_resize_on_mount)		\
+	x(EINVAL,			EINVAL_dev_resize_same_size)		\
 	x(EINVAL,			EINVAL_missing_new_extent_overwrite)	\
 	x(EINVAL,			EINVAL_version_min_too_old)		\
 	x(EINVAL,			EINVAL_block_size_needs_thp)		\

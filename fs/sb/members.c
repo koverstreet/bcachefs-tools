@@ -216,29 +216,78 @@ static int validate_member(struct printbuf *err,
 		return -BCH_ERR_invalid_sb_members;
 	}
 
-	u64 target_nbuckets = le64_to_cpu(m.target_nbuckets);
+	return 0;
+}
 
-	if (target_nbuckets) {
-		if (target_nbuckets < first_bucket) {
-			prt_printf(err, "device %u: target buckets starts before first bucket (got %llu, first %u)",
-				   i, target_nbuckets, first_bucket);
-			return -BCH_ERR_invalid_sb_members;
-		}
+/*
+ * Validate resize target_nbuckets against static or exclusively superblock-dependent state.
+ * Additional, runtime-dependent checks are done in bch2_dev_resize_validate_target().
+ */
+int bch2_resize_validate_target_invariants(struct bch_fs *c, u64 target_nbuckets,
+					   u64 nbuckets, unsigned first_bucket,
+					   bool resize_on_mount, struct printbuf *err)
+{
+	if (!target_nbuckets)		/* not resizing */
+		return 0;
 
-		if (target_nbuckets < nbuckets &&
-		    target_nbuckets - first_bucket < BCH_MIN_NR_NBUCKETS) {
-			prt_printf(err, "device %u: not enough target buckets (got %llu, min %u)",
-				   i, target_nbuckets - first_bucket, BCH_MIN_NR_NBUCKETS);
-			return -BCH_ERR_invalid_sb_members;
-		}
-
-		if (target_nbuckets > BCH_MEMBER_NBUCKETS_MAX) {
-			prt_printf(err, "device %u: target buckets too big (got %llu, max %u)",
-				   i, target_nbuckets, BCH_MEMBER_NBUCKETS_MAX);
-			return -BCH_ERR_invalid_sb_members;
-		}
+	if (target_nbuckets == nbuckets) {
+		prt_printf(err, "resize target equals current size (%llu)", nbuckets);
+		return bch_err_throw(c, EINVAL_dev_resize_same_size);
 	}
 
+	/*
+	 * resize_on_mount and a resize target are mutually exclusive: an
+	 * unexpanded image is grown by mounting it, not by an explicit resize.
+	 */
+	if (resize_on_mount) {
+		prt_printf(err, "resize target with resize_on_mount set");
+		return bch_err_throw(c, EINVAL_dev_resize_on_mount);
+	}
+
+	if (target_nbuckets < (u64) first_bucket  + BCH_MIN_NR_NBUCKETS) {
+		prt_printf(err, "resize target too small (%llu, min %llu)",
+			   target_nbuckets, (u64) first_bucket + BCH_MIN_NR_NBUCKETS);
+		return bch_err_throw(c, device_size_too_small);
+	}
+
+	if (target_nbuckets > BCH_MEMBER_NBUCKETS_MAX) {
+		prt_printf(err, "resize target too big (%llu, max %u)",
+			   target_nbuckets, BCH_MEMBER_NBUCKETS_MAX);
+		return bch_err_throw(c, device_size_too_big);
+	}
+
+	return 0;
+}
+
+/*
+ * Clear target_nbuckets for any device that violates `bch2_resize_validate_target_invariants()`.
+ */
+int bch2_check_resize_targets(struct bch_fs *c)
+{
+	/*
+	 * Reporting and repair are separate critical sections: fsck_err() must not be
+	 * called with c->sb_lock held, as it may prompt, and on an unrepairable error
+	 * it can take paths that themselves need the lock.
+	 */
+
+	for_each_member_device(c, ca) {
+		CLASS(printbuf, err)();
+
+		if (!bch2_resize_validate_target_invariants(c,
+				READ_ONCE(ca->mi.target_nbuckets),
+				READ_ONCE(ca->mi.nbuckets), ca->mi.first_bucket,
+				ca->mi.resize_on_mount, &err))
+			continue;
+
+		if (ret_fsck_err(c, dev_resize_target_bad, "device %u: %s",
+				 ca->dev_idx, err.buf)) {
+			guard(mutex_noio)(&c->sb_lock);
+
+			bch2_members_v2_get_mut(c->disk_sb.sb,
+						ca->dev_idx)->target_nbuckets = 0;
+			bch2_write_super(c);
+		}
+	}
 	return 0;
 }
 

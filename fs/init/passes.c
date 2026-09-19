@@ -25,6 +25,7 @@
 #include "journal/journal.h"
 
 #include "sb/io.h"
+#include "sb/members.h"
 
 #include "snapshots/snapshot.h"
 #include "snapshots/subvolume.h"
