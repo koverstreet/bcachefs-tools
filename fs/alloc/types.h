@@ -56,6 +56,8 @@ struct open_bucket {
 	bool			valid:1;
 	bool			on_partial_list:1;
 	bool			do_discards_fast:1;
+	/* handle already removed from ca->nr_open_buckets (bucket left free) */
+	bool			free_uncounted;
 
 	u8			dev;
 	u8			generation;
