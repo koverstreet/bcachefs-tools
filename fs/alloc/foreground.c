@@ -181,7 +181,8 @@ void __bch2_open_bucket_put(struct bch_fs *c, struct open_bucket *ob)
 		c->allocator.open_buckets_freelist = ob - c->allocator.open_buckets;
 
 		c->allocator.open_buckets_nr_free++;
-		ca->nr_open_buckets--;
+		if (!ob->free_uncounted)
+			ca->nr_open_buckets--;
 	}
 
 	/*
@@ -324,6 +325,7 @@ static struct open_bucket *__try_alloc_bucket(struct bch_fs *c,
 		ob->dev		= ca->dev_idx;
 		ob->generation		= gen;
 		ob->bucket	= bucket;
+		ob->free_uncounted = false;
 	}
 
 	ca->nr_open_buckets++;

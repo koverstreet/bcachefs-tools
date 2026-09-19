@@ -1435,6 +1435,23 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 		if (statechange_to(a->data_type == BCH_DATA_free))
 			bch2_alloc_wake_dev(ca);
 
+		{
+			guard(spinlock)(&c->allocator.freelist_lock);
+			struct open_bucket *ob =
+				bch2_bucket_is_open(c, op.new.k->p.inode, op.new.k->p.offset);
+			if (ob) {
+				if (statechange_from(a->data_type == BCH_DATA_free) &&
+				    !ob->free_uncounted) {
+					ca->nr_open_buckets--;
+					ob->free_uncounted = true;
+				} else if (statechange_to(a->data_type == BCH_DATA_free) &&
+					   ob->free_uncounted) {
+					ca->nr_open_buckets++;
+					ob->free_uncounted = false;
+				}
+			}
+		}
+
 		if (statechange_to(!data_type_is_empty(a->data_type))) {
 			/*
 			 * Record journal sequence number of empty -> nonempty
