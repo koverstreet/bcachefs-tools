@@ -937,7 +937,7 @@ bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
 	memset(nr_online, 0, sizeof(nr_online));
 
 	scoped_guard(rcu)
-		for_each_member_device_rcu(c, ca, &devs) {
+		for_each_member_device_rcu(c, ca, NULL) {
 			if (!ca->mi.durability)
 				continue;
 
@@ -968,15 +968,15 @@ bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
 	if (!(flags & BCH_FORCE_IF_METADATA_DEGRADED)) {
 		if (nr_online[BCH_DATA_journal] < nr_have[BCH_DATA_journal] &&
 		    nr_online[BCH_DATA_journal] < c->opts.metadata_replicas) {
-			prt_printf(err, "Insufficient rw journal devices (%u) online\n",
-				   nr_online[BCH_DATA_journal]);
+			prt_printf(err, "Insufficient rw journal devices (%u < %u) online\n",
+				   nr_online[BCH_DATA_journal], c->opts.metadata_replicas);
 			return false;
 		}
 
 		if (nr_online[BCH_DATA_btree] < nr_have[BCH_DATA_btree] &&
 		    nr_online[BCH_DATA_btree] < c->opts.metadata_replicas) {
-			prt_printf(err, "Insufficient rw btree devices (%u) online\n",
-				   nr_online[BCH_DATA_btree]);
+			prt_printf(err, "Insufficient rw btree devices (%u < %u) online\n",
+				   nr_online[BCH_DATA_btree], c->opts.metadata_replicas);
 			return false;
 		}
 	}
@@ -984,8 +984,8 @@ bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
 	if (!(flags & BCH_FORCE_IF_DATA_DEGRADED)) {
 		if (nr_online[BCH_DATA_user] < nr_have[BCH_DATA_user] &&
 		    nr_online[BCH_DATA_user] < c->opts.data_replicas) {
-			prt_printf(err, "Insufficient rw user data devices (%u) online\n",
-				   nr_online[BCH_DATA_user]);
+			prt_printf(err, "Insufficient rw user data devices (%u < %u) online\n",
+				   nr_online[BCH_DATA_user], c->opts.data_replicas);
 			return false;
 		}
 	}
