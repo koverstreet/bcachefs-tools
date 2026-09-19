@@ -338,6 +338,11 @@ enum fsck_err_opts {
 	  OPT_BOOL(),							\
 	  BCH2_NO_SB_OPT,		BCACHEFS_VERBOSE_DEFAULT,	\
 	  NULL,		"Extra debugging information during mount/recovery")\
+	x(loglevel,			u8,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
+	  OPT_UINT(0, 7),						\
+	  BCH2_NO_SB_OPT,		0,				\
+	  NULL,		"Max loglevel to emit; higher-numbered (less severe) messages are suppressed (0 = default)")\
 	x(journal_flush_delay,		u32,				\
 	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
 	  OPT_UINT(1, U32_MAX),						\

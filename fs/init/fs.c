@@ -116,7 +116,7 @@ static int kern_soh_to_loglevel(const char *fmt)
 
 static unsigned loglevel_opt(struct bch_fs *c)
 {
-	return c->loglevel ?: c->opts.verbose ? 7: 6;
+	return c->loglevel ?: c->opts.loglevel ?: (c->opts.verbose ? 7 : 6);
 }
 
 void bch2_print_str_loglevel(struct bch_fs *c, int loglevel, const char *str)
