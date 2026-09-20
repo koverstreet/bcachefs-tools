@@ -2488,6 +2488,13 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
 		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
 		__bch2_ec_stripe_buf_exit(&new_s->old_stripe);
+
+		for (unsigned i = 0; i < new_s->new_stripe.key.v.nr_blocks; i++)
+			if (new_s->blocks[i]) {
+				bch2_open_bucket_put(c, c->allocator.open_buckets + new_s->blocks[i]);
+				new_s->blocks[i] = 0;
+			}
+
 		kfree(new_s);
 		return ret;
 	}
