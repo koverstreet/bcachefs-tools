@@ -112,11 +112,17 @@ static inline u64 btree_ptr_hash_val(const struct bkey_i *k)
 	}
 }
 
+/*
+ * mem_ptr lives in bset memory, so it can be clobbered like any other on-disk
+ * field.
+ */
 static inline struct btree *btree_node_mem_ptr(const struct bkey_i *k)
 {
-	return k->k.type == KEY_TYPE_btree_ptr_v2
-		? (void *)(unsigned long)READ_ONCE(bkey_i_to_btree_ptr_v2_c(k)->v.mem_ptr)
-		: NULL;
+	if (k->k.type != KEY_TYPE_btree_ptr_v2)
+		return NULL;
+
+	unsigned long ptr = READ_ONCE(bkey_i_to_btree_ptr_v2_c(k)->v.mem_ptr);
+	return virt_addr_valid(ptr) ? (void *) ptr : NULL;
 }
 
 /* is btree node in hash table? */
