@@ -43,6 +43,7 @@ pub fn rename_trans<'a, 't>(
     src_name:    &c::qstr,
     dst_name:    &c::qstr,
     mode:        c::bch_rename_mode,
+    reconcile_changed: &mut bool,
 ) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::bch2_rename_trans(
@@ -56,6 +57,7 @@ pub fn rename_trans<'a, 't>(
             src_name,
             dst_name,
             mode,
+            reconcile_changed,
         )
     };
     t.result(ret)
