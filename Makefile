@@ -61,6 +61,7 @@ endif
 BCACHEFS_DKMS_FORWARD := BCACHEFS_DEBUG \
                         BCACHEFS_TESTS \
                         BCACHEFS_INJECT_TRANSACTION_RESTARTS \
+                        BCACHEFS_PREBUILT_MODULES \
                         BCACHEFS_RUST \
                         BCACHEFS_WERROR
 
@@ -424,8 +425,10 @@ install_dkms: dkms/dkms.conf dkms/module-version.c
 	cp -a fs/vendor/kernel-rust $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/vendor/
 	$(INSTALL) -m0755 -D fs/scripts/getdents-layout.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0755 -D fs/scripts/rust-is-available-dkms.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
+ifneq ($(BCACHEFS_PREBUILT_MODULES),0)
 	$(INSTALL) -m0755 -D fs/scripts/fetch-module.sh -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
 	$(INSTALL) -m0644 -D signing/bcachefs-signing-ca.pem -t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs/scripts
+endif
 	$(INSTALL) -m0644 -D dkms/module-version.c	-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	$(INSTALL) -m0644 -D version.h			-t $(DESTDIR)$(DKMSDIR)/src/fs/bcachefs
 	@( :; $(foreach v,$(BCACHEFS_DKMS_FORWARD),$(if $($(v)),printf '%s := %s\n' '$(v)' '$($(v))';)) ) > $(DESTDIR)$(DKMSDIR)/build.vars

@@ -11,6 +11,9 @@ CONFIG_BCACHEFS_FS := m
 # -dirty source tree the farm never builds) falls through to a normal local
 # compile. fetch-module.sh logs only to stderr, so stdout is empty unless a
 # module was placed, making the `hit` test unambiguous.
+# Set BCACHEFS_PREBUILT_MODULES=0 to require a local build without network
+# access. `make install_dkms` persists the setting for the DKMS build.
+ifneq ($(BCACHEFS_PREBUILT_MODULES),0)
 bcachefs-version := $(shell sed -n 's/.*bcachefs_version "\(.*\)".*/\1/p' $(src)/version.h 2>/dev/null)
 ifneq ($(bcachefs-version),)
 ifeq ($(shell $(CONFIG_SHELL) $(src)/scripts/fetch-module.sh '$(KERNELRELEASE)' '$(bcachefs-version)' '$(obj)/bcachefs.ko' && echo hit),hit)
@@ -20,6 +23,7 @@ else
 # No version means no lookup key — say so rather than silently compiling:
 # the missing file is the tell that this tree wasn't staged the supported way.
 $(warning bcachefs: no version in $(src)/version.h - not looking for a prebuilt module (version.h is staged by bcachefs-tools 'make install_dkms'; a hand-copied kernel fs/bcachefs/ tree lacks it))
+endif
 endif
 endif
 
