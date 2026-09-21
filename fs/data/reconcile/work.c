@@ -1118,6 +1118,7 @@ static bool bch2_reconcile_enabled(struct bch_fs *c)
 {
 	return !c->opts.read_only &&
 		c->opts.reconcile_enabled &&
+		!c->reconcile.pm_paused &&
 		!(c->opts.reconcile_on_ac_only &&
 		  c->reconcile.on_battery);
 }
@@ -2103,6 +2104,34 @@ static int bch2_reconcile_power_notifier(struct notifier_block *nb,
 }
 #endif
 
+#if defined(CONFIG_PM_SLEEP) && defined(__KERNEL__)
+#include <linux/suspend.h>
+
+static int bch2_reconcile_pm_notifier(struct notifier_block *nb,
+				      unsigned long event, void *data)
+{
+	struct bch_fs *c = container_of(nb, struct bch_fs, reconcile.pm_notifier);
+
+	switch (event) {
+	case PM_HIBERNATION_PREPARE:
+	case PM_SUSPEND_PREPARE:
+	case PM_RESTORE_PREPARE:
+		c->reconcile.pm_paused = true;
+		break;
+	case PM_POST_HIBERNATION:
+	case PM_POST_SUSPEND:
+	case PM_POST_RESTORE:
+		c->reconcile.pm_paused = false;
+		break;
+	default:
+		return NOTIFY_DONE;
+	}
+
+	bch2_reconcile_wakeup(c);
+	return NOTIFY_DONE;
+}
+#endif
+
 static void reconcile_scan_in_flight_free(void *p, void *arg)
 {
 	WARN_ON_ONCE(1);
@@ -2117,6 +2146,10 @@ void bch2_fs_reconcile_exit(struct bch_fs *c)
 		rhashtable_free_and_destroy(&r->scans_in_flight,
 					    reconcile_scan_in_flight_free, NULL);
 
+#if defined(CONFIG_PM_SLEEP) && defined(__KERNEL__)
+	if (r->pm_notifier.notifier_call)
+		unregister_pm_notifier(&r->pm_notifier);
+#endif
 #ifdef CONFIG_POWER_SUPPLY
 	power_supply_unreg_notifier(&r->power_notifier);
 #endif
@@ -2130,6 +2163,10 @@ int bch2_fs_reconcile_init(struct bch_fs *c)
 	try(rhashtable_init(&r->scans_in_flight, &reconcile_scan_in_flight_params));
 	r->scans_in_flight_init_done = true;
 
+#if defined(CONFIG_PM_SLEEP) && defined(__KERNEL__)
+	r->pm_notifier.notifier_call = bch2_reconcile_pm_notifier;
+	try(register_pm_notifier(&r->pm_notifier));
+#endif
 #ifdef CONFIG_POWER_SUPPLY
 	r->power_notifier.notifier_call = bch2_reconcile_power_notifier;
 	try(power_supply_reg_notifier(&r->power_notifier));

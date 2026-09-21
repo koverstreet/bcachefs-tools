@@ -42,6 +42,11 @@ struct bch_fs_reconcile {
 #ifdef CONFIG_POWER_SUPPLY
 	struct notifier_block		power_notifier;
 #endif
+
+	bool				pm_paused;
+#if defined(CONFIG_PM_SLEEP) && defined(__KERNEL__)
+	struct notifier_block		pm_notifier;
+#endif
 };
 
 #endif /* _BCACHEFS_REBALANCE_TYPES_H */
