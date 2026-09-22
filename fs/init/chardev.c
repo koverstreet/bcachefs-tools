@@ -31,6 +31,7 @@
 #include <linux/device.h>
 #include <linux/fs.h>
 #include <linux/ioctl.h>
+#include <linux/ioprio.h>
 #include <linux/major.h>
 #include <linux/sched/task.h>
 #include <linux/slab.h>
@@ -331,6 +332,16 @@ struct bch_data_ctx {
 static int bch2_data_thread(void *arg)
 {
 	struct bch_data_ctx *ctx = container_of(arg, struct bch_data_ctx, thr);
+
+	/*
+	 * Run scrub in background so that backpointer resolves yield to
+	 * foreground IO.
+	 *
+	 * this thread is created fresh for each job and exits with it; if we
+	 * ever reuse threads we'll need to reset the ioprio
+	 */
+	if (ctx->arg.op == BCH_DATA_OP_scrub)
+		set_task_ioprio(current, IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0));
 
 	ctx->thr.ret = bch2_data_job(ctx->c, &ctx->stats, &ctx->arg);
 	if (ctx->thr.ret == -BCH_ERR_device_offline)
