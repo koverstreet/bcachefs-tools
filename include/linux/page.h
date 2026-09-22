@@ -24,6 +24,7 @@ static const size_t linux_page_size = PAGE_SIZE;
 #define offset_in_page(p)		((unsigned long) (p) & ~PAGE_MASK)
 
 #define page_address(p)			((void *) (p))
+#define virt_addr_valid(p)		((unsigned long) (p) != 0)
 
 #define kmap_atomic(page)		page_address(page)
 #define kunmap_atomic(addr)		do {} while (0)
