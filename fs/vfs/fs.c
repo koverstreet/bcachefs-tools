@@ -590,6 +590,11 @@ static struct bch_inode_info *__bch2_new_inode(struct bch_fs *c, gfp_t gfp)
 	inode->ei_flags = 0;
 	mutex_init(&inode->ei_quota_lock);
 	memset(&inode->ei_devs_need_flush, 0, sizeof(inode->ei_devs_need_flush));
+	spin_lock_init(&inode->ei_flush_lock);
+	INIT_LIST_HEAD(&inode->ei_flush_done);
+	inode->ei_flush_seq_issued	= 0;
+	inode->ei_flush_seq_completed	= 0;
+	memset(&inode->ei_flush_wait, 0, sizeof(inode->ei_flush_wait));
 	INIT_DELAYED_WORK(&inode->ei_writeback_timer, bch2_vfs_writeback_fn);
 
 	if (unlikely(inode_init_always_gfp(c->vfs_sb, &inode->v, gfp))) {
