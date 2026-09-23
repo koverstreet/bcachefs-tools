@@ -792,10 +792,10 @@ static int bch2_copygc_thread(void *arg)
 		kick = READ_ONCE(c->copygc.kick_count);
 		c->copygc.wait = 0;
 
-		c->copygc.running = true;
+		WRITE_ONCE(c->copygc.running, true);
 		ret = bch2_copygc(&ctxt, &buckets, &devs, &did_work);
-		c->copygc.running = false;
-		c->copygc.run_count++;
+		WRITE_ONCE(c->copygc.running, false);
+		WRITE_ONCE(c->copygc.run_count, c->copygc.run_count + 1);
 
 		wake_up(&c->copygc.running_wq);
 

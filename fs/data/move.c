@@ -462,12 +462,15 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 {
 	struct bch_fs *c = ctxt->trans->c;
 	bool is_kthread = current->flags & PF_KTHREAD;
+	u32 copygc_run_count = READ_ONCE(c->copygc.run_count);
 	u64 delay;
 
-	if (ctxt->wait_on_copygc && c->copygc.running) {
+	if (ctxt->wait_on_copygc && READ_ONCE(c->copygc.running)) {
 		bch2_moving_ctxt_flush_all(ctxt);
+		/* Copygc may start another batch before we observe it idle. */
 		wait_event_freezable(c->copygc.running_wq,
-				    !c->copygc.running ||
+				    !READ_ONCE(c->copygc.running) ||
+				    READ_ONCE(c->copygc.run_count) != copygc_run_count ||
 				    (is_kthread && kthread_should_stop()));
 	}
 
