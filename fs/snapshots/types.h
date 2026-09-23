@@ -82,11 +82,24 @@ struct snapshot_delete {
  * page not yet) such that the snapshot captures an inconsistent state — the
  * shape that bit MySQL/InnoDB.
  *
- * Page-cache dirtying paths (buffered write_iter and mmap mkdirty) take this
- * lock as readers; snapshot creation takes it as a writer. O_DIRECT doesn't
- * need it — direct writes commit as atomic btree transactions, no page cache
- * staleness window. Buffered writeback is fine too — each writeback insert
- * is atomic w.r.t. the snapshot transaction.
+ * Page-cache dirtying paths take these locks as readers; snapshot creation
+ * takes them as writers. O_DIRECT doesn't need them — direct writes commit as
+ * atomic btree transactions, no page cache staleness window. Buffered
+ * writeback is fine too — each writeback insert is atomic w.r.t. the
+ * snapshot transaction.
+ *
+ * There are two locks because the two dirtying paths sit on opposite sides
+ * of mmap_lock, mirroring the sb_writers freeze levels (SB_FREEZE_WRITE vs
+ * SB_FREEZE_PAGEFAULT):
+ *
+ *   write_iter:   create_lock -> mmap_lock (faulting in user pages)
+ *   page_mkwrite: mmap_lock (held by caller) -> pagefault_lock
+ *
+ * One lock can't sit both above and below mmap_lock — that's an ABBA
+ * inversion. Snapshot creation write-locks create_lock first (draining
+ * syscall-level dirtiers, whose user-page faults may still take
+ * pagefault_lock as readers), then pagefault_lock (draining mmap dirtiers).
+ * Lock order: create_lock -> mmap_lock -> pagefault_lock.
  */
 struct bch_fs_snapshots {
 	struct snapshot_table __rcu		*table;
@@ -94,8 +107,9 @@ struct bch_fs_snapshots {
 	/* a topology repair invalidated descendants' is_ancestor bitmaps: */
 	bool					need_table_rebuild;
 	struct percpu_rw_semaphore		create_lock;
+	struct percpu_rw_semaphore		pagefault_lock;
 	struct snapshot_delete			delete;
-	struct work_struct			wait_for_pagecache_and_delete_work;
+	struct delayed_work			wait_for_pagecache_and_delete_work;
 	snapshot_id_list			unlinked;
 	struct mutex				unlinked_lock;
 };
