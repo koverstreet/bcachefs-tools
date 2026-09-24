@@ -136,6 +136,12 @@ struct write_point_specifier {
 	unsigned long		v;
 };
 
+/*
+ * #653: max nr_replicas for which the per-replica placement gate applies;
+ * above this (and for nr_replicas <= 1) reservations are placement-ungated.
+ */
+#define BCH_PLACEABLE_TOPMAX	BCH_REPLICAS_MAX	/* #653: 4 (was 8) */
+
 struct bch_fs_capacity_pcpu {
 	struct bch_fs_usage_base	usage;
 	u64			sectors_available;
@@ -157,6 +163,18 @@ struct bch_fs_capacity {
 	atomic64_t		sectors_available;
 	spinlock_t		sectors_available_lock;
 
+	/*
+	 * #653: per-replica-class HELD durable reservation -- durable space
+	 * reserved-but-not-yet-placed, in the same unit as the @sectors passed
+	 * to bch2_disk_reservation_add() (logical * nr_replicas). Indexed by
+	 * nr_replicas; only 2..BCH_PLACEABLE_TOPMAX are used. The reserve-time
+	 * check+increment runs under @sectors_available_lock; placement/put
+	 * decrements are monotone and lock-free (bch2_capacity_held_sub). It
+	 * mirrors online_reserved exactly for the gated classes, so it always
+	 * equals the outstanding unplaced durable mass.
+	 */
+	atomic64_t		held_durable[BCH_PLACEABLE_TOPMAX + 1];
+
 	struct bch_fs_capacity_pcpu __percpu	*pcpu;
 
 	struct percpu_rwsem_noio	mark_lock;
@@ -172,6 +190,7 @@ struct bch_fs_allocator {
 	spinlock_t		freelist_lock;
 	struct closure_waitlist	freelist_wait;
 	unsigned long		last_stuck;
+
 
 	open_bucket_idx_t	open_buckets_freelist;
 	open_bucket_idx_t	open_buckets_nr_free;

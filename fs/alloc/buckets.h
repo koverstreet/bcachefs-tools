@@ -374,10 +374,23 @@ static inline const char *bch2_data_type_str(enum bch_data_type type)
 
 /* Disk reservations: */
 
+void bch2_capacity_held_sub(struct bch_fs *, unsigned, u64);
+
+/*
+ * #653: a reservation is placement-gated (its durable space is HELD against a
+ * per-replica placeable ceiling) iff 2 <= nr_replicas <= BCH_PLACEABLE_TOPMAX.
+ */
+static inline bool bch2_reservation_placeable_gated(unsigned nr_replicas)
+{
+	return nr_replicas >= 2 && nr_replicas <= BCH_PLACEABLE_TOPMAX;
+}
+
 static inline void bch2_disk_reservation_put(struct bch_fs *c,
 					     struct disk_reservation *res)
 {
 	if (res->sectors) {
+		/* #653: retire held durable reservation on drop-without-place. */
+		bch2_capacity_held_sub(c, res->nr_replicas, res->sectors);
 		this_cpu_sub(c->capacity.pcpu->online_reserved, res->sectors);
 		res->sectors = 0;
 	}
@@ -396,6 +409,13 @@ static inline int bch2_disk_reservation_add(struct bch_fs *c, struct disk_reserv
 {
 #ifdef __KERNEL__
 	u64 old, new;
+
+	/*
+	 * #653: placement-gated classes never take the per-cpu fast path; their
+	 * HOLD accounting must go through the locked slow path.
+	 */
+	if (bch2_reservation_placeable_gated(res->nr_replicas))
+		return __bch2_disk_reservation_add(c, res, sectors, flags);
 
 	old = this_cpu_read(c->capacity.pcpu->sectors_available);
 	do {

@@ -424,8 +424,14 @@ int bch2_get_folio_disk_reservation(struct bch_fs *c,
 	if (!disk_res_sectors)
 		return 0;
 
-	ret = bch2_disk_reservation_get(c, &disk_res,
-					disk_res_sectors, 1,
+	/*
+	 * #653: disk_res_sectors is already the nr_replicas-fold reservation
+	 * deficit; carry the real replica count on the reservation (not 1) so
+	 * the placement gate/HOLD engages for buffered writes too, and add the
+	 * pre-multiplied sectors directly (don't let _get() multiply again).
+	 */
+	disk_res = bch2_disk_reservation_init(c, nr_replicas);
+	ret = bch2_disk_reservation_add(c, &disk_res, disk_res_sectors,
 					!check_enospc
 					? BCH_DISK_RESERVATION_NOFAIL
 					: 0);
@@ -470,6 +476,8 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 	}
 
 	CLASS(disk_reservation, disk_res)(c);
+	/* #653: bind the placement gate/HOLD to the real replica count. */
+	disk_res.r.nr_replicas = res->disk.nr_replicas;
 	if (disk_sectors) {
 		ret = bch2_disk_reservation_add(c, &disk_res.r, disk_sectors,
 				partial ? BCH_DISK_RESERVATION_PARTIAL : 0);
@@ -529,6 +537,8 @@ static int bch2_folio_reservation_get_nofail(struct bch_fs *c,
 		quota_sectors += s->s[i].state == SECTOR_unallocated;
 	     }
 
+	/* #653: bind the placement gate/HOLD to the real replica count. */
+	disk_res.nr_replicas = res->disk.nr_replicas;
 	if (disk_sectors) {
 		ret = bch2_disk_reservation_add(c, &disk_res, disk_sectors,
 				BCH_DISK_RESERVATION_NOFAIL);

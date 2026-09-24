@@ -281,6 +281,12 @@ void bch2_trans_account_disk_usage_change(struct btree_trans *trans)
 	if (added > 0) {
 		trans->disk_res->sectors -= added;
 		this_cpu_sub(c->capacity.pcpu->online_reserved, added);
+		/*
+		 * #653: placement retires held durable reservation, mirroring
+		 * the online_reserved decrement (net-zero against the device
+		 * free consumed by the placement itself).
+		 */
+		bch2_capacity_held_sub(c, trans->disk_res->nr_replicas, added);
 	}
 
 	scoped_guard(preempt) {
@@ -964,6 +970,128 @@ bool bch2_is_superblock_bucket(struct bch_dev *ca, u64 b)
 
 #define SECTORS_CACHE	1024
 
+/*
+ * Per-replica placeability at grant time (root fix for the #653 allocator
+ * park):
+ *
+ * sectors_available (below) is a GLOBAL scalar derived from summed free space;
+ * it is replica-blind.  A reservation it grants may be impossible to PLACE at
+ * res->nr_replicas on distinct rw devices -- e.g. one big device plus several
+ * small ones, where the small devices exhaust while the big device still holds
+ * most of the free space.  The foreground write then parks forever in
+ * __bch2_wait_on_allocator on bucket_alloc_blocked instead of getting ENOSPC.
+ *
+ * placeable_sectors_at_replicas() returns the max number of LOGICAL sectors
+ * that can actually be placed at @nr_replicas using distinct devices per
+ * replica, over the current rw + durable member set:
+ *
+ *   max { s : sum_i min(f_i, s) >= s * R }
+ *
+ * with f_i the free sectors on rw member i.  The maximiser has the closed form
+ *
+ *   min( floor(sum f / R),
+ *        min_{t=1..R-1} floor( (sum f - sum of t largest f) / (R - t) ) )
+ *
+ * where the t-largest term encodes the distinct-device constraint (for R==2 it
+ * reduces to min(floor(sum f / 2), sum f - max_i f_i)).
+ *
+ * CONSERVATIVE / no false ENOSPC: computed over the FULL rw+durable set,
+ * target-blind (the write's target is not known at grant time) -- an UPPER
+ * bound on the real placeability of any untargeted write, so it never refuses a
+ * legitimately placeable write.  Mixed durability IS handled: a member of
+ * durability d contributes to min(d, R) of the R replicas -- d >= R backs a
+ * whole logical sector alone (the @big term), d < R joins the distinct-device
+ * spread (the @top[] term).  U64_MAX ("per-replica gate not applicable, fall
+ * back to the global test only") is returned solely for R <= 1 or
+ * R > BCH_PLACEABLE_TOPMAX.  The value is the closed-form fractional
+ * distinct-device packing optimum C*; the caller applies the integral safety
+ * margin (exact at R==2, C* - nr_devices at R>=3) so a grant is never admitted
+ * above the true placeable OPT.
+ */
+/* BCH_PLACEABLE_TOPMAX now defined in alloc/types.h (#653). */
+
+static u64 placeable_sectors_at_replicas(struct bch_fs *c, unsigned nr_replicas,
+					 unsigned *nr_devices)
+{
+	if (nr_replicas <= 1)
+		return U64_MAX;
+	if (nr_replicas > BCH_PLACEABLE_TOPMAX)
+		return U64_MAX;
+
+	u64 total = 0;
+	u64 big = 0;
+	u64 top[BCH_PLACEABLE_TOPMAX];		/* descending, top[0] largest */
+	unsigned ntop = 0, keep = nr_replicas - 1;
+	unsigned ndev = 0;		/* #653: participating rw+durable members */
+
+	guard(rcu)();
+	for_each_member_device_rcu(c, ca, NULL) {
+		if (ca->mi.state != BCH_MEMBER_STATE_rw)
+			continue;
+		if (!ca->mi.durability)
+			continue;
+		unsigned d = min_t(unsigned, ca->mi.durability, nr_replicas);
+		ndev++;
+
+		u64 f = __dev_buckets_free(ca, bch2_dev_usage_read(ca),
+					  BCH_WATERMARK_normal) *
+			ca->mi.bucket_size;
+
+		if (d >= nr_replicas) {
+			big += f;		/* durability>=R backs R alone */
+			continue;
+		}
+
+		total += f;
+
+		/* insert f into the descending top[] of size keep */
+		if (ntop < keep) {
+			unsigned i = ntop++;
+			while (i && top[i - 1] < f) {
+				top[i] = top[i - 1];
+				i--;
+			}
+			top[i] = f;
+		} else if (keep && f > top[keep - 1]) {
+			unsigned i = keep - 1;
+			while (i && top[i - 1] < f) {
+				top[i] = top[i - 1];
+				i--;
+			}
+			top[i] = f;
+		}
+	}
+
+	u64 s = total / nr_replicas;
+	u64 partial = total;
+	for (unsigned t = 1; t < nr_replicas; t++) {
+		if (t - 1 < ntop)
+			partial -= top[t - 1];
+		s = min(s, partial / (nr_replicas - t));
+	}
+	if (nr_devices)
+		*nr_devices = ndev;
+	return big + s;
+}
+
+/*
+ * #653: monotone lock-free draw-down of the per-class held durable reservation.
+ * Never underflows. No-op for placement-ungated classes.
+ */
+void bch2_capacity_held_sub(struct bch_fs *c, unsigned nr_replicas, u64 sub)
+{
+	if (!bch2_reservation_placeable_gated(nr_replicas) || !sub)
+		return;
+
+	atomic64_t *h = &c->capacity.held_durable[nr_replicas];
+	u64 old = atomic64_read(h), new;
+
+	do {
+		new = old > sub ? old - sub : 0;
+	} while (!atomic64_try_cmpxchg(h, &old, new));
+}
+
+
 static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 			struct disk_reservation *res,
 			u64 sectors, enum bch_reservation_flags flags)
@@ -973,15 +1101,145 @@ static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 	percpu_u64_set(&c->capacity.pcpu->sectors_available, 0);
 	u64 sectors_available = avail_factor(__bch2_fs_usage_read_short(c).free);
 
+	/*
+	 * #653 completeness fix: re-seed the global sectors_available counter to
+	 * the authoritative fresh value before the commit below.
+	 *
+	 * @sectors_available (= avail_factor(fs_usage.free)) is the TRUE
+	 * reservable space: fs_usage.free already reflects all committed
+	 * online_reserved and is computed independently of this atomic counter
+	 * (which __bch2_fs_usage_read_short() sums into a throwaway and ignores).
+	 * The atomic c->capacity.sectors_available is only the undistributed
+	 * fast-path *cache pool*: ungated reservations draw it down into per-cpu
+	 * caches, and -- because gated reservations always route through this
+	 * locked slow path and never refill it -- it falls to ~0 while ample free
+	 * space remains. The admit check tests @sectors_available (correct), but
+	 * the atomic-subtract commit read `old` off this depleted pool, so every
+	 * gated reservation was refused (admit=1 yet ENOSPC) => false-ENOSPC.
+	 *
+	 * Recompute-from-truth is precisely this function`s job: seed the pool to
+	 * the authoritative value here (as the failure path below already does),
+	 * so the subsequent atomic RMW commit draws from the correct base. The
+	 * commit stays an atomic cmpxchg subtract off the LIVE counter, so a
+	 * concurrent lock-free fast-path draw landing after this re-seed is still
+	 * captured (it lowers `old` -> the loop retries). Durable over-admit is
+	 * guarded by the placeable/HELD gate above, not by this replica-blind
+	 * counter, so re-seeding it here cannot over-admit at the durable margin.
+	 */
+	atomic64_set(&c->capacity.sectors_available, sectors_available);
+
+	/*
+	 * Root fix (#653): in addition to the global sectors_available
+	 * test below -- which is replica-blind -- refuse a grant that cannot be
+	 * PLACED at res->nr_replicas on distinct rw devices, so an unplaceable
+	 * write gets clean ENOSPC here instead of parking in the allocator.
+	 * @placeable is in the same "sectors == logical * nr_replicas" unit as
+	 * @sectors; U64_MAX means the per-replica gate is not applicable.
+	 */
+	u64 placeable = U64_MAX;
+	if (res->nr_replicas >= 1) {
+		unsigned nr_devices = 0;
+		u64 p = placeable_sectors_at_replicas(c, res->nr_replicas,
+						      &nr_devices);
+		if (p != U64_MAX) {
+			/*
+			 * #653 conservative ceiling C* - n. The closed form C*
+			 * (placeable_sectors_at_replicas) is the fractional,
+			 * target-blind optimum; the true INTEGRAL placeable OPT
+			 * can fall short of C* by at most one logical sector per
+			 * participating device (proved: opt_ge_optval_sub_n,
+			 * OPT >= C* - nr_devices). At N==2 C* is proven tight, so
+			 * use it exact; at N>=3 use the proven-sound bound
+			 * C* - nr_devices so a grant is never admitted above OPT
+			 * (never over-admits). Clamp at 0.
+			 */
+			if (res->nr_replicas >= 3)
+				p = p > nr_devices ? p - nr_devices : 0;
+			placeable = avail_factor(p) * res->nr_replicas;
+		}
+	}
+
+	/*
+	 * #653: HOLD, don't merely count. @placeable is the total durable space
+	 * placeable at res->nr_replicas on the CURRENT free-vector; subtract
+	 * what is already HELD (reserved-but-unplaced) for this class so two
+	 * reservations cannot both pass against the same physical free (the
+	 * reserve->place TOCTOU), and so the test is against REMAINING rather
+	 * than total placeable space. Ungated classes keep avail_place=U64_MAX.
+	 */
+	bool gated = placeable != U64_MAX;
+	u64 avail_place = placeable;
+	if (gated) {
+		u64 held = atomic64_read(&c->capacity.held_durable[res->nr_replicas]);
+		avail_place = placeable > held ? placeable - held : 0;
+	}
+
 	if (sectors_available && (flags & BCH_DISK_RESERVATION_PARTIAL))
 		sectors = min(sectors, sectors_available);
+	if (gated && (flags & BCH_DISK_RESERVATION_PARTIAL))
+		sectors = min(sectors, avail_place);
 
-	if (sectors <= sectors_available ||
+	/*
+	 * #653: a non-NOFAIL gated grant is admitted ONLY when it fits the
+	 * conservative placeable ceiling (sectors <= avail_place), so it is
+	 * never presented unplaceable to the foreground allocator; only a
+	 * NOFAIL grant may pass unplaceable (and self-throttles via HELD).
+	 */
+	if (((sectors <= sectors_available) && (sectors <= avail_place)) ||
 	    (flags & BCH_DISK_RESERVATION_NOFAIL)) {
-		atomic64_set(&c->capacity.sectors_available,
-			     max_t(s64, 0, sectors_available - sectors));
+		/*
+		 * #653 concurrency fix: commit the draw with an atomic RMW
+		 * SUBTRACT off the LIVE sectors_available counter, not an
+		 * OVERWRITE from the (already stale) entry snapshot. The
+		 * overwrite erased lock-free fast-path draws that landed
+		 * concurrently under this lock, giving that space back and
+		 * over-admitting at the durable-full margin. Re-check that the
+		 * live value still has room; if a concurrent draw took it, fail
+		 * as no-room unless NOFAIL (which still admits, flooring at 0,
+		 * matching the prior max_t(s64, 0, ...) semantics). The entry
+		 * snapshot is used only for the admission check above, never for
+		 * the commit. Proven safe (Sum granted <= capacity over all
+		 * interleavings) in Bcachefs916.ReservationConc653.
+		 */
+		u64 old = atomic64_read(&c->capacity.sectors_available), new;
+		do {
+			if ((s64) old < (s64) sectors) {
+				if (!(flags & BCH_DISK_RESERVATION_NOFAIL))
+					return bch_err_throw(c, ENOSPC_disk_reservation);
+				new = 0;
+			} else {
+				new = old - sectors;
+			}
+		} while (!atomic64_try_cmpxchg(&c->capacity.sectors_available,
+					       &old, new));
 		this_cpu_add(c->capacity.pcpu->online_reserved, sectors);
 		res->sectors			+= sectors;
+		/*
+		 * #653: HOLD the durable space for gated classes, mirroring the
+		 * online_reserved increment above. Retired at placement
+		 * (bch2_trans_account_disk_usage_change) and on drop
+		 * (bch2_disk_reservation_put). A NOFAIL grant exceeding
+		 * avail_place is a genuine over-commit and is held too, so the
+		 * class self-throttles (avail_place -> 0) until it drains.
+		 */
+		if (gated) {
+			/*
+			 * #653 invariant (debug): a non-NOFAIL gated grant is
+			 * admitted ONLY when it fits the conservative ceiling at
+			 * admit time -- sectors <= avail_place = placeable - held
+			 * (or, for PARTIAL, sectors was clamped to avail_place
+			 * above) -- so it is never presented unplaceable to the
+			 * foreground allocator. NOTE: held_durable[] is a SHARED
+			 * per-class counter that NOFAIL grants may legitimately
+			 * push above @placeable (the self-throttling over-commit),
+			 * so the post-increment mass held<=placeable is NOT a hard
+			 * invariant and is deliberately NOT asserted here.
+			 */
+			EBUG_ON(!(flags & BCH_DISK_RESERVATION_NOFAIL) &&
+				sectors > avail_place);
+			atomic64_add(sectors,
+				     &c->capacity.held_durable[res->nr_replicas]);
+		}
 		return 0;
 	} else {
 		atomic64_set(&c->capacity.sectors_available, sectors_available);
@@ -992,6 +1250,17 @@ static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 int __bch2_disk_reservation_add(struct bch_fs *c, struct disk_reservation *res,
 				u64 sectors, enum bch_reservation_flags flags)
 {
+	/*
+	 * #653: placement-gated classes must not use the per-cpu fast-path
+	 * cache -- the HOLD check+increment has to be atomic against the
+	 * placeable ceiling under sectors_available_lock, so route them
+	 * straight to the locked slow path. This closes the reserve->place
+	 * TOCTOU on the fast path too (by not racing it), with no separate
+	 * per-cpu held cache to keep coherent.
+	 */
+	if (bch2_reservation_placeable_gated(res->nr_replicas))
+		return disk_reservation_recalc_sectors_available(c, res, sectors, flags);
+
 	guard(preempt)();
 	struct bch_fs_capacity_pcpu *pcpu = this_cpu_ptr(c->capacity.pcpu);
 
