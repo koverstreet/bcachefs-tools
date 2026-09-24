@@ -7,7 +7,10 @@
 #include "alloc/replicas.h"
 
 #include "btree/cache.h"
+#include "btree/interior.h"
 #include "btree/iter.h"
+
+#include "journal/journal.h"
 
 #include "sb/members.h"
 #include "sb/io.h"
@@ -737,10 +740,8 @@ static int btree_bitmap_gc_btree_level(struct btree_trans *trans,
 	return 0;
 }
 
-int bch2_btree_bitmap_gc(struct bch_fs *c)
+static int btree_bitmap_gc_mark(struct bch_fs *c)
 {
-	bch2_progress_init(&c->recovery.progress, __func__, c, 0, ~0ULL);
-
 	scoped_guard(mutex_noio, &c->sb_lock) {
 		guard(rcu)();
 		for_each_member_device_rcu(c, ca, NULL)
@@ -763,6 +764,35 @@ int bch2_btree_bitmap_gc(struct bch_fs *c)
 				bch2_dev_btree_bitmap_mark(c, bkey_i_to_s_c(&b->key));
 		}
 	}
+
+	return 0;
+}
+
+static int btree_bitmap_gc_run(struct bch_fs *c, bool *retry)
+{
+	*retry = false;
+	{
+		guard(rwsem_write)(&c->gc.lock);
+		if (bch2_btree_interior_updates_pending(c)) {
+			*retry = true;
+			return 0;
+		}
+
+		/* No unwritten update may hide an old, still reachable node. */
+		try(btree_bitmap_gc_mark(c));
+	}
+
+	/*
+	 * The walk can observe committed pointer removals that are not yet
+	 * durable. Flush them before dropping their old bitmap coverage.
+	 *
+	 * Release gc.lock first: journal reclaim can need to split nodes.
+	 * Updates started after the walk retain their marked old nodes and
+	 * mark new nodes before committing the parent pointers.
+	 */
+	try(bch2_journal_flush(&c->journal));
+	/* A failed interior update may have left only the old topology durable. */
+	try(bch2_journal_error(&c->journal));
 
 	u64 sectors_marked_old = 0, sectors_marked_new = 0;
 
@@ -788,6 +818,23 @@ int bch2_btree_bitmap_gc(struct bch_fs *c)
 	bch_info(c, "%s", buf.buf);
 
 	return 0;
+}
+
+int bch2_btree_bitmap_gc(struct bch_fs *c)
+{
+	lockdep_assert_held(&c->recovery.run_lock);
+	bch2_progress_init(&c->recovery.progress, __func__, c, 0, ~0ULL);
+
+	for (;;) {
+		/* Completion can split nodes, so wait without holding gc.lock. */
+		bch2_btree_interior_updates_flush(c);
+
+		bool retry;
+		int ret = btree_bitmap_gc_run(c, &retry);
+
+		if (!retry)
+			return ret;
+	}
 }
 
 static void bch2_maybe_schedule_btree_bitmap_gc_work(struct work_struct *work)
