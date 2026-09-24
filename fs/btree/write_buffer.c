@@ -34,6 +34,15 @@
 #include <linux/prefetch.h>
 #include <linux/sort.h>
 
+#ifdef CONFIG_BCACHEFS_TESTS
+/* One observation per module load, shared by all mounted filesystems. */
+static bool test_wb_pin_publication;
+static atomic_t test_wb_pin_state = ATOMIC_INIT(0);
+module_param_named(wb_pin_publication, test_wb_pin_publication, bool, 0644);
+MODULE_PARM_DESC(wb_pin_publication,
+		 "Force and observe flushing allocation failure once per module load");
+#endif
+
 /*
  * Catch the "added BTREE_IS_write_buffer but forgot BCH_WRITE_BUFFER_BTREES"
  * footgun at compile time: count the write_buffer bits in BCH_BTREE_IDS() and
@@ -883,6 +892,13 @@ static void bch2_journal_keys_to_write_buffer_lock(struct bch_fs *c,
 		pb->room = darray_room(pb->wb->keys);
 		if (pb->wb == &wb->flushing)
 			pb->room = min(pb->room, wb->sorted.size - wb->flushing.keys.nr);
+#ifdef CONFIG_BCACHEFS_TESTS
+		if (test_wb_pin_publication &&
+		    idx == BCH_WB_BTREE_backpointers &&
+		    pb->wb == &wb->flushing &&
+		    atomic_read(&test_wb_pin_state) == 0)
+			pb->room = 0;
+#endif
 	}
 }
 
@@ -1302,13 +1318,53 @@ retry:
 	 */
 	gfp_t gfp = pb->wb == &wb->flushing ? WB_RESIZE_GFP : GFP_KERNEL;
 
+#ifdef CONFIG_BCACHEFS_TESTS
+	bool force_alloc_failure =
+		test_wb_pin_publication &&
+		dst->test_wb_pin_armed &&
+		idx == BCH_WB_BTREE_backpointers &&
+		pb->wb == &wb->flushing &&
+		pb->wb->keys.nr &&
+		!pb->wb->pin.seq &&
+		atomic_cmpxchg(&test_wb_pin_state, 1, 2) == 1;
+
+	ret = force_alloc_failure
+		? -ENOMEM
+		: darray_make_room_gfp(&pb->wb->keys, u64s, gfp);
+#else
 	ret = darray_make_room_gfp(&pb->wb->keys, u64s, gfp);
+#endif
 	if (!ret && pb->wb == &wb->flushing)
 		ret = darray_resize_gfp(&wb->sorted, wb->flushing.keys.size, gfp);
 
 	if (unlikely(ret)) {
 		if (pb->wb == &wb->flushing) {
 			mutex_unlock(&pb->wb->lock);
+#ifdef CONFIG_BCACHEFS_TESTS
+			if (force_alloc_failure) {
+				/*
+				 * Reacquiring the lock proves what another lock holder can
+				 * observe in the fallback window. Do not wait: a flush
+				 * holder may need inc.lock or journal buf_lock from us.
+				 * A holder may also drain flushing before we reacquire it;
+				 * that is not an observation of the staged keys, so rearm.
+				 */
+				if (mutex_trylock(&wb->flushing.lock)) {
+					if (wb->flushing.keys.nr) {
+						pr_info("WB_PIN_REPRO observer flushing=%zu fpin=%llu\n",
+							wb->flushing.keys.nr, wb->flushing.pin.seq);
+					} else {
+						pr_info("WB_PIN_REPRO observer drained; retrying\n");
+						atomic_set(&test_wb_pin_state, 0);
+					}
+					mutex_unlock(&wb->flushing.lock);
+				} else {
+					pr_err("WB_PIN_REPRO observer lock unavailable\n");
+					atomic_set(&test_wb_pin_state, 0);
+				}
+				dst->test_wb_pin_armed = false;
+			}
+#endif
 			pb->wb = &wb->inc;
 			bch2_journal_pin_add(&c->journal, dst->seq, &pb->wb->pin,
 					     bch2_btree_write_buffer_journal_flush);
@@ -1325,6 +1381,19 @@ retry:
 	BUG_ON(!dst->seq);
 
 	bch2_journal_key_to_wb_reserved(c, pb, dst->seq, k);
+#ifdef CONFIG_BCACHEFS_TESTS
+	if (test_wb_pin_publication &&
+	    idx == BCH_WB_BTREE_backpointers &&
+	    pb->wb == &wb->flushing &&
+	    pb->wb->keys.nr == u64s &&
+	    !pb->wb->pin.seq &&
+	    atomic_cmpxchg(&test_wb_pin_state, 0, 1) == 0) {
+		dst->test_wb_pin_armed = true;
+		pb->room = 0;
+		pr_info("WB_PIN_REPRO staged flushing=%zu fpin=%llu\n",
+			pb->wb->keys.nr, pb->wb->pin.seq);
+	}
+#endif
 	return 0;
 }
 
@@ -1353,6 +1422,14 @@ void bch2_journal_keys_to_write_buffer_start(struct bch_fs *c,
 static int __bch2_journal_keys_to_write_buffer_end(struct bch_fs *c, struct journal_keys_to_wb *dst)
 {
 	int ret = 0;
+
+#ifdef CONFIG_BCACHEFS_TESTS
+	/* The forced failure must consume the arm in this intake. */
+	if (dst->test_wb_pin_armed) {
+		atomic_cmpxchg(&test_wb_pin_state, 1, 0);
+		dst->test_wb_pin_armed = false;
+	}
+#endif
 
 	/*
 	 * For each btree: inject live (non-zero) accounting accumulators into

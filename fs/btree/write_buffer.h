@@ -77,6 +77,9 @@ struct journal_keys_to_wb_btree {
 
 struct journal_keys_to_wb {
 	u64				seq;
+#ifdef CONFIG_BCACHEFS_TESTS
+	bool				test_wb_pin_armed;
+#endif
 	struct journal_keys_to_wb_btree	per_btree[BCH_WB_BTREE_NR];
 };
 
