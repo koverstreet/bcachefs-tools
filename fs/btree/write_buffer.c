@@ -1339,6 +1339,10 @@ retry:
 
 	if (unlikely(ret)) {
 		if (pb->wb == &wb->flushing) {
+			if (pb->wb->keys.nr)
+				bch2_journal_pin_add(&c->journal, dst->seq,
+						     &pb->wb->pin,
+						     bch2_btree_write_buffer_journal_flush);
 			mutex_unlock(&pb->wb->lock);
 #ifdef CONFIG_BCACHEFS_TESTS
 			if (force_alloc_failure) {
