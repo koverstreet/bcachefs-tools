@@ -2156,7 +2156,7 @@ static inline bool dev_may_alloc(struct bch_fs *c, struct bch_dev *ca, struct al
 			return false;
 	}
 
-	return ca->mi.state == BCH_MEMBER_STATE_rw &&
+	return bch2_dev_is_rw(ca) &&
 		bch2_dev_is_online(ca) &&
 		(ca->mi.data_allowed & BIT(req->data_type));
 }

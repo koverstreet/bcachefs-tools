@@ -109,7 +109,7 @@ static int bch2_bucket_is_movable(struct btree_trans *trans,
 	if (!ca)
 		return 0;
 
-	if (ca->mi.state != BCH_MEMBER_STATE_rw ||
+	if (!bch2_dev_is_rw(ca) ||
 	    !bch2_dev_is_online(ca)) {
 		bch_err_throw(c, bucket_not_moveable_dev_not_rw);
 		return 0;
