@@ -767,6 +767,8 @@ do_io:
 			s->s[i].replicas_reserved = 0;
 			bch2_folio_sector_set(folio, s, i, SECTOR_allocated);
 		}
+
+		s->reserved_degraded = false;
 	}
 
 	BUG_ON(atomic_read(&s->write_count));
