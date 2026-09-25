@@ -1147,6 +1147,32 @@ void bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now)
 	}
 }
 
+/*
+ * Every slot, not just ours: consuming at one count shrinks the others, and not
+ * linearly, so they only stay honest recomputed together.
+ */
+static void disk_reservation_caches_reset(struct bch_fs *c, u64 *avail)
+{
+	lockdep_assert_held(&c->capacity.sectors_available_lock);
+
+	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
+		percpu_u64_set(&c->capacity.pcpu->sectors_available[i], 0);
+
+	__bch2_fs_sectors_placeable(c, avail, NULL);
+}
+
+/* Device state changed: the caches were computed against the old devices */
+void bch2_disk_reservation_caches_invalidate(struct bch_fs *c)
+{
+	u64 avail[BCH_REPLICAS_MAX];
+
+	guard(spinlock)(&c->capacity.sectors_available_lock);
+	disk_reservation_caches_reset(c, avail);
+
+	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
+		atomic64_set(&c->capacity.sectors_available[i], avail[i]);
+}
+
 static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 			struct disk_reservation *res,
 			u64 sectors, enum bch_reservation_flags flags)
@@ -1156,16 +1182,7 @@ static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 	unsigned slot = disk_res_slot(res->nr_replicas);
 	u64 avail[BCH_REPLICAS_MAX], have = 0;
 
-	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		percpu_u64_set(&c->capacity.pcpu->sectors_available[i], 0);
-
-	/*
-	 * Every slot, not just ours: consuming at one replica count shrinks the
-	 * others too (and not linearly - filling one small device can drop what
-	 * fits at 3 replicas by more than was written), so the only way they
-	 * stay honest is to recompute the lot whenever any of them runs dry.
-	 */
-	__bch2_fs_sectors_placeable(c, avail, NULL);
+	disk_reservation_caches_reset(c, avail);
 
 	/* anything placeable at more replicas than we need will do */
 	for (unsigned i = slot; i < BCH_REPLICAS_MAX; i++)

@@ -1649,6 +1649,8 @@ void bch2_recalc_capacity(struct bch_fs *c)
 
 	c->capacity.bucket_size_max = bucket_size_max;
 
+	bch2_disk_reservation_caches_invalidate(c);
+
 	/* Wake up case someone was waiting for buckets */
 	bch2_alloc_wake_all(c);
 }

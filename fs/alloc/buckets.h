@@ -348,6 +348,7 @@ static inline u64 bch2_online_reserved(struct bch_fs *c)
  * @out_now (optional) the same without waiting for copygc.
  */
 void bch2_fs_sectors_placeable(struct bch_fs *, u64 *, u64 *);
+void bch2_disk_reservation_caches_invalidate(struct bch_fs *);
 
 int __bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
 			     struct bkey_s_c, const struct bch_extent_ptr *,
