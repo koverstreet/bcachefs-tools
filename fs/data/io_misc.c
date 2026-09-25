@@ -53,8 +53,9 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(iter));
 
 	sectors = min_t(u64, sectors, k.k->p.offset - iter->pos.offset);
-	new_replicas = max(0, (int) opts.data_replicas -
-			   (int) bch2_bkey_durability_safe(c, k).nr_overwritable);
+	unsigned nr_overwritable = bch2_bkey_durability_safe(c, k).nr_overwritable;
+
+	new_replicas = max(0, (int) opts.data_replicas - (int) nr_overwritable);
 
 	/*
 	 * Get a disk reservation before (in the nocow case) calling
@@ -67,8 +68,11 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 		goto err_noprint;
 	}
 
+	/* data_replicas, less however many the reservation couldn't give us: */
+	unsigned nr_replicas = opts.data_replicas - (new_replicas - res.r.nr_replicas);
+
 	if (new_replicas)
-		sectors = div_u64(res.r.sectors, new_replicas);
+		sectors = div_u64(res.r.sectors, res.r.nr_replicas);
 
 	bch2_bkey_buf_reassemble(&old, k);
 
@@ -81,7 +85,7 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 		reservation = bkey_reservation_init(new.k);
 		reservation->k.p = iter->pos;
 		bch2_key_resize(&reservation->k, sectors);
-		reservation->v.nr_replicas = opts.data_replicas;
+		reservation->v.nr_replicas = nr_replicas;
 	} else {
 		struct bkey_i_extent *e;
 		struct bch_devs_list devs_have;
@@ -100,8 +104,8 @@ int bch2_extent_fallocate(struct btree_trans *trans,
 						opts.foreground_target,
 						false,
 						&devs_have,
-						opts.data_replicas,
-						opts.data_replicas,
+						nr_replicas,
+						nr_replicas,
 						BCH_WATERMARK_normal,
 						0, &cl)) ?:
 			bch2_alloc_sectors_req(trans, req, write_point, &wp);

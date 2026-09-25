@@ -480,8 +480,9 @@ static __always_inline long bch2_dio_write_loop(struct dio_write *dio)
 
 		ret = bch2_disk_reservation_add(c, &dio->op.res, bio_sectors(bio),
 						dio->op.opts.data_replicas, 0);
-		if (unlikely(ret) &&
-		    !bch2_dio_write_check_allocated(dio))
+		if (likely(!ret))
+			dio->op.nr_replicas = dio->op.res.nr_replicas;
+		else if (!bch2_dio_write_check_allocated(dio))
 			goto err;
 
 		task_io_account_write(bio->bi_iter.bi_size);
