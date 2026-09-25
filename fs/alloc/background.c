@@ -1591,7 +1591,7 @@ void bch2_recalc_capacity(struct bch_fs *c)
 
 	guard(rcu)();
 	for_each_member_device_rcu(c, ca, NULL) {
-		if (ca->mi.state != BCH_MEMBER_STATE_rw)
+		if (!bch2_dev_is_rw(ca))
 			continue;
 
 		if (!ca->mi.durability)

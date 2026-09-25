@@ -274,6 +274,16 @@ static inline u64 bch2_dev_buckets_reserved(struct bch_dev *ca, enum bch_waterma
 	return reserved;
 }
 
+/*
+ * In the allocator's rw set - see for_each_rw_member_rcu(). Not ca->mi.state:
+ * device state transitions update the allocator and then recalc, before the new
+ * member state has been written.
+ */
+static inline bool bch2_dev_is_rw(struct bch_dev *ca)
+{
+	return test_bit(ca->dev_idx, ca->fs->allocator.rw_devs[BCH_DATA_free].d);
+}
+
 static inline u64 __dev_buckets_free(struct bch_dev *ca,
 				     struct bch_dev_usage usage,
 				     enum bch_watermark watermark)
