@@ -519,6 +519,9 @@ int bchfs_truncate(struct mnt_idmap *idmap,
 		goto err;
 	ret = 0;
 
+	if (!iattr->ia_size && inode->v.i_size)
+		set_bit(EI_INODE_FLUSH_ON_CLOSE, &inode->ei_flags);
+
 	truncate_setsize(&inode->v, iattr->ia_size);
 
 	/*

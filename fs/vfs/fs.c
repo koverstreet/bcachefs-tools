@@ -1806,6 +1806,15 @@ static int bch2_open(struct inode *vinode, struct file *file)
 	return generic_file_open(vinode, file);
 }
 
+static int bch2_release(struct inode *vinode, struct file *file)
+{
+	struct bch_inode_info *inode = to_bch_ei(vinode);
+
+	if (test_and_clear_bit(EI_INODE_FLUSH_ON_CLOSE, &inode->ei_flags))
+		filemap_flush(vinode->i_mapping);
+	return 0;
+}
+
 /* bcachefs inode flags -> FS_IOC_GETFLAGS: */
 static const __maybe_unused unsigned bch_flags_to_uflags[] = {
 	[__BCH_INODE_sync]		= FS_SYNC_FL,
@@ -1955,6 +1964,7 @@ err:
 
 static const struct file_operations bch_file_operations = {
 	.open		= bch2_open,
+	.release	= bch2_release,
 	.llseek		= bch2_llseek,
 	.read_iter	= bch2_read_iter,
 	.write_iter	= bch2_write_iter,
