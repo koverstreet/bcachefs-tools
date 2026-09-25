@@ -439,6 +439,11 @@ static bool folio_sectors_short(struct bch_folio *s, unsigned first,
  * rewrites every copy, and a reservation's count is the placement question it
  * asks. What sectors already hold is over-reserved, and goes back when
  * @disk_res is put.
+ *
+ * Without @check_enospc this can't fail: it's the backstop for overwrite credit
+ * lost since the folio was dirtied (snapshots, reflink, EC, compression). But
+ * if a foreground reservation already fell back, that was a decision - retry
+ * the normal way, which falls back too, and only insist if that fails.
  */
 int bch2_get_folio_disk_reservation(struct bch_fs *c,
 				struct bch_inode_info *inode,
@@ -454,9 +459,15 @@ int bch2_get_folio_disk_reservation(struct bch_fs *c,
 	if (!folio_sectors_short(s, 0, sectors, nr_replicas))
 		return 0;
 
+	int flags = !check_enospc ? BCH_DISK_RESERVATION_NOFAIL : 0;
+
 	CLASS(disk_reservation, disk_res)(c);
-	try(bch2_disk_reservation_add(c, &disk_res.r, sectors, nr_replicas,
-				      !check_enospc ? BCH_DISK_RESERVATION_NOFAIL : 0));
+	int ret = bch2_disk_reservation_add(c, &disk_res.r, sectors, nr_replicas,
+					    READ_ONCE(s->reserved_degraded) ? 0 : flags);
+	if (ret && (flags & BCH_DISK_RESERVATION_NOFAIL))
+		ret = bch2_disk_reservation_add(c, &disk_res.r, sectors, nr_replicas, flags);
+	if (ret)
+		return ret;
 
 	/* what we can place, before it's raised to the folio's slot below: */
 	unsigned granted = disk_res.r.nr_replicas;
@@ -540,8 +551,10 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 			last = round_up(offset + reserved, block_bytes(c)) >> 9;
 		}
 
-		if (unlikely(disk_res.r.nr_replicas < res->disk.nr_replicas))
+		if (unlikely(disk_res.r.nr_replicas < res->disk.nr_replicas)) {
 			disk_res_move_slot(c, &res->disk, disk_res.r.nr_replicas);
+			res->degraded = true;
+		}
 	}
 
 	for (unsigned i = first; i < last; i++)
@@ -675,6 +688,9 @@ bool bch2_set_folio_dirty(struct bch_fs *c,
 		folio_reservation_set_nr_replicas(c, folio, s, nr_replicas);
 		bch2_disk_reservation_set_nr_replicas(c, &res->disk,
 						      s->replicas_reserved_at);
+
+		if (res->degraded)
+			s->reserved_degraded = true;
 
 		for (i = round_down(offset, block_bytes(c)) >> 9;
 		     i < round_up(offset + len, block_bytes(c)) >> 9;
