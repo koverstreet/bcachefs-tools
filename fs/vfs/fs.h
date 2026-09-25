@@ -122,10 +122,8 @@ static inline subvol_inum inode_inum(const struct bch_inode_info *inode)
 #define EI_INODE_HASHED			2
 
 /*
- * Set by a truncate to 0 of a nonempty file: start writeback on close, so an
- * application replacing a file in place without fsync doesn't lose both the
- * old and new contents on crash (the truncate is journalled within a second,
- * the new data could otherwise sit in the page cache for 30):
+ * Set by a truncate of a nonempty file to 0: start writeback on close. See
+ * DOC(replace-in-place) in fs.c:
  */
 #define EI_INODE_FLUSH_ON_CLOSE		3
 

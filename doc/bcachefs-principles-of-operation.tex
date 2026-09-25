@@ -277,17 +277,7 @@ property is weakened --- after a crash, a nocow extent may contain newer data
 than moment $T$, and without checksums this cannot be detected.
 \end{itemize}
 
-The common write-temporary-then-rename-over pattern gets a stronger
-guarantee: when a rename \emph{overwrites} an existing file, bcachefs first
-completes writeback of the source file's data, so the data's extents are
-journalled before the rename is. Combined with prefix consistency this makes
-the replacement atomic and complete without any fsync: after a crash, either
-the old file is intact, or the rename happened and all of the new file's data
-is present --- the empty-or-truncated-file outcome cannot occur. Note this
-orders the rename behind the data but does not make the rename itself durable
-(no journal flush is issued); an application that must know the replacement
-has happened still needs fsync. Plain renames that don't overwrite anything
-get no implicit writeback.
+\bchdoc{replace-in-place}
 
 Related interfaces, briefly: \texttt{fdatasync(2)} is implemented
 identically to \texttt{fsync(2)} (stronger than POSIX requires).
@@ -299,13 +289,7 @@ so until a journal flush a crash simply recovers to a moment before the
 write. Crash semantics are identical to a buffered write whose writeback has
 completed; fsync or fdatasync is still what makes the write survive. The \texttt{O\_TMPFILE}-then-\texttt{linkat} pattern is
 covered by fsync's own-inode completeness: the link updates the inode, so a
-subsequent fsync of the file persists it. Finally, truncate-then-rewrite of an existing file
-(\texttt{O\_TRUNC}) is inherently unsafe as a replacement strategy on any
-filesystem: the old contents are destroyed before the new contents exist, so
-no placement of fsync can provide an old-or-new guarantee --- a crash after
-the truncate persists but before the rewrite does recovers an empty file,
-and fsync only narrows that window. Atomic replacement is what
-rename-over is for.
+subsequent fsync of the file persists it.
 
 \subsection{Bucket based allocation}
 

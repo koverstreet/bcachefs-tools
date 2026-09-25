@@ -1806,6 +1806,54 @@ static int bch2_open(struct inode *vinode, struct file *file)
 	return generic_file_open(vinode, file);
 }
 
+/* DOC(replace-in-place)
+ *
+ * Applications commonly replace a file's contents in one of two ways, often
+ * without fsync. POSIX promises nothing for either, but both get special
+ * handling, as they do on ext4, XFS and btrfs - in one case more strongly.
+ *
+ * **Write a temporary file, then rename it over the original.** When a
+ * rename overwrites an existing file, bcachefs first completes writeback of
+ * the source file's data, so the data's extents are journalled before the
+ * rename is. Combined with prefix consistency this makes the replacement
+ * atomic and complete without any fsync: after a crash, either the old file
+ * is intact, or the rename happened and all of the new file's data is
+ * present; the empty-or-truncated-file outcome cannot occur. This orders the
+ * rename behind the data but does not make the rename itself durable (no
+ * journal flush is issued); an application that must know the replacement has
+ * happened still needs fsync. Plain renames that don't overwrite anything get
+ * no implicit writeback.
+ *
+ * This is stronger than the other filesystems: ext4 (`auto_da_alloc`) and
+ * btrfs only start writeback of the source on an overwriting rename without
+ * waiting for it, so a crash shortly afterwards can still recover an empty
+ * file, and XFS does nothing here. The cost is that each overwriting rename
+ * waits for its source's data to be written, which shows up in workloads that
+ * replace many files this way, such as package managers.
+ *
+ * **Truncate and rewrite** (`O_TRUNC`). Some applications replace a file by
+ * opening it with `O_TRUNC`, writing the new contents and closing it, without
+ * fsync. The truncate is journalled within `journal_flush_delay` (default one
+ * second), but the new data can stay in the page cache for the dirty writeback
+ * delay (default thirty seconds). A crash in between recovers an empty file:
+ * both the old and the new contents are lost.
+ *
+ * As a workaround, as on ext4, XFS and btrfs, truncating a nonempty file to
+ * zero length makes the next close start writeback of the file's data.
+ *
+ * This is an implicit fsync on close, minus waiting for the writeback and
+ * minus the journal commit, and it does not make the pattern safe. The file is
+ * empty on disk from the moment the truncate is journalled until the new data
+ * is written back, and a crash anywhere in that interval still loses both
+ * versions; no flush can prevent that, it can only shorten the interval.
+ *
+ * Applications that do this and need the old or the new contents to survive a
+ * crash are buggy, on every filesystem, and need to be fixed. The correct way
+ * to replace a file is to write the new contents to a new file - a temporary
+ * file, or an `O_TMPFILE` given a name with `linkat` - and rename it over the
+ * old one, fsyncing the new file first if the new contents must be durable.
+ */
+
 static int bch2_release(struct inode *vinode, struct file *file)
 {
 	struct bch_inode_info *inode = to_bch_ei(vinode);
