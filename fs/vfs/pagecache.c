@@ -397,48 +397,57 @@ int bch2_mark_pagecache_reserved(struct bch_inode_info *inode,
 	return ret;
 }
 
-static inline unsigned sectors_to_reserve(struct bch_folio_sector *s,
-					  unsigned nr_replicas)
+static inline unsigned replicas_to_reserve(struct bch_folio_sector *s,
+					   unsigned nr_replicas)
 {
 	return max(0, (int) nr_replicas -
 		   s->nr_replicas -
 		   s->replicas_reserved);
 }
 
+static bool folio_sectors_short(struct bch_folio *s, unsigned first,
+				unsigned last, unsigned nr_replicas)
+{
+	for (unsigned i = first; i < last; i++)
+		if (replicas_to_reserve(&s->s[i], nr_replicas))
+			return true;
+	return false;
+}
+
+/*
+ * Every sector at the inode's count, not just the copies each lacks: writeback
+ * rewrites every copy, and a reservation's count is the placement question it
+ * asks. What sectors already hold is over-reserved, and goes back when
+ * @disk_res is put.
+ */
 int bch2_get_folio_disk_reservation(struct bch_fs *c,
 				struct bch_inode_info *inode,
 				struct folio *folio, bool check_enospc)
 {
 	struct bch_folio *s = bch2_folio(folio);
 	unsigned nr_replicas = inode_nr_replicas(c, inode);
-	struct disk_reservation disk_res = bch2_disk_reservation_init(c, nr_replicas);
-	unsigned i, sectors = folio_sectors(folio), disk_res_sectors = 0;
-	int ret;
+	unsigned sectors = folio_sectors(folio);
 
 	BUG_ON(!s);
 	EBUG_ON(!s->state_uptodate);
 
-	for (i = 0; i < sectors; i++)
-		disk_res_sectors += sectors_to_reserve(&s->s[i], nr_replicas);
-
-	if (!disk_res_sectors)
+	if (!folio_sectors_short(s, 0, sectors, nr_replicas))
 		return 0;
 
-	/*
-	 * sectors_to_reserve() already multiplied by the replica count, per
-	 * sector - so add the total directly rather than letting
-	 * bch2_disk_reservation_get() multiply it again.
-	 */
-	ret = bch2_disk_reservation_add(c, &disk_res, disk_res_sectors,
-					!check_enospc
-					? BCH_DISK_RESERVATION_NOFAIL
-					: 0);
-	if (unlikely(ret))
-		return ret;
+	CLASS(disk_reservation, disk_res)(c);
+	try(bch2_disk_reservation_get(c, &disk_res.r, sectors, nr_replicas,
+				      !check_enospc ? BCH_DISK_RESERVATION_NOFAIL : 0));
 
-	for (i = 0; i < sectors; i++)
-		s->s[i].replicas_reserved +=
-			sectors_to_reserve(&s->s[i], nr_replicas);
+	/*
+	 * Only what each sector lacks: reserved copies stay until the sector
+	 * is written, so topping up clean sectors would pile them up.
+	 */
+	for (unsigned i = 0; i < sectors; i++) {
+		unsigned r = replicas_to_reserve(&s->s[i], nr_replicas);
+
+		s->s[i].replicas_reserved += r;
+		disk_res.r.sectors -= r;
+	}
 
 	return 0;
 }
@@ -459,52 +468,39 @@ static ssize_t __bch2_folio_reservation_get(struct bch_fs *c,
 			bool partial)
 {
 	struct bch_folio *s = bch2_folio(folio);
-	unsigned i, disk_sectors = 0, quota_sectors = 0;
+	unsigned first	= round_down(offset, block_bytes(c)) >> 9;
+	unsigned last	= round_up(offset + len, block_bytes(c)) >> 9;
+	unsigned quota_sectors = 0;
 	size_t reserved = len;
-	int ret;
 
 	BUG_ON(!s);
 	BUG_ON(!s->state_uptodate);
 
-	for (i = round_down(offset, block_bytes(c)) >> 9;
-	     i < round_up(offset + len, block_bytes(c)) >> 9;
-	     i++) {
-		disk_sectors += sectors_to_reserve(&s->s[i], res->disk.nr_replicas);
-		quota_sectors += s->s[i].state == SECTOR_unallocated;
-	}
-
 	CLASS(disk_reservation, disk_res)(c);
-	disk_res.r.nr_replicas = res->disk.nr_replicas;
 
-	if (disk_sectors) {
-		ret = bch2_disk_reservation_add(c, &disk_res.r, disk_sectors,
-				partial ? BCH_DISK_RESERVATION_PARTIAL : 0);
-		if (unlikely(ret))
-			return ret;
+	if (folio_sectors_short(s, first, last, res->disk.nr_replicas)) {
+		try(bch2_disk_reservation_get(c, &disk_res.r, last - first,
+					      res->disk.nr_replicas,
+					      partial ? BCH_DISK_RESERVATION_PARTIAL : 0));
 
-		if (unlikely(disk_res.r.sectors != disk_sectors)) {
-			disk_sectors = quota_sectors = 0;
+		unsigned got = disk_res.r.sectors / disk_res.r.nr_replicas;
+		if (unlikely(got < last - first)) {
+			/*
+			 * Make sure to get a reservation that's aligned to the
+			 * filesystem blocksize:
+			 */
+			unsigned reserved_offset = round_down((first + got) << 9, block_bytes(c));
+			reserved = clamp(reserved_offset, offset, offset + len) - offset;
 
-			for (i = round_down(offset, block_bytes(c)) >> 9;
-			     i < round_up(offset + len, block_bytes(c)) >> 9;
-			     i++) {
-				disk_sectors += sectors_to_reserve(&s->s[i], res->disk.nr_replicas);
-				if (disk_sectors > disk_res.r.sectors) {
-					/*
-					 * Make sure to get a reservation that's
-					 * aligned to the filesystem blocksize:
-					 */
-					unsigned reserved_offset = round_down(i << 9, block_bytes(c));
-					reserved = clamp(reserved_offset, offset, offset + len) - offset;
+			if (!reserved)
+				return bch_err_throw(c, ENOSPC_disk_reservation);
 
-					if (!reserved)
-						return bch_err_throw(c, ENOSPC_disk_reservation);
-					break;
-				}
-				quota_sectors += s->s[i].state == SECTOR_unallocated;
-			}
+			last = round_up(offset + reserved, block_bytes(c)) >> 9;
 		}
 	}
+
+	for (unsigned i = first; i < last; i++)
+		quota_sectors += s->s[i].state == SECTOR_unallocated;
 
 	if (quota_sectors)
 		try(bch2_quota_reservation_add(c, inode, &res->quota, quota_sectors, true));
@@ -521,38 +517,33 @@ static int bch2_folio_reservation_get_nofail(struct bch_fs *c,
 			size_t offset, size_t len)
 {
 	struct bch_folio *s = bch2_folio(folio);
-	unsigned i, disk_sectors = 0, quota_sectors = 0;
-	struct disk_reservation disk_res =
-		bch2_disk_reservation_init(c, res->disk.nr_replicas);
+	unsigned first	= round_down(offset, block_bytes(c)) >> 9;
+	unsigned last	= round_up(offset + len, block_bytes(c)) >> 9;
+	unsigned quota_sectors = 0;
 	int ret;
 
 	BUG_ON(!s);
 	BUG_ON(!s->state_uptodate);
 
-	for (i = round_down(offset, block_bytes(c)) >> 9;
-	     i < round_up(offset + len, block_bytes(c)) >> 9;
-	     i++) {
-		disk_sectors += sectors_to_reserve(&s->s[i], res->disk.nr_replicas);
+	for (unsigned i = first; i < last; i++)
 		quota_sectors += s->s[i].state == SECTOR_unallocated;
-	     }
 
-	if (disk_sectors) {
-		ret = bch2_disk_reservation_add(c, &disk_res, disk_sectors,
-				BCH_DISK_RESERVATION_NOFAIL);
-		if (unlikely(ret))
-			return ret;
-	}
+	CLASS(disk_reservation, disk_res)(c);
+
+	if (folio_sectors_short(s, first, last, res->disk.nr_replicas))
+		try(bch2_disk_reservation_get(c, &disk_res.r, last - first,
+					      res->disk.nr_replicas,
+					      BCH_DISK_RESERVATION_NOFAIL));
 
 	if (quota_sectors) {
 		/* FIXME: we'll need to make sure this won't fail with -ENOMEM */
 		ret = bch2_quota_reservation_add(c, inode, &res->quota, quota_sectors, false);
-		if (unlikely(ret)) {
-			bch2_disk_reservation_put(c, &disk_res);
+		if (unlikely(ret))
 			return ret;
-		}
 	}
 
-	res->disk.sectors += disk_res.sectors;
+	res->disk.sectors += disk_res.r.sectors;
+	disk_res.r.sectors = 0;
 	return 0;
 }
 
@@ -634,17 +625,17 @@ bool bch2_set_folio_dirty(struct bch_fs *c,
 		for (i = round_down(offset, block_bytes(c)) >> 9;
 		     i < round_up(offset + len, block_bytes(c)) >> 9;
 		     i++) {
-			unsigned sectors = sectors_to_reserve(&s->s[i],
+			unsigned replicas = replicas_to_reserve(&s->s[i],
 							res->disk.nr_replicas);
 
 			/*
 			 * This can happen if we race with the error path in
 			 * bch2_writepage_io_done():
 			 */
-			sectors = min_t(unsigned, sectors, res->disk.sectors);
+			replicas = min_t(unsigned, replicas, res->disk.sectors);
 
-			s->s[i].replicas_reserved += sectors;
-			res->disk.sectors -= sectors;
+			s->s[i].replicas_reserved += replicas;
+			res->disk.sectors -= replicas;
 
 			dirty_sectors += s->s[i].state == SECTOR_unallocated;
 
@@ -680,7 +671,9 @@ bool bch2_vfs_dirty_folio(struct address_space *mapping, struct folio *folio)
 
 	bch2_folio_reservation_init(c, inode, &res);
 	BUG_ON(bch2_folio_reservation_get_nofail(c, inode, folio, &res, 0, dirty_bytes));
-	return bch2_set_folio_dirty(c, inode, folio, &res, 0, dirty_bytes);
+	bool ret = bch2_set_folio_dirty(c, inode, folio, &res, 0, dirty_bytes);
+	bch2_folio_reservation_put(c, inode, &res);
+	return ret;
 }
 
 vm_fault_t bch2_page_fault(struct vm_fault *vmf)
