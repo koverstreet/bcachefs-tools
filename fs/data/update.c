@@ -1490,7 +1490,7 @@ int bch2_data_update_init(struct btree_trans *trans,
 		 * rereplicate, currently, so that users don't get an unexpected -ENOSPC
 		 */
 		m->op.nr_replicas = max(0, (int) (io_opts->data_replicas - durability_keeping)) +
-			m->opts.extra_replicas;
+			m->op.res.nr_replicas;
 
 		if (!durability_keeping) {
 			m->op.nr_replicas = max_t(unsigned, m->op.nr_replicas, 1);
