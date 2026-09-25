@@ -449,20 +449,13 @@ int bch2_disk_reservation_add_slowpath(struct bch_fs *, struct disk_reservation 
 				       u64, enum bch_reservation_flags);
 
 /*
- * Raise the count a reservation is held at. It only ever goes up: erring high
- * reserves more than we need, erring low reserves space we could not place.
- *
- * A reservation lives entirely in disk_res_slot(res->nr_replicas), so raising
- * the count carries what is already charged across. The counters are summed
- * across cpus, so that pair of this_cpu ops only has to not split a slot.
+ * A reservation lives entirely in one slot, so changing its count moves what it
+ * holds. The counters are summed across cpus, so the two ops mustn't be split.
  */
-static inline void bch2_disk_reservation_set_nr_replicas(struct bch_fs *c,
-							 struct disk_reservation *res,
-							 unsigned nr_replicas)
+static inline void disk_res_move_slot(struct bch_fs *c,
+				      struct disk_reservation *res,
+				      unsigned nr_replicas)
 {
-	if (nr_replicas <= res->nr_replicas)
-		return;
-
 	if (res->sectors) {
 		unsigned old = disk_res_slot(res->nr_replicas);
 		unsigned new = disk_res_slot(nr_replicas);
@@ -477,6 +470,18 @@ static inline void bch2_disk_reservation_set_nr_replicas(struct bch_fs *c,
 	}
 
 	res->nr_replicas = nr_replicas;
+}
+
+/*
+ * Charging only ever raises the count: erring high reserves more than we need,
+ * erring low reserves space we can't place. Only write_degraded lowers it.
+ */
+static inline void bch2_disk_reservation_set_nr_replicas(struct bch_fs *c,
+							 struct disk_reservation *res,
+							 unsigned nr_replicas)
+{
+	if (nr_replicas > res->nr_replicas)
+		disk_res_move_slot(c, res, nr_replicas);
 }
 
 /*
