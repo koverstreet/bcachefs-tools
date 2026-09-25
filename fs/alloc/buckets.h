@@ -360,6 +360,8 @@ static inline u64 bch2_online_reserved(struct bch_fs *c)
  */
 void bch2_fs_sectors_placeable(struct bch_fs *, u64 *, u64 *);
 void bch2_disk_reservation_caches_invalidate(struct bch_fs *);
+void bch2_disk_reservation_degraded(struct bch_fs *, unsigned, unsigned,
+				    u64, unsigned long);
 
 int __bch2_bucket_ref_update(struct btree_trans *, struct bch_dev *,
 			     struct bkey_s_c, const struct bch_extent_ptr *,
@@ -557,9 +559,15 @@ static inline int bch2_disk_reservation_add(struct bch_fs *c,
 					    u64 sectors, unsigned nr_replicas,
 					    int flags)
 {
+	unsigned wanted = nr_replicas;
+
 	while (1) {
 		int ret = __bch2_disk_reservation_add(c, res, sectors * nr_replicas,
 						      nr_replicas, flags);
+		if (unlikely(!ret && nr_replicas < wanted))
+			bch2_disk_reservation_degraded(c, wanted, nr_replicas,
+						       sectors, _THIS_IP_);
+
 		if (!bch2_err_matches(ret, ENOSPC) ||
 		    nr_replicas <= 1 ||
 		    !bch2_write_degraded_ok(c))
