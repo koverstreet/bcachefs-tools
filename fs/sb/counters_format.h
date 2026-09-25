@@ -141,6 +141,8 @@ enum bch_counters_flags {
 	  "Buckets allocated from existing stripe")			\
 	x(sectors_alloc,			126, TYPE_SECTORS,	\
 	  "Total sectors allocated")					\
+	x(disk_reservation_degraded,		136, TYPE_SECTORS,	\
+	  "Sectors reserved at fewer replicas than asked for")		\
 	x(bkey_pack_pos_fail,			112, TYPE_COUNTER,	\
 	  "Bkey position packing failures")				\
 	x(btree_cache_scan,			7,   TYPE_COUNTER,	\

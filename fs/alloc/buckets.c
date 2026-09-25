@@ -31,6 +31,8 @@
 #include "init/recovery.h"
 #include "init/passes.h"
 
+#include "sb/counters.h"
+
 #include <linux/preempt.h>
 
 void bch2_dev_usage_read_fast(struct bch_dev *ca, struct bch_dev_usage *usage)
@@ -1165,6 +1167,14 @@ static void disk_reservation_caches_reset(struct bch_fs *c, u64 *avail)
 		percpu_u64_set(&c->capacity.pcpu->sectors_available[i], 0);
 
 	__bch2_fs_sectors_placeable(c, avail, NULL);
+}
+
+void bch2_disk_reservation_degraded(struct bch_fs *c, unsigned wanted,
+				    unsigned got, u64 sectors, unsigned long ip)
+{
+	event_add_trace(c, disk_reservation_degraded, sectors, buf,
+		prt_printf(&buf, "wanted %u replicas, got %u: %llu sectors from %pS",
+			   wanted, got, sectors, (void *) ip));
 }
 
 /* Device state changed: the caches were computed against the old devices */
