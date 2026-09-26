@@ -265,6 +265,17 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 	while (true) {
 		bool had_open_stripe = false;
 
+		/*
+		 * In-flight interior updates - there are plenty right after
+		 * mount, from presplit_shard_boundaries - hold btree nodes the
+		 * scan can't see yet (not reachable, so no backpointer) and
+		 * the buckets of the nodes they replace. Scanning ahead of them
+		 * finds nothing to do while those buckets stay counted, and ten
+		 * fast scans trip the stall check (tools#921).
+		 */
+		bch2_trans_unlock(trans);
+		bch2_btree_interior_updates_flush(c);
+
 		try(bch2_btree_write_buffer_flush_sync(trans));
 
 		try(backpointer_scan_for_each(trans, iter, BTREE_ID_backpointers,
