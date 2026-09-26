@@ -9,15 +9,22 @@
 
 ## ktest
 
-Tests live in `~/ktest/tests/fs/bcachefs/` (e.g. `subvol.ktest`).
+ktest is a separate test harness repository:
+<https://evilpiepirate.org/git/ktest.git/>. It is also available on GitHub as
+`koverstreet/ktest`.
+
+Clone or check out ktest at `~/ktest`; bcachefs tests live in
+`~/ktest/tests/fs/bcachefs/` (e.g. `subvol.ktest`). Change to a Linux kernel
+source tree, then run:
 
 ```bash
 # Run a test
-btk run -IP ~/ktest/tests/fs/bcachefs/<file>.ktest <test_name>
+~/ktest/build-test-kernel run -IP ~/ktest/tests/fs/bcachefs/<file>.ktest <test_name>
 ```
 
 - Test functions in the file are named `test_*`; drop the `test_` prefix
-  when running (e.g. `test_foo` in the file becomes `btk run ... foo`).
+  when running (e.g. `test_foo` in the file becomes
+  `~/ktest/build-test-kernel run ... foo`).
 - Prefix a test function with `d_` to disable it.
 - Source `bcachefs-test-libs.sh` for helpers (`config-scratch-devs`,
   `bcachefs_antagonist`, etc.).
