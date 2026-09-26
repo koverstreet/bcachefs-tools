@@ -1620,7 +1620,7 @@ int bch2_fs_btree_write_buffer_init(struct bch_fs *c)
 
 	c->btree.write_buffer_wq =
 		alloc_workqueue("bcachefs_wb_flush",
-				WQ_UNBOUND|WQ_MEM_RECLAIM, 0);
+				WQ_UNBOUND|WQ_MEM_RECLAIM|WQ_FREEZABLE, 0);
 	if (!c->btree.write_buffer_wq)
 		return bch_err_throw(c, ENOMEM_fs_other_alloc);
 

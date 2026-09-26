@@ -968,6 +968,14 @@ struct bch_fs_btree {
 	 * blocks waiting for the inner shards to complete, so they can't
 	 * share a wq. WQ_MEM_RECLAIM on both because the flush sits in the
 	 * journal-reclaim path.
+	 *
+	 * write_buffer_wq is freezable: a flush does btree commits, and those
+	 * submit btree node writes from the flushing context - after a
+	 * hibernate snapshot that is a write the image doesn't know about.
+	 * The shard wq must NOT be: a flush in progress when the freeze starts
+	 * waits on its shards, and freeze_workqueues_busy() waits on the
+	 * flush. Shards are only queued by a running flush, so once the outer
+	 * wq is frozen no new ones appear.
 	 */
 	struct workqueue_struct			*write_buffer_wq;
 	struct workqueue_struct			*write_buffer_shard_wq;
