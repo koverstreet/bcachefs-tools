@@ -1228,8 +1228,11 @@ static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
 		atomic64_set(&c->capacity.sectors_available[i], avail[i]);
 
+	/* after a shutdown nothing is writable: that's not out of space */
 	if (!ok)
-		return bch_err_throw(c, ENOSPC_disk_reservation);
+		return test_bit(BCH_FS_emergency_ro, &c->flags)
+			? bch_err_throw(c, emergency_ro)
+			: bch_err_throw(c, ENOSPC_disk_reservation);
 
 	this_cpu_add(c->capacity.pcpu->online_reserved[slot], sectors);
 	res->sectors			+= sectors;
