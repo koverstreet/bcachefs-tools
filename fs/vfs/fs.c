@@ -2632,7 +2632,21 @@ static int bch2_statfs(struct dentry *dentry, struct kstatfs *buf)
 	buf->f_bsize	= sb->s_blocksize;
 	buf->f_blocks	= usage.capacity >> shift;
 	buf->f_bfree	= usage.free >> shift;
-	buf->f_bavail	= avail_factor(usage.free) >> shift;
+
+	/*
+	 * What this inode could actually write: a reservation at its replica
+	 * count, from placeable space (whole free buckets) - applications size
+	 * fallocate() from this. Never more than capacity - used.
+	 */
+	struct bch_inode_opts opts;
+	bch2_inode_opts_get_inode(c, &to_bch_ei(d_inode(dentry))->ei_inode, &opts);
+	unsigned nr_replicas = clamp_t(unsigned, opts.data_replicas, 1, BCH_REPLICAS_MAX);
+
+	u64 placeable[BCH_REPLICAS_MAX];
+	bch2_fs_sectors_placeable(c, placeable, NULL);
+	buf->f_bavail	= div_u64(min(avail_factor(usage.free),
+				      placeable[nr_replicas - 1]),
+				  nr_replicas) >> shift;
 
 	u64 nr_inodes = 0;
 	struct disk_accounting_pos k;
