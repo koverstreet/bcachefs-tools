@@ -761,6 +761,13 @@ static void bch2_rbio_retry(struct work_struct *work)
 		if (!rbio->split) {
 			rbio->bio.bi_status	= 0;
 			rbio->ret		= 0;
+			/*
+			 * Not restored if we got here without going through
+			 * bch2_read_endio() (the EC reconstruct punt): the
+			 * retry's completion would run a second endio pass on
+			 * data it already decrypted.
+			 */
+			rbio->bio.bi_end_io	= rbio->end_io;
 		}
 
 		rbio = bch2_rbio_free(rbio);
