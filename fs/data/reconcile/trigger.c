@@ -539,8 +539,12 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 	if (k.k->type == KEY_TYPE_stripe) {
 		*ret = r;
 
-		return (r.need_rb & BIT(BCH_RECONCILE_data_replicas)) &&
-			!bkey_s_c_to_stripe(k).v->needs_reconcile;
+		/*
+		 * Both directions: a device that stops evacuating leaves the
+		 * bit set on stripes that no longer need anything (#929).
+		 */
+		return !!(r.need_rb & BIT(BCH_RECONCILE_data_replicas)) !=
+			bkey_s_c_to_stripe(k).v->needs_reconcile;
 	}
 
 	if (unwritten || incompressible)

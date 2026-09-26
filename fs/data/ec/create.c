@@ -2366,7 +2366,17 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	if (!stripe_degraded(c, old_s)) {
 		event_inc_trace(c, stripe_repair_race, buf,
 				bch2_bkey_val_to_text(&buf, c, s.s_c));
-		return 0;
+
+		/*
+		 * Nothing to repair - e.g. the device that was evacuating went
+		 * back to rw. Clear needs_reconcile, or this stripe stays on
+		 * the hipri queue and reconcile revisits it forever:
+		 */
+		struct bch_inode_opts opts;
+		try(bch2_bkey_get_io_opts(trans, NULL, s.s_c, &opts));
+		try(bch2_update_reconcile_opts(trans, NULL, &opts, iter, 0, s.s_c,
+					       SET_NEEDS_RECONCILE_other));
+		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
 	}
 
 	unsigned nr_data = old_s->nr_blocks - old_s->nr_redundant;
