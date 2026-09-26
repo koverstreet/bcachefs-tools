@@ -173,6 +173,10 @@ struct bch_fs_allocator {
 	struct closure_waitlist	freelist_wait;
 	unsigned long		last_stuck;
 
+	/* #916: rw set can't satisfy a blocked alloc (see req_fs_alloc_unsatisfiable);
+	 * set by __bch2_wait_on_allocator past the stuck timeout, cleared on rw-set change. */
+	bool			alloc_unsatisfiable;
+
 	open_bucket_idx_t	open_buckets_freelist;
 	open_bucket_idx_t	open_buckets_nr_free;
 	struct closure_waitlist	open_buckets_wait;
