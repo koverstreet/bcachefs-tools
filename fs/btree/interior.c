@@ -3738,6 +3738,16 @@ static int __bch2_btree_node_update_key(struct btree_trans *trans,
 		struct btree_update *as = (void *) (READ_ONCE(b->will_make_reachable) & ~1UL);
 		struct btree_update_node *n = darray_find_p(as->new_nodes, i, i->b == b);
 
+		/*
+		 * Reconcile state on a new node's key is computed, with
+		 * triggers, by btree_update_nodes_written_trans() - which
+		 * strips it again if the node is freed before it becomes
+		 * reachable. The update that frees it runs trigger_old on
+		 * b->key, so b->key mustn't carry reconcile state that
+		 * trigger_new never saw:
+		 */
+		bkey_strip_reconcile(c, bkey_i_to_s(new_key));
+
 		bch2_btree_node_lock_write_nofail(trans, btree_iter_path(trans, iter), &b->c);
 		bkey_copy(&b->key, new_key);
 		bch2_btree_node_unlock_write(trans, btree_iter_path(trans, iter), b);
