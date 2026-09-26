@@ -1396,10 +1396,20 @@ static int bch2_propagate_opts_to_reflink_v(struct btree_trans *trans,
 	u64 end = REFLINK_P_IDX(p.v) + p.k->size + le32_to_cpu(p.v->back_pad);
 	u32 restart_count = trans->restart_count;
 
+	/*
+	 * Raising the replica count pads the key with invalid-device pointers,
+	 * and the reconcile trigger charges extra_disk_res for them - the
+	 * commit needs a reservation to put that in. Released per key so it
+	 * can't accumulate across the range.
+	 */
+	CLASS(disk_reservation, res)(trans->c);
+
 	int ret = for_each_btree_key_commit(trans, iter, BTREE_ID_reflink,
 				POS(0, idx),
 				BTREE_ITER_intent|BTREE_ITER_not_extents, k,
-				NULL, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+				&res.r, NULL, BCH_TRANS_COMMIT_no_enospc, ({
+		bch2_disk_reservation_put(trans->c, &res.r);
+
 		if (bpos_ge(bkey_start_pos(k.k), POS(0, end)))
 			break;
 
