@@ -1033,7 +1033,9 @@ void bch2_inode_opts_get(struct bch_fs *c, struct bch_inode_opts *ret, bool meta
 	ret->change_cookie = c->opt_change_cookie;
 
 	if (metadata) {
-		ret->background_target	= c->opts.metadata_target ?: c->opts.foreground_target;
+		ret->background_target	= c->opts.metadata_target ?:
+			c->opts.background_target ?:
+			c->opts.foreground_target;
 		ret->data_replicas	= c->opts.metadata_replicas;
 		ret->data_checksum	= c->opts.metadata_checksum;
 		ret->compression	= 0;
