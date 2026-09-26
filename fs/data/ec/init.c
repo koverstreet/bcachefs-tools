@@ -429,6 +429,18 @@ static int check_stripe_refs_one(struct btree_trans *trans,
 				"stripe block %u missing bucket ref\n%s",
 				i, (bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
 			try(bucket_stripe_ref_mod(trans, bucket, k.k->p.offset, true));
+
+		/*
+		 * The ref above is what keeps the bucket from being reused; if
+		 * the bucket's gen has moved anyway, the stripe's data is gone
+		 * from under it (GH #960). Reported, not repaired: what to do
+		 * with such a stripe is still open.
+		 */
+		printbuf_reset(&buf);
+		log_fsck_err_on(dev_ptr_stale(ca, ptr) > 0,
+				trans, stripe_read_ptr_stale,
+				"stripe block %u points to a bucket that has been reused\n%s",
+				i, (bch2_bkey_val_to_text(&buf, c, k), buf.buf));
 	}
 fsck_err:
 	return ret;

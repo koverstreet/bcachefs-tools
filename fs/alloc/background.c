@@ -1229,6 +1229,41 @@ static noinline int inval_bucket_key(struct btree_trans *trans, struct bkey_s_c 
 #define statechange_from(expr)		(eval_state(old_a, expr) && !eval_state(new_a, expr))
 #define statechange(expr)		(eval_state(old_a, expr) != eval_state(new_a, expr))
 
+/*
+ * stripe_refcount counts the bucket_to_stripe entries for this bucket. If it
+ * drops to zero while a stripe still points here, nothing stops the bucket
+ * going empty, being discarded and reused under the stripe - the stripe's
+ * pointers then go stale, which fsck doesn't otherwise catch until the stripe
+ * is read (GH #960). Name the transaction that let it happen.
+ */
+static noinline int alloc_check_no_stripe_refs(struct btree_trans *trans,
+					       struct bkey_s_c old, struct bkey_s_c new)
+{
+	struct bch_fs *c = trans->c;
+	u64 b = bucket_to_u64(new.k->p);
+	struct bpos end = POS(b, U64_MAX);
+
+	CLASS(btree_iter, iter)(trans, BTREE_ID_bucket_to_stripe, POS(b, 0), 0);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_max(&iter, &end));
+	int ret = 0;
+
+	if (k.k) {
+		CLASS(printbuf, buf)();
+		prt_printf(&buf, "bucket stripe_refcount went to 0 in %s, but stripe %llu still references it\n",
+			   trans->fn, k.k->p.offset);
+		prt_str(&buf, "old: ");
+		bch2_bkey_val_to_text(&buf, c, old);
+		prt_str(&buf, "\nnew: ");
+		bch2_bkey_val_to_text(&buf, c, new);
+		prt_newline(&buf);
+		bch2_prt_task_backtrace(&buf, current, 1, GFP_KERNEL);
+
+		log_fsck_err(trans, alloc_key_stripe_refcount_wrong, "%s", buf.buf);
+	}
+fsck_err:
+	return ret;
+}
+
 int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 {
 	struct bch_fs *c = trans->c;
@@ -1299,6 +1334,10 @@ int bch2_trigger_alloc(struct btree_trans *trans, struct btree_trigger_op op)
 		 * bucket), so don't WARN during fsck.
 		 */
 		bool in_fsck = test_bit(BCH_FS_in_fsck, &c->flags);
+
+		if (!in_fsck &&
+		    unlikely(old_a->stripe_refcount && !new_a->stripe_refcount))
+			try(alloc_check_no_stripe_refs(trans, op.old, op.new.s_c));
 
 		if (statechange_to(a->data_type == BCH_DATA_free)) {
 			/*
