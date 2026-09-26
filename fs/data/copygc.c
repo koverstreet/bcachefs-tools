@@ -757,9 +757,9 @@ static int bch2_copygc_thread(void *arg)
 					       kthread_should_stop());
 		}
 
+		/* Moves in flight stay tracked in @buckets across the freeze */
 		if (unlikely(freezing(current))) {
-			move_buckets_wait(&ctxt, &buckets, true);
-			__refrigerator(false);
+			try_to_freeze();
 			continue;
 		}
 

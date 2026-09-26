@@ -153,7 +153,12 @@ void bch2_move_ctxt_wait_for_io(struct moving_context *ctxt)
 
 void bch2_moving_ctxt_flush_all(struct moving_context *ctxt)
 {
-	move_ctxt_wait_event(ctxt, list_empty(&ctxt->reads));
+	/*
+	 * Wait freezably for the IO itself; the closure_sync() after only
+	 * covers the closure_put() that follows each completion's wakeup.
+	 */
+	move_ctxt_wait_event(ctxt, list_empty(&ctxt->reads) &&
+			     !atomic_read(&ctxt->write_ios));
 	bch2_trans_unlock_long(ctxt->trans);
 	closure_sync(&ctxt->cl);
 }
@@ -486,7 +491,7 @@ int bch2_move_ratelimit(struct moving_context *ctxt)
 					delay);
 
 		if (unlikely(freezing(current))) {
-			bch2_moving_ctxt_flush_all(ctxt);
+			bch2_trans_unlock_long(ctxt->trans);
 			try_to_freeze();
 		}
 	} while (delay);
