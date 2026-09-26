@@ -680,6 +680,8 @@ static void __bch2_btree_node_iter_fix(struct btree_path *path,
 							    b, t, k2);
 		}
 	}
+
+	bch2_btree_node_iter_verify(node_iter, b);
 }
 
 void bch2_btree_node_iter_fix(struct btree_trans *trans,

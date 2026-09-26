@@ -111,6 +111,50 @@ static inline unsigned __btree_node_iter_used(struct btree_node_iter *iter)
 	return n;
 }
 
+static noinline __cold void btree_node_iter_bad(struct btree_node_iter *iter,
+						struct btree *b, const char *msg)
+{
+	CLASS(printbuf, buf)();
+
+	prt_printf(&buf, "btree node iterator: %s\niter (k end):", msg);
+	for (unsigned i = 0; i < ARRAY_SIZE(iter->data); i++)
+		prt_printf(&buf, " [%u %u]", iter->data[i].k, iter->data[i].end);
+
+	if (b) {
+		prt_str(&buf, "\nbsets (start end):");
+		for_each_bset(b, t)
+			prt_printf(&buf, " [%u %u]", btree_bkey_first_offset(t), t->end_offset);
+	}
+
+	panic("%s\n", buf.buf);
+}
+
+/*
+ * Live entries are contiguous from data[0], and each tracks a different bset.
+ * __btree_node_iter_used() counts from the end and btree_node_iter_for_each()
+ * from the start, so a hole or a duplicate makes them disagree about where the
+ * next push goes - an overflow of data[] (GH #935).
+ *
+ * Unlike the rest of __bch2_btree_node_iter_verify() this holds between every
+ * step of an update, so the helpers below check it mid-update too.
+ */
+static void btree_node_iter_verify_shape(struct btree_node_iter *iter, struct btree *b)
+{
+	if (!IS_ENABLED(CONFIG_BCACHEFS_DEBUG))
+		return;
+
+	unsigned used = __btree_node_iter_used(iter);
+
+	for (unsigned i = 0; i < used; i++) {
+		if (__btree_node_iter_set_end(iter, i))
+			btree_node_iter_bad(iter, b, "empty entry before a live one");
+
+		for (unsigned j = 0; j < i; j++)
+			if (iter->data[i].end == iter->data[j].end)
+				btree_node_iter_bad(iter, b, "two entries track the same bset");
+	}
+}
+
 struct bset_tree *bch2_bkey_to_bset(struct btree *b, struct bkey_packed *k)
 {
 	return bch2_bkey_to_bset_inlined(b, k);
@@ -289,7 +333,15 @@ void __bch2_btree_node_iter_verify(struct btree_node_iter *iter,
 {
 	struct bkey_packed *k, *p;
 
-	if (bch2_btree_node_iter_end(iter))
+	/*
+	 * Before the early return, and before anything that iterates with
+	 * btree_node_iter_for_each(): a hole ends that walk early, hiding
+	 * itself and everything behind it.
+	 */
+	btree_node_iter_verify_shape(iter, b);
+
+	if (!static_branch_unlikely(&bch2_debug_check_bset_lookups) ||
+	    bch2_btree_node_iter_end(iter))
 		return;
 
 	/* Verify no duplicates: */
@@ -1387,11 +1439,22 @@ static inline void __bch2_btree_node_iter_push(struct btree_node_iter *iter,
 	if (k != end) {
 		struct btree_node_iter_set *pos =
 			&iter->data[__btree_node_iter_used(iter)];
+		unsigned end_offset = __btree_node_key_to_offset(b, end);
 
-		EBUG_ON(pos >= iter->data + ARRAY_SIZE(iter->data));
+		if (IS_ENABLED(CONFIG_BCACHEFS_DEBUG)) {
+			btree_node_iter_verify_shape(iter, b);
+
+			for (struct btree_node_iter_set *i = iter->data; i < pos; i++)
+				if (i->end == end_offset)
+					btree_node_iter_bad(iter, b, "push of a bset already tracked");
+
+			if (pos >= iter->data + ARRAY_SIZE(iter->data))
+				btree_node_iter_bad(iter, b, "push into a full iterator");
+		}
+
 		*pos = (struct btree_node_iter_set) {
 			__btree_node_key_to_offset(b, k),
-			__btree_node_key_to_offset(b, end)
+			end_offset
 		};
 	}
 }
@@ -1568,6 +1631,8 @@ void bch2_btree_node_iter_sort(struct btree_node_iter *iter,
 
 	if (!__btree_node_iter_set_end(iter, 1))
 		btree_node_iter_sort_two(iter, b, 0);
+
+	btree_node_iter_verify_shape(iter, b);
 }
 
 void bch2_btree_node_iter_set_drop(struct btree_node_iter *iter,
@@ -1578,6 +1643,8 @@ void bch2_btree_node_iter_set_drop(struct btree_node_iter *iter,
 
 	memmove(&set[0], &set[1], (void *) last - (void *) set);
 	*last = (struct btree_node_iter_set) { 0, 0 };
+
+	btree_node_iter_verify_shape(iter, NULL);
 }
 
 static inline void __bch2_btree_node_iter_advance(struct btree_node_iter *iter,
