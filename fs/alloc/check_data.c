@@ -498,13 +498,14 @@ int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 		try(bch2_bkey_set_needs_reconcile(trans, NULL, &opts, bkey_i_to_s(new),
 						  BKEY_EXTENT_U64s_MAX,
 						  SET_NEEDS_RECONCILE_opt_change, 0));
-		if (bkey_is_btree_ptr(&new->k)) {
-			u8 total = bch2_bkey_durability_safe(c, bkey_i_to_s_c(new)).total;
-
-			bch2_trans_extra_disk_res_add(trans,
-					(u64) total * btree_sectors(c), total);
-		}
-
+		/*
+		 * No triggers, at either level: gc owns alloc info and
+		 * accounting here and marks the new key itself when we
+		 * restart. Transactional triggers would check it against the
+		 * alloc btree gc is rebuilding (fatal on insert, GH #910), and
+		 * - since gc_pos is already at this key - also mark it into gc
+		 * state before gc has marked the old key.
+		 */
 		if (!level) {
 			try(bch2_trans_update(trans, iter, new,
 					      BTREE_UPDATE_internal_snapshot_node|
@@ -515,7 +516,7 @@ int bch2_check_fix_ptrs(struct btree_trans *trans, struct btree_iter *iter,
 			struct btree *b = errptr_try(bch2_btree_iter_peek_node(&node_iter));
 
 			return bch2_btree_node_update_key(trans, &node_iter, b, new,
-							  BCH_TRANS_COMMIT_no_enospc, false) ?:
+							  BCH_TRANS_COMMIT_no_enospc, true) ?:
 				btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 		}
 	}
