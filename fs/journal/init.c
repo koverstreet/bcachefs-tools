@@ -162,9 +162,14 @@ static int bch2_set_nr_journal_buckets_loop(struct bch_fs *c, struct bch_dev *ca
 		 * XXX: that's not right, disk reservations only ensure a
 		 * filesystem-wide allocation will succeed, this is a device
 		 * specific allocation - we can hang here:
+		 *
+		 * A device outside the capacity (durability 0) takes nothing
+		 * anyone reserved, so there's nothing to reserve against - and
+		 * when initializing a new filesystem, the devices after it
+		 * don't have their free space counted yet.
 		 */
 		CLASS(disk_reservation, res)(c);
-		if (!new_fs)
+		if (!new_fs && dev_has_capacity(ca))
 			try(bch2_disk_reservation_add(c, &res.r,
 						bucket_to_sector(ca, nr - ja->nr), 1, 0));
 
