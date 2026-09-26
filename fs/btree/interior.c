@@ -1477,9 +1477,16 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 		if (commit_flags & BCH_TRANS_COMMIT_journal_reclaim)
 			return ERR_PTR(-BCH_ERR_journal_reclaim_would_deadlock);
 
+		/*
+		 * Or until the journal errors out: a halted journal stays low on
+		 * space for good, and the bch2_journal_error() check below
+		 * returns the error (tools#971 - rewrite workers queued after a
+		 * failed mount waited here forever, holding up bch2_fs_stop()):
+		 */
 		ret = drop_locks_do(trans,
 			({ trans_wait_event(trans, &c->journal.async_wait,
-					    !journal_low_on_space(&c->journal)); 0; }));
+					    !journal_low_on_space(&c->journal) ||
+					    bch2_journal_error(&c->journal)); 0; }));
 		if (ret)
 			return ERR_PTR(ret);
 	}
