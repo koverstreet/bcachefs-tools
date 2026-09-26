@@ -53,6 +53,8 @@ struct bch_fs_recovery {
 	 * recovery doesn't hammer a pass that keeps failing.
 	 */
 	struct recovery_pass_entry passes_failing_ratelimit[BCH_RECOVERY_PASS_NR];
+	/* Consecutive failures, for exponential backoff; zeroed on success */
+	u8			passes_failing_nr[BCH_RECOVERY_PASS_NR];
 
 	spinlock_t		lock;
 	struct mutex		run_lock;

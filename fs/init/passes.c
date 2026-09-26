@@ -214,6 +214,14 @@ static bool recovery_pass_entry_ratelimited(const struct recovery_pass_entry *e,
 		ktime_get_real_seconds() - le64_to_cpu(e->last_run);
 }
 
+/*
+ * For self healing - e.g. missing backpointers - that would otherwise keep
+ * scheduling an expensive repair pass that can wait: run it at most once per
+ * this many times its last runtime. Not the failing-pass backoff, which is
+ * RECOVERY_PASS_FAILING_RATELIMIT.
+ */
+#define RECOVERY_PASS_SELF_HEAL_RATELIMIT	100
+
 static bool bch2_recovery_pass_want_ratelimit_locked(struct bch_fs *c, enum bch_recovery_pass pass,
 						     unsigned runtime_fraction)
 {
@@ -362,7 +370,7 @@ static bool recovery_pass_needs_set(struct bch_fs *c,
 		return false;
 
 	if ((*flags & RUN_RECOVERY_PASS_ratelimit) &&
-	    !bch2_recovery_pass_want_ratelimit_locked(c, pass, 100))
+	    !bch2_recovery_pass_want_ratelimit_locked(c, pass, RECOVERY_PASS_SELF_HEAL_RATELIMIT))
 		*flags &= ~RUN_RECOVERY_PASS_ratelimit;
 
 	/*
@@ -576,7 +584,7 @@ int bch2_require_recovery_pass(struct bch_fs *c,
 
 	guard(mutex_noio)(&c->sb_lock);
 
-	if (bch2_recovery_pass_want_ratelimit_locked(c, pass, 100))
+	if (bch2_recovery_pass_want_ratelimit_locked(c, pass, RECOVERY_PASS_SELF_HEAL_RATELIMIT))
 		return 0;
 
 	enum bch_run_recovery_pass_flags flags = 0;
@@ -593,6 +601,28 @@ int bch2_require_recovery_pass(struct bch_fs *c,
 		bch_err_throw(c, recovery_pass_will_run);
 }
 
+/*
+ * Retry backoff for a failing pass, as a multiple of its last runtime (same
+ * units as bch2_recovery_pass_want_ratelimit()'s fraction): a pass that ran for
+ * T before failing isn't retried by automatic recovery for 2^n * T after its
+ * nth consecutive failure, up to RATELIMIT * T. Exponential, not a fixed
+ * multiple: a transient failure - journal_res_blocked under a full journal -
+ * gets retried soon, while a pass that keeps failing still backs off to a
+ * small fraction of the time. A fixed 100x kept a pass that failed once after
+ * 766s unscheduled for 21 hours (tools#941). Separate from
+ * RECOVERY_PASS_SELF_HEAL_RATELIMIT: that one throttles repairs that succeed.
+ */
+#define RECOVERY_PASS_FAILING_RATELIMIT	20
+
+static unsigned failing_pass_backoff(struct bch_fs_recovery *r, enum bch_recovery_pass pass)
+{
+	unsigned nr = r->passes_failing_nr[pass];
+
+	return nr < 5
+		? min(1U << nr, RECOVERY_PASS_FAILING_RATELIMIT)
+		: RECOVERY_PASS_FAILING_RATELIMIT;
+}
+
 static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
 {
 	struct bch_fs_recovery *r = &c->recovery;
@@ -607,8 +637,15 @@ static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
 	if (ret) {
 		if (!bch2_err_matches(ret, BCH_ERR_restart_recovery)) {
 			s64 end_time = ktime_get_real_seconds();
-			bch_err(c, "%s(): error %s", p->name, bch2_err_str(ret));
+			s64 runtime = max(0, end_time - start_time);
+
 			r->passes_failing |= BIT_ULL(pass);
+			if (r->passes_failing_nr[pass] < U8_MAX)
+				r->passes_failing_nr[pass]++;
+
+			bch_err(c, "%s(): error %s - failure %u, not retried automatically for %llus",
+				p->name, bch2_err_str(ret), r->passes_failing_nr[pass],
+				(u64) runtime * failing_pass_backoff(r, pass));
 			/*
 			 * Ratelimit retries the same way the sb ratelimits expensive
 			 * passes, but in memory - a failing pass doesn't get to write
@@ -618,7 +655,7 @@ static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
 			 */
 			r->passes_failing_ratelimit[pass] = (struct recovery_pass_entry) {
 				.last_run	= cpu_to_le64(end_time),
-				.last_runtime	= cpu_to_le32(max(0, end_time - start_time)),
+				.last_runtime	= cpu_to_le32(runtime),
 			};
 		}
 		return ret;
@@ -628,20 +665,13 @@ static int bch2_run_recovery_pass(struct bch_fs *c, enum bch_recovery_pass pass)
 		bch2_print(c, KERN_CONT " done (%lli seconds)\n",
 			   ktime_get_real_seconds() - start_time);
 	r->passes_failing = 0;
+	r->passes_failing_nr[pass] = 0;
 
 	if (!test_bit(BCH_FS_error, &c->flags))
 		bch2_sb_recovery_pass_complete(c, pass, start_time);
 
 	return 0;
 }
-
-/*
- * Retry ratelimit for a failing pass, as a multiple of its last runtime (same
- * units as bch2_recovery_pass_want_ratelimit()'s fraction): a pass that ran for
- * T before failing won't be retried by automatic recovery for RATELIMIT * T.
- * Raise it if a class of failing passes retries too aggressively.
- */
-#define RECOVERY_PASS_FAILING_RATELIMIT	100
 
 int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool failfast)
 {
@@ -680,7 +710,7 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 			failing &= ~BIT_ULL(pass);
 
 			if (recovery_pass_entry_ratelimited(&r->passes_failing_ratelimit[pass],
-							    RECOVERY_PASS_FAILING_RATELIMIT))
+							    failing_pass_backoff(r, pass)))
 				orig_passes_to_run &= ~BIT_ULL(pass);
 		}
 	}
