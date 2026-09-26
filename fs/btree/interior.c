@@ -1458,6 +1458,20 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 		commit_flags |= watermark;
 	}
 
+	/*
+	 * Going read-only, every interior update is part of the final journal
+	 * flush, which can't finish until it does - and discards, the only
+	 * thing that would free buckets, stopped with writes. Below the
+	 * reclaim watermark a node allocation can wait on the btree reserve
+	 * forever (unmount hanging in __bch2_wait_on_allocator()):
+	 */
+	if (unlikely(test_bit(BCH_FS_going_ro, &c->flags)) &&
+	    watermark < BCH_WATERMARK_reclaim) {
+		watermark = BCH_WATERMARK_reclaim;
+		commit_flags &= ~BCH_WATERMARK_MASK;
+		commit_flags |= watermark;
+	}
+
 	if (watermark < BCH_WATERMARK_reclaim &&
 	    journal_low_on_space(&c->journal)) {
 		if (commit_flags & BCH_TRANS_COMMIT_journal_reclaim)
