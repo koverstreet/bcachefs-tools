@@ -76,6 +76,8 @@ struct alloc_request {
 	/* bch2_bucket_alloc_set_trans(): */
 	struct dev_alloc_list	devs_sorted;
 	u64			domain_keys[BCH_SB_MEMBERS_MAX];
+	/* scratch for move_alloc_avoid_busy_devs(), same lifetime as devs_sorted above */
+	u32			move_pressure[BCH_SB_MEMBERS_MAX];
 	struct bch_dev_usage	usage;
 
 	/* bch2_bucket_alloc_trans(): */
