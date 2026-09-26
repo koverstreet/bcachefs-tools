@@ -6,6 +6,8 @@
 
 #include "init/progress.h"
 
+#include "snapshots/subvolume.h"
+
 static int dirent_points_to_inode(struct bch_fs *c,
 				  struct bkey_s_c_dirent dirent,
 				  struct bch_inode_unpacked *inode)
@@ -79,6 +81,13 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 	int ret = 0;
 
 	if (k.k->type != KEY_TYPE_subvolume)
+		return 0;
+
+	/*
+	 * Unlinking zeroes fs_path_parent: a subvolume on its way to deletion
+	 * has no path by design, and isn't ours to reattach.
+	 */
+	if (bch2_subvolume_state_compat(bkey_s_c_to_subvolume(k).v) != SUBVOLUME_STATE_live)
 		return 0;
 
 	CLASS(btree_iter, parent_iter)(trans, BTREE_ID_subvolumes, POS_MIN, 0);
