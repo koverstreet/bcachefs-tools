@@ -40,4 +40,10 @@ unsigned long wait_for_completion_timeout(struct completion *, unsigned long);
 
 #define wait_for_completion_interruptible(x) (wait_for_completion(x), 0)
 
+static inline int wait_for_completion_state(struct completion *x, unsigned int state)
+{
+	wait_for_completion(x);
+	return 0;
+}
+
 #endif

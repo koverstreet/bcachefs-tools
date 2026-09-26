@@ -1491,31 +1491,18 @@ typedef struct {
 	struct bch_fs		*c;
 	unsigned		dev;
 	unsigned		reconcile_phase;
-	struct closure		cl;
+	struct completion	done;
 
 	struct bch_move_stats	stats;
 } reconcile_phys_thr;
 
 DEFINE_DARRAY(reconcile_phys_thr);
 
-/*
- * Destructor ordering: closure_return() must be the last thing before the
- * function returns, but __cleanup destructors run after closure_return()
- * signals the parent — which can then free the thrs darray containing the
- * reconcile_phys_thr (and its embedded bch_move_stats) that
- * moving_context.stats still points to. So we manage moving_context
- * lifetime manually here.
- *
- * This is a general hazard with __cleanup + closure_return: the parent
- * can wake and free resources before the child's destructors run. In Rust
- * this will be enforced by Drop ordering.
- */
-static CLOSURE_CALLBACK(do_reconcile_phys_thread)
+static void reconcile_phys_dev(reconcile_phys_thr *thr)
 {
-	closure_type(thr, reconcile_phys_thr, cl);
 	struct bch_fs *c = thr->c;
 
-	struct moving_context ctxt;
+	struct moving_context ctxt __cleanup(bch2_moving_ctxt_exit);
 	bch2_moving_ctxt_init(&ctxt, c, NULL, &thr->stats,
 			      writepoint_ptr(&c->allocator.reconcile_write_point),
 			      true);
@@ -1526,8 +1513,6 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 	darray_make_room(&work, RECONCILE_WORK_BUF_NR);
 	if (!work.size) {
 		bch_err(c, "%s: unable to allocate memory", __func__);
-		bch2_moving_ctxt_exit(&ctxt);
-		closure_return(cl);
 		return;
 	}
 
@@ -1562,15 +1547,30 @@ static CLOSURE_CALLBACK(do_reconcile_phys_thread)
 		if (ret)
 			break;
 	}
+}
 
-	bch2_moving_ctxt_exit(&ctxt);
-	closure_return(cl);
+/*
+ * A freezable kthread, not a work item: the freezer can only stop a work item
+ * between items, and this one runs for a whole pass - waiting on move
+ * completions that the freezer has already stopped. A kthread is frozen in
+ * place in its move waits (MOVE_CTXT_WAIT_STATE), like the other movers.
+ *
+ * The pass runs in its own function so that its destructors have run before
+ * we signal the parent, which then frees @thr.
+ */
+static int reconcile_phys_thread(void *arg)
+{
+	reconcile_phys_thr *thr = arg;
+
+	set_freezable();
+	reconcile_phys_dev(thr);
+	complete(&thr->done);
+	return 0;
 }
 
 static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 {
 	CLASS(darray_reconcile_phys_thr, thrs)();
-	CLASS(closure_stack, cl)();
 
 	for_each_member_device(c, ca)
 		if (ca->mi.rotational &&
@@ -1581,11 +1581,25 @@ static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 						.reconcile_phase	= reconcile_phase,
 						})));
 
-	darray_for_each(thrs, i)
-		closure_call(&i->cl, do_reconcile_phys_thread, system_dfl_wq, &cl);
+	int ret = 0;
+	unsigned nr_started = 0;
 
-	closure_sync_unbounded(&cl);
-	return 0;
+	darray_for_each(thrs, i) {
+		init_completion(&i->done);
+
+		struct task_struct *t = kthread_run(reconcile_phys_thread, i,
+					"bch-reconcile/%s:%u", c->name, i->dev);
+		ret = PTR_ERR_OR_ZERO(t);
+		if (ret)
+			break;
+		nr_started++;
+	}
+
+	/* The threads freeze in place, so our wait for them must be freezable too: */
+	for (unsigned i = 0; i < nr_started; i++)
+		wait_for_completion_state(&thrs.data[i].done,
+					  TASK_UNINTERRUPTIBLE|TASK_FREEZABLE);
+	return ret;
 }
 
 static void reconcile_phase_start(struct bch_fs *c)
