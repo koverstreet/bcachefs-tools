@@ -904,6 +904,8 @@ int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 
 	if (new_state == BCH_MEMBER_STATE_rw && bch2_dev_is_online(ca))
 		__bch2_dev_read_write(c, ca);
+	else if (new_state != BCH_MEMBER_STATE_rw)
+		bch2_recalc_capacity(c); /* #1157: capacity must reflect the post-flip member state */
 
 	/*
 	 * Any RW transition (in or out) changes the EC widening target (RW
