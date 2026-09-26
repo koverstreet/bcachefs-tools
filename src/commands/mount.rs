@@ -4,16 +4,17 @@ use std::{
     io::{stdout, IsTerminal},
     os::fd::{AsFd, AsRawFd, OwnedFd},
     os::unix::ffi::OsStringExt,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     ptr, str,
 };
 
-use anyhow::{ensure, Result};
+use anyhow::{bail, ensure, Context, Result};
 use bcachefs_kernel::c::{bch_opts, bch_sb_handle};
 use bcachefs_kernel::errcode::BchError;
 use bcachefs_kernel::{c, opt_get, opt_set, path_to_cstr};
 use clap::Parser;
 use log::{debug, error, info, warn};
+use rustix::fs::{openat, openat2, CWD, Mode, OFlags, ResolveFlags};
 use uuid::Uuid;
 use crate::degraded;
 use crate::device_scan;
@@ -317,7 +318,7 @@ fn online_late_devices(uuid: Uuid, mounted: &HashSet<u8>, opts: &bch_opts) {
 fn mount_inner(
     src: OsString,
     target: &std::path::Path,
-    fstype: &str,
+    fstype: Option<&str>,
     mountflags: libc::c_ulong,
     data: Option<String>,
     devs: Vec<DevInfo>,
@@ -332,20 +333,24 @@ fn mount_inner(
     // a parameter, so that one still goes through a keyring.
     let user_key = unlocked.and_then(|u| u.hex());
 
-    if mountflags & libc::MS_REMOUNT == 0 {
-        if let Some(src_str) = src.to_str() {
-            let c_target = path_to_cstr(target);
-            let mut flags = mountflags;
+    // Bind mounts have no filesystem type and must use mount(2); normal
+    // filesystem mounts retain the fs_context path and its diagnostics.
+    if let Some(fstype) = fstype {
+        if mountflags & libc::MS_REMOUNT == 0 {
+            if let Some(src_str) = src.to_str() {
+                let c_target = path_to_cstr(target);
+                let mut flags = mountflags;
 
-            loop {
-                info!("mounting filesystem");
-                match mount_fs_context(src_str, &c_target, fstype, flags, data.as_deref(),
-                                       &devs, user_key.as_ref().map(|s| s.as_str()))? {
-                    Mounted::Yes      => return Ok(()),
-                    Mounted::UseLegacy => break,
-                    Mounted::WriteProtected => {
-                        println!("mount: device write-protected, mounting read-only");
-                        flags |= libc::MS_RDONLY;
+                loop {
+                    info!("mounting filesystem");
+                    match mount_fs_context(src_str, &c_target, fstype, flags, data.as_deref(),
+                                           &devs, user_key.as_ref().map(|s| s.as_str()))? {
+                        Mounted::Yes      => return Ok(()),
+                        Mounted::UseLegacy => break,
+                        Mounted::WriteProtected => {
+                            println!("mount: device write-protected, mounting read-only");
+                            flags |= libc::MS_RDONLY;
+                        }
                     }
                 }
             }
@@ -369,7 +374,7 @@ fn mount_inner(
 fn mount_legacy(
     src: OsString,
     target: &std::path::Path,
-    fstype: &str,
+    fstype: Option<&str>,
     mut mountflags: libc::c_ulong,
     data: Option<String>,
 ) -> Result<(), MountError> {
@@ -384,13 +389,16 @@ fn mount_legacy(
     let c_src = CString::new(src.clone().into_vec()).map_err(|_| bad_arg("device path"))?;
     let c_target = path_to_cstr(target);
     let data = data.map(CString::new).transpose().map_err(|_| bad_arg("mount options"))?;
-    let fstype = CString::new(fstype).map_err(|_| bad_arg("filesystem type"))?;
+    let fstype = fstype
+        .map(CString::new)
+        .transpose()
+        .map_err(|_| bad_arg("filesystem type"))?;
 
     // convert to pointers for ffi
     let c_src = c_src.as_ptr();
     let c_target = c_target.as_ptr();
     let data_ptr = data.as_ref().map_or(ptr::null(), |data| data.as_ptr().cast());
-    let fstype = fstype.as_ptr();
+    let fstype = fstype.as_ref().map_or(ptr::null(), |fstype| fstype.as_ptr());
 
     let mut ret;
     loop {
@@ -451,11 +459,14 @@ pub(crate) struct ParsedMountOptions {
     /// fuser equivalent are omitted here but still apply via `flags`.
     #[cfg(feature = "fuse")]
     pub fuse_options: Vec<fuser::MountOption>,
+    /// Optional subvolume or snapshot path to bind-mount as the mount root.
+    pub subvol:      Option<PathBuf>,
 }
 
 /// Parse a comma-separated mount option string, splitting kernel mount flags
-/// (and their fuser equivalents) from filesystem-specific options.
-pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOptions {
+/// (and their fuser equivalents) from filesystem-specific options, plus an
+/// optional helper-handled subvolume path selection.
+pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> Result<ParsedMountOptions> {
     debug!("parsing mount options: {}", options.as_ref());
 
     let mut parsed = ParsedMountOptions::default();
@@ -492,18 +503,213 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> ParsedMountOp
             // Userspace-only fstab options - not passed to the kernel:
             "auto" | "noauto" | "nofail" | "_netdev"
             | "user" | "nouser" | "users" | "group" | "owner" => {}
-            o if o.starts_with("x-") || o.starts_with("comment=") => {}
+            o if o.starts_with("x-") || o.starts_with("X-") || o.starts_with("comment=") => {}
+            o if o.starts_with("subvol=") => {
+                ensure!(parsed.subvol.is_none(), "subvol= specified more than once");
+                parsed.subvol = parse_subvol_path(&o["subvol=".len()..])?;
+            }
             o => fs_opts.push(o),
         }
     }
 
     parsed.fs_opts = (!fs_opts.is_empty()).then(|| fs_opts.join(","));
-    parsed
+    Ok(parsed)
+}
+
+struct TempMount {
+    path: PathBuf,
+    mounted: bool,
+}
+
+fn detach_mount(path: &Path) -> Result<()> {
+    let c_path = path_to_cstr(path);
+    let ret = unsafe { libc::umount2(c_path.as_ptr(), libc::MNT_DETACH) };
+    if ret != 0 {
+        return Err(crate::ErrnoError(errno::errno()).into());
+    }
+    Ok(())
+}
+
+impl TempMount {
+    fn new() -> Result<Self> {
+        let base = Path::new("/run/mount");
+        let base = if base.is_dir() { base } else { Path::new("/tmp") };
+        let pid = std::process::id();
+
+        for i in 0..1000 {
+            let path = base.join(format!("bcachefs-subvol.{pid}.{i}"));
+            match std::fs::create_dir(&path) {
+                Ok(()) => return Ok(Self { path, mounted: false }),
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
+            }
+        }
+
+        bail!("could not create temporary mountpoint under {}", base.display())
+    }
+
+    fn umount(&mut self) -> Result<()> {
+        if self.mounted {
+            detach_mount(&self.path)?;
+            self.mounted = false;
+        }
+
+        std::fs::remove_dir(&self.path)
+            .with_context(|| format!("removing {}", self.path.display()))?;
+        Ok(())
+    }
+}
+
+impl Drop for TempMount {
+    fn drop(&mut self) {
+        let _ = self.umount();
+    }
+}
+
+fn parse_subvol_path(path: &str) -> Result<Option<PathBuf>> {
+    let path = path.trim_start_matches('/');
+    if path.is_empty() {
+        return Ok(None);
+    }
+
+    let mut normalized = PathBuf::new();
+    for component in Path::new(path).components() {
+        match component {
+            Component::Normal(part) => normalized.push(part),
+            Component::CurDir => {}
+            Component::ParentDir => bail!("subvol= path must not contain '..'"),
+            Component::RootDir | Component::Prefix(_) => {
+                bail!("subvol= path must be relative to the filesystem root")
+            }
+        }
+    }
+
+    Ok((!normalized.as_os_str().is_empty()).then_some(normalized))
+}
+
+/// Open the requested path below a mounted filesystem root without following
+/// an escape through a symlink or magic link. The returned O_PATH descriptor
+/// pins the resolved directory until the bind mount is complete.
+fn open_subvolume(root: &Path, subvol: &Path) -> Result<OwnedFd> {
+    let root_fd = openat(
+        CWD,
+        root,
+        OFlags::PATH | OFlags::DIRECTORY,
+        Mode::empty(),
+    )
+    .with_context(|| format!("opening mounted filesystem root {}", root.display()))?;
+
+    match openat2(
+        &root_fd,
+        subvol,
+        OFlags::PATH | OFlags::DIRECTORY,
+        Mode::empty(),
+        ResolveFlags::IN_ROOT | ResolveFlags::NO_MAGICLINKS,
+    ) {
+        Ok(fd) => Ok(fd),
+        Err(e) if matches!(e.raw_os_error(), libc::ENOSYS | libc::EINVAL) => {
+            // Kernels without openat2 still get a race-free no-escape path:
+            // open each normalized component beneath the pinned root and
+            // reject symlinks rather than resolving them outside the mount.
+            let mut current = root_fd;
+            for component in subvol.components() {
+                let Component::Normal(name) = component else {
+                    bail!("invalid normalized subvolume path")
+                };
+                current = openat(
+                    &current,
+                    name,
+                    OFlags::PATH | OFlags::DIRECTORY | OFlags::NOFOLLOW,
+                    Mode::empty(),
+                )
+                .with_context(|| format!("opening subvolume component {}", name.to_string_lossy()))?;
+            }
+            Ok(current)
+        }
+        Err(e) => Err(e).context("resolving subvolume path")?,
+    }
+}
+
+fn bind_mount_flags(mountflags: libc::c_ulong) -> libc::c_ulong {
+    mountflags
+        & (libc::MS_RDONLY
+            | libc::MS_NOSUID
+            | libc::MS_NODEV
+            | libc::MS_NOEXEC
+            | libc::MS_NOATIME
+            | libc::MS_STRICTATIME
+            | libc::MS_NODIRATIME
+            | libc::MS_RELATIME)
+}
+
+fn mount_subvolume(
+    src: OsString,
+    target: &Path,
+    mountflags: libc::c_ulong,
+    data: Option<String>,
+    devs: Vec<DevInfo>,
+    unlocked: Option<&Unlocked>,
+    subvol: &Path,
+) -> anyhow::Result<()> {
+    let mut tmp = TempMount::new()?;
+
+    mount_inner(src, &tmp.path, Some("bcachefs"), mountflags, data, devs, unlocked)
+        .map_err(anyhow::Error::from)?;
+    tmp.mounted = true;
+
+    let subvol_fd = open_subvolume(&tmp.path, subvol)?;
+    let subvol_path = OsString::from(format!("/proc/self/fd/{}", subvol_fd.as_raw_fd()));
+
+    mount_inner(
+        subvol_path,
+        target,
+        None,
+        libc::MS_BIND,
+        None,
+        Vec::new(),
+        None,
+    )
+    .map_err(anyhow::Error::from)?;
+
+    let flags = bind_mount_flags(mountflags);
+    if flags != 0 {
+        let remount_result = mount_inner(
+            target.as_os_str().to_os_string(),
+            target,
+            None,
+            libc::MS_BIND | libc::MS_REMOUNT | flags,
+            None,
+            Vec::new(),
+            None,
+        )
+        .map_err(anyhow::Error::from);
+        if let Err(err) = remount_result {
+            // Do not leave a bind mount with weaker-than-requested flags when
+            // the corrective remount fails. Preserve the remount error as the
+            // primary failure and only log a cleanup failure.
+            if let Err(cleanup) = detach_mount(target) {
+                warn!(
+                    "failed to clean up subvolume bind mount at {} after remount error: {cleanup:#}",
+                    target.display()
+                );
+            }
+            return Err(err);
+        }
+    }
+
+    tmp.umount()?;
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{is_splitbrain, parse_mountflag_options};
+    use std::{
+        fs,
+        os::unix::fs::symlink,
+        path::{Path, PathBuf},
+    };
+
+    use super::{bind_mount_flags, is_splitbrain, open_subvolume, parse_mountflag_options};
     use bcachefs_kernel::c;
     use bcachefs_kernel::errcode::BchError;
 
@@ -525,7 +731,7 @@ mod tests {
 
     #[test]
     fn parse_mountflag_options_splits_kernel_and_fs_options() {
-        let p = parse_mountflag_options("ro,noexec,metadata_replicas=2,norecovery");
+        let p = parse_mountflag_options("ro,noexec,metadata_replicas=2,norecovery").unwrap();
 
         assert_eq!(p.fs_opts.as_deref(), Some("metadata_replicas=2,norecovery"));
         assert_ne!(p.flags & libc::MS_RDONLY, 0);
@@ -534,10 +740,73 @@ mod tests {
 
     #[test]
     fn parse_mountflag_options_drops_userspace_fstab_options() {
-        let p = parse_mountflag_options("nofail,_netdev,x-systemd.device-timeout=5");
+        let p = parse_mountflag_options("nofail,_netdev,x-systemd.device-timeout=5").unwrap();
 
         assert_eq!(p.fs_opts, None);
         assert_eq!(p.flags, 0);
+    }
+
+    #[test]
+    fn parse_subvol_mount_option() {
+        let p = parse_mountflag_options("rw,noatime,subvol=/@root,X-mount.mkdir").unwrap();
+
+        assert_eq!(p.fs_opts, None);
+        assert_eq!(p.flags & libc::MS_NOATIME, libc::MS_NOATIME);
+        assert_eq!(p.subvol, Some(PathBuf::from("@root")));
+    }
+
+    #[test]
+    fn rejects_escaping_subvol_path() {
+        assert!(parse_mountflag_options("subvol=../root").is_err());
+    }
+
+    #[test]
+    fn keeps_filesystem_options() {
+        let p = parse_mountflag_options("compression=lz4,subvol=home").unwrap();
+
+        assert_eq!(p.fs_opts.as_deref(), Some("compression=lz4"));
+        assert_eq!(p.subvol, Some(PathBuf::from("home")));
+    }
+
+    #[test]
+    fn rooted_subvolume_resolution_rejects_symlink_escape() {
+        let base = (0..1000)
+            .find_map(|i| {
+                let path = std::env::temp_dir().join(format!(
+                    "bcachefs-subvol-test-{}-{i}",
+                    std::process::id()
+                ));
+                match fs::create_dir(&path) {
+                    Ok(()) => Some(path),
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => None,
+                    Err(e) => panic!("creating test fixture {}: {e}", path.display()),
+                }
+            })
+            .expect("could not allocate unique test fixture directory");
+        let root = base.join("root");
+        let outside = base.join("outside");
+        fs::create_dir(&root).unwrap();
+        fs::create_dir(&outside).unwrap();
+        fs::create_dir_all(root.join("nested/leaf")).unwrap();
+        symlink(&outside, root.join("escape")).unwrap();
+
+        assert!(open_subvolume(&root, Path::new("nested/leaf")).is_ok());
+        assert!(open_subvolume(&root, Path::new("escape")).is_err());
+
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn bind_remount_preserves_per_mount_flags_only() {
+        let requested = libc::MS_RDONLY
+            | libc::MS_NOEXEC
+            | libc::MS_NOSUID
+            | libc::MS_NODEV
+            | libc::MS_SYNCHRONOUS;
+        assert_eq!(
+            bind_mount_flags(requested),
+            libc::MS_RDONLY | libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_NODEV
+        );
     }
 }
 
@@ -679,9 +948,16 @@ fn mount_asking_about_degraded(
             a.devices, mountpoint.to_string_lossy(), &cli.options
         );
 
-        let err = match mount_inner(a.devices.clone(), mountpoint, "bcachefs",
-                                    flags, fs_opts.clone(), a.devinfo.clone(),
-                                    unlocked) {
+        let result = if let Some(subvol) = parsed.subvol.as_deref() {
+            mount_subvolume(a.devices.clone(), mountpoint, flags, fs_opts.clone(),
+                            a.devinfo.clone(), unlocked, subvol)
+        } else {
+            mount_inner(a.devices.clone(), mountpoint, Some("bcachefs"),
+                        flags, fs_opts.clone(), a.devinfo.clone(), unlocked)
+                .map_err(anyhow::Error::from)
+        };
+
+        let err = match result {
             Ok(()) => {
                 // Mounted, but we left members behind: one of them may have
                 // shown up while we were asking about it.
@@ -693,9 +969,13 @@ fn mount_asking_about_degraded(
             Err(e) => e,
         };
 
+        let Some(mount_err) = err.downcast_ref::<MountError>() else {
+            return Err(err);
+        };
+
         let Some(ask) = &a.ask else { return Err(err.into()) };
 
-        match ask.put(&err.code)? {
+        match ask.put(&mount_err.code)? {
             degraded::Outcome::Mount { fs_opt, read_only } => {
                 fs_opts = Some(degraded::append_opt(fs_opts, fs_opt));
                 // Read-only is a mount flag, not a degraded= value, and it has
@@ -726,7 +1006,7 @@ fn cmd_mount_inner(cli: &Cli) -> Result<()> {
         debug!("ignoring -s/--sloppy; bcachefs already ignores unrecognized options");
     }
 
-    let parsed = parse_mountflag_options(&cli.options);
+    let parsed = parse_mountflag_options(&cli.options)?;
     let mut opts = bcachefs_kernel::opts::parse_mount_opts(None, parsed.fs_opts.as_deref(), true)
         .unwrap_or_default();
 
@@ -781,7 +1061,8 @@ UUID=<uuid> before the bcachefs mount helper can scan all members.\n\n\
 If the filesystem is encrypted, the passphrase will be looked up in \
 the kernel keyring first; if not found, the user is prompted \
 interactively (or reads from stdin if not a terminal). Use -k or --passphrase-file \
-to specify alternative unlock methods.")]
+to specify alternative unlock methods.\n\n\
+Use -o subvol=PATH to mount a subvolume or snapshot path as the mount root.")]
 pub struct Cli {
     /// Path to passphrase file
     ///
