@@ -930,6 +930,25 @@ int bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 		       enum bch_member_state new_state, int flags,
 		       struct printbuf *err)
 {
+	/*
+	 * Taking a device out of the allocator shrinks capacity under the
+	 * reservations dirty pagecache already holds, and the allocator
+	 * waits for space that isn't coming back: write it out first, while
+	 * the space is still there.
+	 *
+	 * Before state_lock, which writeback may need; trylock because
+	 * umount holds s_umount while it waits for sysfs writers - us, from
+	 * the state option - to drain.
+	 */
+	struct super_block *sb = c->vfs_sb;
+	if (sb &&
+	    ca->mi.state == BCH_MEMBER_STATE_rw &&
+	    new_state != BCH_MEMBER_STATE_rw &&
+	    down_read_trylock(&sb->s_umount)) {
+		sync_filesystem(sb);
+		up_read(&sb->s_umount);
+	}
+
 	guard(rwsem_write)(&c->state_lock);
 
 	if (READ_ONCE(ca->removing))
