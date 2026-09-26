@@ -1596,9 +1596,28 @@ static const struct vm_operations_struct bch_vm_ops = {
 	.page_mkwrite   = bch2_page_mkwrite,
 };
 
+/*
+ * No new mappings of a writable file after a shutdown, so writers get an error
+ * from mmap() instead of SIGBUS from page_mkwrite. EIO, as ext4 and f2fs return
+ * from a shut-down filesystem: mmap(2) documents neither EIO nor EROFS.
+ */
+static int bch2_mmap_check(struct file *file)
+{
+	struct bch_fs *c = file_inode(file)->i_sb->s_fs_info;
+
+	if ((file->f_mode & FMODE_WRITE) &&
+	    test_bit(BCH_FS_emergency_ro, &c->flags))
+		return bch2_err_class(bch_err_throw(c, mmap_emergency_ro));
+	return 0;
+}
+
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
 static int bch2_mmap_prepare(struct vm_area_desc *desc)
 {
+	int ret = bch2_mmap_check(desc->file);
+	if (ret)
+		return ret;
+
 	file_accessed(desc->file);
 
 	desc->vm_ops = &bch_vm_ops;
@@ -1607,6 +1626,10 @@ static int bch2_mmap_prepare(struct vm_area_desc *desc)
 #else
 static int bch2_mmap(struct file *file, struct vm_area_struct *vma)
 {
+	int ret = bch2_mmap_check(file);
+	if (ret)
+		return ret;
+
 	file_accessed(file);
 
 	vma->vm_ops = &bch_vm_ops;
