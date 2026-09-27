@@ -1482,6 +1482,19 @@ int bch2_data_update_init(struct btree_trans *trans,
 	if (m->opts.type != BCH_DATA_UPDATE_scrub &&
 	    m->opts.type != BCH_DATA_UPDATE_scrub_no_repair) {
 		/*
+		 * A move that only relocates data keeps its old pointers if it
+		 * comes up short, so that isn't a degraded write; one restoring
+		 * lost durability needs every copy it asks for:
+		 */
+		struct bkey_durability d;
+		ret = bch2_bkey_durability(trans, k, &d);
+		if (ret)
+			goto out;
+
+		if (d.online >= io_opts->data_replicas)
+			m->op.flags |= BCH_WRITE_replicas_best_effort;
+
+		/*
 		 * If current extent durability is less than io_opts.data_replicas,
 		 * we're not trying to rereplicate the extent up to data_alloc/replicas.here -
 		 * unless extra_replicas was specified

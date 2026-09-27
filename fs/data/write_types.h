@@ -26,6 +26,7 @@
 	x(sync)				\
 	x(flush)			\
 	x(move)				\
+	x(replicas_best_effort)		\
 	x(in_worker)			\
 	x(submitted)			\
 	x(convert_unwritten)

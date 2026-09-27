@@ -1769,7 +1769,8 @@ retry:
 			 * is what a reservation should have refused;
 			 * no_progress is space copygc hasn't compacted yet.
 			 */
-			if (req->nr_effective < req->nr_replicas)
+			if (req->nr_effective < req->nr_replicas &&
+			    !(req->flags & BCH_WRITE_replicas_best_effort))
 				bch2_sb_error_count(c,
 					bch2_err_matches(ret, BCH_ERR_insufficient_devices)
 					? BCH_FSCK_ERR_write_degraded_insufficient_devices
