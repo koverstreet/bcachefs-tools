@@ -1663,9 +1663,11 @@ static int get_old_stripe(struct btree_trans *trans,
 		       btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 	}
 
-	bool ret = may_reuse_stripe(c, new, old.v) &&
-		bch2_stripe_handle_tryget(c, &new->old_stripe_handle, idx);
-	if (ret)
+	if (!may_reuse_stripe(c, new, old.v))
+		return 0;
+
+	int ret = bch2_stripe_handle_tryget_existing(&iter, &new->old_stripe_handle);
+	if (ret > 0)
 		bkey_reassemble(&new->old_stripe.key.k_i, k);
 	return ret;
 }
@@ -2411,17 +2413,16 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	if (unlikely(!new_s))
 		return -ENOMEM;
 
-	if (!bch2_stripe_handle_tryget(c, &new_s->old_stripe_handle, s.k->p.offset)) {
+	int ret = bch2_stripe_handle_tryget_existing(iter, &new_s->old_stripe_handle);
+	if (ret <= 0) {
 		/* trace this */
 		kfree(new_s);
-		return 0;
+		return ret;
 	}
 
 	bkey_reassemble(&new_s->old_stripe.key.k_i, s.s_c);
 
 	init_new_stripe_from_old(c, new_s, true);
-
-	int ret;
 
 	CLASS(closure_stack, cl)();
 	while (bch2_err_matches(ret = bch2_ec_stripe_buf_init(c, &new_s->old_stripe, 0,

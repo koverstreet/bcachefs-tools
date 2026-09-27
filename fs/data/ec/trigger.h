@@ -235,7 +235,10 @@ void bch2_stripe_new_buckets_del(struct bch_fs *, struct ec_stripe_new *);
 bool bch2_stripe_is_open(struct bch_fs *, u64);
 
 struct ec_stripe_handle;
+/* Hash-only claim for an unallocated stripe slot. */
 bool bch2_stripe_handle_tryget(struct bch_fs *, struct ec_stripe_handle *, u64);
+/* Intent-locked existing key: 1 acquired, 0 busy, negative error/restart. */
+int bch2_stripe_handle_tryget_existing(struct btree_iter *, struct ec_stripe_handle *);
 void bch2_stripe_handle_put(struct bch_fs *, struct ec_stripe_handle *);
 
 #endif /* _BCACHEFS_DATA_EC_TRIGGER_H */

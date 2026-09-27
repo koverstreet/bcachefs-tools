@@ -971,8 +971,8 @@ static int do_reconcile_extent(struct moving_context *ctxt,
 	struct bbpos data_pos = rb_work_to_data_pos(work.pos);
 
 	/* We require holding an intent lock when calling
-	 * bch2_stripe_handle_tryget(), to avoid racing with the stripe trigger
-	 * deleting the stripe */
+	 * bch2_stripe_handle_tryget_existing(), to avoid racing with the
+	 * stripe trigger deleting the stripe */
 	enum btree_iter_update_trigger_flags flags = data_pos.btree == BTREE_ID_stripes
 		? BTREE_ITER_intent : 0;
 
@@ -1021,8 +1021,8 @@ static int do_reconcile_extent_phys(struct moving_context *ctxt,
 		return 0;
 
 	/* We require holding an intent lock when calling
-	 * bch2_stripe_handle_tryget(), to avoid racing with the stripe trigger
-	 * deleting the stripe */
+	 * bch2_stripe_handle_tryget_existing(), to avoid racing with the
+	 * stripe trigger deleting the stripe */
 	enum btree_iter_update_trigger_flags flags = bp.v->btree_id == BTREE_ID_stripes
 		? BTREE_ITER_intent : 0;
 
