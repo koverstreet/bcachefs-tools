@@ -1185,6 +1185,7 @@ static int btree_node_iter_and_journal_peek(struct btree_trans *trans,
 		return btree_node_missing_err(trans, path);
 
 	bkey_reassemble(&trans->btree_path_down, k);
+	btree_node_mem_ptr_reload(&trans->btree_path_down, k.v);
 
 	if ((flags & BTREE_ITER_prefetch) &&
 	    c->opts.btree_node_prefetch)
@@ -1221,6 +1222,7 @@ static int btree_path_down(struct btree_trans *trans,
 			return btree_node_missing_err(trans, path);
 
 		bch2_bkey_unpack(l->b, &trans->btree_path_down, k);
+		btree_node_mem_ptr_reload(&trans->btree_path_down, bkeyp_val(&l->b->format, k));
 
 		if (unlikely((flags & BTREE_ITER_prefetch)) &&
 		    trans->c->opts.btree_node_prefetch)

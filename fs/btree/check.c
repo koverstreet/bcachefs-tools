@@ -417,6 +417,7 @@ again:
 
 		bch2_btree_and_journal_iter_advance(&iter);
 		bch2_bkey_buf_reassemble(&cur_k, k);
+		btree_node_mem_ptr_reload(cur_k.k, k.v);
 
 		cur = bch2_btree_node_get_noiter(trans, cur_k.k,
 					b->c.btree_id, b->c.level - 1,
@@ -535,6 +536,7 @@ again:
 
 	while ((k = bch2_btree_and_journal_iter_peek(c, &iter)).k) {
 		bch2_bkey_buf_reassemble(&cur_k, k);
+		btree_node_mem_ptr_reload(cur_k.k, k.v);
 		bch2_btree_and_journal_iter_advance(&iter);
 
 		cur = bch2_btree_node_get_noiter(trans, cur_k.k,
