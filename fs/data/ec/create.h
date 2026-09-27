@@ -251,9 +251,8 @@ void bch2_new_stripes_to_text(struct printbuf *, struct bch_fs *);
 struct moving_context;
 int bch2_stripe_repair(struct moving_context *, struct btree_iter *, struct bkey_s_c_stripe);
 
-struct wb_maybe_flush;
-int bch2_ec_record_lost_block(struct btree_trans *, struct bkey_s_c_stripe, unsigned,
-			      enum bch_sb_error_id, struct wb_maybe_flush *);
+void bch2_ec_record_lost_blocks(struct btree_trans *, struct bkey_s_c_stripe, u32,
+				enum bch_sb_error_id, bool);
 
 void bch2_logged_op_stripe_update_to_text(struct printbuf *, struct bch_fs *, struct bkey_s_c);
 

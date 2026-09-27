@@ -616,51 +616,26 @@ static int ec_record_lost_bp(struct btree_trans *trans,
 }
 
 /*
- * Record damage against every extent in @blocknr of @stripe.
+ * Record damage against every extent in @blocks of @stripe - its backpointers
+ * are looked up through @stripe's pointers, so a block on a device being
+ * removed has to already point at BCH_SB_MEMBER_INVALID.
  *
- * Updates go into @trans and are NOT committed: the caller's commit decides
- * whether the records land atomically with whatever destroyed the block. A
- * block is a bucket, so this can be a lot of updates - a caller that can't
- * carry them all in one transaction wants its own committing loop instead
- * (see ec_record_lost_blocks()).
+ * Commits per backpointer: a block is a bucket, and a block's worth of
+ * extents won't fit in one transaction - so callers record before destroying
+ * the blocks, not atomically with it.
  */
-int bch2_ec_record_lost_block(struct btree_trans *trans,
-			      struct bkey_s_c_stripe stripe, unsigned blocknr,
-			      enum bch_sb_error_id err,
-			      struct wb_maybe_flush *last_flushed)
+void bch2_ec_record_lost_blocks(struct btree_trans *trans,
+				struct bkey_s_c_stripe stripe, u32 blocks,
+				enum bch_sb_error_id err, bool count)
 {
-	struct bp_range bps = stripe_block_bps(trans->c, stripe, blocknr);
-
-	return for_each_btree_key_max(trans, bp_iter, bps.btree,
-				      bps.start, bps.end, 0, bp_k, ({
-		if (bp_k.k->type != KEY_TYPE_backpointer)
-			continue;
-
-		ec_record_lost_bp(trans, bkey_s_c_to_backpointer(bp_k),
-				  err, true, last_flushed);
-	}));
-}
-
-/*
- * The reuse is abandoned, so the old stripe stays as it is and nothing else
- * discovers the loss until someone reads one of those files.
- *
- * Commits per backpointer rather than sharing one transaction: there's nothing
- * here to be atomic with - the stripe was left untouched - and a whole block's
- * worth of extents in one transaction would overrun it.
- */
-static void ec_record_lost_blocks(struct bch_fs *c, struct ec_stripe_new *s)
-{
-	CLASS(btree_trans, trans)(c);
+	struct bch_fs *c = trans->c;
 
 	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
 	wb_maybe_flush_init(&last_flushed);
 
-	for (u32 lost = s->old_stripe_lost_blocks; lost; lost &= lost - 1) {
+	for (u32 lost = blocks; lost; lost &= lost - 1) {
 		unsigned block = __ffs(lost);
-		struct bp_range bps = stripe_block_bps(c,
-					bkey_i_to_s_c_stripe(&s->old_stripe.key.k_i),
-					block);
+		struct bp_range bps = stripe_block_bps(c, stripe, block);
 
 		int ret = for_each_btree_key_max_commit(trans, bp_iter, bps.btree,
 					bps.start, bps.end, 0, bp_k,
@@ -670,14 +645,13 @@ static void ec_record_lost_blocks(struct bch_fs *c, struct ec_stripe_new *s)
 				continue;
 
 			ec_record_lost_bp(trans, bkey_s_c_to_backpointer(bp_k),
-					  BCH_FSCK_ERR_stripe_reconstruct_failed,
-					  false, &last_flushed);
+					  err, count, &last_flushed);
 		}));
 
 		/* a block we can't attribute doesn't stop the others */
 		if (ret)
 			bch_err(c, "error recording damage for stripe %llu block %u: %s",
-				s->old_stripe.key.k.p.offset, block, bch2_err_str(ret));
+				stripe.k->p.offset, block, bch2_err_str(ret));
 	}
 }
 
@@ -724,8 +698,16 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 	 * The fold has already been waited for, by ec_stripe_create() before
 	 * it called us - so old_stripe_err is stable here.
 	 */
+	/*
+	 * The reuse is abandoned, so the old stripe stays as it is and nothing
+	 * else discovers the loss until someone reads one of those files:
+	 */
 	if (s->old_stripe_read && s->old_stripe_err) {
-		ec_record_lost_blocks(c, s);
+		CLASS(btree_trans, trans)(c);
+		bch2_ec_record_lost_blocks(trans,
+				bkey_i_to_s_c_stripe(&s->old_stripe.key.k_i),
+				s->old_stripe_lost_blocks,
+				BCH_FSCK_ERR_stripe_reconstruct_failed, false);
 		return s->old_stripe_err;
 	}
 

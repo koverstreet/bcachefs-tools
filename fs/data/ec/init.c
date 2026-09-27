@@ -24,7 +24,7 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 				  struct bkey_s_c k,
 				  unsigned dev_idx,
 				  unsigned flags, struct printbuf *err,
-				  bool *had_open)
+				  bool *had_open, u64 *recorded)
 {
 	if (k.k->type != KEY_TYPE_stripe)
 		return 0;
@@ -51,6 +51,98 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 		return 0;
 	}
 
+	struct bkey_s_c_stripe old = bkey_s_c_to_stripe(k);
+	unsigned nr_good = 0;
+	u32 lost_blocks = 0, newly_lost = 0;
+
+	scoped_guard(rcu)
+		for (unsigned i = 0; i < old.v->nr_blocks; i++) {
+			unsigned dev = old.v->ptrs[i].dev;
+
+			if (dev == dev_idx) {
+				dev = BCH_SB_MEMBER_INVALID;
+				newly_lost |= BIT(i);
+			}
+
+			/*
+			 * Two different questions, and they disagree on evacuating
+			 * devices: @nr_good is the redundancy we'd be left with, so
+			 * a device on its way out doesn't count - that's what the
+			 * policy checks below want. @lost_blocks is what's actually
+			 * unreadable now, and an evacuating device still has its
+			 * data.
+			 */
+			struct bch_dev *ca = bch2_dev_rcu_noerror(c, dev);
+			nr_good += ca && ca->mi.state != BCH_MEMBER_STATE_evacuating;
+			if (!ca)
+				lost_blocks |= BIT(i);
+		}
+
+	if (nr_good < old.v->nr_blocks && !(flags & BCH_FORCE_IF_DATA_DEGRADED)) {
+		prt_str(err, "cannot drop device without degrading\n  ");
+		bch2_bkey_val_to_text(err, c, k);
+		prt_newline(err);
+		return bch_err_throw(c, remove_would_lose_data);
+	}
+
+	unsigned nr_data = old.v->nr_blocks - old.v->nr_redundant;
+
+	if (nr_good < nr_data && !(flags & BCH_FORCE_IF_DATA_LOST)) {
+		prt_str(err, "cannot drop device without losing data\n  ");
+		bch2_bkey_val_to_text(err, c, k);
+		prt_newline(err);
+		return bch_err_throw(c, remove_would_lose_data);
+	}
+
+	/*
+	 * More blocks gone than the stripe can rebuild from: the extents in
+	 * them have no other copy, and the stripe key doesn't name an inode, so
+	 * once we invalidate the only thing tying them to their files is the
+	 * damage btree. Name them while we still can.
+	 *
+	 * First, in their own transactions: a block is a bucket, and a block's
+	 * worth of extents won't fit in the one that invalidates. Then restart,
+	 * and invalidate on the next pass. A crash in between leaves the damage
+	 * recorded a little early, which is the side to err on.
+	 *
+	 * Recording counts, so @recorded - the last stripe we recorded - keeps
+	 * that pass from recording again.
+	 *
+	 * The extents' backpointers are already in BTREE_ID_stripe_backpointers
+	 * by now: a stripe's own backpointer sits at the end of its block's
+	 * range, so the scan re-keys a block's extents before it reaches the
+	 * stripe key.
+	 */
+	if (hweight32(lost_blocks) > old.v->nr_redundant &&
+	    *recorded != k.k->p.offset) {
+		/*
+		 * Everything, if this removal is what killed the stripe -
+		 * every block already invalidated stops being reconstructible
+		 * here. If it was already dead, those were recorded when it
+		 * died and only our own blocks are news.
+		 */
+		u32 record = hweight32(lost_blocks & ~newly_lost) > old.v->nr_redundant
+			? newly_lost
+			: lost_blocks;
+
+		/* the stripe as it'll be, so our block's extents are found re-keyed: */
+		struct bkey_buf tmp __cleanup(bch2_bkey_buf_exit);
+		bch2_bkey_buf_init(&tmp);
+		bch2_bkey_buf_reassemble(&tmp, k);
+
+		struct bkey_i_stripe *n = bkey_i_to_stripe(tmp.k);
+		for (unsigned i = 0; i < n->v.nr_blocks; i++)
+			if (n->v.ptrs[i].dev == dev_idx)
+				n->v.ptrs[i].dev = BCH_SB_MEMBER_INVALID;
+
+		*recorded = k.k->p.offset;
+		bch2_ec_record_lost_blocks(trans, stripe_i_to_s_c(n), record,
+					   BCH_FSCK_ERR_data_lost_device_removed, true);
+
+		/* those committed, and @k is stale: */
+		return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);
+	}
+
 	struct bkey_i_stripe *s =
 		errptr_try(bch2_bkey_make_mut_typed(trans, iter, &k, 0, stripe));
 
@@ -71,80 +163,9 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 	acc.replicas.data_type = BCH_DATA_user;
 	try(bch2_disk_accounting_mod(trans, &acc, &sectors, 1, false));
 
-	unsigned nr_good = 0;
-	u32 lost_blocks = 0, newly_lost = 0;
-
-	scoped_guard(rcu)
-		for (unsigned i = 0; i < s->v.nr_blocks; i++) {
-			struct bch_extent_ptr *ptr = s->v.ptrs + i;
-
-			if (ptr->dev == dev_idx) {
-				ptr->dev = BCH_SB_MEMBER_INVALID;
-				newly_lost |= BIT(i);
-			}
-
-			/*
-			 * Two different questions, and they disagree on evacuating
-			 * devices: @nr_good is the redundancy we'd be left with, so
-			 * a device on its way out doesn't count - that's what the
-			 * policy checks below want. @lost_blocks is what's actually
-			 * unreadable now, and an evacuating device still has its
-			 * data.
-			 */
-			struct bch_dev *ca = bch2_dev_rcu_noerror(c, ptr->dev);
-			nr_good += ca && ca->mi.state != BCH_MEMBER_STATE_evacuating;
-			if (!ca)
-				lost_blocks |= BIT(i);
-		}
-
-	if (nr_good < s->v.nr_blocks && !(flags & BCH_FORCE_IF_DATA_DEGRADED)) {
-		prt_str(err, "cannot drop device without degrading\n  ");
-		bch2_bkey_val_to_text(err, c, k);
-		prt_newline(err);
-		return bch_err_throw(c, remove_would_lose_data);
-	}
-
-	unsigned nr_data = s->v.nr_blocks - s->v.nr_redundant;
-
-	if (nr_good < nr_data && !(flags & BCH_FORCE_IF_DATA_LOST)) {
-		prt_str(err, "cannot drop device without losing data\n  ");
-		bch2_bkey_val_to_text(err, c, k);
-		prt_newline(err);
-		return bch_err_throw(c, remove_would_lose_data);
-	}
-
-	/*
-	 * More blocks gone than the stripe can rebuild from: the extents in
-	 * them have no other copy, and the stripe key doesn't name an inode, so
-	 * once this commits the only thing tying them to their files is the
-	 * damage btree. Name them while we still can.
-	 *
-	 * Recorded in this transaction, so the records land with the
-	 * invalidation that caused them or not at all. The extents'
-	 * backpointers are already in BTREE_ID_stripe_backpointers by now: a
-	 * stripe's own backpointer sits at the end of its block's range, so the
-	 * scan re-keys a block's extents before it reaches the stripe key.
-	 */
-	if (hweight32(lost_blocks) > s->v.nr_redundant) {
-		/*
-		 * Everything, if this removal is what killed the stripe -
-		 * every block already invalidated stops being reconstructible
-		 * at this commit. If it was already dead, those were recorded
-		 * when it died and only our own blocks are news.
-		 */
-		u32 record = hweight32(lost_blocks & ~newly_lost) > s->v.nr_redundant
-			? newly_lost
-			: lost_blocks;
-
-		struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
-		wb_maybe_flush_init(&last_flushed);
-
-		for (u32 b = record; b; b &= b - 1)
-			try(bch2_ec_record_lost_block(trans,
-					bkey_i_to_s_c_stripe(&s->k_i), __ffs(b),
-					BCH_FSCK_ERR_data_lost_device_removed,
-					&last_flushed));
-	}
+	for (unsigned i = 0; i < s->v.nr_blocks; i++)
+		if (s->v.ptrs[i].dev == dev_idx)
+			s->v.ptrs[i].dev = BCH_SB_MEMBER_INVALID;
 
 	sectors = -sectors;
 
@@ -158,7 +179,7 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 static int bch2_invalidate_stripe_to_dev_from_alloc(struct btree_trans *trans,
 						    unsigned dev_idx, u64 stripe_idx,
 						    unsigned flags, struct printbuf *err,
-						    bool *had_open)
+						    bool *had_open, u64 *recorded)
 {
 	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, stripe_idx),
 				BTREE_ITER_intent);
@@ -171,13 +192,15 @@ static int bch2_invalidate_stripe_to_dev_from_alloc(struct btree_trans *trans,
 	 */
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
-	return bch2_invalidate_stripe_to_dev(trans, &iter, k, dev_idx, flags, err, had_open);
+	return bch2_invalidate_stripe_to_dev(trans, &iter, k, dev_idx, flags, err,
+					     had_open, recorded);
 }
 
 int bch2_dev_remove_stripes(struct bch_fs *c, unsigned dev_idx,
 			    unsigned flags, struct printbuf *err)
 {
 	CLASS(btree_trans, trans)(c);
+	u64 recorded = 0;
 	int ret = 0;
 
 	/*
@@ -196,7 +219,7 @@ int bch2_dev_remove_stripes(struct bch_fs *c, unsigned dev_idx,
 					  BTREE_ITER_intent, k,
 					  NULL, NULL, 0, ({
 			bch2_invalidate_stripe_to_dev_from_alloc(trans, dev_idx, k.k->p.offset,
-								 flags, err, &had_open);
+								 flags, err, &had_open, &recorded);
 		}));
 		if (ret || !had_open)
 			goto out;
