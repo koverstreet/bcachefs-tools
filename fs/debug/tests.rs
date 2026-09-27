@@ -15,6 +15,7 @@ use crate::errcode::{
     bch_errcode,
     BchError,
     ENOENT_bkey_type_mismatch,
+    ret_to_result,
 };
 use crate::fs::{BorrowedFs, Fs};
 use crate::util::async_exec::{block_on, spawn, system_unbound, WaitGroup};
@@ -520,6 +521,84 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
     }
 }
 
+/// Stripe reuse and repair open existing stripes, and bch2_trigger_stripe()
+/// deletes a stripe it finds empty and not open - but that decision is made in
+/// a trigger, and a commit that drops its locks (waiting on a journal
+/// reservation, say) relocks and retries without re-running triggers. So
+/// bch2_stripe_handle_tryget_existing() has to invalidate the relock of any
+/// transaction that has queued an update to the stripe key.
+///
+/// The updater queues a no-op update through a plain iterator, so the test also
+/// exercises the update being routed through the key cache rather than
+/// assuming it.
+///
+/// This runs on a live filesystem, where background work can invalidate the
+/// relock too. So each attempt first relocks without an open, which must
+/// succeed - proving the window was quiet - and only then checks that an open
+/// makes the relock fail; a noisy window is retried.
+///
+/// The caller must lay down erasure-coded data first (see ec.ktest); this errors
+/// out if no stripe is found.
+fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
+    for _ in 0..100 {
+        let updater = BtreeTrans::new(fs);
+        let mut u_iter = BtreeIter::new(&updater, c::btree_id::stripes, POS_MIN,
+                                        BtreeIterFlags::INTENT);
+
+        let idx = lockrestart_do(&updater, |t| {
+            let fs = t.fs();
+            let k = fs.require(u_iter.peek_max(SPOS_MAX)?, ENOENT_bkey_type_mismatch)?;
+            let idx = k.k.p.offset;
+
+            let u = t.bkey_make_mut_noupdate(k)?;
+            let t = t.update(&mut u_iter, u, UpdateTriggerFlags::NORUN)?;
+            t.done(idx)
+        })?;
+
+        updater.unlock();
+        if unsafe { c::bch2_trans_relock_notrace(updater.raw()) } != 0 {
+            continue;
+        }
+        updater.unlock();
+
+        // Safety: plain C struct, all-zeroes is its unclaimed state.
+        let mut handle: c::ec_stripe_handle = unsafe { core::mem::zeroed() };
+        {
+            let opener = BtreeTrans::new(fs);
+            let mut o_iter = BtreeIter::new(&opener, c::btree_id::stripes, pos(0, idx),
+                                            BtreeIterFlags::INTENT);
+
+            let opened = lockrestart_do(&opener, |t| {
+                let fs = t.fs();
+                fs.require(o_iter.peek_max(pos(0, idx))?, ENOENT_bkey_type_mismatch)?;
+
+                let ret = unsafe {
+                    c::bch2_stripe_handle_tryget_existing(o_iter.raw_mut(), &mut handle)
+                };
+                t.result_value(ret_to_result(ret))
+            })?;
+
+            if opened != 1 {
+                kernel::pr_info!("stripe {} already open, can't test\n", idx);
+                return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_stripe_already_open);
+            }
+        }
+
+        let ret = unsafe { c::bch2_trans_relock_notrace(updater.raw()) };
+        unsafe { c::bch2_stripe_handle_put(fs.raw, &mut handle) };
+
+        if ret == 0 {
+            kernel::pr_info!("opening stripe {} didn't invalidate a queued update's relock\n",
+                             idx);
+            return fs.throw(bch_errcode::BCH_ERR_EINVAL_test_stripe_open_relock_not_invalidated);
+        }
+        return Ok(());
+    }
+
+    kernel::pr_info!("no quiet window in 100 attempts: relock kept failing without an open\n");
+    fs.throw(bch_errcode::BCH_ERR_test_no_quiet_window)
+}
+
 fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
     let mut cookie = BkeyCookie::new();
     cookie.k_mut().p.snapshot = snapid_hi;
@@ -725,6 +804,7 @@ fn lookup_test(testname: &CStr) -> Option<(&'static [u8], TestFn)> {
         (b"test_extent_create_dup", test_extent_create_dup),
         (b"test_btree_ptr_stale_dirty", test_btree_ptr_stale_dirty),
         (b"test_inject_stripe_ptr_mismatch", test_inject_stripe_ptr_mismatch),
+        (b"test_stripe_open_invalidates_update", test_stripe_open_invalidates_update),
         (b"test_snapshots", test_snapshots),
     ];
 
