@@ -143,6 +143,8 @@ enum bch_counters_flags {
 	  "Total sectors allocated")					\
 	x(disk_reservation_degraded,		136, TYPE_SECTORS,	\
 	  "Sectors reserved at fewer replicas than asked for")		\
+	x(bucket_alloc_placement_restricted,	137, TYPE_COUNTER,	\
+	  "Buckets allocated while free space mismatch restricted placement")\
 	x(bkey_pack_pos_fail,			112, TYPE_COUNTER,	\
 	  "Bkey position packing failures")				\
 	x(btree_cache_scan,			7,   TYPE_COUNTER,	\

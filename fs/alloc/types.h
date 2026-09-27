@@ -160,6 +160,21 @@ struct bch_fs_capacity {
 	atomic64_t		sectors_available[BCH_REPLICAS_MAX];
 	spinlock_t		sectors_available_lock;
 
+	/*
+	 * Bit n - 1 set when free space is lopsided enough that where copies
+	 * go decides how much fits at n replicas, and the devices every such
+	 * allocation has to use - see bch2_dev_alloc_required(). Recomputed
+	 * with the reservation caches; read without locking, it's a placement
+	 * preference.
+	 *
+	 * placement_allowance: physical sectors we can allocate before that
+	 * could change, and so the most the reservation caches hand out
+	 * between recomputes.
+	 */
+	unsigned long		placement_constrained;
+	struct bch_devs_mask	placement_required[BCH_REPLICAS_MAX];
+	u64			placement_allowance;
+
 	struct bch_fs_capacity_pcpu __percpu	*pcpu;
 
 	struct percpu_rwsem_noio	mark_lock;

@@ -1034,20 +1034,23 @@ static struct dev_placeable dev_sectors_placeable(struct bch_dev *ca)
 
 /*
  * The free space distribution, as much as placeable() needs: the total and the
- * BCH_REPLICAS_MAX - 1 largest devices.
+ * BCH_REPLICAS_MAX - 1 largest devices, and which devices those are.
  */
 struct dev_free_dist {
-	u64	total;
-	u64	largest[BCH_REPLICAS_MAX - 1];
+	u64		total;
+	u64		largest[BCH_REPLICAS_MAX - 1];
+	unsigned	largest_dev[BCH_REPLICAS_MAX - 1];
 };
 
-static void dev_free_dist_add(struct dev_free_dist *d, u64 f)
+static void dev_free_dist_add(struct dev_free_dist *d, u64 f, unsigned dev)
 {
 	d->total += f;
 
 	for (unsigned i = 0; i < ARRAY_SIZE(d->largest); i++)
-		if (f > d->largest[i])
+		if (f > d->largest[i]) {
 			swap(f, d->largest[i]);
+			swap(dev, d->largest_dev[i]);
+		}
 }
 
 /*
@@ -1069,6 +1072,65 @@ static u64 dev_free_dist_placeable(const struct dev_free_dist *d, unsigned n)
 	for (unsigned k = 1; k < n; k++) {
 		sum -= min(sum, d->largest[k - 1]);
 		ret = min(ret, mul_u64_u64_div_u64(sum, n, n - k));
+	}
+
+	return ret;
+}
+
+/*
+ * At n replicas, a device with more free space than the rest can match - more
+ * than the devices smaller than it have between them, over the n - 1 other
+ * copies of each write - only fills if every write puts a copy on it: a write
+ * that skips it spends the others' space on data it had room for. (For 2x:
+ * more free space than all the other devices combined.) The next largest
+ * likewise against the smaller ones over n - 2, and so on; it's always a prefix
+ * of the n - 1 largest.
+ *
+ * Detected with hysteresis: we start restricting a margin before we're in
+ * trouble, so every device can be filled, and stop only a wider margin after,
+ * so we don't flap. @was is the previous result: empty if we weren't.
+ *
+ * @allowance is how far allocation can move things before the answer could
+ * change, in physical sectors: a sector allocated on a smaller device closes
+ * the gap by at most one, so allocating less than the gap can't start a
+ * restriction. Frees aren't covered - freeing space on the device itself also
+ * closes it - but the margin is there for drift.
+ */
+#define PLACEMENT_ENGAGE_SHIFT		3	/* start 1/8th early */
+#define PLACEMENT_RELEASE_SHIFT		2	/* stop 1/4th late */
+
+static bool dev_free_dist_required(const struct dev_free_dist *d, unsigned n,
+				   const struct bch_devs_mask *was,
+				   struct bch_devs_mask *required,
+				   u64 *allowance)
+{
+	u64 smaller = d->total;
+	bool ret = false;
+
+	memset(required, 0, sizeof(*required));
+	*allowance = U64_MAX;
+
+	for (unsigned i = 0; i + 1 < n; i++) {
+		u64 f = d->largest[i];
+		unsigned dev = d->largest_dev[i];
+
+		smaller -= min(smaller, f);
+
+		u64 have	= f * (n - 1 - i);
+		u64 engage	= smaller - (smaller >> PLACEMENT_ENGAGE_SHIFT);
+		u64 release	= smaller - (smaller >> PLACEMENT_RELEASE_SHIFT);
+
+		if (have > (test_bit(dev, was->d) ? release : engage)) {
+			__set_bit(dev, required->d);
+			ret = true;
+			continue;
+		}
+
+		/* nothing smaller to spend: allocation can't close the gap */
+		if (smaller)
+			*allowance = max(engage - have,
+					 smaller >> (PLACEMENT_ENGAGE_SHIFT + 1));
+		break;
 	}
 
 	return ret;
@@ -1125,7 +1187,8 @@ static void dev_free_dist_partition(const struct dev_free_dist *d,
 		out[n] = avail_factor(out[n]);
 }
 
-static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now)
+static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now,
+					bool update_placement)
 {
 	struct dev_free_dist eventual = {}, now = {};
 
@@ -1133,9 +1196,27 @@ static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now
 		for_each_member_device_rcu(c, ca, NULL) {
 			struct dev_placeable f = dev_sectors_placeable(ca);
 
-			dev_free_dist_add(&eventual, f.eventual);
-			dev_free_dist_add(&now, f.now);
+			dev_free_dist_add(&eventual, f.eventual, ca->dev_idx);
+			dev_free_dist_add(&now, f.now, ca->dev_idx);
 		}
+
+	if (update_placement) {
+		u64 allowance = U64_MAX;
+
+		for (unsigned n = 2; n <= BCH_REPLICAS_MAX; n++) {
+			struct bch_devs_mask *cur = &c->capacity.placement_required[n - 1];
+			struct bch_devs_mask required;
+			u64 a;
+
+			bool constrained = dev_free_dist_required(&eventual, n, cur, &required, &a);
+
+			*cur = required;
+			mod_bit(n - 1, &c->capacity.placement_constrained, constrained);
+			allowance = min(allowance, a);
+		}
+
+		c->capacity.placement_allowance = allowance;
+	}
 
 	/* reserved but not yet written, so not in the bucket counts */
 	struct bch_fs_capacity_pcpu b = {};
@@ -1150,12 +1231,31 @@ static void __bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now
 void bch2_fs_sectors_placeable(struct bch_fs *c, u64 *out, u64 *out_now)
 {
 	guard(percpu_read_noio)(&c->capacity.mark_lock);
-	__bch2_fs_sectors_placeable(c, out, out_now);
+	__bch2_fs_sectors_placeable(c, out, out_now, false);
 
 	for (int i = BCH_REPLICAS_MAX - 2; i >= 0; --i) {
 		out[i] += out[i + 1];
 		if (out_now)
 			out_now[i] += out_now[i + 1];
+	}
+}
+
+/*
+ * What the fastpath may hand out before the next recompute: never more than
+ * placement_allowance, so the placement restriction is re-evaluated before
+ * allocation could have changed it. Capped here and not in the recalc's
+ * decision - running out forces a recompute, never an -ENOSPC. Most capable
+ * slot first: a reservation at any count can draw from above its own.
+ */
+static void disk_reservation_caches_store(struct bch_fs *c, const u64 *avail)
+{
+	u64 budget = c->capacity.placement_allowance;
+
+	for (int i = BCH_REPLICAS_MAX - 1; i >= 0; --i) {
+		u64 v = min(avail[i], budget);
+
+		budget -= v;
+		atomic64_set(&c->capacity.sectors_available[i], v);
 	}
 }
 
@@ -1170,7 +1270,7 @@ static void disk_reservation_caches_reset(struct bch_fs *c, u64 *avail)
 	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
 		percpu_u64_set(&c->capacity.pcpu->sectors_available[i], 0);
 
-	__bch2_fs_sectors_placeable(c, avail, NULL);
+	__bch2_fs_sectors_placeable(c, avail, NULL, true);
 }
 
 void bch2_disk_reservation_degraded(struct bch_fs *c, unsigned wanted,
@@ -1189,8 +1289,7 @@ void bch2_disk_reservation_caches_invalidate(struct bch_fs *c)
 	guard(spinlock)(&c->capacity.sectors_available_lock);
 	disk_reservation_caches_reset(c, avail);
 
-	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		atomic64_set(&c->capacity.sectors_available[i], avail[i]);
+	disk_reservation_caches_store(c, avail);
 }
 
 static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
@@ -1225,8 +1324,7 @@ static int disk_reservation_recalc_sectors_available(struct bch_fs *c,
 		}
 	}
 
-	for (unsigned i = 0; i < BCH_REPLICAS_MAX; i++)
-		atomic64_set(&c->capacity.sectors_available[i], avail[i]);
+	disk_reservation_caches_store(c, avail);
 
 	/* after a shutdown nothing is writable: that's not out of space */
 	if (!ok)

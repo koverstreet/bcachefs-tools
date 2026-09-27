@@ -73,6 +73,9 @@ struct alloc_request {
 	 */
 	struct bch_devs_mask	devs_chosen;
 
+	/* devices this allocation should use first, see bch2_dev_alloc_required() */
+	const struct bch_devs_mask *devs_required;
+
 	/* bch2_bucket_alloc_set_trans(): */
 	struct dev_alloc_list	devs_sorted;
 	u64			domain_keys[BCH_SB_MEMBERS_MAX];
