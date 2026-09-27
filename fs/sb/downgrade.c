@@ -485,6 +485,8 @@ int bch2_sb_downgrade_update(struct bch_fs *c)
 			dst->errors[i] = cpu_to_le16(src->errors[i]);
 
 		try(downgrade_table_extra(c, &table));
+		/* it may have grown the table: */
+		dst = (void *) &darray_top(table);
 
 		if (!dst->recovery_passes[0] &&
 		    !dst->recovery_passes[1] &&
