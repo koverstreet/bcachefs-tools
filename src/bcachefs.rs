@@ -22,6 +22,8 @@ pub mod http;
 mod eytzinger_test;
 #[cfg(test)]
 mod workqueue_test;
+#[cfg(test)]
+mod ec_lifetime_test;
 
 use std::process::ExitCode;
 use bch_bindgen::c;
