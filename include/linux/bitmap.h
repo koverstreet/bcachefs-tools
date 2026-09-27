@@ -285,4 +285,17 @@ static inline bool bitmap_equal(const unsigned long *src1,
 	return __bitmap_equal(src1, src2, nbits);
 }
 
+static inline bool bitmap_intersects(const unsigned long *src1,
+				     const unsigned long *src2,
+				     unsigned int nbits)
+{
+	for (unsigned k = 0; k < nbits / BITS_PER_LONG; k++)
+		if (src1[k] & src2[k])
+			return true;
+
+	return nbits % BITS_PER_LONG &&
+		(src1[nbits / BITS_PER_LONG] & src2[nbits / BITS_PER_LONG] &
+		 BITMAP_LAST_WORD_MASK(nbits));
+}
+
 #endif /* _PERF_BITOPS_H */
