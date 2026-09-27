@@ -16,6 +16,7 @@
 #include "btree/bkey_buf.h"
 #include "btree/bset.h"
 #include "btree/check.h"
+#include "btree/locking.h"
 #include "btree/update.h"
 #include "btree/write_buffer.h"
 
@@ -707,6 +708,53 @@ bool bch2_stripe_handle_tryget(struct bch_fs *c,
 		s->idx = idx;
 		hlist_add_head(&s->hash, &c->ec.stripes_new[hash]);
 	}
+	return ret;
+}
+
+int bch2_stripe_handle_tryget_existing(struct btree_iter *iter,
+				       struct ec_stripe_handle *s)
+{
+	struct btree_trans *trans = iter->trans;
+	struct btree_path *path = btree_iter_path(trans, iter);
+	u64 idx = iter->pos.offset;
+
+	/* A noncached iterator can have obtained the key from the key cache: */
+	if (iter->key_cache_path) {
+		struct btree_path *cached = trans->paths + iter->key_cache_path;
+
+		if (bpos_eq(cached->pos, iter->pos) &&
+		    btree_node_intent_locked(cached, 0))
+			path = cached;
+	}
+
+	EBUG_ON(iter->btree_id != BTREE_ID_stripes);
+	EBUG_ON(!bpos_eq(path->pos, iter->pos));
+	/* write locking without holding intent would corrupt the six lock: */
+	BUG_ON(!btree_node_intent_locked(path, 0));
+
+	if (bch2_stripe_is_open(trans->c, idx))
+		return 0;
+
+	/*
+	 * bch2_trigger_stripe() and device invalidation delete or invalidate a
+	 * stripe after checking that it isn't open. Their commit can then drop
+	 * its locks (e.g. waiting on a journal reservation), relock and commit
+	 * without re-running the triggers. Taking and dropping an intent lock
+	 * doesn't invalidate that relock; a write lock does, because write
+	 * unlock advances the six sequence.
+	 *
+	 * Those transactions update the stripe key, so they hold its key cache
+	 * entry as well as a leaf path. If we read the key through the leaf,
+	 * there was no cache entry at the time, and a cache entry they held was
+	 * evicted, which already invalidated their cache path. So bumping
+	 * whichever of the two supplied our key is enough. The key cache fill
+	 * write-locks the leaf around its insert for the same reason.
+	 *
+	 * Take the lock before publishing, so a restart can't leak a handle.
+	 */
+	try(bch2_btree_node_lock_write(trans, path, &path->l[0].b->c));
+	int ret = bch2_stripe_handle_tryget(trans->c, s, idx);
+	bch2_btree_node_unlock_write(trans, path, path->l[0].b);
 	return ret;
 }
 

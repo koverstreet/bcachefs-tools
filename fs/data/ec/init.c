@@ -44,7 +44,11 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 	 * Important: check stripe_is_open with the stripe key intent-locked
 	 * (both callers' iterators), same discipline as ec_stripe_delete() -
 	 * otherwise a create can open the stripe and load the pre-update key
-	 * between our check and commit.
+	 * between our check and commit. The intent lock excludes that while we
+	 * hold it; if our commit drops and retakes its locks, the create has
+	 * published its handle under the key's write lock
+	 * (bch2_stripe_handle_tryget_existing()), so our relock fails and we
+	 * check again.
 	 */
 	if (bch2_stripe_is_open(c, k.k->p.offset)) {
 		*had_open = true;

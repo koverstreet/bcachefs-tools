@@ -119,7 +119,8 @@ static int ec_stripe_delete(struct btree_trans *trans, u64 idx, bool is_open)
 
 	/*
 	 * We expect write buffer races here
-	 * Important: check stripe_is_open with stripe key locked:
+	 * Important: check stripe_is_open with stripe key locked (openers
+	 * publish under its write lock, see bch2_stripe_handle_tryget_existing()):
 	 */
 	if (k.k->type != KEY_TYPE_stripe ||
 	    stripe_lru_pos(bkey_s_c_to_stripe(k).v) != STRIPE_LRU_POS_EMPTY) {
@@ -1627,9 +1628,11 @@ static int get_old_stripe(struct btree_trans *trans,
 	struct bch_fs *c = trans->c;
 
 	/*
-	 * We require an intent lock here until we have the stripe open, for
-	 * exclusion with bch2_trigger_stripe() - which will delete empty
-	 * stripes if they're not open, but it can't actually open them:
+	 * Keep the key intent-locked until bch2_stripe_handle_tryget_existing()
+	 * has published our handle under the key's write lock: the intent lock
+	 * excludes bch2_trigger_stripe() - which deletes empty stripes if they
+	 * aren't open - while we hold it, and the write lock invalidates one
+	 * that checked before us and dropped its locks before committing.
 	 */
 	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, idx),
 				BTREE_ITER_intent|
@@ -1681,9 +1684,11 @@ static int get_old_stripe(struct btree_trans *trans,
 		       btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 	}
 
-	bool ret = may_reuse_stripe(c, new, old.v) &&
-		bch2_stripe_handle_tryget(c, &new->old_stripe_handle, idx);
-	if (ret)
+	if (!may_reuse_stripe(c, new, old.v))
+		return 0;
+
+	int ret = bch2_stripe_handle_tryget_existing(&iter, &new->old_stripe_handle);
+	if (ret > 0)
 		bkey_reassemble(&new->old_stripe.key.k_i, k);
 	return ret;
 }
@@ -2354,11 +2359,10 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	struct bch_fs *c = trans->c;
 
 	/*
-	 * Same as get_old_stripe() -
-	 *
-	 * We require an intent lock here until we have the stripe open, for
-	 * exclusion with bch2_trigger_stripe() - which will delete empty
-	 * stripes if they're not open, but it can't actually open them:
+	 * Same as get_old_stripe(): the key stays intent-locked until
+	 * bch2_stripe_handle_tryget_existing() has published our handle under
+	 * its write lock, for exclusion with bch2_trigger_stripe() and device
+	 * invalidation, which act on stripes that aren't open:
 	 */
 	BUG_ON(!btree_node_intent_locked(btree_iter_path(trans, iter), 0));
 
@@ -2419,17 +2423,16 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	if (unlikely(!new_s))
 		return -ENOMEM;
 
-	if (!bch2_stripe_handle_tryget(c, &new_s->old_stripe_handle, s.k->p.offset)) {
+	int ret = bch2_stripe_handle_tryget_existing(iter, &new_s->old_stripe_handle);
+	if (ret <= 0) {
 		/* trace this */
 		kfree(new_s);
-		return 0;
+		return ret;
 	}
 
 	bkey_reassemble(&new_s->old_stripe.key.k_i, s.s_c);
 
 	init_new_stripe_from_old(c, new_s, true);
-
-	int ret;
 
 	CLASS(closure_stack, cl)();
 	while (bch2_err_matches(ret = bch2_ec_stripe_buf_init(c, &new_s->old_stripe, 0,
