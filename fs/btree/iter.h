@@ -682,6 +682,15 @@ bch2_btree_iter_flags(struct btree_trans *trans,
 	    !btree_type_has_snapshot_field(btree_id))
 		flags &= ~BTREE_ITER_all_snapshots;
 
+	/*
+	 * Without snapshot semantics a snapshot field is just part of the key:
+	 * advancing past a key at (inode, offset, snapshot) must not skip the
+	 * others at (inode, offset).
+	 */
+	if (btree_type_has_snapshot_field(btree_id) &&
+	    !btree_type_has_snapshots(btree_id))
+		flags |= BTREE_ITER_all_snapshots;
+
 	if (!(flags & BTREE_ITER_all_snapshots) &&
 	    btree_type_has_snapshots(btree_id))
 		flags |= BTREE_ITER_filter_snapshots;
