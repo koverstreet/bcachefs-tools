@@ -1601,11 +1601,20 @@ static const struct vm_operations_struct bch_vm_ops = {
  * from mmap() instead of SIGBUS from page_mkwrite. EIO, as ext4 and f2fs return
  * from a shut-down filesystem: mmap(2) documents neither EIO nor EROFS.
  */
-static int bch2_mmap_check(struct file *file)
+/*
+ * A write fault on a shut-down filesystem can't get a disk reservation, so
+ * page_mkwrite would SIGBUS: refuse the mapping instead, so the writer gets an
+ * error from mmap(). Only shared writable mappings fault that way - a
+ * read-only mapping of a file open for writing (xfs_io's default) never calls
+ * page_mkwrite, and must still work: generic/743 maps read-only while its
+ * error injection is taking the filesystem down. mprotect() can still make one
+ * writable later; that case SIGBUSes, as it always did.
+ */
+static int bch2_mmap_check(struct file *file, bool shared_writable)
 {
 	struct bch_fs *c = file_inode(file)->i_sb->s_fs_info;
 
-	if ((file->f_mode & FMODE_WRITE) &&
+	if (shared_writable &&
 	    test_bit(BCH_FS_emergency_ro, &c->flags))
 		return bch2_err_class(bch_err_throw(c, mmap_emergency_ro));
 	return 0;
@@ -1614,7 +1623,14 @@ static int bch2_mmap_check(struct file *file)
 #if LINUX_VERSION_CODE >= KERNEL_VERSION(6,17,0)
 static int bch2_mmap_prepare(struct vm_area_desc *desc)
 {
-	int ret = bch2_mmap_check(desc->file);
+#if LINUX_VERSION_CODE >= KERNEL_VERSION(7,0,0)
+	bool shared_writable = vma_flags_test_all(&desc->vma_flags,
+						  VMA_SHARED_BIT, VMA_WRITE_BIT);
+#else
+	bool shared_writable = (desc->vm_flags & (VM_SHARED|VM_WRITE)) ==
+		(VM_SHARED|VM_WRITE);
+#endif
+	int ret = bch2_mmap_check(desc->file, shared_writable);
 	if (ret)
 		return ret;
 
@@ -1626,7 +1642,8 @@ static int bch2_mmap_prepare(struct vm_area_desc *desc)
 #else
 static int bch2_mmap(struct file *file, struct vm_area_struct *vma)
 {
-	int ret = bch2_mmap_check(file);
+	int ret = bch2_mmap_check(file,
+			(vma->vm_flags & (VM_SHARED|VM_WRITE)) == (VM_SHARED|VM_WRITE));
 	if (ret)
 		return ret;
 
