@@ -863,19 +863,37 @@ void bch2_trans_node_add(struct btree_trans *trans, struct btree *b)
 	bch2_trans_revalidate_updates_in_node(trans, b);
 }
 
+/*
+ * @b is being freed, or reused for a different node: paths that have it cached
+ * without holding a lock on it must forget it.
+ *
+ * The saved lock_seq doesn't protect a stale pointer from this transaction:
+ * __bch2_btree_node_unlock_write() advances the saved seq of every path here
+ * that has @b and a matching seq, locked or not - so a stale path would stay in
+ * sync through our own write unlocks, and relock onto whatever @b becomes.
+ *
+ * Paths holding @b locked are left alone: bch2_trans_node_add() migrates them.
+ */
+void bch2_trans_node_forget(struct btree_trans *trans, struct btree *b)
+{
+	struct btree_path *path;
+	unsigned i;
+
+	trans_for_each_path(trans, path, i)
+		for (unsigned l = 0; l < BTREE_MAX_DEPTH; l++)
+			if (path->l[l].b == b && !btree_node_locked(path, l))
+				path->l[l].b = ERR_PTR(-BCH_ERR_no_btree_node_drop);
+}
+
 void bch2_trans_node_verify_not_in_iters(struct btree_trans *trans, struct btree *b)
 {
 	struct btree_path *path;
 	unsigned i, level = b->c.level;
 
 	/*
-	 * path->l[level].b is also a cache for fast relock: a path can carry
-	 * a node pointer at a level it has released the lock on. When the
-	 * btree node cache slot for that previously-cached node is recycled
-	 * for an unrelated node (different btree, even), the cached pointer
-	 * stale-coincides with whatever now occupies the slot. Only flag a
-	 * leak when the path is actually still holding a lock at this level
-	 * - that's the case bch2_trans_node_add couldn't migrate.
+	 * Unlocked references were dropped by bch2_trans_node_forget(), locked
+	 * ones migrated by bch2_trans_node_add(): a path still holding a lock
+	 * on @b is one bch2_trans_node_add() couldn't migrate.
 	 */
 	trans_for_each_path(trans, path, i)
 		if (unlikely(path->l[level].b == b &&

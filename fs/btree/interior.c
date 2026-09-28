@@ -392,6 +392,7 @@ static void bch2_btree_node_free_inmem(struct btree_trans *trans,
 	__btree_node_free(trans, b);
 
 	bch2_btree_node_transition_state(&c->btree.cache, b, BTREE_NODE_CACHE_FREEABLE);
+	bch2_trans_node_forget(trans, b);
 }
 
 /*

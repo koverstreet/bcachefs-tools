@@ -1021,6 +1021,9 @@ got_mem:
 	BUG_ON(btree_node_write_in_flight(b));
 	BUG_ON(!b->data);
 
+	/* @b may have been a node our paths still have cached: */
+	bch2_trans_node_forget(trans, b);
+
 	b->flags		= 0;
 	b->written		= 0;
 	b->nsets		= 0;
