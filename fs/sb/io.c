@@ -965,6 +965,27 @@ static int read_backup_supers(struct bch_sb_handle *sb,
 	return 0;
 }
 
+/*
+ * The primary was unreadable, failed validation, or was older than a backup. Put the good copy back in slot 0 now,
+ * rather than leaving it for the next superblock write - that write reads back
+ * slot 0 first and would take a torn primary for another writer.
+ */
+static int rewrite_primary_super(struct bch_sb_handle *sb)
+{
+	struct bch_sb *s = sb->sb;
+
+	s->offset = s->layout.sb_offset[0];
+	s->csum = csum_vstruct(NULL, BCH_SB_CSUM_TYPE(s), null_nonce(), s);
+
+	bio_reset(sb->bio, sb->bdev, REQ_OP_WRITE|REQ_SYNC|REQ_META|REQ_FUA);
+	sb->bio->bi_iter.bi_sector = le64_to_cpu(s->offset);
+	bch2_bio_map(sb->bio, s,
+		     roundup((size_t) vstruct_bytes(s),
+			     bdev_logical_block_size(sb->bdev)));
+
+	return submit_bio_wait(sb->bio);
+}
+
 static int read_super_and_backups(struct bch_sb_handle *sb,
 			     const char *path,
 			     struct bch_opts *opts,
@@ -1038,6 +1059,7 @@ static int read_super_and_backups(struct bch_sb_handle *sb,
 		return -EFAULT;
 
 	u64 sb_offset;
+	bool primary_bad = false;
 
 	/*
 	 * If the user requested a specific superblock offset (recovery /
@@ -1057,13 +1079,17 @@ static int read_super_and_backups(struct bch_sb_handle *sb,
 		CLASS(printbuf, primary_err)();
 		int ret = read_one_super(sb, BCH_SB_SECTOR, &primary_err);
 		if (!ret) {
+			u64 primary_seq = le64_to_cpu(sb->sb->seq);
+
 			memcpy(&layout, &sb->sb->layout, sizeof(layout));
 			try(validate_sb_layout(&layout, err));
 			try(read_backup_supers(sb, &layout, true, &sb_offset, err));
+			primary_bad = primary_seq < le64_to_cpu(sb->sb->seq);
 		} else {
 			prt_printf(err, "primary superblock unreadable: %s\n", primary_err.buf);
 			try(read_layout_sector(sb, &layout, err));
 			try(read_backup_supers(sb, &layout, false, &sb_offset, err));
+			primary_bad = true;
 		}
 	}
 
@@ -1082,6 +1108,16 @@ static int read_super_and_backups(struct bch_sb_handle *sb,
 
 	sb->have_layout = true;
 	try(bch2_sb_validate(sb->sb, opts, sb_offset, 0, err));
+
+	if (primary_bad && (sb->mode & BLK_OPEN_WRITE)) {
+		int ret = rewrite_primary_super(sb);
+		if (ret)
+			prt_printf(err, "error rewriting primary superblock from backup at %llu: %s\n",
+				   sb_offset, bch2_err_str(ret));
+		else
+			prt_printf(err, "rewrote primary superblock from backup at %llu\n",
+				   sb_offset);
+	}
 
 	return 0;
 }
