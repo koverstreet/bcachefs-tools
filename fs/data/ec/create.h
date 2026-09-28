@@ -55,11 +55,6 @@ struct ec_stripe_new_bucket {
 	u64			dev_bucket;
 };
 
-struct ec_stripe_handle {
-	struct hlist_node	hash;
-	u64			idx;
-};
-
 struct ec_stripe_new {
 	struct bch_fs		*c;
 	struct moving_context	*ctxt;

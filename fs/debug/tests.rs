@@ -560,7 +560,9 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
         }
         updater.unlock();
 
-        // Safety: plain C struct, all-zeroes is its unclaimed state.
+        // Safety: plain C struct, all-zeroes is its unclaimed state. The
+        // definition must be visible to bindgen (data/ec/types.h) - a forward
+        // declaration comes through as a zero-sized type.
         let mut handle: c::ec_stripe_handle = unsafe { core::mem::zeroed() };
         {
             let opener = BtreeTrans::new(fs);

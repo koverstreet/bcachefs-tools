@@ -26,6 +26,12 @@ struct gc_stripe {
 	union bch_replicas_padded r;
 };
 
+/* A claim on a stripe index, hashed in bch_fs_ec.stripes_new: */
+struct ec_stripe_handle {
+	struct hlist_node	hash;
+	u64			idx;
+};
+
 struct bch_fs_ec {
 	long			stripe_buf_bytes;
 	spinlock_t		stripe_buf_lock;
