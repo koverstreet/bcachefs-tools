@@ -927,7 +927,12 @@ bool bch2_can_read_fs_with_devs(struct bch_fs *c, struct bch_devs_mask *devs,
 	return true;
 }
 
+/*
+ * @devs: the rw devices we'd be writing with - at start, the rw set; for a
+ * device leaving rw, the rw set without it
+ */
 bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
+				 enum bch_write_check check,
 				 unsigned flags, struct printbuf *err)
 {
 	unsigned nr_have[BCH_DATA_NR];
@@ -936,8 +941,9 @@ bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
 	unsigned nr_online[BCH_DATA_NR];
 	memset(nr_online, 0, sizeof(nr_online));
 
+	/* nr_have: what the rw set has now; nr_online: what @devs would have */
 	scoped_guard(rcu)
-		for_each_member_device_rcu(c, ca, &devs) {
+		for_each_member_device_rcu(c, ca, &c->allocator.rw_devs[0]) {
 			if (!ca->mi.durability)
 				continue;
 
@@ -965,18 +971,21 @@ bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
 		return false;
 	}
 
+	if (check == BCH_WRITE_CHECK_start)
+		return true;
+
 	if (!(flags & BCH_FORCE_IF_METADATA_DEGRADED)) {
 		if (nr_online[BCH_DATA_journal] < nr_have[BCH_DATA_journal] &&
 		    nr_online[BCH_DATA_journal] < c->opts.metadata_replicas) {
-			prt_printf(err, "Insufficient rw journal devices (%u) online\n",
-				   nr_online[BCH_DATA_journal]);
+			prt_printf(err, "Insufficient rw journal devices (%u < %u) online\n",
+				   nr_online[BCH_DATA_journal], c->opts.metadata_replicas);
 			return false;
 		}
 
 		if (nr_online[BCH_DATA_btree] < nr_have[BCH_DATA_btree] &&
 		    nr_online[BCH_DATA_btree] < c->opts.metadata_replicas) {
-			prt_printf(err, "Insufficient rw btree devices (%u) online\n",
-				   nr_online[BCH_DATA_btree]);
+			prt_printf(err, "Insufficient rw btree devices (%u < %u) online\n",
+				   nr_online[BCH_DATA_btree], c->opts.metadata_replicas);
 			return false;
 		}
 	}
@@ -984,8 +993,8 @@ bool bch2_can_write_fs_with_devs(struct bch_fs *c, struct bch_devs_mask devs,
 	if (!(flags & BCH_FORCE_IF_DATA_DEGRADED)) {
 		if (nr_online[BCH_DATA_user] < nr_have[BCH_DATA_user] &&
 		    nr_online[BCH_DATA_user] < c->opts.data_replicas) {
-			prt_printf(err, "Insufficient rw user data devices (%u) online\n",
-				   nr_online[BCH_DATA_user]);
+			prt_printf(err, "Insufficient rw user data devices (%u < %u) online\n",
+				   nr_online[BCH_DATA_user], c->opts.data_replicas);
 			return false;
 		}
 	}

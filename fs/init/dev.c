@@ -858,7 +858,8 @@ bool bch2_dev_state_allowed(struct bch_fs *c, struct bch_dev *ca,
 		struct bch_devs_mask new_rw_devs = c->allocator.rw_devs[0];
 		__clear_bit(ca->dev_idx, new_rw_devs.d);
 
-		return bch2_can_write_fs_with_devs(c, new_rw_devs, flags, err);
+		return bch2_can_write_fs_with_devs(c, new_rw_devs, BCH_WRITE_CHECK_dev_leaving_rw,
+						   flags, err);
 	}
 
 	return true;
@@ -1461,7 +1462,8 @@ static int bch2_dev_may_offline(struct bch_fs *c, struct bch_dev *ca, int flags,
 
 	if (!bch2_can_read_fs_with_devs(c, &new_devs, flags, err) ||
 	    (!c->opts.read_only &&
-	     !bch2_can_write_fs_with_devs(c, new_rw_devs, flags, err))) {
+	     !bch2_can_write_fs_with_devs(c, new_rw_devs, BCH_WRITE_CHECK_dev_leaving_rw,
+					  flags, err))) {
 		prt_printf(err, "Cannot offline required disk\n");
 		return bch_err_throw(c, device_state_not_allowed);
 	}

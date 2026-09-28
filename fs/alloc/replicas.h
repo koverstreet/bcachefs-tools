@@ -39,8 +39,18 @@ bool bch2_can_read_replicas_with_devs(struct bch_fs *, struct bch_devs_mask *,
 				      unsigned, struct printbuf *);
 bool bch2_can_read_fs_with_devs(struct bch_fs *, struct bch_devs_mask *,
 				unsigned, struct printbuf *);
+enum bch_write_check {
+	/* Starting: is there anywhere to write each data type at all? */
+	BCH_WRITE_CHECK_start,
+	/*
+	 * A device leaving the rw set: also refuse, unless the matching force
+	 * flag is set, if that takes a data type below its configured replicas
+	 */
+	BCH_WRITE_CHECK_dev_leaving_rw,
+};
+
 bool bch2_can_write_fs_with_devs(struct bch_fs *, struct bch_devs_mask,
-				 unsigned, struct printbuf *);
+				 enum bch_write_check, unsigned, struct printbuf *);
 
 bool bch2_sb_has_journal(struct bch_sb *);
 unsigned bch2_sb_dev_has_data(struct bch_sb *, unsigned);

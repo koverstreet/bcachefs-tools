@@ -1495,7 +1495,8 @@ static int bch2_fs_may_start(struct bch_fs *c, struct printbuf *err)
 
 	if (!bch2_can_read_fs_with_devs(c, &c->devs_online, flags, err) ||
 	    (!c->opts.read_only &&
-	     !bch2_can_write_fs_with_devs(c, c->allocator.rw_devs[0], flags, err))) {
+	     !bch2_can_write_fs_with_devs(c, c->allocator.rw_devs[0], BCH_WRITE_CHECK_start,
+					  flags, err))) {
 		bch2_missing_devs_to_text(err, c);
 		return bch_err_throw(c, insufficient_devices_to_start);
 	}
