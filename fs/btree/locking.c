@@ -899,6 +899,8 @@ bool __bch2_btree_node_relock(struct btree_trans *trans,
 	if (six_relock_type(&b->c.lock, want, path->l[level].lock_seq) ||
 	    (btree_node_lock_seq_matches(path, b, level) &&
 	     btree_node_lock_increment(trans, &b->c, level, want))) {
+		/* a matching seq must mean the node is still the one we had: */
+		EBUG_ON(b->c.btree_id != path->btree_id || b->c.level != level);
 		mark_btree_node_locked(trans, path, level, want);
 		return true;
 	}
