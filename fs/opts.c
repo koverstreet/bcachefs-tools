@@ -13,6 +13,7 @@
 
 #include "data/compress.h"
 #include "data/copygc.h"
+#include "data/reconcile/check.h"
 #include "data/reconcile/work.h"
 
 #include "init/dev.h"
@@ -696,6 +697,12 @@ int bch2_opt_hook_pre_set(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum b
 		if (v)
 			bch2_check_set_feature(c, BCH_FEATURE_ec);
 		break;
+	case Opt_rotational:
+		/* Offline: there's no post hook, and nothing to race with */
+		if (ca && change && v != ca->mi.rotational &&
+		    !test_bit(BCH_FS_started, &c->flags))
+			bch2_reconcile_rotational_changed(c, ca);
+		break;
 	case Opt_casefold_disabled:
 		if (v && (c->sb.features & BIT_ULL(BCH_FEATURE_casefolding))) {
 			bch_err(c, "cannot mount with casefolding disabled: casefolding already in use");
@@ -776,6 +783,11 @@ void bch2_opt_hook_post_set(struct bch_fs *c, struct bch_dev *ca, u64 inum,
 		break;
 	case Opt_read_only:
 		bch2_reconcile_wakeup(c);
+		break;
+	case Opt_rotational:
+		/* Online: the new value has to be live before the pass runs */
+		if (ca && test_bit(BCH_FS_started, &c->flags))
+			bch2_reconcile_rotational_changed(c, ca);
 		break;
 	case Opt_btree_cache_shrinker_seeks: {
 		struct bch_fs_btree_cache *bc = &c->btree.cache;

@@ -16,7 +16,10 @@
 #include "data/reconcile/work.h"
 
 #include "init/error.h"
+#include "init/passes.h"
 #include "init/progress.h"
+
+#include "sb/io.h"
 
 /* need better helpers for iterating in parallel */
 
@@ -653,6 +656,35 @@ static int check_reconcile_work_data_btrees(struct btree_trans *trans)
 						    &snapshot_io_opts, &c->recovery.progress, &last_flushed));
 
 	return 0;
+}
+
+/*
+ * Flipping a device's rotational flag leaves the reconcile phys bits of
+ * backpointers created under the old setting stale, and deletes after the flip
+ * miss their phys btree entries - expected, not damage: have
+ * check_reconcile_work repair them, quietly.
+ */
+void bch2_reconcile_rotational_changed(struct bch_fs *c, struct bch_dev *ca)
+{
+	CLASS(bch_log_msg_level, msg)(c, LOGLEVEL_info);
+	prt_printf(&msg.m, "%s: rotational changed, repairing backpointer reconcile phys bits\n",
+		   ca->name);
+
+	/*
+	 * Silence first, in its own write: an online pass is started as soon as
+	 * it's scheduled, and has to see the silenced errors
+	 */
+	scoped_guard(mutex_noio, &c->sb_lock) {
+		CLASS(sb_write, w)(c);
+		sb_set_err_silent(&w, BCH_FSCK_ERR_backpointer_reconcile_phys_wrong);
+		sb_set_err_silent(&w, BCH_FSCK_ERR_reconcile_work_phys_incorrectly_set);
+	}
+
+	int ret = bch2_run_explicit_recovery_pass(c, &msg.m, BCH_RECOVERY_PASS_check_reconcile_work, 0);
+	if (ret) {
+		prt_printf(&msg.m, "error scheduling check_reconcile_work: %s\n", bch2_err_str(ret));
+		msg.loglevel = LOGLEVEL_err;
+	}
 }
 
 int bch2_check_reconcile_work(struct bch_fs *c)
