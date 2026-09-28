@@ -446,7 +446,8 @@ enum bch_fsck_flags {
 	x(data_lost_double_allocation,				432,	0)		\
 	x(write_degraded_insufficient_devices,			433,	0)		\
 	x(write_degraded_no_progress,				434,	0)		\
-	x(MAX,							435,	0)
+	x(backpointer_reconcile_phys_wrong,			435,	FSCK_AUTOFIX)	\
+	x(MAX,							436,	0)
 
 enum bch_sb_error_id {
 #define x(t, n, ...) BCH_FSCK_ERR_##t = n,

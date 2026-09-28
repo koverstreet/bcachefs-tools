@@ -55,7 +55,7 @@ const char * const bch2_reconcile_opts[] = {
 	NULL
 };
 
-static const char * const bch2_reconcile_work_ids[] = {
+const char * const bch2_reconcile_work_ids[] = {
 	RECONCILE_WORK_IDS()
 	NULL
 };

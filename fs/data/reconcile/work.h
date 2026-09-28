@@ -56,6 +56,8 @@ DEFINE_CLASS(opt_change_scope, struct opt_change_scope,
 	     bch2_opt_change_scope_init(c),
 	     struct bch_fs *c);
 
+extern const char * const bch2_reconcile_work_ids[];
+
 int bch2_set_reconcile_needs_scan_trans(struct btree_trans *, struct reconcile_scan);
 int bch2_set_reconcile_needs_scan(struct bch_fs *, struct reconcile_scan, bool);
 int bch2_set_reconcile_needs_scan_pre(struct bch_fs *, struct reconcile_scan, struct opt_change_scope *);
