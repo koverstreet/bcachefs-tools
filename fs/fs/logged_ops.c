@@ -88,10 +88,15 @@ static int resume_logged_op(struct btree_trans *trans, struct btree_iter *iter,
 	bch2_bkey_buf_init(&sk);
 	bch2_bkey_buf_reassemble(&sk, k);
 
-	fsck_err_on(test_bit(BCH_FS_clean_recovery, &c->flags),
-		    trans, logged_op_but_clean,
-		    "filesystem marked as clean but have logged op\n%s",
-		    (bch2_bkey_val_to_text(&buf, c, k), buf.buf));
+	/*
+	 * Fixing logs the error to the journal via @trans: commit that before
+	 * the resume, which runs transactions of its own:
+	 */
+	if (fsck_err_on(test_bit(BCH_FS_clean_recovery, &c->flags),
+			trans, logged_op_but_clean,
+			"filesystem marked as clean but have logged op\n%s",
+			(bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
+		try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 
 	const struct bch_logged_op_fn *fn = logged_op_fn(sk.k->k.type);
 	if (fn)
