@@ -2534,7 +2534,7 @@ static int btree_trans_peek_key_cache(struct btree_iter *iter, struct bkey_s_c *
 
 	if (!iter->key_cache_path)
 		iter->key_cache_path = bch2_path_get(trans, iter->btree_id, &k->k->p,
-						     iter->flags & BTREE_ITER_intent, 0,
+						     !!(iter->flags & BTREE_ITER_intent), 0,
 						     iter->flags|BTREE_ITER_cached|
 						     BTREE_ITER_cached_nofill,
 						     _THIS_IP_);
