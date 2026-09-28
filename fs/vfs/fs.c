@@ -1158,26 +1158,31 @@ int __bch2_unlink(struct inode *vdir, struct dentry *dentry,
 	int ret;
 
 	bch2_lock_inodes(INODE_UPDATE_LOCK, dir, inode);
-	CLASS(btree_trans, trans)(c);
+	{
+		CLASS(btree_trans, trans)(c);
 
-	ret = commit_do(trans, NULL, NULL,
-			BCH_TRANS_COMMIT_no_enospc,
-		bch2_unlink_trans(trans,
-				  inode_inum(dir),	&dir_u,
-				  inode_inum(inode),	&inode_u, &dentry->d_name,
-				  deleting_snapshot));
-	if (unlikely(ret))
-		goto err;
-
-	bch2_inode_update_after_write(trans, dir, &dir_u,
-				      ATTR_MTIME|ATTR_CTIME|ATTR_SIZE);
-	bch2_inode_update_after_write(trans, inode, &inode_u,
-				      ATTR_CTIME);
-
-	if (IS_CASEFOLDED(vdir))
-		d_invalidate(dentry);
-err:
+		ret = commit_do(trans, NULL, NULL,
+				BCH_TRANS_COMMIT_no_enospc,
+			bch2_unlink_trans(trans,
+					  inode_inum(dir),	&dir_u,
+					  inode_inum(inode),	&inode_u, &dentry->d_name,
+					  deleting_snapshot));
+		if (likely(!ret)) {
+			bch2_inode_update_after_write(trans, dir, &dir_u,
+						      ATTR_MTIME|ATTR_CTIME|ATTR_SIZE);
+			bch2_inode_update_after_write(trans, inode, &inode_u,
+						      ATTR_CTIME);
+		}
+	}
 	bch2_unlock_inodes(INODE_UPDATE_LOCK, dir, inode);
+
+	/*
+	 * d_invalidate() waits for other threads killing child dentries, and
+	 * evicting a deleted child takes btree locks: call it with none of ours
+	 * held, as vfs_rmdir() does shrink_dcache_parent()
+	 */
+	if (!ret && IS_CASEFOLDED(vdir))
+		d_invalidate(dentry);
 
 	return ret;
 }
