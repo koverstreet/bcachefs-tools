@@ -385,6 +385,53 @@ int bch2_inode_opt_propagate_finish(struct btree_trans *trans,
 	return bch2_logged_op_finish(trans, &op->k_i, ret) ?: ret;
 }
 
+/* At the start of the transaction: a restart discards the logged op */
+void bch2_inode_opt_change_init(struct inode_opt_change *ch)
+{
+	ch->reconcile_changed = false;
+	bkey_init(&ch->propagate.k);
+}
+
+/*
+ * In the transaction, after changing @inode_u's options: @old_r is its
+ * reconcile opts from before, @snapshot the snapshot the inode is written at.
+ */
+int bch2_inode_opt_change_trans(struct btree_trans *trans,
+				struct bch_extent_reconcile *old_r,
+				struct bch_inode_unpacked *inode_u, u32 snapshot,
+				struct inode_opt_change *ch)
+{
+	struct bch_extent_reconcile new_r = bch2_inode_reconcile_opts_get(trans->c, inode_u);
+
+	ch->reconcile_changed = memcmp(old_r, &new_r, sizeof(new_r));
+	if (!ch->reconcile_changed)
+		return 0;
+
+	try(bch2_set_reconcile_needs_scan_trans(trans,
+			(struct reconcile_scan) {
+				.type = RECONCILE_SCAN_inum,
+				.inum = inode_u->bi_inum }));
+	/*
+	 * Data written before this subvolume branched off is keyed at an
+	 * ancestor snapshot, and takes its options from the inode version
+	 * there: the new options have to be pushed up to reach it.
+	 */
+	return bch2_inode_opt_propagate_start(trans, inode_u->bi_inum, snapshot,
+					      &ch->propagate);
+}
+
+/* After the transaction has committed */
+int bch2_inode_opt_change_finish(struct btree_trans *trans, struct inode_opt_change *ch)
+{
+	int ret = 0;
+
+	if (ch->propagate.k.type == KEY_TYPE_logged_op_inode_opt_propagate)
+		ret = bch2_inode_opt_propagate_finish(trans, &ch->propagate);
+	if (ch->reconcile_changed)
+		bch2_reconcile_wakeup(trans->c);
+	return ret;
+}
+
 /*
  * An invariant, not a one-off migration: deleting one of two disagreeing
  * branches leaves the survivor's value uncontested but never propagated, and

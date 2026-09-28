@@ -142,15 +142,13 @@ static int bch2_write_inode_trans(struct btree_trans *trans,
 				  struct bch_inode_info *inode,
 				  inode_set_fn set,
 				  void *p, unsigned fields,
-				  bool *reconcile_changed,
-				  struct bkey_i_logged_op_inode_opt_propagate *propagate)
+				  struct inode_opt_change *opt_change)
 {
 	struct bch_fs *c = trans->c;
 	CLASS(btree_iter_uninit, iter)(trans);
 	struct bch_inode_unpacked inode_u;
 
-	/* First thing: a restart discards the update, so it can't stay armed */
-	bkey_init(&propagate->k);
+	bch2_inode_opt_change_init(opt_change);
 
 	try(bch2_inode_peek(trans, &iter, &inode_u, inode_inum(inode), BTREE_ITER_intent));
 
@@ -161,23 +159,11 @@ static int bch2_write_inode_trans(struct btree_trans *trans,
 	if (set)
 	       try(set(trans, inode, &inode_u, p));
 
-	struct bch_extent_reconcile new_r = bch2_inode_reconcile_opts_get(c, &inode_u);
-	*reconcile_changed = memcmp(&old_r, &new_r, sizeof(new_r));
-	if (*reconcile_changed) {
-		try(bch2_set_reconcile_needs_scan_trans(trans,
-				(struct reconcile_scan) {
-					.type = RECONCILE_SCAN_inum,
-					.inum = inode_u.bi_inum }));
-		/*
-		 * Data written before this subvolume branched off is keyed at
-		 * an ancestor snapshot, and takes its options from the inode
-		 * version there: the new options have to be pushed up to reach
-		 * it. iter.snapshot, not inode_u.bi_snapshot - peek() can find
-		 * the key at an ancestor, but we write here.
-		 */
-		try(bch2_inode_opt_propagate_start(trans, inode_u.bi_inum,
-						   iter.snapshot, propagate));
-	}
+	/*
+	 * iter.snapshot, not inode_u.bi_snapshot: peek() can find the key at an
+	 * ancestor, but we write here
+	 */
+	try(bch2_inode_opt_change_trans(trans, &old_r, &inode_u, iter.snapshot, opt_change));
 
 	try(bch2_inode_write(trans, &iter, &inode_u));
 	try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
@@ -196,12 +182,11 @@ int __must_check bch2_write_inode(struct bch_fs *c,
 				  void *p, unsigned fields)
 {
 	CLASS(btree_trans, trans)(c);
-	bool reconcile_changed = false;
 	/* On the stack: it has to outlive the commit that inserts it */
-	struct bkey_i_logged_op_inode_opt_propagate propagate;
+	struct inode_opt_change opt_change;
 
 	int ret = lockrestart_do(trans, bch2_write_inode_trans(trans, inode, set, p, fields,
-							       &reconcile_changed, &propagate));
+							       &opt_change));
 
 	bch2_fs_fatal_err_on(bch2_err_matches(ret, ENOENT), c,
 			     "%s: inode %llu:%llu not found when updating",
@@ -209,12 +194,8 @@ int __must_check bch2_write_inode(struct bch_fs *c,
 			     inode_inum(inode).subvol,
 			     inode_inum(inode).inum);
 
-	if (!ret) {
-		if (propagate.k.type == KEY_TYPE_logged_op_inode_opt_propagate)
-			ret = bch2_inode_opt_propagate_finish(trans, &propagate);
-		if (reconcile_changed)
-			bch2_reconcile_wakeup(c);
-	}
+	if (!ret)
+		ret = bch2_inode_opt_change_finish(trans, &opt_change);
 
 	return ret < 0 ? ret : 0;
 }
@@ -1258,6 +1239,8 @@ static int bch2_rename2(struct mnt_idmap *idmap,
 	struct bch_inode_info *dst_inode = to_bch_ei(dst_dentry->d_inode);
 	struct bch_inode_unpacked dst_dir_u, src_dir_u;
 	struct bch_inode_unpacked src_inode_u, dst_inode_u, *whiteout_inode_u;
+	/* On the stack: they have to outlive the commit that inserts them */
+	struct inode_opt_change src_opt_change, dst_opt_change;
 	enum bch_rename_mode mode = flags & RENAME_EXCHANGE
 		? BCH_RENAME_EXCHANGE
 		: dst_dentry->d_inode
@@ -1315,7 +1298,9 @@ retry:
 				&dst_inode_u,
 				&src_dentry->d_name,
 				&dst_dentry->d_name,
-				mode);
+				mode,
+				&src_opt_change,
+				&dst_opt_change);
 	if (unlikely(ret))
 		goto err_tx_restart;
 
@@ -1367,6 +1352,8 @@ err_tx_restart:
 		bch2_inode_update_after_write(trans, dst_inode, &dst_inode_u,
 					      ATTR_CTIME);
 
+	ret = bch2_inode_opt_change_finish(trans, &src_opt_change) ?:
+	      bch2_inode_opt_change_finish(trans, &dst_opt_change);
 err:
 	bch2_fs_quota_transfer(c, src_inode,
 			       bch_qid(&src_inode->ei_inode),

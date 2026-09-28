@@ -278,6 +278,9 @@ fn fuse_rename(
     let mut dst_dir_u: c::bch_inode_unpacked = Default::default();
     let mut src_inode_u: c::bch_inode_unpacked = Default::default();
     let mut dst_inode_u: c::bch_inode_unpacked = Default::default();
+    // Safety: plain C structs; bch2_rename_trans() initializes them
+    let mut src_opt_change: c::inode_opt_change = unsafe { std::mem::zeroed() };
+    let mut dst_opt_change: c::inode_opt_change = unsafe { std::mem::zeroed() };
 
     btree::iter::trans_commit_do(
         fs,
@@ -295,9 +298,13 @@ fn fuse_rename(
                 &src_qstr,
                 &dst_qstr,
                 c::bch_rename_mode::BCH_RENAME,
+                &mut src_opt_change,
+                &mut dst_opt_change,
             )
         },
-    )
+    )?;
+
+    namei::rename_opt_changes_finish(fs, &mut src_opt_change, &mut dst_opt_change)
 }
 
 #[allow(clippy::too_many_arguments)]

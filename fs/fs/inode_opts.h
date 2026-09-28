@@ -2,6 +2,7 @@
 #ifndef _BCACHEFS_INODE_OPTS_H
 #define _BCACHEFS_INODE_OPTS_H
 
+#include "btree/bkey_types.h"
 #include "fs/inode_format.h"
 
 struct bch_inode_unpacked;
@@ -59,6 +60,22 @@ int bch2_inode_opt_propagate_start(struct btree_trans *, u64, u32,
 				   struct bkey_i_logged_op_inode_opt_propagate *);
 int bch2_inode_opt_propagate_finish(struct btree_trans *,
 				    struct bkey_i_logged_op_inode_opt_propagate *);
+/*
+ * What changing an inode's options leaves for after the commit: an inode
+ * option change has to reach existing data (a reconcile scan) and older
+ * snapshots of the inode (the propagate logged op, finished after commit).
+ */
+struct inode_opt_change {
+	bool						reconcile_changed;
+	struct bkey_i_logged_op_inode_opt_propagate	propagate;
+};
+
+struct bch_extent_reconcile;
+void bch2_inode_opt_change_init(struct inode_opt_change *);
+int bch2_inode_opt_change_trans(struct btree_trans *, struct bch_extent_reconcile *,
+				struct bch_inode_unpacked *, u32, struct inode_opt_change *);
+int bch2_inode_opt_change_finish(struct btree_trans *, struct inode_opt_change *);
+
 int bch2_check_inode_opts_propagated(struct btree_trans *, struct bch_inode_unpacked *);
 int bch2_resume_logged_op_inode_opt_propagate(struct btree_trans *, struct bkey_i *);
 void bch2_logged_op_inode_opt_propagate_to_text(struct printbuf *, struct bch_fs *,

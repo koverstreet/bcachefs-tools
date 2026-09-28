@@ -44,6 +44,7 @@ int bch2_unlink_trans(struct btree_trans *,
 		      subvol_inum, struct bch_inode_unpacked *,
 		      const struct qstr *, bool);
 
+struct inode_opt_change;
 int bch2_rename_trans(struct btree_trans *,
 		      subvol_inum, struct bch_inode_unpacked *,
 		      subvol_inum, struct bch_inode_unpacked *,
@@ -51,7 +52,9 @@ int bch2_rename_trans(struct btree_trans *,
 		      struct bch_inode_unpacked *,
 		      const struct qstr *,
 		      const struct qstr *,
-		      enum bch_rename_mode);
+		      enum bch_rename_mode,
+		      struct inode_opt_change *,
+		      struct inode_opt_change *);
 
 bool bch2_reinherit_attrs(struct bch_inode_unpacked *,
 			  struct bch_inode_unpacked *);

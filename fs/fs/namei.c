@@ -328,7 +328,9 @@ int bch2_rename_trans(struct btree_trans *trans,
 		      struct bch_inode_unpacked *dst_inode_u,
 		      const struct qstr *src_name,
 		      const struct qstr *dst_name,
-		      enum bch_rename_mode mode)
+		      enum bch_rename_mode mode,
+		      struct inode_opt_change *src_opt_change,
+		      struct inode_opt_change *dst_opt_change)
 {
 	struct bch_fs *c = trans->c;
 	CLASS(btree_iter_uninit, src_dir_iter)(trans);
@@ -338,6 +340,9 @@ int bch2_rename_trans(struct btree_trans *trans,
 	subvol_inum src_inum, dst_inum;
 	u64 src_offset, dst_offset;
 	u64 now = bch2_current_time(c);
+
+	bch2_inode_opt_change_init(src_opt_change);
+	bch2_inode_opt_change_init(dst_opt_change);
 
 	try(bch2_inode_peek(trans, &src_dir_iter, src_dir_u, src_dir, BTREE_ITER_intent));
 
@@ -361,9 +366,13 @@ int bch2_rename_trans(struct btree_trans *trans,
 			       mode));
 
 	try(bch2_inode_peek(trans, &src_inode_iter, src_inode_u, src_inum, BTREE_ITER_intent));
+	struct bch_extent_reconcile src_old_r = bch2_inode_reconcile_opts_get(c, src_inode_u);
 
-	if (dst_inum.inum)
+	struct bch_extent_reconcile dst_old_r = {};
+	if (dst_inum.inum) {
 		try(bch2_inode_peek(trans, &dst_inode_iter, dst_inode_u, dst_inum, BTREE_ITER_intent));
+		dst_old_r = bch2_inode_reconcile_opts_get(c, dst_inode_u);
+	}
 
 	if (src_inode_u->bi_subvol &&
 	    dst_dir.subvol != src_inode_u->bi_parent_subvol)
@@ -420,6 +429,13 @@ int bch2_rename_trans(struct btree_trans *trans,
 		    bch2_reinherit_attrs(dst_inode_u, src_dir_u) &&
 		    S_ISDIR(dst_inode_u->bi_mode))
 			return -EXDEV;
+
+		/* Reinherited options have to reach existing data too */
+		try(bch2_inode_opt_change_trans(trans, &src_old_r, src_inode_u,
+						src_inode_iter.snapshot, src_opt_change));
+		if (mode == BCH_RENAME_EXCHANGE)
+			try(bch2_inode_opt_change_trans(trans, &dst_old_r, dst_inode_u,
+							dst_inode_iter.snapshot, dst_opt_change));
 
 		if (is_subdir_for_nlink(src_inode_u)) {
 			src_dir_u->bi_nlink--;

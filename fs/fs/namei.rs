@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::iter::{TransAttempt, TransError};
+use crate::btree::iter::{BtreeTrans, TransAttempt, TransError};
 use crate::c;
+use crate::errcode::{ret_to_result_void, BchError};
+use crate::fs::Fs;
 
 pub fn link_trans<'a, 't>(
     t:        TransAttempt<'a, 't>,
@@ -32,17 +34,21 @@ pub fn unlink_trans<'a, 't>(
     t.result(ret)
 }
 
+/// The opt changes are for rename_opt_changes_finish(), after the commit.
+#[allow(clippy::too_many_arguments)]
 pub fn rename_trans<'a, 't>(
-    t:           TransAttempt<'a, 't>,
-    src_dir:     c::subvol_inum,
-    src_dir_u:   &mut c::bch_inode_unpacked,
-    dst_dir:     c::subvol_inum,
-    dst_dir_u:   &mut c::bch_inode_unpacked,
-    src_inode_u: &mut c::bch_inode_unpacked,
-    dst_inode_u: &mut c::bch_inode_unpacked,
-    src_name:    &c::qstr,
-    dst_name:    &c::qstr,
-    mode:        c::bch_rename_mode,
+    t:              TransAttempt<'a, 't>,
+    src_dir:        c::subvol_inum,
+    src_dir_u:      &mut c::bch_inode_unpacked,
+    dst_dir:        c::subvol_inum,
+    dst_dir_u:      &mut c::bch_inode_unpacked,
+    src_inode_u:    &mut c::bch_inode_unpacked,
+    dst_inode_u:    &mut c::bch_inode_unpacked,
+    src_name:       &c::qstr,
+    dst_name:       &c::qstr,
+    mode:           c::bch_rename_mode,
+    src_opt_change: &mut c::inode_opt_change,
+    dst_opt_change: &mut c::inode_opt_change,
 ) -> Result<TransAttempt<'a, 't>, TransError> {
     let ret = unsafe {
         c::bch2_rename_trans(
@@ -56,9 +62,22 @@ pub fn rename_trans<'a, 't>(
             src_name,
             dst_name,
             mode,
+            src_opt_change,
+            dst_opt_change,
         )
     };
     t.result(ret)
+}
+
+/// After rename_trans() has committed: see bch2_inode_opt_change_finish().
+pub fn rename_opt_changes_finish(
+    fs:  &Fs,
+    src: &mut c::inode_opt_change,
+    dst: &mut c::inode_opt_change,
+) -> Result<(), BchError> {
+    let trans = BtreeTrans::new(fs);
+    ret_to_result_void(unsafe { c::bch2_inode_opt_change_finish(trans.raw(), src) })?;
+    ret_to_result_void(unsafe { c::bch2_inode_opt_change_finish(trans.raw(), dst) })
 }
 
 #[allow(clippy::too_many_arguments)]
