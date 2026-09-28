@@ -14,6 +14,7 @@
 #include "btree/write_buffer.h"
 
 #include "data/checksum.h"
+#include "data/reconcile/work.h"
 #include "data/reflink.h"
 
 #include "sb/io.h"
@@ -88,7 +89,11 @@ __cold void bch2_backpointer_to_text(struct printbuf *out, struct bch_fs *c, str
 	bch2_bpos_to_text(out, bp.v->pos);
 
 	if (BACKPOINTER_RECONCILE_PHYS(bp.v))
-		prt_str(out, " phys");
+		prt_printf(out, " reconcile_phys=%s",
+			   bch2_reconcile_work_ids[BACKPOINTER_RECONCILE_PHYS(bp.v)]);
+
+	if (BACKPOINTER_ERASURE_CODED(bp.v))
+		prt_str(out, " ec");
 
 	if (BACKPOINTER_STRIPE_PTR(bp.v))
 		prt_str(out, " stripe");
