@@ -789,8 +789,18 @@ static void bch2_async_recovery_passes_work(struct work_struct *work)
 	struct bch_fs_recovery *r = &c->recovery;
 
 	if (mutex_trylock(&r->run_lock)) {
+		/*
+		 * A persistent pass is recorded by the same sb_lock section
+		 * that kicks us, and only reaches c->sb when that superblock
+		 * write finishes: read it under sb_lock, or we can run before
+		 * the request is visible and never see it.
+		 */
+		u64 required;
+		scoped_guard(mutex_noio, &c->sb_lock)
+			required = c->sb.recovery_passes_required;
+
 		bch2_run_recovery_passes(c,
-			(c->sb.recovery_passes_required |
+			(required |
 			 r->scheduled_passes_ephemeral) &
 			~r->passes_ratelimiting &
 			bch2_recovery_passes_match(PASS_ONLINE),
