@@ -1649,6 +1649,9 @@ void bch2_recalc_capacity(struct bch_fs *c)
 
 	c->capacity.bucket_size_max = bucket_size_max;
 
+	/* #916: rw set changed - re-evaluate satisfiability from scratch */
+	WRITE_ONCE(c->allocator.alloc_unsatisfiable, false);
+
 	/* Wake up case someone was waiting for buckets */
 	bch2_alloc_wake_all(c);
 }

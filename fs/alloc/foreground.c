@@ -744,8 +744,58 @@ static bool req_dev_sizes_mismatched(struct bch_fs *c, struct alloc_request *req
  * If none of these fire and we have a closure to wait on, we register on
  * freelist_wait and retry once the wake counter advances.
  */
+/*
+ * #916: true iff the current rw set provably cannot satisfy a blocked foreground
+ * allocation, so waiting will never place it: outstanding online_reserved exceeds
+ * the fully-free sectors the rw+durable members can hand out at the normal
+ * watermark, AND copygc can reclaim no more on any of them. The copygc conjunct is
+ * required - online_reserved > free alone false-fires on a fragmented near-full fs
+ * where copygc is merely behind (reservations are against the whole sector pool,
+ * incl. reclaimable space). Requiring copygc idle fires only on the real wedge and
+ * is safe: any reclaimable or freed space defers the bail, never erroring a
+ * placeable write.
+ */
+static bool req_fs_alloc_unsatisfiable(struct bch_fs *c)
+{
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
+
+	u64 online_reserved = percpu_u64_get(&c->capacity.pcpu->online_reserved);
+	if (!online_reserved)
+		return false;
+
+	u64 free = 0;
+	bool copygc_can_make_progress = false;
+
+	scoped_guard(rcu)
+		for_each_rw_member_rcu(c, ca) {
+			if (!ca->mi.durability)
+				continue;
+
+			struct bch_dev_usage usage;
+			bch2_dev_usage_read_fast(ca, &usage);
+
+			free += __dev_buckets_free(ca, usage, BCH_WATERMARK_normal) *
+				ca->mi.bucket_size;
+
+			copygc_can_make_progress |=
+				bch2_copygc_can_make_progress(ca);
+		}
+
+	if (copygc_can_make_progress)	/* space still coming - transient, keep waiting */
+		return false;
+
+	return online_reserved > free;
+}
+
 static bool req_alloc_should_bail(struct bch_fs *c, struct alloc_request *req)
 {
+	/* #916: once the wait side confirmed the rw set can't satisfy this, error the
+	 * retry rather than re-park - even at zero replicas (the wedge), ahead of the
+	 * have_replicas guard; re-verified live so recovery resumes writes. */
+	if (READ_ONCE(c->allocator.alloc_unsatisfiable) &&
+	    req_fs_alloc_unsatisfiable(c))
+		return true;
+
 	bool have_replicas = req->nr_effective ||
 		(req->devs_have && req->devs_have->nr);
 	if (!have_replicas)
@@ -2395,6 +2445,17 @@ void __bch2_wait_on_allocator(struct btree_trans *trans,
 			if ((!old || time_after(jiffies, old + HZ * 60 * 2)) &&
 			    try_cmpxchg(&c->allocator.last_stuck, &old, jiffies))
 				bch2_print_allocator_stuck(c, req, err);
+		}
+
+		/* #916: past the stuck timeout, if the rw set can never satisfy this
+		 * (see req_fs_alloc_unsatisfiable), stop so the retry bails instead of
+		 * parking forever; a healthy evacuation keeps the predicate false. */
+		if (bch2_err_matches(err, BCH_ERR_bucket_alloc_blocked) &&
+		    time_after_eq(jiffies, until) &&
+		    req_fs_alloc_unsatisfiable(c)) {
+			WRITE_ONCE(c->allocator.alloc_unsatisfiable, true);
+			bch2_alloc_waiters_unpark(c);
+			return;
 		}
 
 		trans_closure_sync(trans, cl);
