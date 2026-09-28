@@ -33,6 +33,23 @@ static_assert(ARRAY_SIZE(bch2_errcode_strs) == (BCH_ERR_MAX - BCH_ERR_START) + 1
 	      "an errcode is numbered above the last entry in BCH_ERRCODES() - "
 	      "give BCH_ERR_MAX an explicit value, or renumber");
 
+/*
+ * Two errcodes with the same number would silently alias: the later entry
+ * overwrites the string and parent above, and the enum doesn't care. A
+ * duplicate case label is a compile error, so this makes it one (same trick
+ * as bch2_sb_errs_check_unique()). Gaps are fine.
+ */
+static inline void __maybe_unused bch2_errcodes_check_unique(void)
+{
+	switch (0) {
+	case -1:
+#define x(class, err, nr) case nr:
+	BCH_ERRCODES()
+#undef x
+		;
+	}
+}
+
 __attribute__((const))
 const char *bch2_err_str(int err)
 {
