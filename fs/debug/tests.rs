@@ -40,7 +40,6 @@ use bcachefs_shim as kernel;
 type TestRet = Result<(), BchError>;
 type TestFn = fn(&Fs, u64) -> TestRet;
 
-const ENOMEM: i32 = 12;
 const NO_ENOSPC: CommitOpts = CommitOpts::new().flags(CommitFlags::NO_ENOSPC);
 const INTERNAL_SNAPSHOT_NODE: UpdateTriggerFlags = UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE;
 
@@ -53,7 +52,7 @@ fn errcode(code: bch_errcode) -> i32 {
 }
 
 fn enomem() -> BchError {
-    BchError::from_raw(ENOMEM)
+    bch_err_throw(bch_errcode::BCH_ERR_ENOMEM_perf_test_job)
 }
 
 fn round_up(v: u64, by: u64) -> u64 {

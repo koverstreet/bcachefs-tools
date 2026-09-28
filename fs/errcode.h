@@ -635,7 +635,8 @@
 	x(EIO,				mmap_emergency_ro, 613)			\
 	x(EINVAL,			EINVAL_test_stripe_already_open, 614)	\
 	x(EINVAL,			EINVAL_test_stripe_open_relock_not_invalidated, 615) \
-	x(EAGAIN,			test_no_quiet_window, 616)
+	x(EAGAIN,			test_no_quiet_window, 616)		\
+	x(ENOMEM,			ENOMEM_perf_test_job, 617)
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,
