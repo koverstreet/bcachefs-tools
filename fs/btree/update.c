@@ -158,30 +158,25 @@ int __bch2_insert_snapshot_whiteouts(struct btree_trans *trans,
 	return 0;
 }
 
-int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
-				       struct btree_iter *iter,
-				       enum btree_iter_update_trigger_flags flags,
-				       struct bkey_s_c old,
-				       struct bkey_s_c new)
+/*
+ * @old is being split: re-insert the parts @new doesn't cover - front and back
+ * fragments, and the middle when @new is in a different snapshot - with the
+ * whiteouts that keep them from showing through where they shouldn't.
+ */
+static noinline int extent_overwrite_splits(struct btree_trans *trans,
+					    struct btree_iter *iter,
+					    enum btree_iter_update_trigger_flags flags,
+					    struct bkey_s_c old,
+					    struct bkey_s_c new,
+					    bool front_split, bool back_split)
 {
 	struct bch_fs *c = trans->c;
 	enum btree_id btree_id = iter->btree_id;
-	struct bkey_i *update;
-
-	/*
-	 * Split fragments below are fresh kkeys derived from @old, so the
-	 * caller's BTREE_TRIGGER_set_needs_reconcile_done (asserting "I
-	 * already set the reconcile field on the kkey I'm inserting") doesn't
-	 * apply to them — let the trigger compute it.
-	 */
-	flags &= ~BTREE_TRIGGER_set_needs_reconcile_done;
 	struct bpos new_start = bkey_start_pos(new.k);
-	unsigned front_split = bkey_lt(bkey_start_pos(old.k), new_start);
-	unsigned back_split  = bkey_gt(old.k->p, new.k->p);
-	unsigned middle_split = (front_split || back_split) &&
-		old.k->p.snapshot != new.k->p.snapshot;
+	bool middle_split = old.k->p.snapshot != new.k->p.snapshot;
 	unsigned nr_splits = front_split + back_split + middle_split;
-	int ret = 0, compressed_sectors;
+	struct bkey_i *update;
+	int compressed_sectors;
 
 	/*
 	 * If we're going to be splitting a compressed extent, note it
@@ -237,6 +232,42 @@ int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
 		}
 	}
 
+	if (back_split) {
+		update = errptr_try(bch2_bkey_make_mut_noupdate(trans, old));
+
+		bch2_cut_front(c, new.k->p, update);
+
+		btree_trans_update_by_path(trans, iter->path, update, update->k.u64s,
+					   BTREE_UPDATE_internal_snapshot_node|
+					   flags, _RET_IP_);
+	}
+
+	return 0;
+}
+
+int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
+				       struct btree_iter *iter,
+				       enum btree_iter_update_trigger_flags flags,
+				       struct bkey_s_c old,
+				       struct bkey_s_c new)
+{
+	enum btree_id btree_id = iter->btree_id;
+	struct bkey_i *update;
+	int ret = 0;
+
+	/*
+	 * Split fragments below are fresh kkeys derived from @old, so the
+	 * caller's BTREE_TRIGGER_set_needs_reconcile_done (asserting "I
+	 * already set the reconcile field on the kkey I'm inserting") doesn't
+	 * apply to them — let the trigger compute it.
+	 */
+	flags &= ~BTREE_TRIGGER_set_needs_reconcile_done;
+	bool front_split = bkey_lt(bkey_start_pos(old.k), bkey_start_pos(new.k));
+	bool back_split  = bkey_gt(old.k->p, new.k->p);
+
+	if (unlikely(front_split || back_split))
+		try(extent_overwrite_splits(trans, iter, flags, old, new, front_split, back_split));
+
 	if (!back_split) {
 		update = errptr_try(bch2_trans_kmalloc(trans, sizeof(*update)));
 
@@ -256,14 +287,6 @@ int bch2_trans_update_extent_overwrite(struct btree_trans *trans,
 
 		try(bch2_btree_insert_nonextent(trans, btree_id, update, update->k.u64s,
 					  BTREE_UPDATE_internal_snapshot_node|flags));
-	} else {
-		update = errptr_try(bch2_bkey_make_mut_noupdate(trans, old));
-
-		bch2_cut_front(c, new.k->p, update);
-
-		btree_trans_update_by_path(trans, iter->path, update, update->k.u64s,
-					   BTREE_UPDATE_internal_snapshot_node|
-					   flags, _RET_IP_);
 	}
 
 	return 0;
