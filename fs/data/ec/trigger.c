@@ -681,9 +681,14 @@ static struct ec_stripe_handle *bch2_open_stripe_find(struct bch_fs *c, u64 idx)
 	unsigned hash = hash_64(idx, ilog2(ARRAY_SIZE(c->ec.stripes_new)));
 	struct ec_stripe_handle *s;
 
-	hlist_for_each_entry(s, &c->ec.stripes_new[hash], hash)
+	hlist_for_each_entry(s, &c->ec.stripes_new[hash], hash) {
+		/* every handle on the list is claimed, and hashed by its idx: */
+		EBUG_ON(!s->idx);
+		EBUG_ON(hash_64(s->idx, ilog2(ARRAY_SIZE(c->ec.stripes_new))) != hash);
+
 		if (s->idx == idx)
 			return s;
+	}
 	return NULL;
 }
 
@@ -719,6 +724,7 @@ int bch2_stripe_handle_tryget_existing(struct btree_iter *iter,
 
 	EBUG_ON(iter->btree_id != BTREE_ID_stripes);
 	BUG_ON(!btree_node_intent_locked(btree_iter_path(trans, iter), 0));
+	BUG_ON(s->idx);
 
 	if (bch2_stripe_is_open(trans->c, idx))
 		return 0;

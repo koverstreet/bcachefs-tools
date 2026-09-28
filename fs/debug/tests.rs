@@ -567,9 +567,14 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
             let mut o_iter = BtreeIter::new(&opener, c::btree_id::stripes, pos(0, idx),
                                             BtreeIterFlags::INTENT);
 
+            let mut attempt = 0;
             let opened = lockrestart_do(&opener, |t| {
                 let fs = t.fs();
                 fs.require(o_iter.peek_max(pos(0, idx))?, ENOENT_bkey_type_mismatch)?;
+
+                attempt += 1;
+                assert!(handle.idx == 0,
+                        "attempt {}: handle already claimed (idx {})", attempt, handle.idx);
 
                 let ret = unsafe {
                     c::bch2_stripe_handle_tryget_existing(o_iter.raw_mut(), &mut handle)
