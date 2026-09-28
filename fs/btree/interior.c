@@ -1613,8 +1613,8 @@ bch2_btree_update_start(struct btree_trans *trans, btree_path_idx_t path_idx,
 			ret = bch2_btree_reserve_get(trans, as, nr_nodes, req);
 			if (!bch2_err_matches(ret, BCH_ERR_operation_blocked))
 				break;
-			bch2_wait_on_allocator(trans, req, ret, &cl);
-		} while (1);
+			ret = bch2_wait_on_allocator(trans, req, ret, &cl);
+		} while (!ret);
 
 		/*
 		 * Don't block with btree locks held

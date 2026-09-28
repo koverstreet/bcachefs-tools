@@ -545,13 +545,22 @@ void bch2_alloc_request_to_text(struct printbuf *, struct bch_fs *,
 void __bch2_wait_on_allocator(struct btree_trans *, struct alloc_request *,
 			      int, struct closure *);
 
-static inline void bch2_wait_on_allocator(struct btree_trans *trans,
-					  struct alloc_request *req,
-					  int err,
-					  struct closure *cl)
+/*
+ * Returns an error if the filesystem has gone emergency read-only: the
+ * allocator won't hand out buckets again, so callers must not retry. A normal
+ * read-only transition still allocates (for the final flush), and keeps waiting.
+ */
+static inline int bch2_wait_on_allocator(struct btree_trans *trans,
+					 struct alloc_request *req,
+					 int err,
+					 struct closure *cl)
 {
 	if (closure_nr_remaining(cl) > 1)
 		__bch2_wait_on_allocator(trans, req, err, cl);
+
+	return test_bit(BCH_FS_emergency_ro, &trans->c->flags)
+		? bch_err_throw(trans->c, emergency_ro)
+		: 0;
 }
 
 #endif /* _BCACHEFS_ALLOC_FOREGROUND_H */
