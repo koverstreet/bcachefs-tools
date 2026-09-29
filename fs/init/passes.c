@@ -766,8 +766,9 @@ int bch2_run_recovery_passes(struct bch_fs *c, u64 orig_passes_to_run, bool fail
 		if (ret && failfast)
 			break;
 
-		if (prev <= BCH_RECOVERY_PASS_check_snapshots &&
-		    pass > BCH_RECOVERY_PASS_check_snapshots) {
+		/* the point they wait for - see bch2_copygc_thread() */
+		if (prev <= BCH_RECOVERY_PASS_resume_logged_ops_early &&
+		    pass > BCH_RECOVERY_PASS_resume_logged_ops_early) {
 			bch2_copygc_wakeup(c);
 			bch2_reconcile_wakeup(c);
 		}

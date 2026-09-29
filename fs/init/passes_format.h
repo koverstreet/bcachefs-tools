@@ -132,6 +132,10 @@
 	  "Validate snapshot btree in reverse order: "						\
 	  "parent/child bidirectional links, tree_id, "						\
 	  "depth, subvol flag, and skiplist pointers")						\
+	x(resume_logged_ops_early,		50, PASS_ALWAYS,			0,	\
+	  "Resume incomplete logged operations that background "				\
+	  "work can start (stripe creation), before copygc and "				\
+	  "reconcile may run")									\
 	x(check_subvols,			20, PASS_ONLINE|PASS_FSCK,			\
 	  BIT_ULL(BCH_RECOVERY_PASS_check_snapshots),						\
 	  "Validate subvolume entries: snapshot exists, "					\
@@ -215,9 +219,9 @@
 	  "btrees against actual extent data; remove "						\
 	  "stale entries")									\
 	x(resume_logged_ops,			23, PASS_ALWAYS,			0,	\
-	  "Resume incomplete logged operations "						\
-	  "(fallocate, stripe creation) from logged_ops "					\
-	  "btree, then delete completed entries")						\
+	  "Resume incomplete logged operations only userspace "				\
+	  "starts (truncate, finsert, option propagation) from "				\
+	  "logged_ops btree, then delete completed entries")					\
 	x(delete_dead_inodes,			32, PASS_ALWAYS,			0,	\
 	  "Scan deleted_inodes btree and fully remove "						\
 	  "inodes with nlink == 0 that are not open")						\

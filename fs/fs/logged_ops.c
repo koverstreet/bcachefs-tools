@@ -16,12 +16,14 @@
 
 struct bch_logged_op_fn {
 	u8		type;
+	bool		early;
 	int		(*resume)(struct btree_trans *, struct bkey_i *);
 };
 
 static const struct bch_logged_op_fn logged_op_fns[] = {
-#define x(n)		{					\
+#define x(n, _early)	{					\
 	.type		= KEY_TYPE_logged_op_##n,		\
+	.early		= _early,				\
 	.resume		= bch2_resume_logged_op_##n,		\
 },
 	BCH_LOGGED_OPS()
@@ -29,7 +31,7 @@ static const struct bch_logged_op_fn logged_op_fns[] = {
 };
 
 const char * const bch2_logged_ops[] = {
-#define x(n)	#n,
+#define x(n, ...)	#n,
 	BCH_LOGGED_OPS()
 #undef x
 	NULL
@@ -77,12 +79,17 @@ static const struct bch_logged_op_fn *logged_op_fn(enum bch_bkey_type type)
 }
 
 static int resume_logged_op(struct btree_trans *trans, struct btree_iter *iter,
-			    struct bkey_s_c k)
+			    struct bkey_s_c k, bool early)
 {
 	struct bch_fs *c = trans->c;
 	u32 restart_count = trans->restart_count;
 	CLASS(printbuf, buf)();
 	int ret = 0;
+
+	/* Unknown types go with the late pass, which deletes them: */
+	const struct bch_logged_op_fn *fn = logged_op_fn(k.k->type);
+	if (fn ? fn->early != early : early)
+		return 0;
 
 	struct bkey_buf sk __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&sk);
@@ -98,7 +105,6 @@ static int resume_logged_op(struct btree_trans *trans, struct btree_iter *iter,
 			(bch2_bkey_val_to_text(&buf, c, k), buf.buf)))
 		try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 
-	const struct bch_logged_op_fn *fn = logged_op_fn(sk.k->k.type);
 	if (fn)
 		fn->resume(trans, sk.k);
 
@@ -112,7 +118,7 @@ fsck_err:
 	return ret ?: trans_was_restarted(trans, restart_count);
 }
 
-int bch2_resume_logged_ops(struct bch_fs *c)
+static int resume_logged_ops(struct bch_fs *c, bool early)
 {
 	CLASS(btree_trans, trans)(c);
 	return for_each_btree_key_max(trans, iter,
@@ -120,7 +126,17 @@ int bch2_resume_logged_ops(struct bch_fs *c)
 				   POS(LOGGED_OPS_INUM_logged_ops, 0),
 				   POS(LOGGED_OPS_INUM_logged_ops, U64_MAX),
 				   BTREE_ITER_prefetch, k,
-			resume_logged_op(trans, &iter, k));
+			resume_logged_op(trans, &iter, k, early));
+}
+
+int bch2_resume_logged_ops_early(struct bch_fs *c)
+{
+	return resume_logged_ops(c, true);
+}
+
+int bch2_resume_logged_ops(struct bch_fs *c)
+{
+	return resume_logged_ops(c, false);
 }
 
 int __bch2_logged_op_start(struct btree_trans *trans, struct bkey_i *k)

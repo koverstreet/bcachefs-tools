@@ -1933,9 +1933,11 @@ static int bch2_reconcile_thread(void *arg)
 
 	/*
 	 * Data move operations can't run until after check_snapshots has
-	 * completed, and bch2_snapshot_is_ancestor() is available.
+	 * completed, and bch2_snapshot_is_ancestor() is available - and until
+	 * the logged ops we could start ourselves (stripe creation) have been
+	 * resumed, or recovery would resume ours while we're running them.
 	 */
-	kthread_wait_freezable(c->recovery.pass_done > BCH_RECOVERY_PASS_check_snapshots ||
+	kthread_wait_freezable(c->recovery.pass_done > BCH_RECOVERY_PASS_resume_logged_ops_early ||
 			       kthread_should_stop());
 	if (kthread_should_stop())
 		return 0;

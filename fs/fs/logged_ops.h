@@ -4,11 +4,17 @@
 
 #include "btree/bkey.h"
 
+/*
+ * @early: background work that runs during recovery (copygc, reconcile) can
+ * start these, so they're resumed by resume_logged_ops_early, before that work
+ * may run - any found after that could be live. The rest are only started from
+ * userspace, and are resumed after fsck has repaired what they walk.
+ */
 #define BCH_LOGGED_OPS()			\
-	x(truncate)				\
-	x(finsert)				\
-	x(stripe_update)				\
-	x(inode_opt_propagate)
+	x(truncate,		false)		\
+	x(finsert,		false)		\
+	x(stripe_update,	true)		\
+	x(inode_opt_propagate,	false)
 
 /*
  * Every op advances its cursor through here, so it's the one place to
@@ -34,6 +40,7 @@ extern const char * const bch2_logged_ops[];
 int bch2_logged_op_fail_next_parse(const char *, unsigned *);
 void bch2_logged_op_fail_next_to_text(struct printbuf *, struct bch_fs *);
 
+int bch2_resume_logged_ops_early(struct bch_fs *);
 int bch2_resume_logged_ops(struct bch_fs *);
 int __bch2_logged_op_start(struct btree_trans *, struct bkey_i *);
 int bch2_logged_op_start(struct btree_trans *, struct bkey_i *);
