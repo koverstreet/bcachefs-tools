@@ -69,7 +69,9 @@ pub fn opts_usage_str(flags_all: u32, flags_none: u32) -> String {
         if let Some(help) = opt.help() {
             for (j, line) in help.split('\n').enumerate() {
                 if line.is_empty() && j > 0 { break; }
-                if j > 0 || col > HELPCOL {
+                // help text starts at HELPCOL - 1: wrap unless there's room
+                // for at least one space before it
+                if j > 0 || col >= HELPCOL - 1 {
                     out.push('\n');
                     col = 0;
                 }
