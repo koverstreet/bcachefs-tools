@@ -35,6 +35,8 @@ int bch2_damage_delete(struct btree_trans *, u64, u32);
 int bch2_damage_clear(struct btree_trans *, subvol_inum);
 int bch2_damage_record_key(struct btree_trans *, enum btree_id,
 			   struct bpos, enum bch_sb_error_id);
+int bch2_damage_record_key_if_inode(struct btree_trans *, enum btree_id,
+				    struct bpos, enum bch_sb_error_id);
 int bch2_damage_record_data_loss(struct btree_trans *, enum btree_id,
 				 struct bpos, enum bch_sb_error_id);
 

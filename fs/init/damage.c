@@ -207,6 +207,35 @@ int bch2_damage_record_key(struct btree_trans *trans, enum btree_id btree,
 		: 0;
 }
 
+/* Where check_damage looks for the inode a damage key belongs to */
+static int damage_inode_exists(struct btree_trans *trans, u64 inum, u32 snapshot,
+			       bool *exists)
+{
+	CLASS(btree_iter, iter)(trans, BTREE_ID_inodes, SPOS(0, inum, snapshot),
+				BTREE_ITER_all_snapshots);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+	*exists = bkey_is_inode(k.k);
+	return 0;
+}
+
+/*
+ * For damage recorded after the fact, when the file may be gone too - a journal
+ * rewind can take the file's creation with it. A damage key for an inode that
+ * doesn't exist would only be check_damage's to delete.
+ */
+int bch2_damage_record_key_if_inode(struct btree_trans *trans, enum btree_id btree,
+				    struct bpos pos, enum bch_sb_error_id err)
+{
+	if (btree != BTREE_ID_extents)
+		return 0;
+
+	bool exists;
+	try(damage_inode_exists(trans, pos.inode, pos.snapshot, &exists));
+
+	return exists ? bch2_damage_record(trans, pos, err) : 0;
+}
+
 /*
  * Runtime data damage - loss or corruption found outside fsck_err()
  * reporting (device removal dropping the last replica, read errors):
@@ -335,13 +364,11 @@ static int check_damage_key(struct btree_trans *trans, struct btree_iter *iter,
 	if (k.k->type != KEY_TYPE_damage)
 		return 0;
 
-	CLASS(btree_iter, inode_iter)(trans, BTREE_ID_inodes,
-				      SPOS(0, k.k->p.offset, k.k->p.snapshot),
-				      BTREE_ITER_all_snapshots);
-	struct bkey_s_c inode_k = bkey_try(bch2_btree_iter_peek_slot(&inode_iter));
+	bool exists;
+	try(damage_inode_exists(trans, k.k->p.offset, k.k->p.snapshot, &exists));
 
 	CLASS(printbuf, buf)();
-	if (ret_fsck_err_on(!bkey_is_inode(inode_k.k),
+	if (ret_fsck_err_on(!exists,
 			    trans, damage_key_no_inode,
 			    "damage key with no inode:\n%s",
 			    (bch2_bkey_val_to_text(&buf, trans->c, k), buf.buf)))
