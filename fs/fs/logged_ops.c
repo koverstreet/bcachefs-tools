@@ -141,6 +141,17 @@ int bch2_resume_logged_ops(struct bch_fs *c)
 
 int __bch2_logged_op_start(struct btree_trans *trans, struct bkey_i *k)
 {
+	const struct bch_logged_op_fn *fn = logged_op_fn(k->k.type);
+
+	/*
+	 * Early ops are resumed before anything that can start them may run;
+	 * one started sooner would be resumed underneath whoever started it:
+	 */
+	WARN_ONCE(fn && fn->early &&
+		  READ_ONCE(trans->c->recovery.pass_done) < BCH_RECOVERY_PASS_resume_logged_ops_early,
+		  "logged op %s started before resume_logged_ops_early",
+		  bch2_bkey_types[k->k.type]);
+
 	CLASS(btree_iter_uninit, iter)(trans);
 	try(bch2_bkey_get_empty_slot(trans, &iter, BTREE_ID_logged_ops,
 				     POS_MIN, POS(LOGGED_OPS_INUM_logged_ops, U64_MAX)));
