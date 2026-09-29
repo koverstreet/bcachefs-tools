@@ -152,10 +152,52 @@ static void journal_replay_maybe_drop_overwrites(struct bch_fs *c, struct jset *
 struct journal_list {
 	struct closure		cl;
 	u64			last_seq;
+	/*
+	 * If the journal scrub will run: the newest flush entry before
+	 * last_seq. It can only rewind to a flush, so its first range starts
+	 * there, and we keep entries from there instead of from last_seq.
+	 * Neither ever goes backwards, so dropping below it is always safe.
+	 */
+	bool			scrub;
+	u64			scrub_seq;
 	struct mutex		lock;
 	int			ret;
 	bool			full_read;
 };
+
+/* Entries before this aren't needed (0: none found yet, keep everything) */
+static u64 journal_list_keep_from(struct journal_list *jlist)
+{
+	return jlist->scrub ? jlist->scrub_seq : jlist->last_seq;
+}
+
+/*
+ * last_seq went up: the newest flush entry before it may be one we already
+ * have. Everything from the old scrub_seq on is still here.
+ */
+static void journal_list_scrub_seq_update(struct bch_fs *c, struct journal_list *jlist)
+{
+	struct genradix_iter iter;
+	struct journal_replay **_i;
+
+	/* scrub_seq may be 0, below the base: not a valid index */
+	u64 from = max(jlist->scrub_seq, c->journal_entries_base_seq);
+
+	genradix_for_each_from(&c->journal_entries, iter, _i,
+			       journal_entry_radix_idx(c, from)) {
+		struct journal_replay *i = *_i;
+
+		if (journal_replay_ignore(i))
+			continue;
+
+		u64 seq = le64_to_cpu(i->j.seq);
+		if (seq >= jlist->last_seq)
+			break;
+
+		if (!JSET_NO_FLUSH(&i->j))
+			jlist->scrub_seq = max(jlist->scrub_seq, seq);
+	}
+}
 
 #define JOURNAL_ENTRY_ADD_OK		0
 #define JOURNAL_ENTRY_ADD_OUT_OF_RANGE	5
@@ -181,7 +223,7 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 		c->journal.oldest_seq_found_ondisk = seq;
 
 	/* Is this entry older than the range we need? */
-	if (!c->opts.read_entire_journal && seq < jlist->last_seq)
+	if (!c->opts.read_entire_journal && seq < journal_list_keep_from(jlist))
 		return JOURNAL_ENTRY_ADD_OUT_OF_RANGE;
 
 	/*
@@ -199,23 +241,34 @@ static int journal_entry_add(struct bch_fs *c, struct bch_dev *ca,
 		return bch_err_throw(c, ENOMEM_journal_entry_add);
 	}
 
+	u64 keep_from = journal_list_keep_from(jlist);
+
+	if (last_seq > jlist->last_seq) {
+		jlist->last_seq = last_seq;
+		if (jlist->scrub)
+			journal_list_scrub_seq_update(c, jlist);
+	}
+
+	/* A flush entry before last_seq, newer than the one we had */
+	if (jlist->scrub && !JSET_NO_FLUSH(j) && seq < jlist->last_seq)
+		jlist->scrub_seq = max(jlist->scrub_seq, seq);
+
 	/* Drop entries we don't need anymore */
-	if (last_seq > jlist->last_seq && !c->opts.read_entire_journal) {
+	if (journal_list_keep_from(jlist) > keep_from && !c->opts.read_entire_journal) {
 		genradix_for_each_from(&c->journal_entries, iter, _i,
-				       journal_entry_radix_idx(c, jlist->last_seq)) {
+				       journal_entry_radix_idx(c,
+					max(keep_from, c->journal_entries_base_seq))) {
 			i = *_i;
 
 			if (journal_replay_ignore(i))
 				continue;
 
-			if (le64_to_cpu(i->j.seq) >= last_seq)
+			if (le64_to_cpu(i->j.seq) >= journal_list_keep_from(jlist))
 				break;
 
 			journal_replay_free(c, i, false);
 		}
 	}
-
-	jlist->last_seq = max(jlist->last_seq, last_seq);
 
 	journal_replay_maybe_drop_overwrites(c, j);
 
@@ -752,8 +805,8 @@ static CLOSURE_CALLBACK(bch2_journal_read_device)
 
 		/*
 		 * Sort by seq descending, then read in that order. Once
-		 * we've read past last_seq, all remaining buckets are
-		 * dead — stop.
+		 * we've read past what we keep (last_seq, or the journal
+		 * scrub's start), all remaining buckets are dead — stop.
 		 */
 		darray_sort(order, journal_bucket_entry_cmp);
 
@@ -765,16 +818,16 @@ static CLOSURE_CALLBACK(bch2_journal_read_device)
 				goto err;
 			nr_read++;
 
-			u64 last_seq;
+			u64 keep_from;
 			scoped_guard(mutex, &jlist->lock)
-				last_seq = jlist->last_seq;
+				keep_from = journal_list_keep_from(jlist);
 
 			/*
-			 * Once we've established last_seq and this bucket's
-			 * max seq (now in bucket_seq from the full read) is
-			 * below it, we're done:
+			 * Once we've established where to keep from and this
+			 * bucket's max seq (now in bucket_seq from the full
+			 * read) is below it, we're done:
 			 */
-			if (last_seq && ja->bucket_seq[e->bucket] < last_seq)
+			if (keep_from && ja->bucket_seq[e->bucket] < keep_from)
 				break;
 
 			last_seq_idx = e->bucket;
@@ -933,7 +986,9 @@ static bool journal_has_any_missing(struct bch_fs *c, u64 start_seq, u64 end_seq
 	struct journal_replay *i, **_i;
 	u64 seq = start_seq;
 
-	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+	/* From start_seq: entries before it are only kept for the journal scrub */
+	genradix_for_each_from(&c->journal_entries, radix_iter, _i,
+			journal_entry_radix_idx(c, max(start_seq, c->journal_entries_base_seq))) {
 		i = *_i;
 		if (journal_replay_ignore(i))
 			continue;
@@ -955,7 +1010,12 @@ static bool journal_has_any_missing(struct bch_fs *c, u64 start_seq, u64 end_seq
  */
 static int journal_retry_full_read(struct bch_fs *c, struct journal_list *jlist)
 {
-	struct journal_list retry_jlist = { .last_seq = jlist->last_seq, .full_read = true };
+	struct journal_list retry_jlist = {
+		.last_seq	= jlist->last_seq,
+		.scrub		= jlist->scrub,
+		.scrub_seq	= jlist->scrub_seq,
+		.full_read	= true,
+	};
 
 	closure_init_stack(&retry_jlist.cl);
 	mutex_init(&retry_jlist.lock);
@@ -984,6 +1044,7 @@ static int journal_retry_full_read(struct bch_fs *c, struct journal_list *jlist)
 
 	if (retry_jlist.last_seq > jlist->last_seq)
 		jlist->last_seq = retry_jlist.last_seq;
+	jlist->scrub_seq = max(jlist->scrub_seq, retry_jlist.scrub_seq);
 
 	return retry_jlist.ret;
 }
@@ -998,7 +1059,9 @@ static int bch2_journal_check_for_missing(struct bch_fs *c, u64 start_seq, u64 e
 	/* Sequence number we expect to find next, to check for missing entries */
 	u64 seq = start_seq;
 
-	genradix_for_each(&c->journal_entries, radix_iter, _i) {
+	/* From start_seq: entries before it are only kept for the journal scrub */
+	genradix_for_each_from(&c->journal_entries, radix_iter, _i,
+			journal_entry_radix_idx(c, max(start_seq, c->journal_entries_base_seq))) {
 		i = *_i;
 
 		if (journal_replay_ignore(i))
@@ -1133,7 +1196,7 @@ int bch2_journal_reread_for_rewind(struct bch_fs *c)
 
 int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 {
-	struct journal_list jlist = { .last_seq = 0 };
+	struct journal_list jlist = { .scrub = bch2_journal_scrub_will_run(c) };
 	struct journal_replay *i, **_i;
 	struct genradix_iter radix_iter;
 	bool last_write_torn = false;
@@ -1262,8 +1325,19 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 			prt_printf(&buf, " (unflushed %llu-%llu)",
 				   info->replay_end + 1,
 				   info->cur_seq - 1);
+
+		/*
+		 * Not replayed - just for the journal scrub, whose first
+		 * flush range starts here:
+		 */
+		c->journal_scrub_seq = jlist.scrub && jlist.scrub_seq < drop_before
+			? jlist.scrub_seq : 0;
+		if (c->journal_scrub_seq)
+			prt_printf(&buf, " (scrubbing from %llu)", c->journal_scrub_seq);
 		bch_info(c, "%s", buf.buf);
 	}
+
+	u64 keep_from = c->journal_scrub_seq ?: drop_before;
 
 	genradix_for_each(&c->journal_entries, radix_iter, _i) {
 		i = *_i;
@@ -1272,7 +1346,7 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 			continue;
 
 		seq = le64_to_cpu(i->j.seq);
-		if (seq < drop_before) {
+		if (seq < keep_from) {
 			journal_replay_free(c, i, false);
 			continue;
 		}
@@ -1332,6 +1406,13 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 			replicas_entry_add_dev(&replicas.e, ptr->dev);
 
 		bch2_replicas_entry_sort(&replicas.e);
+
+		/*
+		 * Rewind state only from the entries we replay: one kept for the
+		 * journal scrub could hold a rewind range that's long done.
+		 */
+		if (le64_to_cpu(i->j.seq) < drop_before)
+			continue;
 
 		vstruct_for_each(&i->j, entry) {
 			if (entry->type == BCH_JSET_ENTRY_rewind_limit) {

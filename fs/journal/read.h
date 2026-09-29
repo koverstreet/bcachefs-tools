@@ -9,6 +9,14 @@
 void bch2_journal_pos_from_member_info_set(struct bch_fs *);
 void bch2_journal_pos_from_member_info_resume(struct bch_fs *);
 
+/* The journal scrub runs after an unclean shutdown, or always if asked to */
+static inline bool bch2_journal_scrub_will_run(struct bch_fs *c)
+{
+	return c->opts.scrub_recent_journal_entries &&
+		(!c->sb.clean ||
+		 c->opts.scrub_recent_journal_entries == BCH_SCRUB_JOURNAL_always);
+}
+
 static inline bool journal_replay_ignore(struct journal_replay *i)
 {
 	return !i || i->ignore_blacklisted || i->ignore_not_dirty;

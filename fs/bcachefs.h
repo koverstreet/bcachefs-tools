@@ -808,6 +808,11 @@ struct bch_fs {
 
 	struct journal				journal;
 	u64					journal_replay_seq_start;
+	/*
+	 * Journal scrub: where its first flush range starts - the newest flush
+	 * before journal_replay_seq_start - while it runs; 0 otherwise.
+	 */
+	u64					journal_scrub_seq;
 	u64					journal_replay_seq_end;
 	GENRADIX(struct journal_replay *)	journal_entries;
 	u64					journal_entries_base_seq;

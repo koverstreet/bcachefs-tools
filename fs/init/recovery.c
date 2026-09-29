@@ -967,13 +967,21 @@ use_clean:
 
 	try(bch2_sb_set_upgrade_extra(c));
 
-	if (c->opts.scrub_recent_journal_entries &&
-	    (!c->sb.clean ||
-	     c->opts.scrub_recent_journal_entries == BCH_SCRUB_JOURNAL_always)) {
+	if (bch2_journal_scrub_will_run(c)) {
 		u64 rewind_seq = 0;
 		set_bit(BCH_FS_scrub_journal, &c->flags);
 		try(bch2_scrub_journal(c, &rewind_seq));
 		clear_bit(BCH_FS_scrub_journal, &c->flags);
+
+		/*
+		 * Done with the keys from before the replay start: re-sort
+		 * without them, before accounting read and replay - the
+		 * rewind below re-sorts anyway.
+		 */
+		bool resort = c->journal_scrub_seq;
+		c->journal_scrub_seq = 0;
+		if (resort && !rewind_seq)
+			try(bch2_journal_keys_sort(c));
 		if (rewind_seq) {
 			CLASS(bch_log_msg, msg)(c);
 			prt_printf(&msg.m, "journal scrub: device not honoring flush/FUA, "

@@ -864,7 +864,13 @@ int bch2_journal_keys_sort(struct bch_fs *c)
 					    : BCH_JSET_ENTRY_btree_keys))
 				continue;
 
-			if (!rewind && le64_to_cpu(i->j.seq) < c->journal_replay_seq_start)
+			/*
+			 * Keys from before the replay start are only for the
+			 * journal scrub - recovery re-sorts without them once
+			 * it's done, before anything replays them:
+			 */
+			if (!rewind && le64_to_cpu(i->j.seq) <
+			    (c->journal_scrub_seq ?: c->journal_replay_seq_start))
 				continue;
 
 			jset_entry_for_each_key(entry, k) {
