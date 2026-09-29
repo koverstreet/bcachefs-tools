@@ -1713,6 +1713,18 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, 
 }
 
 /*
+ * Only the blocks we carry forward have to be good - everything else in the old
+ * stripe is discarded at the fold, parity included, and regenerated at create.
+ */
+static u32 ec_old_stripe_required(struct ec_stripe_new *s)
+{
+	u32 required = 0;
+	for (unsigned i = 0; i < s->old_blocks_nr; i++)
+		required |= BIT(s->old_block_map[i]);
+	return required;
+}
+
+/*
  * Fold the blocks we're carrying forward into the new stripe as soon as the old
  * stripe's read lands, instead of at create. The old buffer is the same size as
  * the new one, so holding both for as long as the stripe is being filled makes
@@ -1727,14 +1739,28 @@ static CLOSURE_CALLBACK(ec_old_stripe_fold)
 {
 	closure_type(s, struct ec_stripe_new, old_stripe.io);
 
+	u32 required = ec_old_stripe_required(s);
+
 	/*
-	 * Only the blocks we carry forward have to be good - everything else in
-	 * the old stripe is discarded here, parity included, and regenerated at
-	 * create.
+	 * Only the carried blocks were read. If one of them is bad, read the
+	 * rest so it can be reconstructed, and come back here:
 	 */
-	u32 required = 0;
-	for (unsigned i = 0; i < s->old_blocks_nr; i++)
-		required |= BIT(s->old_block_map[i]);
+	if (!s->old_stripe_read_all) {
+		if (bch2_stripe_buf_blocks_good(&s->old_stripe, required)) {
+			for (unsigned i = 0; i < s->old_blocks_nr; i++)
+				swap(s->new_stripe.data[i],
+				     s->old_stripe.data[s->old_block_map[i]]);
+			closure_return(cl);
+			return;
+		}
+
+		s->old_stripe_read_all = true;
+		for (unsigned i = 0; i < s->old_stripe.key.v.nr_blocks; i++)
+			if (!(required & BIT(i)))
+				bch2_ec_block_io(s->c, &s->old_stripe, REQ_OP_READ, i);
+		continue_at(cl, ec_old_stripe_fold, system_dfl_wq);
+		return;
+	}
 
 	s->old_stripe_err = bch2_stripe_buf_validate_msg(s->c, &s->old_stripe,
 							 true, required);
@@ -1775,7 +1801,10 @@ static void ec_old_stripe_read(struct bch_fs *c, struct ec_stripe_new *s)
 	closure_init(&s->cl, NULL);
 	closure_init(&s->old_stripe.io, &s->cl);
 
-	bch2_stripe_buf_read(c, &s->old_stripe);
+	u32 required = ec_old_stripe_required(s);
+	for (unsigned i = 0; i < s->old_stripe.key.v.nr_blocks; i++)
+		if (required & BIT(i))
+			bch2_ec_block_io(c, &s->old_stripe, REQ_OP_READ, i);
 
 	/*
 	 * Not stripe_create_wq: create waits on the fold, so running them on

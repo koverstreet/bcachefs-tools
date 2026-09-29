@@ -81,6 +81,7 @@ s64 bch2_ec_scrub_block(struct bch_fs *, struct ec_stripe_buf *, unsigned);
 void bch2_ec_generate_ec(struct ec_stripe_buf *);
 void bch2_ec_generate_checksums(struct ec_stripe_buf *);
 
+bool bch2_stripe_buf_blocks_good(struct ec_stripe_buf *, u32);
 int bch2_stripe_buf_validate_msg(struct bch_fs *, struct ec_stripe_buf *, bool, u32);
 
 void bch2_ec_block_io(struct bch_fs *, struct ec_stripe_buf *, blk_opf_t, unsigned);
