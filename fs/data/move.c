@@ -1179,8 +1179,17 @@ void bch2_scrub_journal_queue(struct bch_fs *c, enum btree_id btree,
 	darray_push(&c->scrub_journal_repairs, r);
 }
 
+enum scrub_journal_outcome {
+	SCRUB_JOURNAL_unchanged,
+	SCRUB_JOURNAL_repaired,
+	SCRUB_JOURNAL_rewound,
+	SCRUB_JOURNAL_lost,
+	SCRUB_JOURNAL_NR,
+};
+
 static int scrub_journal_repair_one(struct moving_context *ctxt,
-				    scrub_journal_repair *r)
+				    scrub_journal_repair *r,
+				    enum scrub_journal_outcome *outcome)
 {
 	struct btree_trans *trans = ctxt->trans;
 	struct bch_fs *c = trans->c;
@@ -1190,6 +1199,8 @@ static int scrub_journal_repair_one(struct moving_context *ctxt,
 				BTREE_ITER_intent);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
+	*outcome = SCRUB_JOURNAL_unchanged;
+
 	/*
 	 * Gone: the rewind took it, along with the write it came from. If that
 	 * write was one we couldn't read back, the file lost it - say so.
@@ -1198,6 +1209,7 @@ static int scrub_journal_repair_one(struct moving_context *ctxt,
 		if (!r->read_err)
 			return 0;
 
+		*outcome = SCRUB_JOURNAL_rewound;
 		try(bch2_damage_record_key_if_inode(trans, r->btree_id, stashed.k->p,
 						    BCH_FSCK_ERR_device_bad_flush_forced_rewind));
 		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
@@ -1224,6 +1236,7 @@ static int scrub_journal_repair_one(struct moving_context *ctxt,
 	}
 
 	if (r->read_err && bad_devs == all_ptrs) {
+		*outcome = SCRUB_JOURNAL_lost;
 		try(bch2_damage_record_key(trans, r->btree_id, stashed.k->p,
 					   bch2_data_read_sb_err(r->read_err)));
 		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
@@ -1239,6 +1252,7 @@ static int scrub_journal_repair_one(struct moving_context *ctxt,
 		.ptrs_kill	= bad_devs,
 	};
 
+	*outcome = SCRUB_JOURNAL_repaired;
 	return bch2_move_extent(ctxt, NULL, &io_opts, &data_opts, &iter, 0, k);
 }
 
@@ -1246,14 +1260,11 @@ int bch2_scrub_journal_do_repairs(struct bch_fs *c)
 {
 	CLASS(darray_scrub_journal_repair, repairs)();
 
-	mutex_lock(&c->scrub_journal_repairs_lock);
-	swap(repairs, c->scrub_journal_repairs);
-	mutex_unlock(&c->scrub_journal_repairs_lock);
+	scoped_guard(mutex, &c->scrub_journal_repairs_lock)
+		swap(repairs, c->scrub_journal_repairs);
 
 	if (!repairs.nr)
 		return 0;
-
-	bch_info(c, "journal scrub: repairing %zu extents with bad replicas", repairs.nr);
 
 	struct bch_move_stats stats;
 	bch2_move_stats_init(&stats, "journal_scrub_repair");
@@ -1263,11 +1274,19 @@ int bch2_scrub_journal_do_repairs(struct bch_fs *c)
 			      writepoint_ptr(&c->allocator.reconcile_write_point),
 			      true);
 
+	unsigned nr[SCRUB_JOURNAL_NR] = {};
+
 	darray_for_each(repairs, r) {
+		enum scrub_journal_outcome outcome = SCRUB_JOURNAL_unchanged;
+
 		/* Ignore errors - don't want them blocking mount */
-		lockrestart_do(ctxt.trans, scrub_journal_repair_one(&ctxt, r));
+		lockrestart_do(ctxt.trans, scrub_journal_repair_one(&ctxt, r, &outcome));
+		nr[outcome]++;
 	}
 
+	bch_info(c, "journal scrub: repairing %u extents from good replicas; "
+		 "%u lost to the rewind, %u with no good replica",
+		 nr[SCRUB_JOURNAL_repaired], nr[SCRUB_JOURNAL_rewound], nr[SCRUB_JOURNAL_lost]);
 	return 0;
 }
 
