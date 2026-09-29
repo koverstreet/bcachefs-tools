@@ -1025,8 +1025,9 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 		return 0;
 	}
 
+	/* a range is the entries between two flushes */
 	bch_info(c, "journal scrub: checking %zu flush ranges",
-		 flushes.nr);
+		 flushes.nr - 1);
 
 	struct bch_move_stats stats;
 	bch2_move_stats_init(&stats, "journal_scrub");
