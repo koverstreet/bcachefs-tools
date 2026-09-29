@@ -686,7 +686,7 @@ void bch2_data_update_read_done(struct data_update *u)
 	if (unlikely(rbio->ret)) {
 		if (u->opts.type == BCH_DATA_UPDATE_scrub_no_repair) {
 			/* the journal scrub can't commit: see bch2_scrub_journal_queue() */
-			bch2_scrub_journal_queue(c, u->btree_id, u->k.k,
+			bch2_scrub_journal_queue(c, u->btree_id, 0, u->k.k,
 				bch2_bkey_dev_ptr_bit(c, bkey_i_to_s_c(u->k.k),
 						      rbio->pick.ptr.dev),
 				rbio->ret);
@@ -720,7 +720,7 @@ void bch2_data_update_read_done(struct data_update *u)
 
 	if (u->opts.type == BCH_DATA_UPDATE_scrub_no_repair) {
 		if (u->opts.ptrs_io_error)
-			bch2_scrub_journal_queue(c, u->btree_id, u->k.k,
+			bch2_scrub_journal_queue(c, u->btree_id, 0, u->k.k,
 						 u->opts.ptrs_io_error, 0);
 		u->op.end_io(&u->op);
 		return;

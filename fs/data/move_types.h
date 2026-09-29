@@ -54,9 +54,13 @@ struct move_bucket {
  * @bad_devs is a mask of pointers by their position in @k, like ptrs_io_error,
  * not of device indices. @read_err is set when reading them failed outright,
  * rather than a replica being found bad on a read that succeeded.
+ *
+ * @level is 0 for an extent; for a btree node pointer it's the level @k lives
+ * at, one above the node's.
  */
 typedef struct {
 	enum btree_id		btree_id;
+	unsigned		level;
 	unsigned		bad_devs;
 	int			read_err;
 	__BKEY_PADDED(k, BKEY_EXTENT_VAL_U64s_MAX);
