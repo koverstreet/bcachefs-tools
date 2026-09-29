@@ -1265,7 +1265,8 @@ static void btree_node_scrub_work(struct work_struct *work)
 				 bkey_i_to_s_c(scrub->key.k));
 	prt_newline(&err);
 
-	if (!btree_node_scrub_check(c, scrub->buf, scrub->written, &err)) {
+	if (scrub->bio.bi_status ||
+	    !btree_node_scrub_check(c, scrub->buf, scrub->written, &err)) {
 		int ret = bch2_trans_do(c,
 			bch2_btree_node_rewrite_key(trans, scrub->btree, scrub->level - 1,
 						    scrub->key.k, 0));
