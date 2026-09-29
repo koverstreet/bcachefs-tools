@@ -1125,7 +1125,7 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 		bool checksum_err = atomic64_read(&stats.sectors_error_uncorrected) != errors_before;
 
 		if (checksum_err) {
-			bch2_sb_error_count(c, BCH_FSCK_ERR_device_bad_flush);
+			bch2_sb_error_count(c, BCH_FSCK_ERR_device_bad_flush_forced_rewind);
 			CLASS(bch_log_msg, msg)(c);
 			prt_printf(&msg.m, "journal scrub: checksum errors in flush range seq %llu-%llu, "
 				"device(s) not honoring flush/FUA:",
