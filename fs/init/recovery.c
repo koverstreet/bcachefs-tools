@@ -949,12 +949,6 @@ use_clean:
 		try(bch2_journal_seq_blacklist_add(c, blacklist_seq, journal_start.cur_seq));
 	}
 
-	try(bch2_journal_log_msg(c, "starting journal at entry %llu, replaying %llu-%llu",
-				 journal_start.cur_seq,
-				 journal_start.last_seq,
-				 journal_start.replay_end));
-	try(bch2_fs_journal_start(&c->journal, journal_start));
-
 	/*
 	 * Skip past versions that might have possibly been used (as nonces),
 	 * but hadn't had their pointers written:
@@ -1009,6 +1003,22 @@ use_clean:
 			try(bch2_journal_keys_sort(c));
 		}
 	}
+
+	/*
+	 * Not until the journal scrub has decided whether to rewind: a rewind
+	 * re-reads entries from before last_seq (back to the rewind target's
+	 * last_seq) and replays them, so the pin fifo has to start there -
+	 * journal_replay_seq_start, which only a re-read lowers. Nothing above
+	 * needs the journal started; the blacklist, which btree node reads do
+	 * need, is set up before the roots are read.
+	 */
+	journal_start.last_seq = c->journal_replay_seq_start;
+
+	try(bch2_journal_log_msg(c, "starting journal at entry %llu, replaying %llu-%llu",
+				 journal_start.cur_seq,
+				 journal_start.last_seq,
+				 journal_start.replay_end));
+	try(bch2_fs_journal_start(&c->journal, journal_start));
 
 	try(bch2_run_recovery_passes_startup(c, 0));
 
