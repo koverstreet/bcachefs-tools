@@ -112,6 +112,11 @@ int bch2_btree_root_read(struct bch_fs *, enum btree_id,
 
 void bch2_btree_read_bio_to_text(struct printbuf *, struct btree_read_bio *);
 
+typedef void (*btree_node_scrub_report_fn)(void *priv, unsigned dev, bool good);
+
+int bch2_btree_node_scrub_report(struct btree_trans *, enum btree_id, unsigned,
+				 struct bkey_s_c, unsigned,
+				 btree_node_scrub_report_fn, void *);
 int bch2_btree_node_scrub(struct btree_trans *, enum btree_id, unsigned,
 			  struct bkey_s_c, unsigned);
 
