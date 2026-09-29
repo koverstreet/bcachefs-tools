@@ -394,13 +394,31 @@ static inline int bch2_trans_commit_lazy_if_full(struct btree_trans *trans,
 		: bch2_trans_commit_lazy(trans, disk_res, journal_seq, flags);
 }
 
+/*
+ * If _do fails, bch2_trans_commit() never runs, and never resets what _do had
+ * queued. An error that isn't a restart abandons the attempt: drop them, as
+ * the commit would have, so the next bch2_trans_begin() doesn't take them for
+ * updates someone forgot to commit. (A restart's are dropped by the restart.)
+ */
+#define __commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
+({									\
+	int _ret3 = (_do);						\
+									\
+	if (unlikely(_ret3) &&						\
+	    !bch2_err_matches(_ret3, BCH_ERR_transaction_restart))	\
+		bch2_trans_reset_updates(_trans);			\
+									\
+	_ret3 ?: bch2_trans_commit(_trans, (_disk_res),			\
+				   (_journal_seq), (_flags));		\
+})
+
 #define commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
-	lockrestart_do(_trans, _do ?: bch2_trans_commit(_trans, (_disk_res),\
-					(_journal_seq), (_flags)))
+	lockrestart_do(_trans,						\
+		__commit_do(_trans, _disk_res, _journal_seq, _flags, _do))
 
 #define nested_commit_do(_trans, _disk_res, _journal_seq, _flags, _do)	\
-	nested_lockrestart_do(_trans, _do ?: bch2_trans_commit(_trans, (_disk_res),\
-					(_journal_seq), (_flags)))
+	nested_lockrestart_do(_trans,					\
+		__commit_do(_trans, _disk_res, _journal_seq, _flags, _do))
 
 /* deprecated, prefer CLASS(btree_trans) */
 #define bch2_trans_commit_do(_c, _disk_res, _journal_seq, _flags, _do)		\
