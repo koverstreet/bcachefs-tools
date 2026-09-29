@@ -684,11 +684,19 @@ void bch2_data_update_read_done(struct data_update *u)
 	 * position - u->btree_id is what makes the narrowing exact.
 	 */
 	if (unlikely(rbio->ret)) {
-		CLASS(btree_trans, trans)(c);
-		int ret = commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-			bch2_damage_record_key(trans, u->btree_id, u->k.k->k.p,
-					       bch2_data_read_sb_err(rbio->ret)));
-		bch_err_fn_ratelimited(c, ret);
+		if (u->opts.type == BCH_DATA_UPDATE_scrub_no_repair) {
+			/* the journal scrub can't commit: see bch2_scrub_journal_queue() */
+			bch2_scrub_journal_queue(c, u->btree_id, u->k.k,
+				bch2_bkey_dev_ptr_bit(c, bkey_i_to_s_c(u->k.k),
+						      rbio->pick.ptr.dev),
+				rbio->ret);
+		} else {
+			CLASS(btree_trans, trans)(c);
+			int ret = commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+				bch2_damage_record_key(trans, u->btree_id, u->k.k->k.p,
+						       bch2_data_read_sb_err(rbio->ret)));
+			bch_err_fn_ratelimited(c, ret);
+		}
 	}
 
 	/*
@@ -711,16 +719,9 @@ void bch2_data_update_read_done(struct data_update *u)
 	}
 
 	if (u->opts.type == BCH_DATA_UPDATE_scrub_no_repair) {
-		if (u->opts.ptrs_io_error) {
-			scrub_journal_repair r = {
-				.btree_id	= u->btree_id,
-				.bad_devs	= u->opts.ptrs_io_error,
-			};
-			bkey_copy(&r.k, u->k.k);
-			mutex_lock(&c->scrub_journal_repairs_lock);
-			darray_push(&c->scrub_journal_repairs, r);
-			mutex_unlock(&c->scrub_journal_repairs_lock);
-		}
+		if (u->opts.ptrs_io_error)
+			bch2_scrub_journal_queue(c, u->btree_id, u->k.k,
+						 u->opts.ptrs_io_error, 0);
 		u->op.end_io(&u->op);
 		return;
 	}

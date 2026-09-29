@@ -27,6 +27,7 @@
 
 #include "fs/inode.h"
 
+#include "init/damage.h"
 #include "init/error.h"
 
 #include "journal/reclaim.h"
@@ -1159,6 +1160,25 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	return 0;
 }
 
+/*
+ * The journal scrub runs during recovery with journal keys frozen - nothing may
+ * commit - so what it finds is queued here, for bch2_scrub_journal_do_repairs()
+ * once we're rw and any rewind has happened.
+ */
+void bch2_scrub_journal_queue(struct bch_fs *c, enum btree_id btree,
+			      struct bkey_i *k, unsigned bad_devs, int read_err)
+{
+	scrub_journal_repair r = {
+		.btree_id	= btree,
+		.bad_devs	= bad_devs,
+		.read_err	= read_err,
+	};
+	bkey_copy(&r.k, k);
+
+	guard(mutex)(&c->scrub_journal_repairs_lock);
+	darray_push(&c->scrub_journal_repairs, r);
+}
+
 static int scrub_journal_repair_one(struct moving_context *ctxt,
 				    scrub_journal_repair *r)
 {
@@ -1170,8 +1190,18 @@ static int scrub_journal_repair_one(struct moving_context *ctxt,
 				BTREE_ITER_intent);
 	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
 
-	if (!bch2_extents_match(c, k, stashed))
-		return 0;
+	/*
+	 * Gone: the rewind took it, along with the write it came from. If that
+	 * write was one we couldn't read back, the file lost it - say so.
+	 */
+	if (!bch2_extents_match(c, k, stashed)) {
+		if (!r->read_err)
+			return 0;
+
+		try(bch2_damage_record_key_if_inode(trans, r->btree_id, stashed.k->p,
+						    BCH_FSCK_ERR_device_bad_flush_forced_rewind));
+		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+	}
 
 	/*
 	 * Trim both keys to the overlapping range before remapping,
@@ -1186,6 +1216,20 @@ static int scrub_journal_repair_one(struct moving_context *ctxt,
 	if (!bad_devs)
 		return 0;
 
+	/* No good replica, and no rewind took it: that's plain data loss */
+	unsigned all_ptrs = 0, ptr_bit = 1;
+	bkey_for_each_ptr(bch2_bkey_ptrs(bkey_i_to_s(trimmed)), ptr) {
+		all_ptrs |= ptr_bit;
+		ptr_bit <<= 1;
+	}
+
+	if (r->read_err && bad_devs == all_ptrs) {
+		try(bch2_damage_record_key(trans, r->btree_id, stashed.k->p,
+					   bch2_data_read_sb_err(r->read_err)));
+		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+	}
+
+	/* Repair it from whatever replica is good */
 	struct bch_inode_opts io_opts;
 	bch2_inode_opts_get(c, &io_opts, bkey_is_btree_ptr(k.k));
 
