@@ -996,6 +996,28 @@ static int scrub_pred(struct btree_trans *trans, void *_arg,
 #include "journal/read.h"
 #include "btree/journal_overlay.h"
 
+/*
+ * Devices with a replica the scrub found bad in what it queued from @start on.
+ * A replica that fails its read is retried off another one: the move stats
+ * only see the reads that failed on every replica.
+ */
+static void scrub_journal_bad_replica_devs(struct bch_fs *c, size_t start,
+					   struct bch_devs_mask *devs)
+{
+	guard(mutex)(&c->scrub_journal_repairs_lock);
+
+	for (size_t i = start; i < c->scrub_journal_repairs.nr; i++) {
+		scrub_journal_repair *r = &c->scrub_journal_repairs.data[i];
+		unsigned ptr_bit = 1;
+
+		bkey_for_each_ptr(bch2_bkey_ptrs_c(bkey_i_to_s_c(&r->k)), ptr) {
+			if (r->bad_devs & ptr_bit)
+				__set_bit(ptr->dev, devs->d);
+			ptr_bit <<= 1;
+		}
+	}
+}
+
 int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 {
 	CLASS(darray_u64, flushes)();
@@ -1042,8 +1064,10 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 	/*
 	 * Scrub one flush range at a time, newest first. Within each range,
 	 * fire off all reads asynchronously, then flush once to check for
-	 * errors. Walk backwards until we find a good range — everything
-	 * newer is tainted.
+	 * errors. Walk backwards until two ranges in a row read clean; rewind
+	 * to the start of the oldest range with data no replica could be read
+	 * back for - everything newer is tainted. A bad replica read back from
+	 * a good one is repaired from it instead, once we're rw.
 	 *
 	 * Stop if we've gone further back than scrub_journal_max_rewind_secs seconds.
 	 */
@@ -1055,6 +1079,10 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 		u64 errors_before = atomic64_read(&stats.sectors_error_uncorrected);
 		memset(&stats.devs_error_uncorrected, 0, sizeof(stats.devs_error_uncorrected));
 		int move_ret = 0;
+
+		size_t queued_before;
+		scoped_guard(mutex, &c->scrub_journal_repairs_lock)
+			queued_before = c->scrub_journal_repairs.nr;
 
 		darray_for_each(*keys, jk) {
 			u64 seq = c->journal_entries_base_seq + jk->journal_seq_offset;
@@ -1123,17 +1151,29 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 				bch2_err_str(move_ret),
 				range_start + 1, range_end == U64_MAX ? range_start : range_end);
 
-		bool checksum_err = atomic64_read(&stats.sectors_error_uncorrected) != errors_before;
+		/* uncorrected: every replica failed, so only a rewind fixes it */
+		bool lost = atomic64_read(&stats.sectors_error_uncorrected) != errors_before;
+		bool bad;
+		scoped_guard(mutex, &c->scrub_journal_repairs_lock)
+			bad = c->scrub_journal_repairs.nr != queued_before;
 
-		if (checksum_err) {
-			bch2_sb_error_count(c, BCH_FSCK_ERR_device_bad_flush_forced_rewind);
+		if (bad) {
+			struct bch_devs_mask devs = stats.devs_error_uncorrected;
+			scrub_journal_bad_replica_devs(c, queued_before, &devs);
+
+			bch2_sb_error_count(c, lost
+					    ? BCH_FSCK_ERR_device_bad_flush_forced_rewind
+					    : BCH_FSCK_ERR_device_bad_flush_repaired_from_replica);
 			CLASS(bch_log_msg, msg)(c);
-			prt_printf(&msg.m, "journal scrub: checksum errors in flush range seq %llu-%llu, "
+			prt_printf(&msg.m, "journal scrub: %s in flush range seq %llu-%llu, "
 				"device(s) not honoring flush/FUA:",
+				lost
+				? "data with no good replica"
+				: "bad replicas, to repair from good ones",
 				range_start + 1, range_end == U64_MAX ? range_start : range_end);
 
 			unsigned i;
-			for_each_set_bit(i, stats.devs_error_uncorrected.d, BCH_SB_MEMBERS_MAX) {
+			for_each_set_bit(i, devs.d, BCH_SB_MEMBERS_MAX) {
 				CLASS(bch2_dev_tryget_noerror, ca)(c, i);
 				if (ca)
 					prt_printf(&msg.m, " %s", ca->name);
@@ -1142,14 +1182,16 @@ int bch2_scrub_journal(struct bch_fs *c, u64 *rewind_seq)
 			}
 
 			guard(mutex_noio)(&c->sb_lock);
-			for_each_set_bit(i, stats.devs_error_uncorrected.d, BCH_SB_MEMBERS_MAX) {
+			for_each_set_bit(i, devs.d, BCH_SB_MEMBERS_MAX) {
 				struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, i);
 				if (m)
 					le64_add_cpu(&m->flush_errors, 1);
 			}
 			bch2_write_super(c);
 
-			*rewind_seq = range_start;
+			if (lost)
+				*rewind_seq = range_start;
+			/* Not a good range: keep looking further back for lost data */
 			nr_good = 0;
 		} else if (++nr_good >= 2) {
 			/* Two consecutive good ranges — safe to stop */
