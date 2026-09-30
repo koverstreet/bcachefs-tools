@@ -614,6 +614,17 @@ void bch2_bkey_propagate_incompressible(const struct bch_fs *, struct bkey_i *, 
 
 unsigned bch2_dev_durability(struct bch_fs *, unsigned);
 
+/*
+ * A stripe block counts for nothing if its device's durability is 0: missing,
+ * evacuating, or set to durability 0. Not bch2_dev_bad_or_evacuating(): an
+ * extent pointer on a durability 0 device is legitimate - a cache device - but
+ * a stripe block there leaves every extent in the stripe short.
+ */
+static inline bool bch2_stripe_block_dev_bad(struct bch_fs *c, unsigned dev)
+{
+	return !bch2_dev_durability(c, dev);
+}
+
 int __bch2_extent_ptr_durability(struct btree_trans *, struct extent_ptr_decoded *, bool);
 
 static inline int bch2_extent_ptr_desired_durability(struct btree_trans *trans, struct extent_ptr_decoded *p)

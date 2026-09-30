@@ -498,7 +498,9 @@ static int bch2_bkey_needs_reconcile(struct btree_trans *trans, struct bkey_s_c 
 		incompressible	|= p.crc.compression_type == BCH_COMPRESSION_TYPE_incompressible;
 		unwritten	|= p.ptr.unwritten;
 
-		bool evacuating = bch2_dev_bad_or_evacuating(c, p.ptr.dev) && !p.has_ec;
+		bool evacuating = k.k->type == KEY_TYPE_stripe
+			? bch2_stripe_block_dev_bad(c, p.ptr.dev)
+			: bch2_dev_bad_or_evacuating(c, p.ptr.dev) && !p.has_ec;
 
 		if (!poisoned &&
 		    !btree &&

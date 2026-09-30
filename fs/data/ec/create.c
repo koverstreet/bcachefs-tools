@@ -1590,7 +1590,7 @@ static bool may_reuse_stripe(struct bch_fs *c,
 
 	for_each_data_block(i, nr_data)
 		if (stripe_blockcount_get(old, i)) {
-			if (!bch2_dev_bad_or_evacuating(c, old->ptrs[i].dev))
+			if (!bch2_stripe_block_dev_bad(c, old->ptrs[i].dev))
 				__clear_bit(old->ptrs[i].dev, devs_may_alloc.d);
 			live_data++;
 		}
@@ -1696,7 +1696,7 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, 
 
 	for_each_data_block(i, old_nr_data) {
 		if (stripe_blockcount_get(old_v, i)) {
-			if (!bch2_dev_bad_or_evacuating(c, old_v->ptrs[i].dev))
+			if (!bch2_stripe_block_dev_bad(c, old_v->ptrs[i].dev))
 				__set_bit(s->old_blocks_nr, s->blocks_gotten);
 			else
 				__set_bit(s->old_blocks_nr, s->blocks_moving);
@@ -2370,7 +2370,7 @@ err:
 static bool stripe_degraded(struct bch_fs *c, const struct bch_stripe *s)
 {
 	for (unsigned i = 0; i < s->nr_blocks; i++)
-		if (bch2_dev_bad_or_evacuating(c, s->ptrs[i].dev))
+		if (bch2_stripe_block_dev_bad(c, s->ptrs[i].dev))
 			return true;
 	return false;
 }
