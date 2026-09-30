@@ -317,6 +317,12 @@ static inline void bch2_account_io_success_fail(struct bch_dev *ca,
 	}
 }
 
+static inline void bch2_dev_write_unflushed(struct bch_dev *ca)
+{
+	if (ca && !test_bit(BCH_DEV_unflushed_writes, &ca->flags))
+		set_bit(BCH_DEV_unflushed_writes, &ca->flags);
+}
+
 static inline void bch2_account_io_completion(struct bch_dev *ca,
 					      enum bch_member_error_type type,
 					      u64 submit_time, bool success)

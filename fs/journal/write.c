@@ -545,6 +545,9 @@ static void journal_write_endio(struct bio *bio)
 
 	bch2_account_io_completion(ca, BCH_MEMBER_ERROR_write,
 				   jbio->submit_time, !bio->bi_status);
+	/* The preflush bios have no data: */
+	if (bio->bi_vcnt)
+		bch2_dev_write_unflushed(ca);
 
 	if (bio->bi_status) {
 		guard(spinlock_irqsave)(&j->err_lock);
@@ -638,6 +641,14 @@ static CLOSURE_CALLBACK(journal_write_preflush)
 
 	if (w->separate_flush) {
 		for_each_rw_member(c, ca, BCH_DEV_WRITE_REF_journal_write) {
+			/*
+			 * A member with no completed writes since its last
+			 * flush has nothing for this flush to make durable:
+			 */
+			if (!test_and_clear_bit(BCH_DEV_unflushed_writes, &ca->flags) &&
+			    !bch2_dev_list_has_dev(w->devs_written, ca->dev_idx))
+				continue;
+
 			enumerated_ref_get(&ca->io_ref[WRITE],
 					   BCH_DEV_WRITE_REF_journal_write);
 

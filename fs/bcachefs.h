@@ -502,6 +502,19 @@ struct bucket_bitmap {
 	struct mutex		lock;
 };
 
+/*
+ * unflushed_writes: a write completed that the device may still hold in its
+ * volatile cache; journal_write_preflush() clears it when it flushes the device.
+ */
+#define BCH_DEV_FLAGS()			\
+	x(unflushed_writes)
+
+enum bch_dev_flags {
+#define x(n)		BCH_DEV_##n,
+	BCH_DEV_FLAGS()
+#undef x
+};
+
 struct bch_dev {
 	struct kobject		kobj;
 #ifdef CONFIG_BCACHEFS_DEBUG
@@ -546,6 +559,7 @@ struct bch_dev {
 	u64			btree_allocated_bitmap_gc;
 	atomic64_t		errors[BCH_MEMBER_ERROR_NR];
 	unsigned long		write_errors_start;
+	unsigned long		flags;
 
 	__uuid_t		uuid;
 	char			name[BDEVNAME_SIZE];

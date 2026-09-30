@@ -593,6 +593,8 @@ static void ec_block_endio(struct bio *bio)
 
 	bch2_account_io_completion(ca, bio_data_dir(bio),
 				   ec_bio->submit_time, !bio->bi_status);
+	if (rw == WRITE)
+		bch2_dev_write_unflushed(ca);
 
 	if (bio->bi_status)
 		buf->err[STRIPE_BUF_PRE_RECOV][ec_bio->idx] = -blk_status_to_bch_err(bio->bi_status);

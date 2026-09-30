@@ -1543,6 +1543,8 @@ static void bch2_write_endio(struct bio *bio)
 
 	bch2_account_io_completion(ca, BCH_MEMBER_ERROR_write,
 				   wbio->submit_time, !bio->bi_status);
+	if (!(bio->bi_opf & REQ_FUA))
+		bch2_dev_write_unflushed(ca);
 
 	if (unlikely(bio->bi_status)) {
 		guard(spinlock_irqsave)(&c->write_error_lock);
