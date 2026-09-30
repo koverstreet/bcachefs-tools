@@ -641,7 +641,7 @@ static int opt_hook_io(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum bch_
 				(struct reconcile_scan) { .type = RECONCILE_SCAN_pending}, false));
 
 		try(reconcile_scan_bracket(c,
-			(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .dev = inum }, post, scope));
+			(struct reconcile_scan) { .type = RECONCILE_SCAN_device, .dev = ca->dev_idx }, post, scope));
 		break;
 	case Opt_ec_max_data_blocks:
 		/*
