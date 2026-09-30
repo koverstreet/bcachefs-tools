@@ -18,6 +18,9 @@
 #include "data/compress.h"
 #include "data/keylist.h"
 #include "data/extents.h"
+#include "data/ec/init.h"
+#include "data/ec/io.h"
+#include "data/ec/trigger.h"
 #include "data/move.h"
 #include "data/update.h"
 #include "data/read.h"
@@ -622,7 +625,127 @@ struct bp_walk {
 	};
 	u64	sector_start;
 	u64	sector_end;
+	/* scrub: check the device's stripe blocks against their checksums */
+	bool	verify_stripes;
 };
+
+/*
+ * The block of @k on the device and bucket @bp points into; the stripe is
+ * still locked, so @k is current.
+ */
+static int stripe_block_at_bp(struct bch_dev *ca, struct bkey_s_c_stripe s,
+			      struct bkey_s_c_backpointer bp)
+{
+	u64 bucket = bp_pos_to_bucket(ca, bp.k->p).offset;
+
+	for (unsigned i = 0; i < s.v->nr_blocks; i++)
+		if (s.v->ptrs[i].dev == ca->dev_idx &&
+		    sector_to_bucket(ca, s.v->ptrs[i].offset) == bucket)
+			return i;
+	return -1;
+}
+
+/*
+ * A bad stripe block: point the stripe's pointer to it at
+ * BCH_SB_MEMBER_INVALID, as removing its device would. The stripe is then
+ * degraded, and reconcile rebuilds it. Refused if the stripe couldn't be
+ * rebuilt without it, or is open - being rewritten already.
+ */
+static int scrub_invalidate_stripe_block(struct btree_trans *trans,
+					 struct ec_stripe_buf *buf, unsigned block,
+					 bool *gone, bool *invalidated,
+					 struct printbuf *err)
+{
+	CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, buf->key.k.p, BTREE_ITER_intent);
+	struct bkey_s_c k = bkey_try(bch2_btree_iter_peek_slot(&iter));
+
+	/* deleted, or rewritten without that block, since we read it: */
+	if (k.k->type != KEY_TYPE_stripe ||
+	    block >= bkey_s_c_to_stripe(k).v->nr_blocks ||
+	    !bch2_extent_ptr_eq(bkey_s_c_to_stripe(k).v->ptrs[block],
+				buf->key.v.ptrs[block])) {
+		*gone = true;
+		return 0;
+	}
+
+	bool had_open = false;
+	u64 recorded = 0;
+	try(bch2_invalidate_stripe_to_dev(trans, &iter, k, buf->key.v.ptrs[block].dev,
+					  BCH_FORCE_IF_DATA_DEGRADED, err,
+					  &had_open, &recorded));
+	*invalidated = !had_open;
+	return 0;
+}
+
+static int scrub_stripe_block(struct moving_context *ctxt, struct bch_dev *ca,
+			      struct bkey_s_c_backpointer bp, struct bkey_s_c k)
+{
+	struct btree_trans *trans = ctxt->trans;
+	struct bch_fs *c = trans->c;
+
+	if (k.k->type != KEY_TYPE_stripe)
+		return 0;
+
+	struct bkey_s_c_stripe s = bkey_s_c_to_stripe(k);
+	int block = stripe_block_at_bp(ca, s, bp);
+
+	/* An open stripe's blocks are being written: its checksums aren't final */
+	if (block < 0 || bch2_stripe_is_open(c, k.k->p.offset))
+		return 0;
+
+	struct ec_stripe_buf *buf __free(ec_stripe_buf_free) = kzalloc(sizeof(*buf), GFP_KERNEL);
+	if (!buf)
+		return bch_err_throw(c, ENOMEM_stripe_buf);
+
+	bkey_reassemble(&buf->key.k_i, k);
+
+	/* Don't hold btree locks for IO */
+	bch2_trans_unlock(trans);
+
+	s64 bad = bch2_ec_scrub_block(c, buf, block);
+	if (bad <= 0) {
+		/*
+		 * Couldn't read it: an IO error is counted by the device, and a
+		 * stale pointer means the stripe went away under us.
+		 */
+		return bad == -BCH_ERR_ENOMEM_stripe_buf ? bad : 0;
+	}
+
+	bool gone = false, invalidated = false;
+	CLASS(printbuf, err)();
+	int ret = commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+			    scrub_invalidate_stripe_block(trans, buf, block, &gone,
+							  &invalidated, &err));
+	if (gone)
+		return 0;
+
+	if (ctxt->stats)
+		atomic64_add(bad, invalidated
+			     ? &ctxt->stats->sectors_error_corrected
+			     : &ctxt->stats->sectors_error_uncorrected);
+
+	CLASS(bch_log_msg_ratelimited, msg)(c);
+	prt_printf(&msg.m, "scrub: stripe block %u on %s: %lli sectors don't match the stripe's checksums, expected ",
+		   block, ca->name, bad);
+	bch2_csum_to_text(&msg.m, buf->key.v.csum_type, buf->csum_good[block]);
+	prt_str(&msg.m, " got ");
+	bch2_csum_to_text(&msg.m, buf->key.v.csum_type, buf->csum_bad[block]);
+	prt_newline(&msg.m);
+	bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&buf->key.k_i));
+	prt_newline(&msg.m);
+
+	if (invalidated)
+		prt_str(&msg.m, "block invalidated, reconcile will rebuild the stripe");
+	else if (ret)
+		prt_printf(&msg.m, "error invalidating block: %s", bch2_err_str(ret));
+	else
+		prt_str(&msg.m, "not repaired: stripe is open");
+	prt_newline(&msg.m);
+	if (err.pos)
+		prt_str(&msg.m, err.buf);
+
+	return bch2_err_matches(ret, BCH_ERR_remove_would_lose_data) ? 0 : ret;
+}
 
 static int __bch2_move_data_phys(struct moving_context *ctxt,
 			struct move_bucket *bucket_in_flight,
@@ -739,9 +862,23 @@ static int __bch2_move_data_phys(struct moving_context *ctxt,
 			continue;
 		}
 
+		/* Stripes aren't moved; scrub checks their blocks: */
+		if (!bp.v->level && bp.v->btree_id == BTREE_ID_stripes) {
+			if (w->verify_stripes && ca &&
+			    (data_types & BIT(bp.v->data_type))) {
+				ret = scrub_stripe_block(ctxt, ca, bp, k);
+				if (bch2_err_matches(ret, BCH_ERR_transaction_restart))
+					continue;
+				if (ret)
+					break;
+			}
+
+			bch2_btree_iter_advance(&bp_iter);
+			continue;
+		}
+
 		/* Not moving these; resolving them above still verified them: */
-		if (!(data_types & BIT(bp.v->data_type)) ||
-		    (!bp.v->level && bp.v->btree_id == BTREE_ID_stripes)) {
+		if (!(data_types & BIT(bp.v->data_type))) {
 			bch2_btree_iter_advance(&bp_iter);
 			continue;
 		}
@@ -789,6 +926,7 @@ int bch2_move_data_phys(struct bch_fs *c,
 			struct bch_move_stats *stats,
 			struct write_point_specifier wp,
 			bool wait_on_copygc,
+			bool verify_stripes,
 			move_pred_fn pred, void *arg)
 {
 	struct moving_context ctxt __cleanup(bch2_moving_ctxt_exit);
@@ -806,6 +944,7 @@ int bch2_move_data_phys(struct bch_fs *c,
 		.dev		= { .dev = dev },
 		.sector_start	= start,
 		.sector_end	= end,
+		.verify_stripes	= verify_stripes,
 	};
 
 	return __bch2_move_data_phys(&ctxt, NULL, &w, data_types, false, pred, arg);
@@ -1535,6 +1674,7 @@ int bch2_data_job(struct bch_fs *c,
 					  stats,
 					  writepoint_hashed((unsigned long) current),
 					  false,
+					  true,
 					  scrub_pred, op) ?: ret;
 		break;
 

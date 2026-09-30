@@ -77,6 +77,7 @@ int bch2_ec_stripe_buf_init(struct bch_fs *, struct ec_stripe_buf *, unsigned, u
 
 DEFINE_FREE(ec_stripe_buf_free, struct ec_stripe_buf *, bch2_ec_stripe_buf_exit(_T); kfree(_T));
 
+s64 bch2_ec_scrub_block(struct bch_fs *, struct ec_stripe_buf *, unsigned);
 void bch2_ec_generate_ec(struct ec_stripe_buf *);
 void bch2_ec_generate_checksums(struct ec_stripe_buf *);
 

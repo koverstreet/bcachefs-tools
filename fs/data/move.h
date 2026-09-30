@@ -131,7 +131,7 @@ int bch2_move_data_btree(struct moving_context *, struct bpos, struct bpos,
 
 int bch2_move_data_phys(struct bch_fs *, unsigned, u64, u64, unsigned,
 			struct bch_ratelimit *, struct bch_move_stats *,
-			struct write_point_specifier, bool,
+			struct write_point_specifier, bool, bool,
 			move_pred_fn, void *);
 
 int bch2_evacuate_data(struct moving_context *, unsigned, u64, u64);
