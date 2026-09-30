@@ -1369,10 +1369,19 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 
 	/*
 	 * Defer writing the superblock until filesystem initialization is
-	 * complete - don't write out a partly initialized superblock:
+	 * complete - don't write out a partly initialized superblock.
+	 *
+	 * An offline edit (will_not_start) on a filesystem that has never been
+	 * started has nothing to defer to: say so, rather than let it report
+	 * success having written nothing.
 	 */
-	if (!BCH_SB_INITIALIZED(c->disk_sb.sb))
-		return 0;
+	if (!BCH_SB_INITIALIZED(c->disk_sb.sb)) {
+		if (!c->opts.will_not_start)
+			return 0;
+
+		bch_err(c, "filesystem has never been started, not writing superblock: mount it once first");
+		return bch_err_throw(c, erofs_sb_never_started);
+	}
 
 	if (le16_to_cpu(c->disk_sb.sb->version) > bcachefs_metadata_version_current) {
 		CLASS(printbuf, buf)();

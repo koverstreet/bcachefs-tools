@@ -239,10 +239,6 @@ fn set_option_offline(
     }
 
     if modified {
-        if fs.disk_sb().sb().sb_initialized() == 0 {
-            bail!("superblock not initialized (filesystem was never started): \
-                   bch2_write_super would silently skip the write; mount it once first");
-        }
         let _lock = fs.sb_lock();
         fs.write_super_ret()
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;

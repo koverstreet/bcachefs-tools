@@ -141,10 +141,6 @@ unsafe fn init_crypt_kdf(fs: &Fs) {
 /// Write the changed crypt field out. The open was will_not_start, so the
 /// in-memory superblock is what's on disk plus our edit.
 fn write_crypt_super(fs: &Fs) -> Result<()> {
-    if fs.disk_sb().sb().sb_initialized() == 0 {
-        bail!("superblock not initialized (filesystem was never started): \
-               bch2_write_super would silently skip the write; mount it once first");
-    }
     let _lock = fs.sb_lock();
     fs.write_super_ret()
         .map_err(|e| anyhow!("error writing superblock: {e}"))

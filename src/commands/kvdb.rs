@@ -849,24 +849,6 @@ fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
 
     let _lock = unsafe { crate::wrappers::sb_lock(fs.raw) };
 
-    // bch2_write_super() silently skips uninitialized superblocks (the gate
-    // that keeps format from writing a half-built sb). An opened-from-disk
-    // sb is complete, but never-started images (fresh format) still have
-    // INITIALIZED unset - fail loudly rather than claim success.
-    {
-        let (r, bm) = sb_field("initialized")?;
-        let buf = fs.disk_sb().sb_bytes();
-        let initialized = match bm {
-            Some(bm) => typeinfo::read_bits(buf, &r, bm),
-            None => typeinfo::read_scalar(buf, &r),
-        }.map_err(|e| anyhow!("initialized: {e}"))?;
-        if initialized == 0 {
-            bail!("superblock not initialized (filesystem has never been started): \
-                   bch2_write_super would silently skip the write; \
-                   start the fs once (mount, or kvdb --rw) first");
-        }
-    }
-
     /* sb_lock is held above - disk_sb_mut's contract: */
     let buf = unsafe { fs.disk_sb_mut() }.sb_bytes_mut();
     write_field(buf, &target, v).map_err(|e| anyhow!("{field}: {e}"))?;

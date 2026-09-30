@@ -50,11 +50,6 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
     let fs = Fs::open(&devs, fs_opts)
         .context("opening filesystem")?;
 
-    if fs.disk_sb().sb().sb_initialized() == 0 {
-        return Err(anyhow!("superblock not initialized (filesystem was never started): \
-                            bch2_write_super would silently skip the write; mount it once first"));
-    }
-
     unsafe {
         if to_reset.is_empty() {
             for i in 0..BCH_COUNTER_NR as usize {

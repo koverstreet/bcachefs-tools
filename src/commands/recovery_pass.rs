@@ -50,12 +50,6 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
 
     let fs = crate::device_scan::open_scan(&devs, fs_opts)?;
 
-    if (passes_to_set != 0 || passes_to_unset != 0) &&
-       fs.disk_sb().sb().sb_initialized() == 0 {
-        anyhow::bail!("superblock not initialized (filesystem was never started): \
-                       bch2_write_super would silently skip the write; mount it once first");
-    }
-
     unsafe {
         let _sb_lock = crate::wrappers::sb_lock(fs.raw);
 
