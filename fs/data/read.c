@@ -960,7 +960,8 @@ static noinline void bch2_rbio_narrow_crcs(struct bch_read_bio *rbio)
 		return;
 
 	CLASS(btree_trans, trans)(c);
-	int ret = commit_do(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
+	CLASS(disk_reservation, res)(c);
+	int ret = commit_do(trans, &res.r, NULL, BCH_TRANS_COMMIT_no_enospc,
 			    __bch2_rbio_narrow_crcs(trans, rbio, &new_crc));
 	if (!ret)
 		event_inc_trace(c, data_read_narrow_crcs, buf,
@@ -1230,7 +1231,7 @@ static noinline void read_from_stale_dirty_pointer(struct btree_trans *trans,
 static inline bool can_narrow_crc(struct bch_extent_crc_unpacked n)
 {
 	return n.csum_type &&
-		n.uncompressed_size < n.live_size &&
+		n.live_size < n.uncompressed_size &&
 		!crc_is_compressed(n);
 }
 
