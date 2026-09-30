@@ -205,6 +205,19 @@ void bch_sb_crypt_init(struct bch_sb *sb,
 	bch_crypt_update_passphrase(sb, crypt, &key, passphrase);
 }
 
+/*
+ * The scrypt parameters a passphrase is derived with. A key stored unencrypted
+ * - formatted with --no_passphrase - never had any, so this has to run before
+ * the first passphrase is set on it.
+ */
+void bch_crypt_kdf_init(struct bch_sb_field_crypt *crypt)
+{
+	SET_BCH_CRYPT_KDF_TYPE(crypt, BCH_KDF_SCRYPT);
+	SET_BCH_KDF_SCRYPT_N(crypt, ilog2(16384));
+	SET_BCH_KDF_SCRYPT_R(crypt, ilog2(8));
+	SET_BCH_KDF_SCRYPT_P(crypt, ilog2(16));
+}
+
 void bch_crypt_update_passphrase(
 			struct bch_sb *sb,
 			struct bch_sb_field_crypt *crypt,
@@ -222,12 +235,8 @@ void bch_crypt_update_passphrase(
 	}
 
 	// If crypt already has an encrypted key reuse it's encryption params
-	if (!bch2_key_is_encrypted(&crypt->key)) {
-		SET_BCH_CRYPT_KDF_TYPE(crypt, BCH_KDF_SCRYPT);
-		SET_BCH_KDF_SCRYPT_N(crypt, ilog2(16384));
-		SET_BCH_KDF_SCRYPT_R(crypt, ilog2(8));
-		SET_BCH_KDF_SCRYPT_P(crypt, ilog2(16));
-	}
+	if (!bch2_key_is_encrypted(&crypt->key))
+		bch_crypt_kdf_init(crypt);
 
 	struct bch_key passphrase_key;
 	int ret = derive_passphrase(crypt, new_passphrase, &passphrase_key);

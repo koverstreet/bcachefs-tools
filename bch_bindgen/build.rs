@@ -575,6 +575,7 @@ fn main() {
         .allowlist_function("copy_fs")
         .allowlist_function("rust_.*")
         .allowlist_function("bch_sb_crypt_init")
+        .allowlist_function("bch_crypt_kdf_init")
         .allowlist_function("read_passphrase")
         .blocklist_function("bch2_prt_vprintf")
         .blocklist_function("bch2_inode_opts_get_inode")

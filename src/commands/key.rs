@@ -125,6 +125,18 @@ unsafe fn set_crypt_key(fs: &Fs, key: c::bch_encrypted_key) {
     crypt.key = key;
 }
 
+/// Give the crypt field scrypt parameters, for a key that has never been
+/// wrapped with a passphrase: --no_passphrase leaves them unset.
+///
+/// # Safety
+/// Caller must hold sb_lock.
+unsafe fn init_crypt_kdf(fs: &Fs) {
+    let disk_sb = &mut (*fs.raw).disk_sb;
+    let crypt: &mut c::bch_sb_field_crypt = bcachefs_kernel::sb::io::sb_field_get_mut(disk_sb)
+        .expect("filesystem has no crypt field");
+    c::bch_crypt_kdf_init(crypt);
+}
+
 // ---- set-passphrase ----
 
 #[derive(Parser, Debug)]
@@ -140,6 +152,10 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
 
     let new_passphrase = Passphrase::ask_for_new_passphrase()
         .context("reading new passphrase")?;
+
+    if !sb_is_encrypted(fs.sb_handle()) {
+        unsafe { init_crypt_kdf(&fs); }
+    }
 
     let encrypted_key = new_passphrase.encrypt_key(fs.sb_handle(), raw_key)?;
 
