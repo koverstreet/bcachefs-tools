@@ -168,6 +168,15 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 		if (s->v.ptrs[i].dev == dev_idx)
 			s->v.ptrs[i].dev = BCH_SB_MEMBER_INVALID;
 
+	/*
+	 * We just degraded it, so it needs rebuilding. Device removal gets this
+	 * from bch2_bkey_set_needs_reconcile() above, which sees the device on
+	 * its way out; scrub invalidating a bad block on a healthy device
+	 * doesn't, and can't offer the device scan that its consistency check
+	 * wants to explain the change.
+	 */
+	s->v.needs_reconcile = true;
+
 	sectors = -sectors;
 
 	memset(&acc, 0, sizeof(acc));
