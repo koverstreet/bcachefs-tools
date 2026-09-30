@@ -970,6 +970,79 @@ static bool check_version_upgrade(struct bch_fs *c, struct printbuf *out)
 	return ret;
 }
 
+/*
+ * Prepare the superblock for a start: last_mount, required recovery passes,
+ * version upgrade/downgrade, and what those imply.
+ */
+static void bch2_fs_sb_prep_for_start(struct bch_fs *c, struct printbuf *out)
+{
+	scoped_guard(mutex_noio, &c->sb_lock) {
+		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
+
+		__le64 now = cpu_to_le64(ktime_get_real_seconds());
+		scoped_guard(rcu)
+			for_each_online_member_rcu(c, ca)
+				bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount = now;
+
+		if (BCH_SB_HAS_TOPOLOGY_ERRORS(c->disk_sb.sb))
+			ext->recovery_passes_required[0] |=
+				cpu_to_le64(bch2_recovery_passes_to_stable(BIT_ULL(BCH_RECOVERY_PASS_check_topology)));
+
+		u64 sb_passes = bch2_recovery_passes_from_stable(le64_to_cpu(ext->recovery_passes_required[0]));
+		if (sb_passes) {
+			prt_str(out, "superblock requires following recovery passes to be run: ");
+			prt_bitflags(out, bch2_recovery_passes, sb_passes);
+			prt_newline(out);
+		}
+
+		u64 btrees_lost_data = le64_to_cpu(ext->btrees_lost_data);
+		if (btrees_lost_data) {
+			prt_str(out, "superblock indicates damage to following btrees:  ");
+			prt_bitflags(out, __bch2_btree_ids, btrees_lost_data);
+			prt_newline(out);
+		}
+
+		if (test_bit(BCH_FS_may_upgrade_downgrade, &c->flags)) {
+			if (bch2_check_version_downgrade(c)) {
+				prt_str(out, "Version downgrade required");
+
+				__le64 passes = ext->recovery_passes_required[0];
+				bch2_sb_set_downgrade(c,
+						      BCH_VERSION_MINOR(bcachefs_metadata_version_current),
+						      BCH_VERSION_MINOR(c->sb.version));
+				passes = ext->recovery_passes_required[0] & ~passes;
+				if (passes) {
+					prt_str(out, ", running recovery passes: ");
+					prt_bitflags(out, bch2_recovery_passes,
+						     bch2_recovery_passes_from_stable(le64_to_cpu(passes)));
+				}
+				prt_newline(out);
+			}
+
+			check_version_upgrade(c, out);
+		}
+
+		c->opts.recovery_passes |= bch2_recovery_passes_from_stable(le64_to_cpu(ext->recovery_passes_required[0]));
+
+		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_autofix_errors)
+			SET_BCH_SB_ERROR_ACTION(c->disk_sb.sb, BCH_ON_ERROR_fix_safe);
+
+		unsigned extent_bp_shift_needed = ilog2(c->opts.encoded_extent_max >> 9) + 1;
+		if (extent_bp_shift_needed > c->sb.extent_bp_shift) {
+			prt_printf(out, "extent_bp_shift too small: must repair backpointers\n");
+			SET_BCH_SB_EXTENT_BP_SHIFT(c->disk_sb.sb, extent_bp_shift_needed);
+			ext->recovery_passes_required[0] |=
+				cpu_to_le64(bch2_recovery_passes_to_stable(BIT_ULL(BCH_RECOVERY_PASS_check_extents_to_backpointers)));
+			ext->recovery_passes_required[0] |=
+				cpu_to_le64(bch2_recovery_passes_to_stable(BIT_ULL(BCH_RECOVERY_PASS_check_backpointers_to_extents)));
+			__set_bit_le64(BCH_FSCK_ERR_backpointer_to_missing_ptr, ext->errors_silent);
+			__set_bit_le64(BCH_FSCK_ERR_ptr_to_missing_backpointer, ext->errors_silent);
+		}
+
+		set_bit(BCH_FS_sb_dirty, &c->flags);
+	}
+}
+
 noinline_for_stack
 static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 {
@@ -1043,71 +1116,7 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 	if (c->opts.journal_rewind)
 		prt_printf(out, "rewinding journal, fsck required\n");
 
-	scoped_guard(mutex_noio, &c->sb_lock) {
-		struct bch_sb_field_ext *ext = bch2_sb_field_get(c->disk_sb.sb, ext);
-
-		__le64 now = cpu_to_le64(ktime_get_real_seconds());
-		scoped_guard(rcu)
-			for_each_online_member_rcu(c, ca)
-				bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx)->last_mount = now;
-
-		if (BCH_SB_HAS_TOPOLOGY_ERRORS(c->disk_sb.sb))
-			ext->recovery_passes_required[0] |=
-				cpu_to_le64(bch2_recovery_passes_to_stable(BIT_ULL(BCH_RECOVERY_PASS_check_topology)));
-
-		u64 sb_passes = bch2_recovery_passes_from_stable(le64_to_cpu(ext->recovery_passes_required[0]));
-		if (sb_passes) {
-			prt_str(out, "superblock requires following recovery passes to be run: ");
-			prt_bitflags(out, bch2_recovery_passes, sb_passes);
-			prt_newline(out);
-		}
-
-		u64 btrees_lost_data = le64_to_cpu(ext->btrees_lost_data);
-		if (btrees_lost_data) {
-			prt_str(out, "superblock indicates damage to following btrees:  ");
-			prt_bitflags(out, __bch2_btree_ids, btrees_lost_data);
-			prt_newline(out);
-		}
-
-		if (test_bit(BCH_FS_may_upgrade_downgrade, &c->flags)) {
-			if (bch2_check_version_downgrade(c)) {
-				prt_str(out, "Version downgrade required");
-
-				__le64 passes = ext->recovery_passes_required[0];
-				bch2_sb_set_downgrade(c,
-						      BCH_VERSION_MINOR(bcachefs_metadata_version_current),
-						      BCH_VERSION_MINOR(c->sb.version));
-				passes = ext->recovery_passes_required[0] & ~passes;
-				if (passes) {
-					prt_str(out, ", running recovery passes: ");
-					prt_bitflags(out, bch2_recovery_passes,
-						     bch2_recovery_passes_from_stable(le64_to_cpu(passes)));
-				}
-				prt_newline(out);
-			}
-
-			check_version_upgrade(c, out);
-		}
-
-		c->opts.recovery_passes |= bch2_recovery_passes_from_stable(le64_to_cpu(ext->recovery_passes_required[0]));
-
-		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_autofix_errors)
-			SET_BCH_SB_ERROR_ACTION(c->disk_sb.sb, BCH_ON_ERROR_fix_safe);
-
-		unsigned extent_bp_shift_needed = ilog2(c->opts.encoded_extent_max >> 9) + 1;
-		if (extent_bp_shift_needed > c->sb.extent_bp_shift) {
-			prt_printf(out, "extent_bp_shift too small: must repair backpointers\n");
-			SET_BCH_SB_EXTENT_BP_SHIFT(c->disk_sb.sb, extent_bp_shift_needed);
-			ext->recovery_passes_required[0] |=
-				cpu_to_le64(bch2_recovery_passes_to_stable(BIT_ULL(BCH_RECOVERY_PASS_check_extents_to_backpointers)));
-			ext->recovery_passes_required[0] |=
-				cpu_to_le64(bch2_recovery_passes_to_stable(BIT_ULL(BCH_RECOVERY_PASS_check_backpointers_to_extents)));
-			__set_bit_le64(BCH_FSCK_ERR_backpointer_to_missing_ptr, ext->errors_silent);
-			__set_bit_le64(BCH_FSCK_ERR_ptr_to_missing_backpointer, ext->errors_silent);
-		}
-
-		set_bit(BCH_FS_sb_dirty, &c->flags);
-	}
+	bch2_fs_sb_prep_for_start(c, out);
 
 	if (c->sb.clean)
 		set_bit(BCH_FS_clean_recovery, &c->flags);
