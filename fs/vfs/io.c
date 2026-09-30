@@ -360,7 +360,7 @@ static int __bch2_truncate_folio(struct bch_inode_info *inode,
 	}
 
 	if (!folio_test_uptodate(folio)) {
-		ret = bch2_read_single_folio(folio, mapping);
+		ret = bch2_read_single_folio(folio, mapping, false);
 		if (ret)
 			goto unlock;
 	}

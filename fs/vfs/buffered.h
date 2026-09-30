@@ -15,7 +15,7 @@ struct bch_writepage_io {
 	struct bch_write_op		op;
 };
 
-int bch2_read_single_folio(struct folio *, struct address_space *);
+int bch2_read_single_folio(struct folio *, struct address_space *, bool);
 int bch2_read_folio(struct file *, struct folio *);
 
 int bch2_writepages(struct address_space *, struct writeback_control *);

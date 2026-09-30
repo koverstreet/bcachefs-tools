@@ -478,7 +478,36 @@ static void bch2_read_single_folio_end_io(struct bio *bio)
 	complete(bio->bi_private);
 }
 
-int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
+/*
+ * The folios readpage_bio_extend() added after @folio are locked and ours to
+ * finish, as bch2_readpages_end_io() does for readahead; @folio stays locked,
+ * it's the caller's.
+ */
+static void bch2_read_single_folio_finish_extension(struct bch_read_bio *rbio,
+						    struct folio *folio)
+{
+	struct bio *bio = &rbio->bio;
+	struct folio_iter fi;
+
+	struct folio *last = page_folio(bio->bi_io_vec[bio->bi_vcnt - 1].bv_page);
+	struct folio *partial = bch2_folio(last)->partially_uptodate ? last : NULL;
+
+	bio_for_each_folio_all(fi, bio)
+		if (fi.folio != folio)
+			folio_end_read(fi.folio, !rbio->ret && fi.folio != partial);
+}
+
+/*
+ * Read one folio, synchronously; @folio is locked and stays locked.
+ *
+ * A partial read of a checksummed or compressed extent reads the whole extent
+ * anyway. With @extend, the rest of it goes into the page cache, as readahead
+ * does, rather than being thrown away: without it a sequential rewrite that
+ * doesn't cover whole folios reads the same extent once per folio. The caller
+ * must hold pagecache_add, since new folios are added.
+ */
+int bch2_read_single_folio(struct folio *folio, struct address_space *mapping,
+			   bool extend)
 {
 	struct bch_inode_info *inode = to_bch_ei(mapping->host);
 	struct bch_fs *c = inode->v.i_sb->s_fs_info;
@@ -497,7 +526,13 @@ int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
 
 	bch2_inode_opts_get_inode(c, &inode->ei_inode, &opts);
 
-	rbio = rbio_init(bio_alloc_bioset(NULL, 1, REQ_OP_READ, GFP_KERNEL, &c->bio_read),
+	unsigned nr_vecs = extend
+		? min_t(unsigned, BIO_MAX_VECS,
+			DIV_ROUND_UP(c->opts.encoded_extent_max, PAGE_SIZE) + 1)
+		: 1;
+	struct readpages_iter readpages_iter = { .mapping = mapping };
+
+	rbio = rbio_init(bio_alloc_bioset(NULL, nr_vecs, REQ_OP_READ, GFP_KERNEL, &c->bio_read),
 			 c,
 			 opts,
 			 bch2_read_single_folio_end_io);
@@ -507,9 +542,13 @@ int bch2_read_single_folio(struct folio *folio, struct address_space *mapping)
 	bio_add_folio_nofail(&rbio->bio, folio, folio_size(folio), 0);
 
 	blk_start_plug(&plug);
-	bch2_trans_run(c, (bchfs_read(trans, rbio, inode_inum(inode), NULL), 0));
+	bch2_trans_run(c, (bchfs_read(trans, rbio, inode_inum(inode),
+				      extend ? &readpages_iter : NULL), 0));
 	blk_finish_plug(&plug);
 	wait_for_completion(&done);
+
+	if (extend)
+		bch2_read_single_folio_finish_extension(rbio, folio);
 
 	ret = bch2_err_class(rbio->ret);
 	bio_put(&rbio->bio);
@@ -526,7 +565,7 @@ int bch2_read_folio(struct file *file, struct folio *folio)
 {
 	int ret;
 
-	ret = bch2_read_single_folio(folio, folio->mapping);
+	ret = bch2_read_single_folio(folio, folio->mapping, false);
 	folio_unlock(folio);
 	return bch2_err_class(ret);
 }
@@ -923,7 +962,7 @@ int bch2_write_begin(
 		goto out;
 	}
 readpage:
-	ret = bch2_read_single_folio(folio, mapping);
+	ret = bch2_read_single_folio(folio, mapping, true);
 	if (ret)
 		goto err;
 out:
@@ -1049,7 +1088,7 @@ static int __bch2_buffered_write(struct bch_fs *c,
 
 	f = darray_first(fs);
 	if (pos != folio_pos(f) && !folio_test_uptodate(f)) {
-		ret = bch2_read_single_folio(f, mapping);
+		ret = bch2_read_single_folio(f, mapping, true);
 		if (ret)
 			goto out;
 	}
@@ -1061,7 +1100,7 @@ static int __bch2_buffered_write(struct bch_fs *c,
 		if (end >= inode->v.i_size) {
 			folio_zero_range(f, 0, folio_size(f));
 		} else {
-			ret = bch2_read_single_folio(f, mapping);
+			ret = bch2_read_single_folio(f, mapping, true);
 			if (ret)
 				goto out;
 		}
@@ -1091,7 +1130,7 @@ static int __bch2_buffered_write(struct bch_fs *c,
 				end = min(end, folio_end_pos(darray_last(fs)));
 			} else {
 				if (!folio_test_uptodate(f)) {
-					ret = bch2_read_single_folio(f, mapping);
+					ret = bch2_read_single_folio(f, mapping, true);
 					if (ret)
 						goto out;
 				}
