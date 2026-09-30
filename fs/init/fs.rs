@@ -279,19 +279,20 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_write_super(self.raw) })
     }
 
-    /// bch2_write_super(), lifting nochanges around the write: inspection
-    /// opens (norecovery/nostart) imply nochanges, which makes write_super
-    /// a silent no-op - the right default, except when an offline admin
-    /// command is performing the user's explicitly requested write.
-    /// Caller must hold sb_lock.
-    pub fn write_super_force(&self) -> Result<(), BchError> {
-        unsafe {
-            let saved = (*self.raw).opts.nochanges;
-            (*self.raw).opts.nochanges = 0;
-            let ret = c::bch2_write_super(self.raw);
-            (*self.raw).opts.nochanges = saved;
-            ret_to_result(ret)
-        }
+    /// A superblock write that's part of bringing the filesystem up, on a
+    /// nostart open that will start it afterwards - allowed before start,
+    /// like recovery's own. Caller must hold sb_lock.
+    pub fn write_super_bringup(&self) -> Result<(), BchError> {
+        ret_to_result(unsafe {
+            c::bch2_write_super_flags(self.raw, c::bch_sb_write_flags::BCH_SB_WRITE_bringup)
+        })
+    }
+
+    /// Apply in-memory superblock edits to the in-memory state derived from
+    /// it (c->sb, member info) without writing - for an open that will start
+    /// and persist them then. Caller must hold sb_lock.
+    pub fn sb_update(&self) {
+        unsafe { c::bch2_sb_update(self.raw) }
     }
 
     /// Check if a device index exists and has a device pointer.

@@ -46,6 +46,7 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
 
     let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, nostart, 1);
+    opt_set!(fs_opts, will_not_start, 1);
 
     let fs = crate::device_scan::open_scan(&devs, fs_opts)?;
 

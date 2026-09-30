@@ -53,6 +53,7 @@ fn cmd_set_option(argv: Vec<String>) -> Result<()> {
 
     let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, nostart, 1);
+    opt_set!(fs_opts, will_not_start, 1);
 
     match crate::device_scan::open_online_or_offline(&devs, fs_opts)? {
         OpenedFs::Online(fs)  => set_option_online(fs, &devices, &dev_idxs, &opts),
@@ -243,7 +244,7 @@ fn set_option_offline(
                    bch2_write_super would silently skip the write; mount it once first");
         }
         let _lock = fs.sb_lock();
-        fs.write_super_force()
+        fs.write_super_ret()
             .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
     }
 

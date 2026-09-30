@@ -871,13 +871,10 @@ fn cmd_sb_set(fs: &Fs, field: &str, v: u64) -> Result<String> {
     let buf = unsafe { fs.disk_sb_mut() }.sb_bytes_mut();
     write_field(buf, &target, v).map_err(|e| anyhow!("{field}: {e}"))?;
 
-    // Every kvdb open short of --rw runs with nochanges (norecovery implies
-    // it, init/fs.c), which turns bch2_write_super() into a silent no-op.
-    // That protection is load-bearing - the open path makes version-upgrade
-    // decisions an inspection-mode open must never persist - so don't weaken
-    // the open; lift nochanges around this one write, which is the user's
-    // explicit request.
-    fs.write_super_force()
+    // Only --rw (started) and --nostart (opened will_not_start, which makes
+    // no version decisions to persist) get here - see the check in the
+    // command loop.
+    fs.write_super_ret()
         .map_err(|e| anyhow!("bch2_write_super failed: {e}"))?;
     Ok(String::new())
 }
@@ -1273,6 +1270,7 @@ fn kvdb(cli: Cli) -> Result<()> {
     // sb-only mode: open the sb but don't run recovery or touch the btree.
     if cli.nostart {
         opt_set!(fs_opts, nostart, 1);
+        opt_set!(fs_opts, will_not_start, 1);
     }
     // Whatever repair the superblock has scheduled is not what we came for:
     // check_allocations is pass 5, so recovery_pass_last below is a ceiling it
@@ -1284,8 +1282,10 @@ fn kvdb(cli: Cli) -> Result<()> {
         bail!("--rw and --norecovery are mutually exclusive");
     }
     // Inspection is the primary use, and a full-recovery open can repair -
-    // rewrite - the state under inspection; rw is opt-in.
-    if !cli.rw {
+    // rewrite - the state under inspection; rw is opt-in. Not for --nostart:
+    // nothing recovers there anyway, and the nochanges norecovery implies
+    // would turn sb set into a silent no-op.
+    if !cli.rw && !cli.nostart {
         opt_set!(fs_opts, norecovery, 1);
     } else {
         // Go read-write, and stop there. Everything through journal_replay is

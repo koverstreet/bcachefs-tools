@@ -688,7 +688,7 @@ static void le_bitvector_to_cpu(unsigned long *dst, unsigned long *src, unsigned
 		dst[i] = le_ulong_to_cpu(src[i]);
 }
 
-static void bch2_sb_update(struct bch_fs *c)
+void bch2_sb_update(struct bch_fs *c)
 {
 	struct bch_sb *src = c->disk_sb.sb;
 
@@ -1269,7 +1269,8 @@ DEFINE_DARRAY_FREE_ITEM(write_sb_dev, write_sb_dev_put);
  * loop, the error report - so filtering here is the only place the restriction
  * has to be applied.
  */
-static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs)
+static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs,
+			      enum bch_sb_write_flags flags)
 {
 	struct closure *cl = &c->sb_write;
 	unsigned degraded_flags = BCH_FORCE_IF_DEGRADED;
@@ -1277,6 +1278,19 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 
 	if (!test_bit(BCH_FS_may_upgrade_downgrade, &c->flags))
 		return 0;
+
+	/*
+	 * Before a start has begun, the in-memory superblock holds what the open
+	 * decided - version upgrade/downgrade, last_mount - for a start to act
+	 * on; an open that never starts mustn't persist that. So a write before
+	 * start is either part of bringing the filesystem up (as recovery's own
+	 * are), or from an open that said it will never start, which skips
+	 * those decisions:
+	 */
+	if (!test_bit(BCH_FS_start_begun, &c->flags) &&
+	    !c->opts.will_not_start &&
+	    !(flags & BCH_SB_WRITE_bringup))
+		return bch_err_throw(c, erofs_sb_write_before_start);
 
 	event_inc_trace(c, write_super, buf);
 
@@ -1530,11 +1544,12 @@ static int __bch2_write_super(struct bch_fs *c, const struct bch_devs_mask *devs
 	return 0;
 }
 
-static int bch2_write_super_devs(struct bch_fs *c, const struct bch_devs_mask *devs)
+static int bch2_write_super_devs(struct bch_fs *c, const struct bch_devs_mask *devs,
+				 enum bch_sb_write_flags flags)
 {
 	u64 start_time = local_clock();
 
-	int ret = __bch2_write_super(c, devs);
+	int ret = __bch2_write_super(c, devs, flags);
 	/* Make new options visible after they're persistent: */
 	bch2_sb_update(c);
 
@@ -1542,9 +1557,14 @@ static int bch2_write_super_devs(struct bch_fs *c, const struct bch_devs_mask *d
 	return ret;
 }
 
+int bch2_write_super_flags(struct bch_fs *c, enum bch_sb_write_flags flags)
+{
+	return bch2_write_super_devs(c, NULL, flags);
+}
+
 int bch2_write_super(struct bch_fs *c)
 {
-	return bch2_write_super_devs(c, NULL);
+	return bch2_write_super_flags(c, 0);
 }
 
 /*
@@ -1657,7 +1677,7 @@ int bch2_write_super_replicas(struct bch_fs *c)
 	}
 
 	return nr_skipped
-		? bch2_write_super_devs(c, &devs)
+		? bch2_write_super_devs(c, &devs, 0)
 		: bch2_write_super(c);
 }
 

@@ -44,6 +44,7 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
     // open fs in nostart mode
     let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, nostart, 1);
+    opt_set!(fs_opts, will_not_start, 1);
     opt_set!(fs_opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
 
     let fs = Fs::open(&devs, fs_opts)

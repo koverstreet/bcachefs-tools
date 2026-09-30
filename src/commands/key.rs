@@ -83,10 +83,11 @@ fn parse_device_list(args: &[String]) -> Vec<PathBuf> {
     }
 }
 
-/// Open a filesystem with nostart for superblock modification.
+/// Open a filesystem for superblock modification: never started.
 fn open_nostart(devs: &[PathBuf]) -> Result<Fs> {
     let mut opts = c::bch_opts::default();
     opt_set!(opts, nostart, 1);
+    opt_set!(opts, will_not_start, 1);
     crate::device_scan::open_scan(devs, opts)
         .map_err(|e| anyhow::anyhow!("Error opening {:?}: {}", devs, e))
 }
@@ -137,16 +138,15 @@ unsafe fn init_crypt_kdf(fs: &Fs) {
     c::bch_crypt_kdf_init(crypt);
 }
 
-/// Write the changed crypt field out. The open was nostart, which implies
-/// nochanges, and there plain write_super() is a silent no-op - see
-/// Fs::write_super_force().
+/// Write the changed crypt field out. The open was will_not_start, so the
+/// in-memory superblock is what's on disk plus our edit.
 fn write_crypt_super(fs: &Fs) -> Result<()> {
     if fs.disk_sb().sb().sb_initialized() == 0 {
         bail!("superblock not initialized (filesystem was never started): \
                bch2_write_super would silently skip the write; mount it once first");
     }
     let _lock = fs.sb_lock();
-    fs.write_super_force()
+    fs.write_super_ret()
         .map_err(|e| anyhow!("error writing superblock: {e}"))
 }
 

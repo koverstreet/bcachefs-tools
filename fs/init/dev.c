@@ -1296,7 +1296,10 @@ int bch2_dev_add(struct bch_fs *c, const char *path, struct printbuf *err)
 			c->sb.nr_devices = c->disk_sb.sb->nr_devices;
 
 			/* We just added a device: the write isn't optional, and
-			 * we need its error. */
+			 * we need its error. On a filesystem not yet started
+			 * (bcachefs device add, offline) it's part of bringing
+			 * it up. */
+			w.flags |= BCH_SB_WRITE_bringup;
 			sb_dirty(&w);
 			ret = sb_write_flush(&w);
 			if (ret)

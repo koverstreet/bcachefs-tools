@@ -358,6 +358,7 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
 
     let mut opts: c::bch_opts = Default::default();
     opt_set!(opts, nostart, 1);
+    opt_set!(opts, will_not_start, 1);
     opt_set!(opts, degraded, bch_degraded_actions::BCH_DEGRADED_very as u8);
 
     // Read superblock to get dev_idx
@@ -377,7 +378,7 @@ fn set_state_offline(device: &str, new_state: u32) -> Result<()> {
     {
         let _lock = fs.sb_lock();
         unsafe { fs.member_mut(dev_idx) }.set_member_state(new_state as u64);
-        fs.write_super_force()
+        fs.write_super_ret()
             .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }
     Ok(())

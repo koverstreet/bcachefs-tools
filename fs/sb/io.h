@@ -96,6 +96,16 @@ int bch2_sb_validate(struct bch_sb *, struct bch_opts *, u64,
 
 int bch2_read_super(const char *, struct bch_opts *, struct bch_sb_handle *);
 int bch2_read_super_silent(const char *, struct bch_opts *, struct bch_sb_handle *);
+/*
+ * bringup: this write is part of bringing the filesystem up - allowed before
+ * a start has begun, see __bch2_write_super()
+ */
+enum bch_sb_write_flags {
+	BCH_SB_WRITE_bringup	= BIT(0),
+};
+
+void bch2_sb_update(struct bch_fs *);
+int bch2_write_super_flags(struct bch_fs *, enum bch_sb_write_flags);
 int bch2_write_super(struct bch_fs *);
 int bch2_write_super_replicas(struct bch_fs *);
 void __bch2_check_set_feature(struct bch_fs *, unsigned);
@@ -131,6 +141,7 @@ struct sb_write {
 	struct bch_fs	*c;
 	bool		dirty;
 	bool		replicas;
+	enum bch_sb_write_flags flags;
 };
 
 static inline struct sb_write sb_write_init(struct bch_fs *c)
@@ -164,7 +175,7 @@ static inline int sb_write_flush(struct sb_write *w)
 	w->dirty = false;
 	return w->replicas
 		? bch2_write_super_replicas(w->c)
-		: bch2_write_super(w->c);
+		: bch2_write_super_flags(w->c, w->flags);
 }
 
 static inline void sb_write_exit(struct sb_write *w)

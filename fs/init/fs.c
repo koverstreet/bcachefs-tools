@@ -972,7 +972,10 @@ static bool check_version_upgrade(struct bch_fs *c, struct printbuf *out)
 
 /*
  * Prepare the superblock for a start: last_mount, required recovery passes,
- * version upgrade/downgrade, and what those imply.
+ * version upgrade/downgrade, and what those imply. An open that will never
+ * start - offline superblock edits - skips this, so its in-memory superblock
+ * stays what's on disk plus the caller's edit, and writing it persists only
+ * that. See __bch2_write_super().
  */
 static void bch2_fs_sb_prep_for_start(struct bch_fs *c, struct printbuf *out)
 {
@@ -1056,6 +1059,9 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 	if (c->opts.nochanges)
 		c->opts.read_only = true;
 
+	if (c->opts.will_not_start)
+		c->opts.nostart = true;
+
 	if (c->opts.journal_rewind)
 		c->opts.fsck = true;
 
@@ -1116,7 +1122,8 @@ static int bch2_fs_opt_version_init(struct bch_fs *c, struct printbuf *out)
 	if (c->opts.journal_rewind)
 		prt_printf(out, "rewinding journal, fsck required\n");
 
-	bch2_fs_sb_prep_for_start(c, out);
+	if (!c->opts.will_not_start)
+		bch2_fs_sb_prep_for_start(c, out);
 
 	if (c->sb.clean)
 		set_bit(BCH_FS_clean_recovery, &c->flags);
@@ -1516,6 +1523,13 @@ static int bch2_fs_may_start(struct bch_fs *c, struct printbuf *err)
 static int __bch2_fs_start(struct bch_fs *c, struct printbuf *err)
 {
 	BUG_ON(test_bit(BCH_FS_started, &c->flags));
+
+	/* the open skipped what a start needs - see bch2_fs_opt_version_init() */
+	if (c->opts.will_not_start)
+		return bch_err_throw(c, EINVAL_will_not_start);
+
+	/* superblock writes from here on are part of bringing it up: */
+	set_bit(BCH_FS_start_begun, &c->flags);
 
 	scoped_guard(rwsem_write, &c->state_lock) {
 		scoped_guard(rcu)

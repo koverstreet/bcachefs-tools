@@ -643,6 +643,7 @@ struct bch_dev {
 
 #define BCH_FS_FLAGS()			\
 	x(new_fs)			\
+	x(start_begun)			\
 	x(started)			\
 	x(clean_recovery)		\
 	x(btree_running)		\
