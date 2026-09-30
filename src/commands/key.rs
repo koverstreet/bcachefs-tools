@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Context, Result};
 use bcachefs_kernel::c::{bch_key, bch_encrypted_key};
 use bch_bindgen::c;
+use bch_bindgen::fs::FsExt;
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
 use bch_bindgen::sb::io as sb_io;
@@ -84,11 +85,11 @@ fn parse_device_list(args: &[String]) -> Vec<PathBuf> {
 }
 
 /// Open a filesystem for superblock modification: never started.
-fn open_nostart(devs: &[PathBuf]) -> Result<Fs> {
+fn open_nostart(devs: &[PathBuf], user_key: Option<&bch_key>) -> Result<Fs> {
     let mut opts = c::bch_opts::default();
     opt_set!(opts, nostart, 1);
     opt_set!(opts, will_not_start, 1);
-    crate::device_scan::open_scan(devs, opts)
+    Fs::open_with_key(devs, opts, user_key)
         .map_err(|e| anyhow::anyhow!("Error opening {:?}: {}", devs, e))
 }
 
@@ -97,22 +98,35 @@ fn open_nostart(devs: &[PathBuf]) -> Result<Fs> {
 /// If the key is encrypted (passphrase-protected), prompts for and verifies
 /// the current passphrase. If the key is unencrypted (formatted with
 /// --no_passphrase), reads the raw key directly.
+///
+/// Asks before opening, from a superblock read ahead: opening a
+/// passphrase-protected filesystem needs the key, and without one the open
+/// asks for the passphrase itself - reading the line from stdin that we were
+/// going to read, so ours got EOF.
 fn open_and_verify(devs: &[PathBuf]) -> Result<(Fs, bch_key)> {
-    let fs = open_nostart(devs)?;
-    let sb_handle = fs.sb_handle();
+    let dev_str = devs.iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join(":");
+    let sbs = crate::device_scan::scan_sbs(&dev_str, &c::bch_opts::default())?;
+    let sb_handle = &sbs.first()
+        .ok_or_else(|| anyhow!("no bcachefs superblock found on {dev_str}"))?.1;
 
     if sb_handle.sb().crypt().is_none() {
         bail!("Filesystem does not have encryption enabled");
     }
 
-    if sb_is_encrypted(sb_handle) {
-        let PassphraseCorrect { cleartext_sb_key, .. } =
+    let (user_key, raw_key) = if sb_is_encrypted(sb_handle) {
+        let PassphraseCorrect { passphrase_key, cleartext_sb_key, .. } =
             Passphrase::ask_and_check(sb_handle, None)?;
-        Ok((fs, cleartext_sb_key.into_key()))
+        (Some(passphrase_key), cleartext_sb_key.into_key())
     } else {
-        let raw_key = sb_handle.sb().crypt().unwrap().key().key.clone();
-        Ok((fs, raw_key))
-    }
+        (None, sb_handle.sb().crypt().unwrap().key().key.clone())
+    };
+
+    let paths: Vec<PathBuf> = sbs.iter().map(|(p, _)| p.clone()).collect();
+    let fs = open_nostart(&paths, user_key.as_ref())?;
+    Ok((fs, raw_key))
 }
 
 /// Write a new encrypted key to the crypt superblock field.

@@ -24,6 +24,8 @@ extern "C" {
 /// Userspace extension methods on the core [`Fs`].
 pub trait FsExt {
     fn open(devs: &[PathBuf], opts: c::bch_opts) -> Result<Fs, BchError>;
+    fn open_with_key(devs: &[PathBuf], opts: c::bch_opts, user_key: Option<&c::bch_key>)
+        -> Result<Fs, BchError>;
     fn write(&self, inum: u64, offset: u64, subvol: u32, replicas: u32, data: &[u8], new_i_size: u64) -> WriteOp;
     fn read<'a>(&'a self, inum: c::subvol_inum, offset: u64, inode: &c::bch_inode_unpacked, buf: &'a mut [u8]) -> ReadOp;
     fn accounting_mem_read(&self, pos: c::bpos, nr: u32) -> Vec<u64>;
@@ -31,7 +33,16 @@ pub trait FsExt {
 }
 
 impl FsExt for Fs {
-    fn open(devs: &[PathBuf], mut opts: c::bch_opts) -> Result<Fs, BchError> {
+    fn open(devs: &[PathBuf], opts: c::bch_opts) -> Result<Fs, BchError> {
+        Self::open_with_key(devs, opts, None)
+    }
+
+    /// @user_key: the passphrase-derived key, for a passphrase-protected
+    /// filesystem. Without it the open looks in the keyring, and failing
+    /// that prompts for the passphrase on stdin itself (bch2_request_key()).
+    fn open_with_key(devs: &[PathBuf], mut opts: c::bch_opts, user_key: Option<&c::bch_key>)
+        -> Result<Fs, BchError>
+    {
         let devs_cstrs: Vec<_> = devs
             .iter()
             .map(|i| CString::new(i.as_os_str().as_bytes()).unwrap())
@@ -43,7 +54,8 @@ impl FsExt for Fs {
             let mut devs: c::darray_const_str = std::mem::zeroed();
             devs.data = devs_array[..].as_mut_ptr();
             devs.nr = devs_array.len();
-            c::bch2_fs_open(&mut devs, &mut opts, std::ptr::null())
+            c::bch2_fs_open(&mut devs, &mut opts,
+                            user_key.map_or(std::ptr::null(), |k| k as *const _))
         };
 
         errptr_to_result(ret).map(|fs| Fs { raw: fs })
