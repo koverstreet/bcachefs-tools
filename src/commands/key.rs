@@ -137,6 +137,19 @@ unsafe fn init_crypt_kdf(fs: &Fs) {
     c::bch_crypt_kdf_init(crypt);
 }
 
+/// Write the changed crypt field out. The open was nostart, which implies
+/// nochanges, and there plain write_super() is a silent no-op - see
+/// Fs::write_super_force().
+fn write_crypt_super(fs: &Fs) -> Result<()> {
+    if fs.disk_sb().sb().sb_initialized() == 0 {
+        bail!("superblock not initialized (filesystem was never started): \
+               bch2_write_super would silently skip the write; mount it once first");
+    }
+    let _lock = fs.sb_lock();
+    fs.write_super_force()
+        .map_err(|e| anyhow!("error writing superblock: {e}"))
+}
+
 // ---- set-passphrase ----
 
 #[derive(Parser, Debug)]
@@ -163,9 +176,7 @@ fn cmd_set_passphrase(cli: SetPassphraseCli) -> Result<()> {
         set_crypt_key(&fs, encrypted_key);
         c::bch2_revoke_key(fs.sb_handle().sb);
     }
-    fs.write_super();
-
-    Ok(())
+    write_crypt_super(&fs)
 }
 
 // ---- remove-passphrase ----
@@ -182,9 +193,7 @@ fn cmd_remove_passphrase(cli: RemovePassphraseCli) -> Result<()> {
     let (fs, raw_key) = open_and_verify(&parse_device_list(&cli.devices))?;
 
     unsafe { set_crypt_key(&fs, bch_encrypted_key::new_unencrypted(raw_key)); }
-    fs.write_super();
-
-    Ok(())
+    write_crypt_super(&fs)
 }
 
 pub const CMD_UNLOCK: super::CmdDef = typed_cmd!("unlock", "Unlock an encrypted filesystem", UnlockCli, cmd_unlock);
