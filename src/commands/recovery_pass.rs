@@ -50,6 +50,12 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
 
     let fs = crate::device_scan::open_scan(&devs, fs_opts)?;
 
+    if (passes_to_set != 0 || passes_to_unset != 0) &&
+       fs.disk_sb().sb().sb_initialized() == 0 {
+        anyhow::bail!("superblock not initialized (filesystem was never started): \
+                       bch2_write_super would silently skip the write; mount it once first");
+    }
+
     unsafe {
         let _sb_lock = crate::wrappers::sb_lock(fs.raw);
 
@@ -65,7 +71,8 @@ fn cmd_recovery_pass(cli: RecoveryPassCli) -> Result<()> {
             ext.recovery_passes_required[0] &= !passes_to_unset.to_le();
             ext.recovery_passes_required[0] |= passes_to_set.to_le();
             scheduled = u64::from_le(ext.recovery_passes_required[0]);
-            fs.write_super();
+            fs.write_super_ret()
+                .map_err(|e| anyhow::anyhow!("error writing superblock: {e}"))?;
         }
 
         drop(_sb_lock);

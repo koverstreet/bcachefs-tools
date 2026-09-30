@@ -50,6 +50,11 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
     let fs = Fs::open(&devs, fs_opts)
         .context("opening filesystem")?;
 
+    if fs.disk_sb().sb().sb_initialized() == 0 {
+        return Err(anyhow!("superblock not initialized (filesystem was never started): \
+                            bch2_write_super would silently skip the write; mount it once first"));
+    }
+
     unsafe {
         if to_reset.is_empty() {
             for i in 0..BCH_COUNTER_NR as usize {
@@ -63,7 +68,8 @@ fn cmd_reset_counters(cli: Cli) -> Result<()> {
 
         // persist to superblock
         let _lock = crate::wrappers::sb_lock(fs.raw);
-        fs.write_super();
+        fs.write_super_ret()
+            .map_err(|e| anyhow!("error writing superblock: {}", e))?;
     }
 
     Ok(())
