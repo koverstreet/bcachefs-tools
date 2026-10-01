@@ -915,12 +915,13 @@ static void reconcile_set_move_limits(struct moving_context *ctxt,
 		MOVE_LIMITS_RECONCILE_TARGET, target);
 }
 
-static void reconcile_scan_set_move_limits(struct moving_context *ctxt)
+static void reconcile_scan_set_move_limits(struct moving_context *ctxt,
+					   struct reconcile_scan s)
 {
 	struct bch_fs *c = ctxt->trans->c;
 	struct bch_inode_opts opts;
 
-	bch2_inode_opts_get(c, &opts, false);
+	bch2_inode_opts_get(c, &opts, s.type == RECONCILE_SCAN_metadata);
 
 	unsigned target = opts.background_target ?: opts.foreground_target;
 
@@ -1465,9 +1466,9 @@ static int do_reconcile_scan(struct moving_context *ctxt,
 	bch2_move_stats_init(&r->scan_stats, "reconcile_scan");
 	ctxt->stats = &r->scan_stats;
 	bch2_moving_ctxt_reset_limits(ctxt);
-	reconcile_scan_set_move_limits(ctxt);
 
 	struct reconcile_scan s = reconcile_scan_decode(c, cookie_pos.offset);
+	reconcile_scan_set_move_limits(ctxt, s);
 	if (s.type == RECONCILE_SCAN_fs) {
 		try(do_reconcile_scan_fs(ctxt, s, snapshot_io_opts, false));
 	} else if (s.type == RECONCILE_SCAN_metadata) {
