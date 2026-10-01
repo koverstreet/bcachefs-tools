@@ -237,6 +237,7 @@ static int stripe_update_extent(struct btree_trans *trans,
 				struct bkey_s_c_backpointer bp,
 				struct stripe_update_bucket_stats *stats,
 				struct disk_reservation *res,
+				enum bch_watermark watermark,
 				struct wb_maybe_flush *last_flushed)
 {
 	struct bch_fs *c = trans->c;
@@ -363,6 +364,7 @@ static int stripe_update_extent(struct btree_trans *trans,
 	try(bch2_trans_update_buf(trans, &iter, n, BKEY_EXTENT_U64s_MAX,
 				  BTREE_TRIGGER_set_needs_reconcile_done));
 	try(bch2_trans_commit(trans, res, NULL,
+			watermark|
 			BCH_TRANS_COMMIT_no_check_rw|
 			BCH_TRANS_COMMIT_no_enospc));
 
@@ -415,7 +417,8 @@ static int stripe_update_bucket(struct btree_trans *trans,
 				struct bkey_i_stripe *old_stripe,
 				struct bkey_i_stripe *new_stripe,
 				unsigned old_blocknr,
-				unsigned new_blocknr)
+				unsigned new_blocknr,
+				enum bch_watermark watermark)
 {
 	struct bch_fs *c = trans->c;
 
@@ -443,7 +446,7 @@ static int stripe_update_bucket(struct btree_trans *trans,
 		wb_maybe_flush_inc(&last_flushed);
 		stripe_update_extent(trans, old_stripe, new_stripe,
 				     old_block, new_block, new_blocknr,
-				     bp, &stats, &res.r, &last_flushed);
+				     bp, &stats, &res.r, watermark, &last_flushed);
 	})));
 
 	event_inc_trace(c, stripe_update_bucket, buf, ({
@@ -468,7 +471,8 @@ static int __stripe_update_extents(struct btree_trans *trans,
 				   struct bkey_i_stripe *old_stripe,
 				   struct bkey_i_stripe *new_stripe,
 				   const u8 *old_block_map,
-				   unsigned old_blocks_nr)
+				   unsigned old_blocks_nr,
+				   enum bch_watermark watermark)
 {
 	unsigned nr_data = new_stripe->v.nr_blocks - new_stripe->v.nr_redundant;
 
@@ -480,7 +484,7 @@ static int __stripe_update_extents(struct btree_trans *trans,
 		struct bkey_i_stripe *old = i < old_blocks_nr
 			? old_stripe : new_stripe;
 
-		try(stripe_update_bucket(trans, old, new_stripe, old_blocknr, i));
+		try(stripe_update_bucket(trans, old, new_stripe, old_blocknr, i, watermark));
 	}
 
 	return 0;
@@ -494,7 +498,8 @@ static int stripe_update_extents(struct bch_fs *c, struct ec_stripe_new *s)
 				       &s->old_stripe.key,
 				       &s->new_stripe.key,
 				       s->old_block_map,
-				       s->old_blocks_nr);
+				       s->old_blocks_nr,
+				       s->watermark);
 }
 
 __cold void bch2_logged_op_stripe_update_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
@@ -547,7 +552,8 @@ int bch2_resume_logged_op_stripe_update(struct btree_trans *trans, struct bkey_i
 				       bkey_i_to_stripe(old_sk.k),
 				       bkey_i_to_stripe(new_sk.k),
 				       op->v.old_block_map,
-				       op->v.old_blocks_nr);
+				       op->v.old_blocks_nr,
+				       BCH_WATERMARK_normal);
 }
 
 static void zero_out_rest_of_ec_bucket(struct bch_fs *c,
@@ -739,7 +745,15 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 	op.v.old_blocks_nr	= s->old_blocks_nr;
 	memcpy(op.v.old_block_map, s->old_block_map, sizeof(op.v.old_block_map));
 
+	/*
+	 * At the watermark of the stripe head this stripe came from: copygc's
+	 * stripes are copygc's, and copygc can't make progress until they're
+	 * created - its open buckets and stripe buffers are held until then.
+	 * At the default watermark these commits waited behind the journal's
+	 * free space throttle, which only copygc can lift: deadlock.
+	 */
 	try(bch2_trans_commit_do(c, &s->res, NULL,
+				 s->watermark|
 				 BCH_TRANS_COMMIT_no_check_rw|
 				 BCH_TRANS_COMMIT_no_enospc,
 		ec_stripe_key_update(trans, &s->new_stripe.key) ?:
@@ -749,7 +763,7 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 
 	{
 		CLASS(btree_trans, trans)(c);
-		ret = bch2_logged_op_finish(trans, &op.k_i, ret, 0) ?: ret;
+		ret = bch2_logged_op_finish(trans, &op.k_i, ret, s->watermark) ?: ret;
 	}
 
 	return ret;
