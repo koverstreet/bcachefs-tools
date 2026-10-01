@@ -125,6 +125,11 @@ static int test_zstd_early_abort_incompressible(struct bch_fs *c, u64 nr)
 
 		if (type == BCH_COMPRESSION_TYPE_incompressible)
 			incompressible_count++;
+		else if (type != BCH_COMPRESSION_TYPE_zstd) {
+			bch_err(c, "test_zstd_early_abort: unexpected compression type %u (iter %llu)",
+				type, i);
+			return -EIO;
+		}
 	}
 
 	if (incompressible_count < nr / 2) {
