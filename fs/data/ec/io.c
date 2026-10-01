@@ -73,6 +73,27 @@ static void raid_gen(int nd, int np, size_t size, void **v)
 	BUG_ON(np > 2);
 }
 
+/*
+ * raid6_recov_2data() and raid6_recov_datap() handle at most a page: they stand
+ * the zero page in for the missing blocks while generating the syndrome.
+ */
+static void raid6_recov_paged(int disks, size_t size, int faila, int failb, void **v)
+{
+	void *p[BCH_BKEY_PTRS_MAX];
+
+	for (size_t offset = 0; offset < size; offset += PAGE_SIZE) {
+		size_t bytes = min_t(size_t, size - offset, PAGE_SIZE);
+
+		for (int i = 0; i < disks; i++)
+			p[i] = v[i] + offset;
+
+		if (failb < disks - 2)
+			raid6_recov_2data(disks, bytes, faila, failb, p);
+		else
+			raid6_recov_datap(disks, bytes, faila, p);
+	}
+}
+
 static void raid_rec(int nr, int *ir, int nd, int np, size_t size, void **v)
 {
 	switch (nr) {
@@ -87,12 +108,12 @@ static void raid_rec(int nr, int *ir, int nd, int np, size_t size, void **v)
 	case 2:
 		if (ir[1] < nd) {
 			/* data+data failure. */
-			raid6_recov_2data(nd + np, size, ir[0], ir[1], v);
+			raid6_recov_paged(nd + np, size, ir[0], ir[1], v);
 		} else if (ir[0] < nd) {
 			/* data + p/q failure */
 
 			if (ir[1] == nd) /* data + p failure */
-				raid6_recov_datap(nd + np, size, ir[0], v);
+				raid6_recov_paged(nd + np, size, ir[0], ir[1], v);
 			else { /* data + q failure */
 				raid5_recov(nd + 1, ir[0], size, v);
 				raid6_gen_syndrome(nd + np, size, v);
