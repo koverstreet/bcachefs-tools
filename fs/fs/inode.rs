@@ -33,6 +33,11 @@ pub fn rm(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     ret_to_result(unsafe { c::bch2_inode_rm(fs.raw, inum) })
 }
 
+/// A subvolume's root: deleting it is subvolume deletion's job.
+pub fn is_subvolume_root(inode: &c::bch_inode_unpacked) -> bool {
+    unsafe { c::bch2_inode_is_subvolume_root(inode) }
+}
+
 pub fn fsck_write_inode(
     trans: &btree::iter::BtreeTrans<'_>,
     inode: &mut c::bch_inode_unpacked,

@@ -13,10 +13,20 @@
 //   bcachefs's shrinker threads and fs_start happen after fork.
 // - I/O alignment: All reads and writes must be block-aligned. Unaligned
 //   requests get read-modify-write treatment in the write handler.
+// - Inode lifetime: there is no VFS inode cache here, so we keep the part of
+//   it that matters - how many references the kernel holds (FUSE's lookup
+//   count: one per entry we hand it, dropped by forget). When that reaches
+//   zero we do what bch2_evict_inode() does: an inode with no links left is
+//   deleted. Unlink only queues an inode for deletion; without this nothing
+//   ever deleted it, its space was never freed, and unmount left the
+//   filesystem marked clean with deleted inodes outstanding. FUSE doesn't
+//   promise a forget for every inode at unmount, so destroy() evicts
+//   whatever is still referenced.
 
 use std::cell::Cell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::ffi::OsStr;
 use std::fs::File;
 use std::io::{Read, Write};
@@ -412,6 +422,8 @@ struct BcachefsFs {
     /// for both, so the caller cannot tell them apart -- it asks this instead
     /// of guessing, which also keeps it correct if fuser's internals change.
     destroyed: Arc<AtomicBool>,
+    /// Kernel references (FUSE lookup counts) per inum: see "Inode lifetime".
+    lookups: Mutex<HashMap<u64, u64>>,
 }
 
 // Safety: bch_fs is internally synchronized with its own locking.
@@ -421,6 +433,53 @@ unsafe impl Sync for BcachefsFs {}
 impl BcachefsFs {
     fn fs(&self) -> std::mem::ManuallyDrop<Fs> {
         unsafe { Fs::borrow_raw(self.c) }
+    }
+
+    /// The kernel now holds a reference: every reply that hands it an entry.
+    /// Taken before the reply goes out, so a forget can't arrive first.
+    fn inode_get(&self, inum: u64) {
+        *self.lookups.lock().unwrap().entry(inum).or_insert(0) += 1;
+    }
+
+    /// The kernel dropped @nlookup references; evict at zero.
+    fn inode_put(&self, inum: u64, nlookup: u64) {
+        let unreferenced = {
+            let mut lookups = self.lookups.lock().unwrap();
+            match lookups.get_mut(&inum) {
+                Some(n) => {
+                    *n = n.saturating_sub(nlookup);
+                    *n == 0 && lookups.remove(&inum).is_some()
+                }
+                None => false,
+            }
+        };
+
+        if unreferenced {
+            self.inode_evict(inum);
+        }
+    }
+
+    /// bch2_evict_inode(): nothing references the inode any more, so if it
+    /// has no links left, delete it. A subvolume root with no links is the
+    /// subvolume deletion path's to delete, not ours.
+    fn inode_evict(&self, inum: u64) {
+        let fs = self.fs();
+        let inum = c::subvol_inum { subvol: 1, inum };
+        let bi = match inode::find_by_inum(&fs, inum) {
+            Ok(bi) => bi,
+            Err(e) => {
+                eprintln!("bcachefs fuse: evicting inode {}: lookup error {}", inum.inum, e);
+                return;
+            }
+        };
+
+        if Fs::inode_nlink_get(&bi) != 0 || inode::is_subvolume_root(&bi) {
+            return;
+        }
+
+        if let Err(e) = inode::rm(&fs, inum) {
+            eprintln!("bcachefs fuse: deleting unlinked inode {}: {}", inum.inum, e);
+        }
     }
 
     fn inode_to_attr(&self, bi: &c::bch_inode_unpacked) -> FileAttr {
@@ -473,8 +532,20 @@ impl Filesystem for BcachefsFs {
 
     fn destroy(&mut self) {
         eprintln!("bcachefs fuse: destroy");
+        ensure_thread_init();
+
+        let referenced: Vec<u64> = self.lookups.lock().unwrap().drain().map(|(inum, _)| inum).collect();
+        for inum in referenced {
+            self.inode_evict(inum);
+        }
+
         unsafe { c::bch2_fs_exit(self.c) };
         self.destroyed.store(true, Ordering::SeqCst);
+    }
+
+    fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
+        ensure_thread_init();
+        self.inode_put(map_root_ino(ino).inum, nlookup);
     }
 
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
@@ -515,6 +586,7 @@ impl Filesystem for BcachefsFs {
 
         eprintln!("  lookup -> ok inum={}", inum.inum);
         let attr = self.inode_to_attr(&bi);
+        self.inode_get(inum.inum);
         reply.entry(&TTL, &attr, Generation(bi.bi_generation as u64));
     }
 
@@ -645,6 +717,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&new_inode);
+        self.inode_get(new_inode.bi_inum);
         reply.entry(&TTL, &attr, Generation(new_inode.bi_generation as u64));
     }
 
@@ -724,6 +797,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&new_inode);
+        self.inode_get(new_inode.bi_inum);
         reply.entry(&TTL, &attr, Generation(new_inode.bi_generation as u64));
     }
 
@@ -774,6 +848,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&inode_u);
+        self.inode_get(inode_u.bi_inum);
         reply.entry(&TTL, &attr, Generation(inode_u.bi_generation as u64));
     }
 
@@ -1021,6 +1096,7 @@ impl Filesystem for BcachefsFs {
 
         eprintln!("  create -> ok inum={}", new_inode.bi_inum);
         let attr = self.inode_to_attr(&new_inode);
+        self.inode_get(new_inode.bi_inum);
         reply.created(
             &TTL, &attr,
             Generation(new_inode.bi_generation as u64),
@@ -1111,6 +1187,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
             c: fs_raw,
             signal_fd: None,
             destroyed: Arc::clone(&destroyed),
+            lookups: Mutex::new(HashMap::new()),
         };
         if let Err(e) = fuser::mount2(bcachefs_fs, &cli.mountpoint, &config) {
             if !destroyed.load(Ordering::SeqCst) {
@@ -1229,6 +1306,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         c: fs_raw,
         signal_fd: Some(signal_fd),
         destroyed: Arc::clone(&destroyed),
+        lookups: Mutex::new(HashMap::new()),
     };
 
     match fuser::mount2(bcachefs_fs, &cli.mountpoint, &config) {
