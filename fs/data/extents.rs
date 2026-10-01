@@ -21,29 +21,11 @@ impl<T> ExtentUnionField<T> for c::__BindgenUnionField<T> {
     }
 }
 
-impl ExtentUnionField<core::ffi::c_ulong> for core::ffi::c_ulong {
-    unsafe fn as_union_ref(&self) -> &core::ffi::c_ulong {
+impl<T> ExtentUnionField<T> for T {
+    unsafe fn as_union_ref(&self) -> &T {
         self
     }
-    unsafe fn as_union_mut(&mut self) -> &mut core::ffi::c_ulong {
-        self
-    }
-}
-
-impl ExtentUnionField<c::bch_extent_ptr> for c::bch_extent_ptr {
-    unsafe fn as_union_ref(&self) -> &c::bch_extent_ptr {
-        self
-    }
-    unsafe fn as_union_mut(&mut self) -> &mut c::bch_extent_ptr {
-        self
-    }
-}
-
-impl ExtentUnionField<c::bch_extent_stripe_ptr> for c::bch_extent_stripe_ptr {
-    unsafe fn as_union_ref(&self) -> &c::bch_extent_stripe_ptr {
-        self
-    }
-    unsafe fn as_union_mut(&mut self) -> &mut c::bch_extent_stripe_ptr {
+    unsafe fn as_union_mut(&mut self) -> &mut T {
         self
     }
 }
@@ -278,4 +260,41 @@ pub(crate) fn entry_stripe_ptr_mut(
     entry: &mut c::bch_extent_entry,
 ) -> &mut c::bch_extent_stripe_ptr {
     unsafe { extent_union_field_mut(&mut entry.stripe_ptr) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_direct_field<Field>(mut field: Field) {
+        let address = core::ptr::addr_of!(field);
+        let shared = unsafe { extent_union_field_ref::<Field, Field>(&field) };
+        assert_eq!(core::ptr::from_ref(shared), address);
+        let unique = unsafe { extent_union_field_mut::<Field, Field>(&mut field) };
+        assert_eq!(core::ptr::from_mut(unique).cast_const(), address);
+    }
+
+    #[test]
+    fn direct_extent_crc_fields_preserve_address() {
+        check_direct_field::<c::bch_extent_crc32>(unsafe { core::mem::zeroed() });
+        check_direct_field::<c::bch_extent_crc64>(unsafe { core::mem::zeroed() });
+        check_direct_field::<c::bch_extent_crc128>(unsafe { core::mem::zeroed() });
+    }
+
+    #[test]
+    fn wrapped_union_field_reads_and_updates_storage() {
+        #[repr(C)]
+        struct WrappedField {
+            field: c::__BindgenUnionField<u64>,
+            storage: u64,
+        }
+
+        let mut wrapped = WrappedField {
+            field: c::__BindgenUnionField::new(),
+            storage: 42,
+        };
+        assert_eq!(unsafe { *extent_union_field_ref::<u64, _>(&wrapped.field) }, 42);
+        unsafe { *extent_union_field_mut::<u64, _>(&mut wrapped.field) = 84 };
+        assert_eq!(wrapped.storage, 84);
+    }
 }
