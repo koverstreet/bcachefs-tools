@@ -617,6 +617,8 @@ int bch2_resume_logged_op_stripe_update(struct btree_trans *trans, struct bkey_i
 	struct bkey_buf old_sk __cleanup(bch2_bkey_buf_exit);
 	bch2_bkey_buf_init(&old_sk);
 
+	unsigned old_blocks_nr = op->v.old_blocks_nr;
+
 	/* Read new stripe */
 	CLASS(btree_iter, new_iter)(trans, BTREE_ID_stripes, POS(0, new_idx), BTREE_ITER_cached);
 	struct bkey_s_c new_k = bkey_try(bch2_btree_iter_peek_slot(&new_iter));
@@ -633,10 +635,18 @@ int bch2_resume_logged_op_stripe_update(struct btree_trans *trans, struct bkey_i
 		CLASS(btree_iter, old_iter)(trans, BTREE_ID_stripes, POS(0, old_idx), BTREE_ITER_cached);
 		struct bkey_s_c old_k = bkey_try(bch2_btree_iter_peek_slot(&old_iter));
 
-		if (old_k.k->type == KEY_TYPE_stripe)
+		if (old_k.k->type == KEY_TYPE_stripe) {
 			bch2_bkey_buf_reassemble(&old_sk, old_k);
-		else
+		} else {
+			/*
+			 * It was deleted once empty, so the carried blocks'
+			 * extents are re-keyed already, and old_block_map
+			 * doesn't index the new stripe: re-key each block
+			 * against itself, as for a new stripe.
+			 */
 			bch2_bkey_buf_reassemble(&old_sk, new_k);
+			old_blocks_nr = 0;
+		}
 	} else {
 		bch2_bkey_buf_reassemble(&old_sk, new_k);
 	}
@@ -645,7 +655,7 @@ int bch2_resume_logged_op_stripe_update(struct btree_trans *trans, struct bkey_i
 				       bkey_i_to_stripe(old_sk.k),
 				       bkey_i_to_stripe(new_sk.k),
 				       op->v.old_block_map,
-				       op->v.old_blocks_nr,
+				       old_blocks_nr,
 				       ec_stripe_create_watermark(BCH_WATERMARK_normal));
 }
 
