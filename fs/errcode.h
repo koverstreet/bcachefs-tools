@@ -643,7 +643,9 @@
 	x(EINVAL,			EINVAL_will_not_start, 620)		\
 	x(EROFS,			erofs_sb_never_started, 621)	\
 	x(ESHUTDOWN,			ioctl_fs_stopping, 622)			\
-	x(ENOMEM,			ENOMEM_reconcile_stripes_pending, 623)
+	x(ENOMEM,			ENOMEM_reconcile_stripes_pending, 623)	\
+	x(BCH_ERR_data_read_retry_avoid,data_read_retry_ec_read_around, 624)	\
+	x(BCH_ERR_stripe_read,		stripe_read_skipped, 625)
 
 /*
  * BCH_ERR_MAX is one past the highest errcode number, wherever that entry sits
