@@ -1320,7 +1320,7 @@ mod tests {
             hidden: 7,
             used_percent: 40,
             leaving: 0,
-            stripe_empty: 0,
+            stripe_empty: Some(0),
             bucket_size: 1,
             buckets: 100,
             data_types: Some(vec![DeviceDataTypeUsage {
@@ -1350,5 +1350,51 @@ mod tests {
         dev_usage_full_to_text(&mut detailed, &fixture_device());
         assert!(detailed.as_str().contains("51200"));
         assert!(!detailed.as_str().contains("47616"));
+    }
+
+    #[test]
+    fn shared_model_keeps_uuid_free_space_and_single_byte_unit() {
+        let usage = FsUsage {
+            mountpoint: "/fixture".to_string(),
+            uuid: "12345678-1234-5678-9abc-def012345678".to_string(),
+            fields: vec!["devices"],
+            capacity: 200,
+            used: 80,
+            online_reserved: 10,
+            free: vec![100, 50, 0],
+            free_now: vec![90, 40, 0],
+            replicas_summary: ReplicasSummary {
+                replicated: Vec::new(),
+                erasure_coded: Vec::new(),
+                cached: 0,
+                reserved: 0,
+            },
+            replicas: Vec::new(),
+            persistent_reserved: Vec::new(),
+            compression: Vec::new(),
+            btree: Vec::new(),
+            rebalance_work: Vec::new(),
+            reconcile_work: Vec::new(),
+            devices: Vec::new(),
+        };
+        let json = serde_json::to_value(&usage).unwrap();
+
+        assert_eq!(json["uuid"], usage.uuid);
+        assert_eq!(json["capacity_bytes"], 200 * SECTOR_BYTES);
+        assert_eq!(json["used_bytes"], 80 * SECTOR_BYTES);
+        assert_eq!(json["online_reserved_bytes"], 10 * SECTOR_BYTES);
+        assert_eq!(json["free_bytes"][0], 100 * SECTOR_BYTES);
+        assert_eq!(json["free_now_bytes"][0], 90 * SECTOR_BYTES);
+        assert!(json.get("capacity").is_none());
+
+        let mut text = Printbuf::new();
+        fs_usage_to_text(&mut text, &usage);
+        let text = text.to_string();
+        assert!(text.contains(&usage.uuid));
+        assert!(text.contains("Used:"));
+        assert!(text.contains("Online reserved:"));
+        assert!(text.contains("Free:"));
+        assert!(text.contains("51200"));
+        assert!(text.contains("46080"));
     }
 }
