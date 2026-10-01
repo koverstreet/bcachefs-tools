@@ -1132,10 +1132,21 @@ static bool move_alloc_dev_stalled(struct bch_fs *c,
 				   struct alloc_request *req,
 				   unsigned dev, u64 now)
 {
-	return (req->flags & BCH_WRITE_move) &&
-		req->data_type == BCH_DATA_user &&
-		move_alloc_dev_pressure(c, req, dev, now) >=
-		MOVE_ALLOC_STALLED_THRESHOLD;
+	if (!(req->flags & BCH_WRITE_move) ||
+	    req->data_type != BCH_DATA_user ||
+	    (req->devs_required && test_bit(dev, req->devs_required->d)) ||
+	    move_alloc_dev_pressure(c, req, dev, now) <
+	    MOVE_ALLOC_STALLED_THRESHOLD)
+		return false;
+
+	unsigned alternative;
+	for_each_set_bit(alternative, req->devs_may_alloc.d, BCH_SB_MEMBERS_MAX)
+		if (alternative != dev &&
+		    move_alloc_dev_pressure(c, req, alternative, now) <
+		    MOVE_ALLOC_STALLED_THRESHOLD)
+			return true;
+
+	return false;
 }
 
 static void move_alloc_avoid_busy_devs(struct bch_fs *c,
@@ -1175,6 +1186,11 @@ static void move_alloc_avoid_busy_devs(struct bch_fs *c,
 	 */
 	for (unsigned j = 1; j < req->devs_sorted.nr; j++)
 		for (unsigned i = j; i &&
+		     req->domain_keys[req->devs_sorted.data[i - 1]] ==
+		     req->domain_keys[req->devs_sorted.data[i]] &&
+		     (!req->devs_required ||
+		      test_bit(req->devs_sorted.data[i - 1], req->devs_required->d) ==
+		      test_bit(req->devs_sorted.data[i], req->devs_required->d)) &&
 		     pressure[i - 1] >= MOVE_ALLOC_STALLED_THRESHOLD &&
 		     pressure[i - 1] > pressure[i]; i--) {
 			swap(req->devs_sorted.data[i - 1], req->devs_sorted.data[i]);
@@ -1409,8 +1425,10 @@ int bch2_bucket_alloc_set_trans(struct btree_trans *trans,
 		 * Each allocation changes which failure domains the next
 		 * replica should avoid - re-sort and go again:
 		 */
-		if (progress)
+		if (progress) {
 			bch2_dev_alloc_list(c, stripe, req);
+			move_alloc_avoid_busy_devs(c, req);
+		}
 	} while (progress);
 
 	return ret ?: alloc_trace_add(req, BCH_SB_MEMBER_INVALID,
