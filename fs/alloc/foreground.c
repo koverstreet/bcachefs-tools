@@ -497,9 +497,15 @@ bucket_alloc_scan(struct btree_trans *trans, struct alloc_request *req,
 	 * may never commit, and, by making the bucket open, prevents the
 	 * retried commit from ever freeing it. Every alloc-state read on the
 	 * allocation path must carry this flag.
+	 *
+	 * nopreserve: as in try_alloc_bucket_pos(), nothing here is worth
+	 * keeping past this call, and a preserved path outlives it until
+	 * bch2_trans_begin(): callers that retry allocation in one
+	 * transaction would otherwise leave one path per call behind.
 	 */
 	CLASS(btree_iter, iter)(trans, BTREE_ID_freespace,
-				POS(ca->dev_idx, pos), BTREE_ITER_committed);
+				POS(ca->dev_idx, pos),
+				BTREE_ITER_committed|BTREE_ITER_nopreserve);
 
 	while (1) {
 		if (!forwards && pos < min.offset)
