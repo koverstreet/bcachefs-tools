@@ -651,6 +651,14 @@ enum fsck_err_opts {
 	  BCH_SB_EXT_DEV_READAHEAD,	SZ_2M,				\
 	  "size",	"Per-device readahead window size; summed across\n"\
 	  " all devices to set the filesystem readahead")		\
+	x(ec_read_around_penalty,	u16,				\
+	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,					\
+	  OPT_UINT(0, 10000),						\
+	  BCH2_NO_SB_OPT,		150,				\
+	  "%",		"Reconstruct erasure coded reads from the rest of\n"\
+	  " the stripe when the device holding the data is slower\n"\
+	  " than this percentage of the reconstruct's latency (its\n"\
+	  " slowest device's) plus 1ms; 0 disables")		\
 	x(ec_stripe_buf_limit,		u8,				\
 	  OPT_FS|OPT_MOUNT|OPT_RUNTIME,				\
 	  OPT_UINT(1, 25),						\

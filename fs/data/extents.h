@@ -338,6 +338,7 @@ static inline struct bkey_ptrs bch2_bkey_ptrs(struct bkey_s k)
 									\
 	(_ptr).has_ec			= false;			\
 	(_ptr).do_ec_reconstruct	= false;			\
+	(_ptr).ec_read_around		= false;			\
 	(_ptr).crc_retry_nr		= 0;				\
 									\
 	__bkey_extent_entry_for_each_from(_entry, _end, _entry)		\

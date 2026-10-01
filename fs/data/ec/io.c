@@ -9,6 +9,7 @@
 #include "data/checksum.h"
 #include "data/ec/io.h"
 #include "data/ec/trigger.h"
+#include "data/extents.h"
 #include "data/read.h"
 
 #include "init/error.h"
@@ -189,19 +190,25 @@ void bch2_ec_stripe_buf_move(struct ec_stripe_buf *dst, struct ec_stripe_buf *sr
 	memset(src->data, 0, sizeof(src->data));
 }
 
-int bch2_ec_stripe_buf_init(struct bch_fs *c,
-			    struct ec_stripe_buf *buf,
-			    unsigned offset, unsigned size,
-			    struct closure *cl)
+/*
+ * Over ec_stripe_buf_limit, waits on @cl if given, fails if
+ * EC_STRIPE_BUF_optional, and otherwise goes over it.
+ */
+int __bch2_ec_stripe_buf_init(struct bch_fs *c,
+			      struct ec_stripe_buf *buf,
+			      unsigned offset, unsigned size,
+			      struct closure *cl, enum ec_stripe_buf_flags flags)
 {
 	unsigned csum_granularity = 1U << buf->key.v.csum_granularity_bits;
 	unsigned end = offset + size;
 
 	BUG_ON(end > le16_to_cpu(buf->key.v.sectors));
 
-	offset	= round_down(offset, csum_granularity);
-	end	= min_t(unsigned, le16_to_cpu(buf->key.v.sectors),
-			round_up(end, csum_granularity));
+	if (!(flags & EC_STRIPE_BUF_unaligned)) {
+		offset	= round_down(offset, csum_granularity);
+		end	= min_t(unsigned, le16_to_cpu(buf->key.v.sectors),
+				round_up(end, csum_granularity));
+	}
 
 	unsigned long buf_bytes = ((unsigned long)(end - offset) << 9) *
 		buf->key.v.nr_blocks;
@@ -209,10 +216,11 @@ int bch2_ec_stripe_buf_init(struct bch_fs *c,
 		c->opts.ec_stripe_buf_limit;
 
 	scoped_guard(spinlock, &c->ec.stripe_buf_lock) {
-		if (cl &&
+		if ((cl || (flags & EC_STRIPE_BUF_optional)) &&
 		    c->ec.stripe_buf_bytes &&
 		    c->ec.stripe_buf_bytes + buf_bytes > limit) {
-			closure_wait(&c->ec.stripe_buf_wait, cl);
+			if (cl)
+				closure_wait(&c->ec.stripe_buf_wait, cl);
 			return bch_err_throw(c, stripe_buf_mem_blocked);
 		}
 
@@ -222,6 +230,7 @@ int bch2_ec_stripe_buf_init(struct bch_fs *c,
 	buf->c		= c;
 	buf->offset	= offset;
 	buf->size	= end - offset;
+	buf->unaligned	= flags & EC_STRIPE_BUF_unaligned;
 
 	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++) {
 		buf->data[i] = kvmalloc(buf->size << 9, GFP_KERNEL);
@@ -280,7 +289,7 @@ static void bch2_ec_validate_checksums(struct bch_fs *c, struct ec_stripe_buf *b
 	unsigned nr_data = buf->key.v.nr_blocks - buf->key.v.nr_redundant;
 	unsigned csum_granularity = 1U << buf->key.v.csum_granularity_bits;
 
-	if (!buf->key.v.csum_type)
+	if (!buf->key.v.csum_type || buf->unaligned)
 		return;
 
 	for (unsigned i = 0; i < (data_only ? nr_data : buf->key.v.nr_blocks); i++) {
@@ -473,14 +482,16 @@ static bool stripe_read_maybe_spurious(struct ec_stripe_buf *buf, unsigned i,
 /*
  * A device going offline is reported once, by the device. Every stripe that
  * touches it reporting it again is noise: there's nothing to say unless a block
- * failed for some other reason, or we couldn't cope.
+ * failed for some other reason, or we couldn't cope. Blocks a read-around
+ * didn't read aren't failures at all.
  */
 static bool stripe_errs_only_dev_offline(struct ec_stripe_buf *buf)
 {
 	for (unsigned e = 0; e < ARRAY_SIZE(buf->err); e++)
 		for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
 			if (buf->err[e][i] &&
-			    buf->err[e][i] != -BCH_ERR_stripe_read_device_offline)
+			    buf->err[e][i] != -BCH_ERR_stripe_read_device_offline &&
+			    buf->err[e][i] != -BCH_ERR_stripe_read_skipped)
 				return false;
 	return true;
 }
@@ -748,12 +759,6 @@ void bch2_ec_block_io_range(struct bch_fs *c, struct ec_stripe_buf *buf,
 	enumerated_ref_put(&ca->io_ref[rw], ref);
 }
 
-void bch2_stripe_buf_read(struct bch_fs *c, struct ec_stripe_buf *buf)
-{
-	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
-		bch2_ec_block_io(c, buf, REQ_OP_READ, i);
-}
-
 /* recovery read path: */
 
 static int get_stripe_key_trans(struct btree_trans *trans, u64 idx,
@@ -767,10 +772,179 @@ static int get_stripe_key_trans(struct btree_trans *trans, u64 idx,
 	return 0;
 }
 
+/* Read-around: */
+
+#define EC_READ_AROUND_MIN_GAIN_NS	(1000ULL * 1000)
+
+static inline u64 ec_dev_read_latency(struct bch_dev *ca)
+{
+	return atomic64_read(&ca->cur_latency[READ]);
+}
+
+/*
+ * The latency a read-around has to beat: that of its slowest device, @l, scaled
+ * for reading k blocks instead of one, plus the least gain worth having.
+ */
+static inline u64 ec_read_around_cost(u64 l, unsigned penalty)
+{
+	return div_u64(l * penalty, 100) + EC_READ_AROUND_MIN_GAIN_NS;
+}
+
+/*
+ * The blocks a read-around of @block reads: the k fastest of the stripe's other
+ * blocks. With two parity blocks there are k + 1 to choose from, and the
+ * slowest is left out; on a tie, the highest index, so Q before P before data -
+ * rebuilding a data block and Q is an XOR and a syndrome, no Galois field
+ * recovery.
+ *
+ * A device with no read latency sample yet doesn't qualify: what it costs is
+ * unknown. Returns 0 if fewer than k blocks qualify; otherwise the mask, and in
+ * @l_r the latency of the slowest device in it.
+ */
+static u32 ec_read_around_blocks(struct bch_fs *c, const struct bch_stripe *v,
+				 unsigned block, struct bch_io_failures *failed,
+				 u64 *l_r)
+{
+	unsigned nr_data = v->nr_blocks - v->nr_redundant;
+	u64 lat[BCH_BKEY_PTRS_MAX] = {};
+	u32 mask = 0;
+
+	scoped_guard(rcu)
+		for (unsigned i = 0; i < v->nr_blocks; i++) {
+			if (i == block)
+				continue;
+
+			struct bch_dev *ca = bch2_dev_rcu_noerror(c, v->ptrs[i].dev);
+			if (!ca ||
+			    !bch2_dev_is_online(ca) ||
+			    dev_ptr_stale_rcu(ca, &v->ptrs[i]) ||
+			    (failed && bch2_dev_io_failures(failed, ca->dev_idx)))
+				continue;
+
+			lat[i] = ec_dev_read_latency(ca);
+			if (lat[i])
+				mask |= BIT(i);
+		}
+
+	while (hweight32(mask) > nr_data) {
+		unsigned slowest = __ffs(mask);
+
+		for (unsigned i = slowest + 1; i < v->nr_blocks; i++)
+			if ((mask & BIT(i)) && lat[i] >= lat[slowest])
+				slowest = i;
+		mask &= ~BIT(slowest);
+	}
+
+	if (hweight32(mask) < nr_data)
+		return 0;
+
+	*l_r = 0;
+	for (unsigned i = 0; i < v->nr_blocks; i++)
+		if (mask & BIT(i))
+			*l_r = max(*l_r, lat[i]);
+	return mask;
+}
+
+/*
+ * Should a read of @pick, which bch2_bkey_pick_read_device() chose to read
+ * directly, go around its device instead?
+ *
+ * A reconstruct reads k blocks instead of one, so only when that is clearly
+ * faster. With d the device's read latency and r the cost of the reconstruct
+ * (its slowest device's latency, scaled by ec_read_around_penalty, plus 1 ms):
+ * never when d <= r - so never on a healthy pool - and otherwise with
+ * probability 1 - (r/d)^2. The slow device keeps getting some reads, so its
+ * latency estimate recovers when it does.
+ *
+ * Not for reads pinned to a device, or retries: a retry after an error has its
+ * own reconstruct path, and the retry carrying a read-around decision
+ * (BCH_READ_ec_read_around) doesn't roll again.
+ *
+ * Returns 0 or a transaction restart.
+ */
+int bch2_ec_read_around_pick(struct btree_trans *trans,
+			     struct extent_ptr_decoded *pick,
+			     struct bch_io_failures *failed,
+			     enum bch_read_flags flags)
+{
+	struct bch_fs *c = trans->c;
+	unsigned penalty = c->opts.ec_read_around_penalty;
+	bool decided = flags & BCH_READ_ec_read_around;
+
+	if (!penalty ||
+	    (flags & (BCH_READ_hard_require_read_device|
+		      BCH_READ_soft_require_read_device)) ||
+	    ((flags & BCH_READ_in_retry) && !decided))
+		return 0;
+
+	if (failed && failed->ec_around_errcode)
+		return 0;
+
+	/*
+	 * Finding the stripe's devices takes a stripes btree lookup, so first
+	 * check against every online device: r can't be lower than the fastest.
+	 */
+	u64 l_d = 0, l_min = U64_MAX;
+	scoped_guard(rcu) {
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, pick->ptr.dev);
+		if (!ca)
+			return 0;
+
+		l_d = ec_dev_read_latency(ca);
+		if (l_d <= EC_READ_AROUND_MIN_GAIN_NS)
+			return 0;
+
+		for_each_online_member_rcu(c, peer) {
+			u64 l = ec_dev_read_latency(peer);
+			if (peer != ca && l)
+				l_min = min(l_min, l);
+		}
+	}
+
+	if (l_min == U64_MAX ||
+	    l_d <= ec_read_around_cost(l_min, penalty))
+		return 0;
+
+	if (!decided) {
+		/* Data updates get here unlocked, by bch2_data_update_init(): */
+		try(bch2_trans_relock(trans));
+
+		CLASS(btree_iter, iter)(trans, BTREE_ID_stripes, POS(0, pick->ec.idx), BTREE_ITER_slots);
+		struct bkey_s_c k = bch2_btree_iter_peek_slot(&iter);
+		int ret = bkey_err(k);
+		if (ret)
+			return bch2_err_matches(ret, BCH_ERR_transaction_restart) ? ret : 0;
+
+		if (k.k->type != KEY_TYPE_stripe)
+			return 0;
+
+		const struct bch_stripe *v = bkey_s_c_to_stripe(k).v;
+		if (!bch2_ptr_matches_stripe(v, *pick))
+			return 0;
+
+		u64 l_r;
+		if (!ec_read_around_blocks(c, v, pick->ec.block, failed, &l_r))
+			return 0;
+
+		/* In ~us, so the squares fit: */
+		u64 d = min_t(u64, l_d >> 10, U32_MAX);
+		u64 r = min_t(u64, ec_read_around_cost(l_r, penalty) >> 10, U32_MAX);
+
+		if (d <= r ||
+		    bch2_get_random_u64_below(d * d) < r * r)
+			return 0;
+	}
+
+	pick->do_ec_reconstruct = true;
+	pick->ec_read_around	= true;
+	return 0;
+}
+
 int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 			struct bkey_s_c orig_k,
-			struct printbuf *msg)
+			struct bch_io_failures *failed)
 {
+	struct printbuf *msg = &failed->ec_msg;
 	/*
 	 * We need the original extent to read to still be locked when we check
 	 * for non-spurious stale stripe pointers
@@ -838,10 +1012,35 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		bch2_run_explicit_recovery_pass(c, &msg.m, BCH_RECOVERY_PASS_check_allocations, 0);
 	}
 
+	u32 read_mask = EC_BLOCKS_ALL;
+	enum ec_stripe_buf_flags buf_flags = 0;
+	if (rbio->pick.ec_read_around) {
+		u64 l_r;
+		read_mask = ec_read_around_blocks(c, &buf->key.v, rbio->pick.ec.block,
+						  failed, &l_r);
+		/* Raced with a device going offline: not worth a message */
+		if (!read_mask)
+			return bch_err_throw(c, stripe_reconstruct_insufficient_blocks);
+
+		/*
+		 * A read-around is optional, so it doesn't go over the stripe
+		 * buffer limit; the read goes to the device instead. When the
+		 * extent is checksummed, its checksum checks the result, as
+		 * it would a direct read, so read just the extent's range of
+		 * each block, without rounding to checksum granules.
+		 */
+		buf_flags |= EC_STRIPE_BUF_optional;
+		if (rbio->pick.crc.csum_type)
+			buf_flags |= EC_STRIPE_BUF_unaligned;
+	}
+
 	/* Don't hold btree locks for stripe buffer allocations, or IO */
 	bch2_trans_unlock(trans);
 
-	ret = bch2_ec_stripe_buf_init(c, buf, offset, bio_sectors(&rbio->bio), NULL);
+	ret = __bch2_ec_stripe_buf_init(c, buf, offset, bio_sectors(&rbio->bio), NULL,
+					buf_flags);
+	if (bch2_err_matches(ret, BCH_ERR_stripe_buf_mem_blocked))
+		return ret;
 	if (ret) {
 		prt_printf(msg, "error allocating stripe data buffers\n");
 		bch2_bkey_val_to_text(msg, c, bkey_i_to_s_c(&buf->key.k_i));
@@ -849,7 +1048,12 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		return bch_err_throw(c, stripe_reconstruct_enomem);
 	}
 
-	bch2_stripe_buf_read(c, buf);
+	/* Blocks not read are erasures, rebuilt with the target: */
+	for (unsigned i = 0; i < buf->key.v.nr_blocks; i++)
+		if (read_mask & BIT(i))
+			bch2_ec_block_io(c, buf, REQ_OP_READ, i);
+		else
+			buf->err[STRIPE_BUF_PRE_RECOV][i] = -BCH_ERR_stripe_read_skipped;
 
 	/*
 	 * A block went stale under us: the stripe was deleted or replaced, so
