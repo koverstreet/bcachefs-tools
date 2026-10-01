@@ -79,6 +79,8 @@ struct ec_stripe_new {
 	 */
 	int			old_stripe_err;
 	u32			old_stripe_lost_blocks;
+	/* Carried blocks on slow devices, rebuilt from the others */
+	u32			old_stripe_skipped;
 
 	struct bch_devs_mask	devs;
 	enum bch_watermark	watermark;

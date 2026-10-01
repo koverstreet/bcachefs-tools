@@ -846,6 +846,61 @@ static u32 ec_read_around_blocks(struct bch_fs *c, const struct bch_stripe *v,
 }
 
 /*
+ * Blocks of @required on devices much slower than the rest, which a read of
+ * the whole stripe can rebuild from the others: the read-around rule without
+ * the coin toss, for stripe repair and reuse, which read in bulk. At most
+ * nr_redundant, less blocks already lost to offline devices, and only when
+ * every device read in their place has a latency sample.
+ */
+u32 bch2_ec_read_around_skip(struct bch_fs *c, const struct bch_stripe *v, u32 required)
+{
+	unsigned penalty = c->opts.ec_read_around_penalty;
+	u64 lat[BCH_BKEY_PTRS_MAX] = {};
+	u32 offline = 0, skip = 0;
+
+	if (!penalty)
+		return 0;
+
+	scoped_guard(rcu)
+		for (unsigned i = 0; i < v->nr_blocks; i++) {
+			struct bch_dev *ca = bch2_dev_rcu_noerror(c, v->ptrs[i].dev);
+
+			if (ca && bch2_dev_is_online(ca))
+				lat[i] = ec_dev_read_latency(ca);
+			else
+				offline |= BIT(i);
+		}
+
+	for (unsigned budget = v->nr_redundant - min(hweight32(offline), v->nr_redundant);
+	     budget;
+	     --budget) {
+		u32 candidates = required & ~skip & ~offline;
+		if (!candidates)
+			break;
+
+		unsigned slowest = __ffs(candidates);
+		for (unsigned i = slowest + 1; i < v->nr_blocks; i++)
+			if ((candidates & BIT(i)) && lat[i] > lat[slowest])
+				slowest = i;
+
+		u64 l_r = 0;
+		for (unsigned i = 0; i < v->nr_blocks; i++) {
+			if ((skip | offline | BIT(slowest)) & BIT(i))
+				continue;
+			if (!lat[i])
+				return skip;
+			l_r = max(l_r, lat[i]);
+		}
+
+		if (lat[slowest] <= ec_read_around_cost(l_r, penalty))
+			break;
+		skip |= BIT(slowest);
+	}
+
+	return skip;
+}
+
+/*
  * Should a read of @pick, which bch2_bkey_pick_read_device() chose to read
  * directly, go around its device instead?
  *
