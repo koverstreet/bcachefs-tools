@@ -130,27 +130,33 @@ fn fs_usage(cli: Cli) -> Result<()> {
 
 const SECTOR_BYTES: u64 = 512;
 
-fn sectors_to_bytes(sectors: u64) -> u64 {
-    sectors.saturating_mul(SECTOR_BYTES)
+fn sectors_to_bytes<E: serde::ser::Error>(sectors: u64) -> Result<u64, E> {
+    sectors
+        .checked_mul(SECTOR_BYTES)
+        .ok_or_else(|| E::custom("sector count exceeds the u64 byte range"))
 }
 
 fn ser_bytes<S: Serializer>(sectors: &u64, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_u64(sectors_to_bytes(*sectors))
+    s.serialize_u64(sectors_to_bytes::<S::Error>(*sectors)?)
 }
 
 fn ser_bytes32<S: Serializer>(sectors: &u32, s: S) -> Result<S::Ok, S::Error> {
-    s.serialize_u64(sectors_to_bytes(*sectors as u64))
+    s.serialize_u64(sectors_to_bytes::<S::Error>(*sectors as u64)?)
 }
 
 fn ser_optional_bytes<S: Serializer>(sectors: &Option<u64>, s: S) -> Result<S::Ok, S::Error> {
     match sectors {
-        Some(sectors) => s.serialize_some(&sectors_to_bytes(*sectors)),
+        Some(sectors) => s.serialize_some(&sectors_to_bytes::<S::Error>(*sectors)?),
         None => s.serialize_none(),
     }
 }
 
 fn ser_bytes_vec<S: Serializer>(sectors: &Vec<u64>, s: S) -> Result<S::Ok, S::Error> {
-    s.collect_seq(sectors.iter().map(|&value| sectors_to_bytes(value)))
+    let bytes: Result<Vec<u64>, S::Error> = sectors
+        .iter()
+        .map(|&value| sectors_to_bytes(value))
+        .collect();
+    s.collect_seq(bytes?)
 }
 
 #[derive(Serialize)]
@@ -1308,6 +1314,68 @@ pub const CMD: super::CmdDef = typed_cmd!("usage", "Show filesystem disk usage",
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[derive(Serialize)]
+    struct ByteCounts {
+        #[serde(serialize_with = "ser_bytes")]
+        scalar: u64,
+        #[serde(serialize_with = "ser_bytes32")]
+        small: u32,
+        #[serde(serialize_with = "ser_optional_bytes")]
+        optional: Option<u64>,
+        #[serde(serialize_with = "ser_bytes_vec")]
+        vector: Vec<u64>,
+    }
+
+    #[test]
+    fn byte_serialization_preserves_range_boundaries() {
+        let largest = u64::MAX / SECTOR_BYTES;
+        let counts = ByteCounts {
+            scalar: largest,
+            small: u32::MAX,
+            optional: Some(largest),
+            vector: vec![0, largest],
+        };
+        let json = serde_json::to_value(&counts).unwrap();
+        assert_eq!(json["scalar"], largest * SECTOR_BYTES);
+        assert_eq!(json["small"], u64::from(u32::MAX) * SECTOR_BYTES);
+        assert_eq!(json["optional"], largest * SECTOR_BYTES);
+        assert_eq!(json["vector"][0], 0);
+        assert_eq!(json["vector"][1], largest * SECTOR_BYTES);
+        let absent = ByteCounts {
+            optional: None,
+            ..counts
+        };
+        assert!(serde_json::to_value(absent).unwrap()["optional"].is_null());
+    }
+
+    #[test]
+    fn byte_serialization_rejects_overflow_in_every_u64_shape() {
+        let overflow = u64::MAX / SECTOR_BYTES + 1;
+        for counts in [
+            ByteCounts {
+                scalar: overflow,
+                small: 0,
+                optional: None,
+                vector: vec![],
+            },
+            ByteCounts {
+                scalar: 0,
+                small: 0,
+                optional: Some(overflow),
+                vector: vec![],
+            },
+            ByteCounts {
+                scalar: 0,
+                small: 0,
+                optional: None,
+                vector: vec![1, overflow],
+            },
+        ] {
+            let error = serde_json::to_string(&counts).unwrap_err();
+            assert!(error.to_string().contains("sector count exceeds the u64 byte range"));
+        }
+    }
 
     fn fixture_device() -> DeviceUsage {
         DeviceUsage {
