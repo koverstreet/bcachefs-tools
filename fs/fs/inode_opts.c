@@ -382,7 +382,7 @@ int bch2_inode_opt_propagate_finish(struct btree_trans *trans,
 				    struct bkey_i_logged_op_inode_opt_propagate *op)
 {
 	int ret = bch2_resume_logged_op_inode_opt_propagate(trans, &op->k_i);
-	return bch2_logged_op_finish(trans, &op->k_i, ret) ?: ret;
+	return bch2_logged_op_finish(trans, &op->k_i, ret, 0) ?: ret;
 }
 
 /* At the start of the transaction: a restart discards the logged op */

@@ -113,7 +113,7 @@ static int resume_logged_op(struct btree_trans *trans, struct btree_iter *iter,
 	 * Recovery finishes the op either way, so that an op that can't
 	 * complete doesn't wedge every subsequent mount.
 	 */
-	ret = bch2_logged_op_finish(trans, sk.k, 0);
+	ret = bch2_logged_op_finish(trans, sk.k, 0, 0);
 fsck_err:
 	return ret ?: trans_was_restarted(trans, restart_count);
 }
@@ -185,12 +185,14 @@ int bch2_logged_op_start(struct btree_trans *trans, struct bkey_i *k)
  * From @op_ret and not the knob: the knob is one-shot and global, so by now it
  * may have been re-armed or claimed by another op.
  */
-int bch2_logged_op_finish(struct btree_trans *trans, struct bkey_i *k, int op_ret)
+int bch2_logged_op_finish(struct btree_trans *trans, struct bkey_i *k, int op_ret,
+			  unsigned commit_flags)
 {
 	if (bch2_err_matches(op_ret, BCH_ERR_injected_logged_op_fail))
 		return op_ret;
 
 	int ret = commit_do(trans, NULL, NULL,
+			    commit_flags|
 			    BCH_TRANS_COMMIT_no_check_rw|
 			    BCH_TRANS_COMMIT_no_enospc,
 			    bch2_btree_delete(trans, BTREE_ID_logged_ops, k->k.p, 0));
