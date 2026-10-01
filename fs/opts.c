@@ -763,14 +763,15 @@ void bch2_opt_hook_post_set(struct bch_fs *c, struct bch_dev *ca, u64 inum,
 		}
 		break;
 	case Opt_durability:
-		if (test_bit(BCH_FS_rw, &c->flags) &&
-		    ca &&
-		    bch2_dev_is_online(ca) &&
-		    ca->mi.state == BCH_MEMBER_STATE_rw) {
-			scoped_guard(rcu)
-				bch2_dev_allocator_set_rw(c, ca, true);
-			bch2_recalc_capacity(c);
-		}
+		scoped_guard(rwsem_read, &c->state_lock)
+			if (test_bit(BCH_FS_rw, &c->flags) &&
+			    ca &&
+			    bch2_dev_is_online(ca) &&
+			    ca->mi.state == BCH_MEMBER_STATE_rw) {
+				scoped_guard(rcu)
+					bch2_dev_allocator_set_rw(c, ca, true);
+				bch2_recalc_capacity(c);
+			}
 		break;
 	case Opt_version_upgrade:
 		/*
