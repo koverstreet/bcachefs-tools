@@ -94,6 +94,14 @@ static void nocow_flush_endio(struct bio *_bio)
 	struct nocow_flush *bio = container_of(_bio, struct nocow_flush, bio);
 	struct nocow_flush_unit *unit = bio->unit;
 
+	/*
+	 * Record a failure before dropping our ref: once the last ref is
+	 * gone, the fsyncs waiting on this unit may return.
+	 */
+	if (bio->bio.bi_status)
+		mapping_set_error(bio->inode->v.i_mapping,
+				  blk_status_to_errno(bio->bio.bi_status));
+
 	if (atomic_dec_and_test(&unit->pending)) {
 		unsigned long flags;
 
@@ -140,6 +148,12 @@ static void nocow_flush_endio(struct bio *_bio)
  * bit that shows up after it is no different from one that shows up
  * after the exchange. An empty extraction reserves no seq, but still
  * owes the wait for flushes already in flight.
+ *
+ * Errors: a failed flush, or a device that went away before we could
+ * flush it, is recorded with mapping_set_error(), not returned: the
+ * fsync that issued a flush isn't necessarily the one that owed it.
+ * bch2_fsync()'s file_check_and_advance_wb_err() then reports it to
+ * every open file that fsyncs.
  */
 static int bch2_inode_flush_nocow_writes(struct bch_fs *c,
 					 struct bch_inode_info *inode)
@@ -173,8 +187,10 @@ static int bch2_inode_flush_nocow_writes(struct bch_fs *c,
 				ca = NULL;
 		}
 
-		if (!ca)
+		if (!ca) {
+			mapping_set_error(inode->v.i_mapping, -EIO);
 			continue;
+		}
 
 		struct nocow_flush *bio = container_of(bio_alloc_bioset(ca->disk_sb.bdev, 0,
 									REQ_OP_WRITE|REQ_PREFLUSH,
@@ -196,6 +212,10 @@ static int bch2_inode_flush_nocow_writes(struct bch_fs *c,
 		spin_unlock_irq(&inode->ei_flush_lock);
 	}
 
+	/*
+	 * acquire: errors recorded by the flushes we waited for are visible
+	 * to bch2_fsync()'s check
+	 */
 	closure_wait_event(&inode->ei_flush_wait,
 			   smp_load_acquire(&inode->ei_flush_seq_completed) >= snapshot);
 	return 0;
