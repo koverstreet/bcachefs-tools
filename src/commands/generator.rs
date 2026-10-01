@@ -15,12 +15,22 @@
 //! somebody at a terminal. An entry with its own x-systemd.mount-timeout= is
 //! left alone.
 //!
-//! The root needs its own path because in an initrd there is no fstab line for
-//! it: systemd-fstab-generator synthesizes sysroot.mount from root=, rootfstype=
-//! and rootflags= on the kernel cmdline, and mkinitcpio ships an *empty*
-//! /etc/fstab - so the fstab walk reads a file, finds nothing, and returns
-//! happily. That left the one mount where a long recovery actually blocks the
-//! boot on the 90-second default, which is the case this generator exists for.
+//! In an initrd we read what systemd-fstab-generator reads there, from three
+//! places:
+//!
+//!  - the initrd's own /etc/fstab, as is;
+//!  - the host's fstab - $SYSTEMD_SYSROOT_FSTAB, else /sysroot/etc/fstab - but
+//!    only its x-initrd.mount and /usr entries, under /sysroot. This is how
+//!    NixOS mounts everything in stage 1: root=fstab on the cmdline, no
+//!    /etc/fstab in the initrd at all, and the store path of its fstab in
+//!    SYSTEMD_SYSROOT_FSTAB.
+//!  - root= on the cmdline, which systemd-fstab-generator turns into
+//!    sysroot.mount. mkinitcpio does this, with an *empty* /etc/fstab - the one
+//!    mount where a long recovery blocks the boot on the 90-second default,
+//!    which is the case this generator exists for.
+//!
+//! An fstab entry for /sysroot, from either fstab, decides the root with its
+//! fstype; the cmdline is only asked when no fstab names it.
 
 use std::fs;
 use std::io::Write;
@@ -98,10 +108,13 @@ fn escape_path(path: &str) -> Option<String> {
 /// One fstab line's worth of what we care about.
 struct Entry {
     target: String,
+    fstype: String,
     opts:   String,
 }
 
-/// fstab, minus comments and blank lines.
+/// fstab, minus comments and blank lines. Every filesystem type, not just
+/// ours: whether the root is declared here at all decides what we do about
+/// the cmdline's.
 fn parse_fstab(text: &str) -> Vec<Entry> {
     text.lines()
         .map(|l| l.split('#').next().unwrap_or("").trim())
@@ -113,8 +126,9 @@ fn parse_fstab(text: &str) -> Vec<Entry> {
             let fstype = f.next()?;
             let opts = f.next().unwrap_or("defaults");
 
-            (fstype == "bcachefs").then(|| Entry {
+            Some(Entry {
                 target: unescape_octal(target),
+                fstype: fstype.to_string(),
                 opts:   opts.to_string(),
             })
         })
@@ -169,11 +183,40 @@ fn in_initrd() -> bool {
     Path::new("/etc/initrd-release").exists()
 }
 
-/// The initrd's root, as an Entry, when it's ours.
+/// The host's fstab entries that systemd mounts in the initrd, with the paths
+/// they get there - parse_fstab(prefix_sysroot = true) and mount_in_initrd() in
+/// systemd's fstab-generator.c.
+fn sysroot_fstab() -> Vec<Entry> {
+    let path = std::env::var("SYSTEMD_SYSROOT_FSTAB")
+        .unwrap_or_else(|_| format!("{SYSROOT}/etc/fstab"));
+
+    // Absent on the first pass: /sysroot/etc/fstab appears once the root is
+    // mounted, and initrd-parse-etc.service reruns the generators then.
+    let Ok(text) = fs::read_to_string(&path) else {
+        debug!("generator: no host fstab at {path}");
+        return Vec::new();
+    };
+
+    parse_fstab(&text)
+        .into_iter()
+        .filter(|e| e.opts.split(',').any(|o| o == "x-initrd.mount") ||
+                    e.target.trim_end_matches('/') == "/usr")
+        .map(|e| Entry {
+            target: format!("{SYSROOT}{}", e.target.trim_end_matches('/')),
+            ..e
+        })
+        .collect()
+}
+
+/// The initrd's root from the cmdline, as an Entry, when it's ours.
 ///
-/// Deciding this may not touch the device: generators share one 90-second
-/// budget and overrunning kills the whole batch, so blkid-ing the root is out.
-/// That leaves what the cmdline says, and one inference:
+/// Only a root= naming a device makes sysroot.mount from the cmdline; fstab,
+/// off and gpt-auto hand the root to something else (validate_root_or_usr_
+/// mount_source() in fstab-generator.c), and tmpfs and bind: aren't devices.
+///
+/// Deciding whether it's ours may not touch the device: generators share one
+/// 90-second budget and overrunning kills the whole batch, so blkid-ing the root
+/// is out. That leaves what the cmdline says, and one inference:
 ///
 ///   rootfstype=bcachefs   ours, say so.
 ///   rootfstype=<other>    explicitly not ours - leave it alone.
@@ -187,8 +230,10 @@ fn in_initrd() -> bool {
 /// rootfstype= - and dropping it would give up every user who doesn't set
 /// rootfstype=, which is most of them, in exactly the case that motivated this.
 fn cmdline_root(cmdline: &str) -> Option<Entry> {
-    if !in_initrd() {
-        return None;
+    match cmdline_param(cmdline, "root") {
+        None | Some("") | Some("fstab") | Some("off") | Some("tmpfs") => return None,
+        Some(r) if r.starts_with("gpt-auto") || r.starts_with("bind:") => return None,
+        Some(_) => {}
     }
 
     match cmdline_param(cmdline, "rootfstype") {
@@ -201,6 +246,7 @@ fn cmdline_root(cmdline: &str) -> Option<Entry> {
 
     Some(Entry {
         target: SYSROOT.to_string(),
+        fstype: "bcachefs".to_string(),
         opts:   cmdline_param(cmdline, "rootflags").unwrap_or("defaults").to_string(),
     })
 }
@@ -278,7 +324,7 @@ fn cmd_generator(argv: Vec<String>) -> Result<()> {
         return Ok(());
     };
 
-    let mut entries = match fs::read_to_string("/etc/fstab") {
+    let mut fstab = match fs::read_to_string("/etc/fstab") {
         Ok(t) => parse_fstab(&t),
         Err(e) => {
             debug!("generator: no fstab to read: {e}");
@@ -286,9 +332,27 @@ fn cmd_generator(argv: Vec<String>) -> Result<()> {
         }
     };
 
-    match fs::read_to_string("/proc/cmdline") {
-        Ok(c)  => entries.extend(cmdline_root(&c)),
-        Err(e) => debug!("generator: no kernel cmdline to read: {e}"),
+    let initrd = in_initrd();
+    if initrd {
+        fstab.extend(sysroot_fstab());
+    }
+
+    // An fstab that names the root already said what it is, fstype included;
+    // the bcachefs entries below cover it if it's ours.
+    let root_in_fstab = initrd &&
+        fstab.iter().any(|e| e.target.trim_end_matches('/') == SYSROOT);
+
+    let mut entries: Vec<Entry> = fstab.into_iter()
+        .filter(|e| e.fstype == "bcachefs")
+        .collect();
+
+    if root_in_fstab {
+        debug!("generator: fstab declares {SYSROOT}, not inferring it from the cmdline");
+    } else if initrd {
+        match fs::read_to_string("/proc/cmdline") {
+            Ok(c)  => entries.extend(cmdline_root(&c)),
+            Err(e) => debug!("generator: no kernel cmdline to read: {e}"),
+        }
     }
 
     for e in entries {
