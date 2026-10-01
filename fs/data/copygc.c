@@ -539,7 +539,7 @@ static int bch2_copygc(struct moving_context *ctxt,
 		if (bch2_dev_rotational(c, b->k.bucket.inode))
 			bch2_moving_ctxt_set_rotational_limits(ctxt,
 					MOVE_ROTATIONAL_LIMIT_background,
-					MOVE_LIMITS_COPYGC_BUCKET,
+					MOVE_LIMITS_copygc_bucket,
 					b->k.bucket.inode);
 
 		ret = bch2_evacuate_bucket(ctxt, b, b->k.bucket, b->k.generation, data_opts);

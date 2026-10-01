@@ -312,7 +312,7 @@ void bch2_moving_ctxt_reset_limits(struct moving_context *ctxt)
 
 	ctxt->max_sectors_in_flight = c->opts.move_bytes_in_flight >> 9;
 	ctxt->max_ios_in_flight = c->opts.move_ios_in_flight;
-	ctxt->limit_source = MOVE_LIMITS_DEFAULT;
+	ctxt->limit_source = MOVE_LIMITS_default;
 	ctxt->limit_source_id = 0;
 }
 
@@ -1050,7 +1050,7 @@ int bch2_move_data_phys(struct bch_fs *c,
 	if (bch2_dev_rotational(c, dev))
 		bch2_moving_ctxt_set_rotational_limits(&ctxt,
 				MOVE_ROTATIONAL_LIMIT_background,
-				MOVE_LIMITS_PHYS_DEV, dev);
+				MOVE_LIMITS_phys_dev, dev);
 
 	if (ctxt.stats) {
 		ctxt.stats->phys = true;
@@ -1871,18 +1871,18 @@ static __cold void bch2_moving_ctxt_to_text(struct printbuf *out, struct bch_fs 
 
 	prt_str(out, "limit source:\t");
 	switch (ctxt->limit_source) {
-	case MOVE_LIMITS_DEFAULT:
+	case MOVE_LIMITS_default:
 		prt_str(out, "global\n");
 		break;
-	case MOVE_LIMITS_COPYGC_BUCKET:
+	case MOVE_LIMITS_copygc_bucket:
 		prt_printf(out, "copygc bucket dev %u\n", ctxt->limit_source_id);
 		break;
-	case MOVE_LIMITS_RECONCILE_TARGET:
+	case MOVE_LIMITS_reconcile_target:
 		prt_str(out, "reconcile target ");
 		bch2_target_to_text(out, c, ctxt->limit_source_id);
 		prt_newline(out);
 		break;
-	case MOVE_LIMITS_PHYS_DEV:
+	case MOVE_LIMITS_phys_dev:
 		prt_printf(out, "physical dev %u\n", ctxt->limit_source_id);
 		break;
 	}
