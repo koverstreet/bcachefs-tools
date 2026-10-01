@@ -1095,6 +1095,13 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 		buf_flags |= EC_STRIPE_BUF_optional;
 		if (rbio->pick.crc.csum_type)
 			buf_flags |= EC_STRIPE_BUF_unaligned;
+	} else if (bch2_dev_io_failures(failed, rbio->pick.ptr.dev)) {
+		/*
+		 * The block just failed to read, so rebuild it from the
+		 * others: on a drive retrying a bad sector, reading it again
+		 * costs as long again.
+		 */
+		read_mask &= ~BIT(rbio->pick.ec.block);
 	}
 
 	/* Don't hold btree locks for stripe buffer allocations, or IO */
