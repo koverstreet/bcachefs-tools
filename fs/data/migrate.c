@@ -147,32 +147,35 @@ out:
 static int btree_ptr_locations_collect(struct btree_trans *trans,
 				       struct progress_indicator *progress,
 				       unsigned int dev_idx,
+				       unsigned int btree, unsigned int level,
+				       struct bpos *start, bool *done,
 				       darray_btree_ptr_location *locations)
 {
 	struct bch_fs *c = trans->c;
-	size_t limit = (system_totalram_bytes() / 16) /
-		sizeof(struct btree_ptr_location);
+	size_t limit = max_t(size_t, 1, (system_totalram_bytes() / 16) /
+		sizeof(struct btree_ptr_location));
 
-	for (unsigned btree = 0; btree < btree_id_nr_alive(c); btree++)
-		for (unsigned level = 0; level < BTREE_MAX_DEPTH; level++)
-			try(for_each_btree_node(trans, iter, btree, POS_MIN, level, 0, b, ({
-				int ret = bch2_progress_update_iter(trans, progress, &iter);
-				if (!ret &&
-				    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&b->key), dev_idx)) {
-					struct btree_ptr_location loc = {
-						.btree		= btree,
-						.rewrite_level	= b->c.level + 1,
-						.pos		= b->key.k.p,
-					};
+	*done = true;
+	return for_each_btree_node(trans, iter, btree, *start, level, 0, b, ({
+		int ret = bch2_progress_update_iter(trans, progress, &iter);
+		if (!ret &&
+		    bch2_bkey_has_device_c(c, bkey_i_to_s_c(&b->key), dev_idx)) {
+			struct btree_ptr_location loc = {
+				.btree		= btree,
+				.rewrite_level	= b->c.level + 1,
+				.pos		= b->key.k.p,
+			};
 
-					ret = locations->nr >= limit
-						? -ENOMEM
-						: darray_push_gfp(locations, loc, GFP_KERNEL|__GFP_NOWARN);
-				}
-				ret;
-			})));
-
-	return 0;
+			if (locations->nr >= limit) {
+				*start = loc.pos;
+				*done = false;
+				ret = -BCH_ERR_fc_break;
+			} else {
+				ret = darray_push_gfp(locations, loc, GFP_KERNEL|__GFP_NOWARN);
+			}
+		}
+		ret;
+	}));
 }
 
 static int btree_ptr_location_drop_or_rewrite(struct btree_trans *trans,
@@ -276,14 +279,24 @@ static int bch2_dev_metadata_drop(struct bch_fs *c,
 	CLASS(btree_trans, trans)(c);
 	CLASS(darray_btree_ptr_location, locations)();
 
-	try(btree_ptr_locations_collect(trans, progress, dev_idx, &locations));
+	for (unsigned btree = 0; btree < btree_id_nr_alive(c); btree++)
+		for (unsigned level = 0; level < BTREE_MAX_DEPTH; level++) {
+			struct bpos start = POS_MIN;
+			bool done;
 
-	darray_for_each(locations, loc)
-		try(lockrestart_do(trans,
-			btree_ptr_location_drop_or_rewrite(trans, loc, dev_idx, flags, err)));
+			do {
+				locations.nr = 0;
+				try(btree_ptr_locations_collect(trans, progress, dev_idx,
+							btree, level, &start, &done, &locations));
 
-	bch2_trans_unlock(trans);
-	bch2_btree_interior_updates_flush(c);
+				darray_for_each(locations, loc)
+					try(lockrestart_do(trans,
+						btree_ptr_location_drop_or_rewrite(trans, loc, dev_idx, flags, err)));
+
+				bch2_trans_unlock(trans);
+				bch2_btree_interior_updates_flush(c);
+			} while (!done);
+		}
 	return 0;
 }
 
@@ -420,20 +433,12 @@ int bch2_dev_data_drop_by_backpointers(struct bch_fs *c, struct bch_dev *ca,
 			return 0;
 
 		if (dev_only_has_btree_buckets(usage)) {
-			u64 old_data_buckets = data_buckets;
-
 			bch2_progress_init(&progress, "dropping metadata", c, ~0ULL, ~0ULL);
 			try(bch2_dev_metadata_drop(c, &progress, dev_idx, flags, err));
 
 			data_buckets = dev_data_buckets(ca);
 			if (!data_buckets)
 				return 0;
-
-			if (data_buckets >= old_data_buckets) {
-				prt_printf(err, "%s(): no progress dropping btree metadata, %llu data buckets remain\n",
-					   __func__, data_buckets);
-				return bch_err_throw(c, remove_by_backpointer_did_not_terminate);
-			}
 		}
 
 		if (data_buckets < min_data_buckets) {
