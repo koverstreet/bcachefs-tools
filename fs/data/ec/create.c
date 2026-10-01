@@ -2404,6 +2404,48 @@ static bool stripe_degraded(struct bch_fs *c, const struct bch_stripe *s)
 	return false;
 }
 
+/*
+ * The devices a repair of @s can actually use, out of @devs (from
+ * bch2_disk_label_ec_devs()).
+ *
+ * A repair carries the stripe's good data blocks forward where they are
+ * (init_new_stripe_from_old()); only the blocks on bad devices, and all the
+ * parity, get new buckets. So a device holding a carried block counts whatever
+ * its free space; any other device counts only if it can take a new block -
+ * free buckets at the repair's watermark now, or copygc will make some (the
+ * same test as the data update path, and the allocator's bail-out).
+ *
+ * Counting the full ones too made a repair on a full filesystem look like it
+ * had devices enough, skip narrowing, and fail in the allocator with
+ * bucket_alloc_no_progress - every pass, forever.
+ */
+static void stripe_repair_usable_devs(struct bch_fs *c, const struct bch_stripe *s,
+				      struct bch_devs_mask *devs)
+{
+	struct bch_devs_mask carried = {};
+	unsigned nr_data = s->nr_blocks - s->nr_redundant;
+
+	for_each_data_block(i, nr_data)
+		if (stripe_blockcount_get(s, i) &&
+		    !bch2_stripe_block_dev_bad(c, s->ptrs[i].dev))
+			__set_bit(s->ptrs[i].dev, carried.d);
+
+	guard(percpu_read_noio)(&c->capacity.mark_lock);
+	guard(rcu)();
+
+	unsigned i;
+	for_each_set_bit(i, devs->d, BCH_SB_MEMBERS_MAX) {
+		if (test_bit(i, carried.d))
+			continue;
+
+		struct bch_dev *ca = bch2_dev_rcu_noerror(c, i);
+		if (!ca ||
+		    (!dev_buckets_free(ca, BCH_WATERMARK_normal) &&
+		     !bch2_copygc_can_make_progress(ca)))
+			__clear_bit(i, devs->d);
+	}
+}
+
 int bch2_stripe_repair(struct moving_context *ctxt,
 		       struct btree_iter *iter, struct bkey_s_c_stripe s)
 {
@@ -2446,9 +2488,16 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 
 	struct bch_devs_mask devs;
 	bch2_disk_label_ec_devs(c, old_s->disk_label, &devs, le16_to_cpu(old_s->sectors));
+	stripe_repair_usable_devs(c, old_s, &devs);
+
+	/*
+	 * The allocator puts at most one block of a stripe in a failure domain,
+	 * so devices sharing one can't each take a block:
+	 */
+	unsigned nr_usable = min(dev_mask_nr(&devs), bch2_target_nr_domains(c, &devs));
 
 	unsigned need_evacuate = max(0,
-			(int) (nr_live_data_blocks + old_s->nr_redundant) - (int) dev_mask_nr(&devs));
+			(int) (nr_live_data_blocks + old_s->nr_redundant) - (int) nr_usable);
 
 	if (need_evacuate) {
 		unsigned blocks_used[BCH_BKEY_PTRS_MAX], nr = 0;
