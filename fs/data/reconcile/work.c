@@ -1657,7 +1657,8 @@ static int do_reconcile_phys(struct bch_fs *c, unsigned reconcile_phase)
 		nr_started++;
 	}
 
-	for (reconcile_phys_thr *i = thrs.data; i < thrs.data + nr_started; i++) {
+	for (unsigned worker_idx = 0; worker_idx < nr_started; worker_idx++) {
+		reconcile_phys_thr *i = &thrs.data[worker_idx];
 		struct write_point_specifier wp = reconcile_phys_writepoint(i);
 		bool seen = false;
 
@@ -2117,7 +2118,7 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 		}
 	}
 
-	prt_printf(out, "phys workers last phase: considered %llu started %llu distinct writepoints %llu\n",
+	prt_printf(out, "phys workers last phase: considered %llu started %llu distinct writepoint tags %llu\n",
 		   READ_ONCE(r->phys_workers_considered),
 		   READ_ONCE(r->phys_workers_started),
 		   READ_ONCE(r->phys_worker_writepoints_distinct));
