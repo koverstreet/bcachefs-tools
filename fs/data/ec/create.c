@@ -2525,10 +2525,25 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		closure_sync(&cl);
 	}
 
+	/*
+	 * A narrower stripe than the one it replaces carries more parity per
+	 * data block: new space, so reserve it here, where a full filesystem
+	 * fails with -ENOSPC, rather than NOFAIL once the buckets are ours. A
+	 * same-width repair replaces parity with as much parity and keeps its
+	 * NOFAIL reservation below.
+	 */
+	bool narrowing = nr_live_data_blocks < nr_data;
+
 	ret =   ret ?:
 		bch2_ec_stripe_buf_init(c, &new_s->new_stripe, 0, le16_to_cpu(new_s->new_stripe.key.v.sectors), NULL) ?:
+		(narrowing
+		 ? bch2_disk_reservation_add(c, &new_s->res,
+					     le16_to_cpu(new_s->new_stripe.key.v.sectors),
+					     ec_stripe_new_nr_parity(new_s), 0)
+		 : 0) ?:
 		lockrestart_do(trans, stripe_idx_alloc(trans, new_s));
 	if (ret) {
+		bch2_disk_reservation_put(c, &new_s->res);
 		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
 		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
 		__bch2_ec_stripe_buf_exit(&new_s->old_stripe);
@@ -2570,6 +2585,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		prt_str(&msg.m, "\nnew: ");
 		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->new_stripe.key.k_i));
 
+		bch2_disk_reservation_put(c, &new_s->res);
 		bch2_stripe_handle_put(c, &new_s->new_stripe_handle);
 		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
 		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
@@ -2591,10 +2607,11 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	new_s->allocated = true;
 	new_s->state = EC_STRIPE_NEW_filling;
 
-	bch2_disk_reservation_add(c, &new_s->res,
-				  le16_to_cpu(new_s->new_stripe.key.v.sectors),
-				  ec_stripe_new_nr_parity(new_s),
-				  BCH_DISK_RESERVATION_NOFAIL);
+	if (!narrowing)
+		bch2_disk_reservation_add(c, &new_s->res,
+					  le16_to_cpu(new_s->new_stripe.key.v.sectors),
+					  ec_stripe_new_nr_parity(new_s),
+					  BCH_DISK_RESERVATION_NOFAIL);
 	ec_old_stripe_read(c, new_s);
 
 	new_s->ctxt = ctxt;
