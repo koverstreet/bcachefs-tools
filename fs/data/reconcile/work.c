@@ -2118,7 +2118,7 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 		}
 	}
 
-	prt_printf(out, "phys workers last phase: considered %llu started %llu distinct writepoint tags %llu\n",
+	prt_printf(out, "phys workers last phase: considered %llu started %llu distinct writepoint-tags %llu\n",
 		   READ_ONCE(r->phys_workers_considered),
 		   READ_ONCE(r->phys_workers_started),
 		   READ_ONCE(r->phys_worker_writepoints_distinct));
