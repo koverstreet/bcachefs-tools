@@ -417,6 +417,45 @@ int bch2_btree_path_traverse_cached(struct btree_trans *trans,
 	return ret;
 }
 
+/*
+ * A dirty cached key holds a journal pin on the oldest entry its updates are
+ * in, on a seq not yet retired, and ck->seq - the newest - is no older than
+ * that; a clean one holds no pin. btree_key_cache_flush_pos() pins the btree
+ * leaf at ck->journal.seq on trust, so a pin that's gone stale shows up there
+ * as "journal pin set for seq N outside live range" - far from whatever made
+ * it stale.
+ */
+static noinline __cold void bkey_cached_pin_warn(struct bch_fs *c,
+						 struct bkey_cached *ck,
+						 const char *what)
+{
+	CLASS(printbuf, buf)();
+	bch2_btree_id_to_text(&buf, ck->key.btree_id);
+	prt_char(&buf, ' ');
+	bch2_bpos_to_text(&buf, ck->key.pos);
+	prt_printf(&buf, ": dirty %u seq %llu pin seq %llu, journal last_seq %llu",
+		   test_bit(BKEY_CACHED_DIRTY, &ck->flags),
+		   ck->seq, READ_ONCE(ck->journal.seq),
+		   READ_ONCE(c->journal.last_seq));
+	WARN_ONCE(1, "cached key %s: %s", what, buf.buf);
+}
+
+static inline void bkey_cached_check_pin(struct bch_fs *c, struct bkey_cached *ck)
+{
+	u64 pin_seq = READ_ONCE(ck->journal.seq);
+
+	if (test_bit(BKEY_CACHED_DIRTY, &ck->flags)) {
+		if (unlikely(!pin_seq))
+			bkey_cached_pin_warn(c, ck, "dirty with no journal pin");
+		else if (unlikely(pin_seq < READ_ONCE(c->journal.last_seq)))
+			bkey_cached_pin_warn(c, ck, "dirty, pinning a retired journal seq");
+		else if (unlikely(ck->seq < pin_seq))
+			bkey_cached_pin_warn(c, ck, "newest update older than its journal pin");
+	} else if (unlikely(pin_seq)) {
+		bkey_cached_pin_warn(c, ck, "clean but still holds a journal pin");
+	}
+}
+
 static int btree_key_cache_flush_pos(struct btree_trans *trans,
 				     struct bkey_cached_key key,
 				     u64 journal_seq,
@@ -446,6 +485,7 @@ static int btree_key_cache_flush_pos(struct btree_trans *trans,
 		if (journal_seq && ck->journal.seq != journal_seq)
 			return 0;
 
+		bkey_cached_check_pin(c, ck);
 		trans->journal_seq_to_pin = ck->journal.seq;
 
 		/*
@@ -489,6 +529,7 @@ static int btree_key_cache_flush_pos(struct btree_trans *trans,
 			clear_bit(BKEY_CACHED_DIRTY, &ck->flags);
 			atomic_long_dec(&c->btree.key_cache.nr_dirty);
 		}
+		bkey_cached_check_pin(c, ck);
 	} else {
 		struct btree_path *path = btree_iter_path(trans, &c_iter);
 		struct btree_path *path2;
@@ -504,6 +545,7 @@ static int btree_key_cache_flush_pos(struct btree_trans *trans,
 			clear_bit(BKEY_CACHED_DIRTY, &ck->flags);
 			atomic_long_dec(&c->btree.key_cache.nr_dirty);
 		}
+		bkey_cached_check_pin(c, ck);
 
 		mark_btree_node_locked_noreset(path, 0, BTREE_NODE_UNLOCKED);
 		if (bkey_cached_evict(&c->btree.key_cache, ck)) {
@@ -715,8 +757,22 @@ void bch2_btree_insert_key_cached(struct btree_trans *trans,
 	    !journal_pin_active(&ck->journal)) {
 		ck->seq = trans->journal_res.seq;
 	}
-	bch2_journal_pin_add(&c->journal, trans->journal_res.seq,
+	/*
+	 * The seq we pin with is the commit's journal reservation, or for a
+	 * no_journal_res commit, trans->journal_seq_to_pin - which nothing
+	 * resets between commits:
+	 */
+	u64 seq = trans->journal_res.seq;
+	WARN_ONCE(!seq ||
+		  seq < READ_ONCE(c->journal.last_seq) ||
+		  seq >= READ_ONCE(c->journal.pin.back),
+		  "key cache insert pinning journal seq %llu, live range [%llu, %llu)%s",
+		  seq, READ_ONCE(c->journal.last_seq), READ_ONCE(c->journal.pin.back),
+		  insert_entry->flags & BTREE_UPDATE_nojournal ? " (nojournal)" : "");
+
+	bch2_journal_pin_add(&c->journal, seq,
 			     &ck->journal, bch2_btree_key_cache_journal_flush);
+	bkey_cached_check_pin(c, ck);
 
 	if (kick_reclaim)
 		journal_reclaim_kick(&c->journal);
@@ -738,6 +794,7 @@ void bch2_btree_key_cache_drop(struct btree_trans *trans,
 		atomic_long_dec(&c->btree.key_cache.nr_dirty);
 		bch2_journal_pin_drop(&c->journal, &ck->journal);
 	}
+	bkey_cached_check_pin(c, ck);
 
 	bkey_cached_evict(bc, ck);
 	bkey_cached_free(trans, bc, ck);
