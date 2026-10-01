@@ -9,10 +9,9 @@ build() {
     # calls systemd-ask-password, because the passphrase prompt lives here.
     add_binary mount.bcachefs
     add_binary systemd-ask-password
-    # Raises the mount timeout so a long recovery isn't killed at 90s. Only
-    # covers /etc/fstab entries; an initrd root comes from root= on the
-    # cmdline via systemd-fstab-generator, so this does nothing for sysroot
-    # yet - see the note in src/commands/generator.rs.
+    # Raises the mount timeout so a long recovery isn't killed at 90s -
+    # including the root's, which here comes from root= on the cmdline, not
+    # fstab. See the notes in src/commands/generator.rs.
     add_binary /usr/lib/systemd/system-generators/bcachefs-mount-generator
     add_udev_rule /usr/lib/udev/rules.d/64-bcachefs.rules
 }
