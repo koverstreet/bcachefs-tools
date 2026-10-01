@@ -4,7 +4,7 @@ Snapshot backup and send/receive design
 bcachefs already has the local pieces an administrator expects from a
 snapshot-based backup system: subvolumes, read-only snapshots, recursive
 snapshot listings, usage accounting. That's enough to build local retention
-scripting around ``bcachefs subvolume snapshot`` and
+scripting around ``bcachefs subvolume snapshot --read-only`` and
 ``bcachefs subvolume list-snapshots``. It is not enough for a real
 ``bcachefs backup`` command - the missing piece is an export/import
 protocol.
@@ -49,7 +49,7 @@ What's missing today
 ---------------------
 
 The current userspace command surface has some of the building blocks, but
-not the protocol: ``subvolume snapshot`` creates the read-only snapshot that
+not the protocol: ``subvolume snapshot --read-only`` creates the frozen snapshot that
 would get sent, ``subvolume list-snapshots --json`` gives discovery,
 ``dump``/``undump`` are metadata-image tools rather than a send/receive
 protocol, and ``format --source``/``migrate`` reuse the tree-copy engine -
