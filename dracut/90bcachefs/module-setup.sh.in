@@ -1,0 +1,62 @@
+#!/bin/bash
+#
+# dracut module: boot from bcachefs. The mkinitcpio counterpart is
+# arch/etc/initcpio/install/sd-bcachefs, initramfs-tools' is initramfs/hook.
+
+# called by dracut
+check() {
+    require_binaries @ROOT_SBINDIR@/bcachefs || return 1
+
+    # hostonly: only when something the host boots from is bcachefs.
+    [[ $hostonly ]] || [[ $mount_needs ]] && {
+        for fs in "${host_fs_types[@]}"; do
+            [[ $fs == "bcachefs" ]] && return 0
+        done
+        return 255
+    }
+
+    return 0
+}
+
+# called by dracut
+depends() {
+    # mount.bcachefs asks for an encrypted filesystem's passphrase through
+    # systemd-ask-password, which needs an agent in the initramfs to answer it.
+    if dracut_module_included "systemd"; then
+        echo udev-rules systemd-ask-password
+    else
+        echo udev-rules
+    fi
+    return 0
+}
+
+# called by dracut
+installkernel() {
+    hostonly='' instmods bcachefs
+}
+
+# called by dracut
+install() {
+    # The udev rule below runs the binary by absolute path, so it keeps its
+    # installed one. mount(8) looks for its helper in /sbin: without it a
+    # multi-device source ("dev1:dev2") never reaches us, and there's nobody
+    # to prompt for a passphrase.
+    inst @ROOT_SBINDIR@/bcachefs
+    inst @ROOT_SBINDIR@/mount.bcachefs /sbin/mount.bcachefs
+
+    # Hot-add for a member that turns up after the mount went degraded, and
+    # the per-member by-uuid links. A multi-device root comes up here, which is
+    # where a member is most likely to still be enumerating.
+    inst_rules 64-bcachefs.rules
+
+    if dracut_module_included "systemd"; then
+        # Raises the mount timeout, so a long recovery of the root isn't
+        # killed at DefaultTimeoutStartSec - see src/commands/generator.rs.
+        # dracut's systemd initramfs mounts the root as sysroot.mount; the
+        # shell-based one has no timeout to raise.
+        inst_multiple -o "$systemdutildir/system-generators/bcachefs-mount-generator"
+
+        # Still named by older fstab entries (x-systemd.requires=).
+        inst_multiple -o "$systemdsystemunitdir/bcachefs-wait-devices@.service"
+    fi
+}
