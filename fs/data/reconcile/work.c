@@ -823,6 +823,19 @@ static int do_reconcile_stripe(struct moving_context *ctxt,
 			bch2_bkey_val_to_text(&msg.m, c, s.s_c);
 		}
 		ret = 0;
+	} else if (ret && !bch2_err_matches(ret, BCH_ERR_transaction_restart)) {
+		/*
+		 * One stripe we can't repair right now - out of space, say -
+		 * must not end the reconcile thread, and with it all
+		 * background data movement until the next start. Skip it, as
+		 * do_reconcile_extent() skips an extent it can't move: the
+		 * stripe keeps needs_reconcile, so a later pass retries it.
+		 */
+		CLASS(bch_log_msg_ratelimited, msg)(c);
+		prt_printf(&msg.m, "error repairing stripe, leaving it for a later pass: %s\n",
+			   bch2_err_str(ret));
+		bch2_bkey_val_to_text(&msg.m, c, s.s_c);
+		ret = 0;
 	}
 
 	/* Suppress trans_was_restarted() check */
