@@ -795,7 +795,7 @@ void bch2_latency_acct(struct bch_dev *ca, u64 submit_time, int rw)
 		 * latency, skip doing the update and atomic operation - most of
 		 * the time:
 		 */
-		if (abs((int) (old - io_latency)) < (old >> 1) &&
+		if (abs_diff(old, io_latency) < (old >> 1) &&
 		    now & ~(~0U << 5))
 			break;
 
