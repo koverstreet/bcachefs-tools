@@ -436,6 +436,39 @@ void bch2_journal_do_discards(struct journal *j)
  * entry, holding it open to ensure it gets replayed during recovery:
  */
 
+/*
+ * An entry the journal is done with - retired past last_seq, or dropped off the
+ * front of the pin fifo - must hold no pins. count is the pins on its lists
+ * plus refs that are gone by then, so a pin still listed means count was
+ * decremented for a pin that never left, or a pin was added to an entry
+ * already retired. Either way the pin now sits on a seq nothing will flush,
+ * and fifo_entry() will hand its slot to a new seq.
+ */
+void bch2_journal_pin_list_check_retired(struct journal *j,
+					 struct journal_entry_pin_list *p, u64 seq)
+{
+	struct journal_entry_pin *pin = NULL;
+
+	/*
+	 * Lockless, after the caller saw count == 0: a dropped pin leaves its
+	 * list before count is decremented (journal_pin_drop_locked(), whose
+	 * atomic_dec_and_test() orders the two), so pair that here or a weakly
+	 * ordered CPU can see the count and a stale list together:
+	 */
+	smp_rmb();
+
+	for (unsigned i = 0; i < JOURNAL_PIN_TYPE_NR && !pin; i++)
+		pin = list_first_entry_or_null(&p->unflushed[i], struct journal_entry_pin, list);
+	if (!pin)
+		pin = list_first_entry_or_null(&p->flushed, struct journal_entry_pin, list);
+
+	WARN_ONCE(pin || atomic_read(&p->count),
+		  "journal seq %llu retired with count %u%s%ps",
+		  seq, atomic_read(&p->count),
+		  pin ? ", pins still listed, first " : "",
+		  pin ? pin->flush : NULL);
+}
+
 void bch2_journal_update_last_seq(struct journal *j)
 {
 	lockdep_assert_held(&j->lock);
@@ -448,8 +481,10 @@ void bch2_journal_update_last_seq(struct journal *j)
 	struct journal_entry_pin_list *pin_list;
 	while (j->last_seq <  j->pin.back &&
 	       j->last_seq <= j->seq_ondisk &&
-	       !atomic_read(&(pin_list = journal_seq_pin(j, j->last_seq))->count))
+	       !atomic_read(&(pin_list = journal_seq_pin(j, j->last_seq))->count)) {
+		bch2_journal_pin_list_check_retired(j, pin_list, j->last_seq);
 		j->last_seq++;
+	}
 
 	if (old != j->last_seq) {
 		bch2_journal_space_available(j);
@@ -526,12 +561,39 @@ void bch2_journal_replay_pins_put(struct journal *j, u64 seq)
 	}
 }
 
+/*
+ * The pin list for @pin's @seq. fifo_entry() masks without a range check, so a
+ * stale seq lands on whatever live entry shares its slot, and pinning,
+ * unpinning or flushing there corrupts that entry's count - silently, until
+ * some later pin trips over the result. A pin's seq is live by construction:
+ * say so where it isn't.
+ */
+static struct journal_entry_pin_list *
+journal_pin_seq_list(struct journal *j, struct journal_entry_pin *pin, u64 seq)
+{
+	WARN_ONCE(seq < j->pin.front || seq >= j->pin.back,
+		  "journal pin %ps at seq %llu outside live range [%llu, %llu)",
+		  pin->flush, seq, j->pin.front, j->pin.back);
+	return &fifo_entry(&j->pin, seq);
+}
+
+static struct journal_entry_pin_list *maybe_seq_pin(struct journal *j,
+						    struct journal_entry_pin *pin, u64 seq)
+{
+	return seq ? journal_pin_seq_list(j, pin, seq) : NULL;
+}
+
 static inline bool journal_pin_drop_locked(struct journal *j,
 					   struct journal_entry_pin_list *pin_l,
 					   struct journal_entry_pin *pin)
 {
 	if (!journal_pin_active(pin))
 		return false;
+
+	/* active <=> on a list: */
+	WARN_ONCE(list_empty(&pin->list),
+		  "journal pin %ps active at seq %llu but on no list",
+		  pin->flush, pin->seq);
 
 	if (j->flush_in_progress == pin)
 		j->flush_in_progress_dropped = true;
@@ -564,7 +626,7 @@ void bch2_journal_pin_drop(struct journal *j,
 		if (!seq)
 			break;
 
-		struct journal_entry_pin_list *pin_l = &fifo_entry(&j->pin, seq);
+		struct journal_entry_pin_list *pin_l = journal_pin_seq_list(j, pin, seq);
 		guard(spinlock)(&pin_l->lock);
 		if (pin->seq != seq)
 			continue;
@@ -604,6 +666,13 @@ static inline bool bch2_journal_pin_set_locked(struct journal *j,
 		: false;
 
 	/*
+	 * inactive <=> on no list - or the list_add below corrupts the old one.
+	 * A pin that has never been set is zeroed, not INIT_LIST_HEAD()ed:
+	 */
+	WARN_ONCE(pin->list.next && !list_empty(&pin->list),
+		  "journal pin %ps inactive but still on a list", pin->flush);
+
+	/*
 	 * flush_fn is how we identify journal pins in debugfs, so must always
 	 * exist, even if it doesn't do anything:
 	 */
@@ -624,11 +693,6 @@ static inline bool bch2_journal_pin_set_locked(struct journal *j,
 	return reclaim;
 }
 
-static struct journal_entry_pin_list *maybe_seq_pin(struct journal *j, u64 seq)
-{
-	return seq ? &fifo_entry(&j->pin, seq) : NULL;
-}
-
 void bch2_journal_pin_copy(struct journal *j,
 			   struct journal_entry_pin *dst,
 			   struct journal_entry_pin *src,
@@ -643,8 +707,8 @@ void bch2_journal_pin_copy(struct journal *j,
 		if (!src_seq)
 			break;
 
-		struct journal_entry_pin_list *src_l = maybe_seq_pin(j, src_seq);
-		struct journal_entry_pin_list *dst_l = maybe_seq_pin(j, dst_seq);
+		struct journal_entry_pin_list *src_l = maybe_seq_pin(j, src, src_seq);
+		struct journal_entry_pin_list *dst_l = maybe_seq_pin(j, dst, dst_seq);
 
 		if (!dst_l || dst_l == src_l) {
 			spin_lock(&src_l->lock);
@@ -702,12 +766,23 @@ void bch2_journal_pin_set(struct journal *j, u64 new_seq,
 	WARN_ONCE(new_seq < j->pin.front || new_seq >= j->pin.back,
 		  "journal pin set for seq %llu outside live range [%llu, %llu)",
 		  new_seq, j->pin.front, j->pin.back);
+	/*
+	 * Stronger than the above: front trails last_seq (it's last_seq_ondisk),
+	 * so a seq already retired - count reached zero - still passes it, and
+	 * the front then moves past a live pin. A legitimate caller holds
+	 * something that keeps its seq from retiring (the pin it's copying, a
+	 * key cache entry's own pin, a journal reservation): pinning below
+	 * last_seq means it didn't.
+	 */
+	WARN_ONCE(new_seq < READ_ONCE(j->last_seq),
+		  "journal pin %ps set for seq %llu, already retired (last_seq %llu)",
+		  flush_fn, new_seq, READ_ONCE(j->last_seq));
 
 	while (true) {
 		u64 old_seq = READ_ONCE(pin->seq);
 
 		struct journal_entry_pin_list *new_l = &fifo_entry(&j->pin, new_seq);
-		struct journal_entry_pin_list *old_l = maybe_seq_pin(j, old_seq);
+		struct journal_entry_pin_list *old_l = maybe_seq_pin(j, pin, old_seq);
 
 		if (!old_l || old_l == new_l) {
 			spin_lock(&new_l->lock);
@@ -863,6 +938,11 @@ static size_t journal_flush_pins(struct journal *j,
 		err = flush_fn(j, pin, seq);
 
 		scoped_guard(percpu_read, &j->pin_resize_lock) {
+			/*
+			 * Unchecked: if flush_fn dropped the pin, @seq may have
+			 * retired since. If it didn't, the pin still holds @seq,
+			 * and the list_move below checks it:
+			 */
 			struct journal_entry_pin_list *pin_l = &fifo_entry(&j->pin, seq);
 
 			guard(spinlock)(&pin_l->lock);
@@ -878,7 +958,7 @@ static size_t journal_flush_pins(struct journal *j,
 
 			/* Pin might have been dropped or rearmed: */
 			if (likely(!err && !j->flush_in_progress_dropped))
-				list_move(&pin->list, &pin_l->flushed);
+				list_move(&pin->list, &journal_pin_seq_list(j, pin, seq)->flushed);
 			j->flush_in_progress = NULL;
 			j->flush_in_progress_dropped = false;
 		}

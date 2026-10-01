@@ -96,6 +96,8 @@ journal_seq_pin(struct journal *j, u64 seq)
 	return &fifo_entry(&j->pin, seq);
 }
 
+void bch2_journal_pin_list_check_retired(struct journal *,
+					 struct journal_entry_pin_list *, u64);
 void bch2_journal_update_last_seq(struct journal *);
 
 typedef struct {
