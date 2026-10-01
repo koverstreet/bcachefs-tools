@@ -597,3 +597,55 @@ mod tests {
         assert!(f.typed().is_err());
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::util::bitmask::{le64_bitmask_get, le64_bitmask_set};
+
+    #[test]
+    fn zstd_early_abort_and_write_degraded_flags_are_independent() {
+        let untouched = (1u64 << 63) | 0xdead_beef;
+        for action in 0..=3 {
+            for enabled in 0..=1 {
+                let mut flags = untouched.to_le();
+                le64_bitmask_set(
+                    &mut flags,
+                    c::BCH_SB_WRITE_DEGRADED_ACTION_OFFSET,
+                    c::BCH_SB_WRITE_DEGRADED_ACTION_BITS,
+                    action,
+                );
+                le64_bitmask_set(
+                    &mut flags,
+                    c::BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT_OFFSET,
+                    c::BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT_BITS,
+                    enabled,
+                );
+                assert_eq!(u64::from_le(flags), untouched | (action << 60) | (enabled << 62));
+                assert_eq!(
+                    le64_bitmask_get(
+                        flags,
+                        c::BCH_SB_WRITE_DEGRADED_ACTION_OFFSET,
+                        c::BCH_SB_WRITE_DEGRADED_ACTION_BITS,
+                    ),
+                    action,
+                );
+                le64_bitmask_set(
+                    &mut flags,
+                    c::BCH_SB_WRITE_DEGRADED_ACTION_OFFSET,
+                    c::BCH_SB_WRITE_DEGRADED_ACTION_BITS,
+                    3 - action,
+                );
+                assert_eq!(
+                    le64_bitmask_get(
+                        flags,
+                        c::BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT_OFFSET,
+                        c::BCH_SB_ZSTD_COMPRESSION_EARLY_ABORT_BITS,
+                    ),
+                    enabled,
+                );
+                assert_eq!(u64::from_le(flags), untouched | ((3 - action) << 60) | (enabled << 62));
+            }
+        }
+    }
+}
