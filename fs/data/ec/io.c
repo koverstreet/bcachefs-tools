@@ -830,9 +830,15 @@ int bch2_ec_read_extent(struct btree_trans *trans, struct bch_read_bio *rbio,
 
 	bch2_stripe_buf_read(c, buf);
 
+	/*
+	 * A block went stale under us: the stripe was deleted or replaced, so
+	 * the extent has changed. Retry as a direct read of a stale pointer is.
+	 */
 	ret = bch2_stripe_buf_validate(c, buf, false, EC_BLOCKS_ALL);
 	if (ret == -BCH_ERR_stripe_reconstruct_stale_race)
-		return bch_err_throw(c, data_read_ptr_stale_race);
+		return rbio->flags & BCH_READ_retry_if_stale
+			? bch_err_throw(c, data_read_ptr_stale_retry)
+			: bch_err_throw(c, data_read_ptr_stale_race);
 
 	if (!ret)
 		memcpy_to_bio(&rbio->bio, rbio->bio.bi_iter,
