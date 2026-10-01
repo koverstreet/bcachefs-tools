@@ -1624,7 +1624,7 @@ int __bch2_read_extent(struct btree_trans *trans,
 	ret = 0;
 
 	if (pick.has_ec && !pick.do_ec_reconstruct) {
-		try(bch2_ec_read_around_pick(trans, &pick, failed, flags));
+		try(bch2_ec_read_around_pick(trans, &pick, failed, flags, dev));
 
 		/* The retry that does the read-around doesn't promote: */
 		if (pick.ec_read_around)

@@ -911,26 +911,34 @@ u32 bch2_ec_read_around_skip(struct bch_fs *c, const struct bch_stripe *v, u32 r
  * probability 1 - (r/d)^2. The slow device keeps getting some reads, so its
  * latency estimate recovers when it does.
  *
- * Not for reads pinned to a device, or retries: a retry after an error has its
- * own reconstruct path, and the retry carrying a read-around decision
- * (BCH_READ_ec_read_around) doesn't roll again.
+ * Not for reads that must come from the device (scrub), or retries: a retry
+ * after an error has its own reconstruct path, and the retry carrying a
+ * read-around decision (BCH_READ_ec_read_around) doesn't roll again.
+ *
+ * Reconcile reads each device's data on that device's own thread, in LBA
+ * order (soft_require_read_device). Those read around it only when it's far
+ * slower: by 16x, the factor ptr_better() uses to keep replicated reads there
+ * when the other replica is non-rotational.
  *
  * Returns 0 or a transaction restart.
  */
 int bch2_ec_read_around_pick(struct btree_trans *trans,
 			     struct extent_ptr_decoded *pick,
 			     struct bch_io_failures *failed,
-			     enum bch_read_flags flags)
+			     enum bch_read_flags flags, int preferred_dev)
 {
 	struct bch_fs *c = trans->c;
 	unsigned penalty = c->opts.ec_read_around_penalty;
 	bool decided = flags & BCH_READ_ec_read_around;
 
 	if (!penalty ||
-	    (flags & (BCH_READ_hard_require_read_device|
-		      BCH_READ_soft_require_read_device)) ||
+	    (flags & BCH_READ_hard_require_read_device) ||
 	    ((flags & BCH_READ_in_retry) && !decided))
 		return 0;
+
+	if ((flags & BCH_READ_soft_require_read_device) &&
+	    pick->ptr.dev == preferred_dev)
+		penalty *= 16;
 
 	if (failed && failed->ec_around_errcode)
 		return 0;
