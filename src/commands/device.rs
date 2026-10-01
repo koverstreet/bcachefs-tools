@@ -587,11 +587,14 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
     // scale, and the loop already samples once a second, so the delta is free.
     //
     // Smoothed, because a one-second sample of a background reconcile is
-    // bursty enough to be unreadable. Only decreases count: usage can rise
-    // when reconcile writes before it frees, and a negative rate reads as a
-    // fault rather than as bookkeeping.
+    // bursty enough to be unreadable. A rise counts as no movement: usage can
+    // rise when reconcile writes before it frees, and a negative rate reads as
+    // a fault rather than as bookkeeping. But a second that moved nothing
+    // still counts - skipping it froze the last rate, and a stalled evacuate
+    // read "about 10s left" for ten minutes (#1076).
     let mut last: Option<(Instant, u64)> = None;
     let mut rate = 0.0_f64;
+    let mut last_progress = Instant::now();
 
     loop {
         let usage = handle.dev_usage(dev_idx)
@@ -605,15 +608,22 @@ fn cmd_device_evacuate(cli: EvacuateCli) -> Result<()> {
         let now = Instant::now();
         if let Some((then, was)) = last {
             let secs = now.duration_since(then).as_secs_f64();
-            if secs > 0.0 && was > data_sectors {
-                let moved = ((was - data_sectors) << 9) as f64 / secs;
+            if secs > 0.0 {
+                let moved = (was.saturating_sub(data_sectors) << 9) as f64 / secs;
                 rate = if rate == 0.0 { moved } else { rate * 0.7 + moved * 0.3 };
+            }
+            if was > data_sectors {
+                last_progress = now;
             }
         }
         last = Some((now, data_sectors));
 
+        let stalled = now.duration_since(last_progress);
+
         print!("\x1b[2K\r{} left", fmt_sectors_human(data_sectors));
-        if rate > 0.0 {
+        if stalled >= Duration::from_secs(10) {
+            print!(", no progress for {}", fmt_duration_human(stalled.as_secs()));
+        } else if rate > 0.0 {
             // kwz on IRC: the rate says it is moving, it does not say when it
             // will be done, and that is the thing you actually want to know
             // before deciding whether to wait or go to bed.
