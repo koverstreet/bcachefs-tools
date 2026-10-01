@@ -8,6 +8,8 @@
 #include "data/read.h"
 #include "data/write_types.h"
 
+#include <linux/ioprio.h>
+
 struct moving_context;
 
 #define BCH_DATA_UPDATE_TYPES()	\
@@ -59,6 +61,11 @@ struct data_update_opts {
 	enum bch_trans_commit_flags	commit_flags;
 	u16				ioprio;
 };
+
+static inline u16 bch2_move_ioprio(struct data_update_opts *opts)
+{
+	return opts->ioprio ?: IOPRIO_PRIO_VALUE(IOPRIO_CLASS_IDLE, 0);
+}
 
 struct data_update {
 	struct rcu_head		rcu;
