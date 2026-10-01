@@ -24,6 +24,16 @@ fn write_version_upgrade(filesystem: &str, value: &str) -> Result<()> {
         .with_context(|| format!("setting version_upgrade={value} on {filesystem}"))
 }
 
+fn update_result(wait_ret: Result<()>, reset_ret: Result<()>) -> Result<()> {
+    match (wait_ret, reset_ret) {
+        (Err(wait_error), Err(reset_error)) => Err(wait_error.context(format!(
+            "also failed to disable further version upgrades: {reset_error:#}"
+        ))),
+        (Err(error), Ok(())) | (Ok(()), Err(error)) => Err(error),
+        (Ok(()), Ok(())) => Ok(()),
+    }
+}
+
 fn cmd_update(cli: UpdateCli) -> Result<()> {
     println!("Allowing incompatible features for {}", cli.filesystem);
     write_version_upgrade(&cli.filesystem, "incompatible")?;
@@ -34,10 +44,7 @@ fn cmd_update(cli: UpdateCli) -> Result<()> {
     println!("Disabling further version upgrades");
     let reset_ret = write_version_upgrade(&cli.filesystem, "none");
 
-    wait_ret?;
-    reset_ret?;
-
-    Ok(())
+    update_result(wait_ret, reset_ret)
 }
 
 pub const CMD: super::CmdDef = typed_cmd!(
@@ -46,3 +53,37 @@ pub const CMD: super::CmdDef = typed_cmd!(
     UpdateCli,
     cmd_update
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn update_reports_wait_and_reset_failures() {
+        let error = update_result(
+            Err(anyhow::anyhow!("reconcile accounting failed")),
+            Err(anyhow::anyhow!("version_upgrade write failed")),
+        )
+        .unwrap_err();
+        let message = format!("{error:#}");
+        assert!(message.contains("reconcile accounting failed"));
+        assert!(message.contains("version_upgrade write failed"));
+    }
+
+    #[test]
+    fn update_requires_both_wait_and_reset_to_succeed() {
+        assert!(update_result(Ok(()), Ok(())).is_ok());
+        assert_eq!(
+            update_result(Err(anyhow::anyhow!("wait failed")), Ok(()))
+                .unwrap_err()
+                .to_string(),
+            "wait failed",
+        );
+        assert_eq!(
+            update_result(Ok(()), Err(anyhow::anyhow!("reset failed")))
+                .unwrap_err()
+                .to_string(),
+            "reset failed",
+        );
+    }
+}
