@@ -3,7 +3,7 @@ use std::{
     ffi::{CStr, CString, OsString},
     io::{stdout, IsTerminal},
     os::fd::{AsFd, AsRawFd, OwnedFd},
-    os::unix::ffi::OsStringExt,
+    os::unix::{ffi::OsStringExt, fs::DirBuilderExt},
     path::{Component, Path, PathBuf},
     ptr, str,
 };
@@ -517,6 +517,7 @@ pub(crate) fn parse_mountflag_options(options: impl AsRef<str>) -> Result<Parsed
 }
 
 struct TempMount {
+    directory: PathBuf,
     path: PathBuf,
     mounted: bool,
 }
@@ -534,14 +535,27 @@ impl TempMount {
     fn new() -> Result<Self> {
         let base = Path::new("/run/mount");
         let base = if base.is_dir() { base } else { Path::new("/tmp") };
+        Self::new_in(base)
+    }
+
+    fn new_in(base: &Path) -> Result<Self> {
         let pid = std::process::id();
 
         for i in 0..1000 {
-            let path = base.join(format!("bcachefs-subvol.{pid}.{i}"));
-            match std::fs::create_dir(&path) {
-                Ok(()) => return Ok(Self { path, mounted: false }),
+            let directory = base.join(format!("bcachefs-subvol.{pid}.{i}"));
+            match std::fs::DirBuilder::new().mode(0o700).create(&directory) {
+                Ok(()) => {
+                    let tmp = Self {
+                        path: directory.join("root"),
+                        directory,
+                        mounted: false,
+                    };
+                    std::fs::create_dir(&tmp.path)
+                        .with_context(|| format!("creating {}", tmp.path.display()))?;
+                    return Ok(tmp);
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(e) => return Err(e).with_context(|| format!("creating {}", path.display())),
+                Err(e) => return Err(e).with_context(|| format!("creating {}", directory.display())),
             }
         }
 
@@ -554,8 +568,13 @@ impl TempMount {
             self.mounted = false;
         }
 
-        std::fs::remove_dir(&self.path)
-            .with_context(|| format!("removing {}", self.path.display()))?;
+        for path in [&self.path, &self.directory] {
+            match std::fs::remove_dir(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(e).with_context(|| format!("removing {}", path.display())),
+            }
+        }
         Ok(())
     }
 }
@@ -705,11 +724,11 @@ fn mount_subvolume(
 mod tests {
     use std::{
         fs,
-        os::unix::fs::symlink,
+        os::unix::fs::{symlink, PermissionsExt},
         path::{Path, PathBuf},
     };
 
-    use super::{bind_mount_flags, is_splitbrain, open_subvolume, parse_mountflag_options, take_fuse_option};
+    use super::{bind_mount_flags, is_splitbrain, open_subvolume, parse_mountflag_options, take_fuse_option, TempMount};
     use bcachefs_kernel::c;
     use bcachefs_kernel::errcode::BchError;
 
@@ -755,6 +774,17 @@ mod tests {
 
         assert_eq!(p.fs_opts, None);
         assert_eq!(p.flags, 0);
+    }
+
+    #[test]
+    fn temporary_mount_has_private_parent() {
+        let base = TempMount::new_in(&std::env::temp_dir()).unwrap();
+        fs::set_permissions(&base.path, fs::Permissions::from_mode(0o755)).unwrap();
+        let tmp = TempMount::new_in(&base.path).unwrap();
+        let parent = tmp.path.parent().unwrap().to_path_buf();
+        assert_eq!(fs::metadata(&parent).unwrap().permissions().mode() & 0o777, 0o700);
+        drop(tmp);
+        assert!(!parent.exists());
     }
 
     #[test]
