@@ -373,7 +373,7 @@ int bch2_move_extent(struct moving_context *ctxt,
 	struct bch_fs *c = trans->c;
 	int ret = 0;
 
-	if (data_opts->type == BCH_DATA_UPDATE_scrub &&
+	if (data_update_is_scrub(data_opts->type) &&
 	    !bch2_dev_idx_is_online(c, data_opts->read_dev))
 		return bch_err_throw(c, device_offline);
 
