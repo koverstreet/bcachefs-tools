@@ -461,7 +461,10 @@ static CLOSURE_CALLBACK(journal_write_done)
 	if (w_wrote)
 		w_wrote->write_done = true;
 
-	j->pin.front = min(j->pin.back, j->last_seq_ondisk);
+	u64 new_front = min(j->pin.back, j->last_seq_ondisk);
+	for (u64 seq = j->pin.front; seq < new_front; seq++)
+		bch2_journal_pin_list_check_retired(j, &fifo_entry(&j->pin, seq), seq);
+	j->pin.front = new_front;
 
 	if (completed) {
 		/*
