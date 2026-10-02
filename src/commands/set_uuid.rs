@@ -64,6 +64,7 @@ fn cmd_set_fs_uuid(cli: Cli) -> Result<()> {
 
     let mut fs_opts = c::bch_opts::default();
     opt_set!(fs_opts, nostart, 1);
+    opt_set!(fs_opts, will_not_start, 1);
 
     let fs = Fs::open(&devs, fs_opts).context("opening filesystem offline")?;
 
