@@ -1095,13 +1095,14 @@ impl Filesystem for BcachefsFs {
         let fs = self.fs();
         let usage = fs.usage_read_short();
         let block_size = fs.block_bytes();
-        let shift = block_size.trailing_zeros() as u64;
+        // usage is in 512 byte sectors - as bch2_statfs():
+        let shift = block_size.trailing_zeros() as u64 - 9;
 
         let nr_inodes = accounting::nr_inodes(&fs);
 
         reply.statfs(
             usage.capacity >> shift,
-            (usage.capacity - usage.used) >> shift,
+            usage.free >> shift,
             (usage.capacity - usage.used) >> shift,
             nr_inodes,
             u64::MAX,
