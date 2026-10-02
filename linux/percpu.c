@@ -46,6 +46,7 @@
 #include <sys/mman.h>
 
 #include <linux/percpu.h>
+#include <linux/rcupdate.h>
 
 #include "fs/util/darray.h"
 #include "fs/util/util.h"
@@ -367,9 +368,18 @@ static void bch_percpu_module_init(void)
 	bch_percpu_thread_init();
 }
 
+/*
+ * Runs at exit, while other threads may still be running: liburcu's call_rcu
+ * thread in particular, working through callbacks whose rcu_heads live in
+ * percpu memory (rcu_pending). Wait for those before unmapping it - the
+ * callback thread otherwise reads the next rcu_head out of a chunk we just
+ * unmapped, and the process segfaults after the program is already done.
+ */
 __attribute__((destructor))
 static void bch_percpu_module_exit(void)
 {
+	rcu_barrier();
+
 	pthread_mutex_lock(&bch_percpu_lock);
 	for (int cpu = 0; cpu < bch_percpu_nr_cpus; cpu++) {
 		void *chunk = bch_percpu_chunks[cpu];
