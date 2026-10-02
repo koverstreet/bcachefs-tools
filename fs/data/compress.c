@@ -92,7 +92,7 @@ struct bbuf bch2_bounce_alloc(struct bch_fs *c, unsigned size, int rw)
 {
 	void *b;
 
-	BUG_ON(size > c->opts.encoded_extent_max);
+	BUG_ON(size > c->sb.encoded_extent_max);
 
 	/*
 	 * __GFP_SKIP_ZERO: opt out of CONFIG_INIT_ON_ALLOC_DEFAULT_ON, which
@@ -165,7 +165,7 @@ static bool bio_phys_contig(struct bio *bio, struct bvec_iter start)
 static struct bbuf __bch2_bio_map_or_bounce(struct bch_fs *c, struct bio *bio,
 				       struct bvec_iter start, int rw)
 {
-	BUG_ON(start.bi_size > c->opts.encoded_extent_max);
+	BUG_ON(start.bi_size > c->sb.encoded_extent_max);
 
 #ifndef CONFIG_HIGHMEM
 	if (bio_phys_contig(bio, start)) {
@@ -360,8 +360,8 @@ int bch2_bio_uncompress(struct bch_fs *c, struct bio *src,
 	BUG_ON(dst_iter.bi_size + (crc.offset << 9) > dst_len);
 	BUG_ON(src->bi_iter.bi_size != crc.compressed_size << 9);
 
-	if (crc.uncompressed_size << 9	> c->opts.encoded_extent_max ||
-	    crc.compressed_size << 9	> c->opts.encoded_extent_max)
+	if (crc.uncompressed_size << 9	> c->sb.encoded_extent_max ||
+	    crc.compressed_size << 9	> c->sb.encoded_extent_max)
 		return bch2_decompress_err(c, bch_err_throw(c, decompress_exceeded_max_encoded_extent));
 
 	struct bbuf dst_buf __cleanup(bch2_bbuf_exit) = dst_len == dst_iter.bi_size
@@ -752,7 +752,7 @@ void bch2_fs_compress_exit(struct bch_fs *c)
 static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 {
 	ZSTD_parameters params = zstd_get_params(zstd_max_clevel(),
-						 c->opts.encoded_extent_max);
+						 BCH_ENCODED_EXTENT_MAX);
 
 	c->compress.zstd_workspace_size = zstd_cctx_workspace_bound(&params.cParams);
 
@@ -784,12 +784,12 @@ static int __bch2_fs_compress_init(struct bch_fs *c, u64 features)
 
 	if (!mempool_initialized(&c->compress.bounce[READ]) &&
 	    mempool_init_kvmalloc_pool(&c->compress.bounce[READ],
-				       1, c->opts.encoded_extent_max))
+				       1, BCH_ENCODED_EXTENT_MAX))
 		return bch_err_throw(c, ENOMEM_compression_bounce_read_init);
 
 	if (!mempool_initialized(&c->compress.bounce[WRITE]) &&
 	    mempool_init_kvmalloc_pool(&c->compress.bounce[WRITE],
-				       1, c->opts.encoded_extent_max))
+				       1, BCH_ENCODED_EXTENT_MAX))
 		return bch_err_throw(c, ENOMEM_compression_bounce_write_init);
 
 	for (i = compression_types;

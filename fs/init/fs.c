@@ -1030,7 +1030,7 @@ static void bch2_fs_sb_prep_for_start(struct bch_fs *c, struct printbuf *out)
 		if (c->sb.version_upgrade_complete < bcachefs_metadata_version_autofix_errors)
 			SET_BCH_SB_ERROR_ACTION(c->disk_sb.sb, BCH_ON_ERROR_fix_safe);
 
-		unsigned extent_bp_shift_needed = ilog2(c->opts.encoded_extent_max >> 9) + 1;
+		unsigned extent_bp_shift_needed = ilog2(BCH_ENCODED_EXTENT_MAX >> 9) + 1;
 		if (extent_bp_shift_needed > c->sb.extent_bp_shift) {
 			prt_printf(out, "extent_bp_shift too small: must repair backpointers\n");
 			SET_BCH_SB_EXTENT_BP_SHIFT(c->disk_sb.sb, extent_bp_shift_needed);
@@ -1040,6 +1040,9 @@ static void bch2_fs_sb_prep_for_start(struct bch_fs *c, struct printbuf *out)
 				cpu_to_le64(bch2_recovery_passes_to_stable(BIT_ULL(BCH_RECOVERY_PASS_check_backpointers_to_extents)));
 			__set_bit_le64(BCH_FSCK_ERR_backpointer_to_missing_ptr, ext->errors_silent);
 			__set_bit_le64(BCH_FSCK_ERR_ptr_to_missing_backpointer, ext->errors_silent);
+			c->opts.recovery_passes |=
+				BIT_ULL(BCH_RECOVERY_PASS_check_extents_to_backpointers) |
+				BIT_ULL(BCH_RECOVERY_PASS_check_backpointers_to_extents);
 		}
 
 		set_bit(BCH_FS_sb_dirty, &c->flags);

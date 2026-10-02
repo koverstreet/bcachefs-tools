@@ -1961,7 +1961,7 @@ int bch2_fs_io_read_init(struct bch_fs *c)
 	if (mempool_init(&c->bio_bounce_bufs,
 			 max_t(unsigned,
 			       c->opts.btree_node_size,
-			       c->opts.encoded_extent_max) /
+			       BCH_ENCODED_EXTENT_MAX) /
 			 BIO_BOUNCE_BUF_POOL_LEN,
 			 bio_bounce_buf_alloc_fn,
 			 bio_bounce_buf_free_fn,
