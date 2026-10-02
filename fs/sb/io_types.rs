@@ -33,6 +33,7 @@ pub struct bch_sb_cpu {
     pub extent_types_known: u8,
     pub extent_bp_shift: u8,
 
+    pub encoded_extent_max: u32,
     pub time_base_lo: u64,
     pub time_base_hi: u32,
     pub time_units_per_sec: c_uint,

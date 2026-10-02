@@ -313,7 +313,7 @@ fn check_overlapping_extents(
 /// bounded by encoded_extent_max: one that isn't is a bug elsewhere, not
 /// damage - reported, not repaired.
 fn check_extent_overbig(fs: &Fs, k: BkeySC<'_>) {
-    let max_sectors = fs.opts().encoded_extent_max() >> 9;
+    let max_sectors = fs.sb.encoded_extent_max >> 9;
 
     for crc in k.crcs(fs) {
         if extents::crc_is_encoded(&crc) && crc.uncompressed_size > max_sectors {

@@ -1714,10 +1714,10 @@ static int bch2_write_op_decode(struct bch_write_op *op, struct bio *bio)
 	BUG_ON(DIV_ROUND_UP(crc->live_size, PAGE_SECTORS) > bio->bi_max_vecs);
 	BUG_ON(bio->bi_iter.bi_size != crc->compressed_size << 9);
 
-	if (crc->uncompressed_size << 9	> c->opts.encoded_extent_max) {
+	if (crc->uncompressed_size << 9	> c->sb.encoded_extent_max) {
 		bch2_write_op_error(op, false, op->pos.offset,
 				    "extent too big to decompress (%u > %u)",
-				    crc->uncompressed_size << 9, c->opts.encoded_extent_max);
+				    crc->uncompressed_size << 9, c->sb.encoded_extent_max);
 		return bch2_decompress_err(c, bch_err_throw(c, decompress_exceeded_max_encoded_extent));
 	}
 

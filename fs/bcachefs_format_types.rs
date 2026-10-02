@@ -1039,6 +1039,7 @@ pub struct bch_sb_field_ext {
      * the check pass. Runtime copy: bch_sb.btrees_clean.
      */
     pub btrees_clean: Le64,
+    pub encoded_extent_write_max: Le64,
 }
 vstruct!(bch_sb_field_ext, field.u64s, start = 0);
 

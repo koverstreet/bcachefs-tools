@@ -688,6 +688,13 @@ int bch2_opt_hook_pre_set(struct bch_fs *c, struct bch_dev *ca, u64 inum, enum b
 			  bool change, struct opt_change_scope *scope)
 {
 	switch (id) {
+	case Opt_encoded_extent_max:
+		if (change && test_bit(BCH_FS_started, &c->flags) &&
+		    ilog2(v >> 9) + 1 > c->sb.extent_bp_shift) {
+			bch_err(c, "encoded_extent_max requires backpointer preparation before mounting read-write");
+			return -EINVAL;
+		}
+		break;
 	case Opt_state:
 		if (ca)
 			return bch2_dev_set_state(c, ca, v, BCH_FORCE_IF_DEGRADED, NULL);
@@ -946,6 +953,15 @@ u64 bch2_opt_from_sb(struct bch_sb *sb, enum bch_opt_id id, int dev_idx)
 	if (opt->flags & OPT_SB_FIELD_SECTORS)
 		v <<= 9;
 
+	if (id == Opt_encoded_extent_max && dev_idx < 0) {
+		const struct bch_sb_field_ext *ext = bch2_sb_field_get(sb, ext);
+
+		if (ext && vstruct_bytes(&ext->field) >=
+		    offsetof(struct bch_sb_field_ext, encoded_extent_write_max) +
+		    sizeof(ext->encoded_extent_write_max) && ext->encoded_extent_write_max)
+			v = le64_to_cpu(ext->encoded_extent_write_max);
+	}
+
 	return v;
 }
 
@@ -969,6 +985,7 @@ bool __bch2_opt_set_sb(struct bch_sb *sb, int dev_idx,
 		       const struct bch_option *opt, u64 v, const char *val)
 {
 	bool changed = false;
+	u64 requested = v;
 
 	if (opt->flags & OPT_SB_FIELD_SECTORS)
 		v >>= 9;
@@ -980,8 +997,20 @@ bool __bch2_opt_set_sb(struct bch_sb *sb, int dev_idx,
 		v++;
 
 	if ((opt->flags & OPT_FS) && dev_idx < 0) {
+		if (!strcmp(opt->attr.name, "encoded_extent_max")) {
+			u64 legacy_read_max = opt->get_sb(sb);
+			struct bch_sb_field_ext *ext = bch2_sb_field_get(sb, ext);
+
+			if (ext && vstruct_bytes(&ext->field) >=
+			    offsetof(struct bch_sb_field_ext, encoded_extent_write_max) +
+			    sizeof(ext->encoded_extent_write_max)) {
+				changed = le64_to_cpu(ext->encoded_extent_write_max) != requested;
+				ext->encoded_extent_write_max = cpu_to_le64(requested);
+				v = max(v, legacy_read_max);
+			}
+		}
 		if (opt->set_sb) {
-			changed = v != opt->get_sb(sb);
+			changed |= v != opt->get_sb(sb);
 			opt->set_sb(sb, v);
 		} else if (opt->set_ext) {
 			struct bch_sb_field_ext *ext = bch2_sb_field_get(sb, ext);
