@@ -452,6 +452,7 @@
 	x(EROFS,			erofs_recovery_cancelled, 406)		\
 	x(EROFS,			emergency_ro, 407)			\
 	x(ESHUTDOWN,			btree_not_started, 408)			\
+	x(ESHUTDOWN,			ioctl_fs_stopping, 622)			\
 	x(0,				operation_blocked, 409)			\
 	x(BCH_ERR_operation_blocked,	btree_cache_cannibalize_lock_blocked, 410) \
 	x(BCH_ERR_operation_blocked,	journal_res_blocked, 411)		\

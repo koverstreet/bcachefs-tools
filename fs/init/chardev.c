@@ -950,17 +950,34 @@ long bch2_fs_ioctl(struct bch_fs *c, unsigned cmd, void __user *arg)
 	return ret;
 }
 
+/*
+ * bch_chardev_lock covers the minor -> filesystem lookup and the filesystem's
+ * ro_ref tryget together: bch2_fs_stop() removes the minor under it before
+ * waiting for ro_ref to drain, so an ioctl either holds a ref on a live
+ * filesystem or doesn't find it - never one that's being torn down.
+ */
+static DEFINE_MUTEX(bch_chardev_lock);
 static DEFINE_IDR(bch_chardev_minor);
 
 static long bch2_chardev_ioctl(struct file *filp, unsigned cmd, unsigned long v)
 {
 	unsigned minor = iminor(file_inode(filp));
-	struct bch_fs *c = minor < U8_MAX ? idr_find(&bch_chardev_minor, minor) : NULL;
 	void __user *arg = (void __user *) v;
+	struct bch_fs *c = NULL;
 
-	return c
-		? bch2_fs_ioctl(c, cmd, arg)
-		: bch2_global_ioctl(cmd, arg);
+	if (minor < U8_MAX)
+		scoped_guard(mutex, &bch_chardev_lock) {
+			c = idr_find(&bch_chardev_minor, minor);
+			if (c && !bch2_ro_ref_tryget(c))
+				return bch2_err_class(bch_err_throw(c, ioctl_fs_stopping));
+		}
+
+	if (!c)
+		return bch2_global_ioctl(cmd, arg);
+
+	long ret = bch2_fs_ioctl(c, cmd, arg);
+	bch2_ro_ref_put(c);
+	return ret;
 }
 
 static const struct file_operations bch_chardev_fops = {
@@ -980,12 +997,14 @@ void bch2_fs_chardev_exit(struct bch_fs *c)
 	if (!IS_ERR_OR_NULL(c->chardev))
 		device_unregister(c->chardev);
 	if (c->minor >= 0)
-		idr_remove(&bch_chardev_minor, c->minor);
+		scoped_guard(mutex, &bch_chardev_lock)
+			idr_remove(&bch_chardev_minor, c->minor);
 }
 
 int bch2_fs_chardev_init(struct bch_fs *c)
 {
-	c->minor = idr_alloc(&bch_chardev_minor, c, 0, 0, GFP_KERNEL);
+	scoped_guard(mutex, &bch_chardev_lock)
+		c->minor = idr_alloc(&bch_chardev_minor, c, 0, 0, GFP_KERNEL);
 	if (c->minor < 0)
 		return bch_err_throw(c, chardev_init_error);
 
