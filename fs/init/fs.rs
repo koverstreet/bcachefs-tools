@@ -273,6 +273,15 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.raw, ca.as_mut_ptr(), c::btree_iter_update_trigger_flags(flags.bits())) })
     }
 
+    /// Set @inum's i_size to @new_i_size and drop every extent past it, as a
+    /// logged op, so a crash midway resumes rather than leaving extents past
+    /// EOF. Block granular: zeroing the rest of the block @new_i_size falls
+    /// in is the caller's job, as the VFS does it in the page cache.
+    pub fn truncate(&self, inum: c::subvol_inum, new_i_size: u64) -> Result<(), BchError> {
+        let mut i_sectors_delta = 0;
+        ret_to_result(unsafe { c::bch2_truncate(self.raw, inum, new_i_size, &mut i_sectors_delta) })
+    }
+
     /// Write superblock to disk (locked version). Caller must hold sb_lock.
     /// Returns Ok(()) on success or the error code on failure.
     pub fn write_super_ret(&self) -> Result<(), BchError> {

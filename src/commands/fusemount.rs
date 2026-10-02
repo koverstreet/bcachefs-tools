@@ -402,6 +402,35 @@ fn fuse_setattr(
     Ok(inode_out)
 }
 
+/// Shrinking a file: zero the rest of the block the new EOF falls in, then drop
+/// everything past it. The kernel's own truncate zeroes that tail in the page
+/// cache; without it, truncating down and back up reads the old bytes again
+/// (xfstests generic/029). Growing needs only the new i_size, which
+/// fuse_setattr() writes.
+fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), BchError> {
+    let bi = inode::find_by_inum(fs, inum)?;
+    if new_size >= bi.bi_size {
+        return Ok(());
+    }
+
+    let block_size = fs.block_bytes();
+    let tail = (new_size & (block_size - 1)) as usize;
+    if tail != 0 {
+        let block_start = new_size - tail as u64;
+        let mut buf = AlignedBuf::new(block_size as usize);
+        block_on(fs.read(inum, block_start, &bi, &mut buf))?;
+
+        if buf[tail..].iter().any(|&b| b != 0) {
+            buf[tail..].fill(0);
+            let replicas = std::cmp::max(inode::opts_get_inode(fs, &bi).data_replicas as u32, 1);
+            block_on(fs.write(bi.bi_inum, block_start, inum.subvol as u32,
+                              replicas, &buf, new_size))?;
+        }
+    }
+
+    fs.truncate(inum, new_size)
+}
+
 fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     btree::iter::trans_commit_do(
         fs,
@@ -659,6 +688,13 @@ impl Filesystem for BcachefsFs {
 
         let (atime_flag, atime_val) = parse_time(&atime);
         let (mtime_flag, mtime_val) = parse_time(&mtime);
+
+        if let Some(size) = size {
+            if let Err(e) = fuse_truncate(&fs, inum, size) {
+                reply.error(bch_err(&e));
+                return;
+            }
+        }
 
         let bi = match fuse_setattr(
             &fs,
