@@ -10,7 +10,10 @@
 //   ino 1. This is a FUSE protocol limitation — snapshot subvolumes with
 //   colliding inode numbers cannot be represented in a single FUSE mount.
 // - Daemonization: Must fork() before spawning threads (Linux constraint).
-//   bcachefs's shrinker threads and fs_start happen after fork.
+//   bcachefs's shrinker threads and fs_start happen after fork. The daemon
+//   lives as long as the mount, not the process that mounted it, so it gets
+//   a systemd scope of its own: stopping the caller's scope (xfstests stops
+//   one per test) would otherwise kill it and leave a dead mount.
 // - I/O alignment: All reads and writes must be block-aligned. Unaligned
 //   requests get read-modify-write treatment in the write handler.
 // - Inode lifetime: there is no VFS inode cache here, so we keep the part of
@@ -1236,6 +1239,144 @@ fn parse_fuse_mount_options(
     Ok((bch_opts, mount_options, parsed.flags))
 }
 
+/// Move the daemon into a transient systemd scope of its own.
+///
+/// Why: the daemon has to live as long as the mount, but it starts life in the
+/// cgroup of whoever ran mount(8), and systemd kills every process in a unit
+/// when that unit stops - a login session ending, a service that mounted
+/// something restarting, or xfstests, which runs each test in a scope and
+/// stops it afterwards. The daemon dies, and what's left is worse than an
+/// unmount: the mount stays, every access returns ENOTCONN, and the kernel
+/// still holds the device, so fsck and a fresh mount get EBUSY until someone
+/// unmounts the corpse.
+///
+/// How: the D-Bus call `systemd-run --scope` makes, with the daemon's pid.
+/// Without systemd there is no scope to leave. Failing isn't fatal to the
+/// mount - the daemon then lives and dies with its caller's scope, as before -
+/// so it's a warning.
+fn move_to_own_scope(pid: libc::pid_t, device: &str, mountpoint: &str) {
+    if !Path::new("/run/systemd/system").exists() {
+        return;
+    }
+
+    if let Err(e) = start_transient_scope(pid, device, mountpoint) {
+        eprintln!("warning: couldn't give the fuse daemon a systemd scope of its own ({e}); \
+                   it will exit with whatever scope ran the mount");
+    }
+}
+
+/// StartTransientUnit through sd-bus, dlopen()ed: libsystemd is there wherever
+/// systemd is, and this is the only thing we'd link it for.
+fn start_transient_scope(pid: libc::pid_t, device: &str, mountpoint: &str) -> Result<(), String> {
+    use std::ffi::{c_char, c_int, c_void, CStr, CString};
+
+    #[repr(C)]
+    struct SdBusError {
+        name:       *const c_char,
+        message:    *const c_char,
+        need_free:  c_int,
+    }
+
+    type BusNew         = unsafe extern "C" fn(*mut *mut c_void) -> c_int;
+    type BusSetAddress  = unsafe extern "C" fn(*mut c_void, *const c_char) -> c_int;
+    type BusSetClient   = unsafe extern "C" fn(*mut c_void, c_int) -> c_int;
+    type BusStart       = unsafe extern "C" fn(*mut c_void) -> c_int;
+    type BusUnref       = unsafe extern "C" fn(*mut c_void) -> *mut c_void;
+    type BusErrorFree   = unsafe extern "C" fn(*mut SdBusError);
+    type BusCallMethod  = unsafe extern "C" fn(*mut c_void, *const c_char, *const c_char,
+                                               *const c_char, *const c_char, *mut SdBusError,
+                                               *mut *mut c_void, *const c_char, ...) -> c_int;
+
+    let lib = unsafe { libc::dlopen(c"libsystemd.so.0".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL) };
+    if lib.is_null() {
+        return Err("libsystemd.so.0 not found".into());
+    }
+
+    macro_rules! sym {
+        ($name:literal, $ty:ty) => {{
+            let p = unsafe { libc::dlsym(lib, $name.as_ptr()) };
+            if p.is_null() {
+                return Err(format!("libsystemd has no {}", $name.to_string_lossy()));
+            }
+            unsafe { std::mem::transmute::<*mut c_void, $ty>(p) }
+        }};
+    }
+
+    let bus_new          = sym!(c"sd_bus_new", BusNew);
+    let bus_open_system  = sym!(c"sd_bus_open_system", BusNew);
+    let bus_set_address  = sym!(c"sd_bus_set_address", BusSetAddress);
+    let bus_set_client   = sym!(c"sd_bus_set_bus_client", BusSetClient);
+    let bus_start        = sym!(c"sd_bus_start", BusStart);
+    let bus_unref        = sym!(c"sd_bus_flush_close_unref", BusUnref);
+    let bus_error_free   = sym!(c"sd_bus_error_free", BusErrorFree);
+    let bus_call_method  = sym!(c"sd_bus_call_method", BusCallMethod);
+
+    let errno = |what: &str, ret: c_int| format!("{what}: {}", std::io::Error::from_raw_os_error(-ret));
+
+    // As root, talk to systemd directly, as systemctl and systemd-run do:
+    // there may be no D-Bus daemon (minimal systems, test VMs).
+    let mut bus: *mut c_void = std::ptr::null_mut();
+    let ret = if Path::new("/run/systemd/private").exists() {
+        let ret = unsafe { bus_new(&mut bus) };
+        if ret < 0 {
+            return Err(errno("sd_bus_new", ret));
+        }
+        unsafe {
+            let ret = bus_set_address(bus, c"unix:path=/run/systemd/private".as_ptr());
+            if ret < 0 { ret } else {
+                let ret = bus_set_client(bus, 0);
+                if ret < 0 { ret } else { bus_start(bus) }
+            }
+        }
+    } else {
+        unsafe { bus_open_system(&mut bus) }
+    };
+    if ret < 0 {
+        unsafe { bus_unref(bus) };
+        return Err(errno("connecting to systemd", ret));
+    }
+
+    let unit = CString::new(format!("bcachefs-fuse-{pid}.scope")).unwrap();
+    let description = CString::new(format!("bcachefs fuse daemon: {device} on {mountpoint}"))
+        .unwrap_or_default();
+    let mut error = SdBusError {
+        name:       std::ptr::null(),
+        message:    std::ptr::null(),
+        need_free:  0,
+    };
+
+    // Array lengths are ints to sd_bus_message_append(), as in systemd-run:
+    let ret = unsafe {
+        bus_call_method(bus,
+            c"org.freedesktop.systemd1".as_ptr(),
+            c"/org/freedesktop/systemd1".as_ptr(),
+            c"org.freedesktop.systemd1.Manager".as_ptr(),
+            c"StartTransientUnit".as_ptr(),
+            &mut error, std::ptr::null_mut(),
+            c"ssa(sv)a(sa(sv))".as_ptr(),
+            unit.as_ptr(), c"fail".as_ptr(),
+            3 as c_int,
+            c"PIDs".as_ptr(), c"au".as_ptr(), 1 as c_int, pid as u32,
+            c"Description".as_ptr(), c"s".as_ptr(), description.as_ptr(),
+            c"CollectMode".as_ptr(), c"s".as_ptr(), c"inactive-or-failed".as_ptr(),
+            0 as c_int)
+    };
+
+    let result = if ret >= 0 {
+        Ok(())
+    } else if !error.message.is_null() {
+        Err(unsafe { CStr::from_ptr(error.message) }.to_string_lossy().into_owned())
+    } else {
+        Err(errno("StartTransientUnit", ret))
+    };
+
+    unsafe {
+        bus_error_free(&mut error);
+        bus_unref(bus);
+    }
+    result
+}
+
 /// Run @f with stderr going to a scratch file, shown only if @f fails.
 ///
 /// A mount helper prints nothing on success - xfstests counts any output as a
@@ -1414,6 +1555,8 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         // The child owns the filesystem now: the parent's copy must never
         // shut it down, not even on the error paths below.
         std::mem::forget(fs);
+
+        move_to_own_scope(pid, &cli.device, &cli.mountpoint);
 
         // Parent: wait for child to signal mount readiness
         drop(write_fd);
