@@ -2466,14 +2466,20 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 
 	if (need_evacuate) {
 		unsigned blocks_used[BCH_BKEY_PTRS_MAX], nr = 0;
-		memset(blocks_used, 0, sizeof(blocks_used));
 
+		/*
+		 * Blocks on bad devices first: that's the data that has to
+		 * move, and the stripe narrows to the good blocks:
+		 */
 		for_each_data_block(i, nr_data)
-			if (stripe_blockcount_get(old_s, i))
+			if (stripe_blockcount_get(old_s, i) &&
+			    bch2_stripe_block_dev_bad(c, old_s->ptrs[i].dev))
+				blocks_used[nr++] = i;
+		for_each_data_block(i, nr_data)
+			if (stripe_blockcount_get(old_s, i) &&
+			    !bch2_stripe_block_dev_bad(c, old_s->ptrs[i].dev))
 				blocks_used[nr++] = i;
 		BUG_ON(nr < need_evacuate);
-
-		bubble_sort(blocks_used, nr, cmp_int);
 
 		for (unsigned i = 0; i < need_evacuate; i++) {
 			const struct bch_extent_ptr *ptr = old_s->ptrs + blocks_used[i];
