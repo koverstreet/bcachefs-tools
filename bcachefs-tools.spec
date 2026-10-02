@@ -132,8 +132,11 @@ check, modify and correct any inconsistencies in the bcachefs filesystem.
 %{_udevrulesdir}/64-bcachefs.rules
 %{_datadir}/bash-completion/completions/bcachefs
 %{_sbindir}/mount.fuse.bcachefs
+%{_sbindir}/mount.fuseblk.bcachefs
 %{_sbindir}/fsck.fuse.bcachefs
+%{_sbindir}/fsck.fuseblk.bcachefs
 %{_sbindir}/mkfs.fuse.bcachefs
+%{_sbindir}/mkfs.fuseblk.bcachefs
 %{_unitdir}/bcachefs-wait-devices@.service
 %{_systemdgeneratordir}/bcachefs-mount-generator
 

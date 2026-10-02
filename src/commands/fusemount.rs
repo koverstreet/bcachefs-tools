@@ -22,17 +22,28 @@
 //   filesystem marked clean with deleted inodes outstanding. FUSE doesn't
 //   promise a forget for every inode at unmount, so destroy() evicts
 //   whatever is still referenced.
+// - Unmount: a plain fuse mount never sends FUSE_DESTROY - the daemon only
+//   finds out when /dev/fuse goes dead - so umount returns while destroy()
+//   and bch2_fs_exit() are still running, and an fsck or remount straight
+//   after gets EBUSY. A fuseblk mount (block device source) sends DESTROY
+//   and waits for the reply, so umount returns once the filesystem is shut
+//   down. fuser only mounts plain fuse, so for block devices we mount
+//   fuseblk ourselves and hand fuser the /dev/fuse fd. The kernel claims the
+//   source device exclusively for fuseblk, so we open with noexcl and claim
+//   the other devices ourselves. Image files can't be fuseblk sources and
+//   keep plain fuse, race and all.
 
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::ffi::OsStr;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::fd::OwnedFd;
+use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt};
+use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use bch_bindgen::fs::FsExt;
@@ -1129,7 +1140,7 @@ pub struct Cli {
 fn parse_fuse_mount_options(
     device: &str,
     options: Option<&str>,
-) -> anyhow::Result<(c::bch_opts, Vec<MountOption>)> {
+) -> anyhow::Result<(c::bch_opts, Vec<MountOption>, libc::c_ulong)> {
     let mut mount_options = vec![
         MountOption::FSName(device.to_string()),
         // Use CUSTOM instead of Subtype — fuser categorizes Subtype as
@@ -1154,22 +1165,125 @@ fn parse_fuse_mount_options(
 
     mount_options.extend(parsed.fuse_options);
 
-    Ok((bch_opts, mount_options))
+    Ok((bch_opts, mount_options, parsed.flags))
+}
+
+/// How the FUSE mount is made: see "Unmount" in the notes at the top.
+enum FuseMount {
+    /// Plain fuse via fuser::mount2(), for image files.
+    Fuse,
+    /// fuseblk, mounted by us, for block devices.
+    Fuseblk {
+        source:   PathBuf,
+        ms_flags: libc::c_ulong,
+    },
+}
+
+/// Mount fuseblk on @mountpoint and return the /dev/fuse fd to serve it on.
+///
+/// The option string is what fuser builds for plain fuse, plus blksize; the
+/// flags get fuser's nodev/nosuid defaults, so the two kinds of mount behave
+/// the same apart from unmount.
+fn mount_fuseblk(
+    source:     &Path,
+    mountpoint: &str,
+    ms_flags:   libc::c_ulong,
+    blksize:    u32,
+) -> std::io::Result<OwnedFd> {
+    let dev_fuse = OpenOptions::new().read(true).write(true).open("/dev/fuse")?;
+    let rootmode = std::fs::metadata(mountpoint)?.mode() & libc::S_IFMT;
+    let data = format!(
+        "fd={},rootmode={:o},user_id={},group_id={},blksize={},subtype=bcachefs",
+        dev_fuse.as_raw_fd(), rootmode,
+        rustix::process::getuid().as_raw(), rustix::process::getgid().as_raw(),
+        blksize,
+    );
+
+    use rustix::mount::MountFlags;
+    let flags = MountFlags::from_bits_retain(ms_flags as _) | MountFlags::NODEV | MountFlags::NOSUID;
+    let data = std::ffi::CString::new(data)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
+    rustix::mount::mount(source, mountpoint, "fuseblk", flags, Some(data.as_c_str()))?;
+
+    Ok(dev_fuse.into())
+}
+
+/// Mount and serve until unmounted. On error, destroy() has run iff the
+/// session got as far as taking @bcachefs_fs - the caller checks `destroyed`.
+fn fuse_run(
+    bcachefs_fs: BcachefsFs,
+    mountpoint:  &str,
+    config:      &Config,
+    mount:       &FuseMount,
+) -> std::io::Result<()> {
+    let FuseMount::Fuseblk { source, ms_flags } = mount else {
+        return fuser::mount2(bcachefs_fs, mountpoint, config);
+    };
+
+    // fuseblk wants a power of two from 512 to the page size:
+    let blksize = (bcachefs_fs.fs().block_bytes() as usize)
+        .clamp(512, rustix::param::page_size()) as u32;
+
+    let fd = mount_fuseblk(source, mountpoint, *ms_flags, blksize)?;
+
+    // Session::from_fd() reads FUSE_INIT, which the kernel only sends once
+    // the mount exists - hence mount first. From here a failure leaves a
+    // mount with nothing serving it; detach it rather than leave it hanging.
+    fuser::Session::from_fd(bcachefs_fs, fd, fuser::SessionACL::Owner, config.clone())
+        .and_then(|se| se.spawn())
+        .and_then(|bg| bg.join())
+        .inspect_err(|_| {
+            let _ = rustix::mount::unmount(mountpoint, rustix::mount::UnmountFlags::DETACH);
+        })
+}
+
+/// Claim the devices the kernel doesn't (everything but the fuseblk source)
+/// exclusively, for the life of the mount: we opened them noexcl so the
+/// kernel's claim on the source doesn't collide with ours.
+fn claim_devices(devs: &[PathBuf]) -> anyhow::Result<Vec<File>> {
+    devs.iter()
+        .filter(|d| std::fs::metadata(d).map(|m| m.file_type().is_block_device()).unwrap_or(false))
+        .map(|d| OpenOptions::new().read(true).custom_flags(libc::O_EXCL).open(d)
+             .map_err(|e| anyhow::anyhow!("{}: device in use: {}", d.display(), e)))
+        .collect()
 }
 
 pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     use crate::device_scan::scan_sbs;
 
-    let (bch_opts, mount_options) = parse_fuse_mount_options(&cli.device, cli.options.as_deref())?;
+    let (mut bch_opts, mount_options, ms_flags) =
+        parse_fuse_mount_options(&cli.device, cli.options.as_deref())?;
 
     let sbs = scan_sbs(&cli.device, &bch_opts)?;
-    let devs: Vec<_> = sbs.iter().map(|(p, _)| p.clone()).collect();
+    let devs: Vec<PathBuf> = sbs.iter().map(|(p, _)| p.clone()).collect();
+
+    let mount = match devs.first() {
+        Some(d) if std::fs::metadata(d).map(|m| m.file_type().is_block_device()).unwrap_or(false) =>
+            FuseMount::Fuseblk { source: d.clone(), ms_flags },
+        _ => FuseMount::Fuse,
+    };
+
+    if matches!(mount, FuseMount::Fuseblk { .. }) {
+        opt_set!(bch_opts, noexcl, 1);
+    }
 
     let fs = Fs::open(&devs, bch_opts)
         .map_err(|e| anyhow::anyhow!("Error opening filesystem: {}", e))?;
     let fs_raw = fs.raw;
     // BcachefsFs::destroy takes ownership — prevent Fs double-free
     std::mem::forget(fs);
+
+    // Held until we exit: across the fork, the child's copies keep the claims.
+    let _claims = match &mount {
+        FuseMount::Fuseblk { .. } => match claim_devices(&devs[1..]) {
+            Ok(claims) => claims,
+            Err(e) => {
+                unsafe { c::bch2_fs_exit(fs_raw) };
+                return Err(e);
+            }
+        },
+        FuseMount::Fuse => Vec::new(),
+    };
 
     let mut config = Config::default();
     config.mount_options = mount_options;
@@ -1189,7 +1303,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
             destroyed: Arc::clone(&destroyed),
             lookups: Mutex::new(HashMap::new()),
         };
-        if let Err(e) = fuser::mount2(bcachefs_fs, &cli.mountpoint, &config) {
+        if let Err(e) = fuse_run(bcachefs_fs, &cli.mountpoint, &config, &mount) {
             if !destroyed.load(Ordering::SeqCst) {
                 unsafe { c::bch2_fs_exit(fs_raw) };
             }
@@ -1286,7 +1400,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         signal_parent_err(write_fd, CHILD_ERR_FS_START, &format!("{e:#}"));
         std::process::exit(1);
     }
-    eprintln!("fusemount: filesystem started, calling fuser::mount2");
+    eprintln!("fusemount: filesystem started, mounting");
 
     let destroyed = Arc::new(AtomicBool::new(false));
     // Not `?`: the filesystem is started by now, and returning here without
@@ -1309,12 +1423,12 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         lookups: Mutex::new(HashMap::new()),
     };
 
-    match fuser::mount2(bcachefs_fs, &cli.mountpoint, &config) {
+    match fuse_run(bcachefs_fs, &cli.mountpoint, &config, &mount) {
         Ok(()) => {
-            eprintln!("fusemount: fuser::mount2 returned normally (unmounted)");
+            eprintln!("fusemount: unmounted");
         }
         Err(e) => {
-            eprintln!("fusemount: fuser::mount2 failed: {}", e);
+            eprintln!("fusemount: mount failed: {}", e);
             // If the mount itself failed we were never handed to a
             // FilesystemHolder, so destroy() has not run and nothing has shut
             // the filesystem down -- leaving the superblock dirty after
@@ -1342,10 +1456,11 @@ mod tests {
 
     #[test]
     fn parse_fuse_mount_options_sets_bcachefs_read_only_and_fuse_ro() {
-        let (opts, mount_options) =
+        let (opts, mount_options, ms_flags) =
             parse_fuse_mount_options("/dev/test", Some("ro,norecovery")).unwrap();
 
         assert_eq!(opt_get!(opts, read_only), 1);
+        assert!(ms_flags & libc::MS_RDONLY != 0);
         assert!(mount_options.contains(&MountOption::RO));
         assert!(mount_options.contains(&MountOption::FSName("/dev/test".to_string())));
         assert!(mount_options.contains(&MountOption::CUSTOM("subtype=bcachefs".to_string())));
@@ -1353,7 +1468,7 @@ mod tests {
 
     #[test]
     fn parse_fuse_mount_options_preserves_supported_fuse_flags() {
-        let (_opts, mount_options) = parse_fuse_mount_options(
+        let (_opts, mount_options, _ms_flags) = parse_fuse_mount_options(
             "/dev/test",
             Some("nodev,nosuid,noexec,noatime,dirsync,sync"),
         )

@@ -394,6 +394,9 @@ endif
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuse.bcachefs
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuse.bcachefs
 	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.fuse.bcachefs
+	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuseblk.bcachefs
+	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuseblk.bcachefs
+	$(LN) -sfr $(DESTDIR)$(ROOT_SBINDIR)/bcachefs $(DESTDIR)$(ROOT_SBINDIR)/mount.fuseblk.bcachefs
 
 .PHONY: uninstall
 uninstall:
@@ -404,6 +407,9 @@ uninstall:
 	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuse.bcachefs
 	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuse.bcachefs
 	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mount.fuse.bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mkfs.fuseblk.bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/fsck.fuseblk.bcachefs
+	$(RM) $(DESTDIR)$(ROOT_SBINDIR)/mount.fuseblk.bcachefs
 	$(RM) $(DESTDIR)$(PREFIX)/share/man/man8/bcachefs.8
 	$(RM) $(DESTDIR)$(BASH_COMPLETION_DIR)/bcachefs
 	$(RM) -r $(DESTDIR)$(DKMSDIR)
