@@ -188,7 +188,10 @@ static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 {
 	struct journal_device *ja = &ca->journal;
 	bool started = test_bit(BCH_FS_started, &c->flags);
-	bool allocator_removed = false;
+	bool allocator_updated = false;
+	bool allocator_rw = test_bit(ca->dev_idx,
+				    c->allocator.rw_devs[BCH_DATA_free].d);
+	u8 old_data_allowed = ca->mi.data_allowed;
 	bool committed = false;
 	int ret = 0;
 	u64 *old_buckets = NULL, *old_bucket_seq = NULL;
@@ -218,13 +221,12 @@ static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 	if (ret)
 		return ret;
 
-	/*
-	 * Keep the normal journal transaction path, but make sure it can
-	 * reserve journal space only on the remaining members. The device
-	 * stays online and is added back below after its journal is gone.
-	 */
-	bch2_dev_allocator_remove(c, ca);
-	allocator_removed = true;
+	ca->mi.data_allowed &= ~BIT(BCH_DATA_journal);
+	bch2_dev_allocator_set_rw(c, ca, allocator_rw);
+	allocator_updated = true;
+	scoped_guard(spinlock, &c->journal.lock)
+		bch2_journal_space_available(&c->journal);
+	closure_wake_up(&c->journal.async_wait);
 	bch2_dev_journal_stop(&c->journal, ca);
 
 	old_nr = ja->nr;
@@ -242,7 +244,6 @@ static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 
 			struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb,
 								ca->dev_idx);
-			u8 old_data_allowed = ca->mi.data_allowed;
 			u8 data_allowed = old_data_allowed & ~BIT(BCH_DATA_journal);
 			SET_BCH_MEMBER_DATA_ALLOWED(m, data_allowed);
 
@@ -282,8 +283,12 @@ static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 						BTREE_TRIGGER_transactional);
 		}
 
-	if (allocator_removed) {
-		bch2_dev_allocator_add(c, ca);
+	if (allocator_updated) {
+		if (!committed)
+			ca->mi.data_allowed = old_data_allowed;
+		bch2_dev_allocator_set_rw(c, ca, allocator_rw);
+		scoped_guard(spinlock, &c->journal.lock)
+			bch2_journal_space_available(&c->journal);
 		bch2_recalc_capacity(c);
 	}
 
