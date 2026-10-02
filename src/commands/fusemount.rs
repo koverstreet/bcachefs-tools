@@ -1215,6 +1215,37 @@ fn parse_fuse_mount_options(
     Ok((bch_opts, mount_options, parsed.flags))
 }
 
+/// Run @f with stderr going to a scratch file, shown only if @f fails.
+///
+/// A mount helper prints nothing on success - xfstests counts any output as a
+/// failure. But opening the filesystem in-process logs to stderr ("starting
+/// version", options, devices), where the kernel would log to dmesg, and if
+/// the open fails that log is what says why.
+fn stderr_unless_error<T, E>(f: impl FnOnce() -> Result<T, E>) -> Result<T, E> {
+    use rustix::fs::{memfd_create, MemfdFlags};
+    use rustix::stdio::dup2_stderr;
+    use std::io::Seek;
+    use std::os::fd::AsFd;
+
+    // Can't capture: printing the log is better than losing the mount
+    let Ok((log, saved)) = memfd_create(c"fusemount-log", MemfdFlags::CLOEXEC)
+        .and_then(|log| Ok((log, rustix::io::dup(std::io::stderr().as_fd())?)))
+    else {
+        return f();
+    };
+
+    let _ = dup2_stderr(&log);
+    let ret = f();
+    let _ = dup2_stderr(&saved);
+
+    if ret.is_err() {
+        let mut log = File::from(log);
+        let _ = log.seek(std::io::SeekFrom::Start(0))
+            .and_then(|_| std::io::copy(&mut log, &mut std::io::stderr()));
+    }
+    ret
+}
+
 /// How the FUSE mount is made: see "Unmount" in the notes at the top.
 enum FuseMount {
     /// Plain fuse via fuser::mount2(), for image files.
@@ -1301,7 +1332,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     let (mut bch_opts, mount_options, ms_flags) =
         parse_fuse_mount_options(&cli.device, cli.options.as_deref())?;
 
-    let sbs = scan_sbs(&cli.device, &bch_opts)?;
+    let sbs = stderr_unless_error(|| scan_sbs(&cli.device, &bch_opts))?;
     let devs: Vec<PathBuf> = sbs.iter().map(|(p, _)| p.clone()).collect();
 
     let mount = match devs.first() {
@@ -1314,7 +1345,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         opt_set!(bch_opts, noexcl, 1);
     }
 
-    let fs = Fs::open(&devs, bch_opts)
+    let fs = stderr_unless_error(|| Fs::open(&devs, bch_opts))
         .map_err(|e| anyhow::anyhow!("Error opening filesystem: {}", e))?;
     let fs_raw = fs.raw;
     // BcachefsFs::destroy takes ownership — prevent Fs double-free
