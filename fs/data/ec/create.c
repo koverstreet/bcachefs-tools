@@ -2562,12 +2562,13 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	}));
 
 	if (ret) {
-		CLASS(bch_log_msg, msg)(c);
+		CLASS(bch_log_msg_ratelimited, msg)(c);
+		prt_printf(&msg.m, "stripe repair: error allocating buckets for the new stripe: %s",
+			   bch2_err_str(ret));
 		prt_str(&msg.m, "\nold: ");
-		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->old_stripe.key.k_i));;
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->old_stripe.key.k_i));
 		prt_str(&msg.m, "\nnew: ");
-		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->new_stripe.key.k_i));;
-		prt_printf(&msg.m, "\nret %s", bch2_err_str(ret));
+		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->new_stripe.key.k_i));
 
 		bch2_stripe_handle_put(c, &new_s->new_stripe_handle);
 		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
