@@ -434,6 +434,17 @@ fn fuse_truncate(fs: &Fs, inum: c::subvol_inum, new_size: u64) -> Result<(), Bch
     fs.truncate(inum, new_size)
 }
 
+/// What bch2_fsync() does once the page cache is written back, which here it
+/// already is - writes complete before we reply to them. The kernel flushes
+/// the journal only as far as the inode's last update; we don't track that,
+/// so we flush all of it: more than the minimum, never less.
+fn fuse_fsync(fs: &Fs) -> Result<(), BchError> {
+    if unsafe { (*fs.raw).opts.journal_flush_disabled } != 0 {
+        return Ok(());
+    }
+    fs.journal_flush()
+}
+
 fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     btree::iter::trans_commit_do(
         fs,
@@ -1061,6 +1072,30 @@ impl Filesystem for BcachefsFs {
         }
 
         reply.written(size as u32);
+    }
+
+    // Unimplemented, these answer ENOSYS - which the kernel takes to mean the
+    // filesystem needs no fsync: it stops asking, and every fsync after that
+    // returns success with nothing made durable (xfstests generic/034, files
+    // missing after a simulated power failure).
+    fn fsync(&self, _req: &Request, ino: INodeNo, _fh: FileHandle, _datasync: bool,
+             reply: ReplyEmpty) {
+        ensure_thread_init();
+        eprintln!("fuse_fsync(ino={})", map_root_ino(ino).inum);
+        match fuse_fsync(&self.fs()) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(bch_err(&e)),
+        }
+    }
+
+    fn fsyncdir(&self, _req: &Request, ino: INodeNo, _fh: FileHandle, _datasync: bool,
+                reply: ReplyEmpty) {
+        ensure_thread_init();
+        eprintln!("fuse_fsyncdir(ino={})", map_root_ino(ino).inum);
+        match fuse_fsync(&self.fs()) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(bch_err(&e)),
+        }
     }
 
     fn readdir(

@@ -273,6 +273,12 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_trans_mark_dev_sb(self.raw, ca.as_mut_ptr(), c::btree_iter_update_trigger_flags(flags.bits())) })
     }
 
+    /// Flush the journal: everything committed before the call is on disk when
+    /// it returns.
+    pub fn journal_flush(&self) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_journal_flush(&mut (*self.raw).journal) })
+    }
+
     /// Set @inum's i_size to @new_i_size and drop every extent past it, as a
     /// logged op, so a crash midway resumes rather than leaving extents past
     /// EOF. Block granular: zeroing the rest of the block @new_i_size falls
