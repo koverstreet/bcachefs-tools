@@ -286,12 +286,27 @@ fn fuse_link(
     Ok(inode)
 }
 
+/// Whether @name exists in @dir.
+fn dirent_exists(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<bool, BchError> {
+    let qstr = dirent::qstr(name);
+    let lookup = inode::find_by_inum(fs, dir)
+        .and_then(|dir_u| str_hash::hash_info_init(fs, &dir_u))
+        .and_then(|hash_info| dirent::lookup(fs, dir, &hash_info, &qstr));
+
+    match lookup {
+        Ok(_) => Ok(true),
+        Err(e) if e.matches_errno(libc::ENOENT) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
 fn fuse_rename(
     fs:       &Fs,
     src_dir:  c::subvol_inum,
     src_name: &[u8],
     dst_dir:  c::subvol_inum,
     dst_name: &[u8],
+    mode:     c::bch_rename_mode,
 ) -> Result<(), BchError> {
     let src_qstr = dirent::qstr(src_name);
     let dst_qstr = dirent::qstr(dst_name);
@@ -318,7 +333,7 @@ fn fuse_rename(
                 &mut dst_inode_u,
                 &src_qstr,
                 &dst_qstr,
-                c::bch_rename_mode::BCH_RENAME,
+                mode,
                 &mut src_opt_change,
                 &mut dst_opt_change,
             )
@@ -819,7 +834,7 @@ impl Filesystem for BcachefsFs {
         name: &OsStr,
         newparent: INodeNo,
         newname: &OsStr,
-        _flags: RenameFlags,
+        flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
         ensure_thread_init();
@@ -827,11 +842,43 @@ impl Filesystem for BcachefsFs {
         let dst_dir = map_root_ino(newparent);
         let src_bytes = name.as_bytes();
         let dst_bytes = newname.as_bytes();
-        eprintln!("fuse_rename(src_dir={}, {:?} -> dst_dir={}, {:?})",
-               src_dir.inum, name, dst_dir.inum, newname);
+        eprintln!("fuse_rename(src_dir={}, {:?} -> dst_dir={}, {:?}, flags={})",
+               src_dir.inum, name, dst_dir.inum, newname, flags);
+
+        if flags.contains(RenameFlags::RENAME_WHITEOUT) {
+            reply.error(Errno::EINVAL);
+            return;
+        }
 
         let fs = self.fs();
-        match fuse_rename(&fs, src_dir, src_bytes, dst_dir, dst_bytes) {
+
+        // The mode, chosen as bch2_rename2() chooses it. BCH_RENAME means
+        // "there is no target" and isn't checked: renaming onto an existing
+        // name with it inserts a second dirent of that name. The kernel holds
+        // both directories locked for the whole request, so the target can't
+        // appear or vanish between this lookup and the rename.
+        let dst_exists = match dirent_exists(&fs, dst_dir, dst_bytes) {
+            Ok(v)  => v,
+            Err(e) => { reply.error(bch_err(&e)); return; }
+        };
+
+        let mode = if flags.contains(RenameFlags::RENAME_EXCHANGE) {
+            if !dst_exists {
+                reply.error(Errno::ENOENT);
+                return;
+            }
+            c::bch_rename_mode::BCH_RENAME_EXCHANGE
+        } else if dst_exists {
+            if flags.contains(RenameFlags::RENAME_NOREPLACE) {
+                reply.error(Errno::EEXIST);
+                return;
+            }
+            c::bch_rename_mode::BCH_RENAME_OVERWRITE
+        } else {
+            c::bch_rename_mode::BCH_RENAME
+        };
+
+        match fuse_rename(&fs, src_dir, src_bytes, dst_dir, dst_bytes, mode) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(bch_err(&e)),
         }
