@@ -639,6 +639,24 @@ static union bch_extent_entry *bkey_crc_find(const struct bch_fs *c, struct bkey
 	return NULL;
 }
 
+/* The smallest checksum entry type that can hold @crc: */
+static enum bch_extent_entry_type bch2_extent_crc_type(struct bch_extent_crc_unpacked crc)
+{
+	if (bch_crc_bytes[crc.csum_type]	<= 4 &&
+	    crc.uncompressed_size		<= CRC32_SIZE_MAX &&
+	    crc.nonce				<= CRC32_NONCE_MAX)
+		return BCH_EXTENT_ENTRY_crc32;
+	if (bch_crc_bytes[crc.csum_type]	<= 10 &&
+	    crc.uncompressed_size		<= CRC64_SIZE_MAX &&
+	    crc.nonce				<= CRC64_NONCE_MAX)
+		return BCH_EXTENT_ENTRY_crc64;
+	if (bch_crc_bytes[crc.csum_type]	<= 16 &&
+	    crc.uncompressed_size		<= CRC128_SIZE_MAX &&
+	    crc.nonce				<= CRC128_NONCE_MAX)
+		return BCH_EXTENT_ENTRY_crc128;
+	BUG();
+}
+
 /*
  * We're writing another replica for this extent, so while we've got the data in
  * memory we'll be computing a new checksum for the currently live data.
@@ -671,7 +689,24 @@ bool bch2_bkey_narrow_crc(const struct bch_fs *c,
 			i->ptr.offset += old.offset;
 	}
 
-	bch2_extent_crc_pack(entry_to_crc(old_e), new, extent_entry_type(old_e));
+	/*
+	 * Narrowing advances the nonce by the old offset (encrypted extents),
+	 * which may no longer fit the old entry's nonce field: replace it with
+	 * a larger entry in the same position. The caller leaves room for a
+	 * crc128.
+	 */
+	enum bch_extent_entry_type old_type = extent_entry_type(old_e);
+	enum bch_extent_entry_type new_type = max(old_type, bch2_extent_crc_type(new));
+
+	if (new_type == old_type) {
+		bch2_extent_crc_pack(entry_to_crc(old_e), new, old_type);
+	} else {
+		union bch_extent_crc new_e;
+
+		bch2_extent_crc_pack(&new_e, new, new_type);
+		extent_entry_drop(c, bkey_i_to_s(k), old_e);
+		__extent_entry_insert(c, k, old_e, to_entry(&new_e));
+	}
 	return true;
 }
 
@@ -721,24 +756,8 @@ void bch2_extent_crc_append(const struct bch_fs *c,
 {
 	struct bkey_ptrs ptrs = bch2_bkey_ptrs(bkey_i_to_s(k));
 	union bch_extent_crc *crc = (void *) ptrs.end;
-	enum bch_extent_entry_type type;
 
-	if (bch_crc_bytes[new.csum_type]	<= 4 &&
-	    new.uncompressed_size		<= CRC32_SIZE_MAX &&
-	    new.nonce				<= CRC32_NONCE_MAX)
-		type = BCH_EXTENT_ENTRY_crc32;
-	else if (bch_crc_bytes[new.csum_type]	<= 10 &&
-		   new.uncompressed_size	<= CRC64_SIZE_MAX &&
-		   new.nonce			<= CRC64_NONCE_MAX)
-		type = BCH_EXTENT_ENTRY_crc64;
-	else if (bch_crc_bytes[new.csum_type]	<= 16 &&
-		   new.uncompressed_size	<= CRC128_SIZE_MAX &&
-		   new.nonce			<= CRC128_NONCE_MAX)
-		type = BCH_EXTENT_ENTRY_crc128;
-	else
-		BUG();
-
-	bch2_extent_crc_pack(crc, new, type);
+	bch2_extent_crc_pack(crc, new, bch2_extent_crc_type(new));
 
 	k->k.u64s += extent_entry_u64s(c, ptrs.end);
 
