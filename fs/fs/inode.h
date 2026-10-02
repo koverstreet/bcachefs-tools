@@ -292,6 +292,8 @@ int bch2_inode_nlink_inc(struct bch_inode_unpacked *);
 void bch2_inode_nlink_dec(struct btree_trans *, struct bch_inode_unpacked *);
 int bch2_inode_set_casefold(struct btree_trans *, subvol_inum,
 			    struct bch_inode_unpacked *, unsigned);
+int bch2_inode_set_tmpdir(struct btree_trans *, subvol_inum,
+			    struct bch_inode_unpacked *, unsigned);
 
 
 #include "data/reconcile/trigger.h"
@@ -313,6 +315,7 @@ static inline bool subvol_inum_eq(subvol_inum a, subvol_inum b)
 }
 
 int bch2_inode_rm_snapshot(struct btree_trans *, u64, u32);
+int bch2_unlink_tmpdirs(struct bch_fs *c);
 int bch2_delete_dead_inodes(struct bch_fs *);
 int bch2_kill_i_generation_keys(struct bch_fs *);
 

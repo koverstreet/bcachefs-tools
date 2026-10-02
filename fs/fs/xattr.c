@@ -476,6 +476,9 @@ static int inode_opt_set_fn(struct btree_trans *trans,
 	if (s->id == Inode_opt_casefold)
 		try(bch2_inode_set_casefold(trans, inode_inum(inode), bi, s->v));
 
+	if (s->id == Inode_opt_tmpdir)
+		try(bch2_inode_set_tmpdir(trans, inode_inum(inode), bi, s->v));
+
 	if (s->id == Inode_opt_inodes_32bit &&
 	    !bch2_request_incompat_feature(trans->c, bcachefs_metadata_version_31bit_dirent_offset)) {
 		/*
