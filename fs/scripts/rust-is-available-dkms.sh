@@ -6,8 +6,9 @@
 # the normal Rust-for-Linux availability rules; this script adds only the extra
 # checks needed by bcachefs' out-of-tree Rust glue.
 #
-# When a check fails we fall back to the C-only module — but log exactly which
-# prerequisite is missing (to stderr, so it lands in the DKMS build log). The
+# When a check fails the Makefile falls back to bcachefs's vendored Rust stack
+# (or, failing that, the C-only module) — but log exactly which prerequisite is
+# missing (to stderr, so it lands in the DKMS build log). The
 # point is that a kernel which is *almost* Rust-capable (config + scripts present
 # but, say, the prebuilt stdlib not installed) otherwise builds C fine yet dies
 # deep in rustc with a cryptic "E0463: can't find crate for `core`" — instead of
@@ -22,7 +23,7 @@ canonical_version()
 	echo $((100000 * $1 + 100 * $2 + $3))
 }
 
-# Fall back to the C-only module, reporting exactly what's missing. The reason
+# The kernel's Rust can't be used: report exactly what's missing. The reason
 # IS the verdict: stdout is "y", or else the reason we couldn't. The Makefile
 # bakes that into the module, so the mount-time "built without Rust support"
 # message can say why - months later, on a machine whose build log is long gone.
@@ -37,7 +38,7 @@ skip()
 {
 	reason=$(printf '%s' "$1" | tr -d '"\\$`')
 	if [ -n "$reason" ]; then
-		echo "bcachefs: building without Rust — $reason" >&2
+		echo "bcachefs: can't use the kernel's Rust, trying the vendored stack — $reason" >&2
 	fi
 	printf '%s\n' "${reason:-reason not recorded}"
 	exit 0

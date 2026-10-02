@@ -242,87 +242,69 @@ $(warning bcachefs: $(src)/module-version.c missing - module will carry no MODUL
 endif
 endif
 
-# Rust support — optional, gated on CONFIG_RUST. The C side owns the module
-# entry points; mod.o is a member object compiled by the kernel's Rust rules
-# and linked into bcachefs.ko. CONFIG_RUST=y -> bcachefs-y, unset -> dropped.
+# Rust support. The C side owns the module entry points; mod.o is a member
+# object compiled by the kernel's Rust rules and linked into bcachefs.ko.
 #
 # mod.rs include!s generated bindings (bcachefs.rs + *_gen.rs) plus the
 # static-inline C wrappers (extern.c). The userspace tools build produces these
 # via cargo/build.rs; the in-kernel/DKMS build has no cargo, so we run the same
 # codegen logic (codegen.rs, shared via include!) as a standalone host tool.
 #
-# DKMS builds should not fail just because the host Rust toolchain does not
-# match the kernel's Rust setup. Auto-probe the pieces we need and silently fall
-# back to the C-only module when they are not usable. BCACHEFS_RUST=1 forces the
-# Rust build (useful for debugging); BCACHEFS_RUST=0 disables it explicitly.
-ifdef CONFIG_RUST
-# The Rust build shells out to bindgen even outside DKMS; if bindgen isn't
-# installed, fall back to the C-only module rather than failing the build
-# (reported by feedc0de). DKMS refines this further via the auto-probe below.
-bcachefs-rust-y := $(if $(shell command -v $(BINDGEN) 2>/dev/null),y,n)
-bcachefs-rust-why := bindgen ($(BINDGEN)) not found
-ifdef BCACHEFS_DKMS
+# Two ways to get Rust: the kernel's own (CONFIG_RUST=y and, for DKMS, a
+# toolchain the probe says matches it), or our vendored copy of the kernel's
+# Rust stack (fs/vendor/kernel-rust, Makefile.rust.vendor), which needs only
+# rustc + rust-src + bindgen, whatever rustc built the kernel, if any. Prefer
+# the kernel's, fall back to vendored, and failing both build the C-only module
+# and say why.
+#
+# BCACHEFS_RUST=0 disables Rust; BCACHEFS_RUST=1 forces it without probing (the
+# kernel's if CONFIG_RUST=y, else vendored). BCACHEFS_RUST_VENDOR=1 takes the
+# vendored stack even when the kernel's is usable, to test that path.
 BCACHEFS_RUST ?= auto
-ifeq ($(BCACHEFS_RUST),1)
-bcachefs-rust-y := y
-else ifeq ($(BCACHEFS_RUST),0)
-bcachefs-rust-y := n
-bcachefs-rust-why := explicitly disabled at build time with BCACHEFS_RUST=0
-else
+
+# Why the kernel's own Rust can't be used; empty if it can:
+bcachefs-kernel-rust-why :=
+ifndef CONFIG_RUST
+bcachefs-kernel-rust-why := kernel $(KERNELVERSION) was built without CONFIG_RUST
+else ifeq ($(BCACHEFS_RUST_VENDOR),1)
+bcachefs-kernel-rust-why := vendored Rust forced with BCACHEFS_RUST_VENDOR=1
+else ifneq ($(BCACHEFS_RUST),1)
+ifdef BCACHEFS_DKMS
 # The probe answers with "y" or with the reason it said no - see
-# scripts/rust-is-available-dkms.sh. Keeping the reason (rather than a bare n)
-# is what lets the module tell the user at mount time what was missing.
-bcachefs-rust-probe := $(shell RUSTC='$(RUSTC)' HOSTRUSTC='$(HOSTRUSTC)'	\
+# scripts/rust-is-available-dkms.sh.
+bcachefs-kernel-rust-probe := $(shell RUSTC='$(RUSTC)' HOSTRUSTC='$(HOSTRUSTC)'	\
 	BINDGEN='$(BINDGEN)' CC='$(CC)' KERNEL_SRC='$(srctree)'		\
 	KERNEL_OBJ='$(objtree)' CONFIG_RUSTC_VERSION='$(CONFIG_RUSTC_VERSION)' \
 	$(CONFIG_SHELL) $(src)/scripts/rust-is-available-dkms.sh)
-bcachefs-rust-y := $(if $(filter y,$(bcachefs-rust-probe)),y,n)
-bcachefs-rust-why := $(if $(filter y,$(bcachefs-rust-probe)),,$(bcachefs-rust-probe))
-endif
-endif
-# Kernel ships Rust; use it, don't vendor.
-bcachefs-vendor-rust :=
+bcachefs-kernel-rust-why := $(if $(filter y,$(bcachefs-kernel-rust-probe)),,$(bcachefs-kernel-rust-probe))
 else
-# CONFIG_RUST=n: no kernel Rust to link against.
-#
-# Vendoring our own copy of the kernel's rust/ is a bridge for kernels older
-# than the distros turning CONFIG_RUST on, which happened at 7.0. Gate it on
-# that, so fs/vendor/kernel-rust can simply be deleted once < 7.0 is out of
-# support — carrying a fork of the kernel's Rust tree indefinitely is exactly
-# what this is meant to avoid.
-#
-# On 7.0+ with CONFIG_RUST=n there is no fallback and shouldn't be: the kernel
-# can supply this and wasn't asked to. Say so, rather than silently building a
-# C-only module.
-#
-# If VERSION is somehow unset, fall through to not vendoring: losing optional
-# Rust on an old kernel is a degradation, vendoring where we shouldn't is the
-# thing we're trying to stop doing.
-bcachefs-can-vendor-rust := $(shell [ '$(VERSION)' -lt 7 ] 2>/dev/null && echo y)
+# In-tree, the kernel's Rust matches by construction; we still shell out to
+# bindgen (reported by feedc0de).
+bcachefs-kernel-rust-why := $(if $(shell command -v $(BINDGEN) 2>/dev/null),,bindgen ($(BINDGEN)) not found)
+endif
+endif
 
-ifneq ($(bcachefs-can-vendor-rust),y)
-bcachefs-rust-y := n
-bcachefs-rust-why := kernel $(KERNELVERSION) was built without CONFIG_RUST; enable it, or ask your distribution to
-bcachefs-vendor-rust :=
-else
-# Pre-7.0: build bcachefs's own vendored stack (Makefile.rust.vendor), if we
-# can. BCACHEFS_RUST=1 forces; auto needs rustc + its rust-src + bindgen, plus
-# the kernel's rustc_cfg (generated unconditionally by syncconfig) and its
-# target-spec generator source. scripts/target.json itself is
-# always-$(CONFIG_RUST), so a Rust-off tree doesn't have one — we generate our
-# own below rather than requiring it.
-BCACHEFS_RUST ?= auto
-ifeq ($(BCACHEFS_RUST),1)
-bcachefs-rust-y := y
-else ifeq ($(BCACHEFS_RUST),0)
+ifeq ($(BCACHEFS_RUST),0)
 bcachefs-rust-y := n
 bcachefs-rust-why := explicitly disabled at build time with BCACHEFS_RUST=0
+bcachefs-vendor-rust :=
+else ifeq ($(bcachefs-kernel-rust-why),)
+bcachefs-rust-y := y
+bcachefs-vendor-rust :=
+else ifeq ($(BCACHEFS_RUST),1)
+bcachefs-rust-y := y
+bcachefs-vendor-rust := y
 else
-# Same protocol as the DKMS probe: say "y", or say what was missing. Reporting
-# the first failed prerequisite by name is the whole point - "no Rust support"
-# on its own sends people to their distro asking for CONFIG_RUST, which is not
-# what this path needs.
-bcachefs-rust-probe := $(shell					\
+# The vendored stack needs rustc + its rust-src + bindgen, plus the kernel's
+# rustc_cfg (generated unconditionally by syncconfig) and its target-spec
+# generator source. scripts/target.json is always-$(CONFIG_RUST), so a Rust-off
+# tree doesn't have one - we generate our own below rather than requiring it.
+#
+# Same protocol as the DKMS probe: "y", or the first missing prerequisite by
+# name. The reason reported is both: why not the kernel's, and why not ours -
+# "no Rust support" on its own sends people to their distro asking for
+# CONFIG_RUST, when installing rust-src may be all this needs.
+bcachefs-vendor-rust-probe := $(shell					\
 	command -v $(RUSTC)   >/dev/null 2>&1 ||			\
 		{ echo 'rustc ($(RUSTC)) not found'; exit 0; };		\
 	command -v $(BINDGEN) >/dev/null 2>&1 ||			\
@@ -334,11 +316,9 @@ bcachefs-rust-probe := $(shell					\
 	[ -r "$$($(RUSTC) --print sysroot)/lib/rustlib/src/rust/library/core/src/lib.rs" ] || \
 		{ echo 'rust-src not found'; exit 0; }; \
 	echo y)
-bcachefs-rust-y := $(if $(filter y,$(bcachefs-rust-probe)),y,n)
-bcachefs-rust-why := $(if $(filter y,$(bcachefs-rust-probe)),,$(bcachefs-rust-probe))
-endif
+bcachefs-rust-y := $(if $(filter y,$(bcachefs-vendor-rust-probe)),y,n)
+bcachefs-rust-why := $(bcachefs-kernel-rust-why); vendored Rust: $(bcachefs-vendor-rust-probe)
 bcachefs-vendor-rust := $(bcachefs-rust-y)
-endif # bcachefs-can-vendor-rust
 endif
 
 # The shared leaf crates (cmd_bch_library) link core/compiler_builtins from the

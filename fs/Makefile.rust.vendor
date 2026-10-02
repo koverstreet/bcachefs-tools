@@ -1,7 +1,8 @@
 # SPDX-License-Identifier: GPL-2.0
 #
-# Vendored Rust stack for CONFIG_RUST=n kernels — included from fs/Makefile.rust
-# when bcachefs-vendor-rust=y.
+# Vendored Rust stack, for when the kernel's own can't be used: CONFIG_RUST=n,
+# or a Rust toolchain that doesn't match the one the kernel was built with.
+# Included from fs/Makefile when bcachefs-vendor-rust=y.
 #
 # Builds bcachefs's checked-in copy of the kernel Rust support stack
 # (fs/vendor/kernel-rust/, a patched 7.1 rust/) into $(obj)/vrust, then bundles
