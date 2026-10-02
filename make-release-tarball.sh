@@ -32,20 +32,10 @@ scp bcachefs-tools-$version.tar.zst	evilpiepirate.org:/var/www/htdocs/bcachefs-t
 scp bcachefs-tools-$version.tar.asc	evilpiepirate.org:/var/www/htdocs/bcachefs-tools/
 scp bcachefs-tools-$version.tar.sign	evilpiepirate.org:/var/www/htdocs/bcachefs-tools/
 
-cargo-vendor-filterer
-
+# The source replacement config it prints covers every vendored source -
+# crates.io and any git dependencies - so it's never out of date:
 mkdir .cargo
-cat > .cargo/config.toml <<-ZZ
-[source.crates-io]
-replace-with = "vendored-sources"
-
-[source."git+https://evilpiepirate.org/git/rust-bindgen.git"]
-git = "https://evilpiepirate.org/git/rust-bindgen.git"
-replace-with = "vendored-sources"
-
-[source.vendored-sources]
-directory = "vendor"
-ZZ
+cargo-vendor-filterer > .cargo/config.toml
 
 cp bcachefs-tools-$version.tar bcachefs-tools-vendored-$version.tar
 tar --append --file bcachefs-tools-vendored-$version.tar	\
