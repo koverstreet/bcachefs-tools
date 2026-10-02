@@ -452,7 +452,6 @@
 	x(EROFS,			erofs_recovery_cancelled, 406)		\
 	x(EROFS,			emergency_ro, 407)			\
 	x(ESHUTDOWN,			btree_not_started, 408)			\
-	x(ESHUTDOWN,			ioctl_fs_stopping, 622)			\
 	x(0,				operation_blocked, 409)			\
 	x(BCH_ERR_operation_blocked,	btree_cache_cannibalize_lock_blocked, 410) \
 	x(BCH_ERR_operation_blocked,	journal_res_blocked, 411)		\
@@ -643,14 +642,27 @@
 	x(EROFS,			erofs_sb_write_before_start, 619)	\
 	x(EINVAL,			EINVAL_will_not_start, 620)		\
 	x(EROFS,			erofs_sb_never_started, 621)	\
+	x(ESHUTDOWN,			ioctl_fs_stopping, 622)			\
 	x(ENOMEM,			ENOMEM_reconcile_stripes_pending, 623)
+
+/*
+ * BCH_ERR_MAX is one past the highest errcode number, wherever that entry sits
+ * in BCH_ERRCODES(): a union is the size of its largest member, and a char[nr
+ * + 1] has no padding, so this one is the largest nr, plus one. Never declared
+ * as an object, only measured.
+ */
+union bch_errcode_max {
+#define x(class, err, nr)	char BCH_ERR_##err[nr + 1];
+	BCH_ERRCODES()
+#undef x
+};
 
 enum bch_errcode {
 	BCH_ERR_START		= 2048,
 #define x(class, err, nr) BCH_ERR_##err = BCH_ERR_START + nr,
 	BCH_ERRCODES()
 #undef x
-	BCH_ERR_MAX
+	BCH_ERR_MAX		= BCH_ERR_START + sizeof(union bch_errcode_max),
 };
 
 __attribute__((const)) const char *bch2_err_str(int);

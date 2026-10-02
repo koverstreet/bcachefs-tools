@@ -5,33 +5,21 @@
 
 #include <linux/errname.h>
 
-static const char * const bch2_errcode_strs[] = {
+/*
+ * Sized by BCH_ERR_MAX, not by their initializers: BCH_ERRCODES() needn't be in
+ * numeric order, and an unused number is a NULL entry.
+ */
+static const char * const bch2_errcode_strs[BCH_ERR_MAX - BCH_ERR_START] = {
 #define x(class, err, nr) [BCH_ERR_##err - BCH_ERR_START] = #err,
 	BCH_ERRCODES()
 #undef x
-	NULL
 };
 
-static const unsigned bch2_errcode_parents[] = {
+static const unsigned bch2_errcode_parents[BCH_ERR_MAX - BCH_ERR_START] = {
 #define x(class, err, nr) [BCH_ERR_##err - BCH_ERR_START] = class,
 	BCH_ERRCODES()
 #undef x
 };
-
-/*
- * The identifiers in BCH_ERRCODES() are explicit and fixed, so nothing keeps
- * the table dense or in order any more - but two things here still assume it.
- * The arrays above are sized by their largest designated index, while
- * BCH_ERR_MAX is whatever the textually last entry is plus one, and
- * bch2_err_str() bounds-checks against BCH_ERR_MAX before indexing. Add an
- * errcode numbered above the last one in the table and those diverge, and the
- * lookup reads off the end.
- *
- * The +1 is the trailing NULL, which lands one past the largest index.
- */
-static_assert(ARRAY_SIZE(bch2_errcode_strs) == (BCH_ERR_MAX - BCH_ERR_START) + 1,
-	      "an errcode is numbered above the last entry in BCH_ERRCODES() - "
-	      "give BCH_ERR_MAX an explicit value, or renumber");
 
 /*
  * Two errcodes with the same number would silently alias: the later entry
