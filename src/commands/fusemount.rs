@@ -35,8 +35,7 @@
 
 use std::cell::Cell;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::ffi::OsStr;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
@@ -199,11 +198,6 @@ fn bch_err(e: &BchError) -> Errno {
     Errno::from_i32(e.errno())
 }
 
-fn start_fs(raw: *mut c::bch_fs) -> Result<(), BchError> {
-    let fs = unsafe { Fs::borrow_raw(raw) };
-    fs.start()
-}
-
 fn fuse_create_inode(
     fs:    &Fs,
     dir:   c::subvol_inum,
@@ -314,9 +308,8 @@ fn fuse_rename(
     let mut dst_dir_u: c::bch_inode_unpacked = Default::default();
     let mut src_inode_u: c::bch_inode_unpacked = Default::default();
     let mut dst_inode_u: c::bch_inode_unpacked = Default::default();
-    // Safety: plain C structs; bch2_rename_trans() initializes them
-    let mut src_opt_change: c::inode_opt_change = unsafe { std::mem::zeroed() };
-    let mut dst_opt_change: c::inode_opt_change = unsafe { std::mem::zeroed() };
+    let mut src_opt_change: c::inode_opt_change = Default::default();
+    let mut dst_opt_change: c::inode_opt_change = Default::default();
 
     btree::iter::trans_commit_do(
         fs,
@@ -434,20 +427,13 @@ fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), Bc
 }
 
 struct BcachefsFs {
-    c: *mut c::bch_fs,
+    /// Shut down (Fs's Drop: bch2_fs_exit()) exactly once on every path:
+    /// destroy() takes it, and if the mount fails before fuser hands us to a
+    /// FilesystemHolder - whose Drop calls destroy() - it goes down with us.
+    fs: Option<Fs>,
     /// Write end of a pipe used to signal the parent process that the
     /// FUSE mount is established. Written in init(), None in foreground mode.
     signal_fd: Option<OwnedFd>,
-    /// Set by destroy() once bch2_fs_exit() has run.
-    ///
-    /// fuser::mount2() is Session::new().and_then(|se| se.run()), and the two
-    /// halves differ: Session::new() mounts before wrapping us in a
-    /// FilesystemHolder, whose Drop calls destroy(). So a mount failure never
-    /// shuts the filesystem down and the caller must, while a failure after
-    /// the session is established already has. mount2 returns one io::Result
-    /// for both, so the caller cannot tell them apart -- it asks this instead
-    /// of guessing, which also keeps it correct if fuser's internals change.
-    destroyed: Arc<AtomicBool>,
     /// Kernel references (FUSE lookup counts) per inum: see "Inode lifetime".
     lookups: Mutex<HashMap<u64, u64>>,
 }
@@ -457,8 +443,8 @@ unsafe impl Send for BcachefsFs {}
 unsafe impl Sync for BcachefsFs {}
 
 impl BcachefsFs {
-    fn fs(&self) -> std::mem::ManuallyDrop<Fs> {
-        unsafe { Fs::borrow_raw(self.c) }
+    fn fs(&self) -> &Fs {
+        self.fs.as_ref().expect("fuse request after destroy()")
     }
 
     /// The kernel now holds a reference: every reply that hands it an entry.
@@ -565,8 +551,7 @@ impl Filesystem for BcachefsFs {
             self.inode_evict(inum);
         }
 
-        unsafe { c::bch2_fs_exit(self.c) };
-        self.destroyed.store(true, Ordering::SeqCst);
+        self.fs = None;
     }
 
     fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
@@ -667,7 +652,6 @@ impl Filesystem for BcachefsFs {
                 let ts = c::timespec {
                     tv_sec: d.as_secs() as _,
                     tv_nsec: d.subsec_nanos() as _,
-                    ..unsafe { std::mem::zeroed() }
                 };
                 (1, fs.timespec_to_time(ts) as u64)
             }
@@ -1091,7 +1075,7 @@ impl Filesystem for BcachefsFs {
 
         let ret = unsafe {
             c::rust_fuse_readdir(
-                self.c, dir, pos,
+                self.fs().raw, dir, pos,
                 &mut reply as *mut ReplyDirectory as *mut _,
                 Some(filldir),
             )
@@ -1111,7 +1095,7 @@ impl Filesystem for BcachefsFs {
         let fs = self.fs();
         let usage = fs.usage_read_short();
         let block_size = fs.block_bytes();
-        let shift = unsafe { (*self.c).block_bits } as u64;
+        let shift = block_size.trailing_zeros() as u64;
 
         let nr_inodes = accounting::nr_inodes(&fs);
 
@@ -1286,8 +1270,8 @@ fn mount_fuseblk(
     Ok(dev_fuse.into())
 }
 
-/// Mount and serve until unmounted. On error, destroy() has run iff the
-/// session got as far as taking @bcachefs_fs - the caller checks `destroyed`.
+/// Mount and serve until unmounted. Either way @bcachefs_fs - and with it the
+/// filesystem - is gone by the time this returns.
 fn fuse_run(
     bcachefs_fs: BcachefsFs,
     mountpoint:  &str,
@@ -1347,19 +1331,10 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     let fs = stderr_unless_error(|| Fs::open(&devs, bch_opts))
         .map_err(|e| anyhow::anyhow!("Error opening filesystem: {}", e))?;
-    let fs_raw = fs.raw;
-    // BcachefsFs::destroy takes ownership — prevent Fs double-free
-    std::mem::forget(fs);
 
     // Held until we exit: across the fork, the child's copies keep the claims.
     let _claims = match &mount {
-        FuseMount::Fuseblk { .. } => match claim_devices(&devs[1..]) {
-            Ok(claims) => claims,
-            Err(e) => {
-                unsafe { c::bch2_fs_exit(fs_raw) };
-                return Err(e);
-            }
-        },
+        FuseMount::Fuseblk { .. } => claim_devices(&devs[1..])?,
         FuseMount::Fuse => Vec::new(),
     };
 
@@ -1370,21 +1345,13 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     if cli.foreground {
         unsafe { c::linux_shrinkers_init() };
-        if let Err(e) = start_fs(fs_raw) {
-            unsafe { c::bch2_fs_exit(fs_raw) };
-            anyhow::bail!("Error starting filesystem: {}", e);
-        }
-        let destroyed = Arc::new(AtomicBool::new(false));
+        fs.start().map_err(|e| anyhow::anyhow!("Error starting filesystem: {}", e))?;
         let bcachefs_fs = BcachefsFs {
-            c: fs_raw,
+            fs: Some(fs),
             signal_fd: None,
-            destroyed: Arc::clone(&destroyed),
             lookups: Mutex::new(HashMap::new()),
         };
         if let Err(e) = fuse_run(bcachefs_fs, &cli.mountpoint, &config, &mount) {
-            if !destroyed.load(Ordering::SeqCst) {
-                unsafe { c::bch2_fs_exit(fs_raw) };
-            }
             anyhow::bail!("Error mounting filesystem: {}", e);
         }
         return Ok(());
@@ -1407,6 +1374,10 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     }
 
     if pid > 0 {
+        // The child owns the filesystem now: the parent's copy must never
+        // shut it down, not even on the error paths below.
+        std::mem::forget(fs);
+
         // Parent: wait for child to signal mount readiness
         drop(write_fd);
         let mut pipe = File::from(read_fd);
@@ -1472,32 +1443,28 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     unsafe { c::linux_shrinkers_init() };
 
     eprintln!("fusemount: starting filesystem");
-    if let Err(e) = start_fs(fs_raw) {
+    // process::exit() skips destructors: drop fs explicitly before it.
+    if let Err(e) = fs.start() {
         eprintln!("fusemount: bch2_fs_start failed: {}", e);
-        unsafe { c::bch2_fs_exit(fs_raw) };
+        drop(fs);
         signal_parent_err(write_fd, CHILD_ERR_FS_START, &format!("{e:#}"));
         std::process::exit(1);
     }
     eprintln!("fusemount: filesystem started, mounting");
 
-    let destroyed = Arc::new(AtomicBool::new(false));
-    // Not `?`: the filesystem is started by now, and returning here without
-    // shutting it down leaves the same dirty superblock this commit exists to
-    // prevent -- just reached through fd exhaustion rather than a failed mount.
     let signal_fd = match write_fd.try_clone() {
         Ok(fd) => fd,
         Err(e) => {
             eprintln!("fusemount: couldn't duplicate the signal fd: {e}");
-            unsafe { c::bch2_fs_exit(fs_raw) };
+            drop(fs);
             signal_parent_err(write_fd, CHILD_ERR_SETUP,
                               &format!("couldn't duplicate the signal fd: {e}"));
             std::process::exit(1);
         }
     };
     let bcachefs_fs = BcachefsFs {
-        c: fs_raw,
+        fs: Some(fs),
         signal_fd: Some(signal_fd),
-        destroyed: Arc::clone(&destroyed),
         lookups: Mutex::new(HashMap::new()),
     };
 
@@ -1507,15 +1474,8 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         }
         Err(e) => {
             eprintln!("fusemount: mount failed: {}", e);
-            // If the mount itself failed we were never handed to a
-            // FilesystemHolder, so destroy() has not run and nothing has shut
-            // the filesystem down -- leaving the superblock dirty after
-            // recovery and any version upgrade have already been committed.
-            // If the session did start, destroy() has run and calling
-            // bch2_fs_exit() again would be a double free.
-            if !destroyed.load(Ordering::SeqCst) {
-                unsafe { c::bch2_fs_exit(fs_raw) };
-            }
+            // The filesystem is already shut down: by destroy() if the
+            // session started, else dropped with bcachefs_fs.
             signal_parent_err(write_fd, CHILD_ERR_MOUNT, &format!("{e}"));
             std::process::exit(1);
         }
