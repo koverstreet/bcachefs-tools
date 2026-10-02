@@ -43,12 +43,21 @@ let
     }
   );
 
+  src = lib.fileset.toSource {
+    root = ./.;
+    fileset = lib.fileset.fileFilter ({ hasExt, ... }: !hasExt "nix") ./.;
+  };
+
+  # Vendoring a git dependency runs `cargo package --exclude-lockfile`, which
+  # older cargo (the msrv toolchain's) doesn't have. The vendored sources don't
+  # depend on the toolchain, so always vendor with the latest one.
+  craneLibLatest = (crane.mkLib pkgs).overrideToolchain (
+    p: p.pkgsBuildHost.rust-bin.stable.latest.minimal
+  );
+
   args = {
-    inherit version;
-    src = lib.fileset.toSource {
-      root = ./.;
-      fileset = lib.fileset.fileFilter ({ hasExt, ... }: !hasExt "nix") ./.;
-    };
+    inherit version src;
+    cargoVendorDir = craneLibLatest.vendorCargoDeps { inherit src; };
     strictDeps = true;
 
     env = {
