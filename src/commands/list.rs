@@ -338,3 +338,30 @@ fn list(opt: Cli) -> Result<()> {
 }
 
 pub const CMD: super::CmdDef = typed_cmd!("list", "List filesystem metadata", Cli, list);
+
+#[cfg(test)]
+mod tests {
+    use super::{cmd_list_inner, Cli};
+    use clap::Parser;
+
+    #[test]
+    fn replica_min_requires_a_positive_count() {
+        assert!(Cli::try_parse_from(["list", "--replicas-min", "0", "missing-device"]).is_err());
+        let opt = Cli::try_parse_from(["list", "--replicas-min", "2", "missing-device"]).unwrap();
+        assert_eq!(opt.replicas_min, Some(2));
+    }
+
+    #[test]
+    fn replica_min_rejects_unsupported_listing_before_opening_devices() {
+        for (flag, value, expected) in [
+            ("--btree", "inodes", "--replicas-min can only be used with the extents btree"),
+            ("--mode", "nodes", "--replicas-min can only be used with --mode keys"),
+            ("--level", "1", "--replicas-min can only be used at leaf level"),
+        ] {
+            let opt = Cli::try_parse_from([
+                "list", "--replicas-min", "2", flag, value, "missing-device",
+            ]).unwrap();
+            assert_eq!(cmd_list_inner(&opt).unwrap_err().to_string(), expected);
+        }
+    }
+}
