@@ -68,6 +68,9 @@
 
 #include "init/damage.h"
 #include "init/error.h"
+#include "init/fs.h"
+
+#include "journal/journal.h"
 
 /*
  * dev stripe state
@@ -515,6 +518,30 @@ static int stripe_update_bucket(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * logged_op_fail_next=stripe_update stops a reuse after its carried blocks,
+ * when the old stripe is empty and recovery may delete it before the op
+ * resumes. A running filesystem would reuse the half-built new stripe at once,
+ * so stand in for a crash: flush the journal and go read-only, as a log-flush
+ * shutdown does.
+ */
+static int stripe_update_inject_crash(struct btree_trans *trans)
+{
+	struct bch_fs *c = trans->c;
+	int ret = bch2_logged_op_inject_fail(c, KEY_TYPE_logged_op_stripe_update);
+
+	if (ret) {
+		bch2_trans_unlock(trans);
+		bch2_journal_flush(&c->journal);
+
+		CLASS(bch_log_msg, msg)(c);
+		msg.m.suppress = true; /* only print once, when we go ERO */
+		prt_printf(&msg.m, "logged_op_fail_next: stripe update stopped after its carried blocks\n");
+		bch2_fs_emergency_read_only(c, &msg.m);
+	}
+	return ret;
+}
+
 static int __stripe_update_extents(struct btree_trans *trans,
 				   struct bkey_i_stripe *old_stripe,
 				   struct bkey_i_stripe *new_stripe,
@@ -527,6 +554,9 @@ static int __stripe_update_extents(struct btree_trans *trans,
 	try(bch2_btree_write_buffer_flush_sync(trans));
 
 	for_each_data_block(i, nr_data) {
+		if (old_blocks_nr && i == old_blocks_nr)
+			try(stripe_update_inject_crash(trans));
+
 		unsigned old_blocknr = i < old_blocks_nr
 			? old_block_map[i] : i;
 		struct bkey_i_stripe *old = i < old_blocks_nr
@@ -567,6 +597,11 @@ __cold void bch2_logged_op_stripe_update_to_text(struct printbuf *out, struct bc
 	prt_printf(out, "old_idx=%llu", le64_to_cpu(op.v->old_idx));
 	prt_printf(out, " new_idx=%llu", le64_to_cpu(op.v->new_idx));
 	prt_printf(out, " old_blocks_nr=%u", op.v->old_blocks_nr);
+
+	unsigned nr = min_t(unsigned, op.v->old_blocks_nr, ARRAY_SIZE(op.v->old_block_map));
+	prt_printf(out, " old_block_map=");
+	for (unsigned i = 0; i < nr; i++)
+		prt_printf(out, "%s%u", i ? "," : "", op.v->old_block_map[i]);
 }
 
 int bch2_resume_logged_op_stripe_update(struct btree_trans *trans, struct bkey_i *op_k)

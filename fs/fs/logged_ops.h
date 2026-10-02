@@ -17,21 +17,28 @@
 	x(inode_opt_propagate,	false)
 
 /*
- * Every op advances its cursor through here, so it's the one place to
- * interrupt one: the op is then left at a cursor the real code produced.
+ * Fails once if logged_op_fail_next is armed for @type, standing in for a
+ * crash at this point.
  *
  * cmpxchg: arming is by type, so two ops of that type in flight would both
  * fire.
  */
+static inline int bch2_logged_op_inject_fail(struct bch_fs *c, unsigned type)
+{
+	if (unlikely(READ_ONCE(c->logged_op_fail_next) == type) &&
+	    cmpxchg(&c->logged_op_fail_next, type, 0) == type)
+		return bch_err_throw(c, injected_logged_op_fail);
+	return 0;
+}
+
+/*
+ * Every op with a cursor advances it through here, so it's the one place to
+ * interrupt one: the op is then left at a cursor the real code produced.
+ */
 static inline int bch2_logged_op_update(struct btree_trans *trans, struct bkey_i *op)
 {
-	struct bch_fs *c = trans->c;
-
-	if (unlikely(READ_ONCE(c->logged_op_fail_next) == op->k.type) &&
-	    cmpxchg(&c->logged_op_fail_next, op->k.type, 0) == op->k.type)
-		return bch_err_throw(c, injected_logged_op_fail);
-
-	return bch2_btree_insert_trans(trans, BTREE_ID_logged_ops, op, BTREE_ITER_cached);
+	return bch2_logged_op_inject_fail(trans->c, op->k.type) ?:
+		bch2_btree_insert_trans(trans, BTREE_ID_logged_ops, op, BTREE_ITER_cached);
 }
 
 /* Names as written to the sysfs knob, indexed as BCH_LOGGED_OPS() is: */
