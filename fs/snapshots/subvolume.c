@@ -806,77 +806,56 @@ static void bch2_subvolume_wait_for_pagecache_and_delete(struct work_struct *wor
 {
 	struct bch_fs *c = container_of(to_delayed_work(work), struct bch_fs,
 				snapshots.wait_for_pagecache_and_delete_work);
+	snapshot_id_list pending = {};
+	snapshot_id_list busy = {};
 	int ret = 0;
-	bool requeue = false;
 
-	while (!ret) {
-		snapshot_id_list s;
-		snapshot_id_list busy = {};
-
-		scoped_guard(mutex, &c->snapshots.unlinked_lock) {
-			s = c->snapshots.unlinked;
-			darray_init(&c->snapshots.unlinked);
+	scoped_guard(mutex, &c->snapshots.unlinked_lock) {
+		ret = darray_make_room(&pending, c->snapshots.unlinked.nr);
+		if (!ret && c->snapshots.unlinked.nr) {
+			memcpy(pending.data, c->snapshots.unlinked.data,
+			       c->snapshots.unlinked.nr * sizeof(pending.data[0]));
+			pending.nr = c->snapshots.unlinked.nr;
 		}
-
-		if (!s.nr)
-			break;
-
-		ret = bch2_evict_subvolume_inodes(c, &s, &busy);
-		if (ret)
-			goto requeue_all;
-
-		CLASS(btree_trans, trans)(c);
-
-		for (unsigned i = 0; i < s.nr; i++) {
-			u32 id = s.data[i];
-
-			if (snapshot_list_has_id(&busy, id)) {
-				requeue = true;
-				continue;
-			}
-
-			ret = bch2_subvolume_set_deleted(trans, id);
-			bch_err_msg(c, ret, "deleting subvolume %u", id);
-			if (ret) {
-				for (unsigned j = i; j < s.nr; j++)
-					snapshot_list_add_nodup(c, &busy, s.data[j]);
-				goto requeue_all;
-			}
-		}
-
-requeue_all:
-		if (busy.nr) {
-			/*
-			 * busy holds this batch's still-held subvolume ids (evicted
-			 * from s above); c->snapshots.unlinked may have gained fresh
-			 * entries from concurrent unlinks while we ran unlocked. Make
-			 * busy the new unlinked list and fold those fresh entries in,
-			 * skipping any id busy already carries, so a subvolume that's
-			 * both still-busy and newly-unlinked isn't queued twice.
-			 */
-			scoped_guard(mutex, &c->snapshots.unlinked_lock) {
-				snapshot_id_list new = c->snapshots.unlinked;
-
-				c->snapshots.unlinked = busy;
-				darray_init(&busy);
-
-				darray_for_each(new, id)
-					if (!snapshot_list_has_id(&c->snapshots.unlinked, *id))
-						ret = ret ?: snapshot_list_add(c, &c->snapshots.unlinked, *id);
-				darray_exit(&new);
-			}
-			requeue = true;
-		}
-
-		darray_exit(&busy);
-		darray_exit(&s);
 	}
 
+	if (!ret && pending.nr)
+		ret = bch2_evict_subvolume_inodes(c, &pending, &busy);
+
+	if (!ret && pending.nr) {
+		CLASS(btree_trans, trans)(c);
+
+		darray_for_each(pending, id) {
+			if (snapshot_list_has_id(&busy, *id))
+				continue;
+
+			ret = bch2_subvolume_set_deleted(trans, *id);
+			bch_err_msg(c, ret, "deleting subvolume %u", *id);
+			if (ret)
+				break;
+
+			scoped_guard(mutex, &c->snapshots.unlinked_lock) {
+				u32 *queued = darray_find(c->snapshots.unlinked, *id);
+				if (queued)
+					darray_remove_item(&c->snapshots.unlinked, queued);
+			}
+		}
+	}
+
+	darray_exit(&busy);
+	darray_exit(&pending);
+
+	bool requeue;
+	scoped_guard(mutex, &c->snapshots.unlinked_lock)
+		requeue = c->snapshots.unlinked.nr != 0;
+
 	if (requeue &&
-	    queue_delayed_work(c->write_ref_wq,
-			       &c->snapshots.wait_for_pagecache_and_delete_work,
-			       HZ))
-		return;
+	    enumerated_ref_tryget(&c->writes, BCH_WRITE_REF_snapshot_delete_pagecache)) {
+		if (!queue_delayed_work(c->write_ref_wq,
+				       &c->snapshots.wait_for_pagecache_and_delete_work,
+				       HZ))
+			enumerated_ref_put(&c->writes, BCH_WRITE_REF_snapshot_delete_pagecache);
+	}
 
 	enumerated_ref_put(&c->writes, BCH_WRITE_REF_snapshot_delete_pagecache);
 }
