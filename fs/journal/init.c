@@ -189,9 +189,10 @@ static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 	struct journal_device *ja = &ca->journal;
 	bool started = test_bit(BCH_FS_started, &c->flags);
 	bool allocator_removed = false;
+	bool committed = false;
 	int ret = 0;
 	u64 *old_buckets = NULL, *old_bucket_seq = NULL;
-	unsigned old_nr, nr_freed = 0;
+	unsigned old_nr;
 
 	if (nr)
 		return -EINVAL;
@@ -230,28 +231,6 @@ static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 	old_buckets = ja->buckets;
 	old_bucket_seq = ja->bucket_seq;
 
-	/* Account the old buckets as free, one transaction at a time. */
-	for (unsigned i = 0; i < old_nr && !ret; i++) {
-		CLASS(btree_trans, trans)(c);
-		ret = bch2_trans_mark_metadata_bucket(trans, ca,
-						old_buckets[i], BCH_DATA_free, 0,
-						BTREE_TRIGGER_transactional);
-		if (!ret)
-			nr_freed++;
-	}
-
-	/* Restore any buckets already freed if a later transaction failed. */
-	if (ret) {
-		while (nr_freed) {
-			CLASS(btree_trans, trans)(c);
-			int ret2 = bch2_trans_mark_metadata_bucket(trans, ca,
-						old_buckets[--nr_freed], BCH_DATA_journal,
-						ca->mi.bucket_size, BTREE_TRIGGER_transactional);
-			if (ret2)
-				bch_err_fn(c, ret2);
-		}
-	}
-
 	if (!ret) {
 		scoped_guard(journal_block, &c->journal) {
 			scoped_guard(spinlock, &c->journal.lock) {
@@ -283,20 +262,34 @@ static int bch2_shrink_journal_buckets(struct bch_fs *c, struct bch_dev *ca,
 					ja->sectors_free = 0;
 					bch2_journal_space_available(&c->journal);
 				}
+				committed = true;
 			} else {
+				m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
 				SET_BCH_MEMBER_DATA_ALLOWED(m, old_data_allowed);
+				ca->mi.data_allowed = old_data_allowed;
+				int restore_ret = bch2_journal_buckets_to_sb(c, ca,
+								old_buckets, old_nr);
+				bch_err_fn(c, restore_ret);
 			}
 		}
 	}
+
+	if (committed)
+		for (unsigned bucket = 0; bucket < old_nr && !ret; bucket++) {
+			CLASS(btree_trans, trans)(c);
+			ret = bch2_trans_mark_metadata_bucket(trans, ca,
+						old_buckets[bucket], BCH_DATA_free, 0,
+						BTREE_TRIGGER_transactional);
+		}
 
 	if (allocator_removed) {
 		bch2_dev_allocator_add(c, ca);
 		bch2_recalc_capacity(c);
 	}
 
-	if (ret) {
+	bch_err_fn(c, ret);
+	if (!committed) {
 		/* Keep the old journal arrays on any failed superblock update. */
-		bch_err_fn(c, ret);
 		return ret;
 	}
 
