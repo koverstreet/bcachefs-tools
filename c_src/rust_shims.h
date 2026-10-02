@@ -233,4 +233,11 @@ void rust_accounting_mem_read(struct bch_fs *c, struct bpos p,
  */
 int rust_eytzinger_test(void);
 
+/*
+ * Unit test for the cuckoo u64 set (fs/util/cuckoo.h). Runs under `cargo test`
+ * via a Rust #[test] wrapper. Returns the number of failed assertions (0 ==
+ * pass); failure details are printed to stderr.
+ */
+int rust_cuckoo_test(void);
+
 #endif /* _RUST_SHIMS_H */

@@ -197,6 +197,7 @@ bcachefs-y		:=			\
 	snapshots/snapshot.o			\
 	snapshots/subvolume.o			\
 	util/clock.o				\
+	util/cuckoo.o				\
 	util/darray.o				\
 	util/enumerated_ref.o			\
 	util/eytzinger.o			\
