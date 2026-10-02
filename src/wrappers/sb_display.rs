@@ -10,7 +10,7 @@
 // allocator.
 
 use std::fmt::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use bch_bindgen::c;
 use bcachefs_kernel::util::printbuf::Printbuf;
@@ -153,12 +153,12 @@ pub unsafe fn sb_to_text_with_names(
 /// counters, and a short issue tag ("ok" if none apply).
 ///
 /// Reuses the same UUID-based device-path discovery as
-/// sb_to_text_with_names(), so it works purely from the superblock of a
-/// single surviving device — no online filesystem required.
+/// sb_to_text_with_names(), retaining the supplied member path even when
+/// discovery cannot enumerate it. No online filesystem is required.
 ///
 /// # Safety
 /// `sb` must point to a valid `bch_sb`.
-pub unsafe fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb) {
+pub unsafe fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb, device_path: &Path) {
     let uuid = uuid::Uuid::from_bytes(sb.user_uuid.b);
     let device_str = format!("UUID={}", uuid);
 
@@ -173,11 +173,13 @@ pub unsafe fn sb_members_summary_to_text(out: &mut Printbuf, sb: &c::bch_sb) {
                 return;
             }
 
-            let dev = find_dev(&sbs, idx);
-            let missing = dev.is_none();
-            let path = dev
-                .map(|(path, _)| path.to_string_lossy().into_owned())
-                .unwrap_or_else(|| "(not found)".to_string());
+            let path = if idx == sb.dev_idx as u32 {
+                Some(device_path.to_string_lossy().into_owned())
+            } else {
+                find_dev(&sbs, idx).map(|(path, _)| path.to_string_lossy().into_owned())
+            };
+            let missing = path.is_none();
+            let path = path.unwrap_or_else(|| "(not found)".to_string());
 
             let state = m.member_state() as u8;
             let state_str = sb::members::member_state_str(state);
