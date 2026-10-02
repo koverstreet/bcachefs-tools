@@ -5,6 +5,7 @@
 #include "btree/bbpos_types.h"
 #include "data/move_types.h"
 #include "init/progress.h"
+#include "util/cuckoo.h"
 
 #include <linux/mutex.h>
 #include <linux/rhashtable-types.h>
@@ -37,6 +38,17 @@ struct bch_fs_reconcile {
 	struct rhashtable		scans_in_flight;
 	bool				scans_in_flight_init_done;
 	struct mutex			scans_in_flight_lock;
+
+	/*
+	 * Stripes whose repair failed in a way only a change elsewhere can fix
+	 * - no space, too few usable devices: the scan skips them, so reconcile
+	 * carries on with everything else and goes idle once they're all
+	 * that's left, instead of retrying them back to back. Stripes have no
+	 * on-disk pending state, as extents do; in memory, a remount retries
+	 * each once. Owned by the reconcile thread.
+	 */
+	struct cuckoo_u64		stripes_pending;
+	u32				stripes_pending_copygc_run_count;
 
 	bool				on_battery;
 #ifdef CONFIG_POWER_SUPPLY
