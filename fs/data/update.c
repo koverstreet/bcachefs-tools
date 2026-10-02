@@ -1046,6 +1046,7 @@ static int __bch2_data_update_bios_init(struct data_update *m, struct bch_fs *c,
 	bio_init(&m->op.wbio.bio,	NULL, m->bvecs, nr_vecs, 0);
 
 	if (bch2_bio_alloc_pages(&m->op.wbio.bio, c->opts.block_size, buf_bytes, gfp)) {
+		bch2_bio_free_pages_pool(c, &m->op.wbio.bio);
 		kfree(m->bvecs);
 		m->bvecs = NULL;
 		return -ENOMEM;
