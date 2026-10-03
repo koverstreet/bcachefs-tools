@@ -579,8 +579,18 @@ fn ts_to_systime(ts: c::timespec) -> SystemTime {
 }
 
 impl Filesystem for BcachefsFs {
-    fn init(&mut self, _req: &Request, _config: &mut fuser::KernelConfig) -> std::io::Result<()> {
+    fn init(&mut self, _req: &Request, config: &mut fuser::KernelConfig) -> std::io::Result<()> {
         eprintln!("bcachefs fuse: init callback fired");
+
+        // File handles (NFS export, open_by_handle_at()) outlive the kernel's
+        // inode cache. Without this the kernel can only resolve a handle
+        // whose inode is still cached, and returns ESTALE otherwise; with it,
+        // it asks us - a lookup of "." or ".." in the handle's inode, see
+        // lookup().
+        if let Err(unsupported) = config.add_capabilities(fuser::InitFlags::FUSE_EXPORT_SUPPORT) {
+            eprintln!("bcachefs fuse: kernel lacks {unsupported:?}: file handles go stale \
+                       once their inode leaves the cache");
+        }
         // Signal parent that mount is established
         if let Some(fd) = self.signal_fd.take() {
             eprintln!("bcachefs fuse: signaling parent");
@@ -615,10 +625,23 @@ impl Filesystem for BcachefsFs {
 
         let fs = self.fs();
         let qstr = dirent::qstr(name_bytes);
-        let lookup = inode::find_by_inum(&fs, dir)
-            .and_then(|dir_u| str_hash::hash_info_init(&fs, &dir_u))
-            .and_then(|hash_info| dirent::lookup(&fs, dir, &hash_info, &qstr))
-            .and_then(|inum| inode::find_by_inum(&fs, inum).map(|bi| (inum, bi)));
+        let lookup = match name_bytes {
+            // Only sent to resolve a file handle (FUSE_EXPORT_SUPPORT, see
+            // init()); there are no dirents for them. The parent is
+            // bch2_get_parent()'s, less the subvolume - we serve only one.
+            b"." => inode::find_by_inum(&fs, dir).map(|bi| (dir, bi)),
+            b".." => inode::find_by_inum(&fs, dir).and_then(|dir_u| {
+                let parent = c::subvol_inum {
+                    subvol: dir.subvol,
+                    inum:   if dir.inum == BCACHEFS_ROOT_INO { dir.inum } else { dir_u.bi_dir },
+                };
+                inode::find_by_inum(&fs, parent).map(|bi| (parent, bi))
+            }),
+            _ => inode::find_by_inum(&fs, dir)
+                .and_then(|dir_u| str_hash::hash_info_init(&fs, &dir_u))
+                .and_then(|hash_info| dirent::lookup(&fs, dir, &hash_info, &qstr))
+                .and_then(|inum| inode::find_by_inum(&fs, inum).map(|bi| (inum, bi))),
+        };
 
         let (inum, bi) = match lookup {
             Ok(v) => v,
