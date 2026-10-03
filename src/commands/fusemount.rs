@@ -782,7 +782,7 @@ impl BcachefsFs {
         let nlink = Fs::inode_nlink_get(bi);
 
         FileAttr {
-            ino: INodeNo(unmap_root_ino(bi.bi_inum)),
+            ino: INodeNo(bi.bi_inum),
             size: bi.bi_size,
             blocks: bi.bi_sectors,
             atime: ts_to_systime(ts_a),
@@ -1413,26 +1413,33 @@ impl Filesystem for BcachefsFs {
         let dir = resolve!(self, ino, reply);
         eprintln!("fuse_readdir(dir={}, offset={})", dir.inum, offset);
 
-        {
+        let parent_inum = {
             let fs = self.fs();
             match inode::find_by_inum(&fs, dir) {
-                Ok(bi) => fuse_touch_atime(&fs, self.atime, dir, &bi),
+                Ok(bi) => {
+                    fuse_touch_atime(&fs, self.atime, dir, &bi);
+                    if dir.inum == BCACHEFS_ROOT_INO && dir.subvol == BCACHEFS_ROOT_SUBVOL {
+                        dir.inum
+                    } else {
+                        bi.bi_dir
+                    }
+                }
                 Err(e) => { reply.error(bch_err(&e)); return; }
             }
-        }
+        };
 
         let mut pos = offset;
 
         // Handle . and ..
         if pos == 0 {
-            if reply.add(INodeNo(unmap_root_ino(dir.inum)), 1, FileType::Directory, ".") {
+            if reply.add(INodeNo(dir.inum), 1, FileType::Directory, ".") {
                 reply.ok();
                 return;
             }
             pos = 1;
         }
         if pos == 1 {
-            if reply.add(INodeNo(1), 2, FileType::Directory, "..") {
+            if reply.add(INodeNo(parent_inum), 2, FileType::Directory, "..") {
                 reply.ok();
                 return;
             }
@@ -1454,7 +1461,7 @@ impl Filesystem for BcachefsFs {
             };
             let name_str = OsStr::from_bytes(name_bytes);
             let file_type = dtype_to_filetype(dtype);
-            let full = reply.add(INodeNo(unmap_root_ino(ino)), pos, file_type, name_str);
+            let full = reply.add(INodeNo(ino), pos, file_type, name_str);
             if full { -1 } else { 0 }
         }
 
