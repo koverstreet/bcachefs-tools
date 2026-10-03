@@ -876,12 +876,17 @@ impl Filesystem for BcachefsFs {
         let lookup = match name_bytes {
             // Only sent to resolve a file handle (FUSE_EXPORT_SUPPORT, see
             // init()); there are no dirents for them. The parent is
-            // bch2_get_parent()'s, less the subvolume - we serve only one.
+            // bch2_get_parent()'s: a subvolume root's is in its parent
+            // subvolume.
             b"." => inode::find_by_inum(&fs, dir).map(|bi| (dir, bi)),
             b".." => inode::find_by_inum(&fs, dir).and_then(|dir_u| {
-                let parent = c::subvol_inum {
-                    subvol: dir.subvol,
-                    inum:   if dir.inum == BCACHEFS_ROOT_INO { dir.inum } else { dir_u.bi_dir },
+                let parent = if (dir.subvol, dir.inum) == (BCACHEFS_ROOT_SUBVOL, BCACHEFS_ROOT_INO) {
+                    dir
+                } else {
+                    c::subvol_inum {
+                        subvol: if dir_u.bi_parent_subvol != 0 { dir_u.bi_parent_subvol as u64 } else { dir.subvol },
+                        inum:   dir_u.bi_dir,
+                    }
                 };
                 inode::find_by_inum(&fs, parent).map(|bi| (parent, bi))
             }),
