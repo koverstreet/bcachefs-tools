@@ -337,11 +337,21 @@ static int bch2_check_fix_ptr(struct btree_trans *trans,
 			 bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
 		if (g->data_type == BCH_DATA_journal) {
 			try(bch2_dev_journal_bucket_delete(ca, PTR_BUCKET_NR(ca, &p.ptr)));
-			g->data_type		= data_type;
-			g->stripe_sectors	= 0;
-			g->dirty_sectors	= 0;
-			g->cached_sectors	= 0;
-			return 0;
+
+			/*
+			 * gc already counted the bucket as journal when it
+			 * marked it: move it over, as marking does.
+			 */
+			struct bch_alloc_v4 old, new;
+			scoped_guard(bucket_lock, g) {
+				old = bucket_m_to_alloc(*g);
+				g->data_type		= data_type;
+				g->stripe_sectors	= 0;
+				g->dirty_sectors	= 0;
+				g->cached_sectors	= 0;
+				new = bucket_m_to_alloc(*g);
+			}
+			return bch2_alloc_key_to_dev_counters(trans, ca, &old, &new, BTREE_TRIGGER_gc);
 		}
 
 		if (!p.ptr.cached && data_type == BCH_DATA_btree &&
