@@ -1134,15 +1134,16 @@ impl Filesystem for BcachefsFs {
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
 
-        // Write link target, NUL terminated but with i_size excluding the NUL,
-        // as the kernel's page_symlink() does: stat reports the target's length.
+        // Write the link target without a NUL, i_size its length, as the
+        // kernel's page_symlink() does: the data ends at i_size, rounded up to
+        // a block - one block more when the target's length is a multiple of
+        // the block size is an extent past the end of the inode, which fsck
+        // deletes. readlink stops at i_size.
         let block_size = fs.block_bytes();
-        let link_with_nul_len = link_bytes.len() + 1;
-        let padded = (link_with_nul_len as u64).div_ceil(block_size) * block_size;
+        let padded = (link_bytes.len() as u64).div_ceil(block_size) * block_size;
 
         let mut buf = AlignedBuf::new(padded as usize);
         buf[..link_bytes.len()].copy_from_slice(link_bytes);
-        // buf is zero-initialized, so NUL terminator and padding are already 0
 
         let sym_inum = c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum };
         if let Err(e) = block_on(fs.write(new_inode.bi_inum, 0, dir.subvol as u32,
