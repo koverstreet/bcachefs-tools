@@ -30,6 +30,13 @@
  * exit_one callbacks via bch_percpu_register(); the registry runs them
  * for every live chunk plus future ones.
  *
+ * A slot is a CPU: a thread holds one while it lives and returns it when it
+ * exits, and the next new thread takes it over, chunk contents and all. So
+ * BCH_PERCPU_MAX_CPUS bounds live threads, not threads ever created - which
+ * matters for kernel code that starts a short-lived kthread per operation
+ * (reconcile's per-device passes), each of which used to take a slot for
+ * good.
+ *
  * The dynamic allocator is bump + freelist. Allocations return zeroed
  * memory across all live chunks; new threads get zeroed chunks via
  * anonymous mmap, which preserves the contract on subsequent allocations.
@@ -207,6 +214,46 @@ static void bch_percpu_print_threads(void)
 		fprintf(stderr, "  (other)          %u\n", nr_other);
 }
 
+/*
+ * Slots whose thread has exited. A slot is a CPU, not a thread: its chunk
+ * stays mapped and published, and what the old thread left in it - counter
+ * contributions, freelists - carries on for whichever thread takes the slot
+ * next, as a CPU's percpu state does across the tasks that run on it.
+ */
+static int		free_slots[BCH_PERCPU_MAX_CPUS];
+static int		nr_free_slots;
+
+static pthread_key_t	bch_percpu_exit_key;
+
+/*
+ * The key's value is only there so that its destructor runs at thread exit:
+ * pthread runs a destructor only for keys with a non-NULL value.
+ */
+static void bch_percpu_claim_slot(int id, void *chunk)
+{
+	bch_percpu_my_chunk = chunk;
+	bch_percpu_my_id    = id;
+	pthread_setspecific(bch_percpu_exit_key, chunk);
+}
+
+/*
+ * Runs after the thread's Rust thread_local destructors (glibc runs
+ * __call_tls_dtors() before pthread key destructors), so those may still use
+ * percpu memory. If anything after this does, this_cpu_ptr() takes a slot
+ * again and sets the key again, and pthread calls us again.
+ */
+static void bch_percpu_thread_exit(void *chunk)
+{
+	pthread_mutex_lock(&bch_percpu_lock);
+	/* Unless bch_percpu_module_exit() has already unmapped everything: */
+	if (bch_percpu_chunks[bch_percpu_my_id] == chunk)
+		free_slots[nr_free_slots++] = bch_percpu_my_id;
+	pthread_mutex_unlock(&bch_percpu_lock);
+
+	bch_percpu_my_chunk = NULL;
+	bch_percpu_my_id    = -1;
+}
+
 void bch_percpu_thread_init(void)
 {
 	if (bch_percpu_my_chunk)
@@ -226,6 +273,31 @@ void bch_percpu_thread_init(void)
 		bch_percpu_dynamic_size = sizeof(void *) > 4
 			? 256UL << 20
 			:   8UL << 20;
+
+		int ret = pthread_key_create(&bch_percpu_exit_key, bch_percpu_thread_exit);
+		if (ret) {
+			pthread_mutex_unlock(&bch_percpu_lock);
+			fprintf(stderr, "bch_percpu_thread_init: pthread_key_create: %s\n",
+				strerror(ret));
+			abort();
+		}
+	}
+
+	if (nr_free_slots) {
+		/* Already published and initialized - it carries on as it was: */
+		int id = free_slots[--nr_free_slots];
+		bch_percpu_claim_slot(id, bch_percpu_chunks[id]);
+		pthread_mutex_unlock(&bch_percpu_lock);
+		return;
+	}
+
+	int my_id = bch_percpu_nr_cpus;
+	if (my_id >= BCH_PERCPU_MAX_CPUS) {
+		pthread_mutex_unlock(&bch_percpu_lock);
+		fprintf(stderr, "bch_percpu_thread_init: too many live threads (max %d)\n",
+			BCH_PERCPU_MAX_CPUS);
+		bch_percpu_print_threads();
+		abort();
 	}
 
 	/* Address space, not memory - pages fault in as they're touched: */
@@ -238,18 +310,8 @@ void bch_percpu_thread_init(void)
 		abort();
 	}
 
-	int my_id = bch_percpu_nr_cpus;
-	if (my_id >= BCH_PERCPU_MAX_CPUS) {
-		pthread_mutex_unlock(&bch_percpu_lock);
-		fprintf(stderr, "bch_percpu_thread_init: too many threads (max %d)\n",
-			BCH_PERCPU_MAX_CPUS);
-		bch_percpu_print_threads();
-		abort();
-	}
-
-	bch_percpu_my_chunk = chunk;
-	bch_percpu_my_id    = my_id;
 	bch_percpu_chunks[my_id] = chunk;
+	bch_percpu_claim_slot(my_id, chunk);
 
 	for (int i = 0; i < nr_callbacks; i++)
 		if (callbacks[i].init_one)

@@ -240,4 +240,12 @@ int rust_eytzinger_test(void);
  */
 int rust_cuckoo_test(void);
 
+/*
+ * Unit test for the userspace percpu shim's slot lifetime (linux/percpu.c):
+ * exited threads return their slot, live threads never share one. Runs under
+ * `cargo test` via a Rust #[test] wrapper. Returns the number of failed
+ * assertions (0 == pass); failure details are printed to stderr.
+ */
+int rust_percpu_test(void);
+
 #endif /* _RUST_SHIMS_H */
