@@ -1917,8 +1917,17 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     // allow_other: a filesystem is for every user, not just whoever mounted
     // it. Safe only because mount_options carries default_permissions.
     config.acl = fuser::SessionACL::All;
-    // Worker threads get current + RCU via ensure_thread_init() with
-    // a Drop guard for cleanup. No need to restrict to single-threaded.
+    // Worker threads, each on its own cloned /dev/fuse fd: fuser's default is
+    // one, which serves every request in turn. Each gets current and RCU from
+    // ensure_thread_init().
+    //
+    // Requests now run concurrently - safe because the kernel serialises what
+    // isn't: it holds the inode lock across a buffered write and across
+    // setattr, so write()'s partial-block read-modify-write and
+    // fuse_truncate() never race on one inode. (So do direct writes, as long
+    // as we don't ask for FOPEN_PARALLEL_DIRECT_WRITES.)
+    config.n_threads = Some(std::thread::available_parallelism().map_or(4, |n| n.get()).min(16));
+    config.clone_fd = true;
 
     if cli.foreground {
         unsafe { c::linux_shrinkers_init() };
