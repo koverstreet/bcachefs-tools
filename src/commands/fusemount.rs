@@ -39,7 +39,7 @@
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::sync::Mutex;
-use std::ffi::OsStr;
+use std::ffi::{CString, OsStr};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, OwnedFd};
@@ -95,7 +95,7 @@ fn ensure_thread_init() {
 use fuser::{
     Config, FileAttr, FileType, Filesystem, MountOption,
     ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyEmpty,
-    ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite,
+    ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
     Request, TimeOrNow,
     Errno, FileHandle, FopenFlags, Generation,
     INodeNo, OpenFlags, RenameFlags,
@@ -197,6 +197,19 @@ fn err(ret: i32) -> Errno {
 }
 
 /// Convert a BchError to a fuser Errno.
+/// Reply to a getxattr or listxattr with what a rust_xattr_*() shim returned:
+/// a length, or a negative error. An empty @buf means the caller asked only for
+/// the length.
+fn reply_xattr(reply: ReplyXattr, ret: i32, buf: &[u8]) {
+    if ret < 0 {
+        reply.error(bch_err(&BchError::from_raw(-ret)));
+    } else if buf.is_empty() {
+        reply.size(ret as u32);
+    } else {
+        reply.data(&buf[..ret as usize]);
+    }
+}
+
 fn bch_err(e: &BchError) -> Errno {
     Errno::from_i32(e.errno())
 }
@@ -1327,6 +1340,82 @@ impl Filesystem for BcachefsFs {
             reply.error(err(ret));
         } else {
             reply.ok();
+        }
+    }
+
+    // xattrs: user., trusted. and security. - see rust_xattr_*() in
+    // c_src/rust_shims.c for what's served and why. Permissions are the
+    // kernel's: with default_permissions it checks them before asking us.
+
+    fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+        ensure_thread_init();
+        let inum = map_root_ino(ino);
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+
+        let mut buf = vec![0u8; size as usize];
+        let ret = unsafe {
+            c::rust_xattr_get(self.fs().raw, inum, name.as_ptr(),
+                              if size == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() },
+                              buf.len())
+        };
+        reply_xattr(reply, ret, &buf);
+    }
+
+    fn listxattr(&self, req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        ensure_thread_init();
+        let inum = map_root_ino(ino);
+
+        // The kernel lists trusted.* only to CAP_SYS_ADMIN, and doesn't filter
+        // the list for FUSE; we only see the caller's uid.
+        let show_trusted = req.uid() == 0;
+
+        let mut buf = vec![0u8; size as usize];
+        let ret = unsafe {
+            c::rust_xattr_list(self.fs().raw, inum,
+                               if size == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() },
+                               buf.len(), show_trusted)
+        };
+        reply_xattr(reply, ret, &buf);
+    }
+
+    fn setxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, value: &[u8],
+                flags: i32, _position: u32, reply: ReplyEmpty) {
+        ensure_thread_init();
+        let inum = map_root_ino(ino);
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+
+        let ret = unsafe {
+            c::rust_xattr_set(self.fs().raw, inum, name.as_ptr(),
+                              value.as_ptr().cast(), value.len(), flags)
+        };
+        match ret {
+            0 => reply.ok(),
+            e => reply.error(bch_err(&BchError::from_raw(-e))),
+        }
+    }
+
+    fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        ensure_thread_init();
+        let inum = map_root_ino(ino);
+        let Ok(name) = CString::new(name.as_bytes()) else {
+            reply.error(Errno::EINVAL);
+            return;
+        };
+
+        // As the VFS does: XATTR_REPLACE, so that a missing xattr is ENODATA
+        let ret = unsafe {
+            c::rust_xattr_set(self.fs().raw, inum, name.as_ptr(), std::ptr::null(), 0,
+                              libc::XATTR_REPLACE)
+        };
+        match ret {
+            0 => reply.ok(),
+            e => reply.error(bch_err(&BchError::from_raw(-e))),
         }
     }
 
