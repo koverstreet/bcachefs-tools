@@ -25,6 +25,11 @@
 //   filesystem marked clean with deleted inodes outstanding. FUSE doesn't
 //   promise a forget for every inode at unmount, so destroy() evicts
 //   whatever is still referenced.
+//   Forget comes whenever the kernel gets round to sending it, though, and
+//   the kernel's own unlink frees the space before returning. So we also
+//   count open files (open/create to release), and an inode whose last link
+//   goes with nothing open on it is deleted right away, in unlink, rename
+//   or the last release: see inode_unlinked().
 // - Node IDs: FUSE names inodes by a 64-bit node ID, and an inode number
 //   isn't one - a snapshot shares inode numbers and generations with its
 //   origin. Root subvolume inodes are their own number, so a file handle
@@ -266,7 +271,8 @@ fn fuse_create_inode(
     Ok(inode)
 }
 
-fn fuse_unlink(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<(), BchError> {
+/// Returns the inode as the unlink left it.
+fn fuse_unlink(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<c::bch_inode_unpacked, BchError> {
     let qstr = dirent::qstr(name);
     let mut dir_u: c::bch_inode_unpacked = Default::default();
     let mut inode: c::bch_inode_unpacked = Default::default();
@@ -286,7 +292,8 @@ fn fuse_unlink(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<(), BchError
                 false,
             )
         },
-    )
+    )?;
+    Ok(inode)
 }
 
 fn fuse_link(
@@ -323,6 +330,8 @@ fn dirent_exists(fs: &Fs, dir: c::subvol_inum, name: &[u8]) -> Result<bool, BchE
     }
 }
 
+/// Returns the destination inode as the rename left it: for
+/// BCH_RENAME_OVERWRITE, the one it replaced.
 fn fuse_rename(
     fs:       &Fs,
     src_dir:  c::subvol_inum,
@@ -330,7 +339,7 @@ fn fuse_rename(
     dst_dir:  c::subvol_inum,
     dst_name: &[u8],
     mode:     c::bch_rename_mode,
-) -> Result<(), BchError> {
+) -> Result<c::bch_inode_unpacked, BchError> {
     let src_qstr = dirent::qstr(src_name);
     let dst_qstr = dirent::qstr(dst_name);
     let mut src_dir_u: c::bch_inode_unpacked = Default::default();
@@ -362,7 +371,8 @@ fn fuse_rename(
         },
     )?;
 
-    namei::rename_opt_changes_finish(fs, &mut src_opt_change, &mut dst_opt_change)
+    namei::rename_opt_changes_finish(fs, &mut src_opt_change, &mut dst_opt_change)?;
+    Ok(dst_inode_u)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -599,6 +609,12 @@ const ALT_NODE_BASE: u64 = 1 << 63;
 struct NodeRef {
     inum:    c::subvol_inum,
     nlookup: u64,
+    /// Open files on it: open() and create() to release(). An unlinked inode
+    /// is deleted when the last link and the last open are both gone, as the
+    /// kernel's iput() does - not when the kernel gets round to forgetting it.
+    opens:   u64,
+    /// Deleted while the kernel still holds the node: see NodeMap::deleted().
+    deleted: bool,
 }
 
 /// Node IDs - the kernel's name for an inode - and the inodes they stand for.
@@ -649,7 +665,7 @@ impl NodeMap {
             None => {
                 let node = self.own_node(inum).unwrap_or_else(|| self.alloc_alt());
                 self.by_inum.insert(key, node);
-                self.by_node.insert(node, NodeRef { inum, nlookup: 0 });
+                self.by_node.insert(node, NodeRef { inum, nlookup: 0, opens: 0, deleted: false });
                 node
             }
         };
@@ -663,7 +679,9 @@ impl NodeMap {
             return None;
         }
         let node = unmap_root_ino(inum.inum);
-        if self.is_alt(node) {
+        // Still a live node for an inode deleted under it, whose number this
+        // one now has: see deleted()
+        if self.is_alt(node) || self.by_node.contains_key(&node) {
             return None;
         }
         if node >= ALT_NODE_BASE {
@@ -688,15 +706,55 @@ impl NodeMap {
         if r.nlookup != 0 {
             return None;
         }
-        let inum = self.by_node.remove(&node)?.inum;
-        self.by_inum.remove(&(inum.subvol, inum.inum));
-        Some(inum)
+        let r = self.by_node.remove(&node)?;
+        if r.deleted {
+            return None;
+        }
+        self.by_inum.remove(&(r.inum.subvol, r.inum.inum));
+        Some(r.inum)
+    }
+
+    /// An open file on @node, counted until release(). False if its inode has
+    /// been deleted - unlinked between the open's FUSE_LOOKUP and its
+    /// FUSE_OPEN: see inode_unlinked().
+    fn open(&mut self, node: u64) -> bool {
+        match self.by_node.get_mut(&node) {
+            Some(r) if r.deleted => false,
+            Some(r) => { r.opens += 1; true }
+            None => true,
+        }
+    }
+
+    /// An open file on @node closed: its inode, if that was the last.
+    fn release(&mut self, node: u64) -> Option<c::subvol_inum> {
+        let r = self.by_node.get_mut(&node)?;
+        r.opens = r.opens.saturating_sub(1);
+        (r.opens == 0 && !r.deleted).then_some(r.inum)
+    }
+
+    /// Claims the deletion of @inum, which has no links left: false if it's
+    /// still open, or if a racing unlink or release claimed it first - two
+    /// bch2_inode_rm()s of one inode, run together, both find it and the
+    /// second finds it gone, which is an inconsistency.
+    ///
+    /// The node is marked deleted, as the kernel may still hold it: forget
+    /// mustn't evict it again, and the inode number is free to be reused - by
+    /// an inode that mustn't be handed this node (own_node()).
+    fn delete(&mut self, inum: c::subvol_inum) -> bool {
+        let key = (inum.subvol, inum.inum);
+
+        match self.by_inum.get(&key).and_then(|node| self.by_node.get_mut(node)) {
+            Some(r) if r.opens == 0 => r.deleted = true,
+            _ => return false,
+        }
+        self.by_inum.remove(&key);
+        true
     }
 
     /// Forget everything: the inodes still referenced.
     fn drain(&mut self) -> Vec<c::subvol_inum> {
         self.by_inum.clear();
-        self.by_node.drain().map(|(_, r)| r.inum).collect()
+        self.by_node.drain().filter(|(_, r)| !r.deleted).map(|(_, r)| r.inum).collect()
     }
 }
 
@@ -782,6 +840,29 @@ impl BcachefsFs {
 
         if let Err(e) = inode::rm(&fs, inum) {
             eprintln!("bcachefs fuse: deleting unlinked inode {}: {}", inum.inum, e);
+        }
+    }
+
+    /// The kernel's iput() at the end of an unlink, or of the last close: an
+    /// inode with no links left and no open files is deleted now, so its space
+    /// is back before the syscall returns. Leaving it to forget left it to
+    /// whenever the kernel sent that (generic/015: rm; sync; df). @bi is the
+    /// inode as the caller has it. Not directories - an rmdir'd one is empty,
+    /// and we don't count open directory handles.
+    ///
+    /// FUSE opens an existing file in two requests, FUSE_LOOKUP then
+    /// FUSE_OPEN, and an unlink can land between them. That open finds the
+    /// inode deleted and gets ENOENT (NodeMap::open()), as if the unlink had
+    /// come before its lookup.
+    fn inode_unlinked(&self, inum: c::subvol_inum, bi: &c::bch_inode_unpacked) {
+        if Fs::inode_nlink_get(bi) != 0 ||
+           (bi.bi_mode as u32 & libc::S_IFMT) == S_IFDIR ||
+           inode::is_subvolume_root(bi) {
+            return;
+        }
+
+        if self.nodes.lock().unwrap().delete(inum) {
+            self.inode_evict(inum);
         }
     }
 
@@ -1108,7 +1189,10 @@ impl Filesystem for BcachefsFs {
 
         let fs = self.fs();
         match fuse_unlink(&fs, dir, name_bytes) {
-            Ok(()) => reply.ok(),
+            Ok(bi) => {
+                self.inode_unlinked(c::subvol_inum { subvol: dir.subvol, inum: bi.bi_inum }, &bi);
+                reply.ok()
+            }
             Err(e) => reply.error(bch_err(&e)),
         }
     }
@@ -1227,7 +1311,13 @@ impl Filesystem for BcachefsFs {
         };
 
         match fuse_rename(&fs, src_dir, src_bytes, dst_dir, dst_bytes, mode) {
-            Ok(()) => reply.ok(),
+            Ok(dst_bi) => {
+                if mode == c::bch_rename_mode::BCH_RENAME_OVERWRITE {
+                    self.inode_unlinked(c::subvol_inum { subvol: dst_dir.subvol, inum: dst_bi.bi_inum },
+                                        &dst_bi);
+                }
+                reply.ok()
+            }
             Err(e) => reply.error(bch_err(&e)),
         }
     }
@@ -1284,7 +1374,28 @@ impl Filesystem for BcachefsFs {
         } else {
             FopenFlags::FOPEN_KEEP_CACHE
         };
+
+        // Counted, so an unlink doesn't delete it under us: see inode_unlinked()
+        if !self.nodes.lock().unwrap().open(ino.0) {
+            reply.error(Errno::ENOENT);
+            return;
+        }
         reply.opened(FileHandle(0), flags);
+    }
+
+    fn release(&self, _req: &Request, ino: INodeNo, _fh: FileHandle, _flags: OpenFlags,
+               _lock_owner: Option<LockOwner>, _flush: bool, reply: ReplyEmpty) {
+        ensure_thread_init();
+        eprintln!("fuse_release(ino={})", ino.0);
+
+        // The last open of an inode with no links left: it goes now
+        let last = self.nodes.lock().unwrap().release(ino.0);
+        if let Some(inum) = last {
+            if let Ok(bi) = inode::find_by_inum(&self.fs(), inum) {
+                self.inode_unlinked(inum, &bi);
+            }
+        }
+        reply.ok();
     }
 
     fn read(
@@ -1665,6 +1776,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("  create -> ok inum={}", new_inode.bi_inum);
         let attr = self.inode_to_attr(&new_inode);
         let node = self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
+        self.nodes.lock().unwrap().open(node.0);
         reply.created_with_nodeid(
             node, &TTL, &attr,
             Generation(new_inode.bi_generation as u64),
@@ -2476,5 +2588,31 @@ mod tests {
         let next = map.get(inum(5, 6000));
         assert!(next != high.inum);
         resolves_to(&map, high.inum, high);
+    }
+
+    #[test]
+    fn node_map_inode_deleted_under_its_node() {
+        let mut map = NodeMap::new();
+        let old = inum(BCACHEFS_ROOT_SUBVOL, 5000);
+
+        let node = map.get(old);
+        assert!(map.open(node));
+        assert!(!map.delete(old), "still open");
+        assert_eq!(map.release(node).map(|i| i.inum), Some(5000), "last close");
+
+        // Unlinked and deleted while the kernel still holds the node
+        assert!(map.delete(old));
+        assert!(!map.delete(old), "an unlink and a release both deleting it");
+        assert!(!map.open(node), "an open racing the unlink");
+
+        // The inode number is free and reused: the new inode can't have the
+        // node the kernel still holds for the old one
+        let new = map.get(old);
+        assert!(new != node);
+        resolves_to(&map, new, old);
+
+        // and the old node's forget evicts nothing
+        assert!(map.put(node, 1).is_none());
+        resolves_to(&map, new, old);
     }
 }
