@@ -3199,7 +3199,7 @@ int __bch2_foreground_maybe_merge(struct btree_trans *trans,
 	 * bch2_btree_node_format_fits()'s strict-less-than check.
 	 */
 	darray_for_each(dsts, d)
-		BUG_ON(__vstruct_bytes(struct btree_node, d->b->data->u64s) >=
+		BUG_ON(__vstruct_bytes(struct btree_node, le16_to_cpu(d->b->data->u64s)) >=
 		       btree_buf_bytes(d->b));
 
 	darray_for_each(dsts, d) {
