@@ -880,6 +880,11 @@ fn take_fuse_option(options: &str) -> (bool, String) {
 }
 
 fn mount(cli: Cli) -> std::process::ExitCode {
+    // TODO: centralize this on the top level CLI
+    // First: the FUSE path below reports its failures with error!(), which
+    // says nothing at all until this has run.
+    logging::setup(cli.verbose, cli.colorize);
+
     let (via_fuse, options) = take_fuse_option(&cli.options);
 
     // Before the module check: a FUSE mount mustn't modprobe the kernel
@@ -916,9 +921,6 @@ fn mount(cli: Cli) -> std::process::ExitCode {
     }
 
     let module = check_bcachefs_module();
-
-    // TODO: centralize this on the top level CLI
-    logging::setup(cli.verbose, cli.colorize);
 
     match cmd_mount_inner(&cli) {
         Ok(_)   => std::process::ExitCode::SUCCESS,
