@@ -2029,6 +2029,24 @@ __cold void bch2_reconcile_status_to_text(struct printbuf *out, struct bch_fs *c
 
 	struct bch_fs_reconcile *r = &c->reconcile;
 
+	/*
+	 * Marking work needs incompatible features: without them every scan
+	 * completes, finds nothing to do, and the only other sign is a notice
+	 * once per boot (#1052, #946):
+	 */
+	bool data_ok	= bch2_incompat_feature_allowed(c, bcachefs_metadata_version_sb_field_extent_type_u64s);
+	bool meta_ok	= bch2_incompat_feature_allowed(c, bcachefs_metadata_version_reconcile);
+	if (!data_ok || !meta_ok) {
+		prt_printf(out, "Reconcile disabled%s: needs incompatible feature ",
+			   data_ok ? " for metadata" : "");
+		bch2_version_to_text(out, data_ok
+				     ? bcachefs_metadata_version_reconcile
+				     : bcachefs_metadata_version_sb_field_extent_type_u64s);
+		prt_str(out, ", allowed up to ");
+		bch2_version_to_text(out, c->sb.version_incompat_allowed);
+		prt_str(out, "\n  set version_upgrade=incompatible to enable\n\n");
+	}
+
 	if (!r->running) {
 		prt_printf(out, "waiting:\n");
 		u64 now = atomic64_read(&c->io_clock[WRITE].now);

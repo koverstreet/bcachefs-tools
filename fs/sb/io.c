@@ -213,8 +213,7 @@ enum bcachefs_metadata_version bch2_latest_compatible_version(enum bcachefs_meta
 
 int bch2_set_version_incompat(struct bch_fs *c, enum bcachefs_metadata_version version)
 {
-	if (((c->sb.features & BIT_ULL(BCH_FEATURE_incompat_version_field)) &&
-	     version <= c->sb.version_incompat_allowed)) {
+	if (bch2_incompat_feature_allowed(c, version)) {
 		guard(mutex_noio)(&c->sb_lock);
 
 		if (version > c->sb.version_incompat) {

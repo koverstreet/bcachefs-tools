@@ -22,6 +22,15 @@ enum bcachefs_metadata_version bch2_latest_compatible_version(enum bcachefs_meta
 
 int bch2_set_version_incompat(struct bch_fs *, enum bcachefs_metadata_version);
 
+/* Whether bch2_request_incompat_feature() would succeed, without asking: */
+static inline bool bch2_incompat_feature_allowed(struct bch_fs *c,
+						 enum bcachefs_metadata_version version)
+{
+	return version <= c->sb.version_incompat ||
+		((c->sb.features & BIT_ULL(BCH_FEATURE_incompat_version_field)) &&
+		 version <= c->sb.version_incompat_allowed);
+}
+
 static inline int bch2_request_incompat_feature(struct bch_fs *c,
 						enum bcachefs_metadata_version version)
 {
