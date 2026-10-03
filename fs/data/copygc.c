@@ -412,6 +412,9 @@ static int bch2_copygc_get_stripe_buckets(struct moving_context *ctxt,
 			if (ret2 < 0)
 				break;
 
+			/* 1 is "queued", not something for the loop to stop on: */
+			ret2 = 0;
+
 			if (copygc_batch_full(buckets_in_flight)) {
 				ret2 = -BCH_ERR_fc_break;
 				break;
