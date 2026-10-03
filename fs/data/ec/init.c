@@ -138,7 +138,7 @@ int bch2_invalidate_stripe_to_dev(struct btree_trans *trans,
 
 		*recorded = k.k->p.offset;
 		bch2_ec_record_lost_blocks(trans, stripe_i_to_s_c(n), record,
-					   BCH_FSCK_ERR_data_lost_device_removed, true);
+					   BCH_FSCK_ERR_data_lost_device_removed, true, NULL);
 
 		/* those committed, and @k is stale: */
 		return btree_trans_restart(trans, BCH_ERR_transaction_restart_nested);

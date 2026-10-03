@@ -57,6 +57,7 @@
 #include "btree/update.h"
 #include "btree/write_buffer.h"
 
+#include "data/checksum.h"
 #include "data/copygc.h"
 #include "data/ec/create.h"
 #include "data/ec/io.h"
@@ -592,14 +593,60 @@ static bool stripe_has_removing_dev(struct bch_fs *c, struct bch_stripe *v)
 }
 
 /*
+ * Whether @k's data in @block of @buf - the stripe as read - checks out against
+ * the extent's own checksum. A block fails as a whole on one bad granule of its
+ * stripe checksum, but an extent elsewhere in it is intact: if its checksum
+ * matches what we read, that's its data, on disk. Only for a block we did read:
+ * one on an offline device is a buffer of nothing. No checksum, no way to tell.
+ */
+static bool ec_extent_good_in_buf(struct bch_fs *c, struct bkey_s_c k,
+				  const struct ec_stripe_buf *buf, unsigned block)
+{
+	const struct bch_extent_ptr *sp = &buf->key.v.ptrs[block];
+	u64 block_sectors = le16_to_cpu(buf->key.v.sectors);
+	struct bkey_ptrs_c ptrs = bch2_bkey_ptrs_c(k);
+	const union bch_extent_entry *entry;
+	struct extent_ptr_decoded p;
+
+	if (buf->err[STRIPE_BUF_PRE_RECOV][block] != -BCH_ERR_stripe_read_csum_err ||
+	    !buf->data[block])
+		return false;
+
+	bkey_for_each_ptr_decode(k.k, ptrs, p, entry) {
+		if (p.ptr.dev != sp->dev ||
+		    p.ptr.offset < sp->offset ||
+		    p.ptr.offset >= sp->offset + block_sectors)
+			continue;
+
+		u64 offset = p.ptr.offset - sp->offset;
+		if (!p.crc.csum_type ||
+		    offset < buf->offset ||
+		    offset + p.crc.compressed_size > buf->offset + buf->size)
+			return false;
+
+		void *data = buf->data[block] + ((offset - buf->offset) << 9);
+		struct nonce nonce = extent_nonce(k.k->bversion, p.crc);
+		struct bch_csum csum = bch2_checksum(c, p.crc.csum_type, nonce, data,
+						     p.crc.compressed_size << 9);
+		return !bch2_crc_cmp(csum, p.crc.csum);
+	}
+
+	return false;
+}
+
+/*
  * @count: whether to count the sb error here as well as recording it. The reuse
  * path doesn't - bch2_ec_read_done() already counted the block that failed to
  * reconstruct, and a damage record must name an error the counters have heard
  * of, not raise the count a second time per extent.
+ *
+ * @buf, @block: the stripe as read, if we have it - an extent whose own
+ * checksum checks out against it isn't lost.
  */
 static int ec_record_lost_bp(struct btree_trans *trans,
 			     struct bkey_s_c_backpointer bp,
 			     enum bch_sb_error_id err, bool count,
+			     const struct ec_stripe_buf *buf, unsigned block,
 			     struct wb_maybe_flush *last_flushed)
 {
 	/* skip the resolve below for backpointers we couldn't attribute anyway */
@@ -616,6 +663,9 @@ static int ec_record_lost_bp(struct btree_trans *trans,
 	if (!k.k)
 		return 0;
 
+	if (buf && ec_extent_good_in_buf(trans->c, k, buf, block))
+		return 0;
+
 	return count
 		? bch2_damage_record_data_loss(trans, bp.v->btree_id, k.k->p, err)
 		: bch2_damage_record_key(trans, bp.v->btree_id, k.k->p, err);
@@ -629,10 +679,15 @@ static int ec_record_lost_bp(struct btree_trans *trans,
  * Commits per backpointer: a block is a bucket, and a block's worth of
  * extents won't fit in one transaction - so callers record before destroying
  * the blocks, not atomically with it.
+ *
+ * @buf: the stripe as read, when the blocks were read rather than lost to a
+ * device - extents that still check out against it are skipped. NULL to
+ * record every extent.
  */
 void bch2_ec_record_lost_blocks(struct btree_trans *trans,
 				struct bkey_s_c_stripe stripe, u32 blocks,
-				enum bch_sb_error_id err, bool count)
+				enum bch_sb_error_id err, bool count,
+				const struct ec_stripe_buf *buf)
 {
 	struct bch_fs *c = trans->c;
 
@@ -651,7 +706,7 @@ void bch2_ec_record_lost_blocks(struct btree_trans *trans,
 				continue;
 
 			ec_record_lost_bp(trans, bkey_s_c_to_backpointer(bp_k),
-					  err, count, &last_flushed);
+					  err, count, buf, block, &last_flushed);
 		}));
 
 		/* a block we can't attribute doesn't stop the others */
@@ -709,11 +764,21 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 	 * else discovers the loss until someone reads one of those files:
 	 */
 	if (s->old_stripe_read && s->old_stripe_err) {
+		/*
+		 * Too few blocks to reconstruct: the lost blocks' buffers still
+		 * hold what we read, and an extent that checks out against it
+		 * isn't lost - a block fails on one bad granule. After a
+		 * reconstruct they hold its output instead, which says nothing
+		 * about what's on disk.
+		 */
+		bool as_read = s->old_stripe_err == -BCH_ERR_stripe_reconstruct_insufficient_blocks;
+
 		CLASS(btree_trans, trans)(c);
 		bch2_ec_record_lost_blocks(trans,
 				bkey_i_to_s_c_stripe(&s->old_stripe.key.k_i),
 				s->old_stripe_lost_blocks,
-				BCH_FSCK_ERR_stripe_reconstruct_failed, false);
+				BCH_FSCK_ERR_stripe_reconstruct_failed, false,
+				as_read ? &s->old_stripe : NULL);
 		return s->old_stripe_err;
 	}
 
