@@ -570,12 +570,29 @@ impl BcachefsFs {
     }
 }
 
+/// Times before 1970 are valid on bcachefs: a timespec's tv_sec is then
+/// negative, with tv_nsec still counting forwards from it.
 fn ts_to_systime(ts: c::timespec) -> SystemTime {
+    let nsec = Duration::from_nanos(ts.tv_nsec as u64);
     if ts.tv_sec >= 0 {
-        UNIX_EPOCH + Duration::new(ts.tv_sec as u64, ts.tv_nsec as u32)
+        UNIX_EPOCH + Duration::from_secs(ts.tv_sec as u64) + nsec
     } else {
-        UNIX_EPOCH
+        UNIX_EPOCH - Duration::from_secs(ts.tv_sec.unsigned_abs()) + nsec
     }
+}
+
+fn systime_to_ts(t: SystemTime) -> c::timespec {
+    let (sec, nsec) = match t.duration_since(UNIX_EPOCH) {
+        Ok(d)  => (d.as_secs() as i64, d.subsec_nanos()),
+        Err(e) => {
+            let d = e.duration();
+            match d.subsec_nanos() {
+                0 => (-(d.as_secs() as i64), 0),
+                n => (-(d.as_secs() as i64) - 1, 1_000_000_000 - n),
+            }
+        }
+    };
+    c::timespec { tv_sec: sec as _, tv_nsec: nsec as _ }
 }
 
 impl Filesystem for BcachefsFs {
@@ -718,14 +735,8 @@ impl Filesystem for BcachefsFs {
         let parse_time = |time: &Option<TimeOrNow>| match time {
             None => (0, 0),
             Some(TimeOrNow::Now) => (2, 0),
-            Some(TimeOrNow::SpecificTime(t)) => {
-                let d = t.duration_since(UNIX_EPOCH).unwrap_or_default();
-                let ts = c::timespec {
-                    tv_sec: d.as_secs() as _,
-                    tv_nsec: d.subsec_nanos() as _,
-                };
-                (1, fs.timespec_to_time(ts) as u64)
-            }
+            Some(TimeOrNow::SpecificTime(t)) =>
+                (1, fs.timespec_to_time(systime_to_ts(*t)) as u64),
         };
 
         let (atime_flag, atime_val) = parse_time(&atime);
@@ -1755,9 +1766,11 @@ pub const CMD: super::CmdDef = typed_cmd!("fusemount", "FUSE mount", Cli, cmd_fu
 
 #[cfg(test)]
 mod tests {
-    use super::parse_fuse_mount_options;
+    use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime};
     use bcachefs_kernel::opt_get;
+    use bch_bindgen::c;
     use fuser::MountOption;
+    use std::time::{Duration, UNIX_EPOCH};
 
     #[test]
     fn parse_fuse_mount_options_sets_bcachefs_read_only_and_fuse_ro() {
@@ -1769,6 +1782,23 @@ mod tests {
         assert!(mount_options.contains(&MountOption::RO));
         assert!(mount_options.contains(&MountOption::FSName("/dev/test".to_string())));
         assert!(mount_options.contains(&MountOption::CUSTOM("subtype=bcachefs".to_string())));
+    }
+
+    #[test]
+    fn timespec_systime_round_trip_including_before_1970() {
+        for (sec, nsec) in [(0i64, 0u32), (1, 500_000_000), (1_700_000_000, 123),
+                            (-1, 0), (-1, 500_000_000), (-2_000_000_000, 999_999_999)] {
+            let ts = c::timespec { tv_sec: sec as _, tv_nsec: nsec as _ };
+            let t = ts_to_systime(ts);
+            let back = systime_to_ts(t);
+            assert_eq!((back.tv_sec as i64, back.tv_nsec as u32), (sec, nsec),
+                       "round trip of {sec}.{nsec:09}");
+        }
+
+        // -0.5s is tv_sec -1, tv_nsec 500000000:
+        let half_before = UNIX_EPOCH - Duration::from_millis(500);
+        let ts = systime_to_ts(half_before);
+        assert_eq!((ts.tv_sec as i64, ts.tv_nsec as u32), (-1, 500_000_000));
     }
 
     /// We mount with allow_other and do no permission checks of our own, so
