@@ -1442,6 +1442,17 @@ impl Filesystem for BcachefsFs {
         }
     }
 
+    /// sync(2), syncfs(2): bch2_sync_fs(). Answering ENOSYS here - fuser's
+    /// default - would make the kernel stop asking for the rest of the mount.
+    fn syncfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyEmpty) {
+        ensure_thread_init();
+        eprintln!("fuse_syncfs");
+        match fuse_fsync(&self.fs()) {
+            Ok(()) => reply.ok(),
+            Err(e) => reply.error(bch_err(&e)),
+        }
+    }
+
     fn readdir(
         &self,
         _req: &Request,
