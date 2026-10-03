@@ -10,6 +10,10 @@ struct bch_fs_copygc {
 	s64			wait_at;
 	s64			wait;
 	bool			running;
+	bool			pressure_pending;
+	bool			current_run_pressure;
+	bool			last_run_pressure;
+	u32			pressure_run_count;
 	u32			run_count;
 	u32			kick_count;
 	wait_queue_head_t	running_wq;
@@ -35,4 +39,3 @@ struct bch_fs_copygc {
 };
 
 #endif /* _BCACHEFS_COPYGC_TYPES_H */
-
