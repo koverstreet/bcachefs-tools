@@ -1264,6 +1264,11 @@ fn parse_fuse_mount_options(
         // silently dropped and the mount shows as "fuse" instead of
         // "fuse.bcachefs" in /proc/mounts.
         MountOption::CUSTOM("subtype=bcachefs".to_string()),
+        // Paired with allow_other (SessionACL::All, see cmd_fusemount()):
+        // other users get in, and the kernel checks their access against the
+        // mode bits we report, as for any filesystem. We do no checking of our
+        // own, so allow_other without this would let anyone do anything.
+        MountOption::DefaultPermissions,
     ];
     let parsed = options
         .map(super::mount::parse_mountflag_options)
@@ -1467,7 +1472,8 @@ enum FuseMount {
 ///
 /// The option string is what fuser builds for plain fuse, plus blksize; the
 /// flags get fuser's nodev/nosuid defaults, so the two kinds of mount behave
-/// the same apart from unmount.
+/// the same apart from unmount. That includes allow_other with
+/// default_permissions - see parse_fuse_mount_options().
 fn mount_fuseblk(
     source:     &Path,
     mountpoint: &str,
@@ -1477,7 +1483,8 @@ fn mount_fuseblk(
     let dev_fuse = OpenOptions::new().read(true).write(true).open("/dev/fuse")?;
     let rootmode = std::fs::metadata(mountpoint)?.mode() & libc::S_IFMT;
     let data = format!(
-        "fd={},rootmode={:o},user_id={},group_id={},blksize={},subtype=bcachefs",
+        "fd={},rootmode={:o},user_id={},group_id={},blksize={},subtype=bcachefs,\
+         allow_other,default_permissions",
         dev_fuse.as_raw_fd(), rootmode,
         rustix::process::getuid().as_raw(), rustix::process::getgid().as_raw(),
         blksize,
@@ -1513,7 +1520,7 @@ fn fuse_run(
     // Session::from_fd() reads FUSE_INIT, which the kernel only sends once
     // the mount exists - hence mount first. From here a failure leaves a
     // mount with nothing serving it; detach it rather than leave it hanging.
-    fuser::Session::from_fd(bcachefs_fs, fd, fuser::SessionACL::Owner, config.clone())
+    fuser::Session::from_fd(bcachefs_fs, fd, config.acl, config.clone())
         .and_then(|se| se.spawn())
         .and_then(|bg| bg.join())
         .inspect_err(|_| {
@@ -1562,6 +1569,9 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     let mut config = Config::default();
     config.mount_options = mount_options;
+    // allow_other: a filesystem is for every user, not just whoever mounted
+    // it. Safe only because mount_options carries default_permissions.
+    config.acl = fuser::SessionACL::All;
     // Worker threads get current + RCU via ensure_thread_init() with
     // a Drop guard for cleanup. No need to restrict to single-threaded.
 
@@ -1726,6 +1736,18 @@ mod tests {
         assert!(mount_options.contains(&MountOption::RO));
         assert!(mount_options.contains(&MountOption::FSName("/dev/test".to_string())));
         assert!(mount_options.contains(&MountOption::CUSTOM("subtype=bcachefs".to_string())));
+    }
+
+    /// We mount with allow_other and do no permission checks of our own, so
+    /// without default_permissions every user could do anything.
+    #[test]
+    fn parse_fuse_mount_options_always_sets_default_permissions() {
+        for options in [None, Some("ro"), Some("nodev,nosuid")] {
+            let (_opts, mount_options, _ms_flags) =
+                parse_fuse_mount_options("/dev/test", options).unwrap();
+            assert!(mount_options.contains(&MountOption::DefaultPermissions),
+                    "no default_permissions with -o {options:?}");
+        }
     }
 
     #[test]
