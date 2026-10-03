@@ -833,7 +833,8 @@ impl Filesystem for BcachefsFs {
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
 
-        // Write link target (include NUL terminator, like the C code did)
+        // Write link target, NUL terminated but with i_size excluding the NUL,
+        // as the kernel's page_symlink() does: stat reports the target's length.
         let block_size = fs.block_bytes();
         let link_with_nul_len = link_bytes.len() + 1;
         let padded = (link_with_nul_len as u64).div_ceil(block_size) * block_size;
@@ -844,7 +845,7 @@ impl Filesystem for BcachefsFs {
 
         let sym_inum = c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum };
         if let Err(e) = block_on(fs.write(new_inode.bi_inum, 0, dir.subvol as u32,
-                                          1, &buf, link_with_nul_len as u64)) {
+                                          1, &buf, link_bytes.len() as u64)) {
             reply.error(bch_err(&e));
             return;
         }
