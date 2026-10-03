@@ -197,7 +197,7 @@ fn err(ret: i32) -> Errno {
 }
 
 /// Convert a BchError to a fuser Errno.
-/// Reply to a getxattr or listxattr with what a rust_xattr_*() shim returned:
+/// Reply to a getxattr or listxattr with what a rust_fuse_xattr_*() shim returned:
 /// a length, or a negative error. An empty @buf means the caller asked only for
 /// the length.
 fn reply_xattr(reply: ReplyXattr, ret: i32, buf: &[u8]) {
@@ -1343,8 +1343,8 @@ impl Filesystem for BcachefsFs {
         }
     }
 
-    // xattrs: user., trusted. and security. - see rust_xattr_*() in
-    // c_src/rust_shims.c for what's served and why. Permissions are the
+    // xattrs: user., trusted. and security. - see rust_fuse_xattr_*() in
+    // c_src/fuse_shims.c for what's served and why. Permissions are the
     // kernel's: with default_permissions it checks them before asking us.
 
     fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
@@ -1357,7 +1357,7 @@ impl Filesystem for BcachefsFs {
 
         let mut buf = vec![0u8; size as usize];
         let ret = unsafe {
-            c::rust_xattr_get(self.fs().raw, inum, name.as_ptr(),
+            c::rust_fuse_xattr_get(self.fs().raw, inum, name.as_ptr(),
                               if size == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() },
                               buf.len())
         };
@@ -1374,7 +1374,7 @@ impl Filesystem for BcachefsFs {
 
         let mut buf = vec![0u8; size as usize];
         let ret = unsafe {
-            c::rust_xattr_list(self.fs().raw, inum,
+            c::rust_fuse_xattr_list(self.fs().raw, inum,
                                if size == 0 { std::ptr::null_mut() } else { buf.as_mut_ptr().cast() },
                                buf.len(), show_trusted)
         };
@@ -1391,7 +1391,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let ret = unsafe {
-            c::rust_xattr_set(self.fs().raw, inum, name.as_ptr(),
+            c::rust_fuse_xattr_set(self.fs().raw, inum, name.as_ptr(),
                               value.as_ptr().cast(), value.len(), flags)
         };
         match ret {
@@ -1410,7 +1410,7 @@ impl Filesystem for BcachefsFs {
 
         // As the VFS does: XATTR_REPLACE, so that a missing xattr is ENODATA
         let ret = unsafe {
-            c::rust_xattr_set(self.fs().raw, inum, name.as_ptr(), std::ptr::null(), 0,
+            c::rust_fuse_xattr_set(self.fs().raw, inum, name.as_ptr(), std::ptr::null(), 0,
                               libc::XATTR_REPLACE)
         };
         match ret {

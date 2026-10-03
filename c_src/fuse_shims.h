@@ -27,4 +27,15 @@ typedef int (*rust_fuse_filldir_fn)(void *ctx,
 int rust_fuse_readdir(struct bch_fs *c, subvol_inum dir,
 		      u64 pos, void *ctx, rust_fuse_filldir_fn filldir);
 
+/*
+ * xattrs by full name on an inode by number: user., trusted. and security.
+ * only - see fuse_shims.c. Return a length or a negative error.
+ */
+int rust_fuse_xattr_get(struct bch_fs *c, subvol_inum inum, const char *name,
+			void *buf, size_t size);
+int rust_fuse_xattr_list(struct bch_fs *c, subvol_inum inum, char *buf, size_t size,
+			 bool show_trusted);
+int rust_fuse_xattr_set(struct bch_fs *c, subvol_inum inum, const char *name,
+			const void *value, size_t size, int flags);
+
 #endif /* _FUSE_SHIMS_H */
