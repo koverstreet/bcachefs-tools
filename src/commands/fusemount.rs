@@ -25,6 +25,13 @@
 //   filesystem marked clean with deleted inodes outstanding. FUSE doesn't
 //   promise a forget for every inode at unmount, so destroy() evicts
 //   whatever is still referenced.
+// - Node IDs: FUSE names inodes by a 64-bit node ID, and an inode number
+//   isn't one - a snapshot shares inode numbers and generations with its
+//   origin. Root subvolume inodes are their own number, so a file handle
+//   (node ID + generation) still resolves after eviction; inodes in other
+//   subvolumes get node IDs from a range that is never reused, so theirs go
+//   stale (ESTALE) instead of resolving to the wrong inode. See NodeMap.
+//   stat() still reports the inode number, as the kernel driver does.
 // - Unmount: a plain fuse mount never sends FUSE_DESTROY - the daemon only
 //   finds out when /dev/fuse goes dead - so umount returns while destroy()
 //   and bch2_fs_exit() are still running, and an fsck or remount straight
@@ -37,7 +44,7 @@
 //   keep plain fuse, race and all.
 
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 use std::ffi::{CString, OsStr};
 use std::fs::{File, OpenOptions};
@@ -104,6 +111,7 @@ use fuser::{
 
 const TTL: Duration = Duration::MAX;
 
+const BCACHEFS_ROOT_SUBVOL: u64 = 1;
 const BCACHEFS_ROOT_INO: u64 = 4096;
 const S_IFDIR: u32 = 0o040000;
 const S_IFLNK: u32 = 0o120000;
@@ -118,7 +126,7 @@ const DT_SOCK: u32 = 12;
 fn map_root_ino(ino: INodeNo) -> c::subvol_inum {
     let ino: u64 = ino.0;
     c::subvol_inum {
-        subvol: 1,
+        subvol: BCACHEFS_ROOT_SUBVOL,
         inum: if ino == 1 { BCACHEFS_ROOT_INO } else { ino },
     }
 }
@@ -579,11 +587,117 @@ impl AtimeOpts {
     }
 }
 
+/// Where node IDs start for inodes that can't be their own inode number: those
+/// in other subvolumes - a snapshot shares inode numbers with its origin - and
+/// root subvolume inodes whose number is taken. Inode allocation stays below
+/// 2^63 today (cursor_idx_min_max()), so the ranges don't meet in practice;
+/// NodeMap doesn't depend on it.
+const ALT_NODE_BASE: u64 = 1 << 63;
+
 /// A node ID the kernel holds: the inode it stands for, and FUSE's lookup count
 /// - one per entry we hand out, dropped by forget.
 struct NodeRef {
     inum:    c::subvol_inum,
     nlookup: u64,
+}
+
+/// Node IDs - the kernel's name for an inode - and the inodes they stand for.
+///
+/// A root subvolume inode is its own inode number (the root, 4096, is node 1),
+/// so a node ID that has been forgotten - a file handle, after eviction -
+/// still resolves. Every other inode gets an alternate from a counter that
+/// starts at ALT_NODE_BASE and never goes back: a forgotten alternate is
+/// stale, and can never come to stand for a different inode.
+struct NodeMap {
+    by_node:  HashMap<u64, NodeRef>,
+    by_inum:  HashMap<(u64, u64), u64>,
+    next_alt: u64,
+    /// Root subvolume inodes at or above ALT_NODE_BASE that were given their
+    /// own number: they keep it, and the alternate counter skips it.
+    high_own: HashSet<u64>,
+}
+
+impl NodeMap {
+    fn new() -> Self {
+        NodeMap {
+            by_node:  HashMap::new(),
+            by_inum:  HashMap::new(),
+            next_alt: ALT_NODE_BASE,
+            high_own: HashSet::new(),
+        }
+    }
+
+    fn resolve(&self, node: u64) -> Result<c::subvol_inum, Errno> {
+        if let Some(r) = self.by_node.get(&node) {
+            return Ok(r.inum);
+        }
+        if self.is_alt(node) {
+            return Err(Errno::ESTALE);
+        }
+        Ok(map_root_ino(INodeNo(node)))
+    }
+
+    fn is_alt(&self, node: u64) -> bool {
+        (ALT_NODE_BASE..self.next_alt).contains(&node) && !self.high_own.contains(&node)
+    }
+
+    /// A reference to @inum's node ID, counted until put().
+    fn get(&mut self, inum: c::subvol_inum) -> u64 {
+        let key = (inum.subvol, inum.inum);
+        let node = match self.by_inum.get(&key) {
+            Some(&node) => node,
+            None => {
+                let node = self.own_node(inum).unwrap_or_else(|| self.alloc_alt());
+                self.by_inum.insert(key, node);
+                self.by_node.insert(node, NodeRef { inum, nlookup: 0 });
+                node
+            }
+        };
+        self.by_node.get_mut(&node).unwrap().nlookup += 1;
+        node
+    }
+
+    /// @inum's own inode number as its node ID, if it can have it.
+    fn own_node(&mut self, inum: c::subvol_inum) -> Option<u64> {
+        if inum.subvol != BCACHEFS_ROOT_SUBVOL {
+            return None;
+        }
+        let node = unmap_root_ino(inum.inum);
+        if self.is_alt(node) {
+            return None;
+        }
+        if node >= ALT_NODE_BASE {
+            self.high_own.insert(node);
+        }
+        Some(node)
+    }
+
+    fn alloc_alt(&mut self) -> u64 {
+        while self.high_own.contains(&self.next_alt) {
+            self.next_alt += 1;
+        }
+        self.next_alt += 1;
+        self.next_alt - 1
+    }
+
+    /// Drop @nlookup references to @node; with the last, return the inode it
+    /// stood for.
+    fn put(&mut self, node: u64, nlookup: u64) -> Option<c::subvol_inum> {
+        let r = self.by_node.get_mut(&node)?;
+        r.nlookup = r.nlookup.saturating_sub(nlookup);
+        if r.nlookup != 0 {
+            return None;
+        }
+        let inum = self.by_node.remove(&node)?.inum;
+        self.by_inum.remove(&(inum.subvol, inum.inum));
+        Some(inum)
+    }
+
+    /// Forget everything: the inodes still referenced.
+    fn drain(&mut self) -> Vec<c::subvol_inum> {
+        self.by_inum.clear();
+        self.by_node.drain().map(|(_, r)| r.inum).collect()
+    }
 }
 
 /// In a handler: the inode @node stands for, or reply with the error and return.
@@ -605,7 +719,7 @@ struct BcachefsFs {
     /// FUSE mount is established. Written in init(), None in foreground mode.
     signal_fd: Option<OwnedFd>,
     /// The node IDs the kernel holds: see "Inode lifetime".
-    nodes: Mutex<HashMap<u64, NodeRef>>,
+    nodes: Mutex<NodeMap>,
     atime: AtimeOpts,
 }
 
@@ -618,41 +732,20 @@ impl BcachefsFs {
         self.fs.as_ref().expect("fuse request after destroy()")
     }
 
-    /// The kernel now holds a reference: every reply that hands it an entry.
-    /// Taken before the reply goes out, so a forget can't arrive first.
     /// The inode a node ID from the kernel stands for.
     fn resolve(&self, node: INodeNo) -> Result<c::subvol_inum, Errno> {
-        if let Some(r) = self.nodes.lock().unwrap().get(&node.0) {
-            return Ok(r.inum);
-        }
-        // Not referenced - a file handle, after eviction. Node IDs are inode
-        // numbers in the root subvolume.
-        Ok(map_root_ino(node))
+        self.nodes.lock().unwrap().resolve(node.0)
     }
 
     /// Hand the kernel a reference to @inum: its node ID, counted until forget.
+    /// Taken before the reply goes out, so the forget can't arrive first.
     fn node_get(&self, inum: c::subvol_inum) -> INodeNo {
-        let node = unmap_root_ino(inum.inum);
-        self.nodes.lock().unwrap()
-            .entry(node).or_insert(NodeRef { inum, nlookup: 0 })
-            .nlookup += 1;
-        INodeNo(node)
+        INodeNo(self.nodes.lock().unwrap().get(inum))
     }
 
-    /// The kernel dropped @nlookup references; evict at zero.
     /// forget: drop @nlookup references to @node; with the last, evict.
     fn node_put(&self, node: INodeNo, nlookup: u64) {
-        let unreferenced = {
-            let mut nodes = self.nodes.lock().unwrap();
-            match nodes.get_mut(&node.0) {
-                Some(r) => {
-                    r.nlookup = r.nlookup.saturating_sub(nlookup);
-                    if r.nlookup == 0 { nodes.remove(&node.0).map(|r| r.inum) } else { None }
-                }
-                None => None,
-            }
-        };
-
+        let unreferenced = self.nodes.lock().unwrap().put(node.0, nlookup);
         if let Some(inum) = unreferenced {
             self.inode_evict(inum);
         }
@@ -759,7 +852,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("bcachefs fuse: destroy");
         ensure_thread_init();
 
-        let referenced: Vec<c::subvol_inum> = self.nodes.lock().unwrap().drain().map(|(_, r)| r.inum).collect();
+        let referenced = self.nodes.lock().unwrap().drain();
         for inum in referenced {
             self.inode_evict(inum);
         }
@@ -823,8 +916,8 @@ impl Filesystem for BcachefsFs {
 
         eprintln!("  lookup -> ok inum={}", inum.inum);
         let attr = self.inode_to_attr(&bi);
-        self.node_get(inum);
-        reply.entry(&TTL, &attr, Generation(bi.bi_generation as u64));
+        let node = self.node_get(inum);
+        reply.entry_with_nodeid(node, &TTL, &attr, Generation(bi.bi_generation as u64));
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
@@ -967,8 +1060,8 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&new_inode);
-        self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
-        reply.entry(&TTL, &attr, Generation(new_inode.bi_generation as u64));
+        let node = self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
+        reply.entry_with_nodeid(node, &TTL, &attr, Generation(new_inode.bi_generation as u64));
     }
 
     fn mkdir(
@@ -1048,8 +1141,8 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&new_inode);
-        self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
-        reply.entry(&TTL, &attr, Generation(new_inode.bi_generation as u64));
+        let node = self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
+        reply.entry_with_nodeid(node, &TTL, &attr, Generation(new_inode.bi_generation as u64));
     }
 
     fn rename(
@@ -1131,8 +1224,8 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&inode_u);
-        self.node_get(c::subvol_inum { subvol: parent.subvol, inum: inode_u.bi_inum });
-        reply.entry(&TTL, &attr, Generation(inode_u.bi_generation as u64));
+        let node = self.node_get(c::subvol_inum { subvol: parent.subvol, inum: inode_u.bi_inum });
+        reply.entry_with_nodeid(node, &TTL, &attr, Generation(inode_u.bi_generation as u64));
     }
 
     fn open(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
@@ -1507,9 +1600,9 @@ impl Filesystem for BcachefsFs {
 
         eprintln!("  create -> ok inum={}", new_inode.bi_inum);
         let attr = self.inode_to_attr(&new_inode);
-        self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
-        reply.created(
-            &TTL, &attr,
+        let node = self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
+        reply.created_with_nodeid(
+            node, &TTL, &attr,
             Generation(new_inode.bi_generation as u64),
             FileHandle(0),
             FopenFlags::FOPEN_KEEP_CACHE,
@@ -1974,7 +2067,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         let bcachefs_fs = BcachefsFs {
             fs: Some(fs),
             signal_fd: None,
-            nodes: Mutex::new(HashMap::new()),
+            nodes: Mutex::new(NodeMap::new()),
             atime: AtimeOpts::from_ms_flags(ms_flags),
         };
         if let Err(e) = fuse_serve(bcachefs_fs, &cli.mountpoint, &config, fd) {
@@ -2114,7 +2207,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     let bcachefs_fs = BcachefsFs {
         fs: Some(fs),
         signal_fd: Some(signal_fd),
-        nodes: Mutex::new(HashMap::new()),
+        nodes: Mutex::new(NodeMap::new()),
         atime: AtimeOpts::from_ms_flags(ms_flags),
     };
 
@@ -2139,6 +2232,7 @@ pub const CMD: super::CmdDef = typed_cmd!("fusemount", "FUSE mount", Cli, cmd_fu
 #[cfg(test)]
 mod tests {
     use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime, AtimeMode, AtimeOpts};
+    use super::{NodeMap, ALT_NODE_BASE, BCACHEFS_ROOT_INO, BCACHEFS_ROOT_SUBVOL};
     use bcachefs_kernel::opt_get;
     use bch_bindgen::c;
     use fuser::MountOption;
@@ -2230,5 +2324,79 @@ mod tests {
 
         assert!(mount_options.contains(&MountOption::Dev));
         assert!(mount_options.contains(&MountOption::Suid));
+    }
+
+    fn inum(subvol: u64, inum: u64) -> c::subvol_inum {
+        c::subvol_inum { subvol, inum }
+    }
+
+    fn resolves_to(map: &NodeMap, node: u64, want: c::subvol_inum) {
+        let got = map.resolve(node).unwrap();
+        assert_eq!((got.subvol, got.inum), (want.subvol, want.inum), "node {node:#x}");
+    }
+
+    #[test]
+    fn node_map_root_subvol_inodes_are_their_own_number() {
+        let mut map = NodeMap::new();
+        let root = inum(BCACHEFS_ROOT_SUBVOL, BCACHEFS_ROOT_INO);
+        let f = inum(BCACHEFS_ROOT_SUBVOL, 5000);
+
+        assert_eq!(map.get(root), 1);
+        assert_eq!(map.get(f), 5000);
+        assert_eq!(map.get(f), 5000);
+
+        // Forgotten, they still resolve: file handles outlive the kernel's references
+        assert!(map.put(5000, 1).is_none());
+        assert!(map.put(5000, 1).is_some());
+        assert!(map.put(1, 1).is_some());
+        resolves_to(&map, 5000, f);
+        resolves_to(&map, 1, root);
+    }
+
+    #[test]
+    fn node_map_snapshot_inodes_get_alternates_that_go_stale() {
+        let mut map = NodeMap::new();
+        let origin = inum(BCACHEFS_ROOT_SUBVOL, 5000);
+        let snap   = inum(3, 5000);
+        let snap2  = inum(4, 5000);
+
+        assert_eq!(map.get(origin), 5000);
+        let a = map.get(snap);
+        let b = map.get(snap2);
+        assert!(a >= ALT_NODE_BASE && b >= ALT_NODE_BASE && a != b);
+        assert_eq!(map.get(snap), a, "one inode, one node ID");
+        resolves_to(&map, 5000, origin);
+        resolves_to(&map, a, snap);
+        resolves_to(&map, b, snap2);
+
+        // Forgotten, an alternate is stale - never another inode - and a new
+        // reference gets a new one
+        map.put(a, 2);
+        assert_eq!(map.resolve(a).unwrap_err().code(), libc::ESTALE);
+        let a2 = map.get(snap);
+        assert!(a2 != a && a2 != b);
+        resolves_to(&map, a2, snap);
+    }
+
+    #[test]
+    fn node_map_high_root_subvol_inodes_and_alternates_never_share() {
+        let mut map = NodeMap::new();
+
+        // An inode number the alternates have already used can't be its own node
+        let a = map.get(inum(3, 5000));
+        let clash = inum(BCACHEFS_ROOT_SUBVOL, a);
+        let c_node = map.get(clash);
+        assert!(c_node != a);
+        resolves_to(&map, c_node, clash);
+        resolves_to(&map, a, inum(3, 5000));
+
+        // One they haven't reached yet is its own node, and they skip it -
+        // even once forgotten, it still resolves to that inode
+        let high = inum(BCACHEFS_ROOT_SUBVOL, map.next_alt);
+        assert_eq!(map.get(high), high.inum);
+        map.put(high.inum, 1);
+        let next = map.get(inum(5, 6000));
+        assert!(next != high.inum);
+        resolves_to(&map, high.inum, high);
     }
 }
