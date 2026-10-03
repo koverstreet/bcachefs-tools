@@ -579,6 +579,23 @@ impl AtimeOpts {
     }
 }
 
+/// A node ID the kernel holds: the inode it stands for, and FUSE's lookup count
+/// - one per entry we hand out, dropped by forget.
+struct NodeRef {
+    inum:    c::subvol_inum,
+    nlookup: u64,
+}
+
+/// In a handler: the inode @node stands for, or reply with the error and return.
+macro_rules! resolve {
+    ($self:expr, $node:expr, $reply:expr) => {
+        match $self.resolve($node) {
+            Ok(inum) => inum,
+            Err(e)   => { $reply.error(e); return; }
+        }
+    };
+}
+
 struct BcachefsFs {
     /// Shut down (Fs's Drop: bch2_fs_exit()) exactly once on every path:
     /// destroy() takes it, and if the mount fails before fuser hands us to a
@@ -587,8 +604,8 @@ struct BcachefsFs {
     /// Write end of a pipe used to signal the parent process that the
     /// FUSE mount is established. Written in init(), None in foreground mode.
     signal_fd: Option<OwnedFd>,
-    /// Kernel references (FUSE lookup counts) per inum: see "Inode lifetime".
-    lookups: Mutex<HashMap<u64, u64>>,
+    /// The node IDs the kernel holds: see "Inode lifetime".
+    nodes: Mutex<HashMap<u64, NodeRef>>,
     atime: AtimeOpts,
 }
 
@@ -603,24 +620,40 @@ impl BcachefsFs {
 
     /// The kernel now holds a reference: every reply that hands it an entry.
     /// Taken before the reply goes out, so a forget can't arrive first.
-    fn inode_get(&self, inum: u64) {
-        *self.lookups.lock().unwrap().entry(inum).or_insert(0) += 1;
+    /// The inode a node ID from the kernel stands for.
+    fn resolve(&self, node: INodeNo) -> Result<c::subvol_inum, Errno> {
+        if let Some(r) = self.nodes.lock().unwrap().get(&node.0) {
+            return Ok(r.inum);
+        }
+        // Not referenced - a file handle, after eviction. Node IDs are inode
+        // numbers in the root subvolume.
+        Ok(map_root_ino(node))
+    }
+
+    /// Hand the kernel a reference to @inum: its node ID, counted until forget.
+    fn node_get(&self, inum: c::subvol_inum) -> INodeNo {
+        let node = unmap_root_ino(inum.inum);
+        self.nodes.lock().unwrap()
+            .entry(node).or_insert(NodeRef { inum, nlookup: 0 })
+            .nlookup += 1;
+        INodeNo(node)
     }
 
     /// The kernel dropped @nlookup references; evict at zero.
-    fn inode_put(&self, inum: u64, nlookup: u64) {
+    /// forget: drop @nlookup references to @node; with the last, evict.
+    fn node_put(&self, node: INodeNo, nlookup: u64) {
         let unreferenced = {
-            let mut lookups = self.lookups.lock().unwrap();
-            match lookups.get_mut(&inum) {
-                Some(n) => {
-                    *n = n.saturating_sub(nlookup);
-                    *n == 0 && lookups.remove(&inum).is_some()
+            let mut nodes = self.nodes.lock().unwrap();
+            match nodes.get_mut(&node.0) {
+                Some(r) => {
+                    r.nlookup = r.nlookup.saturating_sub(nlookup);
+                    if r.nlookup == 0 { nodes.remove(&node.0).map(|r| r.inum) } else { None }
                 }
-                None => false,
+                None => None,
             }
         };
 
-        if unreferenced {
+        if let Some(inum) = unreferenced {
             self.inode_evict(inum);
         }
     }
@@ -628,9 +661,8 @@ impl BcachefsFs {
     /// bch2_evict_inode(): nothing references the inode any more, so if it
     /// has no links left, delete it. A subvolume root with no links is the
     /// subvolume deletion path's to delete, not ours.
-    fn inode_evict(&self, inum: u64) {
+    fn inode_evict(&self, inum: c::subvol_inum) {
         let fs = self.fs();
-        let inum = c::subvol_inum { subvol: 1, inum };
         let bi = match inode::find_by_inum(&fs, inum) {
             Ok(bi) => bi,
             Err(e) => {
@@ -727,7 +759,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("bcachefs fuse: destroy");
         ensure_thread_init();
 
-        let referenced: Vec<u64> = self.lookups.lock().unwrap().drain().map(|(inum, _)| inum).collect();
+        let referenced: Vec<c::subvol_inum> = self.nodes.lock().unwrap().drain().map(|(_, r)| r.inum).collect();
         for inum in referenced {
             self.inode_evict(inum);
         }
@@ -737,12 +769,12 @@ impl Filesystem for BcachefsFs {
 
     fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
         ensure_thread_init();
-        self.inode_put(map_root_ino(ino).inum, nlookup);
+        self.node_put(ino, nlookup);
     }
 
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         ensure_thread_init();
-        let dir = map_root_ino(parent);
+        let dir = resolve!(self, parent, reply);
         let name_bytes = name.as_bytes();
         eprintln!("fuse_lookup(dir={}, name={:?})", dir.inum, name);
 
@@ -791,13 +823,13 @@ impl Filesystem for BcachefsFs {
 
         eprintln!("  lookup -> ok inum={}", inum.inum);
         let attr = self.inode_to_attr(&bi);
-        self.inode_get(inum.inum);
+        self.node_get(inum);
         reply.entry(&TTL, &attr, Generation(bi.bi_generation as u64));
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
         eprintln!("fuse_getattr(inum={})", inum.inum);
 
         let fs = self.fs();
@@ -833,7 +865,7 @@ impl Filesystem for BcachefsFs {
         reply: ReplyAttr,
     ) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
         eprintln!("fuse_setattr(inum={})", inum.inum);
 
         let fs = self.fs();
@@ -889,7 +921,7 @@ impl Filesystem for BcachefsFs {
 
     fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
         eprintln!("fuse_readlink(inum={})", inum.inum);
 
         let fs = self.fs();
@@ -924,7 +956,7 @@ impl Filesystem for BcachefsFs {
         reply: ReplyEntry,
     ) {
         ensure_thread_init();
-        let dir = map_root_ino(parent);
+        let dir = resolve!(self, parent, reply);
         let name_bytes = name.as_bytes();
         eprintln!("fuse_mknod(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
@@ -935,7 +967,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&new_inode);
-        self.inode_get(new_inode.bi_inum);
+        self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
         reply.entry(&TTL, &attr, Generation(new_inode.bi_generation as u64));
     }
 
@@ -954,7 +986,7 @@ impl Filesystem for BcachefsFs {
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         ensure_thread_init();
-        let dir = map_root_ino(parent);
+        let dir = resolve!(self, parent, reply);
         let name_bytes = name.as_bytes();
         eprintln!("fuse_unlink(dir={}, name={:?})", dir.inum, name);
 
@@ -979,7 +1011,7 @@ impl Filesystem for BcachefsFs {
         reply: ReplyEntry,
     ) {
         ensure_thread_init();
-        let dir = map_root_ino(parent);
+        let dir = resolve!(self, parent, reply);
         let name_bytes = name.as_bytes();
         let link_bytes = link.as_os_str().as_bytes();
         eprintln!("fuse_symlink(dir={}, name={:?}, link={:?})", dir.inum, name, link);
@@ -1016,7 +1048,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&new_inode);
-        self.inode_get(new_inode.bi_inum);
+        self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
         reply.entry(&TTL, &attr, Generation(new_inode.bi_generation as u64));
     }
 
@@ -1031,8 +1063,8 @@ impl Filesystem for BcachefsFs {
         reply: ReplyEmpty,
     ) {
         ensure_thread_init();
-        let src_dir = map_root_ino(parent);
-        let dst_dir = map_root_ino(newparent);
+        let src_dir = resolve!(self, parent, reply);
+        let dst_dir = resolve!(self, newparent, reply);
         let src_bytes = name.as_bytes();
         let dst_bytes = newname.as_bytes();
         eprintln!("fuse_rename(src_dir={}, {:?} -> dst_dir={}, {:?}, flags={})",
@@ -1086,8 +1118,8 @@ impl Filesystem for BcachefsFs {
         reply: ReplyEntry,
     ) {
         ensure_thread_init();
-        let src_inum = map_root_ino(ino);
-        let parent = map_root_ino(newparent);
+        let src_inum = resolve!(self, ino, reply);
+        let parent = resolve!(self, newparent, reply);
         let name_bytes = newname.as_bytes();
         eprintln!("fuse_link(ino={}, newparent={}, name={:?})",
                src_inum.inum, parent.inum, newname);
@@ -1099,7 +1131,7 @@ impl Filesystem for BcachefsFs {
         };
 
         let attr = self.inode_to_attr(&inode_u);
-        self.inode_get(inode_u.bi_inum);
+        self.node_get(c::subvol_inum { subvol: parent.subvol, inum: inode_u.bi_inum });
         reply.entry(&TTL, &attr, Generation(inode_u.bi_generation as u64));
     }
 
@@ -1128,7 +1160,7 @@ impl Filesystem for BcachefsFs {
         reply: ReplyData,
     ) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
         let size = size as usize;
         eprintln!("fuse_read(ino={}, offset={}, size={})", inum.inum, offset, size);
 
@@ -1177,7 +1209,7 @@ impl Filesystem for BcachefsFs {
         reply: ReplyWrite,
     ) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
         let size = data.len();
         eprintln!("fuse_write(ino={}, offset={}, size={})", inum.inum, offset, size);
 
@@ -1254,7 +1286,7 @@ impl Filesystem for BcachefsFs {
     fn fsync(&self, _req: &Request, ino: INodeNo, _fh: FileHandle, _datasync: bool,
              reply: ReplyEmpty) {
         ensure_thread_init();
-        eprintln!("fuse_fsync(ino={})", map_root_ino(ino).inum);
+        eprintln!("fuse_fsync(ino={})", ino.0);
         match fuse_fsync(&self.fs()) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(bch_err(&e)),
@@ -1264,7 +1296,7 @@ impl Filesystem for BcachefsFs {
     fn fsyncdir(&self, _req: &Request, ino: INodeNo, _fh: FileHandle, _datasync: bool,
                 reply: ReplyEmpty) {
         ensure_thread_init();
-        eprintln!("fuse_fsyncdir(ino={})", map_root_ino(ino).inum);
+        eprintln!("fuse_fsyncdir(ino={})", ino.0);
         match fuse_fsync(&self.fs()) {
             Ok(()) => reply.ok(),
             Err(e) => reply.error(bch_err(&e)),
@@ -1280,7 +1312,7 @@ impl Filesystem for BcachefsFs {
         mut reply: ReplyDirectory,
     ) {
         ensure_thread_init();
-        let dir = map_root_ino(ino);
+        let dir = resolve!(self, ino, reply);
         eprintln!("fuse_readdir(dir={}, offset={})", dir.inum, offset);
 
         {
@@ -1349,7 +1381,7 @@ impl Filesystem for BcachefsFs {
 
     fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
         let Ok(name) = CString::new(name.as_bytes()) else {
             reply.error(Errno::EINVAL);
             return;
@@ -1366,7 +1398,7 @@ impl Filesystem for BcachefsFs {
 
     fn listxattr(&self, req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
 
         // The kernel lists trusted.* only to CAP_SYS_ADMIN, and doesn't filter
         // the list for FUSE; we only see the caller's uid.
@@ -1384,7 +1416,7 @@ impl Filesystem for BcachefsFs {
     fn setxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, value: &[u8],
                 flags: i32, _position: u32, reply: ReplyEmpty) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
         let Ok(name) = CString::new(name.as_bytes()) else {
             reply.error(Errno::EINVAL);
             return;
@@ -1402,7 +1434,7 @@ impl Filesystem for BcachefsFs {
 
     fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
         ensure_thread_init();
-        let inum = map_root_ino(ino);
+        let inum = resolve!(self, ino, reply);
         let Ok(name) = CString::new(name.as_bytes()) else {
             reply.error(Errno::EINVAL);
             return;
@@ -1459,7 +1491,7 @@ impl Filesystem for BcachefsFs {
         reply: ReplyCreate,
     ) {
         ensure_thread_init();
-        let dir = map_root_ino(parent);
+        let dir = resolve!(self, parent, reply);
         let name_bytes = name.as_bytes();
         eprintln!("fuse_create(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
@@ -1475,7 +1507,7 @@ impl Filesystem for BcachefsFs {
 
         eprintln!("  create -> ok inum={}", new_inode.bi_inum);
         let attr = self.inode_to_attr(&new_inode);
-        self.inode_get(new_inode.bi_inum);
+        self.node_get(c::subvol_inum { subvol: dir.subvol, inum: new_inode.bi_inum });
         reply.created(
             &TTL, &attr,
             Generation(new_inode.bi_generation as u64),
@@ -1942,7 +1974,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         let bcachefs_fs = BcachefsFs {
             fs: Some(fs),
             signal_fd: None,
-            lookups: Mutex::new(HashMap::new()),
+            nodes: Mutex::new(HashMap::new()),
             atime: AtimeOpts::from_ms_flags(ms_flags),
         };
         if let Err(e) = fuse_serve(bcachefs_fs, &cli.mountpoint, &config, fd) {
@@ -2082,7 +2114,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     let bcachefs_fs = BcachefsFs {
         fs: Some(fs),
         signal_fd: Some(signal_fd),
-        lookups: Mutex::new(HashMap::new()),
+        nodes: Mutex::new(HashMap::new()),
         atime: AtimeOpts::from_ms_flags(ms_flags),
     };
 
