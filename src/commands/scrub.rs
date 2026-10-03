@@ -25,6 +25,7 @@ extern "C" fn sigint_handler(_: libc::c_int) {
     INTERRUPTED.store(true, Ordering::Relaxed);
 }
 
+const NO_PROGRESS_WARN_AFTER: Duration = Duration::from_secs(30);
 /// bch_ioctl_data_event is blocklisted from bindgen (packed+aligned conflict),
 /// so we read raw bytes and extract fields manually.
 /// Layout: u8 type, u8 ret, u8 pad[6], bch_ioctl_data_progress, padding to 128.
@@ -68,13 +69,18 @@ fn start_scrub(ioctl_fd: std::os::fd::BorrowedFd, dev_idx: u32, data_types: u32)
 }
 
 struct ScrubDev {
-    name:           String,
-    progress_fd:    Option<std::fs::File>,
-    done:           u64,
-    corrected:      u64,
-    uncorrected:    u64,
-    total:          u64,
-    ret_status:     u8,
+    name:              String,
+    progress_fd:       Option<std::fs::File>,
+    done:              u64,
+    corrected:         u64,
+    uncorrected:       u64,
+    total:             u64,
+    ret_status:        u8,
+    /// Highest `done` value observed so far, and when it was last seen to
+    /// advance. Used to detect a device whose progress ioctl keeps returning
+    /// events but never reports more work done (koverstreet/bcachefs-tools#564).
+    last_seen_done:    u64,
+    last_seen_done_at: Instant,
 }
 
 impl ScrubDev {
@@ -102,6 +108,26 @@ impl ScrubDev {
             pct,
             status)
     }
+}
+
+/// True if every device that is still actively scrubbing (`progress_fd` is
+/// still open) has not had its `done` counter advance for `warn_after`. This
+/// catches both "the ioctl never returns" and the #564 case where progress
+/// events keep arriving (so `total` is known and non-zero) but `done` never
+/// moves off 0. A device with no `progress_fd` (finished, offline, or errored)
+/// is not "active" and does not count either way.
+fn scrub_stalled(devs: &[ScrubDev], now: Instant, warn_after: Duration) -> bool {
+    let mut any_active = false;
+    let mut all_stalled = true;
+    for dev in devs {
+        if dev.progress_fd.is_some() {
+            any_active = true;
+            if now.duration_since(dev.last_seen_done_at) < warn_after {
+                all_stalled = false;
+            }
+        }
+    }
+    any_active && all_stalled
 }
 
 #[derive(Parser, Debug)]
@@ -153,6 +179,7 @@ fn scrub(cli: Cli) -> Result<()> {
         scrub_devs.push(ScrubDev {
             name, progress_fd: Some(fd),
             done: 0, corrected: 0, uncorrected: 0, total: 0, ret_status: 0,
+            last_seen_done: 0, last_seen_done_at: Instant::now(),
         });
     } else {
         for dev in &devices {
@@ -160,6 +187,7 @@ fn scrub(cli: Cli) -> Result<()> {
             scrub_devs.push(ScrubDev {
                 name: dev.dev.clone(), progress_fd: Some(fd),
                 done: 0, corrected: 0, uncorrected: 0, total: 0, ret_status: 0,
+                last_seen_done: 0, last_seen_done_at: Instant::now(),
             });
         }
     }
@@ -173,6 +201,7 @@ fn scrub(cli: Cli) -> Result<()> {
 
     let mut exit_code = 0i32;
     let mut last = Instant::now();
+    let mut no_progress_warned = false;
     let mut first = true;
     let live_output = io::stdout().is_terminal();
 
@@ -208,6 +237,11 @@ fn scrub(cli: Cli) -> Result<()> {
                         dev.uncorrected = p.sectors_error_uncorrected;
                         dev.total = p.sectors_total;
 
+                        if dev.done > dev.last_seen_done {
+                            dev.last_seen_done = dev.done;
+                            dev.last_seen_done_at = now;
+                        }
+
                         if dev.corrected > 0 { exit_code |= 2; }
                         if dev.uncorrected > 0 { exit_code |= 4; }
 
@@ -227,6 +261,20 @@ fn scrub(cli: Cli) -> Result<()> {
             if dev.progress_fd.is_some() {
                 all_done = false;
             }
+        }
+
+        if scrub_stalled(&scrub_devs, now, NO_PROGRESS_WARN_AFTER) {
+            if !no_progress_warned {
+                writeln!(
+                    io::stderr(),
+                    "warning: scrub has not reported progress for {} seconds; \
+                     check that the running kernel or DKMS module matches this bcachefs-tools version",
+                    NO_PROGRESS_WARN_AFTER.as_secs()
+                )?;
+                no_progress_warned = true;
+            }
+        } else {
+            no_progress_warned = false;
         }
 
         let interrupted = INTERRUPTED.load(Ordering::Relaxed);
@@ -288,3 +336,78 @@ pub const CMD: super::CmdDef = typed_cmd!(
     Cli,
     scrub
 );
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dummy fd for "this device is still actively scrubbing" — its
+    /// content is never read by `scrub_stalled`, only `is_some()` matters.
+    fn active_fd() -> Option<std::fs::File> {
+        Some(std::fs::File::open("/dev/null").expect("open /dev/null"))
+    }
+
+    fn dev(progress_fd: Option<std::fs::File>, done: u64, last_seen_done_at: Instant) -> ScrubDev {
+        ScrubDev {
+            name: "test".to_string(),
+            progress_fd,
+            done,
+            corrected: 0,
+            uncorrected: 0,
+            total: 1 << 20,
+            ret_status: 0,
+            last_seen_done: done,
+            last_seen_done_at,
+        }
+    }
+
+    // Negative control: a device that just made progress is never stalled,
+    // no matter how small the warn threshold.
+    #[test]
+    fn immediate_progress_is_not_stalled() {
+        let now = Instant::now();
+        let devs = vec![dev(active_fd(), 100, now)];
+        assert!(!scrub_stalled(&devs, now, Duration::from_secs(30)));
+    }
+
+    // The #564 case: total is known (so the old `total > 0` criterion would
+    // have wrongly counted this as "progress"), but `done` has been stuck
+    // since before the warn window opened.
+    #[test]
+    fn done_stuck_at_zero_with_known_total_is_stalled() {
+        let now = Instant::now();
+        let stuck_since = now - Duration::from_secs(31);
+        let devs = vec![dev(active_fd(), 0, stuck_since)];
+        assert!(scrub_stalled(&devs, now, Duration::from_secs(30)));
+    }
+
+    // Same stuck device, but not yet past the warn threshold.
+    #[test]
+    fn done_stuck_but_within_threshold_is_not_stalled() {
+        let now = Instant::now();
+        let stuck_since = now - Duration::from_secs(10);
+        let devs = vec![dev(active_fd(), 0, stuck_since)];
+        assert!(!scrub_stalled(&devs, now, Duration::from_secs(30)));
+    }
+
+    // A device that already finished (no progress_fd) does not count as
+    // active, so it can't itself trigger or block the warning.
+    #[test]
+    fn finished_device_is_not_active() {
+        let now = Instant::now();
+        let devs = vec![dev(None, 100, now - Duration::from_secs(60))];
+        assert!(!scrub_stalled(&devs, now, Duration::from_secs(30)));
+    }
+
+    // One device stuck, one still making real progress: the warning
+    // requires *no* device to have advanced, so this must not fire.
+    #[test]
+    fn one_advancing_device_suppresses_the_warning() {
+        let now = Instant::now();
+        let devs = vec![
+            dev(active_fd(), 0, now - Duration::from_secs(60)),
+            dev(active_fd(), 100, now),
+        ];
+        assert!(!scrub_stalled(&devs, now, Duration::from_secs(30)));
+    }
+}
