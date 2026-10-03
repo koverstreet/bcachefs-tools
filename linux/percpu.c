@@ -38,6 +38,7 @@
  * state. Things that need real per-instance setup (semaphores etc.)
  * should use DEFINE_PER_CPU + the registry instead.
  */
+#include <dirent.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -151,6 +152,61 @@ void bch_percpu_register(void (*init_one)(void *),
 	pthread_mutex_unlock(&bch_percpu_lock);
 }
 
+/*
+ * Running out of slots means something made more threads than expected; say
+ * which. Workqueue workers are named "<queue>/<n>", so they're grouped by
+ * queue.
+ */
+static void bch_percpu_print_threads(void)
+{
+	struct { char name[16]; unsigned nr; } names[64];
+	unsigned nr_names = 0, nr_threads = 0, nr_other = 0;
+
+	DIR *dir = opendir("/proc/self/task");
+	if (!dir)
+		return;
+
+	struct dirent *d;
+	while ((d = readdir(dir))) {
+		if (d->d_name[0] == '.')
+			continue;
+
+		char path[sizeof("/proc/self/task//comm") + sizeof(d->d_name)];
+		char name[16] = "";
+		snprintf(path, sizeof(path), "/proc/self/task/%s/comm", d->d_name);
+		FILE *f = fopen(path, "r");
+		if (!f)
+			continue;
+		if (!fgets(name, sizeof(name), f))
+			name[0] = '\0';
+		fclose(f);
+
+		name[strcspn(name, "/\n")] = '\0';
+		nr_threads++;
+
+		unsigned i;
+		for (i = 0; i < nr_names; i++)
+			if (!strcmp(names[i].name, name))
+				break;
+		if (i == nr_names) {
+			if (nr_names == ARRAY_SIZE(names)) {
+				nr_other++;
+				continue;
+			}
+			strcpy(names[nr_names].name, name);
+			names[nr_names++].nr = 0;
+		}
+		names[i].nr++;
+	}
+	closedir(dir);
+
+	fprintf(stderr, "%u live threads:\n", nr_threads);
+	for (unsigned i = 0; i < nr_names; i++)
+		fprintf(stderr, "  %-16s %u\n", names[i].name, names[i].nr);
+	if (nr_other)
+		fprintf(stderr, "  (other)          %u\n", nr_other);
+}
+
 void bch_percpu_thread_init(void)
 {
 	if (bch_percpu_my_chunk)
@@ -187,6 +243,7 @@ void bch_percpu_thread_init(void)
 		pthread_mutex_unlock(&bch_percpu_lock);
 		fprintf(stderr, "bch_percpu_thread_init: too many threads (max %d)\n",
 			BCH_PERCPU_MAX_CPUS);
+		bch_percpu_print_threads();
 		abort();
 	}
 
