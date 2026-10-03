@@ -1535,25 +1535,42 @@ int bch2_dev_resize(struct bch_fs *c, struct bch_dev *ca, u64 nbuckets, struct p
 		return ret;
 	}
 
+	/*
+	 * The new range comes into the alloc btree as holes - free buckets - and
+	 * may hold a backup superblock that was past the old end. It has to be
+	 * marked before the range goes into freespace, and marking needs
+	 * nbuckets to cover it (the alloc trigger refuses buckets past the end).
+	 * So mark with freespace not initialized, as device add does: the alloc
+	 * trigger doesn't expect the new range in freespace yet, and the
+	 * allocator steers clear of superblock buckets (is_superblock_bucket()).
+	 * bch2_dev_freespace_init() sets it again; after a crash, mount
+	 * initializes freespace for the whole device.
+	 */
+	bool freespace_initialized = ca->mi.freespace_initialized;
+
+	scoped_guard(mutex_noio, &c->sb_lock) {
+		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
+		m->nbuckets = cpu_to_le64(nbuckets);
+		SET_BCH_MEMBER_FREESPACE_INITIALIZED(m, false);
+
+		bch2_write_super(c);
+	}
+
 	ret = bch2_trans_mark_dev_sb(c, ca, BTREE_TRIGGER_transactional);
 	if (ret) {
 		prt_printf(err, "bch2_trans_mark_dev_sb() error: %s\n", bch2_err_str(ret));
 		return ret;
 	}
 
-	scoped_guard(mutex_noio, &c->sb_lock) {
-		struct bch_member *m = bch2_members_v2_get_mut(c->disk_sb.sb, ca->dev_idx);
-		m->nbuckets = cpu_to_le64(nbuckets);
-
-		bch2_write_super(c);
-	}
-
-	if (ca->mi.freespace_initialized) {
+	if (freespace_initialized) {
 		ret = __bch2_dev_resize_alloc(ca, old_nbuckets, nbuckets);
 		if (ret) {
 			prt_printf(err, "__bch2_dev_resize_alloc() error: %s\n", bch2_err_str(ret));
 			return ret;
 		}
+
+		scoped_guard(mutex_noio, &c->sb_lock)
+			bch2_write_super(c);
 	}
 
 	bch2_recalc_capacity(c);

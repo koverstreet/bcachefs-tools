@@ -223,9 +223,16 @@ static struct open_bucket *bch2_open_bucket_alloc(struct bch_fs_allocator *c)
 	return ob;
 }
 
+/*
+ * The alloc btree shows a superblock bucket as a free hole until it's been
+ * marked: before the trans_mark_dev_sbs recovery pass, and on a device without
+ * freespace initialized - which bch2_dev_resize() has while it marks the
+ * superblock buckets the new range brings in.
+ */
 static inline bool is_superblock_bucket(struct bch_fs *c, struct bch_dev *ca, u64 b)
 {
-	if (c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_trans_mark_dev_sbs))
+	if ((c->recovery.passes_complete & BIT_ULL(BCH_RECOVERY_PASS_trans_mark_dev_sbs)) &&
+	    READ_ONCE(ca->mi.freespace_initialized))
 		return false;
 
 	return bch2_is_superblock_bucket(ca, b);
