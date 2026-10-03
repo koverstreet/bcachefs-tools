@@ -1285,6 +1285,16 @@ fn parse_fuse_mount_options(
 
     mount_options.extend(parsed.fuse_options);
 
+    // fuser defaults to nodev,nosuid, as fusermount does for an unprivileged
+    // user mounting something untrusted. This is root mounting a block device,
+    // as trusted as a kernel mount - so like mount(8), only what -o asks for:
+    if !mount_options.contains(&MountOption::NoDev) {
+        mount_options.push(MountOption::Dev);
+    }
+    if !mount_options.contains(&MountOption::NoSuid) {
+        mount_options.push(MountOption::Suid);
+    }
+
     Ok((bch_opts, mount_options, parsed.flags))
 }
 
@@ -1470,10 +1480,10 @@ enum FuseMount {
 
 /// Mount fuseblk on @mountpoint and return the /dev/fuse fd to serve it on.
 ///
-/// The option string is what fuser builds for plain fuse, plus blksize; the
-/// flags get fuser's nodev/nosuid defaults, so the two kinds of mount behave
-/// the same apart from unmount. That includes allow_other with
-/// default_permissions - see parse_fuse_mount_options().
+/// The option string is what fuser builds for plain fuse, plus blksize, so the
+/// two kinds of mount behave the same apart from unmount. That includes
+/// allow_other with default_permissions, and nodev/nosuid only when asked for
+/// - see parse_fuse_mount_options().
 fn mount_fuseblk(
     source:     &Path,
     mountpoint: &str,
@@ -1491,7 +1501,7 @@ fn mount_fuseblk(
     );
 
     use rustix::mount::MountFlags;
-    let flags = MountFlags::from_bits_retain(ms_flags as _) | MountFlags::NODEV | MountFlags::NOSUID;
+    let flags = MountFlags::from_bits_retain(ms_flags as _);
     let data = std::ffi::CString::new(data)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidInput, e))?;
     rustix::mount::mount(source, mountpoint, "fuseblk", flags, Some(data.as_c_str()))?;
@@ -1768,5 +1778,19 @@ mod tests {
         ] {
             assert!(mount_options.contains(&option));
         }
+        // asked for nodev/nosuid, so not overridden - fuser rejects the pair:
+        assert!(!mount_options.contains(&MountOption::Dev));
+        assert!(!mount_options.contains(&MountOption::Suid));
+    }
+
+    /// Like a kernel mount, not fuser's nodev,nosuid defaults: device nodes
+    /// and setuid binaries work unless -o turns them off.
+    #[test]
+    fn parse_fuse_mount_options_defaults_to_dev_suid() {
+        let (_opts, mount_options, _ms_flags) =
+            parse_fuse_mount_options("/dev/test", None).unwrap();
+
+        assert!(mount_options.contains(&MountOption::Dev));
+        assert!(mount_options.contains(&MountOption::Suid));
     }
 }
