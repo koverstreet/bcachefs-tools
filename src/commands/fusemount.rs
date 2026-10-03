@@ -721,6 +721,10 @@ struct BcachefsFs {
     /// The node IDs the kernel holds: see "Inode lifetime".
     nodes: Mutex<NodeMap>,
     atime: AtimeOpts,
+    /// Our locks and claims on the devices (lock_devices(), claim_devices()):
+    /// let go in destroy(), with the filesystem shut down, so they're free by
+    /// the time umount returns - not when the process gets round to exiting.
+    held: Vec<File>,
 }
 
 // Safety: bch_fs is internally synchronized with its own locking.
@@ -866,6 +870,7 @@ impl Filesystem for BcachefsFs {
         }
 
         self.fs = None;
+        self.held.clear();
     }
 
     fn forget(&self, _req: &Request, ino: INodeNo, nlookup: u64) {
@@ -2027,23 +2032,67 @@ fn claim_devices(devs: &[PathBuf]) -> anyhow::Result<Vec<File>> {
 /// still ask for synchronous DESTROY at unmount (fc->destroy, which only
 /// fuseblk and virtiofs set): then we'd open the device O_EXCL, and one object
 /// would be both the claim and the I/O.
+///
+/// A held lock whose device isn't mounted is a daemon shutting down - unmount
+/// takes the mount away first, then waits for DESTROY - so wait for it, as a
+/// kernel mount waits for a dying superblock (generic/604 races exactly that).
 fn lock_devices(devs: &[PathBuf]) -> anyhow::Result<Vec<File>> {
     use rustix::fs::{flock, FlockOperation};
+    use rustix::io::Errno;
+
+    const WAIT_MAX: Duration = Duration::from_secs(300);
 
     devs.iter()
         .map(|d| {
             let f = File::open(d)
                 .map_err(|e| anyhow::anyhow!("{}: {}", d.display(), e))?;
-            flock(&f, FlockOperation::NonBlockingLockExclusive)
-                .map_err(|e| if e == rustix::io::Errno::WOULDBLOCK {
-                    anyhow::anyhow!("{}: already in use by another FUSE mount of bcachefs",
-                                    d.display())
-                } else {
-                    anyhow::anyhow!("{}: locking: {}", d.display(), e)
-                })?;
-            Ok(f)
+            let start = std::time::Instant::now();
+            let mut said = false;
+            loop {
+                match flock(&f, FlockOperation::NonBlockingLockExclusive) {
+                    Ok(()) => return Ok(f),
+                    Err(Errno::WOULDBLOCK) if fuse_mounted(d) =>
+                        anyhow::bail!("{}: already in use by another FUSE mount of bcachefs",
+                                      d.display()),
+                    Err(Errno::WOULDBLOCK) if start.elapsed() < WAIT_MAX => {
+                        if !said && start.elapsed() >= Duration::from_secs(1) {
+                            eprintln!("{}: waiting for the previous FUSE mount of it to finish shutting down",
+                                      d.display());
+                            said = true;
+                        }
+                        std::thread::sleep(Duration::from_millis(20));
+                    }
+                    Err(Errno::WOULDBLOCK) =>
+                        anyhow::bail!("{}: a FUSE mount of bcachefs that's no longer mounted still \
+                                       holds it after {}s - is its daemon stuck?",
+                                      d.display(), WAIT_MAX.as_secs()),
+                    Err(e) =>
+                        anyhow::bail!("{}: locking: {}", d.display(), e),
+                }
+            }
         })
         .collect()
+}
+
+/// Whether @dev is the source of a mounted FUSE filesystem: the same block
+/// device, or the same image file.
+fn fuse_mounted(dev: &Path) -> bool {
+    let same = |a: &std::fs::Metadata, b: &std::fs::Metadata| {
+        if a.file_type().is_block_device() && b.file_type().is_block_device() {
+            a.rdev() == b.rdev()
+        } else {
+            a.dev() == b.dev() && a.ino() == b.ino()
+        }
+    };
+    let Ok(want) = std::fs::metadata(dev) else { return false };
+    let Ok(mountinfo) = std::fs::read_to_string("/proc/self/mountinfo") else { return false };
+
+    // ... - fstype source superopts
+    mountinfo.lines()
+        .filter_map(|l| l.split_once(" - ").map(|(_, r)| r))
+        .filter_map(|r| { let mut f = r.split(' '); Some((f.next()?, f.next()?)) })
+        .filter(|(fstype, _)| fstype.starts_with("fuse"))
+        .any(|(_, source)| std::fs::metadata(source).is_ok_and(|m| same(&m, &want)))
 }
 
 pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
@@ -2073,17 +2122,16 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         opt_set!(bch_opts, noexcl, 1);
     }
 
-    // Held until we exit, like the claims below: see lock_devices().
-    let _locks = lock_devices(&devs)?;
+    // Held until destroy(), with the claims below: see lock_devices(). Across
+    // the fork, the child's copies keep them.
+    let mut held = lock_devices(&devs)?;
 
     let fs = stderr_unless_error(|| Fs::open(&devs, bch_opts))
         .map_err(|e| anyhow::anyhow!("Error opening filesystem: {}", e))?;
 
-    // Held until we exit: across the fork, the child's copies keep the claims.
-    let _claims = match &mount {
-        FuseMount::Fuseblk { .. } => claim_devices(&devs[1..])?,
-        FuseMount::Fuse => Vec::new(),
-    };
+    if let FuseMount::Fuseblk { .. } = &mount {
+        held.extend(claim_devices(&devs[1..])?);
+    }
 
     let mut config = Config::default();
     config.mount_options = mount_options;
@@ -2117,6 +2165,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
             signal_fd: None,
             nodes: Mutex::new(NodeMap::new()),
             atime: AtimeOpts::from_ms_flags(ms_flags),
+            held,
         };
         if let Err(e) = fuse_serve(bcachefs_fs, &cli.mountpoint, &config, fd) {
             anyhow::bail!("Error mounting filesystem: {}", e);
@@ -2257,6 +2306,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         signal_fd: Some(signal_fd),
         nodes: Mutex::new(NodeMap::new()),
         atime: AtimeOpts::from_ms_flags(ms_flags),
+        held,
     };
 
     match fuse_serve(bcachefs_fs, &cli.mountpoint, &config, fuse_fd) {
