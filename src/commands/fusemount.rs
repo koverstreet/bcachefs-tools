@@ -1341,13 +1341,18 @@ impl Filesystem for BcachefsFs {
         let shift = block_size.trailing_zeros() as u64 - 9;
 
         let nr_inodes = accounting::nr_inodes(&fs);
+        // As bch2_statfs(): inodes have no fixed limit, so count the free
+        // space as room for ~256 byte inodes. (u64::MAX here read as -1,
+        // "unknown", and df -i showed "-" - which xfstests generic/273 then
+        // fed to arithmetic.)
+        let avail_inodes = (usage.capacity - usage.used) << 1;
 
         reply.statfs(
             usage.capacity >> shift,
             usage.free >> shift,
             (usage.capacity - usage.used) >> shift,
-            nr_inodes,
-            u64::MAX,
+            nr_inodes + avail_inodes,
+            avail_inodes,
             block_size as u32,
             255,
             block_size as u32,
