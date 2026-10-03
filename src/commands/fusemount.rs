@@ -162,7 +162,7 @@ fn dtype_to_filetype(dtype: u32) -> FileType {
 const CHILD_OK: u8            = 0;
 const CHILD_ERR_FS_START: u8  = 1;
 const CHILD_ERR_MOUNT: u8     = 2;
-/// Between the two: the filesystem is up but we never reached fuser::mount2.
+/// After start, before serving: the filesystem is up but nothing ever served it.
 const CHILD_ERR_SETUP: u8     = 3;
 
 /// Bounded well under a pipe buffer so the child never blocks writing it, even
@@ -1668,33 +1668,54 @@ fn mount_fuseblk(
     Ok(dev_fuse.into())
 }
 
-/// Mount and serve until unmounted. Either way @bcachefs_fs - and with it the
-/// filesystem - is gone by the time this returns.
-fn fuse_run(
-    bcachefs_fs: BcachefsFs,
-    mountpoint:  &str,
-    config:      &Config,
-    mount:       &FuseMount,
-) -> std::io::Result<()> {
+/// For fuseblk, make the mount - before the filesystem is started.
+///
+/// The kernel's exclusive claim on the source device, taken by this mount, is
+/// what keeps a kernel bcachefs mount, or fsck/format, off a device we're
+/// serving - and keeps us off one they have: whichever comes second gets
+/// EBUSY. So it has to be in place before anything writes: started first, we
+/// could go read-write on a device the kernel has mounted, and only then fail
+/// here. It does nothing against another fusemount (sget: see lock_devices()).
+///
+/// Plain fuse has no such claim and mounts in fuse_serve(), via fuser.
+fn fuse_claim(fs: &Fs, mountpoint: &str, mount: &FuseMount) -> std::io::Result<Option<OwnedFd>> {
     let FuseMount::Fuseblk { source, ms_flags } = mount else {
-        return fuser::mount2(bcachefs_fs, mountpoint, config);
+        return Ok(None);
     };
 
     // fuseblk wants a power of two from 512 to the page size:
-    let blksize = (bcachefs_fs.fs().block_bytes() as usize)
+    let blksize = (fs.block_bytes() as usize)
         .clamp(512, rustix::param::page_size()) as u32;
 
-    let fd = mount_fuseblk(source, mountpoint, *ms_flags, blksize)?;
+    mount_fuseblk(source, mountpoint, *ms_flags, blksize).map(Some)
+}
 
-    // Session::from_fd() reads FUSE_INIT, which the kernel only sends once
-    // the mount exists - hence mount first. From here a failure leaves a
-    // mount with nothing serving it; detach it rather than leave it hanging.
+/// Detach a fuseblk mount nothing is going to serve.
+fn fuse_unclaim(mountpoint: &str) {
+    let _ = rustix::mount::unmount(mountpoint, rustix::mount::UnmountFlags::DETACH);
+}
+
+/// Serve until unmounted: on @fd from fuse_claim(), or, for plain fuse, on a
+/// mount made here. Either way @bcachefs_fs - and with it the filesystem - is
+/// gone by the time this returns.
+fn fuse_serve(
+    bcachefs_fs: BcachefsFs,
+    mountpoint:  &str,
+    config:      &Config,
+    fd:          Option<OwnedFd>,
+) -> std::io::Result<()> {
+    let Some(fd) = fd else {
+        return fuser::mount2(bcachefs_fs, mountpoint, config);
+    };
+
+    // Session::from_fd() reads FUSE_INIT, which the kernel sent when the mount
+    // was made and holds until we read it - so filesystem start can come in
+    // between. From here a failure leaves a mount with nothing serving it;
+    // detach it rather than leave it hanging.
     fuser::Session::from_fd(bcachefs_fs, fd, config.acl, config.clone())
         .and_then(|se| se.spawn())
         .and_then(|bg| bg.join())
-        .inspect_err(|_| {
-            let _ = rustix::mount::unmount(mountpoint, rustix::mount::UnmountFlags::DETACH);
-        })
+        .inspect_err(|_| fuse_unclaim(mountpoint))
 }
 
 /// Claim the devices the kernel doesn't (everything but the fuseblk source)
@@ -1708,11 +1729,69 @@ fn claim_devices(devs: &[PathBuf]) -> anyhow::Result<Vec<File>> {
         .collect()
 }
 
+/// Lock every device - block device or image file - against another fusemount,
+/// for as long as this process lives. Taken before the filesystem is opened.
+///
+/// This is horrible, and it's the best there is. Why we need a lock of our own:
+///
+/// - The kernel's claim on a fuseblk mount's source looks like the lock, and
+///   against everything that isn't fuseblk it is one: a kernel bcachefs mount,
+///   or fsck/format opening O_EXCL, has a different holder and gets EBUSY (see
+///   bd_may_claim()). That's why fuse_claim() mounts before the filesystem is
+///   started - so it can't write first and lose the race afterwards.
+///
+/// - But against another fuseblk mount it's nothing: get_tree_bdev() finds the
+///   superblock already on that device and hands it to the second mount (sget),
+///   ignoring the second mount's /dev/fuse fd. So a second fusemount's mount
+///   *succeeds*, and it then started a second read-write filesystem on a device
+///   the first daemon was serving - seen as the superblock sequence jumping
+///   while the first daemon ran, which caught it and went emergency read-only.
+///
+/// - Nor can we just open the device O_EXCL ourselves: our claim and the
+///   kernel's have different holders, so whichever came second would fail - we
+///   couldn't mount our own device.
+///
+/// So: flock(). Advisory - it binds only fusemount - and it locks an inode, so
+/// it's per device *node*: a second node for the same disk made with mknod gets
+/// a lock of its own. Device scanning resolves to the /dev nodes, so in practice
+/// every fusemount locks the same one.
+///
+/// The right fix is a fuse mount that isn't tied to a block device but can
+/// still ask for synchronous DESTROY at unmount (fc->destroy, which only
+/// fuseblk and virtiofs set): then we'd open the device O_EXCL, and one object
+/// would be both the claim and the I/O.
+fn lock_devices(devs: &[PathBuf]) -> anyhow::Result<Vec<File>> {
+    use rustix::fs::{flock, FlockOperation};
+
+    devs.iter()
+        .map(|d| {
+            let f = File::open(d)
+                .map_err(|e| anyhow::anyhow!("{}: {}", d.display(), e))?;
+            flock(&f, FlockOperation::NonBlockingLockExclusive)
+                .map_err(|e| if e == rustix::io::Errno::WOULDBLOCK {
+                    anyhow::anyhow!("{}: already in use by another FUSE mount of bcachefs",
+                                    d.display())
+                } else {
+                    anyhow::anyhow!("{}: locking: {}", d.display(), e)
+                })?;
+            Ok(f)
+        })
+        .collect()
+}
+
 pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     use crate::device_scan::scan_sbs;
 
     let (mut bch_opts, mount_options, ms_flags) =
         parse_fuse_mount_options(&cli.device, cli.options.as_deref())?;
+
+    // A remount has to reach the daemon already serving the mount; carrying
+    // on here would start a second filesystem on the same device instead.
+    if ms_flags & libc::MS_REMOUNT != 0 {
+        anyhow::bail!("{}: remounting a FUSE mount of bcachefs isn't supported yet; \
+                       unmount it and mount it again with the new options",
+                      cli.mountpoint);
+    }
 
     let sbs = stderr_unless_error(|| scan_sbs(&cli.device, &bch_opts))?;
     let devs: Vec<PathBuf> = sbs.iter().map(|(p, _)| p.clone()).collect();
@@ -1726,6 +1805,9 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     if matches!(mount, FuseMount::Fuseblk { .. }) {
         opt_set!(bch_opts, noexcl, 1);
     }
+
+    // Held until we exit, like the claims below: see lock_devices().
+    let _locks = lock_devices(&devs)?;
 
     let fs = stderr_unless_error(|| Fs::open(&devs, bch_opts))
         .map_err(|e| anyhow::anyhow!("Error opening filesystem: {}", e))?;
@@ -1746,14 +1828,21 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     if cli.foreground {
         unsafe { c::linux_shrinkers_init() };
-        fs.start().map_err(|e| anyhow::anyhow!("Error starting filesystem: {}", e))?;
+        let fd = fuse_claim(&fs, &cli.mountpoint, &mount)
+            .map_err(|e| anyhow::anyhow!("Error mounting filesystem: {}", e))?;
+        if let Err(e) = fs.start() {
+            if fd.is_some() {
+                fuse_unclaim(&cli.mountpoint);
+            }
+            anyhow::bail!("Error starting filesystem: {}", e);
+        }
         let bcachefs_fs = BcachefsFs {
             fs: Some(fs),
             signal_fd: None,
             lookups: Mutex::new(HashMap::new()),
             atime: AtimeOpts::from_ms_flags(ms_flags),
         };
-        if let Err(e) = fuse_run(bcachefs_fs, &cli.mountpoint, &config, &mount) {
+        if let Err(e) = fuse_serve(bcachefs_fs, &cli.mountpoint, &config, fd) {
             anyhow::bail!("Error mounting filesystem: {}", e);
         }
         return Ok(());
@@ -1818,9 +1907,9 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
                 Some(CHILD_ERR_MOUNT) =>
                     anyhow::bail!("FUSE mount failed"),
                 Some(CHILD_ERR_SETUP) if !reason.is_empty() =>
-                    anyhow::bail!("filesystem started but the mount was never attempted: {reason}"),
+                    anyhow::bail!("filesystem started but was never served: {reason}"),
                 Some(CHILD_ERR_SETUP) =>
-                    anyhow::bail!("filesystem started but the mount was never attempted"),
+                    anyhow::bail!("filesystem started but was never served"),
                 _ =>
                     anyhow::bail!("child exited without reporting a reason"),
             }
@@ -1851,20 +1940,36 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
 
     unsafe { c::linux_shrinkers_init() };
 
-    eprintln!("fusemount: starting filesystem");
     // process::exit() skips destructors: drop fs explicitly before it.
+    let fuse_fd = match fuse_claim(&fs, &cli.mountpoint, &mount) {
+        Ok(fd) => fd,
+        Err(e) => {
+            eprintln!("fusemount: mount failed: {}", e);
+            drop(fs);
+            signal_parent_err(write_fd, CHILD_ERR_MOUNT, &format!("{e}"));
+            std::process::exit(1);
+        }
+    };
+
+    eprintln!("fusemount: starting filesystem");
     if let Err(e) = fs.start() {
         eprintln!("fusemount: bch2_fs_start failed: {}", e);
+        if fuse_fd.is_some() {
+            fuse_unclaim(&cli.mountpoint);
+        }
         drop(fs);
         signal_parent_err(write_fd, CHILD_ERR_FS_START, &format!("{e:#}"));
         std::process::exit(1);
     }
-    eprintln!("fusemount: filesystem started, mounting");
+    eprintln!("fusemount: filesystem started, serving");
 
     let signal_fd = match write_fd.try_clone() {
         Ok(fd) => fd,
         Err(e) => {
             eprintln!("fusemount: couldn't duplicate the signal fd: {e}");
+            if fuse_fd.is_some() {
+                fuse_unclaim(&cli.mountpoint);
+            }
             drop(fs);
             signal_parent_err(write_fd, CHILD_ERR_SETUP,
                               &format!("couldn't duplicate the signal fd: {e}"));
@@ -1878,7 +1983,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         atime: AtimeOpts::from_ms_flags(ms_flags),
     };
 
-    match fuse_run(bcachefs_fs, &cli.mountpoint, &config, &mount) {
+    match fuse_serve(bcachefs_fs, &cli.mountpoint, &config, fuse_fd) {
         Ok(()) => {
             eprintln!("fusemount: unmounted");
         }
