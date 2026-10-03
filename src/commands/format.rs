@@ -156,6 +156,7 @@ struct FormatConfig {
     devices:         Vec<DevConfig>,
     force:           bool,
     quiet:           bool,
+    verbose:         bool,
     initialize:      bool,
     encrypted:       bool,
     no_passphrase:   bool,
@@ -240,6 +241,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
     let mut no_passphrase = false;
     let mut quiet = false;
     let mut initialize = true;
+    let mut verbose = false;
     let mut encrypted = false;
     let mut passphrase_file: Option<String> = None;
     let mut source: Option<String> = None;
@@ -303,6 +305,17 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                 None => (opt_part, None),
             };
             let name = raw_name.replace('-', "_");
+
+            // --verbose is a format-time UX flag: it raises the loglevel of
+            // the initialize-fs open so the init log is emitted. Handle it
+            // before the generic option lookup, otherwise it is routed into
+            // fs_opts as the OPT_FS `verbose` filesystem option and never
+            // reaches cfg.verbose:
+            if name == "verbose" && inline_val.is_none() {
+                verbose = true;
+                i += 1;
+                continue;
+            }
 
             if let Some((opt_id, opt, negated)) = bch_opt_lookup_negated(&name) {
                 if opt.flags as u32 & opt_flags != 0 {
@@ -396,6 +409,9 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                 }
                 "force" => force = true,
                 "quiet" => quiet = true,
+                // --verbose (bare) is intercepted before the generic
+                // option lookup above; this arm only sees --verbose=VALUE,
+                // which is left to the OPT_FS verbose filesystem option:
                 "verbose" => {}
                 "help" => {
                     format_usage();
@@ -425,7 +441,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
                 }
                 b'f' => force = true,
                 b'q' => quiet = true,
-                b'v' => {}
+                b'v' => verbose = true,
                 b'h' => {
                     format_usage();
                     process::exit(0);
@@ -476,6 +492,7 @@ fn parse_format_args(argv: Vec<String>) -> Result<FormatConfig> {
         devices,
         force,
         quiet,
+        verbose,
         initialize,
         encrypted,
         no_passphrase,
@@ -662,7 +679,12 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
         let dev_paths: Vec<PathBuf> = cfg.devices.iter().map(|d| PathBuf::from(&d.path)).collect();
         drop(devices);
 
-        let open_opts: c::bch_opts = Default::default();
+        let mut open_opts: c::bch_opts = Default::default();
+        if cfg.verbose {
+            opt_set!(open_opts, verbose, 1);
+        } else {
+            opt_set!(open_opts, loglevel, 4);
+        }
 
         let fs = Fs::open(&dev_paths, open_opts)
             .map_err(|e| anyhow!("error opening {}: {}", dev_paths[0].display(), e))?;
