@@ -201,8 +201,13 @@ fn bch_err(e: &BchError) -> Errno {
     Errno::from_i32(e.errno())
 }
 
+/// @req supplies the owner: the caller's fsuid and fsgid, which is what the
+/// kernel gives a new inode. bch2_inode_init_late() then applies a setgid
+/// parent's group, and the kernel has already applied the umask and stripped
+/// setgid where the caller isn't entitled to it.
 fn fuse_create_inode(
     fs:    &Fs,
+    req:   &Request,
     dir:   c::subvol_inum,
     name:  &[u8],
     mode:  u16,
@@ -227,8 +232,8 @@ fn fuse_create_inode(
                 &mut inode,
                 &mut subvol,
                 &qstr,
-                0,
-                0,
+                req.uid(),
+                req.gid(),
                 mode,
                 rdev,
                 c::subvol_inum::default(),
@@ -757,7 +762,7 @@ impl Filesystem for BcachefsFs {
 
     fn mknod(
         &self,
-        _req: &Request,
+        req: &Request,
         parent: INodeNo,
         name: &OsStr,
         mode: u32,
@@ -771,7 +776,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_mknod(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(&fs, dir, name_bytes, mode as u16, rdev as u64) {
+        let new_inode = match fuse_create_inode(&fs, req, dir, name_bytes, mode as u16, rdev as u64) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -814,7 +819,7 @@ impl Filesystem for BcachefsFs {
 
     fn symlink(
         &self,
-        _req: &Request,
+        req: &Request,
         parent: INodeNo,
         name: &OsStr,
         link: &Path,
@@ -828,7 +833,7 @@ impl Filesystem for BcachefsFs {
 
         // Create the symlink inode
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(&fs, dir, name_bytes, (S_IFLNK | 0o777) as u16, 0) {
+        let new_inode = match fuse_create_inode(&fs, req, dir, name_bytes, (S_IFLNK | 0o777) as u16, 0) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
         };
@@ -1192,7 +1197,7 @@ impl Filesystem for BcachefsFs {
 
     fn create(
         &self,
-        _req: &Request,
+        req: &Request,
         parent: INodeNo,
         name: &OsStr,
         mode: u32,
@@ -1206,7 +1211,7 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_create(dir={}, name={:?}, mode={:#o})", dir.inum, name, mode);
 
         let fs = self.fs();
-        let new_inode = match fuse_create_inode(&fs, dir, name_bytes, mode as u16, 0) {
+        let new_inode = match fuse_create_inode(&fs, req, dir, name_bytes, mode as u16, 0) {
             Ok(inode) => inode,
             Err(e)    => {
                 eprintln!("  create -> err {}", e);
