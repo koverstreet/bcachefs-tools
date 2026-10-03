@@ -116,6 +116,11 @@ impl BcachefsHandle {
 /// Each entry starts with a `struct bkey` header (5 u64s = 40 bytes),
 /// followed by counters. The `bkey.u64s` field gives the total size
 /// of key + value in u64s.
+pub(crate) fn parse_accounting_counters(data: &[u8]) -> Vec<u64> {
+    data.chunks_exact(8)
+        .map(|bytes| u64::from_ne_bytes(bytes.try_into().unwrap())).collect()
+}
+
 fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
     let mut entries = Vec::new();
     let kernel_version = bcachefs_kernel_version();
@@ -163,17 +168,24 @@ fn parse_accounting_entries(data: &[u8]) -> Vec<AccountingEntry> {
         // Counters start after the bkey header (bch_accounting.d[])
         // bch_accounting has just a bch_val (0 bytes), then d[]
         // So counters start at u64 offset BKEY_U64S
-        let nr_counters = key_u64s - BKEY_U64S;
-        let counters: Vec<u64> = (0..nr_counters)
-            .map(|i| {
-                let off = (BKEY_U64S + i) * 8;
-                u64::from_ne_bytes(entry_data[off..off + 8].try_into().unwrap())
-            })
-            .collect();
+        let counters = parse_accounting_counters(&entry_data[BKEY_U64S * 8..]);
 
         entries.push(AccountingEntry { pos, counters });
         offset += entry_bytes;
     }
 
     entries
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_accounting_counters;
+
+    #[test]
+    fn accounting_counters_decode_native_u64_values() {
+        let values = [3u64, 8, 16, u64::MAX];
+        let bytes: Vec<_> = values.iter().flat_map(|value| value.to_ne_bytes()).collect();
+        assert_eq!(parse_accounting_counters(&bytes), values);
+        assert!(parse_accounting_counters(&[]).is_empty());
+    }
 }
