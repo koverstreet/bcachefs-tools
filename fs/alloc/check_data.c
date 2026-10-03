@@ -350,6 +350,16 @@ static int bch2_check_fix_ptr(struct btree_trans *trans,
 			return bch_err_throw(c, fsck_repair_unimplemented);
 		}
 
+		/*
+		 * Data in a superblock bucket: every superblock write lands on it,
+		 * so it has been or will be overwritten - drop the pointer. If it
+		 * was the last readable one, the next pass records the loss
+		 * (bch2_no_valid_pointers_repair()). Seen after a resize freed the
+		 * bucket holding a backup superblock (#785).
+		 */
+		if (g->data_type == BCH_DATA_sb)
+			return drop_this_ptr(r, ptr_bit);
+
 		g->data_type = BCH_DATA_multiple;
 	}
 
