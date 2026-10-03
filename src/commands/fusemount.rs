@@ -454,6 +454,43 @@ fn fuse_fsync(fs: &Fs) -> Result<(), BchError> {
     fs.journal_flush()
 }
 
+/// touch_atime(), for a read or readdir that reached us. @bi is the inode as
+/// the caller already has it, so that the usual case - no update due - costs
+/// no transaction; the decision is made again on the current inode inside it.
+/// Failure doesn't fail the read, any more than it does in the kernel.
+fn fuse_touch_atime(fs: &Fs, opts: AtimeOpts, inum: c::subvol_inum, bi: &c::bch_inode_unpacked) {
+    if !opts.needs_update(fs, bi, fs.current_time()) {
+        return;
+    }
+
+    let ret = btree::iter::trans_commit_do(
+        fs,
+        None,
+        CommitOpts::new().flags(CommitFlags::NO_ENOSPC),
+        |t| {
+            let now = fs.current_time();
+            let mut iter = btree::iter::BtreeIter::uninit();
+            let mut inode_u: c::bch_inode_unpacked = Default::default();
+
+            let t = inode::peek(
+                t,
+                &mut iter,
+                &mut inode_u,
+                inum,
+                btree::iter::BtreeIterFlags::INTENT,
+            )?;
+            if !opts.needs_update(fs, &inode_u, now) {
+                return Ok(t);
+            }
+            inode_u.bi_atime = now;
+            inode::write(t, &mut iter, &mut inode_u)
+        },
+    );
+    if let Err(e) = ret {
+        eprintln!("fusemount: updating atime of inode {}: {}", inum.inum, e);
+    }
+}
+
 fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), BchError> {
     btree::iter::trans_commit_do(
         fs,
@@ -478,6 +515,57 @@ fn fuse_update_inode_after_write(fs: &Fs, inum: c::subvol_inum) -> Result<(), Bc
     )
 }
 
+/// fuse marks every inode S_NOATIME when it has no writeback cache (we don't
+/// use it), so the kernel never updates atime: it's ours, on the reads and
+/// readdirs that reach us, by the rules of the kernel's atime_needs_update().
+/// A read the kernel serves from its page cache never reaches us, so atime can
+/// lag behind those.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum AtimeMode {
+    Never,
+    Relative,
+    Strict,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct AtimeOpts {
+    mode:       AtimeMode,
+    nodiratime: bool,
+}
+
+impl AtimeOpts {
+    /// relatime unless told otherwise, as for a kernel mount:
+    fn from_ms_flags(flags: libc::c_ulong) -> Self {
+        let mode = if flags & (libc::MS_NOATIME | libc::MS_RDONLY) != 0 {
+            AtimeMode::Never
+        } else if flags & libc::MS_STRICTATIME != 0 {
+            AtimeMode::Strict
+        } else {
+            AtimeMode::Relative
+        };
+        AtimeOpts { mode, nodiratime: flags & libc::MS_NODIRATIME != 0 }
+    }
+
+    /// atime_needs_update() and relatime_need_update(): with relatime, only
+    /// when atime isn't already after the last change, or is a day old.
+    fn needs_update(&self, fs: &Fs, bi: &c::bch_inode_unpacked, now: u64) -> bool {
+        let is_dir = bi.bi_mode as u32 & libc::S_IFMT == libc::S_IFDIR;
+        if is_dir && self.nodiratime {
+            return false;
+        }
+
+        let (atime, now) = (bi.bi_atime as i64, now as i64);
+        match self.mode {
+            AtimeMode::Never    => false,
+            AtimeMode::Strict   => atime != now,
+            AtimeMode::Relative =>
+                atime <= bi.bi_mtime as i64 ||
+                atime <= bi.bi_ctime as i64 ||
+                fs.time_to_timespec(now).tv_sec - fs.time_to_timespec(atime).tv_sec >= 24 * 60 * 60,
+        }
+    }
+}
+
 struct BcachefsFs {
     /// Shut down (Fs's Drop: bch2_fs_exit()) exactly once on every path:
     /// destroy() takes it, and if the mount fails before fuser hands us to a
@@ -488,6 +576,7 @@ struct BcachefsFs {
     signal_fd: Option<OwnedFd>,
     /// Kernel references (FUSE lookup counts) per inum: see "Inode lifetime".
     lookups: Mutex<HashMap<u64, u64>>,
+    atime: AtimeOpts,
 }
 
 // Safety: bch_fs is internally synchronized with its own locking.
@@ -1003,7 +1092,15 @@ impl Filesystem for BcachefsFs {
 
     fn open(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
         eprintln!("fuse_open(ino={})", ino.0);
-        reply.opened(FileHandle(0), FopenFlags::FOPEN_KEEP_CACHE);
+        // A read the page cache answers never reaches us to update atime
+        // (see AtimeOpts). strictatime asks for every access, so there let
+        // the kernel drop the cache at open: at least each open's reads do.
+        let flags = if self.atime.mode == AtimeMode::Strict {
+            FopenFlags::empty()
+        } else {
+            FopenFlags::FOPEN_KEEP_CACHE
+        };
+        reply.opened(FileHandle(0), flags);
     }
 
     fn read(
@@ -1027,6 +1124,9 @@ impl Filesystem for BcachefsFs {
             Ok(bi) => bi,
             Err(e) => { reply.error(bch_err(&e)); return; }
         };
+
+        // Even a read at EOF, as filemap_read()'s file_accessed():
+        fuse_touch_atime(&fs, self.atime, inum, &bi);
 
         let end = std::cmp::min(bi.bi_size, offset + size as u64);
         if end <= offset {
@@ -1169,6 +1269,14 @@ impl Filesystem for BcachefsFs {
         ensure_thread_init();
         let dir = map_root_ino(ino);
         eprintln!("fuse_readdir(dir={}, offset={})", dir.inum, offset);
+
+        {
+            let fs = self.fs();
+            match inode::find_by_inum(&fs, dir) {
+                Ok(bi) => fuse_touch_atime(&fs, self.atime, dir, &bi),
+                Err(e) => { reply.error(bch_err(&e)); return; }
+            }
+        }
 
         let mut pos = offset;
 
@@ -1643,6 +1751,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
             fs: Some(fs),
             signal_fd: None,
             lookups: Mutex::new(HashMap::new()),
+            atime: AtimeOpts::from_ms_flags(ms_flags),
         };
         if let Err(e) = fuse_run(bcachefs_fs, &cli.mountpoint, &config, &mount) {
             anyhow::bail!("Error mounting filesystem: {}", e);
@@ -1761,6 +1870,7 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
         fs: Some(fs),
         signal_fd: Some(signal_fd),
         lookups: Mutex::new(HashMap::new()),
+        atime: AtimeOpts::from_ms_flags(ms_flags),
     };
 
     match fuse_run(bcachefs_fs, &cli.mountpoint, &config, &mount) {
@@ -1783,7 +1893,7 @@ pub const CMD: super::CmdDef = typed_cmd!("fusemount", "FUSE mount", Cli, cmd_fu
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime};
+    use super::{parse_fuse_mount_options, systime_to_ts, ts_to_systime, AtimeMode, AtimeOpts};
     use bcachefs_kernel::opt_get;
     use bch_bindgen::c;
     use fuser::MountOption;
@@ -1799,6 +1909,19 @@ mod tests {
         assert!(mount_options.contains(&MountOption::RO));
         assert!(mount_options.contains(&MountOption::FSName("/dev/test".to_string())));
         assert!(mount_options.contains(&MountOption::CUSTOM("subtype=bcachefs".to_string())));
+    }
+
+    #[test]
+    fn atime_opts_follow_mount_flags() {
+        let mode = |f| AtimeOpts::from_ms_flags(f).mode;
+        assert_eq!(mode(0), AtimeMode::Relative);
+        assert_eq!(mode(libc::MS_RELATIME), AtimeMode::Relative);
+        assert_eq!(mode(libc::MS_STRICTATIME), AtimeMode::Strict);
+        assert_eq!(mode(libc::MS_NOATIME), AtimeMode::Never);
+        // read-only can't write an atime, whatever else was asked for:
+        assert_eq!(mode(libc::MS_RDONLY | libc::MS_STRICTATIME), AtimeMode::Never);
+        assert!(AtimeOpts::from_ms_flags(libc::MS_NODIRATIME).nodiratime);
+        assert!(!AtimeOpts::from_ms_flags(0).nodiratime);
     }
 
     #[test]
