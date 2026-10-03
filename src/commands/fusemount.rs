@@ -1838,9 +1838,14 @@ pub fn cmd_fusemount(cli: Cli) -> anyhow::Result<()> {
     // binding a socket and spawning threads is not allowed.
     crate::http::bch2_start_http_lazy();
 
-    // Daemon mode must not inherit the caller's stderr or grow a fixed log
+    // Daemon mode must not hold on to the caller's stdio, nor grow a fixed log
     // file under /tmp; foreground mode still leaves debug output visible.
-    if let Ok(f) = std::fs::File::create("/dev/null") {
+    // All three: a caller reading our output through a pipe - `mount ... |
+    // tee`, `$(mount ...)` - waits for EOF, and while the daemon has the write
+    // end it never comes (xfstests generic/067 hung forever in tee).
+    if let Ok(f) = OpenOptions::new().read(true).write(true).open("/dev/null") {
+        rustix::stdio::dup2_stdin(&f)?;
+        rustix::stdio::dup2_stdout(&f)?;
         rustix::stdio::dup2_stderr(&f)?;
     }
 
