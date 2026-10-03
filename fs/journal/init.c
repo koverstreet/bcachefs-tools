@@ -221,7 +221,7 @@ int bch2_dev_journal_bucket_delete(struct bch_dev *ca, u64 b)
 		&new_buckets[pos + 1],
 		(ja->nr - 1 - pos) * sizeof(new_buckets[0]));
 
-	int ret = bch2_journal_buckets_to_sb(c, ca, ja->buckets, ja->nr - 1) ?:
+	int ret = bch2_journal_buckets_to_sb(c, ca, new_buckets, ja->nr - 1) ?:
 		bch2_write_super(c);
 	if (ret) {
 		kfree(new_buckets);
