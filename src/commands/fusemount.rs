@@ -105,7 +105,7 @@ use fuser::{
     ReplyEntry, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr,
     Request, TimeOrNow,
     Errno, FileHandle, FopenFlags, Generation,
-    INodeNo, OpenFlags, RenameFlags,
+    INodeNo, OpenAccMode, OpenFlags, RenameFlags,
     BsdFileFlags, WriteFlags, LockOwner,
 };
 
@@ -743,6 +743,14 @@ impl BcachefsFs {
         INodeNo(self.nodes.lock().unwrap().get(inum))
     }
 
+    /// EROFS in a read-only subvolume. The core refuses creates, unlinks and
+    /// xattr changes there itself; opening for write, setattr, link and rename
+    /// the kernel driver refuses in its VFS ops (bch2_open() and friends),
+    /// which our handlers stand in for.
+    fn subvol_writable(&self, subvol: u64) -> Result<(), Errno> {
+        self.fs().subvol_is_ro(subvol as u32).map_err(|e| bch_err(&e))
+    }
+
     /// forget: drop @nlookup references to @node; with the last, evict.
     fn node_put(&self, node: INodeNo, nlookup: u64) {
         let unreferenced = self.nodes.lock().unwrap().put(node.0, nlookup);
@@ -966,6 +974,11 @@ impl Filesystem for BcachefsFs {
         let inum = resolve!(self, ino, reply);
         eprintln!("fuse_setattr(inum={})", inum.inum);
 
+        if let Err(e) = self.subvol_writable(inum.subvol) {
+            reply.error(e);
+            return;
+        }
+
         let fs = self.fs();
 
         let parse_time = |time: &Option<TimeOrNow>| match time {
@@ -1173,6 +1186,12 @@ impl Filesystem for BcachefsFs {
             return;
         }
 
+        if let Err(e) = self.subvol_writable(src_dir.subvol)
+            .and_then(|_| self.subvol_writable(dst_dir.subvol)) {
+            reply.error(e);
+            return;
+        }
+
         let fs = self.fs();
 
         // The mode, chosen as bch2_rename2() chooses it. BCH_RENAME means
@@ -1222,6 +1241,12 @@ impl Filesystem for BcachefsFs {
         eprintln!("fuse_link(ino={}, newparent={}, name={:?})",
                src_inum.inum, parent.inum, newname);
 
+        if let Err(e) = self.subvol_writable(parent.subvol)
+            .and_then(|_| self.subvol_writable(src_inum.subvol)) {
+            reply.error(e);
+            return;
+        }
+
         let fs = self.fs();
         let inode_u = match fuse_link(&fs, src_inum, parent, name_bytes) {
             Ok(inode) => inode,
@@ -1233,8 +1258,18 @@ impl Filesystem for BcachefsFs {
         reply.entry_with_nodeid(node, &TTL, &attr, Generation(inode_u.bi_generation as u64));
     }
 
-    fn open(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+    fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
+        ensure_thread_init();
         eprintln!("fuse_open(ino={})", ino.0);
+
+        if flags.acc_mode() != OpenAccMode::O_RDONLY {
+            let inum = resolve!(self, ino, reply);
+            if let Err(e) = self.subvol_writable(inum.subvol) {
+                reply.error(e);
+                return;
+            }
+        }
+
         // A read the page cache answers never reaches us to update atime
         // (see AtimeOpts). strictatime asks for every access, so there let
         // the kernel drop the cache at open: at least each open's reads do.

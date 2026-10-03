@@ -288,6 +288,11 @@ impl Fs {
         ret_to_result(unsafe { c::bch2_truncate(self.raw, inum, new_i_size, &mut i_sectors_delta) })
     }
 
+    /// EROFS if @subvol is a read-only subvolume (a read-only snapshot).
+    pub fn subvol_is_ro(&self, subvol: u32) -> Result<(), BchError> {
+        ret_to_result(unsafe { c::bch2_subvol_is_ro(self.raw, subvol) })
+    }
+
     /// Write superblock to disk (locked version). Caller must hold sb_lock.
     /// Returns Ok(()) on success or the error code on failure.
     pub fn write_super_ret(&self) -> Result<(), BchError> {
