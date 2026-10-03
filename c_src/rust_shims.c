@@ -24,6 +24,9 @@
 #include "fs/btree/update.h"
 #include "fs/data/extents.h"
 #include "fs/alloc/accounting.h"
+#include "fs/fs/xattr.h"
+#include "fs/snapshots/subvolume.h"
+#include <linux/xattr.h>
 #include "rust_shims.h"
 
 struct bch_csum rust_csum_vstruct_sb(struct bch_sb *sb)
@@ -273,4 +276,144 @@ void rust_accounting_mem_read(struct bch_fs *c, struct bpos p,
 			      u64 *v, unsigned nr)
 {
 	bch2_accounting_mem_read(c, p, v, nr);
+}
+
+/*
+ * xattrs by full name ("user.foo") on an inode given by number, for fusemount.
+ *
+ * xattr.c's get and list take VFS objects (bch_inode_info, dentry), and for the
+ * kernel the VFS does the prefix to type mapping. These do the inode lookup and
+ * that mapping, then what xattr.c does. A stopgap: once xattr.c is Rust they
+ * fold into it.
+ *
+ * Only user., trusted. and security. are served. system.posix_acl_* is stored
+ * in bcachefs's own ACL format and bcachefs.* names inode options rather than
+ * xattrs - both need conversions this doesn't do. Matching on
+ * bch2_xattr_handlers[] instead of this table would be wrong for the latter:
+ * the bcachefs.* handlers have no .flags, so "bcachefs.foo" would read as the
+ * user xattr "foo".
+ */
+static const char * const rust_xattr_prefixes[] = {
+	[KEY_TYPE_XATTR_INDEX_USER]	= XATTR_USER_PREFIX,
+	[KEY_TYPE_XATTR_INDEX_TRUSTED]	= XATTR_TRUSTED_PREFIX,
+	[KEY_TYPE_XATTR_INDEX_SECURITY]	= XATTR_SECURITY_PREFIX,
+};
+
+/* Strips the prefix from *name; returns the xattr type, or -EOPNOTSUPP. */
+static int rust_xattr_type(const char **name)
+{
+	for (unsigned i = 0; i < ARRAY_SIZE(rust_xattr_prefixes); i++) {
+		const char *prefix = rust_xattr_prefixes[i];
+
+		if (prefix && !strncmp(*name, prefix, strlen(prefix))) {
+			*name += strlen(prefix);
+			return i;
+		}
+	}
+	return -EOPNOTSUPP;
+}
+
+static int __rust_xattr_get(struct btree_trans *trans, subvol_inum inum,
+			    int type, const char *name, void *buf, size_t size)
+{
+	struct bch_inode_unpacked inode_u;
+	try(bch2_inode_find_by_inum_trans(trans, inum, &inode_u));
+
+	struct bch_hash_info hash;
+	try(bch2_hash_info_init(trans->c, &inode_u, &hash));
+
+	struct xattr_search_key search = X_SEARCH(type, name, strlen(name));
+	CLASS(btree_iter_uninit, iter)(trans);
+	struct bkey_s_c k = bkey_try(bch2_hash_lookup(trans, &iter, bch2_xattr_hash_desc,
+						      &hash, inum, &search, 0));
+
+	struct bkey_s_c_xattr xattr = bkey_s_c_to_xattr(k);
+	int len = le16_to_cpu(xattr.v->x_val_len);
+	if (buf) {
+		if (len > size)
+			return -ERANGE;
+		memcpy(buf, xattr_val(xattr.v), len);
+	}
+	return len;
+}
+
+/* The value's length; with @buf NULL, just the length. */
+int rust_xattr_get(struct bch_fs *c, subvol_inum inum, const char *name,
+		   void *buf, size_t size)
+{
+	int type = rust_xattr_type(&name);
+	if (type < 0)
+		return type;
+
+	CLASS(btree_trans, trans)(c);
+	int ret = lockrestart_do(trans, __rust_xattr_get(trans, inum, type, name, buf, size));
+
+	/* as bch2_xattr_get_handler(): a missing xattr is ENODATA */
+	return bch2_err_matches(ret, ENOENT) ? -ENODATA : ret;
+}
+
+static int rust_xattr_emit(char *buf, size_t size, size_t *used,
+			   const char *prefix, const char *name, unsigned name_len)
+{
+	size_t len = strlen(prefix) + name_len + 1;
+
+	if (buf) {
+		if (*used + len > size)
+			return -ERANGE;
+		memcpy(buf + *used, prefix, strlen(prefix));
+		memcpy(buf + *used + strlen(prefix), name, name_len);
+		buf[*used + len - 1] = '\0';
+	}
+	*used += len;
+	return 0;
+}
+
+/*
+ * NUL separated full names, as listxattr(2); with @buf NULL, just the length.
+ * trusted.* only with @show_trusted - the kernel lists those only to
+ * CAP_SYS_ADMIN, and decides that from the caller, which we can't see.
+ */
+int rust_xattr_list(struct bch_fs *c, subvol_inum inum, char *buf, size_t size,
+		    bool show_trusted)
+{
+	CLASS(btree_trans, trans)(c);
+	size_t used = 0;
+
+	int ret = for_each_btree_key_in_subvolume_max(trans, iter, BTREE_ID_xattrs,
+				POS(inum.inum, 0), POS(inum.inum, U64_MAX),
+				inum.subvol, 0, k, ({
+		if (k.k->type != KEY_TYPE_xattr)
+			continue;
+
+		struct bkey_s_c_xattr x = bkey_s_c_to_xattr(k);
+		unsigned type = x.v->x_type;
+		const char *prefix = type < ARRAY_SIZE(rust_xattr_prefixes)
+			? rust_xattr_prefixes[type] : NULL;
+
+		if (!prefix || (type == KEY_TYPE_XATTR_INDEX_TRUSTED && !show_trusted))
+			continue;
+
+		rust_xattr_emit(buf, size, &used, prefix,
+				x.v->x_name_and_value, x.v->x_name_len);
+	}));
+
+	return ret ?: used;
+}
+
+/*
+ * Set, or with @value NULL remove - bch2_xattr_set(), which also updates ctime.
+ * @flags: XATTR_CREATE, XATTR_REPLACE; removing passes XATTR_REPLACE, as the
+ * VFS does, so that a missing xattr is ENODATA.
+ */
+int rust_xattr_set(struct bch_fs *c, subvol_inum inum, const char *name,
+		   const void *value, size_t size, int flags)
+{
+	int type = rust_xattr_type(&name);
+	if (type < 0)
+		return type;
+
+	struct bch_inode_unpacked inode_u;
+	CLASS(btree_trans, trans)(c);
+	return commit_do(trans, NULL, NULL, 0,
+		bch2_xattr_set(trans, inum, &inode_u, name, value, size, type, flags));
 }

@@ -226,6 +226,17 @@ void rust_accounting_mem_read(struct bch_fs *c, struct bpos p,
 			      __u64 *v, unsigned nr);
 
 /*
+ * xattrs by full name on an inode by number, for fusemount: user., trusted.
+ * and security. only. See rust_shims.c. Return a length or a negative error.
+ */
+int rust_xattr_get(struct bch_fs *c, subvol_inum inum, const char *name,
+		   void *buf, size_t size);
+int rust_xattr_list(struct bch_fs *c, subvol_inum inum, char *buf, size_t size,
+		    bool show_trusted);
+int rust_xattr_set(struct bch_fs *c, subvol_inum inum, const char *name,
+		   const void *value, size_t size, int flags);
+
+/*
  * Unit test for the eytzinger sort/search primitive and the darray 1-based
  * wrapper (snapshot_id_dying's lookup path). Runs under `cargo test` via a
  * Rust #[test] wrapper. Returns the number of failed assertions (0 == pass);
