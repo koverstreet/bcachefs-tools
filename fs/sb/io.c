@@ -707,6 +707,7 @@ void bch2_sb_update(struct bch_fs *c)
 
 	c->sb.extent_bp_shift = BCH_SB_EXTENT_BP_SHIFT(c->disk_sb.sb) ?:
 		BCH_SB_EXTENT_BP_SHIFT_DEFAULT;
+	c->sb.encoded_extent_max = 512ULL << BCH_SB_ENCODED_EXTENT_MAX_BITS(src);
 
 	c->sb.nsec_per_time_unit = le32_to_cpu(src->time_precision);
 	c->sb.time_units_per_sec = NSEC_PER_SEC / c->sb.nsec_per_time_unit;
@@ -1777,6 +1778,21 @@ static int bch2_sb_ext_validate(struct bch_sb *sb, struct bch_sb_field *f,
 		return -BCH_ERR_invalid_sb_ext;
 	}
 
+	struct bch_sb_field_ext *ext = field_to_type(f, ext);
+	if (vstruct_bytes(f) >= offsetof(struct bch_sb_field_ext, encoded_extent_write_max) +
+			       sizeof(ext->encoded_extent_write_max)) {
+		u64 write_max = le64_to_cpu(ext->encoded_extent_write_max);
+		unsigned read_bits = BCH_SB_ENCODED_EXTENT_MAX_BITS(sb);
+
+		if (write_max && (write_max < 4096 ||
+				  write_max > BCH_ENCODED_EXTENT_MAX ||
+				  read_bits < 3 || read_bits > ilog2(BCH_ENCODED_EXTENT_MAX >> 9) ||
+				  write_max > (512ULL << read_bits) || !is_power_of_2(write_max))) {
+			prt_printf(err, "invalid encoded extent write maximum %llu", write_max);
+			return -BCH_ERR_invalid_sb_ext;
+		}
+	}
+
 	return 0;
 }
 
@@ -1822,6 +1838,12 @@ static __cold void bch2_sb_ext_to_text(struct printbuf *out,
 		prt_printf(out, "Btrees validated clean:\t");
 		prt_bitflags(out, __bch2_btree_ids, le64_to_cpu(e->btrees_clean));
 		prt_newline(out);
+	}
+
+	if (vstruct_bytes(f) >= offsetof(struct bch_sb_field_ext, encoded_extent_write_max) +
+			       sizeof(e->encoded_extent_write_max) && e->encoded_extent_write_max) {
+		prt_printf(out, "Encoded extent write maximum:\t%llu bytes\n",
+			   le64_to_cpu(e->encoded_extent_write_max));
 	}
 }
 

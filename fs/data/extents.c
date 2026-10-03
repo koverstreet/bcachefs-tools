@@ -2043,7 +2043,7 @@ int bch2_bkey_ptrs_validate(struct bch_fs *c, struct bkey_s_c k,
 					 c, ptr_crc_uncompressed_size_too_small,
 					 "checksum offset + key size > uncompressed size");
 			bkey_fsck_err_on(crc_is_encoded(crc) &&
-					 (crc.uncompressed_size > c->opts.encoded_extent_max >> 9) &&
+					 (crc.uncompressed_size > c->sb.encoded_extent_max >> 9) &&
 					 (from->flags & (BCH_VALIDATE_write|BCH_VALIDATE_commit)),
 					 c, ptr_crc_uncompressed_size_too_big,
 					 "too large encoded extent");

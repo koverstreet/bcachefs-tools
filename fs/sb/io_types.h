@@ -23,6 +23,7 @@ struct bch_sb_cpu {
 	u8		extent_type_u64s[31];
 	u8		extent_types_known;
 	u8		extent_bp_shift;
+	u32		encoded_extent_max;
 
 	u64		time_base_lo;
 	u32		time_base_hi;
