@@ -664,7 +664,10 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
 
         let open_opts: c::bch_opts = Default::default();
 
-        let fs = Fs::open(&dev_paths, open_opts)
+        // Starting and stopping the filesystem log what the kernel would put
+        // in dmesg: shown only if it fails. Copying in --source isn't
+        // captured - what it says matters either way.
+        let fs = crate::util::stderr_unless_error(|| Fs::open(&dev_paths, open_opts))
             .map_err(|e| anyhow!("error opening {}: {}", dev_paths[0].display(), e))?;
 
         if let Some(ref src) = cfg.source {
@@ -676,7 +679,10 @@ fn cmd_format(argv: Vec<String>) -> Result<()> {
                 .map_err(|e| anyhow!("error copying from {}: {}", src, e))?;
         }
 
-        // Fs::drop calls bch2_fs_exit
+        crate::util::stderr_unless_error(|| match fs.exit() {
+            0 => Ok(()),
+            ret => Err(bcachefs_kernel::errcode::BchError::from_raw(ret)),
+        }).map_err(|e| anyhow!("error shutting down {}: {}", dev_paths[0].display(), e))?;
     }
 
     // Free deferred option strings

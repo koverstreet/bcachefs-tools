@@ -234,3 +234,35 @@ where F: FnOnce(&mut io::Stdout) -> Result<()>
     let _ = terminal::disable_raw_mode();
     result
 }
+
+/// Run @f with stderr going to a scratch file, shown only if @f fails.
+///
+/// Opening a filesystem in-process logs to stderr ("starting version",
+/// options, devices, "initializing new filesystem"), where the kernel would log
+/// to dmesg - and if the open fails, that log is what says why. On success it's
+/// noise: a mount helper prints nothing (xfstests counts any output as a
+/// failure), and nor does format.
+pub fn stderr_unless_error<T, E>(f: impl FnOnce() -> std::result::Result<T, E>) -> std::result::Result<T, E> {
+    use rustix::fs::{memfd_create, MemfdFlags};
+    use rustix::stdio::dup2_stderr;
+    use std::io::Seek;
+    use std::os::fd::AsFd;
+
+    // Can't capture: printing the log is better than losing the operation
+    let Ok((log, saved)) = memfd_create(c"bcachefs-log", MemfdFlags::CLOEXEC)
+        .and_then(|log| Ok((log, rustix::io::dup(std::io::stderr().as_fd())?)))
+    else {
+        return f();
+    };
+
+    let _ = dup2_stderr(&log);
+    let ret = f();
+    let _ = dup2_stderr(&saved);
+
+    if ret.is_err() {
+        let mut log = File::from(log);
+        let _ = log.seek(std::io::SeekFrom::Start(0))
+            .and_then(|_| std::io::copy(&mut log, &mut std::io::stderr()));
+    }
+    ret
+}
