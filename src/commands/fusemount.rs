@@ -356,6 +356,7 @@ fn fuse_setattr(
     atime:      u64,
     mtime_flag: i32,
     mtime:      u64,
+    ctime:      Option<u64>,
 ) -> Result<c::bch_inode_unpacked, BchError> {
     let mut inode_out: c::bch_inode_unpacked = Default::default();
 
@@ -400,6 +401,9 @@ fn fuse_setattr(
             if mtime_flag == 2 {
                 inode_u.bi_mtime = now;
             }
+            // Every attribute change is a status change. The kernel only
+            // sends a ctime with the writeback cache, so it's ours to set:
+            inode_u.bi_ctime = ctime.unwrap_or(now);
 
             let t = inode::write(t, &mut iter, &mut inode_u)?;
             inode_out = inode_u;
@@ -718,7 +722,7 @@ impl Filesystem for BcachefsFs {
         size: Option<u64>,
         atime: Option<TimeOrNow>,
         mtime: Option<TimeOrNow>,
-        _ctime: Option<SystemTime>,
+        ctime: Option<SystemTime>,
         _fh: Option<FileHandle>,
         _crtime: Option<SystemTime>,
         _chgtime: Option<SystemTime>,
@@ -740,9 +744,21 @@ impl Filesystem for BcachefsFs {
         };
 
         let (atime_flag, atime_val) = parse_time(&atime);
-        let (mtime_flag, mtime_val) = parse_time(&mtime);
+        let (mut mtime_flag, mtime_val) = parse_time(&mtime);
+        let ctime = ctime.map(|t| fs.timespec_to_time(systime_to_ts(t)) as u64);
 
         if let Some(size) = size {
+            // A size change modifies the file: truncate(2) sends only the
+            // size, and leaves mtime to us as it does to a kernel filesystem.
+            // Asked before truncating, which already changes it.
+            let size_changed = match inode::find_by_inum(&fs, inum) {
+                Ok(bi) => bi.bi_size != size,
+                Err(e) => { reply.error(bch_err(&e)); return; }
+            };
+            if size_changed && mtime_flag == 0 {
+                mtime_flag = 2;
+            }
+
             if let Err(e) = fuse_truncate(&fs, inum, size) {
                 reply.error(bch_err(&e));
                 return;
@@ -760,6 +776,7 @@ impl Filesystem for BcachefsFs {
             atime_val,
             mtime_flag,
             mtime_val,
+            ctime,
         ) {
             Ok(inode) => inode,
             Err(e)    => { reply.error(bch_err(&e)); return; }
