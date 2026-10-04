@@ -55,8 +55,14 @@ if [ ! -x "$kernel_rust_check" ]; then
 	skip "no $kernel_rust_check (kernel sources lack Rust support)"
 fi
 
-if ! "$kernel_rust_check" >/dev/null 2>&1; then
-	skip "$kernel_rust_check reports the kernel's Rust toolchain unavailable"
+# Its reason is the first "***" block of what it prints - "Rust compiler
+# 'rustc' is too old.; Your version: ...; Minimum version: ..." - the rest is
+# boilerplate pointing at the kernel docs.
+if ! kernel_rust_out=$("$kernel_rust_check" 2>&1); then
+	kernel_rust_why=$(printf '%s\n' "$kernel_rust_out" |
+		sed -n 's/^\*\*\* *//p' |
+		awk 'NF { why = why (why ? "; " : "") $0; next } why { print why; exit }')
+	skip "the kernel's scripts/rust_is_available.sh: ${kernel_rust_why:-failed, without saying why}"
 fi
 
 rustc_output=$(LC_ALL=C "$RUSTC" --version 2>/dev/null) ||

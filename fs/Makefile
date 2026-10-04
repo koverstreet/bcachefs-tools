@@ -299,35 +299,22 @@ else
 # scripts/target.json is always-$(CONFIG_RUST), so a Rust-off tree doesn't have
 # one - we generate our own below rather than requiring it.
 #
-# Same protocol as the DKMS probe: "y", or the first missing prerequisite by
-# name. The error reports both: why not the kernel's, and why not ours - "no
-# Rust support" on its own sends people to their distro asking for CONFIG_RUST,
-# when installing rust-src may be all this needs.
+# Same protocol as the DKMS probe: "y", or what's missing - all of it. The
+# error reports both: why not the kernel's, and why not ours - "no Rust
+# support" on its own sends people to their distro asking for CONFIG_RUST, when
+# installing rust-src may be all this needs.
 bcachefs-vendor-rustc-min := 1.85.0
-bcachefs-vendor-rust-probe := $(shell					\
-	command -v $(RUSTC)   >/dev/null 2>&1 ||			\
-		{ echo 'rustc ($(RUSTC)) not found'; exit 0; };		\
-	v=$$($(RUSTC) --version | sed -nE '1s/^rustc ([0-9]+\.[0-9]+\.[0-9]+).*/\1/p'); \
-	[ "$$(printf '%s\n' $(bcachefs-vendor-rustc-min) "$$v" | sort -V | head -1)" = $(bcachefs-vendor-rustc-min) ] || \
-		{ echo "rustc $$v is older than $(bcachefs-vendor-rustc-min)"; exit 0; }; \
-	command -v $(HOSTRUSTC) >/dev/null 2>&1 ||			\
-		{ echo 'host rustc ($(HOSTRUSTC)) not found'; exit 0; }; \
-	command -v $(BINDGEN) >/dev/null 2>&1 ||			\
-		{ echo 'bindgen ($(BINDGEN)) not found'; exit 0; };	\
-	[ -r '$(objtree)/scripts/generate_rust_target.rs' ] ||		\
-		{ echo 'kernel tree has no scripts/generate_rust_target.rs'; exit 0; }; \
-	[ -r '$(objtree)/include/generated/rustc_cfg' ] ||		\
-		{ echo 'kernel tree has no include/generated/rustc_cfg'; exit 0; }; \
-	[ -r "$$($(RUSTC) --print sysroot)/lib/rustlib/src/rust/library/core/src/lib.rs" ] || \
-		{ echo 'rust-src not found'; exit 0; }; \
-	echo y)
+bcachefs-vendor-rust-probe := $(shell RUSTC='$(RUSTC)' HOSTRUSTC='$(HOSTRUSTC)' \
+	BINDGEN='$(BINDGEN)' KERNEL_OBJ='$(objtree)'			\
+	RUSTC_MIN=$(bcachefs-vendor-rustc-min)				\
+	$(CONFIG_SHELL) $(src)/scripts/rust-vendor-available.sh)
 
 ifeq ($(bcachefs-vendor-rust-probe),y)
 bcachefs-vendor-rust := y
 else ifneq ($(.DEFAULT_GOAL),__clean)
 # Not on clean: kbuild reads this file there too, without the kernel config,
 # and a machine without Rust must still be able to clean.
-$(error bcachefs requires Rust, and can't build with the kernel's Rust ($(bcachefs-kernel-rust-why)) or its own vendored copy ($(bcachefs-vendor-rust-probe)). Install rustc >= $(bcachefs-vendor-rustc-min), rust-src and bindgen)
+$(error bcachefs requires Rust. Can't use the kernel's Rust: $(bcachefs-kernel-rust-why). Can't build bcachefs' own copy either: $(bcachefs-vendor-rust-probe))
 endif
 endif
 
