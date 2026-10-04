@@ -213,6 +213,7 @@
 
 #include "btree/interior.h"
 
+#include "data/ec/create.h"
 #include "data/ec/init.h"
 #include "data/migrate.h"
 #include "data/reconcile/work.h"
@@ -879,6 +880,10 @@ int __bch2_dev_set_state(struct bch_fs *c, struct bch_dev *ca,
 	struct reconcile_scan s = new_state == BCH_MEMBER_STATE_rw
 		? (struct reconcile_scan) { .type = RECONCILE_SCAN_pending }
 		: (struct reconcile_scan) { .type = RECONCILE_SCAN_device, .dev = ca->dev_idx };
+
+	/* empty stripes hold their buckets until deleted: */
+	if (new_state == BCH_MEMBER_STATE_evacuating)
+		bch2_do_stripe_deletes(c);
 
 	if (ca->mi.state == new_state) {
 		if (new_state == BCH_MEMBER_STATE_evacuating)
