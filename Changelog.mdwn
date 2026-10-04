@@ -1,5 +1,123 @@
 # Changelog
 
+## v1.39.7 - Sun Oct 4 2026
+
+### Major changes:
+
+#### Disk accounting now has replication level fully plumbed
+
+Previously, on a filesystem with mismatched device sizes or severely mismatched
+free space, a write would be allowed when we could only write degraded (and not
+running in degraded mode). Now, those writes will properly return -ENOSPC.
+
+Disk reservations are now taken at a replica count, and the allocator
+knows how much it can place at each one - how much we can write *now*, as
+distinct from how much we could reserve. `bcachefs fs usage` shows free
+space by replica count (via the new `BCH_IOCTL_QUERY_ACCOUNTING_v2`), and
+statfs never reports more than a reservation could actually get. The
+copygc reserve is now per device.
+
+New option `write_degraded`: whether to write fewer copies than asked for
+rather than returning ENOSPC. The default, `degraded`, does so only while a
+device is missing or not read-write; `yes` always, `no` never.
+
+A write that lands with fewer replicas than it asked for is no longer
+silent (GH #1221): it's recorded in the superblock error list
+(`write_degraded_insufficient_devices`, `write_degraded_no_progress`), and
+reservations granted at a lower count show up in `fs top` as
+`disk_reservation_degraded`.
+
+#### FUSE mount
+
+`bcachefs mount -o fuse` mounts through the FUSE daemon, which grew significant
+new functionality: subvolumes (".." of a subvolume root is in the parent),
+extended attributes, multiple worker threads, `allow_other` with the kernel
+checking permissions, file handles that survive the inode cache, fsync,
+fsyncdir and syncfs, new inodes owned by the caller, atime/mtime/ctime
+updates, times before 1970, writes refused on read-only snapshots, rename
+over an existing name, unlinked-but-open inodes deleted on last close, and
+statfs in the right units. Block devices mount as `fuseblk` so umount waits
+for shutdown, the daemon gets its own systemd scope, and a second
+filesystem never starts on a device in use.
+
+FUSE mode is now being tested in the CI with the full xfstests suite. It's
+important to note that given the constraints of the kernel FUSE interface, FUSE
+will never be competitive with in-kernel bcachefs on performance or have a 100%
+complete featureset; the goal here is to make it a solid and well tested
+recovery option.
+
+#### Boot
+
+A dracut module. The systemd generator reads the fstabs systemd reads in an
+initrd, and the `sd-bcachefs` mkinitcpio hook now relies on it for the root.
+
+#### Journal scrub
+
+Journal scrub scrubs from the flush before last_seq, checks btree nodes
+written in the window, reports bad replicas it repaired from good ones,
+and queues read failures instead of committing damage. Recovery starts the
+journal after the scrub.
+
+### Bugfixes
+
+- Checksum narrowing never ran: `can_narrow_crc()`'s test was reversed
+  (Alan Derk). Narrowing could also outgrow the entry's nonce field.
+- Erasure coding:
+  - a stripe reuse that can't reconstruct records damage only for the
+    extents that fail their own checksums, not every extent in the block
+  - stripe repair evacuates the bad blocks first, counts only devices that
+    can take a block, and reserves its parity when narrowing; a stripe it
+    can't repair yet is parked instead of ending the reconcile thread
+  - scrub checks stripe blocks against the stripe's checksums; a block on a
+    durability 0 device counts as bad
+  - transient allocation failures no longer park extents
+  - stripe reuse reads only the blocks it carries (Alan Derk)
+  - opening an existing stripe invalidates stale "not open" decisions
+    (tom-doerr); open buckets leaked when stripe repair failed (daniron26)
+- Superblocks: a bad primary is rewritten when we read from a backup.
+  `key set-passphrase` and `remove-passphrase` actually write the
+  superblock and ask for the passphrase once; offline edits persist the
+  edit, not the open's version decisions. Resize marks the superblock
+  buckets the new range brings in, and fsck drops data pointers into
+  superblock buckets.
+- Emergency shutdown: reservations fail with EROFS, waiting on the
+  allocator is an error, and shared writable mmaps are refused.
+- Written-but-open buckets were subtracted from free space twice: with one
+  member ro or offline under sustained writes, writes and sync could hang
+  on an array far from full (GH #917, daniron26).
+- `device set-state ro` without `--force` could leave fewer rw devices than
+  `--replicas`, and new writes landed with one copy; the check had been
+  dead since a two-step regression (daniron26).
+- A recovery pass that failed wasn't retried for 100x its runtime - one
+  transient failure could leave snapshot deletion unscheduled for most of a
+  day (tools #941). The backoff is now exponential in consecutive failures,
+  capped at 20x, and resets on success.
+- fsck resurrected subvolumes waiting on deletion into lost+found - with
+  podman on a full filesystem, dozens of deleted image layers (reported by
+  ticpu).
+- A partial hole punch in a snapshot child could let the parent's data
+  reappear after remount (Matthias Goergens).
+- The btree write buffer could expose staged keys without a journal pin
+  when growing its array failed (Matthias Goergens).
+- Freezing: the write buffer flush workqueue and reconcile workers are
+  freezable, and moves in flight are frozen rather than flushed.
+- Setting a device ro, evacuating or spare writes out dirty data first: on
+  a full filesystem, shrinking capacity under dirty pagecache's
+  reservations left sync waiting forever. Evacuate says when it stops
+  making progress.
+- A durability change scans the device that changed, not device 0 (Alan
+  Derk).
+- Encrypted mounts through the mount(2) fallback find the key in a fresh
+  session that doesn't link the user keyring (tools #640, Darafei
+  Praliaskouski).
+- `set-fs-option --rotational=` persists even when it matches the detected
+  value, so a later rediscovery can't override an explicit choice (tools
+  #594, Darafei Praliaskouski).
+- rmdir in a casefolded directory could deadlock against the last close of
+  a removed subdirectory.
+
+No metadata version change.
+
 ## v1.39.6 - Fri Sep 11 2026
 
 An early release for an erasure coding regression in 1.39.5: stripe reuse moved
