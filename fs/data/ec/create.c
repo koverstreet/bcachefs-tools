@@ -121,15 +121,18 @@ static int ec_stripe_delete(struct btree_trans *trans, u64 idx, bool is_open)
 	/*
 	 * We expect write buffer races here
 	 * Important: check stripe_is_open with stripe key locked:
+	 * An open stripe must exist, but needn't be empty:
 	 */
-	if (k.k->type != KEY_TYPE_stripe ||
-	    stripe_lru_pos(bkey_s_c_to_stripe(k).v) != STRIPE_LRU_POS_EMPTY) {
+	if (k.k->type != KEY_TYPE_stripe) {
 		CLASS(printbuf, buf)();
 		bch2_fs_inconsistent_on(is_open,
-					c, "error deleting stripe: got non or nonempty stripe\n%s",
-					(bch2_bkey_val_to_text(&buf, c, k), buf.buf));
+					c, "error deleting stripe: open stripe %llu missing\n%s",
+					idx, (bch2_bkey_val_to_text(&buf, c, k), buf.buf));
 		return 0;
 	}
+
+	if (stripe_lru_pos(bkey_s_c_to_stripe(k).v) != STRIPE_LRU_POS_EMPTY)
+		return 0;
 
 	event_inc_trace(c, stripe_delete, buf,
 			bch2_bkey_val_to_text(&buf, c, k));
@@ -871,7 +874,25 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 		ret = bch2_logged_op_finish(trans, &op.k_i, ret, watermark) ?: ret;
 	}
 
-	return ret;
+	if (ret)
+		return ret;
+
+	/*
+	 * The trigger and the delete worker skip open stripes, and both of
+	 * ours may have emptied while we held them:
+	 */
+	u64 old_idx = s->have_old_stripe ? s->old_stripe.key.k.p.offset : 0;
+	u64 new_idx = s->new_stripe.key.k.p.offset;
+
+	CLASS(btree_trans, trans)(c);
+	return commit_do(trans, NULL, NULL,
+			 watermark|
+			 BCH_TRANS_COMMIT_no_check_rw|
+			 BCH_TRANS_COMMIT_no_enospc,
+		(old_idx && old_idx != new_idx
+		 ? ec_stripe_delete(trans, old_idx, true)
+		 : 0) ?:
+		ec_stripe_delete(trans, new_idx, true));
 }
 
 static void stripe_put_iorefs(struct bch_fs *c, struct bch_stripe *s,
