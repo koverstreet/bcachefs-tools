@@ -9,11 +9,9 @@ use crate::errcode::{
     ret_to_result_void as ret_to_result,
 };
 use crate::fs::Fs;
-#[cfg(feature = "std")]
 use crate::printbuf_to_formatter;
 use crate::SPOS_MAX;
 use bitflags::bitflags;
-#[cfg(feature = "std")]
 use core::fmt;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
@@ -1212,7 +1210,6 @@ impl<'t> Drop for BtreeNodeIter<'t> {
     }
 }
 
-#[cfg(feature = "std")]
 impl<'b, 'f> c::btree {
     pub fn to_text(&'b self, fs: &'f Fs) -> BtreeNodeToText<'b, 'f> {
         BtreeNodeToText { b: self, fs }
@@ -1263,13 +1260,11 @@ impl c::btree {
     }
 }
 
-#[cfg(feature = "std")]
 pub struct BtreeNodeToText<'b, 'f> {
     b:  &'b c::btree,
     fs: &'f Fs,
 }
 
-#[cfg(feature = "std")]
 impl<'b, 'f> fmt::Display for BtreeNodeToText<'b, 'f> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe {
@@ -1278,13 +1273,11 @@ impl<'b, 'f> fmt::Display for BtreeNodeToText<'b, 'f> {
     }
 }
 
-#[cfg(feature = "std")]
 pub struct BtreeNodeOndiskToText<'b, 'f> {
     b:  &'b c::btree,
     fs: &'f Fs,
 }
 
-#[cfg(feature = "std")]
 impl<'b, 'f> fmt::Display for BtreeNodeOndiskToText<'b, 'f> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe {

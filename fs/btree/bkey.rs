@@ -2,11 +2,8 @@
 
 use super::iter::BtreeIter;
 use crate::c;
-#[cfg(feature = "std")]
 use crate::fs::Fs;
-#[cfg(feature = "std")]
 use crate::printbuf_to_formatter;
-#[cfg(feature = "std")]
 use core::fmt;
 #[cfg(feature = "std")]
 use core::str::FromStr;
@@ -263,7 +260,6 @@ pub struct BkeySC<'a> {
 include!(concat!(env!("OUT_DIR"), "/bkey_types_gen.rs"));
 
 impl<'a> BkeySC<'a> {
-    #[cfg(feature = "std")]
     unsafe fn to_raw(&self) -> c::bkey_s_c {
         c::bkey_s_c {
             k: self.k,
@@ -271,7 +267,6 @@ impl<'a> BkeySC<'a> {
         }
     }
 
-    #[cfg(feature = "std")]
     pub fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'a, 'f> {
         BkeySCToText {
             k: BkeySC { k: self.k, v: self.v, iter: PhantomData },
@@ -280,7 +275,6 @@ impl<'a> BkeySC<'a> {
     }
 
     /// Key only - type, pos, size - without rendering the value.
-    #[cfg(feature = "std")]
     pub fn to_text_key(&self) -> BkeySCKeyToText<'a> {
         BkeySCKeyToText {
             k: BkeySC { k: self.k, v: self.v, iter: PhantomData },
@@ -395,13 +389,11 @@ impl<'a> From<&'a mut c::bkey_i> for BkeyS<'a> {
     }
 }
 
-#[cfg(feature = "std")]
 pub struct BkeySCToText<'a, 'f> {
     k:  BkeySC<'a>,
     fs: &'f Fs,
 }
 
-#[cfg(feature = "std")]
 impl fmt::Display for BkeySCToText<'_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         unsafe {
@@ -412,12 +404,10 @@ impl fmt::Display for BkeySCToText<'_, '_> {
     }
 }
 
-#[cfg(feature = "std")]
 pub struct BkeySCKeyToText<'a> {
     k: BkeySC<'a>,
 }
 
-#[cfg(feature = "std")]
 impl fmt::Display for BkeySCKeyToText<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         unsafe { printbuf_to_formatter(f, |buf| c::bch2_bkey_to_text(buf, self.k.k)) }

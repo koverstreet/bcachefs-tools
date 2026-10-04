@@ -239,7 +239,6 @@ include!(concat!(env!("OUT_DIR"), "/btree_ids_gen.rs"));
 // `crate::POS_MIN` / `crate::SPOS_MAX` spelling used across the tree and the
 // tools binary.
 pub use btree::bkey::{pos, spos, POS_MAX, POS_MIN, SPOS_MAX};
-#[cfg(feature = "std")]
 pub use util::printbuf::printbuf_to_formatter;
 #[cfg(feature = "std")]
 pub use btree::bbpos::{bbpos_range_parse, BbposRange};

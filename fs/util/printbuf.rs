@@ -1,9 +1,8 @@
 use core::ffi::CStr;
-use core::fmt;
+use core::fmt::{self, Write as _};
 use core::ops::{Deref, DerefMut};
 
 use crate::c;
-#[cfg(feature = "std")]
 use crate::c::bpos as Bpos;
 
 /// Rust wrapper around `c::printbuf` providing `fmt::Write` via
@@ -206,17 +205,23 @@ impl Drop for c::printbuf {
     }
 }
 
-#[cfg(feature = "std")]
 impl fmt::Display for Bpos {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         printbuf_to_formatter(f, |buf| unsafe { c::bch2_bpos_to_text(buf, *self) })
     }
 }
 
-#[cfg(feature = "std")]
+/// Display through a C *_to_text(): render into a printbuf made for this call,
+/// then write it out. The printbuf only exists while something is actually
+/// formatting. Its indentation and tabstops start from scratch, but `\n`,
+/// `\t` and `\r` it leaves raw are interpreted by the destination, when that's
+/// a Printbuf (see its fmt::Write).
+///
+/// Invalid UTF-8 comes out as U+FFFD, as to_string_lossy() would, without
+/// allocating - so this works in-kernel too.
 pub fn printbuf_to_formatter<F>(f: &mut fmt::Formatter<'_>, func: F) -> fmt::Result
 where
-    F: Fn(*mut c::printbuf),
+    F: FnOnce(*mut c::printbuf),
 {
     let mut buf = c::printbuf::new();
 
@@ -226,6 +231,12 @@ where
         return Ok(());
     }
 
-    let s = unsafe { CStr::from_ptr(buf.buf) };
-    f.write_str(&s.to_string_lossy())
+    let bytes = unsafe { CStr::from_ptr(buf.buf) }.to_bytes();
+    for chunk in bytes.utf8_chunks() {
+        f.write_str(chunk.valid())?;
+        if !chunk.invalid().is_empty() {
+            f.write_char(char::REPLACEMENT_CHARACTER)?;
+        }
+    }
+    Ok(())
 }
