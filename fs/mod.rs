@@ -44,6 +44,7 @@ pub mod btree;
 pub mod debug {
     pub mod tests;
 }
+#[path = "fs/check.rs"]        pub mod check;
 #[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
 pub mod init {
