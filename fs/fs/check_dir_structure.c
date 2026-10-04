@@ -306,8 +306,15 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 				if (ret)
 					return ret;
 
+				/*
+				 * Done with this path: it was a loop, there are
+				 * no depths along it to renumber - and on error
+				 * or restart, nothing more may run in this
+				 * transaction.
+				 */
 				ret = bch2_reattach_inode(trans, &inode);
 				bch_err_msg(c, ret, "reattaching inode %llu", inode.bi_inum);
+				return ret;
 			}
 
 			break;
