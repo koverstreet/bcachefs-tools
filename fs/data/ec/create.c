@@ -1825,6 +1825,43 @@ static u32 ec_old_stripe_required(struct ec_stripe_new *s)
 	return required;
 }
 
+/* The old stripe's blocks we're carrying forward checked out: take them. */
+static void ec_old_stripe_carry(struct ec_stripe_new *s)
+{
+	for (unsigned i = 0; i < s->old_blocks_nr; i++)
+		swap(s->new_stripe.data[i],
+		     s->old_stripe.data[s->old_block_map[i]]);
+}
+
+/*
+ * The old stripe has been read in full: validate it, reconstructing what's bad
+ * if it can be, then carry its blocks forward - or note which of the ones we
+ * wanted are lost, for create to record damage against.
+ */
+static void ec_old_stripe_read_done(struct ec_stripe_new *s)
+{
+	u32 required = ec_old_stripe_required(s);
+
+	s->old_stripe_err = bch2_stripe_buf_validate_msg(s->c, &s->old_stripe,
+							 true, required);
+	if (!s->old_stripe_err) {
+		ec_old_stripe_carry(s);
+		return;
+	}
+
+	/*
+	 * Reconstruct either couldn't run - too many failures, so everything
+	 * that failed to read is lost - or ran and left blocks that still don't
+	 * check out:
+	 */
+	enum bch_stripe_buf_err e =
+		s->old_stripe_err == -BCH_ERR_stripe_reconstruct_insufficient_blocks
+		? STRIPE_BUF_PRE_RECOV
+		: STRIPE_BUF_POST_RECOV;
+
+	s->old_stripe_lost_blocks = ec_failed_mask(&s->old_stripe, e) & required;
+}
+
 /*
  * Fold the blocks we're carrying forward into the new stripe as soon as the old
  * stripe's read lands, instead of at create. The old buffer is the same size as
@@ -1848,9 +1885,7 @@ static CLOSURE_CALLBACK(ec_old_stripe_fold)
 	 */
 	if (!s->old_stripe_read_all) {
 		if (bch2_stripe_buf_blocks_good(&s->old_stripe, required)) {
-			for (unsigned i = 0; i < s->old_blocks_nr; i++)
-				swap(s->new_stripe.data[i],
-				     s->old_stripe.data[s->old_block_map[i]]);
+			ec_old_stripe_carry(s);
 			closure_return(cl);
 			return;
 		}
@@ -1863,27 +1898,7 @@ static CLOSURE_CALLBACK(ec_old_stripe_fold)
 		return;
 	}
 
-	s->old_stripe_err = bch2_stripe_buf_validate_msg(s->c, &s->old_stripe,
-							 true, required);
-	if (!s->old_stripe_err) {
-		for (unsigned i = 0; i < s->old_blocks_nr; i++)
-			swap(s->new_stripe.data[i],
-			     s->old_stripe.data[s->old_block_map[i]]);
-	} else {
-		/*
-		 * Which of the blocks we wanted are actually unreadable, for
-		 * create to record damage against: reconstruct either couldn't
-		 * run - too many failures, so everything that failed to read
-		 * is lost - or ran and left blocks that still don't check out.
-		 */
-		enum bch_stripe_buf_err e =
-			s->old_stripe_err == -BCH_ERR_stripe_reconstruct_insufficient_blocks
-			? STRIPE_BUF_PRE_RECOV
-			: STRIPE_BUF_POST_RECOV;
-
-		s->old_stripe_lost_blocks = ec_failed_mask(&s->old_stripe, e) & required;
-	}
-
+	ec_old_stripe_read_done(s);
 	closure_return(cl);
 }
 
