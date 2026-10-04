@@ -280,7 +280,7 @@ pub fn resolve<'p>(
 pub fn resolve_with_bits<'p>(
     info: &'static StructInfo,
     path: &'p str,
-) -> Result<(FieldRef, Option<&'static BitmaskField>), ResolveError<'p>> {
+) -> Result<FieldTarget, ResolveError<'p>> {
     let err = match resolve(info, path) {
         Ok(r) => return Ok((r, None)),
         Err(e) => e,
@@ -419,6 +419,18 @@ pub fn write_bits(
     }
     let old = read_scalar(buf, r)?;
     write_scalar(buf, r, old & !(bm.mask() << bm.lo) | (v << bm.lo))
+}
+
+/// What resolve_with_bits() resolves to: a field, or a declared bit range
+/// within one (`no_keys`, `flags.subvol`).
+pub type FieldTarget = (FieldRef, Option<&'static BitmaskField>);
+
+/// Write a resolved field or bit range.
+pub fn write(buf: &mut [u8], (r, bm): &FieldTarget, v: u64) -> Result<(), AccessError> {
+    match bm {
+        Some(bm) => write_bits(buf, r, bm, v),
+        None => write_scalar(buf, r, v),
+    }
 }
 
 // ---------------------------------------------------------------------------
