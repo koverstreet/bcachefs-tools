@@ -80,7 +80,7 @@ void bch2_ec_stripe_buf_move(struct ec_stripe_buf *, struct ec_stripe_buf *);
 int bch2_ec_stripe_buf_init(struct bch_fs *, struct ec_stripe_buf *, unsigned, unsigned,
 			    struct closure *);
 
-DEFINE_FREE(ec_stripe_buf_free, struct ec_stripe_buf *, bch2_ec_stripe_buf_exit(_T); kfree(_T));
+DEFINE_FREE(ec_stripe_buf_free, struct ec_stripe_buf *, if (_T) { bch2_ec_stripe_buf_exit(_T); kfree(_T); });
 
 s64 bch2_ec_scrub_block(struct bch_fs *, struct ec_stripe_buf *, unsigned);
 void bch2_ec_generate_ec(struct ec_stripe_buf *);
