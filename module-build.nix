@@ -27,7 +27,8 @@ bcachefs-tools:
   stdenv,
   kernelModuleMakeFlags,
   kernel,
-  rustPlatform
+  rustPlatform,
+  rust-bindgen
 }:
 
 stdenv.mkDerivation {
@@ -39,7 +40,13 @@ stdenv.mkDerivation {
 
   src = bcachefs-tools.dkms;
 
-  nativeBuildInputs = kernel.moduleBuildDependencies;
+  # The kernel only brings rustc and bindgen when it was built with Rust; a
+  # kernel without it builds bcachefs's Rust from the vendored stack, which
+  # needs them all the same.
+  nativeBuildInputs = kernel.moduleBuildDependencies ++ [
+    rustPlatform.rust.rustc
+    rust-bindgen
+  ];
 
   enableParallelBuilding = true;
 

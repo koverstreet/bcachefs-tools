@@ -61,7 +61,6 @@ endif
 BCACHEFS_DKMS_FORWARD := BCACHEFS_DEBUG \
                         BCACHEFS_TESTS \
                         BCACHEFS_INJECT_TRANSACTION_RESTARTS \
-                        BCACHEFS_RUST \
                         BCACHEFS_WERROR
 
 # Vars persisted into the *local* build.vars across invocations - a
@@ -119,11 +118,6 @@ CFLAGS+=-std=gnu11 -O2 -g -MMD -MP -Wall -fPIC		\
 	-DCONFIG_STACKTRACE					\
 	-D__SANE_USERSPACE_TYPES__				\
 	$(EXTRA_CFLAGS)
-
-# The tools are always built with Rust (cargo), so define CONFIG_BCACHEFS_RUST
-# unconditionally — same symbol the module derives from bcachefs-rust-y, so C
-# shared between the two builds gates consistently.
-CFLAGS+=-DCONFIG_BCACHEFS_RUST=y
 
 # Intenionally not doing the above to $(LDFLAGS) because we rely on
 # recursive expansion here (CFLAGS is not yet completely built by this line)

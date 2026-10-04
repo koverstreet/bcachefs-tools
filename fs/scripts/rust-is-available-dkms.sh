@@ -1,18 +1,18 @@
 #!/bin/sh
 # SPDX-License-Identifier: GPL-2.0
 #
-# Return "y" when bcachefs' optional DKMS Rust objects can be built with the
-# current kernel/toolchain, else "n". The kernel's own rust_is_available.sh owns
-# the normal Rust-for-Linux availability rules; this script adds only the extra
-# checks needed by bcachefs' out-of-tree Rust glue.
+# Return "y" when bcachefs' DKMS Rust objects can be built against the kernel's
+# own Rust, else the reason they can't. The kernel's own rust_is_available.sh
+# owns the normal Rust-for-Linux availability rules; this script adds only the
+# extra checks needed by bcachefs' out-of-tree Rust glue.
 #
-# When a check fails the Makefile falls back to bcachefs's vendored Rust stack
-# (or, failing that, the C-only module) — but log exactly which prerequisite is
-# missing (to stderr, so it lands in the DKMS build log). The
+# When a check fails the Makefile falls back to bcachefs's vendored Rust stack,
+# and fails the build if that can't be used either — but log exactly which
+# prerequisite is missing (to stderr, so it lands in the DKMS build log). The
 # point is that a kernel which is *almost* Rust-capable (config + scripts present
-# but, say, the prebuilt stdlib not installed) otherwise builds C fine yet dies
-# deep in rustc with a cryptic "E0463: can't find crate for `core`" — instead of
-# this script catching it and saying what to install.
+# but, say, the prebuilt stdlib not installed) otherwise dies deep in rustc with
+# a cryptic "E0463: can't find crate for `core`", when the vendored stack would
+# have built.
 
 set -e
 
@@ -24,16 +24,13 @@ canonical_version()
 }
 
 # The kernel's Rust can't be used: report exactly what's missing. The reason
-# IS the verdict: stdout is "y", or else the reason we couldn't. The Makefile
-# bakes that into the module, so the mount-time "built without Rust support"
-# message can say why - months later, on a machine whose build log is long gone.
-# The stderr copy still lands in the DKMS build log for whoever is watching the
-# build itself.
+# IS the verdict: stdout is "y", or else the reason we couldn't. If the vendored
+# stack can't be used either, the Makefile's build error quotes it; the stderr
+# copy lands in the DKMS build log either way.
 #
-# Stripped of the characters that would otherwise terminate the C string literal
-# it ends up inside: the reason travels through make and the shell into a -D. An
-# unusual path should mangle the message, never break the build. The apostrophe
-# comes out in the Makefile, which also covers the reasons it composes itself.
+# Stripped of quotes, backslashes, $ and backticks: the reason travels through
+# make and the shell, and an unusual path should mangle the message, never the
+# build.
 skip()
 {
 	reason=$(printf '%s' "$1" | tr -d '"\\$`')
@@ -87,12 +84,26 @@ fi
 # out-of-tree module to link against `core`. A kernel that ships the Rust config
 # + scripts but not the compiled rust/ artifacts — a locally built kernel, or a
 # kernel-devel/headers package without the Rust build output — otherwise dies
-# with E0463 "can't find crate for `core`" instead of falling back to C-only.
+# with E0463 "can't find crate for `core`" instead of falling back to vendored.
 libcore=$KERNEL_OBJ/rust/libcore.rmeta
 
 if [ ! -r "$libcore" ]; then
 	skip "missing the kernel's prebuilt Rust stdlib ($libcore); the kernel was built/installed without its rust/ artifacts"
 fi
+
+# core isn't all of it: kbuild compiles a module's Rust with --extern kernel and
+# --extern pin_init (scripts/Makefile.build), from 7.2 also zerocopy and
+# zerocopy_derive, and the kernel crate needs the macros proc-macro. A packager
+# trimming rust/ can keep one and drop another.
+for crate in kernel pin_init $(grep -q -- '--extern zerocopy' "$KERNEL_SRC/scripts/Makefile.build" 2>/dev/null && echo zerocopy); do
+	[ -r "$KERNEL_OBJ/rust/lib$crate.rmeta" ] ||
+		skip "missing the kernel's prebuilt Rust crate $crate ($KERNEL_OBJ/rust/lib$crate.rmeta)"
+done
+
+for procmacro in macros $(grep -q -- '--extern zerocopy_derive' "$KERNEL_SRC/scripts/Makefile.build" 2>/dev/null && echo zerocopy_derive); do
+	ls "$KERNEL_OBJ/rust/lib$procmacro".* >/dev/null 2>&1 ||
+		skip "missing the kernel's prebuilt Rust proc-macro $procmacro ($KERNEL_OBJ/rust/lib$procmacro.*)"
+done
 
 # ...and it has to have been built by *this* rustc, or rustc refuses to load it:
 # E0514, "found crate `core` compiled by an incompatible version of rustc".
@@ -103,7 +114,7 @@ fi
 # toolchain change and auto.conf agrees with the installed rustc while every
 # artifact on disk disagrees. Reported by debaba, on a locally built 7.2-rc6
 # whose rust/ came from rustc 1.96 and which was then built against a 1.95
-# host — straight to E0514 rather than to the C-only module this script exists
+# host — straight to E0514 rather than to the vendored stack this script exists
 # to fall back to.
 #
 # So ask the artifact we actually link against. An rmeta opens with a

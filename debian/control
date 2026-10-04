@@ -63,6 +63,9 @@ Section: kernel
 Depends: ${misc:Depends},
 	 openssl,
 	 xz-utils,
+	 rustc (>= 1.85),
+	 rust-src,
+	 bindgen,
 	 initramfs-tools | linux-initramfs-tool,
 	 linux-headers-generic (>= 6.16) |
 	 linux-headers-generic-hwe-24.04 (>= 6.16) |

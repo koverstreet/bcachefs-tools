@@ -6,11 +6,10 @@ export BCACHEFS_DKMS=1
 #
 # Export what build.vars actually defined, rather than a fixed list:
 # `export FOO` on an unset FOO still hands the sub-make FOO="" at
-# origin=environment, and any environment value - empty included - makes
-# fs/Makefile's `BCACHEFS_RUST ?= auto` a no-op. That pinned every DKMS
-# build to the auto-probe and defeated the documented BCACHEFS_RUST=0
-# escape hatch (koverstreet/bcachefs#1197). A name that was never set
-# isn't in $(.VARIABLES), so it can't be exported empty.
+# origin=environment, and any environment value - empty included -
+# defeats a `?=` default in fs/Makefile (koverstreet/bcachefs#1197). A
+# name that was never set isn't in $(.VARIABLES), so it can't be exported
+# empty.
 -include $(CURDIR)/build.vars
 $(foreach v,$(filter BCACHEFS_%,$(.VARIABLES)),$(eval export $(v)))
 

@@ -16,7 +16,7 @@
 
 %global make_opts VERSION="%{version}" BUILD_VERBOSE=1 PREFIX=%{_prefix} ROOT_SBINDIR=%{_sbindir}
 
-%global MSRV 1.77
+%global MSRV 1.85
 %global MINIMAL_KERNEL_VERSION_FOR_TOOLS 6.11.3
 %global MINIMAL_KERNEL_VERSION_FOR_MODULE 6.16
 
@@ -154,6 +154,15 @@ Requires:       python3
 # does a full local build.
 Requires:       openssl
 Requires:       xz
+# The module is part Rust: the kernel's own Rust support if the toolchain
+# matches it, else bcachefs's vendored copy, which needs rust-src and bindgen.
+Requires:       rust >= %{MSRV}
+Requires:       rust-src
+%if 0%{?suse_version}
+Requires:       rust-bindgen
+%else
+Requires:       bindgen-cli
+%endif
 
 Obsoletes:      fuse-bcachefs < %{version}-%{release}
 

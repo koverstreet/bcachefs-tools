@@ -49,9 +49,12 @@ apt install -y pkg-config libaio-dev libblkid-dev libkeyutils-dev \
     python3 python3-docutils libclang-dev debhelper dh-python systemd-dev
 ```
 
-The kernel module and DKMS build also require headers and a Rust toolchain
-compatible with the bundled kernel sources. Installing the userspace dependencies
-does not by itself establish that the distribution kernel is supported.
+The kernel module and DKMS build also require the kernel's headers, and Rust:
+rustc (>= 1.85), rust-src and bindgen. If the kernel was built with Rust and
+your rustc matches the one it was built with, the module uses the kernel's own
+Rust support; otherwise it builds bcachefs's vendored copy, which is what needs
+rust-src. Installing the userspace dependencies does not by itself establish
+that the distribution kernel is supported.
 
 Fedora: install build dependencies either with `dnf builddep bcachefs-tools` or with:
 ```shell
