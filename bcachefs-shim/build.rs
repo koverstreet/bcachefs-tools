@@ -66,6 +66,8 @@ fn main() {
         .allowlist_type("uid_t")
         .allowlist_type("gid_t")
         .allowlist_type("cds_.*")
+        // File mode bits: the kernel crate's bindings have them in-kernel.
+        .allowlist_var("S_IF.*")
         // Never emit fs/ types: those are bcachefs-kernel's, and some (printbuf)
         // even carry Rust impls there. allowlist_recursively would otherwise
         // pull them in through an include/ reference.

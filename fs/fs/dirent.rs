@@ -4,6 +4,14 @@ use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 
+impl c::bch_dirent {
+    /// The inode number the dirent points at. Meaningless for a DT_SUBVOL
+    /// dirent, which keeps subvolume IDs in the same space.
+    pub fn d_inum(&self) -> u64 {
+        u64::from_le(unsafe { self.__bindgen_anon_1.d_inum })
+    }
+}
+
 pub fn qstr(name: &[u8]) -> c::qstr {
     c::qstr {
         __bindgen_anon_1: c::qstr__bindgen_ty_1 {
