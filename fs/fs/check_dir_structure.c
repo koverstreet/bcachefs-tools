@@ -279,7 +279,15 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 
 		min_bi_depth = parent_inode.bi_depth;
 
-		if (parent_inode.bi_depth < inode.bi_depth &&
+		/*
+		 * Depths decrease towards the root, so a shallower parent means
+		 * the rest of the path has been checked - unless this walk has
+		 * already crossed a depth that's wrong. Around a loop the depths
+		 * can't all decrease, so trusting them past a wrong one always
+		 * stops the walk before it comes back around.
+		 */
+		if (!redo_bi_depth &&
+		    parent_inode.bi_depth < inode.bi_depth &&
 		    min_bi_depth < U16_MAX)
 			break;
 
@@ -345,6 +353,12 @@ int bch2_check_directory_structure(struct bch_fs *c)
 		if (!S_ISDIR(bkey_inode_mode(k)))
 			continue;
 
+		/*
+		 * check_inodes has already stripped BCH_INODE_unlinked from
+		 * every directory but the root of an unlinked subvolume, and a
+		 * subvolume root ends every walk - so skipping these can't
+		 * hide a directory loop:
+		 */
 		if (bch2_inode_flags(k) & BCH_INODE_unlinked)
 			continue;
 
