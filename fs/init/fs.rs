@@ -1,6 +1,6 @@
 use crate::c;
 use crate::btree::bkey::AsBkeyI;
-use crate::errcode::{bch_err_throw, bch_errcode, ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, ret_to_result_void as ret_to_result, BchError};
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::iter::{BtreeIterFlags, CommitOpts, UpdateTriggerFlags};
 use crate::util::locking::MemallocFlags;
@@ -134,8 +134,16 @@ impl Fs {
         unsafe { c::bch2_write_super(self.raw) };
     }
 
+    /// Throw @error, as C's bch_err_throw() does: counted in error_throw and
+    /// traced, so errors started in Rust are as visible as errors started in C.
+    /// Naming an error to compare or parse against isn't throwing it - that's
+    /// BchError::from_errcode().
+    pub fn err(&self, error: bch_errcode) -> BchError {
+        BchError::from_raw(-unsafe { c::__bch2_err_throw(self.raw, -(error as i32)) })
+    }
+
     pub fn throw<T>(&self, error: bch_errcode) -> Result<T, BchError> {
-        Err(bch_err_throw(error))
+        Err(self.err(error))
     }
 
     pub fn require<T>(&self, value: Option<T>, error: bch_errcode) -> Result<T, BchError> {

@@ -3,7 +3,6 @@ use crate::alloc::buckets::DiskReservation;
 use crate::c;
 use crate::errcode::{
     BchError,
-    bch_err_throw,
     bch_errcode,
     errptr_to_result,
     errptr_to_result_c,
@@ -209,8 +208,13 @@ impl<'a, 't> TransAttempt<'a, 't> {
         Ok(self)
     }
 
+    /// Restart the transaction, as C's btree_trans_restart(): the transaction
+    /// has to know - it's marked restarted and its restart_count bumped, which
+    /// is what bch2_trans_begin() and verify_not_restarted() go by.
     pub fn restart(self, error: bch_errcode) -> TransError {
-        TransError::Restart(bch_err_throw(error))
+        let ip = Self::restart as *const () as core::ffi::c_ulong;
+        let ret = unsafe { c::bch2_trans_restart_ip(self.raw(), error as i32, ip) };
+        TransError::Restart(BchError::from_raw(-ret))
     }
 
     pub fn done<T>(self, value: T) -> TransResult<'a, 't, T> {

@@ -11,7 +11,6 @@ use crate::data::extents::{
     extent_entry_type,
 };
 use crate::errcode::{
-    bch_err_throw,
     bch_errcode,
     BchError,
     ENOENT_bkey_type_mismatch,
@@ -47,12 +46,12 @@ fn error_ret(error: BchError) -> i32 {
     -error.raw()
 }
 
-fn errcode(code: bch_errcode) -> i32 {
-    error_ret(bch_err_throw(code))
+fn errcode(fs: &Fs, code: bch_errcode) -> i32 {
+    error_ret(fs.err(code))
 }
 
-fn enomem() -> BchError {
-    bch_err_throw(bch_errcode::BCH_ERR_ENOMEM_perf_test_job)
+fn enomem(fs: &Fs) -> BchError {
+    fs.err(bch_errcode::BCH_ERR_ENOMEM_perf_test_job)
 }
 
 fn round_up(v: u64, by: u64) -> u64 {
@@ -846,7 +845,7 @@ impl TestJob {
         // kernel alloc inherited its context from `current` (scoped memalloc
         // flags) instead of threading GFP per call, even this would unify.
         #[cfg(kernel)]
-        let job = Arc::new(job, GFP_KERNEL).map_err(|_| enomem())?;
+        let job = Arc::new(job, GFP_KERNEL).map_err(|_| enomem(fs))?;
         #[cfg(not(kernel))]
         let job = Arc::new(job);
 
@@ -900,15 +899,15 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
     let fs = unsafe { Fs::borrow_raw(raw_fs) };
 
     if nr == 0 || nr_threads == 0 {
-        return errcode(bch_errcode::BCH_ERR_EINVAL_test_zero_nr_or_threads);
+        return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_zero_nr_or_threads);
     }
 
     let Some(testname) = (!testname.is_null()).then(|| unsafe { CStr::from_ptr(testname) }) else {
-        return errcode(bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
+        return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
     };
 
     let Some((name, test)) = lookup_test(testname) else {
-        return errcode(bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
+        return errcode(&fs, bch_errcode::BCH_ERR_EINVAL_test_unknown_test);
     };
 
     let job = match TestJob::new(&*fs, nr, nr_threads, test) {
@@ -919,7 +918,7 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
     let queue = system_unbound();
     let wg = match WaitGroup::new(nr_threads) {
         Ok(wg) => wg,
-        Err(_) => return error_ret(enomem()),
+        Err(_) => return error_ret(enomem(&fs)),
     };
 
     // Fork the workers and wait for all of them: `block_on` drives the join on
@@ -953,7 +952,7 @@ pub unsafe extern "C" fn bch2_btree_perf_test(
     });
 
     let Some((start, ret_code)) = outcome else {
-        return error_ret(enomem());
+        return error_ret(enomem(&fs));
     };
 
     let finish = local_clock();

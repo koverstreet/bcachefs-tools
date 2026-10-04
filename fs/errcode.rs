@@ -113,10 +113,6 @@ impl From<std::io::Error> for BchError {
     }
 }
 
-pub fn bch_err_throw(code: bch_errcode) -> BchError {
-    BchError::from_errcode(code)
-}
-
 pub fn ret_to_result(ret: c_int) -> Result<c_int, BchError> {
     if ret < 0 && ret > -4096 {
         Err(BchError(-ret))
