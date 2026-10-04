@@ -24,7 +24,7 @@ const HEADERS: &[&str] = &[
     "alloc/accounting.h", "alloc/background.h", "alloc/buckets.h", "alloc/disk_groups.h",
     "data/checksum.h", "data/ec/trigger.h", "data/extents.h", "data/io_misc.h", "data/move.h", "data/read.h", "data/update.h", "data/write.h",
     "debug/debug.h",
-    "init/dev.h", "init/error.h", "init/fs.h", "init/passes.h",
+    "init/damage.h", "init/dev.h", "init/error.h", "init/fs.h", "init/passes.h",
     "fs/check.h", "fs/dirent.h", "fs/inode.h", "fs/inode_opts.h", "fs/namei.h", "fs/xattr.h",
     "journal/init.h", "journal/read.h", "journal/reclaim.h", "journal/seq_blacklist.h", "journal/validate.h",
     "sb/io.h", "sb/members.h",
@@ -41,7 +41,9 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // fsck's snapshots_seen: init/exit are static inlines over a darray, and
     // C allocates it, so C has to free it.
     "snapshots_seen_.*",
-    "bkey_is_inode",
+    "bkey_is_inode", "bkey_inode_mode", "INODE_STR_HASH", "SET_INODE_STR_HASH", "journal_cur_seq",
+    "dirent_copy_target",
+    "bkey_extent_is_allocation", "bkey_extent_is_reservation", "crc_is_encoded",
     // crypto helpers for the dump sanitize path (static inlines, not
     // bch2_-prefixed): nonce constructors + bset_encrypt, driven from Rust
     // over the already-wrapped bch2_checksum / bch2_encrypt.
@@ -55,8 +57,15 @@ const BLOCKLIST_TYPE: &[&str] = &["bch_ioctl_data_event", "bch_replicas_padded__
 const BLOCKLIST_ITEM: &[&str] = &["bch2_bkey_ops"];
 const ALLOWLIST_VAR: &[&str] = &["BCH_.*", "BTREE_MAX_DEPTH", "KEY_SPEC_.*", "bch.*", "__bch2.*", "__BTREE_ITER.*", "BTREE_ITER.*",
     // bcachefs's own dirent type, alongside the kernel's DT_*:
-    "DT_SUBVOL"];
+    "DT_SUBVOL",
+    // errnos, for bch2_err_matches() against a bare errno, or returning one
+    // as C does (darray_push()'s -ENOMEM); add as needed:
+    "ENOENT", "ENOMEM", "EINVAL",
+    "BCACHEFS_ROOT_SUBVOL", "BCACHEFS_ROOT_INO",
+    "KEY_TYPE_XATTR_INDEX_.*"];
 const ALLOWLIST_TYPE: &[&str] = &["bch_.*", "bkey_i_.*", "bkey_s_c_.*", "bkey_s_.*", "btree_flags", "disk_accounting_type", "fsck_err_opts", "nonce", "sb_names",
+    // xattr lookups take it through a void *, so nothing else pulls it in:
+    "xattr_search_key",
     // genradix: kernel::bindings doesn't bind it, so we emit it ourselves from a
     // build-time copy of the kernel header (see run_bindgen + fs/Makefile).
     "genradix.*", "__genradix.*"];
@@ -100,6 +109,7 @@ const NO_PARTIALEQ: &[&str] = &["bkey", "bpos"];
 const DERIVE_READD: &[&str] = &[
     "bpos", "bbpos",
     "subvol_inum", "bch_opts",
+    "bch_inode_unpacked", "u96",
     "bch_ioctl_snapshot_node",
     "bch_ioctl_snapshot_node_v2",
 ];
