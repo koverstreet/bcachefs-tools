@@ -814,9 +814,9 @@ For planning a staged migration, separate three cases:
 \item \textbf{Converting an existing filesystem in place.}
   Use \texttt{bcachefs migrate} when the source filesystem and block-device
   stack are supported. This avoids building a second full-size pool. Verify the
-  new filesystem before deleting \texttt{/old\_migrated\_filesystem} and
-  completing \texttt{migrate-superblock}; that file holds the space still
-  referenced by the old filesystem.
+  new filesystem before completing the migration. Delete
+  \path{/old_migrated_filesystem} before running \texttt{migrate-superblock};
+  that file holds the space still referenced by the old filesystem.
 \item \textbf{Juggling disks into a new pool.}
   If an in-place conversion is not possible, create the new bcachefs filesystem
   on the devices you can free first, copy data over, then add more devices as
@@ -832,9 +832,9 @@ For planning a staged migration, separate three cases:
   \texttt{data\_replicas=3}. Higher parity counts are not currently supported.
 \end{itemize}
 
-Use \texttt{bcachefs fs usage} to see which layouts still exist on disk, and
-\texttt{bcachefs reconcile status} or \texttt{bcachefs reconcile wait} to track
-the rewrite. Reconcile can only make progress when the requested policy is
+Inspect on-disk layouts with \texttt{bcachefs fs usage}. Track the rewrite with
+\texttt{bcachefs reconcile status} or \texttt{bcachefs reconcile wait}.
+Reconcile can only make progress when the requested policy is
 possible with the currently online devices and free space; otherwise the work
 is left pending until those constraints are resolved.
 
