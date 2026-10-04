@@ -584,14 +584,14 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
     iter.for_each_max(&trans, end, |k| {
         if take_interrupt() {
             out.push_str("(interrupted)\n");
-            return ControlFlow::Break(());
+            return Ok(ControlFlow::Break(()));
         }
         if key_only {
             out.push_str(&format!("{}\n", k.to_text_key()));
         } else {
             out.push_str(&format!("{}\n", k.to_text(fs)));
         }
-        ControlFlow::Continue(())
+        Ok(ControlFlow::Continue(()))
     })?;
     Ok(out)
 }

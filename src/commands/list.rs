@@ -37,17 +37,17 @@ fn list_keys(fs: &Fs, opt: &Cli) -> anyhow::Result<()> {
 
     iter.for_each(&trans, |k| {
         if k.k.p > opt.end {
-            return ControlFlow::Break(());
+            return Ok(ControlFlow::Break(()));
         }
 
         if let Some(ty) = opt.bkey_type {
             if k.k.type_ != ty.0 as u8 {
-                return ControlFlow::Continue(());
+                return Ok(ControlFlow::Continue(()));
             }
         }
 
         println!("{}", k.to_text(fs));
-        ControlFlow::Continue(())
+        Ok(ControlFlow::Continue(()))
     })?;
 
     Ok(())
