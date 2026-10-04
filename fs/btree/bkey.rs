@@ -260,7 +260,8 @@ pub struct BkeySC<'a> {
 include!(concat!(env!("OUT_DIR"), "/bkey_types_gen.rs"));
 
 impl<'a> BkeySC<'a> {
-    unsafe fn to_raw(&self) -> c::bkey_s_c {
+    /// The key as C's bkey_s_c, for passing to C.
+    pub(crate) fn to_raw(&self) -> c::bkey_s_c {
         c::bkey_s_c {
             k: self.k,
             v: self.v,

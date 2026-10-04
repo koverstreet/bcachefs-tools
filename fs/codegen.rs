@@ -41,6 +41,7 @@ const ALLOWLIST_FUNCTION: &[&str] = &[
     // fsck's snapshots_seen: init/exit are static inlines over a darray, and
     // C allocates it, so C has to free it.
     "snapshots_seen_.*",
+    "bkey_is_inode",
     // crypto helpers for the dump sanitize path (static inlines, not
     // bch2_-prefixed): nonce constructors + bset_encrypt, driven from Rust
     // over the already-wrapped bch2_checksum / bch2_encrypt.

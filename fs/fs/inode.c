@@ -715,7 +715,7 @@ fsck_err:
 }
 
 static __cold void __bch2_inode_unpacked_to_text(struct printbuf *out,
-					  struct bch_inode_unpacked *inode)
+					  const struct bch_inode_unpacked *inode)
 {
 	prt_newline(out);
 
@@ -743,7 +743,7 @@ static __cold void __bch2_inode_unpacked_to_text(struct printbuf *out,
 #undef  x
 }
 
-__cold void bch2_inode_unpacked_to_text(struct printbuf *out, struct bch_inode_unpacked *inode)
+__cold void bch2_inode_unpacked_to_text(struct printbuf *out, const struct bch_inode_unpacked *inode)
 {
 	prt_printf(out, "inum: %llu:%u ", inode->bi_inum, inode->bi_snapshot);
 	guard(printbuf_indent)(out);

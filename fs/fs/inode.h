@@ -116,7 +116,7 @@ void bch2_inode_pack(struct bch_fs *, struct bkey_inode_buf *, const struct bch_
 void bch2_inode_unpack(struct bch_fs *, struct bkey_s_c, struct bch_inode_unpacked *);
 struct bkey_i *bch2_inode_to_v3(struct btree_trans *, struct bkey_i *);
 
-void bch2_inode_unpacked_to_text(struct printbuf *, struct bch_inode_unpacked *);
+void bch2_inode_unpacked_to_text(struct printbuf *, const struct bch_inode_unpacked *);
 
 int __bch2_inode_peek_snapshot(struct btree_trans *,
 			       struct btree_iter *,
