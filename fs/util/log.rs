@@ -78,6 +78,22 @@ macro_rules! bch_info {
     };
 }
 
+/// As C's WARN_ON(): the kernel's warning in-kernel, and what the userspace
+/// shim's WARN_ON() prints otherwise. Evaluates to @cond.
+#[macro_export]
+macro_rules! warn_on {
+    ($cond:expr) => {{
+        let cond: bool = $cond;
+        #[cfg(kernel)]
+        kernel::warn_on!(cond);
+        #[cfg(not(kernel))]
+        if cond {
+            std::eprintln!("WARNING at {}:{}", file!(), line!());
+        }
+        cond
+    }};
+}
+
 /// The name of the function this is expanded in, as C's __func__ - the
 /// function, not a closure inside it.
 #[macro_export]

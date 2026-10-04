@@ -46,6 +46,9 @@ pub mod debug {
 }
 #[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
+pub mod init {
+    #[path = "error.rs"] pub mod error;
+}
 #[path = "fs/inode.rs"]        pub mod inode;
 #[path = "journal/read.rs"]     pub mod journal;
 #[path = "fs/namei.rs"]        pub mod namei;

@@ -55,6 +55,7 @@ const ALLOWLIST_TYPE: &[&str] = &["bch_.*", "bkey_i_.*", "bkey_s_c_.*", "bkey_s_
     // build-time copy of the kernel header (see run_bindgen + fs/Makefile).
     "genradix.*", "__genradix.*"];
 const BITFIELD_ENUM: &[&str] = &[
+    "bch_fsck_flags",
     "btree_iter_update_trigger_flags",
     "bch_reservation_flags",
     "bch_trans_commit_flags",
@@ -291,6 +292,13 @@ pub fn gen_xmacros(src: &str, out: &str) {
     assert!(!errcodes.is_empty(), "failed to parse BCH_ERRCODES()");
     std::fs::write(format!("{out}/errcodes_gen.rs"), generate_errcodes(&errcodes))
         .expect("write errcodes_gen.rs");
+
+    let sb_errors_h = std::fs::read_to_string(format!("{src}/sb/errors_format.h"))
+        .expect("reading sb/errors_format.h");
+    let sb_errors = parse_xmacro(&sb_errors_h, "BCH_SB_ERRS");
+    assert!(!sb_errors.is_empty(), "failed to parse BCH_SB_ERRS()");
+    std::fs::write(format!("{out}/fsck_err_ids_gen.rs"), generate_fsck_err_ids(&sb_errors))
+        .expect("write fsck_err_ids_gen.rs");
 
     let bkey_types = parse_xmacro(&format_h, "BCH_BKEY_TYPES");
     assert!(!bkey_types.is_empty(), "failed to parse BCH_BKEY_TYPES()");
@@ -644,6 +652,27 @@ fn generate_errcodes(entries: &[Vec<String>]) -> String {
         out.push_str(&format!(
             "#[allow(non_upper_case_globals)]\n\
              pub const {name}: bch_errcode = bch_errcode::BCH_ERR_{name};\n"
+        ));
+    }
+
+    out
+}
+
+/// The fsck error ids by their BCH_SB_ERRS() names, as errcodes are by theirs:
+/// id::inode_wrong_nlink for bch_sb_error_id::BCH_FSCK_ERR_inode_wrong_nlink.
+fn generate_fsck_err_ids(entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    out.push_str("// Auto-generated from BCH_SB_ERRS() — do not edit\n\n");
+
+    for e in entries {
+        if e.is_empty() {
+            continue;
+        }
+
+        let name = rust_ident(&e[0]);
+        out.push_str(&format!(
+            "#[allow(non_upper_case_globals)]\n\
+             pub const {name}: bch_sb_error_id = bch_sb_error_id::BCH_FSCK_ERR_{name};\n"
         ));
     }
 
