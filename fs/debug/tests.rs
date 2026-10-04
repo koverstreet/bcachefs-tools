@@ -162,18 +162,18 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
         assert!(k.k.p.offset == i);
         i += 1;
-        Ok(ControlFlow::Continue(()))
+        Ok(())
     })?;
     assert_eq!(i, nr);
 
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, u64::MAX, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_reverse(&trans, POS_MIN, |k| {
+    iter.for_each_reverse(&trans, POS_MIN, |_, k| {
         i -= 1;
         assert!(k.k.p.offset == i);
-        Ok(ControlFlow::Continue(()))
+        Ok(())
     })?;
     assert_eq!(i, 0);
     Ok(())
@@ -193,18 +193,18 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
         assert_eq!(k.k.start_offset(), i);
         i = k.k.p.offset;
-        Ok(ControlFlow::Continue(()))
+        Ok(())
     })?;
     assert_eq!(i, nr);
 
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, u64::MAX, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_reverse(&trans, POS_MIN, |k| {
+    iter.for_each_reverse(&trans, POS_MIN, |_, k| {
         assert!(k.k.p.offset == i);
         i = k.k.start_offset();
-        Ok(ControlFlow::Continue(()))
+        Ok(())
     })?;
     assert_eq!(i, 0);
     Ok(())
@@ -223,16 +223,16 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
         assert!(k.k.p.offset == i);
         i += 2;
-        Ok(ControlFlow::Continue(()))
+        Ok(())
     })?;
     assert_eq!(i, nr * 2);
 
     i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::SLOTS);
-    iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
         if i >= nr * 2 {
             return Ok(ControlFlow::Break(()));
         }
@@ -258,17 +258,17 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
         assert_eq!(k.k.start_offset(), i + 8);
         assert_eq!({ k.k.size }, 8);
         i += 16;
-        Ok(ControlFlow::Continue(()))
+        Ok(())
     })?;
     assert_eq!(i, nr);
 
     i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::SLOTS);
-    iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, k| {
         if i == nr {
             return Ok(ControlFlow::Break(()));
         }
@@ -747,7 +747,7 @@ fn seq_insert(fs: &Fs, nr: u64) -> TestRet {
 fn seq_lookup(fs: &Fs, _nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_k| Ok(ControlFlow::Continue(())))?;
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_, _| Ok(()))?;
     Ok(())
 }
 

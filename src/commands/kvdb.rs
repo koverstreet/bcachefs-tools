@@ -544,7 +544,7 @@ fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
         start,
         iter_flags(BtreeIterFlags::ALL_SNAPSHOTS | BtreeIterFlags::PREFETCH, filtered),
     );
-    iter.for_each_max(&trans, end, |k| {
+    iter.for_each_max(&trans, end, |_, k| {
         if take_interrupt() {
             out.push_str("(interrupted)\n");
             return Ok(ControlFlow::Break(()));

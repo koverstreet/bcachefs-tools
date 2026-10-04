@@ -268,6 +268,30 @@ impl<'a> BkeySC<'a> {
         }
     }
 
+    /// The value, copied into a @T and zero padded past what the key has: for
+    /// reading a value that may predate fields @T has, which a reference to
+    /// it would read past the end of - as C's bkey_val_copy_pad(). Typed
+    /// wrappers check the key type, then call this.
+    ///
+    /// XXX: a workaround for as_<type>() reading past short values, until
+    /// the bindings have capnproto-style accessors - see bkey_types!().
+    ///
+    /// # Safety
+    /// @T is the value type of this key's type: plain data, all-zeroes valid.
+    pub(crate) unsafe fn val_copy_pad<T: Default>(&self) -> T {
+        const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / core::mem::size_of::<u64>();
+
+        let mut v = T::default();
+        let bytes = ((self.k.u64s as usize).saturating_sub(BKEY_U64S) * 8)
+            .min(core::mem::size_of::<T>());
+        unsafe {
+            core::ptr::write_bytes(&mut v as *mut T as *mut u8, 0, core::mem::size_of::<T>());
+            core::ptr::copy_nonoverlapping(self.v as *const c::bch_val as *const u8,
+                                           &mut v as *mut T as *mut u8, bytes);
+        }
+        v
+    }
+
     pub fn to_text<'f>(&self, fs: &'f Fs) -> BkeySCToText<'a, 'f> {
         BkeySCToText {
             k: BkeySC { k: self.k, v: self.v, iter: PhantomData },
@@ -529,6 +553,22 @@ pub fn bkey_start_offset(k: &c::bkey) -> u64 {
 
 pub fn bkey_deleted(k: &c::bkey) -> bool {
     c::bch_bkey_type(k.type_ as u32) == c::bch_bkey_type::KEY_TYPE_deleted
+}
+
+/// Whether @k is a tombstone in an extents btree - deleted, a whiteout or an
+/// extent whiteout: as bkey_extent_whiteout().
+pub fn bkey_extent_whiteout(k: &c::bkey) -> bool {
+    matches!(c::bch_bkey_type(k.type_ as u32),
+             c::bch_bkey_type::KEY_TYPE_deleted |
+             c::bch_bkey_type::KEY_TYPE_whiteout |
+             c::bch_bkey_type::KEY_TYPE_extent_whiteout)
+}
+
+/// The key, without its value: as bch2_bkey_to_text().
+impl fmt::Display for c::bkey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        printbuf_to_formatter(f, |buf| unsafe { c::bch2_bkey_to_text(buf, self) })
+    }
 }
 
 pub fn bkey_is_btree_ptr(k: &c::bkey) -> bool {
