@@ -1655,6 +1655,32 @@ static int new_stripe_alloc_buckets(struct btree_trans *trans,
 	return ret;
 }
 
+/*
+ * What reuse and repair need to know of a stripe's blocks, as masks by block
+ * index: which data blocks hold live data, and which blocks - data or parity -
+ * are on a device that's lost its durability (missing, evacuating; see
+ * bch2_stripe_block_dev_bad()).
+ */
+struct stripe_blocks {
+	u32	live;
+	u32	bad;
+};
+
+static struct stripe_blocks stripe_blocks_get(struct bch_fs *c, const struct bch_stripe *s)
+{
+	struct stripe_blocks b = {};
+	unsigned nr_data = s->nr_blocks - s->nr_redundant;
+
+	for (unsigned i = 0; i < s->nr_blocks; i++) {
+		if (i < nr_data && stripe_blockcount_get(s, i))
+			b.live |= BIT(i);
+		if (bch2_stripe_block_dev_bad(c, s->ptrs[i].dev))
+			b.bad |= BIT(i);
+	}
+
+	return b;
+}
+
 static bool may_reuse_stripe(struct bch_fs *c,
 			     struct ec_stripe_new *new, const struct bch_stripe *old)
 {
@@ -1663,19 +1689,16 @@ static bool may_reuse_stripe(struct bch_fs *c,
 	    old->nr_redundant		!= new->new_stripe.key.v.nr_redundant)
 		return false;
 
+	struct stripe_blocks b = stripe_blocks_get(c, old);
 	struct bch_devs_mask devs_may_alloc = new->devs;
-	unsigned nr_data = old->nr_blocks - old->nr_redundant;
-	unsigned live_data = 0;
 
-	for_each_data_block(i, nr_data)
-		if (stripe_blockcount_get(old, i)) {
-			if (!bch2_stripe_block_dev_bad(c, old->ptrs[i].dev))
-				__clear_bit(old->ptrs[i].dev, devs_may_alloc.d);
-			live_data++;
-		}
+	unsigned long carried = b.live & ~b.bad;
+	unsigned i;
+	for_each_set_bit(i, &carried, BCH_BKEY_PTRS_MAX)
+		__clear_bit(old->ptrs[i].dev, devs_may_alloc.d);
 
 	/* live data blocks (including moving) must fit with room for at least one new block */
-	if (live_data + 1 > ec_stripe_new_nr_data(new))
+	if (hweight32(b.live) + 1 > ec_stripe_new_nr_data(new))
 		return false;
 
 	return dev_mask_nr(&devs_may_alloc) > ec_stripe_new_nr_parity(new);
@@ -1770,22 +1793,21 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, 
 	memset(s->blocks_gotten, 0, sizeof(s->blocks_gotten));
 	memset(s->blocks_allocated, 0, sizeof(s->blocks_allocated));
 
-	unsigned old_nr_data = old_v->nr_blocks - old_v->nr_redundant;
 	unsigned new_nr_data = new_v->nr_blocks - new_v->nr_redundant;
+	struct stripe_blocks b = stripe_blocks_get(c, old_v);
 
-	for_each_data_block(i, old_nr_data) {
-		if (stripe_blockcount_get(old_v, i)) {
-			if (!bch2_stripe_block_dev_bad(c, old_v->ptrs[i].dev))
-				__set_bit(s->old_blocks_nr, s->blocks_gotten);
-			else
-				__set_bit(s->old_blocks_nr, s->blocks_moving);
-			__set_bit(s->old_blocks_nr, s->blocks_allocated);
+	unsigned long live = b.live;
+	for_each_set_bit(i, &live, BCH_BKEY_PTRS_MAX) {
+		if (!(b.bad & BIT(i)))
+			__set_bit(s->old_blocks_nr, s->blocks_gotten);
+		else
+			__set_bit(s->old_blocks_nr, s->blocks_moving);
+		__set_bit(s->old_blocks_nr, s->blocks_allocated);
 
-			new_v->ptrs[s->old_blocks_nr] = old_v->ptrs[i];
+		new_v->ptrs[s->old_blocks_nr] = old_v->ptrs[i];
 
-			s->old_block_map[s->old_blocks_nr++] = i;
-			BUG_ON(s->old_blocks_nr + !repair > new_nr_data);
-		}
+		s->old_block_map[s->old_blocks_nr++] = i;
+		BUG_ON(s->old_blocks_nr + !repair > new_nr_data);
 	}
 
 	s->have_old_stripe = true;
@@ -2475,14 +2497,6 @@ err:
 
 /* reconcile/resilver: */
 
-static bool stripe_degraded(struct bch_fs *c, const struct bch_stripe *s)
-{
-	for (unsigned i = 0; i < s->nr_blocks; i++)
-		if (bch2_stripe_block_dev_bad(c, s->ptrs[i].dev))
-			return true;
-	return false;
-}
-
 /*
  * The devices a repair of @s can actually use, out of @devs (from
  * bch2_disk_label_ec_devs()).
@@ -2499,20 +2513,18 @@ static bool stripe_degraded(struct bch_fs *c, const struct bch_stripe *s)
  * bucket_alloc_no_progress - every pass, forever.
  */
 static void stripe_repair_usable_devs(struct bch_fs *c, const struct bch_stripe *s,
-				      struct bch_devs_mask *devs)
+				      struct stripe_blocks b, struct bch_devs_mask *devs)
 {
 	struct bch_devs_mask carried = {};
-	unsigned nr_data = s->nr_blocks - s->nr_redundant;
+	unsigned long carried_blocks = b.live & ~b.bad;
+	unsigned i;
 
-	for_each_data_block(i, nr_data)
-		if (stripe_blockcount_get(s, i) &&
-		    !bch2_stripe_block_dev_bad(c, s->ptrs[i].dev))
-			__set_bit(s->ptrs[i].dev, carried.d);
+	for_each_set_bit(i, &carried_blocks, BCH_BKEY_PTRS_MAX)
+		__set_bit(s->ptrs[i].dev, carried.d);
 
 	guard(percpu_read_noio)(&c->capacity.mark_lock);
 	guard(rcu)();
 
-	unsigned i;
 	for_each_set_bit(i, devs->d, BCH_SB_MEMBERS_MAX) {
 		if (test_bit(i, carried.d))
 			continue;
@@ -2552,11 +2564,11 @@ static int stripe_repair_nothing_to_do(struct btree_trans *trans,
  * width. @devs is set to those devices.
  */
 static unsigned stripe_repair_need_evacuate(struct bch_fs *c, const struct bch_stripe *s,
-					    unsigned nr_live_data_blocks,
+					    struct stripe_blocks b,
 					    struct bch_devs_mask *devs)
 {
 	bch2_disk_label_ec_devs(c, s->disk_label, devs, le16_to_cpu(s->sectors));
-	stripe_repair_usable_devs(c, s, devs);
+	stripe_repair_usable_devs(c, s, b, devs);
 
 	/*
 	 * The allocator puts at most one block of a stripe in a failure domain,
@@ -2564,7 +2576,7 @@ static unsigned stripe_repair_need_evacuate(struct bch_fs *c, const struct bch_s
 	 */
 	unsigned nr_usable = min(dev_mask_nr(devs), bch2_target_nr_domains(c, devs));
 
-	return max(0, (int) (nr_live_data_blocks + s->nr_redundant) - (int) nr_usable);
+	return max(0, (int) (hweight32(b.live) + s->nr_redundant) - (int) nr_usable);
 }
 
 /*
@@ -2573,25 +2585,24 @@ static unsigned stripe_repair_need_evacuate(struct bch_fs *c, const struct bch_s
  * left. Reconcile retries the repair once the moves are done.
  */
 static int stripe_repair_narrow(struct moving_context *ctxt,
-				struct bkey_s_c_stripe s, unsigned need_evacuate)
+				struct bkey_s_c_stripe s, struct stripe_blocks b,
+				unsigned need_evacuate)
 {
 	struct bch_fs *c = ctxt->trans->c;
 	const struct bch_stripe *v = s.v;
-	unsigned nr_data = v->nr_blocks - v->nr_redundant;
 	unsigned blocks_used[BCH_BKEY_PTRS_MAX], nr = 0;
 
 	/*
 	 * Blocks on bad devices first: that's the data that has to move, and
 	 * the stripe narrows to the good blocks:
 	 */
-	for_each_data_block(i, nr_data)
-		if (stripe_blockcount_get(v, i) &&
-		    bch2_stripe_block_dev_bad(c, v->ptrs[i].dev))
-			blocks_used[nr++] = i;
-	for_each_data_block(i, nr_data)
-		if (stripe_blockcount_get(v, i) &&
-		    !bch2_stripe_block_dev_bad(c, v->ptrs[i].dev))
-			blocks_used[nr++] = i;
+	unsigned long moving = b.live & b.bad, carried = b.live & ~b.bad;
+	unsigned i;
+
+	for_each_set_bit(i, &moving, BCH_BKEY_PTRS_MAX)
+		blocks_used[nr++] = i;
+	for_each_set_bit(i, &carried, BCH_BKEY_PTRS_MAX)
+		blocks_used[nr++] = i;
 
 	/*
 	 * Too few devices for even a one block stripe: evacuating every block
@@ -2783,21 +2794,18 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	 */
 	BUG_ON(!btree_node_intent_locked(btree_iter_path(trans, iter), 0));
 
-	if (!stripe_degraded(c, s.v))
+	struct stripe_blocks b = stripe_blocks_get(c, s.v);
+
+	if (!b.bad)
 		return stripe_repair_nothing_to_do(trans, iter, s);
 
-	unsigned nr_data = s.v->nr_blocks - s.v->nr_redundant;
-	unsigned nr_live_data_blocks = 0;
-	for_each_data_block(i, nr_data)
-		nr_live_data_blocks += stripe_blockcount_get(s.v, i) != 0;
-
-	if (!nr_live_data_blocks)
+	if (!b.live)
 		return 0;
 
 	struct bch_devs_mask devs;
-	unsigned need_evacuate = stripe_repair_need_evacuate(c, s.v, nr_live_data_blocks, &devs);
+	unsigned need_evacuate = stripe_repair_need_evacuate(c, s.v, b, &devs);
 
 	return need_evacuate
-		? stripe_repair_narrow(ctxt, s, need_evacuate)
-		: stripe_repair_rebuild(ctxt, iter, s, devs, nr_live_data_blocks);
+		? stripe_repair_narrow(ctxt, s, b, need_evacuate)
+		: stripe_repair_rebuild(ctxt, iter, s, devs, hweight32(b.live));
 }
