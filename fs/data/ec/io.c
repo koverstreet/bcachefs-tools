@@ -152,6 +152,22 @@ void bch2_ec_stripe_buf_exit(struct ec_stripe_buf *buf)
 	closure_debug_destroy(&buf->io);
 }
 
+/*
+ * Move @src's buffers, read results and key into @dst, which must be empty. The
+ * IO closure belongs to the buffer's owner and doesn't move.
+ */
+void bch2_ec_stripe_buf_move(struct ec_stripe_buf *dst, struct ec_stripe_buf *src)
+{
+	EBUG_ON(dst->c);
+
+	closure_sync(&src->io);
+
+	dst->contents = src->contents;
+
+	src->c = NULL;
+	memset(src->data, 0, sizeof(src->data));
+}
+
 int bch2_ec_stripe_buf_init(struct bch_fs *c,
 			    struct ec_stripe_buf *buf,
 			    unsigned offset, unsigned size,
