@@ -1809,7 +1809,12 @@ static int get_old_stripe(struct btree_trans *trans,
 	return ret;
 }
 
-static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, bool repair)
+/*
+ * Lay out the new stripe from the old one: blocks in @carry come forward in
+ * place, blocks in @move get new buckets; any other block is left behind.
+ */
+static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s,
+				     u32 carry, u32 move, bool repair)
 {
 	struct bch_stripe *new_v = &s->new_stripe.key.v;
 	struct bch_stripe *old_v = &s->old_stripe.key.v;
@@ -1829,11 +1834,12 @@ static void init_new_stripe_from_old(struct bch_fs *c, struct ec_stripe_new *s, 
 	memset(s->blocks_allocated, 0, sizeof(s->blocks_allocated));
 
 	unsigned new_nr_data = new_v->nr_blocks - new_v->nr_redundant;
-	struct stripe_blocks b = stripe_blocks_get(c, old_v);
 
-	unsigned long live = b.live;
-	for_each_set_bit(i, &live, BCH_BKEY_PTRS_MAX) {
-		if (!(b.bad & BIT(i)))
+	EBUG_ON(carry & move);
+
+	unsigned long blocks = carry | move;
+	for_each_set_bit(i, &blocks, BCH_BKEY_PTRS_MAX) {
+		if (carry & BIT(i))
 			__set_bit(s->old_blocks_nr, s->blocks_gotten);
 		else
 			__set_bit(s->old_blocks_nr, s->blocks_moving);
@@ -2002,7 +2008,8 @@ static int stripe_reuse(struct btree_trans *trans, struct ec_stripe_new *s)
 	if (ret <= 0)
 		return ret ?: bch_err_throw(c, stripe_alloc_blocked);
 
-	init_new_stripe_from_old(c, s, false);
+	struct stripe_blocks b = stripe_blocks_get(c, &s->old_stripe.key.v);
+	init_new_stripe_from_old(c, s, b.live & ~b.bad, b.live & b.bad, false);
 	return 0;
 }
 
@@ -2758,27 +2765,28 @@ static int stripe_repair_read(struct btree_trans *trans, struct bkey_s_c_stripe 
 }
 
 /*
- * Rebuild @s at @nr_live_data_blocks wide: a new stripe that carries its good
- * data blocks forward in place and gets new buckets for the blocks on bad
- * devices and for the parity. We take over the caller's claim on @s, @h, and
- * the stripe as it read it, @read; the reconstruct and the writes happen in
- * stripe creation, after we return.
+ * Rebuild @s as a new stripe of the data blocks in @carry and @move: those in
+ * @carry come forward in place, those in @move get new buckets, and so does the
+ * parity (see init_new_stripe_from_old()). We take over the caller's claim on
+ * @s, @h, and the stripe as it read it, @read; the reconstruct and the writes
+ * happen in stripe creation, after we return.
  */
 static int stripe_repair_rebuild(struct moving_context *ctxt,
 				 struct bkey_s_c_stripe s,
 				 struct ec_stripe_handle *h,
 				 struct ec_stripe_buf *read, bool read_all,
-				 struct bch_devs_mask devs, unsigned nr_live_data_blocks)
+				 struct bch_devs_mask devs, u32 carry, u32 move)
 {
 	struct btree_trans *trans = ctxt->trans;
 	struct bch_fs *c = trans->c;
 	const struct bch_stripe *old_s = s.v;
 	unsigned nr_data = old_s->nr_blocks - old_s->nr_redundant;
+	unsigned nr_new_data = hweight32(carry | move);
 
 	struct ec_stripe_new *new_s = ec_new_stripe_alloc(c, devs, BCH_WATERMARK_normal,
 							  old_s->disk_label,
 							  old_s->algorithm,
-							  nr_live_data_blocks,
+							  nr_new_data,
 							  old_s->nr_redundant,
 							  le16_to_cpu(old_s->sectors));
 	if (unlikely(!new_s))
@@ -2787,7 +2795,7 @@ static int stripe_repair_rebuild(struct moving_context *ctxt,
 	bch2_stripe_handle_move(c, &new_s->old_stripe_handle, h);
 	bkey_reassemble(&new_s->old_stripe.key.k_i, s.s_c);
 
-	init_new_stripe_from_old(c, new_s, true);
+	init_new_stripe_from_old(c, new_s, carry, move, true);
 
 	CLASS(closure_stack, cl)();
 
@@ -2798,7 +2806,7 @@ static int stripe_repair_rebuild(struct moving_context *ctxt,
 	 * same-width repair replaces parity with as much parity and keeps its
 	 * NOFAIL reservation below.
 	 */
-	bool narrowing = nr_live_data_blocks < nr_data;
+	bool narrowing = nr_new_data < nr_data;
 
 	int ret = bch2_ec_stripe_buf_init(c, &new_s->new_stripe, 0, le16_to_cpu(new_s->new_stripe.key.v.sectors), NULL) ?:
 		(narrowing
@@ -2926,7 +2934,8 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	bool read_all;
 	ret = buf
 		? stripe_repair_read(trans, s, b.live, buf, &read_all) ?:
-		  stripe_repair_rebuild(ctxt, s, &h, buf, read_all, devs, hweight32(b.live))
+		  stripe_repair_rebuild(ctxt, s, &h, buf, read_all, devs,
+					b.live & ~b.bad, b.live & b.bad)
 		: bch_err_throw(c, ENOMEM_stripe_buf);
 
 	/* unless the rebuild took it: */
