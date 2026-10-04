@@ -10,10 +10,10 @@ use crate::errcode::{
 };
 use crate::fs::Fs;
 use crate::printbuf_to_formatter;
+use crate::util::log::CFnName;
 use crate::SPOS_MAX;
 use bitflags::bitflags;
 use core::fmt;
-use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::{size_of, ManuallyDrop, MaybeUninit};
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -27,10 +27,9 @@ use c::bpos;
 /// C's bch2_trans_get(). Transaction stats and lock contention are reported per
 /// function, under that name; without it a transaction is "(unknown)".
 ///
-/// XXX: C registers __func__ - a NUL-terminated string that lives forever.
-/// Rust has the function name only at runtime and unterminated, so each call
-/// site carries a buffer it's copied into, on first use. Clean this up once
-/// enough is converted to key the stats on Rust's own names.
+/// XXX: C registers __func__ - a NUL-terminated string that lives forever -
+/// so each call site carries a CFnName to copy its name into. Clean this up
+/// once enough is converted to key the stats on Rust's own names.
 #[macro_export]
 macro_rules! btree_trans {
     ($fs:expr) => {{
@@ -44,19 +43,15 @@ macro_rules! btree_trans {
 pub struct TransFnName {
     idx:   AtomicU32,
     claim: AtomicBool,
-    buf:   UnsafeCell<[u8; 64]>,
+    name:  CFnName,
 }
-
-// buf is written once, by whoever claims it, before idx is published, and
-// only read through the pointer handed to C after that.
-unsafe impl Sync for TransFnName {}
 
 impl TransFnName {
     pub const fn new() -> Self {
         TransFnName {
             idx:   AtomicU32::new(0),
             claim: AtomicBool::new(false),
-            buf:   UnsafeCell::new([0; 64]),
+            name:  CFnName::new(),
         }
     }
 
@@ -69,12 +64,7 @@ impl TransFnName {
             return idx;
         }
 
-        let buf = unsafe { &mut *self.buf.get() };
-        let n = name.len().min(buf.len() - 1);
-        buf[..n].copy_from_slice(&name.as_bytes()[..n]);
-        buf[n] = 0;
-
-        let idx = unsafe { c::bch2_trans_get_fn_idx(buf.as_ptr() as *const core::ffi::c_char) };
+        let idx = unsafe { c::bch2_trans_get_fn_idx(self.name.get(name).as_ptr()) };
         self.idx.store(idx, Ordering::Release);
         idx
     }
@@ -218,6 +208,9 @@ impl Drop for TransMayDropUpdates<'_, '_> {
     }
 }
 
+/// A BchError, sorted by whether it's a transaction restart: the conversions
+/// both ways are trivial.
+#[derive(Clone, Copy)]
 pub enum TransError {
     Restart(BchError),
     Error(BchError),
@@ -238,6 +231,20 @@ impl From<BchError> for TransError {
 impl From<bch_errcode> for TransError {
     fn from(code: bch_errcode) -> Self {
         BchError::from(code).into()
+    }
+}
+
+impl From<crate::util::alloc::AllocError> for TransError {
+    fn from(error: crate::util::alloc::AllocError) -> Self {
+        TransError::Error(error.into())
+    }
+}
+
+impl From<TransError> for BchError {
+    fn from(error: TransError) -> Self {
+        match error {
+            TransError::Restart(e) | TransError::Error(e) => e,
+        }
     }
 }
 

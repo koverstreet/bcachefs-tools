@@ -122,6 +122,14 @@ impl From<std::io::Error> for BchError {
     }
 }
 
+/// A failed allocation is a bare -ENOMEM, as darray_push()'s is: callers that
+/// want to say where map it to their own ENOMEM_* code.
+impl From<crate::util::alloc::AllocError> for BchError {
+    fn from(_: crate::util::alloc::AllocError) -> BchError {
+        c::ENOMEM.into()
+    }
+}
+
 pub fn ret_to_result(ret: c_int) -> Result<c_int, BchError> {
     if ret < 0 && ret > -4096 {
         Err(BchError(-ret))

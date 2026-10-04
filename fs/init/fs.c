@@ -247,6 +247,21 @@ void __bch2_print(struct bch_fs *c, const char *fmt, ...)
 	va_end(args);
 }
 
+/*
+ * For Rust's ratelimited log macros, which keep a ratelimit_state per call
+ * site as bch2_ratelimit() does, but have to initialize it at runtime:
+ */
+void bch2_ratelimit_state_init(struct ratelimit_state *rs)
+{
+	ratelimit_default_init(rs);
+}
+
+/* __bch2_ratelimit(), with the caller's function name for the "suppressed" message: */
+bool bch2_ratelimit_suppress(struct bch_fs *c, struct ratelimit_state *rs, const char *func)
+{
+	return c->opts.ratelimit_errors && !___ratelimit(rs, func);
+}
+
 static void bch2_fs_release(struct kobject *);
 static void bch2_fs_counters_release(struct kobject *k)
 {

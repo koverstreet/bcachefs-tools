@@ -167,6 +167,9 @@ void bch2_print_opts(struct bch_opts *, const char *, ...);
 __printf(2, 3)
 void __bch2_print(struct bch_fs *c, const char *fmt, ...);
 
+void bch2_ratelimit_state_init(struct ratelimit_state *);
+bool bch2_ratelimit_suppress(struct bch_fs *, struct ratelimit_state *, const char *);
+
 
 #define maybe_dev_to_fs(_c)	_Generic((_c),				\
 	struct bch_dev *:	((struct bch_dev *) (_c))->fs,		\
