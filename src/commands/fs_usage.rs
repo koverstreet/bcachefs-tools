@@ -1,4 +1,4 @@
-use std::fmt::Write as FmtWrite;
+use std::{collections::BTreeMap, fmt::Write as FmtWrite};
 
 use anyhow::{anyhow, Result};
 use bch_bindgen::c;
@@ -96,7 +96,7 @@ fn fs_usage(cli: Cli) -> Result<()> {
             let fs = fs_usage_collect(path, &fields, name_mode)?;
             let mut out = Printbuf::new();
             out.set_human_readable(cli.human_readable);
-            fs_usage_to_text(&mut out, &fs, &fields);
+            fs_usage_to_text(&mut out, &fs, &fields)?;
             print!("{}", out);
         }
     }
@@ -133,10 +133,7 @@ struct FsUsage {
     online_reserved_bytes: u64,
     free_bytes: Vec<u64>,
     free_now_bytes: Vec<u64>,
-    replicas_summary: ReplicasSummary,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     replicas: Vec<ReplicaUsage>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
     persistent_reserved: Vec<PersistentReserved>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     compression: Vec<CompressionUsage>,
@@ -149,32 +146,11 @@ struct FsUsage {
     devices: Vec<DeviceUsage>,
 }
 
-#[derive(Default, Serialize)]
-struct ReplicasSummary {
-    replicated: Vec<DurabilityUsage>,
-    erasure_coded: Vec<EcUsage>,
-    cached_bytes: u64,
-    reserved_bytes: u64,
-}
-
-#[derive(Serialize)]
-struct DurabilityUsage {
-    durability: u32,
-    degraded: u32,
-    bytes: u64,
-}
-
-#[derive(Serialize)]
-struct EcUsage {
-    data: u8,
-    parity: u8,
-    degraded: u32,
-    bytes: u64,
-}
-
 #[derive(Serialize)]
 struct ReplicaUsage {
     data_type: String,
+    #[serde(skip)]
+    is_cached: bool,
     required: u8,
     replicas: u8,
     durability: u32,
@@ -319,14 +295,10 @@ fn collect_accounting(
     for entry in entries {
         match entry.pos.decode() {
             DiskAccountingKind::PersistentReserved { nr_replicas } => {
-                let count = bytes(entry.counter(0))?;
-                add_bytes(&mut usage.replicas_summary.reserved_bytes, count)?;
-                if has(Field::Replicas) && count != 0 {
-                    usage.persistent_reserved.push(PersistentReserved {
-                        replicas: nr_replicas,
-                        bytes: count,
-                    });
-                }
+                usage.persistent_reserved.push(PersistentReserved {
+                    replicas: nr_replicas,
+                    bytes: bytes(entry.counter(0))?,
+                });
             }
             DiskAccountingKind::Replicas {
                 data_type,
@@ -334,52 +306,18 @@ fn collect_accounting(
                 nr_required,
                 devs: dev_list,
             } => {
-                let count = bytes(entry.counter(0))?;
                 let devices = &dev_list[..nr_devs as usize];
                 let durability = replicas_durability(nr_devs, nr_required, devices, devs);
-                let summary = &mut usage.replicas_summary;
-                if data_type == data_type::cached {
-                    add_bytes(&mut summary.cached_bytes, count)?;
-                } else if nr_required > 1 {
-                    let parity = nr_devs - nr_required;
-                    if let Some(row) = summary.erasure_coded.iter_mut().find(|row| {
-                        (row.data, row.parity, row.degraded)
-                            == (nr_required, parity, durability.degraded)
-                    }) {
-                        add_bytes(&mut row.bytes, count)?;
-                    } else {
-                        summary.erasure_coded.push(EcUsage {
-                            data: nr_required,
-                            parity,
-                            degraded: durability.degraded,
-                            bytes: count,
-                        });
-                    }
-                } else {
-                    if let Some(row) = summary.replicated.iter_mut().find(|row| {
-                        (row.durability, row.degraded)
-                            == (durability.durability, durability.degraded)
-                    }) {
-                        add_bytes(&mut row.bytes, count)?;
-                    } else {
-                        summary.replicated.push(DurabilityUsage {
-                            durability: durability.durability,
-                            degraded: durability.degraded,
-                            bytes: count,
-                        });
-                    }
-                }
-                if has(Field::Replicas) && count != 0 {
-                    usage.replicas.push(ReplicaUsage {
-                        data_type: printbuf_to_string(|out| prt_data_type(out, data_type)),
-                        required: nr_required,
-                        replicas: nr_devs,
-                        durability: durability.durability,
-                        degraded: durability.degraded,
-                        devices: dev_list_names(devices, devs),
-                        bytes: count,
-                    });
-                }
+                usage.replicas.push(ReplicaUsage {
+                    data_type: printbuf_to_string(|out| prt_data_type(out, data_type)),
+                    is_cached: data_type == data_type::cached,
+                    required: nr_required,
+                    replicas: nr_devs,
+                    durability: durability.durability,
+                    degraded: durability.degraded,
+                    devices: dev_list_names(devices, devs),
+                    bytes: bytes(entry.counter(0))?,
+                });
             }
             DiskAccountingKind::Compression { compression_type } if has(Field::Compression) => {
                 let extents = entry.counter(0);
@@ -431,14 +369,6 @@ fn collect_accounting(
             _ => {}
         }
     }
-    usage
-        .replicas_summary
-        .replicated
-        .sort_by_key(|row| (row.durability, row.degraded));
-    usage
-        .replicas_summary
-        .erasure_coded
-        .sort_by_key(|row| (row.data, row.parity, row.degraded));
     Ok(())
 }
 
@@ -609,7 +539,7 @@ fn collect_devices(
     Ok(devices)
 }
 
-fn fs_usage_to_text(out: &mut Printbuf, fs: &FsUsage, fields: &[Field]) {
+fn fs_usage_to_text(out: &mut Printbuf, fs: &FsUsage, fields: &[Field]) -> Result<()> {
     writeln!(out, "Filesystem: {}", fs.uuid).unwrap();
 
     out.aligned(|sub| {
@@ -651,7 +581,7 @@ fn fs_usage_to_text(out: &mut Printbuf, fs: &FsUsage, fields: &[Field]) {
         }
     });
 
-    replicas_summary_to_text(out, &fs.replicas_summary);
+    replicas_summary_to_text(out, fs)?;
 
     if fields.contains(&Field::Replicas) {
         replicas_detail_to_text(out, &fs.persistent_reserved, &fs.replicas);
@@ -663,29 +593,51 @@ fn fs_usage_to_text(out: &mut Printbuf, fs: &FsUsage, fields: &[Field]) {
     reconcile_work_to_text(out, &fs.reconcile_work);
 
     devices_to_text(out, &fs.devices, fields.contains(&Field::Devices));
+    Ok(())
 }
 
-fn replicas_summary_to_text(out: &mut Printbuf, summary: &ReplicasSummary) {
-    let has_ec = !summary.erasure_coded.is_empty();
+fn replicas_summary_to_text(out: &mut Printbuf, fs: &FsUsage) -> Result<()> {
+    let mut replicated = BTreeMap::<u32, BTreeMap<u32, u64>>::new();
+    let mut erasure_coded = BTreeMap::<(u8, u8), BTreeMap<u32, u64>>::new();
+    let mut cached_bytes = 0;
+    let mut reserved_bytes = 0;
+    for row in &fs.replicas {
+        if row.is_cached {
+            add_bytes(&mut cached_bytes, row.bytes)?;
+            continue;
+        }
+        let columns = if row.required > 1 {
+            erasure_coded
+                .entry((row.required, row.replicas - row.required))
+                .or_default()
+        } else {
+            replicated.entry(row.durability).or_default()
+        };
+        add_bytes(columns.entry(row.degraded).or_default(), row.bytes)?;
+    }
+    for row in &fs.persistent_reserved {
+        add_bytes(&mut reserved_bytes, row.bytes)?;
+    }
+    let has_ec = !erasure_coded.is_empty();
     writeln!(out).unwrap();
     if has_ec {
         writeln!(out, "Replicated:").unwrap();
     }
-    let columns = summary
-        .replicated
-        .iter()
-        .map(|row| row.degraded + 1)
+    let columns = replicated
+        .values()
+        .flat_map(|rows| rows.keys())
+        .map(|degraded| degraded + 1)
         .max()
         .unwrap_or(0);
     if columns != 0 {
         out.aligned(|sub| {
             prt_degraded_header(sub, columns as usize);
-            for rows in summary
-                .replicated
-                .chunk_by(|left, right| left.durability == right.durability)
-            {
-                write!(sub, "{}x:\t", rows[0].durability).unwrap();
-                prt_degraded_row(sub, rows.iter().map(|row| (row.degraded, row.bytes)));
+            for (durability, rows) in &replicated {
+                write!(sub, "{}x:\t", durability).unwrap();
+                prt_degraded_row(
+                    sub,
+                    rows.iter().map(|(&degraded, &count)| (degraded, count)),
+                );
             }
         });
     }
@@ -694,28 +646,25 @@ fn replicas_summary_to_text(out: &mut Printbuf, summary: &ReplicasSummary) {
         out.aligned(|sub| {
             prt_degraded_header(
                 sub,
-                summary
-                    .erasure_coded
-                    .iter()
-                    .map(|row| row.degraded as usize + 1)
+                erasure_coded
+                    .values()
+                    .flat_map(|rows| rows.keys())
+                    .map(|degraded| *degraded as usize + 1)
                     .max()
                     .unwrap(),
             );
-            for rows in summary
-                .erasure_coded
-                .chunk_by(|left, right| (left.data, left.parity) == (right.data, right.parity))
-            {
-                write!(sub, "{}+{}:\t", rows[0].data, rows[0].parity).unwrap();
-                prt_degraded_row(sub, rows.iter().map(|row| (row.degraded, row.bytes)));
+            for ((data, parity), rows) in &erasure_coded {
+                write!(sub, "{}+{}:\t", data, parity).unwrap();
+                prt_degraded_row(
+                    sub,
+                    rows.iter().map(|(&degraded, &count)| (degraded, count)),
+                );
             }
         });
     }
-    if summary.cached_bytes > 0 || summary.reserved_bytes > 0 {
+    if cached_bytes > 0 || reserved_bytes > 0 {
         out.aligned(|sub| {
-            for (name, count) in [
-                ("cached", summary.cached_bytes),
-                ("reserved", summary.reserved_bytes),
-            ] {
+            for (name, count) in [("cached", cached_bytes), ("reserved", reserved_bytes)] {
                 if count > 0 {
                     write!(sub, "{}:\t", name).unwrap();
                     sub.units_u64(count);
@@ -724,6 +673,7 @@ fn replicas_summary_to_text(out: &mut Printbuf, summary: &ReplicasSummary) {
             }
         });
     }
+    Ok(())
 }
 
 fn replicas_detail_to_text(
@@ -738,13 +688,13 @@ fn replicas_detail_to_text(
         )
         .unwrap();
 
-        for r in persistent_reserved {
+        for r in persistent_reserved.iter().filter(|row| row.bytes != 0) {
             write!(sub, "reserved:\t1/{}\t\t[]\t ", r.replicas).unwrap();
             sub.units_u64(r.bytes);
             write!(sub, "\r\n").unwrap();
         }
 
-        for r in replicas {
+        for r in replicas.iter().filter(|row| row.bytes != 0) {
             write!(
                 sub,
                 "{}:\t{}/{}\t{}\t[{}]\t",
@@ -1049,29 +999,25 @@ mod tests {
             &[Field::Replicas, Field::Compression],
         )
         .unwrap();
-        let summary = &usage.replicas_summary;
-        assert_eq!(summary.replicated.len(), 1);
-        assert_eq!(summary.replicated[0].bytes, 18 * SECTOR_BYTES);
-        assert_eq!(summary.replicated[0].degraded, 1);
         assert_eq!(usage.replicas.len(), 3);
-        assert_eq!(summary.erasure_coded[0].data, 2);
-        assert_eq!(summary.erasure_coded[0].parity, 1);
-        assert_eq!(summary.erasure_coded[0].degraded, 2);
-        assert_eq!(summary.erasure_coded[0].bytes, 13 * SECTOR_BYTES);
-        assert_eq!(summary.reserved_bytes, 3 * SECTOR_BYTES);
+        assert_eq!(usage.replicas[0].bytes, 7 * SECTOR_BYTES);
+        assert_eq!(usage.replicas[1].bytes, 11 * SECTOR_BYTES);
+        assert_eq!(usage.replicas[2].required, 2);
+        assert_eq!(usage.replicas[2].replicas, 3);
+        assert_eq!(usage.replicas[2].degraded, 2);
+        assert_eq!(usage.replicas[2].bytes, 13 * SECTOR_BYTES);
+        assert_eq!(usage.persistent_reserved[0].bytes, 3 * SECTOR_BYTES);
         assert_eq!(usage.devices[0].leaving_bytes, 5 * SECTOR_BYTES);
         assert_eq!(usage.devices[0].stripe_empty, Some(2 * SECTOR_BYTES));
         let json = serde_json::to_value(&usage).unwrap();
-        assert_eq!(
-            json["replicas_summary"]["replicated"][0]["bytes"],
-            18 * SECTOR_BYTES
-        );
+        assert_eq!(json["replicas"][0]["bytes"], 7 * SECTOR_BYTES);
         assert_eq!(json["compression"][0]["average_extent_bytes"], 341);
         let mut compression = Printbuf::new();
         compression_to_text(&mut compression, &usage.compression);
         assert!(compression.as_str().contains("341"));
         let mut text = Printbuf::new();
-        replicas_summary_to_text(&mut text, &usage.replicas_summary);
+        replicas_summary_to_text(&mut text, &usage).unwrap();
+        assert_eq!(text.as_str(), "\nReplicated:\n     undegraded   -1x  \n2x:              9216  \n\n\nErasure coded (data+parity):\n      undegraded  -1x   -2x  \n2+1:                   6656  \n\nreserved:  1536  \n\n");
         assert!(text.as_str().contains("9216"));
         assert!(text.as_str().contains("-1x"));
         assert!(text.as_str().contains("2+1:"));
@@ -1079,11 +1025,8 @@ mod tests {
 
         let mut summary = FsUsage::default();
         collect_accounting(&mut summary, &entries, &devs, &[]).unwrap();
-        assert!(summary.replicas.is_empty());
-        assert_eq!(
-            summary.replicas_summary.replicated[0].bytes,
-            18 * SECTOR_BYTES
-        );
+        assert_eq!(summary.replicas.len(), 3);
+        assert_eq!(summary.replicas[0].bytes, 7 * SECTOR_BYTES);
         let zero_entries = entries
             .iter()
             .map(|entry| AccountingEntry {
@@ -1094,10 +1037,11 @@ mod tests {
         let mut zero = FsUsage::default();
         collect_accounting(&mut zero, &zero_entries, &devs, &[Field::Compression]).unwrap();
         assert_eq!(zero.compression[0].average_extent_bytes, 0);
-        assert_eq!(zero.replicas_summary.replicated.len(), 1);
-        assert_eq!(zero.replicas_summary.erasure_coded.len(), 1);
+        assert_eq!(zero.replicas.len(), 3);
+        assert_eq!(zero.persistent_reserved.len(), 1);
         let mut text = Printbuf::new();
-        replicas_summary_to_text(&mut text, &zero.replicas_summary);
+        replicas_summary_to_text(&mut text, &zero).unwrap();
+        assert_eq!(text.as_str(), "\nReplicated:\n     undegraded  -1x  \n2x:                   \n\n\nErasure coded (data+parity):\n      undegraded  -1x  -2x  \n2+1:                        \n\n");
         assert!(text.as_str().contains("2x:"));
         assert!(text.as_str().contains("2+1:"));
         assert!(zero.devices.is_empty());
@@ -1115,7 +1059,54 @@ mod tests {
                 counters: vec![largest],
             })
             .collect::<Vec<_>>();
-        assert!(collect_accounting(&mut FsUsage::default(), &entries, &[], &[]).is_err());
+        let mut usage = FsUsage::default();
+        collect_accounting(&mut usage, &entries, &[], &[]).unwrap();
+        assert!(replicas_summary_to_text(&mut Printbuf::new(), &usage).is_err());
+        let json = serde_json::to_value(&usage).unwrap();
+        assert_eq!(
+            json["persistent_reserved"][0]["bytes"],
+            largest * SECTOR_BYTES
+        );
+        assert_eq!(
+            json["persistent_reserved"][1]["bytes"],
+            largest * SECTOR_BYTES
+        );
+    }
+
+    #[test]
+    fn replica_facts_keep_cached_and_zero_entries_in_default_json() {
+        let entries = [
+            (data_type::cached, 7),
+            (data_type::cached, 0),
+            (data_type::user, 0),
+        ]
+        .into_iter()
+        .map(|(data_type, count)| AccountingEntry {
+            pos: DiskAccountingKind::Replicas {
+                data_type,
+                nr_devs: 1,
+                nr_required: 1,
+                devs: [0; std::mem::size_of::<c::bpos>()],
+            }
+            .encode(),
+            counters: vec![count],
+        })
+        .collect::<Vec<_>>();
+        let mut usage = FsUsage::default();
+        collect_accounting(&mut usage, &entries, &[], &[]).unwrap();
+        let json = serde_json::to_value(&usage).unwrap();
+        assert_eq!(json["replicas"].as_array().unwrap().len(), 3);
+        assert_eq!(json["replicas"][0]["data_type"], "cached");
+        assert_eq!(json["replicas"][0]["bytes"], 7 * SECTOR_BYTES);
+        assert_eq!(json["replicas"][1]["bytes"], 0);
+        assert_eq!(json["replicas"][2]["bytes"], 0);
+        let mut text = Printbuf::new();
+        replicas_summary_to_text(&mut text, &usage).unwrap();
+        assert!(text.as_str().contains("cached:"));
+        assert!(text.as_str().contains("3584"));
+        let mut detail = Printbuf::new();
+        replicas_detail_to_text(&mut detail, &[], &usage.replicas);
+        assert!(!detail.as_str().contains("user:"));
     }
 
     fn fixture_device() -> DeviceUsage {
@@ -1171,12 +1162,6 @@ mod tests {
             online_reserved_bytes: 10 * SECTOR_BYTES,
             free_bytes: vec![bytes(100).unwrap(), bytes(50).unwrap(), 0],
             free_now_bytes: vec![bytes(90).unwrap(), bytes(40).unwrap(), 0],
-            replicas_summary: ReplicasSummary {
-                replicated: Vec::new(),
-                erasure_coded: Vec::new(),
-                cached_bytes: 0,
-                reserved_bytes: 0,
-            },
             replicas: Vec::new(),
             persistent_reserved: Vec::new(),
             compression: Vec::new(),
@@ -1196,7 +1181,7 @@ mod tests {
         assert!(json.get("capacity").is_none());
 
         let mut text = Printbuf::new();
-        fs_usage_to_text(&mut text, &usage, &[Field::Devices]);
+        fs_usage_to_text(&mut text, &usage, &[Field::Devices]).unwrap();
         let text = text.to_string();
         assert!(text.contains(&usage.uuid));
         assert!(text.contains("Used:"));
