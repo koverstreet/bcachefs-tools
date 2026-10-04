@@ -16,6 +16,9 @@
 //!    the key was, and can only produce what the packer produces:
 //!    has_inode_opts, for one, is recomputed. The key stays where it is -
 //!    bi_inum and bi_snapshot are just fields.
+//!  - dirents: the target is a union tagged by d_type, and d_type is a C
+//!    bitfield, so those fields are written by name - each one exactly, so
+//!    the tag and the target can be made to disagree.
 //!  - extents: not yet. An entry's position depends on the entries before
 //!    it, and the entries are C bitfields, which typeinfo doesn't describe.
 //!
@@ -123,9 +126,52 @@ impl TransBkey<'_, '_> {
     {
         if inode::bkey_is_inode(self.k()) {
             self.set_inode(fs, field, val)
+        } else if self.k().type_ as u32 == c::bch_bkey_type::KEY_TYPE_dirent.0 {
+            self.set_dirent(field, val)
         } else {
             self.set_fixed(field, val)
         }
+    }
+
+    /// The dirent's target is a union tagged by d_type - d_inum, or
+    /// (d_child_subvol, d_parent_subvol) for DT_SUBVOL - and d_type is a C
+    /// bitfield: typeinfo reaches neither. Each of these writes exactly the
+    /// field named, tag or not, so a test can make them disagree.
+    fn set_dirent<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
+        let overflow = |bytes, val| SetError::Access {
+            field,
+            err: AccessError::Overflow { bytes, val },
+        };
+
+        if !matches!(field, "d_type" | "d_inum" | "d_child_subvol" | "d_parent_subvol") {
+            return self.set_fixed(field, val);
+        }
+
+        let v = parse_val(self.k().type_, field, val)?;
+        let d = unsafe { &mut *(&mut self.k_i_mut().v as *mut c::bch_val as *mut c::bch_dirent) };
+
+        match field {
+            "d_type" => {
+                if v >= 1 << 5 {
+                    return Err(SetError::Access {
+                        field,
+                        err: AccessError::BitsOverflow { bits: 5, val: v },
+                    });
+                }
+                d.set_d_type(v as u8);
+            }
+            "d_inum" => d.__bindgen_anon_1.d_inum = v.to_le(),
+            _ => {
+                let v = u32::try_from(v).map_err(|_| overflow(4, v))?.to_le();
+                let s = unsafe { &mut d.__bindgen_anon_1.__bindgen_anon_1 };
+                if field == "d_child_subvol" {
+                    s.d_child_subvol = v;
+                } else {
+                    s.d_parent_subvol = v;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn set_fixed<'p>(&mut self, field: &'p str, val: &'p str) -> Result<(), SetError<'p>> {
