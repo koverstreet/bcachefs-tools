@@ -221,10 +221,9 @@ fn check_nlinks(fs: &Fs) -> Result<(), BchError> {
         let this_iter_range_start = next_iter_range_start;
         next_iter_range_start = u64::MAX;
 
-        // XXX: the hardlink scan's own error is dropped - as the C did.
-        let _ = check_nlinks_find_hardlinks(fs, &mut links,
-                                            this_iter_range_start,
-                                            &mut next_iter_range_start);
+        check_nlinks_find_hardlinks(fs, &mut links,
+                                    this_iter_range_start,
+                                    &mut next_iter_range_start)?;
 
         check_nlinks_walk_dirents(fs, &mut links,
                                   this_iter_range_start,
