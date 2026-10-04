@@ -47,7 +47,7 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::c;
 use bcachefs_kernel::btree::bkey::BkeySC;
-use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter, BtreeTrans};
+use bcachefs_kernel::btree::iter::{BtreeIterFlags, BtreeNodeIter};
 use bcachefs_kernel::data::extents::bkey_ptrs;
 use bcachefs_kernel::opt_set;
 use clap::Parser;
@@ -225,7 +225,7 @@ fn cmd_kill_btree_node(cli: KillBtreeNodeCli) -> Result<()> {
     // O_DIRECT requires aligned buffers; bd_fd is opened with O_DIRECT
     let zeroes = crate::util::AlignedBuf::new(block_size);
 
-    let trans = BtreeTrans::new(&fs);
+    let trans = bcachefs_kernel::btree_trans!(&fs);
 
     for kill in &mut kill_nodes {
         let mut found = false;

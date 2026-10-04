@@ -41,7 +41,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use anyhow::{anyhow, bail, Result};
 use bcachefs_kernel::btree::bkey::{BkeyS, BkeySC, POS_MIN, SPOS_MAX};
 use bcachefs_kernel::btree::iter::{
-    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, CommitOpts,
+    commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
     TransError, UpdateTriggerFlags,
 };
 use bcachefs_kernel::c;
@@ -480,7 +480,7 @@ enum ReadOp {
 
 fn cmd_read(fs: &Fs, op: ReadOp, btree: c::btree_id, pos: c::bpos, filtered: bool,
             how: Render<'_>) -> Result<String> {
-    let trans = BtreeTrans::new(fs);
+    let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
     let out = lockrestart_do(&trans, |t| {
         let base = match op {
@@ -573,7 +573,7 @@ fn take_interrupt() -> bool {
 
 fn cmd_list(fs: &Fs, btree: c::btree_id, start: c::bpos, end: c::bpos,
             filtered: bool, key_only: bool) -> Result<String> {
-    let trans = BtreeTrans::new(fs);
+    let trans = bcachefs_kernel::btree_trans!(fs);
     let mut out = String::new();
     let mut iter = BtreeIter::new(
         &trans,
@@ -668,7 +668,7 @@ fn cmd_update(
     pos: c::bpos,
     assigns: &[(&str, FieldVal)],
 ) -> Result<String> {
-    let trans = BtreeTrans::new(fs);
+    let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
 
     let commit = commit_do(
@@ -764,7 +764,7 @@ fn cmd_set(
         .map(|(path, fv)| Ok((*path, field_val(ti.type_ as u8, path, fv)?)))
         .collect::<Result<Vec<(&str, u64)>>>()?;
 
-    let trans = BtreeTrans::new(fs);
+    let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
 
     let commit = commit_do(

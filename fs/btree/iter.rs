@@ -13,13 +13,72 @@ use crate::printbuf_to_formatter;
 use crate::SPOS_MAX;
 use bitflags::bitflags;
 use core::fmt;
+use core::cell::UnsafeCell;
 use core::marker::PhantomData;
 use core::mem::{size_of, MaybeUninit};
+use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use core::ptr::NonNull;
 use core::slice;
 use core::ops::{ControlFlow, Deref};
 
 use c::bpos;
+
+/// btree_trans!(fs): a transaction named for the function it's created in, as
+/// C's bch2_trans_get(). Transaction stats and lock contention are reported per
+/// function, under that name; without it a transaction is "(unknown)".
+///
+/// XXX: C registers __func__ - a NUL-terminated string that lives forever.
+/// Rust has the function name only at runtime and unterminated, so each call
+/// site carries a buffer it's copied into, on first use. Clean this up once
+/// enough is converted to key the stats on Rust's own names.
+#[macro_export]
+macro_rules! btree_trans {
+    ($fs:expr) => {{
+        static FN: $crate::btree::iter::TransFnName = $crate::btree::iter::TransFnName::new();
+        $crate::btree::iter::BtreeTrans::new_fn($fs, FN.idx($crate::function_name!()))
+    }};
+}
+
+/// One btree_trans!() call site's registered name: see there.
+#[doc(hidden)]
+pub struct TransFnName {
+    idx:   AtomicU32,
+    claim: AtomicBool,
+    buf:   UnsafeCell<[u8; 64]>,
+}
+
+// buf is written once, by whoever claims it, before idx is published, and
+// only read through the pointer handed to C after that.
+unsafe impl Sync for TransFnName {}
+
+impl TransFnName {
+    pub const fn new() -> Self {
+        TransFnName {
+            idx:   AtomicU32::new(0),
+            claim: AtomicBool::new(false),
+            buf:   UnsafeCell::new([0; 64]),
+        }
+    }
+
+    /// This call site's index in bch2_btree_transaction_fns, registering
+    /// @name on first use. 0 - "(unknown)" - while another thread is
+    /// registering it, or if the table is full.
+    pub fn idx(&self, name: &str) -> u32 {
+        let idx = self.idx.load(Ordering::Acquire);
+        if idx != 0 || self.claim.swap(true, Ordering::AcqRel) {
+            return idx;
+        }
+
+        let buf = unsafe { &mut *self.buf.get() };
+        let n = name.len().min(buf.len() - 1);
+        buf[..n].copy_from_slice(&name.as_bytes()[..n]);
+        buf[n] = 0;
+
+        let idx = unsafe { c::bch2_trans_get_fn_idx(buf.as_ptr() as *const core::ffi::c_char) };
+        self.idx.store(idx, Ordering::Release);
+        idx
+    }
+}
 
 pub struct BtreeTrans<'f> {
     raw: *mut c::btree_trans,
@@ -27,10 +86,12 @@ pub struct BtreeTrans<'f> {
 }
 
 impl<'f> BtreeTrans<'f> {
-    pub fn new(fs: &'f Fs) -> BtreeTrans<'f> {
+    /// Use btree_trans!(), which names the transaction for its caller.
+    #[doc(hidden)]
+    pub fn new_fn(fs: &'f Fs, fn_idx: u32) -> BtreeTrans<'f> {
         unsafe {
             BtreeTrans {
-                raw: &mut *c::__bch2_trans_get(fs.raw, 0),
+                raw: &mut *c::__bch2_trans_get(fs.raw, fn_idx),
                 fs,
             }
         }
@@ -694,7 +755,7 @@ pub fn trans_commit_do<'t, F>(
 where
     F: for<'a> FnMut(TransAttempt<'a, 't>) -> Result<TransAttempt<'a, 't>, TransError>,
 {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     commit_do(&trans, disk_res, flags, f)
 }
 
@@ -705,7 +766,7 @@ pub fn trans_run<'t, T, F>(fs: &'t Fs, f: F) -> Result<T, BchError>
 where
     F: for<'a> FnMut(TransAttempt<'a, 't>) -> TransResult<'a, 't, T>,
 {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, f)
 }
 

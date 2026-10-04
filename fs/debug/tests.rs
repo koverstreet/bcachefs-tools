@@ -4,7 +4,7 @@ use crate::alloc::buckets::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, POS_MIN, SPOS_MAX};
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
-    BtreeTrans, CommitFlags, CommitOpts, TransAttempt, TransError, UpdateTriggerFlags,
+    CommitFlags, CommitOpts, TransAttempt, TransError, UpdateTriggerFlags,
 };
 use crate::data::extents::{
     bkey_extent_entries_mut, bkey_extent_entries_sc, bkey_ptrs_mut, entry_stripe_ptr_mut,
@@ -98,7 +98,7 @@ fn trans_cookie_alloc<'a, 't>(
 }
 
 fn test_delete(fs: &Fs, _nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(
         &trans,
         c::btree_id::xattrs,
@@ -125,7 +125,7 @@ fn test_delete(fs: &Fs, _nr: u64) -> TestRet {
 }
 
 fn test_delete_written(fs: &Fs, _nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(
         &trans,
         c::btree_id::xattrs,
@@ -159,7 +159,7 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
         insert_cookie(fs, c::btree_id::xattrs, &mut k)?;
     }
 
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
     iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
@@ -190,7 +190,7 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
         insert_cookie(fs, c::btree_id::extents, &mut k)?;
     }
 
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
     iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
@@ -220,7 +220,7 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
         insert_cookie(fs, c::btree_id::xattrs, &mut k)?;
     }
 
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
     iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
@@ -255,7 +255,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
         insert_cookie(fs, c::btree_id::extents, &mut k)?;
     }
 
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut i = 0;
     let mut iter = BtreeIter::new(&trans, c::btree_id::extents, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
     iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
@@ -284,7 +284,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
 fn test_peek_end_btree(fs: &Fs, btree: c::btree_id) -> TestRet {
     delete_test_keys(fs)?;
 
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, btree, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
 
     for _ in 0..2 {
@@ -344,7 +344,7 @@ fn test_extent_overwrite_all(fs: &Fs, _nr: u64) -> TestRet {
 }
 
 fn insert_test_overlapping_extent(fs: &Fs, inum: u64, start: u64, len: u32, snapid: u32) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let res = DiskReservation::new(fs);
 
     commit_do(&trans, Some(&res), NO_ENOSPC, |t| {
@@ -368,7 +368,7 @@ fn test_extent_create_overlapping(fs: &Fs, inum: u64) -> TestRet {
 }
 
 fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(
         &trans,
         c::btree_id::extents,
@@ -441,7 +441,7 @@ fn test_btree_ptr_stale_dirty_key<'a, 't>(
 }
 
 fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     lockrestart_do(&trans, |t| {
         let mut iter = BtreeNodeIter::new(
             t.trans(),
@@ -478,7 +478,7 @@ fn test_btree_ptr_stale_dirty(fs: &Fs, _nr: u64) -> TestRet {
 fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
     const STRIPE_PTR: u32 = c::bch_extent_entry_type::BCH_EXTENT_ENTRY_stripe_ptr as u32;
 
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(
         &trans,
         c::btree_id::extents,
@@ -541,7 +541,7 @@ fn test_inject_stripe_ptr_mismatch(fs: &Fs, _nr: u64) -> TestRet {
 /// out if no stripe is found.
 fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
     for _ in 0..100 {
-        let updater = BtreeTrans::new(fs);
+        let updater = crate::btree_trans!(fs);
         let mut u_iter = BtreeIter::new(&updater, c::btree_id::stripes, POS_MIN,
                                         BtreeIterFlags::INTENT);
 
@@ -566,7 +566,7 @@ fn test_stripe_open_invalidates_update(fs: &Fs, _nr: u64) -> TestRet {
         // declaration comes through as a zero-sized type.
         let mut handle: c::ec_stripe_handle = unsafe { core::mem::zeroed() };
         {
-            let opener = BtreeTrans::new(fs);
+            let opener = crate::btree_trans!(fs);
             let mut o_iter = BtreeIter::new(&opener, c::btree_id::stripes, pos(0, idx),
                                             BtreeIterFlags::INTENT);
 
@@ -611,7 +611,7 @@ fn test_snapshot_filter(fs: &Fs, snapid_lo: u32, snapid_hi: u32) -> TestRet {
     cookie.k_mut().p.snapshot = snapid_hi;
     insert_cookie(fs, c::btree_id::xattrs, &mut cookie)?;
 
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, snapid_lo), BtreeIterFlags::empty());
 
     let snapshot = lockrestart_do(&trans, |t| {
@@ -646,7 +646,7 @@ fn test_rand() -> u64 {
 }
 
 fn rand_insert(fs: &Fs, nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
 
     for _ in 0..nr {
         commit_do(&trans, None, NO_ENOSPC, |t| {
@@ -661,7 +661,7 @@ fn rand_insert(fs: &Fs, nr: u64) -> TestRet {
 }
 
 fn rand_insert_multi(fs: &Fs, nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
 
     for _ in (0..nr).step_by(8) {
         commit_do(&trans, None, NO_ENOSPC, |mut t| {
@@ -679,7 +679,7 @@ fn rand_insert_multi(fs: &Fs, nr: u64) -> TestRet {
 }
 
 fn rand_lookup(fs: &Fs, nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
 
     for _ in 0..nr {
@@ -694,7 +694,7 @@ fn rand_lookup(fs: &Fs, nr: u64) -> TestRet {
 }
 
 fn rand_mixed(fs: &Fs, nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
 
     for i in 0..nr {
@@ -718,7 +718,7 @@ fn rand_mixed(fs: &Fs, nr: u64) -> TestRet {
 }
 
 fn rand_delete(fs: &Fs, nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
 
     for _ in 0..nr {
         let p = spos(0, test_rand(), u32::MAX);
@@ -731,7 +731,7 @@ fn rand_delete(fs: &Fs, nr: u64) -> TestRet {
 }
 
 fn seq_insert(fs: &Fs, nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
 
     for i in 0..nr {
         commit_do(&trans, None, NO_ENOSPC, |t| {
@@ -745,14 +745,14 @@ fn seq_insert(fs: &Fs, nr: u64) -> TestRet {
 }
 
 fn seq_lookup(fs: &Fs, _nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
     iter.for_each_max(&trans, pos(0, u64::MAX), |_k| Ok(ControlFlow::<()>::Continue(())))?;
     Ok(())
 }
 
 fn seq_overwrite(fs: &Fs, _nr: u64) -> TestRet {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::INTENT);
 
     loop {

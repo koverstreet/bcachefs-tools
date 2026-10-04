@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::iter::{BtreeTrans, TransAttempt, TransError};
+use crate::btree::iter::{TransAttempt, TransError};
 use crate::c;
 use crate::errcode::{ret_to_result_void, BchError};
 use crate::fs::Fs;
@@ -75,7 +75,7 @@ pub fn rename_opt_changes_finish(
     src: &mut c::inode_opt_change,
     dst: &mut c::inode_opt_change,
 ) -> Result<(), BchError> {
-    let trans = BtreeTrans::new(fs);
+    let trans = crate::btree_trans!(fs);
     ret_to_result_void(unsafe { c::bch2_inode_opt_change_finish(trans.raw(), src) })?;
     ret_to_result_void(unsafe { c::bch2_inode_opt_change_finish(trans.raw(), dst) })
 }

@@ -15,7 +15,7 @@ use bcachefs_kernel::accounting::{compression_type, data_type, DiskAccountingKin
 use bcachefs_kernel::btree::bkey::bkey_type;
 use bcachefs_kernel::btree_id;
 use bcachefs_kernel::opts::{prt_compression_type, prt_data_type};
-use bcachefs_kernel::btree::iter::{BtreeIter, BtreeTrans, lockrestart_do};
+use bcachefs_kernel::btree::iter::{BtreeIter, lockrestart_do};
 use bch_bindgen::c;
 use crate::copy_fs::{CopyFsState, copy_fs};
 use bch_bindgen::data::moving::MovingContext;
@@ -177,7 +177,7 @@ fn move_btree(fs: &Fs, move_alloc: bool, target_dev: u32) -> Result<(), anyhow::
 
 /// Look up the last alloc key to find how many buckets are used.
 fn get_nbuckets_used(fs: &Fs) -> Result<u64, anyhow::Error> {
-    let trans = BtreeTrans::new(fs);
+    let trans = bcachefs_kernel::btree_trans!(fs);
     let mut iter = BtreeIter::new(
         &trans,
         btree_id::alloc,

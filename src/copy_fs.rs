@@ -249,7 +249,7 @@ fn create_or_update_file(
         // bch2_fsck_write_inode has its own commit_do loop internally —
         // don't wrap it in trans_commit_do or it double-nests.
         {
-            let trans = btree::BtreeTrans::new(fs);
+            let trans = bcachefs_kernel::btree_trans!(fs);
             inode::fsck_write_inode(&trans, &mut child_inode)?;
         }
     } else {

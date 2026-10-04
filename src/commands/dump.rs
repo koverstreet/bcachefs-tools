@@ -736,7 +736,7 @@ fn dump_fs(fs: &Fs, cli: &DumpCli, sanitize: bool, sanitize_filenames: bool) -> 
     // journal overlay, so nodes reachable only through not-yet-replayed journal
     // entries are captured too.
     for id in 0..fs.btree_id_nr_alive() {
-        let trans = btree::BtreeTrans::new(fs);
+        let trans = bcachefs_kernel::btree_trans!(fs);
 
         for level in 0..(c::BTREE_MAX_DEPTH as u32) {
             let mut node_iter = btree::BtreeNodeIter::new(
