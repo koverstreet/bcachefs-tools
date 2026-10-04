@@ -254,8 +254,10 @@ fn printbuf_to_string(f: impl FnOnce(&mut Printbuf)) -> String {
 fn accounting_types_for_fields(fields: &[Field]) -> u32 {
     let has = |f: Field| -> bool { fields.contains(&f) };
 
-    let mut accounting_types: u32 =
-        disk_accounting_type::replicas.bit() | disk_accounting_type::persistent_reserved.bit();
+    let mut accounting_types: u32 = disk_accounting_type::replicas.bit()
+        | disk_accounting_type::persistent_reserved.bit()
+        | disk_accounting_type::dev_leaving.bit()
+        | disk_accounting_type::dev_stripe_frag.bit();
 
     if has(Field::Compression) {
         accounting_types |= disk_accounting_type::compression.bit();
@@ -269,7 +271,6 @@ fn accounting_types_for_fields(fields: &[Field]) -> u32 {
             accounting_types |= disk_accounting_type::rebalance_work.bit();
         } else {
             accounting_types |= disk_accounting_type::reconcile_work.bit();
-            accounting_types |= disk_accounting_type::dev_leaving.bit();
         }
     }
 
@@ -286,16 +287,6 @@ fn fs_usage_collect(path: &str, fields: &[Field], name_mode: DeviceNameMode) -> 
     let mut result = handle
         .query_accounting(types)
         .map_err(|e| anyhow!("query_accounting ioctl failed (kernel too old?): {}", e))?;
-    for extra in [
-        disk_accounting_type::dev_leaving,
-        disk_accounting_type::dev_stripe_frag,
-    ] {
-        if types & extra.bit() == 0 {
-            if let Ok(extra) = handle.query_accounting(extra.bit()) {
-                result.entries.extend(extra.entries);
-            }
-        }
-    }
     result.entries.sort_by_key(|entry| entry.pos);
     let mut usage = FsUsage {
         mountpoint: path.to_string(),
@@ -958,6 +949,24 @@ pub const CMD: super::CmdDef = typed_cmd!("usage", "Show filesystem disk usage",
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn field_selection_includes_unprivileged_device_accounting() {
+        let device_types =
+            disk_accounting_type::dev_leaving.bit() | disk_accounting_type::dev_stripe_frag.bit();
+        let privileged_types =
+            disk_accounting_type::inum.bit() | disk_accounting_type::snapshot.bit();
+        for fields in [
+            vec![],
+            vec![Field::Replicas],
+            vec![Field::Devices],
+            vec![Field::RebalanceWork],
+        ] {
+            let types = accounting_types_for_fields(&fields);
+            assert_eq!(types & device_types, device_types);
+            assert_eq!(types & privileged_types, 0);
+        }
+    }
 
     #[test]
     fn degraded_row_preserves_missing_and_zero_columns() {
