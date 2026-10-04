@@ -127,15 +127,16 @@ static int check_subvol_path(struct btree_trans *trans, struct btree_iter *iter,
 		bch2_btree_iter_set_pos(&parent_iter, POS(0, parent));
 		k = bkey_try(bch2_btree_iter_peek_slot(&parent_iter));
 
-		if (inode_fsck_err_on(k.k->type != KEY_TYPE_subvolume,
-				trans, SPOS(0, le64_to_cpu(s.v->inode),
-					    le32_to_cpu(s.v->snapshot)),
-				subvol_unreachable,
-				"unreachable subvolume %s",
-				(printbuf_reset(&buf),
-				 bch2_bkey_val_to_text(&buf, c, s.s_c),
-				 buf.buf))) {
-			return reattach_subvol(trans, s);
+		if (k.k->type != KEY_TYPE_subvolume) {
+			if (inode_fsck_err(trans, SPOS(0, le64_to_cpu(s.v->inode),
+						       le32_to_cpu(s.v->snapshot)),
+					   subvol_unreachable,
+					   "unreachable subvolume %s",
+					   (printbuf_reset(&buf),
+					    bch2_bkey_val_to_text(&buf, c, s.s_c),
+					    buf.buf)))
+				ret = reattach_subvol(trans, s);
+			break;
 		}
 	}
 fsck_err:
