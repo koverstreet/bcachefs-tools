@@ -3079,6 +3079,10 @@ static int stripe_repair_opened(struct moving_context *ctxt, struct bkey_s_c_str
 	if (read_all && bch2_stripe_buf_validate_msg(c, buf, true, b.live))
 		return stripe_repair_unrebuildable(ctxt, h, buf, b);
 
+	/* a block that failed the read is rewritten, not carried: */
+	if (read_all)
+		b.bad |= ec_failed_mask(buf, STRIPE_BUF_PRE_RECOV);
+
 	struct bch_devs_mask devs;
 	unsigned need_evacuate = stripe_repair_need_evacuate(c, s.v, b, &devs);
 	if (need_evacuate) {
@@ -3091,14 +3095,8 @@ static int stripe_repair_opened(struct moving_context *ctxt, struct bkey_s_c_str
 				     b.live & ~b.bad, b.live & b.bad);
 }
 
-/*
- * A degraded stripe - a block on a device that's missing, evacuating or
- * otherwise lost its durability - gets rebuilt at its width if there are
- * devices for it, narrowed if not; one that can't be reconstructed gets
- * rebuilt around what's left of it.
- */
-int bch2_stripe_repair(struct moving_context *ctxt,
-		       struct btree_iter *iter, struct bkey_s_c_stripe s)
+static int __stripe_repair(struct moving_context *ctxt, struct btree_iter *iter,
+			   struct bkey_s_c_stripe s, struct stripe_blocks b)
 {
 	struct btree_trans *trans = ctxt->trans;
 	struct bch_fs *c = trans->c;
@@ -3111,11 +3109,6 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	 * stripes if they're not open, but it can't actually open them:
 	 */
 	BUG_ON(!btree_node_intent_locked(btree_iter_path(trans, iter), 0));
-
-	struct stripe_blocks b = stripe_blocks_get(c, s.v);
-
-	if (!b.bad)
-		return stripe_repair_nothing_to_do(trans, iter, s);
 
 	if (!b.live)
 		return 0;
@@ -3139,4 +3132,35 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	/* unless the rebuild took it: */
 	bch2_stripe_handle_put(c, &h);
 	return ret;
+}
+
+/*
+ * A degraded stripe - a block on a device that's missing, evacuating or
+ * otherwise lost its durability - gets rebuilt at its width if there are
+ * devices for it, narrowed if not; one that can't be reconstructed gets
+ * rebuilt around what's left of it.
+ */
+int bch2_stripe_repair(struct moving_context *ctxt,
+		       struct btree_iter *iter, struct bkey_s_c_stripe s)
+{
+	struct stripe_blocks b = stripe_blocks_get(ctxt->trans->c, s.v);
+
+	if (!b.bad)
+		return stripe_repair_nothing_to_do(ctxt->trans, iter, s);
+
+	return __stripe_repair(ctxt, iter, s, b);
+}
+
+/*
+ * Scrub found @block failing the stripe's checksums: repair as if degraded with
+ * @block bad. Repair can't find it itself - it may be parity, or not live, and
+ * repair only reads the live data blocks.
+ */
+int bch2_stripe_repair_damaged(struct moving_context *ctxt, struct btree_iter *iter,
+			       struct bkey_s_c_stripe s, unsigned block)
+{
+	struct stripe_blocks b = stripe_blocks_get(ctxt->trans->c, s.v);
+
+	b.bad |= BIT(block);
+	return __stripe_repair(ctxt, iter, s, b);
 }
