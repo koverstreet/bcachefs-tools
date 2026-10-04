@@ -134,11 +134,7 @@ fn check_nlinks_walk_dirents(
     let mut iter = BtreeIter::new(&trans, c::btree_id::dirents, POS_MIN, iter_flags());
 
     let ret = iter.for_each(&trans, |_, k| {
-        // XXX: an error here ends the walk, and the pass carries on as if it
-        // had succeeded - as the C did.
-        if s.update(fs, c::btree_id::dirents, k.k.p).is_err() {
-            return Ok(ControlFlow::Break(()));
-        }
+        s.update(fs, c::btree_id::dirents, k.k.p)?;
 
         if let Some(d) = k.as_dirent() {
             let d_type = d.d_type() as u32;
@@ -149,7 +145,7 @@ fn check_nlinks_walk_dirents(
             }
         }
 
-        Ok(ControlFlow::Continue(()))
+        Ok(())
     });
 
     bch_err_fn!(fs, ret)
