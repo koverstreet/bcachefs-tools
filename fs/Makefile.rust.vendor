@@ -248,8 +248,13 @@ $(VRD)/helpers.o: $(VENDOR)/helpers/helpers.c $(wildcard $(VENDOR)/helpers/*.c) 
 # on the kbuild path - an unused_attributes error, fatal under CONFIG_WERROR.
 # Neither path can be told apart by a cfg, since both set --cfg kernel, so the
 # attribute belongs to whoever invokes rustc.
+#
+# OBJTREE likewise: kbuild sets it for a module's Rust (rust_common_cmd), and
+# kernel crate macros expanded in our code read it - warn_on!() includes the
+# generated arch asm from $OBJTREE/rust/kernel/. Ours is $(VRD).
 quiet_cmd_bch_vr_mod = VRUSTC M $@
-      cmd_bch_vr_mod = RUSTC_BOOTSTRAP=1 OUT_DIR=$(abspath $(obj)/rust) $(RUSTC) \
+      cmd_bch_vr_mod = RUSTC_BOOTSTRAP=1 OUT_DIR=$(abspath $(obj)/rust) \
+	OBJTREE=$(bch-vr-objtree) $(RUSTC) \
 	$(bch-vr-tflags) --edition=2021 --cfg kernel \
 	-Zcrate-attr=no_std \
 	-Zcrate-attr='feature($(rust_allowed_features))' \
