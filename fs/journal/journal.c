@@ -1324,8 +1324,12 @@ int __bch2_journal_meta(struct journal *j)
 {
 	CLASS(closure_stack, cl)();
 
+	/*
+	 * An empty entry is the journal's own forward progress: it can't wait
+	 * behind the allocator's free space watermark, which may never drop.
+	 */
 	struct journal_res res = {};
-	try(bch2_journal_res_get(j, &res, jset_u64s(0), 0, NULL));
+	try(bch2_journal_res_get(j, &res, jset_u64s(0), BCH_WATERMARK_reclaim, NULL));
 	bch2_journal_res_flush(j, &res, &cl);
 	bch2_journal_res_put(j, &res);
 
