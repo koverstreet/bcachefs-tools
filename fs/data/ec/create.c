@@ -229,38 +229,39 @@ static void bch2_bkey_drop_stripe_ptr(const struct bch_fs *c, struct bkey_s k,
 		}
 }
 
+struct stripe_update_extent_args {
+	struct bkey_i_stripe			*old_stripe;
+	struct bkey_i_stripe			*new_stripe;
+	struct bch_extent_ptr			old_block;
+	struct bch_extent_ptr			new_block;
+	unsigned				new_blocknr;
+	struct stripe_update_bucket_stats	stats;
+};
+
+/* Point an extent in a reused stripe's block at the new stripe: */
 static int stripe_update_extent(struct btree_trans *trans,
-				struct bkey_i_stripe *old_stripe,
-				struct bkey_i_stripe *new_stripe,
-				struct bch_extent_ptr old_block,
-				struct bch_extent_ptr new_block,
-				unsigned new_blocknr,
 				struct bkey_s_c_backpointer bp,
-				struct stripe_update_bucket_stats *stats,
-				struct disk_reservation *res,
-				enum bch_watermark watermark,
-				struct wb_maybe_flush *last_flushed)
+				struct btree_iter *iter, struct bkey_s_c k,
+				void *_args)
 {
 	struct bch_fs *c = trans->c;
+	struct stripe_update_extent_args *args = _args;
+	struct bkey_i_stripe *old_stripe = args->old_stripe;
+	struct bkey_i_stripe *new_stripe = args->new_stripe;
+	struct bch_extent_ptr old_block	= args->old_block;
+	struct bch_extent_ptr new_block	= args->new_block;
+	unsigned new_blocknr		= args->new_blocknr;
+	struct stripe_update_bucket_stats *stats = &args->stats;
 
 	if (bp.v->level) {
-		CLASS(btree_iter_uninit, iter)(trans);
-		struct btree *b = errptr_try(bch2_backpointer_get_node(trans, bp, &iter, last_flushed));
-
 		CLASS(printbuf, buf)();
 		prt_printf(&buf, "found btree node in erasure coded bucket:\n");
-		if (b)
-			bch2_bkey_val_to_text(&buf, c, bp.s_c);
-		else
-			prt_str(&buf, "(not found)");
+		bch2_bkey_val_to_text(&buf, c, bp.s_c);
 
 		bch2_fs_inconsistent(c, "%s", buf.buf);
 		return bch_err_throw(c, erasure_coding_found_btree_node);
 	}
 
-	CLASS(btree_iter_uninit, iter)(trans);
-	struct bkey_s_c k =
-		bkey_try(bch2_backpointer_get_key(trans, bp, &iter, BTREE_ITER_intent, last_flushed));
 	if (!k.k) {
 		/*
 		 * extent no longer exists - we could flush the btree
@@ -362,12 +363,8 @@ static int stripe_update_extent(struct btree_trans *trans,
 					  BKEY_EXTENT_U64s_MAX,
 					  SET_NEEDS_RECONCILE_other, 0));
 
-	try(bch2_trans_update_buf(trans, &iter, n, BKEY_EXTENT_U64s_MAX,
+	try(bch2_trans_update_buf(trans, iter, n, BKEY_EXTENT_U64s_MAX,
 				  BTREE_TRIGGER_set_needs_reconcile_done));
-	try(bch2_trans_commit(trans, res, NULL,
-			watermark|
-			BCH_TRANS_COMMIT_no_check_rw|
-			BCH_TRANS_COMMIT_no_enospc));
 
 	stats->nr_done++;
 	stats->sectors_done += bp.v->bucket_len;
@@ -414,6 +411,61 @@ static struct bp_range stripe_block_bps(struct bch_fs *c,
 	};
 }
 
+typedef int (*ec_block_extent_fn)(struct btree_trans *, struct bkey_s_c_backpointer,
+				  struct btree_iter *, struct bkey_s_c, void *);
+
+static int ec_block_extent_resolve(struct btree_trans *trans,
+				   struct bkey_s_c_backpointer bp,
+				   struct wb_maybe_flush *last_flushed,
+				   ec_block_extent_fn fn, void *arg)
+{
+	/* the stripe's own: */
+	if (bp.v->btree_id == BTREE_ID_stripes)
+		return 0;
+
+	/* a btree node - not erasure coded, so the caller decides how bad: */
+	if (bp.v->level)
+		return fn(trans, bp, NULL, bkey_s_c_null, arg);
+
+	wb_maybe_flush_inc(last_flushed);
+
+	CLASS(btree_iter_uninit, iter)(trans);
+	struct bkey_s_c k = bkey_try(bch2_backpointer_get_key(trans, bp, &iter,
+							BTREE_ITER_intent, last_flushed));
+	return fn(trans, bp, &iter, k, arg);
+}
+
+/*
+ * Run @fn on every extent in block @block of @stripe, found by backpointer,
+ * committing after each: a block's extents won't fit in one transaction. @fn
+ * gets k.k == NULL for a backpointer that doesn't resolve to an extent - gone,
+ * or a btree node.
+ */
+static int ec_stripe_block_for_each_extent(struct btree_trans *trans,
+					   struct bkey_s_c_stripe stripe, unsigned block,
+					   struct disk_reservation *res,
+					   enum bch_trans_commit_flags commit_flags,
+					   ec_block_extent_fn fn, void *arg)
+{
+	struct bch_fs *c = trans->c;
+	struct bp_range bps = stripe_block_bps(c, stripe, block);
+
+	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
+	wb_maybe_flush_init(&last_flushed);
+
+	return for_each_btree_key_max_commit(trans, bp_iter, bps.btree,
+				bps.start, bps.end, 0, bp_k,
+				res, NULL, commit_flags, ({
+		if (res)
+			bch2_disk_reservation_put(c, res);
+
+		bp_k.k->type == KEY_TYPE_backpointer
+			? ec_block_extent_resolve(trans, bkey_s_c_to_backpointer(bp_k),
+						  &last_flushed, fn, arg)
+			: 0;
+	}));
+}
+
 static int stripe_update_bucket(struct btree_trans *trans,
 				struct bkey_i_stripe *old_stripe,
 				struct bkey_i_stripe *new_stripe,
@@ -423,32 +475,24 @@ static int stripe_update_bucket(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	struct bch_extent_ptr old_block = old_stripe->v.ptrs[old_blocknr];
-	struct bch_extent_ptr new_block = new_stripe->v.ptrs[new_blocknr];
-
-	struct bp_range bps = stripe_block_bps(c,
-				bkey_i_to_s_c_stripe(&old_stripe->k_i), old_blocknr);
-
-	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
-	wb_maybe_flush_init(&last_flushed);
-
-	struct stripe_update_bucket_stats stats = {};
+	struct stripe_update_extent_args args = {
+		.old_stripe	= old_stripe,
+		.new_stripe	= new_stripe,
+		.old_block	= old_stripe->v.ptrs[old_blocknr],
+		.new_block	= new_stripe->v.ptrs[new_blocknr],
+		.new_blocknr	= new_blocknr,
+	};
+	struct stripe_update_bucket_stats *stats = &args.stats;
 
 	CLASS(disk_reservation, res)(c);
 
-	try(for_each_btree_key_max(trans, bp_iter, bps.btree, bps.start, bps.end, 0, bp_k, ({
-		if (bp_k.k->type != KEY_TYPE_backpointer)
-			continue;
-
-		struct bkey_s_c_backpointer bp = bkey_s_c_to_backpointer(bp_k);
-		if (bp.v->btree_id == BTREE_ID_stripes)
-			continue;
-
-		wb_maybe_flush_inc(&last_flushed);
-		stripe_update_extent(trans, old_stripe, new_stripe,
-				     old_block, new_block, new_blocknr,
-				     bp, &stats, &res.r, watermark, &last_flushed);
-	})));
+	try(ec_stripe_block_for_each_extent(trans,
+				bkey_i_to_s_c_stripe(&old_stripe->k_i), old_blocknr,
+				&res.r,
+				watermark|
+				BCH_TRANS_COMMIT_no_check_rw|
+				BCH_TRANS_COMMIT_no_enospc,
+				stripe_update_extent, &args));
 
 	event_inc_trace(c, stripe_update_bucket, buf, ({
 		prt_printf(&buf, "Updating block %u\n", new_blocknr);
@@ -456,13 +500,13 @@ static int stripe_update_bucket(struct btree_trans *trans,
 		prt_newline(&buf);
 
 		prt_printf(&buf, "bp_to_deleted:\t%u %u\n",
-			   stats.nr_bp_to_deleted, stats.sectors_bp_to_deleted);
+			   stats->nr_bp_to_deleted, stats->sectors_bp_to_deleted);
 		prt_printf(&buf, "no_match:\t%u %u\n",
-			   stats.nr_no_match, stats.sectors_no_match);
+			   stats->nr_no_match, stats->sectors_no_match);
 		prt_printf(&buf, "cached:\t%u %u\n",
-			   stats.nr_cached, stats.sectors_cached);
+			   stats->nr_cached, stats->sectors_cached);
 		prt_printf(&buf, "done:\t%u %u\n",
-			   stats.nr_done, stats.sectors_done);
+			   stats->nr_done, stats->sectors_done);
 	}));
 
 	return 0;
@@ -643,32 +687,30 @@ static bool ec_extent_good_in_buf(struct bch_fs *c, struct bkey_s_c k,
  * @buf, @block: the stripe as read, if we have it - an extent whose own
  * checksum checks out against it isn't lost.
  */
-static int ec_record_lost_bp(struct btree_trans *trans,
-			     struct bkey_s_c_backpointer bp,
-			     enum bch_sb_error_id err, bool count,
-			     const struct ec_stripe_buf *buf, unsigned block,
-			     struct wb_maybe_flush *last_flushed)
+struct ec_record_lost_args {
+	enum bch_sb_error_id		err;
+	bool				count;
+	const struct ec_stripe_buf	*buf;
+	unsigned			block;
+};
+
+static int ec_record_lost_extent(struct btree_trans *trans,
+				 struct bkey_s_c_backpointer bp,
+				 struct btree_iter *iter, struct bkey_s_c k,
+				 void *_args)
 {
-	/* skip the resolve below for backpointers we couldn't attribute anyway */
-	if (bp.v->btree_id != BTREE_ID_extents)
+	struct ec_record_lost_args *args = _args;
+
+	/* reflink extents name no inode to record against */
+	if (!k.k || bp.v->btree_id != BTREE_ID_extents)
 		return 0;
 
-	/*
-	 * Resolve, don't trust bp->pos: an unflushed write buffer entry can
-	 * name a position that now belongs to a different file, and damage on
-	 * the wrong file is worse than none.
-	 */
-	CLASS(btree_iter_uninit, iter)(trans);
-	struct bkey_s_c k = bkey_try(bch2_backpointer_get_key(trans, bp, &iter, 0, last_flushed));
-	if (!k.k)
+	if (args->buf && ec_extent_good_in_buf(trans->c, k, args->buf, args->block))
 		return 0;
 
-	if (buf && ec_extent_good_in_buf(trans->c, k, buf, block))
-		return 0;
-
-	return count
-		? bch2_damage_record_data_loss(trans, bp.v->btree_id, k.k->p, err)
-		: bch2_damage_record_key(trans, bp.v->btree_id, k.k->p, err);
+	return args->count
+		? bch2_damage_record_data_loss(trans, bp.v->btree_id, k.k->p, args->err)
+		: bch2_damage_record_key(trans, bp.v->btree_id, k.k->p, args->err);
 }
 
 /*
@@ -676,9 +718,8 @@ static int ec_record_lost_bp(struct btree_trans *trans,
  * are looked up through @stripe's pointers, so a block on a device being
  * removed has to already point at BCH_SB_MEMBER_INVALID.
  *
- * Commits per backpointer: a block is a bucket, and a block's worth of
- * extents won't fit in one transaction - so callers record before destroying
- * the blocks, not atomically with it.
+ * Commits per extent, so callers record before destroying the blocks, not
+ * atomically with it.
  *
  * @buf: the stripe as read, when the blocks were read rather than lost to a
  * device - extents that still check out against it are skipped. NULL to
@@ -691,28 +732,22 @@ void bch2_ec_record_lost_blocks(struct btree_trans *trans,
 {
 	struct bch_fs *c = trans->c;
 
-	struct wb_maybe_flush last_flushed __cleanup(wb_maybe_flush_exit);
-	wb_maybe_flush_init(&last_flushed);
-
 	for (u32 lost = blocks; lost; lost &= lost - 1) {
-		unsigned block = __ffs(lost);
-		struct bp_range bps = stripe_block_bps(c, stripe, block);
+		struct ec_record_lost_args args = {
+			.err	= err,
+			.count	= count,
+			.buf	= buf,
+			.block	= __ffs(lost),
+		};
 
-		int ret = for_each_btree_key_max_commit(trans, bp_iter, bps.btree,
-					bps.start, bps.end, 0, bp_k,
-					NULL, NULL,
-					BCH_TRANS_COMMIT_no_enospc, ({
-			if (bp_k.k->type != KEY_TYPE_backpointer)
-				continue;
-
-			ec_record_lost_bp(trans, bkey_s_c_to_backpointer(bp_k),
-					  err, count, buf, block, &last_flushed);
-		}));
+		int ret = ec_stripe_block_for_each_extent(trans, stripe, args.block,
+					NULL, BCH_TRANS_COMMIT_no_enospc,
+					ec_record_lost_extent, &args);
 
 		/* a block we can't attribute doesn't stop the others */
 		if (ret)
 			bch_err(c, "error recording damage for stripe %llu block %u: %s",
-				stripe.k->p.offset, block, bch2_err_str(ret));
+				stripe.k->p.offset, args.block, bch2_err_str(ret));
 	}
 }
 
