@@ -224,7 +224,12 @@ static int check_path_loop(struct btree_trans *trans, struct bkey_s_c inode_k)
 	if (collapse_terminal)
 		snapshot = collapse_terminal;
 
-	CLASS(btree_iter, inode_iter)(trans, BTREE_ID_inodes, POS_MIN, 0);
+	/*
+	 * Not all_snapshots: the parent we want is the one visible in
+	 * @snapshot, and a filtered iterator looks in the snapshot it was
+	 * initialized with - set_pos() keeps it.
+	 */
+	CLASS(btree_iter, inode_iter)(trans, BTREE_ID_inodes, SPOS(0, 0, snapshot), 0);
 
 	/*
 	 * If we're running full fsck, check_dirents() will have already ran,
