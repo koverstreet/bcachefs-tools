@@ -535,6 +535,16 @@ static int __stripe_update_extents(struct btree_trans *trans,
 	return 0;
 }
 
+/*
+ * Creating a stripe completes space already taken, and holds open buckets and
+ * writes until it's done: it can't wait behind the journal's free space
+ * throttle (dev_starved_watermark()), or a full filesystem deadlocks.
+ */
+static enum bch_watermark ec_stripe_create_watermark(enum bch_watermark watermark)
+{
+	return max(watermark, BCH_WATERMARK_copygc);
+}
+
 static int stripe_update_extents(struct bch_fs *c, struct ec_stripe_new *s)
 {
 	CLASS(btree_trans, trans)(c);
@@ -544,7 +554,7 @@ static int stripe_update_extents(struct bch_fs *c, struct ec_stripe_new *s)
 				       &s->new_stripe.key,
 				       s->old_block_map,
 				       s->old_blocks_nr,
-				       s->watermark);
+				       ec_stripe_create_watermark(s->watermark));
 }
 
 __cold void bch2_logged_op_stripe_update_to_text(struct printbuf *out, struct bch_fs *c, struct bkey_s_c k)
@@ -598,7 +608,7 @@ int bch2_resume_logged_op_stripe_update(struct btree_trans *trans, struct bkey_i
 				       bkey_i_to_stripe(new_sk.k),
 				       op->v.old_block_map,
 				       op->v.old_blocks_nr,
-				       BCH_WATERMARK_normal);
+				       ec_stripe_create_watermark(BCH_WATERMARK_normal));
 }
 
 static void zero_out_rest_of_ec_bucket(struct bch_fs *c,
@@ -845,15 +855,10 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 	op.v.old_blocks_nr	= s->old_blocks_nr;
 	memcpy(op.v.old_block_map, s->old_block_map, sizeof(op.v.old_block_map));
 
-	/*
-	 * At the watermark of the stripe head this stripe came from: copygc's
-	 * stripes are copygc's, and copygc can't make progress until they're
-	 * created - its open buckets and stripe buffers are held until then.
-	 * At the default watermark these commits waited behind the journal's
-	 * free space throttle, which only copygc can lift: deadlock.
-	 */
+	enum bch_watermark watermark = ec_stripe_create_watermark(s->watermark);
+
 	try(bch2_trans_commit_do(c, &s->res, NULL,
-				 s->watermark|
+				 watermark|
 				 BCH_TRANS_COMMIT_no_check_rw|
 				 BCH_TRANS_COMMIT_no_enospc,
 		ec_stripe_key_update(trans, &s->new_stripe.key) ?:
@@ -863,7 +868,7 @@ static int __ec_stripe_create(struct ec_stripe_new *s)
 
 	{
 		CLASS(btree_trans, trans)(c);
-		ret = bch2_logged_op_finish(trans, &op.k_i, ret, s->watermark) ?: ret;
+		ret = bch2_logged_op_finish(trans, &op.k_i, ret, watermark) ?: ret;
 	}
 
 	return ret;
