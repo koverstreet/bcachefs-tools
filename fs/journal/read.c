@@ -1292,8 +1292,9 @@ int bch2_journal_read(struct bch_fs *c, struct journal_start_info *info)
 	}
 
 	if (!info->replay_end) {
-		fsck_err(c, dirty_but_no_journal_entries_post_drop_nonflushes,
-			 "journal read done, but no entries found after dropping non-flushes");
+		fsck_err_on(!c->sb.clean,
+			    c, dirty_but_no_journal_entries_post_drop_nonflushes,
+			    "journal read done, but no entries found after dropping non-flushes");
 		return 0;
 	}
 
