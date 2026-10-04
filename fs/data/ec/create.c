@@ -2525,96 +2525,126 @@ static void stripe_repair_usable_devs(struct bch_fs *c, const struct bch_stripe 
 	}
 }
 
-int bch2_stripe_repair(struct moving_context *ctxt,
-		       struct btree_iter *iter, struct bkey_s_c_stripe s)
+/*
+ * Nothing to repair - e.g. the device that was evacuating went back to rw.
+ * Clear needs_reconcile, or this stripe stays on the hipri queue and reconcile
+ * revisits it forever:
+ */
+static int stripe_repair_nothing_to_do(struct btree_trans *trans,
+				       struct btree_iter *iter,
+				       struct bkey_s_c_stripe s)
 {
-	struct btree_trans *trans = ctxt->trans;
 	struct bch_fs *c = trans->c;
 
-	/*
-	 * Same as get_old_stripe() -
-	 *
-	 * We require an intent lock here until we have the stripe open, for
-	 * exclusion with bch2_trigger_stripe() - which will delete empty
-	 * stripes if they're not open, but it can't actually open them:
-	 */
-	BUG_ON(!btree_node_intent_locked(btree_iter_path(trans, iter), 0));
+	event_inc_trace(c, stripe_repair_race, buf,
+			bch2_bkey_val_to_text(&buf, c, s.s_c));
 
-	const struct bch_stripe *old_s = s.v;
-	if (!stripe_degraded(c, old_s)) {
-		event_inc_trace(c, stripe_repair_race, buf,
-				bch2_bkey_val_to_text(&buf, c, s.s_c));
+	struct bch_inode_opts opts;
+	try(bch2_bkey_get_io_opts(trans, NULL, s.s_c, &opts));
+	try(bch2_update_reconcile_opts(trans, NULL, &opts, iter, 0, s.s_c,
+				       SET_NEEDS_RECONCILE_other));
+	return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
+}
 
-		/*
-		 * Nothing to repair - e.g. the device that was evacuating went
-		 * back to rw. Clear needs_reconcile, or this stripe stays on
-		 * the hipri queue and reconcile revisits it forever:
-		 */
-		struct bch_inode_opts opts;
-		try(bch2_bkey_get_io_opts(trans, NULL, s.s_c, &opts));
-		try(bch2_update_reconcile_opts(trans, NULL, &opts, iter, 0, s.s_c,
-					       SET_NEEDS_RECONCILE_other));
-		return bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc);
-	}
-
-	unsigned nr_data = old_s->nr_blocks - old_s->nr_redundant;
-	unsigned nr_live_data_blocks = 0;
-	for_each_data_block(i, nr_data)
-		nr_live_data_blocks += stripe_blockcount_get(old_s, i) != 0;
-
-	if (!nr_live_data_blocks)
-		return 0;
-
-	struct bch_devs_mask devs;
-	bch2_disk_label_ec_devs(c, old_s->disk_label, &devs, le16_to_cpu(old_s->sectors));
-	stripe_repair_usable_devs(c, old_s, &devs);
+/*
+ * How many of @s's live data blocks have to be evacuated before what's left
+ * fits on the devices a repair can use - 0 if it can be rebuilt at its current
+ * width. @devs is set to those devices.
+ */
+static unsigned stripe_repair_need_evacuate(struct bch_fs *c, const struct bch_stripe *s,
+					    unsigned nr_live_data_blocks,
+					    struct bch_devs_mask *devs)
+{
+	bch2_disk_label_ec_devs(c, s->disk_label, devs, le16_to_cpu(s->sectors));
+	stripe_repair_usable_devs(c, s, devs);
 
 	/*
 	 * The allocator puts at most one block of a stripe in a failure domain,
 	 * so devices sharing one can't each take a block:
 	 */
-	unsigned nr_usable = min(dev_mask_nr(&devs), bch2_target_nr_domains(c, &devs));
+	unsigned nr_usable = min(dev_mask_nr(devs), bch2_target_nr_domains(c, devs));
 
-	unsigned need_evacuate = max(0,
-			(int) (nr_live_data_blocks + old_s->nr_redundant) - (int) nr_usable);
+	return max(0, (int) (nr_live_data_blocks + s->nr_redundant) - (int) nr_usable);
+}
 
-	if (need_evacuate) {
-		unsigned blocks_used[BCH_BKEY_PTRS_MAX], nr = 0;
+/*
+ * Too few devices to rebuild @s at its width: evacuate @need_evacuate of its
+ * live data blocks, so the data goes to other stripes and @s narrows to what's
+ * left. Reconcile retries the repair once the moves are done.
+ */
+static int stripe_repair_narrow(struct moving_context *ctxt,
+				struct bkey_s_c_stripe s, unsigned need_evacuate)
+{
+	struct bch_fs *c = ctxt->trans->c;
+	const struct bch_stripe *v = s.v;
+	unsigned nr_data = v->nr_blocks - v->nr_redundant;
+	unsigned blocks_used[BCH_BKEY_PTRS_MAX], nr = 0;
 
-		/*
-		 * Blocks on bad devices first: that's the data that has to
-		 * move, and the stripe narrows to the good blocks:
-		 */
-		for_each_data_block(i, nr_data)
-			if (stripe_blockcount_get(old_s, i) &&
-			    bch2_stripe_block_dev_bad(c, old_s->ptrs[i].dev))
-				blocks_used[nr++] = i;
-		for_each_data_block(i, nr_data)
-			if (stripe_blockcount_get(old_s, i) &&
-			    !bch2_stripe_block_dev_bad(c, old_s->ptrs[i].dev))
-				blocks_used[nr++] = i;
+	/*
+	 * Blocks on bad devices first: that's the data that has to move, and
+	 * the stripe narrows to the good blocks:
+	 */
+	for_each_data_block(i, nr_data)
+		if (stripe_blockcount_get(v, i) &&
+		    bch2_stripe_block_dev_bad(c, v->ptrs[i].dev))
+			blocks_used[nr++] = i;
+	for_each_data_block(i, nr_data)
+		if (stripe_blockcount_get(v, i) &&
+		    !bch2_stripe_block_dev_bad(c, v->ptrs[i].dev))
+			blocks_used[nr++] = i;
 
-		/*
-		 * Too few devices for even a one block stripe: evacuating
-		 * every block empties the stripe, and it goes away:
-		 */
-		need_evacuate = min(need_evacuate, nr);
+	/*
+	 * Too few devices for even a one block stripe: evacuating every block
+	 * empties the stripe, and it goes away:
+	 */
+	need_evacuate = min(need_evacuate, nr);
 
-		for (unsigned i = 0; i < need_evacuate; i++) {
-			const struct bch_extent_ptr *ptr = old_s->ptrs + blocks_used[i];
-			u64 end = ptr->offset + le16_to_cpu(old_s->sectors);
+	for (unsigned i = 0; i < need_evacuate; i++) {
+		const struct bch_extent_ptr *ptr = v->ptrs + blocks_used[i];
+		u64 end = ptr->offset + le16_to_cpu(v->sectors);
 
-			if (ptr->dev != BCH_SB_MEMBER_INVALID)
-				try(bch2_evacuate_data(ctxt, ptr->dev,
-						       ptr->offset, end));
-			else
-				try(bch2_evacuate_ec_orphan(ctxt,
-						s.k->p.offset, blocks_used[i],
-						ptr->offset, end));
+		if (ptr->dev != BCH_SB_MEMBER_INVALID)
+			try(bch2_evacuate_data(ctxt, ptr->dev, ptr->offset, end));
+		else
+			try(bch2_evacuate_ec_orphan(ctxt, s.k->p.offset, blocks_used[i],
+						    ptr->offset, end));
+	}
+
+	return bch_err_throw(c, stripe_needs_block_evacuate);
+}
+
+/* Undo a rebuild that failed before it was handed to stripe creation: */
+static void stripe_repair_rebuild_abort(struct bch_fs *c, struct ec_stripe_new *new_s)
+{
+	bch2_disk_reservation_put(c, &new_s->res);
+	bch2_stripe_handle_put(c, &new_s->new_stripe_handle);
+	bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
+	bch2_ec_stripe_buf_exit(&new_s->new_stripe);
+	__bch2_ec_stripe_buf_exit(&new_s->old_stripe);
+
+	for (unsigned i = 0; i < new_s->new_stripe.key.v.nr_blocks; i++)
+		if (new_s->blocks[i]) {
+			bch2_open_bucket_put(c, c->allocator.open_buckets + new_s->blocks[i]);
+			new_s->blocks[i] = 0;
 		}
 
-		return bch_err_throw(c, stripe_needs_block_evacuate);
-	}
+	kfree(new_s);
+}
+
+/*
+ * Rebuild @s at @nr_live_data_blocks wide: a new stripe that carries its good
+ * data blocks forward in place and gets new buckets for the blocks on bad
+ * devices and for the parity. The old stripe's read, the reconstruct and the
+ * writes all happen in stripe creation, after we return.
+ */
+static int stripe_repair_rebuild(struct moving_context *ctxt,
+				 struct btree_iter *iter, struct bkey_s_c_stripe s,
+				 struct bch_devs_mask devs, unsigned nr_live_data_blocks)
+{
+	struct btree_trans *trans = ctxt->trans;
+	struct bch_fs *c = trans->c;
+	const struct bch_stripe *old_s = s.v;
+	unsigned nr_data = old_s->nr_blocks - old_s->nr_redundant;
 
 	struct ec_stripe_new *new_s = ec_new_stripe_alloc(c, devs, BCH_WATERMARK_normal,
 							  old_s->disk_label,
@@ -2662,11 +2692,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		 : 0) ?:
 		lockrestart_do(trans, stripe_idx_alloc(trans, new_s));
 	if (ret) {
-		bch2_disk_reservation_put(c, &new_s->res);
-		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
-		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
-		__bch2_ec_stripe_buf_exit(&new_s->old_stripe);
-		kfree(new_s);
+		stripe_repair_rebuild_abort(c, new_s);
 		return ret;
 	}
 
@@ -2704,19 +2730,7 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 		prt_str(&msg.m, "\nnew: ");
 		bch2_bkey_val_to_text(&msg.m, c, bkey_i_to_s_c(&new_s->new_stripe.key.k_i));
 
-		bch2_disk_reservation_put(c, &new_s->res);
-		bch2_stripe_handle_put(c, &new_s->new_stripe_handle);
-		bch2_stripe_handle_put(c, &new_s->old_stripe_handle);
-		bch2_ec_stripe_buf_exit(&new_s->new_stripe);
-		__bch2_ec_stripe_buf_exit(&new_s->old_stripe);
-
-		for (unsigned i = 0; i < new_s->new_stripe.key.v.nr_blocks; i++)
-			if (new_s->blocks[i]) {
-				bch2_open_bucket_put(c, c->allocator.open_buckets + new_s->blocks[i]);
-				new_s->blocks[i] = 0;
-			}
-
-		kfree(new_s);
+		stripe_repair_rebuild_abort(c, new_s);
 		return ret;
 	}
 
@@ -2747,4 +2761,43 @@ int bch2_stripe_repair(struct moving_context *ctxt,
 	/* new_s->seq assigned in ec_stripe_new_put() when STRIPE_REF_io drops. */
 	ec_stripe_new_put(c, new_s, STRIPE_REF_io);
 	return 0;
+}
+
+/*
+ * A degraded stripe - a block on a device that's missing, evacuating or
+ * otherwise lost its durability - gets rebuilt at its width if there are
+ * devices for it, narrowed if not.
+ */
+int bch2_stripe_repair(struct moving_context *ctxt,
+		       struct btree_iter *iter, struct bkey_s_c_stripe s)
+{
+	struct btree_trans *trans = ctxt->trans;
+	struct bch_fs *c = trans->c;
+
+	/*
+	 * Same as get_old_stripe() -
+	 *
+	 * We require an intent lock here until we have the stripe open, for
+	 * exclusion with bch2_trigger_stripe() - which will delete empty
+	 * stripes if they're not open, but it can't actually open them:
+	 */
+	BUG_ON(!btree_node_intent_locked(btree_iter_path(trans, iter), 0));
+
+	if (!stripe_degraded(c, s.v))
+		return stripe_repair_nothing_to_do(trans, iter, s);
+
+	unsigned nr_data = s.v->nr_blocks - s.v->nr_redundant;
+	unsigned nr_live_data_blocks = 0;
+	for_each_data_block(i, nr_data)
+		nr_live_data_blocks += stripe_blockcount_get(s.v, i) != 0;
+
+	if (!nr_live_data_blocks)
+		return 0;
+
+	struct bch_devs_mask devs;
+	unsigned need_evacuate = stripe_repair_need_evacuate(c, s.v, nr_live_data_blocks, &devs);
+
+	return need_evacuate
+		? stripe_repair_narrow(ctxt, s, need_evacuate)
+		: stripe_repair_rebuild(ctxt, iter, s, devs, nr_live_data_blocks);
 }
