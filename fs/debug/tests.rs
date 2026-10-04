@@ -165,7 +165,7 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
     iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
         assert!(k.k.p.offset == i);
         i += 1;
-        Ok(ControlFlow::<()>::Continue(()))
+        Ok(ControlFlow::Continue(()))
     })?;
     assert_eq!(i, nr);
 
@@ -173,7 +173,7 @@ fn test_iterate(fs: &Fs, nr: u64) -> TestRet {
     iter.for_each_reverse(&trans, POS_MIN, |k| {
         i -= 1;
         assert!(k.k.p.offset == i);
-        Ok(ControlFlow::<()>::Continue(()))
+        Ok(ControlFlow::Continue(()))
     })?;
     assert_eq!(i, 0);
     Ok(())
@@ -196,7 +196,7 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
         assert_eq!(k.k.start_offset(), i);
         i = k.k.p.offset;
-        Ok(ControlFlow::<()>::Continue(()))
+        Ok(ControlFlow::Continue(()))
     })?;
     assert_eq!(i, nr);
 
@@ -204,7 +204,7 @@ fn test_iterate_extents(fs: &Fs, nr: u64) -> TestRet {
     iter.for_each_reverse(&trans, POS_MIN, |k| {
         assert!(k.k.p.offset == i);
         i = k.k.start_offset();
-        Ok(ControlFlow::<()>::Continue(()))
+        Ok(ControlFlow::Continue(()))
     })?;
     assert_eq!(i, 0);
     Ok(())
@@ -226,7 +226,7 @@ fn test_iterate_slots(fs: &Fs, nr: u64) -> TestRet {
     iter.for_each_max(&trans, pos(0, u64::MAX), |k| {
         assert!(k.k.p.offset == i);
         i += 2;
-        Ok(ControlFlow::<()>::Continue(()))
+        Ok(ControlFlow::Continue(()))
     })?;
     assert_eq!(i, nr * 2);
 
@@ -262,7 +262,7 @@ fn test_iterate_slots_extents(fs: &Fs, nr: u64) -> TestRet {
         assert_eq!(k.k.start_offset(), i + 8);
         assert_eq!({ k.k.size }, 8);
         i += 16;
-        Ok(ControlFlow::<()>::Continue(()))
+        Ok(ControlFlow::Continue(()))
     })?;
     assert_eq!(i, nr);
 
@@ -747,7 +747,7 @@ fn seq_insert(fs: &Fs, nr: u64) -> TestRet {
 fn seq_lookup(fs: &Fs, _nr: u64) -> TestRet {
     let trans = crate::btree_trans!(fs);
     let mut iter = BtreeIter::new(&trans, c::btree_id::xattrs, spos(0, 0, u32::MAX), BtreeIterFlags::empty());
-    iter.for_each_max(&trans, pos(0, u64::MAX), |_k| Ok(ControlFlow::<()>::Continue(())))?;
+    iter.for_each_max(&trans, pos(0, u64::MAX), |_k| Ok(ControlFlow::Continue(())))?;
     Ok(())
 }
 

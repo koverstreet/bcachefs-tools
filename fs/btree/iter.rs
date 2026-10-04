@@ -955,21 +955,20 @@ impl<'t> BtreeIter<'t> {
     /// @f, move on with @step.
     ///
     /// @f's result is two things, kept apart: whether its work succeeded
-    /// (`Result`), and whether to go on (`ControlFlow`). `Break(b)` ends the
-    /// loop with `Some(b)`; running off the end returns `None`. A transaction
-    /// restart, from the peek or from @f, retries the same position; any other
-    /// error is returned.
-    fn for_each_inner<B, P, S, F>(
+    /// (`Result`), and whether to go on (`ControlFlow`), as C's
+    /// fc_continue/fc_break. A transaction restart, from the peek or from @f,
+    /// retries the same position; any other error is returned.
+    fn for_each_inner<P, S, F>(
         &mut self,
         trans:    &BtreeTrans<'_>,
         mut peek: P,
         mut step: S,
         mut f:    F,
-    ) -> Result<Option<B>, BchError>
+    ) -> Result<(), BchError>
     where
         P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
         S: FnMut(*mut c::btree_iter) -> bool,
-        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<B>, BchError>,
+        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<()>, BchError>,
     {
         let raw = &mut self.raw as *mut c::btree_iter;
         loop {
@@ -978,7 +977,7 @@ impl<'t> BtreeIter<'t> {
             let k = match bkey_s_c_to_result(peek(raw)) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
-                Ok(None) => return Ok(None),
+                Ok(None) => return Ok(()),
                 Ok(Some(k)) => k,
             };
 
@@ -987,22 +986,22 @@ impl<'t> BtreeIter<'t> {
                 Err(e) => return Err(e),
                 Ok(flow) => {
                     t.verify_not_restarted();
-                    if let ControlFlow::Break(b) = flow {
-                        return Ok(Some(b));
+                    if flow.is_break() {
+                        return Ok(());
                     }
                 }
             }
 
             if !step(raw) {
-                return Ok(None);
+                return Ok(());
             }
         }
     }
 
-    pub fn for_each_max<B, F>(&mut self, trans: &BtreeTrans<'_>, end: bpos, f: F)
-        -> Result<Option<B>, BchError>
+    pub fn for_each_max<F>(&mut self, trans: &BtreeTrans<'_>, end: bpos, f: F)
+        -> Result<(), BchError>
     where
-        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<B>, BchError>,
+        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<()>, BchError>,
     {
         // Respect the iterator's SLOTS flag: a slots iterator must visit every
         // slot — including holes — via peek_slot, not skip ahead to the next
@@ -1027,9 +1026,9 @@ impl<'t> BtreeIter<'t> {
             f)
     }
 
-    pub fn for_each<B, F>(&mut self, trans: &BtreeTrans<'_>, f: F) -> Result<Option<B>, BchError>
+    pub fn for_each<F>(&mut self, trans: &BtreeTrans<'_>, f: F) -> Result<(), BchError>
     where
-        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<B>, BchError>,
+        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<()>, BchError>,
     {
         self.for_each_max(trans, SPOS_MAX, f)
     }
@@ -1039,20 +1038,20 @@ impl<'t> BtreeIter<'t> {
     /// isn't: breaking means it's done, so it must not have queued anything -
     /// that would be lost, and is a bug in @f. A restart from @f or the commit
     /// retries the key.
-    fn for_each_commit_inner<B, P, F>(
+    fn for_each_commit_inner<P, F>(
         &mut self,
         trans:    &BtreeTrans<'t>,
         disk_res: Option<&DiskReservation<'_>>,
         flags:    CommitOpts,
         mut peek: P,
         mut f:    F,
-    ) -> Result<Option<B>, BchError>
+    ) -> Result<(), BchError>
     where
         P: FnMut(*mut c::btree_iter) -> c::bkey_s_c,
         F: for<'a, 'k> FnMut(
             TransAttempt<'a, 't>,
             BkeySC<'k>,
-        ) -> Result<(TransAttempt<'a, 't>, ControlFlow<B>), TransError>,
+        ) -> Result<(TransAttempt<'a, 't>, ControlFlow<()>), TransError>,
     {
         let raw = &mut self.raw as *mut c::btree_iter;
         loop {
@@ -1061,7 +1060,7 @@ impl<'t> BtreeIter<'t> {
             let k = match bkey_s_c_to_result(peek(raw)) {
                 Err(e) if e.matches(bch_errcode::BCH_ERR_transaction_restart) => continue,
                 Err(e) => return Err(e),
-                Ok(None) => return Ok(None),
+                Ok(None) => return Ok(()),
                 Ok(Some(k)) => k,
             };
 
@@ -1069,10 +1068,10 @@ impl<'t> BtreeIter<'t> {
                 continue;
             };
 
-            if let ControlFlow::Break(b) = flow {
+            if flow.is_break() {
                 assert!(!t.has_updates(), "for_each_commit body broke with updates queued");
                 t.verify_not_restarted();
-                return Ok(Some(b));
+                return Ok(());
             }
 
             let Some(t) = retry_restart(t.commit(disk_res, flags))? else {
@@ -1082,30 +1081,30 @@ impl<'t> BtreeIter<'t> {
             t.verify_not_restarted();
 
             if !unsafe { c::bch2_btree_iter_advance(raw) } {
-                return Ok(None);
+                return Ok(());
             }
         }
     }
 
-    pub fn for_each_commit<B, F>(
+    pub fn for_each_commit<F>(
         &mut self,
         trans:    &BtreeTrans<'t>,
         disk_res: Option<&DiskReservation<'_>>,
         flags:    CommitOpts,
         f:        F,
-    ) -> Result<Option<B>, BchError>
+    ) -> Result<(), BchError>
     where
         F: for<'a, 'k> FnMut(
             TransAttempt<'a, 't>,
             BkeySC<'k>,
-        ) -> Result<(TransAttempt<'a, 't>, ControlFlow<B>), TransError>,
+        ) -> Result<(TransAttempt<'a, 't>, ControlFlow<()>), TransError>,
     {
         self.for_each_commit_inner(trans, disk_res, flags,
             |raw| unsafe { c::bch2_btree_iter_peek(raw) },
             f)
     }
 
-    pub fn for_each_max_commit<B, F>(
+    pub fn for_each_max_commit<F>(
         &mut self,
         trans:      &BtreeTrans<'t>,
         end:        bpos,
@@ -1113,12 +1112,12 @@ impl<'t> BtreeIter<'t> {
         disk_res:   Option<&DiskReservation<'_>>,
         flags:      CommitOpts,
         f:          F,
-    ) -> Result<Option<B>, BchError>
+    ) -> Result<(), BchError>
     where
         F: for<'a, 'k> FnMut(
             TransAttempt<'a, 't>,
             BkeySC<'k>,
-        ) -> Result<(TransAttempt<'a, 't>, ControlFlow<B>), TransError>,
+        ) -> Result<(TransAttempt<'a, 't>, ControlFlow<()>), TransError>,
     {
         self.for_each_commit_inner(trans, disk_res, flags,
             |raw| unsafe {
@@ -1131,10 +1130,10 @@ impl<'t> BtreeIter<'t> {
             f)
     }
 
-    pub fn for_each_reverse<B, F>(&mut self, trans: &BtreeTrans<'_>, min: bpos, f: F)
-        -> Result<Option<B>, BchError>
+    pub fn for_each_reverse<F>(&mut self, trans: &BtreeTrans<'_>, min: bpos, f: F)
+        -> Result<(), BchError>
     where
-        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<B>, BchError>,
+        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<()>, BchError>,
     {
         self.for_each_inner(trans,
             |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) },
@@ -1142,14 +1141,14 @@ impl<'t> BtreeIter<'t> {
             f)
     }
 
-    pub fn for_each_reverse_flags<B, F>(
+    pub fn for_each_reverse_flags<F>(
         &mut self,
         trans: &BtreeTrans<'_>,
         flags: BtreeIterFlags,
         f:     F,
-    ) -> Result<Option<B>, BchError>
+    ) -> Result<(), BchError>
     where
-        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<B>, BchError>,
+        F: for<'a> FnMut(BkeySC<'a>) -> Result<ControlFlow<()>, BchError>,
     {
         self.for_each_inner(trans,
             |raw| unsafe {
