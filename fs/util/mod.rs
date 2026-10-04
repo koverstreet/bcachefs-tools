@@ -1,3 +1,4 @@
+pub mod alloc;
 pub mod async_exec;
 pub mod bitmask;
 pub mod darray;

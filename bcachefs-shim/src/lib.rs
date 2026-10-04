@@ -13,6 +13,8 @@
 /// and `kernel`'s real one otherwise.
 pub use bcachefs_shim_macros::pin_data;
 
+pub mod alloc;
+
 pub mod c {
     #![allow(
         non_camel_case_types,
