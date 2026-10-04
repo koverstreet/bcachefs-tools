@@ -27,8 +27,9 @@
 //! makes that command raw again. Writes always target the exact key.
 //! Full semantics: doc/kvdb.md.
 //!
-//! Fixed-layout vals are fully editable; varint-packed (inode) and
-//! entry-stream (extent) vals only up to their fixed header. Updates run the
+//! Fields are set by the key type's set() (btree/bkey_methods.rs):
+//! fixed-layout vals and inodes (through bch_inode_unpacked) are fully
+//! editable, entry-stream (extent) vals only up to their fixed header. Updates run the
 //! normal triggers and key validation — per-key-invalid keys are (correctly)
 //! rejected; whether we want a validation-bypass mode for injecting those is
 //! an open question.
@@ -39,16 +40,17 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::{anyhow, bail, Result};
-use bcachefs_kernel::btree::bkey::{BkeyS, BkeySC, POS_MIN, SPOS_MAX};
+use bcachefs_kernel::btree::bkey::{BkeySC, POS_MIN, SPOS_MAX};
+use bcachefs_kernel::btree::bkey_methods;
 use bcachefs_kernel::btree::iter::{
     commit_do, lockrestart_do, BtreeIter, BtreeIterFlags, CommitFlags, CommitOpts,
-    TransError, UpdateTriggerFlags,
+    TransBkey, TransError, UpdateTriggerFlags,
 };
 use bcachefs_kernel::c;
 use bcachefs_kernel::errcode::{bch_errcode, BchError};
 use bcachefs_kernel::fs::Fs;
 use bcachefs_kernel::opt_set;
-use bcachefs_kernel::typeinfo;
+use bcachefs_kernel::typeinfo::{self, FieldTarget};
 use bch_bindgen::c::bch_degraded_actions;
 use clap::Parser;
 
@@ -174,9 +176,13 @@ One editing trap: snapshot IDs allocate descending from U32_MAX and the
 in-memory snapshot table is id-indexed; inserting a snapshot key with an
 unrealistically low id asks the table to span billions of entries and fails
 with ENOMEM_mark_snapshot. Use realistic, near-U32_MAX ids when fabricating
-snapshots. Varint-packed values (inodes) and entry-stream values (extents)
-are editable only up to their fixed header; fixed-layout values are fully
-editable.
+snapshots.
+
+Fixed-layout values are fully editable. Inodes are too, by their unpacked
+field names (bi_dir, bi_nlink, ...): an edit unpacks, sets and repacks, so
+it rewrites the inode as inode_v3, and can only produce what the packer
+does. Entry-stream values (extents) are editable only up to their fixed
+header.
 ";
 
 /// Btree read/write REPL (debug)
@@ -258,61 +264,14 @@ fn parse_pos(s: &str) -> Result<c::bpos> {
 }
 
 fn parse_int(s: &str) -> Result<u64> {
-    if let Some(h) = s.strip_prefix("0x") {
-        Ok(u64::from_str_radix(h, 16)?)
-    } else if s.starts_with('-') {
-        Ok(s.parse::<i64>()? as u64)
-    } else {
-        Ok(s.parse::<u64>()?)
-    }
+    bkey_methods::parse_int(s).ok_or_else(|| anyhow!("expected an integer, got '{s}'"))
 }
 
-/// An assignment value: numbers resolve immediately, anything else is an
-/// enum value name, resolved once the field (and so the key type) is known.
-enum FieldVal {
-    Int(u64),
-    Name(String),
-}
-
-fn parse_assign(s: &str) -> Result<(&str, FieldVal)> {
-    let (path, val) = s
-        .split_once('=')
-        .ok_or_else(|| anyhow!("expected field=value, got '{s}'"))?;
-    Ok((path, match parse_int(val) {
-        Ok(v) => FieldVal::Int(v),
-        Err(_) => FieldVal::Name(val.to_string()),
-    }))
-}
-
-/// The one piece of schema kvdb owns: which fields hold enum codewords. The
-/// name<->value tables come from the x-macro imports (fs/codegen.rs); this
-/// goes away when the format has a real schema:
-fn field_enum(type_: u8, path: &str) -> Option<&'static [(&'static str, u64)]> {
-    use bcachefs_kernel::snapshot_states::*;
-
-    match (type_ as u32, path) {
-        (t, "state") if t == c::bch_bkey_type::KEY_TYPE_snapshot.0 =>
-            Some(SNAPSHOT_STATE_VALUES),
-        (t, "state") if t == c::bch_bkey_type::KEY_TYPE_subvolume.0 =>
-            Some(SUBVOLUME_STATE_VALUES),
-        _ => None,
-    }
-}
-
-fn field_val(type_: u8, path: &str, v: &FieldVal) -> Result<u64> {
-    match v {
-        FieldVal::Int(v) => Ok(*v),
-        FieldVal::Name(n) => {
-            let vals = field_enum(type_, path)
-                .ok_or_else(|| anyhow!("{path}: expected integer, got '{n}'"))?;
-            vals.iter()
-                .find(|(name, _)| name == n)
-                .map(|(_, v)| *v)
-                .ok_or_else(|| anyhow!("{path}: unknown value '{n}' (valid: {})",
-                                       vals.iter().map(|(n, _)| *n)
-                                           .collect::<Vec<_>>().join(", ")))
-        }
-    }
+/// `field=value`, both as text: the value is parsed by the field's key type
+/// (TransBkey::set()).
+fn parse_assign(s: &str) -> Result<(&str, &str)> {
+    s.split_once('=')
+        .ok_or_else(|| anyhow!("expected field=value, got '{s}'"))
 }
 
 /// The bcachefs to_text methods are the faithful rendering of the on-disk
@@ -393,10 +352,6 @@ fn render_key_fields(k: &BkeySC<'_>, paths: &[&str]) -> Result<String> {
     Ok(out)
 }
 
-/// A resolved assignment target: a field, or a declared bit range within one
-/// (`no_keys`, `flags.subvol`).
-type FieldTarget = (typeinfo::FieldRef, Option<&'static typeinfo::BitmaskField>);
-
 /// Resolve a field-or-bit path against a key type's val struct.
 fn resolve_field(type_: u8, path: &str) -> Result<FieldTarget> {
     let info = typeinfo::bkey_val_info(type_ as u32)
@@ -404,15 +359,23 @@ fn resolve_field(type_: u8, path: &str) -> Result<FieldTarget> {
     typeinfo::resolve_with_bits(info, path).map_err(|e| anyhow!("{e}"))
 }
 
-fn write_field(
-    val: &mut [u8],
-    (r, bm): &FieldTarget,
-    v: u64,
-) -> std::result::Result<(), typeinfo::AccessError> {
-    match bm {
-        Some(bm) => typeinfo::write_bits(val, r, bm, v),
-        None => typeinfo::write_scalar(val, r, v),
+/// Room for whatever set() grows a value to: the largest key there is.
+const BKEY_VAL_U64S_MAX: usize = u8::MAX as usize - BKEY_U64S;
+
+/// Apply @assigns to @k, reporting the first failure through @user_err.
+fn set_fields(
+    fs:       &Fs,
+    k:        &mut TransBkey<'_, '_>,
+    assigns:  &[(&str, &str)],
+    user_err: &mut Option<anyhow::Error>,
+) -> Result<(), TransError> {
+    for (field, val) in assigns {
+        if let Err(e) = k.set(fs, field, val) {
+            *user_err = Some(anyhow!("{e}"));
+            return Err(no_key_err());
+        }
     }
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -666,7 +629,7 @@ fn cmd_update(
     fs: &Fs,
     btree: c::btree_id,
     pos: c::bpos,
-    assigns: &[(&str, FieldVal)],
+    assigns: &[(&str, &str)],
 ) -> Result<String> {
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
@@ -691,43 +654,12 @@ fn cmd_update(
                 return Err(no_key_err());
             };
 
-            // Byte extent the assignments need; the value may legally be
-            // shorter than the current struct (older format version) - grow
-            // it, zero-filled, if a written field lies beyond the end. The
-            // key type is known now, so enum value names resolve here too:
-            let mut need = 0usize;
-            let mut resolved = Vec::with_capacity(assigns.len());
-            for (path, fv) in assigns {
-                match resolve_field(k.k.type_, path) {
-                    Ok((r, _)) => need = need.max(r.offset + r.len),
-                    Err(e) => {
-                        user_err = Some(e);
-                        return Err(no_key_err());
-                    }
-                }
-                match field_val(k.k.type_, path, fv) {
-                    Ok(v) => resolved.push((*path, v)),
-                    Err(e) => {
-                        user_err = Some(e);
-                        return Err(no_key_err());
-                    }
-                }
-            }
-
-            let val_u64s = (k.k.u64s as usize - BKEY_U64S).max(need.div_ceil(8));
-            let mut new = t.bkey_reassemble_resized(k, val_u64s)
+            // A copy of the key, as it is, in a buffer set() can grow it into:
+            let mut new = t.bkey_reassemble_resized(k, BKEY_VAL_U64S_MAX)
                 .map_err(TransError::from)?;
+            new.k_mut().u64s = k.k.u64s;
 
-            let type_ = new.k().type_;
-            let mut val_view = BkeyS::from(new.k_i_mut());
-            let val = val_view.val_bytes_mut();
-            for (path, v) in &resolved {
-                let target = resolve_field(type_, path).expect("resolved above");
-                if let Err(e) = write_field(val, &target, *v) {
-                    user_err = Some(anyhow!("{path}: {e}"));
-                    return Err(no_key_err());
-                }
-            }
+            set_fields(fs, &mut new, assigns, &mut user_err)?;
 
             t.update(&mut iter, new, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE)
         },
@@ -744,25 +676,11 @@ fn cmd_set(
     btree: c::btree_id,
     pos: c::bpos,
     type_name: &str,
-    assigns: &[(&str, FieldVal)],
+    assigns: &[(&str, &str)],
     in_snapshot: bool,
 ) -> Result<String> {
     let ti = typeinfo::bkey_type_info_by_name(type_name)
         .ok_or_else(|| anyhow!("unknown key type '{type_name}'"))?;
-
-    // The value needs the struct's fixed size, extended by whatever the
-    // assignments reach - vartail elements (damage errors[n]) lie beyond it:
-    let mut need = ti.info.size;
-    for (path, _) in assigns {
-        let (r, _) = resolve_field(ti.type_ as u8, path)?;
-        need = need.max(r.offset + r.len);
-    }
-    let val_u64s = need.div_ceil(8);
-
-    let assigns = assigns
-        .iter()
-        .map(|(path, fv)| Ok((*path, field_val(ti.type_ as u8, path, fv)?)))
-        .collect::<Result<Vec<(&str, u64)>>>()?;
 
     let trans = bcachefs_kernel::btree_trans!(fs);
     let mut user_err: Option<anyhow::Error> = None;
@@ -795,24 +713,14 @@ fn cmd_set(
             iter.peek_max_flags(SPOS_MAX, BtreeIterFlags::SLOTS)
                 .map_err(TransError::from)?;
 
-            let mut new = t.bkey_alloc_init(val_u64s, ti.type_ as u8, pos)
+            // A zeroed value of the struct's fixed size, in a buffer set()
+            // can grow it into - vartail elements (damage errors[n]) lie
+            // beyond the struct:
+            let mut new = t.bkey_alloc_init(BKEY_VAL_U64S_MAX, ti.type_ as u8, pos)
                 .map_err(TransError::from)?;
+            new.k_mut().u64s = (BKEY_U64S + ti.info.size.div_ceil(8)) as u8;
 
-            let mut val_view = BkeyS::from(new.k_i_mut());
-            let val = val_view.val_bytes_mut();
-            for (path, v) in &assigns {
-                let target = match typeinfo::resolve_with_bits(ti.info, path) {
-                    Ok(t) => t,
-                    Err(e) => {
-                        user_err = Some(anyhow!("{e}"));
-                        return Err(no_key_err());
-                    }
-                };
-                if let Err(e) = write_field(val, &target, *v) {
-                    user_err = Some(anyhow!("{path}: {e}"));
-                    return Err(no_key_err());
-                }
-            }
+            set_fields(fs, &mut new, assigns, &mut user_err)?;
 
             t.update(&mut iter, new, update_flags)
         },
@@ -867,7 +775,7 @@ fn cmd_sb_set(fs: &Fs, dev: Option<u32>, field: &str, v: u64) -> Result<String> 
         Some(ca) => unsafe { &mut (*ca.as_mut_ptr()).disk_sb }.sb_bytes_mut(),
         None     => unsafe { fs.disk_sb_mut() }.sb_bytes_mut(),
     };
-    write_field(buf, &target, v).map_err(|e| anyhow!("{field}: {e}"))?;
+    typeinfo::write(buf, &target, v).map_err(|e| anyhow!("{field}: {e}"))?;
 
     // Only --rw (started) and --nostart (opened will_not_start, which makes
     // no version decisions to persist) get here - see the check in the
@@ -1177,10 +1085,7 @@ fn h_sb(repl: &mut Repl, cmd: &Cmd, args: &[&str]) -> Result<ControlFlow<(), Str
                        reopen with --rw, or --nostart for sb-only edits");
             }
             let (field, val) = parse_assign(assign)?;
-            let FieldVal::Int(v) = val else {
-                bail!("sb set: expected an integer value");
-            };
-            cmd_sb_set(repl.fs.offline()?, dev, field, v)?
+            cmd_sb_set(repl.fs.offline()?, dev, field, parse_int(val)?)?
         }
         _ => bail!("usage: {}", cmd.usage),
     }))
