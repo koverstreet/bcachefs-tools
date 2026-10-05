@@ -812,6 +812,11 @@ void bch2_bkey_propagate_incompressible(const struct bch_fs *c, struct bkey_i *d
 }
 
 
+/*
+ * What a copy already on @dev is worth: nothing if the device is gone or being
+ * evacuated. For what a new copy written there would be worth,
+ * bch2_dev_rw_durability().
+ */
 unsigned bch2_dev_durability(struct bch_fs *c, unsigned dev)
 {
 	guard(rcu)();

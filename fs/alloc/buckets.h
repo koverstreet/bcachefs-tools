@@ -285,12 +285,21 @@ static inline bool bch2_dev_is_rw(struct bch_dev *ca)
 }
 
 /*
+ * What a new copy written to @ca would be worth: nothing unless it's rw. For
+ * what a copy already there is worth, bch2_dev_durability().
+ */
+static inline unsigned bch2_dev_rw_durability(struct bch_dev *ca)
+{
+	return bch2_dev_is_rw(ca) ? ca->mi.durability : 0;
+}
+
+/*
  * Everything that divides c->capacity.capacity up per device has to agree with
  * bch2_recalc_capacity() about which devices are in the sum.
  */
 static inline bool dev_has_capacity(struct bch_dev *ca)
 {
-	return bch2_dev_is_rw(ca) && ca->mi.durability;
+	return bch2_dev_rw_durability(ca) != 0;
 }
 
 static inline u64 dev_capacity_sectors(struct bch_dev *ca)
