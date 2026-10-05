@@ -2,6 +2,7 @@
 
 use crate::alloc::buckets::DiskReservation;
 use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, POS_MIN, SPOS_MAX};
+use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
     CommitFlags, CommitOpts, TransAttempt, TransError, UpdateTriggerFlags,
@@ -641,6 +642,56 @@ fn test_snapshots(fs: &Fs, _nr: u64) -> TestRet {
     test_snapshot_filter(fs, snapids[0], snapids[1])
 }
 
+/// Fill @buf with a key of its size, value words counting up from @seed.
+fn bkey_buf_test_key(buf: &mut [u64], seed: u64) -> BkeySC<'_> {
+    const BKEY_U64S: usize = core::mem::size_of::<c::bkey>() / 8;
+
+    let u64s = buf.len();
+    for (i, v) in buf[BKEY_U64S..].iter_mut().enumerate() {
+        *v = seed + i as u64;
+    }
+
+    let k = unsafe { &mut *(buf.as_mut_ptr() as *mut c::bkey_i) };
+    unsafe { c::bkey_init(&mut k.k) };
+    k.k.u64s = u64s as u8;
+    k.k.p.offset = seed;
+    BkeySC::from(&*k)
+}
+
+fn bkey_buf_holds(b: &BkeyBuf, k: BkeySC<'_>) -> bool {
+    let held = b.sc();
+    held.k.u64s == k.k.u64s && held.k.p.offset == k.k.p.offset &&
+        held.val_bytes() == k.val_bytes()
+}
+
+/// BkeyBuf through both of its buffers - a key that fits in the struct, then
+/// one that needs the heap - moved after each copy, which the C bkey_buf,
+/// pointing into itself, couldn't survive.
+fn test_bkey_buf(_fs: &Fs, _nr: u64) -> TestRet {
+    let mut small = [0u64; 12];
+    let mut big = [0u64; 64];
+
+    let mut b = BkeyBuf::new();
+    assert!(b.sc().is_deleted());
+
+    let k = bkey_buf_test_key(&mut small, 100);
+    b.reassemble(k);
+    let b = core::hint::black_box(b);
+    assert!(bkey_buf_holds(&b, k));
+
+    let mut b = b;
+    let k = bkey_buf_test_key(&mut big, 1000);
+    b.reassemble(k);
+    let mut b = core::hint::black_box(b);
+    assert!(bkey_buf_holds(&b, k));
+
+    // Back to a small key, from the heap:
+    let k = bkey_buf_test_key(&mut small, 100);
+    b.reassemble(k);
+    assert!(bkey_buf_holds(&b, k));
+    Ok(())
+}
+
 fn test_rand() -> u64 {
     random_u64_below(u64::MAX)
 }
@@ -814,6 +865,7 @@ fn lookup_test(testname: &CStr) -> Option<(&'static [u8], TestFn)> {
         (b"test_inject_stripe_ptr_mismatch", test_inject_stripe_ptr_mismatch),
         (b"test_stripe_open_invalidates_update", test_stripe_open_invalidates_update),
         (b"test_snapshots", test_snapshots),
+        (b"test_bkey_buf", test_bkey_buf),
     ];
 
     TESTS.iter().copied().find(|(name, _)| testname.to_bytes() == *name)
