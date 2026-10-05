@@ -694,7 +694,8 @@ struct btree_trans {
 	 * returns trans_was_restarted() (e.g. fsck counting i_sectors, which
 	 * spans too many extents to be a single transaction). The begin can't
 	 * see the restart that's about to be returned, so the caller vouches
-	 * for it here.
+	 * for it here. Set it with CLASS(trans_may_drop_updates), which
+	 * restores it at the end of the scope.
 	 */
 	bool			begin_may_drop_updates:1;
 	bool			has_interior_updates:1;

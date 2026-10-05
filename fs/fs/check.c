@@ -2232,9 +2232,8 @@ static int check_subdir_dirents_count(struct btree_trans *trans, struct inode_wa
 	 * begins from the dropped-updates warning.
 	 */
 	u32 restart_count = trans->restart_count;
-	trans->begin_may_drop_updates = true;
+	CLASS(trans_may_drop_updates, may_drop)(trans);
 	int ret = check_subdir_count_notnested(trans, w);
-	trans->begin_may_drop_updates = false;
 
 	return ret ?: trans_was_restarted(trans, restart_count);
 }
@@ -2671,9 +2670,8 @@ again:
 		 * this post-loop flush the restart has no handler and faults
 		 * recovery (it broke every transaction-restart-injection test).
 		 */
-		trans->begin_may_drop_updates = true;
+		CLASS(trans_may_drop_updates, may_drop)(trans);
 		ret = check_subdir_count_notnested(trans, &dir);
-		trans->begin_may_drop_updates = false;
 	}
 
 	if (!ret && need_second_pass && !did_second_pass) {

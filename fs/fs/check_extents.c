@@ -103,9 +103,8 @@ static int check_i_sectors(struct btree_trans *trans, struct inode_walker *w)
 	 * those begins from the dropped-updates warning for the duration.
 	 */
 	u32 restart_count = trans->restart_count;
-	trans->begin_may_drop_updates = true;
+	CLASS(trans_may_drop_updates, may_drop)(trans);
 	int ret = check_i_sectors_notnested(trans, w);
-	trans->begin_may_drop_updates = false;
 
 	return ret ?: trans_was_restarted(trans, restart_count);
 }
@@ -471,16 +470,15 @@ int bch2_check_extents(struct bch_fs *c)
 		/*
 		 * Final flush of the last inode's i_sectors. The inner
 		 * fsck_write_inode() commits must be exempt from the trans_begin
-		 * dropped-updates warning, so set begin_may_drop_updates as
-		 * check_i_sectors() does - but call _notnested directly, NOT the
+		 * dropped-updates warning, so exempt them as check_i_sectors()
+		 * does - but call _notnested directly, NOT the
 		 * nested check_i_sectors(): that returns trans_was_restarted()
 		 * for an in-loop caller to retry on, and at this post-loop flush
 		 * the restart has no handler and faults recovery (it broke every
 		 * transaction-restart-injection test).
 		 */
-		trans->begin_may_drop_updates = true;
+		CLASS(trans_may_drop_updates, may_drop)(trans);
 		ret = check_i_sectors_notnested(trans, &w);
-		trans->begin_may_drop_updates = false;
 	}
 	return ret;
 }

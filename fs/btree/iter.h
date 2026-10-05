@@ -1156,6 +1156,31 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 })
 
 /*
+ * Exempt bch2_trans_begin() from the dropped-updates warning for a scope (see
+ * begin_may_drop_updates), restoring the previous value on exit, so exemptions
+ * nest: an inner one ending doesn't end the outer.
+ */
+struct trans_may_drop_updates {
+	struct btree_trans	*trans;
+	bool			old;
+};
+
+#define trans_may_drop_updates_class_init(_trans)				\
+({										\
+	struct trans_may_drop_updates t = {					\
+		.trans	= _trans,						\
+		.old	= (_trans)->begin_may_drop_updates,			\
+	};									\
+	(_trans)->begin_may_drop_updates = true;				\
+	t;									\
+})
+
+DEFINE_CLASS(trans_may_drop_updates, struct trans_may_drop_updates,
+	     _T.trans->begin_may_drop_updates = _T.old,
+	     trans_may_drop_updates_class_init(trans),
+	     struct btree_trans *trans)
+
+/*
  * nested_lockrestart_do(), nested_commit_do():
  *
  * These are like lockrestart_do() and commit_do(), with two differences:
@@ -1170,7 +1195,7 @@ static inline int btree_trans_too_many_iters(struct btree_trans *trans)
 	int _ret2;							\
 									\
 	_restart_count = _orig_restart_count = (_trans)->restart_count;	\
-	(_trans)->begin_may_drop_updates = true;			\
+	CLASS(trans_may_drop_updates, _may_drop)(_trans);		\
 									\
 	while (bch2_err_matches(_ret2 = (_do), BCH_ERR_transaction_restart))\
 		_restart_count = bch2_trans_begin(_trans);		\
