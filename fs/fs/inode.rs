@@ -5,7 +5,7 @@ use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{
-    bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt, TransError,
+    bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitOpts, TransAttempt, TransRet,
 };
 use crate::{btree, btree_id, printbuf_to_formatter};
 use core::ffi::CStr;
@@ -248,7 +248,7 @@ impl c::bch_inode_unpacked {
 pub fn fsck_write<'a, 't>(
     t:     TransAttempt<'a, 't>,
     inode: &mut c::bch_inode_unpacked,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let ret = unsafe { c::__bch2_fsck_write_inode(t.raw(), inode) };
     t.result(ret)
 }
@@ -274,7 +274,7 @@ pub fn peek<'a, 't>(
     inode: &mut c::bch_inode_unpacked,
     inum:  c::subvol_inum,
     flags: BtreeIterFlags,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let ret = unsafe {
         c::__bch2_inode_peek(
             t.raw(),
@@ -292,7 +292,7 @@ pub fn write<'a, 't>(
     t:     TransAttempt<'a, 't>,
     iter:  &mut BtreeIter<'t>,
     inode: &mut c::bch_inode_unpacked,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let ret = unsafe {
         c::bch2_inode_write(t.raw(), iter.raw_mut(), inode)
     };

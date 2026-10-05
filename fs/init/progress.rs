@@ -4,7 +4,7 @@
 //! printed to dmesg as the walk goes, for work that has nowhere better to
 //! report progress.
 
-use crate::btree::iter::{BtreeIter, TransAttempt, TransError};
+use crate::btree::iter::{BtreeIter, TransAttempt, TransRet};
 use crate::c;
 use crate::fs::Fs;
 use core::ffi::CStr;
@@ -40,7 +40,7 @@ impl<'f> Progress<'f> {
         &self,
         t:    TransAttempt<'a, 't>,
         iter: &mut BtreeIter<'t>,
-    ) -> Result<TransAttempt<'a, 't>, TransError> {
+    ) -> TransRet<'a, 't> {
         let ret = unsafe { c::bch2_progress_update_iter(t.raw(), self.raw, iter.raw_mut()) };
         t.result(ret)
     }

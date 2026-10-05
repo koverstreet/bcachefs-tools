@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0
 
-use crate::btree::iter::{BtreeTrans, TransAttempt, TransError};
+use crate::btree::iter::{BtreeTrans, TransAttempt, TransRet};
 use crate::c;
 use crate::check::SnapshotsSeen;
 use crate::errcode::{ret_to_result_void, BchError};
@@ -54,7 +54,7 @@ pub fn link_trans<'a, 't>(
     inum:     c::subvol_inum,
     inode:    &mut c::bch_inode_unpacked,
     name:     &c::qstr,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let ret = unsafe {
         c::bch2_link_trans(t.raw(), dir_inum, dir, inum, inode, name)
     };
@@ -69,7 +69,7 @@ pub fn unlink_trans<'a, 't>(
     inode:    &mut c::bch_inode_unpacked,
     name:     &c::qstr,
     deleting: bool,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let ret = unsafe {
         c::bch2_unlink_trans(t.raw(), dir_inum, dir, target, inode, name, deleting)
     };
@@ -91,7 +91,7 @@ pub fn rename_trans<'a, 't>(
     mode:           c::bch_rename_mode,
     src_opt_change: &mut c::inode_opt_change,
     dst_opt_change: &mut c::inode_opt_change,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let ret = unsafe {
         c::bch2_rename_trans(
             t.raw(),
@@ -136,7 +136,7 @@ pub fn create_trans<'a, 't>(
     rdev:         c::dev_t,
     snapshot_src: c::subvol_inum,
     flags:        u32,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let ret = unsafe {
         c::bch2_create_trans(
             t.raw(),

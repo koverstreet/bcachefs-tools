@@ -5,7 +5,7 @@ use crate::btree::bkey::{pos, spos, BkeyCookie, BkeyS, BkeySC, POS_MIN, SPOS_MAX
 use crate::btree::bkey_buf::BkeyBuf;
 use crate::btree::iter::{
     commit_do, lockrestart_do, trans_commit_do, BtreeIter, BtreeIterFlags, BtreeNodeIter,
-    CommitFlags, CommitOpts, TransAttempt, TransError, UpdateTriggerFlags,
+    CommitFlags, CommitOpts, TransAttempt, TransRet, UpdateTriggerFlags,
 };
 use crate::data::extents::{
     bkey_extent_entries_mut, bkey_extent_entries_sc, bkey_ptrs_mut, entry_stripe_ptr_mut,
@@ -402,7 +402,7 @@ fn test_extent_create_dup(fs: &Fs, inum: u64) -> TestRet {
 fn test_btree_ptr_stale_dirty_key<'a, 't>(
     t: TransAttempt<'a, 't>,
     k: BkeySC<'_>,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let mut iter = BtreeIter::new(
         t.trans(),
         c::btree_id::extents,

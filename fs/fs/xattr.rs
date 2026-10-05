@@ -2,7 +2,7 @@
 
 use core::ffi::{c_void, CStr};
 
-use crate::btree::iter::{TransAttempt, TransError};
+use crate::btree::iter::{TransAttempt, TransRet};
 use crate::c;
 use crate::str_hash::HashTable;
 
@@ -30,7 +30,7 @@ pub fn set<'a, 't>(
     val:   &[u8],
     typ:   i32,
     flags: i32,
-) -> Result<TransAttempt<'a, 't>, TransError> {
+) -> TransRet<'a, 't> {
     let ret = unsafe {
         c::bch2_xattr_set(
             t.raw(),

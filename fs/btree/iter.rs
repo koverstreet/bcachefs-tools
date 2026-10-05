@@ -218,6 +218,10 @@ pub enum TransError {
 
 pub type TransResult<'a, 't, T = ()> = Result<(TransAttempt<'a, 't>, T), TransError>;
 
+/// What a transaction step - a commit loop body, or a helper it calls -
+/// returns: the attempt, to carry on with, or why not.
+pub type TransRet<'a, 't> = Result<TransAttempt<'a, 't>, TransError>;
+
 impl From<BchError> for TransError {
     fn from(error: BchError) -> Self {
         if error.matches(bch_errcode::BCH_ERR_transaction_restart) {
@@ -1020,7 +1024,7 @@ pub fn commit_do<'t, F>(
     mut f: F,
 ) -> Result<(), BchError>
 where
-    F: for<'a> FnMut(TransAttempt<'a, 't>) -> Result<TransAttempt<'a, 't>, TransError>,
+    F: for<'a> FnMut(TransAttempt<'a, 't>) -> TransRet<'a, 't>,
 {
     lockrestart_do(trans, |t| {
         let t = f(t)?;
@@ -1039,7 +1043,7 @@ pub fn trans_commit_do<'t, F>(
     f: F,
 ) -> Result<(), BchError>
 where
-    F: for<'a> FnMut(TransAttempt<'a, 't>) -> Result<TransAttempt<'a, 't>, TransError>,
+    F: for<'a> FnMut(TransAttempt<'a, 't>) -> TransRet<'a, 't>,
 {
     let trans = crate::btree_trans!(fs);
     commit_do(&trans, disk_res, flags, f)
@@ -1267,7 +1271,7 @@ impl<'t> BtreeIter<'t> {
     pub fn traverse<'a>(
         &mut self,
         t: TransAttempt<'a, 't>,
-    ) -> Result<TransAttempt<'a, 't>, TransError> {
+    ) -> TransRet<'a, 't> {
         let ret = unsafe { c::bch2_btree_iter_traverse(self.raw_mut()) };
         t.result(ret)
     }
@@ -1444,7 +1448,7 @@ impl<'t> BtreeIter<'t> {
             TransAttempt<'a, 't>,
             &mut BtreeIter<'t>,
             BkeySC<'k>,
-        ) -> Result<TransAttempt<'a, 't>, TransError>,
+        ) -> TransRet<'a, 't>,
     {
         loop {
             let t = trans.begin();
@@ -1499,7 +1503,7 @@ impl<'t> BtreeIter<'t> {
             TransAttempt<'a, 't>,
             &mut BtreeIter<'t>,
             BkeySC<'k>,
-        ) -> Result<TransAttempt<'a, 't>, TransError>,
+        ) -> TransRet<'a, 't>,
     {
         self.for_each_commit_inner(trans, disk_res, flags,
             |raw| unsafe { c::bch2_btree_iter_peek(raw) },
@@ -1521,7 +1525,7 @@ impl<'t> BtreeIter<'t> {
             TransAttempt<'a, 't>,
             &mut BtreeIter<'t>,
             BkeySC<'k>,
-        ) -> Result<TransAttempt<'a, 't>, TransError>,
+        ) -> TransRet<'a, 't>,
     {
         self.for_each_commit_inner(trans, disk_res, flags,
             |raw| unsafe { c::bch2_btree_iter_peek_prev_min(raw, min) },
@@ -1543,7 +1547,7 @@ impl<'t> BtreeIter<'t> {
             TransAttempt<'a, 't>,
             &mut BtreeIter<'t>,
             BkeySC<'k>,
-        ) -> Result<TransAttempt<'a, 't>, TransError>,
+        ) -> TransRet<'a, 't>,
     {
         self.for_each_commit_inner(trans, disk_res, flags,
             |raw| unsafe {
