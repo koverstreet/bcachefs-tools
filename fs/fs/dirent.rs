@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0
 
 use crate::btree::bkey::BkeySC;
-use crate::btree::iter::{BtreeIter, BtreeTrans, TransAttempt, TransBkey};
+use crate::btree::iter::{
+    BtreeIter, BtreeIterFlags, BtreeTrans, TransAttempt, TransBkey, TransRet, UpdateTriggerFlags,
+};
 use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
@@ -160,6 +162,38 @@ pub fn init_name(
                                  new.k_i_mut() as *mut c::bkey_i as *mut c::bkey_i_dirent,
                                  hash_info, &name, core::ptr::null())
     })
+}
+
+/// Create dirent @name in directory @dir, in subvolume @subvol at @snapshot,
+/// pointing at @target: as bch2_dirent_create_snapshot(). Where it went is
+/// returned in @dir_offset.
+#[allow(clippy::too_many_arguments)]
+pub fn create_snapshot<'a, 't>(
+    t:            TransAttempt<'a, 't>,
+    subvol:       u32,
+    snapshot:     u32,
+    dir:          &mut c::bch_inode_unpacked,
+    d_type:       u8,
+    name:         &[u8],
+    target:       DirentTarget,
+    dir_offset:   &mut u64,
+    iter_flags:   BtreeIterFlags,
+    update_flags: UpdateTriggerFlags,
+) -> TransRet<'a, 't> {
+    // The C takes the subvolume or inode number, and gets which from @d_type;
+    // a subvolume dirent's parent is @subvol.
+    let target = match target {
+        DirentTarget::Subvol { child, .. } => child as u64,
+        DirentTarget::Inode(inum)          => inum,
+    };
+    let name = qstr(name);
+    let ret = unsafe {
+        c::bch2_dirent_create_snapshot(t.raw(), subvol, snapshot, dir, d_type, &name, target,
+                                       dir_offset,
+                                       c::btree_iter_update_trigger_flags(iter_flags.bits() |
+                                                                          update_flags.bits()))
+    };
+    t.result(ret)
 }
 
 /// A new dirent in directory @dir named @name, of type @d_type, pointing at

@@ -3,9 +3,11 @@
 use crate::c;
 use crate::errcode::{self, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::dirent::DirentTarget;
 use crate::btree::bkey::BkeySC;
 use crate::btree::iter::{
     bkey_s_c_to_result, BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransRet,
+    UpdateTriggerFlags,
 };
 use crate::{btree, btree_id, printbuf_to_formatter};
 use core::ffi::CStr;
@@ -137,6 +139,40 @@ pub fn get_dirent<'i>(
     Ok(bkey_s_c_to_result(d.into())?.expect("a dirent lookup returns a key or an error"))
 }
 
+/// Some version of @inum, in any snapshot: as bch2_inode_find_any_snapshot().
+pub fn find_any_snapshot(trans: &BtreeTrans<'_>, inum: u64) -> Result<c::bch_inode_unpacked, BchError> {
+    let mut inode = c::bch_inode_unpacked::default();
+    ret_to_result(unsafe { c::bch2_inode_find_any_snapshot(trans.raw(), inum, &mut inode) })?;
+    Ok(inode)
+}
+
+/// Give @inode a free inode number in @snapshot - below 2^32, with @is_32bit -
+/// and queue its creation through @iter: as bch2_inode_create().
+pub fn create<'a, 't>(
+    t:        TransAttempt<'a, 't>,
+    iter:     &mut BtreeIter<'t>,
+    inode:    &mut c::bch_inode_unpacked,
+    snapshot: u32,
+    is_32bit: bool,
+) -> TransRet<'a, 't> {
+    let ret = unsafe { c::bch2_inode_create(t.raw(), iter.raw_mut(), inode, snapshot, is_32bit) };
+    t.result(ret)
+}
+
+/// As write(), with update flags: as bch2_inode_write_flags().
+pub fn write_flags<'a, 't>(
+    t:     TransAttempt<'a, 't>,
+    iter:  &mut BtreeIter<'t>,
+    inode: &mut c::bch_inode_unpacked,
+    flags: UpdateTriggerFlags,
+) -> TransRet<'a, 't> {
+    let ret = unsafe {
+        c::bch2_inode_write_flags(t.raw(), iter.raw_mut(), inode,
+                                  c::btree_iter_update_trigger_flags(flags.bits()))
+    };
+    t.result(ret)
+}
+
 /// The oldest version of @inum that a key in @snapshot sees - the version
 /// all the others take their hash info from: as
 /// bch2_inode_find_oldest_snapshot().
@@ -224,6 +260,32 @@ impl c::bch_inode_unpacked {
 
     pub fn is_dir(&self) -> bool {
         self.bi_mode as u32 & c::S_IFMT == c::S_IFDIR
+    }
+
+    /// The dirent type naming it: as inode_d_type().
+    pub fn d_type(&self) -> u8 {
+        if self.bi_subvol != 0 {
+            c::DT_SUBVOL as u8
+        } else {
+            ((self.bi_mode >> 12) & 15) as u8
+        }
+    }
+
+    /// What a dirent naming it points at: a subvolume root by subvolume,
+    /// linked from its parent subvolume; anything else by inode number.
+    pub fn dirent_target(&self) -> DirentTarget {
+        if self.bi_subvol != 0 {
+            DirentTarget::Subvol { child: self.bi_subvol, parent: self.bi_parent_subvol }
+        } else {
+            DirentTarget::Inode(self.bi_inum)
+        }
+    }
+
+    /// Whether it counts towards its parent's link count: a directory, but not
+    /// a subvolume root, which is named by a DT_SUBVOL dirent: as
+    /// is_subdir_for_nlink().
+    pub fn is_subdir_for_nlink(&self) -> bool {
+        self.is_dir() && self.bi_subvol == 0
     }
 
     /// The str_hash type its dirents or xattrs are hashed with: C's
