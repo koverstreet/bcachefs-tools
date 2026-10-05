@@ -715,6 +715,9 @@ static int scrub_stripe_block(struct moving_context *ctxt, struct bch_dev *ca,
 	bch2_trans_unlock(trans);
 
 	s64 bad = bch2_ec_scrub_block(c, buf, block);
+
+	try(bch2_trans_relock(trans));
+
 	if (bad <= 0) {
 		/*
 		 * Couldn't read it: an IO error is counted by the device, and a
