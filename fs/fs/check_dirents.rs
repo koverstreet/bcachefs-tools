@@ -505,7 +505,8 @@ fn check_dirent<'a, 't>(
         t
     };
 
-    let Some(w) = st.dir.walk(trans, iter, k)? else { return Ok(t) };
+    let (t, w) = st.dir.walk(t, iter, k)?;
+    let Some(w) = w else { return Ok(t) };
     if w.first_this_inode {
         st.hash_info = str_hash::hash_info_init(fs, w.inode)?;
     }

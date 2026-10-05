@@ -404,7 +404,7 @@ fn check_extent<'a, 't>(
 
     st.s.update(fs, c::btree_id::extents, k.k.p)?;
 
-    st.w.walk(trans, iter, k)?;
+    t = st.w.walk(t, iter, k)?.0;
 
     if k.key_type() != c::bch_bkey_type::KEY_TYPE_whiteout {
         let (t2, fixed) = check_overlapping_extents(t, &st.res, &mut st.s, &mut st.extent_ends, k)?;

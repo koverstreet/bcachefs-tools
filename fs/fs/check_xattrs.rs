@@ -94,7 +94,8 @@ fn check_xattr<'a, 't>(
 
     st.s.update(fs, c::btree_id::xattrs, k.k.p)?;
 
-    let Some(w) = st.inode.walk(trans, iter, k)? else { return Ok(t) };
+    let (t, w) = st.inode.walk(t, iter, k)?;
+    let Some(w) = w else { return Ok(t) };
     if w.first_this_inode {
         st.hash_info = str_hash::hash_info_init(fs, w.inode)?;
     }

@@ -2,12 +2,21 @@
 
 //! fsck helpers shared by the passes (fs/check.h).
 
-use crate::btree::bkey::BkeySC;
-use crate::btree::iter::{BtreeIter, BtreeTrans};
+use crate::btree::bkey::{bkey_extent_whiteout, pos, spos, BkeySC};
+use crate::btree::iter::{
+    BtreeIter, BtreeIterFlags, BtreeTrans, CommitFlags, TransAttempt, TransResult, TransRet,
+    UpdateTriggerFlags,
+};
 use crate::c;
-use crate::errcode::{ret_to_result_void as ret_to_result, BchError};
+use crate::errcode::{bch_errcode, errptr_to_result, ret_to_result_void as ret_to_result, BchError};
 use crate::fs::Fs;
+use crate::init::error::id;
+use crate::inode;
+use crate::snapshots::snapshot;
 use crate::str_hash::HashTable;
+use crate::util::Printbuf;
+use crate::{bch_err, inode_fsck_err};
+use core::ops::ControlFlow;
 
 /// The snapshot IDs of the keys seen so far at one position, for deciding
 /// visibility while walking a btree in key order with all snapshots: a key
@@ -135,39 +144,176 @@ impl InodeWalker {
     }
 
     /// The live inode version @k belongs to, as bch2_walk_inode() and then
-    /// bch2_check_key_has_inode(): None if @k is a tombstone, or its inode is
-    /// missing or a whiteout. A missing inode is reported, and repaired by
-    /// deleting @k or recreating the inode.
+    /// check_key_has_inode(): None if @k is a tombstone, or its inode is
+    /// missing or a whiteout. A missing inode or one of the wrong type is
+    /// reported, and repaired.
     ///
     /// Either may commit and return a restart. On any error the cached
     /// versions are invalidated, so the retry starts from the btree.
-    pub fn walk(
-        &mut self,
-        trans: &BtreeTrans<'_>,
-        iter:  &mut BtreeIter<'_>,
-        k:     BkeySC<'_>,
-    ) -> Result<Option<Walked<'_>>, BchError> {
-        let i = unsafe { c::bch2_walk_inode(trans.raw(), &mut self.0, k.to_raw()) };
-        // bch2_check_key_has_inode() returns an ERR_PTR() from the walk as its error.
-        let ret = unsafe {
-            c::bch2_check_key_has_inode(trans.raw(), iter.raw_mut(), &mut self.0, i, k.to_raw())
+    pub fn walk<'a, 't, 'w>(
+        &'w mut self,
+        t:    TransAttempt<'a, 't>,
+        iter: &mut BtreeIter<'t>,
+        k:    BkeySC<'_>,
+    ) -> TransResult<'a, 't, Option<Walked<'w>>> {
+        let (t, i) = match self.walk_and_check(t, iter, k) {
+            Ok(v) => v,
+            Err(e) => {
+                // Keep last_pos on this inode: a retry that saw a new inode
+                // would have the caller check this one's sums half counted
+                self.0.last_pos = k.k.p;
+                self.invalidate();
+                return Err(e);
+            }
         };
-        if let Err(e) = ret_to_result(ret) {
-            // Restarts from the repairs move last_pos off this inode (C's
-            // last_pos.inode--), which would make the next walk see a new
-            // inode and have the caller check this one's sums half counted:
-            self.0.last_pos = k.k.p;
-            self.invalidate();
-            return Err(e);
-        }
 
-        let Some(i) = (unsafe { i.as_mut() }) else { return Ok(None) };
-        if i.whiteout {
-            return Ok(None);
-        }
+        let Some(i) = i.filter(|&i| !self.inodes()[i].whiteout) else { return t.done(None) };
 
         let first_this_inode = core::mem::take(&mut self.0.first_this_inode);
-        Ok(Some(Walked { inode: &mut i.inode, first_this_inode }))
+        t.done(Some(Walked { inode: &mut self.inodes_mut()[i].inode, first_this_inode }))
+    }
+
+    /// The index of the version @k resolves to, if any.
+    fn walk_and_check<'a, 't>(
+        &mut self,
+        t:    TransAttempt<'a, 't>,
+        iter: &mut BtreeIter<'t>,
+        k:    BkeySC<'_>,
+    ) -> TransResult<'a, 't, Option<usize>> {
+        let i = errptr_to_result(unsafe { c::bch2_walk_inode(t.raw(), &mut self.0, k.to_raw()) })?;
+        let i = (!i.is_null()).then(|| unsafe { i.offset_from(self.0.inodes.data) } as usize);
+
+        let t = self.check_key_has_inode(t, iter, i, k)?;
+        t.done(i)
+    }
+
+    /// @k, in @iter's btree, has to belong to an inode of the matching type:
+    /// version @i, the one it resolved to. A missing inode is recreated, or
+    /// copied down from a good version in an ancestor snapshot, or - if it
+    /// looks deleted - @k is; one of the wrong type gets the type its keys
+    /// say it has.
+    fn check_key_has_inode<'a, 't>(
+        &mut self,
+        t:    TransAttempt<'a, 't>,
+        iter: &mut BtreeIter<'t>,
+        i:    Option<usize>,
+        k:    BkeySC<'_>,
+    ) -> TransRet<'a, 't> {
+        let trans = t.trans();
+        let fs = trans.fs();
+        let btree = iter.btree();
+
+        // whiteouts and hash whiteouts are tombstones - they need no inode:
+        if bkey_extent_whiteout(k.k) || k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
+            return Ok(t);
+        }
+
+        let inodes = self.inodes();
+        // The version @k resolved to, unless that's a whiteout:
+        let live = i.filter(|&i| !inodes[i].whiteout);
+
+        if live.is_some_and(|l| btree_matches_i_mode(btree, inodes[l].inode.bi_mode)) {
+            return Ok(t);
+        }
+
+        let mut buf = Printbuf::new();
+        match live {
+            Some(l) => write!(buf, "key for wrong inode mode {:o}", inodes[l].inode.bi_mode),
+            None    => write!(buf, "key in missing inode"),
+        }
+
+        let good_ancestor = inodes.iter().position(|i2| {
+            !i2.whiteout &&
+            snapshot::is_ancestor(trans, k.k.p.snapshot, i2.inode.bi_snapshot) &&
+            btree_matches_i_mode(btree, i2.inode.bi_mode)
+        });
+        if let Some(g) = good_ancestor {
+            write!(buf, ", but found good inode in older snapshot{}\n", inodes[g].inode);
+        }
+
+        write!(buf, "\nfound keys:\n");
+
+        let inode_pos = spos(k.k.p.inode, 0, k.k.p.snapshot);
+        let nr_keys = count_inode_keys(trans, inode_pos, btree, Some(&mut buf))?;
+        if nr_keys == 0 {
+            bch_err!(fs, "check_key_has_inode: error finding live keys in inode");
+            return Err(fs.err(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed).into());
+        }
+
+        if nr_keys >= COUNT_INODE_KEYS_MAX {
+            write!(buf, "found {nr_keys}+ keys for this inode\n");
+        } else {
+            write!(buf, "found {nr_keys} keys for this inode\n");
+        }
+
+        let lost_data = fs.btree_lost_data(c::btree_id::inodes);
+        if lost_data {
+            write!(buf, "data was lost in inodes btree\n");
+        }
+
+        // Both write repairs edit a version in place: which one
+        let fix = match live {
+            None => {
+                let inode_looks_deleted = good_ancestor.is_some() && nr_keys < 3 && !lost_data;
+                if inode_looks_deleted {
+                    write!(buf, "inode was deleted, will delete key\n");
+                }
+
+                if !inode_fsck_err!(trans, k.k.p, id::key_in_missing_inode, "{buf}")? {
+                    return Ok(t);
+                }
+
+                if inode_looks_deleted {
+                    return t.delete_at(iter, UpdateTriggerFlags::INTERNAL_SNAPSHOT_NODE);
+                }
+
+                let Some(g) = good_ancestor else {
+                    reconstruct_inode(trans, btree, k.k.p.snapshot, k.k.p.inode)?;
+                    let t = t.commit(None, CommitFlags::NO_ENOSPC)?;
+                    return Err(t.restart(bch_errcode::BCH_ERR_transaction_restart_commit));
+                };
+
+                // A good ancestor is visible from @k, so the walk resolved @k
+                // to a version - a whiteout, there being no live one.
+                // XXX: which stays marked a whiteout - see check_extents
+                let i = i.expect("a good ancestor is visible, so @k resolved to a version");
+                let inodes = self.inodes_mut();
+                let snapshot = inodes[i].inode.bi_snapshot;
+                inodes[i].inode = inodes[g].inode;
+                inodes[i].inode.bi_snapshot = snapshot;
+                i
+            }
+            Some(l) => {
+                if !inode_fsck_err!(trans, k.k.p, id::key_in_wrong_inode_type, "{buf}")? {
+                    return Ok(t);
+                }
+
+                let count = |b| if b == btree {
+                    Ok(nr_keys)
+                } else {
+                    count_inode_keys(trans, inode_pos, b, None)
+                };
+                let nr_extents = count(c::btree_id::extents)?;
+                let nr_dirents = count(c::btree_id::dirents)?;
+
+                if nr_extents != 0 && nr_dirents != 0 {
+                    bch_err!(fs, "have both extents and dirents for inode with bad mode, cannot repair");
+                    return Err(fs.err(bch_errcode::BCH_ERR_shutdown_with_errors_unfixed).into());
+                }
+
+                let inode = &mut self.inodes_mut()[l].inode;
+                let ty = if nr_dirents != 0 { c::S_IFDIR } else { c::S_IFREG };
+                inode.bi_mode = (inode.bi_mode & !(c::S_IFMT as c::umode_t)) | ty as c::umode_t;
+                l
+            }
+        };
+
+        // fsck_write(), not the self-committing version: we're inside the
+        // caller's commit loop, and that one eats restarts - and when the lazy
+        // commit after it has nothing to do, the advanced restart_count leaks
+        // to the caller
+        let t = inode::fsck_write(t, &mut self.inodes_mut()[fix].inode)?;
+        t.commit_lazy(CommitFlags::NO_ENOSPC)
     }
 
     /// The cached versions are stale - something changed the inodes without
@@ -276,6 +422,52 @@ pub fn reconstruct_subvol(
     inum:     u64,
 ) -> Result<(), BchError> {
     ret_to_result(unsafe { c::bch2_reconstruct_subvol(trans.raw(), snapshot, subvol, inum) })
+}
+
+/// Whether an inode of mode @mode can own keys in @btree.
+fn btree_matches_i_mode(btree: c::btree_id, mode: c::umode_t) -> bool {
+    let fmt = mode as u32 & c::S_IFMT;
+    match btree {
+        c::btree_id::extents => fmt == c::S_IFREG || fmt == c::S_IFLNK,
+        c::btree_id::dirents => fmt == c::S_IFDIR,
+        c::btree_id::xattrs  => true,
+        _ => unreachable!("check_key_has_inode() on btree {}", btree as u32),
+    }
+}
+
+/// Where count_inode_keys() stops counting.
+const COUNT_INODE_KEYS_MAX: u32 = 100;
+
+/// How many keys inode @inode_pos has in @btree, as its version in
+/// @inode_pos's snapshot sees them - up to COUNT_INODE_KEYS_MAX - printing
+/// the first ten to @out.
+fn count_inode_keys(
+    trans:     &BtreeTrans<'_>,
+    inode_pos: c::bpos,
+    btree:     c::btree_id,
+    mut out:   Option<&mut Printbuf>,
+) -> Result<u32, BchError> {
+    let fs = trans.fs();
+    let mut nr_keys = 0;
+    let mut iter = BtreeIter::new(trans, btree, inode_pos, BtreeIterFlags::empty());
+
+    iter.for_each_max_norestart(pos(inode_pos.inode, u64::MAX), |_, k| {
+        // Error keys count: they're placeholders for unreadable data,
+        // evidence the inode had contents. Hash whiteouts are just
+        // tombstones:
+        if k.key_type() == c::bch_bkey_type::KEY_TYPE_hash_whiteout {
+            return Ok(ControlFlow::Continue(()));
+        }
+
+        nr_keys += 1;
+        if let Some(out) = out.as_deref_mut().filter(|_| nr_keys <= 10) {
+            write!(out, "{}\n", k.to_text(fs));
+        }
+
+        Ok(if nr_keys >= COUNT_INODE_KEYS_MAX { ControlFlow::Break(()) } else { ControlFlow::Continue(()) })
+    })?;
+
+    Ok(nr_keys)
 }
 
 /// @new, a key just written to hash table @T, may have moved a dirent: point

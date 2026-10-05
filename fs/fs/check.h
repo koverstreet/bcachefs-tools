@@ -102,12 +102,6 @@ int bch2_fsck_update_backpointers(struct btree_trans *,
 				  struct bch_hash_info *,
 				  struct bkey_i *);
 
-int bch2_check_key_has_inode(struct btree_trans *,
-			     struct btree_iter *,
-			     struct inode_walker *,
-			     struct inode_walker_entry *,
-			     struct bkey_s_c);
-
 int bch2_check_inodes(struct bch_fs *);
 int bch2_check_extents(struct bch_fs *);
 int bch2_check_indirect_extents(struct bch_fs *);
