@@ -48,6 +48,19 @@ if [ "$HOSTRUSTC" != "$RUSTC" ] && ! command -v "$HOSTRUSTC" >/dev/null 2>&1; th
 	miss "host rustc ($HOSTRUSTC) not found"
 fi
 
+# rustc --version can work where compiling doesn't: a half-upgraded install,
+# librustc_driver out of step with libLLVM, only fails when the build reaches a
+# lazily bound symbol - "symbol lookup error", deep in the build (tools#1082).
+# So compile something: the host rustc builds the first Rust in the build, the
+# target-spec generator and codegen.
+if command -v "$HOSTRUSTC" >/dev/null 2>&1 && tmp=$(mktemp -d 2>/dev/null); then
+	if ! printf 'fn main() {}\n' |
+	     LC_ALL=C "$HOSTRUSTC" -o "$tmp/probe" - >/dev/null 2>"$tmp/err"; then
+		miss "$HOSTRUSTC can't compile an empty program: $(grep -m1 . "$tmp/err")"
+	fi
+	rm -rf "$tmp"
+fi
+
 command -v "$BINDGEN" >/dev/null 2>&1 ||
 	miss "bindgen ($BINDGEN) not found"
 

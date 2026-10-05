@@ -82,6 +82,20 @@ fi
 command -v "$HOSTRUSTC" >/dev/null 2>&1 || skip "host rustc ($HOSTRUSTC) not found"
 command -v "$BINDGEN" >/dev/null 2>&1 || skip "bindgen ($BINDGEN) not found"
 
+# rustc --version can work where compiling doesn't: a half-upgraded install,
+# librustc_driver out of step with libLLVM, only fails at the first lazily
+# bound symbol - "symbol lookup error", deep in the build (tools#1082). So
+# compile something, with the host rustc: it builds the first Rust in the build.
+if tmp=$(mktemp -d 2>/dev/null); then
+	if ! printf 'fn main() {}\n' |
+	     LC_ALL=C "$HOSTRUSTC" -o "$tmp/probe" - >/dev/null 2>"$tmp/err"; then
+		err=$(grep -m1 . "$tmp/err")
+		rm -rf "$tmp"
+		skip "$HOSTRUSTC can't compile an empty program: $err"
+	fi
+	rm -rf "$tmp"
+fi
+
 if [ ! -r "$KERNEL_OBJ/include/generated/rustc_cfg" ]; then
 	skip "missing $KERNEL_OBJ/include/generated/rustc_cfg (kernel not configured for Rust)"
 fi
