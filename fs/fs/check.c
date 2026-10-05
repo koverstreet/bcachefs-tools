@@ -2948,42 +2948,6 @@ int bch2_check_root(struct bch_fs *c)
 			 check_root_trans(trans));
 }
 
-static int fix_reflink_p_key(struct btree_trans *trans, struct btree_iter *iter,
-			     struct bkey_s_c k)
-{
-	struct bkey_s_c_reflink_p p;
-
-	if (k.k->type != KEY_TYPE_reflink_p)
-		return 0;
-
-	p = bkey_s_c_to_reflink_p(k);
-
-	if (!p.v->front_pad && !p.v->back_pad)
-		return 0;
-
-	struct bkey_i_reflink_p *u = errptr_try(bch2_trans_kmalloc(trans, sizeof(*u)));
-
-	bkey_reassemble(&u->k_i, k);
-	u->v.front_pad	= 0;
-	u->v.back_pad	= 0;
-
-	return bch2_trans_update(trans, iter, &u->k_i, BTREE_TRIGGER_norun);
-}
-
-int bch2_fix_reflink_p(struct bch_fs *c)
-{
-	if (c->sb.version >= bcachefs_metadata_version_reflink_p_fix)
-		return 0;
-
-	CLASS(btree_trans, trans)(c);
-	return for_each_btree_key_commit(trans, iter,
-				BTREE_ID_extents, POS_MIN,
-				BTREE_ITER_intent|BTREE_ITER_prefetch|
-				BTREE_ITER_all_snapshots, k,
-				NULL, NULL, BCH_TRANS_COMMIT_no_enospc,
-			fix_reflink_p_key(trans, &iter, k));
-}
-
 /* translate to return code of fsck commad - man(8) fsck */
 int bch2_fs_fsck_errcode(struct bch_fs *c, struct printbuf *msg)
 {

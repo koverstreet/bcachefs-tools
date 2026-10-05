@@ -47,6 +47,7 @@ pub mod debug {
 #[path = "fs/check.rs"]        pub mod check;
 #[path = "fs/check_dir_structure.rs"] pub mod check_dir_structure;
 #[path = "fs/check_nlinks.rs"] pub mod check_nlinks;
+#[path = "fs/fix_reflink_p.rs"] pub mod fix_reflink_p;
 #[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
 pub mod init {
