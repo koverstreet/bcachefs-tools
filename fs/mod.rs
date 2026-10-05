@@ -55,6 +55,10 @@ pub mod init {
 #[path = "journal/read.rs"]     pub mod journal;
 #[path = "fs/namei.rs"]        pub mod namei;
 pub mod sb;
+pub mod snapshots {
+    #[path = "snapshot.rs"] pub mod snapshot;
+    #[path = "subvolume.rs"] pub mod subvolume;
+}
 /// Name<->value tables for the snapshot/subvolume state codewords, generated
 /// from the BCH_*_STATES() x-macros in snapshots/format.h:
 pub mod snapshot_states {
