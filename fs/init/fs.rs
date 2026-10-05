@@ -81,6 +81,27 @@ impl BorrowedFs {
     }
 }
 
+// Metadata versions only go up, so they order by number: "at least version X"
+// is fs.version() >= bcachefs_metadata_version::X.
+impl PartialOrd for c::bcachefs_metadata_version {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for c::bcachefs_metadata_version {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.0.cmp(&other.0)
+    }
+}
+
+/// As bch2_version_to_text(): the version's number and name.
+impl core::fmt::Display for c::bcachefs_metadata_version {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        crate::printbuf_to_formatter(f, |out| unsafe { c::bch2_version_to_text(out, *self) })
+    }
+}
+
 impl Fs {
     /// The filesystem's options, as resolved at open.
     pub fn opts(&self) -> &c::bch_opts {
@@ -120,6 +141,39 @@ impl Fs {
     /// Access the superblock.
     pub fn sb(&self) -> &c::bch_sb {
         self.sb_handle().sb()
+    }
+
+    /// The metadata version the filesystem is at: C's c->sb.version, the
+    /// in-memory copy, which is what decides version-gated behaviour.
+    pub fn version(&self) -> c::bcachefs_metadata_version {
+        c::bcachefs_metadata_version(unsafe { (*self.raw).sb.version } as u32)
+    }
+
+    /// The version the last upgrade completed to: c->sb.version_upgrade_complete.
+    /// Below version() while an upgrade's migrations are still running.
+    pub fn version_upgrade_complete(&self) -> c::bcachefs_metadata_version {
+        c::bcachefs_metadata_version(unsafe { (*self.raw).sb.version_upgrade_complete } as u32)
+    }
+
+    /// Whether btree @id lost data - topology repair dropped nodes - so
+    /// repairs may reconstruct what it's missing: c->sb.btrees_lost_data.
+    pub fn btree_lost_data(&self, id: c::btree_id) -> bool {
+        let lost = unsafe { (*self.raw).sb.btrees_lost_data };
+        lost & (1u64 << id as u32) != 0
+    }
+
+    /// Whether filesystem flag @f (BCH_FS_*) is set: C's test_bit() on
+    /// c->flags. Other threads set and clear them, so it's an atomic load.
+    pub fn flag(&self, f: c::bch_fs_flags) -> bool {
+        let flags = unsafe {
+            &*(core::ptr::addr_of!((*self.raw).flags) as *const core::sync::atomic::AtomicUsize)
+        };
+        flags.load(core::sync::atomic::Ordering::Relaxed) & (1usize << f as u32) != 0
+    }
+
+    /// The journal sequence number being written: C's journal_cur_seq().
+    pub fn journal_cur_seq(&self) -> u64 {
+        unsafe { c::journal_cur_seq(core::ptr::addr_of_mut!((*self.raw).journal)) }
     }
 
     /// Acquire the superblock lock, returning a guard that releases it on drop.

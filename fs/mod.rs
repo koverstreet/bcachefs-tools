@@ -48,6 +48,7 @@ pub mod debug {
 #[path = "fs/dirent.rs"]       pub mod dirent;
 #[path = "init/fs.rs"]          pub mod fs;
 pub mod init {
+    #[path = "damage.rs"] pub mod damage;
     #[path = "error.rs"] pub mod error;
     #[path = "progress.rs"] pub mod progress;
 }
