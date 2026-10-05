@@ -1463,6 +1463,15 @@ static int delete_ancestor_snapshot_inodes(struct btree_trans *trans, struct bpo
 	}
 }
 
+/*
+ * For Rust: bch2_inode_or_descendents_is_open() is declared in vfs/fs.h -
+ * a static inline stub in userspace - which isn't in the Rust bindings.
+ */
+int rust_inode_or_descendents_is_open(struct btree_trans *trans, struct bpos p)
+{
+	return bch2_inode_or_descendents_is_open(trans, p);
+}
+
 int bch2_inode_rm_snapshot(struct btree_trans *trans, u64 inum, u32 snapshot)
 {
 	return __bch2_inode_rm_snapshot(trans, inum, snapshot) ?:

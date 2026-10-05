@@ -46,6 +46,15 @@ static inline u64 bch2_inode_opt_get(struct bch_inode_unpacked *inode,
 	}
 }
 
+/* Whether any per-inode option is set: what BCH_INODE_has_inode_opts records */
+static inline bool bch2_inode_has_opts(const struct bch_inode_unpacked *inode)
+{
+#define x(_name, ...)	if (inode->bi_##_name) return true;
+	BCH_INODE_OPTS()
+#undef x
+	return false;
+}
+
 #define inode_opt_get(_c, _inode, _name)			\
 	((_inode)->bi_##_name ? (_inode)->bi_##_name - 1 : (_c)->opts._name)
 
