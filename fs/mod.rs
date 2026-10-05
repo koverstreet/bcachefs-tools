@@ -50,6 +50,7 @@ pub mod debug {
 #[path = "fs/check_dirents.rs"] pub mod check_dirents;
 #[path = "fs/check_inodes.rs"] pub mod check_inodes;
 #[path = "fs/check_root.rs"]   pub mod check_root;
+#[path = "fs/check_unreachable_inodes.rs"] pub mod check_unreachable_inodes;
 #[path = "fs/check_xattrs.rs"] pub mod check_xattrs;
 #[path = "fs/fix_reflink_p.rs"] pub mod fix_reflink_p;
 #[path = "fs/dirent.rs"]       pub mod dirent;
