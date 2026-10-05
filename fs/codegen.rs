@@ -401,6 +401,8 @@ pub fn gen_xmacros(src: &str, out: &str) {
         .expect("reading opts.h");
     let opts = parse_xmacro(&opts_h, "BCH_OPTS");
     assert!(!opts.is_empty(), "failed to parse BCH_OPTS()");
+    std::fs::write(format!("{out}/opts_gen.rs"), generate_opts(&opts))
+        .expect("write opts_gen.rs");
 
     std::fs::write(
         format!("{out}/newtype_enum_aliases_gen.rs"),
@@ -1012,6 +1014,20 @@ fn generate_btree_ids_known(entries: &[Vec<String>]) -> String {
          pub const BTREE_HAS_SNAPSHOTS_MASK: u64 = {mask:#x};\n"
     ));
 
+    out
+}
+
+/// The options, for opts.rs's bch_opts!(), which defines their accessors:
+/// name: C type = bool for an OPT_BOOL(), raw for the rest.
+fn generate_opts(entries: &[Vec<String>]) -> String {
+    let mut out = String::new();
+    out.push_str("// Auto-generated from BCH_OPTS() — do not edit\n\n");
+    out.push_str("bch_opts! {\n");
+    for e in entries {
+        let kind = if e[3].trim_start().starts_with("OPT_BOOL") { "bool" } else { "raw" };
+        out.push_str(&format!("    {}: {} = {},\n", e[0], e[1].trim(), kind));
+    }
+    out.push_str("}\n");
     out
 }
 

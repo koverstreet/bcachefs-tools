@@ -10,6 +10,24 @@ use std::ffi::CString;
 #[allow(non_camel_case_types)]
 pub type opt_id = c::bch_opt_id;
 
+/// An accessor for every option, invoked with BCH_OPTS() by codegen
+/// (opts_gen.rs): an OPT_BOOL() as bool, the rest as their C type.
+macro_rules! bch_opts {
+    ($($name:ident: $ty:ty = $kind:ident),* $(,)?) => {
+        impl c::bch_opts {
+            $(bch_opts!(@accessor $name, $ty, $kind);)*
+        }
+    };
+    (@accessor $name:ident, $ty:ty, bool) => {
+        pub fn $name(&self) -> bool { self.$name != 0 }
+    };
+    (@accessor $name:ident, $ty:ty, raw) => {
+        pub fn $name(&self) -> $ty { self.$name }
+    };
+}
+
+include!(concat!(env!("OUT_DIR"), "/opts_gen.rs"));
+
 /// Return the opt table as a proper slice.
 ///
 /// bindgen generates `bch2_opt_table` as a zero-length array since it can't
