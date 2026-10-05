@@ -1,4 +1,5 @@
-use crate::btree::bkey::{BkeyS, BkeyValSC};
+use crate::btree::bkey::{BkeyS, BkeySC, BkeyValSC};
+use crate::btree::iter::{BtreeIter, TransAttempt, TransRet};
 use crate::c;
 use crate::fs::Fs;
 use core::marker::PhantomData;
@@ -232,6 +233,60 @@ pub fn bkey_ptrs_mut<'a>(
     k:  &'a mut BkeyS<'_>,
 ) -> ExtentPtrIterMut<'a> {
     ExtentPtrIterMut { inner: bkey_extent_entries_mut(fs, k) }
+}
+
+fn extent_entry_is_crc(entry: &c::bch_extent_entry) -> bool {
+    use c::bch_extent_entry_type::*;
+
+    let ty = extent_entry_type(entry);
+    ty == BCH_EXTENT_ENTRY_crc32 as u32 ||
+    ty == BCH_EXTENT_ENTRY_crc64 as u32 ||
+    ty == BCH_EXTENT_ENTRY_crc128 as u32
+}
+
+/// The checksum/compression entries of @k, unpacked: as bkey_for_each_crc().
+pub fn bkey_crcs<'a>(k: BkeySC<'a>) -> impl Iterator<Item = c::bch_extent_crc_unpacked> + 'a {
+    bkey_extent_entries_sc(&k.v())
+        .filter(|e| extent_entry_is_crc(e))
+        .map(move |e| unsafe {
+            c::bch2_extent_crc_unpack(k.k, e as *const _ as *const c::bch_extent_crc)
+        })
+}
+
+/// Whether @crc's data is checksummed or compressed - read back whole, so
+/// bounded by encoded_extent_max: as crc_is_encoded().
+pub fn crc_is_encoded(crc: &c::bch_extent_crc_unpacked) -> bool {
+    // By value in C; bindgen doesn't make it Copy
+    unsafe { c::crc_is_encoded(core::ptr::read(crc)) }
+}
+
+/// Whether @k is counted in its inode's i_sectors: as
+/// bkey_extent_is_allocation().
+pub fn bkey_extent_is_allocation(k: &c::bkey) -> bool {
+    unsafe { c::bkey_extent_is_allocation(k) }
+}
+
+/// Whether @k reserves space rather than holding data - a reservation, or
+/// an extent with unwritten pointers: as bkey_extent_is_reservation().
+pub fn bkey_extent_is_reservation(fs: &Fs, k: BkeySC<'_>) -> bool {
+    unsafe { c::bkey_extent_is_reservation(fs.raw, k.to_raw()) }
+}
+
+/// @k's durability, for reserving space to rewrite it: as
+/// bch2_bkey_durability_safe(), which tolerates bad pointers.
+pub fn durability_safe(fs: &Fs, k: BkeySC<'_>) -> c::bkey_durability {
+    unsafe { c::bch2_bkey_durability_safe(fs.raw, k.to_raw()) }
+}
+
+/// Drop @k's stale cached pointers, updating it through @iter: as
+/// bch2_bkey_drop_stale_ptrs().
+pub fn drop_stale_ptrs<'a, 't>(
+    t:    TransAttempt<'a, 't>,
+    iter: &mut BtreeIter<'t>,
+    k:    BkeySC<'_>,
+) -> TransRet<'a, 't> {
+    let ret = unsafe { c::bch2_bkey_drop_stale_ptrs(t.raw(), iter.raw_mut(), k.to_raw()) };
+    t.result(ret)
 }
 
 /// Mutable access to an entry's `stripe_ptr` union field.
