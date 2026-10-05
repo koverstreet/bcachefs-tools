@@ -49,6 +49,7 @@ pub mod debug {
 #[path = "init/fs.rs"]          pub mod fs;
 pub mod init {
     #[path = "error.rs"] pub mod error;
+    #[path = "progress.rs"] pub mod progress;
 }
 #[path = "fs/inode.rs"]        pub mod inode;
 #[path = "journal/read.rs"]     pub mod journal;
