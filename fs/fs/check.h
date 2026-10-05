@@ -26,6 +26,9 @@ DEFINE_CLASS(snapshots_seen, struct snapshots_seen,
 
 int bch2_snapshots_seen_update(struct bch_fs *, struct snapshots_seen *,
 			       enum btree_id, struct bpos);
+int bch2_snapshots_seen_add_inorder(struct bch_fs *, struct snapshots_seen *, u32);
+int bch2_snapshots_seen_copy(struct bch_fs *, struct snapshots_seen *,
+			     struct snapshots_seen *);
 
 bool bch2_key_visible_in_snapshot(struct btree_trans *, struct snapshots_seen *, u32, u32);
 
@@ -70,6 +73,11 @@ DEFINE_CLASS(inode_walker, struct inode_walker,
 struct inode_walker_entry *bch2_walk_inode(struct btree_trans *,
 					   struct inode_walker *,
 					   struct bkey_s_c);
+int bch2_get_visible_inodes(struct btree_trans *, struct inode_walker *,
+			    struct snapshots_seen *, u64);
+
+int bch2_reconstruct_inode(struct btree_trans *, enum btree_id, u32, u64);
+bool bch2_inode_should_reattach(struct bch_inode_unpacked *);
 
 void bch2_dirent_inode_mismatch_msg(struct printbuf *, struct bch_fs *,
 				    struct bkey_s_c_dirent,

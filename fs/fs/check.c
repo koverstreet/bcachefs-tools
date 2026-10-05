@@ -396,7 +396,7 @@ static int lookup_lostfound(struct btree_trans *trans, u32 snapshot,
 	return ret;
 }
 
-static inline bool inode_should_reattach(struct bch_inode_unpacked *inode)
+bool bch2_inode_should_reattach(struct bch_inode_unpacked *inode)
 {
 	if (inode->bi_inum == BCACHEFS_ROOT_INO &&
 	    inode->bi_subvol == BCACHEFS_ROOT_SUBVOL)
@@ -625,7 +625,7 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 			/*
 			 * Fixed by a previous partial commit: its backpointer
 			 * already names our reattach dirent. Must be checked
-			 * before inode_should_reattach() - having a
+			 * before bch2_inode_should_reattach() - having a
 			 * backpointer, it would fall into the whiteout arm
 			 * and turn the committed fixup into a dangling
 			 * backpointer:
@@ -634,7 +634,7 @@ int bch2_reattach_inode(struct btree_trans *trans, struct bch_inode_unpacked *in
 			    child_inode.bi_dir_offset == inode->bi_dir_offset)
 				continue;
 
-			if (!inode_should_reattach(&child_inode)) {
+			if (!bch2_inode_should_reattach(&child_inode)) {
 				try(maybe_delete_dirent(trans,
 							SPOS(lostfound.bi_inum, inode->bi_dir_offset,
 							     dirent_snapshot),
@@ -739,7 +739,7 @@ int bch2_reconstruct_subvol(struct btree_trans *trans, u32 snapshotid, u32 subvo
 	return 0;
 }
 
-static int reconstruct_inode(struct btree_trans *trans, enum btree_id btree, u32 snapshot, u64 inum)
+int bch2_reconstruct_inode(struct btree_trans *trans, enum btree_id btree, u32 snapshot, u64 inum)
 {
 	struct bch_fs *c = trans->c;
 	unsigned i_mode = S_IFREG;
@@ -806,6 +806,35 @@ int bch2_snapshots_seen_update(struct bch_fs *c, struct snapshots_seen *s,
 	s->pos = pos;
 
 	return snapshot_list_add_nodup(c, &s->ids, pos.snapshot);
+}
+
+int bch2_snapshots_seen_add_inorder(struct bch_fs *c, struct snapshots_seen *s, u32 id)
+{
+	u32 *i;
+	__darray_for_each(s->ids, i) {
+		if (*i == id)
+			return 0;
+		if (*i > id)
+			break;
+	}
+
+	int ret = darray_insert_item(&s->ids, i - s->ids.data, id);
+	if (ret)
+		bch_err(c, "error reallocating snapshots_seen table (size %zu)",
+			s->ids.size);
+	return ret;
+}
+
+int bch2_snapshots_seen_copy(struct bch_fs *c, struct snapshots_seen *dst,
+			     struct snapshots_seen *src)
+{
+	*dst = *src;
+	dst->ids.data = kmemdup(src->ids.data,
+				sizeof(src->ids.data[0]) * src->ids.size,
+				GFP_KERNEL);
+	if (!dst->ids.data)
+		return bch_err_throw(c, ENOMEM_fsck_extent_ends_at);
+	return 0;
 }
 
 /**
@@ -929,10 +958,10 @@ static int get_inodes_all_snapshots(struct btree_trans *trans,
 	return 0;
 }
 
-static int get_visible_inodes(struct btree_trans *trans,
-			      struct inode_walker *w,
-			      struct snapshots_seen *s,
-			      u64 inum)
+int bch2_get_visible_inodes(struct btree_trans *trans,
+			    struct inode_walker *w,
+			    struct snapshots_seen *s,
+			    u64 inum)
 {
 	struct bch_fs *c = trans->c;
 	struct bkey_s_c k;
@@ -1107,7 +1136,7 @@ int bch2_fsck_update_backpointers(struct btree_trans *trans,
 		root_inode.bi_dir_offset	= d->k.p.offset;
 		return __bch2_fsck_write_inode(trans, &root_inode);
 	} else {
-		try(get_visible_inodes(trans, &target, s, le64_to_cpu(d->v.d_inum)));
+		try(bch2_get_visible_inodes(trans, &target, s, le64_to_cpu(d->v.d_inum)));
 
 		/*
 		 * A backpointer is the (bi_dir, bi_dir_offset) pair - compare
@@ -1635,7 +1664,7 @@ static int find_oldest_inode_needs_reattach(struct btree_trans *trans,
 		struct bch_inode_unpacked parent_inode;
 		bch2_inode_unpack(trans->c, k, &parent_inode);
 
-		if (!inode_should_reattach(&parent_inode))
+		if (!bch2_inode_should_reattach(&parent_inode))
 			break;
 
 		*inode = parent_inode;
@@ -1881,7 +1910,7 @@ static int check_unreachable_inode(struct btree_trans *trans,
 		seen->is_subvol_root	= inode.bi_subvol != 0;
 	}
 
-	if (!inode_should_reattach(&inode))
+	if (!bch2_inode_should_reattach(&inode))
 		return 0;
 
 	/*
@@ -2080,7 +2109,7 @@ int bch2_check_key_has_inode(struct btree_trans *trans,
 				return bch2_btree_delete_at(trans, iter, BTREE_UPDATE_internal_snapshot_node);
 
 			if (!good_ancestor) {
-				try(reconstruct_inode(trans, iter->btree_id, k.k->p.snapshot, k.k->p.inode));
+				try(bch2_reconstruct_inode(trans, iter->btree_id, k.k->p.snapshot, k.k->p.inode));
 				try(bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc));
 
 				inode->last_pos.inode--;
@@ -2159,7 +2188,7 @@ static int maybe_reconstruct_inum_btree(struct btree_trans *trans,
 		     "inode %llu:%u type %s missing, but contents found: reconstruct?",
 		     inum, snapshot,
 		     btree == BTREE_ID_extents ? "reg" : "dir"))
-		return  reconstruct_inode(trans, btree, snapshot, inum) ?:
+		return  bch2_reconstruct_inode(trans, btree, snapshot, inum) ?:
 			bch2_trans_commit(trans, NULL, NULL, BCH_TRANS_COMMIT_no_enospc) ?:
 			btree_trans_restart(trans, BCH_ERR_transaction_restart_commit);
 fsck_err:
@@ -2477,7 +2506,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 	if (d.v->d_type == DT_SUBVOL) {
 		try(check_dirent_to_subvol(trans, iter, d));
 	} else {
-		try(get_visible_inodes(trans, target, s, le64_to_cpu(d.v->d_inum)));
+		try(bch2_get_visible_inodes(trans, target, s, le64_to_cpu(d.v->d_inum)));
 
 		if (!target->inodes.nr)
 			try(maybe_reconstruct_inum(trans, le64_to_cpu(d.v->d_inum), d.k->p.snapshot));
@@ -2485,7 +2514,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 		/*
 		 * The inode must exist in an ancestor snapshot of the dirent:
 		 * that's what makes the dirent resolvable from every
-		 * subvolume leaf that can see it. get_visible_inodes() also
+		 * subvolume leaf that can see it. bch2_get_visible_inodes() also
 		 * accepts inodes in descendant snapshots - reachable from
 		 * *some* leaf, but a subvolume in a sibling branch sees the
 		 * dirent and not the inode, and lookups there return ENOENT.
@@ -2573,7 +2602,7 @@ static int check_dirent(struct btree_trans *trans, struct btree_iter *iter,
 			 * One repair per snapshot version of the target inode:
 			 * bounded only by snapshot count, so commit-and-restart
 			 * before the batch outgrows the trans bump allocator.
-			 * The re-drive converges: get_visible_inodes() rereads
+			 * The re-drive converges: bch2_get_visible_inodes() rereads
 			 * the versions and committed repairs no longer fire.
 			 */
 			try(bch2_trans_commit_lazy_if_full(trans, NULL, NULL,

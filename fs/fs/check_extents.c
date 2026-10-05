@@ -11,23 +11,6 @@
 #include "init/damage.h"
 #include "init/progress.h"
 
-static int snapshots_seen_add_inorder(struct bch_fs *c, struct snapshots_seen *s, u32 id)
-{
-	u32 *i;
-	__darray_for_each(s->ids, i) {
-		if (*i == id)
-			return 0;
-		if (*i > id)
-			break;
-	}
-
-	int ret = darray_insert_item(&s->ids, i - s->ids.data, id);
-	if (ret)
-		bch_err(c, "error reallocating snapshots_seen table (size %zu)",
-			s->ids.size);
-	return ret;
-}
-
 /*
  * XXX: this is handling transaction restarts without returning
  * -BCH_ERR_transaction_restart_nested, this is not how we do things anymore:
@@ -150,14 +133,9 @@ static int extent_ends_at(struct bch_fs *c,
 	struct extent_end *i, n = (struct extent_end) {
 		.offset		= k.k->p.offset,
 		.snapshot	= k.k->p.snapshot,
-		.seen		= *seen,
 	};
 
-	n.seen.ids.data = kmemdup(seen->ids.data,
-			      sizeof(seen->ids.data[0]) * seen->ids.size,
-			      GFP_KERNEL);
-	if (!n.seen.ids.data)
-		return bch_err_throw(c, ENOMEM_fsck_extent_ends_at);
+	try(bch2_snapshots_seen_copy(c, &n.seen, seen));
 
 	__darray_for_each(extent_ends->e, i) {
 		if (i->snapshot == k.k->p.snapshot) {
@@ -272,7 +250,7 @@ static int overlapping_extents_found(struct btree_trans *trans,
 			/*
 			 * We overwrote the first extent in pos2's snapshot:
 			 */
-			try(snapshots_seen_add_inorder(c, pos1_seen, pos2.p.snapshot));
+			try(bch2_snapshots_seen_add_inorder(c, pos1_seen, pos2.p.snapshot));
 		} else {
 			/*
 			 * We overwrote the second extent - restart
@@ -398,7 +376,7 @@ static int check_extent(struct btree_trans *trans, struct btree_iter *iter,
 					"extent type past end of inode %llu:%u, i_size %llu\n%s",
 					i->inode.bi_inum, i->inode.bi_snapshot, i->inode.bi_size,
 					(bch2_bkey_val_to_text(&buf, c, k), buf.buf))) {
-				try(snapshots_seen_add_inorder(c, s, i->inode.bi_snapshot));
+				try(bch2_snapshots_seen_add_inorder(c, s, i->inode.bi_snapshot));
 
 				/*
 				 * fpunch_snapshot() commits internally, so it
